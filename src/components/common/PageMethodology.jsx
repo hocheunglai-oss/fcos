@@ -16,6 +16,9 @@ export default function PageMethodology({
   sections = [],
   sources = [],
   className,
+  triggerIcon: TriggerIcon = BookOpen,
+  iconOnly = false,
+  triggerLabel = 'Methodology',
 }) {
   const [open, setOpen] = useState(false);
 
@@ -24,16 +27,16 @@ export default function PageMethodology({
       <Button
         type="button"
         variant="outline"
-        aria-label="Open methodology"
-        title="Methodology"
+        aria-label={`Open ${triggerLabel.toLowerCase()}`}
+        title={triggerLabel}
         className={cn(
           'h-[38px] gap-[7px] rounded-[7px] px-2.5 text-xs font-medium text-muted-foreground shadow-sm hover:text-foreground sm:px-3.5',
           className,
         )}
         onClick={() => setOpen(true)}
       >
-        <BookOpen className="h-4 w-4" />
-        <span className="hidden sm:inline">Methodology</span>
+        <TriggerIcon className="h-4 w-4" />
+        {!iconOnly && <span className="hidden sm:inline">{triggerLabel}</span>}
       </Button>
 
       <Dialog open={open} onOpenChange={setOpen}>

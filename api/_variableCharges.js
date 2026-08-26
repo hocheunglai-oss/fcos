@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { requireExternalActionGate } from './_externalActionGates.js';
-import { getApiVersion, sfCompositeQueries, sfQuery, sfRequest } from './_salesforce.js';
+import { getApiVersion, getInstanceUrl, sfCompositeQueries, sfQuery, sfRequest } from './_salesforce.js';
 
 const SALESFORCE_ID = /^[A-Za-z0-9]{15}(?:[A-Za-z0-9]{3})?$/;
 const VARIABLE_CHARGE_STEM_CREATED_FROM = '2026-01-01T00:00:00Z';
@@ -488,12 +488,18 @@ function candidateWhere(stemIds, fieldName = 'STEM__c') {
   return ids ? ` AND ${fieldName} IN (${ids})` : '';
 }
 
+function compareVariableChargeRows(a, b) {
+  const aName = text(a?.Product__r?.Name || a?.Product2Id__r?.Name || a?.Description__c, 255).toLocaleLowerCase('en');
+  const bName = text(b?.Product__r?.Name || b?.Product2Id__r?.Name || b?.Description__c, 255).toLocaleLowerCase('en');
+  return aName.localeCompare(bName, 'en', { sensitivity: 'base' }) || text(a?.Id, 18).localeCompare(text(b?.Id, 18));
+}
+
 async function loadLiveCases({ client, stemIds = null, stemAccessCondition = null }) {
   const requested = stemIds ? [...new Set(stemIds.filter((id) => SALESFORCE_ID.test(String(id || ''))))] : null;
   if (stemIds && requested.length !== stemIds.length) throw httpError('A valid Salesforce STEM is required.', 400, 'INVALID_STEM_ID');
   const [allLineItems, allExtraCosts] = await Promise.all([
-    queryAll(`SELECT Id, STEM__c, Original_Supplier__c, Product__c, Product__r.Name, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_Max__c, Unit_of_Measure__c, Unit_Sell_At__c, Unit_Buy_At__c, Total_Cost__c, Total_Price__c, Commission_Cost__c, Payment_Term__c, Buyer_Invoice__c, Supplier_Invoice__c, Cancelled__c, LastModifiedDate FROM STEM_Line_Item__c WHERE Cancelled__c = false AND STEM__r.CreatedDate >= ${VARIABLE_CHARGE_STEM_CREATED_FROM}${candidateWhere(requested)}`),
-    queryAll(`SELECT Id, STEM__c, STEM_Line_Item__c, Supplier__c, Supplier_Invoice__c, Product2Id__c, Product2Id__r.Name, Description__c, RecordTypeId, RecordType.Name, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_Range_Max__c, Unit_of_Measure__c, Unit_Cost__c, Unit_Price__c, Lumpsum_Cost__c, Lumpsum_Price__c, Line_Total_Buy__c, Line_Total__c, Payment_Term__c, Buyer_Invoice__c, Cancelled__c, LastModifiedDate FROM STEM_Extra_Cost__c WHERE Cancelled__c = false AND Supplier__c != null AND STEM__r.CreatedDate >= ${VARIABLE_CHARGE_STEM_CREATED_FROM}${candidateWhere(requested)}`),
+    queryAll(`SELECT Id, STEM__c, Original_Supplier__c, Product__c, Product__r.Name, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_Max__c, Unit_of_Measure__c, Unit_Sell_At__c, Unit_Buy_At__c, Total_Cost__c, Total_Price__c, Commission_Cost__c, Payment_Term__c, Buyer_Invoice__c, Supplier_Invoice__c, Cancelled__c, CurrencyIsoCode, LastModifiedDate FROM STEM_Line_Item__c WHERE Cancelled__c = false AND STEM__r.CreatedDate >= ${VARIABLE_CHARGE_STEM_CREATED_FROM}${candidateWhere(requested)}`),
+    queryAll(`SELECT Id, STEM__c, STEM_Line_Item__c, Supplier__c, Supplier_Invoice__c, Product2Id__c, Product2Id__r.Name, Description__c, RecordTypeId, RecordType.Name, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_Range_Max__c, Unit_of_Measure__c, Unit_Cost__c, Unit_Price__c, Lumpsum_Cost__c, Lumpsum_Price__c, Line_Total_Buy__c, Line_Total__c, Payment_Term__c, Buyer_Invoice__c, Cancelled__c, CurrencyIsoCode, LastModifiedDate FROM STEM_Extra_Cost__c WHERE Cancelled__c = false AND Supplier__c != null AND STEM__r.CreatedDate >= ${VARIABLE_CHARGE_STEM_CREATED_FROM}${candidateWhere(requested)}`),
   ]);
   const supplierStages = await queryAll(`SELECT Id, STEM__c, Supplier__c, Manual_Review_Required__c, Supplier_Status__c, Verified_At__c, Verified_By_Email__c, Reviewed_Source_Fingerprint__c, Revision__c, Buyer_Charge_Status__c, Buyer_Charge_Reviewed_Source_Fingerprint__c, Buyer_Charge_Confirmed_At__c, Buyer_Charge_Confirmed_By_Email__c, Buyer_Charge_Revision__c, LastModifiedDate FROM STEM_Variable_Charge_Supplier__c WHERE STEM__r.CreatedDate >= ${VARIABLE_CHARGE_STEM_CREATED_FROM}${candidateWhere(requested)}`);
   const supplierIds = [...new Set([
@@ -512,7 +518,7 @@ async function loadLiveCases({ client, stemIds = null, stemAccessCondition = nul
   const stemRows = [];
   for (const group of chunks(targetStemIds)) {
     const accessClause = stemAccessCondition ? ` AND (${stemAccessCondition})` : '';
-    stemRows.push(...await queryAll(`SELECT Id, Name, KeyStem__c, Account__c, CreatedDate, Delivery_Date__c, ETA_Start_Date__c, ETA_End_Date__c, ETB_Start_Date__c, ETB_End_Date__c, ETCD_Start_Date__c, ETCD_End_Date__c, ETD_Start_Date__c, ETD_End_Date__c, Payment_Term__c, Total__c, Costs_Total__c, Total_Invoice_Amount__c, Receivable_Balance__c, Payable_Balance__c, Variable_Charges_Confirmed__c, LastModifiedDate FROM STEM__c WHERE Id IN (${quotedIds(group)}) AND CreatedDate >= ${VARIABLE_CHARGE_STEM_CREATED_FROM}${accessClause}`));
+    stemRows.push(...await queryAll(`SELECT Id, Name, KeyStem__c, Account__c, Account__r.Name, Vessel__c, Vessel__r.Name, Port__c, Port__r.Name, CreatedDate, Delivery_Date__c, ETA_Start_Date__c, ETA_End_Date__c, ETB_Start_Date__c, ETB_End_Date__c, ETCD_Start_Date__c, ETCD_End_Date__c, ETD_Start_Date__c, ETD_End_Date__c, Payment_Term__c, Total__c, Costs_Total__c, Total_Invoice_Amount__c, Receivable_Balance__c, Payable_Balance__c, CurrencyIsoCode, Variable_Charges_Confirmed__c, LastModifiedDate FROM STEM__c WHERE Id IN (${quotedIds(group)}) AND CreatedDate >= ${VARIABLE_CHARGE_STEM_CREATED_FROM}${accessClause}`));
   }
   const accessibleStemIds = new Set(stemRows.map((row) => row.Id));
   const [nominations, supplierNominations, invoices] = await Promise.all([
@@ -521,9 +527,9 @@ async function loadLiveCases({ client, stemIds = null, stemAccessCondition = nul
     accessibleStemIds.size ? queryAll(`SELECT Id, Name, STEM__c, Proforma__c, Sent__c, File__c, LastModifiedDate FROM Invoice__c WHERE STEM__c IN (${quotedIds([...accessibleStemIds])})`) : [],
   ]);
   const result = stemRows.map((stem) => {
-    const stemLineItems = allLineItems.filter((row) => row.STEM__c === stem.Id);
-    const lineItems = relevantLines.filter((row) => row.STEM__c === stem.Id);
-    const extraCosts = relevantExtras.filter((row) => row.STEM__c === stem.Id);
+    const stemLineItems = allLineItems.filter((row) => row.STEM__c === stem.Id).sort(compareVariableChargeRows);
+    const lineItems = relevantLines.filter((row) => row.STEM__c === stem.Id).sort(compareVariableChargeRows);
+    const extraCosts = relevantExtras.filter((row) => row.STEM__c === stem.Id).sort(compareVariableChargeRows);
     const usedAccountIds = new Set([...lineItems.map((row) => row.Original_Supplier__c), ...extraCosts.map((row) => row.Supplier__c)]);
     const entry = {
       stem, lineItems, extraCosts, allLineItems: stemLineItems,
@@ -635,21 +641,27 @@ function finiteAmount(value) {
 }
 
 function financialSummary(live) {
+  const stemCurrency = text(live.stem?.CurrencyIsoCode, 3).toUpperCase() || null;
   const rows = [
     ...live.lineItems.map((row) => ({
       supplierId: row.Original_Supplier__c,
       cost: finiteAmount(row.Total_Cost__c),
       charge: finiteAmount(row.Total_Price__c),
+      currency: text(row.CurrencyIsoCode, 3).toUpperCase() || stemCurrency,
     })),
     ...live.extraCosts.map((row) => ({
       supplierId: row.Supplier__c,
       cost: finiteAmount(row.Line_Total_Buy__c),
       charge: finiteAmount(row.Line_Total__c),
+      currency: text(row.CurrencyIsoCode, 3).toUpperCase() || stemCurrency,
     })),
   ];
   const summarize = (selected) => {
-    const costsComplete = selected.every((row) => row.cost != null);
-    const chargesComplete = selected.every((row) => row.charge != null);
+    const currencies = [...new Set(selected.map((row) => row.currency).filter(Boolean))];
+    const currency = stemCurrency || (currencies.length === 1 ? currencies[0] : 'USD');
+    const currencyMismatch = currencies.some((value) => value !== currency) || currencies.length > 1;
+    const costsComplete = !currencyMismatch && selected.every((row) => row.cost != null);
+    const chargesComplete = !currencyMismatch && selected.every((row) => row.charge != null);
     const supplierCostTotal = costsComplete ? selected.reduce((sum, row) => sum + row.cost, 0) : null;
     const buyerChargeTotal = chargesComplete ? selected.reduce((sum, row) => sum + row.charge, 0) : null;
     return {
@@ -658,12 +670,16 @@ function financialSummary(live) {
       margin: supplierCostTotal != null && buyerChargeTotal != null ? buyerChargeTotal - supplierCostTotal : null,
       costsComplete,
       chargesComplete,
+      currency,
+      blockingReason: currencyMismatch ? 'Charge rows use different currencies and cannot be combined.'
+        : !costsComplete ? 'One or more supplier totals are unavailable in Salesforce.'
+          : !chargesComplete ? 'One or more buyer totals are unavailable in Salesforce.' : null,
       rowCount: selected.length,
     };
   };
   return {
     ...summarize(rows),
-    currencyBasis: 'stem_currency',
+    currencyBasis: 'exact_row_currency',
     bySupplier: live.accounts.map((account) => ({
       supplierId: account.Id,
       supplierName: account.Name,
@@ -834,6 +850,14 @@ function serializeCase(live, stored, profile, gm, dueDate, sideRows = [], profil
     id: stored?.id || null, stemId: live.stem.Id,
     stemName: live.stem.Name || live.stem.KeyStem__c || live.stem.Id,
     stemReference: live.stem.KeyStem__c || null,
+    buyerAccountId: live.stem.Account__c || null,
+    buyerAccountName: live.stem.Account__r?.Name || null,
+    vesselId: live.stem.Vessel__c || null,
+    vesselName: live.stem.Vessel__r?.Name || null,
+    portId: live.stem.Port__c || null,
+    portName: live.stem.Port__r?.Name || null,
+    currency: text(live.stem.CurrencyIsoCode, 3).toUpperCase() || 'USD',
+    buyerPaymentTerm: live.stem.Payment_Term__c || null,
     createdDate: live.stem.CreatedDate || null,
     deliveryDate: live.stem.Delivery_Date__c || null, dueDate, status,
     hasProductLineItems: actionability.hasProductLineItems,
@@ -990,6 +1014,35 @@ async function activeProducts() {
   return rows.map((row) => ({ id: row.Id, name: row.Name, lastModifiedDate: row.LastModifiedDate }));
 }
 
+async function assignmentHistory(client, caseRow) {
+  if (!caseRow?.id) return { rows: [], unavailable: false };
+  const result = await client.from('variable_charge_events')
+    .select('event_type,metadata,created_at')
+    .eq('case_id', caseRow.id)
+    .in('event_type', ['side_assigned', 'side_taken_back'])
+    .order('created_at', { ascending: false })
+    .limit(50);
+  if (result.error) return { rows: [], unavailable: true };
+  const suppliers = new Map((caseRow.supplierAccounts || []).map((row) => [row.id, row.name]));
+  return {
+    unavailable: false,
+    rows: (result.data || []).map((row) => {
+      const metadata = row.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+      const side = metadata.side === 'buyer_charge' ? 'Buyer Leg' : metadata.side === 'cost' ? 'Supplier Leg' : 'Review';
+      const targetRole = metadata.targetRole === 'buyer_trader' ? 'Buyer Trader'
+        : metadata.targetRole === 'supplier_trader' ? 'Supplier Trader'
+          : metadata.targetRole === 'gm_override' ? 'Temporary Assignee' : null;
+      return {
+        occurredAt: row.created_at || null,
+        eventType: row.event_type,
+        side,
+        supplierName: suppliers.get(metadata.supplierAccountId) || null,
+        action: row.event_type === 'side_taken_back' ? 'Taken Back' : targetRole ? `Assigned to ${targetRole}` : 'Assignment Changed',
+      };
+    }),
+  };
+}
+
 export async function variableChargeOptions(_body, context) {
   const [products, profiles, recordTypes] = await Promise.all([
     activeProducts(),
@@ -1012,6 +1065,7 @@ export async function getVariableChargeDetail(body, context) {
     linkedSalesforceFiles(live),
     variableChargeOptions({}, context),
   ]);
+  const history = await assignmentHistory(context.client, cases[0]);
   return {
     case: cases[0],
     lineItems: live.lineItems.map((row) => serializeLiveRow(row, 'line_item')),
@@ -1022,6 +1076,9 @@ export async function getVariableChargeDetail(body, context) {
     pricingModes: options.pricingModes,
     capabilities: cases[0].capabilities,
     pairedWorkflowEnabled: pairedWorkflowEnabled(),
+    assignmentHistory: history.rows,
+    assignmentHistoryUnavailable: history.unavailable,
+    salesforceInstanceUrl: getInstanceUrl(),
   };
 }
 
@@ -1116,10 +1173,10 @@ function normalizeSupplierReviewPayload(body, supplierRows) {
   const reviews = supplierRows.map((row) => {
     const selected = outcomes.get(row.Id);
     if (!selected || !SUPPLIER_REVIEW_OUTCOMES.has(selected.outcome)) {
-      throw httpError('Mark every supplier charge as Correct or Needs change before confirming.', 400, 'ROW_REVIEW_REQUIRED');
+      throw httpError('Resolve every supplier charge as Correct or Edit Cost before approval.', 400, 'ROW_REVIEW_REQUIRED');
     }
     if (selected.outcome === 'changed' && !updateIds.has(row.Id)) {
-      throw httpError('Save the corrected cost fields for every charge marked Needs change.', 400, 'ROW_CHANGE_REQUIRED');
+      throw httpError('Save the corrected cost fields for every charge marked Edit Cost.', 400, 'ROW_CHANGE_REQUIRED');
     }
     if (selected.outcome === 'cancelled' && !cancellationIds.has(row.Id)) {
       throw httpError('A cancelled outcome must include the matching Salesforce charge cancellation.', 400, 'ROW_CANCELLATION_REQUIRED');
@@ -1155,7 +1212,7 @@ function normalizeBuyerReviewPayload(body, live) {
   const reviews = rows.map((row) => {
     const selected = decisions.get(row.Id);
     if (!selected || !['include', 'exclude'].includes(selected.decision)) {
-      throw httpError('Choose Include or Exclude for every buyer charge before approval.', 400, 'BUYER_CHARGE_DECISION_REQUIRED');
+      throw httpError('Choose Charge Buyer or Do Not Charge for every buyer charge before approval.', 400, 'BUYER_CHARGE_DECISION_REQUIRED');
     }
     return {
       sourceId: row.Id,
@@ -1176,7 +1233,7 @@ async function validateReviews(body, live, files) {
   for (const id of existingIds) {
     const review = byId.get(id);
     if (!review || review.reviewed !== true) throw httpError('Every current Variable Charges row must be reviewed individually.', 400, 'ROW_REVIEW_REQUIRED');
-    if (!['include', 'exclude'].includes(review.buyerChargeDecision)) throw httpError('Every reviewed row needs an Include or Exclude buyer-charge decision.', 400, 'BUYER_CHARGE_DECISION_REQUIRED');
+    if (!['include', 'exclude'].includes(review.buyerChargeDecision)) throw httpError('Every reviewed row needs a Charge Buyer or Do Not Charge decision.', 400, 'BUYER_CHARGE_DECISION_REQUIRED');
     const evidence = reviewEvidence(review);
     if (!evidence.reference && !evidence.evidenceDocumentIds.length) throw httpError('Every reviewed row needs a reference, note, or Salesforce File.', 400, 'ROW_EVIDENCE_REQUIRED');
   }
@@ -1188,7 +1245,7 @@ async function validateReviews(body, live, files) {
   for (const addition of Array.isArray(body?.extraCostAdds) ? body.extraCostAdds : []) {
     const review = byId.get(text(addition?.reviewLocalId, 64));
     if (!review || review.reviewed !== true) throw httpError('Every new STEM Charge must be reviewed individually.', 400, 'ROW_REVIEW_REQUIRED');
-    if (!['include', 'exclude'].includes(review.buyerChargeDecision)) throw httpError('Every new STEM Charge needs an Include or Exclude buyer-charge decision.', 400, 'BUYER_CHARGE_DECISION_REQUIRED');
+    if (!['include', 'exclude'].includes(review.buyerChargeDecision)) throw httpError('Every new STEM Charge needs a Charge Buyer or Do Not Charge decision.', 400, 'BUYER_CHARGE_DECISION_REQUIRED');
     const evidence = reviewEvidence(review);
     if (!evidence.reference && !evidence.evidenceDocumentIds.length) throw httpError('Every new STEM Charge needs a reference, note, or Salesforce File.', 400, 'ROW_EVIDENCE_REQUIRED');
   }
@@ -1657,7 +1714,7 @@ async function validateBuyerSide(body, supplierRows, files) {
   for (const row of supplierRows) {
     const review = byId.get(row.Id);
     if (!review || review.reviewed !== true) throw httpError('Review every current buyer-charge row for this supplier.', 400, 'BUYER_ROW_REVIEW_REQUIRED');
-    if (!['include', 'exclude'].includes(text(review.buyerChargeDecision, 32).toLowerCase())) throw httpError('Choose Include or Exclude for every buyer charge.', 400, 'BUYER_CHARGE_DECISION_REQUIRED');
+    if (!['include', 'exclude'].includes(text(review.buyerChargeDecision, 32).toLowerCase())) throw httpError('Choose Charge Buyer or Do Not Charge for every buyer charge.', 400, 'BUYER_CHARGE_DECISION_REQUIRED');
     const evidence = reviewEvidence(review);
     if (!evidence.reference) throw httpError('The buyer-charge side requires a note for every reviewed row.', 400, 'BUYER_NOTE_REQUIRED');
     if (evidence.evidenceDocumentIds.some((id) => !fileIds.has(id))) throw httpError('A selected Salesforce File is no longer linked to this charge.', 409, 'EVIDENCE_CHANGED');
@@ -1666,7 +1723,7 @@ async function validateBuyerSide(body, supplierRows, files) {
   for (const addition of Array.isArray(normalized?.extraCostAdds) ? normalized.extraCostAdds : []) {
     if (!text(addition?.reviewLocalId || addition?.localId, 64)) throw httpError('Every new paired charge needs a stable local identity.', 400, 'ADDITION_ID_REQUIRED');
     const decision = text(addition?.buyerChargeDecision || addition?.decision, 32).toLowerCase();
-    if (!['include', 'exclude'].includes(decision)) throw httpError('Choose Include or Exclude for every new buyer charge.', 400, 'BUYER_CHARGE_DECISION_REQUIRED');
+    if (!['include', 'exclude'].includes(decision)) throw httpError('Choose Charge Buyer or Do Not Charge for every new buyer charge.', 400, 'BUYER_CHARGE_DECISION_REQUIRED');
     if (decision === 'include') numeric(addition?.buyerPrice ?? addition?.price ?? addition?.fixedBuyerAmount ?? addition?.buyerUnitPrice, 'Buyer price', { nullable: false });
     const evidence = reviewEvidence(addition);
     if (!buyerNote && !evidence.reference) throw httpError('The buyer-charge side requires a note for every new charge.', 400, 'BUYER_NOTE_REQUIRED');
@@ -1681,7 +1738,7 @@ export async function assignVariableChargeSides(body, context) {
   const supplierId = text(body?.supplierId, 18);
   const sides = selectedSides(body);
   const targetRole = text(body?.target, 40).toLowerCase();
-  if (!['buyer_trader', 'supplier_trader'].includes(targetRole)) throw httpError('Choose Buyer Trader or Supplier Trader.', 400, 'INVALID_SIDE_ASSIGNMENT_TARGET');
+  if (!['buyer_trader', 'supplier_trader', 'gm_override'].includes(targetRole)) throw httpError('Choose Buyer Trader, Supplier Trader, or an authorized Temporary Assignee.', 400, 'INVALID_SIDE_ASSIGNMENT_TARGET');
   const operationId = operationIdentity(body);
   const live = await liveCaseForStem(stemId, context);
   const requirement = (live.supplierRequirements || []).find((row) => row.supplierId === supplierId && row.effectiveRequired);
@@ -1695,11 +1752,23 @@ export async function assignVariableChargeSides(body, context) {
   const reason = text(body?.gmOverrideReason || body?.reason, 1000);
   const supplierOwner = requirement.assignedSupplierTrader?.id === context.profile.id
     && !VIEW_ONLY_USER_TYPES.has(text(context.profile?.user_type).toLowerCase());
-  if (!supplierOwner && !(gm.isGeneralManager && reason.length >= 5)) {
+  const explicitGmOverride = targetRole === 'gm_override';
+  if (explicitGmOverride && !(gm.isGeneralManager && reason.length >= 5)) {
+    if (gm.isGeneralManager) throw httpError('A General Manager override reason of at least 5 characters is required.', 400, 'GM_REASON_REQUIRED');
+    throw httpError('Only the active General Manager may apply a Temporary Assignee.', 403, 'GENERAL_MANAGER_REQUIRED');
+  }
+  if (!explicitGmOverride && !supplierOwner && !(gm.isGeneralManager && reason.length >= 5)) {
     if (gm.isGeneralManager) throw httpError('A General Manager override reason of at least 5 characters is required.', 400, 'GM_REASON_REQUIRED');
     throw httpError('Only the resolved Supplier Trader may delegate or take back these sides.', 403, 'DEFAULT_SUPPLIER_TRADER_REQUIRED');
   }
-  const targetUserId = targetRole === 'buyer_trader' ? live.assignment?.profileId : requirement.assignedSupplierTrader?.id;
+  let targetUserId = targetRole === 'buyer_trader' ? live.assignment?.profileId : requirement.assignedSupplierTrader?.id;
+  if (explicitGmOverride) {
+    const requestedAssigneeId = text(body?.assigneeProfileId, 64);
+    const profiles = await activeProfileDirectory(context.client);
+    const requestedAssignee = profiles.find((row) => row.id === requestedAssigneeId && !VIEW_ONLY_USER_TYPES.has(text(row.user_type).toLowerCase()));
+    if (!requestedAssignee) throw httpError('Choose an active trader as the Temporary Assignee.', 400, 'INVALID_ASSIGNEE');
+    targetUserId = requestedAssignee.id;
+  }
   if (!targetUserId) throw httpError(`The resolved ${targetRole === 'buyer_trader' ? 'Buyer' : 'Supplier'} Trader is unavailable.`, 409, 'SIDE_TARGET_UNRESOLVED');
   const requestFingerprint = sha256({ stemId, supplierId, sides, targetRole, targetUserId, revisions, reason: gm.isGeneralManager ? reason : null });
   const reservation = await reserveOperation(context.client, { operationId, type: 'side_assign', stemId, fingerprint: requestFingerprint, actorId: context.profile.id });
@@ -1710,12 +1779,12 @@ export async function assignVariableChargeSides(body, context) {
     p_stem_id: stemId,
     p_supplier_account_id: supplierId,
     p_sides: sides,
-    p_target_role: !supplierOwner && gm.isGeneralManager ? 'gm_override' : targetRole,
+    p_target_role: explicitGmOverride || (!supplierOwner && gm.isGeneralManager) ? 'gm_override' : targetRole,
     p_target_user_id: targetUserId,
     p_expected_revisions: revisions,
     p_actor_user_id: context.profile.id,
     p_actor_email: context.profile.email,
-    p_override_reason: !supplierOwner && gm.isGeneralManager ? reason : null,
+    p_override_reason: explicitGmOverride || (!supplierOwner && gm.isGeneralManager) ? reason : null,
   });
   if (error) {
     if (/changed after it was opened|revision/i.test(error.message || '')) throw httpError(error.message, 409, 'SIDE_REVISION_CONFLICT');

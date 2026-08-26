@@ -272,21 +272,24 @@ test('simplified buyer approval uses one case note and exact include or exclude 
 
 test('financial summary is deterministic and fails closed on incomplete totals', () => {
   assert.deepEqual(variableChargeInternals.financialSummary({
+    stem: { CurrencyIsoCode: 'USD' },
     accounts: [{ Id: '0012x0000000001AAA', Name: 'SUPPLIER A' }],
-    lineItems: [{ Original_Supplier__c: '0012x0000000001AAA', Total_Cost__c: 100, Total_Price__c: 130 }],
-    extraCosts: [{ Supplier__c: '0012x0000000001AAA', Line_Total_Buy__c: 20, Line_Total__c: 25 }],
+    lineItems: [{ Original_Supplier__c: '0012x0000000001AAA', Total_Cost__c: 100, Total_Price__c: 130, CurrencyIsoCode: 'USD' }],
+    extraCosts: [{ Supplier__c: '0012x0000000001AAA', Line_Total_Buy__c: 20, Line_Total__c: 25, CurrencyIsoCode: 'USD' }],
   }), {
     supplierCostTotal: 120,
     buyerChargeTotal: 155,
     margin: 35,
     costsComplete: true,
     chargesComplete: true,
+    currency: 'USD',
+    blockingReason: null,
     rowCount: 2,
-    currencyBasis: 'stem_currency',
+    currencyBasis: 'exact_row_currency',
     bySupplier: [{
       supplierId: '0012x0000000001AAA', supplierName: 'SUPPLIER A',
       supplierCostTotal: 120, buyerChargeTotal: 155, margin: 35,
-      costsComplete: true, chargesComplete: true, rowCount: 2,
+      costsComplete: true, chargesComplete: true, currency: 'USD', blockingReason: null, rowCount: 2,
     }],
   });
   const incomplete = variableChargeInternals.financialSummary({
@@ -295,6 +298,14 @@ test('financial summary is deterministic and fails closed on incomplete totals',
   assert.equal(incomplete.supplierCostTotal, null);
   assert.equal(incomplete.margin, null);
   assert.equal(incomplete.costsComplete, false);
+  const mixed = variableChargeInternals.financialSummary({
+    stem: { CurrencyIsoCode: 'USD' }, accounts: [],
+    lineItems: [{ Total_Cost__c: 10, Total_Price__c: 12, CurrencyIsoCode: 'USD' }],
+    extraCosts: [{ Line_Total_Buy__c: 20, Line_Total__c: 25, CurrencyIsoCode: 'HKD' }],
+  });
+  assert.equal(mixed.costsComplete, false);
+  assert.equal(mixed.chargesComplete, false);
+  assert.match(mixed.blockingReason, /different currencies/);
 });
 
 test('FCOS handlers are explicit, fail-closed, atomic, and do not send email', async () => {
@@ -323,15 +334,28 @@ test('FCOS handlers are explicit, fail-closed, atomic, and do not send email', a
   assert.match(service, /allOrNone: true/);
   assert.match(service, /expectedLastModifiedDate/);
   const liveLoader = service.slice(service.indexOf('async function loadLiveCases'), service.indexOf('function effectiveAssignee'));
-  assert.doesNotMatch(liveLoader, /CurrencyIsoCode/);
+  assert.match(liveLoader, /CurrencyIsoCode/);
+  assert.match(liveLoader, /Account__r\.Name/);
+  assert.match(liveLoader, /Vessel__r\.Name/);
+  assert.match(liveLoader, /Port__r\.Name/);
   assert.match(service, /currency: row\.CurrencyIsoCode \|\| null/);
   assert.match(service, /requireExternalActionGate\('salesforce_write'\)/);
+  assert.match(service, /\['buyer_trader', 'supplier_trader', 'gm_override'\]/);
+  assert.match(service, /Choose an active trader as the Temporary Assignee/);
   assert.match(service, /Cancelled__c: true/);
   assert.doesNotMatch(service, /method:\s*'DELETE'/);
   assert.doesNotMatch(service, /sendOperationalMail|sendEmail|Graph/);
-  assert.match(ui, /Confirm \{activeSupplierStage\.supplierName \|\| 'supplier'\} costs/);
-  assert.match(ui, /Approve buyer charges/);
-  assert.match(ui, /Audit details/);
+  assert.match(ui, /Approve Supplier Costs/);
+  assert.match(ui, /Approve Buyer Charges/);
+  assert.match(ui, /Approve Both/);
+  assert.match(ui, /target: 'gm_override'/);
+  assert.match(ui, /Temporary Assignee/);
+  assert.match(ui, /Audit Details/);
+  assert.match(ui, /Supplier Leg/);
+  assert.match(ui, /Buyer Leg/);
+  assert.match(ui, /Charge Buyer/);
+  assert.match(ui, /Do Not Charge/);
+  assert.match(ui, /Pending/);
   assert.match(ui, /valueOf\(row\.item, \['productName'\]\)/);
   assert.doesNotMatch(ui, /row\.sourceType === 'line_item' \? 'Line item' : 'Extra cost'/);
   assert.match(service, /Product2Id__r\.Name/);
@@ -378,11 +402,15 @@ test('Variable Charges UI shows complete STEM identity and explicit readiness ba
   ]);
   assert.match(service, /stemName: live\.stem\.Name \|\| live\.stem\.KeyStem__c/);
   assert.match(service, /stemReference: live\.stem\.KeyStem__c/);
+  assert.match(service, /buyerAccountName: live\.stem\.Account__r\?\.Name/);
+  assert.match(service, /vesselName: live\.stem\.Vessel__r\?\.Name/);
+  assert.match(service, /portName: live\.stem\.Port__r\?\.Name/);
   assert.match(service, /ETA_Start_Date__c, ETA_End_Date__c, ETB_Start_Date__c, ETB_End_Date__c, ETCD_Start_Date__c, ETCD_End_Date__c, ETD_Start_Date__c, ETD_End_Date__c/);
   assert.match(ui, /Latest ETA \/ ETB \/ ETCD \/ ETD/);
   assert.match(ui, /Due \/ available/);
-  assert.match(ui, /Available from/);
-  assert.match(methodology, /Extra-cost-only cases have no Variable Charges due date/);
+  assert.match(ui, /Review Starts/);
+  assert.match(ui, /Review Timing Basis/);
+  assert.match(methodology, /extra-cost-only cases have no workflow due date/i);
 });
 
 test('extra-cost-only invoice wording uses an optional document date without updating STEM delivery', async () => {

@@ -400,16 +400,20 @@ export const PAYMENT_COLLECTIONS_METHODOLOGIES = {
     description: 'How each supplier’s costs and buyer charges are reviewed side by side with independent invoice gates.',
     sections: [
       {
+        title: 'Review timing',
+        body: 'For a product-bearing STEM, Review Starts is one calendar day after the Salesforce Delivery Date. For an extra-cost-only STEM, Review Starts is one calendar day after the latest date in the ETA, ETB, ETCD, or ETD ranges. If every schedule date is missing, FCOS uses the Hong Kong Enquiry Created Date. Product workflows are due on the existing next-Hong-Kong-business-day basis; extra-cost-only cases have no workflow due date.',
+      },
+      {
         title: 'Live case detection',
         body: 'FCOS identifies exact supplier Account IDs from non-cancelled Salesforce line items and extra costs. A supplier is required when Account Is Agent is selected or the exact STEM/supplier pair is selected manually under “Who must confirm final supplier charges?”. Is Agent suppliers cannot be opted out. Salesforce remains authoritative and is re-read before every consequential action.',
       },
       {
-        title: 'Readiness and paired ownership',
-        body: 'A product-bearing STEM becomes actionable one calendar day after its required Salesforce Delivery Date and is due on the next Hong Kong business day. An extra-cost-only STEM instead uses the latest ETA, ETB, ETCD, or ETD range date, falling back to its Hong Kong Enquiry Created Date. Extra-cost-only cases have no Variable Charges due date. Each exact supplier receives one paired work package. Supplier costs and buyer charges both default to that supplier’s resolved Supplier Trader, who may assign either side or both sides to the resolved Buyer Confirmation Trader.',
+        title: 'Paired ownership',
+        body: 'Each exact supplier receives one paired work package. Supplier costs and buyer charges both default to that supplier’s resolved Supplier Trader, who may assign either side to the resolved Buyer Confirmation Trader and take it back before approval.',
       },
       {
         title: 'Review and controlled changes',
-        body: 'The cost and buyer-charge columns may be completed in either order. The cost owner marks each exact-supplier charge as Correct or Needs change, controls additions, cancellations and shared fields, and records a supplier note. The buyer-side owner records Include or Exclude, buyer pricing and a buyer-charge note. Existing product lines remain read-only and Salesforce Files are optional evidence.',
+        body: 'The Supplier Leg and Buyer Leg may be completed in either order. Pending remains unresolved and blocks approval. The cost owner marks each exact-supplier charge as Correct or Edit Cost, controls additions, cancellations and shared fields, and records a Review Note. The buyer-side owner selects Charge Buyer or Do Not Charge, controls permitted buyer pricing, and records a Review Note. Existing product lines remain read-only in FCOS and Salesforce Files are optional supplier evidence.',
       },
       {
         title: 'Permissions and overrides',

@@ -47,7 +47,8 @@ test('the shared Methodology dialog remains readable on constrained viewports', 
   assert.match(component, /BookOpen/);
   assert.match(component, /h-\[38px\]/);
   assert.match(component, /font-medium/);
-  assert.match(component, /hidden sm:inline">Methodology/);
+  assert.match(component, /triggerLabel = 'Methodology'/);
+  assert.match(component, /hidden sm:inline">\{triggerLabel\}/);
 });
 
 test('Markets and Hedge Desk expose one shared page-level Methodology control', () => {

@@ -7,20 +7,32 @@ import {
   CircleDot,
   ChevronRight,
   ClipboardCheck,
+  ExternalLink,
   FileText,
+  Info,
   Loader2,
+  MoreHorizontal,
   PackagePlus,
   RefreshCw,
   ShieldCheck,
   X,
 } from 'lucide-react';
 import { appClient } from '@/api/appClient';
+import PageMethodology from '@/components/common/PageMethodology';
 import StemDetailLink from '@/components/common/StemDetailLink';
 import StateBlock from '@/components/common/StateBlock';
 import TableShell from '@/components/common/TableShell';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import {
   Dialog,
   DialogContent,
@@ -33,6 +45,19 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { Skeleton } from '@/components/ui/skeleton';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
+import { PAYMENT_COLLECTIONS_METHODOLOGIES } from '@/lib/pageMethodologies';
 import { cn } from '@/lib/utils';
 
 const VIEWS = [
@@ -44,14 +69,14 @@ const VIEWS = [
 ];
 
 const BUYER_CHARGE_DECISIONS = [
-  { value: 'include', label: 'Include buyer charge' },
-  { value: 'exclude', label: 'Exclude buyer charge' },
+  { value: 'include', label: 'Charge Buyer' },
+  { value: 'exclude', label: 'Do Not Charge' },
 ];
 
 const POST_INVOICE_RESOLUTIONS = [
-  { value: 'no_adjustment', label: 'No adjustment' },
-  { value: 'revised_invoice', label: 'Revised invoice' },
-  { value: 'credit_note', label: 'Credit note' },
+  { value: 'no_adjustment', label: 'No Adjustment' },
+  { value: 'revised_invoice', label: 'Revised Invoice' },
+  { value: 'credit_note', label: 'Credit Note' },
 ];
 
 function operationId(prefix) {
@@ -86,10 +111,54 @@ function formatDate(value) {
 }
 
 function formatMoney(value, currency) {
-  if (value == null || value === '') return '—';
+  if (value == null || value === '') return 'Unavailable';
   const amount = Number(value);
-  if (!Number.isFinite(amount)) return '—';
-  return `${currency || ''} ${amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`.trim();
+  if (!Number.isFinite(amount)) return 'Unavailable';
+  return `${currency || 'USD'} ${amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function finiteNumber(value) {
+  if (value == null || value === '') return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function sideStatusLabel(side) {
+  if (side?.status === 'verified') return 'Approved';
+  if (side?.status === 'invalidated') return 'Needs Review';
+  return 'Pending';
+}
+
+function sideStatusTone(side) {
+  if (side?.status === 'verified') return 'border-emerald-300 bg-emerald-50 text-emerald-900';
+  if (side?.status === 'invalidated') return 'border-amber-300 bg-amber-50 text-amber-900';
+  return 'border-slate-300 bg-slate-50 text-slate-700';
+}
+
+function pricingTypeFor(item) {
+  return item?.fixed === true || valueOf(item, ['pricingType', 'pricing_type']) === 'fixed'
+    || valueOf(item, ['fixedCost', 'fixed_cost', 'fixedPrice', 'fixed_price'], null) != null ? 'fixed' : 'per_unit';
+}
+
+function rowFinancials(row, draft, fallbackCurrency = 'USD') {
+  const item = row.item || {};
+  const pricingType = draft?.pricingType || pricingTypeFor(item);
+  const currency = text(valueOf(item, ['currency', 'CurrencyIsoCode'])) || fallbackCurrency || 'USD';
+  const quantity = finiteNumber(draft?.quantity ?? valueOf(item, ['quantity', 'Quantity__c']));
+  const supplierRate = finiteNumber(draft?.supplierCost ?? (pricingType === 'fixed'
+    ? valueOf(item, ['fixedCost', 'fixed_cost', 'Lumpsum_Cost__c'])
+    : valueOf(item, ['cost', 'unitCost', 'unit_cost', 'Unit_Cost__c'])));
+  const buyerRate = finiteNumber(draft?.buyerPrice ?? (pricingType === 'fixed'
+    ? valueOf(item, ['fixedPrice', 'fixed_price', 'Lumpsum_Price__c'])
+    : valueOf(item, ['price', 'unitPrice', 'unit_price', 'Unit_Price__c'])));
+  const storedSupplierTotal = finiteNumber(valueOf(item, ['lineCost', 'line_cost', 'totalCost', 'Total_Cost__c']));
+  const storedBuyerTotal = finiteNumber(valueOf(item, ['linePrice', 'line_price', 'totalPrice', 'Total_Price__c']));
+  const supplierTotal = draft ? (pricingType === 'fixed' ? supplierRate : supplierRate != null && quantity != null ? supplierRate * quantity : null) : storedSupplierTotal;
+  const buyerTotal = draft ? (pricingType === 'fixed' ? buyerRate : buyerRate != null && quantity != null ? buyerRate * quantity : null) : storedBuyerTotal;
+  return {
+    pricingType, currency, quantity, supplierRate, buyerRate, supplierTotal, buyerTotal,
+    margin: supplierTotal != null && buyerTotal != null ? buyerTotal - supplierTotal : null,
+  };
 }
 
 function caseStemId(caseRow) {
@@ -121,18 +190,19 @@ function StemIdentity({ caseRow, onOpenStem }) {
 
 function caseStatus(caseRow) {
   const status = text(valueOf(caseRow, ['status', 'caseStatus', 'case_status']));
-  if (status === 'post_invoice_changes') return 'Invoice already issued—action required';
+  if (status === 'post_invoice_changes') return 'Invoice Action Required';
   if (status === 'awaiting_delivery') return 'Waiting';
-  if (status === 'needs_action') return 'In review';
+  if (status === 'needs_action') return 'In Review';
   if (status === 'ready_for_invoice') return 'Ready for Invoice';
   if (status === 'completed') return 'Completed';
-  return VIEWS.find((view) => view.id === status)?.label || status || 'In review';
+  return VIEWS.find((view) => view.id === status)?.label || status || 'In Review';
 }
 
 function normalizeReviewRows(lineItems = [], extraCosts = []) {
+  const compare = (a, b) => itemLabel(a).localeCompare(itemLabel(b), 'en', { sensitivity: 'base' }) || a.sourceId.localeCompare(b.sourceId);
   return [
-    ...lineItems.map((item, index) => ({ key: `line:${rowId(item, 'line', index)}`, sourceType: 'line_item', sourceId: rowId(item, 'line', index), item, readOnly: true })),
-    ...extraCosts.map((item, index) => ({ key: `extra:${rowId(item, 'extra', index)}`, sourceType: 'extra_cost', sourceId: rowId(item, 'extra', index), item, readOnly: false })),
+    ...lineItems.map((item, index) => ({ key: `line:${rowId(item, 'line', index)}`, sourceType: 'line_item', sourceId: rowId(item, 'line', index), item, readOnly: true })).sort(compare),
+    ...extraCosts.map((item, index) => ({ key: `extra:${rowId(item, 'extra', index)}`, sourceType: 'extra_cost', sourceId: rowId(item, 'extra', index), item, readOnly: false })).sort(compare),
   ];
 }
 
@@ -376,8 +446,11 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
     : Array.isArray(effectiveCapabilities.assigneeOptions)
     ? effectiveCapabilities.assigneeOptions
     : Array.isArray(activeCase.assigneeOptions) ? activeCase.assigneeOptions : [];
-  const supplierPaymentTerm = text(valueOf(activeCase, ['supplierPaymentTerm', 'supplier_payment_term', 'paymentTerm', 'payment_term'])) || 'Inherited from supplier';
   const supplierAccounts = Array.isArray(activeCase.supplierAccounts) ? activeCase.supplierAccounts : [];
+  const activeSupplierAccount = supplierAccounts.find((row) => text(row.id) === activeSupplierId) || null;
+  const supplierPaymentTerm = text(valueOf(activeSupplierAccount, ['paymentTerm', 'payment_term'])) || 'Not set';
+  const buyerPaymentTerm = text(valueOf(activeCase, ['buyerPaymentTerm', 'buyer_payment_term', 'paymentTerm', 'payment_term'])) || 'Not set';
+  const stemCurrency = text(valueOf(activeCase, ['currency', 'currencyIsoCode', 'CurrencyIsoCode'])) || 'USD';
 
   const rowSupplierId = (row) => text(valueOf(row?.item || row, ['supplierId', 'supplier_id', 'Original_Supplier__c', 'Supplier__c']));
 
@@ -426,7 +499,7 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
     if (!supplierReviewNote) { setSaveError('Add one supplier reference or note before confirming the costs.'); return; }
     for (const row of stageRows) {
       const review = reviews[row.key] || {};
-      if (!['correct', 'changed', 'cancelled'].includes(review.outcome)) { setSaveError(`Mark ${itemLabel(row)} as Correct or Needs change.`); return; }
+      if (!['correct', 'changed', 'cancelled'].includes(review.outcome)) { setSaveError(`Mark ${itemLabel(row)} as Correct or Edit Cost.`); return; }
       if (row.readOnly && review.outcome !== 'correct') { setSaveError(`${itemLabel(row)} is a read-only product line. Correct it in Salesforce, then refresh this task.`); return; }
     }
     const extraCostUpdates = [];
@@ -536,13 +609,27 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
     const buyerSelected = sides.includes('buyer_charge');
     const costNote = text(supplierReviewNotes[supplierId]);
     const buyerNote = text(buyerReviewNotes[supplierId]);
-    if (costSelected && !costNote) { setSaveError('Add a supplier cost note before confirmation.'); return; }
-    if (buyerSelected && !buyerNote) { setSaveError('Add a buyer-charge note before confirmation.'); return; }
+    if (costSelected && !costNote) { setSaveError('Add the Supplier Leg Review Note before approval.'); return; }
+    if (buyerSelected && !buyerNote) { setSaveError('Add the Buyer Leg Review Note before approval.'); return; }
     for (const row of stageRows) {
       const review = reviews[row.key] || {};
-      if (costSelected && !['correct', 'changed', 'cancelled'].includes(review.outcome)) { setSaveError(`Review the cost side of ${itemLabel(row)}.`); return; }
+      if (costSelected && !['correct', 'changed', 'cancelled'].includes(review.outcome)) { setSaveError(`${itemLabel(row)} is Pending on the Supplier Leg.`); return; }
       if (costSelected && row.readOnly && review.outcome !== 'correct') { setSaveError(`${itemLabel(row)} is read-only. Correct it in Salesforce, then refresh.`); return; }
-      if (buyerSelected && !['include', 'exclude'].includes(review.buyerChargeDecision)) { setSaveError(`Choose Include or Exclude for ${itemLabel(row)}.`); return; }
+      if (costSelected && row.sourceType === 'extra_cost' && review.outcome === 'changed') {
+        const original = initialExtraDraft(row.item);
+        const draft = extraDrafts[row.sourceId] || original;
+        const changed = changeKey({ description: draft.description, pricingType: draft.pricingType, supplierCost: draft.supplierCost, quantity: draft.quantity, unitOfMeasure: draft.unitOfMeasure })
+          !== changeKey({ description: original.description, pricingType: original.pricingType, supplierCost: original.supplierCost, quantity: original.quantity, unitOfMeasure: original.unitOfMeasure });
+        if (!changed) { setSaveError(`Make the intended cost change for ${itemLabel(row)}, or mark it Correct.`); return; }
+        if (!text(draft.description) || finiteNumber(draft.supplierCost) == null || (draft.pricingType === 'per_unit' && (!(finiteNumber(draft.quantity) > 0) || !text(draft.unitOfMeasure)))) {
+          setSaveError(`Complete the cost details for ${itemLabel(row)}.`); return;
+        }
+      }
+      if (buyerSelected && !['include', 'exclude'].includes(review.buyerChargeDecision)) { setSaveError(`${itemLabel(row)} is Pending on the Buyer Leg.`); return; }
+      if (buyerSelected && row.sourceType === 'extra_cost' && review.buyerChargeDecision === 'include'
+        && finiteNumber((extraDrafts[row.sourceId] || initialExtraDraft(row.item)).buyerPrice) == null) {
+        setSaveError(`Enter the Buyer price for ${itemLabel(row)}.`); return;
+      }
     }
     const costUpdates = [];
     const buyerUpdates = [];
@@ -553,12 +640,16 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
       const original = initialExtraDraft(item);
       const draft = extraDrafts[id] || original;
       const expectedLastModifiedDate = valueOf(item, ['lastModifiedDate', 'last_modified_date', 'LastModifiedDate'], null);
-      if (costSelected && draft.cancelled && !original.cancelled) {
+      const row = stageRows.find((candidate) => candidate.sourceId === id);
+      const supplierOutcome = reviews[row?.key]?.outcome;
+      if (costSelected && supplierOutcome === 'cancelled' && draft.cancelled && !original.cancelled) {
         cancellations.push({ extraCostId: id, expectedLastModifiedDate });
-      } else if (costSelected && changeKey({ description: draft.description, pricingType: draft.pricingType, supplierCost: draft.supplierCost, quantity: draft.quantity, unitOfMeasure: draft.unitOfMeasure }) !== changeKey({ description: original.description, pricingType: original.pricingType, supplierCost: original.supplierCost, quantity: original.quantity, unitOfMeasure: original.unitOfMeasure })) {
+      } else if (costSelected && supplierOutcome === 'changed'
+        && changeKey({ description: draft.description, pricingType: draft.pricingType, supplierCost: draft.supplierCost, quantity: draft.quantity, unitOfMeasure: draft.unitOfMeasure }) !== changeKey({ description: original.description, pricingType: original.pricingType, supplierCost: original.supplierCost, quantity: original.quantity, unitOfMeasure: original.unitOfMeasure })) {
         costUpdates.push({ extraCostId: id, expectedLastModifiedDate, description: draft.description, pricingType: draft.pricingType, supplierCost: Number(draft.supplierCost), quantity: draft.pricingType === 'per_unit' ? Number(draft.quantity) : null, unitOfMeasure: draft.unitOfMeasure });
       }
-      if (buyerSelected && String(draft.buyerPrice ?? '') !== String(original.buyerPrice ?? '')) {
+      if (buyerSelected && reviews[row?.key]?.buyerChargeDecision === 'include'
+        && String(draft.buyerPrice ?? '') !== String(original.buyerPrice ?? '')) {
         buyerUpdates.push({ extraCostId: id, expectedLastModifiedDate, pricingType: draft.pricingType, buyerPrice: Number(draft.buyerPrice) });
       }
     });
@@ -568,7 +659,7 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
       return;
     }
     if (buyerSelected && supplierAdds.some((draft) => !['include', 'exclude'].includes(draft.buyerChargeDecision) || (draft.buyerChargeDecision === 'include' && !(Number(draft.buyerPrice) >= 0)))) {
-      setSaveError('Choose the buyer decision and price for every new paired charge.');
+      setSaveError('Resolve every new Buyer Leg charge and enter its price before approval.');
       return;
     }
     const additions = supplierAdds.map((draft) => ({
@@ -677,14 +768,34 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
     }
     setGmSaving(true);
     setSaveError('');
-    const response = await appClient.functions.invoke('variableChargesGmOverride', {
-      stemId: selectedStemId,
-      assigneeProfileId: gmDraft.assigneeProfileId,
-      reason,
-      expectedRevision: valueOf(activeCase, ['revision'], null),
-      expectedFingerprint: valueOf(activeCase, ['fingerprint', 'currentFingerprint', 'current_fingerprint'], null),
-      operationId: operationId('variable_charge_gm'),
-    }, { force: true });
+    const openSides = pairedWorkflow ? [
+      ...(activeCostSide?.status !== 'verified' ? ['cost'] : []),
+      ...(activeBuyerSide?.status !== 'verified' ? ['buyer_charge'] : []),
+    ] : [];
+    if (pairedWorkflow && (!activeSupplierId || !openSides.length)) {
+      setSaveError('There are no open sides to reassign for this supplier.');
+      setGmSaving(false);
+      return;
+    }
+    const response = pairedWorkflow
+      ? await appClient.functions.invoke('variableChargesSideAssign', {
+        stemId: selectedStemId,
+        supplierId: activeSupplierId,
+        sides: openSides,
+        target: 'gm_override',
+        assigneeProfileId: gmDraft.assigneeProfileId,
+        expectedRevisions: Object.fromEntries(openSides.map((side) => [side, Number(side === 'cost' ? activeCostSide?.revision : activeBuyerSide?.revision)])),
+        gmOverrideReason: reason,
+        operationId: operationId('variable_charge_side_gm'),
+      }, { force: true })
+      : await appClient.functions.invoke('variableChargesGmOverride', {
+        stemId: selectedStemId,
+        assigneeProfileId: gmDraft.assigneeProfileId,
+        reason,
+        expectedRevision: valueOf(activeCase, ['revision'], null),
+        expectedFingerprint: valueOf(activeCase, ['fingerprint', 'currentFingerprint', 'current_fingerprint'], null),
+        operationId: operationId('variable_charge_gm'),
+      }, { force: true });
     if (response.data?.error) {
       setSaveError(response.data.error);
       setGmSaving(false);
@@ -734,10 +845,9 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <Button type="button" variant="ghost" size="sm" className="-ml-2 mb-2 gap-2" onClick={closeDetail} disabled={saving || Boolean(supplierSavingId) || gmSaving || postSaving}>
-            <ArrowLeft className="h-4 w-4" /> Back to Variable Charges
+            <ArrowLeft className="h-4 w-4" /> Back
           </Button>
           <h1 className="truncate text-xl font-semibold text-foreground">{caseStemName(activeCase)}</h1>
-          <p className="mt-1 text-sm text-muted-foreground">{valueOf(activeCase, ['nextAction', 'workflow.nextAction'], 'Review final charges')}</p>
         </div>
         <div className="flex items-center gap-2">
           {detail && <Badge variant="outline" className={viewTone(valueOf(activeCase, ['status']))}>{caseStatus(activeCase)}</Badge>}
@@ -747,14 +857,11 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
         </div>
       </div>
 
-      {detailLoading ? <StateBlock icon={Loader2} title="Loading this task" description="Checking the latest Salesforce charges and approvals." /> : detailError ? (
+      {detailLoading ? <VariableChargeReviewSkeleton /> : detailError ? (
         <StateBlock icon={AlertTriangle} title="Unable to load this task" description={detailError} action={<Button variant="outline" onClick={() => loadDetail(selectedStemId, { force: true })}>Try again</Button>} />
       ) : detail ? (
         <div className="space-y-5">
-          {pairedWorkflow
-            ? <IndependentSideProgress sideProgress={activeCase.sideProgress} buyerReady={activeCase.invoiceReadiness?.buyer?.ready === true} />
-            : <GuidedProgress currentStep={currentStep} progress={workflow.progress} />}
-          <SimpleCaseSummary caseRow={activeCase} onOpenStem={onOpenStem} />
+          {pairedWorkflow ? <CommonReviewSummary caseRow={activeCase} /> : <><GuidedProgress currentStep={currentStep} progress={workflow.progress} /><SimpleCaseSummary caseRow={activeCase} onOpenStem={onOpenStem} /></>}
           {saveError && <div className="flex gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />{saveError}</div>}
 
           {valueOf(activeCase, ['status']) === 'post_invoice_changes' && (
@@ -762,42 +869,42 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
           )}
 
           {pairedWorkflow ? (
-            <>
-              <PairedSupplierProgress requirements={supplierRequirements} activeSupplierId={activeSupplierId} onSelect={setActiveSupplierId} />
-              {activeSupplierStage && currentStep !== 'invoice_attention' && (
-                <section className="space-y-5 rounded-xl border border-border bg-card p-4 shadow-sm sm:p-5">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div><h2 className="text-base font-semibold">{activeSupplierStage.supplierName || 'Supplier'}</h2><p className="mt-1 text-sm text-muted-foreground">Review the shared charge once, then complete either side in any order.</p></div>
-                    <div className="flex flex-wrap gap-2">
-                      {activeCostSide?.permissions?.canAssignToBuyer && <Button type="button" size="sm" variant="outline" disabled={Boolean(sideAssignmentSaving)} onClick={() => assignPairedSides(activeSupplierStage, ['cost'], 'buyer_trader')}>Assign cost to Buyer Trader</Button>}
-                      {activeBuyerSide?.permissions?.canAssignToBuyer && <Button type="button" size="sm" variant="outline" disabled={Boolean(sideAssignmentSaving)} onClick={() => assignPairedSides(activeSupplierStage, ['buyer_charge'], 'buyer_trader')}>Assign buyer side to Buyer Trader</Button>}
-                      {activeCostSide?.permissions?.canAssignToBuyer && activeBuyerSide?.permissions?.canAssignToBuyer && <Button type="button" size="sm" variant="outline" disabled={Boolean(sideAssignmentSaving)} onClick={() => assignPairedSides(activeSupplierStage, ['cost', 'buyer_charge'], 'buyer_trader')}>Assign both</Button>}
-                      {activeCostSide?.permissions?.canTakeBack && <Button type="button" size="sm" variant="ghost" disabled={Boolean(sideAssignmentSaving)} onClick={() => assignPairedSides(activeSupplierStage, ['cost'], 'supplier_trader')}>Take cost back</Button>}
-                      {activeBuyerSide?.permissions?.canTakeBack && <Button type="button" size="sm" variant="ghost" disabled={Boolean(sideAssignmentSaving)} onClick={() => assignPairedSides(activeSupplierStage, ['buyer_charge'], 'supplier_trader')}>Take buyer side back</Button>}
-                    </div>
-                  </div>
-                  <FinancialSummary summary={financials.bySupplier?.find((row) => text(row.supplierId) === activeSupplierId) || financials} />
-                  <div className="space-y-3">
-                    {activeSupplierRows.map((row) => {
-                      const review = reviews[row.key] || initialReview(row);
-                      const draft = row.sourceType === 'extra_cost' ? extraDrafts[row.sourceId] || initialExtraDraft(row.item) : null;
-                      return <div key={row.key} className="rounded-xl border border-border bg-muted/10 p-3"><div className="mb-3 border-b border-border pb-3"><div className="font-semibold">{itemLabel(row)}</div><div className="mt-1 text-xs text-muted-foreground">Shared identity · {valueOf(row.item, ['description', 'productName'], 'Charge')} · Qty {valueOf(row.item, ['quantity'], '—')} {valueOf(row.item, ['unitOfMeasure'], '')}</div></div><div className="grid gap-3 lg:grid-cols-2"><SupplierChargeDecision row={row} review={review} draft={draft} disabled={!canCostSideEdit || Boolean(supplierSavingId)} onOutcome={(outcome) => { updateReview(row.key, { outcome }); if (row.sourceType === 'extra_cost' && outcome === 'correct') updateExtraDraft(row.sourceId, initialExtraDraft(row.item)); if (row.sourceType === 'extra_cost' && outcome === 'cancelled') updateExtraDraft(row.sourceId, { cancelled: true }); if (row.sourceType === 'extra_cost' && outcome === 'changed') updateExtraDraft(row.sourceId, { cancelled: false }); }} onDraftChange={(patch) => updateExtraDraft(row.sourceId, patch)} /><BuyerChargeDecision row={row} review={review} draft={draft} disabled={!canBuyerSideEdit || saving} onDecision={(buyerChargeDecision) => updateReview(row.key, { buyerChargeDecision })} onDraftChange={(patch) => updateExtraDraft(row.sourceId, patch)} /></div></div>;
-                    })}
-                  </div>
-                  {canCostSideEdit && activeCostSide?.status !== 'verified' && <div className="space-y-3"><Button type="button" variant="outline" size="sm" className="gap-2" onClick={() => setAddDrafts((current) => [...current, initialAddDraft(activeCase, activeSupplierId)])}><PackagePlus className="h-4 w-4" /> Add supplier charge</Button>{addDrafts.filter((draft) => text(draft.supplierAccountId) === activeSupplierId).map((draft) => <NewExtraCostEditor key={draft.localId} draft={draft} products={products} supplierAccounts={supplierAccounts.filter((row) => text(row.id) === activeSupplierId)} files={salesforceFiles} defaultPaymentTerm={supplierPaymentTerm} supplierStage={!canBuyerSideEdit} disabled={!canCostSideEdit} onChange={(patch) => updateAddDraft(draft.localId, patch)} onRemove={() => setAddDrafts((current) => current.filter((row) => row.localId !== draft.localId))} />)}</div>}
-                  <div className="grid gap-4 lg:grid-cols-2">
-                    <SideReviewPanel title="Supplier costs" side={activeCostSide} note={supplierReviewNotes[activeSupplierId] || ''} onNote={(value) => setSupplierReviewNotes((current) => ({ ...current, [activeSupplierId]: value }))} disabled={!canCostSideEdit || Boolean(supplierSavingId)} />
-                    <SideReviewPanel title="Buyer charges" side={activeBuyerSide} note={buyerReviewNotes[activeSupplierId] || ''} onNote={(value) => setBuyerReviewNotes((current) => ({ ...current, [activeSupplierId]: value }))} disabled={!canBuyerSideEdit || saving} />
-                  </div>
-                  {salesforceFiles.length ? <OptionalEvidence files={salesforceFiles} selectedIds={activeSupplierRows[0] ? reviews[activeSupplierRows[0].key]?.evidenceDocumentIds || [] : []} disabled={Boolean(supplierSavingId) || saving} onToggle={(fileId) => activeSupplierRows.forEach((row) => toggleEvidence(row.key, fileId))} /> : null}
-                  <div className="flex flex-wrap justify-end gap-2 border-t border-border pt-4">
-                    {canCostSideEdit && activeCostSide?.status !== 'verified' && <Button type="button" variant="outline" disabled={Boolean(supplierSavingId)} onClick={() => confirmPairedSides(activeSupplierStage, ['cost'])}>Confirm cost side</Button>}
-                    {canBuyerSideEdit && activeBuyerSide?.status !== 'verified' && <Button type="button" variant="outline" disabled={saving || Boolean(supplierSavingId)} onClick={() => confirmPairedSides(activeSupplierStage, ['buyer_charge'])}>Confirm buyer side</Button>}
-                    {canCostSideEdit && canBuyerSideEdit && activeCostSide?.status !== 'verified' && activeBuyerSide?.status !== 'verified' && (activeCostSide.currentAssignee?.id === activeBuyerSide.currentAssignee?.id || canGmOverride) && <Button type="button" disabled={saving || Boolean(supplierSavingId)} onClick={() => confirmPairedSides(activeSupplierStage, ['cost', 'buyer_charge'])}>{saving || supplierSavingId === activeSupplierId ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}Confirm both sides</Button>}
-                  </div>
-                </section>
-              )}
-            </>
+            <PairedReviewWorkspace
+              caseRow={activeCase}
+              requirement={activeSupplierStage}
+              requirements={supplierRequirements}
+              activeSupplierId={activeSupplierId}
+              onSupplierChange={setActiveSupplierId}
+              rows={activeSupplierRows}
+              reviews={reviews}
+              extraDrafts={extraDrafts}
+              addDrafts={addDrafts.filter((draft) => text(draft.supplierAccountId) === activeSupplierId)}
+              products={products}
+              files={salesforceFiles}
+              financials={financials}
+              currency={stemCurrency}
+              supplierPaymentTerm={supplierPaymentTerm}
+              buyerPaymentTerm={buyerPaymentTerm}
+              canCostEdit={canCostSideEdit}
+              canBuyerEdit={canBuyerSideEdit}
+              canGmOverride={canGmOverride}
+              saving={saving}
+              supplierSaving={Boolean(supplierSavingId)}
+              assignmentSaving={Boolean(sideAssignmentSaving)}
+              supplierNote={supplierReviewNotes[activeSupplierId] || ''}
+              buyerNote={buyerReviewNotes[activeSupplierId] || ''}
+              salesforceInstanceUrl={detail.salesforceInstanceUrl}
+              onReviewChange={updateReview}
+              onDraftChange={updateExtraDraft}
+              onAddDraftChange={updateAddDraft}
+              onAdd={() => setAddDrafts((current) => [...current, initialAddDraft(activeCase, activeSupplierId)])}
+              onRemoveAdd={(localId) => setAddDrafts((current) => current.filter((row) => row.localId !== localId))}
+              onSupplierNote={(value) => setSupplierReviewNotes((current) => ({ ...current, [activeSupplierId]: value }))}
+              onBuyerNote={(value) => setBuyerReviewNotes((current) => ({ ...current, [activeSupplierId]: value }))}
+              onToggleEvidence={(fileId) => activeSupplierRows.forEach((row) => toggleEvidence(row.key, fileId))}
+              onAssign={(sides, target) => assignPairedSides(activeSupplierStage, sides, target)}
+              onApprove={(sides) => confirmPairedSides(activeSupplierStage, sides)}
+            />
           ) : (
             <>
           <SupplierProgress requirements={supplierRequirements} activeSupplierId={activeSupplierId} onSelect={setActiveSupplierId} canGmOverride={canGmOverride} />
@@ -857,14 +964,12 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
             </>
           )}
 
-          {valueOf(activeCase, ['status']) === 'ready_for_invoice' && <div className="flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-emerald-950"><CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0" /><div><div className="font-semibold">Buyer invoice ready</div><div className="mt-1 text-sm">Every required buyer-charge side is confirmed. Any outstanding supplier-cost work remains visible above.</div></div></div>}
-
-          <AuditDetails caseRow={activeCase} files={salesforceFiles} canGmOverride={canGmOverride} canEditNormally={canEditNormally} gmActionReason={gmActionReason} onGmActionReason={setGmActionReason} onOpenGm={pairedWorkflow ? null : () => setGmOpen(true)} />
+          <AuditDetails caseRow={activeCase} assignmentHistory={detail.assignmentHistory || []} assignmentHistoryUnavailable={detail.assignmentHistoryUnavailable === true} canGmOverride={canGmOverride} onOpenGm={() => setGmOpen(true)} />
         </div>
       ) : null}
 
       <Dialog open={gmOpen} onOpenChange={setGmOpen}>
-        <DialogContent className="sm:max-w-lg"><DialogHeader><DialogTitle>General Manager override</DialogTitle><DialogDescription>Temporarily reassign this task. A reason is mandatory and recorded in the audit trail.</DialogDescription></DialogHeader><div className="space-y-4"><div className="space-y-2"><Label htmlFor="variable-charge-gm-assignee">Temporary assignee</Label><Select value={gmDraft.assigneeProfileId} onValueChange={(assigneeProfileId) => setGmDraft((current) => ({ ...current, assigneeProfileId }))} disabled={gmSaving}><SelectTrigger id="variable-charge-gm-assignee"><SelectValue placeholder="Select active FCOS user" /></SelectTrigger><SelectContent>{assigneeOptions.map((option) => <SelectItem key={valueOf(option, ['id', 'profileId', 'profile_id'])} value={String(valueOf(option, ['id', 'profileId', 'profile_id']))}>{valueOf(option, ['fullName', 'full_name', 'name', 'email'])}</SelectItem>)}</SelectContent></Select></div>{!assigneeOptions.length && <p className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">Active reassignment options are unavailable. Refresh the task before attempting an override.</p>}<div className="space-y-2"><Label htmlFor="variable-charge-gm-reason">Override reason</Label><Textarea id="variable-charge-gm-reason" value={gmDraft.reason} onChange={(event) => setGmDraft((current) => ({ ...current, reason: event.target.value }))} placeholder="Why is temporary reassignment required?" disabled={gmSaving} /></div></div><DialogFooter><Button type="button" variant="outline" onClick={() => setGmOpen(false)} disabled={gmSaving}>Cancel</Button><Button type="button" onClick={saveGmOverride} disabled={gmSaving || !assigneeOptions.length}>{gmSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Apply override</Button></DialogFooter></DialogContent>
+        <DialogContent className="sm:max-w-lg"><DialogHeader><DialogTitle>General Manager Override</DialogTitle><DialogDescription className="sr-only">Temporarily assign the open Variable Charges review.</DialogDescription></DialogHeader><div className="space-y-4"><div className="space-y-2"><Label htmlFor="variable-charge-gm-assignee">Temporary Assignee</Label><Select value={gmDraft.assigneeProfileId} onValueChange={(assigneeProfileId) => setGmDraft((current) => ({ ...current, assigneeProfileId }))} disabled={gmSaving}><SelectTrigger id="variable-charge-gm-assignee"><SelectValue placeholder="Select active FCOS user" /></SelectTrigger><SelectContent>{assigneeOptions.map((option) => <SelectItem key={valueOf(option, ['id', 'profileId', 'profile_id'])} value={String(valueOf(option, ['id', 'profileId', 'profile_id']))}>{valueOf(option, ['fullName', 'full_name', 'name', 'email'])}</SelectItem>)}</SelectContent></Select></div>{!assigneeOptions.length && <p className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">Active reassignment options are unavailable. Refresh the task before attempting an override.</p>}<div className="space-y-2"><Label htmlFor="variable-charge-gm-reason">Override Reason</Label><Textarea id="variable-charge-gm-reason" value={gmDraft.reason} onChange={(event) => setGmDraft((current) => ({ ...current, reason: event.target.value }))} disabled={gmSaving} /></div></div><DialogFooter><Button type="button" variant="outline" onClick={() => setGmOpen(false)} disabled={gmSaving}>Cancel</Button><Button type="button" onClick={saveGmOverride} disabled={gmSaving || !assigneeOptions.length}>{gmSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Apply Override</Button></DialogFooter></DialogContent>
       </Dialog>
     </div>
   ) : null;
@@ -963,15 +1068,116 @@ function queueDate(caseRow) {
   return formatDate(valueOf(caseRow, ['actionableOn', 'actionable_on']));
 }
 
-function IndependentSideProgress({ sideProgress = {}, buyerReady = false }) {
-  const cost = sideProgress?.supplierCosts || {};
-  const buyer = sideProgress?.buyerCharges || {};
-  const items = [
-    { id: 'cost', label: 'Supplier costs', confirmed: Number(cost.confirmed || 0), required: Number(cost.required || 0), ready: Number(cost.required || 0) > 0 && Number(cost.confirmed || 0) === Number(cost.required || 0) },
-    { id: 'buyer', label: 'Buyer charges', confirmed: Number(buyer.confirmed || 0), required: Number(buyer.required || 0), ready: Number(buyer.required || 0) > 0 && Number(buyer.confirmed || 0) === Number(buyer.required || 0) },
-    { id: 'invoice', label: 'Buyer invoice', confirmed: buyerReady ? 1 : 0, required: 1, ready: buyerReady },
-  ];
-  return <ol className="grid gap-2 rounded-xl border border-border bg-card p-3 sm:grid-cols-3">{items.map((item) => <li key={item.id} className={cn('flex items-center gap-3 rounded-lg px-3 py-2 text-sm', !item.ready && item.id !== 'invoice' && 'bg-blue-50 text-blue-950')}><span className={cn('flex h-7 w-7 shrink-0 items-center justify-center rounded-full border', item.ready ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-blue-300 bg-white text-blue-700')}>{item.ready ? <CheckCircle2 className="h-4 w-4" /> : <CircleDot className="h-4 w-4" />}</span><span><span className="block font-semibold">{item.label}</span><span className="text-xs text-muted-foreground">{item.confirmed} of {item.required} confirmed</span></span></li>)}</ol>;
+function VariableChargeReviewSkeleton() {
+  return <div className="space-y-4" aria-label="Loading Variable Charges review"><Skeleton className="h-28 w-full rounded-xl" /><Skeleton className="h-16 w-full rounded-xl" /><div className="min-w-0 overflow-hidden rounded-xl border border-border"><div className="grid min-w-[960px] grid-cols-2"><Skeleton className="h-40 rounded-none border-r border-border" /><Skeleton className="h-40 rounded-none" /></div>{[0, 1, 2].map((row) => <div key={row} className="grid min-w-[960px] grid-cols-2 border-t border-border"><Skeleton className="h-44 rounded-none border-r border-border" /><Skeleton className="h-44 rounded-none" /></div>)}</div></div>;
+}
+
+function CommonReviewSummary({ caseRow }) {
+  const deliveryDate = valueOf(caseRow, ['deliveryDate', 'delivery_date']);
+  const cost = caseRow.sideProgress?.supplierCosts || {};
+  const buyer = caseRow.sideProgress?.buyerCharges || {};
+  const buyerInvoiceReady = caseRow.invoiceReadiness?.buyer?.ready === true;
+  const methodology = PAYMENT_COLLECTIONS_METHODOLOGIES['variable-charges'];
+  return <section className="space-y-3 rounded-xl border border-border bg-card p-4 shadow-sm"><div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4"><SummaryField label="Vessel">{valueOf(caseRow, ['vesselName'], 'Not set') || 'Not set'}</SummaryField><SummaryField label="Port">{valueOf(caseRow, ['portName'], 'Not set') || 'Not set'}</SummaryField><SummaryField label={<span className="inline-flex items-center gap-1.5">{deliveryDate ? 'Delivery Date' : 'Review Starts'}<PageMethodology {...methodology} triggerIcon={Info} iconOnly triggerLabel="Review timing" className="h-6 w-6 rounded-full border-0 bg-transparent p-0 shadow-none" /></span>}>{formatDate(deliveryDate || valueOf(caseRow, ['actionableOn'])) === '—' ? 'Not set' : formatDate(deliveryDate || valueOf(caseRow, ['actionableOn']))}</SummaryField><SummaryField label="Next Action">{valueOf(caseRow, ['nextAction', 'workflow.nextAction'], 'Not set') || 'Not set'}</SummaryField></div><div className="border-t border-border pt-3 text-sm font-medium text-foreground"><span>Supplier Costs {Number(cost.confirmed || 0)}/{Number(cost.required || 0)}</span><span className="mx-2 text-muted-foreground">·</span><span>Buyer Charges {Number(buyer.confirmed || 0)}/{Number(buyer.required || 0)}</span><span className="mx-2 text-muted-foreground">·</span><span className={buyerInvoiceReady ? 'text-emerald-700' : 'text-slate-600'}>{buyerInvoiceReady ? 'Buyer Invoice Ready' : 'Buyer Invoice Not Ready'}</span></div></section>;
+}
+
+function MarginAmount({ value, currency = 'USD', unavailableReason = '' }) {
+  const amount = finiteNumber(value);
+  if (amount == null) return <div><div className="font-semibold text-muted-foreground">Unavailable</div>{unavailableReason && <div className="mt-0.5 text-xs font-normal text-muted-foreground">{unavailableReason}</div>}</div>;
+  return <div className={cn('font-semibold tabular-nums', amount > 0 ? 'text-emerald-700' : amount < 0 ? 'text-rose-700' : 'text-muted-foreground')}>{currency || 'USD'} {amount > 0 ? '+' : ''}{amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>;
+}
+
+function LegMetric({ label, children }) {
+  return <div><div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{label}</div><div className="mt-1 text-sm font-medium">{children}</div></div>;
+}
+
+function LegOptions({ side, disabled, onAssign }) {
+  const canAssign = side?.permissions?.canAssignToBuyer === true;
+  const canTakeBack = side?.permissions?.canTakeBack === true;
+  if (!canAssign && !canTakeBack) return null;
+  return <DropdownMenu><DropdownMenuTrigger asChild><Button type="button" size="icon" variant="ghost" className="h-8 w-8" disabled={disabled} aria-label="Assignment options"><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuLabel>Options</DropdownMenuLabel><DropdownMenuSeparator />{canAssign && <DropdownMenuItem onSelect={() => onAssign('buyer_trader')}>Assign to Buyer Trader</DropdownMenuItem>}{canTakeBack && <DropdownMenuItem onSelect={() => onAssign('supplier_trader')}>Take Back</DropdownMenuItem>}</DropdownMenuContent></DropdownMenu>;
+}
+
+function LegHeader({ leg, name, nameControl = null, traderLabel, side, totalLabel, total, totalComplete, totalBlockingReason = '', currency, paymentTerm, buyer = false, editable = false, assignmentSaving, onAssign }) {
+  const assignee = side?.currentAssignee?.name || 'Needs assignment';
+  const canEdit = editable || side?.permissions?.canEdit === true || side?.permissions?.canConfirm === true;
+  return <header className={cn('sticky top-0 z-10 min-h-[196px] space-y-4 p-4', buyer ? 'bg-blue-50/95' : 'bg-slate-100/95')}><div className="flex items-start justify-between gap-3"><div className="min-w-0 flex-1"><div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{leg}</div>{nameControl || <div className="mt-1 truncate text-base font-semibold" title={name}>{name || 'Not set'}</div>}</div><LegOptions side={side} disabled={assignmentSaving} onAssign={onAssign} /></div><div className="grid grid-cols-2 gap-3"><LegMetric label={traderLabel}>{assignee}</LegMetric><LegMetric label="Status"><Badge variant="outline" className={sideStatusTone(side)}>{sideStatusLabel(side)}</Badge></LegMetric><LegMetric label={totalLabel}>{totalComplete ? formatMoney(total, currency) : <span className="text-muted-foreground">Unavailable</span>}{!totalComplete && totalBlockingReason && <div className="mt-0.5 text-xs font-normal text-muted-foreground">{totalBlockingReason}</div>}</LegMetric><LegMetric label={buyer ? 'Buyer Payment Term' : 'Supplier Payment Term'}>{paymentTerm || 'Not set'}</LegMetric></div>{!canEdit && side?.status !== 'verified' && <div className="rounded-md border border-slate-200 bg-white/70 px-2.5 py-2 text-xs text-slate-700">View Only · Assigned to {assignee}</div>}</header>;
+}
+
+function DecisionButtons({ options, selected, disabled, onChange, ariaLabel }) {
+  return <div className="inline-flex max-w-full flex-wrap rounded-lg border border-border bg-background p-1" role="group" aria-label={ariaLabel}>{options.map((option) => <Button key={option.value || 'pending'} type="button" size="sm" variant={selected === option.value ? 'secondary' : 'ghost'} className={cn('h-8 px-2.5 text-xs', selected === option.value && option.tone)} disabled={disabled} onClick={() => onChange(option.value)}>{option.label}</Button>)}</div>;
+}
+
+function SalesforceEditNotice({ sourceId, instanceUrl }) {
+  const url = instanceUrl && sourceId ? `${String(instanceUrl).replace(/\/$/, '')}/${sourceId}` : '';
+  return <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-950"><div>Edit this product line in Salesforce, then Refresh.</div>{url && <a className="mt-2 inline-flex items-center gap-1 font-medium text-blue-700 hover:underline" href={url} target="_blank" rel="noreferrer">Open Salesforce <ExternalLink className="h-3.5 w-3.5" /></a>}</div>;
+}
+
+function PairedExtraCostFields({ row, draft, disabled, onChange, onCancel }) {
+  const id = `paired-${row.sourceId}`;
+  return <div className="mt-3 space-y-3 rounded-lg border border-amber-200 bg-amber-50/40 p-3"><div className="flex items-center justify-between gap-2"><div className="text-xs font-semibold uppercase tracking-wide text-amber-950">Edit Charge Details</div><AlertDialog><AlertDialogTrigger asChild><Button type="button" size="sm" variant="ghost" className="text-rose-700 hover:bg-rose-50 hover:text-rose-800" disabled={disabled}>Cancel Charge</Button></AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Cancel this charge?</AlertDialogTitle><AlertDialogDescription>The charge remains in Salesforce history but will no longer be active.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Keep Charge</AlertDialogCancel><AlertDialogAction className="bg-rose-600 hover:bg-rose-700" onClick={onCancel}>Cancel Charge</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog></div><div className="space-y-2"><Label htmlFor={`${id}-description`}>Description</Label><Input id={`${id}-description`} value={draft.description || ''} disabled={disabled} onChange={(event) => onChange({ description: event.target.value })} /></div><div className="grid gap-3 sm:grid-cols-2"><div className="space-y-2"><Label>Pricing Basis</Label><Select value={draft.pricingType} disabled={disabled} onValueChange={(pricingType) => onChange({ pricingType })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="fixed">Fixed</SelectItem><SelectItem value="per_unit">Per Unit</SelectItem></SelectContent></Select></div><div className="space-y-2"><Label htmlFor={`${id}-cost`}>{draft.pricingType === 'fixed' ? 'Supplier Fixed Cost' : 'Supplier Unit Cost'}</Label><Input id={`${id}-cost`} inputMode="decimal" value={draft.supplierCost ?? ''} disabled={disabled} onChange={(event) => onChange({ supplierCost: event.target.value })} /></div>{draft.pricingType === 'per_unit' && <><div className="space-y-2"><Label htmlFor={`${id}-quantity`}>Quantity</Label><Input id={`${id}-quantity`} inputMode="decimal" value={draft.quantity ?? ''} disabled={disabled} onChange={(event) => onChange({ quantity: event.target.value })} /></div><div className="space-y-2"><Label htmlFor={`${id}-uom`}>UOM</Label><Input id={`${id}-uom`} value={draft.unitOfMeasure || ''} disabled={disabled} onChange={(event) => onChange({ unitOfMeasure: event.target.value })} /></div></>}</div></div>;
+}
+
+function AmountDisplay({ label, amount, currency, unavailableReason }) {
+  return <div><div className="text-xs text-muted-foreground">{label}</div><div className="mt-1 font-semibold tabular-nums">{amount == null ? 'Unavailable' : formatMoney(amount, currency)}</div>{amount == null && unavailableReason && <div className="mt-1 text-xs text-amber-800">{unavailableReason}</div>}</div>;
+}
+
+function PairedChargeRow({ row, review, draft, currency, canCostEdit, canBuyerEdit, instanceUrl, onReviewChange, onDraftChange }) {
+  const [buyerPriceOpen, setBuyerPriceOpen] = useState(false);
+  const values = rowFinancials(row, draft, currency);
+  const description = text(valueOf(row.item, ['description']));
+  const product = itemLabel(row);
+  const descriptionVisible = description && description.localeCompare(product, undefined, { sensitivity: 'base' }) !== 0;
+  const quantity = values.quantity;
+  const uom = text(draft?.unitOfMeasure || valueOf(row.item, ['unitOfMeasure'])) || 'Not set';
+  const supplierEditing = review.outcome === 'changed' || review.outcome === 'cancelled';
+  const unavailableReason = values.pricingType === 'per_unit' && values.quantity == null ? 'Quantity is unavailable.' : 'The Salesforce total is unavailable.';
+  return <article className="border-t border-border"><div className="border-b border-border bg-muted/25 px-4 py-3"><div className="flex flex-wrap items-start justify-between gap-3"><div className="min-w-0"><h3 className="font-semibold">{product}</h3>{descriptionVisible && <p className="mt-0.5 text-sm text-muted-foreground">{description}</p>}</div><div className="flex flex-wrap items-start gap-x-5 gap-y-1 text-xs text-muted-foreground"><span>Quantity <strong className="text-foreground">{quantity ?? 'Not set'} {quantity != null ? uom : ''}</strong></span><span>Pricing Basis <strong className="text-foreground">{values.pricingType === 'fixed' ? 'Fixed' : 'Per Unit'}</strong></span><div><span>Margin</span><MarginAmount value={values.margin} currency={values.currency} unavailableReason={unavailableReason} /></div></div></div></div><div className="grid grid-cols-2"><section className="min-h-[210px] space-y-3 border-r-2 border-slate-300 bg-slate-50/30 p-4"><DecisionButtons ariaLabel={`${product} supplier review`} selected={review.outcome === 'cancelled' ? 'changed' : review.outcome || ''} disabled={!canCostEdit} onChange={(outcome) => { if (outcome === 'changed' && review.outcome === 'cancelled') onDraftChange({ cancelled: false }); onReviewChange({ outcome }); }} options={[{ value: '', label: 'Pending', tone: 'bg-slate-100 text-slate-800' }, { value: 'correct', label: 'Correct', tone: 'bg-emerald-100 text-emerald-900' }, { value: 'changed', label: 'Edit Cost', tone: 'bg-amber-100 text-amber-950' }]} /><div className="grid grid-cols-2 gap-3"><AmountDisplay label={values.pricingType === 'fixed' ? 'Supplier Fixed Cost' : 'Supplier Unit Cost'} amount={values.supplierRate} currency={values.currency} unavailableReason={unavailableReason} /><AmountDisplay label="Total Supplier Cost" amount={values.supplierTotal} currency={values.currency} unavailableReason={unavailableReason} /></div>{supplierEditing && (row.readOnly ? <SalesforceEditNotice sourceId={row.sourceId} instanceUrl={instanceUrl} /> : <PairedExtraCostFields row={row} draft={draft} disabled={!canCostEdit} onChange={onDraftChange} onCancel={() => { onDraftChange({ cancelled: true }); onReviewChange({ outcome: 'cancelled' }); }} />)}</section><section className="min-h-[210px] space-y-3 bg-blue-50/20 p-4"><DecisionButtons ariaLabel={`${product} buyer review`} selected={review.buyerChargeDecision || ''} disabled={!canBuyerEdit} onChange={(buyerChargeDecision) => onReviewChange({ buyerChargeDecision })} options={[{ value: '', label: 'Pending', tone: 'bg-slate-100 text-slate-800' }, { value: 'include', label: 'Charge Buyer', tone: 'bg-blue-100 text-blue-900' }, { value: 'exclude', label: 'Do Not Charge', tone: 'bg-slate-200 text-slate-900' }]} /><div className="grid grid-cols-2 gap-3"><AmountDisplay label={values.pricingType === 'fixed' ? 'Buyer Fixed Charge' : 'Buyer Unit Price'} amount={values.buyerRate} currency={values.currency} unavailableReason={unavailableReason} /><AmountDisplay label="Total Buyer Charge" amount={values.buyerTotal} currency={values.currency} unavailableReason={unavailableReason} /></div>{review.buyerChargeDecision === 'include' && <div><Button type="button" size="sm" variant="outline" disabled={!canBuyerEdit} onClick={() => setBuyerPriceOpen((open) => !open)}>Edit Buyer Price</Button>{buyerPriceOpen && (row.readOnly ? <SalesforceEditNotice sourceId={row.sourceId} instanceUrl={instanceUrl} /> : <div className="mt-3 space-y-2"><Label htmlFor={`paired-buyer-price-${row.sourceId}`}>{values.pricingType === 'fixed' ? 'Buyer Fixed Charge' : 'Buyer Unit Price'}</Label><Input id={`paired-buyer-price-${row.sourceId}`} inputMode="decimal" value={draft?.buyerPrice ?? ''} disabled={!canBuyerEdit} onChange={(event) => onDraftChange({ buyerPrice: event.target.value })} /></div>)}</div>}</section></div></article>;
+}
+
+function PairedNewChargeRow({ draft, products, currency, canCostEdit, canBuyerEdit, commonOwner, onChange, onRemove }) {
+  const pricingType = draft.pricingType || 'fixed';
+  const quantity = finiteNumber(draft.quantity);
+  const supplierRate = finiteNumber(draft.supplierCost);
+  const buyerRate = finiteNumber(draft.buyerPrice);
+  const supplierTotal = pricingType === 'fixed' ? supplierRate : supplierRate != null && quantity != null ? supplierRate * quantity : null;
+  const buyerTotal = pricingType === 'fixed' ? buyerRate : buyerRate != null && quantity != null ? buyerRate * quantity : null;
+  const margin = supplierTotal != null && buyerTotal != null ? buyerTotal - supplierTotal : null;
+  return <article className="border-t border-dashed border-blue-300"><div className="border-b border-border bg-blue-50/40 px-4 py-3"><div className="flex items-center justify-between gap-3"><div><div className="font-semibold">New Charge</div><div className="mt-0.5 text-xs text-muted-foreground">Supplier and payment term are inherited.</div></div><Button type="button" size="sm" variant="ghost" onClick={onRemove} disabled={!canCostEdit}><X className="mr-1 h-4 w-4" />Remove</Button></div></div><div className="grid grid-cols-2"><section className="space-y-3 border-r-2 border-slate-300 bg-slate-50/30 p-4"><div className="grid gap-3 sm:grid-cols-2"><div className="space-y-2"><Label>Product</Label><Select value={draft.productId || undefined} disabled={!canCostEdit} onValueChange={(productId) => onChange({ productId })}><SelectTrigger><SelectValue placeholder="Select Product" /></SelectTrigger><SelectContent>{products.map((product) => <SelectItem key={valueOf(product, ['id', 'Id'])} value={String(valueOf(product, ['id', 'Id']))}>{valueOf(product, ['name', 'Name'], 'Product')}</SelectItem>)}</SelectContent></Select></div><div className="space-y-2"><Label htmlFor={`new-description-${draft.localId}`}>Description</Label><Input id={`new-description-${draft.localId}`} value={draft.description || ''} disabled={!canCostEdit} onChange={(event) => onChange({ description: event.target.value })} /></div><div className="space-y-2"><Label>Pricing Basis</Label><Select value={pricingType} disabled={!canCostEdit} onValueChange={(value) => onChange({ pricingType: value })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="fixed">Fixed</SelectItem><SelectItem value="per_unit">Per Unit</SelectItem></SelectContent></Select></div><div className="space-y-2"><Label htmlFor={`new-cost-${draft.localId}`}>{pricingType === 'fixed' ? 'Supplier Fixed Cost' : 'Supplier Unit Cost'}</Label><Input id={`new-cost-${draft.localId}`} inputMode="decimal" value={draft.supplierCost ?? ''} disabled={!canCostEdit} onChange={(event) => onChange({ supplierCost: event.target.value })} /></div>{pricingType === 'per_unit' && <><div className="space-y-2"><Label htmlFor={`new-quantity-${draft.localId}`}>Quantity</Label><Input id={`new-quantity-${draft.localId}`} inputMode="decimal" value={draft.quantity ?? ''} disabled={!canCostEdit} onChange={(event) => onChange({ quantity: event.target.value })} /></div><div className="space-y-2"><Label htmlFor={`new-uom-${draft.localId}`}>UOM</Label><Input id={`new-uom-${draft.localId}`} value={draft.unitOfMeasure || ''} disabled={!canCostEdit} onChange={(event) => onChange({ unitOfMeasure: event.target.value })} /></div></>}</div><AmountDisplay label="Total Supplier Cost" amount={supplierTotal} currency={currency} unavailableReason="Complete the required cost fields." /></section><section className="space-y-3 bg-blue-50/20 p-4">{commonOwner ? <><DecisionButtons ariaLabel="New charge buyer review" selected={draft.buyerChargeDecision || ''} disabled={!canBuyerEdit} onChange={(buyerChargeDecision) => onChange({ buyerChargeDecision })} options={[{ value: '', label: 'Pending', tone: 'bg-slate-100 text-slate-800' }, { value: 'include', label: 'Charge Buyer', tone: 'bg-blue-100 text-blue-900' }, { value: 'exclude', label: 'Do Not Charge', tone: 'bg-slate-200 text-slate-900' }]} />{draft.buyerChargeDecision === 'include' && <div className="space-y-2"><Label htmlFor={`new-price-${draft.localId}`}>{pricingType === 'fixed' ? 'Buyer Fixed Charge' : 'Buyer Unit Price'}</Label><Input id={`new-price-${draft.localId}`} inputMode="decimal" value={draft.buyerPrice ?? ''} disabled={!canBuyerEdit} onChange={(event) => onChange({ buyerPrice: event.target.value })} /></div>}<AmountDisplay label="Total Buyer Charge" amount={draft.buyerChargeDecision === 'exclude' ? 0 : buyerTotal} currency={currency} unavailableReason="Resolve the Buyer Leg and enter a price." /><div><div className="text-xs text-muted-foreground">Margin</div><MarginAmount value={draft.buyerChargeDecision === 'exclude' && supplierTotal != null ? -supplierTotal : margin} currency={currency} /></div></> : <div className="rounded-md border border-blue-200 bg-white/70 p-3 text-sm text-blue-950">Pending for Buyer Trader after Supplier approval.</div>}</section></div></article>;
+}
+
+function PairedReviewWorkspace({ caseRow, requirement, requirements, activeSupplierId, onSupplierChange, rows, reviews, extraDrafts, addDrafts, products, files, financials, currency, supplierPaymentTerm, buyerPaymentTerm, canCostEdit, canBuyerEdit, saving, supplierSaving, assignmentSaving, supplierNote, buyerNote, salesforceInstanceUrl, onReviewChange, onDraftChange, onAddDraftChange, onAdd, onRemoveAdd, onSupplierNote, onBuyerNote, onToggleEvidence, onAssign, onApprove }) {
+  if (!requirement) return <StateBlock icon={AlertTriangle} title="Supplier review unavailable" description="Refresh to load the exact supplier work package." />;
+  const costSide = requirement.sides?.cost || {};
+  const buyerSide = requirement.sides?.buyerCharge || {};
+  const commonOwner = Boolean(costSide.currentAssignee?.id && costSide.currentAssignee.id === buyerSide.currentAssignee?.id);
+  const bothOpen = costSide.status !== 'verified' && buyerSide.status !== 'verified';
+  const selectedFinancials = financials.bySupplier?.find((row) => text(row.supplierId) === activeSupplierId) || financials;
+  const costReady = rows.length > 0 && rows.every((row) => {
+    const outcome = reviews[row.key]?.outcome;
+    if (!['correct', 'changed', 'cancelled'].includes(outcome)) return false;
+    if (row.readOnly) return outcome === 'correct';
+    if (outcome !== 'changed') return true;
+    const draft = extraDrafts[row.sourceId] || initialExtraDraft(row.item);
+    const original = initialExtraDraft(row.item);
+    const changed = changeKey({ description: draft.description, pricingType: draft.pricingType, supplierCost: draft.supplierCost, quantity: draft.quantity, unitOfMeasure: draft.unitOfMeasure })
+      !== changeKey({ description: original.description, pricingType: original.pricingType, supplierCost: original.supplierCost, quantity: original.quantity, unitOfMeasure: original.unitOfMeasure });
+    return changed && text(draft.description) && finiteNumber(draft.supplierCost) != null
+      && (draft.pricingType !== 'per_unit' || (finiteNumber(draft.quantity) > 0 && text(draft.unitOfMeasure)));
+  }) && Boolean(text(supplierNote));
+  const buyerReady = rows.length > 0 && rows.every((row) => {
+    const decision = reviews[row.key]?.buyerChargeDecision;
+    if (!['include', 'exclude'].includes(decision)) return false;
+    return decision !== 'include' || row.sourceType !== 'extra_cost'
+      || finiteNumber((extraDrafts[row.sourceId] || initialExtraDraft(row.item)).buyerPrice) != null;
+  }) && Boolean(text(buyerNote));
+  const additionsCostReady = addDrafts.every((draft) => text(draft.productId) && text(draft.description) && finiteNumber(draft.supplierCost) != null && (draft.pricingType !== 'per_unit' || (finiteNumber(draft.quantity) > 0 && text(draft.unitOfMeasure))));
+  const additionsBuyerReady = addDrafts.every((draft) => ['include', 'exclude'].includes(draft.buyerChargeDecision) && (draft.buyerChargeDecision !== 'include' || finiteNumber(draft.buyerPrice) != null));
+  const busy = saving || supplierSaving || assignmentSaving;
+  const canApproveBoth = commonOwner && bothOpen && canCostEdit && canBuyerEdit;
+  const supplierName = requirement.supplierName || 'Not set';
+  const supplierControl = requirements.length > 1 ? <Select value={activeSupplierId} onValueChange={onSupplierChange}><SelectTrigger className="mt-1 bg-white font-semibold"><SelectValue /></SelectTrigger><SelectContent>{requirements.map((row) => <SelectItem key={row.supplierId} value={String(row.supplierId)}>{row.supplierName || 'Supplier unavailable'} · Cost {sideStatusLabel(row.sides?.cost)} · Buyer {sideStatusLabel(row.sides?.buyerCharge)}</SelectItem>)}</SelectContent></Select> : null;
+  return <section className="space-y-3"><div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3"><div className="text-sm font-medium">Total Margin</div><MarginAmount value={financials.margin} currency={financials.currency || currency} unavailableReason={financials.blockingReason} /></div><div className="overflow-x-auto rounded-xl border border-border bg-card shadow-sm [scrollbar-gutter:stable]"><div className="min-w-[960px]"><div className="grid grid-cols-2"><div className="border-r-2 border-slate-300"><LegHeader leg="Supplier Leg" name={supplierName} nameControl={supplierControl} traderLabel="Supplier Trader" side={costSide} totalLabel="Total Supplier Cost" total={selectedFinancials.supplierCostTotal} totalComplete={selectedFinancials.costsComplete} totalBlockingReason={selectedFinancials.blockingReason} currency={selectedFinancials.currency || currency} paymentTerm={supplierPaymentTerm} editable={canCostEdit} assignmentSaving={assignmentSaving} onAssign={(target) => onAssign(['cost'], target)} /></div><div><LegHeader leg="Buyer Leg" name={caseRow.buyerAccountName || 'Not set'} traderLabel="Buyer Trader" side={buyerSide} totalLabel="Total Buyer Charge" total={selectedFinancials.buyerChargeTotal} totalComplete={selectedFinancials.chargesComplete} totalBlockingReason={selectedFinancials.blockingReason} currency={selectedFinancials.currency || currency} paymentTerm={buyerPaymentTerm} buyer editable={canBuyerEdit} assignmentSaving={assignmentSaving} onAssign={(target) => onAssign(['buyer_charge'], target)} /></div></div>{rows.length ? rows.map((row) => <PairedChargeRow key={row.key} row={row} review={reviews[row.key] || initialReview(row)} draft={row.sourceType === 'extra_cost' ? extraDrafts[row.sourceId] || initialExtraDraft(row.item) : null} currency={currency} canCostEdit={canCostEdit && costSide.status !== 'verified'} canBuyerEdit={canBuyerEdit && buyerSide.status !== 'verified'} instanceUrl={salesforceInstanceUrl} onReviewChange={(patch) => onReviewChange(row.key, patch)} onDraftChange={(patch) => onDraftChange(row.sourceId, patch)} />) : <div className="border-t border-border px-4 py-10 text-center text-sm text-muted-foreground">No active charges for this supplier</div>}{addDrafts.map((draft) => <PairedNewChargeRow key={draft.localId} draft={draft} products={products} currency={currency} canCostEdit={canCostEdit && costSide.status !== 'verified'} canBuyerEdit={canBuyerEdit && buyerSide.status !== 'verified'} commonOwner={commonOwner} onChange={(patch) => onAddDraftChange(draft.localId, patch)} onRemove={() => onRemoveAdd(draft.localId)} />)}<div className="grid grid-cols-2 border-t-2 border-slate-300"><footer className="space-y-3 border-r-2 border-slate-300 bg-slate-50/30 p-4"><div className="space-y-2"><Label htmlFor={`supplier-review-note-${activeSupplierId}`}>Review Note</Label><Textarea id={`supplier-review-note-${activeSupplierId}`} value={supplierNote} onChange={(event) => onSupplierNote(event.target.value.slice(0, 1000))} disabled={!canCostEdit || costSide.status === 'verified' || busy} /></div>{files.length > 0 && <OptionalEvidence files={files} selectedIds={rows[0] ? reviews[rows[0].key]?.evidenceDocumentIds || [] : []} disabled={!canCostEdit || costSide.status === 'verified' || busy} onToggle={onToggleEvidence} />}{canCostEdit && costSide.status !== 'verified' && <Button type="button" variant="outline" size="sm" onClick={onAdd} disabled={busy}><PackagePlus className="mr-2 h-4 w-4" />Add Charge</Button>}{!canApproveBoth && <div className="flex justify-end"><Button type="button" onClick={() => onApprove(['cost'])} disabled={!canCostEdit || costSide.status === 'verified' || busy || !costReady || !additionsCostReady || !rows.length}>{supplierSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Approve Supplier Costs</Button></div>}</footer><footer className="space-y-3 bg-blue-50/20 p-4"><div className="space-y-2"><Label htmlFor={`buyer-review-note-${activeSupplierId}`}>Review Note</Label><Textarea id={`buyer-review-note-${activeSupplierId}`} value={buyerNote} onChange={(event) => onBuyerNote(event.target.value.slice(0, 1000))} disabled={!canBuyerEdit || buyerSide.status === 'verified' || busy} /></div>{!canApproveBoth && <div className="flex justify-end"><Button type="button" onClick={() => onApprove(['buyer_charge'])} disabled={!canBuyerEdit || buyerSide.status === 'verified' || busy || !buyerReady || !rows.length}>{saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Approve Buyer Charges</Button></div>}</footer></div>{canApproveBoth && <div className="flex justify-center border-t border-border bg-background p-4"><Button type="button" onClick={() => onApprove(['cost', 'buyer_charge'])} disabled={busy || !costReady || !buyerReady || !additionsCostReady || !additionsBuyerReady || !rows.length}>{busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Approve Both</Button></div>}</div></div></section>;
 }
 
 function GuidedProgress({ currentStep, progress = {} }) {
@@ -994,38 +1200,18 @@ function SupplierProgress({ requirements, activeSupplierId, onSelect, canGmOverr
   return <section className="rounded-xl border border-border bg-card p-4"><div className="mb-3 flex items-center justify-between gap-3"><h2 className="text-sm font-semibold">Supplier costs</h2><span className="text-xs text-muted-foreground">{requirements.filter((row) => row.status === 'Verified').length} of {requirements.length} confirmed</span></div><div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">{requirements.map((row) => { const active = text(row.supplierId) === activeSupplierId; const status = row.status === 'Verified' ? 'Confirmed' : row.status === 'Invalidated' ? 'Needs review again' : row.assignmentStatus === 'resolved' ? 'To confirm' : 'Needs assignment'; const selectable = row.canVerify === true || canGmOverride; return <button key={row.supplierId} type="button" disabled={!selectable} onClick={() => onSelect(text(row.supplierId))} className={cn('rounded-lg border p-3 text-left transition-colors', active && selectable ? 'border-blue-400 bg-blue-50' : 'border-border', !selectable && 'cursor-default')}><div className="flex items-start justify-between gap-2"><span className="font-medium">{row.supplierName || 'Supplier unavailable'}</span>{row.status === 'Verified' ? <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" /> : active ? <CircleDot className="h-4 w-4 shrink-0 text-blue-600" /> : <Circle className="h-4 w-4 shrink-0 text-slate-400" />}</div><div className="mt-1 text-xs text-muted-foreground">{status} · {row.assignedSupplierTrader?.name || 'No Supplier Trader'}</div></button>; })}</div></section>;
 }
 
-function PairedSupplierProgress({ requirements, activeSupplierId, onSelect }) {
-  if (!requirements.length) return null;
-  return <section className="rounded-xl border border-border bg-card p-4"><div className="mb-3 flex items-center justify-between gap-3"><h2 className="text-sm font-semibold">Suppliers</h2><span className="text-xs text-muted-foreground">Choose a supplier work package</span></div><div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">{requirements.map((row) => {
-    const active = text(row.supplierId) === activeSupplierId;
-    const cost = row.sides?.cost || {};
-    const buyer = row.sides?.buyerCharge || {};
-    return <button key={row.supplierId} type="button" onClick={() => onSelect(text(row.supplierId))} className={cn('rounded-lg border p-3 text-left transition-colors', active ? 'border-blue-400 bg-blue-50' : 'border-border hover:border-slate-300')}><div className="flex items-start justify-between gap-2"><span className="font-medium">{row.supplierName || 'Supplier unavailable'}</span>{cost.status === 'verified' && buyer.status === 'verified' ? <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" /> : <CircleDot className="h-4 w-4 shrink-0 text-blue-600" />}</div><div className="mt-2 grid grid-cols-2 gap-2 text-xs"><SideStatusCompact label="Costs" side={cost} /><SideStatusCompact label="Buyer" side={buyer} /></div></button>;
-  })}</div></section>;
-}
-
-function SideStatusCompact({ label, side }) {
-  const status = side?.status === 'verified' ? 'Confirmed' : side?.status === 'invalidated' ? 'Review again' : 'Pending';
-  return <div className="rounded-md bg-background/80 p-2"><div className="font-medium">{label} · {status}</div><div className="mt-0.5 truncate text-muted-foreground">{side?.currentAssignee?.name || 'Unassigned'}</div></div>;
-}
-
-function SideReviewPanel({ title, side, note, onNote, disabled }) {
-  const status = side?.status === 'verified' ? 'Confirmed' : side?.status === 'invalidated' ? 'Needs review again' : 'Pending';
-  return <div className={cn('space-y-3 rounded-lg border p-4', side?.status === 'verified' ? 'border-emerald-200 bg-emerald-50/40' : 'border-border')}><div className="flex flex-wrap items-start justify-between gap-2"><div><h3 className="font-semibold">{title}</h3><p className="mt-1 text-xs text-muted-foreground">Assignee · {side?.currentAssignee?.name || 'Needs assignment'}</p></div><Badge variant="outline">{status}</Badge></div>{side?.status !== 'verified' ? <div className="space-y-2"><Label>{title} note</Label><Textarea value={note} onChange={(event) => onNote(event.target.value.slice(0, 1000))} placeholder={`Required note for ${title.toLowerCase()}`} disabled={disabled} /></div> : <p className="text-xs text-emerald-800">Confirmed {side?.confirmationTime ? formatDate(side.confirmationTime) : ''}</p>}</div>;
-}
-
 function ReadOnlyNotice({ caseRow, responsiblePerson }) { return <div className="flex gap-2 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700"><ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" /><span>View only. This step belongs to {responsiblePerson || valueOf(caseRow, ['responsiblePerson', 'workflow.responsiblePerson'], 'another user')}.</span></div>; }
 
 function SupplierChargeDecision({ row, review, draft, disabled, onOutcome, onDraftChange }) {
   const cost = valueOf(row.item, ['lineCost', 'line_cost', 'totalCost', 'Total_Cost__c', 'fixedCost', 'unitCost']);
   const needsChange = review.outcome === 'changed' || review.outcome === 'cancelled';
-  return <article className={cn('rounded-lg border p-4', review.outcome === 'correct' ? 'border-emerald-200 bg-emerald-50/40' : needsChange ? 'border-amber-300 bg-amber-50/40' : 'border-border')}><div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><div className="font-medium">{itemLabel(row)}</div><div className="mt-1 text-sm text-muted-foreground">Current supplier cost · {formatMoney(cost, valueOf(row.item, ['currency']))}</div></div><div className="flex rounded-lg border border-border bg-background p-1"><Button type="button" size="sm" variant={review.outcome === 'correct' ? 'default' : 'ghost'} className={cn(review.outcome === 'correct' && 'bg-emerald-600 hover:bg-emerald-700')} disabled={disabled} onClick={() => onOutcome('correct')}><CheckCircle2 className="mr-1.5 h-4 w-4" />Correct</Button><Button type="button" size="sm" variant={needsChange ? 'default' : 'ghost'} className={cn(needsChange && 'bg-amber-600 hover:bg-amber-700')} disabled={disabled} onClick={() => onOutcome('changed')}>Needs change</Button></div></div>{needsChange && (row.readOnly ? <div className="mt-3 rounded-md border border-amber-200 bg-white p-3 text-sm text-amber-900">This product line is read-only here. Correct it in Salesforce, then refresh this task.</div> : <ExistingExtraCostEditor item={row.item} draft={draft} disabled={disabled} supplierStage onChange={(patch) => { onDraftChange(patch); if (patch.cancelled === true) onOutcome('cancelled'); else if (review.outcome === 'cancelled') onOutcome('changed'); }} />)}</article>;
+  return <article className={cn('rounded-lg border p-4', review.outcome === 'correct' ? 'border-emerald-200 bg-emerald-50/40' : needsChange ? 'border-amber-300 bg-amber-50/40' : 'border-border')}><div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><div className="font-medium">{itemLabel(row)}</div><div className="mt-1 text-sm text-muted-foreground">Current supplier cost · {formatMoney(cost, valueOf(row.item, ['currency']))}</div></div><div className="flex rounded-lg border border-border bg-background p-1"><Button type="button" size="sm" variant={review.outcome === 'correct' ? 'default' : 'ghost'} className={cn(review.outcome === 'correct' && 'bg-emerald-600 hover:bg-emerald-700')} disabled={disabled} onClick={() => onOutcome('correct')}><CheckCircle2 className="mr-1.5 h-4 w-4" />Correct</Button><Button type="button" size="sm" variant={needsChange ? 'default' : 'ghost'} className={cn(needsChange && 'bg-amber-600 hover:bg-amber-700')} disabled={disabled} onClick={() => onOutcome('changed')}>Edit Cost</Button></div></div>{needsChange && (row.readOnly ? <div className="mt-3 rounded-md border border-amber-200 bg-white p-3 text-sm text-amber-900">This product line is read-only here. Correct it in Salesforce, then refresh this task.</div> : <ExistingExtraCostEditor item={row.item} draft={draft} disabled={disabled} supplierStage onChange={(patch) => { onDraftChange(patch); if (patch.cancelled === true) onOutcome('cancelled'); else if (review.outcome === 'cancelled') onOutcome('changed'); }} />)}</article>;
 }
 
 function BuyerChargeDecision({ row, review, draft, disabled, onDecision, onDraftChange }) {
   const supplierCost = valueOf(row.item, ['lineCost', 'line_cost', 'totalCost', 'Total_Cost__c', 'fixedCost', 'unitCost']);
   const buyerCharge = valueOf(row.item, ['linePrice', 'line_price', 'totalPrice', 'Total_Price__c', 'fixedPrice', 'unitPrice']);
-  return <article className="rounded-lg border border-border p-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><div className="font-medium">{itemLabel(row)}</div><div className="mt-1 text-sm text-muted-foreground">Supplier {formatMoney(supplierCost)} · Buyer {formatMoney(buyerCharge)}</div></div><div className="flex rounded-lg border border-border bg-background p-1">{BUYER_CHARGE_DECISIONS.map((option) => <Button key={option.value} type="button" size="sm" variant={review.buyerChargeDecision === option.value ? 'default' : 'ghost'} disabled={disabled} onClick={() => onDecision(option.value)}>{option.value === 'include' ? 'Include' : 'Exclude'}</Button>)}</div></div>{row.sourceType === 'extra_cost' && review.buyerChargeDecision === 'include' && draft ? <div className="mt-3 max-w-sm space-y-2"><Label htmlFor={`buyer-price-${row.sourceId}`}>{draft.pricingType === 'fixed' ? 'Buyer charge' : 'Buyer price / unit'}</Label><Input id={`buyer-price-${row.sourceId}`} inputMode="decimal" value={draft.buyerPrice ?? ''} onChange={(event) => onDraftChange({ buyerPrice: event.target.value })} disabled={disabled} /></div> : null}</article>;
+  return <article className="rounded-lg border border-border p-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><div className="font-medium">{itemLabel(row)}</div><div className="mt-1 text-sm text-muted-foreground">Supplier {formatMoney(supplierCost)} · Buyer {formatMoney(buyerCharge)}</div></div><div className="flex rounded-lg border border-border bg-background p-1">{BUYER_CHARGE_DECISIONS.map((option) => <Button key={option.value} type="button" size="sm" variant={review.buyerChargeDecision === option.value ? 'default' : 'ghost'} disabled={disabled} onClick={() => onDecision(option.value)}>{option.label}</Button>)}</div></div>{row.sourceType === 'extra_cost' && review.buyerChargeDecision === 'include' && draft ? <div className="mt-3 max-w-sm space-y-2"><Label htmlFor={`buyer-price-${row.sourceId}`}>{draft.pricingType === 'fixed' ? 'Buyer charge' : 'Buyer price / unit'}</Label><Input id={`buyer-price-${row.sourceId}`} inputMode="decimal" value={draft.buyerPrice ?? ''} onChange={(event) => onDraftChange({ buyerPrice: event.target.value })} disabled={disabled} /></div> : null}</article>;
 }
 
 function FinancialSummary({ summary }) {
@@ -1035,11 +1221,13 @@ function FinancialSummary({ summary }) {
 function SummaryAmount({ label, value, complete }) { return <div className="rounded-lg border border-border bg-muted/20 p-3"><div className="text-xs text-muted-foreground">{label}</div><div className="mt-1 text-lg font-semibold tabular-nums">{complete ? formatMoney(value) : 'Unavailable'}</div><div className="mt-1 text-[11px] text-muted-foreground">STEM currency</div></div>; }
 
 function OptionalEvidence({ files, selectedIds, disabled, onToggle }) {
-  return <details className="rounded-lg border border-border p-3"><summary className="cursor-pointer text-sm font-medium">Optional Salesforce Files ({files.length})</summary><div className="mt-3 flex flex-wrap gap-2">{files.map((file) => { const fileId = String(valueOf(file, ['contentDocumentId', 'id', 'Id'])); return <label key={fileId} className="flex max-w-full items-center gap-2 rounded-md border border-border px-2 py-1.5 text-xs"><Checkbox checked={selectedIds.includes(fileId)} disabled={disabled} onCheckedChange={() => onToggle(fileId)} /><FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" /><span className="truncate">{valueOf(file, ['title', 'fileName', 'name', 'Name'], 'Salesforce File')}</span></label>; })}</div></details>;
+  return <details className="rounded-lg border border-border p-3"><summary className="cursor-pointer text-sm font-medium">Supporting Files (Optional) ({files.length})</summary><div className="mt-3 flex flex-wrap gap-2">{files.map((file) => { const fileId = String(valueOf(file, ['contentDocumentId', 'id', 'Id'])); return <label key={fileId} className="flex max-w-full items-center gap-2 rounded-md border border-border px-2 py-1.5 text-xs"><Checkbox checked={selectedIds.includes(fileId)} disabled={disabled} onCheckedChange={() => onToggle(fileId)} /><FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" /><span className="truncate">{valueOf(file, ['title', 'fileName', 'name', 'Name'], 'Salesforce File')}</span></label>; })}</div></details>;
 }
 
-function AuditDetails({ caseRow, files, canGmOverride, canEditNormally, gmActionReason, onGmActionReason, onOpenGm }) {
-  return <details className="rounded-xl border border-border bg-card"><summary className="cursor-pointer px-4 py-3 text-sm font-semibold">Audit details</summary><div className="space-y-4 border-t border-border p-4 text-sm"><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><SummaryField label="Available from">{formatDate(valueOf(caseRow, ['actionableOn']))}</SummaryField><SummaryField label="Based on">{actionBasisLabel(caseRow)}</SummaryField><SummaryField label="Revision">{valueOf(caseRow, ['revision'], 0)}</SummaryField><SummaryField label="Linked files">{files.length}</SummaryField></div>{valueOf(caseRow, ['assignmentMessage']) && <p className="rounded-md border border-amber-200 bg-amber-50 p-3 text-amber-900">{valueOf(caseRow, ['assignmentMessage'])}</p>}{canGmOverride && <div className="space-y-3 rounded-lg border border-amber-200 bg-amber-50 p-3"><div className="font-medium text-amber-950">General Manager controls</div>{!canEditNormally && <div className="space-y-2"><Label htmlFor="variable-charge-gm-action-reason">Action reason</Label><Textarea id="variable-charge-gm-action-reason" value={gmActionReason} onChange={(event) => onGmActionReason(event.target.value.slice(0, 1000))} placeholder="Why are you acting for the assigned trader?" /></div>}{onOpenGm && <Button type="button" size="sm" variant="outline" onClick={onOpenGm}><ShieldCheck className="mr-2 h-4 w-4" />Temporary reassignment</Button>}</div>}</div></details>;
+function AuditDetails({ caseRow, assignmentHistory, assignmentHistoryUnavailable, canGmOverride, onOpenGm }) {
+  const productBearing = caseRow.hasProductLineItems === true;
+  const updated = valueOf(caseRow, ['salesforceStemLastModifiedAt']);
+  return <details className="rounded-xl border border-border bg-card"><summary className="cursor-pointer px-4 py-3 text-sm font-semibold">Audit Details</summary><div className="space-y-4 border-t border-border p-4 text-sm"><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><SummaryField label="Review Timing Basis">{actionBasisLabel(caseRow)}{valueOf(caseRow, ['actionBasisDate']) ? ` · ${formatDate(valueOf(caseRow, ['actionBasisDate']))}` : ''}</SummaryField>{productBearing && <SummaryField label="Workflow Due Date">{formatDate(valueOf(caseRow, ['dueDate'])) === '—' ? 'Not set' : formatDate(valueOf(caseRow, ['dueDate']))}</SummaryField>}<SummaryField label="Salesforce Updated">{updated ? formatDate(updated) : 'Not set'}</SummaryField><SummaryField label="Workflow Revision">{valueOf(caseRow, ['revision'], 0)}</SummaryField></div><div><div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Assignment History</div>{assignmentHistoryUnavailable ? <div className="mt-2 text-sm text-amber-800">Assignment history is temporarily unavailable.</div> : assignmentHistory.length ? <ul className="mt-2 divide-y divide-border rounded-lg border border-border">{assignmentHistory.map((entry, index) => <li key={`${entry.occurredAt || 'event'}:${index}`} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2"><span>{entry.side}{entry.supplierName ? ` · ${entry.supplierName}` : ''} · {entry.action}</span><span className="text-xs text-muted-foreground">{entry.occurredAt ? formatDate(entry.occurredAt) : 'Not set'}</span></li>)}</ul> : <div className="mt-2 text-sm text-muted-foreground">No assignment changes.</div>}</div>{canGmOverride && onOpenGm && <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3"><div className="font-medium text-amber-950">General Manager Override</div><Button type="button" size="sm" variant="outline" onClick={onOpenGm}><ShieldCheck className="mr-2 h-4 w-4" />Open Override</Button></div>}</div></details>;
 }
 
 function ExistingExtraCostEditor({ item, draft, supplierStage = false, buyerStage = false, disabled, onChange }) {
@@ -1060,4 +1248,4 @@ function ExtraCostFields({ id, value, disabled, supplierStage = false, buyerStag
   return <div className="mt-4 grid gap-3 md:grid-cols-2 lg:grid-cols-6"><div className="space-y-2"><Label htmlFor={`${id}-term`}>Payment term</Label><Input id={`${id}-term`} value={value.paymentTerm || ''} onChange={(event) => onChange({ paymentTerm: event.target.value })} disabled={disabled || paymentTermReadOnly || buyerStage} /></div><div className="space-y-2"><Label>Pricing</Label><Select value={value.pricingType} onValueChange={(pricingType) => onChange({ pricingType })} disabled={disabled || buyerStage}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="fixed">Fixed</SelectItem><SelectItem value="per_unit">Per unit</SelectItem></SelectContent></Select></div><div className="space-y-2"><Label htmlFor={`${id}-supplier-cost`}>{value.pricingType === 'fixed' ? 'Fixed supplier cost' : 'Supplier cost / unit'}</Label><Input id={`${id}-supplier-cost`} inputMode="decimal" value={value.supplierCost ?? ''} onChange={(event) => onChange({ supplierCost: event.target.value })} disabled={disabled || buyerStage} /></div>{!supplierStage && <div className="space-y-2"><Label htmlFor={`${id}-buyer-price`}>{value.pricingType === 'fixed' ? 'Fixed buyer price' : 'Buyer price / unit'}</Label><Input id={`${id}-buyer-price`} inputMode="decimal" value={value.buyerPrice ?? ''} onChange={(event) => onChange({ buyerPrice: event.target.value })} disabled={disabled} /></div>}{value.pricingType === 'per_unit' && <><div className="space-y-2"><Label htmlFor={`${id}-quantity`}>Quantity</Label><Input id={`${id}-quantity`} inputMode="decimal" value={value.quantity ?? ''} onChange={(event) => onChange({ quantity: event.target.value })} disabled={disabled || buyerStage} /></div><div className="space-y-2"><Label htmlFor={`${id}-uom`}>Unit of measure</Label><Input id={`${id}-uom`} value={value.unitOfMeasure || ''} onChange={(event) => onChange({ unitOfMeasure: event.target.value })} disabled={disabled || buyerStage} /></div></>}</div>;
 }
 
-function PostInvoiceResolution({ value, disabled, saving, onChange, onSave }) { return <section className="space-y-3 rounded-lg border border-rose-200 bg-rose-50/50 p-4"><div><h2 className="text-sm font-semibold text-rose-950">Urgent post-invoice change</h2><p className="mt-1 text-xs text-rose-900">Resolve as no adjustment, revised invoice, or credit note. A reference is mandatory.</p></div><div className="grid gap-3 md:grid-cols-2"><div className="space-y-2"><Label>Resolution</Label><Select value={value.resolution} onValueChange={(resolution) => onChange({ resolution })} disabled={disabled || saving}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{POST_INVOICE_RESOLUTIONS.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select></div><div className="space-y-2"><Label htmlFor="post-invoice-reference">Reference</Label><Input id="post-invoice-reference" value={value.reference} onChange={(event) => onChange({ reference: event.target.value })} placeholder="Invoice, credit note, or approval reference" disabled={disabled || saving} /></div></div><div className="space-y-2"><Label htmlFor="post-invoice-note">Resolution note</Label><Textarea id="post-invoice-note" value={value.note} onChange={(event) => onChange({ note: event.target.value })} placeholder="Optional context" disabled={disabled || saving} /></div><Button type="button" variant="outline" onClick={onSave} disabled={disabled || saving}>{saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Save resolution</Button>{disabled && <p className="text-xs text-rose-900">Only the currently authorized resolver may record this outcome.</p>}</section>; }
+function PostInvoiceResolution({ value, disabled, saving, onChange, onSave }) { return <section className="space-y-3 rounded-lg border border-rose-300 bg-rose-50 p-4"><h2 className="text-sm font-semibold text-rose-950">Invoice already issued—action required</h2><div className="grid gap-3 md:grid-cols-2"><div className="space-y-2"><Label>Resolution</Label><Select value={value.resolution} onValueChange={(resolution) => onChange({ resolution })} disabled={disabled || saving}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{POST_INVOICE_RESOLUTIONS.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select></div><div className="space-y-2"><Label htmlFor="post-invoice-reference">Reference</Label><Input id="post-invoice-reference" value={value.reference} onChange={(event) => onChange({ reference: event.target.value })} disabled={disabled || saving} /></div></div><div className="space-y-2"><Label htmlFor="post-invoice-note">Resolution Note</Label><Textarea id="post-invoice-note" value={value.note} onChange={(event) => onChange({ note: event.target.value })} disabled={disabled || saving} /></div><Button type="button" variant="outline" onClick={onSave} disabled={disabled || saving}>{saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Save Resolution</Button></section>; }
