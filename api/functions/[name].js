@@ -24,34 +24,9 @@ import { loadDashboardAccountExposureBatch, loadDashboardCounterpartySearch, res
 import { generateSpecialTermsDocument } from '../_specialTermsExport.js';
 import { groupPaymentReminderRows } from '../_paymentReminderRouting.js';
 import { applyBuyerReminderRules, buyerReminderAccountType, buyerReminderCandidateByAccount, buyerReminderRuleMap, canonicalSalesforceAccountId, evaluateBuyerReminderSelection } from '../_buyerInvoiceReminderRules.js';
-import {
-  completePaymentReminderBatch,
-  completePaymentReminderOperation,
-  mapPaymentReminderBatches,
-  paymentReminderBatchHash,
-  paymentReminderDeliveryUncertain,
-  paymentReminderPreviewSecret,
-  paymentReminderRequestHash,
-  repairPaymentReminderTimelines,
-  reservePaymentReminderBatch,
-  reservePaymentReminderOperation,
-  savePaymentReminderTimeline,
-  signPaymentReminderPreview,
-  verifyPaymentReminderPreview,
-} from '../_paymentReminderOperations.js';
+import { completePaymentReminderBatch, completePaymentReminderOperation, mapPaymentReminderBatches, paymentReminderBatchHash, paymentReminderDeliveryUncertain, paymentReminderPreviewSecret, paymentReminderRequestHash, repairPaymentReminderTimelines, reservePaymentReminderBatch, reservePaymentReminderOperation, savePaymentReminderTimeline, signPaymentReminderPreview, verifyPaymentReminderPreview } from '../_paymentReminderOperations.js';
 import { accountNameKey, buildAccountManagerRows, groupEligibleSalesforceAccounts, managerDisplayText, normalizeAccountManagerUserIds } from '../_accountManagers.js';
-import {
-  ACCOUNT_PIC_MAX_CSV_BYTES,
-  accountPicDirectoryProjection,
-  accountPicFlexibleDirectoryProjection,
-  accountPicFlexiblePayloadHash,
-  accountPicPayloadHash,
-  accountPicRowColorPayloadHash,
-  normalizeAccountPicGrid,
-  normalizeAccountPicRows,
-  parseAccountPicCsv,
-  validAccountPicAccountId,
-} from '../_accountPicDirectories.js';
+import { ACCOUNT_PIC_MAX_CSV_BYTES, accountPicDirectoryProjection, accountPicFlexibleDirectoryProjection, accountPicFlexiblePayloadHash, accountPicPayloadHash, accountPicRowColorPayloadHash, normalizeAccountPicGrid, normalizeAccountPicRows, parseAccountPicCsv, validAccountPicAccountId } from '../_accountPicDirectories.js';
 import { normalizeAccountPicRowColorRules } from '../../src/lib/accountPicRowColors.js';
 import { createClient } from '@supabase/supabase-js';
 import { waitUntil } from '@vercel/functions';
@@ -8913,11 +8888,7 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
       };
     }, { sell: 0, uninvoicedBuy: 0, invoicedBuy: 0, sellOnlyUninvoiced: 0 });
     const calculatedBuyer = lineTotals.sell + extraTotals.sell;
-    const buyerResolution = resolveBuyerFinancialAmount({
-      salesforceAmount: decisionDashboardNullable(stem.Total_Invoice_Amount__c),
-      calculatedAmount: calculatedBuyer,
-      finalInvoiceIssued: finalBuyerInvoiceStemIds.has(stem.Id),
-    });
+    const buyerResolution = resolveBuyerFinancialAmount({ salesforceAmount: decisionDashboardNullable(stem.Total_Invoice_Amount__c), calculatedAmount: calculatedBuyer, finalInvoiceIssued: finalBuyerInvoiceStemIds.has(stem.Id) });
     const buyer = buyerResolution.amount;
     const qlikSupplierCost = stem.QLIK_STEM_Line_Item_Total_Cost__c != null || stem.QLIK_Costs_Total_Cost__c != null
       ? decisionDashboardNumber(stem.QLIK_STEM_Line_Item_Total_Cost__c) + decisionDashboardNumber(stem.QLIK_Costs_Total_Cost__c)
@@ -10362,15 +10333,10 @@ async function stemPnlFull(body, req = null, accessContext = null) {
         );
       }),
     ),
-    Promise.all(
-      idChunks.map((chunk) => {
-        const inList = chunk.map((id) => `'${id}'`).join(',');
-        return queryRows(
-          `SELECT Id, Name, STEM__c, Proforma__c, Deprecated__c FROM Invoice__c WHERE STEM__c IN (${inList}) LIMIT 5000`,
-          { limit: 5000, softFail: true },
-        );
-      }),
-    ),
+    Promise.all(idChunks.map((chunk) => queryRows(
+      `SELECT Id, Name, STEM__c, Proforma__c, Deprecated__c FROM Invoice__c WHERE STEM__c IN (${chunk.map((id) => `'${id}'`).join(',')}) LIMIT 5000`,
+      { limit: 5000, softFail: true },
+    ))),
   ]);
 
   const lineItems = lineItemArrays.flat();
@@ -10432,11 +10398,7 @@ async function stemPnlFull(body, req = null, accessContext = null) {
   const rows = stems.map((s) => {
     const agg = byId[s.Id] || {};
     const calculatedBuyer = (agg.buyerLineSell ?? 0) + (agg.extraCostSell ?? 0);
-    const buyerResolution = resolveBuyerFinancialAmount({
-      salesforceAmount: s.Total_Invoice_Amount__c,
-      calculatedAmount: calculatedBuyer,
-      finalInvoiceIssued: finalBuyerInvoiceStemIds.has(s.Id),
-    });
+    const buyerResolution = resolveBuyerFinancialAmount({ salesforceAmount: s.Total_Invoice_Amount__c, calculatedAmount: calculatedBuyer, finalInvoiceIssued: finalBuyerInvoiceStemIds.has(s.Id) });
     const buyer = buyerResolution.amount ?? 0;
     const supplierBase = (s.Total_Invoiced_Amount_From_Suppliers__c ?? 0) + (agg.hasSupplierInvoice ? (agg.uninvoicedSupplierLineBuy ?? 0) : (agg.supplierLineBuy ?? 0));
     const rawSupplier = supplierBase + (agg.extraCostBuy ?? 0);
@@ -15108,21 +15070,14 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
             }),
           )
         : Promise.resolve([]),
-      compositeQueryRows(
-        chunkIds(stemIds).map((chunk) => {
-          const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-          return {
-            soql: `SELECT Id, Name, STEM__c, Proforma__c, Deprecated__c FROM Invoice__c WHERE STEM__c IN (${inList}) LIMIT 5000`,
-            limit: 5000,
-            softFail: true,
-          };
-        }),
-      ),
+      compositeQueryRows(chunkIds(stemIds).map((chunk) => ({
+        soql: `SELECT Id, Name, STEM__c, Proforma__c, Deprecated__c FROM Invoice__c WHERE STEM__c IN (${chunk.map((id) => `'${escapeSoql(id)}'`).join(',')}) LIMIT 5000`,
+        limit: 5000,
+        softFail: true,
+      }))),
     ]);
 
-    for (const invoice of buyerInvoiceArrays.flat().filter(isFinalBuyerInvoice)) {
-      if (invoice.STEM__c) finalBuyerInvoiceStemIds.add(invoice.STEM__c);
-    }
+    for (const invoice of buyerInvoiceArrays.flat().filter(isFinalBuyerInvoice)) if (invoice.STEM__c) finalBuyerInvoiceStemIds.add(invoice.STEM__c);
 
     for (const item of lineItemArrays.flat()) {
       if (!item.STEM__c) continue;
@@ -15332,11 +15287,7 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
         const supplierOverstatement = qlikSupplierCost == null ? 0 : rawSupplier - qlikSupplierCost;
         const calculatedSupplierInvoice = unmatchedSellOnlyExtra > 0 && supplierOverstatement > 0 && supplierOverstatement <= unmatchedSellOnlyExtra + 0.05 ? qlikSupplierCost : rawSupplier;
         const calculatedBuyerInvoice = lineSellTotal + extraSellTotal;
-        const buyerInvoiceResolution = resolveBuyerFinancialAmount({
-          salesforceAmount: stem.Total_Invoice_Amount__c,
-          calculatedAmount: calculatedBuyerInvoice,
-          finalInvoiceIssued: finalBuyerInvoiceStemIds.has(stem.Id),
-        });
+        const buyerInvoiceResolution = resolveBuyerFinancialAmount({ salesforceAmount: stem.Total_Invoice_Amount__c, calculatedAmount: calculatedBuyerInvoice, finalInvoiceIssued: finalBuyerInvoiceStemIds.has(stem.Id) });
         const buyerInvoiceAmount = buyerInvoiceResolution.amount;
         const stemBasePnl = buyerInvoiceAmount == null ? null : Number(buyerInvoiceAmount || 0) - Number(calculatedSupplierInvoice || 0);
         const supplierInvoicePayable = supplierInvoicePayableByStem[stem.Id];
@@ -18065,11 +18016,7 @@ async function salesforceStemDetailUncached(body, req = null, accessContext = nu
     return sum + extraSellAmount(ec, stemHasDelivery);
   }, 0);
   const calculatedUndatedBuyerInvoice = calculatedLineItemSell + calculatedExtraCostSell;
-  const buyerInvoiceResolution = resolveBuyerFinancialAmount({
-    salesforceAmount: recordRaw.Total_Invoice_Amount__c,
-    calculatedAmount: calculatedUndatedBuyerInvoice,
-    finalInvoiceIssued: buyerInvoices.some(isFinalBuyerInvoice),
-  });
+  const buyerInvoiceResolution = resolveBuyerFinancialAmount({ salesforceAmount: recordRaw.Total_Invoice_Amount__c, calculatedAmount: calculatedUndatedBuyerInvoice, finalInvoiceIssued: buyerInvoices.some(isFinalBuyerInvoice) });
   const calculatedSupplierInvoice = payableAmountCandidates[0] ?? 0;
   const record = {
     ...recordRaw,
