@@ -4,6 +4,11 @@
         <members>Account.Is_Agent__c</members>
         <members>STEM__c.Variable_Charges_Confirmed__c</members>
         <members>STEM_Variable_Charge_Supplier__c.External_Key__c</members>
+        <members>STEM_Variable_Charge_Supplier__c.Buyer_Charge_Confirmed_At__c</members>
+        <members>STEM_Variable_Charge_Supplier__c.Buyer_Charge_Confirmed_By_Email__c</members>
+        <members>STEM_Variable_Charge_Supplier__c.Buyer_Charge_Reviewed_Source_Fingerprint__c</members>
+        <members>STEM_Variable_Charge_Supplier__c.Buyer_Charge_Revision__c</members>
+        <members>STEM_Variable_Charge_Supplier__c.Buyer_Charge_Status__c</members>
         <members>STEM_Variable_Charge_Supplier__c.Manual_Review_Required__c</members>
         <members>STEM_Variable_Charge_Supplier__c.Reviewed_Source_Fingerprint__c</members>
         <members>STEM_Variable_Charge_Supplier__c.Revision__c</members>

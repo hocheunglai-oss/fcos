@@ -5,9 +5,12 @@ global without sharing class VariableChargeRest {
         public String supplierId;
         public String verifierEmail;
         public String expectedFingerprint;
+        public String expectedCostFingerprint;
+        public String expectedBuyerFingerprint;
         public String expectedStageLastModifiedAt;
         public String expectedStemLastModifiedAt;
         public String gmOverrideReason;
+        public List<String> sides;
     }
 
     global class ResponseBody {
@@ -15,9 +18,13 @@ global without sharing class VariableChargeRest {
         public String supplierId;
         public String stageId;
         public String supplierStatus;
+        public String buyerChargeStatus;
         public Boolean buyerConfirmed;
         public Integer revision;
+        public Integer buyerChargeRevision;
         public String fingerprint;
+        public String costFingerprint;
+        public String buyerFingerprint;
         public String lastModifiedAt;
     }
 
@@ -31,41 +38,66 @@ global without sharing class VariableChargeRest {
         if (String.isBlank(body.stemId)) throw requestError('A STEM is required.');
         Id stemId = Id.valueOf(body.stemId);
         String action = parts.size() >= 2 ? parts[1].toLowerCase() : '';
-        if (action == 'supplier' && parts.size() == 4 && parts[3].toLowerCase() == 'verify') return verifySupplier(stemId, body);
-        if (action == 'buyer' && parts.size() == 3 && parts[2].toLowerCase() == 'confirm') return confirmBuyer(stemId, body);
+        if (action == 'supplier' && parts.size() == 4 && parts[3].toLowerCase() == 'verify') {
+            body.sides = new List<String>{'cost'};
+            return confirmSupplierSides(stemId, body);
+        }
+        if (action == 'supplier' && parts.size() == 4 && parts[3].toLowerCase() == 'confirm') return confirmSupplierSides(stemId, body);
+        if (action == 'supplier' && parts.size() == 5 && parts[4].toLowerCase() == 'confirm') {
+            body.sides = new List<String>{normalizedSide(parts[3])};
+            return confirmSupplierSides(stemId, body);
+        }
+        if (action == 'buyer' && parts.size() == 3 && parts[2].toLowerCase() == 'confirm') {
+            throw requestError('The Variable Charges workflow changed. Refresh FCOS and confirm each supplier buyer-charge side.');
+        }
         throw requestError('Unsupported Variable Charges action.');
     }
 
     @HttpGet
     global static ResponseBody get() {
         List<String> parts = pathParts();
-        if (parts.size() != 4 || parts[1].toLowerCase() != 'supplier' || parts[3].toLowerCase() != 'fingerprint') throw requestError('Unsupported Variable Charges readiness request.');
+        if (parts.size() < 4 || parts[1].toLowerCase() != 'supplier') throw requestError('Unsupported Variable Charges readiness request.');
         Id stemId = Id.valueOf(parts[0]);
         Id supplierId = Id.valueOf(parts[2]);
         if (!VariableChargeInvoiceReadinessService.exactSupplierIds(stemId).contains(supplierId)) throw requestError('The selected Account is not an exact active supplier on this STEM.');
+        String side = parts.size() == 4 && parts[3].toLowerCase() == 'fingerprint'
+            ? 'cost'
+            : parts.size() == 5 && parts[4].toLowerCase() == 'fingerprint' ? normalizedSide(parts[3]) : null;
+        if (side == null) throw requestError('Unsupported Variable Charges readiness request.');
         ResponseBody response = baseResponse(stemId, supplierId);
-        response.fingerprint = VariableChargeInvoiceReadinessService.supplierFingerprint(stemId, supplierId);
+        if (side == 'cost') {
+            response.costFingerprint = VariableChargeInvoiceReadinessService.supplierFingerprint(stemId, supplierId);
+            response.fingerprint = response.costFingerprint;
+        } else {
+            response.buyerFingerprint = VariableChargeInvoiceReadinessService.buyerChargeFingerprint(stemId, supplierId);
+            response.fingerprint = response.buyerFingerprint;
+        }
         STEM__c stem = [SELECT LastModifiedDate FROM STEM__c WHERE Id = :stemId LIMIT 1];
         response.lastModifiedAt = iso(stem.LastModifiedDate);
         return response;
     }
 
-    private static ResponseBody verifySupplier(Id stemId, RequestBody body) {
+    private static ResponseBody confirmSupplierSides(Id stemId, RequestBody body) {
         if (String.isBlank(body.supplierId) || String.isBlank(body.verifierEmail)) throw requestError('An exact supplier and verifier email are required.');
+        Set<String> sides = new Set<String>();
+        for (String requested : body.sides == null ? new List<String>() : body.sides) sides.add(normalizedSide(requested));
+        sides.remove(null);
+        if (sides.isEmpty()) throw requestError('Select at least one Variable Charges side to confirm.');
         Id supplierId = Id.valueOf(body.supplierId);
         STEM__c stem = [SELECT Id, LastModifiedDate FROM STEM__c WHERE Id = :stemId LIMIT 1 FOR UPDATE];
         assertTimestamp(stem.LastModifiedDate, body.expectedStemLastModifiedAt, 'The STEM changed after it was opened.');
         if (!VariableChargeInvoiceReadinessService.exactSupplierIds(stemId).contains(supplierId)) throw requestError('The selected Account is not an exact active supplier on this STEM.');
         if (!VariableChargeInvoiceReadinessService.requiredSupplierIds(stemId).contains(supplierId)) throw requestError('This supplier is not currently required in Variable Charges.');
         assertTaskActionable(stemId);
-        if (String.isBlank(body.gmOverrideReason)) assertSupplierTrader(stemId, supplierId, body.verifierEmail);
-        else if (body.gmOverrideReason.trim().length() < 5) throw requestError('A GM/Admin override reason of at least 5 characters is required.');
+        if (String.isNotBlank(body.gmOverrideReason) && body.gmOverrideReason.trim().length() < 5) throw requestError('A General Manager override reason of at least 5 characters is required.');
 
         String key = String.valueOf(stemId) + ':' + String.valueOf(supplierId);
         List<STEM_Variable_Charge_Supplier__c> existing = [
             SELECT Id, External_Key__c, STEM__c, Supplier__c, Manual_Review_Required__c,
                 Supplier_Status__c, Verified_At__c, Verified_By_Email__c,
-                Reviewed_Source_Fingerprint__c, Revision__c, LastModifiedDate
+                Reviewed_Source_Fingerprint__c, Revision__c, Buyer_Charge_Status__c,
+                Buyer_Charge_Reviewed_Source_Fingerprint__c, Buyer_Charge_Confirmed_At__c,
+                Buyer_Charge_Confirmed_By_Email__c, Buyer_Charge_Revision__c, LastModifiedDate
             FROM STEM_Variable_Charge_Supplier__c WHERE External_Key__c = :key LIMIT 1 FOR UPDATE
         ];
         STEM_Variable_Charge_Supplier__c stage;
@@ -76,38 +108,52 @@ global without sharing class VariableChargeRest {
             stage = existing[0];
             assertTimestamp(stage.LastModifiedDate, body.expectedStageLastModifiedAt, 'The supplier stage changed after it was opened.');
         }
-        String fingerprint = VariableChargeInvoiceReadinessService.supplierFingerprint(stemId, supplierId);
-        if (String.isBlank(body.expectedFingerprint) || body.expectedFingerprint.toLowerCase() != fingerprint) throw requestError('Supplier charge data changed after review. Refresh and review every row again.');
-        stage.Supplier_Status__c = 'Verified';
-        stage.Verified_At__c = System.now();
-        stage.Verified_By_Email__c = body.verifierEmail.trim().toLowerCase();
-        stage.Reviewed_Source_Fingerprint__c = fingerprint;
+        String costFingerprint;
+        String buyerFingerprint;
+        if (sides.contains('cost')) {
+            costFingerprint = VariableChargeInvoiceReadinessService.supplierFingerprint(stemId, supplierId);
+            String expectedCost = String.isNotBlank(body.expectedCostFingerprint) ? body.expectedCostFingerprint : body.expectedFingerprint;
+            if (String.isBlank(expectedCost) || expectedCost.toLowerCase() != costFingerprint) throw requestError('Supplier cost data changed after review. Refresh and review the cost side again.');
+            stage.Supplier_Status__c = 'Verified';
+            stage.Verified_At__c = System.now();
+            stage.Verified_By_Email__c = body.verifierEmail.trim().toLowerCase();
+            stage.Reviewed_Source_Fingerprint__c = costFingerprint;
+        }
+        if (sides.contains('buyer_charge')) {
+            buyerFingerprint = VariableChargeInvoiceReadinessService.buyerChargeFingerprint(stemId, supplierId);
+            if (String.isBlank(body.expectedBuyerFingerprint) || body.expectedBuyerFingerprint.toLowerCase() != buyerFingerprint) throw requestError('Buyer-charge data changed after review. Refresh and review the buyer-charge side again.');
+            stage.Buyer_Charge_Status__c = 'Verified';
+            stage.Buyer_Charge_Confirmed_At__c = System.now();
+            stage.Buyer_Charge_Confirmed_By_Email__c = body.verifierEmail.trim().toLowerCase();
+            stage.Buyer_Charge_Reviewed_Source_Fingerprint__c = buyerFingerprint;
+        }
         upsert stage External_Key__c;
-        stage = [SELECT Id, Supplier_Status__c, Revision__c, LastModifiedDate FROM STEM_Variable_Charge_Supplier__c WHERE External_Key__c = :key LIMIT 1];
+        if (sides.contains('buyer_charge') && allBuyerSidesReady(stemId)) {
+            stem.Variable_Charges_Confirmed__c = true;
+            update stem;
+        }
+        stage = [SELECT Id, Supplier_Status__c, Revision__c, Buyer_Charge_Status__c,
+            Buyer_Charge_Revision__c, LastModifiedDate
+            FROM STEM_Variable_Charge_Supplier__c WHERE External_Key__c = :key LIMIT 1];
         ResponseBody response = baseResponse(stemId, supplierId);
         response.stageId = stage.Id;
         response.supplierStatus = stage.Supplier_Status__c;
+        response.buyerChargeStatus = stage.Buyer_Charge_Status__c;
         response.revision = stage.Revision__c == null ? 0 : stage.Revision__c.intValue();
-        response.fingerprint = fingerprint;
+        response.buyerChargeRevision = stage.Buyer_Charge_Revision__c == null ? 0 : stage.Buyer_Charge_Revision__c.intValue();
+        response.costFingerprint = costFingerprint;
+        response.buyerFingerprint = buyerFingerprint;
+        response.fingerprint = sides.size() == 1 ? (sides.contains('cost') ? costFingerprint : buyerFingerprint) : null;
+        response.buyerConfirmed = [SELECT Variable_Charges_Confirmed__c FROM STEM__c WHERE Id = :stemId].Variable_Charges_Confirmed__c;
         response.lastModifiedAt = iso(stage.LastModifiedDate);
         return response;
     }
 
-    private static ResponseBody confirmBuyer(Id stemId, RequestBody body) {
-        STEM__c stem = [SELECT Id, LastModifiedDate, Variable_Charges_Confirmed__c FROM STEM__c WHERE Id = :stemId LIMIT 1 FOR UPDATE];
-        assertTimestamp(stem.LastModifiedDate, body.expectedStemLastModifiedAt, 'The STEM changed after it was opened.');
-        assertTaskActionable(stemId);
-        for (Id supplierId : VariableChargeInvoiceReadinessService.requiredSupplierIds(stemId)) {
-            VariableChargeInvoiceReadinessService.Readiness readiness = VariableChargeInvoiceReadinessService.evaluateSupplier(stemId, supplierId);
-            if (readiness.ready != true) throw requestError(readiness.reason);
+    private static Boolean allBuyerSidesReady(Id stemId) {
+        for (Id requiredSupplierId : VariableChargeInvoiceReadinessService.requiredSupplierIds(stemId)) {
+            if (VariableChargeInvoiceReadinessService.evaluateBuyerSupplier(stemId, requiredSupplierId).ready != true) return false;
         }
-        stem.Variable_Charges_Confirmed__c = true;
-        update stem;
-        stem = [SELECT Variable_Charges_Confirmed__c, LastModifiedDate FROM STEM__c WHERE Id = :stemId];
-        ResponseBody response = baseResponse(stemId, null);
-        response.buyerConfirmed = stem.Variable_Charges_Confirmed__c;
-        response.lastModifiedAt = iso(stem.LastModifiedDate);
-        return response;
+        return true;
     }
 
     private static void assertSupplierTrader(Id stemId, Id supplierId, String verifierEmail) {
@@ -165,6 +211,12 @@ global without sharing class VariableChargeRest {
 
     private static String normalizeEmail(String value) {
         return String.isBlank(value) ? '' : value.trim().toLowerCase();
+    }
+
+    private static String normalizedSide(String value) {
+        String side = String.isBlank(value) ? '' : value.trim().toLowerCase().replace('-', '_');
+        if (side == 'cost' || side == 'buyer_charge') return side;
+        throw requestError('Only cost and buyer-charge sides are supported.');
     }
 
     private static String iso(Datetime value) {

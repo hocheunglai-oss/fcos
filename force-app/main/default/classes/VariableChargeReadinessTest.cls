@@ -42,6 +42,19 @@ private class VariableChargeReadinessTest {
         update stage;
     }
 
+    private static void verifyBuyerSide(Map<String, Id> ids) {
+        STEM_Variable_Charge_Supplier__c stage = [
+            SELECT Id, Buyer_Charge_Status__c, Buyer_Charge_Confirmed_At__c,
+                Buyer_Charge_Confirmed_By_Email__c, Buyer_Charge_Reviewed_Source_Fingerprint__c
+            FROM STEM_Variable_Charge_Supplier__c WHERE Id = :ids.get('stage')
+        ];
+        stage.Buyer_Charge_Status__c = 'Verified';
+        stage.Buyer_Charge_Confirmed_At__c = System.now();
+        stage.Buyer_Charge_Confirmed_By_Email__c = 'supplier.trader@example.com';
+        stage.Buyer_Charge_Reviewed_Source_Fingerprint__c = VariableChargeInvoiceReadinessService.buyerChargeFingerprint(ids.get('stem'), ids.get('supplier'));
+        update stage;
+    }
+
     private static Invoice__c insertInvoiceWithoutTriggers(Id stemId) {
         ContextManager.avoidInvoiceFiring = true;
         try {
@@ -158,6 +171,8 @@ private class VariableChargeReadinessTest {
         System.assertEquals(true, VariableChargeInvoiceReadinessService.evaluateSupplier(ids.get('stem'), ids.get('supplier')).ready);
         System.assertEquals(false, VariableChargeInvoiceReadinessService.evaluateBuyer(ids.get('stem')).ready);
 
+        verifyBuyerSide(ids);
+
         ContextManager.skipTriggers = true;
         try {
             update new STEM__c(Id = ids.get('stem'), Variable_Charges_Confirmed__c = true);
@@ -182,10 +197,11 @@ private class VariableChargeReadinessTest {
     }
 
     @IsTest
-    static void supplierFinancialChangeInvalidatesOnlyItsStageAndBuyerConfirmation() {
+    static void sharedFinancialChangeInvalidatesBothSidesAndBuyerConfirmation() {
         Map<String, Id> ids = prepareRequiredSupplier(false);
         Test.startTest();
         verifyStage(ids);
+        verifyBuyerSide(ids);
         ContextManager.skipTriggers = true;
         try {
             update new STEM__c(Id = ids.get('stem'), Variable_Charges_Confirmed__c = true);
@@ -199,9 +215,68 @@ private class VariableChargeReadinessTest {
             new List<STEM_Line_Item__c>{line},
             new Map<Id, STEM_Line_Item__c>{line.Id => before}
         );
-        System.assertEquals('Invalidated', [SELECT Supplier_Status__c FROM STEM_Variable_Charge_Supplier__c WHERE Id = :ids.get('stage')].Supplier_Status__c);
+        STEM_Variable_Charge_Supplier__c invalidated = [SELECT Supplier_Status__c, Buyer_Charge_Status__c FROM STEM_Variable_Charge_Supplier__c WHERE Id = :ids.get('stage')];
+        System.assertEquals('Invalidated', invalidated.Supplier_Status__c);
+        System.assertEquals('Invalidated', invalidated.Buyer_Charge_Status__c);
         System.assertEquals(false, [SELECT Variable_Charges_Confirmed__c FROM STEM__c WHERE Id = :ids.get('stem')].Variable_Charges_Confirmed__c);
         Test.stopTest();
+    }
+
+    @IsTest
+    static void costOnlyChangeLeavesBuyerSideAndAggregateReady() {
+        Map<String, Id> ids = prepareRequiredSupplier(false);
+        verifyStage(ids);
+        verifyBuyerSide(ids);
+        ContextManager.skipTriggers = true;
+        try {
+            update new STEM__c(Id = ids.get('stem'), Variable_Charges_Confirmed__c = true);
+        } finally {
+            ContextManager.skipTriggers = false;
+        }
+        STEM_Line_Item__c line = [SELECT Id, STEM__c, Original_Supplier__c, Cancelled__c, Unit_Buy_At__c FROM STEM_Line_Item__c WHERE STEM__c = :ids.get('stem') AND Original_Supplier__c = :ids.get('supplier') LIMIT 1];
+        STEM_Line_Item__c before = line.clone(true, true, false, false);
+        line.Unit_Buy_At__c = (line.Unit_Buy_At__c == null ? 0 : line.Unit_Buy_At__c) + 1;
+        VariableChargeInvoiceReadinessService.invalidateForLineItemChanges(new List<STEM_Line_Item__c>{line}, new Map<Id, STEM_Line_Item__c>{line.Id => before});
+        STEM_Variable_Charge_Supplier__c stage = [SELECT Supplier_Status__c, Buyer_Charge_Status__c FROM STEM_Variable_Charge_Supplier__c WHERE Id = :ids.get('stage')];
+        System.assertEquals('Invalidated', stage.Supplier_Status__c);
+        System.assertEquals('Verified', stage.Buyer_Charge_Status__c);
+        System.assertEquals(true, [SELECT Variable_Charges_Confirmed__c FROM STEM__c WHERE Id = :ids.get('stem')].Variable_Charges_Confirmed__c);
+    }
+
+    @IsTest
+    static void buyerOnlyChangeLeavesSupplierCostVerifiedAndClosesBuyerGate() {
+        Map<String, Id> ids = prepareRequiredSupplier(false);
+        verifyStage(ids);
+        verifyBuyerSide(ids);
+        ContextManager.skipTriggers = true;
+        try {
+            update new STEM__c(Id = ids.get('stem'), Variable_Charges_Confirmed__c = true);
+        } finally {
+            ContextManager.skipTriggers = false;
+        }
+        STEM_Line_Item__c line = [SELECT Id, STEM__c, Original_Supplier__c, Cancelled__c, Unit_Sell_At__c FROM STEM_Line_Item__c WHERE STEM__c = :ids.get('stem') AND Original_Supplier__c = :ids.get('supplier') LIMIT 1];
+        STEM_Line_Item__c before = line.clone(true, true, false, false);
+        line.Unit_Sell_At__c = (line.Unit_Sell_At__c == null ? 0 : line.Unit_Sell_At__c) + 1;
+        VariableChargeInvoiceReadinessService.invalidateForLineItemChanges(new List<STEM_Line_Item__c>{line}, new Map<Id, STEM_Line_Item__c>{line.Id => before});
+        STEM_Variable_Charge_Supplier__c stage = [SELECT Supplier_Status__c, Buyer_Charge_Status__c FROM STEM_Variable_Charge_Supplier__c WHERE Id = :ids.get('stage')];
+        System.assertEquals('Verified', stage.Supplier_Status__c);
+        System.assertEquals('Invalidated', stage.Buyer_Charge_Status__c);
+        System.assertEquals(false, [SELECT Variable_Charges_Confirmed__c FROM STEM__c WHERE Id = :ids.get('stem')].Variable_Charges_Confirmed__c);
+    }
+
+    @IsTest
+    static void buyerSideCanFinishBeforeSupplierCostAndOpenBuyerGate() {
+        Map<String, Id> ids = prepareRequiredSupplier(false);
+        verifyBuyerSide(ids);
+        ContextManager.skipTriggers = true;
+        try {
+            update new STEM__c(Id = ids.get('stem'), Variable_Charges_Confirmed__c = true);
+        } finally {
+            ContextManager.skipTriggers = false;
+        }
+        System.assertEquals('Pending', [SELECT Supplier_Status__c FROM STEM_Variable_Charge_Supplier__c WHERE Id = :ids.get('stage')].Supplier_Status__c);
+        System.assertEquals(false, VariableChargeInvoiceReadinessService.evaluateSupplier(ids.get('stem'), ids.get('supplier')).ready);
+        System.assertEquals(true, VariableChargeInvoiceReadinessService.evaluateBuyer(ids.get('stem')).ready);
     }
 
     @IsTest

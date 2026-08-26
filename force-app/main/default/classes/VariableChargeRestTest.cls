@@ -84,7 +84,7 @@ private class VariableChargeRestTest {
     }
 
     @IsTest
-    static void buyerActionUsesTheCanonicalGate() {
+    static void legacyBuyerActionRequiresPairedRefresh() {
         Map<String, Id> ids = prepareRequiredSupplier();
         STEM_Variable_Charge_Supplier__c stage = [
             SELECT Id, STEM__c, Supplier__c
@@ -104,8 +104,37 @@ private class VariableChargeRestTest {
         buyerBody.expectedStemLastModifiedAt = iso(stem.LastModifiedDate);
         request('POST', String.valueOf(ids.get('stem')) + '/buyer/confirm', buyerBody);
         Test.startTest();
+        try {
+            VariableChargeRest.post();
+            System.assert(false, 'The legacy aggregate buyer action must not bypass exact side ownership.');
+        } catch (AuraHandledException expected) {
+            System.assertEquals(409, RestContext.response.statusCode);
+            System.assert(expected.getMessage().contains('Refresh FCOS'));
+        }
+        Test.stopTest();
+    }
+
+    @IsTest
+    static void buyerSideCanConfirmBeforeSupplierCost() {
+        Map<String, Id> ids = prepareRequiredSupplier();
+        STEM__c stem = [SELECT LastModifiedDate FROM STEM__c WHERE Id = :ids.get('stem')];
+        STEM_Variable_Charge_Supplier__c stage = [
+            SELECT LastModifiedDate FROM STEM_Variable_Charge_Supplier__c WHERE Id = :ids.get('stage')
+        ];
+        VariableChargeRest.RequestBody body = new VariableChargeRest.RequestBody();
+        body.stemId = String.valueOf(ids.get('stem'));
+        body.supplierId = String.valueOf(ids.get('supplier'));
+        body.verifierEmail = 'supplier.trader@example.com';
+        body.expectedBuyerFingerprint = VariableChargeInvoiceReadinessService.buyerChargeFingerprint(ids.get('stem'), ids.get('supplier'));
+        body.expectedStageLastModifiedAt = iso(stage.LastModifiedDate);
+        body.expectedStemLastModifiedAt = iso(stem.LastModifiedDate);
+        request('POST', String.valueOf(ids.get('stem')) + '/supplier/' + String.valueOf(ids.get('supplier')) + '/buyer-charge/confirm', body);
+
+        Test.startTest();
         VariableChargeRest.ResponseBody confirmed = VariableChargeRest.post();
         Test.stopTest();
+        System.assertEquals('Verified', confirmed.buyerChargeStatus);
+        System.assertEquals('Pending', confirmed.supplierStatus);
         System.assertEquals(true, confirmed.buyerConfirmed);
     }
 

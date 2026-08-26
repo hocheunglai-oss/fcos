@@ -5,6 +5,10 @@ function cleanIds(values, limit = 100) {
   return [...new Set((Array.isArray(values) ? values : []).map((value) => String(value || '').trim()).filter(Boolean))].slice(0, limit);
 }
 
+function pairedVariableChargeWorkflowEnabled() {
+  return String(process.env.VARIABLE_CHARGE_PAIRED_WORKFLOW_ENABLED || '').trim().toLowerCase() === 'true';
+}
+
 function collaborationNotification(row) {
   return {
     id: `collaboration:${row.id}`,
@@ -171,6 +175,26 @@ function variableChargeSupplierNotification(row, state = {}) {
   };
 }
 
+function variableChargeSideNotification(row, state = {}) {
+  const sideLabel = row.side === 'buyer_charge' ? 'buyer charges' : 'supplier costs';
+  const invalidated = row.status === 'invalidated';
+  const notificationKey = `${row.case_id}:side:${row.id}:${row.revision}:${row.status}`;
+  return {
+    id: `variable_charges:${notificationKey}`,
+    source: 'variable_charges',
+    sourceId: row.case_id,
+    type: invalidated ? `${row.side}_reconfirmation_required` : `${row.side}_confirmation_required`,
+    severity: invalidated ? 'critical' : 'warning',
+    title: invalidated ? `${sideLabel} need review again` : `${sideLabel} need confirmation`,
+    message: `${row.variable_charge_cases?.stem_name || row.stem_id} assigns this supplier’s ${sideLabel} to you.`,
+    link: `/payment-collections?tab=variable-charges&stemId=${encodeURIComponent(row.stem_id)}&supplierId=${encodeURIComponent(row.supplier_account_id)}`,
+    readAt: state.read_at || null,
+    handledAt: state.handled_at || null,
+    snoozedUntil: state.snoozed_until || null,
+    createdAt: row.updated_at,
+  };
+}
+
 function specialTermsNotification(row, state = {}) {
   const revisionToken = row.revisionId || row.updatedAt || 'draft';
   return {
@@ -308,6 +332,7 @@ export async function workNotificationsList(body = {}, accessContext) {
   const queryLimit = Math.min(200, limit * 4);
   const now = new Date().toISOString();
   const systemWindow = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  const pairedVariableChargeWorkflow = pairedVariableChargeWorkflowEnabled();
   const [databaseSnapshot, specialTermsQueue, specialTermsConsolidationQueue, marketAlertEvents] = await Promise.all([
     loadDatabaseSnapshot(client, profile.id, queryLimit, now, systemWindow),
     listSpecialTermApprovalQueue({ limit: queryLimit }).then((data) => ({ data: data.items || [], error: null })).catch((error) => ({ data: [], error })),
@@ -322,6 +347,14 @@ export async function workNotificationsList(body = {}, accessContext) {
       .select('alert_event_id,read_at,handled_at,snoozed_until')
       .eq('user_id', profile.id)
       .in('alert_event_id', marketAlertIds)
+    : { data: [], error: null };
+  const variableChargeSideStates = pairedVariableChargeWorkflow
+    ? await client.from('variable_charge_side_states')
+      .select('id,case_id,stem_id,supplier_account_id,side,status,revision,updated_at,variable_charge_cases(stem_name,due_date)')
+      .eq('assigned_user_id', profile.id)
+      .in('status', ['pending', 'invalidated'])
+      .order('updated_at', { ascending: false })
+      .limit(queryLimit)
     : { data: [], error: null };
   const {
     collaborationResult,
@@ -375,6 +408,7 @@ export async function workNotificationsList(body = {}, accessContext) {
     if (!unavailableTable(variableChargeSupplierStages.error)) throw variableChargeSupplierStages.error;
     if (!unavailableSources.includes('Variable Charges')) unavailableSources.push('Variable Charges');
   }
+  if (variableChargeSideStates.error && !unavailableTable(variableChargeSideStates.error)) throw variableChargeSideStates.error;
   if (variableChargeStates.error && !unavailableTable(variableChargeStates.error)) throw variableChargeStates.error;
   if (generalManagerRoles.error && !unavailableTable(generalManagerRoles.error)) throw generalManagerRoles.error;
   if (specialTermsQueue.error) unavailableSources.push('Special Terms');
@@ -407,9 +441,13 @@ export async function workNotificationsList(body = {}, accessContext) {
       const key = `${row.id}:${row.revision}:${row.workflow_status}`;
       return variableChargeNotification(row, variableChargeStateByKey.get(key));
     });
-  const variableChargeSupplierNotifications = (variableChargeSupplierStages.data || []).map((row) => {
+  const variableChargeSupplierNotifications = ((!pairedVariableChargeWorkflow || variableChargeSideStates.error) ? variableChargeSupplierStages.data || [] : []).map((row) => {
     const key = `${row.case_id}:supplier:${row.id}:${row.revision}:${row.status}`;
     return variableChargeSupplierNotification(row, variableChargeStateByKey.get(key));
+  });
+  const variableChargeSideNotifications = (pairedVariableChargeWorkflow ? variableChargeSideStates.data || [] : []).map((row) => {
+    const key = `${row.case_id}:side:${row.id}:${row.revision}:${row.status}`;
+    return variableChargeSideNotification(row, variableChargeStateByKey.get(key));
   });
   const specialTermsStateByKey = new Map((specialTermsStates.data || []).map((row) => [row.notification_key, row]));
   const specialTermsNotifications = specialTermsApprover
@@ -426,14 +464,14 @@ export async function workNotificationsList(body = {}, accessContext) {
       return specialTermsRelinkNotification(consolidation, term, specialTermsStateByKey.get(key));
     }));
 
-  const notifications = [...(collaborationResult.data || []).map(collaborationNotification), ...(growthResult.data || []).map(growthNotification), ...(improvementsResult.data || []).map(improvementNotification), ...routerNotifications, ...systemNotifications, ...marketNotifications, ...variableChargeNotifications, ...variableChargeSupplierNotifications, ...specialTermsNotifications, ...specialTermsRelinkNotifications]
+  const notifications = [...(collaborationResult.data || []).map(collaborationNotification), ...(growthResult.data || []).map(growthNotification), ...(improvementsResult.data || []).map(improvementNotification), ...routerNotifications, ...systemNotifications, ...marketNotifications, ...variableChargeNotifications, ...variableChargeSupplierNotifications, ...variableChargeSideNotifications, ...specialTermsNotifications, ...specialTermsRelinkNotifications]
     .filter((row) => notificationVisible(row, body, now))
     .sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)))
     .slice(0, limit);
 
   return {
     notifications,
-    unreadCount: Number(collaborationCount.count || 0) + Number(growthCount.count || 0) + Number(improvementsCount.count || 0) + [...routerNotifications, ...systemNotifications, ...marketNotifications, ...variableChargeNotifications, ...variableChargeSupplierNotifications, ...specialTermsNotifications, ...specialTermsRelinkNotifications].filter((row) => !row.readAt && !row.handledAt && (!row.snoozedUntil || row.snoozedUntil <= now)).length,
+    unreadCount: Number(collaborationCount.count || 0) + Number(growthCount.count || 0) + Number(improvementsCount.count || 0) + [...routerNotifications, ...systemNotifications, ...marketNotifications, ...variableChargeNotifications, ...variableChargeSupplierNotifications, ...variableChargeSideNotifications, ...specialTermsNotifications, ...specialTermsRelinkNotifications].filter((row) => !row.readAt && !row.handledAt && (!row.snoozedUntil || row.snoozedUntil <= now)).length,
     unavailableSources,
     filters: {
       source: body.source || 'all',

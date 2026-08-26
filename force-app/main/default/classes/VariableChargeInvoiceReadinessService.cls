@@ -148,13 +148,31 @@ public without sharing class VariableChargeInvoiceReadinessService {
             return blockedForActionability(actionability, stemId, null, true);
         }
         for (Id supplierId : requiredIds) {
-            Readiness supplierReadiness = evaluateSupplier(stemId, supplierId);
-            if (supplierReadiness.ready != true) return supplierReadiness;
+            Readiness buyerSideReadiness = evaluateBuyerSupplier(stemId, supplierId);
+            if (buyerSideReadiness.ready != true) return buyerSideReadiness;
         }
         if (stem.Variable_Charges_Confirmed__c != true) {
             return blocked('Approve buyer charges in FCOS before creating the final Buyer Invoice.', stemId, null, true);
         }
         return withActionability(new Readiness(true, true, null, stemId, null), actionability);
+    }
+
+    public static Readiness evaluateBuyerSupplier(Id stemId, Id supplierId) {
+        SupplierContext context = loadSupplierContext(stemId, supplierId);
+        if (context == null || context.stem == null) return blocked('The STEM could not be found.', stemId, supplierId, true);
+        if (context.exactSupplier != true) return blocked('The selected Account is not an active exact supplier on this STEM.', stemId, supplierId, true);
+        if (context.required != true) return new Readiness(true, false, null, stemId, supplierId);
+        Actionability actionability = calculateActionability(context.stem, context.hasProductLineItems);
+        if (actionability.ready != true) return blockedForActionability(actionability, stemId, supplierId, true);
+        if (context.stage == null || context.stage.Buyer_Charge_Status__c != 'Verified') {
+            return blocked('Confirm ' + context.supplier.Name + ' buyer charges in FCOS before creating the final Buyer Invoice.', stemId, supplierId, true);
+        }
+        String currentFingerprint = buyerChargeFingerprint(stemId, supplierId);
+        if (String.isBlank(context.stage.Buyer_Charge_Reviewed_Source_Fingerprint__c)
+            || context.stage.Buyer_Charge_Reviewed_Source_Fingerprint__c != currentFingerprint) {
+            return blocked(context.supplier.Name + ' buyer charges changed. Confirm them again in FCOS before creating the final Buyer Invoice.', stemId, supplierId, true);
+        }
+        return withActionability(new Readiness(true, true, null, stemId, supplierId), actionability);
     }
 
     public static void assertFinalBuyerInvoiceAllowed(Id stemId) {
@@ -217,7 +235,7 @@ public without sharing class VariableChargeInvoiceReadinessService {
                 continue;
             }
             for (Id supplierId : requiredSupplierIds(stem.Id)) {
-                Readiness readiness = evaluateSupplier(stem.Id, supplierId);
+                Readiness readiness = evaluateBuyerSupplier(stem.Id, supplierId);
                 if (readiness.ready != true) {
                     stem.addError(readiness.reason);
                     break;
@@ -228,44 +246,83 @@ public without sharing class VariableChargeInvoiceReadinessService {
 
     public static String supplierFingerprint(Id stemId, Id supplierId) {
         List<String> parts = new List<String>();
-        STEM__c readinessStem = [
-            SELECT Id, CreatedDate, Delivery_Date__c,
-                ETA_Start_Date__c, ETA_End_Date__c, ETB_Start_Date__c, ETB_End_Date__c,
-                ETCD_Start_Date__c, ETCD_End_Date__c, ETD_Start_Date__c, ETD_End_Date__c
-            FROM STEM__c WHERE Id = :stemId LIMIT 1
-        ];
-        parts.add('S|' + JSON.serialize(readinessStem));
+        Map<String, Object> binds = new Map<String, Object>{'stemId' => stemId, 'supplierId' => supplierId};
+        parts.add('S|' + JSON.serialize(fingerprintRows(STEM__c.SObjectType, new List<String>{
+            'Id','CreatedDate','Delivery_Date__c','ETA_Start_Date__c','ETA_End_Date__c',
+            'ETB_Start_Date__c','ETB_End_Date__c','ETCD_Start_Date__c','ETCD_End_Date__c',
+            'ETD_Start_Date__c','ETD_End_Date__c','CurrencyIsoCode'
+        }, 'WHERE Id = :stemId LIMIT 1', binds)[0]));
         for (STEM_Line_Item__c row : [
             SELECT Id FROM STEM_Line_Item__c
             WHERE STEM__c = :stemId AND Cancelled__c = false ORDER BY Id
         ]) parts.add('P|' + row.Id);
-        for (Account row : [SELECT Id, Is_Agent__c, Supplier_Payment_Term__c, LastModifiedDate FROM Account WHERE Id = :supplierId]) {
-            parts.add('A|' + row.Id + '|' + row.Is_Agent__c + '|' + row.Supplier_Payment_Term__c + '|' + row.LastModifiedDate.getTime());
+        for (SObject row : fingerprintRows(Account.SObjectType,
+            new List<String>{'Id','Is_Agent__c','Supplier_Payment_Term__c'},
+            'WHERE Id = :supplierId', binds)) {
+            parts.add('A|' + JSON.serialize(row));
         }
-        for (STEM_Line_Item__c row : [
-            SELECT Id, Original_Supplier__c, Cancelled__c, Product__c, Payment_Term__c, Quantity__c,
-                Quantity_Delivered_Per_BDN__c, Quantity_Max__c, Unit_of_Measure__c,
-                Unit_Sell_At__c, Unit_Buy_At__c, Total_Price__c, Total_Cost__c,
-                Commission_Cost__c, LastModifiedDate
-            FROM STEM_Line_Item__c
-            WHERE STEM__c = :stemId AND Original_Supplier__c = :supplierId AND Cancelled__c = false ORDER BY Id
-        ]) parts.add('L|' + JSON.serialize(row));
-        for (STEM_Extra_Cost__c row : [
-            SELECT Id, Supplier__c, Cancelled__c, Product2Id__c, Description__c, Payment_Term__c,
-                STEM_Line_Item__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_Range_Max__c,
-                Unit_of_Measure__c, Unit_Price__c, Unit_Cost__c, Lumpsum_Price__c, Lumpsum_Cost__c,
-                Line_Total__c, Line_Total_Buy__c, Supplier_Invoice__c, LastModifiedDate
-            FROM STEM_Extra_Cost__c
-            WHERE STEM__c = :stemId AND Supplier__c = :supplierId AND Cancelled__c = false ORDER BY Id
-        ]) parts.add('E|' + JSON.serialize(row));
-        for (Nomination__c row : [
-            SELECT Id, Buyer_Supplier_Trader__c, BT_ST_Email_Address__c, Deprecated__c, LastModifiedDate
-            FROM Nomination__c
-            WHERE STEM__c = :stemId AND Account__c = :supplierId AND Deprecated__c = false
-                AND RecordTypeId = :FCBStatic.SUPPLIER_NOMINATION_RT_ID ORDER BY Id
-        ]) parts.add('N|' + JSON.serialize(row));
+        for (SObject row : fingerprintRows(STEM_Line_Item__c.SObjectType, new List<String>{
+            'Id','Original_Supplier__c','Cancelled__c','Product__c','Payment_Term__c','Quantity__c',
+            'Quantity_Delivered_Per_BDN__c','Quantity_Max__c','Unit_of_Measure__c',
+            'Unit_Buy_At__c','Total_Cost__c','Commission_Cost__c','CurrencyIsoCode'
+        }, 'WHERE STEM__c = :stemId AND Original_Supplier__c = :supplierId AND Cancelled__c = false ORDER BY Id', binds))
+            parts.add('L|' + JSON.serialize(row));
+        for (SObject row : fingerprintRows(STEM_Extra_Cost__c.SObjectType, new List<String>{
+            'Id','Supplier__c','Cancelled__c','Product2Id__c','Description__c','Payment_Term__c',
+            'STEM_Line_Item__c','Quantity__c','Quantity_Delivered_Per_BDN__c','Quantity_Range_Max__c',
+            'Unit_of_Measure__c','Unit_Cost__c','Lumpsum_Cost__c','Line_Total_Buy__c',
+            'Supplier_Invoice__c','CurrencyIsoCode'
+        }, 'WHERE STEM__c = :stemId AND Supplier__c = :supplierId AND Cancelled__c = false ORDER BY Id', binds))
+            parts.add('E|' + JSON.serialize(row));
         Blob digest = Crypto.generateDigest('SHA-256', Blob.valueOf(String.join(parts, '\n')));
         return EncodingUtil.convertToHex(digest).toLowerCase();
+    }
+
+    public static String buyerChargeFingerprint(Id stemId, Id supplierId) {
+        List<String> parts = new List<String>();
+        Map<String, Object> binds = new Map<String, Object>{'stemId' => stemId, 'supplierId' => supplierId};
+        parts.add('S|' + JSON.serialize(fingerprintRows(STEM__c.SObjectType, new List<String>{
+            'Id','CreatedDate','Delivery_Date__c','ETA_Start_Date__c','ETA_End_Date__c',
+            'ETB_Start_Date__c','ETB_End_Date__c','ETCD_Start_Date__c','ETCD_End_Date__c',
+            'ETD_Start_Date__c','ETD_End_Date__c','CurrencyIsoCode'
+        }, 'WHERE Id = :stemId LIMIT 1', binds)[0]));
+        for (STEM_Line_Item__c row : [
+            SELECT Id FROM STEM_Line_Item__c
+            WHERE STEM__c = :stemId AND Cancelled__c = false ORDER BY Id
+        ]) parts.add('P|' + row.Id);
+        for (SObject row : fingerprintRows(Account.SObjectType,
+            new List<String>{'Id','Is_Agent__c'}, 'WHERE Id = :supplierId', binds)) {
+            parts.add('A|' + JSON.serialize(row));
+        }
+        for (SObject row : fingerprintRows(STEM_Line_Item__c.SObjectType, new List<String>{
+            'Id','Original_Supplier__c','Cancelled__c','Product__c','Quantity__c',
+            'Quantity_Delivered_Per_BDN__c','Quantity_Max__c','Unit_of_Measure__c',
+            'Unit_Sell_At__c','Total_Price__c','CurrencyIsoCode'
+        }, 'WHERE STEM__c = :stemId AND Original_Supplier__c = :supplierId AND Cancelled__c = false ORDER BY Id', binds))
+            parts.add('L|' + JSON.serialize(row));
+        for (SObject row : fingerprintRows(STEM_Extra_Cost__c.SObjectType, new List<String>{
+            'Id','Supplier__c','Cancelled__c','Product2Id__c','Description__c','STEM_Line_Item__c',
+            'Quantity__c','Quantity_Delivered_Per_BDN__c','Quantity_Range_Max__c','Unit_of_Measure__c',
+            'Unit_Price__c','Lumpsum_Price__c','Line_Total__c','CurrencyIsoCode'
+        }, 'WHERE STEM__c = :stemId AND Supplier__c = :supplierId AND Cancelled__c = false ORDER BY Id', binds))
+            parts.add('E|' + JSON.serialize(row));
+        Blob digest = Crypto.generateDigest('SHA-256', Blob.valueOf(String.join(parts, '\n')));
+        return EncodingUtil.convertToHex(digest).toLowerCase();
+    }
+
+    private static List<SObject> fingerprintRows(
+        Schema.SObjectType objectType,
+        List<String> requestedFields,
+        String whereClause,
+        Map<String, Object> binds
+    ) {
+        Map<String, Schema.SObjectField> available = objectType.getDescribe().fields.getMap();
+        List<String> selected = new List<String>();
+        for (String field : requestedFields) if (available.containsKey(field)) selected.add(field);
+        if (selected.isEmpty() || selected[0] != 'Id') throw messageException('Variable Charges fingerprint schema is unavailable.');
+        String soql = 'SELECT ' + String.join(selected, ',') + ' FROM '
+            + objectType.getDescribe().getName() + ' ' + whereClause;
+        return Database.queryWithBinds(soql, binds, AccessLevel.SYSTEM_MODE);
     }
 
     public static Set<Id> requiredSupplierIds(Id stemId) {
@@ -290,64 +347,82 @@ public without sharing class VariableChargeInvoiceReadinessService {
     }
 
     public static void invalidateForLineItemChanges(List<STEM_Line_Item__c> newRecords, Map<Id, STEM_Line_Item__c> oldMap) {
-        Set<String> pairs = new Set<String>();
+        Set<String> costPairs = new Set<String>();
+        Set<String> buyerPairs = new Set<String>();
+        Set<String> sharedPairs = new Set<String>();
         Map<Id, Integer> activeCountDelta = new Map<Id, Integer>();
         if (newRecords != null) for (STEM_Line_Item__c row : newRecords) {
             STEM_Line_Item__c oldRow = oldMap == null ? null : oldMap.get(row.Id);
             addActiveCountDelta(activeCountDelta, row.STEM__c, row.Cancelled__c != true ? 1 : 0);
             if (oldRow != null) addActiveCountDelta(activeCountDelta, oldRow.STEM__c, oldRow.Cancelled__c != true ? -1 : 0);
-            if (oldRow == null || changed(row, oldRow, new List<String>{'STEM__c','Original_Supplier__c','Cancelled__c','Product__c','Payment_Term__c','Quantity__c','Quantity_Delivered_Per_BDN__c','Quantity_Max__c','Unit_of_Measure__c','Unit_Sell_At__c','Unit_Buy_At__c','Total_Price__c','Total_Cost__c','Commission_Cost__c','CurrencyIsoCode'})) {
-                addPair(pairs, row.STEM__c, row.Original_Supplier__c);
-                if (oldRow != null) addPair(pairs, oldRow.STEM__c, oldRow.Original_Supplier__c);
-            }
+            if (oldRow == null || changed(row, oldRow, new List<String>{'STEM__c','Original_Supplier__c','Cancelled__c','Product__c','Quantity__c','Quantity_Delivered_Per_BDN__c','Quantity_Max__c','Unit_of_Measure__c','CurrencyIsoCode'}))
+                addChangedPairs(sharedPairs, row, oldRow, 'Original_Supplier__c');
+            if (oldRow != null && changed(row, oldRow, new List<String>{'Payment_Term__c','Unit_Buy_At__c','Total_Cost__c','Commission_Cost__c'}))
+                addChangedPairs(costPairs, row, oldRow, 'Original_Supplier__c');
+            if (oldRow != null && changed(row, oldRow, new List<String>{'Unit_Sell_At__c','Total_Price__c'}))
+                addChangedPairs(buyerPairs, row, oldRow, 'Original_Supplier__c');
         }
         if (newRecords == null && oldMap != null) for (STEM_Line_Item__c row : oldMap.values()) {
-            addPair(pairs, row.STEM__c, row.Original_Supplier__c);
+            addPair(sharedPairs, row.STEM__c, row.Original_Supplier__c);
             addActiveCountDelta(activeCountDelta, row.STEM__c, row.Cancelled__c != true ? -1 : 0);
         }
-        invalidatePairs(pairs);
+        costPairs.removeAll(sharedPairs);
+        buyerPairs.removeAll(sharedPairs);
+        invalidatePairSides(sharedPairs, true, true);
+        invalidatePairSides(costPairs, true, false);
+        invalidatePairSides(buyerPairs, false, true);
         invalidateProductPresenceTransitions(activeCountDelta);
     }
 
     public static void invalidateForExtraCostChanges(List<STEM_Extra_Cost__c> newRecords, Map<Id, STEM_Extra_Cost__c> oldMap) {
-        Set<String> pairs = new Set<String>();
+        Set<String> costPairs = new Set<String>();
+        Set<String> buyerPairs = new Set<String>();
+        Set<String> sharedPairs = new Set<String>();
         if (newRecords != null) for (STEM_Extra_Cost__c row : newRecords) {
             STEM_Extra_Cost__c oldRow = oldMap == null ? null : oldMap.get(row.Id);
-            if (oldRow == null || changed(row, oldRow, new List<String>{'STEM__c','Supplier__c','Cancelled__c','Product2Id__c','Description__c','Payment_Term__c','STEM_Line_Item__c','Quantity__c','Quantity_Delivered_Per_BDN__c','Quantity_Range_Max__c','Unit_of_Measure__c','Unit_Price__c','Unit_Cost__c','Lumpsum_Price__c','Lumpsum_Cost__c','Line_Total__c','Line_Total_Buy__c','Supplier_Invoice__c','CurrencyIsoCode'})) {
-                addPair(pairs, row.STEM__c, row.Supplier__c);
-                if (oldRow != null) addPair(pairs, oldRow.STEM__c, oldRow.Supplier__c);
-            }
+            if (oldRow == null || changed(row, oldRow, new List<String>{'STEM__c','Supplier__c','Cancelled__c','Product2Id__c','Description__c','STEM_Line_Item__c','Quantity__c','Quantity_Delivered_Per_BDN__c','Quantity_Range_Max__c','Unit_of_Measure__c','CurrencyIsoCode'}))
+                addChangedPairs(sharedPairs, row, oldRow, 'Supplier__c');
+            if (oldRow != null && changed(row, oldRow, new List<String>{'Payment_Term__c','Unit_Cost__c','Lumpsum_Cost__c','Line_Total_Buy__c','Supplier_Invoice__c'}))
+                addChangedPairs(costPairs, row, oldRow, 'Supplier__c');
+            if (oldRow != null && changed(row, oldRow, new List<String>{'Unit_Price__c','Lumpsum_Price__c','Line_Total__c'}))
+                addChangedPairs(buyerPairs, row, oldRow, 'Supplier__c');
         }
-        if (newRecords == null && oldMap != null) for (STEM_Extra_Cost__c row : oldMap.values()) addPair(pairs, row.STEM__c, row.Supplier__c);
-        invalidatePairs(pairs);
+        if (newRecords == null && oldMap != null) for (STEM_Extra_Cost__c row : oldMap.values()) addPair(sharedPairs, row.STEM__c, row.Supplier__c);
+        costPairs.removeAll(sharedPairs);
+        buyerPairs.removeAll(sharedPairs);
+        invalidatePairSides(sharedPairs, true, true);
+        invalidatePairSides(costPairs, true, false);
+        invalidatePairSides(buyerPairs, false, true);
     }
 
     public static void invalidateForAccountChanges(Map<Id, Account> newMap, Map<Id, Account> oldMap) {
         if (newMap == null || oldMap == null) return;
-        Set<Id> ids = new Set<Id>();
+        Set<Id> bothIds = new Set<Id>();
+        Set<Id> costIds = new Set<Id>();
         for (Id id : newMap.keySet()) {
             Account before = oldMap.get(id), after = newMap.get(id);
-            if (before != null && (before.Is_Agent__c != after.Is_Agent__c || before.Supplier_Payment_Term__c != after.Supplier_Payment_Term__c)) ids.add(id);
+            if (before != null && (before.Is_Agent__c != after.Is_Agent__c || before.Inactive_Suspended__c != after.Inactive_Suspended__c)) bothIds.add(id);
+            if (before != null && before.Supplier_Payment_Term__c != after.Supplier_Payment_Term__c) costIds.add(id);
         }
-        Set<String> pairs = new Set<String>();
+        Set<Id> ids = new Set<Id>();
+        ids.addAll(bothIds);
+        ids.addAll(costIds);
+        Set<String> bothPairs = new Set<String>();
+        Set<String> costPairs = new Set<String>();
         if (!ids.isEmpty()) {
-            for (STEM_Line_Item__c row : [SELECT STEM__c, Original_Supplier__c FROM STEM_Line_Item__c WHERE Original_Supplier__c IN :ids AND Cancelled__c = false]) addPair(pairs, row.STEM__c, row.Original_Supplier__c);
-            for (STEM_Extra_Cost__c row : [SELECT STEM__c, Supplier__c FROM STEM_Extra_Cost__c WHERE Supplier__c IN :ids AND Cancelled__c = false]) addPair(pairs, row.STEM__c, row.Supplier__c);
+            for (STEM_Line_Item__c row : [SELECT STEM__c, Original_Supplier__c FROM STEM_Line_Item__c WHERE Original_Supplier__c IN :ids AND Cancelled__c = false])
+                addPair(bothIds.contains(row.Original_Supplier__c) ? bothPairs : costPairs, row.STEM__c, row.Original_Supplier__c);
+            for (STEM_Extra_Cost__c row : [SELECT STEM__c, Supplier__c FROM STEM_Extra_Cost__c WHERE Supplier__c IN :ids AND Cancelled__c = false])
+                addPair(bothIds.contains(row.Supplier__c) ? bothPairs : costPairs, row.STEM__c, row.Supplier__c);
         }
-        invalidatePairs(pairs);
+        costPairs.removeAll(bothPairs);
+        invalidatePairSides(bothPairs, true, true);
+        invalidatePairSides(costPairs, true, false);
     }
 
     public static void invalidateForNominationChanges(List<Nomination__c> newRecords, Map<Id, Nomination__c> oldMap) {
-        Set<String> pairs = new Set<String>();
-        if (newRecords != null) for (Nomination__c row : newRecords) {
-            Nomination__c oldRow = oldMap == null ? null : oldMap.get(row.Id);
-            if (oldRow == null || changed(row, oldRow, new List<String>{'STEM__c','Account__c','Buyer_Supplier_Trader__c','Deprecated__c','RecordTypeId'})) {
-                addPair(pairs, row.STEM__c, row.Account__c);
-                if (oldRow != null) addPair(pairs, oldRow.STEM__c, oldRow.Account__c);
-            }
-        }
-        if (newRecords == null && oldMap != null) for (Nomination__c row : oldMap.values()) addPair(pairs, row.STEM__c, row.Account__c);
-        invalidatePairs(pairs);
+        // Trader nominations only reroute pending FCOS work. They do not change either
+        // financial fingerprint and therefore must not invalidate a confirmed side.
     }
 
     public static void invalidateForSupplierInvoiceChanges(List<Supplier_Invoice__c> newRecords, Map<Id, Supplier_Invoice__c> oldMap) {
@@ -360,21 +435,32 @@ public without sharing class VariableChargeInvoiceReadinessService {
                 addPair(pairs, oldRow.STEM__c, oldRow.Supplier__c);
             }
         }
-        invalidatePairs(pairs);
+        invalidatePairSides(pairs, true, false);
     }
 
     public static void invalidateForStemChanges(List<STEM__c> newRecords, Map<Id, STEM__c> oldMap) {
         if (newRecords == null || oldMap == null) return;
-        Set<Id> stems = new Set<Id>();
-        Set<Id> readinessStems = new Set<Id>();
+        Set<Id> costStems = new Set<Id>();
+        Set<Id> buyerStems = new Set<Id>();
+        Set<Id> bothStems = new Set<Id>();
         for (STEM__c row : newRecords) {
             STEM__c oldRow = oldMap.get(row.Id);
-            if (oldRow != null && changed(row, oldRow, new List<String>{'Delivery_Date__c','Payment_Term__c','Account__c','Total__c','Costs_Total__c','Total_Invoice_Amount__c','Receivable_Balance__c','Payable_Balance__c','CurrencyIsoCode'})) stems.add(row.Id);
-            if (oldRow != null && changed(row, oldRow, new List<String>{'Delivery_Date__c','ETA_Start_Date__c','ETA_End_Date__c','ETB_Start_Date__c','ETB_End_Date__c','ETCD_Start_Date__c','ETCD_End_Date__c','ETD_Start_Date__c','ETD_End_Date__c'})) readinessStems.add(row.Id);
+            if (oldRow == null) continue;
+            if (changed(row, oldRow, new List<String>{'Delivery_Date__c','ETA_Start_Date__c','ETA_End_Date__c','ETB_Start_Date__c','ETB_End_Date__c','ETCD_Start_Date__c','ETCD_End_Date__c','ETD_Start_Date__c','ETD_End_Date__c','CurrencyIsoCode'})) bothStems.add(row.Id);
+            if (changed(row, oldRow, new List<String>{'Costs_Total__c','Payable_Balance__c'})) costStems.add(row.Id);
+            if (changed(row, oldRow, new List<String>{'Payment_Term__c','Account__c','Total__c','Total_Invoice_Amount__c','Receivable_Balance__c'})) buyerStems.add(row.Id);
         }
-        stems.addAll(readinessStems);
-        invalidateAllStages(readinessStems);
-        invalidateStems(stems);
+        Set<Id> buyerAffectedStems = new Set<Id>();
+        buyerAffectedStems.addAll(bothStems);
+        buyerAffectedStems.addAll(buyerStems);
+        for (STEM__c row : newRecords) {
+            if (buyerAffectedStems.contains(row.Id)) row.Variable_Charges_Confirmed__c = false;
+        }
+        costStems.removeAll(bothStems);
+        buyerStems.removeAll(bothStems);
+        invalidateStagesForStems(bothStems, true, true, false);
+        invalidateStagesForStems(costStems, true, false, false);
+        invalidateStagesForStems(buyerStems, false, true, false);
     }
 
     private static SupplierContext loadSupplierContext(Id stemId, Id supplierId) {
@@ -399,7 +485,9 @@ public without sharing class VariableChargeInvoiceReadinessService {
         String externalKey = pairKey(stemId, supplierId);
         List<STEM_Variable_Charge_Supplier__c> stages = [
             SELECT Id, STEM__c, Supplier__c, Manual_Review_Required__c, Supplier_Status__c,
-                Reviewed_Source_Fingerprint__c, Verified_At__c, Verified_By_Email__c, Revision__c
+                Reviewed_Source_Fingerprint__c, Verified_At__c, Verified_By_Email__c, Revision__c,
+                Buyer_Charge_Status__c, Buyer_Charge_Reviewed_Source_Fingerprint__c,
+                Buyer_Charge_Confirmed_At__c, Buyer_Charge_Confirmed_By_Email__c, Buyer_Charge_Revision__c
             FROM STEM_Variable_Charge_Supplier__c WHERE External_Key__c = :externalKey LIMIT 1
         ];
         context.stage = stages.isEmpty() ? null : stages[0];
@@ -508,6 +596,11 @@ public without sharing class VariableChargeInvoiceReadinessService {
         if (stemId != null && supplierId != null) pairs.add(pairKey(stemId, supplierId));
     }
 
+    private static void addChangedPairs(Set<String> pairs, SObject afterRow, SObject beforeRow, String supplierField) {
+        if (afterRow != null) addPair(pairs, (Id)afterRow.get('STEM__c'), (Id)afterRow.get(supplierField));
+        if (beforeRow != null) addPair(pairs, (Id)beforeRow.get('STEM__c'), (Id)beforeRow.get(supplierField));
+    }
+
     private static void addActiveCountDelta(Map<Id, Integer> deltas, Id stemId, Integer delta) {
         if (stemId == null || delta == null || delta == 0) return;
         deltas.put(stemId, (deltas.containsKey(stemId) ? deltas.get(stemId) : 0) + delta);
@@ -537,52 +630,65 @@ public without sharing class VariableChargeInvoiceReadinessService {
             Integer previousCount = currentCount - activeCountDelta.get(stemId);
             if ((currentCount > 0) != (previousCount > 0)) transitioned.add(stemId);
         }
-        invalidateAllStages(transitioned);
+        invalidateStagesForStems(transitioned, true, true, true);
     }
 
-    private static void invalidateAllStages(Set<Id> stemIds) {
+    private static void invalidateStagesForStems(Set<Id> stemIds, Boolean invalidateCost, Boolean invalidateBuyer, Boolean invalidateStemAggregate) {
         if (invalidationInProgress || stemIds == null || stemIds.isEmpty()) return;
         List<STEM_Variable_Charge_Supplier__c> stages = [
             SELECT Id, STEM__c, Supplier_Status__c, Verified_At__c, Verified_By_Email__c,
-                Reviewed_Source_Fingerprint__c, Revision__c
+                Reviewed_Source_Fingerprint__c, Revision__c, Buyer_Charge_Status__c,
+                Buyer_Charge_Reviewed_Source_Fingerprint__c, Buyer_Charge_Confirmed_At__c,
+                Buyer_Charge_Confirmed_By_Email__c, Buyer_Charge_Revision__c
             FROM STEM_Variable_Charge_Supplier__c WHERE STEM__c IN :stemIds
         ];
         invalidationInProgress = true;
         try {
             for (STEM_Variable_Charge_Supplier__c stage : stages) {
-                if (stage.Supplier_Status__c == 'Verified') stage.Supplier_Status__c = 'Invalidated';
-                stage.Verified_At__c = null;
-                stage.Verified_By_Email__c = null;
-                stage.Reviewed_Source_Fingerprint__c = null;
+                invalidateStage(stage, invalidateCost, invalidateBuyer);
             }
             if (!stages.isEmpty()) update stages;
-            invalidateStems(stemIds);
+            if (invalidateBuyer == true && invalidateStemAggregate == true) invalidateStems(stemIds);
         } finally {
             invalidationInProgress = false;
         }
     }
 
-    private static void invalidatePairs(Set<String> pairs) {
+    private static void invalidatePairSides(Set<String> pairs, Boolean invalidateCost, Boolean invalidateBuyer) {
         if (invalidationInProgress || pairs == null || pairs.isEmpty()) return;
         Set<Id> stemIds = new Set<Id>();
         List<STEM_Variable_Charge_Supplier__c> stages = [
             SELECT Id, External_Key__c, STEM__c, Supplier_Status__c, Verified_At__c, Verified_By_Email__c,
-                Reviewed_Source_Fingerprint__c, Revision__c
+                Reviewed_Source_Fingerprint__c, Revision__c, Buyer_Charge_Status__c,
+                Buyer_Charge_Reviewed_Source_Fingerprint__c, Buyer_Charge_Confirmed_At__c,
+                Buyer_Charge_Confirmed_By_Email__c, Buyer_Charge_Revision__c
             FROM STEM_Variable_Charge_Supplier__c WHERE External_Key__c IN :pairs
         ];
         for (String pair : pairs) stemIds.add((Id)pair.substringBefore(':'));
         invalidationInProgress = true;
         try {
             for (STEM_Variable_Charge_Supplier__c stage : stages) {
-                if (stage.Supplier_Status__c == 'Verified') stage.Supplier_Status__c = 'Invalidated';
-                stage.Verified_At__c = null;
-                stage.Verified_By_Email__c = null;
-                stage.Reviewed_Source_Fingerprint__c = null;
+                invalidateStage(stage, invalidateCost, invalidateBuyer);
             }
             if (!stages.isEmpty()) update stages;
-            invalidateStems(stemIds);
+            if (invalidateBuyer == true) invalidateStems(stemIds);
         } finally {
             invalidationInProgress = false;
+        }
+    }
+
+    private static void invalidateStage(STEM_Variable_Charge_Supplier__c stage, Boolean invalidateCost, Boolean invalidateBuyer) {
+        if (invalidateCost == true) {
+            if (stage.Supplier_Status__c == 'Verified') stage.Supplier_Status__c = 'Invalidated';
+            stage.Verified_At__c = null;
+            stage.Verified_By_Email__c = null;
+            stage.Reviewed_Source_Fingerprint__c = null;
+        }
+        if (invalidateBuyer == true) {
+            if (stage.Buyer_Charge_Status__c == 'Verified') stage.Buyer_Charge_Status__c = 'Invalidated';
+            stage.Buyer_Charge_Confirmed_At__c = null;
+            stage.Buyer_Charge_Confirmed_By_Email__c = null;
+            stage.Buyer_Charge_Reviewed_Source_Fingerprint__c = null;
         }
     }
 

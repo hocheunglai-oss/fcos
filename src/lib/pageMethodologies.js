@@ -397,27 +397,27 @@ export const PAYMENT_COLLECTIONS_METHODOLOGIES = {
   },
   'variable-charges': {
     title: 'Variable Charges',
-    description: 'How supplier costs and final buyer pricing are verified through the two-stage invoice gate.',
+    description: 'How each supplier’s costs and buyer charges are reviewed side by side with independent invoice gates.',
     sections: [
       {
         title: 'Live case detection',
         body: 'FCOS identifies exact supplier Account IDs from non-cancelled Salesforce line items and extra costs. A supplier is required when Account Is Agent is selected or the exact STEM/supplier pair is selected manually under “Who must confirm final supplier charges?”. Is Agent suppliers cannot be opted out. Salesforce remains authoritative and is re-read before every consequential action.',
       },
       {
-        title: 'Delivery and two-stage ownership',
-        body: 'A product-bearing STEM becomes actionable one calendar day after its required Salesforce Delivery Date and is due on the next Hong Kong business day. An extra-cost-only STEM instead becomes actionable one calendar day after the latest ETA, ETB, ETCD, or ETD range date; if every schedule date is missing, its Hong Kong Enquiry Created Date is the basis. Extra-cost-only cases have no Variable Charges due date. Each exact supplier resolves its Supplier Trader from active Supplier Nominations by normalized email first and unique normalized name fallback. After every required supplier is verified, the Buyer Confirmation Trader completes buyer pricing.',
+        title: 'Readiness and paired ownership',
+        body: 'A product-bearing STEM becomes actionable one calendar day after its required Salesforce Delivery Date and is due on the next Hong Kong business day. An extra-cost-only STEM instead uses the latest ETA, ETB, ETCD, or ETD range date, falling back to its Hong Kong Enquiry Created Date. Extra-cost-only cases have no Variable Charges due date. Each exact supplier receives one paired work package. Supplier costs and buyer charges both default to that supplier’s resolved Supplier Trader, who may assign either side or both sides to the resolved Buyer Confirmation Trader.',
       },
       {
         title: 'Review and controlled changes',
-        body: 'Each Supplier Trader marks every exact-supplier charge as Correct or Needs change and records one supplier reference or note; Salesforce Files are optional. Existing product lines remain read-only. The Buyer Trader reviews totals, records buyer-charge decisions and adds one case note. Cancellation always keeps the Salesforce history rather than deleting the row.',
+        body: 'The cost and buyer-charge columns may be completed in either order. The cost owner marks each exact-supplier charge as Correct or Needs change, controls additions, cancellations and shared fields, and records a supplier note. The buyer-side owner records Include or Exclude, buyer pricing and a buyer-charge note. Existing product lines remain read-only and Salesforce Files are optional evidence.',
       },
       {
         title: 'Permissions and overrides',
-        body: 'All Payment Collections users may view. Only each assigned Supplier Trader may verify their supplier and only the assigned Buyer Trader may complete the final stage. Finance and Administrators remain read-only. The one active UUID-backed General Manager may temporarily reassign or override with a mandatory recorded reason.',
+        body: 'All Payment Collections users may view. Only a side’s current assignee may edit or confirm it. The original Supplier Trader may delegate or take back an unconfirmed side. Finance and Administrators remain read-only. The one active UUID-backed General Manager may override either side only with a mandatory audited reason.',
       },
       {
         title: 'Invoice gate and later changes',
-        body: 'A required Supplier Invoice is blocked only until that exact supplier’s costs are confirmed. Final Buyer Invoice creation, generation and sending remain blocked until every supplier stage and the Buyer Trader approval pass live Salesforce readiness. Proformas and credit notes bypass the buyer gate. Relevant later changes require review again; changes after invoicing appear as “Invoice already issued—action required”.',
+        body: 'A Supplier Invoice is blocked only until that exact supplier’s cost side is confirmed. Final Buyer Invoice creation, generation and sending are allowed after every required buyer-charge side is confirmed, even if supplier costs remain outstanding. Proformas and credit notes bypass the buyer gate. Cost-only changes do not create buyer-adjustment alerts; buyer or shared changes after invoicing remain urgent.',
       },
     ],
   },

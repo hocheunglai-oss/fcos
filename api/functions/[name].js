@@ -93,6 +93,8 @@ import { workCommitmentsList as workCommitmentsListService } from '../_workCommi
 import {
   getShipAgentChargeDetail,
   getVariableChargeDetail,
+  assignVariableChargeSides,
+  confirmVariableChargeSides,
   confirmVariableChargeBuyer,
   listShipAgentCharges,
   listVariableCharges,
@@ -1606,6 +1608,8 @@ const HANDLER_MODULE_ACCESS = {
   variableChargesOptions: ['buyer_invoices', 'incoming_payments'],
   variableChargesSupplierVerify: ['buyer_invoices', 'incoming_payments'],
   variableChargesBuyerConfirm: ['buyer_invoices', 'incoming_payments'],
+  variableChargesSideAssign: ['buyer_invoices', 'incoming_payments'],
+  variableChargesSideConfirm: ['buyer_invoices', 'incoming_payments'],
   variableChargesGmOverride: ['buyer_invoices', 'incoming_payments'],
   variableChargesPostInvoiceResolve: ['buyer_invoices', 'incoming_payments'],
   variableChargesSync: ['buyer_invoices', 'incoming_payments'],
@@ -5374,6 +5378,20 @@ async function variableChargesBuyerConfirm(body, req, accessContext = null) {
   const context = await shipAgentChargesContext(req, accessContext);
   await requireShipAgentStemAccess(body, context);
   return confirmVariableChargeBuyer(body, context);
+}
+
+async function variableChargesSideAssign(body, req, accessContext = null) {
+  const context = await shipAgentChargesContext(req, accessContext);
+  await requireShipAgentStemAccess(body, context);
+  if (!isSalesforceId(String(body?.supplierId || '').trim())) throw appError('A valid exact Supplier Account is required.', 400);
+  return assignVariableChargeSides(body, context);
+}
+
+async function variableChargesSideConfirm(body, req, accessContext = null) {
+  const context = await shipAgentChargesContext(req, accessContext);
+  await requireShipAgentStemAccess(body, context);
+  if (!isSalesforceId(String(body?.supplierId || '').trim())) throw appError('A valid exact Supplier Account is required.', 400);
+  return confirmVariableChargeSides(body, context);
 }
 
 async function variableChargesGmOverride(body, req, accessContext = null) {
@@ -19385,6 +19403,8 @@ const handlers = {
   variableChargesOptions,
   variableChargesSupplierVerify,
   variableChargesBuyerConfirm,
+  variableChargesSideAssign,
+  variableChargesSideConfirm,
   variableChargesGmOverride,
   variableChargesPostInvoiceResolve,
   variableChargesSync,

@@ -23,6 +23,10 @@ const VARIABLE_CHARGE_SCHEDULE_FIELDS = [
 const SIMPLE_QUEUE_NAMES = new Set(['my_tasks', 'waiting', 'ready_for_invoice', 'completed', 'all_cases']);
 const SUPPLIER_REVIEW_OUTCOMES = new Set(['correct', 'changed', 'cancelled']);
 
+function pairedWorkflowEnabled() {
+  return String(process.env.VARIABLE_CHARGE_PAIRED_WORKFLOW_ENABLED || '').trim().toLowerCase() === 'true';
+}
+
 function httpError(message, status = 400, code = 'VARIABLE_CHARGE_ERROR', details) {
   const error = new Error(message);
   error.status = status;
@@ -282,16 +286,66 @@ function supplierLiveFingerprint(liveCase, supplierId) {
       id: row.Id,
       isAgent: row.Is_Agent__c === true,
       paymentTerm: row.Supplier_Payment_Term__c || null,
-      lastModifiedAt: row.LastModifiedDate || null,
     })),
-    nominations: (liveCase.supplierNominations || []).filter((row) => row.Account__c === supplierId).map((row) => ({
-      id: row.Id,
-      trader: row.Buyer_Supplier_Trader__c || null,
-      email: normalizedEmail(row.BT_ST_Email_Address__c),
-      lastModifiedAt: row.LastModifiedDate || null,
+    lineItems: liveCase.lineItems.filter((row) => row.Original_Supplier__c === supplierId).map((row) => ({
+      kind: 'line_item', id: row.Id, supplierId: row.Original_Supplier__c,
+      cancelled: row.Cancelled__c === true, productId: row.Product__c || null,
+      quantity: row.Quantity__c ?? null, deliveredQuantity: row.Quantity_Delivered_Per_BDN__c ?? null,
+      quantityMax: row.Quantity_Max__c ?? null, uom: row.Unit_of_Measure__c || null,
+      paymentTerm: row.Payment_Term__c || null, unitCost: row.Unit_Buy_At__c ?? null,
+      totalCost: row.Total_Cost__c ?? null, commissionCost: row.Commission_Cost__c ?? null,
+      currency: row.CurrencyIsoCode || null,
+    })).sort((a, b) => a.id.localeCompare(b.id)),
+    extraCosts: liveCase.extraCosts.filter((row) => row.Supplier__c === supplierId).map((row) => ({
+      kind: 'extra_cost', id: row.Id, supplierId: row.Supplier__c,
+      cancelled: row.Cancelled__c === true, productId: row.Product2Id__c || null,
+      description: row.Description__c || null, stemLineItemId: row.STEM_Line_Item__c || null,
+      quantity: row.Quantity__c ?? null, deliveredQuantity: row.Quantity_Delivered_Per_BDN__c ?? null,
+      quantityRangeMax: row.Quantity_Range_Max__c ?? null, uom: row.Unit_of_Measure__c || null,
+      paymentTerm: row.Payment_Term__c || null, unitCost: row.Unit_Cost__c ?? null,
+      fixedCost: row.Lumpsum_Cost__c ?? null, lineCost: row.Line_Total_Buy__c ?? null,
+      supplierInvoiceId: row.Supplier_Invoice__c || null, currency: row.CurrencyIsoCode || null,
+    })).sort((a, b) => a.id.localeCompare(b.id)),
+  });
+}
+
+function buyerChargeLiveFingerprint(liveCase, supplierId) {
+  return sha256({
+    readiness: {
+      deliveryDate: liveCase.stem.Delivery_Date__c || null,
+      schedule: Object.fromEntries(VARIABLE_CHARGE_SCHEDULE_FIELDS.map((field) => [field, liveCase.stem[field] || null])),
+      productLinePresence: (liveCase.allLineItems || []).map((row) => row.Id).sort(),
+    },
+    account: liveCase.accounts.filter((row) => row.Id === supplierId).map((row) => ({
+      id: row.Id, isAgent: row.Is_Agent__c === true,
     })),
-    lineItems: liveCase.lineItems.filter((row) => row.Original_Supplier__c === supplierId).map(lineFingerprint).sort((a, b) => a.id.localeCompare(b.id)),
-    extraCosts: liveCase.extraCosts.filter((row) => row.Supplier__c === supplierId).map(extraFingerprint).sort((a, b) => a.id.localeCompare(b.id)),
+    lineItems: liveCase.lineItems.filter((row) => row.Original_Supplier__c === supplierId).map((row) => ({
+      kind: 'line_item', id: row.Id, supplierId: row.Original_Supplier__c,
+      cancelled: row.Cancelled__c === true, productId: row.Product__c || null,
+      quantity: row.Quantity__c ?? null, deliveredQuantity: row.Quantity_Delivered_Per_BDN__c ?? null,
+      quantityMax: row.Quantity_Max__c ?? null, uom: row.Unit_of_Measure__c || null,
+      unitPrice: row.Unit_Sell_At__c ?? null, totalPrice: row.Total_Price__c ?? null,
+      currency: row.CurrencyIsoCode || null,
+    })).sort((a, b) => a.id.localeCompare(b.id)),
+    extraCosts: liveCase.extraCosts.filter((row) => row.Supplier__c === supplierId).map((row) => ({
+      kind: 'extra_cost', id: row.Id, supplierId: row.Supplier__c,
+      cancelled: row.Cancelled__c === true, productId: row.Product2Id__c || null,
+      description: row.Description__c || null, stemLineItemId: row.STEM_Line_Item__c || null,
+      quantity: row.Quantity__c ?? null, deliveredQuantity: row.Quantity_Delivered_Per_BDN__c ?? null,
+      quantityRangeMax: row.Quantity_Range_Max__c ?? null, uom: row.Unit_of_Measure__c || null,
+      unitPrice: row.Unit_Price__c ?? null, fixedPrice: row.Lumpsum_Price__c ?? null,
+      linePrice: row.Line_Total__c ?? null, currency: row.CurrencyIsoCode || null,
+    })).sort((a, b) => a.id.localeCompare(b.id)),
+  });
+}
+
+function buyerAggregateFingerprint(liveCase) {
+  return sha256({
+    stemId: liveCase.stem.Id,
+    suppliers: (liveCase.supplierRequirements || []).map((requirement) => ({
+      supplierId: requirement.supplierId,
+      fingerprint: buyerChargeLiveFingerprint(liveCase, requirement.supplierId),
+    })).sort((a, b) => a.supplierId.localeCompare(b.supplierId)),
   });
 }
 
@@ -410,6 +464,11 @@ async function resolveSupplierAssignments(client, liveCases) {
         lastModifiedAt: stage?.LastModifiedDate || null,
         reviewedSourceFingerprint: stage?.Reviewed_Source_Fingerprint__c || null,
         sourceFingerprint: supplierLiveFingerprint(entry, account.Id),
+        buyerChargeStatus: stage?.Buyer_Charge_Status__c || 'Pending',
+        buyerChargeRevision: Number(stage?.Buyer_Charge_Revision__c || 0),
+        buyerChargeConfirmedAt: stage?.Buyer_Charge_Confirmed_At__c || null,
+        buyerChargeReviewedSourceFingerprint: stage?.Buyer_Charge_Reviewed_Source_Fingerprint__c || null,
+        buyerChargeSourceFingerprint: buyerChargeLiveFingerprint(entry, account.Id),
         assignmentStatus,
         assignmentMessage: assignmentStatus === 'resolved' ? null
           : assignmentStatus === 'missing_nomination' ? 'No active Supplier Nomination is assigned.'
@@ -436,7 +495,7 @@ async function loadLiveCases({ client, stemIds = null, stemAccessCondition = nul
     queryAll(`SELECT Id, STEM__c, Original_Supplier__c, Product__c, Product__r.Name, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_Max__c, Unit_of_Measure__c, Unit_Sell_At__c, Unit_Buy_At__c, Total_Cost__c, Total_Price__c, Commission_Cost__c, Payment_Term__c, Buyer_Invoice__c, Supplier_Invoice__c, Cancelled__c, LastModifiedDate FROM STEM_Line_Item__c WHERE Cancelled__c = false AND STEM__r.CreatedDate >= ${VARIABLE_CHARGE_STEM_CREATED_FROM}${candidateWhere(requested)}`),
     queryAll(`SELECT Id, STEM__c, STEM_Line_Item__c, Supplier__c, Supplier_Invoice__c, Product2Id__c, Product2Id__r.Name, Description__c, RecordTypeId, RecordType.Name, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_Range_Max__c, Unit_of_Measure__c, Unit_Cost__c, Unit_Price__c, Lumpsum_Cost__c, Lumpsum_Price__c, Line_Total_Buy__c, Line_Total__c, Payment_Term__c, Buyer_Invoice__c, Cancelled__c, LastModifiedDate FROM STEM_Extra_Cost__c WHERE Cancelled__c = false AND Supplier__c != null AND STEM__r.CreatedDate >= ${VARIABLE_CHARGE_STEM_CREATED_FROM}${candidateWhere(requested)}`),
   ]);
-  const supplierStages = await queryAll(`SELECT Id, STEM__c, Supplier__c, Manual_Review_Required__c, Supplier_Status__c, Verified_At__c, Verified_By_Email__c, Reviewed_Source_Fingerprint__c, Revision__c, LastModifiedDate FROM STEM_Variable_Charge_Supplier__c WHERE STEM__r.CreatedDate >= ${VARIABLE_CHARGE_STEM_CREATED_FROM}${candidateWhere(requested)}`);
+  const supplierStages = await queryAll(`SELECT Id, STEM__c, Supplier__c, Manual_Review_Required__c, Supplier_Status__c, Verified_At__c, Verified_By_Email__c, Reviewed_Source_Fingerprint__c, Revision__c, Buyer_Charge_Status__c, Buyer_Charge_Reviewed_Source_Fingerprint__c, Buyer_Charge_Confirmed_At__c, Buyer_Charge_Confirmed_By_Email__c, Buyer_Charge_Revision__c, LastModifiedDate FROM STEM_Variable_Charge_Supplier__c WHERE STEM__r.CreatedDate >= ${VARIABLE_CHARGE_STEM_CREATED_FROM}${candidateWhere(requested)}`);
   const supplierIds = [...new Set([
     ...allLineItems.map((row) => row.Original_Supplier__c),
     ...allExtraCosts.map((row) => row.Supplier__c), ...supplierStages.map((row) => row.Supplier__c),
@@ -482,6 +541,7 @@ async function loadLiveCases({ client, stemIds = null, stemAccessCondition = nul
   });
   await resolveAssignments(client, result);
   await resolveSupplierAssignments(client, result);
+  for (const entry of result) entry.buyerFingerprint = buyerAggregateFingerprint(entry);
   return result;
 }
 
@@ -524,15 +584,25 @@ function capabilitiesFor(row, profile, gm) {
 
 function deriveStatus(live, stored, today = hongKongToday()) {
   const finals = live.invoices.filter(finalInvoice);
-  const sourceChanged = Boolean(stored?.source_fingerprint && stored.source_fingerprint !== live.fingerprint);
-  const confirmed = live.stem.Variable_Charges_Confirmed__c === true
-    && stored?.confirmation_status === 'confirmed'
-    && !sourceChanged;
-  if (finals.length && (sourceChanged || stored?.workflow_status === 'post_invoice_change')) return 'post_invoice_changes';
+  if (!pairedWorkflowEnabled()) {
+    const sourceChanged = Boolean(stored?.source_fingerprint && stored.source_fingerprint !== live.fingerprint);
+    const confirmed = live.stem.Variable_Charges_Confirmed__c === true
+      && stored?.confirmation_status === 'confirmed' && !sourceChanged;
+    if (finals.length && (sourceChanged || stored?.workflow_status === 'post_invoice_change')) return 'post_invoice_changes';
+    if (!live.hasVariableCharges) return 'completed';
+    if (!variableChargeActionability(live, today).ready) return 'awaiting_delivery';
+    if ((live.supplierRequirements || []).some((row) => row.assignmentStatus !== 'resolved' || row.status !== 'Verified')) return 'needs_action';
+    if (live.assignment?.status !== 'resolved') return 'needs_action';
+    if (finals.length) return confirmed || stored?.post_invoice_resolution ? 'completed' : 'post_invoice_changes';
+    if (confirmed) return 'ready_for_invoice';
+    return 'needs_action';
+  }
+  const buyerSidesReady = (live.supplierRequirements || []).every((row) => row.buyerChargeStatus === 'Verified');
+  const buyerChanged = (live.supplierRequirements || []).some((row) => row.buyerChargeStatus === 'Invalidated');
+  const confirmed = live.stem.Variable_Charges_Confirmed__c === true && buyerSidesReady;
+  if (finals.length && (buyerChanged || stored?.workflow_status === 'post_invoice_change')) return 'post_invoice_changes';
   if (!live.hasVariableCharges) return 'completed';
   if (!variableChargeActionability(live, today).ready) return 'awaiting_delivery';
-  if ((live.supplierRequirements || []).some((row) => row.assignmentStatus !== 'resolved' || row.status !== 'Verified')) return 'needs_action';
-  if (live.assignment?.status !== 'resolved') return 'needs_action';
   if (finals.length) return confirmed || stored?.post_invoice_resolution ? 'completed' : 'post_invoice_changes';
   if (confirmed) return 'ready_for_invoice';
   return 'needs_action';
@@ -604,39 +674,76 @@ function financialSummary(live) {
 
 function plainLanguageWorkflow(caseRow) {
   const requirements = caseRow.supplierRequirements || [];
-  const pendingSuppliers = requirements.filter((row) => row.status !== 'Verified');
-  const currentSupplier = pendingSuppliers.find((row) => row.canVerify) || pendingSuppliers[0] || null;
+  if (caseRow.pairedWorkflowEnabled !== true) {
+    const pendingSuppliers = requirements.filter((row) => row.status !== 'Verified');
+    const currentSupplier = pendingSuppliers.find((row) => row.canVerify) || pendingSuppliers[0] || null;
+    const status = caseRow.status;
+    const postInvoice = status === 'post_invoice_changes';
+    const awaiting = status === 'awaiting_delivery';
+    const supplierStep = pendingSuppliers.length > 0;
+    const buyerStep = !supplierStep && status === 'needs_action' && !postInvoice;
+    const isMyTask = postInvoice ? caseRow.capabilities?.canResolvePostInvoice === true
+      : awaiting ? false : supplierStep ? pendingSuppliers.some((row) => row.canVerify)
+        : buyerStep && caseRow.capabilities?.canBuyerConfirm === true;
+    const simplifiedQueue = isMyTask ? 'my_tasks'
+      : status === 'ready_for_invoice' ? 'ready_for_invoice'
+        : status === 'completed' ? 'completed' : 'waiting';
+    const currentStep = postInvoice ? 'invoice_attention' : supplierStep ? 'supplier_costs' : buyerStep ? 'buyer_charges' : 'ready_for_invoices';
+    const responsiblePerson = supplierStep ? currentSupplier?.assignedSupplierTrader?.name || 'Needs assignment'
+      : buyerStep || postInvoice ? caseRow.assignedBuyerTrader?.name || 'Needs assignment'
+        : status === 'ready_for_invoice' ? 'Invoice team' : 'Completed';
+    const nextAction = postInvoice ? 'Invoice already issued—action required'
+      : awaiting ? (caseRow.actionableOn ? `Available from ${caseRow.actionableOn}` : 'Add the required schedule information')
+        : supplierStep ? (isMyTask ? `Confirm ${currentSupplier?.supplierName || 'supplier'} costs` : `Waiting for ${responsiblePerson}`)
+          : buyerStep ? (isMyTask ? 'Approve buyer charges' : `Waiting for ${responsiblePerson}`)
+            : status === 'ready_for_invoice' ? 'Ready for invoice creation' : status === 'completed' ? 'Completed' : 'Waiting';
+    return {
+      simplifiedQueue, currentStep, isMyTask, responsiblePerson, nextAction,
+      progress: {
+        supplierCosts: supplierStep ? 'current' : 'complete',
+        buyerCharges: supplierStep ? 'waiting' : buyerStep ? 'current' : 'complete',
+        readyForInvoices: status === 'ready_for_invoice' || status === 'completed' ? 'complete' : 'waiting',
+      },
+    };
+  }
+  const pendingCosts = requirements.filter((row) => row.sides?.cost?.status !== 'verified');
+  const pendingBuyerCharges = requirements.filter((row) => row.sides?.buyerCharge?.status !== 'verified');
+  const myCost = pendingCosts.find((row) => row.sides?.cost?.permissions?.canConfirm);
+  const myBuyerCharge = pendingBuyerCharges.find((row) => row.sides?.buyerCharge?.permissions?.canConfirm);
+  const currentRequirement = myCost || myBuyerCharge || pendingCosts[0] || pendingBuyerCharges[0] || null;
   const status = caseRow.status;
   const postInvoice = status === 'post_invoice_changes';
   const awaiting = status === 'awaiting_delivery';
-  const supplierStep = pendingSuppliers.length > 0;
-  const buyerStep = !supplierStep && status === 'needs_action' && !postInvoice;
+  const supplierStep = pendingCosts.length > 0;
+  const buyerStep = pendingBuyerCharges.length > 0;
   const isMyTask = postInvoice
     ? caseRow.capabilities?.canResolvePostInvoice === true
     : awaiting ? false
-      : supplierStep ? pendingSuppliers.some((row) => row.canVerify)
-        : buyerStep && caseRow.capabilities?.canBuyerConfirm === true;
+      : Boolean(myCost || myBuyerCharge);
   let simplifiedQueue = 'waiting';
   if (isMyTask) simplifiedQueue = 'my_tasks';
   else if (status === 'ready_for_invoice') simplifiedQueue = 'ready_for_invoice';
   else if (status === 'completed') simplifiedQueue = 'completed';
   const currentStep = postInvoice ? 'invoice_attention'
-    : supplierStep ? 'supplier_costs'
-      : buyerStep ? 'buyer_charges' : 'ready_for_invoices';
-  const responsiblePerson = supplierStep
-    ? currentSupplier?.assignedSupplierTrader?.name || 'Needs assignment'
-    : buyerStep || postInvoice
+    : supplierStep && buyerStep ? 'paired_charges'
+      : supplierStep ? 'supplier_costs'
+        : buyerStep ? 'buyer_charges' : 'ready_for_invoices';
+  const responsiblePerson = currentRequirement
+    ? (myCost ? currentRequirement.sides.cost.currentAssignee?.name
+      : myBuyerCharge ? currentRequirement.sides.buyerCharge.currentAssignee?.name
+        : currentRequirement.sides.cost.status !== 'verified'
+          ? currentRequirement.sides.cost.currentAssignee?.name
+          : currentRequirement.sides.buyerCharge.currentAssignee?.name) || 'Needs assignment'
+    : postInvoice
       ? caseRow.assignedBuyerTrader?.name || 'Needs assignment'
       : status === 'ready_for_invoice' ? 'Invoice team' : 'Completed';
   let nextAction = 'Waiting';
   if (postInvoice) nextAction = 'Invoice already issued—action required';
   else if (awaiting) nextAction = caseRow.actionableOn ? `Available from ${caseRow.actionableOn}` : 'Add the required schedule information';
-  else if (supplierStep) {
-    nextAction = currentSupplier?.assignmentStatus !== 'resolved'
-      ? `Assign a Supplier Trader for ${currentSupplier?.supplierName || 'this supplier'}`
-      : isMyTask ? `Confirm ${currentSupplier?.supplierName || 'supplier'} costs`
-        : `Waiting for ${responsiblePerson}`;
-  } else if (buyerStep) nextAction = isMyTask ? 'Approve buyer charges' : `Waiting for ${responsiblePerson}`;
+  else if (myCost && myBuyerCharge && myCost.supplierId === myBuyerCharge.supplierId) nextAction = `Confirm both sides for ${myCost.supplierName}`;
+  else if (myCost) nextAction = `Confirm ${myCost.supplierName} costs`;
+  else if (myBuyerCharge) nextAction = `Confirm ${myBuyerCharge.supplierName} buyer charges`;
+  else if (supplierStep || buyerStep) nextAction = `Waiting for ${responsiblePerson}`;
   else if (status === 'ready_for_invoice') nextAction = 'Ready for invoice creation';
   else if (status === 'completed') nextAction = 'Completed';
   return {
@@ -647,13 +754,13 @@ function plainLanguageWorkflow(caseRow) {
     nextAction,
     progress: {
       supplierCosts: supplierStep ? 'current' : 'complete',
-      buyerCharges: supplierStep ? 'waiting' : buyerStep ? 'current' : 'complete',
+      buyerCharges: buyerStep ? 'current' : 'complete',
       readyForInvoices: status === 'ready_for_invoice' || status === 'completed' ? 'complete' : 'waiting',
     },
   };
 }
 
-function serializeCase(live, stored, profile, gm, dueDate) {
+function serializeCase(live, stored, profile, gm, dueDate, sideRows = [], profiles = []) {
   const status = deriveStatus(live, stored);
   const actionability = variableChargeActionability(live);
   const assignee = effectiveAssignee(stored || {});
@@ -665,20 +772,64 @@ function serializeCase(live, stored, profile, gm, dueDate) {
   const assignedBuyerTrader = assignee.id ? assignee : {
     id: live.assignment?.profileId || null, name: live.assignment?.name || null, email: live.assignment?.email || null,
   };
-  const supplierRequirements = (live.supplierRequirements || []).map((row) => ({
-    ...row,
-    canVerify: row.assignmentStatus === 'resolved'
-      && row.assignedSupplierTrader?.id === profile?.id
-      && !VIEW_ONLY_USER_TYPES.has(text(profile?.user_type, 100).toLowerCase()),
-  }));
-  const verifiedSupplierCount = supplierRequirements.filter((row) => row.status === 'Verified').length;
+  const profileMap = new Map(profiles.map((row) => [row.id, row]));
+  const normalTrader = !VIEW_ONLY_USER_TYPES.has(text(profile?.user_type, 100).toLowerCase());
+  const supplierRequirements = (live.supplierRequirements || []).map((row) => {
+    const sideState = (side) => sideRows.find((state) => state.supplier_account_id === row.supplierId && state.side === side) || null;
+    const serializeSide = (side) => {
+      const state = sideState(side);
+      const synchronized = Boolean(state);
+      const defaultId = state?.default_assignee_user_id || row.assignedSupplierTrader?.id || null;
+      const assignedId = state?.assigned_user_id || defaultId;
+      const defaultProfile = profileMap.get(defaultId) || (row.assignedSupplierTrader?.id === defaultId ? row.assignedSupplierTrader : null);
+      const assignedProfile = profileMap.get(assignedId) || (row.assignedSupplierTrader?.id === assignedId ? row.assignedSupplierTrader : null);
+      const salesforceStatus = side === 'cost' ? row.status : row.buyerChargeStatus;
+      const fingerprint = side === 'cost' ? row.sourceFingerprint : row.buyerChargeSourceFingerprint;
+      const reviewedFingerprint = side === 'cost' ? row.reviewedSourceFingerprint : row.buyerChargeReviewedSourceFingerprint;
+      const confirmedAt = side === 'cost' ? row.verifiedAt : row.buyerChargeConfirmedAt;
+      const verified = salesforceStatus === 'Verified';
+      const frozen = verified;
+      const isCurrentAssignee = synchronized && assignedId === profile?.id && normalTrader;
+      const isDefaultAssignee = synchronized && defaultId === profile?.id && normalTrader;
+      return {
+        side,
+        status: verified ? 'verified' : salesforceStatus === 'Invalidated' ? 'invalidated' : 'pending',
+        defaultAssignee: defaultProfile ? { id: defaultProfile.id, name: defaultProfile.full_name || defaultProfile.name || defaultProfile.email, email: defaultProfile.email || null } : { id: defaultId, name: null, email: null },
+        currentAssignee: assignedProfile ? { id: assignedProfile.id, name: assignedProfile.full_name || assignedProfile.name || assignedProfile.email, email: assignedProfile.email || null } : { id: assignedId, name: null, email: null },
+        assignmentSource: state?.assignment_source || (defaultId ? 'supplier_nomination' : 'unresolved'),
+        revision: Number(state?.revision || 0),
+        salesforceRevision: Number(side === 'cost' ? row.revision : row.buyerChargeRevision),
+        fingerprint,
+        reviewedFingerprint: reviewedFingerprint || null,
+        confirmationTime: confirmedAt || null,
+        permissions: {
+          canEdit: !frozen && isCurrentAssignee,
+          canConfirm: !frozen && isCurrentAssignee,
+          canAssignToBuyer: !frozen && isDefaultAssignee && Boolean(assignedBuyerTrader.id) && assignedId !== assignedBuyerTrader.id,
+          canTakeBack: !frozen && isDefaultAssignee && assignedId !== defaultId,
+          canGmOverride: !frozen && gm.isGeneralManager,
+        },
+      };
+    };
+    const cost = serializeSide('cost');
+    const buyerCharge = serializeSide('buyer_charge');
+    return {
+      ...row,
+      sides: { cost, buyerCharge },
+      canVerify: cost.permissions.canConfirm,
+    };
+  });
+  const verifiedSupplierCount = supplierRequirements.filter((row) => row.sides.cost.status === 'verified').length;
+  const verifiedBuyerCount = supplierRequirements.filter((row) => row.sides.buyerCharge.status === 'verified').length;
   const baseCapabilities = capabilitiesFor(stored || {
     assigned_buyer_user_id: live.assignment?.profileId,
     assigned_buyer_name: live.assignment?.name,
     assigned_buyer_email: live.assignment?.email,
   }, profile, gm);
   baseCapabilities.canSupplierVerify = supplierRequirements.some((row) => row.canVerify);
-  baseCapabilities.canBuyerConfirm = baseCapabilities.canConfirm && verifiedSupplierCount === supplierRequirements.length;
+  baseCapabilities.canBuyerConfirm = pairedWorkflowEnabled()
+    ? supplierRequirements.some((row) => row.sides.buyerCharge.permissions.canConfirm)
+    : baseCapabilities.canConfirm && verifiedSupplierCount === supplierRequirements.length;
   const serialized = {
     id: stored?.id || null, stemId: live.stem.Id,
     stemName: live.stem.Name || live.stem.KeyStem__c || live.stem.Id,
@@ -691,9 +842,10 @@ function serializeCase(live, stored, profile, gm, dueDate) {
     actionBasisDate: actionability.actionBasisDate,
     actionableOn: actionability.actionableOn,
     salesforceStemLastModifiedAt: live.stem.LastModifiedDate || null,
-    revision: Number(stored?.revision || 0), fingerprint: live.fingerprint,
+    revision: Number(stored?.revision || 0), fingerprint: pairedWorkflowEnabled() ? live.buyerFingerprint : live.fingerprint,
     confirmed: live.stem.Variable_Charges_Confirmed__c === true,
     confirmedFingerprint: stored?.confirmation_status === 'confirmed' ? stored?.source_fingerprint || null : null,
+    pairedWorkflowEnabled: pairedWorkflowEnabled(),
     assignedBuyerTrader,
     assigneeProfileId: assignedBuyerTrader.id || null,
     assigneeName: assignedBuyerTrader.name || null,
@@ -702,6 +854,22 @@ function serializeCase(live, stored, profile, gm, dueDate) {
     assignmentMessage: live.assignment?.message || null,
     supplierRequirements,
     supplierStageProgress: { verified: verifiedSupplierCount, required: supplierRequirements.length },
+    sideProgress: {
+      supplierCosts: { confirmed: verifiedSupplierCount, required: supplierRequirements.length },
+      buyerCharges: { confirmed: verifiedBuyerCount, required: supplierRequirements.length },
+    },
+    invoiceReadiness: {
+      buyer: {
+        ready: live.stem.Variable_Charges_Confirmed__c === true && verifiedBuyerCount === supplierRequirements.length,
+        confirmed: verifiedBuyerCount,
+        required: supplierRequirements.length,
+      },
+      suppliers: supplierRequirements.map((row) => ({
+        supplierId: row.supplierId,
+        supplierName: row.supplierName,
+        ready: row.sides.cost.status === 'verified',
+      })),
+    },
     supplierAccounts,
     variableChargeSupplierName: supplierAccounts.map((row) => row.name).filter(Boolean).join(', ') || null,
     shipAgentName: supplierAccounts.map((row) => row.name).filter(Boolean).join(', ') || null,
@@ -736,16 +904,32 @@ async function storedCases(client, stemIds = null) {
   return data || [];
 }
 
+async function storedSideStates(client, stemIds) {
+  if (!stemIds?.length) return [];
+  const { data, error } = await client.from('variable_charge_side_states').select([
+    'id', 'stem_id', 'supplier_account_id', 'side', 'default_assignee_user_id',
+    'assigned_user_id', 'assignment_source', 'status', 'source_fingerprint',
+    'salesforce_stage_last_modified_at', 'revision', 'updated_at',
+  ].join(',')).in('stem_id', stemIds);
+  if (error) throw httpError('Variable Charges side storage is unavailable. Apply the paired-workflow migration.', 503, 'VARIABLE_CHARGE_SIDE_STORAGE_UNAVAILABLE');
+  return data || [];
+}
+
 async function serializeCases(client, liveCases, profile) {
-  const stored = await storedCases(client, liveCases.map((entry) => entry.stem.Id));
+  const stemIds = liveCases.map((entry) => entry.stem.Id);
+  const [stored, sides, profiles] = await Promise.all([
+    storedCases(client, stemIds),
+    pairedWorkflowEnabled() ? storedSideStates(client, stemIds) : Promise.resolve([]),
+    activeProfileDirectory(client),
+  ]);
   const storedMap = new Map(stored.map((row) => [row.stem_id, row]));
   const gm = await activeGeneralManager(client, profile?.id);
   const cases = [];
   for (const live of liveCases) {
     const dueDate = live.hasProductLineItems && live.stem.Delivery_Date__c ? await dueDateForDelivery(live.stem.Delivery_Date__c) : null;
-    cases.push(serializeCase(live, storedMap.get(live.stem.Id), profile, gm, dueDate));
+    cases.push(serializeCase(live, storedMap.get(live.stem.Id), profile, gm, dueDate, sides.filter((row) => row.stem_id === live.stem.Id), profiles));
   }
-  return { cases, gm };
+  return { cases, gm, pairedWorkflowEnabled: pairedWorkflowEnabled() };
 }
 
 function viewCounts(cases) {
@@ -772,7 +956,7 @@ export async function listVariableCharges(body, context) {
   return {
     cases: filtered,
     counts: viewCounts(serialized.cases),
-    capabilities: { canGmOverride: serialized.gm.isGeneralManager, generalManagerConfigured: serialized.gm.configured },
+    capabilities: { canGmOverride: serialized.gm.isGeneralManager, generalManagerConfigured: serialized.gm.configured, pairedWorkflowEnabled: serialized.pairedWorkflowEnabled },
     retrievedAt: new Date().toISOString(),
   };
 }
@@ -837,6 +1021,7 @@ export async function getVariableChargeDetail(body, context) {
     assignees: options.assignees,
     pricingModes: options.pricingModes,
     capabilities: cases[0].capabilities,
+    pairedWorkflowEnabled: pairedWorkflowEnabled(),
   };
 }
 
@@ -1070,7 +1255,7 @@ async function salesforceChargeWrites(body, live) {
   return { changed: true, responses };
 }
 
-async function salesforceSupplierChargeWrites(body, live, supplierId) {
+async function salesforceSupplierChargeWrites(body, live, supplierId, { includeBuyerFields = false } = {}) {
   const updates = Array.isArray(body?.extraCostUpdates) ? body.extraCostUpdates : [];
   const additions = Array.isArray(body?.extraCostAdds) ? body.extraCostAdds : [];
   const cancellations = Array.isArray(body?.cancellations) ? body.cancellations : [];
@@ -1089,11 +1274,13 @@ async function salesforceSupplierChargeWrites(body, live, supplierId) {
     if (mode === 'fixed') {
       bodyPatch.Lumpsum_Cost__c = numeric(update.supplierCost ?? update.cost ?? update.fixedAmount, 'Fixed supplier cost');
       bodyPatch.Unit_Cost__c = null;
+      if (includeBuyerFields) bodyPatch.Lumpsum_Price__c = numeric(update.buyerPrice ?? update.price ?? update.fixedBuyerAmount, 'Fixed buyer price');
     } else {
       bodyPatch.Quantity__c = numeric(update.quantity, 'Quantity', { positive: true, nullable: false });
       bodyPatch.Unit_of_Measure__c = text(update.unitOfMeasure || current.Unit_of_Measure__c, 40) || '1.';
       bodyPatch.Unit_Cost__c = numeric(update.supplierCost ?? update.cost ?? update.unitPrice, 'Supplier unit cost');
       bodyPatch.Lumpsum_Cost__c = null;
+      if (includeBuyerFields) bodyPatch.Unit_Price__c = numeric(update.buyerPrice ?? update.price ?? update.buyerUnitPrice, 'Buyer unit price');
     }
     requests.push({ method: 'PATCH', url: `/services/data/${apiVersion}/sobjects/STEM_Extra_Cost__c/${id}`, referenceId: `supplierUpdate${reference++}`, httpHeaders: lastModifiedHeaders(current.LastModifiedDate), body: bodyPatch });
   }
@@ -1115,12 +1302,14 @@ async function salesforceSupplierChargeWrites(body, live, supplierId) {
     const create = { STEM__c: live.stem.Id, Supplier__c: supplierId, Product2Id__c: productId, RecordTypeId: recordTypes[0].Id, Payment_Term__c: paymentTerm, Cancelled__c: false, Description__c: text(addition.description, 32_000) || 'STEM Charge' };
     if (mode === 'fixed') {
       create.Lumpsum_Cost__c = numeric(addition.supplierCost ?? addition.cost ?? addition.fixedAmount, 'Fixed supplier cost');
+      if (includeBuyerFields) create.Lumpsum_Price__c = numeric(addition.buyerPrice ?? addition.price ?? addition.fixedBuyerAmount, 'Fixed buyer price');
       create.Quantity__c = numeric(addition.quantity ?? 1, 'Quantity', { positive: true, nullable: false });
       create.Unit_of_Measure__c = text(addition.unitOfMeasure, 40) || '1.';
     } else {
       create.Quantity__c = numeric(addition.quantity, 'Quantity', { positive: true, nullable: false });
       create.Unit_of_Measure__c = text(addition.unitOfMeasure, 40) || '1.';
       create.Unit_Cost__c = numeric(addition.supplierCost ?? addition.cost ?? addition.unitPrice, 'Supplier unit cost');
+      if (includeBuyerFields) create.Unit_Price__c = numeric(addition.buyerPrice ?? addition.price ?? addition.buyerUnitPrice, 'Buyer unit price');
     }
     requests.push({ method: 'POST', url: `/services/data/${apiVersion}/sobjects/STEM_Extra_Cost__c`, referenceId: `supplierCreate${reference++}`, body: create });
   }
@@ -1359,7 +1548,316 @@ export async function verifyVariableChargeSupplier(body, context) {
   }
 }
 
+function selectedSides(body) {
+  const raw = Array.isArray(body?.sides) ? body.sides : body?.side ? [body.side] : [];
+  const sides = [...new Set(raw.map((value) => text(value, 40).toLowerCase().replaceAll('-', '_')))];
+  if (!sides.length || sides.some((side) => !['cost', 'buyer_charge'].includes(side))) {
+    throw httpError('Select the cost side, buyer-charge side, or both sides.', 400, 'INVALID_VARIABLE_CHARGE_SIDE');
+  }
+  return sides;
+}
+
+function expectedSideRevisions(body, sides) {
+  const source = body?.expectedRevisions || {};
+  const result = {};
+  for (const side of sides) {
+    const revision = Number(source[side] ?? (side === 'buyer_charge' ? source.buyerCharge : undefined));
+    if (!Number.isInteger(revision) || revision < 1) {
+      throw httpError('Refresh before changing this side; its workflow revision is unavailable.', 409, 'SIDE_REVISION_REQUIRED');
+    }
+    result[side] = revision;
+  }
+  return result;
+}
+
+async function sideStatesForSupplier(context, stemId, supplierId, sides) {
+  const rows = await storedSideStates(context.client, [stemId]);
+  const selected = rows.filter((row) => row.supplier_account_id === supplierId && sides.includes(row.side));
+  if (selected.length !== sides.length) {
+    throw httpError('The paired workflow is not synchronized yet. Refresh Variable Charges and retry.', 409, 'SIDE_STATE_NOT_SYNCHRONIZED');
+  }
+  return selected;
+}
+
+function sideBody(body, side) {
+  const nested = side === 'cost' ? body?.cost : body?.buyerCharge || body?.buyer_charge;
+  return nested && typeof nested === 'object' ? { ...body, ...nested } : body;
+}
+
+function mergePairedWrites(costBody, buyerBody) {
+  const byId = new Map();
+  for (const update of [...(costBody?.extraCostUpdates || []), ...(buyerBody?.extraCostUpdates || [])]) {
+    const id = text(update?.extraCostId || update?.id, 18);
+    if (!id) continue;
+    byId.set(id, { ...(byId.get(id) || {}), ...update, extraCostId: id });
+  }
+  const additionsByKey = new Map();
+  for (const addition of [...(costBody?.extraCostAdds || []), ...(buyerBody?.extraCostAdds || [])]) {
+    const key = text(addition?.reviewLocalId || addition?.localId, 64);
+    if (!key) throw httpError('Every new paired charge needs a stable local identity.', 400, 'ADDITION_ID_REQUIRED');
+    additionsByKey.set(key, { ...(additionsByKey.get(key) || {}), ...addition, reviewLocalId: key });
+  }
+  return {
+    ...costBody,
+    extraCostUpdates: [...byId.values()],
+    extraCostAdds: [...additionsByKey.values()],
+    cancellations: costBody?.cancellations || [],
+  };
+}
+
+async function validateCostSide(body, supplierRows) {
+  const normalized = normalizeSupplierReviewPayload(body, supplierRows);
+  const reviews = Array.isArray(normalized?.reviews) ? normalized.reviews : [];
+  const byId = new Map(reviews.map((row) => [text(row?.sourceId || row?.id, 64), row]));
+  for (const row of supplierRows) {
+    const review = byId.get(row.Id);
+    if (!review || review.reviewed !== true) throw httpError('Review every current cost row for this supplier.', 400, 'COST_ROW_REVIEW_REQUIRED');
+    if (!reviewEvidence(review).reference) throw httpError('The cost side requires a supplier note for every reviewed row.', 400, 'COST_NOTE_REQUIRED');
+  }
+  const costNote = text(normalized?.supplierReviewNote || normalized?.note, 1000);
+  for (const addition of Array.isArray(normalized?.extraCostAdds) ? normalized.extraCostAdds : []) {
+    if (!text(addition?.reviewLocalId || addition?.localId, 64)) throw httpError('Every new supplier charge needs a stable local identity.', 400, 'ADDITION_ID_REQUIRED');
+    if (!text(addition?.productId, 18)) throw httpError('Choose a Salesforce Product for every new supplier charge.', 400, 'PRODUCT_REQUIRED');
+    numeric(addition?.supplierCost ?? addition?.cost ?? addition?.fixedAmount ?? addition?.unitPrice, 'Supplier cost', { nullable: false });
+    if ((addition?.pricingType || addition?.pricingMode) === 'per_unit') numeric(addition?.quantity, 'Quantity', { positive: true, nullable: false });
+    if (!costNote && !reviewEvidence(addition).reference) throw httpError('The cost side requires a supplier note for every new charge.', 400, 'COST_NOTE_REQUIRED');
+  }
+  return { body: normalized, reviews };
+}
+
+function normalizeBuyerSide(body, supplierRows) {
+  if (!Array.isArray(body?.rowChargeDecisions)) return body;
+  const note = text(body?.buyerReviewNote || body?.note, 1000);
+  if (!note) throw httpError('Add a buyer-charge note before confirmation.', 400, 'BUYER_NOTE_REQUIRED');
+  const decisions = new Map(body.rowChargeDecisions.map((row) => [
+    text(row?.sourceId || row?.id, 64),
+    { decision: text(row?.decision || row?.buyerChargeDecision, 32).toLowerCase(), evidenceDocumentIds: row?.evidenceDocumentIds || [] },
+  ]));
+  return {
+    ...body,
+    reviews: supplierRows.map((row) => {
+      const selected = decisions.get(row.Id);
+      return {
+        sourceId: row.Id,
+        sourceType: row.Original_Supplier__c ? 'line_item' : 'extra_cost',
+        reviewed: true,
+        buyerChargeDecision: selected?.decision,
+        referenceOrNote: note,
+        evidenceDocumentIds: selected?.evidenceDocumentIds || [],
+      };
+    }),
+  };
+}
+
+async function validateBuyerSide(body, supplierRows, files) {
+  const normalized = normalizeBuyerSide(body, supplierRows);
+  const reviews = Array.isArray(normalized?.reviews) ? normalized.reviews : [];
+  const byId = new Map(reviews.map((row) => [text(row?.sourceId || row?.id, 64), row]));
+  const fileIds = new Set(files.map((row) => row.id));
+  for (const row of supplierRows) {
+    const review = byId.get(row.Id);
+    if (!review || review.reviewed !== true) throw httpError('Review every current buyer-charge row for this supplier.', 400, 'BUYER_ROW_REVIEW_REQUIRED');
+    if (!['include', 'exclude'].includes(text(review.buyerChargeDecision, 32).toLowerCase())) throw httpError('Choose Include or Exclude for every buyer charge.', 400, 'BUYER_CHARGE_DECISION_REQUIRED');
+    const evidence = reviewEvidence(review);
+    if (!evidence.reference) throw httpError('The buyer-charge side requires a note for every reviewed row.', 400, 'BUYER_NOTE_REQUIRED');
+    if (evidence.evidenceDocumentIds.some((id) => !fileIds.has(id))) throw httpError('A selected Salesforce File is no longer linked to this charge.', 409, 'EVIDENCE_CHANGED');
+  }
+  const buyerNote = text(normalized?.buyerReviewNote || normalized?.note, 1000);
+  for (const addition of Array.isArray(normalized?.extraCostAdds) ? normalized.extraCostAdds : []) {
+    if (!text(addition?.reviewLocalId || addition?.localId, 64)) throw httpError('Every new paired charge needs a stable local identity.', 400, 'ADDITION_ID_REQUIRED');
+    const decision = text(addition?.buyerChargeDecision || addition?.decision, 32).toLowerCase();
+    if (!['include', 'exclude'].includes(decision)) throw httpError('Choose Include or Exclude for every new buyer charge.', 400, 'BUYER_CHARGE_DECISION_REQUIRED');
+    if (decision === 'include') numeric(addition?.buyerPrice ?? addition?.price ?? addition?.fixedBuyerAmount ?? addition?.buyerUnitPrice, 'Buyer price', { nullable: false });
+    const evidence = reviewEvidence(addition);
+    if (!buyerNote && !evidence.reference) throw httpError('The buyer-charge side requires a note for every new charge.', 400, 'BUYER_NOTE_REQUIRED');
+    if (evidence.evidenceDocumentIds.some((id) => !fileIds.has(id))) throw httpError('A selected Salesforce File is no longer linked to this charge.', 409, 'EVIDENCE_CHANGED');
+  }
+  return { body: normalized, reviews };
+}
+
+export async function assignVariableChargeSides(body, context) {
+  if (!pairedWorkflowEnabled()) throw httpError('The paired Variable Charges workflow is not enabled yet.', 409, 'PAIRED_WORKFLOW_DISABLED');
+  const stemId = text(body?.stemId, 18);
+  const supplierId = text(body?.supplierId, 18);
+  const sides = selectedSides(body);
+  const targetRole = text(body?.target, 40).toLowerCase();
+  if (!['buyer_trader', 'supplier_trader'].includes(targetRole)) throw httpError('Choose Buyer Trader or Supplier Trader.', 400, 'INVALID_SIDE_ASSIGNMENT_TARGET');
+  const operationId = operationIdentity(body);
+  const live = await liveCaseForStem(stemId, context);
+  const requirement = (live.supplierRequirements || []).find((row) => row.supplierId === supplierId && row.effectiveRequired);
+  if (!requirement) throw httpError('This exact supplier is not required in Variable Charges.', 409, 'SUPPLIER_STAGE_NOT_REQUIRED');
+  const revisions = expectedSideRevisions(body, sides);
+  const states = await sideStatesForSupplier(context, stemId, supplierId, sides);
+  for (const state of states) {
+    if (Number(state.revision) !== revisions[state.side]) throw httpError('This responsibility changed after it was opened. Refresh and retry.', 409, 'SIDE_REVISION_CONFLICT');
+  }
+  const gm = await activeGeneralManager(context.client, context.profile.id);
+  const reason = text(body?.gmOverrideReason || body?.reason, 1000);
+  const supplierOwner = requirement.assignedSupplierTrader?.id === context.profile.id
+    && !VIEW_ONLY_USER_TYPES.has(text(context.profile?.user_type).toLowerCase());
+  if (!supplierOwner && !(gm.isGeneralManager && reason.length >= 5)) {
+    if (gm.isGeneralManager) throw httpError('A General Manager override reason of at least 5 characters is required.', 400, 'GM_REASON_REQUIRED');
+    throw httpError('Only the resolved Supplier Trader may delegate or take back these sides.', 403, 'DEFAULT_SUPPLIER_TRADER_REQUIRED');
+  }
+  const targetUserId = targetRole === 'buyer_trader' ? live.assignment?.profileId : requirement.assignedSupplierTrader?.id;
+  if (!targetUserId) throw httpError(`The resolved ${targetRole === 'buyer_trader' ? 'Buyer' : 'Supplier'} Trader is unavailable.`, 409, 'SIDE_TARGET_UNRESOLVED');
+  const requestFingerprint = sha256({ stemId, supplierId, sides, targetRole, targetUserId, revisions, reason: gm.isGeneralManager ? reason : null });
+  const reservation = await reserveOperation(context.client, { operationId, type: 'side_assign', stemId, fingerprint: requestFingerprint, actorId: context.profile.id });
+  if (reservation?.status === 'succeeded') return reservation.result || {};
+  if (['failed', 'uncertain'].includes(reservation?.status)) throw httpError('This assignment operation cannot be resumed safely. Refresh and use a new operation.', 409, 'OPERATION_NOT_RESUMABLE');
+  const { data, error } = await context.client.rpc('assign_variable_charge_sides', {
+    p_operation_id: operationId,
+    p_stem_id: stemId,
+    p_supplier_account_id: supplierId,
+    p_sides: sides,
+    p_target_role: !supplierOwner && gm.isGeneralManager ? 'gm_override' : targetRole,
+    p_target_user_id: targetUserId,
+    p_expected_revisions: revisions,
+    p_actor_user_id: context.profile.id,
+    p_actor_email: context.profile.email,
+    p_override_reason: !supplierOwner && gm.isGeneralManager ? reason : null,
+  });
+  if (error) {
+    if (/changed after it was opened|revision/i.test(error.message || '')) throw httpError(error.message, 409, 'SIDE_REVISION_CONFLICT');
+    throw error;
+  }
+  const result = { stemId, supplierId, sides: data?.sides || [], operationId };
+  await completeOperation(context.client, operationId, 'succeeded', { stemId, supplierId, status: 'assigned' });
+  return result;
+}
+
+export async function confirmVariableChargeSides(body, context) {
+  if (!pairedWorkflowEnabled()) throw httpError('The paired Variable Charges workflow is not enabled yet.', 409, 'PAIRED_WORKFLOW_DISABLED');
+  const stemId = text(body?.stemId, 18);
+  const supplierId = text(body?.supplierId, 18);
+  const sides = selectedSides(body);
+  const operationId = operationIdentity(body);
+  const revisions = expectedSideRevisions(body, sides);
+  const liveBefore = await liveCaseForStem(stemId, context);
+  const requirement = (liveBefore.supplierRequirements || []).find((row) => row.supplierId === supplierId && row.effectiveRequired);
+  if (!requirement) throw httpError('This exact supplier is not required in Variable Charges.', 409, 'SUPPLIER_STAGE_NOT_REQUIRED');
+  assertLiveActionable(liveBefore);
+  const states = await sideStatesForSupplier(context, stemId, supplierId, sides);
+  const gm = await activeGeneralManager(context.client, context.profile.id);
+  const overrideReason = text(body?.gmOverrideReason || body?.reason, 1000);
+  const normalAuthority = states.every((state) => state.assigned_user_id === context.profile.id)
+    && !VIEW_ONLY_USER_TYPES.has(text(context.profile?.user_type).toLowerCase());
+  if (!normalAuthority && !(gm.isGeneralManager && overrideReason.length >= 5)) {
+    if (gm.isGeneralManager) throw httpError('A General Manager override reason of at least 5 characters is required.', 400, 'GM_REASON_REQUIRED');
+    throw httpError('Only the current assignee may confirm each selected side.', 403, 'SIDE_ASSIGNEE_REQUIRED');
+  }
+  for (const state of states) {
+    if (Number(state.revision) !== revisions[state.side]) throw httpError('This side changed after it was opened. Refresh and review it again.', 409, 'SIDE_REVISION_CONFLICT');
+  }
+  if (text(body?.expectedStemLastModifiedAt, 80) !== text(liveBefore.stem.LastModifiedDate, 80)) throw httpError('The Salesforce STEM changed after it was opened.', 409, 'STEM_LAST_MODIFIED_CONFLICT');
+  const supplierRows = [...liveBefore.lineItems, ...liveBefore.extraCosts].filter((row) => (row.Original_Supplier__c || row.Supplier__c) === supplierId);
+  const files = await linkedSalesforceFiles(liveBefore);
+  const costReview = sides.includes('cost') ? await validateCostSide(sideBody(body, 'cost'), supplierRows) : null;
+  const buyerReview = sides.includes('buyer_charge') ? await validateBuyerSide(sideBody(body, 'buyer_charge'), supplierRows, files) : null;
+  const expectedFingerprints = body?.expectedFingerprints || {};
+  const expectedCostFingerprint = text(expectedFingerprints.cost || body?.expectedCostFingerprint, 128);
+  const expectedBuyerFingerprint = text(expectedFingerprints.buyer_charge || expectedFingerprints.buyerCharge || body?.expectedBuyerFingerprint, 128);
+  if (sides.includes('cost') && expectedCostFingerprint !== requirement.sourceFingerprint) throw httpError('Supplier costs changed after review.', 409, 'COST_FINGERPRINT_CONFLICT');
+  if (sides.includes('buyer_charge') && expectedBuyerFingerprint !== requirement.buyerChargeSourceFingerprint) throw httpError('Buyer charges changed after review.', 409, 'BUYER_FINGERPRINT_CONFLICT');
+  const requestFingerprint = sha256({
+    stemId, supplierId, sides, revisions, expectedCostFingerprint, expectedBuyerFingerprint,
+    costReviews: costReview?.reviews || [], buyerReviews: buyerReview?.reviews || [],
+    costWrites: costReview?.body?.extraCostUpdates || [], buyerWrites: buyerReview?.body?.extraCostUpdates || [],
+    additions: costReview?.body?.extraCostAdds || [], cancellations: costReview?.body?.cancellations || [],
+    overrideReason: normalAuthority ? null : overrideReason,
+  });
+  const reservation = await reserveOperation(context.client, { operationId, type: 'side_confirm', stemId, fingerprint: requestFingerprint, actorId: context.profile.id });
+  if (reservation?.status === 'succeeded') return reservation.result || {};
+  if (['failed', 'uncertain'].includes(reservation?.status)) throw httpError('This confirmation has an uncertain outcome. Refresh before taking another action.', 409, 'OPERATION_UNCERTAIN');
+  let salesforceResult = null;
+  let ledgerFingerprints = null;
+  let salesforceWritten = reservation?.status === 'salesforce_written';
+  try {
+    if (reservation?.status !== 'salesforce_written') {
+      if (sides.length === 2) {
+        await salesforceSupplierChargeWrites(mergePairedWrites(costReview.body, buyerReview.body), liveBefore, supplierId, { includeBuyerFields: true });
+      } else if (sides[0] === 'cost') {
+        await salesforceSupplierChargeWrites(costReview.body, liveBefore, supplierId);
+      } else {
+        await salesforceChargeWrites(buyerReview.body, liveBefore);
+      }
+      const refreshed = await liveCaseForStem(stemId, context);
+      const refreshedRequirement = (refreshed.supplierRequirements || []).find((row) => row.supplierId === supplierId);
+      const [costSnapshot, buyerSnapshot] = await Promise.all([
+        sides.includes('cost') ? sfRequest(`/apexrest/fcos/variable-charges/${encodeURIComponent(stemId)}/supplier/${encodeURIComponent(supplierId)}/cost/fingerprint`, { readOnly: true }) : null,
+        sides.includes('buyer_charge') ? sfRequest(`/apexrest/fcos/variable-charges/${encodeURIComponent(stemId)}/supplier/${encodeURIComponent(supplierId)}/buyer-charge/fingerprint`, { readOnly: true }) : null,
+      ]);
+      salesforceResult = await sfRequest(`/apexrest/fcos/variable-charges/${encodeURIComponent(stemId)}/supplier/${encodeURIComponent(supplierId)}/confirm`, {
+        method: 'POST',
+        body: {
+          stemId, supplierId, sides, verifierEmail: context.profile.email,
+          expectedCostFingerprint: costSnapshot?.costFingerprint || costSnapshot?.fingerprint || null,
+          expectedBuyerFingerprint: buyerSnapshot?.buyerFingerprint || buyerSnapshot?.fingerprint || null,
+          expectedStemLastModifiedAt: refreshed.stem.LastModifiedDate,
+          expectedStageLastModifiedAt: refreshedRequirement?.lastModifiedAt || null,
+          gmOverrideReason: normalAuthority ? null : overrideReason,
+        },
+      });
+      const confirmedLive = await liveCaseForStem(stemId, context);
+      const confirmedRequirement = (confirmedLive.supplierRequirements || []).find((row) => row.supplierId === supplierId);
+      ledgerFingerprints = {
+        cost: confirmedRequirement?.sourceFingerprint,
+        buyer_charge: confirmedRequirement?.buyerChargeSourceFingerprint,
+      };
+      await completeOperation(context.client, operationId, 'salesforce_written', {
+        stemId, supplierId, sourceFingerprint: sha256({ cost: salesforceResult?.costFingerprint, buyer: salesforceResult?.buyerFingerprint }),
+      });
+      salesforceWritten = true;
+    } else {
+      const refreshed = await liveCaseForStem(stemId, context);
+      const refreshedRequirement = (refreshed.supplierRequirements || []).find((row) => row.supplierId === supplierId);
+      if (sides.includes('cost') && refreshedRequirement?.status !== 'Verified') throw httpError('The cost-side Salesforce confirmation changed before recovery.', 409, 'POST_WRITE_LIVE_DATA_CONFLICT');
+      if (sides.includes('buyer_charge') && refreshedRequirement?.buyerChargeStatus !== 'Verified') throw httpError('The buyer-side Salesforce confirmation changed before recovery.', 409, 'POST_WRITE_LIVE_DATA_CONFLICT');
+      ledgerFingerprints = {
+        cost: refreshedRequirement?.sourceFingerprint,
+        buyer_charge: refreshedRequirement?.buyerChargeSourceFingerprint,
+      };
+      salesforceResult = {
+        costFingerprint: refreshedRequirement?.reviewedSourceFingerprint,
+        buyerFingerprint: refreshedRequirement?.buyerChargeReviewedSourceFingerprint,
+        lastModifiedAt: refreshedRequirement?.lastModifiedAt,
+      };
+    }
+    const confirmationRows = sides.map((side) => ({
+      side,
+      expectedRevision: revisions[side],
+      sourceFingerprint: ledgerFingerprints?.[side],
+      salesforceStageLastModifiedAt: salesforceResult?.lastModifiedAt || null,
+      rowByRowReviewed: true,
+      noteRecorded: true,
+      evidencePresent: (side === 'cost' ? costReview?.reviews : buyerReview?.reviews)?.some((review) => reviewEvidence(review).evidenceDocumentIds.length > 0) || false,
+    }));
+    const { data, error } = await context.client.rpc('record_variable_charge_side_confirmations', {
+      p_operation_id: operationId,
+      p_stem_id: stemId,
+      p_supplier_account_id: supplierId,
+      p_sides: confirmationRows,
+      p_actor_user_id: context.profile.id,
+      p_actor_email: context.profile.email,
+      p_override_reason: normalAuthority ? null : overrideReason,
+    });
+    if (error) {
+      if (/changed after it was opened|revision/i.test(error.message || '')) throw httpError(error.message, 409, 'SIDE_REVISION_CONFLICT');
+      throw error;
+    }
+    const result = { stemId, supplierId, sides: data?.sides || [], operationId, buyerInvoiceReady: salesforceResult?.buyerConfirmed === true };
+    await completeOperation(context.client, operationId, 'succeeded', { stemId, supplierId, status: 'verified' });
+    return result;
+  } catch (error) {
+    if (!salesforceWritten) {
+      await completeOperation(context.client, operationId, 'uncertain', { stemId, supplierId, errorCode: error.code || 'SIDE_CONFIRM_UNCERTAIN' }).catch(() => {});
+    }
+    throw error;
+  }
+}
+
 export async function confirmVariableChargeBuyer(body, context) {
+  if (pairedWorkflowEnabled()) throw httpError('The Variable Charges workflow changed. Refresh FCOS and confirm each supplier buyer-charge side.', 409, 'PAIRED_WORKFLOW_REFRESH_REQUIRED');
   const live = await liveCaseForStem(text(body?.stemId, 18), context);
   if ((live.supplierRequirements || []).some((row) => row.status !== 'Verified')) {
     throw httpError('Every required Supplier Trader must verify their supplier before Buyer Trader confirmation.', 409, 'SUPPLIER_STAGES_INCOMPLETE');
@@ -1368,6 +1866,7 @@ export async function confirmVariableChargeBuyer(body, context) {
 }
 
 export async function overrideVariableChargeAssignment(body, context) {
+  if (pairedWorkflowEnabled()) throw httpError('Use the audited side-level General Manager override in the paired workflow.', 409, 'PAIRED_WORKFLOW_REFRESH_REQUIRED');
   const stemId = text(body?.stemId, 18);
   const operationId = operationIdentity(body);
   const reason = text(body?.reason, 1000);
@@ -1417,10 +1916,11 @@ export async function resolveVariableChargePostInvoiceChange(body, context) {
   if (!reference) throw httpError('A resolution reference is required.', 400, 'RESOLUTION_REFERENCE_REQUIRED');
   const live = await liveCaseForStem(stemId, context);
   const stored = currentCaseRow(await storedCases(context.client, [stemId]), stemId);
-  if (text(body?.expectedFingerprint, 128) !== live.fingerprint) throw httpError('Salesforce data changed after this case was opened. Refresh before resolving it.', 409, 'LIVE_DATA_CONFLICT');
+  const currentFingerprint = pairedWorkflowEnabled() ? live.buyerFingerprint : live.fingerprint;
+  if (text(body?.expectedFingerprint, 128) !== currentFingerprint) throw httpError('Salesforce buyer-charge data changed after this case was opened. Refresh before resolving it.', 409, 'LIVE_DATA_CONFLICT');
   await requireCaseAuthority(context, stored, body);
   if (!live.invoices.some(finalInvoice)) throw httpError('A final buyer invoice is required before post-invoice resolution.', 409, 'FINAL_INVOICE_REQUIRED');
-  const requestFingerprint = sha256({ stemId, resolution, reference, note, revision: body?.expectedRevision, live: live.fingerprint });
+  const requestFingerprint = sha256({ stemId, resolution, reference, note, revision: body?.expectedRevision, live: currentFingerprint });
   const { data, error } = await context.client.rpc('resolve_variable_charge_post_invoice_change', {
     p_stem_id: stemId, p_resolution: resolution, p_reference: reference, p_note: note,
     p_expected_revision: Number(stored.revision || 0), p_operation_id: operationId,
@@ -1436,6 +1936,7 @@ export async function resolveVariableChargePostInvoiceChange(body, context) {
 
 function syncPayload(live, stored, dueDate) {
   const status = deriveStatus(live, stored);
+  const sourceFingerprint = pairedWorkflowEnabled() ? live.buyerFingerprint : live.fingerprint;
   return {
     stemId: live.stem.Id,
     stemName: live.stem.Name || live.stem.KeyStem__c || live.stem.Id,
@@ -1448,11 +1949,13 @@ function syncPayload(live, stored, dueDate) {
     assignmentSource: live.assignment?.status === 'resolved'
       ? (live.assignment?.matchedBy === 'name' ? 'nomination_name' : 'nomination_email')
       : 'unresolved',
-    sourceFingerprint: live.fingerprint,
-    supplierFingerprint: sha256(live.accounts.map((row) => ({ id: row.Id, isAgent: row.Is_Agent__c === true, paymentTerm: row.Supplier_Payment_Term__c || null }))),
+    sourceFingerprint,
+    supplierFingerprint: pairedWorkflowEnabled()
+      ? sourceFingerprint
+      : sha256(live.accounts.map((row) => ({ id: row.Id, isAgent: row.Is_Agent__c === true, paymentTerm: row.Supplier_Payment_Term__c || null }))),
     salesforceStemLastModifiedAt: live.stem.LastModifiedDate || null,
     invoiceState: live.invoices.some(finalInvoice) ? 'invoiced' : 'not_invoiced',
-    postInvoiceDetectedAt: live.invoices.some(finalInvoice) && stored?.source_fingerprint && stored.source_fingerprint !== live.fingerprint
+    postInvoiceDetectedAt: live.invoices.some(finalInvoice) && stored?.source_fingerprint && stored.source_fingerprint !== sourceFingerprint
       ? new Date().toISOString()
       : stored?.post_invoice_detected_at || null,
   };
@@ -1508,6 +2011,27 @@ export async function syncVariableCharges(context, { stemIds = null } = {}) {
       })),
     });
     if (supplierStageError) throw supplierStageError;
+    const sidePayload = (entry.supplierRequirements || []).flatMap((row) => {
+      const costStatus = row.status === 'Verified' ? 'verified' : row.status === 'Invalidated' ? 'invalidated' : 'pending';
+      const buyerStatus = row.buyerChargeStatus === 'Verified' ? 'verified' : row.buyerChargeStatus === 'Invalidated' ? 'invalidated' : 'pending';
+      const common = {
+        supplierAccountId: row.supplierId,
+        defaultAssigneeUserId: row.assignedSupplierTrader?.id || null,
+        buyerTraderUserId: entry.assignment?.profileId || null,
+        salesforceStageLastModifiedAt: row.lastModifiedAt || null,
+      };
+      return [
+        { ...common, side: 'cost', status: costStatus, sourceFingerprint: row.sourceFingerprint },
+        { ...common, side: 'buyer_charge', status: buyerStatus, sourceFingerprint: row.buyerChargeSourceFingerprint },
+      ];
+    });
+    if (pairedWorkflowEnabled()) {
+      const { error: sideStateError } = await context.client.rpc('sync_variable_charge_side_states', {
+        p_stem_id: entry.stem.Id,
+        p_sides: sidePayload,
+      });
+      if (sideStateError) throw sideStateError;
+    }
     results.push(data);
   }
   return {
@@ -1533,6 +2057,8 @@ function isShipAgentAccount(account) {
 }
 
 export const variableChargeInternals = {
+  buyerAggregateFingerprint,
+  buyerChargeLiveFingerprint,
   deriveStatus,
   effectiveAssignee,
   financialSummary,
@@ -1547,6 +2073,7 @@ export const variableChargeInternals = {
   nextHongKongBusinessDay,
   variableChargeActionability,
   plainLanguageWorkflow,
+  supplierLiveFingerprint,
   sha256,
   SHIP_AGENT_STEM_CREATED_FROM: VARIABLE_CHARGE_STEM_CREATED_FROM,
   VARIABLE_CHARGE_STEM_CREATED_FROM,

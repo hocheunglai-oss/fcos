@@ -159,6 +159,39 @@ test('live fingerprint detects financial changes but ignores normal buyer-invoic
   }), original);
 });
 
+test('paired fingerprints isolate cost-only and buyer-only changes while sharing identity fields', () => {
+  const supplierId = '0012x0000000001AAA';
+  const base = {
+    stem: { Id: 'a002x0000000001AAA', CurrencyIsoCode: 'USD', Delivery_Date__c: '2026-08-01' },
+    accounts: [{ Id: supplierId, Is_Agent__c: true }],
+    supplierRequirements: [{ supplierId }],
+    lineItems: [{
+      Id: 'a012x0000000001AAA', Original_Supplier__c: supplierId, Cancelled__c: false,
+      Product__c: '01t2x0000000001AAA', Quantity__c: 10, Unit_of_Measure__c: 'MT',
+      Unit_Buy_At__c: 500, Total_Cost__c: 5000, Unit_Sell_At__c: 520, Total_Price__c: 5200,
+      CurrencyIsoCode: 'USD',
+    }],
+    allLineItems: [{ Id: 'a012x0000000001AAA' }],
+    extraCosts: [],
+  };
+  const cost = variableChargeInternals.supplierLiveFingerprint(base, supplierId);
+  const buyer = variableChargeInternals.buyerChargeLiveFingerprint(base, supplierId);
+
+  const costChanged = { ...base, lineItems: [{ ...base.lineItems[0], Unit_Buy_At__c: 510, Total_Cost__c: 5100 }] };
+  assert.notEqual(variableChargeInternals.supplierLiveFingerprint(costChanged, supplierId), cost);
+  assert.equal(variableChargeInternals.buyerChargeLiveFingerprint(costChanged, supplierId), buyer);
+  assert.equal(variableChargeInternals.buyerAggregateFingerprint(costChanged), variableChargeInternals.buyerAggregateFingerprint(base));
+
+  const buyerChanged = { ...base, lineItems: [{ ...base.lineItems[0], Unit_Sell_At__c: 530, Total_Price__c: 5300 }] };
+  assert.equal(variableChargeInternals.supplierLiveFingerprint(buyerChanged, supplierId), cost);
+  assert.notEqual(variableChargeInternals.buyerChargeLiveFingerprint(buyerChanged, supplierId), buyer);
+  assert.notEqual(variableChargeInternals.buyerAggregateFingerprint(buyerChanged), variableChargeInternals.buyerAggregateFingerprint(base));
+
+  const sharedChanged = { ...base, lineItems: [{ ...base.lineItems[0], Quantity__c: 11 }] };
+  assert.notEqual(variableChargeInternals.supplierLiveFingerprint(sharedChanged, supplierId), cost);
+  assert.notEqual(variableChargeInternals.buyerChargeLiveFingerprint(sharedChanged, supplierId), buyer);
+});
+
 test('plain-language queues identify the current user task without changing internal statuses', () => {
   const supplierTask = variableChargeInternals.plainLanguageWorkflow({
     status: 'needs_action',
@@ -278,6 +311,8 @@ test('FCOS handlers are explicit, fail-closed, atomic, and do not send email', a
     'variableChargesOptions',
     'variableChargesSupplierVerify',
     'variableChargesBuyerConfirm',
+    'variableChargesSideAssign',
+    'variableChargesSideConfirm',
     'variableChargesGmOverride',
     'variableChargesPostInvoiceResolve',
     'variableChargesSync',
@@ -289,6 +324,7 @@ test('FCOS handlers are explicit, fail-closed, atomic, and do not send email', a
   assert.match(service, /expectedLastModifiedDate/);
   const liveLoader = service.slice(service.indexOf('async function loadLiveCases'), service.indexOf('function effectiveAssignee'));
   assert.doesNotMatch(liveLoader, /CurrencyIsoCode/);
+  assert.match(service, /currency: row\.CurrencyIsoCode \|\| null/);
   assert.match(service, /requireExternalActionGate\('salesforce_write'\)/);
   assert.match(service, /Cancelled__c: true/);
   assert.doesNotMatch(service, /method:\s*'DELETE'/);
@@ -301,6 +337,37 @@ test('FCOS handlers are explicit, fail-closed, atomic, and do not send email', a
   assert.match(service, /Product2Id__r\.Name/);
   assert.match(service, /productName: productName \|\| null/);
   assert.match(methodology, /'variable-charges'/);
+});
+
+test('paired workflow keeps cost and buyer responsibility independent', () => {
+  const previous = process.env.VARIABLE_CHARGE_PAIRED_WORKFLOW_ENABLED;
+  process.env.VARIABLE_CHARGE_PAIRED_WORKFLOW_ENABLED = 'true';
+  try {
+    const costOwnerTask = variableChargeInternals.plainLanguageWorkflow({
+      pairedWorkflowEnabled: true,
+      status: 'ready_for_invoice',
+      supplierRequirements: [{
+        supplierId: '0012x0000000001AAA', supplierName: 'SUPPLIER A',
+        sides: {
+          cost: { status: 'pending', permissions: { canConfirm: true }, currentAssignee: { name: 'Supplier Trader' } },
+          buyerCharge: { status: 'verified', permissions: { canConfirm: false }, currentAssignee: { name: 'Buyer Trader' } },
+        },
+      }],
+      capabilities: {},
+    });
+    assert.equal(costOwnerTask.simplifiedQueue, 'my_tasks');
+    assert.equal(costOwnerTask.currentStep, 'supplier_costs');
+    assert.equal(costOwnerTask.nextAction, 'Confirm SUPPLIER A costs');
+
+    const buyerReadyWithPendingCost = liveCase({
+      stem: { ...liveCase().stem, Variable_Charges_Confirmed__c: true },
+      supplierRequirements: [{ status: 'Pending', buyerChargeStatus: 'Verified' }],
+    });
+    assert.equal(variableChargeInternals.deriveStatus(buyerReadyWithPendingCost, {}, '2026-08-08'), 'ready_for_invoice');
+  } finally {
+    if (previous == null) delete process.env.VARIABLE_CHARGE_PAIRED_WORKFLOW_ENABLED;
+    else process.env.VARIABLE_CHARGE_PAIRED_WORKFLOW_ENABLED = previous;
+  }
 });
 
 test('Variable Charges UI shows complete STEM identity and explicit readiness basis', async () => {

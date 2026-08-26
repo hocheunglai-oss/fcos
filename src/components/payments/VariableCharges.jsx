@@ -231,7 +231,9 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
   const [supplierSavingId, setSupplierSavingId] = useState('');
   const [supplierReviewNotes, setSupplierReviewNotes] = useState({});
   const [buyerReviewNote, setBuyerReviewNote] = useState('');
+  const [buyerReviewNotes, setBuyerReviewNotes] = useState({});
   const [showAllBuyerRows, setShowAllBuyerRows] = useState(false);
+  const [sideAssignmentSaving, setSideAssignmentSaving] = useState('');
 
   const loadCases = useCallback(async ({ force = false } = {}) => {
     if (force) setRefreshing(true);
@@ -289,9 +291,10 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
     setGmActionReason('');
     setSupplierReviewNotes({});
     setBuyerReviewNote('');
+    setBuyerReviewNotes({});
     setShowAllBuyerRows(false);
     const requirements = Array.isArray(nextDetail.case?.supplierRequirements) ? nextDetail.case.supplierRequirements : [];
-    setActiveSupplierId(text(requirements.find((row) => row.canVerify)?.supplierId || requirements[0]?.supplierId));
+    setActiveSupplierId(text(requirements.find((row) => row.sides?.cost?.permissions?.canConfirm || row.sides?.buyerCharge?.permissions?.canConfirm || row.canVerify)?.supplierId || requirements[0]?.supplierId));
     setDetailLoading(false);
   }, []);
 
@@ -354,7 +357,12 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
   const canGmOverride = effectiveCapabilities.canGmOverride === true || activeCase.canGmOverride === true;
   const supplierRequirements = Array.isArray(activeCase.supplierRequirements) ? activeCase.supplierRequirements : [];
   const activeSupplierStage = supplierRequirements.find((row) => text(row.supplierId) === activeSupplierId) || null;
+  const pairedWorkflow = detail?.pairedWorkflowEnabled === true || activeCase.pairedWorkflowEnabled === true;
+  const activeCostSide = activeSupplierStage?.sides?.cost || null;
+  const activeBuyerSide = activeSupplierStage?.sides?.buyerCharge || null;
   const canSupplierEdit = activeSupplierStage?.canVerify === true || (canGmOverride && text(gmActionReason).length >= 5);
+  const canCostSideEdit = activeCostSide?.permissions?.canEdit === true || (activeCostSide?.permissions?.canGmOverride === true && text(gmActionReason).length >= 5);
+  const canBuyerSideEdit = activeBuyerSide?.permissions?.canEdit === true || (activeBuyerSide?.permissions?.canGmOverride === true && text(gmActionReason).length >= 5);
   const allSuppliersVerified = supplierRequirements.length > 0 && supplierRequirements.every((row) => row.status === 'Verified');
   const canBuyerConfirm = allSuppliersVerified && (effectiveCapabilities.canBuyerConfirm === true || canEditNormally || (canGmOverride && text(gmActionReason).length >= 5));
   const canResolvePostInvoice = effectiveCapabilities.canResolvePostInvoice === true
@@ -500,6 +508,117 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
     setSupplierSavingId('');
   };
 
+  const assignPairedSides = async (requirement, sides, target) => {
+    const supplierId = text(requirement?.supplierId);
+    if (!supplierId || sideAssignmentSaving) return;
+    const sideKey = `${supplierId}:${sides.join('+')}:${target}`;
+    setSideAssignmentSaving(sideKey);
+    setSaveError('');
+    const response = await appClient.functions.invoke('variableChargesSideAssign', {
+      stemId: selectedStemId,
+      supplierId,
+      sides,
+      target,
+      expectedRevisions: Object.fromEntries(sides.map((side) => [side, Number(side === 'cost' ? requirement.sides?.cost?.revision : requirement.sides?.buyerCharge?.revision)])),
+      operationId: operationId('variable_charge_side_assign'),
+      gmOverrideReason: text(gmActionReason) || null,
+    }, { force: true });
+    if (response.data?.error) setSaveError(response.data.error);
+    else await Promise.all([loadDetail(selectedStemId, { force: true }), loadCases()]);
+    setSideAssignmentSaving('');
+  };
+
+  const confirmPairedSides = async (requirement, sides) => {
+    const supplierId = text(requirement?.supplierId);
+    if (!supplierId || supplierSavingId || saving) return;
+    const stageRows = reviewRows.filter((row) => rowSupplierId(row) === supplierId);
+    const costSelected = sides.includes('cost');
+    const buyerSelected = sides.includes('buyer_charge');
+    const costNote = text(supplierReviewNotes[supplierId]);
+    const buyerNote = text(buyerReviewNotes[supplierId]);
+    if (costSelected && !costNote) { setSaveError('Add a supplier cost note before confirmation.'); return; }
+    if (buyerSelected && !buyerNote) { setSaveError('Add a buyer-charge note before confirmation.'); return; }
+    for (const row of stageRows) {
+      const review = reviews[row.key] || {};
+      if (costSelected && !['correct', 'changed', 'cancelled'].includes(review.outcome)) { setSaveError(`Review the cost side of ${itemLabel(row)}.`); return; }
+      if (costSelected && row.readOnly && review.outcome !== 'correct') { setSaveError(`${itemLabel(row)} is read-only. Correct it in Salesforce, then refresh.`); return; }
+      if (buyerSelected && !['include', 'exclude'].includes(review.buyerChargeDecision)) { setSaveError(`Choose Include or Exclude for ${itemLabel(row)}.`); return; }
+    }
+    const costUpdates = [];
+    const buyerUpdates = [];
+    const cancellations = [];
+    (detail?.extraCosts || []).forEach((item, index) => {
+      if (text(valueOf(item, ['supplierId', 'supplier_id', 'Supplier__c'])) !== supplierId) return;
+      const id = rowId(item, 'extra', index);
+      const original = initialExtraDraft(item);
+      const draft = extraDrafts[id] || original;
+      const expectedLastModifiedDate = valueOf(item, ['lastModifiedDate', 'last_modified_date', 'LastModifiedDate'], null);
+      if (costSelected && draft.cancelled && !original.cancelled) {
+        cancellations.push({ extraCostId: id, expectedLastModifiedDate });
+      } else if (costSelected && changeKey({ description: draft.description, pricingType: draft.pricingType, supplierCost: draft.supplierCost, quantity: draft.quantity, unitOfMeasure: draft.unitOfMeasure }) !== changeKey({ description: original.description, pricingType: original.pricingType, supplierCost: original.supplierCost, quantity: original.quantity, unitOfMeasure: original.unitOfMeasure })) {
+        costUpdates.push({ extraCostId: id, expectedLastModifiedDate, description: draft.description, pricingType: draft.pricingType, supplierCost: Number(draft.supplierCost), quantity: draft.pricingType === 'per_unit' ? Number(draft.quantity) : null, unitOfMeasure: draft.unitOfMeasure });
+      }
+      if (buyerSelected && String(draft.buyerPrice ?? '') !== String(original.buyerPrice ?? '')) {
+        buyerUpdates.push({ extraCostId: id, expectedLastModifiedDate, pricingType: draft.pricingType, buyerPrice: Number(draft.buyerPrice) });
+      }
+    });
+    const supplierAdds = costSelected ? addDrafts.filter((draft) => text(draft.supplierAccountId) === supplierId) : [];
+    if (supplierAdds.some((draft) => !text(draft.productId) || !text(draft.description) || !(Number(draft.supplierCost) >= 0) || (draft.pricingType === 'per_unit' && !(Number(draft.quantity) > 0)))) {
+      setSaveError('Complete every new supplier charge before confirmation.');
+      return;
+    }
+    if (buyerSelected && supplierAdds.some((draft) => !['include', 'exclude'].includes(draft.buyerChargeDecision) || (draft.buyerChargeDecision === 'include' && !(Number(draft.buyerPrice) >= 0)))) {
+      setSaveError('Choose the buyer decision and price for every new paired charge.');
+      return;
+    }
+    const additions = supplierAdds.map((draft) => ({
+      reviewLocalId: draft.localId, productId: draft.productId, description: draft.description,
+      supplierAccountId: supplierId, pricingType: draft.pricingType,
+      supplierCost: Number(draft.supplierCost), buyerPrice: draft.buyerChargeDecision === 'include' ? Number(draft.buyerPrice) : null,
+      quantity: draft.pricingType === 'per_unit' ? Number(draft.quantity) : null,
+      unitOfMeasure: draft.unitOfMeasure,
+      buyerChargeDecision: draft.buyerChargeDecision,
+      referenceOrNote: buyerNote,
+      evidenceDocumentIds: draft.evidenceDocumentIds || [],
+    }));
+    setSupplierSavingId(supplierId);
+    setSaving(buyerSelected);
+    setSaveError('');
+    const response = await appClient.functions.invoke('variableChargesSideConfirm', {
+      stemId: selectedStemId,
+      supplierId,
+      sides,
+      expectedStemLastModifiedAt: valueOf(activeCase, ['salesforceStemLastModifiedAt', 'salesforce_stem_last_modified_at'], null),
+      expectedRevisions: {
+        ...(costSelected ? { cost: Number(requirement.sides?.cost?.revision) } : {}),
+        ...(buyerSelected ? { buyer_charge: Number(requirement.sides?.buyerCharge?.revision) } : {}),
+      },
+      expectedFingerprints: {
+        ...(costSelected ? { cost: requirement.sides?.cost?.fingerprint } : {}),
+        ...(buyerSelected ? { buyer_charge: requirement.sides?.buyerCharge?.fingerprint } : {}),
+      },
+      operationId: operationId('variable_charge_side_confirm'),
+      cost: costSelected ? {
+        supplierReviewNote: costNote,
+        rowOutcomes: stageRows.map((row) => ({ sourceId: row.sourceId, outcome: reviews[row.key]?.outcome, evidenceDocumentIds: reviews[row.key]?.evidenceDocumentIds || [] })),
+        extraCostUpdates: costUpdates, extraCostAdds: additions, cancellations,
+      } : undefined,
+      buyerCharge: buyerSelected ? {
+        buyerReviewNote: buyerNote,
+        rowChargeDecisions: stageRows.map((row) => ({ sourceId: row.sourceId, decision: reviews[row.key]?.buyerChargeDecision, evidenceDocumentIds: reviews[row.key]?.evidenceDocumentIds || [] })),
+        extraCostUpdates: buyerUpdates, extraCostAdds: additions, cancellations: [],
+      } : undefined,
+      gmOverrideReason: text(gmActionReason) || null,
+    }, { force: true });
+    if (response.data?.error) setSaveError(response.data.error);
+    else {
+      setAddDrafts((current) => current.filter((draft) => text(draft.supplierAccountId) !== supplierId));
+      await Promise.all([loadDetail(selectedStemId, { force: true }), loadCases()]);
+    }
+    setSaving(false);
+    setSupplierSavingId('');
+  };
+
   const saveConfirmation = async () => {
     if (!canBuyerConfirm || !selectedStemId) return;
     if (validationErrors.length) {
@@ -632,7 +751,9 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
         <StateBlock icon={AlertTriangle} title="Unable to load this task" description={detailError} action={<Button variant="outline" onClick={() => loadDetail(selectedStemId, { force: true })}>Try again</Button>} />
       ) : detail ? (
         <div className="space-y-5">
-          <GuidedProgress currentStep={currentStep} progress={workflow.progress} />
+          {pairedWorkflow
+            ? <IndependentSideProgress sideProgress={activeCase.sideProgress} buyerReady={activeCase.invoiceReadiness?.buyer?.ready === true} />
+            : <GuidedProgress currentStep={currentStep} progress={workflow.progress} />}
           <SimpleCaseSummary caseRow={activeCase} onOpenStem={onOpenStem} />
           {saveError && <div className="flex gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />{saveError}</div>}
 
@@ -640,6 +761,45 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
             <PostInvoiceResolution value={postResolution} disabled={!canResolvePostInvoice} saving={postSaving} onChange={(patch) => setPostResolution((current) => ({ ...current, ...patch }))} onSave={savePostInvoiceResolution} />
           )}
 
+          {pairedWorkflow ? (
+            <>
+              <PairedSupplierProgress requirements={supplierRequirements} activeSupplierId={activeSupplierId} onSelect={setActiveSupplierId} />
+              {activeSupplierStage && currentStep !== 'invoice_attention' && (
+                <section className="space-y-5 rounded-xl border border-border bg-card p-4 shadow-sm sm:p-5">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div><h2 className="text-base font-semibold">{activeSupplierStage.supplierName || 'Supplier'}</h2><p className="mt-1 text-sm text-muted-foreground">Review the shared charge once, then complete either side in any order.</p></div>
+                    <div className="flex flex-wrap gap-2">
+                      {activeCostSide?.permissions?.canAssignToBuyer && <Button type="button" size="sm" variant="outline" disabled={Boolean(sideAssignmentSaving)} onClick={() => assignPairedSides(activeSupplierStage, ['cost'], 'buyer_trader')}>Assign cost to Buyer Trader</Button>}
+                      {activeBuyerSide?.permissions?.canAssignToBuyer && <Button type="button" size="sm" variant="outline" disabled={Boolean(sideAssignmentSaving)} onClick={() => assignPairedSides(activeSupplierStage, ['buyer_charge'], 'buyer_trader')}>Assign buyer side to Buyer Trader</Button>}
+                      {activeCostSide?.permissions?.canAssignToBuyer && activeBuyerSide?.permissions?.canAssignToBuyer && <Button type="button" size="sm" variant="outline" disabled={Boolean(sideAssignmentSaving)} onClick={() => assignPairedSides(activeSupplierStage, ['cost', 'buyer_charge'], 'buyer_trader')}>Assign both</Button>}
+                      {activeCostSide?.permissions?.canTakeBack && <Button type="button" size="sm" variant="ghost" disabled={Boolean(sideAssignmentSaving)} onClick={() => assignPairedSides(activeSupplierStage, ['cost'], 'supplier_trader')}>Take cost back</Button>}
+                      {activeBuyerSide?.permissions?.canTakeBack && <Button type="button" size="sm" variant="ghost" disabled={Boolean(sideAssignmentSaving)} onClick={() => assignPairedSides(activeSupplierStage, ['buyer_charge'], 'supplier_trader')}>Take buyer side back</Button>}
+                    </div>
+                  </div>
+                  <FinancialSummary summary={financials.bySupplier?.find((row) => text(row.supplierId) === activeSupplierId) || financials} />
+                  <div className="space-y-3">
+                    {activeSupplierRows.map((row) => {
+                      const review = reviews[row.key] || initialReview(row);
+                      const draft = row.sourceType === 'extra_cost' ? extraDrafts[row.sourceId] || initialExtraDraft(row.item) : null;
+                      return <div key={row.key} className="rounded-xl border border-border bg-muted/10 p-3"><div className="mb-3 border-b border-border pb-3"><div className="font-semibold">{itemLabel(row)}</div><div className="mt-1 text-xs text-muted-foreground">Shared identity · {valueOf(row.item, ['description', 'productName'], 'Charge')} · Qty {valueOf(row.item, ['quantity'], '—')} {valueOf(row.item, ['unitOfMeasure'], '')}</div></div><div className="grid gap-3 lg:grid-cols-2"><SupplierChargeDecision row={row} review={review} draft={draft} disabled={!canCostSideEdit || Boolean(supplierSavingId)} onOutcome={(outcome) => { updateReview(row.key, { outcome }); if (row.sourceType === 'extra_cost' && outcome === 'correct') updateExtraDraft(row.sourceId, initialExtraDraft(row.item)); if (row.sourceType === 'extra_cost' && outcome === 'cancelled') updateExtraDraft(row.sourceId, { cancelled: true }); if (row.sourceType === 'extra_cost' && outcome === 'changed') updateExtraDraft(row.sourceId, { cancelled: false }); }} onDraftChange={(patch) => updateExtraDraft(row.sourceId, patch)} /><BuyerChargeDecision row={row} review={review} draft={draft} disabled={!canBuyerSideEdit || saving} onDecision={(buyerChargeDecision) => updateReview(row.key, { buyerChargeDecision })} onDraftChange={(patch) => updateExtraDraft(row.sourceId, patch)} /></div></div>;
+                    })}
+                  </div>
+                  {canCostSideEdit && activeCostSide?.status !== 'verified' && <div className="space-y-3"><Button type="button" variant="outline" size="sm" className="gap-2" onClick={() => setAddDrafts((current) => [...current, initialAddDraft(activeCase, activeSupplierId)])}><PackagePlus className="h-4 w-4" /> Add supplier charge</Button>{addDrafts.filter((draft) => text(draft.supplierAccountId) === activeSupplierId).map((draft) => <NewExtraCostEditor key={draft.localId} draft={draft} products={products} supplierAccounts={supplierAccounts.filter((row) => text(row.id) === activeSupplierId)} files={salesforceFiles} defaultPaymentTerm={supplierPaymentTerm} supplierStage={!canBuyerSideEdit} disabled={!canCostSideEdit} onChange={(patch) => updateAddDraft(draft.localId, patch)} onRemove={() => setAddDrafts((current) => current.filter((row) => row.localId !== draft.localId))} />)}</div>}
+                  <div className="grid gap-4 lg:grid-cols-2">
+                    <SideReviewPanel title="Supplier costs" side={activeCostSide} note={supplierReviewNotes[activeSupplierId] || ''} onNote={(value) => setSupplierReviewNotes((current) => ({ ...current, [activeSupplierId]: value }))} disabled={!canCostSideEdit || Boolean(supplierSavingId)} />
+                    <SideReviewPanel title="Buyer charges" side={activeBuyerSide} note={buyerReviewNotes[activeSupplierId] || ''} onNote={(value) => setBuyerReviewNotes((current) => ({ ...current, [activeSupplierId]: value }))} disabled={!canBuyerSideEdit || saving} />
+                  </div>
+                  {salesforceFiles.length ? <OptionalEvidence files={salesforceFiles} selectedIds={activeSupplierRows[0] ? reviews[activeSupplierRows[0].key]?.evidenceDocumentIds || [] : []} disabled={Boolean(supplierSavingId) || saving} onToggle={(fileId) => activeSupplierRows.forEach((row) => toggleEvidence(row.key, fileId))} /> : null}
+                  <div className="flex flex-wrap justify-end gap-2 border-t border-border pt-4">
+                    {canCostSideEdit && activeCostSide?.status !== 'verified' && <Button type="button" variant="outline" disabled={Boolean(supplierSavingId)} onClick={() => confirmPairedSides(activeSupplierStage, ['cost'])}>Confirm cost side</Button>}
+                    {canBuyerSideEdit && activeBuyerSide?.status !== 'verified' && <Button type="button" variant="outline" disabled={saving || Boolean(supplierSavingId)} onClick={() => confirmPairedSides(activeSupplierStage, ['buyer_charge'])}>Confirm buyer side</Button>}
+                    {canCostSideEdit && canBuyerSideEdit && activeCostSide?.status !== 'verified' && activeBuyerSide?.status !== 'verified' && (activeCostSide.currentAssignee?.id === activeBuyerSide.currentAssignee?.id || canGmOverride) && <Button type="button" disabled={saving || Boolean(supplierSavingId)} onClick={() => confirmPairedSides(activeSupplierStage, ['cost', 'buyer_charge'])}>{saving || supplierSavingId === activeSupplierId ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}Confirm both sides</Button>}
+                  </div>
+                </section>
+              )}
+            </>
+          ) : (
+            <>
           <SupplierProgress requirements={supplierRequirements} activeSupplierId={activeSupplierId} onSelect={setActiveSupplierId} canGmOverride={canGmOverride} />
 
           {activeSupplierStage && activeSupplierStage.status !== 'Verified' && currentStep !== 'invoice_attention' && (
@@ -694,10 +854,12 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
               <div className="flex justify-end border-t border-border pt-4"><Button type="button" onClick={saveConfirmation} disabled={!canBuyerConfirm || saving || Boolean(supplierSavingId)}>{saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />} Approve buyer charges</Button></div>
             </section>
           )}
+            </>
+          )}
 
-          {valueOf(activeCase, ['status']) === 'ready_for_invoice' && <div className="flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-emerald-950"><CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0" /><div><div className="font-semibold">Ready for invoices</div><div className="mt-1 text-sm">Supplier costs and buyer charges are approved.</div></div></div>}
+          {valueOf(activeCase, ['status']) === 'ready_for_invoice' && <div className="flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-emerald-950"><CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0" /><div><div className="font-semibold">Buyer invoice ready</div><div className="mt-1 text-sm">Every required buyer-charge side is confirmed. Any outstanding supplier-cost work remains visible above.</div></div></div>}
 
-          <AuditDetails caseRow={activeCase} files={salesforceFiles} canGmOverride={canGmOverride} canEditNormally={canEditNormally} gmActionReason={gmActionReason} onGmActionReason={setGmActionReason} onOpenGm={() => setGmOpen(true)} />
+          <AuditDetails caseRow={activeCase} files={salesforceFiles} canGmOverride={canGmOverride} canEditNormally={canEditNormally} gmActionReason={gmActionReason} onGmActionReason={setGmActionReason} onOpenGm={pairedWorkflow ? null : () => setGmOpen(true)} />
         </div>
       ) : null}
 
@@ -771,17 +933,25 @@ function viewTone(value) {
 
 function CaseRow({ caseRow, onOpen, onOpenStem }) {
   const status = valueOf(caseRow, ['status']);
-  return <tr className={cn('bg-card align-middle', status === 'post_invoice_changes' && 'bg-rose-50/60')}><td className="px-4 py-3"><StemIdentity caseRow={caseRow} onOpenStem={onOpenStem} /></td><td className="px-4 py-3">{valueOf(caseRow, ['variableChargeSupplierName', 'variable_charge_supplier_name'], '—')}</td><td className="px-4 py-3"><Badge variant="outline" className={viewTone(status)}>{currentStepLabel(valueOf(caseRow, ['currentStep', 'workflow.currentStep']))}</Badge></td><td className="px-4 py-3">{valueOf(caseRow, ['responsiblePerson', 'workflow.responsiblePerson'], 'Needs assignment')}</td><td className="px-4 py-3">{queueDate(caseRow)}</td><td className={cn('px-4 py-3 font-medium', status === 'post_invoice_changes' && 'text-rose-800')}>{valueOf(caseRow, ['nextAction', 'workflow.nextAction'], caseStatus(caseRow))}</td><td className="px-4 py-3 text-right"><Button type="button" size="sm" variant="outline" onClick={onOpen}>{valueOf(caseRow, ['isMyTask', 'workflow.isMyTask']) === true ? 'Start' : 'Open'} <ChevronRight className="ml-1 h-3.5 w-3.5" /></Button></td></tr>;
+  return <tr className={cn('bg-card align-middle', status === 'post_invoice_changes' && 'bg-rose-50/60')}><td className="px-4 py-3"><StemIdentity caseRow={caseRow} onOpenStem={onOpenStem} /></td><td className="px-4 py-3">{valueOf(caseRow, ['variableChargeSupplierName', 'variable_charge_supplier_name'], '—')}</td><td className="px-4 py-3"><CaseProgress caseRow={caseRow} status={status} /></td><td className="px-4 py-3">{valueOf(caseRow, ['responsiblePerson', 'workflow.responsiblePerson'], 'Needs assignment')}</td><td className="px-4 py-3">{queueDate(caseRow)}</td><td className={cn('px-4 py-3 font-medium', status === 'post_invoice_changes' && 'text-rose-800')}>{valueOf(caseRow, ['nextAction', 'workflow.nextAction'], caseStatus(caseRow))}</td><td className="px-4 py-3 text-right"><Button type="button" size="sm" variant="outline" onClick={onOpen}>{valueOf(caseRow, ['isMyTask', 'workflow.isMyTask']) === true ? 'Start' : 'Open'} <ChevronRight className="ml-1 h-3.5 w-3.5" /></Button></td></tr>;
 }
 
 function CaseCard({ caseRow, onOpen, onOpenStem }) {
   const status = valueOf(caseRow, ['status']);
-  return <article className={cn('rounded-xl border border-border bg-card p-4 shadow-sm', status === 'post_invoice_changes' && 'border-rose-300 bg-rose-50/60')}><div className="flex items-start justify-between gap-3"><div><StemIdentity caseRow={caseRow} onOpenStem={onOpenStem} /><p className="mt-1 text-sm text-muted-foreground">{valueOf(caseRow, ['variableChargeSupplierName', 'variable_charge_supplier_name'], 'Variable Charges supplier')}</p></div><Badge variant="outline" className={viewTone(status)}>{currentStepLabel(valueOf(caseRow, ['currentStep', 'workflow.currentStep']))}</Badge></div><dl className="mt-4 grid grid-cols-2 gap-x-3 gap-y-2 text-xs"><div><dt className="text-muted-foreground">Responsible</dt><dd className="mt-0.5 font-medium">{valueOf(caseRow, ['responsiblePerson', 'workflow.responsiblePerson'], 'Needs assignment')}</dd></div><div><dt className="text-muted-foreground">Due / available</dt><dd className="mt-0.5 font-medium">{queueDate(caseRow)}</dd></div><div className="col-span-2"><dt className="text-muted-foreground">Next action</dt><dd className={cn('mt-0.5 font-medium', status === 'post_invoice_changes' && 'text-rose-800')}>{valueOf(caseRow, ['nextAction', 'workflow.nextAction'], caseStatus(caseRow))}</dd></div></dl><Button type="button" variant="outline" size="sm" className="mt-4 w-full" onClick={onOpen}>{valueOf(caseRow, ['isMyTask', 'workflow.isMyTask']) === true ? 'Start task' : 'Open task'} <ChevronRight className="ml-1 h-3.5 w-3.5" /></Button></article>;
+  return <article className={cn('rounded-xl border border-border bg-card p-4 shadow-sm', status === 'post_invoice_changes' && 'border-rose-300 bg-rose-50/60')}><div className="flex items-start justify-between gap-3"><div><StemIdentity caseRow={caseRow} onOpenStem={onOpenStem} /><p className="mt-1 text-sm text-muted-foreground">{valueOf(caseRow, ['variableChargeSupplierName', 'variable_charge_supplier_name'], 'Variable Charges supplier')}</p></div><CaseProgress caseRow={caseRow} status={status} /></div><dl className="mt-4 grid grid-cols-2 gap-x-3 gap-y-2 text-xs"><div><dt className="text-muted-foreground">Responsible</dt><dd className="mt-0.5 font-medium">{valueOf(caseRow, ['responsiblePerson', 'workflow.responsiblePerson'], 'Needs assignment')}</dd></div><div><dt className="text-muted-foreground">Due / available</dt><dd className="mt-0.5 font-medium">{queueDate(caseRow)}</dd></div><div className="col-span-2"><dt className="text-muted-foreground">Next action</dt><dd className={cn('mt-0.5 font-medium', status === 'post_invoice_changes' && 'text-rose-800')}>{valueOf(caseRow, ['nextAction', 'workflow.nextAction'], caseStatus(caseRow))}</dd></div></dl><Button type="button" variant="outline" size="sm" className="mt-4 w-full" onClick={onOpen}>{valueOf(caseRow, ['isMyTask', 'workflow.isMyTask']) === true ? 'Start task' : 'Open task'} <ChevronRight className="ml-1 h-3.5 w-3.5" /></Button></article>;
+}
+
+function CaseProgress({ caseRow, status }) {
+  if (caseRow?.pairedWorkflowEnabled !== true) return <Badge variant="outline" className={viewTone(status)}>{currentStepLabel(valueOf(caseRow, ['currentStep', 'workflow.currentStep']))}</Badge>;
+  const costs = caseRow.sideProgress?.supplierCosts || {};
+  const buyer = caseRow.sideProgress?.buyerCharges || {};
+  return <div className="space-y-1 text-xs"><div><span className="font-medium">Costs</span> {Number(costs.confirmed || 0)}/{Number(costs.required || 0)}</div><div><span className="font-medium">Buyer</span> {Number(buyer.confirmed || 0)}/{Number(buyer.required || 0)}</div></div>;
 }
 
 function currentStepLabel(value) {
   if (value === 'supplier_costs') return 'Supplier costs';
   if (value === 'buyer_charges') return 'Buyer charges';
+  if (value === 'paired_charges') return 'Costs & buyer charges';
   if (value === 'ready_for_invoices') return 'Ready for invoices';
   if (value === 'invoice_attention') return 'Invoice action required';
   return 'Waiting';
@@ -791,6 +961,17 @@ function queueDate(caseRow) {
   const due = valueOf(caseRow, ['dueDate', 'due_date']);
   if (due) return formatDate(due);
   return formatDate(valueOf(caseRow, ['actionableOn', 'actionable_on']));
+}
+
+function IndependentSideProgress({ sideProgress = {}, buyerReady = false }) {
+  const cost = sideProgress?.supplierCosts || {};
+  const buyer = sideProgress?.buyerCharges || {};
+  const items = [
+    { id: 'cost', label: 'Supplier costs', confirmed: Number(cost.confirmed || 0), required: Number(cost.required || 0), ready: Number(cost.required || 0) > 0 && Number(cost.confirmed || 0) === Number(cost.required || 0) },
+    { id: 'buyer', label: 'Buyer charges', confirmed: Number(buyer.confirmed || 0), required: Number(buyer.required || 0), ready: Number(buyer.required || 0) > 0 && Number(buyer.confirmed || 0) === Number(buyer.required || 0) },
+    { id: 'invoice', label: 'Buyer invoice', confirmed: buyerReady ? 1 : 0, required: 1, ready: buyerReady },
+  ];
+  return <ol className="grid gap-2 rounded-xl border border-border bg-card p-3 sm:grid-cols-3">{items.map((item) => <li key={item.id} className={cn('flex items-center gap-3 rounded-lg px-3 py-2 text-sm', !item.ready && item.id !== 'invoice' && 'bg-blue-50 text-blue-950')}><span className={cn('flex h-7 w-7 shrink-0 items-center justify-center rounded-full border', item.ready ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-blue-300 bg-white text-blue-700')}>{item.ready ? <CheckCircle2 className="h-4 w-4" /> : <CircleDot className="h-4 w-4" />}</span><span><span className="block font-semibold">{item.label}</span><span className="text-xs text-muted-foreground">{item.confirmed} of {item.required} confirmed</span></span></li>)}</ol>;
 }
 
 function GuidedProgress({ currentStep, progress = {} }) {
@@ -811,6 +992,26 @@ function SummaryField({ label, children }) { return <div><div className="text-xs
 function SupplierProgress({ requirements, activeSupplierId, onSelect, canGmOverride }) {
   if (!requirements.length) return null;
   return <section className="rounded-xl border border-border bg-card p-4"><div className="mb-3 flex items-center justify-between gap-3"><h2 className="text-sm font-semibold">Supplier costs</h2><span className="text-xs text-muted-foreground">{requirements.filter((row) => row.status === 'Verified').length} of {requirements.length} confirmed</span></div><div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">{requirements.map((row) => { const active = text(row.supplierId) === activeSupplierId; const status = row.status === 'Verified' ? 'Confirmed' : row.status === 'Invalidated' ? 'Needs review again' : row.assignmentStatus === 'resolved' ? 'To confirm' : 'Needs assignment'; const selectable = row.canVerify === true || canGmOverride; return <button key={row.supplierId} type="button" disabled={!selectable} onClick={() => onSelect(text(row.supplierId))} className={cn('rounded-lg border p-3 text-left transition-colors', active && selectable ? 'border-blue-400 bg-blue-50' : 'border-border', !selectable && 'cursor-default')}><div className="flex items-start justify-between gap-2"><span className="font-medium">{row.supplierName || 'Supplier unavailable'}</span>{row.status === 'Verified' ? <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" /> : active ? <CircleDot className="h-4 w-4 shrink-0 text-blue-600" /> : <Circle className="h-4 w-4 shrink-0 text-slate-400" />}</div><div className="mt-1 text-xs text-muted-foreground">{status} · {row.assignedSupplierTrader?.name || 'No Supplier Trader'}</div></button>; })}</div></section>;
+}
+
+function PairedSupplierProgress({ requirements, activeSupplierId, onSelect }) {
+  if (!requirements.length) return null;
+  return <section className="rounded-xl border border-border bg-card p-4"><div className="mb-3 flex items-center justify-between gap-3"><h2 className="text-sm font-semibold">Suppliers</h2><span className="text-xs text-muted-foreground">Choose a supplier work package</span></div><div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">{requirements.map((row) => {
+    const active = text(row.supplierId) === activeSupplierId;
+    const cost = row.sides?.cost || {};
+    const buyer = row.sides?.buyerCharge || {};
+    return <button key={row.supplierId} type="button" onClick={() => onSelect(text(row.supplierId))} className={cn('rounded-lg border p-3 text-left transition-colors', active ? 'border-blue-400 bg-blue-50' : 'border-border hover:border-slate-300')}><div className="flex items-start justify-between gap-2"><span className="font-medium">{row.supplierName || 'Supplier unavailable'}</span>{cost.status === 'verified' && buyer.status === 'verified' ? <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" /> : <CircleDot className="h-4 w-4 shrink-0 text-blue-600" />}</div><div className="mt-2 grid grid-cols-2 gap-2 text-xs"><SideStatusCompact label="Costs" side={cost} /><SideStatusCompact label="Buyer" side={buyer} /></div></button>;
+  })}</div></section>;
+}
+
+function SideStatusCompact({ label, side }) {
+  const status = side?.status === 'verified' ? 'Confirmed' : side?.status === 'invalidated' ? 'Review again' : 'Pending';
+  return <div className="rounded-md bg-background/80 p-2"><div className="font-medium">{label} · {status}</div><div className="mt-0.5 truncate text-muted-foreground">{side?.currentAssignee?.name || 'Unassigned'}</div></div>;
+}
+
+function SideReviewPanel({ title, side, note, onNote, disabled }) {
+  const status = side?.status === 'verified' ? 'Confirmed' : side?.status === 'invalidated' ? 'Needs review again' : 'Pending';
+  return <div className={cn('space-y-3 rounded-lg border p-4', side?.status === 'verified' ? 'border-emerald-200 bg-emerald-50/40' : 'border-border')}><div className="flex flex-wrap items-start justify-between gap-2"><div><h3 className="font-semibold">{title}</h3><p className="mt-1 text-xs text-muted-foreground">Assignee · {side?.currentAssignee?.name || 'Needs assignment'}</p></div><Badge variant="outline">{status}</Badge></div>{side?.status !== 'verified' ? <div className="space-y-2"><Label>{title} note</Label><Textarea value={note} onChange={(event) => onNote(event.target.value.slice(0, 1000))} placeholder={`Required note for ${title.toLowerCase()}`} disabled={disabled} /></div> : <p className="text-xs text-emerald-800">Confirmed {side?.confirmationTime ? formatDate(side.confirmationTime) : ''}</p>}</div>;
 }
 
 function ReadOnlyNotice({ caseRow, responsiblePerson }) { return <div className="flex gap-2 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700"><ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" /><span>View only. This step belongs to {responsiblePerson || valueOf(caseRow, ['responsiblePerson', 'workflow.responsiblePerson'], 'another user')}.</span></div>; }
@@ -838,7 +1039,7 @@ function OptionalEvidence({ files, selectedIds, disabled, onToggle }) {
 }
 
 function AuditDetails({ caseRow, files, canGmOverride, canEditNormally, gmActionReason, onGmActionReason, onOpenGm }) {
-  return <details className="rounded-xl border border-border bg-card"><summary className="cursor-pointer px-4 py-3 text-sm font-semibold">Audit details</summary><div className="space-y-4 border-t border-border p-4 text-sm"><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><SummaryField label="Available from">{formatDate(valueOf(caseRow, ['actionableOn']))}</SummaryField><SummaryField label="Based on">{actionBasisLabel(caseRow)}</SummaryField><SummaryField label="Revision">{valueOf(caseRow, ['revision'], 0)}</SummaryField><SummaryField label="Linked files">{files.length}</SummaryField></div>{valueOf(caseRow, ['assignmentMessage']) && <p className="rounded-md border border-amber-200 bg-amber-50 p-3 text-amber-900">{valueOf(caseRow, ['assignmentMessage'])}</p>}{canGmOverride && <div className="space-y-3 rounded-lg border border-amber-200 bg-amber-50 p-3"><div className="font-medium text-amber-950">General Manager controls</div>{!canEditNormally && <div className="space-y-2"><Label htmlFor="variable-charge-gm-action-reason">Action reason</Label><Textarea id="variable-charge-gm-action-reason" value={gmActionReason} onChange={(event) => onGmActionReason(event.target.value.slice(0, 1000))} placeholder="Why are you acting for the assigned trader?" /></div>}<Button type="button" size="sm" variant="outline" onClick={onOpenGm}><ShieldCheck className="mr-2 h-4 w-4" />Temporary reassignment</Button></div>}</div></details>;
+  return <details className="rounded-xl border border-border bg-card"><summary className="cursor-pointer px-4 py-3 text-sm font-semibold">Audit details</summary><div className="space-y-4 border-t border-border p-4 text-sm"><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><SummaryField label="Available from">{formatDate(valueOf(caseRow, ['actionableOn']))}</SummaryField><SummaryField label="Based on">{actionBasisLabel(caseRow)}</SummaryField><SummaryField label="Revision">{valueOf(caseRow, ['revision'], 0)}</SummaryField><SummaryField label="Linked files">{files.length}</SummaryField></div>{valueOf(caseRow, ['assignmentMessage']) && <p className="rounded-md border border-amber-200 bg-amber-50 p-3 text-amber-900">{valueOf(caseRow, ['assignmentMessage'])}</p>}{canGmOverride && <div className="space-y-3 rounded-lg border border-amber-200 bg-amber-50 p-3"><div className="font-medium text-amber-950">General Manager controls</div>{!canEditNormally && <div className="space-y-2"><Label htmlFor="variable-charge-gm-action-reason">Action reason</Label><Textarea id="variable-charge-gm-action-reason" value={gmActionReason} onChange={(event) => onGmActionReason(event.target.value.slice(0, 1000))} placeholder="Why are you acting for the assigned trader?" /></div>}{onOpenGm && <Button type="button" size="sm" variant="outline" onClick={onOpenGm}><ShieldCheck className="mr-2 h-4 w-4" />Temporary reassignment</Button>}</div>}</div></details>;
 }
 
 function ExistingExtraCostEditor({ item, draft, supplierStage = false, buyerStage = false, disabled, onChange }) {
