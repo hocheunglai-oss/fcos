@@ -296,6 +296,10 @@ test('FCOS handlers are explicit, fail-closed, atomic, and do not send email', a
   assert.match(ui, /Confirm \{activeSupplierStage\.supplierName \|\| 'supplier'\} costs/);
   assert.match(ui, /Approve buyer charges/);
   assert.match(ui, /Audit details/);
+  assert.match(ui, /valueOf\(row\.item, \['productName'\]\)/);
+  assert.doesNotMatch(ui, /row\.sourceType === 'line_item' \? 'Line item' : 'Extra cost'/);
+  assert.match(service, /Product2Id__r\.Name/);
+  assert.match(service, /productName: productName \|\| null/);
   assert.match(methodology, /'variable-charges'/);
 });
 

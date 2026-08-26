@@ -759,7 +759,7 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
 }
 
 function itemLabel(row) {
-  return text(valueOf(row.item, ['name', 'Name', 'description', 'Description__c'])) || (row.sourceType === 'line_item' ? 'Line item' : 'Extra cost');
+  return text(valueOf(row.item, ['productName'])) || 'Product name unavailable';
 }
 
 function viewTone(value) {
