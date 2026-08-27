@@ -72,18 +72,20 @@ test('paired backfill selects exact required suppliers and preserves only author
   assert.deepEqual(requiredSupplierIds({
     lineItems: [
       { Original_Supplier__c: 'agent' },
+      { Original_Supplier__c: 'variable' },
       { Original_Supplier__c: 'manual' },
       { Original_Supplier__c: 'ordinary' },
     ],
     extraCosts: [{ Supplier__c: 'inactive' }],
     accounts: [
       { Id: 'agent', Is_Agent__c: true, Inactive_Suspended__c: false },
+      { Id: 'variable', Is_Agent__c: false, Is_Variable__c: true, Inactive_Suspended__c: false },
       { Id: 'manual', Is_Agent__c: false, Inactive_Suspended__c: false },
       { Id: 'ordinary', Is_Agent__c: false, Inactive_Suspended__c: false },
       { Id: 'inactive', Is_Agent__c: true, Inactive_Suspended__c: true },
     ],
     supplierStages: [{ Supplier__c: 'manual', Manual_Review_Required__c: true }],
-  }), ['agent', 'manual']);
+  }), ['agent', 'manual', 'variable']);
   assert.equal(buyerCaseBackfillStatus({
     caseRow: { confirmation_status: 'confirmed' },
     stem: { Variable_Charges_Confirmed__c: true },
@@ -99,6 +101,15 @@ test('paired backfill selects exact required suppliers and preserves only author
     stem: { Variable_Charges_Confirmed__c: false },
     hasHistoricalConfirmation: false,
   }), 'pending');
+});
+
+test('Is Variable requirement sources remain service-only and accepted by both supplier-stage functions', async () => {
+  const sql = await readFile(new URL('../supabase/migrations/20260827041826_variable_charge_is_variable_source.sql', import.meta.url), 'utf8');
+  assert.match(sql, /requirement_source in \('is_agent', 'is_variable', 'manual'\)/);
+  assert.equal((sql.match(/'is_variable'/g) || []).length >= 3, true);
+  assert.match(sql, /revoke all on function public\.sync_variable_charge_supplier_stages[\s\S]+from public, anon, authenticated/);
+  assert.match(sql, /revoke all on function public\.record_variable_charge_supplier_confirmation[\s\S]+from public, anon, authenticated/);
+  assert.match(sql, /grant execute on function public\.sync_variable_charge_supplier_stages[\s\S]+to service_role/);
 });
 
 test('paired backfill uses the current Salesforce REST CLI contract', async () => {

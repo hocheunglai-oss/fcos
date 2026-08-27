@@ -64,7 +64,7 @@ import {
   buyerAmountWithAnchorageDecision,
   buyerDecisionOptionsForItem,
   buyerPriceWithAnchorageDefault,
-  isAnchorageDuesItem,
+  isHongKongAnchorageDuesItem,
 } from '@/lib/variableChargeRules';
 
 const VIEWS = [
@@ -352,7 +352,14 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
       setDetailLoading(false);
       return;
     }
-    const nextDetail = response.data || {};
+    const rawDetail = response.data || {};
+    const hongKongVariableCharges = rawDetail.case?.hongKongVariableCharges === true
+      || rawDetail.hongKongVariableCharges === true;
+    const nextDetail = {
+      ...rawDetail,
+      lineItems: (rawDetail.lineItems || []).map((item) => ({ ...item, hongKongVariableCharges })),
+      extraCosts: (rawDetail.extraCosts || []).map((item) => ({ ...item, hongKongVariableCharges })),
+    };
     const rows = normalizeReviewRows(nextDetail.lineItems, nextDetail.extraCosts);
     setDetail(nextDetail);
     setReviews(Object.fromEntries(rows.map((row) => [row.key, initialReview(row)])));
@@ -632,10 +639,10 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
       }
       if (buyerSelected && !['include', 'exclude'].includes(review.buyerChargeDecision)) { setSaveError(`${itemLabel(row)} is Pending on the Buyer Leg.`); return; }
       if (buyerSelected && row.sourceType === 'extra_cost' && review.buyerChargeDecision === 'include'
-        && (isAnchorageDuesItem(row.item)
+        && (isHongKongAnchorageDuesItem(row.item)
           ? !(finiteNumber((extraDrafts[row.sourceId] || initialExtraDraft(row.item)).buyerPrice) > 0)
           : finiteNumber((extraDrafts[row.sourceId] || initialExtraDraft(row.item)).buyerPrice) == null)) {
-        setSaveError(isAnchorageDuesItem(row.item)
+        setSaveError(isHongKongAnchorageDuesItem(row.item)
           ? 'Enter a positive excess Anchorage Dues buyer charge when the vessel stayed more than 12 hours.'
           : `Enter the Buyer price for ${itemLabel(row)}.`); return;
       }
@@ -1088,7 +1095,7 @@ function CommonReviewSummary({ caseRow }) {
   const buyer = caseRow.sideProgress?.buyerCharges || {};
   const buyerInvoiceReady = caseRow.invoiceReadiness?.buyer?.ready === true;
   const methodology = PAYMENT_COLLECTIONS_METHODOLOGIES['variable-charges'];
-  return <section className="space-y-3 rounded-xl border border-border bg-card p-4 shadow-sm"><div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4"><SummaryField label="Vessel">{valueOf(caseRow, ['vesselName'], 'Not set') || 'Not set'}</SummaryField><SummaryField label="Port">{valueOf(caseRow, ['portName'], 'Not set') || 'Not set'}</SummaryField><SummaryField label={<span className="inline-flex items-center gap-1.5">{deliveryDate ? 'Delivery Date' : 'Review Starts'}<PageMethodology {...methodology} triggerIcon={Info} iconOnly triggerLabel="Review timing" className="h-6 w-6 rounded-full border-0 bg-transparent p-0 shadow-none" /></span>}>{formatDate(deliveryDate || valueOf(caseRow, ['actionableOn'])) === '—' ? 'Not set' : formatDate(deliveryDate || valueOf(caseRow, ['actionableOn']))}</SummaryField><SummaryField label="Next Action">{valueOf(caseRow, ['nextAction', 'workflow.nextAction'], 'Not set') || 'Not set'}</SummaryField></div><div className="border-t border-border pt-3 text-sm font-medium text-foreground"><span>Supplier Costs {Number(cost.confirmed || 0)}/{Number(cost.required || 0)}</span><span className="mx-2 text-muted-foreground">·</span><span>Buyer Charges {Number(buyer.confirmed || 0)}/{Number(buyer.required || 0)}</span><span className="mx-2 text-muted-foreground">·</span><span className={buyerInvoiceReady ? 'text-emerald-700' : 'text-slate-600'}>{buyerInvoiceReady ? 'Buyer Invoice Ready' : 'Buyer Invoice Not Ready'}</span></div></section>;
+  return <section className="space-y-3 rounded-xl border border-border bg-card p-4 shadow-sm">{caseRow?.hongKongVariableCharges === true ? <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-900">Hong Kong charge rules</Badge> : null}<div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4"><SummaryField label="Vessel">{valueOf(caseRow, ['vesselName'], 'Not set') || 'Not set'}</SummaryField><SummaryField label="Port">{valueOf(caseRow, ['portName'], 'Not set') || 'Not set'}</SummaryField><SummaryField label={<span className="inline-flex items-center gap-1.5">{deliveryDate ? 'Delivery Date' : 'Review Starts'}<PageMethodology {...methodology} triggerIcon={Info} iconOnly triggerLabel="Review timing" className="h-6 w-6 rounded-full border-0 bg-transparent p-0 shadow-none" /></span>}>{formatDate(deliveryDate || valueOf(caseRow, ['actionableOn'])) === '—' ? 'Not set' : formatDate(deliveryDate || valueOf(caseRow, ['actionableOn']))}</SummaryField><SummaryField label="Next Action">{valueOf(caseRow, ['nextAction', 'workflow.nextAction'], 'Not set') || 'Not set'}</SummaryField></div><div className="border-t border-border pt-3 text-sm font-medium text-foreground"><span>Supplier Costs {Number(cost.confirmed || 0)}/{Number(cost.required || 0)}</span><span className="mx-2 text-muted-foreground">·</span><span>Buyer Charges {Number(buyer.confirmed || 0)}/{Number(buyer.required || 0)}</span><span className="mx-2 text-muted-foreground">·</span><span className={buyerInvoiceReady ? 'text-emerald-700' : 'text-slate-600'}>{buyerInvoiceReady ? 'Buyer Invoice Ready' : 'Buyer Invoice Not Ready'}</span></div></section>;
 }
 
 function MarginAmount({ value, currency = 'USD', unavailableReason = '' }) {
@@ -1142,7 +1149,7 @@ function PairedChargeRow({ row, review, draft, currency, canCostEdit, canBuyerEd
   const uom = text(draft?.unitOfMeasure || valueOf(row.item, ['unitOfMeasure'])) || 'Not set';
   const fixedPricing = values.pricingType === 'fixed';
   const supplierEditing = review.outcome === 'changed' || review.outcome === 'cancelled';
-  const anchorageDues = isAnchorageDuesItem(row.item);
+  const anchorageDues = isHongKongAnchorageDuesItem(row.item);
   const buyerDecisionOptions = buyerDecisionOptionsForItem(row.item);
   const displayedBuyerRate = buyerAmountWithAnchorageDecision(row.item, review.buyerChargeDecision, values.buyerRate);
   const displayedBuyerTotal = buyerAmountWithAnchorageDecision(row.item, review.buyerChargeDecision, values.buyerTotal);
@@ -1205,7 +1212,7 @@ function PairedReviewWorkspace({ caseRow, requirement, requirements, activeSuppl
     if (!['include', 'exclude'].includes(decision)) return false;
     if (decision !== 'include' || row.sourceType !== 'extra_cost') return true;
     const buyerPrice = finiteNumber((extraDrafts[row.sourceId] || initialExtraDraft(row.item)).buyerPrice);
-    return isAnchorageDuesItem(row.item) ? buyerPrice > 0 : buyerPrice != null;
+    return isHongKongAnchorageDuesItem(row.item) ? buyerPrice > 0 : buyerPrice != null;
   }) && Boolean(text(buyerNote));
   const additionsCostReady = addDrafts.every((draft) => text(draft.productId) && text(draft.description) && finiteNumber(draft.supplierCost) != null && (draft.pricingType !== 'per_unit' || (finiteNumber(draft.quantity) > 0 && text(draft.unitOfMeasure))));
   const additionsBuyerReady = addDrafts.every((draft) => ['include', 'exclude'].includes(draft.buyerChargeDecision) && (draft.buyerChargeDecision !== 'include' || finiteNumber(draft.buyerPrice) != null));

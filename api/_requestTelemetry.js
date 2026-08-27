@@ -43,6 +43,9 @@ function initialTelemetry({ handler, requestId } = {}) {
     startedAtMs: Date.now(),
     salesforce: {
       quotaCalls: 0,
+      sourceReads: 0,
+      backed: false,
+      fetchedAt: null,
       logicalQueries: 0,
       compositeCalls: 0,
       rows: 0,
@@ -98,12 +101,23 @@ export function recordSalesforceCall({
 } = {}) {
   const telemetry = currentRequestTelemetry();
   if (!telemetry) return;
+  telemetry.salesforce.sourceReads += 1;
+  telemetry.salesforce.backed = true;
+  telemetry.salesforce.fetchedAt = new Date().toISOString();
   telemetry.salesforce.quotaCalls += 1;
   telemetry.salesforce.logicalQueries += Math.max(0, Number(logicalQueries) || 0);
   telemetry.salesforce.compositeCalls += composite ? 1 : 0;
   telemetry.salesforce.rows += Math.max(0, Number(rows) || 0);
   telemetry.salesforce.durationMs += Math.max(0, Number(durationMs) || 0);
   if (limit) telemetry.salesforce.limit = limit;
+}
+
+export function recordSalesforceCacheHit(fetchedAt) {
+  const telemetry = currentRequestTelemetry();
+  if (!telemetry) return;
+  telemetry.salesforce.sourceReads += 1;
+  telemetry.salesforce.backed = true;
+  telemetry.salesforce.fetchedAt = fetchedAt ? new Date(fetchedAt).toISOString() : new Date().toISOString();
 }
 
 export function recordSalesforceLimit(limit) {
@@ -190,6 +204,10 @@ export function telemetryResponseHeaders() {
     'x-fcos-cache': telemetry.cache.status,
     'x-fcos-data-fetched-at': telemetry.cache.fetchedAt || new Date().toISOString(),
     'x-fcos-salesforce-calls': String(telemetry.salesforce.quotaCalls),
+    'x-fcos-salesforce-backed': telemetry.salesforce.backed ? '1' : '0',
+    'x-fcos-salesforce-fetched-at': telemetry.salesforce.backed
+      ? telemetry.salesforce.fetchedAt || telemetry.cache.fetchedAt || new Date().toISOString()
+      : '',
   };
 }
 

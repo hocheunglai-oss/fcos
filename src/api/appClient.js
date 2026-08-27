@@ -1,5 +1,6 @@
 import { isSupabaseConfigured, supabase } from '@/lib/supabaseClient';
 import { navigationCacheDecision } from '@/lib/navigationCachePolicy';
+import { publishSalesforceFreshness } from '@/lib/salesforceFreshness';
 
 const STORAGE_PREFIX = 'fcos';
 const DEFAULT_FUNCTION_CACHE_TTL_MS = 30_000;
@@ -63,6 +64,9 @@ async function requestAuthContext() {
 }
 
 function browserCacheResponse(cached, cacheStatus, backgroundRefresh = false) {
+  if (cached.meta?.salesforceBacked && cached.meta?.salesforceFetchedAt) {
+    publishSalesforceFreshness({ fetchedAt: cached.meta.salesforceFetchedAt, handler: cached.name });
+  }
   return {
     data: cloneJson(cached.data),
     meta: {
@@ -204,6 +208,8 @@ async function requestFunction(name, payload, options, cacheKey, authContext, ca
   const requestId = responseHeader('x-fcos-request-id');
   const salesforceCallsHeader = responseHeader('x-fcos-salesforce-calls');
   const salesforceCalls = salesforceCallsHeader == null ? null : Number(salesforceCallsHeader);
+  const salesforceBacked = responseHeader('x-fcos-salesforce-backed') === '1';
+  const salesforceFetchedAt = responseHeader('x-fcos-salesforce-fetched-at');
   const mutationHeader = responseHeader('x-fcos-handler-mutation');
 
   if (!responseIsJson) {
@@ -248,7 +254,12 @@ async function requestFunction(name, payload, options, cacheKey, authContext, ca
     cachedAt: fetchedAt,
     requestId,
     salesforceCalls: Number.isFinite(salesforceCalls) ? salesforceCalls : null,
+    salesforceBacked,
+    salesforceFetchedAt: salesforceBacked ? salesforceFetchedAt || serverFetchedAt : null,
   };
+  if (responseMeta.salesforceBacked && responseMeta.salesforceFetchedAt) {
+    publishSalesforceFreshness({ fetchedAt: responseMeta.salesforceFetchedAt, handler: name });
+  }
   if (cacheKey && cacheGeneration === functionCacheGeneration) {
     functionResponseCache.set(cacheKey, {
       name,

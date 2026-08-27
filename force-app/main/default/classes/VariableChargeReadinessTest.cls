@@ -8,13 +8,14 @@ private class VariableChargeReadinessTest {
     private static Map<String, Id> prepareRequiredSupplier(Boolean manualOnly) {
         STEM__c stem = [SELECT Id, Delivery_Date__c, Variable_Charges_Confirmed__c FROM STEM__c LIMIT 1];
         STEM_Line_Item__c line = [SELECT Id, STEM__c, Original_Supplier__c, Cancelled__c FROM STEM_Line_Item__c WHERE STEM__c = :stem.Id LIMIT 1];
-        Account supplier = [SELECT Id, Is_Agent__c FROM Account WHERE Id = :line.Original_Supplier__c];
+        Account supplier = [SELECT Id, Is_Agent__c, Is_Variable__c FROM Account WHERE Id = :line.Original_Supplier__c];
         ContextManager.skipTriggers = true;
         try {
             stem.Delivery_Date__c = Date.today().addDays(-1);
             stem.Variable_Charges_Confirmed__c = false;
             update stem;
             supplier.Is_Agent__c = !manualOnly;
+            supplier.Is_Variable__c = false;
             update supplier;
         } finally {
             ContextManager.skipTriggers = false;
@@ -78,6 +79,21 @@ private class VariableChargeReadinessTest {
     static void manualRequirementGatesSupplierAndBuyer() {
         Map<String, Id> ids = prepareRequiredSupplier(true);
         Test.startTest();
+        assertRequiredFlow(ids);
+        Test.stopTest();
+    }
+
+    @IsTest
+    static void isVariableRequirementGatesSupplierAndBuyer() {
+        Map<String, Id> ids = prepareRequiredSupplier(false);
+        ContextManager.skipTriggers = true;
+        try {
+            update new Account(Id = ids.get('supplier'), Is_Agent__c = false, Is_Variable__c = true);
+        } finally {
+            ContextManager.skipTriggers = false;
+        }
+        Test.startTest();
+        System.assertEquals(true, VariableChargeInvoiceReadinessService.requiredSupplierIds(ids.get('stem')).contains(ids.get('supplier')));
         assertRequiredFlow(ids);
         Test.stopTest();
     }
@@ -283,10 +299,11 @@ private class VariableChargeReadinessTest {
     static void noRequirementBypassesBothGates() {
         Map<String, Id> ids = prepareRequiredSupplier(false);
         Test.startTest();
-        Account supplier = [SELECT Id, Is_Agent__c FROM Account WHERE Id = :ids.get('supplier')];
+        Account supplier = [SELECT Id, Is_Agent__c, Is_Variable__c FROM Account WHERE Id = :ids.get('supplier')];
         ContextManager.skipTriggers = true;
         try {
             supplier.Is_Agent__c = false;
+            supplier.Is_Variable__c = false;
             update supplier;
             STEM_Variable_Charge_Supplier__c stage = [SELECT Id, Manual_Review_Required__c FROM STEM_Variable_Charge_Supplier__c WHERE Id = :ids.get('stage')];
             stage.Manual_Review_Required__c = false;

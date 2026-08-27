@@ -28,8 +28,9 @@ function liveCase(overrides = {}) {
   };
 }
 
-test('Variable Charges detection uses Is Agent and assignment normalization remains deterministic', () => {
+test('Variable Charges detection uses Is Agent or Is Variable and assignment normalization remains deterministic', () => {
   assert.equal(variableChargeInternals.isVariableChargeAccount({ Is_Agent__c: true }), true);
+  assert.equal(variableChargeInternals.isVariableChargeAccount({ Is_Agent__c: false, Is_Variable__c: true }), true);
   assert.equal(variableChargeInternals.isVariableChargeAccount({ Is_Agent__c: false, Imported_Particulars__c: 'Ship Agent' }), false);
   assert.equal(variableChargeInternals.normalizedEmail(' Trader@Example.COM '), 'trader@example.com');
   assert.equal(variableChargeInternals.normalizedName('José  De-Silva'), 'jose de silva');

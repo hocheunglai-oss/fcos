@@ -115,7 +115,9 @@ export function requiredSupplierIds({ lineItems, extraCosts, accounts, supplierS
   return [...exact].filter((supplierId) => {
     const account = accountMap.get(supplierId);
     return account?.Inactive_Suspended__c !== true
-      && (account?.Is_Agent__c === true || stageMap.get(supplierId)?.Manual_Review_Required__c === true);
+      && (account?.Is_Agent__c === true
+        || account?.Is_Variable__c === true
+        || stageMap.get(supplierId)?.Manual_Review_Required__c === true);
   }).sort();
 }
 
@@ -206,7 +208,7 @@ function sfData(alias, stemIds) {
     ...sfStages.map((row) => row.Supplier__c),
   ].filter(Boolean))];
   const accounts = queryByIds(alias,
-    'SELECT Id, Name, Is_Agent__c, Supplier_Payment_Term__c, Inactive_Suspended__c FROM Account',
+    'SELECT Id, Name, Is_Agent__c, Is_Variable__c, Supplier_Payment_Term__c, Inactive_Suspended__c FROM Account',
     'Id', supplierIds);
   return { stems, lineItems, extraCosts, sfStages, nominations, accounts };
 }

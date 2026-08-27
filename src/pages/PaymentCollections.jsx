@@ -21,6 +21,7 @@ import StateBlock from '@/components/common/StateBlock';
 import TableShell from '@/components/common/TableShell';
 import PageMethodology from '@/components/common/PageMethodology';
 import DataStatus from '@/components/common/DataStatus';
+import SalesforceSyncBadge from '@/components/common/SalesforceSyncBadge';
 import StemDetailLink from '@/components/common/StemDetailLink';
 import WorkspaceViewBar from '@/components/common/WorkspaceViewBar';
 import { PAYMENT_COLLECTIONS_METHODOLOGIES } from '@/lib/pageMethodologies';
@@ -205,6 +206,7 @@ export default function PaymentCollections() {
           )}
           trailing={(
             <>
+            <SalesforceSyncBadge />
             {reconciling
               ? <DataStatus meta={reconciliationMeta} state="refreshing" label="Reconciliation" />
               : reconciliationMeta

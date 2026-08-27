@@ -49,6 +49,13 @@ function isAnchorageDuesRow(row) {
   return productName === 'ANCHORAGE DUE' || productName === 'ANCHORAGE DUES';
 }
 
+function isHongKongStem(stem) {
+  const values = [stem?.Port__r?.Name, stem?.Port__r?.Country__c]
+    .map((value) => text(value, 255).normalize('NFKC').replace(/\s+/g, ' ').toUpperCase())
+    .filter(Boolean);
+  return values.some((value) => value === 'HONG KONG' || value === 'HK');
+}
+
 function normalizedEmail(value) {
   return text(value, 320).toLowerCase();
 }
@@ -222,7 +229,7 @@ async function dueDateForDelivery(deliveryDate) {
 }
 
 function isVariableChargeAccount(account) {
-  return account?.Is_Agent__c === true;
+  return account?.Is_Agent__c === true || account?.Is_Variable__c === true;
 }
 
 function finalInvoice(invoice) {
@@ -275,7 +282,12 @@ function liveFingerprint(liveCase) {
       payableBalance: liveCase.stem.Payable_Balance__c ?? null,
       currency: liveCase.stem.CurrencyIsoCode || null,
     },
-    accounts: liveCase.accounts.map((row) => ({ id: row.Id, isAgent: row.Is_Agent__c === true, paymentTerm: row.Supplier_Payment_Term__c || null })).sort((a, b) => a.id.localeCompare(b.id)),
+    accounts: liveCase.accounts.map((row) => ({
+      id: row.Id,
+      isAgent: row.Is_Agent__c === true,
+      isVariable: row.Is_Variable__c === true,
+      paymentTerm: row.Supplier_Payment_Term__c || null,
+    })).sort((a, b) => a.id.localeCompare(b.id)),
     supplierStages: (liveCase.supplierStages || []).map((row) => ({ id: row.Id, supplierId: row.Supplier__c, manual: row.Manual_Review_Required__c === true, status: row.Supplier_Status__c, revision: row.Revision__c ?? null, fingerprint: row.Reviewed_Source_Fingerprint__c || null })).sort((a, b) => String(a.supplierId).localeCompare(String(b.supplierId))),
     nominations: liveCase.nominations.map((row) => ({ id: row.Id, trader: row.Buyer_Supplier_Trader__c || null, email: row.BT_ST_Email_Address__c || null, buyerConfirmation: row.Buyer_Confirmation__c || null })).sort((a, b) => a.id.localeCompare(b.id)),
     lineItems: liveCase.lineItems.map(lineFingerprint).sort((a, b) => a.id.localeCompare(b.id)),
@@ -293,6 +305,7 @@ function supplierLiveFingerprint(liveCase, supplierId) {
     account: liveCase.accounts.filter((row) => row.Id === supplierId).map((row) => ({
       id: row.Id,
       isAgent: row.Is_Agent__c === true,
+      isVariable: row.Is_Variable__c === true,
       paymentTerm: row.Supplier_Payment_Term__c || null,
     })),
     lineItems: liveCase.lineItems.filter((row) => row.Original_Supplier__c === supplierId).map((row) => ({
@@ -325,7 +338,7 @@ function buyerChargeLiveFingerprint(liveCase, supplierId) {
       productLinePresence: (liveCase.allLineItems || []).map((row) => row.Id).sort(),
     },
     account: liveCase.accounts.filter((row) => row.Id === supplierId).map((row) => ({
-      id: row.Id, isAgent: row.Is_Agent__c === true,
+      id: row.Id, isAgent: row.Is_Agent__c === true, isVariable: row.Is_Variable__c === true,
     })),
     lineItems: liveCase.lineItems.filter((row) => row.Original_Supplier__c === supplierId).map((row) => ({
       kind: 'line_item', id: row.Id, supplierId: row.Original_Supplier__c,
@@ -462,9 +475,12 @@ async function resolveSupplierAssignments(client, liveCases) {
         supplierId: account.Id,
         supplierName: account.Name,
         isAgent: account.Is_Agent__c === true,
+        isVariable: account.Is_Variable__c === true,
         manualReviewRequired: stage?.Manual_Review_Required__c === true,
-        effectiveRequired: account.Is_Agent__c === true || stage?.Manual_Review_Required__c === true,
-        requirementSource: account.Is_Agent__c === true ? 'Account · Is Agent' : 'Manual STEM selection',
+        effectiveRequired: isVariableChargeAccount(account) || stage?.Manual_Review_Required__c === true,
+        requirementSource: account.Is_Agent__c === true
+          ? 'Account · Is Agent'
+          : account.Is_Variable__c === true ? 'Account · Is Variable' : 'Manual STEM selection',
         stageId: stage?.Id || null,
         status: stage?.Supplier_Status__c || 'Pending',
         revision: Number(stage?.Revision__c || 0),
@@ -514,7 +530,7 @@ async function loadLiveCases({ client, stemIds = null, stemAccessCondition = nul
     ...allLineItems.map((row) => row.Original_Supplier__c),
     ...allExtraCosts.map((row) => row.Supplier__c), ...supplierStages.map((row) => row.Supplier__c),
   ].filter(Boolean))];
-  const accounts = (await queryIds('Account', 'Id, Name, Is_Agent__c, Supplier_Payment_Term__c, Inactive_Suspended__c, LastModifiedDate', supplierIds))
+  const accounts = (await queryIds('Account', 'Id, Name, Is_Agent__c, Is_Variable__c, Supplier_Payment_Term__c, Inactive_Suspended__c, LastModifiedDate', supplierIds))
     .filter((account) => account.Inactive_Suspended__c !== true);
   const accountMap = new Map(accounts.map((row) => [row.Id, row]));
   const manualPairKeys = new Set(supplierStages.filter((row) => row.Manual_Review_Required__c === true).map((row) => `${row.STEM__c}:${row.Supplier__c}`));
@@ -526,7 +542,7 @@ async function loadLiveCases({ client, stemIds = null, stemAccessCondition = nul
   const stemRows = [];
   for (const group of chunks(targetStemIds)) {
     const accessClause = stemAccessCondition ? ` AND (${stemAccessCondition})` : '';
-    stemRows.push(...await queryAll(`SELECT Id, Name, KeyStem__c, Account__c, Account__r.Name, Vessel__c, Vessel__r.Name, Port__c, Port__r.Name, CreatedDate, Delivery_Date__c, ETA_Start_Date__c, ETA_End_Date__c, ETB_Start_Date__c, ETB_End_Date__c, ETCD_Start_Date__c, ETCD_End_Date__c, ETD_Start_Date__c, ETD_End_Date__c, Payment_Term__c, Total__c, Costs_Total__c, Total_Invoice_Amount__c, Receivable_Balance__c, Payable_Balance__c, Variable_Charges_Confirmed__c, LastModifiedDate FROM STEM__c WHERE Id IN (${quotedIds(group)}) AND CreatedDate >= ${VARIABLE_CHARGE_STEM_CREATED_FROM}${accessClause}`));
+    stemRows.push(...await queryAll(`SELECT Id, Name, KeyStem__c, Account__c, Account__r.Name, Vessel__c, Vessel__r.Name, Port__c, Port__r.Name, Port__r.Country__c, CreatedDate, Delivery_Date__c, ETA_Start_Date__c, ETA_End_Date__c, ETB_Start_Date__c, ETB_End_Date__c, ETCD_Start_Date__c, ETCD_End_Date__c, ETD_Start_Date__c, ETD_End_Date__c, Payment_Term__c, Total__c, Costs_Total__c, Total_Invoice_Amount__c, Receivable_Balance__c, Payable_Balance__c, Variable_Charges_Confirmed__c, LastModifiedDate FROM STEM__c WHERE Id IN (${quotedIds(group)}) AND CreatedDate >= ${VARIABLE_CHARGE_STEM_CREATED_FROM}${accessClause}`));
   }
   const accessibleStemIds = new Set(stemRows.map((row) => row.Id));
   const [nominations, supplierNominations, invoices] = await Promise.all([
@@ -650,6 +666,7 @@ function finiteAmount(value) {
 
 function financialSummary(live) {
   const stemCurrency = text(live.stem?.CurrencyIsoCode, 3).toUpperCase() || null;
+  const hongKongDelivery = isHongKongStem(live.stem);
   const rows = [
     ...live.lineItems.map((row) => ({
       supplierId: row.Original_Supplier__c,
@@ -660,7 +677,7 @@ function financialSummary(live) {
     ...live.extraCosts.map((row) => ({
       supplierId: row.Supplier__c,
       cost: finiteAmount(row.Line_Total_Buy__c),
-      charge: finiteAmount(row.Line_Total__c) ?? (isAnchorageDuesRow(row) ? 0 : null),
+      charge: finiteAmount(row.Line_Total__c) ?? (hongKongDelivery && isAnchorageDuesRow(row) ? 0 : null),
       currency: text(row.CurrencyIsoCode, 3).toUpperCase() || stemCurrency,
     })),
   ];
@@ -791,6 +808,8 @@ function serializeCase(live, stored, profile, gm, dueDate, sideRows = [], profil
   const supplierAccounts = live.accounts.map((row) => ({
     id: row.Id,
     name: row.Name,
+    isAgent: row.Is_Agent__c === true,
+    isVariable: row.Is_Variable__c === true,
     paymentTerm: row.Supplier_Payment_Term__c || null,
   }));
   const assignedBuyerTrader = assignee.id ? assignee : {
@@ -864,6 +883,8 @@ function serializeCase(live, stored, profile, gm, dueDate, sideRows = [], profil
     vesselName: live.stem.Vessel__r?.Name || null,
     portId: live.stem.Port__c || null,
     portName: live.stem.Port__r?.Name || null,
+    portCountry: live.stem.Port__r?.Country__c || null,
+    hongKongVariableCharges: isHongKongStem(live.stem),
     currency: text(live.stem.CurrencyIsoCode, 3).toUpperCase() || 'USD',
     buyerPaymentTerm: live.stem.Payment_Term__c || null,
     createdDate: live.stem.CreatedDate || null,
@@ -1594,7 +1615,7 @@ export async function verifyVariableChargeSupplier(body, context) {
       p_assignment_source: !assigned && gm.isGeneralManager
         ? 'manual_gm_override'
         : requirement.assignedSupplierTrader?.matchedBy === 'name' ? 'nomination_name' : 'nomination_email',
-      p_requirement_source: requirement.isAgent ? 'is_agent' : 'manual',
+      p_requirement_source: requirement.isAgent ? 'is_agent' : requirement.isVariable ? 'is_variable' : 'manual',
       p_source_fingerprint: result?.fingerprint || readinessSnapshot?.fingerprint,
       p_salesforce_stage_last_modified_at: result?.lastModifiedAt || null,
       p_reference_recorded: referencesRecorded,
@@ -1714,7 +1735,8 @@ function normalizeBuyerSide(body, supplierRows) {
   };
 }
 
-function applyAnchorageBuyerDefaults(body, supplierRows, reviews) {
+function applyAnchorageBuyerDefaults(body, supplierRows, reviews, { hongKongDelivery = false } = {}) {
+  if (!hongKongDelivery) return body;
   const reviewById = new Map((reviews || []).map((row) => [
     text(row?.sourceId || row?.id, 64),
     text(row?.buyerChargeDecision, 32).toLowerCase(),
@@ -1740,7 +1762,7 @@ function applyAnchorageBuyerDefaults(body, supplierRows, reviews) {
   return { ...body, extraCostUpdates: [...updatesById.values()] };
 }
 
-async function validateBuyerSide(body, supplierRows, files) {
+async function validateBuyerSide(body, supplierRows, files, { hongKongDelivery = false } = {}) {
   const normalized = normalizeBuyerSide(body, supplierRows);
   const reviews = Array.isArray(normalized?.reviews) ? normalized.reviews : [];
   const byId = new Map(reviews.map((row) => [text(row?.sourceId || row?.id, 64), row]));
@@ -1754,7 +1776,7 @@ async function validateBuyerSide(body, supplierRows, files) {
     if (!review || review.reviewed !== true) throw httpError('Review every current buyer-charge row for this supplier.', 400, 'BUYER_ROW_REVIEW_REQUIRED');
     const decision = text(review.buyerChargeDecision, 32).toLowerCase();
     if (!['include', 'exclude'].includes(decision)) throw httpError('Choose Charge Buyer or Do Not Charge for every buyer charge.', 400, 'BUYER_CHARGE_DECISION_REQUIRED');
-    if (row?.Supplier__c && isAnchorageDuesRow(row) && decision === 'include') {
+    if (hongKongDelivery && row?.Supplier__c && isAnchorageDuesRow(row) && decision === 'include') {
       const pricingType = row.Lumpsum_Cost__c != null || row.Lumpsum_Price__c != null ? 'fixed' : 'per_unit';
       const update = extraCostUpdates.get(row.Id);
       const buyerPrice = update
@@ -1776,7 +1798,7 @@ async function validateBuyerSide(body, supplierRows, files) {
     if (!buyerNote && !evidence.reference) throw httpError('The buyer-charge side requires a note for every new charge.', 400, 'BUYER_NOTE_REQUIRED');
     if (evidence.evidenceDocumentIds.some((id) => !fileIds.has(id))) throw httpError('A selected Salesforce File is no longer linked to this charge.', 409, 'EVIDENCE_CHANGED');
   }
-  return { body: applyAnchorageBuyerDefaults(normalized, supplierRows, reviews), reviews };
+  return { body: applyAnchorageBuyerDefaults(normalized, supplierRows, reviews, { hongKongDelivery }), reviews };
 }
 
 export async function assignVariableChargeSides(body, context) {
@@ -1869,7 +1891,9 @@ export async function confirmVariableChargeSides(body, context) {
   const supplierRows = [...liveBefore.lineItems, ...liveBefore.extraCosts].filter((row) => (row.Original_Supplier__c || row.Supplier__c) === supplierId);
   const files = await linkedSalesforceFiles(liveBefore);
   const costReview = sides.includes('cost') ? await validateCostSide(sideBody(body, 'cost'), supplierRows) : null;
-  const buyerReview = sides.includes('buyer_charge') ? await validateBuyerSide(sideBody(body, 'buyer_charge'), supplierRows, files) : null;
+  const buyerReview = sides.includes('buyer_charge')
+    ? await validateBuyerSide(sideBody(body, 'buyer_charge'), supplierRows, files, { hongKongDelivery: isHongKongStem(liveBefore.stem) })
+    : null;
   const expectedFingerprints = body?.expectedFingerprints || {};
   const expectedCostFingerprint = text(expectedFingerprints.cost || body?.expectedCostFingerprint, 128);
   const expectedBuyerFingerprint = text(expectedFingerprints.buyer_charge || expectedFingerprints.buyerCharge || body?.expectedBuyerFingerprint, 128);
@@ -2068,7 +2092,12 @@ function syncPayload(live, stored, dueDate) {
     sourceFingerprint,
     supplierFingerprint: pairedWorkflowEnabled()
       ? sourceFingerprint
-      : sha256(live.accounts.map((row) => ({ id: row.Id, isAgent: row.Is_Agent__c === true, paymentTerm: row.Supplier_Payment_Term__c || null }))),
+      : sha256(live.accounts.map((row) => ({
+        id: row.Id,
+        isAgent: row.Is_Agent__c === true,
+        isVariable: row.Is_Variable__c === true,
+        paymentTerm: row.Supplier_Payment_Term__c || null,
+      }))),
     salesforceStemLastModifiedAt: live.stem.LastModifiedDate || null,
     invoiceState: live.invoices.some(finalInvoice) ? 'invoiced' : 'not_invoiced',
     postInvoiceDetectedAt: live.invoices.some(finalInvoice) && stored?.source_fingerprint && stored.source_fingerprint !== sourceFingerprint
@@ -2118,7 +2147,7 @@ export async function syncVariableCharges(context, { stemIds = null } = {}) {
         assignmentSource: row.assignmentStatus === 'resolved'
           ? row.assignedSupplierTrader?.matchedBy === 'name' ? 'nomination_name' : 'nomination_email'
           : 'unresolved',
-        requirementSource: row.isAgent ? 'is_agent' : 'manual',
+        requirementSource: row.isAgent ? 'is_agent' : row.isVariable ? 'is_variable' : 'manual',
         status: text(row.status, 32).toLowerCase(),
         sourceFingerprint: row.status === 'Verified' && row.reviewedSourceFingerprint
           ? row.reviewedSourceFingerprint
@@ -2182,6 +2211,7 @@ export const variableChargeInternals = {
   finalInvoice,
   isShipAgentAccount,
   isAnchorageDuesRow,
+  isHongKongStem,
   isVariableChargeAccount,
   liveFingerprint,
   normalizedEmail,

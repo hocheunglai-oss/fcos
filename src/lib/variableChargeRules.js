@@ -14,16 +14,24 @@ export function isAnchorageDuesItem(item) {
   ));
 }
 
+export function usesHongKongVariableChargeRules(item) {
+  return item?.hongKongVariableCharges === true || item?.hong_kong_variable_charges === true;
+}
+
+export function isHongKongAnchorageDuesItem(item) {
+  return usesHongKongVariableChargeRules(item) && isAnchorageDuesItem(item);
+}
+
 export function buyerPriceWithAnchorageDefault(item, pricingType = 'fixed') {
   const existing = pricingType === 'fixed'
     ? item?.fixedPrice ?? item?.fixed_price ?? item?.Lumpsum_Price__c
     : item?.price ?? item?.unitPrice ?? item?.unit_price ?? item?.Unit_Price__c;
   if (existing != null && existing !== '') return existing;
-  return isAnchorageDuesItem(item) ? 0 : '';
+  return isHongKongAnchorageDuesItem(item) ? 0 : '';
 }
 
 export function buyerDecisionOptionsForItem(item) {
-  if (!isAnchorageDuesItem(item)) {
+  if (!isHongKongAnchorageDuesItem(item)) {
     return [
       { value: '', label: 'Pending', tone: 'bg-slate-100 text-slate-800' },
       { value: 'include', label: 'Charge Buyer', tone: 'bg-blue-100 text-blue-900' },
@@ -38,12 +46,12 @@ export function buyerDecisionOptionsForItem(item) {
 }
 
 export function buyerAmountWithAnchorageDecision(item, decision, amount) {
-  return isAnchorageDuesItem(item) && decision !== 'include' ? 0 : amount;
+  return isHongKongAnchorageDuesItem(item) && decision !== 'include' ? 0 : amount;
 }
 
 export function anchorageBuyerTotalAdjustment(rows = []) {
   return rows.reduce((adjustment, row) => {
-    if (!isAnchorageDuesItem(row?.item) || row?.decision === 'include') return adjustment;
+    if (!isHongKongAnchorageDuesItem(row?.item) || row?.decision === 'include') return adjustment;
     const currentTotal = Number(row?.currentTotal);
     return adjustment - (Number.isFinite(currentTotal) ? currentTotal : 0);
   }, 0);

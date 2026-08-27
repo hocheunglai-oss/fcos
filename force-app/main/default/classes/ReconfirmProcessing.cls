@@ -172,6 +172,7 @@ public class ReconfirmProcessing {
         for (STEM_Line_Item__c child : [
             SELECT STEM__c, STEM__r.Name, STEM__r.LastModifiedDate, Original_Supplier__c,
                 Original_Supplier__r.Name, Original_Supplier__r.Is_Agent__c,
+                Original_Supplier__r.Is_Variable__c,
                 Original_Supplier__r.LastModifiedDate
             FROM STEM_Line_Item__c
             WHERE STEM__r.Enquiry__c = :enquiryId AND STEM__r.CreatedDate >= :VARIABLE_CHARGE_CUTOFF
@@ -182,7 +183,8 @@ public class ReconfirmProcessing {
             if (!rows.containsKey(key)) rows.put(key, new VariableChargeSupplierRow(
                 child.STEM__c, child.STEM__r.Name, child.STEM__r.LastModifiedDate,
                 child.Original_Supplier__c, child.Original_Supplier__r.Name,
-                child.Original_Supplier__r.Is_Agent__c, child.Original_Supplier__r.LastModifiedDate
+                child.Original_Supplier__r.Is_Agent__c, child.Original_Supplier__r.Is_Variable__c,
+                child.Original_Supplier__r.LastModifiedDate
             ));
             rows.get(key).lineItemCount++;
             stemIds.add(child.STEM__c);
@@ -190,7 +192,8 @@ public class ReconfirmProcessing {
         }
         for (STEM_Extra_Cost__c child : [
             SELECT STEM__c, STEM__r.Name, STEM__r.LastModifiedDate, Supplier__c,
-                Supplier__r.Name, Supplier__r.Is_Agent__c, Supplier__r.LastModifiedDate
+                Supplier__r.Name, Supplier__r.Is_Agent__c, Supplier__r.Is_Variable__c,
+                Supplier__r.LastModifiedDate
             FROM STEM_Extra_Cost__c
             WHERE STEM__r.Enquiry__c = :enquiryId AND STEM__r.CreatedDate >= :VARIABLE_CHARGE_CUTOFF
                 AND Cancelled__c = false AND Supplier__c != null
@@ -200,6 +203,7 @@ public class ReconfirmProcessing {
             if (!rows.containsKey(key)) rows.put(key, new VariableChargeSupplierRow(
                 child.STEM__c, child.STEM__r.Name, child.STEM__r.LastModifiedDate,
                 child.Supplier__c, child.Supplier__r.Name, child.Supplier__r.Is_Agent__c,
+                child.Supplier__r.Is_Variable__c,
                 child.Supplier__r.LastModifiedDate
             ));
             rows.get(key).extraCostCount++;
@@ -257,9 +261,10 @@ public class ReconfirmProcessing {
             } else {
                 row.assignmentStatus = 'Resolved';
             }
-            row.effectiveRequired = row.isAgent || row.manualReviewRequired;
-            row.requirementLocked = row.isAgent;
-            row.requirementSource = row.isAgent ? 'Account · Is Agent' : (row.manualReviewRequired ? 'Manual STEM selection' : 'Not required');
+            row.effectiveRequired = row.isAgent || row.isVariable || row.manualReviewRequired;
+            row.requirementLocked = row.isAgent || row.isVariable;
+            row.requirementSource = row.isAgent ? 'Account · Is Agent'
+                : (row.isVariable ? 'Account · Is Variable' : (row.manualReviewRequired ? 'Manual STEM selection' : 'Not required'));
         }
         List<VariableChargeSupplierRow> result = rows.values();
         result.sort();
@@ -283,7 +288,7 @@ public class ReconfirmProcessing {
             FROM STEM__c WHERE Id IN :stemIds FOR UPDATE
         ]);
         Map<Id, Account> suppliers = new Map<Id, Account>([
-            SELECT Id, Is_Agent__c, LastModifiedDate FROM Account WHERE Id IN :supplierIds
+            SELECT Id, Is_Agent__c, Is_Variable__c, LastModifiedDate FROM Account WHERE Id IN :supplierIds
         ]);
         Map<String, STEM_Variable_Charge_Supplier__c> stages = new Map<String, STEM_Variable_Charge_Supplier__c>();
         for (STEM_Variable_Charge_Supplier__c stage : [
@@ -318,7 +323,7 @@ public class ReconfirmProcessing {
             if (stage != null && isoDateTime(stage.LastModifiedDate) != change.expectedStageLastModifiedAt) {
                 throw variableChargeException('This supplier requirement changed after it was opened. Refresh before saving.');
             }
-            if (supplier.Is_Agent__c == true && change.manualReviewRequired != true) {
+            if ((supplier.Is_Agent__c == true || supplier.Is_Variable__c == true) && change.manualReviewRequired != true) {
                 change.manualReviewRequired = false;
             }
             Boolean priorManual = stage?.Manual_Review_Required__c == true;
@@ -734,6 +739,7 @@ public class ReconfirmProcessing {
         @AuraEnabled public Id supplierId { get; set; }
         @AuraEnabled public String supplierName { get; set; }
         @AuraEnabled public Boolean isAgent { get; set; }
+        @AuraEnabled public Boolean isVariable { get; set; }
         @AuraEnabled public Boolean manualReviewRequired { get; set; }
         @AuraEnabled public Boolean effectiveRequired { get; set; }
         @AuraEnabled public Boolean requirementLocked { get; set; }
@@ -752,17 +758,18 @@ public class ReconfirmProcessing {
         @AuraEnabled public Integer lineItemCount { get; set; }
         @AuraEnabled public Integer extraCostCount { get; set; }
 
-        public VariableChargeSupplierRow(Id stemId, String stemName, Datetime stemModified, Id supplierId, String supplierName, Boolean isAgent, Datetime accountModified) {
+        public VariableChargeSupplierRow(Id stemId, String stemName, Datetime stemModified, Id supplierId, String supplierName, Boolean isAgent, Boolean isVariable, Datetime accountModified) {
             this.key = variableChargeKey(stemId, supplierId);
             this.stemId = stemId;
             this.stemName = stemName;
             this.supplierId = supplierId;
             this.supplierName = supplierName;
             this.isAgent = isAgent == true;
+            this.isVariable = isVariable == true;
             this.manualReviewRequired = false;
-            this.effectiveRequired = this.isAgent;
-            this.requirementLocked = this.isAgent;
-            this.requirementSource = this.isAgent ? 'Account · Is Agent' : 'Not required';
+            this.effectiveRequired = this.isAgent || this.isVariable;
+            this.requirementLocked = this.isAgent || this.isVariable;
+            this.requirementSource = this.isAgent ? 'Account · Is Agent' : (this.isVariable ? 'Account · Is Variable' : 'Not required');
             this.supplierStatus = 'Pending';
             this.revision = 0;
             this.stemLastModifiedAt = isoDateTime(stemModified);

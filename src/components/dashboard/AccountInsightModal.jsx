@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import DataStatus from '@/components/common/DataStatus';
+import SalesforceSyncBadge from '@/components/common/SalesforceSyncBadge';
 import StemDetailModal from '@/components/dashboard/StemDetailModal';
 import { navigationCacheOptions } from '@/lib/navigationCachePolicy';
 
@@ -279,6 +280,7 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
               <div className="mb-1 flex flex-wrap items-center gap-2">
                 <span className="rounded-sm bg-sky-100 px-2 py-0.5 text-[11px] font-semibold uppercase text-sky-800">Account Insight</span>
                 <span className="rounded-sm border border-border px-2 py-0.5 text-[11px] font-semibold">{ROLE_LABELS[displayedRole] || displayedRole}</span>
+                <SalesforceSyncBadge />
                 {meta ? <DataStatus meta={meta} label="Salesforce" /> : null}
               </div>
               <DialogTitle className="truncate text-xl">{identity.name || account?.name || 'Account'}</DialogTitle>

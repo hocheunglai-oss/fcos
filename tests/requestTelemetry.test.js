@@ -50,12 +50,16 @@ test('builds redacted request summaries and response metadata', async () => {
       400,
     );
 
-    assert.deepEqual(telemetryResponseHeaders(), {
+    const headers = telemetryResponseHeaders();
+    assert.deepEqual({ ...headers, 'x-fcos-salesforce-fetched-at': '<timestamp>' }, {
       'x-fcos-request-id': 'request-123',
       'x-fcos-cache': 'HIT',
       'x-fcos-data-fetched-at': '2026-07-28T10:00:00.000Z',
       'x-fcos-salesforce-calls': '1',
+      'x-fcos-salesforce-backed': '1',
+      'x-fcos-salesforce-fetched-at': '<timestamp>',
     });
+    assert.equal(Number.isNaN(new Date(headers['x-fcos-salesforce-fetched-at']).getTime()), false);
     const summary = requestTelemetrySummary(400);
     assert.equal(typeof summary.durationMs, 'number');
     assert.deepEqual({ ...summary, durationMs: 0 }, {

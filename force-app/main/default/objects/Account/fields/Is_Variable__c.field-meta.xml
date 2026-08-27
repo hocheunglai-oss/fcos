@@ -2,7 +2,7 @@
 <CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
     <fullName>Is_Variable__c</fullName>
     <defaultValue>false</defaultValue>
-    <description>Identifies an Account that is configured for variable-charge handling. Workflow behaviour is applied only by explicit FCOS rules.</description>
+    <description>Requires Variable Charges review for this supplier. Hong Kong deliveries also use the Hong Kong-specific charge rules.</description>
     <label>Is Variable</label>
     <trackHistory>true</trackHistory>
     <trackTrending>false</trackTrending>

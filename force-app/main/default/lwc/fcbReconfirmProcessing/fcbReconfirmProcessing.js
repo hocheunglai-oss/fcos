@@ -115,7 +115,7 @@ export default class FcbReconfirmProcessing extends LightningElement {
 
   normalizeVariableChargeRows(rows) {
     return (rows || []).map((row) => {
-      const effectiveRequired = row.isAgent === true || row.manualReviewRequired === true;
+      const effectiveRequired = row.isAgent === true || row.isVariable === true || row.manualReviewRequired === true;
       const lineItemCount = Number(row.lineItemCount || 0);
       const extraCostCount = Number(row.extraCostCount || 0);
       const itemParts = [];
@@ -133,14 +133,14 @@ export default class FcbReconfirmProcessing extends LightningElement {
           : supplierStatus === 'Invalidated' ? 'Needs review again' : 'Not confirmed',
         itemSummary: itemParts.join(' · ') || 'No active charge rows',
         requirementLabel: 'Review required before supplier invoice',
-        requirementHelp: row.isAgent === true
+        requirementHelp: row.isAgent === true || row.isVariable === true
           ? 'Automatically required'
           : '',
         reviewState: needsAssignment ? 'Needs assignment' : effectiveRequired ? 'Required' : 'Optional',
         assignmentClass: row.assignmentStatus === 'Resolved'
           ? 'assignment-resolved'
           : 'assignment-error',
-        sourceClass: row.isAgent === true
+        sourceClass: row.isAgent === true || row.isVariable === true
           ? 'source-pill source-pill_agent'
           : effectiveRequired
             ? 'source-pill source-pill_manual'
@@ -169,7 +169,7 @@ export default class FcbReconfirmProcessing extends LightningElement {
       ? {
           ...row,
           manualReviewRequired: checked,
-          effectiveRequired: row.isAgent === true || checked,
+          effectiveRequired: row.isAgent === true || row.isVariable === true || checked,
           dirty: true,
           requirementHelp: '',
           reviewState: checked

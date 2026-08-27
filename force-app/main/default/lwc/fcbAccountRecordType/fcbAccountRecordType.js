@@ -186,8 +186,8 @@ export default class FcbAccountRecordType extends LightningElement {
           : 'Remove Is Agent from this Account? Existing manual requirements and invoiced history remain governed.')
         : this.savedIsVariable !== this.isVariable
         ? (this.isVariable
-          ? 'Mark this Account as Is Variable?'
-          : 'Remove Is Variable from this Account?')
+          ? 'Mark this Account as Is Variable? Its final supplier charges will require Variable Charges review. Hong Kong deliveries will also use the Hong Kong charge rules.'
+          : 'Remove Is Variable from this Account? Existing manual requirements and invoiced history remain governed.')
         : this.savedIsBroker && !this.isBroker
         ? "Are you sure this account is no longer a broker?"
         : this.isBroker || this.recordTypeId === this.recordTypeIds.find(recordType => recordType.label === 'Broker').value

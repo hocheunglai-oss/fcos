@@ -377,7 +377,7 @@ export async function masterContractOptions(body, context) {
       ? "('Supplier','Buyer & Supplier')"
       : "('Buyer','Supplier','Buyer & Supplier')";
   const definitions = [];
-  if (requested('accounts')) definitions.push({ key: 'accounts', soql: `SELECT Id,Name,Company_Code__c,Buyer_Payment_Term__c,Supplier_Payment_Term__c,Is_Agent__c,RecordType.Name FROM Account WHERE Inactive_Suspended__c = false AND RecordType.Name IN ${accountTypes} AND (Name LIKE '${like}' OR Company_Code__c LIKE '${like}') ORDER BY Name LIMIT 100` });
+  if (requested('accounts')) definitions.push({ key: 'accounts', soql: `SELECT Id,Name,Company_Code__c,Buyer_Payment_Term__c,Supplier_Payment_Term__c,Is_Agent__c,Is_Variable__c,RecordType.Name FROM Account WHERE Inactive_Suspended__c = false AND RecordType.Name IN ${accountTypes} AND (Name LIKE '${like}' OR Company_Code__c LIKE '${like}') ORDER BY Name LIMIT 100` });
   if (requested('products')) definitions.push({ key: 'products', soql: `SELECT Id,Name,ProductCode,Family FROM Product2 WHERE IsActive = true AND (Name LIKE '${like}' OR ProductCode LIKE '${like}') ORDER BY Name LIMIT 100` });
   if (requested('ports')) definitions.push({ key: 'ports', soql: `SELECT Id,Name,Country__c,Offshore__c FROM Port__c WHERE (Name LIKE '${like}' OR Country__c LIKE '${like}') ORDER BY Name LIMIT 100` });
   if (requested('vessels')) definitions.push({ key: 'vessels', soql: `SELECT Id,Name,IMO__c FROM Vessel__c WHERE Inactive__c = false AND (Name LIKE '${like}' OR IMO__c LIKE '${like}') ORDER BY Name LIMIT 100` });
@@ -397,7 +397,7 @@ export async function masterContractOptions(body, context) {
   const vessels = records.vessels || [];
   const accountRole = (recordType) => recordType === 'Buyer & Supplier' ? 'buyer_supplier' : recordType === 'Buyer' ? 'buyer' : 'supplier';
   return {
-    accounts: accounts.map((row) => ({ id: row.Id, name: row.Name, clKey: row.Company_Code__c || null, buyerPaymentTerm: row.Buyer_Payment_Term__c || null, supplierPaymentTerm: row.Supplier_Payment_Term__c || null, isAgent: row.Is_Agent__c === true, role: accountRole(row.RecordType?.Name), roleLabel: row.RecordType?.Name || 'Account' })),
+    accounts: accounts.map((row) => ({ id: row.Id, name: row.Name, clKey: row.Company_Code__c || null, buyerPaymentTerm: row.Buyer_Payment_Term__c || null, supplierPaymentTerm: row.Supplier_Payment_Term__c || null, isAgent: row.Is_Agent__c === true, isVariable: row.Is_Variable__c === true, role: accountRole(row.RecordType?.Name), roleLabel: row.RecordType?.Name || 'Account' })),
     products: products.map((row) => ({ id: row.Id, name: row.Name, code: row.ProductCode || null, family: row.Family || null })),
     ports: ports.map((row) => ({ id: row.Id, name: row.Name, country: row.Country__c || null, offshore: row.Offshore__c === true })),
     vessels: vessels.map((row) => ({ id: row.Id, name: row.Name, imo: row.IMO__c || null })),

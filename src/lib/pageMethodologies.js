@@ -405,7 +405,7 @@ export const PAYMENT_COLLECTIONS_METHODOLOGIES = {
       },
       {
         title: 'Live case detection',
-        body: 'FCOS identifies exact supplier Account IDs from non-cancelled Salesforce line items and extra costs. A supplier is required when Account Is Agent is selected or the exact STEM/supplier pair is selected manually under “Who must confirm final supplier charges?”. Is Agent suppliers cannot be opted out. Salesforce remains authoritative and is re-read before every consequential action.',
+        body: 'FCOS identifies exact supplier Account IDs from non-cancelled Salesforce line items and extra costs. A supplier is required when Account Is Agent or Is Variable is selected, or the exact STEM/supplier pair is selected manually under “Who must confirm final supplier charges?”. Account-level requirements cannot be opted out. Is Variable applies at every delivery port; a Hong Kong delivery additionally activates the Hong Kong charge rules. Salesforce remains authoritative and is re-read before every consequential action.',
       },
       {
         title: 'Paired ownership',
@@ -413,7 +413,7 @@ export const PAYMENT_COLLECTIONS_METHODOLOGIES = {
       },
       {
         title: 'Review and controlled changes',
-        body: 'The Supplier Leg and Buyer Leg may be completed in either order. Pending remains unresolved and blocks approval. The cost owner marks each exact-supplier charge as Correct or Edit Cost, controls additions, cancellations and shared fields, and records a Review Note. The buyer-side owner selects Charge Buyer or Do Not Charge, controls permitted buyer pricing, and records a Review Note. Anchorage Dues default to a zero buyer charge for the first 12 aggregate anchoring hours; when the vessel stays longer, the Buyer Trader enters only the excess amount and may amend it before approval. Existing product lines remain read-only in FCOS and Salesforce Files are optional supplier evidence.',
+        body: 'The Supplier Leg and Buyer Leg may be completed in either order. Pending remains unresolved and blocks approval. The cost owner marks each exact-supplier charge as Correct or Edit Cost, controls additions, cancellations and shared fields, and records a Review Note. The buyer-side owner selects Charge Buyer or Do Not Charge, controls permitted buyer pricing, and records a Review Note. For Hong Kong deliveries, Anchorage Dues default to a zero buyer charge for the first 12 aggregate anchoring hours; when the vessel stays longer, the Buyer Trader enters only the excess amount and may amend it before approval. Existing product lines remain read-only in FCOS and Salesforce Files are optional supplier evidence.',
       },
       {
         title: 'Permissions and overrides',

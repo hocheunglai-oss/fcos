@@ -595,6 +595,21 @@
   gap: 12px;
 }
 
+.hedge-desk-root .app-salesforce-freshness {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  border: 1px solid rgb(186 230 253);
+  border-radius: 999px;
+  background: rgb(240 249 255);
+  padding: 0.125rem 0.5rem;
+  color: rgb(7 89 133);
+  font-size: 0.625rem;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .hedge-desk-root .app-page-header h1 {
   margin: 0;
   font-size: 30px;

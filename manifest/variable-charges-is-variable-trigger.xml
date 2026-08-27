@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Package xmlns="http://soap.sforce.com/2006/04/metadata">
+    <types>
+        <members>MasterContractGenerationService</members>
+        <members>ReconfirmProcessing</members>
+        <members>VariableChargeInvoiceReadinessService</members>
+        <members>VariableChargeReadinessTest</members>
+        <name>ApexClass</name>
+    </types>
+    <types>
+        <members>Account.Is_Variable__c</members>
+        <name>CustomField</name>
+    </types>
+    <types>
+        <members>fcbAccountRecordType</members>
+        <members>fcbReconfirmProcessing</members>
+        <name>LightningComponentBundle</name>
+    </types>
+    <version>67.0</version>
+</Package>

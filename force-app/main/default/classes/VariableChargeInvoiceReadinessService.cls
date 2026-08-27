@@ -43,6 +43,11 @@ public without sharing class VariableChargeInvoiceReadinessService {
         public Boolean hasProductLineItems;
     }
 
+    @TestVisible
+    private static Boolean isVariableChargeAccount(Account account) {
+        return account != null && (account.Is_Agent__c == true || account.Is_Variable__c == true);
+    }
+
     @AuraEnabled(cacheable=false)
     public static Readiness getBuyerReadiness(String stemId) {
         Id parsedStemId = safeId(stemId);
@@ -111,10 +116,12 @@ public without sharing class VariableChargeInvoiceReadinessService {
                 ETCD_Start_Date__c, ETCD_End_Date__c, ETD_Start_Date__c, ETD_End_Date__c,
                 Variable_Charges_Confirmed__c,
                 (SELECT Original_Supplier__c, Original_Supplier__r.Is_Agent__c,
+                    Original_Supplier__r.Is_Variable__c,
                     Original_Supplier__r.Inactive_Suspended__c
                  FROM STEM_Line_Items__r
                  WHERE Cancelled__c = false),
                 (SELECT Supplier__c, Supplier__r.Is_Agent__c,
+                    Supplier__r.Is_Variable__c,
                     Supplier__r.Inactive_Suspended__c
                  FROM STEM_Extra_Costs__r
                  WHERE Cancelled__c = false AND Supplier__c != null),
@@ -132,12 +139,12 @@ public without sharing class VariableChargeInvoiceReadinessService {
             if (lineItem.Original_Supplier__c == null) continue;
             if (lineItem.Original_Supplier__r?.Inactive_Suspended__c == true) continue;
             exactIds.add(lineItem.Original_Supplier__c);
-            if (lineItem.Original_Supplier__r?.Is_Agent__c == true) requiredIds.add(lineItem.Original_Supplier__c);
+            if (isVariableChargeAccount(lineItem.Original_Supplier__r)) requiredIds.add(lineItem.Original_Supplier__c);
         }
         for (STEM_Extra_Cost__c extraCost : stem.STEM_Extra_Costs__r) {
             if (extraCost.Supplier__r?.Inactive_Suspended__c == true) continue;
             exactIds.add(extraCost.Supplier__c);
-            if (extraCost.Supplier__r?.Is_Agent__c == true) requiredIds.add(extraCost.Supplier__c);
+            if (isVariableChargeAccount(extraCost.Supplier__r)) requiredIds.add(extraCost.Supplier__c);
         }
         for (STEM_Variable_Charge_Supplier__c stage : stem.Variable_Charge_Suppliers__r) {
             if (stage.Manual_Review_Required__c == true && exactIds.contains(stage.Supplier__c)) requiredIds.add(stage.Supplier__c);
@@ -257,7 +264,7 @@ public without sharing class VariableChargeInvoiceReadinessService {
             WHERE STEM__c = :stemId AND Cancelled__c = false ORDER BY Id
         ]) parts.add('P|' + row.Id);
         for (SObject row : fingerprintRows(Account.SObjectType,
-            new List<String>{'Id','Is_Agent__c','Supplier_Payment_Term__c'},
+            new List<String>{'Id','Is_Agent__c','Is_Variable__c','Supplier_Payment_Term__c'},
             'WHERE Id = :supplierId', binds)) {
             parts.add('A|' + JSON.serialize(row));
         }
@@ -291,7 +298,7 @@ public without sharing class VariableChargeInvoiceReadinessService {
             WHERE STEM__c = :stemId AND Cancelled__c = false ORDER BY Id
         ]) parts.add('P|' + row.Id);
         for (SObject row : fingerprintRows(Account.SObjectType,
-            new List<String>{'Id','Is_Agent__c'}, 'WHERE Id = :supplierId', binds)) {
+            new List<String>{'Id','Is_Agent__c','Is_Variable__c'}, 'WHERE Id = :supplierId', binds)) {
             parts.add('A|' + JSON.serialize(row));
         }
         for (SObject row : fingerprintRows(STEM_Line_Item__c.SObjectType, new List<String>{
@@ -329,8 +336,8 @@ public without sharing class VariableChargeInvoiceReadinessService {
         Set<Id> exact = exactSupplierIds(stemId);
         if (exact.isEmpty()) return new Set<Id>();
         Set<Id> required = new Set<Id>();
-        for (Account account : [SELECT Id, Is_Agent__c, Inactive_Suspended__c FROM Account WHERE Id IN :exact]) {
-            if (account.Inactive_Suspended__c != true && account.Is_Agent__c == true) required.add(account.Id);
+        for (Account account : [SELECT Id, Is_Agent__c, Is_Variable__c, Inactive_Suspended__c FROM Account WHERE Id IN :exact]) {
+            if (account.Inactive_Suspended__c != true && isVariableChargeAccount(account)) required.add(account.Id);
         }
         for (STEM_Variable_Charge_Supplier__c stage : [
             SELECT Supplier__c, Manual_Review_Required__c
@@ -401,7 +408,9 @@ public without sharing class VariableChargeInvoiceReadinessService {
         Set<Id> costIds = new Set<Id>();
         for (Id id : newMap.keySet()) {
             Account before = oldMap.get(id), after = newMap.get(id);
-            if (before != null && (before.Is_Agent__c != after.Is_Agent__c || before.Inactive_Suspended__c != after.Inactive_Suspended__c)) bothIds.add(id);
+            if (before != null && (before.Is_Agent__c != after.Is_Agent__c
+                || before.Is_Variable__c != after.Is_Variable__c
+                || before.Inactive_Suspended__c != after.Inactive_Suspended__c)) bothIds.add(id);
             if (before != null && before.Supplier_Payment_Term__c != after.Supplier_Payment_Term__c) costIds.add(id);
         }
         Set<Id> ids = new Set<Id>();
@@ -479,7 +488,7 @@ public without sharing class VariableChargeInvoiceReadinessService {
         if (context.stem.CreatedDate.date() < STEM_CREATED_FROM) {
             context.exactSupplier = true; context.required = false; return context;
         }
-        List<Account> accounts = [SELECT Id, Name, Is_Agent__c, Inactive_Suspended__c FROM Account WHERE Id = :supplierId LIMIT 1];
+        List<Account> accounts = [SELECT Id, Name, Is_Agent__c, Is_Variable__c, Inactive_Suspended__c FROM Account WHERE Id = :supplierId LIMIT 1];
         if (!accounts.isEmpty()) context.supplier = accounts[0];
         context.exactSupplier = exactSupplierIds(stemId).contains(supplierId) && context.supplier != null && context.supplier.Inactive_Suspended__c != true;
         String externalKey = pairKey(stemId, supplierId);
@@ -492,7 +501,7 @@ public without sharing class VariableChargeInvoiceReadinessService {
         ];
         context.stage = stages.isEmpty() ? null : stages[0];
         context.required = context.exactSupplier == true
-            && (context.supplier.Is_Agent__c == true || context.stage?.Manual_Review_Required__c == true);
+            && (isVariableChargeAccount(context.supplier) || context.stage?.Manual_Review_Required__c == true);
         return context;
     }
 

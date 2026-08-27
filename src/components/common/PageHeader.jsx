@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef } from 'react';
 import { cn } from '@/lib/utils';
 import { getPageCopy } from '@/lib/pageCopy';
+import SalesforceSyncBadge from '@/components/common/SalesforceSyncBadge';
 import { useWorkspaceChromeRegistration } from '@/components/workspace/WorkspaceChrome';
 
 export default function PageHeader({ icon: Icon, eyebrow, title, description, meta, status, actions, compact = false, sticky = true, className }) {
@@ -25,7 +26,10 @@ export default function PageHeader({ icon: Icon, eyebrow, title, description, me
         {Icon && <Icon className="hidden h-4 w-4 shrink-0 text-muted-foreground sm:block" />}
         <div className="min-w-0">
           {copy.eyebrow && <div className="hidden truncate text-[11px] font-medium text-muted-foreground sm:block">{copy.eyebrow}</div>}
-          <h1 className="truncate font-ui text-xl font-semibold leading-[1.625rem] tracking-[-0.01em] text-foreground">{copy.title}</h1>
+          <div className="flex min-w-0 items-center gap-2">
+            <h1 className="truncate font-ui text-xl font-semibold leading-[1.625rem] tracking-[-0.01em] text-foreground">{copy.title}</h1>
+            <SalesforceSyncBadge />
+          </div>
         </div>
       </div>
       {actions && <div className="app-page-header__actions flex max-w-[58vw] items-center gap-2 overflow-x-auto pb-0.5 sm:max-w-[65vw] sm:pb-0">{actions}</div>}

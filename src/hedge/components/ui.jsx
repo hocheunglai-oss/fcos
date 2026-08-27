@@ -9,6 +9,7 @@ import {
 import { PRODUCT_COLORS, formatMoney } from "../lib/domain";
 import { PAGE_METHODOLOGIES } from "../lib/methodology";
 import PageMethodology from "@/components/common/PageMethodology";
+import SalesforceSyncBadge from "@/components/common/SalesforceSyncBadge";
 
 export function Button({ children, icon: Icon, variant = "secondary", size = "md", className = "", ...props }) {
   return (
@@ -75,6 +76,7 @@ export function PageHeader({ eyebrow, title, description, actions, status }) {
         {eyebrow && <div className="app-eyebrow">{eyebrow}</div>}
         <div className="app-page-header__title-row">
           <h1>{title}</h1>
+          <SalesforceSyncBadge className="app-salesforce-freshness" />
           {status}
         </div>
         {description && <p>{description}</p>}

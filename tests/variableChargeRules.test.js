@@ -8,36 +8,44 @@ import {
   buyerDecisionOptionsForItem,
   buyerPriceWithAnchorageDefault,
   isAnchorageDuesItem,
+  isHongKongAnchorageDuesItem,
 } from '../src/lib/variableChargeRules.js';
 
 const repositoryFile = (path) => readFile(new URL(`../${path}`, import.meta.url), 'utf8');
 
 test('Anchorage Dues buyer charge defaults to zero without overwriting an existing charge', () => {
-  const item = { productName: 'ANCHORAGE DUES', fixedCost: 500, fixedPrice: null };
+  const item = { productName: 'ANCHORAGE DUES', fixedCost: 500, fixedPrice: null, hongKongVariableCharges: true };
   assert.equal(isAnchorageDuesItem(item), true);
   assert.equal(isAnchorageDuesItem({ productName: ' anchorage   due ' }), true);
   assert.equal(isAnchorageDuesItem({ productName: 'Agency Fee' }), false);
+  assert.equal(isHongKongAnchorageDuesItem(item), true);
+  assert.equal(isHongKongAnchorageDuesItem({ ...item, hongKongVariableCharges: false }), false);
   assert.equal(buyerPriceWithAnchorageDefault(item, 'fixed'), 0);
   assert.equal(buyerPriceWithAnchorageDefault({ ...item, fixedPrice: 125.5 }, 'fixed'), 125.5);
   assert.equal(buyerPriceWithAnchorageDefault({ productName: 'Agency Fee', fixedPrice: null }, 'fixed'), '');
 });
 
 test('Anchorage Dues uses explicit excess-time buyer decisions', () => {
-  const options = buyerDecisionOptionsForItem({ productName: 'ANCHORAGE DUES' });
+  const hongKongAnchorage = { productName: 'ANCHORAGE DUES', hongKongVariableCharges: true };
+  const options = buyerDecisionOptionsForItem(hongKongAnchorage);
   assert.deepEqual(options.map((row) => row.label), ['Pending', 'Charge Excess', 'No Charge · 12h or less']);
   assert.deepEqual(
     buyerDecisionOptionsForItem({ productName: 'Agency Fee' }).map((row) => row.label),
     ['Pending', 'Charge Buyer', 'Do Not Charge'],
   );
-  assert.equal(buyerAmountWithAnchorageDecision({ productName: 'ANCHORAGE DUES' }, '', 267.51), 0);
-  assert.equal(buyerAmountWithAnchorageDecision({ productName: 'ANCHORAGE DUES' }, 'exclude', 267.51), 0);
-  assert.equal(buyerAmountWithAnchorageDecision({ productName: 'ANCHORAGE DUES' }, 'include', 267.51), 267.51);
+  assert.equal(buyerAmountWithAnchorageDecision(hongKongAnchorage, '', 267.51), 0);
+  assert.equal(buyerAmountWithAnchorageDecision(hongKongAnchorage, 'exclude', 267.51), 0);
+  assert.equal(buyerAmountWithAnchorageDecision(hongKongAnchorage, 'include', 267.51), 267.51);
   assert.equal(buyerAmountWithAnchorageDecision({ productName: 'Agency Fee' }, '', 900), 900);
   assert.equal(anchorageBuyerTotalAdjustment([
-    { item: { productName: 'ANCHORAGE DUES' }, decision: '', currentTotal: 267.51 },
-    { item: { productName: 'ANCHORAGE DUES' }, decision: 'include', currentTotal: 100 },
+    { item: hongKongAnchorage, decision: '', currentTotal: 267.51 },
+    { item: hongKongAnchorage, decision: 'include', currentTotal: 100 },
     { item: { productName: 'Agency Fee' }, decision: '', currentTotal: 900 },
   ]), -267.51);
+  assert.deepEqual(
+    buyerDecisionOptionsForItem({ productName: 'ANCHORAGE DUES', hongKongVariableCharges: false }).map((row) => row.label),
+    ['Pending', 'Charge Buyer', 'Do Not Charge'],
+  );
 });
 
 test('server writes a zero buyer price when excluded Anchorage Dues has no zero stored', () => {
@@ -50,6 +58,7 @@ test('server writes a zero buyer price when excluded Anchorage Dues has no zero 
     { extraCostUpdates: [] },
     [row],
     [{ sourceId: row.Id, buyerChargeDecision: 'exclude' }],
+    { hongKongDelivery: true },
   );
   assert.deepEqual(result.extraCostUpdates, [{
     extraCostId: row.Id,
@@ -61,17 +70,25 @@ test('server writes a zero buyer price when excluded Anchorage Dues has no zero 
     { extraCostUpdates: [] },
     [{ ...row, Lumpsum_Price__c: 0 }],
     [{ sourceId: row.Id, buyerChargeDecision: 'exclude' }],
+    { hongKongDelivery: true },
   ).extraCostUpdates.length, 0);
   assert.equal(variableChargeInternals.applyAnchorageBuyerDefaults(
     { extraCostUpdates: [] },
     [row],
     [{ sourceId: row.Id, buyerChargeDecision: 'include' }],
+    { hongKongDelivery: true },
+  ).extraCostUpdates.length, 0);
+  assert.equal(variableChargeInternals.applyAnchorageBuyerDefaults(
+    { extraCostUpdates: [] },
+    [row],
+    [{ sourceId: row.Id, buyerChargeDecision: 'exclude' }],
+    { hongKongDelivery: false },
   ).extraCostUpdates.length, 0);
 });
 
 test('Anchorage Dues contributes a zero buyer charge to financial totals before Salesforce is saved', () => {
   const summary = variableChargeInternals.financialSummary({
-    stem: { CurrencyIsoCode: 'HKD' },
+    stem: { CurrencyIsoCode: 'HKD', Port__r: { Name: 'HONG KONG', Country__c: 'HONG KONG' } },
     lineItems: [],
     accounts: [{ Id: '0012x0000000001AAA', Name: 'Hong Kong Agent' }],
     extraCosts: [{
@@ -83,6 +100,14 @@ test('Anchorage Dues contributes a zero buyer charge to financial totals before 
   assert.equal(summary.buyerChargeTotal, 0);
   assert.equal(summary.margin, -500);
   assert.equal(summary.chargesComplete, true);
+});
+
+test('Is Variable triggers review globally while Hong Kong charge rules remain port-specific', () => {
+  assert.equal(variableChargeInternals.isVariableChargeAccount({ Is_Agent__c: false, Is_Variable__c: true }), true);
+  assert.equal(variableChargeInternals.isVariableChargeAccount({ Is_Agent__c: false, Is_Variable__c: false }), false);
+  assert.equal(variableChargeInternals.isHongKongStem({ Port__r: { Name: 'HONG KONG' } }), true);
+  assert.equal(variableChargeInternals.isHongKongStem({ Port__r: { Country__c: 'Hong Kong' } }), true);
+  assert.equal(variableChargeInternals.isHongKongStem({ Port__r: { Name: 'SINGAPORE', Country__c: 'SINGAPORE' } }), false);
 });
 
 test('Is Variable is a history-tracked Account field placed beside Is Agent in both Account forms', async () => {

@@ -235,7 +235,7 @@ public without sharing class MasterContractGenerationService {
         require(owners.size() == 1, 'The assigned contract owner does not uniquely match an active Salesforce User by email.');
         Map<Id, Account> accounts = new Map<Id, Account>([
             SELECT Id, Name, Inactive_Suspended__c, Buyer_Payment_Term__c, Supplier_Payment_Term__c,
-                Is_Agent__c, RecordType.Name
+                Is_Agent__c, Is_Variable__c, RecordType.Name
             FROM Account WHERE Id IN :accountIds
         ]);
         require(accounts.size() == accountIds.size(), 'One or more exact Account identities are unavailable.');
@@ -420,7 +420,8 @@ public without sharing class MasterContractGenerationService {
                 Set<Id> applicable = new Set<Id>{ request.supplierAccountId };
                 for (ChargeRule rule : request.chargeRules == null ? new List<ChargeRule>() : request.chargeRules) if (applies(rule, delivery.supplyLocation)) applicable.add(rule.supplierAccountId);
                 for (Id supplierId : applicable) {
-                    if (manualIds.contains(supplierId) || accounts.get(supplierId)?.Is_Agent__c == true) {
+                    if (manualIds.contains(supplierId) || accounts.get(supplierId)?.Is_Agent__c == true
+                        || accounts.get(supplierId)?.Is_Variable__c == true) {
                         stages.add(new STEM_Variable_Charge_Supplier__c(
                             STEM__c = stemByKey.get(delivery.deliveryKey).Id,
                             Supplier__c = supplierId,
