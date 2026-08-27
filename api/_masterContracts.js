@@ -380,7 +380,7 @@ export async function masterContractOptions(body, context) {
   if (requested('accounts')) definitions.push({ key: 'accounts', soql: `SELECT Id,Name,Company_Code__c,Buyer_Payment_Term__c,Supplier_Payment_Term__c,Is_Agent__c,Is_Variable__c,RecordType.Name FROM Account WHERE Inactive_Suspended__c = false AND RecordType.Name IN ${accountTypes} AND (Name LIKE '${like}' OR Company_Code__c LIKE '${like}') ORDER BY Name LIMIT 100` });
   if (requested('products')) definitions.push({ key: 'products', soql: `SELECT Id,Name,ProductCode,Family FROM Product2 WHERE IsActive = true AND (Name LIKE '${like}' OR ProductCode LIKE '${like}') ORDER BY Name LIMIT 100` });
   if (requested('ports')) definitions.push({ key: 'ports', soql: `SELECT Id,Name,Country__c,Offshore__c FROM Port__c WHERE (Name LIKE '${like}' OR Country__c LIKE '${like}') ORDER BY Name LIMIT 100` });
-  if (requested('vessels')) definitions.push({ key: 'vessels', soql: `SELECT Id,Name,IMO__c FROM Vessel__c WHERE Inactive__c = false AND (Name LIKE '${like}' OR IMO__c LIKE '${like}') ORDER BY Name LIMIT 100` });
+  if (requested('vessels')) definitions.push({ key: 'vessels', soql: `SELECT Id,Name,IMO__c,NRT__c FROM Vessel__c WHERE Inactive__c = false AND (Name LIKE '${like}' OR IMO__c LIKE '${like}') ORDER BY Name LIMIT 100` });
   const [salesforce, owners] = await Promise.all([
     definitions.length
       ? sfCompositeQueries(definitions.map((definition) => ({ soql: definition.soql, clean: true, softFail: false, limit: 100 })))
@@ -400,7 +400,7 @@ export async function masterContractOptions(body, context) {
     accounts: accounts.map((row) => ({ id: row.Id, name: row.Name, clKey: row.Company_Code__c || null, buyerPaymentTerm: row.Buyer_Payment_Term__c || null, supplierPaymentTerm: row.Supplier_Payment_Term__c || null, isAgent: row.Is_Agent__c === true, isVariable: row.Is_Variable__c === true, role: accountRole(row.RecordType?.Name), roleLabel: row.RecordType?.Name || 'Account' })),
     products: products.map((row) => ({ id: row.Id, name: row.Name, code: row.ProductCode || null, family: row.Family || null })),
     ports: ports.map((row) => ({ id: row.Id, name: row.Name, country: row.Country__c || null, offshore: row.Offshore__c === true })),
-    vessels: vessels.map((row) => ({ id: row.Id, name: row.Name, imo: row.IMO__c || null })),
+    vessels: vessels.map((row) => ({ id: row.Id, name: row.Name, imo: row.IMO__c || null, nrt: row.NRT__c ?? null })),
     owners: (owners.data || []).filter((row) => !query || `${row.full_name || ''} ${row.email || ''}`.toLocaleLowerCase().includes(query.toLocaleLowerCase())).map((row) => ({ id: row.id, name: row.full_name || row.email, email: row.email, userType: row.user_type })),
   };
 }
@@ -410,11 +410,13 @@ export async function createMasterContractVessel(body, context) {
   assertOwner(context.profile, contract, 'create a Vessel for this Master Contract');
   const name = text(body?.name, 300);
   const imo = text(body?.imo, 40).replace(/\s+/g, '');
+  const nrt = body?.nrt === '' || body?.nrt == null ? null : Number(body.nrt);
   if (!name || !imo) throw error('Vessel name and IMO are required.');
+  if (nrt != null && (!Number.isInteger(nrt) || nrt <= 0)) throw error('Net Registered Tonnage (NRT) must be a positive whole number.');
   const duplicates = await sfQuery(`SELECT Id,Name,IMO__c,Inactive__c FROM Vessel__c WHERE Name = '${soql(name)}' OR IMO__c = '${soql(imo)}' LIMIT 20`, { clean: true, limit: 20 });
   if (duplicates.records.length) throw error('A Vessel with this name or IMO already exists. Select the existing exact record.', 409, 'MASTER_CONTRACT_VESSEL_DUPLICATE');
-  const created = await sfRequest('/sobjects/Vessel__c', { method: 'POST', body: { Name: name, IMO__c: imo, Inactive__c: false } });
-  return { id: created.id, name, imo };
+  const created = await sfRequest('/sobjects/Vessel__c', { method: 'POST', body: { Name: name, IMO__c: imo, NRT__c: nrt, Inactive__c: false } });
+  return { id: created.id, name, imo, nrt };
 }
 
 function creationPayload(contract, snapshot, deliveryKeys, ownerEmail = null) {

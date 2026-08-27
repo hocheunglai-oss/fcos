@@ -129,6 +129,7 @@ test('Is Variable is a history-tracked Account field placed beside Is Agent in b
   assert.ok(newMarkup.indexOf('field-name="Is_Agent__c"') < newMarkup.indexOf('field-name="Is_Variable__c"'));
   assert.ok(newMarkup.indexOf('field-name="Is_Variable__c"') < newMarkup.indexOf('field-name="Is_Broker__c"'));
   assert.match(recordController, /fields\["Is_Variable__c"\] = this\.isVariable/);
+  assert.match(recordController, /showSaveButton\(\)[\s\S]*this\.isVariable !== this\.savedIsVariable/);
   assert.match(userPermission, /Account\.Is_Variable__c/);
   assert.match(integrationPermission, /Account\.Is_Variable__c/);
 });

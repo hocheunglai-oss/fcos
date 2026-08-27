@@ -1,6 +1,12 @@
 import { createHash } from 'node:crypto';
 import { requireExternalActionGate } from './_externalActionGates.js';
 import { getApiVersion, getInstanceUrl, sfCompositeQueries, sfQuery, sfRequest } from './_salesforce.js';
+import {
+  ANCHORAGE_CALCULATION_VERSION,
+  ANCHORAGE_LOCATION_ELSEWHERE,
+  calculateHongKongAnchorageDues,
+  convertAnchorageHkd,
+} from '../src/lib/anchorageDues.js';
 
 const SALESFORCE_ID = /^[A-Za-z0-9]{15}(?:[A-Za-z0-9]{3})?$/;
 const VARIABLE_CHARGE_STEM_CREATED_FROM = '2026-01-01T00:00:00Z';
@@ -263,12 +269,28 @@ function extraFingerprint(row) {
     linePrice: row.Line_Total__c ?? null, paymentTerm: row.Payment_Term__c || null,
     currency: row.CurrencyIsoCode || null, supplierInvoiceId: row.Supplier_Invoice__c || null,
     stemLineItemId: row.STEM_Line_Item__c || null, recordTypeId: row.RecordTypeId || null,
+    ...(row.Anchorage_Calculation_Version__c ? { anchorage: {
+      arrival: row.Anchorage_Arrival__c || null,
+      departure: row.Anchorage_Departure__c || null,
+      location: row.Anchorage_Location__c || null,
+      allocationHkd: row.Anchorage_Dues_Allocation_HKD__c ?? null,
+      nrt: row.Anchorage_NRT_Snapshot__c ?? null,
+      usdHkdRate: row.Anchorage_USD_HKD_Rate__c ?? null,
+      fxRevision: row.Anchorage_FX_Settings_Revision__c ?? null,
+      version: row.Anchorage_Calculation_Version__c,
+    } } : {}),
   };
+}
+
+function anchorageFingerprintActive(liveCase, supplierId = null) {
+  return (liveCase.extraCosts || []).some((row) => (!supplierId || row.Supplier__c === supplierId)
+    && isAnchorageDuesRow(row) && Boolean(row.Anchorage_Calculation_Version__c));
 }
 
 function liveFingerprint(liveCase) {
   return sha256({
     stemId: liveCase.stem.Id,
+    ...(anchorageFingerprintActive(liveCase) ? { vesselNrt: liveCase.stem.Vessel__r?.NRT__c ?? null } : {}),
     deliveryDate: liveCase.stem.Delivery_Date__c || null,
     schedule: Object.fromEntries(VARIABLE_CHARGE_SCHEDULE_FIELDS.map((field) => [field, liveCase.stem[field] || null])),
     productLinePresence: (liveCase.allLineItems || []).map((row) => row.Id).sort(),
@@ -297,6 +319,7 @@ function liveFingerprint(liveCase) {
 
 function supplierLiveFingerprint(liveCase, supplierId) {
   return sha256({
+    ...(anchorageFingerprintActive(liveCase, supplierId) ? { vesselNrt: liveCase.stem.Vessel__r?.NRT__c ?? null } : {}),
     readiness: {
       deliveryDate: liveCase.stem.Delivery_Date__c || null,
       schedule: Object.fromEntries(VARIABLE_CHARGE_SCHEDULE_FIELDS.map((field) => [field, liveCase.stem[field] || null])),
@@ -326,12 +349,14 @@ function supplierLiveFingerprint(liveCase, supplierId) {
       paymentTerm: row.Payment_Term__c || null, unitCost: row.Unit_Cost__c ?? null,
       fixedCost: row.Lumpsum_Cost__c ?? null, lineCost: row.Line_Total_Buy__c ?? null,
       supplierInvoiceId: row.Supplier_Invoice__c || null, currency: row.CurrencyIsoCode || null,
+      ...(row.Anchorage_Calculation_Version__c ? { anchorage: extraFingerprint(row).anchorage } : {}),
     })).sort((a, b) => a.id.localeCompare(b.id)),
   });
 }
 
 function buyerChargeLiveFingerprint(liveCase, supplierId) {
   return sha256({
+    ...(anchorageFingerprintActive(liveCase, supplierId) ? { vesselNrt: liveCase.stem.Vessel__r?.NRT__c ?? null } : {}),
     readiness: {
       deliveryDate: liveCase.stem.Delivery_Date__c || null,
       schedule: Object.fromEntries(VARIABLE_CHARGE_SCHEDULE_FIELDS.map((field) => [field, liveCase.stem[field] || null])),
@@ -356,6 +381,7 @@ function buyerChargeLiveFingerprint(liveCase, supplierId) {
       quantityRangeMax: row.Quantity_Range_Max__c ?? null, uom: row.Unit_of_Measure__c || null,
       unitPrice: row.Unit_Price__c ?? null, fixedPrice: row.Lumpsum_Price__c ?? null,
       linePrice: row.Line_Total__c ?? null, currency: row.CurrencyIsoCode || null,
+      ...(row.Anchorage_Calculation_Version__c ? { anchorage: extraFingerprint(row).anchorage } : {}),
     })).sort((a, b) => a.id.localeCompare(b.id)),
   });
 }
@@ -523,7 +549,7 @@ async function loadLiveCases({ client, stemIds = null, stemAccessCondition = nul
   if (stemIds && requested.length !== stemIds.length) throw httpError('A valid Salesforce STEM is required.', 400, 'INVALID_STEM_ID');
   const [allLineItems, allExtraCosts] = await Promise.all([
     queryAll(`SELECT Id, STEM__c, Original_Supplier__c, Product__c, Product__r.Name, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_Max__c, Unit_of_Measure__c, Unit_Sell_At__c, Unit_Buy_At__c, Total_Cost__c, Total_Price__c, Commission_Cost__c, Payment_Term__c, Buyer_Invoice__c, Supplier_Invoice__c, Cancelled__c, LastModifiedDate FROM STEM_Line_Item__c WHERE Cancelled__c = false AND STEM__r.CreatedDate >= ${VARIABLE_CHARGE_STEM_CREATED_FROM}${candidateWhere(requested)}`),
-    queryAll(`SELECT Id, STEM__c, STEM_Line_Item__c, Supplier__c, Supplier_Invoice__c, Product2Id__c, Product2Id__r.Name, Description__c, RecordTypeId, RecordType.Name, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_Range_Max__c, Unit_of_Measure__c, Unit_Cost__c, Unit_Price__c, Lumpsum_Cost__c, Lumpsum_Price__c, Line_Total_Buy__c, Line_Total__c, Payment_Term__c, Buyer_Invoice__c, Cancelled__c, LastModifiedDate FROM STEM_Extra_Cost__c WHERE Cancelled__c = false AND Supplier__c != null AND STEM__r.CreatedDate >= ${VARIABLE_CHARGE_STEM_CREATED_FROM}${candidateWhere(requested)}`),
+    queryAll(`SELECT Id, STEM__c, STEM_Line_Item__c, Supplier__c, Supplier_Invoice__c, Product2Id__c, Product2Id__r.Name, Description__c, RecordTypeId, RecordType.Name, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_Range_Max__c, Unit_of_Measure__c, Unit_Cost__c, Unit_Price__c, Lumpsum_Cost__c, Lumpsum_Price__c, Line_Total_Buy__c, Line_Total__c, Payment_Term__c, Buyer_Invoice__c, Cancelled__c, Anchorage_Arrival__c, Anchorage_Departure__c, Anchorage_Location__c, Anchorage_Dues_Allocation_HKD__c, Anchorage_NRT_Snapshot__c, Anchorage_USD_HKD_Rate__c, Anchorage_FX_Settings_Revision__c, Anchorage_Calculation_Version__c, LastModifiedDate FROM STEM_Extra_Cost__c WHERE Cancelled__c = false AND Supplier__c != null AND STEM__r.CreatedDate >= ${VARIABLE_CHARGE_STEM_CREATED_FROM}${candidateWhere(requested)}`),
   ]);
   const supplierStages = await queryAll(`SELECT Id, STEM__c, Supplier__c, Manual_Review_Required__c, Supplier_Status__c, Verified_At__c, Verified_By_Email__c, Reviewed_Source_Fingerprint__c, Revision__c, Buyer_Charge_Status__c, Buyer_Charge_Reviewed_Source_Fingerprint__c, Buyer_Charge_Confirmed_At__c, Buyer_Charge_Confirmed_By_Email__c, Buyer_Charge_Revision__c, LastModifiedDate FROM STEM_Variable_Charge_Supplier__c WHERE STEM__r.CreatedDate >= ${VARIABLE_CHARGE_STEM_CREATED_FROM}${candidateWhere(requested)}`);
   const supplierIds = [...new Set([
@@ -542,7 +568,7 @@ async function loadLiveCases({ client, stemIds = null, stemAccessCondition = nul
   const stemRows = [];
   for (const group of chunks(targetStemIds)) {
     const accessClause = stemAccessCondition ? ` AND (${stemAccessCondition})` : '';
-    stemRows.push(...await queryAll(`SELECT Id, Name, KeyStem__c, Account__c, Account__r.Name, Vessel__c, Vessel__r.Name, Port__c, Port__r.Name, Port__r.Country__c, CreatedDate, Delivery_Date__c, ETA_Start_Date__c, ETA_End_Date__c, ETB_Start_Date__c, ETB_End_Date__c, ETCD_Start_Date__c, ETCD_End_Date__c, ETD_Start_Date__c, ETD_End_Date__c, Payment_Term__c, Total__c, Costs_Total__c, Total_Invoice_Amount__c, Receivable_Balance__c, Payable_Balance__c, Variable_Charges_Confirmed__c, LastModifiedDate FROM STEM__c WHERE Id IN (${quotedIds(group)}) AND CreatedDate >= ${VARIABLE_CHARGE_STEM_CREATED_FROM}${accessClause}`));
+    stemRows.push(...await queryAll(`SELECT Id, Name, KeyStem__c, Account__c, Account__r.Name, Vessel__c, Vessel__r.Name, Vessel__r.NRT__c, Port__c, Port__r.Name, Port__r.Country__c, CreatedDate, Delivery_Date__c, ETA_Start_Date__c, ETA_End_Date__c, ETB_Start_Date__c, ETB_End_Date__c, ETCD_Start_Date__c, ETCD_End_Date__c, ETD_Start_Date__c, ETD_End_Date__c, Payment_Term__c, Total__c, Costs_Total__c, Total_Invoice_Amount__c, Receivable_Balance__c, Payable_Balance__c, Variable_Charges_Confirmed__c, LastModifiedDate FROM STEM__c WHERE Id IN (${quotedIds(group)}) AND CreatedDate >= ${VARIABLE_CHARGE_STEM_CREATED_FROM}${accessClause}`));
   }
   const accessibleStemIds = new Set(stemRows.map((row) => row.Id));
   const [nominations, supplierNominations, invoices] = await Promise.all([
@@ -655,6 +681,16 @@ function serializeLiveRow(row, kind) {
     paymentTerm: row.Payment_Term__c || null, buyerInvoiceId: row.Buyer_Invoice__c || null,
     currency: row.CurrencyIsoCode || null, lastModifiedDate: row.LastModifiedDate || null,
     readOnly: kind === 'line_item', cancelled: row.Cancelled__c === true,
+    anchorage: kind === 'extra_cost' && isAnchorageDuesRow(row) ? {
+      arrival: row.Anchorage_Arrival__c || null,
+      departure: row.Anchorage_Departure__c || null,
+      location: row.Anchorage_Location__c || ANCHORAGE_LOCATION_ELSEWHERE,
+      allocationHkd: row.Anchorage_Dues_Allocation_HKD__c ?? null,
+      nrtSnapshot: row.Anchorage_NRT_Snapshot__c ?? null,
+      usdHkdRate: row.Anchorage_USD_HKD_Rate__c ?? null,
+      fxSettingsRevision: row.Anchorage_FX_Settings_Revision__c ?? null,
+      calculationVersion: row.Anchorage_Calculation_Version__c || null,
+    } : null,
   };
 }
 
@@ -1072,6 +1108,77 @@ async function assignmentHistory(client, caseRow) {
   };
 }
 
+async function variableChargeSettings(client) {
+  const { data, error } = await client.from('variable_charge_settings')
+    .select('id,usd_hkd_rate,revision,updated_at,updated_by')
+    .eq('id', 'company')
+    .maybeSingle();
+  if (error || !data) throw httpError('Variable Charges settings are unavailable. Apply the required Supabase migration.', 503, 'VARIABLE_CHARGE_SETTINGS_UNAVAILABLE');
+  return {
+    usdHkdRate: Number(data.usd_hkd_rate),
+    revision: Number(data.revision),
+    updatedAt: data.updated_at || null,
+  };
+}
+
+function anchorageEvidence(live, settings) {
+  const rows = live.extraCosts.filter((row) => isAnchorageDuesRow(row));
+  if (!isHongKongStem(live.stem) || !rows.length) return null;
+  const accountNames = new Map((live.accounts || []).map((row) => [row.Id, row.Name]));
+  const periods = rows.map((row) => ({
+    id: row.Id,
+    supplierId: row.Supplier__c,
+    arrival: row.Anchorage_Arrival__c,
+    departure: row.Anchorage_Departure__c,
+    location: row.Anchorage_Location__c || ANCHORAGE_LOCATION_ELSEWHERE,
+  }));
+  const allocations = rows.map((row) => ({ id: row.Id, amountHkd: row.Anchorage_Dues_Allocation_HKD__c }));
+  const calculation = calculateHongKongAnchorageDues({
+    nrt: live.stem.Vessel__r?.NRT__c,
+    periods,
+    allocations,
+  });
+  const allocatedById = new Map((calculation.allocations || []).map((row) => [row.id, row.amountHkd]));
+  return {
+    vesselNrt: live.stem.Vessel__r?.NRT__c ?? null,
+    companyUsdHkdRate: settings.usdHkdRate,
+    fxSettingsRevision: settings.revision,
+    calculation,
+    rows: rows.map((row) => {
+      const currency = text(row.CurrencyIsoCode || live.stem.CurrencyIsoCode, 3).toUpperCase();
+      const allocationHkd = allocatedById.get(row.Id) ?? row.Anchorage_Dues_Allocation_HKD__c ?? null;
+      const supplierAmount = finiteAmount(row.Line_Total_Buy__c);
+      const appliedRate = row.Anchorage_Calculation_Version__c
+        ? finiteAmount(row.Anchorage_USD_HKD_Rate__c)
+        : settings.usdHkdRate;
+      const supplierHkd = currency === 'HKD' && supplierAmount != null
+        ? { available: true, amount: supplierAmount, rate: 1, basis: 'HKD direct' }
+        : currency === 'USD' && supplierAmount != null && appliedRate > 0
+          ? { available: true, amount: Math.round(supplierAmount * appliedRate * 100) / 100, rate: appliedRate, basis: `USD 1 = HKD ${appliedRate}` }
+          : { available: false, reason: supplierAmount == null ? 'Supplier charge is unavailable.' : `${currency || 'This currency'} is not supported for Hong Kong anchorage-dues comparison.` };
+      const buyerSuggestion = convertAnchorageHkd(allocationHkd, currency, appliedRate);
+      return {
+        extraCostId: row.Id,
+        supplierId: row.Supplier__c,
+        supplierName: accountNames.get(row.Supplier__c) || 'Supplier',
+        currency,
+        arrival: row.Anchorage_Arrival__c || null,
+        departure: row.Anchorage_Departure__c || null,
+        location: row.Anchorage_Location__c || ANCHORAGE_LOCATION_ELSEWHERE,
+        allocationHkd,
+        supplierChargeHkd: supplierHkd,
+        supplierVarianceHkd: supplierHkd.available && allocationHkd != null ? Math.round((supplierHkd.amount - allocationHkd) * 100) / 100 : null,
+        buyerSuggestion,
+        appliedNrt: row.Anchorage_NRT_Snapshot__c ?? null,
+        appliedUsdHkdRate: row.Anchorage_USD_HKD_Rate__c ?? null,
+        appliedFxSettingsRevision: row.Anchorage_FX_Settings_Revision__c ?? null,
+        savedCalculationVersion: row.Anchorage_Calculation_Version__c || null,
+        lastModifiedDate: row.LastModifiedDate || null,
+      };
+    }),
+  };
+}
+
 export async function variableChargeOptions(_body, context) {
   const [products, profiles, recordTypes] = await Promise.all([
     activeProducts(),
@@ -1089,12 +1196,15 @@ export async function variableChargeOptions(_body, context) {
 
 export async function getVariableChargeDetail(body, context) {
   const live = await liveCaseForStem(body?.stemId, context);
-  const [{ cases }, files, options] = await Promise.all([
+  const [{ cases }, files, options, settings] = await Promise.all([
     serializeCases(context.client, [live], context.profile),
     linkedSalesforceFiles(live),
     variableChargeOptions({}, context),
+    variableChargeSettings(context.client),
   ]);
   const history = await assignmentHistory(context.client, cases[0]);
+  const gm = await activeGeneralManager(context.client, context.profile?.id);
+  const userType = text(context.profile?.user_type, 100).toLowerCase();
   return {
     case: cases[0],
     lineItems: live.lineItems.map((row) => serializeLiveRow(row, 'line_item')),
@@ -1108,6 +1218,125 @@ export async function getVariableChargeDetail(body, context) {
     assignmentHistory: history.rows,
     assignmentHistoryUnavailable: history.unavailable,
     salesforceInstanceUrl: getInstanceUrl(),
+    anchorage: anchorageEvidence(live, settings),
+    variableChargeSettings: {
+      ...settings,
+      canSave: userType === 'administrator' || gm.isGeneralManager,
+    },
+  };
+}
+
+export async function getVariableChargeSettings(_body, context) {
+  const settings = await variableChargeSettings(context.client);
+  const gm = await activeGeneralManager(context.client, context.profile?.id);
+  return { ...settings, canSave: text(context.profile?.user_type, 100).toLowerCase() === 'administrator' || gm.isGeneralManager };
+}
+
+export async function saveVariableChargeSettings(body, context) {
+  const gm = await activeGeneralManager(context.client, context.profile?.id);
+  if (text(context.profile?.user_type, 100).toLowerCase() !== 'administrator' && !gm.isGeneralManager) {
+    throw httpError('Only an Administrator or the active General Manager may change the company USD/HKD rate.', 403, 'VARIABLE_CHARGE_SETTINGS_FORBIDDEN');
+  }
+  const rate = numeric(body?.usdHkdRate, 'USD/HKD rate', { positive: true, nullable: false });
+  const expectedRevision = Number(body?.expectedRevision);
+  const reason = text(body?.reason, 1000);
+  if (!Number.isInteger(expectedRevision) || expectedRevision < 1) throw httpError('The settings revision is required.', 409, 'SETTINGS_REVISION_REQUIRED');
+  if (reason.length < 5) throw httpError('Enter a specific reason of at least 5 characters.', 400, 'SETTINGS_REASON_REQUIRED');
+  const { data, error } = await context.client.rpc('save_variable_charge_settings', {
+    p_expected_revision: expectedRevision,
+    p_usd_hkd_rate: rate,
+    p_actor_user_id: context.profile.id,
+    p_reason: reason,
+  });
+  if (error) {
+    if (/changed after/i.test(error.message || '')) throw httpError(error.message, 409, 'SETTINGS_REVISION_CONFLICT');
+    throw error;
+  }
+  return {
+    usdHkdRate: Number(data.usd_hkd_rate),
+    revision: Number(data.revision),
+    updatedAt: data.updated_at || null,
+    canSave: true,
+  };
+}
+
+function anchorageInputRows(body, liveRows) {
+  if (!Array.isArray(body?.rows)) throw httpError('Anchorage periods are required.', 400, 'ANCHORAGE_ROWS_REQUIRED');
+  const inputById = new Map(body.rows.map((row) => [text(row?.extraCostId || row?.id, 18), row]));
+  if (inputById.size !== liveRows.length || liveRows.some((row) => !inputById.has(row.Id))) {
+    throw httpError('Save every active Anchorage Dues period together.', 409, 'ANCHORAGE_SCOPE_CHANGED');
+  }
+  return liveRows.map((row) => {
+    const input = inputById.get(row.Id);
+    if (text(input?.expectedLastModifiedDate, 80) !== text(row.LastModifiedDate, 80)) {
+      throw httpError('An Anchorage Dues row changed after it was opened. Refresh and try again.', 409, 'ANCHORAGE_ROW_CHANGED');
+    }
+    const arrival = new Date(input?.arrival);
+    const departure = new Date(input?.departure);
+    if (Number.isNaN(arrival.getTime()) || Number.isNaN(departure.getTime())) {
+      throw httpError('Complete a valid arrival and departure for every Anchorage Dues row.', 400, 'ANCHORAGE_PERIOD_INVALID');
+    }
+    const location = text(input?.location, 80) || ANCHORAGE_LOCATION_ELSEWHERE;
+    if (![ANCHORAGE_LOCATION_ELSEWHERE, 'Victoria Port'].includes(location)) throw httpError('Choose a valid Hong Kong anchorage location.', 400, 'ANCHORAGE_LOCATION_INVALID');
+    return {
+      row,
+      id: row.Id,
+      supplierId: row.Supplier__c,
+      arrival: arrival.toISOString(),
+      departure: departure.toISOString(),
+      location,
+      allocationHkd: numeric(input?.allocationHkd, 'Anchorage allocation', { nullable: true }),
+    };
+  });
+}
+
+export async function saveVariableChargeAnchorage(body, context) {
+  const live = await liveCaseForStem(body?.stemId, context);
+  if (!isHongKongStem(live.stem)) throw httpError('Anchorage-dues verification applies only to Hong Kong deliveries.', 409, 'NOT_HONG_KONG_DELIVERY');
+  const liveRows = live.extraCosts.filter((row) => isAnchorageDuesRow(row));
+  if (!liveRows.length) throw httpError('No active Anchorage Dues charge was found.', 404, 'ANCHORAGE_DUES_NOT_FOUND');
+  const gm = await activeGeneralManager(context.client, context.profile?.id);
+  const userType = text(context.profile?.user_type, 100).toLowerCase();
+  const trader = (live.supplierRequirements || []).some((row) => row.assignedSupplierTrader?.id === context.profile?.id)
+    || live.assignment?.profileId === context.profile?.id;
+  if (!trader && userType !== 'administrator' && !gm.isGeneralManager) {
+    throw httpError('Only an assigned trader, Administrator, or the active General Manager may save anchorage evidence.', 403, 'ANCHORAGE_SAVE_FORBIDDEN');
+  }
+  const settings = await variableChargeSettings(context.client);
+  const inputs = anchorageInputRows(body, liveRows);
+  const calculation = calculateHongKongAnchorageDues({
+    nrt: live.stem.Vessel__r?.NRT__c,
+    periods: inputs,
+    allocations: inputs.map((row) => ({ id: row.id, amountHkd: row.allocationHkd })),
+  });
+  if (!calculation.complete) throw httpError(calculation.errors[0] || 'Anchorage dues could not be calculated.', 400, 'ANCHORAGE_CALCULATION_INCOMPLETE', calculation.errors);
+  if (!calculation.allocationComplete) throw httpError('Allocate the calculated total across all agent rows. Allocations must match within HKD 0.10.', 400, 'ANCHORAGE_ALLOCATION_INCOMPLETE', calculation);
+  const allocationById = new Map(calculation.allocations.map((row) => [row.id, row.amountHkd]));
+  const apiVersion = getApiVersion();
+  const compositeRequest = inputs.map((input, index) => ({
+    method: 'PATCH',
+    url: `/services/data/${apiVersion}/sobjects/STEM_Extra_Cost__c/${input.id}`,
+    referenceId: `anchorage${index + 1}`,
+    httpHeaders: lastModifiedHeaders(input.row.LastModifiedDate),
+    body: {
+      Anchorage_Arrival__c: input.arrival,
+      Anchorage_Departure__c: input.departure,
+      Anchorage_Location__c: input.location,
+      Anchorage_Dues_Allocation_HKD__c: allocationById.get(input.id),
+      Anchorage_NRT_Snapshot__c: calculation.nrt,
+      Anchorage_USD_HKD_Rate__c: settings.usdHkdRate,
+      Anchorage_FX_Settings_Revision__c: settings.revision,
+      Anchorage_Calculation_Version__c: ANCHORAGE_CALCULATION_VERSION,
+    },
+  }));
+  requireExternalActionGate('salesforce_write');
+  const result = await sfRequest('/composite', { method: 'POST', body: { allOrNone: true, compositeRequest } });
+  const failed = (result?.compositeResponse || []).find((row) => row.httpStatusCode < 200 || row.httpStatusCode >= 300);
+  if (failed) throw httpError(failed.body?.[0]?.message || 'Salesforce could not save the anchorage evidence.', 502, 'ANCHORAGE_SALESFORCE_WRITE_FAILED');
+  const refreshed = await liveCaseForStem(body?.stemId, context);
+  return {
+    anchorage: anchorageEvidence(refreshed, settings),
+    savedAt: new Date().toISOString(),
   };
 }
 
@@ -1561,6 +1790,7 @@ export async function verifyVariableChargeSupplier(body, context) {
     throw httpError('Only the assigned Supplier Trader may verify this supplier stage.', 403, 'ASSIGNED_SUPPLIER_TRADER_REQUIRED');
   }
   assertLiveActionable(live);
+  await assertAnchorageApprovalReady(live, supplierId, context, 'cost');
   if (text(body?.expectedStemLastModifiedAt, 80) !== text(live.stem.LastModifiedDate, 80)) {
     throw httpError('The Salesforce STEM changed after this supplier stage was opened.', 409, 'STEM_LAST_MODIFIED_CONFLICT');
   }
@@ -1801,6 +2031,28 @@ async function validateBuyerSide(body, supplierRows, files, { hongKongDelivery =
   return { body: applyAnchorageBuyerDefaults(normalized, supplierRows, reviews, { hongKongDelivery }), reviews };
 }
 
+async function assertAnchorageApprovalReady(live, supplierId, context, side) {
+  const rows = live.extraCosts.filter((row) => row.Supplier__c === supplierId && isAnchorageDuesRow(row));
+  if (!isHongKongStem(live.stem) || !rows.length) return;
+  const evidence = anchorageEvidence(live, await variableChargeSettings(context.client));
+  if (!evidence?.calculation?.complete) {
+    throw httpError(evidence?.calculation?.errors?.[0] || 'Save complete anchorage details before approval.', 409, 'ANCHORAGE_EVIDENCE_INCOMPLETE');
+  }
+  if (!evidence.calculation.allocationComplete) {
+    throw httpError('Allocate the calculated anchorage dues across all agent rows before approval.', 409, 'ANCHORAGE_ALLOCATION_INCOMPLETE');
+  }
+  if (evidence.rows.some((row) => !row.savedCalculationVersion || Number(row.appliedNrt) !== Number(evidence.vesselNrt))) {
+    throw httpError('The Vessel NRT or anchorage evidence changed. Save the anchorage details again before approval.', 409, 'ANCHORAGE_EVIDENCE_STALE');
+  }
+  const selected = evidence.rows.filter((row) => row.supplierId === supplierId);
+  if (side === 'cost' && selected.some((row) => row.supplierChargeHkd?.available !== true)) {
+    throw httpError('The supplier Anchorage Dues charge cannot be compared in its current currency.', 409, 'ANCHORAGE_SUPPLIER_COMPARISON_UNAVAILABLE');
+  }
+  if (side === 'buyer_charge' && selected.some((row) => row.buyerSuggestion?.available !== true)) {
+    throw httpError('The buyer Anchorage Dues suggestion cannot be converted in its current currency.', 409, 'ANCHORAGE_BUYER_SUGGESTION_UNAVAILABLE');
+  }
+}
+
 export async function assignVariableChargeSides(body, context) {
   if (!pairedWorkflowEnabled()) throw httpError('The paired Variable Charges workflow is not enabled yet.', 409, 'PAIRED_WORKFLOW_DISABLED');
   const stemId = text(body?.stemId, 18);
@@ -1889,6 +2141,7 @@ export async function confirmVariableChargeSides(body, context) {
   }
   if (text(body?.expectedStemLastModifiedAt, 80) !== text(liveBefore.stem.LastModifiedDate, 80)) throw httpError('The Salesforce STEM changed after it was opened.', 409, 'STEM_LAST_MODIFIED_CONFLICT');
   const supplierRows = [...liveBefore.lineItems, ...liveBefore.extraCosts].filter((row) => (row.Original_Supplier__c || row.Supplier__c) === supplierId);
+  for (const side of sides) await assertAnchorageApprovalReady(liveBefore, supplierId, context, side);
   const files = await linkedSalesforceFiles(liveBefore);
   const costReview = sides.includes('cost') ? await validateCostSide(sideBody(body, 'cost'), supplierRows) : null;
   const buyerReview = sides.includes('buyer_charge')
@@ -2001,6 +2254,9 @@ export async function confirmVariableChargeBuyer(body, context) {
   const live = await liveCaseForStem(text(body?.stemId, 18), context);
   if ((live.supplierRequirements || []).some((row) => row.status !== 'Verified')) {
     throw httpError('Every required Supplier Trader must verify their supplier before Buyer Trader confirmation.', 409, 'SUPPLIER_STAGES_INCOMPLETE');
+  }
+  for (const requirement of live.supplierRequirements || []) {
+    await assertAnchorageApprovalReady(live, requirement.supplierId, context, 'buyer_charge');
   }
   return saveAndConfirmVariableCharges(normalizeBuyerReviewPayload(body, live), context);
 }

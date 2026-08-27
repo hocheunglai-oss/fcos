@@ -416,6 +416,10 @@ export const PAYMENT_COLLECTIONS_METHODOLOGIES = {
         body: 'The Supplier Leg and Buyer Leg may be completed in either order. Pending remains unresolved and blocks approval. The cost owner marks each exact-supplier charge as Correct or Edit Cost, controls additions, cancellations and shared fields, and records a Review Note. The buyer-side owner selects Charge Buyer or Do Not Charge, controls permitted buyer pricing, and records a Review Note. For Hong Kong deliveries, Anchorage Dues default to a zero buyer charge for the first 12 aggregate anchoring hours; when the vessel stays longer, the Buyer Trader enters only the excess amount and may amend it before approval. Existing product lines remain read-only in FCOS and Salesforce Files are optional supplier evidence.',
       },
       {
+        title: 'Hong Kong anchorage dues',
+        body: 'For exact Anchorage Due or Anchorage Dues charges on a Hong Kong delivery, FCOS uses the Vessel’s positive whole-number NRT and each saved arrival, departure and location in Hong Kong time. The first 12 aggregate hours are free; later time is grouped by Victoria Port or elsewhere in Hong Kong and rounded up to the next hour for each location. Rates are HKD 0.02 or HKD 0.015 per NRT-hour respectively, subject to the HKD 100 minimum and final rounding down to HKD 0.10. One agent row receives the calculated total automatically; multiple agent rows require allocations matching within HKD 0.10. Supplier comparison and the buyer amount are verification and suggestion only—FCOS never overwrites either financial value automatically. The saved Vessel NRT, company USD/HKD rate, settings revision and calculation version preserve the reviewed evidence.',
+      },
+      {
         title: 'Permissions and overrides',
         body: 'All Payment Collections users may view. Only a side’s current assignee may edit or confirm it. The original Supplier Trader may delegate or take back an unconfirmed side. Finance and Administrators remain read-only. The one active UUID-backed General Manager may override either side only with a mandatory audited reason.',
       },

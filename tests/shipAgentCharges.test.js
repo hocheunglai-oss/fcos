@@ -320,6 +320,9 @@ test('FCOS handlers are explicit, fail-closed, atomic, and do not send email', a
   for (const handler of [
     'variableChargesList',
     'variableChargesDetail',
+    'variableChargesAnchorageSave',
+    'variableChargesSettingsGet',
+    'variableChargesSettingsSave',
     'variableChargesOptions',
     'variableChargesSupplierVerify',
     'variableChargesBuyerConfirm',

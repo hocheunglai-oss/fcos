@@ -904,6 +904,7 @@ function ContractEditor({
                         vesselId: value,
                         vesselName: row?.name || "",
                         vesselImo: row?.imo || "",
+                        vesselNrt: row?.nrt ?? "",
                       });
                     }}
                     renderLabel={(row) =>
@@ -911,7 +912,7 @@ function ContractEditor({
                     }
                   />
                   {!delivery.vesselId ? (
-                    <div className="grid gap-2 rounded-lg border border-dashed p-2 md:col-span-2 md:grid-cols-[1fr_160px_auto]">
+                    <div className="grid gap-2 rounded-lg border border-dashed p-2 md:col-span-3 md:grid-cols-[1fr_160px_150px_auto]">
                       <Field
                         label="Vessel name"
                         value={delivery.vesselName}
@@ -924,6 +925,16 @@ function ContractEditor({
                         value={delivery.vesselImo}
                         onChange={(value) =>
                           updateDelivery(index, { vesselImo: value })
+                        }
+                      />
+                      <Field
+                        label="NRT (optional)"
+                        type="number"
+                        min="1"
+                        step="1"
+                        value={delivery.vesselNrt || ""}
+                        onChange={(value) =>
+                          updateDelivery(index, { vesselNrt: value })
                         }
                       />
                       {existing ? (
@@ -941,12 +952,14 @@ function ContractEditor({
                               const created = await onCreateVessel({
                                 name: delivery.vesselName,
                                 imo: delivery.vesselImo,
+                                nrt: delivery.vesselNrt,
                               });
                               if (created)
                                 updateDelivery(index, {
                                   vesselId: created.id,
                                   vesselName: created.name,
                                   vesselImo: created.imo,
+                                  vesselNrt: created.nrt ?? "",
                                 });
                             }}
                           >
@@ -1742,7 +1755,7 @@ export default function MasterContracts() {
     [invoke],
   );
 
-  const createVessel = async ({ name, imo }) => {
+  const createVessel = async ({ name, imo, nrt }) => {
     if (!detail?.contract?.id) return null;
     setBusy(true);
     setError("");
@@ -1751,6 +1764,7 @@ export default function MasterContracts() {
         contractId: detail.contract.id,
         name,
         imo,
+        nrt,
       });
       setOptions((current) => ({
         ...current,

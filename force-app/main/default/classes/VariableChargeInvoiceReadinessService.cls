@@ -281,6 +281,7 @@ public without sharing class VariableChargeInvoiceReadinessService {
             'Supplier_Invoice__c','CurrencyIsoCode'
         }, 'WHERE STEM__c = :stemId AND Supplier__c = :supplierId AND Cancelled__c = false ORDER BY Id', binds))
             parts.add('E|' + JSON.serialize(row));
+        addAnchorageFingerprintParts(parts, stemId, supplierId);
         Blob digest = Crypto.generateDigest('SHA-256', Blob.valueOf(String.join(parts, '\n')));
         return EncodingUtil.convertToHex(digest).toLowerCase();
     }
@@ -313,6 +314,7 @@ public without sharing class VariableChargeInvoiceReadinessService {
             'Unit_Price__c','Lumpsum_Price__c','Line_Total__c','CurrencyIsoCode'
         }, 'WHERE STEM__c = :stemId AND Supplier__c = :supplierId AND Cancelled__c = false ORDER BY Id', binds))
             parts.add('E|' + JSON.serialize(row));
+        addAnchorageFingerprintParts(parts, stemId, supplierId);
         Blob digest = Crypto.generateDigest('SHA-256', Blob.valueOf(String.join(parts, '\n')));
         return EncodingUtil.convertToHex(digest).toLowerCase();
     }
@@ -330,6 +332,20 @@ public without sharing class VariableChargeInvoiceReadinessService {
         String soql = 'SELECT ' + String.join(selected, ',') + ' FROM '
             + objectType.getDescribe().getName() + ' ' + whereClause;
         return Database.queryWithBinds(soql, binds, AccessLevel.SYSTEM_MODE);
+    }
+
+    private static void addAnchorageFingerprintParts(List<String> parts, Id stemId, Id supplierId) {
+        Map<String, Object> binds = new Map<String, Object>{'stemId' => stemId, 'supplierId' => supplierId};
+        List<SObject> anchorageRows = fingerprintRows(STEM_Extra_Cost__c.SObjectType, new List<String>{
+            'Id','Anchorage_Arrival__c','Anchorage_Departure__c','Anchorage_Location__c',
+            'Anchorage_Dues_Allocation_HKD__c','Anchorage_NRT_Snapshot__c','Anchorage_USD_HKD_Rate__c',
+            'Anchorage_FX_Settings_Revision__c','Anchorage_Calculation_Version__c'
+        }, 'WHERE STEM__c = :stemId AND Supplier__c = :supplierId AND Cancelled__c = false '
+            + 'AND Anchorage_Calculation_Version__c != null ORDER BY Id', binds);
+        if (anchorageRows.isEmpty()) return;
+        List<STEM__c> stems = [SELECT Id, Vessel__r.NRT__c FROM STEM__c WHERE Id = :stemId LIMIT 1];
+        parts.add('NRT|' + String.valueOf(stems.isEmpty() ? null : stems[0].Vessel__r?.NRT__c));
+        for (SObject row : anchorageRows) parts.add('H|' + JSON.serialize(row));
     }
 
     public static Set<Id> requiredSupplierIds(Id stemId) {
@@ -387,7 +403,7 @@ public without sharing class VariableChargeInvoiceReadinessService {
         Set<String> sharedPairs = new Set<String>();
         if (newRecords != null) for (STEM_Extra_Cost__c row : newRecords) {
             STEM_Extra_Cost__c oldRow = oldMap == null ? null : oldMap.get(row.Id);
-            if (oldRow == null || changed(row, oldRow, new List<String>{'STEM__c','Supplier__c','Cancelled__c','Product2Id__c','Description__c','STEM_Line_Item__c','Quantity__c','Quantity_Delivered_Per_BDN__c','Quantity_Range_Max__c','Unit_of_Measure__c','CurrencyIsoCode'}))
+            if (oldRow == null || changed(row, oldRow, new List<String>{'STEM__c','Supplier__c','Cancelled__c','Product2Id__c','Description__c','STEM_Line_Item__c','Quantity__c','Quantity_Delivered_Per_BDN__c','Quantity_Range_Max__c','Unit_of_Measure__c','CurrencyIsoCode','Anchorage_Arrival__c','Anchorage_Departure__c','Anchorage_Location__c','Anchorage_Dues_Allocation_HKD__c','Anchorage_NRT_Snapshot__c','Anchorage_USD_HKD_Rate__c','Anchorage_FX_Settings_Revision__c','Anchorage_Calculation_Version__c'}))
                 addChangedPairs(sharedPairs, row, oldRow, 'Supplier__c');
             if (oldRow != null && changed(row, oldRow, new List<String>{'Payment_Term__c','Unit_Cost__c','Lumpsum_Cost__c','Line_Total_Buy__c','Supplier_Invoice__c'}))
                 addChangedPairs(costPairs, row, oldRow, 'Supplier__c');
@@ -400,6 +416,23 @@ public without sharing class VariableChargeInvoiceReadinessService {
         invalidatePairSides(sharedPairs, true, true);
         invalidatePairSides(costPairs, true, false);
         invalidatePairSides(buyerPairs, false, true);
+    }
+
+    public static void invalidateForVesselChanges(Map<Id, Vessel__c> newMap, Map<Id, Vessel__c> oldMap) {
+        if (newMap == null || oldMap == null) return;
+        Set<Id> changedVesselIds = new Set<Id>();
+        for (Id vesselId : newMap.keySet()) {
+            Vessel__c before = oldMap.get(vesselId), after = newMap.get(vesselId);
+            if (before != null && before.NRT__c != after.NRT__c) changedVesselIds.add(vesselId);
+        }
+        if (changedVesselIds.isEmpty()) return;
+        Set<String> pairs = new Set<String>();
+        for (STEM_Extra_Cost__c row : [
+            SELECT STEM__c, Supplier__c FROM STEM_Extra_Cost__c
+            WHERE STEM__r.Vessel__c IN :changedVesselIds AND Cancelled__c = false
+                AND Supplier__c != null AND Anchorage_Calculation_Version__c != null
+        ]) addPair(pairs, row.STEM__c, row.Supplier__c);
+        invalidatePairSides(pairs, true, true);
     }
 
     public static void invalidateForAccountChanges(Map<Id, Account> newMap, Map<Id, Account> oldMap) {

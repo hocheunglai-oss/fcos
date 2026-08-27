@@ -3,6 +3,7 @@
     <classAccesses><apexClass>MasterContractGenerationRest</apexClass><enabled>true</enabled></classAccesses>
     <classAccesses><apexClass>MasterContractGenerationService</apexClass><enabled>true</enabled></classAccesses>
     <classAccesses><apexClass>MasterContractInvoiceReadinessService</apexClass><enabled>true</enabled></classAccesses>
+    <fieldPermissions><editable>true</editable><field>Vessel__c.NRT__c</field><readable>true</readable></fieldPermissions>
     <fieldPermissions><editable>true</editable><field>Opportunity.Master_Contract_Delivery_Key__c</field><readable>true</readable></fieldPermissions>
     <fieldPermissions><editable>true</editable><field>Opportunity.Master_Contract_Key__c</field><readable>true</readable></fieldPermissions>
     <fieldPermissions><editable>true</editable><field>Opportunity.Master_Contract_Source__c</field><readable>true</readable></fieldPermissions>

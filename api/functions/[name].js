@@ -93,6 +93,7 @@ import { workCommitmentsList as workCommitmentsListService } from '../_workCommi
 import {
   getShipAgentChargeDetail,
   getVariableChargeDetail,
+  getVariableChargeSettings,
   assignVariableChargeSides,
   confirmVariableChargeSides,
   confirmVariableChargeBuyer,
@@ -103,6 +104,8 @@ import {
   resolveShipAgentPostInvoiceChange,
   resolveVariableChargePostInvoiceChange,
   saveAndConfirmShipAgentCharges,
+  saveVariableChargeAnchorage,
+  saveVariableChargeSettings,
   shipAgentChargeOptions,
   variableChargeOptions,
   syncShipAgentCharges,
@@ -1605,6 +1608,9 @@ const HANDLER_MODULE_ACCESS = {
   shipAgentChargesSync: ['buyer_invoices', 'incoming_payments'],
   variableChargesList: ['buyer_invoices', 'incoming_payments'],
   variableChargesDetail: ['buyer_invoices', 'incoming_payments'],
+  variableChargesAnchorageSave: ['buyer_invoices', 'incoming_payments'],
+  variableChargesSettingsGet: ['buyer_invoices', 'incoming_payments'],
+  variableChargesSettingsSave: ['buyer_invoices', 'incoming_payments'],
   variableChargesOptions: ['buyer_invoices', 'incoming_payments'],
   variableChargesSupplierVerify: ['buyer_invoices', 'incoming_payments'],
   variableChargesBuyerConfirm: ['buyer_invoices', 'incoming_payments'],
@@ -5361,6 +5367,20 @@ async function variableChargesDetail(body, req, accessContext = null) {
   const context = await shipAgentChargesContext(req, accessContext);
   await requireShipAgentStemAccess(body, context);
   return getVariableChargeDetail(body, context);
+}
+
+async function variableChargesAnchorageSave(body, req, accessContext = null) {
+  const context = await shipAgentChargesContext(req, accessContext);
+  await requireShipAgentStemAccess(body, context);
+  return saveVariableChargeAnchorage(body, context);
+}
+
+async function variableChargesSettingsGet(body, req, accessContext = null) {
+  return getVariableChargeSettings(body, await shipAgentChargesContext(req, accessContext));
+}
+
+async function variableChargesSettingsSave(body, req, accessContext = null) {
+  return saveVariableChargeSettings(body, await shipAgentChargesContext(req, accessContext));
 }
 
 async function variableChargesOptions(body, req, accessContext = null) {
@@ -19400,6 +19420,9 @@ const handlers = {
   shipAgentChargesSync,
   variableChargesList,
   variableChargesDetail,
+  variableChargesAnchorageSave,
+  variableChargesSettingsGet,
+  variableChargesSettingsSave,
   variableChargesOptions,
   variableChargesSupplierVerify,
   variableChargesBuyerConfirm,

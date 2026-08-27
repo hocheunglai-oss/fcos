@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <PermissionSet xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fieldPermissions><editable>true</editable><field>Vessel__c.NRT__c</field><readable>true</readable></fieldPermissions>
     <fieldPermissions><editable>true</editable><field>Opportunity.Master_Contract_Delivery_Key__c</field><readable>true</readable></fieldPermissions>
     <fieldPermissions><editable>true</editable><field>Opportunity.Master_Contract_Key__c</field><readable>true</readable></fieldPermissions>
     <fieldPermissions><editable>true</editable><field>Opportunity.Master_Contract_Source__c</field><readable>true</readable></fieldPermissions>

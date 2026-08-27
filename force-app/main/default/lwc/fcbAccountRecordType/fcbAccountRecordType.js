@@ -384,6 +384,7 @@ export default class FcbAccountRecordType extends LightningElement {
   showSaveButton() {
     this.isShowedSavedButton = this.recordTypeId !== this.savedRecordTypeId 
     || this.isAgent !== this.savedIsAgent
+    || this.isVariable !== this.savedIsVariable
     || this.isBroker !== this.savedIsBroker 
     || this.hiddenBroker !== this.savedHiddenBroker
     || this.hiddenBrokerCompany !== this.savedHiddenBrokerCompany

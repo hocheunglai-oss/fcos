@@ -255,6 +255,9 @@ test('API and Salesforce package preserve exact-ID, all-or-none, and invoice-gat
     read('manifest/master-contracts-full.xml'),
   ]);
   assert.match(api, /MASTER_CONTRACT_PREFLIGHT_BLOCKED/);
+  assert.match(api, /SELECT Id,Name,IMO__c,NRT__c FROM Vessel__c/);
+  assert.match(api, /Net Registered Tonnage \(NRT\) must be a positive whole number/);
+  assert.match(page, /label="NRT \(optional\)"/);
   assert.match(api, /enqueue_master_contract_sync/);
   assert.match(api, /finalize_master_contract_salesforce_batch/);
   assert.match(api, /complete official MOPS publication is required for both pricing dates/);
