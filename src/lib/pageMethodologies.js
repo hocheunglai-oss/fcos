@@ -413,7 +413,7 @@ export const PAYMENT_COLLECTIONS_METHODOLOGIES = {
       },
       {
         title: 'Review and controlled changes',
-        body: 'The Supplier Leg and Buyer Leg may be completed in either order. Pending remains unresolved and blocks approval. The cost owner marks each exact-supplier charge as Correct or Edit Cost, controls additions, cancellations and shared fields, and records a Review Note. The buyer-side owner selects Charge Buyer or Do Not Charge, controls permitted buyer pricing, and records a Review Note. Existing product lines remain read-only in FCOS and Salesforce Files are optional supplier evidence.',
+        body: 'The Supplier Leg and Buyer Leg may be completed in either order. Pending remains unresolved and blocks approval. The cost owner marks each exact-supplier charge as Correct or Edit Cost, controls additions, cancellations and shared fields, and records a Review Note. The buyer-side owner selects Charge Buyer or Do Not Charge, controls permitted buyer pricing, and records a Review Note. Anchorage Dues default to a zero buyer charge for the first 12 aggregate anchoring hours; when the vessel stays longer, the Buyer Trader enters only the excess amount and may amend it before approval. Existing product lines remain read-only in FCOS and Salesforce Files are optional supplier evidence.',
       },
       {
         title: 'Permissions and overrides',

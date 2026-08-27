@@ -3,6 +3,7 @@
     <classAccesses><apexClass>VariableChargeInvoiceReadinessService</apexClass><enabled>true</enabled></classAccesses>
     <classAccesses><apexClass>MasterContractInvoiceReadinessService</apexClass><enabled>true</enabled></classAccesses>
     <fieldPermissions><editable>true</editable><field>Account.Is_Agent__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>Account.Is_Variable__c</field><readable>true</readable></fieldPermissions>
     <fieldPermissions><editable>false</editable><field>STEM__c.Variable_Charges_Confirmed__c</field><readable>true</readable></fieldPermissions>
     <fieldPermissions><editable>true</editable><field>STEM_Variable_Charge_Supplier__c.Manual_Review_Required__c</field><readable>true</readable></fieldPermissions>
     <fieldPermissions><editable>false</editable><field>STEM_Variable_Charge_Supplier__c.Verified_At__c</field><readable>true</readable></fieldPermissions>

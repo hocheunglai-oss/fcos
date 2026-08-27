@@ -21,6 +21,8 @@ export default class FcbAccountRecordType extends LightningElement {
   savedRecordTypeId;
   @track isAgent;
   savedIsAgent;
+  @track isVariable;
+  savedIsVariable;
   @track isBroker;
   @track isBrokerRecordType;
   savedIsBroker;
@@ -136,6 +138,8 @@ export default class FcbAccountRecordType extends LightningElement {
       this.recordTypeId = result.RecordTypeId;
       this.isAgent = result.Is_Agent__c;
       this.savedIsAgent = result.Is_Agent__c;
+      this.isVariable = result.Is_Variable__c;
+      this.savedIsVariable = result.Is_Variable__c;
       this.isBroker = result.Is_Broker__c;
       this.savedIsBroker = result.Is_Broker__c;
       this.isBrokerRecordType = this.recordTypeId === this.recordTypeIds.find(recordType => recordType.label === 'Broker').value;
@@ -180,12 +184,16 @@ export default class FcbAccountRecordType extends LightningElement {
         ? (this.isAgent
           ? 'Mark this Account as Is Agent? Its final supplier charges will require Variable Charges verification.'
           : 'Remove Is Agent from this Account? Existing manual requirements and invoiced history remain governed.')
+        : this.savedIsVariable !== this.isVariable
+        ? (this.isVariable
+          ? 'Mark this Account as Is Variable?'
+          : 'Remove Is Variable from this Account?')
         : this.savedIsBroker && !this.isBroker
         ? "Are you sure this account is no longer a broker?"
         : this.isBroker || this.recordTypeId === this.recordTypeIds.find(recordType => recordType.label === 'Broker').value
           ? "Are you sure you would like to change this account to buyer/supplier/broker?"
           : "Are you sure you would like to change this account to buyer/supplier"
-      if ((this.recordTypeId !== this.savedRecordTypeId) || (this.isAgent !== this.savedIsAgent) || (this.isBroker !== this.savedIsBroker)) {
+      if ((this.recordTypeId !== this.savedRecordTypeId) || (this.isAgent !== this.savedIsAgent) || (this.isVariable !== this.savedIsVariable) || (this.isBroker !== this.savedIsBroker)) {
         result = await LightningConfirm.open({
           message: message,
           label: "Please Confirm",
@@ -197,6 +205,7 @@ export default class FcbAccountRecordType extends LightningElement {
           fields["Id"] = this.recordId;
           fields["RecordTypeId"] = this.recordTypeId;
           fields["Is_Agent__c"] = this.isAgent;
+          fields["Is_Variable__c"] = this.isVariable;
           fields["Is_Broker__c"] = this.isBroker;
           fields["Hidden_Broker__c"] = this.hiddenBroker;
           fields["Hidden_Broker_Company__c"] = this.hiddenBrokerCompany;
@@ -214,6 +223,7 @@ export default class FcbAccountRecordType extends LightningElement {
               this.actionExecuting = false;
               this.savedRecordTypeId = this.recordTypeId;
               this.savedIsAgent = this.isAgent;
+              this.savedIsVariable = this.isVariable;
               this.savedIsBroker = this.isBroker;
               this.dispatchEvent(
                 new ShowToastEvent({
@@ -239,6 +249,7 @@ export default class FcbAccountRecordType extends LightningElement {
         } else {
           this.recordTypeId = this.savedRecordTypeId;
           this.isAgent = this.savedIsAgent;
+          this.isVariable = this.savedIsVariable;
           this.isBroker = this.savedIsBroker;
           this.isBrokerRecordType = this.recordTypeId === this.recordTypeIds.find(recordType => recordType.label === 'Broker').value;
           this.template.querySelector('lightning-combobox').value - this.savedRecordTypeId
@@ -248,6 +259,7 @@ export default class FcbAccountRecordType extends LightningElement {
         const fields = {};
         fields["Id"] = this.recordId;
         fields["Is_Agent__c"] = this.isAgent;
+        fields["Is_Variable__c"] = this.isVariable;
         fields["Hidden_Broker__c"] = this.hiddenBroker;
         fields["Hidden_Broker_Company__c"] = this.hiddenBrokerCompany;
         fields["Email_Invoice__c"] = this.selectedEmailInvoice;
@@ -264,6 +276,7 @@ export default class FcbAccountRecordType extends LightningElement {
             this.actionExecuting = false;
             this.savedRecordTypeId = this.recordTypeId;
             this.savedIsAgent = this.isAgent;
+            this.savedIsVariable = this.isVariable;
             this.savedIsBroker = this.isBroker;
             this.dispatchEvent(
               new ShowToastEvent({
@@ -311,6 +324,8 @@ export default class FcbAccountRecordType extends LightningElement {
       this.isBrokerRecordType = this.recordTypeId === this.recordTypeIds.find(recordType => recordType.label === 'Broker').value;
     } else if (event.target.name === 'isAgent') {
       this.isAgent = event.detail.checked;
+    } else if (event.target.name === 'isVariable') {
+      this.isVariable = event.detail.checked;
     } else if (event.target.name === 'isBroker') {
       this.isBroker = event.detail.checked;
     } else if(event.target.name === 'hiddenBroker'){

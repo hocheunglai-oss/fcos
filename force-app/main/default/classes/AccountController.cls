@@ -1,7 +1,7 @@
 public with sharing class AccountController {
     @AuraEnabled
     public static Account getAccount(String accountId){
-        return [SELECT Id, RecordTypeId, RecordType.Name, Is_Agent__c, Is_Broker__c, Hidden_Broker__c, Hidden_Broker_Company__c, Email_Invoice__c, Invoice_Format__c,
+        return [SELECT Id, RecordTypeId, RecordType.Name, Is_Agent__c, Is_Variable__c, Is_Broker__c, Hidden_Broker__c, Hidden_Broker_Company__c, Email_Invoice__c, Invoice_Format__c,
                 Email_Confirmation__c, Email_Nomination__c, Confirmation_Format__c, Nomination_Format__c, Mailing_Requirement__c
                 FROM Account WHERE Id =: accountId LIMIT 1];
     }

@@ -15,6 +15,11 @@
                         checked={isAgent} onchange={handleChangeRecordType}>
                     </lightning-input>
                 </div>
+                <div class="record-type-field">
+                    <lightning-input name="isVariable" type="checkbox" label="Is Variable" variant="label-stacked"
+                        checked={isVariable} onchange={handleChangeRecordType}>
+                    </lightning-input>
+                </div>
                 <template if:false={isBrokerRecordType}>
                     <div class="record-type-field">
                         <lightning-input name="isBroker" type="checkbox" label="Is Broker" variant="label-stacked"

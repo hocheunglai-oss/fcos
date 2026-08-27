@@ -59,6 +59,11 @@ import {
 } from '@/components/ui/alert-dialog';
 import { PAYMENT_COLLECTIONS_METHODOLOGIES } from '@/lib/pageMethodologies';
 import { cn } from '@/lib/utils';
+import {
+  buyerDecisionOptionsForItem,
+  buyerPriceWithAnchorageDefault,
+  isAnchorageDuesItem,
+} from '@/lib/variableChargeRules';
 
 const VIEWS = [
   { id: 'my_tasks', label: 'My Tasks', tone: 'border-blue-300 bg-blue-50 text-blue-900' },
@@ -228,9 +233,7 @@ function initialExtraDraft(item) {
     supplierCost: pricingType === 'fixed'
       ? valueOf(item, ['fixedCost', 'fixed_cost', 'Lumpsum_Cost__c'], '')
       : valueOf(item, ['cost', 'unitCost', 'unit_cost', 'Unit_Cost__c'], ''),
-    buyerPrice: pricingType === 'fixed'
-      ? valueOf(item, ['fixedPrice', 'fixed_price', 'Lumpsum_Price__c'], '')
-      : valueOf(item, ['price', 'unitPrice', 'unit_price', 'Unit_Price__c'], ''),
+    buyerPrice: buyerPriceWithAnchorageDefault(item, pricingType),
     quantity: valueOf(item, ['quantity', 'Quantity__c'], ''),
     unitOfMeasure: text(valueOf(item, ['unitOfMeasure', 'unit_of_measure', 'Unit_of_Measure__c'], '1.')),
     cancelled: item.cancelled === true || item.Cancelled__c === true,
@@ -627,8 +630,12 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
       }
       if (buyerSelected && !['include', 'exclude'].includes(review.buyerChargeDecision)) { setSaveError(`${itemLabel(row)} is Pending on the Buyer Leg.`); return; }
       if (buyerSelected && row.sourceType === 'extra_cost' && review.buyerChargeDecision === 'include'
-        && finiteNumber((extraDrafts[row.sourceId] || initialExtraDraft(row.item)).buyerPrice) == null) {
-        setSaveError(`Enter the Buyer price for ${itemLabel(row)}.`); return;
+        && (isAnchorageDuesItem(row.item)
+          ? !(finiteNumber((extraDrafts[row.sourceId] || initialExtraDraft(row.item)).buyerPrice) > 0)
+          : finiteNumber((extraDrafts[row.sourceId] || initialExtraDraft(row.item)).buyerPrice) == null)) {
+        setSaveError(isAnchorageDuesItem(row.item)
+          ? 'Enter a positive excess Anchorage Dues buyer charge when the vessel stayed more than 12 hours.'
+          : `Enter the Buyer price for ${itemLabel(row)}.`); return;
       }
     }
     const costUpdates = [];
@@ -1132,8 +1139,10 @@ function PairedChargeRow({ row, review, draft, currency, canCostEdit, canBuyerEd
   const uom = text(draft?.unitOfMeasure || valueOf(row.item, ['unitOfMeasure'])) || 'Not set';
   const fixedPricing = values.pricingType === 'fixed';
   const supplierEditing = review.outcome === 'changed' || review.outcome === 'cancelled';
+  const anchorageDues = isAnchorageDuesItem(row.item);
+  const buyerDecisionOptions = buyerDecisionOptionsForItem(row.item);
   const unavailableReason = values.pricingType === 'per_unit' && values.quantity == null ? 'Quantity is unavailable.' : 'The Salesforce total is unavailable.';
-  return <article className="border-t border-border"><div className="border-b border-border bg-muted/25 px-4 py-3"><div className="flex flex-wrap items-start justify-between gap-3"><div className="min-w-0"><h3 className="font-semibold">{product}</h3>{descriptionVisible && <p className="mt-0.5 text-sm text-muted-foreground">{description}</p>}</div><div className="flex flex-wrap items-start gap-x-5 gap-y-1 text-xs text-muted-foreground">{!fixedPricing && <span>Quantity <strong className="text-foreground">{quantity ?? 'Not set'} {quantity != null ? uom : ''}</strong></span>}<span>Pricing Basis <strong className="text-foreground">{fixedPricing ? 'Fixed charge' : 'Per Unit'}</strong></span><div><span>Margin</span><MarginAmount value={values.margin} currency={values.currency} unavailableReason={unavailableReason} /></div></div></div></div><div className="grid grid-cols-2"><section className="min-h-[210px] space-y-3 border-r-2 border-slate-300 bg-slate-50/30 p-4"><DecisionButtons ariaLabel={`${product} supplier review`} selected={review.outcome === 'cancelled' ? 'changed' : review.outcome || ''} disabled={!canCostEdit} onChange={(outcome) => { if (outcome === 'changed' && review.outcome === 'cancelled') onDraftChange({ cancelled: false }); onReviewChange({ outcome }); }} options={[{ value: '', label: 'Pending', tone: 'bg-slate-100 text-slate-800' }, { value: 'correct', label: 'Correct', tone: 'bg-emerald-100 text-emerald-900' }, { value: 'changed', label: 'Edit Cost', tone: 'bg-amber-100 text-amber-950' }]} /><div className="grid grid-cols-2 gap-3"><AmountDisplay label={values.pricingType === 'fixed' ? 'Supplier Fixed Cost' : 'Supplier Unit Cost'} amount={values.supplierRate} currency={values.currency} unavailableReason={unavailableReason} /><AmountDisplay label="Total Supplier Cost" amount={values.supplierTotal} currency={values.currency} unavailableReason={unavailableReason} /></div>{supplierEditing && (row.readOnly ? <SalesforceEditNotice sourceId={row.sourceId} instanceUrl={instanceUrl} /> : <PairedExtraCostFields row={row} draft={draft} disabled={!canCostEdit} onChange={onDraftChange} onCancel={() => { onDraftChange({ cancelled: true }); onReviewChange({ outcome: 'cancelled' }); }} />)}</section><section className="min-h-[210px] space-y-3 bg-blue-50/20 p-4"><DecisionButtons ariaLabel={`${product} buyer review`} selected={review.buyerChargeDecision || ''} disabled={!canBuyerEdit} onChange={(buyerChargeDecision) => onReviewChange({ buyerChargeDecision })} options={[{ value: '', label: 'Pending', tone: 'bg-slate-100 text-slate-800' }, { value: 'include', label: 'Charge Buyer', tone: 'bg-blue-100 text-blue-900' }, { value: 'exclude', label: 'Do Not Charge', tone: 'bg-slate-200 text-slate-900' }]} /><div className="grid grid-cols-2 gap-3"><AmountDisplay label={values.pricingType === 'fixed' ? 'Buyer Fixed Charge' : 'Buyer Unit Price'} amount={values.buyerRate} currency={values.currency} unavailableReason={unavailableReason} /><AmountDisplay label="Total Buyer Charge" amount={values.buyerTotal} currency={values.currency} unavailableReason={unavailableReason} /></div>{review.buyerChargeDecision === 'include' && <div><Button type="button" size="sm" variant="outline" disabled={!canBuyerEdit} onClick={() => setBuyerPriceOpen((open) => !open)}>Edit Buyer Price</Button>{buyerPriceOpen && (row.readOnly ? <SalesforceEditNotice sourceId={row.sourceId} instanceUrl={instanceUrl} /> : <div className="mt-3 space-y-2"><Label htmlFor={`paired-buyer-price-${row.sourceId}`}>{values.pricingType === 'fixed' ? 'Buyer Fixed Charge' : 'Buyer Unit Price'}</Label><Input id={`paired-buyer-price-${row.sourceId}`} inputMode="decimal" value={draft?.buyerPrice ?? ''} disabled={!canBuyerEdit} onChange={(event) => onDraftChange({ buyerPrice: event.target.value })} /></div>)}</div>}</section></div></article>;
+  return <article className="border-t border-border"><div className="border-b border-border bg-muted/25 px-4 py-3"><div className="flex flex-wrap items-start justify-between gap-3"><div className="min-w-0"><h3 className="font-semibold">{product}</h3>{descriptionVisible && <p className="mt-0.5 text-sm text-muted-foreground">{description}</p>}</div><div className="flex flex-wrap items-start gap-x-5 gap-y-1 text-xs text-muted-foreground">{!fixedPricing && <span>Quantity <strong className="text-foreground">{quantity ?? 'Not set'} {quantity != null ? uom : ''}</strong></span>}<span>Pricing Basis <strong className="text-foreground">{fixedPricing ? 'Fixed charge' : 'Per Unit'}</strong></span><div><span>Margin</span><MarginAmount value={values.margin} currency={values.currency} unavailableReason={unavailableReason} /></div></div></div></div><div className="grid grid-cols-2"><section className="min-h-[210px] space-y-3 border-r-2 border-slate-300 bg-slate-50/30 p-4"><DecisionButtons ariaLabel={`${product} supplier review`} selected={review.outcome === 'cancelled' ? 'changed' : review.outcome || ''} disabled={!canCostEdit} onChange={(outcome) => { if (outcome === 'changed' && review.outcome === 'cancelled') onDraftChange({ cancelled: false }); onReviewChange({ outcome }); }} options={[{ value: '', label: 'Pending', tone: 'bg-slate-100 text-slate-800' }, { value: 'correct', label: 'Correct', tone: 'bg-emerald-100 text-emerald-900' }, { value: 'changed', label: 'Edit Cost', tone: 'bg-amber-100 text-amber-950' }]} /><div className="grid grid-cols-2 gap-3"><AmountDisplay label={values.pricingType === 'fixed' ? 'Supplier Fixed Cost' : 'Supplier Unit Cost'} amount={values.supplierRate} currency={values.currency} unavailableReason={unavailableReason} /><AmountDisplay label="Total Supplier Cost" amount={values.supplierTotal} currency={values.currency} unavailableReason={unavailableReason} /></div>{supplierEditing && (row.readOnly ? <SalesforceEditNotice sourceId={row.sourceId} instanceUrl={instanceUrl} /> : <PairedExtraCostFields row={row} draft={draft} disabled={!canCostEdit} onChange={onDraftChange} onCancel={() => { onDraftChange({ cancelled: true }); onReviewChange({ outcome: 'cancelled' }); }} />)}</section><section className="min-h-[210px] space-y-3 bg-blue-50/20 p-4"><DecisionButtons ariaLabel={`${product} buyer review`} selected={review.buyerChargeDecision || ''} disabled={!canBuyerEdit} onChange={(buyerChargeDecision) => onReviewChange({ buyerChargeDecision })} options={buyerDecisionOptions} />{anchorageDues && <p className="text-xs text-blue-900">First 12 hours: no buyer charge. If the vessel stays longer, charge only the excess amount.</p>}<div className="grid grid-cols-2 gap-3"><AmountDisplay label={values.pricingType === 'fixed' ? 'Buyer Fixed Charge' : 'Buyer Unit Price'} amount={review.buyerChargeDecision === 'exclude' && anchorageDues ? 0 : values.buyerRate} currency={values.currency} unavailableReason={unavailableReason} /><AmountDisplay label="Total Buyer Charge" amount={review.buyerChargeDecision === 'exclude' && anchorageDues ? 0 : values.buyerTotal} currency={values.currency} unavailableReason={unavailableReason} /></div>{review.buyerChargeDecision === 'include' && <div><Button type="button" size="sm" variant="outline" disabled={!canBuyerEdit} onClick={() => setBuyerPriceOpen((open) => !open)}>{anchorageDues ? 'Edit Excess Charge' : 'Edit Buyer Price'}</Button>{buyerPriceOpen && (row.readOnly ? <SalesforceEditNotice sourceId={row.sourceId} instanceUrl={instanceUrl} /> : <div className="mt-3 space-y-2"><Label htmlFor={`paired-buyer-price-${row.sourceId}`}>{anchorageDues ? 'Buyer Excess Anchorage Charge' : values.pricingType === 'fixed' ? 'Buyer Fixed Charge' : 'Buyer Unit Price'}</Label><Input id={`paired-buyer-price-${row.sourceId}`} inputMode="decimal" value={draft?.buyerPrice ?? ''} disabled={!canBuyerEdit} onChange={(event) => onDraftChange({ buyerPrice: event.target.value })} /></div>)}</div>}</section></div></article>;
 }
 
 function PairedNewChargeRow({ draft, products, currency, canCostEdit, canBuyerEdit, commonOwner, onChange, onRemove }) {
@@ -1169,8 +1178,9 @@ function PairedReviewWorkspace({ caseRow, requirement, requirements, activeSuppl
   const buyerReady = rows.length > 0 && rows.every((row) => {
     const decision = reviews[row.key]?.buyerChargeDecision;
     if (!['include', 'exclude'].includes(decision)) return false;
-    return decision !== 'include' || row.sourceType !== 'extra_cost'
-      || finiteNumber((extraDrafts[row.sourceId] || initialExtraDraft(row.item)).buyerPrice) != null;
+    if (decision !== 'include' || row.sourceType !== 'extra_cost') return true;
+    const buyerPrice = finiteNumber((extraDrafts[row.sourceId] || initialExtraDraft(row.item)).buyerPrice);
+    return isAnchorageDuesItem(row.item) ? buyerPrice > 0 : buyerPrice != null;
   }) && Boolean(text(buyerNote));
   const additionsCostReady = addDrafts.every((draft) => text(draft.productId) && text(draft.description) && finiteNumber(draft.supplierCost) != null && (draft.pricingType !== 'per_unit' || (finiteNumber(draft.quantity) > 0 && text(draft.unitOfMeasure))));
   const additionsBuyerReady = addDrafts.every((draft) => ['include', 'exclude'].includes(draft.buyerChargeDecision) && (draft.buyerChargeDecision !== 'include' || finiteNumber(draft.buyerPrice) != null));

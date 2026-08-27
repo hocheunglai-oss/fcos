@@ -39,7 +39,12 @@ public class AccountControllerTest {
     static void testGetAccount(){
         Test.startTest();
         Account broker = TestDataFactory.createTestAccount('Test Broker', 'BROKER', true);
+		broker.Is_Agent__c = true;
+		broker.Is_Variable__c = true;
+		update broker;
 		system.assertEquals(true, AccountController.getAccount(broker.Id).Is_Broker__c);
+		system.assertEquals(true, AccountController.getAccount(broker.Id).Is_Agent__c);
+		system.assertEquals(true, AccountController.getAccount(broker.Id).Is_Variable__c);
         Test.stopTest();
     }
     

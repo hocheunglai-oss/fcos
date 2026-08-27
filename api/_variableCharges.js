@@ -41,6 +41,14 @@ function text(value, max = 1000) {
   return String(value ?? '').trim().slice(0, max);
 }
 
+function isAnchorageDuesRow(row) {
+  const productName = text(row?.Product2Id__r?.Name || row?.Product__r?.Name, 255)
+    .normalize('NFKC')
+    .replace(/\s+/g, ' ')
+    .toUpperCase();
+  return productName === 'ANCHORAGE DUE' || productName === 'ANCHORAGE DUES';
+}
+
 function normalizedEmail(value) {
   return text(value, 320).toLowerCase();
 }
@@ -652,7 +660,7 @@ function financialSummary(live) {
     ...live.extraCosts.map((row) => ({
       supplierId: row.Supplier__c,
       cost: finiteAmount(row.Line_Total_Buy__c),
-      charge: finiteAmount(row.Line_Total__c),
+      charge: finiteAmount(row.Line_Total__c) ?? (isAnchorageDuesRow(row) ? 0 : null),
       currency: text(row.CurrencyIsoCode, 3).toUpperCase() || stemCurrency,
     })),
   ];
@@ -1706,15 +1714,54 @@ function normalizeBuyerSide(body, supplierRows) {
   };
 }
 
+function applyAnchorageBuyerDefaults(body, supplierRows, reviews) {
+  const reviewById = new Map((reviews || []).map((row) => [
+    text(row?.sourceId || row?.id, 64),
+    text(row?.buyerChargeDecision, 32).toLowerCase(),
+  ]));
+  const updatesById = new Map((Array.isArray(body?.extraCostUpdates) ? body.extraCostUpdates : []).map((update) => [
+    text(update?.extraCostId || update?.id, 18),
+    update,
+  ]));
+  for (const row of supplierRows) {
+    if (!row?.Supplier__c || !isAnchorageDuesRow(row) || reviewById.get(row.Id) !== 'exclude') continue;
+    const pricingType = row.Lumpsum_Cost__c != null || row.Lumpsum_Price__c != null ? 'fixed' : 'per_unit';
+    const currentBuyerPrice = pricingType === 'fixed' ? finiteAmount(row.Lumpsum_Price__c) : finiteAmount(row.Unit_Price__c);
+    if (currentBuyerPrice === 0) continue;
+    const existing = updatesById.get(row.Id) || {};
+    updatesById.set(row.Id, {
+      ...existing,
+      extraCostId: row.Id,
+      expectedLastModifiedDate: text(existing.expectedLastModifiedDate || existing.lastModifiedDate || row.LastModifiedDate, 80),
+      pricingType,
+      buyerPrice: 0,
+    });
+  }
+  return { ...body, extraCostUpdates: [...updatesById.values()] };
+}
+
 async function validateBuyerSide(body, supplierRows, files) {
   const normalized = normalizeBuyerSide(body, supplierRows);
   const reviews = Array.isArray(normalized?.reviews) ? normalized.reviews : [];
   const byId = new Map(reviews.map((row) => [text(row?.sourceId || row?.id, 64), row]));
+  const extraCostUpdates = new Map((Array.isArray(normalized?.extraCostUpdates) ? normalized.extraCostUpdates : []).map((row) => [
+    text(row?.extraCostId || row?.id, 18),
+    row,
+  ]));
   const fileIds = new Set(files.map((row) => row.id));
   for (const row of supplierRows) {
     const review = byId.get(row.Id);
     if (!review || review.reviewed !== true) throw httpError('Review every current buyer-charge row for this supplier.', 400, 'BUYER_ROW_REVIEW_REQUIRED');
-    if (!['include', 'exclude'].includes(text(review.buyerChargeDecision, 32).toLowerCase())) throw httpError('Choose Charge Buyer or Do Not Charge for every buyer charge.', 400, 'BUYER_CHARGE_DECISION_REQUIRED');
+    const decision = text(review.buyerChargeDecision, 32).toLowerCase();
+    if (!['include', 'exclude'].includes(decision)) throw httpError('Choose Charge Buyer or Do Not Charge for every buyer charge.', 400, 'BUYER_CHARGE_DECISION_REQUIRED');
+    if (row?.Supplier__c && isAnchorageDuesRow(row) && decision === 'include') {
+      const pricingType = row.Lumpsum_Cost__c != null || row.Lumpsum_Price__c != null ? 'fixed' : 'per_unit';
+      const update = extraCostUpdates.get(row.Id);
+      const buyerPrice = update
+        ? finiteAmount(update.buyerPrice ?? update.price ?? update.fixedBuyerAmount ?? update.buyerUnitPrice)
+        : finiteAmount(pricingType === 'fixed' ? row.Lumpsum_Price__c : row.Unit_Price__c);
+      if (!(buyerPrice > 0)) throw httpError('Enter a positive excess Anchorage Dues buyer charge when the vessel stayed more than 12 hours.', 400, 'ANCHORAGE_EXCESS_CHARGE_REQUIRED');
+    }
     const evidence = reviewEvidence(review);
     if (!evidence.reference) throw httpError('The buyer-charge side requires a note for every reviewed row.', 400, 'BUYER_NOTE_REQUIRED');
     if (evidence.evidenceDocumentIds.some((id) => !fileIds.has(id))) throw httpError('A selected Salesforce File is no longer linked to this charge.', 409, 'EVIDENCE_CHANGED');
@@ -1729,7 +1776,7 @@ async function validateBuyerSide(body, supplierRows, files) {
     if (!buyerNote && !evidence.reference) throw httpError('The buyer-charge side requires a note for every new charge.', 400, 'BUYER_NOTE_REQUIRED');
     if (evidence.evidenceDocumentIds.some((id) => !fileIds.has(id))) throw httpError('A selected Salesforce File is no longer linked to this charge.', 409, 'EVIDENCE_CHANGED');
   }
-  return { body: normalized, reviews };
+  return { body: applyAnchorageBuyerDefaults(normalized, supplierRows, reviews), reviews };
 }
 
 export async function assignVariableChargeSides(body, context) {
@@ -2126,6 +2173,7 @@ function isShipAgentAccount(account) {
 }
 
 export const variableChargeInternals = {
+  applyAnchorageBuyerDefaults,
   buyerAggregateFingerprint,
   buyerChargeLiveFingerprint,
   deriveStatus,
@@ -2133,6 +2181,7 @@ export const variableChargeInternals = {
   financialSummary,
   finalInvoice,
   isShipAgentAccount,
+  isAnchorageDuesRow,
   isVariableChargeAccount,
   liveFingerprint,
   normalizedEmail,
