@@ -3,6 +3,7 @@ import test from 'node:test';
 import { readFile } from 'node:fs/promises';
 import { variableChargeInternals } from '../api/_variableCharges.js';
 import {
+  anchorageBuyerTotalAdjustment,
   buyerAmountWithAnchorageDecision,
   buyerDecisionOptionsForItem,
   buyerPriceWithAnchorageDefault,
@@ -32,6 +33,11 @@ test('Anchorage Dues uses explicit excess-time buyer decisions', () => {
   assert.equal(buyerAmountWithAnchorageDecision({ productName: 'ANCHORAGE DUES' }, 'exclude', 267.51), 0);
   assert.equal(buyerAmountWithAnchorageDecision({ productName: 'ANCHORAGE DUES' }, 'include', 267.51), 267.51);
   assert.equal(buyerAmountWithAnchorageDecision({ productName: 'Agency Fee' }, '', 900), 900);
+  assert.equal(anchorageBuyerTotalAdjustment([
+    { item: { productName: 'ANCHORAGE DUES' }, decision: '', currentTotal: 267.51 },
+    { item: { productName: 'ANCHORAGE DUES' }, decision: 'include', currentTotal: 100 },
+    { item: { productName: 'Agency Fee' }, decision: '', currentTotal: 900 },
+  ]), -267.51);
 });
 
 test('server writes a zero buyer price when excluded Anchorage Dues has no zero stored', () => {

@@ -40,3 +40,11 @@ export function buyerDecisionOptionsForItem(item) {
 export function buyerAmountWithAnchorageDecision(item, decision, amount) {
   return isAnchorageDuesItem(item) && decision !== 'include' ? 0 : amount;
 }
+
+export function anchorageBuyerTotalAdjustment(rows = []) {
+  return rows.reduce((adjustment, row) => {
+    if (!isAnchorageDuesItem(row?.item) || row?.decision === 'include') return adjustment;
+    const currentTotal = Number(row?.currentTotal);
+    return adjustment - (Number.isFinite(currentTotal) ? currentTotal : 0);
+  }, 0);
+}
