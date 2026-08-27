@@ -36,3 +36,7 @@ export function buyerDecisionOptionsForItem(item) {
     { value: 'exclude', label: 'No Charge · 12h or less', tone: 'bg-slate-200 text-slate-900' },
   ];
 }
+
+export function buyerAmountWithAnchorageDecision(item, decision, amount) {
+  return isAnchorageDuesItem(item) && decision !== 'include' ? 0 : amount;
+}
