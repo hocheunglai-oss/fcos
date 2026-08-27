@@ -1,5 +1,35 @@
 public class StemTriggerHandler {
 
+    public static void validateBuyerBrokerSelection(List<STEM__c> stems, Map<Id, STEM__c> oldStemMap) {
+        Set<Id> changedBrokerIds = new Set<Id>();
+        for (STEM__c stem : stems) {
+            STEM__c oldStem = oldStemMap == null ? null : oldStemMap.get(stem.Id);
+            if (stem.Buyer_Broker__c != null
+                && (oldStem == null || stem.Buyer_Broker__c != oldStem.Buyer_Broker__c)) {
+                changedBrokerIds.add(stem.Buyer_Broker__c);
+            }
+        }
+        if (changedBrokerIds.isEmpty()) return;
+
+        Map<Id, Account> brokers = new Map<Id, Account>([
+            SELECT Id, RecordTypeId, Inactive_Suspended__c, Is_Broker__c
+            FROM Account
+            WHERE Id IN :changedBrokerIds
+        ]);
+        for (STEM__c stem : stems) {
+            STEM__c oldStem = oldStemMap == null ? null : oldStemMap.get(stem.Id);
+            if (stem.Buyer_Broker__c == null
+                || (oldStem != null && stem.Buyer_Broker__c == oldStem.Buyer_Broker__c)) {
+                continue;
+            }
+            Account broker = brokers.get(stem.Buyer_Broker__c);
+            if (broker == null || broker.Inactive_Suspended__c == true
+                || (broker.RecordTypeId != FCBStatic.BROKER_ACCOUNT_RT_ID && broker.Is_Broker__c != true)) {
+                stem.Buyer_Broker__c.addError('Choose an active Account that is a Broker or has Is Broker selected.');
+            }
+        }
+    }
+
     public static void updateVesselAndPort(List<STEM__c> stemList, Map<Id, STEM__c> oldStemMap) {
         Id originatedRecordTypeId = Schema.SObjectType.STEM__c.getRecordTypeInfosByName().get('Originated').getRecordTypeId();
         Id stemChargeRecordTypeId = Schema.SObjectType.STEM_Extra_Cost__c.getRecordTypeInfosByName().get('STEM Charge').getRecordTypeId();

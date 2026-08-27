@@ -6,6 +6,7 @@ trigger StemTrigger on STEM__c(before insert, before update, after insert, after
         StemTriggerHandler.createMailingRecord(Trigger.new);
     }
     if((Trigger.isUpdate || Trigger.isInsert) && Trigger.IsBefore){
+        StemTriggerHandler.validateBuyerBrokerSelection(Trigger.new, Trigger.isUpdate ? Trigger.oldMap : null);
         StemTriggerHandler.setExpectedDeliveryDate(Trigger.new);
         StemTriggerHandler.passBuyersPayTermDate(Trigger.new);
         StemTriggerHandler.setPaymentDelayForHistoricalStem(Trigger.new);

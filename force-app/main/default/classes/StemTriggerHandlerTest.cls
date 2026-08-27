@@ -17,6 +17,37 @@ private class StemTriggerHandlerTest {
     }
 
     @IsTest
+    static void rejectsNewInactiveBuyerBrokerSelection() {
+        Account inactiveBroker = TestDataFactory.createTestAccount('Inactive Broker', 'BROKER', true);
+        inactiveBroker.Inactive_Suspended__c = true;
+        update inactiveBroker;
+        STEM__c stem = [SELECT Id, Buyer_Broker__c FROM STEM__c LIMIT 1];
+        stem.Buyer_Broker__c = inactiveBroker.Id;
+
+        Test.startTest();
+        Database.SaveResult result = Database.update(stem, false);
+        Test.stopTest();
+
+        System.assertEquals(false, result.isSuccess());
+        System.assert(result.getErrors()[0].getMessage().contains('Choose an active Account'));
+    }
+
+    @IsTest
+    static void acceptsActiveIsBrokerAccountOutsideBrokerRecordType() {
+        Account designatedBroker = TestDataFactory.createTestAccount('Buyer Acting As Broker', 'BUYER', false);
+        designatedBroker.Is_Broker__c = true;
+        insert designatedBroker;
+        STEM__c stem = [SELECT Id, Buyer_Broker__c FROM STEM__c LIMIT 1];
+        stem.Buyer_Broker__c = designatedBroker.Id;
+
+        Test.startTest();
+        update stem;
+        Test.stopTest();
+
+        System.assertEquals(designatedBroker.Id, [SELECT Buyer_Broker__c FROM STEM__c WHERE Id = :stem.Id].Buyer_Broker__c);
+    }
+
+    @IsTest
     static void updateVessel() {
         Test.startTest();
         Vessel__c vessel = TestDataFactory.createTestVessel('VesselTest', '9898785', null, true);
