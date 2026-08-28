@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Master_Contract_Source__c</fullName>
+    <defaultValue>false</defaultValue>
+    <description>Identifies an Originated STEM created from an approved FCOS Master Contract delivery.</description>
+    <label>Master Contract Source</label>
+    <type>Checkbox</type>
+</CustomField>

@@ -1,10 +1,13 @@
-import { Fragment, useEffect, useMemo, useState } from 'react';
-import { AlertCircle, BookOpen, CheckCircle2, CircleDollarSign, ExternalLink, Eye, FileCheck2, Loader2, RefreshCw, Search, Send, ShieldCheck, Upload, X } from 'lucide-react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { AlertCircle, BookOpen, CheckCircle2, CircleDollarSign, ExternalLink, Eye, FileCheck2, Link2, Loader2, Plus, RefreshCw, Search, Send, ShieldCheck, Upload, X } from 'lucide-react';
 import { format } from 'date-fns';
 import { appClient } from '@/api/appClient';
 import PageHeader from '@/components/common/PageHeader';
+import PageMethodology from '@/components/common/PageMethodology';
+import DataStatus from '@/components/common/DataStatus';
 import StateBlock from '@/components/common/StateBlock';
 import TableShell from '@/components/common/TableShell';
+import StemDetailLink from '@/components/common/StemDetailLink';
 import StemDetailModal from '@/components/dashboard/StemDetailModal';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -21,7 +24,10 @@ import {
   zeroBalanceNotRequiredEligibility,
 } from '@/lib/disputeWorkflowDefaults';
 import { DISPUTE_BUYER_CLOSE_REASONS, DISPUTE_SUPPLIER_CLOSE_REASONS } from '@/lib/disputeWorkflowOptions';
+import { DISPUTE_WORKFLOW_METHODOLOGY } from '@/lib/pageMethodologies';
+import { useAuth } from '@/lib/AuthContext';
 import { cn } from '@/lib/utils';
+import { useNavigationAwareRequest } from '@/hooks/useNavigationAwareRequest';
 
 const ACTIVE_STAGES = ['Draft', 'Pending Approval', 'Revision Requested', 'Rejected', 'Approved - Pending Accounting', 'Accounting In Progress', 'Settled - Ready to Close', 'Closed'];
 const DISPUTE_DELIVERY_DATE_MIN = '2026-01-01';
@@ -70,6 +76,8 @@ const DEFAULT_ACTION = {
   requiresAttachment: false,
   accountingStatus: 'Pending Accounting',
 };
+
+const newOperationId = () => globalThis.crypto?.randomUUID?.() || `${Date.now()}-0000-4000-8000-${Math.random().toString(16).slice(2, 14).padEnd(12, '0')}`;
 
 const fmtMoney = (value) => {
   const number = numericValue(value);
@@ -270,7 +278,7 @@ function Metric({ label, value, tone = 'default' }) {
   return (
     <div className="rounded-xl border border-border bg-card p-4">
       <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
-      <p className={`mt-1 font-dm text-2xl font-bold ${toneClass}`}>{value}</p>
+      <p className={`mt-1 font-ui text-2xl font-semibold ${toneClass}`}>{value}</p>
     </div>
   );
 }
@@ -803,7 +811,7 @@ function WorkflowRulesModal({ open, onClose, capabilities }) {
               <section><h3 className="font-semibold text-foreground">Party identity rules</h3><div className="mt-2 space-y-2 text-muted-foreground"><p>Traders select at least one Account from the STEM buyer, line-item suppliers, or extra-cost suppliers.</p><p>Cancelled line and extra-cost items remain eligible. Repeated supplier IDs with different payment terms count once, while different Account IDs remain separate.</p><p>Party identity and workflow instructions are stored in Supabase and revalidated against Salesforce Account lookups.</p></div></section>
               <section><h3 className="font-semibold text-foreground">Commercial outcome and payment-state rules</h3><div className="mt-2 space-y-2 text-muted-foreground"><p>The trader enters an amount only after a buyer credit note or supplier recovery is commercially agreed. The invoice currency is read from Salesforce; it is selectable only when the same supplier has invoices in more than one currency.</p><p>Each supplier invoice is shown as Unpaid, Partly paid, or Paid. FCOS allocates the approved supplier recovery oldest invoice first, subject to trader edits and server revalidation.</p><p>The unpaid portion becomes an urgent Do not pay instruction as soon as the draft is saved. Finance may acknowledge that hold before approval, but cannot settle or release it until approval. Later supplier payments automatically move value from Do not pay to Get back paid amount without changing the approved commercial total.</p></div></section>
               <section><h3 className="font-semibold text-foreground">Refund, offset, and evidence</h3><div className="mt-2 space-y-2 text-muted-foreground"><p>After approval, Finance selects cash refund from the supplier or an offset against an eligible open invoice for the same supplier Account and currency. FCOS only creates instructions and suggestions; it never creates Salesforce payments, refunds, credit notes, or offsets.</p><p>Settled requires the settlement date and either a supplier credit note/supporting document linked to the instruction or a Finance reference. Documents remain stored in Salesforce Files and can optionally link to an invoice instruction.</p><p>The editable default name is the Hong Kong date plus From/To Buyer/Supplier. Duplicate names on the same STEM receive -1, -2, and so on.</p></div></section>
-              <section><h3 className="font-semibold text-foreground">Closure rules</h3><div className="mt-2 space-y-2 text-muted-foreground"><p>Use Close dispute with supplier when no supplier recovery is required; select a close reason and balance-payment instruction instead of entering zero. FCOS prefills No Balance Payment when that supplier's payable balance is zero. Use Close dispute with buyer when no buyer credit note is required.</p><p>When the buyer receivable balance is zero, FCOS prefills Full payment received from buyer for either closure outcome. These are editable defaults; the trader remains responsible for confirming the actual closure terms.</p><p>Finance may mark a no-credit-note buyer closure or no-recovery supplier closure Not Required without a reason when that exact dispute leg's latest Salesforce balance is 0.00. FCOS rechecks the buyer receivable or exact supplier Account payable balance when saving; all other Not Required updates still need an explanation.</p><p>Every commercial outcome that was added must be Settled or Not Required. Every generated supplier invoice instruction must also be Settled or Not Required. All required documents must remain linked and a final closure note is mandatory.</p><p>Existing legacy supplier actions with no commercial amount remain blocked until corrected. Closure succeeds only after the current Salesforce party structure is revalidated and Salesforce Dispute Status is written back as Closed.</p></div></section>
+              <section><h3 className="font-semibold text-foreground">Closure rules</h3><div className="mt-2 space-y-2 text-muted-foreground"><p>Use Close dispute with supplier when no supplier recovery is required; select a close reason and balance-payment instruction instead of entering zero. FCOS prefills No Balance Payment when that supplier's payable balance is zero. Use Close dispute with buyer when no buyer credit note is required.</p><p>When the buyer receivable balance is zero, FCOS prefills Full payment received from buyer for either closure outcome. These are editable defaults; the trader remains responsible for confirming the actual closure terms.</p><p>UOC opened means the positive debt must exist as an Agreed Compensation claim for the exact dispute-party Account. The claim may be linked after submission or approval, but final closure is blocked until an open claim was selected or created and revalidated. Later recovery may close the linked claim without invalidating the original link.</p><p>Finance may mark a no-credit-note buyer closure or no-recovery supplier closure Not Required without a reason when that exact dispute leg's latest Salesforce balance is 0.00. FCOS rechecks the buyer receivable or exact supplier Account payable balance when saving; all other Not Required updates still need an explanation.</p><p>Every commercial outcome that was added must be Settled or Not Required. Every generated supplier invoice instruction must also be Settled or Not Required. All required documents must remain linked and a final closure note is mandatory.</p><p>Existing legacy supplier actions with no commercial amount remain blocked until corrected. Closure succeeds only after the current Salesforce party structure is revalidated and Salesforce Dispute Status is written back as Closed.</p></div></section>
               <section><h3 className="font-semibold text-foreground">Salesforce status values</h3><p className="mt-2 text-muted-foreground">No Dispute, Open - Trader Review, Pending Approval, Revision Requested, Rejected, Approved - Pending Accounting, Accounting In Progress, Settled - Ready to Close, Closed.</p></section>
             </TabsContent>
           </Tabs>
@@ -1193,6 +1201,97 @@ function SupplierAmountAmendModal({ action, stem, open, onClose, onSaved }) {
   return <Dialog open={open} onOpenChange={(nextOpen) => { if (!nextOpen && !busy) onClose(); }}><DialogContent className="sm:max-w-xl"><DialogHeader><DialogTitle>{missingAmount ? 'Record supplier dispute amount' : 'Convert to invoice instructions'}</DialogTitle></DialogHeader><div className="space-y-4 py-2"><p className="text-sm text-muted-foreground">{missingAmount ? 'This existing supplier action needs an approved recovery amount before it can proceed. Adding a previously missing amount to an approved workflow requires approval again.' : 'This converts the unchanged legacy supplier amount into invoice-level Do not pay and Get back paid amount instructions without changing the approved commercial total.'}</p><div className="grid gap-3 sm:grid-cols-2"><div className="space-y-1.5"><Label>Dispute amount</Label><Input type="number" min="0" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} /></div><div className="space-y-1.5"><Label>Currency</Label><Input value={currencyIsoCode} maxLength={3} onChange={(event) => setCurrencyIsoCode(event.target.value.toUpperCase())} className="uppercase" /></div></div><div className="grid gap-2 rounded-lg border border-border bg-muted/20 p-3 text-sm sm:grid-cols-2"><div>Do not pay <span className="float-right font-semibold tabular-nums">{fmtMoney(preview.totalDoNotPay)}</span></div><div>Get back paid amount <span className="float-right font-semibold tabular-nums">{fmtMoney(preview.totalGetBackPaid)}</span></div></div><div className="space-y-1.5"><Label>Explanation</Label><Textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Required when the amount is zero" /></div>{error && <div className="rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}</div><div className="flex justify-end gap-2"><Button variant="outline" onClick={onClose} disabled={busy}>Cancel</Button><Button onClick={save} disabled={busy}>{busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}{missingAmount ? 'Save Amount' : 'Convert'}</Button></div></DialogContent></Dialog>;
 }
 
+function CompensationClaimLinkModal({ action, open, onClose, onLinked, canCreateClaim }) {
+  const [claims, setClaims] = useState([]);
+  const [selectedClaimId, setSelectedClaimId] = useState('');
+  const [actionUpdatedAt, setActionUpdatedAt] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [picOptions, setPicOptions] = useState([]);
+  const [contacts, setContacts] = useState([]);
+  const [claimDraft, setClaimDraft] = useState({ contactId: '__none__', amount: '', deadlineDate: '', pic: '', description: '' });
+
+  const loadClaims = async (preferredClaimId = '') => {
+    if (!action?.id) return;
+    setLoading(true);
+    setError('');
+    const response = await appClient.functions.invoke('disputeWorkflowCompensationClaims', { actionId: action.id });
+    setLoading(false);
+    if (response.data?.error) return setError(response.data.error);
+    setClaims(response.data.claims || []);
+    setActionUpdatedAt(response.data.actionUpdatedAt || action.updatedAt || '');
+    const desired = preferredClaimId || action.linkedAgreedCompensationId || '';
+    setSelectedClaimId((response.data.claims || []).some((claim) => claim.claimId === desired) ? desired : '');
+  };
+
+  useEffect(() => {
+    if (!open || !action?.id) return;
+    setCreating(false);
+    setClaimDraft({ contactId: '__none__', amount: '', deadlineDate: '', pic: '', description: '' });
+    loadClaims();
+  }, [open, action?.id]);
+
+  const beginCreate = async () => {
+    setBusy(true);
+    setError('');
+    const [bootstrap, contactResponse] = await Promise.all([
+      appClient.functions.invoke('unofficialCompensationOptions', { mode: 'bootstrap' }),
+      appClient.functions.invoke('unofficialCompensationOptions', { mode: 'contacts', accountId: action.partyAccountId }),
+    ]);
+    setBusy(false);
+    if (bootstrap.data?.error || contactResponse.data?.error) return setError(bootstrap.data?.error || contactResponse.data?.error);
+    if (!(bootstrap.data.accounts || []).some((account) => account.accountId === action.partyAccountId)) return setError('Only an active Salesforce Account can receive a new claim. Select an existing historical claim if appropriate.');
+    setPicOptions(bootstrap.data.picOptions || []);
+    setContacts(contactResponse.data.contacts || []);
+    setCreating(true);
+  };
+
+  const createClaim = async () => {
+    setBusy(true);
+    setError('');
+    const response = await appClient.functions.invoke('unofficialCompensationClaimCreate', {
+      operationId: newOperationId(),
+      accountId: action.partyAccountId,
+      contactId: claimDraft.contactId === '__none__' ? null : claimDraft.contactId,
+      amount: Number(claimDraft.amount),
+      deadlineDate: claimDraft.deadlineDate,
+      pic: claimDraft.pic,
+      description: claimDraft.description,
+    });
+    setBusy(false);
+    if (response.data?.error) return setError(response.data.error);
+    setCreating(false);
+    await loadClaims(response.data.claim?.claimId);
+  };
+
+  const saveLink = async (claimId) => {
+    setBusy(true);
+    setError('');
+    const response = await appClient.functions.invoke('disputeWorkflowCompensationClaimLink', {
+      operationId: newOperationId(),
+      actionId: action.id,
+      claimId: claimId || null,
+      expectedActionUpdatedAt: actionUpdatedAt,
+    });
+    setBusy(false);
+    if (response.data?.error) return setError(response.data.error);
+    await onLinked(response.data);
+    onClose();
+  };
+
+  return <Dialog open={open} onOpenChange={(nextOpen) => { if (!nextOpen && !busy) onClose(); }}><DialogContent className="max-h-[88vh] max-w-2xl overflow-y-auto"><DialogHeader><DialogTitle>Agreed Compensation Claim</DialogTitle><DialogDescription>UOC opened means the positive debt is recorded as an Agreed Compensation claim. Select an open claim for the exact dispute-party Account.</DialogDescription></DialogHeader>
+    {action && <div className="rounded-md border bg-muted/30 px-4 py-3 text-sm"><div className="font-semibold">{action.partyName}</div><div className="text-muted-foreground">{action.partySide === 'buyer' ? 'Buyer' : 'Supplier'} · UOC opened</div></div>}
+    {loading ? <div className="flex items-center justify-center py-8 text-sm text-muted-foreground"><Loader2 className="mr-2 h-4 w-4 animate-spin" />Loading open claims</div> : <div className="space-y-4">
+      {!creating && <><div className="space-y-1.5"><Label>Open claim</Label><Select value={selectedClaimId} onValueChange={setSelectedClaimId}><SelectTrigger><SelectValue placeholder="Select an open claim" /></SelectTrigger><SelectContent>{claims.map((claim) => <SelectItem key={claim.claimId} value={claim.claimId}>{claim.currencyIsoCode} {fmtAmount(claim.amount)} · due {fmtDate(claim.deadlineDate)} · {claim.contactName || 'No Contact'} · PIC {claim.pic || 'not set'}</SelectItem>)}</SelectContent></Select>{!claims.length && <p className="text-xs text-amber-700">No open claim exists for this Account.</p>}</div>{canCreateClaim && <Button type="button" variant="outline" size="sm" className="gap-2" onClick={beginCreate} disabled={busy}><Plus className="h-3.5 w-3.5" />Create Claim</Button>}</>}
+      {creating && <div className="space-y-3 rounded-md border p-4"><div className="font-semibold">Create claim for {action.partyName}</div><div className="grid gap-3 sm:grid-cols-2"><div><Label>Contact (optional)</Label><Select value={claimDraft.contactId} onValueChange={(value) => setClaimDraft((current) => ({ ...current, contactId: value }))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="__none__">No Contact</SelectItem>{contacts.map((contact) => <SelectItem key={contact.contactId} value={contact.contactId}>{contact.contactName}</SelectItem>)}</SelectContent></Select></div><div><Label>Salesforce PIC</Label><Select value={claimDraft.pic} onValueChange={(value) => setClaimDraft((current) => ({ ...current, pic: value }))}><SelectTrigger><SelectValue placeholder="Select PIC" /></SelectTrigger><SelectContent>{picOptions.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select></div><div><Label>Agreed amount</Label><Input type="number" min="0.01" step="0.01" value={claimDraft.amount} onChange={(event) => setClaimDraft((current) => ({ ...current, amount: event.target.value }))} /></div><div><Label>Deadline</Label><Input type="date" value={claimDraft.deadlineDate} onChange={(event) => setClaimDraft((current) => ({ ...current, deadlineDate: event.target.value }))} /></div><div className="sm:col-span-2"><Label>Description (optional)</Label><Textarea value={claimDraft.description} onChange={(event) => setClaimDraft((current) => ({ ...current, description: event.target.value }))} /></div></div><div className="flex justify-end gap-2"><Button type="button" variant="outline" onClick={() => setCreating(false)} disabled={busy}>Cancel</Button><Button type="button" onClick={createClaim} disabled={busy || !(Number(claimDraft.amount) > 0) || !claimDraft.deadlineDate || !claimDraft.pic}>{busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Create in Salesforce</Button></div></div>}
+    </div>}
+    {error && <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">{error}</div>}
+    {!creating && <div className="flex flex-wrap justify-between gap-2"><div>{action?.linkedAgreedCompensationId && <Button type="button" variant="outline" onClick={() => saveLink(null)} disabled={busy}>Remove Link</Button>}</div><div className="flex gap-2"><Button type="button" variant="outline" onClick={onClose} disabled={busy}>Cancel</Button><Button type="button" onClick={() => saveLink(selectedClaimId)} disabled={busy || !selectedClaimId}>{busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Link Claim</Button></div></div>}
+  </DialogContent></Dialog>;
+}
+
 function WorkflowDecisionModal({ mode, open, onClose, onConfirm, busy }) {
   const [note, setNote] = useState('');
   const config = {
@@ -1200,6 +1299,7 @@ function WorkflowDecisionModal({ mode, open, onClose, onConfirm, busy }) {
     revision: ['Request Revision', 'Revision reason', 'Return to Trader'],
     reject: ['Reject Instructions', 'Rejection reason', 'Reject'],
     close: ['Close Dispute', 'Final closure note', 'Close Dispute'],
+    'accept-external': ['Accept Salesforce Closure', 'Mandatory acceptance reason', 'Accept and Close FCOS'],
   }[mode] || ['Workflow Decision', 'Note', 'Confirm'];
   useEffect(() => { if (open) setNote(''); }, [open, mode]);
   const requiresNote = mode !== 'approve';
@@ -1215,6 +1315,7 @@ function WorkflowDecisionModal({ mode, open, onClose, onConfirm, busy }) {
 }
 
 function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
+  const { hasModuleAccess } = useAuth();
   const workflow = workflowFromRow(stem);
   const [caseRow, setCaseRow] = useState(workflow.case);
   const [parties, setParties] = useState(workflow.parties || []);
@@ -1231,6 +1332,7 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
   const [accountingAction, setAccountingAction] = useState(null);
   const [supplierInstruction, setSupplierInstruction] = useState(null);
   const [amendAction, setAmendAction] = useState(null);
+  const [compensationAction, setCompensationAction] = useState(null);
   const [previewDocument, setPreviewDocument] = useState(null);
   const [decisionMode, setDecisionMode] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -1300,13 +1402,15 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
   const candidateSchemaValid = partyRegistry?.candidateSchemaValid === true;
   const selectionValid = legacyReadOnly || selectedAccountIds.length > 0;
   const partiesValid = legacyReadOnly || (candidateSchemaValid && selectionValid);
-  const canEdit = !legacyReadOnly && editableWorkflow(caseRow) && candidateSchemaValid;
+  const canEdit = !legacyReadOnly && !externalClosure && editableWorkflow(caseRow) && candidateSchemaValid;
   const documentedActionIds = new Set(documents.map((document) => document.actionId).filter(Boolean));
   const missingRequiredDocuments = actions.filter((action) => action.requiresAttachment && (!action.id || !documentedActionIds.has(action.id)));
   const supplierAmountRequired = actions.filter((action) => action.partyType === 'supplier' && action.supplierDisputeAmountRequired);
   const supplierConversionRequired = actions.filter((action) => action.partyType === 'supplier' && action.supplierInstructionConversionRequired);
+  const uocActions = actions.filter((action) => String(action.closeReason || '').trim().toLowerCase() === 'uoc opened');
+  const missingUocClaimLinks = uocActions.filter((action) => !action.linkedAgreedCompensationId);
   const canSubmit = canEdit && selectionValid && actions.length > 0 && missingRequiredDocuments.length === 0 && supplierAmountRequired.length === 0 && supplierConversionRequired.length === 0 && !reconciliationError;
-  const canReview = !legacyReadOnly && capabilities?.canApprove && caseRow?.approvalStatus === 'Pending Approval';
+  const canReview = !legacyReadOnly && !externalClosure && capabilities?.canApprove && caseRow?.approvalStatus === 'Pending Approval';
   const canApprove = partiesValid
     && canReview
     && missingRequiredDocuments.length === 0
@@ -1315,7 +1419,8 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
     && !reconciliationError;
   const canAccount = capabilities?.canAccount && caseRow?.approvalStatus === 'Approved' && caseRow?.workflowStatus !== 'Closed';
   const canAcknowledgeUrgentHold = capabilities?.canAccount && caseRow?.workflowStatus !== 'Closed';
-  const canClose = partiesValid && capabilities?.canClose && caseRow?.workflowStatus === 'Settled - Ready to Close' && !reconciliationError;
+  const canClose = partiesValid && !externalClosure && capabilities?.canClose && caseRow?.workflowStatus === 'Settled - Ready to Close' && !reconciliationError && missingUocClaimLinks.length === 0;
+  const canAcceptExternalClosure = partiesValid && externalClosure && capabilities?.canAcceptExternalClosure && caseRow?.workflowStatus === 'Settled - Ready to Close' && !reconciliationError && missingUocClaimLinks.length === 0;
   const canManageDocuments = !legacyReadOnly
     && caseRow?.workflowStatus !== 'Closed'
     && (canEdit || canAccount || capabilities?.canApprove);
@@ -1487,10 +1592,21 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
     if (decisionMode === 'revision') result = await invokeWorkflow('disputeWorkflowReject', { caseId: caseRow.id, reason: decisionNote, revisionRequested: true });
     if (decisionMode === 'reject') result = await invokeWorkflow('disputeWorkflowReject', { caseId: caseRow.id, reason: decisionNote, revisionRequested: false });
     if (decisionMode === 'close') result = await invokeWorkflow('disputeWorkflowClose', { caseId: caseRow.id, note: decisionNote });
+    if (decisionMode === 'accept-external') result = await invokeWorkflow('disputeWorkflowAcceptExternalClosure', { caseId: caseRow.id, reason: decisionNote });
     if (result) setDecisionMode(null);
   };
   const documentUploaded = async (document) => {
     setDocuments((prev) => [document, ...prev.filter((item) => item.id !== document.id)]);
+    await onSaved?.(stem.Id);
+  };
+  const compensationClaimLinked = async (result) => {
+    setActions((current) => current.map((action) => action.id === result.actionId ? {
+      ...action,
+      linkedAgreedCompensationId: result.claim?.claimId || null,
+      linkedCompensationSnapshot: result.claim || {},
+      linkedCompensationAt: result.updatedAt || new Date().toISOString(),
+      updatedAt: result.updatedAt || action.updatedAt,
+    } : action));
     await onSaved?.(stem.Id);
   };
 
@@ -1529,10 +1645,12 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
             <div className="flex gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
               <div>
-                <div className="font-semibold">Closed directly in Salesforce.</div>
+                <div className="font-semibold">Salesforce was closed outside FCOS.</div>
                 <div>
-                  FCOS is showing this case as read-only Closed. Its preserved internal stage is {caseRow.internalWorkflowStatus || 'Draft'}.
-                  Reopen the dispute in Salesforce to continue that workflow.
+                  FCOS has preserved the internal stage {caseRow.internalWorkflowStatus || caseRow.workflowStatus || 'Draft'}.
+                  {caseRow.approvalStatus === 'Approved'
+                    ? ' Finance can complete every accounting action and instruction here. An Administrator or the General Manager must then accept the external closure with a reason.'
+                    : ' Reopen the dispute in Salesforce before continuing commercial preparation or approval.'}
                 </div>
               </div>
             </div>
@@ -1548,6 +1666,9 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
           )}
           {supplierConversionRequired.length > 0 && (
             <div className="flex gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /><div><span className="font-semibold">Invoice instructions required.</span> Convert each legacy supplier action so Finance can work from the current supplier invoice balances.</div></div>
+          )}
+          {missingUocClaimLinks.length > 0 && (
+            <div className="flex gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /><div><span className="font-semibold">Agreed Compensation claim required before closure.</span> Link an open claim for each exact buyer or supplier Account marked UOC opened. Submission and approval may continue while the claim is being arranged.</div></div>
           )}
           {!externalClosure && caseRow?.salesforceWritebackStatus && caseRow.salesforceWritebackStatus !== 'not_started' && (
             <div className={cn('rounded-lg border p-3 text-xs', caseRow.salesforceWritebackStatus === 'success' ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-amber-200 bg-amber-50 text-amber-900')}>
@@ -1641,6 +1762,11 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
                         {action.requiresAttachment && <div className="text-amber-700">Attachment required</div>}
                         {action.supplierDisputeAmountRequired && <div className="font-medium text-amber-700">Supplier dispute amount required</div>}
                         {action.supplierInstructionConversionRequired && <div className="font-medium text-amber-700">Convert to invoice instructions</div>}
+                        {String(action.closeReason || '').trim().toLowerCase() === 'uoc opened' && (
+                          action.linkedAgreedCompensationId
+                            ? <div className="mt-1 font-medium text-emerald-700">Claim linked: {action.linkedCompensationSnapshot?.contactName || 'No Contact'} · {action.linkedCompensationSnapshot?.currencyIsoCode || 'USD'} {fmtAmount(action.linkedCompensationSnapshot?.amount)}</div>
+                            : <div className="mt-1 font-medium text-amber-700">Agreed Compensation claim not linked</div>
+                        )}
                         {action.id && <div className="text-[11px] text-muted-foreground">{documents.filter((document) => document.actionId === action.id).length} document(s)</div>}
                       </td>
                       <td className="px-3 py-2">
@@ -1654,6 +1780,7 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
                         <div className="flex justify-end gap-1.5">
                           {partiesValid && canManageDocuments && (canEdit || action.id) && <Button type="button" variant="outline" size="sm" onClick={() => openUpload({ party: { id: action.partyId, accountId: action.partyAccountId, name: action.partyName }, partySide: action.partySide || action.partyType, action })} disabled={busy} className="gap-1.5" title={action.id ? 'Upload document' : 'Save draft and upload document'}><Upload className="h-3.5 w-3.5" /> Upload</Button>}
                           {!legacyReadOnly && caseRow?.workflowStatus !== 'Closed' && action.partyType === 'supplier' && LEGACY_SUPPLIER_FINANCIAL_ACTIONS.has(action.actionType) && action.id && <Button type="button" variant="outline" size="sm" onClick={() => setAmendAction(action)} disabled={busy}>{action.supplierDisputeAmountRequired ? 'Record supplier dispute amount' : 'Convert to invoice instructions'}</Button>}
+                          {!legacyReadOnly && caseRow?.workflowStatus !== 'Closed' && action.id && String(action.closeReason || '').trim().toLowerCase() === 'uoc opened' && <Button type="button" variant="outline" size="sm" onClick={() => setCompensationAction(action)} disabled={busy} className="gap-1.5"><Link2 className="h-3.5 w-3.5" />{action.linkedAgreedCompensationId ? 'Change Claim' : 'Link Claim'}</Button>}
                           {canEdit && <Button type="button" variant="outline" size="sm" onClick={() => removeAction(index)} disabled={busy}>Remove</Button>}
                           {canAccount && action.id && action.actionType !== 'resolve_supplier_dispute' && <Button type="button" variant="outline" size="sm" onClick={() => setAccountingAction(action)} disabled={busy}>Update</Button>}
                           {!canEdit && !canAccount && !canManageDocuments && '—'}
@@ -1755,7 +1882,8 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
             {canReview && <Button type="button" variant="outline" onClick={() => setDecisionMode('revision')} disabled={busy}>Request Revision</Button>}
             {canReview && <Button type="button" variant="outline" onClick={() => setDecisionMode('reject')} disabled={busy}>Reject</Button>}
             {canApprove && <Button type="button" onClick={() => setDecisionMode('approve')} disabled={busy} className="gap-2"><ShieldCheck className="h-4 w-4" /> Approve</Button>}
-            {capabilities?.canClose && caseRow?.workflowStatus === 'Settled - Ready to Close' && <Button type="button" onClick={() => setDecisionMode('close')} disabled={busy || !canClose} title={!canClose && reconciliationError ? 'Resolve supplier payment reconciliation before closure' : undefined} className="gap-2"><CheckCircle2 className="h-4 w-4" /> Close Dispute</Button>}
+            {!externalClosure && capabilities?.canClose && caseRow?.workflowStatus === 'Settled - Ready to Close' && <Button type="button" onClick={() => setDecisionMode('close')} disabled={busy || !canClose} title={!canClose ? reconciliationError ? 'Resolve supplier payment reconciliation before closure' : missingUocClaimLinks.length ? 'Link every required Agreed Compensation claim before closure' : 'Complete the closure requirements' : undefined} className="gap-2"><CheckCircle2 className="h-4 w-4" /> Close Dispute</Button>}
+            {externalClosure && capabilities?.canAcceptExternalClosure && caseRow?.workflowStatus === 'Settled - Ready to Close' && <Button type="button" onClick={() => setDecisionMode('accept-external')} disabled={busy || !canAcceptExternalClosure} className="gap-2"><CheckCircle2 className="h-4 w-4" /> Accept Salesforce Closure</Button>}
           </div>
         </div>
       </DialogContent>
@@ -1764,6 +1892,7 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
     <AccountingUpdateModal action={accountingAction} stem={stem} open={Boolean(accountingAction)} onClose={() => setAccountingAction(null)} onSaved={refreshAfter} />
     <SupplierInstructionModal instruction={supplierInstruction} stem={stem} approvalStatus={caseRow?.approvalStatus} open={Boolean(supplierInstruction)} onClose={() => setSupplierInstruction(null)} onSaved={refreshAfter} />
     <SupplierAmountAmendModal action={amendAction} stem={stem} open={Boolean(amendAction)} onClose={() => setAmendAction(null)} onSaved={refreshAfter} />
+    <CompensationClaimLinkModal action={compensationAction} open={Boolean(compensationAction)} onClose={() => setCompensationAction(null)} onLinked={compensationClaimLinked} canCreateClaim={hasModuleAccess('unofficial_compensation')} />
     <DocumentPreviewModal document={previewDocument} onClose={() => setPreviewDocument(null)} />
     <WorkflowDecisionModal mode={decisionMode} open={Boolean(decisionMode)} onClose={() => setDecisionMode(null)} onConfirm={confirmDecision} busy={busy} />
     </>
@@ -1780,10 +1909,12 @@ function Summary({ label, value, align = 'left', strong = false, tone = 'default
 }
 
 export default function DisputeWorkflow() {
+  const { request: requestDisputes } = useNavigationAwareRequest('collaboration');
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [lastRefresh, setLastRefresh] = useState(null);
+  const [responseMeta, setResponseMeta] = useState(null);
   const [search, setSearch] = useState('');
   const [selectedStages, setSelectedStages] = useState(['Draft', 'Pending Approval', 'Revision Requested', 'Approved - Pending Accounting', 'Accounting In Progress', 'Settled - Ready to Close']);
   const [managedStem, setManagedStem] = useState(null);
@@ -1791,34 +1922,55 @@ export default function DisputeWorkflow() {
   const [capabilities, setCapabilities] = useState({ role: 'user', canPrepare: true, canApprove: false, canAccount: false, canClose: false, canViewAllRules: true });
   const [rulesOpen, setRulesOpen] = useState(false);
   const [fieldWarning, setFieldWarning] = useState('');
+  const deepLinkedStemOpened = useRef(false);
 
   const loadRows = async (options = {}) => {
     setLoading(true);
     setError(null);
-    const res = await appClient.functions.invoke('disputeWorkflowList', { limit: 10000 }, { cache: true, force: options.force });
-    if (res.data?.error) {
-      setError(res.data.error);
-      setRows([]);
-      setLoading(false);
-      return [];
-    }
-    const nextRows = res.data?.rows || [];
-    setRows(nextRows);
-    setCapabilities(res.data?.capabilities || {
-      role: 'user',
-      canPrepare: true,
-      canApprove: Boolean(res.data?.isDisputeAdmin),
-      canAccount: Boolean(res.data?.isDisputeAccounting),
-      canClose: Boolean(res.data?.isDisputeAccounting),
-      canViewAllRules: true,
+    let nextRows = [];
+    await requestDisputes({
+      name: 'disputeWorkflowList',
+      payload: { limit: 10000 },
+      force: options.force,
+      apply: (res) => {
+        setResponseMeta(res.data?.error ? { ...res.meta, cacheStatus: 'UNAVAILABLE' } : res.meta);
+        if (res.data?.error) {
+          setError(res.data.error);
+          setRows([]);
+          nextRows = [];
+          return;
+        }
+        nextRows = res.data?.rows || [];
+        setError(null);
+        setRows(nextRows);
+        setCapabilities(res.data?.capabilities || {
+          role: 'user',
+          canPrepare: true,
+          canApprove: Boolean(res.data?.isDisputeAdmin),
+          canAccount: Boolean(res.data?.isDisputeAccounting),
+          canClose: Boolean(res.data?.isDisputeAccounting),
+          canAcceptExternalClosure: false,
+          canViewAllRules: true,
+        });
+        setFieldWarning(res.data?.fieldWarning || '');
+        setLastRefresh(new Date(res.meta?.cachedAt || Date.now()));
+      },
     });
-    setFieldWarning(res.data?.fieldWarning || '');
-    setLastRefresh(new Date());
     setLoading(false);
     return nextRows;
   };
 
   useEffect(() => { loadRows(); }, []);
+
+  useEffect(() => {
+    if (deepLinkedStemOpened.current || !rows.length) return;
+    const stemId = new URLSearchParams(window.location.search).get('stem');
+    if (!stemId) return;
+    const matched = rows.find((row) => row.Id === stemId);
+    if (!matched) return;
+    deepLinkedStemOpened.current = true;
+    setManagedStem(matched);
+  }, [rows]);
 
   const selectedStageSet = useMemo(() => new Set(selectedStages), [selectedStages]);
   const filteredRows = useMemo(() => {
@@ -1871,16 +2023,22 @@ export default function DisputeWorkflow() {
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden p-4 md:p-5">
+    <div className="workspace-operations flex h-full min-h-0 flex-col gap-4 overflow-hidden p-4 md:p-5">
       <PageHeader
         icon={FileCheck2}
         eyebrow="Dispute workflow"
         title="Dispute Workflow"
         description="Trader instructions, approval, accounting settlement, Salesforce documents, and closure."
         className="shrink-0"
-        meta={lastRefresh ? `Last updated ${format(lastRefresh, 'HH:mm:ss')}` : 'Auto-loaded from Salesforce and Supabase'}
+        meta={(
+          <span className="flex flex-wrap items-center gap-2">
+            <span>{lastRefresh ? `Last updated ${format(lastRefresh, 'HH:mm:ss')}` : 'Auto-loaded from Salesforce and Supabase'}</span>
+            {responseMeta ? <DataStatus meta={responseMeta} label="Workflow data" /> : null}
+          </span>
+        )}
         actions={(
           <div className="flex gap-2">
+            <PageMethodology {...DISPUTE_WORKFLOW_METHODOLOGY} />
             <Button variant="outline" onClick={() => setRulesOpen(true)} className="gap-2"><BookOpen className="h-4 w-4" /> Workflow Rules</Button>
             <Button variant="outline" onClick={() => loadRows({ force: true })} disabled={loading} className="gap-2">
               {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Refresh
@@ -1969,13 +2127,11 @@ export default function DisputeWorkflow() {
                   const legacyReadOnly = workflow.case?.legacyReadOnly === true;
                   const needsPartySelection = !legacyReadOnly && row._Dispute_Parties?.candidateSchemaValid === true && row._Dispute_Parties?.selectionValid !== true;
                   return (
-                    <tr
-                      key={row.Id}
-                      className={cn('cursor-pointer border-b border-border/40 hover:bg-muted/30', index % 2 ? 'bg-muted/10' : '')}
-                      onClick={() => setSelectedStemId(row.Id)}
-                    >
+                    <tr key={row.Id} className={cn('border-b border-border/40 hover:bg-muted/30', index % 2 ? 'bg-muted/10' : '')}>
                       <td className="whitespace-nowrap px-3 py-2.5">
-                        <div className="font-medium text-foreground">{row._Display_Name || row.Name || '—'}</div>
+                        <div>
+                          <StemDetailLink stemId={row.Id} onOpen={setSelectedStemId}>{row._Display_Name || row.Name || '—'}</StemDetailLink>
+                        </div>
                         <div className="mt-0.5 text-[11px] text-muted-foreground">Delivery {fmtDate(row.Delivery_Date__c)}</div>
                       </td>
                       <td className="whitespace-nowrap px-3 py-2.5">

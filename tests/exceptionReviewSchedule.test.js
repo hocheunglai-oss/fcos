@@ -163,12 +163,14 @@ test('live dashboard route and Exception Review UI use the Schedule interface', 
     apiSource.indexOf('async function stemPnlFull'),
   );
   const pageSource = await readFile(new URL('../src/pages/ReviewQueue.jsx', import.meta.url), 'utf8');
+  const classifierSource = await readFile(new URL('../src/lib/exceptionReviewClassifier.js', import.meta.url), 'utf8');
 
   assert.match(liveFunction, /buildExceptionReviewScheduleWhere\(dateWindows\)/);
   assert.match(liveFunction, /_Exception_Schedule: exceptionScheduleMode \? normalizeExceptionSchedule\(stem\) : null/);
   assert.match(liveFunction, /_Has_Uncancelled_Line_Product_Item: stemsWithUncancelledLineProductItems\.has\(stem\.Id\)/);
   assert.match(pageSource, new RegExp(`dateBasis: EXCEPTION_REVIEW_DATE_BASIS`));
-  assert.match(pageSource, /isExceptionPotentialDelay/);
+  assert.match(pageSource, /classifyExceptionReviewStem/);
+  assert.match(classifierSource, /isExceptionPotentialDelay/);
   assert.match(pageSource, /Delivery \/ Schedule/);
   assert.match(pageSource, /Schedule Range/);
   assert.doesNotMatch(pageSource, /Expected_Delivery_Date__c|Expected Delivery/);

@@ -1,0 +1,71 @@
+<template>
+    <template if:true={isModalOpen}>
+        <section role="dialog" tabindex="-1" aria-label="Meaningful description of the modal content" aria-modal="true" aria-describedby="modal-content-id-1" class="slds-modal slds-fade-in-open">
+            <div class="slds-modal__container fixed-modal">
+                <template if:false={actionExecuted}>
+                    <lightning-spinner alternative-text="Loading"></lightning-spinner>
+                </template>
+                <header class="slds-modal__header slds-modal__header_empty">
+                    <button class="slds-button slds-button_icon slds-modal__close slds-button_icon-inverse" title="Close" onclick={closeModal}>
+                        <lightning-icon icon-name="utility:close"
+                                        alternative-text="close"
+                                        variant="inverse"
+                                        size="small" ></lightning-icon>
+                        <span class="slds-assistive-text">Close</span>
+                    </button>
+                </header>
+                <div class="slds-modal__content slds-p-around_medium" id="modal-content-id-1">
+                    <template for:each={inputs} for:item="input">
+                        <template if:false={input.isDisabled}>
+                            <template if:true={input.isHidden}>
+                                 <div class="slds-grid slds-gutters" key={input.id} draggable="true" ondragstart={handleDragStart} ondragover={handleDragOver} ondrop={handleDrop} data-id={input.id}>
+                                    <div class="slds-col slds-size_11-of-12">
+                                        <hr></hr>
+                                    </div>
+                                    <lightning-button onclick={removeInput} data-id={input.id}
+                                        variant="base" title="Remove Input" icon-name="utility:close"
+                                        class="slds-col slds-size_1-of-12 slds-m-top_x-small slds-m-left_small"></lightning-button>
+                                 </div>
+                            </template>
+                            <template if:false={input.isHidden}>
+                                <div key={input.id} class="row-container" data-id={input.id}
+                                    >
+
+                                    <div class={input.topLineClass}></div>
+                                    <div class={input.rowClass}>
+                                        <div class="slds-grid slds-gutters row-content">
+                                            <lightning-input class="slds-col slds-size_4-of-12"
+                                                value={input.label} onchange={handleChangeLabel} data-id={input.id}></lightning-input>
+                                            <lightning-input class="slds-col slds-size_6-of-12"
+                                                value={input.value} onchange={handleChangeValue} data-id={input.id}></lightning-input>
+                                            <lightning-icon icon-name="utility:move" size="x-small" draggable="true"
+                                                class="drag-handle slds-col slds-size_1-of-12 slds-m-top_large" data-id={input.id}
+                                                ondragstart={handleDragStart} ondragover={handleDragOver} ondrop={handleDrop}></lightning-icon>
+                                            <lightning-button icon-name="utility:close" variant="base"
+                                                class="slds-col slds-size_1-of-12 slds-m-top_medium"
+                                                onclick={removeInput} data-id={input.id}></lightning-button>
+                                        </div>
+                                    </div>
+
+                                    <div class={input.bottomLineClass}></div>
+                                </div>
+                            </template>
+                        </template>
+                    </template>
+                    <div class="slds-grid slds-gutters">
+                        <lightning-input class="slds-col slds-size_4-of-12" value={specialTerms.label} onchange={handleChangeSpecialTermLabel}></lightning-input>
+                        <lightning-input-rich-text class="slds-col slds-size_6-of-12 slds-m-top_medium" value={specialTerms.value} onchange={handleChangeSpecialTermValue}></lightning-input-rich-text>
+                    </div>
+                    <lightning-button-icon size="x-small" icon-name="utility:add" variant="brand"
+                                           alternative-text="Add Input" onclick={addNewInput}>
+                    </lightning-button-icon>
+                </div>
+                <footer class="slds-modal__footer">
+                    <button class="slds-button slds-button_neutral" onclick={handlePreviewPDF} title="Preview">Preview</button>
+                    <button class="slds-button slds-button_brand" onclick={handleGeneratePDF} title="Generate">Generate</button>
+                </footer>
+            </div>
+        </section>
+        <div class="slds-backdrop slds-backdrop_open"></div>
+    </template>
+</template>

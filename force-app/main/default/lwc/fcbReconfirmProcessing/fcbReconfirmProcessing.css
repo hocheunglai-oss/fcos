@@ -1,0 +1,357 @@
+:host {
+    display: block;
+}
+
+.reconfirm-shell {
+    display: grid;
+    gap: 1rem;
+    padding: 0.75rem 1rem 1rem;
+    background: #f7f9fb;
+}
+
+.workspace-intro,
+.section-header,
+.stem-group-header,
+.section-heading,
+.summary-list,
+.section-actions,
+.group-counts {
+    display: flex;
+}
+
+.workspace-intro,
+.section-header,
+.stem-group-header {
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+}
+
+.workspace-intro {
+    padding: 0.25rem 0.25rem 0.5rem;
+}
+
+.eyebrow,
+.stem-label,
+.field-label {
+    color: #5f6b7a;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.workspace-title {
+    margin-top: 0.125rem;
+    color: #181818;
+    font-size: 1.125rem;
+    font-weight: 700;
+    line-height: 1.35;
+}
+
+.workspace-description,
+.section-description,
+.item-detail {
+    color: #5f6b7a;
+    line-height: 1.45;
+}
+
+.workspace-description {
+    max-width: 44rem;
+    margin-top: 0.25rem;
+    font-size: 0.8125rem;
+}
+
+.summary-list,
+.section-actions,
+.group-counts {
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.summary-list {
+    justify-content: flex-end;
+}
+
+.summary-pill,
+.count-pill,
+.status-pill,
+.source-pill {
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid #d8dde6;
+    border-radius: 999px;
+    background: #fff;
+    color: #3e4a59;
+    font-size: 0.75rem;
+    font-weight: 600;
+    line-height: 1.2;
+    padding: 0.35rem 0.625rem;
+    white-space: nowrap;
+}
+
+.summary-pill_accent,
+.count-pill_accent {
+    border-color: #b4c9ff;
+    background: #eef4ff;
+    color: #014486;
+}
+
+.section-card {
+    overflow: hidden;
+    border: 1px solid #d8dde6;
+    border-radius: 0.75rem;
+    background: #fff;
+    box-shadow: 0 1px 2px rgba(24, 24, 24, 0.04);
+}
+
+.section-card_accent {
+    border-color: #b4c9ff;
+}
+
+.section-header {
+    padding: 1rem;
+    border-bottom: 1px solid #eef1f6;
+}
+
+.section-heading {
+    min-width: 0;
+    align-items: flex-start;
+    gap: 0.75rem;
+}
+
+.section-icon {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    border-radius: 0.5rem;
+    background: #f0f3f8;
+}
+
+.section-icon_accent {
+    background: #eef4ff;
+}
+
+.section-title {
+    color: #181818;
+    font-size: 0.9375rem;
+    font-weight: 700;
+    line-height: 1.35;
+}
+
+.section-description {
+    max-width: 48rem;
+    margin-top: 0.125rem;
+    font-size: 0.75rem;
+}
+
+.message-grid,
+.stem-list {
+    display: grid;
+    gap: 0.75rem;
+    padding: 0.75rem;
+}
+
+.message-grid {
+    grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+}
+
+.message-card,
+.stem-group {
+    border: 1px solid #e5e9f0;
+    border-radius: 0.625rem;
+    background: #fff;
+}
+
+.message-card {
+    padding: 0.75rem;
+}
+
+.item-heading,
+.stem-name,
+.supplier-name {
+    color: #181818;
+    font-weight: 700;
+}
+
+.item-heading {
+    margin-bottom: 0.5rem;
+    font-size: 0.8125rem;
+}
+
+.stem-group-header {
+    align-items: center;
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid #eef1f6;
+    background: #fafbfc;
+}
+
+.stem-name {
+    margin-top: 0.0625rem;
+    font-size: 0.875rem;
+}
+
+.supplier-list {
+    display: grid;
+}
+
+.cia-row,
+.variable-row {
+    display: grid;
+    align-items: center;
+    gap: 0.75rem 1rem;
+    padding: 0.75rem 1rem;
+    border-top: 1px solid #eef1f6;
+}
+
+.supplier-list > :first-child {
+    border-top: 0;
+}
+
+.cia-row {
+    grid-template-columns: minmax(12rem, 1.7fr) minmax(11rem, 1fr) minmax(10rem, 0.8fr);
+}
+
+.variable-row {
+    grid-template-columns: minmax(12rem, 1.6fr) minmax(12rem, 1.25fr) minmax(13rem, 1.1fr) minmax(9rem, 0.8fr);
+}
+
+.cia-row_dirty,
+.variable-row_dirty {
+    box-shadow: inset 0.1875rem 0 #1b96ff;
+    background: #f8fbff;
+}
+
+.variable-row_required {
+    background: #fbfdff;
+}
+
+.supplier-identity,
+.supplier-trader,
+.requirement-control,
+.supplier-status {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.1875rem;
+}
+
+.supplier-name {
+    overflow-wrap: anywhere;
+    font-size: 0.8125rem;
+}
+
+.item-detail,
+.field-label,
+.field-error {
+    font-size: 0.6875rem;
+}
+
+.field-error,
+.assignment-error {
+    color: #ba0517;
+}
+
+.assignment-resolved {
+    color: #2e844a;
+    font-size: 0.8125rem;
+    font-weight: 600;
+}
+
+.source-pill_agent {
+    border-color: #b4c9ff;
+    background: #eef4ff;
+    color: #014486;
+}
+
+.source-pill_manual {
+    border-color: #f8dca8;
+    background: #fff7e8;
+    color: #8c4b02;
+}
+
+.status-pill_verified {
+    border-color: #a7d8b5;
+    background: #eef9f1;
+    color: #2e844a;
+}
+
+.status-pill_invalidated,
+.status-pill_unresolved {
+    border-color: #f1b4b8;
+    background: #fef1f2;
+    color: #ba0517;
+}
+
+.supplier-status {
+    flex-flow: row wrap;
+    align-items: center;
+}
+
+.section-progress {
+    position: relative;
+    display: flex;
+    min-height: 3rem;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    border-bottom: 1px solid #eef1f6;
+    color: #5f6b7a;
+    font-size: 0.75rem;
+}
+
+.section-progress lightning-spinner {
+    position: relative;
+    width: 1.5rem;
+    height: 1.5rem;
+}
+
+.empty-state {
+    padding: 1.5rem 1rem;
+    color: #5f6b7a;
+    font-size: 0.8125rem;
+    text-align: center;
+}
+
+@media (max-width: 64rem) {
+    .variable-row {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 48rem) {
+    .reconfirm-shell {
+        padding: 0.5rem;
+    }
+
+    .workspace-intro,
+    .section-header,
+    .stem-group-header {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .summary-list,
+    .section-actions,
+    .group-counts {
+        justify-content: flex-start;
+    }
+
+    .message-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .cia-row,
+    .variable-row {
+        grid-template-columns: 1fr;
+    }
+
+    .section-actions lightning-button {
+        flex: 1 1 auto;
+    }
+}

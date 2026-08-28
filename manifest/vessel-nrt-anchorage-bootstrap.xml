@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Package xmlns="http://soap.sforce.com/2006/04/metadata">
+    <types>
+        <members>Vessel__c.NRT__c</members>
+        <members>STEM_Extra_Cost__c.Anchorage_Arrival__c</members>
+        <members>STEM_Extra_Cost__c.Anchorage_Departure__c</members>
+        <members>STEM_Extra_Cost__c.Anchorage_Location__c</members>
+        <members>STEM_Extra_Cost__c.Anchorage_Dues_Allocation_HKD__c</members>
+        <members>STEM_Extra_Cost__c.Anchorage_NRT_Snapshot__c</members>
+        <members>STEM_Extra_Cost__c.Anchorage_USD_HKD_Rate__c</members>
+        <members>STEM_Extra_Cost__c.Anchorage_FX_Settings_Revision__c</members>
+        <members>STEM_Extra_Cost__c.Anchorage_Calculation_Version__c</members>
+        <name>CustomField</name>
+    </types>
+    <types>
+        <members>Vessel__c</members>
+        <name>CustomObject</name>
+    </types>
+    <types>
+        <members>Vessel__c.NRT_Must_Be_Positive</members>
+        <name>ValidationRule</name>
+    </types>
+    <types>
+        <members>FCOS_Variable_Charges_Integration</members>
+        <members>FCOS_Master_Contracts_Data</members>
+        <name>PermissionSet</name>
+    </types>
+    <version>67.0</version>
+</Package>

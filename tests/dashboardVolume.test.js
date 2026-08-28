@@ -120,6 +120,18 @@ test('converts both litre boundaries to MT before averaging a range', () => {
   assert.equal(dashboardVolumeLabel(volume), '0.85-1.7 MT');
 });
 
+test('uses the ordered range until the parent STEM delivery date is completed', () => {
+  const volume = dashboardLineItemVolume({
+    Quantity__c: 50,
+    Quantity_Max__c: 100,
+    Quantity_Delivered_Per_BDN__c: 98,
+    Is_Quantity_Range__c: true,
+    UOM__c: 'MT',
+  }, false, { lineItemUomField: 'UOM__c', productFamily: 'LSMGO' });
+  assert.equal(volume.quantity, 75);
+  assert.equal(volume.isRange, true);
+});
+
 test('retains the existing MT fallback when Salesforce has no explicit UOM', () => {
   const volume = dashboardLineItemVolume({
     Quantity_Delivered_Per_BDN__c: 1030,
@@ -174,7 +186,7 @@ test('dashboard integration reads Salesforce UOM and normalizes KPI volume to MT
   assert.match(apiSource, /findDashboardUomField/);
   assert.match(apiSource, /dashboardLineItemVolume/);
   assert.match(apiSource, /productFamily: dashboardFamily/);
-  assert.equal(apiSource.match(/dashboardLineItemVolume\(/g)?.length, 1);
+  assert.ok((apiSource.match(/dashboardLineItemVolume\(/g)?.length || 0) >= 2);
   assert.match(apiSource, /monthlyProductVolumeSeries/);
   assert.doesNotMatch(apiSource, /productFamilyQuantityByName\\[family\\].*financialQuantity/);
   assert.match(dashboardSource, /productVolumeKpi\.unitOfMeasure/);

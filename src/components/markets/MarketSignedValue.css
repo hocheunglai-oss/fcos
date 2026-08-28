@@ -1,0 +1,15 @@
+.market-signed-value { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px; color: #64748b; font-variant-numeric: tabular-nums; }
+.market-signed-value__amount { display: inline-flex; align-items: center; gap: 3px; font-weight: 800; }
+.market-signed-value__amount svg { width: 13px; height: 13px; stroke-width: 2.4; }
+.market-signed-value__context { color: #64748b; font-size: .88em; font-weight: 600; }
+.market-signed-value--up .market-signed-value__amount, .market-signed-token--up { color: #087447; }
+.market-signed-value--down .market-signed-value__amount, .market-signed-token--down { color: #c02632; }
+.market-signed-value--neutral .market-signed-value__amount, .market-signed-token--neutral { color: #64748b; }
+.market-signed-value--pill { width: max-content; max-width: 100%; padding: 4px 6px; border: 1px solid #dbe2ea; border-radius: 7px; background: #f8fafc; font-size: 10px; }
+.market-signed-value--pill.market-signed-value--up { border-color: #a7e3c7; background: #edfbf4; }
+.market-signed-value--pill.market-signed-value--down { border-color: #fecaca; background: #fff1f2; }
+.market-signed-token { font-weight: 800; font-variant-numeric: tabular-nums; }
+.market-signed-axis-tick { font-size: 10px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.market-signed-axis-tick--up { fill: #087447; }
+.market-signed-axis-tick--down { fill: #c02632; }
+.market-signed-axis-tick--neutral { fill: #64748b; }

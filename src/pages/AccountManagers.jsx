@@ -5,7 +5,6 @@ import {
   ChevronLeft,
   ChevronRight,
   CircleAlert,
-  CircleHelp,
   GripVertical,
   Loader2,
   Pencil,
@@ -18,9 +17,14 @@ import {
   X,
 } from 'lucide-react';
 import { appClient } from '@/api/appClient';
+import { useNavigationAwareRequest } from '@/hooks/useNavigationAwareRequest';
 import PageHeader from '@/components/common/PageHeader';
+import PageMethodology from '@/components/common/PageMethodology';
+import DataStatus from '@/components/common/DataStatus';
 import StateBlock from '@/components/common/StateBlock';
 import TableShell from '@/components/common/TableShell';
+import WorkspaceViewBar from '@/components/common/WorkspaceViewBar';
+import BuyerPicReferences from '@/components/account-managers/BuyerPicReferences';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -33,7 +37,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -41,6 +44,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/use-toast';
 import { accountClKeyLabel, accountSearchDisplayText } from '@/lib/accountDisplay';
+import { ACCOUNT_MANAGERS_METHODOLOGY } from '@/lib/pageMethodologies';
 
 const PAGE_SIZE = 100;
 const UNASSIGNED_FILTER = '__unassigned__';
@@ -84,13 +88,13 @@ function SummaryMetric({ label, value }) {
 
 function ManagerCoverage({ managers, assignmentSource, inheritedFromGroupName }) {
   if (!managers.length) {
-    return <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-800">Unassigned</Badge>;
+    return <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-700 dark:bg-amber-950/50 dark:text-amber-200">Unassigned</Badge>;
   }
   return (
     <div>
       <div className="flex flex-wrap gap-1.5">
         {managers.map((manager, index) => (
-          <Badge key={manager.id} variant="outline" className={manager.active ? 'border-blue-200 bg-blue-50 text-blue-800' : 'border-red-200 bg-red-50 text-red-700'}>
+          <Badge key={manager.id} variant="outline" className={manager.active ? 'border-blue-200 bg-blue-50 text-blue-800 dark:border-blue-800 dark:bg-blue-950/50 dark:text-blue-200' : 'border-red-200 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-950/50 dark:text-red-200'}>
             <span className="mr-1 font-semibold tabular-nums">{index + 1}.</span>
             {manager.fullName}{manager.active ? '' : ' (inactive)'}
           </Badge>
@@ -105,16 +109,16 @@ function ManagerCoverage({ managers, assignmentSource, inheritedFromGroupName })
 
 function RoleBadges({ roles, isGroupAccount }) {
   if (isGroupAccount) {
-    return <Badge variant="outline" className="border-slate-300 bg-slate-100 text-slate-800">Group</Badge>;
+    return <Badge variant="outline" className="border-border bg-muted text-foreground">Group</Badge>;
   }
   return (
     <div className="flex flex-wrap gap-1.5">
       {(roles || []).map((role) => (
         <Badge key={role} variant="outline" className={role === 'broker'
-          ? 'border-violet-200 bg-violet-50 text-violet-800'
+          ? 'border-violet-200 bg-violet-50 text-violet-800 dark:border-violet-800 dark:bg-violet-950/50 dark:text-violet-200'
           : role === 'buyer_supplier'
-            ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
-            : 'border-sky-200 bg-sky-50 text-sky-800'}>
+            ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-200'
+            : 'border-sky-200 bg-sky-50 text-sky-800 dark:border-sky-800 dark:bg-sky-950/50 dark:text-sky-200'}>
           {ROLE_LABELS[role] || role}
         </Badge>
       ))}
@@ -124,11 +128,13 @@ function RoleBadges({ roles, isGroupAccount }) {
 
 export default function AccountManagers() {
   const { toast } = useToast();
+  const { request: requestAccounts } = useNavigationAwareRequest('collaboration');
   const [accounts, setAccounts] = useState([]);
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
+  const [responseMeta, setResponseMeta] = useState(null);
   const [search, setSearch] = useState('');
   const [selectedManagerKeys, setSelectedManagerKeys] = useState(null);
   const [currentPage, setCurrentPage] = useState(1);
@@ -143,33 +149,39 @@ export default function AccountManagers() {
   const [noteSavingKey, setNoteSavingKey] = useState('');
   const [groupEditAccount, setGroupEditAccount] = useState(null);
   const [groupNoteEditAccount, setGroupNoteEditAccount] = useState(null);
-  const [methodologyOpen, setMethodologyOpen] = useState(false);
   const nextDraftKey = useRef(0);
+  const [workspaceView, setWorkspaceView] = useState('managers');
 
-  const loadAccounts = useCallback(async ({ background = false } = {}) => {
+  const loadAccounts = useCallback(async ({ background = false, force = background } = {}) => {
     if (background) setRefreshing(true);
     else setLoading(true);
     setError('');
-    const response = await appClient.functions.invoke('accountManagersList', {}, { force: true });
-    if (response.data?.error) {
-      setError(response.data.error);
-    } else {
-      setAccounts(response.data?.accounts || []);
-      setUsers(response.data?.users || []);
-      if (!background) {
-        setCurrentPage(1);
-        setSelectedManagerKeys(null);
-        setEditingKey('');
-        setDraftManagers([]);
-        setManagerPropagateToChildren(false);
-        setNoteEditingKey('');
-        setNoteDraft('');
-        setNotePropagateToChildren(false);
-      }
-    }
+    await requestAccounts({
+      name: 'accountManagersList',
+      force,
+      apply: (response) => {
+        setResponseMeta(response.data?.error ? { ...response.meta, cacheStatus: 'UNAVAILABLE' } : response.meta);
+        if (response.data?.error) setError(response.data.error);
+        else {
+          setError('');
+          setAccounts(response.data?.accounts || []);
+          setUsers(response.data?.users || []);
+          if (!background) {
+            setCurrentPage(1);
+            setSelectedManagerKeys(null);
+            setEditingKey('');
+            setDraftManagers([]);
+            setManagerPropagateToChildren(false);
+            setNoteEditingKey('');
+            setNoteDraft('');
+            setNotePropagateToChildren(false);
+          }
+        }
+      },
+    });
     setLoading(false);
     setRefreshing(false);
-  }, []);
+  }, [requestAccounts]);
 
   useEffect(() => {
     loadAccounts();
@@ -401,18 +413,33 @@ export default function AccountManagers() {
     setCurrentPage(1);
   };
 
+  const workspaceViews = [
+    { id: 'managers', label: 'Account Managers', icon: UsersRound },
+    { id: 'buyer-pic-references', label: 'Buyer PIC References', icon: UsersRound },
+  ];
+
+  if (workspaceView === 'buyer-pic-references') {
+    return (
+      <div className="workspace-reference min-w-0">
+        <BuyerPicReferences
+          activeView={workspaceView}
+          onViewChange={setWorkspaceView}
+          methodology={ACCOUNT_MANAGERS_METHODOLOGY}
+        />
+      </div>
+    );
+  }
+
   return (
-    <div className="min-w-0 pb-8">
+    <div className="workspace-reference min-w-0 pb-8">
       <PageHeader
         icon={UsersRound}
         title="Account Managers"
         meta={`${stats.total.toLocaleString()} active Account names`}
         actions={(
           <>
-            <Button variant="outline" onClick={() => setMethodologyOpen(true)}>
-              <CircleHelp />
-              Methodology
-            </Button>
+            <PageMethodology {...ACCOUNT_MANAGERS_METHODOLOGY} />
+            <DataStatus meta={responseMeta} state={loading || refreshing ? 'refreshing' : undefined} label="Accounts" />
             <Button
               variant="outline"
               size="icon"
@@ -425,6 +452,13 @@ export default function AccountManagers() {
             </Button>
           </>
         )}
+      />
+
+      <WorkspaceViewBar
+        className="mb-5"
+        views={workspaceViews}
+        value={workspaceView}
+        onValueChange={setWorkspaceView}
       />
 
       <div className="mb-5 grid grid-cols-2 divide-x divide-y overflow-hidden rounded-lg border border-border bg-card sm:grid-cols-4 sm:divide-y-0">
@@ -837,53 +871,6 @@ export default function AccountManagers() {
           <StateBlock title="No Accounts found" description="No active Account names match the current filters." />
         )}
       </TableShell>
-
-      <Dialog open={methodologyOpen} onOpenChange={setMethodologyOpen}>
-        <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>Account Managers Methodology</DialogTitle>
-            <DialogDescription>How Account coverage, manager priority, GROUP propagation, and synchronization work.</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-5 text-sm text-foreground">
-            <section>
-              <h3 className="font-semibold">Account coverage</h3>
-              <p className="mt-1 text-muted-foreground">
-                The directory shows active Buyer, Buyer &amp; Supplier, Broker, and GROUP Account names. GROUP Accounts appear first. Same-name Salesforce Account records are managed together; inactive and supplier-only Accounts are not listed.
-              </p>
-            </section>
-            <section>
-              <h3 className="font-semibold">Manager priority</h3>
-              <p className="mt-1 text-muted-foreground">
-                Each Account can have up to three managers. Priority 1 is highest. Drag the handle to reorder managers, then use Save to apply the ordered list.
-              </p>
-            </section>
-            <section>
-              <h3 className="font-semibold">GROUP Accounts</h3>
-              <p className="mt-1 text-muted-foreground">
-                Every GROUP manager edit asks for a scope. GROUP only updates the GROUP Account in FCOS and Salesforce, turns off child inheritance, and leaves existing child Salesforce values and direct FCOS assignments unchanged. GROUP + children writes the ordered list to the GROUP and every direct child Salesforce Account, turns on inheritance, and replaces direct child FCOS manager overrides.
-              </p>
-            </section>
-            <section>
-              <h3 className="font-semibold">Salesforce synchronization</h3>
-              <p className="mt-1 text-muted-foreground">
-                FCOS stores the ordered users and writes their display names to Salesforce Account Manager. GROUP families are written all-or-none; failed or mismatched rows remain visible as sync issues for retry.
-              </p>
-            </section>
-            <section>
-              <h3 className="font-semibold">Account notes</h3>
-              <p className="mt-1 text-muted-foreground">
-                Each Account name has an FCOS note of up to 255 characters. A GROUP note edit can update the GROUP only or copy the note to every direct child Account name. GROUP + children replaces existing child notes at that time; each child note remains independently editable afterward. Notes never write to Salesforce.
-              </p>
-            </section>
-            <section>
-              <h3 className="font-semibold">Search and filters</h3>
-              <p className="mt-1 text-muted-foreground">
-                Every Account search result shows the Account name and Salesforce CL Key. Search matches Account names, CL Keys, parent GROUP names, GROUP child names, Account type, manager name, manager email, and note text. The manager filter includes inherited assignments and Unassigned Accounts.
-              </p>
-            </section>
-          </div>
-        </DialogContent>
-      </Dialog>
 
       <AlertDialog open={Boolean(groupEditAccount)} onOpenChange={(open) => {
         if (!open) setGroupEditAccount(null);

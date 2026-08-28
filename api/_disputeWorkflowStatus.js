@@ -23,13 +23,16 @@ export function projectExternalDisputeClosure(caseRow = {}, stem = {}) {
   if (!caseRow?.id || !isSalesforceDisputeClosed(salesforceStatus)) return null;
 
   const workflowStatus = caseRow.workflow_status ?? caseRow.workflowStatus ?? '';
+  if (workflowStatus === 'Closed') return null;
   if (hasRecordedFcosClosureWriteback(caseRow)) return null;
   return {
-    workflowStatus: 'Closed',
+    workflowStatus: workflowStatus || 'Draft',
     currentSalesforceStatus: salesforceStatus,
     internalWorkflowStatus: workflowStatus || 'Draft',
     externalClosure: true,
-    legacyReadOnly: true,
+    externalClosureRequiresReview: true,
+    commercialReadOnly: true,
+    legacyReadOnly: false,
     salesforceLastModifiedAt: validIsoDate(stem.LastModifiedDate),
   };
 }

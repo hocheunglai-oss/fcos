@@ -1,5 +1,3 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=DM+Sans:wght@300;400;500;600;700&display=swap');
-
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -25,7 +23,10 @@
     --border: 220 15% 90%;
     --input: 220 15% 90%;
     --ring: 221 83% 53%;
-    --radius: 0.625rem;
+    --radius: 0.875rem;
+    --radius-control: 0.625rem;
+    --radius-panel: 0.875rem;
+    --radius-window: 1.25rem;
     --chart-1: 221 83% 53%;
     --chart-2: 160 60% 45%;
     --chart-3: 30 80% 55%;
@@ -39,8 +40,37 @@
     --sidebar-accent-foreground: 220 15% 90%;
     --sidebar-border: 220 20% 18%;
     --sidebar-ring: 221 83% 53%;
-    --font-inter: 'Inter', sans-serif;
-    --font-dm: 'DM Sans', sans-serif;
+    --font-ui: 'IBM Plex Sans Variable', 'PingFang HK', 'Hiragino Sans GB', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-data: 'IBM Plex Mono', SFMono-Regular, Menlo, Consolas, monospace;
+    --workspace-toolbar-height: 3.5rem;
+    --workspace-safe-area-top: env(safe-area-inset-top, 0px);
+    --workspace-safe-area-right: env(safe-area-inset-right, 0px);
+    --workspace-safe-area-bottom: env(safe-area-inset-bottom, 0px);
+    --workspace-safe-area-left: env(safe-area-inset-left, 0px);
+    --workspace-canvas: 216 24% 96%;
+    --workspace-material: 0 0% 100%;
+    --workspace-material-subtle: 216 24% 98%;
+    --workspace-border: 216 18% 84%;
+    --workspace-shadow: 218 36% 18%;
+    --shadow-panel: 0 1px 2px hsl(var(--workspace-shadow) / 0.05), 0 10px 28px hsl(var(--workspace-shadow) / 0.04);
+    --shadow-window: 0 24px 64px hsl(var(--workspace-shadow) / 0.2), 0 2px 10px hsl(var(--workspace-shadow) / 0.08);
+    --glass-alpha: 0.72;
+    --glass-blur: 22px;
+    --glass-saturation: 1.34;
+    --glass-tint: 214 48% 98%;
+  }
+
+  :root[data-glass-intensity='clear'] {
+    --glass-alpha: 0.56;
+    --glass-blur: 28px;
+    --glass-saturation: 1.42;
+  }
+
+  :root[data-glass-intensity='tinted'] {
+    --glass-alpha: 0.88;
+    --glass-blur: 14px;
+    --glass-saturation: 1.16;
+    --glass-tint: 216 42% 94%;
   }
 
   .dark {
@@ -71,12 +101,19 @@
     --sidebar-accent-foreground: 220 15% 90%;
     --sidebar-border: 220 20% 14%;
     --sidebar-ring: 221 83% 53%;
+    --workspace-canvas: 220 22% 8%;
+    --workspace-material: 220 18% 12%;
+    --workspace-material-subtle: 220 17% 14%;
+    --workspace-border: 220 13% 26%;
+    --workspace-shadow: 0 0% 0%;
+    --glass-tint: 220 18% 13%;
   }
 }
 
 @layer base {
   * {
-    @apply border-border outline-ring/50;
+    border-color: hsl(var(--border));
+    outline-color: hsl(var(--ring) / 0.5);
   }
   html,
   body,
@@ -84,12 +121,35 @@
     height: 100%;
   }
   body {
-    @apply bg-background text-foreground font-inter antialiased;
+    @apply bg-background text-foreground font-ui antialiased;
     background:
-      linear-gradient(135deg, hsl(214 42% 96%) 0%, hsl(178 32% 95%) 48%, hsl(36 44% 96%) 100%);
+      radial-gradient(circle at 16% -12%, hsl(212 88% 96%) 0, transparent 34%),
+      radial-gradient(circle at 92% 12%, hsl(190 55% 96%) 0, transparent 30%),
+      hsl(var(--workspace-canvas));
     min-height: 100vh;
     overflow: hidden;
     overscroll-behavior: none;
+  }
+
+  :where(.recharts-surface, .recharts-tooltip-wrapper) {
+    font-family: var(--font-ui);
+  }
+
+  :where(button, input, select, textarea) {
+    font: inherit;
+  }
+
+  :where(table, [data-financial-value], .tabular-nums) {
+    font-variant-numeric: tabular-nums lining-nums;
+    font-feature-settings: 'tnum' 1, 'lnum' 1;
+  }
+
+  :where(code, kbd, pre, [data-technical-identifier]) {
+    font-family: var(--font-data);
+  }
+
+  ::selection {
+    background: hsl(var(--primary) / 0.2);
   }
 
   html[data-density='compact'] table th,
@@ -121,25 +181,17 @@
   .glass-surface,
   .bg-card.border-border,
   .border.bg-card {
-    background:
-      linear-gradient(180deg, hsl(0 0% 100% / 0.82), hsl(0 0% 100% / 0.62));
-    border-color: hsl(0 0% 100% / 0.72);
-    box-shadow:
-      0 18px 48px hsl(218 42% 22% / 0.08),
-      inset 0 1px 0 hsl(0 0% 100% / 0.72);
-    backdrop-filter: blur(22px) saturate(1.18);
-    -webkit-backdrop-filter: blur(22px) saturate(1.18);
+    background: hsl(var(--workspace-material));
+    border-color: hsl(var(--workspace-border) / 0.72);
+    box-shadow: 0 1px 2px hsl(var(--workspace-shadow) / 0.05), 0 10px 28px hsl(var(--workspace-shadow) / 0.04);
   }
 
   .glass-page-header {
-    background:
-      linear-gradient(135deg, hsl(0 0% 100% / 0.68), hsl(192 45% 98% / 0.46));
-    border: 1px solid hsl(0 0% 100% / 0.7);
-    box-shadow:
-      0 16px 42px hsl(218 42% 22% / 0.07),
-      inset 0 1px 0 hsl(0 0% 100% / 0.76);
-    backdrop-filter: blur(24px) saturate(1.2);
-    -webkit-backdrop-filter: blur(24px) saturate(1.2);
+    background: linear-gradient(180deg, hsl(var(--glass-tint) / calc(var(--glass-alpha) + 0.08)), hsl(var(--glass-tint) / var(--glass-alpha)));
+    border: 1px solid hsl(var(--workspace-border) / 0.7);
+    box-shadow: 0 1px 0 hsl(0 0% 100% / 0.55) inset, 0 10px 32px hsl(var(--workspace-shadow) / 0.08);
+    backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
   }
 
   .glass-sidebar {
@@ -153,27 +205,21 @@
 
   .glass-control,
   .glass-control.bg-transparent {
-    background:
-      linear-gradient(180deg, hsl(0 0% 100% / 0.7), hsl(0 0% 100% / 0.48));
-    border-color: hsl(214 30% 78% / 0.65);
-    box-shadow:
-      0 8px 22px hsl(218 42% 22% / 0.05),
-      inset 0 1px 0 hsl(0 0% 100% / 0.68);
-    backdrop-filter: blur(14px) saturate(1.14);
-    -webkit-backdrop-filter: blur(14px) saturate(1.14);
+    background: linear-gradient(180deg, hsl(var(--glass-tint) / calc(var(--glass-alpha) + 0.1)), hsl(var(--glass-tint) / var(--glass-alpha)));
+    border-color: hsl(var(--workspace-border) / 0.78);
+    box-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.48), 0 1px 2px hsl(var(--workspace-shadow) / 0.05);
+    backdrop-filter: blur(calc(var(--glass-blur) * 0.65)) saturate(var(--glass-saturation));
+    -webkit-backdrop-filter: blur(calc(var(--glass-blur) * 0.65)) saturate(var(--glass-saturation));
   }
 
   .glass-floating,
   .glass-floating.bg-popover,
   .glass-floating.bg-background {
-    background:
-      linear-gradient(180deg, hsl(0 0% 100% / 0.9), hsl(0 0% 100% / 0.74));
-    border-color: hsl(0 0% 100% / 0.76);
-    box-shadow:
-      0 24px 64px hsl(218 42% 18% / 0.18),
-      inset 0 1px 0 hsl(0 0% 100% / 0.82);
-    backdrop-filter: blur(28px) saturate(1.22);
-    -webkit-backdrop-filter: blur(28px) saturate(1.22);
+    background: linear-gradient(180deg, hsl(var(--glass-tint) / calc(var(--glass-alpha) + 0.16)), hsl(var(--glass-tint) / calc(var(--glass-alpha) + 0.04)));
+    border-color: hsl(var(--workspace-border) / 0.78);
+    box-shadow: 0 24px 64px hsl(var(--workspace-shadow) / 0.2), inset 0 1px 0 hsl(0 0% 100% / 0.5);
+    backdrop-filter: blur(calc(var(--glass-blur) + 4px)) saturate(var(--glass-saturation));
+    -webkit-backdrop-filter: blur(calc(var(--glass-blur) + 4px)) saturate(var(--glass-saturation));
   }
 
   .payment-reminder-dialog.glass-floating {
@@ -208,21 +254,13 @@
 
   .dark .glass-surface,
   .dark .bg-card.border-border,
-  .dark .border.bg-card {
-    background:
-      linear-gradient(180deg, hsl(220 22% 15% / 0.78), hsl(220 24% 10% / 0.58));
-    border-color: hsl(0 0% 100% / 0.12);
-    box-shadow:
-      0 18px 48px hsl(0 0% 0% / 0.28),
-      inset 0 1px 0 hsl(0 0% 100% / 0.08);
-  }
+  .dark .border.bg-card { background: hsl(var(--workspace-material)); border-color: hsl(var(--workspace-border) / 0.82); }
 
   .dark .glass-page-header,
   .dark .glass-floating,
   .dark .glass-control {
-    background:
-      linear-gradient(180deg, hsl(220 22% 15% / 0.84), hsl(220 24% 10% / 0.68));
-    border-color: hsl(0 0% 100% / 0.12);
+    background: linear-gradient(180deg, hsl(var(--glass-tint) / calc(var(--glass-alpha) + 0.12)), hsl(var(--glass-tint) / var(--glass-alpha)));
+    border-color: hsl(var(--workspace-border) / 0.85);
   }
 
   .dark .payment-reminder-dialog.glass-floating {
@@ -241,9 +279,30 @@
   }
 
   .app-workspace-shell {
-    background: hsl(215 22% 96%);
-    color: hsl(222 22% 12%);
+    background:
+      radial-gradient(circle at 22% -10%, hsl(212 90% 96% / 0.9), transparent 34%),
+      radial-gradient(circle at 95% 6%, hsl(184 58% 95% / 0.72), transparent 32%),
+      hsl(var(--workspace-canvas));
+    color: hsl(var(--foreground));
   }
+
+  .dark .app-workspace-shell {
+    background:
+      radial-gradient(circle at 22% -10%, hsl(215 55% 16% / 0.62), transparent 34%),
+      radial-gradient(circle at 95% 6%, hsl(186 42% 13% / 0.48), transparent 32%),
+      hsl(var(--workspace-canvas));
+  }
+
+  .app-navigation-material,
+  .app-navigation-caption-material {
+    background: linear-gradient(180deg, hsl(var(--glass-tint) / calc(var(--glass-alpha) + 0.06)), hsl(var(--glass-tint) / var(--glass-alpha)));
+    border-color: hsl(var(--workspace-border) / 0.74);
+    box-shadow: 10px 0 32px hsl(var(--workspace-shadow) / 0.08), inset -1px 0 0 hsl(0 0% 100% / 0.32);
+    backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+  }
+
+  .app-navigation-caption-material { background: hsl(var(--glass-tint) / calc(var(--glass-alpha) * 0.58)); }
 
   .app-workspace-sidebar {
     will-change: transform;
@@ -255,8 +314,8 @@
     inset-block: 0;
     right: 0;
     width: 12px;
-    border-right: 1px solid hsl(214 24% 84%);
-    background: linear-gradient(90deg, hsl(215 22% 96% / 0), hsl(217 91% 60% / 0.18));
+    border-right: 1px solid hsl(var(--workspace-border) / 0.7);
+    background: linear-gradient(90deg, transparent, hsl(var(--primary) / 0.12));
     pointer-events: none;
     transition: opacity 150ms ease;
   }
@@ -266,26 +325,101 @@
     opacity: 0;
   }
 
-  .app-workspace-shell .glass-page-header,
   .app-workspace-shell .glass-surface,
   .app-workspace-shell .bg-card.border-border,
   .app-workspace-shell .border.bg-card {
-    background: hsl(0 0% 100%);
-    border-color: hsl(214 24% 88%);
-    border-radius: 8px;
-    box-shadow: 0 1px 2px hsl(220 30% 22% / 0.06);
+    background: hsl(var(--workspace-material));
+    border-color: hsl(var(--workspace-border) / 0.72);
+    border-radius: var(--radius);
+    box-shadow: 0 1px 2px hsl(var(--workspace-shadow) / 0.05), 0 10px 28px hsl(var(--workspace-shadow) / 0.035);
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
   }
 
+  .app-workspace-shell .glass-page-header {
+    background: linear-gradient(180deg, hsl(var(--glass-tint) / calc(var(--glass-alpha) + 0.08)), hsl(var(--glass-tint) / var(--glass-alpha)));
+    border-color: hsl(var(--workspace-border) / 0.7);
+    border-radius: calc(var(--radius) + 2px);
+    backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+  }
+
   .app-workspace-shell .app-page-header {
-    margin-bottom: 1rem;
-    padding: 1rem 1.25rem;
+    padding-inline: 0.9rem;
+  }
+
+  .app-workspace-shell .app-page-header:has(+ .app-page-header-context) {
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+  }
+
+  .app-workspace-shell .app-page-header-context {
+    border-bottom-left-radius: calc(var(--radius) + 2px);
+    border-bottom-right-radius: calc(var(--radius) + 2px);
   }
 
   .app-workspace-shell .app-page-header h1 {
-    font-size: 1.375rem;
-    line-height: 1.75rem;
+    font-size: 1.25rem;
+    line-height: 1.625rem;
+    font-weight: 600;
+  }
+
+  .app-workspace-shell .app-page-header__actions {
+    scrollbar-width: none;
+  }
+
+  .app-workspace-shell .app-page-header__actions > * {
+    flex-shrink: 0;
+  }
+
+  .app-workspace-shell .app-page-header__actions::-webkit-scrollbar {
+    display: none;
+  }
+
+  .app-workspace-scroll > :first-child {
+    width: 100%;
+    max-width: 1600px;
+    margin-inline: auto;
+  }
+
+  .app-workspace-scroll > .workspace-page-wide {
+    max-width: none;
+  }
+
+  html[data-market-pulse-corner='top-right'] .app-workspace-main .app-page-header {
+    padding-inline-end: 3.25rem;
+  }
+
+  html[data-market-pulse-corner='top-right'] .app-workspace-main .workspace-primary-navigation {
+    padding-inline-end: 3.25rem;
+  }
+
+  html[data-market-pulse-corner='top-right'] .app-workspace-main .workspace-floating-utility-safe {
+    padding-inline-end: 3.25rem;
+  }
+
+  @media (max-width: 639px) {
+    .app-workspace-shell .app-page-header {
+      grid-template-columns: minmax(0, 1fr);
+      align-items: stretch;
+      gap: 0.375rem;
+    }
+
+    .app-workspace-shell .app-page-header__actions {
+      max-width: 100%;
+    }
+
+    html[data-market-pulse-corner='top-right'] .app-workspace-main .app-page-header > :first-child {
+      padding-inline-end: 3.25rem;
+    }
+
+    html[data-market-pulse-corner='top-right'] .app-workspace-main .app-page-header {
+      padding-inline-end: 0.9rem;
+    }
+
+    html[data-market-pulse-corner='top-right'] .app-workspace-main .workspace-primary-navigation {
+      padding-inline-end: 3.25rem;
+    }
   }
 
   .app-workspace-shell .glass-control,
@@ -293,12 +427,8 @@
   .app-workspace-shell input,
   .app-workspace-shell select,
   .app-workspace-shell textarea {
-    background: hsl(0 0% 100%);
-    border-color: hsl(214 24% 84%);
-    border-radius: 8px;
-    box-shadow: none;
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
+    border-color: hsl(var(--workspace-border) / 0.78);
+    border-radius: calc(var(--radius) - 2px);
   }
 
   .app-workspace-shell button,
@@ -306,15 +436,26 @@
     letter-spacing: 0;
   }
 
+  .app-workspace-shell button:not(:disabled):active,
+  .app-workspace-shell a:active {
+    transform: scale(0.985);
+  }
+
   .app-workspace-shell table {
     border-collapse: separate;
     border-spacing: 0;
   }
 
+  .app-workspace-main,
+  .app-workspace-main > *,
+  .app-workspace-main [data-radix-scroll-area-viewport] > div {
+    min-width: 0;
+  }
+
   .app-workspace-shell table th {
-    background: hsl(215 22% 97%);
-    border-bottom: 1px solid hsl(214 24% 88%);
-    color: hsl(215 12% 46%);
+    background: hsl(var(--workspace-material-subtle));
+    border-bottom: 1px solid hsl(var(--workspace-border) / 0.72);
+    color: hsl(var(--muted-foreground));
     font-size: 0.6875rem;
     line-height: 1rem;
     text-transform: uppercase;
@@ -322,23 +463,355 @@
   }
 
   .app-workspace-shell table td {
-    border-bottom-color: hsl(214 24% 91% / 0.8);
+    border-bottom-color: hsl(var(--workspace-border) / 0.52);
     vertical-align: top;
   }
 
   .app-workspace-shell tbody tr:hover {
-    background: hsl(214 95% 97%);
+    background: hsl(var(--accent) / 0.55);
   }
 
   .app-workspace-shell .sticky.bg-card,
   .app-workspace-shell thead .bg-card {
-    background: hsl(215 22% 97%);
+    background: hsl(var(--workspace-material-subtle));
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
   }
 
   .app-workspace-shell .rounded-xl,
   .app-workspace-shell .rounded-2xl {
-    border-radius: 8px;
+    border-radius: var(--radius);
+  }
+
+  .app-market-pulse-dock {
+    cursor: grab;
+    touch-action: none;
+    user-select: none;
+    will-change: left, top;
+  }
+
+  .app-market-pulse-dock.is-dragging {
+    cursor: grabbing;
+  }
+
+  .app-market-pulse-trigger {
+    background: hsl(var(--glass-tint) / calc(var(--glass-alpha) + 0.08));
+    color: hsl(var(--foreground));
+    border: 1px solid hsl(var(--workspace-border) / 0.75);
+    border-radius: 999px;
+    border-color: hsl(var(--workspace-border) / 0.75);
+    box-shadow: 0 12px 34px hsl(var(--workspace-shadow) / 0.14), inset 0 1px 0 hsl(0 0% 100% / 0.38);
+    backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+  }
+
+  .app-market-pulse-trigger:hover {
+    background: hsl(var(--glass-tint) / calc(var(--glass-alpha) + 0.18));
+  }
+
+  .workspace-command-palette [cmdk-item][data-selected='true'] {
+    background: hsl(var(--primary) / 0.12);
+    color: hsl(var(--foreground));
+  }
+
+  .dark .app-workspace-sidebar :is(.text-slate-950, .text-slate-900, .text-slate-700, .text-slate-600) { color: hsl(var(--foreground)); }
+  .dark .app-workspace-sidebar .text-slate-500 { color: hsl(var(--muted-foreground)); }
+  .dark .app-workspace-sidebar .border-white\/70,
+  .dark .app-workspace-sidebar .border-white\/80 { border-color: hsl(var(--workspace-border) / 0.78); }
+
+  @media (prefers-reduced-transparency: reduce) {
+    :root { --glass-alpha: 1; --glass-blur: 0px; --glass-saturation: 1; }
+    .glass-page-header,
+    .glass-control,
+    .glass-floating,
+    .app-navigation-material,
+    .app-navigation-caption-material,
+    .app-market-pulse-trigger { backdrop-filter: none !important; -webkit-backdrop-filter: none !important; }
+  }
+
+  @media (prefers-contrast: more) {
+    :root { --workspace-border: 218 18% 52%; }
+    .app-workspace-shell :focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 2px; }
+  }
+
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: 0.01ms !important; }
+    .app-workspace-shell button:active, .app-workspace-shell a:active { transform: none; }
+  }
+
+  .email-router-content-shell {
+    max-width: 100%;
+    contain: inline-size;
+  }
+
+  .email-router-content {
+    max-width: 100%;
+    overflow-wrap: break-word;
+  }
+
+  .email-router-content img {
+    display: inline-block;
+    height: auto;
+    max-width: 100%;
+  }
+
+  .email-router-content table {
+    border-collapse: collapse;
+    max-width: 100%;
+  }
+
+  .email-router-content td,
+  .email-router-content th {
+    max-width: 100%;
+    overflow-wrap: break-word;
+  }
+}
+
+/* Dashboard and Account Insight pilot */
+.workspace-dashboard {
+  container-type: inline-size;
+}
+
+.workspace-filter-rail {
+  box-shadow: 0 1px 0 hsl(var(--border) / 0.72), 0 12px 28px -26px hsl(220 28% 15% / 0.42);
+}
+
+.workspace-filter-panel,
+.workspace-kpi-card,
+.account-insight-section,
+.material-table {
+  background: hsl(var(--card));
+}
+
+.workspace-kpi-card {
+  box-shadow: var(--shadow-panel);
+}
+
+.workspace-kpi-card:hover {
+  border-color: hsl(var(--ring) / 0.32);
+}
+
+.account-insight-window {
+  background: hsl(var(--background));
+  isolation: isolate;
+}
+
+.account-insight-toolbar {
+  box-shadow: 0 1px 0 hsl(var(--border) / 0.7);
+}
+
+.account-insight-canvas {
+  background:
+    radial-gradient(circle at 100% 0%, hsl(211 100% 94% / 0.38), transparent 28rem),
+    hsl(var(--workspace-canvas));
+}
+
+.account-insight-kpi {
+  box-shadow: 0 1px 2px hsl(220 30% 18% / 0.05);
+}
+
+.material-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.material-table {
+  max-width: 100%;
+  overscroll-behavior-inline: contain;
+  scrollbar-gutter: stable;
+  -webkit-overflow-scrolling: touch;
+}
+
+.material-table:focus-visible {
+  border-color: hsl(var(--ring) / 0.5);
+}
+
+.material-table tbody tr {
+  transition: background-color 120ms ease;
+}
+
+.material-table tbody tr:hover {
+  background: hsl(var(--muted) / 0.45);
+}
+
+@media (max-width: 639px) {
+  .app-workspace-sidebar {
+    width: 60px !important;
+  }
+
+  .app-workspace-sidebar .app-navigation-material,
+  .app-workspace-sidebar-spacer {
+    width: 60px !important;
+  }
+
+  .material-table table th,
+  .material-table table td {
+    max-width: min(18rem, calc(100vw - 6rem));
+  }
+}
+
+/* Operational and financial workspaces */
+.workspace-operations {
+  background:
+    linear-gradient(180deg, hsl(var(--workspace-material-subtle) / 0.5), transparent 18rem),
+    hsl(var(--workspace-canvas));
+}
+
+.workspace-operations .material-panel,
+.workspace-operations .material-table,
+.workspace-operations .recharts-wrapper,
+.workspace-operations .recharts-responsive-container {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.workspace-operations :where(.divide-y, tbody) > :where(* + *) {
+  border-color: hsl(var(--workspace-border) / 0.66);
+}
+
+.workspace-operations [role='dialog'],
+.workspace-operations [role='alertdialog'] {
+  border-radius: var(--radius-window);
+}
+
+/* Trading and reference workspaces */
+.workspace-reference {
+  min-height: 100%;
+  background:
+    linear-gradient(180deg, hsl(var(--workspace-material-subtle) / 0.46), transparent 16rem),
+    hsl(var(--workspace-canvas));
+}
+
+.workspace-reference :where(.material-panel, .material-table, .border.bg-card, details.bg-card) {
+  background: hsl(var(--workspace-material));
+  border-color: hsl(var(--workspace-border) / 0.72);
+  border-radius: var(--radius);
+  box-shadow: 0 1px 2px hsl(var(--workspace-shadow) / 0.045);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.workspace-reference :where([role='dialog'], [role='alertdialog']) {
+  border-radius: var(--radius-window);
+}
+
+.market-pulse-surface {
+  background: hsl(var(--workspace-canvas) / 0.96);
+}
+
+.market-pulse-surface .material-panel {
+  background: hsl(var(--workspace-material));
+  border-color: hsl(var(--workspace-border) / 0.72);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* Collaboration, tools, and administration workspaces */
+.workspace-collaboration,
+.workspace-tools,
+.workspace-administration,
+.workspace-administration-canvas {
+  min-height: 100%;
+  background:
+    linear-gradient(180deg, hsl(var(--workspace-material-subtle) / 0.44), transparent 17rem),
+    hsl(var(--workspace-canvas));
+}
+
+.workspace-collaboration :where(.material-panel, .material-table, .border.bg-card),
+.workspace-tools :where(.material-panel, .material-table),
+.workspace-administration :where(.material-panel, .material-table),
+.workspace-administration-canvas :where(.material-panel, .material-table, .border.bg-card) {
+  background: hsl(var(--workspace-material));
+  border-color: hsl(var(--workspace-border) / 0.72);
+  border-radius: var(--radius);
+  box-shadow: 0 1px 2px hsl(var(--workspace-shadow) / 0.045);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.workspace-collaboration :where([role='dialog'], [role='alertdialog']),
+.workspace-tools :where([role='dialog'], [role='alertdialog']),
+.workspace-administration :where([role='dialog'], [role='alertdialog']) {
+  border-radius: var(--radius-window);
+}
+
+.email-router-workspace .email-router-commandbar {
+  box-shadow: 0 1px 0 hsl(var(--workspace-border) / 0.58);
+}
+
+.email-router-workspace > .material-panel > :where(.flex.min-h-0, .border-b) {
+  background-color: hsl(var(--workspace-material));
+}
+
+.settings-navigation {
+  z-index: 12;
+  background: linear-gradient(180deg, hsl(var(--glass-tint) / calc(var(--glass-alpha) + 0.06)), hsl(var(--glass-tint) / var(--glass-alpha)));
+}
+
+.settings-content {
+  min-height: 100%;
+  background: hsl(var(--workspace-canvas));
+}
+
+.workspace-administration-canvas table tbody {
+  background: hsl(var(--workspace-material));
+}
+
+.dark .workspace-collaboration :where(.bg-amber-50, .bg-amber-50\/60, .bg-amber-50\/50) {
+  background-color: rgb(69 41 10 / 0.46);
+}
+
+.dark .workspace-collaboration :where(.text-amber-900, .text-amber-800, .text-amber-700),
+.dark .workspace-tools :where(.text-amber-950, .text-amber-900, .text-amber-800) {
+  color: #fde68a;
+}
+
+.dark .workspace-tools :where(.bg-amber-50, .bg-sky-50, .bg-blue-50\/70) {
+  background-color: hsl(var(--workspace-material-subtle));
+}
+
+.dark .workspace-tools :where(.text-sky-950, .text-sky-900, .text-blue-700) {
+  color: #bfdbfe;
+}
+
+.dark .workspace-administration :where(.bg-red-50, .bg-amber-50, .bg-amber-50\/50),
+.dark .workspace-administration-canvas :where(.bg-red-50, .bg-amber-50, .bg-amber-50\/50) {
+  background-color: hsl(var(--workspace-material-subtle));
+}
+
+.dark .workspace-administration :where(.text-red-700, .text-red-800),
+.dark .workspace-administration-canvas :where(.text-red-700, .text-red-800) {
+  color: #fecaca;
+}
+
+.dark .workspace-administration :where(.text-amber-700, .text-amber-800),
+.dark .workspace-administration-canvas :where(.text-amber-700, .text-amber-800) {
+  color: #fde68a;
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .workspace-trading :where(.hedge-desk-commandbar, .hedge-desk-tabs, .app-page-header, .app-drawer, .app-modal) {
+    background: hsl(var(--workspace-material)) !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+}
+
+@media (max-width: 639px) {
+  .app-workspace-sidebar {
+    width: 3.5rem !important;
+  }
+
+  .app-workspace-sidebar-spacer {
+    width: 3.5rem !important;
+  }
+
+  .app-workspace-sidebar .app-navigation-material {
+    width: 3.5rem;
+  }
+
+  .account-insight-window {
+    border-radius: var(--radius-window) var(--radius-window) 0 0;
   }
 }

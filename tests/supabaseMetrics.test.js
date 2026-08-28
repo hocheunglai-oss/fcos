@@ -86,3 +86,16 @@ test('keeps unavailable individual metrics null and treats malformed input as un
     assert.equal(result.severity, 'monitoring_unavailable');
   }
 });
+
+test('rejects impossible capacity samples instead of reporting negative usage', () => {
+  const result = parseSupabasePrometheusMetrics(`
+node_memory_MemTotal_bytes 1000
+node_memory_MemAvailable_bytes 1200
+node_filesystem_size_bytes{mountpoint="/data",fstype="ext4"} 1000
+node_filesystem_avail_bytes{mountpoint="/data",fstype="ext4"} 1760
+`);
+
+  assert.equal(result.monitoringAvailable, false);
+  assert.equal(result.kpis.memoryUsedPercent, null);
+  assert.equal(result.kpis.diskUsedPercent, null);
+});

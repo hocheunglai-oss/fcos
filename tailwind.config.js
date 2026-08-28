@@ -5,13 +5,22 @@ module.exports = {
   theme: {
     extend: {
       fontFamily: {
-        inter: ['var(--font-inter)'],
-        dm: ['var(--font-dm)'],
+        sans: ['var(--font-ui)'],
+        ui: ['var(--font-ui)'],
+        data: ['var(--font-data)'],
+        mono: ['var(--font-data)'],
       },
       borderRadius: {
+        control: 'var(--radius-control)',
+        panel: 'var(--radius-panel)',
+        window: 'var(--radius-window)',
         lg: 'var(--radius)',
         md: 'calc(var(--radius) - 2px)',
         sm: 'calc(var(--radius) - 4px)'
+      },
+      boxShadow: {
+        panel: 'var(--shadow-panel)',
+        window: 'var(--shadow-window)',
       },
       colors: {
         background: 'hsl(var(--background))',

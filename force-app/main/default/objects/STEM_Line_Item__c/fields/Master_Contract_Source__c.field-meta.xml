@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Master_Contract_Source__c</fullName>
+    <defaultValue>false</defaultValue>
+    <description>Identifies a product line created from an FCOS Master Contract.</description>
+    <label>Master Contract Source</label>
+    <type>Checkbox</type>
+</CustomField>

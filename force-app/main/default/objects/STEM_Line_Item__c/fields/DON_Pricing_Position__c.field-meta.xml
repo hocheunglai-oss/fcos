@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>DON_Pricing_Position__c</fullName>
+    <description>Direction of benchmark exposure created by different supplier and buyer pricing dates.</description>
+    <label>Pricing Position</label>
+    <required>false</required>
+    <type>Picklist</type>
+    <valueSet>
+        <restricted>true</restricted>
+        <valueSetDefinition>
+            <sorted>false</sorted>
+            <value><fullName>Long</fullName><default>false</default><label>Long</label></value>
+            <value><fullName>Short</fullName><default>false</default><label>Short</label></value>
+            <value><fullName>Matched</fullName><default>true</default><label>Matched</label></value>
+        </valueSetDefinition>
+    </valueSet>
+</CustomField>

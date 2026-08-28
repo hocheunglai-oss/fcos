@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ValidationRule xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Agency_Fee_Must_Be_Positive</fullName>
+    <active>true</active>
+    <description>An agreed Agency Fee must be greater than zero when supplied.</description>
+    <errorConditionFormula>AND(NOT(ISBLANK(Agency_Fee_USD__c)), Agency_Fee_USD__c &lt;= 0)</errorConditionFormula>
+    <errorDisplayField>Agency_Fee_USD__c</errorDisplayField>
+    <errorMessage>Agreed Agency Fee (USD) must be greater than zero.</errorMessage>
+</ValidationRule>

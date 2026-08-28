@@ -1,6 +1,1387 @@
-export const APP_VERSION = '2.0.44';
+import { APP_VERSION } from './appVersionMeta.js';
+
+export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.190',
+    releasedAt: '2026-08-23',
+    title: 'Simplify the Incoming Payments internal report',
+    changes: [
+      'Replaces the three-step Incoming Payments email wizard with one review-and-send surface matching the payment-reminder workflow.',
+      'Loads approved recipients and the live report preview together, then rebuilds current report data immediately before delivery.',
+      'Keeps approved recipients read-only during ordinary sends and allows authorized template managers to change them only through an explicit saved revision.',
+    ],
+  },
+  {
+    version: '2.0.189',
+    releasedAt: '2026-08-21',
+    title: 'Add Platts-aligned market intelligence',
+    changes: [
+      'Adds a Daily Decision Brief, exact contract-month forward curves, source-linked bunker drivers, and company alert controls without trade recommendations.',
+      'Replaces shared M1/M2 adjustments with verified outright BM, M1, and M2 observations plus short-lived authorized fallbacks for missing exact contracts.',
+      'Keeps settlement MOPS controls and hedge-expiry verification available while the new valuation curve completes its ten-publication-day shadow review.',
+      'Backfills structured licensed-report evidence without storing PDF content, report commentary, prompts, or raw AI responses.',
+    ],
+  },
+  {
+    version: '2.0.188',
+    releasedAt: '2026-08-20',
+    title: 'Add delivered-price MOPS analytics',
+    changes: [
+      'Adds Hong Kong VLSFO, HSFO 380, and LSMGO plus exact Not published gaps for South Korea West.',
+      'Adds exact-date premium/discount sparklines, 1W/1M/3M statistics, and synchronized 1W-to-1Y product charts.',
+      'Preserves immutable report lineage, quarantines conflicts, and publishes settlement MOPS only from a complete European Marketscan AMFSA00/PPXDK00/POABC00 triple.',
+      'Moves long market history behind a lazy authenticated range API and expands System Health with report-sync and MOPS publication outcomes.',
+    ],
+  },
+  {
+    version: '2.0.187',
+    releasedAt: '2026-08-20',
+    title: 'Add delivered bunker market intelligence',
+    changes: [
+      'Separates Delivered Bunkers, Cargo & Forward, and Trading Signals while preserving the controlled MOPS settlement data path.',
+      'Adds Singapore, South Korea, South Korea (West), Zhoushan, and Kaohsiung coverage for VLSFO, HSFO 380, and LSMGO with explicit assessment, posted, unavailable, and stale states.',
+      'Maps Kaohsiung MF-380 to HSFO 380 and displays LS180 as the local VLSFO label.',
+      'Adds deterministic licensed-report review and service-only storage for structured observations without retaining report files or text.',
+    ],
+  },
+  {
+    version: '2.0.186',
+    releasedAt: '2026-08-19',
+    title: 'Configure Buyer PIC row colours',
+    changes: [
+      'Adds ordered row-colour rules to Buyer PIC References, with the first exact match determining each desktop row and mobile card tint.',
+      'Allows any text, multi-line, checkbox, number, Buyer Trader, or Supplier Trader column to drive a colour condition instead of limiting colours to Team.',
+      'Saves colour rules independently with live Account revalidation, revision conflict checks, idempotency, and service-only storage.',
+    ],
+  },
+  {
+    version: '2.0.185',
+    releasedAt: '2026-08-18',
+    title: 'Pin Salesforce Production authentication profile',
+    changes: [
+      'Records Vincent as the non-secret Salesforce Production browser authentication profile while retaining Otto for FCOS, DEVEE, and QAT.',
+      'Requires an exact Salesforce environment and browser-profile acknowledgement before browser authentication guidance is shown.',
+      'Keeps vincexai isolated to the shared Salesforce GitHub repository and never records browser credential or passkey material.',
+    ],
+  },
+  {
+    version: '2.0.184',
+    releasedAt: '2026-08-18',
+    title: 'Clarify Supplier Invoice evidence',
+    changes: [
+      'Labels issued Supplier Statement evidence as a Supplier Invoice number instead of displaying an unexplained Salesforce value.',
+      'Renames the desktop evidence column to Supplier invoice / estimate and gives mobile evidence the same explicit wording.',
+    ],
+  },
+  {
+    version: '2.0.183',
+    releasedAt: '2026-08-18',
+    title: 'Preserve Account results around Insight',
+    changes: [
+      'Opens Account Insight over the live Dashboard so closing it preserves the Account page, exposure results, filters, scroll position, and keyboard focus without another directory request.',
+      'Places the Both, Buyer, and Supplier selector inside every USD credit forecast and keeps unavailable directions visible but disabled.',
+      'Removes repeated exposure explanations from Account results while retaining the combined Credit Statement risk warning.',
+    ],
+  },
+  {
+    version: '2.0.182',
+    releasedAt: '2026-08-18',
+    title: 'Correct combined buyer exposure currency',
+    changes: [
+      'Keeps buyer receivable exposure in Salesforce corporate USD when single-currency STEM records do not expose CurrencyIsoCode.',
+      'Makes the combined Buyer and Supplier statement agree with the authoritative buyer statement instead of defaulting the buyer side to zero.',
+    ],
+  },
+  {
+    version: '2.0.181',
+    releasedAt: '2026-08-18',
+    title: 'Unify Account and GROUP exposure search',
+    changes: [
+      'Combines Buyer and Supplier Account discovery into one exact-ID Company/GROUP search with lifetime role badges and GROUP-first results.',
+      'Adds one Accounts directory with Both, Buyer, and Supplier views, currency-separated receivable, payable, informational net exposure, and period gross profit.',
+      'Adds a combined Account or GROUP statement with separate buyer and supplier forecasts, fail-closed netting, and direct access to each authoritative directional statement.',
+    ],
+  },
+  {
+    version: '2.0.180',
+    releasedAt: '2026-08-18',
+    title: 'Add Supplier payable statements',
+    changes: [
+      'Adds exact-Account Supplier Credit Statements with issued payable balances, conservative uninvoiced estimates, currency-safe KPIs, and descending payment forecasts.',
+      'Adds optional active-GROUP scope, invoice and supplier-child evidence, selectable copy details, and fail-closed identity or completeness safeguards.',
+      'Adds a server-paginated Supplier statements directory and makes the Accounts tab inherit Dashboard Company/GROUP and Port/COUNTRY filters without a second search box.',
+    ],
+  },
+  {
+    version: '2.0.179',
+    releasedAt: '2026-08-18',
+    title: 'Split FCOS Updates queue from preparation',
+    changes: [
+      'Loads the first FCOS Updates screen from queue-only data while mailbox, recipient, and interrupted-delivery preparation continue in the background.',
+      'Preserves the full live preparation response before any batch editing or delivery action becomes available.',
+    ],
+  },
+  {
+    version: '2.0.178',
+    releasedAt: '2026-08-18',
+    title: 'Open FCOS Updates faster',
+    changes: [
+      'Runs independent FCOS Updates database reads concurrently while re-reading batches only when interrupted-delivery recovery changes live state.',
+      'Displays pending, sent, and skipped updates in compact 50-row pages instead of rendering the complete release archive at once.',
+    ],
+  },
+  {
+    version: '2.0.177',
+    releasedAt: '2026-08-18',
+    title: 'Tighten Dashboard filters and accelerate FCOS Updates',
+    changes: [
+      'Places the Company or GROUP and Port or COUNTRY searches together as one compact Dashboard filter group.',
+      'Removes the calculation-explanation control from Account Insight.',
+      'Opens the saved FCOS Updates queue immediately, checks release notes in the background, and keeps the queue usable during synchronization.',
+    ],
+  },
+  {
+    version: '2.0.174',
+    releasedAt: '2026-08-17',
+    title: 'Emphasize expected invoice copy details',
+    changes: [
+      'Removes the redundant Not Issued wording from copied Statement Evidence while keeping the interface warning unchanged.',
+      'Underlines expected invoice amounts and due dates in rich-text destinations and surrounds those phrases with asterisks in plain text.',
+    ],
+  },
+  {
+    version: '2.0.173',
+    releasedAt: '2026-08-17',
+    title: 'Clarify Statement exposure quantities',
+    changes: [
+      'Uses ordered maximum quantities for Not Issued Statement Evidence exposure while preserving Salesforce QLIK quantities for credit reconciliation and forecasts.',
+      'Sorts Statement Evidence by delivery date from newest to oldest and labels the forecast midpoint basis for un-invoiced quantity ranges.',
+    ],
+  },
+  {
+    version: '2.0.172',
+    releasedAt: '2026-08-17',
+    title: 'Calculate complete expected invoice totals',
+    changes: [
+      'Calculates Not Issued Buyer Invoice estimates from non-cancelled ordered product and extra-cost rows without using zero BDN quantities.',
+      'Uses maximum quantities for range orders, identifies those rows as BASIS MAX QTY, groups Not Issued STEMs, and combines actual and expected values into one clearly marked total.',
+    ],
+  },
+  {
+    version: '2.0.171',
+    releasedAt: '2026-08-17',
+    title: 'Include expected invoice amounts',
+    changes: [
+      'Adds the live Salesforce STEM invoice total to copied Statement Evidence when the Buyer Invoice has not yet been issued.',
+      'Keeps Not Issued explicit, labels the value as Expected Invoice Amount, and appends currency-separated expected-amount totals.',
+    ],
+  },
+  {
+    version: '2.0.170',
+    releasedAt: '2026-08-17',
+    title: 'Clarify expected invoice due dates',
+    changes: [
+      'Keeps the Salesforce-backed expected due date in copied Statement Evidence for STEMs whose buyer invoice is Not Issued.',
+      'Labels that date as Expected Due Date and omits overdue or due-soon status until an actual buyer invoice exists.',
+      'Places each Payment Collection queue Select all or Clear all control directly beside the filter label it changes.',
+      'Opens and resets Dashboard to Year to date by default, with a new saved-filter version so the default takes effect immediately.',
+      'Applies Dashboard buyer Account/GROUP and Port/COUNTRY filters to Account Statements, prioritizes GROUP and COUNTRY suggestions, and standardizes COUNTRY labels.',
+    ],
+  },
+  {
+    version: '2.0.169',
+    releasedAt: '2026-08-17',
+    title: 'Make Account Insight exports decision-ready',
+    changes: [
+      'Replaces empty or decorative Account Insight PDF charts with an executive KPI summary, recent-period figures, meaningful payment and risk sections, and ranked STEM tables with repeated page headers.',
+      'Loads Salesforce UOM and Product UOM fallbacks for extra costs and limits missing-UOM alerts to quantity-priced rows that actually require a unit.',
+      'Highlights statement STEMs without buyer invoices as Not Issued, allows them to be copied, and separates issued invoice totals from the explicit not-issued count.',
+    ],
+  },
+  {
+    version: '2.0.168',
+    releasedAt: '2026-08-17',
+    title: 'Clarify Salesforce credit capacity',
+    changes: [
+      'Applies Salesforce Individual, Group, and Special credit-category policies exactly, including uncapped GROUP sharing for COSCO and a one-unit threshold before showing calculated availability differences.',
+      'Moves applicable positive credit limits into a compact forecast legend, removes overlapping zero-limit labels, and removes the monthly buyer/supplier gross-profit chart and payload.',
+      'Hides Special Term live and draft document previews when neither live nor draft Terms Text contains a clause.',
+      'Adds an N/A change-reason toggle that disables the whole-term reason field and submits N/A as the governed revision reason.',
+    ],
+  },
+  {
+    version: '2.0.167',
+    releasedAt: '2026-08-14',
+    title: 'Enforce DEVEE-first Salesforce promotion',
+    changes: [
+      'Pins DEVEE as the only Salesforce development/source environment and records the fixed DEVEE → shared GitHub → QAT → Production promotion order in System Health.',
+      'Requires a fresh successful DEVEE deployment proof for the exact Salesforce source-tree hash before the shared repository can be updated.',
+      'Records Otto for primary FCOS authentication and vincexai as the isolated shared Salesforce GitHub browser fallback while retaining CLI-first verification.',
+    ],
+  },
+  {
+    version: '2.0.166',
+    releasedAt: '2026-08-14',
+    title: 'Guarantee shared Salesforce contribution attribution',
+    changes: [
+      'Pins the non-secret GitHub account ID for the shared Salesforce mirror and requires both commit author and committer to resolve to `vincelessxai` before publication succeeds.',
+      'Rebuilds an existing mirror branch from current shared main with an exact remote-head lease, preventing stale or divergent publication history.',
+      'Documents inherited Ship-Agent readiness metadata and byte-equivalent source evidence on the current shared pull request for repository-owner review.',
+    ],
+  },
+  {
+    version: '2.0.165',
+    releasedAt: '2026-08-14',
+    title: 'Justify Special Term clause text',
+    changes: [
+      'Aligns complete clause lines to both A4 margins while keeping each paragraph’s final line naturally left-aligned in the local preview, PDF, and Word exports.',
+      'Preserves the compact right-aligned number column and hanging text indent across numbered clauses, nested bullets, page continuations, and legacy wording.',
+      'Verifies the shared alignment tokens and native Word paragraph justification without changing Salesforce contractual text.',
+    ],
+  },
+  {
+    version: '2.0.164',
+    releasedAt: '2026-08-14',
+    title: 'Improve Special Term document typography',
+    changes: [
+      'Increased Special Term body copy to readable 12 pt Arial with 1.25 line spacing across the A4 preview, PDF, and Word exports.',
+      'Rebuilt numbered and nested-list geometry with compact right-aligned markers, a consistent text column, aligned wrapped lines, and symmetric page margins.',
+      'Converts preserved Salesforce rich-text markup and tab separators to safe document text before preview and export without rewriting contractual wording.',
+    ],
+  },
+  {
+    version: '2.0.163',
+    releasedAt: '2026-08-14',
+    title: 'Publish professional Special Term documents',
+    changes: [
+      'Restored live PDF downloads and added editable Word exports from Salesforce-authoritative Terms Text while excluding Confirmation and Nomination remarks.',
+      'Added a synchronized responsive A4 preview with shared letterhead, typography, numbering, nested bullets, draft watermarking, pagination, and live-versus-draft controls.',
+      'Fail-closes structured exports on stale records or clause-compilation drift, keeps legacy wording unchanged, and records only redacted document audit metadata.',
+    ],
+  },
+  {
+    version: '2.0.162',
+    releasedAt: '2026-08-13',
+    title: 'Enforce the shared Salesforce mirror',
+    changes: [
+      'Pins the separate vincelessxai authorization and ivanyk20/fcbhk repository as mandatory non-secret Salesforce publication targets in System Health.',
+      'Publishes the complete FCOS Salesforce metadata tree into the shared repository after successful Production, Devee, and QAT deployment while preserving unrelated shared source.',
+      'Blocks FCOS pushes containing Salesforce changes until the shared branch is byte-equivalent and records its owned-file inventory for safe future removals.',
+    ],
+  },
+  {
+    version: '2.0.161',
+    releasedAt: '2026-08-13',
+    title: 'Render Special Term remarks cleanly',
+    changes: [
+      'Converts preserved Salesforce rich-text Confirmation and Nomination remarks to readable bullet text in whole-term migration previews instead of showing HTML markup.',
+    ],
+  },
+  {
+    version: '2.0.160',
+    releasedAt: '2026-08-12',
+    title: 'Scope and restore Ship-Agent reconciliation',
+    changes: [
+      'Limits Ship-Agent Charges detection, reconciliation, and consequential actions to STEM records created on or after 1 January 2026.',
+      'Filters related Salesforce line-item and extra-cost queries at source to avoid scanning irrelevant historical records.',
+      'Repairs the Ship-Agent case synchronization function that caused automatic Payment Collections reconciliation to report unavailable.',
+    ],
+  },
+  {
+    version: '2.0.159',
+    releasedAt: '2026-08-12',
+    title: 'Refresh Email Router across FCOS tabs',
+    changes: [
+      'Broadcasts each completed 30-second mailbox check to every open FCOS tab so the visible Email Router list refreshes even when another tab owns the browser lock.',
+      'Keeps server-side mailbox claims and adds a safe no-BroadcastChannel fallback without sharing mailbox or message content between tabs.',
+      'Removes the requested routing explanations and compacts redirect, recipient, preset, filing, send, and advisor controls to reduce scrolling.',
+    ],
+  },
+  {
+    version: '2.0.158',
+    releasedAt: '2026-08-11',
+    title: 'Clear recovered Email Router maintenance alerts',
+    changes: [
+      'Automatically handles older Email Router maintenance incidents only after a later complete scheduled run succeeds.',
+      'Protects concurrent failures by resolving only incidents that predate the successful maintenance run.',
+      'Strengthens manual recovery verification to require fresh synchronization and active subscriptions for Inbox, Sent Items, and Archive.',
+    ],
+  },
+  {
+    version: '2.0.157',
+    releasedAt: '2026-08-10',
+    title: 'Verify and clear recovered FCOS incidents',
+    changes: [
+      'Added live recovery checks for Special Terms, Hedge Salesforce mapping, Email Router maintenance, legacy Salesforce queries, and controlled bootstrap incidents.',
+      'Prevented development and preview failures from creating global production notification records unless an explicit isolated override is enabled.',
+      'Kept incident audit events intact while allowing verified recoveries to move every active user notification to Handled.',
+    ],
+  },
+  {
+    version: '2.0.156',
+    releasedAt: '2026-08-10',
+    title: 'Refresh changed Salesforce schemas automatically',
+    changes: [
+      'Retries Special Terms schema validation once against live Salesforce when a cached description predates a metadata deployment.',
+      'Keeps genuine schema or access mismatches fail-closed after the forced revalidation.',
+    ],
+  },
+  {
+    version: '2.0.155',
+    releasedAt: '2026-08-10',
+    title: 'Reuse clauses in Special Term remarks',
+    changes: [
+      'Extended the Salesforce Clause Bank to independent Terms Text, Confirmation remark, and Nomination remark projections without duplicating approved wording.',
+      'Replaced free-form remark editing with clause-by-clause plus controls and reviewed Numbered or Hyphen compilation, while preserving each original remark for audited rollback.',
+      'Expanded live-corpus migration review, stale-write enforcement, idempotent all-or-none writes, and Salesforce direct-edit guards across all three projections.',
+    ],
+  },
+  {
+    version: '2.0.154',
+    releasedAt: '2026-08-10',
+    title: 'Reuse approved numbered Special Term clauses',
+    changes: [
+      'Replaced free-form Terms Text editing with a numbered clause composer backed by versioned Salesforce clause identities, immutable approved wording, and selective per-row upgrades.',
+      'Added Draft, approval, retirement, and review-gated legacy migration workflows with active General Manager or Administrator control and preserved original wording.',
+      'Kept Terms_Text__c as the sequential plain-text Salesforce projection while adding stale-write protection, all-or-none assignment changes, targeted caching, and redacted service-only operation history.',
+    ],
+  },
+  {
+    version: '2.0.153',
+    releasedAt: '2026-08-10',
+    title: 'Pin Git pushes to the FCOS identity',
+    changes: [
+      'Bound plain Git HTTPS pushes to the repository-isolated hocheunglai-oss GitHub authorization without changing the Mac\'s global credential helper.',
+      'Added a tracked pre-push identity guard and made credential-helper or hook drift fail the GitHub target pin in System Health.',
+    ],
+  },
+  {
+    version: '2.0.152',
+    releasedAt: '2026-08-10',
+    title: 'Publish signed connection health',
+    changes: [
+      'Replaced manual browser checklist records with live Ed25519-signed, service-only connection attestations backed by one schema-validated target policy.',
+      'Moved Vercel and Supabase credentials to dedicated macOS Keychain items, pinned critical CLI versions, and added parallel identity, target, permission, and credential-lifecycle probes.',
+      'Added attestation freshness to System Health and redacted publication events to the Universal Audit Trail without storing provider secrets or CLI output.',
+    ],
+  },
+  {
+    version: '2.0.151',
+    releasedAt: '2026-08-09',
+    title: 'Pin durable FCOS provider authorization',
+    changes: [
+      'Added a single fail-closed connection command that revalidates the exact GitHub, Vercel, Supabase, and Salesforce targets before delegated CLI use.',
+      'Isolated GitHub, Vercel, and Supabase authorization under ignored repo-local profiles, pinned the Supabase CLI version, and isolated the Salesforce target while retaining its protected host credential store.',
+      'Expanded System Health with the non-secret account, team, project, org, profile, isolation mechanism, and local config policy for every connection.',
+    ],
+  },
+  {
+    version: '2.0.150',
+    releasedAt: '2026-08-09',
+    title: 'Enforce the CLI-first connection checklist',
+    changes: [
+      'Added a Connection Checklist view under System Health for the approved GitHub, Vercel, Supabase, and Salesforce targets.',
+      'Enforced CLI availability, exact non-secret target verification, and CLI use before allowing the Otto Chrome profile solely for a recorded CLI authentication failure.',
+      'Kept checklist persistence browser-local and schema-limited so CLI output, tokens, secrets, and arbitrary credential text cannot be recorded.',
+    ],
+  },
+  {
+    version: '2.0.149',
+    releasedAt: '2026-08-08',
+    title: 'Show connection cleanup warnings accurately',
+    changes: [
+      'Kept healthy provider connectivity online while showing non-blocking System Health warnings for redundant or legacy connection configuration that still needs cleanup.',
+    ],
+  },
+  {
+    version: '2.0.148',
+    releasedAt: '2026-08-08',
+    title: 'Clear transitive dependency advisories',
+    changes: [
+      'Updated DOMPurify, nanoid, and js-yaml within their existing compatible dependency ranges after the production install audit identified current advisories.',
+      'Retained the declared application dependency contract while restoring a zero-vulnerability npm audit result.',
+    ],
+  },
+  {
+    version: '2.0.147',
+    releasedAt: '2026-08-08',
+    title: 'Faster startup and clearer connection health',
+    changes: [
+      'Loaded independent workspace and navigation preferences together to shorten signed-in startup without weakening revision checks.',
+      'Moved the full version audit history and navigation drag-and-drop editor out of the initial browser bundle, and restored release dates for the newest audit entries.',
+      'Unified server-side Supabase key resolution for current secret keys and legacy service-role keys, and surfaced redundant Salesforce authentication modes in System Health.',
+      'Stopped hidden or duplicate Chrome tabs from repeating Email Router synchronization, rejected impossible negative capacity metrics, and labeled the gated Outlook calendar as intentionally disabled.',
+    ],
+  },
+  {
+    version: '2.0.146',
+    releasedAt: '2026-08-08',
+    title: 'Gate final invoices on ship-agent charges',
+    changes: [
+      'Added the Ship-Agent Charges Payment Collections queue with delivery timing, assigned Buyer Trader review, controlled Salesforce extra-cost changes, and documented General Manager overrides.',
+      'Added service-only revisioned confirmation, operation, event, notification, and commitment workflows without mirroring Salesforce financial records.',
+      'Blocked final buyer invoice creation, generation, and sending until shared live Salesforce readiness passes, while preserving proforma and credit-note flows.',
+    ],
+  },
+  {
+    version: '2.0.145',
+    releasedAt: '2026-08-08',
+    title: 'Restore original recipients in Redirect Reply All',
+    changes: [
+      'Restored the original sender and visible original To and Cc participants when a redirected-message recipient uses Reply All.',
+      'Excluded the connected shared mailbox and all original Bcc recipients from the restored reply route.',
+      'Added Microsoft 365 draft verification and a regression case covering an external sender, shared mailbox, original Cc, and one redirect recipient.',
+    ],
+  },
+  {
+    version: '2.0.144',
+    releasedAt: '2026-08-08',
+    title: 'Clear redirect recipients and reply behavior',
+    changes: [
+      'Restored the original message From, To, and Cc details inside every Email Router redirect.',
+      'Kept reviewed redirect To and Cc recipients visible to one another while preserving Bcc privacy and recipient order.',
+      'Directed Reply to the original sender and Reply All to the original sender plus the visible redirect recipients, with live Microsoft 365 draft verification before submission.',
+    ],
+  },
+  {
+    version: '2.0.143',
+    releasedAt: '2026-08-07',
+    title: 'Rich-text Special Terms editing',
+    changes: [
+      'Replaced the Special Terms wording textarea with a sanitized rich-text editor designed around numbered contractual clauses.',
+      'Kept existing Salesforce plain-text wording unchanged until a user deliberately edits and saves the term.',
+      'Prepared Special Terms display and search to handle both existing plain text and reviewed rich-text wording while PDF downloads remain disabled.',
+    ],
+  },
+  {
+    version: '2.0.142',
+    releasedAt: '2026-08-07',
+    title: 'Expanded Email Router mailboxes',
+    changes: [
+      'Added Market Report, Trash, and Junk mailbox views beside Inbox, Sent, and Archive, with Junk clearly highlighted in red.',
+      'Removed the duplicate Reply and Forward action buttons because Forward remains available in the reviewed Route Message panel.',
+      'Made Market Report routing recognize the connected mailbox folder whether Microsoft 365 names it Market Report or Market Reports.',
+    ],
+  },
+  {
+    version: '2.0.141',
+    releasedAt: '2026-08-07',
+    title: 'Forward-and-file Email Router workflow',
+    changes: [
+      'Unified Forward and Redirect in the fixed Route Message panel with ordered To, Cc, and Bcc recipients and no separate Forward confirmation window.',
+      'Added reviewed post-action filing to Archive or Administrator-approved Microsoft 365 folders, with source movement only after Sent Items confirmation and a move-only retry safeguard.',
+      'Added privacy-protected company routing learning that requires three similar confirmed outcomes and confidence above 60% before preselecting an action, recipients, or folder.',
+    ],
+  },
+  {
+    version: '2.0.140',
+    releasedAt: '2026-08-07',
+    title: 'Safer redirects and direct message actions',
+    changes: [
+      'Fixed valid Outlook messages being rejected during Redirect because of harmless original Bcc, Resent, or missing Message-ID headers.',
+      'Moved Reply, Forward, Archive, Trash, and Market Report controls into a distinct action toolbar above the selected message.',
+      'Added a one-click, server-validated move to the exact Microsoft 365 Market Report folder with duplicate-folder protection.',
+    ],
+  },
+  {
+    version: '2.0.139',
+    releasedAt: '2026-08-07',
+    title: 'Live Microsoft 365 redirect confirmation',
+    changes: [
+      'Made Email Router follow each secured outgoing action through Microsoft 365 submission and Sent Items confirmation without requiring a page refresh.',
+      'Replaced the indefinite Queued securely state with live Sending securely, Confirming, Confirmed, or a bounded uncertain outcome.',
+      'Preserved the durable no-duplicate-send safeguard while using the five-minute maintenance job only as recovery fallback.',
+    ],
+  },
+  {
+    version: '2.0.138',
+    releasedAt: '2026-08-07',
+    title: 'Simplified Email Router navigation and leave management',
+    changes: [
+      'Removed the Email Router page tabs and moved Routing Setup into a permission-controlled modal opened from the mailbox toolbar.',
+      'Consolidated personal and company routing availability into one Routing Leave window, with company-wide controls limited to Administrators and the active General Manager.',
+      'Reduced the Email Router header height and removed the Operations label, descriptive copy, and loaded-message count.',
+    ],
+  },
+  {
+    version: '2.0.137',
+    releasedAt: '2026-08-07',
+    title: 'Fixed Email Router action-status placement',
+    changes: [
+      'Moved transient Email Router action results into a persistent page-header status area between the mailbox identity and page actions.',
+      'Removed duplicate confirmed, submitted, uncertain, and failed result banners from the selected-message pane while retaining its permanent action history.',
+    ],
+  },
+  {
+    version: '2.0.136',
+    releasedAt: '2026-08-06',
+    title: 'Embedded email images and immediate redirect archiving',
+    changes: [
+      'Restored embedded PNG, JPEG, GIF, and WebP letterhead images while continuing to block SVG, HTML, scriptable, malformed, and oversized data sources.',
+      'Moved redirected source messages to Archive immediately after Microsoft Graph accepts the outgoing message instead of waiting for the five-minute reconciliation job.',
+      'Removed successfully queued redirects from the open Inbox immediately while durable Sent Items confirmation continues in the background.',
+    ],
+  },
+  {
+    version: '2.0.135',
+    releasedAt: '2026-08-06',
+    title: 'Faster Email Router and message rendering repair',
+    changes: [
+      'Fixed emails such as AICC FENGHUANG displaying hidden WYSIWYG stylesheet comments as visible message content.',
+      'Made message bodies, action history, and known attachment metadata load concurrently, stopped 30-second inbox refreshes from reopening the selected message, and removed duplicate routing-directory requests.',
+      'Prepared short-lived attachment streams with message details so previews and downloads normally avoid an extra request, while preserving authorization and expiry checks.',
+      'Made Archive update the inbox immediately and let Redirect return after its Microsoft 365 draft is durably recorded while protected submission continues in the background.',
+      'Added redacted operation timing for mailbox lists, message details, attachments, and mail actions without recording message or recipient data.',
+    ],
+  },
+  {
+    version: '2.0.134',
+    releasedAt: '2026-08-06',
+    title: 'Trade-date broker settlements',
+    changes: [
+      'Separated broker settlement from the general Hedge pricing-month close and now assigns each broker commission to the month of its trade date.',
+      'Reopened every historical broker/month settlement for review without changing FCBS invoices or SFS report history.',
+      'Added per-broker settlement status, revision protection, audit history, and change detection when trades or commission rates change after settlement.',
+    ],
+  },
+  {
+    version: '2.0.133',
+    releasedAt: '2026-08-06',
+    title: 'Monthly Hedge broker commissions',
+    changes: [
+      'Added an all-history monthly broker commission ledger to Hedge Desk Settlement, grouped by trade month and broker with trade counts and monthly totals.',
+      'Included newly configured broker names in commission totals instead of restricting the calculation to the original fixed broker list.',
+    ],
+  },
+  {
+    version: '2.0.132',
+    releasedAt: '2026-08-06',
+    title: 'Faster Email Router actions',
+    changes: [
+      'Made Archive a one-click action without a confirmation window and removed the redundant Microsoft Graph message preflight.',
+      'Reduced Redirect latency by processing only the newly requested outbox action and leaving Sent Items confirmation to durable background reconciliation.',
+    ],
+  },
+  {
+    version: '2.0.131',
+    releasedAt: '2026-08-06',
+    title: 'Live Email Router Inbox refresh',
+    changes: [
+      'Fixed open Email Router lists remaining stale when another user or tab won the shared 30-second mailbox synchronization claim.',
+      'Every successful heartbeat now refreshes an open Inbox silently, including when the current tab reports that synchronization was completed elsewhere.',
+    ],
+  },
+  {
+    version: '2.0.130',
+    releasedAt: '2026-08-06',
+    title: 'App-wide Email Router synchronization',
+    changes: [
+      'Added a 30-second Email Router mailbox synchronization heartbeat across every FCOS page for users with Email Router access.',
+      'Added a server-side mailbox claim so simultaneous users and tabs share one Graph delta synchronization instead of duplicating calls.',
+      'Refreshes open Email Router message lists from the background heartbeat while retaining Graph notifications and scheduled recovery.',
+    ],
+  },
+  {
+    version: '2.0.129',
+    releasedAt: '2026-08-06',
+    title: 'Special Terms document review',
+    changes: [
+      'Temporarily disabled FCOS-generated Special Term PDF downloads in both the workspace and server while typography, margins, and numbered-list alignment are redesigned.',
+      'Kept Salesforce Confirmation and Nomination attachment settings and Special Term remark copying unchanged.',
+    ],
+  },
+  {
+    version: '2.0.128',
+    releasedAt: '2026-08-06',
+    title: 'Readable mobile workspaces',
+    changes: [
+      'Reserved the icon dock width on mobile so page headings, controls, selection toolbars, and table content remain visible beside the sidebar.',
+    ],
+  },
+  {
+    version: '2.0.127',
+    releasedAt: '2026-08-06',
+    title: 'Individual Special Terms documents',
+    changes: [
+      'Replaced the Special Terms register with selectable, standalone PDFs containing only the authoritative term name and Terms Text beneath the approved company letterhead.',
+      'Added ordered multiple downloads with progress, duplicate filename suffixes, and retry retention for failed documents.',
+      'Added plain-text copy controls for Confirmation and Nomination special remarks in both the Terms table and editing window.',
+    ],
+  },
+  {
+    version: '2.0.126',
+    releasedAt: '2026-08-06',
+    title: 'Special Terms PDF register',
+    changes: [
+      'Added a PDF download to Special Terms that follows the current Terms or Rules view and search filter.',
+      'Generated the report server-side from authoritative Salesforce data with term wording, document remarks, linked rule conditions, source time, and page numbering.',
+      'Kept Salesforce record IDs out of the visible report and recorded only redacted export scope and counts in the audit trail.',
+    ],
+  },
+  {
+    version: '2.0.125',
+    releasedAt: '2026-08-06',
+    title: 'Security and financial workflow hardening',
+    changes: [
+      'Replaced browser-supplied Salesforce queries with server-owned Dashboard filters and made Interoffice data restrictions fail closed when Salesforce metadata cannot be validated.',
+      'Moved financial-report recipients and templates into approved server settings so browser or fallback values cannot restore an obsolete address or alter an internal report.',
+      'Added currency-specific Payment Collection closure thresholds and kept the strict below-0.005 rule for currencies without an approved threshold.',
+      'Standardized financial calculations on Salesforce native quantity and UOM while retaining approximate density conversion only for volume statistics.',
+      'Kept externally closed Salesforce disputes in FCOS until accounting is complete or an authorized external-closure acceptance is recorded with a reason.',
+      'Improved Account Insight exception classification, Email Router availability, safe error messages, targeted incident verification, and release security checks.',
+    ],
+  },
+  {
+    version: '2.0.124',
+    releasedAt: '2026-08-06',
+    title: 'Account Insight data labels',
+    changes: [
+      'Replaced every generic Unspecified label in Account Insight with the exact missing field, such as Currency not set, Product not set, Port not set, UOM not set, Date not set, or Reason not set.',
+      'Removed secondary buyer-broker commission messages from Account Insight data warnings while retaining validated line-item commission calculations.',
+    ],
+  },
+  {
+    version: '2.0.123',
+    releasedAt: '2026-08-06',
+    title: 'Sidebar glass layering correction',
+    changes: [
+      'Kept the expanded sidebar caption glass above Dashboard filters while preserving its position below application dialogs.',
+      'Reduced the caption sheet opacity and blur radius so underlying page content remains visibly blurred through the liquid material.',
+    ],
+  },
+  {
+    version: '2.0.122',
+    releasedAt: '2026-08-06',
+    title: 'Fixed-position dock expansion',
+    changes: [
+      'Kept every sidebar icon at the same horizontal and vertical position when the caption pane expands.',
+    ],
+  },
+  {
+    version: '2.0.121',
+    releasedAt: '2026-08-06',
+    title: 'Liquid caption dock default',
+    changes: [
+      'Made Icon and caption the default sidebar behavior for existing and future users.',
+      'Confined the liquid translucent treatment to the expanded caption pane while preserving the established icon and label styling.',
+    ],
+  },
+  {
+    version: '2.0.120',
+    releasedAt: '2026-08-05',
+    title: 'Two-mode application dock',
+    changes: [
+      'Removed sidebar auto-hide and replaced the workspace preference with Icon only and Icon and caption modes.',
+      'Added whole-dock caption expansion on sidebar hover, single-line labels, and focused row magnification without resizing the active page.',
+    ],
+  },
+  {
+    version: '2.0.119',
+    releasedAt: '2026-08-05',
+    title: 'Icon dock active-state correction',
+    changes: [
+      'Corrected tooltip and navigation composition so inactive dock icons retain their slate color and the current page receives the intended blue active background.',
+    ],
+  },
+  {
+    version: '2.0.118',
+    releasedAt: '2026-08-05',
+    title: 'Translucent application icon dock',
+    changes: [
+      'Replaced the text-heavy application sidebar with a 72-pixel translucent icon dock that magnifies icons and shows complete floating captions on hover or keyboard focus.',
+      'Preserved grouped navigation, active-page indication, notifications, user identity, Settings access, auto-hide behavior, and a temporary expanded mode for navigation customization.',
+    ],
+  },
+  {
+    version: '2.0.117',
+    releasedAt: '2026-08-05',
+    title: 'Readable compact sidebar labels',
+    changes: [
+      'Kept the compact application sidebar while allowing long navigation labels to wrap cleanly instead of hiding their final letters.',
+    ],
+  },
+  {
+    version: '2.0.116',
+    releasedAt: '2026-08-05',
+    title: 'Compact application sidebar',
+    changes: [
+      'Reduced the fixed and auto-hide application sidebar width by approximately 30% while preserving labelled navigation and hover access to truncated page names.',
+      'Moved Version Audit Trail and Sign out from the application sidebar into the Settings navigator on desktop and mobile.',
+    ],
+  },
+  {
+    version: '2.0.115',
+    releasedAt: '2026-08-05',
+    title: 'Simplified Dashboard STEM table',
+    changes: [
+      'Removed raw Port references, Exception Schedule, uncancelled-product flags, and Extra Costs from the Dashboard Filtered STEMs table while retaining them for calculations and search.',
+      'Simplified Buyer and Buyer GROUP labels to the Account name while preserving exact Account identity for Account Insight.',
+    ],
+  },
+  {
+    version: '2.0.114',
+    releasedAt: '2026-08-05',
+    title: 'Account Insight Salesforce schema fix',
+    changes: [
+      'Fixed Account Insight so secondary buyer-broker fields are selected only after Salesforce describe confirms they exist.',
+      'Kept Account Insight available when Salesforce has no secondary buyer-broker commission field by using validated line-item commissions and showing a clear data warning.',
+    ],
+  },
+  {
+    version: '2.0.113',
+    releasedAt: '2026-08-05',
+    title: 'Account insight, faster navigation, and controlled improvements',
+    changes: [
+      'Added exact-Account Dashboard insights with role-specific trading, profitability, payment, risk, STEM, and GROUP analysis plus PDF and CSV exports.',
+      'Added navigation-aware browser snapshots so recent pages reopen immediately, moderately stale pages refresh in the background, and manual Refresh continues to retrieve live data.',
+      'Assigned new FCOS Improvements tickets by default to the active UUID-backed General Manager while preserving controlled reassignment and approval history.',
+      'Completed FCOS-000001 by removing the PSPRS column from external payment-reminder invoice tables and previews without changing internal reports or Payment Collections data.',
+    ],
+  },
+  {
+    version: '2.0.112',
+    releasedAt: '2026-08-05',
+    title: 'Special Terms page restored',
+    changes: [
+      'Restored the Special Terms workspace by keeping Salesforce response-status data in the page component that loads and displays it.',
+      'Added a regression check that prevents the response-status state from being moved outside the Special Terms page scope again.',
+    ],
+  },
+  {
+    version: '2.0.111',
+    releasedAt: '2026-08-05',
+    title: 'Unified and compact Settings workspace',
+    changes: [
+      'Unified Dashboard Search, Hedge Trading Assistant, and Email Router Advisor model selection and usage into one consistent, purpose-based format.',
+      'Redesigned Email Delivery for dense mailbox and purpose tables with one audited, all-or-none save for multiple sender assignment changes.',
+      'Condensed People & Access into searchable user and user-type tables and removed its duplicate audit list in favor of the Universal Audit Trail.',
+      'Standardized Settings navigation, panel width, typography, spacing, controls, and section-specific methodology across desktop and mobile layouts.',
+    ],
+  },
+  {
+    version: '2.0.110',
+    releasedAt: '2026-08-05',
+    title: 'Single-source sidebar preferences',
+    changes: [
+      'Removed the duplicate sidebar mode arrow and navigation-order pencil from the sidebar; both preferences remain managed through My Settings.',
+      'Preserved left-edge hover for auto-hide mode and the existing drag, visibility, reset, cancel, and save workflow when navigation editing is opened from Settings.',
+    ],
+  },
+  {
+    version: '2.0.109',
+    releasedAt: '2026-08-05',
+    title: 'Role-aware Settings workspace',
+    changes: [
+      'Reorganized Settings into Personal, Administration, and Operations sections with mobile navigation, role-aware visibility, stable links, and section-specific save actions.',
+      'Synchronized sidebar, table-density, navigation, and STEM document preferences across browsers while retaining local settings only as an offline cache.',
+      'Moved Email Router, Hedge Desk, Broker Commissions, AI Models, FCOS Updates, System Health, and Audit controls to their owning workflows and introduced one authoritative company exchange-rate provider.',
+    ],
+  },
+  {
+    version: '2.0.108',
+    releasedAt: '2026-08-04',
+    title: 'Shared FCOS Improvements ticketing',
+    changes: [
+      'Added FCOS Improvements for every active user to report reproducible bugs and measurable feature requests, attach private evidence, and follow one shared queue.',
+      'Added General Manager approval for comments, assignments, ticket edits, and status changes, with pending proposals visible to everyone and stale decisions blocked server-side.',
+      'Connected improvement approvals to My Commitments, unified notifications, the redacted Audit Trail, and a Codex helper that can inspect and propose changes but cannot approve them.',
+    ],
+  },
+  {
+    version: '2.0.107',
+    releasedAt: '2026-08-04',
+    title: 'Consistent page methodology and Hedge controls',
+    changes: [
+      'Standardized every page-level Methodology control on the labelled Book icon, typography, color, and size used by Markets and removed the duplicate Markets control.',
+      'Centralized and refreshed the Account Managers, Cashflow, Growth & Coaching, Projects & Tasks, Email Router, Settings, trading, collection, dispute, and operational methodology guides against current workflow and permission rules.',
+      'Removed obsolete Hedge Desk methodology navigation and counterparty banking inputs while preserving historical database values; settlement documents continue to rely on a counterparty-issued invoice when FCOS must pay.',
+    ],
+  },
+  {
+    version: '2.0.106',
+    releasedAt: '2026-08-04',
+    title: 'Report delivery and system error notifications',
+    changes: [
+      'Corrected the Microsoft Graph database context used by the Outstanding Buyer Invoices report, Incoming Payment report, and payment reminders so live delivery no longer fails with an undefined client.',
+      'Added redacted and deduplicated system-error notifications for every active user while excluding normal validation and permission responses.',
+      'Normalized blank optional Hedge Desk dates to no date and rejected invalid calendar dates before saving to PostgreSQL.',
+    ],
+  },
+  {
+    version: '2.0.105',
+    releasedAt: '2026-08-04',
+    title: 'Email images and leave-aware routing',
+    changes: [
+      'Restored embedded email images by resolving Microsoft 365 content identifiers even when Graph excludes inline-only items from its attachment flag, with a clear placeholder when an image is unavailable.',
+      'Added self-managed routing leave, Administrator-managed company schedules, Standard and conditional preset versions, priority and specificity rules, and scheduled routing overrides.',
+      'Protected reviewed preset recipients with a signed 60-minute snapshot, invalidated stale configuration safely, and warned without blocking when selected recipients are currently on leave.',
+    ],
+  },
+  {
+    version: '2.0.104',
+    releasedAt: '2026-08-04',
+    title: 'Case-sensitive Email Router labels',
+    changes: [
+      'Preserved uppercase and lowercase letters in Email Router directory labels and made label uniqueness use an exact case-sensitive comparison throughout Settings and server validation.',
+    ],
+  },
+  {
+    version: '2.0.103',
+    releasedAt: '2026-08-04',
+    title: 'Editable Email Router routing presets',
+    changes: [
+      'Changed routing presets into selectable labels that prefill numbered To, Cc, and Bcc recipients while keeping every recipient editable and switching off the preset label after an amendment.',
+      'Made the case-preserved preset name the only user-visible identifier, enforced case-insensitive name uniqueness, and replaced the preset editor with the same ordered recipient-label controls used by Redirect.',
+    ],
+  },
+  {
+    version: '2.0.102',
+    releasedAt: '2026-08-04',
+    title: 'Email Router message display repair',
+    changes: [
+      'Kept the full message body available when Microsoft Graph cannot return an attachment collection, and retrieved inline-image identifiers only from compatible attachment records.',
+      'Restored safe newsletter table formatting and HTTPS images while containing wide content inside the message viewer.',
+    ],
+  },
+  {
+    version: '2.0.101',
+    releasedAt: '2026-08-04',
+    title: 'Email Router workflow hardening',
+    changes: [
+      'Restored ordered manual To, Cc, and Bcc recipients for Redirect and Forward while keeping preset and directory recipients validated server-side.',
+      'Made routing-directory, group, and preset changes atomic so active presets cannot retain unavailable recipients, and corrected exact-action Undo and inline-image handling.',
+      'Hardened Hedge Desk settlement, Salesforce synchronization, document, and maintenance workflows so failed database outcome tracking cannot be reported as successful.',
+    ],
+  },
+  {
+    version: '2.0.100',
+    releasedAt: '2026-08-04',
+    title: 'Fixed Email Router preset recipients',
+    changes: [
+      'Corrected routing preset validation so a selected person is not rejected because its intentionally empty group field is present, and vice versa.',
+      'Made removed or excluded preset recipients visible and repairable before saving.',
+    ],
+  },
+  {
+    version: '2.0.99',
+    releasedAt: '2026-08-04',
+    title: 'Fixed Email Router directory saving',
+    changes: [
+      'Aligned Email Router audit validation with whole-directory ordering changes so adding, reordering, and saving contacts or groups no longer ends with an event constraint error.',
+    ],
+  },
+  {
+    version: '2.0.98',
+    releasedAt: '2026-08-03',
+    title: 'Fixed Email Router redirect workspace',
+    changes: [
+      'Moved Redirect into a permanent right-side composer with Bcc hidden by default, one explicit Send Redirect action, and the Email Router Advisor directly below Send.',
+      'Preselected the Advisor\'s ordered To, Cc, and Bcc recommendations only above 60% confidence while keeping every redirect under explicit user control.',
+      'Allowed retained inactive external routing contacts to be restored safely instead of failing with a duplicate-email error.',
+    ],
+  },
+  {
+    version: '2.0.97',
+    releasedAt: '2026-08-03',
+    title: 'Ordered Email Router directory',
+    changes: [
+      'Combined FCOS users, approved external contacts, and routing groups into one Administrator-controlled directory with drag-and-drop ordering and revision-safe saving.',
+      'Made Redirect a prominent labeled action and numbered every To, Cc, and Bcc selection while preserving the same visible recipient sequence in the outgoing message.',
+    ],
+  },
+  {
+    version: '2.0.96',
+    releasedAt: '2026-08-03',
+    title: 'Hedge settlement delivery history repair',
+    changes: [
+      'Corrected the settlement-email duplicate-delivery check to use the Hedge operations table’s actual creation timestamp column, restoring safe email preparation before Microsoft Graph submission.',
+    ],
+  },
+  {
+    version: '2.0.95',
+    releasedAt: '2026-08-03',
+    title: 'Exact settlement letterhead contact band',
+    changes: [
+      'Matched the settlement invoice contact band to the company reference by reducing the rule spacing to three millimetres and applying the sampled Fratelli blue to the company name, contact text, and both rules.',
+    ],
+  },
+  {
+    version: '2.0.94',
+    releasedAt: '2026-08-03',
+    title: 'Settlement invoice letterhead and layout refinement',
+    changes: [
+      'Added the company telephone number and general email between full-width letterhead rules, used full legal company names, integrated settlement totals into the payment-direction panel, simplified the footer, and compacted invoices with fewer than twelve trades onto one page where content permits.',
+    ],
+  },
+  {
+    version: '2.0.93',
+    releasedAt: '2026-08-03',
+    title: 'Settlement invoice letterhead restoration',
+    changes: [
+      'Restored the original centred Fratelli Cosulich company letterhead, address, title band, and footer wording on Hedge Desk settlement invoices without changing payment-direction or beneficiary logic.',
+    ],
+  },
+  {
+    version: '2.0.92',
+    releasedAt: '2026-08-03',
+    title: 'Email Router recipient loading clarity',
+    changes: [
+      'Replaced the temporary empty-directory message in Redirect and Forward with an explicit loading state while FCOS retrieves the included users and routing presets.',
+    ],
+  },
+  {
+    version: '2.0.91',
+    releasedAt: '2026-08-03',
+    title: 'Email Router active-user directory and recipient controls',
+    changes: [
+      'Restricted the Email Router routing directory to active FCOS users and added editable initial-based nicknames with Administrator-controlled inclusion.',
+      'Restored independent To, Cc, and Bcc recipient selection for Redirect and Forward while showing nickname-only routing labels.',
+      'Corrected the Email Router Advisor structured request and added clearer model, authentication, and API-limit failure messages.',
+    ],
+  },
+  {
+    version: '2.0.90',
+    releasedAt: '2026-08-03',
+    title: 'Access display and Hedge invoice deletion repair',
+    changes: [
+      'Corrected Users & Access so the protected Administrator and General Manager user types display their effective Email Router access as checked instead of showing a misleading unchecked box.',
+      'Fixed Hedge Desk invoice deletion when generated PDFs are linked by removing document metadata atomically, cleaning up private stored files, and clearly marking the deletion as permanent.',
+    ],
+  },
+  {
+    version: '2.0.89',
+    releasedAt: '2026-08-03',
+    title: 'Email Router access and settlement delivery repair',
+    changes: [
+      'Made Email Router visibility configurable by user type or individual override in Users & Access while preserving access for every existing user during rollout.',
+      'Fixed Email Router Settings profile loading and the Hedge settlement Microsoft Graph tracking error that could appear after an accepted submission.',
+      'Added a readable rich-text settlement email preview, stable uncertain-send protection, and a redesigned professional settlement PDF with explicit payer and beneficiary details.',
+      'Removed the application selector and portal landing from the FCOS interface while retaining the dormant server-side federation foundation for future applications.',
+    ],
+  },
+  {
+    version: '2.0.88',
+    releasedAt: '2026-08-03',
+    title: 'Native FCOS Email Router',
+    changes: [
+      'Integrated Inbox, Sent, Archive, message review, attachment preview, Redirect, Reply, Forward, Archive, Delete, Undo, and controlled uncertain-send review directly into FCOS.',
+      'Moved Email Router directory, groups, presets, mailbox health, and AI Advisor controls into FCOS Settings while granting every active user operator access.',
+      'Replaced portal handoff and standalone identity with FCOS authentication, metadata-only Supabase storage, immutable Microsoft Graph synchronization, and mailbox-scoped Graph actions.',
+      'Added durable draft, submitted, confirmed, failed, and uncertain action states so Graph acceptance is never presented as completed delivery before Sent Items confirmation.',
+    ],
+  },
+  {
+    version: '2.0.87',
+    releasedAt: '2026-08-03',
+    title: 'Payment Collection dispute visibility',
+    changes: [
+      'Highlighted disputed STEMs in Payment Collections with distinct active-dispute, closed-history, and status-review indicators while preserving existing overdue colours.',
+      'Added dispute status to Payment Collection search and a With dispute / No dispute filter without changing reminder or collection workflow rules.',
+    ],
+  },
+  {
+    version: '2.0.86',
+    releasedAt: '2026-08-02',
+    title: 'Amount-based buyer payment posting reconciliation',
+    changes: [
+      'Compared all newly detected buyer payments with the expected Salesforce receivable-balance movement and separated pending, partial, mismatched, and overdue posting exceptions.',
+      'Added visible reconciliation arithmetic and Hong Kong business-day age to Payment Collections, and paused every external reminder route while a posting discrepancy remains active.',
+      'Added an audited, issue-specific reminder override for Finance, Administrators, and the General Manager; changed payment evidence automatically invalidates the override.',
+    ],
+  },
+  {
+    version: '2.0.85',
+    releasedAt: '2026-08-02',
+    title: 'Complete CIA payment classification',
+    changes: [
+      'Classified partial and fully settled buyer receipts as CIA when received on or before either the earliest ETA or actual delivery date, with inclusive date boundaries.',
+      'Added received-versus-delivery comparison details, multi-payment CIA and other-payment totals, expandable payment evidence, and evidence filters with counters in Payment Collections.',
+    ],
+  },
+  {
+    version: '2.0.84',
+    releasedAt: '2026-08-02',
+    title: 'Partial CIA payment evidence',
+    changes: [
+      'Classified an open buyer payment as Partial CIA only when its Salesforce received date is earlier than the STEM earliest ETA; equal, later, or unavailable ETA dates display Partial Payment.',
+    ],
+  },
+  {
+    version: '2.0.83',
+    releasedAt: '2026-08-02',
+    title: 'Clear payment evidence and STEM links',
+    changes: [
+      'Added the buyer payment amount beside its Salesforce received date in Payment Collections so partial-payment evidence is clear.',
+      'Restricted STEM detail opening across operational tables to explicit links in STEM columns; clicking other row cells no longer opens STEM details.',
+    ],
+  },
+  {
+    version: '2.0.82',
+    releasedAt: '2026-08-02',
+    title: 'Payment promise amount entry',
+    changes: [
+      'Defaulted new Payment Collection promise amounts to the current receivable balance and removed the amount field increment and decrement controls.',
+    ],
+  },
+  {
+    version: '2.0.81',
+    releasedAt: '2026-08-02',
+    title: 'Calendar-safe MOPS month queries',
+    changes: [
+      'Corrected MOPS verification, SFS reporting, and Salesforce hedge finalization to use valid next-month date boundaries instead of assuming every month has 31 days.',
+    ],
+  },
+  {
+    version: '2.0.80',
+    releasedAt: '2026-08-02',
+    title: 'Manual MOPS verification evidence',
+    changes: [
+      'Changed final monthly MOPS verification to save the manually verified text without parsing or comparing its wording, month, or values.',
+      'Made saved verification text viewable and editable from Markets while keeping revision, final-trading-day, complete-input, and audit controls.',
+    ],
+  },
+  {
+    version: '2.0.79',
+    releasedAt: '2026-08-02',
+    title: 'Final monthly MOPS verification',
+    changes: [
+      'Corrected paper-hedge expiry so daily MOPS rows must be complete but do not require individual verification.',
+      'Added one controlled verification of the calculated final S380, S0.5, and SGO monthly averages against a manually pasted third-party message.',
+      'Made changes to underlying daily MOPS values invalidate the monthly verification until the final average is verified again.',
+      'Removed counterparty banking details and missing-bank warnings from payable FCBHK settlement documents; payment instructions come from the counterparty invoice.',
+    ],
+  },
+  {
+    version: '2.0.78',
+    releasedAt: '2026-08-02',
+    title: 'Hedge settlement payment direction',
+    changes: [
+      'Made every Hedge settlement document and screen state the payer, payee, beneficiary, and absolute settlement amount explicitly.',
+      'Corrected payable FCBS credit notes so FCBS is the beneficiary and missing FCBS bank details never fall back to the FCBHK account.',
+      'Renamed the Settlement invoice view to FCBHK Invoices and added payer-to-beneficiary information to every invoice row.',
+      'Paper hedges now expire automatically only after the final Platts trading day and complete daily MOPS verification against manually pasted third-party messages.',
+    ],
+  },
+  {
+    version: '2.0.77',
+    releasedAt: '2026-08-02',
+    title: 'Unified AI settings, Markets, and Salesforce Special Terms',
+    changes: [
+      'Combined Dashboard AI Search and Hedge Desk Trading Assistant model selection and estimated USD usage in one AI Models settings tab.',
+      'Moved Markets into a standalone Trading page available to every active user by default while retaining controlled market-price editing.',
+      'Replaced Hedge settlement HTML-source editing with a rich-text editor and draggable settlement variables.',
+      'Aligned the Hedge Desk theme, colors, spacing, and application shell behavior with the rest of FCOS.',
+      'Moved Salesforce SWAPS synchronization to expired paper hedges with final-MOPS validation, server-calculated net P&L, one allocation per linked STEM, and an all-or-none previewed transaction.',
+      'Added Salesforce-authoritative Special Terms wording and rule management with schema validation, stale-write protection, Salesforce-calculated priority, and controlled deletion.',
+    ],
+  },
+  {
+    version: '2.0.76',
+    releasedAt: '2026-08-02',
+    title: 'Graph mailbox registry enforcement',
+    changes: [
+      'Removed the obsolete environment-based mailbox import endpoint so every active sender address is managed only in the protected Graph mailbox registry.',
+      'Extended the Graph-only regression guard to block environment-backed mailbox bootstrap compatibility from returning.',
+    ],
+  },
+  {
+    version: '2.0.75',
+    releasedAt: '2026-08-02',
+    title: 'Hedge Desk retirement and Graph-only email configuration',
+    changes: [
+      'Retired the standalone Hedge Desk deployment after a final source-to-FCOS reconciliation passed without record, relationship, document, or financial mismatches.',
+      'Removed legacy SMTP credentials and channel-specific Microsoft configuration aliases from the active FCOS deployment.',
+      'Made the shared Microsoft Graph application configuration and administrator-assigned mailbox registry the only FCOS email-delivery path.',
+    ],
+  },
+  {
+    version: '2.0.74',
+    releasedAt: '2026-08-02',
+    title: 'Native Hedge Desk and Graph-only email routing',
+    changes: [
+      'Added Hedge Desk to FCOS with physical trades, paper hedges, market prices, settlement, counterparties, month close, protected documents, and administration.',
+      'Migrated and reconciled the existing Hedge Desk book, normalized relationships, settlement history, approved reports, and source audit attribution without recalculating closed history.',
+      'Moved every FCOS email purpose to an administrator-managed Microsoft Graph mailbox route using Vercel OIDC, with no SMTP transport or automatic sender fallback.',
+      'Added Hedge Desk maintenance, Salesforce integration controls, protected Trading Assistant model selection, System Health coverage, and idempotent delivery safeguards.',
+    ],
+  },
+  {
+    version: '2.0.73',
+    releasedAt: '2026-08-02',
+    title: 'Unofficial Compensation claim management',
+    changes: [
+      'Replaced the ambiguous Account Claim action with a Manage view that displays every existing open or closed Salesforce claim and its agreed amount.',
+      'Separated the populated Account management view from the explicit Open New Claim flow.',
+      'Restricted Salesforce compensation status changes to Finance, Administrators, and the active General Manager with server-side enforcement.',
+    ],
+  },
+  {
+    version: '2.0.72',
+    releasedAt: '2026-08-02',
+    title: 'Operational Microsoft Graph sender',
+    changes: [
+      'Moved payment reminders, reports, notifications, and other routine FCOS email to Microsoft Graph using Vercel OIDC and the operational mailbox.',
+      'Added one Graph-first operational mail service with To, CC, BCC, plain-text, and HTML support across existing email workflows.',
+      'Added a guarded temporary SMTP fallback for definite authentication failures while preventing automatic retries after uncertain Graph responses.',
+      'Updated Email Senders and System Health to report the operational and FCOS Updates Microsoft 365 channels independently.',
+    ],
+  },
+  {
+    version: '2.0.71',
+    releasedAt: '2026-08-02',
+    title: 'Email sender configuration display',
+    changes: [
+      'Corrected the Email Senders settings response so both configured Vercel mailbox addresses are displayed.',
+    ],
+  },
+  {
+    version: '2.0.70',
+    releasedAt: '2026-08-01',
+    title: 'Email sender separation',
+    changes: [
+      'Separated the shared operational SMTP mailbox from the dedicated FCOS Updates sender throughout Settings.',
+      'Added independent non-sending health checks for the operational SMTP and FCOS Updates delivery channels.',
+      'Clarified that General Manager sending authority does not determine or change the FCOS Updates sender mailbox.',
+    ],
+  },
+  {
+    version: '2.0.69',
+    releasedAt: '2026-08-01',
+    title: 'Configurable General Manager',
+    changes: [
+      'Added General Manager as a protected user type that can be assigned to a successor in Users & Access.',
+      'Made General Manager transfers atomic while retaining the UUID-backed authority role, reporting-root rules, and full administration access.',
+      'Converted the former General Manager to Administrator and returned them to reporting-line setup after a confirmed transfer.',
+    ],
+  },
+  {
+    version: '2.0.68',
+    releasedAt: '2026-08-01',
+    title: 'General Manager reporting root',
+    changes: [
+      'Made the active UUID-backed General Manager the manager-free reporting hierarchy root while retaining manager eligibility for other employees.',
+      'Added self-managed goal activation and evidence-backed outcomes for the General Manager without self-notifications.',
+      'Added database enforcement against forged General Manager assignments and self-managed goal decisions.',
+    ],
+  },
+  {
+    version: '2.0.67',
+    releasedAt: '2026-08-01',
+    title: 'Settings methodology placement',
+    changes: [
+      'Moved each Settings methodology control from the section navigator into the active page header beside its primary actions.',
+      'Removed the isolated mobile methodology row while retaining section-specific guidance for System Settings, Users & Access, and Audit Trail.',
+    ],
+  },
+  {
+    version: '2.0.66',
+    releasedAt: '2026-08-01',
+    title: 'Reporting-line batch save correction',
+    changes: [
+      'Corrected universal reporting-line saves so assignments are written directly to their validated final state without violating the manager constraint.',
+      'Clearing both manager roles now removes the empty assignment record while retaining goal updates and audit history.',
+    ],
+  },
+  {
+    version: '2.0.65',
+    releasedAt: '2026-08-01',
+    title: 'Universal reporting-line save',
+    changes: [
+      'Replaced row-by-row reporting-line saves with one Save changes button that appears only when assignments are edited.',
+      'Added atomic batch validation so revision conflicts or reporting cycles reject every edited assignment without partial saves.',
+    ],
+  },
+  {
+    version: '2.0.64',
+    releasedAt: '2026-08-01',
+    title: 'Reliable local sign-in',
+    changes: [
+      'Changed the default local development command to run the complete FCOS interface and server API together.',
+      'Added visible authentication errors when FCOS cannot verify a signed-in Supabase account.',
+    ],
+  },
+  {
+    version: '2.0.63',
+    releasedAt: '2026-08-01',
+    title: 'Advisory Manager terminology',
+    changes: [
+      'Renamed the read-only secondary development role to Advisory Manager across Growth & Coaching and reporting-line administration.',
+      'Clarified that Advisory Managers may view goals but cannot comment, approve, or complete them.',
+    ],
+  },
+  {
+    version: '2.0.62',
+    releasedAt: '2026-08-01',
+    title: 'Responsibility-based sidebar sections',
+    changes: [
+      'Focused Trading on Dashboard and Account Managers.',
+      'Added Cross Functions for Payment Collections, disputes, unofficial compensation, and broker commissions.',
+      'Added a dedicated Finance section for Cashflow while preserving each user\'s saved navigation preferences.',
+    ],
+  },
+  {
+    version: '2.0.61',
+    releasedAt: '2026-08-01',
+    title: 'Unofficial Compensation monitoring',
+    changes: [
+      'Added a Salesforce-authoritative Unofficial Compensation workspace grouped by exact Account, Contact, and currency.',
+      'Added controlled Agreed Compensation claim, UOC recovery, group status, and erroneous-recovery actions with live validation and audit protection.',
+      'Connected UOC opened dispute closures to exact-Account Agreed Compensation claims and blocked final closure when a required claim is missing.',
+    ],
+  },
+  {
+    version: '2.0.60',
+    releasedAt: '2026-08-01',
+    title: 'Page methodology guides',
+    changes: [
+      'Added page-specific Methodology dialogs across every authenticated FCOS workspace and application portal.',
+      'Added tab-sensitive methodology for Payment Collections, Broker Commissions and Report Archive, and each Settings section.',
+      'Documented data scope, calculations, priority rules, responsibilities, automatic behavior, and system boundaries in each guide.',
+    ],
+  },
+  {
+    version: '2.0.59',
+    releasedAt: '2026-08-01',
+    title: 'Personal navigation and payment collections',
+    changes: [
+      'Reorganized FCOS into Personal, Trading, and optional Tools sections with per-user ordering and visibility.',
+      'Integrated Incoming Payments with the Payment Collections queue and added live Salesforce reconciliation exceptions.',
+      'Added evidence-backed Payment Advice Received follow-up with reminder pausing and verification dates.',
+      'Integrated Report Archive into Broker Commissions and moved Users & Access and Audit Trail into Settings.',
+    ],
+  },
+  {
+    version: '2.0.58',
+    releasedAt: '2026-07-31',
+    title: 'Coordinated work and development workflows',
+    changes: [
+      'Added My Commitments and actionable notification states across Projects & Tasks and Growth & Coaching.',
+      'Added project followers, blocker links, blocked reasons, health updates, milestones, reusable checklists, and controlled bulk updates.',
+      'Added goal-quality guidance, manager review filters, plan closeout and carry-forward, and private completed-task evidence links.',
+      'Added staged coaching sessions, agenda carry-forward, action acceptance proposals, and on-demand loading of confidential session content.',
+    ],
+  },
+  {
+    version: '2.0.57',
+    releasedAt: '2026-07-31',
+    title: 'Simplified FCOS update email workflow',
+    changes: [
+      'Removed the separate submit, approval, and return steps so Administrators save drafts and only Vincent Lee can send the current saved revision.',
+    ],
+  },
+  {
+    version: '2.0.56',
+    releasedAt: '2026-07-31',
+    title: 'Direct Microsoft 365 update sender',
+    changes: [
+      'Changed FCOS Updates from delegated SMTP sending to passwordless Microsoft 365 OAuth, authenticated by the FCOS production workload and restricted to Vincent Lee\'s mailbox.',
+    ],
+  },
+  {
+    version: '2.0.55',
+    releasedAt: '2026-07-31',
+    title: 'FCOS Updates delivery protection',
+    changes: [
+      'Stopped an FCOS update email batch after the first Microsoft 365 sender-wide rejection, preventing repeated Send As failures from extending SMTP throttling and showing Administrators a clear recovery message.',
+    ],
+  },
+  {
+    version: '2.0.54',
+    releasedAt: '2026-07-31',
+    title: 'FCOS Updates sender identity',
+    changes: [
+      'Changed FCOS update announcements to use Vincent Lee <vincent@cosulich.com.hk> as their dedicated From identity without changing other FCOS email workflows.',
+    ],
+  },
+  {
+    version: '2.0.53',
+    releasedAt: '2026-07-31',
+    title: 'FCOS update email recipients',
+    changes: [
+      'Added a saved, editable recipient list and visible authenticated sender to the FCOS update email review workflow.',
+    ],
+  },
+  {
+    version: '2.0.52',
+    releasedAt: '2026-07-31',
+    title: 'Growth and coaching',
+    changes: [
+      'Added employee-authored measurable development goals with checkpoints, reporting-line approval, progress evidence, and completion review.',
+      'Added confidential equal-participant coaching with mutual invitations, private preparation, shared session confirmation, actions, and private files.',
+      'Added unified work notifications, controlled reminder emails, Outlook calendar synchronization states, and Administrator reporting-line setup.',
+    ],
+  },
+  {
+    version: '2.0.51',
+    releasedAt: '2026-07-31',
+    title: 'Admin-controlled FCOS update emails',
+    changes: [
+      'Added an Administrator release-review queue sourced from the Version Audit Trail, with editable categories and recipient-facing wording.',
+      'Added Vincent-controlled approval, skip, restore, send, and recipient-level retry handling for individual updates and multi-update digests.',
+      'Added service-only delivery tracking, shared authenticated SMTP sending, and FCOS Updates events in the Universal Audit Trail.',
+    ],
+  },
+  {
+    version: '2.0.50',
+    releasedAt: '2026-07-31',
+    title: 'Buyer report recipient persistence',
+    changes: [
+      'Corrected Louisa email address in the Outstanding Buyer Invoices report defaults and stored settings.',
+      'Prevented Payment Reminder template saves from replacing unrelated scheduled report recipients.',
+      'Made external reminder and scheduled report sending fail closed when shared settings storage is unavailable.',
+    ],
+  },
+  {
+    version: '2.0.49',
+    releasedAt: '2026-07-31',
+    title: 'Dashboard AI usage costs',
+    changes: [
+      'Added official standard USD token rates for every available Dashboard interpretation model.',
+      'Added current-month and all-time estimated OpenAI API spend, interpretation counts, and last-use details to AI Search settings.',
+      'Recorded successful OpenAI responses in a service-only usage ledger without storing search prompts or Salesforce data.',
+    ],
+  },
+  {
+    version: '2.0.48',
+    releasedAt: '2026-07-31',
+    title: 'Dashboard AI mobile verification fixes',
+    changes: [
+      'Prevented the mobile Dashboard results table from collapsing when analytics are hidden.',
+      'Hardened all-history interpretation so generic STEM wording is not treated as an extra record condition.',
+    ],
+  },
+  {
+    version: '2.0.47',
+    releasedAt: '2026-07-31',
+    title: 'AI-powered Dashboard record search',
+    changes: [
+      'Added natural-language Dashboard search with clarification, visible interpretations, selected-period defaults, and explicit date overrides.',
+      'Added server-validated Salesforce filters for parties, products, extra costs, operational fields, and financial comparisons without sending records to the AI model.',
+      'Added an Administrator-controlled OpenAI model setting with GPT-5 mini as the recommended default.',
+    ],
+  },
+  {
+    version: '2.0.46',
+    releasedAt: '2026-07-30',
+    title: 'Projects and tasks collaboration',
+    changes: [
+      'Added shared Projects, Tasks, and one-level Subtasks with list and Kanban views, accountable assignment, priorities, due dates, and automatic progress.',
+      'Added globally visible descriptions, comments, mentions, activity history, private related files, and in-app work notifications.',
+      'Restricted assignment, movement, and archive actions to each item owner or General Manager while keeping collaboration visible to every active FCOS user.',
+    ],
+  },
+  {
+    version: '2.0.45',
+    releasedAt: '2026-07-30',
+    title: 'Universal application portal',
+    changes: [
+      'Added an entitled application hub after FCOS sign-in and an application switcher above Daily Work.',
+      'Added audited EmailRouter Owner and Operator access management with automatic Administrator ownership.',
+      'Added signed single-use launch, target-owned sessions, global logout, synchronization status, and retry handling.',
+    ],
+  },
   {
     version: '2.0.44',
     releasedAt: '2026-07-27',

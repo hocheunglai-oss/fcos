@@ -6,9 +6,13 @@ import { sfRequest } from '../api/_salesforce.js';
 
 test('established FCOS integrations stay live while new actions remain UAT gated', () => {
   const gates = externalActionGates({});
-  assert.deepEqual(Object.values(gates).map((gate) => gate.enabled), [true, true, true, false, false]);
+  assert.deepEqual(Object.values(gates).map((gate) => gate.enabled), [true, true, true, false, false, false, false]);
   assert.equal(isExternalActionEnabled('salesforce_write', { FCOS_DISABLE_SALESFORCE_WRITE: 'TRUE' }), false);
   assert.equal(isExternalActionEnabled('salesforce_write', { FCOS_DISABLE_SALESFORCE_WRITE: 'yes' }), true);
+  assert.equal(isExternalActionEnabled('outlook_calendar', {}), false);
+  assert.equal(isExternalActionEnabled('outlook_calendar', { FCOS_ENABLE_OUTLOOK_CALENDAR: 'true' }), true);
+  assert.equal(isExternalActionEnabled('growth_coaching_email', {}), false);
+  assert.equal(isExternalActionEnabled('growth_coaching_email', { FCOS_ENABLE_GROWTH_COACHING_EMAIL: 'true' }), true);
   assert.equal(isExternalActionEnabled('bank_execution', { FCOS_ENABLE_BANK_EXECUTION: 'TRUE' }), true);
 });
 
@@ -38,8 +42,13 @@ test('an emergency Salesforce pause rejects mutations before authentication or n
 
 test('retained live paths include emergency controls at their server boundary', async () => {
   const source = await readFile(new URL('../api/functions/[name].js', import.meta.url), 'utf8');
+  const graphSource = await readFile(new URL('../api/_microsoftGraphMail.js', import.meta.url), 'utf8');
+  const operationalSource = await readFile(new URL('../api/_operationalMail.js', import.meta.url), 'utf8');
   assert.match(source, /async function googleDriveAccessToken\(\) \{\s*requireExternalActionGate\('google_drive'\)/);
-  assert.match(source, /async function sendWithSmtp\([^)]*\) \{\s*requireExternalActionGate\('email_delivery'\)/);
+  assert.match(source, /from '\.\.\/_operationalMail\.js'/);
+  assert.match(operationalSource, /sendGraphPurposeMail/);
+  assert.doesNotMatch(operationalSource, /smtp/i);
+  assert.match(graphSource, /export async function createMicrosoftGraphMailTransport[\s\S]*requireExternalActionGate\('email_delivery'/);
   assert.match(source, /async function outstandingBuyerInvoicesEmailCron[\s\S]*isExternalActionEnabled\('email_delivery'\)/);
   assert.match(source, /async function disputeWorkflowUploadDocument[\s\S]*requireExternalActionGate\('salesforce_write'\)/);
 });
@@ -47,9 +56,18 @@ test('retained live paths include emergency controls at their server boundary', 
 test('FCOS keeps its dedicated Supabase extension and scheduled email cadence', async () => {
   const source = await readFile(new URL('../api/functions/[name].js', import.meta.url), 'utf8');
   const vercel = JSON.parse(await readFile(new URL('../vercel.json', import.meta.url), 'utf8'));
-  assert.match(source, /createClient\(url, serviceRoleKey/);
+  assert.match(source, /serverSupabaseConfig\(\)/);
+  assert.match(source, /createClient\(config\.url, config\.key/);
   assert.deepEqual(vercel.crons, [
     { path: '/api/functions/outstandingBuyerInvoicesEmailCron', schedule: '0 0 * * 1-5' },
     { path: '/api/functions/outstandingBuyerInvoicesEmailCron', schedule: '0 6 * * 1-5' },
+    { path: '/api/functions/paymentCollectionsReconcileCron', schedule: '30 23 * * 0-4' },
+    { path: '/api/functions/portalEntitlementSyncCron', schedule: '30 18 * * *' },
+    { path: '/api/functions/collaborationDailyCron', schedule: '0 1 * * *' },
+    { path: '/api/functions/growthCoachingDailyCron', schedule: '30 0 * * 1-5' },
+    { path: '/api/functions/hedgeDeskMaintenanceCron', schedule: '30 0 * * *' },
+    { path: '/api/functions/marketReportDriveSyncCron', schedule: '0 * * * *' },
+    { path: '/api/functions/masterContractReconcileCron', schedule: '15 * * * *' },
+    { path: '/api/functions/emailRouterMaintenanceCron', schedule: '*/5 * * * *' },
   ]);
 });

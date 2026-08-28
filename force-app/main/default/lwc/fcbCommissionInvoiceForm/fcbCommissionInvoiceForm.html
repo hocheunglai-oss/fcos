@@ -1,0 +1,59 @@
+<template>
+    <lightning-card>
+        <div>
+          <template if:false={isSaved}>
+            <lightning-spinner alternative-text="Loading"></lightning-spinner>
+          </template>
+          <div class="slds-grid">
+            <div class="slds-col slds-size_1-of-2">
+              <h3 slot="title">Invoicing Info (From Brokers)</h3>
+            </div>
+            <div class="slds-col slds-size_1-of-2">
+              <lightning-input type="text" disabled label="Calculated Total" variant="label-stacked"
+                value={totalSumForBrokerText}></lightning-input>
+            </div>
+          </div>
+          <lightning-record-edit-form class="commision-invoice-form" object-api-name="Commission_Invoice__c" onsubmit={handleSubmit} onsuccess={handleSuccess}
+            onerror={handleError}>
+            <lightning-input class="commission-invoice-field" type="date" label="Invoice Date" date-style="short" variant="label-stacked"
+              value={invoiceDateValue} onchange={handleChangeInvoiceDate} required disabled={disableCommissionInputs}>
+            </lightning-input>
+            <div class="slds-grid slds-gutters">
+              <div class="slds-col slds-size_1-of-2">
+                <lightning-input-field disabled={disableCommissionInputs} class="commission-invoice-field" field-name="Name" variant="label-stacked" required>
+                </lightning-input-field>
+                <div style="display: none">
+                  <lightning-input-field field-name="Broker__c" variant="label-stacked">
+                  </lightning-input-field>
+                </div>
+                <lightning-combobox class="commission-invoice-field" name="brokerpicklist" label="Broker" value={brokerId} placeholder="Select Broker"
+                  options={options} required="true" onchange={handleChange} disabled={disableCommissionInputs}>
+                </lightning-combobox>
+                <lightning-combobox name="bankDetailsPicklist" label="Bank Details" value={bankDetailsValue}
+                  placeholder="Select Bank Details" options={bankDetailOptions} onchange={handleBankDetailChange}
+                  class="slds-m-top_x-small" disabled={disableCommissionInputs} required>
+                </lightning-combobox>
+                <div style="display: none">
+                  <lightning-input-field field-name="STEM__c" variant="label-stacked" value={recordId} disabled="true">
+                  </lightning-input-field>
+                </div> 
+              </div>
+              <div class="slds-col slds-size_1-of-2">
+                <lightning-input class="commission-invoice-field" variant="label-stacked" type="number" formatter="currency" label="Invoice Amount"
+                  value={invoiceAmountValue} onchange={handleChangeInvoiceAmount} required step="0.01" disabled={disableCommissionInputs}>
+                </lightning-input>
+              </div>
+      
+            </div>
+            <div class="slds-grid">
+              <c-fcb-file-upload-binder disabled={disableCommissionInputs} uploader-label="Comm" uploader-value="COMM"></c-fcb-file-upload-binder>
+            </div>
+            <div class="slds-grid">
+              <lightning-button class="slds-var-m-top_small slds-column" variant="brand" type="submit" name="createSEC"
+                label="Create Commission Invoice" disabled={disableCommissionInputs}>
+              </lightning-button>
+            </div>
+          </lightning-record-edit-form>
+        </div>
+      </lightning-card>
+</template>

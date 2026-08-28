@@ -1,4 +1,7 @@
 {
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "installCommand": "npm ci",
+  "regions": ["sin1"],
   "crons": [
     {
       "path": "/api/functions/outstandingBuyerInvoicesEmailCron",
@@ -7,11 +10,43 @@
     {
       "path": "/api/functions/outstandingBuyerInvoicesEmailCron",
       "schedule": "0 6 * * 1-5"
+    },
+    {
+      "path": "/api/functions/paymentCollectionsReconcileCron",
+      "schedule": "30 23 * * 0-4"
+    },
+    {
+      "path": "/api/functions/portalEntitlementSyncCron",
+      "schedule": "30 18 * * *"
+    },
+    {
+      "path": "/api/functions/collaborationDailyCron",
+      "schedule": "0 1 * * *"
+    },
+    {
+      "path": "/api/functions/growthCoachingDailyCron",
+      "schedule": "30 0 * * 1-5"
+    },
+    {
+      "path": "/api/functions/hedgeDeskMaintenanceCron",
+      "schedule": "30 0 * * *"
+    },
+    {
+      "path": "/api/functions/marketReportDriveSyncCron",
+      "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/functions/masterContractReconcileCron",
+      "schedule": "15 * * * *"
+    },
+    {
+      "path": "/api/functions/emailRouterMaintenanceCron",
+      "schedule": "*/5 * * * *"
     }
   ],
   "rewrites": [
     {
-      "source": "/((?!api/.*).*)",
+      "source": "/((?!api/|src/|@vite/|@react-refresh|@fs/|@id/|node_modules/|assets/|favicon\\.svg$|manifest\\.json$|app-version\\.json$).*)",
       "destination": "/index.html"
     }
   ]

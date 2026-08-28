@@ -49,7 +49,7 @@ test('approval, payment reconciliation, and Finance instruction updates use atom
 });
 
 test('legacy amount amendment is restricted to the responsible trader or administrator', () => {
-  assert.match(apiSource, /profile\.user_type !== 'administrator' && !responsibleTrader/);
+  assert.match(apiSource, /!isAdministratorUserType\(profile\.user_type\) && !responsibleTrader/);
   assert.match(apiSource, /Only the responsible trader or an administrator/);
 });
 

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Package xmlns="http://soap.sforce.com/2006/04/metadata">
+    <types>
+        <members>PaidAmountService</members>
+        <members>PaidAmountServiceTest</members>
+        <members>StemTriggerHandler</members>
+        <members>StemTriggerHandlerTest</members>
+        <name>ApexClass</name>
+    </types>
+    <types>
+        <members>StemTrigger</members>
+        <name>ApexTrigger</name>
+    </types>
+    <types>
+        <members>STEM__c.Buyer_Broker__c</members>
+        <name>CustomField</name>
+    </types>
+    <version>67.0</version>
+</Package>

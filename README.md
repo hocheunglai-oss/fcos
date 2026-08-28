@@ -2,7 +2,7 @@
 
 FCOS is a Vite/React analytics app backed by Vercel serverless API routes. It connects directly to Salesforce from the server side.
 
-FCOS remains the live Supabase extension to Salesforce while FCOS Backbone is built. Its existing Salesforce writeback, Google Drive report archive, and scheduled/manual email functions remain intact and enabled by default because users rely on them today. Emergency server controls can pause each connector without removing or replacing its legacy implementation. New bank execution and payment-promotion paths remain disabled until their respective business UAT approval.
+FCOS is the live Supabase extension to Salesforce. Its existing Salesforce writeback, Google Drive report archive, and scheduled/manual email functions remain intact and enabled by default because users rely on them today. Emergency server controls can pause each connector without removing or replacing its legacy implementation. New bank execution and payment-promotion paths remain disabled until their respective business UAT approval.
 
 ## Local Development
 
@@ -30,18 +30,57 @@ FCOS_ENABLE_PAYMENT_PROMOTION=false
 
 Changing any control is an operationally controlled action. The kill switches preserve the current FCOS implementation and provide a reversible emergency pause; they are not migration switches.
 
-The optional FCOS Backbone shadow bridge is server-only and does not replace a live FCOS read. Configure the same high-entropy secret in both Vercel projects only when the bridge is ready for identity and projection UAT:
+### Microsoft Graph email routing
+
+Every FCOS email purpose uses Microsoft Graph and an approved Microsoft 365
+mailbox. One protected Entra application and Vercel OIDC trust provide the
+application identity:
 
 ```bash
-FCOS_BACKBONE_URL=https://fcbhk-erp.vercel.app
-FCOS_BACKBONE_BRIDGE_SECRET=<shared server secret of at least 32 characters>
+FCOS_MICROSOFT_TENANT_ID=your_tenant_id
+FCOS_MICROSOFT_CLIENT_ID=your_application_client_id
 ```
 
-Backbone supports a zero-interruption rotation window: first set its primary secret to a newly generated value and `FCOS_BRIDGE_SHARED_SECRET_PREVIOUS` to the still-live value, then deploy Backbone; update this FCOS secret to the new value and deploy FCOS; confirm FCOS System Health reports `credentialVersion: primary`; after the signed-request window and rollback margin, remove Backbone's previous-secret variable. Secrets never belong in source control or browser variables.
+Administrators and the active General Manager register mailbox addresses and
+assign one mailbox to each email purpose in Settings. These assignments are
+non-secret Supabase configuration. The Entra federated credential must match
+the Vercel production issuer, subject, and audience exactly. In Exchange Online,
+assign `Application Mail.Send` to the service principal through a recipient scope
+covering every approved mailbox. Do not also grant an unscoped Entra `Mail.Send`
+application permission because Entra and Exchange grants are additive. This
+Microsoft Graph route is the only FCOS email-delivery path.
 
-When configured, System Health resolves the current FCOS user to an active Backbone HKG identity. The server can then run bounded `trade.find`, `trade.changes`, and `audit.list` comparisons. A mapped Backbone Finance or Administrator user can also retrieve the read-only `finance.handoffs` summary list through the Exception Review module boundary; it has no acknowledgement, invoice, payment, email, Drive, Salesforce, or bank mutation. FCOS continues using its current Salesforce and dedicated Supabase paths until an individual replacement is accepted and rehearsed.
+### External application foundation and Email Router
 
-See [FCOS live continuity during the Backbone transition](docs/live-continuity-during-backbone-transition.md) for the preserved-function and replacement rules.
+FCOS retains a server-side federation foundation for future registered external
+applications. No application portal or app switcher is shown while FCOS is the
+only active application. The federation service signs short-lived ES256
+assertions and never shares FCOS browser tokens or the Supabase service role
+with a target application. Email Router is native FCOS functionality and does
+not use a portal handoff, a second Supabase Auth session, or target-application
+entitlements. Its page visibility is managed through Users & Access.
+
+Configure these server-only values in FCOS:
+
+```bash
+FCOS_PORTAL_ISSUER=https://fcos.fcuno.com
+FCOS_PORTAL_SIGNING_KEY_ID=fcos-portal-2026-01
+FCOS_PORTAL_SIGNING_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"
+```
+
+External targets configure the matching public key, issuer, and key ID and may
+stage a next public key before private-key rotation. Application entitlements,
+synchronization failures, and logout retries are stored only in service-role
+tables.
+
+The native Email Router uses the same FCOS Microsoft Entra application and
+Vercel OIDC trust as Graph-only email delivery. Its connected mailbox is stored
+in the protected Graph mailbox registry and must have mailbox-scoped
+`Application Mail.ReadWrite` and `Application Mail.Send` Exchange RBAC roles.
+Message bodies, MIME, full recipient lists, and attachment bytes remain in
+Microsoft 365; Supabase stores only operational metadata and durable action
+state. Redirect, Reply, and Forward create a Graph draft before submission and
+are not confirmed until the resulting item is reconciled in Sent Items.
 
 ## Account Identity
 
@@ -69,6 +108,8 @@ SALESFORCE_REFRESH_TOKEN=your_salesforce_refresh_token
 For a temporary test only, `SALESFORCE_ACCESS_TOKEN` can be used, but it will expire and should not be used for production. If JWT or refresh-token environment variable names exist but any required value is blank, the app intentionally blocks the temporary access-token fallback and reports a System Health configuration error.
 
 ## Deployment
+
+Salesforce metadata follows one source-controlled promotion path: deploy and verify an explicit reviewed change manifest in DEVEE, publish the complete current DEVEE-owned `force-app` tree to the `ivanyk20/fcbhk` `src/` mirror, then promote the same manifest to QAT and finally Production. Run `npm run salesforce:deploy:all -- --manifest manifest/<change>.xml`; the command verifies every pinned org identity, derives the scoped Apex tests from the manifest, enforces the order, records a non-secret DEVEE deployment proof bound to the complete source-tree hash, and blocks shared publication unless that hash matches. Never develop or synchronize independently from QAT or Production. Full-tree validation remains available through `npm run salesforce:validate:all`, but it intentionally includes unrelated local org tests and is not the normal promotion route.
 
 Production deploys are handled by Vercel:
 

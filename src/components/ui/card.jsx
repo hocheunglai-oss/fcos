@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils"
 const Card = React.forwardRef(({ className, ...props }, ref) => (
   <div
     ref={ref}
-    className={cn("glass-surface rounded-xl border bg-card text-card-foreground", className)}
+    className={cn("material-panel rounded-[var(--radius-panel)] border border-border bg-card text-card-foreground shadow-[var(--shadow-panel)]", className)}
     {...props} />
 ))
 Card.displayName = "Card"

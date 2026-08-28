@@ -29,11 +29,13 @@ test('projects a stale FCOS workflow as externally closed without replacing its 
   });
 
   assert.deepEqual(projection, {
-    workflowStatus: 'Closed',
+    workflowStatus: 'Approved - Pending Accounting',
     currentSalesforceStatus: 'Closed',
     internalWorkflowStatus: 'Approved - Pending Accounting',
     externalClosure: true,
-    legacyReadOnly: true,
+    externalClosureRequiresReview: true,
+    commercialReadOnly: true,
+    legacyReadOnly: false,
     salesforceLastModifiedAt: '2026-07-24T05:10:00.000Z',
   });
 });
@@ -80,22 +82,27 @@ test('ignores non-closed Salesforce statuses and cases without workflow storage'
   }), null);
 });
 
-test('queue projection, read-only controls, and conditional Salesforce writeback stay connected', async () => {
-  const [apiSource, salesforceSource, pageSource] = await Promise.all([
+test('queue projection preserves Finance accounting and requires authorized external closure acceptance', async () => {
+  const [apiSource, salesforceSource, pageSource, migrationSource] = await Promise.all([
     readFile(new URL('../api/functions/[name].js', import.meta.url), 'utf8'),
     readFile(new URL('../api/_salesforce.js', import.meta.url), 'utf8'),
     readFile(new URL('../src/pages/DisputeWorkflow.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('../supabase/migrations/20260806100000_dispute_external_closure_reconciliation.sql', import.meta.url), 'utf8'),
   ]);
 
   assert.match(apiSource, /projectExternallyClosedDisputeWorkflows\(rows, workflowMap\)/);
   assert.match(apiSource, /'If-Unmodified-Since': ifUnmodifiedSince/);
   assert.match(apiSource, /await patchDisputeWorkflowStatusInSalesforce\(caseRow, 'Pending Approval'\)/);
   assert.match(apiSource, /await patchDisputeWorkflowStatusInSalesforce\(caseRow, workflowStatus\)/);
-  assert.match(apiSource, /if \(!hasRecordedFcosClosureWriteback\(caseRow\)\) assertSalesforceDisputeIsOpen\(currentStem\)/);
+  assert.match(apiSource, /hasUnacceptedExternalDisputeClosure\(caseRow, currentStem\)/);
+  assert.match(apiSource, /disputeWorkflowAcceptExternalClosure/);
+  assert.match(apiSource, /requireExternalDisputeClosureAuthority/);
   assert.match(salesforceSource, /sfRequest\(path, \{\s*method = 'GET',\s*body,\s*headers = \{\}/);
   assert.match(salesforceSource, /if \(!\['GET', 'HEAD'\]\.includes\(normalizedMethod\) && !readOnly\) requireExternalActionGate\('salesforce_write'\)/);
   assert.match(salesforceSource, /\.\.\.headers/);
-  assert.match(pageSource, /const canReview = !legacyReadOnly/);
-  assert.match(pageSource, /const canManageDocuments = !legacyReadOnly/);
-  assert.match(pageSource, /Closed directly in Salesforce\./);
+  assert.match(pageSource, /const canReview = !legacyReadOnly && !externalClosure/);
+  assert.match(pageSource, /const canAccount = capabilities\?\.canAccount/);
+  assert.match(pageSource, /Accept Salesforce Closure/);
+  assert.match(migrationSource, /external_closure_acceptance_reason/);
+  assert.match(migrationSource, /external_closure_accepted/);
 });

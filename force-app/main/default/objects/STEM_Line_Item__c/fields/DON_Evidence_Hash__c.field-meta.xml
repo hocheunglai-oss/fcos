@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>DON_Evidence_Hash__c</fullName>
+    <description>SHA-256 fingerprint of the reviewed FCOS benchmark evidence.</description>
+    <label>DON Evidence Hash</label>
+    <length>64</length>
+    <type>Text</type>
+</CustomField>

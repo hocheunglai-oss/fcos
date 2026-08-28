@@ -1,0 +1,19 @@
+{
+  "client": {
+    "largestJavaScriptBytes": 720000,
+    "largestJavaScriptGzipBytes": 215000,
+    "chartChunkBytes": 405000,
+    "totalJavaScriptBytes": 3715000
+  },
+  "server": {
+    "universalDispatcherLines": 19600,
+    "universalFunctionKilobytes": 23000,
+    "dedicatedFunctionKilobytes": 9000
+  },
+  "requests": {
+    "workNotificationsDatabase": 1,
+    "workNotificationsSalesforce": 2,
+    "emailRouterForegroundFolders": 1,
+    "emailRouterForegroundPages": 1
+  }
+}
