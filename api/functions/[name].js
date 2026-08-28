@@ -15,11 +15,7 @@ import { dashboardAccountRankings } from '../../src/lib/dashboardAccountRankings
 import { loadDashboardAccountInsight } from '../_dashboardAccountInsightService.js';
 import { generateDashboardAccountInsightExport } from '../_dashboardAccountInsightExport.js';
 import { loadDashboardAccountCreditDirectory, loadDashboardAccountCreditStatement } from '../_dashboardAccountCreditStatementService.js';
-import {
-  buildBuyerPaymentDelayModels,
-  normalizeBuyerPaymentConservativeness,
-  selectBuyerPaymentDelayModel,
-} from '../_buyerPaymentPerformance.js';
+import { buildBuyerPaymentDelayModels, normalizeBuyerPaymentConservativeness, selectBuyerPaymentDelayModel } from '../_buyerPaymentPerformance.js';
 import { loadDashboardAccountExposureBatch, loadDashboardCounterpartySearch, resolveUnifiedCounterpartyMemberIds } from '../_dashboardUnifiedCounterpartyService.js';
 import { generateSpecialTermsDocument } from '../_specialTermsExport.js';
 import { groupPaymentReminderRows } from '../_paymentReminderRouting.js';
