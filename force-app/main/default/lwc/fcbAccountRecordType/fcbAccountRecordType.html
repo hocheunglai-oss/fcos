@@ -20,6 +20,12 @@
                         checked={isVariable} onchange={handleChangeRecordType}>
                     </lightning-input>
                 </div>
+                <div class="record-type-field">
+                    <lightning-input name="agencyFeeUsd" type="number" label="Agreed Agency Fee (USD)"
+                        variant="label-stacked" min="0.01" step="0.01" value={agencyFeeUsd}
+                        onchange={handleAgencyFeeChange}>
+                    </lightning-input>
+                </div>
                 <template if:false={isBrokerRecordType}>
                     <div class="record-type-field">
                         <lightning-input name="isBroker" type="checkbox" label="Is Broker" variant="label-stacked"

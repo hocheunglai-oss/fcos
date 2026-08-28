@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Package xmlns="http://soap.sforce.com/2006/04/metadata">
+    <types>
+        <members>Account.Agency_Fee_USD__c</members>
+        <members>STEM_Extra_Cost__c.Hong_Kong_Bundle_Key__c</members>
+        <members>STEM_Extra_Cost__c.Hong_Kong_Bundle_Managed__c</members>
+        <members>STEM_Extra_Cost__c.Hong_Kong_Bundle_Sequence__c</members>
+        <members>STEM_Extra_Cost__c.Hong_Kong_Bundle_Source__c</members>
+        <members>STEM_Extra_Cost__c.Port_Clearance_Rate_HKD__c</members>
+        <members>STEM_Extra_Cost__c.Port_Clearance_Calculation_Version__c</members>
+        <name>CustomField</name>
+    </types>
+    <types>
+        <members>Account.Agency_Fee_Must_Be_Positive</members>
+        <name>ValidationRule</name>
+    </types>
+    <version>67.0</version>
+</Package>

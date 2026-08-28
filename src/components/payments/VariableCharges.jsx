@@ -63,11 +63,15 @@ import { calculateHongKongAnchorageDues } from '@/lib/anchorageDues';
 import { LIGHT_DUES_CATEGORY_ALL_OTHER, LIGHT_DUES_CATEGORY_RIVER_TRADE, calculateHongKongLightDues } from '@/lib/lightDues';
 import { cn } from '@/lib/utils';
 import {
-  anchorageBuyerTotalAdjustment,
   buyerAmountWithAnchorageDecision,
+  buyerDecisionDefaultForItem,
+  buyerDecisionLockedForItem,
   buyerDecisionOptionsForItem,
   buyerPriceWithAnchorageDefault,
+  isIncludedBasicCallingItem,
   isHongKongAnchorageDuesItem,
+  isPortClearanceItem,
+  supplierCostLockedForItem,
 } from '@/lib/variableChargeRules';
 
 const VIEWS = [
@@ -209,7 +213,11 @@ function caseStatus(caseRow) {
 }
 
 function normalizeReviewRows(lineItems = [], extraCosts = []) {
-  const compare = (a, b) => itemLabel(a).localeCompare(itemLabel(b), 'en', { sensitivity: 'base' }) || a.sourceId.localeCompare(b.sourceId);
+  const compare = (a, b) => {
+    const aSequence = finiteNumber(valueOf(a.item, ['bundleSequence', 'bundle_sequence'])) ?? 100;
+    const bSequence = finiteNumber(valueOf(b.item, ['bundleSequence', 'bundle_sequence'])) ?? 100;
+    return aSequence - bSequence || itemLabel(a).localeCompare(itemLabel(b), 'en', { sensitivity: 'base' }) || a.sourceId.localeCompare(b.sourceId);
+  };
   return [
     ...lineItems.map((item, index) => ({ key: `line:${rowId(item, 'line', index)}`, sourceType: 'line_item', sourceId: rowId(item, 'line', index), item, readOnly: true })).sort(compare),
     ...extraCosts.map((item, index) => ({ key: `extra:${rowId(item, 'extra', index)}`, sourceType: 'extra_cost', sourceId: rowId(item, 'extra', index), item, readOnly: false })).sort(compare),
@@ -221,7 +229,7 @@ function initialReview(row) {
   return {
     outcome: '',
     reviewed: item.reviewed === true,
-    buyerChargeDecision: text(valueOf(item, ['buyerChargeDecision', 'buyer_charge_decision'])),
+    buyerChargeDecision: text(valueOf(item, ['buyerChargeDecision', 'buyer_charge_decision'])) || buyerDecisionDefaultForItem(item),
     referenceOrNote: text(valueOf(item, ['referenceOrNote', 'reference_or_note', 'reviewNote', 'review_note'])),
     evidenceDocumentIds: Array.isArray(item.evidenceDocumentIds || item.evidence_document_ids)
       ? (item.evidenceDocumentIds || item.evidence_document_ids).map(String)
@@ -241,7 +249,7 @@ function initialExtraDraft(item) {
     supplierCost: valueOf(item, ['supplierCurrency.inputAmount'], null) ?? (pricingType === 'fixed'
       ? valueOf(item, ['fixedCost', 'fixed_cost', 'Lumpsum_Cost__c'], '')
       : valueOf(item, ['cost', 'unitCost', 'unit_cost', 'Unit_Cost__c'], '')),
-    buyerPrice: lightDues && finiteNumber(storedBuyerPrice) == null ? 0 : storedBuyerPrice,
+    buyerPrice: (lightDues && finiteNumber(storedBuyerPrice) == null ? 0 : storedBuyerPrice),
     quantity: valueOf(item, ['quantity', 'Quantity__c'], ''),
     unitOfMeasure: text(valueOf(item, ['unitOfMeasure', 'unit_of_measure', 'Unit_of_Measure__c'], '1.')),
     cancelled: item.cancelled === true || item.Cancelled__c === true,
@@ -560,7 +568,9 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
       const draft = extraDrafts[id] || original;
       const expectedLastModifiedDate = valueOf(item, ['lastModifiedDate', 'last_modified_date', 'LastModifiedDate'], null);
       if (draft.cancelled && !original.cancelled) { cancellations.push({ extraCostId: id, expectedLastModifiedDate }); return; }
-      if (changeKey({ ...draft, cancelled: false }) !== changeKey({ ...original, cancelled: false })) {
+      const matchingRow = stageRows.find((row) => row.sourceId === id);
+      const forceManagedPortReview = isPortClearanceItem(item) && reviews[matchingRow?.key]?.outcome === 'changed';
+      if (forceManagedPortReview || changeKey({ ...draft, cancelled: false }) !== changeKey({ ...original, cancelled: false })) {
         extraCostUpdates.push({
           extraCostId: id, expectedLastModifiedDate, description: draft.description,
           pricingType: draft.pricingType, supplierCost: Number(draft.supplierCost), inputCurrency: draft.inputCurrency || 'USD', expectedFxSettingsRevision: Number(detail?.variableChargeSettings?.revision),
@@ -667,7 +677,7 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
       if (costSelected && row.sourceType === 'extra_cost' && review.outcome === 'changed') {
         const original = initialExtraDraft(row.item);
         const draft = extraDrafts[row.sourceId] || original;
-        const changed = changeKey({ description: draft.description, pricingType: draft.pricingType, supplierCost: draft.supplierCost, inputCurrency: draft.inputCurrency, quantity: draft.quantity, unitOfMeasure: draft.unitOfMeasure })
+        const changed = isPortClearanceItem(row.item) || changeKey({ description: draft.description, pricingType: draft.pricingType, supplierCost: draft.supplierCost, inputCurrency: draft.inputCurrency, quantity: draft.quantity, unitOfMeasure: draft.unitOfMeasure })
           !== changeKey({ description: original.description, pricingType: original.pricingType, supplierCost: original.supplierCost, inputCurrency: original.inputCurrency, quantity: original.quantity, unitOfMeasure: original.unitOfMeasure });
         if (!changed) { setSaveError(`Make the intended cost change for ${itemLabel(row)}, or mark it Correct.`); return; }
         if (!text(draft.description) || finiteNumber(draft.supplierCost) == null || (draft.pricingType === 'per_unit' && (!(finiteNumber(draft.quantity) > 0) || !text(draft.unitOfMeasure)))) {
@@ -680,7 +690,7 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
           ? !(finiteNumber((extraDrafts[row.sourceId] || initialExtraDraft(row.item)).buyerPrice) > 0)
           : finiteNumber((extraDrafts[row.sourceId] || initialExtraDraft(row.item)).buyerPrice) == null)) {
         setSaveError(isHongKongAnchorageDuesItem(row.item)
-          ? 'Enter a positive excess Anchorage Dues buyer charge when the vessel stayed more than 12 hours.'
+          ? 'Enter a positive Anchorage Dues buyer charge when the reviewed supplier charge was incurred.'
           : `Enter the Buyer price for ${itemLabel(row)}.`); return;
       }
     }
@@ -698,7 +708,8 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
       if (costSelected && supplierOutcome === 'cancelled' && draft.cancelled && !original.cancelled) {
         cancellations.push({ extraCostId: id, expectedLastModifiedDate });
       } else if (costSelected && supplierOutcome === 'changed'
-        && changeKey({ description: draft.description, pricingType: draft.pricingType, supplierCost: draft.supplierCost, inputCurrency: draft.inputCurrency, quantity: draft.quantity, unitOfMeasure: draft.unitOfMeasure }) !== changeKey({ description: original.description, pricingType: original.pricingType, supplierCost: original.supplierCost, inputCurrency: original.inputCurrency, quantity: original.quantity, unitOfMeasure: original.unitOfMeasure })) {
+        && (isPortClearanceItem(item)
+          || changeKey({ description: draft.description, pricingType: draft.pricingType, supplierCost: draft.supplierCost, inputCurrency: draft.inputCurrency, quantity: draft.quantity, unitOfMeasure: draft.unitOfMeasure }) !== changeKey({ description: original.description, pricingType: original.pricingType, supplierCost: original.supplierCost, inputCurrency: original.inputCurrency, quantity: original.quantity, unitOfMeasure: original.unitOfMeasure }))) {
         costUpdates.push({ extraCostId: id, expectedLastModifiedDate, description: draft.description, pricingType: draft.pricingType, supplierCost: Number(draft.supplierCost), inputCurrency: draft.inputCurrency || 'USD', expectedFxSettingsRevision: Number(detail?.variableChargeSettings?.revision), quantity: draft.pricingType === 'per_unit' ? Number(draft.quantity) : null, unitOfMeasure: draft.unitOfMeasure });
       }
       if (buyerSelected && reviews[row?.key]?.buyerChargeDecision === 'include'
@@ -1211,6 +1222,17 @@ function PairedExtraCostFields({ row, draft, disabled, onChange, onCancel }) {
   return <div className="mt-3 space-y-3 rounded-lg border border-amber-200 bg-amber-50/40 p-3"><div className="flex items-center justify-between gap-2"><div className="text-xs font-semibold uppercase tracking-wide text-amber-950">Edit Charge Details</div><AlertDialog><AlertDialogTrigger asChild><Button type="button" size="sm" variant="ghost" className="text-rose-700 hover:bg-rose-50 hover:text-rose-800" disabled={disabled}>Cancel Charge</Button></AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Cancel this charge?</AlertDialogTitle><AlertDialogDescription>The charge remains in Salesforce history but will no longer be active.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Keep Charge</AlertDialogCancel><AlertDialogAction className="bg-rose-600 hover:bg-rose-700" onClick={onCancel}>Cancel Charge</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog></div><div className="space-y-2"><Label htmlFor={`${id}-description`}>Description</Label><Input id={`${id}-description`} value={draft.description || ''} disabled={disabled} onChange={(event) => onChange({ description: event.target.value })} /></div><div className="grid gap-3 sm:grid-cols-2"><div className="space-y-2"><Label>Pricing Basis</Label><Select value={draft.pricingType} disabled={disabled} onValueChange={(pricingType) => onChange({ pricingType })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="fixed">Fixed</SelectItem><SelectItem value="per_unit">Per Unit</SelectItem></SelectContent></Select></div><div className="space-y-2"><Label>Input Currency</Label><Select value={draft.inputCurrency || 'USD'} disabled={disabled} onValueChange={(inputCurrency) => onChange({ inputCurrency })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="HKD">HKD</SelectItem><SelectItem value="USD">USD</SelectItem></SelectContent></Select></div><div className="space-y-2"><Label htmlFor={`${id}-cost`}>{draft.pricingType === 'fixed' ? 'Supplier Fixed Cost' : 'Supplier Unit Cost'} ({draft.inputCurrency || 'USD'})</Label><Input id={`${id}-cost`} inputMode="decimal" value={draft.supplierCost ?? ''} disabled={disabled} onChange={(event) => onChange({ supplierCost: event.target.value })} /></div>{draft.pricingType === 'per_unit' && <><div className="space-y-2"><Label htmlFor={`${id}-quantity`}>Quantity</Label><Input id={`${id}-quantity`} inputMode="decimal" value={draft.quantity ?? ''} disabled={disabled} onChange={(event) => onChange({ quantity: event.target.value })} /></div><div className="space-y-2"><Label htmlFor={`${id}-uom`}>UOM</Label><Input id={`${id}-uom`} value={draft.unitOfMeasure || ''} disabled={disabled} onChange={(event) => onChange({ unitOfMeasure: event.target.value })} /></div></>}</div></div>;
 }
 
+function ManagedPortClearanceFields({ row, draft, disabled, onChange }) {
+  const id = `port-clearance-${row.sourceId}`;
+  return <div className="mt-3 space-y-3 rounded-lg border border-amber-200 bg-amber-50/40 p-3"><div className="text-xs font-semibold uppercase tracking-wide text-amber-950">Supplier-reported applications</div><div className="grid gap-3 sm:grid-cols-2"><div className="space-y-2"><Label htmlFor={`${id}-count`}>Application Count</Label><Input id={`${id}-count`} inputMode="numeric" value={draft.quantity ?? ''} disabled={disabled} onChange={(event) => onChange({ quantity: event.target.value.replace(/[^0-9]/g, '') })} /></div><AmountDisplay label="Locked Rate" amount={58} currency="HKD" /></div><div className="text-xs text-amber-900">The first application is included in Basic Calling Cost. Each additional supplier-reported application is passed through to the buyer. One application is valid for 72 hours from its start; FCOS does not infer the count from vessel timings.</div></div>;
+}
+
+function LockedAgencyFeeFields({ row, instanceUrl }) {
+  const supplierId = text(valueOf(row.item, ['supplierId', 'supplier_id', 'Supplier__c']));
+  const url = instanceUrl && supplierId ? `${String(instanceUrl).replace(/\/$/, '')}/${supplierId}` : '';
+  return <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50/40 p-3 text-xs text-amber-950"><div>Agency Fee is copied from Agreed Agency Fee (USD) on the supplier Account and cannot be changed here.</div>{url && <a className="mt-2 inline-flex items-center gap-1 font-medium text-blue-700 hover:underline" href={url} target="_blank" rel="noreferrer">Open supplier Account <ExternalLink className="h-3.5 w-3.5" /></a>}</div>;
+}
+
 function AmountDisplay({ label, amount, currency, unavailableReason }) {
   return <div><div className="text-xs text-muted-foreground">{label}</div><div className="mt-1 font-semibold tabular-nums">{amount == null ? 'Unavailable' : formatMoney(amount, currency)}</div>{amount == null && unavailableReason && <div className="mt-1 text-xs text-amber-800">{unavailableReason}</div>}</div>;
 }
@@ -1323,13 +1345,16 @@ function PairedChargeRow({ row, review, draft, currency, companyRate, canCostEdi
   const fixedPricing = values.pricingType === 'fixed';
   const supplierEditing = review.outcome === 'changed' || review.outcome === 'cancelled';
   const anchorageDues = isHongKongAnchorageDuesItem(row.item);
-  const lightDues = text(product).toUpperCase() === 'LIGHT DUES';
+  const portClearance = isPortClearanceItem(row.item);
+  const supplierLocked = supplierCostLockedForItem(row.item);
+  const buyerLocked = buyerDecisionLockedForItem(row.item);
+  const includedInBasicCalling = isIncludedBasicCallingItem(row.item);
   const buyerDecisionOptions = buyerDecisionOptionsForItem(row.item);
   const displayedBuyerRate = buyerAmountWithAnchorageDecision(row.item, review.buyerChargeDecision, values.buyerRate);
   const displayedBuyerTotal = buyerAmountWithAnchorageDecision(row.item, review.buyerChargeDecision, values.buyerTotal);
   const displayedMargin = values.supplierTotal != null && displayedBuyerTotal != null ? displayedBuyerTotal - values.supplierTotal : null;
   const unavailableReason = values.pricingType === 'per_unit' && values.quantity == null ? 'Quantity is unavailable.' : 'The Salesforce total is unavailable.';
-  return <article className="border-t border-border"><div className="border-b border-border bg-muted/25 px-4 py-3"><div className="flex flex-wrap items-start justify-between gap-3"><div className="min-w-0"><h3 className="font-semibold">{product}</h3>{descriptionVisible && <p className="mt-0.5 text-sm text-muted-foreground">{description}</p>}</div><div className="flex flex-wrap items-start gap-x-5 gap-y-1 text-xs text-muted-foreground">{!fixedPricing && <span>Quantity <strong className="text-foreground">{values.quantity ?? 'Not set'} {values.quantity != null ? (text(draft?.unitOfMeasure || valueOf(row.item, ['unitOfMeasure'])) || 'Not set') : ''}</strong></span>}<span>Pricing Basis <strong className="text-foreground">{fixedPricing ? 'Fixed charge' : 'Per Unit'}</strong></span><div><span>Margin</span><MarginAmount value={displayedMargin} currency="USD" unavailableReason={unavailableReason} /></div></div></div></div><div className="grid grid-cols-2"><section className="min-h-[210px] space-y-3 border-r-2 border-slate-300 bg-slate-50/30 p-4"><DecisionButtons ariaLabel={`${product} supplier review`} selected={review.outcome === 'cancelled' ? 'changed' : review.outcome || ''} disabled={!canCostEdit} onChange={(outcome) => { if (outcome === 'changed' && review.outcome === 'cancelled') onDraftChange({ cancelled: false }); onReviewChange({ outcome }); }} options={[{ value: '', label: 'Pending', tone: 'bg-slate-100 text-slate-800' }, { value: 'correct', label: 'Correct', tone: 'bg-emerald-100 text-emerald-900' }, { value: 'changed', label: 'Edit Cost', tone: 'bg-amber-100 text-amber-950' }]} /><div className="grid grid-cols-2 gap-3"><SupplierDualAmount label={fixedPricing ? 'Supplier Fixed Cost' : 'Supplier Unit Cost'} row={row} draft={draft} companyRate={companyRate} /><SupplierDualAmount label="Total Supplier Cost" row={row} draft={draft} total companyRate={companyRate} /></div>{supplierEditing && (row.readOnly ? <SalesforceEditNotice sourceId={row.sourceId} instanceUrl={instanceUrl} /> : <PairedExtraCostFields row={row} draft={draft} disabled={!canCostEdit} onChange={onDraftChange} onCancel={() => { onDraftChange({ cancelled: true }); onReviewChange({ outcome: 'cancelled' }); }} />)}</section><section className="min-h-[210px] space-y-3 bg-blue-50/20 p-4"><DecisionButtons ariaLabel={`${product} buyer review`} selected={review.buyerChargeDecision || ''} disabled={!canBuyerEdit} onChange={(buyerChargeDecision) => onReviewChange({ buyerChargeDecision })} options={buyerDecisionOptions} />{anchorageDues && <p className="text-xs text-blue-900">First 12 hours: no buyer charge. If the vessel stays longer, charge only the excess amount.</p>}{lightDues && <p className="text-xs text-blue-900">Buyer charge starts at USD 0. Choose whether to charge the buyer.</p>}<div className="grid grid-cols-2 gap-3"><AmountDisplay label={fixedPricing ? 'Buyer Fixed Charge' : 'Buyer Unit Price'} amount={displayedBuyerRate} currency="USD" unavailableReason={unavailableReason} /><AmountDisplay label="Total Buyer Charge" amount={displayedBuyerTotal} currency="USD" unavailableReason={unavailableReason} /></div>{review.buyerChargeDecision === 'include' && <div><Button type="button" size="sm" variant="outline" disabled={!canBuyerEdit} onClick={() => setBuyerPriceOpen((open) => !open)}>{anchorageDues ? 'Edit Excess Charge' : 'Edit Buyer Price'}</Button>{buyerPriceOpen && (row.readOnly ? <SalesforceEditNotice sourceId={row.sourceId} instanceUrl={instanceUrl} /> : <div className="mt-3 space-y-2"><Label htmlFor={`paired-buyer-price-${row.sourceId}`}>{anchorageDues ? 'Buyer Excess Anchorage Charge' : fixedPricing ? 'Buyer Fixed Charge (USD)' : 'Buyer Unit Price (USD)'}</Label><Input id={`paired-buyer-price-${row.sourceId}`} inputMode="decimal" value={draft?.buyerPrice ?? ''} disabled={!canBuyerEdit} onChange={(event) => onDraftChange({ buyerPrice: event.target.value })} /></div>)}</div>}</section></div></article>;
+  return <article className="border-t border-border"><div className="border-b border-border bg-muted/25 px-4 py-3"><div className="flex flex-wrap items-start justify-between gap-3"><div className="min-w-0"><h3 className="font-semibold">{product}</h3>{descriptionVisible && <p className="mt-0.5 text-sm text-muted-foreground">{description}</p>}</div><div className="flex flex-wrap items-start gap-x-5 gap-y-1 text-xs text-muted-foreground">{!fixedPricing && <span>Quantity <strong className="text-foreground">{values.quantity ?? 'Not set'} {values.quantity != null ? (text(draft?.unitOfMeasure || valueOf(row.item, ['unitOfMeasure'])) || 'Not set') : ''}</strong></span>}<span>Pricing Basis <strong className="text-foreground">{fixedPricing ? 'Fixed charge' : 'Per Unit'}</strong></span><div><span>Margin</span><MarginAmount value={displayedMargin} currency="USD" unavailableReason={unavailableReason} /></div></div></div></div><div className="grid grid-cols-2"><section className="min-h-[210px] space-y-3 border-r-2 border-slate-300 bg-slate-50/30 p-4"><DecisionButtons ariaLabel={`${product} supplier review`} selected={review.outcome === 'cancelled' ? 'changed' : review.outcome || ''} disabled={!canCostEdit} onChange={(outcome) => { if (outcome === 'changed' && review.outcome === 'cancelled') onDraftChange({ cancelled: false }); onReviewChange({ outcome }); }} options={[{ value: '', label: 'Pending', tone: 'bg-slate-100 text-slate-800' }, { value: 'correct', label: 'Correct', tone: 'bg-emerald-100 text-emerald-900' }, { value: 'changed', label: supplierLocked ? 'Review Setup' : 'Edit Cost', tone: 'bg-amber-100 text-amber-950' }]} /><div className="grid grid-cols-2 gap-3"><SupplierDualAmount label={fixedPricing ? 'Supplier Fixed Cost' : 'Supplier Unit Cost'} row={row} draft={draft} companyRate={companyRate} /><SupplierDualAmount label="Total Supplier Cost" row={row} draft={draft} total companyRate={companyRate} /></div>{supplierEditing && (row.readOnly ? <SalesforceEditNotice sourceId={row.sourceId} instanceUrl={instanceUrl} /> : portClearance ? <ManagedPortClearanceFields row={row} draft={draft} disabled={!canCostEdit} onChange={onDraftChange} /> : supplierLocked ? <LockedAgencyFeeFields row={row} instanceUrl={instanceUrl} /> : <PairedExtraCostFields row={row} draft={draft} disabled={!canCostEdit} onChange={onDraftChange} onCancel={() => { onDraftChange({ cancelled: true }); onReviewChange({ outcome: 'cancelled' }); }} />)}</section><section className="min-h-[210px] space-y-3 bg-blue-50/20 p-4"><DecisionButtons ariaLabel={`${product} buyer review`} selected={review.buyerChargeDecision || ''} disabled={!canBuyerEdit || buyerLocked} onChange={(buyerChargeDecision) => onReviewChange({ buyerChargeDecision })} options={buyerDecisionOptions} />{anchorageDues && <p className="text-xs text-blue-900">The reviewed supplier Anchorage Dues charge is proposed to the buyer at zero margin. The Buyer Trader may amend the USD amount.</p>}{includedInBasicCalling && <p className="text-xs text-blue-900">Included in Basic Calling Cost · buyer charge remains USD 0.</p>}{portClearance && <p className="text-xs text-blue-900">The first application is included. Additional supplier-reported applications are passed through at HKD 58 each using the reviewed row rate.</p>}<div className="grid grid-cols-2 gap-3"><AmountDisplay label={fixedPricing ? 'Buyer Fixed Charge' : 'Buyer Unit Price'} amount={displayedBuyerRate} currency="USD" unavailableReason={unavailableReason} /><AmountDisplay label="Total Buyer Charge" amount={displayedBuyerTotal} currency="USD" unavailableReason={unavailableReason} /></div>{review.buyerChargeDecision === 'include' && !buyerLocked && <div><Button type="button" size="sm" variant="outline" disabled={!canBuyerEdit} onClick={() => setBuyerPriceOpen((open) => !open)}>{anchorageDues ? 'Edit Pass-Through Amount' : 'Edit Buyer Price'}</Button>{buyerPriceOpen && (row.readOnly ? <SalesforceEditNotice sourceId={row.sourceId} instanceUrl={instanceUrl} /> : <div className="mt-3 space-y-2"><Label htmlFor={`paired-buyer-price-${row.sourceId}`}>{anchorageDues ? 'Buyer Anchorage Dues Charge (USD)' : fixedPricing ? 'Buyer Fixed Charge (USD)' : 'Buyer Unit Price (USD)'}</Label><Input id={`paired-buyer-price-${row.sourceId}`} inputMode="decimal" value={draft?.buyerPrice ?? ''} disabled={!canBuyerEdit} onChange={(event) => onDraftChange({ buyerPrice: event.target.value })} /></div>)}</div>}</section></div></article>;
 }
 
 function PairedNewChargeRow({ draft, products, canCostEdit, canBuyerEdit, commonOwner, onChange, onRemove }) {
@@ -1351,11 +1376,15 @@ function PairedReviewWorkspace({ caseRow, requirement, requirements, activeSuppl
   const commonOwner = Boolean(costSide.currentAssignee?.id && costSide.currentAssignee.id === buyerSide.currentAssignee?.id);
   const bothOpen = costSide.status !== 'verified' && buyerSide.status !== 'verified';
   const adjustFinancials = (summary, affectedRows) => {
-    const adjustment = anchorageBuyerTotalAdjustment((affectedRows || []).map((row) => ({
-      item: row.item,
-      decision: reviews[row.key]?.buyerChargeDecision,
-      currentTotal: valueOf(row.item, ['linePrice', 'line_price', 'totalPrice', 'Total_Price__c']),
-    })));
+    const adjustment = (affectedRows || []).reduce((total, row) => {
+      if (row.sourceType !== 'extra_cost') return total;
+      const decision = reviews[row.key]?.buyerChargeDecision;
+      if (!['include', 'exclude'].includes(decision)) return total;
+      const currentTotal = finiteNumber(valueOf(row.item, ['linePrice', 'line_price', 'totalPrice', 'Total_Price__c'])) ?? 0;
+      const draft = extraDrafts[row.sourceId] || initialExtraDraft(row.item);
+      const reviewedTotal = decision === 'exclude' ? 0 : rowFinancials(row, draft, currency).buyerTotal;
+      return reviewedTotal == null ? total : total + reviewedTotal - currentTotal;
+    }, 0);
     if (!adjustment || summary?.buyerChargeTotal == null) return summary;
     return {
       ...summary,
@@ -1375,7 +1404,7 @@ function PairedReviewWorkspace({ caseRow, requirement, requirements, activeSuppl
     if (outcome !== 'changed') return true;
     const draft = extraDrafts[row.sourceId] || initialExtraDraft(row.item);
     const original = initialExtraDraft(row.item);
-    const changed = changeKey({ description: draft.description, pricingType: draft.pricingType, supplierCost: draft.supplierCost, inputCurrency: draft.inputCurrency, quantity: draft.quantity, unitOfMeasure: draft.unitOfMeasure })
+    const changed = isPortClearanceItem(row.item) || changeKey({ description: draft.description, pricingType: draft.pricingType, supplierCost: draft.supplierCost, inputCurrency: draft.inputCurrency, quantity: draft.quantity, unitOfMeasure: draft.unitOfMeasure })
       !== changeKey({ description: original.description, pricingType: original.pricingType, supplierCost: original.supplierCost, inputCurrency: original.inputCurrency, quantity: original.quantity, unitOfMeasure: original.unitOfMeasure });
     return changed && text(draft.description) && finiteNumber(draft.supplierCost) != null
       && (draft.pricingType !== 'per_unit' || (finiteNumber(draft.quantity) > 0 && text(draft.unitOfMeasure)));

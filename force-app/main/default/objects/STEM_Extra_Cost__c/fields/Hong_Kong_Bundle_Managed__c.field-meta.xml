@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Hong_Kong_Bundle_Managed__c</fullName>
+    <defaultValue>false</defaultValue>
+    <description>Identifies a support row managed by the Hong Kong Basic Calling Cost bundle service.</description>
+    <label>Hong Kong Bundle Managed</label>
+    <trackHistory>true</trackHistory>
+    <trackTrending>false</trackTrending>
+    <type>Checkbox</type>
+</CustomField>

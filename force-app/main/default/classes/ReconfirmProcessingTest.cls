@@ -54,15 +54,16 @@ public class ReconfirmProcessingTest {
         stemExtraCost.Intended_Payment_Date__c = Date.today().addDays(4);
         insert stemExtraCost;
 
-        ReconfirmProcessing.ReconfirmItem initial = findItem(
-            ReconfirmProcessing.getReconfirmInfo(new List<String>{stem.Enquiry__c}), stemExtraCost.Id);
+        Datetime expectedLastModifiedAt = [
+            SELECT LastModifiedDate FROM STEM_Extra_Cost__c WHERE Id = :stemExtraCost.Id
+        ].LastModifiedDate;
         ReconfirmProcessing.CiaChangeInput confirmChange = new ReconfirmProcessing.CiaChangeInput();
         confirmChange.recordId = stemExtraCost.Id;
         confirmChange.intendedPaymentDate = Date.today();
         confirmChange.intendedPaymentDateChanged = true;
         confirmChange.reconfirm = true;
         confirmChange.reconfirmChanged = true;
-        confirmChange.expectedLastModifiedAt = initial.lastModifiedAt;
+        confirmChange.expectedLastModifiedAt = expectedLastModifiedAt;
 
         Test.startTest();
         List<ReconfirmProcessing.ReconfirmItem> confirmed = ReconfirmProcessing.saveCiaChanges(
@@ -107,6 +108,7 @@ public class ReconfirmProcessingTest {
         staleChange.reconfirmChanged = true;
         staleChange.expectedLastModifiedAt = Datetime.now().addDays(-1);
 
+        Test.startTest();
         try {
             ReconfirmProcessing.saveCiaChanges(
                 stem.Enquiry__c, new List<ReconfirmProcessing.CiaChangeInput>{ staleChange });
@@ -114,6 +116,7 @@ public class ReconfirmProcessingTest {
         } catch (AuraHandledException expected) {
 			System.assertNotEquals(null, expected);
         }
+        Test.stopTest();
         STEM_Extra_Cost__c unchanged = [
             SELECT Intended_Payment_Date__c, Reconfirm__c
             FROM STEM_Extra_Cost__c WHERE Id = :stemExtraCost.Id

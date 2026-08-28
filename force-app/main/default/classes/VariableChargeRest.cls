@@ -110,6 +110,7 @@ global without sharing class VariableChargeRest {
         }
         String costFingerprint;
         String buyerFingerprint;
+        VariableChargeInvoiceReadinessService.assertHongKongBundleConfirmationReady(stemId, supplierId, sides);
         if (sides.contains('cost')) {
             costFingerprint = VariableChargeInvoiceReadinessService.supplierFingerprint(stemId, supplierId);
             String expectedCost = String.isNotBlank(body.expectedCostFingerprint) ? body.expectedCostFingerprint : body.expectedFingerprint;

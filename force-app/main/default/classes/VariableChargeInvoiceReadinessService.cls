@@ -81,6 +81,8 @@ public without sharing class VariableChargeInvoiceReadinessService {
         if (actionability.ready != true) {
             return blockedForActionability(actionability, stemId, supplierId, true);
         }
+        String bundleProblem = hongKongBundleProblem(stemId, supplierId, true);
+        if (String.isNotBlank(bundleProblem)) return blocked(bundleProblem, stemId, supplierId, true);
         if (context.stage == null || context.stage.Supplier_Status__c != 'Verified') {
             return blocked('Confirm ' + context.supplier.Name + ' costs in FCOS before creating this Supplier Invoice.', stemId, supplierId, true);
         }
@@ -171,6 +173,8 @@ public without sharing class VariableChargeInvoiceReadinessService {
         if (context.required != true) return new Readiness(true, false, null, stemId, supplierId);
         Actionability actionability = calculateActionability(context.stem, context.hasProductLineItems);
         if (actionability.ready != true) return blockedForActionability(actionability, stemId, supplierId, true);
+        String bundleProblem = hongKongBundleProblem(stemId, supplierId, false);
+        if (String.isNotBlank(bundleProblem)) return blocked(bundleProblem, stemId, supplierId, true);
         if (context.stage == null || context.stage.Buyer_Charge_Status__c != 'Verified') {
             return blocked('Confirm ' + context.supplier.Name + ' buyer charges in FCOS before creating the final Buyer Invoice.', stemId, supplierId, true);
         }
@@ -225,6 +229,82 @@ public without sharing class VariableChargeInvoiceReadinessService {
         }
     }
 
+    public static void assertHongKongBundleConfirmationReady(Id stemId, Id supplierId, Set<String> sides) {
+        if (sides == null || sides.isEmpty()) return;
+        if (sides.contains('cost')) {
+            String costProblem = hongKongBundleProblem(stemId, supplierId, true);
+            if (String.isNotBlank(costProblem)) throw messageException(costProblem);
+        }
+        if (sides.contains('buyer_charge')) {
+            String buyerProblem = hongKongBundleProblem(stemId, supplierId, false);
+            if (String.isNotBlank(buyerProblem)) throw messageException(buyerProblem);
+        }
+    }
+
+    private static String hongKongBundleProblem(Id stemId, Id supplierId, Boolean supplierSide) {
+        List<STEM__c> stems = [
+            SELECT Id, Port__r.Name, Port__r.Country__c
+            FROM STEM__c WHERE Id = :stemId LIMIT 1
+        ];
+        if (stems.isEmpty() || !isHongKongPort(stems[0])) return null;
+        List<STEM_Extra_Cost__c> rows = [
+            SELECT Id, Product2Id__r.Name, Quantity__c, Unit_Cost__c, Unit_Price__c,
+                Lumpsum_Cost__c, Lumpsum_Price__c, Supplier_Cost_Input_Currency__c,
+                Supplier_Cost_Input_Value__c, Supplier_Cost_USD_HKD_Rate__c,
+                Port_Clearance_Rate_HKD__c, Port_Clearance_Calculation_Version__c
+            FROM STEM_Extra_Cost__c
+            WHERE STEM__c = :stemId AND Supplier__c = :supplierId
+                AND Cancelled__c = false AND Hong_Kong_Bundle_Managed__c = true
+        ];
+        for (STEM_Extra_Cost__c row : rows) {
+            String productName = normalizeProductName(row.Product2Id__r?.Name);
+            if (productName == HongKongBasicCallingBundleService.AGENCY_FEE) {
+                if (supplierSide && (row.Lumpsum_Cost__c == null || row.Lumpsum_Cost__c <= 0)) {
+                    return 'Set Agreed Agency Fee (USD) on the supplier Account before approving Agency Fee.';
+                }
+                if (!supplierSide && row.Lumpsum_Price__c != null && row.Lumpsum_Price__c.abs() > 0.005) {
+                    return 'Agency Fee is included in Basic Calling Cost and must remain USD 0 on the Buyer Leg.';
+                }
+            } else if (productName == HongKongBasicCallingBundleService.LIGHT_DUES) {
+                if (!supplierSide && row.Lumpsum_Price__c != null && row.Lumpsum_Price__c.abs() > 0.005) {
+                    return 'Light Dues are included in Basic Calling Cost and must remain USD 0 on the Buyer Leg.';
+                }
+            } else if (productName == HongKongBasicCallingBundleService.PORT_CLEARANCE_FEE) {
+                if (row.Quantity__c == null || row.Quantity__c < 1 || row.Quantity__c != row.Quantity__c.setScale(0)) {
+                    return 'Enter the whole-number Port Clearance application count reported by the supplier.';
+                }
+                if (supplierSide && (row.Port_Clearance_Rate_HKD__c != HongKongBasicCallingBundleService.PORT_CLEARANCE_RATE_HKD
+                    || row.Port_Clearance_Calculation_Version__c != HongKongBasicCallingBundleService.PORT_CLEARANCE_VERSION
+                    || row.Supplier_Cost_Input_Currency__c != 'HKD'
+                    || row.Supplier_Cost_Input_Value__c != HongKongBasicCallingBundleService.PORT_CLEARANCE_RATE_HKD
+                    || row.Supplier_Cost_USD_HKD_Rate__c == null || row.Supplier_Cost_USD_HKD_Rate__c <= 0
+                    || row.Unit_Cost__c == null || row.Unit_Cost__c <= 0)) {
+                    return 'Confirm the supplier-reported Port Clearance application count before approval.';
+                }
+                if (!supplierSide) {
+                    Decimal buyerUnitPrice = row.Unit_Price__c == null ? 0 : row.Unit_Price__c;
+                    if (row.Quantity__c == 1 && buyerUnitPrice.abs() > 0.005) {
+                        return 'The first Port Clearance application is included in Basic Calling Cost and must remain USD 0.';
+                    }
+                    if (row.Quantity__c > 1 && buyerUnitPrice <= 0) {
+                        return 'Additional Port Clearance applications must be reviewed as a buyer pass-through.';
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    private static Boolean isHongKongPort(STEM__c stem) {
+        String name = normalizeProductName(stem?.Port__r?.Name);
+        String country = normalizeProductName(stem?.Port__r?.Country__c);
+        return name == 'HONG KONG' || country == 'HONG KONG' || country == 'HK';
+    }
+
+    private static String normalizeProductName(String value) {
+        return String.isBlank(value) ? '' : value.trim().replaceAll('\\s+', ' ').toUpperCase();
+    }
+
     public static void assertBuyerConfirmationWriteAllowed(List<STEM__c> newRecords, Map<Id, STEM__c> oldMap) {
         if (newRecords == null || oldMap == null) return;
         Set<Id> confirmingIds = new Set<Id>();
@@ -268,7 +348,7 @@ public without sharing class VariableChargeInvoiceReadinessService {
             'WHERE STEM__c = :stemId AND Cancelled__c = false ORDER BY Id', binds);
         for (SObject row : lineRows) parts.add('P|' + String.valueOf(row.get('Id')));
         for (SObject row : fingerprintRows(Account.SObjectType,
-            new List<String>{'Id','Is_Agent__c','Is_Variable__c','Supplier_Payment_Term__c'},
+            new List<String>{'Id','Is_Agent__c','Is_Variable__c','Supplier_Payment_Term__c','Agency_Fee_USD__c'},
             'WHERE Id = :supplierId', binds)) {
             parts.add('A|' + JSON.serialize(row));
         }
@@ -278,7 +358,9 @@ public without sharing class VariableChargeInvoiceReadinessService {
             'Id','Supplier__c','Cancelled__c','Product2Id__c','Description__c','Payment_Term__c',
             'STEM_Line_Item__c','Quantity__c','Quantity_Delivered_Per_BDN__c','Quantity_Range_Max__c',
             'Unit_of_Measure__c','Unit_Cost__c','Lumpsum_Cost__c','Line_Total_Buy__c',
-            'Supplier_Invoice__c','CurrencyIsoCode'
+            'Supplier_Invoice__c','CurrencyIsoCode','Hong_Kong_Bundle_Key__c',
+            'Hong_Kong_Bundle_Managed__c','Hong_Kong_Bundle_Sequence__c','Hong_Kong_Bundle_Source__c',
+            'Port_Clearance_Rate_HKD__c','Port_Clearance_Calculation_Version__c'
         };
         List<SObject> extraRows = fingerprintRows(STEM_Extra_Cost__c.SObjectType, new List<String>{
             'Id','Supplier__c','Cancelled__c','Product2Id__c','Description__c','Payment_Term__c',
@@ -291,7 +373,9 @@ public without sharing class VariableChargeInvoiceReadinessService {
             'Anchorage_FX_Settings_Revision__c','Anchorage_Calculation_Version__c',
             'Light_Dues_Entry_Date__c','Light_Dues_Category__c','Light_Dues_NRT_Snapshot__c',
             'Light_Dues_Rate_HKD__c','Light_Dues_Amount_HKD__c','Light_Dues_USD_HKD_Rate__c',
-            'Light_Dues_FX_Settings_Revision__c','Light_Dues_Calculation_Version__c'
+            'Light_Dues_FX_Settings_Revision__c','Light_Dues_Calculation_Version__c',
+            'Hong_Kong_Bundle_Key__c','Hong_Kong_Bundle_Managed__c','Hong_Kong_Bundle_Sequence__c',
+            'Hong_Kong_Bundle_Source__c','Port_Clearance_Rate_HKD__c','Port_Clearance_Calculation_Version__c'
         }, 'WHERE STEM__c = :stemId AND Supplier__c = :supplierId AND Cancelled__c = false ORDER BY Id', binds);
         for (SObject row : extraRows) parts.add('E|' + serializeProjection(row, baseExtraFields));
         addReviewedEvidenceFingerprintParts(parts, stemId, extraRows, true);
@@ -324,7 +408,9 @@ public without sharing class VariableChargeInvoiceReadinessService {
         List<String> baseExtraFields = new List<String>{
             'Id','Supplier__c','Cancelled__c','Product2Id__c','Description__c','STEM_Line_Item__c',
             'Quantity__c','Quantity_Delivered_Per_BDN__c','Quantity_Range_Max__c','Unit_of_Measure__c',
-            'Unit_Price__c','Lumpsum_Price__c','Line_Total__c','CurrencyIsoCode'
+            'Unit_Price__c','Lumpsum_Price__c','Line_Total__c','CurrencyIsoCode',
+            'Hong_Kong_Bundle_Key__c','Hong_Kong_Bundle_Managed__c','Hong_Kong_Bundle_Sequence__c',
+            'Hong_Kong_Bundle_Source__c','Port_Clearance_Rate_HKD__c','Port_Clearance_Calculation_Version__c'
         };
         List<SObject> extraRows = fingerprintRows(STEM_Extra_Cost__c.SObjectType, new List<String>{
             'Id','Supplier__c','Cancelled__c','Product2Id__c','Description__c','STEM_Line_Item__c',
@@ -335,7 +421,9 @@ public without sharing class VariableChargeInvoiceReadinessService {
             'Anchorage_FX_Settings_Revision__c','Anchorage_Calculation_Version__c',
             'Light_Dues_Entry_Date__c','Light_Dues_Category__c','Light_Dues_NRT_Snapshot__c',
             'Light_Dues_Rate_HKD__c','Light_Dues_Amount_HKD__c','Light_Dues_USD_HKD_Rate__c',
-            'Light_Dues_FX_Settings_Revision__c','Light_Dues_Calculation_Version__c'
+            'Light_Dues_FX_Settings_Revision__c','Light_Dues_Calculation_Version__c',
+            'Hong_Kong_Bundle_Key__c','Hong_Kong_Bundle_Managed__c','Hong_Kong_Bundle_Sequence__c',
+            'Hong_Kong_Bundle_Source__c','Port_Clearance_Rate_HKD__c','Port_Clearance_Calculation_Version__c'
         }, 'WHERE STEM__c = :stemId AND Supplier__c = :supplierId AND Cancelled__c = false ORDER BY Id', binds);
         for (SObject row : extraRows) parts.add('E|' + serializeProjection(row, baseExtraFields));
         addReviewedEvidenceFingerprintParts(parts, stemId, extraRows, false);
@@ -473,7 +561,7 @@ public without sharing class VariableChargeInvoiceReadinessService {
         Set<String> sharedPairs = new Set<String>();
         if (newRecords != null) for (STEM_Extra_Cost__c row : newRecords) {
             STEM_Extra_Cost__c oldRow = oldMap == null ? null : oldMap.get(row.Id);
-            if (oldRow == null || changed(row, oldRow, new List<String>{'STEM__c','Supplier__c','Cancelled__c','Product2Id__c','Description__c','STEM_Line_Item__c','Quantity__c','Quantity_Delivered_Per_BDN__c','Quantity_Range_Max__c','Unit_of_Measure__c','CurrencyIsoCode','Supplier_Cost_Input_Currency__c','Supplier_Cost_Input_Value__c','Supplier_Cost_USD_HKD_Rate__c','Supplier_Cost_FX_Settings_Revision__c','Anchorage_Arrival__c','Anchorage_Departure__c','Anchorage_Location__c','Anchorage_Dues_Allocation_HKD__c','Anchorage_NRT_Snapshot__c','Anchorage_USD_HKD_Rate__c','Anchorage_FX_Settings_Revision__c','Anchorage_Calculation_Version__c','Light_Dues_Entry_Date__c','Light_Dues_Category__c','Light_Dues_NRT_Snapshot__c','Light_Dues_Rate_HKD__c','Light_Dues_Amount_HKD__c','Light_Dues_USD_HKD_Rate__c','Light_Dues_FX_Settings_Revision__c','Light_Dues_Calculation_Version__c'}))
+            if (oldRow == null || changed(row, oldRow, new List<String>{'STEM__c','Supplier__c','Cancelled__c','Product2Id__c','Description__c','STEM_Line_Item__c','Quantity__c','Quantity_Delivered_Per_BDN__c','Quantity_Range_Max__c','Unit_of_Measure__c','CurrencyIsoCode','Supplier_Cost_Input_Currency__c','Supplier_Cost_Input_Value__c','Supplier_Cost_USD_HKD_Rate__c','Supplier_Cost_FX_Settings_Revision__c','Anchorage_Arrival__c','Anchorage_Departure__c','Anchorage_Location__c','Anchorage_Dues_Allocation_HKD__c','Anchorage_NRT_Snapshot__c','Anchorage_USD_HKD_Rate__c','Anchorage_FX_Settings_Revision__c','Anchorage_Calculation_Version__c','Light_Dues_Entry_Date__c','Light_Dues_Category__c','Light_Dues_NRT_Snapshot__c','Light_Dues_Rate_HKD__c','Light_Dues_Amount_HKD__c','Light_Dues_USD_HKD_Rate__c','Light_Dues_FX_Settings_Revision__c','Light_Dues_Calculation_Version__c','Hong_Kong_Bundle_Key__c','Hong_Kong_Bundle_Managed__c','Hong_Kong_Bundle_Sequence__c','Hong_Kong_Bundle_Source__c','Port_Clearance_Rate_HKD__c','Port_Clearance_Calculation_Version__c'}))
                 addChangedPairs(sharedPairs, row, oldRow, 'Supplier__c');
             if (oldRow != null && changed(row, oldRow, new List<String>{'Payment_Term__c','Unit_Cost__c','Lumpsum_Cost__c','Line_Total_Buy__c','Supplier_Invoice__c'}))
                 addChangedPairs(costPairs, row, oldRow, 'Supplier__c');
@@ -514,7 +602,8 @@ public without sharing class VariableChargeInvoiceReadinessService {
             if (before != null && (before.Is_Agent__c != after.Is_Agent__c
                 || before.Is_Variable__c != after.Is_Variable__c
                 || before.Inactive_Suspended__c != after.Inactive_Suspended__c)) bothIds.add(id);
-            if (before != null && before.Supplier_Payment_Term__c != after.Supplier_Payment_Term__c) costIds.add(id);
+            if (before != null && (before.Supplier_Payment_Term__c != after.Supplier_Payment_Term__c
+                || before.Agency_Fee_USD__c != after.Agency_Fee_USD__c)) costIds.add(id);
         }
         Set<Id> ids = new Set<Id>();
         ids.addAll(bothIds);

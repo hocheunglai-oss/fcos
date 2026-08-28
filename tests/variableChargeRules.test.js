@@ -13,22 +13,22 @@ import {
 
 const repositoryFile = (path) => readFile(new URL(`../${path}`, import.meta.url), 'utf8');
 
-test('Anchorage Dues buyer charge defaults to zero without overwriting an existing charge', () => {
+test('Anchorage Dues buyer charge defaults to the reviewed supplier charge without overwriting an existing charge', () => {
   const item = { productName: 'ANCHORAGE DUES', fixedCost: 500, fixedPrice: null, hongKongVariableCharges: true };
   assert.equal(isAnchorageDuesItem(item), true);
   assert.equal(isAnchorageDuesItem({ productName: ' anchorage   due ' }), true);
   assert.equal(isAnchorageDuesItem({ productName: 'Agency Fee' }), false);
   assert.equal(isHongKongAnchorageDuesItem(item), true);
   assert.equal(isHongKongAnchorageDuesItem({ ...item, hongKongVariableCharges: false }), false);
-  assert.equal(buyerPriceWithAnchorageDefault(item, 'fixed'), 0);
+  assert.equal(buyerPriceWithAnchorageDefault(item, 'fixed'), 500);
   assert.equal(buyerPriceWithAnchorageDefault({ ...item, fixedPrice: 125.5 }, 'fixed'), 125.5);
   assert.equal(buyerPriceWithAnchorageDefault({ productName: 'Agency Fee', fixedPrice: null }, 'fixed'), '');
 });
 
-test('Anchorage Dues uses explicit excess-time buyer decisions', () => {
+test('Anchorage Dues uses explicit pass-through buyer decisions', () => {
   const hongKongAnchorage = { productName: 'ANCHORAGE DUES', hongKongVariableCharges: true };
   const options = buyerDecisionOptionsForItem(hongKongAnchorage);
-  assert.deepEqual(options.map((row) => row.label), ['Pending', 'Charge Excess', 'No Charge · 12h or less']);
+  assert.deepEqual(options.map((row) => row.label), ['Pending', 'Pass Through', 'No Supplier Charge']);
   assert.deepEqual(
     buyerDecisionOptionsForItem({ productName: 'Agency Fee' }).map((row) => row.label),
     ['Pending', 'Charge Buyer', 'Do Not Charge'],
@@ -72,12 +72,14 @@ test('server writes a zero buyer price when excluded Anchorage Dues has no zero 
     [{ sourceId: row.Id, buyerChargeDecision: 'exclude' }],
     { hongKongDelivery: true },
   ).extraCostUpdates.length, 0);
-  assert.equal(variableChargeInternals.applyAnchorageBuyerDefaults(
+  const included = variableChargeInternals.applyAnchorageBuyerDefaults(
     { extraCostUpdates: [] },
     [row],
     [{ sourceId: row.Id, buyerChargeDecision: 'include' }],
     { hongKongDelivery: true },
-  ).extraCostUpdates.length, 0);
+  );
+  assert.equal(included.extraCostUpdates.length, 1);
+  assert.equal(included.extraCostUpdates[0].buyerPrice, 500);
   assert.equal(variableChargeInternals.applyAnchorageBuyerDefaults(
     { extraCostUpdates: [] },
     [row],
@@ -86,7 +88,7 @@ test('server writes a zero buyer price when excluded Anchorage Dues has no zero 
   ).extraCostUpdates.length, 0);
 });
 
-test('Anchorage Dues contributes a zero buyer charge to financial totals before Salesforce is saved', () => {
+test('Anchorage Dues contributes its supplier pass-through to financial totals before Salesforce is saved', () => {
   const summary = variableChargeInternals.financialSummary({
     stem: { CurrencyIsoCode: 'HKD', Port__r: { Name: 'HONG KONG', Country__c: 'HONG KONG' } },
     lineItems: [],
@@ -97,8 +99,8 @@ test('Anchorage Dues contributes a zero buyer charge to financial totals before 
       Line_Total__c: null, CurrencyIsoCode: 'HKD',
     }],
   });
-  assert.equal(summary.buyerChargeTotal, 0);
-  assert.equal(summary.margin, -500);
+  assert.equal(summary.buyerChargeTotal, 500);
+  assert.equal(summary.margin, 0);
   assert.equal(summary.chargesComplete, true);
 });
 
@@ -123,7 +125,7 @@ test('Is Variable is a history-tracked Account field placed beside Is Agent in b
   assert.match(field, /<fullName>Is_Variable__c<\/fullName>/);
   assert.match(field, /<label>Is Variable<\/label>/);
   assert.match(field, /<trackHistory>true<\/trackHistory>/);
-  assert.match(controller, /Is_Agent__c, Is_Variable__c, Is_Broker__c/);
+  assert.match(controller, /Is_Agent__c, Is_Variable__c, Agency_Fee_USD__c, Is_Broker__c/);
   assert.ok(recordMarkup.indexOf('name="isAgent"') < recordMarkup.indexOf('name="isVariable"'));
   assert.ok(recordMarkup.indexOf('name="isVariable"') < recordMarkup.indexOf('name="isBroker"'));
   assert.ok(newMarkup.indexOf('field-name="Is_Agent__c"') < newMarkup.indexOf('field-name="Is_Variable__c"'));
