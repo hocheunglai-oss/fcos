@@ -321,6 +321,8 @@ test('FCOS handlers are explicit, fail-closed, atomic, and do not send email', a
     'variableChargesList',
     'variableChargesDetail',
     'variableChargesAnchorageSave',
+    'variableChargesVesselNrtSave',
+    'variableChargesLightDuesSave',
     'variableChargesSettingsGet',
     'variableChargesSettingsSave',
     'variableChargesOptions',
@@ -360,8 +362,8 @@ test('FCOS handlers are explicit, fail-closed, atomic, and do not send email', a
   assert.match(ui, /Approve Supplier Costs/);
   assert.match(ui, /Approve Buyer Charges/);
   assert.match(ui, /Approve Both/);
-  assert.match(ui, /target: 'gm_override'/);
-  assert.match(ui, /Temporary Assignee/);
+  assert.match(ui, /Review as General Manager/);
+  assert.doesNotMatch(ui, /Temporary Assignee/);
   assert.match(ui, /Audit Details/);
   assert.match(ui, /Supplier Leg/);
   assert.match(ui, /Buyer Leg/);

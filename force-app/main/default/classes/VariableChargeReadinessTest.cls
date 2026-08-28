@@ -298,6 +298,46 @@ private class VariableChargeReadinessTest {
     }
 
     @IsTest
+    static void vesselNrtChangeInvalidatesVersionedLightDuesReviews() {
+        Map<String, Id> ids = prepareRequiredSupplier(false);
+        verifyStage(ids);
+        verifyBuyerSide(ids);
+        ContextManager.skipTriggers = true;
+        Vessel__c vessel;
+        try {
+            vessel = new Vessel__c(Name = 'LIGHT DUES NRT TEST', IMO__c = '9898786', NRT__c = 7000);
+            insert vessel;
+            update new STEM__c(Id = ids.get('stem'), Vessel__c = vessel.Id, Variable_Charges_Confirmed__c = true);
+            Id productId = [SELECT Product__c FROM STEM_Line_Item__c WHERE STEM__c = :ids.get('stem') LIMIT 1].Product__c;
+            insert new STEM_Extra_Cost__c(
+                STEM__c = ids.get('stem'), Supplier__c = ids.get('supplier'), Product2Id__c = productId,
+                Cancelled__c = false, Light_Dues_Calculation_Version__c = 'hk-md-2026-v1',
+                Light_Dues_Entry_Date__c = Date.today(), Light_Dues_Category__c = 'All Other',
+                Light_Dues_NRT_Snapshot__c = 7000, Light_Dues_Rate_HKD__c = 43,
+                Light_Dues_Amount_HKD__c = 3010, Light_Dues_USD_HKD_Rate__c = 7.84,
+                Light_Dues_FX_Settings_Revision__c = 1
+            );
+        } finally {
+            ContextManager.skipTriggers = false;
+        }
+        Vessel__c before = vessel.clone(true, true, false, false);
+        vessel.NRT__c = 7001;
+        Test.startTest();
+        VariableChargeInvoiceReadinessService.invalidateForVesselChanges(
+            new Map<Id, Vessel__c>{ vessel.Id => vessel },
+            new Map<Id, Vessel__c>{ before.Id => before }
+        );
+        Test.stopTest();
+        STEM_Variable_Charge_Supplier__c stage = [
+            SELECT Supplier_Status__c, Buyer_Charge_Status__c
+            FROM STEM_Variable_Charge_Supplier__c WHERE Id = :ids.get('stage')
+        ];
+        System.assertEquals('Invalidated', stage.Supplier_Status__c);
+        System.assertEquals('Invalidated', stage.Buyer_Charge_Status__c);
+        System.assertEquals(false, [SELECT Variable_Charges_Confirmed__c FROM STEM__c WHERE Id = :ids.get('stem')].Variable_Charges_Confirmed__c);
+    }
+
+    @IsTest
     static void buyerOnlyChangeLeavesSupplierCostVerifiedAndClosesBuyerGate() {
         Map<String, Id> ids = prepareRequiredSupplier(false);
         verifyStage(ids);

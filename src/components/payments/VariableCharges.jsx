@@ -60,6 +60,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { PAYMENT_COLLECTIONS_METHODOLOGIES } from '@/lib/pageMethodologies';
 import { calculateHongKongAnchorageDues } from '@/lib/anchorageDues';
+import { LIGHT_DUES_CATEGORY_ALL_OTHER, LIGHT_DUES_CATEGORY_RIVER_TRADE, calculateHongKongLightDues } from '@/lib/lightDues';
 import { cn } from '@/lib/utils';
 import {
   anchorageBuyerTotalAdjustment,
@@ -230,21 +231,24 @@ function initialReview(row) {
 
 function initialExtraDraft(item) {
   const pricingType = item.fixed === true || item.Fixed__c === true || valueOf(item, ['pricingType', 'pricing_type']) === 'fixed' || valueOf(item, ['fixedCost', 'fixed_cost', 'fixedPrice', 'fixed_price'], null) != null ? 'fixed' : 'per_unit';
+  const lightDues = item?.hongKongVariableCharges === true && text(valueOf(item, ['productName'])).toUpperCase() === 'LIGHT DUES';
+  const storedBuyerPrice = buyerPriceWithAnchorageDefault(item, pricingType);
   return {
     description: text(valueOf(item, ['description', 'Description__c', 'name', 'Name'])),
     paymentTerm: text(valueOf(item, ['paymentTerm', 'payment_term', 'Payment_Term__c'])),
     pricingType,
-    supplierCost: pricingType === 'fixed'
+    inputCurrency: text(valueOf(item, ['supplierCurrency.inputCurrency'])) || 'USD',
+    supplierCost: valueOf(item, ['supplierCurrency.inputAmount'], null) ?? (pricingType === 'fixed'
       ? valueOf(item, ['fixedCost', 'fixed_cost', 'Lumpsum_Cost__c'], '')
-      : valueOf(item, ['cost', 'unitCost', 'unit_cost', 'Unit_Cost__c'], ''),
-    buyerPrice: buyerPriceWithAnchorageDefault(item, pricingType),
+      : valueOf(item, ['cost', 'unitCost', 'unit_cost', 'Unit_Cost__c'], '')),
+    buyerPrice: lightDues && finiteNumber(storedBuyerPrice) == null ? 0 : storedBuyerPrice,
     quantity: valueOf(item, ['quantity', 'Quantity__c'], ''),
     unitOfMeasure: text(valueOf(item, ['unitOfMeasure', 'unit_of_measure', 'Unit_of_Measure__c'], '1.')),
     cancelled: item.cancelled === true || item.Cancelled__c === true,
   };
 }
 
-function initialAddDraft(caseRow, supplierId = '') {
+function initialAddDraft(caseRow, supplierId = '', companyRate = null) {
   const supplierAccounts = Array.isArray(caseRow?.supplierAccounts) ? caseRow.supplierAccounts : [];
   return {
     localId: operationId('extra'),
@@ -252,6 +256,8 @@ function initialAddDraft(caseRow, supplierId = '') {
     description: 'STEM Charge',
     paymentTerm: text(valueOf(caseRow, ['supplierPaymentTerm', 'supplier_payment_term', 'paymentTerm', 'payment_term'])),
     pricingType: 'fixed',
+    inputCurrency: 'USD',
+    companyRate,
     supplierAccountId: supplierId || (supplierAccounts.length === 1 ? supplierAccounts[0].id : ''),
     supplierCost: '',
     buyerPrice: '',
@@ -299,7 +305,7 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
   const [saveError, setSaveError] = useState('');
   const [saving, setSaving] = useState(false);
   const [gmOpen, setGmOpen] = useState(false);
-  const [gmDraft, setGmDraft] = useState({ assigneeProfileId: '', reason: '' });
+  const [gmDraft, setGmDraft] = useState({ sides: 'both', reason: '' });
   const [gmSaving, setGmSaving] = useState(false);
   const [postResolution, setPostResolution] = useState({ resolution: 'no_adjustment', reference: '', note: '' });
   const [postSaving, setPostSaving] = useState(false);
@@ -313,6 +319,11 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
   const [sideAssignmentSaving, setSideAssignmentSaving] = useState('');
   const [anchorageDrafts, setAnchorageDrafts] = useState({});
   const [anchorageSaving, setAnchorageSaving] = useState(false);
+  const [vesselNrtDraft, setVesselNrtDraft] = useState('');
+  const [vesselNrtSaving, setVesselNrtSaving] = useState(false);
+  const [lightDuesDrafts, setLightDuesDrafts] = useState({});
+  const [lightDuesSaving, setLightDuesSaving] = useState(false);
+  const [gmReviewSides, setGmReviewSides] = useState([]);
   const [rateSettingsOpen, setRateSettingsOpen] = useState(false);
   const [rateSettingsDraft, setRateSettingsDraft] = useState({ usdHkdRate: '7.84', expectedRevision: 1, reason: '' });
   const [rateSettingsSaving, setRateSettingsSaving] = useState(false);
@@ -369,6 +380,7 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
         ...item,
         hongKongVariableCharges,
         anchorageVerification: rawDetail.anchorage?.rows?.find((row) => row.extraCostId === item.id) || null,
+        lightDuesVerification: rawDetail.lightDues?.rows?.find((row) => row.extraCostId === item.id) || null,
       })),
     };
     const rows = normalizeReviewRows(nextDetail.lineItems, nextDetail.extraCosts);
@@ -385,13 +397,20 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
       allocationHkd: row.allocationHkd ?? '',
       expectedLastModifiedDate: row.lastModifiedDate || '',
     }])));
+    setVesselNrtDraft(nextDetail.vessel?.nrt == null ? '' : String(nextDetail.vessel.nrt));
+    setLightDuesDrafts(Object.fromEntries((nextDetail.lightDues?.rows || []).map((row) => [row.extraCostId, {
+      entryDate: row.entryDate || '',
+      category: row.category || LIGHT_DUES_CATEGORY_ALL_OTHER,
+      expectedLastModifiedDate: row.lastModifiedDate || '',
+    }])));
     if (nextDetail.variableChargeSettings) setRateSettingsDraft({
       usdHkdRate: String(nextDetail.variableChargeSettings.usdHkdRate ?? 7.84),
       expectedRevision: Number(nextDetail.variableChargeSettings.revision || 1),
       reason: '',
     });
     setAddDrafts([]);
-    setGmDraft({ assigneeProfileId: text(valueOf(nextDetail.case, ['assigneeProfileId', 'assignee_profile_id'])), reason: '' });
+    setGmDraft({ sides: 'both', reason: '' });
+    setGmReviewSides([]);
     setPostResolution({ resolution: 'no_adjustment', reference: '', note: '' });
     setGmActionReason('');
     setSupplierReviewNotes({});
@@ -466,8 +485,8 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
   const activeCostSide = activeSupplierStage?.sides?.cost || null;
   const activeBuyerSide = activeSupplierStage?.sides?.buyerCharge || null;
   const canSupplierEdit = activeSupplierStage?.canVerify === true || (canGmOverride && text(gmActionReason).length >= 5);
-  const canCostSideEdit = activeCostSide?.permissions?.canEdit === true || (activeCostSide?.permissions?.canGmOverride === true && text(gmActionReason).length >= 5);
-  const canBuyerSideEdit = activeBuyerSide?.permissions?.canEdit === true || (activeBuyerSide?.permissions?.canGmOverride === true && text(gmActionReason).length >= 5);
+  const canCostSideEdit = activeCostSide?.permissions?.canEdit === true || (activeCostSide?.permissions?.canGmOverride === true && gmReviewSides.includes('cost') && text(gmActionReason).length >= 5);
+  const canBuyerSideEdit = activeBuyerSide?.permissions?.canEdit === true || (activeBuyerSide?.permissions?.canGmOverride === true && gmReviewSides.includes('buyer_charge') && text(gmActionReason).length >= 5);
   const allSuppliersVerified = supplierRequirements.length > 0 && supplierRequirements.every((row) => row.status === 'Verified');
   const canBuyerConfirm = allSuppliersVerified && (effectiveCapabilities.canBuyerConfirm === true || canEditNormally || (canGmOverride && text(gmActionReason).length >= 5));
   const canResolvePostInvoice = effectiveCapabilities.canResolvePostInvoice === true
@@ -476,11 +495,6 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
   const reviewRows = useMemo(() => normalizeReviewRows(detail?.lineItems, detail?.extraCosts), [detail]);
   const products = Array.isArray(detail?.products) ? detail.products : [];
   const salesforceFiles = Array.isArray(detail?.salesforceFiles) ? detail.salesforceFiles : [];
-  const assigneeOptions = Array.isArray(detail?.assignees)
-    ? detail.assignees
-    : Array.isArray(effectiveCapabilities.assigneeOptions)
-    ? effectiveCapabilities.assigneeOptions
-    : Array.isArray(activeCase.assigneeOptions) ? activeCase.assigneeOptions : [];
   const supplierAccounts = Array.isArray(activeCase.supplierAccounts) ? activeCase.supplierAccounts : [];
   const activeSupplierAccount = supplierAccounts.find((row) => text(row.id) === activeSupplierId) || null;
   const supplierPaymentTerm = text(valueOf(activeSupplierAccount, ['paymentTerm', 'payment_term'])) || 'Not set';
@@ -549,7 +563,7 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
       if (changeKey({ ...draft, cancelled: false }) !== changeKey({ ...original, cancelled: false })) {
         extraCostUpdates.push({
           extraCostId: id, expectedLastModifiedDate, description: draft.description,
-          pricingType: draft.pricingType, supplierCost: Number(draft.supplierCost),
+          pricingType: draft.pricingType, supplierCost: Number(draft.supplierCost), inputCurrency: draft.inputCurrency || 'USD', expectedFxSettingsRevision: Number(detail?.variableChargeSettings?.revision),
           quantity: draft.pricingType === 'per_unit' ? Number(draft.quantity) : null,
           unitOfMeasure: draft.unitOfMeasure,
         });
@@ -558,7 +572,7 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
     const supplierAdds = addDrafts.filter((draft) => text(draft.supplierAccountId) === supplierId);
     const extraCostAdds = supplierAdds.map((draft) => ({
       productId: draft.productId, description: draft.description, supplierAccountId: supplierId,
-      pricingType: draft.pricingType, supplierCost: Number(draft.supplierCost),
+      pricingType: draft.pricingType, supplierCost: Number(draft.supplierCost), inputCurrency: draft.inputCurrency || 'USD', expectedFxSettingsRevision: Number(detail?.variableChargeSettings?.revision),
       quantity: draft.pricingType === 'per_unit' ? Number(draft.quantity) : null,
       unitOfMeasure: draft.unitOfMeasure,
     }));
@@ -653,8 +667,8 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
       if (costSelected && row.sourceType === 'extra_cost' && review.outcome === 'changed') {
         const original = initialExtraDraft(row.item);
         const draft = extraDrafts[row.sourceId] || original;
-        const changed = changeKey({ description: draft.description, pricingType: draft.pricingType, supplierCost: draft.supplierCost, quantity: draft.quantity, unitOfMeasure: draft.unitOfMeasure })
-          !== changeKey({ description: original.description, pricingType: original.pricingType, supplierCost: original.supplierCost, quantity: original.quantity, unitOfMeasure: original.unitOfMeasure });
+        const changed = changeKey({ description: draft.description, pricingType: draft.pricingType, supplierCost: draft.supplierCost, inputCurrency: draft.inputCurrency, quantity: draft.quantity, unitOfMeasure: draft.unitOfMeasure })
+          !== changeKey({ description: original.description, pricingType: original.pricingType, supplierCost: original.supplierCost, inputCurrency: original.inputCurrency, quantity: original.quantity, unitOfMeasure: original.unitOfMeasure });
         if (!changed) { setSaveError(`Make the intended cost change for ${itemLabel(row)}, or mark it Correct.`); return; }
         if (!text(draft.description) || finiteNumber(draft.supplierCost) == null || (draft.pricingType === 'per_unit' && (!(finiteNumber(draft.quantity) > 0) || !text(draft.unitOfMeasure)))) {
           setSaveError(`Complete the cost details for ${itemLabel(row)}.`); return;
@@ -684,8 +698,8 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
       if (costSelected && supplierOutcome === 'cancelled' && draft.cancelled && !original.cancelled) {
         cancellations.push({ extraCostId: id, expectedLastModifiedDate });
       } else if (costSelected && supplierOutcome === 'changed'
-        && changeKey({ description: draft.description, pricingType: draft.pricingType, supplierCost: draft.supplierCost, quantity: draft.quantity, unitOfMeasure: draft.unitOfMeasure }) !== changeKey({ description: original.description, pricingType: original.pricingType, supplierCost: original.supplierCost, quantity: original.quantity, unitOfMeasure: original.unitOfMeasure })) {
-        costUpdates.push({ extraCostId: id, expectedLastModifiedDate, description: draft.description, pricingType: draft.pricingType, supplierCost: Number(draft.supplierCost), quantity: draft.pricingType === 'per_unit' ? Number(draft.quantity) : null, unitOfMeasure: draft.unitOfMeasure });
+        && changeKey({ description: draft.description, pricingType: draft.pricingType, supplierCost: draft.supplierCost, inputCurrency: draft.inputCurrency, quantity: draft.quantity, unitOfMeasure: draft.unitOfMeasure }) !== changeKey({ description: original.description, pricingType: original.pricingType, supplierCost: original.supplierCost, inputCurrency: original.inputCurrency, quantity: original.quantity, unitOfMeasure: original.unitOfMeasure })) {
+        costUpdates.push({ extraCostId: id, expectedLastModifiedDate, description: draft.description, pricingType: draft.pricingType, supplierCost: Number(draft.supplierCost), inputCurrency: draft.inputCurrency || 'USD', expectedFxSettingsRevision: Number(detail?.variableChargeSettings?.revision), quantity: draft.pricingType === 'per_unit' ? Number(draft.quantity) : null, unitOfMeasure: draft.unitOfMeasure });
       }
       if (buyerSelected && reviews[row?.key]?.buyerChargeDecision === 'include'
         && String(draft.buyerPrice ?? '') !== String(original.buyerPrice ?? '')) {
@@ -704,7 +718,7 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
     const additions = supplierAdds.map((draft) => ({
       reviewLocalId: draft.localId, productId: draft.productId, description: draft.description,
       supplierAccountId: supplierId, pricingType: draft.pricingType,
-      supplierCost: Number(draft.supplierCost), buyerPrice: draft.buyerChargeDecision === 'include' ? Number(draft.buyerPrice) : null,
+      supplierCost: Number(draft.supplierCost), inputCurrency: draft.inputCurrency || 'USD', expectedFxSettingsRevision: Number(detail?.variableChargeSettings?.revision), buyerPrice: draft.buyerChargeDecision === 'include' ? Number(draft.buyerPrice) : null,
       quantity: draft.pricingType === 'per_unit' ? Number(draft.quantity) : null,
       unitOfMeasure: draft.unitOfMeasure,
       buyerChargeDecision: draft.buyerChargeDecision,
@@ -801,48 +815,18 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
 
   const saveGmOverride = async () => {
     const reason = text(gmDraft.reason);
-    if (!canGmOverride || !text(gmDraft.assigneeProfileId) || reason.length < 5) {
-      setSaveError('Select an assignee and enter a specific override reason (at least 5 characters).');
+    const sides = gmDraft.sides === 'cost' ? ['cost'] : gmDraft.sides === 'buyer_charge' ? ['buyer_charge'] : ['cost', 'buyer_charge'];
+    const openSides = sides.filter((side) => side === 'cost' ? activeCostSide?.status !== 'verified' : activeBuyerSide?.status !== 'verified');
+    if (!canGmOverride || reason.length < 5 || !openSides.length) {
+      setSaveError(!openSides.length ? 'The selected leg is already approved.' : 'Enter a specific General Manager review reason (at least 5 characters).');
       return;
     }
     setGmSaving(true);
     setSaveError('');
-    const openSides = pairedWorkflow ? [
-      ...(activeCostSide?.status !== 'verified' ? ['cost'] : []),
-      ...(activeBuyerSide?.status !== 'verified' ? ['buyer_charge'] : []),
-    ] : [];
-    if (pairedWorkflow && (!activeSupplierId || !openSides.length)) {
-      setSaveError('There are no open sides to reassign for this supplier.');
-      setGmSaving(false);
-      return;
-    }
-    const response = pairedWorkflow
-      ? await appClient.functions.invoke('variableChargesSideAssign', {
-        stemId: selectedStemId,
-        supplierId: activeSupplierId,
-        sides: openSides,
-        target: 'gm_override',
-        assigneeProfileId: gmDraft.assigneeProfileId,
-        expectedRevisions: Object.fromEntries(openSides.map((side) => [side, Number(side === 'cost' ? activeCostSide?.revision : activeBuyerSide?.revision)])),
-        gmOverrideReason: reason,
-        operationId: operationId('variable_charge_side_gm'),
-      }, { force: true })
-      : await appClient.functions.invoke('variableChargesGmOverride', {
-        stemId: selectedStemId,
-        assigneeProfileId: gmDraft.assigneeProfileId,
-        reason,
-        expectedRevision: valueOf(activeCase, ['revision'], null),
-        expectedFingerprint: valueOf(activeCase, ['fingerprint', 'currentFingerprint', 'current_fingerprint'], null),
-        operationId: operationId('variable_charge_gm'),
-      }, { force: true });
-    if (response.data?.error) {
-      setSaveError(response.data.error);
-      setGmSaving(false);
-      return;
-    }
+    setGmReviewSides(openSides);
+    setGmActionReason(reason);
     setGmSaving(false);
     setGmOpen(false);
-    await Promise.all([loadDetail(selectedStemId, { force: true }), loadCases({ force: true })]);
   };
 
   const savePostInvoiceResolution = async () => {
@@ -888,6 +872,33 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
     setAnchorageSaving(false);
   };
 
+  const saveVesselNrt = async () => {
+    if (vesselNrtSaving) return;
+    setVesselNrtSaving(true);
+    setSaveError('');
+    const response = await appClient.functions.invoke('variableChargesVesselNrtSave', {
+      stemId: selectedStemId,
+      nrt: Number(vesselNrtDraft),
+      expectedLastModifiedDate: detail?.vessel?.lastModifiedDate,
+    }, { force: true });
+    if (response.data?.error) setSaveError(response.data.error);
+    else await Promise.all([loadDetail(selectedStemId, { force: true }), loadCases()]);
+    setVesselNrtSaving(false);
+  };
+
+  const saveLightDues = async () => {
+    if (!detail?.lightDues || lightDuesSaving) return;
+    setLightDuesSaving(true);
+    setSaveError('');
+    const response = await appClient.functions.invoke('variableChargesLightDuesSave', {
+      stemId: selectedStemId,
+      rows: detail.lightDues.rows.map((row) => ({ extraCostId: row.extraCostId, ...lightDuesDrafts[row.extraCostId] })),
+    }, { force: true });
+    if (response.data?.error) setSaveError(response.data.error);
+    else await Promise.all([loadDetail(selectedStemId, { force: true }), loadCases()]);
+    setLightDuesSaving(false);
+  };
+
   const saveRateSettings = async () => {
     setRateSettingsSaving(true);
     setSaveError('');
@@ -929,8 +940,9 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
       ) : detail ? (
         <div className="space-y-5">
           {pairedWorkflow ? <CommonReviewSummary caseRow={activeCase} /> : <><GuidedProgress currentStep={currentStep} progress={workflow.progress} /><SimpleCaseSummary caseRow={activeCase} onOpenStem={onOpenStem} /></>}
-          {detail.anchorage && detail.variableChargeSettings?.canSave === true && <div className="flex justify-end"><Button type="button" size="sm" variant="outline" onClick={() => setRateSettingsOpen(true)}><Settings2 className="mr-2 h-4 w-4" />Company USD/HKD rate</Button></div>}
-          {!pairedWorkflow && detail.anchorage && <div className="overflow-x-auto rounded-xl border border-border bg-card"><div className="min-w-[760px]"><AnchorageDuesPanel evidence={detail.anchorage} drafts={anchorageDrafts} canEdit={canCostSideEdit || canBuyerSideEdit || detail.variableChargeSettings?.canSave === true} saving={anchorageSaving} onChange={(id, patch) => setAnchorageDrafts((current) => ({ ...current, [id]: { ...current[id], ...patch } }))} onSave={saveAnchorageDetails} /></div></div>}
+          {(detail.vessel?.canSaveNrt || detail.anchorage || detail.lightDues) && <HongKongStatutoryChargesPanel vessel={detail.vessel} nrtDraft={vesselNrtDraft} onNrtChange={setVesselNrtDraft} nrtSaving={vesselNrtSaving} onSaveNrt={saveVesselNrt} anchorage={detail.anchorage} anchorageDrafts={anchorageDrafts} anchorageSaving={anchorageSaving} onAnchorageChange={(id, patch) => setAnchorageDrafts((current) => ({ ...current, [id]: { ...current[id], ...patch } }))} onSaveAnchorage={saveAnchorageDetails} lightDues={detail.lightDues} lightDuesDrafts={lightDuesDrafts} lightDuesSaving={lightDuesSaving} onLightDuesChange={(id, patch) => setLightDuesDrafts((current) => ({ ...current, [id]: { ...current[id], ...patch } }))} onSaveLightDues={saveLightDues} canEdit={canCostSideEdit || canBuyerSideEdit || detail.variableChargeSettings?.canSave === true} canEditRate={detail.variableChargeSettings?.canSave === true} onEditRate={() => setRateSettingsOpen(true)} />}
+          {pairedWorkflow && canGmOverride && (activeCostSide?.status !== 'verified' || activeBuyerSide?.status !== 'verified') && <div className="flex flex-wrap justify-end gap-2">{activeCostSide?.status !== 'verified' && <Button type="button" size="sm" variant="outline" onClick={() => { setGmDraft({ sides: 'cost', reason: '' }); setGmOpen(true); }}><ShieldCheck className="mr-2 h-4 w-4" />Review Supplier Leg as GM</Button>}{activeBuyerSide?.status !== 'verified' && <Button type="button" size="sm" variant="outline" onClick={() => { setGmDraft({ sides: 'buyer_charge', reason: '' }); setGmOpen(true); }}><ShieldCheck className="mr-2 h-4 w-4" />Review Buyer Leg as GM</Button>}</div>}
+          {pairedWorkflow && detail.supplierDualCurrencySummary && (() => { const total = detail.supplierDualCurrencySummary.bySupplier?.find((row) => text(row.supplierId) === activeSupplierId) || detail.supplierDualCurrencySummary; return <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-300 bg-slate-50 px-4 py-3 text-sm"><span className="font-medium">Selected Supplier Total</span><span className="font-semibold tabular-nums">{total.complete ? `${formatMoney(total.usd, 'USD')} · ${formatMoney(total.hkd, 'HKD')}` : 'Unavailable'}</span><span className="text-xs text-muted-foreground">{total.rateLabel}</span></div>; })()}
           {saveError && <div className="flex gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />{saveError}</div>}
 
           {valueOf(activeCase, ['status']) === 'post_invoice_changes' && (
@@ -964,7 +976,7 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
               supplierNote={supplierReviewNotes[activeSupplierId] || ''}
               buyerNote={buyerReviewNotes[activeSupplierId] || ''}
               salesforceInstanceUrl={detail.salesforceInstanceUrl}
-              anchorage={detail.anchorage}
+              anchorage={null}
               anchorageDrafts={anchorageDrafts}
               anchorageSaving={anchorageSaving}
               canSaveAnchorage={canCostSideEdit || canBuyerSideEdit || detail.variableChargeSettings?.canSave === true}
@@ -975,7 +987,7 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
               onReviewChange={updateReview}
               onDraftChange={updateExtraDraft}
               onAddDraftChange={updateAddDraft}
-              onAdd={() => setAddDrafts((current) => [...current, initialAddDraft(activeCase, activeSupplierId)])}
+              onAdd={() => setAddDrafts((current) => [...current, initialAddDraft(activeCase, activeSupplierId, detail?.variableChargeSettings?.usdHkdRate)])}
               onRemoveAdd={(localId) => setAddDrafts((current) => current.filter((row) => row.localId !== localId))}
               onSupplierNote={(value) => setSupplierReviewNotes((current) => ({ ...current, [activeSupplierId]: value }))}
               onBuyerNote={(value) => setBuyerReviewNotes((current) => ({ ...current, [activeSupplierId]: value }))}
@@ -1042,15 +1054,15 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
             </>
           )}
 
-          <AuditDetails caseRow={activeCase} assignmentHistory={detail.assignmentHistory || []} assignmentHistoryUnavailable={detail.assignmentHistoryUnavailable === true} canGmOverride={canGmOverride} onOpenGm={() => setGmOpen(true)} />
+          <AuditDetails caseRow={activeCase} assignmentHistory={detail.assignmentHistory || []} assignmentHistoryUnavailable={detail.assignmentHistoryUnavailable === true} />
         </div>
       ) : null}
 
       <Dialog open={gmOpen} onOpenChange={setGmOpen}>
-        <DialogContent className="sm:max-w-lg"><DialogHeader><DialogTitle>General Manager Override</DialogTitle><DialogDescription className="sr-only">Temporarily assign the open Variable Charges review.</DialogDescription></DialogHeader><div className="space-y-4"><div className="space-y-2"><Label htmlFor="variable-charge-gm-assignee">Temporary Assignee</Label><Select value={gmDraft.assigneeProfileId} onValueChange={(assigneeProfileId) => setGmDraft((current) => ({ ...current, assigneeProfileId }))} disabled={gmSaving}><SelectTrigger id="variable-charge-gm-assignee"><SelectValue placeholder="Select active FCOS user" /></SelectTrigger><SelectContent>{assigneeOptions.map((option) => <SelectItem key={valueOf(option, ['id', 'profileId', 'profile_id'])} value={String(valueOf(option, ['id', 'profileId', 'profile_id']))}>{valueOf(option, ['fullName', 'full_name', 'name', 'email'])}</SelectItem>)}</SelectContent></Select></div>{!assigneeOptions.length && <p className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">Active reassignment options are unavailable. Refresh the task before attempting an override.</p>}<div className="space-y-2"><Label htmlFor="variable-charge-gm-reason">Override Reason</Label><Textarea id="variable-charge-gm-reason" value={gmDraft.reason} onChange={(event) => setGmDraft((current) => ({ ...current, reason: event.target.value }))} disabled={gmSaving} /></div></div><DialogFooter><Button type="button" variant="outline" onClick={() => setGmOpen(false)} disabled={gmSaving}>Cancel</Button><Button type="button" onClick={saveGmOverride} disabled={gmSaving || !assigneeOptions.length}>{gmSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Apply Override</Button></DialogFooter></DialogContent>
+        <DialogContent className="sm:max-w-lg"><DialogHeader><DialogTitle>Review as General Manager</DialogTitle><DialogDescription>Assignments stay unchanged. Your reason is recorded when you approve the selected leg.</DialogDescription></DialogHeader><div className="space-y-4"><div className="space-y-2"><Label>Review</Label><Select value={gmDraft.sides} onValueChange={(sides) => setGmDraft((current) => ({ ...current, sides }))} disabled={gmSaving}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="cost" disabled={activeCostSide?.status === 'verified'}>Supplier Leg</SelectItem><SelectItem value="buyer_charge" disabled={activeBuyerSide?.status === 'verified'}>Buyer Leg</SelectItem><SelectItem value="both" disabled={activeCostSide?.status === 'verified' || activeBuyerSide?.status === 'verified'}>Both legs</SelectItem></SelectContent></Select></div><div className="space-y-2"><Label htmlFor="variable-charge-gm-reason">Reason</Label><Textarea id="variable-charge-gm-reason" value={gmDraft.reason} onChange={(event) => setGmDraft((current) => ({ ...current, reason: event.target.value }))} disabled={gmSaving} /></div></div><DialogFooter><Button type="button" variant="outline" onClick={() => setGmOpen(false)} disabled={gmSaving}>Cancel</Button><Button type="button" onClick={saveGmOverride} disabled={gmSaving || text(gmDraft.reason).length < 5}>{gmSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Start Review</Button></DialogFooter></DialogContent>
       </Dialog>
       <Dialog open={rateSettingsOpen} onOpenChange={setRateSettingsOpen}>
-        <DialogContent className="sm:max-w-md"><DialogHeader><DialogTitle>Company USD/HKD rate</DialogTitle><DialogDescription>Used only to verify Hong Kong Anchorage Dues and suggest buyer charges.</DialogDescription></DialogHeader><div className="space-y-4"><div className="space-y-2"><Label htmlFor="anchorage-usd-hkd-rate">USD 1 = HKD</Label><Input id="anchorage-usd-hkd-rate" inputMode="decimal" value={rateSettingsDraft.usdHkdRate} onChange={(event) => setRateSettingsDraft((current) => ({ ...current, usdHkdRate: event.target.value }))} disabled={rateSettingsSaving} /></div><div className="space-y-2"><Label htmlFor="anchorage-rate-reason">Reason</Label><Textarea id="anchorage-rate-reason" value={rateSettingsDraft.reason} onChange={(event) => setRateSettingsDraft((current) => ({ ...current, reason: event.target.value }))} disabled={rateSettingsSaving} /></div></div><DialogFooter><Button type="button" variant="outline" onClick={() => setRateSettingsOpen(false)} disabled={rateSettingsSaving}>Cancel</Button><Button type="button" onClick={saveRateSettings} disabled={rateSettingsSaving}>{rateSettingsSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Save rate</Button></DialogFooter></DialogContent>
+        <DialogContent className="sm:max-w-md"><DialogHeader><DialogTitle>Company USD/HKD rate</DialogTitle><DialogDescription>Used for Hong Kong statutory-charge verification and Supplier Leg currency conversions.</DialogDescription></DialogHeader><div className="space-y-4"><div className="space-y-2"><Label htmlFor="anchorage-usd-hkd-rate">USD 1 = HKD</Label><Input id="anchorage-usd-hkd-rate" inputMode="decimal" value={rateSettingsDraft.usdHkdRate} onChange={(event) => setRateSettingsDraft((current) => ({ ...current, usdHkdRate: event.target.value }))} disabled={rateSettingsSaving} /></div><div className="space-y-2"><Label htmlFor="anchorage-rate-reason">Reason</Label><Textarea id="anchorage-rate-reason" value={rateSettingsDraft.reason} onChange={(event) => setRateSettingsDraft((current) => ({ ...current, reason: event.target.value }))} disabled={rateSettingsSaving} /></div></div><DialogFooter><Button type="button" variant="outline" onClick={() => setRateSettingsOpen(false)} disabled={rateSettingsSaving}>Cancel</Button><Button type="button" onClick={saveRateSettings} disabled={rateSettingsSaving}>{rateSettingsSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Save rate</Button></DialogFooter></DialogContent>
       </Dialog>
     </div>
   ) : null;
@@ -1179,10 +1191,10 @@ function LegOptions({ side, disabled, onAssign }) {
   return <DropdownMenu><DropdownMenuTrigger asChild><Button type="button" size="icon" variant="ghost" className="h-8 w-8" disabled={disabled} aria-label="Assignment options"><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuLabel>Options</DropdownMenuLabel><DropdownMenuSeparator />{canAssign && <DropdownMenuItem onSelect={() => onAssign('buyer_trader')}>Assign to Buyer Trader</DropdownMenuItem>}{canTakeBack && <DropdownMenuItem onSelect={() => onAssign('supplier_trader')}>Take Back</DropdownMenuItem>}</DropdownMenuContent></DropdownMenu>;
 }
 
-function LegHeader({ leg, name, nameControl = null, traderLabel, side, totalLabel, total, totalComplete, totalBlockingReason = '', currency, paymentTerm, buyer = false, editable = false, assignmentSaving, onAssign }) {
+function LegHeader({ leg, name, nameControl = null, traderLabel, side, totalLabel, total, totalComplete, totalBlockingReason = '', currency, paymentTerm, buyer = false, editable = false, assignmentSaving, canGmOverride = false, onReviewAsGm, onAssign }) {
   const assignee = side?.currentAssignee?.name || 'Needs assignment';
   const canEdit = editable || side?.permissions?.canEdit === true || side?.permissions?.canConfirm === true;
-  return <header className={cn('sticky top-0 z-10 min-h-[196px] space-y-4 p-4', buyer ? 'bg-blue-50/95' : 'bg-slate-100/95')}><div className="flex items-start justify-between gap-3"><div className="min-w-0 flex-1"><div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{leg}</div>{nameControl || <div className="mt-1 truncate text-base font-semibold" title={name}>{name || 'Not set'}</div>}</div><LegOptions side={side} disabled={assignmentSaving} onAssign={onAssign} /></div><div className="grid grid-cols-2 gap-3"><LegMetric label={traderLabel}>{assignee}</LegMetric><LegMetric label="Status"><Badge variant="outline" className={sideStatusTone(side)}>{sideStatusLabel(side)}</Badge></LegMetric><LegMetric label={totalLabel}>{totalComplete ? formatMoney(total, currency) : <span className="text-muted-foreground">Unavailable</span>}{!totalComplete && totalBlockingReason && <div className="mt-0.5 text-xs font-normal text-muted-foreground">{totalBlockingReason}</div>}</LegMetric><LegMetric label={buyer ? 'Buyer Payment Term' : 'Supplier Payment Term'}>{paymentTerm || 'Not set'}</LegMetric></div>{!canEdit && side?.status !== 'verified' && <div className="rounded-md border border-slate-200 bg-white/70 px-2.5 py-2 text-xs text-slate-700">View Only · Assigned to {assignee}</div>}</header>;
+  return <header className={cn('sticky top-0 z-10 min-h-[196px] space-y-4 p-4', buyer ? 'bg-blue-50/95' : 'bg-slate-100/95')}><div className="flex items-start justify-between gap-3"><div className="min-w-0 flex-1"><div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{leg}</div>{nameControl || <div className="mt-1 truncate text-base font-semibold" title={name}>{name || 'Not set'}</div>}</div><div className="flex items-center gap-1">{canGmOverride && side?.status !== 'verified' && <Button type="button" size="sm" variant="outline" onClick={onReviewAsGm}><ShieldCheck className="mr-1.5 h-3.5 w-3.5" />Review as General Manager</Button>}<LegOptions side={side} disabled={assignmentSaving} onAssign={onAssign} /></div></div><div className="grid grid-cols-2 gap-3"><LegMetric label={traderLabel}>{assignee}</LegMetric><LegMetric label="Status"><Badge variant="outline" className={sideStatusTone(side)}>{sideStatusLabel(side)}</Badge></LegMetric><LegMetric label={totalLabel}>{totalComplete ? formatMoney(total, currency) : <span className="text-muted-foreground">Unavailable</span>}{!totalComplete && totalBlockingReason && <div className="mt-0.5 text-xs font-normal text-muted-foreground">{totalBlockingReason}</div>}</LegMetric><LegMetric label={buyer ? 'Buyer Payment Term' : 'Supplier Payment Term'}>{paymentTerm || 'Not set'}</LegMetric></div>{!canEdit && side?.status !== 'verified' && <div className="rounded-md border border-slate-200 bg-white/70 px-2.5 py-2 text-xs text-slate-700">View Only · Assigned to {assignee}</div>}</header>;
 }
 
 function DecisionButtons({ options, selected, disabled, onChange, ariaLabel }) {
@@ -1196,7 +1208,7 @@ function SalesforceEditNotice({ sourceId, instanceUrl }) {
 
 function PairedExtraCostFields({ row, draft, disabled, onChange, onCancel }) {
   const id = `paired-${row.sourceId}`;
-  return <div className="mt-3 space-y-3 rounded-lg border border-amber-200 bg-amber-50/40 p-3"><div className="flex items-center justify-between gap-2"><div className="text-xs font-semibold uppercase tracking-wide text-amber-950">Edit Charge Details</div><AlertDialog><AlertDialogTrigger asChild><Button type="button" size="sm" variant="ghost" className="text-rose-700 hover:bg-rose-50 hover:text-rose-800" disabled={disabled}>Cancel Charge</Button></AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Cancel this charge?</AlertDialogTitle><AlertDialogDescription>The charge remains in Salesforce history but will no longer be active.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Keep Charge</AlertDialogCancel><AlertDialogAction className="bg-rose-600 hover:bg-rose-700" onClick={onCancel}>Cancel Charge</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog></div><div className="space-y-2"><Label htmlFor={`${id}-description`}>Description</Label><Input id={`${id}-description`} value={draft.description || ''} disabled={disabled} onChange={(event) => onChange({ description: event.target.value })} /></div><div className="grid gap-3 sm:grid-cols-2"><div className="space-y-2"><Label>Pricing Basis</Label><Select value={draft.pricingType} disabled={disabled} onValueChange={(pricingType) => onChange({ pricingType })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="fixed">Fixed</SelectItem><SelectItem value="per_unit">Per Unit</SelectItem></SelectContent></Select></div><div className="space-y-2"><Label htmlFor={`${id}-cost`}>{draft.pricingType === 'fixed' ? 'Supplier Fixed Cost' : 'Supplier Unit Cost'}</Label><Input id={`${id}-cost`} inputMode="decimal" value={draft.supplierCost ?? ''} disabled={disabled} onChange={(event) => onChange({ supplierCost: event.target.value })} /></div>{draft.pricingType === 'per_unit' && <><div className="space-y-2"><Label htmlFor={`${id}-quantity`}>Quantity</Label><Input id={`${id}-quantity`} inputMode="decimal" value={draft.quantity ?? ''} disabled={disabled} onChange={(event) => onChange({ quantity: event.target.value })} /></div><div className="space-y-2"><Label htmlFor={`${id}-uom`}>UOM</Label><Input id={`${id}-uom`} value={draft.unitOfMeasure || ''} disabled={disabled} onChange={(event) => onChange({ unitOfMeasure: event.target.value })} /></div></>}</div></div>;
+  return <div className="mt-3 space-y-3 rounded-lg border border-amber-200 bg-amber-50/40 p-3"><div className="flex items-center justify-between gap-2"><div className="text-xs font-semibold uppercase tracking-wide text-amber-950">Edit Charge Details</div><AlertDialog><AlertDialogTrigger asChild><Button type="button" size="sm" variant="ghost" className="text-rose-700 hover:bg-rose-50 hover:text-rose-800" disabled={disabled}>Cancel Charge</Button></AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Cancel this charge?</AlertDialogTitle><AlertDialogDescription>The charge remains in Salesforce history but will no longer be active.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Keep Charge</AlertDialogCancel><AlertDialogAction className="bg-rose-600 hover:bg-rose-700" onClick={onCancel}>Cancel Charge</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog></div><div className="space-y-2"><Label htmlFor={`${id}-description`}>Description</Label><Input id={`${id}-description`} value={draft.description || ''} disabled={disabled} onChange={(event) => onChange({ description: event.target.value })} /></div><div className="grid gap-3 sm:grid-cols-2"><div className="space-y-2"><Label>Pricing Basis</Label><Select value={draft.pricingType} disabled={disabled} onValueChange={(pricingType) => onChange({ pricingType })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="fixed">Fixed</SelectItem><SelectItem value="per_unit">Per Unit</SelectItem></SelectContent></Select></div><div className="space-y-2"><Label>Input Currency</Label><Select value={draft.inputCurrency || 'USD'} disabled={disabled} onValueChange={(inputCurrency) => onChange({ inputCurrency })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="HKD">HKD</SelectItem><SelectItem value="USD">USD</SelectItem></SelectContent></Select></div><div className="space-y-2"><Label htmlFor={`${id}-cost`}>{draft.pricingType === 'fixed' ? 'Supplier Fixed Cost' : 'Supplier Unit Cost'} ({draft.inputCurrency || 'USD'})</Label><Input id={`${id}-cost`} inputMode="decimal" value={draft.supplierCost ?? ''} disabled={disabled} onChange={(event) => onChange({ supplierCost: event.target.value })} /></div>{draft.pricingType === 'per_unit' && <><div className="space-y-2"><Label htmlFor={`${id}-quantity`}>Quantity</Label><Input id={`${id}-quantity`} inputMode="decimal" value={draft.quantity ?? ''} disabled={disabled} onChange={(event) => onChange({ quantity: event.target.value })} /></div><div className="space-y-2"><Label htmlFor={`${id}-uom`}>UOM</Label><Input id={`${id}-uom`} value={draft.unitOfMeasure || ''} disabled={disabled} onChange={(event) => onChange({ unitOfMeasure: event.target.value })} /></div></>}</div></div>;
 }
 
 function AmountDisplay({ label, amount, currency, unavailableReason }) {
@@ -1276,36 +1288,60 @@ function AnchorageDuesPanel({ evidence, drafts, canEdit, saving, canEditRate, on
   );
 }
 
-function PairedChargeRow({ row, review, draft, currency, canCostEdit, canBuyerEdit, instanceUrl, onReviewChange, onDraftChange }) {
+function LightDuesPanel({ evidence, drafts, canEdit, saving, onChange, onSave }) {
+  const rows = evidence?.rows || [];
+  return <section className="border-t-2 border-cyan-300 bg-cyan-50/35 p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="font-semibold text-cyan-950">Hong Kong Light Dues verification</h3><div className="mt-1 text-xs text-cyan-900">Charged once for each represented Hong Kong entry.</div></div><Button type="button" size="sm" variant="outline" disabled={!canEdit || saving} onClick={onSave}>{saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Save Light Dues details</Button></div><div className="mt-4 grid gap-3">{rows.map((row) => { const draft = drafts[row.extraCostId] || {}; const calculation = calculateHongKongLightDues({ nrt: evidence.vesselNrt, entryDate: draft.entryDate, category: draft.category || LIGHT_DUES_CATEGORY_ALL_OTHER }); return <div key={row.extraCostId} className="grid gap-3 rounded-lg border border-cyan-200 bg-white/80 p-3 md:grid-cols-2"><div className="space-y-1.5"><Label htmlFor={`light-dues-date-${row.extraCostId}`}>Confirmed Entry Date</Label><Input id={`light-dues-date-${row.extraCostId}`} type="date" value={draft.entryDate || ''} disabled={!canEdit || saving} onChange={(event) => onChange(row.extraCostId, { entryDate: event.target.value })} /></div><div className="space-y-1.5"><Label>Vessel Category</Label><Select value={draft.category || LIGHT_DUES_CATEGORY_ALL_OTHER} disabled={!canEdit || saving} onValueChange={(category) => onChange(row.extraCostId, { category })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value={LIGHT_DUES_CATEGORY_ALL_OTHER}>All other vessels</SelectItem><SelectItem value={LIGHT_DUES_CATEGORY_RIVER_TRADE}>River-trade only</SelectItem></SelectContent></Select></div><div className="md:col-span-2 flex flex-wrap gap-x-5 gap-y-1 border-t border-cyan-100 pt-2 text-xs text-cyan-950"><span>Calculated <strong>{calculation.complete ? formatMoney(calculation.amountHkd, 'HKD') : 'Unavailable'}</strong></span><span>USD equivalent <strong>{calculation.complete && evidence.companyUsdHkdRate > 0 ? formatMoney(calculation.amountHkd / evidence.companyUsdHkdRate, 'USD') : 'Unavailable'}</strong></span><span>Supplier charge <strong>{row.supplierChargeUsd == null ? 'Unavailable' : `${formatMoney(row.supplierChargeUsd, 'USD')} · ${formatMoney(row.supplierChargeHkd, 'HKD')}`}</strong></span><span>Variance <strong>{row.supplierVarianceHkd == null ? 'Unavailable' : formatMoney(row.supplierVarianceHkd, 'HKD')}</strong></span><span>Buyer default <strong>USD 0.00</strong></span>{row.savedCalculationVersion && <span>Reviewed basis <strong>NRT {row.appliedNrt} · HKD {row.appliedRateHkd}/100 NRT</strong></span>}</div>{!calculation.complete && <div className="md:col-span-2 rounded-md bg-cyan-100 p-2 text-xs text-cyan-950">{calculation.errors?.[0]}</div>}</div>; })}</div></section>;
+}
+
+function HongKongStatutoryChargesPanel({ vessel, nrtDraft, onNrtChange, nrtSaving, onSaveNrt, anchorage, anchorageDrafts, anchorageSaving, onAnchorageChange, onSaveAnchorage, lightDues, lightDuesDrafts, lightDuesSaving, onLightDuesChange, onSaveLightDues, canEdit, canEditRate, onEditRate }) {
+  return <div className="overflow-x-auto rounded-xl border border-amber-300 bg-card shadow-sm"><div className="min-w-[760px]"><section className="p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="font-semibold">Hong Kong statutory charges</h2><p className="mt-1 text-xs text-muted-foreground">Changing the Vessel record may reopen other Anchorage or Light Dues reviews using this Vessel.</p></div>{canEditRate && <Button type="button" size="sm" variant="ghost" onClick={onEditRate}><Settings2 className="mr-2 h-4 w-4" />Company USD/HKD rate</Button>}</div><div className="mt-4 flex flex-wrap items-end gap-3"><div className="w-56 space-y-1.5"><Label htmlFor="variable-charge-vessel-nrt">Vessel NRT</Label><Input id="variable-charge-vessel-nrt" inputMode="numeric" value={nrtDraft} disabled={!canEdit || nrtSaving} onChange={(event) => onNrtChange(event.target.value.replace(/[^0-9]/g, ''))} /></div><Button type="button" variant="outline" disabled={!canEdit || nrtSaving || !(Number(nrtDraft) > 0 && Number.isInteger(Number(nrtDraft)))} onClick={onSaveNrt}>{nrtSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Save Vessel NRT</Button><span className="pb-2 text-xs text-muted-foreground">{vessel?.affectedReviewCount || 0} statutory review row(s) on this task may be affected.</span></div></section>{anchorage && <AnchorageDuesPanel evidence={anchorage} drafts={anchorageDrafts} canEdit={canEdit} saving={anchorageSaving} onChange={onAnchorageChange} onSave={onSaveAnchorage} />}{lightDues && <LightDuesPanel evidence={lightDues} drafts={lightDuesDrafts} canEdit={canEdit} saving={lightDuesSaving} onChange={onLightDuesChange} onSave={onSaveLightDues} />}</div></div>;
+}
+
+function SupplierDualAmount({ label, row, draft, total = false, companyRate }) {
+  const values = rowFinancials(row, draft, 'USD');
+  const serverDual = valueOf(row.item, [total ? 'supplierCurrency.total' : 'supplierCurrency.unitOrFixed'], null);
+  let usd = total ? values.supplierTotal : values.supplierRate;
+  let hkd = finiteNumber(serverDual?.hkdAmount);
+  const rate = finiteNumber(valueOf(row.item, ['supplierCurrency.usdHkdRate'], companyRate));
+  if (draft && finiteNumber(draft.supplierCost) != null && rate > 0) {
+    const native = finiteNumber(draft.supplierCost);
+    const unitUsd = draft.inputCurrency === 'HKD' ? native / rate : native;
+    usd = total && draft.pricingType === 'per_unit' && finiteNumber(draft.quantity) != null ? unitUsd * Number(draft.quantity) : unitUsd;
+    hkd = total && draft.pricingType === 'per_unit' && finiteNumber(draft.quantity) != null
+      ? (draft.inputCurrency === 'HKD' ? native : native * rate) * Number(draft.quantity)
+      : draft.inputCurrency === 'HKD' ? native : native * rate;
+  }
+  return <div><div className="text-xs text-muted-foreground">{label}</div><div className="mt-1 font-semibold tabular-nums">{usd == null ? 'Unavailable' : formatMoney(usd, 'USD')}</div><div className="text-xs font-medium tabular-nums text-slate-600">{hkd == null ? 'HKD unavailable' : formatMoney(hkd, 'HKD')}</div>{serverDual?.basis === 'current_rate' && <div className="mt-0.5 text-[11px] text-amber-700">Current company rate</div>}</div>;
+}
+
+function PairedChargeRow({ row, review, draft, currency, companyRate, canCostEdit, canBuyerEdit, instanceUrl, onReviewChange, onDraftChange }) {
   const [buyerPriceOpen, setBuyerPriceOpen] = useState(false);
   const values = rowFinancials(row, draft, currency);
   const description = text(valueOf(row.item, ['description']));
   const product = itemLabel(row);
   const descriptionVisible = description && description.localeCompare(product, undefined, { sensitivity: 'base' }) !== 0;
-  const quantity = values.quantity;
-  const uom = text(draft?.unitOfMeasure || valueOf(row.item, ['unitOfMeasure'])) || 'Not set';
   const fixedPricing = values.pricingType === 'fixed';
   const supplierEditing = review.outcome === 'changed' || review.outcome === 'cancelled';
   const anchorageDues = isHongKongAnchorageDuesItem(row.item);
+  const lightDues = text(product).toUpperCase() === 'LIGHT DUES';
   const buyerDecisionOptions = buyerDecisionOptionsForItem(row.item);
   const displayedBuyerRate = buyerAmountWithAnchorageDecision(row.item, review.buyerChargeDecision, values.buyerRate);
   const displayedBuyerTotal = buyerAmountWithAnchorageDecision(row.item, review.buyerChargeDecision, values.buyerTotal);
-  const displayedMargin = values.supplierTotal != null && displayedBuyerTotal != null
-    ? displayedBuyerTotal - values.supplierTotal
-    : null;
+  const displayedMargin = values.supplierTotal != null && displayedBuyerTotal != null ? displayedBuyerTotal - values.supplierTotal : null;
   const unavailableReason = values.pricingType === 'per_unit' && values.quantity == null ? 'Quantity is unavailable.' : 'The Salesforce total is unavailable.';
-  return <article className="border-t border-border"><div className="border-b border-border bg-muted/25 px-4 py-3"><div className="flex flex-wrap items-start justify-between gap-3"><div className="min-w-0"><h3 className="font-semibold">{product}</h3>{descriptionVisible && <p className="mt-0.5 text-sm text-muted-foreground">{description}</p>}</div><div className="flex flex-wrap items-start gap-x-5 gap-y-1 text-xs text-muted-foreground">{!fixedPricing && <span>Quantity <strong className="text-foreground">{quantity ?? 'Not set'} {quantity != null ? uom : ''}</strong></span>}<span>Pricing Basis <strong className="text-foreground">{fixedPricing ? 'Fixed charge' : 'Per Unit'}</strong></span><div><span>Margin</span><MarginAmount value={displayedMargin} currency={values.currency} unavailableReason={unavailableReason} /></div></div></div></div><div className="grid grid-cols-2"><section className="min-h-[210px] space-y-3 border-r-2 border-slate-300 bg-slate-50/30 p-4"><DecisionButtons ariaLabel={`${product} supplier review`} selected={review.outcome === 'cancelled' ? 'changed' : review.outcome || ''} disabled={!canCostEdit} onChange={(outcome) => { if (outcome === 'changed' && review.outcome === 'cancelled') onDraftChange({ cancelled: false }); onReviewChange({ outcome }); }} options={[{ value: '', label: 'Pending', tone: 'bg-slate-100 text-slate-800' }, { value: 'correct', label: 'Correct', tone: 'bg-emerald-100 text-emerald-900' }, { value: 'changed', label: 'Edit Cost', tone: 'bg-amber-100 text-amber-950' }]} /><div className="grid grid-cols-2 gap-3"><AmountDisplay label={values.pricingType === 'fixed' ? 'Supplier Fixed Cost' : 'Supplier Unit Cost'} amount={values.supplierRate} currency={values.currency} unavailableReason={unavailableReason} /><AmountDisplay label="Total Supplier Cost" amount={values.supplierTotal} currency={values.currency} unavailableReason={unavailableReason} /></div>{supplierEditing && (row.readOnly ? <SalesforceEditNotice sourceId={row.sourceId} instanceUrl={instanceUrl} /> : <PairedExtraCostFields row={row} draft={draft} disabled={!canCostEdit} onChange={onDraftChange} onCancel={() => { onDraftChange({ cancelled: true }); onReviewChange({ outcome: 'cancelled' }); }} />)}</section><section className="min-h-[210px] space-y-3 bg-blue-50/20 p-4"><DecisionButtons ariaLabel={`${product} buyer review`} selected={review.buyerChargeDecision || ''} disabled={!canBuyerEdit} onChange={(buyerChargeDecision) => onReviewChange({ buyerChargeDecision })} options={buyerDecisionOptions} />{anchorageDues && <p className="text-xs text-blue-900">First 12 hours: no buyer charge. If the vessel stays longer, charge only the excess amount.</p>}<div className="grid grid-cols-2 gap-3"><AmountDisplay label={values.pricingType === 'fixed' ? 'Buyer Fixed Charge' : 'Buyer Unit Price'} amount={displayedBuyerRate} currency={values.currency} unavailableReason={unavailableReason} /><AmountDisplay label="Total Buyer Charge" amount={displayedBuyerTotal} currency={values.currency} unavailableReason={unavailableReason} /></div>{review.buyerChargeDecision === 'include' && <div><Button type="button" size="sm" variant="outline" disabled={!canBuyerEdit} onClick={() => setBuyerPriceOpen((open) => !open)}>{anchorageDues ? 'Edit Excess Charge' : 'Edit Buyer Price'}</Button>{buyerPriceOpen && (row.readOnly ? <SalesforceEditNotice sourceId={row.sourceId} instanceUrl={instanceUrl} /> : <div className="mt-3 space-y-2"><Label htmlFor={`paired-buyer-price-${row.sourceId}`}>{anchorageDues ? 'Buyer Excess Anchorage Charge' : values.pricingType === 'fixed' ? 'Buyer Fixed Charge' : 'Buyer Unit Price'}</Label><Input id={`paired-buyer-price-${row.sourceId}`} inputMode="decimal" value={draft?.buyerPrice ?? ''} disabled={!canBuyerEdit} onChange={(event) => onDraftChange({ buyerPrice: event.target.value })} /></div>)}</div>}</section></div></article>;
+  return <article className="border-t border-border"><div className="border-b border-border bg-muted/25 px-4 py-3"><div className="flex flex-wrap items-start justify-between gap-3"><div className="min-w-0"><h3 className="font-semibold">{product}</h3>{descriptionVisible && <p className="mt-0.5 text-sm text-muted-foreground">{description}</p>}</div><div className="flex flex-wrap items-start gap-x-5 gap-y-1 text-xs text-muted-foreground">{!fixedPricing && <span>Quantity <strong className="text-foreground">{values.quantity ?? 'Not set'} {values.quantity != null ? (text(draft?.unitOfMeasure || valueOf(row.item, ['unitOfMeasure'])) || 'Not set') : ''}</strong></span>}<span>Pricing Basis <strong className="text-foreground">{fixedPricing ? 'Fixed charge' : 'Per Unit'}</strong></span><div><span>Margin</span><MarginAmount value={displayedMargin} currency="USD" unavailableReason={unavailableReason} /></div></div></div></div><div className="grid grid-cols-2"><section className="min-h-[210px] space-y-3 border-r-2 border-slate-300 bg-slate-50/30 p-4"><DecisionButtons ariaLabel={`${product} supplier review`} selected={review.outcome === 'cancelled' ? 'changed' : review.outcome || ''} disabled={!canCostEdit} onChange={(outcome) => { if (outcome === 'changed' && review.outcome === 'cancelled') onDraftChange({ cancelled: false }); onReviewChange({ outcome }); }} options={[{ value: '', label: 'Pending', tone: 'bg-slate-100 text-slate-800' }, { value: 'correct', label: 'Correct', tone: 'bg-emerald-100 text-emerald-900' }, { value: 'changed', label: 'Edit Cost', tone: 'bg-amber-100 text-amber-950' }]} /><div className="grid grid-cols-2 gap-3"><SupplierDualAmount label={fixedPricing ? 'Supplier Fixed Cost' : 'Supplier Unit Cost'} row={row} draft={draft} companyRate={companyRate} /><SupplierDualAmount label="Total Supplier Cost" row={row} draft={draft} total companyRate={companyRate} /></div>{supplierEditing && (row.readOnly ? <SalesforceEditNotice sourceId={row.sourceId} instanceUrl={instanceUrl} /> : <PairedExtraCostFields row={row} draft={draft} disabled={!canCostEdit} onChange={onDraftChange} onCancel={() => { onDraftChange({ cancelled: true }); onReviewChange({ outcome: 'cancelled' }); }} />)}</section><section className="min-h-[210px] space-y-3 bg-blue-50/20 p-4"><DecisionButtons ariaLabel={`${product} buyer review`} selected={review.buyerChargeDecision || ''} disabled={!canBuyerEdit} onChange={(buyerChargeDecision) => onReviewChange({ buyerChargeDecision })} options={buyerDecisionOptions} />{anchorageDues && <p className="text-xs text-blue-900">First 12 hours: no buyer charge. If the vessel stays longer, charge only the excess amount.</p>}{lightDues && <p className="text-xs text-blue-900">Buyer charge starts at USD 0. Choose whether to charge the buyer.</p>}<div className="grid grid-cols-2 gap-3"><AmountDisplay label={fixedPricing ? 'Buyer Fixed Charge' : 'Buyer Unit Price'} amount={displayedBuyerRate} currency="USD" unavailableReason={unavailableReason} /><AmountDisplay label="Total Buyer Charge" amount={displayedBuyerTotal} currency="USD" unavailableReason={unavailableReason} /></div>{review.buyerChargeDecision === 'include' && <div><Button type="button" size="sm" variant="outline" disabled={!canBuyerEdit} onClick={() => setBuyerPriceOpen((open) => !open)}>{anchorageDues ? 'Edit Excess Charge' : 'Edit Buyer Price'}</Button>{buyerPriceOpen && (row.readOnly ? <SalesforceEditNotice sourceId={row.sourceId} instanceUrl={instanceUrl} /> : <div className="mt-3 space-y-2"><Label htmlFor={`paired-buyer-price-${row.sourceId}`}>{anchorageDues ? 'Buyer Excess Anchorage Charge' : fixedPricing ? 'Buyer Fixed Charge (USD)' : 'Buyer Unit Price (USD)'}</Label><Input id={`paired-buyer-price-${row.sourceId}`} inputMode="decimal" value={draft?.buyerPrice ?? ''} disabled={!canBuyerEdit} onChange={(event) => onDraftChange({ buyerPrice: event.target.value })} /></div>)}</div>}</section></div></article>;
 }
 
-function PairedNewChargeRow({ draft, products, currency, canCostEdit, canBuyerEdit, commonOwner, onChange, onRemove }) {
+function PairedNewChargeRow({ draft, products, canCostEdit, canBuyerEdit, commonOwner, onChange, onRemove }) {
   const pricingType = draft.pricingType || 'fixed';
   const quantity = finiteNumber(draft.quantity);
-  const supplierRate = finiteNumber(draft.supplierCost);
+  const nativeSupplierRate = finiteNumber(draft.supplierCost);
+  const supplierRate = draft.inputCurrency === 'HKD' && finiteNumber(draft.companyRate) > 0 ? nativeSupplierRate / Number(draft.companyRate) : nativeSupplierRate;
   const buyerRate = finiteNumber(draft.buyerPrice);
   const supplierTotal = pricingType === 'fixed' ? supplierRate : supplierRate != null && quantity != null ? supplierRate * quantity : null;
   const buyerTotal = pricingType === 'fixed' ? buyerRate : buyerRate != null && quantity != null ? buyerRate * quantity : null;
   const margin = supplierTotal != null && buyerTotal != null ? buyerTotal - supplierTotal : null;
-  return <article className="border-t border-dashed border-blue-300"><div className="border-b border-border bg-blue-50/40 px-4 py-3"><div className="flex items-center justify-between gap-3"><div><div className="font-semibold">New Charge</div><div className="mt-0.5 text-xs text-muted-foreground">Supplier and payment term are inherited.</div></div><Button type="button" size="sm" variant="ghost" onClick={onRemove} disabled={!canCostEdit}><X className="mr-1 h-4 w-4" />Remove</Button></div></div><div className="grid grid-cols-2"><section className="space-y-3 border-r-2 border-slate-300 bg-slate-50/30 p-4"><div className="grid gap-3 sm:grid-cols-2"><div className="space-y-2"><Label>Product</Label><Select value={draft.productId || undefined} disabled={!canCostEdit} onValueChange={(productId) => onChange({ productId })}><SelectTrigger><SelectValue placeholder="Select Product" /></SelectTrigger><SelectContent>{products.map((product) => <SelectItem key={valueOf(product, ['id', 'Id'])} value={String(valueOf(product, ['id', 'Id']))}>{valueOf(product, ['name', 'Name'], 'Product')}</SelectItem>)}</SelectContent></Select></div><div className="space-y-2"><Label htmlFor={`new-description-${draft.localId}`}>Description</Label><Input id={`new-description-${draft.localId}`} value={draft.description || ''} disabled={!canCostEdit} onChange={(event) => onChange({ description: event.target.value })} /></div><div className="space-y-2"><Label>Pricing Basis</Label><Select value={pricingType} disabled={!canCostEdit} onValueChange={(value) => onChange({ pricingType: value })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="fixed">Fixed</SelectItem><SelectItem value="per_unit">Per Unit</SelectItem></SelectContent></Select></div><div className="space-y-2"><Label htmlFor={`new-cost-${draft.localId}`}>{pricingType === 'fixed' ? 'Supplier Fixed Cost' : 'Supplier Unit Cost'}</Label><Input id={`new-cost-${draft.localId}`} inputMode="decimal" value={draft.supplierCost ?? ''} disabled={!canCostEdit} onChange={(event) => onChange({ supplierCost: event.target.value })} /></div>{pricingType === 'per_unit' && <><div className="space-y-2"><Label htmlFor={`new-quantity-${draft.localId}`}>Quantity</Label><Input id={`new-quantity-${draft.localId}`} inputMode="decimal" value={draft.quantity ?? ''} disabled={!canCostEdit} onChange={(event) => onChange({ quantity: event.target.value })} /></div><div className="space-y-2"><Label htmlFor={`new-uom-${draft.localId}`}>UOM</Label><Input id={`new-uom-${draft.localId}`} value={draft.unitOfMeasure || ''} disabled={!canCostEdit} onChange={(event) => onChange({ unitOfMeasure: event.target.value })} /></div></>}</div><AmountDisplay label="Total Supplier Cost" amount={supplierTotal} currency={currency} unavailableReason="Complete the required cost fields." /></section><section className="space-y-3 bg-blue-50/20 p-4">{commonOwner ? <><DecisionButtons ariaLabel="New charge buyer review" selected={draft.buyerChargeDecision || ''} disabled={!canBuyerEdit} onChange={(buyerChargeDecision) => onChange({ buyerChargeDecision })} options={[{ value: '', label: 'Pending', tone: 'bg-slate-100 text-slate-800' }, { value: 'include', label: 'Charge Buyer', tone: 'bg-blue-100 text-blue-900' }, { value: 'exclude', label: 'Do Not Charge', tone: 'bg-slate-200 text-slate-900' }]} />{draft.buyerChargeDecision === 'include' && <div className="space-y-2"><Label htmlFor={`new-price-${draft.localId}`}>{pricingType === 'fixed' ? 'Buyer Fixed Charge' : 'Buyer Unit Price'}</Label><Input id={`new-price-${draft.localId}`} inputMode="decimal" value={draft.buyerPrice ?? ''} disabled={!canBuyerEdit} onChange={(event) => onChange({ buyerPrice: event.target.value })} /></div>}<AmountDisplay label="Total Buyer Charge" amount={draft.buyerChargeDecision === 'exclude' ? 0 : buyerTotal} currency={currency} unavailableReason="Resolve the Buyer Leg and enter a price." /><div><div className="text-xs text-muted-foreground">Margin</div><MarginAmount value={draft.buyerChargeDecision === 'exclude' && supplierTotal != null ? -supplierTotal : margin} currency={currency} /></div></> : <div className="rounded-md border border-blue-200 bg-white/70 p-3 text-sm text-blue-950">Pending for Buyer Trader after Supplier approval.</div>}</section></div></article>;
+  return <article className="border-t border-dashed border-blue-300"><div className="flex items-center justify-between border-b border-border bg-blue-50/40 px-4 py-3"><div><div className="font-semibold">New Charge</div><div className="text-xs text-muted-foreground">Supplier and payment term are inherited.</div></div><Button type="button" size="sm" variant="ghost" onClick={onRemove} disabled={!canCostEdit}><X className="mr-1 h-4 w-4" />Remove</Button></div><div className="grid grid-cols-2"><section className="space-y-3 border-r-2 border-slate-300 bg-slate-50/30 p-4"><div className="grid gap-3 sm:grid-cols-2"><div className="space-y-2"><Label>Product</Label><Select value={draft.productId || undefined} disabled={!canCostEdit} onValueChange={(productId) => onChange({ productId })}><SelectTrigger><SelectValue placeholder="Select Product" /></SelectTrigger><SelectContent>{products.map((product) => <SelectItem key={valueOf(product, ['id', 'Id'])} value={String(valueOf(product, ['id', 'Id']))}>{valueOf(product, ['name', 'Name'], 'Product')}</SelectItem>)}</SelectContent></Select></div><div className="space-y-2"><Label>Description</Label><Input value={draft.description || ''} disabled={!canCostEdit} onChange={(event) => onChange({ description: event.target.value })} /></div><div className="space-y-2"><Label>Pricing Basis</Label><Select value={pricingType} disabled={!canCostEdit} onValueChange={(value) => onChange({ pricingType: value })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="fixed">Fixed</SelectItem><SelectItem value="per_unit">Per Unit</SelectItem></SelectContent></Select></div><div className="space-y-2"><Label>Input Currency</Label><Select value={draft.inputCurrency || 'USD'} disabled={!canCostEdit} onValueChange={(inputCurrency) => onChange({ inputCurrency })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="HKD">HKD</SelectItem><SelectItem value="USD">USD</SelectItem></SelectContent></Select></div><div className="space-y-2"><Label>{pricingType === 'fixed' ? 'Supplier Fixed Cost' : 'Supplier Unit Cost'} ({draft.inputCurrency || 'USD'})</Label><Input inputMode="decimal" value={draft.supplierCost ?? ''} disabled={!canCostEdit} onChange={(event) => onChange({ supplierCost: event.target.value })} /></div>{pricingType === 'per_unit' && <><div className="space-y-2"><Label>Quantity</Label><Input inputMode="decimal" value={draft.quantity ?? ''} disabled={!canCostEdit} onChange={(event) => onChange({ quantity: event.target.value })} /></div><div className="space-y-2"><Label>UOM</Label><Input value={draft.unitOfMeasure || ''} disabled={!canCostEdit} onChange={(event) => onChange({ unitOfMeasure: event.target.value })} /></div></>}</div><AmountDisplay label="Total Supplier Cost (USD)" amount={supplierTotal} currency="USD" unavailableReason="Complete the required cost fields." /></section><section className="space-y-3 bg-blue-50/20 p-4">{commonOwner ? <><DecisionButtons ariaLabel="New charge buyer review" selected={draft.buyerChargeDecision || ''} disabled={!canBuyerEdit} onChange={(buyerChargeDecision) => onChange({ buyerChargeDecision })} options={[{ value: '', label: 'Pending', tone: 'bg-slate-100 text-slate-800' }, { value: 'include', label: 'Charge Buyer', tone: 'bg-blue-100 text-blue-900' }, { value: 'exclude', label: 'Do Not Charge', tone: 'bg-slate-200 text-slate-900' }]} />{draft.buyerChargeDecision === 'include' && <div className="space-y-2"><Label>Buyer {pricingType === 'fixed' ? 'Fixed Charge' : 'Unit Price'} (USD)</Label><Input inputMode="decimal" value={draft.buyerPrice ?? ''} disabled={!canBuyerEdit} onChange={(event) => onChange({ buyerPrice: event.target.value })} /></div>}<AmountDisplay label="Total Buyer Charge" amount={draft.buyerChargeDecision === 'exclude' ? 0 : buyerTotal} currency="USD" unavailableReason="Resolve the Buyer Leg and enter a price." /><div><div className="text-xs text-muted-foreground">Margin</div><MarginAmount value={draft.buyerChargeDecision === 'exclude' && supplierTotal != null ? -supplierTotal : margin} currency="USD" /></div></> : <div className="rounded-md border border-blue-200 bg-white/70 p-3 text-sm text-blue-950">Pending for Buyer Trader after Supplier approval.</div>}</section></div></article>;
 }
 
 function PairedReviewWorkspace({ caseRow, requirement, requirements, activeSupplierId, onSupplierChange, rows, allRows, reviews, extraDrafts, addDrafts, products, files, financials: rawFinancials, currency, supplierPaymentTerm, buyerPaymentTerm, canCostEdit, canBuyerEdit, saving, supplierSaving, assignmentSaving, supplierNote, buyerNote, salesforceInstanceUrl, anchorage, anchorageDrafts, anchorageSaving, canSaveAnchorage, onAnchorageChange, onSaveAnchorage, onReviewChange, onDraftChange, onAddDraftChange, onAdd, onRemoveAdd, onSupplierNote, onBuyerNote, onToggleEvidence, onAssign, onApprove }) {
@@ -1339,8 +1375,8 @@ function PairedReviewWorkspace({ caseRow, requirement, requirements, activeSuppl
     if (outcome !== 'changed') return true;
     const draft = extraDrafts[row.sourceId] || initialExtraDraft(row.item);
     const original = initialExtraDraft(row.item);
-    const changed = changeKey({ description: draft.description, pricingType: draft.pricingType, supplierCost: draft.supplierCost, quantity: draft.quantity, unitOfMeasure: draft.unitOfMeasure })
-      !== changeKey({ description: original.description, pricingType: original.pricingType, supplierCost: original.supplierCost, quantity: original.quantity, unitOfMeasure: original.unitOfMeasure });
+    const changed = changeKey({ description: draft.description, pricingType: draft.pricingType, supplierCost: draft.supplierCost, inputCurrency: draft.inputCurrency, quantity: draft.quantity, unitOfMeasure: draft.unitOfMeasure })
+      !== changeKey({ description: original.description, pricingType: original.pricingType, supplierCost: original.supplierCost, inputCurrency: original.inputCurrency, quantity: original.quantity, unitOfMeasure: original.unitOfMeasure });
     return changed && text(draft.description) && finiteNumber(draft.supplierCost) != null
       && (draft.pricingType !== 'per_unit' || (finiteNumber(draft.quantity) > 0 && text(draft.unitOfMeasure)));
   }) && Boolean(text(supplierNote));
@@ -1425,7 +1461,7 @@ function NewExtraCostEditor({ draft, products, supplierAccounts, files, defaultP
 }
 
 function ExtraCostFields({ id, value, disabled, supplierStage = false, buyerStage = false, onChange, paymentTermReadOnly = false }) {
-  return <div className="mt-4 grid gap-3 md:grid-cols-2 lg:grid-cols-6"><div className="space-y-2"><Label htmlFor={`${id}-term`}>Payment term</Label><Input id={`${id}-term`} value={value.paymentTerm || ''} onChange={(event) => onChange({ paymentTerm: event.target.value })} disabled={disabled || paymentTermReadOnly || buyerStage} /></div><div className="space-y-2"><Label>Pricing</Label><Select value={value.pricingType} onValueChange={(pricingType) => onChange({ pricingType })} disabled={disabled || buyerStage}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="fixed">Fixed</SelectItem><SelectItem value="per_unit">Per unit</SelectItem></SelectContent></Select></div><div className="space-y-2"><Label htmlFor={`${id}-supplier-cost`}>{value.pricingType === 'fixed' ? 'Fixed supplier cost' : 'Supplier cost / unit'}</Label><Input id={`${id}-supplier-cost`} inputMode="decimal" value={value.supplierCost ?? ''} onChange={(event) => onChange({ supplierCost: event.target.value })} disabled={disabled || buyerStage} /></div>{!supplierStage && <div className="space-y-2"><Label htmlFor={`${id}-buyer-price`}>{value.pricingType === 'fixed' ? 'Fixed buyer price' : 'Buyer price / unit'}</Label><Input id={`${id}-buyer-price`} inputMode="decimal" value={value.buyerPrice ?? ''} onChange={(event) => onChange({ buyerPrice: event.target.value })} disabled={disabled} /></div>}{value.pricingType === 'per_unit' && <><div className="space-y-2"><Label htmlFor={`${id}-quantity`}>Quantity</Label><Input id={`${id}-quantity`} inputMode="decimal" value={value.quantity ?? ''} onChange={(event) => onChange({ quantity: event.target.value })} disabled={disabled || buyerStage} /></div><div className="space-y-2"><Label htmlFor={`${id}-uom`}>Unit of measure</Label><Input id={`${id}-uom`} value={value.unitOfMeasure || ''} onChange={(event) => onChange({ unitOfMeasure: event.target.value })} disabled={disabled || buyerStage} /></div></>}</div>;
+  return <div className="mt-4 grid gap-3 md:grid-cols-2 lg:grid-cols-6"><div className="space-y-2"><Label htmlFor={`${id}-term`}>Payment term</Label><Input id={`${id}-term`} value={value.paymentTerm || ''} onChange={(event) => onChange({ paymentTerm: event.target.value })} disabled={disabled || paymentTermReadOnly || buyerStage} /></div><div className="space-y-2"><Label>Pricing</Label><Select value={value.pricingType} onValueChange={(pricingType) => onChange({ pricingType })} disabled={disabled || buyerStage}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="fixed">Fixed</SelectItem><SelectItem value="per_unit">Per unit</SelectItem></SelectContent></Select></div>{supplierStage && <div className="space-y-2"><Label>Input Currency</Label><Select value={value.inputCurrency || 'USD'} onValueChange={(inputCurrency) => onChange({ inputCurrency })} disabled={disabled || buyerStage}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="HKD">HKD</SelectItem><SelectItem value="USD">USD</SelectItem></SelectContent></Select></div>}<div className="space-y-2"><Label htmlFor={`${id}-supplier-cost`}>{value.pricingType === 'fixed' ? 'Fixed supplier cost' : 'Supplier cost / unit'} ({value.inputCurrency || 'USD'})</Label><Input id={`${id}-supplier-cost`} inputMode="decimal" value={value.supplierCost ?? ''} onChange={(event) => onChange({ supplierCost: event.target.value })} disabled={disabled || buyerStage} /></div>{!supplierStage && <div className="space-y-2"><Label htmlFor={`${id}-buyer-price`}>{value.pricingType === 'fixed' ? 'Fixed buyer price' : 'Buyer price / unit'} (USD)</Label><Input id={`${id}-buyer-price`} inputMode="decimal" value={value.buyerPrice ?? ''} onChange={(event) => onChange({ buyerPrice: event.target.value })} disabled={disabled} /></div>}{value.pricingType === 'per_unit' && <><div className="space-y-2"><Label htmlFor={`${id}-quantity`}>Quantity</Label><Input id={`${id}-quantity`} inputMode="decimal" value={value.quantity ?? ''} onChange={(event) => onChange({ quantity: event.target.value })} disabled={disabled || buyerStage} /></div><div className="space-y-2"><Label htmlFor={`${id}-uom`}>Unit of measure</Label><Input id={`${id}-uom`} value={value.unitOfMeasure || ''} onChange={(event) => onChange({ unitOfMeasure: event.target.value })} disabled={disabled || buyerStage} /></div></>}</div>;
 }
 
 function PostInvoiceResolution({ value, disabled, saving, onChange, onSave }) { return <section className="space-y-3 rounded-lg border border-rose-300 bg-rose-50 p-4"><h2 className="text-sm font-semibold text-rose-950">Invoice already issued—action required</h2><div className="grid gap-3 md:grid-cols-2"><div className="space-y-2"><Label>Resolution</Label><Select value={value.resolution} onValueChange={(resolution) => onChange({ resolution })} disabled={disabled || saving}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{POST_INVOICE_RESOLUTIONS.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select></div><div className="space-y-2"><Label htmlFor="post-invoice-reference">Reference</Label><Input id="post-invoice-reference" value={value.reference} onChange={(event) => onChange({ reference: event.target.value })} disabled={disabled || saving} /></div></div><div className="space-y-2"><Label htmlFor="post-invoice-note">Resolution Note</Label><Textarea id="post-invoice-note" value={value.note} onChange={(event) => onChange({ note: event.target.value })} disabled={disabled || saving} /></div><Button type="button" variant="outline" onClick={onSave} disabled={disabled || saving}>{saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Save Resolution</Button></section>; }

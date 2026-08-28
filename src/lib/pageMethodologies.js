@@ -420,6 +420,10 @@ export const PAYMENT_COLLECTIONS_METHODOLOGIES = {
         body: 'For exact Anchorage Due or Anchorage Dues charges on a Hong Kong delivery, FCOS uses the Vessel’s positive whole-number NRT and each saved arrival, departure and location in Hong Kong time. The first 12 aggregate hours are free; later time is grouped by Victoria Port or elsewhere in Hong Kong and rounded up to the next hour for each location. Rates are HKD 0.02 or HKD 0.015 per NRT-hour respectively, subject to the HKD 100 minimum and final rounding down to HKD 0.10. One agent row receives the calculated total automatically; multiple agent rows require allocations matching within HKD 0.10. Supplier comparison and the buyer amount are verification and suggestion only—FCOS never overwrites either financial value automatically. The saved Vessel NRT, company USD/HKD rate, settings revision and calculation version preserve the reviewed evidence.',
       },
       {
+        title: 'Hong Kong NRT, currencies and Light Dues',
+        body: 'Authorized reviewers may update the shared Salesforce Vessel NRT with conflict protection; the change can reopen other statutory-charge reviews using that Vessel. Supplier amounts remain authoritative in Salesforce USD and are displayed in both USD and HKD. Editable extra charges accept reviewed HKD or USD input and preserve the original amount, currency, FX rate and settings revision. Buyer charges and margins remain USD. Exact LIGHT DUES rows use the confirmed entry date and NRT rounded up to each 100-ton block: HKD 43 for all other vessels or HKD 18 for river-trade-only vessels. The buyer decision starts at USD 0, and all statutory calculations remain review evidence rather than automatic financial changes.',
+      },
+      {
         title: 'Permissions and overrides',
         body: 'All Payment Collections users may view. Only a side’s current assignee may edit or confirm it. The original Supplier Trader may delegate or take back an unconfirmed side. Finance and Administrators remain read-only. The one active UUID-backed General Manager may override either side only with a mandatory audited reason.',
       },

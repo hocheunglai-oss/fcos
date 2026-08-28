@@ -266,6 +266,8 @@ const HANDLER_BEHAVIOR = Object.freeze({
   variableChargesList: readPolicy({"cache":"none","externalAction":false,"capability":null}),
   variableChargesDetail: readPolicy({"cache":"none","externalAction":false,"capability":null}),
   variableChargesAnchorageSave: mutationPolicy({"cache":"none","externalAction":true,"capability":null}),
+  variableChargesVesselNrtSave: mutationPolicy({"cache":"none","externalAction":true,"capability":null}),
+  variableChargesLightDuesSave: mutationPolicy({"cache":"none","externalAction":true,"capability":null}),
   variableChargesSettingsGet: readPolicy({"cache":"none","externalAction":false,"capability":null}),
   variableChargesSettingsSave: mutationPolicy({"cache":"none","externalAction":false,"capability":null}),
   variableChargesOptions: readPolicy({"cache":"none","externalAction":false,"capability":null}),

@@ -103,7 +103,7 @@ import {
   resolveShipAgentPostInvoiceChange,
   resolveVariableChargePostInvoiceChange,
   saveAndConfirmShipAgentCharges,
-  saveVariableChargeAnchorage, saveVariableChargeSettings,
+  saveVariableChargeAnchorage, saveVariableChargeLightDues, saveVariableChargeSettings, saveVariableChargeVesselNrt,
   shipAgentChargeOptions,
   variableChargeOptions,
   syncShipAgentCharges,
@@ -1606,7 +1606,7 @@ const HANDLER_MODULE_ACCESS = {
   shipAgentChargesSync: ['buyer_invoices', 'incoming_payments'],
   variableChargesList: ['buyer_invoices', 'incoming_payments'],
   variableChargesDetail: ['buyer_invoices', 'incoming_payments'],
-  variableChargesAnchorageSave: ['buyer_invoices', 'incoming_payments'], variableChargesSettingsGet: ['buyer_invoices', 'incoming_payments'], variableChargesSettingsSave: ['buyer_invoices', 'incoming_payments'],
+  variableChargesAnchorageSave: ['buyer_invoices', 'incoming_payments'], variableChargesVesselNrtSave: ['buyer_invoices', 'incoming_payments'], variableChargesLightDuesSave: ['buyer_invoices', 'incoming_payments'], variableChargesSettingsGet: ['buyer_invoices', 'incoming_payments'], variableChargesSettingsSave: ['buyer_invoices', 'incoming_payments'],
   variableChargesOptions: ['buyer_invoices', 'incoming_payments'],
   variableChargesSupplierVerify: ['buyer_invoices', 'incoming_payments'],
   variableChargesBuyerConfirm: ['buyer_invoices', 'incoming_payments'],
@@ -5360,6 +5360,10 @@ async function variableChargesList(body, req, accessContext = null) { return lis
 async function variableChargesDetail(body, req, accessContext = null) { const context = await shipAgentChargesContext(req, accessContext); await requireShipAgentStemAccess(body, context); return getVariableChargeDetail(body, context); }
 
 async function variableChargesAnchorageSave(body, req, accessContext = null) { const context = await shipAgentChargesContext(req, accessContext); await requireShipAgentStemAccess(body, context); return saveVariableChargeAnchorage(body, context); }
+
+async function variableChargesVesselNrtSave(body, req, accessContext = null) { const context = await shipAgentChargesContext(req, accessContext); await requireShipAgentStemAccess(body, context); return saveVariableChargeVesselNrt(body, context); }
+
+async function variableChargesLightDuesSave(body, req, accessContext = null) { const context = await shipAgentChargesContext(req, accessContext); await requireShipAgentStemAccess(body, context); return saveVariableChargeLightDues(body, context); }
 
 async function variableChargesSettingsGet(body, req, accessContext = null) { return getVariableChargeSettings(body, await shipAgentChargesContext(req, accessContext)); }
 
@@ -19400,7 +19404,7 @@ const handlers = {
   shipAgentChargesSync,
   variableChargesList,
   variableChargesDetail,
-  variableChargesAnchorageSave, variableChargesSettingsGet, variableChargesSettingsSave,
+  variableChargesAnchorageSave, variableChargesVesselNrtSave, variableChargesLightDuesSave, variableChargesSettingsGet, variableChargesSettingsSave,
   variableChargesOptions,
   variableChargesSupplierVerify,
   variableChargesBuyerConfirm,

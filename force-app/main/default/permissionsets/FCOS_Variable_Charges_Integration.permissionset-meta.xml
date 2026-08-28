@@ -11,6 +11,18 @@
     <fieldPermissions><editable>true</editable><field>STEM_Extra_Cost__c.Anchorage_USD_HKD_Rate__c</field><readable>true</readable></fieldPermissions>
     <fieldPermissions><editable>true</editable><field>STEM_Extra_Cost__c.Anchorage_FX_Settings_Revision__c</field><readable>true</readable></fieldPermissions>
     <fieldPermissions><editable>true</editable><field>STEM_Extra_Cost__c.Anchorage_Calculation_Version__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>STEM_Extra_Cost__c.Supplier_Cost_Input_Currency__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>STEM_Extra_Cost__c.Supplier_Cost_Input_Value__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>STEM_Extra_Cost__c.Supplier_Cost_USD_HKD_Rate__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>STEM_Extra_Cost__c.Supplier_Cost_FX_Settings_Revision__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>STEM_Extra_Cost__c.Light_Dues_Entry_Date__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>STEM_Extra_Cost__c.Light_Dues_Category__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>STEM_Extra_Cost__c.Light_Dues_NRT_Snapshot__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>STEM_Extra_Cost__c.Light_Dues_Rate_HKD__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>STEM_Extra_Cost__c.Light_Dues_Amount_HKD__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>STEM_Extra_Cost__c.Light_Dues_USD_HKD_Rate__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>STEM_Extra_Cost__c.Light_Dues_FX_Settings_Revision__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>STEM_Extra_Cost__c.Light_Dues_Calculation_Version__c</field><readable>true</readable></fieldPermissions>
     <fieldPermissions><editable>true</editable><field>STEM__c.Variable_Charges_Confirmed__c</field><readable>true</readable></fieldPermissions>
     <fieldPermissions><editable>true</editable><field>STEM_Variable_Charge_Supplier__c.Manual_Review_Required__c</field><readable>true</readable></fieldPermissions>
     <fieldPermissions><editable>true</editable><field>STEM_Variable_Charge_Supplier__c.Verified_At__c</field><readable>true</readable></fieldPermissions>
