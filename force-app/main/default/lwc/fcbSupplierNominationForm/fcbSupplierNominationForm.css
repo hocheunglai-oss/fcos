@@ -1,0 +1,26 @@
+.row-dragged {
+    background-color: #e0f0ff;
+    outline: 1px solid #5c7cff;
+    opacity: 0.85;
+}
+
+.highlight-line {
+    height: 3px;
+    background-color: green;
+    margin: 0;
+    transition: background-color 0.1s ease;
+}
+
+.drag-handle {
+    cursor: grab;
+}
+.drag-handle:active {
+    cursor: grabbing;
+}
+.fixed-modal {
+    width: 1450px !important;
+    max-width: 1450px !important;
+
+    display: flex;
+    flex-direction: column;
+}
