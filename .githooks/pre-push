@@ -46,7 +46,8 @@ $updates
 EOF
 
 if [ "$salesforce_changed" -eq 1 ]; then
-  if ! npm run salesforce:mirror:verify; then
+  git_local_environment="$(git rev-parse --local-env-vars)"
+  if ! (unset $git_local_environment; npm run salesforce:mirror:verify); then
     echo "FCOS push blocked: Salesforce metadata must be published byte-for-byte to ivanyk20/fcbhk first." >&2
     echo "Run npm run salesforce:mirror:publish, then retry this push." >&2
     exit 1
