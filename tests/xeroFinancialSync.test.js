@@ -167,10 +167,36 @@ test('mapping proposals use only unanimous exact legacy line evidence', () => {
     status: 'proposed',
     xeroAccountCode: '41100',
     xeroTaxType: 'NONE',
+    evidenceBasis: 'exact_line',
     sampleCount: 2,
     documentCount: 2,
-    alternatives: [{ xeroAccountCode: '41100', xeroTaxType: 'NONE', sampleCount: 2, documentCount: 2 }],
+    alternatives: [{ xeroAccountCode: '41100', xeroTaxType: 'NONE', sampleCount: 2, documentCount: 2, evidenceBasis: 'exact_line' }],
   }]);
+});
+
+test('mapping proposals use serialized quantity and unit amount when lineAmount is absent', () => {
+  const row = proposalRow({ xeroId: 'xero-1', accountCode: '41100', taxType: 'NONE' });
+  delete row.lines[0].lineAmount;
+  const [proposal] = deriveXeroProductMappingProposals([row]);
+  assert.equal(proposal.status, 'proposed');
+  assert.equal(proposal.xeroAccountCode, '41100');
+  assert.equal(proposal.evidenceBasis, 'exact_line');
+});
+
+test('uniform exact-document coding proposes mappings when legacy and Salesforce line grouping differs', () => {
+  const row = proposalRow({ xeroId: 'xero-1', accountCode: '41100', taxType: 'NONE' });
+  row.total = 1000;
+  row.lines = [
+    { sourceId: 'line-1', productId: 'product-a', productName: 'HSFO 380', description: 'HSFO 380', quantity: 6, unitAmount: 100 },
+    { sourceId: 'line-2', productId: 'product-b', productName: 'BARGE FEE', description: 'BARGE FEE', quantity: 1, unitAmount: 400 },
+  ];
+  row.xero.total = 1000;
+  row.xero.lineItems = [{ Description: 'Legacy bunker sale', Quantity: 1, UnitAmount: 1000, LineAmount: 1000, AccountCode: '41100', TaxType: 'NONE' }];
+  const proposals = deriveXeroProductMappingProposals([row]);
+  assert.deepEqual(proposals.map((proposal) => [proposal.salesforceProductId, proposal.xeroAccountCode, proposal.evidenceBasis]), [
+    ['product-b', '41100', 'uniform_document'],
+    ['product-a', '41100', 'uniform_document'],
+  ]);
 });
 
 test('mapping proposals expose conflicts without choosing an account', () => {
@@ -209,6 +235,7 @@ function proposalRow({ xeroId, accountCode, taxType }) {
     }],
     xero: {
       id: xeroId,
+      total: 1000,
       lineItems: [{
         Description: 'Legacy bunker line',
         Quantity: 1,

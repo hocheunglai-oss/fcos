@@ -336,7 +336,7 @@ function ProductMappingRow({ direction, product, mapping, proposal, accounts, ta
   const evidenceLabel = mapping
     ? `Approved${mapping.approvedByEmail ? ` by ${mapping.approvedByEmail}` : ''}`
     : proposal?.status === 'proposed'
-      ? `Suggested from ${proposal.sampleCount} exact legacy line${proposal.sampleCount === 1 ? '' : 's'} across ${proposal.documentCount} document${proposal.documentCount === 1 ? '' : 's'}`
+      ? `Suggested from ${proposal.documentCount} exact matched legacy document${proposal.documentCount === 1 ? '' : 's'} · ${mappingEvidenceBasisLabel(proposal.evidenceBasis)}`
       : proposal?.status === 'conflict'
         ? `Conflicting legacy evidence: ${proposal.alternatives.map((item) => `${item.xeroAccountCode}/${item.xeroTaxType}`).join(', ')}`
         : 'No exact legacy suggestion';
@@ -348,6 +348,12 @@ function mappingReviewRank(row) {
   if (row.proposal?.status === 'proposed') return 0;
   if (row.proposal?.status === 'conflict') return 1;
   return 2;
+}
+
+function mappingEvidenceBasisLabel(basis) {
+  if (basis === 'exact_line') return 'line coding matched';
+  if (basis === 'uniform_document') return 'uniform document coding';
+  return 'consistent line/document coding';
 }
 
 function BankMapping({ bank, mapping, accounts, onSaved }) {

@@ -833,10 +833,10 @@ export function deriveXeroProductMappingProposals(rows = []) {
   const evidenceByProduct = new Map();
   for (const row of rows) {
     if (!row?.xero?.lineItems?.length || !mappingProposalEvidenceAllowed(row)) continue;
-    const pairs = exactLegacyLinePairs(row.lines || [], row.xero.lineItems || []);
+    const pairs = legacyMappingEvidencePairs(row);
     if (!pairs.length) continue;
     const direction = row.salesforceObject === 'Invoice__c' ? 'buyer' : 'supplier';
-    for (const { sourceLine, xeroLine } of pairs) {
+    for (const { sourceLine, xeroLine, basis } of pairs) {
       const accountCode = String(xeroLine.AccountCode || '').trim();
       if (!sourceLine.productId || !accountCode) continue;
       const taxType = String(xeroLine.TaxType || 'NONE').trim().toUpperCase() || 'NONE';
@@ -853,9 +853,11 @@ export function deriveXeroProductMappingProposals(rows = []) {
         xeroTaxType: taxType,
         sampleCount: 0,
         documentIds: new Set(),
+        evidenceBases: new Set(),
       };
       signature.sampleCount += 1;
       if (row.xero.id) signature.documentIds.add(row.xero.id);
+      signature.evidenceBases.add(basis);
       evidence.signatures.set(signatureKey, signature);
       evidenceByProduct.set(key, evidence);
     }
@@ -868,6 +870,7 @@ export function deriveXeroProductMappingProposals(rows = []) {
         xeroTaxType: signature.xeroTaxType,
         sampleCount: signature.sampleCount,
         documentCount: signature.documentIds.size,
+        evidenceBasis: signature.evidenceBases.size === 1 ? [...signature.evidenceBases][0] : 'mixed',
       }))
       .sort((left, right) => right.sampleCount - left.sampleCount
         || left.xeroAccountCode.localeCompare(right.xeroAccountCode)
@@ -880,6 +883,7 @@ export function deriveXeroProductMappingProposals(rows = []) {
       status: proposal ? 'proposed' : 'conflict',
       xeroAccountCode: proposal?.xeroAccountCode || null,
       xeroTaxType: proposal?.xeroTaxType || null,
+      evidenceBasis: proposal?.evidenceBasis || null,
       sampleCount: alternatives.reduce((sum, item) => sum + item.sampleCount, 0),
       documentCount: alternatives.reduce((sum, item) => sum + item.documentCount, 0),
       alternatives,
@@ -892,6 +896,24 @@ export function deriveXeroProductMappingProposals(rows = []) {
 function mappingProposalEvidenceAllowed(row) {
   const blockers = row.blockers || [];
   return blockers.every((blocker) => /: Finance-approved Xero account mapping is missing\.$/.test(String(blocker)));
+}
+
+function legacyMappingEvidencePairs(row) {
+  const sourceLines = row.lines || [];
+  const xeroLines = row.xero?.lineItems || [];
+  const exactPairs = exactLegacyLinePairs(sourceLines, xeroLines);
+  if (exactPairs.length) return exactPairs.map((pair) => ({ ...pair, basis: 'exact_line' }));
+  if (!sourceLines.length || !xeroLines.length || !sameMoney(row.total, row.xero?.total)) return [];
+  const signatures = new Map();
+  for (const xeroLine of xeroLines) {
+    const accountCode = String(xeroLine.AccountCode || '').trim();
+    if (!accountCode) return [];
+    const taxType = String(xeroLine.TaxType || 'NONE').trim().toUpperCase() || 'NONE';
+    signatures.set(`${accountCode}:${taxType}`, { ...xeroLine, AccountCode: accountCode, TaxType: taxType });
+  }
+  if (signatures.size !== 1 || sourceLines.some((line) => !line.productId || !Number.isFinite(sourceAccountingLineAmount(line)))) return [];
+  const [uniformXeroLine] = signatures.values();
+  return sourceLines.map((sourceLine) => ({ sourceLine, xeroLine: uniformXeroLine, basis: 'uniform_document' }));
 }
 
 function exactLegacyLinePairs(sourceLines, xeroLines) {
@@ -913,8 +935,9 @@ function exactLegacyLinePairs(sourceLines, xeroLines) {
 }
 
 function exactLegacyLineMatch(sourceLine, xeroLine, singleLineDocument) {
+  const sourceAmount = sourceAccountingLineAmount(sourceLine);
   const xeroAmount = xeroLegacyLineAmount(xeroLine);
-  if (!Number.isFinite(xeroAmount) || !sameMoney(Math.abs(sourceLine.lineAmount), Math.abs(xeroAmount))) return false;
+  if (!Number.isFinite(sourceAmount) || !Number.isFinite(xeroAmount) || !sameMoney(Math.abs(sourceAmount), Math.abs(xeroAmount))) return false;
   if (singleLineDocument) return true;
   const productName = normalizeName(sourceLine.productName);
   const sourceDescription = normalizeName(sourceLine.description);
@@ -923,6 +946,14 @@ function exactLegacyLineMatch(sourceLine, xeroLine, singleLineDocument) {
   return xeroDescription.includes(productName)
     || productName.includes(xeroDescription)
     || (sourceDescription && (xeroDescription.includes(sourceDescription) || sourceDescription.includes(xeroDescription)));
+}
+
+function sourceAccountingLineAmount(line) {
+  const explicit = Number(line?.lineAmount);
+  if (Number.isFinite(explicit)) return explicit;
+  const quantity = Number(line?.quantity);
+  const unitAmount = Number(line?.unitAmount);
+  return Number.isFinite(quantity) && Number.isFinite(unitAmount) ? quantity * unitAmount : Number.NaN;
 }
 
 function xeroLegacyLineAmount(line) {
