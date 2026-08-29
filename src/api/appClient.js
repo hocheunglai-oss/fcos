@@ -1,6 +1,7 @@
 import { isSupabaseConfigured, supabase } from '@/lib/supabaseClient';
 import { navigationCacheDecision } from '@/lib/navigationCachePolicy';
 import { publishSalesforceFreshness } from '@/lib/salesforceFreshness';
+import { FUNCTION_CONTRACT_VERSION, validateFunctionRequest } from '@/api/functionContracts';
 
 const STORAGE_PREFIX = 'fcos';
 const DEFAULT_FUNCTION_CACHE_TTL_MS = 30_000;
@@ -303,6 +304,17 @@ function startFunctionRequest(name, payload, options, cacheKey, authContext) {
 }
 
 async function invoke(name, payload = {}, options = {}) {
+  const contract = validateFunctionRequest(name, payload);
+  if (!contract.ok) {
+    return {
+      data: {
+        error: `Invalid ${name} request: ${contract.issues.join('; ')}.`,
+        code: 'CLIENT_FUNCTION_CONTRACT_INVALID',
+        contractVersion: FUNCTION_CONTRACT_VERSION,
+      },
+      meta: { cached: false, cacheLayer: 'client', cacheStatus: 'SKIPPED', cachedAt: null, requestId: null, salesforceCalls: null },
+    };
+  }
   const authContext = await requestAuthContext();
   const rawCacheKey = options.cacheKey || (options.cache ? functionCacheKey(name, payload) : null);
   const cacheKey = rawCacheKey ? `${authContext.scope}:${rawCacheKey}` : null;

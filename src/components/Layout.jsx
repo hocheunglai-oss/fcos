@@ -872,6 +872,7 @@ export default function Layout() {
           open={commandPaletteOpen}
           onOpenChange={setCommandPaletteOpen}
           groups={accessibleGroups}
+          canSearchCounterparties={hasModuleAccess('dashboard')}
           onNavigate={(target) => { if (confirmLeaveWithUnsavedChanges()) navigate(target); }}
           onCustomizeNavigation={startNavigationEditing}
         />

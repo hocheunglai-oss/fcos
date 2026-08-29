@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowRight, Bell, BellRing, Check, CheckCheck, Clock3, Loader2, RotateCcw, ShieldCheck, TriangleAlert } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { appClient } from "@/api/appClient";
@@ -7,6 +7,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import { groupWorkNotifications } from "@/lib/workNotificationGroups";
 
 const REFRESH_INTERVAL_MS = 60_000;
 const NOTIFICATION_LIMIT = 40;
@@ -129,7 +130,7 @@ export default function WorkNotifications() {
   );
 
   const openNotification = async (notification) => {
-    if (!notification.readAt) await markRead([notification.id]);
+    if (!notification.readAt) await markRead(notification.notificationIds || [notification.id]);
     setOpen(false);
     if (typeof notification.link === "string" && notification.link) {
       navigate(notification.link);
@@ -144,7 +145,7 @@ export default function WorkNotifications() {
         const response = await appClient.functions.invoke(
           "workNotificationsState",
           {
-            notificationIds: [notification.id],
+            notificationIds: notification.notificationIds || [notification.id],
             state,
             snoozedUntil,
             listState: stateFilter,
@@ -176,6 +177,7 @@ export default function WorkNotifications() {
 
   const unavailableLabel = unavailableSources.map(sourceLabel).join(", ");
   const hasUnavailableSources = unavailableSources.length > 0;
+  const visibleNotifications = useMemo(() => groupWorkNotifications(notifications), [notifications]);
 
   return (
     <Popover
@@ -249,15 +251,16 @@ export default function WorkNotifications() {
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               Loading notifications
             </div>
-          ) : notifications.length ? (
+          ) : visibleNotifications.length ? (
             <div className="divide-y divide-border">
-              {notifications.map((notification) => (
-                <div key={notification.id} className={cn("flex items-start gap-1 px-2 py-1.5 transition-colors hover:bg-muted/60", !notification.readAt && "bg-blue-50/70 dark:bg-blue-950/35")}>
+              {visibleNotifications.map((notification) => (
+                <div key={notification.groupKey || notification.id} className={cn("flex items-start gap-1 px-2 py-1.5 transition-colors hover:bg-muted/60", !notification.readAt && "bg-blue-50/70 dark:bg-blue-950/35")}>
                   <button type="button" className="flex min-w-0 flex-1 items-start gap-3 px-2 py-1.5 text-left" onClick={() => openNotification(notification)}>
                     <span className={cn("mt-1.5 h-2 w-2 shrink-0 rounded-full", notification.readAt ? "bg-muted-foreground/40" : "bg-blue-600")} />
                     <span className="min-w-0 flex-1">
                       <span className="mb-1 flex flex-wrap items-center gap-2">
                         <span className={cn("rounded px-1.5 py-0.5 text-[10px] font-medium ring-1 ring-inset", sourceBadgeClass(notification.source))}>{sourceLabel(notification.source)}</span>
+                        {notification.occurrenceCount > 1 && <span className="rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-800" aria-label={`${notification.occurrenceCount} occurrences`}>{notification.occurrenceCount}×</span>}
                         <span className="text-[11px] text-muted-foreground">{formatNotificationTime(notification.createdAt)}</span>
                       </span>
                       <span className="block break-words text-sm font-medium text-foreground">{notification.title}</span>

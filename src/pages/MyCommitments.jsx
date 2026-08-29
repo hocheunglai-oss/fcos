@@ -44,6 +44,8 @@ const SOURCES = [
   { key: "payment_collections", label: "Payment Collections", icon: ReceiptText },
   { key: "disputes", label: "Disputes", icon: FileCheck2 },
   { key: "hedge_desk", label: "Hedge Desk", icon: ChartNoAxesCombined },
+  { key: "markets", label: "Markets", icon: ChartNoAxesCombined },
+  { key: "xero_portal", label: "Xero", icon: ReceiptText },
   { key: "special_terms", label: "Special Terms", icon: FileCheck2 },
   { key: "email_router", label: "Email Router", icon: MailSearch },
   { key: "system_error", label: "System Errors", icon: TriangleAlert },
@@ -76,6 +78,8 @@ function sourceBadgeClass(source) {
   if (source === "payment_collections") return "border-cyan-200 bg-cyan-50 text-cyan-900";
   if (source === "disputes") return "border-orange-200 bg-orange-50 text-orange-900";
   if (source === "hedge_desk") return "border-emerald-200 bg-emerald-50 text-emerald-900";
+  if (source === "markets") return "border-teal-200 bg-teal-50 text-teal-900";
+  if (source === "xero_portal") return "border-sky-200 bg-sky-50 text-sky-900";
   if (source === "special_terms") return "border-indigo-200 bg-indigo-50 text-indigo-900";
   if (source === "growth_coaching") return "border-violet-200 bg-violet-50 text-violet-800";
   if (source === "fcos_improvements") return "border-cyan-200 bg-cyan-50 text-cyan-900";

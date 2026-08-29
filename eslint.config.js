@@ -102,6 +102,7 @@ export default [
   {
     files: [
       "api/**/*.{js,mjs,cjs}",
+      "shared/**/*.{js,mjs,cjs}",
       "scripts/**/*.{js,mjs,cjs}",
       "tests/**/*.{js,mjs,cjs}",
     ],

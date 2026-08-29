@@ -31,6 +31,7 @@
     "verify:migrations": "node scripts/verify-migrations.mjs",
     "verify:graph-only": "node scripts/verify-production-source.mjs",
     "verify:performance": "node scripts/verify-performance-budgets.mjs",
+    "verify:compatibility": "node scripts/verify-compatibility-registry.mjs",
     "verify:release": "node scripts/verify-release.mjs",
     "connections:verify": "node scripts/fcos-connections.mjs verify",
     "connections:doctor": "node scripts/fcos-connections.mjs doctor",

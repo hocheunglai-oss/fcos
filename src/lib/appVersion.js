@@ -4,6 +4,17 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.191',
+    releasedAt: '2026-08-29',
+    title: 'Improve evidence, search and operational visibility',
+    changes: [
+      'Adds consistent calculation evidence to Dashboard and Account Credit figures, including authority, exclusions, warnings and evidence time.',
+      'Makes Salesforce freshness contextual and searchable, and adds exact Account and GROUP lookup to the global command palette.',
+      'Groups repeated system incidents without losing occurrence counts and brings Markets and Xero work into My Work.',
+      'Adds governed function contracts and compatibility checks while reducing initial client weight through lazy version-history loading.',
+    ],
+  },
+  {
     version: '2.0.190',
     releasedAt: '2026-08-23',
     title: 'Simplify the Incoming Payments internal report',

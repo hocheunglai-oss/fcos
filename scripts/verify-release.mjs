@@ -4,6 +4,7 @@ const checks = [
   ['Unit and integration tests', ['run', 'test']],
   ['Lint', ['run', 'lint']],
   ['Type checking', ['run', 'typecheck']],
+  ['Compatibility registry', ['run', 'verify:compatibility']],
   ['Migration integrity', ['run', 'verify:migrations']],
   ['Graph-only production source', ['run', 'verify:graph-only']],
   ['Production build', ['run', 'build']],

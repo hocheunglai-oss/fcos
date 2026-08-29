@@ -46,7 +46,8 @@ test('internal financial report sends ignore browser recipients and message copy
 
 test('unexpected server errors use a safe browser envelope and permanent admin bootstrap is absent', async () => {
   const source = await readFile(handlerUrl, 'utf8');
-  const envelope = source.slice(source.indexOf('function publicApiErrorPayload'), source.indexOf('export default async function handler'));
+  const envelope = await readFile(new URL('../api/_publicApiError.js', import.meta.url), 'utf8');
+  assert.match(source, /publicApiErrorPayload\(error, status, requestId\)/);
   assert.match(envelope, /status < 500 \|\| error\?\.expose === true/);
   assert.match(envelope, /requestId/);
   assert.match(envelope, /FCOS could not complete this operation/);

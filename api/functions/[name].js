@@ -90,6 +90,9 @@ import { growthCalendarHealth } from '../_growthOutlook.js';
 import { workNotificationsList as workNotificationsListService, workNotificationsRead as workNotificationsReadService, workNotificationsState as workNotificationsStateService } from '../_workNotifications.js';
 import { reportSystemError, resolveRecoveredSystemErrorHandler, resolveSystemErrorIncident, shouldNotifySystemError, validSystemErrorSignature } from '../_systemErrorNotifications.js';
 import { workCommitmentsList as workCommitmentsListService } from '../_workCommitments.js';
+import { FUNCTION_CONTRACT_VERSION, validateFunctionRequest } from '../../shared/functionContracts.js';
+import { publicApiErrorPayload } from '../_publicApiError.js';
+import { withActiveUser } from '../_handlerAdapters.js';
 import {
   getShipAgentChargeDetail,
   getVariableChargeDetail, getVariableChargeSettings,
@@ -887,121 +890,35 @@ async function collaborationDailyCron(body = {}, req = null) {
   return collaborationDailyMaintenance(supabaseAdminClient());
 }
 
-async function collaborationList(body = {}, req = null, accessContext = null) {
-  return collaborationListService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function collaborationDetail(body = {}, req = null, accessContext = null) {
-  return collaborationDetailService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function collaborationCreate(body = {}, req = null, accessContext = null) {
-  return collaborationCreateService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function collaborationUpdate(body = {}, req = null, accessContext = null) {
-  return collaborationUpdateService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function collaborationBulkUpdate(body = {}, req = null, accessContext = null) {
-  return collaborationBulkUpdateService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function collaborationFollowerToggle(body = {}, req = null, accessContext = null) {
-  return collaborationFollowerToggleService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function collaborationDependencySave(body = {}, req = null, accessContext = null) {
-  return collaborationDependencySaveService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function collaborationDependencyRemove(body = {}, req = null, accessContext = null) {
-  return collaborationDependencyRemoveService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function collaborationMilestoneSave(body = {}, req = null, accessContext = null) {
-  return collaborationMilestoneSaveService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function collaborationTemplateList(body = {}, req = null, accessContext = null) {
-  return collaborationTemplateListService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function collaborationTemplateSave(body = {}, req = null, accessContext = null) {
-  return collaborationTemplateSaveService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function collaborationArchive(body = {}, req = null, accessContext = null) {
-  return collaborationArchiveService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function collaborationCommentSave(body = {}, req = null, accessContext = null) {
-  return collaborationCommentSaveService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function collaborationCommentDelete(body = {}, req = null, accessContext = null) {
-  return collaborationCommentDeleteService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function collaborationAttachmentPrepare(body = {}, req = null, accessContext = null) {
-  return collaborationAttachmentPrepareService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function collaborationAttachmentComplete(body = {}, req = null, accessContext = null) {
-  return collaborationAttachmentCompleteService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function collaborationAttachmentUrl(body = {}, req = null, accessContext = null) {
-  return collaborationAttachmentUrlService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function collaborationAttachmentDelete(body = {}, req = null, accessContext = null) {
-  return collaborationAttachmentDeleteService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function collaborationNotificationsList(body = {}, req = null, accessContext = null) {
-  return collaborationNotificationsListService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function collaborationNotificationsRead(body = {}, req = null, accessContext = null) {
-  return collaborationNotificationsReadService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function improvementsList(body = {}, req = null, accessContext = null) {
-  return improvementsListService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function improvementDetail(body = {}, req = null, accessContext = null) {
-  return improvementDetailService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function improvementCreate(body = {}, req = null, accessContext = null) {
-  return improvementCreateService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function improvementPropose(body = {}, req = null, accessContext = null) {
-  return improvementProposeService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function improvementDecision(body = {}, req = null, accessContext = null) {
-  return improvementDecisionService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function improvementAttachmentPrepare(body = {}, req = null, accessContext = null) {
-  return improvementAttachmentPrepareService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function improvementAttachmentComplete(body = {}, req = null, accessContext = null) {
-  return improvementAttachmentCompleteService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function improvementAttachmentUrl(body = {}, req = null, accessContext = null) {
-  return improvementAttachmentUrlService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function improvementAttachmentDelete(body = {}, req = null, accessContext = null) {
-  return improvementAttachmentDeleteService(body, accessContext || (await requireActiveUser(req)));
-}
+const collaborationList = withActiveUser(collaborationListService, requireActiveUser);
+const collaborationDetail = withActiveUser(collaborationDetailService, requireActiveUser);
+const collaborationCreate = withActiveUser(collaborationCreateService, requireActiveUser);
+const collaborationUpdate = withActiveUser(collaborationUpdateService, requireActiveUser);
+const collaborationBulkUpdate = withActiveUser(collaborationBulkUpdateService, requireActiveUser);
+const collaborationFollowerToggle = withActiveUser(collaborationFollowerToggleService, requireActiveUser);
+const collaborationDependencySave = withActiveUser(collaborationDependencySaveService, requireActiveUser);
+const collaborationDependencyRemove = withActiveUser(collaborationDependencyRemoveService, requireActiveUser);
+const collaborationMilestoneSave = withActiveUser(collaborationMilestoneSaveService, requireActiveUser);
+const collaborationTemplateList = withActiveUser(collaborationTemplateListService, requireActiveUser);
+const collaborationTemplateSave = withActiveUser(collaborationTemplateSaveService, requireActiveUser);
+const collaborationArchive = withActiveUser(collaborationArchiveService, requireActiveUser);
+const collaborationCommentSave = withActiveUser(collaborationCommentSaveService, requireActiveUser);
+const collaborationCommentDelete = withActiveUser(collaborationCommentDeleteService, requireActiveUser);
+const collaborationAttachmentPrepare = withActiveUser(collaborationAttachmentPrepareService, requireActiveUser);
+const collaborationAttachmentComplete = withActiveUser(collaborationAttachmentCompleteService, requireActiveUser);
+const collaborationAttachmentUrl = withActiveUser(collaborationAttachmentUrlService, requireActiveUser);
+const collaborationAttachmentDelete = withActiveUser(collaborationAttachmentDeleteService, requireActiveUser);
+const collaborationNotificationsList = withActiveUser(collaborationNotificationsListService, requireActiveUser);
+const collaborationNotificationsRead = withActiveUser(collaborationNotificationsReadService, requireActiveUser);
+const improvementsList = withActiveUser(improvementsListService, requireActiveUser);
+const improvementDetail = withActiveUser(improvementDetailService, requireActiveUser);
+const improvementCreate = withActiveUser(improvementCreateService, requireActiveUser);
+const improvementPropose = withActiveUser(improvementProposeService, requireActiveUser);
+const improvementDecision = withActiveUser(improvementDecisionService, requireActiveUser);
+const improvementAttachmentPrepare = withActiveUser(improvementAttachmentPrepareService, requireActiveUser);
+const improvementAttachmentComplete = withActiveUser(improvementAttachmentCompleteService, requireActiveUser);
+const improvementAttachmentUrl = withActiveUser(improvementAttachmentUrlService, requireActiveUser);
+const improvementAttachmentDelete = withActiveUser(improvementAttachmentDeleteService, requireActiveUser);
 
 function requireAdministratorContext(accessContext) {
   if (!isAdministratorUserType(accessContext?.profile?.user_type)) {
@@ -1135,6 +1052,9 @@ async function workCommitmentsList(body = {}, req = null, accessContext = null) 
     hedgeCloseApprove,
     hedgeSettlementManage,
     emailRouter,
+    markets,
+    specialTerms,
+    xeroPortal,
   ] = await Promise.all([
     userHasAnyModuleAccess(context.client, context.profile, ['buyer_invoices', 'incoming_payments']),
     userHasAnyModuleAccess(context.client, context.profile, ['disputes']),
@@ -1144,6 +1064,9 @@ async function workCommitmentsList(body = {}, req = null, accessContext = null) 
     userHasCapability(context.client, context.profile, 'hedge_close_approve'),
     userHasCapability(context.client, context.profile, 'hedge_settlement_manage'),
     userHasAnyModuleAccess(context.client, context.profile, ['email_router']),
+    userHasAnyModuleAccess(context.client, context.profile, ['markets']),
+    userHasAnyModuleAccess(context.client, context.profile, ['special_terms']),
+    userHasAnyModuleAccess(context.client, context.profile, ['xero_portal']),
   ]);
   return workCommitmentsListService(body, {
     ...context,
@@ -1156,6 +1079,9 @@ async function workCommitmentsList(body = {}, req = null, accessContext = null) 
       hedgeCloseApprove,
       hedgeSettlementManage,
       emailRouter,
+      markets,
+      specialTerms,
+      xeroPortal,
     },
   });
 }
@@ -1175,109 +1101,32 @@ async function growthReportingLinesSaveBatch(body = {}, req = null, accessContex
   return growthReportingLinesSaveBatchService(body, requireAdministratorContext(context));
 }
 
-async function growthCoachingBootstrap(body = {}, req = null, accessContext = null) {
-  return growthCoachingBootstrapService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function growthPlanSave(body = {}, req = null, accessContext = null) {
-  return growthPlanSaveService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function growthPlanCloseout(body = {}, req = null, accessContext = null) {
-  return growthPlanCloseoutService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function growthGoalSave(body = {}, req = null, accessContext = null) {
-  return growthGoalSaveService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function growthGoalSubmit(body = {}, req = null, accessContext = null) {
-  return growthGoalSubmitService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function growthGoalDecision(body = {}, req = null, accessContext = null) {
-  return growthGoalDecisionService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function growthGoalProgressSave(body = {}, req = null, accessContext = null) {
-  return growthGoalProgressSaveService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function growthGoalCompletion(body = {}, req = null, accessContext = null) {
-  return growthGoalCompletionService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function growthGoalEvidenceOptions(body = {}, req = null, accessContext = null) {
-  return growthGoalEvidenceOptionsService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function growthGoalEvidenceSave(body = {}, req = null, accessContext = null) {
-  return growthGoalEvidenceSaveService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function coachingRelationshipInvite(body = {}, req = null, accessContext = null) {
-  return coachingRelationshipInviteService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function coachingRelationshipRespond(body = {}, req = null, accessContext = null) {
-  return coachingRelationshipRespondService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function coachingRelationshipEnd(body = {}, req = null, accessContext = null) {
-  return coachingRelationshipEndService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function coachingSessionSave(body = {}, req = null, accessContext = null) {
-  return coachingSessionSaveService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function coachingSessionContentSave(body = {}, req = null, accessContext = null) {
-  return coachingSessionContentSaveService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function coachingSessionConfirm(body = {}, req = null, accessContext = null) {
-  return coachingSessionConfirmService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function coachingSessionCancel(body = {}, req = null, accessContext = null) {
-  return coachingSessionCancelService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function coachingActionSave(body = {}, req = null, accessContext = null) {
-  return coachingActionSaveService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function coachingActionPublish(body = {}, req = null, accessContext = null) {
-  return coachingActionPublishService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function coachingActionProposalRespond(body = {}, req = null, accessContext = null) {
-  return coachingActionProposalRespondService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function growthAttachmentPrepare(body = {}, req = null, accessContext = null) {
-  return growthAttachmentPrepareService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function growthAttachmentComplete(body = {}, req = null, accessContext = null) {
-  return growthAttachmentCompleteService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function growthAttachmentUrl(body = {}, req = null, accessContext = null) {
-  return growthAttachmentUrlService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function growthEmailPreferencesSave(body = {}, req = null, accessContext = null) {
-  return growthEmailPreferencesSaveService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function coachingCalendarResolve(body = {}, req = null, accessContext = null) {
-  return coachingCalendarResolveService(body, accessContext || (await requireActiveUser(req)));
-}
-
-async function coachingCalendarRetry(body = {}, req = null, accessContext = null) {
-  return coachingCalendarRetryService(body, accessContext || (await requireActiveUser(req)));
-}
+const growthCoachingBootstrap = withActiveUser(growthCoachingBootstrapService, requireActiveUser);
+const growthPlanSave = withActiveUser(growthPlanSaveService, requireActiveUser);
+const growthPlanCloseout = withActiveUser(growthPlanCloseoutService, requireActiveUser);
+const growthGoalSave = withActiveUser(growthGoalSaveService, requireActiveUser);
+const growthGoalSubmit = withActiveUser(growthGoalSubmitService, requireActiveUser);
+const growthGoalDecision = withActiveUser(growthGoalDecisionService, requireActiveUser);
+const growthGoalProgressSave = withActiveUser(growthGoalProgressSaveService, requireActiveUser);
+const growthGoalCompletion = withActiveUser(growthGoalCompletionService, requireActiveUser);
+const growthGoalEvidenceOptions = withActiveUser(growthGoalEvidenceOptionsService, requireActiveUser);
+const growthGoalEvidenceSave = withActiveUser(growthGoalEvidenceSaveService, requireActiveUser);
+const coachingRelationshipInvite = withActiveUser(coachingRelationshipInviteService, requireActiveUser);
+const coachingRelationshipRespond = withActiveUser(coachingRelationshipRespondService, requireActiveUser);
+const coachingRelationshipEnd = withActiveUser(coachingRelationshipEndService, requireActiveUser);
+const coachingSessionSave = withActiveUser(coachingSessionSaveService, requireActiveUser);
+const coachingSessionContentSave = withActiveUser(coachingSessionContentSaveService, requireActiveUser);
+const coachingSessionConfirm = withActiveUser(coachingSessionConfirmService, requireActiveUser);
+const coachingSessionCancel = withActiveUser(coachingSessionCancelService, requireActiveUser);
+const coachingActionSave = withActiveUser(coachingActionSaveService, requireActiveUser);
+const coachingActionPublish = withActiveUser(coachingActionPublishService, requireActiveUser);
+const coachingActionProposalRespond = withActiveUser(coachingActionProposalRespondService, requireActiveUser);
+const growthAttachmentPrepare = withActiveUser(growthAttachmentPrepareService, requireActiveUser);
+const growthAttachmentComplete = withActiveUser(growthAttachmentCompleteService, requireActiveUser);
+const growthAttachmentUrl = withActiveUser(growthAttachmentUrlService, requireActiveUser);
+const growthEmailPreferencesSave = withActiveUser(growthEmailPreferencesSaveService, requireActiveUser);
+const coachingCalendarResolve = withActiveUser(coachingCalendarResolveService, requireActiveUser);
+const coachingCalendarRetry = withActiveUser(coachingCalendarRetryService, requireActiveUser);
 
 async function growthCoachingDailyCron(body = {}, req = null) {
   requireCronAuthorization(req);
@@ -19511,29 +19360,6 @@ if (handlersWithoutAccessPolicy.length) {
   throw new Error(`FCOS handler access policy is missing for: ${handlersWithoutAccessPolicy.join(', ')}`);
 }
 
-function publicApiErrorPayload(error, status, requestId) {
-  const exposeMessage = status < 500 || error?.expose === true;
-  const codeToken = String(error?.code || (status >= 500 ? 'FCOS_INTERNAL_ERROR' : 'FCOS_REQUEST_REJECTED'))
-    .trim()
-    .toUpperCase()
-    .replace(/[^A-Z0-9_]/g, '_')
-    .slice(0, 100) || 'FCOS_INTERNAL_ERROR';
-  const message = exposeMessage
-    ? String(error?.message || 'The FCOS request could not be completed.')
-    : 'FCOS could not complete this operation. Use the request reference when reporting the problem.';
-  const conflictDetails = status === 409 && error?.details !== undefined
-    ? JSON.parse(JSON.stringify(error.details))
-    : undefined;
-  return {
-    error: message,
-    message,
-    code: codeToken,
-    requestId,
-    ...(conflictDetails !== undefined ? { details: conflictDetails } : {}),
-    ...(status === 409 && error?.details?.current !== undefined ? { current: error.details.current } : {}),
-  };
-}
-
 export default async function handler(req, res) {
   const url = new URL(req.url, 'http://localhost');
   const name = url.pathname.split('/').pop();
@@ -19570,6 +19396,12 @@ export default async function handler(req, res) {
         if (!fn) return sendJson(res, { error: `Unknown function: ${name}` }, 404);
         const accessContext = await requireHandlerAccess(name, req);
         const body = await readBody(req);
+        const contract = validateFunctionRequest(name, body);
+        if (!contract.ok) {
+          throw appError(`Invalid ${name} request: ${contract.issues.join('; ')}.`, 400, 'FUNCTION_CONTRACT_INVALID', {
+            contractVersion: FUNCTION_CONTRACT_VERSION,
+          });
+        }
         const data = await fn(body, req, accessContext);
         return sendJson(res, data);
       } catch (error) {
