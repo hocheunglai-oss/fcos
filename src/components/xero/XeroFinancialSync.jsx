@@ -14,6 +14,7 @@ const DEFAULT_CUTOFF = '2026-01-01';
 const DIRECTIONS = ['buyer', 'supplier'];
 const DEFAULT_BANKS = ['DBS', 'UBS'];
 const PAGE_SIZE = 100;
+const MAPPING_PAGE_SIZE = 25;
 
 export default function XeroFinancialSync({ portalStatus }) {
   const [mappings, setMappings] = useState(null);
@@ -26,6 +27,7 @@ export default function XeroFinancialSync({ portalStatus }) {
   const [cutoffDate, setCutoffDate] = useState(DEFAULT_CUTOFF);
   const [documentPage, setDocumentPage] = useState(0);
   const [paymentPage, setPaymentPage] = useState(0);
+  const [mappingPage, setMappingPage] = useState(0);
   const [busy, setBusy] = useState('mappings');
   const [error, setError] = useState('');
 
@@ -45,6 +47,20 @@ export default function XeroFinancialSync({ portalStatus }) {
 
   const products = useMemo(() => preview?.products || [], [preview]);
   const productMappingIndex = useMemo(() => new Map((mappings?.productMappings || []).map((mapping) => [`${mapping.direction}:${mapping.salesforceProductId}`, mapping])), [mappings]);
+  const mappingProposalIndex = useMemo(() => new Map((preview?.mappingProposals || []).map((proposal) => [`${proposal.direction}:${proposal.salesforceProductId}`, proposal])), [preview]);
+  const mappingProposalSummary = useMemo(() => ({
+    proposed: (preview?.mappingProposals || []).filter((proposal) => proposal.status === 'proposed').length,
+    conflicts: (preview?.mappingProposals || []).filter((proposal) => proposal.status === 'conflict').length,
+  }), [preview]);
+  const productMappingRows = useMemo(() => products.flatMap((product) => DIRECTIONS.map((direction) => {
+    const key = `${direction}:${product.id}`;
+    return { key, direction, product, mapping: productMappingIndex.get(key), proposal: mappingProposalIndex.get(key) };
+  })).sort((left, right) => mappingReviewRank(left) - mappingReviewRank(right)
+    || left.direction.localeCompare(right.direction)
+    || left.product.name.localeCompare(right.product.name)
+    || left.product.id.localeCompare(right.product.id)), [mappingProposalIndex, productMappingIndex, products]);
+  const mappingPageCount = Math.max(1, Math.ceil(productMappingRows.length / MAPPING_PAGE_SIZE));
+  const visibleProductMappings = useMemo(() => productMappingRows.slice(mappingPage * MAPPING_PAGE_SIZE, (mappingPage + 1) * MAPPING_PAGE_SIZE), [mappingPage, productMappingRows]);
   const bankMappingIndex = useMemo(() => new Map((mappings?.bankMappings || []).map((mapping) => [mapping.salesforceBankName, mapping])), [mappings]);
   const eligibleRows = useMemo(() => (preview?.rows || []).filter((row) => row.status === 'eligible'), [preview]);
   const documentPageCount = Math.max(1, Math.ceil((preview?.rows?.length || 0) / PAGE_SIZE));
@@ -66,6 +82,7 @@ export default function XeroFinancialSync({ portalStatus }) {
       return;
     }
     setPreview(result.data);
+    setMappingPage(0);
     setDocumentPage(0);
     setSelected(new Set((result.data.rows || []).filter((row) => row.status === 'eligible').map((row) => row.id)));
   }
@@ -180,20 +197,29 @@ export default function XeroFinancialSync({ portalStatus }) {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-base font-semibold">Finance-approved Product mappings</h2>
-            <p className="mt-1 text-sm text-muted-foreground">Default tax is NONE. Buyer sales and supplier costs are mapped independently.</p>
+            <p className="mt-1 text-sm text-muted-foreground">Default tax is NONE. Buyer sales and supplier costs are mapped independently. Legacy suggestions are never approved automatically.</p>
           </div>
-          <div className="text-xs text-muted-foreground">{(mappings?.productMappings || []).length} saved mappings</div>
+          <div className="text-right text-xs text-muted-foreground">
+            <div>{(mappings?.productMappings || []).length} saved mappings</div>
+            {preview ? <div>{mappingProposalSummary.proposed} evidence-backed suggestions · {mappingProposalSummary.conflicts} conflicts</div> : null}
+          </div>
         </div>
         {products.length ? (
-          <div className="mt-4 max-h-[420px] overflow-auto rounded-lg border border-border">
-            <Table scrollLabel="Xero product mappings">
-              <TableHeader><TableRow><TableHead>Direction</TableHead><TableHead>Salesforce Product</TableHead><TableHead>Xero account</TableHead><TableHead>Tax type</TableHead><TableHead>Action</TableHead></TableRow></TableHeader>
-              <TableBody>
-                {products.flatMap((product) => DIRECTIONS.map((direction) => (
-                  <ProductMappingRow key={`${direction}:${product.id}`} direction={direction} product={product} mapping={productMappingIndex.get(`${direction}:${product.id}`)} accounts={mappings?.accountOptions || []} taxes={mappings?.taxOptions || []} onSaved={loadMappings} />
-                )))}
-              </TableBody>
-            </Table>
+          <div className="mt-4 space-y-3">
+            <div className="flex items-center justify-between gap-3 text-sm text-muted-foreground">
+              <span>Mappings {mappingPage * MAPPING_PAGE_SIZE + 1}–{Math.min((mappingPage + 1) * MAPPING_PAGE_SIZE, productMappingRows.length)} of {productMappingRows.length} · suggestions first</span>
+              <div className="flex gap-2"><Button type="button" size="sm" variant="outline" onClick={() => setMappingPage((page) => Math.max(0, page - 1))} disabled={mappingPage === 0}>Previous</Button><Button type="button" size="sm" variant="outline" onClick={() => setMappingPage((page) => Math.min(mappingPageCount - 1, page + 1))} disabled={mappingPage >= mappingPageCount - 1}>Next</Button></div>
+            </div>
+            <div className="max-h-[520px] overflow-auto rounded-lg border border-border">
+              <Table scrollLabel="Xero product mappings">
+                <TableHeader><TableRow><TableHead>Direction</TableHead><TableHead>Salesforce Product</TableHead><TableHead>Xero account</TableHead><TableHead>Tax type</TableHead><TableHead>Action</TableHead></TableRow></TableHeader>
+                <TableBody>
+                  {visibleProductMappings.map((row) => (
+                    <ProductMappingRow key={row.key} direction={row.direction} product={row.product} mapping={row.mapping} proposal={row.proposal} accounts={mappings?.accountOptions || []} taxes={mappings?.taxOptions || []} onSaved={loadMappings} />
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
           </div>
         ) : <div className="mt-3 rounded-lg border border-dashed border-border px-3 py-3 text-sm text-muted-foreground">Build the first preview to load every Product used by 2026 financial documents.</div>}
       </section>
@@ -289,11 +315,16 @@ export default function XeroFinancialSync({ portalStatus }) {
   );
 }
 
-function ProductMappingRow({ direction, product, mapping, accounts, taxes, onSaved }) {
-  const [accountCode, setAccountCode] = useState(mapping?.xeroAccountCode || '');
-  const [taxType, setTaxType] = useState(mapping?.xeroTaxType || 'NONE');
+function ProductMappingRow({ direction, product, mapping, proposal, accounts, taxes, onSaved }) {
+  const suggestedAccountCode = !mapping && proposal?.status === 'proposed' ? proposal.xeroAccountCode : '';
+  const suggestedTaxType = !mapping && proposal?.status === 'proposed' ? proposal.xeroTaxType : 'NONE';
+  const [accountCode, setAccountCode] = useState(mapping?.xeroAccountCode || suggestedAccountCode || '');
+  const [taxType, setTaxType] = useState(mapping?.xeroTaxType || suggestedTaxType || 'NONE');
   const [busy, setBusy] = useState(false);
-  useEffect(() => { setAccountCode(mapping?.xeroAccountCode || ''); setTaxType(mapping?.xeroTaxType || 'NONE'); }, [mapping]);
+  useEffect(() => {
+    setAccountCode(mapping?.xeroAccountCode || suggestedAccountCode || '');
+    setTaxType(mapping?.xeroTaxType || suggestedTaxType || 'NONE');
+  }, [mapping, suggestedAccountCode, suggestedTaxType]);
   async function save() {
     const account = accounts.find((row) => row.code === accountCode);
     if (!account) return;
@@ -302,7 +333,21 @@ function ProductMappingRow({ direction, product, mapping, accounts, taxes, onSav
     setBusy(false);
     if (result.data?.error) toast({ title: 'Mapping save failed', description: result.data.error, variant: 'destructive' }); else { toast({ title: 'Product mapping saved' }); await onSaved(); }
   }
-  return <TableRow><TableCell className="capitalize">{direction}</TableCell><TableCell className="font-medium">{product.name}</TableCell><TableCell><select value={accountCode} onChange={(event) => setAccountCode(event.target.value)} className="h-9 min-w-[260px] rounded-md border border-input bg-background px-3 text-sm"><option value="">Select Xero account</option>{accounts.filter((row) => !row.bank).map((row) => <option key={row.id} value={row.code}>{row.code} · {row.name}</option>)}</select></TableCell><TableCell><select value={taxType} onChange={(event) => setTaxType(event.target.value)} className="h-9 min-w-[180px] rounded-md border border-input bg-background px-3 text-sm"><option value="NONE">NONE</option>{taxes.filter((row) => row.taxType !== 'NONE').map((row) => <option key={row.taxType} value={row.taxType}>{row.taxType} · {row.name}</option>)}</select></TableCell><TableCell><Button type="button" size="sm" variant="outline" onClick={save} disabled={!accountCode || busy}>{busy ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Save className="mr-2 h-3.5 w-3.5" />}Save</Button></TableCell></TableRow>;
+  const evidenceLabel = mapping
+    ? `Approved${mapping.approvedByEmail ? ` by ${mapping.approvedByEmail}` : ''}`
+    : proposal?.status === 'proposed'
+      ? `Suggested from ${proposal.sampleCount} exact legacy line${proposal.sampleCount === 1 ? '' : 's'} across ${proposal.documentCount} document${proposal.documentCount === 1 ? '' : 's'}`
+      : proposal?.status === 'conflict'
+        ? `Conflicting legacy evidence: ${proposal.alternatives.map((item) => `${item.xeroAccountCode}/${item.xeroTaxType}`).join(', ')}`
+        : 'No exact legacy suggestion';
+  return <TableRow><TableCell className="capitalize">{direction}</TableCell><TableCell><div className="font-medium">{product.name}</div><div className={cn('mt-1 text-xs', mapping ? 'text-emerald-700' : proposal?.status === 'conflict' ? 'text-amber-700' : 'text-muted-foreground')}>{evidenceLabel}</div></TableCell><TableCell><select value={accountCode} onChange={(event) => setAccountCode(event.target.value)} className="h-9 min-w-[260px] rounded-md border border-input bg-background px-3 text-sm"><option value="">Select Xero account</option>{accounts.filter((row) => !row.bank).map((row) => <option key={row.id} value={row.code}>{row.code} · {row.name}</option>)}</select></TableCell><TableCell><select value={taxType} onChange={(event) => setTaxType(event.target.value)} className="h-9 min-w-[180px] rounded-md border border-input bg-background px-3 text-sm"><option value="NONE">NONE</option>{taxes.filter((row) => row.taxType !== 'NONE').map((row) => <option key={row.taxType} value={row.taxType}>{row.taxType} · {row.name}</option>)}</select></TableCell><TableCell><Button type="button" size="sm" variant="outline" onClick={save} disabled={!accountCode || busy}>{busy ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Save className="mr-2 h-3.5 w-3.5" />}{mapping ? 'Update approval' : 'Approve mapping'}</Button></TableCell></TableRow>;
+}
+
+function mappingReviewRank(row) {
+  if (row.mapping) return 3;
+  if (row.proposal?.status === 'proposed') return 0;
+  if (row.proposal?.status === 'conflict') return 1;
+  return 2;
 }
 
 function BankMapping({ bank, mapping, accounts, onSaved }) {

@@ -6,6 +6,7 @@ import {
   buildXeroAccountingPayload,
   buildFinancialClassifications,
   classifyXeroFinancialDocument,
+  deriveXeroProductMappingProposals,
   isProtectedXeroDocument,
   xeroFinancialRateSnapshot,
 } from '../api/_xeroFinancialSync.js';
@@ -153,6 +154,73 @@ test('stored Salesforce document links resolve through the current source row', 
   assert.equal(result.rows[0].xero.id, 'xero-invoice-1');
 });
 
+test('mapping proposals use only unanimous exact legacy line evidence', () => {
+  const rows = [
+    proposalRow({ xeroId: 'xero-1', accountCode: '41100', taxType: 'NONE' }),
+    proposalRow({ xeroId: 'xero-2', accountCode: '41100', taxType: 'NONE' }),
+  ];
+  const proposals = deriveXeroProductMappingProposals(rows);
+  assert.deepEqual(proposals, [{
+    direction: 'buyer',
+    salesforceProductId: '01t000000000001AAA',
+    salesforceProductName: 'HSFO 380',
+    status: 'proposed',
+    xeroAccountCode: '41100',
+    xeroTaxType: 'NONE',
+    sampleCount: 2,
+    documentCount: 2,
+    alternatives: [{ xeroAccountCode: '41100', xeroTaxType: 'NONE', sampleCount: 2, documentCount: 2 }],
+  }]);
+});
+
+test('mapping proposals expose conflicts without choosing an account', () => {
+  const proposals = deriveXeroProductMappingProposals([
+    proposalRow({ xeroId: 'xero-1', accountCode: '41100', taxType: 'NONE' }),
+    proposalRow({ xeroId: 'xero-2', accountCode: '41000', taxType: 'OUTPUT' }),
+  ]);
+  assert.equal(proposals.length, 1);
+  assert.equal(proposals[0].status, 'conflict');
+  assert.equal(proposals[0].xeroAccountCode, null);
+  assert.equal(proposals[0].sampleCount, 2);
+  assert.deepEqual(proposals[0].alternatives.map((row) => row.xeroAccountCode).sort(), ['41000', '41100']);
+});
+
+test('mapping proposals reject non-mapping blockers and ambiguous multi-line evidence', () => {
+  const nonMappingBlocker = proposalRow({ xeroId: 'xero-1', accountCode: '41100', taxType: 'NONE' });
+  nonMappingBlocker.blockers.push('No exact active Xero Contact matches the Salesforce Account.');
+  const ambiguous = proposalRow({ xeroId: 'xero-2', accountCode: '41100', taxType: 'NONE' });
+  ambiguous.lines.push({ ...ambiguous.lines[0], sourceId: 'line-2' });
+  ambiguous.xero.lineItems.push({ ...ambiguous.xero.lineItems[0], AccountCode: '41000' });
+  assert.deepEqual(deriveXeroProductMappingProposals([nonMappingBlocker, ambiguous]), []);
+});
+
+function proposalRow({ xeroId, accountCode, taxType }) {
+  return {
+    salesforceObject: 'Invoice__c',
+    blockers: ['HSFO 380: Finance-approved Xero account mapping is missing.'],
+    lines: [{
+      sourceId: 'line-1',
+      productId: '01t000000000001AAA',
+      productName: 'HSFO 380',
+      description: 'HSFO 380',
+      quantity: 10,
+      unitAmount: 100,
+      lineAmount: 1000,
+    }],
+    xero: {
+      id: xeroId,
+      lineItems: [{
+        Description: 'Legacy bunker line',
+        Quantity: 1,
+        UnitAmount: 1000,
+        LineAmount: 1000,
+        AccountCode: accountCode,
+        TaxType: taxType,
+      }],
+    },
+  };
+}
+
 test('Xero rate headers are recorded and the 20 percent daily reserve fails closed', () => {
   const headers = new Headers({
     'x-minlimit-remaining': '42',
@@ -205,5 +273,10 @@ test('financial handlers and Finance review UI are registered without a schedule
   assert.match(server, /\.\.\.xeroHandlers/);
   assert.match(ui, /Finance reviewed/);
   assert.match(ui, /Financial write gate locked/);
+  assert.match(ui, /Legacy suggestions are never approved automatically/);
+  assert.match(ui, /Suggested from/);
+  assert.match(ui, /Approve mapping/);
+  assert.match(ui, /MAPPING_PAGE_SIZE = 25/);
+  assert.match(ui, /suggestions first/);
   assert.doesNotMatch(`${server}\n${xeroHandlers}`, /xeroFinancialSyncCron/);
 });

@@ -111,6 +111,7 @@ export default function XeroPortal() {
   const hasLifecycleRun = Boolean(run?.id);
   const xero = status?.xero || {};
   const scopeFlags = xero.scopeFlags || {};
+  const needsFinancialReconnect = xero.connected && (!scopeFlags.paymentsWrite || !scopeFlags.settingsRead);
   const actionGate = status?.externalActions?.xero_contact_sync;
   const reasonLabels = status?.reasonLabels || {};
   const statusLabels = status?.statusLabels || {};
@@ -292,10 +293,18 @@ export default function XeroPortal() {
               Refresh
             </Button>
             {xero.connected ? (
-              <Button type="button" variant="outline" onClick={disconnectXero} disabled={busy === 'disconnect'}>
-                {busy === 'disconnect' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <XCircle className="mr-2 h-4 w-4" />}
-                Disconnect
-              </Button>
+              <>
+                {needsFinancialReconnect ? (
+                  <Button type="button" onClick={connectXero} disabled={busy === 'connect'}>
+                    {busy === 'connect' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <PlugZap className="mr-2 h-4 w-4" />}
+                    Reconnect scopes
+                  </Button>
+                ) : null}
+                <Button type="button" variant="outline" onClick={disconnectXero} disabled={busy === 'disconnect'}>
+                  {busy === 'disconnect' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <XCircle className="mr-2 h-4 w-4" />}
+                  Disconnect
+                </Button>
+              </>
             ) : (
               <Button type="button" onClick={connectXero} disabled={busy === 'connect' || !xero.configured}>
                 {busy === 'connect' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <PlugZap className="mr-2 h-4 w-4" />}

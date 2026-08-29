@@ -174,6 +174,13 @@ test('native Xero Portal migration is service-role only and creates private rece
   assert.match(sql, /'xero_portal_manage'/);
 });
 
+test('connected Xero users can refresh missing scopes without deleting the stored connection first', async () => {
+  const ui = await readFile(new URL('../src/pages/XeroPortal.jsx', import.meta.url), 'utf8');
+  assert.match(ui, /needsFinancialReconnect/);
+  assert.match(ui, /Reconnect scopes/);
+  assert.match(ui, /onClick=\{connectXero\}/);
+});
+
 function jsonResponse(body, status = 200) {
   return {
     ok: status >= 200 && status < 300,
