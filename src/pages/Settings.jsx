@@ -203,7 +203,14 @@ function healthValue(value) {
 function flattenHealthDetails(value, prefix = '', rows = []) {
   if (value === undefined || value === null || value === '') return rows;
   if (Array.isArray(value)) {
-    rows.push([prefix, healthValue(value)]);
+    const containsStructuredValues = value.some((entry) => entry && typeof entry === 'object');
+    if (!containsStructuredValues) {
+      rows.push([prefix, healthValue(value)]);
+      return rows;
+    }
+    value.forEach((entry, index) => {
+      flattenHealthDetails(entry, `${prefix} ${index + 1}`.trim(), rows);
+    });
     return rows;
   }
   if (typeof value === 'object') {

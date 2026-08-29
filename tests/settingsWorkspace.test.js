@@ -150,6 +150,8 @@ test('System Health includes a lazy, signed, secret-safe API-first Connection Ch
 
   assert.match(settings, /lazy\(\(\) => import\('@\/components\/settings\/ConnectionChecklist'\)\)/);
   assert.match(settings, /<TabsTrigger value="connections">Connection Checklist<\/TabsTrigger>/);
+  assert.match(settings, /containsStructuredValues/);
+  assert.match(settings, /flattenHealthDetails\(entry, `\$\{prefix\} \$\{index \+ 1\}`\.trim\(\), rows\)/);
   assert.match(checklist, /Live, machine-signed verification/);
   assert.match(checklist, /appClient\.functions\.invoke\('systemHealth'/);
   assert.doesNotMatch(checklist, /<Input|<Textarea/);
