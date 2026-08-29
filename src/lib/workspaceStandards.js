@@ -144,6 +144,15 @@ export const WORKSPACE_STANDARDS = Object.freeze({
     freshness: 'Short Salesforce snapshot',
     consequentialActionsRefresh: false,
   },
+  xero_portal: {
+    title: 'Xero Portal',
+    route: '/xero-portal',
+    section: 'Finance',
+    authority: 'Xero with Salesforce Account source',
+    views: ['needs_action', 'all', 'exceptions', 'activity'],
+    freshness: 'Live Xero connection with cached contact usage',
+    consequentialActionsRefresh: true,
+  },
   email_router: {
     title: 'Email Router',
     route: '/email-router',

@@ -6,7 +6,7 @@ import { sfRequest } from '../api/_salesforce.js';
 
 test('established FCOS integrations stay live while new actions remain UAT gated', () => {
   const gates = externalActionGates({});
-  assert.deepEqual(Object.values(gates).map((gate) => gate.enabled), [true, true, true, false, false, false, false]);
+  assert.deepEqual(Object.values(gates).map((gate) => gate.enabled), [true, true, true, false, false, false, false, false, false]);
   assert.equal(isExternalActionEnabled('salesforce_write', { FCOS_DISABLE_SALESFORCE_WRITE: 'TRUE' }), false);
   assert.equal(isExternalActionEnabled('salesforce_write', { FCOS_DISABLE_SALESFORCE_WRITE: 'yes' }), true);
   assert.equal(isExternalActionEnabled('outlook_calendar', {}), false);
@@ -14,6 +14,10 @@ test('established FCOS integrations stay live while new actions remain UAT gated
   assert.equal(isExternalActionEnabled('growth_coaching_email', {}), false);
   assert.equal(isExternalActionEnabled('growth_coaching_email', { FCOS_ENABLE_GROWTH_COACHING_EMAIL: 'true' }), true);
   assert.equal(isExternalActionEnabled('bank_execution', { FCOS_ENABLE_BANK_EXECUTION: 'TRUE' }), true);
+  assert.equal(isExternalActionEnabled('xero_contact_sync', {}), false);
+  assert.equal(isExternalActionEnabled('xero_contact_sync', { FCOS_ENABLE_XERO_CONTACT_SYNC: 'true' }), true);
+  assert.equal(isExternalActionEnabled('xero_financial_sync', {}), false);
+  assert.equal(isExternalActionEnabled('xero_financial_sync', { FCOS_ENABLE_XERO_FINANCIAL_SYNC: 'true' }), true);
 });
 
 test('emergency-disabled legacy integrations return a stable conflict without exposing their environment variable', () => {

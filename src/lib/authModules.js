@@ -28,7 +28,8 @@ export const APP_MODULES = [
   { id: 'markets', label: 'Markets', path: '/markets', sortOrder: 86 },
   { id: 'special_terms', label: 'Special Terms', path: '/special-terms', sortOrder: 87 },
   { id: 'hedge_desk', label: 'Hedge Desk', path: '/hedge-desk', sortOrder: 88 },
-  { id: 'email_router', label: 'Email Router', path: '/email-router', sortOrder: 89 },
+  { id: 'xero_portal', label: 'Xero Portal', path: '/xero-portal', sortOrder: 89 },
+  { id: 'email_router', label: 'Email Router', path: '/email-router', sortOrder: 91 },
   { id: 'settings', label: 'Settings', path: '/settings', sortOrder: 90 },
   { id: 'admin', label: 'People & Access', path: '/settings?section=people', sortOrder: 100 },
 ];
@@ -48,6 +49,7 @@ export const APP_CAPABILITIES = [
   { id: 'special_terms_manage', label: 'Manage Special Terms', description: 'Create, edit, and remove Salesforce Special Terms and matching rules.' },
   { id: 'special_terms_clause_approve', label: 'Approve Special Term Clauses', description: 'Approve, retire, migrate, and roll back versioned Salesforce clause wording.' },
   { id: 'broker_settings_manage', label: 'Manage Broker Commission Settings', description: 'Change the company exchange-rate provider used by Broker Commissions.' },
+  { id: 'xero_portal_manage', label: 'Manage Xero Portal', description: 'Connect Xero, create receipt draft bills, rename contacts, and archive unused contacts.' },
 ];
 
 export const FULL_CAPABILITIES = Object.fromEntries(APP_CAPABILITIES.map((capability) => [capability.id, true]));

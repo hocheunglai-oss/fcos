@@ -41,6 +41,18 @@ const GATE_DEFINITIONS = Object.freeze({
     label: 'Payment promotion',
     description: 'Promotion of reviewed drafts into authoritative payment records.',
   },
+  xero_contact_sync: {
+    envName: 'FCOS_ENABLE_XERO_CONTACT_SYNC',
+    defaultEnabled: false,
+    label: 'Xero portal synchronization',
+    description: 'Xero contact creation, contact rename/archive, and receipt draft-bill synchronization.',
+  },
+  xero_financial_sync: {
+    envName: 'FCOS_ENABLE_XERO_FINANCIAL_SYNC',
+    defaultEnabled: false,
+    label: 'Salesforce-to-Xero financial synchronization',
+    description: 'Finance-authorised creation or update of Xero accounting transactions and exact payment allocations.',
+  },
 });
 
 function enabledValue(value) {

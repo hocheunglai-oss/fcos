@@ -33,6 +33,7 @@ const SpecialTerms = lazy(() => import('@/pages/SpecialTerms'));
 const SpecialTermEditor = lazy(() => import('@/pages/SpecialTermEditor'));
 const EmailRouter = lazy(() => import('@/pages/EmailRouter'));
 const MasterContracts = lazy(() => import('@/pages/MasterContracts'));
+const XeroPortal = lazy(() => import('@/pages/XeroPortal'));
 
 function RouteLoader() {
   return <div className="fixed inset-0 flex items-center justify-center" role="status" aria-live="polite"><div className="h-8 w-8 animate-spin rounded-full border-4 border-slate-200 border-t-primary" aria-hidden="true" /><span className="sr-only">Loading workspace</span></div>;
@@ -118,6 +119,7 @@ const AuthenticatedApp = () => {
             <Route path="/special-terms" element={<ModuleGate moduleId="special_terms"><SpecialTerms /></ModuleGate>} />
             <Route path="/special-terms/:termId" element={<ModuleGate moduleId="special_terms"><SpecialTermEditor /></ModuleGate>} />
             <Route path="/hedge-desk" element={<ModuleGate moduleId="hedge_desk"><HedgeDesk /></ModuleGate>} />
+            <Route path="/xero-portal" element={<ModuleGate moduleId="xero_portal"><XeroPortal /></ModuleGate>} />
             <Route path="/buyers-administrator" element={<Navigate to="/account-managers" replace />} />
             <Route path="/audit-trail" element={<RedirectWithSection section="audit" />} />
             <Route path="/admin" element={<RedirectWithSection section="people" />} />

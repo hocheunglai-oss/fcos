@@ -61,6 +61,11 @@ const HANDLER_CONTEXT = {
     message: 'A legacy Salesforce query endpoint failed. FCOS can verify that this retired endpoint is no longer available.',
     link: '/',
   },
+  xeroPortalContactLifecyclePreview: {
+    title: 'Xero contact review failed',
+    message: 'The Xero contact review could not be completed. FCOS will retry temporary read failures; review the Xero connection before trying again if the issue persists.',
+    link: '/xero-portal',
+  },
 };
 
 function cleanHandler(value) {

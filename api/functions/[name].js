@@ -262,6 +262,34 @@ import {
 } from '../_emailRouterHandlers.js';
 import { createEmailRouterServiceClient, currentEmailRouterMailbox, emailRouterGraphFetch, maintainEmailRouterSubscriptions, processEmailRouterOutbox, recordEmailRouterAlert, resolveEmailRouterAlert, syncEmailRouterFolderFromStoredCursor } from '../_emailRouterCore.js';
 import { processEmailRouterLearningJobs } from '../_emailRouterLearning.js';
+import {
+  xeroPortalConnectStart as xeroPortalConnectStartService,
+  xeroPortalContactAutoCreateLatest as xeroPortalContactAutoCreateLatestService,
+  xeroPortalContactAutoCreateRun as xeroPortalContactAutoCreateRunService,
+  xeroPortalContactLifecycleApply as xeroPortalContactLifecycleApplyService,
+  xeroPortalContactLifecycleLatest as xeroPortalContactLifecycleLatestService,
+  xeroPortalContactLifecyclePreview as xeroPortalContactLifecyclePreviewService,
+  xeroPortalContactLifecycleRun as xeroPortalContactLifecycleRunService,
+  xeroPortalContactLifecycleStatus as xeroPortalContactLifecycleStatusService,
+  xeroPortalDisconnect as xeroPortalDisconnectService,
+  xeroPortalReceiptCreate as xeroPortalReceiptCreateService,
+  xeroPortalReceiptFileUrl as xeroPortalReceiptFileUrlService,
+  xeroPortalReceiptSync as xeroPortalReceiptSyncService,
+  xeroPortalReceiptsList as xeroPortalReceiptsListService,
+  xeroPortalStatus as xeroPortalStatusService,
+} from '../_xeroPortal.js';
+import {
+  xeroFinancialMappingsGet as xeroFinancialMappingsGetService,
+  xeroFinancialMappingsSave as xeroFinancialMappingsSaveService,
+  xeroFinancialPaymentApply as xeroFinancialPaymentApplyService,
+  xeroFinancialSyncApply as xeroFinancialSyncApplyService,
+  xeroFinancialSyncPreview as xeroFinancialSyncPreviewService,
+  xeroFinancialSyncRun as xeroFinancialSyncRunService,
+} from '../_xeroFinancialSync.js';
+
+export const config = {
+  maxDuration: 300,
+};
 
 async function readBody(req) {
   if (req.method === 'GET') return {};
@@ -336,7 +364,8 @@ const ADMIN_APP_MODULES = [
   { id: 'markets', label: 'Markets', path: '/markets', sortOrder: 86 },
   { id: 'special_terms', label: 'Special Terms', path: '/special-terms', sortOrder: 87 },
   { id: 'hedge_desk', label: 'Hedge Desk', path: '/hedge-desk', sortOrder: 88 },
-  { id: 'email_router', label: 'Email Router', path: '/email-router', sortOrder: 89 },
+  { id: 'xero_portal', label: 'Xero Portal', path: '/xero-portal', sortOrder: 89 },
+  { id: 'email_router', label: 'Email Router', path: '/email-router', sortOrder: 91 },
   { id: 'settings', label: 'Settings', path: '/settings', sortOrder: 90 },
   { id: 'admin', label: 'People & Access', path: '/settings?section=people', sortOrder: 100 },
 ];
@@ -404,6 +433,7 @@ const ADMIN_CAPABILITIES = [
   { id: 'special_terms_manage', label: 'Manage Special Terms', description: 'Create, edit, and remove Salesforce Special Terms and matching rules.' },
   { id: 'special_terms_clause_approve', label: 'Approve Special Term Clauses', description: 'Approve, retire, migrate, and roll back versioned Salesforce clause wording.' },
   { id: 'broker_settings_manage', label: 'Manage Broker Commission Settings', description: 'Change the company exchange-rate provider used by Broker Commissions.' },
+  { id: 'xero_portal_manage', label: 'Manage Xero Portal', description: 'Connect Xero, create receipt draft bills, rename contacts, and archive unused contacts.' },
 ];
 const ADMIN_CAPABILITY_IDS = new Set(ADMIN_CAPABILITIES.map((capability) => capability.id));
 const ADMIN_FULL_CAPABILITIES = Object.fromEntries(ADMIN_CAPABILITIES.map((capability) => [capability.id, true]));
@@ -479,6 +509,7 @@ const FALLBACK_TYPE_PERMISSIONS = {
     hedge_desk: true,
     markets: true,
     special_terms: true,
+    xero_portal: false,
     settings: true,
     admin: false,
   },
@@ -498,6 +529,7 @@ const FALLBACK_TYPE_PERMISSIONS = {
     hedge_desk: true,
     markets: true,
     special_terms: true,
+    xero_portal: true,
     settings: false,
     admin: false,
   },
@@ -517,6 +549,7 @@ const FALLBACK_TYPE_PERMISSIONS = {
     hedge_desk: false,
     markets: true,
     special_terms: true,
+    xero_portal: false,
     settings: false,
     admin: false,
   },
@@ -536,6 +569,7 @@ const FALLBACK_TYPE_PERMISSIONS = {
     hedge_desk: false,
     markets: true,
     special_terms: true,
+    xero_portal: false,
     settings: false,
     admin: false,
   },
@@ -555,6 +589,7 @@ const FALLBACK_TYPE_PERMISSIONS = {
     hedge_desk: false,
     markets: true,
     special_terms: true,
+    xero_portal: false,
     settings: false,
     admin: false,
   },
@@ -575,6 +610,7 @@ const FALLBACK_TYPE_CAPABILITIES = {
     special_terms_manage: true,
     special_terms_clause_approve: false,
     broker_settings_manage: false,
+    xero_portal_manage: false,
   },
   finance: {
     disputes_approve: false,
@@ -589,6 +625,7 @@ const FALLBACK_TYPE_CAPABILITIES = {
     special_terms_manage: false,
     special_terms_clause_approve: false,
     broker_settings_manage: true,
+    xero_portal_manage: true,
   },
   operations: {
     disputes_approve: false,
@@ -603,6 +640,7 @@ const FALLBACK_TYPE_CAPABILITIES = {
     special_terms_manage: true,
     special_terms_clause_approve: false,
     broker_settings_manage: false,
+    xero_portal_manage: false,
   },
   interoffice: {
     disputes_approve: false,
@@ -616,6 +654,7 @@ const FALLBACK_TYPE_CAPABILITIES = {
     hedge_admin: false,
     special_terms_manage: false,
     special_terms_clause_approve: false,
+    xero_portal_manage: false,
   },
   viewer: {
     disputes_approve: false,
@@ -629,6 +668,7 @@ const FALLBACK_TYPE_CAPABILITIES = {
     hedge_admin: false,
     special_terms_manage: false,
     special_terms_clause_approve: false,
+    xero_portal_manage: false,
   },
 };
 const INTEROFFICE_USER_TYPE_ID = 'interoffice';
@@ -1426,6 +1466,26 @@ const HANDLER_MODULE_ACCESS = {
   emailRouterDelta: ['email_router'],
   emailRouterSubscription: ['email_router'],
   emailRouterMaintenanceCron: [],
+  xeroPortalStatus: ['xero_portal'],
+  xeroPortalConnectStart: ['xero_portal'],
+  xeroPortalDisconnect: ['xero_portal'],
+  xeroPortalReceiptsList: ['xero_portal'],
+  xeroPortalReceiptCreate: ['xero_portal'],
+  xeroPortalReceiptSync: ['xero_portal'],
+  xeroPortalReceiptFileUrl: ['xero_portal'],
+  xeroPortalContactLifecycleStatus: ['xero_portal'],
+  xeroPortalContactLifecycleLatest: ['xero_portal'],
+  xeroPortalContactLifecycleRun: ['xero_portal'],
+  xeroPortalContactLifecyclePreview: ['xero_portal'],
+  xeroPortalContactLifecycleApply: ['xero_portal'],
+  xeroPortalContactAutoCreateLatest: ['xero_portal'],
+  xeroPortalContactAutoCreateRun: ['xero_portal'],
+  xeroFinancialMappingsGet: ['xero_portal'],
+  xeroFinancialMappingsSave: ['xero_portal'],
+  xeroFinancialSyncPreview: ['xero_portal'],
+  xeroFinancialSyncApply: ['xero_portal'],
+  xeroFinancialSyncRun: ['xero_portal'],
+  xeroFinancialPaymentApply: ['xero_portal'],
   hedgeDeskEntity: ['hedge_desk'],
   hedgeMarkets: ['markets'],
   marketPulseSnapshot: ['markets'],
@@ -19175,6 +19235,49 @@ async function emailRouterMaintenanceCron(_body = {}, req = null) {
   };
 }
 
+const withXeroPortalUser = (service, { recoveredHandler = null } = {}) => async (body = {}, req = null, accessContext = null) => {
+  const startedAt = new Date();
+  const context = accessContext || (await requireActiveUser(req));
+  const result = await service(body, { req, accessContext: context });
+  if (recoveredHandler) {
+    await resolveRecoveredSystemErrorHandler(context.client, recoveredHandler, {
+      resolvedThrough: startedAt,
+      resolvedAt: new Date(),
+    }).catch((error) => {
+      console.warn('[xero-portal] Recovered notification could not be resolved.', {
+        handler: recoveredHandler,
+        code: error?.code || 'XERO_PORTAL_NOTIFICATION_RECOVERY_FAILED',
+      });
+    });
+  }
+  return result;
+};
+
+const xeroPortalStatus = withXeroPortalUser(xeroPortalStatusService);
+const xeroPortalConnectStart = withXeroPortalUser(xeroPortalConnectStartService);
+const xeroPortalDisconnect = withXeroPortalUser(xeroPortalDisconnectService);
+const xeroPortalReceiptsList = withXeroPortalUser(xeroPortalReceiptsListService);
+const xeroPortalReceiptCreate = withXeroPortalUser(xeroPortalReceiptCreateService);
+const xeroPortalReceiptSync = withXeroPortalUser(xeroPortalReceiptSyncService);
+const xeroPortalReceiptFileUrl = withXeroPortalUser(xeroPortalReceiptFileUrlService);
+const xeroPortalContactLifecycleStatus = withXeroPortalUser(xeroPortalContactLifecycleStatusService);
+const xeroPortalContactLifecycleLatest = withXeroPortalUser(xeroPortalContactLifecycleLatestService);
+const xeroPortalContactLifecycleRun = withXeroPortalUser(xeroPortalContactLifecycleRunService);
+const xeroPortalContactLifecyclePreview = withXeroPortalUser(xeroPortalContactLifecyclePreviewService, {
+  recoveredHandler: 'xeroPortalContactLifecyclePreview',
+});
+const xeroPortalContactLifecycleApply = withXeroPortalUser(xeroPortalContactLifecycleApplyService);
+const xeroPortalContactAutoCreateLatest = withXeroPortalUser(xeroPortalContactAutoCreateLatestService);
+const xeroPortalContactAutoCreateRun = withXeroPortalUser(xeroPortalContactAutoCreateRunService);
+const xeroFinancialMappingsGet = withXeroPortalUser(xeroFinancialMappingsGetService);
+const xeroFinancialMappingsSave = withXeroPortalUser(xeroFinancialMappingsSaveService);
+const xeroFinancialSyncPreview = withXeroPortalUser(xeroFinancialSyncPreviewService, {
+  recoveredHandler: 'xeroFinancialSyncPreview',
+});
+const xeroFinancialSyncApply = withXeroPortalUser(xeroFinancialSyncApplyService);
+const xeroFinancialSyncRun = withXeroPortalUser(xeroFinancialSyncRunService);
+const xeroFinancialPaymentApply = withXeroPortalUser(xeroFinancialPaymentApplyService);
+
 const handlers = {
   authContext,
   portalApplicationsList,
@@ -19244,6 +19347,26 @@ const handlers = {
   emailRouterDelta,
   emailRouterSubscription,
   emailRouterMaintenanceCron,
+  xeroPortalStatus,
+  xeroPortalConnectStart,
+  xeroPortalDisconnect,
+  xeroPortalReceiptsList,
+  xeroPortalReceiptCreate,
+  xeroPortalReceiptSync,
+  xeroPortalReceiptFileUrl,
+  xeroPortalContactLifecycleStatus,
+  xeroPortalContactLifecycleLatest,
+  xeroPortalContactLifecycleRun,
+  xeroPortalContactLifecyclePreview,
+  xeroPortalContactLifecycleApply,
+  xeroPortalContactAutoCreateLatest,
+  xeroPortalContactAutoCreateRun,
+  xeroFinancialMappingsGet,
+  xeroFinancialMappingsSave,
+  xeroFinancialSyncPreview,
+  xeroFinancialSyncApply,
+  xeroFinancialSyncRun,
+  xeroFinancialPaymentApply,
   hedgeDeskEntity,
   hedgeMarkets,
   marketPulseSnapshot,

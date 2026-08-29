@@ -20,6 +20,7 @@ import {
   Save,
   Search,
   Sprout,
+  Landmark,
   ReceiptText,
   RefreshCw,
   ScrollText,
@@ -99,6 +100,7 @@ const navGroups = [
     label: 'Finance',
     items: [
       workspaceNavigation('cashflow_forecast', { moduleId: 'cashflow_forecast', icon: WalletCards }),
+      workspaceNavigation('xero_portal', { moduleId: 'xero_portal', icon: Landmark }),
     ],
   },
   {

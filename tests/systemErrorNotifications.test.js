@@ -97,6 +97,13 @@ test('unknown handlers receive a safe generic notification', () => {
   assert.equal(descriptor.link, '/');
 });
 
+test('Xero contact review failures point users to the recoverable workspace', () => {
+  const descriptor = systemErrorPublicDescriptor('xeroPortalContactLifecyclePreview');
+  assert.equal(descriptor.title, 'Xero contact review failed');
+  assert.equal(descriptor.link, '/xero-portal');
+  assert.match(descriptor.message, /retry temporary read failures/i);
+});
+
 test('a recovered handler resolves only incidents seen before the successful run began', async () => {
   const observed = {};
   const client = {
@@ -196,6 +203,7 @@ test('system error storage is service-only and integrated into unified notificat
   assert.match(handler, /case 'salesforceQuery'/);
   assert.match(handler, /resolveSystemErrorIncident\(context\.client, incidentSignature\)/);
   assert.match(handler, /resolveRecoveredSystemErrorHandler\(client, 'emailRouterMaintenanceCron', \{/);
+  assert.match(handler, /recoveredHandler: 'xeroPortalContactLifecyclePreview'/);
 });
 
 test('all Graph report and reminder handlers pass an explicit database client', async () => {
