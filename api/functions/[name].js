@@ -179,7 +179,7 @@ import { getHedgeSalesforceMapping, previewHedgeSalesforce, pushHedgeSalesforce 
 import { financialQuantityLabel, financialQuantityValue as financialQuantity, nativeFinancialQuantity } from '../_financialQuantity.js';
 import { buildHandlerPolicyRegistry, handlerPolicyFor } from '../_handlerPolicyRegistry.js';
 import { runHedgeMaintenance } from '../_hedgeMaintenance.js';
-import { runMarketReportArchiveReplayBatch, runMarketReportDriveSync } from '../_marketDriveSync.js';
+import { runMarketReportArchiveReplayBatch, runMarketReportDriveSync, verifyMarketDriveAuthority } from '../_marketDriveSync.js';
 import {
   getMarketIntelligenceAlertRules,
   loadMarketIntelligenceBrief,
@@ -6840,21 +6840,7 @@ async function googleDriveHealthRow() {
       ? await timedCheck(async () => {
           const token = await exchangeGoogleDriveRefreshToken(googleDriveMarketOAuthConfig());
           const marketConfig = CONNECTION_INTEGRATIONS.googleDriveMarketReports;
-          const about = await fetchJsonWithTimeout('https://www.googleapis.com/drive/v3/about?fields=user(emailAddress)', {
-            headers: { Authorization: `Bearer ${token.access_token}` },
-          });
-          if (String(about.user?.emailAddress || '').trim().toLowerCase() !== marketConfig.accountEmail.toLowerCase()) {
-            throw new Error('Google Drive market-report authorization does not match the approved account.');
-          }
-          const marketRootFields = encodeURIComponent('id,name,mimeType,trashed');
-          const marketRoot = await fetchJsonWithTimeout(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(marketConfig.rootFolderId)}?fields=${marketRootFields}`, {
-            headers: { Authorization: `Bearer ${token.access_token}` },
-          });
-          if (marketRoot.id !== marketConfig.rootFolderId
-              || marketRoot.mimeType !== 'application/vnd.google-apps.folder'
-              || marketRoot.trashed === true) {
-            throw new Error('Google Drive market-report root does not match the approved folder.');
-          }
+          const marketAuthority = await verifyMarketDriveAuthority(fetch, token.access_token, marketConfig);
           let reportArchive = {
             status: 'not_configured',
             errorCode: 'GOOGLE_DRIVE_REPORT_ARCHIVE_NOT_CONFIGURED',
@@ -6881,21 +6867,11 @@ async function googleDriveHealthRow() {
               };
             }
           }
-          const marketFolders = [];
-          for (const marketFolder of marketConfig.folders) {
-            const marketFields = encodeURIComponent('id,name,mimeType,trashed,parents');
-            const marketMetadata = await fetchJsonWithTimeout(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(marketFolder.folderId)}?fields=${marketFields}`, {
-              headers: { Authorization: `Bearer ${token.access_token}` },
-            });
-            if (marketMetadata.id !== marketFolder.folderId
-                || marketMetadata.mimeType !== 'application/vnd.google-apps.folder'
-                || marketMetadata.trashed === true
-                || !Array.isArray(marketMetadata.parents)
-                || !marketMetadata.parents.includes(marketConfig.rootFolderId)) {
-              throw new Error('Google Drive market-report folders do not match the approved hierarchy.');
-            }
-            marketFolders.push({ label: marketFolder.label, folderId: maskValue(marketMetadata.id, 6, 4), folderName: marketMetadata.name || null });
-          }
+          const marketFolders = marketAuthority.folders.map((folder) => ({
+            label: folder.label,
+            folderId: maskValue(folder.folderId, 6, 4),
+            folderName: folder.folderName,
+          }));
           const healthClient = supabaseAdminClient();
           const [syncRun, imports, published, matched, incomplete, conflicts] = await Promise.all([
             healthClient.from('market_report_sync_runs').select('status,discovered_count,skipped_count,imported_count,failed_count,deferred_count,error_code,started_at,completed_at').eq('status', 'completed').order('completed_at', { ascending: false }).limit(1).maybeSingle(),

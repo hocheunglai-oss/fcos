@@ -75,7 +75,7 @@ async function driveBuffer(fetchImpl, accessToken, fileId) {
   return buffer;
 }
 
-async function verifyDriveAuthority(fetchImpl, accessToken, config) {
+export async function verifyMarketDriveAuthority(fetchImpl, accessToken, config) {
   const about = await driveJson(fetchImpl, accessToken, 'about', { fields: 'user(emailAddress)' });
   if (String(about.user?.emailAddress || '').trim().toLowerCase() !== config.accountEmail.toLowerCase()) {
     throw syncError('Google Drive market-report authorization does not match the approved account.', 'MARKET_DRIVE_IDENTITY_MISMATCH', 503);
@@ -104,6 +104,7 @@ async function verifyDriveAuthority(fetchImpl, accessToken, config) {
       && shortcut.shortcutDetails?.targetMimeType === DRIVE_FOLDER_MIME_TYPE)
     .map((shortcut) => shortcut.shortcutDetails.targetId));
 
+  const folders = [];
   for (const folder of config.folders) {
     const metadata = await driveJson(fetchImpl, accessToken, `files/${encodeURIComponent(folder.folderId)}`, {
       fields: 'id,name,mimeType,trashed,parents',
@@ -116,7 +117,18 @@ async function verifyDriveAuthority(fetchImpl, accessToken, config) {
           && !approvedShortcutTargets.has(folder.folderId))) {
       throw syncError('Google Drive market-report folders do not match the approved hierarchy.', 'MARKET_DRIVE_FOLDER_MISMATCH', 503);
     }
+    folders.push({
+      label: folder.label,
+      folderId: metadata.id,
+      folderName: metadata.name || null,
+    });
   }
+  return {
+    accountEmail: String(about.user?.emailAddress || '').trim().toLowerCase(),
+    rootFolderId: root.id,
+    rootFolderName: root.name || null,
+    folders,
+  };
 }
 
 async function listDriveReports(fetchImpl, accessToken, folder) {
@@ -209,7 +221,7 @@ export async function runMarketReportArchiveReplayBatch(client, {
   reviewedReportDateOverrides = REVIEWED_REPORT_DATE_OVERRIDES,
 } = {}) {
   if (!client || !accessToken) throw syncError('Market archive replay authorization is unavailable.', 'MARKET_ARCHIVE_AUTH_UNAVAILABLE', 503);
-  await verifyDriveAuthority(fetchImpl, accessToken, config);
+  await verifyMarketDriveAuthority(fetchImpl, accessToken, config);
   const folderFiles = await Promise.all(config.folders.map((folder) => listDriveReports(fetchImpl, accessToken, folder)));
   const archive = reviewedArchiveFiles(folderFiles.flat(), reviewedArchive);
   const normalizedCursor = Number(cursor);
@@ -441,7 +453,7 @@ export async function runMarketReportDriveSync(client, {
     libraryRepairedCount: 0,
   };
   try {
-    await verifyDriveAuthority(fetchImpl, accessToken, config);
+    await verifyMarketDriveAuthority(fetchImpl, accessToken, config);
     const [storedReportIndex, ...folderFiles] = await Promise.all([
       loadStoredReportIndex(client),
       ...config.folders.map((folder) => listDriveReports(fetchImpl, accessToken, folder)),

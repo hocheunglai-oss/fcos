@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
-import { loadPendingMarketIntelligenceDates, marketDriveRunKey, prioritizeMarketDriveCandidates, runMarketReportArchiveReplayBatch, runMarketReportDriveSync } from '../api/_marketDriveSync.js';
+import { loadPendingMarketIntelligenceDates, marketDriveRunKey, prioritizeMarketDriveCandidates, runMarketReportArchiveReplayBatch, runMarketReportDriveSync, verifyMarketDriveAuthority } from '../api/_marketDriveSync.js';
 
 const config = {
   accountEmail: 'vince.less@gmail.com',
@@ -119,6 +119,14 @@ test('hourly sync accepts exact approved folders linked through root shortcuts',
   assert.equal(result.status, 'completed');
   assert.equal(result.discoveredCount, 0);
   assert.equal(drive.calls.some((url) => url.includes('application%2Fvnd.google-apps.shortcut')), true);
+});
+
+test('shared Drive authority verification returns exact shortcut-backed folders for health checks', async () => {
+  const drive = driveFetch({ shortcutHierarchy: true });
+  const authority = await verifyMarketDriveAuthority(drive.fetchImpl, 'token', config);
+  assert.equal(authority.accountEmail, config.accountEmail);
+  assert.equal(authority.rootFolderId, config.rootFolderId);
+  assert.deepEqual(authority.folders.map(({ label, folderId }) => ({ label, folderId })), config.folders.map(({ label, folderId }) => ({ label, folderId })));
 });
 
 test('hourly sync skips known checksums without downloading report bytes', async () => {
@@ -345,5 +353,6 @@ test('production scheduling is exactly hourly and keeps the cron secret protecte
   assert.match(dispatcher, /const configured = missingEnv\(marketRequired\)\.length === 0/);
   assert.match(dispatcher, /const archiveConfigured = missingEnv\(archiveRequired\)\.length === 0/);
   assert.match(dispatcher, /if \(archiveConfigured\)[\s\S]*googleDriveConfig\(\)/);
+  assert.match(dispatcher, /verifyMarketDriveAuthority\(fetch, token\.access_token, marketConfig\)/);
   assert.match(dispatcher, /missingEnv: missingEnv\(marketRequired\)/);
 });
