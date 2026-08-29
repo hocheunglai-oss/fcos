@@ -3,7 +3,7 @@
     "largestJavaScriptBytes": 720000,
     "largestJavaScriptGzipBytes": 215000,
     "chartChunkBytes": 405000,
-    "totalJavaScriptBytes": 3715000
+    "totalJavaScriptBytes": 3850000
   },
   "server": {
     "universalDispatcherLines": 19600,

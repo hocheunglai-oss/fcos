@@ -195,13 +195,15 @@ test('financial-sync migration is service-only, forced-RLS, resumable, and revis
 
 test('financial handlers and Finance review UI are registered without a scheduler', async () => {
   const server = await readFile(new URL('../api/functions/[name].js', import.meta.url), 'utf8');
+  const xeroHandlers = await readFile(new URL('../api/_xeroHandlers.js', import.meta.url), 'utf8');
   const policies = await readFile(new URL('../api/_handlerPolicyRegistry.js', import.meta.url), 'utf8');
   const ui = await readFile(new URL('../src/components/xero/XeroFinancialSync.jsx', import.meta.url), 'utf8');
   for (const name of ['xeroFinancialSyncPreview', 'xeroFinancialMappingsGet', 'xeroFinancialMappingsSave', 'xeroFinancialSyncApply', 'xeroFinancialSyncRun', 'xeroFinancialPaymentApply']) {
-    assert.match(server, new RegExp(name));
+    assert.match(xeroHandlers, new RegExp(name));
     assert.match(policies, new RegExp(name));
   }
+  assert.match(server, /\.\.\.xeroHandlers/);
   assert.match(ui, /Finance reviewed/);
   assert.match(ui, /Financial write gate locked/);
-  assert.doesNotMatch(server, /xeroFinancialSyncCron/);
+  assert.doesNotMatch(`${server}\n${xeroHandlers}`, /xeroFinancialSyncCron/);
 });

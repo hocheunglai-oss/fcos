@@ -189,6 +189,7 @@ test('system error storage is service-only and integrated into unified notificat
   assert.match(notificationUi, /systemErrorVerify/);
   const handler = await readFile(handlerUrl, 'utf8');
   const systemErrors = await readFile(new URL('../api/_systemErrorNotifications.js', import.meta.url), 'utf8');
+  const xeroHandlers = await readFile(new URL('../api/_xeroHandlers.js', import.meta.url), 'utf8');
   assert.match(handler, /resolveRecoveredSystemErrorHandler/);
   assert.match(systemErrors, /resolveSystemErrorIncident/);
   assert.match(systemErrors, /\.eq\('dedupe_key', dedupeKey\)/);
@@ -203,7 +204,7 @@ test('system error storage is service-only and integrated into unified notificat
   assert.match(handler, /case 'salesforceQuery'/);
   assert.match(handler, /resolveSystemErrorIncident\(context\.client, incidentSignature\)/);
   assert.match(handler, /resolveRecoveredSystemErrorHandler\(client, 'emailRouterMaintenanceCron', \{/);
-  assert.match(handler, /recoveredHandler: 'xeroPortalContactLifecyclePreview'/);
+  assert.match(xeroHandlers, /recoveredHandler: 'xeroPortalContactLifecyclePreview'/);
 });
 
 test('all Graph report and reminder handlers pass an explicit database client', async () => {
