@@ -500,12 +500,12 @@ export async function runMarketReportDriveSync(client, {
           || storedImport.report_date !== parsed.reportDate)) {
           throw syncError('A stored report checksum no longer matches its immutable identity.', 'MARKET_DRIVE_STORED_IDENTITY_MISMATCH', 409);
         }
-        const saved = storedImport
-          ? await client.rpc('record_market_report_product_library', {
+        const saveReport = () => storedImport
+          ? client.rpc('record_market_report_product_library', {
             p_import_id: storedImport.id,
             p_observations: parsed.libraryObservations || [],
           })
-          : await client.rpc('save_market_drive_report_import', {
+          : client.rpc('save_market_drive_report_import', {
             p_idempotency_key: `market-drive-${parsed.sourceHash}`,
             p_source_document_type: file.documentType,
             p_source_hash: parsed.sourceHash,
@@ -517,6 +517,11 @@ export async function runMarketReportDriveSync(client, {
             p_availability: parsed.availabilityEvidence || [],
             p_library_observations: parsed.libraryObservations || [],
           });
+        let saved = await saveReport();
+        // Both database functions are idempotent. Retry once when the first
+        // response is lost or Supabase has a transient gateway/statement error;
+        // the immutable source hash prevents duplicate report evidence.
+        if (saved.error) saved = await saveReport();
         if (saved.error) throw syncError('A parsed market report could not be saved.', 'MARKET_DRIVE_IMPORT_FAILED');
         const publicationStatus = saved.data?.mopsPublication?.status;
         if (publicationStatus === 'published') summary.mopsPublishedCount += 1;

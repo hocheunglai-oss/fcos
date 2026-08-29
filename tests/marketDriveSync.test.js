@@ -20,15 +20,22 @@ function response(data, { ok = true, binary = false } = {}) {
   };
 }
 
-function clientMock({ knownMd5 = [], storedReports = [], publicationStatus = null, pairedImports = [], briefs = [] } = {}) {
+function clientMock({ knownMd5 = [], storedReports = [], publicationStatus = null, pairedImports = [], briefs = [], saveFailuresBeforeSuccess = 0 } = {}) {
   const rpcCalls = [];
+  let remainingSaveFailures = saveFailuresBeforeSuccess;
   return {
     rpcCalls,
     rpc: async (name, payload) => {
       rpcCalls.push({ name, payload });
       if (name === 'reserve_market_report_sync_run') return { data: { reserved: true, status: 'running' }, error: null };
       if (name === 'finish_market_report_sync_run') return { data: { status: payload.p_status }, error: null };
-      if (name === 'save_market_drive_report_import') return { data: { status: 'completed', mopsPublication: publicationStatus ? { status: publicationStatus, conflictCode: publicationStatus === 'conflict' ? 'MOPS_LEDGER_VALUE_MISMATCH' : null } : null }, error: null };
+      if (name === 'save_market_drive_report_import') {
+        if (remainingSaveFailures > 0) {
+          remainingSaveFailures -= 1;
+          return { data: null, error: new Error('Transient save failure') };
+        }
+        return { data: { status: 'completed', mopsPublication: publicationStatus ? { status: publicationStatus, conflictCode: publicationStatus === 'conflict' ? 'MOPS_LEDGER_VALUE_MISMATCH' : null } : null }, error: null };
+      }
       if (name === 'record_market_report_product_library') return { data: { libraryObservationCount: payload.p_observations.length, libraryInsertedCount: payload.p_observations.length }, error: null };
       return { data: null, error: new Error('Unexpected RPC') };
     },
@@ -198,6 +205,21 @@ test('hourly sync parses and atomically stores an unseen report', async () => {
   assert.equal(saved.payload.p_source_document_type, 'european_marketscan');
   assert.deepEqual(saved.payload.p_observations, [{ sourceSymbol: 'AMFSA00', price: 700 }]);
   assert.equal(saved.payload.p_library_observations[0].productName, '0.5% FOB Singapore cargo');
+});
+
+test('hourly sync retries one transient idempotent report save without duplicating the import', async () => {
+  const pdf = Buffer.from('%PDF-transient-save');
+  const md5 = (await import('node:crypto')).createHash('md5').update(pdf).digest('hex');
+  const client = clientMock({ saveFailuresBeforeSuccess: 1 });
+  const drive = driveFetch({ files: [{ id: 'transientreport12345', name: 'EUM_20260827.pdf', mimeType: 'application/pdf', size: String(pdf.length), md5Checksum: md5, modifiedTime: '2026-08-27T09:02:00Z', documentType: 'european_marketscan' }], pdf });
+  const result = await runMarketReportDriveSync(client, {
+    accessToken: 'token', fetchImpl: drive.fetchImpl, config, now: new Date('2026-08-27T09:20:00Z'),
+    parseReport: async () => ({ sourceHash: 'b'.repeat(64), reportDate: '2026-08-27', observations: [{ sourceSymbol: 'AMFSA00', price: 700 }] }),
+    processDerived: async () => ({ status: 'completed', alertsPublished: 0, shadowRecorded: 0 }),
+  });
+  assert.equal(result.status, 'completed');
+  assert.equal(result.importedCount, 1);
+  assert.equal(client.rpcCalls.filter(({ name }) => name === 'save_market_drive_report_import').length, 2);
 });
 
 test('hourly sync repairs a stored report library without replaying governed evidence', async () => {
