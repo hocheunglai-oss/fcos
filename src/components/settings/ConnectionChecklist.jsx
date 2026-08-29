@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   AlertTriangle,
+  Cable,
   CheckCircle2,
   Circle,
   Clock3,
@@ -12,7 +13,6 @@ import {
   RefreshCw,
   ShieldCheck,
   Terminal,
-  UserCheck,
   XCircle,
 } from 'lucide-react';
 import { appClient } from '@/api/appClient';
@@ -31,7 +31,7 @@ import {
   sanitizeConnectionAttestation,
 } from '@/lib/connectionChecklist';
 
-const STEP_ICONS = [Terminal, UserCheck, ShieldCheck, Monitor];
+const STEP_ICONS = [Cable, Terminal, Monitor];
 const REFRESH_INTERVAL_MS = 60_000;
 const SALESFORCE_CONNECTION_TARGET = CONNECTION_TARGETS.find(({ id }) => id === 'salesforce');
 const SHARED_SALESFORCE_BROWSER_PROFILE = SALESFORCE_CONNECTION_TARGET?.publication?.browserProfile || 'vincexai';
@@ -241,7 +241,7 @@ export default function ConnectionChecklist() {
         </div>
       </div>
 
-      <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+      <div className="mt-4 grid gap-2 md:grid-cols-3">
         {CONNECTION_CHECKLIST_SEQUENCE.map((step, index) => {
           const Icon = STEP_ICONS[index] || Circle;
           return (
@@ -255,7 +255,7 @@ export default function ConnectionChecklist() {
 
       <div className="mt-4 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900">
         <LockKeyhole className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-        <span><span className="font-semibold">Fallback rule:</span> use Chrome only when CLI and approved API/connector authentication cannot complete. Use <span className="font-semibold">{APPROVED_CONNECTION_BROWSER_PROFILE}</span> for FCOS, Salesforce DEVEE, and Salesforce QAT; <span className="font-semibold">{SALESFORCE_BROWSER_PROFILES.production || 'Vincent'}</span> only for Salesforce Production authentication; or <span className="font-semibold">{SHARED_SALESFORCE_BROWSER_PROFILE}</span> only for the shared Salesforce GitHub repository. Then return to <code>{CONNECTION_DOCTOR_COMMAND}</code>.</span>
+        <span><span className="font-semibold">Connection order:</span> approved API or connector first, verified CLI second, and Chrome only as the final fallback. Use <span className="font-semibold">{APPROVED_CONNECTION_BROWSER_PROFILE}</span> for FCOS, Salesforce DEVEE, and Salesforce QAT; <span className="font-semibold">{SALESFORCE_BROWSER_PROFILES.production || 'Vincent'}</span> only for Salesforce Production authentication; or <span className="font-semibold">{SHARED_SALESFORCE_BROWSER_PROFILE}</span> only for the shared Salesforce GitHub repository. Then return to <code>{CONNECTION_DOCTOR_COMMAND}</code>.</span>
       </div>
 
       {error && <div role="alert" className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}

@@ -27,6 +27,7 @@ const WARNING_CODES = new Set([
   'credential_expired',
   'credential_expiry_unknown',
   'permission_probe_failed',
+  'shared_metadata_out_of_date',
   'target_pin_missing',
   'salesforce_auth_not_isolated',
 ]);

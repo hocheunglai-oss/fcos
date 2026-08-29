@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { FCOS_CONNECTION_POLICY, validateFcosConnectionPolicy } from '../config/fcosConnections.js';
 import {
   APPROVED_CONNECTION_BROWSER_PROFILE,
@@ -57,14 +57,14 @@ function attestation(overrides = {}) {
   };
 }
 
-test('one schema-validated policy owns the approved targets and CLI-first order', () => {
+test('one schema-validated policy owns the approved targets and API-first order', () => {
   assert.equal(validateFcosConnectionPolicy(FCOS_CONNECTION_POLICY), true);
   assert.deepEqual(CONNECTION_CHECKLIST_SEQUENCE.map(({ id }) => id), [
-    'cli_availability',
-    'target_identity',
-    'cli_use',
+    'api_first',
+    'cli_fallback',
     'browser_fallback',
   ]);
+  assert.equal(CONNECTION_POLICY_VERSION, 9);
   assert.equal(APPROVED_CONNECTION_BROWSER_PROFILE, 'Otto');
   assert.equal(CONNECTION_PROFILE_NAME, 'fcos-production');
   assert.equal(CONNECTION_LOCAL_STATE_DIRECTORY, '.fcos-cli');
@@ -102,6 +102,8 @@ test('one schema-validated policy owns the approved targets and CLI-first order'
   const salesforce = CONNECTION_TARGETS.find(({ id }) => id === 'salesforce');
   assert.deepEqual(salesforce.environments.map(({ key }) => key), ['devee', 'qat', 'production']);
   assert.deepEqual(salesforce.environments.map(({ browserProfile }) => browserProfile), ['Otto', 'Otto', 'Vincent']);
+  assert.equal(salesforce.environments.find(({ key }) => key === 'production').username, 'vincent@cosulich.com.hk');
+  assert.equal(salesforce.environments.find(({ key }) => key === 'production').instanceUrl, 'https://fratellicosulich.my.salesforce.com');
   assert.equal(salesforce.profileName, 'fcos-devee');
   assert.equal(salesforce.publication.browserProfile, 'vincexai');
   assert.equal(salesforce.publication.sourceEnvironmentKey, 'devee');
@@ -111,6 +113,29 @@ test('one schema-validated policy owns the approved targets and CLI-first order'
     ['supabase', 'macos_keychain'],
     ['salesforce', 'protected_host_store'],
   ]);
+});
+
+test('operational source reads external target identifiers from the connection policy', async () => {
+  const sourcePaths = (await Promise.all(['api', 'scripts'].map(async (root) => {
+    const entries = await readdir(new URL(`../${root}/`, import.meta.url), { recursive: true, withFileTypes: true });
+    return entries
+      .filter((entry) => entry.isFile() && /\.(?:js|mjs)$/.test(entry.name))
+      .map((entry) => new URL(`../${root}/${entry.parentPath ? `${entry.parentPath.split(`/${root}/`).at(-1)}/` : ''}${entry.name}`, import.meta.url));
+  }))).flat();
+  const forbiddenLiterals = [
+    'pjforfvchygdyqfcgpmw',
+    '00D2x000000Ei4oEAC',
+    '00D1m0000008kioEAA',
+    '00D1s0000008lFEEAY',
+  ];
+  const matches = [];
+  for (const sourcePath of sourcePaths) {
+    const source = await readFile(sourcePath, 'utf8');
+    for (const literal of forbiddenLiterals) {
+      if (source.includes(literal)) matches.push(`${sourcePath.pathname}:${literal}`);
+    }
+  }
+  assert.deepEqual(matches, []);
 });
 
 test('Salesforce browser authentication is environment-specific and fails closed on profile drift', () => {

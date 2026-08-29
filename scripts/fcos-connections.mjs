@@ -34,6 +34,14 @@ function identifier(providerId, label) {
   return target(providerId).identifiers.find((entry) => entry.label === label)?.value || '';
 }
 
+function normalizedOrigin(value) {
+  try {
+    return new URL(String(value || '')).origin.toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
 function salesforceEnvironments() {
   return target('salesforce').environments || [{ key: 'production', label: 'Production', alias: target('salesforce').profileName, orgId: identifier('salesforce', 'Production Org ID') || identifier('salesforce', 'Org ID'), isSandbox: false }];
 }
@@ -452,10 +460,17 @@ function baseReport(providerId, version, startedAt, metadata) {
 }
 
 function finalizeReport(report, startedAt) {
+  const missingPermissions = target(report.provider).requiredPermissions
+    .filter((permission) => !report.permissions.includes(permission));
+  const sharedMetadataOnly = report.provider === 'salesforce'
+    && missingPermissions.length > 0
+    && missingPermissions.every((permission) => permission === 'shared.metadata.current');
   const warningCodes = [...new Set([
     ...report.warningCodes,
     ...(report.targetPin !== 'verified' ? ['target_pin_missing'] : []),
-    ...(report.permissionStatus !== 'verified' ? ['permission_probe_failed'] : []),
+    ...(report.permissionStatus !== 'verified'
+      ? [sharedMetadataOnly ? 'shared_metadata_out_of_date' : 'permission_probe_failed']
+      : []),
   ])];
   return sanitizeConnectionProviderReport({ ...report, latencyMs: Date.now() - startedAt, warningCodes }, report.provider);
 }
@@ -662,6 +677,8 @@ async function verifySalesforce(version, metadata, startedAt) {
       organization,
       verified: display.ok && organization.ok
         && parsed?.result?.id === environment.orgId
+        && parsed?.result?.username === environment.username
+        && normalizedOrigin(parsed?.result?.instanceUrl) === normalizedOrigin(environment.instanceUrl)
         && parsed?.result?.connectedStatus === 'Connected'
         && record?.Id === environment.orgId
         && record?.IsSandbox === environment.isSandbox,
@@ -718,16 +735,42 @@ export async function verifyProvider(providerId) {
   return report;
 }
 
-function writeSafeStatus(reports, publication = null) {
-  const value = {
+function readSafeStatus() {
+  try {
+    const value = JSON.parse(readFileSync(STATUS_PATH, 'utf8'));
+    return value?.schemaVersion === 2
+      && value?.policyVersion === CONNECTION_POLICY_VERSION
+      && value?.profile === CONNECTION_PROFILE_NAME
+      ? value
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export function mergeSafeConnectionStatus(current, reports, publication, generatedAt = new Date().toISOString()) {
+  const completeSnapshot = reports.length === CONNECTION_TARGETS.length
+    && CONNECTION_TARGETS.every(({ id }) => reports.some((report) => report.provider === id));
+  const existingProviders = completeSnapshot ? {} : (current?.providers || {});
+  const resolvedPublication = completeSnapshot
+    ? (publication ?? null)
+    : (publication ?? current?.publication ?? null);
+  return {
     schemaVersion: 2,
     policyVersion: CONNECTION_POLICY_VERSION,
     profile: CONNECTION_PROFILE_NAME,
-    generatedAt: new Date().toISOString(),
+    generatedAt,
     browserProfile: APPROVED_CONNECTION_BROWSER_PROFILE,
-    publication,
-    providers: Object.fromEntries(reports.map((report) => [report.provider, report])),
+    publication: resolvedPublication,
+    providers: {
+      ...existingProviders,
+      ...Object.fromEntries(reports.map((report) => [report.provider, report])),
+    },
   };
+}
+
+function writeSafeStatus(reports, publication = undefined) {
+  const value = mergeSafeConnectionStatus(readSafeStatus(), reports, publication);
   writeFileSync(STATUS_PATH, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
   chmodSync(STATUS_PATH, 0o600);
   return value;

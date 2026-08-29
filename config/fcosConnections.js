@@ -1,6 +1,6 @@
 const connectionPolicy = {
   schemaVersion: 1,
-  policyVersion: 7,
+  policyVersion: 9,
   profile: 'fcos-production',
   browserProfile: 'Otto',
   localStateDirectory: '.fcos-cli',
@@ -19,24 +19,19 @@ const connectionPolicy = {
   },
   sequence: [
     {
-      id: 'cli_availability',
-      label: 'Verify CLI availability and version',
-      detail: 'Confirm the approved provider CLI is installed and compatible before checking any authenticated identity.',
+      id: 'api_first',
+      label: 'Use the approved API or connector',
+      detail: 'Prefer a purpose-built API or connector after verifying its exact account, organization, project, repository, environment, scope, and target permissions.',
     },
     {
-      id: 'target_identity',
-      label: 'Verify account, team, project, and permissions',
-      detail: 'Compare live CLI identity and read-only capability probes with the exact approved identifiers. Stop on any mismatch.',
-    },
-    {
-      id: 'cli_use',
-      label: 'Use the verified CLI',
-      detail: 'Continue through the target-locked wrapper while the identity, target pin, version, and required permissions remain valid.',
+      id: 'cli_fallback',
+      label: 'Fall back to the verified CLI',
+      detail: 'When no approved API or connector can complete the operation, use the repo-pinned CLI only after its version, identity, target pin, and required permissions pass.',
     },
     {
       id: 'browser_fallback',
-      label: 'Use only the pinned browser profile for blocked authentication',
-      detail: 'Chrome remains locked unless the CLI cannot authenticate. Use Otto for FCOS, DEVEE, and QAT; Vincent for Salesforce Production; or vincexai only for the shared Salesforce GitHub account. Then return to the CLI and publish a signed verification.',
+      label: 'Use Chrome only as the final fallback',
+      detail: 'Chrome remains locked unless both the approved API/connector and verified CLI cannot complete the operation. Use only the environment-pinned profile, then return to API or CLI verification.',
     },
   ],
   integrations: {
@@ -199,7 +194,7 @@ const connectionPolicy = {
       environments: [
         { key: 'devee', label: 'Devee', alias: 'fcos-devee', username: 'vincent@cosulich.com.hk.devee', instanceUrl: 'https://fratellicosulich--devee.sandbox.my.salesforce.com', orgId: '00D1m0000008kioEAA', isSandbox: true, browserProfile: 'Otto' },
         { key: 'qat', label: 'QAT', alias: 'fcos-qat', username: 'vincent@cosulich.com.hk.qat', instanceUrl: 'https://fratellicosulich--qat.sandbox.my.salesforce.com', orgId: '00D1s0000008lFEEAY', isSandbox: true, browserProfile: 'Otto' },
-        { key: 'production', label: 'Production', alias: 'source-salesforce', orgId: '00D2x000000Ei4oEAC', isSandbox: false, browserProfile: 'Vincent' },
+        { key: 'production', label: 'Production', alias: 'source-salesforce', username: 'vincent@cosulich.com.hk', instanceUrl: 'https://fratellicosulich.my.salesforce.com', orgId: '00D2x000000Ei4oEAC', isSandbox: false, browserProfile: 'Vincent' },
       ],
     },
   ],
@@ -219,6 +214,15 @@ export function validateFcosConnectionPolicy(value = connectionPolicy) {
   requirePositiveInteger(value.policyVersion, 'policyVersion');
   requireString(value.profile, 'profile');
   requireString(value.browserProfile, 'browserProfile');
+  const expectedSequence = ['api_first', 'cli_fallback', 'browser_fallback'];
+  if (!Array.isArray(value.sequence)
+      || value.sequence.map(({ id }) => id).join(',') !== expectedSequence.join(',')) {
+    throw new Error('Connection policy order must remain API/connector, CLI, then Chrome.');
+  }
+  for (const [index, step] of value.sequence.entries()) {
+    requireString(step.label, `sequence.${index}.label`);
+    requireString(step.detail, `sequence.${index}.detail`);
+  }
   const approvedBrowserProfiles = new Set(['Otto', 'Vincent', 'vincexai']);
   if (!approvedBrowserProfiles.has(value.browserProfile)) throw new Error('Connection policy browserProfile is not approved.');
   requireString(value.localStateDirectory, 'localStateDirectory');
@@ -280,10 +284,8 @@ export function validateFcosConnectionPolicy(value = connectionPolicy) {
         requireString(environment.key, `salesforce.${environment.key}.key`);
         requireString(environment.label, `salesforce.${environment.key}.label`);
         requireString(environment.alias, `salesforce.${environment.key}.alias`);
-        if (environment.isSandbox) {
-          requireString(environment.username, `salesforce.${environment.key}.username`);
-          requireString(environment.instanceUrl, `salesforce.${environment.key}.instanceUrl`);
-        }
+        requireString(environment.username, `salesforce.${environment.key}.username`);
+        requireString(environment.instanceUrl, `salesforce.${environment.key}.instanceUrl`);
         requireString(environment.orgId, `salesforce.${environment.key}.orgId`);
         requireString(environment.browserProfile, `salesforce.${environment.key}.browserProfile`);
         if (!approvedBrowserProfiles.has(environment.browserProfile)) {
@@ -333,4 +335,22 @@ function deepFreeze(value) {
 validateFcosConnectionPolicy(connectionPolicy);
 
 export const FCOS_CONNECTION_POLICY = deepFreeze(connectionPolicy);
+export function fcosConnectionProvider(providerId) {
+  const provider = FCOS_CONNECTION_POLICY.providers.find(({ id }) => id === providerId);
+  if (!provider) throw new Error(`Unknown FCOS connection provider: ${providerId || '(missing)'}.`);
+  return provider;
+}
+
+export function fcosConnectionIdentifier(providerId, label) {
+  const value = fcosConnectionProvider(providerId).identifiers.find((entry) => entry.label === label)?.value;
+  if (!value) throw new Error(`FCOS connection policy is missing ${providerId}.${label}.`);
+  return value;
+}
+
+export function fcosSalesforceEnvironment(environmentKey) {
+  const environment = fcosConnectionProvider('salesforce').environments.find(({ key }) => key === environmentKey);
+  if (!environment) throw new Error(`Unknown FCOS Salesforce environment: ${environmentKey || '(missing)'}.`);
+  return environment;
+}
+
 export default FCOS_CONNECTION_POLICY;

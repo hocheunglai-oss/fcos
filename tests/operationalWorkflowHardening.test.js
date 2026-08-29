@@ -60,7 +60,7 @@ test('browser authentication loads protected profile data through the server API
   assert.match(loginSource, /visibleError/);
   const scripts = JSON.parse(packageSource).scripts;
   assert.equal(scripts.dev, 'vite');
-  assert.equal(scripts['dev:full'], 'vercel dev');
+  assert.equal(scripts['dev:full'], 'node scripts/fcos-connections.mjs run vercel -- dev');
 });
 
 test('report archive compensates cross-system failures', async () => {

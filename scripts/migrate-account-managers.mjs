@@ -4,22 +4,21 @@ import {
   expandLegacyAccountManager,
   groupEligibleSalesforceAccounts,
 } from '../api/_accountManagers.js';
+import { serverSupabaseConfig } from '../api/_supabaseConfig.js';
+import { fcosConnectionIdentifier, fcosSalesforceEnvironment } from '../config/fcosConnections.js';
 
 const SALESFORCE_API_VERSION = 'v67.0';
-const SALESFORCE_ALIAS = process.env.SALESFORCE_ORG_ALIAS || 'source-salesforce';
+const PRODUCTION_ORG = fcosSalesforceEnvironment('production');
+const EXPECTED_SUPABASE_REF = fcosConnectionIdentifier('supabase', 'Project ref');
+const SALESFORCE_ALIAS = process.env.SALESFORCE_ORG_ALIAS || PRODUCTION_ORG.alias;
 const ACTOR_EMAIL = process.env.ACCOUNT_MANAGER_MIGRATION_ACTOR || 'vincent@cosulich.com.hk';
 const APPLY = process.argv.includes('--apply');
 
-function requiredEnv(name) {
-  const value = String(process.env[name] || '').trim();
-  if (!value) throw new Error(`${name} is required.`);
-  return value;
-}
-
 function salesforceOrg() {
-  const result = spawnSync('npx', [
-    '--yes',
-    '@salesforce/cli',
+  if (SALESFORCE_ALIAS !== PRODUCTION_ORG.alias) {
+    throw new Error(`Account Manager migration is Production-only; use Salesforce alias ${PRODUCTION_ORG.alias}.`);
+  }
+  const result = spawnSync('sf', [
     'org',
     'display',
     '--target-org',
@@ -32,6 +31,13 @@ function salesforceOrg() {
   if (result.status !== 0) throw new Error(result.stderr || result.stdout || 'Salesforce CLI authentication failed.');
   const org = JSON.parse(result.stdout).result || {};
   if (!org.accessToken || !org.instanceUrl) throw new Error('Salesforce CLI did not return a usable authenticated org.');
+  const isSandbox = org.isSandbox === true || String(org.instanceUrl || '').includes('.sandbox.') || String(org.instanceUrl || '').includes('--');
+  if (
+    org.id !== PRODUCTION_ORG.orgId
+    || org.username !== PRODUCTION_ORG.username
+    || new URL(org.instanceUrl).origin !== new URL(PRODUCTION_ORG.instanceUrl).origin
+    || isSandbox !== PRODUCTION_ORG.isSandbox
+  ) throw new Error(`Salesforce identity mismatch; expected ${PRODUCTION_ORG.orgId} / ${PRODUCTION_ORG.username} / Production.`);
   return org;
 }
 
@@ -49,8 +55,13 @@ async function responseJson(response) {
 }
 
 async function main() {
-  const supabaseUrl = requiredEnv('VITE_SUPABASE_URL').replace(/\/$/, '');
-  const serviceRoleKey = requiredEnv('SUPABASE_SERVICE_ROLE_KEY');
+  const supabase = serverSupabaseConfig();
+  if (!supabase.configured) throw new Error(`${supabase.missingEnv.join(' and ')} is required.`);
+  const supabaseUrl = supabase.url.replace(/\/$/, '');
+  const serviceRoleKey = supabase.key;
+  if (new URL(supabaseUrl).hostname.split('.')[0] !== EXPECTED_SUPABASE_REF) {
+    throw new Error(`Supabase identity mismatch; expected project ${EXPECTED_SUPABASE_REF}.`);
+  }
   const org = salesforceOrg();
   const salesforceHeaders = {
     Authorization: `Bearer ${org.accessToken}`,

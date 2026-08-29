@@ -4,10 +4,17 @@ import { readFile } from 'node:fs/promises';
 import {
   canonicalGitRemote,
   githubCredentialHelperValue,
+  mergeSafeConnectionStatus,
   providerRuntime,
   validateProviderArgs,
   versionPolicyStatus,
 } from '../scripts/fcos-connections.mjs';
+
+const connectionProviderIds = ['github', 'vercel', 'supabase', 'salesforce'];
+
+function connectionReport(provider, marker = provider) {
+  return { provider, marker };
+}
 
 test('connection runner resolves GitHub remotes without accepting other hosts', () => {
   assert.equal(canonicalGitRemote('https://github.com/hocheunglai-oss/fcos.git'), 'hocheunglai-oss/fcos');
@@ -63,4 +70,44 @@ test('tracked pre-push guard uses the isolated FCOS GitHub identity', async () =
   assert.match(hook, /GH_CONFIG_DIR="\$repo_root\/\.fcos-cli\/github" gh api user/);
   assert.match(hook, /hocheunglai-oss\/fcos/);
   assert.doesNotMatch(hook, /gh auth switch|gh auth login/);
+});
+
+test('provider-specific checks merge into the safe status without erasing other providers or publication evidence', () => {
+  const current = {
+    publication: { status: 'published', verifiedAt: '2026-08-30T00:00:00.000Z' },
+    providers: Object.fromEntries(connectionProviderIds.map((provider) => [provider, connectionReport(provider, 'old')])),
+  };
+  const value = mergeSafeConnectionStatus(
+    current,
+    [connectionReport('salesforce', 'new')],
+    undefined,
+    '2026-08-30T01:00:00.000Z',
+  );
+
+  assert.deepEqual(Object.keys(value.providers).sort(), [...connectionProviderIds].sort());
+  assert.equal(value.providers.salesforce.marker, 'new');
+  assert.equal(value.providers.github.marker, 'old');
+  assert.deepEqual(value.publication, current.publication);
+});
+
+test('complete connection checks replace stale providers and publication evidence', () => {
+  const current = {
+    publication: { status: 'published', verifiedAt: '2026-08-29T00:00:00.000Z' },
+    providers: {
+      ...Object.fromEntries(connectionProviderIds.map((provider) => [provider, connectionReport(provider, 'old')])),
+      obsolete: connectionReport('obsolete', 'old'),
+    },
+  };
+  const reports = connectionProviderIds.map((provider) => connectionReport(provider, 'new'));
+  const publication = { status: 'skipped' };
+  const value = mergeSafeConnectionStatus(current, reports, publication, '2026-08-30T01:00:00.000Z');
+
+  assert.deepEqual(Object.keys(value.providers).sort(), [...connectionProviderIds].sort());
+  assert.ok(Object.values(value.providers).every(({ marker }) => marker === 'new'));
+  assert.deepEqual(value.publication, publication);
+});
+
+test('full-stack development uses the verified Vercel runner', async () => {
+  const packageJson = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.equal(packageJson.scripts['dev:full'], 'node scripts/fcos-connections.mjs run vercel -- dev');
 });

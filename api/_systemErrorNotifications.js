@@ -48,7 +48,7 @@ const HANDLER_CONTEXT = {
   },
   marketReportDriveSyncCron: {
     title: 'Market report synchronization needs attention',
-    message: 'The hourly Google Drive market-report check did not complete or found a quarantined MOPS conflict. Existing verified prices remain available while the data-quality issue is reviewed.',
+    message: 'The hourly Google Drive market-report check did not complete. Check Markets data notes and System Health for the specific authorization, source, or data-quality issue. Existing verified prices remain available.',
     link: '/markets',
   },
   emailRouterMaintenanceCron: {

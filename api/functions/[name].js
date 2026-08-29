@@ -40,6 +40,7 @@ import { allocateSupplierDispute, normalizeSupplierInvoiceExposure, resolveSuppl
 import { currentRequestTelemetry, logRequestTelemetry, recordRequestFailure, recordSupabaseRequest, requestIdFrom, runWithRequestTelemetry, salesforceLimitFromBody, telemetryResponseHeaders } from '../_requestTelemetry.js';
 import { parseSupabasePrometheusMetrics } from '../_supabaseMetrics.js';
 import { serverSupabaseConfig } from '../_supabaseConfig.js';
+import { GOOGLE_DRIVE_MARKET_OAUTH_REQUIRED_ENV, GOOGLE_DRIVE_OAUTH_REQUIRED_ENV, exchangeGoogleDriveRefreshToken, googleDriveMarketOAuthConfig, googleDriveOAuthConfig } from '../_googleDriveOAuth.js';
 import { CONNECTION_INTEGRATIONS, connectionAttestationState, sanitizeConnectionAttestation } from '../../src/lib/connectionChecklist.js';
 import { expireRuntimeCacheTags, getOrLoadRuntimeCache } from '../_runtimeCache.js';
 import { checkPortalApplicationsHealth, launchPortalApplication, listPortalApplicationsForUser, portalAdminModel, preparePortalUserDeletion, processPortalOutbox, reconcilePortalEntitlementsForProfile, restorePortalUserAfterFailedDeletion, retryPortalAccessSync, revokePortalSessions, savePortalExplicitAccess, syncPortalEntitlement } from '../_portal.js';
@@ -4090,33 +4091,17 @@ async function writeReportExportEvent(client, reportExportId, eventType, actor, 
 }
 
 function googleDriveConfig() {
-  const clientId = process.env.GOOGLE_DRIVE_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_DRIVE_CLIENT_SECRET;
-  const refreshToken = process.env.GOOGLE_DRIVE_REFRESH_TOKEN;
-  const folderId = process.env.GOOGLE_DRIVE_REPORT_FOLDER_ID;
-  if (!clientId || !clientSecret || !refreshToken || !folderId) {
-    throw appError('Missing Google Drive env vars. Set GOOGLE_DRIVE_CLIENT_ID, GOOGLE_DRIVE_CLIENT_SECRET, GOOGLE_DRIVE_REFRESH_TOKEN, and GOOGLE_DRIVE_REPORT_FOLDER_ID in Vercel.', 500);
-  }
-  return { clientId, clientSecret, refreshToken, folderId };
+  return googleDriveOAuthConfig();
 }
 
 async function googleDriveAccessToken() {
   requireExternalActionGate('google_drive');
-  const { clientId, clientSecret, refreshToken } = googleDriveConfig();
-  const response = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST',
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      grant_type: 'refresh_token',
-      client_id: clientId,
-      client_secret: clientSecret,
-      refresh_token: refreshToken,
-    }),
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw appError(data.error_description || data.error || 'Google Drive token refresh failed.', 502);
-  if (!data.access_token) throw appError('Google Drive token refresh did not return an access token.', 502);
-  return data.access_token;
+  return (await exchangeGoogleDriveRefreshToken(googleDriveConfig())).access_token;
+}
+
+async function googleDriveMarketAccessToken() {
+  requireExternalActionGate('google_drive');
+  return (await exchangeGoogleDriveRefreshToken(googleDriveMarketOAuthConfig())).access_token;
 }
 
 async function googleDriveFetch(url, options = {}) {
@@ -6844,24 +6829,16 @@ async function supabaseHealthRow({ force = false } = {}) {
 }
 
 async function googleDriveHealthRow() {
-  const required = ['GOOGLE_DRIVE_CLIENT_ID', 'GOOGLE_DRIVE_CLIENT_SECRET', 'GOOGLE_DRIVE_REFRESH_TOKEN', 'GOOGLE_DRIVE_REPORT_FOLDER_ID'];
-  const configured = missingEnv(required).length === 0;
+  const marketRequired = GOOGLE_DRIVE_MARKET_OAUTH_REQUIRED_ENV;
+  const archiveRequired = GOOGLE_DRIVE_OAUTH_REQUIRED_ENV;
+  const displayedEnv = [...new Set([...marketRequired, ...archiveRequired])];
+  const configured = missingEnv(marketRequired).length === 0;
+  const archiveConfigured = missingEnv(archiveRequired).length === 0;
   const gateEnabled = isExternalActionEnabled('google_drive');
   const result =
     configured && gateEnabled
       ? await timedCheck(async () => {
-          const { clientId, clientSecret, refreshToken, folderId } = googleDriveConfig();
-          const token = await fetchJsonWithTimeout('https://oauth2.googleapis.com/token', {
-            method: 'POST',
-            headers: { 'content-type': 'application/x-www-form-urlencoded' },
-            body: new URLSearchParams({
-              grant_type: 'refresh_token',
-              client_id: clientId,
-              client_secret: clientSecret,
-              refresh_token: refreshToken,
-            }),
-          });
-          if (!token.access_token) throw new Error('Google OAuth did not return an access token.');
+          const token = await exchangeGoogleDriveRefreshToken(googleDriveMarketOAuthConfig());
           const marketConfig = CONNECTION_INTEGRATIONS.googleDriveMarketReports;
           const about = await fetchJsonWithTimeout('https://www.googleapis.com/drive/v3/about?fields=user(emailAddress)', {
             headers: { Authorization: `Bearer ${token.access_token}` },
@@ -6878,10 +6855,32 @@ async function googleDriveHealthRow() {
               || marketRoot.trashed === true) {
             throw new Error('Google Drive market-report root does not match the approved folder.');
           }
-          const fields = encodeURIComponent('id,name,mimeType,trashed');
-          const folder = await fetchJsonWithTimeout(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(folderId)}?fields=${fields}`, {
-            headers: { Authorization: `Bearer ${token.access_token}` },
-          });
+          let reportArchive = {
+            status: 'not_configured',
+            errorCode: 'GOOGLE_DRIVE_REPORT_ARCHIVE_NOT_CONFIGURED',
+            missingEnv: missingEnv(archiveRequired),
+          };
+          if (archiveConfigured) {
+            try {
+              const { folderId, ...archiveOauthConfig } = googleDriveConfig();
+              const archiveToken = await exchangeGoogleDriveRefreshToken(archiveOauthConfig);
+              const fields = encodeURIComponent('id,name,mimeType,trashed');
+              const folder = await fetchJsonWithTimeout(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(folderId)}?fields=${fields}`, {
+                headers: { Authorization: `Bearer ${archiveToken.access_token}` },
+              });
+              reportArchive = {
+                status: folder.id === folderId && folder.mimeType === 'application/vnd.google-apps.folder' && folder.trashed !== true ? 'online' : 'unavailable',
+                errorCode: null,
+                folderName: folder.name || null,
+                folderId: maskValue(folder.id, 6, 4),
+              };
+            } catch (error) {
+              reportArchive = {
+                status: 'unavailable',
+                errorCode: String(error?.code || 'GOOGLE_DRIVE_REPORT_ARCHIVE_UNAVAILABLE').slice(0, 80),
+              };
+            }
+          }
           const marketFolders = [];
           for (const marketFolder of marketConfig.folders) {
             const marketFields = encodeURIComponent('id,name,mimeType,trashed,parents');
@@ -6911,9 +6910,8 @@ async function googleDriveHealthRow() {
           return {
             accessTokenExpiresAt: addSecondsIso(token.expires_in),
             accountEmail: marketConfig.accountEmail,
-            folderName: folder.name || null,
-            folderId: maskValue(folder.id, 6, 4),
-            folderTrashed: folder.trashed === true,
+            healthStatus: reportArchive.status === 'online' ? 'online' : 'warning',
+            reportArchive,
             marketFolders,
             lastSuccessfulMarketScan: syncRun.data?.completed_at || null,
             lastMarketScanDiscovered: syncRun.data?.discovered_count ?? null,
@@ -6937,17 +6935,19 @@ async function googleDriveHealthRow() {
       endpoint: 'https://www.googleapis.com/drive/v3',
       authType: 'OAuth refresh token',
       configured,
-      configuredEnv: configuredEnv(required),
-      missingEnv: missingEnv(required),
+      configuredEnv: configuredEnv(displayedEnv),
+      missingEnv: missingEnv(marketRequired),
       tokenExpiry: configured ? 'Refresh token expiry is not exposed by Google; short-lived access-token expiry is checked live.' : null,
       details: {
         gateEnabled,
+        reportArchiveConfigured: archiveConfigured,
+        reportArchiveMissingEnv: missingEnv(archiveRequired),
         marketReportAccount: CONNECTION_INTEGRATIONS.googleDriveMarketReports.accountEmail,
         marketReportBrowserProfile: CONNECTION_INTEGRATIONS.googleDriveMarketReports.browserProfile,
         marketReportRootFolder: maskValue(CONNECTION_INTEGRATIONS.googleDriveMarketReports.rootFolderId, 6, 4),
         marketReportSchedule: CONNECTION_INTEGRATIONS.googleDriveMarketReports.syncSchedule,
       },
-      notes: gateEnabled ? ['Archive files remain XLS. Market-report PDFs are read only; FCOS stores configured observations and checksums, not PDF bytes or report text.'] : ['Google Drive has been paused by its emergency control. The legacy archive path remains intact.'],
+      notes: gateEnabled ? ['Report Archive and licensed market-report reads use separate refresh tokens so one Drive authority cannot silently replace the other. Archive files remain XLS. Market-report PDFs are read only; FCOS stores configured observations and checksums, not PDF bytes or report text.'] : ['Google Drive has been paused by its emergency control. The legacy archive path remains intact.'],
     },
     result,
   );
@@ -18439,7 +18439,7 @@ async function marketIntelligenceArchiveReplay(body = {}, req = null, accessCont
   const context = accessContext || (await requireActiveUser(req));
   await requireCapability(context.client, context.profile, 'hedge_admin', 'Hedge administration permission is required to reconcile the licensed market archive.');
   requireExternalActionGate('google_drive');
-  const accessToken = await googleDriveAccessToken();
+  const accessToken = await googleDriveMarketAccessToken();
   const result = await runMarketReportArchiveReplayBatch(context.client, {
     accessToken,
     cursor: body.cursor,
@@ -18555,7 +18555,7 @@ async function marketReportDriveSyncCron(_body = {}, req = null) {
   requireCronAuthorization(req);
   requireExternalActionGate('google_drive');
   const client = supabaseAdminClient();
-  const accessToken = await googleDriveAccessToken();
+  const accessToken = await googleDriveMarketAccessToken();
   const result = await runMarketReportDriveSync(client, { accessToken });
   if (result.status === 'failed') {
     throw appError('Scheduled Google Drive market-report synchronization did not complete.', 502, result.errorCode || 'MARKET_DRIVE_SYNC_FAILED', undefined, true);

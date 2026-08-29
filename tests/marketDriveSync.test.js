@@ -340,4 +340,10 @@ test('production scheduling is exactly hourly and keeps the cron secret protecte
   const dispatcher = fs.readFileSync(new URL('../api/functions/[name].js', import.meta.url), 'utf8');
   assert.match(dispatcher, /async function marketReportDriveSyncCron[\s\S]*requireCronAuthorization\(req\)/);
   assert.match(dispatcher, /marketReportDriveSyncCron[\s\S]*requireExternalActionGate\('google_drive'\)/);
+  assert.match(dispatcher, /marketReportDriveSyncCron[\s\S]*googleDriveMarketAccessToken\(\)/);
+  assert.match(dispatcher, /marketIntelligenceArchiveReplay[\s\S]*googleDriveMarketAccessToken\(\)/);
+  assert.match(dispatcher, /const configured = missingEnv\(marketRequired\)\.length === 0/);
+  assert.match(dispatcher, /const archiveConfigured = missingEnv\(archiveRequired\)\.length === 0/);
+  assert.match(dispatcher, /if \(archiveConfigured\)[\s\S]*googleDriveConfig\(\)/);
+  assert.match(dispatcher, /missingEnv: missingEnv\(marketRequired\)/);
 });

@@ -1,4 +1,4 @@
-#env
+# Environment files
 .env
 .env.*
 
@@ -27,10 +27,14 @@ dist-ssr
 *.sln
 *.sw?
 
-.env
 .vite
 .vercel
-.env*
+
+# Generated local migration, verification, and report artifacts
+output/
+reports/
+tmp/
+supabase/.branches/
 
 # Repo-isolated provider credentials, CLI state, and local target pins
 .fcos-cli/

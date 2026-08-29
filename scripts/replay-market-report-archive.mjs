@@ -6,11 +6,12 @@ import { pathToFileURL } from 'node:url';
 import { createClient } from '@supabase/supabase-js';
 import { parseMarketReportPdf } from '../api/_marketIntelligence.js';
 import { processMarketIntelligenceDate } from '../api/_marketIntelligenceTrading.js';
+import { serverSupabaseConfig } from '../api/_supabaseConfig.js';
+import { fcosConnectionIdentifier } from '../config/fcosConnections.js';
 
 const MOPS_SYMBOLS = Object.freeze({ AMFSA00: 's05', PPXDK00: 's380', POABC00: 'sgo' });
 const DEFAULT_START_DATE = '2025-01-01';
-const EXPECTED_SUPABASE_PROJECT_REF = 'pjforfvchygdyqfcgpmw';
-const DEFAULT_SUPABASE_URL = 'https://pjforfvchygdyqfcgpmw.supabase.co';
+const EXPECTED_SUPABASE_PROJECT_REF = fcosConnectionIdentifier('supabase', 'Project ref');
 
 function usage() {
   return [
@@ -593,14 +594,14 @@ async function main() {
   const audit = buildMarketArchiveAudit(archive);
   console.log(JSON.stringify({ mode: 'local-audit', ...audit }, null, 2));
   if (options.localOnly) return;
-  const key = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!key) throw new Error('A service-only Supabase key is required in the environment for live impact or apply mode.');
-  const supabaseUrl = new URL(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || DEFAULT_SUPABASE_URL);
+  const supabase = serverSupabaseConfig();
+  if (!supabase.configured) throw new Error(`${supabase.missingEnv.join(' and ')} is required for live impact or apply mode.`);
+  const supabaseUrl = new URL(supabase.url);
   const projectRef = supabaseUrl.hostname.split('.')[0];
   if (supabaseUrl.protocol !== 'https:' || projectRef !== EXPECTED_SUPABASE_PROJECT_REF) {
     throw new Error(`Supabase identity mismatch: expected project ${EXPECTED_SUPABASE_PROJECT_REF}.`);
   }
-  const client = createClient(supabaseUrl.toString(), key, {
+  const client = createClient(supabaseUrl.toString(), supabase.key, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
   const ledger = await loadLedger(client, options.start);
