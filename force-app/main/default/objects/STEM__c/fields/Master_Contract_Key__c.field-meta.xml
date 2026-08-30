@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Master_Contract_Key__c</fullName>
+    <description>Stable FCOS Master Contract identity. Multiple delivery STEMs may share this value.</description>
+    <label>Master Contract Key</label>
+    <length>80</length>
+    <type>Text</type>
+</CustomField>

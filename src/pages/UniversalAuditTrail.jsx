@@ -1,6 +1,5 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { History, Loader2, RefreshCw, Search, ShieldCheck } from 'lucide-react';
-import { appClient } from '@/api/appClient';
 import PageHeader from '@/components/common/PageHeader';
 import StateBlock from '@/components/common/StateBlock';
 import TableShell from '@/components/common/TableShell';
@@ -9,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { useNavigationAwareRequest } from '@/hooks/useNavigationAwareRequest';
 
 function formatDateTime(value) {
   if (!value) return '—';
@@ -42,11 +42,16 @@ function sourceTone(source) {
   if (source === 'Reports Archive') return 'border-emerald-200 bg-emerald-50 text-emerald-700';
   if (source === 'Late Payment Interest') return 'border-red-200 bg-red-50 text-red-700';
   if (source === 'Dispute Workflow') return 'border-amber-200 bg-amber-50 text-amber-800';
+  if (source === 'Projects & Tasks') return 'border-emerald-200 bg-emerald-50 text-emerald-800';
+  if (source === 'Growth & Coaching') return 'border-teal-200 bg-teal-50 text-teal-800';
   if (source === 'Internal Daily Report') return 'border-blue-200 bg-blue-50 text-blue-700';
+  if (source === 'FCOS Updates') return 'border-cyan-200 bg-cyan-50 text-cyan-800';
+  if (source === 'System Connections') return 'border-indigo-200 bg-indigo-50 text-indigo-800';
   return 'border-violet-200 bg-violet-50 text-violet-700';
 }
 
-export default function UniversalAuditTrail() {
+export default function UniversalAuditTrail({ methodologyAction = null }) {
+  const { request: requestAudit } = useNavigationAwareRequest('collaboration');
   const [rows, setRows] = useState([]);
   const [sources, setSources] = useState([]);
   const [source, setSource] = useState('all');
@@ -58,28 +63,28 @@ export default function UniversalAuditTrail() {
   const loadRows = async ({ force = false } = {}) => {
     setLoading(true);
     setError('');
-    const response = await appClient.functions.invoke('universalAuditTrail', {
-      source,
-      keyword,
-      limit: 500,
-    }, {
-      cache: true,
+    await requestAudit({
+      name: 'universalAuditTrail',
+      payload: { source, keyword, limit: 500 },
       force,
       cacheKey: `universalAuditTrail:${source}:${keyword}`,
+      apply: (response) => {
+        if (response.data?.error) {
+          setError(response.data.error);
+          setRows([]);
+          setSources([]);
+        } else {
+          setError('');
+          setRows(response.data?.rows || []);
+          setSources(response.data?.sources || []);
+        }
+      },
     });
-    if (response.data?.error) {
-      setError(response.data.error);
-      setRows([]);
-      setSources([]);
-    } else {
-      setRows(response.data?.rows || []);
-      setSources(response.data?.sources || []);
-    }
     setLoading(false);
   };
 
   useEffect(() => {
-    loadRows({ force: true });
+    loadRows();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -90,18 +95,21 @@ export default function UniversalAuditTrail() {
   }, [rows, sources]);
 
   return (
-    <div className="min-h-screen bg-background px-4 py-5 md:px-6">
+    <div className="workspace-administration-canvas mx-auto min-h-screen max-w-[1440px] p-4 sm:p-6 lg:p-8">
       <PageHeader
         icon={ShieldCheck}
         eyebrow="Administrator audit"
         title="Universal Audit Trail"
-        description="Review app-level audit events from admin changes, collections, report archive, dispute workflow, internal report runs, and late-payment interest requests."
+        description="Review redacted app-level audit events from administration, collaboration, system connections, Growth & Coaching, FCOS updates, collections, reports, disputes, internal report runs, and late-payment interest requests."
         meta={`${rows.length.toLocaleString()} events shown · Hong Kong time`}
         actions={(
-          <Button onClick={() => loadRows({ force: true })} disabled={loading}>
-            {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
-            Refresh
-          </Button>
+          <>
+            {methodologyAction}
+            <Button onClick={() => loadRows({ force: true })} disabled={loading}>
+              {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+              Refresh
+            </Button>
+          </>
         )}
       />
 

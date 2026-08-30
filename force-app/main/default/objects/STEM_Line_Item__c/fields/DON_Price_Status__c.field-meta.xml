@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>DON_Price_Status__c</fullName>
+    <description>Fail-closed review state for an FCOS Master Contract DON price.</description>
+    <label>DON Price Status</label>
+    <required>false</required>
+    <type>Picklist</type>
+    <valueSet>
+        <restricted>true</restricted>
+        <valueSetDefinition>
+            <sorted>false</sorted>
+            <value><fullName>Unresolved</fullName><default>true</default><label>Unresolved</label></value>
+            <value><fullName>Review Required</fullName><default>false</default><label>Review Required</label></value>
+            <value><fullName>Reviewed</fullName><default>false</default><label>Reviewed</label></value>
+            <value><fullName>Applied</fullName><default>false</default><label>Applied</label></value>
+            <value><fullName>Conflict</fullName><default>false</default><label>Conflict</label></value>
+        </valueSetDefinition>
+    </valueSet>
+</CustomField>

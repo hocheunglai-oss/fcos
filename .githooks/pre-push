@@ -1,0 +1,57 @@
+#!/bin/sh
+
+repo_root="$(git rev-parse --show-toplevel 2>/dev/null)"
+expected_account="$(git config --local --get fcos.expectedGithubAccount)"
+remote_name="$1"
+remote_url="$(git remote get-url "$remote_name" 2>/dev/null || printf '%s' "$2")"
+updates="$(cat)"
+
+case "$remote_url" in
+  *github.com/hocheunglai-oss/fcos*) ;;
+  *) exit 0 ;;
+esac
+
+if [ -z "$repo_root" ] || [ "$expected_account" != "hocheunglai-oss" ]; then
+  echo "FCOS push blocked: the repository-local GitHub policy is not configured." >&2
+  echo "Run npm run connections:bootstrap -- github." >&2
+  exit 1
+fi
+
+actual_account="$(GH_CONFIG_DIR="$repo_root/.fcos-cli/github" gh api user --jq .login 2>/dev/null || true)"
+if [ "$actual_account" != "$expected_account" ]; then
+  echo "FCOS push blocked: the isolated GitHub CLI identity does not match '$expected_account'." >&2
+  echo "Run npm run connections:verify -- github before pushing." >&2
+  exit 1
+fi
+
+salesforce_changed=0
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ -n "$local_sha" ] || continue
+  case "$local_sha" in
+    0000000000000000000000000000000000000000) continue ;;
+  esac
+  case "$remote_sha" in
+    0000000000000000000000000000000000000000)
+      changed_paths="$(git ls-tree -r --name-only "$local_sha" 2>/dev/null)"
+      ;;
+    *)
+      changed_paths="$(git diff --name-only "$remote_sha..$local_sha" 2>/dev/null)"
+      ;;
+  esac
+  if printf '%s\n' "$changed_paths" | grep -q '^force-app/main/default/'; then
+    salesforce_changed=1
+  fi
+done <<EOF
+$updates
+EOF
+
+if [ "$salesforce_changed" -eq 1 ]; then
+  git_local_environment="$(git rev-parse --local-env-vars)"
+  if ! (unset $git_local_environment; npm run salesforce:mirror:verify); then
+    echo "FCOS push blocked: Salesforce metadata must be published byte-for-byte to ivanyk20/fcbhk first." >&2
+    echo "Run npm run salesforce:mirror:publish, then retry this push." >&2
+    exit 1
+  fi
+fi
+
+exit 0

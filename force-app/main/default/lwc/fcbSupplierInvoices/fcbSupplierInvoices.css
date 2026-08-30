@@ -1,0 +1,28 @@
+.exampleHolder{
+    position: relative;
+    display: inline-block;
+    margin-left: 15px;
+    width: 55px;
+    vertical-align: middle;
+    white-space: nowrap;
+}
+
+table, th, td{
+    border: 1px solid;
+    border-collapse: collapse;
+}
+
+thead{
+    background-color: rgb(150, 150, 150);
+    height: 32px;
+}
+
+tr{
+    height: 28px;
+}
+.info-row{
+    background-color: rgb(240, 240, 240);
+}
+.info-row td{
+    text-align: right;
+}

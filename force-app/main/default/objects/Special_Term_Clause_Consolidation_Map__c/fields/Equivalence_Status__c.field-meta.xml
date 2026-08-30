@@ -1,0 +1,2 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata"><fullName>Equivalence_Status__c</fullName><label>Equivalence Status</label><required>true</required><type>Picklist</type><valueSet><restricted>true</restricted><valueSetDefinition><sorted>false</sorted><value><fullName>Exact Normalized</fullName><default>false</default><label>Exact Normalized</label></value><value><fullName>Approved Equivalent</fullName><default>true</default><label>Approved Equivalent</label></value></valueSetDefinition></valueSet></CustomField>

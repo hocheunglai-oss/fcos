@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Activity,
   ArrowDown,
@@ -6,60 +6,84 @@ import {
   AlertTriangle,
   Check,
   CheckCircle2,
-  CircleDollarSign,
   Clock,
   ExternalLink,
   FileText,
   Loader2,
   Mail,
   Minus,
+  Pencil,
+  Palette,
+  Plus,
   RefreshCw,
   Server,
   Settings,
   ShieldCheck,
+  Sparkles,
   XCircle,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import PageHeader from '@/components/common/PageHeader';
 import DraftNotice from '@/components/common/DraftNotice';
 import StateBlock from '@/components/common/StateBlock';
 import { appClient } from '@/api/appClient';
-import { RATE_PROVIDER_OPTIONS, readExchangeRateSettings, saveExchangeRateSettings } from '@/lib/exchangeRateSettings';
 import { DOCUMENT_SOURCE_GROUPS, readDocumentSettings, saveDocumentSettings } from '@/lib/documentSettings';
 import { clearDraft, readDraft, sameDraftValue, useDraftAutosave } from '@/lib/draftAutosave';
+import { useAuth } from '@/lib/AuthContext';
+import HedgeAssistantAiSettings from '@/hedge/components/HedgeAssistantAiSettings';
+import EmailRouterAdvisorAiSettings from '@/components/email-router/EmailRouterAdvisorAiSettings';
+import AiModelSettingsCard from '@/components/settings/AiModelSettingsCard';
+import { applyAppearancePreferences, readAppearancePreferences } from '@/lib/appearancePreferences';
+
+const ConnectionChecklist = lazy(() => import('@/components/settings/ConnectionChecklist'));
 
 const SETTINGS_DRAFT_KEY = 'settings:page';
-const SETTINGS_TAB_KEY = 'settings:active-tab';
+const SIDEBAR_FIXED_STORAGE_KEY = 'workspace-sidebar-fixed';
 const HEALTH_SAMPLES_KEY = 'fcos:system-health-samples';
 const HEALTH_SAMPLE_INTERVAL_MS = 60_000;
 const MAX_HEALTH_SAMPLES = 5;
 
-const SETTINGS_TABS = [
-  { id: 'email', label: 'Email Senders', icon: Mail },
-  { id: 'exchange', label: 'Exchange Rate', icon: CircleDollarSign },
-  { id: 'documents', label: 'STEM Documents', icon: FileText },
-  { id: 'health', label: 'System Health', icon: Activity },
-];
-
-function validSettingsTab(value) {
-  return SETTINGS_TABS.some((tab) => tab.id === value) ? value : 'email';
+function settingsSnapshot() {
+  const documents = readDocumentSettings();
+  const appearance = readAppearancePreferences();
+  return {
+    sidebarMode: localStorage.getItem(SIDEBAR_FIXED_STORAGE_KEY) === 'true' ? 'fixed' : 'auto_hide',
+    tableDensity: localStorage.getItem('table-density') === 'comfort' ? 'comfort' : 'compact',
+    documentShowOnlyRelevant: documents.showOnlyRelevant,
+    documentSourceGroups: documents.relevantSourceGroups,
+    appearanceMode: appearance.appearanceMode,
+    glassIntensity: appearance.glassIntensity,
+    revision: 0,
+    initialized: false,
+  };
 }
 
-function settingsSnapshot() {
+function comparableWorkspaceSettings(value = {}) {
+  const selectedGroups = new Set(Array.isArray(value.documentSourceGroups) ? value.documentSourceGroups : []);
   return {
-    exchangeRateSettings: readExchangeRateSettings(),
-    documentSettings: readDocumentSettings(),
+    sidebarMode: value.sidebarMode === 'fixed' ? 'fixed' : 'auto_hide',
+    tableDensity: value.tableDensity === 'comfort' ? 'comfort' : 'compact',
+    documentShowOnlyRelevant: value.documentShowOnlyRelevant !== false,
+    documentSourceGroups: DOCUMENT_SOURCE_GROUPS.filter((group) => selectedGroups.has(group)),
+    appearanceMode: ['system', 'light', 'dark'].includes(value.appearanceMode) ? value.appearanceMode : 'light',
+    glassIntensity: ['clear', 'balanced', 'tinted'].includes(value.glassIntensity) ? value.glassIntensity : 'balanced',
   };
+}
+
+function sameWorkspaceSettings(a, b) {
+  return sameDraftValue(comparableWorkspaceSettings(a), comparableWorkspaceSettings(b));
 }
 
 function SettingsPanel({ title, description, icon: Icon, meta, children }) {
   return (
-    <section className="rounded-xl border border-border bg-card p-5">
-      <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+    <section className="material-panel rounded-lg border border-border bg-card p-4">
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex min-w-0 items-start gap-3">
           {Icon && (
             <div className="mt-0.5 rounded-lg bg-muted p-2 text-muted-foreground">
@@ -126,6 +150,14 @@ const STATUS_META = {
   },
 };
 
+function MailboxVerificationBadge({ mailbox }) {
+  if (!mailbox) return <StatusBadge status="not_configured" />;
+  if (!mailbox.active) return <StatusBadge status="disabled" />;
+  if (mailbox.verificationState === 'verified') return <StatusBadge status="online" />;
+  if (mailbox.verificationState === 'failed') return <StatusBadge status="warning" />;
+  return <StatusBadge status="configured" />;
+}
+
 function formatHealthDate(value) {
   if (!value) return '—';
   if (typeof value === 'string' && !/^\d{4}-\d{2}-\d{2}T/.test(value)) return value;
@@ -171,7 +203,14 @@ function healthValue(value) {
 function flattenHealthDetails(value, prefix = '', rows = []) {
   if (value === undefined || value === null || value === '') return rows;
   if (Array.isArray(value)) {
-    rows.push([prefix, healthValue(value)]);
+    const containsStructuredValues = value.some((entry) => entry && typeof entry === 'object');
+    if (!containsStructuredValues) {
+      rows.push([prefix, healthValue(value)]);
+      return rows;
+    }
+    value.forEach((entry, index) => {
+      flattenHealthDetails(entry, `${prefix} ${index + 1}`.trim(), rows);
+    });
     return rows;
   }
   if (typeof value === 'object') {
@@ -309,7 +348,7 @@ function KpiGroup({ title, children }) {
   );
 }
 
-function SystemHealthPanel() {
+function HealthOverviewPanel() {
   const [loading, setLoading] = useState(false);
   const [health, setHealth] = useState(null);
   const [error, setError] = useState('');
@@ -370,7 +409,7 @@ function SystemHealthPanel() {
     <SettingsPanel
       icon={Activity}
       title="System Health"
-      description="Live status of server-side APIs, the shared email sender, external tools, and token expiry notes."
+      description="Live server status plus exact, non-secret CLI authorization targets and isolation policy."
       meta={health?.generatedAt ? `Last checked ${formatHealthDate(health.generatedAt)}` : null}
     >
       <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
@@ -457,7 +496,7 @@ function SystemHealthPanel() {
             )}
           </div>
 
-          <div className="overflow-hidden rounded-xl border border-border">
+          <div className="overflow-hidden rounded-lg border border-border">
             <div className="max-h-[62vh] overflow-auto">
               <table className="w-full min-w-[1080px] text-left text-sm">
                 <thead className="sticky top-0 z-10 bg-muted text-xs uppercase tracking-wide text-muted-foreground">
@@ -520,65 +559,322 @@ function SystemHealthPanel() {
   );
 }
 
-export default function SettingsPage() {
+function SystemHealthPanel() {
+  const [activeView, setActiveView] = useState('overview');
+  return (
+    <Tabs value={activeView} onValueChange={setActiveView} className="space-y-4">
+      <div className="overflow-x-auto pb-1">
+        <TabsList aria-label="System Health views" className="w-max">
+          <TabsTrigger value="overview">Health Overview</TabsTrigger>
+          <TabsTrigger value="connections">Connection Checklist</TabsTrigger>
+        </TabsList>
+      </div>
+      <TabsContent value="overview" className="mt-0">
+        <HealthOverviewPanel />
+      </TabsContent>
+      <TabsContent value="connections" className="mt-0">
+        <Suspense fallback={<StateBlock icon={Loader2} title="Loading connection checklist" description="Preparing the API-first connection runbook." />}>
+          <ConnectionChecklist />
+        </Suspense>
+      </TabsContent>
+    </Tabs>
+  );
+}
+
+export default function SettingsPage({ section = 'my', methodologyAction = null }) {
+  const { isAdministrator, hasCapability } = useAuth();
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [exchangeRateSettings, setExchangeRateSettings] = useState(readExchangeRateSettings);
   const [documentSettings, setDocumentSettings] = useState(readDocumentSettings);
   const [baseSettings, setBaseSettings] = useState(settingsSnapshot);
   const [draftRestoredAt, setDraftRestoredAt] = useState(null);
-  const [activeTab, setActiveTab] = useState(() => validSettingsTab(localStorage.getItem(SETTINGS_TAB_KEY)));
+  const [sidebarMode, setSidebarMode] = useState(() => settingsSnapshot().sidebarMode);
+  const [tableDensity, setTableDensity] = useState(() => settingsSnapshot().tableDensity);
+  const [appearanceMode, setAppearanceMode] = useState(() => settingsSnapshot().appearanceMode);
+  const [glassIntensity, setGlassIntensity] = useState(() => settingsSnapshot().glassIntensity);
+  const [workspaceRevision, setWorkspaceRevision] = useState(0);
+  const [workspaceError, setWorkspaceError] = useState('');
+  const [aiSettings, setAiSettings] = useState(null);
+  const [aiModels, setAiModels] = useState([]);
+  const [aiUsage, setAiUsage] = useState(null);
+  const [baseAiModelId, setBaseAiModelId] = useState(null);
+  const [aiSettingsLoading, setAiSettingsLoading] = useState(true);
+  const [aiSettingsError, setAiSettingsError] = useState(null);
+  const [emailSenders, setEmailSenders] = useState(null);
+  const [emailSendersLoading, setEmailSendersLoading] = useState(true);
+  const [emailSendersError, setEmailSendersError] = useState('');
+  const [emailSenderBusy, setEmailSenderBusy] = useState(false);
+  const [mailboxEditorOpen, setMailboxEditorOpen] = useState(false);
+  const [mailboxForm, setMailboxForm] = useState({ mailboxId: null, emailAddress: '', label: '', active: true, expectedRevision: null, reason: '' });
+  const [routeDrafts, setRouteDrafts] = useState({});
+  const [routeAuditReason, setRouteAuditReason] = useState('');
 
   useEffect(() => {
     const base = settingsSnapshot();
     const draft = readDraft(SETTINGS_DRAFT_KEY);
-    const next = draft?.data && !sameDraftValue(draft.data, base)
+    const next = draft?.data && !sameWorkspaceSettings(draft.data, base)
       ? { ...base, ...draft.data }
       : base;
-    setExchangeRateSettings(next.exchangeRateSettings || base.exchangeRateSettings);
-    setDocumentSettings(next.documentSettings || base.documentSettings);
+    setSidebarMode(next.sidebarMode || base.sidebarMode);
+    setTableDensity(next.tableDensity || base.tableDensity);
+    setAppearanceMode(next.appearanceMode || base.appearanceMode);
+    setGlassIntensity(next.glassIntensity || base.glassIntensity);
+    setDocumentSettings({
+      showOnlyRelevant: next.documentShowOnlyRelevant ?? base.documentShowOnlyRelevant,
+      relevantSourceGroups: next.documentSourceGroups || base.documentSourceGroups,
+    });
     setBaseSettings(base);
-    setDraftRestoredAt(draft?.data && !sameDraftValue(next, base) ? draft.updatedAt : null);
+    setDraftRestoredAt(draft?.data && !sameWorkspaceSettings(next, base) ? draft.updatedAt : null);
+
+    let cancelled = false;
+    const loadWorkspacePreferences = async () => {
+      const response = await appClient.functions.invoke('workspacePreferencesGet', {}, { force: true });
+      if (cancelled) return;
+      if (response.data?.error) {
+        setWorkspaceError(response.data.error);
+        return;
+      }
+      const preferences = response.data?.preferences;
+      if (!preferences) return;
+      const serverSettings = {
+        sidebarMode: preferences.sidebarMode,
+        tableDensity: preferences.tableDensity,
+        documentShowOnlyRelevant: preferences.documentShowOnlyRelevant,
+        documentSourceGroups: preferences.documentSourceGroups,
+        appearanceMode: preferences.appearanceMode,
+        glassIntensity: preferences.glassIntensity,
+        revision: preferences.revision,
+        initialized: preferences.initialized,
+      };
+      setSidebarMode(serverSettings.sidebarMode);
+      setTableDensity(serverSettings.tableDensity);
+      setAppearanceMode(serverSettings.appearanceMode);
+      setGlassIntensity(serverSettings.glassIntensity);
+      setDocumentSettings({
+        showOnlyRelevant: serverSettings.documentShowOnlyRelevant,
+        relevantSourceGroups: serverSettings.documentSourceGroups,
+      });
+      setWorkspaceRevision(serverSettings.revision);
+      setBaseSettings(serverSettings);
+      clearDraft(SETTINGS_DRAFT_KEY);
+      setDraftRestoredAt(null);
+      saveDocumentSettings({
+        showOnlyRelevant: serverSettings.documentShowOnlyRelevant,
+        relevantSourceGroups: serverSettings.documentSourceGroups,
+      });
+      localStorage.setItem(SIDEBAR_FIXED_STORAGE_KEY, String(serverSettings.sidebarMode === 'fixed'));
+      localStorage.setItem('table-density', serverSettings.tableDensity);
+      applyAppearancePreferences(serverSettings);
+      window.dispatchEvent(new CustomEvent('fcos:workspace-preferences-updated', { detail: serverSettings }));
+    };
+    loadWorkspacePreferences();
+    return () => { cancelled = true; };
   }, []);
 
+  useEffect(() => {
+    const applyWorkspacePreferences = (event) => {
+      const preferences = event.detail;
+      if (!preferences?.initialized) return;
+      setSidebarMode(preferences.sidebarMode);
+      setTableDensity(preferences.tableDensity);
+      setAppearanceMode(preferences.appearanceMode);
+      setGlassIntensity(preferences.glassIntensity);
+      setDocumentSettings({
+        showOnlyRelevant: preferences.documentShowOnlyRelevant,
+        relevantSourceGroups: preferences.documentSourceGroups,
+      });
+      setWorkspaceRevision(preferences.revision);
+      setBaseSettings({
+        sidebarMode: preferences.sidebarMode,
+        tableDensity: preferences.tableDensity,
+        documentShowOnlyRelevant: preferences.documentShowOnlyRelevant,
+        documentSourceGroups: preferences.documentSourceGroups,
+        appearanceMode: preferences.appearanceMode,
+        glassIntensity: preferences.glassIntensity,
+        revision: preferences.revision,
+        initialized: true,
+      });
+      setWorkspaceError('');
+    };
+    window.addEventListener('fcos:workspace-preferences-updated', applyWorkspacePreferences);
+    return () => window.removeEventListener('fcos:workspace-preferences-updated', applyWorkspacePreferences);
+  }, []);
+
+  useEffect(() => {
+    applyAppearancePreferences({ appearanceMode, glassIntensity });
+  }, [appearanceMode, glassIntensity]);
+
+  const loadAiSettings = useCallback(async () => {
+    setAiSettingsLoading(true);
+    setAiSettingsError(null);
+    const response = await appClient.functions.invoke('dashboardAiSettingsGet', {}, { force: true });
+    if (response.data?.error) {
+      setAiSettingsError(response.data.error);
+    } else {
+      setAiSettings(response.data.settings || null);
+      setAiModels(response.data.models || []);
+      setAiUsage(response.data.usage || null);
+      setBaseAiModelId(response.data.settings?.modelId || null);
+    }
+    setAiSettingsLoading(false);
+  }, []);
+
+  useEffect(() => {
+    if (section === 'ai' && isAdministrator) loadAiSettings();
+  }, [isAdministrator, loadAiSettings, section]);
+
+  const loadEmailSenders = useCallback(async () => {
+    setEmailSendersLoading(true);
+    setEmailSendersError('');
+    const response = await appClient.functions.invoke('emailSenderStatus', {}, { cache: false });
+    if (response.data?.error) {
+      setEmailSenders(null);
+      setEmailSendersError(response.data.error);
+    } else {
+      setEmailSenders(response.data || null);
+      setRouteDrafts(Object.fromEntries((response.data?.purposes || []).map((purpose) => [purpose.key, {
+        mailboxId: purpose.mailbox?.id || '',
+        expectedRevision: purpose.revision,
+      }])));
+      setRouteAuditReason('');
+    }
+    setEmailSendersLoading(false);
+  }, []);
+
+  useEffect(() => {
+    if (section === 'email-delivery' && isAdministrator) loadEmailSenders();
+  }, [isAdministrator, loadEmailSenders, section]);
+
+  const openMailboxEditor = (mailbox = null) => {
+    setMailboxForm({
+      mailboxId: mailbox?.id || null,
+      emailAddress: mailbox?.emailAddress || '',
+      label: mailbox?.label || '',
+      active: mailbox?.active !== false,
+      expectedRevision: mailbox?.revision ?? null,
+      reason: '',
+    });
+    setMailboxEditorOpen(true);
+  };
+
+  const saveMailbox = async () => {
+    setEmailSenderBusy(true);
+    setEmailSendersError('');
+    const response = await appClient.functions.invoke('emailSenderMailboxSave', mailboxForm);
+    if (response.data?.error) {
+      setEmailSendersError(response.data.error);
+    } else {
+      setEmailSenders(response.data.registry);
+      setMailboxEditorOpen(false);
+      await loadEmailSenders();
+    }
+    setEmailSenderBusy(false);
+  };
+
+  const dirtySenderRoutes = useMemo(() => (emailSenders?.purposes || []).filter((purpose) => (
+    String(routeDrafts[purpose.key]?.mailboxId || '') !== String(purpose.mailbox?.id || '')
+  )), [emailSenders, routeDrafts]);
+
+  const saveSenderRoutes = async () => {
+    if (!dirtySenderRoutes.length) return;
+    setEmailSenderBusy(true);
+    setEmailSendersError('');
+    const response = await appClient.functions.invoke('emailSenderRouteSave', {
+      changes: dirtySenderRoutes.map((purpose) => ({
+        purposeKey: purpose.key,
+        mailboxId: routeDrafts[purpose.key]?.mailboxId || null,
+        expectedRevision: routeDrafts[purpose.key]?.expectedRevision,
+      })),
+      reason: routeAuditReason,
+    });
+    if (response.data?.error) setEmailSendersError(response.data.error);
+    else await loadEmailSenders();
+    setEmailSenderBusy(false);
+  };
+
   const settingsDraftValue = useMemo(() => ({
-    exchangeRateSettings,
-    documentSettings,
-  }), [documentSettings, exchangeRateSettings]);
-  const settingsDirty = Boolean(baseSettings && !sameDraftValue(settingsDraftValue, baseSettings));
+    sidebarMode,
+    tableDensity,
+    documentShowOnlyRelevant: documentSettings.showOnlyRelevant,
+    documentSourceGroups: documentSettings.relevantSourceGroups,
+    appearanceMode,
+    glassIntensity,
+    revision: workspaceRevision,
+    initialized: true,
+  }), [appearanceMode, documentSettings, glassIntensity, sidebarMode, tableDensity, workspaceRevision]);
+  const settingsDirty = Boolean(baseSettings && !sameWorkspaceSettings(settingsDraftValue, baseSettings));
   useDraftAutosave(SETTINGS_DRAFT_KEY, settingsDraftValue, {
     enabled: true,
     dirty: settingsDirty,
     message: 'Autosaved Settings draft. Save or discard it before leaving.',
   });
 
-  const changeTab = (tab) => {
-    const next = validSettingsTab(tab);
-    setActiveTab(next);
-    localStorage.setItem(SETTINGS_TAB_KEY, next);
+  const savePersonalSettings = async () => {
+    setSaving(true);
+    setWorkspaceError('');
+    try {
+      const response = await appClient.functions.invoke('workspacePreferencesSave', {
+        sidebarMode,
+        tableDensity,
+        documentShowOnlyRelevant: documentSettings.showOnlyRelevant,
+        documentSourceGroups: documentSettings.relevantSourceGroups,
+        appearanceMode,
+        glassIntensity,
+        expectedRevision: workspaceRevision,
+      });
+      if (response.data?.error) throw new Error(response.data.error);
+      const preferences = response.data.preferences;
+      const savedValue = { ...settingsDraftValue, revision: preferences.revision, initialized: true };
+      setWorkspaceRevision(preferences.revision);
+      setBaseSettings(savedValue);
+      saveDocumentSettings(documentSettings);
+      localStorage.setItem(SIDEBAR_FIXED_STORAGE_KEY, String(sidebarMode === 'fixed'));
+      localStorage.setItem('table-density', tableDensity);
+      applyAppearancePreferences({ appearanceMode, glassIntensity });
+      window.dispatchEvent(new CustomEvent('fcos:workspace-preferences-updated', { detail: savedValue }));
+      clearDraft(SETTINGS_DRAFT_KEY);
+      setDraftRestoredAt(null);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (saveError) {
+      setWorkspaceError(saveError.message || 'Personal settings could not be saved.');
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const saveAll = async () => {
+  const saveDashboardAiSettings = async () => {
+    if (!aiSettings?.modelId || aiSettings.modelId === baseAiModelId) return;
     setSaving(true);
-    saveExchangeRateSettings(exchangeRateSettings);
-    saveDocumentSettings(documentSettings);
-    const savedValue = {
-      exchangeRateSettings,
-      documentSettings,
-    };
-    setBaseSettings(savedValue);
-    clearDraft(SETTINGS_DRAFT_KEY);
-    setDraftRestoredAt(null);
+    setAiSettingsError(null);
+    const response = await appClient.functions.invoke('dashboardAiSettingsSave', {
+      modelId: aiSettings.modelId,
+      expectedRevision: aiSettings.revision,
+    });
+    if (response.data?.error) {
+      setAiSettingsError(response.data.error);
+    } else {
+      setAiSettings(response.data.settings);
+      setAiModels(response.data.models || aiModels);
+      setAiUsage(response.data.usage || aiUsage);
+      setBaseAiModelId(response.data.settings?.modelId || aiSettings.modelId);
+      setSaved(true);
+      window.setTimeout(() => setSaved(false), 2000);
+    }
     setSaving(false);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
   };
 
   const discardSettingsDraft = () => {
     clearDraft(SETTINGS_DRAFT_KEY);
     if (baseSettings) {
-      setExchangeRateSettings(baseSettings.exchangeRateSettings || readExchangeRateSettings());
-      setDocumentSettings(baseSettings.documentSettings || readDocumentSettings());
+      setSidebarMode(baseSettings.sidebarMode);
+      setTableDensity(baseSettings.tableDensity);
+      setAppearanceMode(baseSettings.appearanceMode);
+      setGlassIntensity(baseSettings.glassIntensity);
+      setDocumentSettings({
+        showOnlyRelevant: baseSettings.documentShowOnlyRelevant,
+        relevantSourceGroups: baseSettings.documentSourceGroups,
+      });
     }
     setDraftRestoredAt(null);
   };
@@ -592,97 +888,361 @@ export default function SettingsPage() {
     });
   };
 
+  const activeTab = {
+    my: 'documents',
+    'email-delivery': 'email',
+    ai: 'ai',
+    health: 'health',
+  }[section] || 'documents';
+  const dashboardUsageByModel = useMemo(() => Object.fromEntries(aiModels.map((model) => {
+    const usage = aiUsage?.models?.find((item) => item.modelId === model.id) || {};
+    return [model.id, {
+      requests: usage.allTimeCalls,
+      inputTokens: usage.allTimeInputTokens,
+      cachedInputTokens: usage.allTimeCachedInputTokens,
+      outputTokens: usage.allTimeOutputTokens,
+      estimatedCostUsd: usage.allTimeCostUsd,
+      periodCostUsd: usage.monthCostUsd,
+      lastUsedAt: usage.lastUsedAt,
+    }];
+  })), [aiModels, aiUsage]);
+  const pageMeta = {
+    my: {
+      eyebrow: 'Personal',
+      title: 'My Settings',
+      description: 'Keep your FCOS workspace consistent across browsers and devices.',
+    },
+    'email-delivery': {
+      eyebrow: 'Administration',
+      title: 'Email Delivery',
+      description: 'Manage approved Microsoft Graph mailboxes and their FCOS email-purpose assignments.',
+    },
+    ai: {
+      eyebrow: 'Administration',
+      title: 'AI Models',
+      description: 'Manage authorized AI models and review usage and estimated cost by FCOS purpose.',
+    },
+    health: {
+      eyebrow: 'Operations',
+      title: 'System Health',
+      description: 'Review current service status, workload indicators, and provider connections.',
+    },
+  }[section];
+
   return (
-    <div className="mx-auto max-w-6xl p-6 lg:p-8">
+    <div className="workspace-administration-canvas mx-auto max-w-[1440px] p-4 sm:p-6 lg:p-8">
       <PageHeader
         icon={Settings}
-        eyebrow="Admin"
-        title="Settings"
-        description="Configure email senders, exchange rates, and STEM document behavior."
+        eyebrow={pageMeta.eyebrow}
+        title={pageMeta.title}
+        description={pageMeta.description}
         actions={(
-          <Button onClick={saveAll} disabled={saving} className="gap-2">
-            {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : saved ? <Check className="h-3.5 w-3.5" /> : null}
-            {saved ? 'Saved!' : 'Save All Settings'}
-          </Button>
+          <>
+            {methodologyAction}
+            {section === 'my' && settingsDirty && (
+              <Button onClick={savePersonalSettings} disabled={saving} className="gap-2">
+                {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : saved ? <Check className="h-3.5 w-3.5" /> : null}
+                {saved ? 'Saved' : 'Save My Settings'}
+              </Button>
+            )}
+          </>
         )}
       />
 
-      <DraftNotice restoredAt={draftRestoredAt} label="Settings draft restored" onDiscard={discardSettingsDraft} className="mb-6" />
+      {section === 'my' && <DraftNotice restoredAt={draftRestoredAt} label="My Settings draft restored" onDiscard={discardSettingsDraft} className="mb-6" />}
 
-      <Tabs value={activeTab} onValueChange={changeTab} className="space-y-4">
-        <div className="rounded-2xl border border-border bg-card/70 p-2">
-          <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1 bg-transparent p-0">
-            {SETTINGS_TABS.map((tab) => {
-              const Icon = tab.icon;
-              return (
-                <TabsTrigger
-                  key={tab.id}
-                  value={tab.id}
-                  className="h-9 gap-2 px-3 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
-                >
-                  <Icon className="h-3.5 w-3.5" />
-                  {tab.label}
-                </TabsTrigger>
-              );
-            })}
-          </TabsList>
+      {workspaceError && section === 'my' && (
+        <div className="mb-6 flex items-start gap-2 rounded-lg border border-destructive/20 bg-destructive/10 p-4 text-sm text-destructive">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>{workspaceError}</span>
         </div>
+      )}
+
+      <Tabs value={activeTab} className="space-y-4">
 
         <TabsContent value="email" className="mt-0">
           <SettingsPanel
             icon={Mail}
-            title="Shared Email Sender"
-            description="All internal reports, late-interest requests, and external payment reminders use one centrally managed server mailbox."
+            title="Microsoft Graph Email Senders"
+            description="Assign an approved Microsoft 365 mailbox to each FCOS email purpose. Microsoft 365 controls the visible sender identity."
+            meta={emailSendersLoading ? 'Loading sender configuration' : null}
           >
-            <div className="flex items-start gap-3 py-2">
-              <Server className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" />
-              <div>
-                <h3 className="text-sm font-semibold text-foreground">Central SMTP sender</h3>
-                <p className="mt-1 text-sm text-muted-foreground">Every user sends through the same mailbox and sender identity.</p>
-                <p className="mt-1 text-xs text-muted-foreground">Credentials are stored only in Vercel. Connection status is available in System Health.</p>
+            {emailSendersError && (
+              <div className="mb-4 flex items-start gap-2 border-y border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <p>{emailSendersError}</p>
+                  <Button type="button" variant="outline" size="sm" onClick={loadEmailSenders} className="mt-2 gap-2">
+                    <RefreshCw className="h-3.5 w-3.5" />
+                    Retry
+                  </Button>
+                </div>
               </div>
-            </div>
-          </SettingsPanel>
-        </TabsContent>
+            )}
+            {emailSendersLoading && !emailSenders ? (
+              <StateBlock
+                icon={Loader2}
+                title="Loading Graph sender routes"
+                description="Reading protected mailbox assignments and delivery status."
+              />
+            ) : (
+              <div className="space-y-6">
+                <div className="flex flex-wrap items-center justify-between gap-3 border-y border-border py-2.5">
+                  <div className="text-xs text-muted-foreground">
+                    <span className="font-semibold text-foreground">Microsoft Graph · Vercel OIDC</span>
+                    {' · '}{emailSenders?.deliveryGateEnabled ? 'Delivery enabled' : 'Delivery disabled'}
+                    {' · '}{emailSenders?.applicationConfigured ? 'Application configured' : 'Application not configured'}
+                  </div>
+                  {isAdministrator && (
+                    <div className="flex gap-2">
+                      <Button type="button" variant="outline" size="icon" onClick={loadEmailSenders} disabled={emailSenderBusy || emailSendersLoading} title="Refresh Email Delivery" aria-label="Refresh Email Delivery">
+                        <RefreshCw className={`h-4 w-4 ${emailSendersLoading ? 'animate-spin' : ''}`} />
+                      </Button>
+                      <Button type="button" size="sm" onClick={() => openMailboxEditor()} disabled={emailSenderBusy}>
+                        <Plus className="h-4 w-4" />
+                        Add mailbox
+                      </Button>
+                    </div>
+                  )}
+                </div>
 
-        <TabsContent value="exchange" className="mt-0">
-          <SettingsPanel
-            icon={CircleDollarSign}
-            title="Exchange Rate API"
-            description="Used by Broker's Commission to convert USD payable and receivable summaries into CNY."
-          >
-            <div className="grid gap-4 md:grid-cols-2">
-              <div className="space-y-1.5">
-                <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">USD/CNY Mid-Rate Source</Label>
-                <Select
-                  value={exchangeRateSettings.provider}
-                  onValueChange={(provider) => setExchangeRateSettings((prev) => ({ ...prev, provider }))}
-                >
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {RATE_PROVIDER_OPTIONS.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <div>
+                  <h3 className="text-sm font-semibold text-foreground">Approved mailboxes</h3>
+                  <div className="mt-2 overflow-x-auto border-y border-border">
+                    <table className="w-full min-w-[720px] text-left text-xs">
+                      <thead className="bg-muted/40 text-muted-foreground">
+                        <tr>
+                          <th className="px-3 py-2 font-semibold">Mailbox</th>
+                          <th className="px-3 py-2 font-semibold">Microsoft 365 address</th>
+                          <th className="px-3 py-2 font-semibold">Verification</th>
+                          <th className="px-3 py-2 font-semibold">Last successful delivery</th>
+                          <th className="px-3 py-2 text-right font-semibold">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border">
+                        {(emailSenders?.mailboxes || []).map((mailbox) => (
+                          <tr key={mailbox.id}>
+                            <td className="px-3 py-3 font-medium text-foreground">{mailbox.label}</td>
+                            <td className="px-3 py-3 text-foreground">{mailbox.emailAddress}</td>
+                            <td className="px-3 py-3"><MailboxVerificationBadge mailbox={mailbox} /></td>
+                            <td className="px-3 py-3 text-muted-foreground">{formatHealthDate(mailbox.lastSuccessAt)}</td>
+                            <td className="px-3 py-3 text-right">
+                              {isAdministrator && (
+                                <Button type="button" variant="ghost" size="icon" onClick={() => openMailboxEditor(mailbox)} title={`Edit ${mailbox.label}`} aria-label={`Edit ${mailbox.label}`}>
+                                  <Pencil className="h-4 w-4" />
+                                </Button>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                        {!emailSenders?.mailboxes?.length && (
+                          <tr><td colSpan={5} className="px-3 py-6 text-center text-muted-foreground">No Microsoft Graph mailbox has been registered.</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div>
+                  <div className="flex flex-wrap items-end justify-between gap-2">
+                    <div>
+                      <h3 className="text-sm font-semibold text-foreground">Purpose assignments</h3>
+                      <p className="mt-0.5 text-xs text-muted-foreground">Change any number of routes, then save the complete set once.</p>
+                    </div>
+                    {dirtySenderRoutes.length > 0 && <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-800">{dirtySenderRoutes.length} unsaved</Badge>}
+                  </div>
+                  <div className="mt-2 overflow-x-auto border-y border-border">
+                    <table className="w-full min-w-[820px] text-left text-xs">
+                      <thead className="bg-muted/40 text-muted-foreground">
+                        <tr>
+                          <th className="px-3 py-2 font-semibold">Email purpose</th>
+                          <th className="w-[330px] px-3 py-2 font-semibold">Assigned Microsoft 365 mailbox</th>
+                          <th className="px-3 py-2 font-semibold">State</th>
+                          <th className="px-3 py-2 font-semibold">Last changed</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border">
+                    {(emailSenders?.purposes || []).map((purpose) => {
+                      const draft = routeDrafts[purpose.key] || {};
+                      const dirty = String(draft.mailboxId || '') !== String(purpose.mailbox?.id || '');
+                      return (
+                        <tr key={purpose.key} className={dirty ? 'bg-amber-50/50' : 'bg-background'}>
+                          <td className="px-3 py-2.5">
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium text-foreground">{purpose.label}</span>
+                              {dirty && <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-800">Changed</Badge>}
+                            </div>
+                            <p className="mt-0.5 max-w-xl text-[11px] leading-4 text-muted-foreground">{purpose.description}</p>
+                          </td>
+                          <td className="px-3 py-2.5">
+                            <Select
+                              value={draft.mailboxId || '__none__'}
+                              onValueChange={(mailboxId) => setRouteDrafts((current) => ({ ...current, [purpose.key]: { ...draft, mailboxId: mailboxId === '__none__' ? '' : mailboxId } }))}
+                              disabled={!isAdministrator || emailSenderBusy}
+                            >
+                              <SelectTrigger><SelectValue placeholder="Not assigned" /></SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="__none__">Not assigned</SelectItem>
+                                {(emailSenders?.mailboxes || []).filter((mailbox) => mailbox.active).map((mailbox) => (
+                                  <SelectItem key={mailbox.id} value={mailbox.id}>{mailbox.label} · {mailbox.emailAddress}</SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </td>
+                          <td className="px-3 py-2.5"><MailboxVerificationBadge mailbox={draft.mailboxId ? (emailSenders?.mailboxes || []).find((mailbox) => mailbox.id === draft.mailboxId) : null} /></td>
+                          <td className="px-3 py-2.5 text-muted-foreground">{formatHealthDate(purpose.updatedAt)}</td>
+                        </tr>
+                      );
+                    })}
+                      </tbody>
+                    </table>
+                  </div>
+                  {isAdministrator && dirtySenderRoutes.length > 0 && (
+                    <div className="mt-3 flex flex-col gap-3 rounded-lg border border-amber-200 bg-amber-50/50 p-3 lg:flex-row lg:items-end">
+                      <div className="min-w-0 flex-1 space-y-1.5">
+                        <Label htmlFor="sender-route-audit-reason" className="text-xs">Audit reason for all {dirtySenderRoutes.length} change{dirtySenderRoutes.length === 1 ? '' : 's'}</Label>
+                        <Input
+                          id="sender-route-audit-reason"
+                          value={routeAuditReason}
+                          onChange={(event) => setRouteAuditReason(event.target.value)}
+                          placeholder="Why are these sender assignments changing?"
+                          maxLength={255}
+                          disabled={emailSenderBusy}
+                        />
+                      </div>
+                      <Button type="button" onClick={saveSenderRoutes} disabled={routeAuditReason.trim().length < 8 || emailSenderBusy} className="gap-2">
+                        {emailSenderBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                        Save {dirtySenderRoutes.length} assignment{dirtySenderRoutes.length === 1 ? '' : 's'}
+                      </Button>
+                    </div>
+                  )}
+                </div>
               </div>
-              <div className="rounded-lg border border-border bg-background/50 p-3 text-xs text-muted-foreground">
-                <div><span className="font-semibold text-foreground">Source:</span> Frankfurter API</div>
-                <div><span className="font-semibold text-foreground">Rate treatment:</span> API rate is mid-rate</div>
-                <div><span className="font-semibold text-foreground">Bank buy rate:</span> mid-rate less 0.2%</div>
-                <div><span className="font-semibold text-foreground">Date rule:</span> latest available rate on or before quarter end</div>
-                <div><span className="font-semibold text-foreground">Auth:</span> no API key</div>
+            )}
+            <div className="mt-4 flex items-start gap-3 text-xs leading-5 text-muted-foreground">
+              <Server className="mt-0.5 h-4 w-4 shrink-0" />
+              <div>
+                <p>Microsoft application configuration remains protected in Vercel. Mailbox addresses and purpose assignments contain no credentials and are stored server-side in Supabase.</p>
+                <p className="mt-1">Every message uses its assigned Microsoft 365 mailbox through Microsoft Graph. Failed or uncertain deliveries remain reserved for controlled review.</p>
               </div>
             </div>
           </SettingsPanel>
+
+          <Dialog open={mailboxEditorOpen} onOpenChange={setMailboxEditorOpen}>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>{mailboxForm.mailboxId ? 'Edit Microsoft 365 mailbox' : 'Add Microsoft 365 mailbox'}</DialogTitle>
+                <DialogDescription>The mailbox must already be included in the Exchange Application RBAC scope for FCOS.</DialogDescription>
+              </DialogHeader>
+              <div className="space-y-4">
+                <div className="space-y-1.5">
+                  <Label>Mailbox label</Label>
+                  <Input value={mailboxForm.label} onChange={(event) => setMailboxForm((current) => ({ ...current, label: event.target.value }))} maxLength={100} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Microsoft 365 email address</Label>
+                  <Input type="email" value={mailboxForm.emailAddress} onChange={(event) => setMailboxForm((current) => ({ ...current, emailAddress: event.target.value }))} />
+                </div>
+                {mailboxForm.mailboxId && (
+                  <div className="space-y-1.5">
+                    <Label>Status</Label>
+                    <Select value={mailboxForm.active ? 'active' : 'disabled'} onValueChange={(value) => setMailboxForm((current) => ({ ...current, active: value === 'active' }))}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="active">Active</SelectItem>
+                        <SelectItem value="disabled">Disabled</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+                <div className="space-y-1.5">
+                  <Label>Audit reason</Label>
+                  <Input value={mailboxForm.reason} onChange={(event) => setMailboxForm((current) => ({ ...current, reason: event.target.value }))} placeholder="Reason for this mailbox change" maxLength={255} />
+                </div>
+              </div>
+              <DialogFooter>
+                <Button type="button" variant="outline" onClick={() => setMailboxEditorOpen(false)} disabled={emailSenderBusy}>Cancel</Button>
+                <Button type="button" onClick={saveMailbox} disabled={emailSenderBusy || !mailboxForm.label.trim() || !mailboxForm.emailAddress.trim() || mailboxForm.reason.trim().length < 8}>
+                  {emailSenderBusy ? 'Saving…' : 'Save mailbox'}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         </TabsContent>
 
         <TabsContent value="documents" className="mt-0">
-          <SettingsPanel
-            icon={FileText}
-            title="STEM Documents"
-            description="Choose which discovered Salesforce document sources are relevant for Stem Detail and dispute document browsing."
-          >
+          <div className="space-y-5">
+            <SettingsPanel
+              icon={Settings}
+              title="Workspace"
+              description="Choose how FCOS looks and behaves for your account across browsers and devices."
+            >
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Appearance</Label>
+                  <Select value={appearanceMode} onValueChange={setAppearanceMode}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="system">Follow system</SelectItem>
+                      <SelectItem value="light">Light</SelectItem>
+                      <SelectItem value="dark">Dark</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs leading-relaxed text-muted-foreground">Light is the company default. You can still follow the system or choose Dark for your account.</p>
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Glass intensity</Label>
+                  <Select value={glassIntensity} onValueChange={setGlassIntensity}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="clear">Clear</SelectItem>
+                      <SelectItem value="balanced">Balanced</SelectItem>
+                      <SelectItem value="tinted">Tinted</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs leading-relaxed text-muted-foreground">Controls navigation and transient surfaces only; financial content stays opaque.</p>
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Sidebar behavior</Label>
+                  <Select value={sidebarMode} onValueChange={setSidebarMode}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="fixed">Icon only</SelectItem>
+                      <SelectItem value="auto_hide">Icon and caption</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs leading-relaxed text-muted-foreground">
+                    Icon and caption expands the complete dock while the pointer is anywhere over the sidebar, then magnifies the active row.
+                  </p>
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Table density</Label>
+                  <Select value={tableDensity} onValueChange={setTableDensity}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="compact">Compact</SelectItem>
+                      <SelectItem value="comfort">Comfort</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="mt-4 border-t border-border pt-4">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => window.dispatchEvent(new CustomEvent('fcos:navigation-customize'))}
+                >
+                  <Palette className="h-4 w-4" />
+                  Customize sidebar order and visibility
+                </Button>
+              </div>
+            </SettingsPanel>
+
+            <SettingsPanel
+              icon={FileText}
+              title="STEM Documents"
+              description="Choose which discovered Salesforce document sources are relevant for Stem Detail and dispute document browsing."
+            >
             <label className="mb-4 flex items-center gap-2 text-sm font-medium text-foreground">
               <input
                 type="checkbox"
@@ -707,20 +1267,47 @@ export default function SettingsPage() {
                 );
               })}
             </div>
-          </SettingsPanel>
+            </SettingsPanel>
+          </div>
+        </TabsContent>
+
+        <TabsContent value="ai" className="mt-0">
+          <div className="space-y-5">
+          {isAdministrator && (
+            <AiModelSettingsCard
+              title="Dashboard AI Search"
+              description="Select the model that converts natural-language Dashboard requests into a validated FCOS search plan. Salesforce records are never sent to the model."
+              icon={Sparkles}
+              modelLabel="Interpretation model"
+              models={aiModels}
+              selectedModelId={aiSettings?.modelId || ''}
+              savedModelId={baseAiModelId || ''}
+              usageByModel={dashboardUsageByModel}
+              periodLabel={aiUsage?.monthLabel || 'Current month'}
+              loading={aiSettingsLoading}
+              saving={saving}
+              error={aiSettingsError || (aiUsage && !aiUsage.available ? 'Usage tracking is unavailable. Model selection remains available.' : '')}
+              message={saved ? 'Dashboard AI model saved.' : ''}
+              canManage={isAdministrator}
+              apiConfigured={aiSettings?.apiConfigured === true}
+              storageAvailable={aiSettings?.storageAvailable !== false}
+              onModelChange={(modelId) => setAiSettings((current) => ({ ...current, modelId }))}
+              onSave={saveDashboardAiSettings}
+              onRefresh={loadAiSettings}
+              updatedAt={aiSettings?.updatedAt}
+              privacyNote="Only the user’s search sentence is sent. FCOS validates the structured result and builds Salesforce filters server-side."
+            />
+          )}
+          {hasCapability('hedge_admin') && <HedgeAssistantAiSettings />}
+          {isAdministrator && <EmailRouterAdvisorAiSettings />}
+          </div>
         </TabsContent>
 
         <TabsContent value="health" className="mt-0">
           <SystemHealthPanel />
         </TabsContent>
-      </Tabs>
 
-      <div className="mt-4 flex justify-end rounded-xl border border-border bg-card/70 p-3">
-        <Button onClick={saveAll} disabled={saving} className="gap-2">
-          {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : saved ? <Check className="h-3.5 w-3.5" /> : null}
-          {saved ? 'Saved!' : 'Save All Settings'}
-        </Button>
-      </div>
+      </Tabs>
     </div>
   );
 }

@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "id": "legacy-v2-workspace-route",
+      "kind": "route",
+      "target": "/v2/*",
+      "owner": "platform",
+      "reason": "Preserve bookmarked links while the universal workspace replaces the v2 shell.",
+      "introduced": "2026-01-01",
+      "reviewAfter": "2026-10-01",
+      "retireWhen": "No production navigation telemetry for 30 consecutive days."
+    },
+    {
+      "id": "legacy-payment-routes",
+      "kind": "route",
+      "target": "/buyer-invoices and /incoming-payments",
+      "owner": "payments",
+      "reason": "Redirect saved links into Payment Collections without losing the intended tab.",
+      "introduced": "2026-01-01",
+      "reviewAfter": "2026-10-01",
+      "retireWhen": "No production navigation telemetry for either route for 30 consecutive days."
+    },
+    {
+      "id": "legacy-ship-agent-variable-charges",
+      "kind": "handler-and-route",
+      "target": "shipAgentCharges* handlers and ship-agent-charges tab",
+      "owner": "payments",
+      "reason": "Keep old Variable Charges links and rollback wrappers valid during the canonical rename.",
+      "introduced": "2026-08-01",
+      "reviewAfter": "2026-10-01",
+      "retireWhen": "No legacy handler or tab traffic for 30 consecutive days and rollback window is closed."
+    },
+    {
+      "id": "legacy-account-admin-route",
+      "kind": "route",
+      "target": "/buyers-administrator",
+      "owner": "accounts",
+      "reason": "Preserve bookmarks after Account Managers became the canonical workspace.",
+      "introduced": "2026-01-01",
+      "reviewAfter": "2026-10-01",
+      "retireWhen": "No production navigation telemetry for 30 consecutive days."
+    },
+    {
+      "id": "legacy-workspace-preferences-rpc",
+      "kind": "database-function",
+      "target": "save_user_workspace_preferences",
+      "owner": "platform",
+      "reason": "Support the previous deployment while workspace preference v2 rolls out.",
+      "introduced": "2026-08-01",
+      "reviewAfter": "2026-10-01",
+      "retireWhen": "All supported clients use v2 and no old-RPC calls are observed for 30 consecutive days."
+    }
+  ]
+}

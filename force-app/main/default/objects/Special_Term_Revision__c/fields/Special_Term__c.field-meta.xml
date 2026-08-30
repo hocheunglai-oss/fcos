@@ -1,0 +1,2 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata"><fullName>Special_Term__c</fullName><label>Special Term</label><referenceTo>Special_Term__c</referenceTo><relationshipLabel>Revisions</relationshipLabel><relationshipName>Revisions</relationshipName><type>MasterDetail</type><writeRequiresMasterRead>true</writeRequiresMasterRead></CustomField>

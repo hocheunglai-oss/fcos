@@ -6,6 +6,27 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="manifest" href="/manifest.json" />
     <title>FCOS</title>
+    <script>
+      (() => {
+        try {
+          const stored = JSON.parse(localStorage.getItem('fcos:workspace-appearance:v2') || '{}');
+          const appearance = ['system', 'light', 'dark'].includes(stored.appearanceMode) ? stored.appearanceMode : 'light';
+          const glass = ['clear', 'balanced', 'tinted'].includes(stored.glassIntensity) ? stored.glassIntensity : 'balanced';
+          const resolved = appearance === 'system'
+            ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+            : appearance;
+          document.documentElement.dataset.appearance = appearance;
+          document.documentElement.dataset.resolvedAppearance = resolved;
+          document.documentElement.dataset.glassIntensity = glass;
+          document.documentElement.classList.toggle('dark', resolved === 'dark');
+          document.documentElement.style.colorScheme = resolved;
+        } catch {
+          document.documentElement.dataset.appearance = 'light';
+          document.documentElement.dataset.resolvedAppearance = 'light';
+          document.documentElement.dataset.glassIntensity = 'balanced';
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

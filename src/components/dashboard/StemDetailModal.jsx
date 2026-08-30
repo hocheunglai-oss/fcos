@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { appClient } from '@/api/appClient';
+import { navigationCacheOptions } from '@/lib/navigationCachePolicy';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { format } from 'date-fns';
 import { Loader2, AlertCircle, ExternalLink, FileText, Download, Settings, Search, Eye, X, CheckCircle2 } from 'lucide-react';
@@ -431,6 +432,9 @@ function DocumentsSection({
 
 function PnlBanner({ record, lineItems, extraCosts, buyerBrokers }) {
   const buyer = record.Total_Invoice_Amount__c;
+  const buyerLabel = record._Buyer_Invoice_Amount_Source === 'calculated_unissued'
+    ? 'Expected Buyer Invoice (Not issued)'
+    : 'Buyer Invoice';
   const uninvoicedSupplierExtraCosts = extraCosts.reduce((sum, ec) => ec.Supplier_Invoice__c || ec.Cancelled__c ? sum : sum + (ec.Line_Total_Buy__c ?? 0), 0);
   const invoicedSupplierExtraCosts = extraCosts.reduce((sum, ec) => !ec.Supplier_Invoice__c || ec.Cancelled__c ? sum : sum + (ec.Line_Total_Buy__c ?? 0), 0);
   const sellOnlySupplierExtraCosts = extraCosts.reduce((sum, ec) => {
@@ -481,7 +485,7 @@ function PnlBanner({ record, lineItems, extraCosts, buyerBrokers }) {
     <div className={`mt-3 rounded-xl border px-5 py-3 ${isPositive ? 'bg-emerald-50 border-emerald-200' : 'bg-red-50 border-red-200'}`}>
       <div className="flex flex-wrap gap-x-6 gap-y-1.5 text-sm">
         <div className="flex flex-col">
-          <span className="text-xs text-muted-foreground mb-0.5">Buyer Invoice</span>
+          <span className="text-xs text-muted-foreground mb-0.5">{buyerLabel}</span>
           <span className="font-semibold text-foreground">{fmtMoney(buyer)}</span>
         </div>
         <div className="text-muted-foreground self-end pb-0.5">−</div>
@@ -613,7 +617,7 @@ function FinancialSummaryCard({ record, supplierPayments, buyerPayments, brokerC
             <div className="text-xs text-muted-foreground">Invoice value, open receivable, and received dates.</div>
           </div>
           <div className="grid gap-2 sm:grid-cols-2">
-            <FinancialMetric label="Buyer Invoice Amount" value={record.Total_Invoice_Amount__c} />
+            <FinancialMetric label={record._Buyer_Invoice_Amount_Source === 'calculated_unissued' ? 'Expected Buyer Invoice (Not issued)' : 'Buyer Invoice Amount'} value={record.Total_Invoice_Amount__c} />
             <FinancialMetric label="Receivable Balance" value={record.Receivable_Balance__c} tone="receivable" />
           </div>
           <div>
@@ -681,7 +685,7 @@ export default function StemDetailModal({ stemId, open, onClose }) {
     setShowAllDocuments(false);
     setError(null);
     setLoading(true);
-    appClient.functions.invoke('salesforceStemDetail', { stemId }).then(res => {
+    const applyDetail = (res) => {
       if (res.data?.error) setError(res.data.error);
       else {
         setRecord(res.data.record);
@@ -693,14 +697,16 @@ export default function StemDetailModal({ stemId, open, onClose }) {
         setBrokerCommissionPayments(res.data.brokerCommissionPayments || []);
       }
       setLoading(false);
-    });
-    appClient.functions.invoke('salesforceStemDocuments', { stemId }).then(res => {
+    };
+    appClient.functions.invoke('salesforceStemDetail', { stemId }, navigationCacheOptions('collaboration', applyDetail)).then(applyDetail);
+    const applyDocuments = (res) => {
       if (res.data?.error) setDocumentsError(res.data.error);
       else {
         setDocuments(res.data?.documents || []);
       }
       setDocumentsLoading(false);
-    });
+    };
+    appClient.functions.invoke('salesforceStemDocuments', { stemId }, navigationCacheOptions('collaboration', applyDocuments)).then(applyDocuments);
   }, [open, stemId]);
 
   // Build a map from line item ID → buyer broker info
@@ -744,7 +750,7 @@ export default function StemDetailModal({ stemId, open, onClose }) {
             <div className="flex items-start justify-between gap-4">
               <div>
                 <p className="text-xs text-muted-foreground mb-0.5">Stem Detail</p>
-                <DialogTitle className="text-xl font-bold font-dm">
+                <DialogTitle className="font-ui text-xl font-semibold">
                   {record?.Name || stemId}
                 </DialogTitle>
                 {record?._Vessel_Name && (

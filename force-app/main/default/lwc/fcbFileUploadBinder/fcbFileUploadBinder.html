@@ -1,0 +1,39 @@
+<template>
+    <lightning-card>
+        <template if:false={uploadedFile}>
+            <div style="display: inline-block;">
+                       <c-modal-free-file-upload
+                                label={uploaderLabel}
+                                accepted-file-formats={allowedExtensions}
+                                onuploadfinished={handleUploadFinished}
+                                disabled={disabled}>
+                        </c-modal-free-file-upload>
+            </div>
+            <div class="slds-grid slds-gutters">
+                <template for:each={fileUrls} for:item="bdnUrl">
+                    <lightning-formatted-url class="slds-col" key={bdnUrl.url} value={bdnUrl.url} tooltip="Show PDF" label={bdnUrl.title} target="_blank"></lightning-formatted-url>
+                </template>
+            </div>
+        </template>
+        <template if:true={fileId}>
+            <div class="slds-text-body_small" style="display: inline-flex;">
+                <div>
+                    <div class="slds-box_x-small slds-text-align_center slds-text-title_bold slds-m-around_xx-small" style="padding-top: 10px;">
+                        {fileName}
+                    </div>
+                </div>
+                <div>
+                    <div class="slds-box_x-small slds-text-align_center">
+                        <lightning-button-icon icon-name="utility:close"
+                                               variant="container"
+                                               onclick={removeFile}
+                                               alternative-text="Remove file"
+                                               title="remove"></lightning-button-icon>
+                    </div>
+                </div>
+            </div>
+        </template>
+
+    </lightning-card>
+</template>
+

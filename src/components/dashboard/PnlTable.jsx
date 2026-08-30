@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { format } from 'date-fns';
+import StemDetailLink from '@/components/common/StemDetailLink';
 import { compactTextValue, numericValue, textValue } from '@/lib/displayValue';
 import { cn } from '@/lib/utils';
 
@@ -12,11 +13,13 @@ const DELIVERY_FIELD = 'Delivery_Date__c';
 const FIELD_LABELS = {
   [BUYER_FIELD]: 'Buyer Invoice Amount',
   [SUPPLIER_FIELD]: 'Supplier Invoice Amount(s)',
+  'Name': 'STEM',
   'Receivable_Balance__c': 'Receivable Balance',
   'Buyer_Name__c': 'Buyer Name',
   '_Buyer_Group': 'Buyer Group',
   '_Supplier_Names': 'Supplier Names',
   '_Product_Quantities': 'Products / Quantity',
+  '_Extra_Cost_Names': 'Extra Costs',
   'ETA_Start_Date__c': 'ETA',
   [DELIVERY_FIELD]: 'Delivery Date',
   '__extraCostBuyCalc': 'EXTRA COSTS',
@@ -51,7 +54,16 @@ const BASE_HIDDEN_COLS = new Set([
   '_suppBrokerComm',
   '_Supplier_Name_List',
   '_Supplier_Invoice_Amount_List',
+  '_Buyer_Account',
+  '_Buyer_Group_Account',
+  '_Supplier_Accounts',
   '_Product_Quantity_List',
+  '_Extra_Cost_Name_List',
+  '_Extra_Cost_Names',
+  'Port__c',
+  'Port__r',
+  '_Exception_Schedule',
+  '_Has_Uncancelled_Line_Product_Item',
 ]);
 
 // Columns that are right-aligned (money)
@@ -119,6 +131,7 @@ const COL_ORDER = [
   '_Buyer_Group',
   '_Supplier_Names',
   '_Product_Quantities',
+  '_Extra_Cost_Names',
   'CreatedDate',
   DELIVERY_FIELD,
   BUYER_FIELD,
@@ -130,22 +143,47 @@ const COL_ORDER = [
   '__pnl__',
 ];
 
-export default function PnlTable({ records = [], onRowClick, counterpartyMode = 'buyer', scrollClassName = 'max-h-[520px]' }) {
+const accountDisplayLabel = (account, fallback = 'Account', showClKey = true) => {
+  if (!account) return fallback;
+  const name = account.name || fallback;
+  const clKey = String(account.clKey || '').trim();
+  const hasDistinctClKey = clKey && clKey.localeCompare(String(name).trim(), undefined, { sensitivity: 'accent' }) !== 0;
+  return showClKey && hasDistinctClKey ? `${name} · ${clKey}` : name;
+};
+
+function AccountInsightButton({ account, role, fallback, onOpen, className = '', showClKey = true }) {
+  const label = accountDisplayLabel(account, fallback, showClKey);
+  if (!account?.accountId || !onOpen) return <span className={className}>{label || '—'}</span>;
+  return (
+    <button
+      type="button"
+      className={cn('text-left font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2', className)}
+      onClick={() => onOpen({ ...account, role })}
+      title={`Open Account Insight for ${label}`}
+    >
+      {label}
+    </button>
+  );
+}
+
+export default function PnlTable({ records = [], onStemClick, onAccountClick, counterpartyMode = 'buyer', showAllCounterparties = false, scrollClassName = 'max-h-[520px]' }) {
   const [sortKey, setSortKey] = useState(DELIVERY_FIELD);
   const [sortDir, setSortDir] = useState(-1);
   const firstRecord = records[0] || {};
   const hiddenCols = useMemo(() => {
     const cols = new Set(BASE_HIDDEN_COLS);
-    if (counterpartyMode === 'supplier') {
-      cols.add('Buyer_Name__c');
-      cols.add('_Buyer_Group');
-      cols.add(BUYER_FIELD);
-    } else {
-      cols.add('_Supplier_Names');
-      cols.add(SUPPLIER_FIELD);
+    if (!showAllCounterparties) {
+      if (counterpartyMode === 'supplier') {
+        cols.add('Buyer_Name__c');
+        cols.add('_Buyer_Group');
+        cols.add(BUYER_FIELD);
+      } else {
+        cols.add('_Supplier_Names');
+        cols.add(SUPPLIER_FIELD);
+      }
     }
     return cols;
-  }, [counterpartyMode]);
+  }, [counterpartyMode, showAllCounterparties]);
   const rawCols = Object.keys(firstRecord).filter(k => k !== 'Id' && !hiddenCols.has(k));
   const hasBuyer = Object.prototype.hasOwnProperty.call(firstRecord, BUYER_FIELD);
   const hasSupplier = Object.prototype.hasOwnProperty.call(firstRecord, SUPPLIER_FIELD);
@@ -202,17 +240,11 @@ export default function PnlTable({ records = [], onRowClick, counterpartyMode = 
         </thead>
         <tbody>
           {sortedRecords.map((row, i) => {
-            const buyer = row[BUYER_FIELD] ?? null;
-            const supplier = row[SUPPLIER_FIELD] ?? null;
             const pnl = showPnl ? getPnl(row) : null;
             const pnlPositive = pnl != null && pnl >= 0;
 
             return (
-              <tr
-                key={row.Id || i}
-                className="border-b border-border/50 hover:bg-muted/30 transition-colors cursor-pointer"
-                onClick={() => onRowClick?.(row)}
-              >
+              <tr key={row.Id || i} className="border-b border-border/50 hover:bg-muted/30 transition-colors">
                 {displayCols.map(col => {
                   if (col === '__pnl__') {
                     return (
@@ -236,20 +268,58 @@ export default function PnlTable({ records = [], onRowClick, counterpartyMode = 
                     );
                   }
                   if (col === '_Supplier_Names') {
-                    const supplierNames = Array.isArray(row._Supplier_Name_List)
-                      ? row._Supplier_Name_List
-                      : String(row._Supplier_Names || '').split(',').map((name) => name.trim()).filter(Boolean);
+                    const supplierAccounts = Array.isArray(row._Supplier_Accounts) ? row._Supplier_Accounts : [];
+                    const supplierNames = supplierAccounts.length
+                      ? supplierAccounts
+                      : (Array.isArray(row._Supplier_Name_List)
+                        ? row._Supplier_Name_List.map((name) => ({ name }))
+                        : String(row._Supplier_Names || '').split(',').map((name) => ({ name: name.trim() })).filter((item) => item.name));
                     return (
                       <td key={col} className="py-2.5 px-3 min-w-72 text-foreground">
                         {supplierNames.length ? (
                           <div className="flex flex-wrap gap-1.5">
-                            {supplierNames.map((name) => (
-                              <span key={name} className="rounded-md border border-border bg-muted/30 px-2 py-0.5 text-[11px] leading-5 text-foreground">
-                                {name}
+                            {supplierNames.map((account, index) => account.accountId ? (
+                              <AccountInsightButton
+                                key={account.accountId}
+                                account={account}
+                                role="supplier"
+                                fallback={account.name}
+                                onOpen={onAccountClick}
+                                className="rounded-md border border-border bg-muted/30 px-2 py-0.5 text-[11px] leading-5"
+                              />
+                            ) : (
+                              <span key={`${account.name}-${index}`} className="rounded-md border border-border bg-muted/30 px-2 py-0.5 text-[11px] leading-5 text-foreground">
+                                {account.name}
                               </span>
                             ))}
                           </div>
                         ) : '—'}
+                      </td>
+                    );
+                  }
+                  if (col === 'Buyer_Name__c') {
+                    return (
+                      <td key={col} className="py-2.5 px-3 min-w-56 text-foreground">
+                        <AccountInsightButton
+                          account={row._Buyer_Account}
+                          role="buyer"
+                          fallback={fmtVal(col, row[col])}
+                          onOpen={onAccountClick}
+                          showClKey={false}
+                        />
+                      </td>
+                    );
+                  }
+                  if (col === '_Buyer_Group') {
+                    return (
+                      <td key={col} className="py-2.5 px-3 min-w-56 text-foreground">
+                        <AccountInsightButton
+                          account={row._Buyer_Group_Account}
+                          role="group"
+                          fallback={fmtVal(col, row[col])}
+                          onOpen={onAccountClick}
+                          showClKey={false}
+                        />
                       </td>
                     );
                   }
@@ -294,6 +364,31 @@ export default function PnlTable({ records = [], onRowClick, counterpartyMode = 
                             ))}
                           </div>
                         ) : '—'}
+                      </td>
+                    );
+                  }
+                  if (col === '_Extra_Cost_Names') {
+                    const extraCostNames = Array.isArray(row._Extra_Cost_Name_List)
+                      ? row._Extra_Cost_Name_List
+                      : String(row._Extra_Cost_Names || '').split(',').map((value) => value.trim()).filter(Boolean);
+                    return (
+                      <td key={col} className="min-w-64 px-3 py-2.5 text-foreground">
+                        {extraCostNames.length ? (
+                          <div className="flex flex-wrap gap-1.5">
+                            {extraCostNames.map((name) => (
+                              <span key={name} className="rounded-md border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] leading-5 text-amber-900">
+                                {name}
+                              </span>
+                            ))}
+                          </div>
+                        ) : '—'}
+                      </td>
+                    );
+                  }
+                  if (col === 'Name') {
+                    return (
+                      <td key={col} className="py-2.5 px-3 whitespace-nowrap text-foreground">
+                        <StemDetailLink stemId={row.Id} onOpen={onStemClick}>{fmtVal(col, row[col])}</StemDetailLink>
                       </td>
                     );
                   }

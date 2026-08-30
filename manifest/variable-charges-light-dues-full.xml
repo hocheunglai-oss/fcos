@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Package xmlns="http://soap.sforce.com/2006/04/metadata">
+    <types>
+        <members>VariableChargeInvoiceReadinessService</members>
+        <members>VariableChargeReadinessTest</members>
+        <name>ApexClass</name>
+    </types>
+    <types>
+        <members>STEM_Extra_Cost__c.Supplier_Cost_Input_Currency__c</members>
+        <members>STEM_Extra_Cost__c.Supplier_Cost_Input_Value__c</members>
+        <members>STEM_Extra_Cost__c.Supplier_Cost_USD_HKD_Rate__c</members>
+        <members>STEM_Extra_Cost__c.Supplier_Cost_FX_Settings_Revision__c</members>
+        <members>STEM_Extra_Cost__c.Light_Dues_Entry_Date__c</members>
+        <members>STEM_Extra_Cost__c.Light_Dues_Category__c</members>
+        <members>STEM_Extra_Cost__c.Light_Dues_NRT_Snapshot__c</members>
+        <members>STEM_Extra_Cost__c.Light_Dues_Rate_HKD__c</members>
+        <members>STEM_Extra_Cost__c.Light_Dues_Amount_HKD__c</members>
+        <members>STEM_Extra_Cost__c.Light_Dues_USD_HKD_Rate__c</members>
+        <members>STEM_Extra_Cost__c.Light_Dues_FX_Settings_Revision__c</members>
+        <members>STEM_Extra_Cost__c.Light_Dues_Calculation_Version__c</members>
+        <name>CustomField</name>
+    </types>
+    <types>
+        <members>STEM_Extra_Cost__c</members>
+        <name>CustomObject</name>
+    </types>
+    <types>
+        <members>FCOS_Variable_Charges_Integration</members>
+        <members>FCOS_Variable_Charges_User</members>
+        <name>PermissionSet</name>
+    </types>
+    <version>67.0</version>
+</Package>

@@ -1,0 +1,117 @@
+<template>
+    <lightning-card title="Record Type" icon-name="custom:custom18">
+        <template if:true={actionExecuting}>
+            <lightning-spinner alternative-text="Loading..."></lightning-spinner>
+        </template>
+        <div class="record-type-panel">
+            <div class="record-type-grid">
+                <div class="record-type-field record-type-field_primary">
+                    <lightning-combobox name="recordType" label="Record Type" placeholder="Select Record Type"
+                        value={recordTypeId} options={recordTypeIds} onchange={handleChangeRecordType}>
+                    </lightning-combobox>
+                </div>
+                <div class="record-type-field">
+                    <lightning-input name="isAgent" type="checkbox" label="Is Agent" variant="label-stacked"
+                        checked={isAgent} onchange={handleChangeRecordType}>
+                    </lightning-input>
+                </div>
+                <div class="record-type-field">
+                    <lightning-input name="isVariable" type="checkbox" label="Is Variable" variant="label-stacked"
+                        checked={isVariable} onchange={handleChangeRecordType}>
+                    </lightning-input>
+                </div>
+                <template if:false={isBrokerRecordType}>
+                    <div class="record-type-field">
+                        <lightning-input name="isBroker" type="checkbox" label="Is Broker" variant="label-stacked"
+                            checked={isBroker} onchange={handleChangeRecordType}>
+                        </lightning-input>
+                    </div>
+                </template>
+                <template if:true={isBroker}>
+                    <div class="record-type-field">
+                        <lightning-input name="hiddenBroker" type="checkbox" label="Hidden Broker Individual" variant="label-stacked"
+                            checked={hiddenBroker} onchange={handleChangeRecordType}>
+                        </lightning-input>
+                    </div>
+                    <div class="record-type-field">
+                        <lightning-input name="hiddenBrokerCompany" type="checkbox" label="Hidden Broker Company" variant="label-stacked"
+                            checked={hiddenBrokerCompany} onchange={handleChangeRecordType}>
+                        </lightning-input>
+                    </div>
+                </template>
+            </div>
+            <div class="invoicing-requirement">
+                <lightning-input name="invoicingRequirement" type="text" label="Invoicing Requirement" variant="label-stacked"
+                    value={invoicingRequirement} onchange={handleChangeInvoicingRequirement}>
+                </lightning-input>
+            </div>
+        </div>
+        <template if:true={isBroker}>
+            <div class="preference-panel">
+                <div class="preference-grid">
+                    <div>
+                        <lightning-radio-group 
+                            label="Confirmation Format"
+                            options={confirmationFormatOptions}
+                            value={selectedConfirmationFormat}
+                            onchange={handleConfirmationFormatChange}
+                            disabled={disabledRadioButtons}>
+                        </lightning-radio-group>    
+                    </div>
+                    <div>
+                    <lightning-radio-group 
+                        label="Confirmation Email"
+                        options={emailConfirmationOptions}
+                        value={selectedEmailConfirmation}
+                        onchange={handleEmailConfirmationChange}
+                        disabled={disabledRadioButtons}>
+                    </lightning-radio-group>
+                    </div>
+                    <div>
+                    <lightning-radio-group 
+                        label="Nomination Format"
+                        options={nominationFormatOptions}
+                        value={selectedNominationFormat}
+                        onchange={handleNominationFormatChange}
+                        disabled={disabledRadioButtons}>
+                    </lightning-radio-group>
+                    </div>
+                    <div>
+                    <lightning-radio-group 
+                        label="Nomination Email"
+                        options={emailNominationOptions}
+                        value={selectedEmailNomination}
+                        onchange={handleEmailNominationChange}
+                        disabled={disabledRadioButtons}>
+                    </lightning-radio-group>
+                    </div>
+                </div>
+                <div class="preference-grid preference-grid_secondary">
+                    <div>
+                        <lightning-radio-group 
+                            label="Invoice Format"
+                            options={invoiceFormatOptions}
+                            value={selectedInvoiceFormat}
+                            onchange={handleInvoiceFormatChange}
+                            disabled={disabledRadioButtons}>
+                        </lightning-radio-group>
+                    </div>
+                    <div>
+                    <lightning-radio-group 
+                        label="Invoice Email"
+                        options={emailInvoiceOptions}
+                        value={selectedEmailInvoice}
+                        onchange={handleEmailInvoiceChange}
+                        disabled={disabledRadioButtons}>
+                    </lightning-radio-group>    
+                    </div>
+                </div>
+            </div>
+        </template>
+        <template if:true={isShowedSavedButton}>
+            <div class="slds-align_absolute-center slds-m-top_x-small">
+                <lightning-button variant="brand" label="Save" onclick={saveRecord}></lightning-button>
+            </div>
+        </template>
+    </lightning-card>
+</template>

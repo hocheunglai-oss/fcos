@@ -1,0 +1,435 @@
+<template>
+    <lightning-tabset variant="scoped">
+        <template if:false={actionExecuted}>
+            <lightning-spinner alternative-text="Loading"></lightning-spinner>
+        </template>
+        <lightning-tab label="STEM" class={tabBackground}>
+            <div class="slds-m-bottom_small">
+                <lightning-card class="slds-m-bottom_small">
+                    <h3 slot="title">Invoicing Info (To Buyer)</h3>
+                    <div class="slds-p-horizontal_small">
+                        <lightning-record-edit-form record-id={recordId} class="main-form" object-api-name="STEM__c" onsuccess={handleSuccess} onsubmit={handleSubmit} onchange={handleChange} onerror={handleError}>
+                            <div class="slds-grid slds-wrap">
+                                <div class="slds-col slds-size_1-of-4"> 
+                                    <lightning-input-field name="main-form-field" field-name="Vessel__c" variant="label-stacked">
+                                    </lightning-input-field>
+                                    <lightning-input-field class={originatedClass} name="main-form-field" field-name="Account__c" variant="label-stacked" required>
+                                    </lightning-input-field>
+                                    <div class="slds-grid">
+                                        <div class="slds-col slds-size_1-of-2">
+                                            <lightning-output-field name="main-form-field" field-name="Invoice_Status__c"
+                                                variant="label-stacked">
+                                            </lightning-output-field>
+                                        </div>
+                                        <template if:true={isAcknowledgeReceiptVisible}>
+                                            <div style="margin-top: 5px; color: rgb(68, 68, 68)" class="slds-col slds-size_1-of-2">
+                                                <label for="acknowledgeReceiptField">{acknowledgeReceiptLabel}</label>
+                                                <lightning-input-field id="acknowledgeReceiptField" style="margin-top: 9px;" name="main-form-field" field-name="Acknowledge_Receipt__c"
+                                                    variant="label-hidden">
+                                                </lightning-input-field>
+                                            </div>
+                                        </template>
+                                    </div>
+                                    <lightning-input-field style="margin-top: 14px;" name="main-form-field" field-name="Office_Originated__c" variant="label-stacked">
+                                    </lightning-input-field>
+                                    <lightning-input-field style="margin-top: 21px;" name="main-form-field" field-name="Factoring_Invoice__c" variant="label-stacked">
+                                    </lightning-input-field>
+                                </div>
+                                <div class="slds-col slds-size_1-of-4">
+                                    <div class="slds-grid">
+                                        <div class="slds-col slds-size_1-of-2">
+                                            <lightning-input-field name="main-form-field" field-name="Port__c"
+                                             variant="label-stacked" required>
+                                            </lightning-input-field>
+                                        </div>
+                                        <div class="slds-col slds-size_1-of-2">
+                                            <lightning-input-field name="main-form-field" field-name="Location_Details__c"
+                                             variant="label-stacked">
+                                            </lightning-input-field>
+                                        </div>
+                                    </div>                                    
+                                    <div class="slds-grid">
+                                        <div class="slds-col slds-size_1-of-3">
+                                            <lightning-combobox name="paymentTermPicklist"
+                                                        label="Buyer Payment Term"
+                                                        value={paymentTermValue}
+                                                        placeholder="Select Payment Term"
+                                                        options={paymentTermOptions}
+                                                        required
+                                                        onchange={handlePaymentTermChange}>
+                                            </lightning-combobox>
+                                        </div>
+                                        <div class="slds-col slds-size_1-of-3 slds-grid">
+                                            <div class="slds-m-left_x-large">
+                                                <lightning-input-field name="main-form-field"
+                                                    field-name="Partial_CIA__c" variant="label-stacked">
+                                                </lightning-input-field>
+                                            </div>                                           
+                                        </div>
+                                        <div class="slds-col slds-size_1-of-3">
+                                            <lightning-input-field name="main-form-field"
+                                                field-name="Partial_Lumpsum_Sell_At__c" variant="label-stacked"
+                                                value={partialLumpsumSellAt} disabled={isDisabledPartialCIA}>
+                                            </lightning-input-field>
+                                        </div>
+                                    </div>
+                                    
+                                    <lightning-input-field name="main-form-field" field-name="PSPRS__c" variant="label-stacked">
+                                    </lightning-input-field>
+                                    <lightning-input-field style="margin-top: 7px;" name="main-form-field" field-name="Contact__c" variant="label-stacked">
+                                    </lightning-input-field>
+                                    <p style="white-space: pre-line; margin: 40px 10px 10px 10px;">
+                                        {traderText}
+                                    </p>
+                                </div>
+                                <div class="slds-col slds-size_1-of-6 slds-m-top_xx-small">
+                                    <label for="ETA_ETB__c" class="classLabel">Schedule</label>
+                                    <div class="slds-grid">
+                                        <div class="slds-col slds-size_4-of-6">
+                                            <p class="date-range">
+                                                {dateRange}
+                                            </p>
+                                        </div>
+                                        <div class="slds-col slds-size_2-of-6">
+                                            <lightning-button class="slds-m-top_small" variant="brand-outline" name="openStem"
+                                            label="Edit" onclick={openStemModal}>
+                                            </lightning-button>
+                                        </div>
+                                    </div>
+                                    <div style="margin-top: 9px;">
+                                        <lightning-input-field name="main-form-field" field-name="Buyer_Broker__c" variant="label-stacked">
+                                        </lightning-input-field>
+                                    </div>
+                                    <div>
+                                        <lightning-input name="main-form-field" date-style="short" variant="label-stacked" value={expectedDeliveryDateValue} onchange={handleChangeExpectedDeliveryDate} type="date" label="Expected Delivery Date" required>
+                                        </lightning-input>
+                                    </div>
+                                    <div class="slds-grid slds-gutters">
+                                        <div class="slds-col slds-size_4-of-6">
+                                            <lightning-combobox name="disputeStatusPicklist" label="Dispute Status" value={disputeStatusValue}
+                                                placeholder="Select Dispute Status" options={disputeStatusOptions} required
+                                                onchange={handleDisputeStatusChange}>
+                                            </lightning-combobox>
+                                        </div>
+                                        <div class="slds-col slds-size_2-of-6" style="margin-top: 21px;">
+                                            <lightning-button variant="brand-outline" name="openDisputes" label="Select" onclick={openDisputeAccounts}>
+                                            </lightning-button>
+                                        </div>
+                                    </div>
+                                    <div style="margin-top: 9px;">
+                                        <lightning-radio-group
+                                            name="holdPayment"
+                                            label="Hold Payment"
+                                            options={holdPaymentOptions}
+                                            value={holdPaymentValue}
+                                            type="radio"
+                                            onchange={handleHoldPaymentChange}>
+                                        </lightning-radio-group>
+                                    </div>
+                                </div>
+                                <div class="slds-col slds-size_1-of-4">
+                                    <lightning-input-field field-name="Agent__c"
+                                        variant="label-stacked" class="slds-scrollable text-area" name="main-form-field">
+                                    </lightning-input-field>
+                                    <lightning-input-field field-name="Label__c"
+                                        variant="label-stacked" class="slds-scrollable" name="main-form-field">
+                                    </lightning-input-field>
+                                </div>                                
+                            </div>
+                            <template if:true={showSaveButton}>
+                                <div class="slds-grid slds-gutters slds-grid_align-center">
+                                    <div class="slds-col">
+                                        <lightning-button class="slds-m-top_small general-stem-info-buttons" variant="brand" type="submit" name="update"
+                                            label="Save">
+                                        </lightning-button>
+                                    </div>
+                                    <div class="slds-col">
+                                        <lightning-button
+                                            class="slds-m-top_small"
+                                            label="Cancel"
+                                            onclick={handleReset}
+                                        ></lightning-button>
+                                    </div> 
+                                </div>
+                            </template>
+                        </lightning-record-edit-form>  
+                    </div> 
+                </lightning-card>
+                <div class="slds-m-top_small">
+                    <lightning-card>
+                        <h3 slot="title">Buyer Brokers (Secondary)</h3>
+                        <div class="slds-grid slds-wrap slds-p-horizontal_small">
+                            <template for:each={stemBuyerBrokers} for:item="stemBuyerBroker">
+                                <div key={stemBuyerBroker.Id} class="slds-col slds-size_1-of-4">
+                                    <lightning-record-edit-form object-api-name="STEM_Buyer_Broker__c" record-id={stemBuyerBroker.Id}
+                                        class="buyer-broker-form" onchange={handleBuyerBrokerChange} onsubmit={handleSubmitBuyerBroker}
+                                        onsuccess={handleSuccessBuyerBroker}>
+                                        <div class="slds-grid slds-gutters">
+                                            <div class="slds-col slds-size_10-of-12">
+                                                <lightning-input-field field-name="Buyer_Broker__c" variant="label-stacked"
+                                                    data-id={stemBuyerBroker.Id} required>
+                                                </lightning-input-field>
+                                            </div>
+                                            <lightning-button onclick={removeBuyerBroker} data-id={stemBuyerBroker.Id} variant="base"
+                                                title="Remove Input" icon-name="utility:close"
+                                                class="slds-col slds-size_1-of-12 slds-m-top_medium slds-m-left_small">
+                                            </lightning-button>
+                                        </div>
+                                        <input type="submit" class="hidden-btn" />
+                                    </lightning-record-edit-form>
+                                </div>
+                            </template>
+                            <template for:each={newStemBuyerBrokers} for:item="newStemBuyerBroker">
+                                <div key={newStemBuyerBroker.id} class="slds-col slds-size_1-of-4">
+                                    <lightning-record-edit-form object-api-name="STEM_Buyer_Broker__c" class="buyer-broker-form"
+                                        onchange={handleBuyerBrokerChange} onsubmit={handleSubmitBuyerBroker}
+                                        onsuccess={handleSuccessBuyerBroker}>
+                                        <div class="slds-grid slds-gutters">
+                                            <div class="slds-col slds-size_10-of-12">
+                                                <lightning-input-field field-name="Buyer_Broker__c" variant="label-stacked"
+                                                    data-id={newStemBuyerBroker.id} required>
+                                                </lightning-input-field>
+                                            </div>
+                                            <lightning-button onclick={removeNewBuyerBroker} data-id={newStemBuyerBroker.id} variant="base"
+                                                title="Remove Input" icon-name="utility:close"
+                                                class="slds-col slds-size_1-of-12 slds-m-top_medium slds-m-left_xx-small">
+                                            </lightning-button>
+                                        </div>
+                                        <input type="submit" class="hidden-btn" />
+                                    </lightning-record-edit-form>
+                                </div>
+                            </template>
+                            <div class="slds-col slds-size_1-of-4 slds-m-top_large">
+                                <div class="slds-m-left_small">
+                                    <lightning-button-icon size="x-small" icon-name="utility:add" variant="brand" alternative-text="Add Input"
+                                        onclick={addNewBuyerBroker}>
+                                    </lightning-button-icon>
+                                </div> 
+                            </div>
+                        </div>
+                    
+                        <template if:true={isBuyerBrokerChanged}>
+                            <div class="slds-grid slds-gutters slds-align_absolute-center">
+                                <div class="slds-col">
+                                    <lightning-button onclick={saveBuyerBrokers} variant="brand"
+                                        label="Save Buyer Brokers"></lightning-button>
+                                </div>
+                                <div class="slds-col">
+                                    <lightning-button onclick={cancelSavebBuyerBrokers} label="Cancel"></lightning-button>
+                                </div>
+                            </div>
+                        </template>
+                    </lightning-card>
+                </div>
+                <template if:true={showEditStem}>
+                    <c-fcb-edit-stem-form-modal
+                      record-id={recordId}
+                      current-stem={stem}
+                      onclose={handleModalCloseEvent}
+                    >
+                    </c-fcb-edit-stem-form-modal>
+                </template>
+                <template if:true={showDisputeAccounts}>
+                    <c-fcb-select-dispute-accounts
+                      record-id={recordId}
+                      onclose={handleModalCloseEvent}
+                    >
+                    </c-fcb-select-dispute-accounts>
+                </template>   
+            </div>
+            <c-fcb-stem-line-item-table record-id={recordId} onrefreshproductinfo={handleRefreshProductInfo} stem={stem}></c-fcb-stem-line-item-table>   
+            <div class="slds-m-bottom_small">
+                <c-fcb-stem-extra-costs stem-line-item-id="" record-id={recordId} show-quantity-b-d-n={showQuantityBDN}
+                    add-button-title="Add STEM Extra Charge" onrefreshproductinfo={handleRefreshProductInfo}></c-fcb-stem-extra-costs>
+            </div>
+            <c-fcb-stem-unofficial-compensations record-id={recordId}></c-fcb-stem-unofficial-compensations>
+            <template if:true={showDisputes}>  
+                <lightning-card title="Disputes" icon-name="custom:custom53" class="slds-m-bottom_small">
+                    <c-fcb-disputes record-id={recordId}></c-fcb-disputes>
+                </lightning-card>      
+            </template>
+        </lightning-tab>
+        <lightning-tab label="Profit Summary" class={tabBackground}>
+            <c-fcb-stem-extra-cost-tab record-id={recordId}></c-fcb-stem-extra-cost-tab>
+        </lightning-tab>
+        <lightning-tab label="BDNs" class={tabBackground}>
+            <!-- STEM LINE ITEMS -->
+            <div class="slds-m-bottom_small">
+                <lightning-card>
+                    <template if:true={showSaveAllButton}>
+                        <div class="slds-grid slds-gutters slds-grid_align-center">
+                            <div class="slds-col">
+                                <lightning-button variant="brand" label="Save All" title="Save All" onclick={handleSubmitAllProductLineItems}
+                                    class="slds-align_absolute-center" disabled={isSavingBdnDetails}>
+                                </lightning-button>
+                            </div>
+                            <div class="slds-col">
+                                <lightning-button
+                                    class="slds-m-top_small"
+                                    label="Cancel"
+                                    onclick={handleStemLineItemReset}
+                                    disabled={isSavingBdnDetails}
+                                ></lightning-button>
+                            </div> 
+                        </div>
+                        <template if:true={isSavingBdnDetails}>
+                            <div class="slds-is-relative slds-p-vertical_large">
+                                <lightning-spinner alternative-text="Saving BDN details" size="small"></lightning-spinner>
+                            </div>
+                        </template>
+                    </template>
+                    
+                    <template for:each={stemLineItems} for:item="stemLineItem" for:index="index">
+                        <div class="slds-var-p-around_small" key={stemLineItem.Id}>
+                            <lightning-card>
+                                <c-fcb-stem-line-item data-entry-id="test" stem-line-item={stemLineItem} record-id={recordId} onchangeinput={handleStemLineItemChange}>
+                                </c-fcb-stem-line-item>
+                            </lightning-card>
+                        </div>
+                    </template>
+                </lightning-card>
+            </div>
+            <!-- END STEM LINE ITEMS -->
+        </lightning-tab>
+        <lightning-tab label="Supplier Invoices" class={tabBackground}>
+            <div class="slds-m-bottom_small">
+                <lightning-card>
+                    <c-fcb-supplier-invoices record-id={recordId} stem={stem}></c-fcb-supplier-invoices>
+                </lightning-card>
+            </div>
+        </lightning-tab>
+        <lightning-tab label="Commission Invoices" class={tabBackground}>
+            <!-- COMISSION INVOICES -->
+            <div class="slds-m-bottom_small">
+                <lightning-card>
+                    <template if:true={showSaveAllCommissionButton}>
+                        <div class="slds-grid slds-gutters slds-grid_align-center">
+                            <div class="slds-col">
+                                <lightning-button variant="brand" label="Save All" title="Save All" onclick={handleSubmitAllCommisions}
+                                    class="slds-align_absolute-center">
+                                </lightning-button>
+                            </div>
+                            <div class="slds-col">
+                                <lightning-button
+                                    class="slds-m-top_small"
+                                    label="Cancel"
+                                    onclick={handleCommissionReset}
+                                ></lightning-button>
+                            </div> 
+                        </div>
+                    </template>
+                    <!-- <template for:each={stemLineItems} for:item="stemLineItem" for:index="index">
+                        <div class="slds-var-p-around_small" key={stemLineItem.Id}>
+                            <lightning-card>
+                                <c-fcb-commision-invoices stem-line-item={stemLineItem} record-id={recordId} onchangeinput={handleCommissionChange}>
+                                </c-fcb-commision-invoices>
+                            </lightning-card>
+                        </div>
+                    </template> -->
+                    <c-fcb-commission-invoice-form stem-line-items={stemLineItems} record-id={recordId} onchangeinput={handleCommissionChange}>
+                    </c-fcb-commission-invoice-form>
+                </lightning-card>
+            </div>
+            <!-- COMISSION INVOICES -->
+        </lightning-tab>
+        <lightning-tab label="Invoices" class={invoiceBackground}> 
+            <!--PRODUCT INFO-->
+            <div class="slds-m-bottom_small">
+                <lightning-card>
+                    <div class="slds-grid slds-wrap">
+                        <div class="slds-col slds-size_1-of-3">
+                            <lightning-input class="delivery-date-input stem-dates-field" type="date" label={deliveryDateLabel}
+                                date-style="short" variant="label-stacked" value={deliveryDateValue} onchange={handleChangeDeliveryDate}
+                                required={deliveryDateRequired} disabled={deliveryDateDisabled}>
+                            </lightning-input>
+                        </div>
+                        <div class="slds-col slds-size_1-of-3">
+                            <lightning-input class="due-date-checkbox slds-m-top_x-small" type="checkbox" label="Due Date Override"
+                                checked={dueDateOverride} disabled={dueDateOverrideDisabled} onchange={provideDueDate} variant="label-stacked">
+                            </lightning-input>
+                        </div>
+                        <div class="slds-col slds-size_1-of-3">
+                            <lightning-input class="due-date-input" type="date" label="Invoice Due Date" date-style="short"
+                                variant="label-stacked" value={invoiceDueDateValue} onchange={handleChangeInvoiceDueDate} required
+                                disabled={dueDateDisabled}>
+                            </lightning-input>
+                            <template if:true={showCancellationChargeDueDateHint}>
+                                <div class="slds-text-body_small slds-text-color_weak slds-m-top_xx-small" role="note">
+                                    {cancellationChargeDueDateHint}
+                                </div>
+                            </template>
+                        </div>
+                        <template if:true={fcbsReferenceVisible}>
+                            <div class="slds-col slds-size_1-of-3">
+                                <lightning-input class="fcbs-ref" type="text" label="FCBS Reference" max-length="15"
+                                    variant="label-stacked" value={fcbsReference} onchange={handleChangeFcbsReference} required>
+                                </lightning-input>
+                            </div>
+                        </template>
+                    </div>
+                    <div class="slds-m-top_x-small slds-m-bottom_x-small slds-grid slds-grid_align-space">
+                        <div class="slds-col">
+                            <lightning-button class="general-stem-info-buttons" data-name="createInvoiceButton" variant="brand"
+                                label={invoiceButtonLabel} title={invoiceButtonLabel} disabled={createInvoiceDisabled}
+                                onclick={generateInvoice}>
+                            </lightning-button>
+                            <template if:true={createInvoiceDisabled}>
+                                <lightning-helptext content={createInvoiceDisabledMessage}></lightning-helptext>
+                            </template>
+                        </div>
+                        <div class="slds-col">
+                            <lightning-button class="general-stem-info-buttons" data-name="lastInvoiceForm" variant="brand"
+                                label="Last Saved Invoice Form" title="Last Saved Invoice Form" disabled={disabledLastInvoiceForm}
+                                onclick={generateInvoice}>
+                            </lightning-button>
+                        </div>
+                    </div>
+                    <c-fcb-invoice-form></c-fcb-invoice-form>
+                    <lightning-datatable class="product-info" columns={productColumns} data={productInfo} key-field="Id" onrowselection={handleProductChange}> </lightning-datatable>    
+                </lightning-card>
+            </div>
+            <!--END OF PRODUCT INFO-->
+
+            <!--INVOICES-->
+            <div class="slds-m-bottom_small">
+                <lightning-card>
+                    <div class="slds-align_absolute-center slds-m-top_x-small slds-m-bottom_x-small">
+                        <lightning-button class="general-stem-info-buttons" variant="brand" label="Send Invoice" title="Send Invoice" onclick={sendInvoice} disabled={sendInvoiceDisabled}>
+                        </lightning-button>
+                    </div>
+                    <template if:true={openEmail}>
+                        <c-fcb-email-invoice-modal current-stem={stem} record-id={recordId} selected-items={selectedItems} onrefreshinvoicetable={handleInvoiceTableRefresh}></c-fcb-email-invoice-modal>
+                    </template>
+                    <lightning-datatable class="invoice-info" columns={invoiceColumns} data={invoices} key-field="Id" onsave={handleSave} onrowselection={handleInvoiceChange} onrowaction={handleRowAction}></lightning-datatable>    
+                </lightning-card>
+            </div>
+            <template if:true={showMessage}>
+                <div class="slds-m-top_medium">
+                    <lightning-card title="Message" icon-name="custom:custom18">
+                        <lightning-record-edit-form record-id={recordId} class="main-form" object-api-name="STEM__c">
+                            <div class="slds-p-horizontal_small" >
+                                <lightning-input-field field-name="Message__c" disabled variant="label-hidden">
+                                </lightning-input-field>
+                            </div>                           
+                        </lightning-record-edit-form>
+                    </lightning-card>
+                </div>
+            </template>
+            <!--END OF INVOICES-->
+        </lightning-tab>
+        <lightning-tab label="Payments" class={tabBackground}>
+            <!--PAYMENTS-->
+            <div class="slds-m-bottom_small">
+                <lightning-card title="Receivable Payments" icon-name="custom:custom17">
+                    <c-fcb-stem-payment stem-id={recordId}></c-fcb-stem-payment>
+                </lightning-card>
+            </div>
+            <div class="slds-m-bottom_small">
+                <lightning-card title="Payable Payments" icon-name="custom:custom17">
+                    <c-fcb-supplier-invoice-payment stem-id={recordId} stem={stem} ongettotalpaidamount={handleTotalPaidAmount}></c-fcb-supplier-invoice-payment>
+                </lightning-card>
+            </div>
+            <!--END OF PAYMENTS-->
+        </lightning-tab>
+    </lightning-tabset>
+</template>

@@ -1,0 +1,1 @@
+drop index if exists public.account_pic_directory_rows_account_sequence_idx;

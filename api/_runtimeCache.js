@@ -1,5 +1,10 @@
 import { createHash } from 'node:crypto';
-import { recordCacheEvent, runtimeCacheWriteAllowed } from './_requestTelemetry.js';
+import {
+  currentRequestTelemetry,
+  recordCacheEvent,
+  recordSalesforceCacheHit,
+  runtimeCacheWriteAllowed,
+} from './_requestTelemetry.js';
 
 export const RUNTIME_CACHE_MAX_BYTES = Math.floor(1.8 * 1024 * 1024);
 
@@ -226,6 +231,9 @@ export async function getOrLoadRuntimeCache({
     try {
       const entry = await readEntry(adapter, key, start);
       if (usableEntry(entry, start)) {
+        if (entry.sources?.salesforce === true) {
+          recordSalesforceCacheHit(entry.sources.salesforceFetchedAt || entry.fetchedAt);
+        }
         const result = {
           value: entry.value,
           cache: cacheMetadata('hit', key, entry.fetchedAt, ttl, normalizedTags),
@@ -264,13 +272,26 @@ export async function getOrLoadRuntimeCache({
 
 async function loadAndOptionallyCache({ adapter, key, ttl, tags, loader, now, status, cacheError = null }) {
   const deduplicate = status !== 'bypass';
-  if (deduplicate && inFlightLoads.has(key)) return inFlightLoads.get(key);
+  if (deduplicate && inFlightLoads.has(key)) {
+    const result = await inFlightLoads.get(key);
+    if (result.sources?.salesforce === true && currentRequestTelemetry()?.salesforce?.backed !== true) {
+      recordSalesforceCacheHit(result.sources.salesforceFetchedAt || result.cache?.fetchedAt);
+    }
+    return result;
+  }
   const loadToken = Symbol(key);
   latestLoadTokens.set(key, loadToken);
 
   const promise = (async () => {
+    const salesforceReadsBefore = currentRequestTelemetry()?.salesforce?.sourceReads || 0;
     const value = await loader();
     const fetchedAt = cacheNow(now);
+    const telemetry = currentRequestTelemetry();
+    const salesforceBacked = (telemetry?.salesforce?.sourceReads || 0) > salesforceReadsBefore;
+    const sources = salesforceBacked ? {
+      salesforce: true,
+      salesforceFetchedAt: new Date(fetchedAt).toISOString(),
+    } : { salesforce: false };
     let finalStatus = status;
     let finalError = cacheError;
 
@@ -278,7 +299,7 @@ async function loadAndOptionallyCache({ adapter, key, ttl, tags, loader, now, st
       finalStatus = 'bypass';
       finalError = new Error('Runtime cache write skipped after an upstream partial failure');
     } else if (ttl > 0 && latestLoadTokens.get(key) === loadToken) {
-      const entry = { value, fetchedAt, expiresAt: fetchedAt + ttl * 1000, tags };
+      const entry = { value, fetchedAt, expiresAt: fetchedAt + ttl * 1000, tags, sources };
       try {
         if (runtimeCacheJsonSize(entry) > RUNTIME_CACHE_MAX_BYTES) {
           finalStatus = 'oversize';
@@ -294,6 +315,7 @@ async function loadAndOptionallyCache({ adapter, key, ttl, tags, loader, now, st
     return {
       value,
       cache: cacheMetadata(finalStatus, key, fetchedAt, ttl, tags, finalError),
+      sources,
     };
   })();
 

@@ -35,6 +35,7 @@ export function salesforceLimitFromBody(body = {}) {
   };
 }
 
+/** @param {{handler?: string, requestId?: string}} [options] */
 function initialTelemetry({ handler, requestId } = {}) {
   return {
     requestId: requestId || randomUUID(),
@@ -42,6 +43,9 @@ function initialTelemetry({ handler, requestId } = {}) {
     startedAtMs: Date.now(),
     salesforce: {
       quotaCalls: 0,
+      sourceReads: 0,
+      backed: false,
+      fetchedAt: null,
       logicalQueries: 0,
       compositeCalls: 0,
       rows: 0,
@@ -63,6 +67,13 @@ function initialTelemetry({ handler, requestId } = {}) {
       fetchedAt: null,
       writeAllowed: true,
       skipReason: null,
+    },
+    emailRouter: {
+      operation: null,
+      durationMs: 0,
+      graphMs: 0,
+      storageMs: 0,
+      continuedInBackground: false,
     },
     error: null,
   };
@@ -90,12 +101,23 @@ export function recordSalesforceCall({
 } = {}) {
   const telemetry = currentRequestTelemetry();
   if (!telemetry) return;
+  telemetry.salesforce.sourceReads += 1;
+  telemetry.salesforce.backed = true;
+  telemetry.salesforce.fetchedAt = new Date().toISOString();
   telemetry.salesforce.quotaCalls += 1;
   telemetry.salesforce.logicalQueries += Math.max(0, Number(logicalQueries) || 0);
   telemetry.salesforce.compositeCalls += composite ? 1 : 0;
   telemetry.salesforce.rows += Math.max(0, Number(rows) || 0);
   telemetry.salesforce.durationMs += Math.max(0, Number(durationMs) || 0);
   if (limit) telemetry.salesforce.limit = limit;
+}
+
+export function recordSalesforceCacheHit(fetchedAt) {
+  const telemetry = currentRequestTelemetry();
+  if (!telemetry) return;
+  telemetry.salesforce.sourceReads += 1;
+  telemetry.salesforce.backed = true;
+  telemetry.salesforce.fetchedAt = fetchedAt ? new Date(fetchedAt).toISOString() : new Date().toISOString();
 }
 
 export function recordSalesforceLimit(limit) {
@@ -109,6 +131,19 @@ export function recordSupabaseRequest({ durationMs = 0, ok = true } = {}) {
   telemetry.supabase.requests += 1;
   telemetry.supabase.durationMs += Math.max(0, Number(durationMs) || 0);
   if (!ok) telemetry.supabase.failures += 1;
+}
+
+/** @param {{operation?: string, totalMs?: number, graphMs?: number, storageMs?: number, continuedInBackground?: boolean}} [options] */
+export function recordEmailRouterOperation({ operation, totalMs = 0, graphMs = 0, storageMs = 0, continuedInBackground = false } = {}) {
+  const telemetry = currentRequestTelemetry();
+  if (!telemetry) return;
+  telemetry.emailRouter = {
+    operation: String(operation || 'unknown').replaceAll(/[^a-z0-9_.-]/gi, '_').slice(0, 80),
+    durationMs: Math.max(0, Number(totalMs) || 0),
+    graphMs: Math.max(0, Number(graphMs) || 0),
+    storageMs: Math.max(0, Number(storageMs) || 0),
+    continuedInBackground: continuedInBackground === true,
+  };
 }
 
 export function recordCacheEvent(status, fetchedAt = null) {
@@ -169,6 +204,10 @@ export function telemetryResponseHeaders() {
     'x-fcos-cache': telemetry.cache.status,
     'x-fcos-data-fetched-at': telemetry.cache.fetchedAt || new Date().toISOString(),
     'x-fcos-salesforce-calls': String(telemetry.salesforce.quotaCalls),
+    'x-fcos-salesforce-backed': telemetry.salesforce.backed ? '1' : '0',
+    'x-fcos-salesforce-fetched-at': telemetry.salesforce.backed
+      ? telemetry.salesforce.fetchedAt || telemetry.cache.fetchedAt || new Date().toISOString()
+      : '',
   };
 }
 
@@ -197,6 +236,11 @@ export function requestTelemetrySummary(status = 200) {
     supabaseRequests: telemetry.supabase.requests,
     supabaseFailures: telemetry.supabase.failures,
     supabaseDurationMs: Math.round(telemetry.supabase.durationMs),
+    emailRouterOperation: telemetry.emailRouter.operation,
+    emailRouterDurationMs: Math.round(telemetry.emailRouter.durationMs),
+    emailRouterGraphMs: Math.round(telemetry.emailRouter.graphMs),
+    emailRouterStorageMs: Math.round(telemetry.emailRouter.storageMs),
+    emailRouterBackground: telemetry.emailRouter.continuedInBackground,
     errorName: telemetry.error?.name || null,
     errorCode: telemetry.error?.code || null,
     errorMessage: telemetry.error?.message || null,
