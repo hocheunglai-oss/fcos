@@ -29,13 +29,15 @@ test('Xero Portal manual keeps complete parallel English and Traditional Chinese
   const english = XERO_PORTAL_MANUALS.en;
   const traditionalChinese = XERO_PORTAL_MANUALS['zh-Hant'];
   assert.deepEqual(traditionalChinese.sections.map((section) => section.id), english.sections.map((section) => section.id));
-  assert.equal(english.workflow.length, 6);
+  assert.equal(english.workflow.length, 4);
   assert.equal(traditionalChinese.workflow.length, english.workflow.length);
+  assert.deepEqual(traditionalChinese.tasks.map((task) => task[0]), english.tasks.map((task) => task[0]));
 
   for (const manual of [english, traditionalChinese]) {
     assert.ok(manual.title);
     assert.ok(manual.subtitle);
     assert.equal(manual.important.length, 3);
+    assert.equal(manual.tasks.length, 4);
     assert.equal(manual.sections.reduce((sum, section) => sum + section.controls.length, 0), 49);
     for (const section of manual.sections) {
       assert.ok(section.title);
@@ -64,9 +66,13 @@ test('Xero Portal exposes the bilingual manual from both the header and tabs', a
   const page = await readFile(new URL('../src/pages/XeroPortal.jsx', import.meta.url), 'utf8');
   const manual = await readFile(new URL('../src/components/xero/XeroPortalManual.jsx', import.meta.url), 'utf8');
   assert.match(page, /setTab\('manual'\)/);
-  assert.match(page, /TabsTrigger value="manual">User Manual<\/TabsTrigger>/);
-  assert.match(page, /<XeroPortalManual \/>/);
+  assert.match(page, /TabsTrigger value="manual">\{copy\.tabs\.manual\}<\/TabsTrigger>/);
+  assert.match(page, /<XeroPortalManual language=\{language\} onLanguageChange=\{setLanguage\} \/>/);
   assert.match(manual, /XERO_PORTAL_MANUAL_LANGUAGES\.map/);
-  assert.match(manual, /Buttons and controls/);
-  assert.match(manual, /按鈕及控制項/);
+  assert.match(manual, /Button-by-button reference/);
+  assert.match(manual, /按鈕逐項參考/);
+  assert.match(manual, /manual\.tasks\.map/);
+  assert.match(manual, /<Accordion/);
+  assert.match(manual, /<details/);
+  assert.doesNotMatch(manual, /<table/);
 });

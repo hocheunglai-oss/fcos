@@ -298,12 +298,12 @@ test('financial handlers and Finance review UI are registered without a schedule
     assert.match(policies, new RegExp(name));
   }
   assert.match(server, /\.\.\.xeroHandlers/);
-  assert.match(ui, /Finance reviewed/);
-  assert.match(ui, /Financial write gate locked/);
-  assert.match(ui, /Legacy suggestions are never approved automatically/);
-  assert.match(ui, /Suggested from/);
-  assert.match(ui, /Approve mapping/);
+  assert.match(ui, /financialCopy\.financeReviewed/);
+  assert.match(ui, /financialCopy\.gateLocked/);
+  assert.match(ui, /financialCopy\.mappingDescription/);
+  assert.match(ui, /financialCopy\.suggested/);
+  assert.match(ui, /financialCopy\.approveMapping/);
   assert.match(ui, /MAPPING_PAGE_SIZE = 25/);
-  assert.match(ui, /suggestions first/);
+  assert.match(ui, /financialCopy\.mappingRange/);
   assert.doesNotMatch(`${server}\n${xeroHandlers}`, /xeroFinancialSyncCron/);
 });
