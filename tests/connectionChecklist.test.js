@@ -79,7 +79,7 @@ test('one schema-validated policy owns the approved targets and API-first order'
     syncAudience: 'fcos-identity-sync',
     syncEndpoint: 'https://fcos.fcuno.com/api/fcuno/identity-sync',
     providerRepository: 'hocheunglai-oss/bunker-map',
-    providerCommit: '7a3df3e4b75401b0ec3397271bf05c4b82cdbe8f',
+    providerCommit: 'a6c7637d63fafd2ff71aaf08d90c6aa504c73ba0',
     contractPath: 'contracts/fcuno-fcos/v1',
     contractSha256: '7fc54e7c3bd79fb014ad81dc6d9190d021549d9428486ef85ed78fdff95d7cc2',
     providerVercelProjectId: 'prj_8OifIFDF7Gcpd2i4VSRJOHjL3A9Q',
