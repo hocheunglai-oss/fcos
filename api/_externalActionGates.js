@@ -44,6 +44,7 @@ const GATE_DEFINITIONS = Object.freeze({
   xero_contact_sync: {
     envName: 'FCOS_ENABLE_XERO_CONTACT_SYNC',
     defaultEnabled: false,
+    expectedState: 'live',
     label: 'Xero portal synchronization',
     description: 'Xero contact creation, contact rename/archive, and receipt draft-bill synchronization.',
   },
@@ -71,7 +72,7 @@ export function externalActionGates(env = process.env) {
     label: definition.label,
     description: definition.description,
     enabled: definitionEnabled(definition, env),
-    expectedState: definition.defaultEnabled ? 'live' : 'uat_gated',
+    expectedState: definition.expectedState || (definition.defaultEnabled ? 'live' : 'uat_gated'),
     control: definition.defaultEnabled ? 'emergency_kill_switch' : 'explicit_enablement',
   }]));
 }

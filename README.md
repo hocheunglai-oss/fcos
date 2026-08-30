@@ -2,7 +2,7 @@
 
 FCOS is a Vite/React analytics app backed by Vercel serverless API routes. It connects directly to Salesforce from the server side.
 
-FCOS is the live Supabase extension to Salesforce. Its existing Salesforce writeback, Google Drive report archive, and scheduled/manual email functions remain intact and enabled by default because users rely on them today. Emergency server controls can pause each connector without removing or replacing its legacy implementation. New bank execution and payment-promotion paths remain disabled until their respective business UAT approval.
+FCOS is the live Supabase extension to Salesforce. Its existing Salesforce writeback, Google Drive market-report archive, scheduled/manual email functions, and explicitly enabled Xero Portal contact synchronization remain intact because users rely on them today. Emergency server controls can pause the established connectors without removing or replacing their implementation. New bank execution and payment-promotion paths remain disabled until their respective business UAT approval.
 
 ## Local Development
 
@@ -21,12 +21,12 @@ FCOS_DISABLE_GOOGLE_DRIVE=false
 FCOS_DISABLE_EMAIL_DELIVERY=false
 ```
 
-New external actions remain explicitly gated during parallel UAT:
+Xero Portal contact synchronization remains explicitly enabled in Production so a missing setting fails closed. Bank execution and payment promotion remain gated during UAT:
 
 ```bash
 FCOS_ENABLE_BANK_EXECUTION=false
 FCOS_ENABLE_PAYMENT_PROMOTION=false
-FCOS_ENABLE_XERO_CONTACT_SYNC=false
+FCOS_ENABLE_XERO_CONTACT_SYNC=true
 ```
 
 Changing any control is an operationally controlled action. The kill switches preserve the current FCOS implementation and provide a reversible emergency pause; they are not migration switches.

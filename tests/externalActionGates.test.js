@@ -16,8 +16,15 @@ test('established FCOS integrations stay live while new actions remain UAT gated
   assert.equal(isExternalActionEnabled('bank_execution', { FCOS_ENABLE_BANK_EXECUTION: 'TRUE' }), true);
   assert.equal(isExternalActionEnabled('xero_contact_sync', {}), false);
   assert.equal(isExternalActionEnabled('xero_contact_sync', { FCOS_ENABLE_XERO_CONTACT_SYNC: 'true' }), true);
+  assert.equal(gates.xero_contact_sync.expectedState, 'live');
+  assert.equal(gates.xero_financial_sync.expectedState, 'uat_gated');
   assert.equal(isExternalActionEnabled('xero_financial_sync', {}), false);
   assert.equal(isExternalActionEnabled('xero_financial_sync', { FCOS_ENABLE_XERO_FINANCIAL_SYNC: 'true' }), true);
+});
+
+test('System Health does not report self-hosted interface fonts as an external connection', async () => {
+  const source = await readFile(new URL('../api/functions/[name].js', import.meta.url), 'utf8');
+  assert.doesNotMatch(source, /googleFontsHealthRow|fonts\.googleapis\.com|Loads Inter and DM Sans/);
 });
 
 test('emergency-disabled legacy integrations return a stable conflict without exposing their environment variable', () => {

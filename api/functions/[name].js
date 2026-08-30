@@ -6918,22 +6918,6 @@ function vercelRuntimeHealthRow() {
   );
 }
 
-function googleFontsHealthRow() {
-  return healthRow({
-    id: 'google-fonts',
-    name: 'Google Fonts',
-    category: 'Frontend Asset',
-    purpose: 'Loads Inter and DM Sans web fonts from the CSS import.',
-    scope: 'browser',
-    provider: 'Google Fonts',
-    endpoint: 'https://fonts.googleapis.com',
-    authType: 'No API key',
-    configured: true,
-    tokenExpiry: 'Not applicable.',
-    notes: ['Loaded by the browser as a frontend asset, not through the server API.'],
-  });
-}
-
 function providerDashboardLinks() {
   const supabaseHost = (() => {
     try {
@@ -7056,7 +7040,7 @@ async function systemHealth(body = {}, req = null, accessContext) {
     connectionAttestationHealthRow(),
   ]);
   const rows = [...providerRows, connectionAttestation.row];
-  rows.push(externalActionGateHealthRow(), cronHealthRow(), vercelRuntimeHealthRow(), googleFontsHealthRow());
+  rows.push(externalActionGateHealthRow(), cronHealthRow(), vercelRuntimeHealthRow());
   const summary = rows.reduce(
     (acc, row) => {
       acc.total += 1;
