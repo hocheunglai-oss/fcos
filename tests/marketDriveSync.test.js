@@ -373,8 +373,8 @@ test('production scheduling is exactly hourly and keeps the cron secret protecte
   assert.match(dispatcher, /marketReportDriveSyncCron[\s\S]*googleDriveMarketAccessToken\(\)/);
   assert.match(dispatcher, /marketIntelligenceArchiveReplay[\s\S]*googleDriveMarketAccessToken\(\)/);
   assert.match(dispatcher, /const configured = missingEnv\(marketRequired\)\.length === 0/);
-  assert.match(dispatcher, /const archiveConfigured = missingEnv\(archiveRequired\)\.length === 0/);
-  assert.match(dispatcher, /if \(archiveConfigured\)[\s\S]*googleDriveConfig\(\)/);
   assert.match(dispatcher, /verifyMarketDriveAuthority\(fetch, token\.access_token, marketConfig\)/);
   assert.match(dispatcher, /missingEnv: missingEnv\(marketRequired\)/);
+  assert.match(dispatcher, /The legacy XLS Report Archive is retired\. XLS exports download locally only\./);
+  assert.doesNotMatch(dispatcher, /archiveRequired|archiveConfigured|googleDriveConfig\(\)/);
 });

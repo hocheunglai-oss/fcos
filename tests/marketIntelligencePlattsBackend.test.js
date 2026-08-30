@@ -546,7 +546,7 @@ test('migration provides service-only governed market-intelligence storage and d
 });
 
 test('curve-evidence migration normalizes all eight series and stores immutable service-only availability', () => {
-  const migration = read('supabase/migrations/20260821032837_daily_brief_navigation_curve_evidence.sql');
+  const migration = read('supabase/migrations/20260821034056_daily_brief_navigation_curve_evidence.sql');
   for (const symbol of ['FPLSM01', 'FPLSM02', 'FOFS000', 'FOFS001', 'FOFS002', 'BSGSL00', 'MSGSL00', 'MSHSL00']) assert.match(migration, new RegExp(symbol));
   assert.match(migration, /create table if not exists public\.market_report_series_availability/i);
   assert.match(migration, /availability_status text not null check \(availability_status in \('published_na', 'not_detected'\)\)/i);
@@ -559,7 +559,7 @@ test('curve-evidence migration normalizes all eight series and stores immutable 
 });
 
 test('brief revision repair serializes without granting update on immutable brief tables', () => {
-  const migration = read('supabase/migrations/20260821035058_daily_brief_revision_lock_permission.sql');
+  const migration = read('supabase/migrations/20260821035219_daily_brief_revision_lock_permission.sql');
   assert.match(migration, /pg_advisory_xact_lock\(hashtextextended\(/i);
   assert.match(migration, /market-intelligence-brief:/i);
   assert.doesNotMatch(migration, /for update/i);
@@ -584,7 +584,7 @@ test('the reviewed SGO midpoint parser correction is exact, fail closed, and aud
 });
 
 test('archive replay reconciles only source-bound explicit zero daily changes', () => {
-  const migration = read('supabase/migrations/20260820192313_reconcile_explicit_zero_market_changes.sql');
+  const migration = read('supabase/migrations/20260820192609_reconcile_explicit_zero_market_changes.sql');
   assert.match(migration, /SOURCE_EXPLICIT_ZERO_DAY_CHANGE/);
   assert.match(migration, /source_document_type = p_source_document_type[\s\S]*source_hash = p_source_hash[\s\S]*report_date = p_report_date/i);
   assert.match(migration, /v_evidence\.price = v_price/);
@@ -599,7 +599,7 @@ test('archive replay reconciles only source-bound explicit zero daily changes', 
 });
 
 test('non-publication MOPS evidence remains an incomplete gap rather than a conflict', () => {
-  const migration = read('supabase/migrations/20260820194143_classify_nonpublication_mops_gaps.sql');
+  const migration = read('supabase/migrations/20260820194241_classify_nonpublication_mops_gaps.sql');
   assert.match(migration, /publish_market_mops_from_import_canonical_core/);
   assert.match(migration, /NON_PUBLICATION_DAY_REPRINT/);
   assert.match(migration, /publication\.outcome = 'conflict'/);
@@ -612,7 +612,7 @@ test('non-publication MOPS evidence remains an incomplete gap rather than a conf
 });
 
 test('range-midpoint replay correction is limited to exact reviewed delivered evidence', () => {
-  const migration = read('supabase/migrations/20260820195126_reconcile_range_midpoint_market_changes.sql');
+  const migration = read('supabase/migrations/20260820195434_reconcile_range_midpoint_market_changes.sql');
   assert.match(migration, /SOURCE_RANGE_MIDPOINT_PARSER_CORRECTION/);
   assert.match(migration, /p_source_document_type = 'bunkerwire'/);
   assert.match(migration, /v_series\.market_family = 'delivered'/);
@@ -628,7 +628,7 @@ test('range-midpoint replay correction is limited to exact reviewed delivered ev
 });
 
 test('printed-zero replay correction is bound to the exact reviewed MGZSD00 evidence', () => {
-  const migration = read('supabase/migrations/20260820204700_reconcile_printed_zero_market_change.sql');
+  const migration = read('supabase/migrations/20260820204550_reconcile_printed_zero_market_change.sql');
   assert.match(migration, /SOURCE_PRINTED_ZERO_DAY_CHANGE_OVERRIDE/);
   assert.match(migration, /cce2dce7fcb825e0fce366c8e7aa2dd217366a3181c41a4f73132e4cefd4c2b1/);
   assert.match(migration, /p_report_date = date '2026-05-26'/);

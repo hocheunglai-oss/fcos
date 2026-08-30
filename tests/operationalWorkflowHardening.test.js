@@ -63,9 +63,9 @@ test('browser authentication loads protected profile data through the server API
   assert.equal(scripts['dev:full'], 'node scripts/fcos-connections.mjs run vercel -- dev');
 });
 
-test('report archive compensates cross-system failures', async () => {
+test('legacy Google Drive XLS archive is retired without affecting local XLS exports', async () => {
   const source = await readFile(functionUrl, 'utf8');
-  assert.match(source, /googleDriveTrashFile\(driveFile\.id\)/);
-  assert.match(source, /googleDriveRenameFile\(current\.drive_file_id, current\.file_name\)/);
-  assert.match(source, /googleDriveRestoreFile\(current\.drive_file_id\)/);
+  assert.match(source, /legacy Google Drive XLS Report Archive has been retired/);
+  assert.doesNotMatch(source, /GOOGLE_DRIVE_REPORT_FOLDER_ID/);
+  assert.doesNotMatch(source, /googleDriveUploadFile/);
 });

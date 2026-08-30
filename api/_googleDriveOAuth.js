@@ -1,10 +1,3 @@
-export const GOOGLE_DRIVE_OAUTH_REQUIRED_ENV = Object.freeze([
-  'GOOGLE_DRIVE_CLIENT_ID',
-  'GOOGLE_DRIVE_CLIENT_SECRET',
-  'GOOGLE_DRIVE_REFRESH_TOKEN',
-  'GOOGLE_DRIVE_REPORT_FOLDER_ID',
-]);
-
 export const GOOGLE_DRIVE_MARKET_OAUTH_REQUIRED_ENV = Object.freeze([
   'GOOGLE_DRIVE_CLIENT_ID',
   'GOOGLE_DRIVE_CLIENT_SECRET',
@@ -18,24 +11,6 @@ function oauthError(message, code, status = 503) {
   error.statusCode = status;
   error.expose = true;
   return error;
-}
-
-export function googleDriveOAuthConfig(environment = process.env) {
-  const config = {
-    clientId: String(environment.GOOGLE_DRIVE_CLIENT_ID || '').trim(),
-    clientSecret: String(environment.GOOGLE_DRIVE_CLIENT_SECRET || '').trim(),
-    refreshToken: String(environment.GOOGLE_DRIVE_REFRESH_TOKEN || '').trim(),
-    folderId: String(environment.GOOGLE_DRIVE_REPORT_FOLDER_ID || '').trim(),
-  };
-  const missing = GOOGLE_DRIVE_OAUTH_REQUIRED_ENV.filter((name) => !String(environment[name] || '').trim());
-  if (missing.length) {
-    throw oauthError(
-      `Google Drive configuration is incomplete. Missing: ${missing.join(', ')}.`,
-      'MARKET_DRIVE_CONFIG_INVALID',
-      500,
-    );
-  }
-  return config;
 }
 
 export function googleDriveMarketOAuthConfig(environment = process.env) {

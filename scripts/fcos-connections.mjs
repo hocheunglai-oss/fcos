@@ -790,6 +790,22 @@ function providerOperational(report) {
     && ['approved', 'warning'].includes(report.cliVersionStatus);
 }
 
+export function providerCliRunnable(report) {
+  if (!report?.identityVerified
+    || report.identityStatus !== 'verified'
+    || report.targetPin !== 'verified'
+    || !['approved', 'warning'].includes(report.cliVersionStatus)) return false;
+  if (report.permissionStatus === 'verified') return true;
+  if (report.provider !== 'salesforce') return false;
+  const required = target('salesforce').requiredPermissions;
+  const granted = new Set(report.permissions || []);
+  const missing = required.filter((permission) => !granted.has(permission));
+  return missing.length === 1
+    && missing[0] === 'shared.metadata.current'
+    && (report.warningCodes || []).length === 1
+    && report.warningCodes[0] === 'shared_metadata_out_of_date';
+}
+
 function printReports(value, asJson) {
   if (asJson) {
     process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
@@ -997,7 +1013,7 @@ async function runCommand(args) {
     ? null
     : await verifyProvider(providerId);
   if (report) writeSafeStatus([report]);
-  if (report && !providerOperational(report)) {
+  if (report && !providerCliRunnable(report)) {
     console.error(`${providerId}: ${report.identityStatus}. CLI command blocked before execution.`);
     return exitCodeFor([report]);
   }

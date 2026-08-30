@@ -4,7 +4,7 @@ import test from 'node:test';
 
 const handlerUrl = new URL('../api/functions/[name].js', import.meta.url);
 const portalUrl = new URL('../api/_portal.js', import.meta.url);
-const migrationUrl = new URL('../supabase/migrations/20260824005729_fix_user_deletion_immutable_audit.sql', import.meta.url);
+const migrationUrl = new URL('../supabase/migrations/20260824010429_fix_user_deletion_immutable_audit.sql', import.meta.url);
 
 function functionSource(source, startName, endName) {
   const start = source.indexOf(`async function ${startName}`);

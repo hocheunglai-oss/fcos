@@ -110,14 +110,13 @@ const navGroups = [
       workspaceNavigation('email_router', { moduleId: 'email_router', icon: MailSearch }),
       workspaceNavigation('review', { moduleId: 'review', icon: ClipboardCheck }),
       workspaceNavigation('pnl', { moduleId: 'pnl', icon: TrendingUp }),
-      { id: 'report_archive', to: '/brokers?tab=archive', label: 'Report Archive', moduleId: 'report_archive', icon: History },
     ],
   },
 ];
 
 const DEFAULT_NAVIGATION_PREFERENCES = {
   sectionOrders: Object.fromEntries(navGroups.map((group) => [group.id, group.items.map((item) => item.id)])),
-  hiddenItemIds: ['review', 'pnl', 'report_archive'],
+  hiddenItemIds: ['review', 'pnl'],
   revision: 0,
 };
 const LEGACY_TRADING_DEFAULT_ORDER = ['dashboard', 'payment_collections', 'unofficial_compensation', 'cashflow_forecast', 'disputes', 'brokers', 'buyers_administrator'];

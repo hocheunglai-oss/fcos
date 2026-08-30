@@ -5,6 +5,7 @@ import {
   canonicalGitRemote,
   githubCredentialHelperValue,
   mergeSafeConnectionStatus,
+  providerCliRunnable,
   providerRuntime,
   validateProviderArgs,
   versionPolicyStatus,
@@ -63,6 +64,29 @@ test('verified runner blocks secret output and target overrides', () => {
   assert.equal(validateProviderArgs('salesforce', ['data', 'query', '-o', 'fcos-devee']), true);
   assert.equal(validateProviderArgs('salesforce', ['data', 'query', '--target-org', '00D1s0000008lFEEAY']), true);
   assert.throws(() => validateProviderArgs('supabase', ['login', '--token', 'secret']), /Secret-bearing CLI flags/);
+});
+
+test('Salesforce CLI remains available to repair only shared-mirror drift', () => {
+  const requiredPermissions = [
+    'production.organization.read', 'production.data.query',
+    'devee.organization.read', 'devee.data.query',
+    'qat.organization.read', 'qat.data.query',
+    'shared.repository.read', 'shared.repository.push',
+  ];
+  const repairable = {
+    provider: 'salesforce',
+    identityVerified: true,
+    identityStatus: 'verified',
+    targetPin: 'verified',
+    permissionStatus: 'missing',
+    permissions: requiredPermissions,
+    cliVersionStatus: 'approved',
+    warningCodes: ['shared_metadata_out_of_date'],
+  };
+  assert.equal(providerCliRunnable(repairable), true);
+  assert.equal(providerCliRunnable({ ...repairable, targetPin: 'missing' }), false);
+  assert.equal(providerCliRunnable({ ...repairable, warningCodes: ['permission_probe_failed'] }), false);
+  assert.equal(providerCliRunnable({ ...repairable, permissions: requiredPermissions.slice(0, -1) }), false);
 });
 
 test('tracked pre-push guard uses the isolated FCOS GitHub identity', async () => {

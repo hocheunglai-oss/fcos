@@ -6,8 +6,8 @@ const read = (path) => readFile(new URL(path, import.meta.url), 'utf8');
 
 test('workspace appearance preferences are revisioned and remain service-only', async () => {
   const [migration, lightDefaultMigration, server] = await Promise.all([
-    read('../supabase/migrations/20260822173115_macos_workspace_appearance_preferences.sql'),
-    read('../supabase/migrations/20260823021429_default_workspace_appearance_light.sql'),
+    read('../supabase/migrations/20260822173838_macos_workspace_appearance_preferences.sql'),
+    read('../supabase/migrations/20260823021617_default_workspace_appearance_light.sql'),
     read('../api/functions/[name].js'),
   ]);
   assert.match(migration, /appearance_mode text not null default 'system'/);

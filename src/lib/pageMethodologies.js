@@ -35,7 +35,11 @@ export const MASTER_CONTRACTS_METHODOLOGY = {
     },
     {
       title: 'Creation and synchronization',
-      body: 'Each selected delivery creates one Closed Won Enquiry and one Originated STEM in one all-or-none Salesforce transaction. External delivery, line and charge keys make retries idempotent. Live Salesforce differences are shown as variances and never silently rewrite the approved baseline. Creation stays blocked until exact parties, products, vessels, ports, payment terms, DON rules, owner and Variable Charges configuration are complete.',
+      body: 'New records receive concurrency-safe incremental keys beginning Master_Contract_1 and Delivery_1; existing keys remain unchanged. Each selected delivery creates one Closed Won Enquiry and one Originated STEM in one all-or-none Salesforce transaction. External delivery, line and charge keys make retries idempotent. Live Salesforce differences are shown as variances and never silently rewrite the approved baseline.',
+    },
+    {
+      title: 'Contract-wide operational inputs',
+      body: 'A Master Contract has one Buyer payment term and one Supplier payment term, applied to every delivery. Port mode may use one exact port for all deliveries or different ports by delivery. Each exact port has one supply location for the contract, and that location is applied consistently to every delivery using that port. Salesforce creation stays blocked until these and all other required references are complete.',
     },
     {
       title: 'Pricing dates, market position and invoices',

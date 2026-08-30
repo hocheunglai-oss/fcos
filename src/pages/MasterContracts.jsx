@@ -68,8 +68,14 @@ import { Textarea } from "@/components/ui/textarea";
 import { MASTER_CONTRACTS_METHODOLOGY } from "@/lib/pageMethodologies";
 import {
   MASTER_CONTRACT_BENCHMARKS,
+  applyMasterContractPaymentTerms,
+  applyMasterContractPortAssignment,
+  applyMasterContractPortLocation,
   masterContractBenchmark,
   masterContractLineKey,
+  masterContractPaymentTerms,
+  masterContractPortAssignment,
+  masterContractPortSettings,
   masterContractPricingPosition,
 } from "@/lib/masterContracts";
 
@@ -77,11 +83,13 @@ const SALESFORCE_ORIGIN = "https://fratellicosulich.lightning.force.com";
 const DEFAULT_SNAPSHOT = Object.freeze({
   ownerUserId: "",
   parties: {
-    buyer: { accountId: "", name: "", clKey: "", pic: "" },
-    supplier: { accountId: "", name: "", clKey: "", confirmed: false },
+    buyer: { accountId: "", name: "", clKey: "", pic: "", paymentTerm: "" },
+    supplier: { accountId: "", name: "", clKey: "", confirmed: false, paymentTerm: "" },
   },
   terms: {
     don: { minDays: "", maxDays: "" },
+    portAssignment: { mode: "one_port", portId: "", portName: "" },
+    portSettings: [],
     variableCharges: { mode: "", supplierIds: [] },
   },
   products: [],
@@ -296,10 +304,11 @@ function SearchableEntitySelect({
             variant="outline"
             role="combobox"
             aria-expanded={open}
-            className="w-full justify-between px-3 font-normal"
+            className="h-auto min-h-10 w-full justify-between px-3 py-2 font-normal"
+            title={selectedText}
           >
             <span
-              className={`truncate ${!selected && !selectedFallback ? "text-muted-foreground" : ""}`}
+              className={`line-clamp-2 min-w-0 break-words text-left ${!selected && !selectedFallback ? "text-muted-foreground" : ""}`}
             >
               {selectedText}
             </span>
@@ -334,7 +343,7 @@ function SearchableEntitySelect({
                     <Check
                       className={`h-4 w-4 ${row.id === value ? "opacity-100" : "opacity-0"}`}
                     />
-                    <span className="min-w-0 truncate">{renderLabel(row)}</span>
+                    <span className="min-w-0 break-words">{renderLabel(row)}</span>
                   </CommandItem>
                 ))}
               </CommandGroup>
@@ -444,14 +453,22 @@ function ContractEditor({
     if (!open) return;
     setContractKey(existing?.contractKey || "");
     setTitle(existing?.title || "");
-    setSnapshot(clone(existing?.snapshot || DEFAULT_SNAPSHOT));
+    const next = clone(existing?.snapshot || DEFAULT_SNAPSHOT);
+    const withTerms = applyMasterContractPaymentTerms(next, masterContractPaymentTerms(next));
+    setSnapshot(applyMasterContractPortAssignment(withTerms, masterContractPortAssignment(withTerms)));
   }, [existing, open]);
+
+  const portAssignment = masterContractPortAssignment(snapshot);
+  const portSettings = masterContractPortSettings(snapshot);
+  const updatePortAssignment = (assignment) => {
+    setSnapshot((current) => applyMasterContractPortAssignment(current, assignment));
+  };
 
   const chooseAccount = (side, accountId) => {
     const account = options.accounts.find((row) => row.id === accountId);
     if (!account) return;
-    setSnapshot((current) =>
-      setPath(current, ["parties", side], {
+    setSnapshot((current) => {
+      const next = setPath(current, ["parties", side], {
         ...current.parties[side],
         accountId: account.id,
         name: account.name,
@@ -461,8 +478,15 @@ function ContractEditor({
             ? account.buyerPaymentTerm || ""
             : account.supplierPaymentTerm || "",
         ...(side === "supplier" ? { confirmed: false } : {}),
-      }),
-    );
+      });
+      const terms = masterContractPaymentTerms(next);
+      return applyMasterContractPaymentTerms(next, {
+        ...terms,
+        ...(side === "buyer"
+          ? { buyerPaymentTerm: account.buyerPaymentTerm || "" }
+          : { supplierPaymentTerm: account.supplierPaymentTerm || "" }),
+      });
+    });
   };
   const updateProduct = (index, patch) =>
     setSnapshot((current) => ({
@@ -538,13 +562,13 @@ function ContractEditor({
       deliveries: [
         ...current.deliveries,
         {
-          deliveryKey: `${contractKey || "CONTRACT"}-D${String(current.deliveries.length + 1).padStart(2, "0")}`,
+          deliveryKey: "",
           sequence: current.deliveries.length + 1,
           vesselName: "",
           vesselImo: "",
           vesselId: "",
-          portId: "",
-          portName: "",
+          portId: masterContractPortAssignment(current).portId || "",
+          portName: masterContractPortAssignment(current).portName || "",
           preliminaryEta: "",
           supplyLocation: "TBD",
           buyerPaymentTerm: current.parties.buyer.paymentTerm || "",
@@ -555,11 +579,7 @@ function ContractEditor({
           variableChargeSupplierIds: [],
           products: current.products.map((product) => ({
             productKey: product.productKey,
-            contractLineKey: masterContractLineKey(
-              contractKey,
-              `${contractKey || "CONTRACT"}-D${String(current.deliveries.length + 1).padStart(2, "0")}`,
-              product.productKey,
-            ),
+            contractLineKey: "",
             quantityMin: 0,
             quantityMax: 0,
           })),
@@ -587,8 +607,8 @@ function ContractEditor({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[92vh] max-w-6xl overflow-y-auto">
-        <DialogHeader>
+      <DialogContent className="flex h-[94vh] w-[96vw] max-w-[1600px] flex-col gap-0 overflow-hidden p-0">
+        <DialogHeader className="shrink-0 border-b px-6 py-4 pr-12">
           <DialogTitle>
             {existing
               ? "Amend Master Contract baseline"
@@ -599,19 +619,16 @@ function ContractEditor({
             synchronization are separate actions.
           </DialogDescription>
         </DialogHeader>
-        <div className="grid gap-6 py-2">
+        <div className="grid flex-1 gap-5 overflow-y-auto px-6 py-5">
           <section className="grid gap-3 rounded-xl border p-4">
-            <h3 className="font-semibold">Identity and parties</h3>
+            <h3 className="font-semibold">Contract and parties</h3>
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-              <Field
-                label="Contract key"
-                value={contractKey}
-                onChange={(value) =>
-                  setContractKey(
-                    value.toUpperCase().replace(/[^A-Z0-9_-]/g, ""),
-                  )
-                }
-              />
+              <div className="grid gap-1.5">
+                <Label>Master Contract key</Label>
+                <div className="min-h-10 rounded-md border bg-muted/40 px-3 py-2 font-data text-sm">
+                  {contractKey || "Assigned automatically when saved"}
+                </div>
+              </div>
               <Field label="Title" value={title} onChange={setTitle} />
               <SearchableEntitySelect
                 label="Contract owner"
@@ -662,6 +679,30 @@ function ContractEditor({
                   )
                 }
               />
+              <Field
+                label="Buyer payment term"
+                value={snapshot.parties.buyer.paymentTerm}
+                onChange={(value) =>
+                  setSnapshot((current) =>
+                    applyMasterContractPaymentTerms(current, {
+                      ...masterContractPaymentTerms(current),
+                      buyerPaymentTerm: value,
+                    }),
+                  )
+                }
+              />
+              <Field
+                label="Supplier payment term"
+                value={snapshot.parties.supplier.paymentTerm}
+                onChange={(value) =>
+                  setSnapshot((current) =>
+                    applyMasterContractPaymentTerms(current, {
+                      ...masterContractPaymentTerms(current),
+                      supplierPaymentTerm: value,
+                    }),
+                  )
+                }
+              />
             </div>
             <label className="flex items-center gap-2 text-sm">
               <Checkbox
@@ -680,7 +721,7 @@ function ContractEditor({
             </label>
           </section>
           <section className="grid gap-3 rounded-xl border p-4">
-            <h3 className="font-semibold">DON and Variable Charges</h3>
+            <h3 className="font-semibold">Pricing and review rules</h3>
             <div className="grid gap-3 md:grid-cols-3">
               <Field
                 label="DON minimum days before ETA"
@@ -748,7 +789,7 @@ function ContractEditor({
           <section className="grid gap-3 rounded-xl border p-4">
             <div className="flex items-center justify-between">
               <h3 className="font-semibold">
-                Product terms and contracted totals
+                Products and totals
               </h3>
               <Button
                 type="button"
@@ -763,7 +804,7 @@ function ContractEditor({
             {snapshot.products.map((product, index) => (
               <div
                 key={`${product.productKey}-${index}`}
-                className="grid gap-2 rounded-lg bg-muted/40 p-3 md:grid-cols-3 xl:grid-cols-5"
+                className="grid gap-3 rounded-lg bg-muted/40 p-3 md:grid-cols-2 xl:grid-cols-3"
               >
                 <SearchableEntitySelect
                   label="Salesforce Product"
@@ -865,7 +906,7 @@ function ContractEditor({
           </section>
           <section className="grid gap-3 rounded-xl border p-4">
             <div className="flex items-center justify-between">
-              <h3 className="font-semibold">Deliveries</h3>
+              <h3 className="font-semibold">Deliveries and ports</h3>
               <Button
                 type="button"
                 size="sm"
@@ -876,19 +917,74 @@ function ContractEditor({
                 Delivery
               </Button>
             </div>
+            <div className="grid gap-3 rounded-lg border bg-muted/30 p-3 md:grid-cols-2">
+              <StaticSelect
+                label="Ports"
+                value={portAssignment.mode}
+                options={[
+                  { id: "one_port", name: "One port for all deliveries" },
+                  { id: "per_delivery", name: "Different port by delivery" },
+                ]}
+                onChange={(mode) => updatePortAssignment({ mode })}
+              />
+              {portAssignment.mode === "one_port" ? (
+                <SearchableEntitySelect
+                  label="Port for all deliveries"
+                  value={portAssignment.portId}
+                  options={options.ports}
+                  onSearch={onOptionsQuery}
+                  searchScope="ports"
+                  selectedFallback={portAssignment.portName || ""}
+                  onChange={(value) => {
+                    const row = options.ports.find((item) => item.id === value);
+                    updatePortAssignment({
+                      mode: "one_port",
+                      portId: value,
+                      portName: row?.name || "",
+                    });
+                  }}
+                />
+              ) : (
+                <div className="flex items-end pb-2 text-xs text-muted-foreground">
+                  Choose the exact port within each delivery.
+                </div>
+              )}
+            </div>
+            {portSettings.length ? (
+              <div className="grid gap-2 rounded-lg border bg-background p-3">
+                <div className="text-sm font-medium">One supply location per port</div>
+                <div className="grid gap-2 lg:grid-cols-2">
+                  {portSettings.map((setting) => (
+                    <div key={setting.portId} className="grid gap-2 rounded-lg bg-muted/40 p-3 sm:grid-cols-[minmax(0,1fr)_220px] sm:items-end">
+                      <div className="min-w-0">
+                        <div className="break-words text-sm font-medium">{setting.portName || "Selected port"}</div>
+                        {setting.conflicting ? <div className="text-xs text-amber-700">Existing deliveries use different locations. Choose the contract location.</div> : null}
+                      </div>
+                      <StaticSelect
+                        label="Supply location"
+                        value={setting.supplyLocation}
+                        options={["TBD", "Berth", "Anchorage"].map((id) => ({ id, name: id }))}
+                        onChange={(supplyLocation) =>
+                          setSnapshot((current) => applyMasterContractPortLocation(current, { ...setting, supplyLocation }))
+                        }
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
             {snapshot.deliveries.map((delivery, index) => (
               <div
-                key={`${delivery.deliveryKey}-${index}`}
+                key={delivery.id || delivery.deliveryKey || `new-delivery-${index}`}
                 className="grid gap-3 rounded-lg border bg-card p-3"
               >
-                <div className="grid gap-2 md:grid-cols-4 xl:grid-cols-6">
-                  <Field
-                    label="Delivery key"
-                    value={delivery.deliveryKey}
-                    onChange={(value) =>
-                      updateDelivery(index, { deliveryKey: value })
-                    }
-                  />
+                <div className="grid gap-3 lg:grid-cols-2 2xl:grid-cols-3">
+                  <div className="grid gap-1.5">
+                    <Label>Delivery key</Label>
+                    <div className="min-h-10 rounded-md border bg-muted/40 px-3 py-2 font-data text-sm">
+                      {delivery.deliveryKey || "Assigned automatically when saved"}
+                    </div>
+                  </div>
                   <SearchableEntitySelect
                     label="Vessel"
                     value={delivery.vesselId}
@@ -973,40 +1069,31 @@ function ContractEditor({
                       )}
                     </div>
                   ) : null}
-                  <SearchableEntitySelect
-                    label="Port"
-                    value={delivery.portId}
-                    options={options.ports}
-                    onSearch={onOptionsQuery}
-                    searchScope="ports"
-                    selectedFallback={delivery.portName || ""}
-                    onChange={(value) => {
-                      const row = options.ports.find(
-                        (item) => item.id === value,
-                      );
-                      updateDelivery(index, {
-                        portId: value,
-                        portName: row?.name || "",
-                      });
-                    }}
-                  />
+                  {portAssignment.mode === "per_delivery" ? (
+                    <SearchableEntitySelect
+                      label="Port"
+                      value={delivery.portId}
+                      options={options.ports}
+                      onSearch={onOptionsQuery}
+                      searchScope="ports"
+                      selectedFallback={delivery.portName || ""}
+                      onChange={(value) => {
+                        const row = options.ports.find(
+                          (item) => item.id === value,
+                        );
+                        updateDelivery(index, {
+                          portId: value,
+                          portName: row?.name || "",
+                        });
+                      }}
+                    />
+                  ) : null}
                   <Field
                     label="Preliminary ETA"
                     type="date"
                     value={delivery.preliminaryEta}
                     onChange={(value) =>
                       updateDelivery(index, { preliminaryEta: value })
-                    }
-                  />
-                  <StaticSelect
-                    label="Supply location"
-                    value={delivery.supplyLocation}
-                    options={["TBD", "Berth", "Anchorage"].map((id) => ({
-                      id,
-                      name: id,
-                    }))}
-                    onChange={(value) =>
-                      updateDelivery(index, { supplyLocation: value })
                     }
                   />
                   <Field
@@ -1034,20 +1121,6 @@ function ContractEditor({
                     placeholder="Required only when the agreed date is outside the DON window"
                     onChange={(value) =>
                       updateDelivery(index, { donAlternateReason: value })
-                    }
-                  />
-                  <Field
-                    label="Buyer payment term"
-                    value={delivery.buyerPaymentTerm}
-                    onChange={(value) =>
-                      updateDelivery(index, { buyerPaymentTerm: value })
-                    }
-                  />
-                  <Field
-                    label="Supplier payment term"
-                    value={delivery.supplierPaymentTerm}
-                    onChange={(value) =>
-                      updateDelivery(index, { supplierPaymentTerm: value })
                     }
                   />
                   {(() => {
@@ -1148,7 +1221,7 @@ function ContractEditor({
           </section>
           <section className="grid gap-3 rounded-xl border p-4">
             <div className="flex items-center justify-between">
-              <h3 className="font-semibold">Fixed charge rules</h3>
+              <h3 className="font-semibold">Charges</h3>
               <Button
                 type="button"
                 size="sm"
@@ -1162,7 +1235,7 @@ function ContractEditor({
             {snapshot.chargeRules.map((rule, index) => (
               <div
                 key={`${rule.chargeKey}-${index}`}
-                className="grid gap-2 rounded-lg bg-muted/40 p-3 md:grid-cols-4 xl:grid-cols-7"
+                className="grid gap-3 rounded-lg bg-muted/40 p-3 lg:grid-cols-2 2xl:grid-cols-4"
               >
                 <Field
                   label="Key"
@@ -1298,12 +1371,12 @@ function ContractEditor({
             ))}
           </section>
         </div>
-        <DialogFooter>
+        <DialogFooter className="shrink-0 border-t bg-background px-6 py-4">
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
           <Button
-            disabled={busy || !contractKey || !title}
+            disabled={busy || !title}
             onClick={() => onSave({ contractKey, title, snapshot })}
           >
             {busy ? (

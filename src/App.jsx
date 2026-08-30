@@ -111,7 +111,7 @@ const AuthenticatedApp = () => {
             <Route path="/buyer-invoices" element={<RedirectWithTab path="/payment-collections" tab="collections" />} />
             <Route path="/incoming-payments" element={<RedirectWithTab path="/payment-collections" tab="incoming" />} />
             <Route path="/cashflow-forecast" element={<ModuleGate moduleId="cashflow_forecast"><CashflowForecast /></ModuleGate>} />
-            <Route path="/brokers" element={<ModuleGateAny moduleIds={['brokers', 'report_archive']}><BrokerWorkspace /></ModuleGateAny>} />
+            <Route path="/brokers" element={<ModuleGate moduleId="brokers"><BrokerWorkspace /></ModuleGate>} />
             <Route path="/report-archive" element={<RedirectWithTab path="/brokers" tab="archive" />} />
             <Route path="/account-managers" element={<ModuleGate moduleId="buyers_administrator"><AccountManagers /></ModuleGate>} />
             <Route path="/master-contracts" element={<ModuleGate moduleId="master_contracts"><MasterContracts /></ModuleGate>} />
