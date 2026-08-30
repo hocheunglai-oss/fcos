@@ -1,0 +1,45 @@
+<template>
+    <lightning-card title="Contracts Filing" icon-name="custom:custom63">
+        <template if:true={isLoading}>
+            <lightning-spinner alternative-text="Loading"></lightning-spinner>
+        </template>
+        <div class="slds-grid slds-wrap">
+            <lightning-input class="slds-size_1-of-6" label="Stem Search" type="text" variant="label-stacked" value={stemFilter} onchange={handleChangeStemFilter}></lightning-input>
+            <lightning-input class="slds-size_1-of-6" label="Acount Search" type="text" variant="label-stacked" value={accountFilter} onchange={handleChangeAccountFilter}></lightning-input>
+            <lightning-input class="slds-size_1-of-6" label="From" type="date" date-style="short" variant="label-stacked" value={startDateRange} onchange={handleChangeStartDateRange}></lightning-input>
+            <lightning-input class="slds-size_1-of-6" label="To" type="date" date-style="short" variant="label-stacked" value={endDateRange} onchange={handleChangeEndDateRange}></lightning-input>
+            <div class="slds-size_1-of-6" style="margin-top: 21px;">
+                <lightning-button
+                    label="Upload Selected Vessel Reports"
+                    onclick={handleUploadVesselReports} variant="brand">
+                </lightning-button>
+            </div>
+            <div class="slds-size_1-of-6" style="margin-top: 21px;">
+                <lightning-button
+                    label="Upload Selected Company Reports"
+                    onclick={handleUploadCompanyReports} variant="brand">
+                </lightning-button>
+            </div>
+        </div>
+        <div class="slds-m-around_medium">
+            <c-file-upload-tree-grid  key-field="Id"
+                                      data={data}
+                                      columns={columns}
+                                      onuploadfinished={handleUploadFinished}
+                                      onrowaction={handleRowAction}
+                                      selected-rows={selectedRows}
+                                      onrowselection={handleRowSelection}>
+            </c-file-upload-tree-grid>
+        </div>
+        <template if:true={hasMore}>
+            <div class="slds-align_absolute-center slds-m-top_medium">
+                <lightning-button
+                    label="Load More"
+                    onclick={handleLoadMore}
+                    variant="neutral"
+                    disabled={isLoading}>
+                </lightning-button>
+            </div>
+        </template>
+    </lightning-card>
+</template>

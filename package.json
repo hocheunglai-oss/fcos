@@ -7,9 +7,14 @@
     "node": "24.x"
   },
   "scripts": {
-    "dev": "vite",
-    "dev:full": "node scripts/fcos-connections.mjs run vercel -- dev",
-    "dev:ui": "vite",
+    "dev": "node scripts/dev-server.mjs",
+    "dev:full": "node scripts/dev-server.mjs -- node scripts/fcos-connections.mjs run vercel -- dev",
+    "dev:ui": "node scripts/dev-server.mjs",
+    "dev:status": "node scripts/dev-server.mjs status",
+    "dev:stop": "node scripts/dev-server.mjs stop",
+    "local:services:start": "node scripts/local-services.mjs start",
+    "local:services:status": "node scripts/local-services.mjs status",
+    "local:services:stop": "node scripts/local-services.mjs stop",
     "test": "node --test tests/*.test.js",
     "test:e2e": "playwright test",
     "build": "node scripts/write-app-version.mjs && vite build",

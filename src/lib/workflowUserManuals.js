@@ -1,0 +1,98 @@
+export const WORKFLOW_USER_MANUALS = Object.freeze({
+  disputes: {
+    title: 'Dispute Workflow',
+    introduction: 'Use this workflow to record a disputed STEM, obtain the required approval, settle the accounting position, and close the case with an auditable reason.',
+    beforeYouStart: [
+      'Confirm the exact STEM, buyer, supplier, currency, and disputed amount.',
+      'Keep instructions factual. Do not use a dispute record as a substitute for changing an invoice.',
+      'Refresh before saving when another user may have changed the case.',
+      'Only authorised actions write to Salesforce; filters and previews are read only.',
+    ],
+    workflow: [
+      { title: 'Find or open the case', description: 'Search by STEM or counterparty, then open the exact disputed record.' },
+      { title: 'Record the instruction', description: 'Enter the commercial instruction, disputed scope, responsibility, and supporting evidence.' },
+      { title: 'Approve and settle', description: 'The responsible approver confirms the instruction; Accounting records the actual settlement.' },
+      { title: 'Close and verify', description: 'Confirm Salesforce documents and payment evidence, then close with the final outcome.' },
+    ],
+    sections: [
+      { title: '1. Queue and case selection', open: true, purpose: 'Use the queue to identify cases waiting for you without changing their status.', steps: ['Review the status, responsible person, disputed amount, deadline, and any data warning.', 'Use search and filters to narrow the loaded rows.', 'Open the exact STEM and compare the FCOS case with Salesforce before acting.'], controls: [{ label: 'Refresh', description: 'Reloads the latest Salesforce and FCOS dispute state. It does not approve or close a case.', effect: 'read' }, { label: 'Open', description: 'Opens the selected dispute while preserving the queue.', effect: 'navigation' }] },
+      { title: '2. Trader instruction and approval', purpose: 'Record what must happen and obtain approval before Accounting acts.', steps: ['Describe the agreed treatment and amount clearly.', 'Attach or link evidence when required.', 'Submit the instruction to the assigned approver.', 'If returned, correct the stated issue and submit again.'], controls: [{ label: 'Save instruction', description: 'Saves the current dispute instruction and evidence state.', effect: 'save' }, { label: 'Approve / Return', description: 'Records the approver decision. A return requires a clear reason.', effect: 'save' }] },
+      { title: '3. Accounting and closure', purpose: 'Record the real accounting outcome without inventing payments or document references.', steps: ['Confirm the approved instruction.', 'Select the exact invoice, credit note, payment, or write-off evidence.', 'Record actual settlement values and dates.', 'Close only when the external Salesforce position and FCOS case agree.'], controls: [{ label: 'Save accounting', description: 'Stores the reviewed accounting settlement against the case.', effect: 'save' }, { label: 'Close dispute', description: 'Closes the workflow after required evidence and reasons are complete.', effect: 'external' }] },
+      { title: '4. Errors and reopening', purpose: 'Recover safely when data is stale, incomplete, or changed after closure.', steps: ['Use Refresh after a stale-write warning.', 'Resolve missing Account, invoice, currency, or payment evidence in the authoritative system.', 'Reopen only with the required reason when further work is genuinely necessary.', 'Never duplicate a case to bypass a blocker.'], controls: [] },
+    ],
+    finishedWhen: 'The approved instruction, accounting outcome, Salesforce evidence, final status, and closure reason all agree.',
+  },
+  unofficialCompensation: {
+    title: 'Unofficial Compensation',
+    introduction: 'Use this page to record a non-invoice compensation commitment and track how it is recovered through eligible STEM pricing.',
+    beforeYouStart: ['Confirm the exact Account and currency.', 'Enter the real agreed amount and deadline.', 'Do not create a recovery against an unrelated STEM.', 'Refresh before editing a claim being handled by someone else.'],
+    workflow: [
+      { title: 'Open the claim', description: 'Choose the Account, amount, deadline, PIC, and a clear description.' },
+      { title: 'Add recoveries', description: 'Link eligible STEM lines and define the fixed or per-unit recovery.' },
+      { title: 'Monitor collection', description: 'Compare planned and actual recovered amounts without mixing currencies.' },
+      { title: 'Complete the claim', description: 'Close only when the balance and supporting Salesforce data are correct.' },
+    ],
+    sections: [
+      { title: '1. Create a claim', open: true, purpose: 'Create one clear Account-level obligation.', steps: ['Select the exact active Account.', 'Enter currency, amount, deadline, PIC, and description.', 'Review validation messages, then save once.'], controls: [{ label: 'Open Claim', description: 'Opens the claim form; no record is created until Save.', effect: 'navigation' }, { label: 'Save Claim', description: 'Creates the reviewed claim in FCOS.', effect: 'save' }] },
+      { title: '2. Add or amend a recovery', purpose: 'Allocate recovery to the exact STEM line where the commercial recovery occurs.', steps: ['Open the Account claim.', 'Search for and select the exact STEM and line item.', 'Choose fixed or per-unit treatment and enter the reviewed value.', 'Save and check the recalculated balance.'], controls: [{ label: 'Add Recovery', description: 'Opens recovery entry for the selected claim.', effect: 'navigation' }, { label: 'Save Recovery', description: 'Stores the recovery link and calculation.', effect: 'save' }, { label: 'Remove', description: 'Removes an incorrect recovery after confirmation; it does not delete the Salesforce STEM.', effect: 'save' }] },
+      { title: '3. Review balances and deadlines', purpose: 'Identify incomplete, overdue, or over-recovered claims.', steps: ['Review outstanding totals by currency.', 'Check overdue and due-within-seven-days indicators.', 'Open data issues before relying on the balance.', 'Refresh after relevant Salesforce changes.'], controls: [{ label: 'Refresh', description: 'Reloads Salesforce values and FCOS recovery records.', effect: 'read' }] },
+      { title: '4. Correct mistakes', purpose: 'Correct the existing record rather than creating a duplicate.', steps: ['Edit the claim or recovery when allowed.', 'Use the displayed blocking reason when deletion is unavailable.', 'Keep the final claim and recovery history auditable.'], controls: [] },
+    ],
+    finishedWhen: 'The claim amount, linked recoveries, actual recovered value, remaining balance, and completion status reconcile in the same currency.',
+  },
+  variableCharges: {
+    title: 'Variable Charges',
+    introduction: 'Use this task to confirm supplier costs first, decide buyer charges second, and unlock the correct invoice only after every required review is complete.',
+    beforeYouStart: ['Work only on the Supplier or Buyer Leg assigned to you.', 'Mark every charge; Pending blocks approval.', 'Use Refresh after changing a read-only product line in Salesforce.', 'Supplier and Buyer notes are required before approval.'],
+    workflow: [
+      { title: 'Open My Tasks', description: 'Choose the STEM and supplier showing your next action.' },
+      { title: 'Confirm supplier costs', description: 'Mark each row Correct or Edit Cost and enter one supplier reference or note.' },
+      { title: 'Approve buyer charges', description: 'Choose Charge Buyer or Do Not Charge for every row and review the margin.' },
+      { title: 'Verify invoice readiness', description: 'Check that the required supplier invoice and final buyer invoice actions are unlocked.' },
+    ],
+    sections: [
+      { title: '1. Queue and shared information', open: true, purpose: 'The queue and common header show the STEM once; the split review separates supplier and buyer responsibilities.', steps: ['Start in My Tasks.', 'Confirm STEM name, vessel, port, Delivery Date or Review Starts, and next action.', 'For multiple suppliers, select the supplier whose costs you are reviewing.'], controls: [{ label: 'Refresh Salesforce', description: 'Reloads current STEM, charge, assignment, and invoice-readiness evidence.', effect: 'read' }, { label: 'Start / Open', description: 'Opens the exact Variable Charges task.', effect: 'navigation' }] },
+      { title: '2. Supplier Leg', purpose: 'Confirm the final supplier cost for each exact supplier before that supplier invoice is created.', steps: ['Review Product, description, quantity, pricing basis, and supplier totals.', 'Choose Correct when the displayed cost is right.', 'Choose Edit Cost only for an editable extra charge; product-line edits remain in Salesforce.', 'Enter one supplier reference or note and approve when no row is Pending.'], controls: [{ label: 'Pending / Correct / Edit Cost', description: 'Records the review outcome for one supplier-cost row. Pending prevents approval.', effect: 'save' }, { label: 'Approve Supplier Costs', description: 'Confirms the selected supplier stage and unlocks only that supplier invoice when all safeguards pass.', effect: 'external' }] },
+      { title: '3. Buyer Leg', purpose: 'Decide which reviewed costs are charged to the buyer and confirm the resulting margin.', steps: ['Review supplier cost, buyer charge, and total margin.', 'Choose Charge Buyer or Do Not Charge for every row.', 'Edit the allowed buyer price when necessary.', 'Enter one buyer review note and approve when no row is Pending.'], controls: [{ label: 'Pending / Charge Buyer / Do Not Charge', description: 'Records one buyer-charge decision. Pending prevents approval.', effect: 'save' }, { label: 'Approve Buyer Charges', description: 'Confirms the final Buyer Leg after every required supplier stage is complete.', effect: 'external' }] },
+      { title: '4. Hong Kong statutory charges', purpose: 'Use structured NRT and timing evidence to verify Light Dues and Anchorage Dues without silently replacing financial values.', steps: ['Save a valid Vessel NRT when required.', 'Review entry dates, vessel category, anchorage periods, location, FX evidence, and allocations.', 'Compare calculated statutory evidence with the supplier charge.', 'Save evidence before approving the affected row.'], controls: [{ label: 'Save Vessel NRT', description: 'Updates the shared Salesforce Vessel NRT and may reopen affected reviews.', effect: 'external' }, { label: 'Save anchorage / Light Dues details', description: 'Saves structured verification evidence without automatically changing reviewed prices.', effect: 'external' }] },
+      { title: '5. General Manager and post-invoice actions', purpose: 'Handle exceptional review authority and changes discovered after an invoice exists.', steps: ['The General Manager selects the leg to review and enters a specific reason.', 'Assignments remain unchanged.', 'For post-invoice changes, select the real resolution and provide its reference.', 'Never modify issued financial history silently.'], controls: [{ label: 'Review as General Manager', description: 'Temporarily permits direct review of the selected leg with an audited reason.', effect: 'save' }, { label: 'Save Resolution', description: 'Records the reviewed post-invoice outcome and reference.', effect: 'external' }] },
+    ],
+    finishedWhen: 'All required supplier stages and the Buyer Leg are approved, no row remains Pending, and invoice readiness shows the expected supplier and buyer actions.',
+  },
+  specialTerms: {
+    title: 'Special Terms',
+    introduction: 'Use this workspace to maintain governed contractual clauses, preview their document use, and publish approved wording to Salesforce.',
+    beforeYouStart: ['Search before creating a new term.', 'Keep contractual wording exact and complete.', 'Use N/A only when the applicable field genuinely has no reason.', 'Never publish unresolved clause boundaries or broken links.'],
+    workflow: [
+      { title: 'Find or create the term', description: 'Search by term or clause name and avoid duplicates.' },
+      { title: 'Edit complete wording', description: 'Update clauses, order, applicability, and change reason together.' },
+      { title: 'Preview document use', description: 'Check confirmation and nomination projections only where clauses exist.' },
+      { title: 'Review and publish', description: 'Resolve validation and relink issues, then submit through the approval workflow.' },
+    ],
+    sections: [
+      { title: '1. Search and status', open: true, purpose: 'Locate the authoritative term and understand whether it is legacy, draft, ready, or approved.', steps: ['Search by term or clause name.', 'Use the status filter to focus the queue.', 'Open the existing term whenever one already represents the requirement.'], controls: [{ label: 'Refresh', description: 'Reloads term summaries from Salesforce while preserving the current workspace.', effect: 'read' }, { label: 'New Special Term', description: 'Opens an empty governed term; it does not publish until saved and approved.', effect: 'navigation' }] },
+      { title: '2. Edit clauses and reason', purpose: 'Make one complete revision so reviewers can understand the exact change.', steps: ['Add, edit, remove, combine, or reorder clauses as required.', 'Choose where each clause applies.', 'Enter the change reason, or select N/A to disable the reason box and store N/A.', 'Resolve every validation message before submitting.'], controls: [{ label: 'Save Draft', description: 'Saves the revision without publishing it as the active contractual term.', effect: 'save' }, { label: 'N/A', description: 'Stores N/A as the change reason and disables free-text entry.', effect: 'save' }] },
+      { title: '3. Preview and approve', purpose: 'Verify only meaningful document projections and publish through controlled approval.', steps: ['Open confirmation or nomination preview only when applicable clauses exist.', 'Review wording, ordering, and linked usage.', 'Submit for approval.', 'Authorised approvers publish or return the revision with a reason.'], controls: [{ label: 'Preview', description: 'Shows the draft document wording; it does not publish or create a live document.', effect: 'read' }, { label: 'Submit / Publish', description: 'Advances or completes the governed Salesforce revision.', effect: 'external' }] },
+      { title: '4. Clause Library', purpose: 'Reuse approved clauses and resolve duplicates without losing lineage.', steps: ['Search and filter the library.', 'Review origin, usage, and duplicate candidates.', 'Edit or consolidate only with the required permission.', 'Keep historical revisions and links intact.'], controls: [{ label: 'Clause Library', description: 'Switches to reusable clause management.', effect: 'navigation' }, { label: 'Rapid review', description: 'Moves through eligible clause reviews without changing approval requirements.', effect: 'navigation' }] },
+    ],
+    finishedWhen: 'The active Salesforce term contains the approved clauses in the correct order and projections show only applicable wording.',
+  },
+  accountManagers: {
+    title: 'Account Managers',
+    introduction: 'Use this workspace to maintain Account Manager coverage and human-reference Buyer PIC tables without changing operational routing automatically.',
+    beforeYouStart: ['Select the exact Salesforce Account, especially when names are duplicated.', 'Review inherited GROUP coverage before adding a direct assignment.', 'Buyer PIC References are informational only.', 'Refresh after Account or user-status changes in Salesforce or FCOS.'],
+    workflow: [
+      { title: 'Find the Account', description: 'Search the active Account directory and review role and GROUP context.' },
+      { title: 'Review coverage', description: 'Compare direct managers with inherited GROUP assignments.' },
+      { title: 'Save assignments', description: 'Add, remove, or reorder only the intended active managers.' },
+      { title: 'Maintain PIC references', description: 'Edit flexible reference tables, colours, vessel types, and trader variables when needed.' },
+    ],
+    sections: [
+      { title: '1. Account Manager assignments', open: true, purpose: 'Maintain clear direct and inherited ownership for each active Account.', steps: ['Search by Account name or CL Key.', 'Check Buyer, Supplier, Broker, or combined role.', 'Review direct managers and inherited GROUP coverage.', 'Edit the exact Account and save the complete ordered list.'], controls: [{ label: 'Refresh Accounts', description: 'Reloads active Accounts and manager coverage.', effect: 'read' }, { label: 'Edit', description: 'Opens assignment editing for the selected Account.', effect: 'navigation' }, { label: 'Save', description: 'Stores the reviewed ordered manager assignments.', effect: 'save' }, { label: 'Reset', description: 'Discards unsaved assignment changes and restores the loaded state.', effect: 'navigation' }] },
+      { title: '2. Buyer PIC References', purpose: 'Maintain a flexible human-reference table for an active Buyer or Buyer & Supplier Account.', steps: ['Open Buyer PIC References.', 'Add the exact Account if no table exists.', 'Open the table and use Edit table.', 'Save after checking headers, row labels, input types, and values.'], controls: [{ label: 'Add Account', description: 'Creates an empty reference-table draft for the selected active Buyer Account.', effect: 'navigation' }, { label: 'Edit table', description: 'Enables column, row, trader-variable, checkbox, number, and text editing.', effect: 'navigation' }, { label: 'Save table', description: 'Saves the complete reference-table revision.', effect: 'save' }] },
+      { title: '3. Columns, vessel types, and row colours', purpose: 'Adapt the reference table without assigning operational meaning to its contents.', steps: ['Rename any column or row header.', 'Add or remove ordinary columns and vessel-type checkbox columns.', 'Choose free text, multi-text, checkbox, number, Buyer Trader, or Supplier Trader inputs.', 'Apply ordered colour rules based on any supported column condition.'], controls: [{ label: 'Add column / Add vessel type', description: 'Adds a configurable reference column.', effect: 'navigation' }, { label: 'Row colours', description: 'Maintains ordered display-only colour conditions.', effect: 'save' }] },
+      { title: '4. CSV import and export', purpose: 'Exchange reference rows without losing the configured FCOS column structure.', steps: ['Export CSV when a working copy is needed.', 'Before import, make sure the CSV headers match current columns.', 'Review the import preview.', 'Replace rows only after validation succeeds.'], controls: [{ label: 'Export CSV', description: 'Downloads the current five-or-more-column reference table.', effect: 'read' }, { label: 'Import matching CSV', description: 'Previews and then replaces rows; trader-variable cells remain governed inside FCOS.', effect: 'save' }] },
+    ],
+    finishedWhen: 'The exact Account shows the intended direct/inherited managers, and any Buyer PIC Reference table is saved at the expected revision with no unintended routing effect.',
+  },
+});

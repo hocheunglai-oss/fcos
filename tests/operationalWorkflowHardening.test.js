@@ -59,8 +59,12 @@ test('browser authentication loads protected profile data through the server API
   assert.match(appClientSource, /The FCOS server API is unavailable/);
   assert.match(loginSource, /visibleError/);
   const scripts = JSON.parse(packageSource).scripts;
-  assert.equal(scripts.dev, 'vite');
-  assert.equal(scripts['dev:full'], 'node scripts/fcos-connections.mjs run vercel -- dev');
+  assert.equal(scripts.dev, 'node scripts/dev-server.mjs');
+  assert.equal(
+    scripts['dev:full'],
+    'node scripts/dev-server.mjs -- node scripts/fcos-connections.mjs run vercel -- dev',
+  );
+  assert.equal(scripts['dev:stop'], 'node scripts/dev-server.mjs stop');
 });
 
 test('legacy Google Drive XLS archive is retired without affecting local XLS exports', async () => {

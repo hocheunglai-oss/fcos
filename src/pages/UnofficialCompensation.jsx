@@ -18,6 +18,7 @@ import { appClient } from '@/api/appClient';
 import { useNavigationAwareRequest } from '@/hooks/useNavigationAwareRequest';
 import PageHeader from '@/components/common/PageHeader';
 import PageMethodology from '@/components/common/PageMethodology';
+import WorkflowUserManual from '@/components/common/WorkflowUserManual';
 import DataStatus from '@/components/common/DataStatus';
 import StateBlock from '@/components/common/StateBlock';
 import TableShell from '@/components/common/TableShell';
@@ -35,6 +36,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/use-toast';
 import { accountClKeyLabel, accountSearchDisplayText } from '@/lib/accountDisplay';
 import { UNOFFICIAL_COMPENSATION_METHODOLOGY } from '@/lib/pageMethodologies';
+import { WORKFLOW_USER_MANUALS } from '@/lib/workflowUserManuals';
 import { unofficialCompensationClaimIssues, unofficialCompensationRecoveryIssues } from '@/lib/workflowValidation';
 
 const EMPTY_CLAIM = { accountId: '', contactId: '__none__', amount: '', deadlineDate: '', pic: '', description: '' };
@@ -352,7 +354,7 @@ export default function UnofficialCompensation() {
             {responseMeta ? <DataStatus meta={responseMeta} label="Salesforce" /> : null}
           </span>
         ) : undefined}
-        actions={<><PageMethodology {...UNOFFICIAL_COMPENSATION_METHODOLOGY} /><Button type="button" variant="outline" className="gap-2" onClick={() => load(true)} disabled={refreshing}><RefreshCw className={refreshing ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />Refresh</Button><Button type="button" className="gap-2" onClick={() => openClaim()}><Plus className="h-4 w-4" />Open Claim</Button></>}
+        actions={<><WorkflowUserManual manual={WORKFLOW_USER_MANUALS.unofficialCompensation} /><PageMethodology {...UNOFFICIAL_COMPENSATION_METHODOLOGY} /><Button type="button" variant="outline" className="gap-2" onClick={() => load(true)} disabled={refreshing}><RefreshCw className={refreshing ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />Refresh</Button><Button type="button" className="gap-2" onClick={() => openClaim()}><Plus className="h-4 w-4" />Open Claim</Button></>}
       />
 
       <div className="grid divide-y rounded-lg border bg-card sm:grid-cols-4 sm:divide-x sm:divide-y-0">

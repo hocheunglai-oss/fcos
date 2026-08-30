@@ -332,13 +332,14 @@ export async function workNotificationsList(body = {}, accessContext) {
   const queryLimit = Math.min(200, limit * 4);
   const now = new Date().toISOString();
   const systemWindow = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  const marketWindowDate = systemWindow.slice(0, 10);
   const pairedVariableChargeWorkflow = pairedVariableChargeWorkflowEnabled();
   const [databaseSnapshot, specialTermsQueue, specialTermsConsolidationQueue, marketAlertEvents] = await Promise.all([
     loadDatabaseSnapshot(client, profile.id, queryLimit, now, systemWindow),
     listSpecialTermApprovalQueue({ limit: queryLimit }).then((data) => ({ data: data.items || [], error: null })).catch((error) => ({ data: [], error })),
     listSpecialTermClauseConsolidations({ includeClosed: false }).then((data) => ({ data: data.consolidations || [], error: null })).catch((error) => ({ data: [], error })),
     canViewMarkets
-      ? client.from('market_intelligence_alert_events').select('id,report_id,series_id,alert_type,severity,title,message,created_at').order('created_at', { ascending: false }).limit(queryLimit)
+      ? client.from('market_intelligence_alert_events').select('id,report_id,report_date,series_id,alert_type,severity,title,message,created_at').gte('report_date', marketWindowDate).order('created_at', { ascending: false }).limit(queryLimit)
       : Promise.resolve({ data: [], error: null }),
   ]);
   const marketAlertIds = (marketAlertEvents.data || []).map((row) => row.id).filter(Boolean);
