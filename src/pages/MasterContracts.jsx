@@ -217,7 +217,7 @@ function StaticSelect({
   return (
     <div className="grid gap-1.5">
       <Label>{label}</Label>
-      <Select value={value || undefined} onValueChange={onChange}>
+      <Select value={String(value ?? "")} onValueChange={onChange}>
         <SelectTrigger>
           <SelectValue placeholder={`Select ${label.toLowerCase()}`} />
         </SelectTrigger>
