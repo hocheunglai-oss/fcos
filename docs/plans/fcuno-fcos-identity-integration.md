@@ -3,7 +3,7 @@
 Status: In implementation
 Decision date: 24 August 2026
 Last architecture review: 31 August 2026
-Implementation state: Additive provider and consumer foundations in isolated branches; production flags remain disabled
+Implementation state: Additive provider and consumer foundations are deployed; production flags remain disabled
 
 ## Implemented foundation
 
@@ -17,7 +17,7 @@ Implementation state: Additive provider and consumer foundations in isolated bra
   existing authorization record and rejects stale, inactive, unverified or
   non-entitled identities at every authenticated API boundary.
 - The exact federation contract is pinned to FCUNO commit
-  `a6c7637d63fafd2ff71aaf08d90c6aa504c73ba0` and aggregate SHA-256
+  `9d8e05cd338e6105b6a495d68512f63692d3a48c` and aggregate SHA-256
   `7fc54e7c3bd79fb014ad81dc6d9190d021549d9428486ef85ed78fdff95d7cc2`.
 - Otto's existing SPC profile is linked by exact unique email. FCUNO owns its
   sign-in and revocation; SPC continues to own role, office, route, Supplier
@@ -25,6 +25,10 @@ Implementation state: Additive provider and consumer foundations in isolated bra
   retain their external sign-in.
 - Repository CI verifies the immutable contract and cancels superseded checks
   on the same branch. Provider and consumer release flags default to off.
+- Identity synchronization has an independently gated verification-key route.
+  It can be enabled and reconciled before FCUNO OIDC discovery or FCOS login
+  is exposed. Enabling synchronization never enables the FCOS login UI or
+  server-side federation enforcement.
 
 ## Activation gates
 
@@ -34,6 +38,11 @@ reconciliation report has no duplicates or unresolved active users, OIDC and
 signing secrets are configured only in their owning systems, both immutable
 previews pass compatibility and authenticated browser checks, and an approved
 paired release record identifies both Git commits and Vercel deployments.
+
+Activation order is fixed: configure current/next signing keys while every
+flag is off, enable identity synchronization and reconcile its outbox, then
+enable the OIDC provider and FCOS login only after the pilot identity and
+rollback evidence are approved.
 
 ## Summary
 

@@ -70,7 +70,7 @@ export function fcunoFederationConfig(env = process.env) {
 }
 
 function requireSyncConfiguration(config) {
-  if (!config.federationEnabled || !config.syncEnabled) {
+  if (!config.syncEnabled) {
     throw fcunoFederationError('FCUNO identity synchronization is not enabled.', 404, 'FCUNO_IDENTITY_SYNC_DISABLED');
   }
   if (!config.issuer || !config.audience || !config.jwksUri || !config.algorithms.length) {
