@@ -45,6 +45,7 @@ import { readDocumentSettings, saveDocumentSettings } from '@/lib/documentSettin
 import { applyAppearancePreferences, listenForSystemAppearance, readAppearancePreferences } from '@/lib/appearancePreferences';
 import { WorkspaceChromeProvider } from '@/components/workspace/WorkspaceChrome';
 import DraggableWorkspaceUtility from '@/components/workspace/DraggableWorkspaceUtility';
+import WorkspaceErrorBoundary from '@/components/WorkspaceErrorBoundary';
 
 const VersionAuditHistory = lazy(() => import('@/components/VersionAuditHistory'));
 const MarketPulse = lazy(() => import('@/components/market-pulse/MarketPulse'));
@@ -534,6 +535,12 @@ export default function Layout() {
   return (
     <WorkspaceChromeProvider>
     <div className="app-workspace-shell relative flex h-screen overflow-hidden">
+      <a
+        href="#fcos-main-content"
+        className="sr-only focus:fixed focus:left-20 focus:top-3 focus:z-[100] focus:h-auto focus:w-auto focus:overflow-visible focus:whitespace-normal focus:rounded-lg focus:bg-slate-950 focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:text-white focus:shadow-xl"
+      >
+        Skip to main content
+      </a>
       <EmailRouterBackgroundSync enabled={hasModuleAccess('email_router')} />
       <aside
         onMouseEnter={() => setSidebarHovered(true)}
@@ -819,7 +826,7 @@ export default function Layout() {
 
       <div className="app-workspace-sidebar-spacer w-[72px] shrink-0" aria-hidden="true" />
 
-      <main className="app-workspace-main flex h-screen min-w-0 flex-1 flex-col overflow-hidden">
+      <main id="fcos-main-content" tabIndex={-1} className="app-workspace-main flex h-screen min-w-0 flex-1 flex-col overflow-hidden">
         {versionUpdate && (
           <div className="pointer-events-auto z-40 shrink-0 border-b border-amber-200 bg-amber-50 px-4 py-2 text-amber-950 shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-3">
@@ -845,7 +852,13 @@ export default function Layout() {
             </DraggableWorkspaceUtility>
           )}
           <div ref={workspaceScrollRef} className={cn('app-workspace-scroll h-full min-h-0', pageOwnsScroll ? 'overflow-hidden' : 'overflow-auto')}>
-            <Outlet />
+            <WorkspaceErrorBoundary
+              scope="page"
+              resetKey={`${location.pathname}${location.search}`}
+              onGoHome={() => navigate('/')}
+            >
+              <Outlet />
+            </WorkspaceErrorBoundary>
           </div>
         </div>
       </main>

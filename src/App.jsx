@@ -3,13 +3,14 @@ import { lazy, Suspense, useEffect } from 'react';
 import { QueryClientProvider } from '@tanstack/react-query'
 import { SpeedInsights } from '@vercel/speed-insights/react';
 import { queryClientInstance } from '@/lib/query-client'
-import { BrowserRouter as Router, Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import { BrowserRouter as Router, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import PageNotFound from './lib/PageNotFound';
 import { AuthProvider, useAuth } from '@/lib/AuthContext';
 import UserNotRegisteredError from '@/components/UserNotRegisteredError';
 import ModuleGate from '@/components/ModuleGate';
 import ModuleGateAny from '@/components/ModuleGateAny';
 import Layout from '@/components/Layout';
+import WorkspaceErrorBoundary from '@/components/WorkspaceErrorBoundary';
 
 const DashboardSettings = lazy(() => import('@/pages/DashboardSettings'));
 const AccountInsight = lazy(() => import('@/pages/AccountInsight'));
@@ -63,6 +64,7 @@ function AuthErrorScreen({ authError }) {
 
 const AuthenticatedApp = () => {
   const location = useLocation();
+  const navigate = useNavigate();
   const { isLoadingAuth, isLoadingPublicSettings, authError, isAuthenticated } = useAuth();
   const loginRedirectState = location.pathname === '/' ? undefined : { from: location };
 
@@ -77,6 +79,11 @@ const AuthenticatedApp = () => {
   }
 
   return (
+    <WorkspaceErrorBoundary
+      scope="application"
+      resetKey={`${location.pathname}${location.search}`}
+      onGoHome={() => navigate('/')}
+    >
     <Suspense fallback={<RouteLoader />}>
     <Routes>
       <Route path="/login" element={<Login />} />
@@ -129,6 +136,7 @@ const AuthenticatedApp = () => {
       )}
     </Routes>
     </Suspense>
+    </WorkspaceErrorBoundary>
   );
 };
 
