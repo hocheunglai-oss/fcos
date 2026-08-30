@@ -20,11 +20,13 @@ import { Textarea } from '@/components/ui/textarea';
 import StateBlock from '@/components/common/StateBlock';
 import TableShell from '@/components/common/TableShell';
 import PageMethodology from '@/components/common/PageMethodology';
+import PageUserManual from '@/components/common/PageUserManual';
 import DataStatus from '@/components/common/DataStatus';
 import SalesforceSyncBadge from '@/components/common/SalesforceSyncBadge';
 import StemDetailLink from '@/components/common/StemDetailLink';
 import WorkspaceViewBar from '@/components/common/WorkspaceViewBar';
 import { PAYMENT_COLLECTIONS_METHODOLOGIES } from '@/lib/pageMethodologies';
+import { VARIABLE_CHARGES_USER_MANUAL } from '@/lib/pageUserManuals';
 import StemDetailModal from '@/components/dashboard/StemDetailModal';
 import VariableCharges from '@/components/payments/VariableCharges';
 
@@ -213,6 +215,7 @@ export default function PaymentCollections() {
                 ? <DataStatus meta={reconciliationMeta} label="Reconciliation" />
                 : null}
             <PageMethodology {...activeMethodology} size="sm" />
+            {activeTab === 'variable-charges' ? <PageUserManual {...VARIABLE_CHARGES_USER_MANUAL} /> : null}
             </>
           )}
         />

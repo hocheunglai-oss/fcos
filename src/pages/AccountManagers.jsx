@@ -20,7 +20,7 @@ import { appClient } from '@/api/appClient';
 import { useNavigationAwareRequest } from '@/hooks/useNavigationAwareRequest';
 import PageHeader from '@/components/common/PageHeader';
 import PageMethodology from '@/components/common/PageMethodology';
-import WorkflowUserManual from '@/components/common/WorkflowUserManual';
+import PageUserManual from '@/components/common/PageUserManual';
 import DataStatus from '@/components/common/DataStatus';
 import StateBlock from '@/components/common/StateBlock';
 import TableShell from '@/components/common/TableShell';
@@ -46,7 +46,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/use-toast';
 import { accountClKeyLabel, accountSearchDisplayText } from '@/lib/accountDisplay';
 import { ACCOUNT_MANAGERS_METHODOLOGY } from '@/lib/pageMethodologies';
-import { WORKFLOW_USER_MANUALS } from '@/lib/workflowUserManuals';
+import { ACCOUNT_MANAGERS_USER_MANUAL } from '@/lib/pageUserManuals';
 
 const PAGE_SIZE = 100;
 const UNASSIGNED_FILTER = '__unassigned__';
@@ -423,11 +423,11 @@ export default function AccountManagers() {
   if (workspaceView === 'buyer-pic-references') {
     return (
       <div className="workspace-reference min-w-0">
-        <div className="mb-3 flex justify-end"><WorkflowUserManual manual={WORKFLOW_USER_MANUALS.accountManagers} /></div>
         <BuyerPicReferences
           activeView={workspaceView}
           onViewChange={setWorkspaceView}
           methodology={ACCOUNT_MANAGERS_METHODOLOGY}
+          userManual={ACCOUNT_MANAGERS_USER_MANUAL}
         />
       </div>
     );
@@ -441,8 +441,8 @@ export default function AccountManagers() {
         meta={`${stats.total.toLocaleString()} active Account names`}
         actions={(
           <>
-            <WorkflowUserManual manual={WORKFLOW_USER_MANUALS.accountManagers} />
             <PageMethodology {...ACCOUNT_MANAGERS_METHODOLOGY} />
+            <PageUserManual {...ACCOUNT_MANAGERS_USER_MANUAL} />
             <DataStatus meta={responseMeta} state={loading || refreshing ? 'refreshing' : undefined} label="Accounts" />
             <Button
               variant="outline"

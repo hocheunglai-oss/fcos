@@ -20,7 +20,6 @@ import {
 } from 'lucide-react';
 import { appClient } from '@/api/appClient';
 import PageMethodology from '@/components/common/PageMethodology';
-import WorkflowUserManual from '@/components/common/WorkflowUserManual';
 import StemDetailLink from '@/components/common/StemDetailLink';
 import StateBlock from '@/components/common/StateBlock';
 import TableShell from '@/components/common/TableShell';
@@ -60,7 +59,6 @@ import {
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
 import { PAYMENT_COLLECTIONS_METHODOLOGIES } from '@/lib/pageMethodologies';
-import { WORKFLOW_USER_MANUALS } from '@/lib/workflowUserManuals';
 import { calculateHongKongAnchorageDues } from '@/lib/anchorageDues';
 import { LIGHT_DUES_CATEGORY_ALL_OTHER, LIGHT_DUES_CATEGORY_RIVER_TRADE, calculateHongKongLightDues } from '@/lib/lightDues';
 import { cn } from '@/lib/utils';
@@ -941,7 +939,6 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
           <h1 className="truncate text-xl font-semibold text-foreground">{caseStemName(activeCase)}</h1>
         </div>
         <div className="flex items-center gap-2">
-          <WorkflowUserManual manual={WORKFLOW_USER_MANUALS.variableCharges} compact />
           {detail && <Badge variant="outline" className={viewTone(valueOf(activeCase, ['status']))}>{caseStatus(activeCase)}</Badge>}
           <Button type="button" variant="outline" size="sm" onClick={() => loadDetail(selectedStemId, { force: true })} disabled={detailLoading || saving || Boolean(supplierSavingId)}>
             <RefreshCw className={cn('mr-2 h-4 w-4', detailLoading && 'animate-spin')} /> Refresh
@@ -1092,7 +1089,6 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
           <p className="mt-1 max-w-3xl text-sm text-muted-foreground">See what needs your attention, what is waiting, and what is ready for invoice creation.</p>
         </div>
         <div className="flex items-center gap-2 self-start">
-          <WorkflowUserManual manual={WORKFLOW_USER_MANUALS.variableCharges} />
           <Button type="button" variant="outline" className="gap-2" onClick={() => loadCases({ force: true })} disabled={refreshing || loading}>
             <RefreshCw className={cn('h-4 w-4', (refreshing || loading) && 'animate-spin')} /> Refresh Salesforce
           </Button>
