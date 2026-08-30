@@ -4,12 +4,14 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { appClient } from '@/api/appClient';
 import PageHeader from '@/components/common/PageHeader';
 import PageMethodology from '@/components/common/PageMethodology';
+import PageUserManual from '@/components/common/PageUserManual';
 import StateBlock from '@/components/common/StateBlock';
 import WholeTermRevisionPanel from '@/components/special-terms/WholeTermRevisionPanel';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { SPECIAL_TERMS_METHODOLOGY } from '@/lib/pageMethodologies';
+import { SPECIAL_TERMS_USER_MANUAL } from '@/lib/pageUserManuals';
 import { invalidateSpecialTermDetail, prefetchSpecialTermDetail } from '@/lib/specialTermDetailPrefetch';
 
 export default function SpecialTermEditor() {
@@ -74,7 +76,7 @@ export default function SpecialTermEditor() {
         title={detail?.term?.name || 'Special Term'}
         description="One editor for Terms Text, both remarks, matching rules, and the governed preview."
         meta={<div className="flex flex-wrap gap-2"><Badge variant={detail?.term?.revisionStatus === 'Approved' ? 'default' : 'secondary'}>{detail?.term?.revisionStatus || 'Legacy'}</Badge><Badge variant="outline">{detail?.term?.addToConfirmation ? 'Confirmation PDF' : 'No Confirmation PDF'}</Badge><Badge variant="outline">{detail?.term?.addToNomination ? 'Nomination PDF' : 'No Nomination PDF'}</Badge></div>}
-        actions={<div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => navigate('/special-terms')}><ArrowLeft className="mr-2 h-4 w-4" />Back to terms</Button><PageMethodology {...SPECIAL_TERMS_METHODOLOGY} /><Button variant="outline" onClick={() => load({ force: true, preserveViewport: true })} disabled={refreshing}><RefreshCw className={`mr-2 h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />Refresh term</Button>{detail?.instanceUrl ? <Button asChild variant="outline"><a href={`${detail.instanceUrl}/${termId}`} target="_blank" rel="noreferrer">Salesforce<ExternalLink className="ml-2 h-4 w-4" /></a></Button> : null}</div>}
+        actions={<div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => navigate('/special-terms')}><ArrowLeft className="mr-2 h-4 w-4" />Back to terms</Button><PageMethodology {...SPECIAL_TERMS_METHODOLOGY} /><PageUserManual {...SPECIAL_TERMS_USER_MANUAL} /><Button variant="outline" onClick={() => load({ force: true, preserveViewport: true })} disabled={refreshing}><RefreshCw className={`mr-2 h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />Refresh term</Button>{detail?.instanceUrl ? <Button asChild variant="outline"><a href={`${detail.instanceUrl}/${termId}`} target="_blank" rel="noreferrer">Salesforce<ExternalLink className="ml-2 h-4 w-4" /></a></Button> : null}</div>}
       />
 
       {message ? <Alert><ShieldCheck className="h-4 w-4" /><AlertDescription>{message}</AlertDescription></Alert> : null}
