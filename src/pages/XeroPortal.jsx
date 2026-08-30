@@ -9,6 +9,7 @@ import {
   ExternalLink,
   FileJson,
   FileText,
+  Languages,
   Loader2,
   PlugZap,
   RefreshCw,
@@ -29,26 +30,16 @@ import { Textarea } from '@/components/ui/textarea';
 import { toast } from '@/components/ui/use-toast';
 import { appClient } from '@/api/appClient';
 import { emptyReceiptFields, parseReceiptText } from '@/lib/receiptExtraction';
+import {
+  XERO_PORTAL_LANGUAGE_STORAGE_KEY,
+  XERO_PORTAL_UI_LANGUAGES,
+  normalizeXeroPortalLanguage,
+  xeroPortalUiCopy,
+} from '@/lib/xeroPortalUiCopy';
 import { cn } from '@/lib/utils';
 
-const ACTION_OPTIONS = [
-  ['all', 'All actions'],
-  ['archive', 'Archive'],
-  ['rename', 'Rename'],
-  ['exception', 'Exceptions'],
-  ['keep', 'Keep'],
-];
-
-const STATUS_OPTIONS = [
-  ['all', 'All statuses'],
-  ['eligible', 'Eligible'],
-  ['blocked', 'Blocked'],
-  ['kept', 'Kept'],
-  ['not-selected', 'Not selected'],
-  ['updated', 'Updated'],
-  ['archived', 'Archived'],
-  ['failed', 'Failed'],
-];
+const ACTION_FILTERS = ['archive', 'rename', 'exception', 'keep'];
+const STATUS_FILTERS = ['eligible', 'blocked', 'kept', 'not-selected', 'updated', 'archived', 'failed'];
 
 const RECEIPT_CURRENCIES = ['HKD', 'USD', 'SGD', 'CNY', 'EUR', 'GBP', 'AUD', 'NZD', 'CAD', 'JPY'];
 const XeroFinancialSync = lazy(() => import('@/components/xero/XeroFinancialSync'));
@@ -72,6 +63,14 @@ export default function XeroPortal() {
   const [receiptDraft, setReceiptDraft] = useState(emptyReceiptFields);
   const [receiptFile, setReceiptFile] = useState(null);
   const [ocrBusy, setOcrBusy] = useState(false);
+  const [language, setLanguage] = useState(() => normalizeXeroPortalLanguage(
+    typeof window === 'undefined' ? 'en' : window.localStorage.getItem(XERO_PORTAL_LANGUAGE_STORAGE_KEY),
+  ));
+  const copy = xeroPortalUiCopy(language);
+
+  useEffect(() => {
+    window.localStorage.setItem(XERO_PORTAL_LANGUAGE_STORAGE_KEY, language);
+  }, [language]);
 
   const load = useCallback(async ({ force = false } = {}) => {
     setLoading(true);
@@ -98,8 +97,9 @@ export default function XeroPortal() {
   useEffect(() => {
     const xero = searchParams.get('xero');
     const message = searchParams.get('message');
-    if (xero === 'connected') toast({ title: 'Xero connected', description: 'FCOS can now read and update the connected Xero organisation.' });
-    if (xero === 'error') toast({ title: 'Xero connection failed', description: message || 'Check the Xero app settings and try again.', variant: 'destructive' });
+    const callbackCopy = xeroPortalUiCopy(window.localStorage.getItem(XERO_PORTAL_LANGUAGE_STORAGE_KEY));
+    if (xero === 'connected') toast({ title: callbackCopy.toasts.connected, description: callbackCopy.toasts.connectedDescription });
+    if (xero === 'error') toast({ title: callbackCopy.toasts.connectionFailed, description: message || callbackCopy.toasts.connectionFailedDescription, variant: 'destructive' });
     if (xero) {
       const next = new URLSearchParams(searchParams);
       next.delete('xero');
@@ -121,8 +121,17 @@ export default function XeroPortal() {
 
   const reasonOptions = useMemo(() => {
     const reasons = new Set((run?.rows || []).map((row) => row.reason).filter(Boolean));
-    return [['all', 'All reasons'], ...[...reasons].sort().map((reason) => [reason, reasonLabels[reason] || reason])];
-  }, [reasonLabels, run]);
+    return [['all', copy.contacts.allReasons], ...[...reasons].sort().map((reason) => [reason, copy.reasons[reason] || reasonLabels[reason] || reason])];
+  }, [copy, reasonLabels, run]);
+
+  const actionOptions = useMemo(() => [
+    ['all', copy.contacts.allActions],
+    ...ACTION_FILTERS.map((action) => [action, copy.actions[action] || action]),
+  ], [copy]);
+  const statusOptions = useMemo(() => [
+    ['all', copy.contacts.allStatuses],
+    ...STATUS_FILTERS.map((statusValue) => [statusValue, copy.statuses[statusValue] || statusValue]),
+  ], [copy]);
 
   const filteredRows = useMemo(() => {
     const q = filters.search.trim().toUpperCase();
@@ -152,7 +161,7 @@ export default function XeroPortal() {
     const result = await appClient.functions.invoke('xeroPortalConnectStart', { returnPath: '/xero-portal' }, { force: true, invalidateCache: true });
     setBusy('');
     if (result.data?.error) {
-      toast({ title: 'Xero connection unavailable', description: result.data.error, variant: 'destructive' });
+      toast({ title: copy.toasts.connectionUnavailable, description: result.data.error, variant: 'destructive' });
       return;
     }
     window.location.href = result.data.authorizationUrl;
@@ -162,9 +171,9 @@ export default function XeroPortal() {
     setBusy('disconnect');
     const result = await appClient.functions.invoke('xeroPortalDisconnect', {}, { force: true, invalidateCache: true });
     setBusy('');
-    if (result.data?.error) toast({ title: 'Disconnect failed', description: result.data.error, variant: 'destructive' });
+    if (result.data?.error) toast({ title: copy.toasts.disconnectFailed, description: result.data.error, variant: 'destructive' });
     else {
-      toast({ title: 'Xero disconnected' });
+      toast({ title: copy.toasts.disconnected });
       await load({ force: true });
     }
   }
@@ -178,7 +187,7 @@ export default function XeroPortal() {
     }, { force: true, invalidateCache: true });
     setBusy('');
     if (result.data?.error) {
-      toast({ title: 'Preview failed', description: result.data.error, variant: 'destructive' });
+      toast({ title: copy.toasts.previewFailed, description: result.data.error, variant: 'destructive' });
       return;
     }
     setRun(result.data.run);
@@ -195,20 +204,20 @@ export default function XeroPortal() {
     }, { force: true, invalidateCache: true });
     setBusy('');
     if (result.data?.error) {
-      toast({ title: 'Apply failed', description: result.data.error, variant: 'destructive' });
+      toast({ title: copy.toasts.applyFailed, description: result.data.error, variant: 'destructive' });
       return;
     }
     setRun(result.data.run);
     setSelectedRows(new Set());
     setReviewed(false);
-    toast({ title: 'Xero contact changes applied', description: summarizeApply(result.data.run?.summary || {}) });
+    toast({ title: copy.toasts.changesApplied, description: summarizeApply(result.data.run?.summary || {}, language) });
     await load({ force: true });
   }
 
   async function runOcr() {
     if (!receiptFile) return;
     if (!receiptFile.type.startsWith('image/')) {
-      toast({ title: 'OCR supports image receipts', description: 'PDF receipts can still be saved and synced after entering the fields manually.', variant: 'destructive' });
+      toast({ title: copy.toasts.ocrImagesOnly, description: copy.toasts.ocrImagesOnlyDescription, variant: 'destructive' });
       return;
     }
     setOcrBusy(true);
@@ -220,7 +229,7 @@ export default function XeroPortal() {
       const text = result.data?.text || '';
       setReceiptDraft((current) => ({ ...current, ...parseReceiptText(text, receiptFile.name), note: text.trim() || current.note }));
     } catch (ocrError) {
-      toast({ title: 'OCR failed', description: ocrError.message || 'Enter the receipt fields manually.', variant: 'destructive' });
+      toast({ title: copy.toasts.ocrFailed, description: ocrError.message || copy.toasts.ocrFailedDescription, variant: 'destructive' });
     } finally {
       setOcrBusy(false);
     }
@@ -228,7 +237,7 @@ export default function XeroPortal() {
 
   async function saveReceipt({ sync = false } = {}) {
     if (!receiptFile) {
-      toast({ title: 'Receipt file required', description: 'Choose an image or PDF receipt first.', variant: 'destructive' });
+      toast({ title: copy.toasts.fileRequired, description: copy.toasts.fileRequiredDescription, variant: 'destructive' });
       return;
     }
     setBusy(sync ? 'receipt-sync-create' : 'receipt-create');
@@ -240,12 +249,12 @@ export default function XeroPortal() {
     }, { force: true, invalidateCache: true });
     setBusy('');
     if (result.data?.error) {
-      toast({ title: sync ? 'Receipt sync failed' : 'Receipt save failed', description: result.data.error, variant: 'destructive' });
+      toast({ title: sync ? copy.toasts.receiptSyncFailed : copy.toasts.receiptSaveFailed, description: result.data.error, variant: 'destructive' });
       return;
     }
     setReceiptDraft(emptyReceiptFields());
     setReceiptFile(null);
-    toast({ title: sync ? 'Receipt sent to Xero' : 'Receipt saved', description: sync ? 'A draft bill was created and the file attached.' : 'The receipt is stored in FCOS.' });
+    toast({ title: sync ? copy.toasts.receiptSent : copy.toasts.receiptSaved, description: sync ? copy.toasts.receiptSentDescription : copy.toasts.receiptSavedDescription });
     await load({ force: true });
   }
 
@@ -253,8 +262,8 @@ export default function XeroPortal() {
     setBusy(`receipt-sync-${id}`);
     const result = await appClient.functions.invoke('xeroPortalReceiptSync', { id }, { force: true, invalidateCache: true });
     setBusy('');
-    if (result.data?.error) toast({ title: 'Receipt sync failed', description: result.data.error, variant: 'destructive' });
-    else toast({ title: 'Receipt sent to Xero', description: 'A draft bill was created and the file attached.' });
+    if (result.data?.error) toast({ title: copy.toasts.receiptSyncFailed, description: result.data.error, variant: 'destructive' });
+    else toast({ title: copy.toasts.receiptSent, description: copy.toasts.receiptSentDescription });
     await load({ force: true });
   }
 
@@ -272,49 +281,55 @@ export default function XeroPortal() {
   }
 
   if (loading && !status) {
-    return <div className="workspace-tools p-4 lg:p-6"><StateBlock icon={Loader2} title="Loading Xero Portal" description="FCOS is reading the Xero connection, receipt audit, and latest contact lifecycle run." /></div>;
+    return <div className="workspace-tools p-4 lg:p-6"><StateBlock icon={Loader2} title={copy.header.loadingTitle} description={copy.header.loadingDescription} /></div>;
   }
 
   return (
-    <div className="workspace-tools min-h-full bg-background p-4 text-foreground lg:p-6">
+    <div className="workspace-tools min-h-full bg-background p-4 text-foreground lg:p-6" lang={language === 'zh-Hant' ? 'zh-Hant-HK' : 'en'}>
       <div className="mx-auto flex max-w-[1800px] flex-col gap-4">
         <header className="flex flex-col gap-3 border-b border-border pb-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <div className="flex flex-wrap items-center gap-2">
-              <h1 className="text-2xl font-semibold tracking-normal">Xero Portal</h1>
-              <StatusBadge ok={xero.connected} trueLabel="Connected" falseLabel="Disconnected" />
-              <StatusBadge ok={actionGate?.enabled} trueLabel="Xero writes enabled" falseLabel="Xero writes gated" tone={actionGate?.enabled ? 'emerald' : 'amber'} />
+              <h1 className="text-2xl font-semibold tracking-normal">{copy.header.title}</h1>
+              <StatusBadge ok={xero.connected} trueLabel={copy.header.connected} falseLabel={copy.header.disconnected} />
+              <StatusBadge ok={actionGate?.enabled} trueLabel={copy.header.writesEnabled} falseLabel={copy.header.writesGated} tone={actionGate?.enabled ? 'emerald' : 'amber'} />
             </div>
-            <p className="mt-1 max-w-4xl text-sm text-muted-foreground">
-              Finance-reviewed Salesforce accounting sync, receipt draft bills, Account contact sync, unused-contact review, and automation audit.
-            </p>
+            <p className="mt-1 max-w-4xl text-sm text-muted-foreground">{copy.header.subtitle}</p>
           </div>
           <div className="flex flex-wrap gap-2">
+            <div aria-label={copy.languageLabel} className="inline-flex rounded-lg border border-border bg-muted/30 p-1">
+              <Languages className="mx-2 my-auto h-4 w-4 text-muted-foreground" />
+              {XERO_PORTAL_UI_LANGUAGES.map((option) => (
+                <Button key={option.id} type="button" size="sm" variant={language === option.id ? 'default' : 'ghost'} className="h-8" aria-pressed={language === option.id} onClick={() => setLanguage(option.id)}>
+                  {option.label}
+                </Button>
+              ))}
+            </div>
             <Button type="button" variant="outline" onClick={() => setTab('manual')}>
               <BookOpen className="mr-2 h-4 w-4" />
-              User manual
+              {copy.header.manual}
             </Button>
             <Button type="button" variant="outline" onClick={() => load({ force: true })} disabled={Boolean(busy)}>
               {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
-              Refresh
+              {copy.header.refresh}
             </Button>
             {xero.connected ? (
               <>
                 {needsFinancialReconnect ? (
                   <Button type="button" onClick={connectXero} disabled={busy === 'connect'}>
                     {busy === 'connect' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <PlugZap className="mr-2 h-4 w-4" />}
-                    Reconnect scopes
+                    {copy.header.reconnect}
                   </Button>
                 ) : null}
                 <Button type="button" variant="outline" onClick={disconnectXero} disabled={busy === 'disconnect'}>
                   {busy === 'disconnect' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <XCircle className="mr-2 h-4 w-4" />}
-                  Disconnect
+                  {copy.header.disconnect}
                 </Button>
               </>
             ) : (
               <Button type="button" onClick={connectXero} disabled={busy === 'connect' || !xero.configured}>
                 {busy === 'connect' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <PlugZap className="mr-2 h-4 w-4" />}
-                Connect Xero
+                {copy.header.connect}
               </Button>
             )}
           </div>
@@ -323,68 +338,66 @@ export default function XeroPortal() {
         {error ? <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div> : null}
 
         <section className="grid gap-3 lg:grid-cols-4">
-          <ConnectionPanel title="Xero tenant" rows={[
-            ['Organisation', xero.tenantName || 'Not connected'],
-            ['Tenant ID', xero.tenantId || 'Not available'],
-            ['Token expires', formatDateTime(xero.expiresAt)],
-            ['Redirect URI', xero.redirectUri || 'Not configured'],
+          <ConnectionPanel unavailable={copy.common.unavailable} title={copy.panels.tenant} rows={[
+            [copy.panels.organisation, xero.tenantName || copy.panels.notConnected],
+            [copy.panels.tenantId, xero.tenantId || copy.common.unavailable],
+            [copy.panels.tokenExpires, formatDateTime(xero.expiresAt, language)],
+            [copy.panels.redirectUri, xero.redirectUri || copy.common.notConfigured],
           ]} />
-          <ConnectionPanel title="Xero scopes" rows={[
-            ['Contacts', scopeFlags.contacts ? 'Available' : 'Missing'],
-            ['Invoices', scopeFlags.invoices ? 'Available' : 'Missing'],
-            ['Attachments', scopeFlags.attachments ? 'Available' : 'Missing'],
-            ['Payments', scopeFlags.paymentsWrite ? 'Read / write' : scopeFlags.paymentsRead ? 'Read only' : 'Missing'],
-            ['Accounting settings', scopeFlags.settingsRead ? 'Available' : 'Missing'],
+          <ConnectionPanel unavailable={copy.common.unavailable} title={copy.panels.scopes} rows={[
+            [copy.panels.contacts, scopeFlags.contacts ? copy.common.available : copy.common.missing],
+            [copy.panels.invoices, scopeFlags.invoices ? copy.common.available : copy.common.missing],
+            [copy.panels.attachments, scopeFlags.attachments ? copy.common.available : copy.common.missing],
+            [copy.panels.payments, scopeFlags.paymentsWrite ? copy.common.readWrite : scopeFlags.paymentsRead ? copy.common.readOnly : copy.common.missing],
+            [copy.panels.accountingSettings, scopeFlags.settingsRead ? copy.common.available : copy.common.missing],
           ]} />
-          <ConnectionPanel title="Salesforce source" rows={[
-            ['Auth', status?.salesforce?.authMode || 'Unknown'],
-            ['Instance', hostname(status?.salesforce?.instanceUrl)],
-            ['CL Key', 'HK* only'],
-            ['Delivery from', status?.salesforce?.recentStemDeliveryFrom || '2025-01-01'],
+          <ConnectionPanel unavailable={copy.common.unavailable} title={copy.panels.salesforce} rows={[
+            [copy.panels.auth, status?.salesforce?.authMode || copy.common.unknown],
+            [copy.panels.instance, hostname(status?.salesforce?.instanceUrl, copy.common.notConfigured)],
+            [copy.panels.clKey, copy.panels.hkOnly],
+            [copy.panels.deliveryFrom, status?.salesforce?.recentStemDeliveryFrom || '2025-01-01'],
           ]} />
-          <ConnectionPanel title="Latest automation" rows={[
-            ['Run', autoRun?.id ? shortId(autoRun.id) : 'No run'],
-            ['Event', autoRun?.eventId || 'Not available'],
-            ['Created', String(autoRun?.summary?.created || 0)],
-            ['Skipped / failed', `${autoRun?.summary?.skipped || 0} / ${autoRun?.summary?.failed || 0}`],
+          <ConnectionPanel unavailable={copy.common.unavailable} title={copy.panels.automation} rows={[
+            [copy.panels.run, autoRun?.id ? shortId(autoRun.id) : copy.panels.noRun],
+            [copy.panels.event, autoRun?.eventId || copy.common.unavailable],
+            [copy.panels.created, String(autoRun?.summary?.created || 0)],
+            [copy.panels.skippedFailed, `${autoRun?.summary?.skipped || 0} / ${autoRun?.summary?.failed || 0}`],
           ]} />
         </section>
 
         <Tabs value={tab} onValueChange={setTab} className="w-full">
           <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1">
-            <TabsTrigger value="contacts">Contacts</TabsTrigger>
-            <TabsTrigger value="accounting">Accounting Sync</TabsTrigger>
-            <TabsTrigger value="receipts">Receipts</TabsTrigger>
-            <TabsTrigger value="automation">Auto-Created Contacts</TabsTrigger>
-            <TabsTrigger value="manual">User Manual</TabsTrigger>
+            <TabsTrigger value="contacts">{copy.tabs.contacts}</TabsTrigger>
+            <TabsTrigger value="accounting">{copy.tabs.accounting}</TabsTrigger>
+            <TabsTrigger value="receipts">{copy.tabs.receipts}</TabsTrigger>
+            <TabsTrigger value="automation">{copy.tabs.automation}</TabsTrigger>
+            <TabsTrigger value="manual">{copy.tabs.manual}</TabsTrigger>
           </TabsList>
 
           <TabsContent value="contacts" className="space-y-4">
             <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
-              <Kpi label="Non-archived Xero" value={hasLifecycleRun ? summary.nonArchivedXeroContacts : null} />
-              <Kpi label="Archived Xero" value={hasLifecycleRun ? summary.archivedXeroContacts : null} />
-              <Kpi label="Unmatched active" value={hasLifecycleRun ? summary.unmatchedNonArchivedXeroContacts : null} tone="amber" />
-              <Kpi label="Rename eligible" value={hasLifecycleRun ? summary.renameEligible : null} tone="sky" />
-              <Kpi label="Archive eligible" value={hasLifecycleRun ? summary.archiveEligible : null} tone="rose" />
-              <Kpi label="Exceptions" value={hasLifecycleRun ? summary.exception : null} tone="slate" />
+              <Kpi label={copy.contacts.kpis.active} value={hasLifecycleRun ? summary.nonArchivedXeroContacts : null} emptyLabel={copy.contacts.previewRequired} />
+              <Kpi label={copy.contacts.kpis.archived} value={hasLifecycleRun ? summary.archivedXeroContacts : null} emptyLabel={copy.contacts.previewRequired} />
+              <Kpi label={copy.contacts.kpis.unmatched} value={hasLifecycleRun ? summary.unmatchedNonArchivedXeroContacts : null} tone="amber" emptyLabel={copy.contacts.previewRequired} />
+              <Kpi label={copy.contacts.kpis.rename} value={hasLifecycleRun ? summary.renameEligible : null} tone="sky" emptyLabel={copy.contacts.previewRequired} />
+              <Kpi label={copy.contacts.kpis.archive} value={hasLifecycleRun ? summary.archiveEligible : null} tone="rose" emptyLabel={copy.contacts.previewRequired} />
+              <Kpi label={copy.contacts.kpis.exceptions} value={hasLifecycleRun ? summary.exception : null} tone="slate" emptyLabel={copy.contacts.previewRequired} />
             </section>
 
             <section className="rounded-lg border border-border bg-card p-4">
               <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                 <div>
-                  <h2 className="text-base font-semibold">Contact Cleanup & Sync</h2>
-                  <p className="mt-1 max-w-4xl text-sm text-muted-foreground">
-                    Matching uses Xero current name only: Salesforce Account name or the Salesforce CL Key after removing leading HK. ContactNumber and AccountNumber are reference fields only.
-                  </p>
+                  <h2 className="text-base font-semibold">{copy.contacts.title}</h2>
+                  <p className="mt-1 max-w-4xl text-sm text-muted-foreground">{copy.contacts.description}</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <Button type="button" variant="outline" onClick={() => setFilters((current) => ({ ...current, unmatchedOnly: !current.unmatchedOnly }))}>
                     <ShieldCheck className="mr-2 h-4 w-4" />
-                    {filters.unmatchedOnly ? 'Show all rows' : 'Show unmatched Xero'}
+                    {filters.unmatchedOnly ? copy.contacts.showAll : copy.contacts.showUnmatched}
                   </Button>
                   <Button type="button" onClick={previewLifecycle} disabled={busy === 'preview' || !xero.connected || !scopeFlags.contacts}>
                     {busy === 'preview' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
-                    Preview
+                    {copy.contacts.preview}
                   </Button>
                 </div>
               </div>
@@ -393,76 +406,76 @@ export default function XeroPortal() {
                 <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
                   <label className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm">
                     <Checkbox checked={forceUsageRefresh} onCheckedChange={(checked) => setForceUsageRefresh(checked === true)} />
-                    Full usage refresh
+                    {copy.contacts.fullUsage}
                   </label>
                   <label className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm">
                     <Checkbox checked={incrementalUsageRefresh} onCheckedChange={(checked) => setIncrementalUsageRefresh(checked === true)} disabled={forceUsageRefresh} />
-                    Incremental usage refresh
+                    {copy.contacts.incrementalUsage}
                   </label>
-                  <AuditButton disabled={!run} onClick={() => downloadJson(run, `xero-contact-lifecycle-${run?.id || 'run'}.json`)} icon={FileJson}>JSON audit</AuditButton>
-                  <AuditButton disabled={!run} onClick={() => downloadCsv(run?.rows || [], `xero-contact-lifecycle-${run?.id || 'run'}.csv`)} icon={Download}>CSV audit</AuditButton>
+                  <AuditButton disabled={!run} onClick={() => downloadJson(run, `xero-contact-lifecycle-${run?.id || 'run'}.json`)} icon={FileJson}>{copy.contacts.jsonAudit}</AuditButton>
+                  <AuditButton disabled={!run} onClick={() => downloadCsv(run?.rows || [], `xero-contact-lifecycle-${run?.id || 'run'}.csv`)} icon={Download}>{copy.contacts.csvAudit}</AuditButton>
                 </div>
                 <div className="rounded-lg border border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-                  <div className="font-semibold text-foreground">Xero call estimate</div>
+                  <div className="font-semibold text-foreground">{copy.contacts.callEstimate}</div>
                   <div className="mt-1 grid grid-cols-3 gap-2">
-                    <span>Preview: {hasLifecycleRun ? (run?.xeroCallEstimate?.previewActualCalls ?? 0) : 'Pending'}</span>
-                    <span>Verify: {hasLifecycleRun ? (run?.xeroCallEstimate?.applyVerifyCalls ?? 0) : 'Pending'}</span>
-                    <span>Apply: {hasLifecycleRun ? (run?.xeroCallEstimate?.applyMutationCalls ?? 0) : 'Pending'}</span>
+                    <span>{copy.contacts.preview}: {hasLifecycleRun ? (run?.xeroCallEstimate?.previewActualCalls ?? 0) : copy.common.pending}</span>
+                    <span>{copy.contacts.verify}: {hasLifecycleRun ? (run?.xeroCallEstimate?.applyVerifyCalls ?? 0) : copy.common.pending}</span>
+                    <span>{copy.contacts.apply}: {hasLifecycleRun ? (run?.xeroCallEstimate?.applyMutationCalls ?? 0) : copy.common.pending}</span>
                   </div>
                 </div>
               </div>
 
               <div className="mt-4 rounded-lg border border-dashed border-border bg-background/60 px-3 py-2 text-sm text-muted-foreground">
                 {hasLifecycleRun
-                  ? `Last contact lifecycle run ${shortId(run.id)} loaded ${formatDateTime(run.createdAt)} with ${Number(run.rowCount || run.rows?.length || 0).toLocaleString()} audit rows.`
-                  : 'No contact lifecycle preview has been generated in FCOS yet. The KPI cards and table will populate after Preview.'}
+                  ? copy.contacts.lastRun(shortId(run.id), formatDateTime(run.createdAt, language), Number(run.rowCount || run.rows?.length || 0).toLocaleString(copy.locale))
+                  : copy.contacts.noRun}
               </div>
 
-              <UsageCache sources={status?.usageCache?.sources || run?.usageCache?.sources || []} />
-              <StatusLegend labels={statusLabels} />
+              <UsageCache sources={status?.usageCache?.sources || run?.usageCache?.sources || []} copy={copy} language={language} />
+              <StatusLegend labels={statusLabels} copy={copy} />
             </section>
 
             <section className="rounded-lg border border-border bg-card p-4">
               <div className="grid gap-2 md:grid-cols-5">
                 <div className="relative md:col-span-2">
                   <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-                  <Input value={filters.search} onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))} placeholder="Search Xero, Salesforce, CL Key" className="pl-9" />
+                  <Input value={filters.search} onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))} placeholder={copy.contacts.search} className="pl-9" />
                 </div>
-                <NativeSelect value={filters.action} onChange={(action) => setFilters((current) => ({ ...current, action }))} options={ACTION_OPTIONS} />
-                <NativeSelect value={filters.status} onChange={(statusValue) => setFilters((current) => ({ ...current, status: statusValue }))} options={STATUS_OPTIONS} />
+                <NativeSelect value={filters.action} onChange={(action) => setFilters((current) => ({ ...current, action }))} options={actionOptions} />
+                <NativeSelect value={filters.status} onChange={(statusValue) => setFilters((current) => ({ ...current, status: statusValue }))} options={statusOptions} />
                 <NativeSelect value={filters.reason} onChange={(reason) => setFilters((current) => ({ ...current, reason }))} options={reasonOptions} />
               </div>
 
               <div className="mt-3 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                 <div className="text-sm text-muted-foreground">
-                  Showing {filteredRows.length.toLocaleString()} rows. Selected {totalSelectedCount.toLocaleString()} total, {selectedEligibleCount.toLocaleString()} visible eligible.
+                  {copy.contacts.showing(filteredRows.length.toLocaleString(copy.locale), totalSelectedCount.toLocaleString(copy.locale), selectedEligibleCount.toLocaleString(copy.locale))}
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <Button type="button" variant="outline" onClick={selectVisibleEligible} disabled={!filteredRows.some(canApplyRow)}>Select visible eligible</Button>
-                  <Button type="button" variant="outline" onClick={() => setSelectedRows(new Set())}>Clear</Button>
+                  <Button type="button" variant="outline" onClick={selectVisibleEligible} disabled={!filteredRows.some(canApplyRow)}>{copy.contacts.selectVisible}</Button>
+                  <Button type="button" variant="outline" onClick={() => setSelectedRows(new Set())}>{copy.common.clear}</Button>
                   <label className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm">
                     <Checkbox checked={reviewed} onCheckedChange={(checked) => setReviewed(checked === true)} />
-                    Reviewed
+                    {copy.contacts.reviewed}
                   </label>
                   <Button type="button" onClick={applyLifecycle} disabled={!run?.id || !reviewed || !selectedEligibleCount || busy === 'apply'}>
                     {busy === 'apply' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Archive className="mr-2 h-4 w-4" />}
-                    Apply selected
+                    {copy.contacts.applySelected}
                   </Button>
                 </div>
               </div>
 
               <div className="mt-4">
-                <Table scrollLabel="Xero contact lifecycle rows">
+                <Table scrollLabel={copy.contacts.tableLabel}>
                   <TableHeader>
                     <TableRow>
-                      <TableHead className="w-10">Use</TableHead>
-                      <TableHead>Action</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Xero contact</TableHead>
-                      <TableHead>Salesforce source</TableHead>
-                      <TableHead>Match</TableHead>
-                      <TableHead>Usage</TableHead>
-                      <TableHead>Reason</TableHead>
+                      <TableHead className="w-10">{copy.common.use}</TableHead>
+                      <TableHead>{copy.common.action}</TableHead>
+                      <TableHead>{copy.common.status}</TableHead>
+                      <TableHead>{copy.contacts.xeroContact}</TableHead>
+                      <TableHead>{copy.contacts.salesforceSource}</TableHead>
+                      <TableHead>{copy.contacts.match}</TableHead>
+                      <TableHead>{copy.contacts.usage}</TableHead>
+                      <TableHead>{copy.common.reason}</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -471,29 +484,29 @@ export default function XeroPortal() {
                         <TableCell>
                           <Checkbox checked={selectedRows.has(row.id)} onCheckedChange={(checked) => toggleRow(row.id, checked === true)} disabled={!canApplyRow(row)} />
                         </TableCell>
-                        <TableCell><ActionBadge action={row.action} /></TableCell>
-                        <TableCell><StatusBadgeText status={row.status} /></TableCell>
+                        <TableCell><ActionBadge action={row.action} copy={copy} /></TableCell>
+                        <TableCell><StatusBadgeText status={row.status} copy={copy} /></TableCell>
                         <TableCell className="min-w-[260px]">
-                          <div className="font-medium">{row.xeroContactName || 'No Xero match'}</div>
+                          <div className="font-medium">{row.xeroContactName || copy.contacts.noXeroMatch}</div>
                           <div className="mt-1 text-xs text-muted-foreground">
-                            {row.xeroContactNumber || 'No contact no.'} · {row.xeroAccountNumber || 'No account no.'} · {row.xeroContactStatus || 'No status'}
+                            {row.xeroContactNumber || copy.contacts.noContactNumber} · {row.xeroAccountNumber || copy.contacts.noAccountNumber} · {row.xeroContactStatus || copy.contacts.noStatus}
                           </div>
                         </TableCell>
                         <TableCell className="min-w-[260px]">
-                          <div className="font-medium">{row.salesforceName || 'No Salesforce match'}</div>
+                          <div className="font-medium">{row.salesforceName || copy.contacts.noSalesforceMatch}</div>
                           <div className="mt-1 text-xs text-muted-foreground">
-                            {row.salesforceCompanyCode || 'No CL Key'} · {row.salesforceRecordType || 'No type'}
+                            {row.salesforceCompanyCode || copy.common.noClKey} · {copy.recordTypes[row.salesforceRecordType] || row.salesforceRecordType || copy.common.noType}
                           </div>
                         </TableCell>
-                        <TableCell>{row.matchField ? (matchFieldLabels[row.matchField] || row.matchField) : 'None'}</TableCell>
-                        <TableCell>{usageText(row.usage)}</TableCell>
+                        <TableCell>{row.matchField ? (copy.matchFields[row.matchField] || matchFieldLabels[row.matchField] || row.matchField) : copy.common.none}</TableCell>
+                        <TableCell>{usageText(row.usage, copy)}</TableCell>
                         <TableCell className="max-w-[320px]">
-                          <div className="font-medium">{reasonLabels[row.reason] || row.reason || 'No issue'}</div>
+                          <div className="font-medium">{copy.reasons[row.reason] || reasonLabels[row.reason] || row.reason || copy.common.noIssue}</div>
                           {row.message ? <div className="mt-1 text-xs text-muted-foreground">{row.message}</div> : null}
                         </TableCell>
                       </TableRow>
                     )) : (
-                      <TableRow><TableCell colSpan={8}><StateBlock icon={CheckCircle2} title={hasLifecycleRun ? 'No matching rows' : 'No lifecycle preview'} description={hasLifecycleRun ? 'Adjust filters or run a new preview.' : 'Run Preview to load Xero contacts, Salesforce matches, and archive exceptions.'} /></TableCell></TableRow>
+                      <TableRow><TableCell colSpan={8}><StateBlock icon={CheckCircle2} title={hasLifecycleRun ? copy.contacts.noRowsTitle : copy.contacts.noPreviewTitle} description={hasLifecycleRun ? copy.contacts.noRowsDescription : copy.contacts.noPreviewDescription} /></TableCell></TableRow>
                     )}
                   </TableBody>
                 </Table>
@@ -502,64 +515,72 @@ export default function XeroPortal() {
           </TabsContent>
 
           <TabsContent value="accounting" className="space-y-4">
-            <Suspense fallback={<StateBlock icon={Loader2} title="Loading accounting sync" description="FCOS is loading the Finance review workspace." />}>
-              <XeroFinancialSync portalStatus={status} />
+            <Suspense fallback={<StateBlock icon={Loader2} title={copy.financial.loadingTitle} description={copy.financial.loadingDescription} />}>
+              <XeroFinancialSync portalStatus={status} language={language} />
             </Suspense>
           </TabsContent>
 
           <TabsContent value="receipts" className="space-y-4">
             <section className="grid gap-4 xl:grid-cols-[480px_1fr]">
               <div className="rounded-lg border border-border bg-card p-4">
-                <h2 className="text-base font-semibold">Scan Receipt</h2>
+                <h2 className="text-base font-semibold">{copy.receipts.title}</h2>
                 <div className="mt-4 space-y-3">
-                  <Input type="file" accept="image/*,application/pdf" onChange={(event) => setReceiptFile(event.target.files?.[0] || null)} />
+                  <label className="block">
+                    <span className="text-xs font-semibold text-muted-foreground">{copy.receipts.file}</span>
+                    <span className="mt-1 flex min-h-9 cursor-pointer items-center gap-2 rounded-[var(--radius-control)] border border-input bg-background px-3 py-1.5 text-sm shadow-sm">
+                      <Upload className="h-4 w-4 text-muted-foreground" />
+                      <span className="font-medium">{copy.receipts.chooseFile}</span>
+                      <span className="min-w-0 truncate text-muted-foreground">{receiptFile?.name || copy.receipts.noFile}</span>
+                    </span>
+                    <input type="file" accept="image/*,application/pdf" className="sr-only" onChange={(event) => setReceiptFile(event.target.files?.[0] || null)} />
+                  </label>
                   <div className="grid gap-2 sm:grid-cols-2">
                     <Button type="button" variant="outline" onClick={runOcr} disabled={!receiptFile || ocrBusy}>
                       {ocrBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileText className="mr-2 h-4 w-4" />}
-                      OCR image
+                      {copy.receipts.ocr}
                     </Button>
-                    <Button type="button" variant="outline" onClick={() => setReceiptDraft(emptyReceiptFields())}>Reset</Button>
+                    <Button type="button" variant="outline" onClick={() => setReceiptDraft(emptyReceiptFields())}>{copy.receipts.reset}</Button>
                   </div>
-                  <Field label="Merchant" value={receiptDraft.merchant} onChange={(merchant) => setReceiptDraft((current) => ({ ...current, merchant }))} />
+                  <Field label={copy.receipts.merchant} value={receiptDraft.merchant} onChange={(merchant) => setReceiptDraft((current) => ({ ...current, merchant }))} />
                   <div className="grid gap-2 sm:grid-cols-2">
-                    <Field label="Date" type="date" value={receiptDraft.date} onChange={(date) => setReceiptDraft((current) => ({ ...current, date }))} />
-                    <Field label="Total" type="number" value={receiptDraft.total} onChange={(total) => setReceiptDraft((current) => ({ ...current, total }))} />
+                    <Field label={copy.receipts.date} type="date" value={receiptDraft.date} onChange={(date) => setReceiptDraft((current) => ({ ...current, date }))} />
+                    <Field label={copy.receipts.total} type="number" value={receiptDraft.total} onChange={(total) => setReceiptDraft((current) => ({ ...current, total }))} />
                   </div>
                   <div className="grid gap-2 sm:grid-cols-3">
-                    <NativeSelect label="Currency" value={receiptDraft.currency} onChange={(currency) => setReceiptDraft((current) => ({ ...current, currency }))} options={RECEIPT_CURRENCIES.map((code) => [code, code])} />
-                    <Field label="Account" value={receiptDraft.accountCode} onChange={(accountCode) => setReceiptDraft((current) => ({ ...current, accountCode }))} />
-                    <Field label="Tax" value={receiptDraft.taxType} onChange={(taxType) => setReceiptDraft((current) => ({ ...current, taxType }))} />
+                    <NativeSelect label={copy.receipts.currency} value={receiptDraft.currency} onChange={(currency) => setReceiptDraft((current) => ({ ...current, currency }))} options={RECEIPT_CURRENCIES.map((code) => [code, code])} />
+                    <Field label={copy.receipts.account} value={receiptDraft.accountCode} onChange={(accountCode) => setReceiptDraft((current) => ({ ...current, accountCode }))} />
+                    <Field label={copy.receipts.tax} value={receiptDraft.taxType} onChange={(taxType) => setReceiptDraft((current) => ({ ...current, taxType }))} />
                   </div>
-                  <Field label="Category" value={receiptDraft.category} onChange={(category) => setReceiptDraft((current) => ({ ...current, category }))} />
+                  <Field label={copy.receipts.category} value={receiptDraft.category} onChange={(category) => setReceiptDraft((current) => ({ ...current, category }))} />
                   <div>
-                    <label className="text-xs font-semibold text-muted-foreground">Notes / OCR text</label>
+                    <label className="text-xs font-semibold text-muted-foreground">{copy.receipts.notes}</label>
                     <Textarea value={receiptDraft.note} onChange={(event) => setReceiptDraft((current) => ({ ...current, note: event.target.value }))} rows={6} />
                   </div>
                   <div className="flex flex-wrap gap-2">
                     <Button type="button" variant="outline" onClick={() => saveReceipt({ sync: false })} disabled={!receiptFile || busy === 'receipt-create'}>
                       {busy === 'receipt-create' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
-                      Save draft
+                      {copy.receipts.save}
                     </Button>
                     <Button type="button" onClick={() => saveReceipt({ sync: true })} disabled={!receiptFile || !xero.connected || !scopeFlags.invoices || !scopeFlags.attachments || busy === 'receipt-sync-create'}>
                       {busy === 'receipt-sync-create' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
-                      Create Xero draft bill
+                      {copy.receipts.createBill}
                     </Button>
                   </div>
                 </div>
               </div>
 
               <div className="rounded-lg border border-border bg-card p-4">
-                <h2 className="text-base font-semibold">Receipt Audit</h2>
+                <h2 className="text-base font-semibold">{copy.receipts.auditTitle}</h2>
                 <div className="mt-4">
-                  <Table scrollLabel="Receipt audit">
+                  <Table scrollLabel={copy.receipts.auditLabel}>
                     <TableHeader>
                       <TableRow>
-                        <TableHead>Receipt</TableHead>
-                        <TableHead>Total</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead>Xero</TableHead>
-                        <TableHead>Updated</TableHead>
-                        <TableHead>Action</TableHead>
+                        <TableHead>{copy.receipts.receipt}</TableHead>
+                        <TableHead>{copy.receipts.total}</TableHead>
+                        <TableHead>{copy.receipts.status}</TableHead>
+                        <TableHead>{copy.receipts.xero}</TableHead>
+                        <TableHead>{copy.receipts.updated}</TableHead>
+                        <TableHead>{copy.receipts.action}</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -570,21 +591,21 @@ export default function XeroPortal() {
                             <div className="mt-1 text-xs text-muted-foreground">{receipt.fileName} · {receipt.date}</div>
                           </TableCell>
                           <TableCell>{receipt.currency} {formatNumber(receipt.total)}</TableCell>
-                          <TableCell><ReceiptStatusBadge status={receipt.status} /></TableCell>
+                          <TableCell><ReceiptStatusBadge status={receipt.status} copy={copy} /></TableCell>
                           <TableCell>
-                            {receipt.xeroInvoiceUrl ? <a className="inline-flex items-center gap-1 text-sm text-blue-700 hover:underline" href={receipt.xeroInvoiceUrl} target="_blank" rel="noreferrer">Draft bill <ExternalLink className="h-3 w-3" /></a> : 'Not synced'}
+                            {receipt.xeroInvoiceUrl ? <a className="inline-flex items-center gap-1 text-sm text-blue-700 hover:underline" href={receipt.xeroInvoiceUrl} target="_blank" rel="noreferrer">{copy.receipts.draftBill} <ExternalLink className="h-3 w-3" /></a> : copy.receipts.notSynced}
                             {receipt.error ? <div className="mt-1 max-w-[260px] text-xs text-red-700">{receipt.error}</div> : null}
                           </TableCell>
-                          <TableCell>{formatDateTime(receipt.updatedAt)}</TableCell>
+                          <TableCell>{formatDateTime(receipt.updatedAt, language)}</TableCell>
                           <TableCell>
                             <Button type="button" size="sm" variant="outline" onClick={() => syncReceipt(receipt.id)} disabled={receipt.status === 'synced' || !xero.connected || !scopeFlags.invoices || !scopeFlags.attachments || busy === `receipt-sync-${receipt.id}`}>
                               {busy === `receipt-sync-${receipt.id}` ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Send className="mr-2 h-3.5 w-3.5" />}
-                              Sync
+                              {copy.receipts.sync}
                             </Button>
                           </TableCell>
                         </TableRow>
                       ))}
-                      {!receipts.length ? <TableRow><TableCell colSpan={6}><StateBlock icon={FileText} title="No receipts stored" description="Upload a receipt to create the first draft audit row." /></TableCell></TableRow> : null}
+                      {!receipts.length ? <TableRow><TableCell colSpan={6}><StateBlock icon={FileText} title={copy.receipts.emptyTitle} description={copy.receipts.emptyDescription} /></TableCell></TableRow> : null}
                     </TableBody>
                   </Table>
                 </div>
@@ -596,47 +617,45 @@ export default function XeroPortal() {
             <section className="rounded-lg border border-border bg-card p-4">
               <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                 <div>
-                  <h2 className="text-base font-semibold">Salesforce Trigger Contact Creation</h2>
-                  <p className="mt-1 max-w-4xl text-sm text-muted-foreground">
-                    FCOS records every signed Salesforce event that checks for newly used Account names missing from Xero.
-                  </p>
+                  <h2 className="text-base font-semibold">{copy.automation.title}</h2>
+                  <p className="mt-1 max-w-4xl text-sm text-muted-foreground">{copy.automation.description}</p>
                 </div>
                 <div className="flex gap-2">
-                  <AuditButton disabled={!autoRun} onClick={() => downloadJson(autoRun, `xero-contact-auto-create-${autoRun?.id || 'run'}.json`)} icon={FileJson}>JSON audit</AuditButton>
-                  <AuditButton disabled={!autoRun} onClick={() => downloadCsv(autoRun?.rows || [], `xero-contact-auto-create-${autoRun?.id || 'run'}.csv`)} icon={Download}>CSV audit</AuditButton>
+                  <AuditButton disabled={!autoRun} onClick={() => downloadJson(autoRun, `xero-contact-auto-create-${autoRun?.id || 'run'}.json`)} icon={FileJson}>{copy.contacts.jsonAudit}</AuditButton>
+                  <AuditButton disabled={!autoRun} onClick={() => downloadCsv(autoRun?.rows || [], `xero-contact-auto-create-${autoRun?.id || 'run'}.csv`)} icon={Download}>{copy.contacts.csvAudit}</AuditButton>
                 </div>
               </div>
               <div className="mt-4 grid gap-3 sm:grid-cols-4">
-                <Kpi label="Pending" value={autoRun?.summary?.pending || 0} tone="sky" />
-                <Kpi label="Created" value={autoRun?.summary?.created || 0} tone="emerald" />
-                <Kpi label="Already exists" value={autoRun?.summary?.alreadyExists || autoRun?.summary?.['already-exists'] || 0} />
-                <Kpi label="Failed" value={autoRun?.summary?.failed || 0} tone="rose" />
+                <Kpi label={copy.automation.pending} value={autoRun?.summary?.pending || 0} tone="sky" />
+                <Kpi label={copy.automation.created} value={autoRun?.summary?.created || 0} tone="emerald" />
+                <Kpi label={copy.automation.alreadyExists} value={autoRun?.summary?.alreadyExists || autoRun?.summary?.['already-exists'] || 0} />
+                <Kpi label={copy.automation.failed} value={autoRun?.summary?.failed || 0} tone="rose" />
               </div>
               <div className="mt-4">
-                <Table scrollLabel="Auto-created Xero contact rows">
+                <Table scrollLabel={copy.automation.tableLabel}>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Salesforce Account</TableHead>
-                      <TableHead>Xero Contact</TableHead>
-                      <TableHead>Match</TableHead>
-                      <TableHead>Reason</TableHead>
+                      <TableHead>{copy.common.status}</TableHead>
+                      <TableHead>{copy.automation.salesforceAccount}</TableHead>
+                      <TableHead>{copy.automation.xeroContact}</TableHead>
+                      <TableHead>{copy.automation.match}</TableHead>
+                      <TableHead>{copy.automation.reason}</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {(autoRun?.rows || []).map((row) => (
                       <TableRow key={row.id}>
-                        <TableCell><StatusBadgeText status={row.status} /></TableCell>
+                        <TableCell><StatusBadgeText status={row.status} copy={copy} /></TableCell>
                         <TableCell>
-                          <div className="font-medium">{row.salesforceName || 'No Account'}</div>
-                          <div className="mt-1 text-xs text-muted-foreground">{row.salesforceCompanyCode || 'No CL Key'} · {row.salesforceRecordType || 'No type'}</div>
+                          <div className="font-medium">{row.salesforceName || copy.automation.noAccount}</div>
+                          <div className="mt-1 text-xs text-muted-foreground">{row.salesforceCompanyCode || copy.common.noClKey} · {copy.recordTypes[row.salesforceRecordType] || row.salesforceRecordType || copy.common.noType}</div>
                         </TableCell>
-                        <TableCell>{row.xeroContactName || row.xeroContactId || 'No Xero contact'}</TableCell>
-                        <TableCell>{row.matchField ? (matchFieldLabels[row.matchField] || row.matchField) : 'None'}</TableCell>
-                        <TableCell>{reasonLabels[row.reason] || row.reason || row.message || 'No issue'}</TableCell>
+                        <TableCell>{row.xeroContactName || row.xeroContactId || copy.automation.noXeroContact}</TableCell>
+                        <TableCell>{row.matchField ? (copy.matchFields[row.matchField] || matchFieldLabels[row.matchField] || row.matchField) : copy.common.none}</TableCell>
+                        <TableCell>{copy.reasons[row.reason] || reasonLabels[row.reason] || row.reason || row.message || copy.common.noIssue}</TableCell>
                       </TableRow>
                     ))}
-                    {!autoRun?.rows?.length ? <TableRow><TableCell colSpan={5}><StateBlock icon={AlertTriangle} title="No automation audit run yet" description="A Salesforce trigger run will appear here after a signed event reaches FCOS." /></TableCell></TableRow> : null}
+                    {!autoRun?.rows?.length ? <TableRow><TableCell colSpan={5}><StateBlock icon={AlertTriangle} title={copy.automation.emptyTitle} description={copy.automation.emptyDescription} /></TableCell></TableRow> : null}
                   </TableBody>
                 </Table>
               </div>
@@ -644,8 +663,8 @@ export default function XeroPortal() {
           </TabsContent>
 
           <TabsContent value="manual" className="space-y-4">
-            <Suspense fallback={<StateBlock icon={Loader2} title="Loading Xero Portal manual" description="FCOS is loading the English and Traditional Chinese user guide." />}>
-              <XeroPortalManual />
+            <Suspense fallback={<StateBlock icon={Loader2} title={copy.manual.loadingTitle} description={copy.manual.loadingDescription} />}>
+              <XeroPortalManual language={language} onLanguageChange={setLanguage} />
             </Suspense>
           </TabsContent>
         </Tabs>
@@ -654,7 +673,7 @@ export default function XeroPortal() {
   );
 }
 
-function ConnectionPanel({ title, rows }) {
+function ConnectionPanel({ title, rows, unavailable }) {
   return (
     <section className="rounded-lg border border-border bg-card p-4">
       <h2 className="text-sm font-semibold">{title}</h2>
@@ -662,7 +681,7 @@ function ConnectionPanel({ title, rows }) {
         {rows.map(([label, value]) => (
           <div key={label} className="grid grid-cols-[110px_1fr] gap-2 text-xs">
             <dt className="text-muted-foreground">{label}</dt>
-            <dd className="truncate font-medium" title={String(value || '')}>{value || 'Not available'}</dd>
+            <dd className="truncate font-medium" title={String(value || '')}>{value || unavailable}</dd>
           </div>
         ))}
       </dl>
@@ -670,7 +689,7 @@ function ConnectionPanel({ title, rows }) {
   );
 }
 
-function Kpi({ label, value, tone = 'neutral' }) {
+function Kpi({ label, value, tone = 'neutral', emptyLabel = '' }) {
   const tones = {
     neutral: 'border-slate-200 bg-slate-50 text-slate-900',
     amber: 'border-amber-200 bg-amber-50 text-amber-950',
@@ -684,12 +703,12 @@ function Kpi({ label, value, tone = 'neutral' }) {
   return (
     <div className={cn('rounded-lg border px-4 py-3', tones[tone] || tones.neutral)}>
       <div className="text-xs font-semibold uppercase tracking-normal opacity-70">{label}</div>
-      <div className={cn('mt-1 font-semibold', hasValue ? 'text-2xl' : 'text-sm')}>{hasValue ? number.toLocaleString() : 'Preview required'}</div>
+      <div className={cn('mt-1 font-semibold', hasValue ? 'text-2xl' : 'text-sm')}>{hasValue ? number.toLocaleString() : emptyLabel}</div>
     </div>
   );
 }
 
-function UsageCache({ sources }) {
+function UsageCache({ sources, copy, language }) {
   if (!sources?.length) return null;
   return (
     <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
@@ -697,25 +716,25 @@ function UsageCache({ sources }) {
         <div key={source.source} className="rounded-lg border border-border bg-background/70 px-3 py-2">
           <div className="flex items-center justify-between gap-2">
             <span className="truncate text-xs font-semibold">{source.label}</span>
-            <StatusBadgeText status={source.status} />
+            <StatusBadgeText status={source.status} copy={copy} />
           </div>
           <div className="mt-1 text-xs text-muted-foreground">
-            {source.recordsScanned?.toLocaleString?.() || 0} records · {source.contactCount?.toLocaleString?.() || 0} contacts
+            {source.recordsScanned?.toLocaleString?.(copy.locale) || 0} {language === 'zh-Hant' ? '筆紀錄' : 'records'} · {source.contactCount?.toLocaleString?.(copy.locale) || 0} {language === 'zh-Hant' ? '個聯絡人' : 'contacts'}
           </div>
-          <div className="mt-1 text-[11px] text-muted-foreground">{formatDateTime(source.scannedAt)}</div>
+          <div className="mt-1 text-[11px] text-muted-foreground">{formatDateTime(source.scannedAt, language)}</div>
         </div>
       ))}
     </div>
   );
 }
 
-function StatusLegend({ labels }) {
+function StatusLegend({ labels, copy }) {
   return (
     <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
       {Object.entries(labels || {}).map(([status, description]) => (
         <div key={status} className="rounded-lg border border-border bg-background/70 px-3 py-2 text-xs">
-          <div className="font-semibold capitalize text-foreground">{status.replaceAll('-', ' ')}</div>
-          <div className="mt-1 text-muted-foreground">{description}</div>
+          <div className="font-semibold text-foreground">{copy.statuses[status] || status.replaceAll('-', ' ')}</div>
+          <div className="mt-1 text-muted-foreground">{copy.statusDescriptions[status] || description}</div>
         </div>
       ))}
     </div>
@@ -764,7 +783,7 @@ function StatusBadge({ ok, trueLabel, falseLabel, tone = ok ? 'emerald' : 'rose'
   return <Badge variant="outline" className={className}>{ok ? trueLabel : falseLabel}</Badge>;
 }
 
-function StatusBadgeText({ status }) {
+function StatusBadgeText({ status, copy }) {
   const value = String(status || 'unknown');
   const tone = {
     eligible: 'border-sky-200 bg-sky-50 text-sky-700',
@@ -781,10 +800,10 @@ function StatusBadgeText({ status }) {
     'already-exists': 'border-slate-200 bg-slate-50 text-slate-700',
     'not-selected': 'border-slate-200 bg-slate-50 text-slate-700',
   }[value] || 'border-slate-200 bg-slate-50 text-slate-700';
-  return <Badge variant="outline" className={cn('whitespace-nowrap capitalize', tone)}>{value.replaceAll('-', ' ')}</Badge>;
+  return <Badge variant="outline" className={cn('whitespace-nowrap', tone)}>{copy?.statuses?.[value] || value.replaceAll('-', ' ')}</Badge>;
 }
 
-function ReceiptStatusBadge({ status }) {
+function ReceiptStatusBadge({ status, copy }) {
   const ok = status === 'synced';
   const fail = status === 'failed';
   return (
@@ -793,12 +812,12 @@ function ReceiptStatusBadge({ status }) {
       fail && 'border-rose-200 bg-rose-50 text-rose-700',
       !ok && !fail && 'border-slate-200 bg-slate-50 text-slate-700',
     )}>
-      {status}
+      {copy?.statuses?.[status] || status}
     </Badge>
   );
 }
 
-function ActionBadge({ action }) {
+function ActionBadge({ action, copy }) {
   const icon = {
     archive: Archive,
     rename: RefreshCw,
@@ -809,7 +828,7 @@ function ActionBadge({ action }) {
   return (
     <Badge variant="outline" className="whitespace-nowrap">
       <Icon className="mr-1 h-3 w-3" />
-      {String(action || 'unknown')}
+      {copy?.actions?.[action] || String(action || copy?.common?.unknown || 'unknown')}
     </Badge>
   );
 }
@@ -818,20 +837,23 @@ function canApplyRow(row) {
   return row?.status === 'eligible' && (row.action === 'rename' || row.action === 'archive') && row.xeroContactId;
 }
 
-function usageText(usage = []) {
-  if (!usage.length) return 'No readable usage';
-  return usage.map((item) => `${item.label || item.source}: ${item.records || 0}`).join('; ');
+function usageText(usage = [], copy) {
+  if (!usage.length) return copy.contacts.noReadableUsage;
+  return usage.map((item) => `${copy.usageSources[item.source] || item.label || item.source}: ${item.records || 0}`).join('; ');
 }
 
-function summarizeApply(summary) {
-  return `${summary.updated || 0} renamed, ${summary.archived || 0} archived, ${summary.failed || 0} failed.`;
+function summarizeApply(summary, language) {
+  return language === 'zh-Hant'
+    ? `已重新命名 ${summary.updated || 0} 個、已封存 ${summary.archived || 0} 個、失敗 ${summary.failed || 0} 個。`
+    : `${summary.updated || 0} renamed, ${summary.archived || 0} archived, ${summary.failed || 0} failed.`;
 }
 
-function formatDateTime(value) {
-  if (!value) return 'Not available';
+function formatDateTime(value, language = 'en') {
+  const unavailable = language === 'zh-Hant' ? '不可用' : 'Not available';
+  if (!value) return unavailable;
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return 'Not available';
-  return new Intl.DateTimeFormat('en-GB', {
+  if (Number.isNaN(date.getTime())) return unavailable;
+  return new Intl.DateTimeFormat(language === 'zh-Hant' ? 'zh-HK' : 'en-GB', {
     day: '2-digit',
     month: 'short',
     year: 'numeric',
@@ -847,11 +869,11 @@ function formatNumber(value) {
   return Number.isFinite(number) ? number.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00';
 }
 
-function hostname(value) {
+function hostname(value, fallback = 'Not configured') {
   try {
     return new URL(value).hostname;
   } catch {
-    return value || 'Not configured';
+    return value || fallback;
   }
 }
 
