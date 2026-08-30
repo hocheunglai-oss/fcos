@@ -40,6 +40,7 @@ import { allocateSupplierDispute, normalizeSupplierInvoiceExposure, resolveSuppl
 import { currentRequestTelemetry, logRequestTelemetry, recordRequestFailure, recordSupabaseRequest, requestIdFrom, runWithRequestTelemetry, salesforceLimitFromBody, telemetryResponseHeaders } from '../_requestTelemetry.js';
 import { parseSupabasePrometheusMetrics } from '../_supabaseMetrics.js';
 import { serverSupabaseConfig } from '../_supabaseConfig.js';
+import { enforceFcunoFederatedAccess, fcunoFederationConfig } from '../_fcunoIdentityFederation.js';
 import { GOOGLE_DRIVE_MARKET_OAUTH_REQUIRED_ENV, exchangeGoogleDriveRefreshToken, googleDriveMarketOAuthConfig } from '../_googleDriveOAuth.js';
 import { CONNECTION_INTEGRATIONS, connectionAttestationState, sanitizeConnectionAttestation } from '../../src/lib/connectionChecklist.js';
 import { expireRuntimeCacheTags, getOrLoadRuntimeCache } from '../_runtimeCache.js';
@@ -753,8 +754,14 @@ async function requireActiveUser(req) {
   const { data: userData, error: userError } = await client.auth.getUser(token);
   if (userError || !userData?.user) throw appError('Invalid or expired session. Sign in again.', 401);
 
-  const { data: profile, error: profileError } = await client.from('user_profiles').select('id,email,full_name,user_type,active,use_type_defaults').eq('id', userData.user.id).maybeSingle();
+  const { data: storedProfile, error: profileError } = await client.from('user_profiles').select('id,email,full_name,user_type,active,use_type_defaults').eq('id', userData.user.id).maybeSingle();
   if (profileError) throw profileError;
+  const profile = await enforceFcunoFederatedAccess({
+    client,
+    authUser: userData.user,
+    profile: storedProfile,
+    accessToken: token,
+  });
   if (!profile) throw appError('User is not registered.', 403);
   if (!profile.active) throw appError('User is inactive.', 403);
 
@@ -2023,6 +2030,10 @@ async function ensureReportArchiveManageModule(client) {
 async function persistManagedUser(client, body, actor = null) {
   const payload = await sanitizeManagedUserPayload(client, body);
   const isUpdate = Boolean(payload.id);
+  const identityManagedByFcuno = fcunoFederationConfig().federationEnabled;
+  if (identityManagedByFcuno && !isUpdate) {
+    throw appError('Create company identities in FCUNO User Management, then assign FCOS access here.', 409, 'FCUNO_IDENTITY_CREATE_REQUIRED');
+  }
   const generalManager = await loadActiveGeneralManager(client);
   let authUser = isUpdate ? { id: payload.id } : await findAuthUserByEmail(client, payload.email);
   let managedProfile = null;
@@ -2035,6 +2046,15 @@ async function persistManagedUser(client, body, actor = null) {
       .maybeSingle();
     if (error) throw error;
     managedProfile = data;
+    if (!managedProfile) throw appError('User not found.', 404);
+    if (identityManagedByFcuno && (
+      String(payload.email || '').toLowerCase() !== String(managedProfile?.email || '').toLowerCase()
+      || String(payload.full_name || '') !== String(managedProfile?.full_name || '')
+      || payload.active !== (managedProfile?.active !== false)
+      || Boolean(payload.password)
+    )) {
+      throw appError('Email, name, active state and credentials are managed in FCUNO. Only FCOS authorization can be changed here.', 409, 'FCUNO_IDENTITY_READ_ONLY');
+    }
     await assertAdministratorContinuity(client, {
       userId: authUser.id,
       nextActive: payload.active,
@@ -2056,12 +2076,14 @@ async function persistManagedUser(client, body, actor = null) {
     : payload.user_type;
 
   if (authUser?.id) {
-    const updatePayload = {
-      email: payload.email,
-      user_metadata: { full_name: payload.full_name },
-      app_metadata: { user_type: stagedUserType },
-    };
-    if (payload.password) updatePayload.password = payload.password;
+    const updatePayload = identityManagedByFcuno
+      ? { app_metadata: { user_type: stagedUserType } }
+      : {
+          email: payload.email,
+          user_metadata: { full_name: payload.full_name },
+          app_metadata: { user_type: stagedUserType },
+          ...(payload.password ? { password: payload.password } : {}),
+        };
     const { data, error } = await client.auth.admin.updateUserById(authUser.id, updatePayload);
     if (error) throw error;
     authUser = data.user;
@@ -2080,13 +2102,16 @@ async function persistManagedUser(client, body, actor = null) {
   if (!authUser?.id) throw appError('Supabase did not return a user id.', 500);
 
   const nowIso = new Date().toISOString();
+  const effectiveEmail = identityManagedByFcuno ? managedProfile.email : payload.email;
+  const effectiveFullName = identityManagedByFcuno ? managedProfile.full_name : payload.full_name;
+  const effectiveActive = identityManagedByFcuno ? managedProfile.active !== false : payload.active;
   const { error: profileError } = await client.from('user_profiles').upsert(
     {
       id: authUser.id,
-      email: payload.email,
-      full_name: payload.full_name,
+      email: effectiveEmail,
+      full_name: effectiveFullName,
       user_type: stagedUserType,
-      active: payload.active,
+      active: effectiveActive,
       use_type_defaults: payload.use_type_defaults,
       updated_at: nowIso,
     },
@@ -2170,14 +2195,15 @@ async function persistManagedUser(client, body, actor = null) {
     capabilities: Object.entries(payload.capabilities)
       .filter(([, allowed]) => allowed)
       .map(([id]) => id),
+    identity_authority: identityManagedByFcuno ? 'fcuno' : 'fcos',
   });
 
   return {
     id: authUser.id,
-    email: payload.email,
-    full_name: payload.full_name,
+    email: effectiveEmail,
+    full_name: effectiveFullName,
     user_type: payload.user_type,
-    active: payload.active,
+    active: effectiveActive,
     use_type_defaults: payload.use_type_defaults,
     permissions: payload.permissions,
     capabilities: payload.capabilities,
@@ -2193,6 +2219,16 @@ async function adminUsersList(body, req) {
   if (profileError) throw profileError;
 
   const userIds = (profiles || []).map((profile) => profile.id);
+  const identityManagedByFcuno = fcunoFederationConfig().federationEnabled;
+  let linkedIdentityIds = new Set();
+  if (identityManagedByFcuno && userIds.length) {
+    const { data: identityRows, error: identityError } = await client
+      .from('fcos_external_identity_links')
+      .select('auth_user_id')
+      .in('auth_user_id', userIds);
+    if (identityError) throw identityError;
+    linkedIdentityIds = new Set((identityRows || []).map((row) => row.auth_user_id).filter(Boolean));
+  }
   let permissionRows = [];
   if (userIds.length) {
     const { data, error } = await client.from('user_module_permissions').select('user_id,module_id,can_view').in('user_id', userIds);
@@ -2225,6 +2261,9 @@ async function adminUsersList(body, req) {
 
   const users = (profiles || []).map((profile) => ({
     ...profile,
+    identity_source: identityManagedByFcuno
+      ? linkedIdentityIds.has(profile.id) ? 'fcuno' : 'pending_fcuno_link'
+      : 'fcos',
     type_label: userTypes.find((type) => type.id === profile.user_type)?.label || profile.user_type,
     use_type_defaults: isAdministratorUserType(profile.user_type) ? true : profile.use_type_defaults !== false,
     permissions: isAdministratorUserType(profile.user_type) ? ADMIN_FULL_ACCESS : profile.use_type_defaults !== false ? normalizePermissions(profile.user_type, typePermissions[profile.user_type] || {}) : normalizePermissions(profile.user_type, permissionsByUser[profile.id] || {}),
@@ -2248,6 +2287,7 @@ async function adminUsersList(body, req) {
       name: generalManager.full_name || generalManager.email,
       email: generalManager.email,
     },
+    identityAuthority: identityManagedByFcuno ? 'fcuno' : 'fcos',
   };
 }
 
@@ -2694,6 +2734,9 @@ async function adminUserDelete(body, req) {
   const { data: target, error: targetError } = await client.from('user_profiles').select('id,email,full_name,user_type,active').eq('id', userId).maybeSingle();
   if (targetError) throw targetError;
   if (!target) throw appError('User not found.', 404);
+  if (fcunoFederationConfig().federationEnabled) {
+    throw appError('Company identities must be deactivated or removed in FCUNO User Management.', 409, 'FCUNO_IDENTITY_DELETE_REQUIRED');
+  }
   await assertAdministratorContinuity(client, {
     userId: target.id,
     deleting: true,
