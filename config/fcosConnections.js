@@ -1,6 +1,6 @@
 const connectionPolicy = {
   schemaVersion: 1,
-  policyVersion: 10,
+  policyVersion: 11,
   profile: 'fcos-production',
   browserProfile: 'Otto',
   localStateDirectory: '.fcos-cli',
@@ -43,8 +43,9 @@ const connectionPolicy = {
       oidcCallbackUrl: 'https://pjforfvchygdyqfcgpmw.supabase.co/auth/v1/callback',
       syncAudience: 'fcos-identity-sync',
       syncEndpoint: 'https://fcos.fcuno.com/api/fcuno/identity-sync',
+      syncJwksEndpoint: 'https://fcuno.com/api/fcos-identity-sync/jwks',
       providerRepository: 'hocheunglai-oss/bunker-map',
-      providerCommit: 'a6c7637d63fafd2ff71aaf08d90c6aa504c73ba0',
+      providerCommit: '9d8e05cd338e6105b6a495d68512f63692d3a48c',
       contractPath: 'contracts/fcuno-fcos/v1',
       contractSha256: '7fc54e7c3bd79fb014ad81dc6d9190d021549d9428486ef85ed78fdff95d7cc2',
       providerVercelProjectId: 'prj_8OifIFDF7Gcpd2i4VSRJOHjL3A9Q',
@@ -259,6 +260,7 @@ export function validateFcosConnectionPolicy(value = connectionPolicy) {
   requireString(federation?.oidcCallbackUrl, 'integrations.fcunoIdentityFederation.oidcCallbackUrl');
   requireString(federation?.syncAudience, 'integrations.fcunoIdentityFederation.syncAudience');
   requireString(federation?.syncEndpoint, 'integrations.fcunoIdentityFederation.syncEndpoint');
+  requireString(federation?.syncJwksEndpoint, 'integrations.fcunoIdentityFederation.syncJwksEndpoint');
   requireString(federation?.providerRepository, 'integrations.fcunoIdentityFederation.providerRepository');
   requireString(federation?.providerCommit, 'integrations.fcunoIdentityFederation.providerCommit');
   requireString(federation?.contractPath, 'integrations.fcunoIdentityFederation.contractPath');
@@ -267,6 +269,7 @@ export function validateFcosConnectionPolicy(value = connectionPolicy) {
   requireString(federation?.providerSupabaseProjectRef, 'integrations.fcunoIdentityFederation.providerSupabaseProjectRef');
   if (federation.issuer !== 'https://fcuno.com'
       || federation.oidcProvider !== 'custom:fcuno'
+      || federation.syncJwksEndpoint !== 'https://fcuno.com/api/fcos-identity-sync/jwks'
       || federation.providerRepository !== 'hocheunglai-oss/bunker-map') {
     throw new Error('FCUNO identity federation authority is not pinned to the approved provider.');
   }

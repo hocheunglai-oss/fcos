@@ -12,13 +12,34 @@ import {
 const issuer = 'https://identity.fcuno.example';
 const audience = 'fcos-identity-sync';
 const syncEnv = {
-  FCOS_ENABLE_FCUNO_FEDERATION: 'true',
+  FCOS_ENABLE_FCUNO_FEDERATION: 'false',
   FCOS_ENABLE_FCUNO_IDENTITY_SYNC: 'true',
   FCUNO_IDENTITY_ISSUER: issuer,
   FCUNO_IDENTITY_SYNC_AUDIENCE: audience,
   FCUNO_IDENTITY_JWKS_URI: `${issuer}/jwks.json`,
   FCUNO_IDENTITY_JWT_ALGORITHMS: 'ES256',
 };
+
+test('FCUNO identity synchronization is independently gated from FCOS login', async () => {
+  const { privateKey, publicKey } = await generateKeyPair('ES256');
+  const token = await signedToken(privateKey, { jti: 'event-sync-only' });
+  const verified = await verifyFcunoIdentitySyncToken({
+    headers: { authorization: `Bearer ${token}` },
+    env: syncEnv,
+    jwks: publicKey,
+  });
+  assert.equal(verified.config.syncEnabled, true);
+  assert.equal(verified.config.federationEnabled, false);
+
+  await assert.rejects(
+    verifyFcunoIdentitySyncToken({
+      headers: { authorization: `Bearer ${token}` },
+      env: { ...syncEnv, FCOS_ENABLE_FCUNO_IDENTITY_SYNC: 'false', FCOS_ENABLE_FCUNO_FEDERATION: 'true' },
+      jwks: publicKey,
+    }),
+    (error) => error.code === 'FCUNO_IDENTITY_SYNC_DISABLED' && error.status === 404,
+  );
+});
 
 async function signedToken(privateKey, payload = {}) {
   return new SignJWT({ typ: 'fcuno.identity-sync+jwt', ...payload })
