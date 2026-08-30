@@ -1,39 +1,8 @@
 # FCUNO-Centred Identity Integration with Conflict-Safe Releases
 
-Status: In implementation
+Status: Saved for future implementation and discussion
 Decision date: 24 August 2026
-Last architecture review: 31 August 2026
-Implementation state: Additive provider and consumer foundations in isolated branches; production flags remain disabled
-
-## Implemented foundation
-
-- FCUNO now exposes the additive OIDC discovery, authorization, token, JWKS,
-  user-info and revocation surfaces, using short-lived PKCE-bound codes and
-  current/next ES256 signing keys.
-- FCUNO User Management owns verified identity email, global active state and
-  `Use FCOS` / `Use SPC` entitlements. Its signed, revisioned outbox projects
-  identity metadata to FCOS without sharing passwords or service-role keys.
-- FCOS consumes `custom:fcuno`, links the synchronized immutable subject to its
-  existing authorization record and rejects stale, inactive, unverified or
-  non-entitled identities at every authenticated API boundary.
-- The exact federation contract is pinned to FCUNO commit
-  `7a3df3e4b75401b0ec3397271bf05c4b82cdbe8f` and aggregate SHA-256
-  `7fc54e7c3bd79fb014ad81dc6d9190d021549d9428486ef85ed78fdff95d7cc2`.
-- Otto's existing SPC profile is linked by exact unique email. FCUNO owns its
-  sign-in and revocation; SPC continues to own role, office, route, Supplier
-  Trader status, page permissions and operational history. Other SPC users
-  retain their external sign-in.
-- Repository CI verifies the immutable contract and cancels superseded checks
-  on the same branch. Provider and consumer release flags default to off.
-
-## Activation gates
-
-Production activation remains fail-closed until both migrations are reviewed
-and applied to their separately pinned Supabase projects, the exact identity
-reconciliation report has no duplicates or unresolved active users, OIDC and
-signing secrets are configured only in their owning systems, both immutable
-previews pass compatibility and authenticated browser checks, and an approved
-paired release record identifies both Git commits and Vercel deployments.
+Implementation state: Not started
 
 ## Summary
 
@@ -41,7 +10,7 @@ FCUNO remains the company identity and credential authority. FCOS and SPC consum
 
 | Layer | Shared between FCUNO and FCOS | Remains separate |
 |---|---|---|
-| Identity | FCUNO user UUID, verified email, username, display name, active state, identity revision, credential revision and application entitlement | Passwords, password hashes, cookies, refresh tokens and recovery credentials |
+| Identity | FCUNO user UUID, email, username, display name, active state, credential revision and application entitlement | Passwords, password hashes, cookies, refresh tokens and recovery credentials |
 | Permissions | Whether the identity may enter FCOS or SPC | FCOS groups/modules/capabilities remain in FCOS; SPC roles/page permissions remain in SPC |
 | Supabase | Identity metadata is projected through signed, revisioned APIs | FCUNO project `gglyugbrnyvyfktgwert` and FCOS project `pjforfvchygdyqfcgpmw` retain separate tables, Auth, service keys, sessions, backups and migrations |
 | Vercel | Allowlisted origins, callback URLs, protocol version, client IDs and public verification keys | `bunker-map-c2ks` and `fcos` remain separate projects, deployments, environment variables, domains and private keys |
@@ -71,27 +40,17 @@ If FCOS and FCUNO are updated simultaneously from different Codex tasks, they ca
 
 ### FCOS sign-in
 
-- FCUNO exposes a standards-based OIDC provider backed by its current admin
-  session and credential store. FCOS registers it as the FCOS Supabase
-  project's custom OAuth provider `custom:fcuno`; FCUNO is not connected to the
-  FCOS database and never receives a service-role key.
-- FCOS redirects users to FCUNO and uses the authorization-code flow with PKCE:
+- FCOS redirects users to FCUNO's current login and uses an authorization-code flow with PKCE:
   1. FCOS creates state, nonce, PKCE challenge and a validated return path.
   2. FCUNO authenticates using its existing credential.
   3. FCUNO issues a hashed, single-use code valid for 60 seconds.
-  4. Supabase Auth exchanges it server-to-server at FCUNO's token endpoint and
-     verifies the ES256-signed ID token through FCUNO's current/next JWKS.
-  5. FCOS verifies the resulting Supabase identity against the separately
-     synchronized FCUNO subject, verified email, entitlement and revision
-     before returning application permissions.
-- Add versioned interfaces for OIDC discovery, authorization, token exchange,
-  user info, identity synchronization/acknowledgement, session revocation and
-  federation health.
+  4. FCOS exchanges it server-to-server for an ES256-signed identity assertion.
+  5. FCOS verifies issuer, audience, subject, state, nonce, PKCE, expiry, identity revision and replay status.
+  6. FCOS creates the Supabase session for the prelinked auth user through a server-generated magic-link token hash exchanged by same-origin POST. No email is sent and no token appears in a URL.
+- Add versioned interfaces for FCOS authentication start/callback, FCUNO authorization/token exchange, identity synchronization/acknowledgement, session revocation and federation health.
 - FCUNO holds the signing private key. FCOS stores only the allowlisted current and next public keys.
 - Credential changes and deactivation increment the FCUNO identity revision. FCOS rejects sessions issued before the synchronized revision timestamp.
-- Ordinary FCOS password login remains available only behind a migration flag
-  during the rollback window, then is rejected. Existing password credentials
-  are not mutated until reconciliation and rollback evidence are complete.
+- Ordinary FCOS password login is removed at cutover. After the rollback window, existing Supabase passwords are replaced with unknown random values.
 - Retain one disabled-by-default, time-limited and audited FCOS break-glass administrator flow.
 
 ### SPC hybrid users
@@ -115,9 +74,7 @@ If FCOS and FCUNO are updated simultaneously from different Codex tasks, they ca
   - FCUNO: identity revisions, application entitlements, authorization codes, signing events and delivery outbox.
   - FCOS: external identity links, received revisions, authentication transactions and synchronization evidence.
 - Enable RLS, revoke browser-role access and expose only narrow security-invoker RPCs or authenticated server endpoints.
-- Store only authorization-code hashes, token revocation hashes, redacted audit
-  metadata and protocol evidence. No raw OAuth code or private key enters a
-  database table.
+- Store only code hashes, redacted audit metadata and protocol evidence.
 - Each migration modifies only its own project and is append-only, idempotent and protected by a migration/advisory lock.
 
 ### Vercel
@@ -125,10 +82,7 @@ If FCOS and FCUNO are updated simultaneously from different Codex tasks, they ca
 - Keep deployments independent:
   - FCUNO: `bunker-map-c2ks`.
   - FCOS: pinned `fcos` project.
-- Share only non-secret protocol configuration: issuer, client identifier,
-  exact callback URIs, protocol versions and public verification keys. FCUNO's
-  signing key and OIDC client secret stay only in the FCUNO Vercel project;
-  FCOS's matching provider secret stays only in the FCOS Supabase Auth vault.
+- Share only non-secret protocol configuration: issuer, audiences, callback origins, protocol versions and public keys.
 - Never copy service-role keys or private signing keys between projects.
 - Expose build SHA, contract version and database revision through authenticated health endpoints.
 - Promote immutable preview deployments by exact Git commit rather than rebuilding production from a moving branch.
@@ -137,8 +91,7 @@ If FCOS and FCUNO are updated simultaneously from different Codex tasks, they ca
 
 - Keep the canonical versioned federation JSON Schemas and fixtures in `hocheunglai-oss/bunker-map`, because FCUNO is the identity issuer.
 - FCOS pins the exact contract version, FCUNO commit and schema SHA-256 in repository configuration.
-- FCOS CI downloads that exact public commit and runs provider/consumer
-  contract tests. It never downloads executable provider code.
+- FCOS CI downloads that exact public commit and runs provider/consumer contract tests.
 - FCUNO CI prevents deletion or incompatible modification of a protocol version still pinned by FCOS production.
 - Each repository retains its own implementation; no Git submodule and no shared generated source tree are introduced.
 - Record each approved integration release with the FCUNO/FCOS commit SHAs and preview URLs, federation contract version and schema hash, both migration revisions, verification result and production promotion timestamps.

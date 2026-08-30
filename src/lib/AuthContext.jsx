@@ -15,9 +15,6 @@ const LOCAL_ADMIN_USER = {
 };
 
 const REPORT_ARCHIVE_MODULE_ID = 'report_archive';
-const FCUNO_OIDC_PROVIDER = 'custom:fcuno';
-const fcunoOidcEnabled = import.meta.env.VITE_FCOS_ENABLE_FCUNO_OIDC === 'true';
-const legacyPasswordLoginEnabled = import.meta.env.VITE_FCOS_ENABLE_FCUNO_LEGACY_PASSWORD_LOGIN === 'true';
 const LOCAL_APPLICATIONS = [
   {
     id: 'fcos',
@@ -191,26 +188,6 @@ export const AuthProvider = ({ children }) => {
     if (!result?.user) throw new Error(loginFailureMessage(result?.error));
   };
 
-  const loginWithFcuno = async (returnTo = '/') => {
-    if (!isSupabaseConfigured) {
-      applyLocalAdmin();
-      return;
-    }
-    if (!fcunoOidcEnabled) throw new Error('FCUNO sign-in is not enabled for this FCOS environment.');
-    const candidate = typeof returnTo === 'string' && returnTo.startsWith('/') && !returnTo.startsWith('//')
-      ? returnTo
-      : '/';
-    window.sessionStorage.setItem('fcos:fcuno-return-to', candidate);
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: FCUNO_OIDC_PROVIDER,
-      options: { redirectTo: `${window.location.origin}/login?federated=1` },
-    });
-    if (error) {
-      window.sessionStorage.removeItem('fcos:fcuno-return-to');
-      throw error;
-    }
-  };
-
   const refreshApplications = async () => {
     if (!isSupabaseConfigured) {
       setApplications(LOCAL_APPLICATIONS);
@@ -320,11 +297,8 @@ export const AuthProvider = ({ children }) => {
     authChecked,
     authMode,
     isSupabaseConfigured,
-    fcunoOidcEnabled,
-    legacyPasswordLoginEnabled,
     isAdministrator,
     login,
-    loginWithFcuno,
     logout,
     navigateToLogin,
     checkUserAuth,

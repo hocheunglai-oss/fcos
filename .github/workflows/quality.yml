@@ -5,10 +5,6 @@ on:
   push:
     branches: [main]
 
-concurrency:
-  group: fcos-quality-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   code-and-database:
     runs-on: ubuntu-latest
@@ -19,7 +15,6 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: npm run verify:fcuno-contract
       - run: npm test
       - run: npm run lint
       - run: npm run typecheck

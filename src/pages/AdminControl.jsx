@@ -59,7 +59,6 @@ const emptyTypeForm = {
 };
 
 const REPORT_ARCHIVE_MODULE_ID = 'report_archive';
-const FCUNO_USER_MANAGEMENT_URL = 'https://fcuno.com/admin/usermanagement';
 const REPORT_ARCHIVE_ACCESS_OPTIONS = [
   { value: 'none', label: 'No Access' },
   { value: 'read', label: 'Read Only' },
@@ -220,7 +219,6 @@ export default function AdminControl({ methodologyAction = null }) {
   const [capabilityDefinitions, setCapabilityDefinitions] = useState(APP_CAPABILITIES);
   const [typeCapabilities, setTypeCapabilities] = useState({});
   const [generalManager, setGeneralManager] = useState(null);
-  const [identityAuthority, setIdentityAuthority] = useState('fcos');
   const [searchTerm, setSearchTerm] = useState('');
   const [userStatusFilter, setUserStatusFilter] = useState('all');
   const [userForm, setUserForm] = useState(emptyUserForm);
@@ -340,7 +338,6 @@ export default function AdminControl({ methodologyAction = null }) {
             setCapabilityDefinitions(usersRes.data.capabilities?.length ? usersRes.data.capabilities : APP_CAPABILITIES);
             setTypeCapabilities(usersRes.data.typeCapabilities || {});
             setGeneralManager(usersRes.data.generalManager || null);
-            setIdentityAuthority(usersRes.data.identityAuthority === 'fcuno' ? 'fcuno' : 'fcos');
           }
         },
       });
@@ -397,7 +394,6 @@ export default function AdminControl({ methodologyAction = null }) {
       use_type_defaults: useTypeDefaults,
       permissions: normalizedPermissions(sortedModules, sourcePermissions),
       capabilities: normalizedCapabilities(capabilityDefinitions, sourceCapabilities),
-      identity_source: item.identity_source || 'fcos',
     };
     const draft = readDraft(userDraftKey(base));
     let next = draft?.data && !sameDraftValue(draft.data, safeUserDraft(base))
@@ -666,9 +662,7 @@ export default function AdminControl({ methodologyAction = null }) {
   };
 
   const canDeleteSelectedType = typeForm.id && !isAdministratorUserType(typeForm.id) && selectedTypeAssignedCount === 0;
-  const newButtonLabel = activeSection === 'users'
-    ? identityAuthority === 'fcuno' ? 'Open FCUNO Users' : 'New User'
-    : 'New Type';
+  const newButtonLabel = activeSection === 'users' ? 'New User' : 'New Type';
   const discardUserDraft = () => {
     clearDraft(activeUserDraftKey);
     setUserForm(baseUserForm);
@@ -694,14 +688,7 @@ export default function AdminControl({ methodologyAction = null }) {
               <>
                 <Button
                   type="button"
-                  onClick={() => {
-                    if (activeSection !== 'users') return openTypeDialog(null);
-                    if (identityAuthority === 'fcuno') {
-                      window.open(FCUNO_USER_MANAGEMENT_URL, '_blank', 'noopener,noreferrer');
-                      return;
-                    }
-                    openUserDialog(null);
-                  }}
+                  onClick={() => (activeSection === 'users' ? openUserDialog(null) : openTypeDialog(null))}
                   disabled={!isSupabaseConfigured}
                   className="gap-2"
                 >
@@ -811,7 +798,7 @@ export default function AdminControl({ methodologyAction = null }) {
                             {item.id === generalManager?.userId && <Badge variant="outline" className="border-blue-200 bg-blue-50 text-blue-700">Reporting root</Badge>}
                           </span>
                         </td>
-                        <td className="px-3 py-2.5 text-muted-foreground"><div>{item.use_type_defaults !== false ? 'User type defaults' : permissionSummary(sortedModules, permissions)}</div>{identityAuthority === 'fcuno' && <div className="mt-0.5 text-[11px]">{item.identity_source === 'fcuno' ? 'Identity · FCUNO' : 'Identity · awaiting FCUNO link'}</div>}</td>
+                        <td className="px-3 py-2.5 text-muted-foreground">{item.use_type_defaults !== false ? 'User type defaults' : permissionSummary(sortedModules, permissions)}</td>
                         <td className="px-3 py-2.5"><Badge variant="outline" className={item.active ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-red-200 bg-red-50 text-red-700'}>{item.active ? 'Active' : 'Disabled'}</Badge></td>
                         <td className="px-3 py-2.5 text-right"><Button type="button" variant="ghost" size="icon" onClick={() => openUserDialog(item)} title={`Edit ${item.full_name || item.email}`} aria-label={`Edit ${item.full_name || item.email}`}><Pencil className="h-4 w-4" /></Button></td>
                       </tr>
@@ -856,7 +843,7 @@ export default function AdminControl({ methodologyAction = null }) {
         <DialogContent className="max-h-[90vh] max-w-4xl overflow-hidden p-0">
           <DialogHeader className="border-b border-border px-5 py-4">
             <DialogTitle>{userForm.id ? 'Edit User' : 'Create User'}</DialogTitle>
-            <DialogDescription>{identityAuthority === 'fcuno' ? 'Identity is read-only from FCUNO. Manage only FCOS authorization here.' : 'Assign a user type, then inherit its access rights or set custom access.'}</DialogDescription>
+            <DialogDescription>Assign a user type, then inherit its access rights or set custom access.</DialogDescription>
           </DialogHeader>
           <form onSubmit={saveUser} className="min-h-0">
             <div className="max-h-[calc(90vh-150px)] overflow-auto px-5 py-4">
@@ -870,7 +857,7 @@ export default function AdminControl({ methodologyAction = null }) {
                     onChange={(event) => setUserForm((prev) => ({ ...prev, email: event.target.value }))}
                     className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
                     required
-                    disabled={Boolean(userForm.id) || identityAuthority === 'fcuno'}
+                    disabled={Boolean(userForm.id)}
                   />
                 </label>
                 <label className="space-y-1.5">
@@ -879,7 +866,6 @@ export default function AdminControl({ methodologyAction = null }) {
                     value={userForm.full_name}
                     onChange={(event) => setUserForm((prev) => ({ ...prev, full_name: event.target.value }))}
                     className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                    disabled={identityAuthority === 'fcuno'}
                   />
                 </label>
                 <label className="space-y-1.5">
@@ -903,7 +889,6 @@ export default function AdminControl({ methodologyAction = null }) {
                     required={!userForm.id}
                     minLength={8}
                     placeholder={userForm.id ? 'Leave blank to keep current password' : ''}
-                    disabled={identityAuthority === 'fcuno'}
                   />
                 </label>
               </div>
@@ -924,7 +909,7 @@ export default function AdminControl({ methodologyAction = null }) {
                   <input
                     type="checkbox"
                     checked={userForm.active}
-                    disabled={identityAuthority === 'fcuno' || selectedUserIsGeneralManager || userForm.user_type === 'general_manager'}
+                    disabled={selectedUserIsGeneralManager || userForm.user_type === 'general_manager'}
                     onChange={(event) => setUserForm((prev) => ({ ...prev, active: event.target.checked }))}
                   />
                   Active user
@@ -971,7 +956,7 @@ export default function AdminControl({ methodologyAction = null }) {
               </div>
             </div>
             <DialogFooter className="border-t border-border px-5 py-4">
-              {identityAuthority !== 'fcuno' && userForm.id && userForm.id !== currentUser?.id && (
+              {userForm.id && userForm.id !== currentUser?.id && (
                 <button
                   type="button"
                   onClick={deleteUser}

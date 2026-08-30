@@ -4,7 +4,6 @@ import { getVercelOidcToken } from '@vercel/oidc';
 import { requireExternalActionGate } from './_externalActionGates.js';
 import { recordEmailRouterOperation } from './_requestTelemetry.js';
 import { serverSupabaseConfig } from './_supabaseConfig.js';
-import { enforceFcunoFederatedAccess } from './_fcunoIdentityFederation.js';
 
 const GRAPH_ROOT = 'https://graph.microsoft.com/v1.0';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -105,19 +104,12 @@ export async function requireEmailRouterUser(req, dependencies = {}) {
   if (!token) throw routerError('Sign-in required.', 401, 'EMAIL_ROUTER_SIGN_IN_REQUIRED');
   const { data: auth, error: authError } = await client.auth.getUser(token);
   if (authError || !auth?.user || !UUID.test(auth.user.id)) throw routerError('Invalid or expired session. Sign in again.', 401, 'EMAIL_ROUTER_SESSION_INVALID');
-  const { data: storedProfile, error } = await client
+  const { data: profile, error } = await client
     .from('user_profiles')
-    .select('id,email,full_name,user_type,active,use_type_defaults')
+    .select('id,email,full_name,user_type,active')
     .eq('id', auth.user.id)
     .maybeSingle();
   if (error) throw error;
-  const profile = await enforceFcunoFederatedAccess({
-    client,
-    authUser: auth.user,
-    profile: storedProfile,
-    accessToken: token,
-    env: dependencies.env || process.env,
-  });
   if (!profile?.active || profile.id !== auth.user.id || !UUID.test(profile.id)) throw routerError('Active FCOS user access required.', 403, 'EMAIL_ROUTER_USER_INACTIVE');
   return { client, profile, authUser: auth.user };
 }

@@ -1,6 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
 import { serverSupabaseConfig } from './_supabaseConfig.js';
-import { enforceFcunoFederatedAccess } from './_fcunoIdentityFederation.js';
 import { reportSystemError, shouldNotifySystemError } from './_systemErrorNotifications.js';
 import {
   logRequestTelemetry,
@@ -56,18 +55,12 @@ async function requireActiveUser(req) {
   if (authError || !auth?.user) {
     throw endpointError('Invalid or expired session. Sign in again.', 401, 'FCOS_SESSION_INVALID');
   }
-  const { data: storedProfile, error } = await client
+  const { data: profile, error } = await client
     .from('user_profiles')
     .select('id,email,full_name,user_type,active,use_type_defaults')
     .eq('id', auth.user.id)
     .maybeSingle();
   if (error) throw error;
-  const profile = await enforceFcunoFederatedAccess({
-    client,
-    authUser: auth.user,
-    profile: storedProfile,
-    accessToken: token,
-  });
   if (!profile) throw endpointError('User is not registered.', 403, 'FCOS_USER_UNREGISTERED');
   if (!profile.active) throw endpointError('User is inactive.', 403, 'FCOS_USER_INACTIVE');
   return { client, authUser: auth.user, profile };
