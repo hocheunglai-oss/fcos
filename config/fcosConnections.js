@@ -1,6 +1,6 @@
 const connectionPolicy = {
   schemaVersion: 1,
-  policyVersion: 9,
+  policyVersion: 10,
   profile: 'fcos-production',
   browserProfile: 'Otto',
   localStateDirectory: '.fcos-cli',
@@ -35,6 +35,21 @@ const connectionPolicy = {
     },
   ],
   integrations: {
+    fcunoIdentityFederation: {
+      issuer: 'https://fcuno.com',
+      protocolVersion: '1.0',
+      oidcProvider: 'custom:fcuno',
+      oidcClientId: 'fcos-production',
+      oidcCallbackUrl: 'https://pjforfvchygdyqfcgpmw.supabase.co/auth/v1/callback',
+      syncAudience: 'fcos-identity-sync',
+      syncEndpoint: 'https://fcos.fcuno.com/api/fcuno/identity-sync',
+      providerRepository: 'hocheunglai-oss/bunker-map',
+      providerCommit: 'bd013104a6046904d3f69ed0f016b80a7a8ce742',
+      contractPath: 'contracts/fcuno-fcos/v1',
+      contractSha256: '7fc54e7c3bd79fb014ad81dc6d9190d021549d9428486ef85ed78fdff95d7cc2',
+      providerVercelProjectId: 'prj_8OifIFDF7Gcpd2i4VSRJOHjL3A9Q',
+      providerSupabaseProjectRef: 'gglyugbrnyvyfktgwert',
+    },
     googleDriveMarketReports: {
       accountEmail: 'vince.less@gmail.com',
       browserProfile: 'Vincent',
@@ -236,6 +251,32 @@ export function validateFcosConnectionPolicy(value = connectionPolicy) {
     throw new Error('Connection policy staleSeconds must exceed freshnessSeconds.');
   }
   requireString(value.integrations?.googleDriveMarketReports?.accountEmail, 'integrations.googleDriveMarketReports.accountEmail');
+  const federation = value.integrations?.fcunoIdentityFederation;
+  requireString(federation?.issuer, 'integrations.fcunoIdentityFederation.issuer');
+  requireString(federation?.protocolVersion, 'integrations.fcunoIdentityFederation.protocolVersion');
+  requireString(federation?.oidcProvider, 'integrations.fcunoIdentityFederation.oidcProvider');
+  requireString(federation?.oidcClientId, 'integrations.fcunoIdentityFederation.oidcClientId');
+  requireString(federation?.oidcCallbackUrl, 'integrations.fcunoIdentityFederation.oidcCallbackUrl');
+  requireString(federation?.syncAudience, 'integrations.fcunoIdentityFederation.syncAudience');
+  requireString(federation?.syncEndpoint, 'integrations.fcunoIdentityFederation.syncEndpoint');
+  requireString(federation?.providerRepository, 'integrations.fcunoIdentityFederation.providerRepository');
+  requireString(federation?.providerCommit, 'integrations.fcunoIdentityFederation.providerCommit');
+  requireString(federation?.contractPath, 'integrations.fcunoIdentityFederation.contractPath');
+  requireString(federation?.contractSha256, 'integrations.fcunoIdentityFederation.contractSha256');
+  requireString(federation?.providerVercelProjectId, 'integrations.fcunoIdentityFederation.providerVercelProjectId');
+  requireString(federation?.providerSupabaseProjectRef, 'integrations.fcunoIdentityFederation.providerSupabaseProjectRef');
+  if (federation.issuer !== 'https://fcuno.com'
+      || federation.oidcProvider !== 'custom:fcuno'
+      || federation.providerRepository !== 'hocheunglai-oss/bunker-map') {
+    throw new Error('FCUNO identity federation authority is not pinned to the approved provider.');
+  }
+  if (!/^[0-9a-f]{40}$/.test(federation.providerCommit)
+      || !/^[0-9a-f]{64}$/.test(federation.contractSha256)) {
+    throw new Error('FCUNO identity federation requires exact provider commit and contract SHA-256 pins.');
+  }
+  if (federation.providerSupabaseProjectRef === 'pjforfvchygdyqfcgpmw') {
+    throw new Error('FCUNO and FCOS must retain separate Supabase projects.');
+  }
   requireString(value.integrations?.googleDriveMarketReports?.browserProfile, 'integrations.googleDriveMarketReports.browserProfile');
   if (value.integrations.googleDriveMarketReports.browserProfile !== 'Vincent') {
     throw new Error('Google Drive market-report browser authentication must use Vincent.');
