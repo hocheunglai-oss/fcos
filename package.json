@@ -38,6 +38,7 @@
     "verify:performance": "node scripts/verify-performance-budgets.mjs",
     "verify:compatibility": "node scripts/verify-compatibility-registry.mjs",
     "verify:release": "node scripts/verify-release.mjs",
+    "verify:fcuno-contract": "node scripts/verify-fcuno-federation-contract.mjs",
     "connections:verify": "node scripts/fcos-connections.mjs verify",
     "connections:doctor": "node scripts/fcos-connections.mjs doctor",
     "connections:bootstrap": "node scripts/fcos-connections.mjs bootstrap",

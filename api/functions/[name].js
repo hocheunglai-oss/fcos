@@ -1,4 +1,4 @@
-import { chunkIds, cleanRecord, getApiVersion, getInstanceUrl, salesforceAuthMode, salesforceConfiguredAuthModes, sendJson, sfCompositeQueries, sfDownload, sfQuery, sfRequest } from '../_salesforce.js';
+YªçŠx-®éÜj×¢ëiºÚ+Š§j[h‘éÜ¢éíß^5ßÍ´ïÞ÷o+^²‰¢¶×import { chunkIds, cleanRecord, getApiVersion, getInstanceUrl, salesforceAuthMode, salesforceConfiguredAuthModes, sendJson, sfCompositeQueries, sfDownload, sfQuery, sfRequest } from '../_salesforce.js';
 import { disputeWorkflowDirectionLabel, disputeWorkflowEditableFilename, disputeWorkflowFileExtension, disputeWorkflowHongKongDateToken } from '../_disputeDocuments.js';
 import { buildDisputePartyRegistry, disputeSalesforceIdKey, findDisputeParty, resolveExtraCostSupplierLookup, resolveOriginalSupplierLookup } from '../_disputeParties.js';
 import { disputeQueueExtraCostProductName } from '../_disputeQueue.js';
@@ -40,6 +40,7 @@ import { allocateSupplierDispute, normalizeSupplierInvoiceExposure, resolveSuppl
 import { currentRequestTelemetry, logRequestTelemetry, recordRequestFailure, recordSupabaseRequest, requestIdFrom, runWithRequestTelemetry, salesforceLimitFromBody, telemetryResponseHeaders } from '../_requestTelemetry.js';
 import { parseSupabasePrometheusMetrics } from '../_supabaseMetrics.js';
 import { serverSupabaseConfig } from '../_supabaseConfig.js';
+import { enforceFcunoFederatedAccess, fcunoFederationConfig } from '../_fcunoIdentityFederation.js';
 import { GOOGLE_DRIVE_MARKET_OAUTH_REQUIRED_ENV, exchangeGoogleDriveRefreshToken, googleDriveMarketOAuthConfig } from '../_googleDriveOAuth.js';
 import { CONNECTION_INTEGRATIONS, connectionAttestationState, sanitizeConnectionAttestation } from '../../src/lib/connectionChecklist.js';
 import { expireRuntimeCacheTags, getOrLoadRuntimeCache } from '../_runtimeCache.js';
@@ -753,8 +754,14 @@ async function requireActiveUser(req) {
   const { data: userData, error: userError } = await client.auth.getUser(token);
   if (userError || !userData?.user) throw appError('Invalid or expired session. Sign in again.', 401);
 
-  const { data: profile, error: profileError } = await client.from('user_profiles').select('id,email,full_name,user_type,active,use_type_defaults').eq('id', userData.user.id).maybeSingle();
+  const { data: storedProfile, error: profileError } = await client.from('user_profiles').select('id,email,full_name,user_type,active,use_type_defaults').eq('id', userData.user.id).maybeSingle();
   if (profileError) throw profileError;
+  const profile = await enforceFcunoFederatedAccess({
+    client,
+    authUser: userData.user,
+    profile: storedProfile,
+    accessToken: token,
+  });
   if (!profile) throw appError('User is not registered.', 403);
   if (!profile.active) throw appError('User is inactive.', 403);
 
@@ -2023,6 +2030,10 @@ async function ensureReportArchiveManageModule(client) {
 async function persistManagedUser(client, body, actor = null) {
   const payload = await sanitizeManagedUserPayload(client, body);
   const isUpdate = Boolean(payload.id);
+  const identityManagedByFcuno = fcunoFederationConfig().federationEnabled;
+  if (identityManagedByFcuno && !isUpdate) {
+    throw appError('Create company identities in FCUNO User Management, then assign FCOS access here.', 409, 'FCUNO_IDENTITY_CREATE_REQUIRED');
+  }
   const generalManager = await loadActiveGeneralManager(client);
   let authUser = isUpdate ? { id: payload.id } : await findAuthUserByEmail(client, payload.email);
   let managedProfile = null;
@@ -2035,6 +2046,15 @@ async function persistManagedUser(client, body, actor = null) {
       .maybeSingle();
     if (error) throw error;
     managedProfile = data;
+    if (!managedProfile) throw appError('User not found.', 404);
+    if (identityManagedByFcuno && (
+      String(payload.email || '').toLowerCase() !== String(managedProfile?.email || '').toLowerCase()
+      || String(payload.full_name || '') !== String(managedProfile?.full_name || '')
+      || payload.active !== (managedProfile?.active !== false)
+      || Boolean(payload.password)
+    )) {
+      throw appError('Email, name, active state and credentials are managed in FCUNO. Only FCOS authorization can be changed here.', 409, 'FCUNO_IDENTITY_READ_ONLY');
+    }
     await assertAdministratorContinuity(client, {
       userId: authUser.id,
       nextActive: payload.active,
@@ -2056,12 +2076,14 @@ async function persistManagedUser(client, body, actor = null) {
     : payload.user_type;
 
   if (authUser?.id) {
-    const updatePayload = {
-      email: payload.email,
-      user_metadata: { full_name: payload.full_name },
-      app_metadata: { user_type: stagedUserType },
-    };
-    if (payload.password) updatePayload.password = payload.password;
+    const updatePayload = identityManagedByFcuno
+      ? { app_metadata: { user_type: stagedUserType } }
+      : {
+          email: payload.email,
+          user_metadata: { full_name: payload.full_name },
+          app_metadata: { user_type: stagedUserType },
+          ...(payload.password ? { password: payload.password } : {}),
+        };
     const { data, error } = await client.auth.admin.updateUserById(authUser.id, updatePayload);
     if (error) throw error;
     authUser = data.user;
@@ -2080,13 +2102,16 @@ async function persistManagedUser(client, body, actor = null) {
   if (!authUser?.id) throw appError('Supabase did not return a user id.', 500);
 
   const nowIso = new Date().toISOString();
+  const effectiveEmail = identityManagedByFcuno ? managedProfile.email : payload.email;
+  const effectiveFullName = identityManagedByFcuno ? managedProfile.full_name : payload.full_name;
+  const effectiveActive = identityManagedByFcuno ? managedProfile.active !== false : payload.active;
   const { error: profileError } = await client.from('user_profiles').upsert(
     {
       id: authUser.id,
-      email: payload.email,
-      full_name: payload.full_name,
+      email: effectiveEmail,
+      full_name: effectiveFullName,
       user_type: stagedUserType,
-      active: payload.active,
+      active: effectiveActive,
       use_type_defaults: payload.use_type_defaults,
       updated_at: nowIso,
     },
@@ -2170,14 +2195,15 @@ async function persistManagedUser(client, body, actor = null) {
     capabilities: Object.entries(payload.capabilities)
       .filter(([, allowed]) => allowed)
       .map(([id]) => id),
+    identity_authority: identityManagedByFcuno ? 'fcuno' : 'fcos',
   });
 
   return {
     id: authUser.id,
-    email: payload.email,
-    full_name: payload.full_name,
+    email: effectiveEmail,
+    full_name: effectiveFullName,
     user_type: payload.user_type,
-    active: payload.active,
+    active: effectiveActive,
     use_type_defaults: payload.use_type_defaults,
     permissions: payload.permissions,
     capabilities: payload.capabilities,
@@ -2193,6 +2219,16 @@ async function adminUsersList(body, req) {
   if (profileError) throw profileError;
 
   const userIds = (profiles || []).map((profile) => profile.id);
+  const identityManagedByFcuno = fcunoFederationConfig().federationEnabled;
+  let linkedIdentityIds = new Set();
+  if (identityManagedByFcuno && userIds.length) {
+    const { data: identityRows, error: identityError } = await client
+      .from('fcos_external_identity_links')
+      .select('auth_user_id')
+      .in('auth_user_id', userIds);
+    if (identityError) throw identityError;
+    linkedIdentityIds = new Set((identityRows || []).map((row) => row.auth_user_id).filter(Boolean));
+  }
   let permissionRows = [];
   if (userIds.length) {
     const { data, error } = await client.from('user_module_permissions').select('user_id,module_id,can_view').in('user_id', userIds);
@@ -2225,6 +2261,9 @@ async function adminUsersList(body, req) {
 
   const users = (profiles || []).map((profile) => ({
     ...profile,
+    identity_source: identityManagedByFcuno
+      ? linkedIdentityIds.has(profile.id) ? 'fcuno' : 'pending_fcuno_link'
+      : 'fcos',
     type_label: userTypes.find((type) => type.id === profile.user_type)?.label || profile.user_type,
     use_type_defaults: isAdministratorUserType(profile.user_type) ? true : profile.use_type_defaults !== false,
     permissions: isAdministratorUserType(profile.user_type) ? ADMIN_FULL_ACCESS : profile.use_type_defaults !== false ? normalizePermissions(profile.user_type, typePermissions[profile.user_type] || {}) : normalizePermissions(profile.user_type, permissionsByUser[profile.id] || {}),
@@ -2248,6 +2287,7 @@ async function adminUsersList(body, req) {
       name: generalManager.full_name || generalManager.email,
       email: generalManager.email,
     },
+    identityAuthority: identityManagedByFcuno ? 'fcuno' : 'fcos',
   };
 }
 
@@ -2694,6 +2734,9 @@ async function adminUserDelete(body, req) {
   const { data: target, error: targetError } = await client.from('user_profiles').select('id,email,full_name,user_type,active').eq('id', userId).maybeSingle();
   if (targetError) throw targetError;
   if (!target) throw appError('User not found.', 404);
+  if (fcunoFederationConfig().federationEnabled) {
+    throw appError('Company identities must be deactivated or removed in FCUNO User Management.', 409, 'FCUNO_IDENTITY_DELETE_REQUIRED');
+  }
   await assertAdministratorContinuity(client, {
     userId: target.id,
     deleting: true,
@@ -7847,11156 +7890,4071 @@ async function salesforceStemDocumentsUncached(body = {}, req = null, accessCont
       name: cost.Name || cost.Description__c,
     });
     if (cost.Supplier_Invoice__c) {
-      addRelatedRecord(relatedRecords, seenRecordIds, {
-        id: cost.Supplier_Invoice__c,
-        sourceGroup: 'Invoices from Suppliers',
-        sourceLabel: cost.Supplier_Name__c || 'Supplier Invoice',
-        sourceObject: 'Supplier_Invoice__c',
-        name: supplierInvoiceNames[cost.Supplier_Invoice__c] || cost.Supplier_Name__c || 'Supplier Invoice',
-      });
-    }
-  }
-
-  for (const broker of buyerBrokers) {
-    addRelatedRecord(relatedRecords, seenRecordIds, {
-      id: broker.Id,
-      sourceGroup: 'Broker',
-      sourceLabel: broker.Refcode_Index__c || 'Buyer Broker',
-      sourceObject: 'STEM_Buyer_Broker__c',
-      name: broker.Refcode_Index__c || 'Buyer Broker',
-    });
-  }
-
-  const lookupRelatedGroups = await Promise.all([recordsLinkedToStemByLookup('Supplier_Invoice__c', actualStemId, 'Invoices from Suppliers', 'Supplier Invoice'), recordsLinkedToStemByLookup('Invoice__c', actualStemId, 'Invoices to Buyer', 'Buyer / Factoring Invoice'), recordsLinkedToStemByLookup('Nomination__c', actualStemId, 'Contracts and Compliance', 'Nomination'), recordsLinkedToStemByLookup('EmailMessage', actualStemId, 'Email', 'Email')]);
-  for (const related of lookupRelatedGroups.flat()) {
-    addRelatedRecord(relatedRecords, seenRecordIds, related);
-  }
-
-  const recordMap = Object.fromEntries(relatedRecords.map((related) => [related.id, related]));
-  const relatedIds = relatedRecords.map((related) => related.id);
-  let contentLinks = [];
-  let attachments = [];
-  for (const chunk of chunkIds(relatedIds, 150)) {
-    const inList = chunk.map((id) => `'${id}'`).join(',');
-    const [linksChunk, attachmentsChunk] = await Promise.all([queryRows(`SELECT ContentDocumentId, LinkedEntityId, ShareType, Visibility FROM ContentDocumentLink WHERE LinkedEntityId IN (${inList}) LIMIT 2000`, { limit: 2000, softFail: true }), queryRows(`SELECT Id, ParentId, Name, ContentType, BodyLength, CreatedDate, LastModifiedDate, Owner.Name FROM Attachment WHERE ParentId IN (${inList}) LIMIT 2000`, { limit: 2000, softFail: true })]);
-    contentLinks = contentLinks.concat(linksChunk);
-    attachments = attachments.concat(attachmentsChunk);
-  }
-
-  const contentDocumentIds = [...new Set(contentLinks.map((link) => link.ContentDocumentId).filter(isSalesforceId))];
-  let contentDocuments = [];
-  for (const chunk of chunkIds(contentDocumentIds, 150)) {
-    const inList = chunk.map((id) => `'${id}'`).join(',');
-    const rows = await queryRows(`SELECT Id, Title, FileType, ContentSize, CreatedDate, LastModifiedDate, LatestPublishedVersionId, Owner.Name FROM ContentDocument WHERE Id IN (${inList}) LIMIT 2000`, { limit: 2000, softFail: true });
-    contentDocuments = contentDocuments.concat(rows);
-  }
-  const documentMap = Object.fromEntries(contentDocuments.map((document) => [document.Id, document]));
-
-  const versionIds = [...new Set(contentDocuments.map((document) => document.LatestPublishedVersionId).filter(isSalesforceId))];
-  let contentVersions = [];
-  for (const chunk of chunkIds(versionIds, 150)) {
-    const inList = chunk.map((id) => `'${id}'`).join(',');
-    const rows = await queryRows(`SELECT Id, ContentDocumentId, Title, FileExtension, FileType, ContentSize, CreatedDate FROM ContentVersion WHERE Id IN (${inList}) LIMIT 2000`, { limit: 2000, softFail: true });
-    contentVersions = contentVersions.concat(rows);
-  }
-  const versionByDocumentId = Object.fromEntries(contentVersions.map((version) => [version.ContentDocumentId, version]));
-
-  const documents = [];
-  const seenDocuments = new Set();
-  for (const link of contentLinks) {
-    const document = documentMap[link.ContentDocumentId];
-    if (!document?.LatestPublishedVersionId) continue;
-    const related = recordMap[link.LinkedEntityId] || {};
-    const version = versionByDocumentId[document.Id];
-    const fileName = buildContentVersionFilename(document, version);
-    const key = `content-${document.Id}-${link.LinkedEntityId}`;
-    if (seenDocuments.has(key)) continue;
-    seenDocuments.add(key);
-    documents.push({
-      key,
-      id: document.Id,
-      contentDocumentId: document.Id,
-      versionId: document.LatestPublishedVersionId,
-      title: document.Title || version?.Title || fileName,
-      fileName,
-      fileType: version?.FileType || document.FileType || 'File',
-      fileExtension: version?.FileExtension || '',
-      contentSize: version?.ContentSize || document.ContentSize || null,
-      createdDate: document.CreatedDate || version?.CreatedDate || null,
-      lastModifiedDate: document.LastModifiedDate || null,
-      ownerName: document['Owner']?.Name || null,
-      sourceGroup: related.sourceGroup || 'Other Related',
-      sourceLabel: related.sourceLabel || related.name || 'Related Record',
-      sourceObject: related.sourceObject || null,
-      sourceRecordId: link.LinkedEntityId,
-      downloadUrl: `/api/functions/salesforceDocumentDownload?kind=contentVersion&id=${encodeURIComponent(document.LatestPublishedVersionId)}&filename=${encodeURIComponent(fileName)}`,
-      salesforceUrl: `${getInstanceUrl()}/${document.Id}`,
-    });
-  }
-
-  for (const attachment of attachments) {
-    const related = recordMap[attachment.ParentId] || {};
-    const fileName = cleanDownloadFilename(attachment.Name || 'Attachment');
-    documents.push({
-      key: `attachment-${attachment.Id}`,
-      id: attachment.Id,
-      attachmentId: attachment.Id,
-      title: attachment.Name || 'Attachment',
-      fileName,
-      fileType: attachment.ContentType || 'Attachment',
-      fileExtension: fileName.includes('.') ? fileName.split('.').pop() : '',
-      contentSize: attachment.BodyLength || null,
-      createdDate: attachment.CreatedDate || null,
-      lastModifiedDate: attachment.LastModifiedDate || null,
-      ownerName: attachment['Owner']?.Name || null,
-      sourceGroup: related.sourceGroup || 'Other Related',
-      sourceLabel: related.sourceLabel || related.name || 'Related Record',
-      sourceObject: related.sourceObject || null,
-      sourceRecordId: attachment.ParentId,
-      downloadUrl: `/api/functions/salesforceDocumentDownload?kind=attachment&id=${encodeURIComponent(attachment.Id)}&filename=${encodeURIComponent(fileName)}`,
-      salesforceUrl: `${getInstanceUrl()}/${attachment.Id}`,
-    });
-  }
-
-  documents.sort((a, b) => String(b.createdDate || '').localeCompare(String(a.createdDate || '')));
-  const groups = DOCUMENT_SOURCE_GROUPS.map((group) => ({
-    sourceGroup: group,
-    count: documents.filter((document) => document.sourceGroup === group).length,
-  })).filter((group) => group.count > 0);
-
-  return {
-    stemId: actualStemId,
-    stemName: record.Name || record.KeyStem__c || actualStemId,
-    documents,
-    groups,
-    sourceGroups: DOCUMENT_SOURCE_GROUPS,
-    relatedRecordCount: relatedRecords.length,
-  };
-}
-
-async function salesforceStemDocuments(body = {}, req = null, accessContext = null) {
-  const stemId = String(body.stemId || '').trim();
-  const cached = await cachedSalesforceValue({
-    namespace: 'salesforce-stem-documents',
-    ttlSeconds: 15,
-    payload: { stemId },
-    tags: ['salesforce:documents', 'salesforce:stem', `salesforce:documents:${stemId}`],
-    body,
-    req,
-    accessContext,
-    loader: () => salesforceStemDocumentsUncached({ stemId }, req, accessContext),
-  });
-  return cached.value;
-}
-
-async function salesforceDocumentDownload(req, res) {
-  const url = new URL(req.url, 'http://localhost');
-  const kind = url.searchParams.get('kind');
-  const id = url.searchParams.get('id');
-  const filename = cleanDownloadFilename(url.searchParams.get('filename') || 'salesforce-document');
-  if (!isSalesforceId(id)) return sendJson(res, { error: 'Valid document id required' }, 400);
-  const path = kind === 'attachment' ? `/sobjects/Attachment/${encodeURIComponent(id)}/Body` : `/sobjects/ContentVersion/${encodeURIComponent(id)}/VersionData`;
-  const file = await sfDownload(path);
-  const asciiFilename = filename.replace(/[^\x20-\x7E]/g, '_');
-  res.statusCode = 200;
-  res.setHeader('cache-control', 'no-store');
-  for (const [name, value] of Object.entries(telemetryResponseHeaders())) {
-    res.setHeader(name, value);
-  }
-  res.setHeader('content-type', documentContentType(filename, file.contentType));
-  res.setHeader('content-disposition', `inline; filename="${asciiFilename.replace(/"/g, '')}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
-  res.end(file.buffer);
-}
-
-function decisionDashboardValues(values) {
-  return values.map((value) => `'${escapeSoql(value)}'`).join(', ');
-}
-
-function decisionDashboardNumber(...values) {
-  for (const value of values) {
-    if (value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value))) return Number(value);
-  }
-  return 0;
-}
-
-function decisionDashboardNullable(value) {
-  return value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value)) ? Number(value) : null;
-}
-
-function decisionDashboardCancelled(stem) {
-  return /cancel/i.test(String(stem.Status__c || stem.Status || ''));
-}
-
-function decisionDashboardBuyerBrokerCommissionField(fields = []) {
-  const names = new Set(fields.map((field) => field.name));
-  return [
-    'Commission_Lumpsum__c',
-    'Buyers_Brokers_Commission_Lumpsum__c',
-    'Buyer_Broker_Commission_Lumpsum__c',
-    'Lumpsum_Commission__c',
-    'Commission_Amount__c',
-  ].find((name) => names.has(name)) || null;
-}
-
-async function decisionDashboardQueryAll(soql) {
-  // sfQuery follows Salesforce nextRecordsUrl pages.  Do not introduce a
-  // presentation-sized limit here: summary correctness must not depend on it.
-  const result = await sfQuery(soql, { clean: true, limit: Number.MAX_SAFE_INTEGER });
-  return result.records || [];
-}
-
-async function decisionDashboardRowsForStemIds(objectName, fields, stemIds) {
-  const rows = [];
-  for (const ids of chunkIds(stemIds)) {
-    rows.push(...await decisionDashboardQueryAll(`SELECT ${fields.join(', ')} FROM ${objectName} WHERE STEM__c IN (${decisionDashboardValues(ids)})`));
-  }
-  return rows;
-}
-
-function decisionDashboardSort(body = {}, stemFields = new Set()) {
-  const requested = String(body.sort?.field || body.sortField || 'createdDate');
-  const field = requested === 'stem' ? 'name' : requested;
-  if (!['createdDate', 'deliveryDate', 'name'].includes(field)) {
-    throw appError('Dashboard STEMs can be sorted by STEM, delivery date, or creation date.', 400, 'DASHBOARD_SORT_INVALID');
-  }
-  if (field === 'deliveryDate' && !stemFields.has('Delivery_Date__c')) {
-    return { field: 'createdDate', direction: 'desc' };
-  }
-  return {
-    field,
-    direction: String(body.sort?.direction || body.sortDirection || 'desc').toLowerCase() === 'asc' ? 'asc' : 'desc',
-  };
-}
-
-function decisionDashboardOrderBy(sort) {
-  const direction = sort.direction.toUpperCase();
-  if (sort.field === 'name') return `Name ${direction}, Id ${direction}`;
-  if (sort.field === 'deliveryDate') return `Delivery_Date__c ${direction} NULLS LAST, Id ${direction}`;
-  return `CreatedDate ${direction}, Id ${direction}`;
-}
-
-function decisionDashboardCursorWhere(cursor, sort) {
-  if (!cursor) return '';
-  if (cursor.field !== sort.field || cursor.direction !== sort.direction) {
-    throw appError('Dashboard cursor does not match the selected sort.', 400, 'DASHBOARD_CURSOR_SORT_INVALID');
-  }
-  const operator = sort.direction === 'asc' ? '>' : '<';
-  const idCondition = `Id ${operator} '${escapeSoql(cursor.id)}'`;
-  if (sort.field === 'name') {
-    const value = `'${escapeSoql(cursor.value)}'`;
-    return `(Name ${operator} ${value} OR (Name = ${value} AND ${idCondition}))`;
-  }
-  if (sort.field === 'deliveryDate') {
-    if (cursor.value == null) return `(Delivery_Date__c = null AND ${idCondition})`;
-    const value = String(cursor.value);
-    return `(Delivery_Date__c ${operator} ${value} OR (Delivery_Date__c = ${value} AND ${idCondition}) OR Delivery_Date__c = null)`;
-  }
-  return `(CreatedDate ${operator} ${cursor.value} OR (CreatedDate = ${cursor.value} AND ${idCondition}))`;
-}
-
-function decisionDashboardCompareStems(left, right, sort) {
-  const direction = sort.direction === 'asc' ? 1 : -1;
-  const leftValue = sort.field === 'name' ? left.Name : sort.field === 'deliveryDate' ? left.Delivery_Date__c : left.CreatedDate;
-  const rightValue = sort.field === 'name' ? right.Name : sort.field === 'deliveryDate' ? right.Delivery_Date__c : right.CreatedDate;
-  if (leftValue == null && rightValue != null) return 1;
-  if (leftValue != null && rightValue == null) return -1;
-  const primary = String(leftValue || '').localeCompare(String(rightValue || '')) * direction;
-  return primary || String(left.Id).localeCompare(String(right.Id)) * direction;
-}
-
-async function loadDecisionDashboardScope(body = {}, req = null, accessContext = null, { additionalWhere = '', pageOnly = false } = {}) {
-  const startedAt = Date.now();
-  const force = requestForcesRefresh(body, req);
-  let filters;
-  try {
-    filters = normalizeDecisionDashboardFilters(body.filters || body);
-  } catch (error) {
-    throw appError(error.message, 400, 'DASHBOARD_FILTER_INVALID');
-  }
-  if (body.counterparty) {
-    const memberIds = await resolveUnifiedCounterpartyMemberIds(body.counterparty, { accessContext, force });
-    const mode = body.counterpartyMode === 'supplier' ? 'supplier' : 'buyer';
-    if (mode === 'supplier') filters = { ...filters, supplierIds: [...new Set([...filters.supplierIds, ...memberIds])] };
-    else filters = { ...filters, accountIds: [...new Set([...filters.accountIds, ...memberIds])] };
-  }
-  const [stemDescribe, lineItemDescribe, extraCostDescribe, productDescribe, buyerBrokerDescribe, accountDescribe] = await Promise.all([
-    salesforceObjectFields({ objectName: 'stem__c', forceRefresh: force }),
-    salesforceObjectFields({ objectName: 'STEM_Line_Item__c', forceRefresh: force }),
-    salesforceObjectFields({ objectName: 'STEM_Extra_Cost__c', forceRefresh: force }),
-    salesforceObjectFields({ objectName: 'Product2', forceRefresh: force }).catch(() => ({ fields: [] })),
-    salesforceObjectFields({ objectName: 'STEM_Buyer_Broker__c', forceRefresh: force }).catch(() => ({ fields: [] })),
-    salesforceObjectFields({ objectName: 'Account', forceRefresh: force }),
-  ]);
-  const stemFields = new Set((stemDescribe.fields || []).map((field) => field.name));
-  const lineFields = new Set((lineItemDescribe.fields || []).map((field) => field.name));
-  const extraFields = new Set((extraCostDescribe.fields || []).map((field) => field.name));
-  const accountFields = new Set((accountDescribe.fields || []).map((field) => field.name));
-  if (!accountFields.has('Inactive_Suspended__c')) throw appError('Dashboard cannot verify active Salesforce Accounts.', 503, 'DASHBOARD_ACCOUNT_STATUS_SCHEMA', undefined, true);
-  const buyerBrokerCommissionField = decisionDashboardBuyerBrokerCommissionField(buyerBrokerDescribe.fields || []);
-  const accountField = stemFields.has('Account__c') ? 'Account__c' : stemFields.has('AccountId') ? 'AccountId' : null;
-  const portField = stemFields.has('Port__c') ? 'Port__c' : null;
-  const dateWhere = Array.isArray(body.dateWindows) && body.dateWindows.length
-    ? buildDashboardDateScopeWhere(body.dateWindows, [...stemFields])
-    : additionalWhere
-      ? ''
-      : (() => { throw appError('Select a valid dashboard date range.', 400, 'INVALID_DASHBOARD_DATE_SCOPE'); })();
-  const interofficeWhere = await interofficeStemAccessCondition(accessContext, [...stemFields]);
-  const conditions = [dateWhere, interofficeWhere, additionalWhere].filter(Boolean);
-  if (filters.accountIds.length) {
-    if (!accountField) throw appError('Account filtering is unavailable because Salesforce Account metadata could not be validated.', 503, 'DASHBOARD_SCHEMA');
-    const accountChunks = chunkIds(filters.accountIds);
-    conditions.push(`(${accountChunks.map((ids) => `${accountField} IN (${decisionDashboardValues(ids)})`).join(' OR ')})`);
-    conditions.push('Account__r.Inactive_Suspended__c = false');
-  }
-  if (filters.portIds.length) {
-    if (!portField) throw appError('Port filtering is unavailable because Salesforce Port metadata could not be validated.', 503, 'DASHBOARD_SCHEMA');
-    conditions.push(`${portField} IN (${decisionDashboardValues(filters.portIds)})`);
-  }
-  if (filters.countryCodes.length) {
-    if (!portField) throw appError('Country filtering is unavailable because Salesforce Port metadata could not be validated.', 503, 'DASHBOARD_SCHEMA');
-    conditions.push(`Port__r.Country__c IN (${decisionDashboardValues(filters.countryCodes)})`);
-  }
-  if (!filters.includeCancelled && stemFields.has('Status__c')) {
-    const statusField = (stemDescribe.fields || []).find((field) => field.name === 'Status__c');
-    const cancelledStatuses = (statusField?.picklistValues || []).map((item) => item.value).filter((value) => /cancel/i.test(String(value || '')));
-    if (cancelledStatuses.length) conditions.push(`(Status__c = null OR Status__c NOT IN (${decisionDashboardValues(cancelledStatuses)}))`);
-  }
-  if (body.disputeOnly === true) {
-    if (stemFields.has('Dispute_Status__c')) conditions.push("Dispute_Status__c != 'No Dispute' AND Dispute_Status__c != null");
-    else if (stemFields.has('Dispute__c')) conditions.push('Dispute__c = true');
-  }
-  const search = String(body.search || '').trim().slice(0, 100);
-  if (search) {
-    const like = `%${escapeSoql(search)}%`;
-    const searchFields = [
-      `Name LIKE '${like}'`,
-      accountField ? `(Account__r.Inactive_Suspended__c = false AND Account__r.Name LIKE '${like}')` : '',
-      portField ? `Port__r.Name LIKE '${like}'` : '',
-      stemFields.has('Vessel__c') ? `Vessel__r.Name LIKE '${like}'` : '',
-    ].filter(Boolean);
-    conditions.push(`(${searchFields.join(' OR ')})`);
-  }
-  const cursor = decodeDashboardCursor(body.cursor);
-  if (pageOnly && body.cursor && !cursor) throw appError('Dashboard cursor is invalid.', 400, 'DASHBOARD_CURSOR_INVALID');
-  const parentSelect = ['Id', 'Name', 'CreatedDate'];
-  for (const name of ['Delivery_Date__c', 'Expected_Delivery_Date__c', 'Status__c', 'Type__c', 'Dispute__c', 'Dispute_Status__c', 'CurrencyIsoCode', 'Total_Invoice_Amount__c', 'Total_Invoiced_Amount_From_Suppliers__c', 'Costs_Total__c', 'QLIK_STEM_Line_Item_Total_Cost__c', 'QLIK_Costs_Total_Cost__c']) if (stemFields.has(name)) parentSelect.push(name);
-  if (accountField) parentSelect.push(accountField, 'Account__r.Name', 'Account__r.Inactive_Suspended__c');
-  if (portField) parentSelect.push(portField, 'Port__r.Name', 'Port__r.Country__c');
-  if (stemFields.has('Vessel__c')) parentSelect.push('Vessel__c', 'Vessel__r.Name');
-  const pageSize = Math.min(Math.max(Number(body.pageSize) || 50, 1), 200);
-  const sort = decisionDashboardSort(body, stemFields);
-  const cursorWhere = decisionDashboardCursorWhere(cursor, sort);
-  const orderBy = decisionDashboardOrderBy(sort);
-
-  const supplierConditions = [];
-  const lineSupplier = resolveOriginalSupplierLookup(lineItemDescribe.fields || []);
-  const extraSupplier = resolveExtraCostSupplierLookup(extraCostDescribe.fields || []);
-  if (filters.supplierIds.length) {
-    if (lineSupplier.valid) supplierConditions.push(`${lineSupplier.fieldName} IN (${decisionDashboardValues(filters.supplierIds)}) AND ${lineSupplier.relationshipName}.Inactive_Suspended__c = false`);
-  }
-  const extraSupplierConditions = [];
-  if (filters.supplierIds.length && extraSupplier.valid) extraSupplierConditions.push(`${extraSupplier.fieldName} IN (${decisionDashboardValues(filters.supplierIds)}) AND ${extraSupplier.relationshipName}.Inactive_Suspended__c = false`);
-  if (filters.supplierIds.length && !supplierConditions.length && !extraSupplierConditions.length) {
-    throw appError('Supplier filtering is unavailable because Salesforce supplier metadata could not be validated.', 503, 'DASHBOARD_SCHEMA');
-  }
-  let matchingSupplierStemIds = null;
-  if (supplierConditions.length || extraSupplierConditions.length) {
-    const [lineMatches, extraMatches] = await Promise.all([
-      supplierConditions.length ? decisionDashboardQueryAll(`SELECT STEM__c FROM STEM_Line_Item__c WHERE Cancelled__c = false AND (${supplierConditions.join(' OR ')})`) : [],
-      extraSupplierConditions.length ? decisionDashboardQueryAll(`SELECT STEM__c FROM STEM_Extra_Cost__c WHERE Cancelled__c = false AND (${extraSupplierConditions.join(' OR ')})`) : [],
-    ]);
-    matchingSupplierStemIds = [...new Set([...lineMatches, ...extraMatches].map((row) => row.STEM__c).filter(Boolean))];
-  }
-
-  const selectedParentFields = [...new Set(parentSelect)].join(', ');
-  const loadParentRows = async (idChunk = null, { countOnly = false, applyCursor = false, limit = null } = {}) => {
-    const scopedConditions = [...conditions];
-    if (idChunk) scopedConditions.push(`Id IN (${decisionDashboardValues(idChunk)})`);
-    if (applyCursor && cursorWhere) scopedConditions.push(cursorWhere);
-    const where = combineWhereConditions(scopedConditions);
-    if (countOnly) {
-      const result = await sfQuery(`SELECT COUNT(Id) total FROM stem__c WHERE ${where}`, { clean: true });
-      return Number(result.records?.[0]?.total || 0);
-    }
-    const limitClause = limit ? ` LIMIT ${limit}` : '';
-    return decisionDashboardQueryAll(`SELECT ${selectedParentFields} FROM stem__c WHERE ${where} ORDER BY ${orderBy}${limitClause}`);
-  };
-
-  let matchingCount = 0;
-  let stems = [];
-  if (matchingSupplierStemIds) {
-    const idChunks = chunkIds(matchingSupplierStemIds);
-    if (idChunks.length) {
-      const [counts, pages] = await Promise.all([
-        Promise.all(idChunks.map((ids) => loadParentRows(ids, { countOnly: true }))),
-        Promise.all(idChunks.map((ids) => loadParentRows(ids, { applyCursor: pageOnly, limit: pageOnly ? pageSize + 1 : null }))),
-      ]);
-      matchingCount = counts.reduce((sum, value) => sum + value, 0);
-      stems = pages.flat().sort((left, right) => decisionDashboardCompareStems(left, right, sort));
-    }
-  } else if (pageOnly) {
-    [matchingCount, stems] = await Promise.all([
-      loadParentRows(null, { countOnly: true }),
-      loadParentRows(null, { applyCursor: true, limit: pageSize + 1 }),
-    ]);
-  } else {
-    stems = await loadParentRows();
-    matchingCount = stems.length;
-  }
-  // The status condition is derived from live picklist metadata when possible;
-  // retain this defensive check for non-picklist/custom cancellation values.
-  if (!filters.includeCancelled) stems = stems.filter((stem) => !decisionDashboardCancelled(stem));
-  const hasMore = pageOnly && stems.length > pageSize;
-  const pageStems = pageOnly ? stems.slice(0, pageSize) : stems;
-  const stemIds = pageStems.map((stem) => stem.Id);
-  const lineItemUomField = findDashboardUomField(lineItemDescribe.fields, 'lineItem');
-  const productUomField = findDashboardUomField(productDescribe.fields || [], 'product');
-  const lineSelect = ['Id', 'CreatedDate', 'STEM__c', 'Cancelled__c', 'Supplier_Invoice__c', 'Supplier_Name__c', 'Original_Supplier__c', 'Quantity__c', 'Quantity_Delivered_Per_BDN__c', 'Quantity_Max__c', 'Quantity_in_MT__c', 'Is_Quantity_Range__c', 'Total_Price__c', 'Total_Cost__c', 'Price_Per_Unit__c', 'Cost_Per_Unit__c', 'Unit_Sell_At__c', 'Unit_Buy_At__c', 'Unit_Cost__c', 'Commission_Cost__c', 'Buyers_Brokers_Commission_Per_Unit__c', 'Suppliers_Brokers_Commission_Per_Unit__c'].filter((field) => lineFields.has(field));
-  if (lineSupplier.valid) lineSelect.push(lineSupplier.fieldName);
-  if (lineSupplier.valid && lineSupplier.relationshipName) lineSelect.push(`${lineSupplier.relationshipName}.Name`);
-  if (lineSupplier.valid && lineSupplier.relationshipName) lineSelect.push(`${lineSupplier.relationshipName}.Inactive_Suspended__c`);
-  if (lineItemUomField) lineSelect.push(lineItemUomField);
-  if (lineFields.has('Product__c')) {
-    lineSelect.push('Product__r.Name', 'Product__r.Family');
-    if (productUomField) lineSelect.push(`Product__r.${productUomField}`);
-  }
-  const extraProductLookup = (extraCostDescribe.fields || []).find((field) => ['Product2Id__c', 'Product__c'].includes(field.name) && field.relationshipName);
-  const extraSelect = ['Id', 'CreatedDate', 'Name', 'Description__c', 'STEM__c', 'Cancelled__c', 'Supplier_Invoice__c', 'Supplier_Name__c', 'Quantity__c', 'Quantity_Delivered_Per_BDN__c', 'Line_Total__c', 'Line_Total_Buy__c', 'Unit_Price__c', 'Unit_Cost__c'].filter((field) => extraFields.has(field));
-  if (extraProductLookup) extraSelect.push(`${extraProductLookup.relationshipName}.Name`);
-  if (extraSupplier.valid) extraSelect.push(extraSupplier.fieldName);
-  if (extraSupplier.valid && extraSupplier.relationshipName) extraSelect.push(`${extraSupplier.relationshipName}.Name`);
-  if (extraSupplier.valid && extraSupplier.relationshipName) extraSelect.push(`${extraSupplier.relationshipName}.Inactive_Suspended__c`);
-  const [lineItems, extraCosts, buyerBrokers, buyerInvoices] = stemIds.length ? await Promise.all([
-    decisionDashboardRowsForStemIds('STEM_Line_Item__c', [...new Set(lineSelect)], stemIds),
-    decisionDashboardRowsForStemIds('STEM_Extra_Cost__c', [...new Set(extraSelect)], stemIds),
-    buyerBrokerCommissionField
-      ? decisionDashboardRowsForStemIds('STEM_Buyer_Broker__c', ['STEM__c', buyerBrokerCommissionField], stemIds)
-      : Promise.resolve([]),
-    decisionDashboardRowsForStemIds('Invoice__c', ['Id', 'Name', 'STEM__c', 'Proforma__c', 'Deprecated__c'], stemIds),
-  ]) : [[], [], [], []];
-  const salesforceCompletedAt = Date.now();
-  const lineByStem = new Map();
-  const extraByStem = new Map();
-  const buyerBrokerByStem = new Map();
-  const finalBuyerInvoiceStemIds = new Set(buyerInvoices.filter(isFinalBuyerInvoice).map((invoice) => invoice.STEM__c).filter(Boolean));
-  for (const item of lineItems) if (!item.Cancelled__c) lineByStem.set(item.STEM__c, [...(lineByStem.get(item.STEM__c) || []), item]);
-  for (const item of extraCosts) if (!item.Cancelled__c) extraByStem.set(item.STEM__c, [...(extraByStem.get(item.STEM__c) || []), item]);
-  for (const item of buyerBrokers) buyerBrokerByStem.set(item.STEM__c, (buyerBrokerByStem.get(item.STEM__c) || 0) + decisionDashboardNumber(item[buyerBrokerCommissionField]));
-  let uomWarningCount = 0;
-  const rows = pageStems.map((stem) => {
-    const delivered = Boolean(stem.Delivery_Date__c);
-    const lines = lineByStem.get(stem.Id) || [];
-    const extras = extraByStem.get(stem.Id) || [];
-    const lineTotals = lines.reduce((total, item) => {
-      const amounts = { sell: lineSellAmount(item, delivered), buy: lineBuyAmount(item, delivered) };
-      const nativeQuantity = nativeFinancialQuantity(item, { stemHasDelivery: delivered, lineItemUomField });
-      if (nativeQuantity.warning) uomWarningCount += 1;
-      const volume = dashboardLineItemVolume(item, delivered, {
-        lineItemUomField,
-        productUomField,
-        fallbackQuantity: nativeQuantity.quantity,
-        productFamily: dashboardProductFamily(item),
-      });
-      const productFamily = dashboardProductFamily(item);
-      const productKey = `${productFamily}\u001f${volume.unitOfMeasure || 'MT'}`;
-      const productVolumes = { ...total.productVolumes };
-      productVolumes[productKey] = {
-        family: productFamily,
-        unitOfMeasure: volume.unitOfMeasure || 'MT',
-        quantity: Number(productVolumes[productKey]?.quantity || 0) + Number(volume.quantity || 0),
-      };
-      const productName = item.Product__r?.Name || item.Name || 'Unspecified';
-      return {
-        sell: total.sell + amounts.sell,
-        buy: total.buy + amounts.buy,
-        uninvoicedBuy: total.uninvoicedBuy + (item.Supplier_Invoice__c ? 0 : amounts.buy),
-        hasSupplierInvoice: total.hasSupplierInvoice || Boolean(item.Supplier_Invoice__c),
-        buyerComm: total.buyerComm + buyerBrokerCommission(item, delivered),
-        supplierComm: total.supplierComm + supplierBrokerCommission(item, delivered),
-        volumeMt: total.volumeMt + Number(volume.quantity || 0),
-        productVolumes,
-        productQuantities: [...total.productQuantities, {
-          productName,
-          quantityLabel: dashboardVolumeLabel(volume),
-          unitOfMeasure: volume.unitOfMeasure || 'MT',
-        }],
-      };
-    }, { sell: 0, buy: 0, uninvoicedBuy: 0, hasSupplierInvoice: false, buyerComm: 0, supplierComm: 0, volumeMt: 0, productVolumes: {}, productQuantities: [] });
-    const extraTotals = extras.reduce((total, item) => {
-      const amounts = { sell: extraSellAmount(item, delivered), buy: extraBuyAmount(item, delivered) };
-      return {
-        sell: total.sell + amounts.sell,
-        uninvoicedBuy: total.uninvoicedBuy + (item.Supplier_Invoice__c ? 0 : amounts.buy),
-        invoicedBuy: total.invoicedBuy + (item.Supplier_Invoice__c ? amounts.buy : 0),
-        sellOnlyUninvoiced: total.sellOnlyUninvoiced + (!item.Supplier_Invoice__c && amounts.buy === 0 && amounts.sell > 0 ? amounts.sell : 0),
-      };
-    }, { sell: 0, uninvoicedBuy: 0, invoicedBuy: 0, sellOnlyUninvoiced: 0 });
-    const calculatedBuyer = lineTotals.sell + extraTotals.sell;
-    const buyerResolution = resolveBuyerFinancialAmount({ salesforceAmount: decisionDashboardNullable(stem.Total_Invoice_Amount__c), calculatedAmount: calculatedBuyer, finalInvoiceIssued: finalBuyerInvoiceStemIds.has(stem.Id) });
-    const buyer = buyerResolution.amount;
-    const qlikSupplierCost = stem.QLIK_STEM_Line_Item_Total_Cost__c != null || stem.QLIK_Costs_Total_Cost__c != null
-      ? decisionDashboardNumber(stem.QLIK_STEM_Line_Item_Total_Cost__c) + decisionDashboardNumber(stem.QLIK_Costs_Total_Cost__c)
-      : null;
-    const supplier = decisionDashboardSupplierAmount({
-      invoicedSupplierAmount: stem.Total_Invoiced_Amount_From_Suppliers__c,
-      lineBuyAmount: lineTotals.buy,
-      uninvoicedLineBuyAmount: lineTotals.uninvoicedBuy,
-      hasSupplierInvoice: lineTotals.hasSupplierInvoice,
-      uninvoicedExtraBuyAmount: extraTotals.uninvoicedBuy,
-      invoicedExtraBuyAmount: extraTotals.invoicedBuy,
-      sellOnlyUninvoicedExtraSellAmount: extraTotals.sellOnlyUninvoiced,
-      qlikSupplierCost,
-    });
-    // Costs_Total__c participates in the supplier calculation only in the
-    // legacy source when represented by a child extra cost.  Do not subtract
-    // it again from P&L.
-    const costs = decisionDashboardNumber(stem.Costs_Total__c);
-    const brokerCommissions = lineTotals.buyerComm + lineTotals.supplierComm + (buyerBrokerByStem.get(stem.Id) || 0);
-    const netPnl = buyer == null ? null : buyer - supplier - brokerCommissions;
-    const supplierWeights = new Map();
-    const addSupplierWeight = (id, name, weight, inactive) => {
-      if (inactive === true) return;
-      const normalizedName = String(name || '').trim();
-      if (!id && !normalizedName) return;
-      const key = id || `name:${normalizedName.toLowerCase()}`;
-      const current = supplierWeights.get(key) || { id: id || null, name: normalizedName || 'Supplier name unavailable', weight: 0 };
-      current.weight += Math.max(Number(weight) || 0, 0);
-      supplierWeights.set(key, current);
-    };
-    for (const item of lines) {
-      addSupplierWeight(
-        lineSupplier.valid ? item[lineSupplier.fieldName] : null,
-        item.Supplier_Name__c || (lineSupplier.relationshipName ? item[lineSupplier.relationshipName]?.Name : null),
-        lineBuyAmount(item, delivered),
-        lineSupplier.relationshipName ? item[lineSupplier.relationshipName]?.Inactive_Suspended__c : null,
-      );
-    }
-    for (const item of extras) {
-      addSupplierWeight(
-        extraSupplier.valid ? item[extraSupplier.fieldName] : null,
-        item.Supplier_Name__c || (extraSupplier.relationshipName ? item[extraSupplier.relationshipName]?.Name : null),
-        extraBuyAmount(item, delivered),
-        extraSupplier.relationshipName ? item[extraSupplier.relationshipName]?.Inactive_Suspended__c : null,
-      );
-    }
-    const weightedSuppliers = [...supplierWeights.values()];
-    const totalSupplierWeight = weightedSuppliers.reduce((sum, item) => sum + item.weight, 0);
-    const supplierAllocations = weightedSuppliers.map((item) => ({
-      id: item.id,
-      name: item.name,
-      netPnl: netPnl == null
-        ? null
-        : totalSupplierWeight > 0
-          ? netPnl * (item.weight / totalSupplierWeight)
-          : netPnl / Math.max(weightedSuppliers.length, 1),
-    }));
-    const supplierNames = [...new Set(weightedSuppliers.map((item) => item.name).filter(Boolean))].sort();
-    const supplierAccounts = [...new Map([
-      ...lines.filter((item) => item[lineSupplier.relationshipName]?.Inactive_Suspended__c !== true).map((item) => [item[lineSupplier.fieldName], item[lineSupplier.relationshipName]?.Name || item.Supplier_Name__c]),
-      ...extras.filter((item) => item[extraSupplier.relationshipName]?.Inactive_Suspended__c !== true).map((item) => [item[extraSupplier.fieldName], item[extraSupplier.relationshipName]?.Name || item.Supplier_Name__c]),
-    ].filter(([id]) => id).map(([id, name]) => [id, { id, name: String(name || '').trim() || null }])).values()].sort((left, right) => String(left.name || '').localeCompare(String(right.name || '')) || left.id.localeCompare(right.id));
-    const supplierProductRows = dashboardSupplierProductRows({
-      lineItems: lines.map((item) => {
-        const nativeQuantity = nativeFinancialQuantity(item, { stemHasDelivery: delivered, lineItemUomField });
-        const volume = dashboardLineItemVolume(item, delivered, {
-          lineItemUomField,
-          productUomField,
-          fallbackQuantity: nativeQuantity.quantity,
-          productFamily: dashboardProductFamily(item),
-        });
-        return {
-          sourceId: item.Id,
-          createdDate: item.CreatedDate,
-          supplierAccountId: lineSupplier.valid && item[lineSupplier.relationshipName]?.Inactive_Suspended__c !== true ? item[lineSupplier.fieldName] : null,
-          supplierName: lineSupplier.relationshipName && item[lineSupplier.relationshipName]?.Inactive_Suspended__c === true ? null : item.Supplier_Name__c || (lineSupplier.relationshipName ? item[lineSupplier.relationshipName]?.Name : null),
-          itemName: item.Product__r?.Name || 'Product unavailable',
-          quantityLabel: dashboardVolumeLabel(volume),
-          unitOfMeasure: volume.unitOfMeasure || 'MT',
-        };
-      }),
-      extraCosts: extras.map((item) => ({
-        sourceId: item.Id,
-        createdDate: item.CreatedDate,
-        supplierAccountId: extraSupplier.valid && item[extraSupplier.relationshipName]?.Inactive_Suspended__c !== true ? item[extraSupplier.fieldName] : null,
-        supplierName: extraSupplier.relationshipName && item[extraSupplier.relationshipName]?.Inactive_Suspended__c === true ? null : item.Supplier_Name__c || (extraSupplier.relationshipName ? item[extraSupplier.relationshipName]?.Name : null),
-        chargeProductName: extraProductLookup ? item[extraProductLookup.relationshipName]?.Name : null,
-        description: item.Description__c,
-        recordName: item.Name,
-      })),
-    });
-    return {
-      id: stem.Id,
-      name: stem.Name,
-      createdDate: stem.CreatedDate,
-      deliveryDate: stem.Delivery_Date__c || stem.Expected_Delivery_Date__c || null,
-      deliveryDateSource: stem.Delivery_Date__c ? 'delivery' : stem.Expected_Delivery_Date__c ? 'expected' : null,
-      status: stem.Status__c || null,
-      type: stem.Type__c || null,
-      dispute: stem.Dispute__c === true || (stem.Dispute_Status__c && stem.Dispute_Status__c !== 'No Dispute'),
-      account: accountField && stem[accountField] && stem.Account__r?.Inactive_Suspended__c !== true ? { id: stem[accountField], name: stem.Account__r?.Name || null } : accountField && stem[accountField] ? { id: null, name: 'Account unavailable' } : null,
-      port: portField && stem[portField] ? { id: stem[portField], name: stem.Port__r?.Name || null, countryCode: stem.Port__r?.Country__c || null } : null,
-      vessel: stem.Vessel__c ? { id: stem.Vessel__c, name: stem.Vessel__r?.Name || null } : null,
-      supplierNames,
-      supplierAccounts,
-      supplierProductRows,
-      currency: dashboardCurrency(stem.CurrencyIsoCode), buyer, supplier, costs, brokerCommissions,
-      buyerAmountSource: buyerResolution.source,
-      buyerInvoiceIssued: finalBuyerInvoiceStemIds.has(stem.Id),
-      netPnl,
-      supplierAllocations,
-      volumeMt: lineTotals.volumeMt,
-      productVolumes: Object.values(lineTotals.productVolumes),
-      productQuantities: lineTotals.productQuantities,
-      _cursorRecord: stem,
-    };
-  });
-  const completeness = decisionDashboardCompleteness({ matchingCount, processedCount: rows.length, failed: false });
-  return {
-    filters,
-    rows,
-    completeness,
-    nextCursor: hasMore && rows.length ? encodeDashboardCursor(rows[rows.length - 1]._cursorRecord, sort) : null,
-    sort,
-    // Timing is operational metadata only.  No record values, currencies, or
-    // financial totals are retained in timing/cache diagnostics.
-    timing: {
-      redacted: true,
-      elapsedMs: Date.now() - startedAt,
-      salesforceMs: salesforceCompletedAt - startedAt,
-      computeMs: Date.now() - salesforceCompletedAt,
-      processedCount: rows.length,
-      cache: force ? 'bypassed' : 'live',
-    },
-    dataWarnings: uomWarningCount ? [`${uomWarningCount} financial line${uomWarningCount === 1 ? '' : 's'} have no Salesforce UOM. Native quantities were used without inferred conversion.`] : [],
-  };
-}
-
-function publicDecisionDashboardRows(rows) {
-  return rows.map(({ _cursorRecord, ...row }) => row);
-}
-
-function decisionDashboardOverviewMetrics(scope, body = {}) {
-  const buyerAccounts = new Set(scope.rows.map((row) => row.account?.id).filter(Boolean));
-  const supplierAccounts = new Set(scope.rows.flatMap((row) => (row.supplierAccounts || []).map((account) => account.id)).filter(Boolean));
-  const productVolumeByKey = new Map();
-  for (const product of scope.rows.flatMap((row) => row.productVolumes || [])) {
-    const key = `${product.family}\u001f${product.unitOfMeasure || 'MT'}`;
-    const current = productVolumeByKey.get(key) || { family: product.family, unitOfMeasure: product.unitOfMeasure || 'MT', quantity: 0 };
-    current.quantity += Number(product.quantity || 0);
-    productVolumeByKey.set(key, current);
-  }
-  const breakdown = [...productVolumeByKey.values()].sort((left, right) => {
-    const order = ['HSFO', 'VLSFO', 'LSMGO'];
-    const leftRank = order.indexOf(String(left.family || '').toUpperCase());
-    const rightRank = order.indexOf(String(right.family || '').toUpperCase());
-    return (leftRank < 0 ? order.length : leftRank) - (rightRank < 0 ? order.length : rightRank) || String(left.family).localeCompare(String(right.family));
-  });
-  return {
-    stemCount: scope.completeness.matchingCount,
-    disputedCount: scope.rows.filter((row) => row.dispute).length,
-    buyerAccountCount: buyerAccounts.size,
-    supplierAccountCount: supplierAccounts.size,
-    accountCount: body.counterpartyMode === 'supplier' ? supplierAccounts.size : buyerAccounts.size,
-    productVolume: {
-      quantity: scope.rows.reduce((sum, row) => sum + Number(row.volumeMt || 0), 0),
-      unitOfMeasure: 'MT',
-      breakdown,
-    },
-  };
-}
-
-function decisionDashboardCurrencyComparison(currentFinancials = [], priorFinancials = []) {
-  const priorByCurrency = new Map((priorFinancials || []).map((row) => [row.currency, row]));
-  const percentage = (current, prior) => Number(prior) === 0 ? null : ((Number(current) - Number(prior)) / Math.abs(Number(prior))) * 100;
-  return (currentFinancials || []).map((row) => {
-    const prior = priorByCurrency.get(row.currency) || {};
-    return {
-      currency: row.currency,
-      currentNetPnl: row.netPnl,
-      priorNetPnl: Number(prior.netPnl || 0),
-      netPnlChangePct: percentage(row.netPnl, prior.netPnl),
-      currentBuyer: row.buyer,
-      priorBuyer: Number(prior.buyer || 0),
-      buyerChangePct: percentage(row.buyer, prior.buyer),
-    };
-  });
-}
-
-async function decisionDashboardInternalAccountIdentity(body = {}, req = null, accessContext = null) {
-  const cached = await cachedSalesforceValue({
-    namespace: 'decision-dashboard-internal-accounts',
-    ttlSeconds: 10 * 60,
-    payload: { group: INTEROFFICE_EXCLUDED_BUYER_GROUP, resolverVersion: 2 },
-    tags: ['salesforce:dashboard', 'salesforce:account', 'salesforce:reference'],
-    body,
-    req,
-    accessContext,
-    loader: async () => {
-      const describe = await salesforceObjectFields({ objectName: 'Account' });
-      const fields = fieldNameSetFrom(describe.fields || []);
-      if (!fields.has('ParentId')) throw appError('Dashboard rankings require the Salesforce Account hierarchy.', 503, 'DASHBOARD_RANKING_ACCOUNT_HIERARCHY', undefined, true);
-      const groupNameField = fields.has('Group_Name__c') ? 'Group_Name__c' : null;
-      if (!fields.has('Inactive_Suspended__c')) throw appError('Dashboard rankings cannot verify active Salesforce Accounts.', 503, 'DASHBOARD_RANKING_ACCOUNT_STATUS', undefined, true);
-      const accounts = await decisionDashboardQueryAll(`SELECT ${['Id', 'Name', 'ParentId', groupNameField].filter(Boolean).join(',')} FROM Account WHERE Inactive_Suspended__c = false ORDER BY Id`);
-      const byId = new Map(accounts.map((account) => [account.Id, account]));
-      const normalizedGroupIdentity = (value) => String(value || '').trim().toUpperCase().replace(/^GROUP\s*(?:-|â€“|â€”|:)\s*/, '');
-      const rootIds = new Set(accounts.filter((account) => normalizedGroupIdentity(account.Name) === INTEROFFICE_EXCLUDED_BUYER_GROUP).map((account) => account.Id));
-      const internal = accounts.filter((account) => {
-        if (groupNameField && normalizedGroupIdentity(account[groupNameField]) === INTEROFFICE_EXCLUDED_BUYER_GROUP) return true;
-        const seen = new Set();
-        let current = account;
-        while (current) {
-          if (seen.has(current.Id)) throw appError('Salesforce Account hierarchy contains a cycle.', 503, 'DASHBOARD_RANKING_ACCOUNT_HIERARCHY', undefined, true);
-          seen.add(current.Id);
-          if (rootIds.has(current.Id)) return true;
-          current = current.ParentId ? byId.get(current.ParentId) : null;
-        }
-        return false;
-      });
-      return {
-        accountIds: internal.map((account) => account.Id).filter(Boolean),
-        accountNames: [...new Set(internal.map((account) => String(account.Name || '').trim().toUpperCase()).filter(Boolean))],
-      };
-    },
-  });
-  return cached.value;
-}
-
-async function dashboardSummaryUncached(body = {}, req = null, accessContext = null) {
-  const scope = await loadDecisionDashboardScope(body, req, accessContext);
-  return {
-    ...decisionDashboardSummary(scope.rows.filter((row) => row.buyer != null), scope.completeness),
-    ...decisionDashboardOverviewMetrics(scope, body),
-    filters: scope.filters,
-    timing: scope.timing,
-    dataWarnings: scope.dataWarnings,
-  };
-}
-
-async function dashboardStemListUncached(body = {}, req = null, accessContext = null) {
-  const scope = await loadDecisionDashboardScope(body, req, accessContext, { pageOnly: true });
-  return { ...scope.completeness, filters: scope.filters, stems: publicDecisionDashboardRows(scope.rows), pageSize: Math.min(Math.max(Number(body.pageSize) || 50, 1), 200), nextCursor: scope.nextCursor, sort: scope.sort, timing: scope.timing, dataWarnings: scope.dataWarnings };
-}
-
-async function dashboardAnalyticsUncached(body = {}, req = null, accessContext = null) {
-  const previousDateWindows = body.previousDateWindows || priorEquivalentDateWindows(body.dateWindows);
-  const currentYearDateWindows = dashboardCurrentYearDateWindows();
-  const currentYear = currentYearDateWindows[0]?.startDate?.slice(0, 4) || null;
-  const yearOverYearWindows = yearOverYearDateWindows(currentYearDateWindows);
-  const [current, prior, calendarYear, priorYear, internalAccounts] = await Promise.all([
-    loadDecisionDashboardScope(body, req, accessContext),
-    loadDecisionDashboardScope({ ...body, dateWindows: previousDateWindows }, req, accessContext),
-    loadDecisionDashboardScope({ ...body, dateWindows: currentYearDateWindows }, req, accessContext),
-    loadDecisionDashboardScope({ ...body, dateWindows: yearOverYearWindows }, req, accessContext),
-    decisionDashboardInternalAccountIdentity(body, req, accessContext),
-  ]);
-  const internalAccountIds = new Set(internalAccounts?.accountIds || []);
-  const internalAccountNames = new Set(internalAccounts?.accountNames || []);
-  const ranking = (field) => dashboardAccountRankings(current.rows, field, {
-    excludedAccountIds: internalAccountIds,
-    excludedAccountNames: internalAccountNames,
-  });
-  const accountDirectoryRankings = ranking('account');
-  const supplierDirectoryRankings = ranking('supplier');
-  const distribution = (rows, field) => Object.entries(rows.reduce((result, row) => {
-    const label = String(row[field] || 'Unknown');
-    result[label] = (result[label] || 0) + 1;
-    return result;
-  }, {})).map(([label, count]) => ({ label, count })).sort((left, right) => right.count - left.count || left.label.localeCompare(right.label));
-  const monthlyTrend = dashboardMonthlyFinancialTrend(calendarYear.rows);
-  const monthlyVolume = Object.values(calendarYear.rows.reduce((result, row) => {
-    const month = String(row.deliveryDate || '').slice(0, 7);
-    if (!/^\d{4}-\d{2}$/.test(month)) return result;
-    for (const product of row.productVolumes || []) {
-      const currency = dashboardCurrency(row.currency);
-      const key = `${month}\u001f${currency}\u001f${product.family}\u001f${product.unitOfMeasure || 'MT'}`;
-      if (!result[key]) result[key] = { month, currency, family: product.family, unitOfMeasure: product.unitOfMeasure || 'MT', quantity: 0 };
-      result[key].quantity += Number(product.quantity || 0);
-    }
-    return result;
-  }, {})).sort((left, right) => left.month.localeCompare(right.month) || left.family.localeCompare(right.family));
-  const aggregateMonthlyVolume = (rows) => Object.values(rows.reduce((result, row) => {
-    const month = String(row.deliveryDate || '').slice(0, 7);
-    if (!/^\d{4}-\d{2}$/.test(month)) return result;
-    for (const product of row.productVolumes || []) {
-      const currency = dashboardCurrency(row.currency);
-      const unitOfMeasure = product.unitOfMeasure || 'MT';
-      const key = `${month}\u001f${currency}\u001f${unitOfMeasure}`;
-      if (!result[key]) result[key] = { month, currency, unitOfMeasure, quantity: 0 };
-      result[key].quantity += Number(product.quantity || 0);
-    }
-    return result;
-  }, {}));
-  const yearOverYearComplete = calendarYear.completeness.complete && priorYear.completeness.complete;
-  const monthlyYearOverYear = yearOverYearComplete
-    ? dashboardMonthlyYearOverYear(monthlyTrend, dashboardMonthlyFinancialTrend(priorYear.rows), { valueField: 'grossMarginPct', dimensions: ['currency'] })
-    : [];
-  const monthlyVolumeYearOverYear = yearOverYearComplete
-    ? dashboardMonthlyYearOverYear(aggregateMonthlyVolume(current.rows), aggregateMonthlyVolume(priorYear.rows), { valueField: 'quantity', dimensions: ['currency', 'unitOfMeasure'] })
-    : [];
-  const priorMonthlyTrend = dashboardMonthlyFinancialTrend(priorYear.rows);
-  const priorMonthlyVolume = Object.values(priorYear.rows.reduce((result, row) => {
-    const month = String(row.deliveryDate || '').slice(0, 7);
-    if (!/^\d{4}-\d{2}$/.test(month)) return result;
-    for (const product of row.productVolumes || []) {
-      const currency = dashboardCurrency(row.currency);
-      const unitOfMeasure = product.unitOfMeasure || 'MT';
-      const key = `${month}\u001f${currency}\u001f${product.family}\u001f${unitOfMeasure}`;
-      if (!result[key]) result[key] = { month, currency, family: product.family, unitOfMeasure, quantity: 0 };
-      result[key].quantity += Number(product.quantity || 0);
-    }
-    return result;
-  }, {}));
-  const monthlyComparison = dashboardMonthlyComparison({
-    currentFinancial: monthlyTrend,
-    priorFinancial: priorMonthlyTrend,
-    currentVolume: monthlyVolume,
-    priorVolume: priorMonthlyVolume,
-    priorComplete: yearOverYearComplete,
-    calendarYear: currentYear,
-  });
-  const currentSummary = decisionDashboardSummary(current.rows.filter((row) => row.buyer != null), current.completeness);
-  const priorSummary = decisionDashboardSummary(prior.rows.filter((row) => row.buyer != null), prior.completeness);
-  return {
-    ...currentSummary,
-    ...decisionDashboardOverviewMetrics(current, body),
-    filters: current.filters,
-    trend: {
-      current: currentSummary,
-      previous: priorSummary,
-      previousDateWindows,
-      monthly: monthlyTrend,
-      monthlyVolume,
-      monthlyComparison: {
-        complete: yearOverYearComplete,
-        calendarYear: currentYear,
-        currentDateWindows: currentYearDateWindows,
-        dateWindows: yearOverYearWindows,
-        rows: monthlyComparison,
-      },
-      yearOverYear: {
-        complete: yearOverYearComplete,
-        dateWindows: yearOverYearWindows,
-        monthly: monthlyYearOverYear,
-        monthlyVolume: monthlyVolumeYearOverYear,
-      },
-    },
-    comparisonByCurrency: currentSummary.complete && priorSummary.complete
-      ? decisionDashboardCurrencyComparison(currentSummary.financials, priorSummary.financials)
-      : null,
-    priorPeriod: { stemCount: prior.completeness.matchingCount },
-    distributions: { status: distribution(current.rows, 'status'), type: distribution(current.rows, 'type') },
-    rankings: { accountsByNetPnl: accountDirectoryRankings.slice(0, 10), portsByNetPnl: ranking('port').slice(0, 10), suppliersByNetPnl: supplierDirectoryRankings.slice(0, 10) },
-    directoryRankings: { buyers: accountDirectoryRankings, suppliers: supplierDirectoryRankings },
-    timing: current.timing,
-    dataWarnings: current.dataWarnings,
-  };
-}
-
-async function cachedDecisionDashboard(handler, body, req, accessContext, ttlSeconds, loader) {
-  const cachePayload = { ...body };
-  delete cachePayload.force;
-  delete cachePayload.forceRefresh;
-  delete cachePayload.refresh;
-  const cached = await cachedSalesforceValue({
-    namespace: handler === 'stems'
-      ? 'decision-dashboard-v9-stems'
-      : handler === 'analytics'
-        ? 'decision-dashboard-v10-analytics-calendar-year'
-        : `decision-dashboard-v9-${handler}`,
-    ttlSeconds,
-    payload: cachePayload,
-    tags: ['salesforce:dashboard', 'salesforce:stem', `salesforce:dashboard:${handler}`],
-    body,
-    req,
-    accessContext,
-    loader,
-  });
-  return cached.value;
-}
-
-async function dashboardSummary(body = {}, req = null, accessContext = null) {
-  return cachedDecisionDashboard('summary', body, req, accessContext, 60, () => dashboardSummaryUncached(body, req, accessContext));
-}
-
-async function dashboardStemList(body = {}, req = null, accessContext = null) {
-  return cachedDecisionDashboard('stems', body, req, accessContext, 30, () => dashboardStemListUncached(body, req, accessContext));
-}
-
-async function dashboardAnalytics(body = {}, req = null, accessContext = null) {
-  return cachedDecisionDashboard('analytics', body, req, accessContext, 60, () => dashboardAnalyticsUncached(body, req, accessContext));
-}
-
-async function salesforceDashboardFilteredCompatibility(body = {}, req = null, accessContext = null, internalOptions = {}) {
-  if (body?.contract === 'decision-dashboard') return dashboardSummary(body, req, accessContext);
-  return salesforceDashboardFilteredFull(body, req, accessContext, internalOptions);
-}
-
-async function salesforceDashboardFilteredUncached(body, req = null, accessContext = null, internalOptions = {}) {
-  const { trendYear, disputeOnly, portCountry, companyKeyword, companyFilterMode, dateBasis, dateWindows } = body;
-  const currentYear = Number(trendYear) || new Date().getFullYear();
-  const [describe, lineItemDescribe, productDescribe, extraCostDescribe] = await Promise.all([
-    salesforceObjectFields({ objectName: 'stem__c' }),
-    salesforceObjectFields({ objectName: 'STEM_Line_Item__c' }).catch(() => ({
-      fields: [],
-    })),
-    salesforceObjectFields({ objectName: 'Product2' }).catch(() => ({
-      fields: [],
-    })),
-    salesforceObjectFields({ objectName: 'STEM_Extra_Cost__c' }).catch(() => ({ fields: [] })),
-  ]);
-  const fieldNames = describe.fields.map((f) => f.name);
-  const lineItemUomField = findDashboardUomField(lineItemDescribe.fields, 'lineItem');
-  const productUomField = findDashboardUomField(productDescribe.fields, 'product');
-  const originalSupplierLookup = resolveOriginalSupplierLookup(lineItemDescribe.fields || []);
-  const originalSupplierRelationship = originalSupplierLookup.relationshipName || 'Original_Supplier__r';
-  const extraCostFieldNames = new Set((extraCostDescribe.fields || []).map((field) => field.name));
-  const extraCostProductLookup = (extraCostDescribe.fields || []).find((field) => ['Product2Id__c', 'Product__c'].includes(field.name) && field.relationshipName);
-  const extraCostSupplierLookup = resolveExtraCostSupplierLookup(extraCostDescribe.fields || []);
-  const extraCostSupplierField = extraCostSupplierLookup.fieldName;
-  const extraCostSupplierRelationship = extraCostSupplierLookup.relationshipName;
-  if (dateBasis && dateBasis !== EXCEPTION_REVIEW_DATE_BASIS) {
-    throw new Error(`Unsupported dashboard date basis: ${dateBasis}`);
-  }
-  const exceptionScheduleMode = dateBasis === EXCEPTION_REVIEW_DATE_BASIS;
-  const requestMode = body.mode === 'exception_review' || exceptionScheduleMode ? 'exception_review' : 'dashboard';
-  const exceptionReviewMode = requestMode === 'exception_review';
-  const missingScheduleFields = exceptionScheduleMode ? exceptionScheduleSchemaIssues(fieldNames) : [];
-  if (missingScheduleFields.length) {
-    throw new Error(`Exception Review Schedule schema error: missing Salesforce STEM fields ${missingScheduleFields.join(', ')}.`);
-  }
-  let effectiveWhere;
-  try {
-    effectiveWhere = exceptionScheduleMode
-      ? buildExceptionReviewScheduleWhere(dateWindows)
-      : internalOptions.serverWhere || buildDashboardDateScopeWhere(dateWindows, fieldNames);
-  } catch (error) {
-    throw appError(error.message || 'Dashboard date scope is invalid.', 400, 'INVALID_DASHBOARD_DATE_SCOPE');
-  }
-  const accountDescribe = fieldNames.includes('Account__c')
-    ? await salesforceObjectFields({ objectName: 'Account' }).catch(() => ({
-        fields: [],
-      }))
-    : { fields: [] };
-  const accountFieldNames = (accountDescribe.fields || []).map((field) => field.name);
-  const accountFieldNameSet = new Set(accountFieldNames);
-  const interofficeCondition = await interofficeStemAccessCondition(accessContext, fieldNames, accountFieldNames);
-
-  const hasStatus = fieldNames.includes('Status__c');
-  const hasType = fieldNames.includes('Type__c');
-  const hasDispute = fieldNames.includes('Dispute__c');
-  const hasDisputeStatus = fieldNames.includes('Dispute_Status__c');
-  const hasDisputeType = fieldNames.includes('Dispute_Type__c');
-  const hasDisputeParticular = fieldNames.includes('Dispute_Particular__c');
-  const accountField = fieldNames.includes('Account__c') ? 'Account__c' : fieldNames.includes('AccountId') ? 'AccountId' : null;
-  const buyerAmountField = fieldNames.includes('Total_Invoice_Amount__c') ? 'Total_Invoice_Amount__c' : null;
-  const supplierAmountField = fieldNames.includes('Total_Invoiced_Amount_From_Suppliers__c') ? 'Total_Invoiced_Amount_From_Suppliers__c' : null;
-  const totalCostsField = fieldNames.includes('Costs_Total__c') ? 'Costs_Total__c' : null;
-  const buyerNameField = fieldNames.includes('Buyer_Name__c') ? 'Buyer_Name__c' : fieldNames.includes('Buyer__c') ? 'Buyer__c' : null;
-  const expectedDeliveryField = fieldNames.includes('Expected_Delivery_Date__c') ? 'Expected_Delivery_Date__c' : null;
-  const disputeCondition = disputeOnly ? (hasDisputeStatus ? "Dispute_Status__c != 'No Dispute' AND Dispute_Status__c != null" : hasDispute ? 'Dispute__c = true' : '') : '';
-  const normalizedPortCountry = String(portCountry || '').trim();
-  const portCountryLike = normalizedPortCountry ? `%${escapeSoql(normalizedPortCountry)}%` : '';
-  const portCountryCondition = normalizedPortCountry ? `(Port__r.Country__c LIKE '${portCountryLike}' OR Port__r.Name LIKE '${portCountryLike}')` : '';
-  const normalizedCompanyKeyword = String(companyKeyword || '').trim();
-  const companyMode = companyFilterMode === 'supplier' ? 'supplier' : 'buyer';
-  const companyLike = normalizedCompanyKeyword ? `%${escapeSoql(normalizedCompanyKeyword)}%` : '';
-  const supplierCompanyFilterActive = Boolean(normalizedCompanyKeyword && companyMode === 'supplier');
-  const companyMatches = (name) =>
-    !normalizedCompanyKeyword ||
-    String(name || '')
-      .toLowerCase()
-      .includes(normalizedCompanyKeyword.toLowerCase());
-  const companyCondition = normalizedCompanyKeyword ? (companyMode === 'supplier' ? `Id IN (SELECT STEM__c FROM STEM_Line_Item__c WHERE Supplier_Name__c LIKE '${companyLike}' AND Cancelled__c = false)` : buyerNameField ? [`${buyerNameField} LIKE '${companyLike}'`, accountField ? `Account__r.Group_Name__c LIKE '${companyLike}'` : '', accountField ? `Account__r.Parent.Name LIKE '${companyLike}'` : ''].filter(Boolean).join(' OR ') : '') : '';
-  const baseWhereConditions = [effectiveWhere, companyCondition, interofficeCondition].filter(Boolean);
-  const baseWhere = combineWhereConditions(baseWhereConditions);
-  const combinedWhere = combineWhereConditions([...baseWhereConditions, disputeCondition]);
-  const whereClause = combinedWhere ? `WHERE ${combinedWhere}` : '';
-  const monthlyDateCondition = `(Delivery_Date__c >= ${currentYear}-01-01 AND Delivery_Date__c <= ${currentYear}-12-31)${expectedDeliveryField ? ` OR (Delivery_Date__c = null AND ${expectedDeliveryField} >= ${currentYear}-01-01 AND ${expectedDeliveryField} <= ${currentYear}-12-31)` : ''}`;
-  const monthlyWhere = combineWhereConditions([monthlyDateCondition, disputeCondition, portCountryCondition, companyCondition, interofficeCondition]);
-  const monthlyWhereClause = monthlyWhere ? `WHERE ${monthlyWhere}` : '';
-
-  const plFields = ['Id', 'Name', 'CreatedDate'];
-  if (fieldNames.includes('Delivery_Date__c')) plFields.push('Delivery_Date__c');
-  if (expectedDeliveryField) plFields.push(expectedDeliveryField);
-  if (fieldNames.includes('ETA_Start_Date__c')) plFields.push('ETA_Start_Date__c');
-  if (buyerNameField) plFields.push(buyerNameField);
-  if (accountField) {
-    plFields.push(accountField, 'Account__r.Name');
-    if (accountFieldNameSet.has('Company_Code__c')) plFields.push('Account__r.Company_Code__c');
-    if (accountFieldNameSet.has('Inactive_Suspended__c')) plFields.push('Account__r.Inactive_Suspended__c');
-    if (accountFieldNameSet.has('RecordTypeId')) plFields.push('Account__r.RecordType.Name');
-    if (accountFieldNames.includes('Group_Name__c')) plFields.push('Account__r.Group_Name__c');
-    if (accountFieldNames.includes('ParentId')) {
-      plFields.push('Account__r.ParentId', 'Account__r.Parent.Name');
-      if (accountFieldNameSet.has('Company_Code__c')) plFields.push('Account__r.Parent.Company_Code__c');
-      if (accountFieldNameSet.has('Inactive_Suspended__c')) plFields.push('Account__r.Parent.Inactive_Suspended__c');
-      if (accountFieldNameSet.has('RecordTypeId')) plFields.push('Account__r.Parent.RecordType.Name');
-    }
-  }
-  if (hasDisputeStatus) plFields.push('Dispute_Status__c');
-  if (hasDispute) plFields.push('Dispute__c');
-  if (hasDisputeType) plFields.push('Dispute_Type__c');
-  if (hasDisputeParticular) plFields.push('Dispute_Particular__c');
-  if (buyerAmountField) plFields.push(buyerAmountField);
-  if (supplierAmountField) plFields.push(supplierAmountField);
-  if (totalCostsField) plFields.push(totalCostsField);
-  if (fieldNames.includes('QLIK_STEM_Line_Item_Total_Cost__c')) plFields.push('QLIK_STEM_Line_Item_Total_Cost__c');
-  if (fieldNames.includes('QLIK_Costs_Total_Cost__c')) plFields.push('QLIK_Costs_Total_Cost__c');
-  if (fieldNames.includes('KeyStem__c')) plFields.push('KeyStem__c');
-  if (fieldNames.includes('Port__c')) plFields.push('Port__c', 'Port__r.Name', 'Port__r.Country__c');
-  if (exceptionScheduleMode) {
-    for (const field of EXCEPTION_SCHEDULE_FIELDS) {
-      if (!plFields.includes(field)) plFields.push(field);
-    }
-  }
-
-  const queries = [
-    {
-      soql: `SELECT COUNT(Id) total FROM stem__c ${whereClause}`,
-      softFail: true,
-    },
-    !exceptionReviewMode && hasStatus
-      ? {
-          soql: `SELECT Status__c val, COUNT(Id) total FROM stem__c ${whereClause} GROUP BY Status__c`,
-          softFail: true,
-        }
-      : null,
-    !exceptionReviewMode && hasType
-      ? {
-          soql: `SELECT Type__c val, COUNT(Id) total FROM stem__c ${whereClause} GROUP BY Type__c`,
-          softFail: true,
-        }
-      : null,
-    {
-      soql: `SELECT ${plFields.join(', ')} FROM stem__c ${whereClause} ORDER BY Delivery_Date__c DESC NULLS LAST, CreatedDate DESC LIMIT 3000`,
-      limit: 3000,
-      softFail: true,
-    },
-    !exceptionReviewMode && hasDisputeStatus
-      ? {
-          soql: `SELECT COUNT(Id) total FROM stem__c WHERE Dispute_Status__c != 'No Dispute' AND Dispute_Status__c != null${baseWhere ? ` AND (${baseWhere})` : ''}`,
-          softFail: true,
-        }
-      : !exceptionReviewMode && hasDispute
-        ? {
-            soql: `SELECT COUNT(Id) total FROM stem__c WHERE Dispute__c = true${baseWhere ? ` AND (${baseWhere})` : ''}`,
-            softFail: true,
-          }
-        : null,
-    !exceptionReviewMode && accountField
-      ? {
-          soql: `SELECT ${accountField} acct, COUNT(Id) cnt FROM stem__c ${whereClause} GROUP BY ${accountField}`,
-          softFail: true,
-        }
-      : null,
-    !exceptionReviewMode && buyerAmountField
-      ? {
-          soql: `SELECT SUM(${buyerAmountField}) total FROM stem__c ${whereClause}`,
-          softFail: true,
-        }
-      : null,
-    !exceptionReviewMode && supplierAmountField
-      ? {
-          soql: `SELECT SUM(${supplierAmountField}) total FROM stem__c ${whereClause}`,
-          softFail: true,
-        }
-      : null,
-    !exceptionReviewMode && totalCostsField
-      ? {
-          soql: `SELECT SUM(${totalCostsField}) total FROM stem__c ${whereClause}`,
-          softFail: true,
-        }
-      : null,
-    !exceptionReviewMode
-      ? {
-          soql: `SELECT Id, Delivery_Date__c, ${buyerAmountField || 'Total_Invoice_Amount__c'}, ${supplierAmountField || 'Total_Invoiced_Amount_From_Suppliers__c'}, ${totalCostsField || 'Costs_Total__c'}, QLIK_STEM_Line_Item_Total_Cost__c, QLIK_Costs_Total_Cost__c FROM stem__c ${whereClause} LIMIT 3000`,
-          limit: 3000,
-          softFail: true,
-        }
-      : null,
-    !exceptionReviewMode
-      ? {
-          soql: `SELECT Id, Delivery_Date__c${expectedDeliveryField ? `, ${expectedDeliveryField}` : ''}, ${buyerNameField ? `${buyerNameField}, ` : ''}${buyerAmountField || 'Total_Invoice_Amount__c'}, ${supplierAmountField || 'Total_Invoiced_Amount_From_Suppliers__c'}, QLIK_STEM_Line_Item_Total_Cost__c, QLIK_Costs_Total_Cost__c FROM stem__c ${monthlyWhereClause} LIMIT 3000`,
-          limit: 3000,
-          softFail: true,
-        }
-      : null,
-  ];
-
-  const results = await compositeQueryBatch(queries);
-  const totalRes = results[0];
-  const statusRes = results[1];
-  const typeRes = results[2];
-  const recentRes = results[3];
-  const disputedRes = results[4];
-  const accountsRes = results[5];
-  const allStemsRes = exceptionReviewMode ? recentRes : results[9];
-  const monthlyStemsRes = results[10];
-
-  const allStemIds = [...new Set([...(allStemsRes.records || []).map((s) => s.Id), ...(monthlyStemsRes.records || []).map((s) => s.Id)])];
-  const stemById = {};
-  for (const stem of [...(allStemsRes.records || []), ...(monthlyStemsRes.records || [])]) stemById[stem.Id] = stem;
-  const monthlyMonthByStem = {};
-  for (const stem of monthlyStemsRes.records || []) {
-    const effectiveDate = stem.Delivery_Date__c || stem.Expected_Delivery_Date__c;
-    const month = Number(String(effectiveDate || '').split('-')[1]);
-    if (stem.Id && month >= 1 && month <= 12) monthlyMonthByStem[stem.Id] = month;
-  }
-
-  let lineItems = [];
-  let buyerBrokers = [];
-  let extraCosts = [];
-  if (allStemIds.length > 0) {
-    const lineItemFields = ['Id', 'STEM__c', 'Total_Price__c', 'Total_Cost__c', 'Supplier_Invoice__c', 'Cancelled__c', 'Supplier_Name__c', 'Buyers_Brokers_Commission_Per_Unit__c', 'Quantity__c', 'Quantity_Delivered_Per_BDN__c', 'Quantity_Max__c', 'Quantity_in_MT__c', 'Is_Quantity_Range__c', 'Product__r.Name', 'Product__r.Family', 'Price_Per_Unit__c', 'Cost_Per_Unit__c', 'Unit_Sell_At__c', 'Unit_Buy_At__c', 'Unit_Cost__c', 'Subtotal_Sell_At__c', 'Subtotal_Buy_At__c', 'Commission_Cost__c', 'Suppliers_Brokers_Commission_Per_Unit__c', 'Supplier_Broker__r.Name', 'Buyers_Broker__r.Name', 'Offer_Line_Item__r.UnitPrice', 'Offer_Line_Item__r.Supplier_Unit_Price__c'];
-    if (originalSupplierLookup.valid) {
-      lineItemFields.push('Original_Supplier__c', `${originalSupplierRelationship}.Name`);
-      if (accountFieldNameSet.has('Company_Code__c')) lineItemFields.push(`${originalSupplierRelationship}.Company_Code__c`);
-      if (accountFieldNameSet.has('Inactive_Suspended__c')) lineItemFields.push(`${originalSupplierRelationship}.Inactive_Suspended__c`);
-    }
-    if (lineItemUomField) lineItemFields.push(lineItemUomField);
-    if (productUomField) lineItemFields.push(`Product__r.${productUomField}`);
-    const stemChunks = chunkIds(allStemIds);
-    const [lineItemChunks, buyerBrokerChunks, extraCostChunks] = await Promise.all([
-      compositeQueryRows(
-        stemChunks.map((chunk) => {
-          const inList = chunk.map((id) => `'${id}'`).join(',');
-          return {
-            soql: `SELECT ${lineItemFields.join(', ')} FROM STEM_Line_Item__c WHERE STEM__c IN (${inList}) LIMIT 2000`,
-            limit: 2000,
-            softFail: true,
-          };
-        }),
-      ),
-      compositeQueryRows(
-        stemChunks.map((chunk) => {
-          const inList = chunk.map((id) => `'${id}'`).join(',');
-          return {
-            soql: `SELECT STEM__c, Commission_Lumpsum__c FROM STEM_Buyer_Broker__c WHERE STEM__c IN (${inList}) LIMIT 2000`,
-            limit: 2000,
-            softFail: true,
-          };
-        }),
-      ),
-      compositeQueryRows(
-        stemChunks.map((chunk) => {
-          const inList = chunk.map((id) => `'${id}'`).join(',');
-          const identityFields = [extraCostFieldNames.has('Name') ? 'Name' : '', extraCostFieldNames.has('Description__c') ? 'Description__c' : '', extraCostProductLookup ? `${extraCostProductLookup.relationshipName}.Name` : '', extraCostSupplierLookup.valid ? extraCostSupplierField : '', extraCostSupplierLookup.valid && extraCostSupplierRelationship ? `${extraCostSupplierRelationship}.Name` : '', extraCostSupplierLookup.valid && extraCostSupplierRelationship && accountFieldNameSet.has('Company_Code__c') ? `${extraCostSupplierRelationship}.Company_Code__c` : '', extraCostSupplierLookup.valid && extraCostSupplierRelationship && accountFieldNameSet.has('Inactive_Suspended__c') ? `${extraCostSupplierRelationship}.Inactive_Suspended__c` : ''].filter(Boolean);
-          return {
-            soql: `SELECT Id, STEM__c, Supplier_Name__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_in_MT__c, Quantity_Range_Max__c, Is_Quantity_Range__c, Unit_Price__c, Unit_Cost__c, Line_Total__c, Line_Total_Buy__c, Supplier_Invoice__c, Cancelled__c${identityFields.length ? `, ${identityFields.join(', ')}` : ''} FROM STEM_Extra_Cost__c WHERE STEM__c IN (${inList}) LIMIT 2000`,
-            limit: 2000,
-            softFail: true,
-          };
-        }),
-      ),
-    ]);
-    lineItems = lineItemChunks.flat();
-    buyerBrokers = buyerBrokerChunks.flat();
-    extraCosts = extraCostChunks.flat();
-  }
-
-  const lineItemSellByStem = {};
-  const extraCostSellByStem = {};
-  const extraCostBuyByStem = {};
-  const invoicedExtraCostBuyByStem = {};
-  const sellOnlyExtraSellByStem = {};
-  const extraCostNamesByStem = {};
-  for (const ec of extraCosts) {
-    if (!ec.STEM__c || ec.Cancelled__c) continue;
-    const extraCostIdentity = [extraCostProductLookup ? ec[extraCostProductLookup.relationshipName]?.Name : null, ec.Description__c, ec.Name].map((value) => String(value || '').trim()).filter(Boolean);
-    if (extraCostIdentity.length) {
-      if (!extraCostNamesByStem[ec.STEM__c]) extraCostNamesByStem[ec.STEM__c] = new Set();
-      for (const value of extraCostIdentity) extraCostNamesByStem[ec.STEM__c].add(value);
-    }
-    const stemHasDelivery = !!stemById[ec.STEM__c]?.Delivery_Date__c;
-    const buy = extraBuyAmount(ec, stemHasDelivery);
-    const sell = extraSellAmount(ec, stemHasDelivery);
-    extraCostSellByStem[ec.STEM__c] = (extraCostSellByStem[ec.STEM__c] || 0) + sell;
-    if (ec.Supplier_Invoice__c) invoicedExtraCostBuyByStem[ec.STEM__c] = (invoicedExtraCostBuyByStem[ec.STEM__c] || 0) + buy;
-    if (!ec.Supplier_Invoice__c) extraCostBuyByStem[ec.STEM__c] = (extraCostBuyByStem[ec.STEM__c] || 0) + buy;
-    if (!ec.Supplier_Invoice__c && buy === 0 && sell > 0) sellOnlyExtraSellByStem[ec.STEM__c] = (sellOnlyExtraSellByStem[ec.STEM__c] || 0) + sell;
-  }
-
-  const supplierLineBuyByStem = {};
-  const uninvoicedSupplierLineBuyByStem = {};
-  const hasSupplierInvoiceByStem = {};
-  const brokerByStem = {};
-  const filteredStemIds = new Set((allStemsRes.records || []).map((stem) => stem.Id));
-  const productFamilyQuantityByUnit = new Map();
-  const monthlyProductVolumeByUnit = new Map();
-  const supplierNamesByStem = {};
-  const supplierAccountsByStem = {};
-  const supplierNamesInFilteredStems = new Set();
-  const supplierWeightByStem = {};
-  const supplierInvoiceAmountByStem = {};
-  const unassignedExtraCostBuyByStem = {};
-  const productQuantitiesByStem = {};
-  const stemsWithUncancelledLineProductItems = new Set();
-  const addSupplierInvoiceAmount = (stemId, supplierName, amount) => {
-    if (!stemId) return;
-    const numericAmount = Number(amount || 0);
-    if (!Number.isFinite(numericAmount) || numericAmount === 0) return;
-    const name = String(supplierName || '').trim() || 'Unspecified Supplier';
-    if (!supplierInvoiceAmountByStem[stemId]) supplierInvoiceAmountByStem[stemId] = {};
-    supplierInvoiceAmountByStem[stemId][name] = (supplierInvoiceAmountByStem[stemId][name] || 0) + numericAmount;
-  };
-  const addSupplierAccount = (stemId, accountId, name, clKey, inactive) => {
-    const accountKey = disputeSalesforceIdKey(accountId);
-    if (!stemId || !accountKey || inactive === true) return;
-    if (!supplierAccountsByStem[stemId]) supplierAccountsByStem[stemId] = new Map();
-    const existing = supplierAccountsByStem[stemId].get(accountKey);
-    supplierAccountsByStem[stemId].set(accountKey, {
-      accountId: existing?.accountId || accountId,
-      name: existing?.name || String(name || 'Supplier name unavailable').trim(),
-      clKey: existing?.clKey || String(clKey || '').trim(),
-      inactive: false,
-    });
-  };
-  for (const li of lineItems) {
-    const id = li.STEM__c;
-    if (!id || li.Cancelled__c) continue;
-    stemsWithUncancelledLineProductItems.add(id);
-    const stemHasDelivery = !!stemById[id]?.Delivery_Date__c;
-    const lineSell = lineSellAmount(li, stemHasDelivery);
-    const lineBuy = lineBuyAmount(li, stemHasDelivery);
-    const dashboardFamily = dashboardProductFamily(li);
-    const dashboardVolume = dashboardLineItemVolume(li, stemHasDelivery, {
-      lineItemUomField,
-      productUomField,
-      fallbackQuantity: financialQuantity(li, stemHasDelivery),
-      productFamily: dashboardFamily,
-    });
-    const productName = li['Product__r']?.Name || li.Name || 'Unspecified';
-    const supplierAccount = originalSupplierLookup.valid ? li[originalSupplierRelationship] || {} : {};
-    const supplierName = supplierAccount.Inactive_Suspended__c === true ? '' : String(li.Supplier_Name__c || '').trim();
-    addSupplierAccount(id, li.Original_Supplier__c, supplierAccount.Name || supplierName, supplierAccount.Company_Code__c, supplierAccount.Inactive_Suspended__c);
-    addSupplierInvoiceAmount(id, supplierName, lineBuy);
-    const supplierMatchesCompanyFilter = !supplierCompanyFilterActive || companyMatches(supplierName);
-    if (supplierMatchesCompanyFilter) {
-      if (!productQuantitiesByStem[id]) productQuantitiesByStem[id] = [];
-      productQuantitiesByStem[id].push({
-        productName,
-        quantityLabel: dashboardVolumeLabel(dashboardVolume),
-        unitOfMeasure: dashboardVolume.unitOfMeasure,
-      });
-    }
-    if (supplierName) {
-      if (!supplierNamesByStem[id]) supplierNamesByStem[id] = new Set();
-      supplierNamesByStem[id].add(supplierName);
-      if (supplierMatchesCompanyFilter) {
-        if (filteredStemIds.has(id)) supplierNamesInFilteredStems.add(supplierName);
-        if (!supplierWeightByStem[id]) supplierWeightByStem[id] = {};
-        const supplierWeight = Math.abs(lineSell) || Math.abs(lineBuy) || financialQuantity(li, stemHasDelivery) || 1;
-        supplierWeightByStem[id][supplierName] = (supplierWeightByStem[id][supplierName] || 0) + supplierWeight;
-      }
-    }
-    if (filteredStemIds.has(id) && supplierMatchesCompanyFilter) {
-      const family = dashboardFamily;
-      const volumeKey = `${family}\u001f${dashboardVolume.unitOfMeasure}`;
-      const current = productFamilyQuantityByUnit.get(volumeKey) || {
-        family,
-        unitOfMeasure: dashboardVolume.unitOfMeasure,
-        quantity: 0,
-      };
-      current.quantity += Number(dashboardVolume.quantity || 0);
-      productFamilyQuantityByUnit.set(volumeKey, current);
-    }
-    const monthlyFamily = dashboardFamily;
-    const monthlyMonth = monthlyMonthByStem[id];
-    if (monthlyMonth && supplierMatchesCompanyFilter) {
-      const volumeKey = `${monthlyFamily}\u001f${dashboardVolume.unitOfMeasure}`;
-      const current = monthlyProductVolumeByUnit.get(volumeKey) || {
-        family: monthlyFamily,
-        unitOfMeasure: dashboardVolume.unitOfMeasure,
-        months: Array(12).fill(0),
-      };
-      current.months[monthlyMonth - 1] += Number(dashboardVolume.quantity || 0);
-      monthlyProductVolumeByUnit.set(volumeKey, current);
-    }
-    lineItemSellByStem[id] = (lineItemSellByStem[id] || 0) + lineSell;
-    supplierLineBuyByStem[id] = (supplierLineBuyByStem[id] || 0) + lineBuy;
-    if (!li.Supplier_Invoice__c) {
-      uninvoicedSupplierLineBuyByStem[id] = (uninvoicedSupplierLineBuyByStem[id] || 0) + lineBuy;
-    }
-    if (li.Supplier_Invoice__c) hasSupplierInvoiceByStem[id] = true;
-
-    if (!brokerByStem[id])
-      brokerByStem[id] = {
-        buyerComm: 0,
-        suppCommPerUnit: 0,
-        suppBrokerName: null,
-        buyerBrokerName: null,
-      };
-    brokerByStem[id].buyerComm += buyerBrokerCommission(li, stemHasDelivery);
-    brokerByStem[id].suppCommPerUnit += supplierBrokerCommission(li, stemHasDelivery);
-    if (!brokerByStem[id].suppBrokerName && li['Supplier_Broker__r']?.Name) brokerByStem[id].suppBrokerName = li['Supplier_Broker__r'].Name;
-    if (!brokerByStem[id].buyerBrokerName && li['Buyers_Broker__r']?.Name) brokerByStem[id].buyerBrokerName = li['Buyers_Broker__r'].Name;
-  }
-  for (const ec of extraCosts) {
-    if (!ec.STEM__c || ec.Cancelled__c) continue;
-    const stemHasDelivery = !!stemById[ec.STEM__c]?.Delivery_Date__c;
-    const buy = extraBuyAmount(ec, stemHasDelivery);
-    const supplierAccount = extraCostSupplierRelationship ? ec[extraCostSupplierRelationship] || {} : {};
-    const supplierName = supplierAccount.Inactive_Suspended__c === true ? '' : String(ec.Supplier_Name__c || '').trim();
-    addSupplierAccount(ec.STEM__c, extraCostSupplierField ? ec[extraCostSupplierField] : null, supplierAccount.Name || supplierName, supplierAccount.Company_Code__c, supplierAccount.Inactive_Suspended__c);
-    if (supplierName) {
-      addSupplierInvoiceAmount(ec.STEM__c, supplierName, buy);
-      if (!supplierNamesByStem[ec.STEM__c]) supplierNamesByStem[ec.STEM__c] = new Set();
-      supplierNamesByStem[ec.STEM__c].add(supplierName);
-      if (filteredStemIds.has(ec.STEM__c) && (!supplierCompanyFilterActive || companyMatches(supplierName))) {
-        supplierNamesInFilteredStems.add(supplierName);
-      }
-    } else {
-      unassignedExtraCostBuyByStem[ec.STEM__c] = (unassignedExtraCostBuyByStem[ec.STEM__c] || 0) + buy;
-    }
-  }
-  for (const bb of buyerBrokers) {
-    if (!bb.STEM__c) continue;
-    if (!brokerByStem[bb.STEM__c])
-      brokerByStem[bb.STEM__c] = {
-        buyerComm: 0,
-        suppCommPerUnit: 0,
-        suppBrokerName: null,
-        buyerBrokerName: null,
-      };
-    brokerByStem[bb.STEM__c].buyerComm += bb.Commission_Lumpsum__c ?? 0;
-  }
-
-  const bf = buyerAmountField || 'Total_Invoice_Amount__c';
-  const sf2 = supplierAmountField || 'Total_Invoiced_Amount_From_Suppliers__c';
-  const cf = totalCostsField || 'Costs_Total__c';
-
-  const calculateStem = (stem) => {
-    const calculatedBuyer = (lineItemSellByStem[stem.Id] || 0) + (extraCostSellByStem[stem.Id] || 0);
-    const buyer = !stem.Delivery_Date__c && calculatedBuyer > 0 ? calculatedBuyer : stem[bf];
-    const invoicedSupplier = stem[sf2] ?? 0;
-    const supplierLineBuy = supplierLineBuyByStem[stem.Id] || 0;
-    const uninvoicedSupplierLineBuy = uninvoicedSupplierLineBuyByStem[stem.Id] || 0;
-    const supplierBase = invoicedSupplier + (hasSupplierInvoiceByStem[stem.Id] ? uninvoicedSupplierLineBuy : supplierLineBuy);
-    const extraCostBuy = extraCostBuyByStem[stem.Id] || 0;
-    const rawSupplier = supplierBase + extraCostBuy;
-    const unmatchedSellOnlyExtra = hasSupplierInvoiceByStem[stem.Id] ? Math.max(0, (sellOnlyExtraSellByStem[stem.Id] || 0) - (invoicedExtraCostBuyByStem[stem.Id] || 0)) : 0;
-    const qlikSupplierCost = stem.QLIK_STEM_Line_Item_Total_Cost__c != null || stem.QLIK_Costs_Total_Cost__c != null ? (stem.QLIK_STEM_Line_Item_Total_Cost__c || 0) + (stem.QLIK_Costs_Total_Cost__c || 0) : null;
-    const supplierOverstatement = qlikSupplierCost == null ? 0 : rawSupplier - qlikSupplierCost;
-    const supplier = unmatchedSellOnlyExtra > 0 && supplierOverstatement > 0 && supplierOverstatement <= unmatchedSellOnlyExtra + 0.05 ? qlikSupplierCost : rawSupplier;
-    const buyerComm = brokerByStem[stem.Id]?.buyerComm || 0;
-    const suppCommPerUnit = brokerByStem[stem.Id]?.suppCommPerUnit || 0;
-    const brokerCommissions = buyerComm + suppCommPerUnit;
-    return {
-      buyer,
-      supplier,
-      extraCostBuy,
-      buyerComm,
-      suppCommPerUnit,
-      brokerCommissions,
-      netPnl: buyer != null ? buyer - supplier - brokerCommissions : null,
-    };
-  };
-
-  const allocateStemPnlToSuppliers = (stem, netPnl) => {
-    if (netPnl == null) return [];
-    const weights = supplierWeightByStem[stem.Id] || {};
-    const entries = Object.entries(weights).filter(([name]) => name);
-    if (!entries.length) return [];
-    const totalWeight = entries.reduce((sum, [, weight]) => sum + Math.max(Number(weight) || 0, 0), 0);
-    if (totalWeight <= 0) {
-      const equalShare = netPnl / entries.length;
-      return entries.map(([name]) => ({ name, netPnl: equalShare }));
-    }
-    return entries.map(([name, weight]) => ({
-      name,
-      netPnl: netPnl * (Math.max(Number(weight) || 0, 0) / totalWeight),
-    }));
-  };
-
-  const recentStems = (recentRes.records || []).map((stem) => {
-    const calc = calculateStem(stem);
-    const supplierNames = [...(supplierNamesByStem[stem.Id] || [])].sort();
-    const productQuantities = productQuantitiesByStem[stem.Id] || [];
-    const extraCostNames = [...(extraCostNamesByStem[stem.Id] || [])].sort();
-    const buyerAccount = stem['Account__r'] || {};
-    const buyerGroupAccount = buyerAccount.ParentId && buyerAccount.Parent?.Inactive_Suspended__c !== true ? {
-      accountId: buyerAccount.ParentId,
-      name: buyerAccount.Parent?.Name || buyerAccount.Group_Name__c || 'GROUP name unavailable',
-      clKey: buyerAccount.Parent?.Company_Code__c || '',
-      inactive: false,
-      recordType: buyerAccount.Parent?.RecordType?.Name || 'Group',
-    } : null;
-    const buyerGroup = buyerAccount.Parent?.Inactive_Suspended__c === true ? null : buyerGroupAccount?.name || buyerAccount.Group_Name__c || null;
-    const buyerAccountIdentity = stem[accountField] && buyerAccount.Inactive_Suspended__c !== true ? {
-      accountId: stem[accountField],
-      name: buyerAccount.Name || stem[buyerNameField] || 'Buyer name unavailable',
-      clKey: buyerAccount.Company_Code__c || '',
-      inactive: false,
-      recordType: buyerAccount.RecordType?.Name || null,
-    } : null;
-    const supplierAccounts = [...(supplierAccountsByStem[stem.Id]?.values() || [])]
-      .sort((left, right) => left.name.localeCompare(right.name) || left.accountId.localeCompare(right.accountId));
-    const port = stem['Port__r'] || {};
-    const supplierAmountMap = {
-      ...(supplierInvoiceAmountByStem[stem.Id] || {}),
-    };
-    if (unassignedExtraCostBuyByStem[stem.Id]) {
-      supplierAmountMap['Unassigned Extra Costs'] = (supplierAmountMap['Unassigned Extra Costs'] || 0) + unassignedExtraCostBuyByStem[stem.Id];
-    }
-    let supplierInvoiceAmountList = Object.entries(supplierAmountMap)
-      .map(([supplierName, amount]) => ({
-        supplierName,
-        amount: Number(amount || 0),
-      }))
-      .filter((item) => item.amount !== 0)
-      .sort((a, b) => a.supplierName.localeCompare(b.supplierName));
-    const supplierListTotal = supplierInvoiceAmountList.reduce((sum, item) => sum + item.amount, 0);
-    const supplierDiff = Number(calc.supplier || 0) - supplierListTotal;
-    if (Math.abs(supplierDiff) > 0.05) {
-      if (!supplierInvoiceAmountList.length) {
-        supplierInvoiceAmountList = [
-          {
-            supplierName: 'Supplier Invoice Amount',
-            amount: Number(calc.supplier || 0),
-          },
-        ];
-      } else {
-        const denominator = supplierInvoiceAmountList.reduce((sum, item) => sum + Math.abs(item.amount), 0) || supplierInvoiceAmountList.length;
-        supplierInvoiceAmountList = supplierInvoiceAmountList.map((item) => {
-          const ratio = denominator === supplierInvoiceAmountList.length ? 1 / supplierInvoiceAmountList.length : Math.abs(item.amount) / denominator;
-          return { ...item, amount: item.amount + supplierDiff * ratio };
-        });
-      }
-    }
-    return {
-      ...stem,
-      ...(buyerNameField && buyerAccount.Inactive_Suspended__c === true ? { [buyerNameField]: 'Account unavailable' } : {}),
-      [bf]: calc.buyer ?? null,
-      [sf2]: calc.supplier || null,
-      _Buyer_Group: buyerGroup,
-      _Buyer_Account: buyerAccountIdentity,
-      _Buyer_Group_Account: buyerGroupAccount,
-      _Port_Name: port.Name || null,
-      _Port_Country: port.Country__c || null,
-      _Exception_Schedule: exceptionScheduleMode ? normalizeExceptionSchedule(stem) : null,
-      _Supplier_Name_List: supplierNames,
-      _Supplier_Accounts: supplierAccounts,
-      _Supplier_Names: supplierNames.join(', ') || null,
-      _Supplier_Invoice_Amount_List: supplierInvoiceAmountList,
-      _Has_Uncancelled_Line_Product_Item: stemsWithUncancelledLineProductItems.has(stem.Id),
-      _Product_Quantity_List: productQuantities,
-      _Product_Quantities: productQuantities.map((item) => `${item.productName} ${item.quantityLabel}`).join(', ') || null,
-      _Extra_Cost_Name_List: extraCostNames,
-      _Extra_Cost_Names: extraCostNames.join(', ') || null,
-      _buyerBrokerName: brokerByStem[stem.Id]?.buyerBrokerName || null,
-      _buyerBrokerComm: calc.buyerComm || null,
-      _suppBrokerName: brokerByStem[stem.Id]?.suppBrokerName || null,
-      _suppBrokerComm: calc.suppCommPerUnit || null,
-      __buyerCommCalc: calc.buyerComm,
-      __suppCommPerUnitCalc: calc.suppCommPerUnit,
-      __extraCostBuyCalc: calc.extraCostBuy,
-      __netPnlCalc: calc.netPnl,
-    };
-  });
-
-  let totalProfit = 0;
-  let totalInvoicedProfit = 0;
-  let totalBuyer = 0;
-  let totalSupplier = 0;
-  let totalCosts = 0;
-  let totalBrokerCommissions = 0;
-  for (const stem of allStemsRes.records || []) {
-    const calc = calculateStem(stem);
-    if (calc.buyer == null) continue;
-    totalProfit += calc.netPnl || 0;
-    if (stem.Delivery_Date__c) totalInvoicedProfit += calc.netPnl || 0;
-    totalBuyer += calc.buyer;
-    totalSupplier += calc.supplier;
-    totalBrokerCommissions += calc.brokerCommissions;
-    totalCosts += stem[cf] ?? 0;
-  }
-
-  const buyerPnlMap = {};
-  for (const stem of recentStems) {
-    if (stem.Account__r?.Inactive_Suspended__c === true) continue;
-    const buyerName = stem[buyerNameField] || null;
-    if (buyerName && buyerName.toUpperCase().includes('COSULICH')) continue;
-    if (!buyerName || stem[bf] == null || stem.__netPnlCalc == null) continue;
-    buyerPnlMap[buyerName] = (buyerPnlMap[buyerName] || 0) + stem.__netPnlCalc;
-  }
-  const topBuyersByNetPnl = Object.entries(buyerPnlMap)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 10)
-    .map(([name, pnl]) => ({ name, netPnl: pnl }));
-  const supplierPnlMap = {};
-  for (const stem of allStemsRes.records || []) {
-    const calc = calculateStem(stem);
-    if (calc.buyer == null || calc.netPnl == null) continue;
-    for (const allocation of allocateStemPnlToSuppliers(stem, calc.netPnl)) {
-      supplierPnlMap[allocation.name] = (supplierPnlMap[allocation.name] || 0) + allocation.netPnl;
-    }
-  }
-  const topSuppliersByNetPnl = Object.entries(supplierPnlMap)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 10)
-    .map(([name, pnl]) => ({ name, netPnl: pnl }));
-
-  const monthlyTotals = Array.from({ length: 12 }, (_, i) => ({
-    month: i + 1,
-    netPnl: 0,
-    turnover: 0,
-  }));
-  const buyerMonthTotals = {};
-  const supplierMonthTotals = {};
-  for (const stem of monthlyStemsRes.records || []) {
-    const effectiveDate = stem.Delivery_Date__c || stem.Expected_Delivery_Date__c;
-    if (!effectiveDate) continue;
-    const calc = calculateStem(stem);
-    if (calc.buyer == null) continue;
-    const month = Number(String(effectiveDate).split('-')[1]);
-    if (!month || month < 1 || month > 12) continue;
-    monthlyTotals[month - 1].turnover += Number(calc.buyer || 0);
-    monthlyTotals[month - 1].netPnl += calc.netPnl || 0;
-    if (buyerNameField && stem[buyerNameField] && !String(stem[buyerNameField]).toUpperCase().includes('COSULICH')) {
-      const buyerName = stem[buyerNameField];
-      if (!buyerMonthTotals[buyerName]) buyerMonthTotals[buyerName] = Array(12).fill(0);
-      buyerMonthTotals[buyerName][month - 1] += calc.netPnl || 0;
-    }
-    for (const allocation of allocateStemPnlToSuppliers(stem, calc.netPnl)) {
-      if (!supplierMonthTotals[allocation.name]) supplierMonthTotals[allocation.name] = Array(12).fill(0);
-      supplierMonthTotals[allocation.name][month - 1] += allocation.netPnl || 0;
-    }
-  }
-  const monthlyNetPnl = monthlyTotals.map((item) => ({
-    month: item.month,
-    label: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][item.month - 1],
-    netPnl: item.netPnl,
-    turnover: item.turnover,
-    grossMarginPct: grossMarginPercent(item.netPnl, item.turnover),
-  }));
-  const monthlyBuyerNames = Object.entries(buyerMonthTotals)
-    .map(([name, months]) => ({
-      name,
-      total: months.reduce((sum, value) => sum + value, 0),
-    }))
-    .sort((a, b) => b.total - a.total)
-    .slice(0, 8)
-    .map((item) => item.name);
-  const monthlyBuyerNetPnl = monthlyNetPnl.map((item, idx) => {
-    const row = { month: item.month, label: item.label };
-    for (const buyerName of monthlyBuyerNames) row[buyerName] = buyerMonthTotals[buyerName]?.[idx] || 0;
-    return row;
-  });
-  const monthlySupplierNames = Object.entries(supplierMonthTotals)
-    .map(([name, months]) => ({
-      name,
-      total: months.reduce((sum, value) => sum + value, 0),
-    }))
-    .sort((a, b) => b.total - a.total)
-    .slice(0, 8)
-    .map((item) => item.name);
-  const monthlySupplierNetPnl = monthlyNetPnl.map((item, idx) => {
-    const row = { month: item.month, label: item.label };
-    for (const supplierName of monthlySupplierNames) row[supplierName] = supplierMonthTotals[supplierName]?.[idx] || 0;
-    return row;
-  });
-  const productFamilyQuantities = [...productFamilyQuantityByUnit.values()].sort((a, b) => b.quantity - a.quantity);
-  const productFamilyOrder = new Map([
-    ['HSFO', 0],
-    ['VLSFO', 1],
-    ['LSMGO', 2],
-  ]);
-  const monthlyProductVolumeSeries = [...monthlyProductVolumeByUnit.values()]
-    .sort((a, b) => {
-      const familyDifference = (productFamilyOrder.get(a.family) ?? 99) - (productFamilyOrder.get(b.family) ?? 99);
-      if (familyDifference) return familyDifference;
-      const nameDifference = a.family.localeCompare(b.family);
-      return nameDifference || a.unitOfMeasure.localeCompare(b.unitOfMeasure);
-    })
-    .map((series, index) => ({
-      key: `volume_${index}`,
-      family: series.family,
-      unitOfMeasure: series.unitOfMeasure,
-      months: series.months,
-    }));
-  const monthlyProductVolumes = monthlyNetPnl.map((item, idx) => {
-    const row = {
-      month: item.month,
-      label: item.label,
-      grossMarginPct: item.grossMarginPct,
-    };
-    for (const series of monthlyProductVolumeSeries) {
-      row[series.key] = series.months[idx] || 0;
-    }
-    return row;
-  });
-  const missingFinancialUomCount = [...lineItems, ...extraCosts].filter((item) => {
-    if (item.Cancelled__c) return false;
-    return Boolean(nativeFinancialQuantity(item, {
-      stemHasDelivery: Boolean(stemById[item.STEM__c]?.Delivery_Date__c),
-      maxField: Object.prototype.hasOwnProperty.call(item, 'Quantity_Range_Max__c') ? 'Quantity_Range_Max__c' : 'Quantity_Max__c',
-      lineItemUomField,
-      productUomField,
-    }).warning);
-  }).length;
-
-  return {
-    mode: requestMode,
-    stemTotal: totalRes.records?.[0]?.total ?? 0,
-    accountCount: accountsRes.records ? accountsRes.records.filter((r) => r.acct != null).length : null,
-    buyerAccountCount: accountsRes.records ? accountsRes.records.filter((r) => r.acct != null).length : null,
-    supplierAccountCount: supplierNamesInFilteredStems.size,
-    totalBuyer,
-    totalSupplier,
-    totalBrokerCommissions,
-    totalProfit,
-    totalInvoicedProfit,
-    disputedCount: disputedRes.records?.[0]?.total ?? 0,
-    stemByStatus: (statusRes.records || []).map((r) => ({
-      label: r.val || 'Unknown',
-      value: r.total,
-    })),
-    stemByType: (typeRes.records || []).map((r) => ({
-      label: r.val || 'Unknown',
-      value: r.total,
-    })),
-    recentStems,
-    totalCosts,
-    buyerAmountField,
-    supplierAmountField,
-    totalCostsField,
-    accountField,
-    topBuyersByNetPnl,
-    topSuppliersByNetPnl,
-    monthlyNetPnl,
-    monthlyBuyerNetPnl,
-    monthlyBuyerNames,
-    monthlySupplierNetPnl,
-    monthlySupplierNames,
-    monthlyNetPnlYear: currentYear,
-    productFamilyQuantities,
-    monthlyProductVolumes,
-    monthlyProductVolumeSeries: monthlyProductVolumeSeries.map((series) => ({
-      key: series.key,
-      family: series.family,
-      unitOfMeasure: series.unitOfMeasure,
-    })),
-    dateBasis: exceptionScheduleMode ? EXCEPTION_REVIEW_DATE_BASIS : null,
-    dataWarnings: missingFinancialUomCount
-      ? [`${missingFinancialUomCount} financial line${missingFinancialUomCount === 1 ? '' : 's'} have no Salesforce UOM. Native quantities were used without inferred conversion.`]
-      : [],
-  };
-}
-
-async function salesforceDashboardFilteredFull(body, req = null, accessContext = null, internalOptions = {}) {
-  const mode = body.mode === 'exception_review' || body.dateBasis === EXCEPTION_REVIEW_DATE_BASIS ? 'exception_review' : 'dashboard';
-  const cachePayload = { ...body, mode };
-  delete cachePayload.where;
-  delete cachePayload.force;
-  delete cachePayload.forceRefresh;
-  delete cachePayload.refresh;
-  if (internalOptions.serverWhere) {
-    cachePayload.serverWhereHash = createHash('sha256').update(internalOptions.serverWhere).digest('hex');
-  }
-  const cached = await cachedSalesforceValue({
-    namespace: `salesforce-dashboard-${mode}`,
-    ttlSeconds: 60,
-    payload: cachePayload,
-    tags: ['salesforce:dashboard', `salesforce:dashboard:${mode}`, 'salesforce:stem'],
-    body,
-    req,
-    accessContext,
-    loader: () => salesforceDashboardFilteredUncached({ ...body, mode }, req, accessContext, internalOptions),
-  });
-  return cached.value;
-}
-
-async function dashboardAccountInsight(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  return loadDashboardAccountInsight({
-    body,
-    accessContext: context,
-    force: requestForcesRefresh(body, req),
-  });
-}
-
-async function dashboardAccountCreditDirectory(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  const directory = await loadDashboardAccountCreditDirectory({
-    body,
-    accessContext: context,
-    force: requestForcesRefresh(body, req),
-  });
-  if (!['both', 'buyer', 'supplier'].includes(body.direction) || !directory?.accounts?.length) return directory;
-
-  const financialFilters = {
-    portIds: Array.isArray(body.filters?.portIds) ? body.filters.portIds : [],
-    countryCodes: Array.isArray(body.filters?.countryCodes) ? body.filters.countryCodes : [],
-  };
-  const cached = await cachedSalesforceValue({
-    namespace: 'dashboard-unified-account-directory-financials-v1',
-    ttlSeconds: 60,
-    payload: {
-      dateWindows: body.dateWindows || [],
-      disputeOnly: body.disputeOnly === true,
-      filters: financialFilters,
-    },
-    tags: ['salesforce:dashboard', 'salesforce:account', 'salesforce:group', 'salesforce:stem', 'salesforce:line-item', 'salesforce:extra-cost'],
-    body,
-    req,
-    accessContext: context,
-    loader: async () => {
-      const scope = await loadDecisionDashboardScope({
-        dateWindows: body.dateWindows || [],
-        disputeOnly: body.disputeOnly === true,
-        counterpartyMode: 'buyer',
-        filters: financialFilters,
-      }, req, context);
-      return {
-        complete: scope.completeness.complete === true,
-        buyers: dashboardAccountRankings(scope.rows, 'account'),
-        suppliers: dashboardAccountRankings(scope.rows, 'supplier'),
-      };
-    },
-  });
-  const financials = cached.value;
-  const aggregate = (rankings, memberAccountIds) => {
-    const members = new Set((memberAccountIds || []).map((id) => String(id || '').slice(0, 15)));
-    const byCurrency = new Map();
-    for (const ranking of rankings || []) {
-      if (!members.has(String(ranking.accountId || '').slice(0, 15))) continue;
-      const currency = String(ranking.currency || 'USD').toUpperCase();
-      byCurrency.set(currency, (byCurrency.get(currency) || 0) + Number(ranking.grossProfit ?? ranking.netPnl ?? 0));
-    }
-    return [...byCurrency.entries()]
-      .map(([currency, grossProfit]) => ({ currency, grossProfit }))
-      .sort((left, right) => left.currency.localeCompare(right.currency));
-  };
-  return {
-    ...directory,
-    accounts: directory.accounts.map((account) => ({
-      ...account,
-      buyerGrossProfitByCurrency: financials.complete ? aggregate(financials.buyers, account.memberAccountIds) : [],
-      supplierGrossProfitByCurrency: financials.complete ? aggregate(financials.suppliers, account.memberAccountIds) : [],
-      financialsComplete: financials.complete,
-    })),
-    meta: {
-      ...directory.meta,
-      financialsComplete: financials.complete,
-      financialsCache: cached.cache?.status || null,
-    },
-  };
-}
-
-async function canManageDashboardCreditForecastSettings(context) {
-  if (context?.profile?.user_type === 'administrator') return true;
-  if (context?.profile?.user_type !== 'general_manager') return false;
-  const activeGeneralManager = await loadActiveGeneralManager(context.client);
-  return activeGeneralManager.id === context.profile.id;
-}
-
-async function dashboardAccountCreditStatement(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  const forecastToday = dateOnly(new Date());
-  const [forecastSettings, canManageForecastSettings, holidayData] = await Promise.all([
-    loadCashflowSettings(),
-    canManageDashboardCreditForecastSettings(context),
-    loadCashflowHolidayData(yearsBetween(forecastToday, addDays(forecastToday, 730)), []),
-  ]);
-  return loadDashboardAccountCreditStatement({
-    body: {
-      ...body,
-      _forecastSettings: forecastSettings,
-      _canManageForecastSettings: canManageForecastSettings,
-      _blockedForecastDates: [...holidayData.blockedMap.keys()],
-    },
-    accessContext: context,
-    force: requestForcesRefresh(body, req),
-  });
-}
-
-async function dashboardCreditForecastSettingsSave(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  if (!(await canManageDashboardCreditForecastSettings(context))) {
-    throw appError('Only an Administrator or the active General Manager may change the company credit forecast setting.', 403, 'CREDIT_FORECAST_SETTINGS_FORBIDDEN');
-  }
-  const conservativeness = normalizeBuyerPaymentConservativeness(body.conservativeness, null);
-  if (!conservativeness) throw appError('Credit forecast conservativeness must be typical, cautious, or severe.', 400, 'CREDIT_FORECAST_SETTINGS_INVALID');
-  const expectedUpdatedAt = body.expectedUpdatedAt ? String(body.expectedUpdatedAt) : null;
-  if (!expectedUpdatedAt) {
-    throw appError('Reload the Credit Statement before changing the company forecast setting.', 409, 'CREDIT_FORECAST_SETTINGS_STALE');
-  }
-  const { data, error } = await context.client.rpc('save_credit_statement_conservativeness', {
-    p_conservativeness: conservativeness,
-    p_actor_user_id: context.profile.id,
-    p_actor_email: context.profile.email,
-    p_expected_updated_at: expectedUpdatedAt,
-  });
-  if (error) {
-    if (error.code === '40001' || /changed after/i.test(String(error.message || ''))) {
-      throw appError('The company credit forecast setting changed after this chart was opened. Reload the statement before saving.', 409, 'CREDIT_FORECAST_SETTINGS_STALE');
-    }
-    throw error;
-  }
-  await Promise.all([
-    expireRuntimeCacheTags(['salesforce:account-credit', 'dashboard:credit-forecast-settings']),
-    writeAdminAudit(context.client, context.profile, 'dashboard_credit_forecast_setting_changed', null, null, {
-      conservativeness,
-    }),
-  ]);
-  return {
-    forecastSettings: {
-      companyConservativeness: conservativeness,
-      updatedAt: data?.updatedAt || data?.updated_at || null,
-      updatedByEmail: data?.updatedByEmail || data?.updated_by_email || context.profile.email,
-      canManage: true,
-    },
-  };
-}
-
-async function dashboardCounterpartySearch(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  return loadDashboardCounterpartySearch({ body, accessContext: context, force: requestForcesRefresh(body, req) });
-}
-
-async function dashboardAccountExposureBatch(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  return loadDashboardAccountExposureBatch({ body, accessContext: context, force: requestForcesRefresh(body, req) });
-}
-
-async function dashboardAccountInsightExport(body = {}, req, res, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  const insight = await loadDashboardAccountInsight({
-    body: { ...body, cursor: 0, pageSize: 100 },
-    accessContext: context,
-    force: requestForcesRefresh(body, req),
-    includeExportRows: true,
-  });
-  const generated = generateDashboardAccountInsightExport(insight, {
-    format: body.format,
-    actorName: context.profile.full_name || context.profile.email,
-  });
-  await writeAdminAudit(context.client, context.profile, 'dashboard_account_insight_exported', null, null, {
-    format: String(body.format || '').toLowerCase(),
-    role: insight.activeRole,
-    periodMode: insight.period?.mode || null,
-    stemCount: insight.kpis?.stemCount || 0,
-  });
-  const asciiFilename = generated.filename.replace(/[^\x20-\x7E]/g, '_').replace(/"/g, '');
-  res.statusCode = 200;
-  res.setHeader('cache-control', 'no-store');
-  res.setHeader('content-type', generated.contentType);
-  res.setHeader('content-disposition', `attachment; filename="${asciiFilename}"; filename*=UTF-8''${encodeURIComponent(generated.filename)}`);
-  for (const [name, value] of Object.entries(telemetryResponseHeaders())) res.setHeader(name, value);
-  res.end(generated.buffer);
-}
-
-async function stemPnlFull(body, req = null, accessContext = null) {
-  const { dateWindows, limit = 500 } = body;
-  let dateCondition;
-  try {
-    const describe = await salesforceObjectFields({ objectName: 'stem__c' });
-    dateCondition = buildDashboardDateScopeWhere(dateWindows, describe.fields.map((field) => field.name));
-  } catch (error) {
-    throw appError(error.message || 'STEM P&L date scope is invalid.', 400, 'INVALID_STEM_PNL_DATE_SCOPE');
-  }
-  const interofficeCondition = await interofficeStemAccessCondition(accessContext);
-  const combinedWhere = combineWhereConditions([dateCondition, interofficeCondition]);
-  const whereClause = combinedWhere ? `WHERE ${combinedWhere}` : '';
-  const stems = await queryRows(
-    `
-    SELECT Id, KeyStem__c, Name, Delivery_Date__c, Expected_Delivery_Date__c,
-           Account__r.Name,
-           Total_Invoice_Amount__c,
-           Total_Invoiced_Amount_From_Suppliers__c,
-           QLIK_STEM_Line_Item_Total_Cost__c,
-           QLIK_Costs_Total_Cost__c,
-           QLIK_Total_Profit__c
-    FROM stem__c
-    ${whereClause}
-    ORDER BY Delivery_Date__c DESC NULLS LAST, CreatedDate DESC
-    LIMIT ${Number(limit) || 500}
-  `,
-    { limit: Math.max(Number(limit) || 500, 500) },
-  );
-
-  if (!stems.length) {
-    return {
-      rows: [],
-      totals: {
-        count: 0,
-        complete: 0,
-        Buyer_Invoice: 0,
-        Supplier_Invoice: 0,
-        Costs: 0,
-        Total_Broker_Comm: 0,
-        Gross_Profit: 0,
-        Net_Profit: 0,
-      },
-    };
-  }
-
-  const stemIds = stems.map((s) => s.Id);
-  const idChunks = chunkIds(stemIds);
-  const [lineItemArrays, buyerBrokerArrays, extraCostArrays, buyerInvoiceArrays] = await Promise.all([
-    Promise.all(
-      idChunks.map((chunk) => {
-        const inList = chunk.map((id) => `'${id}'`).join(',');
-        return queryRows(
-          `
-        SELECT Id, STEM__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_Max__c, Quantity_in_MT__c, Is_Quantity_Range__c,
-               Product__r.Name, Product__r.Family,
-               Price_Per_Unit__c, Cost_Per_Unit__c, Unit_Sell_At__c, Unit_Buy_At__c, Unit_Cost__c,
-               Total_Price__c, Total_Cost__c, Supplier_Invoice__c, Cancelled__c,
-               Buyers_Brokers_Commission_Per_Unit__c,
-               Buyers_Brokers_Commission_Lumpsum__c,
-               Commission_Cost__c,
-               Suppliers_Brokers_Commission_Per_Unit__c,
-               Supplier_Broker__r.Name,
-               Offer_Line_Item__r.UnitPrice,
-               Offer_Line_Item__r.Supplier_Unit_Price__c
-        FROM STEM_Line_Item__c
-        WHERE STEM__c IN (${inList})
-        LIMIT 2000
-      `,
-          { limit: 2000, softFail: true },
-        );
-      }),
-    ),
-    Promise.all(idChunks.map(() => Promise.resolve([]))),
-    Promise.all(
-      idChunks.map((chunk) => {
-        const inList = chunk.map((id) => `'${id}'`).join(',');
-        return queryRows(
-          `
-        SELECT STEM__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_in_MT__c,
-               Quantity_Range_Max__c, Is_Quantity_Range__c,
-               Unit_Price__c, Unit_Cost__c, Line_Total__c, Line_Total_Buy__c,
-               Supplier_Invoice__c, Cancelled__c
-        FROM STEM_Extra_Cost__c
-        WHERE STEM__c IN (${inList})
-        LIMIT 5000
-      `,
-          { limit: 5000, softFail: true },
-        );
-      }),
-    ),
-    Promise.all(idChunks.map((chunk) => queryRows(
-      `SELECT Id, Name, STEM__c, Proforma__c, Deprecated__c FROM Invoice__c WHERE STEM__c IN (${chunk.map((id) => `'${id}'`).join(',')}) LIMIT 5000`,
-      { limit: 5000, softFail: true },
-    ))),
-  ]);
-
-  const lineItems = lineItemArrays.flat();
-  const buyerBrokerItems = buyerBrokerArrays.flat();
-  const extraCosts = extraCostArrays.flat();
-  const finalBuyerInvoiceStemIds = new Set(buyerInvoiceArrays.flat().filter(isFinalBuyerInvoice).map((invoice) => invoice.STEM__c).filter(Boolean));
-  const stemById = Object.fromEntries(stems.map((stem) => [stem.Id, stem]));
-  const byId = {};
-  const initStem = (id) => {
-    if (!byId[id])
-      byId[id] = {
-        suppBrokerComm: 0,
-        buyerBrokerComm: 0,
-        extraCostSell: 0,
-        extraCostBuy: 0,
-        invoicedExtraCostBuy: 0,
-        sellOnlyExtraSell: 0,
-        buyerLineSell: 0,
-        supplierLineBuy: 0,
-        uninvoicedSupplierLineBuy: 0,
-        hasSupplierInvoice: false,
-        suppBrokerName: null,
-      };
-  };
-
-  for (const li of lineItems) {
-    const id = li.STEM__c;
-    if (!id) continue;
-    initStem(id);
-    if (li.Cancelled__c) continue;
-    const stemHasDelivery = !!stemById[id]?.Delivery_Date__c;
-    const lineSell = lineSellAmount(li, stemHasDelivery);
-    const lineBuy = lineBuyAmount(li, stemHasDelivery);
-    byId[id].buyerLineSell += lineSell;
-    byId[id].supplierLineBuy += lineBuy;
-    if (!li.Supplier_Invoice__c) byId[id].uninvoicedSupplierLineBuy += lineBuy;
-    if (li.Supplier_Invoice__c) byId[id].hasSupplierInvoice = true;
-    byId[id].suppBrokerComm += supplierBrokerCommission(li, stemHasDelivery);
-    byId[id].buyerBrokerComm += buyerBrokerCommission(li, stemHasDelivery);
-    if (!byId[id].suppBrokerName && li['Supplier_Broker__r']?.Name) byId[id].suppBrokerName = li['Supplier_Broker__r'].Name;
-  }
-  for (const bb of buyerBrokerItems) {
-    if (!bb.STEM__c) continue;
-    initStem(bb.STEM__c);
-    byId[bb.STEM__c].buyerBrokerComm += bb.Commission_Lumpsum__c ?? 0;
-  }
-  for (const ec of extraCosts) {
-    if (!ec.STEM__c || ec.Cancelled__c) continue;
-    initStem(ec.STEM__c);
-    const stemHasDelivery = !!stemById[ec.STEM__c]?.Delivery_Date__c;
-    const buy = extraBuyAmount(ec, stemHasDelivery);
-    const sell = extraSellAmount(ec, stemHasDelivery);
-    byId[ec.STEM__c].extraCostSell += sell;
-    if (ec.Supplier_Invoice__c) byId[ec.STEM__c].invoicedExtraCostBuy += buy;
-    if (!ec.Supplier_Invoice__c) byId[ec.STEM__c].extraCostBuy += buy;
-    if (!ec.Supplier_Invoice__c && buy === 0 && sell > 0) byId[ec.STEM__c].sellOnlyExtraSell += sell;
-  }
-
-  const rows = stems.map((s) => {
-    const agg = byId[s.Id] || {};
-    const calculatedBuyer = (agg.buyerLineSell ?? 0) + (agg.extraCostSell ?? 0);
-    const buyerResolution = resolveBuyerFinancialAmount({ salesforceAmount: s.Total_Invoice_Amount__c, calculatedAmount: calculatedBuyer, finalInvoiceIssued: finalBuyerInvoiceStemIds.has(s.Id) });
-    const buyer = buyerResolution.amount ?? 0;
-    const supplierBase = (s.Total_Invoiced_Amount_From_Suppliers__c ?? 0) + (agg.hasSupplierInvoice ? (agg.uninvoicedSupplierLineBuy ?? 0) : (agg.supplierLineBuy ?? 0));
-    const rawSupplier = supplierBase + (agg.extraCostBuy ?? 0);
-    const unmatchedSellOnlyExtra = agg.hasSupplierInvoice ? Math.max(0, (agg.sellOnlyExtraSell ?? 0) - (agg.invoicedExtraCostBuy ?? 0)) : 0;
-    const qlikSupplierCost = s.QLIK_STEM_Line_Item_Total_Cost__c != null || s.QLIK_Costs_Total_Cost__c != null ? (s.QLIK_STEM_Line_Item_Total_Cost__c || 0) + (s.QLIK_Costs_Total_Cost__c || 0) : null;
-    const supplierOverstatement = qlikSupplierCost == null ? 0 : rawSupplier - qlikSupplierCost;
-    const supplier = unmatchedSellOnlyExtra > 0 && supplierOverstatement > 0 && supplierOverstatement <= unmatchedSellOnlyExtra + 0.05 ? qlikSupplierCost : rawSupplier;
-    const suppBrokerComm = agg.suppBrokerComm ?? 0;
-    const buyerBrokerComm = agg.buyerBrokerComm ?? 0;
-    const totalBroker = suppBrokerComm + buyerBrokerComm;
-    const grossProfit = buyer - supplier;
-    const netProfit = grossProfit - totalBroker;
-    return {
-      Id: s.Id,
-      Key: s.KeyStem__c,
-      Name: s.Name,
-      Delivery_Date: s.Delivery_Date__c,
-      Expected_Delivery_Date: s.Expected_Delivery_Date__c,
-      Buyer: s['Account__r']?.Name ?? null,
-      Buyer_Invoice: buyer || null,
-      Buyer_Invoice_Source: buyerResolution.source,
-      Supplier_Invoice: supplier || null,
-      Supplier_Broker_Name: agg.suppBrokerName || null,
-      Supplier_Broker_Comm: suppBrokerComm !== 0 ? suppBrokerComm : null,
-      Buyer_Broker_Comm: buyerBrokerComm !== 0 ? buyerBrokerComm : null,
-      Total_Broker_Comm: totalBroker !== 0 ? totalBroker : null,
-      Gross_Profit: buyer && supplier ? grossProfit : null,
-      Net_Profit: buyer && supplier ? netProfit : null,
-      Margin_Pct: buyer && supplier ? (netProfit / buyer) * 100 : null,
-      Qlik_Total_Profit: s.QLIK_Total_Profit__c ?? null,
-    };
-  });
-  const complete = rows.filter((r) => r.Buyer_Invoice && r.Supplier_Invoice);
-  return {
-    rows,
-    totals: {
-      count: rows.length,
-      complete: complete.length,
-      Buyer_Invoice: complete.reduce((sum, r) => sum + (r.Buyer_Invoice ?? 0), 0),
-      Supplier_Invoice: complete.reduce((sum, r) => sum + (r.Supplier_Invoice ?? 0), 0),
-      Total_Broker_Comm: complete.reduce((sum, r) => sum + (r.Total_Broker_Comm ?? 0), 0),
-      Gross_Profit: complete.reduce((sum, r) => sum + (r.Gross_Profit ?? 0), 0),
-      Net_Profit: complete.reduce((sum, r) => sum + (r.Net_Profit ?? 0), 0),
-      Qlik_Net_Profit: rows.reduce((sum, r) => sum + (r.Qlik_Total_Profit ?? 0), 0),
-    },
-  };
-}
-
-async function salesforceBuyerInvoicesSnapshot(body, req = null, accessContext = null) {
-  const daysAhead = Math.max(0, Math.min(Number(body.daysAhead) || 7, 365));
-  const thresholdState = body._thresholdState || (await loadPaymentCollectionThresholds(safeSupabaseAdminClient()));
-  const rowLimit = 10000;
-  const today = dateOnly(new Date());
-  const dueThrough = addDays(today, daysAhead);
-  const describe = await salesforceObjectFields({ objectName: 'stem__c' });
-  const fieldNames = describe.fields.map((f) => f.name);
-  const accountDescribe = fieldNames.includes('Account__c')
-    ? await salesforceObjectFields({ objectName: 'Account' }).catch(() => ({
-        fields: [],
-      }))
-    : { fields: [] };
-  const accountFieldNames = (accountDescribe.fields || []).map((field) => field.name);
-  const interofficeCondition = await interofficeStemAccessCondition(accessContext, fieldNames, accountFieldNames);
-  const brokerInvoiceFormatFields = accountInvoiceFormatFields(accountDescribe.fields || []);
-  const brokerEmailFields = accountBrokerEmailFields(accountDescribe.fields || []);
-
-  const dueFields = ['Invoice_Due_Date__c', 'Buyer_Pay_Term_Date__c', 'Due_Date__c'].filter((field) => fieldNames.includes(field));
-  if (!dueFields.length) {
-    return {
-      allRows: [],
-      today,
-      dueThrough,
-      daysAhead,
-      paymentThresholds: thresholdState,
-      traderEmailByName: {},
-      hasBuyerTraderFilter: false,
-      selectedBuyerTradersInput: [],
-    };
-  }
-
-  const fields = ['Id', 'Name'];
-  if (fieldNames.includes('LastModifiedDate')) fields.push('LastModifiedDate');
-  for (const field of dueFields) fields.push(field);
-  if (fieldNames.includes('KeyStem__c')) fields.push('KeyStem__c');
-  if (fieldNames.includes('CurrencyIsoCode')) fields.push('CurrencyIsoCode');
-  if (fieldNames.includes('Delivery_Date__c')) fields.push('Delivery_Date__c');
-  if (fieldNames.includes('Delivery_Date_Or_Expected__c')) fields.push('Delivery_Date_Or_Expected__c');
-  if (fieldNames.includes('Expected_Delivery_Date__c')) fields.push('Expected_Delivery_Date__c');
-  if (fieldNames.includes('ETA_Start_Date__c')) fields.push('ETA_Start_Date__c');
-  if (fieldNames.includes('ETA_End_Date__c')) fields.push('ETA_End_Date__c');
-  if (fieldNames.includes('Payment_Term__c')) fields.push('Payment_Term__c');
-  if (fieldNames.includes('Vessel__c')) fields.push('Vessel__r.Name');
-  if (fieldNames.includes('Port__c')) fields.push('Port__r.Name');
-  if (fieldNames.includes('Buyer_Name__c')) fields.push('Buyer_Name__c');
-  if (fieldNames.includes('Buyer__c')) fields.push('Buyer__c');
-  if (fieldNames.includes('Total_Invoice_Amount__c')) fields.push('Total_Invoice_Amount__c');
-  if (fieldNames.includes('Receivable_Balance__c')) fields.push('Receivable_Balance__c');
-  if (fieldNames.includes('Dispute_Status__c')) fields.push('Dispute_Status__c');
-  if (fieldNames.includes('PSPRS__c')) fields.push('PSPRS__c');
-  if (fieldNames.includes('Account__c')) {
-    fields.push('Account__c', 'Account__r.Name');
-    if (accountFieldNames.includes('Group_Name__c')) fields.push('Account__r.Group_Name__c');
-    if (accountFieldNames.includes('ParentId')) fields.push('Account__r.ParentId', 'Account__r.Parent.Name');
-    if (accountFieldNames.includes('Accounts_Email__c')) fields.push('Account__r.Accounts_Email__c');
-  }
-  if (fieldNames.includes('Payment_Date__c')) fields.push('Payment_Date__c');
-
-  const storedDueCondition = dueFields.map((field) => `(${field} != null AND ${field} >= ${MIN_BUYER_INVOICE_DUE_DATE} AND ${field} <= ${dueThrough})`).join(' OR ');
-  const calculatedDueDateConditions = [fieldNames.includes('Delivery_Date__c') ? `Delivery_Date__c != null AND Delivery_Date__c <= ${dueThrough}` : '', fieldNames.includes('Delivery_Date_Or_Expected__c') ? `Delivery_Date_Or_Expected__c != null AND Delivery_Date_Or_Expected__c <= ${dueThrough}` : '', fieldNames.includes('Expected_Delivery_Date__c') ? `Expected_Delivery_Date__c != null AND Expected_Delivery_Date__c <= ${dueThrough}` : ''].filter(Boolean);
-  const calculatedDueCondition = fieldNames.includes('Payment_Term__c') && calculatedDueDateConditions.length ? `(Payment_Term__c != null AND (${calculatedDueDateConditions.map((condition) => `(${condition})`).join(' OR ')}))` : '';
-  const dueCondition = [storedDueCondition, calculatedDueCondition].filter(Boolean).join(' OR ');
-  const outstandingConditions = [];
-  if (fieldNames.includes('Payment_Date__c')) outstandingConditions.push('Payment_Date__c = null');
-  const whereParts = [`(${dueCondition})`, ...outstandingConditions];
-  if (interofficeCondition) whereParts.push(interofficeCondition);
-
-  const anchorStemId = isSalesforceId(String(body.anchorStemId || '').trim())
-    ? String(body.anchorStemId).trim()
-    : null;
-  const requestedStemIds = [...new Set((Array.isArray(body.requestedStemIds) ? body.requestedStemIds : [])
-    .map((id) => String(id || '').trim())
-    .filter(isSalesforceId))].slice(0, 500);
-  let targetScope = null;
-  if (anchorStemId) {
-    if (!fieldNames.includes('Account__c')) {
-      throw appError('The Salesforce Buyer Account lookup is unavailable. External payment reminders are disabled.', 503);
-    }
-    const anchorRows = await queryRows(`
-      SELECT Id, Account__c, Account__r.Name, Account__r.ParentId, Account__r.Parent.Name${accountFieldNames.includes('Group_Name__c') ? ', Account__r.Group_Name__c' : ''}
-      FROM stem__c
-      WHERE Id = '${escapeSoql(anchorStemId)}'
-      LIMIT 1
-    `, { limit: 1, softFail: false });
-    const anchor = anchorRows[0];
-    if (!anchor?.Account__c) throw appError('The selected invoice no longer has a Buyer Account in Salesforce.', 409);
-    const anchorAccount = anchor.Account__r || {};
-    const groupName = anchorAccount.Group_Name__c || anchorAccount.Parent?.Name || '';
-    const parentAccountId = isFratelliCosulichBuyerGroup(groupName) ? null : anchorAccount.ParentId || null;
-    targetScope = {
-      anchorStemId,
-      buyerAccountId: anchor.Account__c,
-      parentAccountId,
-    };
-    const accountConditions = [`Account__c = '${escapeSoql(anchor.Account__c)}'`];
-    if (parentAccountId) accountConditions.push(`Account__r.ParentId = '${escapeSoql(parentAccountId)}'`);
-    whereParts.push(`(${accountConditions.join(' OR ')})`);
-    if (requestedStemIds.length) {
-      const inList = requestedStemIds.map((id) => `'${escapeSoql(id)}'`).join(',');
-      whereParts.push(`Id IN (${inList})`);
-    }
-  }
-
-  const stems = await queryRows(
-    `
-    SELECT ${[...new Set(fields)].join(', ')}
-    FROM stem__c
-    WHERE ${whereParts.join(' AND ')}
-    ORDER BY ${dueFields[0]} ASC NULLS LAST, Name ASC
-    LIMIT ${rowLimit}
-  `,
-    { limit: rowLimit, softFail: true },
-  );
-
-  const stemIds = stems.map((stem) => stem.Id);
-  const traderByStem = {};
-  const traderEmailByName = {};
-  const prpspUploadDateByStem = {};
-  const buyerBrokerDetailsByStem = {};
-  if (stemIds.length) {
-    const stemChunks = chunkIds(stemIds);
-    const [nominationArrays, supplierInvoiceArrays, brokerLineItemArrays, buyerBrokerArrays] = await Promise.all([
-      compositeQueryRows(
-        stemChunks.map((chunk) => {
-          const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-          return {
-            soql: `
-          SELECT Id, Name, STEM__c, Buyer_Supplier_Trader__c, BT_ST_Email_Address__c
-          FROM Nomination__c
-          WHERE STEM__c IN (${inList}) AND Buyer_Supplier_Trader__c != null
-          ORDER BY CreatedDate ASC
-          LIMIT 5000
-        `,
-            limit: 5000,
-            softFail: true,
-          };
-        }),
-      ),
-      compositeQueryRows(
-        stemChunks.map((chunk) => {
-          const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-          return {
-            soql: `
-          SELECT Id, STEM__c, PSPRS_Upload_Date__c
-          FROM Supplier_Invoice__c
-          WHERE STEM__c IN (${inList}) AND PSPRS_Upload_Date__c != null
-          LIMIT 5000
-        `,
-            limit: 5000,
-            softFail: true,
-          };
-        }),
-      ),
-      compositeQueryRows(
-        stemChunks.map((chunk) => {
-          const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-          return {
-            soql: `
-          SELECT Id, STEM__c, Buyers_Broker__c, Buyer_Broker__c, Cancelled__c
-          FROM STEM_Line_Item__c
-          WHERE STEM__c IN (${inList})
-          LIMIT 5000
-        `,
-            limit: 5000,
-            softFail: true,
-          };
-        }),
-      ),
-      compositeQueryRows(
-        stemChunks.map((chunk) => {
-          const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-          return {
-            soql: `
-          SELECT Id, STEM__c, Buyer_Broker__c
-          FROM STEM_Buyer_Broker__c
-          WHERE STEM__c IN (${inList})
-          LIMIT 5000
-        `,
-            limit: 5000,
-            softFail: true,
-          };
-        }),
-      ),
-    ]);
-
-    for (const nomination of nominationArrays.flat()) {
-      if (!nomination.STEM__c || !nomination.Buyer_Supplier_Trader__c) continue;
-      if (!traderByStem[nomination.STEM__c])
-        traderByStem[nomination.STEM__c] = {
-          buyer: [],
-          all: [],
-          buyerEmails: [],
-          allEmails: [],
-          emailByName: {},
-        };
-      const name = String(nomination.Name || '');
-      const value = nomination.Buyer_Supplier_Trader__c;
-      const emails = uniqueEmailList(nomination.BT_ST_Email_Address__c);
-      const traderKey = traderEmailLookupKey(value);
-      if (!traderByStem[nomination.STEM__c].all.includes(value)) traderByStem[nomination.STEM__c].all.push(value);
-      for (const email of emails) {
-        if (!traderByStem[nomination.STEM__c].allEmails.some((item) => item.toLowerCase() === email.toLowerCase())) {
-          traderByStem[nomination.STEM__c].allEmails.push(email);
-        }
-      }
-      if (traderKey && emails.length) {
-        traderByStem[nomination.STEM__c].emailByName[traderKey] = uniqueEmailList(traderByStem[nomination.STEM__c].emailByName[traderKey] || [], emails);
-        traderEmailByName[traderKey] = uniqueEmailList(traderEmailByName[traderKey] || [], emails);
-      }
-      if (name.startsWith('Confirmation to ') && !traderByStem[nomination.STEM__c].buyer.includes(value)) {
-        traderByStem[nomination.STEM__c].buyer.push(value);
-      }
-      if (name.startsWith('Confirmation to ')) {
-        for (const email of emails) {
-          if (!traderByStem[nomination.STEM__c].buyerEmails.some((item) => item.toLowerCase() === email.toLowerCase())) {
-            traderByStem[nomination.STEM__c].buyerEmails.push(email);
-          }
-        }
-      }
-    }
-
-    for (const invoice of supplierInvoiceArrays.flat()) {
-      if (!invoice.STEM__c || !invoice.PSPRS_Upload_Date__c) continue;
-      prpspUploadDateByStem[invoice.STEM__c] = latestDate([prpspUploadDateByStem[invoice.STEM__c], invoice.PSPRS_Upload_Date__c]);
-    }
-
-    const brokerLinksByStem = {};
-    const addBrokerLink = (stemId, brokerId) => {
-      if (!stemId || !brokerId) return;
-      if (!brokerLinksByStem[stemId]) brokerLinksByStem[stemId] = [];
-      if (!brokerLinksByStem[stemId].some((id) => String(id).slice(0, 15) === String(brokerId).slice(0, 15))) {
-        brokerLinksByStem[stemId].push(brokerId);
-      }
-    };
-    for (const item of brokerLineItemArrays.flat()) {
-      if (item.Cancelled__c) continue;
-      addBrokerLink(item.STEM__c, item.Buyers_Broker__c || item.Buyer_Broker__c);
-    }
-    for (const broker of buyerBrokerArrays.flat()) {
-      addBrokerLink(broker.STEM__c, broker.Buyer_Broker__c);
-    }
-
-    const brokerIds = [...new Set(Object.values(brokerLinksByStem).flat().filter(Boolean))];
-    const brokerAccountMap = {};
-    if (brokerIds.length) {
-      const brokerAccountFields = ['Id', 'Name'];
-      brokerAccountFields.push(...brokerInvoiceFormatFields, ...brokerEmailFields);
-      if (accountFieldNames.includes('Hidden_Broker__c')) brokerAccountFields.push('Hidden_Broker__c');
-      if (accountFieldNames.includes('Hidden_Broker_Company__c')) brokerAccountFields.push('Hidden_Broker_Company__c');
-      const brokerAccountChunks = await compositeQueryRows(
-        chunkIds(brokerIds).map((chunk) => {
-          const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-          return {
-            soql: `
-          SELECT ${[...new Set(brokerAccountFields)].join(', ')}
-          FROM Account
-          WHERE Id IN (${inList})
-            AND Inactive_Suspended__c = false
-          LIMIT 5000
-        `,
-            limit: 5000,
-            softFail: true,
-          };
-        }),
-      );
-      for (const account of brokerAccountChunks.flat()) {
-        if (account.Hidden_Broker__c === true || account.Hidden_Broker_Company__c === true) continue;
-        const detail = {
-          id: account.Id,
-          name: account.Name || account.Id,
-          invoiceFormat: brokerInvoiceFormatFields.map((field) => routingFormatValue(account[field])).find(Boolean) || null,
-          emails: uniqueEmailList(...brokerEmailFields.flatMap((field) => emailTokensFromValue(account[field]))),
-        };
-        brokerAccountMap[account.Id] = detail;
-        brokerAccountMap[String(account.Id).slice(0, 15)] = detail;
-      }
-    }
-    for (const [stemId, ids] of Object.entries(brokerLinksByStem)) {
-      buyerBrokerDetailsByStem[stemId] = ids.map((id) => brokerAccountMap[id] || brokerAccountMap[String(id).slice(0, 15)] || null).filter(Boolean);
-    }
-  }
-
-  const hasBuyerTraderFilter = Object.prototype.hasOwnProperty.call(body, 'buyerTraders');
-  const selectedBuyerTradersInput = Array.isArray(body.buyerTraders) ? body.buyerTraders : splitBuyerTraderNames(body.buyerTraders);
-
-  const allRows = stems
-    .map((stem) => {
-      const dueDate = calculatedBuyerPayTermDate(stem) || stem.Invoice_Due_Date__c || stem.Due_Date__c || stem.Buyer_Pay_Term_Date__c || earliestDate(dueFields.map((field) => stem[field]));
-      if (!dueDate || dueDate > dueThrough) return null;
-      if (dueDate < MIN_BUYER_INVOICE_DUE_DATE) return null;
-      if (stem.KeyStem__c && stem.KeyStem__c.startsWith('T')) return null;
-      const thresholdPolicy = paymentCollectionThresholdPolicy(thresholdState, stem.CurrencyIsoCode);
-      if (stem.Receivable_Balance__c != null && paymentCollectionBalanceIsSettled(stem.Receivable_Balance__c, thresholdPolicy)) return null;
-      const daysUntilDue = daysBetween(today, dueDate);
-      const account = stem['Account__r'] || {};
-      const traderInfo = traderByStem[stem.Id] || {};
-      const buyerTraderEmails = traderInfo.buyerEmails?.length ? traderInfo.buyerEmails : traderInfo.allEmails || [];
-      const paymentReminderRecipients = uniqueEmailList(account.Accounts_Email__c, buyerTraderEmails);
-      const prpspUploadDate = prpspUploadDateByStem[stem.Id] || null;
-      const rawPsprsStatus = stem.PSPRS__c || null;
-      const brokerRouting = combineBuyerBrokerRouting(buyerBrokerDetailsByStem[stem.Id] || []);
-      return {
-        id: stem.Id,
-        stemId: stem.Id,
-        lastModifiedAt: stem.LastModifiedDate || null,
-        stemName: formatStemName(stem),
-        keyStem: stem.KeyStem__c || null,
-        buyerAccountId: stem.Account__c || null,
-        buyerParentAccountId: account.ParentId || null,
-        buyerGroupName: account.Group_Name__c || account.Parent?.Name || null,
-        buyerName: stem.Buyer_Name__c || account.Name || stem.Buyer__c || null,
-        invoiceAmount: stem.Total_Invoice_Amount__c ?? null,
-        currency: stem.CurrencyIsoCode || 'USD',
-        fullyPaidThreshold: thresholdPolicy.threshold,
-        fullyPaidThresholdConfigured: thresholdPolicy.configured,
-        receivableBalance: stem.Receivable_Balance__c ?? null,
-        disputeStatus: stem.Dispute_Status__c || null,
-        buyerInvoiceDueDate: dueDate,
-        deliveryDate: stem.Delivery_Date__c || null,
-        earliestEtaDate: earliestEtaDate(stem.ETA_Start_Date__c, stem.ETA_End_Date__c),
-        buyerTraderInCharge: (traderInfo.buyer?.length ? traderInfo.buyer : traderInfo.all || []).join(', ') || null,
-        buyerAccountsEmail: account.Accounts_Email__c || null,
-        buyerTraderEmail: buyerTraderEmails.join(', ') || null,
-        buyerTraderEmailByName: traderInfo.emailByName || {},
-        paymentReminderRecipient: paymentReminderRecipients.join(', ') || null,
-        paymentReminderRecipients,
-        ...brokerRouting,
-        prpspStatus: prpspDisplayStatus(rawPsprsStatus, prpspUploadDate),
-        prpspUploadDate,
-        rawPsprsStatus,
-        daysUntilDue,
-        status: daysUntilDue == null ? 'Due' : daysUntilDue < 0 ? 'Overdue' : daysUntilDue === 0 ? 'Due Today' : 'Due Soon',
-      };
-    })
-    .filter(Boolean)
-    .sort((a, b) => {
-      if (a.buyerInvoiceDueDate !== b.buyerInvoiceDueDate) return a.buyerInvoiceDueDate.localeCompare(b.buyerInvoiceDueDate);
-      return String(a.stemName || '').localeCompare(String(b.stemName || ''));
-    });
-
-  return {
-    allRows,
-    today,
-    dueThrough,
-    daysAhead,
-    paymentThresholds: thresholdState,
-    traderEmailByName,
-    hasBuyerTraderFilter,
-    selectedBuyerTradersInput,
-    targetScope,
-  };
-}
-
-async function buyerInvoiceReportFromSnapshot(snapshot, body = {}) {
-  const { allRows, today, dueThrough, traderEmailByName, hasBuyerTraderFilter, selectedBuyerTradersInput } = {
-    ...snapshot,
-    hasBuyerTraderFilter: Object.prototype.hasOwnProperty.call(body, 'buyerTraders'),
-    selectedBuyerTradersInput: Array.isArray(body.buyerTraders) ? body.buyerTraders : splitBuyerTraderNames(body.buyerTraders),
-  };
-  const [collectionMap, reminderRulesState] = await Promise.all([loadBuyerInvoiceCollectionMap(allRows.map((row) => row.stemId)), loadBuyerInvoiceReminderRules()]);
-  const rowsWithCollection = allRows.map((row) => {
-    const collection = collectionMap[row.stemId] || {};
-    const paymentHandlerName = collection.item?.ownerName || splitBuyerTraderNames(row.buyerTraderInCharge)[0] || '';
-    const paymentHandlerEmail = uniqueEmailList(row.buyerTraderEmailByName?.[traderEmailLookupKey(paymentHandlerName)] || [], traderEmailByName[traderEmailLookupKey(paymentHandlerName)] || []);
-    const paymentReminderRecipients = uniqueEmailList(row.paymentReminderRecipients || [], row.buyerAccountsEmail || '', row.buyerTraderEmail || '', paymentHandlerEmail);
-    return {
-      ...row,
-      paymentHandlerName,
-      paymentHandlerEmail: paymentHandlerEmail.join(', ') || null,
-      paymentReminderRecipient: paymentReminderRecipients.join(', ') || null,
-      paymentReminderRecipients,
-      collection: collection.item || null,
-      collectionEvents: collection.events || [],
-    };
-  });
-  const rowsWithReminderRules = applyBuyerReminderRules(rowsWithCollection, reminderRulesState.rules, reminderRulesState.available);
-
-  const buyerTraderOptions = [...new Set(rowsWithReminderRules.flatMap((row) => splitBuyerTraderNames(row.buyerTraderInCharge)))].sort((a, b) => a.localeCompare(b));
-  const selectedBuyerTraders = selectedBuyerTradersInput.map((name) => String(name || '').trim()).filter((name) => buyerTraderOptions.includes(name));
-  const activeBuyerTraders = hasBuyerTraderFilter ? selectedBuyerTraders : buyerTraderOptions;
-  const activeBuyerTraderSet = new Set(activeBuyerTraders);
-  const rows = hasBuyerTraderFilter && !activeBuyerTraderSet.size ? [] : activeBuyerTraderSet.size && activeBuyerTraderSet.size < buyerTraderOptions.length ? rowsWithReminderRules.filter((row) => splitBuyerTraderNames(row.buyerTraderInCharge).some((name) => activeBuyerTraderSet.has(name))) : rowsWithReminderRules;
-
-  return {
-    rows,
-    today,
-    dueThrough,
-    daysAhead: snapshot.daysAhead,
-    paymentThresholds: snapshot.paymentThresholds,
-    buyerTraderOptions,
-    selectedBuyerTraders: activeBuyerTraders,
-    hasBuyerTraderFilter,
-    paymentReminderRulesAvailable: reminderRulesState.available,
-    targetScope: snapshot.targetScope || null,
-  };
-}
-
-async function salesforceBuyerInvoicesDue(body, req = null, accessContext = null) {
-  const daysAhead = Math.max(0, Math.min(Number(body.daysAhead) || 7, 365));
-  const thresholdState = await loadPaymentCollectionThresholds(safeSupabaseAdminClient());
-  const thresholdCacheKey = paymentCollectionThresholdCacheKey(thresholdState);
-  const cached = await cachedSalesforceValue({
-    namespace: 'salesforce-buyer-invoices',
-    ttlSeconds: 60,
-    payload: { daysAhead, thresholdCacheKey },
-    tags: ['salesforce:buyer-invoices', 'salesforce:stem', 'salesforce:account'],
-    body,
-    req,
-    accessContext,
-    loader: () => salesforceBuyerInvoicesSnapshot({ daysAhead, _thresholdState: thresholdState }, req, accessContext),
-  });
-  return buyerInvoiceReportFromSnapshot(cached.value, body);
-}
-
-async function salesforceBuyerInvoicesDueTargeted(body, req = null, accessContext = null) {
-  const daysAhead = Math.max(0, Math.min(Number(body.daysAhead) || 7, 365));
-  const thresholdState = await loadPaymentCollectionThresholds(safeSupabaseAdminClient());
-  const snapshot = await salesforceBuyerInvoicesSnapshot({
-    daysAhead,
-    anchorStemId: body.anchorStemId || body.stemId,
-    requestedStemIds: body.requestedStemIds || body.invoiceStemIds,
-    _thresholdState: thresholdState,
-  }, req, accessContext);
-  return buyerInvoiceReportFromSnapshot(snapshot, body);
-}
-
-async function loadIncomingPaymentSettings() {
-  return loadPaymentCollectionThresholds(safeSupabaseAdminClient());
-}
-
-async function incomingPaymentSettingsGet(body, req, accessContext = null) {
-  if (!accessContext) await requireActiveUser(req);
-  return { settings: await loadIncomingPaymentSettings() };
-}
-
-async function incomingPaymentSettingsSave(body, req, accessContext = null) {
-  const { client, profile } = accessContext || (await requireActiveUser(req));
-  await requireCapability(client, profile, 'financial_report_settings_manage', 'Finance, Administrators, and the General Manager can change payment thresholds.');
-  const saved = Array.isArray(body.thresholds)
-    ? await savePaymentCollectionThresholds(client, body.thresholds, profile)
-    : [await savePaymentCollectionThreshold(client, body, profile)];
-  return { saved, settings: await loadPaymentCollectionThresholds(client) };
-}
-
-const CASHFLOW_SETTINGS_ID = 'default';
-const CASHFLOW_HOLIDAY_SOURCE = 'nager.date';
-const DEFAULT_CASHFLOW_SETTINGS = {
-  horizonDays: 90,
-  lookbackMonths: 12,
-  minBuyerSamples: 3,
-  minGroupSamples: 5,
-};
-
-function clampInteger(value, fallback, min, max) {
-  const number = Math.trunc(Number(value));
-  if (!Number.isFinite(number)) return fallback;
-  return Math.max(min, Math.min(number, max));
-}
-
-function serializeCashflowSettings(row = null) {
-  return {
-    horizonDays: clampInteger(row?.horizon_days, DEFAULT_CASHFLOW_SETTINGS.horizonDays, 1, 365),
-    lookbackMonths: clampInteger(row?.lookback_months, DEFAULT_CASHFLOW_SETTINGS.lookbackMonths, 1, 36),
-    minBuyerSamples: clampInteger(row?.min_buyer_samples, DEFAULT_CASHFLOW_SETTINGS.minBuyerSamples, 1, 100),
-    minGroupSamples: clampInteger(row?.min_group_samples, DEFAULT_CASHFLOW_SETTINGS.minGroupSamples, 1, 100),
-    creditStatementConservativeness: normalizeBuyerPaymentConservativeness(row?.credit_statement_conservativeness),
-    updatedAt: row?.updated_at || null,
-    updatedByEmail: row?.updated_by_email || null,
-  };
-}
-
-async function loadCashflowSettings() {
-  const client = safeSupabaseAdminClient();
-  if (!client) return serializeCashflowSettings(null);
-  const { data, error } = await client.from('cashflow_forecast_settings').select('id,horizon_days,lookback_months,min_buyer_samples,min_group_samples,credit_statement_conservativeness,updated_by_email,updated_at').eq('id', CASHFLOW_SETTINGS_ID).maybeSingle();
-  if (error) return serializeCashflowSettings(null);
-  return serializeCashflowSettings(data);
-}
-
-function serializeCashflowHolidayOverride(row) {
-  return {
-    id: row.id,
-    date: row.holiday_date,
-    countryCode: row.country_code || 'MANUAL',
-    name: row.name || 'Manual blocked date',
-    isBlocked: row.is_blocked !== false,
-    note: row.note || null,
-    updatedAt: row.updated_at || row.created_at || null,
-    updatedByEmail: row.updated_by_email || row.created_by_email || null,
-  };
-}
-
-async function loadCashflowHolidayOverrides(years = []) {
-  const client = safeSupabaseAdminClient();
-  if (!client) return [];
-  let query = client.from('cashflow_holiday_overrides').select('id,holiday_date,country_code,name,is_blocked,note,created_by_email,created_at,updated_by_email,updated_at').order('holiday_date', { ascending: true });
-  const normalizedYears = [...new Set(years.map((year) => Number(year)).filter(Number.isFinite))];
-  if (normalizedYears.length) {
-    const from = `${Math.min(...normalizedYears)}-01-01`;
-    const to = `${Math.max(...normalizedYears)}-12-31`;
-    query = query.gte('holiday_date', from).lte('holiday_date', to);
-  }
-  const { data, error } = await query;
-  if (error) return [];
-  return (data || []).map(serializeCashflowHolidayOverride);
-}
-
-function cashflowHolidayIsBlocking(holiday) {
-  const types = holiday?.types || holiday?.holidayTypes || [];
-  if (Array.isArray(types) && types.length) {
-    return types.some((type) => ['public', 'bank'].includes(String(type).toLowerCase()));
-  }
-  return true;
-}
-
-async function fetchNagerHolidays(countryCode, year) {
-  const response = await fetch(`https://date.nager.at/api/v4/Holidays/${encodeURIComponent(countryCode)}/${encodeURIComponent(year)}`, {
-    headers: { accept: 'application/json' },
-  });
-  if (!response.ok) throw appError(`Holiday API returned ${response.status} for ${countryCode} ${year}.`, 502);
-  const rows = await response.json();
-  return (Array.isArray(rows) ? rows : [])
-    .filter(cashflowHolidayIsBlocking)
-    .map((holiday) => ({
-      date: holiday.date,
-      localName: holiday.localName || holiday.name || 'Holiday',
-      name: holiday.name || holiday.localName || 'Holiday',
-      countryCode,
-      types: holiday.types || holiday.holidayTypes || [],
-      source: CASHFLOW_HOLIDAY_SOURCE,
-    }))
-    .filter((holiday) => holiday.date);
-}
-
-async function cashflowCachedHolidays(countryCode, year, warnings = []) {
-  const client = safeSupabaseAdminClient();
-  const cacheSelect = 'id,country_code,calendar_year,source,holidays,fetched_at,expires_at,error_message';
-  if (client) {
-    const { data: cached } = await client.from('cashflow_holiday_cache').select(cacheSelect).eq('country_code', countryCode).eq('calendar_year', year).eq('source', CASHFLOW_HOLIDAY_SOURCE).maybeSingle();
-    const notExpired = cached?.expires_at && new Date(cached.expires_at).getTime() > Date.now();
-    if (cached?.holidays && notExpired) {
-      return {
-        holidays: cached.holidays,
-        fetchedAt: cached.fetched_at,
-        fromCache: true,
-      };
-    }
-    try {
-      const holidays = await fetchNagerHolidays(countryCode, year);
-      const expiresAt = new Date();
-      expiresAt.setUTCDate(expiresAt.getUTCDate() + 30);
-      await client.from('cashflow_holiday_cache').upsert(
-        {
-          country_code: countryCode,
-          calendar_year: year,
-          source: CASHFLOW_HOLIDAY_SOURCE,
-          holidays,
-          fetched_at: new Date().toISOString(),
-          expires_at: expiresAt.toISOString(),
-          error_message: null,
-        },
-        { onConflict: 'country_code,calendar_year,source' },
-      );
-      return {
-        holidays,
-        fetchedAt: new Date().toISOString(),
-        fromCache: false,
-      };
-    } catch (error) {
-      warnings.push(error.message);
-      if (cached?.holidays)
-        return {
-          holidays: cached.holidays,
-          fetchedAt: cached.fetched_at,
-          fromCache: true,
-          error: error.message,
-        };
-      return {
-        holidays: [],
-        fetchedAt: null,
-        fromCache: false,
-        error: error.message,
-      };
-    }
-  }
-
-  try {
-    return {
-      holidays: await fetchNagerHolidays(countryCode, year),
-      fetchedAt: new Date().toISOString(),
-      fromCache: false,
-    };
-  } catch (error) {
-    warnings.push(error.message);
-    return {
-      holidays: [],
-      fetchedAt: null,
-      fromCache: false,
-      error: error.message,
-    };
-  }
-}
-
-function yearsBetween(dateFrom, dateTo) {
-  const fromYear = Number(String(dateFrom).slice(0, 4));
-  const toYear = Number(String(dateTo).slice(0, 4));
-  if (!Number.isFinite(fromYear) || !Number.isFinite(toYear)) return [Number(dateOnly(new Date()).slice(0, 4))];
-  const years = [];
-  for (let year = fromYear; year <= toYear; year += 1) years.push(year);
-  return years;
-}
-
-async function loadCashflowHolidayData(years, warnings = []) {
-  const normalizedYears = [...new Set((years || []).map((year) => Number(year)).filter(Number.isFinite))].sort();
-  const countries = ['SG', 'US'];
-  const holidayRows = [];
-  const statuses = [];
-  for (const year of normalizedYears) {
-    for (const countryCode of countries) {
-      const result = await cashflowCachedHolidays(countryCode, year, warnings);
-      holidayRows.push(...(result.holidays || []));
-      statuses.push({
-        countryCode,
-        year,
-        source: CASHFLOW_HOLIDAY_SOURCE,
-        fetchedAt: result.fetchedAt,
-        fromCache: result.fromCache,
-        error: result.error || null,
-      });
-    }
-  }
-  const overrides = await loadCashflowHolidayOverrides(normalizedYears);
-  const blockedMap = new Map();
-  for (const holiday of holidayRows) {
-    if (!holiday.date) continue;
-    const current = blockedMap.get(holiday.date) || [];
-    current.push({
-      date: holiday.date,
-      countryCode: holiday.countryCode,
-      name: holiday.name || holiday.localName || 'Holiday',
-      source: holiday.source || CASHFLOW_HOLIDAY_SOURCE,
-    });
-    blockedMap.set(holiday.date, current);
-  }
-  for (const override of overrides) {
-    if (!override.date) continue;
-    const current = blockedMap.get(override.date) || [];
-    if (override.isBlocked) {
-      current.push({
-        date: override.date,
-        countryCode: override.countryCode,
-        name: override.name,
-        source: 'manual',
-        overrideId: override.id,
-      });
-      blockedMap.set(override.date, current);
-    } else {
-      blockedMap.delete(override.date);
-    }
-  }
-  return {
-    holidays: [...blockedMap.values()].flat().sort((a, b) => String(a.date).localeCompare(String(b.date))),
-    overrides,
-    statuses,
-    blockedMap,
-  };
-}
-
-function cashflowBusinessDayAdjustment(originalDate, blockedMap) {
-  let current = originalDate;
-  let firstReason = null;
-  for (let guard = 0; guard < 30; guard += 1) {
-    const day = new Date(`${current}T00:00:00.000Z`).getUTCDay();
-    const holidayReasons = blockedMap.get(current) || [];
-    const weekend = day === 0 || day === 6;
-    if (!weekend && !holidayReasons.length) {
-      return {
-        date: current,
-        note: firstReason ? `Moved from ${originalDate} due to ${firstReason}` : null,
-      };
-    }
-    if (!firstReason) {
-      if (holidayReasons.length) {
-        firstReason = holidayReasons.map((item) => `${item.countryCode} ${item.name}`).join(', ');
-      } else {
-        firstReason = 'weekend';
-      }
-    }
-    current = addDays(current, 1);
-  }
-  return { date: originalDate, note: null };
-}
-
-function cashflowBuildDelayModels(samples, settings) {
-  return buildBuyerPaymentDelayModels(samples, settings, { today: dateOnly(new Date()) });
-}
-
-function cashflowSelectDelayModel(row, models, settings) {
-  return selectBuyerPaymentDelayModel(row, models, settings);
-}
-
-function cashflowPaymentText(payment, fields = []) {
-  return fields
-    .map((field) => payment?.[field])
-    .concat([payment?.Name, payment?.RecordType?.Name, payment?.RecordType?.DeveloperName])
-    .filter(Boolean)
-    .join(' ')
-    .toLowerCase();
-}
-
-async function cashflowBuyerPaymentSamples({ lookbackMonths, accessContext = null }) {
-  const today = dateOnly(new Date());
-  const lookbackStart = [addDays(today, -Math.max(1, Number(lookbackMonths || 12)) * 31), CASHFLOW_FORECAST_START_DATE].sort().at(-1);
-  const paymentDescribe = await salesforceObjectFields({
-    objectName: 'Payment__c',
-  }).catch(() => ({ fields: [] }));
-  const paymentFields = paymentDescribe.fields || [];
-  const paymentFieldNames = new Set(paymentFields.map((field) => field.name));
-  const paymentFieldByName = Object.fromEntries(paymentFields.map((field) => [field.name, field]));
-  if (!paymentFieldNames.size) return { samples: [], warnings: ['Payment__c is not queryable.'] };
-  const dateField = firstAvailableField(paymentFieldNames, ['Date__c', 'Payment_Date__c', 'Received_Date__c', 'Paid_Date__c', 'CreatedDate']);
-  const amountField = firstAvailableField(paymentFieldNames, ['Amount__c', 'Payment_Amount__c', 'Paid_Amount__c', 'Received_Amount__c', 'Total_Amount__c', 'Amount_Paid__c', 'Payment_Value__c', 'Actual_Amount__c']);
-  if (!dateField || !amountField)
-    return {
-      samples: [],
-      warnings: ['Payment__c date or amount field was not found.'],
-    };
-  const supplierInvoiceLookupFields = incomingPaymentSupplierInvoiceFields(paymentFields);
-  const referenceFields = incomingPaymentReferenceFields(paymentFields);
-  const statusFields = selectedFields(paymentFieldNames, ['Status__c', 'Payment_Status__c']);
-  const typeFields = selectedFields(paymentFieldNames, ['Type__c', 'Payment_Type__c']);
-  const directionFields = incomingPaymentDirectionFields(paymentFields);
-  const dateType = paymentFieldByName[dateField]?.type || null;
-  const payments = await queryRows(
-    `
-    SELECT ${[...new Set(['Id', ...selectedFields(paymentFieldNames, ['Name', 'CreatedDate', 'STEM__c', 'CurrencyIsoCode', 'Currency__c', 'RecordTypeId']), paymentFieldNames.has('RecordTypeId') ? 'RecordType.Name' : null, paymentFieldNames.has('RecordTypeId') ? 'RecordType.DeveloperName' : null, dateField, amountField, ...supplierInvoiceLookupFields, ...referenceFields, ...statusFields, ...typeFields, ...directionFields].filter(Boolean))].join(', ')}
-    FROM Payment__c
-    WHERE ${dateField} >= ${soqlDateValue(dateField, dateType, lookbackStart, false)}
-    ORDER BY ${dateField} DESC NULLS LAST
-    LIMIT 10000
-  `,
-    { limit: 10000, softFail: true },
-  );
-  const eligiblePayments = payments
-    .filter((payment) => payment.STEM__c)
-    .filter((payment) => !incomingPaymentIsReceivableRemittance(payment, [...referenceFields, ...directionFields, ...typeFields, ...statusFields]))
-    .filter((payment) => !incomingPaymentSupplierInvoiceId(payment, supplierInvoiceLookupFields));
-  const stemIds = [...new Set(eligiblePayments.map((payment) => payment.STEM__c).filter(Boolean))];
-  if (!stemIds.length) return { samples: [], warnings: [] };
-
-  const stemDescribe = await salesforceObjectFields({
-    objectName: 'stem__c',
-  }).catch(() => ({ fields: [] }));
-  const stemFieldNames = new Set((stemDescribe.fields || []).map((field) => field.name));
-  const accountDescribe = stemFieldNames.has('Account__c')
-    ? await salesforceObjectFields({ objectName: 'Account' }).catch(() => ({
-        fields: [],
-      }))
-    : { fields: [] };
-  const accountFieldNames = new Set((accountDescribe.fields || []).map((field) => field.name));
-  const interofficeCondition = await interofficeStemAccessCondition(accessContext, stemFieldNames, accountFieldNames);
-  const stemSelectFields = ['Id', 'Name', ...selectedFields(stemFieldNames, ['KeyStem__c', 'Buyer_Name__c', 'Buyer__c', 'Account__c', 'Payment_Term__c', 'Invoice_Due_Date__c', 'Buyer_Pay_Term_Date__c', 'Due_Date__c', 'Delivery_Date__c', 'Delivery_Date_Or_Expected__c', 'Expected_Delivery_Date__c'])];
-  if (stemFieldNames.has('Account__c')) {
-    stemSelectFields.push('Account__r.Name');
-    if (accountFieldNames.has('Group_Name__c')) stemSelectFields.push('Account__r.Group_Name__c');
-    if (accountFieldNames.has('ParentId')) stemSelectFields.push('Account__r.Parent.Name');
-  }
-  const stemMap = {};
-  const stemRows = await compositeQueryRows(
-    chunkIds(stemIds).map((chunk) => {
-      const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-      const stemWhere = combineWhereConditions([`Id IN (${inList})`, interofficeCondition]);
-      return {
-        soql: `
-      SELECT ${[...new Set(stemSelectFields)].join(', ')}
-      FROM stem__c
-      WHERE ${stemWhere}
-      LIMIT 5000
-    `,
-        limit: 5000,
-        softFail: true,
-      };
-    }),
-  );
-  for (const stem of stemRows.flat()) stemMap[stem.Id] = stem;
-
-  const textFields = [...referenceFields, ...directionFields, ...typeFields, ...statusFields];
-  const samples = [];
-  for (const payment of eligiblePayments) {
-    const stem = stemMap[payment.STEM__c];
-    if (!stem) continue;
-    if (isBeforeCashflowForecastStart(stem.Delivery_Date__c)) continue;
-    const amount = incomingPaymentNumber(payment[amountField]);
-    if (amount == null || amount <= 0) continue;
-    const text = cashflowPaymentText(payment, textFields);
-    if (/(bank\s*charge|broker|commission|payable|supplier)/i.test(text)) continue;
-    if (
-      incomingPaymentLooksBankCharge(payment, {
-        referenceFields,
-        directionFields,
-        typeFields,
-        statusFields,
-      })
-    )
-      continue;
-    const type = incomingPaymentTypeFromContext(payment, {
-      amount,
-      stem,
-      supplierInvoice: null,
-      supplierInvoiceFields: supplierInvoiceLookupFields,
-      directionFields,
-      typeFields,
-      statusFields,
-    });
-    if (type !== 'Buyer Payment') continue;
-    const dueDate = calculatedBuyerPayTermDate(stem) || stem.Invoice_Due_Date__c || stem.Due_Date__c || stem.Buyer_Pay_Term_Date__c || null;
-    const paymentDate = dateOnly(payment[dateField] || payment.CreatedDate);
-    if (!dueDate || !paymentDate) continue;
-    if (isBeforeCashflowForecastStart(paymentDate)) continue;
-    const account = stem['Account__r'] || {};
-    samples.push({
-      paymentId: payment.Id,
-      stemId: stem.Id,
-      stemName: formatStemName(stem),
-      buyerAccountId: stem.Account__c || null,
-      buyerName: incomingPaymentBuyerName(stem),
-      buyerGroupName: account.Group_Name__c || account.Parent?.Name || incomingPaymentBuyerName(stem),
-      dueDate,
-      paymentDate,
-      delayDays: daysBetween(dueDate, paymentDate),
-      amount,
-    });
-  }
-  return { samples, warnings: [] };
-}
-
-function cashflowBucketKey(date, bucket = 'daily') {
-  if (bucket === 'monthly') return String(date || '').slice(0, 7);
-  if (bucket === 'weekly') {
-    const value = new Date(`${date}T00:00:00.000Z`);
-    const day = value.getUTCDay() || 7;
-    value.setUTCDate(value.getUTCDate() - day + 1);
-    return dateOnly(value);
-  }
-  return date;
-}
-
-function cashflowBucketLabel(key, bucket = 'daily') {
-  if (!key) return 'â€”';
-  if (bucket === 'monthly') return key;
-  if (bucket === 'weekly') return `Week of ${key}`;
-  return key;
-}
-
-function cashflowSummarizeRows(rows, bucket = 'daily') {
-  const totals = {
-    buyerReceipts: 0,
-    supplierPayments: 0,
-    netCashflow: 0,
-    overdueRiskReceipts: 0,
-    rowCount: rows.length,
-  };
-  const buckets = new Map();
-  const today = dateOnly(new Date());
-  for (const row of rows) {
-    const amount = Number(row.amount || 0);
-    if (row.direction === 'inflow') {
-      totals.buyerReceipts += amount;
-      if (row.sourceDueDate && row.sourceDueDate < today) totals.overdueRiskReceipts += amount;
-    } else {
-      totals.supplierPayments += amount;
-    }
-    const key = cashflowBucketKey(row.forecastDate, bucket);
-    if (!buckets.has(key))
-      buckets.set(key, {
-        bucket: key,
-        label: cashflowBucketLabel(key, bucket),
-        inflow: 0,
-        outflow: 0,
-        net: 0,
-      });
-    const current = buckets.get(key);
-    if (row.direction === 'inflow') current.inflow += amount;
-    if (row.direction === 'outflow') current.outflow += amount;
-    current.net = current.inflow - current.outflow;
-  }
-  totals.netCashflow = totals.buyerReceipts - totals.supplierPayments;
-  return {
-    totals,
-    buckets: [...buckets.values()].sort((a, b) => String(a.bucket).localeCompare(String(b.bucket))),
-  };
-}
-
-async function cashflowSupplierInvoiceRows({ dateTo, blockedMap, accessContext = null }) {
-  const warnings = [];
-  const today = dateOnly(new Date());
-  const describe = await salesforceObjectFields({
-    objectName: 'Supplier_Invoice__c',
-  }).catch(() => ({ fields: [] }));
-  const fields = describe.fields || [];
-  const fieldNames = new Set(fields.map((field) => field.name));
-  if (!fieldNames.size) return { rows: [], warnings: ['Supplier_Invoice__c is not queryable.'] };
-  const fieldByName = Object.fromEntries(fields.map((field) => [field.name, field]));
-  const stemField = firstAvailableField(fieldNames, ['STEM__c', 'Stem__c']);
-  const dueDateField = firstAvailableField(fieldNames, ['Invoice_Due_Date__c', 'Due_Date__c', 'Payment_Due_Date__c', 'Pay_Term_Date__c', 'Supplier_Pay_Term_Date__c']);
-  const payableField = firstAvailableField(fieldNames, ['Payable_Balance__c', 'Balance__c', 'Actual_Balance__c', 'Outstanding_Balance__c']);
-  const amountField = firstAvailableField(fieldNames, ['Invoice_Amount__c', 'Calculated_Amount__c', 'Amount__c', 'Total_Amount__c']);
-  const paidDateField = firstAvailableField(fieldNames, ['Payment_Date__c', 'Paid_Date__c', 'Date_Paid__c']);
-  const supplierFields = selectedFields(fieldNames, ['Supplier__c', 'Expected_Supplier__c', 'Substitute_Supplier__c']);
-  const supplierRelationships = supplierFields.map((field) => fieldByName[field]?.relationshipName).filter(Boolean);
-  if (!stemField || !dueDateField || (!payableField && !amountField)) {
-    return {
-      rows: [],
-      warnings: ['Supplier invoice STEM, due date, or amount fields were not found.'],
-    };
-  }
-  const selectFields = ['Id', 'Name', stemField, dueDateField, payableField, amountField, paidDateField, ...selectedFields(fieldNames, ['Supplier_Name__c', 'CurrencyIsoCode', 'Currency__c']), ...supplierFields, ...supplierRelationships.map((relationship) => `${relationship}.Name`)].filter(Boolean);
-  const whereParts = [`${dueDateField} != null`, `${dueDateField} <= ${dateTo}`];
-  if (paidDateField) whereParts.push(`${paidDateField} = null`);
-  const invoices = await queryRows(
-    `
-    SELECT ${[...new Set(selectFields)].join(', ')}
-    FROM Supplier_Invoice__c
-    WHERE ${whereParts.join(' AND ')}
-    ORDER BY ${dueDateField} ASC NULLS LAST
-    LIMIT 10000
-  `,
-    { limit: 10000, softFail: true },
-  );
-  const stemIds = [...new Set(invoices.map((invoice) => invoice[stemField]).filter(Boolean))];
-  const stemMap = {};
-  if (stemIds.length) {
-    const stemDescribe = await salesforceObjectFields({
-      objectName: 'stem__c',
-    }).catch(() => ({ fields: [] }));
-    const stemFieldNames = new Set((stemDescribe.fields || []).map((field) => field.name));
-    const accountDescribe = stemFieldNames.has('Account__c')
-      ? await salesforceObjectFields({ objectName: 'Account' }).catch(() => ({
-          fields: [],
-        }))
-      : { fields: [] };
-    const accountFieldNames = new Set((accountDescribe.fields || []).map((field) => field.name));
-    const interofficeCondition = await interofficeStemAccessCondition(accessContext, stemFieldNames, accountFieldNames);
-    const stemSelectFields = ['Id', 'Name', ...selectedFields(stemFieldNames, ['KeyStem__c', 'Delivery_Date__c'])];
-    if (stemFieldNames.has('Vessel__c')) stemSelectFields.push('Vessel__r.Name');
-    if (stemFieldNames.has('Port__c')) stemSelectFields.push('Port__r.Name');
-    const stemRows = await compositeQueryRows(
-      chunkIds(stemIds).map((chunk) => {
-        const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-        const stemWhere = combineWhereConditions([`Id IN (${inList})`, interofficeCondition]);
-        return {
-          soql: `
-        SELECT ${[...new Set(stemSelectFields)].join(', ')}
-        FROM stem__c
-        WHERE ${stemWhere}
-        LIMIT 5000
-      `,
-          limit: 5000,
-          softFail: true,
-        };
-      }),
-    );
-    for (const stem of stemRows.flat()) stemMap[stem.Id] = stem;
-  }
-  const rows = [];
-  for (const invoice of invoices) {
-    const amount = Number(payableField ? invoice[payableField] : invoice[amountField]);
-    if (!Number.isFinite(amount) || amount <= 0) continue;
-    const sourceDueDate = invoice[dueDateField];
-    if (!sourceDueDate) continue;
-    const originalDate = sourceDueDate < today ? today : sourceDueDate;
-    const adjusted = cashflowBusinessDayAdjustment(originalDate, blockedMap);
-    const stem = stemMap[invoice[stemField]] || null;
-    if (isInterofficeAccess(accessContext) && invoice[stemField] && !stem) continue;
-    if (isBeforeCashflowForecastStart(stem?.Delivery_Date__c)) continue;
-    const counterparty = supplierRelationships.map((relationship) => invoice[relationship]?.Name).find(Boolean) || invoice.Supplier_Name__c || supplierFields.map((field) => invoice[field]).find(Boolean) || invoice.Name || 'Supplier';
-    rows.push({
-      id: `supplier-${invoice.Id}`,
-      forecastDate: adjusted.date,
-      originalDate,
-      direction: 'outflow',
-      type: 'Supplier Payment',
-      stemId: invoice[stemField] || null,
-      stemName: stem ? formatStemName(stem) : invoice[stemField] || null,
-      counterparty,
-      buyerGroup: null,
-      amount,
-      currency: invoice.CurrencyIsoCode || invoice.Currency__c || 'USD',
-      sourceDueDate,
-      predictedDelayDays: 0,
-      modelLevel: 'Contractual due date',
-      sampleCount: null,
-      confidence: 'Certain',
-      holidayAdjustment: adjusted.note,
-      sourceRecordId: invoice.Id,
-      sourceRecordName: invoice.Name || null,
-    });
-  }
-  return { rows, warnings };
-}
-
-async function cashflowBuyerReceiptRows({ dateTo, settings, models, blockedMap, accessContext = null }) {
-  const today = dateOnly(new Date());
-  const daysAhead = Math.max(0, Math.min(daysBetween(today, dateTo) ?? settings.horizonDays, 365));
-  const invoiceData = await salesforceBuyerInvoicesDue({ daysAhead }, null, accessContext);
-  const rows = [];
-  for (const invoice of invoiceData.rows || []) {
-    if (isBeforeCashflowForecastStart(invoice.deliveryDate)) continue;
-    const amount = Number(invoice.receivableBalance || 0);
-    if (!Number.isFinite(amount) || amount <= 0) continue;
-    const dueDate = invoice.buyerInvoiceDueDate;
-    if (!dueDate) continue;
-    const model = cashflowSelectDelayModel(invoice, models, settings);
-    const predictedDate = addDays(dueDate, model.predictedDelayDays || 0);
-    const originalDate = predictedDate < today ? today : predictedDate;
-    const adjusted = cashflowBusinessDayAdjustment(originalDate, blockedMap);
-    rows.push({
-      id: `buyer-${invoice.stemId}`,
-      forecastDate: adjusted.date,
-      originalDate,
-      direction: 'inflow',
-      type: 'Buyer Receipt',
-      stemId: invoice.stemId,
-      stemName: invoice.stemName,
-      counterparty: invoice.buyerName || 'Buyer',
-      buyerGroup: invoice.buyerGroupName || invoice.buyerName || null,
-      amount,
-      currency: invoice.currency || 'USD',
-      sourceDueDate: dueDate,
-      predictedDelayDays: model.predictedDelayDays,
-      modelLevel: model.level,
-      sampleCount: model.sampleCount,
-      confidence: model.confidence,
-      holidayAdjustment: adjusted.note,
-      buyerAccountId: invoice.buyerAccountId || null,
-      status: invoice.status || null,
-    });
-  }
-  return rows;
-}
-
-function cashflowPerformanceRows(samples, models) {
-  const buyerRows = Object.entries(models.buyerModels || {}).map(([buyerAccountId, model]) => {
-    const sample = samples.find((row) => row.buyerAccountId === buyerAccountId) || {};
-    return {
-      id: `buyer-${buyerAccountId}`,
-      level: 'Buyer',
-      name: sample.buyerName || buyerAccountId,
-      buyerGroup: sample.buyerGroupName || null,
-      predictedDelayDays: model.predictedDelayDays,
-      sampleCount: model.sampleCount,
-      confidence: model.confidence,
-    };
-  });
-  const groupRows = Object.entries(models.groupModels || {}).map(([groupName, model]) => ({
-    id: `group-${groupName}`,
-    level: 'Buyer Group',
-    name: groupName,
-    buyerGroup: groupName,
-    predictedDelayDays: model.predictedDelayDays,
-    sampleCount: model.sampleCount,
-    confidence: model.confidence,
-  }));
-  return [...buyerRows, ...groupRows]
-    .sort((a, b) => {
-      if (b.sampleCount !== a.sampleCount) return b.sampleCount - a.sampleCount;
-      return String(a.name || '').localeCompare(String(b.name || ''));
-    })
-    .slice(0, 50);
-}
-
-async function cashflowForecast(body, req = null, accessContext = null) {
-  const warnings = [];
-  const settings = await loadCashflowSettings();
-  const today = dateOnly(new Date());
-  const dateFrom = dateOnly(body.dateFrom || body.date_from || today);
-  const dateTo = dateOnly(body.dateTo || body.date_to || addDays(today, settings.horizonDays));
-  const bucket = ['daily', 'weekly', 'monthly'].includes(String(body.bucket || '').toLowerCase()) ? String(body.bucket).toLowerCase() : 'daily';
-  const holidayData = await loadCashflowHolidayData(yearsBetween(dateFrom, addDays(dateTo, 14)), warnings);
-  const incomingSettings = await loadIncomingPaymentSettings();
-  const blockedDates = [...holidayData.blockedMap.keys()].sort();
-  const cached = await cachedSalesforceValue({
-    namespace: 'salesforce-cashflow',
-    ttlSeconds: 60,
-    payload: {
-      dateTo,
-      settings,
-      paymentThresholds: paymentCollectionThresholdCacheKey(incomingSettings),
-      blockedDates,
-    },
-    tags: ['salesforce:cashflow', 'salesforce:stem', 'salesforce:buyer-invoices'],
-    body,
-    req,
-    accessContext,
-    loader: async () => {
-      const buyerSamplesData = await cashflowBuyerPaymentSamples({
-        lookbackMonths: settings.lookbackMonths,
-        accessContext,
-      });
-      const models = cashflowBuildDelayModels(buyerSamplesData.samples || [], settings);
-      const [buyerRows, supplierData] = await Promise.all([
-        cashflowBuyerReceiptRows({
-          dateTo,
-          settings,
-          models,
-          blockedMap: holidayData.blockedMap,
-          accessContext,
-        }),
-        cashflowSupplierInvoiceRows({
-          dateTo,
-          blockedMap: holidayData.blockedMap,
-          accessContext,
-        }),
-      ]);
-      return { buyerSamplesData, models, buyerRows, supplierData };
-    },
-  });
-  const { buyerSamplesData, models, buyerRows, supplierData } = cached.value;
-  warnings.push(...(buyerSamplesData.warnings || []));
-  warnings.push(...(supplierData.warnings || []));
-  const rows = [...buyerRows, ...(supplierData.rows || [])]
-    .filter((row) => row.forecastDate >= dateFrom && row.forecastDate <= dateTo)
-    .sort((a, b) => {
-      if (a.forecastDate !== b.forecastDate) return a.forecastDate.localeCompare(b.forecastDate);
-      if (a.direction !== b.direction) return a.direction.localeCompare(b.direction);
-      return String(a.counterparty || '').localeCompare(String(b.counterparty || ''));
-    });
-  const summary = cashflowSummarizeRows(rows, bucket);
-  const canManageSettings = accessContext ? await userHasCapability(accessContext.client, accessContext.profile, 'cashflow_forecast_manage') : false;
-  return {
-    dateFrom,
-    dateTo,
-    bucket,
-    rows,
-    buckets: summary.buckets,
-    totals: summary.totals,
-    performance: cashflowPerformanceRows(buyerSamplesData.samples || [], models),
-    settings,
-    incomingPaymentSettings: incomingSettings,
-    holidays: holidayData.holidays,
-    holidayOverrides: holidayData.overrides,
-    holidaySourceStatus: holidayData.statuses,
-    warnings: [...new Set(warnings.filter(Boolean))],
-    capabilities: { canManageSettings },
-  };
-}
-
-async function cashflowBuyerPaymentPerformance(body, req = null, accessContext = null) {
-  const baseSettings = await loadCashflowSettings();
-  const settings = {
-    ...baseSettings,
-    lookbackMonths: clampInteger(body.lookbackMonths, baseSettings.lookbackMonths, 1, 36),
-  };
-  const data = await cashflowBuyerPaymentSamples({
-    lookbackMonths: settings.lookbackMonths,
-    accessContext,
-  });
-  const models = cashflowBuildDelayModels(data.samples || [], settings);
-  return {
-    settings,
-    samples: data.samples || [],
-    performance: cashflowPerformanceRows(data.samples || [], models),
-    warnings: data.warnings || [],
-  };
-}
-
-async function cashflowSettingsGet(body, req, accessContext = null) {
-  const { client, profile } = accessContext || (await requireActiveUser(req));
-  const today = dateOnly(new Date());
-  const settings = await loadCashflowSettings();
-  const years = Array.isArray(body.years) && body.years.length ? body.years : yearsBetween(today, addDays(today, settings.horizonDays + 14));
-  const holidayData = await loadCashflowHolidayData(years, []);
-  return {
-    settings,
-    holidayOverrides: holidayData.overrides,
-    holidaySourceStatus: holidayData.statuses,
-    capabilities: {
-      canManageSettings: await userHasCapability(client, profile, 'cashflow_forecast_manage'),
-    },
-  };
-}
-
-async function cashflowSettingsSave(body, req, accessContext = null) {
-  const { client, profile } = accessContext || (await requireActiveUser(req));
-  await requireCapability(client, profile, 'cashflow_forecast_manage', 'Cashflow settings management permission is required.');
-  if (body.overrideAction === 'add') {
-    const date = dateOnly(body.date || body.holidayDate);
-    if (!date) throw appError('Blocked date is required.', 400);
-    const countryCode =
-      String(body.countryCode || 'MANUAL')
-        .trim()
-        .toUpperCase()
-        .slice(0, 12) || 'MANUAL';
-    const payload = {
-      holiday_date: date,
-      country_code: countryCode,
-      name: String(body.name || 'Manual blocked date').trim() || 'Manual blocked date',
-      is_blocked: body.isBlocked !== false,
-      note: body.note ? String(body.note).trim() : null,
-      updated_by: profile.id,
-      updated_by_email: profile.email,
-      updated_at: new Date().toISOString(),
-      created_by: profile.id,
-      created_by_email: profile.email,
-    };
-    const { error } = await client.from('cashflow_holiday_overrides').upsert(payload, { onConflict: 'holiday_date,country_code' });
-    if (error) throw error;
-    return cashflowSettingsGet({}, req);
-  }
-  if (body.overrideAction === 'delete') {
-    const id = body.id || body.overrideId;
-    if (!id) throw appError('Override id is required.', 400);
-    const { error } = await client.from('cashflow_holiday_overrides').delete().eq('id', id);
-    if (error) throw error;
-    return cashflowSettingsGet({}, req);
-  }
-  const payload = {
-    id: CASHFLOW_SETTINGS_ID,
-    horizon_days: clampInteger(body.horizonDays ?? body.horizon_days, DEFAULT_CASHFLOW_SETTINGS.horizonDays, 1, 365),
-    lookback_months: clampInteger(body.lookbackMonths ?? body.lookback_months, DEFAULT_CASHFLOW_SETTINGS.lookbackMonths, 1, 36),
-    min_buyer_samples: clampInteger(body.minBuyerSamples ?? body.min_buyer_samples, DEFAULT_CASHFLOW_SETTINGS.minBuyerSamples, 1, 100),
-    min_group_samples: clampInteger(body.minGroupSamples ?? body.min_group_samples, DEFAULT_CASHFLOW_SETTINGS.minGroupSamples, 1, 100),
-    updated_by: profile.id,
-    updated_by_email: profile.email,
-    updated_at: new Date().toISOString(),
-  };
-  const { data, error } = await client.from('cashflow_forecast_settings').upsert(payload, { onConflict: 'id' }).select('id,horizon_days,lookback_months,min_buyer_samples,min_group_samples,credit_statement_conservativeness,updated_by_email,updated_at').single();
-  if (error) throw error;
-  return {
-    settings: serializeCashflowSettings(data),
-    holidayOverrides: await loadCashflowHolidayOverrides(),
-  };
-}
-
-async function cashflowHolidayCalendar(body, req) {
-  await requireActiveUser(req);
-  const today = dateOnly(new Date());
-  const years = Array.isArray(body.years) && body.years.length ? body.years : [Number(today.slice(0, 4))];
-  const warnings = [];
-  const data = await loadCashflowHolidayData(years, warnings);
-  return {
-    holidays: data.holidays,
-    holidayOverrides: data.overrides,
-    holidaySourceStatus: data.statuses,
-    warnings,
-  };
-}
-
-function incomingPaymentNumber(value) {
-  if (value == null || value === '') return null;
-  const number = Number(value);
-  return Number.isFinite(number) ? number : null;
-}
-
-function firstAvailableField(fieldNames, candidates) {
-  return candidates.find((field) => fieldNames.has(field)) || null;
-}
-
-function soqlDateValue(dateField, dateType, isoDate, endOfDay = false) {
-  if (!isoDate) return null;
-  if (dateField === 'CreatedDate' || dateType === 'datetime') {
-    return `${isoDate}T${endOfDay ? '23:59:59' : '00:00:00'}Z`;
-  }
-  return isoDate;
-}
-
-function soqlHongKongDateTimeValue(isoDate, endOfDay = false) {
-  if (!isoDate) return null;
-  const localTime = endOfDay ? '23:59:59.999' : '00:00:00.000';
-  return new Date(`${isoDate}T${localTime}+08:00`).toISOString().replace(/\.\d{3}Z$/, 'Z');
-}
-
-function selectedFields(fieldNames, fields) {
-  return fields.filter((field) => field && fieldNames.has(field));
-}
-
-function incomingPaymentReferenceFields(paymentFields = []) {
-  const fieldNames = new Set(paymentFields.map((field) => field.name));
-  const exactFields = ['Bank_Reference__c', 'Reference__c', 'Payment_Reference__c', 'Transaction_Reference__c', 'Description__c', 'Remarks__c'].filter((field) => fieldNames.has(field));
-  const allowedTypes = new Set(['string', 'textarea', 'picklist', 'email', 'phone', 'url']);
-  const dynamicFields = paymentFields.filter((field) => field?.name && field.name !== 'Name' && !field.name.endsWith('__c__r') && allowedTypes.has(field.type) && fieldMatchesAny(field, ['bankreference', 'bankreferencec', 'paymentreference', 'paymentreferencec', 'transactionreference', 'transactionreferencec', 'reference', 'referencec', 'description', 'descriptionc', 'remarks', 'remarksc', 'narration', 'narrationc', 'paymentdetails', 'paymentdetailsc', 'receiptreference', 'receiptreferencec'], ['bankref', 'reference', 'transaction', 'remittance', 'description', 'remark', 'narration', 'receipt', 'cheque', 'check', 'details', 'payer', 'payor'])).map((field) => field.name);
-  return uniqueTextList([...exactFields, ...dynamicFields]).slice(0, 10);
-}
-
-function incomingPaymentSupplierInvoiceFields(paymentFields = []) {
-  const fieldNames = new Set(paymentFields.map((field) => field.name));
-  const exactFields = ['Supplier_Invoice__c'].filter((field) => fieldNames.has(field));
-  const dynamicFields = paymentFields
-    .filter((field) => {
-      if (!field?.name || field.name === 'Name') return false;
-      if (field.type !== 'reference') return false;
-      const referenceTo = Array.isArray(field.referenceTo) ? field.referenceTo : [];
-      return referenceTo.includes('Supplier_Invoice__c') || fieldMatchesAny(field, ['supplierinvoice', 'supplierinvoicec', 'supplierinvoiceid', 'supplierinvoiceidc'], ['supplierinvoice', 'supplierinv', 'vendorinvoice']);
-    })
-    .map((field) => field.name);
-  return uniqueTextList([...exactFields, ...dynamicFields]).slice(0, 8);
-}
-
-function incomingPaymentDirectionFields(paymentFields = []) {
-  const fieldNames = new Set(paymentFields.map((field) => field.name));
-  const exactFields = ['Type__c', 'Payment_Type__c', 'Status__c', 'Payment_Status__c', 'Direction__c', 'Payment_Direction__c', 'Category__c', 'Payment_Category__c', 'Payable_Receivable__c', 'AP_AR__c', 'Payer__c', 'Payor__c', 'Payee__c', 'From__c', 'To__c', 'Supplier__c', 'Vendor__c', 'Account__c'].filter((field) => fieldNames.has(field));
-  const allowedTypes = new Set(['string', 'textarea', 'picklist', 'reference']);
-  const dynamicFields = paymentFields.filter((field) => field?.name && field.name !== 'Name' && allowedTypes.has(field.type) && fieldMatchesAny(field, ['paymenttype', 'paymenttypec', 'paymentdirection', 'paymentdirectionc', 'direction', 'directionc', 'payablereceivable', 'payablereceivablec', 'apar', 'aparc', 'supplier', 'supplierc', 'vendor', 'vendorc', 'payee', 'payeec', 'payer', 'payerc', 'payor', 'payorc'], ['paymenttype', 'direction', 'payable', 'receivable', 'supplier', 'vendor', 'payee', 'payer', 'payor', 'payfrom', 'payto', 'recipient', 'beneficiary', 'party'])).map((field) => field.name);
-  return uniqueTextList([...exactFields, ...dynamicFields]).slice(0, 20);
-}
-
-function incomingPaymentSupplierInvoiceId(payment, supplierInvoiceFields = []) {
-  return supplierInvoiceFields.map((field) => payment?.[field]).find((value) => isSalesforceId(value)) || null;
-}
-
-function incomingPaymentLooksSupplierSide(payment, { supplierInvoiceFields = [], directionFields = [], typeFields = [], statusFields = [] } = {}) {
-  if (incomingPaymentSupplierInvoiceId(payment, supplierInvoiceFields)) return true;
-  const fields = uniqueTextList([...directionFields, ...typeFields, ...statusFields]);
-  const hasSupplierLookup = fields.some((field) => {
-    const value = payment?.[field];
-    if (value == null || value === '') return false;
-    const fieldToken = normalizedFieldToken(field);
-    if (fieldToken.includes('buyersupplier')) return false;
-    return fieldToken.includes('supplier') || fieldToken.includes('vendor') || fieldToken.includes('supplierinvoice');
-  });
-  if (hasSupplierLookup) return true;
-  const valueToken = normalizedFieldToken(
-    fields
-      .filter((field) => payment?.[field] != null && payment[field] !== '')
-      .map((field) => payment[field])
-      .join(' '),
-  );
-  if (!valueToken) return false;
-  const supplierSignals = ['supplierinvoice', 'supplierpayment', 'supplierrefund', 'vendor', 'payable', 'accountspayable', 'outgoing', 'paymenttosupplier', 'tosupplier', 'fromsupplier', 'supplieraccount', 'supplierc', 'suppliername'];
-  const hasSupplierSignal = supplierSignals.some((signal) => valueToken.includes(signal));
-  if (!hasSupplierSignal) return false;
-  const mixedBuyerSupplierOnly = valueToken.includes('buyersupplier') && !['supplierinvoice', 'supplierpayment', 'supplierrefund', 'paymenttosupplier', 'payable', 'vendor'].some((signal) => valueToken.includes(signal));
-  return !mixedBuyerSupplierOnly;
-}
-
-function incomingPaymentLooksBankCharge(payment, { referenceFields = [], directionFields = [], typeFields = [], statusFields = [] } = {}) {
-  if (payment?.Id === 'a0Sfu00000FsN0c' || String(payment?.Id || '').startsWith('a0Sfu00000FsN0c')) return true;
-  const fields = uniqueTextList([...referenceFields, ...directionFields, ...typeFields, ...statusFields, 'Name']);
-  const valueToken = normalizedFieldToken(
-    fields
-      .filter((field) => payment?.[field] != null && payment[field] !== '')
-      .map((field) => payment[field])
-      .join(' '),
-  );
-  if (!valueToken) return false;
-  return ['bankcharge', 'bankcharges', 'bankfee', 'bankfees', 'remittancecharge', 'remittancefee', 'transfercharge', 'transferfee'].some((signal) => valueToken.includes(signal));
-}
-
-function incomingPaymentLooksBuyerSide(payment, { referenceFields = [], directionFields = [], typeFields = [], statusFields = [] } = {}) {
-  const fields = uniqueTextList([...referenceFields, ...directionFields, ...typeFields, ...statusFields, 'Name']);
-  const valueToken = normalizedFieldToken(
-    fields
-      .filter((field) => payment?.[field] != null && payment[field] !== '')
-      .map((field) => payment[field])
-      .join(' '),
-  );
-  if (!valueToken) return false;
-  return ['buyerpayment', 'buyerreceipt', 'paymentfrombuyer', 'frombuyer', 'customerpayment', 'customerreceipt', 'receivable', 'accountsreceivable'].some((signal) => valueToken.includes(signal));
-}
-
-function incomingPaymentLooksStemPayableCalculation(payment, { amount, payableAmounts = [], referenceFields = [], directionFields = [], typeFields = [], statusFields = [], allowBlankSignal = false } = {}) {
-  if (amount == null || amount <= 0) return false;
-  const matchesPayableAmount = payableAmounts.filter((value) => value != null && Number.isFinite(Number(value)) && Math.abs(Number(value)) > 0).some((value) => amountNearlyEqual(amount, value, 1));
-  if (!matchesPayableAmount) return false;
-  if (
-    incomingPaymentLooksBuyerSide(payment, {
-      referenceFields,
-      directionFields,
-      typeFields,
-      statusFields,
-    })
-  )
-    return false;
-
-  const fields = uniqueTextList([...referenceFields, ...directionFields, ...typeFields, ...statusFields, 'Name']);
-  const valueToken = normalizedFieldToken(
-    fields
-      .filter((field) => payment?.[field] != null && payment[field] !== '')
-      .map((field) => payment[field])
-      .join(' '),
-  );
-  if (!valueToken) return allowBlankSignal;
-  return true;
-}
-
-function stemPayableAmountCandidates({ stem = {}, lineItems = [], extraCosts = [] } = {}) {
-  const stemHasDelivery = !!stem.Delivery_Date__c;
-  const activeLineItems = lineItems.filter((item) => !item.Cancelled__c);
-  const activeExtraCosts = extraCosts.filter((item) => !item.Cancelled__c);
-  const supplierInvoiceTotal = numericValue(stem.Total_Invoiced_Amount_From_Suppliers__c) ?? 0;
-  const supplierLineBuyTotal = activeLineItems.reduce((sum, item) => sum + lineBuyAmount(item, stemHasDelivery), 0);
-  const uninvoicedSupplierLineBuyTotal = activeLineItems.reduce((sum, item) => (item.Supplier_Invoice__c ? sum : sum + lineBuyAmount(item, stemHasDelivery)), 0);
-  const supplierExtraBuyTotal = activeExtraCosts.reduce((sum, item) => sum + extraBuyAmount(item, stemHasDelivery), 0);
-  const uninvoicedSupplierExtraBuyTotal = activeExtraCosts.reduce((sum, item) => (item.Supplier_Invoice__c ? sum : sum + extraBuyAmount(item, stemHasDelivery)), 0);
-  const hasSupplierInvoiceLines = activeLineItems.some((item) => item.Supplier_Invoice__c);
-  const calculatedSupplierInvoice = supplierInvoiceTotal + (hasSupplierInvoiceLines ? uninvoicedSupplierLineBuyTotal : supplierLineBuyTotal);
-  return [calculatedSupplierInvoice, calculatedSupplierInvoice + supplierExtraBuyTotal, calculatedSupplierInvoice + uninvoicedSupplierExtraBuyTotal, supplierLineBuyTotal, uninvoicedSupplierLineBuyTotal, supplierExtraBuyTotal, uninvoicedSupplierExtraBuyTotal, supplierLineBuyTotal + supplierExtraBuyTotal, uninvoicedSupplierLineBuyTotal + uninvoicedSupplierExtraBuyTotal, supplierInvoiceTotal, numericValue(stem.Payable_Balance__c), numericValue(stem.Total_Costs__c), numericValue(stem.Total_Cost__c), numericValue(stem.Total_Cost_Amount__c), ...activeLineItems.map((item) => lineBuyAmount(item, stemHasDelivery)), ...activeExtraCosts.map((item) => extraBuyAmount(item, stemHasDelivery))].filter((value) => value != null && Number.isFinite(Number(value)) && Math.abs(Number(value)) > 0);
-}
-
-function incomingPaymentTypeFromContext(payment, { amount, stem, supplierInvoice, supplierInvoiceFields, directionFields, typeFields, statusFields }) {
-  const supplierSide =
-    supplierInvoice ||
-    incomingPaymentLooksSupplierSide(payment, {
-      supplierInvoiceFields,
-      directionFields,
-      typeFields,
-      statusFields,
-    });
-  if (supplierSide) return amount != null && amount < 0 ? 'Supplier Refund' : 'Supplier Payment';
-  if (stem && (amount == null || amount >= 0)) return 'Buyer Payment';
-  return 'Unmatched';
-}
-
-function amountNearlyEqual(left, right, tolerance = 0.05) {
-  const a = Number(left);
-  const b = Number(right);
-  if (!Number.isFinite(a) || !Number.isFinite(b)) return false;
-  return Math.abs(Math.abs(a) - Math.abs(b)) <= tolerance;
-}
-
-function paymentSearchToken(payment, fields = []) {
-  return normalizedFieldToken(
-    uniqueTextList([...fields, 'Name'])
-      .filter((field) => payment?.[field] != null && payment[field] !== '')
-      .map((field) => payment[field])
-      .join(' '),
-  );
-}
-
-function addBrokerCommissionGroup(groupsByStem, group) {
-  if (!group?.stemId || !group.brokerType || !group.amount) return;
-  const key = [group.stemId, group.brokerType, group.brokerId || group.brokerName || 'unknown'].join('::');
-  if (!groupsByStem[group.stemId]) groupsByStem[group.stemId] = [];
-  const existing = groupsByStem[group.stemId].find((item) => item.key === key);
-  if (existing) {
-    existing.amount += Number(group.amount || 0);
-    return;
-  }
-  groupsByStem[group.stemId].push({
-    key,
-    stemId: group.stemId,
-    brokerId: group.brokerId || null,
-    brokerName: group.brokerName || group.brokerId || group.brokerType,
-    brokerType: group.brokerType,
-    side: group.side,
-    amount: Number(group.amount || 0),
-  });
-}
-
-function buildBrokerCommissionGroups({ stemMap = {}, lineItems = [], buyerBrokers = [], accountMap = {} } = {}) {
-  const groupsByStem = {};
-  const buyerBrokersByStem = {};
-  for (const broker of buyerBrokers) {
-    if (!broker.STEM__c) continue;
-    if (!buyerBrokersByStem[broker.STEM__c]) buyerBrokersByStem[broker.STEM__c] = [];
-    buyerBrokersByStem[broker.STEM__c].push(broker);
-  }
-
-  for (const item of lineItems) {
-    if (!item.STEM__c || item.Cancelled__c) continue;
-    const stem = stemMap[item.STEM__c];
-    if (!stem) continue;
-    const qty = financialQuantity(item, !!stem.Delivery_Date__c);
-    const supplierAmount = brokerAmount(item.Suppliers_Brokers_Commission_Per_Unit__c, qty);
-    if (item.Supplier_Broker__c && supplierAmount !== 0) {
-      addBrokerCommissionGroup(groupsByStem, {
-        stemId: item.STEM__c,
-        brokerId: item.Supplier_Broker__c,
-        brokerName: accountMap[item.Supplier_Broker__c] || accountMap[String(item.Supplier_Broker__c).slice(0, 15)] || item.Supplier_Broker__c,
-        brokerType: 'Supplier Broker',
-        side: 'supplier',
-        amount: supplierAmount,
-      });
-    }
-
-    const buyerBrokerId = item.Buyers_Broker__c || item.Buyer_Broker__c;
-    const hasSupplierBrokerUnit = Number(item.Suppliers_Brokers_Commission_Per_Unit__c || 0) !== 0;
-    const buyerPerUnitAmount = brokerAmount(item.Buyers_Brokers_Commission_Per_Unit__c, qty);
-    const buyerLumpsumAmount = Number(item.Buyers_Brokers_Commission_Lumpsum__c || 0);
-    const buyerAmount = buyerLumpsumAmount || buyerPerUnitAmount;
-    if (buyerBrokerId && buyerAmount !== 0) {
-      addBrokerCommissionGroup(groupsByStem, {
-        stemId: item.STEM__c,
-        brokerId: buyerBrokerId,
-        brokerName: accountMap[buyerBrokerId] || accountMap[String(buyerBrokerId).slice(0, 15)] || buyerBrokerId,
-        brokerType: 'Buyer Broker',
-        side: 'buyer',
-        amount: buyerAmount,
-      });
-    }
-
-    const secondaryAmount = !hasSupplierBrokerUnit && item.Commission_Cost__c != null ? Number(item.Commission_Cost__c || 0) - buyerPerUnitAmount : 0;
-    const secondaryBrokers = (buyerBrokersByStem[item.STEM__c] || []).filter((broker) => {
-      if (!broker.Buyer_Broker__c) return true;
-      if (!buyerBrokerId) return true;
-      return String(broker.Buyer_Broker__c).slice(0, 15) !== String(buyerBrokerId).slice(0, 15);
-    });
-    if (secondaryAmount > 0 && secondaryBrokers.length > 0) {
-      for (const broker of secondaryBrokers) {
-        addBrokerCommissionGroup(groupsByStem, {
-          stemId: item.STEM__c,
-          brokerId: broker.Buyer_Broker__c || null,
-          brokerName: accountMap[broker.Buyer_Broker__c] || accountMap[String(broker.Buyer_Broker__c || '').slice(0, 15)] || broker.Buyer_Broker__c || 'Secondary Buyer Broker',
-          brokerType: 'Secondary Buyer Broker',
-          side: 'buyer',
-          amount: secondaryAmount,
-        });
-      }
-    }
-  }
-  return groupsByStem;
-}
-
-function findBrokerCommissionPaymentMatch(payment, amount, groups = [], textFields = []) {
-  if (!groups.length || amount == null) return null;
-  const amountMatches = groups.filter((group) => amountNearlyEqual(amount, group.amount));
-  if (!amountMatches.length) return null;
-  if (amountMatches.length === 1) return amountMatches[0];
-  const token = paymentSearchToken(payment, textFields);
-  if (token) {
-    const textMatch = amountMatches.find((group) => normalizedFieldToken(group.brokerName) && token.includes(normalizedFieldToken(group.brokerName)));
-    if (textMatch) return textMatch;
-  }
-  return amountMatches[0];
-}
-
-function incomingPaymentReference(payment, referenceFields = []) {
-  const value = referenceFields.map((field) => payment[field]).find((item) => item != null && item !== '');
-  return value == null ? null : String(value).trim() || null;
-}
-
-function generatedPaymentName(value) {
-  const text = String(value || '').trim();
-  if (!text) return true;
-  return /^pay(?:ment)?[-_\s]?\d+$/i.test(text) || /^p[-_\s]?\d+$/i.test(text) || /^[a-z]{0,4}\d{5,}$/i.test(text) || /^[a-z0-9]{15,18}$/i.test(text);
-}
-
-function incomingPaymentDisplayName({ payment, referenceFields = [], stem, supplierInvoice, type }) {
-  const reference = incomingPaymentReference(payment, referenceFields);
-  if (reference) return reference;
-
-  const rawName = String(payment?.Name || '').trim();
-  if (rawName && !generatedPaymentName(rawName)) return rawName;
-
-  if (supplierInvoice?.Name) {
-    return `${type === 'Supplier Refund' ? 'Supplier refund' : 'Supplier payment'} - ${supplierInvoice.Name}`;
-  }
-  if (stem) {
-    return `${type === 'Buyer Payment' ? 'Buyer payment' : 'Payment'} - ${formatStemName(stem)}`;
-  }
-  return rawName || payment?.Id || 'Payment';
-}
-
-function incomingPaymentBuyerGroup(stem) {
-  const account = stem?.['Account__r'] || {};
-  return account.Group_Name__c || account.Parent?.Name || stem?.Buyer_Name__c || account.Name || stem?.Buyer__c || null;
-}
-
-function incomingPaymentBuyerName(stem) {
-  const account = stem?.['Account__r'] || {};
-  return stem?.Buyer_Name__c || account.Name || stem?.Buyer__c || null;
-}
-
-function incomingPaymentStatus({ type, amount, stem, supplierInvoice, thresholdPolicy }) {
-  if (!stem && !supplierInvoice) return { label: 'Needs review', tone: 'amber' };
-  if (type === 'Bank Charge') return { label: 'Bank charge', tone: 'amber' };
-  if (type === 'Supplier Refund') return { label: 'Supplier refund', tone: 'green' };
-  if (type === 'Supplier Payment') return { label: 'Supplier payment', tone: 'slate' };
-  const receivable = incomingPaymentNumber(stem?.Receivable_Balance__c);
-  if (receivable != null && receivable < 0) return { label: 'Overpaid / available balance', tone: 'purple' };
-  if (receivable != null && paymentCollectionBalanceIsSettled(receivable, thresholdPolicy)) return { label: 'Fully paid', tone: 'green' };
-  if (amount == null) return { label: 'Amount missing', tone: 'amber' };
-  return { label: 'Partially paid', tone: 'blue' };
-}
-
-function incomingPaymentBankChargeTarget(charge, rows = []) {
-  if (!charge?.stemId || charge.type !== 'Buyer Payment') return null;
-  const chargeAmount = Math.abs(Number(charge.amount || 0));
-  if (!Number.isFinite(chargeAmount) || chargeAmount <= 0 || chargeAmount > 1000) return null;
-  const chargeDate = dateOnly(charge.paymentDate);
-  const chargeCreatedDate = dateOnly(charge.createdDate);
-  const candidates = rows
-    .filter((row) => {
-      if (!row || row.id === charge.id || row.paymentId === charge.paymentId) return false;
-      if (row.type !== 'Buyer Payment' || row.stemId !== charge.stemId) return false;
-      if (charge.currency && row.currency && charge.currency !== row.currency) return false;
-      const targetAmount = Math.abs(Number(row.amount || 0));
-      if (!Number.isFinite(targetAmount) || targetAmount <= chargeAmount) return false;
-      if (targetAmount < chargeAmount * 10) return false;
-      const targetDate = dateOnly(row.paymentDate);
-      const targetCreatedDate = dateOnly(row.createdDate);
-      return (chargeDate && targetDate && chargeDate === targetDate) || (chargeCreatedDate && targetCreatedDate && chargeCreatedDate === targetCreatedDate);
-    })
-    .sort((a, b) => Math.abs(Number(b.amount || 0)) - Math.abs(Number(a.amount || 0)));
-  return candidates[0] || null;
-}
-
-function attachBankChargeToPayment(target, charge) {
-  if (!target || !charge) return;
-  if (!Array.isArray(target.bankCharges)) target.bankCharges = [];
-  target.bankCharges.push({
-    id: charge.id,
-    paymentId: charge.paymentId,
-    paymentDate: charge.paymentDate,
-    amount: Math.abs(Number(charge.amount || 0)),
-    currency: charge.currency,
-    reference: charge.reference,
-    paymentName: charge.paymentDisplayName || charge.paymentName || charge.salesforcePaymentName || charge.paymentId,
-  });
-  target.bankChargeTotal = (target.bankChargeTotal || 0) + Math.abs(Number(charge.amount || 0));
-}
-
-function incomingPaymentRecordTypeToken(payment) {
-  return normalizedFieldToken([payment?.RecordTypeId, payment?.RecordType?.DeveloperName, payment?.RecordType?.Name].filter(Boolean).join(' '));
-}
-
-function incomingPaymentIsRemittanceRecord(payment, fields = []) {
-  const token = incomingPaymentRecordTypeToken(payment);
-  if (token.includes('remittance')) return true;
-  return uniqueTextList(fields).some((field) => {
-    const valueToken = normalizedFieldToken(payment?.[field]);
-    return valueToken.includes('receivableremittance') || valueToken.includes('remittancereceivable') || valueToken.includes('payableremittance') || valueToken.includes('remittancepayable');
-  });
-}
-
-const incomingPaymentIsReceivableRemittance = incomingPaymentIsRemittanceRecord;
-
-function supplierInvoicePartyName(invoice, supplierRelationships = []) {
-  return invoice?.Supplier_Name__c || invoice?.['Supplier__r']?.Name || invoice?.['Expected_Supplier__r']?.Name || invoice?.['Substitute_Supplier__r']?.Name || supplierRelationships.map((relationship) => invoice?.[relationship]?.Name).find(Boolean) || null;
-}
-
-async function incomingBuyerCiaInvoices({ thresholdState, accessContext = null } = {}) {
-  const describe = await salesforceObjectFields({
-    objectName: 'stem__c',
-  }).catch(() => ({ fields: [] }));
-  const fields = describe.fields || [];
-  const fieldNames = new Set(fields.map((field) => field.name));
-  if (!fieldNames.has('Payment_Term__c')) return [];
-
-  const accountDescribe = fieldNames.has('Account__c')
-    ? await salesforceObjectFields({ objectName: 'Account' }).catch(() => ({
-        fields: [],
-      }))
-    : { fields: [] };
-  const accountFieldNames = new Set((accountDescribe.fields || []).map((field) => field.name));
-  const interofficeCondition = await interofficeStemAccessCondition(accessContext, fieldNames, accountFieldNames);
-  const selectFields = ['Id', 'Name', ...selectedFields(fieldNames, ['KeyStem__c', 'Buyer_Name__c', 'Buyer__c', 'Account__c', 'Payment_Term__c', 'Total_Invoice_Amount__c', 'Receivable_Balance__c', 'Payment_Date__c', 'Delivery_Date__c', 'Expected_Delivery_Date__c', 'CurrencyIsoCode'])];
-  if (fieldNames.has('Vessel__c')) selectFields.push('Vessel__r.Name');
-  if (fieldNames.has('Port__c')) selectFields.push('Port__r.Name');
-  if (fieldNames.has('Account__c')) {
-    selectFields.push('Account__r.Name');
-    if (accountFieldNames.has('Group_Name__c')) selectFields.push('Account__r.Group_Name__c');
-    if (accountFieldNames.has('ParentId')) selectFields.push('Account__r.Parent.Name');
-  }
-
-  const whereParts = ["Payment_Term__c LIKE '%CIA%'"];
-  if (fieldNames.has('Payment_Date__c')) whereParts.push('Payment_Date__c = null');
-  if (fieldNames.has('Delivery_Date__c')) whereParts.push('(Delivery_Date__c = null OR Delivery_Date__c >= 2026-01-01)');
-  if (interofficeCondition) whereParts.push(interofficeCondition);
-  const orderBy = fieldNames.has('Delivery_Date__c') ? 'Delivery_Date__c DESC NULLS LAST, CreatedDate DESC' : 'CreatedDate DESC';
-
-  const stems = await queryRows(
-    `
-    SELECT ${[...new Set(selectFields)].join(', ')}
-    FROM stem__c
-    WHERE ${whereParts.join(' AND ')}
-    ORDER BY ${orderBy}
-    LIMIT 1000
-  `,
-    { limit: 1000, softFail: true },
-  );
-  const stemIds = stems.map((stem) => stem.Id).filter(Boolean);
-  if (!stemIds.length) return [];
-
-  const traderByStem = {};
-  const [nominationArrays, lineItemArrays, extraCostArrays] = await Promise.all([
-    compositeQueryRows(
-      chunkIds(stemIds).map((chunk) => {
-        const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-        return {
-          soql: `
-        SELECT Id, Name, STEM__c, Buyer_Supplier_Trader__c
-        FROM Nomination__c
-        WHERE STEM__c IN (${inList}) AND Buyer_Supplier_Trader__c != null
-        ORDER BY CreatedDate ASC
-        LIMIT 5000
-      `,
-          limit: 5000,
-          softFail: true,
-        };
-      }),
-    ),
-    compositeQueryRows(
-      chunkIds(stemIds).map((chunk) => {
-        const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-        return {
-          soql: `
-        SELECT STEM__c, Total_Price__c, Cancelled__c, Quantity__c, Quantity_Delivered_Per_BDN__c,
-               Quantity_Max__c, Quantity_in_MT__c, Is_Quantity_Range__c,
-               Price_Per_Unit__c, Unit_Sell_At__c, Offer_Line_Item__r.UnitPrice
-        FROM STEM_Line_Item__c
-        WHERE STEM__c IN (${inList})
-        LIMIT 5000
-      `,
-          limit: 5000,
-          softFail: true,
-        };
-      }),
-    ),
-    compositeQueryRows(
-      chunkIds(stemIds).map((chunk) => {
-        const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-        return {
-          soql: `
-        SELECT STEM__c, Line_Total__c, Cancelled__c, Quantity__c, Quantity_Delivered_Per_BDN__c,
-               Quantity_in_MT__c, Quantity_Range_Max__c, Is_Quantity_Range__c, Unit_Price__c
-        FROM STEM_Extra_Cost__c
-        WHERE STEM__c IN (${inList})
-        LIMIT 5000
-      `,
-          limit: 5000,
-          softFail: true,
-        };
-      }),
-    ),
-  ]);
-
-  for (const nomination of nominationArrays.flat()) {
-    if (!nomination.STEM__c || !nomination.Buyer_Supplier_Trader__c) continue;
-    if (!traderByStem[nomination.STEM__c]) traderByStem[nomination.STEM__c] = { buyer: [], all: [] };
-    if (!traderByStem[nomination.STEM__c].all.includes(nomination.Buyer_Supplier_Trader__c)) {
-      traderByStem[nomination.STEM__c].all.push(nomination.Buyer_Supplier_Trader__c);
-    }
-    if (String(nomination.Name || '').startsWith('Confirmation to ') && !traderByStem[nomination.STEM__c].buyer.includes(nomination.Buyer_Supplier_Trader__c)) {
-      traderByStem[nomination.STEM__c].buyer.push(nomination.Buyer_Supplier_Trader__c);
-    }
-  }
-
-  const calculatedByStem = {};
-  for (const item of lineItemArrays.flat()) {
-    if (!item.STEM__c || item.Cancelled__c) continue;
-    const stem = stems.find((row) => row.Id === item.STEM__c);
-    calculatedByStem[item.STEM__c] = (calculatedByStem[item.STEM__c] || 0) + lineSellAmount(item, !!stem?.Delivery_Date__c);
-  }
-  for (const item of extraCostArrays.flat()) {
-    if (!item.STEM__c || item.Cancelled__c) continue;
-    const stem = stems.find((row) => row.Id === item.STEM__c);
-    calculatedByStem[item.STEM__c] = (calculatedByStem[item.STEM__c] || 0) + extraSellAmount(item, !!stem?.Delivery_Date__c);
-  }
-
-  return stems.filter((stem) => {
-    if (stem.Receivable_Balance__c == null) return true;
-    return !paymentCollectionBalanceIsSettled(
-      stem.Receivable_Balance__c,
-      paymentCollectionThresholdPolicy(thresholdState, stem.CurrencyIsoCode),
-    );
-  }).map((stem) => {
-    const account = stem['Account__r'] || {};
-    const traderInfo = traderByStem[stem.Id] || {};
-    const calculatedAmount = calculatedByStem[stem.Id] > 0 ? calculatedByStem[stem.Id] : incomingPaymentNumber(stem.Total_Invoice_Amount__c);
-    return {
-      id: stem.Id,
-      stemId: stem.Id,
-      stemName: formatStemName(stem),
-      keyStem: stem.KeyStem__c || null,
-      buyerName: incomingPaymentBuyerName(stem),
-      buyerGroupName: account.Group_Name__c || account.Parent?.Name || incomingPaymentBuyerName(stem),
-      buyerTrader: (traderInfo.buyer?.length ? traderInfo.buyer : traderInfo.all || []).join(', ') || null,
-      paymentTerms: stem.Payment_Term__c || null,
-      calculatedAmount,
-      receivableBalance: incomingPaymentNumber(stem.Receivable_Balance__c),
-      currency: stem.CurrencyIsoCode || null,
-      deliveryDate: stem.Delivery_Date__c || null,
-    };
-  });
-}
-
-async function incomingPaymentsListSnapshot(body, req = null, accessContext = null) {
-  const settings = body._settingsOverride || (await loadIncomingPaymentSettings());
-  const today = dateOnly(new Date());
-  const dateFrom = dateOnly(body.dateFrom || body.date_from || today);
-  const dateTo = dateOnly(body.dateTo || body.date_to || today);
-  const limit = Math.max(100, Math.min(Number(body.limit) || 5000, 10000));
-
-  const paymentDescribe = await salesforceObjectFields({
-    objectName: 'Payment__c',
-  }).catch(() => ({ fields: [] }));
-  const paymentFields = paymentDescribe.fields || [];
-  const paymentFieldNames = new Set(paymentFields.map((field) => field.name));
-  const paymentFieldByName = Object.fromEntries(paymentFields.map((field) => [field.name, field]));
-  if (!paymentFieldNames.size)
-    return {
-      rows: [],
-      availableBalances: [],
-      summary: {},
-      settings,
-      schemaWarnings: ['Payment__c is not queryable.'],
-    };
-
-  const dateField = firstAvailableField(paymentFieldNames, ['Date__c', 'Payment_Date__c', 'Received_Date__c', 'Paid_Date__c', 'CreatedDate']);
-  const amountField = firstAvailableField(paymentFieldNames, ['Amount__c', 'Payment_Amount__c', 'Paid_Amount__c', 'Received_Amount__c', 'Total_Amount__c', 'Amount_Paid__c', 'Payment_Value__c', 'Actual_Amount__c']);
-  const referenceFields = incomingPaymentReferenceFields(paymentFields);
-  const statusFields = selectedFields(paymentFieldNames, ['Status__c', 'Payment_Status__c']);
-  const typeFields = selectedFields(paymentFieldNames, ['Type__c', 'Payment_Type__c']);
-  const supplierInvoiceLookupFields = incomingPaymentSupplierInvoiceFields(paymentFields);
-  const directionFields = incomingPaymentDirectionFields(paymentFields);
-  const paymentSelectFields = ['Id', ...selectedFields(paymentFieldNames, ['Name', 'RecordTypeId', 'CreatedDate', 'LastModifiedDate', 'STEM__c', 'CurrencyIsoCode', 'Currency__c']), paymentFieldNames.has('RecordTypeId') ? 'RecordType.Name' : null, paymentFieldNames.has('RecordTypeId') ? 'RecordType.DeveloperName' : null, ...supplierInvoiceLookupFields, dateField, amountField, ...referenceFields, ...statusFields, ...typeFields, ...directionFields].filter(Boolean);
-
-  const filterDateField = paymentFieldNames.has('CreatedDate') ? 'CreatedDate' : dateField;
-  const filterDateType = paymentFieldByName[filterDateField]?.type || null;
-  const filterDateValue = (isoDate, endOfDay = false) => (filterDateField === 'CreatedDate' ? soqlHongKongDateTimeValue(isoDate, endOfDay) : soqlDateValue(filterDateField, filterDateType, isoDate, endOfDay));
-  const whereParts = [];
-  if (filterDateField && dateFrom) whereParts.push(`${filterDateField} >= ${filterDateValue(dateFrom, false)}`);
-  if (filterDateField && dateTo) whereParts.push(`${filterDateField} <= ${filterDateValue(dateTo, true)}`);
-  const orderBy = filterDateField ? `${filterDateField} DESC NULLS LAST${filterDateField !== 'CreatedDate' ? ', CreatedDate DESC' : ''}` : 'CreatedDate DESC';
-  const payments = await queryRows(
-    `
-    SELECT ${[...new Set(paymentSelectFields)].join(', ')}
-    FROM Payment__c
-    ${whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : ''}
-    ORDER BY ${orderBy}
-    LIMIT ${limit}
-  `,
-    { limit, softFail: true },
-  );
-
-  const eligiblePayments = payments.filter((payment) => !incomingPaymentIsReceivableRemittance(payment, [...referenceFields, ...directionFields, ...typeFields, ...statusFields]));
-  const directStemIds = eligiblePayments.map((payment) => payment.STEM__c).filter(Boolean);
-  const supplierInvoiceIds = eligiblePayments.map((payment) => incomingPaymentSupplierInvoiceId(payment, supplierInvoiceLookupFields)).filter(Boolean);
-  const supplierInvoiceDescribe = supplierInvoiceIds.length ? await salesforceObjectFields({ objectName: 'Supplier_Invoice__c' }).catch(() => ({ fields: [] })) : { fields: [] };
-  const supplierInvoiceFields = supplierInvoiceDescribe.fields || [];
-  const supplierInvoiceFieldNames = new Set(supplierInvoiceFields.map((field) => field.name));
-  const supplierInvoiceFieldByName = Object.fromEntries(supplierInvoiceFields.map((field) => [field.name, field]));
-  const supplierInvoicePayableField = firstAvailableField(supplierInvoiceFieldNames, ['Payable_Balance__c', 'Balance__c', 'Actual_Balance__c', 'Outstanding_Balance__c']);
-  const supplierInvoiceAmountField = firstAvailableField(supplierInvoiceFieldNames, ['Invoice_Amount__c', 'Calculated_Amount__c', 'Amount__c', 'Total_Amount__c']);
-  const supplierInvoiceSupplierFields = selectedFields(supplierInvoiceFieldNames, ['Supplier__c', 'Expected_Supplier__c', 'Substitute_Supplier__c']);
-  const supplierInvoiceSupplierRelationships = supplierInvoiceSupplierFields.map((field) => supplierInvoiceFieldByName[field]?.relationshipName).filter(Boolean);
-  const supplierInvoiceMap = {};
-  if (supplierInvoiceIds.length && supplierInvoiceFieldNames.size) {
-    const supplierInvoiceSelectFields = ['Id', 'Name', ...selectedFields(supplierInvoiceFieldNames, ['STEM__c', 'Supplier_Name__c']), supplierInvoiceAmountField, supplierInvoicePayableField, ...supplierInvoiceSupplierFields, ...supplierInvoiceSupplierRelationships.map((relationship) => `${relationship}.Name`)].filter(Boolean);
-    const invoiceChunks = await compositeQueryRows(
-      chunkIds([...new Set(supplierInvoiceIds)]).map((chunk) => {
-        const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-        return {
-          soql: `
-        SELECT ${[...new Set(supplierInvoiceSelectFields)].join(', ')}
-        FROM Supplier_Invoice__c
-        WHERE Id IN (${inList})
-        LIMIT 5000
-      `,
-          limit: 5000,
-          softFail: true,
-        };
-      }),
-    );
-    for (const invoice of invoiceChunks.flat()) supplierInvoiceMap[invoice.Id] = invoice;
-  }
-
-  const stemIds = [
-    ...new Set([
-      ...directStemIds,
-      ...Object.values(supplierInvoiceMap)
-        .map((invoice) => invoice.STEM__c)
-        .filter(Boolean),
-    ]),
-  ];
-  const stemDescribe = stemIds.length
-    ? await salesforceObjectFields({ objectName: 'stem__c' }).catch(() => ({
-        fields: [],
-      }))
-    : { fields: [] };
-  const stemFields = stemDescribe.fields || [];
-  const stemFieldNames = new Set(stemFields.map((field) => field.name));
-  const accountDescribe = stemFieldNames.has('Account__c')
-    ? await salesforceObjectFields({ objectName: 'Account' }).catch(() => ({
-        fields: [],
-      }))
-    : { fields: [] };
-  const accountFieldNames = new Set((accountDescribe.fields || []).map((field) => field.name));
-  const interofficeCondition = await interofficeStemAccessCondition(accessContext, stemFieldNames, accountFieldNames);
-  const stemSelectFields = ['Id', 'Name', ...selectedFields(stemFieldNames, ['KeyStem__c', 'Buyer_Name__c', 'Buyer__c', 'Account__c', 'Total_Invoice_Amount__c', 'Total_Invoiced_Amount_From_Suppliers__c', 'Receivable_Balance__c', 'Payable_Balance__c', 'Total_Costs__c', 'Total_Cost__c', 'Total_Cost_Amount__c', 'Payment_Date__c', 'Payment_Term__c', 'Invoice_Due_Date__c', 'Buyer_Pay_Term_Date__c', 'Due_Date__c', 'Delivery_Date__c', 'Delivery_Date_Or_Expected__c', 'Expected_Delivery_Date__c', 'CurrencyIsoCode'])];
-  if (stemFieldNames.has('Vessel__c')) stemSelectFields.push('Vessel__r.Name');
-  if (stemFieldNames.has('Port__c')) stemSelectFields.push('Port__r.Name');
-  if (stemFieldNames.has('Account__c')) {
-    stemSelectFields.push('Account__r.Name');
-    if (accountFieldNames.has('Group_Name__c')) stemSelectFields.push('Account__r.Group_Name__c');
-    if (accountFieldNames.has('ParentId')) stemSelectFields.push('Account__r.Parent.Name');
-  }
-  const stemMap = {};
-  if (stemIds.length && stemFieldNames.size) {
-    const stemChunks = await compositeQueryRows(
-      chunkIds(stemIds).map((chunk) => {
-        const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-        const stemWhere = combineWhereConditions([`Id IN (${inList})`, interofficeCondition]);
-        return {
-          soql: `
-        SELECT ${[...new Set(stemSelectFields)].join(', ')}
-        FROM stem__c
-        WHERE ${stemWhere}
-        LIMIT 5000
-      `,
-          limit: 5000,
-          softFail: true,
-        };
-      }),
-    );
-    for (const stem of stemChunks.flat()) stemMap[stem.Id] = stem;
-  }
-  let brokerCommissionGroupsByStem = {};
-  let lineItemsByStem = {};
-  let extraCostsByStem = {};
-  if (stemIds.length) {
-    const [lineItemChunks, buyerBrokerChunks, extraCostChunks] = await Promise.all([
-      compositeQueryRows(
-        chunkIds(stemIds).map((chunk) => {
-          const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-          return {
-            soql: `
-          SELECT Id, STEM__c, Cancelled__c, Quantity__c, Quantity_Delivered_Per_BDN__c,
-                 Quantity_Max__c, Quantity_in_MT__c, Is_Quantity_Range__c,
-                 Cost_Per_Unit__c, Unit_Buy_At__c, Unit_Cost__c, Total_Cost__c,
-                 Supplier_Broker__c, Suppliers_Brokers_Commission_Per_Unit__c,
-                 Buyers_Broker__c, Buyer_Broker__c, Buyers_Brokers_Commission_Per_Unit__c,
-                 Buyers_Brokers_Commission_Lumpsum__c, Commission_Cost__c, Supplier_Invoice__c,
-                 Offer_Line_Item__r.Supplier_Unit_Price__c
-          FROM STEM_Line_Item__c
-          WHERE STEM__c IN (${inList})
-          LIMIT 5000
-        `,
-            limit: 5000,
-            softFail: true,
-          };
-        }),
-      ),
-      compositeQueryRows(
-        chunkIds(stemIds).map((chunk) => {
-          const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-          return {
-            soql: `
-          SELECT Id, STEM__c, Buyer_Broker__c
-          FROM STEM_Buyer_Broker__c
-          WHERE STEM__c IN (${inList})
-          LIMIT 5000
-        `,
-            limit: 5000,
-            softFail: true,
-          };
-        }),
-      ),
-      compositeQueryRows(
-        chunkIds(stemIds).map((chunk) => {
-          const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-          return {
-            soql: `
-          SELECT Id, STEM__c, Cancelled__c, Quantity__c, Quantity_Delivered_Per_BDN__c,
-                 Quantity_in_MT__c, Quantity_Range_Max__c, Is_Quantity_Range__c,
-                 Unit_Cost__c, Line_Total_Buy__c, Supplier_Invoice__c
-          FROM STEM_Extra_Cost__c
-          WHERE STEM__c IN (${inList})
-          LIMIT 5000
-        `,
-            limit: 5000,
-            softFail: true,
-          };
-        }),
-      ),
-    ]);
-    const brokerLineItems = lineItemChunks.flat();
-    const brokerRows = buyerBrokerChunks.flat();
-    const extraCostRows = extraCostChunks.flat();
-    lineItemsByStem = brokerLineItems.reduce((acc, item) => {
-      if (!item.STEM__c) return acc;
-      if (!acc[item.STEM__c]) acc[item.STEM__c] = [];
-      acc[item.STEM__c].push(item);
-      return acc;
-    }, {});
-    extraCostsByStem = extraCostRows.reduce((acc, item) => {
-      if (!item.STEM__c) return acc;
-      if (!acc[item.STEM__c]) acc[item.STEM__c] = [];
-      acc[item.STEM__c].push(item);
-      return acc;
-    }, {});
-    const brokerAccountIds = [...new Set([...brokerLineItems.map((item) => item.Supplier_Broker__c).filter(Boolean), ...brokerLineItems.map((item) => item.Buyers_Broker__c || item.Buyer_Broker__c).filter(Boolean), ...brokerRows.map((item) => item.Buyer_Broker__c).filter(Boolean)])];
-    const accountMap = await namesByIds('Account', brokerAccountIds);
-    for (const [id, name] of Object.entries(accountMap)) accountMap[String(id).slice(0, 15)] = name;
-    brokerCommissionGroupsByStem = buildBrokerCommissionGroups({
-      stemMap,
-      lineItems: brokerLineItems,
-      buyerBrokers: brokerRows,
-      accountMap,
-    });
-  }
-
-  const availableStemKeys = new Set();
-  const availableBalancesByGroup = {};
-  const allRows = eligiblePayments
-    .map((payment) => {
-      const supplierInvoiceId = incomingPaymentSupplierInvoiceId(payment, supplierInvoiceLookupFields);
-      const supplierInvoice = supplierInvoiceId ? supplierInvoiceMap[supplierInvoiceId] || null : null;
-      const stemId = payment.STEM__c || supplierInvoice?.STEM__c || null;
-      const stem = stemId ? stemMap[stemId] || null : null;
-      if (stemId && !stem) return null;
-      const amount = amountField ? incomingPaymentNumber(payment[amountField]) : null;
-      const brokerCommissionMatch = stem?.Id ? findBrokerCommissionPaymentMatch(payment, amount, brokerCommissionGroupsByStem[stem.Id] || [], [...referenceFields, ...directionFields, ...typeFields, ...statusFields]) : null;
-      const bankCharge = incomingPaymentLooksBankCharge(payment, {
-        referenceFields,
-        directionFields,
-        typeFields,
-        statusFields,
-      });
-      const payableCalculation = stem?.Id
-        ? incomingPaymentLooksStemPayableCalculation(payment, {
-            amount,
-            payableAmounts: stemPayableAmountCandidates({
-              stem,
-              lineItems: lineItemsByStem[stem.Id] || [],
-              extraCosts: extraCostsByStem[stem.Id] || [],
-            }),
-            referenceFields,
-            directionFields,
-            typeFields,
-            statusFields,
-            allowBlankSignal: !stem.Delivery_Date__c,
-          })
-        : false;
-      const type = brokerCommissionMatch
-        ? 'Broker Commission'
-        : bankCharge
-          ? 'Bank Charge'
-          : payableCalculation
-            ? 'Supplier Payment'
-            : incomingPaymentTypeFromContext(payment, {
-                amount,
-                stem,
-                supplierInvoice,
-                supplierInvoiceFields: supplierInvoiceLookupFields,
-                directionFields,
-                typeFields,
-                statusFields,
-              });
-      let incomingAmount = amount;
-      if (type.startsWith('Supplier')) {
-        incomingAmount = type === 'Supplier Refund' && amount != null ? Math.abs(amount) : amount;
-      }
-      const paymentDate = dateField ? payment[dateField] || null : payment.CreatedDate || null;
-      const buyerInvoiceDueDate = type === 'Buyer Payment' && stem ? calculatedBuyerPayTermDate(stem) || stem.Invoice_Due_Date__c || stem.Due_Date__c || stem.Buyer_Pay_Term_Date__c || null : null;
-      const delayDays = type === 'Buyer Payment' && buyerInvoiceDueDate && paymentDate ? daysBetween(buyerInvoiceDueDate, dateOnly(paymentDate)) : null;
-      const status = incomingPaymentStatus({
-        type,
-        amount,
-        stem,
-        supplierInvoice,
-        thresholdPolicy: paymentCollectionThresholdPolicy(settings, stem?.CurrencyIsoCode || payment.CurrencyIsoCode || payment.Currency__c),
-      });
-      const receivable = incomingPaymentNumber(stem?.Receivable_Balance__c);
-      const buyerName = incomingPaymentBuyerName(stem);
-      const buyerGroupName = incomingPaymentBuyerGroup(stem);
-      const partyName = type.startsWith('Supplier') ? supplierInvoicePartyName(supplierInvoice, supplierInvoiceSupplierRelationships) : buyerName;
-      if (stem?.Id && receivable != null && receivable < 0) {
-        const key = stem.Id;
-        if (!availableStemKeys.has(key)) {
-          availableStemKeys.add(key);
-          const groupKey = buyerGroupName || buyerName || 'Ungrouped buyer';
-          if (!availableBalancesByGroup[groupKey]) {
-            availableBalancesByGroup[groupKey] = {
-              buyerGroupName: groupKey,
-              buyerNames: new Set(),
-              totalAvailableBalance: 0,
-              stems: [],
-            };
-          }
-          if (buyerName) availableBalancesByGroup[groupKey].buyerNames.add(buyerName);
-          availableBalancesByGroup[groupKey].totalAvailableBalance += Math.abs(receivable);
-          availableBalancesByGroup[groupKey].stems.push({
-            stemId: stem.Id,
-            stemName: formatStemName(stem),
-            buyerName,
-            availableBalance: Math.abs(receivable),
-            receivableBalance: receivable,
-            paymentDate: stem.Payment_Date__c || payment[dateField] || payment.CreatedDate || null,
-          });
-        }
-      }
-      return {
-        id: payment.Id,
-        paymentId: payment.Id,
-        paymentName: incomingPaymentDisplayName({
-          payment,
-          referenceFields,
-          stem,
-          supplierInvoice,
-          type,
-        }),
-        paymentDisplayName: incomingPaymentDisplayName({
-          payment,
-          referenceFields,
-          stem,
-          supplierInvoice,
-          type,
-        }),
-        salesforcePaymentName: payment.Name || null,
-        paymentRecordTypeName: payment.RecordType?.Name || null,
-        paymentRecordTypeDeveloperName: payment.RecordType?.DeveloperName || null,
-        paymentDate,
-        createdDate: payment.CreatedDate || null,
-        invoiceDueDate: buyerInvoiceDueDate,
-        delayDays,
-        paymentTerms: type === 'Buyer Payment' ? stem?.Payment_Term__c || null : null,
-        type,
-        isIncoming: type === 'Buyer Payment' || type === 'Supplier Refund',
-        isBankCharge: type === 'Bank Charge',
-        amount,
-        incomingAmount,
-        currency: payment.CurrencyIsoCode || payment.Currency__c || 'USD',
-        reference: incomingPaymentReference(payment, referenceFields),
-        salesforceStatus: statusFields.map((field) => payment[field]).find(Boolean) || null,
-        salesforceType: typeFields.map((field) => payment[field]).find(Boolean) || null,
-        stemId,
-        stemName: stem ? formatStemName(stem) : null,
-        keyStem: stem?.KeyStem__c || null,
-        buyerName,
-        buyerGroupName,
-        supplierInvoiceId: supplierInvoice?.Id || supplierInvoiceId || null,
-        supplierInvoiceName: supplierInvoice?.Name || null,
-        supplierName: supplierInvoicePartyName(supplierInvoice, supplierInvoiceSupplierRelationships),
-        partyName,
-        invoiceAmount: incomingPaymentNumber(stem?.Total_Invoice_Amount__c),
-        receivableBalance: receivable,
-        payableBalance: supplierInvoicePayableField ? incomingPaymentNumber(supplierInvoice?.[supplierInvoicePayableField]) : incomingPaymentNumber(stem?.Payable_Balance__c),
-        supplierInvoiceAmount: supplierInvoiceAmountField ? incomingPaymentNumber(supplierInvoice?.[supplierInvoiceAmountField]) : null,
-        status: status.label,
-        statusTone: status.tone,
-        paymentObjectAmountField: amountField,
-        paymentObjectSupplierInvoiceFields: supplierInvoiceLookupFields,
-        brokerCommissionMatch,
-      };
-    })
-    .filter(Boolean);
-  const rows = allRows.filter((row) => row.type !== 'Supplier Payment' && row.type !== 'Bank Charge' && row.type !== 'Broker Commission').map((row) => ({ ...row, bankCharges: [] }));
-  const ungroupedBankCharges = [];
-  for (const charge of allRows.filter((row) => row.type === 'Bank Charge')) {
-    const chargeDate = dateOnly(charge.paymentDate);
-    const candidates = rows
-      .filter((row) => row.type === 'Buyer Payment' && row.stemId && row.stemId === charge.stemId)
-      .sort((a, b) => {
-        const aSameDate = dateOnly(a.paymentDate) === chargeDate ? 1 : 0;
-        const bSameDate = dateOnly(b.paymentDate) === chargeDate ? 1 : 0;
-        if (aSameDate !== bSameDate) return bSameDate - aSameDate;
-        return Math.abs(Number(b.amount || 0)) - Math.abs(Number(a.amount || 0));
-      });
-    const target = candidates[0] || null;
-    if (target) {
-      attachBankChargeToPayment(target, charge);
-    } else {
-      ungroupedBankCharges.push(charge);
-    }
-  }
-  const implicitBankChargeIds = new Set();
-  for (const charge of rows) {
-    const target = incomingPaymentBankChargeTarget(charge, rows);
-    if (!target) continue;
-    attachBankChargeToPayment(target, charge);
-    implicitBankChargeIds.add(charge.id || charge.paymentId);
-  }
-  const displayRows = rows.filter((row) => !implicitBankChargeIds.has(row.id || row.paymentId));
-  displayRows.push(...ungroupedBankCharges);
-
-  const interestNotificationMap = body._omitIncomingLiveState ? {} : await loadIncomingPaymentInterestNotificationMap(displayRows.map((row) => row.paymentId || row.id));
-  const rowsWithInterestNotifications = displayRows.map((row) => {
-    const notification = interestNotificationMap[row.paymentId || row.id] || null;
-    return {
-      ...row,
-      interestInvoiceNotification: notification,
-      interestInvoiceNotificationSent: notification?.deliveryStatus === 'sent',
-      interestInvoiceNotificationPending: ['sending', 'uncertain'].includes(notification?.deliveryStatus),
-    };
-  });
-
-  const includedIncomingRows = rowsWithInterestNotifications.filter((row) => row.isIncoming);
-  const buyerCiaInvoices = await incomingBuyerCiaInvoices({
-    thresholdState: settings,
-    accessContext,
-  });
-  const availableBalances = Object.values(availableBalancesByGroup)
-    .map((group) => ({
-      buyerGroupName: group.buyerGroupName,
-      buyerNames: [...group.buyerNames].sort((a, b) => a.localeCompare(b)),
-      totalAvailableBalance: group.totalAvailableBalance,
-      stems: group.stems.sort((a, b) => String(b.paymentDate || '').localeCompare(String(a.paymentDate || ''))),
-    }))
-    .sort((a, b) => b.totalAvailableBalance - a.totalAvailableBalance);
-
-  return {
-    rows: rowsWithInterestNotifications,
-    buyerCiaInvoices,
-    availableBalances,
-    settings,
-    dateFrom,
-    dateTo,
-    schema: {
-      paymentDateField: dateField,
-      paymentFilterDateField: filterDateField,
-      paymentAmountField: amountField,
-      paymentReferenceFields: referenceFields,
-      paymentSupplierInvoiceFields: supplierInvoiceLookupFields,
-      supplierInvoicePayableField,
-      supplierInvoiceAmountField,
-    },
-    schemaWarnings: [amountField ? null : 'No amount-like field was found on Payment__c.', dateField ? null : 'No date-like field was found on Payment__c.', 'Supplier-invoice-linked negative payments are classified as supplier refunds. Confirm if Salesforce uses the opposite sign.'].filter(Boolean),
-    summary: {
-      totalRows: rowsWithInterestNotifications.length,
-      incomingRows: includedIncomingRows.length,
-      totalIncomingAmount: includedIncomingRows.reduce((sum, row) => sum + Math.abs(Number(row.incomingAmount || 0)), 0),
-      buyerPaymentTotal: rowsWithInterestNotifications.filter((row) => row.type === 'Buyer Payment').reduce((sum, row) => sum + Math.abs(Number(row.incomingAmount || 0)), 0),
-      supplierRefundTotal: rowsWithInterestNotifications.filter((row) => row.type === 'Supplier Refund').reduce((sum, row) => sum + Math.abs(Number(row.incomingAmount || 0)), 0),
-      unmatchedCount: rowsWithInterestNotifications.filter((row) => row.type === 'Unmatched' || row.status === 'Needs review').length,
-      fullyPaidCount: rowsWithInterestNotifications.filter((row) => row.status === 'Fully paid').length,
-      availableBalanceTotal: availableBalances.reduce((sum, group) => sum + Number(group.totalAvailableBalance || 0), 0),
-      availableBalanceCount: availableBalances.reduce((sum, group) => sum + (group.stems?.length || 0), 0),
-    },
-  };
-}
-
-async function incomingPaymentsList(body, req = null, accessContext = null) {
-  const settings = await loadIncomingPaymentSettings();
-  const today = dateOnly(new Date());
-  const dateFrom = dateOnly(body.dateFrom || body.date_from || today);
-  const dateTo = dateOnly(body.dateTo || body.date_to || today);
-  const limit = Math.max(100, Math.min(Number(body.limit) || 5000, 10000));
-  const { value: snapshot } = await cachedSalesforceValue({
-    namespace: 'incoming-payments',
-    payload: { dateFrom, dateTo, limit, thresholds: paymentCollectionThresholdCacheKey(settings) },
-    ttlSeconds: 60,
-    tags: ['salesforce:incoming-payments', 'salesforce:stem', 'salesforce:account', 'salesforce:object:Payment__c', 'salesforce:object:Supplier_Invoice__c'],
-    body,
-    req,
-    accessContext,
-    loader: () =>
-      incomingPaymentsListSnapshot(
-        {
-          ...body,
-          dateFrom,
-          dateTo,
-          limit,
-          _settingsOverride: settings,
-          _omitIncomingLiveState: true,
-        },
-        req,
-        accessContext,
-      ),
-  });
-  const notificationMap = await loadIncomingPaymentInterestNotificationMap((snapshot.rows || []).map((row) => row.paymentId || row.id));
-  const collectionMap = await loadBuyerInvoiceCollectionMap((snapshot.rows || []).map((row) => row.stemId).filter(Boolean));
-  return {
-    ...snapshot,
-    settings,
-    rows: (snapshot.rows || []).map((row) => {
-      const notification = notificationMap[row.paymentId || row.id] || null;
-      return {
-        ...row,
-        collection: collectionMap[row.stemId]?.item || null,
-        collectionEvents: collectionMap[row.stemId]?.events || [],
-        interestInvoiceNotification: notification,
-        interestInvoiceNotificationSent: notification?.deliveryStatus === 'sent',
-        interestInvoiceNotificationPending: ['sending', 'uncertain'].includes(notification?.deliveryStatus),
-      };
-    }),
-  };
-}
-
-async function incomingPaymentAllocationConfirm(body, req) {
-  await requireAdministrator(req);
-  const buyerGroupName = String(body.buyerGroupName || body.buyer_group_name || '').trim();
-  if (!buyerGroupName) throw appError('Buyer group is required.', 400);
-  throw appError('Salesforce payment allocation write-back is not enabled yet. Confirm the Salesforce object and fields for applying available buyer balances to another STEM.', 501);
-}
-
-const INCOMING_PAYMENT_INTEREST_NOTIFICATION_FIELDS = ['id', 'payment_id', 'payment_name', 'stem_id', 'stem_name', 'buyer_name', 'buyer_group_name', 'received_date', 'payment_created_date', 'delay_days', 'amount', 'currency', 'receivable_balance', 'recipient_email', 'email_subject', 'email_message_id', 'email_provider', 'actor_user_id', 'actor_email', 'actor_name', 'metadata', 'delivery_status', 'last_attempt_at', 'last_error', 'sender_mailbox_id', 'sender_mailbox_snapshot', 'sent_at', 'created_at', 'updated_at'].join(',');
-
-function incomingPaymentDbNumber(value) {
-  const number = Number(value);
-  return Number.isFinite(number) ? Number(number.toFixed(2)) : null;
-}
-
-function incomingPaymentDbDate(value) {
-  if (!value) return null;
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? null : date.toISOString();
-}
-
-function serializeIncomingPaymentInterestNotification(row = null) {
-  if (!row) return null;
-  return {
-    id: row.id,
-    paymentId: row.payment_id,
-    paymentName: row.payment_name,
-    stemId: row.stem_id,
-    stemName: row.stem_name,
-    buyerName: row.buyer_name,
-    buyerGroupName: row.buyer_group_name,
-    receivedDate: row.received_date,
-    paymentCreatedDate: row.payment_created_date,
-    delayDays: row.delay_days,
-    amount: incomingPaymentNumber(row.amount),
-    currency: row.currency,
-    receivableBalance: incomingPaymentNumber(row.receivable_balance),
-    recipientEmail: row.recipient_email,
-    emailSubject: row.email_subject,
-    emailMessageId: row.email_message_id,
-    emailProvider: row.email_provider,
-    actorUserId: row.actor_user_id,
-    actorEmail: row.actor_email,
-    actorName: row.actor_name,
-    metadata: row.metadata || {},
-    deliveryStatus: row.delivery_status || 'sent',
-    lastAttemptAt: row.last_attempt_at || null,
-    lastError: row.last_error || null,
-    senderMailboxId: row.sender_mailbox_id || null,
-    senderMailboxSnapshot: row.sender_mailbox_snapshot || null,
-    sentAt: row.sent_at,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at || row.created_at,
-  };
-}
-
-function incomingPaymentInterestTableUnavailable(error) {
-  return error?.code === '42P01' || /incoming_payment_interest_notifications/i.test(error?.message || '');
-}
-
-async function loadIncomingPaymentInterestNotificationMap(paymentIds = []) {
-  const client = safeSupabaseAdminClient();
-  if (!client) return {};
-  const ids = [...new Set(paymentIds.map((id) => String(id || '').trim()).filter(Boolean))];
-  if (!ids.length) return {};
-  const notifications = {};
-  for (const chunk of chunkIds(ids, 500)) {
-    const { data, error } = await client.from('incoming_payment_interest_notifications').select(INCOMING_PAYMENT_INTEREST_NOTIFICATION_FIELDS).in('payment_id', chunk);
-    if (error) {
-      if (!incomingPaymentInterestTableUnavailable(error)) {
-        console.error('Failed to load incoming payment interest notifications', error.message);
-      }
-      return {};
-    }
-    for (const row of data || []) notifications[row.payment_id] = serializeIncomingPaymentInterestNotification(row);
-  }
-  return notifications;
-}
-
-async function fetchIncomingPaymentInterestNotification(client, paymentId) {
-  const { data, error } = await client.from('incoming_payment_interest_notifications').select(INCOMING_PAYMENT_INTEREST_NOTIFICATION_FIELDS).eq('payment_id', paymentId).maybeSingle();
-  if (error) {
-    if (incomingPaymentInterestTableUnavailable(error)) {
-      throw appError('Missing Supabase table incoming_payment_interest_notifications. Run the latest Supabase migration before requesting late payment interest invoices.', 500);
-    }
-    throw error;
-  }
-  return serializeIncomingPaymentInterestNotification(data);
-}
-
-function incomingPaymentInterestRateField(accountFields = []) {
-  const allowedTypes = new Set(['double', 'percent', 'currency', 'int', 'string', 'picklist']);
-  const matches = accountFields.filter((field) => field?.name && allowedTypes.has(field.type) && fieldMatchesAny(field, ['latepaymentinterestrate', 'latepaymentinterestratec', 'paymentinterestrate', 'paymentinterestratec', 'overdueinterestrate', 'overdueinterestratec', 'interestrate', 'interestratec', 'financechargerate', 'financechargeratec'], ['latepaymentinterest', 'overdueinterest', 'interestrate', 'financecharge']));
-  return matches[0] || null;
-}
-
-function parseIncomingPaymentInterestRate(value) {
-  if (value == null || value === '') return null;
-  const match = String(value)
-    .replace(/,/g, '')
-    .match(/-?\d+(\.\d+)?/);
-  if (!match) return null;
-  const number = Number(match[0]);
-  if (!Number.isFinite(number) || number < 0) return null;
-  return Math.abs(number) > 1 ? number / 100 : number;
-}
-
-function incomingPaymentInterestRateLabel(rateDecimal) {
-  if (rateDecimal == null) return '-';
-  return `${(Number(rateDecimal) * 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}% per month`;
-}
-
-function interestFormulaText(balance, rateDecimal, days) {
-  return `${money(balance)} x ${incomingPaymentInterestRateLabel(rateDecimal)} x ${days} / 30`;
-}
-
-async function incomingPaymentInterestCalculation(body = {}, accessContext = null) {
-  const stemId = String(body.stemId || body.stem_id || '').trim();
-  if (!isSalesforceId(stemId)) throw appError('Valid stemId is required for late payment interest calculation.', 400);
-  await requireInterofficeStemAccess(stemId, accessContext);
-
-  const [stemDescribe, paymentDescribe] = await Promise.all([
-    salesforceObjectFields({ objectName: 'stem__c' }).catch(() => ({
-      fields: [],
-    })),
-    salesforceObjectFields({ objectName: 'Payment__c' }).catch(() => ({
-      fields: [],
-    })),
-  ]);
-  const stemFields = stemDescribe.fields || [];
-  const stemFieldNames = new Set(stemFields.map((field) => field.name));
-  const paymentFields = paymentDescribe.fields || [];
-  const paymentFieldNames = new Set(paymentFields.map((field) => field.name));
-  if (!paymentFieldNames.size) throw appError('Payment__c is not queryable, so interest cannot be calculated.', 500);
-
-  const accountDescribe = stemFieldNames.has('Account__c')
-    ? await salesforceObjectFields({ objectName: 'Account' }).catch(() => ({
-        fields: [],
-      }))
-    : { fields: [] };
-  const accountFields = accountDescribe.fields || [];
-  const accountFieldNames = new Set(accountFields.map((field) => field.name));
-  const interestField = incomingPaymentInterestRateField(accountFields);
-
-  const stemSelectFields = ['Id', 'Name', ...selectedFields(stemFieldNames, ['KeyStem__c', 'Buyer_Name__c', 'Buyer__c', 'Account__c', 'Total_Invoice_Amount__c', 'Receivable_Balance__c', 'Payment_Term__c', 'Invoice_Due_Date__c', 'Buyer_Pay_Term_Date__c', 'Due_Date__c', 'Delivery_Date__c', 'Delivery_Date_Or_Expected__c', 'Expected_Delivery_Date__c'])];
-  if (stemFieldNames.has('Vessel__c')) stemSelectFields.push('Vessel__r.Name');
-  if (stemFieldNames.has('Port__c')) stemSelectFields.push('Port__r.Name');
-  if (stemFieldNames.has('Account__c')) {
-    stemSelectFields.push('Account__r.Name');
-    if (accountFieldNames.has('Group_Name__c')) stemSelectFields.push('Account__r.Group_Name__c');
-    if (accountFieldNames.has('ParentId')) stemSelectFields.push('Account__r.Parent.Name');
-    if (interestField?.name) stemSelectFields.push(`Account__r.${interestField.name}`);
-  }
-
-  const stemRows = await queryRows(
-    `
-    SELECT ${[...new Set(stemSelectFields)].join(', ')}
-    FROM stem__c
-    WHERE Id = '${escapeSoql(stemId)}'
-    LIMIT 1
-  `,
-    { limit: 1, softFail: true },
-  );
-  const stem = stemRows[0];
-  if (!stem) throw appError('STEM was not found in Salesforce.', 404);
-
-  const dateField = firstAvailableField(paymentFieldNames, ['Date__c', 'Payment_Date__c', 'Received_Date__c', 'Paid_Date__c', 'CreatedDate']);
-  const amountField = firstAvailableField(paymentFieldNames, ['Amount__c', 'Payment_Amount__c', 'Paid_Amount__c', 'Received_Amount__c', 'Total_Amount__c', 'Amount_Paid__c', 'Payment_Value__c', 'Actual_Amount__c']);
-  if (!dateField || !amountField) throw appError('Payment date or amount field was not found on Payment__c.', 500);
-
-  const referenceFields = incomingPaymentReferenceFields(paymentFields);
-  const statusFields = selectedFields(paymentFieldNames, ['Status__c', 'Payment_Status__c']);
-  const typeFields = selectedFields(paymentFieldNames, ['Type__c', 'Payment_Type__c']);
-  const directionFields = incomingPaymentDirectionFields(paymentFields);
-  const supplierInvoiceLookupFields = incomingPaymentSupplierInvoiceFields(paymentFields);
-  const paymentSelectFields = ['Id', ...selectedFields(paymentFieldNames, ['Name', 'RecordTypeId', 'CreatedDate', 'LastModifiedDate', 'STEM__c', 'CurrencyIsoCode', 'Currency__c']), paymentFieldNames.has('RecordTypeId') ? 'RecordType.Name' : null, paymentFieldNames.has('RecordTypeId') ? 'RecordType.DeveloperName' : null, ...supplierInvoiceLookupFields, dateField, amountField, ...referenceFields, ...statusFields, ...typeFields, ...directionFields].filter(Boolean);
-
-  const [lineItems, buyerBrokers, payments] = await Promise.all([
-    queryRows(
-      `
-      SELECT Id, STEM__c, Cancelled__c, Quantity__c, Quantity_Delivered_Per_BDN__c,
-             Quantity_Max__c, Quantity_in_MT__c, Is_Quantity_Range__c,
-             Supplier_Broker__c, Suppliers_Brokers_Commission_Per_Unit__c,
-             Buyers_Broker__c, Buyer_Broker__c, Buyers_Brokers_Commission_Per_Unit__c,
-             Buyers_Brokers_Commission_Lumpsum__c, Commission_Cost__c
-      FROM STEM_Line_Item__c
-      WHERE STEM__c = '${escapeSoql(stemId)}'
-      LIMIT 5000
-    `,
-      { limit: 5000, softFail: true },
-    ),
-    queryRows(
-      `
-      SELECT Id, STEM__c, Buyer_Broker__c
-      FROM STEM_Buyer_Broker__c
-      WHERE STEM__c = '${escapeSoql(stemId)}'
-      LIMIT 5000
-    `,
-      { limit: 5000, softFail: true },
-    ),
-    queryRows(
-      `
-      SELECT ${[...new Set(paymentSelectFields)].join(', ')}
-      FROM Payment__c
-      WHERE STEM__c = '${escapeSoql(stemId)}'
-      ORDER BY ${dateField} ASC NULLS LAST, CreatedDate ASC
-      LIMIT 5000
-    `,
-      { limit: 5000, softFail: true },
-    ),
-  ]);
-
-  const brokerAccountIds = [...new Set([...lineItems.map((item) => item.Supplier_Broker__c).filter(Boolean), ...lineItems.map((item) => item.Buyers_Broker__c || item.Buyer_Broker__c).filter(Boolean), ...buyerBrokers.map((item) => item.Buyer_Broker__c).filter(Boolean)])];
-  const brokerAccountMap = await namesByIds('Account', brokerAccountIds);
-  for (const [id, name] of Object.entries(brokerAccountMap)) brokerAccountMap[String(id).slice(0, 15)] = name;
-  const brokerGroups =
-    buildBrokerCommissionGroups({
-      stemMap: { [stem.Id]: stem },
-      lineItems,
-      buyerBrokers,
-      accountMap: brokerAccountMap,
-    })[stem.Id] || [];
-
-  const buyerPayments = payments
-    .filter((payment) => !incomingPaymentIsReceivableRemittance(payment, [...referenceFields, ...directionFields, ...typeFields, ...statusFields]))
-    .map((payment) => {
-      const amount = incomingPaymentNumber(payment[amountField]);
-      const paymentDate = payment[dateField] || payment.CreatedDate || null;
-      const brokerCommissionMatch = findBrokerCommissionPaymentMatch(payment, amount, brokerGroups, [...referenceFields, ...directionFields, ...typeFields, ...statusFields]);
-      const type = brokerCommissionMatch
-        ? 'Broker Commission'
-        : incomingPaymentLooksBankCharge(payment, {
-              referenceFields,
-              directionFields,
-              typeFields,
-              statusFields,
-            })
-          ? 'Bank Charge'
-          : incomingPaymentTypeFromContext(payment, {
-              amount,
-              stem,
-              supplierInvoice: null,
-              supplierInvoiceFields: supplierInvoiceLookupFields,
-              directionFields,
-              typeFields,
-              statusFields,
-            });
-      return {
-        id: payment.Id,
-        name: incomingPaymentDisplayName({
-          payment,
-          referenceFields,
-          stem,
-          supplierInvoice: null,
-          type,
-        }),
-        amount,
-        paymentDate,
-        dateOnly: dateOnly(paymentDate),
-        type,
-      };
-    })
-    .filter((payment) => payment.type === 'Buyer Payment' && payment.amount != null && payment.amount > 0 && payment.dateOnly)
-    .sort((a, b) => String(a.dateOnly).localeCompare(String(b.dateOnly)) || String(a.id).localeCompare(String(b.id)));
-
-  const rawDueDate = calculatedBuyerPayTermDate(stem) || stem.Invoice_Due_Date__c || stem.Due_Date__c || stem.Buyer_Pay_Term_Date__c || null;
-  const dueDate = dateOnly(rawDueDate);
-  if (!dueDate) throw appError('Buyer invoice due date is missing, so late payment interest cannot be calculated.', 400);
-
-  const rawRate = interestField?.name ? stem['Account__r']?.[interestField.name] : null;
-  const monthlyRate = parseIncomingPaymentInterestRate(rawRate) ?? 0.02;
-  const rateWarning = rawRate == null || rawRate === '' ? 'Buyer account interest rate was not found; defaulted to 2.00% per month.' : null;
-  const invoiceAmount = incomingPaymentNumber(stem.Total_Invoice_Amount__c) ?? incomingPaymentNumber(body.invoiceAmount) ?? buyerPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0) + Math.max(0, Number(body.receivableBalance || 0));
-  if (!invoiceAmount || invoiceAmount <= 0) throw appError('Buyer invoice amount is missing, so late payment interest cannot be calculated.', 400);
-
-  const today = dateOnly(new Date());
-  let balance = invoiceAmount;
-  let lastDate = dueDate;
-  const segments = [];
-  const paymentSchedule = [];
-  for (const payment of buyerPayments) {
-    const paymentAmount = Math.min(Number(payment.amount || 0), Math.max(0, balance));
-    if (payment.dateOnly <= dueDate) {
-      balance = Math.max(0, balance - paymentAmount);
-      paymentSchedule.push({
-        ...payment,
-        balanceAfter: balance,
-        note: 'Paid on/before due date',
-      });
-      continue;
-    }
-    if (balance > 0 && payment.dateOnly > lastDate) {
-      const days = Math.max(0, daysBetween(lastDate, payment.dateOnly));
-      if (days > 0) {
-        const interest = balance * monthlyRate * (days / 30);
-        segments.push({
-          fromDate: lastDate,
-          toDate: payment.dateOnly,
-          balance,
-          days,
-          rateDecimal: monthlyRate,
-          interest,
-          formula: interestFormulaText(balance, monthlyRate, days),
-        });
-      }
-    }
-    balance = Math.max(0, balance - paymentAmount);
-    paymentSchedule.push({
-      ...payment,
-      balanceAfter: balance,
-      note: paymentAmount < Number(payment.amount || 0) ? 'Payment exceeds remaining balance' : '',
-    });
-    lastDate = payment.dateOnly;
-  }
-  const currentReceivable = incomingPaymentNumber(stem.Receivable_Balance__c);
-  if (currentReceivable != null && currentReceivable >= 0) balance = Math.min(balance, currentReceivable);
-  if (balance > 0 && today > lastDate) {
-    const days = Math.max(0, daysBetween(lastDate, today));
-    if (days > 0) {
-      const interest = balance * monthlyRate * (days / 30);
-      segments.push({
-        fromDate: lastDate,
-        toDate: today,
-        balance,
-        days,
-        rateDecimal: monthlyRate,
-        interest,
-        formula: interestFormulaText(balance, monthlyRate, days),
-        note: 'Current unpaid balance to request date',
-      });
-    }
-  }
-
-  const totalInterest = segments.reduce((sum, segment) => sum + Number(segment.interest || 0), 0);
-  return {
-    stem,
-    buyerName: incomingPaymentBuyerName(stem),
-    buyerGroupName: incomingPaymentBuyerGroup(stem),
-    stemName: formatStemName(stem),
-    dueDate,
-    invoiceAmount,
-    receivableBalance: currentReceivable,
-    interestRateField: interestField
-      ? {
-          name: interestField.name,
-          label: interestField.label || interestField.name,
-        }
-      : null,
-    rawInterestRate: rawRate,
-    monthlyRate,
-    rateWarning,
-    paymentSchedule,
-    segments,
-    totalInterest,
-  };
-}
-
-function incomingPaymentInterestCalculationHtml(calculation) {
-  const segmentRows = (calculation.segments || [])
-    .map(
-      (segment) => `
-    <tr>
-      <td style="border-bottom:1px solid #e5e7eb;padding:7px 8px;white-space:nowrap">${prettyDate(segment.fromDate)} to ${prettyDate(segment.toDate)}</td>
-      <td style="border-bottom:1px solid #e5e7eb;padding:7px 8px;text-align:right;white-space:nowrap">${money(segment.balance)}</td>
-      <td style="border-bottom:1px solid #e5e7eb;padding:7px 8px;text-align:right;white-space:nowrap">${segment.days}</td>
-      <td style="border-bottom:1px solid #e5e7eb;padding:7px 8px">${escapeHtml(segment.formula)}</td>
-      <td style="border-bottom:1px solid #e5e7eb;padding:7px 8px;text-align:right;font-weight:700;white-space:nowrap">${money(segment.interest)}</td>
-    </tr>`,
-    )
-    .join('');
-  const paymentRows = (calculation.paymentSchedule || [])
-    .map(
-      (payment) => `
-    <tr>
-      <td style="border-bottom:1px solid #e5e7eb;padding:7px 8px;white-space:nowrap">${prettyDate(payment.paymentDate)}</td>
-      <td style="border-bottom:1px solid #e5e7eb;padding:7px 8px">${escapeHtml(payment.name || payment.id || '-')}</td>
-      <td style="border-bottom:1px solid #e5e7eb;padding:7px 8px;text-align:right;white-space:nowrap">${money(payment.amount)}</td>
-      <td style="border-bottom:1px solid #e5e7eb;padding:7px 8px;text-align:right;white-space:nowrap">${money(payment.balanceAfter)}</td>
-    </tr>`,
-    )
-    .join('');
-  return `
-    <div style="margin-top:16px">
-      <h3 style="margin:0 0 8px;font-size:15px">Late Payment Interest Calculation</h3>
-      ${calculation.rateWarning ? `<p style="margin:0 0 8px;color:#92400e;font-weight:600">${escapeHtml(calculation.rateWarning)}</p>` : ''}
-      <p style="margin:0 0 8px;color:#667085">Formula: Outstanding Balance x Monthly Interest Rate x Overdue Days / 30.</p>
-      <table style="border-collapse:collapse;width:100%;max-width:860px;font-size:12px;margin-bottom:12px">
-        <tbody>
-          <tr><th style="text-align:left;color:#667085;padding:5px 8px;width:210px">Buyer invoice amount</th><td style="padding:5px 8px;font-weight:700">${money(calculation.invoiceAmount)}</td></tr>
-          <tr><th style="text-align:left;color:#667085;padding:5px 8px">Buyer invoice due date</th><td style="padding:5px 8px">${prettyDate(calculation.dueDate)}</td></tr>
-          <tr><th style="text-align:left;color:#667085;padding:5px 8px">Account interest rate</th><td style="padding:5px 8px">${incomingPaymentInterestRateLabel(calculation.monthlyRate)}${calculation.interestRateField ? ` (${escapeHtml(calculation.interestRateField.label)})` : ''}</td></tr>
-          <tr><th style="text-align:left;color:#667085;padding:5px 8px">Calculated interest total</th><td style="padding:5px 8px;font-size:15px;font-weight:800;color:#1f2937">${money(calculation.totalInterest)}</td></tr>
-        </tbody>
-      </table>
-      <table style="border-collapse:collapse;width:100%;max-width:960px;font-size:12px;margin-bottom:12px">
-        <thead><tr style="background:#f8fafc;color:#667085;text-transform:uppercase;font-size:11px"><th style="text-align:left;padding:7px 8px">Period</th><th style="text-align:right;padding:7px 8px">Balance</th><th style="text-align:right;padding:7px 8px">Days</th><th style="text-align:left;padding:7px 8px">Formula</th><th style="text-align:right;padding:7px 8px">Interest</th></tr></thead>
-        <tbody>${segmentRows || '<tr><td colspan="5" style="padding:12px;text-align:center;color:#667085">No overdue interest segment was calculated.</td></tr>'}</tbody>
-      </table>
-      <table style="border-collapse:collapse;width:100%;max-width:860px;font-size:12px">
-        <thead><tr style="background:#f8fafc;color:#667085;text-transform:uppercase;font-size:11px"><th style="text-align:left;padding:7px 8px">Payment Date</th><th style="text-align:left;padding:7px 8px">Payment</th><th style="text-align:right;padding:7px 8px">Amount</th><th style="text-align:right;padding:7px 8px">Balance After</th></tr></thead>
-        <tbody>${paymentRows || '<tr><td colspan="4" style="padding:12px;text-align:center;color:#667085">No buyer payments were found for this STEM.</td></tr>'}</tbody>
-      </table>
-    </div>`;
-}
-
-function incomingPaymentInterestCalculationText(calculation) {
-  return ['Late Payment Interest Calculation', `Formula: Outstanding Balance x Monthly Interest Rate x Overdue Days / 30`, calculation.rateWarning || '', `Buyer invoice amount: ${money(calculation.invoiceAmount)}`, `Buyer invoice due date: ${prettyDate(calculation.dueDate)}`, `Account interest rate: ${incomingPaymentInterestRateLabel(calculation.monthlyRate)}${calculation.interestRateField ? ` (${calculation.interestRateField.label})` : ''}`, `Calculated interest total: ${money(calculation.totalInterest)}`, '', 'Interest segments:', ...(calculation.segments || []).map((segment) => `${prettyDate(segment.fromDate)} to ${prettyDate(segment.toDate)} | ${segment.formula} = ${money(segment.interest)}`), '', 'Buyer payment schedule:', ...(calculation.paymentSchedule || []).map((payment) => `${prettyDate(payment.paymentDate)} | ${payment.name || payment.id || '-'} | Payment ${money(payment.amount)} | Balance after ${money(payment.balanceAfter)}`)].filter((line) => line !== '').join('\n');
-}
-
-const INCOMING_PAYMENT_INTEREST_CALCULATION_TABLE_PATTERN = /\{\{\s*interestCalculationTable\s*\}\}/i;
-const INCOMING_PAYMENT_INTEREST_STEM_LINK_TOKEN_PATTERN = /\{\{\s*stemLink\s*\}\}/i;
-const DEFAULT_INCOMING_PAYMENT_INTEREST_TEMPLATE = {
-  to: [],
-  cc: [],
-  bcc: [],
-  subject: '',
-  body: '',
-};
-
-function incomingPaymentInterestTemplate(input = {}) {
-  return {
-    to: String(input.to ?? DEFAULT_INCOMING_PAYMENT_INTEREST_TEMPLATE.to),
-    cc: String(input.cc ?? DEFAULT_INCOMING_PAYMENT_INTEREST_TEMPLATE.cc),
-    bcc: String(input.bcc ?? DEFAULT_INCOMING_PAYMENT_INTEREST_TEMPLATE.bcc),
-    subject: String(input.subject || DEFAULT_INCOMING_PAYMENT_INTEREST_TEMPLATE.subject),
-    body: String(input.body || input.intro || DEFAULT_INCOMING_PAYMENT_INTEREST_TEMPLATE.body),
-  };
-}
-
-function renderIncomingPaymentInterestTemplate(value, context) {
-  return String(value || '').replace(/\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g, (match, key) => (Object.prototype.hasOwnProperty.call(context, key) ? context[key] : match));
-}
-
-function replaceIncomingPaymentInterestToken(source, pattern, replacement) {
-  return String(source || '')
-    .replace(new RegExp(`<p\\b[^>]*>\\s*${pattern.source}\\s*<\\/p>`, 'i'), replacement)
-    .replace(pattern, replacement);
-}
-
-function incomingPaymentInterestStemLinkHtml(url) {
-  return `<p style="margin:0 0 14px"><a href="${escapeHtml(url)}" style="display:inline-block;border-radius:8px;background:#1f2937;color:#ffffff;text-decoration:none;font-weight:700;padding:9px 13px">Link to STEM</a></p>`;
-}
-
-function incomingPaymentInterestStemLinkText(url) {
-  return `Link to STEM: ${url}`;
-}
-
-function buildIncomingPaymentInterestEmail(body, profile, calculation) {
-  const requestedBy = profile?.full_name || profile?.email || 'Logged-in user';
-  const paymentName = String(body.paymentName || body.paymentDisplayName || body.salesforcePaymentName || body.paymentId || '').trim();
-  const stemName = calculation?.stemName || String(body.stemName || '').trim();
-  const buyerName = calculation?.buyerName || String(body.buyerName || body.partyName || '').trim();
-  const buyerGroupName = calculation?.buyerGroupName || String(body.buyerGroupName || '').trim();
-  const receivedDate = prettyDate(body.paymentDate || body.receivedDate);
-  const insertedDate = body.createdDate && dateOnly(body.createdDate) !== dateOnly(body.paymentDate || body.receivedDate) ? prettyDate(body.createdDate) : '';
-  const delayLabel = body.delayDays == null ? '-' : `${Number(body.delayDays).toLocaleString()} Days`;
-  const context = {
-    requestedBy,
-    requesterEmail: profile?.email || '',
-    buyerName: buyerName || '-',
-    buyerGroupName: buyerGroupName || '-',
-    stemName: stemName || '-',
-    paymentName: paymentName || body.paymentId || '-',
-    receivedDate,
-    insertedDate,
-    delayDays: delayLabel,
-    paymentAmount: money(body.amount),
-    receivableBalance: money(calculation?.receivableBalance ?? body.receivableBalance),
-    invoiceAmount: money(calculation?.invoiceAmount ?? body.invoiceAmount),
-    invoiceDueDate: calculation?.dueDate ? prettyDate(calculation.dueDate) : '-',
-    interestRate: incomingPaymentInterestRateLabel(calculation?.monthlyRate),
-    interestRateField: calculation?.interestRateField?.label || calculation?.interestRateField?.name || '',
-    interestTotal: money(calculation?.totalInterest),
-  };
-  const template = incomingPaymentInterestTemplate(body.reportSettings || {});
-  const stemUrl = incomingPaymentStemUrl({}, calculation?.stem?.Id || body.stemId);
-  const to = uniqueEmailList(renderIncomingPaymentInterestTemplate(template.to, context));
-  const cc = uniqueEmailList(renderIncomingPaymentInterestTemplate(template.cc, context));
-  const bcc = uniqueEmailList(renderIncomingPaymentInterestTemplate(template.bcc, context));
-  const subject = renderIncomingPaymentInterestTemplate(template.subject, context);
-  const bodyContent = renderIncomingPaymentInterestTemplate(template.body, context);
-  const bodyText = hasHtmlMarkup(bodyContent) ? htmlToPlainText(bodyContent) : bodyContent;
-  const calculationHtml = calculation ? incomingPaymentInterestCalculationHtml(calculation) : '';
-  const calculationText = calculation ? incomingPaymentInterestCalculationText(calculation) : '';
-  const htmlBody = replaceIncomingPaymentInterestToken(emailContentHtml(bodyContent), INCOMING_PAYMENT_INTEREST_STEM_LINK_TOKEN_PATTERN, incomingPaymentInterestStemLinkHtml(stemUrl))
-    .replace(/<p\b[^>]*>\s*\{\{\s*interestCalculationTable\s*\}\}\s*<\/p>/i, calculationHtml)
-    .replace(INCOMING_PAYMENT_INTEREST_CALCULATION_TABLE_PATTERN, calculationHtml);
-  const textBody = replaceIncomingPaymentInterestToken(bodyText, INCOMING_PAYMENT_INTEREST_STEM_LINK_TOKEN_PATTERN, incomingPaymentInterestStemLinkText(stemUrl)).replace(INCOMING_PAYMENT_INTEREST_CALCULATION_TABLE_PATTERN, calculationText);
-  const html = `
-    <div style="font-family:Inter,Arial,sans-serif;color:#1f2937;line-height:1.45">
-      ${htmlBody}
-    </div>`;
-  return { to, cc, bcc, subject, html, text: textBody };
-}
-
-async function incomingPaymentInterestInvoiceRequest(body = {}, req = null, accessContext = null) {
-  const { client, profile } = accessContext || (await requireActiveUser(req));
-  const paymentId = String(body.paymentId || body.payment_id || '').trim();
-  if (!paymentId) throw appError('paymentId is required.', 400);
-
-  const delayDays = Number(body.delayDays ?? body.delay_days);
-  if (!Number.isFinite(delayDays) || delayDays <= 3) {
-    throw appError('Late payment interest invoice request is only available for buyer payments delayed more than 3 days.', 400);
-  }
-
-  const existing = await fetchIncomingPaymentInterestNotification(client, paymentId);
-  const forceResend = body.force === true || body.confirmResend === true || body.allowResend === true;
-  if (existing && !forceResend) {
-    const deliveryUncertain = ['sending', 'uncertain'].includes(existing.deliveryStatus);
-    return {
-      sent: false,
-      alreadySent: existing.deliveryStatus === 'sent',
-      deliveryUncertain,
-      requiresConfirmation: true,
-      notification: existing,
-    };
-  }
-
-  const reportSettings = await loadFinancialReportSettings(client, 'incoming_payment_interest_requests', { required: true });
-  if (!String(reportSettings.settings?.subject || '').trim() || !String(reportSettings.settings?.body || '').trim()) {
-    throw appError('Late payment interest request subject and body are not configured. Sending is disabled.', 503, 'FINANCIAL_REPORT_TEMPLATE_NOT_CONFIGURED', undefined, true);
-  }
-  const calculation = await incomingPaymentInterestCalculation({ ...body, delayDays, paymentId }, accessContext);
-  const email = buildIncomingPaymentInterestEmail({ ...body, delayDays, paymentId, reportSettings: reportSettings.settings }, profile, calculation);
-  if (!operationalMailDeliveryAvailable()) {
-    throw appError('The operational email sender is unavailable. Ask an administrator to check Settings > System Health.', 400);
-  }
-  const mailConfig = operationalMailConfig();
-  const recipients = email.to;
-  if (!recipients.length) {
-    throw appError('Late payment interest request recipient is not configured. Add at least one To recipient in the template.', 400);
-  }
-  const senderSnapshot = existing?.senderMailboxSnapshot
-    ? { id: existing.senderMailboxId || null, emailAddress: existing.senderMailboxSnapshot }
-    : await resolveGraphEmailSender(client, 'incoming_payment_reports').then((sender) => ({
-        id: sender.mailboxId,
-        emailAddress: sender.emailAddress,
-      }));
-  const attemptAt = new Date().toISOString();
-  const payload = {
-    payment_id: paymentId,
-    payment_name: String(body.paymentName || body.paymentDisplayName || body.salesforcePaymentName || '').trim() || null,
-    stem_id: String(body.stemId || '').trim() || null,
-    stem_name: calculation.stemName || String(body.stemName || '').trim() || null,
-    buyer_name: calculation.buyerName || String(body.buyerName || body.partyName || '').trim() || null,
-    buyer_group_name: calculation.buyerGroupName || String(body.buyerGroupName || '').trim() || null,
-    received_date: incomingPaymentDbDate(body.paymentDate || body.receivedDate),
-    payment_created_date: incomingPaymentDbDate(body.createdDate),
-    delay_days: Math.trunc(delayDays),
-    amount: incomingPaymentDbNumber(body.amount),
-    currency: String(body.currency || 'USD').trim() || 'USD',
-    receivable_balance: incomingPaymentDbNumber(calculation.receivableBalance ?? body.receivableBalance),
-    recipient_email: uniqueEmailList(recipients, email.cc, email.bcc).join(', '),
-    email_subject: email.subject,
-    email_message_id: null,
-    email_provider: mailConfig.deliveryMethod,
-    actor_user_id: profile.id,
-    actor_email: profile.email,
-    actor_name: profile.full_name || profile.email || null,
-    delivery_status: 'sending',
-    sender_mailbox_id: senderSnapshot.id,
-    sender_mailbox_snapshot: senderSnapshot.emailAddress,
-    last_attempt_at: attemptAt,
-    last_error: null,
-    sent_at: null,
-    updated_at: attemptAt,
-    metadata: {
-      source: 'incoming_payment',
-      delayThresholdDays: 3,
-      requestedAtTimezone: 'Asia/Hong_Kong',
-      resent: Boolean(existing),
-      resendCount: Number(existing?.metadata?.resendCount || 0) + (existing ? 1 : 0),
-      previousRequest: existing
-        ? {
-            sentAt: existing.sentAt || null,
-            actorEmail: existing.actorEmail || null,
-            recipientEmail: existing.recipientEmail || null,
-            emailSubject: existing.emailSubject || null,
-          }
-        : null,
-      interestCalculation: {
-        invoiceAmount: calculation.invoiceAmount,
-        dueDate: calculation.dueDate,
-        interestRateField: calculation.interestRateField,
-        rawInterestRate: calculation.rawInterestRate,
-        monthlyRate: calculation.monthlyRate,
-        rateWarning: calculation.rateWarning,
-        totalInterest: calculation.totalInterest,
-        segments: calculation.segments,
-        paymentSchedule: calculation.paymentSchedule,
-      },
-    },
-  };
-
-  const reserveQuery = existing ? client.from('incoming_payment_interest_notifications').update(payload).eq('payment_id', paymentId) : client.from('incoming_payment_interest_notifications').insert(payload);
-  const { data: reserved, error: reserveError } = await reserveQuery.select(INCOMING_PAYMENT_INTEREST_NOTIFICATION_FIELDS).single();
-  if (reserveError) throw reserveError;
-
-  let result;
-  try {
-    result = await sendOperationalMail({
-      to: recipients,
-      cc: email.cc,
-      bcc: email.bcc,
-      subject: email.subject,
-      html: email.html,
-      text: email.text,
-    }, { client, purposeKey: 'incoming_payment_reports', mailboxSnapshot: senderSnapshot });
-  } catch (error) {
-    await client
-      .from('incoming_payment_interest_notifications')
-      .update({
-        delivery_status: error.mailDeliveryUncertain ? 'uncertain' : 'failed',
-        last_error: error.message,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('payment_id', paymentId);
-    throw error;
-  }
-
-  const sentAt = new Date().toISOString();
-  const { data, error } = await client
-    .from('incoming_payment_interest_notifications')
-    .update({
-      delivery_status: 'sent',
-      email_message_id: result.id || result.messageId || null,
-      email_provider: result.deliveryMethod || mailConfig.deliveryMethod,
-      sent_at: sentAt,
-      last_error: null,
-      updated_at: sentAt,
-    })
-    .eq('payment_id', paymentId)
-    .select(INCOMING_PAYMENT_INTEREST_NOTIFICATION_FIELDS)
-    .single();
-  if (error) {
-    await client
-      .from('incoming_payment_interest_notifications')
-      .update({
-        delivery_status: 'uncertain',
-        last_error: `Email sent but tracking update failed: ${error.message}`,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('payment_id', paymentId);
-    return {
-      sent: true,
-      trackingWarning: 'Email was sent, but FCOS could not finalize its delivery record. Do not resend until an administrator reconciles it.',
-      to: recipients,
-      notification: {
-        ...serializeIncomingPaymentInterestNotification(reserved),
-        deliveryStatus: 'uncertain',
-      },
-    };
-  }
-  return {
-    sent: true,
-    alreadySent: Boolean(existing),
-    resent: Boolean(existing),
-    to: recipients,
-    notification: serializeIncomingPaymentInterestNotification(data),
-  };
-}
-
-const INCOMING_PAYMENT_RECEIVABLE_TABLE_TOKEN_PATTERN = /\{\{\s*receivablePaymentsTable\s*\}\}/i;
-const INCOMING_PAYMENT_BUYER_CIA_TABLE_TOKEN_PATTERN = /\{\{\s*buyerCiaInvoicesTable\s*\}\}/i;
-const INCOMING_PAYMENT_LATE_INTEREST_LINK_TOKEN_PATTERNS = [/\{\{\s*requestLatePaymentInterestInvoiceLink\s*\}\}/i, /\{\{\s*latePaymentInterestLink\s*\}\}/i];
-const DEFAULT_INCOMING_PAYMENT_EMAIL_SETTINGS = {
-  to: [],
-  cc: [],
-  bcc: [],
-  subject: '',
-  intro: '',
-  includeReceivablePayments: true,
-  includeBuyerCiaInvoices: true,
-};
-
-function incomingPaymentEmailSettings(input = {}) {
-  const safeInput = { ...input };
-  delete safeInput.from;
-  const defaults = DEFAULT_INCOMING_PAYMENT_EMAIL_SETTINGS;
-  return {
-    ...defaults,
-    ...safeInput,
-    to: parseEmailList(input.to, defaults.to),
-    cc: parseEmailList(input.cc, defaults.cc),
-    bcc: parseEmailList(input.bcc, defaults.bcc),
-    subject: String(input.subject ?? defaults.subject),
-    intro: String(input.intro ?? defaults.intro),
-    includeReceivablePayments: input.includeReceivablePayments ?? defaults.includeReceivablePayments,
-    includeBuyerCiaInvoices: input.includeBuyerCiaInvoices ?? defaults.includeBuyerCiaInvoices,
-  };
-}
-
-function incomingPaymentSearchMatches(row, search, fields) {
-  const query = String(search || '')
-    .trim()
-    .toLowerCase();
-  if (!query) return true;
-  return fields.some((field) =>
-    String(row?.[field] || '')
-      .toLowerCase()
-      .includes(query),
-  );
-}
-
-function renderIncomingPaymentTemplate(value, context = {}) {
-  let output = String(value || '');
-  for (const [key, replacement] of Object.entries(context)) {
-    output = output.replace(new RegExp(`\\{\\{\\s*${key}\\s*\\}\\}`, 'gi'), String(replacement ?? ''));
-  }
-  return output;
-}
-
-function incomingPaymentReportSummary(rows = []) {
-  const incomingRows = rows.filter((row) => row.isIncoming);
-  return {
-    incomingRows: incomingRows.length,
-    totalIncomingAmount: incomingRows.reduce((sum, row) => sum + Math.abs(Number(row.incomingAmount || 0)), 0),
-    buyerPaymentTotal: rows.filter((row) => row.type === 'Buyer Payment').reduce((sum, row) => sum + Math.abs(Number(row.incomingAmount || 0)), 0),
-    supplierRefundTotal: rows.filter((row) => row.type === 'Supplier Refund').reduce((sum, row) => sum + Math.abs(Number(row.incomingAmount || 0)), 0),
-    unmatchedCount: rows.filter((row) => row.type === 'Unmatched' || row.status === 'Needs review').length,
-  };
-}
-
-function incomingPaymentInsertedNote(row) {
-  if (!row?.paymentDate || !row?.createdDate) return '';
-  if (dateOnly(row.paymentDate) === dateOnly(row.createdDate)) return '';
-  return `Inserted on ${prettyDate(row.createdDate)}`;
-}
-
-function incomingPaymentTermsValue(row) {
-  return row?.type === 'Buyer Payment' ? row.paymentTerms || '-' : 'N/A';
-}
-
-function incomingPaymentDelayValue(row) {
-  if (row?.type !== 'Buyer Payment') return 'N/A';
-  return row.delayDays == null ? '-' : Number(row.delayDays).toLocaleString();
-}
-
-function incomingPaymentAmountText(row) {
-  const bankCharges = (row?.bankCharges || []).map((charge) => `Bank Charge ${money(charge.amount)}`);
-  return [money(row?.amount), ...bankCharges].join(' / ');
-}
-
-function incomingPaymentReceivableTableHtml(rows = []) {
-  const tableRows = rows
-    .map((row) => {
-      const cell = 'border-bottom:1px solid #e5e7eb;padding:7px 8px;vertical-align:top';
-      const amountLines = [escapeHtml(money(row.amount)), ...(row.bankCharges || []).map((charge) => `<span style="display:block;color:#92400e;font-weight:600">Bank Charge ${escapeHtml(money(charge.amount))}</span>`)].join('');
-      return `
-      <tr>
-        <td style="${cell};white-space:nowrap">${prettyDate(row.paymentDate)}${incomingPaymentInsertedNote(row) ? `<span style="display:block;color:#92400e;font-size:11px;font-weight:600">Inserted on ${prettyDate(row.createdDate)}</span>` : ''}</td>
-        <td style="${cell};white-space:nowrap;text-align:right">${escapeHtml(incomingPaymentTermsValue(row))}</td>
-        <td style="${cell};white-space:nowrap;text-align:right">${escapeHtml(incomingPaymentDelayValue(row))}</td>
-        <td style="${cell};min-width:160px">${escapeHtml(row.partyName || '-')}</td>
-        <td style="${cell};min-width:140px">${escapeHtml(row.buyerGroupName || '-')}</td>
-        <td style="${cell};min-width:180px;font-weight:600">${escapeHtml(row.stemName || '-')}</td>
-        <td style="${cell};white-space:nowrap;text-align:right;font-weight:600">${amountLines}</td>
-        <td style="${cell};white-space:nowrap;text-align:right">${money(row.receivableBalance)}</td>
-      </tr>`;
-    })
-    .join('');
-  return `
-    <div style="margin:14px 0 18px">
-      <div style="font-size:13px;font-weight:700;margin:0 0 8px;color:#1f2937">Receivable Payments (${rows.length.toLocaleString()})</div>
-      <div style="overflow-x:auto;border:1px solid #d9e2ef;border-radius:10px">
-        <table style="border-collapse:collapse;width:auto;min-width:1040px;font-size:12px;line-height:1.3">
-          <thead>
-            <tr style="background:#f8fafc;color:#667085;text-transform:uppercase;font-size:11px;letter-spacing:.04em">
-              <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:left;white-space:nowrap">Received Date</th>
-              <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:right;white-space:nowrap">Terms</th>
-              <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:right;white-space:nowrap">Delay</th>
-              <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:left;white-space:nowrap">From</th>
-              <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:left;white-space:nowrap">Group</th>
-              <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:left;white-space:nowrap">STEM</th>
-              <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:right;white-space:nowrap">Amount</th>
-              <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:right;white-space:nowrap">Receivable</th>
-            </tr>
-          </thead>
-          <tbody>${tableRows || '<tr><td colspan="8" style="padding:16px;text-align:center;color:#667085">No receivable payments found for the selected filters.</td></tr>'}</tbody>
-        </table>
-      </div>
-    </div>`;
-}
-
-function incomingPaymentBuyerCiaTableHtml(rows = []) {
-  const tableRows = rows
-    .map((row) => {
-      const cell = 'border-bottom:1px solid #e5e7eb;padding:7px 8px;vertical-align:top';
-      return `
-      <tr>
-        <td style="${cell};min-width:180px;font-weight:600">${escapeHtml(row.buyerName || '-')}</td>
-        <td style="${cell};min-width:140px">${escapeHtml(row.buyerGroupName || '-')}</td>
-        <td style="${cell};min-width:130px">${escapeHtml(row.buyerTrader || '-')}</td>
-        <td style="${cell};min-width:180px;font-weight:600">${escapeHtml(row.stemName || '-')}</td>
-        <td style="${cell};white-space:nowrap;text-align:right">${money(row.calculatedAmount)}</td>
-        <td style="${cell};white-space:nowrap;text-align:right;font-weight:600">${money(row.receivableBalance)}</td>
-        <td style="${cell};white-space:nowrap">${prettyDate(row.deliveryDate)}</td>
-      </tr>`;
-    })
-    .join('');
-  return `
-    <div style="margin:14px 0 18px">
-      <div style="font-size:13px;font-weight:700;margin:0 0 8px;color:#1f2937">Buyer CIA Invoices (${rows.length.toLocaleString()})</div>
-      <div style="overflow-x:auto;border:1px solid #d9e2ef;border-radius:10px">
-        <table style="border-collapse:collapse;width:auto;min-width:900px;font-size:12px;line-height:1.3">
-          <thead>
-            <tr style="background:#f8fafc;color:#667085;text-transform:uppercase;font-size:11px;letter-spacing:.04em">
-              <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:left;white-space:nowrap">Buyer</th>
-              <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:left;white-space:nowrap">Group</th>
-              <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:left;white-space:nowrap">Buyer Trader</th>
-              <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:left;white-space:nowrap">STEM</th>
-              <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:right;white-space:nowrap">Calculated Amount</th>
-              <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:right;white-space:nowrap">Receivable Balance</th>
-              <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:left;white-space:nowrap">Delivery Date</th>
-            </tr>
-          </thead>
-          <tbody>${tableRows || '<tr><td colspan="7" style="padding:16px;text-align:center;color:#667085">No Buyer CIA invoices found for the selected filters.</td></tr>'}</tbody>
-        </table>
-      </div>
-    </div>`;
-}
-
-function incomingPaymentReceivableTableText(rows = []) {
-  if (!rows.length) return 'Receivable Payments: none';
-  return [`Receivable Payments (${rows.length})`, 'Received Date | Terms | Delay | From | Group | STEM | Amount | Receivable', ...rows.map((row) => `${prettyDate(row.paymentDate)}${incomingPaymentInsertedNote(row) ? ` (${incomingPaymentInsertedNote(row)})` : ''} | ${incomingPaymentTermsValue(row)} | ${incomingPaymentDelayValue(row)} | ${row.partyName || '-'} | ${row.buyerGroupName || '-'} | ${row.stemName || '-'} | ${incomingPaymentAmountText(row)} | ${money(row.receivableBalance)}`)].join('\n');
-}
-
-function incomingPaymentBuyerCiaTableText(rows = []) {
-  if (!rows.length) return 'Buyer CIA Invoices: none';
-  return [`Buyer CIA Invoices (${rows.length})`, ...rows.map((row) => `${row.buyerName || '-'} | ${row.buyerGroupName || '-'} | ${row.buyerTrader || '-'} | ${row.stemName || '-'} | Calculated ${money(row.calculatedAmount)} | Receivable ${money(row.receivableBalance)} | Delivery ${prettyDate(row.deliveryDate)}`)].join('\n');
-}
-
-function replaceIncomingPaymentToken(source, pattern, replacement) {
-  return String(source || '')
-    .replace(new RegExp(`<p\\b[^>]*>\\s*${pattern.source}\\s*<\\/p>`, 'i'), replacement)
-    .replace(pattern, replacement);
-}
-
-function injectIncomingPaymentTables(content, settings, receivableTable, buyerCiaTable) {
-  let output = String(content || '');
-  const hasReceivableToken = INCOMING_PAYMENT_RECEIVABLE_TABLE_TOKEN_PATTERN.test(output);
-  const hasBuyerCiaToken = INCOMING_PAYMENT_BUYER_CIA_TABLE_TOKEN_PATTERN.test(output);
-  output = replaceIncomingPaymentToken(output, INCOMING_PAYMENT_RECEIVABLE_TABLE_TOKEN_PATTERN, settings.includeReceivablePayments ? receivableTable : '');
-  output = replaceIncomingPaymentToken(output, INCOMING_PAYMENT_BUYER_CIA_TABLE_TOKEN_PATTERN, settings.includeBuyerCiaInvoices ? buyerCiaTable : '');
-  if (settings.includeReceivablePayments && !hasReceivableToken) output += receivableTable;
-  if (settings.includeBuyerCiaInvoices && !hasBuyerCiaToken) output += buyerCiaTable;
-  return output;
-}
-
-function injectIncomingPaymentLateInterestLink(content, replacement) {
-  let output = String(content || '');
-  for (const pattern of INCOMING_PAYMENT_LATE_INTEREST_LINK_TOKEN_PATTERNS) {
-    output = replaceIncomingPaymentToken(output, pattern, replacement);
-  }
-  return output;
-}
-
-function incomingPaymentLateInterestLinkHtml(url) {
-  return `<p style="margin:0 0 14px"><a href="${escapeHtml(url)}" style="display:inline-block;border-radius:8px;background:#FF2800;color:#ffffff;text-decoration:none;font-weight:700;padding:9px 13px">Late Payment Interest Invoice</a></p>`;
-}
-
-function incomingPaymentLateInterestLinkText(url) {
-  return `Late Payment Interest Invoice: ${url}`;
-}
-
-function buildIncomingPaymentEmail(report, settings) {
-  const summary = report.summary || incomingPaymentReportSummary(report.rows || []);
-  const lateInterestUrl = incomingPaymentFilterUrl(settings, report);
-  const incomingRows = Number(summary.incomingRows || 0);
-  const needsReviewCount = Number(summary.unmatchedCount || 0);
-  const context = {
-    dateFrom: prettyDate(report.dateFrom),
-    dateTo: prettyDate(report.dateTo),
-    today: prettyDate(dateOnly(new Date())),
-    paymentCount: (report.rows || []).length.toLocaleString(),
-    receivablePaymentCount: (report.rows || []).length.toLocaleString(),
-    buyerCiaCount: (report.buyerCiaInvoices || []).length.toLocaleString(),
-    incomingTotal: money(summary.totalIncomingAmount),
-    buyerPaymentTotal: money(summary.buyerPaymentTotal),
-    supplierRefundTotal: money(summary.supplierRefundTotal),
-    needsReviewCount: String(needsReviewCount),
-    keyword: report.search || '',
-  };
-  const subject = renderIncomingPaymentTemplate(settings.subject, context);
-  const content = renderIncomingPaymentTemplate(settings.intro, context);
-  const contentText = hasHtmlMarkup(content) ? htmlToPlainText(content) : content;
-  const summaryHtml = `
-    <table role="presentation" style="border-collapse:collapse;margin:18px 0;width:100%;max-width:720px">
-      <tr>
-        <td style="border:1px solid #d9e2ef;border-radius:8px 0 0 8px;padding:12px;background:#f6fef9">
-          <div style="font-size:12px;color:#667085;text-transform:uppercase;letter-spacing:.04em">Incoming Total</div>
-          <div style="font-size:20px;font-weight:700;color:#059669">${money(summary.totalIncomingAmount)}</div>
-          <div style="margin-top:4px;font-size:12px;color:#667085">Buyer Payments ${money(summary.buyerPaymentTotal)} Â· Supplier Refunds ${money(summary.supplierRefundTotal)} Â· ${incomingRows.toLocaleString()} records</div>
-        </td>
-        <td style="border:1px solid #d9e2ef;border-left:0;border-radius:0 8px 8px 0;padding:12px;background:#fffbeb">
-          <div style="font-size:12px;color:#667085;text-transform:uppercase;letter-spacing:.04em">Needs Review</div>
-          <div style="font-size:20px;font-weight:700;color:#d97706">${needsReviewCount.toLocaleString()}</div>
-          <div style="margin-top:4px;font-size:12px;color:#667085">Unmatched or incomplete payments</div>
-        </td>
-      </tr>
-    </table>`;
-  const contentHtml = injectIncomingPaymentLateInterestLink(emailContentHtml(content), incomingPaymentLateInterestLinkHtml(lateInterestUrl));
-  const html = `
-    <div style="font-family:Inter,Arial,sans-serif;color:#1f2937;line-height:1.45">
-      ${summaryHtml}
-      ${injectIncomingPaymentTables(contentHtml, settings, incomingPaymentReceivableTableHtml(report.rows || []), incomingPaymentBuyerCiaTableHtml(report.buyerCiaInvoices || []))}
-    </div>`;
-  const textContent = injectIncomingPaymentTables([`Incoming Total: ${money(summary.totalIncomingAmount)}`, `Buyer Payments: ${money(summary.buyerPaymentTotal)}`, `Supplier Refunds: ${money(summary.supplierRefundTotal)}`, `Incoming Records: ${incomingRows.toLocaleString()}`, `Needs Review: ${needsReviewCount.toLocaleString()}`, '', injectIncomingPaymentLateInterestLink(contentText, incomingPaymentLateInterestLinkText(lateInterestUrl))].join('\n'), settings, `\n\n${incomingPaymentReceivableTableText(report.rows || [])}\n\n`, `\n\n${incomingPaymentBuyerCiaTableText(report.buyerCiaInvoices || [])}\n\n`);
-  return { subject, html, text: textContent, summary };
-}
-
-async function incomingPaymentEmailReport(body = {}, req = null, accessContext = null) {
-  const activeAccess = accessContext || (await requireActiveUser(req));
-  const stored = await loadFinancialReportSettings(activeAccess.client, 'incoming_payment_reports', { required: !body.preview && !body.dryRun });
-  if (!body.preview && !body.dryRun) {
-    const expectedSettingsRevision = Number(body.expectedSettingsRevision ?? body.expected_settings_revision);
-    if (!Number.isInteger(expectedSettingsRevision) || expectedSettingsRevision < 1) {
-      throw appError('Refresh the Incoming Payment report review before sending.', 409, 'FINANCIAL_REPORT_REVISION_REQUIRED');
-    }
-    if (expectedSettingsRevision !== Number(stored.revision || 0)) {
-      throw appError('The approved Incoming Payment report recipients or template changed after review. Reopen the report before sending.', 409, 'FINANCIAL_REPORT_REVISION_CONFLICT');
-    }
-  }
-  const settings = incomingPaymentEmailSettings(stored.settings);
-  if (!body.preview && !body.dryRun && (!settings.subject.trim() || !settings.intro.trim())) {
-    throw appError('Incoming Payment report subject and body are not configured. Sending is disabled.', 503, 'FINANCIAL_REPORT_TEMPLATE_NOT_CONFIGURED', undefined, true);
-  }
-  const source = await incomingPaymentsList(
-    {
-      dateFrom: body.dateFrom,
-      dateTo: body.dateTo,
-      limit: body.limit || 5000,
-    },
-    null,
-    activeAccess,
-  );
-  const search = String(body.search || '').trim();
-  const rows = (source.rows || []).filter((row) => incomingPaymentSearchMatches(row, search, ['partyName', 'stemName', 'keyStem', 'buyerName', 'buyerGroupName', 'supplierName', 'supplierInvoiceName']));
-  const buyerCiaInvoices = (source.buyerCiaInvoices || []).filter((row) => incomingPaymentSearchMatches(row, search, ['buyerName', 'buyerGroupName', 'buyerTrader', 'stemName', 'keyStem']));
-  const report = {
-    ...source,
-    rows,
-    buyerCiaInvoices,
-    search,
-    summary: incomingPaymentReportSummary(rows),
-  };
-  const email = buildIncomingPaymentEmail(report, settings);
-  const reportMeta = {
-    dateFrom: report.dateFrom,
-    dateTo: report.dateTo,
-    search,
-    receivableRows: rows.length,
-    buyerCiaRows: buyerCiaInvoices.length,
-    summary: email.summary,
-  };
-  if (body.preview || body.dryRun) {
-    return {
-      sent: false,
-      preview: true,
-      settings,
-      settingsRevision: Number(stored.revision || 0),
-      report: reportMeta,
-      email: {
-        subject: email.subject,
-        html: email.html,
-        text: email.text,
-        summary: email.summary,
-      },
-    };
-  }
-  if (!settings.to.length) throw appError('At least one To recipient is required before sending the Incoming Payment report.', 400);
-  const result = await sendOperationalMail({
-    to: settings.to,
-    cc: settings.cc,
-    bcc: settings.bcc,
-    subject: email.subject,
-    html: email.html,
-    text: email.text,
-  }, { client: activeAccess.client, purposeKey: 'incoming_payment_reports' });
-  return {
-    sent: true,
-    id: result.id,
-    to: settings.to,
-    cc: settings.cc,
-    bcc: settings.bcc,
-    subject: email.subject,
-    report: reportMeta,
-    rows: rows.length,
-    buyerCiaRows: buyerCiaInvoices.length,
-    email: {
-      subject: email.subject,
-      html: email.html,
-      text: email.text,
-      summary: email.summary,
-    },
-  };
-}
-
-async function incomingPaymentEmailSettingsGet(body = {}, req = null, accessContext = null) {
-  const { client, profile } = accessContext || (await requireActiveUser(req));
-  const stored = await loadFinancialReportSettings(client, 'incoming_payment_reports');
-  return {
-    ...stored,
-    settings: incomingPaymentEmailSettings(stored.settings),
-    capabilities: {
-      canManageSettings: await userHasCapability(client, profile, 'financial_report_settings_manage'),
-    },
-  };
-}
-
-async function incomingPaymentEmailSettingsSave(body = {}, req = null, accessContext = null) {
-  const { client, profile } = accessContext || (await requireActiveUser(req));
-  await requireCapability(client, profile, 'financial_report_settings_manage', 'Financial report settings management permission is required.');
-  const current = await loadFinancialReportSettings(client, 'incoming_payment_reports');
-  const settings = incomingPaymentEmailSettings({ ...current.settings, ...(body.settings || body) });
-  return saveFinancialReportSettings(client, 'incoming_payment_reports', {
-    settings,
-    expectedRevision: body.expectedRevision ?? body.expected_revision,
-  }, profile);
-}
-
-function financialReportSettingsEditor(settings = {}) {
-  return {
-    ...settings,
-    to: parseEmailList(settings.to, []).join(', '),
-    cc: parseEmailList(settings.cc, []).join(', '),
-    bcc: parseEmailList(settings.bcc, []).join(', '),
-  };
-}
-
-async function incomingPaymentInterestSettingsGet(body = {}, req = null, accessContext = null) {
-  const { client, profile } = accessContext || (await requireActiveUser(req));
-  const stored = await loadFinancialReportSettings(client, 'incoming_payment_interest_requests');
-  return {
-    ...stored,
-    settings: financialReportSettingsEditor(stored.settings),
-    capabilities: {
-      canManageSettings: await userHasCapability(client, profile, 'financial_report_settings_manage'),
-    },
-  };
-}
-
-async function incomingPaymentInterestSettingsSave(body = {}, req = null, accessContext = null) {
-  const { client, profile } = accessContext || (await requireActiveUser(req));
-  await requireCapability(client, profile, 'financial_report_settings_manage', 'Financial report settings management permission is required.');
-  const current = await loadFinancialReportSettings(client, 'incoming_payment_interest_requests');
-  const candidate = incomingPaymentInterestTemplate({ ...current.settings, ...(body.settings || body) });
-  return saveFinancialReportSettings(client, 'incoming_payment_interest_requests', {
-    settings: candidate,
-    expectedRevision: body.expectedRevision ?? body.expected_revision,
-  }, profile);
-}
-
-function buyerInvoiceEmailSettings(input = {}) {
-  const hasBuyerTraderFilter = Object.prototype.hasOwnProperty.call(input, 'buyerTraders');
-  return {
-    ...normalizeBuyerInvoiceEmailSettings(input, {
-      ...DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS,
-    }),
-    hasBuyerTraderFilter,
-  };
-}
-
-function serializeBuyerInvoiceEmailSettingsRow(reportSettings, legacyMeta = null) {
-  const settings = normalizeBuyerInvoiceEmailSettings(reportSettings?.settings || {});
-  return {
-    settings,
-    meta: {
-      storageAvailable: true,
-      configured: reportSettings?.configured === true,
-      revision: Number(reportSettings?.revision || 0),
-      lastPreviewAt: legacyMeta?.last_preview_at || null,
-      lastPreviewRowCount: legacyMeta?.last_preview_row_count ?? null,
-      lastSentAt: legacyMeta?.last_sent_at || null,
-      lastSentRowCount: legacyMeta?.last_sent_row_count ?? null,
-      lastError: legacyMeta?.last_error || null,
-      updatedByEmail: reportSettings?.updatedByEmail || null,
-      updatedAt: reportSettings?.updatedAt || null,
-      nextScheduledRun: nextBuyerInvoiceScheduleRun(settings),
-    },
-  };
-}
-
-async function loadStoredBuyerInvoiceEmailSettings() {
-  const client = safeSupabaseAdminClient();
-  if (!client) throw appError('Financial report settings are unavailable. Sending is disabled until storage is restored.', 503, 'FINANCIAL_REPORT_SETTINGS_UNAVAILABLE', undefined, true);
-  const [reportSettings, legacy] = await Promise.all([
-    loadFinancialReportSettings(client, 'outstanding_invoice_reports'),
-    client.from('buyer_invoice_email_settings').select('last_preview_at,last_preview_row_count,last_sent_at,last_sent_row_count,last_error').eq('id', 'default').maybeSingle(),
-  ]);
-  if (legacy.error) throw appError('Buyer invoice report history is unavailable. Sending is disabled until storage is restored.', 503, 'FINANCIAL_REPORT_SETTINGS_UNAVAILABLE', undefined, true);
-  return serializeBuyerInvoiceEmailSettingsRow(reportSettings, legacy.data);
-}
-
-async function saveStoredBuyerInvoiceEmailSettings(settings, profile = null, expectedRevision = null) {
-  const client = supabaseAdminClient();
-  const current = await loadFinancialReportSettings(client, 'outstanding_invoice_reports');
-  const inputPatch = buyerInvoiceEmailSettingsPatch(settings);
-  const normalized = normalizeBuyerInvoiceEmailSettings({ ...current.settings, ...inputPatch });
-  const settingsPatch = Object.fromEntries(Object.keys(inputPatch).map((key) => [key, normalized[key]]));
-  if (!Object.keys(settingsPatch).length) {
-    throw appError('No recognized buyer invoice email settings were supplied.', 400);
-  }
-  const saved = await saveFinancialReportSettings(client, 'outstanding_invoice_reports', {
-    settings: { ...current.settings, ...settingsPatch },
-    expectedRevision,
-  }, profile);
-  return serializeBuyerInvoiceEmailSettingsRow(saved);
-}
-
-async function updateBuyerInvoiceEmailSettingsMeta(patch = {}) {
-  const client = safeSupabaseAdminClient();
-  if (!client) return;
-  const { error } = await client.from('buyer_invoice_email_settings').upsert({ id: 'default', ...patch }, { onConflict: 'id' });
-  if (error) console.error('Failed to update buyer invoice email settings metadata', error.message);
-}
-
-async function buyerInvoiceEmailSettingsGet(body, req, accessContext = null) {
-  const { client, profile } = accessContext || (await requireActiveUser(req));
-  return {
-    ...(await loadStoredBuyerInvoiceEmailSettings()),
-    capabilities: {
-      canManageSettings: await userHasCapability(client, profile, 'financial_report_settings_manage'),
-    },
-  };
-}
-
-async function buyerInvoiceEmailSettingsSave(body, req, accessContext = null) {
-  const { client, profile } = accessContext || (await requireActiveUser(req));
-  await requireCapability(client, profile, 'financial_report_settings_manage', 'Financial report settings management permission is required.');
-  return saveStoredBuyerInvoiceEmailSettings(body.settings || body, profile, body.expectedRevision ?? body.expected_revision);
-}
-
-function hongKongScheduleParts(date = new Date()) {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'Asia/Hong_Kong',
-    weekday: 'short',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23',
-  }).formatToParts(date);
-  const value = (type) => parts.find((part) => part.type === type)?.value;
-  return {
-    weekday: value('weekday'),
-    date: `${value('year')}-${value('month')}-${value('day')}`,
-    time: `${value('hour')}:${value('minute')}`,
-    minuteOfDay: Number(value('hour')) * 60 + Number(value('minute')),
-  };
-}
-
-function scheduleMinuteOfDay(time) {
-  const match = String(time || '')
-    .trim()
-    .match(/^(\d{1,2}):(\d{2})$/);
-  if (!match) return null;
-  const hour = Number(match[1]);
-  const minute = Number(match[2]);
-  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
-  return hour * 60 + minute;
-}
-
-function buyerInvoiceScheduledWindow(settings, date = new Date()) {
-  const now = hongKongScheduleParts(date);
-  const weekdays = new Set((settings.weekdays || []).map((day) => String(day).slice(0, 3).toLowerCase()));
-  if (!weekdays.has(String(now.weekday).slice(0, 3).toLowerCase())) return null;
-  for (const time of settings.sendTimes || []) {
-    const scheduleMinute = scheduleMinuteOfDay(time);
-    if (scheduleMinute == null) continue;
-    const diff = now.minuteOfDay - scheduleMinute;
-    if (diff >= 0 && diff < 5) {
-      const scheduleTime = String(time).trim().padStart(5, '0');
-      return {
-        date: now.date,
-        time: scheduleTime,
-        runKey: `buyer-invoices:${now.date}:${scheduleTime}`,
-      };
-    }
-  }
-  return null;
-}
-
-function isBuyerInvoiceReportDue(settings, date = new Date()) {
-  return Boolean(buyerInvoiceScheduledWindow(settings, date));
-}
-
-function nextBuyerInvoiceScheduleRun(settings, fromDate = new Date()) {
-  const weekdays = new Set((settings.weekdays || []).map((day) => String(day).slice(0, 3).toLowerCase()));
-  const sendTimes = (settings.sendTimes || [])
-    .map((time) => String(time).trim().padStart(5, '0'))
-    .filter((time) => scheduleMinuteOfDay(time) != null)
-    .sort();
-  if (!weekdays.size || !sendTimes.length) return null;
-
-  const now = hongKongScheduleParts(fromDate);
-  for (let offset = 0; offset < 14; offset += 1) {
-    const probe = hongKongScheduleParts(new Date(fromDate.getTime() + offset * 86400000));
-    if (!weekdays.has(String(probe.weekday).slice(0, 3).toLowerCase())) continue;
-    for (const time of sendTimes) {
-      if (offset === 0 && scheduleMinuteOfDay(time) <= now.minuteOfDay) continue;
-      return `${probe.date} ${time} HKT`;
-    }
-  }
-  return null;
-}
-
-function overdueSeverity(daysUntilDue) {
-  if (daysUntilDue == null || Number(daysUntilDue) > 0) return null;
-  const overdueDays = Math.abs(Number(daysUntilDue));
-  if (overdueDays >= 14) return 'red';
-  if (overdueDays >= 7) return 'orange';
-  return 'yellow';
-}
-
-function overdueDisplayValue(daysUntilDue) {
-  if (daysUntilDue == null) return '-';
-  const overdue = -Number(daysUntilDue);
-  const value = Object.is(overdue, -0) ? 0 : overdue;
-  return value.toLocaleString();
-}
-
-function overdueEmailStyles(daysUntilDue, prpspStatus) {
-  const severity = overdueSeverity(daysUntilDue);
-  const styles = {
-    red: {
-      row: 'background:#fee2e2',
-      border: '#fca5a5',
-      text: '#991b1b',
-      pill: 'background:#fecaca;border-color:#f87171;color:#7f1d1d',
-    },
-    orange: {
-      row: 'background:#fed7aa',
-      border: '#fb923c',
-      text: '#9a3412',
-      pill: 'background:#fdba74;border-color:#f97316;color:#7c2d12',
-    },
-    yellow: {
-      row: 'background:#fde68a',
-      border: '#facc15',
-      text: '#854d0e',
-      pill: 'background:#fcd34d;border-color:#eab308;color:#713f12',
-    },
-  };
-  const base = styles[severity] || {
-    row: '',
-    border: '#e5e7eb',
-    text: '#2563eb',
-    pill: 'background:#eff6ff;border-color:#bfdbfe;color:#1d4ed8',
-  };
-  return prpspStatus === 'Conditional-Not Sent' ? { ...base, row: 'background:#e9d5ff', border: '#c084fc' } : base;
-}
-
-function renderBuyerInvoiceEmailContent(template, report, settings) {
-  return String(template || DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS.intro)
-    .replaceAll('{{reportStart}}', prettyDate(report.today))
-    .replaceAll('{{reportEnd}}', prettyDate(report.dueThrough))
-    .replaceAll('{{daysAhead}}', String(settings.daysAhead ?? report.daysAhead ?? DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS.daysAhead));
-}
-
-function emailContentHtml(content) {
-  if (hasHtmlMarkup(content)) return sanitizeReminderHtml(content);
-  const blocks = String(content || '')
-    .split(/\n{2,}/)
-    .map((block) => block.trim())
-    .filter(Boolean);
-  if (!blocks.length) return '';
-  return blocks
-    .map((block, index) => {
-      const html = escapeHtml(block).replaceAll('\n', '<br>');
-      if (index === 0) return `<h2 style="margin:0 0 6px;font-size:20px">${html}</h2>`;
-      return `<p style="margin:0 0 14px;color:#667085">${html}</p>`;
-    })
-    .join('');
-}
-
-function buyerTraderFilterHtml(report, settings) {
-  const options = report.buyerTraderOptions || [];
-  if (!options.length) return '';
-  const selected = new Set(report.hasBuyerTraderFilter ? report.selectedBuyerTraders || [] : options);
-  const allActive = selected.size === options.length;
-  const allUrl = buyerInvoiceFilterUrl(settings, report, null);
-  const allChip = `<a href="${escapeHtml(allUrl)}" style="display:inline-block;text-decoration:none;border:1px solid ${allActive ? '#2563eb' : '#d9e2ef'};border-radius:6px;padding:4px 10px;margin:0 6px 6px 0;font-size:12px;font-weight:600;${allActive ? 'background:#2563eb;color:#fff' : 'background:#f8fafc;color:#2563eb'}">All</a>`;
-  const chips = options
-    .map((name) => {
-      const active = selected.has(name);
-      const url = buyerInvoiceFilterUrl(settings, report, name);
-      return `<a href="${escapeHtml(url)}" style="display:inline-block;text-decoration:none;border:1px solid ${active ? '#2563eb' : '#d9e2ef'};border-radius:6px;padding:4px 10px;margin:0 6px 6px 0;font-size:12px;font-weight:600;${active ? 'background:#2563eb;color:#fff' : 'background:#f8fafc;color:#2563eb'}">${escapeHtml(name)}</a>`;
-    })
-    .join('');
-  return `
-    <div style="margin:0 0 12px">
-      <div style="font-size:11px;color:#667085;text-transform:uppercase;letter-spacing:.04em;font-weight:700;margin-bottom:6px">Open filtered view by Buyer Trader / Payment Handler</div>
-      <div>${allChip}${chips}</div>
-    </div>`;
-}
-
-function buildBuyerInvoiceReportEmail(report, settings) {
-  const rows = report.rows || [];
-  const overdue = rows.filter((row) => row.status === 'Overdue');
-  const dueSoon = rows.filter((row) => row.status !== 'Overdue');
-  const dueSoonLabel = `Due in ${Number(settings.daysAhead || report.daysAhead || 7).toLocaleString()} Days`;
-  const content = renderBuyerInvoiceEmailContent(settings.intro, report, settings);
-  const totals = {
-    overdueCount: overdue.length,
-    overdueReceivable: overdue.reduce((sum, row) => sum + Number(row.receivableBalance || 0), 0),
-    dueSoonCount: dueSoon.length,
-    dueSoonReceivable: dueSoon.reduce((sum, row) => sum + Number(row.receivableBalance || 0), 0),
-  };
-  const subject = `${settings.subject} - ${prettyDate(report.today)}`;
-  const summaryHtml = settings.includeSummary
-    ? `
-    <table role="presentation" style="border-collapse:collapse;margin:18px 0;width:100%;max-width:620px">
-      <tr>
-        <td style="border:1px solid #d9e2ef;border-radius:8px 0 0 8px;padding:12px;background:#fff7f7">
-          <div style="font-size:12px;color:#667085;text-transform:uppercase;letter-spacing:.04em">Overdue</div>
-          <div style="font-size:20px;font-weight:700;color:#dc2626">${money(totals.overdueReceivable)} (${totals.overdueCount})</div>
-        </td>
-        <td style="border:1px solid #d9e2ef;border-left:0;border-radius:0 8px 8px 0;padding:12px;background:#f7fbff">
-          <div style="font-size:12px;color:#667085;text-transform:uppercase;letter-spacing:.04em">${escapeHtml(dueSoonLabel)}</div>
-          <div style="font-size:20px;font-weight:700;color:#2563eb">${money(totals.dueSoonReceivable)} (${totals.dueSoonCount})</div>
-        </td>
-      </tr>
-    </table>`
-    : '';
-  const tableRows = rows
-    .map((row) => {
-      const severity = overdueEmailStyles(row.daysUntilDue, row.prpspStatus);
-      const cellStyle = `border-bottom:1px solid ${severity.border};padding:8px 10px`;
-      return `
-    <tr style="${severity.row}">
-      <td style="${cellStyle};font-weight:600;white-space:nowrap">${escapeHtml(row.stemName)}</td>
-      <td style="${cellStyle};min-width:180px">${escapeHtml(row.buyerName || '-')}</td>
-      <td style="${cellStyle};min-width:150px">${escapeHtml(row.buyerBrokerNames || '-')}</td>
-      <td style="${cellStyle};text-align:right;white-space:nowrap">${money(row.invoiceAmount)}</td>
-      <td style="${cellStyle};text-align:right;font-weight:600;white-space:nowrap">${money(row.receivableBalance)}</td>
-      <td style="${cellStyle};white-space:nowrap">${prettyDate(row.buyerInvoiceDueDate)}</td>
-      <td style="${cellStyle};min-width:140px">${escapeHtml(row.buyerTraderInCharge || '-')}</td>
-      <td style="${cellStyle};min-width:160px">${escapeHtml(row.paymentHandlerName || row.collection?.ownerName || '-')}</td>
-      <td style="${cellStyle};min-width:160px">${escapeHtml(row.prpspStatus || '-')}</td>
-      <td style="${cellStyle}">
-        <span style="display:inline-block;border:1px solid;border-radius:999px;padding:2px 8px;font-size:12px;font-weight:600;white-space:nowrap;${severity.pill}">${escapeHtml(row.status)}</span>
-      </td>
-      <td style="${cellStyle};text-align:right;font-weight:600;color:${severity.text};white-space:nowrap">${overdueDisplayValue(row.daysUntilDue)}</td>
-    </tr>`;
-    })
-    .join('');
-  const tableHtml = settings.includeTable
-    ? `
-    ${buyerTraderFilterHtml(report, settings)}
-    <div style="max-height:420px;overflow:auto;border:1px solid #d9e2ef;border-radius:10px">
-      <table style="border-collapse:collapse;width:100%;min-width:1260px;font-size:13px">
-        <thead>
-          <tr style="background:#f8fafc;color:#667085;text-transform:uppercase;font-size:11px;letter-spacing:.04em">
-            <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left;position:sticky;top:0;background:#f8fafc">Stem</th>
-            <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left;position:sticky;top:0;background:#f8fafc">Buyer</th>
-            <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left;position:sticky;top:0;background:#f8fafc">Buyer Broker</th>
-            <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:right;position:sticky;top:0;background:#f8fafc">Invoice Amount</th>
-            <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:right;position:sticky;top:0;background:#f8fafc">Receivable Balance</th>
-            <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left;position:sticky;top:0;background:#f8fafc">Due Date</th>
-            <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left;position:sticky;top:0;background:#f8fafc">Buyer Trader</th>
-            <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left;position:sticky;top:0;background:#f8fafc">Payment Collection Handler</th>
-            <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left;position:sticky;top:0;background:#f8fafc">PSPRS</th>
-            <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:left;position:sticky;top:0;background:#f8fafc">Status</th>
-            <th style="border-bottom:1px solid #d9e2ef;padding:8px 10px;text-align:right;position:sticky;top:0;background:#f8fafc">Overdue</th>
-          </tr>
-        </thead>
-        <tbody>${tableRows || '<tr><td colspan="11" style="padding:18px;text-align:center;color:#667085">No outstanding buyer invoices found.</td></tr>'}</tbody>
-      </table>
-    </div>`
-    : '';
-  const contentHtml = emailContentHtml(content);
-  const hasAttentionMarker = /for your attention\./i.test(contentHtml);
-  const contentText = hasHtmlMarkup(content) ? htmlToPlainText(content) : content;
-  const reportBodyHtml = hasAttentionMarker && tableHtml ? `${insertAfterAttentionSentence(contentHtml, tableHtml)}${summaryHtml}` : `${contentHtml}${summaryHtml}${tableHtml}`;
-  const html = `
-    <div style="font-family:Inter,Arial,sans-serif;color:#1f2937;line-height:1.45">
-      ${reportBodyHtml}
-    </div>`;
-  const tableText = rows.map((row) => `${row.stemName} | ${row.buyerName || '-'} | Buyer Broker ${row.buyerBrokerNames || '-'} | Receivable Balance ${money(row.receivableBalance)} | Due ${prettyDate(row.buyerInvoiceDueDate)} | Buyer Trader ${row.buyerTraderInCharge || '-'} | Payment Collection Handler ${row.paymentHandlerName || row.collection?.ownerName || '-'} | PSPRS ${row.prpspStatus || '-'} | ${row.status} | Overdue ${overdueDisplayValue(row.daysUntilDue)}`).join('\n');
-  const introText = hasAttentionMarker && tableText ? insertAfterAttentionSentence(contentText, `\n\n${tableText}\n\n`) : contentText;
-  const textLines = [introText, `Overdue: ${money(totals.overdueReceivable)} (${totals.overdueCount})`, `${dueSoonLabel}: ${money(totals.dueSoonReceivable)} (${totals.dueSoonCount})`, `Open all invoices: ${buyerInvoiceFilterUrl(settings, report, null)}`, ...(report.buyerTraderOptions || []).map((name) => `Open ${name}: ${buyerInvoiceFilterUrl(settings, report, name)}`), '', ...(hasAttentionMarker ? [] : rows.map((row) => `${row.stemName} | ${row.buyerName || '-'} | Buyer Broker ${row.buyerBrokerNames || '-'} | Receivable Balance ${money(row.receivableBalance)} | Due ${prettyDate(row.buyerInvoiceDueDate)} | Buyer Trader ${row.buyerTraderInCharge || '-'} | Payment Collection Handler ${row.paymentHandlerName || row.collection?.ownerName || '-'} | PSPRS ${row.prpspStatus || '-'} | ${row.status} | Overdue ${overdueDisplayValue(row.daysUntilDue)}`))];
-  return { subject, html, text: textLines.join('\n'), totals };
-}
-
-function isFratelliCosulichBuyerGroup(value) {
-  return /\bfratelli\s+cosulich\b/i.test(String(value || ''));
-}
-
-function rowBuyerReminderRecipients(row) {
-  return uniqueEmailList(row?.paymentReminderRecipients || [], row?.paymentReminderRecipient || '', row?.buyerAccountsEmail || '', row?.buyerTraderEmail || '', row?.paymentHandlerEmail || '');
-}
-
-function rowBrokerReminderEmails(row) {
-  return uniqueEmailList(row?.buyerBrokerEmails || '');
-}
-
-function paymentReminderRowRouting(row) {
-  const buyerRecipients = rowBuyerReminderRecipients(row);
-  const brokerEmails = rowBrokerReminderEmails(row);
-  const brokerNames = uniqueTextList(String(row?.buyerBrokerNames || '').split(','));
-  const mode = row?.buyerBrokerRoutingMode || 'buyer_only';
-  if (mode === 'broker_only') {
-    return {
-      mode,
-      to: brokerEmails,
-      cc: [],
-      bcc: [],
-      primaryRecipientName: brokerNames[0] || row?.buyerBrokerNames || 'Broker',
-      warnings: row?.buyerBrokerRoutingWarnings || [],
-    };
-  }
-  if (mode === 'buyer_cc_broker') {
-    return {
-      mode,
-      to: buyerRecipients,
-      cc: brokerEmails,
-      bcc: [],
-      primaryRecipientName: row?.buyerName || 'Customer',
-      warnings: row?.buyerBrokerRoutingWarnings || [],
-    };
-  }
-  return {
-    mode: 'buyer_only',
-    to: buyerRecipients,
-    cc: [],
-    bcc: brokerEmails,
-    primaryRecipientName: row?.buyerName || 'Customer',
-    warnings: row?.buyerBrokerRoutingWarnings || [],
-  };
-}
-
-function paymentReminderRoutingForRows(rows = []) {
-  const resultGroups = groupPaymentReminderRows(rows, paymentReminderRowRouting);
-  return {
-    groups: resultGroups,
-    to: uniqueEmailList(...resultGroups.map((group) => group.to)),
-    cc: uniqueEmailList(...resultGroups.map((group) => group.cc)),
-    bcc: uniqueEmailList(...resultGroups.map((group) => group.bcc)),
-    warnings: uniqueTextList(resultGroups.flatMap((group) => group.warnings)),
-  };
-}
-
-function paymentReminderRecipients(rows) {
-  return paymentReminderRoutingForRows(rows).to;
-}
-
-function paymentReminderTemplateContext(report, rows, selected, routing = null) {
-  const totalReceivable = (rows || []).reduce((sum, row) => sum + Number(row.receivableBalance || 0), 0);
-  const selectedRow = selected || {};
-  const brokerRows = rows?.length ? rows : [selectedRow];
-  const routingInfo = routing || paymentReminderRoutingForRows(rows || []).groups[0] || null;
-  return {
-    stemName: selectedRow.stemName || '',
-    keyStem: selectedRow.keyStem || '',
-    buyerName: selectedRow.buyerName || 'Customer',
-    primaryRecipientName: routingInfo?.primaryRecipientName || selectedRow.buyerName || 'Customer',
-    buyerGroupName: selectedRow.buyerGroupName || '',
-    invoiceAmount: money(selectedRow.invoiceAmount),
-    receivableBalance: money(selectedRow.receivableBalance),
-    buyerInvoiceDueDate: prettyDate(selectedRow.buyerInvoiceDueDate),
-    buyerTraderInCharge: selectedRow.buyerTraderInCharge || '',
-    buyerAccountsEmail: selectedRow.buyerAccountsEmail || '',
-    buyerTraderEmail: selectedRow.buyerTraderEmail || '',
-    paymentHandlerName: selectedRow.paymentHandlerName || selectedRow.collection?.ownerName || '',
-    paymentHandlerEmail: selectedRow.paymentHandlerEmail || '',
-    buyerBrokerNames: uniqueTextList(brokerRows.map((row) => row.buyerBrokerNames)).join(', '),
-    buyerBrokerEmails: uniqueEmailList(...brokerRows.map((row) => row.buyerBrokerEmails || '')).join(', '),
-    buyerBrokerInvoiceFormats: uniqueTextList(brokerRows.map((row) => row.buyerBrokerInvoiceFormats)).join(', '),
-    toRecipients: routingInfo ? routingInfo.to.join(', ') : paymentReminderRecipients(rows).join(', '),
-    psprsStatus: selectedRow.prpspStatus || '',
-    overdue: overdueDisplayValue(selectedRow.daysUntilDue),
-    invoiceStatus: selectedRow.status || '',
-    daysAhead: String(report.daysAhead ?? DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS.daysAhead),
-    today: prettyDate(report.today),
-    dueThrough: prettyDate(report.dueThrough),
-    invoiceCount: String((rows || []).length),
-    totalReceivable: money(totalReceivable),
-  };
-}
-
-function renderPaymentReminderTemplate(template, context) {
-  const values = context || {};
-  return String(template || '').replace(/\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g, (match, key) => (Object.prototype.hasOwnProperty.call(values, key) ? values[key] : match));
-}
-
-function renderPaymentReminderEmailList(value, context) {
-  const raw = Array.isArray(value) ? value.join(', ') : String(value || '');
-  return parseEmailList(renderPaymentReminderTemplate(raw, context), []);
-}
-
-function hasHtmlMarkup(value) {
-  return /<\/?[a-z][\s\S]*>/i.test(String(value || ''));
-}
-
-function sanitizeReminderHtml(value) {
-  return String(value || '')
-    .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, '')
-    .replace(/<style[\s\S]*?>[\s\S]*?<\/style>/gi, '')
-    .replace(/\son[a-z]+\s*=\s*(['"]).*?\1/gi, '')
-    .replace(/\son[a-z]+\s*=\s*[^\s>]+/gi, '')
-    .replace(/javascript:/gi, '');
-}
-
-function htmlToPlainText(value) {
-  return String(value || '')
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/p>/gi, '\n\n')
-    .replace(/<[^>]+>/g, '')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#039;/g, "'")
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}
-
-function paymentReminderContentHtml(content) {
-  const html = hasHtmlMarkup(content)
-    ? sanitizeReminderHtml(content)
-    : String(content || '')
-        .split(/\n{2,}/)
-        .map((block) => `<p>${escapeHtml(block.trim()).replaceAll('\n', '<br>')}</p>`)
-        .join('');
-  const matches = [...html.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/gi)];
-  const paragraphs = matches.length ? matches.map((match) => match[1]) : html.split(/<br\s*\/?>|\n{2,}/i).map((block) => escapeHtml(block.trim()));
-  return paragraphs
-    .map((inner) => inner.trim())
-    .filter((inner) => htmlToPlainText(inner).trim())
-    .map((inner) => {
-      const text = htmlToPlainText(inner).replace(/\s+/g, ' ').trim().toLowerCase();
-      let margin = '0 0 12px';
-      if (/^to\s+/.test(text)) margin = '0 0 3px';
-      else if (/^attn\b/.test(text)) margin = '0 0 18px';
-      else if (/^regards,?/.test(text)) margin = '24px 0 3px';
-      else if (/^fratelli\s+cosulich/.test(text)) margin = '0';
-      return `<p style="margin:${margin};padding:0;color:#1f2937;line-height:1.35;text-align:left">${inner}</p>`;
-    })
-    .join('');
-}
-
-function insertAfterAttentionSentence(content, insertContent) {
-  const source = String(content || '');
-  const marker = /for your attention\./i.exec(source);
-  if (!marker) return `${source}${insertContent}`;
-  const afterMarker = marker.index + marker[0].length;
-  const rest = source.slice(afterMarker);
-  const paragraphClose = /<\/p>/i.exec(rest);
-  if (paragraphClose && paragraphClose.index < 300) {
-    const insertAt = afterMarker + paragraphClose.index + paragraphClose[0].length;
-    return `${source.slice(0, insertAt)}${insertContent}${source.slice(insertAt)}`;
-  }
-  return `${source.slice(0, afterMarker)}\n\n${insertContent}${source.slice(afterMarker)}`;
-}
-
-function insertInvoiceTable(content, insertContent) {
-  const source = String(content || '');
-  if (INVOICE_TABLE_TOKEN_PATTERN.test(source)) {
-    return source.replace(new RegExp(`<p\\b[^>]*>\\s*${INVOICE_TABLE_TOKEN_PATTERN.source}\\s*<\\/p>`, 'i'), insertContent).replace(INVOICE_TABLE_TOKEN_PATTERN, insertContent);
-  }
-  return insertAfterAttentionSentence(source, insertContent);
-}
-
-function buildBuyerInvoicePaymentReminderEmail(report, settings, selected, rows, overrides = {}, routing = null) {
-  const selectedRows = rows || [];
-  const context = paymentReminderTemplateContext(report, selectedRows, selected, routing);
-  const subject = renderPaymentReminderTemplate(overrides.subject || settings.paymentReminderSubject, context);
-  const body = renderPaymentReminderTemplate(overrides.body || settings.paymentReminderBody, context);
-  const tableRows = selectedRows
-    .map((row) => {
-      const severity = overdueEmailStyles(row.daysUntilDue, row.prpspStatus);
-      const cellStyle = `border-bottom:1px solid ${severity.border};padding:7px 8px;vertical-align:top`;
-      const nowrapCellStyle = `${cellStyle};white-space:nowrap`;
-      return `
-    <tr style="${severity.row}">
-      <td style="${cellStyle};font-weight:600;min-width:150px">${escapeHtml(row.stemName)}</td>
-      <td style="${cellStyle};min-width:110px">${escapeHtml(row.buyerName || '-')}</td>
-      <td style="${nowrapCellStyle};text-align:right">${money(row.invoiceAmount)}</td>
-      <td style="${nowrapCellStyle};text-align:right;font-weight:600">${money(row.receivableBalance)}</td>
-      <td style="${nowrapCellStyle}">${prettyDate(row.buyerInvoiceDueDate)}</td>
-      <td style="${cellStyle};min-width:84px">${escapeHtml(row.buyerTraderInCharge || '-')}</td>
-      <td style="${nowrapCellStyle}">
-        <span style="display:inline-block;border:1px solid;border-radius:999px;padding:2px 8px;font-size:12px;font-weight:600;white-space:nowrap;${severity.pill}">${escapeHtml(row.status)}</span>
-      </td>
-      <td style="${nowrapCellStyle};text-align:right;font-weight:600;color:${severity.text}">${overdueDisplayValue(row.daysUntilDue)}</td>
-    </tr>`;
-    })
-    .join('');
-  const tableHtml = `
-    <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid #d9e2ef;border-radius:10px;margin:14px 0 16px;max-width:100%">
-      <table style="border-collapse:collapse;width:auto;min-width:100%;max-width:none;font-size:12px;line-height:1.25;table-layout:auto">
-        <thead>
-          <tr style="background:#f8fafc;color:#667085;text-transform:uppercase;font-size:11px;letter-spacing:.04em">
-	            <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:left;white-space:nowrap">Stem</th>
-	            <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:left;white-space:nowrap">Buyer</th>
-            <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:right;white-space:nowrap">Invoice</th>
-            <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:right;white-space:nowrap">Receivable</th>
-            <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:left;white-space:nowrap">Due Date</th>
-            <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:left;white-space:nowrap">Trader</th>
-            <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:left;white-space:nowrap">Status</th>
-            <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:right;white-space:nowrap">Overdue</th>
-          </tr>
-        </thead>
-        <tbody>${tableRows || '<tr><td colspan="8" style="padding:18px;text-align:center;color:#667085">No invoices selected.</td></tr>'}</tbody>
-      </table>
-    </div>`;
-  const bodyHtml = paymentReminderContentHtml(body);
-  const htmlWithTable = insertInvoiceTable(bodyHtml, tableHtml);
-  const invoiceText = selectedRows.map((row) => `${row.stemName} | ${row.buyerName || '-'} | Receivable Balance ${money(row.receivableBalance)} | Due ${prettyDate(row.buyerInvoiceDueDate)} | ${row.status} | Overdue ${overdueDisplayValue(row.daysUntilDue)} | Buyer Trader ${row.buyerTraderInCharge || '-'}`).join('\n');
-  const bodyText = hasHtmlMarkup(body) ? htmlToPlainText(body) : body;
-  const html = `
-    <div style="font-family:Inter,Arial,sans-serif;color:#1f2937;line-height:1.45">
-      ${htmlWithTable}
-    </div>`;
-  const text = insertInvoiceTable(bodyText, `\n\n${invoiceText}\n\n`);
-  return { subject, body, html, text };
-}
-
-async function loadBuyerInvoicePaymentReminderContext(body = {}, accessContext = null) {
-  const stemId = String(body.stemId || body.stem_id || '').trim();
-  if (!isSalesforceId(stemId)) throw appError('A valid Salesforce STEM is required for a payment reminder.', 400);
-  if (accessContext) await requireInterofficeStemAccess(stemId, accessContext);
-  const [stored, sender] = await Promise.all([
-    loadStoredBuyerInvoiceEmailSettings(),
-    accessContext?.client
-      ? resolveGraphEmailSender(accessContext.client, 'payment_reminders')
-      : Promise.resolve(null),
-  ]);
-  if (stored.meta.storageAvailable !== true) {
-    throw appError('Buyer Invoice email settings are temporarily unavailable. External payment reminders are disabled until storage is restored.', 503);
-  }
-  const settings = {
-    ...buyerInvoiceEmailSettings(stored.settings),
-    hasBuyerTraderFilter: (stored.settings.buyerTraders || []).length > 0,
-  };
-  const report = await salesforceBuyerInvoicesDueTargeted(
-    {
-      daysAhead: body.daysAhead ?? settings.daysAhead,
-      anchorStemId: stemId,
-      requestedStemIds: body.requestedStemIds || body.invoiceStemIds,
-    },
-    null,
-    accessContext,
-  );
-  if (report.paymentReminderRulesAvailable !== true) {
-    throw appError('Buyer Invoice reminder rules are temporarily unavailable. External payment reminders are disabled until storage is restored.', 503);
-  }
-  const selected = report.rows.find((row) => row.stemId === stemId);
-  if (!selected) throw appError('Selected invoice is no longer in the current outstanding invoice window.', 404);
-  const candidates = report.rows
-    .filter((row) => buyerReminderCandidateByAccount(row, selected))
-    .sort((a, b) => {
-      if (a.buyerInvoiceDueDate !== b.buyerInvoiceDueDate) return a.buyerInvoiceDueDate.localeCompare(b.buyerInvoiceDueDate);
-      return String(a.stemName || '').localeCompare(String(b.stemName || ''));
-    });
-  return { settings, settingsRevision: Number(stored.meta.revision || 0), report, selected, candidates, sender };
-}
-
-function preparePaymentReminderRouting(report, settings, selected, candidates) {
-  const eligibleCandidates = candidates.filter((row) => row.paymentReminderEligible === true);
-  const routing = paymentReminderRoutingForRows(eligibleCandidates);
-  const firstGroup = routing.groups.find((group) => group.rows.some((row) => row.stemId === selected.stemId))
-    || routing.groups[0]
-    || {
-      key: 'default', rows: eligibleCandidates, to: [], cc: [], bcc: [],
-      primaryRecipientName: selected.buyerName || 'Customer', mode: 'buyer_only', warnings: [],
-    };
-  const firstSelected = firstGroup.rows.find((row) => row.stemId === selected.stemId) || firstGroup.rows[0] || selected;
-  const preparedGroups = routing.groups.map((group) => {
-    const groupSelected = group.rows.find((row) => row.stemId === selected.stemId) || group.rows[0] || selected;
-    const groupContext = paymentReminderTemplateContext(report, group.rows, groupSelected, group);
-    return {
-      mode: group.mode,
-      key: group.key,
-      to: group.to,
-      cc: uniqueEmailList(group.cc, renderPaymentReminderEmailList(settings.paymentReminderCc, groupContext)),
-      bcc: uniqueEmailList(group.bcc, renderPaymentReminderEmailList(settings.paymentReminderBcc, groupContext)),
-      primaryRecipientName: group.primaryRecipientName,
-      warnings: group.warnings,
-      stemIds: group.rows.map((row) => row.stemId),
-    };
-  });
-  const firstPreparedGroup = preparedGroups.find((group) => group.key === firstGroup.key)
-    || preparedGroups[0]
-    || { to: firstGroup.to, cc: firstGroup.cc, bcc: firstGroup.bcc };
-  const email = buildBuyerInvoicePaymentReminderEmail(report, settings, firstSelected, firstGroup.rows, {}, firstGroup);
-  return { eligibleCandidates, routing, firstGroup, firstPreparedGroup, preparedGroups, email };
-}
-
-function paymentReminderPreparationFingerprint({ candidates, preparedGroups, settingsRevision }) {
-  return createHash('sha256').update(JSON.stringify({
-    candidates: candidates.map((row) => ({
-      stemId: row.stemId,
-      lastModifiedAt: row.lastModifiedAt || null,
-      eligible: row.paymentReminderEligible === true,
-      ruleRevision: Number(row.reminderRuleRevision || 0),
-      ruleUpdatedAt: row.reminderRuleUpdatedAt || null,
-    })).sort((left, right) => left.stemId.localeCompare(right.stemId)),
-    groups: preparedGroups.map((group) => ({
-      key: group.key,
-      stemIds: [...group.stemIds].sort(),
-      to: uniqueEmailList(group.to).map((email) => email.toLowerCase()).sort(),
-      cc: uniqueEmailList(group.cc).map((email) => email.toLowerCase()).sort(),
-      bcc: uniqueEmailList(group.bcc).map((email) => email.toLowerCase()).sort(),
-    })).sort((left, right) => left.key.localeCompare(right.key)),
-    settingsRevision,
-  })).digest('hex');
-}
-
-function paymentReminderConflictDetails(candidates = []) {
-  return {
-    candidates: candidates.map((row) => ({
-      stemId: row.stemId,
-      stemName: row.stemName,
-      buyerName: row.buyerName,
-      receivableBalance: row.receivableBalance,
-      buyerInvoiceDueDate: row.buyerInvoiceDueDate,
-      paymentReminderEligible: row.paymentReminderEligible === true,
-      paymentReminderBlockingReason: row.paymentReminderBlockingReason || null,
-      lastModifiedAt: row.lastModifiedAt || null,
-    })),
-  };
-}
-
-async function buyerInvoicePaymentReminderPrepare(body, req, accessContext = null) {
-  const startedAt = Date.now();
-  const activeAccess = accessContext || (await requireActiveUser(req));
-  const { settings, settingsRevision, report, selected, candidates } = await loadBuyerInvoicePaymentReminderContext(body, activeAccess);
-  if (selected.paymentReminderEligible !== true) {
-    throw appError(selected.paymentReminderBlockingReason || 'This invoice is not eligible for an external payment reminder.', 409);
-  }
-  const { routing, firstPreparedGroup, preparedGroups, email } = preparePaymentReminderRouting(report, settings, selected, candidates);
-  const prepareMs = Date.now() - startedAt;
-  const preparationHash = paymentReminderPreparationFingerprint({ candidates, preparedGroups, settingsRevision });
-  const previewToken = signPaymentReminderPreview({
-    anchorStemId: selected.stemId,
-    candidateStemIds: candidates.map((row) => row.stemId).sort(),
-    preparationHash,
-    settingsRevision,
-    prepareMs,
-  }, paymentReminderPreviewSecret());
-  return {
-    selected,
-    candidates,
-    to: firstPreparedGroup.to,
-    allTo: routing.to,
-    cc: firstPreparedGroup.cc,
-    bcc: firstPreparedGroup.bcc,
-    autoBcc: firstPreparedGroup.bcc,
-    subject: settings.paymentReminderSubject,
-    body: settings.paymentReminderBody,
-    preview: { html: email.html, text: email.text },
-    routingGroups: preparedGroups,
-    routingWarnings: routing.warnings,
-    settingsRevision,
-    previewToken,
-    preparationHash,
-    timings: { prepareMs },
-    settings: {
-      paymentReminderToSource: 'Buyer account/trader/payment handler plus buyer broker Account.Email by Invoice Format',
-      emailDelivery: serverEmailDeliveryStatus(),
-      daysAhead: report.daysAhead,
-      paymentReminderCc: settings.paymentReminderCc,
-      paymentReminderBcc: settings.paymentReminderBcc,
-    },
-  };
-}
-
-async function buyerInvoicePaymentReminderSend(body, req, accessContext = null) {
-  const activeAccess = accessContext || (await requireActiveUser(req));
-  const selectedStemIds = new Set((Array.isArray(body.invoiceStemIds) ? body.invoiceStemIds : []).map((id) => String(id || '').trim()).filter(Boolean));
-  if (!selectedStemIds.size) throw appError('Select at least one invoice to include in the payment reminder.', 400);
-  const idempotencyKey = String(body.idempotencyKey || '').trim();
-  if (idempotencyKey.length < 16 || idempotencyKey.length > 200) throw appError('A valid payment reminder operation ID is required.', 400);
-  const preview = verifyPaymentReminderPreview(body.previewToken, paymentReminderPreviewSecret());
-  const anchorStemId = String(body.stemId || '').trim();
-  if (preview.anchorStemId !== anchorStemId) throw appError('The payment reminder review belongs to another invoice. Reopen it before sending.', 409);
-  if ([...selectedStemIds].some((stemId) => !preview.candidateStemIds?.includes(stemId))) {
-    throw appError('The selected invoice list changed after review. Reopen the payment reminder before sending.', 409);
-  }
-  const validationStartedAt = Date.now();
-  await reconcileBuyerInvoiceCollections({
-    client: activeAccess.client,
-    profile: activeAccess.profile,
-    accessContext: activeAccess,
-    stemIds: [...selectedStemIds],
-  });
-  const { settings, settingsRevision: liveSettingsRevision, report, selected, candidates, sender } = await loadBuyerInvoicePaymentReminderContext(
-    { ...body, requestedStemIds: null },
-    activeAccess,
-  );
-  const liveRouting = preparePaymentReminderRouting(report, settings, selected, candidates);
-  const livePreparationHash = paymentReminderPreparationFingerprint({
-    candidates,
-    preparedGroups: liveRouting.preparedGroups,
-    settingsRevision: liveSettingsRevision,
-  });
-  if (Number(preview.settingsRevision) !== Number(liveSettingsRevision) || preview.preparationHash !== livePreparationHash) {
-    throw appError('Salesforce, reminder rules, recipients, or email settings changed after review. Review the refreshed reminder before sending.', 409, 'PAYMENT_REMINDER_REVIEW_STALE', paymentReminderConflictDetails(candidates));
-  }
-  const selection = evaluateBuyerReminderSelection(candidates, [...selectedStemIds]);
-  if (selection.unknownStemIds.length) {
-    throw appError('The selected invoice list changed after review. Review the refreshed reminder before sending.', 409, 'PAYMENT_REMINDER_SELECTION_STALE', paymentReminderConflictDetails(candidates));
-  }
-  if (selection.restrictedRows.length) {
-    throw appError(selection.restrictedRows[0].paymentReminderBlockingReason || 'One or more selected invoices are no longer eligible for an external payment reminder.', 409, 'PAYMENT_REMINDER_SELECTION_RESTRICTED', paymentReminderConflictDetails(candidates));
-  }
-  const rows = selection.rows;
-  const routing = paymentReminderRoutingForRows(rows);
-  if (!routing.groups.length) throw appError('No payment reminder recipient group could be built.', 400);
-  if (!Array.isArray(body.recipientBatches)) {
-    throw appError('Reviewed email recipient fields are required. Reopen the payment reminder preview and confirm each email batch before sending.', 400);
-  }
-  const reviewedRecipientBatches = new Map(body.recipientBatches.filter((batch) => batch?.key).map((batch) => [batch.key, batch]));
-  const outboundBatches = routing.groups.map((group) => {
-    const groupSelected = group.rows.find((row) => row.stemId === selected.stemId) || group.rows[0] || selected;
-    const reviewedBatch = reviewedRecipientBatches.get(group.key);
-    if (!reviewedBatch) throw appError(`Reviewed recipient fields are missing for ${group.primaryRecipientName || 'recipient group'}. Reopen the preview before sending.`, 400);
-    const to = uniqueEmailList(reviewedBatch.to || '');
-    const cc = uniqueEmailList(reviewedBatch.cc || '');
-    const bcc = uniqueEmailList(reviewedBatch.bcc || '');
-    if (!to.length) throw appError(`Payment reminder recipient is required for ${group.primaryRecipientName || 'recipient group'}.`, 400);
-    const email = buildBuyerInvoicePaymentReminderEmail(report, settings, groupSelected, group.rows, { subject: body.subject, body: body.body }, { ...group, to });
-    return { group, to, cc, bcc, email };
-  });
-  const validationMs = Date.now() - validationStartedAt;
-  const requestHash = paymentReminderRequestHash({
-    anchorStemId,
-    invoiceStemIds: [...selectedStemIds],
-    recipientBatches: body.recipientBatches,
-    subject: body.subject,
-    body: body.body,
-  });
-  const reservation = await reservePaymentReminderOperation(activeAccess.client, {
-    idempotencyKey,
-    requestHash,
-    anchorStemId,
-    selectedStemIds: [...selectedStemIds],
-    batchCount: outboundBatches.length,
-    actorUserId: activeAccess.profile.id,
-    actorEmail: activeAccess.profile.email,
-  });
-  if (reservation.replay) return { sent: true, idempotencyReplayed: true, ...reservation.result };
-  if (reservation.uncertain) throw appError('A previous delivery attempt has an uncertain Microsoft Graph outcome. Verify Sent Items before retrying.', 409);
-  if (reservation.blocked) throw appError('This payment reminder is already being processed.', 409);
-  const operationId = reservation.operationId;
-  const graphStartedAt = Date.now();
-  const deliveryResults = await mapPaymentReminderBatches(outboundBatches, async (batch) => {
-    const batchKeyHash = createHash('sha256').update(batch.group.key).digest('hex');
-    const batchRequestHash = paymentReminderBatchHash({
-      key: batch.group.key,
-      stemIds: batch.group.rows.map((row) => row.stemId),
-      to: batch.to,
-      cc: batch.cc,
-      bcc: batch.bcc,
-    }, { subject: batch.email.subject, html: batch.email.html });
-    const recipientCount = uniqueEmailList(batch.to, batch.cc, batch.bcc).length;
-    let batchReservation;
-    try {
-      batchReservation = await reservePaymentReminderBatch(activeAccess.client, {
-        operationId,
-        batchKeyHash,
-        requestHash: batchRequestHash,
-        stemIds: batch.group.rows.map((row) => row.stemId),
-        rowCount: batch.group.rows.length,
-        recipientCount,
-      });
-    } catch (error) {
-      return { ...batch, status: 'failed', errorCode: 'PAYMENT_REMINDER_BATCH_RESERVE_FAILED', error, graphMs: 0 };
-    }
-    if (batchReservation.replay) return { ...batch, status: 'accepted', replay: true, providerRequestId: batchReservation.providerRequestId, graphMs: 0 };
-    if (batchReservation.uncertain) return { ...batch, status: 'uncertain', errorCode: 'PAYMENT_REMINDER_BATCH_UNCERTAIN', graphMs: 0 };
-    const batchStartedAt = Date.now();
-    try {
-      const result = await sendOperationalMail({
-        to: batch.to, cc: batch.cc, bcc: batch.bcc,
-        subject: batch.email.subject, html: batch.email.html, text: batch.email.text,
-      }, {
-        client: activeAccess.client, purposeKey: 'payment_reminders',
-        mailboxSnapshot: { id: sender.mailboxId, emailAddress: sender.emailAddress },
-      });
-      const graphMs = Date.now() - batchStartedAt;
-      await completePaymentReminderBatch(activeAccess.client, {
-        operationId, batchKeyHash, status: 'accepted',
-        providerRequestId: result.id || result.messageId || null, graphMs,
-      });
-      return { ...batch, status: 'accepted', result, graphMs };
-    } catch (error) {
-      const graphMs = Date.now() - batchStartedAt;
-      const uncertain = paymentReminderDeliveryUncertain(error);
-      try {
-        await completePaymentReminderBatch(activeAccess.client, {
-          operationId, batchKeyHash, status: uncertain ? 'uncertain' : 'failed',
-          graphMs, errorCode: String(error?.code || 'PAYMENT_REMINDER_DELIVERY_FAILED').slice(0, 100),
-        });
-      } catch (ledgerError) {
-        console.error('[payment-reminder] delivery ledger update failed', { requestId: requestIdFrom(req), code: ledgerError?.code || null });
-        return { ...batch, status: 'uncertain', errorCode: 'PAYMENT_REMINDER_LEDGER_UNCERTAIN', error, graphMs };
-      }
-      console.error('[buyerInvoicePaymentReminderSend] email provider failed', {
-        code: String(error?.code || error?.name || 'provider_error').slice(0, 80),
-        provider: operationalMailConfig().deliveryMethod,
-        toCount: batch.to.length, ccCount: batch.cc.length, bccCount: batch.bcc.length,
-        rows: batch.group.rows.length, routingMode: batch.group.mode,
-      });
-      return { ...batch, status: uncertain ? 'uncertain' : 'failed', errorCode: error?.code || null, error, graphMs };
-    }
-  }, 3);
-  const graphMs = Date.now() - graphStartedAt;
-  const accepted = deliveryResults.filter((item) => item.status === 'accepted');
-  const failed = deliveryResults.filter((item) => item.status === 'failed');
-  const uncertain = deliveryResults.filter((item) => item.status === 'uncertain');
-  const preTimelineStatus = uncertain.length ? 'uncertain' : accepted.length === outboundBatches.length ? 'accepted' : accepted.length ? 'partial' : 'failed';
-  await completePaymentReminderOperation(activeAccess.client, {
-    operationId,
-    status: preTimelineStatus,
-    acceptedBatchCount: accepted.length,
-    failedBatchCount: failed.length,
-    timelineRecorded: false,
-    prepareMs: Number(preview.prepareMs || 0), validationMs, graphMs, timelineMs: 0,
-    errorCode: uncertain[0]?.errorCode || failed[0]?.errorCode || null,
-  });
-
-  const collectionWarnings = [];
-  let collectionResults = [];
-  let timelineMs = 0;
-  if (accepted.length) {
-    const timelineStartedAt = Date.now();
-    const timelineRows = accepted.flatMap((item) => {
-      const recipientCount = uniqueEmailList(item.to, item.cc, item.bcc).length;
-      const note = [`Payment reminder accepted by Microsoft Graph.`, `Recipients: ${recipientCount}`, `Routing: ${item.group.mode}`, `Included invoices: ${item.group.rows.length}`].join('\n');
-      const subjectHash = createHash('sha256').update(item.email.subject).digest('hex');
-      return item.group.rows.map((row) => ({
-        stemId: row.stemId,
-        ownerName: row.collection?.ownerName || splitBuyerTraderNames(row.buyerTraderInCharge)[0] || '',
-        note, recipientCount, subjectHash,
-      }));
-    });
-    try {
-      const saved = await savePaymentReminderTimeline(activeAccess.client, {
-        operationId, rows: timelineRows,
-        actorUserId: activeAccess.profile.id, actorEmail: activeAccess.profile.email,
-      });
-      collectionResults = (Array.isArray(saved) ? saved : []).map((item) => ({
-        item: serializeCollectionItem(item?.item),
-        event: serializeCollectionEvent(item?.event),
-      }));
-    } catch (error) {
-      console.error('[payment-reminder] atomic timeline update failed', { requestId: requestIdFrom(req), code: error?.code || null });
-      collectionWarnings.push({ error: 'The reminder was sent, but FCOS will repair its collection timeline during reconciliation.' });
-    }
-    timelineMs = Date.now() - timelineStartedAt;
-  }
-
-  const completed = accepted.length === outboundBatches.length && collectionWarnings.length === 0;
-  const finalStatus = completed ? 'completed' : preTimelineStatus;
-  const redactedResult = {
-    operationId,
-    emails: accepted.length,
-    rows: accepted.reduce((sum, item) => sum + item.group.rows.length, 0),
-    recipientCount: accepted.reduce((sum, item) => sum + uniqueEmailList(item.to, item.cc, item.bcc).length, 0),
-    acceptedBatchCount: accepted.length,
-    failedBatchCount: failed.length,
-    uncertainBatchCount: uncertain.length,
-  };
-  await completePaymentReminderOperation(activeAccess.client, {
-    operationId, status: finalStatus,
-    acceptedBatchCount: accepted.length, failedBatchCount: failed.length,
-    timelineRecorded: collectionWarnings.length === 0,
-    prepareMs: Number(preview.prepareMs || 0), validationMs, graphMs, timelineMs,
-    resultSnapshot: redactedResult,
-    errorCode: uncertain[0]?.errorCode || failed[0]?.errorCode || null,
-  });
-
-  if (!accepted.length) {
-    const firstError = uncertain[0]?.error || failed[0]?.error;
-    if (uncertain.length) throw appError('Microsoft Graph delivery could not be confirmed. Verify Sent Items before retrying.', 409);
-    throw firstError || appError('Microsoft Graph rejected every payment reminder batch.', 502);
-  }
-
-  waitUntil(Promise.resolve().then(() => {
-    expireRuntimeCacheTags(['salesforce:buyer-invoices']);
-  }).catch(() => {}));
-  return {
-    sent: completed,
-    partial: !completed,
-    operationId,
-    id: accepted[0]?.result?.id || accepted[0]?.providerRequestId || null,
-    emails: accepted.length,
-    batches: accepted.map((item) => ({
-      to: item.to, cc: item.cc, bcc: item.bcc,
-      subject: item.email.subject, rows: item.group.rows.length, mode: item.group.mode,
-    })),
-    failedBatches: [...failed, ...uncertain].map((item) => ({
-      key: item.group.key, mode: item.group.mode, rows: item.group.rows.length,
-      status: item.status, errorCode: item.errorCode || null,
-    })),
-    to: uniqueEmailList(...accepted.map((item) => item.to)),
-    cc: uniqueEmailList(...accepted.map((item) => item.cc)),
-    bcc: uniqueEmailList(...accepted.map((item) => item.bcc)),
-    subject: accepted[0]?.email.subject || null,
-    rows: accepted.reduce((sum, item) => sum + item.group.rows.length, 0),
-    collectionResults,
-    collectionWarnings,
-    timings: { prepareMs: Number(preview.prepareMs || 0), validationMs, graphMs, timelineMs },
-  };
-}
-
-async function startBuyerInvoiceEmailRun(window) {
-  const client = safeSupabaseAdminClient();
-  if (!client) return { allowed: true, run: null };
-  const { data, error } = await client
-    .from('buyer_invoice_email_runs')
-    .insert({
-      run_key: window.runKey,
-      schedule_time: window.time,
-      status: 'running',
-    })
-    .select('id,run_key,status,created_at')
-    .single();
-  if (error?.code === '23505') return { allowed: false, duplicate: true };
-  if (error) throw error;
-  return { allowed: true, run: data };
-}
-
-async function finishBuyerInvoiceEmailRun(runKey, patch = {}) {
-  const client = safeSupabaseAdminClient();
-  if (!client || !runKey) return;
-  const { error } = await client
-    .from('buyer_invoice_email_runs')
-    .update({
-      ...patch,
-      completed_at: new Date().toISOString(),
-    })
-    .eq('run_key', runKey);
-  if (error) console.error('Failed to update buyer invoice email run', error.message);
-}
-
-function requireCronAuthorization(req) {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) throw appError('Missing CRON_SECRET in Vercel.', 500);
-  const header = req?.headers?.authorization || req?.headers?.Authorization || '';
-  if (String(header) !== `Bearer ${secret}`) throw appError('Unauthorized cron request.', 401);
-}
-
-async function outstandingBuyerInvoicesEmailReport(body = {}, req = null, accessContext = null) {
-  const activeAccess = accessContext || (body.scheduled ? null : await requireActiveUser(req));
-  const deliveryClient = activeAccess?.client || safeSupabaseAdminClient();
-  if (!deliveryClient) throw appError('FCOS database access is unavailable for the internal report.', 503);
-  const stored = await loadStoredBuyerInvoiceEmailSettings();
-  if ((!body.preview && !body.dryRun) && stored.meta.configured !== true) {
-    throw appError('Outstanding buyer invoice report recipients are not configured. Sending is disabled.', 503, 'FINANCIAL_REPORT_NOT_CONFIGURED', undefined, true);
-  }
-  if (!body.preview && !body.dryRun && (!String(stored.settings?.subject || '').trim() || !String(stored.settings?.intro || '').trim())) {
-    throw appError('Outstanding buyer invoice report subject and body are not configured. Sending is disabled.', 503, 'FINANCIAL_REPORT_TEMPLATE_NOT_CONFIGURED', undefined, true);
-  }
-  const settings = {
-    ...buyerInvoiceEmailSettings(stored.settings),
-    hasBuyerTraderFilter: (stored.settings.buyerTraders || []).length > 0,
-  };
-  if (!body.preview && !body.dryRun && !body.force && !isBuyerInvoiceReportDue(settings)) {
-    return {
-      sent: false,
-      skipped: true,
-      reason: 'Current Hong Kong time is outside the configured report schedule.',
-      schedule: {
-        weekdays: settings.weekdays,
-        sendTimes: settings.sendTimes,
-        now: hongKongScheduleParts(),
-      },
-    };
-  }
-  const reportPayload = { daysAhead: settings.daysAhead };
-  if (settings.hasBuyerTraderFilter) reportPayload.buyerTraders = settings.buyerTraders;
-  if (!body.preview && !body.dryRun) reportPayload.force = true;
-  const report = await salesforceBuyerInvoicesDue(reportPayload, null, activeAccess);
-  const email = buildBuyerInvoiceReportEmail(report, settings);
-  if (body.preview || body.dryRun) {
-    await updateBuyerInvoiceEmailSettingsMeta({
-      last_preview_at: new Date().toISOString(),
-      last_preview_row_count: report.rows.length,
-      last_error: null,
-    });
-    return {
-      sent: false,
-      preview: true,
-      settings: { ...settings, to: settings.to, cc: settings.cc },
-      report: {
-        rows: report.rows,
-        today: report.today,
-        dueThrough: report.dueThrough,
-        daysAhead: report.daysAhead,
-        buyerTraderOptions: report.buyerTraderOptions,
-        selectedBuyerTraders: report.selectedBuyerTraders,
-        hasBuyerTraderFilter: report.hasBuyerTraderFilter,
-      },
-      email: {
-        subject: email.subject,
-        html: email.html,
-        text: email.text,
-        totals: email.totals,
-      },
-    };
-  }
-  let result;
-  try {
-    result = await sendOperationalMail({
-      to: settings.to,
-      cc: settings.cc,
-      bcc: settings.bcc,
-      subject: email.subject,
-      html: email.html,
-      text: email.text,
-    }, { client: deliveryClient, purposeKey: 'outstanding_invoice_reports' });
-  } catch (error) {
-    await updateBuyerInvoiceEmailSettingsMeta({ last_error: error.message });
-    throw error;
-  }
-  await updateBuyerInvoiceEmailSettingsMeta({
-    last_sent_at: new Date().toISOString(),
-    last_sent_row_count: report.rows.length,
-    last_error: null,
-  });
-  return {
-    sent: true,
-    id: result.id,
-    to: settings.to,
-    cc: settings.cc,
-    bcc: settings.bcc,
-    subject: email.subject,
-    rows: report.rows.length,
-    totals: email.totals,
-  };
-}
-
-async function outstandingBuyerInvoicesEmailCron(body, req) {
-  requireCronAuthorization(req);
-  if (!isExternalActionEnabled('email_delivery')) {
-    return {
-      sent: false,
-      skipped: true,
-      gated: true,
-      reason: 'Scheduled email delivery has been paused by an emergency operational control.',
-    };
-  }
-  const stored = await loadStoredBuyerInvoiceEmailSettings();
-  if (stored.meta.storageAvailable !== true) {
-    throw appError('Buyer Invoice email settings are temporarily unavailable. Scheduled report sending is disabled until storage is restored.', 503);
-  }
-  const settings = {
-    ...buyerInvoiceEmailSettings(stored.settings),
-    hasBuyerTraderFilter: (stored.settings.buyerTraders || []).length > 0,
-  };
-  if (settings.enabled === false)
-    return {
-      sent: false,
-      skipped: true,
-      reason: 'Email schedule is disabled.',
-    };
-
-  const window = buyerInvoiceScheduledWindow(settings);
-  if (!window) {
-    return {
-      sent: false,
-      skipped: true,
-      reason: 'Current Hong Kong time is outside the configured report schedule.',
-      schedule: {
-        weekdays: settings.weekdays,
-        sendTimes: settings.sendTimes,
-        now: hongKongScheduleParts(),
-      },
-    };
-  }
-
-  const run = await startBuyerInvoiceEmailRun(window);
-  if (!run.allowed)
-    return {
-      sent: false,
-      skipped: true,
-      duplicate: true,
-      runKey: window.runKey,
-    };
-
-  try {
-    const result = await outstandingBuyerInvoicesEmailReport({
-      settings,
-      force: true,
-      scheduled: true,
-    });
-    await finishBuyerInvoiceEmailRun(window.runKey, {
-      status: 'sent',
-      rows_count: result.rows,
-      totals: result.totals || {},
-      provider_result: {
-        id: result.id || null,
-        to: result.to || [],
-        cc: result.cc || [],
-        subject: result.subject || null,
-      },
-    });
-    return { ...result, scheduled: true, runKey: window.runKey };
-  } catch (error) {
-    await finishBuyerInvoiceEmailRun(window.runKey, {
-      status: 'failed',
-      error: error.message,
-    });
-    throw error;
-  }
-}
-
-async function salesforceDisputeStems(body, req = null, accessContext = null) {
-  const limit = Math.max(100, Math.min(Number(body.limit) || 5000, 10000));
-  const requestedStemId = isSalesforceId(String(body.stemId || '').trim()) ? String(body.stemId).trim() : null;
-  const [describe, accountDescribe] = await Promise.all([
-    salesforceObjectFields({ objectName: 'stem__c' }),
-    salesforceObjectFields({ objectName: 'Account' }),
-  ]);
-  const fieldNames = describe.fields.map((f) => f.name);
-  const disputeAccountFields = new Set((accountDescribe.fields || []).map((field) => field.name));
-  if (!disputeAccountFields.has('Inactive_Suspended__c')) {
-    throw appError('Dispute Account discovery cannot verify active Salesforce Accounts.', 503, 'DISPUTE_ACCOUNT_STATUS_SCHEMA', undefined, true);
-  }
-  const interofficeCondition = await interofficeStemAccessCondition(accessContext, fieldNames);
-  const hasDispute = fieldNames.includes('Dispute__c');
-  const hasDisputeStatus = fieldNames.includes('Dispute_Status__c');
-  if (!hasDispute && !hasDisputeStatus) return { rows: [] };
-  const supplierInvoiceDescribe = await salesforceObjectFields({
-    objectName: 'Supplier_Invoice__c',
-  }).catch(() => ({ fields: [] }));
-  const supplierInvoiceFields = supplierInvoiceDescribe.fields || [];
-  const supplierInvoiceFieldNames = supplierInvoiceFields.map((f) => f.name);
-  const supplierInvoiceFieldByName = Object.fromEntries(supplierInvoiceFields.map((field) => [field.name, field]));
-  const paymentDescribe = await salesforceObjectFields({
-    objectName: 'Payment__c',
-  }).catch(() => ({ fields: [] }));
-  const paymentFields = paymentDescribe.fields || [];
-  const paymentFieldNames = new Set(paymentFields.map((field) => field.name));
-  const supplierSettlementSchema = resolveSupplierSettlementSchema({
-    supplierInvoiceFields,
-    paymentFields,
-  });
-  const supplierInvoicePayableField = supplierSettlementSchema.invoicePayableField;
-  const supplierInvoiceAmountFields = supplierSettlementSchema.invoiceAmountField ? [supplierSettlementSchema.invoiceAmountField] : [];
-  const supplierInvoiceDueDateFields = supplierSettlementSchema.invoiceDueDateFields;
-  const supplierInvoiceDateFields = supplierSettlementSchema.invoiceDateFields;
-  const supplierInvoiceStatusFields = supplierSettlementSchema.invoiceStatusFields;
-  const supplierInvoiceSupplierFields = supplierSettlementSchema.supplierAccountFields;
-  const supplierInvoiceSupplierNameRelationships = supplierInvoiceSupplierFields.map((field) => supplierInvoiceFieldByName[field]?.relationshipName).filter(Boolean);
-  const lineItemDescribe = await salesforceObjectFields({
-    objectName: 'STEM_Line_Item__c',
-  }).catch(() => ({ fields: [] }));
-  const originalSupplierLookup = resolveOriginalSupplierLookup(lineItemDescribe.fields || []);
-  const originalSupplierRelationship = originalSupplierLookup.relationshipName || 'Original_Supplier__r';
-  const extraCostDescribe = await salesforceObjectFields({
-    objectName: 'STEM_Extra_Cost__c',
-  }).catch(() => ({ fields: [] }));
-  const extraCostFields = extraCostDescribe.fields || [];
-  const extraCostFieldNames = new Set(extraCostFields.map((field) => field.name));
-  const extraCostSupplierLookup = resolveExtraCostSupplierLookup(extraCostFields);
-  const extraCostSupplierField = extraCostSupplierLookup.fieldName;
-  const extraCostSupplierRelationship = extraCostSupplierLookup.relationshipName;
-
-  const fields = ['Id', 'Name', 'CreatedDate', 'LastModifiedDate'];
-  for (const field of ['KeyStem__c', 'Delivery_Date__c', 'Expected_Delivery_Date__c', 'ETA_Start_Date__c', 'Buyer_Pay_Term_Date__c', 'Invoice_Due_Date__c', 'Due_Date__c', 'Buyer_Name__c', 'Buyer__c', 'Account__c', 'Dispute__c', 'Dispute_Status__c', 'Total_Invoice_Amount__c', 'Total_Invoiced_Amount_From_Suppliers__c', 'Payable_Balance__c', 'Receivable_Balance__c', 'QLIK_STEM_Line_Item_Total_Cost__c', 'QLIK_Costs_Total_Cost__c']) {
-    if (fieldNames.includes(field)) fields.push(field);
-  }
-  if (fieldNames.includes('Vessel__c')) fields.push('Vessel__r.Name');
-  if (fieldNames.includes('Port__c')) fields.push('Port__r.Name');
-  if (fieldNames.includes('Account__c')) fields.push('Account__r.Name', 'Account__r.Inactive_Suspended__c');
-
-  const activeDisputeStatusCondition = "(Dispute_Status__c != null AND Dispute_Status__c != 'No Dispute' AND Dispute_Status__c != 'No Disputes' AND Dispute_Status__c != 'no dispute' AND Dispute_Status__c != 'no disputes')";
-  const disputeCondition = hasDisputeStatus ? activeDisputeStatusCondition : 'Dispute__c = true';
-  const stemWhere = combineWhereConditions([disputeCondition, interofficeCondition, requestedStemId ? `Id = '${escapeSoql(requestedStemId)}'` : '']);
-  const rows = await queryRows(
-    `
-    SELECT ${[...new Set(fields)].join(', ')}
-    FROM stem__c
-    WHERE ${stemWhere}
-    ORDER BY LastModifiedDate DESC
-    LIMIT ${limit}
-  `,
-    { limit, softFail: true },
-  );
-
-  const stemIds = rows.map((stem) => stem.Id).filter(Boolean);
-  const lineItemsByStem = {};
-  const extraCostsByStem = {};
-  const supplierInvoicesByStem = {};
-  const supplierInvoicePayableByStem = {};
-  const supplierPaymentsByInvoice = {};
-  const finalBuyerInvoiceStemIds = new Set();
-
-  if (stemIds.length) {
-    const [lineItemArrays, extraCostArrays, supplierInvoiceArrays, buyerInvoiceArrays] = await Promise.all([
-      compositeQueryRows(
-        chunkIds(stemIds).map((chunk) => {
-          const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-          return {
-            soql: `
-          SELECT Id, STEM__c, Product__r.Name, Supplier_Name__c,
-                 ${originalSupplierLookup.valid ? `Original_Supplier__c, ${originalSupplierRelationship}.Name, ${originalSupplierRelationship}.Inactive_Suspended__c,` : ''}
-                 Payment_Term__c, Quantity__c, Quantity_Delivered_Per_BDN__c,
-                 Quantity_Max__c, Quantity_in_MT__c, Is_Quantity_Range__c,
-                 Price_Per_Unit__c, Cost_Per_Unit__c, Unit_Sell_At__c, Unit_Buy_At__c, Unit_Cost__c,
-                 Total_Price__c, Total_Cost__c, Supplier_Invoice__c, Cancelled__c,
-                 Offer_Line_Item__r.UnitPrice, Offer_Line_Item__r.Supplier_Unit_Price__c
-          FROM STEM_Line_Item__c
-          WHERE STEM__c IN (${inList})
-          ORDER BY STEM__c, CreatedDate ASC
-          LIMIT 5000
-        `,
-            limit: 5000,
-            softFail: true,
-          };
-        }),
-      ),
-      compositeQueryRows(
-        chunkIds(stemIds).map((chunk) => {
-          const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-          const extraCostSelectFields = ['Id', 'STEM__c', 'Supplier_Name__c', 'Quantity__c', 'Quantity_Delivered_Per_BDN__c', 'Quantity_in_MT__c', 'Quantity_Range_Max__c', 'Is_Quantity_Range__c', 'Unit_Price__c', 'Unit_Cost__c', 'Line_Total__c', 'Line_Total_Buy__c', 'Supplier_Invoice__c', 'Cancelled__c', extraCostFieldNames.has('Payment_Term__c') ? 'Payment_Term__c' : null, extraCostFieldNames.has('Product2Id__c') ? 'Product2Id__r.Name' : null, extraCostSupplierLookup.valid ? extraCostSupplierField : null, extraCostSupplierLookup.valid && extraCostSupplierRelationship ? `${extraCostSupplierRelationship}.Name` : null, extraCostSupplierLookup.valid && extraCostSupplierRelationship ? `${extraCostSupplierRelationship}.Inactive_Suspended__c` : null].filter(Boolean);
-          return {
-            soql: `
-          SELECT ${[...new Set(extraCostSelectFields)].join(', ')}
-          FROM STEM_Extra_Cost__c
-          WHERE STEM__c IN (${inList})
-          LIMIT 5000
-        `,
-            limit: 5000,
-            softFail: true,
-          };
-        }),
-      ),
-      supplierInvoiceFieldNames.includes('STEM__c')
-        ? compositeQueryRows(
-            chunkIds(stemIds).map((chunk) => {
-              const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-              const supplierInvoiceSelectFields = ['STEM__c', 'Id', 'Name', 'CreatedDate', 'LastModifiedDate', ...supplierInvoiceAmountFields, ...supplierInvoiceDueDateFields, ...supplierInvoiceDateFields, ...supplierInvoiceStatusFields, supplierInvoicePayableField, supplierInvoiceFieldNames.includes('CurrencyIsoCode') ? 'CurrencyIsoCode' : null, supplierInvoiceFieldNames.includes('Supplier_Name__c') ? 'Supplier_Name__c' : null, ...supplierInvoiceSupplierFields, ...supplierInvoiceSupplierNameRelationships.flatMap((relationship) => [`${relationship}.Name`, `${relationship}.Inactive_Suspended__c`])].filter(Boolean);
-              return {
-                soql: `
-              SELECT ${[...new Set(supplierInvoiceSelectFields)].join(', ')}
-              FROM Supplier_Invoice__c
-              WHERE STEM__c IN (${inList})
-              LIMIT 5000
-            `,
-                limit: 5000,
-                softFail: true,
-              };
-            }),
-          )
-        : Promise.resolve([]),
-      compositeQueryRows(chunkIds(stemIds).map((chunk) => ({
-        soql: `SELECT Id, Name, STEM__c, Proforma__c, Deprecated__c FROM Invoice__c WHERE STEM__c IN (${chunk.map((id) => `'${escapeSoql(id)}'`).join(',')}) LIMIT 5000`,
-        limit: 5000,
-        softFail: true,
-      }))),
-    ]);
-
-    for (const invoice of buyerInvoiceArrays.flat().filter(isFinalBuyerInvoice)) if (invoice.STEM__c) finalBuyerInvoiceStemIds.add(invoice.STEM__c);
-
-    for (const item of lineItemArrays.flat()) {
-      if (!item.STEM__c) continue;
-      if (!lineItemsByStem[item.STEM__c]) lineItemsByStem[item.STEM__c] = [];
-      lineItemsByStem[item.STEM__c].push(item);
-    }
-    for (const item of extraCostArrays.flat()) {
-      if (!item.STEM__c) continue;
-      if (!extraCostsByStem[item.STEM__c]) extraCostsByStem[item.STEM__c] = [];
-      extraCostsByStem[item.STEM__c].push(item);
-    }
-    for (const invoice of supplierInvoiceArrays.flat()) {
-      if (!invoice.STEM__c) continue;
-      if (!supplierInvoicesByStem[invoice.STEM__c]) supplierInvoicesByStem[invoice.STEM__c] = [];
-      supplierInvoicesByStem[invoice.STEM__c].push(invoice);
-      if (supplierInvoicePayableField == null) continue;
-      supplierInvoicePayableByStem[invoice.STEM__c] = (supplierInvoicePayableByStem[invoice.STEM__c] || 0) + Number(invoice[supplierInvoicePayableField] || 0);
-    }
-
-    const supplierInvoiceIds = supplierInvoiceArrays
-      .flat()
-      .map((invoice) => invoice.Id)
-      .filter(isSalesforceId);
-    if (supplierInvoiceIds.length && supplierSettlementSchema.paymentSupplierInvoiceFields.length && supplierSettlementSchema.paymentAmountField) {
-      const paymentSelectFields = ['Id', paymentFieldNames.has('Name') ? 'Name' : null, paymentFieldNames.has('CreatedDate') ? 'CreatedDate' : null, paymentFieldNames.has('CurrencyIsoCode') ? 'CurrencyIsoCode' : null, supplierSettlementSchema.paymentAmountField, supplierSettlementSchema.paymentDateField, ...supplierSettlementSchema.paymentSupplierInvoiceFields, ...supplierSettlementSchema.paymentStatusFields].filter(Boolean);
-      await Promise.all(
-        supplierSettlementSchema.paymentSupplierInvoiceFields.map(async (lookupField) => {
-          const paymentChunks = await compositeQueryRows(
-            chunkIds(supplierInvoiceIds).map((chunk) => {
-              const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-              return {
-                soql: `
-            SELECT ${[...new Set(paymentSelectFields)].join(', ')}
-            FROM Payment__c
-            WHERE ${lookupField} IN (${inList})
-            ORDER BY ${supplierSettlementSchema.paymentDateField || 'CreatedDate'} DESC NULLS LAST
-            LIMIT 5000
-          `,
-                limit: 5000,
-                softFail: true,
-              };
-            }),
-          );
-          for (const payment of paymentChunks.flat()) {
-            if (!validSupplierSettlementPayment(payment, supplierSettlementSchema.paymentStatusFields)) continue;
-            const invoiceId = payment[lookupField];
-            if (!isSalesforceId(invoiceId)) continue;
-            if (!supplierPaymentsByInvoice[invoiceId]) supplierPaymentsByInvoice[invoiceId] = [];
-            if (supplierPaymentsByInvoice[invoiceId].some((existing) => existing.id === payment.Id)) continue;
-            supplierPaymentsByInvoice[invoiceId].push({
-              id: payment.Id,
-              name: payment.Name || payment.Id,
-              amount: Number(payment[supplierSettlementSchema.paymentAmountField] || 0),
-              date: payment[supplierSettlementSchema.paymentDateField] || payment.CreatedDate || null,
-              currencyIsoCode: payment.CurrencyIsoCode || 'USD',
-              status: supplierSettlementSchema.paymentStatusFields.map((field) => payment[field]).find(Boolean) || null,
-            });
-          }
-        }),
-      );
-    }
-  }
-
-  return {
-    rows: rows
-      .filter((stem) => !hasDisputeStatus || !['no dispute', 'no disputes'].includes(String(stem.Dispute_Status__c || '').toLowerCase()))
-      .map((stem) => {
-        const stemHasDelivery = !!stem.Delivery_Date__c;
-        const lineItems = lineItemsByStem[stem.Id] || [];
-        const extraCosts = extraCostsByStem[stem.Id] || [];
-        const supplierInvoices = supplierInvoicesByStem[stem.Id] || [];
-        const supplierNames = new Set();
-        const productNames = new Set();
-        const supplierProductPairs = [];
-        const supplierProductPairKeys = new Set();
-        const supplierInvoiceProductRowsById = new Map();
-        const uninvoicedExtraCostProductRows = [];
-        const supplierLineBuyByAccount = new Map();
-        const uninvoicedSupplierLineBuyByAccount = new Map();
-        let lineSellTotal = 0;
-        let supplierLineBuy = 0;
-        let uninvoicedSupplierLineBuy = 0;
-        let extraSellTotal = 0;
-        let extraCostBuy = 0;
-        let invoicedExtraCostBuy = 0;
-        let sellOnlyExtraSell = 0;
-        let hasSupplierInvoice = false;
-
-        for (const item of lineItems) {
-          if (item.Cancelled__c) continue;
-          const originalSupplierInactive = item[originalSupplierRelationship]?.Inactive_Suspended__c === true;
-          const originalSupplierAccountId = originalSupplierInactive ? null : item.Original_Supplier__c || null;
-          const originalSupplierAccountKey = disputeSalesforceIdKey(originalSupplierAccountId);
-          const originalSupplierName = originalSupplierInactive ? null : item[originalSupplierRelationship]?.Name || item.Supplier_Name__c || originalSupplierAccountId || null;
-          if (originalSupplierName) supplierNames.add(originalSupplierName);
-          const productName = item['Product__r']?.Name;
-          if (productName) productNames.add(productName);
-          const quantityLabel = lineItemQuantityLabel(item, stemHasDelivery);
-          if (item.Supplier_Invoice__c) {
-            const invoiceRows = supplierInvoiceProductRowsById.get(item.Supplier_Invoice__c) || [];
-            invoiceRows.push({
-              productName: productName || item.Name || 'Product',
-              quantityLabel,
-              supplierName: originalSupplierName,
-              supplierAccountId: originalSupplierAccountId,
-              paymentTerm: item.Payment_Term__c || null,
-            });
-            supplierInvoiceProductRowsById.set(item.Supplier_Invoice__c, invoiceRows);
-          }
-          if (originalSupplierName || productName) {
-            const pairKey = `${originalSupplierAccountKey || originalSupplierName || ''}\u0000${productName || ''}`;
-            if (!supplierProductPairKeys.has(pairKey)) {
-              supplierProductPairKeys.add(pairKey);
-              supplierProductPairs.push({
-                supplierName: originalSupplierName,
-                supplierAccountId: originalSupplierAccountId,
-                productName: productName || null,
-              });
-            }
-          }
-          lineSellTotal += lineSellAmount(item, stemHasDelivery);
-          const buy = lineBuyAmount(item, stemHasDelivery);
-          supplierLineBuy += buy;
-          if (originalSupplierAccountKey) {
-            const supplierLine = supplierLineBuyByAccount.get(originalSupplierAccountKey) || {
-              accountId: originalSupplierAccountId,
-              supplierName: originalSupplierName,
-              amount: 0,
-            };
-            supplierLine.amount += buy;
-            supplierLineBuyByAccount.set(originalSupplierAccountKey, supplierLine);
-          }
-          if (item.Supplier_Invoice__c) {
-            hasSupplierInvoice = true;
-          } else {
-            uninvoicedSupplierLineBuy += buy;
-            if (originalSupplierAccountKey) {
-              const supplierLine = uninvoicedSupplierLineBuyByAccount.get(originalSupplierAccountKey) || {
-                accountId: originalSupplierAccountId,
-                supplierName: originalSupplierName,
-                amount: 0,
-              };
-              supplierLine.amount += buy;
-              uninvoicedSupplierLineBuyByAccount.set(originalSupplierAccountKey, supplierLine);
-            }
-          }
-        }
-
-        for (const item of extraCosts) {
-          if (item.Cancelled__c) continue;
-          const productName = disputeQueueExtraCostProductName(item);
-          const supplierInactive = extraCostSupplierRelationship && item[extraCostSupplierRelationship]?.Inactive_Suspended__c === true;
-          const supplierAccountId = supplierInactive ? null : extraCostSupplierField ? item[extraCostSupplierField] : null;
-          const supplierAccountKey = disputeSalesforceIdKey(supplierAccountId);
-          const supplierName = supplierInactive ? null : (extraCostSupplierRelationship ? item[extraCostSupplierRelationship]?.Name : null) || item.Supplier_Name__c || supplierAccountId || null;
-          if (productName) productNames.add(productName);
-          if (supplierName || productName) {
-            const pairKey = `${supplierAccountKey || supplierName || ''}\u0000${productName || ''}`;
-            if (!supplierProductPairKeys.has(pairKey)) {
-              supplierProductPairKeys.add(pairKey);
-              supplierProductPairs.push({
-                supplierName,
-                supplierAccountId,
-                productName,
-              });
-            }
-          }
-          if (productName) {
-            const productRow = {
-              productName,
-              quantityLabel: null,
-              supplierName,
-              supplierAccountId,
-              paymentTerm: item.Payment_Term__c || null,
-              sourceType: 'extra_cost',
-              sourceRecordId: item.Id,
-            };
-            if (item.Supplier_Invoice__c) {
-              const invoiceRows = supplierInvoiceProductRowsById.get(item.Supplier_Invoice__c) || [];
-              invoiceRows.push(productRow);
-              supplierInvoiceProductRowsById.set(item.Supplier_Invoice__c, invoiceRows);
-            } else {
-              uninvoicedExtraCostProductRows.push({
-                supplierInvoiceId: null,
-                invoiceName: null,
-                ...productRow,
-                dueDate: null,
-                productQuantityLabel: [productRow.productName, productRow.quantityLabel].filter(Boolean).join(' - '),
-              });
-            }
-          }
-          const buy = extraBuyAmount(item, stemHasDelivery);
-          const sell = extraSellAmount(item, stemHasDelivery);
-          extraSellTotal += sell;
-          if (item.Supplier_Invoice__c) {
-            invoicedExtraCostBuy += buy;
-          } else {
-            extraCostBuy += buy;
-            if (buy === 0 && sell > 0) sellOnlyExtraSell += sell;
-          }
-        }
-
-        const supplierBase = Number(stem.Total_Invoiced_Amount_From_Suppliers__c || 0) + (hasSupplierInvoice ? uninvoicedSupplierLineBuy : supplierLineBuy);
-        const rawSupplier = supplierBase + extraCostBuy;
-        const unmatchedSellOnlyExtra = hasSupplierInvoice ? Math.max(0, sellOnlyExtraSell - invoicedExtraCostBuy) : 0;
-        const qlikSupplierCost = stem.QLIK_STEM_Line_Item_Total_Cost__c != null || stem.QLIK_Costs_Total_Cost__c != null ? (stem.QLIK_STEM_Line_Item_Total_Cost__c || 0) + (stem.QLIK_Costs_Total_Cost__c || 0) : null;
-        const supplierOverstatement = qlikSupplierCost == null ? 0 : rawSupplier - qlikSupplierCost;
-        const calculatedSupplierInvoice = unmatchedSellOnlyExtra > 0 && supplierOverstatement > 0 && supplierOverstatement <= unmatchedSellOnlyExtra + 0.05 ? qlikSupplierCost : rawSupplier;
-        const calculatedBuyerInvoice = lineSellTotal + extraSellTotal;
-        const buyerInvoiceResolution = resolveBuyerFinancialAmount({ salesforceAmount: stem.Total_Invoice_Amount__c, calculatedAmount: calculatedBuyerInvoice, finalInvoiceIssued: finalBuyerInvoiceStemIds.has(stem.Id) });
-        const buyerInvoiceAmount = buyerInvoiceResolution.amount;
-        const stemBasePnl = buyerInvoiceAmount == null ? null : Number(buyerInvoiceAmount || 0) - Number(calculatedSupplierInvoice || 0);
-        const supplierInvoicePayable = supplierInvoicePayableByStem[stem.Id];
-        const payableBalance = stem.Payable_Balance__c ?? (supplierInvoicePayable != null ? supplierInvoicePayable : null);
-        const supplierFinanceByAccount = new Map();
-        const supplierInvoiceDueRows = [];
-        const supplierInvoiceExposureRows = [];
-        const addSupplierFinanceByAccount = (accountId, supplierName, invoiceAmount = 0, supplierPayableBalance = 0) => {
-          const accountKey = disputeSalesforceIdKey(accountId);
-          if (!accountKey) return;
-          const current = supplierFinanceByAccount.get(accountKey) || {
-            accountId,
-            accountKey,
-            supplierName: supplierName || accountId,
-            supplierInvoiceAmount: 0,
-            payableBalance: 0,
-          };
-          current.supplierInvoiceAmount += Number(invoiceAmount || 0);
-          current.payableBalance += Number(supplierPayableBalance || 0);
-          supplierFinanceByAccount.set(accountKey, current);
-        };
-        for (const invoice of supplierInvoices) {
-          const supplierAccountField = supplierInvoiceSupplierFields.find((field) => invoice[field]);
-          const supplierAccountRelationship = supplierAccountField ? supplierInvoiceFieldByName[supplierAccountField]?.relationshipName : null;
-          const supplierAccountInactive = supplierAccountRelationship && invoice[supplierAccountRelationship]?.Inactive_Suspended__c === true;
-          const supplierAccountId = supplierAccountInactive ? null : supplierAccountField ? invoice[supplierAccountField] : null;
-          const supplierName = supplierAccountInactive ? null : (supplierAccountRelationship ? invoice[supplierAccountRelationship]?.Name : null) || invoice['Supplier__r']?.Name || invoice.Supplier_Name__c || invoice['Expected_Supplier__r']?.Name || invoice['Substitute_Supplier__r']?.Name || supplierInvoiceSupplierNameRelationships.map((relationship) => invoice[relationship]?.Name).find(Boolean) || null;
-          const invoiceAmountField = supplierInvoiceAmountFields.find((field) => invoice[field] != null);
-          const invoiceAmount = invoiceAmountField ? Number(invoice[invoiceAmountField] || 0) : 0;
-          const supplierPayableBalanceValue = supplierInvoicePayableField ? invoice[supplierInvoicePayableField] : null;
-          const supplierPayableBalanceAvailable = supplierPayableBalanceValue != null && supplierPayableBalanceValue !== '' && Number.isFinite(Number(supplierPayableBalanceValue));
-          const supplierPayableBalance = supplierPayableBalanceAvailable ? Number(supplierPayableBalanceValue) : 0;
-          addSupplierFinanceByAccount(supplierAccountId, supplierName, invoiceAmount, supplierPayableBalance);
-          const dueDateField = supplierInvoiceDueDateFields.find((field) => invoice[field]);
-          const dueDate = dueDateField ? invoice[dueDateField] : null;
-          const invoiceDateField = supplierInvoiceDateFields.find((field) => invoice[field]);
-          const invoiceDate = invoiceDateField ? invoice[invoiceDateField] : invoice.CreatedDate || null;
-          const invoiceStatus = supplierInvoiceStatusFields.map((field) => invoice[field]).find(Boolean) || null;
-          const paymentRows = supplierPaymentsByInvoice[invoice.Id] || [];
-          const positivePayments = paymentRows.filter((payment) => Number(payment.amount) > 0).reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
-          const supplierRefunds = Math.abs(paymentRows.filter((payment) => Number(payment.amount) < 0).reduce((sum, payment) => sum + Number(payment.amount || 0), 0));
-          const exposure = normalizeSupplierInvoiceExposure({
-            supplierInvoiceId: invoice.Id,
-            invoiceName: invoice.Name,
-            sourceStemId: stem.Id,
-            supplierAccountId,
-            supplierName,
-            currencyIsoCode: invoice.CurrencyIsoCode || 'USD',
-            dueDate,
-            invoiceDate,
-            createdDate: invoice.CreatedDate || null,
-            invoiceAmount,
-            payableBalance: supplierPayableBalance,
-            payableBalanceAvailable: supplierPayableBalanceAvailable,
-            status: invoiceStatus,
-            payments: paymentRows,
-          });
-          const netPaymentAudit = positivePayments - supplierRefunds;
-          const expectedPaid = Math.max(0, exposure.invoiceAmount - exposure.payableBalance);
-          const exposureWarnings = [...exposure.warnings];
-          if (!disputeSalesforceIdKey(supplierAccountId)) {
-            exposureWarnings.push('Supplier invoice has no valid supplier Account lookup.');
-          }
-          if (paymentRows.length && Math.abs(expectedPaid - netPaymentAudit) > 0.05) {
-            exposureWarnings.push('Payment records do not reconcile to the current payable balance; Finance confirmation is required.');
-          }
-          supplierInvoiceExposureRows.push({
-            ...exposure,
-            payments: paymentRows,
-            positivePayments,
-            supplierRefunds,
-            netPaymentAudit,
-            status: invoiceStatus,
-            warnings: [...new Set(exposureWarnings)],
-          });
-          const productRows = supplierInvoiceProductRowsById.get(invoice.Id) || [];
-          if (productRows.length) {
-            for (const productRow of productRows) {
-              supplierInvoiceDueRows.push({
-                supplierInvoiceId: invoice.Id || null,
-                invoiceName: invoice.Name || null,
-                supplierName: productRow.supplierName || supplierName,
-                supplierAccountId: productRow.supplierAccountId || supplierAccountId,
-                paymentTerm: productRow.paymentTerm || null,
-                dueDate,
-                productName: productRow.productName,
-                quantityLabel: productRow.quantityLabel,
-                productQuantityLabel: [productRow.productName, productRow.quantityLabel].filter(Boolean).join(' - '),
-              });
-            }
-          } else {
-            supplierInvoiceDueRows.push({
-              supplierInvoiceId: invoice.Id || null,
-              invoiceName: invoice.Name || null,
-              supplierName,
-              supplierAccountId,
-              paymentTerm: null,
-              dueDate,
-              productName: null,
-              quantityLabel: null,
-              productQuantityLabel: null,
-            });
-          }
-        }
-        supplierInvoiceDueRows.push(...uninvoicedExtraCostProductRows);
-        const supplierPaymentDueDatesByAccount = new Map();
-        for (const dueRow of supplierInvoiceDueRows) {
-          const accountKey = disputeSalesforceIdKey(dueRow.supplierAccountId);
-          if (!accountKey || !dueRow.dueDate) continue;
-          const dueDates = supplierPaymentDueDatesByAccount.get(accountKey) || new Set();
-          dueDates.add(dueRow.dueDate);
-          supplierPaymentDueDatesByAccount.set(accountKey, dueDates);
-        }
-        const paymentDueDatesForAccount = (accountKey) => [...(supplierPaymentDueDatesByAccount.get(accountKey) || [])].sort();
-        const supplementalLineBuyByAccount = hasSupplierInvoice || supplierInvoices.length ? uninvoicedSupplierLineBuyByAccount : supplierLineBuyByAccount;
-        for (const supplierLine of supplementalLineBuyByAccount.values()) {
-          addSupplierFinanceByAccount(supplierLine.accountId, supplierLine.supplierName, supplierLine.amount, 0);
-        }
-        const disputePartyRegistry = buildDisputePartyRegistry({
-          stem,
-          lineItems,
-          extraCosts,
-          originalSupplierRelationship,
-          extraCostSupplierField,
-          extraCostSupplierRelationship,
-          schemaIssues: [originalSupplierLookup.issue, extraCostSupplierLookup.issue],
-        });
-        const supplierCandidateRows = disputePartyRegistry.suppliers.map((party) => {
-          const finance = supplierFinanceByAccount.get(party.accountKey);
-          const paymentDueDates = paymentDueDatesForAccount(party.accountKey);
-          const invoices = supplierInvoiceExposureRows.filter((invoice) => disputeSalesforceIdKey(invoice.supplierAccountId) === party.accountKey);
-          return {
-            ...party,
-            supplierName: party.name,
-            status: null,
-            description: null,
-            supplierInvoiceAmount: finance?.supplierInvoiceAmount ?? null,
-            paymentDueDate: paymentDueDates[0] || null,
-            paymentDueDates,
-            payableBalance: finance?.payableBalance ?? null,
-            invoices,
-          };
-        });
-        const disputedSupplierKeys = new Set(disputePartyRegistry.suppliers.map((party) => party.accountKey));
-        const supplierFinanceOnlyRows = [...supplierFinanceByAccount.values()]
-          .filter((finance) => !disputedSupplierKeys.has(finance.accountKey))
-          .map((finance) => {
-            const paymentDueDates = paymentDueDatesForAccount(finance.accountKey);
-            return {
-              accountId: finance.accountId,
-              accountKey: finance.accountKey,
-              supplierName: finance.supplierName,
-              status: null,
-              supplierInvoiceAmount: finance.supplierInvoiceAmount,
-              paymentDueDate: paymentDueDates[0] || null,
-              paymentDueDates,
-              payableBalance: finance.payableBalance,
-              invoices: supplierInvoiceExposureRows.filter((invoice) => disputeSalesforceIdKey(invoice.supplierAccountId) === finance.accountKey),
-            };
-          });
-        const supplierFinanceRowsAll = [...supplierCandidateRows, ...supplierFinanceOnlyRows];
-        const supplierFinanceRows = supplierCandidateRows.length ? supplierCandidateRows : supplierFinanceOnlyRows;
-        const buyerFinanceRow = {
-          buyerName: disputePartyRegistry.buyer?.name || (stem.Account__r?.Inactive_Suspended__c === true ? 'Account unavailable' : stem.Buyer_Name__c || stem['Account__r']?.Name || stem.Buyer__c || null),
-          buyerInvoiceAmount: buyerInvoiceAmount ?? null,
-          buyerInvoiceAmountSource: buyerInvoiceResolution.source,
-          paymentDueDate: stem.Invoice_Due_Date__c || stem.Due_Date__c || stem.Buyer_Pay_Term_Date__c || null,
-          receivableBalance: stem.Receivable_Balance__c ?? null,
-          disputeRows: [],
-          status: null,
-          description: null,
-        };
-
-        return {
-          ...stem,
-          ...(stem.Account__r?.Inactive_Suspended__c === true ? { Account__r: null, Account__c: null } : {}),
-          Total_Invoice_Amount__c: buyerInvoiceAmount ?? stem.Total_Invoice_Amount__c ?? null,
-          Total_Invoiced_Amount_From_Suppliers__c: calculatedSupplierInvoice || stem.Total_Invoiced_Amount_From_Suppliers__c || null,
-          _Supplier_Names: [...supplierNames].sort().join(', ') || null,
-          _Product_Names: [...productNames].sort().join(', ') || null,
-          _Supplier_Product_Pairs: supplierProductPairs,
-          _Buyer_Disputes: [],
-          _Buyer_Dispute_Rows: [],
-          _Buyer_Finance_Row: buyerFinanceRow,
-          _Supplier_Disputes: [],
-          _Supplier_Dispute_Rows: supplierFinanceRows,
-          _Supplier_Finance_Rows_All: supplierFinanceRowsAll,
-          _Dispute_Parties: disputePartyRegistry,
-          _Buyer_Invoice_Due_Date: stem.Invoice_Due_Date__c || stem.Due_Date__c || stem.Buyer_Pay_Term_Date__c || null,
-          _Supplier_Invoice_Due_Rows: supplierInvoiceDueRows,
-          _Supplier_Invoice_Exposure_Rows: supplierInvoiceExposureRows,
-          _Supplier_Settlement_Schema: supplierSettlementSchema,
-          _Stem_Base_Pnl: stemBasePnl,
-          _Buyer_Dispute_Label: null,
-          _Supplier_Dispute_Label: null,
-          _Supplier_Invoice_Split_Label: supplierFinanceRows.map((dispute) => dispute.supplierInvoiceAmount).join('\n') || null,
-          _Payable_Balance_Split_Label: supplierFinanceRows.map((dispute) => dispute.payableBalance).join('\n') || null,
-          _Payable_Balance: payableBalance,
-          _Display_Name: formatStemName(stem),
-          _Buyer_Name: stem.Account__r?.Inactive_Suspended__c === true ? 'Account unavailable' : stem.Buyer_Name__c || stem['Account__r']?.Name || stem.Buyer__c || null,
-          _Effective_Date: stem.Delivery_Date__c || stem.Expected_Delivery_Date__c || null,
-        };
-      }),
-  };
-}
-
-function serializeDisputeWorkflowParty(row) {
-  if (!row) return null;
-  return {
-    id: row.id,
-    caseId: row.case_id || row.caseId,
-    stemId: row.stem_id || row.stemId,
-    accountId: row.account_id || row.accountId,
-    accountKey: row.account_key || row.accountKey,
-    name: row.account_name || row.name || row.account_id || row.accountId,
-    roles: Array.isArray(row.roles) ? row.roles : [],
-    sourceTypes: Array.isArray(row.source_types) ? row.source_types : row.sourceTypes || [],
-    sourceRecordIds: Array.isArray(row.source_record_ids) ? row.source_record_ids : row.sourceRecordIds || [],
-    paymentTerms: Array.isArray(row.payment_terms) ? row.payment_terms : row.paymentTerms || [],
-    products: Array.isArray(row.products) ? row.products : [],
-    cancelledSourceOnly: row.cancelled_source_only === true || row.cancelledSourceOnly === true,
-    createdAt: row.created_at || row.createdAt || null,
-    updatedAt: row.updated_at || row.updatedAt || null,
-  };
-}
-
-function disputeRegistryWithSelection(registry, partyRows = []) {
-  const selected = [];
-  const issues = [...(registry?.issues || [])];
-  const candidateByKey = new Map((registry?.candidates || []).map((candidate) => [candidate.accountKey, candidate]));
-  for (const row of partyRows) {
-    const stored = serializeDisputeWorkflowParty(row);
-    const candidate = candidateByKey.get(stored.accountKey);
-    if (!candidate) {
-      issues.push({
-        code: 'selected_account_stale',
-        message: `${stored.name} is no longer the buyer or a supplier on this STEM.`,
-        recordIds: stored.sourceRecordIds,
-        details: { accountId: stored.accountId },
-      });
-      continue;
-    }
-    selected.push({
-      ...candidate,
-      id: stored.id,
-      caseId: stored.caseId,
-      selected: true,
-    });
-  }
-  const candidateSchemaValid = registry?.candidateSchemaValid === true;
-  const selectionValid = selected.length > 0 && !issues.some((item) => item.code === 'selected_account_stale');
-  return {
-    ...registry,
-    candidateSchemaValid,
-    selectionValid,
-    valid: candidateSchemaValid && selectionValid,
-    selected,
-    issues,
-  };
-}
-
-function assertValidDisputeParties(stem, partyRows = []) {
-  const registry = disputeRegistryWithSelection(stem?._Dispute_Parties, partyRows);
-  if (!stem?._Dispute_Parties) throw appError('Salesforce dispute party candidates could not be resolved.', 502);
-  if (registry.valid) return registry;
-  const messages = registry.issues.map((item) => item.message).filter(Boolean);
-  if (!registry.selectionValid && !messages.length) messages.push('Select at least one disputed Account.');
-  throw appError(`Correct the dispute party selection before continuing: ${messages.join(' ')}`, 400);
-}
-
-async function loadCurrentDisputeStem(stemId, accessContext) {
-  const result = await salesforceDisputeStems({ stemId, limit: 100 }, null, accessContext);
-  const stem = (result.rows || []).find((row) => disputeSalesforceIdKey(row.Id) === disputeSalesforceIdKey(stemId));
-  if (!stem) throw appError('The disputed stem could not be found in the current Salesforce dispute queue.', 404);
-  return stem;
-}
-
-function canonicalDisputeActionTarget(input, partySide, registry) {
-  const accountId = String(input.partyAccountId || input.party_account_id || '').trim();
-  if (!accountId) throw appError('A Salesforce party Account ID is required for every dispute action.', 400);
-  const candidate = findDisputeParty(registry, partySide, accountId);
-  const party = (registry?.selected || []).find((selected) => selected.accountKey === candidate?.accountKey);
-  if (!candidate || !party) throw appError(`The selected ${partySide} Account is not selected for this dispute. Refresh and select the party again.`, 400);
-  return party;
-}
-
-function normalizeDisputeBetaStatus(value, allowed, fallback) {
-  const raw = String(value || '').trim();
-  return allowed.includes(raw) ? raw : fallback;
-}
-
-async function disputeWorkflowCapabilities(client, profile = {}) {
-  const [isApprover, isAccounting] = await Promise.all([userHasCapability(client, profile, 'disputes_approve'), userHasCapability(client, profile, 'disputes_account')]);
-  const canAcceptExternalClosure = profile.user_type === 'administrator'
-    || (profile.user_type === 'general_manager' && (await loadActiveGeneralManager(client)).id === profile.id);
-  return {
-    role: profile.user_type || 'user',
-    canPrepare: true,
-    canApprove: isApprover,
-    canAccount: isAccounting,
-    canClose: isAccounting,
-    canAcceptExternalClosure,
-    canViewAllRules: true,
-  };
-}
-
-function disputeBetaCaseFromStem(stem = {}) {
-  return {
-    stem_id: stem.Id,
-    stem_name: stem._Display_Name || stem.Name || stem.KeyStem__c || stem.Id,
-    buyer_name: stem._Buyer_Name || stem.Buyer_Name__c || null,
-    supplier_names: stem._Supplier_Names || null,
-    current_salesforce_status: stem.Dispute_Status__c || null,
-  };
-}
-
-function legacyClosedDisputeCase(stem = {}) {
-  const salesforceStatus = String(stem.Dispute_Status__c || '').trim();
-  if (!isSalesforceDisputeClosed(salesforceStatus)) return null;
-  return {
-    id: null,
-    stemId: stem.Id,
-    stemName: stem._Display_Name || stem.Name || stem.KeyStem__c || stem.Id,
-    buyerName: stem._Buyer_Name || stem.Buyer_Name__c || '',
-    supplierNames: stem._Supplier_Names || '',
-    currentSalesforceStatus: salesforceStatus,
-    workflowStatus: 'Closed',
-    approvalStatus: 'Approved',
-    latestNote: 'Closed in Salesforce before FCOS workflow tracking.',
-    settlementFinancials: {},
-    settlementPnl: 0,
-    salesforceWritebackStatus: 'legacy',
-    legacyReadOnly: true,
-  };
-}
-
-function serializeDisputeBetaCase(row) {
-  if (!row) return null;
-  return {
-    id: row.id,
-    stemId: row.stem_id,
-    stemName: row.stem_name || '',
-    buyerName: row.buyer_name || '',
-    supplierNames: row.supplier_names || '',
-    currentSalesforceStatus: row.current_salesforce_status || '',
-    workflowStatus: row.workflow_status || 'Draft',
-    approvalStatus: row.approval_status || 'Draft',
-    latestNote: row.latest_note || '',
-    submittedBy: row.submitted_by || null,
-    submittedByEmail: row.submitted_by_email || null,
-    submittedAt: row.submitted_at || null,
-    approvedBy: row.approved_by || null,
-    approvedByEmail: row.approved_by_email || null,
-    approvedAt: row.approved_at || null,
-    rejectedBy: row.rejected_by || null,
-    rejectedByEmail: row.rejected_by_email || null,
-    rejectedAt: row.rejected_at || null,
-    rejectionReason: row.rejection_reason || null,
-    closedBy: row.closed_by || null,
-    closedByEmail: row.closed_by_email || null,
-    closedAt: row.closed_at || null,
-    settlementFinancials: row.settlement_financials || {},
-    settlementPnl: Number(row.settlement_pnl || 0),
-    salesforceWritebackStatus: row.salesforce_writeback_status || 'not_started',
-    salesforceWritebackError: row.salesforce_writeback_error || null,
-    externalClosureDetectedAt: row.external_closure_detected_at || null,
-    externalClosureSalesforceStatus: row.external_closure_salesforce_status || null,
-    externalClosureSalesforceModifiedAt: row.external_closure_salesforce_modified_at || null,
-    externalClosureAcceptedAt: row.external_closure_accepted_at || null,
-    externalClosureAcceptedBy: row.external_closure_accepted_by || null,
-    externalClosureAcceptedByEmail: row.external_closure_accepted_by_email || null,
-    externalClosureAcceptanceReason: row.external_closure_acceptance_reason || null,
-    createdAt: row.created_at || null,
-    updatedAt: row.updated_at || null,
-  };
-}
-
-function serializeDisputeSupplierInstruction(row) {
-  if (!row) return null;
-  return {
-    id: row.id,
-    caseId: row.case_id,
-    actionId: row.action_id,
-    partyId: row.party_id,
-    stemId: row.stem_id,
-    instructionType: row.instruction_type,
-    instructionLabel: row.instruction_type === 'withhold_unpaid' ? 'Do not pay' : 'Get back paid amount',
-    recoveryMethod: row.recovery_method || null,
-    sourceSupplierInvoiceId: row.source_supplier_invoice_id,
-    sourceSupplierInvoiceName: row.source_supplier_invoice_name || '',
-    sourceStemId: row.source_stem_id || row.stem_id,
-    targetSupplierInvoiceId: row.target_supplier_invoice_id || null,
-    targetSupplierInvoiceName: row.target_supplier_invoice_name || '',
-    targetStemId: row.target_stem_id || null,
-    currencyIsoCode: row.currency_iso_code || 'USD',
-    plannedAmount: Number(row.planned_amount || 0),
-    allocatedAmount: Number(row.allocated_amount || 0),
-    sourceInvoiceAmountSnapshot: Number(row.source_invoice_amount_snapshot || 0),
-    sourcePayableBalanceSnapshot: Number(row.source_payable_balance_snapshot || 0),
-    sourcePaidAmountSnapshot: Number(row.source_paid_amount_snapshot || 0),
-    targetInvoiceAmountSnapshot: row.target_invoice_amount_snapshot == null ? null : Number(row.target_invoice_amount_snapshot),
-    targetPayableAmountSnapshot: row.target_payable_amount_snapshot == null ? null : Number(row.target_payable_amount_snapshot),
-    sourceInvoiceSnapshot: row.source_invoice_snapshot || {},
-    sourceStemSnapshot: row.source_stem_snapshot || {},
-    targetInvoiceSnapshot: row.target_invoice_snapshot || {},
-    targetStemSnapshot: row.target_stem_snapshot || {},
-    paymentSnapshot: row.payment_snapshot || {},
-    allocationFingerprint: row.allocation_fingerprint || '',
-    status: row.status || 'Pending Accounting',
-    matchedSalesforcePaymentId: row.matched_salesforce_payment_id || null,
-    matchingPaymentSnapshot: row.matching_payment_snapshot || {},
-    instructionReference: row.instruction_reference || '',
-    instructionDate: row.instruction_date || null,
-    instructionAmount: row.instruction_amount == null ? null : Number(row.instruction_amount),
-    settlementReference: row.settlement_reference || '',
-    settlementDate: row.settlement_date || null,
-    settlementAmount: row.settlement_amount == null ? null : Number(row.settlement_amount),
-    accountingNote: row.accounting_note || '',
-    revision: Number(row.revision || 1),
-    acknowledgedBy: row.acknowledged_by || null,
-    acknowledgedByEmail: row.acknowledged_by_email || null,
-    acknowledgedAt: row.acknowledged_at || null,
-    settledBy: row.settled_by || null,
-    settledByEmail: row.settled_by_email || null,
-    settledAt: row.settled_at || null,
-    createdAt: row.created_at || null,
-    updatedAt: row.updated_at || null,
-  };
-}
-
-function serializeDisputeBetaAction(row, partyMap = new Map(), instructionRows = []) {
-  if (!row) return null;
-  const party = partyMap.get(row.party_id) || null;
-  const actionType = row.action_type;
-  const supplierInstructions = instructionRows.filter((instruction) => instruction.action_id === row.id && instruction.status !== 'Superseded').map(serializeDisputeSupplierInstruction);
-  const invoiceAllocationMap = new Map();
-  for (const instruction of supplierInstructions) {
-    const existing = invoiceAllocationMap.get(instruction.sourceSupplierInvoiceId) || {
-      supplierInvoiceId: instruction.sourceSupplierInvoiceId,
-      invoiceName: instruction.sourceSupplierInvoiceName,
-      amount: instruction.allocatedAmount,
-    };
-    existing.amount = Math.max(existing.amount, instruction.allocatedAmount);
-    invoiceAllocationMap.set(instruction.sourceSupplierInvoiceId, existing);
-  }
-  const closeReason = actionType === 'close_supplier_dispute' ? canonicalDisputeBetaCloseReason(row.close_reason, DISPUTE_BETA_SUPPLIER_CLOSE_REASONS) : actionType === 'close_buyer_dispute' ? canonicalDisputeBetaCloseReason(row.close_reason, DISPUTE_BETA_BUYER_CLOSE_REASONS) : row.close_reason;
-  return {
-    id: row.id,
-    caseId: row.case_id,
-    stemId: row.stem_id,
-    partyId: row.party_id,
-    partySide: row.party_side,
-    partyType: row.party_side,
-    partyName: party?.account_name || party?.name || '',
-    partyAccountId: party?.account_id || party?.accountId || null,
-    partyKey: party?.account_id ? `account:${party.account_id}` : party?.accountId ? `account:${party.accountId}` : null,
-    partyRoles: party?.roles || [],
-    actionType,
-    actionLabel: DISPUTE_BETA_ACTION_LABELS[actionType] || row.action_label || actionType,
-    amount: row.amount == null ? null : Number(row.amount),
-    disputeAmount: row.amount == null ? null : Number(row.amount),
-    currencyIsoCode: supplierInstructions[0]?.currencyIsoCode || 'USD',
-    invoiceAllocations: [...invoiceAllocationMap.values()],
-    supplierInstructions,
-    totalDoNotPay: supplierInstructions.filter((instruction) => instruction.instructionType === 'withhold_unpaid').reduce((sum, instruction) => sum + instruction.plannedAmount, 0),
-    totalGetBackPaid: supplierInstructions.filter((instruction) => instruction.instructionType === 'get_back_paid').reduce((sum, instruction) => sum + instruction.plannedAmount, 0),
-    supplierDisputeAmountRequired: row.party_side === 'supplier' && DISPUTE_LEGACY_SUPPLIER_FINANCIAL_ACTIONS.has(row.action_type) && row.amount == null,
-    supplierInstructionConversionRequired: row.party_side === 'supplier' && row.amount != null && DISPUTE_LEGACY_SUPPLIER_FINANCIAL_ACTIONS.has(row.action_type),
-    specialSellPrice: row.special_sell_price == null ? null : Number(row.special_sell_price),
-    specialBuyPrice: row.special_buy_price == null ? null : Number(row.special_buy_price),
-    quantity: row.quantity == null ? null : Number(row.quantity),
-    quantityUnit: row.quantity_unit || 'MT',
-    closeReason: closeReason || null,
-    balancePaymentInstruction: row.balance_payment_instruction || null,
-    description: row.description || '',
-    requiresAttachment: row.requires_attachment === true,
-    accountingStatus: row.execution_status || 'Pending Accounting',
-    executionStatus: row.execution_status || 'Pending Accounting',
-    instructionReference: row.instruction_reference || '',
-    instructionDate: row.instruction_date || null,
-    instructionAmount: row.instruction_amount == null ? null : Number(row.instruction_amount),
-    settlementReference: row.settlement_reference || '',
-    settlementDate: row.settlement_date || null,
-    settlementAmount: row.settlement_amount == null ? null : Number(row.settlement_amount),
-    accountingNote: row.accounting_note || '',
-    accountingBy: row.accounting_by || null,
-    accountingByEmail: row.accounting_by_email || null,
-    accountingAt: row.accounting_at || null,
-    executedBy: row.executed_by || null,
-    executedByEmail: row.executed_by_email || null,
-    executedAt: row.executed_at || null,
-    executionNote: row.execution_note || null,
-    linkedAgreedCompensationId: row.linked_agreed_compensation_id || null,
-    linkedCompensationSnapshot: row.linked_compensation_snapshot || {},
-    linkedCompensationBy: row.linked_compensation_by || null,
-    linkedCompensationByEmail: row.linked_compensation_by_email || null,
-    linkedCompensationAt: row.linked_compensation_at || null,
-    createdBy: row.created_by || null,
-    createdByEmail: row.created_by_email || null,
-    updatedBy: row.updated_by || null,
-    updatedByEmail: row.updated_by_email || null,
-    createdAt: row.created_at || null,
-    updatedAt: row.updated_at || null,
-  };
-}
-
-function serializeDisputeWorkflowDocument(row) {
-  if (!row) return null;
-  const fileName = row.smart_filename || row.original_filename || 'Dispute document';
-  const versionId = row.salesforce_content_version_id;
-  return {
-    id: row.id,
-    caseId: row.case_id,
-    actionId: row.action_id || null,
-    supplierInstructionId: row.supplier_instruction_id || null,
-    partyId: row.party_id,
-    stemId: row.stem_id,
-    partySide: row.party_side,
-    partyType: row.party_side,
-    partyName: row.party_name || '',
-    partyAccountId: row.party_account_id || null,
-    documentDirection: row.document_direction,
-    documentType: row.document_type,
-    originalFileName: row.original_filename,
-    requestedFileName: row.requested_filename || fileName,
-    fileName,
-    smartFileName: fileName,
-    contentType: row.content_type || 'application/octet-stream',
-    fileExtension: row.file_extension || '',
-    contentSize: Number(row.content_size || 0),
-    contentVersionId: versionId,
-    contentDocumentId: row.salesforce_content_document_id || null,
-    linkedRecordId: row.salesforce_linked_record_id,
-    linkedRecordIds: row.salesforce_linked_record_id ? [row.salesforce_linked_record_id] : [],
-    uploadStatus: row.upload_status || 'complete',
-    salesforceUrl: row.salesforce_url || null,
-    downloadUrl: `/api/functions/salesforceDocumentDownload?kind=contentVersion&id=${encodeURIComponent(versionId)}&filename=${encodeURIComponent(fileName)}`,
-    uploadedBy: row.uploaded_by || null,
-    uploadedByEmail: row.uploaded_by_email || null,
-    createdAt: row.created_at || null,
-  };
-}
-
-function serializeDisputeBetaEvent(row) {
-  if (!row) return null;
-  return {
-    id: row.id,
-    caseId: row.case_id,
-    actionId: row.action_id || null,
-    stemId: row.stem_id,
-    eventType: row.event_type,
-    note: row.note || '',
-    metadata: row.metadata || {},
-    actorUserId: row.actor_user_id || null,
-    actorEmail: row.actor_email || null,
-    createdAt: row.created_at || null,
-  };
-}
-
-function disputeBetaActionPartyType(actionType, inputPartyType) {
-  if (actionType === 'issue_buyer_credit_note' || actionType === 'close_buyer_dispute') return 'buyer';
-  if (actionType === 'hold_supplier_payment' || actionType === 'pay_full_supplier_invoice' || actionType === 'deduct_specific_amount' || actionType === 'resolve_supplier_dispute' || actionType === 'close_supplier_dispute') return 'supplier';
-  return String(inputPartyType || '').toLowerCase() === 'buyer' ? 'buyer' : 'supplier';
-}
-
-function normalizeDisputeBetaAction(input = {}, caseRow, profile = {}, registry) {
-  const actionType = String(input.actionType || input.action_type || '').trim();
-  if (!DISPUTE_BETA_ACTION_LABELS[actionType]) throw appError('Valid dispute workflow action type is required.', 400);
-  const partySide = disputeBetaActionPartyType(actionType, input.partySide || input.party_side || input.partyType || input.party_type);
-  const party = canonicalDisputeActionTarget(input, partySide, registry);
-  const amount = decimalOrNull(input.amount);
-  if (actionType === 'deduct_specific_amount' && amount == null) throw appError('Deduction amount is required.', 400);
-  if (actionType === 'resolve_supplier_dispute' && (amount == null || amount <= 0)) {
-    throw appError('Enter an agreed supplier recovery amount above zero, or choose Close dispute with supplier (no recovery).', 400);
-  }
-  if (actionType === 'issue_buyer_credit_note' && (amount == null || amount <= 0)) {
-    throw appError('Enter an agreed buyer credit note amount above zero, or choose Close dispute with buyer (no credit note).', 400);
-  }
-  const closeReasonInput = String(input.closeReason || input.close_reason || '').trim();
-  const closeReason = actionType === 'close_supplier_dispute' ? canonicalDisputeBetaCloseReason(closeReasonInput, DISPUTE_BETA_SUPPLIER_CLOSE_REASONS) : actionType === 'close_buyer_dispute' ? canonicalDisputeBetaCloseReason(closeReasonInput, DISPUTE_BETA_BUYER_CLOSE_REASONS) : closeReasonInput || null;
-  if (actionType === 'close_supplier_dispute' && !DISPUTE_BETA_SUPPLIER_CLOSE_REASONS.includes(closeReason)) {
-    throw appError('Valid supplier close reason is required.', 400);
-  }
-  if (actionType === 'close_buyer_dispute' && !DISPUTE_BETA_BUYER_CLOSE_REASONS.includes(closeReason)) {
-    throw appError('Valid buyer close reason is required.', 400);
-  }
-  const balancePaymentInstruction = String(input.balancePaymentInstruction || input.balance_payment_instruction || '').trim() || null;
-  if (balancePaymentInstruction && !DISPUTE_BETA_BALANCE_PAYMENT_INSTRUCTIONS.includes(balancePaymentInstruction)) {
-    throw appError('Valid balance payment instruction is required.', 400);
-  }
-  if (actionType === 'close_supplier_dispute' && !balancePaymentInstruction) {
-    throw appError('Balance payment instruction is required when closing a supplier dispute without recovery.', 400);
-  }
-  const currencyIsoCode =
-    String(input.currencyIsoCode || input.currency_iso_code || 'USD')
-      .trim()
-      .toUpperCase() || 'USD';
-  if (actionType === 'resolve_supplier_dispute' && !/^[A-Z]{3}$/.test(currencyIsoCode)) {
-    throw appError('Supplier dispute currency must be a three-letter ISO code.', 400);
-  }
-
-  return {
-    stem_id: caseRow.stem_id,
-    party_id: party.id,
-    party_side: partySide,
-    party_account_key: party.accountKey,
-    action_type: actionType,
-    action_label: DISPUTE_BETA_ACTION_LABELS[actionType],
-    amount,
-    special_sell_price: decimalOrNull(input.specialSellPrice ?? input.special_sell_price),
-    special_buy_price: decimalOrNull(input.specialBuyPrice ?? input.special_buy_price),
-    quantity: decimalOrNull(input.quantity),
-    quantity_unit: String(input.quantityUnit || input.quantity_unit || 'MT').trim() || 'MT',
-    close_reason: closeReason,
-    balance_payment_instruction: balancePaymentInstruction,
-    description: String(input.description || '').trim(),
-    requires_attachment: Boolean(input.requiresAttachment ?? input.requires_attachment),
-    execution_status: normalizeDisputeBetaStatus(input.accountingStatus || input.executionStatus || input.execution_status, DISPUTE_BETA_EXECUTION_STATUSES, 'Pending Accounting'),
-    currency_iso_code: currencyIsoCode,
-    invoice_allocations: Array.isArray(input.invoiceAllocations || input.invoice_allocations) ? input.invoiceAllocations || input.invoice_allocations : [],
-    updated_by: profile.id,
-    updated_by_email: profile.email,
-  };
-}
-
-function prepareSupplierSettlementAction(action, currentStem) {
-  if (action.action_type !== 'resolve_supplier_dispute') return action;
-  const schema = currentStem?._Supplier_Settlement_Schema;
-  if (!schema?.valid) {
-    throw appError(`Supplier payment automation is unavailable: ${(schema?.issues || ['Salesforce invoice/payment schema is incomplete.']).join(' ')}`, 400);
-  }
-  const accountKey = disputeSalesforceIdKey(action.party_account_key);
-  const invoices = (currentStem?._Supplier_Invoice_Exposure_Rows || []).filter((invoice) => disputeSalesforceIdKey(invoice.supplierAccountId) === accountKey);
-  const invalidInvoices = invoices.filter((invoice) => (invoice.warnings || []).some((warning) => /no valid supplier Account lookup|negative|exceeds its invoice amount/i.test(warning)));
-  if (invalidInvoices.length) {
-    throw appError('Correct the supplier invoice Account or payable balance in Salesforce before saving this supplier resolution.', 400);
-  }
-  const allocation = allocateSupplierDispute({
-    invoices,
-    disputeAmount: action.amount,
-    currencyIsoCode: action.currency_iso_code,
-    invoiceAllocations: action.invoice_allocations,
-  });
-  return {
-    ...action,
-    invoice_allocations: allocation.allocations.map((item) => ({
-      supplier_invoice_id: item.supplierInvoiceId,
-      amount: item.allocatedAmount,
-    })),
-    supplier_allocation: allocation,
-    supplier_instructions: supplierInstructionRows(allocation).map((instruction) => ({
-      ...instruction,
-      source_stem_id: currentStem.Id,
-      source_stem_snapshot: {
-        stemId: currentStem.Id,
-        stemName: currentStem._Display_Name || currentStem.Name || currentStem.KeyStem__c || '',
-        deliveryDate: currentStem.Delivery_Date__c || null,
-      },
-    })),
-  };
-}
-
-function calculateDisputeBetaSettlement(actions = []) {
-  let buyerImpact = 0;
-  let supplierImpact = 0;
-  let buyerCreditNoteImpact = 0;
-  let supplierCreditNoteImpact = 0;
-  const lines = [];
-
-  for (const action of actions) {
-    const amount = Number(action.amount ?? action.amount_cents ?? 0) || 0;
-    if (action.action_type === 'issue_buyer_credit_note' || action.actionType === 'issue_buyer_credit_note') {
-      buyerImpact -= amount;
-      lines.push({
-        label: action.action_label || action.actionLabel || 'Buyer credit note',
-        impact: -amount,
-      });
-    }
-    if (action.action_type === 'deduct_specific_amount' || action.actionType === 'deduct_specific_amount') {
-      supplierImpact += amount;
-      lines.push({
-        label: action.action_label || action.actionLabel || 'Supplier deduction',
-        impact: amount,
-      });
-    }
-    if (action.action_type === 'resolve_supplier_dispute' || action.actionType === 'resolve_supplier_dispute') {
-      supplierImpact += amount;
-      lines.push({
-        label: action.action_label || action.actionLabel || 'Supplier dispute resolution',
-        impact: amount,
-      });
-    }
-
-    const buyerCreditNote = Number(action.special_sell_price ?? action.specialSellPrice);
-    if (Number.isFinite(buyerCreditNote) && buyerCreditNote > 0) {
-      const impact = -buyerCreditNote;
-      buyerCreditNoteImpact += impact;
-      lines.push({
-        label: 'Buyer agreed credit note',
-        buyerCreditNote,
-        impact,
-      });
-    }
-
-    const supplierCreditNote = Number(action.special_buy_price ?? action.specialBuyPrice);
-    if (Number.isFinite(supplierCreditNote) && supplierCreditNote > 0) {
-      const impact = supplierCreditNote;
-      supplierCreditNoteImpact += impact;
-      lines.push({
-        label: 'Supplier agreed credit note',
-        supplierCreditNote,
-        impact,
-      });
-    }
-  }
-
-  const settlementPnl = buyerImpact + supplierImpact + buyerCreditNoteImpact + supplierCreditNoteImpact;
-  return {
-    buyerImpact,
-    supplierImpact,
-    buyerCreditNoteImpact,
-    supplierCreditNoteImpact,
-    specialPricePnl: buyerCreditNoteImpact + supplierCreditNoteImpact,
-    settlementPnl,
-    lines,
-  };
-}
-
-async function loadDisputeBetaWorkflowMap(client, stemIds = []) {
-  const ids = [...new Set(stemIds.filter(Boolean))];
-  if (!ids.length) return {};
-  const [casesRes, partiesRes, actionsRes, instructionsRes, eventsRes, documentsRes] = await Promise.all([
-    client.from('dispute_beta_cases').select(DISPUTE_BETA_CASE_SELECT).in('stem_id', ids),
-    client.from('dispute_workflow_parties').select(DISPUTE_WORKFLOW_PARTY_SELECT).in('stem_id', ids).order('created_at', { ascending: true }),
-    client.from('dispute_beta_actions').select(DISPUTE_BETA_ACTION_SELECT).in('stem_id', ids).order('created_at', { ascending: true }),
-    client.from('dispute_workflow_supplier_instructions').select(DISPUTE_SUPPLIER_INSTRUCTION_SELECT).in('stem_id', ids).order('created_at', { ascending: true }),
-    client
-      .from('dispute_beta_events')
-      .select(DISPUTE_BETA_EVENT_SELECT)
-      .in('stem_id', ids)
-      .order('created_at', { ascending: false })
-      .limit(Math.max(100, Math.min(ids.length * 25, 2500))),
-    client.from('dispute_workflow_documents').select(DISPUTE_WORKFLOW_DOCUMENT_SELECT).in('stem_id', ids).eq('upload_status', 'complete').order('created_at', { ascending: false }),
-  ]);
-  if (casesRes.error) throw casesRes.error;
-  if (partiesRes.error) throw partiesRes.error;
-  if (actionsRes.error) throw actionsRes.error;
-  if (instructionsRes.error) throw instructionsRes.error;
-  if (eventsRes.error) throw eventsRes.error;
-  if (documentsRes.error) throw documentsRes.error;
-
-  const map = {};
-  for (const row of casesRes.data || []) {
-    map[row.stem_id] = {
-      case: serializeDisputeBetaCase(row),
-      parties: [],
-      actions: [],
-      supplierInstructions: [],
-      events: [],
-      documents: [],
-    };
-  }
-  const partyById = new Map();
-  for (const row of partiesRes.data || []) {
-    partyById.set(row.id, row);
-    if (!map[row.stem_id])
-      map[row.stem_id] = {
-        case: null,
-        parties: [],
-        actions: [],
-        supplierInstructions: [],
-        events: [],
-        documents: [],
-      };
-    map[row.stem_id].parties.push(serializeDisputeWorkflowParty(row));
-  }
-  for (const row of instructionsRes.data || []) {
-    if (!map[row.stem_id])
-      map[row.stem_id] = {
-        case: null,
-        parties: [],
-        actions: [],
-        supplierInstructions: [],
-        events: [],
-        documents: [],
-      };
-    map[row.stem_id].supplierInstructions.push(serializeDisputeSupplierInstruction(row));
-  }
-  for (const row of actionsRes.data || []) {
-    if (!map[row.stem_id])
-      map[row.stem_id] = {
-        case: null,
-        parties: [],
-        actions: [],
-        supplierInstructions: [],
-        events: [],
-        documents: [],
-      };
-    map[row.stem_id].actions.push(serializeDisputeBetaAction(row, partyById, instructionsRes.data || []));
-  }
-  for (const row of eventsRes.data || []) {
-    if (!map[row.stem_id])
-      map[row.stem_id] = {
-        case: null,
-        parties: [],
-        actions: [],
-        supplierInstructions: [],
-        events: [],
-        documents: [],
-      };
-    map[row.stem_id].events.push(serializeDisputeBetaEvent(row));
-  }
-  for (const row of documentsRes.data || []) {
-    if (!map[row.stem_id])
-      map[row.stem_id] = {
-        case: null,
-        parties: [],
-        actions: [],
-        supplierInstructions: [],
-        events: [],
-        documents: [],
-      };
-    map[row.stem_id].documents.push(serializeDisputeWorkflowDocument(row));
-  }
-  return map;
-}
-
-async function writeDisputeBetaEvent(client, caseRow, eventType, profile, payload = {}) {
-  const { error } = await client.from('dispute_beta_events').insert({
-    case_id: caseRow.id,
-    action_id: payload.actionId || null,
-    stem_id: caseRow.stem_id,
-    event_type: eventType,
-    note: payload.note || null,
-    metadata: payload.metadata || {},
-    actor_user_id: profile?.id || null,
-    actor_email: profile?.email || null,
-  });
-  if (error) throw error;
-}
-
-function assertSalesforceDisputeIsOpen(stem = {}) {
-  if (!isSalesforceDisputeClosed(stem.Dispute_Status__c)) return;
-  throw appError(`This dispute is already ${String(stem.Dispute_Status__c).trim()} in Salesforce. Commercial workflow changes are locked; Finance may continue an already approved FCOS accounting workflow.`, 409);
-}
-
-function hasUnacceptedExternalDisputeClosure(caseRow, stem) {
-  return Boolean(
-    caseRow?.id
-    && caseRow.workflow_status !== 'Closed'
-    && isSalesforceDisputeClosed(stem?.Dispute_Status__c)
-    && !hasRecordedFcosClosureWriteback(caseRow),
-  );
-}
-
-async function recordExternalDisputeClosure(client, caseRow, stem, profile, workflowStatus = null) {
-  if (!hasUnacceptedExternalDisputeClosure(caseRow, stem)) return caseRow;
-  const firstDetection = !caseRow.external_closure_detected_at;
-  const nowIso = new Date().toISOString();
-  const salesforceStatus = String(stem.Dispute_Status__c || '').trim();
-  const { data: updatedCase, error } = await client
-    .from('dispute_beta_cases')
-    .update({
-      ...(workflowStatus ? { workflow_status: workflowStatus } : {}),
-      current_salesforce_status: salesforceStatus,
-      salesforce_writeback_status: 'external',
-      salesforce_writeback_error: null,
-      external_closure_detected_at: caseRow.external_closure_detected_at || nowIso,
-      external_closure_salesforce_status: salesforceStatus,
-      external_closure_salesforce_modified_at: stem.LastModifiedDate || null,
-      updated_at: nowIso,
-    })
-    .eq('id', caseRow.id)
-    .select(DISPUTE_BETA_CASE_SELECT)
-    .single();
-  if (error) throw error;
-  if (firstDetection) {
-    await writeDisputeBetaEvent(client, updatedCase, 'external_closure_detected', profile, {
-      note: `Salesforce was changed directly to ${salesforceStatus}. FCOS retained the ${updatedCase.workflow_status} accounting stage.`,
-      metadata: {
-        salesforceStatus,
-        salesforceLastModifiedAt: stem.LastModifiedDate || null,
-        internalWorkflowStatus: updatedCase.workflow_status,
-      },
-    });
-  }
-  return updatedCase;
-}
-
-async function persistDisputeAccountingStatus(client, caseRow, stem, profile, workflowStatus) {
-  if (hasUnacceptedExternalDisputeClosure(caseRow, stem)) {
-    return recordExternalDisputeClosure(client, caseRow, stem, profile, workflowStatus);
-  }
-  return writeDisputeWorkflowStatusToSalesforce(client, caseRow, profile, workflowStatus);
-}
-
-function projectExternallyClosedDisputeWorkflows(stems = [], workflowMap = {}) {
-  for (const stem of stems) {
-    const workflow = workflowMap[stem.Id];
-    const projection = projectExternalDisputeClosure(workflow?.case, stem);
-    if (projection) workflow.case = { ...workflow.case, ...projection };
-  }
-}
-
-async function loadDisputeWorkflowParties(client, caseId) {
-  const { data, error } = await client.from('dispute_workflow_parties').select(DISPUTE_WORKFLOW_PARTY_SELECT).eq('case_id', caseId).order('created_at', { ascending: true });
-  if (error) throw error;
-  return data || [];
-}
-
-function disputePartyRowMap(partyRows = []) {
-  return new Map(partyRows.map((party) => [party.id, party]));
-}
-
-async function loadDisputeWorkflowActions(client, caseId) {
-  const [partyRows, actionsResult, instructionsResult] = await Promise.all([loadDisputeWorkflowParties(client, caseId), client.from('dispute_beta_actions').select(DISPUTE_BETA_ACTION_SELECT).eq('case_id', caseId).order('created_at', { ascending: true }), client.from('dispute_workflow_supplier_instructions').select(DISPUTE_SUPPLIER_INSTRUCTION_SELECT).eq('case_id', caseId).order('created_at', { ascending: true })]);
-  if (actionsResult.error) throw actionsResult.error;
-  if (instructionsResult.error) throw instructionsResult.error;
-  const instructionRows = instructionsResult.data || [];
-  return {
-    partyRows,
-    actionRows: actionsResult.data || [],
-    instructionRows,
-    supplierInstructions: instructionRows.map(serializeDisputeSupplierInstruction),
-    actions: (actionsResult.data || []).map((row) => serializeDisputeBetaAction(row, disputePartyRowMap(partyRows), instructionRows)),
-  };
-}
-
-async function clearInvalidDisputeCompensationLinks(client, caseRow, profile) {
-  const workflow = await loadDisputeWorkflowActions(client, caseRow.id);
-  const partyMap = disputePartyRowMap(workflow.partyRows);
-  const invalid = workflow.actionRows.filter((action) => {
-    if (!action.linked_agreed_compensation_id) return false;
-    const party = partyMap.get(action.party_id);
-    const snapshotAccountId = action.linked_compensation_snapshot?.accountId;
-    return !['close_buyer_dispute', 'close_supplier_dispute'].includes(action.action_type)
-      || String(action.close_reason || '').trim().toLowerCase() !== 'uoc opened'
-      || !party?.account_id
-      || snapshotAccountId !== party.account_id;
-  });
-  for (const action of invalid) {
-    const now = new Date().toISOString();
-    const { error } = await client.from('dispute_beta_actions').update({
-      linked_agreed_compensation_id: null,
-      linked_compensation_snapshot: {},
-      linked_compensation_by: null,
-      linked_compensation_by_email: null,
-      linked_compensation_at: null,
-      updated_by: profile.id,
-      updated_by_email: profile.email,
-      updated_at: now,
-    }).eq('id', action.id);
-    if (error) throw error;
-    await writeDisputeBetaEvent(client, caseRow, 'compensation_claim_linked', profile, {
-      actionId: action.id,
-      note: 'Agreed Compensation claim link cleared because the dispute party or closure reason changed.',
-      metadata: { claimRemoved: true },
-    });
-  }
-}
-
-async function assertDisputeUocClaimsReadyForClosure(actions, partyRows) {
-  const partyMap = disputePartyRowMap(partyRows);
-  for (const action of actions.filter((row) => String(row.close_reason || '').trim().toLowerCase() === 'uoc opened')) {
-    const party = partyMap.get(action.party_id);
-    if (!action.linked_agreed_compensation_id) {
-      throw appError(`${party?.account_name || 'The dispute party'} requires a linked Agreed Compensation claim before final closure.`, 409);
-    }
-    const snapshot = action.linked_compensation_snapshot || {};
-    if (snapshot.linkedWhileOpen !== true || snapshot.accountId !== party?.account_id) {
-      throw appError(`${party?.account_name || 'The dispute party'} has an invalid compensation claim link. Remove it and select the correct open claim.`, 409);
-    }
-    await validateAgreedCompensationClaimLink(action.linked_agreed_compensation_id, party.account_id, { requireOpen: false });
-  }
-}
-
-function storedSupplierInvoiceAllocations(instructionRows = []) {
-  const allocations = new Map();
-  for (const instruction of instructionRows.filter((row) => row.status !== 'Superseded')) {
-    const id = instruction.source_supplier_invoice_id;
-    if (!id) continue;
-    allocations.set(id, Math.max(Number(allocations.get(id) || 0), Number(instruction.allocated_amount || 0)));
-  }
-  return [...allocations].map(([supplierInvoiceId, amount]) => ({
-    supplierInvoiceId,
-    amount,
-  }));
-}
-
-function currentSupplierActionAllocation(action, partyRows, instructionRows, currentStem) {
-  const party = disputePartyRowMap(partyRows).get(action.party_id);
-  if (!party) throw appError('Supplier resolution has no selected Account.', 400);
-  const accountKey = disputeSalesforceIdKey(party.account_id);
-  const actionInstructions = instructionRows.filter((instruction) => instruction.action_id === action.id && instruction.status !== 'Superseded');
-  const currencyIsoCode = actionInstructions[0]?.currency_iso_code || 'USD';
-  const invoices = (currentStem?._Supplier_Invoice_Exposure_Rows || []).filter((invoice) => disputeSalesforceIdKey(invoice.supplierAccountId) === accountKey);
-  if (!currentStem?._Supplier_Settlement_Schema?.valid) {
-    throw appError(`Supplier payment automation is unavailable: ${(currentStem?._Supplier_Settlement_Schema?.issues || []).join(' ')}`, 409);
-  }
-  return allocateSupplierDispute({
-    invoices,
-    disputeAmount: action.amount,
-    currencyIsoCode,
-    invoiceAllocations: storedSupplierInvoiceAllocations(actionInstructions),
-  });
-}
-
-function supplierInstructionStateChanged(currentRows = [], allocation = {}) {
-  const activeRows = currentRows.filter((row) => row.status !== 'Superseded');
-  const currentFingerprint = activeRows.map((row) => row.allocation_fingerprint).find(Boolean);
-  if (currentFingerprint) return currentFingerprint !== allocation.fingerprint;
-  const currentShape = activeRows.map((row) => `${row.source_supplier_invoice_id}:${row.instruction_type}:${Number(row.planned_amount || 0).toFixed(2)}`).sort();
-  const nextShape = supplierInstructionRows(allocation)
-    .map((row) => `${row.source_supplier_invoice_id}:${row.instruction_type}:${Number(row.planned_amount || 0).toFixed(2)}`)
-    .sort();
-  return JSON.stringify(currentShape) !== JSON.stringify(nextShape);
-}
-
-function assertSupplierAllocationsCurrent(actions, partyRows, instructionRows, currentStem) {
-  for (const action of actions.filter((row) => row.action_type === 'resolve_supplier_dispute')) {
-    const allocation = currentSupplierActionAllocation(action, partyRows, instructionRows, currentStem);
-    const actionInstructions = instructionRows.filter((instruction) => instruction.action_id === action.id);
-    if (supplierInstructionStateChanged(actionInstructions, allocation)) {
-      throw appError('Supplier invoice payment data changed. Save the draft again to review the updated Do not pay and Get back paid amount allocation.', 409);
-    }
-  }
-}
-
-async function reconcileApprovedSupplierInstructions(client, caseRow, partyRows, actionRows, instructionRows, currentStem, profile) {
-  if (caseRow.approval_status !== 'Approved' || caseRow.workflow_status === 'Closed') {
-    return { changed: false, instructionRows };
-  }
-  const reconciliations = [];
-  for (const action of actionRows.filter((row) => row.action_type === 'resolve_supplier_dispute')) {
-    const allocation = currentSupplierActionAllocation(action, partyRows, instructionRows, currentStem);
-    const currentRows = instructionRows.filter((instruction) => instruction.action_id === action.id);
-    if (!supplierInstructionStateChanged(currentRows, allocation)) continue;
-    const sourceStemSnapshot = {
-      stemId: currentStem.Id,
-      stemName: currentStem._Display_Name || currentStem.Name || currentStem.KeyStem__c || '',
-      deliveryDate: currentStem.Delivery_Date__c || null,
-    };
-    reconciliations.push({
-      action_id: action.id,
-      instructions: supplierInstructionRows(allocation).map((desired) => ({
-        ...desired,
-        party_id: action.party_id,
-        source_stem_id: caseRow.stem_id,
-        source_stem_snapshot: sourceStemSnapshot,
-        allocation_fingerprint: allocation.fingerprint,
-      })),
-      note: `Supplier payment changed. Do not pay is now ${allocation.totalDoNotPay.toFixed(2)} ${allocation.currencyIsoCode}; get back paid amount is ${allocation.totalGetBackPaid.toFixed(2)} ${allocation.currencyIsoCode}.`,
-      metadata: {
-        disputeAmount: allocation.disputeAmount,
-        totalDoNotPay: allocation.totalDoNotPay,
-        totalGetBackPaid: allocation.totalGetBackPaid,
-        allocationFingerprint: allocation.fingerprint,
-      },
-    });
-  }
-  if (!reconciliations.length) {
-    if (!hasUnacceptedExternalDisputeClosure(caseRow, currentStem) && caseRow.salesforce_writeback_status === 'failed' && ['Approved - Pending Accounting', 'Accounting In Progress', 'Settled - Ready to Close'].includes(caseRow.workflow_status)) {
-      await writeDisputeWorkflowStatusToSalesforce(client, caseRow, profile, caseRow.workflow_status);
-      return { changed: false, writebackRetried: true, instructionRows };
-    }
-    return { changed: false, writebackRetried: false, instructionRows };
-  }
-  const { error: reconciliationError } = await client.rpc('reconcile_dispute_supplier_instructions', {
-    p_case_id: caseRow.id,
-    p_reconciliations: reconciliations,
-    p_actor: { id: profile.id, email: profile.email },
-  });
-  if (reconciliationError) throw reconciliationError;
-  const updatedCase = await getDisputeBetaCase(client, caseRow.id);
-  await persistDisputeAccountingStatus(client, updatedCase, currentStem, profile, 'Accounting In Progress');
-  const { data, error } = await client.from('dispute_workflow_supplier_instructions').select(DISPUTE_SUPPLIER_INSTRUCTION_SELECT).eq('case_id', caseRow.id).order('created_at', { ascending: true });
-  if (error) throw error;
-  return {
-    changed: true,
-    writebackRetried: false,
-    instructionRows: data || [],
-  };
-}
-
-async function loadDisputeWorkflowDocuments(client, caseId) {
-  const { data, error } = await client.from('dispute_workflow_documents').select(DISPUTE_WORKFLOW_DOCUMENT_SELECT).eq('case_id', caseId).eq('upload_status', 'complete').order('created_at', { ascending: false });
-  if (error) throw error;
-  return data || [];
-}
-
-async function loadDisputeWorkflowEvents(client, caseId, limit = 100) {
-  const { data, error } = await client.from('dispute_beta_events').select(DISPUTE_BETA_EVENT_SELECT).eq('case_id', caseId).order('created_at', { ascending: false }).limit(limit);
-  if (error) throw error;
-  return data || [];
-}
-
-function missingRequiredDisputeDocuments(actions = [], documents = []) {
-  const actionIdsWithDocuments = new Set(documents.map((document) => document.action_id).filter(Boolean));
-  return actions.filter((action) => action.requires_attachment === true && !actionIdsWithDocuments.has(action.id));
-}
-
-async function assertRequiredDisputeDocuments(client, actions = []) {
-  const caseId = actions[0]?.case_id;
-  const documents = caseId ? await loadDisputeWorkflowDocuments(client, caseId) : [];
-  if (!actions.some((action) => action.requires_attachment === true)) return documents;
-  const missing = missingRequiredDisputeDocuments(actions, documents);
-  if (missing.length) {
-    const labels = missing.map((action) => `${action.action_label || action.action_type} (${action.party_side})`);
-    throw appError(`Upload the required document for: ${labels.join(', ')}.`, 400);
-  }
-  return documents;
-}
-
-async function patchDisputeWorkflowStatusInSalesforce(caseRow, salesforceStatus) {
-  const currentRows = await queryRows(`
-    SELECT Id, Dispute_Status__c, LastModifiedDate
-    FROM stem__c
-    WHERE Id = '${escapeSoql(caseRow.stem_id)}'
-    LIMIT 1
-  `);
-  const currentStem = currentRows[0];
-  if (!currentStem) throw appError('The disputed STEM no longer exists in Salesforce.', 404);
-
-  if (isSalesforceDisputeClosed(currentStem.Dispute_Status__c)) {
-    const continuingRecordedClose = isSalesforceDisputeClosed(salesforceStatus) && isSalesforceDisputeClosed(caseRow.current_salesforce_status) && caseRow.salesforce_writeback_status === 'success';
-    if (continuingRecordedClose) return;
-    assertSalesforceDisputeIsOpen(currentStem);
-  }
-
-  const ifUnmodifiedSince = currentStem.LastModifiedDate ? new Date(currentStem.LastModifiedDate).toUTCString() : null;
-  try {
-    await sfRequest(`/sobjects/stem__c/${encodeURIComponent(caseRow.stem_id)}`, {
-      method: 'PATCH',
-      body: { Dispute_Status__c: salesforceStatus },
-      headers: ifUnmodifiedSince ? { 'If-Unmodified-Since': ifUnmodifiedSince } : undefined,
-    });
-  } catch (error) {
-    if (error.status === 412) {
-      throw appError('Salesforce changed while FCOS was saving this workflow. Refresh the Dispute Workflow queue and try again.', 409);
-    }
-    throw error;
-  }
-}
-
-async function recordDisputeWorkflowSalesforceWriteback(client, caseRow, profile, salesforceStatus, writebackStatus = 'success', writebackError = null) {
-  const { data: updatedCase, error } = await client
-    .from('dispute_beta_cases')
-    .update({
-      current_salesforce_status: writebackStatus === 'success' ? salesforceStatus : caseRow.current_salesforce_status,
-      salesforce_writeback_status: writebackStatus,
-      salesforce_writeback_error: writebackError,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', caseRow.id)
-    .select(DISPUTE_BETA_CASE_SELECT)
-    .single();
-  if (error) throw error;
-  await writeDisputeBetaEvent(client, updatedCase, 'salesforce_writeback', profile, {
-    note: writebackStatus === 'success' ? `Salesforce dispute status updated to ${salesforceStatus}.` : `Salesforce dispute status update to ${salesforceStatus} failed.`,
-    metadata: { salesforceStatus, error: writebackError },
-  });
-  return updatedCase;
-}
-
-async function writeDisputeWorkflowStatusToSalesforce(client, caseRow, profile, salesforceStatus, options = {}) {
-  let writebackStatus = 'success';
-  let writebackError = null;
-  let writebackFailure = null;
-  try {
-    await patchDisputeWorkflowStatusInSalesforce(caseRow, salesforceStatus);
-  } catch (error) {
-    writebackStatus = 'failed';
-    writebackError = error.message;
-    writebackFailure = error;
-  }
-  const updatedCase = await recordDisputeWorkflowSalesforceWriteback(client, caseRow, profile, salesforceStatus, writebackStatus, writebackError);
-  if (options.required && writebackStatus === 'failed') {
-    if (writebackFailure?.status) throw writebackFailure;
-    throw appError(`Salesforce dispute status could not be updated: ${writebackError}`, 502);
-  }
-  return updatedCase;
-}
-
-async function upsertDisputeBetaCase(client, stem, extra = {}) {
-  const nowIso = new Date().toISOString();
-  const casePayload = {
-    ...disputeBetaCaseFromStem(stem),
-    latest_note: String(extra.latestNote ?? extra.latest_note ?? '').trim(),
-    updated_at: nowIso,
-  };
-  if (extra.workflowStatus) casePayload.workflow_status = normalizeDisputeBetaStatus(extra.workflowStatus, DISPUTE_BETA_WORKFLOW_STATUSES, 'Draft');
-  if (extra.approvalStatus) casePayload.approval_status = normalizeDisputeBetaStatus(extra.approvalStatus, DISPUTE_BETA_APPROVAL_STATUSES, 'Draft');
-  const { data, error } = await client.from('dispute_beta_cases').upsert(casePayload, { onConflict: 'stem_id' }).select(DISPUTE_BETA_CASE_SELECT).single();
-  if (error) throw error;
-  return data;
-}
-
-async function getDisputeBetaCase(client, caseIdOrStemId) {
-  const value = String(caseIdOrStemId || '').trim();
-  if (!value) throw appError('caseId or stemId is required.', 400);
-  const query = client.from('dispute_beta_cases').select(DISPUTE_BETA_CASE_SELECT);
-  const { data, error } = isSalesforceId(value) ? await query.eq('stem_id', value).maybeSingle() : await query.eq('id', value).maybeSingle();
-  if (error) throw error;
-  if (!data) throw appError('Dispute Workflow case not found.', 404);
-  return data;
-}
-
-function selectedPartyRowsFromAccounts(registry, accountIds = []) {
-  const selectedKeys = new Set(accountIds.map(disputeSalesforceIdKey).filter(Boolean));
-  const candidateByKey = new Map((registry?.candidates || []).map((candidate) => [candidate.accountKey, candidate]));
-  const invalidKeys = [...selectedKeys].filter((key) => !candidateByKey.has(key));
-  if (invalidKeys.length) throw appError('One or more selected Accounts are no longer eligible for this STEM.', 400);
-  if (!selectedKeys.size) throw appError('Select at least one disputed Account before saving.', 400);
-  return [...selectedKeys].map((key) => {
-    const candidate = candidateByKey.get(key);
-    return {
-      id: null,
-      case_id: null,
-      stem_id: null,
-      account_id: candidate.accountId,
-      account_key: candidate.accountKey,
-      account_name: candidate.name,
-      roles: candidate.roles,
-      source_types: candidate.sourceTypes,
-      source_record_ids: candidate.sourceRecordIds,
-      payment_terms: candidate.paymentTerms,
-      products: candidate.products,
-      cancelled_source_only: candidate.cancelledSourceOnly,
-    };
-  });
-}
-
-function validateStoredDisputeActions(actions, partyRows, registry) {
-  const partyById = disputePartyRowMap(partyRows);
-  const seen = new Set();
-  for (const action of actions || []) {
-    const party = partyById.get(action.party_id);
-    if (!party) throw appError(`Action ${action.action_label || action.id} has no selected disputed Account.`, 400);
-    const candidate = findDisputeParty(registry, action.party_side, party.account_id);
-    if (!candidate) throw appError(`${party.account_name} is no longer eligible on the ${action.party_side} side.`, 400);
-    const key = `${party.account_key}:${action.party_side}`;
-    if (seen.has(key)) throw appError(`Only one ${action.party_side} action may be added for ${party.account_name}.`, 400);
-    seen.add(key);
-  }
-  return actions || [];
-}
-
-function supplierActionsMissingDisputeAmount(actions = []) {
-  return actions.filter((action) => action.party_side === 'supplier' && DISPUTE_LEGACY_SUPPLIER_FINANCIAL_ACTIONS.has(action.action_type) && action.amount == null);
-}
-
-function assertSupplierDisputeAmounts(actions = []) {
-  const missing = supplierActionsMissingDisputeAmount(actions);
-  if (missing.length) {
-    throw appError('Supplier dispute amount required. Record the agreed amount before this legacy workflow can progress.', 409);
-  }
-  const legacy = actions.filter((action) => action.party_side === 'supplier' && DISPUTE_LEGACY_SUPPLIER_FINANCIAL_ACTIONS.has(action.action_type));
-  if (legacy.length) {
-    throw appError('Convert each legacy supplier action into invoice-level Finance instructions before this workflow can progress.', 409);
-  }
-}
-
-async function disputeBetaList(body = {}, req, accessContext = null) {
-  const { client, profile } = accessContext || (await requireActiveUser(req));
-  const limit = body.limit || 10000;
-  const cached = await cachedSalesforceValue({
-    namespace: 'salesforce-dispute-queue',
-    ttlSeconds: 30,
-    payload: { limit },
-    tags: ['salesforce:disputes', 'salesforce:stem', 'salesforce:account'],
-    body,
-    req,
-    accessContext: accessContext || { client, profile },
-    loader: () => salesforceDisputeStems({ limit }, null, accessContext || { client, profile }),
-  });
-  const salesforceData = cached.value;
-  const rows = salesforceData.rows || [];
-  let [workflowMap, capabilities] = await Promise.all([
-    loadDisputeBetaWorkflowMap(
-      client,
-      rows.map((row) => row.Id),
-    ),
-    disputeWorkflowCapabilities(client, profile),
-  ]);
-  let reconciled = false;
-  const reconciliationErrors = new Map();
-  for (const stem of rows) {
-    const workflow = workflowMap[stem.Id];
-    if (workflow?.case?.approvalStatus !== 'Approved' || workflow.case.workflowStatus === 'Closed' || !workflow.actions.some((action) => action.actionType === 'resolve_supplier_dispute') || !stem._Supplier_Settlement_Schema?.valid) continue;
-    try {
-      const caseRow = await getDisputeBetaCase(client, workflow.case.id);
-      const stored = await loadDisputeWorkflowActions(client, caseRow.id);
-      const result = await reconcileApprovedSupplierInstructions(client, caseRow, stored.partyRows, stored.actionRows, stored.instructionRows, stem, profile);
-      reconciled = reconciled || result.changed || result.writebackRetried;
-    } catch (error) {
-      console.error('[dispute-workflow] supplier reconciliation failed', {
-        requestId: requestIdFrom(req),
-        code: error?.code || null,
-      });
-      reconciliationErrors.set(stem.Id, 'Supplier payment reconciliation is temporarily unavailable. Finance accounting remains unchanged.');
-    }
-  }
-  if (reconciled) {
-    workflowMap = await loadDisputeBetaWorkflowMap(
-      client,
-      rows.map((row) => row.Id),
-    );
-  }
-  for (const [stemId, error] of reconciliationErrors) {
-    if (workflowMap[stemId]) workflowMap[stemId].reconciliationError = error;
-  }
-  projectExternallyClosedDisputeWorkflows(rows, workflowMap);
-  return {
-    isDisputeAdmin: capabilities.canApprove,
-    isDisputeAccounting: capabilities.canAccount,
-    capabilities,
-    requiredSalesforceFieldsMissing: true,
-    fieldWarning: 'Disputed Accounts, approval, accounting, documents, and audit state are stored in Supabase. Salesforce receives only the high-level STEM Dispute Status.',
-    rows: rows.map((row) => {
-      const workflow = workflowMap[row.Id] || {
-        case: null,
-        parties: [],
-        actions: [],
-        supplierInstructions: [],
-        events: [],
-        documents: [],
-      };
-      if (!workflow.case) workflow.case = legacyClosedDisputeCase(row);
-      return {
-        ...row,
-        _Dispute_Parties: disputeRegistryWithSelection(row._Dispute_Parties, workflow.parties),
-        _Dispute_Workflow: workflow,
-      };
-    }),
-  };
-}
-
-async function disputeBetaSaveDraft(body = {}, req, accessContext = null) {
-  const { client, profile } = accessContext || (await requireActiveUser(req));
-  const stem = body.stem || {};
-  const stemId = stem.Id || body.stemId;
-  if (!stemId) throw appError('stemId is required.', 400);
-  const [currentStem, existingCaseResult] = await Promise.all([loadCurrentDisputeStem(stemId, accessContext || { client, profile }), client.from('dispute_beta_cases').select(DISPUTE_BETA_CASE_SELECT).eq('stem_id', stemId).maybeSingle()]);
-  assertSalesforceDisputeIsOpen(currentStem);
-  const candidateRegistry = currentStem._Dispute_Parties;
-  if (!candidateRegistry?.candidateSchemaValid) {
-    const messages = (candidateRegistry?.issues || []).map((item) => item.message).filter(Boolean);
-    throw appError(`Correct the Salesforce Account sources before continuing: ${messages.join(' ')}`, 400);
-  }
-  if (existingCaseResult.error) throw existingCaseResult.error;
-  const existingCase = existingCaseResult.data;
-  if (existingCase && !['Draft', 'Rejected', 'Revision Requested'].includes(existingCase.workflow_status)) {
-    throw appError('Trader instructions are locked after submission. Request a revision before editing them.', 400);
-  }
-  const selectedPartyRows = selectedPartyRowsFromAccounts(candidateRegistry, body.selectedPartyAccountIds || []);
-  if (existingCase) {
-    const selectedAccountKeys = new Set(selectedPartyRows.map((party) => party.account_key));
-    const [storedPartiesResult, storedDocumentsResult] = await Promise.all([client.from('dispute_workflow_parties').select('id,account_key,account_name').eq('case_id', existingCase.id), client.from('dispute_workflow_documents').select('party_id').eq('case_id', existingCase.id)]);
-    if (storedPartiesResult.error) throw storedPartiesResult.error;
-    if (storedDocumentsResult.error) throw storedDocumentsResult.error;
-    const documentedPartyIds = new Set((storedDocumentsResult.data || []).map((document) => document.party_id).filter(Boolean));
-    const documentedRemovedParties = (storedPartiesResult.data || []).filter((party) => !selectedAccountKeys.has(party.account_key) && documentedPartyIds.has(party.id));
-    if (documentedRemovedParties.length) {
-      const names = documentedRemovedParties.map((party) => party.account_name || party.account_key).join(', ');
-      throw appError(`Keep ${names} selected because dispute documents are already linked to the Account.`, 400);
-    }
-  }
-  const registry = disputeRegistryWithSelection(candidateRegistry, selectedPartyRows);
-  const caseInput = { id: existingCase?.id || null, stem_id: stemId };
-  const normalizedActions = (body.actions || []).map((action) =>
-    prepareSupplierSettlementAction(
-      {
-        id: String(action.id || '').trim() || null,
-        ...normalizeDisputeBetaAction(action, caseInput, profile, registry),
-      },
-      currentStem,
-    ),
-  );
-  const seenActionSides = new Set();
-  for (const action of normalizedActions) {
-    const key = `${action.party_account_key}:${action.party_side}`;
-    if (seenActionSides.has(key)) throw appError('Only one action per selected Account side is allowed.', 400);
-    seenActionSides.add(key);
-  }
-  const financials = calculateDisputeBetaSettlement(normalizedActions);
-  await patchDisputeWorkflowStatusInSalesforce(existingCase || { stem_id: stemId }, 'Open - Trader Review');
-  const casePayload = {
-    ...disputeBetaCaseFromStem(currentStem),
-    current_salesforce_status: 'Open - Trader Review',
-    workflow_status: 'Draft',
-    approval_status: 'Draft',
-    latest_note: String(body.latestNote || '').trim(),
-    settlement_financials: financials,
-    settlement_pnl: financials.settlementPnl,
-  };
-  const { data: savedCaseId, error: saveError } = await client.rpc('save_dispute_workflow_draft', {
-    p_case: casePayload,
-    p_parties: selectedPartyRows.map((party) => ({
-      account_id: party.account_id,
-      account_key: party.account_key,
-      account_name: party.account_name,
-      roles: party.roles,
-      source_types: party.source_types,
-      source_record_ids: party.source_record_ids,
-      payment_terms: party.payment_terms,
-      products: party.products,
-      cancelled_source_only: party.cancelled_source_only,
-    })),
-    p_actions: normalizedActions,
-    p_actor: { id: profile.id, email: profile.email },
-    p_event_note: body.latestNote || 'Draft saved.',
-  });
-  if (saveError) throw saveError;
-  const updatedCase = await getDisputeBetaCase(client, savedCaseId || stemId);
-  await clearInvalidDisputeCompensationLinks(client, updatedCase, profile);
-  const workflowPromise = loadDisputeWorkflowActions(client, updatedCase.id);
-  const documentsPromise = loadDisputeWorkflowDocuments(client, updatedCase.id);
-  const statusPromise = recordDisputeWorkflowSalesforceWriteback(client, updatedCase, profile, 'Open - Trader Review');
-  const [{ partyRows, actions, supplierInstructions }, documents, statusCase] = await Promise.all([workflowPromise, documentsPromise, statusPromise]);
-  const events = await loadDisputeWorkflowEvents(client, updatedCase.id);
-  return {
-    case: serializeDisputeBetaCase(statusCase),
-    parties: partyRows.map(serializeDisputeWorkflowParty),
-    actions,
-    supplierInstructions,
-    events: events.map(serializeDisputeBetaEvent),
-    documents: documents.map(serializeDisputeWorkflowDocument),
-  };
-}
-
-async function disputeBetaSubmitApproval(body = {}, req, accessContext = null) {
-  const { client, profile } = accessContext || (await requireActiveUser(req));
-  const caseRow = await getDisputeBetaCase(client, body.caseId || body.stemId);
-  await requireInterofficeStemAccess(caseRow.stem_id, accessContext || { client, profile });
-  const currentStem = await loadCurrentDisputeStem(caseRow.stem_id, accessContext || { client, profile });
-  assertSalesforceDisputeIsOpen(currentStem);
-  const { partyRows, actionRows, instructionRows, actions: serializedActions } = await loadDisputeWorkflowActions(client, caseRow.id);
-  const registry = assertValidDisputeParties(currentStem, partyRows);
-  const actions = validateStoredDisputeActions(actionRows, partyRows, registry);
-  if (!actions?.length) throw appError('Add at least one trader action before submitting for approval.', 400);
-  assertSupplierDisputeAmounts(actions);
-  assertSupplierAllocationsCurrent(actions, partyRows, instructionRows, currentStem);
-  if (!['Draft', 'Rejected', 'Revision Requested'].includes(caseRow.workflow_status)) {
-    throw appError('Only draft, rejected, or revision-requested cases can be submitted.', 400);
-  }
-  await assertRequiredDisputeDocuments(client, actions);
-  await patchDisputeWorkflowStatusInSalesforce(caseRow, 'Pending Approval');
-  const nowIso = new Date().toISOString();
-  const { data: updatedCase, error } = await client
-    .from('dispute_beta_cases')
-    .update({
-      workflow_status: 'Pending Approval',
-      approval_status: 'Pending Approval',
-      submitted_by: profile.id,
-      submitted_by_email: profile.email,
-      submitted_at: nowIso,
-      latest_note: String(body.note || caseRow.latest_note || '').trim(),
-      updated_at: nowIso,
-    })
-    .eq('id', caseRow.id)
-    .select(DISPUTE_BETA_CASE_SELECT)
-    .single();
-  if (error) throw error;
-  await writeDisputeBetaEvent(client, updatedCase, 'submitted', profile, {
-    note: body.note || 'Submitted for dispute administrator approval.',
-  });
-  const statusCase = await recordDisputeWorkflowSalesforceWriteback(client, updatedCase, profile, 'Pending Approval');
-  const documents = await loadDisputeWorkflowDocuments(client, caseRow.id);
-  return {
-    case: serializeDisputeBetaCase(statusCase),
-    parties: partyRows.map(serializeDisputeWorkflowParty),
-    actions: serializedActions,
-    documents: documents.map(serializeDisputeWorkflowDocument),
-  };
-}
-
-async function disputeBetaApprove(body = {}, req, accessContext = null) {
-  const { client, profile } = accessContext || (await requireActiveUser(req));
-  await requireCapability(client, profile, 'disputes_approve', 'Dispute approval permission is required.', 403);
-  const caseRow = await getDisputeBetaCase(client, body.caseId || body.stemId);
-  await requireInterofficeStemAccess(caseRow.stem_id, accessContext || { client, profile });
-  if (caseRow.approval_status !== 'Pending Approval') throw appError('Only pending Dispute Workflow cases can be approved.', 400);
-  const currentStem = await loadCurrentDisputeStem(caseRow.stem_id, accessContext || { client, profile });
-  assertSalesforceDisputeIsOpen(currentStem);
-  const { partyRows, actionRows, instructionRows } = await loadDisputeWorkflowActions(client, caseRow.id);
-  const registry = assertValidDisputeParties(currentStem, partyRows);
-  const actions = validateStoredDisputeActions(actionRows, partyRows, registry);
-  assertSupplierDisputeAmounts(actions);
-  assertSupplierAllocationsCurrent(actions, partyRows, instructionRows, currentStem);
-  await assertRequiredDisputeDocuments(client, actions || []);
-  const salesforceStatus = 'Approved - Pending Accounting';
-  const { error: pendingError } = await client
-    .from('dispute_beta_cases')
-    .update({
-      salesforce_writeback_status: 'not_started',
-      salesforce_writeback_error: null,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', caseRow.id);
-  if (pendingError) throw pendingError;
-  try {
-    await patchDisputeWorkflowStatusInSalesforce(caseRow, salesforceStatus);
-  } catch (error) {
-    await recordDisputeWorkflowSalesforceWriteback(client, caseRow, profile, salesforceStatus, 'failed', error.message);
-    throw error;
-  }
-  const { error: approvalError } = await client.rpc('approve_dispute_workflow_case', {
-    p_case_id: caseRow.id,
-    p_actor: { id: profile.id, email: profile.email },
-    p_note: body.note || 'Approved by dispute administrator.',
-    p_salesforce_status: salesforceStatus,
-  });
-  if (approvalError) throw approvalError;
-  let updatedCase = await getDisputeBetaCase(client, caseRow.id);
-  if (updatedCase.workflow_status !== salesforceStatus) {
-    updatedCase = await writeDisputeWorkflowStatusToSalesforce(client, updatedCase, profile, updatedCase.workflow_status);
-  }
-  const accountingState = await loadDisputeWorkflowActions(client, caseRow.id);
-  const documents = await loadDisputeWorkflowDocuments(client, caseRow.id);
-  return {
-    case: serializeDisputeBetaCase(updatedCase),
-    parties: partyRows.map(serializeDisputeWorkflowParty),
-    actions: accountingState.actions,
-    supplierInstructions: accountingState.supplierInstructions,
-    documents: documents.map(serializeDisputeWorkflowDocument),
-    writebackResults: [],
-  };
-}
-
-async function disputeBetaReject(body = {}, req, accessContext = null) {
-  const { client, profile } = accessContext || (await requireActiveUser(req));
-  await requireCapability(client, profile, 'disputes_approve', 'Dispute approval permission is required.', 403);
-  const caseRow = await getDisputeBetaCase(client, body.caseId || body.stemId);
-  await requireInterofficeStemAccess(caseRow.stem_id, accessContext || { client, profile });
-  const currentStem = await loadCurrentDisputeStem(caseRow.stem_id, accessContext || { client, profile });
-  assertSalesforceDisputeIsOpen(currentStem);
-  if (caseRow.approval_status !== 'Pending Approval') throw appError('Only pending Dispute Workflow cases can be rejected or returned for revision.', 400);
-  const revisionRequested = Boolean(body.revisionRequested);
-  const reason = String(body.reason || '').trim();
-  if (!reason) throw appError(revisionRequested ? 'Revision reason is required.' : 'Rejection reason is required.', 400);
-  const salesforceStatus = revisionRequested ? 'Revision Requested' : 'Rejected';
-  await patchDisputeWorkflowStatusInSalesforce(caseRow, salesforceStatus);
-  const nowIso = new Date().toISOString();
-  const { data: updatedCase, error } = await client
-    .from('dispute_beta_cases')
-    .update({
-      workflow_status: revisionRequested ? 'Revision Requested' : 'Rejected',
-      approval_status: revisionRequested ? 'Revision Requested' : 'Rejected',
-      rejected_by: profile.id,
-      rejected_by_email: profile.email,
-      rejected_at: nowIso,
-      rejection_reason: reason,
-      updated_at: nowIso,
-    })
-    .eq('id', caseRow.id)
-    .select(DISPUTE_BETA_CASE_SELECT)
-    .single();
-  if (error) throw error;
-  await writeDisputeBetaEvent(client, updatedCase, revisionRequested ? 'revision_requested' : 'rejected', profile, {
-    note: reason,
-  });
-  const statusCase = await recordDisputeWorkflowSalesforceWriteback(client, updatedCase, profile, salesforceStatus);
-  return { case: serializeDisputeBetaCase(statusCase) };
-}
-
-async function disputeWorkflowDocuments(body = {}, req, accessContext = null) {
-  const { client, profile } = accessContext || (await requireActiveUser(req));
-  const caseRow = await getDisputeBetaCase(client, body.caseId || body.stemId);
-  await requireInterofficeStemAccess(caseRow.stem_id, accessContext || { client, profile });
-  const documents = await loadDisputeWorkflowDocuments(client, caseRow.id);
-  return { documents: documents.map(serializeDisputeWorkflowDocument) };
-}
-
-async function disputeWorkflowUploadDocument(body = {}, req, accessContext = null) {
-  const { client, profile } = accessContext || (await requireActiveUser(req));
-  requireExternalActionGate('salesforce_write');
-  const caseRow = await getDisputeBetaCase(client, body.caseId || body.stemId);
-  await requireInterofficeStemAccess(caseRow.stem_id, accessContext || { client, profile });
-  const currentStem = await loadCurrentDisputeStem(caseRow.stem_id, accessContext || { client, profile });
-  assertSalesforceDisputeIsOpen(currentStem);
-  const partyRows = await loadDisputeWorkflowParties(client, caseRow.id);
-  const registry = assertValidDisputeParties(currentStem, partyRows);
-  const storedWorkflow = await loadDisputeWorkflowActions(client, caseRow.id);
-  validateStoredDisputeActions(storedWorkflow.actionRows, partyRows, registry);
-  if (caseRow.approval_status === 'Approved') {
-    const reconciliation = await reconcileApprovedSupplierInstructions(client, caseRow, partyRows, storedWorkflow.actionRows, storedWorkflow.instructionRows, currentStem, profile);
-    if (reconciliation.changed) {
-      throw appError('Supplier payments changed. FCOS updated the accounting plan; reopen the document upload and link it to the revised instruction.', 409);
-    }
-  } else {
-    assertSupplierAllocationsCurrent(storedWorkflow.actionRows, partyRows, storedWorkflow.instructionRows, currentStem);
-  }
-  const canEdit = ['Draft', 'Rejected', 'Revision Requested'].includes(caseRow.workflow_status);
-  const [canApproveDocuments, canAccountDocuments] = await Promise.all([userHasCapability(client, profile, 'disputes_approve'), userHasCapability(client, profile, 'disputes_account')]);
-  if (!canEdit && !canApproveDocuments && !canAccountDocuments) {
-    throw appError('Only accounting or administrators can add documents after trader submission.', 403);
-  }
-
-  const actionId = String(body.actionId || '').trim() || null;
-  const supplierInstructionId = String(body.supplierInstructionId || '').trim() || null;
-  let action = null;
-  if (actionId) {
-    const { data, error } = await client.from('dispute_beta_actions').select(DISPUTE_BETA_ACTION_SELECT).eq('id', actionId).eq('case_id', caseRow.id).maybeSingle();
-    if (error) throw error;
-    if (!data) throw appError('The selected workflow action was not found.', 404);
-    action = data;
-  }
-  let supplierInstruction = null;
-  if (supplierInstructionId) {
-    const { data, error } = await client.from('dispute_workflow_supplier_instructions').select(DISPUTE_SUPPLIER_INSTRUCTION_SELECT).eq('id', supplierInstructionId).eq('case_id', caseRow.id).maybeSingle();
-    if (error) throw error;
-    if (!data) throw appError('The selected supplier instruction was not found.', 404);
-    supplierInstruction = data;
-    if (action && supplierInstruction.action_id !== action.id) {
-      throw appError('The supplier instruction does not belong to the selected action.', 400);
-    }
-    if (!action) {
-      const { data: linkedAction, error: linkedActionError } = await client.from('dispute_beta_actions').select(DISPUTE_BETA_ACTION_SELECT).eq('id', supplierInstruction.action_id).eq('case_id', caseRow.id).maybeSingle();
-      if (linkedActionError) throw linkedActionError;
-      action = linkedAction;
-    }
-  }
-  const partyId = String(body.partyId || action?.party_id || '').trim();
-  const partyRow = partyRows.find((party) => party.id === partyId);
-  if (!partyRow) throw appError('Select a saved disputed Account before uploading a document.', 400);
-  const partySide = String(body.partySide || action?.party_side || '')
-    .trim()
-    .toLowerCase();
-  if (!['buyer', 'supplier'].includes(partySide)) throw appError('Select the buyer or supplier side for this document.', 400);
-  const party = findDisputeParty(registry, partySide, partyRow.account_id);
-  if (!party || !(registry.selected || []).some((selected) => selected.accountKey === party.accountKey)) {
-    throw appError('The selected Account side is no longer valid for this STEM.', 400);
-  }
-  if (action && (action.party_id !== partyRow.id || action.party_side !== partySide)) {
-    throw appError('The selected action does not belong to this Account side.', 400);
-  }
-
-  const documentType = String(body.documentType || '').trim();
-  if (!DISPUTE_WORKFLOW_DOCUMENT_TYPES.has(documentType)) throw appError('Valid document type is required.', 400);
-  const documentDirection = String(body.documentDirection || '')
-    .trim()
-    .toLowerCase();
-  if (!DISPUTE_WORKFLOW_DOCUMENT_DIRECTIONS.has(documentDirection)) throw appError('Select a valid document direction.', 400);
-  if (!documentDirection.endsWith(`_${partySide}`)) throw appError(`Document direction must match the ${partySide} side.`, 400);
-  const originalFileName = String(body.originalFileName || '').trim();
-  if (!originalFileName) throw appError('Document filename is required.', 400);
-  const rawBase64 = String(body.base64 || '')
-    .replace(/^data:[^;]+;base64,/, '')
-    .replace(/\s+/g, '');
-  if (!rawBase64) throw appError('Document content is required.', 400);
-  const buffer = Buffer.from(rawBase64, 'base64');
-  if (!buffer.length) throw appError('Document content is empty or invalid.', 400);
-  if (buffer.length > DISPUTE_WORKFLOW_MAX_DOCUMENT_BYTES) throw appError('Document is too large. Maximum size is 3 MB.', 413);
-
-  const partyName = party.name;
-  const linkedRecordId = caseRow.stem_id;
-  const extension = disputeWorkflowFileExtension(originalFileName);
-  if (!extension) throw appError('The selected document must have a filename extension.', 400);
-  const directionLabel = disputeWorkflowDirectionLabel(documentDirection);
-  const suggestedBaseName = `${disputeWorkflowHongKongDateToken()} ${directionLabel}`;
-  const requestedInput = String(body.requestedFileName || '').replace(new RegExp(`\\.${extension}$`, 'i'), '');
-  const requestedBaseName = disputeWorkflowEditableFilename(requestedInput, suggestedBaseName);
-  const contentType = String(body.contentType || 'application/octet-stream').trim() || 'application/octet-stream';
-  let documentRow = null;
-  for (let suffix = 0; suffix < 1000; suffix += 1) {
-    const smartFileName = `${requestedBaseName}${suffix ? `-${suffix}` : ''}.${extension}`;
-    const { data, error } = await client
-      .from('dispute_workflow_documents')
-      .insert({
-        case_id: caseRow.id,
-        action_id: action?.id || actionId,
-        supplier_instruction_id: supplierInstructionId,
-        party_id: partyRow.id,
-        party_side: partySide,
-        stem_id: caseRow.stem_id,
-        party_name: partyName,
-        party_account_id: party.accountId,
-        document_direction: documentDirection,
-        document_type: documentType,
-        original_filename: originalFileName,
-        requested_filename: `${requestedBaseName}.${extension}`,
-        smart_filename: smartFileName,
-        upload_status: 'pending',
-        content_type: contentType,
-        file_extension: extension,
-        content_size: buffer.length,
-        salesforce_content_version_id: null,
-        salesforce_linked_record_id: linkedRecordId,
-        uploaded_by: profile.id,
-        uploaded_by_email: profile.email,
-      })
-      .select(DISPUTE_WORKFLOW_DOCUMENT_SELECT)
-      .single();
-    if (!error) {
-      documentRow = data;
-      break;
-    }
-    if (error.code !== '23505') throw error;
-  }
-  if (!documentRow) throw appError('A unique document filename could not be reserved.', 409);
-
-  const smartFileName = documentRow.smart_filename;
-  const title = smartFileName.slice(0, -(extension.length + 1));
-  let contentVersionId = null;
-  let contentDocumentId = null;
-
-  try {
-    const contentVersion = await sfRequest('/sobjects/ContentVersion', {
-      method: 'POST',
-      body: {
-        Title: title,
-        PathOnClient: `/${smartFileName}`,
-        VersionData: buffer.toString('base64'),
-        FirstPublishLocationId: linkedRecordId,
-      },
-    });
-    contentVersionId = contentVersion?.id;
-    if (!isSalesforceId(contentVersionId)) throw appError('Salesforce did not return a ContentVersion id.', 502);
-    const versionRows = await queryRows(`SELECT Id, ContentDocumentId FROM ContentVersion WHERE Id = '${escapeSoql(contentVersionId)}' LIMIT 1`, { softFail: true });
-    contentDocumentId = versionRows[0]?.ContentDocumentId || null;
-    if (!isSalesforceId(contentDocumentId)) throw appError('Salesforce did not return a ContentDocument id.', 502);
-    const salesforceUrl = `${getInstanceUrl()}/lightning/r/ContentDocument/${contentDocumentId}/view`;
-    const { data: completedDocument, error: documentError } = await client
-      .from('dispute_workflow_documents')
-      .update({
-        upload_status: 'complete',
-        salesforce_content_version_id: contentVersionId,
-        salesforce_content_document_id: contentDocumentId,
-        salesforce_url: salesforceUrl,
-      })
-      .eq('id', documentRow.id)
-      .eq('upload_status', 'pending')
-      .select(DISPUTE_WORKFLOW_DOCUMENT_SELECT)
-      .single();
-    if (documentError) throw documentError;
-    documentRow = completedDocument;
-  } catch (error) {
-    if (contentDocumentId) await sfRequest(`/sobjects/ContentDocument/${encodeURIComponent(contentDocumentId)}`, { method: 'DELETE' }).catch(() => null);
-    else if (contentVersionId) await sfRequest(`/sobjects/ContentVersion/${encodeURIComponent(contentVersionId)}`, { method: 'DELETE' }).catch(() => null);
-    await client.from('dispute_workflow_documents').delete().eq('id', documentRow.id);
-    throw error;
-  }
-  await writeDisputeBetaEvent(client, caseRow, 'document_uploaded', profile, {
-    actionId,
-    note: `${smartFileName} uploaded to Salesforce.`,
-    metadata: {
-      documentId: documentRow.id,
-      documentType,
-      documentDirection,
-      partySide,
-      partyName,
-      partyAccountId: party.accountId,
-      supplierInstructionId,
-      contentVersionId: documentRow.salesforce_content_version_id,
-      linkedRecordIds: [linkedRecordId],
-    },
-  });
-  return { document: serializeDisputeWorkflowDocument(documentRow) };
-}
-
-async function supplierOffsetInvoiceOptions({ supplierAccountId, currencyIsoCode, excludeInvoiceIds = [], accessContext = null } = {}) {
-  if (!isSalesforceId(supplierAccountId)) throw appError('Valid supplier Account is required.', 400);
-  const [invoiceDescribe, paymentDescribe] = await Promise.all([
-    salesforceObjectFields({ objectName: 'Supplier_Invoice__c' }),
-    salesforceObjectFields({ objectName: 'Payment__c' }).catch(() => ({
-      fields: [],
-    })),
-  ]);
-  const invoiceFields = invoiceDescribe.fields || [];
-  const invoiceFieldNames = new Set(invoiceFields.map((field) => field.name));
-  const invoiceFieldByName = Object.fromEntries(invoiceFields.map((field) => [field.name, field]));
-  const schema = resolveSupplierSettlementSchema({
-    supplierInvoiceFields: invoiceFields,
-    paymentFields: paymentDescribe.fields || [],
-  });
-  if (!schema.valid) {
-    throw appError(`Supplier offset options are unavailable: ${schema.issues.join(' ')}`, 409);
-  }
-  const relationships = schema.supplierAccountFields.map((field) => invoiceFieldByName[field]?.relationshipName).filter(Boolean);
-  const selectFields = ['Id', 'Name', 'CreatedDate', invoiceFieldNames.has('STEM__c') ? 'STEM__c' : null, invoiceFieldNames.has('CurrencyIsoCode') ? 'CurrencyIsoCode' : null, schema.invoiceAmountField, schema.invoicePayableField, ...schema.invoiceDueDateFields, ...schema.invoiceDateFields, ...schema.invoiceStatusFields, ...schema.supplierAccountFields, ...relationships.map((relationship) => `${relationship}.Name`)].filter(Boolean);
-  const accountCondition = schema.supplierAccountFields.map((field) => `${field} = '${escapeSoql(supplierAccountId)}'`).join(' OR ');
-  const rows = await queryRows(
-    `
-    SELECT ${[...new Set(selectFields)].join(', ')}
-    FROM Supplier_Invoice__c
-    WHERE (${accountCondition})
-    ORDER BY CreatedDate ASC
-    LIMIT 2000
-  `,
-    { limit: 2000, softFail: true },
-  );
-  const excluded = new Set(excludeInvoiceIds.map((id) => String(id).slice(0, 15)));
-  const options = [];
-  for (const invoice of rows) {
-    if (excluded.has(String(invoice.Id || '').slice(0, 15))) continue;
-    if (invoice.STEM__c) {
-      const allowed = await requireInterofficeStemAccess(invoice.STEM__c, accessContext)
-        .then(() => true)
-        .catch(() => false);
-      if (!allowed) continue;
-    }
-    const supplierField = schema.supplierAccountFields.find((field) => invoice[field]);
-    if (disputeSalesforceIdKey(invoice[supplierField]) !== disputeSalesforceIdKey(supplierAccountId)) continue;
-    const dueDate = schema.invoiceDueDateFields.map((field) => invoice[field]).find(Boolean) || null;
-    const invoiceDate = schema.invoiceDateFields.map((field) => invoice[field]).find(Boolean) || invoice.CreatedDate || null;
-    const status = schema.invoiceStatusFields.map((field) => invoice[field]).find(Boolean) || null;
-    const statusToken = String(status || '')
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '');
-    if (['closed', 'paid', 'cancelled', 'canceled', 'void', 'rejected'].some((token) => statusToken.includes(token))) continue;
-    const exposure = normalizeSupplierInvoiceExposure({
-      supplierInvoiceId: invoice.Id,
-      invoiceName: invoice.Name,
-      sourceStemId: invoice.STEM__c,
-      supplierAccountId: invoice[supplierField],
-      supplierName: relationships.map((relationship) => invoice[relationship]?.Name).find(Boolean) || '',
-      currencyIsoCode: invoice.CurrencyIsoCode || 'USD',
-      dueDate,
-      invoiceDate,
-      createdDate: invoice.CreatedDate,
-      invoiceAmount: invoice[schema.invoiceAmountField],
-      payableBalance: invoice[schema.invoicePayableField],
-      status,
-    });
-    if (exposure.payableBalance <= 0.01 || exposure.currencyIsoCode !== currencyIsoCode) continue;
-    options.push({
-      supplierInvoiceId: exposure.supplierInvoiceId,
-      invoiceName: exposure.invoiceName,
-      stemId: invoice.STEM__c || null,
-      currencyIsoCode: exposure.currencyIsoCode,
-      invoiceAmount: exposure.invoiceAmount,
-      payableBalance: exposure.payableBalance,
-      dueDate: exposure.dueDate,
-      invoiceDate: exposure.invoiceDate,
-      status,
-    });
-  }
-  return options;
-}
-
-async function disputeWorkflowSupplierOffsetOptions(body = {}, req, accessContext = null) {
-  const { client, profile } = accessContext || (await requireActiveUser(req));
-  await requireCapability(client, profile, 'disputes_account', 'Dispute accounting permission is required for supplier offset options.');
-  const instructionId = String(body.instructionId || '').trim();
-  const { data: instruction, error } = await client.from('dispute_workflow_supplier_instructions').select(DISPUTE_SUPPLIER_INSTRUCTION_SELECT).eq('id', instructionId).maybeSingle();
-  if (error) throw error;
-  if (!instruction) throw appError('Supplier instruction not found.', 404);
-  if (instruction.instruction_type !== 'get_back_paid') throw appError('Only Get back paid amount instructions can use an offset invoice.', 400);
-  const caseRow = await getDisputeBetaCase(client, instruction.case_id);
-  await requireInterofficeStemAccess(caseRow.stem_id, accessContext || { client, profile });
-  const partyRows = await loadDisputeWorkflowParties(client, caseRow.id);
-  const party = partyRows.find((row) => row.id === instruction.party_id);
-  if (!party) throw appError('Supplier instruction has no selected Account.', 400);
-  const options = await supplierOffsetInvoiceOptions({
-    supplierAccountId: party.account_id,
-    currencyIsoCode: instruction.currency_iso_code,
-    excludeInvoiceIds: [instruction.source_supplier_invoice_id],
-    accessContext: accessContext || { client, profile },
-  });
-  const { data: reservations, error: reservationError } = await client.from('dispute_workflow_supplier_instructions').select('id,target_supplier_invoice_id,planned_amount,status,recovery_method').eq('recovery_method', 'future_invoice_offset').not('target_supplier_invoice_id', 'is', null);
-  if (reservationError) throw reservationError;
-  const reservedByInvoice = new Map();
-  for (const reservation of reservations || []) {
-    if (reservation.id === instruction.id || ['Not Required', 'Superseded'].includes(reservation.status)) continue;
-    const key = String(reservation.target_supplier_invoice_id || '').slice(0, 15);
-    reservedByInvoice.set(key, Number(reservedByInvoice.get(key) || 0) + Number(reservation.planned_amount || 0));
-  }
-  const availableOptions = options
-    .map((option) => {
-      const reservedAmount = Number(reservedByInvoice.get(String(option.supplierInvoiceId || '').slice(0, 15)) || 0);
-      return {
-        ...option,
-        reservedAmount,
-        unreservedPayableBalance: Math.max(0, Number(option.payableBalance || 0) - reservedAmount),
-      };
-    })
-    .filter((option) => option.unreservedPayableBalance + 0.01 >= Number(instruction.planned_amount || 0));
-  return { options: availableOptions };
-}
-
-async function disputeWorkflowSupplierInstructionUpdate(body = {}, req, accessContext = null) {
-  const { client, profile } = accessContext || (await requireActiveUser(req));
-  await requireCapability(client, profile, 'disputes_account', 'Dispute accounting permission is required for supplier instructions.');
-  const instructionId = String(body.instructionId || '').trim();
-  if (!instructionId) throw appError('instructionId is required.', 400);
-  const { data: originalInstruction, error: lookupError } = await client.from('dispute_workflow_supplier_instructions').select(DISPUTE_SUPPLIER_INSTRUCTION_SELECT).eq('id', instructionId).maybeSingle();
-  if (lookupError) throw lookupError;
-  if (!originalInstruction) throw appError('Supplier instruction not found.', 404);
-  const caseRow = await getDisputeBetaCase(client, originalInstruction.case_id);
-  await requireInterofficeStemAccess(caseRow.stem_id, accessContext || { client, profile });
-  const currentStem = await loadCurrentDisputeStem(caseRow.stem_id, accessContext || { client, profile });
-  if (!hasUnacceptedExternalDisputeClosure(caseRow, currentStem)) assertSalesforceDisputeIsOpen(currentStem);
-  let workflow = await loadDisputeWorkflowActions(client, caseRow.id);
-  const registry = assertValidDisputeParties(currentStem, workflow.partyRows);
-  validateStoredDisputeActions(workflow.actionRows, workflow.partyRows, registry);
-  assertSupplierDisputeAmounts(workflow.actionRows);
-  const reconciliation = await reconcileApprovedSupplierInstructions(client, caseRow, workflow.partyRows, workflow.actionRows, workflow.instructionRows, currentStem, profile);
-  if (reconciliation.changed) workflow = await loadDisputeWorkflowActions(client, caseRow.id);
-  const instruction = workflow.instructionRows.find((row) => row.id === instructionId);
-  if (!instruction || instruction.status === 'Superseded') {
-    throw appError('Supplier payment data changed and this instruction was replaced. Review the updated accounting plan.', 409);
-  }
-  const requestedRevision = Number(body.revision);
-  if (Number.isInteger(requestedRevision) && requestedRevision !== Number(instruction.revision || 1)) {
-    throw appError('This supplier instruction changed after it was opened. Refresh and review the latest values.', 409);
-  }
-  const status = String(body.status || '').trim();
-  if (!DISPUTE_SUPPLIER_INSTRUCTION_STATUSES.has(status) || status === 'Superseded') {
-    throw appError('Valid supplier instruction status is required.', 400);
-  }
-  if (caseRow.approval_status !== 'Approved') {
-    if (instruction.instruction_type !== 'withhold_unpaid' || status !== 'Hold Acknowledged') {
-      throw appError('Before approval, Finance can only acknowledge an immediate Do not pay instruction.', 400);
-    }
-  }
-  const instructionReference = String(body.instructionReference || '').trim();
-  const instructionDate = String(body.instructionDate || '').trim() || null;
-  const settlementReference = String(body.settlementReference || '').trim();
-  const settlementDate = String(body.settlementDate || '').trim() || null;
-  const accountingNote = String(body.accountingNote || '').trim();
-  if (instructionDate && !/^\d{4}-\d{2}-\d{2}$/.test(instructionDate)) throw appError('Instruction date is invalid.', 400);
-  if (settlementDate && !/^\d{4}-\d{2}-\d{2}$/.test(settlementDate)) throw appError('Settlement date is invalid.', 400);
-  const recoveryMethod = instruction.instruction_type === 'get_back_paid' ? String(body.recoveryMethod || instruction.recovery_method || '').trim() || null : null;
-  if (instruction.instruction_type === 'get_back_paid' && ['Instruction Issued', 'Settled'].includes(status) && !['cash_refund', 'future_invoice_offset'].includes(recoveryMethod)) {
-    throw appError('Choose cash refund or future invoice offset for Get back paid amount.', 400);
-  }
-  if (status === 'Instruction Issued' && (!instructionDate || (!instructionReference && !accountingNote))) {
-    throw appError('Instruction Issued requires an instruction date and a reference or accounting note.', 400);
-  }
-  if (status === 'Not Required' && !accountingNote) throw appError('Explain why this supplier instruction is not required.', 400);
-  const documents = await loadDisputeWorkflowDocuments(client, caseRow.id);
-  const hasEvidence = documents.some((document) => document.supplier_instruction_id === instruction.id && ['supplier_credit_note', 'settlement_agreement', 'proof_of_payment'].includes(document.document_type));
-  if (status === 'Settled' && (!settlementDate || (!settlementReference && !hasEvidence))) {
-    throw appError('Settled requires a settlement date and either an uploaded supplier document or a Finance reference.', 400);
-  }
-  const plannedAmount = Number(instruction.planned_amount || 0);
-  const settlementAmount = decimalOrNull(body.settlementAmount) ?? (status === 'Settled' ? plannedAmount : null);
-  if (status === 'Settled' && Math.abs(Number(settlementAmount || 0) - plannedAmount) > 0.01) {
-    throw appError('Settlement amount must equal the current supplier instruction amount.', 400);
-  }
-
-  const party = workflow.partyRows.find((row) => row.id === instruction.party_id);
-  let targetInvoice = null;
-  if (recoveryMethod === 'future_invoice_offset') {
-    const targetSupplierInvoiceId = String(body.targetSupplierInvoiceId || '').trim();
-    if (!targetSupplierInvoiceId) throw appError('Select the supplier invoice that will receive the offset.', 400);
-    const options = await supplierOffsetInvoiceOptions({
-      supplierAccountId: party?.account_id,
-      currencyIsoCode: instruction.currency_iso_code,
-      excludeInvoiceIds: [instruction.source_supplier_invoice_id],
-      accessContext: accessContext || { client, profile },
-    });
-    targetInvoice = options.find((option) => String(option.supplierInvoiceId).slice(0, 15) === String(targetSupplierInvoiceId).slice(0, 15));
-    if (!targetInvoice) throw appError('The selected offset invoice is no longer eligible for this supplier Account and currency.', 409);
-    if (targetInvoice.payableBalance + 0.01 < plannedAmount) throw appError('The selected offset invoice does not have enough payable balance.', 400);
-  }
-  let matchedPaymentId = null;
-  let matchedPayment = null;
-  if (recoveryMethod === 'cash_refund' && body.matchedSalesforcePaymentId) {
-    const exposure = (currentStem._Supplier_Invoice_Exposure_Rows || []).find((row) => row.supplierInvoiceId === instruction.source_supplier_invoice_id);
-    matchedPayment = (exposure?.payments || []).find((row) => row.id === body.matchedSalesforcePaymentId && Number(row.amount) < 0 && Math.abs(Math.abs(Number(row.amount)) - plannedAmount) <= 0.01 && (row.currencyIsoCode || 'USD') === instruction.currency_iso_code);
-    if (!matchedPayment) throw appError('The selected Salesforce refund no longer matches this supplier invoice, currency, and amount.', 409);
-    matchedPaymentId = matchedPayment.id;
-  }
-
-  const eventType = status === 'Hold Acknowledged' ? 'supplier_hold_acknowledged' : status === 'Settled' ? 'supplier_recovery_settled' : recoveryMethod && recoveryMethod !== instruction.recovery_method ? 'supplier_recovery_method_selected' : 'accounting_updated';
-  const eventNote = `${instruction.instruction_type === 'withhold_unpaid' ? 'Do not pay' : 'Get back paid amount'} updated to ${status}.`;
-  const instructionValues = {
-    status,
-    recovery_method: recoveryMethod,
-    target_supplier_invoice_id: targetInvoice?.supplierInvoiceId || null,
-    target_supplier_invoice_name: targetInvoice?.invoiceName || null,
-    target_stem_id: targetInvoice?.stemId || null,
-    target_invoice_amount_snapshot: targetInvoice?.invoiceAmount ?? null,
-    target_payable_amount_snapshot: targetInvoice?.payableBalance ?? null,
-    target_invoice_snapshot: targetInvoice || {},
-    target_stem_snapshot: targetInvoice?.stemId ? { stemId: targetInvoice.stemId } : {},
-    matched_salesforce_payment_id: matchedPaymentId,
-    matching_payment_snapshot: matchedPayment || {},
-    instruction_reference: instructionReference || null,
-    instruction_date: instructionDate,
-    instruction_amount: decimalOrNull(body.instructionAmount) ?? (status === 'Instruction Issued' ? plannedAmount : null),
-    settlement_reference: settlementReference || null,
-    settlement_date: settlementDate,
-    settlement_amount: settlementAmount,
-    accounting_note: accountingNote || null,
-    event_type: eventType,
-    event_note: eventNote,
-    event_metadata: {
-      supplierInstructionId: instruction.id,
-      recoveryMethod,
-      targetSupplierInvoiceId: targetInvoice?.supplierInvoiceId || null,
-      matchedSalesforcePaymentId: matchedPaymentId,
-      plannedAmount,
-      currencyIsoCode: instruction.currency_iso_code,
-    },
-  };
-  const { error: updateError } = await client.rpc('update_dispute_supplier_instruction', {
-    p_instruction_id: instruction.id,
-    p_expected_revision: Number(instruction.revision || 1),
-    p_values: instructionValues,
-    p_target_payable_amount: targetInvoice?.payableBalance ?? null,
-    p_actor: { id: profile.id, email: profile.email },
-  });
-  if (updateError) {
-    if (String(updateError.message || '').includes('revision conflict')) {
-      throw appError('This supplier instruction was updated by another user. Refresh and try again.', 409);
-    }
-    if (String(updateError.message || '').includes('already reserved')) {
-      throw appError('The selected offset invoice no longer has enough unreserved payable balance. Refresh the offset options.', 409);
-    }
-    throw updateError;
-  }
-
-  if (caseRow.approval_status !== 'Approved') {
-    const refreshed = await loadDisputeWorkflowActions(client, caseRow.id);
-    return {
-      case: serializeDisputeBetaCase(caseRow),
-      parties: refreshed.partyRows.map(serializeDisputeWorkflowParty),
-      actions: refreshed.actions,
-      supplierInstructions: refreshed.supplierInstructions,
-      documents: documents.map(serializeDisputeWorkflowDocument),
-    };
-  }
-  let updatedCase = await getDisputeBetaCase(client, caseRow.id);
-  updatedCase = await persistDisputeAccountingStatus(client, updatedCase, currentStem, profile, updatedCase.workflow_status);
-  const refreshed = await loadDisputeWorkflowActions(client, caseRow.id);
-  return {
-    case: serializeDisputeBetaCase(updatedCase),
-    parties: workflow.partyRows.map(serializeDisputeWorkflowParty),
-    actions: refreshed.actions,
-    supplierInstructions: refreshed.supplierInstructions,
-    documents: documents.map(serializeDisputeWorkflowDocument),
-  };
-}
-
-async function disputeWorkflowSupplierAmountAmend(body = {}, req, accessContext = null) {
-  const { client, profile } = accessContext || (await requireActiveUser(req));
-  const actionId = String(body.actionId || '').trim();
-  const amount = decimalOrNull(body.disputeAmount ?? body.amount);
-  const note = String(body.note || body.description || '').trim();
-  const currencyIsoCode = String(body.currencyIsoCode || 'USD')
-    .trim()
-    .toUpperCase();
-  if (!actionId) throw appError('actionId is required.', 400);
-  if (amount == null || amount < 0) throw appError('Supplier dispute amount must be zero or greater.', 400);
-  if (!/^[A-Z]{3}$/.test(currencyIsoCode)) throw appError('Supplier dispute currency must be a three-letter ISO code.', 400);
-  if (amount === 0 && !note) throw appError('Explain why no supplier recovery is required.', 400);
-  const { data: action, error: actionError } = await client.from('dispute_beta_actions').select(DISPUTE_BETA_ACTION_SELECT).eq('id', actionId).maybeSingle();
-  if (actionError) throw actionError;
-  if (!action || action.party_side !== 'supplier') throw appError('Supplier action not found.', 404);
-  const caseRow = await getDisputeBetaCase(client, action.case_id);
-  const actorEmail = String(profile.email || '')
-    .trim()
-    .toLowerCase();
-  const responsibleTrader =
-    action.created_by === profile.id ||
-    caseRow.submitted_by === profile.id ||
-    [action.created_by_email, caseRow.submitted_by_email].some(
-      (email) =>
-        String(email || '')
-          .trim()
-          .toLowerCase() === actorEmail,
-    );
-  if (!isAdministratorUserType(profile.user_type) && !responsibleTrader) {
-    throw appError('Only the responsible trader or an administrator can record this supplier dispute amount.', 403);
-  }
-  if (caseRow.workflow_status === 'Closed') throw appError('Closed disputes cannot be amended.', 400);
-  await requireInterofficeStemAccess(caseRow.stem_id, accessContext || { client, profile });
-  const currentStem = await loadCurrentDisputeStem(caseRow.stem_id, accessContext || { client, profile });
-  if (!hasUnacceptedExternalDisputeClosure(caseRow, currentStem)) assertSalesforceDisputeIsOpen(currentStem);
-  const workflow = await loadDisputeWorkflowActions(client, caseRow.id);
-  const registry = assertValidDisputeParties(currentStem, workflow.partyRows);
-  validateStoredDisputeActions(workflow.actionRows, workflow.partyRows, registry);
-  const partyById = disputePartyRowMap(workflow.partyRows);
-  const existingAmount = decimalOrNull(action.amount);
-  const commercialAmountChanged = existingAmount == null || Math.abs(existingAmount - amount) > 0.01;
-  const editableStage = ['Draft', 'Rejected', 'Revision Requested'].includes(caseRow.workflow_status);
-  const amendedStage = editableStage ? caseRow.workflow_status : commercialAmountChanged ? 'Revision Requested' : caseRow.approval_status === 'Approved' ? 'Accounting In Progress' : caseRow.workflow_status;
-  const amendedApproval = amendedStage === 'Draft' ? 'Draft' : amendedStage === 'Revision Requested' ? 'Revision Requested' : caseRow.approval_status;
-  const rpcActions = workflow.actionRows.map((row) => {
-    const party = partyById.get(row.party_id);
-    const base = {
-      ...row,
-      party_account_key: party?.account_key,
-    };
-    if (row.id !== action.id) return base;
-    return prepareSupplierSettlementAction(
-      {
-        ...base,
-        action_type: 'resolve_supplier_dispute',
-        action_label: DISPUTE_BETA_ACTION_LABELS.resolve_supplier_dispute,
-        amount,
-        special_buy_price: null,
-        description: note || row.description || '',
-        currency_iso_code: currencyIsoCode,
-        invoice_allocations: Array.isArray(body.invoiceAllocations) ? body.invoiceAllocations : [],
-        execution_status: 'Pending Accounting',
-      },
-      currentStem,
-    );
-  });
-  const financials = calculateDisputeBetaSettlement(rpcActions);
-  const salesforceStatus = amendedStage === 'Draft' ? 'Open - Trader Review' : amendedStage;
-  const casePayload = {
-    ...disputeBetaCaseFromStem(currentStem),
-    current_salesforce_status: salesforceStatus,
-    workflow_status: amendedStage,
-    approval_status: amendedApproval,
-    latest_note: note || 'Supplier dispute amount recorded.',
-    settlement_financials: financials,
-    settlement_pnl: financials.settlementPnl,
-  };
-  const { data: savedCaseId, error: saveError } = await client.rpc('save_dispute_workflow_draft', {
-    p_case: casePayload,
-    p_parties: workflow.partyRows.map((party) => ({
-      account_id: party.account_id,
-      account_key: party.account_key,
-      account_name: party.account_name,
-      roles: party.roles,
-      source_types: party.source_types,
-      source_record_ids: party.source_record_ids,
-      payment_terms: party.payment_terms,
-      products: party.products,
-      cancelled_source_only: party.cancelled_source_only,
-    })),
-    p_actions: rpcActions,
-    p_actor: { id: profile.id, email: profile.email },
-    p_event_note: note || 'Supplier dispute amount recorded.',
-  });
-  if (saveError) throw saveError;
-  const updatedCase = await getDisputeBetaCase(client, savedCaseId || caseRow.id);
-  await patchDisputeWorkflowStatusInSalesforce(updatedCase, salesforceStatus);
-  const statusCase = await recordDisputeWorkflowSalesforceWriteback(client, updatedCase, profile, salesforceStatus);
-  if (amendedStage === 'Revision Requested') {
-    await writeDisputeBetaEvent(client, statusCase, 'revision_requested', profile, {
-      actionId: action.id,
-      note: 'Supplier dispute amount added to an existing workflow; approval is required again.',
-      metadata: { disputeAmount: amount, currencyIsoCode },
-    });
-  } else if (!commercialAmountChanged && action.action_type !== 'resolve_supplier_dispute') {
-    await writeDisputeBetaEvent(client, statusCase, 'supplier_payment_reconciled', profile, {
-      actionId: action.id,
-      note: 'Existing supplier amount converted into invoice-level Finance instructions.',
-      metadata: { disputeAmount: amount, currencyIsoCode },
-    });
-  }
-  const refreshed = await loadDisputeWorkflowActions(client, caseRow.id);
-  const documents = await loadDisputeWorkflowDocuments(client, caseRow.id);
-  return {
-    case: serializeDisputeBetaCase(statusCase),
-    parties: refreshed.partyRows.map(serializeDisputeWorkflowParty),
-    actions: refreshed.actions,
-    supplierInstructions: refreshed.supplierInstructions,
-    documents: documents.map(serializeDisputeWorkflowDocument),
-  };
-}
-
-async function disputeWorkflowAccountingUpdate(body = {}, req, accessContext = null) {
-  const { client, profile } = accessContext || (await requireActiveUser(req));
-  await requireCapability(client, profile, 'disputes_account', 'Dispute accounting permission is required for accounting updates.');
-  const actionId = String(body.actionId || '').trim();
-  if (!actionId) throw appError('actionId is required.', 400);
-  const { data: action, error: actionLookupError } = await client.from('dispute_beta_actions').select(DISPUTE_BETA_ACTION_SELECT).eq('id', actionId).maybeSingle();
-  if (actionLookupError) throw actionLookupError;
-  if (!action) throw appError('Dispute Workflow action not found.', 404);
-  if (action.action_type === 'resolve_supplier_dispute') {
-    throw appError('Update each supplier invoice instruction instead of the parent supplier resolution.', 400);
-  }
-  const caseRow = await getDisputeBetaCase(client, action.case_id);
-  await requireInterofficeStemAccess(caseRow.stem_id, accessContext || { client, profile });
-  const partyRows = await loadDisputeWorkflowParties(client, caseRow.id);
-  const currentStem = await loadCurrentDisputeStem(caseRow.stem_id, accessContext || { client, profile });
-  const externalClosure = hasUnacceptedExternalDisputeClosure(caseRow, currentStem);
-  if (!externalClosure) assertSalesforceDisputeIsOpen(currentStem);
-  const registry = assertValidDisputeParties(currentStem, partyRows);
-  const storedWorkflow = await loadDisputeWorkflowActions(client, caseRow.id);
-  validateStoredDisputeActions(storedWorkflow.actionRows, partyRows, registry);
-  assertSupplierDisputeAmounts(storedWorkflow.actionRows);
-  if (caseRow.approval_status !== 'Approved' || caseRow.workflow_status === 'Closed') {
-    throw appError('Accounting can update actions only after approval and before closure.', 400);
-  }
-  await reconcileApprovedSupplierInstructions(client, caseRow, partyRows, storedWorkflow.actionRows, storedWorkflow.instructionRows, currentStem, profile);
-
-  const accountingStatus = normalizeDisputeBetaStatus(body.accountingStatus || body.executionStatus, DISPUTE_BETA_EXECUTION_STATUSES, '');
-  if (!accountingStatus) throw appError('Valid accounting status is required.', 400);
-  const instructionReference = String(body.instructionReference || '').trim();
-  const instructionDate = String(body.instructionDate || '').trim() || null;
-  const settlementReference = String(body.settlementReference || '').trim();
-  const settlementDate = String(body.settlementDate || '').trim() || null;
-  const accountingNote = String(body.accountingNote || body.note || '').trim();
-  if (instructionDate && !/^\d{4}-\d{2}-\d{2}$/.test(instructionDate)) throw appError('Instruction date is invalid.', 400);
-  if (settlementDate && !/^\d{4}-\d{2}-\d{2}$/.test(settlementDate)) throw appError('Settlement date is invalid.', 400);
-  if (accountingStatus === 'Instruction Issued' && (!instructionDate || (!instructionReference && !accountingNote))) {
-    throw appError('Instruction Issued requires an instruction date and a reference or accounting note.', 400);
-  }
-  const documents = await loadDisputeWorkflowDocuments(client, caseRow.id);
-  const hasSettlementDocument = documents.some((document) => document.action_id === actionId && ['settlement_agreement', 'buyer_credit_note', 'supplier_credit_note', 'proof_of_payment'].includes(document.document_type));
-  if (accountingStatus === 'Settled' && (!settlementDate || (!settlementReference && !hasSettlementDocument))) {
-    throw appError('Settled requires a settlement date and either a reference or settlement document.', 400);
-  }
-  const notRequiredEligibility = disputeNotRequiredEligibility(action, partyRows, currentStem);
-  const notRequiredReasonWaived = accountingStatus === 'Not Required' && !accountingNote && notRequiredEligibility.eligible;
-  if (accountingStatus === 'Not Required' && !accountingNote && !notRequiredReasonWaived) {
-    if (notRequiredEligibility.balanceType && notRequiredEligibility.balance == null) {
-      throw appError(`The current ${notRequiredEligibility.balanceLabel} balance is unavailable. Enter an accounting reason before selecting Not Required.`, 400);
-    }
-    if (notRequiredEligibility.balanceType) {
-      throw appError(`The current ${notRequiredEligibility.balanceLabel} balance is ${notRequiredEligibility.balance.toFixed(2)}, not 0.00. Refresh the dispute or enter an accounting reason.`, 409);
-    }
-    throw appError('Explain why accounting is not required.', 400);
-  }
-
-  const { data: currentActionRows, error: currentActionsError } = await client.from('dispute_beta_actions').select(DISPUTE_BETA_ACTION_SELECT).eq('case_id', caseRow.id).order('created_at', { ascending: true });
-  if (currentActionsError) throw currentActionsError;
-  const projectedActions = (currentActionRows || []).map((row) => (row.id === actionId ? { ...row, execution_status: accountingStatus } : row));
-  const allSettled = projectedActions.length > 0 && projectedActions.every((row) => row.execution_status === 'Settled' || row.execution_status === 'Not Required');
-  const hasAccountingProgress = projectedActions.some((row) => row.execution_status !== 'Pending Accounting');
-  const workflowStatus = allSettled ? 'Settled - Ready to Close' : hasAccountingProgress ? 'Accounting In Progress' : 'Approved - Pending Accounting';
-  if (!externalClosure) await patchDisputeWorkflowStatusInSalesforce(caseRow, workflowStatus);
-
-  const nowIso = new Date().toISOString();
-  const { data: updatedAction, error } = await client
-    .from('dispute_beta_actions')
-    .update({
-      execution_status: accountingStatus,
-      instruction_reference: instructionReference || null,
-      instruction_date: instructionDate,
-      instruction_amount: decimalOrNull(body.instructionAmount),
-      settlement_reference: settlementReference || null,
-      settlement_date: settlementDate,
-      settlement_amount: decimalOrNull(body.settlementAmount),
-      accounting_note: accountingNote || null,
-      accounting_by: profile.id,
-      accounting_by_email: profile.email,
-      accounting_at: nowIso,
-      executed_by: accountingStatus === 'Settled' ? profile.id : null,
-      executed_by_email: accountingStatus === 'Settled' ? profile.email : null,
-      executed_at: accountingStatus === 'Settled' ? nowIso : null,
-      execution_note: accountingNote || null,
-      updated_by: profile.id,
-      updated_by_email: profile.email,
-      updated_at: nowIso,
-    })
-    .eq('id', actionId)
-    .select(DISPUTE_BETA_ACTION_SELECT)
-    .single();
-  if (error) throw error;
-  await writeDisputeBetaEvent(client, caseRow, 'accounting_updated', profile, {
-    actionId,
-    note: `${updatedAction.action_label} updated to ${accountingStatus}.`,
-    metadata: {
-      accountingStatus,
-      instructionReference,
-      instructionDate,
-      settlementReference,
-      settlementDate,
-      notRequiredReasonWaived,
-      verifiedBalance: notRequiredReasonWaived ? notRequiredEligibility.balance : null,
-      verifiedBalanceType: notRequiredReasonWaived ? notRequiredEligibility.balanceType : null,
-      partyAccountId: notRequiredReasonWaived ? notRequiredEligibility.partyAccountId : null,
-    },
-  });
-  const { data: actionRows, error: actionsError } = await client.from('dispute_beta_actions').select(DISPUTE_BETA_ACTION_SELECT).eq('case_id', caseRow.id).order('created_at', { ascending: true });
-  if (actionsError) throw actionsError;
-  const actions = actionRows || [];
-  const { data: statusCase, error: caseError } = await client.from('dispute_beta_cases').update({ workflow_status: workflowStatus, updated_at: nowIso }).eq('id', caseRow.id).select(DISPUTE_BETA_CASE_SELECT).single();
-  if (caseError) throw caseError;
-  const salesforceCase = externalClosure
-    ? await recordExternalDisputeClosure(client, statusCase, currentStem, profile, workflowStatus)
-    : await recordDisputeWorkflowSalesforceWriteback(client, statusCase, profile, workflowStatus);
-  const partyMap = disputePartyRowMap(partyRows);
-  return {
-    case: serializeDisputeBetaCase(salesforceCase),
-    parties: partyRows.map(serializeDisputeWorkflowParty),
-    action: serializeDisputeBetaAction(updatedAction, partyMap),
-    actions: (actions || []).map((item) => serializeDisputeBetaAction(item, partyMap)),
-    documents: documents.map(serializeDisputeWorkflowDocument),
-  };
-}
-
-async function disputeBetaMarkExecuted(body = {}, req, accessContext = null) {
-  return disputeWorkflowAccountingUpdate(
-    {
-      ...body,
-      accountingStatus: 'Settled',
-      settlementDate: body.settlementDate || new Date().toISOString().slice(0, 10),
-      settlementReference: body.settlementReference || body.note,
-      accountingNote: body.accountingNote || body.note,
-    },
-    req,
-    accessContext,
-  );
-}
-
-async function disputeWorkflowCompensationClaims(body = {}, req, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  const actionId = String(body.actionId || '').trim();
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(actionId)) throw appError('Valid dispute action is required.', 400);
-  const { data: action, error } = await context.client
-    .from('dispute_beta_actions')
-    .select('id,case_id,stem_id,action_type,close_reason,party_id,updated_at,dispute_workflow_parties(account_id,account_name)')
-    .eq('id', actionId)
-    .maybeSingle();
-  if (error) throw error;
-  if (!action) throw appError('Dispute action was not found.', 404);
-  await requireInterofficeStemAccess(action.stem_id, context);
-  if (!['close_buyer_dispute', 'close_supplier_dispute'].includes(action.action_type) || String(action.close_reason || '').trim().toLowerCase() !== 'uoc opened') {
-    throw appError('Compensation claims are available only for a UOC opened closure action.', 409);
-  }
-  const accountId = action.dispute_workflow_parties?.account_id;
-  const claims = await agreedCompensationClaimsForAccount(accountId, { includeClosed: false });
-  return {
-    actionId,
-    actionUpdatedAt: action.updated_at,
-    account: { accountId, accountName: action.dispute_workflow_parties?.account_name || '' },
-    claims,
-  };
-}
-
-async function disputeWorkflowCompensationClaimLink(body = {}, req, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  const actionId = String(body.actionId || '').trim();
-  const { data: action, error } = await context.client.from('dispute_beta_actions').select('id,stem_id').eq('id', actionId).maybeSingle();
-  if (error) throw error;
-  if (!action) throw appError('Dispute action was not found.', 404);
-  await requireInterofficeStemAccess(action.stem_id, context);
-  return linkDisputeAgreedCompensationClaim(body, unofficialCompensationServiceContext(context));
-}
-
-async function requireExternalDisputeClosureAuthority(client, profile) {
-  if (profile?.user_type === 'administrator') return;
-  if (profile?.user_type === 'general_manager') {
-    const generalManager = await loadActiveGeneralManager(client);
-    if (generalManager.id === profile.id) return;
-  }
-  throw appError('Only an Administrator or the active General Manager can accept a dispute closed directly in Salesforce.', 403);
-}
-
-async function disputeWorkflowAcceptExternalClosure(body = {}, req, accessContext = null) {
-  const { client, profile } = accessContext || (await requireActiveUser(req));
-  await requireExternalDisputeClosureAuthority(client, profile);
-  const reason = String(body.reason || body.note || '').trim();
-  if (!reason) throw appError('A reason is required to accept the external Salesforce closure.', 400);
-  let caseRow = await getDisputeBetaCase(client, body.caseId || body.stemId);
-  await requireInterofficeStemAccess(caseRow.stem_id, accessContext || { client, profile });
-  const currentStem = await loadCurrentDisputeStem(caseRow.stem_id, accessContext || { client, profile });
-  if (!hasUnacceptedExternalDisputeClosure(caseRow, currentStem)) {
-    throw appError('This dispute is not awaiting acceptance of an external Salesforce closure.', 409);
-  }
-  caseRow = await recordExternalDisputeClosure(client, caseRow, currentStem, profile);
-  let { partyRows, actionRows, instructionRows } = await loadDisputeWorkflowActions(client, caseRow.id);
-  const registry = assertValidDisputeParties(currentStem, partyRows);
-  const reconciliation = await reconcileApprovedSupplierInstructions(client, caseRow, partyRows, actionRows, instructionRows, currentStem, profile);
-  if (reconciliation.changed) {
-    throw appError('Supplier payments changed. FCOS updated the accounting plan; Finance must complete the revised instructions before accepting the external closure.', 409);
-  }
-  if (caseRow.approval_status !== 'Approved' || caseRow.workflow_status !== 'Settled - Ready to Close') {
-    throw appError('Complete the approved FCOS accounting workflow before accepting the external Salesforce closure.', 409);
-  }
-  const actions = validateStoredDisputeActions(actionRows, partyRows, registry);
-  assertSupplierDisputeAmounts(actions);
-  const activeSupplierInstructions = instructionRows.filter((instruction) => instruction.status !== 'Superseded');
-  if (activeSupplierInstructions.some((instruction) => !['Settled', 'Not Required'].includes(instruction.status))) {
-    throw appError('Every supplier invoice instruction must be Settled or Not Required before accepting the external closure.', 409);
-  }
-  if (!actions.length || !actions.every((action) => ['Settled', 'Not Required'].includes(action.execution_status))) {
-    throw appError('Every accounting action must be Settled or Not Required before accepting the external closure.', 409);
-  }
-  await assertDisputeUocClaimsReadyForClosure(actions, partyRows);
-  const documents = await assertRequiredDisputeDocuments(client, actions);
-  const nowIso = new Date().toISOString();
-  const { data: updatedCase, error } = await client
-    .from('dispute_beta_cases')
-    .update({
-      workflow_status: 'Closed',
-      latest_note: reason,
-      current_salesforce_status: String(currentStem.Dispute_Status__c || '').trim(),
-      salesforce_writeback_status: 'external',
-      salesforce_writeback_error: null,
-      external_closure_accepted_at: nowIso,
-      external_closure_accepted_by: profile.id,
-      external_closure_accepted_by_email: profile.email,
-      external_closure_acceptance_reason: reason,
-      closed_by: profile.id,
-      closed_by_email: profile.email,
-      closed_at: nowIso,
-      updated_at: nowIso,
-    })
-    .eq('id', caseRow.id)
-    .eq('workflow_status', 'Settled - Ready to Close')
-    .select(DISPUTE_BETA_CASE_SELECT)
-    .maybeSingle();
-  if (error) throw error;
-  if (!updatedCase) throw appError('The dispute changed before the external closure was accepted. Refresh and review it again.', 409);
-  await writeDisputeBetaEvent(client, updatedCase, 'external_closure_accepted', profile, {
-    note: reason,
-    metadata: {
-      salesforceStatus: currentStem.Dispute_Status__c,
-      salesforceLastModifiedAt: currentStem.LastModifiedDate || null,
-      accountingCompleted: true,
-    },
-  });
-  const partyMap = disputePartyRowMap(partyRows);
-  return {
-    case: serializeDisputeBetaCase(updatedCase),
-    parties: partyRows.map(serializeDisputeWorkflowParty),
-    actions: actions.map((action) => serializeDisputeBetaAction(action, partyMap)),
-    documents: documents.map(serializeDisputeWorkflowDocument),
-  };
-}
-
-async function disputeBetaClose(body = {}, req, accessContext = null) {
-  const { client, profile } = accessContext || (await requireActiveUser(req));
-  await requireCapability(client, profile, 'disputes_account', 'Dispute accounting permission is required to close a dispute.');
-  const caseRow = await getDisputeBetaCase(client, body.caseId || body.stemId);
-  await requireInterofficeStemAccess(caseRow.stem_id, accessContext || { client, profile });
-  const currentStem = await loadCurrentDisputeStem(caseRow.stem_id, accessContext || { client, profile });
-  if (!hasRecordedFcosClosureWriteback(caseRow)) assertSalesforceDisputeIsOpen(currentStem);
-  let { partyRows, actionRows, instructionRows } = await loadDisputeWorkflowActions(client, caseRow.id);
-  const registry = assertValidDisputeParties(currentStem, partyRows);
-  const reconciliation = await reconcileApprovedSupplierInstructions(client, caseRow, partyRows, actionRows, instructionRows, currentStem, profile);
-  if (reconciliation.changed) {
-    const reloaded = await loadDisputeWorkflowActions(client, caseRow.id);
-    partyRows = reloaded.partyRows;
-    actionRows = reloaded.actionRows;
-    instructionRows = reloaded.instructionRows;
-    throw appError('Supplier payments changed after approval. FCOS updated the accounting plan; Finance must complete the revised instructions before closure.', 409);
-  }
-  if (caseRow.approval_status !== 'Approved') throw appError('Only approved Dispute Workflow cases can be closed.', 400);
-  if (caseRow.workflow_status !== 'Settled - Ready to Close') throw appError('Complete accounting settlement for every action before closing.', 400);
-  const finalNote = String(body.note || '').trim();
-  if (!finalNote) throw appError('Final closure note is required.', 400);
-  const actions = validateStoredDisputeActions(actionRows, partyRows, registry);
-  assertSupplierDisputeAmounts(actions);
-  const activeSupplierInstructions = instructionRows.filter((instruction) => instruction.status !== 'Superseded');
-  if (activeSupplierInstructions.some((instruction) => !['Settled', 'Not Required'].includes(instruction.status))) {
-    throw appError('Every supplier invoice instruction must be Settled or Not Required before closure.', 400);
-  }
-  if (!(actions || []).length || !(actions || []).every((action) => action.execution_status === 'Settled' || action.execution_status === 'Not Required')) {
-    throw appError('Every accounting action must be Settled or Not Required before closure.', 400);
-  }
-  await assertDisputeUocClaimsReadyForClosure(actions, partyRows);
-  const documents = await assertRequiredDisputeDocuments(client, actions || []);
-  const statusCase = await writeDisputeWorkflowStatusToSalesforce(client, caseRow, profile, 'Closed', { required: true });
-  const nowIso = new Date().toISOString();
-  const { data: updatedCase, error } = await client
-    .from('dispute_beta_cases')
-    .update({
-      workflow_status: 'Closed',
-      latest_note: finalNote,
-      current_salesforce_status: 'Closed',
-      salesforce_writeback_status: 'success',
-      salesforce_writeback_error: null,
-      closed_by: profile.id,
-      closed_by_email: profile.email,
-      closed_at: nowIso,
-      updated_at: nowIso,
-    })
-    .eq('id', statusCase.id)
-    .select(DISPUTE_BETA_CASE_SELECT)
-    .single();
-  if (error) throw error;
-  await writeDisputeBetaEvent(client, updatedCase, 'closed', profile, {
-    note: finalNote,
-  });
-  const partyMap = disputePartyRowMap(partyRows);
-  return {
-    case: serializeDisputeBetaCase(updatedCase),
-    parties: partyRows.map(serializeDisputeWorkflowParty),
-    actions: (actions || []).map((item) => serializeDisputeBetaAction(item, partyMap)),
-    documents: documents.map(serializeDisputeWorkflowDocument),
-  };
-}
-
-async function salesforceStemDetailUncached(body, req = null, accessContext = null) {
-  const { stemId, updates, childObject, childId, childUpdates } = body;
-  if (!stemId) throw new Error('stemId required');
-
-  let actualStemId = stemId;
-  if (stemId.length < 15) {
-    const lookup = await queryRows(`SELECT Id FROM stem__c WHERE KeyStem__c = '${escapeSoql(stemId)}' LIMIT 1`, { softFail: true });
-    if (!lookup.length) throw new Error(`STEM with KeyStem__c '${stemId}' not found`);
-    actualStemId = lookup[0].Id;
-  }
-  await requireInterofficeStemAccess(actualStemId, accessContext);
-
-  if (childObject && childId && childUpdates && Object.keys(childUpdates).length > 0) {
-    await sfRequest(`/sobjects/${childObject}/${childId}`, {
-      method: 'PATCH',
-      body: childUpdates,
-    });
-  }
-  if (updates && Object.keys(updates).length > 0) {
-    await sfRequest(`/sobjects/stem__c/${actualStemId}`, {
-      method: 'PATCH',
-      body: updates,
-    });
-  }
-
-  const [recordRaw, lineItems, extraCosts, buyerBrokers, buyerInvoices] = await Promise.all([
-    sfRequest(`/sobjects/stem__c/${actualStemId}`).then(cleanRecord),
-    queryRows(`SELECT Id, Name, STEM__c, Product__c, Product__r.Name, Product__r.Family, Supplier_Name__c, BDN_Company__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_Max__c, Quantity_in_MT__c, Is_Quantity_Range__c, Price_Per_Unit__c, Cost_Per_Unit__c, Unit_Sell_At__c, Unit_Buy_At__c, Unit_Cost__c, Subtotal_Sell_At__c, Subtotal_Buy_At__c, Total_Price__c, Total_Cost__c, Supplier_Invoice__c, Payment_Term__c, BDN_Number__c, Cancelled__c, Buyers_Broker__c, Buyer_Broker__c, Buyers_Brokers_Commission_Per_Unit__c, Buyers_Brokers_Commission_Lumpsum__c, Commission_Cost__c, Supplier_Broker__c, Suppliers_Brokers_Commission_Per_Unit__c, Suppliers_Brokers_Commission_Lumpsum__c, Offer_Line_Item__r.UnitPrice, Offer_Line_Item__r.Supplier_Unit_Price__c FROM STEM_Line_Item__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`, { softFail: true }),
-    queryRows(`SELECT Id, Name, Description__c, Product2Id__c, Product2Id__r.Name, Product2Id__r.Family, Supplier_Name__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_in_MT__c, Quantity_Range_Max__c, Is_Quantity_Range__c, Unit_Price__c, Unit_Cost__c, Line_Total__c, Line_Total_Buy__c, Supplier_Invoice__c, Supplier_Issued__c, Payment_Term__c, Cancelled__c FROM STEM_Extra_Cost__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`, { softFail: true }),
-    queryRows(`SELECT Id, STEM__c, Buyer_Broker__c, Refcode_Index__c, Exported__c, Commission_Lumpsum__c, STEM_Line_Item__r.Id FROM STEM_Buyer_Broker__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`, { softFail: true }),
-    queryRows(`SELECT Id, Name, STEM__c, Proforma__c, Deprecated__c, Amount__c FROM Invoice__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`, { softFail: true }),
-  ]);
-  const supplierInvoiceIds = [...new Set([...lineItems.map((item) => item.Supplier_Invoice__c), ...extraCosts.map((item) => item.Supplier_Invoice__c)].filter(isSalesforceId))];
-  const supplierInvoiceNameMap = await namesByIds('Supplier_Invoice__c', supplierInvoiceIds);
-  const supplierInvoiceSupplierNameMap = {};
-  for (const item of [...lineItems, ...extraCosts]) {
-    if (item.Supplier_Invoice__c && item.Supplier_Name__c && !supplierInvoiceSupplierNameMap[item.Supplier_Invoice__c]) {
-      supplierInvoiceSupplierNameMap[item.Supplier_Invoice__c] = item.Supplier_Name__c;
-    }
-  }
-
-  const brokerAccountIds = [...new Set([...lineItems.map((item) => item.Supplier_Broker__c).filter(Boolean), ...lineItems.map((item) => item.Buyers_Broker__c || item.Buyer_Broker__c).filter(Boolean), ...buyerBrokers.map((item) => item.Buyer_Broker__c).filter(Boolean)])];
-  const brokerAccountMap = await namesByIds('Account', brokerAccountIds);
-  for (const [id, name] of Object.entries(brokerAccountMap)) brokerAccountMap[String(id).slice(0, 15)] = name;
-  const brokerCommissionGroupsByStem = buildBrokerCommissionGroups({
-    stemMap: { [actualStemId]: recordRaw },
-    lineItems,
-    buyerBrokers,
-    accountMap: brokerAccountMap,
-  });
-  const brokerCommissionGroups = brokerCommissionGroupsByStem[actualStemId] || [];
-  const stemHasDelivery = !!recordRaw.Delivery_Date__c;
-  const payableAmountCandidates = stemPayableAmountCandidates({
-    stem: recordRaw,
-    lineItems,
-    extraCosts,
-  });
-
-  let supplierInvoicePayments = [];
-  let buyerInvoicePayments = [];
-  const brokerCommissionPaymentMap = new Map();
-  const paymentDescribe = await salesforceObjectFields({
-    objectName: 'Payment__c',
-  }).catch(() => ({ fields: [] }));
-  const paymentFields = paymentDescribe.fields || [];
-  const paymentFieldNames = new Set(paymentFields.map((field) => field.name));
-  const paymentAmountField = ['Amount__c', 'Payment_Amount__c', 'Paid_Amount__c', 'Received_Amount__c', 'Total_Amount__c', 'Amount_Paid__c', 'Payment_Value__c', 'Actual_Amount__c'].find((field) => paymentFieldNames.has(field));
-  const paymentDateField = firstAvailableField(paymentFieldNames, ['Date__c', 'Payment_Date__c', 'Received_Date__c', 'Paid_Date__c', 'CreatedDate']);
-  const supplierInvoiceLookupFields = incomingPaymentSupplierInvoiceFields(paymentFields);
-  const paymentReferenceFields = incomingPaymentReferenceFields(paymentFields);
-  const paymentDirectionFields = incomingPaymentDirectionFields(paymentFields);
-  const paymentStatusFields = selectedFields(paymentFieldNames, ['Status__c', 'Payment_Status__c']);
-  const paymentTypeFields = selectedFields(paymentFieldNames, ['Type__c', 'Payment_Type__c']);
-  const paymentSelectFields = ['Id', paymentFieldNames.has('Name') ? 'Name' : null, paymentFieldNames.has('RecordTypeId') ? 'RecordTypeId' : null, paymentFieldNames.has('RecordTypeId') ? 'RecordType.Name' : null, paymentFieldNames.has('RecordTypeId') ? 'RecordType.DeveloperName' : null, paymentFieldNames.has('STEM__c') ? 'STEM__c' : null, paymentFieldNames.has('CreatedDate') ? 'CreatedDate' : null, paymentDateField, ...supplierInvoiceLookupFields, paymentAmountField, ...paymentReferenceFields, ...paymentStatusFields, ...paymentTypeFields, ...paymentDirectionFields].filter(Boolean);
-  const paymentOrder = paymentDateField ? `${paymentDateField} DESC NULLS LAST, CreatedDate DESC` : 'CreatedDate DESC';
-  if (paymentSelectFields.length > 1) {
-    const selectedPaymentFields = [...new Set(paymentSelectFields)];
-    const paymentDateValue = (payment) => (paymentDateField ? payment[paymentDateField] : null) || payment.Date__c || payment.CreatedDate || null;
-    const sortPaymentRows = (rows) => rows.sort((a, b) => String(paymentDateValue(b) || '').localeCompare(String(paymentDateValue(a) || '')));
-    const decoratePayment = (payment, supplierInvoiceId = null) => ({
-      ...payment,
-      Date__c: paymentDateValue(payment),
-      _Payment_Amount: paymentAmountField ? payment[paymentAmountField] : null,
-      _Payment_Amount_Field: paymentAmountField || null,
-      _Supplier_Invoice_Name: supplierInvoiceId ? supplierInvoiceNameMap[supplierInvoiceId] || supplierInvoiceId : null,
-    });
-    const supplierPaymentMap = new Map();
-    const buyerPaymentMap = new Map();
-    const addBrokerCommissionPayment = (payment, brokerMatch) => {
-      if (!payment?.Id || !brokerMatch) return;
-      supplierPaymentMap.delete(payment.Id);
-      buyerPaymentMap.delete(payment.Id);
-      if (!brokerCommissionPaymentMap.has(brokerMatch.key)) {
-        brokerCommissionPaymentMap.set(brokerMatch.key, {
-          ...brokerMatch,
-          payments: [],
-        });
-      }
-      brokerCommissionPaymentMap.get(brokerMatch.key).payments.push(decoratePayment(payment));
-    };
-    const addSupplierPayment = (payment, supplierInvoiceId = null) => {
-      if (!payment?.Id) return;
-      const invoiceId = supplierInvoiceId || incomingPaymentSupplierInvoiceId(payment, supplierInvoiceLookupFields);
-      supplierPaymentMap.set(payment.Id, {
-        ...decoratePayment(payment, invoiceId),
-        _Supplier_Invoice_Name: invoiceId ? supplierInvoiceNameMap[invoiceId] || invoiceId : 'Supplier payment',
-        _Supplier_Name: invoiceId ? supplierInvoiceSupplierNameMap[invoiceId] || supplierInvoiceNameMap[invoiceId] || invoiceId : 'Supplier payment',
-      });
-    };
-    const addBuyerPayment = (payment) => {
-      if (!payment?.Id) return;
-      buyerPaymentMap.set(payment.Id, decoratePayment(payment));
-    };
-
-    if (supplierInvoiceIds.length && supplierInvoiceLookupFields.length) {
-      await Promise.all(
-        supplierInvoiceLookupFields.map(async (field) => {
-          const paymentChunks = await compositeQueryRows(
-            chunkIds(supplierInvoiceIds).map((chunk) => {
-              const inList = chunk.map((id) => `'${escapeSoql(id)}'`).join(',');
-              return {
-                soql: `
-            SELECT ${selectedPaymentFields.join(', ')}
-            FROM Payment__c
-            WHERE ${field} IN (${inList})
-            ORDER BY ${paymentOrder}
-            LIMIT 2000
-          `,
-                limit: 2000,
-                softFail: true,
-              };
-            }),
-          );
-          for (const payment of paymentChunks.flat()) addSupplierPayment(payment, payment[field]);
-        }),
-      );
-    }
-    if (paymentFieldNames.has('STEM__c')) {
-      const stemPayments = await queryRows(
-        `
-        SELECT ${selectedPaymentFields.join(', ')}
-        FROM Payment__c
-        WHERE STEM__c = '${escapeSoql(actualStemId)}'
-        ORDER BY ${paymentOrder}
-        LIMIT 2000
-      `,
-        { limit: 2000, softFail: true },
-      );
-      for (const payment of stemPayments) {
-        if (incomingPaymentIsReceivableRemittance(payment, [...paymentReferenceFields, ...paymentDirectionFields, ...paymentTypeFields, ...paymentStatusFields])) continue;
-        const amount = paymentAmountField ? incomingPaymentNumber(payment[paymentAmountField]) : null;
-        const brokerCommissionMatch = findBrokerCommissionPaymentMatch(payment, amount, brokerCommissionGroups, [...paymentReferenceFields, ...paymentDirectionFields, ...paymentTypeFields, ...paymentStatusFields]);
-        if (brokerCommissionMatch) {
-          addBrokerCommissionPayment(payment, brokerCommissionMatch);
-          continue;
-        }
-        const bankCharge = incomingPaymentLooksBankCharge(payment, {
-          referenceFields: paymentReferenceFields,
-          directionFields: paymentDirectionFields,
-          typeFields: paymentTypeFields,
-          statusFields: paymentStatusFields,
-        });
-        if (bankCharge) continue;
-        const supplierSide = incomingPaymentLooksSupplierSide(payment, {
-          supplierInvoiceFields: supplierInvoiceLookupFields,
-          directionFields: paymentDirectionFields,
-          typeFields: paymentTypeFields,
-          statusFields: paymentStatusFields,
-        });
-        if (supplierSide) {
-          addSupplierPayment(payment);
-        } else if (
-          incomingPaymentLooksStemPayableCalculation(payment, {
-            amount,
-            payableAmounts: payableAmountCandidates,
-            referenceFields: paymentReferenceFields,
-            directionFields: paymentDirectionFields,
-            typeFields: paymentTypeFields,
-            statusFields: paymentStatusFields,
-            allowBlankSignal: !stemHasDelivery,
-          })
-        ) {
-          continue;
-        } else if (amount == null || amount >= 0) {
-          addBuyerPayment(payment);
-        }
-      }
-    }
-    supplierInvoicePayments = sortPaymentRows([...supplierPaymentMap.values()]);
-    buyerInvoicePayments = sortPaymentRows([...buyerPaymentMap.values()]);
-  }
-
-  const [vesselName, portName, agentName, accountName, buyerBrokerName, factoringInvoiceName] = await Promise.all([recordRaw.Vessel__c ? resolveViaQuery('Vessel__c', recordRaw.Vessel__c, 'Name') : Promise.resolve(null), recordRaw.Port__c ? resolveViaQuery('Port__c', recordRaw.Port__c, 'Name') : Promise.resolve(null), recordRaw.Agent__c ? resolveViaQuery('Account', recordRaw.Agent__c, 'Name') : Promise.resolve(null), recordRaw.Account__c ? resolveViaQuery('Account', recordRaw.Account__c, 'Name') : Promise.resolve(null), recordRaw.Buyer_Broker__c ? resolveViaQuery('Account', recordRaw.Buyer_Broker__c, 'Name') : Promise.resolve(null), recordRaw.Factoring_Invoice__c ? resolveViaQuery('Invoice__c', recordRaw.Factoring_Invoice__c, 'Name') : Promise.resolve(null)]);
-
-  const buyerBrokersWithNames = await Promise.all(
-    buyerBrokers.map(async (bb) => ({
-      ...bb,
-      _Buyer_Broker_Name: bb.Buyer_Broker__c ? brokerAccountMap[bb.Buyer_Broker__c] || brokerAccountMap[String(bb.Buyer_Broker__c).slice(0, 15)] || (await resolveViaQuery('Account', bb.Buyer_Broker__c, 'Name')) : null,
-    })),
-  );
-
-  const supplierBrokerIds = [...new Set(lineItems.map((li) => li.Supplier_Broker__c).filter(Boolean))];
-  const supplierBrokerNameMap = {};
-  await Promise.all(
-    supplierBrokerIds.map(async (id) => {
-      supplierBrokerNameMap[id] = brokerAccountMap[id] || brokerAccountMap[String(id).slice(0, 15)] || (await resolveViaQuery('Account', id, 'Name'));
-    }),
-  );
-
-  const lineItemsWithNames = lineItems.map((li) => {
-    const calculatedQuantity = financialQuantity(li, stemHasDelivery);
-    const calculatedSell = lineSellAmount(li, stemHasDelivery);
-    const calculatedBuy = lineBuyAmount(li, stemHasDelivery);
-    return {
-      ...li,
-      _Financial_Quantity: calculatedQuantity,
-      _Financial_Quantity_Unit: 'MT',
-      ...(!stemHasDelivery
-        ? {
-            Total_Price__c: calculatedSell,
-            Total_Cost__c: calculatedBuy,
-          }
-        : {}),
-      _Product_Name: li['Product__r']?.Name ?? null,
-      _Supplier_Broker_Name: li.Supplier_Broker__c ? supplierBrokerNameMap[li.Supplier_Broker__c] : null,
-    };
-  });
-  const extraCostsWithNames = extraCosts.map((ec) => {
-    const calculatedQuantity = financialQuantity(ec, stemHasDelivery, 'Quantity_Range_Max__c');
-    const calculatedSell = extraSellAmount(ec, stemHasDelivery);
-    const calculatedBuy = extraBuyAmount(ec, stemHasDelivery);
-    return {
-      ...ec,
-      _Financial_Quantity: calculatedQuantity,
-      _Financial_Quantity_Unit: 'MT',
-      ...(!stemHasDelivery
-        ? {
-            Line_Total__c: calculatedSell,
-            Line_Total_Buy__c: calculatedBuy,
-          }
-        : {}),
-      _Product_Name: ec['Product2Id__r']?.Name ?? null,
-    };
-  });
-  const calculatedLineItemSell = lineItems.reduce((sum, li) => {
-    if (li.Cancelled__c) return sum;
-    return sum + lineSellAmount(li, stemHasDelivery);
-  }, 0);
-  const calculatedExtraCostSell = extraCosts.reduce((sum, ec) => {
-    if (ec.Cancelled__c) return sum;
-    return sum + extraSellAmount(ec, stemHasDelivery);
-  }, 0);
-  const calculatedUndatedBuyerInvoice = calculatedLineItemSell + calculatedExtraCostSell;
-  const buyerInvoiceResolution = resolveBuyerFinancialAmount({ salesforceAmount: recordRaw.Total_Invoice_Amount__c, calculatedAmount: calculatedUndatedBuyerInvoice, finalInvoiceIssued: buyerInvoices.some(isFinalBuyerInvoice) });
-  const calculatedSupplierInvoice = payableAmountCandidates[0] ?? 0;
-  const record = {
-    ...recordRaw,
-    Total_Invoice_Amount__c: buyerInvoiceResolution.amount,
-    _Buyer_Invoice_Amount_Source: buyerInvoiceResolution.source,
-    _Buyer_Invoice_Issued: buyerInvoices.some(isFinalBuyerInvoice),
-    _Supplier_Invoice_Amount: calculatedSupplierInvoice,
-    _Buyer_Pay_Term_Date: calculatedBuyerPayTermDate(recordRaw) || recordRaw.Invoice_Due_Date__c || recordRaw.Buyer_Pay_Term_Date__c,
-    _Buyer_Name: recordRaw.Buyer_Name__c || accountName || recordRaw.Buyer__c || null,
-    _Vessel_Name: vesselName,
-    _Port_Name: portName,
-    _Agent_Name: agentName,
-    _Account_Name: accountName,
-    _Buyer_Broker_Name: buyerBrokerName,
-    _Factoring_Invoice_Name: factoringInvoiceName,
-  };
-
-  return {
-    record,
-    lineItems: lineItemsWithNames,
-    extraCosts: extraCostsWithNames,
-    buyerBrokers: buyerBrokersWithNames,
-    supplierInvoicePayments,
-    buyerInvoicePayments,
-    brokerCommissionPayments: [...brokerCommissionPaymentMap.values()].map((group) => ({
-      ...group,
-      payments: group.payments.sort((a, b) => String(b.Date__c || '').localeCompare(String(a.Date__c || ''))),
-    })),
-  };
-}
-
-async function salesforceStemDetailFull(body, req = null, accessContext = null) {
-  const hasWrite = Boolean((body?.updates && Object.keys(body.updates).length) || (body?.childUpdates && Object.keys(body.childUpdates).length));
-  if (hasWrite) return salesforceStemDetailUncached(body, req, accessContext);
-  const stemId = String(body?.stemId || '').trim();
-  const cached = await cachedSalesforceValue({
-    namespace: 'salesforce-stem-detail-v2',
-    ttlSeconds: 15,
-    payload: { stemId },
-    tags: ['salesforce:stem', `salesforce:stem:${stemId}`],
-    body,
-    req,
-    accessContext,
-    loader: () => salesforceStemDetailUncached({ stemId }, req, accessContext),
-  });
-  return cached.value;
-}
-
-function uniquePresentValues(values) {
-  return [...new Set(values.filter((value) => value != null && value !== ''))];
-}
-
-function singleOrMixed(values) {
-  const unique = uniquePresentValues(values);
-  if (!unique.length) return null;
-  return unique.length === 1 ? unique[0] : 'Mixed';
-}
-
-function latestIsoDate(values) {
-  const dates = uniquePresentValues(values).filter((value) => /^\d{4}-\d{2}-\d{2}/.test(String(value)));
-  return dates.sort().at(-1) || null;
-}
-
-function addBrokerProductQuantity(group, row) {
-  const productName = row.productFamily || row.productName || 'â€”';
-  const unit = row.quantityUnit || 'UOM not set';
-  const key = `${productName}::${unit}`;
-  if (!group._productMap.has(key)) {
-    group._productMap.set(key, {
-      productName,
-      productFamily: row.productFamily || productName,
-      quantity: 0,
-      hasQuantity: false,
-      unit,
-    });
-  }
-  const item = group._productMap.get(key);
-  const qty = numericValue(row.bdnQuantity);
-  if (qty != null) {
-    item.quantity += qty;
-    item.hasQuantity = true;
-  }
-}
-
-function combineBrokerCommissionRows(rows) {
-  const groups = new Map();
-  for (const row of rows) {
-    const brokerKey = row.brokerId || row.brokerName || '';
-    const key = [row.stemId, row.brokerType, brokerKey].join('::');
-    if (!groups.has(key)) {
-      groups.set(key, {
-        ...row,
-        id: `${row.brokerType}-${row.stemId}-${brokerKey}`.replace(/\s+/g, '-'),
-        commissionAmount: 0,
-        _productMap: new Map(),
-        _commissionUnitPrices: [],
-        _commissionUnitLines: [],
-        _paymentDates: [],
-        _paymentDateLabels: [],
-        _paymentDelays: [],
-      });
-    }
-    const group = groups.get(key);
-    group.commissionAmount += Number(row.commissionAmount || 0);
-    if (row.commissionUnitPrice != null) group._commissionUnitPrices.push(Number(row.commissionUnitPrice));
-    group._commissionUnitLines.push({
-      productName: row.productFamily || row.productName || 'â€”',
-      value: numericValue(row.commissionUnitPrice),
-      unit: row.quantityUnit || 'UOM not set',
-    });
-    if (row.paymentDate) group._paymentDates.push(row.paymentDate);
-    if (row.paymentDateLabel) group._paymentDateLabels.push(row.paymentDateLabel);
-    if (row.paymentDelay != null) group._paymentDelays.push(Number(row.paymentDelay));
-    addBrokerProductQuantity(group, row);
-  }
-
-  return [...groups.values()].map((group) => {
-    const unitPrices = uniquePresentValues(group._commissionUnitPrices);
-    const paymentDates = uniquePresentValues(group._paymentDates);
-    const paymentDelays = uniquePresentValues(group._paymentDelays);
-    const commissionUnitPriceLines = group._commissionUnitLines.map((item) => ({
-      productName: item.productName,
-      value: item.value,
-      unit: item.unit,
-      label: item.value != null ? `${money(item.value)} / ${item.unit}` : 'â€”',
-    }));
-    const productQuantities = [...group._productMap.values()].map((item) => ({
-      productName: item.productName,
-      productFamily: item.productFamily || item.productName,
-      quantity: item.hasQuantity ? item.quantity : null,
-      quantityUnit: item.unit,
-      label: item.hasQuantity ? `${item.productName} - ${formatQuantityLabel(item.quantity, item.unit)}` : item.productName,
-    }));
-    return {
-      ...group,
-      productName: productQuantities.map((item) => item.productName).join('; '),
-      bdnQuantity: productQuantities.length === 1 ? productQuantities[0].quantity : null,
-      quantityUnit: productQuantities.length === 1 ? productQuantities[0].quantityUnit : 'Mixed',
-      productQuantities,
-      productQuantityLabel: productQuantities.map((item) => item.label).join('; '),
-      commissionUnitPrice: unitPrices.length === 1 ? unitPrices[0] : null,
-      commissionUnitPriceLines,
-      commissionUnitPriceLabel: commissionUnitPriceLines.map((item) => item.label).join('; '),
-      paymentDate: paymentDates.length <= 1 ? paymentDates[0] || null : 'Mixed',
-      paymentDateSort: latestIsoDate(paymentDates),
-      paymentDateLabel: singleOrMixed(group._paymentDateLabels) || group.paymentDateLabel,
-      paymentDelay: paymentDelays.length === 1 ? paymentDelays[0] : null,
-      paymentDelayLabel: paymentDelays.length > 1 ? 'Mixed' : null,
-      _productMap: undefined,
-      _commissionUnitPrices: undefined,
-      _commissionUnitLines: undefined,
-      _paymentDates: undefined,
-      _paymentDateLabels: undefined,
-      _paymentDelays: undefined,
-    };
-  });
-}
-
-async function salesforceBrokerRegisterUncached(body, req = null, accessContext = null) {
-  const limit = Math.min(Number(body.limit) || 2000, 3000);
-  const [lineItemDescribe, productDescribe] = await Promise.all([
-    salesforceObjectFields({ objectName: 'STEM_Line_Item__c' }).catch(() => ({ fields: [] })),
-    salesforceObjectFields({ objectName: 'Product2' }).catch(() => ({ fields: [] })),
-  ]);
-  const lineItemUomField = findDashboardUomField(lineItemDescribe.fields || [], 'lineItem');
-  const productUomField = findDashboardUomField(productDescribe.fields || [], 'product');
-  const nativeUomSelect = [
-    lineItemUomField,
-    productUomField ? `Product__r.${productUomField}` : null,
-  ].filter(Boolean);
-  const interofficeCondition = await interofficeStemAccessCondition(accessContext);
-  const whereClause = interofficeCondition ? `WHERE ${interofficeCondition}` : '';
-  const stems = await queryRows(
-    `
-    SELECT Id, Name, Delivery_Date__c, Payment_Date__c, Buyer_Pay_Term_Date__c
-    FROM stem__c
-    ${whereClause}
-    ORDER BY Delivery_Date__c DESC NULLS LAST
-    LIMIT ${limit}
-  `,
-    { limit },
-  );
-  const stemMap = Object.fromEntries(stems.map((stem) => [stem.Id, stem]));
-  const stemIds = stems.map((stem) => stem.Id);
-  if (!stemIds.length) return { rows: [] };
-
-  const stemChunks = chunkIds(stemIds);
-  const [lineItemChunks, buyerBrokerChunks, buyerPaymentChunks, buyerInvoiceChunks] = await Promise.all([
-    compositeQueryRows(
-      stemChunks.map((chunk) => {
-        const ids = chunk.map((id) => `'${id}'`).join(',');
-        return {
-          soql: `
-        SELECT ${['Id', 'Name', 'STEM__c', 'Product__r.Name', 'Product__r.Family', 'Supplier_Invoice__c',
-          ...nativeUomSelect,
-        ].join(', ')},
-               Supplier_Broker__c, Suppliers_Brokers_Commission_Per_Unit__c,
-               Quantity_Delivered_Per_BDN__c, Quantity__c, Quantity_in_MT__c, Commission_Cost__c, Cancelled__c,
-               Buyers_Broker__c, Buyer_Broker__c, Buyers_Brokers_Commission_Per_Unit__c,
-               Buyers_Brokers_Commission_Lumpsum__c
-        FROM STEM_Line_Item__c
-        WHERE STEM__c IN (${ids})
-        LIMIT 5000
-      `,
-          limit: 5000,
-        };
-      }),
-    ),
-    compositeQueryRows(
-      stemChunks.map((chunk) => {
-        const ids = chunk.map((id) => `'${id}'`).join(',');
-        return {
-          soql: `
-        SELECT Id, Name, STEM__c, Buyer_Broker__c
-        FROM STEM_Buyer_Broker__c
-        WHERE STEM__c IN (${ids})
-        LIMIT 5000
-      `,
-          limit: 5000,
-        };
-      }),
-    ),
-    compositeQueryRows(
-      stemChunks.map((chunk) => {
-        const ids = chunk.map((id) => `'${id}'`).join(',');
-        return {
-          soql: `
-        SELECT STEM__c, Date__c
-        FROM Payment__c
-        WHERE STEM__c IN (${ids}) AND Supplier_Invoice__c = null
-        ORDER BY Date__c DESC
-        LIMIT 5000
-      `,
-          limit: 5000,
-        };
-      }),
-    ),
-    compositeQueryRows(
-      stemChunks.map((chunk) => {
-        const ids = chunk.map((id) => `'${id}'`).join(',');
-        return {
-          soql: `
-        SELECT STEM__c, Invoice_Due_Date__c
-        FROM Invoice__c
-        WHERE STEM__c IN (${ids})
-        ORDER BY Invoice_Due_Date__c DESC
-        LIMIT 5000
-      `,
-          limit: 5000,
-        };
-      }),
-    ),
-  ]);
-
-  const lineItems = lineItemChunks.flat();
-  const buyerBrokers = buyerBrokerChunks.flat();
-  const buyerPayments = buyerPaymentChunks.flat();
-  const buyerInvoices = buyerInvoiceChunks.flat();
-  const accountIds = [...new Set([...lineItems.map((item) => item.Supplier_Broker__c).filter(Boolean), ...lineItems.map((item) => item.Buyers_Broker__c || item.Buyer_Broker__c).filter(Boolean), ...buyerBrokers.map((item) => item.Buyer_Broker__c).filter(Boolean)])];
-
-  const accountChunks = await compositeQueryRows(
-    chunkIds(accountIds).map((chunk) => {
-      const ids = chunk.map((id) => `'${id}'`).join(',');
-      return ids
-        ? {
-            soql: `SELECT Id, Name, Hidden_Broker__c, Hidden_Broker_Company__c FROM Account WHERE Id IN (${ids}) AND Inactive_Suspended__c = false`,
-            softFail: true,
-          }
-        : null;
-    }),
-  );
-  const accountMap = {};
-  const accountFlagMap = {};
-  for (const account of accountChunks.flat()) {
-    const flags = {
-      hiddenBrokerIndividual: account.Hidden_Broker__c === true,
-      hiddenBrokerCompany: account.Hidden_Broker_Company__c === true,
-    };
-    accountMap[account.Id] = account.Name;
-    accountMap[String(account.Id).slice(0, 15)] = account.Name;
-    accountFlagMap[account.Id] = flags;
-    accountFlagMap[String(account.Id).slice(0, 15)] = flags;
-  }
-
-  const supplierInvoiceIds = [...new Set(lineItems.map((item) => item.Supplier_Invoice__c).filter(Boolean))];
-  const paymentDateByInvoice = {};
-  const paymentChunks = await compositeQueryRows(
-    chunkIds(supplierInvoiceIds).map((chunk) => {
-      const ids = chunk.map((id) => `'${id}'`).join(',');
-      return ids
-        ? {
-            soql: `SELECT Supplier_Invoice__c, Date__c FROM Payment__c WHERE Supplier_Invoice__c IN (${ids}) ORDER BY Date__c DESC`,
-            softFail: true,
-          }
-        : null;
-    }),
-  );
-  for (const payment of paymentChunks.flat()) {
-    if (payment.Supplier_Invoice__c && !paymentDateByInvoice[payment.Supplier_Invoice__c]) paymentDateByInvoice[payment.Supplier_Invoice__c] = payment.Date__c;
-  }
-
-  const buyerPaymentDateByStem = {};
-  for (const payment of buyerPayments) {
-    if (payment.STEM__c && !buyerPaymentDateByStem[payment.STEM__c]) buyerPaymentDateByStem[payment.STEM__c] = payment.Date__c;
-  }
-  const buyerInvoiceDueDateByStem = {};
-  for (const invoice of buyerInvoices) {
-    if (invoice.STEM__c && !buyerInvoiceDueDateByStem[invoice.STEM__c]) buyerInvoiceDueDateByStem[invoice.STEM__c] = invoice.Invoice_Due_Date__c;
-  }
-
-  const buyerBrokersByStem = {};
-  for (const item of buyerBrokers) {
-    if (!item.STEM__c) continue;
-    if (!buyerBrokersByStem[item.STEM__c]) buyerBrokersByStem[item.STEM__c] = [];
-    buyerBrokersByStem[item.STEM__c].push(item);
-  }
-
-  const rawRows = [];
-  const financialWarnings = new Set();
-  for (const item of lineItems) {
-    const stem = stemMap[item.STEM__c];
-    if (!stem) continue;
-    const nativeQuantity = nativeFinancialQuantity(item, {
-      stemHasDelivery: !!stem.Delivery_Date__c,
-      lineItemUomField,
-      productUomField,
-    });
-    const qty = nativeQuantity.quantity;
-    const quantityUnit = nativeQuantity.unitOfMeasure || 'UOM not set';
-    if (nativeQuantity.warning) financialWarnings.add(`${stem.Name || 'STEM'} Â· ${item.Name || item.Id}: ${nativeQuantity.warning}`);
-    const supplierAmount = item.Cancelled__c ? 0 : brokerAmount(item.Suppliers_Brokers_Commission_Per_Unit__c, qty);
-    if (item.Supplier_Broker__c && supplierAmount !== 0) {
-      rawRows.push({
-        id: `supplier-${item.Id}`,
-        stemId: item.STEM__c,
-        stemName: stem.Name,
-        brokerId: item.Supplier_Broker__c,
-        productName: item['Product__r']?.Name || item.Name || 'â€”',
-        productFamily: item['Product__r']?.Family || item['Product__r']?.Name || item.Name || 'â€”',
-        bdnQuantity: qty || null,
-        quantityUnit,
-        deliveryDate: stem.Delivery_Date__c,
-        brokerType: 'Supplier Broker',
-        brokerName: accountMap[item.Supplier_Broker__c] || item.Supplier_Broker__c,
-        hiddenBrokerIndividual: accountFlagMap[item.Supplier_Broker__c]?.hiddenBrokerIndividual || false,
-        hiddenBrokerCompany: accountFlagMap[item.Supplier_Broker__c]?.hiddenBrokerCompany || false,
-        commissionUnitPrice: item.Suppliers_Brokers_Commission_Per_Unit__c ?? null,
-        commissionAmount: supplierAmount,
-        paymentDate: paymentDateByInvoice[item.Supplier_Invoice__c] || null,
-        paymentDateLabel: 'Paid Date',
-      });
-    }
-
-    const buyerBrokerId = item.Buyers_Broker__c || item.Buyer_Broker__c;
-    const hasSupplierBrokerUnit = Number(item.Suppliers_Brokers_Commission_Per_Unit__c || 0) !== 0;
-    const buyerPerUnitAmount = brokerAmount(item.Buyers_Brokers_Commission_Per_Unit__c, qty);
-    const buyerLumpsumAmount = Number(item.Buyers_Brokers_Commission_Lumpsum__c || 0);
-    const buyerAmount = buyerLumpsumAmount || buyerPerUnitAmount;
-    if (buyerBrokerId && buyerAmount !== 0) {
-      rawRows.push({
-        id: `buyer-${item.Id}`,
-        stemId: item.STEM__c,
-        stemName: stem.Name,
-        brokerId: buyerBrokerId,
-        productName: item['Product__r']?.Name || item.Name || 'â€”',
-        productFamily: item['Product__r']?.Family || item['Product__r']?.Name || item.Name || 'â€”',
-        bdnQuantity: qty || null,
-        quantityUnit,
-        deliveryDate: stem.Delivery_Date__c,
-        brokerType: 'Buyer Broker',
-        brokerName: accountMap[buyerBrokerId] || buyerBrokerId,
-        hiddenBrokerIndividual: accountFlagMap[buyerBrokerId]?.hiddenBrokerIndividual || false,
-        hiddenBrokerCompany: accountFlagMap[buyerBrokerId]?.hiddenBrokerCompany || false,
-        commissionUnitPrice: item.Buyers_Brokers_Commission_Per_Unit__c ?? (qty ? buyerAmount / qty : null),
-        commissionAmount: buyerAmount,
-        paymentDate: stem.Payment_Date__c || buyerPaymentDateByStem[item.STEM__c] || null,
-        paymentDateLabel: 'Received Date',
-        paymentDelay: paymentDelayDays(stem.Payment_Date__c || buyerPaymentDateByStem[item.STEM__c], buyerInvoiceDueDateByStem[item.STEM__c] || stem.Buyer_Pay_Term_Date__c),
-      });
-    }
-
-    const secondaryAmount = !hasSupplierBrokerUnit && item.Commission_Cost__c != null ? Number(item.Commission_Cost__c || 0) - buyerPerUnitAmount : 0;
-    const secondaryBrokers = (buyerBrokersByStem[item.STEM__c] || []).filter((broker) => {
-      if (!broker.Buyer_Broker__c) return true;
-      if (!buyerBrokerId) return true;
-      return String(broker.Buyer_Broker__c).slice(0, 15) !== String(buyerBrokerId).slice(0, 15);
-    });
-    if (secondaryAmount > 0 && secondaryBrokers.length > 0) {
-      for (const broker of secondaryBrokers) {
-        rawRows.push({
-          id: `secondary-${item.Id}-${broker.Id}`,
-          stemId: item.STEM__c,
-          stemName: stem.Name,
-          brokerId: broker.Buyer_Broker__c || null,
-          productName: item['Product__r']?.Name || item.Name || 'â€”',
-          productFamily: item['Product__r']?.Family || item['Product__r']?.Name || item.Name || 'â€”',
-          bdnQuantity: qty || null,
-          quantityUnit,
-          deliveryDate: stem.Delivery_Date__c,
-          brokerType: 'Secondary Buyer Broker',
-          brokerName: accountMap[broker.Buyer_Broker__c] || broker.Buyer_Broker__c || 'Secondary Buyer Broker',
-          hiddenBrokerIndividual: accountFlagMap[broker.Buyer_Broker__c]?.hiddenBrokerIndividual || false,
-          hiddenBrokerCompany: accountFlagMap[broker.Buyer_Broker__c]?.hiddenBrokerCompany || false,
-          commissionUnitPrice: qty ? secondaryAmount / qty : null,
-          commissionAmount: secondaryAmount,
-          paymentDate: stem.Payment_Date__c || buyerPaymentDateByStem[item.STEM__c] || null,
-          paymentDateLabel: 'Received Date',
-          paymentDelay: paymentDelayDays(stem.Payment_Date__c || buyerPaymentDateByStem[item.STEM__c], buyerInvoiceDueDateByStem[item.STEM__c] || stem.Buyer_Pay_Term_Date__c),
-        });
-      }
-    }
-  }
-
-  const rows = combineBrokerCommissionRows(rawRows);
-  rows.sort((a, b) => String(b.deliveryDate || '').localeCompare(String(a.deliveryDate || '')));
-  return { rows, warnings: [...financialWarnings] };
-}
-
-async function salesforceBrokerRegisterFull(body, req = null, accessContext = null) {
-  const limit = Math.min(Number(body.limit) || 2000, 3000);
-  const cached = await cachedSalesforceValue({
-    namespace: 'salesforce-broker-register',
-    ttlSeconds: 60,
-    payload: { limit },
-    tags: ['salesforce:broker-register', 'salesforce:stem', 'salesforce:account'],
-    body,
-    req,
-    accessContext,
-    loader: () => salesforceBrokerRegisterUncached({ limit }, req, accessContext),
-  });
-  return cached.value;
-}
-
-async function hedgeCapabilities(context) {
-  const entries = await Promise.all([
-    'hedge_book_manage',
-    'hedge_settlement_manage',
-    'hedge_close_approve',
-    'hedge_admin',
-  ].map(async (capability) => [capability, await userHasCapability(context.client, context.profile, capability)]));
-  return Object.fromEntries(entries);
-}
-
-async function hedgeDeskEntity(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  return {
-    data: await handleHedgeDeskEntity(body, context.profile, {
-      client: context.client,
-      capabilities: await hedgeCapabilities(context),
-    }),
-  };
-}
-
-async function hedgeMarkets(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  if (body.action === 'intelligence_brief') return { data: await loadMarketIntelligenceBrief(context.client, body) };
-  if (body.action === 'intelligence_curve') return { data: await loadMarketIntelligenceCurve(context.client, body) };
-  if (body.action === 'intelligence_valuation') return { data: await loadGovernedMarketValuation(context.client, body) };
-  if (body.action === 'forward_fallback_save') {
-    await requireCapability(context.client, context.profile, 'hedge_book_manage', 'Hedge book management permission is required to save a forward fallback.');
-    return { data: await saveMarketForwardFallback(context.client, context.profile, body) };
-  }
-  if (body.action === 'intelligence_alert_rules_get') return { data: await getMarketIntelligenceAlertRules(context.client) };
-  if (body.action === 'intelligence_alert_rules_save') {
-    await requireCapability(context.client, context.profile, 'hedge_admin', 'Hedge administration permission is required to change market alert rules.');
-    return { data: await saveMarketIntelligenceAlertRules(context.client, context.profile, body) };
-  }
-  if (body.action === 'intelligence_curve_cutover_save') {
-    await requireCapability(context.client, context.profile, 'hedge_admin', 'Hedge administration permission is required to approve a curve cutover.');
-    return { data: await saveMarketCurveShadowCutover(context.client, context.profile, body) };
-  }
-  const data = await handleHedgeMarkets(body, context.profile, {
-    client: context.client,
-    capabilities: await hedgeCapabilities(context),
-  });
-  if (['create', 'update', 'delete', 'save_spreads', 'verify_month', 'market_report_import'].includes(String(body.action || ''))) {
-    await expireRuntimeCacheTags(['markets', 'hedge:markets', 'market:intelligence', 'market:pulse']);
-  }
-  return { data };
-}
-
-async function marketIntelligenceBrief(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  return loadMarketIntelligenceBrief(context.client, body);
-}
-
-async function marketPulseSnapshot(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  const [snapshot, capabilities] = await Promise.all([
-    loadMarketPulseSnapshot(context.client, { ...body, force: requestForcesRefresh(body, req) }),
-    hedgeCapabilities(context),
-  ]);
-  return {
-    ...snapshot,
-    // Capabilities are attached after the shared 60-second market-data cache resolves.
-    // They must never be stored in, or inherited from, that cross-user cache entry.
-    capabilities: {
-      hedge_book_manage: capabilities?.hedge_book_manage === true,
-      hedge_admin: capabilities?.hedge_admin === true,
-    },
-  };
-}
-
-async function marketIntelligenceCurve(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  return loadMarketIntelligenceCurve(context.client, body);
-}
-
-async function marketReportCatalogue(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  return loadMarketReportCatalogue(context.client, body);
-}
-
-async function marketReportAnalysis(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  return analyzeMarketReportLibrary(context.client, context.profile, body, {
-    onUsage: (usage) => recordDashboardAiUsage(context.client, context.profile, usage),
-  });
-}
-
-async function marketIntelligenceValuation(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  return loadGovernedMarketValuation(context.client, body);
-}
-
-async function marketForwardFallbackSave(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  return saveMarketForwardFallback(context.client, context.profile, body);
-}
-
-async function marketIntelligenceAlertRulesGet(_body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  return getMarketIntelligenceAlertRules(context.client);
-}
-
-async function marketIntelligenceAlertRulesSave(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  return saveMarketIntelligenceAlertRules(context.client, context.profile, body);
-}
-
-async function marketIntelligenceCurveCutoverSave(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  return saveMarketCurveShadowCutover(context.client, context.profile, body);
-}
-
-async function marketIntelligenceArchiveReplay(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  await requireCapability(context.client, context.profile, 'hedge_admin', 'Hedge administration permission is required to reconcile the licensed market archive.');
-  requireExternalActionGate('google_drive');
-  const accessToken = await googleDriveMarketAccessToken();
-  const result = await runMarketReportArchiveReplayBatch(context.client, {
-    accessToken,
-    cursor: body.cursor,
-    expectedArchiveFingerprint: body.archiveFingerprint || null,
-  });
-  if (result.replayedCount > 0 || result.briefCompletedCount > 0) {
-    await expireRuntimeCacheTags(['markets', 'hedge:markets', 'market:intelligence']);
-  }
-  return result;
-}
-
-async function marketIntradaySnapshotPreview(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  await requireCapability(context.client, context.profile, 'hedge_book_manage', 'Market-data management permission is required to review a provisional paper snapshot.');
-  return previewMarketIntradaySnapshot(context.profile, body);
-}
-
-async function marketIntradaySnapshotSave(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  await requireCapability(context.client, context.profile, 'hedge_book_manage', 'Market-data management permission is required to save a provisional paper snapshot.');
-  const saved = await saveMarketIntradaySnapshot(context.client, context.profile, body);
-  await reconcileMarketIntradayDate(context.client, body.marketDate, context.profile).catch(() => ({ insertedCount: 0 }));
-  await expireRuntimeCacheTags(['markets', 'hedge:markets', 'market:intelligence', 'market:pulse', 'market:intraday']);
-  return saved;
-}
-
-async function marketIntradayTimeline(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  return loadMarketIntradayTimeline(context.client, body);
-}
-
-async function hedgeDeskParseMops(body = {}) {
-  return { ok: true, ...parseMopsText(body.raw_input || body.text || body.input || '') };
-}
-
-async function hedgeDeskGenerateInvoice(body = {}) {
-  const generated = generateHedgeInvoicePdf(body);
-  return {
-    ok: true,
-    base64: generated.buffer.toString('base64'),
-    mimeType: 'application/pdf',
-    filename: generated.filename,
-  };
-}
-
-async function hedgeDeskSaveInvoicePdf(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  await requireCapability(context.client, context.profile, 'hedge_settlement_manage', 'Hedge settlement permission is required to store invoice documents.');
-  return saveHedgeInvoicePdf(context.client, context.profile, body);
-}
-
-async function hedgeDeskSendInvoiceEmail(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  await requireCapability(context.client, context.profile, 'hedge_settlement_manage', 'Hedge settlement permission is required to send settlement invoices.');
-  return sendHedgeInvoiceEmailIdempotent(context.client, context.profile, body);
-}
-
-async function hedgeDeskSfsReport(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  return getHedgeSfsMonthReport(context.client, body.month);
-}
-
-async function hedgeDeskSfsFile(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  return getHedgeSfsFile(context.client, body);
-}
-
-async function hedgeDeskSfsSend(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  await requireCapability(context.client, context.profile, 'hedge_close_approve', 'Hedge month-close approval permission is required to send SFS reports.');
-  return approveAndSendHedgeSfsReport(context.client, context.profile, body);
-}
-
-async function hedgeDeskSalesforcePush(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  await requireCapability(context.client, context.profile, 'hedge_book_manage', 'Hedge book management permission is required for Salesforce synchronization.');
-  return pushHedgeSalesforce(context.client, context.profile, body);
-}
-
-async function hedgeDeskSalesforcePreview(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  await requireCapability(context.client, context.profile, 'hedge_book_manage', 'Hedge book management permission is required for Salesforce allocation previews.');
-  return previewHedgeSalesforce(context.client, context.profile, body);
-}
-
-async function hedgeDeskSalesforceMapping(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  const capabilities = await hedgeCapabilities(context);
-  void body;
-  return { ...(await getHedgeSalesforceMapping(context.client)), canManage: capabilities.hedge_admin === true };
-}
-
-async function hedgeDeskAssistant(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  return runHedgeAssistant(context.client, context.profile, body);
-}
-
-async function hedgeDeskAssistantSettings(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  const capabilities = await hedgeCapabilities(context);
-  return { ...(await hedgeAssistantSettings(context.client)), canManage: capabilities.hedge_admin === true };
-}
-
-async function hedgeDeskMaintenanceCron(body = {}, req = null) {
-  requireCronAuthorization(req);
-  return runHedgeMaintenance(supabaseAdminClient(), {
-    forceIce: body.forceIce === true,
-    dryRun: body.dryRun === true,
-  });
-}
-
-async function marketReportDriveSyncCron(_body = {}, req = null) {
-  requireCronAuthorization(req);
-  requireExternalActionGate('google_drive');
-  const client = supabaseAdminClient();
-  const accessToken = await googleDriveMarketAccessToken();
-  const result = await runMarketReportDriveSync(client, { accessToken });
-  if (result.status === 'failed') {
-    throw appError('Scheduled Google Drive market-report synchronization did not complete.', 502, result.errorCode || 'MARKET_DRIVE_SYNC_FAILED', undefined, true);
-  }
-  if (result.importedCount > 0) await expireRuntimeCacheTags(['markets', 'hedge:markets', 'market:intelligence']);
-  await resolveRecoveredSystemErrorHandler(client, 'marketReportDriveSyncCron', { resolvedThrough: new Date() }).catch(() => {});
-  return result;
-}
-
-const withMasterContractUser = (service) => async (body = {}, req = null, accessContext = null) => service(body, accessContext || (await requireActiveUser(req)));
-const masterContractsList = withMasterContractUser(listMasterContractsService);
-const masterContractDetail = withMasterContractUser(getMasterContractService);
-const masterContractSave = withMasterContractUser(saveMasterContractService);
-const masterContractDecision = withMasterContractUser(decideMasterContractService);
-const masterContractEvidencePrepare = withMasterContractUser(prepareMasterContractEvidenceService);
-const masterContractEvidenceComplete = withMasterContractUser(completeMasterContractEvidenceService);
-const masterContractEvidenceUrl = withMasterContractUser(getMasterContractEvidenceUrlService);
-const masterContractOptions = withMasterContractUser(masterContractOptionsService);
-const masterContractVesselCreate = withMasterContractUser(createMasterContractVesselService);
-const masterContractPreflight = withMasterContractUser(preflightMasterContractService);
-const masterContractBatchCreate = withMasterContractUser(createMasterContractBatchService);
-const masterContractPriceResolve = withMasterContractUser(resolveMasterContractPriceService);
-const masterContractPriceApply = withMasterContractUser(applyMasterContractPriceService);
-const masterContractFeatureSave = withMasterContractUser(saveMasterContractFeatureService);
-const masterContractReconcile = withMasterContractUser(reconcileMasterContractsService);
-
-async function masterContractReconcileCron(body = {}, req = null) {
-  requireCronAuthorization(req);
-  return reconcileMasterContractsService(body, {
-    client: supabaseAdminClient(),
-    profile: { id: null, email: null, user_type: 'system' },
-  });
-}
-
-async function specialTermsWorkspace(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  const [workspace, canApproveClauses] = await Promise.all([
-    listSpecialTerms({ force: body.force === true }),
-    userHasCapability(context.client, context.profile, 'special_terms_clause_approve'),
-  ]);
-  const activeGeneralManager = context.profile.user_type === 'general_manager' ? await loadActiveGeneralManager(context.client) : null;
-  const canApproveRevisions = canApproveClauses && (isAdministratorUserType(context.profile.user_type) || activeGeneralManager?.id === context.profile.id);
-  return {
-    ...workspace,
-    canManage: true,
-    canDraft: true,
-    canApproveClauses: canApproveRevisions,
-    canApproveRevisions,
-    currentUserEmail: context.profile.email || '',
-  };
-}
-
-async function specialTermsSummaryList(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  const [summary, schema, canApproveClauses] = await Promise.all([
-    listSpecialTermSummaries(body),
-    resolveSpecialTermsSchema(),
-    userHasCapability(context.client, context.profile, 'special_terms_clause_approve'),
-  ]);
-  const activeGeneralManager = context.profile.user_type === 'general_manager' ? await loadActiveGeneralManager(context.client) : null;
-  const canApproveRevisions = canApproveClauses && (isAdministratorUserType(context.profile.user_type) || activeGeneralManager?.id === context.profile.id);
-  return {
-    ...summary,
-    terms: (summary.terms || []).map((term) => !canApproveRevisions && term.nextAction === 'review_publish' ? { ...term, nextAction: 'continue' } : term),
-    canDraft: true,
-    canApproveClauses: canApproveRevisions,
-    canApproveRevisions,
-    currentUserEmail: context.profile.email || '',
-    clauseCategoryOptions: schema.clauseCategoryOptions,
-  };
-}
-
-async function specialTermsDocumentExport(body = {}, req, res, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  const format = String(body.format || 'pdf').trim().toLowerCase();
-  const source = String(body.source || 'live').trim().toLowerCase();
-  if (!['pdf', 'docx'].includes(format)) throw appError('Choose PDF or Word document format.', 400, 'SPECIAL_TERMS_DOCUMENT_FORMAT_INVALID');
-  if (!['live', 'draft'].includes(source)) throw appError('Choose a live document or saved draft preview.', 400, 'SPECIAL_TERMS_DOCUMENT_SOURCE_INVALID');
-  if (source === 'draft' && format !== 'pdf') throw appError('Saved drafts may be downloaded as watermarked PDF only.', 409, 'SPECIAL_TERMS_DOCUMENT_DRAFT_FORMAT_RESTRICTED');
-  const term = await getSpecialTermDocumentForExport(body.termId, {
-    source,
-    revisionId: body.revisionId,
-    expectedLastModifiedAt: body.expectedLastModifiedAt,
-    expectedRevisionLastModifiedAt: body.expectedRevisionLastModifiedAt,
-    force: true,
-  });
-  const generated = await generateSpecialTermsDocument(term, {
-    format,
-    source,
-    duplicateIndex: body.duplicateIndex,
-  });
-  await writeAdminAudit(context.client, context.profile, 'special_terms_document_exported', null, null, {
-    termCount: 1,
-    termId: term.id,
-    format,
-    source,
-    pageCount: Number.isFinite(generated.pageCount) ? generated.pageCount : null,
-    outcome: 'success',
-  });
-  const asciiFilename = generated.filename.replace(/[^\x20-\x7E]/g, '_').replace(/"/g, '');
-  res.statusCode = 200;
-  res.setHeader('cache-control', 'no-store');
-  res.setHeader('content-type', generated.contentType);
-  res.setHeader('content-disposition', `attachment; filename="${asciiFilename}"; filename*=UTF-8''${encodeURIComponent(generated.filename)}`);
-  for (const [name, value] of Object.entries(telemetryResponseHeaders())) res.setHeader(name, value);
-  res.end(generated.buffer);
-}
-
-/** Retained only for deployed FCOS clients that call the original route. */
-async function specialTermsPdfExport(body = {}, req, res, accessContext = null) {
-  return specialTermsDocumentExport({ ...body, format: 'pdf', source: body.source || 'live' }, req, res, accessContext);
-}
-
-async function specialTermsOptions(body = {}, req = null, accessContext = null) {
-  accessContext || (await requireActiveUser(req));
-  return { options: await specialTermOptions(body) };
-}
-
-async function isSpecialTermClauseApprover(context) {
-  const hasCapability = await userHasCapability(context.client, context.profile, 'special_terms_clause_approve');
-  if (!hasCapability) return false;
-  const isAdministrator = context.profile.user_type === 'administrator';
-  const activeGeneralManager = context.profile.user_type === 'general_manager'
-    ? await loadActiveGeneralManager(context.client)
-    : null;
-  return isAdministrator || activeGeneralManager?.id === context.profile.id;
-}
-
-async function requireSpecialTermClauseApprover(context) {
-  if (!(await isSpecialTermClauseApprover(context))) throw appError('Only the active General Manager or an Administrator may approve clause wording and migrations.', 403, 'SPECIAL_TERMS_CLAUSE_APPROVER_REQUIRED');
-}
-
-async function specialTermDetail(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  const [detail, schema, canApproveClauses] = await Promise.all([
-    getSpecialTermDetail(body.termId, { force: body.force === true }),
-    resolveSpecialTermsSchema(),
-    userHasCapability(context.client, context.profile, 'special_terms_clause_approve'),
-  ]);
-  const activeGeneralManager = context.profile.user_type === 'general_manager' ? await loadActiveGeneralManager(context.client) : null;
-  const canApproveRevisions = canApproveClauses && (isAdministratorUserType(context.profile.user_type) || activeGeneralManager?.id === context.profile.id);
-  return {
-    ...detail,
-    canDraft: true,
-    canApproveClauses: canApproveRevisions,
-    canApproveRevisions,
-    currentUserEmail: context.profile.email || '',
-    clauseCategoryOptions: schema.clauseCategoryOptions,
-    audienceOptions: schema.audienceOptions,
-    countryOptions: schema.countryOptions,
-  };
-}
-
-async function specialTermClauseBank(body = {}, req = null, accessContext = null) {
-  accessContext || (await requireActiveUser(req));
-  return listSpecialTermClauseBank(body);
-}
-
-async function specialTermClauseSimilar(body = {}, req = null, accessContext = null) {
-  accessContext || (await requireActiveUser(req));
-  return listSpecialTermClauseSimilar(body.clauseId, { limit: body.limit });
-}
-
-async function specialTermClauseEditPreview(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  return getSpecialTermClauseEditPreview(body, { canPublish: await isSpecialTermClauseApprover(context) });
-}
-
-async function specialTermClauseGlobalPublish(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  await requireSpecialTermClauseApprover(context);
-  return publishSpecialTermClauseGlobally(context.client, context.profile, body);
-}
-
-async function specialTermDeletePreview(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  const options = { isApprover: await isSpecialTermClauseApprover(context) };
-  if (body.entityType === 'clause' || body.entityType === 'clauseVersion') return previewSpecialTermClauseDeletion(context.client, context.profile, body, options);
-  return previewSpecialTermDeletion(context.client, context.profile, body, options);
-}
-
-async function specialTermMigrationInventory(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  await requireSpecialTermClauseApprover(context);
-  return getSpecialTermMigrationInventory({ force: body.force === true });
-}
-
-async function specialTermClauseDraftSave(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  return saveSpecialTermClauseDraft(context.client, context.profile, body);
-}
-
-async function specialTermClauseApprove(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  await requireSpecialTermClauseApprover(context);
-  return approveSpecialTermClause(context.client, context.profile, body);
-}
-
-async function specialTermClauseRetire(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  await requireSpecialTermClauseApprover(context);
-  return retireSpecialTermClause(context.client, context.profile, body);
-}
-
-async function specialTermClauseDelete(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  return deleteSpecialTermClause(context.client, context.profile, body, { isApprover: await isSpecialTermClauseApprover(context) });
-}
-
-async function specialTermClauseDraftDiscard(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  return discardSpecialTermClauseDraft(context.client, context.profile, body, { isApprover: await isSpecialTermClauseApprover(context) });
-}
-
-async function specialTermClauseConsolidationList(body = {}, req = null, accessContext = null) {
-  accessContext || (await requireActiveUser(req));
-  return listSpecialTermClauseConsolidations({ includeClosed: body.includeClosed === true });
-}
-
-async function specialTermClauseConsolidationStart(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  await requireSpecialTermClauseApprover(context);
-  return startSpecialTermClauseConsolidation(context.client, context.profile, body);
-}
-
-async function specialTermClauseConsolidationRelink(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  return relinkSpecialTermClauseConsolidation(context.client, context.profile, body);
-}
-
-async function specialTermClauseConsolidationCancel(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  await requireSpecialTermClauseApprover(context);
-  return cancelSpecialTermClauseConsolidation(context.client, context.profile, body);
-}
-
-async function specialTermClauseConsolidationComplete(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  await requireSpecialTermClauseApprover(context);
-  return completeSpecialTermClauseConsolidation(context.client, context.profile, body);
-}
-
-async function specialTermCompositionSave(body = {}, req = null, accessContext = null) {
-  accessContext || (await requireActiveUser(req));
-  throw appError('Direct projection composition is retired. Save a complete Special Term revision instead.', 409, 'SPECIAL_TERMS_WHOLE_REVISION_REQUIRED');
-}
-
-async function specialTermMigrationPreview(body = {}, req = null, accessContext = null) {
-  accessContext || (await requireActiveUser(req));
-  return previewSpecialTermMigration(body.termId, { projection: body.projection || 'termsText' });
-}
-
-async function specialTermMigrationSave(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  return saveSpecialTermMigrationReview(context.client, context.profile, body);
-}
-
-async function specialTermMigrationSaveAll(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  return saveAllSpecialTermMigrationReview(context.client, context.profile, body);
-}
-
-async function specialTermMigrationActivate(body = {}, req = null, accessContext = null) {
-  accessContext || (await requireActiveUser(req));
-  throw appError('Projection-level activation is retired. Approve and activate the complete Special Term revision.', 409, 'SPECIAL_TERMS_WHOLE_REVISION_REQUIRED');
-}
-
-async function specialTermMigrationPreviewAll(body = {}, req = null, accessContext = null) {
-  accessContext || (await requireActiveUser(req));
-  return previewSpecialTermMigrationAll(body.termId);
-}
-
-async function specialTermMigrationRollback(body = {}, req = null, accessContext = null) {
-  accessContext || (await requireActiveUser(req));
-  throw appError('Projection-level rollback is retired. Roll back the complete Special Term revision.', 409, 'SPECIAL_TERMS_WHOLE_REVISION_REQUIRED');
-}
-
-async function specialTermRevisionSave(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  return saveSpecialTermRevision(context.client, context.profile, body);
-}
-
-async function specialTermRevisionCommit(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  return commitSpecialTermRevision(context.client, context.profile, body, { canApprove: await isSpecialTermClauseApprover(context) });
-}
-
-async function specialTermRevisionApprove(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  await requireSpecialTermClauseApprover(context);
-  return approveSpecialTermRevision(context.client, context.profile, body);
-}
-
-async function specialTermRevisionRollback(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  await requireSpecialTermClauseApprover(context);
-  return rollbackSpecialTermRevision(context.client, context.profile, body);
-}
-
-async function specialTermMigrationBatchList(body = {}, req = null, accessContext = null) {
-  accessContext || (await requireActiveUser(req));
-  return listSpecialTermMigrationBatches({ force: body.force === true });
-}
-
-async function specialTermApprovalQueue(body = {}, req = null, accessContext = null) {
-  accessContext || (await requireActiveUser(req));
-  return listSpecialTermApprovalQueue({ force: body.force === true, limit: body.limit });
-}
-
-async function specialTermClauseAiDraft(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  return draftSpecialTermClausesWithAi(context.client, context.profile, body);
-}
-
-async function specialTermsSave(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  await requireCapability(context.client, context.profile, 'special_terms_manage', 'Special Terms drafting permission is required.');
-  return saveSpecialTerm(context.client, context.profile, body);
-}
-
-async function specialTermsDelete(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  await requireCapability(context.client, context.profile, 'special_terms_manage', 'Special Terms management permission is required.');
-  return deleteSpecialTerm(context.client, context.profile, body, { isApprover: await isSpecialTermClauseApprover(context) });
-}
-
-async function specialTermRuleSave(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  await requireCapability(context.client, context.profile, 'special_terms_manage', 'Special Terms drafting permission is required.');
-  return saveSpecialTermRule(context.client, context.profile, body);
-}
-
-async function specialTermRuleDelete(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  await requireCapability(context.client, context.profile, 'special_terms_manage', 'Special Terms management permission is required.');
-  return deleteSpecialTermRule(context.client, context.profile, body, { isApprover: await isSpecialTermClauseApprover(context) });
-}
-
-function nativeEmailRouterDependencies(accessContext) {
-  return { client: accessContext.client, profile: accessContext.profile };
-}
-
-async function emailRouterList(body = {}, req = null, accessContext = null) {
-  return nativeEmailRouterList(req, body, nativeEmailRouterDependencies(accessContext));
-}
-async function emailRouterBackgroundSync(body = {}, req = null, accessContext = null) {
-  return nativeEmailRouterBackgroundSync(req, body, nativeEmailRouterDependencies(accessContext));
-}
-
-async function emailRouterLeave(body = {}, req = null, accessContext = null) {
-  return nativeEmailRouterLeave(req, body, nativeEmailRouterDependencies(accessContext));
-}
-async function emailRouterLeaveSave(body = {}, req = null, accessContext = null) {
-  return nativeEmailRouterLeaveSave(req, body, nativeEmailRouterDependencies(accessContext));
-}
-
-async function emailRouterDetail(body = {}, req = null, accessContext = null) {
-  return nativeEmailRouterDetail(req, body, nativeEmailRouterDependencies(accessContext));
-}
-async function emailRouterDirectory(body = {}, req = null, accessContext = null) {
-  return nativeEmailRouterDirectory(req, body, nativeEmailRouterDependencies(accessContext));
-}
-
-async function emailRouterDirectoryRefresh(body = {}, req = null, accessContext = null) {
-  return nativeEmailRouterDirectoryRefresh(req, body, nativeEmailRouterDependencies(accessContext));
-}
-async function emailRouterPresets(body = {}, req = null, accessContext = null) {
-  return nativeEmailRouterPresets(req, body, nativeEmailRouterDependencies(accessContext));
-}
-
-async function emailRouterAction(body = {}, req = null, accessContext = null) {
-  return nativeEmailRouterAction(req, body, nativeEmailRouterDependencies(accessContext));
-}
-async function emailRouterActionStatus(body = {}, req = null, accessContext = null) {
-  return nativeEmailRouterActionStatus(req, body, nativeEmailRouterDependencies(accessContext));
-}
-
-async function emailRouterUndo(body = {}, req = null, accessContext = null) {
-  return nativeEmailRouterUndo(req, body, nativeEmailRouterDependencies(accessContext));
-}
-async function emailRouterRetry(body = {}, req = null, accessContext = null) {
-  return nativeEmailRouterRetry(req, body, nativeEmailRouterDependencies(accessContext));
-}
-
-async function emailRouterFilingRetry(body = {}, req = null, accessContext = null) {
-  return nativeEmailRouterFilingRetry(req, body, nativeEmailRouterDependencies(accessContext));
-}
-async function emailRouterAttachmentUrl(body = {}, req = null, accessContext = null) {
-  return nativeEmailRouterAttachmentUrl(req, body, nativeEmailRouterDependencies(accessContext));
-}
-
-async function emailRouterAttachmentText(body = {}, req = null, accessContext = null) {
-  return nativeEmailRouterAttachmentText(req, body, nativeEmailRouterDependencies(accessContext));
-}
-
-async function emailRouterHealth(body = {}, req = null, accessContext = null) {
-  return nativeEmailRouterHealth(req, body, nativeEmailRouterDependencies(accessContext));
-}
-
-async function emailRouterAdvisor(body = {}, req = null, accessContext = null) {
-  return nativeEmailRouterAdvisor(req, body, nativeEmailRouterDependencies(accessContext));
-}
-
-async function emailRouterSettings(body = {}, req = null, accessContext = null) {
-  return nativeEmailRouterSettings(req, body, nativeEmailRouterDependencies(accessContext));
-}
-
-async function emailRouterSettingsSave(body = {}, req = null, accessContext = null) {
-  return nativeEmailRouterSettingsSave(req, body, nativeEmailRouterDependencies(accessContext));
-}
-
-async function emailRouterOutbox(body = {}, req = null, accessContext = null) {
-  return nativeEmailRouterOutbox(req, body, nativeEmailRouterDependencies(accessContext));
-}
-
-async function emailRouterDelta(body = {}, req = null, accessContext = null) {
-  return nativeEmailRouterDelta(req, body, nativeEmailRouterDependencies(accessContext));
-}
-
-async function emailRouterSubscription(body = {}, req = null, accessContext = null) {
-  return nativeEmailRouterSubscription(req, body, nativeEmailRouterDependencies(accessContext));
-}
-
-async function emailRouterMaintenanceCron(_body = {}, req = null) {
-  requireCronAuthorization(req);
-  const maintenanceStartedAt = new Date();
-  const client = createEmailRouterServiceClient();
-  const directorySync = await client.rpc('sync_emailrouter_fcos_destinations', { p_actor: null });
-  const mailbox = await currentEmailRouterMailbox(client);
-  const outbox = await processEmailRouterOutbox({ client, mailbox, limit: 25 });
-  const learning = await processEmailRouterLearningJobs({ client, mailbox, limit: 10 }).catch((error) => ({ status: 'warning', code: error.code || 'EMAIL_ROUTER_LEARNING_FAILED' }));
-  const synchronization = {};
-  for (const folder of ['inbox', 'sentitems', 'archive']) {
-    synchronization[folder] = await syncEmailRouterFolderFromStoredCursor({ client, mailbox, folder, maxPages: 10 });
-  }
-  let subscriptions = [];
-  try {
-    subscriptions = await maintainEmailRouterSubscriptions({ client, mailbox });
-    await resolveEmailRouterAlert(client, { dedupeKey: `mailbox:${mailbox.id}:subscriptions` });
-  } catch (error) {
-    await recordEmailRouterAlert(client, { mailboxId: mailbox.id, code: error.code || 'email_router_subscription_failed', severity: 'critical', dedupeKey: `mailbox:${mailbox.id}:subscriptions` });
-    throw error;
-  }
-  if (!directorySync.error && learning?.status !== 'warning') {
-    await resolveRecoveredSystemErrorHandler(client, 'emailRouterMaintenanceCron', {
-      resolvedThrough: maintenanceStartedAt,
-      seenSince: new Date(maintenanceStartedAt.getTime() - 15 * 60_000),
-    }).catch((error) => {
-      console.warn('[email-router] Recovered maintenance notification could not be resolved.', {
-        code: error?.code || 'EMAIL_ROUTER_NOTIFICATION_RECOVERY_FAILED',
-      });
-    });
-  }
-  return {
-    ok: true,
-    directory: directorySync.error ? { status: 'warning' } : { status: 'synchronized' },
-    outbox,
-    learning,
-    synchronization: Object.fromEntries(Object.entries(synchronization).map(([folder, result]) => [folder, { synced: result.synced, removed: result.removed, pages: result.pages, complete: !result.nextLink }])),
-    subscriptions: subscriptions.map((item) => ({ folder: item.folder, state: item.state, expiresAt: item.expiresAt })),
-  };
-}
-
-const xeroHandlers = createXeroHandlers({ requireActiveUser, resolveRecoveredSystemErrorHandler });
-const handlers = {
-  authContext,
-  portalApplicationsList,
-  portalApplicationLaunch,
-  portalSignOut,
-  portalEntitlementSyncCron,
-  collaborationList,
-  collaborationDetail,
-  collaborationCreate,
-  collaborationUpdate,
-  collaborationBulkUpdate,
-  collaborationFollowerToggle,
-  collaborationDependencySave,
-  collaborationDependencyRemove,
-  collaborationMilestoneSave,
-  collaborationTemplateList,
-  collaborationTemplateSave,
-  collaborationArchive,
-  collaborationCommentSave,
-  collaborationCommentDelete,
-  collaborationAttachmentPrepare,
-  collaborationAttachmentComplete,
-  collaborationAttachmentUrl,
-  collaborationAttachmentDelete,
-  collaborationNotificationsList,
-  collaborationNotificationsRead,
-  collaborationDailyCron,
-  improvementsList,
-  improvementDetail,
-  improvementCreate,
-  improvementPropose,
-  improvementDecision,
-  improvementAttachmentPrepare,
-  improvementAttachmentComplete,
-  improvementAttachmentUrl,
-  improvementAttachmentDelete,
-  workNotificationsList,
-  workNotificationsRead,
-  workNotificationsState,
-  systemErrorVerify,
-  workCommitmentsList,
-  navigationPreferencesGet,
-  navigationPreferencesSave,
-  navigationPreferencesReset,
-  workspacePreferencesGet,
-  workspacePreferencesSave,
-  emailRouterList,
-  emailRouterBackgroundSync,
-  emailRouterLeave,
-  emailRouterLeaveSave,
-  emailRouterDetail,
-  emailRouterDirectory,
-  emailRouterDirectoryRefresh,
-  emailRouterPresets,
-  emailRouterAction,
-  emailRouterActionStatus,
-  emailRouterUndo,
-  emailRouterRetry,
-  emailRouterFilingRetry,
-  emailRouterAttachmentUrl,
-  emailRouterAttachmentText,
-  emailRouterHealth,
-  emailRouterAdvisor,
-  emailRouterSettings,
-  emailRouterSettingsSave,
-  emailRouterOutbox,
-  emailRouterDelta,
-  emailRouterSubscription,
-  emailRouterMaintenanceCron, ...xeroHandlers,
-  hedgeDeskEntity,
-  hedgeMarkets,
-  marketPulseSnapshot,
-  marketIntelligenceBrief,
-  marketIntelligenceCurve,
-  marketReportCatalogue,
-  marketReportAnalysis,
-  marketIntelligenceValuation,
-  marketForwardFallbackSave,
-  marketIntelligenceAlertRulesGet,
-  marketIntelligenceAlertRulesSave,
-  marketIntelligenceCurveCutoverSave,
-  marketIntelligenceArchiveReplay,
-  marketIntradaySnapshotPreview,
-  marketIntradaySnapshotSave,
-  marketIntradayTimeline,
-  hedgeDeskParseMops,
-  hedgeDeskGenerateInvoice,
-  hedgeDeskSaveInvoicePdf,
-  hedgeDeskSendInvoiceEmail,
-  hedgeDeskSfsReport,
-  hedgeDeskSfsFile,
-  hedgeDeskSfsSend,
-  hedgeDeskSalesforcePush,
-  hedgeDeskSalesforcePreview,
-  hedgeDeskSalesforceMapping,
-  hedgeDeskAssistant,
-  hedgeDeskAssistantSettings,
-  hedgeDeskMaintenanceCron,
-  marketReportDriveSyncCron,
-  masterContractsList,
-  masterContractDetail,
-  masterContractSave,
-  masterContractDecision,
-  masterContractEvidencePrepare,
-  masterContractEvidenceComplete,
-  masterContractEvidenceUrl,
-  masterContractOptions,
-  masterContractVesselCreate,
-  masterContractPreflight,
-  masterContractBatchCreate,
-  masterContractPriceResolve,
-  masterContractPriceApply,
-  masterContractFeatureSave,
-  masterContractReconcile,
-  masterContractReconcileCron,
-  specialTermsWorkspace,
-  specialTermsSummaryList,
-  specialTermsOptions,
-  specialTermDetail,
-  specialTermClauseBank,
-  specialTermClauseSimilar,
-  specialTermClauseEditPreview,
-  specialTermClauseGlobalPublish,
-  specialTermDeletePreview,
-  specialTermMigrationInventory,
-  specialTermClauseDraftSave,
-  specialTermClauseApprove,
-  specialTermClauseRetire,
-  specialTermClauseDelete,
-  specialTermClauseDraftDiscard,
-  specialTermClauseConsolidationList,
-  specialTermClauseConsolidationStart,
-  specialTermClauseConsolidationRelink,
-  specialTermClauseConsolidationCancel,
-  specialTermClauseConsolidationComplete,
-  specialTermCompositionSave,
-  specialTermMigrationPreview,
-  specialTermMigrationPreviewAll,
-  specialTermMigrationSaveAll,
-  specialTermMigrationSave,
-  specialTermMigrationActivate,
-  specialTermMigrationRollback,
-  specialTermRevisionSave,
-  specialTermRevisionCommit,
-  specialTermRevisionApprove,
-  specialTermRevisionRollback,
-  specialTermMigrationBatchList,
-  specialTermApprovalQueue,
-  specialTermClauseAiDraft,
-  specialTermsSave,
-  specialTermsDelete,
-  specialTermRuleSave,
-  specialTermRuleDelete,
-  growthReportingLinesList,
-  growthReportingLineSave,
-  growthReportingLinesSaveBatch,
-  growthCoachingBootstrap,
-  growthPlanSave,
-  growthPlanCloseout,
-  growthGoalSave,
-  growthGoalSubmit,
-  growthGoalDecision,
-  growthGoalProgressSave,
-  growthGoalCompletion,
-  growthGoalEvidenceOptions,
-  growthGoalEvidenceSave,
-  coachingRelationshipInvite,
-  coachingRelationshipRespond,
-  coachingRelationshipEnd,
-  coachingSessionSave,
-  coachingSessionContentSave,
-  coachingSessionConfirm,
-  coachingSessionCancel,
-  coachingActionSave,
-  coachingActionPublish,
-  coachingActionProposalRespond,
-  growthAttachmentPrepare,
-  growthAttachmentComplete,
-  growthAttachmentUrl,
-  growthEmailPreferencesSave,
-  coachingCalendarResolve,
-  coachingCalendarRetry,
-  growthCoachingDailyCron,
-  salesforceSchema,
-  salesforceObjectFields,
-  dashboardFilterOptions,
-  salesforceFullSchema,
-  salesforceDashboard,
-  salesforceDashboardFiltered: salesforceDashboardFilteredCompatibility,
-  dashboardSummary,
-  dashboardStemList,
-  dashboardAnalytics,
-  dashboardAccountInsight,
-  dashboardAccountCreditDirectory,
-  dashboardAccountCreditStatement,
-  dashboardCreditForecastSettingsSave,
-  dashboardCounterpartySearch,
-  dashboardAccountExposureBatch,
-  dashboardAiSearch,
-  dashboardAiSettingsGet,
-  dashboardAiSettingsSave,
-  salesforceStemDetail: salesforceStemDetailFull,
-  salesforceStemDocuments,
-  unofficialCompensationList,
-  unofficialCompensationOptions,
-  unofficialCompensationClaimCreate,
-  unofficialCompensationClaimGroupStatus,
-  unofficialCompensationRecoveryCreate,
-  unofficialCompensationRecoveryDelete,
-  exceptionReviewWorkflowList,
-  exceptionReviewWorkflowSave,
-  salesforceDescribeChildren,
-  salesforceTopBuyers,
-  salesforceBrokerRegister: salesforceBrokerRegisterFull,
-  salesforceBuyerInvoicesDue,
-  buyerInvoiceCollectionList,
-  buyerInvoiceCollectionSave,
-  buyerInvoiceCollectionEventCreate,
-  buyerInvoicePaymentAdviceSave,
-  paymentCollectionsReconcile,
-  shipAgentChargesList,
-  shipAgentChargesDetail,
-  shipAgentChargesOptions,
-  shipAgentChargesSaveConfirm,
-  shipAgentChargesGmOverride,
-  shipAgentChargesPostInvoiceResolve,
-  shipAgentChargesSync,
-  variableChargesList,
-  variableChargesDetail,
-  variableChargesAnchorageSave, variableChargesVesselNrtSave, variableChargesLightDuesSave, variableChargesSettingsGet, variableChargesSettingsSave,
-  variableChargesOptions,
-  variableChargesSupplierVerify,
-  variableChargesBuyerConfirm,
-  variableChargesSideAssign,
-  variableChargesSideConfirm,
-  variableChargesGmOverride,
-  variableChargesPostInvoiceResolve,
-  variableChargesSync,
-  buyerInvoicePostingReminderOverrideSave,
-  paymentCollectionsReconcileCron,
-  buyerInvoiceEmailSettingsGet,
-  buyerInvoiceEmailSettingsSave,
-  buyerInvoiceReminderRulesList,
-  buyerInvoiceReminderRuleSave,
-  buyerInvoiceReminderRuleRemove,
-  buyerInvoicePaymentReminderPrepare,
-  buyerInvoicePaymentReminderSend,
-  outstandingBuyerInvoicesEmailReport,
-  outstandingBuyerInvoicesEmailCron,
-  incomingPaymentsList,
-  incomingPaymentEmailSettingsGet,
-  incomingPaymentEmailSettingsSave,
-  incomingPaymentInterestSettingsGet,
-  incomingPaymentInterestSettingsSave,
-  incomingPaymentEmailReport,
-  incomingPaymentInterestInvoiceRequest,
-  incomingPaymentSettingsGet,
-  incomingPaymentSettingsSave,
-  incomingPaymentAllocationConfirm,
-  cashflowForecast,
-  cashflowBuyerPaymentPerformance,
-  cashflowSettingsGet,
-  cashflowSettingsSave,
-  cashflowHolidayCalendar,
-  salesforceDisputeStems,
-  disputeBetaList,
-  disputeBetaSaveDraft,
-  disputeBetaSubmitApproval,
-  disputeBetaApprove,
-  disputeBetaReject,
-  disputeBetaMarkExecuted,
-  disputeBetaClose,
-  disputeWorkflowList: disputeBetaList,
-  disputeWorkflowSaveDraft: disputeBetaSaveDraft,
-  disputeWorkflowSubmitApproval: disputeBetaSubmitApproval,
-  disputeWorkflowApprove: disputeBetaApprove,
-  disputeWorkflowReject: disputeBetaReject,
-  disputeWorkflowAccountingUpdate,
-  disputeWorkflowSupplierInstructionUpdate,
-  disputeWorkflowSupplierOffsetOptions,
-  disputeWorkflowSupplierAmountAmend,
-  disputeWorkflowUploadDocument,
-  disputeWorkflowDocuments,
-  disputeWorkflowMarkExecuted: disputeBetaMarkExecuted,
-  disputeWorkflowClose: disputeBetaClose,
-  disputeWorkflowCompensationClaims,
-  disputeWorkflowCompensationClaimLink,
-  disputeWorkflowAcceptExternalClosure,
-  stemPnl: stemPnlFull,
-  frankfurterUsdCnyRate,
-  brokerCommissionSettingsGet,
-  brokerCommissionSettingsSave,
-  reportExportCreate,
-  reportExportsList,
-  reportExportRename,
-  reportExportDelete,
-  reportExportDownload,
-  buyersAdministratorList,
-  buyersAdministratorSave,
-  accountManagersList,
-  accountManagersSave,
-  accountManagersSaveNote,
-  accountManagersRetrySync,
-  accountPicDirectoryList,
-  accountPicAccountOptions,
-  accountPicTraderOptions,
-  accountPicDirectoryDetail,
-  accountPicDirectorySave,
-  accountPicDirectoryImport,
-  accountPicRowColorsSave,
-  emailSenderStatus,
-  emailSenderMailboxSave,
-  emailSenderRouteSave,
-  systemHealth,
-  adminUsersList,
-  adminAuditLogs,
-  adminUserSave,
-  adminUserDelete,
-  adminPortalAccessSave,
-  adminPortalAccessRetry,
-  adminPortalApplicationsHealth,
-  adminUserTypeSave,
-  adminUserTypeDelete,
-  adminFcosUpdatesList,
-  adminFcosUpdatesSync,
-  adminFcosUpdateItemSave,
-  adminFcosUpdateBatchSave,
-  adminFcosUpdateBatchCancel,
-  adminFcosUpdateItemSkip,
-  adminFcosUpdateItemRestore,
-  adminFcosUpdateBatchSend,
-  adminFcosUpdateDeliveryRetry,
-  universalAuditTrail,
-};
-
-const handlersWithoutAccessPolicy = Object.keys(handlers).filter((handlerName) => !handlerPolicyFor(HANDLER_POLICY_REGISTRY, handlerName));
-if (handlersWithoutAccessPolicy.length) {
-  throw new Error(`FCOS handler access policy is missing for: ${handlersWithoutAccessPolicy.join(', ')}`);
-}
-
-export default async function handler(req, res) {
-  const url = new URL(req.url, 'http://localhost');
-  const name = url.pathname.split('/').pop();
-  const requestId = requestIdFrom(req);
-  return runWithRequestTelemetry(
-    {
-      handler: name,
-      requestId,
-    },
-    async () => {
-      try {
-        const handlerPolicy = handlerPolicyFor(HANDLER_POLICY_REGISTRY, name);
-        if (handlerPolicy && typeof res?.setHeader === 'function') {
-          res.setHeader('X-FCOS-Handler-Mutation', handlerPolicy.mutation ? '1' : '0');
-          res.setHeader('X-FCOS-External-Action', handlerPolicy.externalAction ? '1' : '0');
-        }
-        if (name === 'salesforceDocumentDownload') {
-          await requireHandlerAccess(name, req);
-          return await salesforceDocumentDownload(req, res);
-        }
-        if (name === 'dashboardAccountInsightExport') {
-          const accessContext = await requireHandlerAccess(name, req);
-          const body = await readBody(req);
-          return await dashboardAccountInsightExport(body, req, res, accessContext);
-        }
-        if (name === 'specialTermsPdfExport' || name === 'specialTermsDocumentExport') {
-          const accessContext = await requireHandlerAccess(name, req);
-          const body = await readBody(req);
-          return name === 'specialTermsPdfExport'
-            ? await specialTermsPdfExport(body, req, res, accessContext)
-            : await specialTermsDocumentExport(body, req, res, accessContext);
-        }
-        const fn = handlers[name];
-        if (!fn) return sendJson(res, { error: `Unknown function: ${name}` }, 404);
-        const accessContext = await requireHandlerAccess(name, req);
-        const body = await readBody(req);
-        const contract = validateFunctionRequest(name, body);
-        if (!contract.ok) {
-          throw appError(`Invalid ${name} request: ${contract.issues.join('; ')}.`, 400, 'FUNCTION_CONTRACT_INVALID', {
-            contractVersion: FUNCTION_CONTRACT_VERSION,
-          });
-        }
-        const data = await fn(body, req, accessContext);
-        return sendJson(res, data);
-      } catch (error) {
-        const status = error.status || error.statusCode || 500;
-        recordRequestFailure(error, status);
-        if (shouldNotifySystemError(status)) {
-          try {
-            await reportSystemError(safeSupabaseAdminClient(), {
-              handler: name,
-              error,
-              status,
-              requestId,
-            });
-          } catch (notificationError) {
-            console.error('[system-error-notification] recording failed', {
-              handler: name,
-              message: notificationError.message,
-            });
-          }
-        }
-        return sendJson(res, publicApiErrorPayload(error, status, requestId), status);
-      } finally {
-        logRequestTelemetry(res.statusCode || 500);
-      }
-    },
-  );
-}
+     ×myÚÚ$z{-®éÜj×ßNÂˆÛÛœÝ˜Y\’[™›ÈH˜Y\žTÝ[VÜÝ[K’YHßNÂˆÛÛœÝØ[Ý[]Y[[Ý[HØ[Ý[]YžTÝ[VÜÝ[K’YHˆÈØ[Ý[]YžTÝ[VÜÝ[K’YHˆ[˜ÛÛZ[™Ô^[Y[[X™\ŠÝ[K•Ý[Ò[›ÚXÙWÐ[[Ý[×ØÊNÂˆ™]\›ˆÂˆYˆÝ[K’YˆÝ[RYˆÝ[K’YˆÝ[S˜[YNˆ›Ü›X]Ý[S˜[YJÝ[JKˆÙ^TÝ[NˆÝ[K’Ù^TÝ[W×ØÈ[ˆ^Y\“˜[YNˆ[˜ÛÛZ[™Ô^[Y[^Y\“˜[YJÝ[JKˆ^Y\‘Ü›Ý\˜[YNˆXØÛÝ[‘Ü›Ý\Ó˜[YW×ØÈXØÛÝ[”\™[Ë“˜[YH[˜ÛÛZ[™Ô^[Y[^Y\“˜[YJÝ[JKˆ^Y\•˜Y\Žˆ
+˜Y\’[™›Ë˜^Y\Ë›[™ÝÈ˜Y\’[™›Ë˜^Y\ˆˆ˜Y\’[™›Ë˜[×JKš›Ú[Š	Ë	ÊH[ˆ^[Y[\›\ÎˆÝ[K”^[Y[Õ\›W×ØÈ[ˆØ[Ý[]Y[[Ý[ˆ™XÙZ]˜X›P˜[[˜ÙNˆ[˜ÛÛZ[™Ô^[Y[[X™\ŠÝ[K”™XÙZ]˜X›WÐ˜[[˜ÙW×ØÊKˆÝ\œ™[˜ÞNˆÝ[KÝ\œ™[˜ÞR\ÛÐÛÙH[ˆ[]™\žQ]NˆÝ[K‘[]™\žWÑ]W×ØÈ[ˆNÂˆJNÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ[˜ÛÛZ[™Ô^[Y[Ó\ÝÛ˜\ÚÝ
+›ÙK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÙ][™ÜÈH›ÙK—ÜÙ][™ÜÓÝ™\œšYH
+]ØZ]ØY[˜ÛÛZ[™Ô^[Y[Ù][™ÜÊ
+JNÂˆÛÛœÝÙ^HH]SÛ›J™]È]J
+JNÂˆÛÛœÝ]Qœ›ÛHH]SÛ›J›ÙK™]Qœ›ÛH›ÙK™]WÙœ›ÛHÙ^JNÂˆÛÛœÝ]UÈH]SÛ›J›ÙK™]UÈ›ÙK™]WÝÈÙ^JNÂˆÛÛœÝ[Z]HX]›X^
+LX]›Z[Š[X™\Š›ÙK›[Z]
+HLL
+JNÂ‚ˆÛÛœÝ^[Y[\ØÜšX™HH]ØZ]Ø[\Ù›Ü˜ÙSØš™XÝšY[ÊÂˆØš™XÝ˜[YNˆ	Ô^[Y[×ØÉËˆJK˜Ø]Ú
+
+
+HOˆ
+ÈšY[Îˆ×HJJNÂˆÛÛœÝ^[Y[šY[ÈH^[Y[\ØÜšX™K™šY[È×NÂˆÛÛœÝ^[Y[šY[˜[Y\ÈH™]ÈÙ]
+^[Y[šY[Ë›X\
+
+šY[
+HOˆšY[›˜[YJJNÂˆÛÛœÝ^[Y[šY[žS˜[YHHØš™XÝ™œ›ÛQ[šY\Ê^[Y[šY[Ë›X\
+
+šY[
+HOˆÙšY[›˜[YKšY[JJNÂˆYˆ
+\^[Y[šY[˜[Y\ËœÚ^™JBˆ™]\›ˆÂˆ›ÝÜÎˆ×Kˆ]˜Z[X›P˜[[˜Ù\Îˆ×KˆÝ[[X\žNˆßKˆÙ][™ÜËˆØÚ[XUØ\›š[™ÜÎˆÉÔ^[Y[×ØÈ\È›Ý]Y\žXX›K‰×KˆNÂ‚ˆÛÛœÝ]QšY[Hš\œÝ]˜Z[X›QšY[
+^[Y[šY[˜[Y\ËÉÑ]W×ØÉË	Ô^[Y[Ñ]W×ØÉË	Ô™XÙZ]™YÑ]W×ØÉË	ÔZYÑ]W×ØÉË	ÐÜ™X]Y]I×JNÂˆÛÛœÝ[[Ý[šY[Hš\œÝ]˜Z[X›QšY[
+^[Y[šY[˜[Y\ËÉÐ[[Ý[×ØÉË	Ô^[Y[Ð[[Ý[×ØÉË	ÔZYÐ[[Ý[×ØÉË	Ô™XÙZ]™YÐ[[Ý[×ØÉË	ÕÝ[Ð[[Ý[×ØÉË	Ð[[Ý[ÔZY×ØÉË	Ô^[Y[Õ˜[YW×ØÉË	ÐXÝX[Ð[[Ý[×ØÉ×JNÂˆÛÛœÝ™Y™\™[˜ÙQšY[ÈH[˜ÛÛZ[™Ô^[Y[™Y™\™[˜ÙQšY[Ê^[Y[šY[ÊNÂˆÛÛœÝÝ]\ÑšY[ÈHÙ[XÝYšY[Ê^[Y[šY[˜[Y\ËÉÔÝ]\××ØÉË	Ô^[Y[ÔÝ]\××ØÉ×JNÂˆÛÛœÝ\QšY[ÈHÙ[XÝYšY[Ê^[Y[šY[˜[Y\ËÉÕ\W×ØÉË	Ô^[Y[Õ\W×ØÉ×JNÂˆÛÛœÝÝ\Y\’[›ÚXÙSÛÚÝ\šY[ÈH[˜ÛÛZ[™Ô^[Y[Ý\Y\’[›ÚXÙQšY[Ê^[Y[šY[ÊNÂˆÛÛœÝ\™XÝ[Û‘šY[ÈH[˜ÛÛZ[™Ô^[Y[\™XÝ[Û‘šY[Ê^[Y[šY[ÊNÂˆÛÛœÝ^[Y[Ù[XÝšY[ÈHÉÒY	Ë‹‹œÙ[XÝYšY[Ê^[Y[šY[˜[Y\ËÉÓ˜[YIË	Ô™XÛÜ™\RY	Ë	ÐÜ™X]Y]IË	Ó\Ý[ÙYšYY]IË	ÔÕSW×ØÉË	ÐÝ\œ™[˜ÞR\ÛÐÛÙIË	ÐÝ\œ™[˜ÞW×ØÉ×JK^[Y[šY[˜[Y\Ëš\Ê	Ô™XÛÜ™\RY	ÊHÈ	Ô™XÛÜ™\K“˜[YIÈˆ[^[Y[šY[˜[Y\Ëš\Ê	Ô™XÛÜ™\RY	ÊHÈ	Ô™XÛÜ™\K‘]™[Ü\“˜[YIÈˆ[‹‹œÝ\Y\’[›ÚXÙSÛÚÝ\šY[Ë]QšY[[[Ý[šY[‹‹œ™Y™\™[˜ÙQšY[Ë‹‹œÝ]\ÑšY[Ë‹‹\QšY[Ë‹‹™\™XÝ[Û‘šY[×K™š[\Š›ÛÛX[ŠNÂ‚ˆÛÛœÝš[\‘]QšY[H^[Y[šY[˜[Y\Ëš\Ê	ÐÜ™X]Y]IÊHÈ	ÐÜ™X]Y]IÈˆ]QšY[ÂˆÛÛœÝš[\‘]U\HH^[Y[šY[žS˜[YVÙš[\‘]QšY[OË\H[ÂˆÛÛœÝš[\‘]U˜[YHH
+\ÛÑ]K[™Ù‘^HH˜[ÙJHOˆ
+š[\‘]QšY[OOH	ÐÜ™X]Y]IÈÈÛÜ[Û™ÒÛÛ™Ñ]U[YU˜[YJ\ÛÑ]K[™Ù‘^JHˆÛÜ[]U˜[YJš[\‘]QšY[š[\‘]U\K\ÛÑ]K[™Ù‘^JJNÂˆÛÛœÝÚ\™T\ÈH×NÂˆYˆ
+š[\‘]QšY[	‰ˆ]Qœ›ÛJHÚ\™T\Ëœ\Ú
+	Ùš[\‘]QšY[HH	Ùš[\‘]U˜[YJ]Qœ›ÛK˜[ÙJ_X
+NÂˆYˆ
+š[\‘]QšY[	‰ˆ]UÊHÚ\™T\Ëœ\Ú
+	Ùš[\‘]QšY[HH	Ùš[\‘]U˜[YJ]UËYJ_X
+NÂˆÛÛœÝÜ™\žHHš[\‘]QšY[È	Ùš[\‘]QšY[HTÐÈ•SÈTÕ	Ùš[\‘]QšY[OOH	ÐÜ™X]Y]IÈÈ	ËÜ™X]Y]HTÐÉÈˆ	ÉßXˆ	ÐÜ™X]Y]HTÐÉÎÂˆÛÛœÝ^[Y[ÈH]ØZ]]Y\žT›ÝÜÊˆˆÑSPÕ	ÖË‹‹›™]ÈÙ]
+^[Y[Ù[XÝšY[ÊWKš›Ú[Š	Ë	Ê_Bˆ”“ÓH^[Y[×ØÂˆ	ÝÚ\™T\Ë›[™ÝÈÒT‘H	ÝÚ\™T\Ëš›Ú[Š	ÈS‘	Ê_Xˆ	ÉßBˆÔ‘Tˆ–H	ÛÜ™\ž_BˆSRU	Û[Z]BˆˆÈ[Z]ÛÙ˜Z[ˆYHKˆ
+NÂ‚ˆÛÛœÝ[YÚX›T^[Y[ÈH^[Y[Ë™š[\Š
+^[Y[
+HOˆZ[˜ÛÛZ[™Ô^[Y[\Ô™XÙZ]˜X›T™[Z][˜ÙJ^[Y[Ë‹‹œ™Y™\™[˜ÙQšY[Ë‹‹™\™XÝ[Û‘šY[Ë‹‹\QšY[Ë‹‹œÝ]\ÑšY[×JJNÂˆÛÛœÝ\™XÝÝ[RYÈH[YÚX›T^[Y[Ë›X\
+
+^[Y[
+HOˆ^[Y[”ÕSW×ØÊK™š[\Š›ÛÛX[ŠNÂˆÛÛœÝÝ\Y\’[›ÚXÙRYÈH[YÚX›T^[Y[Ë›X\
+
+^[Y[
+HOˆ[˜ÛÛZ[™Ô^[Y[Ý\Y\’[›ÚXÙRY
+^[Y[Ý\Y\’[›ÚXÙSÛÚÝ\šY[ÊJK™š[\Š›ÛÛX[ŠNÂˆÛÛœÝÝ\Y\’[›ÚXÙQ\ØÜšX™HHÝ\Y\’[›ÚXÙRYË›[™ÝÈ]ØZ]Ø[\Ù›Ü˜ÙSØš™XÝšY[ÊÈØš™XÝ˜[YNˆ	ÔÝ\Y\—Ò[›ÚXÙW×ØÉÈJK˜Ø]Ú
+
+
+HOˆ
+ÈšY[Îˆ×HJJHˆÈšY[Îˆ×HNÂˆÛÛœÝÝ\Y\’[›ÚXÙQšY[ÈHÝ\Y\’[›ÚXÙQ\ØÜšX™K™šY[È×NÂˆÛÛœÝÝ\Y\’[›ÚXÙQšY[˜[Y\ÈH™]ÈÙ]
+Ý\Y\’[›ÚXÙQšY[Ë›X\
+
+šY[
+HOˆšY[›˜[YJJNÂˆÛÛœÝÝ\Y\’[›ÚXÙQšY[žS˜[YHHØš™XÝ™œ›ÛQ[šY\ÊÝ\Y\’[›ÚXÙQšY[Ë›X\
+
+šY[
+HOˆÙšY[›˜[YKšY[JJNÂˆÛÛœÝÝ\Y\’[›ÚXÙT^XX›QšY[Hš\œÝ]˜Z[X›QšY[
+Ý\Y\’[›ÚXÙQšY[˜[Y\ËÉÔ^XX›WÐ˜[[˜ÙW×ØÉË	Ð˜[[˜ÙW×ØÉË	ÐXÝX[Ð˜[[˜ÙW×ØÉË	ÓÝ]Ý[™[™×Ð˜[[˜ÙW×ØÉ×JNÂˆÛÛœÝÝ\Y\’[›ÚXÙP[[Ý[šY[Hš\œÝ]˜Z[X›QšY[
+Ý\Y\’[›ÚXÙQšY[˜[Y\ËÉÒ[›ÚXÙWÐ[[Ý[×ØÉË	ÐØ[Ý[]YÐ[[Ý[×ØÉË	Ð[[Ý[×ØÉË	ÕÝ[Ð[[Ý[×ØÉ×JNÂˆÛÛœÝÝ\Y\’[›ÚXÙTÝ\Y\‘šY[ÈHÙ[XÝYšY[ÊÝ\Y\’[›ÚXÙQšY[˜[Y\ËÉÔÝ\Y\—×ØÉË	Ñ^XÝYÔÝ\Y\—×ØÉË	ÔÝXœÝ]]WÔÝ\Y\—×ØÉ×JNÂˆÛÛœÝÝ\Y\’[›ÚXÙTÝ\Y\”™[][ÛœÚ\ÈHÝ\Y\’[›ÚXÙTÝ\Y\‘šY[Ë›X\
+
+šY[
+HOˆÝ\Y\’[›ÚXÙQšY[žS˜[YVÙšY[OËœ™[][ÛœÚ\˜[YJK™š[\Š›ÛÛX[ŠNÂˆÛÛœÝÝ\Y\’[›ÚXÙSX\HßNÂˆYˆ
+Ý\Y\’[›ÚXÙRYË›[™Ý	‰ˆÝ\Y\’[›ÚXÙQšY[˜[Y\ËœÚ^™JHÂˆÛÛœÝÝ\Y\’[›ÚXÙTÙ[XÝšY[ÈHÉÒY	Ë	Ó˜[YIË‹‹œÙ[XÝYšY[ÊÝ\Y\’[›ÚXÙQšY[˜[Y\ËÉÔÕSW×ØÉË	ÔÝ\Y\—Ó˜[YW×ØÉ×JKÝ\Y\’[›ÚXÙP[[Ý[šY[Ý\Y\’[›ÚXÙT^XX›QšY[‹‹œÝ\Y\’[›ÚXÙTÝ\Y\‘šY[Ë‹‹œÝ\Y\’[›ÚXÙTÝ\Y\”™[][ÛœÚ\Ë›X\
+
+™[][ÛœÚ\
+HOˆ	Ü™[][ÛœÚ\K“˜[YX
+WK™š[\Š›ÛÛX[ŠNÂˆÛÛœÝ[›ÚXÙPÚ[šÜÈH]ØZ]ÛÛ\ÜÚ]T]Y\žT›ÝÜÊˆÚ[šÒYÊË‹‹›™]ÈÙ]
+Ý\Y\’[›ÚXÙRYÊWJK›X\
+
+Ú[šÊHOˆÂˆÛÛœÝ[“\ÝHÚ[šË›X\
+
+Y
+HOˆ	ÉÙ\ØØ\TÛÜ[
+Y
+_IØ
+Kš›Ú[Š	Ë	ÊNÂˆ™]\›ˆÂˆÛÜ[ˆˆÑSPÕ	ÖË‹‹›™]ÈÙ]
+Ý\Y\’[›ÚXÙTÙ[XÝšY[ÊWKš›Ú[Š	Ë	Ê_Bˆ”“ÓHÝ\Y\—Ò[›ÚXÙW×ØÂˆÒT‘HYSˆ
+	Ú[“\ÝJBˆSRULˆˆ[Z]ˆLˆÛÙ˜Z[ˆYKˆNÂˆJKˆ
+NÂˆ›Üˆ
+ÛÛœÝ[›ÚXÙHÙˆ[›ÚXÙPÚ[šÜË™›]
+
+JHÝ\Y\’[›ÚXÙSX\Ú[›ÚXÙK’YHH[›ÚXÙNÂˆB‚ˆÛÛœÝÝ[RYÈHÂˆ‹‹›™]ÈÙ]
+Âˆ‹‹™\™XÝÝ[RYËˆ‹‹“Øš™XÝ˜[Y\ÊÝ\Y\’[›ÚXÙSX\
+Bˆ›X\
+
+[›ÚXÙJHOˆ[›ÚXÙK”ÕSW×ØÊBˆ™š[\Š›ÛÛX[ŠKˆJKˆNÂˆÛÛœÝÝ[Q\ØÜšX™HHÝ[RYË›[™ÝˆÈ]ØZ]Ø[\Ù›Ü˜ÙSØš™XÝšY[ÊÈØš™XÝ˜[YNˆ	ÜÝ[W×ØÉÈJK˜Ø]Ú
+
+
+HOˆ
+ÂˆšY[Îˆ×KˆJJBˆˆÈšY[Îˆ×HNÂˆÛÛœÝÝ[QšY[ÈHÝ[Q\ØÜšX™K™šY[È×NÂˆÛÛœÝÝ[QšY[˜[Y\ÈH™]ÈÙ]
+Ý[QšY[Ë›X\
+
+šY[
+HOˆšY[›˜[YJJNÂˆÛÛœÝXØÛÝ[\ØÜšX™HHÝ[QšY[˜[Y\Ëš\Ê	ÐXØÛÝ[×ØÉÊBˆÈ]ØZ]Ø[\Ù›Ü˜ÙSØš™XÝšY[ÊÈØš™XÝ˜[YNˆ	ÐXØÛÝ[	ÈJK˜Ø]Ú
+
+
+HOˆ
+ÂˆšY[Îˆ×KˆJJBˆˆÈšY[Îˆ×HNÂˆÛÛœÝXØÛÝ[šY[˜[Y\ÈH™]ÈÙ]
+
+XØÛÝ[\ØÜšX™K™šY[È×JK›X\
+
+šY[
+HOˆšY[›˜[YJJNÂˆÛÛœÝ[\›Ù™šXÙPÛÛ™][ÛˆH]ØZ][\›Ù™šXÙTÝ[PXØÙ\ÜÐÛÛ™][ÛŠXØÙ\ÜÐÛÛ^Ý[QšY[˜[Y\ËXØÛÝ[šY[˜[Y\ÊNÂˆÛÛœÝÝ[TÙ[XÝšY[ÈHÉÒY	Ë	Ó˜[YIË‹‹œÙ[XÝYšY[ÊÝ[QšY[˜[Y\ËÉÒÙ^TÝ[W×ØÉË	Ð^Y\—Ó˜[YW×ØÉË	Ð^Y\—×ØÉË	ÐXØÛÝ[×ØÉË	ÕÝ[Ò[›ÚXÙWÐ[[Ý[×ØÉË	ÕÝ[Ò[›ÚXÙYÐ[[Ý[Ñœ›ÛWÔÝ\Y\œ××ØÉË	Ô™XÙZ]˜X›WÐ˜[[˜ÙW×ØÉË	Ô^XX›WÐ˜[[˜ÙW×ØÉË	ÕÝ[ÐÛÜÝ××ØÉË	ÕÝ[ÐÛÜÝ×ØÉË	ÕÝ[ÐÛÜÝÐ[[Ý[×ØÉË	Ô^[Y[Ñ]W×ØÉË	Ô^[Y[Õ\›W×ØÉË	Ò[›ÚXÙWÑYWÑ]W×ØÉË	Ð^Y\—Ô^WÕ\›WÑ]W×ØÉË	ÑYWÑ]W×ØÉË	Ñ[]™\žWÑ]W×ØÉË	Ñ[]™\žWÑ]WÓÜ—Ñ^XÝY×ØÉË	Ñ^XÝYÑ[]™\žWÑ]W×ØÉË	ÐÝ\œ™[˜ÞR\ÛÐÛÙI×JWNÂˆYˆ
+Ý[QšY[˜[Y\Ëš\Ê	Õ™\ÜÙ[×ØÉÊJHÝ[TÙ[XÝšY[Ëœ\Ú
+	Õ™\ÜÙ[×Ü‹“˜[YIÊNÂˆYˆ
+Ý[QšY[˜[Y\Ëš\Ê	ÔÜ×ØÉÊJHÝ[TÙ[XÝšY[Ëœ\Ú
+	ÔÜ×Ü‹“˜[YIÊNÂˆYˆ
+Ý[QšY[˜[Y\Ëš\Ê	ÐXØÛÝ[×ØÉÊJHÂˆÝ[TÙ[XÝšY[Ëœ\Ú
+	ÐXØÛÝ[×Ü‹“˜[YIÊNÂˆYˆ
+XØÛÝ[šY[˜[Y\Ëš\Ê	ÑÜ›Ý\Ó˜[YW×ØÉÊJHÝ[TÙ[XÝšY[Ëœ\Ú
+	ÐXØÛÝ[×Ü‹‘Ü›Ý\Ó˜[YW×ØÉÊNÂˆYˆ
+XØÛÝ[šY[˜[Y\Ëš\Ê	Ô\™[Y	ÊJHÝ[TÙ[XÝšY[Ëœ\Ú
+	ÐXØÛÝ[×Ü‹”\™[“˜[YIÊNÂˆBˆÛÛœÝÝ[SX\HßNÂˆYˆ
+Ý[RYË›[™Ý	‰ˆÝ[QšY[˜[Y\ËœÚ^™JHÂˆÛÛœÝÝ[PÚ[šÜÈH]ØZ]ÛÛ\ÜÚ]T]Y\žT›ÝÜÊˆÚ[šÒYÊÝ[RYÊK›X\
+
+Ú[šÊHOˆÂˆÛÛœÝ[“\ÝHÚ[šË›X\
+
+Y
+HOˆ	ÉÙ\ØØ\TÛÜ[
+Y
+_IØ
+Kš›Ú[Š	Ë	ÊNÂˆÛÛœÝÝ[UÚ\™HHÛÛXš[™UÚ\™PÛÛ™][ÛœÊØYSˆ
+	Ú[“\ÝJX[\›Ù™šXÙPÛÛ™][Û—JNÂˆ™]\›ˆÂˆÛÜ[ˆˆÑSPÕ	ÖË‹‹›™]ÈÙ]
+Ý[TÙ[XÝšY[ÊWKš›Ú[Š	Ë	Ê_Bˆ”“ÓHÝ[W×ØÂˆÒT‘H	ÜÝ[UÚ\™_BˆSRULˆˆ[Z]ˆLˆÛÙ˜Z[ˆYKˆNÂˆJKˆ
+NÂˆ›Üˆ
+ÛÛœÝÝ[HÙˆÝ[PÚ[šÜË™›]
+
+JHÝ[SX\ÜÝ[K’YHHÝ[NÂˆBˆ]œ›ÚÙ\ÛÛ[Z\ÜÚ[Û‘Ü›Ý\ÐžTÝ[HHßNÂˆ][™R][\ÐžTÝ[HHßNÂˆ]^˜PÛÜÝÐžTÝ[HHßNÂˆYˆ
+Ý[RYË›[™Ý
+HÂˆÛÛœÝÛ[™R][PÚ[šÜË^Y\œ›ÚÙ\Ú[šÜË^˜PÛÜÝÚ[šÜ×HH]ØZ]›ÛZ\ÙK˜[
+ÂˆÛÛ\ÜÚ]T]Y\žT›ÝÜÊˆÚ[šÒYÊÝ[RYÊK›X\
+
+Ú[šÊHOˆÂˆÛÛœÝ[“\ÝHÚ[šË›X\
+
+Y
+HOˆ	ÉÙ\ØØ\TÛÜ[
+Y
+_IØ
+Kš›Ú[Š	Ë	ÊNÂˆ™]\›ˆÂˆÛÜ[ˆˆÑSPÕYÕSW×ØËØ[˜Ù[Y×ØË]X[]W×ØË]X[]WÑ[]™\™YÔ\—Ð‘—×ØËˆ]X[]WÓX^×ØË]X[]WÚ[—ÓU×ØË\×Ô]X[]WÔ˜[™ÙW×ØËˆÛÜÝÔ\—Õ[š]×ØË[š]Ð^WÐ]×ØË[š]ÐÛÜÝ×ØËÝ[ÐÛÜÝ×ØËˆÝ\Y\—Ðœ›ÚÙ\—×ØËÝ\Y\œ×Ðœ›ÚÙ\œ×ÐÛÛ[Z\ÜÚ[Û—Ô\—Õ[š]×ØËˆ^Y\œ×Ðœ›ÚÙ\—×ØË^Y\—Ðœ›ÚÙ\—×ØË^Y\œ×Ðœ›ÚÙ\œ×ÐÛÛ[Z\ÜÚ[Û—Ô\—Õ[š]×ØËˆ^Y\œ×Ðœ›ÚÙ\œ×ÐÛÛ[Z\ÜÚ[Û—Ó[\Ý[W×ØËÛÛ[Z\ÜÚ[Û—ÐÛÜÝ×ØËÝ\Y\—Ò[›ÚXÙW×ØËˆÙ™™\—Ó[™WÒ][W×Ü‹”Ý\Y\—Õ[š]ÔšXÙW×ØÂˆ”“ÓHÕSWÓ[™WÒ][W×ØÂˆÒT‘HÕSW×ØÈSˆ
+	Ú[“\ÝJBˆSRULˆˆ[Z]ˆLˆÛÙ˜Z[ˆYKˆNÂˆJKˆ
+KˆÛÛ\ÜÚ]T]Y\žT›ÝÜÊˆÚ[šÒYÊÝ[RYÊK›X\
+
+Ú[šÊHOˆÂˆÛÛœÝ[“\ÝHÚ[šË›X\
+
+Y
+HOˆ	ÉÙ\ØØ\TÛÜ[
+Y
+_IØ
+Kš›Ú[Š	Ë	ÊNÂˆ™]\›ˆÂˆÛÜ[ˆˆÑSPÕYÕSW×ØË^Y\—Ðœ›ÚÙ\—×ØÂˆ”“ÓHÕSWÐ^Y\—Ðœ›ÚÙ\—×ØÂˆÒT‘HÕSW×ØÈSˆ
+	Ú[“\ÝJBˆSRULˆˆ[Z]ˆLˆÛÙ˜Z[ˆYKˆNÂˆJKˆ
+KˆÛÛ\ÜÚ]T]Y\žT›ÝÜÊˆÚ[šÒYÊÝ[RYÊK›X\
+
+Ú[šÊHOˆÂˆÛÛœÝ[“\ÝHÚ[šË›X\
+
+Y
+HOˆ	ÉÙ\ØØ\TÛÜ[
+Y
+_IØ
+Kš›Ú[Š	Ë	ÊNÂˆ™]\›ˆÂˆÛÜ[ˆˆÑSPÕYÕSW×ØËØ[˜Ù[Y×ØË]X[]W×ØË]X[]WÑ[]™\™YÔ\—Ð‘—×ØËˆ]X[]WÚ[—ÓU×ØË]X[]WÔ˜[™ÙWÓX^×ØË\×Ô]X[]WÔ˜[™ÙW×ØËˆ[š]ÐÛÜÝ×ØË[™WÕÝ[Ð^W×ØËÝ\Y\—Ò[›ÚXÙW×ØÂˆ”“ÓHÕSWÑ^˜WÐÛÜÝ×ØÂˆÒT‘HÕSW×ØÈSˆ
+	Ú[“\ÝJBˆSRULˆˆ[Z]ˆLˆÛÙ˜Z[ˆYKˆNÂˆJKˆ
+KˆJNÂˆÛÛœÝœ›ÚÙ\“[™R][\ÈH[™R][PÚ[šÜË™›]
+
+NÂˆÛÛœÝœ›ÚÙ\”›ÝÜÈH^Y\œ›ÚÙ\Ú[šÜË™›]
+
+NÂˆÛÛœÝ^˜PÛÜÝ›ÝÜÈH^˜PÛÜÝÚ[šÜË™›]
+
+NÂˆ[™R][\ÐžTÝ[HHœ›ÚÙ\“[™R][\Ëœ™YXÙJ
+XØË][JHOˆÂˆYˆ
+Z][K”ÕSW×ØÊH™]\›ˆXØÎÂˆYˆ
+XXØÖÚ][K”ÕSW×Ø×JHXØÖÚ][K”ÕSW×Ø×HH×NÂˆXØÖÚ][K”ÕSW×Ø×Kœ\Ú
+][JNÂˆ™]\›ˆXØÎÂˆKßJNÂˆ^˜PÛÜÝÐžTÝ[HH^˜PÛÜÝ›ÝÜËœ™YXÙJ
+XØË][JHOˆÂˆYˆ
+Z][K”ÕSW×ØÊH™]\›ˆXØÎÂˆYˆ
+XXØÖÚ][K”ÕSW×Ø×JHXØÖÚ][K”ÕSW×Ø×HH×NÂˆXØÖÚ][K”ÕSW×Ø×Kœ\Ú
+][JNÂˆ™]\›ˆXØÎÂˆKßJNÂˆÛÛœÝœ›ÚÙ\XØÛÝ[YÈHË‹‹›™]ÈÙ]
+Ë‹‹˜œ›ÚÙ\“[™R][\Ë›X\
+
+][JHOˆ][K”Ý\Y\—Ðœ›ÚÙ\—×ØÊK™š[\Š›ÛÛX[ŠK‹‹˜œ›ÚÙ\“[™R][\Ë›X\
+
+][JHOˆ][K^Y\œ×Ðœ›ÚÙ\—×ØÈ][K^Y\—Ðœ›ÚÙ\—×ØÊK™š[\Š›ÛÛX[ŠK‹‹˜œ›ÚÙ\”›ÝÜË›X\
+
+][JHOˆ][K^Y\—Ðœ›ÚÙ\—×ØÊK™š[\Š›ÛÛX[ŠWJWNÂˆÛÛœÝXØÛÝ[X\H]ØZ]˜[Y\ÐžRYÊ	ÐXØÛÝ[	Ëœ›ÚÙ\XØÛÝ[YÊNÂˆ›Üˆ
+ÛÛœÝÚY˜[YWHÙˆØš™XÝ™[šY\ÊXØÛÝ[X\
+JHXØÛÝ[X\ÔÝš[™ÊY
+KœÛXÙJMJWHH˜[YNÂˆœ›ÚÙ\ÛÛ[Z\ÜÚ[Û‘Ü›Ý\ÐžTÝ[HHZ[œ›ÚÙ\ÛÛ[Z\ÜÚ[Û‘Ü›Ý\ÊÂˆÝ[SX\ˆ[™R][\Îˆœ›ÚÙ\“[™R][\Ëˆ^Y\œ›ÚÙ\œÎˆœ›ÚÙ\”›ÝÜËˆXØÛÝ[X\ˆJNÂˆB‚ˆÛÛœÝ]˜Z[X›TÝ[RÙ^\ÈH™]ÈÙ]
+
+NÂˆÛÛœÝ]˜Z[X›P˜[[˜Ù\ÐžQÜ›Ý\HßNÂˆÛÛœÝ[›ÝÜÈH[YÚX›T^[Y[Âˆ›X\
+
+^[Y[
+HOˆÂˆÛÛœÝÝ\Y\’[›ÚXÙRYH[˜ÛÛZ[™Ô^[Y[Ý\Y\’[›ÚXÙRY
+^[Y[Ý\Y\’[›ÚXÙSÛÚÝ\šY[ÊNÂˆÛÛœÝÝ\Y\’[›ÚXÙHHÝ\Y\’[›ÚXÙRYÈÝ\Y\’[›ÚXÙSX\ÜÝ\Y\’[›ÚXÙRYH[ˆ[ÂˆÛÛœÝÝ[RYH^[Y[”ÕSW×ØÈÝ\Y\’[›ÚXÙOË”ÕSW×ØÈ[ÂˆÛÛœÝÝ[HHÝ[RYÈÝ[SX\ÜÝ[RYH[ˆ[ÂˆYˆ
+Ý[RY	‰ˆ\Ý[JH™]\›ˆ[ÂˆÛÛœÝ[[Ý[H[[Ý[šY[È[˜ÛÛZ[™Ô^[Y[[X™\Š^[Y[Ø[[Ý[šY[JHˆ[ÂˆÛÛœÝœ›ÚÙ\ÛÛ[Z\ÜÚ[Û“X]ÚHÝ[OË’YÈš[™œ›ÚÙ\ÛÛ[Z\ÜÚ[Û”^[Y[X]Ú
+^[Y[[[Ý[œ›ÚÙ\ÛÛ[Z\ÜÚ[Û‘Ü›Ý\ÐžTÝ[VÜÝ[K’YH×KË‹‹œ™Y™\™[˜ÙQšY[Ë‹‹™\™XÝ[Û‘šY[Ë‹‹\QšY[Ë‹‹œÝ]\ÑšY[×JHˆ[ÂˆÛÛœÝ˜[šÐÚ\™ÙHH[˜ÛÛZ[™Ô^[Y[ÛÚÜÐ˜[šÐÚ\™ÙJ^[Y[Âˆ™Y™\™[˜ÙQšY[Ëˆ\™XÝ[Û‘šY[Ëˆ\QšY[ËˆÝ]\ÑšY[ËˆJNÂˆÛÛœÝ^XX›PØ[Ý[][ÛˆHÝ[OË’YˆÈ[˜ÛÛZ[™Ô^[Y[ÛÚÜÔÝ[T^XX›PØ[Ý[][ÛŠ^[Y[Âˆ[[Ý[ˆ^XX›P[[Ý[ÎˆÝ[T^XX›P[[Ý[Ø[™Y]\ÊÂˆÝ[Kˆ[™R][\Îˆ[™R][\ÐžTÝ[VÜÝ[K’YH×Kˆ^˜PÛÜÝÎˆ^˜PÛÜÝÐžTÝ[VÜÝ[K’YH×KˆJKˆ™Y™\™[˜ÙQšY[Ëˆ\™XÝ[Û‘šY[Ëˆ\QšY[ËˆÝ]\ÑšY[Ëˆ[ÝÐ›[šÔÚYÛ˜[ˆ\Ý[K‘[]™\žWÑ]W×ØËˆJBˆˆ˜[ÙNÂˆÛÛœÝ\HHœ›ÚÙ\ÛÛ[Z\ÜÚ[Û“X]ÚˆÈ	Ðœ›ÚÙ\ˆÛÛ[Z\ÜÚ[Û‰Âˆˆ˜[šÐÚ\™ÙBˆÈ	Ð˜[šÈÚ\™ÙIÂˆˆ^XX›PØ[Ý[][Û‚ˆÈ	ÔÝ\Y\ˆ^[Y[	Âˆˆ[˜ÛÛZ[™Ô^[Y[\Qœ›ÛPÛÛ^
+^[Y[Âˆ[[Ý[ˆÝ[KˆÝ\Y\’[›ÚXÙKˆÝ\Y\’[›ÚXÙQšY[ÎˆÝ\Y\’[›ÚXÙSÛÚÝ\šY[Ëˆ\™XÝ[Û‘šY[Ëˆ\QšY[ËˆÝ]\ÑšY[ËˆJNÂˆ][˜ÛÛZ[™Ð[[Ý[H[[Ý[ÂˆYˆ
+\KœÝ\ÕÚ]
+	ÔÝ\Y\‰ÊJHÂˆ[˜ÛÛZ[™Ð[[Ý[H\HOOH	ÔÝ\Y\ˆ™Y[™	È	‰ˆ[[Ý[OH[ÈX]˜XœÊ[[Ý[
+Hˆ[[Ý[ÂˆBˆÛÛœÝ^[Y[]HH]QšY[È^[Y[Ù]QšY[H[ˆ^[Y[Ü™X]Y]H[ÂˆÛÛœÝ^Y\’[›ÚXÙQYQ]HH\HOOH	Ð^Y\ˆ^[Y[	È	‰ˆÝ[HÈØ[Ý[]Y^Y\”^U\›Q]JÝ[JHÝ[K’[›ÚXÙWÑYWÑ]W×ØÈÝ[K‘YWÑ]W×ØÈÝ[K^Y\—Ô^WÕ\›WÑ]W×ØÈ[ˆ[ÂˆÛÛœÝ[^Q^\ÈH\HOOH	Ð^Y\ˆ^[Y[	È	‰ˆ^Y\’[›ÚXÙQYQ]H	‰ˆ^[Y[]HÈ^\Ð™]ÙY[Š^Y\’[›ÚXÙQYQ]K]SÛ›J^[Y[]JJHˆ[ÂˆÛÛœÝÝ]\ÈH[˜ÛÛZ[™Ô^[Y[Ý]\ÊÂˆ\Kˆ[[Ý[ˆÝ[KˆÝ\Y\’[›ÚXÙKˆ™\ÚÛÛXÞNˆ^[Y[ÛÛXÝ[Û•™\ÚÛÛXÞJÙ][™ÜËÝ[OËÝ\œ™[˜ÞR\ÛÐÛÙH^[Y[Ý\œ™[˜ÞR\ÛÐÛÙH^[Y[Ý\œ™[˜ÞW×ØÊKˆJNÂˆÛÛœÝ™XÙZ]˜X›HH[˜ÛÛZ[™Ô^[Y[[X™\ŠÝ[OË”™XÙZ]˜X›WÐ˜[[˜ÙW×ØÊNÂˆÛÛœÝ^Y\“˜[YHH[˜ÛÛZ[™Ô^[Y[^Y\“˜[YJÝ[JNÂˆÛÛœÝ^Y\‘Ü›Ý\˜[YHH[˜ÛÛZ[™Ô^[Y[^Y\‘Ü›Ý\
+Ý[JNÂˆÛÛœÝ\S˜[YHH\KœÝ\ÕÚ]
+	ÔÝ\Y\‰ÊHÈÝ\Y\’[›ÚXÙT\S˜[YJÝ\Y\’[›ÚXÙKÝ\Y\’[›ÚXÙTÝ\Y\”™[][ÛœÚ\ÊHˆ^Y\“˜[YNÂˆYˆ
+Ý[OË’Y	‰ˆ™XÙZ]˜X›HOH[	‰ˆ™XÙZ]˜X›H
+HÂˆÛÛœÝÙ^HHÝ[K’YÂˆYˆ
+X]˜Z[X›TÝ[RÙ^\Ëš\ÊÙ^JJHÂˆ]˜Z[X›TÝ[RÙ^\Ë˜Y
+Ù^JNÂˆÛÛœÝÜ›Ý\Ù^HH^Y\‘Ü›Ý\˜[YH^Y\“˜[YH	Õ[™Ü›Ý\Y^Y\‰ÎÂˆYˆ
+X]˜Z[X›P˜[[˜Ù\ÐžQÜ›Ý\ÙÜ›Ý\Ù^WJHÂˆ]˜Z[X›P˜[[˜Ù\ÐžQÜ›Ý\ÙÜ›Ý\Ù^WHHÂˆ^Y\‘Ü›Ý\˜[YNˆÜ›Ý\Ù^Kˆ^Y\“˜[Y\Îˆ™]ÈÙ]
+
+KˆÝ[]˜Z[X›P˜[[˜ÙNˆˆÝ[\Îˆ×KˆNÂˆBˆYˆ
+^Y\“˜[YJH]˜Z[X›P˜[[˜Ù\ÐžQÜ›Ý\ÙÜ›Ý\Ù^WK˜^Y\“˜[Y\Ë˜Y
+^Y\“˜[YJNÂˆ]˜Z[X›P˜[[˜Ù\ÐžQÜ›Ý\ÙÜ›Ý\Ù^WKÝ[]˜Z[X›P˜[[˜ÙH
+ÏHX]˜XœÊ™XÙZ]˜X›JNÂˆ]˜Z[X›P˜[[˜Ù\ÐžQÜ›Ý\ÙÜ›Ý\Ù^WKœÝ[\Ëœ\Ú
+ÂˆÝ[RYˆÝ[K’YˆÝ[S˜[YNˆ›Ü›X]Ý[S˜[YJÝ[JKˆ^Y\“˜[YKˆ]˜Z[X›P˜[[˜ÙNˆX]˜XœÊ™XÙZ]˜X›JKˆ™XÙZ]˜X›P˜[[˜ÙNˆ™XÙZ]˜X›Kˆ^[Y[]NˆÝ[K”^[Y[Ñ]W×ØÈ^[Y[Ù]QšY[H^[Y[Ü™X]Y]H[ˆJNÂˆBˆBˆ™]\›ˆÂˆYˆ^[Y[’Yˆ^[Y[Yˆ^[Y[’Yˆ^[Y[˜[YNˆ[˜ÛÛZ[™Ô^[Y[\Ü^S˜[YJÂˆ^[Y[ˆ™Y™\™[˜ÙQšY[ËˆÝ[KˆÝ\Y\’[›ÚXÙKˆ\KˆJKˆ^[Y[\Ü^S˜[YNˆ[˜ÛÛZ[™Ô^[Y[\Ü^S˜[YJÂˆ^[Y[ˆ™Y™\™[˜ÙQšY[ËˆÝ[KˆÝ\Y\’[›ÚXÙKˆ\KˆJKˆØ[\Ù›Ü˜ÙT^[Y[˜[YNˆ^[Y[“˜[YH[ˆ^[Y[™XÛÜ™\S˜[YNˆ^[Y[”™XÛÜ™\OË“˜[YH[ˆ^[Y[™XÛÜ™\Q]™[Ü\“˜[YNˆ^[Y[”™XÛÜ™\OË‘]™[Ü\“˜[YH[ˆ^[Y[]KˆÜ™X]Y]Nˆ^[Y[Ü™X]Y]H[ˆ[›ÚXÙQYQ]Nˆ^Y\’[›ÚXÙQYQ]Kˆ[^Q^\Ëˆ^[Y[\›\Îˆ\HOOH	Ð^Y\ˆ^[Y[	ÈÈÝ[OË”^[Y[Õ\›W×ØÈ[ˆ[ˆ\Kˆ\Ò[˜ÛÛZ[™Îˆ\HOOH	Ð^Y\ˆ^[Y[	È\HOOH	ÔÝ\Y\ˆ™Y[™	Ëˆ\Ð˜[šÐÚ\™ÙNˆ\HOOH	Ð˜[šÈÚ\™ÙIËˆ[[Ý[ˆ[˜ÛÛZ[™Ð[[Ý[ˆÝ\œ™[˜ÞNˆ^[Y[Ý\œ™[˜ÞR\ÛÐÛÙH^[Y[Ý\œ™[˜ÞW×ØÈ	ÕTÑ	Ëˆ™Y™\™[˜ÙNˆ[˜ÛÛZ[™Ô^[Y[™Y™\™[˜ÙJ^[Y[™Y™\™[˜ÙQšY[ÊKˆØ[\Ù›Ü˜ÙTÝ]\ÎˆÝ]\ÑšY[Ë›X\
+
+šY[
+HOˆ^[Y[ÙšY[JK™š[™
+›ÛÛX[ŠH[ˆØ[\Ù›Ü˜ÙU\Nˆ\QšY[Ë›X\
+
+šY[
+HOˆ^[Y[ÙšY[JK™š[™
+›ÛÛX[ŠH[ˆÝ[RYˆÝ[S˜[YNˆÝ[HÈ›Ü›X]Ý[S˜[YJÝ[JHˆ[ˆÙ^TÝ[NˆÝ[OË’Ù^TÝ[W×ØÈ[ˆ^Y\“˜[YKˆ^Y\‘Ü›Ý\˜[YKˆÝ\Y\’[›ÚXÙRYˆÝ\Y\’[›ÚXÙOË’YÝ\Y\’[›ÚXÙRY[ˆÝ\Y\’[›ÚXÙS˜[YNˆÝ\Y\’[›ÚXÙOË“˜[YH[ˆÝ\Y\“˜[YNˆÝ\Y\’[›ÚXÙT\S˜[YJÝ\Y\’[›ÚXÙKÝ\Y\’[›ÚXÙTÝ\Y\”™[][ÛœÚ\ÊKˆ\S˜[YKˆ[›ÚXÙP[[Ý[ˆ[˜ÛÛZ[™Ô^[Y[[X™\ŠÝ[OË•Ý[Ò[›ÚXÙWÐ[[Ý[×ØÊKˆ™XÙZ]˜X›P˜[[˜ÙNˆ™XÙZ]˜X›Kˆ^XX›P˜[[˜ÙNˆÝ\Y\’[›ÚXÙT^XX›QšY[È[˜ÛÛZ[™Ô^[Y[[X™\ŠÝ\Y\’[›ÚXÙOË–ÜÝ\Y\’[›ÚXÙT^XX›QšY[JHˆ[˜ÛÛZ[™Ô^[Y[[X™\ŠÝ[OË”^XX›WÐ˜[[˜ÙW×ØÊKˆÝ\Y\’[›ÚXÙP[[Ý[ˆÝ\Y\’[›ÚXÙP[[Ý[šY[È[˜ÛÛZ[™Ô^[Y[[X™\ŠÝ\Y\’[›ÚXÙOË–ÜÝ\Y\’[›ÚXÙP[[Ý[šY[JHˆ[ˆÝ]\ÎˆÝ]\Ë›X™[ˆÝ]\ÕÛ™NˆÝ]\ËÛ™Kˆ^[Y[Øš™XÝ[[Ý[šY[ˆ[[Ý[šY[ˆ^[Y[Øš™XÝÝ\Y\’[›ÚXÙQšY[ÎˆÝ\Y\’[›ÚXÙSÛÚÝ\šY[Ëˆœ›ÚÙ\ÛÛ[Z\ÜÚ[Û“X]ÚˆNÂˆJBˆ™š[\Š›ÛÛX[ŠNÂˆÛÛœÝ›ÝÜÈH[›ÝÜË™š[\Š
+›ÝÊHOˆ›ÝË\HOOH	ÔÝ\Y\ˆ^[Y[	È	‰ˆ›ÝË\HOOH	Ð˜[šÈÚ\™ÙIÈ	‰ˆ›ÝË\HOOH	Ðœ›ÚÙ\ˆÛÛ[Z\ÜÚ[Û‰ÊK›X\
+
+›ÝÊHOˆ
+È‹‹œ›ÝË˜[šÐÚ\™Ù\Îˆ×HJJNÂˆÛÛœÝ[™Ü›Ý\Y˜[šÐÚ\™Ù\ÈH×NÂˆ›Üˆ
+ÛÛœÝÚ\™ÙHÙˆ[›ÝÜË™š[\Š
+›ÝÊHOˆ›ÝË\HOOH	Ð˜[šÈÚ\™ÙIÊJHÂˆÛÛœÝÚ\™ÙQ]HH]SÛ›JÚ\™ÙKœ^[Y[]JNÂˆÛÛœÝØ[™Y]\ÈH›ÝÜÂˆ™š[\Š
+›ÝÊHOˆ›ÝË\HOOH	Ð^Y\ˆ^[Y[	È	‰ˆ›ÝËœÝ[RY	‰ˆ›ÝËœÝ[RYOOHÚ\™ÙKœÝ[RY
+BˆœÛÜ
+
+KŠHOˆÂˆÛÛœÝTØ[YQ]HH]SÛ›JKœ^[Y[]JHOOHÚ\™ÙQ]HÈHˆÂˆÛÛœÝ”Ø[YQ]HH]SÛ›J‹œ^[Y[]JHOOHÚ\™ÙQ]HÈHˆÂˆYˆ
+TØ[YQ]HOOH”Ø[YQ]JH™]\›ˆ”Ø[YQ]HHTØ[YQ]NÂˆ™]\›ˆX]˜XœÊ[X™\Š‹˜[[Ý[
+JHHX]˜XœÊ[X™\ŠK˜[[Ý[
+JNÂˆJNÂˆÛÛœÝ\™Ù]HØ[™Y]\ÖÌH[ÂˆYˆ
+\™Ù]
+HÂˆ]XÚ˜[šÐÚ\™ÙUÔ^[Y[
+\™Ù]Ú\™ÙJNÂˆH[ÙHÂˆ[™Ü›Ý\Y˜[šÐÚ\™Ù\Ëœ\Ú
+Ú\™ÙJNÂˆBˆBˆÛÛœÝ[\XÚ]˜[šÐÚ\™ÙRYÈH™]ÈÙ]
+
+NÂˆ›Üˆ
+ÛÛœÝÚ\™ÙHÙˆ›ÝÜÊHÂˆÛÛœÝ\™Ù]H[˜ÛÛZ[™Ô^[Y[˜[šÐÚ\™ÙU\™Ù]
+Ú\™ÙK›ÝÜÊNÂˆYˆ
+]\™Ù]
+HÛÛ[YNÂˆ]XÚ˜[šÐÚ\™ÙUÔ^[Y[
+\™Ù]Ú\™ÙJNÂˆ[\XÚ]˜[šÐÚ\™ÙRYË˜Y
+Ú\™ÙKšYÚ\™ÙKœ^[Y[Y
+NÂˆBˆÛÛœÝ\Ü^T›ÝÜÈH›ÝÜË™š[\Š
+›ÝÊHOˆZ[\XÚ]˜[šÐÚ\™ÙRYËš\Ê›ÝËšY›ÝËœ^[Y[Y
+JNÂˆ\Ü^T›ÝÜËœ\Ú
+‹‹[™Ü›Ý\Y˜[šÐÚ\™Ù\ÊNÂ‚ˆÛÛœÝ[\™\Ý›ÝYšXØ][Û“X\H›ÙK—ÛÛZ][˜ÛÛZ[™Ó]™TÝ]HÈßHˆ]ØZ]ØY[˜ÛÛZ[™Ô^[Y[[\™\Ý›ÝYšXØ][Û“X\
+\Ü^T›ÝÜË›X\
+
+›ÝÊHOˆ›ÝËœ^[Y[Y›ÝËšY
+JNÂˆÛÛœÝ›ÝÜÕÚ][\™\Ý›ÝYšXØ][ÛœÈH\Ü^T›ÝÜË›X\
+
+›ÝÊHOˆÂˆÛÛœÝ›ÝYšXØ][ÛˆH[\™\Ý›ÝYšXØ][Û“X\Ü›ÝËœ^[Y[Y›ÝËšYH[Âˆ™]\›ˆÂˆ‹‹œ›ÝËˆ[\™\Ý[›ÚXÙS›ÝYšXØ][ÛŽˆ›ÝYšXØ][Û‹ˆ[\™\Ý[›ÚXÙS›ÝYšXØ][Û”Ù[ˆ›ÝYšXØ][ÛË™[]™\žTÝ]\ÈOOH	ÜÙ[	Ëˆ[\™\Ý[›ÚXÙS›ÝYšXØ][Û”[™[™ÎˆÉÜÙ[™[™ÉË	Ý[˜Ù\Z[‰×Kš[˜ÛY\Ê›ÝYšXØ][ÛË™[]™\žTÝ]\ÊKˆNÂˆJNÂ‚ˆÛÛœÝ[˜ÛYY[˜ÛÛZ[™Ô›ÝÜÈH›ÝÜÕÚ][\™\Ý›ÝYšXØ][ÛœË™š[\Š
+›ÝÊHOˆ›ÝËš\Ò[˜ÛÛZ[™ÊNÂˆÛÛœÝ^Y\ÚXR[›ÚXÙ\ÈH]ØZ][˜ÛÛZ[™Ð^Y\ÚXR[›ÚXÙ\ÊÂˆ™\ÚÛÝ]NˆÙ][™ÜËˆXØÙ\ÜÐÛÛ^ˆJNÂˆÛÛœÝ]˜Z[X›P˜[[˜Ù\ÈHØš™XÝ˜[Y\Ê]˜Z[X›P˜[[˜Ù\ÐžQÜ›Ý\
+Bˆ›X\
+
+Ü›Ý\
+HOˆ
+Âˆ^Y\‘Ü›Ý\˜[YNˆÜ›Ý\˜^Y\‘Ü›Ý\˜[YKˆ^Y\“˜[Y\ÎˆË‹‹™Ü›Ý\˜^Y\“˜[Y\×KœÛÜ
+
+KŠHOˆK›ØØ[PÛÛ\\™JŠJKˆÝ[]˜Z[X›P˜[[˜ÙNˆÜ›Ý\Ý[]˜Z[X›P˜[[˜ÙKˆÝ[\ÎˆÜ›Ý\œÝ[\ËœÛÜ
+
+KŠHOˆÝš[™Ê‹œ^[Y[]H	ÉÊK›ØØ[PÛÛ\\™JÝš[™ÊKœ^[Y[]H	ÉÊJJKˆJJBˆœÛÜ
+
+KŠHOˆ‹Ý[]˜Z[X›P˜[[˜ÙHHKÝ[]˜Z[X›P˜[[˜ÙJNÂ‚ˆ™]\›ˆÂˆ›ÝÜÎˆ›ÝÜÕÚ][\™\Ý›ÝYšXØ][ÛœËˆ^Y\ÚXR[›ÚXÙ\Ëˆ]˜Z[X›P˜[[˜Ù\ËˆÙ][™ÜËˆ]Qœ›ÛKˆ]UËˆØÚ[XNˆÂˆ^[Y[]QšY[ˆ]QšY[ˆ^[Y[š[\‘]QšY[ˆš[\‘]QšY[ˆ^[Y[[[Ý[šY[ˆ[[Ý[šY[ˆ^[Y[™Y™\™[˜ÙQšY[Îˆ™Y™\™[˜ÙQšY[Ëˆ^[Y[Ý\Y\’[›ÚXÙQšY[ÎˆÝ\Y\’[›ÚXÙSÛÚÝ\šY[ËˆÝ\Y\’[›ÚXÙT^XX›QšY[ˆÝ\Y\’[›ÚXÙP[[Ý[šY[ˆKˆØÚ[XUØ\›š[™ÜÎˆØ[[Ý[šY[È[ˆ	Ó›È[[Ý[[ZÙHšY[Ø\È›Ý[™Ûˆ^[Y[×ØË‰Ë]QšY[È[ˆ	Ó›È]K[ZÙHšY[Ø\È›Ý[™Ûˆ^[Y[×ØË‰Ë	ÔÝ\Y\‹Z[›ÚXÙK[[šÙY™YØ]]™H^[Y[È\™HÛ\ÜÚYšYY\ÈÝ\Y\ˆ™Y[™ËˆÛÛ™š\›HYˆØ[\Ù›Ü˜ÙH\Ù\ÈHÜÜÚ]HÚYÛ‹‰×K™š[\Š›ÛÛX[ŠKˆÝ[[X\žNˆÂˆÝ[›ÝÜÎˆ›ÝÜÕÚ][\™\Ý›ÝYšXØ][ÛœË›[™Ýˆ[˜ÛÛZ[™Ô›ÝÜÎˆ[˜ÛYY[˜ÛÛZ[™Ô›ÝÜË›[™ÝˆÝ[[˜ÛÛZ[™Ð[[Ý[ˆ[˜ÛYY[˜ÛÛZ[™Ô›ÝÜËœ™YXÙJ
+Ý[K›ÝÊHOˆÝ[H
+ÈX]˜XœÊ[X™\Š›ÝËš[˜ÛÛZ[™Ð[[Ý[
+JK
+Kˆ^Y\”^[Y[Ý[ˆ›ÝÜÕÚ][\™\Ý›ÝYšXØ][ÛœË™š[\Š
+›ÝÊHOˆ›ÝË\HOOH	Ð^Y\ˆ^[Y[	ÊKœ™YXÙJ
+Ý[K›ÝÊHOˆÝ[H
+ÈX]˜XœÊ[X™\Š›ÝËš[˜ÛÛZ[™Ð[[Ý[
+JK
+KˆÝ\Y\”™Y[™Ý[ˆ›ÝÜÕÚ][\™\Ý›ÝYšXØ][ÛœË™š[\Š
+›ÝÊHOˆ›ÝË\HOOH	ÔÝ\Y\ˆ™Y[™	ÊKœ™YXÙJ
+Ý[K›ÝÊHOˆÝ[H
+ÈX]˜XœÊ[X™\Š›ÝËš[˜ÛÛZ[™Ð[[Ý[
+JK
+Kˆ[›X]ÚYÛÝ[ˆ›ÝÜÕÚ][\™\Ý›ÝYšXØ][ÛœË™š[\Š
+›ÝÊHOˆ›ÝË\HOOH	Õ[›X]ÚY	È›ÝËœÝ]\ÈOOH	Ó™YYÈ™]šY]ÉÊK›[™Ýˆ[TZYÛÝ[ˆ›ÝÜÕÚ][\™\Ý›ÝYšXØ][ÛœË™š[\Š
+›ÝÊHOˆ›ÝËœÝ]\ÈOOH	Ñ[HZY	ÊK›[™Ýˆ]˜Z[X›P˜[[˜ÙUÝ[ˆ]˜Z[X›P˜[[˜Ù\Ëœ™YXÙJ
+Ý[KÜ›Ý\
+HOˆÝ[H
+È[X™\ŠÜ›Ý\Ý[]˜Z[X›P˜[[˜ÙH
+K
+Kˆ]˜Z[X›P˜[[˜ÙPÛÝ[ˆ]˜Z[X›P˜[[˜Ù\Ëœ™YXÙJ
+Ý[KÜ›Ý\
+HOˆÝ[H
+È
+Ü›Ý\œÝ[\ÏË›[™Ý
+K
+KˆKˆNÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ[˜ÛÛZ[™Ô^[Y[Ó\Ý
+›ÙK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÙ][™ÜÈH]ØZ]ØY[˜ÛÛZ[™Ô^[Y[Ù][™ÜÊ
+NÂˆÛÛœÝÙ^HH]SÛ›J™]È]J
+JNÂˆÛÛœÝ]Qœ›ÛHH]SÛ›J›ÙK™]Qœ›ÛH›ÙK™]WÙœ›ÛHÙ^JNÂˆÛÛœÝ]UÈH]SÛ›J›ÙK™]UÈ›ÙK™]WÝÈÙ^JNÂˆÛÛœÝ[Z]HX]›X^
+LX]›Z[Š[X™\Š›ÙK›[Z]
+HLL
+JNÂˆÛÛœÝÈ˜[YNˆÛ˜\ÚÝHH]ØZ]ØXÚYØ[\Ù›Ü˜ÙU˜[YJÂˆ˜[Y\ÜXÙNˆ	Ú[˜ÛÛZ[™Ë\^[Y[ÉËˆ^[ØYˆÈ]Qœ›ÛK]UË[Z]™\ÚÛÎˆ^[Y[ÛÛXÝ[Û•™\ÚÛØXÚRÙ^JÙ][™ÜÊHKˆÙXÛÛ™ÎˆŒˆYÜÎˆÉÜØ[\Ù›Ü˜ÙNš[˜ÛÛZ[™Ë\^[Y[ÉË	ÜØ[\Ù›Ü˜ÙNœÝ[IË	ÜØ[\Ù›Ü˜ÙN˜XØÛÝ[	Ë	ÜØ[\Ù›Ü˜ÙN›Øš™XÝ”^[Y[×ØÉË	ÜØ[\Ù›Ü˜ÙN›Øš™XÝ”Ý\Y\—Ò[›ÚXÙW×ØÉ×Kˆ›ÙKˆ™\KˆXØÙ\ÜÐÛÛ^ˆØY\Žˆ
+
+HO‚ˆ[˜ÛÛZ[™Ô^[Y[Ó\ÝÛ˜\ÚÝ
+ˆÂˆ‹‹˜›ÙKˆ]Qœ›ÛKˆ]UËˆ[Z]ˆÜÙ][™ÜÓÝ™\œšYNˆÙ][™ÜËˆÛÛZ][˜ÛÛZ[™Ó]™TÝ]NˆYKˆKˆ™\KˆXØÙ\ÜÐÛÛ^ˆ
+KˆJNÂˆÛÛœÝ›ÝYšXØ][Û“X\H]ØZ]ØY[˜ÛÛZ[™Ô^[Y[[\™\Ý›ÝYšXØ][Û“X\
+
+Û˜\ÚÝœ›ÝÜÈ×JK›X\
+
+›ÝÊHOˆ›ÝËœ^[Y[Y›ÝËšY
+JNÂˆÛÛœÝÛÛXÝ[Û“X\H]ØZ]ØY^Y\’[›ÚXÙPÛÛXÝ[Û“X\
+
+Û˜\ÚÝœ›ÝÜÈ×JK›X\
+
+›ÝÊHOˆ›ÝËœÝ[RY
+K™š[\Š›ÛÛX[ŠJNÂˆ™]\›ˆÂˆ‹‹œÛ˜\ÚÝˆÙ][™ÜËˆ›ÝÜÎˆ
+Û˜\ÚÝœ›ÝÜÈ×JK›X\
+
+›ÝÊHOˆÂˆÛÛœÝ›ÝYšXØ][ÛˆH›ÝYšXØ][Û“X\Ü›ÝËœ^[Y[Y›ÝËšYH[Âˆ™]\›ˆÂˆ‹‹œ›ÝËˆÛÛXÝ[ÛŽˆÛÛXÝ[Û“X\Ü›ÝËœÝ[RYOËš][H[ˆÛÛXÝ[Û‘]™[ÎˆÛÛXÝ[Û“X\Ü›ÝËœÝ[RYOË™]™[È×Kˆ[\™\Ý[›ÚXÙS›ÝYšXØ][ÛŽˆ›ÝYšXØ][Û‹ˆ[\™\Ý[›ÚXÙS›ÝYšXØ][Û”Ù[ˆ›ÝYšXØ][ÛË™[]™\žTÝ]\ÈOOH	ÜÙ[	Ëˆ[\™\Ý[›ÚXÙS›ÝYšXØ][Û”[™[™ÎˆÉÜÙ[™[™ÉË	Ý[˜Ù\Z[‰×Kš[˜ÛY\Ê›ÝYšXØ][ÛË™[]™\žTÝ]\ÊKˆNÂˆJKˆNÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ[˜ÛÛZ[™Ô^[Y[[ØØ][ÛÛÛ™š\›J›ÙK™\JHÂˆ]ØZ]™\]Z\™PYZ[š\Ý˜]ÜŠ™\JNÂˆÛÛœÝ^Y\‘Ü›Ý\˜[YHHÝš[™Ê›ÙK˜^Y\‘Ü›Ý\˜[YH›ÙK˜^Y\—ÙÜ›Ý\Û˜[YH	ÉÊKš[J
+NÂˆYˆ
+X^Y\‘Ü›Ý\˜[YJH›ÝÈ\\œ›ÜŠ	Ð^Y\ˆÜ›Ý\\È™\]Z\™Y‰Ë
+NÂˆ›ÝÈ\\œ›ÜŠ	ÔØ[\Ù›Ü˜ÙH^[Y[[ØØ][ÛˆÜš]KX˜XÚÈ\È›Ý[˜X›YY]ˆÛÛ™š\›HHØ[\Ù›Ü˜ÙHØš™XÝ[™šY[È›Üˆ\Z[™È]˜Z[X›H^Y\ˆ˜[[˜Ù\ÈÈ[›Ý\ˆÕSK‰ËLJNÂŸB‚˜ÛÛœÝSÓÓRS‘×ÔVSQS•ÒS•T‘TÕÓ“ÕQ’PÐUSÓ—Ñ’QSÈHÉÚY	Ë	Ü^[Y[ÚY	Ë	Ü^[Y[Û˜[YIË	ÜÝ[WÚY	Ë	ÜÝ[WÛ˜[YIË	Ø^Y\—Û˜[YIË	Ø^Y\—ÙÜ›Ý\Û˜[YIË	Ü™XÙZ]™YÙ]IË	Ü^[Y[ØÜ™X]YÙ]IË	Ù[^WÙ^\ÉË	Ø[[Ý[	Ë	ØÝ\œ™[˜ÞIË	Ü™XÙZ]˜X›WØ˜[[˜ÙIË	Ü™XÚ\Y[Ù[XZ[	Ë	Ù[XZ[ÜÝXš™XÝ	Ë	Ù[XZ[ÛY\ÜØYÙWÚY	Ë	Ù[XZ[Ü›ÝšY\‰Ë	ØXÝÜ—Ý\Ù\—ÚY	Ë	ØXÝÜ—Ù[XZ[	Ë	ØXÝÜ—Û˜[YIË	ÛY]Y]IË	Ù[]™\žWÜÝ]\ÉË	Û\ÝØ][\Ø]	Ë	Û\ÝÙ\œ›Ü‰Ë	ÜÙ[™\—ÛXZ[›ÞÚY	Ë	ÜÙ[™\—ÛXZ[›ÞÜÛ˜\ÚÝ	Ë	ÜÙ[Ø]	Ë	ØÜ™X]YØ]	Ë	Ý\]YØ]	×Kš›Ú[Š	Ë	ÊNÂ‚™[˜Ý[Ûˆ[˜ÛÛZ[™Ô^[Y[“[X™\Š˜[YJHÂˆÛÛœÝ[X™\ˆH[X™\Š˜[YJNÂˆ™]\›ˆ[X™\‹š\Ñš[š]J[X™\ŠHÈ[X™\Š[X™\‹Ñš^Y
+ŠJHˆ[ÂŸB‚™[˜Ý[Ûˆ[˜ÛÛZ[™Ô^[Y[‘]J˜[YJHÂˆYˆ
+]˜[YJH™]\›ˆ[ÂˆÛÛœÝ]HH™]È]J˜[YJNÂˆ™]\›ˆ[X™\‹š\Ó˜SŠ]K™Ù][YJ
+JHÈ[ˆ]KÒTÓÔÝš[™Ê
+NÂŸB‚™[˜Ý[ÛˆÙ\šX[^™R[˜ÛÛZ[™Ô^[Y[[\™\Ý›ÝYšXØ][ÛŠ›ÝÈH[
+HÂˆYˆ
+\›ÝÊH™]\›ˆ[Âˆ™]\›ˆÂˆYˆ›ÝËšYˆ^[Y[Yˆ›ÝËœ^[Y[ÚYˆ^[Y[˜[YNˆ›ÝËœ^[Y[Û˜[YKˆÝ[RYˆ›ÝËœÝ[WÚYˆÝ[S˜[YNˆ›ÝËœÝ[WÛ˜[YKˆ^Y\“˜[YNˆ›ÝË˜^Y\—Û˜[YKˆ^Y\‘Ü›Ý\˜[YNˆ›ÝË˜^Y\—ÙÜ›Ý\Û˜[YKˆ™XÙZ]™Y]Nˆ›ÝËœ™XÙZ]™YÙ]Kˆ^[Y[Ü™X]Y]Nˆ›ÝËœ^[Y[ØÜ™X]YÙ]Kˆ[^Q^\Îˆ›ÝË™[^WÙ^\Ëˆ[[Ý[ˆ[˜ÛÛZ[™Ô^[Y[[X™\Š›ÝË˜[[Ý[
+KˆÝ\œ™[˜ÞNˆ›ÝË˜Ý\œ™[˜ÞKˆ™XÙZ]˜X›P˜[[˜ÙNˆ[˜ÛÛZ[™Ô^[Y[[X™\Š›ÝËœ™XÙZ]˜X›WØ˜[[˜ÙJKˆ™XÚ\Y[[XZ[ˆ›ÝËœ™XÚ\Y[Ù[XZ[ˆ[XZ[ÝXš™XÝˆ›ÝË™[XZ[ÜÝXš™XÝˆ[XZ[Y\ÜØYÙRYˆ›ÝË™[XZ[ÛY\ÜØYÙWÚYˆ[XZ[›ÝšY\Žˆ›ÝË™[XZ[Ü›ÝšY\‹ˆXÝÜ•\Ù\’Yˆ›ÝË˜XÝÜ—Ý\Ù\—ÚYˆXÝÜ‘[XZ[ˆ›ÝË˜XÝÜ—Ù[XZ[ˆXÝÜ“˜[YNˆ›ÝË˜XÝÜ—Û˜[YKˆY]Y]Nˆ›ÝË›Y]Y]HßKˆ[]™\žTÝ]\Îˆ›ÝË™[]™\žWÜÝ]\È	ÜÙ[	Ëˆ\Ý][\]ˆ›ÝË›\ÝØ][\Ø][ˆ\Ý\œ›ÜŽˆ›ÝË›\ÝÙ\œ›Üˆ[ˆÙ[™\“XZ[›ÞYˆ›ÝËœÙ[™\—ÛXZ[›ÞÚY[ˆÙ[™\“XZ[›ÞÛ˜\ÚÝˆ›ÝËœÙ[™\—ÛXZ[›ÞÜÛ˜\ÚÝ[ˆÙ[]ˆ›ÝËœÙ[Ø]ˆÜ™X]Y]ˆ›ÝË˜Ü™X]YØ]ˆ\]Y]ˆ›ÝË\]YØ]›ÝË˜Ü™X]YØ]ˆNÂŸB‚™[˜Ý[Ûˆ[˜ÛÛZ[™Ô^[Y[[\™\ÝX›U[˜]˜Z[X›J\œ›ÜŠHÂˆ™]\›ˆ\œ›ÜË˜ÛÙHOOH	Í”IÈÚ[˜ÛÛZ[™×Ü^[Y[Ú[\™\ÝÛ›ÝYšXØ][ÛœËÚK\Ý
+\œ›ÜË›Y\ÜØYÙH	ÉÊNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆØY[˜ÛÛZ[™Ô^[Y[[\™\Ý›ÝYšXØ][Û“X\
+^[Y[YÈH×JHÂˆÛÛœÝÛY[HØY™TÝ\X˜\ÙPYZ[ÛY[
+
+NÂˆYˆ
+XÛY[
+H™]\›ˆßNÂˆÛÛœÝYÈHË‹‹›™]ÈÙ]
+^[Y[YË›X\
+
+Y
+HOˆÝš[™ÊY	ÉÊKš[J
+JK™š[\Š›ÛÛX[ŠJWNÂˆYˆ
+ZYË›[™Ý
+H™]\›ˆßNÂˆÛÛœÝ›ÝYšXØ][ÛœÈHßNÂˆ›Üˆ
+ÛÛœÝÚ[šÈÙˆÚ[šÒYÊYËL
+JHÂˆÛÛœÝÈ]K\œ›ÜˆHH]ØZ]ÛY[™œ›ÛJ	Ú[˜ÛÛZ[™×Ü^[Y[Ú[\™\ÝÛ›ÝYšXØ][ÛœÉÊKœÙ[XÝ
+SÓÓRS‘×ÔVSQS•ÒS•T‘TÕÓ“ÕQ’PÐUSÓ—Ñ’QSÊKš[Š	Ü^[Y[ÚY	ËÚ[šÊNÂˆYˆ
+\œ›ÜŠHÂˆYˆ
+Z[˜ÛÛZ[™Ô^[Y[[\™\ÝX›U[˜]˜Z[X›J\œ›ÜŠJHÂˆÛÛœÛÛK™\œ›ÜŠ	Ñ˜Z[YÈØY[˜ÛÛZ[™È^[Y[[\™\Ý›ÝYšXØ][ÛœÉË\œ›Ü‹›Y\ÜØYÙJNÂˆBˆ™]\›ˆßNÂˆBˆ›Üˆ
+ÛÛœÝ›ÝÈÙˆ]H×JH›ÝYšXØ][ÛœÖÜ›ÝËœ^[Y[ÚYHHÙ\šX[^™R[˜ÛÛZ[™Ô^[Y[[\™\Ý›ÝYšXØ][ÛŠ›ÝÊNÂˆBˆ™]\›ˆ›ÝYšXØ][ÛœÎÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ™]Ú[˜ÛÛZ[™Ô^[Y[[\™\Ý›ÝYšXØ][ÛŠÛY[^[Y[Y
+HÂˆÛÛœÝÈ]K\œ›ÜˆHH]ØZ]ÛY[™œ›ÛJ	Ú[˜ÛÛZ[™×Ü^[Y[Ú[\™\ÝÛ›ÝYšXØ][ÛœÉÊKœÙ[XÝ
+SÓÓRS‘×ÔVSQS•ÒS•T‘TÕÓ“ÕQ’PÐUSÓ—Ñ’QSÊK™\J	Ü^[Y[ÚY	Ë^[Y[Y
+K›X^X™TÚ[™ÛJ
+NÂˆYˆ
+\œ›ÜŠHÂˆYˆ
+[˜ÛÛZ[™Ô^[Y[[\™\ÝX›U[˜]˜Z[X›J\œ›ÜŠJHÂˆ›ÝÈ\\œ›ÜŠ	ÓZ\ÜÚ[™ÈÝ\X˜\ÙHX›H[˜ÛÛZ[™×Ü^[Y[Ú[\™\ÝÛ›ÝYšXØ][ÛœËˆ[ˆH]\ÝÝ\X˜\ÙHZYÜ˜][Ûˆ™Y›Ü™H™\]Y\Ý[™È]H^[Y[[\™\Ý[›ÚXÙ\Ë‰ËL
+NÂˆBˆ›ÝÈ\œ›ÜŽÂˆBˆ™]\›ˆÙ\šX[^™R[˜ÛÛZ[™Ô^[Y[[\™\Ý›ÝYšXØ][ÛŠ]JNÂŸB‚™[˜Ý[Ûˆ[˜ÛÛZ[™Ô^[Y[[\™\Ý˜]QšY[
+XØÛÝ[šY[ÈH×JHÂˆÛÛœÝ[ÝÙY\\ÈH™]ÈÙ]
+ÉÙÝX›IË	Ü\˜Ù[	Ë	ØÝ\œ™[˜ÞIË	Ú[	Ë	ÜÝš[™ÉË	ÜXÚÛ\Ý	×JNÂˆÛÛœÝX]Ú\ÈHXØÛÝ[šY[Ë™š[\Š
+šY[
+HOˆšY[Ë›˜[YH	‰ˆ[ÝÙY\\Ëš\ÊšY[\JH	‰ˆšY[X]Ú\Ð[žJšY[ÉÛ]\^[Y[[\™\Ý˜]IË	Û]\^[Y[[\™\Ý˜]XÉË	Ü^[Y[[\™\Ý˜]IË	Ü^[Y[[\™\Ý˜]XÉË	ÛÝ™\™YZ[\™\Ý˜]IË	ÛÝ™\™YZ[\™\Ý˜]XÉË	Ú[\™\Ý˜]IË	Ú[\™\Ý˜]XÉË	Ùš[˜[˜ÙXÚ\™Ù\˜]IË	Ùš[˜[˜ÙXÚ\™Ù\˜]XÉ×KÉÛ]\^[Y[[\™\Ý	Ë	ÛÝ™\™YZ[\™\Ý	Ë	Ú[\™\Ý˜]IË	Ùš[˜[˜ÙXÚ\™ÙI×JJNÂˆ™]\›ˆX]Ú\ÖÌH[ÂŸB‚™[˜Ý[Ûˆ\œÙR[˜ÛÛZ[™Ô^[Y[[\™\Ý˜]J˜[YJHÂˆYˆ
+˜[YHOH[˜[YHOOH	ÉÊH™]\›ˆ[ÂˆÛÛœÝX]ÚHÝš[™Ê˜[YJBˆœ™\XÙJËÙË	ÉÊBˆ›X]Ú
+ËO×
+Ê—
+ÊOËÊNÂˆYˆ
+[X]Ú
+H™]\›ˆ[ÂˆÛÛœÝ[X™\ˆH[X™\ŠX]ÚÌJNÂˆYˆ
+S[X™\‹š\Ñš[š]J[X™\ŠH[X™\ˆ
+H™]\›ˆ[Âˆ™]\›ˆX]˜XœÊ[X™\ŠHˆHÈ[X™\ˆÈLˆ[X™\ŽÂŸB‚™[˜Ý[Ûˆ[˜ÛÛZ[™Ô^[Y[[\™\Ý˜]SX™[
+˜]QXÚ[X[
+HÂˆYˆ
+˜]QXÚ[X[OH[
+H™]\›ˆ	ËIÎÂˆ™]\›ˆ	Ê[X™\Š˜]QXÚ[X[
+H
+ˆL
+KÓØØ[TÝš[™Ê	Ù[‹UTÉËÈZ[š[][Qœ˜XÝ[Û‘YÚ]Îˆ‹X^[][Qœ˜XÝ[Û‘YÚ]ÎˆˆJ_IH\ˆ[ÛÂŸB‚™[˜Ý[Ûˆ[\™\Ý›Ü›][U^
+˜[[˜ÙK˜]QXÚ[X[^\ÊHÂˆ™]\›ˆ	Û[Û™^J˜[[˜ÙJ_H	Ú[˜ÛÛZ[™Ô^[Y[[\™\Ý˜]SX™[
+˜]QXÚ[X[
+_H	Ù^\ßHÈÌÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ[˜ÛÛZ[™Ô^[Y[[\™\ÝØ[Ý[][ÛŠ›ÙHHßKXØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÝ[RYHÝš[™Ê›ÙKœÝ[RY›ÙKœÝ[WÚY	ÉÊKš[J
+NÂˆYˆ
+Z\ÔØ[\Ù›Ü˜ÙRY
+Ý[RY
+JH›ÝÈ\\œ›ÜŠ	Õ˜[YÝ[RY\È™\]Z\™Y›Üˆ]H^[Y[[\™\ÝØ[Ý[][Û‹‰Ë
+NÂˆ]ØZ]™\]Z\™R[\›Ù™šXÙTÝ[PXØÙ\ÜÊÝ[RYXØÙ\ÜÐÛÛ^
+NÂ‚ˆÛÛœÝÜÝ[Q\ØÜšX™K^[Y[\ØÜšX™WHH]ØZ]›ÛZ\ÙK˜[
+ÂˆØ[\Ù›Ü˜ÙSØš™XÝšY[ÊÈØš™XÝ˜[YNˆ	ÜÝ[W×ØÉÈJK˜Ø]Ú
+
+
+HOˆ
+ÂˆšY[Îˆ×KˆJJKˆØ[\Ù›Ü˜ÙSØš™XÝšY[ÊÈØš™XÝ˜[YNˆ	Ô^[Y[×ØÉÈJK˜Ø]Ú
+
+
+HOˆ
+ÂˆšY[Îˆ×KˆJJKˆJNÂˆÛÛœÝÝ[QšY[ÈHÝ[Q\ØÜšX™K™šY[È×NÂˆÛÛœÝÝ[QšY[˜[Y\ÈH™]ÈÙ]
+Ý[QšY[Ë›X\
+
+šY[
+HOˆšY[›˜[YJJNÂˆÛÛœÝ^[Y[šY[ÈH^[Y[\ØÜšX™K™šY[È×NÂˆÛÛœÝ^[Y[šY[˜[Y\ÈH™]ÈÙ]
+^[Y[šY[Ë›X\
+
+šY[
+HOˆšY[›˜[YJJNÂˆYˆ
+\^[Y[šY[˜[Y\ËœÚ^™JH›ÝÈ\\œ›ÜŠ	Ô^[Y[×ØÈ\È›Ý]Y\žXX›KÛÈ[\™\ÝØ[››Ý™HØ[Ý[]Y‰ËL
+NÂ‚ˆÛÛœÝXØÛÝ[\ØÜšX™HHÝ[QšY[˜[Y\Ëš\Ê	ÐXØÛÝ[×ØÉÊBˆÈ]ØZ]Ø[\Ù›Ü˜ÙSØš™XÝšY[ÊÈØš™XÝ˜[YNˆ	ÐXØÛÝ[	ÈJK˜Ø]Ú
+
+
+HOˆ
+ÂˆšY[Îˆ×KˆJJBˆˆÈšY[Îˆ×HNÂˆÛÛœÝXØÛÝ[šY[ÈHXØÛÝ[\ØÜšX™K™šY[È×NÂˆÛÛœÝXØÛÝ[šY[˜[Y\ÈH™]ÈÙ]
+XØÛÝ[šY[Ë›X\
+
+šY[
+HOˆšY[›˜[YJJNÂˆÛÛœÝ[\™\ÝšY[H[˜ÛÛZ[™Ô^[Y[[\™\Ý˜]QšY[
+XØÛÝ[šY[ÊNÂ‚ˆÛÛœÝÝ[TÙ[XÝšY[ÈHÉÒY	Ë	Ó˜[YIË‹‹œÙ[XÝYšY[ÊÝ[QšY[˜[Y\ËÉÒÙ^TÝ[W×ØÉË	Ð^Y\—Ó˜[YW×ØÉË	Ð^Y\—×ØÉË	ÐXØÛÝ[×ØÉË	ÕÝ[Ò[›ÚXÙWÐ[[Ý[×ØÉË	Ô™XÙZ]˜X›WÐ˜[[˜ÙW×ØÉË	Ô^[Y[Õ\›W×ØÉË	Ò[›ÚXÙWÑYWÑ]W×ØÉË	Ð^Y\—Ô^WÕ\›WÑ]W×ØÉË	ÑYWÑ]W×ØÉË	Ñ[]™\žWÑ]W×ØÉË	Ñ[]™\žWÑ]WÓÜ—Ñ^XÝY×ØÉË	Ñ^XÝYÑ[]™\žWÑ]W×ØÉ×JWNÂˆYˆ
+Ý[QšY[˜[Y\Ëš\Ê	Õ™\ÜÙ[×ØÉÊJHÝ[TÙ[XÝšY[Ëœ\Ú
+	Õ™\ÜÙ[×Ü‹“˜[YIÊNÂˆYˆ
+Ý[QšY[˜[Y\Ëš\Ê	ÔÜ×ØÉÊJHÝ[TÙ[XÝšY[Ëœ\Ú
+	ÔÜ×Ü‹“˜[YIÊNÂˆYˆ
+Ý[QšY[˜[Y\Ëš\Ê	ÐXØÛÝ[×ØÉÊJHÂˆÝ[TÙ[XÝšY[Ëœ\Ú
+	ÐXØÛÝ[×Ü‹“˜[YIÊNÂˆYˆ
+XØÛÝ[šY[˜[Y\Ëš\Ê	ÑÜ›Ý\Ó˜[YW×ØÉÊJHÝ[TÙ[XÝšY[Ëœ\Ú
+	ÐXØÛÝ[×Ü‹‘Ü›Ý\Ó˜[YW×ØÉÊNÂˆYˆ
+XØÛÝ[šY[˜[Y\Ëš\Ê	Ô\™[Y	ÊJHÝ[TÙ[XÝšY[Ëœ\Ú
+	ÐXØÛÝ[×Ü‹”\™[“˜[YIÊNÂˆYˆ
+[\™\ÝšY[Ë›˜[YJHÝ[TÙ[XÝšY[Ëœ\Ú
+XØÛÝ[×Ü‹‰Ú[\™\ÝšY[›˜[Y_X
+NÂˆB‚ˆÛÛœÝÝ[T›ÝÜÈH]ØZ]]Y\žT›ÝÜÊˆˆÑSPÕ	ÖË‹‹›™]ÈÙ]
+Ý[TÙ[XÝšY[ÊWKš›Ú[Š	Ë	Ê_Bˆ”“ÓHÝ[W×ØÂˆÒT‘HYH	ÉÙ\ØØ\TÛÜ[
+Ý[RY
+_IÂˆSRUBˆˆÈ[Z]ˆKÛÙ˜Z[ˆYHKˆ
+NÂˆÛÛœÝÝ[HHÝ[T›ÝÜÖÌNÂˆYˆ
+\Ý[JH›ÝÈ\\œ›ÜŠ	ÔÕSHØ\È›Ý›Ý[™[ˆØ[\Ù›Ü˜ÙK‰Ë
+NÂ‚ˆÛÛœÝ]QšY[Hš\œÝ]˜Z[X›QšY[
+^[Y[šY[˜[Y\ËÉÑ]W×ØÉË	Ô^[Y[Ñ]W×ØÉË	Ô™XÙZ]™YÑ]W×ØÉË	ÔZYÑ]W×ØÉË	ÐÜ™X]Y]I×JNÂˆÛÛœÝ[[Ý[šY[Hš\œÝ]˜Z[X›QšY[
+^[Y[šY[˜[Y\ËÉÐ[[Ý[×ØÉË	Ô^[Y[Ð[[Ý[×ØÉË	ÔZYÐ[[Ý[×ØÉË	Ô™XÙZ]™YÐ[[Ý[×ØÉË	ÕÝ[Ð[[Ý[×ØÉË	Ð[[Ý[ÔZY×ØÉË	Ô^[Y[Õ˜[YW×ØÉË	ÐXÝX[Ð[[Ý[×ØÉ×JNÂˆYˆ
+Y]QšY[X[[Ý[šY[
+H›ÝÈ\\œ›ÜŠ	Ô^[Y[]HÜˆ[[Ý[šY[Ø\È›Ý›Ý[™Ûˆ^[Y[×ØË‰ËL
+NÂ‚ˆÛÛœÝ™Y™\™[˜ÙQšY[ÈH[˜ÛÛZ[™Ô^[Y[™Y™\™[˜ÙQšY[Ê^[Y[šY[ÊNÂˆÛÛœÝÝ]\ÑšY[ÈHÙ[XÝYšY[Ê^[Y[šY[˜[Y\ËÉÔÝ]\××ØÉË	Ô^[Y[ÔÝ]\××ØÉ×JNÂˆÛÛœÝ\QšY[ÈHÙ[XÝYšY[Ê^[Y[šY[˜[Y\ËÉÕ\W×ØÉË	Ô^[Y[Õ\W×ØÉ×JNÂˆÛÛœÝ\™XÝ[Û‘šY[ÈH[˜ÛÛZ[™Ô^[Y[\™XÝ[Û‘šY[Ê^[Y[šY[ÊNÂˆÛÛœÝÝ\Y\’[›ÚXÙSÛÚÝ\šY[ÈH[˜ÛÛZ[™Ô^[Y[Ý\Y\’[›ÚXÙQšY[Ê^[Y[šY[ÊNÂˆÛÛœÝ^[Y[Ù[XÝšY[ÈHÉÒY	Ë‹‹œÙ[XÝYšY[Ê^[Y[šY[˜[Y\ËÉÓ˜[YIË	Ô™XÛÜ™\RY	Ë	ÐÜ™X]Y]IË	Ó\Ý[ÙYšYY]IË	ÔÕSW×ØÉË	ÐÝ\œ™[˜ÞR\ÛÐÛÙIË	ÐÝ\œ™[˜ÞW×ØÉ×JK^[Y[šY[˜[Y\Ëš\Ê	Ô™XÛÜ™\RY	ÊHÈ	Ô™XÛÜ™\K“˜[YIÈˆ[^[Y[šY[˜[Y\Ëš\Ê	Ô™XÛÜ™\RY	ÊHÈ	Ô™XÛÜ™\K‘]™[Ü\“˜[YIÈˆ[‹‹œÝ\Y\’[›ÚXÙSÛÚÝ\šY[Ë]QšY[[[Ý[šY[‹‹œ™Y™\™[˜ÙQšY[Ë‹‹œÝ]\ÑšY[Ë‹‹\QšY[Ë‹‹™\™XÝ[Û‘šY[×K™š[\Š›ÛÛX[ŠNÂ‚ˆÛÛœÝÛ[™R][\Ë^Y\œ›ÚÙ\œË^[Y[×HH]ØZ]›ÛZ\ÙK˜[
+Âˆ]Y\žT›ÝÜÊˆˆÑSPÕYÕSW×ØËØ[˜Ù[Y×ØË]X[]W×ØË]X[]WÑ[]™\™YÔ\—Ð‘—×ØËˆ]X[]WÓX^×ØË]X[]WÚ[—ÓU×ØË\×Ô]X[]WÔ˜[™ÙW×ØËˆÝ\Y\—Ðœ›ÚÙ\—×ØËÝ\Y\œ×Ðœ›ÚÙ\œ×ÐÛÛ[Z\ÜÚ[Û—Ô\—Õ[š]×ØËˆ^Y\œ×Ðœ›ÚÙ\—×ØË^Y\—Ðœ›ÚÙ\—×ØË^Y\œ×Ðœ›ÚÙ\œ×ÐÛÛ[Z\ÜÚ[Û—Ô\—Õ[š]×ØËˆ^Y\œ×Ðœ›ÚÙ\œ×ÐÛÛ[Z\ÜÚ[Û—Ó[\Ý[W×ØËÛÛ[Z\ÜÚ[Û—ÐÛÜÝ×ØÂˆ”“ÓHÕSWÓ[™WÒ][W×ØÂˆÒT‘HÕSW×ØÈH	ÉÙ\ØØ\TÛÜ[
+Ý[RY
+_IÂˆSRULˆˆÈ[Z]ˆLÛÙ˜Z[ˆYHKˆ
+Kˆ]Y\žT›ÝÜÊˆˆÑSPÕYÕSW×ØË^Y\—Ðœ›ÚÙ\—×ØÂˆ”“ÓHÕSWÐ^Y\—Ðœ›ÚÙ\—×ØÂˆÒT‘HÕSW×ØÈH	ÉÙ\ØØ\TÛÜ[
+Ý[RY
+_IÂˆSRULˆˆÈ[Z]ˆLÛÙ˜Z[ˆYHKˆ
+Kˆ]Y\žT›ÝÜÊˆˆÑSPÕ	ÖË‹‹›™]ÈÙ]
+^[Y[Ù[XÝšY[ÊWKš›Ú[Š	Ë	Ê_Bˆ”“ÓH^[Y[×ØÂˆÒT‘HÕSW×ØÈH	ÉÙ\ØØ\TÛÜ[
+Ý[RY
+_IÂˆÔ‘Tˆ–H	Ù]QšY[HTÐÈ•SÈTÕÜ™X]Y]HTÐÂˆSRULˆˆÈ[Z]ˆLÛÙ˜Z[ˆYHKˆ
+KˆJNÂ‚ˆÛÛœÝœ›ÚÙ\XØÛÝ[YÈHË‹‹›™]ÈÙ]
+Ë‹‹›[™R][\Ë›X\
+
+][JHOˆ][K”Ý\Y\—Ðœ›ÚÙ\—×ØÊK™š[\Š›ÛÛX[ŠK‹‹›[™R][\Ë›X\
+
+][JHOˆ][K^Y\œ×Ðœ›ÚÙ\—×ØÈ][K^Y\—Ðœ›ÚÙ\—×ØÊK™š[\Š›ÛÛX[ŠK‹‹˜^Y\œ›ÚÙ\œË›X\
+
+][JHOˆ][K^Y\—Ðœ›ÚÙ\—×ØÊK™š[\Š›ÛÛX[ŠWJWNÂˆÛÛœÝœ›ÚÙ\XØÛÝ[X\H]ØZ]˜[Y\ÐžRYÊ	ÐXØÛÝ[	Ëœ›ÚÙ\XØÛÝ[YÊNÂˆ›Üˆ
+ÛÛœÝÚY˜[YWHÙˆØš™XÝ™[šY\Êœ›ÚÙ\XØÛÝ[X\
+JHœ›ÚÙ\XØÛÝ[X\ÔÝš[™ÊY
+KœÛXÙJMJWHH˜[YNÂˆÛÛœÝœ›ÚÙ\‘Ü›Ý\ÈBˆZ[œ›ÚÙ\ÛÛ[Z\ÜÚ[Û‘Ü›Ý\ÊÂˆÝ[SX\ˆÈÜÝ[K’YNˆÝ[HKˆ[™R][\Ëˆ^Y\œ›ÚÙ\œËˆXØÛÝ[X\ˆœ›ÚÙ\XØÛÝ[X\ˆJVÜÝ[K’YH×NÂ‚ˆÛÛœÝ^Y\”^[Y[ÈH^[Y[Âˆ™š[\Š
+^[Y[
+HOˆZ[˜ÛÛZ[™Ô^[Y[\Ô™XÙZ]˜X›T™[Z][˜ÙJ^[Y[Ë‹‹œ™Y™\™[˜ÙQšY[Ë‹‹™\™XÝ[Û‘šY[Ë‹‹\QšY[Ë‹‹œÝ]\ÑšY[×JJBˆ›X\
+
+^[Y[
+HOˆÂˆÛÛœÝ[[Ý[H[˜ÛÛZ[™Ô^[Y[[X™\Š^[Y[Ø[[Ý[šY[JNÂˆÛÛœÝ^[Y[]HH^[Y[Ù]QšY[H^[Y[Ü™X]Y]H[ÂˆÛÛœÝœ›ÚÙ\ÛÛ[Z\ÜÚ[Û“X]ÚHš[™œ›ÚÙ\ÛÛ[Z\ÜÚ[Û”^[Y[X]Ú
+^[Y[[[Ý[œ›ÚÙ\‘Ü›Ý\ËË‹‹œ™Y™\™[˜ÙQšY[Ë‹‹™\™XÝ[Û‘šY[Ë‹‹\QšY[Ë‹‹œÝ]\ÑšY[×JNÂˆÛÛœÝ\HHœ›ÚÙ\ÛÛ[Z\ÜÚ[Û“X]ÚˆÈ	Ðœ›ÚÙ\ˆÛÛ[Z\ÜÚ[Û‰Âˆˆ[˜ÛÛZ[™Ô^[Y[ÛÚÜÐ˜[šÐÚ\™ÙJ^[Y[Âˆ™Y™\™[˜ÙQšY[Ëˆ\™XÝ[Û‘šY[Ëˆ\QšY[ËˆÝ]\ÑšY[ËˆJBˆÈ	Ð˜[šÈÚ\™ÙIÂˆˆ[˜ÛÛZ[™Ô^[Y[\Qœ›ÛPÛÛ^
+^[Y[Âˆ[[Ý[ˆÝ[KˆÝ\Y\’[›ÚXÙNˆ[ˆÝ\Y\’[›ÚXÙQšY[ÎˆÝ\Y\’[›ÚXÙSÛÚÝ\šY[Ëˆ\™XÝ[Û‘šY[Ëˆ\QšY[ËˆÝ]\ÑšY[ËˆJNÂˆ™]\›ˆÂˆYˆ^[Y[’Yˆ˜[YNˆ[˜ÛÛZ[™Ô^[Y[\Ü^S˜[YJÂˆ^[Y[ˆ™Y™\™[˜ÙQšY[ËˆÝ[KˆÝ\Y\’[›ÚXÙNˆ[ˆ\KˆJKˆ[[Ý[ˆ^[Y[]Kˆ]SÛ›Nˆ]SÛ›J^[Y[]JKˆ\KˆNÂˆJBˆ™š[\Š
+^[Y[
+HOˆ^[Y[\HOOH	Ð^Y\ˆ^[Y[	È	‰ˆ^[Y[˜[[Ý[OH[	‰ˆ^[Y[˜[[Ý[ˆ	‰ˆ^[Y[™]SÛ›JBˆœÛÜ
+
+KŠHOˆÝš[™ÊK™]SÛ›JK›ØØ[PÛÛ\\™JÝš[™Ê‹™]SÛ›JJHÝš[™ÊKšY
+K›ØØ[PÛÛ\\™JÝš[™Ê‹šY
+JJNÂ‚ˆÛÛœÝ˜]ÑYQ]HHØ[Ý[]Y^Y\”^U\›Q]JÝ[JHÝ[K’[›ÚXÙWÑYWÑ]W×ØÈÝ[K‘YWÑ]W×ØÈÝ[K^Y\—Ô^WÕ\›WÑ]W×ØÈ[ÂˆÛÛœÝYQ]HH]SÛ›J˜]ÑYQ]JNÂˆYˆ
+YYQ]JH›ÝÈ\\œ›ÜŠ	Ð^Y\ˆ[›ÚXÙHYH]H\ÈZ\ÜÚ[™ËÛÈ]H^[Y[[\™\ÝØ[››Ý™HØ[Ý[]Y‰Ë
+NÂ‚ˆÛÛœÝ˜]Ô˜]HH[\™\ÝšY[Ë›˜[YHÈÝ[VÉÐXØÛÝ[×Ü‰×OË–Ú[\™\ÝšY[›˜[YWHˆ[ÂˆÛÛœÝ[ÛT˜]HH\œÙR[˜ÛÛZ[™Ô^[Y[[\™\Ý˜]J˜]Ô˜]JHÏÈŒŽÂˆÛÛœÝ˜]UØ\›š[™ÈH˜]Ô˜]HOH[˜]Ô˜]HOOH	ÉÈÈ	Ð^Y\ˆXØÛÝ[[\™\Ý˜]HØ\È›Ý›Ý[™ÈY˜][YÈ‹Œ	H\ˆ[Û‰Èˆ[ÂˆÛÛœÝ[›ÚXÙP[[Ý[H[˜ÛÛZ[™Ô^[Y[[X™\ŠÝ[K•Ý[Ò[›ÚXÙWÐ[[Ý[×ØÊHÏÈ[˜ÛÛZ[™Ô^[Y[[X™\Š›ÙKš[›ÚXÙP[[Ý[
+HÏÈ^Y\”^[Y[Ëœ™YXÙJ
+Ý[K^[Y[
+HOˆÝ[H
+È[X™\Š^[Y[˜[[Ý[
+K
+H
+ÈX]›X^
+[X™\Š›ÙKœ™XÙZ]˜X›P˜[[˜ÙH
+JNÂˆYˆ
+Z[›ÚXÙP[[Ý[[›ÚXÙP[[Ý[H
+H›ÝÈ\\œ›ÜŠ	Ð^Y\ˆ[›ÚXÙH[[Ý[\ÈZ\ÜÚ[™ËÛÈ]H^[Y[[\™\ÝØ[››Ý™HØ[Ý[]Y‰Ë
+NÂ‚ˆÛÛœÝÙ^HH]SÛ›J™]È]J
+JNÂˆ]˜[[˜ÙHH[›ÚXÙP[[Ý[Âˆ]\Ý]HHYQ]NÂˆÛÛœÝÙYÛY[ÈH×NÂˆÛÛœÝ^[Y[ØÚY[HH×NÂˆ›Üˆ
+ÛÛœÝ^[Y[Ùˆ^Y\”^[Y[ÊHÂˆÛÛœÝ^[Y[[[Ý[HX]›Z[Š[X™\Š^[Y[˜[[Ý[
+KX]›X^
+˜[[˜ÙJJNÂˆYˆ
+^[Y[™]SÛ›HHYQ]JHÂˆ˜[[˜ÙHHX]›X^
+˜[[˜ÙHH^[Y[[[Ý[
+NÂˆ^[Y[ØÚY[Kœ\Ú
+Âˆ‹‹œ^[Y[ˆ˜[[˜ÙPY\Žˆ˜[[˜ÙKˆ›ÝNˆ	ÔZYÛ‹Ø™Y›Ü™HYH]IËˆJNÂˆÛÛ[YNÂˆBˆYˆ
+˜[[˜ÙHˆ	‰ˆ^[Y[™]SÛ›Hˆ\Ý]JHÂˆÛÛœÝ^\ÈHX]›X^
+^\Ð™]ÙY[Š\Ý]K^[Y[™]SÛ›JJNÂˆYˆ
+^\Èˆ
+HÂˆÛÛœÝ[\™\ÝH˜[[˜ÙH
+ˆ[ÛT˜]H
+ˆ
+^\ÈÈÌ
+NÂˆÙYÛY[Ëœ\Ú
+Âˆœ›ÛQ]Nˆ\Ý]KˆÑ]Nˆ^[Y[™]SÛ›Kˆ˜[[˜ÙKˆ^\Ëˆ˜]QXÚ[X[ˆ[ÛT˜]Kˆ[\™\Ýˆ›Ü›][Nˆ[\™\Ý›Ü›][U^
+˜[[˜ÙK[ÛT˜]K^\ÊKˆJNÂˆBˆBˆ˜[[˜ÙHHX]›X^
+˜[[˜ÙHH^[Y[[[Ý[
+NÂˆ^[Y[ØÚY[Kœ\Ú
+Âˆ‹‹œ^[Y[ˆ˜[[˜ÙPY\Žˆ˜[[˜ÙKˆ›ÝNˆ^[Y[[[Ý[[X™\Š^[Y[˜[[Ý[
+HÈ	Ô^[Y[^ÙYYÈ™[XZ[š[™È˜[[˜ÙIÈˆ	ÉËˆJNÂˆ\Ý]HH^[Y[™]SÛ›NÂˆBˆÛÛœÝÝ\œ™[™XÙZ]˜X›HH[˜ÛÛZ[™Ô^[Y[[X™\ŠÝ[K”™XÙZ]˜X›WÐ˜[[˜ÙW×ØÊNÂˆYˆ
+Ý\œ™[™XÙZ]˜X›HOH[	‰ˆÝ\œ™[™XÙZ]˜X›HH
+H˜[[˜ÙHHX]›Z[Š˜[[˜ÙKÝ\œ™[™XÙZ]˜X›JNÂˆYˆ
+˜[[˜ÙHˆ	‰ˆÙ^Hˆ\Ý]JHÂˆÛÛœÝ^\ÈHX]›X^
+^\Ð™]ÙY[Š\Ý]KÙ^JJNÂˆYˆ
+^\Èˆ
+HÂˆÛÛœÝ[\™\ÝH˜[[˜ÙH
+ˆ[ÛT˜]H
+ˆ
+^\ÈÈÌ
+NÂˆÙYÛY[Ëœ\Ú
+Âˆœ›ÛQ]Nˆ\Ý]KˆÑ]NˆÙ^Kˆ˜[[˜ÙKˆ^\Ëˆ˜]QXÚ[X[ˆ[ÛT˜]Kˆ[\™\Ýˆ›Ü›][Nˆ[\™\Ý›Ü›][U^
+˜[[˜ÙK[ÛT˜]K^\ÊKˆ›ÝNˆ	ÐÝ\œ™[[œZY˜[[˜ÙHÈ™\]Y\Ý]IËˆJNÂˆBˆB‚ˆÛÛœÝÝ[[\™\ÝHÙYÛY[Ëœ™YXÙJ
+Ý[KÙYÛY[
+HOˆÝ[H
+È[X™\ŠÙYÛY[š[\™\Ý
+K
+NÂˆ™]\›ˆÂˆÝ[Kˆ^Y\“˜[YNˆ[˜ÛÛZ[™Ô^[Y[^Y\“˜[YJÝ[JKˆ^Y\‘Ü›Ý\˜[YNˆ[˜ÛÛZ[™Ô^[Y[^Y\‘Ü›Ý\
+Ý[JKˆÝ[S˜[YNˆ›Ü›X]Ý[S˜[YJÝ[JKˆYQ]Kˆ[›ÚXÙP[[Ý[ˆ™XÙZ]˜X›P˜[[˜ÙNˆÝ\œ™[™XÙZ]˜X›Kˆ[\™\Ý˜]QšY[ˆ[\™\ÝšY[ˆÈÂˆ˜[YNˆ[\™\ÝšY[›˜[YKˆX™[ˆ[\™\ÝšY[›X™[[\™\ÝšY[›˜[YKˆBˆˆ[ˆ˜]Ò[\™\Ý˜]Nˆ˜]Ô˜]Kˆ[ÛT˜]Kˆ˜]UØ\›š[™Ëˆ^[Y[ØÚY[KˆÙYÛY[ËˆÝ[[\™\ÝˆNÂŸB‚™[˜Ý[Ûˆ[˜ÛÛZ[™Ô^[Y[[\™\ÝØ[Ý[][Û’[
+Ø[Ý[][ÛŠHÂˆÛÛœÝÙYÛY[›ÝÜÈH
+Ø[Ý[][Û‹œÙYÛY[È×JBˆ›X\
+ˆ
+ÙYÛY[
+HOˆˆ‚ˆÝ[OH˜›Ü™\‹X›ÝÛNŒ\ÛÛYÙMYMÙXŽÜY[™ÎÜÝÚ]K\ÜXÙN››ÝÜ˜\‰Ü™]Q]JÙYÛY[™œ›ÛQ]J_HÈ	Ü™]Q]JÙYÛY[Ñ]J_OÝ‚ˆÝ[OH˜›Ü™\‹X›ÝÛNŒ\ÛÛYÙMYMÙXŽÜY[™ÎÜÝ^X[YÛŽœšYÚÝÚ]K\ÜXÙN››ÝÜ˜\‰Û[Û™^JÙYÛY[˜˜[[˜ÙJ_OÝ‚ˆÝ[OH˜›Ü™\‹X›ÝÛNŒ\ÛÛYÙMYMÙXŽÜY[™ÎÜÝ^X[YÛŽœšYÚÝÚ]K\ÜXÙN››ÝÜ˜\‰ÜÙYÛY[™^\ßOÝ‚ˆÝ[OH˜›Ü™\‹X›ÝÛNŒ\ÛÛYÙMYMÙXŽÜY[™ÎÜ‰Ù\ØØ\R[
+ÙYÛY[™›Ü›][J_OÝ‚ˆÝ[OH˜›Ü™\‹X›ÝÛNŒ\ÛÛYÙMYMÙXŽÜY[™ÎÜÝ^X[YÛŽœšYÚÙ›Û]ÙZYÚÌÝÚ]K\ÜXÙN››ÝÜ˜\‰Û[Û™^JÙYÛY[š[\™\Ý
+_OÝ‚ˆÝ˜ˆ
+Bˆš›Ú[Š	ÉÊNÂˆÛÛœÝ^[Y[›ÝÜÈH
+Ø[Ý[][Û‹œ^[Y[ØÚY[H×JBˆ›X\
+ˆ
+^[Y[
+HOˆˆ‚ˆÝ[OH˜›Ü™\‹X›ÝÛNŒ\ÛÛYÙMYMÙXŽÜY[™ÎÜÝÚ]K\ÜXÙN››ÝÜ˜\‰Ü™]Q]J^[Y[œ^[Y[]J_OÝ‚ˆÝ[OH˜›Ü™\‹X›ÝÛNŒ\ÛÛYÙMYMÙXŽÜY[™ÎÜ‰Ù\ØØ\R[
+^[Y[›˜[YH^[Y[šY	ËIÊ_OÝ‚ˆÝ[OH˜›Ü™\‹X›ÝÛNŒ\ÛÛYÙMYMÙXŽÜY[™ÎÜÝ^X[YÛŽœšYÚÝÚ]K\ÜXÙN››ÝÜ˜\‰Û[Û™^J^[Y[˜[[Ý[
+_OÝ‚ˆÝ[OH˜›Ü™\‹X›ÝÛNŒ\ÛÛYÙMYMÙXŽÜY[™ÎÜÝ^X[YÛŽœšYÚÝÚ]K\ÜXÙN››ÝÜ˜\‰Û[Û™^J^[Y[˜˜[[˜ÙPY\Š_OÝ‚ˆÝ˜ˆ
+Bˆš›Ú[Š	ÉÊNÂˆ™]\›ˆˆ]ˆÝ[OH›X\™Ú[‹]ÜŒMœ‚ˆÈÝ[OH›X\™Ú[ŽŒÙ›Û\Ú^™NŒM\“]H^[Y[[\™\ÝØ[Ý[][ÛÚÏ‚ˆ	ØØ[Ý[][Û‹œ˜]UØ\›š[™ÈÈÝ[OH›X\™Ú[ŽŒØÛÛÜŽˆÎLNÙ›Û]ÙZYÚŒ‰Ù\ØØ\R[
+Ø[Ý[][Û‹œ˜]UØ\›š[™Ê_OÜ˜ˆ	ÉßBˆÝ[OH›X\™Ú[ŽŒØÛÛÜŽˆÍÌH‘›Ü›][NˆÝ]Ý[™[™È˜[[˜ÙH[ÛH[\™\Ý˜]HÝ™\™YH^\ÈÈÌÜ‚ˆX›HÝ[OH˜›Ü™\‹XÛÛ\ÙN˜ÛÛ\ÙNÝÚYŒL	NÛX^]ÚYŽŒÙ›Û\Ú^™NŒLœÛX\™Ú[‹X›ÝÛNŒLœ‚ˆ›ÙO‚ˆÝ[OH^X[YÛŽ›YØÛÛÜŽˆÍÌNÜY[™Î\ÝÚYŒŒL^Y\ˆ[›ÚXÙH[[Ý[ÝÝ[OHœY[™Î\Ù›Û]ÙZYÚÌ‰Û[Û™^JØ[Ý[][Û‹š[›ÚXÙP[[Ý[
+_OÝÝ‚ˆÝ[OH^X[YÛŽ›YØÛÛÜŽˆÍÌNÜY[™Î\^Y\ˆ[›ÚXÙHYH]OÝÝ[OHœY[™Î\‰Ü™]Q]JØ[Ý[][Û‹™YQ]J_OÝÝ‚ˆÝ[OH^X[YÛŽ›YØÛÛÜŽˆÍÌNÜY[™Î\XØÛÝ[[\™\Ý˜]OÝÝ[OHœY[™Î\‰Ú[˜ÛÛZ[™Ô^[Y[[\™\Ý˜]SX™[
+Ø[Ý[][Û‹›[ÛT˜]J_IØØ[Ý[][Û‹š[\™\Ý˜]QšY[È
+	Ù\ØØ\R[
+Ø[Ý[][Û‹š[\™\Ý˜]QšY[›X™[
+_JXˆ	ÉßOÝÝ‚ˆÝ[OH^X[YÛŽ›YØÛÛÜŽˆÍÌNÜY[™Î\Ø[Ý[]Y[\™\ÝÝ[ÝÝ[OHœY[™Î\Ù›Û\Ú^™NŒM\Ù›Û]ÙZYÚŽØÛÛÜŽˆÌYŒŽLÍÈ‰Û[Û™^JØ[Ý[][Û‹Ý[[\™\Ý
+_OÝÝ‚ˆÝ›ÙO‚ˆÝX›O‚ˆX›HÝ[OH˜›Ü™\‹XÛÛ\ÙN˜ÛÛ\ÙNÝÚYŒL	NÛX^]ÚYŽMŒÙ›Û\Ú^™NŒLœÛX\™Ú[‹X›ÝÛNŒLœ‚ˆXYˆÝ[OH˜˜XÚÙÜ›Ý[™ˆÙŽ˜Y˜ÎØÛÛÜŽˆÍÌNÝ^]˜[œÙ›Ü›N\\˜Ø\ÙNÙ›Û\Ú^™NŒL\Ý[OH^X[YÛŽ›YÜY[™ÎÜ”\š[ÙÝÝ[OH^X[YÛŽœšYÚÜY[™ÎÜ˜[[˜ÙOÝÝ[OH^X[YÛŽœšYÚÜY[™ÎÜ‘^\ÏÝÝ[OH^X[YÛŽ›YÜY[™ÎÜ‘›Ü›][OÝÝ[OH^X[YÛŽœšYÚÜY[™ÎÜ’[\™\ÝÝÝÝXY‚ˆ›ÙO‰ÜÙYÛY[›ÝÜÈ	ÏÛÛÜ[HHˆÝ[OHœY[™ÎŒLœÝ^X[YÛŽ˜Ù[\ŽØÛÛÜŽˆÍÌH“›ÈÝ™\™YH[\™\ÝÙYÛY[Ø\ÈØ[Ý[]YÝÝ‰ßOÝ›ÙO‚ˆÝX›O‚ˆX›HÝ[OH˜›Ü™\‹XÛÛ\ÙN˜ÛÛ\ÙNÝÚYŒL	NÛX^]ÚYŽŒÙ›Û\Ú^™NŒLœ‚ˆXYˆÝ[OH˜˜XÚÙÜ›Ý[™ˆÙŽ˜Y˜ÎØÛÛÜŽˆÍÌNÝ^]˜[œÙ›Ü›N\\˜Ø\ÙNÙ›Û\Ú^™NŒL\Ý[OH^X[YÛŽ›YÜY[™ÎÜ”^[Y[]OÝÝ[OH^X[YÛŽ›YÜY[™ÎÜ”^[Y[ÝÝ[OH^X[YÛŽœšYÚÜY[™ÎÜ[[Ý[ÝÝ[OH^X[YÛŽœšYÚÜY[™ÎÜ˜[[˜ÙHY\ÝÝÝXY‚ˆ›ÙO‰Ü^[Y[›ÝÜÈ	ÏÛÛÜ[HˆÝ[OHœY[™ÎŒLœÝ^X[YÛŽ˜Ù[\ŽØÛÛÜŽˆÍÌH“›È^Y\ˆ^[Y[ÈÙ\™H›Ý[™›Üˆ\ÈÕSKÝÝ‰ßOÝ›ÙO‚ˆÝX›O‚ˆÙ]˜ÂŸB‚™[˜Ý[Ûˆ[˜ÛÛZ[™Ô^[Y[[\™\ÝØ[Ý[][Û•^
+Ø[Ý[][ÛŠHÂˆ™]\›ˆÉÓ]H^[Y[[\™\ÝØ[Ý[][Û‰Ë›Ü›][NˆÝ]Ý[™[™È˜[[˜ÙH[ÛH[\™\Ý˜]HÝ™\™YH^\ÈÈÌØ[Ý[][Û‹œ˜]UØ\›š[™È	ÉË^Y\ˆ[›ÚXÙH[[Ý[ˆ	Û[Û™^JØ[Ý[][Û‹š[›ÚXÙP[[Ý[
+_X^Y\ˆ[›ÚXÙHYH]Nˆ	Ü™]Q]JØ[Ý[][Û‹™YQ]J_XXØÛÝ[[\™\Ý˜]Nˆ	Ú[˜ÛÛZ[™Ô^[Y[[\™\Ý˜]SX™[
+Ø[Ý[][Û‹›[ÛT˜]J_IØØ[Ý[][Û‹š[\™\Ý˜]QšY[È
+	ØØ[Ý[][Û‹š[\™\Ý˜]QšY[›X™[JXˆ	ÉßXØ[Ý[]Y[\™\ÝÝ[ˆ	Û[Û™^JØ[Ý[][Û‹Ý[[\™\Ý
+_X	ÉË	Ò[\™\ÝÙYÛY[Î‰Ë‹‹ŠØ[Ý[][Û‹œÙYÛY[È×JK›X\
+
+ÙYÛY[
+HOˆ	Ü™]Q]JÙYÛY[™œ›ÛQ]J_HÈ	Ü™]Q]JÙYÛY[Ñ]J_H	ÜÙYÛY[™›Ü›][_HH	Û[Û™^JÙYÛY[š[\™\Ý
+_X
+K	ÉË	Ð^Y\ˆ^[Y[ØÚY[N‰Ë‹‹ŠØ[Ý[][Û‹œ^[Y[ØÚY[H×JK›X\
+
+^[Y[
+HOˆ	Ü™]Q]J^[Y[œ^[Y[]J_H	Ü^[Y[›˜[YH^[Y[šY	ËIßH^[Y[	Û[Û™^J^[Y[˜[[Ý[
+_H˜[[˜ÙHY\ˆ	Û[Û™^J^[Y[˜˜[[˜ÙPY\Š_X
+WK™š[\Š
+[™JHOˆ[™HOOH	ÉÊKš›Ú[Š	×‰ÊNÂŸB‚˜ÛÛœÝSÓÓRS‘×ÔVSQS•ÒS•T‘TÕÐÐSÕSUSÓ—ÕP“WÔUT“ˆH×××Êš[\™\ÝØ[Ý[][Û•X›WÊ—WKÚNÂ˜ÛÛœÝSÓÓRS‘×ÔVSQS•ÒS•T‘TÕÔÕSWÓS’×ÕÒÑS—ÔUT“ˆH×××ÊœÝ[S[š×Ê—WKÚNÂ˜ÛÛœÝQUSÒSÓÓRS‘×ÔVSQS•ÒS•T‘TÕÕSTUHHÂˆÎˆ×KˆØÎˆ×Kˆ˜ØÎˆ×KˆÝXš™XÝˆ	ÉËˆ›ÙNˆ	ÉËŸNÂ‚™[˜Ý[Ûˆ[˜ÛÛZ[™Ô^[Y[[\™\Ý[\]J[œ]HßJHÂˆ™]\›ˆÂˆÎˆÝš[™Ê[œ]ÈÏÈQUSÒSÓÓRS‘×ÔVSQS•ÒS•T‘TÕÕSTUKÊKˆØÎˆÝš[™Ê[œ]˜ØÈÏÈQUSÒSÓÓRS‘×ÔVSQS•ÒS•T‘TÕÕSTUK˜ØÊKˆ˜ØÎˆÝš[™Ê[œ]˜˜ØÈÏÈQUSÒSÓÓRS‘×ÔVSQS•ÒS•T‘TÕÕSTUK˜˜ØÊKˆÝXš™XÝˆÝš[™Ê[œ]œÝXš™XÝQUSÒSÓÓRS‘×ÔVSQS•ÒS•T‘TÕÕSTUKœÝXš™XÝ
+Kˆ›ÙNˆÝš[™Ê[œ]˜›ÙH[œ]š[›ÈQUSÒSÓÓRS‘×ÔVSQS•ÒS•T‘TÕÕSTUK˜›ÙJKˆNÂŸB‚™[˜Ý[Ûˆ™[™\’[˜ÛÛZ[™Ô^[Y[[\™\Ý[\]J˜[YKÛÛ^
+HÂˆ™]\›ˆÝš[™Ê˜[YH	ÉÊKœ™\XÙJ×××ÊŠÐKV˜K^ŒNW×JÊWÊ—WKÙË
+X]ÚÙ^JHOˆ
+Øš™XÝœ›ÝÝ\Kš\ÓÝÛ”›Ü\K˜Ø[
+ÛÛ^Ù^JHÈÛÛ^ÚÙ^WHˆX]Ú
+JNÂŸB‚™[˜Ý[Ûˆ™\XÙR[˜ÛÛZ[™Ô^[Y[[\™\ÝÚÙ[ŠÛÝ\˜ÙK]\›‹™\XÙ[Y[
+HÂˆ™]\›ˆÝš[™ÊÛÝ\˜ÙH	ÉÊBˆœ™\XÙJ™]È™YÑ^
+–×—J—Ê‰Ü]\›‹œÛÝ\˜Ù_WÊÜ˜	ÚIÊK™\XÙ[Y[
+Bˆœ™\XÙJ]\›‹™\XÙ[Y[
+NÂŸB‚™[˜Ý[Ûˆ[˜ÛÛZ[™Ô^[Y[[\™\ÝÝ[S[šÒ[
+\›
+HÂˆ™]\›ˆÝ[OH›X\™Ú[ŽŒMH™YH‰Ù\ØØ\R[
+\›
+_HˆÝ[OH™\Ü^Nš[›[™KX›ØÚÎØ›Ü™\‹\˜Y]\ÎŽØ˜XÚÙÜ›Ý[™ˆÌYŒŽLÍÎØÛÛÜŽˆÙ™™™™™ŽÝ^YXÛÜ˜][ÛŽ››Û™NÙ›Û]ÙZYÚÌÜY[™ÎŽ\LÜ“[šÈÈÕSOØOÜ˜ÂŸB‚™[˜Ý[Ûˆ[˜ÛÛZ[™Ô^[Y[[\™\ÝÝ[S[šÕ^
+\›
+HÂˆ™]\›ˆ[šÈÈÕSNˆ	Ý\›XÂŸB‚™[˜Ý[ÛˆZ[[˜ÛÛZ[™Ô^[Y[[\™\Ý[XZ[
+›ÙK›Ùš[KØ[Ý[][ÛŠHÂˆÛÛœÝ™\]Y\ÝYžHH›Ùš[OË™[Û˜[YH›Ùš[OË™[XZ[	ÓÙÙÙYZ[ˆ\Ù\‰ÎÂˆÛÛœÝ^[Y[˜[YHHÝš[™Ê›ÙKœ^[Y[˜[YH›ÙKœ^[Y[\Ü^S˜[YH›ÙKœØ[\Ù›Ü˜ÙT^[Y[˜[YH›ÙKœ^[Y[Y	ÉÊKš[J
+NÂˆÛÛœÝÝ[S˜[YHHØ[Ý[][ÛËœÝ[S˜[YHÝš[™Ê›ÙKœÝ[S˜[YH	ÉÊKš[J
+NÂˆÛÛœÝ^Y\“˜[YHHØ[Ý[][ÛË˜^Y\“˜[YHÝš[™Ê›ÙK˜^Y\“˜[YH›ÙKœ\S˜[YH	ÉÊKš[J
+NÂˆÛÛœÝ^Y\‘Ü›Ý\˜[YHHØ[Ý[][ÛË˜^Y\‘Ü›Ý\˜[YHÝš[™Ê›ÙK˜^Y\‘Ü›Ý\˜[YH	ÉÊKš[J
+NÂˆÛÛœÝ™XÙZ]™Y]HH™]Q]J›ÙKœ^[Y[]H›ÙKœ™XÙZ]™Y]JNÂˆÛÛœÝ[œÙ\Y]HH›ÙK˜Ü™X]Y]H	‰ˆ]SÛ›J›ÙK˜Ü™X]Y]JHOOH]SÛ›J›ÙKœ^[Y[]H›ÙKœ™XÙZ]™Y]JHÈ™]Q]J›ÙK˜Ü™X]Y]JHˆ	ÉÎÂˆÛÛœÝ[^SX™[H›ÙK™[^Q^\ÈOH[È	ËIÈˆ	Ó[X™\Š›ÙK™[^Q^\ÊKÓØØ[TÝš[™Ê
+_H^\ØÂˆÛÛœÝÛÛ^HÂˆ™\]Y\ÝYžKˆ™\]Y\Ý\‘[XZ[ˆ›Ùš[OË™[XZ[	ÉËˆ^Y\“˜[YNˆ^Y\“˜[YH	ËIËˆ^Y\‘Ü›Ý\˜[YNˆ^Y\‘Ü›Ý\˜[YH	ËIËˆÝ[S˜[YNˆÝ[S˜[YH	ËIËˆ^[Y[˜[YNˆ^[Y[˜[YH›ÙKœ^[Y[Y	ËIËˆ™XÙZ]™Y]Kˆ[œÙ\Y]Kˆ[^Q^\Îˆ[^SX™[ˆ^[Y[[[Ý[ˆ[Û™^J›ÙK˜[[Ý[
+Kˆ™XÙZ]˜X›P˜[[˜ÙNˆ[Û™^JØ[Ý[][ÛËœ™XÙZ]˜X›P˜[[˜ÙHÏÈ›ÙKœ™XÙZ]˜X›P˜[[˜ÙJKˆ[›ÚXÙP[[Ý[ˆ[Û™^JØ[Ý[][ÛËš[›ÚXÙP[[Ý[ÏÈ›ÙKš[›ÚXÙP[[Ý[
+Kˆ[›ÚXÙQYQ]NˆØ[Ý[][ÛË™YQ]HÈ™]Q]JØ[Ý[][Û‹™YQ]JHˆ	ËIËˆ[\™\Ý˜]Nˆ[˜ÛÛZ[™Ô^[Y[[\™\Ý˜]SX™[
+Ø[Ý[][ÛË›[ÛT˜]JKˆ[\™\Ý˜]QšY[ˆØ[Ý[][ÛËš[\™\Ý˜]QšY[Ë›X™[Ø[Ý[][ÛËš[\™\Ý˜]QšY[Ë›˜[YH	ÉËˆ[\™\ÝÝ[ˆ[Û™^JØ[Ý[][ÛËÝ[[\™\Ý
+KˆNÂˆÛÛœÝ[\]HH[˜ÛÛZ[™Ô^[Y[[\™\Ý[\]J›ÙKœ™\ÜÙ][™ÜÈßJNÂˆÛÛœÝÝ[U\›H[˜ÛÛZ[™Ô^[Y[Ý[U\›
+ßKØ[Ý[][ÛËœÝ[OË’Y›ÙKœÝ[RY
+NÂˆÛÛœÝÈH[š\]YQ[XZ[\Ý
+™[™\’[˜ÛÛZ[™Ô^[Y[[\™\Ý[\]J[\]KËÛÛ^
+JNÂˆÛÛœÝØÈH[š\]YQ[XZ[\Ý
+™[™\’[˜ÛÛZ[™Ô^[Y[[\™\Ý[\]J[\]K˜ØËÛÛ^
+JNÂˆÛÛœÝ˜ØÈH[š\]YQ[XZ[\Ý
+™[™\’[˜ÛÛZ[™Ô^[Y[[\™\Ý[\]J[\]K˜˜ØËÛÛ^
+JNÂˆÛÛœÝÝXš™XÝH™[™\’[˜ÛÛZ[™Ô^[Y[[\™\Ý[\]J[\]KœÝXš™XÝÛÛ^
+NÂˆÛÛœÝ›ÙPÛÛ[H™[™\’[˜ÛÛZ[™Ô^[Y[[\™\Ý[\]J[\]K˜›ÙKÛÛ^
+NÂˆÛÛœÝ›ÙU^H\Ò[X\šÝ\
+›ÙPÛÛ[
+HÈ[ÔZ[•^
+›ÙPÛÛ[
+Hˆ›ÙPÛÛ[ÂˆÛÛœÝØ[Ý[][Û’[HØ[Ý[][ÛˆÈ[˜ÛÛZ[™Ô^[Y[[\™\ÝØ[Ý[][Û’[
+Ø[Ý[][ÛŠHˆ	ÉÎÂˆÛÛœÝØ[Ý[][Û•^HØ[Ý[][ÛˆÈ[˜ÛÛZ[™Ô^[Y[[\™\ÝØ[Ý[][Û•^
+Ø[Ý[][ÛŠHˆ	ÉÎÂˆÛÛœÝ[›ÙHH™\XÙR[˜ÛÛZ[™Ô^[Y[[\™\ÝÚÙ[Š[XZ[ÛÛ[[
+›ÙPÛÛ[
+KSÓÓRS‘×ÔVSQS•ÒS•T‘TÕÔÕSWÓS’×ÕÒÑS—ÔUT“‹[˜ÛÛZ[™Ô^[Y[[\™\ÝÝ[S[šÒ[
+Ý[U\›
+JBˆœ™\XÙJÏ–×—J—Ê—××Êš[\™\ÝØ[Ý[][Û•X›WÊ—WWÊÜ‹ÚKØ[Ý[][Û’[
+Bˆœ™\XÙJSÓÓRS‘×ÔVSQS•ÒS•T‘TÕÐÐSÕSUSÓ—ÕP“WÔUT“‹Ø[Ý[][Û’[
+NÂˆÛÛœÝ^›ÙHH™\XÙR[˜ÛÛZ[™Ô^[Y[[\™\ÝÚÙ[Š›ÙU^SÓÓRS‘×ÔVSQS•ÒS•T‘TÕÔÕSWÓS’×ÕÒÑS—ÔUT“‹[˜ÛÛZ[™Ô^[Y[[\™\ÝÝ[S[šÕ^
+Ý[U\›
+JKœ™\XÙJSÓÓRS‘×ÔVSQS•ÒS•T‘TÕÐÐSÕSUSÓ—ÕP“WÔUT“‹Ø[Ý[][Û•^
+NÂˆÛÛœÝ[Hˆ]ˆÝ[OH™›ÛY˜[Z[N’[\‹\šX[Ø[œË\Ù\šYŽØÛÛÜŽˆÌYŒŽLÍÎÛ[™KZZYÚŒKH‚ˆ	Ú[›Ù_BˆÙ]˜Âˆ™]\›ˆÈËØË˜ØËÝXš™XÝ[^ˆ^›ÙHNÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ[˜ÛÛZ[™Ô^[Y[[\™\Ý[›ÚXÙT™\]Y\Ý
+›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÈÛY[›Ùš[HHHXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆÛÛœÝ^[Y[YHÝš[™Ê›ÙKœ^[Y[Y›ÙKœ^[Y[ÚY	ÉÊKš[J
+NÂˆYˆ
+\^[Y[Y
+H›ÝÈ\\œ›ÜŠ	Ü^[Y[Y\È™\]Z\™Y‰Ë
+NÂ‚ˆÛÛœÝ[^Q^\ÈH[X™\Š›ÙK™[^Q^\ÈÏÈ›ÙK™[^WÙ^\ÊNÂˆYˆ
+S[X™\‹š\Ñš[š]J[^Q^\ÊH[^Q^\ÈHÊHÂˆ›ÝÈ\\œ›ÜŠ	Ó]H^[Y[[\™\Ý[›ÚXÙH™\]Y\Ý\ÈÛ›H]˜Z[X›H›Üˆ^Y\ˆ^[Y[È[^YY[Ü™H[ˆÈ^\Ë‰Ë
+NÂˆB‚ˆÛÛœÝ^\Ý[™ÈH]ØZ]™]Ú[˜ÛÛZ[™Ô^[Y[[\™\Ý›ÝYšXØ][ÛŠÛY[^[Y[Y
+NÂˆÛÛœÝ›Ü˜ÙT™\Ù[™H›ÙK™›Ü˜ÙHOOHYH›ÙK˜ÛÛ™š\›T™\Ù[™OOHYH›ÙK˜[ÝÔ™\Ù[™OOHYNÂˆYˆ
+^\Ý[™È	‰ˆY›Ü˜ÙT™\Ù[™
+HÂˆÛÛœÝ[]™\žU[˜Ù\Z[ˆHÉÜÙ[™[™ÉË	Ý[˜Ù\Z[‰×Kš[˜ÛY\Ê^\Ý[™Ë™[]™\žTÝ]\ÊNÂˆ™]\›ˆÂˆÙ[ˆ˜[ÙKˆ[™XYTÙ[ˆ^\Ý[™Ë™[]™\žTÝ]\ÈOOH	ÜÙ[	Ëˆ[]™\žU[˜Ù\Z[‹ˆ™\]Z\™\ÐÛÛ™š\›X][ÛŽˆYKˆ›ÝYšXØ][ÛŽˆ^\Ý[™ËˆNÂˆB‚ˆÛÛœÝ™\ÜÙ][™ÜÈH]ØZ]ØYš[˜[˜ÚX[™\ÜÙ][™ÜÊÛY[	Ú[˜ÛÛZ[™×Ü^[Y[Ú[\™\ÝÜ™\]Y\ÝÉËÈ™\]Z\™YˆYHJNÂˆYˆ
+TÝš[™Ê™\ÜÙ][™ÜËœÙ][™ÜÏËœÝXš™XÝ	ÉÊKš[J
+HTÝš[™Ê™\ÜÙ][™ÜËœÙ][™ÜÏË˜›ÙH	ÉÊKš[J
+JHÂˆ›ÝÈ\\œ›ÜŠ	Ó]H^[Y[[\™\Ý™\]Y\ÝÝXš™XÝ[™›ÙH\™H›ÝÛÛ™šYÝ\™YˆÙ[™[™È\È\ØX›Y‰ËLË	Ñ’SSÒPSÔ‘TÔ•ÕSTUWÓ“ÕÐÓÓ‘’QÕT‘Q	Ë[™Yš[™YYJNÂˆBˆÛÛœÝØ[Ý[][ÛˆH]ØZ][˜ÛÛZ[™Ô^[Y[[\™\ÝØ[Ý[][ÛŠÈ‹‹˜›ÙK[^Q^\Ë^[Y[YKXØÙ\ÜÐÛÛ^
+NÂˆÛÛœÝ[XZ[HZ[[˜ÛÛZ[™Ô^[Y[[\™\Ý[XZ[
+È‹‹˜›ÙK[^Q^\Ë^[Y[Y™\ÜÙ][™ÜÎˆ™\ÜÙ][™ÜËœÙ][™ÜÈK›Ùš[KØ[Ý[][ÛŠNÂˆYˆ
+[Ü\˜][Û˜[XZ[[]™\žP]˜Z[X›J
+JHÂˆ›ÝÈ\\œ›ÜŠ	ÕHÜ\˜][Û˜[[XZ[Ù[™\ˆ\È[˜]˜Z[X›Kˆ\ÚÈ[ˆYZ[š\Ý˜]ÜˆÈÚXÚÈÙ][™ÜÈˆÞ\Ý[HX[‰Ë
+NÂˆBˆÛÛœÝXZ[ÛÛ™šYÈHÜ\˜][Û˜[XZ[ÛÛ™šYÊ
+NÂˆÛÛœÝ™XÚ\Y[ÈH[XZ[ÎÂˆYˆ
+\™XÚ\Y[Ë›[™Ý
+HÂˆ›ÝÈ\\œ›ÜŠ	Ó]H^[Y[[\™\Ý™\]Y\Ý™XÚ\Y[\È›ÝÛÛ™šYÝ\™YˆY]X\ÝÛ™HÈ™XÚ\Y[[ˆH[\]K‰Ë
+NÂˆBˆÛÛœÝÙ[™\”Û˜\ÚÝH^\Ý[™ÏËœÙ[™\“XZ[›ÞÛ˜\ÚÝˆÈÈYˆ^\Ý[™ËœÙ[™\“XZ[›ÞY[[XZ[Y™\ÜÎˆ^\Ý[™ËœÙ[™\“XZ[›ÞÛ˜\ÚÝBˆˆ]ØZ]™\ÛÛ™QÜ˜\[XZ[Ù[™\ŠÛY[	Ú[˜ÛÛZ[™×Ü^[Y[Ü™\ÜÉÊK[Š
+Ù[™\ŠHOˆ
+ÂˆYˆÙ[™\‹›XZ[›ÞYˆ[XZ[Y™\ÜÎˆÙ[™\‹™[XZ[Y™\ÜËˆJJNÂˆÛÛœÝ][\]H™]È]J
+KÒTÓÔÝš[™Ê
+NÂˆÛÛœÝ^[ØYHÂˆ^[Y[ÚYˆ^[Y[Yˆ^[Y[Û˜[YNˆÝš[™Ê›ÙKœ^[Y[˜[YH›ÙKœ^[Y[\Ü^S˜[YH›ÙKœØ[\Ù›Ü˜ÙT^[Y[˜[YH	ÉÊKš[J
+H[ˆÝ[WÚYˆÝš[™Ê›ÙKœÝ[RY	ÉÊKš[J
+H[ˆÝ[WÛ˜[YNˆØ[Ý[][Û‹œÝ[S˜[YHÝš[™Ê›ÙKœÝ[S˜[YH	ÉÊKš[J
+H[ˆ^Y\—Û˜[YNˆØ[Ý[][Û‹˜^Y\“˜[YHÝš[™Ê›ÙK˜^Y\“˜[YH›ÙKœ\S˜[YH	ÉÊKš[J
+H[ˆ^Y\—ÙÜ›Ý\Û˜[YNˆØ[Ý[][Û‹˜^Y\‘Ü›Ý\˜[YHÝš[™Ê›ÙK˜^Y\‘Ü›Ý\˜[YH	ÉÊKš[J
+H[ˆ™XÙZ]™YÙ]Nˆ[˜ÛÛZ[™Ô^[Y[‘]J›ÙKœ^[Y[]H›ÙKœ™XÙZ]™Y]JKˆ^[Y[ØÜ™X]YÙ]Nˆ[˜ÛÛZ[™Ô^[Y[‘]J›ÙK˜Ü™X]Y]JKˆ[^WÙ^\ÎˆX][˜Ê[^Q^\ÊKˆ[[Ý[ˆ[˜ÛÛZ[™Ô^[Y[“[X™\Š›ÙK˜[[Ý[
+KˆÝ\œ™[˜ÞNˆÝš[™Ê›ÙK˜Ý\œ™[˜ÞH	ÕTÑ	ÊKš[J
+H	ÕTÑ	Ëˆ™XÙZ]˜X›WØ˜[[˜ÙNˆ[˜ÛÛZ[™Ô^[Y[“[X™\ŠØ[Ý[][Û‹œ™XÙZ]˜X›P˜[[˜ÙHÏÈ›ÙKœ™XÙZ]˜X›P˜[[˜ÙJKˆ™XÚ\Y[Ù[XZ[ˆ[š\]YQ[XZ[\Ý
+™XÚ\Y[Ë[XZ[˜ØË[XZ[˜˜ØÊKš›Ú[Š	Ë	ÊKˆ[XZ[ÜÝXš™XÝˆ[XZ[œÝXš™XÝˆ[XZ[ÛY\ÜØYÙWÚYˆ[ˆ[XZ[Ü›ÝšY\ŽˆXZ[ÛÛ™šYË™[]™\žSY]ÙˆXÝÜ—Ý\Ù\—ÚYˆ›Ùš[KšYˆXÝÜ—Ù[XZ[ˆ›Ùš[K™[XZ[ˆXÝÜ—Û˜[YNˆ›Ùš[K™[Û˜[YH›Ùš[K™[XZ[[ˆ[]™\žWÜÝ]\Îˆ	ÜÙ[™[™ÉËˆÙ[™\—ÛXZ[›ÞÚYˆÙ[™\”Û˜\ÚÝšYˆÙ[™\—ÛXZ[›ÞÜÛ˜\ÚÝˆÙ[™\”Û˜\ÚÝ™[XZ[Y™\ÜËˆ\ÝØ][\Ø]ˆ][\]ˆ\ÝÙ\œ›ÜŽˆ[ˆÙ[Ø]ˆ[ˆ\]YØ]ˆ][\]ˆY]Y]NˆÂˆÛÝ\˜ÙNˆ	Ú[˜ÛÛZ[™×Ü^[Y[	Ëˆ[^U™\ÚÛ^\ÎˆËˆ™\]Y\ÝY][Y^›Û™Nˆ	Ð\ÚXKÒÛ™×ÒÛÛ™ÉËˆ™\Ù[ˆ›ÛÛX[Š^\Ý[™ÊKˆ™\Ù[™ÛÝ[ˆ[X™\Š^\Ý[™ÏË›Y]Y]OËœ™\Ù[™ÛÝ[
+H
+È
+^\Ý[™ÈÈHˆ
+Kˆ™]š[Ý\Ô™\]Y\Ýˆ^\Ý[™ÂˆÈÂˆÙ[]ˆ^\Ý[™ËœÙ[][ˆXÝÜ‘[XZ[ˆ^\Ý[™Ë˜XÝÜ‘[XZ[[ˆ™XÚ\Y[[XZ[ˆ^\Ý[™Ëœ™XÚ\Y[[XZ[[ˆ[XZ[ÝXš™XÝˆ^\Ý[™Ë™[XZ[ÝXš™XÝ[ˆBˆˆ[ˆ[\™\ÝØ[Ý[][ÛŽˆÂˆ[›ÚXÙP[[Ý[ˆØ[Ý[][Û‹š[›ÚXÙP[[Ý[ˆYQ]NˆØ[Ý[][Û‹™YQ]Kˆ[\™\Ý˜]QšY[ˆØ[Ý[][Û‹š[\™\Ý˜]QšY[ˆ˜]Ò[\™\Ý˜]NˆØ[Ý[][Û‹œ˜]Ò[\™\Ý˜]Kˆ[ÛT˜]NˆØ[Ý[][Û‹›[ÛT˜]Kˆ˜]UØ\›š[™ÎˆØ[Ý[][Û‹œ˜]UØ\›š[™ËˆÝ[[\™\ÝˆØ[Ý[][Û‹Ý[[\™\ÝˆÙYÛY[ÎˆØ[Ý[][Û‹œÙYÛY[Ëˆ^[Y[ØÚY[NˆØ[Ý[][Û‹œ^[Y[ØÚY[KˆKˆKˆNÂ‚ˆÛÛœÝ™\Ù\™T]Y\žHH^\Ý[™ÈÈÛY[™œ›ÛJ	Ú[˜ÛÛZ[™×Ü^[Y[Ú[\™\ÝÛ›ÝYšXØ][ÛœÉÊK\]J^[ØY
+K™\J	Ü^[Y[ÚY	Ë^[Y[Y
+HˆÛY[™œ›ÛJ	Ú[˜ÛÛZ[™×Ü^[Y[Ú[\™\ÝÛ›ÝYšXØ][ÛœÉÊKš[œÙ\
+^[ØY
+NÂˆÛÛœÝÈ]Nˆ™\Ù\™Y\œ›ÜŽˆ™\Ù\™Q\œ›ÜˆHH]ØZ]™\Ù\™T]Y\žKœÙ[XÝ
+SÓÓRS‘×ÔVSQS•ÒS•T‘TÕÓ“ÕQ’PÐUSÓ—Ñ’QSÊKœÚ[™ÛJ
+NÂˆYˆ
+™\Ù\™Q\œ›ÜŠH›ÝÈ™\Ù\™Q\œ›ÜŽÂ‚ˆ]™\Ý[ÂˆžHÂˆ™\Ý[H]ØZ]Ù[™Ü\˜][Û˜[XZ[
+ÂˆÎˆ™XÚ\Y[ËˆØÎˆ[XZ[˜ØËˆ˜ØÎˆ[XZ[˜˜ØËˆÝXš™XÝˆ[XZ[œÝXš™XÝˆ[ˆ[XZ[š[ˆ^ˆ[XZ[^ˆKÈÛY[\œÜÙRÙ^Nˆ	Ú[˜ÛÛZ[™×Ü^[Y[Ü™\ÜÉËXZ[›ÞÛ˜\ÚÝˆÙ[™\”Û˜\ÚÝJNÂˆHØ]Ú
+\œ›ÜŠHÂˆ]ØZ]ÛY[ˆ™œ›ÛJ	Ú[˜ÛÛZ[™×Ü^[Y[Ú[\™\ÝÛ›ÝYšXØ][ÛœÉÊBˆ\]JÂˆ[]™\žWÜÝ]\Îˆ\œ›Ü‹›XZ[[]™\žU[˜Ù\Z[ˆÈ	Ý[˜Ù\Z[‰Èˆ	Ù˜Z[Y	Ëˆ\ÝÙ\œ›ÜŽˆ\œ›Ü‹›Y\ÜØYÙKˆ\]YØ]ˆ™]È]J
+KÒTÓÔÝš[™Ê
+KˆJBˆ™\J	Ü^[Y[ÚY	Ë^[Y[Y
+NÂˆ›ÝÈ\œ›ÜŽÂˆB‚ˆÛÛœÝÙ[]H™]È]J
+KÒTÓÔÝš[™Ê
+NÂˆÛÛœÝÈ]K\œ›ÜˆHH]ØZ]ÛY[ˆ™œ›ÛJ	Ú[˜ÛÛZ[™×Ü^[Y[Ú[\™\ÝÛ›ÝYšXØ][ÛœÉÊBˆ\]JÂˆ[]™\žWÜÝ]\Îˆ	ÜÙ[	Ëˆ[XZ[ÛY\ÜØYÙWÚYˆ™\Ý[šY™\Ý[›Y\ÜØYÙRY[ˆ[XZ[Ü›ÝšY\Žˆ™\Ý[™[]™\žSY]ÙXZ[ÛÛ™šYË™[]™\žSY]ÙˆÙ[Ø]ˆÙ[]ˆ\ÝÙ\œ›ÜŽˆ[ˆ\]YØ]ˆÙ[]ˆJBˆ™\J	Ü^[Y[ÚY	Ë^[Y[Y
+BˆœÙ[XÝ
+SÓÓRS‘×ÔVSQS•ÒS•T‘TÕÓ“ÕQ’PÐUSÓ—Ñ’QSÊBˆœÚ[™ÛJ
+NÂˆYˆ
+\œ›ÜŠHÂˆ]ØZ]ÛY[ˆ™œ›ÛJ	Ú[˜ÛÛZ[™×Ü^[Y[Ú[\™\ÝÛ›ÝYšXØ][ÛœÉÊBˆ\]JÂˆ[]™\žWÜÝ]\Îˆ	Ý[˜Ù\Z[‰Ëˆ\ÝÙ\œ›ÜŽˆ[XZ[Ù[]˜XÚÚ[™È\]H˜Z[Yˆ	Ù\œ›Ü‹›Y\ÜØYÙ_Xˆ\]YØ]ˆ™]È]J
+KÒTÓÔÝš[™Ê
+KˆJBˆ™\J	Ü^[Y[ÚY	Ë^[Y[Y
+NÂˆ™]\›ˆÂˆÙ[ˆYKˆ˜XÚÚ[™ÕØ\›š[™Îˆ	Ñ[XZ[Ø\ÈÙ[]ÓÔÈÛÝ[›Ýš[˜[^™H]È[]™\žH™XÛÜ™ˆÈ›Ý™\Ù[™[[[ˆYZ[š\Ý˜]Üˆ™XÛÛ˜Ú[\È]‰ËˆÎˆ™XÚ\Y[Ëˆ›ÝYšXØ][ÛŽˆÂˆ‹‹œÙ\šX[^™R[˜ÛÛZ[™Ô^[Y[[\™\Ý›ÝYšXØ][ÛŠ™\Ù\™Y
+Kˆ[]™\žTÝ]\Îˆ	Ý[˜Ù\Z[‰ËˆKˆNÂˆBˆ™]\›ˆÂˆÙ[ˆYKˆ[™XYTÙ[ˆ›ÛÛX[Š^\Ý[™ÊKˆ™\Ù[ˆ›ÛÛX[Š^\Ý[™ÊKˆÎˆ™XÚ\Y[Ëˆ›ÝYšXØ][ÛŽˆÙ\šX[^™R[˜ÛÛZ[™Ô^[Y[[\™\Ý›ÝYšXØ][ÛŠ]JKˆNÂŸB‚˜ÛÛœÝSÓÓRS‘×ÔVSQS•Ô‘PÑRUP“WÕP“WÕÒÑS—ÔUT“ˆH×××Êœ™XÙZ]˜X›T^[Y[ÕX›WÊ—WKÚNÂ˜ÛÛœÝSÓÓRS‘×ÔVSQS•Ð•VQT—ÐÒPWÕP“WÕÒÑS—ÔUT“ˆH×××Ê˜^Y\ÚXR[›ÚXÙ\ÕX›WÊ—WKÚNÂ˜ÛÛœÝSÓÓRS‘×ÔVSQS•ÓUWÒS•T‘TÕÓS’×ÕÒÑS—ÔUT“”ÈHË×××Êœ™\]Y\Ý]T^[Y[[\™\Ý[›ÚXÙS[š×Ê—WKÚK×××Ê›]T^[Y[[\™\Ý[š×Ê—WKÚWNÂ˜ÛÛœÝQUSÒSÓÓRS‘×ÔVSQS•ÑSPRSÔÑUS‘ÔÈHÂˆÎˆ×KˆØÎˆ×Kˆ˜ØÎˆ×KˆÝXš™XÝˆ	ÉËˆ[›Îˆ	ÉËˆ[˜ÛYT™XÙZ]˜X›T^[Y[ÎˆYKˆ[˜ÛYP^Y\ÚXR[›ÚXÙ\ÎˆYKŸNÂ‚™[˜Ý[Ûˆ[˜ÛÛZ[™Ô^[Y[[XZ[Ù][™ÜÊ[œ]HßJHÂˆÛÛœÝØY™R[œ]HÈ‹‹š[œ]NÂˆ[]HØY™R[œ]™œ›ÛNÂˆÛÛœÝY˜][ÈHQUSÒSÓÓRS‘×ÔVSQS•ÑSPRSÔÑUS‘ÔÎÂˆ™]\›ˆÂˆ‹‹™Y˜][Ëˆ‹‹œØY™R[œ]ˆÎˆ\œÙQ[XZ[\Ý
+[œ]ËY˜][ËÊKˆØÎˆ\œÙQ[XZ[\Ý
+[œ]˜ØËY˜][Ë˜ØÊKˆ˜ØÎˆ\œÙQ[XZ[\Ý
+[œ]˜˜ØËY˜][Ë˜˜ØÊKˆÝXš™XÝˆÝš[™Ê[œ]œÝXš™XÝÏÈY˜][ËœÝXš™XÝ
+Kˆ[›ÎˆÝš[™Ê[œ]š[›ÈÏÈY˜][Ëš[›ÊKˆ[˜ÛYT™XÙZ]˜X›T^[Y[Îˆ[œ]š[˜ÛYT™XÙZ]˜X›T^[Y[ÈÏÈY˜][Ëš[˜ÛYT™XÙZ]˜X›T^[Y[Ëˆ[˜ÛYP^Y\ÚXR[›ÚXÙ\Îˆ[œ]š[˜ÛYP^Y\ÚXR[›ÚXÙ\ÈÏÈY˜][Ëš[˜ÛYP^Y\ÚXR[›ÚXÙ\ËˆNÂŸB‚™[˜Ý[Ûˆ[˜ÛÛZ[™Ô^[Y[ÙX\˜ÚX]Ú\Ê›ÝËÙX\˜ÚšY[ÊHÂˆÛÛœÝ]Y\žHHÝš[™ÊÙX\˜Ú	ÉÊBˆš[J
+BˆÓÝÙ\Ø\ÙJ
+NÂˆYˆ
+\]Y\žJH™]\›ˆYNÂˆ™]\›ˆšY[ËœÛÛYJ
+šY[
+HO‚ˆÝš[™Ê›ÝÏË–ÙšY[H	ÉÊBˆÓÝÙ\Ø\ÙJ
+Bˆš[˜ÛY\Ê]Y\žJKˆ
+NÂŸB‚™[˜Ý[Ûˆ™[™\’[˜ÛÛZ[™Ô^[Y[[\]J˜[YKÛÛ^HßJHÂˆ]Ý]]HÝš[™Ê˜[YH	ÉÊNÂˆ›Üˆ
+ÛÛœÝÚÙ^K™\XÙ[Y[HÙˆØš™XÝ™[šY\ÊÛÛ^
+JHÂˆÝ]]HÝ]]œ™\XÙJ™]È™YÑ^
+××Ê‰ÚÙ^_WÊ—WX	ÙÚIÊKÝš[™Ê™\XÙ[Y[ÏÈ	ÉÊJNÂˆBˆ™]\›ˆÝ]]ÂŸB‚™[˜Ý[Ûˆ[˜ÛÛZ[™Ô^[Y[™\ÜÝ[[X\žJ›ÝÜÈH×JHÂˆÛÛœÝ[˜ÛÛZ[™Ô›ÝÜÈH›ÝÜË™š[\Š
+›ÝÊHOˆ›ÝËš\Ò[˜ÛÛZ[™ÊNÂˆ™]\›ˆÂˆ[˜ÛÛZ[™Ô›ÝÜÎˆ[˜ÛÛZ[™Ô›ÝÜË›[™ÝˆÝ[[˜ÛÛZ[™Ð[[Ý[ˆ[˜ÛÛZ[™Ô›ÝÜËœ™YXÙJ
+Ý[K›ÝÊHOˆÝ[H
+ÈX]˜XœÊ[X™\Š›ÝËš[˜ÛÛZ[™Ð[[Ý[
+JK
+Kˆ^Y\”^[Y[Ý[ˆ›ÝÜË™š[\Š
+›ÝÊHOˆ›ÝË\HOOH	Ð^Y\ˆ^[Y[	ÊKœ™YXÙJ
+Ý[K›ÝÊHOˆÝ[H
+ÈX]˜XœÊ[X™\Š›ÝËš[˜ÛÛZ[™Ð[[Ý[
+JK
+KˆÝ\Y\”™Y[™Ý[ˆ›ÝÜË™š[\Š
+›ÝÊHOˆ›ÝË\HOOH	ÔÝ\Y\ˆ™Y[™	ÊKœ™YXÙJ
+Ý[K›ÝÊHOˆÝ[H
+ÈX]˜XœÊ[X™\Š›ÝËš[˜ÛÛZ[™Ð[[Ý[
+JK
+Kˆ[›X]ÚYÛÝ[ˆ›ÝÜË™š[\Š
+›ÝÊHOˆ›ÝË\HOOH	Õ[›X]ÚY	È›ÝËœÝ]\ÈOOH	Ó™YYÈ™]šY]ÉÊK›[™ÝˆNÂŸB‚™[˜Ý[Ûˆ[˜ÛÛZ[™Ô^[Y[[œÙ\Y›ÝJ›ÝÊHÂˆYˆ
+\›ÝÏËœ^[Y[]H\›ÝÏË˜Ü™X]Y]JH™]\›ˆ	ÉÎÂˆYˆ
+]SÛ›J›ÝËœ^[Y[]JHOOH]SÛ›J›ÝË˜Ü™X]Y]JJH™]\›ˆ	ÉÎÂˆ™]\›ˆ[œÙ\YÛˆ	Ü™]Q]J›ÝË˜Ü™X]Y]J_XÂŸB‚™[˜Ý[Ûˆ[˜ÛÛZ[™Ô^[Y[\›\Õ˜[YJ›ÝÊHÂˆ™]\›ˆ›ÝÏË\HOOH	Ð^Y\ˆ^[Y[	ÈÈ›ÝËœ^[Y[\›\È	ËIÈˆ	Ó‹ÐIÎÂŸB‚™[˜Ý[Ûˆ[˜ÛÛZ[™Ô^[Y[[^U˜[YJ›ÝÊHÂˆYˆ
+›ÝÏË\HOOH	Ð^Y\ˆ^[Y[	ÊH™]\›ˆ	Ó‹ÐIÎÂˆ™]\›ˆ›ÝË™[^Q^\ÈOH[È	ËIÈˆ[X™\Š›ÝË™[^Q^\ÊKÓØØ[TÝš[™Ê
+NÂŸB‚™[˜Ý[Ûˆ[˜ÛÛZ[™Ô^[Y[[[Ý[^
+›ÝÊHÂˆÛÛœÝ˜[šÐÚ\™Ù\ÈH
+›ÝÏË˜˜[šÐÚ\™Ù\È×JK›X\
+
+Ú\™ÙJHOˆ˜[šÈÚ\™ÙH	Û[Û™^JÚ\™ÙK˜[[Ý[
+_X
+NÂˆ™]\›ˆÛ[Û™^J›ÝÏË˜[[Ý[
+K‹‹˜˜[šÐÚ\™Ù\×Kš›Ú[Š	ÈÈ	ÊNÂŸB‚™[˜Ý[Ûˆ[˜ÛÛZ[™Ô^[Y[™XÙZ]˜X›UX›R[
+›ÝÜÈH×JHÂˆÛÛœÝX›T›ÝÜÈH›ÝÜÂˆ›X\
+
+›ÝÊHOˆÂˆÛÛœÝÙ[H	Ø›Ü™\‹X›ÝÛNŒ\ÛÛYÙMYMÙXŽÜY[™ÎÜÝ™\XØ[X[YÛŽÜ	ÎÂˆÛÛœÝ[[Ý[[™\ÈHÙ\ØØ\R[
+[Û™^J›ÝË˜[[Ý[
+JK‹‹Š›ÝË˜˜[šÐÚ\™Ù\È×JK›X\
+
+Ú\™ÙJHOˆÜ[ˆÝ[OH™\Ü^N˜›ØÚÎØÛÛÜŽˆÎLNÙ›Û]ÙZYÚŒ˜[šÈÚ\™ÙH	Ù\ØØ\R[
+[Û™^JÚ\™ÙK˜[[Ý[
+J_OÜÜ[˜
+WKš›Ú[Š	ÉÊNÂˆ™]\›ˆˆ‚ˆÝ[OH‰ØÙ[NÝÚ]K\ÜXÙN››ÝÜ˜\‰Ü™]Q]J›ÝËœ^[Y[]J_IÚ[˜ÛÛZ[™Ô^[Y[[œÙ\Y›ÝJ›ÝÊHÈÜ[ˆÝ[OH™\Ü^N˜›ØÚÎØÛÛÜŽˆÎLNÙ›Û\Ú^™NŒL\Ù›Û]ÙZYÚŒ’[œÙ\YÛˆ	Ü™]Q]J›ÝË˜Ü™X]Y]J_OÜÜ[˜ˆ	ÉßOÝ‚ˆÝ[OH‰ØÙ[NÝÚ]K\ÜXÙN››ÝÜ˜\Ý^X[YÛŽœšYÚ‰Ù\ØØ\R[
+[˜ÛÛZ[™Ô^[Y[\›\Õ˜[YJ›ÝÊJ_OÝ‚ˆÝ[OH‰ØÙ[NÝÚ]K\ÜXÙN››ÝÜ˜\Ý^X[YÛŽœšYÚ‰Ù\ØØ\R[
+[˜ÛÛZ[™Ô^[Y[[^U˜[YJ›ÝÊJ_OÝ‚ˆÝ[OH‰ØÙ[NÛZ[‹]ÚYŒMŒ‰Ù\ØØ\R[
+›ÝËœ\S˜[YH	ËIÊ_OÝ‚ˆÝ[OH‰ØÙ[NÛZ[‹]ÚYŒM‰Ù\ØØ\R[
+›ÝË˜^Y\‘Ü›Ý\˜[YH	ËIÊ_OÝ‚ˆÝ[OH‰ØÙ[NÛZ[‹]ÚYŒNÙ›Û]ÙZYÚŒ‰Ù\ØØ\R[
+›ÝËœÝ[S˜[YH	ËIÊ_OÝ‚ˆÝ[OH‰ØÙ[NÝÚ]K\ÜXÙN››ÝÜ˜\Ý^X[YÛŽœšYÚÙ›Û]ÙZYÚŒ‰Ø[[Ý[[™\ßOÝ‚ˆÝ[OH‰ØÙ[NÝÚ]K\ÜXÙN››ÝÜ˜\Ý^X[YÛŽœšYÚ‰Û[Û™^J›ÝËœ™XÙZ]˜X›P˜[[˜ÙJ_OÝ‚ˆÝ˜ÂˆJBˆš›Ú[Š	ÉÊNÂˆ™]\›ˆˆ]ˆÝ[OH›X\™Ú[ŽŒMN‚ˆ]ˆÝ[OH™›Û\Ú^™NŒLÜÙ›Û]ÙZYÚÌÛX\™Ú[ŽŒØÛÛÜŽˆÌYŒŽLÍÈ”™XÙZ]˜X›H^[Y[È
+	Ü›ÝÜË›[™ÝÓØØ[TÝš[™Ê
+_JOÙ]‚ˆ]ˆÝ[OH›Ý™\™›ÝË^˜]]ÎØ›Ü™\ŽŒ\ÛÛYÙYL™YŽØ›Ü™\‹\˜Y]\ÎŒL‚ˆX›HÝ[OH˜›Ü™\‹XÛÛ\ÙN˜ÛÛ\ÙNÝÚY˜]]ÎÛZ[‹]ÚYŒLÙ›Û\Ú^™NŒLœÛ[™KZZYÚŒKŒÈ‚ˆXY‚ˆˆÝ[OH˜˜XÚÙÜ›Ý[™ˆÙŽ˜Y˜ÎØÛÛÜŽˆÍÌNÝ^]˜[œÙ›Ü›N\\˜Ø\ÙNÙ›Û\Ú^™NŒL\Û]\‹\ÜXÚ[™Î‹Œ[H‚ˆÝ[OH˜›Ü™\‹X›ÝÛNŒ\ÛÛYÙYL™YŽÜY[™ÎÜÝ^X[YÛŽ›YÝÚ]K\ÜXÙN››ÝÜ˜\”™XÙZ]™Y]OÝ‚ˆÝ[OH˜›Ü™\‹X›ÝÛNŒ\ÛÛYÙYL™YŽÜY[™ÎÜÝ^X[YÛŽœšYÚÝÚ]K\ÜXÙN››ÝÜ˜\•\›\ÏÝ‚ˆÝ[OH˜›Ü™\‹X›ÝÛNŒ\ÛÛYÙYL™YŽÜY[™ÎÜÝ^X[YÛŽœšYÚÝÚ]K\ÜXÙN››ÝÜ˜\‘[^OÝ‚ˆÝ[OH˜›Ü™\‹X›ÝÛNŒ\ÛÛYÙYL™YŽÜY[™ÎÜÝ^X[YÛŽ›YÝÚ]K\ÜXÙN››ÝÜ˜\‘œ›ÛOÝ‚ˆÝ[OH˜›Ü™\‹X›ÝÛNŒ\ÛÛYÙYL™YŽÜY[™ÎÜÝ^X[YÛŽ›YÝÚ]K\ÜXÙN››ÝÜ˜\‘Ü›Ý\Ý‚ˆÝ[OH˜›Ü™\‹X›ÝÛNŒ\ÛÛYÙYL™YŽÜY[™ÎÜÝ^X[YÛŽ›YÝÚ]K\ÜXÙN››ÝÜ˜\”ÕSOÝ‚ˆÝ[OH˜›Ü™\‹X›ÝÛNŒ\ÛÛYÙYL™YŽÜY[™ÎÜÝ^X[YÛŽœšYÚÝÚ]K\ÜXÙN››ÝÜ˜\[[Ý[Ý‚ˆÝ[OH˜›Ü™\‹X›ÝÛNŒ\ÛÛYÙYL™YŽÜY[™ÎÜÝ^X[YÛŽœšYÚÝÚ]K\ÜXÙN››ÝÜ˜\”™XÙZ]˜X›OÝ‚ˆÝ‚ˆÝXY‚ˆ›ÙO‰ÝX›T›ÝÜÈ	ÏÛÛÜ[HŽˆÝ[OHœY[™ÎŒMœÝ^X[YÛŽ˜Ù[\ŽØÛÛÜŽˆÍÌH“›È™XÙZ]˜X›H^[Y[È›Ý[™›ÜˆHÙ[XÝYš[\œËÝÝ‰ßOÝ›ÙO‚ˆÝX›O‚ˆÙ]‚ˆÙ]˜ÂŸB‚™[˜Ý[Ûˆ[˜ÛÛZ[™Ô^[Y[^Y\ÚXUX›R[
+›ÝÜÈH×JHÂˆÛÛœÝX›T›ÝÜÈH›ÝÜÂˆ›X\
+
+›ÝÊHOˆÂˆÛÛœÝÙ[H	Ø›Ü™\‹X›ÝÛNŒ\ÛÛYÙMYMÙXŽÜY[™ÎÜÝ™\XØ[X[YÛŽÜ	ÎÂˆ™]\›ˆˆ‚ˆÝ[OH‰ØÙ[NÛZ[‹]ÚYŒNÙ›Û]ÙZYÚŒ‰Ù\ØØ\R[
+›ÝË˜^Y\“˜[YH	ËIÊ_OÝ‚ˆÝ[OH‰ØÙ[NÛZ[‹]ÚYŒM‰Ù\ØØ\R[
+›ÝË˜^Y\‘Ü›Ý\˜[YH	ËIÊ_OÝ‚ˆÝ[OH‰ØÙ[NÛZ[‹]ÚYŒLÌ‰Ù\ØØ\R[
+›ÝË˜^Y\•˜Y\ˆ	ËIÊ_OÝ‚ˆÝ[OH‰ØÙ[NÛZ[‹]ÚYŒNÙ›Û]ÙZYÚŒ‰Ù\ØØ\R[
+›ÝËœÝ[S˜[YH	ËIÊ_OÝ‚ˆÝ[OH‰ØÙ[NÝÚ]K\ÜXÙN››ÝÜ˜\Ý^X[YÛŽœšYÚ‰Û[Û™^J›ÝË˜Ø[Ý[]Y[[Ý[
+_OÝ‚ˆÝ[OH‰ØÙ[NÝÚ]K\ÜXÙN››ÝÜ˜\Ý^X[YÛŽœšYÚÙ›Û]ÙZYÚŒ‰Û[Û™^J›ÝËœ™XÙZ]˜X›P˜[[˜ÙJ_OÝ‚ˆÝ[OH‰ØÙ[NÝÚ]K\ÜXÙN››ÝÜ˜\‰Ü™]Q]J›ÝË™[]™\žQ]J_OÝ‚ˆÝ˜ÂˆJBˆš›Ú[Š	ÉÊNÂˆ™]\›ˆˆ]ˆÝ[OH›X\™Ú[ŽŒMN‚ˆ]ˆÝ[OH™›Û\Ú^™NŒLÜÙ›Û]ÙZYÚÌÛX\™Ú[ŽŒØÛÛÜŽˆÌYŒŽLÍÈ^Y\ˆÒPH[›ÚXÙ\È
+	Ü›ÝÜË›[™ÝÓØØ[TÝš[™Ê
+_JOÙ]‚ˆ]ˆÝ[OH›Ý™\™›ÝË^˜]]ÎØ›Ü™\ŽŒ\ÛÛYÙYL™YŽØ›Ü™\‹\˜Y]\ÎŒL‚ˆX›HÝ[OH˜›Ü™\‹XÛÛ\ÙN˜ÛÛ\ÙNÝÚY˜]]ÎÛZ[‹]ÚYŽLÙ›Û\Ú^™NŒLœÛ[™KZZYÚŒKŒÈ‚ˆXY‚ˆˆÝ[OH˜˜XÚÙÜ›Ý[™ˆÙŽ˜Y˜ÎØÛÛÜŽˆÍÌNÝ^]˜[œÙ›Ü›N\\˜Ø\ÙNÙ›Û\Ú^™NŒL\Û]\‹\ÜXÚ[™Î‹Œ[H‚ˆÝ[OH˜›Ü™\‹X›ÝÛNŒ\ÛÛYÙYL™YŽÜY[™ÎÜÝ^X[YÛŽ›YÝÚ]K\ÜXÙN››ÝÜ˜\^Y\Ý‚ˆÝ[OH˜›Ü™\‹X›ÝÛNŒ\ÛÛYÙYL™YŽÜY[™ÎÜÝ^X[YÛŽ›YÝÚ]K\ÜXÙN››ÝÜ˜\‘Ü›Ý\Ý‚ˆÝ[OH˜›Ü™\‹X›ÝÛNŒ\ÛÛYÙYL™YŽÜY[™ÎÜÝ^X[YÛŽ›YÝÚ]K\ÜXÙN››ÝÜ˜\^Y\ˆ˜Y\Ý‚ˆÝ[OH˜›Ü™\‹X›ÝÛNŒ\ÛÛYÙYL™YŽÜY[™ÎÜÝ^X[YÛŽ›YÝÚ]K\ÜXÙN››ÝÜ˜\”ÕSOÝ‚ˆÝ[OH˜›Ü™\‹X›ÝÛNŒ\ÛÛYÙYL™YŽÜY[™ÎÜÝ^X[YÛŽœšYÚÝÚ]K\ÜXÙN››ÝÜ˜\Ø[Ý[]Y[[Ý[Ý‚ˆÝ[OH˜›Ü™\‹X›ÝÛNŒ\ÛÛYÙYL™YŽÜY[™ÎÜÝ^X[YÛŽœšYÚÝÚ]K\ÜXÙN››ÝÜ˜\”™XÙZ]˜X›H˜[[˜ÙOÝ‚ˆÝ[OH˜›Ü™\‹X›ÝÛNŒ\ÛÛYÙYL™YŽÜY[™ÎÜÝ^X[YÛŽ›YÝÚ]K\ÜXÙN››ÝÜ˜\‘[]™\žH]OÝ‚ˆÝ‚ˆÝXY‚ˆ›ÙO‰ÝX›T›ÝÜÈ	ÏÛÛÜ[HÈˆÝ[OHœY[™ÎŒMœÝ^X[YÛŽ˜Ù[\ŽØÛÛÜŽˆÍÌH“›È^Y\ˆÒPH[›ÚXÙ\È›Ý[™›ÜˆHÙ[XÝYš[\œËÝÝ‰ßOÝ›ÙO‚ˆÝX›O‚ˆÙ]‚ˆÙ]˜ÂŸB‚™[˜Ý[Ûˆ[˜ÛÛZ[™Ô^[Y[™XÙZ]˜X›UX›U^
+›ÝÜÈH×JHÂˆYˆ
+\›ÝÜË›[™Ý
+H™]\›ˆ	Ô™XÙZ]˜X›H^[Y[Îˆ›Û™IÎÂˆ™]\›ˆØ™XÙZ]˜X›H^[Y[È
+	Ü›ÝÜË›[™ÝJX	Ô™XÙZ]™Y]H\›\È[^Hœ›ÛHÜ›Ý\ÕSH[[Ý[™XÙZ]˜X›IË‹‹œ›ÝÜË›X\
+
+›ÝÊHOˆ	Ü™]Q]J›ÝËœ^[Y[]J_IÚ[˜ÛÛZ[™Ô^[Y[[œÙ\Y›ÝJ›ÝÊHÈ
+	Ú[˜ÛÛZ[™Ô^[Y[[œÙ\Y›ÝJ›ÝÊ_JXˆ	ÉßH	Ú[˜ÛÛZ[™Ô^[Y[\›\Õ˜[YJ›ÝÊ_H	Ú[˜ÛÛZ[™Ô^[Y[[^U˜[YJ›ÝÊ_H	Ü›ÝËœ\S˜[YH	ËIßH	Ü›ÝË˜^Y\‘Ü›Ý\˜[YH	ËIßH	Ü›ÝËœÝ[S˜[YH	ËIßH	Ú[˜ÛÛZ[™Ô^[Y[[[Ý[^
+›ÝÊ_H	Û[Û™^J›ÝËœ™XÙZ]˜X›P˜[[˜ÙJ_X
+WKš›Ú[Š	×‰ÊNÂŸB‚™[˜Ý[Ûˆ[˜ÛÛZ[™Ô^[Y[^Y\ÚXUX›U^
+›ÝÜÈH×JHÂˆYˆ
+\›ÝÜË›[™Ý
+H™]\›ˆ	Ð^Y\ˆÒPH[›ÚXÙ\Îˆ›Û™IÎÂˆ™]\›ˆØ^Y\ˆÒPH[›ÚXÙ\È
+	Ü›ÝÜË›[™ÝJX‹‹œ›ÝÜË›X\
+
+›ÝÊHOˆ	Ü›ÝË˜^Y\“˜[YH	ËIßH	Ü›ÝË˜^Y\‘Ü›Ý\˜[YH	ËIßH	Ü›ÝË˜^Y\•˜Y\ˆ	ËIßH	Ü›ÝËœÝ[S˜[YH	ËIßHØ[Ý[]Y	Û[Û™^J›ÝË˜Ø[Ý[]Y[[Ý[
+_H™XÙZ]˜X›H	Û[Û™^J›ÝËœ™XÙZ]˜X›P˜[[˜ÙJ_H[]™\žH	Ü™]Q]J›ÝË™[]™\žQ]J_X
+WKš›Ú[Š	×‰ÊNÂŸB‚™[˜Ý[Ûˆ™\XÙR[˜ÛÛZ[™Ô^[Y[ÚÙ[ŠÛÝ\˜ÙK]\›‹™\XÙ[Y[
+HÂˆ™]\›ˆÝš[™ÊÛÝ\˜ÙH	ÉÊBˆœ™\XÙJ™]È™YÑ^
+–×—J—Ê‰Ü]\›‹œÛÝ\˜Ù_WÊÜ˜	ÚIÊK™\XÙ[Y[
+Bˆœ™\XÙJ]\›‹™\XÙ[Y[
+NÂŸB‚™[˜Ý[Ûˆ[š™XÝ[˜ÛÛZ[™Ô^[Y[X›\ÊÛÛ[Ù][™ÜË™XÙZ]˜X›UX›K^Y\ÚXUX›JHÂˆ]Ý]]HÝš[™ÊÛÛ[	ÉÊNÂˆÛÛœÝ\Ô™XÙZ]˜X›UÚÙ[ˆHSÓÓRS‘×ÔVSQS•Ô‘PÑRUP“WÕP“WÕÒÑS—ÔUT“‹\Ý
+Ý]]
+NÂˆÛÛœÝ\Ð^Y\ÚXUÚÙ[ˆHSÓÓRS‘×ÔVSQS•Ð•VQT—ÐÒPWÕP“WÕÒÑS—ÔUT“‹\Ý
+Ý]]
+NÂˆÝ]]H™\XÙR[˜ÛÛZ[™Ô^[Y[ÚÙ[ŠÝ]]SÓÓRS‘×ÔVSQS•Ô‘PÑRUP“WÕP“WÕÒÑS—ÔUT“‹Ù][™ÜËš[˜ÛYT™XÙZ]˜X›T^[Y[ÈÈ™XÙZ]˜X›UX›Hˆ	ÉÊNÂˆÝ]]H™\XÙR[˜ÛÛZ[™Ô^[Y[ÚÙ[ŠÝ]]SÓÓRS‘×ÔVSQS•Ð•VQT—ÐÒPWÕP“WÕÒÑS—ÔUT“‹Ù][™ÜËš[˜ÛYP^Y\ÚXR[›ÚXÙ\ÈÈ^Y\ÚXUX›Hˆ	ÉÊNÂˆYˆ
+Ù][™ÜËš[˜ÛYT™XÙZ]˜X›T^[Y[È	‰ˆZ\Ô™XÙZ]˜X›UÚÙ[ŠHÝ]]
+ÏH™XÙZ]˜X›UX›NÂˆYˆ
+Ù][™ÜËš[˜ÛYP^Y\ÚXR[›ÚXÙ\È	‰ˆZ\Ð^Y\ÚXUÚÙ[ŠHÝ]]
+ÏH^Y\ÚXUX›NÂˆ™]\›ˆÝ]]ÂŸB‚™[˜Ý[Ûˆ[š™XÝ[˜ÛÛZ[™Ô^[Y[]R[\™\Ý[šÊÛÛ[™\XÙ[Y[
+HÂˆ]Ý]]HÝš[™ÊÛÛ[	ÉÊNÂˆ›Üˆ
+ÛÛœÝ]\›ˆÙˆSÓÓRS‘×ÔVSQS•ÓUWÒS•T‘TÕÓS’×ÕÒÑS—ÔUT“”ÊHÂˆÝ]]H™\XÙR[˜ÛÛZ[™Ô^[Y[ÚÙ[ŠÝ]]]\›‹™\XÙ[Y[
+NÂˆBˆ™]\›ˆÝ]]ÂŸB‚™[˜Ý[Ûˆ[˜ÛÛZ[™Ô^[Y[]R[\™\Ý[šÒ[
+\›
+HÂˆ™]\›ˆÝ[OH›X\™Ú[ŽŒMH™YH‰Ù\ØØ\R[
+\›
+_HˆÝ[OH™\Ü^Nš[›[™KX›ØÚÎØ›Ü™\‹\˜Y]\ÎŽØ˜XÚÙÜ›Ý[™ˆÑ‘ŒŽØÛÛÜŽˆÙ™™™™™ŽÝ^YXÛÜ˜][ÛŽ››Û™NÙ›Û]ÙZYÚÌÜY[™ÎŽ\LÜ“]H^[Y[[\™\Ý[›ÚXÙOØOÜ˜ÂŸB‚™[˜Ý[Ûˆ[˜ÛÛZ[™Ô^[Y[]R[\™\Ý[šÕ^
+\›
+HÂˆ™]\›ˆ]H^[Y[[\™\Ý[›ÚXÙNˆ	Ý\›XÂŸB‚™[˜Ý[ÛˆZ[[˜ÛÛZ[™Ô^[Y[[XZ[
+™\ÜÙ][™ÜÊHÂˆÛÛœÝÝ[[X\žHH™\ÜœÝ[[X\žH[˜ÛÛZ[™Ô^[Y[™\ÜÝ[[X\žJ™\Üœ›ÝÜÈ×JNÂˆÛÛœÝ]R[\™\Ý\›H[˜ÛÛZ[™Ô^[Y[š[\•\›
+Ù][™ÜË™\Ü
+NÂˆÛÛœÝ[˜ÛÛZ[™Ô›ÝÜÈH[X™\ŠÝ[[X\žKš[˜ÛÛZ[™Ô›ÝÜÈ
+NÂˆÛÛœÝ™YYÔ™]šY]ÐÛÝ[H[X™\ŠÝ[[X\žK[›X]ÚYÛÝ[
+NÂˆÛÛœÝÛÛ^HÂˆ]Qœ›ÛNˆ™]Q]J™\Ü™]Qœ›ÛJKˆ]UÎˆ™]Q]J™\Ü™]UÊKˆÙ^Nˆ™]Q]J]SÛ›J™]È]J
+JJKˆ^[Y[ÛÝ[ˆ
+™\Üœ›ÝÜÈ×JK›[™ÝÓØØ[TÝš[™Ê
+Kˆ™XÙZ]˜X›T^[Y[ÛÝ[ˆ
+™\Üœ›ÝÜÈ×JK›[™ÝÓØØ[TÝš[™Ê
+Kˆ^Y\ÚXPÛÝ[ˆ
+™\Ü˜^Y\ÚXR[›ÚXÙ\È×JK›[™ÝÓØØ[TÝš[™Ê
+Kˆ[˜ÛÛZ[™ÕÝ[ˆ[Û™^JÝ[[X\žKÝ[[˜ÛÛZ[™Ð[[Ý[
+Kˆ^Y\”^[Y[Ý[ˆ[Û™^JÝ[[X\žK˜^Y\”^[Y[Ý[
+KˆÝ\Y\”™Y[™Ý[ˆ[Û™^JÝ[[X\žKœÝ\Y\”™Y[™Ý[
+Kˆ™YYÔ™]šY]ÐÛÝ[ˆÝš[™Ê™YYÔ™]šY]ÐÛÝ[
+KˆÙ^]ÛÜ™ˆ™\ÜœÙX\˜Ú	ÉËˆNÂˆÛÛœÝÝXš™XÝH™[™\’[˜ÛÛZ[™Ô^[Y[[\]JÙ][™ÜËœÝXš™XÝÛÛ^
+NÂˆÛÛœÝÛÛ[H™[™\’[˜ÛÛZ[™Ô^[Y[[\]JÙ][™ÜËš[›ËÛÛ^
+NÂˆÛÛœÝÛÛ[^H\Ò[X\šÝ\
+ÛÛ[
+HÈ[ÔZ[•^
+ÛÛ[
+HˆÛÛ[ÂˆÛÛœÝÝ[[X\žR[HˆX›H›ÛOHœ™\Ù[][ÛˆˆÝ[OH˜›Ü™\‹XÛÛ\ÙN˜ÛÛ\ÙNÛX\™Ú[ŽŒNÝÚYŒL	NÛX^]ÚYÌŒ‚ˆ‚ˆÝ[OH˜›Ü™\ŽŒ\ÛÛYÙYL™YŽØ›Ü™\‹\˜Y]\ÎŽÜY[™ÎŒLœØ˜XÚÙÜ›Ý[™ˆÙ™™YŽH‚ˆ]ˆÝ[OH™›Û\Ú^™NŒLœØÛÛÜŽˆÍÌNÝ^]˜[œÙ›Ü›N\\˜Ø\ÙNÛ]\‹\ÜXÚ[™Î‹Œ[H’[˜ÛÛZ[™ÈÝ[Ù]‚ˆ]ˆÝ[OH™›Û\Ú^™NŒŒÙ›Û]ÙZYÚÌØÛÛÜŽˆÌNMŽH‰Û[Û™^JÝ[[X\žKÝ[[˜ÛÛZ[™Ð[[Ý[
+_OÙ]‚ˆ]ˆÝ[OH›X\™Ú[‹]ÜÙ›Û\Ú^™NŒLœØÛÛÜŽˆÍÌH^Y\ˆ^[Y[È	Û[Û™^JÝ[[X\žK˜^Y\”^[Y[Ý[
+_H0­ÈÝ\Y\ˆ™Y[™È	Û[Û™^JÝ[[X\žKœÝ\Y\”™Y[™Ý[
+_H0­È	Ú[˜ÛÛZ[™Ô›ÝÜËÓØØ[TÝš[™Ê
+_H™XÛÜ™ÏÙ]‚ˆÝ‚ˆÝ[OH˜›Ü™\ŽŒ\ÛÛYÙYL™YŽØ›Ü™\‹[YŒØ›Ü™\‹\˜Y]\ÎŒÜY[™ÎŒLœØ˜XÚÙÜ›Ý[™ˆÙ™™˜™Xˆ‚ˆ]ˆÝ[OH™›Û\Ú^™NŒLœØÛÛÜŽˆÍÌNÝ^]˜[œÙ›Ü›N\\˜Ø\ÙNÛ]\‹\ÜXÚ[™Î‹Œ[H“™YYÈ™]šY]ÏÙ]‚ˆ]ˆÝ[OH™›Û\Ú^™NŒŒÙ›Û]ÙZYÚÌØÛÛÜŽˆÙMÍÌˆ‰Û™YYÔ™]šY]ÐÛÝ[ÓØØ[TÝš[™Ê
+_OÙ]‚ˆ]ˆÝ[OH›X\™Ú[‹]ÜÙ›Û\Ú^™NŒLœØÛÛÜŽˆÍÌH•[›X]ÚYÜˆ[˜ÛÛ\]H^[Y[ÏÙ]‚ˆÝ‚ˆÝ‚ˆÝX›O˜ÂˆÛÛœÝÛÛ[[H[š™XÝ[˜ÛÛZ[™Ô^[Y[]R[\™\Ý[šÊ[XZ[ÛÛ[[
+ÛÛ[
+K[˜ÛÛZ[™Ô^[Y[]R[\™\Ý[šÒ[
+]R[\™\Ý\›
+JNÂˆÛÛœÝ[Hˆ]ˆÝ[OH™›ÛY˜[Z[N’[\‹\šX[Ø[œË\Ù\šYŽØÛÛÜŽˆÌYŒŽLÍÎÛ[™KZZYÚŒKH‚ˆ	ÜÝ[[X\žR[Bˆ	Ú[š™XÝ[˜ÛÛZ[™Ô^[Y[X›\ÊÛÛ[[Ù][™ÜË[˜ÛÛZ[™Ô^[Y[™XÙZ]˜X›UX›R[
+™\Üœ›ÝÜÈ×JK[˜ÛÛZ[™Ô^[Y[^Y\ÚXUX›R[
+™\Ü˜^Y\ÚXR[›ÚXÙ\È×JJ_BˆÙ]˜ÂˆÛÛœÝ^ÛÛ[H[š™XÝ[˜ÛÛZ[™Ô^[Y[X›\ÊØ[˜ÛÛZ[™ÈÝ[ˆ	Û[Û™^JÝ[[X\žKÝ[[˜ÛÛZ[™Ð[[Ý[
+_X^Y\ˆ^[Y[Îˆ	Û[Û™^JÝ[[X\žK˜^Y\”^[Y[Ý[
+_XÝ\Y\ˆ™Y[™Îˆ	Û[Û™^JÝ[[X\žKœÝ\Y\”™Y[™Ý[
+_X[˜ÛÛZ[™È™XÛÜ™Îˆ	Ú[˜ÛÛZ[™Ô›ÝÜËÓØØ[TÝš[™Ê
+_X™YYÈ™]šY]Îˆ	Û™YYÔ™]šY]ÐÛÝ[ÓØØ[TÝš[™Ê
+_X	ÉË[š™XÝ[˜ÛÛZ[™Ô^[Y[]R[\™\Ý[šÊÛÛ[^[˜ÛÛZ[™Ô^[Y[]R[\™\Ý[šÕ^
+]R[\™\Ý\›
+JWKš›Ú[Š	×‰ÊKÙ][™ÜË—‰Ú[˜ÛÛZ[™Ô^[Y[™XÙZ]˜X›UX›U^
+™\Üœ›ÝÜÈ×J_W—˜—‰Ú[˜ÛÛZ[™Ô^[Y[^Y\ÚXUX›U^
+™\Ü˜^Y\ÚXR[›ÚXÙ\È×J_W—˜
+NÂˆ™]\›ˆÈÝXš™XÝ[^ˆ^ÛÛ[Ý[[X\žHNÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ[˜ÛÛZ[™Ô^[Y[[XZ[™\Ü
+›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝXÝ]™PXØÙ\ÜÈHXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆÛÛœÝÝÜ™YH]ØZ]ØYš[˜[˜ÚX[™\ÜÙ][™ÜÊXÝ]™PXØÙ\ÜË˜ÛY[	Ú[˜ÛÛZ[™×Ü^[Y[Ü™\ÜÉËÈ™\]Z\™YˆX›ÙKœ™]šY]È	‰ˆX›ÙK™žT[ˆJNÂˆYˆ
+X›ÙKœ™]šY]È	‰ˆX›ÙK™žT[ŠHÂˆÛÛœÝ^XÝYÙ][™ÜÔ™]š\Ú[ÛˆH[X™\Š›ÙK™^XÝYÙ][™ÜÔ™]š\Ú[ÛˆÏÈ›ÙK™^XÝYÜÙ][™Ü×Ü™]š\Ú[ÛŠNÂˆYˆ
+S[X™\‹š\Ò[YÙ\Š^XÝYÙ][™ÜÔ™]š\Ú[ÛŠH^XÝYÙ][™ÜÔ™]š\Ú[ÛˆJHÂˆ›ÝÈ\\œ›ÜŠ	Ô™Yœ™\ÚH[˜ÛÛZ[™È^[Y[™\Ü™]šY]È™Y›Ü™HÙ[™[™Ë‰ËK	Ñ’SSÒPSÔ‘TÔ•Ô‘U’TÒSÓ—Ô‘TURT‘Q	ÊNÂˆBˆYˆ
+^XÝYÙ][™ÜÔ™]š\Ú[ÛˆOOH[X™\ŠÝÜ™Yœ™]š\Ú[Ûˆ
+JHÂˆ›ÝÈ\\œ›ÜŠ	ÕH\›Ý™Y[˜ÛÛZ[™È^[Y[™\Ü™XÚ\Y[ÈÜˆ[\]HÚ[™ÙYY\ˆ™]šY]Ëˆ™[Ü[ˆH™\Ü™Y›Ü™HÙ[™[™Ë‰ËK	Ñ’SSÒPSÔ‘TÔ•Ô‘U’TÒSÓ—ÐÓÓ‘“PÕ	ÊNÂˆBˆBˆÛÛœÝÙ][™ÜÈH[˜ÛÛZ[™Ô^[Y[[XZ[Ù][™ÜÊÝÜ™YœÙ][™ÜÊNÂˆYˆ
+X›ÙKœ™]šY]È	‰ˆX›ÙK™žT[ˆ	‰ˆ
+\Ù][™ÜËœÝXš™XÝš[J
+H\Ù][™ÜËš[›Ëš[J
+JJHÂˆ›ÝÈ\\œ›ÜŠ	Ò[˜ÛÛZ[™È^[Y[™\ÜÝXš™XÝ[™›ÙH\™H›ÝÛÛ™šYÝ\™YˆÙ[™[™È\È\ØX›Y‰ËLË	Ñ’SSÒPSÔ‘TÔ•ÕSTUWÓ“ÕÐÓÓ‘’QÕT‘Q	Ë[™Yš[™YYJNÂˆBˆÛÛœÝÛÝ\˜ÙHH]ØZ][˜ÛÛZ[™Ô^[Y[Ó\Ý
+ˆÂˆ]Qœ›ÛNˆ›ÙK™]Qœ›ÛKˆ]UÎˆ›ÙK™]UËˆ[Z]ˆ›ÙK›[Z]LˆKˆ[ˆXÝ]™PXØÙ\ÜËˆ
+NÂˆÛÛœÝÙX\˜ÚHÝš[™Ê›ÙKœÙX\˜Ú	ÉÊKš[J
+NÂˆÛÛœÝ›ÝÜÈH
+ÛÝ\˜ÙKœ›ÝÜÈ×JK™š[\Š
+›ÝÊHOˆ[˜ÛÛZ[™Ô^[Y[ÙX\˜ÚX]Ú\Ê›ÝËÙX\˜ÚÉÜ\S˜[YIË	ÜÝ[S˜[YIË	ÚÙ^TÝ[IË	Ø^Y\“˜[YIË	Ø^Y\‘Ü›Ý\˜[YIË	ÜÝ\Y\“˜[YIË	ÜÝ\Y\’[›ÚXÙS˜[YI×JJNÂˆÛÛœÝ^Y\ÚXR[›ÚXÙ\ÈH
+ÛÝ\˜ÙK˜^Y\ÚXR[›ÚXÙ\È×JK™š[\Š
+›ÝÊHOˆ[˜ÛÛZ[™Ô^[Y[ÙX\˜ÚX]Ú\Ê›ÝËÙX\˜ÚÉØ^Y\“˜[YIË	Ø^Y\‘Ü›Ý\˜[YIË	Ø^Y\•˜Y\‰Ë	ÜÝ[S˜[YIË	ÚÙ^TÝ[I×JJNÂˆÛÛœÝ™\ÜHÂˆ‹‹œÛÝ\˜ÙKˆ›ÝÜËˆ^Y\ÚXR[›ÚXÙ\ËˆÙX\˜ÚˆÝ[[X\žNˆ[˜ÛÛZ[™Ô^[Y[™\ÜÝ[[X\žJ›ÝÜÊKˆNÂˆÛÛœÝ[XZ[HZ[[˜ÛÛZ[™Ô^[Y[[XZ[
+™\ÜÙ][™ÜÊNÂˆÛÛœÝ™\ÜY]HHÂˆ]Qœ›ÛNˆ™\Ü™]Qœ›ÛKˆ]UÎˆ™\Ü™]UËˆÙX\˜Úˆ™XÙZ]˜X›T›ÝÜÎˆ›ÝÜË›[™Ýˆ^Y\ÚXT›ÝÜÎˆ^Y\ÚXR[›ÚXÙ\Ë›[™ÝˆÝ[[X\žNˆ[XZ[œÝ[[X\žKˆNÂˆYˆ
+›ÙKœ™]šY]È›ÙK™žT[ŠHÂˆ™]\›ˆÂˆÙ[ˆ˜[ÙKˆ™]šY]ÎˆYKˆÙ][™ÜËˆÙ][™ÜÔ™]š\Ú[ÛŽˆ[X™\ŠÝÜ™Yœ™]š\Ú[Ûˆ
+Kˆ™\Üˆ™\ÜY]Kˆ[XZ[ˆÂˆÝXš™XÝˆ[XZ[œÝXš™XÝˆ[ˆ[XZ[š[ˆ^ˆ[XZ[^ˆÝ[[X\žNˆ[XZ[œÝ[[X\žKˆKˆNÂˆBˆYˆ
+\Ù][™ÜËË›[™Ý
+H›ÝÈ\\œ›ÜŠ	Ð]X\ÝÛ™HÈ™XÚ\Y[\È™\]Z\™Y™Y›Ü™HÙ[™[™ÈH[˜ÛÛZ[™È^[Y[™\Ü‰Ë
+NÂˆÛÛœÝ™\Ý[H]ØZ]Ù[™Ü\˜][Û˜[XZ[
+ÂˆÎˆÙ][™ÜËËˆØÎˆÙ][™ÜË˜ØËˆ˜ØÎˆÙ][™ÜË˜˜ØËˆÝXš™XÝˆ[XZ[œÝXš™XÝˆ[ˆ[XZ[š[ˆ^ˆ[XZ[^ˆKÈÛY[ˆXÝ]™PXØÙ\ÜË˜ÛY[\œÜÙRÙ^Nˆ	Ú[˜ÛÛZ[™×Ü^[Y[Ü™\ÜÉÈJNÂˆ™]\›ˆÂˆÙ[ˆYKˆYˆ™\Ý[šYˆÎˆÙ][™ÜËËˆØÎˆÙ][™ÜË˜ØËˆ˜ØÎˆÙ][™ÜË˜˜ØËˆÝXš™XÝˆ[XZ[œÝXš™XÝˆ™\Üˆ™\ÜY]Kˆ›ÝÜÎˆ›ÝÜË›[™Ýˆ^Y\ÚXT›ÝÜÎˆ^Y\ÚXR[›ÚXÙ\Ë›[™Ýˆ[XZ[ˆÂˆÝXš™XÝˆ[XZ[œÝXš™XÝˆ[ˆ[XZ[š[ˆ^ˆ[XZ[^ˆÝ[[X\žNˆ[XZ[œÝ[[X\žKˆKˆNÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ[˜ÛÛZ[™Ô^[Y[[XZ[Ù][™ÜÑÙ]
+›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÈÛY[›Ùš[HHHXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆÛÛœÝÝÜ™YH]ØZ]ØYš[˜[˜ÚX[™\ÜÙ][™ÜÊÛY[	Ú[˜ÛÛZ[™×Ü^[Y[Ü™\ÜÉÊNÂˆ™]\›ˆÂˆ‹‹œÝÜ™YˆÙ][™ÜÎˆ[˜ÛÛZ[™Ô^[Y[[XZ[Ù][™ÜÊÝÜ™YœÙ][™ÜÊKˆØ\Xš[]Y\ÎˆÂˆØ[“X[˜YÙTÙ][™ÜÎˆ]ØZ]\Ù\’\ÐØ\Xš[]JÛY[›Ùš[K	Ùš[˜[˜ÚX[Ü™\ÜÜÙ][™Ü×ÛX[˜YÙIÊKˆKˆNÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ[˜ÛÛZ[™Ô^[Y[[XZ[Ù][™ÜÔØ]™J›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÈÛY[›Ùš[HHHXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ]ØZ]™\]Z\™PØ\Xš[]JÛY[›Ùš[K	Ùš[˜[˜ÚX[Ü™\ÜÜÙ][™Ü×ÛX[˜YÙIË	Ñš[˜[˜ÚX[™\ÜÙ][™ÜÈX[˜YÙ[Y[\›Z\ÜÚ[Ûˆ\È™\]Z\™Y‰ÊNÂˆÛÛœÝÝ\œ™[H]ØZ]ØYš[˜[˜ÚX[™\ÜÙ][™ÜÊÛY[	Ú[˜ÛÛZ[™×Ü^[Y[Ü™\ÜÉÊNÂˆÛÛœÝÙ][™ÜÈH[˜ÛÛZ[™Ô^[Y[[XZ[Ù][™ÜÊÈ‹‹˜Ý\œ™[œÙ][™ÜË‹‹Š›ÙKœÙ][™ÜÈ›ÙJHJNÂˆ™]\›ˆØ]™Qš[˜[˜ÚX[™\ÜÙ][™ÜÊÛY[	Ú[˜ÛÛZ[™×Ü^[Y[Ü™\ÜÉËÂˆÙ][™ÜËˆ^XÝY™]š\Ú[ÛŽˆ›ÙK™^XÝY™]š\Ú[ÛˆÏÈ›ÙK™^XÝYÜ™]š\Ú[Û‹ˆK›Ùš[JNÂŸB‚™[˜Ý[Ûˆš[˜[˜ÚX[™\ÜÙ][™ÜÑY]ÜŠÙ][™ÜÈHßJHÂˆ™]\›ˆÂˆ‹‹œÙ][™ÜËˆÎˆ\œÙQ[XZ[\Ý
+Ù][™ÜËË×JKš›Ú[Š	Ë	ÊKˆØÎˆ\œÙQ[XZ[\Ý
+Ù][™ÜË˜ØË×JKš›Ú[Š	Ë	ÊKˆ˜ØÎˆ\œÙQ[XZ[\Ý
+Ù][™ÜË˜˜ØË×JKš›Ú[Š	Ë	ÊKˆNÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ[˜ÛÛZ[™Ô^[Y[[\™\ÝÙ][™ÜÑÙ]
+›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÈÛY[›Ùš[HHHXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆÛÛœÝÝÜ™YH]ØZ]ØYš[˜[˜ÚX[™\ÜÙ][™ÜÊÛY[	Ú[˜ÛÛZ[™×Ü^[Y[Ú[\™\ÝÜ™\]Y\ÝÉÊNÂˆ™]\›ˆÂˆ‹‹œÝÜ™YˆÙ][™ÜÎˆš[˜[˜ÚX[™\ÜÙ][™ÜÑY]ÜŠÝÜ™YœÙ][™ÜÊKˆØ\Xš[]Y\ÎˆÂˆØ[“X[˜YÙTÙ][™ÜÎˆ]ØZ]\Ù\’\ÐØ\Xš[]JÛY[›Ùš[K	Ùš[˜[˜ÚX[Ü™\ÜÜÙ][™Ü×ÛX[˜YÙIÊKˆKˆNÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ[˜ÛÛZ[™Ô^[Y[[\™\ÝÙ][™ÜÔØ]™J›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÈÛY[›Ùš[HHHXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ]ØZ]™\]Z\™PØ\Xš[]JÛY[›Ùš[K	Ùš[˜[˜ÚX[Ü™\ÜÜÙ][™Ü×ÛX[˜YÙIË	Ñš[˜[˜ÚX[™\ÜÙ][™ÜÈX[˜YÙ[Y[\›Z\ÜÚ[Ûˆ\È™\]Z\™Y‰ÊNÂˆÛÛœÝÝ\œ™[H]ØZ]ØYš[˜[˜ÚX[™\ÜÙ][™ÜÊÛY[	Ú[˜ÛÛZ[™×Ü^[Y[Ú[\™\ÝÜ™\]Y\ÝÉÊNÂˆÛÛœÝØ[™Y]HH[˜ÛÛZ[™Ô^[Y[[\™\Ý[\]JÈ‹‹˜Ý\œ™[œÙ][™ÜË‹‹Š›ÙKœÙ][™ÜÈ›ÙJHJNÂˆ™]\›ˆØ]™Qš[˜[˜ÚX[™\ÜÙ][™ÜÊÛY[	Ú[˜ÛÛZ[™×Ü^[Y[Ú[\™\ÝÜ™\]Y\ÝÉËÂˆÙ][™ÜÎˆØ[™Y]Kˆ^XÝY™]š\Ú[ÛŽˆ›ÙK™^XÝY™]š\Ú[ÛˆÏÈ›ÙK™^XÝYÜ™]š\Ú[Û‹ˆK›Ùš[JNÂŸB‚™[˜Ý[Ûˆ^Y\’[›ÚXÙQ[XZ[Ù][™ÜÊ[œ]HßJHÂˆÛÛœÝ\Ð^Y\•˜Y\‘š[\ˆHØš™XÝœ›ÝÝ\Kš\ÓÝÛ”›Ü\K˜Ø[
+[œ]	Ø^Y\•˜Y\œÉÊNÂˆ™]\›ˆÂˆ‹‹››Ü›X[^™P^Y\’[›ÚXÙQ[XZ[Ù][™ÜÊ[œ]Âˆ‹‹‘QUSÐ•VQT—ÒS•“ÒPÑWÑSPRSÔÑUS‘ÔËˆJKˆ\Ð^Y\•˜Y\‘š[\‹ˆNÂŸB‚™[˜Ý[ÛˆÙ\šX[^™P^Y\’[›ÚXÙQ[XZ[Ù][™ÜÔ›ÝÊ™\ÜÙ][™ÜËYØXÞSY]HH[
+HÂˆÛÛœÝÙ][™ÜÈH›Ü›X[^™P^Y\’[›ÚXÙQ[XZ[Ù][™ÜÊ™\ÜÙ][™ÜÏËœÙ][™ÜÈßJNÂˆ™]\›ˆÂˆÙ][™ÜËˆY]NˆÂˆÝÜ˜YÙP]˜Z[X›NˆYKˆÛÛ™šYÝ\™Yˆ™\ÜÙ][™ÜÏË˜ÛÛ™šYÝ\™YOOHYKˆ™]š\Ú[ÛŽˆ[X™\Š™\ÜÙ][™ÜÏËœ™]š\Ú[Ûˆ
+Kˆ\Ý™]šY]Ð]ˆYØXÞSY]OË›\ÝÜ™]šY]×Ø][ˆ\Ý™]šY]Ô›ÝÐÛÝ[ˆYØXÞSY]OË›\ÝÜ™]šY]×Ü›Ý×ØÛÝ[ÏÈ[ˆ\ÝÙ[]ˆYØXÞSY]OË›\ÝÜÙ[Ø][ˆ\ÝÙ[›ÝÐÛÝ[ˆYØXÞSY]OË›\ÝÜÙ[Ü›Ý×ØÛÝ[ÏÈ[ˆ\Ý\œ›ÜŽˆYØXÞSY]OË›\ÝÙ\œ›Üˆ[ˆ\]YžQ[XZ[ˆ™\ÜÙ][™ÜÏË\]YžQ[XZ[[ˆ\]Y]ˆ™\ÜÙ][™ÜÏË\]Y][ˆ™^ØÚY[Y[Žˆ™^^Y\’[›ÚXÙTØÚY[T[ŠÙ][™ÜÊKˆKˆNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆØYÝÜ™Y^Y\’[›ÚXÙQ[XZ[Ù][™ÜÊ
+HÂˆÛÛœÝÛY[HØY™TÝ\X˜\ÙPYZ[ÛY[
+
+NÂˆYˆ
+XÛY[
+H›ÝÈ\\œ›ÜŠ	Ñš[˜[˜ÚX[™\ÜÙ][™ÜÈ\™H[˜]˜Z[X›KˆÙ[™[™È\È\ØX›Y[[ÝÜ˜YÙH\È™\ÝÜ™Y‰ËLË	Ñ’SSÒPSÔ‘TÔ•ÔÑUS‘Ô×ÕSURSP“IË[™Yš[™YYJNÂˆÛÛœÝÜ™\ÜÙ][™ÜËYØXÞWHH]ØZ]›ÛZ\ÙK˜[
+ÂˆØYš[˜[˜ÚX[™\ÜÙ][™ÜÊÛY[	ÛÝ]Ý[™[™×Ú[›ÚXÙWÜ™\ÜÉÊKˆÛY[™œ›ÛJ	Ø^Y\—Ú[›ÚXÙWÙ[XZ[ÜÙ][™ÜÉÊKœÙ[XÝ
+	Û\ÝÜ™]šY]×Ø]\ÝÜ™]šY]×Ü›Ý×ØÛÝ[\ÝÜÙ[Ø]\ÝÜÙ[Ü›Ý×ØÛÝ[\ÝÙ\œ›Ü‰ÊK™\J	ÚY	Ë	ÙY˜][	ÊK›X^X™TÚ[™ÛJ
+KˆJNÂˆYˆ
+YØXÞK™\œ›ÜŠH›ÝÈ\\œ›ÜŠ	Ð^Y\ˆ[›ÚXÙH™\Ü\ÝÜžH\È[˜]˜Z[X›KˆÙ[™[™È\È\ØX›Y[[ÝÜ˜YÙH\È™\ÝÜ™Y‰ËLË	Ñ’SSÒPSÔ‘TÔ•ÔÑUS‘Ô×ÕSURSP“IË[™Yš[™YYJNÂˆ™]\›ˆÙ\šX[^™P^Y\’[›ÚXÙQ[XZ[Ù][™ÜÔ›ÝÊ™\ÜÙ][™ÜËYØXÞK™]JNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆØ]™TÝÜ™Y^Y\’[›ÚXÙQ[XZ[Ù][™ÜÊÙ][™ÜË›Ùš[HH[^XÝY™]š\Ú[ÛˆH[
+HÂˆÛÛœÝÛY[HÝ\X˜\ÙPYZ[ÛY[
+
+NÂˆÛÛœÝÝ\œ™[H]ØZ]ØYš[˜[˜ÚX[™\ÜÙ][™ÜÊÛY[	ÛÝ]Ý[™[™×Ú[›ÚXÙWÜ™\ÜÉÊNÂˆÛÛœÝ[œ]]ÚH^Y\’[›ÚXÙQ[XZ[Ù][™ÜÔ]Ú
+Ù][™ÜÊNÂˆÛÛœÝ›Ü›X[^™YH›Ü›X[^™P^Y\’[›ÚXÙQ[XZ[Ù][™ÜÊÈ‹‹˜Ý\œ™[œÙ][™ÜË‹‹š[œ]]ÚJNÂˆÛÛœÝÙ][™ÜÔ]ÚHØš™XÝ™œ›ÛQ[šY\ÊØš™XÝšÙ^\Ê[œ]]Ú
+K›X\
+
+Ù^JHOˆÚÙ^K›Ü›X[^™YÚÙ^WWJJNÂˆYˆ
+SØš™XÝšÙ^\ÊÙ][™ÜÔ]Ú
+K›[™Ý
+HÂˆ›ÝÈ\\œ›ÜŠ	Ó›È™XÛÙÛš^™Y^Y\ˆ[›ÚXÙH[XZ[Ù][™ÜÈÙ\™HÝ\YY‰Ë
+NÂˆBˆÛÛœÝØ]™YH]ØZ]Ø]™Qš[˜[˜ÚX[™\ÜÙ][™ÜÊÛY[	ÛÝ]Ý[™[™×Ú[›ÚXÙWÜ™\ÜÉËÂˆÙ][™ÜÎˆÈ‹‹˜Ý\œ™[œÙ][™ÜË‹‹œÙ][™ÜÔ]ÚKˆ^XÝY™]š\Ú[Û‹ˆK›Ùš[JNÂˆ™]\›ˆÙ\šX[^™P^Y\’[›ÚXÙQ[XZ[Ù][™ÜÔ›ÝÊØ]™Y
+NÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ\]P^Y\’[›ÚXÙQ[XZ[Ù][™ÜÓY]J]ÚHßJHÂˆÛÛœÝÛY[HØY™TÝ\X˜\ÙPYZ[ÛY[
+
+NÂˆYˆ
+XÛY[
+H™]\›ŽÂˆÛÛœÝÈ\œ›ÜˆHH]ØZ]ÛY[™œ›ÛJ	Ø^Y\—Ú[›ÚXÙWÙ[XZ[ÜÙ][™ÜÉÊK\Ù\
+ÈYˆ	ÙY˜][	Ë‹‹œ]ÚKÈÛÛÛ™›XÝˆ	ÚY	ÈJNÂˆYˆ
+\œ›ÜŠHÛÛœÛÛK™\œ›ÜŠ	Ñ˜Z[YÈ\]H^Y\ˆ[›ÚXÙH[XZ[Ù][™ÜÈY]Y]IË\œ›Ü‹›Y\ÜØYÙJNÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ^Y\’[›ÚXÙQ[XZ[Ù][™ÜÑÙ]
+›ÙK™\KXØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÈÛY[›Ùš[HHHXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ™]\›ˆÂˆ‹‹Š]ØZ]ØYÝÜ™Y^Y\’[›ÚXÙQ[XZ[Ù][™ÜÊ
+JKˆØ\Xš[]Y\ÎˆÂˆØ[“X[˜YÙTÙ][™ÜÎˆ]ØZ]\Ù\’\ÐØ\Xš[]JÛY[›Ùš[K	Ùš[˜[˜ÚX[Ü™\ÜÜÙ][™Ü×ÛX[˜YÙIÊKˆKˆNÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ^Y\’[›ÚXÙQ[XZ[Ù][™ÜÔØ]™J›ÙK™\KXØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÈÛY[›Ùš[HHHXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ]ØZ]™\]Z\™PØ\Xš[]JÛY[›Ùš[K	Ùš[˜[˜ÚX[Ü™\ÜÜÙ][™Ü×ÛX[˜YÙIË	Ñš[˜[˜ÚX[™\ÜÙ][™ÜÈX[˜YÙ[Y[\›Z\ÜÚ[Ûˆ\È™\]Z\™Y‰ÊNÂˆ™]\›ˆØ]™TÝÜ™Y^Y\’[›ÚXÙQ[XZ[Ù][™ÜÊ›ÙKœÙ][™ÜÈ›ÙK›Ùš[K›ÙK™^XÝY™]š\Ú[ÛˆÏÈ›ÙK™^XÝYÜ™]š\Ú[ÛŠNÂŸB‚™[˜Ý[ÛˆÛ™ÒÛÛ™ÔØÚY[T\Ê]HH™]È]J
+JHÂˆÛÛœÝ\ÈH™]È[‘]U[YQ›Ü›X]
+	Ù[‹UTÉËÂˆ[YV›Û™Nˆ	Ð\ÚXKÒÛ™×ÒÛÛ™ÉËˆÙYZÙ^Nˆ	ÜÚÜ	ËˆYX\Žˆ	Û[Y\šXÉËˆ[Ûˆ	Ì‹YYÚ]	Ëˆ^Nˆ	Ì‹YYÚ]	ËˆÝ\Žˆ	Ì‹YYÚ]	ËˆZ[]Nˆ	Ì‹YYÚ]	ËˆÝ\ÞXÛNˆ	ÚŒÉËˆJK™›Ü›X]Ô\Ê]JNÂˆÛÛœÝ˜[YHH
+\JHOˆ\Ë™š[™
+
+\
+HOˆ\\HOOH\JOË˜[YNÂˆ™]\›ˆÂˆÙYZÙ^Nˆ˜[YJ	ÝÙYZÙ^IÊKˆ]Nˆ	Ý˜[YJ	ÞYX\‰Ê_KIÝ˜[YJ	Û[Û	Ê_KIÝ˜[YJ	Ù^IÊ_Xˆ[YNˆ	Ý˜[YJ	ÚÝ\‰Ê_N‰Ý˜[YJ	ÛZ[]IÊ_XˆZ[]SÙ‘^Nˆ[X™\Š˜[YJ	ÚÝ\‰ÊJH
+ˆŒ
+È[X™\Š˜[YJ	ÛZ[]IÊJKˆNÂŸB‚™[˜Ý[ÛˆØÚY[SZ[]SÙ‘^J[YJHÂˆÛÛœÝX]ÚHÝš[™Ê[YH	ÉÊBˆš[J
+Bˆ›X]Ú
+×ŠÌKŸJNŠÌŸJIÊNÂˆYˆ
+[X]Ú
+H™]\›ˆ[ÂˆÛÛœÝÝ\ˆH[X™\ŠX]ÚÌWJNÂˆÛÛœÝZ[]HH[X™\ŠX]ÚÌ—JNÂˆYˆ
+Ý\ˆÝ\ˆˆŒÈZ[]HZ[]HˆNJH™]\›ˆ[Âˆ™]\›ˆÝ\ˆ
+ˆŒ
+ÈZ[]NÂŸB‚™[˜Ý[Ûˆ^Y\’[›ÚXÙTØÚY[YÚ[™ÝÊÙ][™ÜË]HH™]È]J
+JHÂˆÛÛœÝ›ÝÈHÛ™ÒÛÛ™ÔØÚY[T\Ê]JNÂˆÛÛœÝÙYZÙ^\ÈH™]ÈÙ]
+
+Ù][™ÜËÙYZÙ^\È×JK›X\
+
+^JHOˆÝš[™Ê^JKœÛXÙJÊKÓÝÙ\Ø\ÙJ
+JJNÂˆYˆ
+]ÙYZÙ^\Ëš\ÊÝš[™Ê›ÝËÙYZÙ^JKœÛXÙJÊKÓÝÙ\Ø\ÙJ
+JJH™]\›ˆ[Âˆ›Üˆ
+ÛÛœÝ[YHÙˆÙ][™ÜËœÙ[™[Y\È×JHÂˆÛÛœÝØÚY[SZ[]HHØÚY[SZ[]SÙ‘^J[YJNÂˆYˆ
+ØÚY[SZ[]HOH[
+HÛÛ[YNÂˆÛÛœÝY™ˆH›ÝË›Z[]SÙ‘^HHØÚY[SZ[]NÂˆYˆ
+Y™ˆH	‰ˆY™ˆJHÂˆÛÛœÝØÚY[U[YHHÝš[™Ê[YJKš[J
+KœYÝ\
+K	Ì	ÊNÂˆ™]\›ˆÂˆ]Nˆ›ÝË™]Kˆ[YNˆØÚY[U[YKˆ[’Ù^Nˆ^Y\‹Z[›ÚXÙ\Î‰Û›ÝË™]_N‰ÜØÚY[U[Y_XˆNÂˆBˆBˆ™]\›ˆ[ÂŸB‚™[˜Ý[Ûˆ\Ð^Y\’[›ÚXÙT™\ÜYJÙ][™ÜË]HH™]È]J
+JHÂˆ™]\›ˆ›ÛÛX[Š^Y\’[›ÚXÙTØÚY[YÚ[™ÝÊÙ][™ÜË]JJNÂŸB‚™[˜Ý[Ûˆ™^^Y\’[›ÚXÙTØÚY[T[ŠÙ][™ÜËœ›ÛQ]HH™]È]J
+JHÂˆÛÛœÝÙYZÙ^\ÈH™]ÈÙ]
+
+Ù][™ÜËÙYZÙ^\È×JK›X\
+
+^JHOˆÝš[™Ê^JKœÛXÙJÊKÓÝÙ\Ø\ÙJ
+JJNÂˆÛÛœÝÙ[™[Y\ÈH
+Ù][™ÜËœÙ[™[Y\È×JBˆ›X\
+
+[YJHOˆÝš[™Ê[YJKš[J
+KœYÝ\
+K	Ì	ÊJBˆ™š[\Š
+[YJHOˆØÚY[SZ[]SÙ‘^J[YJHOH[
+BˆœÛÜ
+
+NÂˆYˆ
+]ÙYZÙ^\ËœÚ^™H\Ù[™[Y\Ë›[™Ý
+H™]\›ˆ[Â‚ˆÛÛœÝ›ÝÈHÛ™ÒÛÛ™ÔØÚY[T\Êœ›ÛQ]JNÂˆ›Üˆ
+]Ù™œÙ]HÈÙ™œÙ]MÈÙ™œÙ]
+ÏHJHÂˆÛÛœÝ›Ø™HHÛ™ÒÛÛ™ÔØÚY[T\Ê™]È]Jœ›ÛQ]K™Ù][YJ
+H
+ÈÙ™œÙ]
+ˆ
+JNÂˆYˆ
+]ÙYZÙ^\Ëš\ÊÝš[™Ê›Ø™KÙYZÙ^JKœÛXÙJÊKÓÝÙ\Ø\ÙJ
+JJHÛÛ[YNÂˆ›Üˆ
+ÛÛœÝ[YHÙˆÙ[™[Y\ÊHÂˆYˆ
+Ù™œÙ]OOH	‰ˆØÚY[SZ[]SÙ‘^J[YJHH›ÝË›Z[]SÙ‘^JHÛÛ[YNÂˆ™]\›ˆ	Ü›Ø™K™]_H	Ý[Y_HÕÂˆBˆBˆ™]\›ˆ[ÂŸB‚™[˜Ý[ÛˆÝ™\™YTÙ]™\š]J^\Õ[[YJHÂˆYˆ
+^\Õ[[YHOH[[X™\Š^\Õ[[YJHˆ
+H™]\›ˆ[ÂˆÛÛœÝÝ™\™YQ^\ÈHX]˜XœÊ[X™\Š^\Õ[[YJJNÂˆYˆ
+Ý™\™YQ^\ÈHM
+H™]\›ˆ	Ü™Y	ÎÂˆYˆ
+Ý™\™YQ^\ÈHÊH™]\›ˆ	ÛÜ˜[™ÙIÎÂˆ™]\›ˆ	ÞY[ÝÉÎÂŸB‚™[˜Ý[ÛˆÝ™\™YQ\Ü^U˜[YJ^\Õ[[YJHÂˆYˆ
+^\Õ[[YHOH[
+H™]\›ˆ	ËIÎÂˆÛÛœÝÝ™\™YHHS[X™\Š^\Õ[[YJNÂˆÛÛœÝ˜[YHHØš™XÝš\ÊÝ™\™YKL
+HÈˆÝ™\™YNÂˆ™]\›ˆ˜[YKÓØØ[TÝš[™Ê
+NÂŸB‚™[˜Ý[ÛˆÝ™\™YQ[XZ[Ý[\Ê^\Õ[[YKœÜÝ]\ÊHÂˆÛÛœÝÙ]™\š]HHÝ™\™YTÙ]™\š]J^\Õ[[YJNÂˆÛÛœÝÝ[\ÈHÂˆ™YˆÂˆ›ÝÎˆ	Ø˜XÚÙÜ›Ý[™ˆÙ™YL™L‰Ëˆ›Ü™\Žˆ	ÈÙ˜ØMXMIËˆ^ˆ	ÈÎNLXŒX‰Ëˆ[ˆ	Ø˜XÚÙÜ›Ý[™ˆÙ™XØXØNØ›Ü™\‹XÛÛÜŽˆÙŽÌMÌNØÛÛÜŽˆÍÙŒYY	ËˆKˆÜ˜[™ÙNˆÂˆ›ÝÎˆ	Ø˜XÚÙÜ›Ý[™ˆÙ™YØXIËˆ›Ü™\Žˆ	ÈÙ˜ŽLŒØÉËˆ^ˆ	ÈÎXLÍL‰Ëˆ[ˆ	Ø˜XÚÙÜ›Ý[™ˆÙ™˜MÍØ›Ü™\‹XÛÛÜŽˆÙŽMÌÌMŽØÛÛÜŽˆÍØÌ™L‰ËˆKˆY[ÝÎˆÂˆ›ÝÎˆ	Ø˜XÚÙÜ›Ý[™ˆÙ™MŽIËˆ›Ü™\Žˆ	ÈÙ˜XØÌMIËˆ^ˆ	ÈÎMIËˆ[ˆ	Ø˜XÚÙÜ›Ý[™ˆÙ˜ÙÍØ›Ü™\‹XÛÛÜŽˆÙXXŒÌØÛÛÜŽˆÍÌLÙŒL‰ËˆKˆNÂˆÛÛœÝ˜\ÙHHÝ[\ÖÜÙ]™\š]WHÂˆ›ÝÎˆ	ÉËˆ›Ü™\Žˆ	ÈÙMYMÙX‰Ëˆ^ˆ	ÈÌMŒÙX‰Ëˆ[ˆ	Ø˜XÚÙÜ›Ý[™ˆÙY™™™ŽØ›Ü™\‹XÛÛÜŽˆØ™™™™NØÛÛÜŽˆÌYY	ËˆNÂˆ™]\›ˆœÜÝ]\ÈOOH	ÐÛÛ™][Û˜[S›ÝÙ[	ÈÈÈ‹‹˜˜\ÙK›ÝÎˆ	Ø˜XÚÙÜ›Ý[™ˆÙNYY™‰Ë›Ü™\Žˆ	ÈØÌ˜ÉÈHˆ˜\ÙNÂŸB‚™[˜Ý[Ûˆ™[™\^Y\’[›ÚXÙQ[XZ[ÛÛ[
+[\]K™\ÜÙ][™ÜÊHÂˆ™]\›ˆÝš[™Ê[\]HQUSÐ•VQT—ÒS•“ÒPÑWÑSPRSÔÑUS‘ÔËš[›ÊBˆœ™\XÙP[
+	ÞÞÜ™\ÜÝ\_IË™]Q]J™\ÜÙ^JJBˆœ™\XÙP[
+	ÞÞÜ™\Ü[™_IË™]Q]J™\Ü™YU›ÝYÚ
+JBˆœ™\XÙP[
+	ÞÞÙ^\ÐZXY_IËÝš[™ÊÙ][™ÜË™^\ÐZXYÏÈ™\Ü™^\ÐZXYÏÈQUSÐ•VQT—ÒS•“ÒPÑWÑSPRSÔÑUS‘ÔË™^\ÐZXY
+JNÂŸB‚™[˜Ý[Ûˆ[XZ[ÛÛ[[
+ÛÛ[
+HÂˆYˆ
+\Ò[X\šÝ\
+ÛÛ[
+JH™]\›ˆØ[š]^™T™[Z[™\’[
+ÛÛ[
+NÂˆÛÛœÝ›ØÚÜÈHÝš[™ÊÛÛ[	ÉÊBˆœÜ]
+×žÌ‹KÊBˆ›X\
+
+›ØÚÊHOˆ›ØÚËš[J
+JBˆ™š[\Š›ÛÛX[ŠNÂˆYˆ
+X›ØÚÜË›[™Ý
+H™]\›ˆ	ÉÎÂˆ™]\›ˆ›ØÚÜÂˆ›X\
+
+›ØÚË[™^
+HOˆÂˆÛÛœÝ[H\ØØ\R[
+›ØÚÊKœ™\XÙP[
+	×‰Ë	Ïœ‰ÊNÂˆYˆ
+[™^OOH
+H™]\›ˆˆÝ[OH›X\™Ú[ŽŒœÙ›Û\Ú^™NŒŒ‰Ú[OÚ˜Âˆ™]\›ˆÝ[OH›X\™Ú[ŽŒMØÛÛÜŽˆÍÌH‰Ú[OÜ˜ÂˆJBˆš›Ú[Š	ÉÊNÂŸB‚™[˜Ý[Ûˆ^Y\•˜Y\‘š[\’[
+™\ÜÙ][™ÜÊHÂˆÛÛœÝÜ[ÛœÈH™\Ü˜^Y\•˜Y\“Ü[ÛœÈ×NÂˆYˆ
+[Ü[ÛœË›[™Ý
+H™]\›ˆ	ÉÎÂˆÛÛœÝÙ[XÝYH™]ÈÙ]
+™\Üš\Ð^Y\•˜Y\‘š[\ˆÈ™\ÜœÙ[XÝY^Y\•˜Y\œÈ×HˆÜ[ÛœÊNÂˆÛÛœÝ[XÝ]™HHÙ[XÝYœÚ^™HOOHÜ[ÛœË›[™ÝÂˆÛÛœÝ[\›H^Y\’[›ÚXÙQš[\•\›
+Ù][™ÜË™\Ü[
+NÂˆÛÛœÝ[Ú\HH™YH‰Ù\ØØ\R[
+[\›
+_HˆÝ[OH™\Ü^Nš[›[™KX›ØÚÎÝ^YXÛÜ˜][ÛŽ››Û™NØ›Ü™\ŽŒ\ÛÛY	Ø[XÝ]™HÈ	ÈÌMŒÙX‰Èˆ	ÈÙYL™Y‰ßNØ›Ü™\‹\˜Y]\ÎœÜY[™ÎLÛX\™Ú[ŽŒœœÙ›Û\Ú^™NŒLœÙ›Û]ÙZYÚŒÉØ[XÝ]™HÈ	Ø˜XÚÙÜ›Ý[™ˆÌMŒÙXŽØÛÛÜŽˆÙ™™‰Èˆ	Ø˜XÚÙÜ›Ý[™ˆÙŽ˜Y˜ÎØÛÛÜŽˆÌMŒÙX‰ßH[ØO˜ÂˆÛÛœÝÚ\ÈHÜ[ÛœÂˆ›X\
+
+˜[YJHOˆÂˆÛÛœÝXÝ]™HHÙ[XÝYš\Ê˜[YJNÂˆÛÛœÝ\›H^Y\’[›ÚXÙQš[\•\›
+Ù][™ÜË™\Ü˜[YJNÂˆ™]\›ˆH™YH‰Ù\ØØ\R[
+\›
+_HˆÝ[OH™\Ü^Nš[›[™KX›ØÚÎÝ^YXÛÜ˜][ÛŽ››Û™NØ›Ü™\ŽŒ\ÛÛY	ØXÝ]™HÈ	ÈÌMŒÙX‰Èˆ	ÈÙYL™Y‰ßNØ›Ü™\‹\˜Y]\ÎœÜY[™ÎLÛX\™Ú[ŽŒœœÙ›Û\Ú^™NŒLœÙ›Û]ÙZYÚŒÉØXÝ]™HÈ	Ø˜XÚÙÜ›Ý[™ˆÌMŒÙXŽØÛÛÜŽˆÙ™™‰Èˆ	Ø˜XÚÙÜ›Ý[™ˆÙŽ˜Y˜ÎØÛÛÜŽˆÌMŒÙX‰ßH‰Ù\ØØ\R[
+˜[YJ_OØO˜ÂˆJBˆš›Ú[Š	ÉÊNÂˆ™]\›ˆˆ]ˆÝ[OH›X\™Ú[ŽŒLœ‚ˆ]ˆÝ[OH™›Û\Ú^™NŒL\ØÛÛÜŽˆÍÌNÝ^]˜[œÙ›Ü›N\\˜Ø\ÙNÛ]\‹\ÜXÚ[™Î‹Œ[NÙ›Û]ÙZYÚÌÛX\™Ú[‹X›ÝÛNœ“Ü[ˆš[\™YšY]ÈžH^Y\ˆ˜Y\ˆÈ^[Y[[™\Ù]‚ˆ]‰Ø[Ú\IØÚ\ßOÙ]‚ˆÙ]˜ÂŸB‚™[˜Ý[ÛˆZ[^Y\’[›ÚXÙT™\Ü[XZ[
+™\ÜÙ][™ÜÊHÂˆÛÛœÝ›ÝÜÈH™\Üœ›ÝÜÈ×NÂˆÛÛœÝÝ™\™YHH›ÝÜË™š[\Š
+›ÝÊHOˆ›ÝËœÝ]\ÈOOH	ÓÝ™\™YIÊNÂˆÛÛœÝYTÛÛÛˆH›ÝÜË™š[\Š
+›ÝÊHOˆ›ÝËœÝ]\ÈOOH	ÓÝ™\™YIÊNÂˆÛÛœÝYTÛÛÛ“X™[HYH[ˆ	Ó[X™\ŠÙ][™ÜË™^\ÐZXY™\Ü™^\ÐZXYÊKÓØØ[TÝš[™Ê
+_H^\ØÂˆÛÛœÝÛÛ[H™[™\^Y\’[›ÚXÙQ[XZ[ÛÛ[
+Ù][™ÜËš[›Ë™\ÜÙ][™ÜÊNÂˆÛÛœÝÝ[ÈHÂˆÝ™\™YPÛÝ[ˆÝ™\™YK›[™ÝˆÝ™\™YT™XÙZ]˜X›NˆÝ™\™YKœ™YXÙJ
+Ý[K›ÝÊHOˆÝ[H
+È[X™\Š›ÝËœ™XÙZ]˜X›P˜[[˜ÙH
+K
+KˆYTÛÛÛÛÝ[ˆYTÛÛÛ‹›[™ÝˆYTÛÛÛ”™XÙZ]˜X›NˆYTÛÛÛ‹œ™YXÙJ
+Ý[K›ÝÊHOˆÝ[H
+È[X™\Š›ÝËœ™XÙZ]˜X›P˜[[˜ÙH
+K
+KˆNÂˆÛÛœÝÝXš™XÝH	ÜÙ][™ÜËœÝXš™XÝHH	Ü™]Q]J™\ÜÙ^J_XÂˆÛÛœÝÝ[[X\žR[HÙ][™ÜËš[˜ÛYTÝ[[X\žBˆÈˆX›H›ÛOHœ™\Ù[][ÛˆˆÝ[OH˜›Ü™\‹XÛÛ\ÙN˜ÛÛ\ÙNÛX\™Ú[ŽŒNÝÚYŒL	NÛX^]ÚYŒŒ‚ˆ‚ˆÝ[OH˜›Ü™\ŽŒ\ÛÛYÙYL™YŽØ›Ü™\‹\˜Y]\ÎŽÜY[™ÎŒLœØ˜XÚÙÜ›Ý[™ˆÙ™™ÙÈ‚ˆ]ˆÝ[OH™›Û\Ú^™NŒLœØÛÛÜŽˆÍÌNÝ^]˜[œÙ›Ü›N\\˜Ø\ÙNÛ]\‹\ÜXÚ[™Î‹Œ[H“Ý™\™YOÙ]‚ˆ]ˆÝ[OH™›Û\Ú^™NŒŒÙ›Û]ÙZYÚÌØÛÛÜŽˆÙÌŒˆ‰Û[Û™^JÝ[Ë›Ý™\™YT™XÙZ]˜X›J_H
+	ÝÝ[Ë›Ý™\™YPÛÝ[JOÙ]‚ˆÝ‚ˆÝ[OH˜›Ü™\ŽŒ\ÛÛYÙYL™YŽØ›Ü™\‹[YŒØ›Ü™\‹\˜Y]\ÎŒÜY[™ÎŒLœØ˜XÚÙÜ›Ý[™ˆÙÙ˜™™ˆ‚ˆ]ˆÝ[OH™›Û\Ú^™NŒLœØÛÛÜŽˆÍÌNÝ^]˜[œÙ›Ü›N\\˜Ø\ÙNÛ]\‹\ÜXÚ[™Î‹Œ[H‰Ù\ØØ\R[
+YTÛÛÛ“X™[
+_OÙ]‚ˆ]ˆÝ[OH™›Û\Ú^™NŒŒÙ›Û]ÙZYÚÌØÛÛÜŽˆÌMŒÙXˆ‰Û[Û™^JÝ[Ë™YTÛÛÛ”™XÙZ]˜X›J_H
+	ÝÝ[Ë™YTÛÛÛÛÝ[JOÙ]‚ˆÝ‚ˆÝ‚ˆÝX›O˜ˆˆ	ÉÎÂˆÛÛœÝX›T›ÝÜÈH›ÝÜÂˆ›X\
+
+›ÝÊHOˆÂˆÛÛœÝÙ]™\š]HHÝ™\™YQ[XZ[Ý[\Ê›ÝË™^\Õ[[YK›ÝËœœÜÝ]\ÊNÂˆÛÛœÝÙ[Ý[HH›Ü™\‹X›ÝÛNŒ\ÛÛY	ÜÙ]™\š]K˜›Ü™\ŸNÜY[™ÎŽLÂˆ™]\›ˆˆˆÝ[OH‰ÜÙ]™\š]Kœ›ÝßH‚ˆÝ[OH‰ØÙ[Ý[_NÙ›Û]ÙZYÚŒÝÚ]K\ÜXÙN››ÝÜ˜\‰Ù\ØØ\R[
+›ÝËœÝ[S˜[YJ_OÝ‚ˆÝ[OH‰ØÙ[Ý[_NÛZ[‹]ÚYŒN‰Ù\ØØ\R[
+›ÝË˜^Y\“˜[YH	ËIÊ_OÝ‚ˆÝ[OH‰ØÙ[Ý[_NÛZ[‹]ÚYŒML‰Ù\ØØ\R[
+›ÝË˜^Y\œ›ÚÙ\“˜[Y\È	ËIÊ_OÝ‚ˆÝ[OH‰ØÙ[Ý[_NÝ^X[YÛŽœšYÚÝÚ]K\ÜXÙN››ÝÜ˜\‰Û[Û™^J›ÝËš[›ÚXÙP[[Ý[
+_OÝ‚ˆÝ[OH‰ØÙ[Ý[_NÝ^X[YÛŽœšYÚÙ›Û]ÙZYÚŒÝÚ]K\ÜXÙN››ÝÜ˜\‰Û[Û™^J›ÝËœ™XÙZ]˜X›P˜[[˜ÙJ_OÝ‚ˆÝ[OH‰ØÙ[Ý[_NÝÚ]K\ÜXÙN››ÝÜ˜\‰Ü™]Q]J›ÝË˜^Y\’[›ÚXÙQYQ]J_OÝ‚ˆÝ[OH‰ØÙ[Ý[_NÛZ[‹]ÚYŒM‰Ù\ØØ\R[
+›ÝË˜^Y\•˜Y\’[Ú\™ÙH	ËIÊ_OÝ‚ˆÝ[OH‰ØÙ[Ý[_NÛZ[‹]ÚYŒMŒ‰Ù\ØØ\R[
+›ÝËœ^[Y[[™\“˜[YH›ÝË˜ÛÛXÝ[ÛË›ÝÛ™\“˜[YH	ËIÊ_OÝ‚ˆÝ[OH‰ØÙ[Ý[_NÛZ[‹]ÚYŒMŒ‰Ù\ØØ\R[
+›ÝËœœÜÝ]\È	ËIÊ_OÝ‚ˆÝ[OH‰ØÙ[Ý[_H‚ˆÜ[ˆÝ[OH™\Ü^Nš[›[™KX›ØÚÎØ›Ü™\ŽŒ\ÛÛYØ›Ü™\‹\˜Y]\ÎŽNN\ÜY[™ÎŒœÙ›Û\Ú^™NŒLœÙ›Û]ÙZYÚŒÝÚ]K\ÜXÙN››ÝÜ˜\ÉÜÙ]™\š]Kœ[H‰Ù\ØØ\R[
+›ÝËœÝ]\Ê_OÜÜ[‚ˆÝ‚ˆÝ[OH‰ØÙ[Ý[_NÝ^X[YÛŽœšYÚÙ›Û]ÙZYÚŒØÛÛÜŽ‰ÜÙ]™\š]K^NÝÚ]K\ÜXÙN››ÝÜ˜\‰ÛÝ™\™YQ\Ü^U˜[YJ›ÝË™^\Õ[[YJ_OÝ‚ˆÝ˜ÂˆJBˆš›Ú[Š	ÉÊNÂˆÛÛœÝX›R[HÙ][™ÜËš[˜ÛYUX›BˆÈˆ	Ø^Y\•˜Y\‘š[\’[
+™\ÜÙ][™ÜÊ_Bˆ]ˆÝ[OH›X^ZZYÚŒÛÝ™\™›ÝÎ˜]]ÎØ›Ü™\ŽŒ\ÛÛYÙYL™YŽØ›Ü™\‹\˜Y]\ÎŒL‚ˆX›HÝ[OH˜›Ü™\‹XÛÛ\ÙN˜ÛÛ\ÙNÝÚYŒL	NÛZ[‹]ÚYŒLŒÙ›Û\Ú^™NŒLÜ‚ˆXY‚ˆˆÝ[OH˜˜XÚÙÜ›Ý[™ˆÙŽ˜Y˜ÎØÛÛÜŽˆÍÌNÝ^]˜[œÙ›Ü›N\\˜Ø\ÙNÙ›Û\Ú^™NŒL\Û]\‹\ÜXÚ[™Î‹Œ[H‚ˆÝ[OH˜›Ü™\‹X›ÝÛNŒ\ÛÛYÙYL™YŽÜY[™ÎŽLÝ^X[YÛŽ›YÜÜÚ][ÛŽœÝXÚÞNÝÜŒØ˜XÚÙÜ›Ý[™ˆÙŽ˜Y˜È”Ý[OÝ‚ˆÝ[OH˜›Ü™\‹X›ÝÛNŒ\ÛÛYÙYL™YŽÜY[™ÎŽLÝ^X[YÛŽ›YÜÜÚ][ÛŽœÝXÚÞNÝÜŒØ˜XÚÙÜ›Ý[™ˆÙŽ˜Y˜È^Y\Ý‚ˆÝ[OH˜›Ü™\‹X›ÝÛNŒ\ÛÛYÙYL™YŽÜY[™ÎŽLÝ^X[YÛŽ›YÜÜÚ][ÛŽœÝXÚÞNÝÜŒØ˜XÚÙÜ›Ý[™ˆÙŽ˜Y˜È^Y\ˆœ›ÚÙ\Ý‚ˆÝ[OH˜›Ü™\‹X›ÝÛNŒ\ÛÛYÙYL™YŽÜY[™ÎŽLÝ^X[YÛŽœšYÚÜÜÚ][ÛŽœÝXÚÞNÝÜŒØ˜XÚÙÜ›Ý[™ˆÙŽ˜Y˜È’[›ÚXÙH[[Ý[Ý‚ˆÝ[OH˜›Ü™\‹X›ÝÛNŒ\ÛÛYÙYL™YŽÜY[™ÎŽLÝ^X[YÛŽœšYÚÜÜÚ][ÛŽœÝXÚÞNÝÜŒØ˜XÚÙÜ›Ý[™ˆÙŽ˜Y˜È”™XÙZ]˜X›H˜[[˜ÙOÝ‚ˆÝ[OH˜›Ü™\‹X›ÝÛNŒ\ÛÛYÙYL™YŽÜY[™ÎŽLÝ^X[YÛŽ›YÜÜÚ][ÛŽœÝXÚÞNÝÜŒØ˜XÚÙÜ›Ý[™ˆÙŽ˜Y˜È‘YH]OÝ‚ˆÝ[OH˜›Ü™\‹X›ÝÛNŒ\ÛÛYÙYL™YŽÜY[™ÎŽLÝ^X[YÛŽ›YÜÜÚ][ÛŽœÝXÚÞNÝÜŒØ˜XÚÙÜ›Ý[™ˆÙŽ˜Y˜È^Y\ˆ˜Y\Ý‚ˆÝ[OH˜›Ü™\‹X›ÝÛNŒ\ÛÛYÙYL™YŽÜY[™ÎŽLÝ^X[YÛŽ›YÜÜÚ][ÛŽœÝXÚÞNÝÜŒØ˜XÚÙÜ›Ý[™ˆÙŽ˜Y˜È”^[Y[ÛÛXÝ[Ûˆ[™\Ý‚ˆÝ[OH˜›Ü™\‹X›ÝÛNŒ\ÛÛYÙYL™YŽÜY[™ÎŽLÝ^X[YÛŽ›YÜÜÚ][ÛŽœÝXÚÞNÝÜŒØ˜XÚÙÜ›Ý[™ˆÙŽ˜Y˜È”Ô”ÏÝ‚ˆÝ[OH˜›Ü™\‹X›ÝÛNŒ\ÛÛYÙYL™YŽÜY[™ÎŽLÝ^X[YÛŽ›YÜÜÚ][ÛŽœÝXÚÞNÝÜŒØ˜XÚÙÜ›Ý[™ˆÙŽ˜Y˜È”Ý]\ÏÝ‚ˆÝ[OH˜›Ü™\‹X›ÝÛNŒ\ÛÛYÙYL™YŽÜY[™ÎŽLÝ^X[YÛŽœšYÚÜÜÚ][ÛŽœÝXÚÞNÝÜŒØ˜XÚÙÜ›Ý[™ˆÙŽ˜Y˜È“Ý™\™YOÝ‚ˆÝ‚ˆÝXY‚ˆ›ÙO‰ÝX›T›ÝÜÈ	ÏÛÛÜ[HŒLHˆÝ[OHœY[™ÎŒNÝ^X[YÛŽ˜Ù[\ŽØÛÛÜŽˆÍÌH“›ÈÝ]Ý[™[™È^Y\ˆ[›ÚXÙ\È›Ý[™ÝÝ‰ßOÝ›ÙO‚ˆÝX›O‚ˆÙ]˜ˆˆ	ÉÎÂˆÛÛœÝÛÛ[[H[XZ[ÛÛ[[
+ÛÛ[
+NÂˆÛÛœÝ\Ð][[Û“X\šÙ\ˆHÙ›Üˆ[Ý\ˆ][[Û—‹ÚK\Ý
+ÛÛ[[
+NÂˆÛÛœÝÛÛ[^H\Ò[X\šÝ\
+ÛÛ[
+HÈ[ÔZ[•^
+ÛÛ[
+HˆÛÛ[ÂˆÛÛœÝ™\Ü›ÙR[H\Ð][[Û“X\šÙ\ˆ	‰ˆX›R[È	Ú[œÙ\Y\][[Û”Ù[[˜ÙJÛÛ[[X›R[
+_IÜÝ[[X\žR[Xˆ	ØÛÛ[[IÜÝ[[X\žR[IÝX›R[XÂˆÛÛœÝ[Hˆ]ˆÝ[OH™›ÛY˜[Z[N’[\‹\šX[Ø[œË\Ù\šYŽØÛÛÜŽˆÌYŒŽLÍÎÛ[™KZZYÚŒKH‚ˆ	Ü™\Ü›ÙR[BˆÙ]˜ÂˆÛÛœÝX›U^H›ÝÜË›X\
+
+›ÝÊHOˆ	Ü›ÝËœÝ[S˜[Y_H	Ü›ÝË˜^Y\“˜[YH	ËIßH^Y\ˆœ›ÚÙ\ˆ	Ü›ÝË˜^Y\œ›ÚÙ\“˜[Y\È	ËIßH™XÙZ]˜X›H˜[[˜ÙH	Û[Û™^J›ÝËœ™XÙZ]˜X›P˜[[˜ÙJ_HYH	Ü™]Q]J›ÝË˜^Y\’[›ÚXÙQYQ]J_H^Y\ˆ˜Y\ˆ	Ü›ÝË˜^Y\•˜Y\’[Ú\™ÙH	ËIßH^[Y[ÛÛXÝ[Ûˆ[™\ˆ	Ü›ÝËœ^[Y[[™\“˜[YH›ÝË˜ÛÛXÝ[ÛË›ÝÛ™\“˜[YH	ËIßHÔ”È	Ü›ÝËœœÜÝ]\È	ËIßH	Ü›ÝËœÝ]\ßHÝ™\™YH	ÛÝ™\™YQ\Ü^U˜[YJ›ÝË™^\Õ[[YJ_X
+Kš›Ú[Š	×‰ÊNÂˆÛÛœÝ[›Õ^H\Ð][[Û“X\šÙ\ˆ	‰ˆX›U^È[œÙ\Y\][[Û”Ù[[˜ÙJÛÛ[^—‰ÝX›U^W—˜
+HˆÛÛ[^ÂˆÛÛœÝ^[™\ÈHÚ[›Õ^Ý™\™YNˆ	Û[Û™^JÝ[Ë›Ý™\™YT™XÙZ]˜X›J_H
+	ÝÝ[Ë›Ý™\™YPÛÝ[JX	ÙYTÛÛÛ“X™[Nˆ	Û[Û™^JÝ[Ë™YTÛÛÛ”™XÙZ]˜X›J_H
+	ÝÝ[Ë™YTÛÛÛÛÝ[JXÜ[ˆ[[›ÚXÙ\Îˆ	Ø^Y\’[›ÚXÙQš[\•\›
+Ù][™ÜË™\Ü[
+_X‹‹Š™\Ü˜^Y\•˜Y\“Ü[ÛœÈ×JK›X\
+
+˜[YJHOˆÜ[ˆ	Û˜[Y_Nˆ	Ø^Y\’[›ÚXÙQš[\•\›
+Ù][™ÜË™\Ü˜[YJ_X
+K	ÉË‹‹Š\Ð][[Û“X\šÙ\ˆÈ×Hˆ›ÝÜË›X\
+
+›ÝÊHOˆ	Ü›ÝËœÝ[S˜[Y_H	Ü›ÝË˜^Y\“˜[YH	ËIßH^Y\ˆœ›ÚÙ\ˆ	Ü›ÝË˜^Y\œ›ÚÙ\“˜[Y\È	ËIßH™XÙZ]˜X›H˜[[˜ÙH	Û[Û™^J›ÝËœ™XÙZ]˜X›P˜[[˜ÙJ_HYH	Ü™]Q]J›ÝË˜^Y\’[›ÚXÙQYQ]J_H^Y\ˆ˜Y\ˆ	Ü›ÝË˜^Y\•˜Y\’[Ú\™ÙH	ËIßH^[Y[ÛÛXÝ[Ûˆ[™\ˆ	Ü›ÝËœ^[Y[[™\“˜[YH›ÝË˜ÛÛXÝ[ÛË›ÝÛ™\“˜[YH	ËIßHÔ”È	Ü›ÝËœœÜÝ]\È	ËIßH	Ü›ÝËœÝ]\ßHÝ™\™YH	ÛÝ™\™YQ\Ü^U˜[YJ›ÝË™^\Õ[[YJ_X
+JWNÂˆ™]\›ˆÈÝXš™XÝ[^ˆ^[™\Ëš›Ú[Š	×‰ÊKÝ[ÈNÂŸB‚™[˜Ý[Ûˆ\Ñœ˜][PÛÜÝ[XÚ^Y\‘Ü›Ý\
+˜[YJHÂˆ™]\›ˆ×™œ˜][WÊØÛÜÝ[XÚ‹ÚK\Ý
+Ýš[™Ê˜[YH	ÉÊJNÂŸB‚™[˜Ý[Ûˆ›ÝÐ^Y\”™[Z[™\”™XÚ\Y[Ê›ÝÊHÂˆ™]\›ˆ[š\]YQ[XZ[\Ý
+›ÝÏËœ^[Y[™[Z[™\”™XÚ\Y[È×K›ÝÏËœ^[Y[™[Z[™\”™XÚ\Y[	ÉË›ÝÏË˜^Y\XØÛÝ[Ñ[XZ[	ÉË›ÝÏË˜^Y\•˜Y\‘[XZ[	ÉË›ÝÏËœ^[Y[[™\‘[XZ[	ÉÊNÂŸB‚™[˜Ý[Ûˆ›ÝÐœ›ÚÙ\”™[Z[™\‘[XZ[Ê›ÝÊHÂˆ™]\›ˆ[š\]YQ[XZ[\Ý
+›ÝÏË˜^Y\œ›ÚÙ\‘[XZ[È	ÉÊNÂŸB‚™[˜Ý[Ûˆ^[Y[™[Z[™\”›ÝÔ›Ý][™Ê›ÝÊHÂˆÛÛœÝ^Y\”™XÚ\Y[ÈH›ÝÐ^Y\”™[Z[™\”™XÚ\Y[Ê›ÝÊNÂˆÛÛœÝœ›ÚÙ\‘[XZ[ÈH›ÝÐœ›ÚÙ\”™[Z[™\‘[XZ[Ê›ÝÊNÂˆÛÛœÝœ›ÚÙ\“˜[Y\ÈH[š\]YU^\Ý
+Ýš[™Ê›ÝÏË˜^Y\œ›ÚÙ\“˜[Y\È	ÉÊKœÜ]
+	Ë	ÊJNÂˆÛÛœÝ[ÙHH›ÝÏË˜^Y\œ›ÚÙ\”›Ý][™Ó[ÙH	Ø^Y\—ÛÛ›IÎÂˆYˆ
+[ÙHOOH	Øœ›ÚÙ\—ÛÛ›IÊHÂˆ™]\›ˆÂˆ[ÙKˆÎˆœ›ÚÙ\‘[XZ[ËˆØÎˆ×Kˆ˜ØÎˆ×Kˆš[X\žT™XÚ\Y[˜[YNˆœ›ÚÙ\“˜[Y\ÖÌH›ÝÏË˜^Y\œ›ÚÙ\“˜[Y\È	Ðœ›ÚÙ\‰ËˆØ\›š[™ÜÎˆ›ÝÏË˜^Y\œ›ÚÙ\”›Ý][™ÕØ\›š[™ÜÈ×KˆNÂˆBˆYˆ
+[ÙHOOH	Ø^Y\—ØØ×Øœ›ÚÙ\‰ÊHÂˆ™]\›ˆÂˆ[ÙKˆÎˆ^Y\”™XÚ\Y[ËˆØÎˆœ›ÚÙ\‘[XZ[Ëˆ˜ØÎˆ×Kˆš[X\žT™XÚ\Y[˜[YNˆ›ÝÏË˜^Y\“˜[YH	ÐÝ\ÝÛY\‰ËˆØ\›š[™ÜÎˆ›ÝÏË˜^Y\œ›ÚÙ\”›Ý][™ÕØ\›š[™ÜÈ×KˆNÂˆBˆ™]\›ˆÂˆ[ÙNˆ	Ø^Y\—ÛÛ›IËˆÎˆ^Y\”™XÚ\Y[ËˆØÎˆ×Kˆ˜ØÎˆœ›ÚÙ\‘[XZ[Ëˆš[X\žT™XÚ\Y[˜[YNˆ›ÝÏË˜^Y\“˜[YH	ÐÝ\ÝÛY\‰ËˆØ\›š[™ÜÎˆ›ÝÏË˜^Y\œ›ÚÙ\”›Ý][™ÕØ\›š[™ÜÈ×KˆNÂŸB‚™[˜Ý[Ûˆ^[Y[™[Z[™\”›Ý][™Ñ›Ü”›ÝÜÊ›ÝÜÈH×JHÂˆÛÛœÝ™\Ý[Ü›Ý\ÈHÜ›Ý\^[Y[™[Z[™\”›ÝÜÊ›ÝÜË^[Y[™[Z[™\”›ÝÔ›Ý][™ÊNÂˆ™]\›ˆÂˆÜ›Ý\Îˆ™\Ý[Ü›Ý\ËˆÎˆ[š\]YQ[XZ[\Ý
+‹‹œ™\Ý[Ü›Ý\Ë›X\
+
+Ü›Ý\
+HOˆÜ›Ý\ÊJKˆØÎˆ[š\]YQ[XZ[\Ý
+‹‹œ™\Ý[Ü›Ý\Ë›X\
+
+Ü›Ý\
+HOˆÜ›Ý\˜ØÊJKˆ˜ØÎˆ[š\]YQ[XZ[\Ý
+‹‹œ™\Ý[Ü›Ý\Ë›X\
+
+Ü›Ý\
+HOˆÜ›Ý\˜˜ØÊJKˆØ\›š[™ÜÎˆ[š\]YU^\Ý
+™\Ý[Ü›Ý\Ë™›]X\
+
+Ü›Ý\
+HOˆÜ›Ý\Ø\›š[™ÜÊJKˆNÂŸB‚™[˜Ý[Ûˆ^[Y[™[Z[™\”™XÚ\Y[Ê›ÝÜÊHÂˆ™]\›ˆ^[Y[™[Z[™\”›Ý][™Ñ›Ü”›ÝÜÊ›ÝÜÊKÎÂŸB‚™[˜Ý[Ûˆ^[Y[™[Z[™\•[\]PÛÛ^
+™\Ü›ÝÜËÙ[XÝY›Ý][™ÈH[
+HÂˆÛÛœÝÝ[™XÙZ]˜X›HH
+›ÝÜÈ×JKœ™YXÙJ
+Ý[K›ÝÊHOˆÝ[H
+È[X™\Š›ÝËœ™XÙZ]˜X›P˜[[˜ÙH
+K
+NÂˆÛÛœÝÙ[XÝY›ÝÈHÙ[XÝYßNÂˆÛÛœÝœ›ÚÙ\”›ÝÜÈH›ÝÜÏË›[™ÝÈ›ÝÜÈˆÜÙ[XÝY›Ý×NÂˆÛÛœÝ›Ý][™Ò[™›ÈH›Ý][™È^[Y[™[Z[™\”›Ý][™Ñ›Ü”›ÝÜÊ›ÝÜÈ×JK™Ü›Ý\ÖÌH[Âˆ™]\›ˆÂˆÝ[S˜[YNˆÙ[XÝY›ÝËœÝ[S˜[YH	ÉËˆÙ^TÝ[NˆÙ[XÝY›ÝËšÙ^TÝ[H	ÉËˆ^Y\“˜[YNˆÙ[XÝY›ÝË˜^Y\“˜[YH	ÐÝ\ÝÛY\‰Ëˆš[X\žT™XÚ\Y[˜[YNˆ›Ý][™Ò[™›ÏËœš[X\žT™XÚ\Y[˜[YHÙ[XÝY›ÝË˜^Y\“˜[YH	ÐÝ\ÝÛY\‰Ëˆ^Y\‘Ü›Ý\˜[YNˆÙ[XÝY›ÝË˜^Y\‘Ü›Ý\˜[YH	ÉËˆ[›ÚXÙP[[Ý[ˆ[Û™^JÙ[XÝY›ÝËš[›ÚXÙP[[Ý[
+Kˆ™XÙZ]˜X›P˜[[˜ÙNˆ[Û™^JÙ[XÝY›ÝËœ™XÙZ]˜X›P˜[[˜ÙJKˆ^Y\’[›ÚXÙQYQ]Nˆ™]Q]JÙ[XÝY›ÝË˜^Y\’[›ÚXÙQYQ]JKˆ^Y\•˜Y\’[Ú\™ÙNˆÙ[XÝY›ÝË˜^Y\•˜Y\’[Ú\™ÙH	ÉËˆ^Y\XØÛÝ[Ñ[XZ[ˆÙ[XÝY›ÝË˜^Y\XØÛÝ[Ñ[XZ[	ÉËˆ^Y\•˜Y\‘[XZ[ˆÙ[XÝY›ÝË˜^Y\•˜Y\‘[XZ[	ÉËˆ^[Y[[™\“˜[YNˆÙ[XÝY›ÝËœ^[Y[[™\“˜[YHÙ[XÝY›ÝË˜ÛÛXÝ[ÛË›ÝÛ™\“˜[YH	ÉËˆ^[Y[[™\‘[XZ[ˆÙ[XÝY›ÝËœ^[Y[[™\‘[XZ[	ÉËˆ^Y\œ›ÚÙ\“˜[Y\Îˆ[š\]YU^\Ý
+œ›ÚÙ\”›ÝÜË›X\
+
+›ÝÊHOˆ›ÝË˜^Y\œ›ÚÙ\“˜[Y\ÊJKš›Ú[Š	Ë	ÊKˆ^Y\œ›ÚÙ\‘[XZ[Îˆ[š\]YQ[XZ[\Ý
+‹‹˜œ›ÚÙ\”›ÝÜË›X\
+
+›ÝÊHOˆ›ÝË˜^Y\œ›ÚÙ\‘[XZ[È	ÉÊJKš›Ú[Š	Ë	ÊKˆ^Y\œ›ÚÙ\’[›ÚXÙQ›Ü›X]Îˆ[š\]YU^\Ý
+œ›ÚÙ\”›ÝÜË›X\
+
+›ÝÊHOˆ›ÝË˜^Y\œ›ÚÙ\’[›ÚXÙQ›Ü›X]ÊJKš›Ú[Š	Ë	ÊKˆÔ™XÚ\Y[Îˆ›Ý][™Ò[™›ÈÈ›Ý][™Ò[™›ËËš›Ú[Š	Ë	ÊHˆ^[Y[™[Z[™\”™XÚ\Y[Ê›ÝÜÊKš›Ú[Š	Ë	ÊKˆÜœÔÝ]\ÎˆÙ[XÝY›ÝËœœÜÝ]\È	ÉËˆÝ™\™YNˆÝ™\™YQ\Ü^U˜[YJÙ[XÝY›ÝË™^\Õ[[YJKˆ[›ÚXÙTÝ]\ÎˆÙ[XÝY›ÝËœÝ]\È	ÉËˆ^\ÐZXYˆÝš[™Ê™\Ü™^\ÐZXYÏÈQUSÐ•VQT—ÒS•“ÒPÑWÑSPRSÔÑUS‘ÔË™^\ÐZXY
+KˆÙ^Nˆ™]Q]J™\ÜÙ^JKˆYU›ÝYÚˆ™]Q]J™\Ü™YU›ÝYÚ
+Kˆ[›ÚXÙPÛÝ[ˆÝš[™Ê
+›ÝÜÈ×JK›[™Ý
+KˆÝ[™XÙZ]˜X›Nˆ[Û™^JÝ[™XÙZ]˜X›JKˆNÂŸB‚™[˜Ý[Ûˆ™[™\”^[Y[™[Z[™\•[\]J[\]KÛÛ^
+HÂˆÛÛœÝ˜[Y\ÈHÛÛ^ßNÂˆ™]\›ˆÝš[™Ê[\]H	ÉÊKœ™\XÙJ×××ÊŠÐKV˜K^ŒNW×JÊWÊ—WKÙË
+X]ÚÙ^JHOˆ
+Øš™XÝœ›ÝÝ\Kš\ÓÝÛ”›Ü\K˜Ø[
+˜[Y\ËÙ^JHÈ˜[Y\ÖÚÙ^WHˆX]Ú
+JNÂŸB‚™[˜Ý[Ûˆ™[™\”^[Y[™[Z[™\‘[XZ[\Ý
+˜[YKÛÛ^
+HÂˆÛÛœÝ˜]ÈH\œ˜^Kš\Ð\œ˜^J˜[YJHÈ˜[YKš›Ú[Š	Ë	ÊHˆÝš[™Ê˜[YH	ÉÊNÂˆ™]\›ˆ\œÙQ[XZ[\Ý
+™[™\”^[Y[™[Z[™\•[\]J˜]ËÛÛ^
+K×JNÂŸB‚™[˜Ý[Ûˆ\Ò[X\šÝ\
+˜[YJHÂˆ™]\›ˆÏÏÖØK^—V×××J‹ÚK\Ý
+Ýš[™Ê˜[YH	ÉÊJNÂŸB‚™[˜Ý[ÛˆØ[š]^™T™[Z[™\’[
+˜[YJHÂˆ™]\›ˆÝš[™Ê˜[YH	ÉÊBˆœ™\XÙJÏØÜš\×××JÏ–×××JÏÜØÜš\‹ÙÚK	ÉÊBˆœ™\XÙJÏÝ[V×××JÏ–×××JÏÜÝ[O‹ÙÚK	ÉÊBˆœ™\XÙJ×ÛÛ–ØK^—J×ÊWÊŠÉÈ—JKŠ×KÙÚK	ÉÊBˆœ™\XÙJ×ÛÛ–ØK^—J×ÊWÊ–×—Ï—JËÙÚK	ÉÊBˆœ™\XÙJÚ˜]˜\ØÜš\‹ÙÚK	ÉÊNÂŸB‚™[˜Ý[Ûˆ[ÔZ[•^
+˜[YJHÂˆ™]\›ˆÝš[™Ê˜[YH	ÉÊBˆœ™\XÙJÏœ—Ê—ÏÏ‹ÙÚK	×‰ÊBˆœ™\XÙJÏÜ‹ÙÚK	×—‰ÊBˆœ™\XÙJÏ×—JÏ‹ÙË	ÉÊBˆœ™\XÙJÉ›˜œÜËÙË	È	ÊBˆœ™\XÙJÉ˜[\ËÙË	É‰ÊBˆœ™\XÙJÉ›ËÙË	Ï	ÊBˆœ™\XÙJÉ™ÝËÙË	Ï‰ÊBˆœ™\XÙJÉœ][ÝËÙË	È‰ÊBˆœ™\XÙJÉˆÌÎNËÙË‰ÈŠBˆœ™\XÙJ×žÌËKÙË	×—‰ÊBˆš[J
+NÂŸB‚™[˜Ý[Ûˆ^[Y[™[Z[™\ÛÛ[[
+ÛÛ[
+HÂˆÛÛœÝ[H\Ò[X\šÝ\
+ÛÛ[
+BˆÈØ[š]^™T™[Z[™\’[
+ÛÛ[
+BˆˆÝš[™ÊÛÛ[	ÉÊBˆœÜ]
+×žÌ‹KÊBˆ›X\
+
+›ØÚÊHOˆ‰Ù\ØØ\R[
+›ØÚËš[J
+JKœ™\XÙP[
+	×‰Ë	Ïœ‰Ê_OÜ˜
+Bˆš›Ú[Š	ÉÊNÂˆÛÛœÝX]Ú\ÈHË‹‹š[›X]Ú[
+Ï–×—JŠ×××JÊOÜ‹ÙÚJWNÂˆÛÛœÝ\˜YÜ˜\ÈHX]Ú\Ë›[™ÝÈX]Ú\Ë›X\
+
+X]Ú
+HOˆX]ÚÌWJHˆ[œÜ]
+Ïœ—Ê—ÏÏŸžÌ‹KÚJK›X\
+
+›ØÚÊHOˆ\ØØ\R[
+›ØÚËš[J
+JJNÂˆ™]\›ˆ\˜YÜ˜\Âˆ›X\
+
+[›™\ŠHOˆ[›™\‹š[J
+JBˆ™š[\Š
+[›™\ŠHOˆ[ÔZ[•^
+[›™\ŠKš[J
+JBˆ›X\
+
+[›™\ŠHOˆÂˆÛÛœÝ^H[ÔZ[•^
+[›™\ŠKœ™\XÙJ×ÊËÙË	È	ÊKš[J
+KÓÝÙ\Ø\ÙJ
+NÂˆ]X\™Ú[ˆH	ÌLœ	ÎÂˆYˆ
+××ÊËË\Ý
+^
+JHX\™Ú[ˆH	ÌÜ	ÎÂˆ[ÙHYˆ
+×˜]—‹Ë\Ý
+^
+JHX\™Ú[ˆH	ÌN	ÎÂˆ[ÙHYˆ
+×œ™YØ\™ËËË\Ý
+^
+JHX\™Ú[ˆH	ÌÜ	ÎÂˆ[ÙHYˆ
+×™œ˜][WÊØÛÜÝ[XÚË\Ý
+^
+JHX\™Ú[ˆH	Ì	ÎÂˆ™]\›ˆÝ[OH›X\™Ú[Ž‰ÛX\™Ú[ŸNÜY[™ÎŒØÛÛÜŽˆÌYŒŽLÍÎÛ[™KZZYÚŒKŒÍNÝ^X[YÛŽ›Y‰Ú[›™\ŸOÜ˜ÂˆJBˆš›Ú[Š	ÉÊNÂŸB‚™[˜Ý[Ûˆ[œÙ\Y\][[Û”Ù[[˜ÙJÛÛ[[œÙ\ÛÛ[
+HÂˆÛÛœÝÛÝ\˜ÙHHÝš[™ÊÛÛ[	ÉÊNÂˆÛÛœÝX\šÙ\ˆHÙ›Üˆ[Ý\ˆ][[Û—‹ÚK™^XÊÛÝ\˜ÙJNÂˆYˆ
+[X\šÙ\ŠH™]\›ˆ	ÜÛÝ\˜Ù_IÚ[œÙ\ÛÛ[XÂˆÛÛœÝY\“X\šÙ\ˆHX\šÙ\‹š[™^
+ÈX\šÙ\–ÌK›[™ÝÂˆÛÛœÝ™\ÝHÛÝ\˜ÙKœÛXÙJY\“X\šÙ\ŠNÂˆÛÛœÝ\˜YÜ˜\ÛÜÙHHÏÜ‹ÚK™^XÊ™\Ý
+NÂˆYˆ
+\˜YÜ˜\ÛÜÙH	‰ˆ\˜YÜ˜\ÛÜÙKš[™^Ì
+HÂˆÛÛœÝ[œÙ\]HY\“X\šÙ\ˆ
+È\˜YÜ˜\ÛÜÙKš[™^
+È\˜YÜ˜\ÛÜÙVÌK›[™ÝÂˆ™]\›ˆ	ÜÛÝ\˜ÙKœÛXÙJ[œÙ\]
+_IÚ[œÙ\ÛÛ[IÜÛÝ\˜ÙKœÛXÙJ[œÙ\]
+_XÂˆBˆ™]\›ˆ	ÜÛÝ\˜ÙKœÛXÙJY\“X\šÙ\Š_W—‰Ú[œÙ\ÛÛ[IÜÛÝ\˜ÙKœÛXÙJY\“X\šÙ\Š_XÂŸB‚™[˜Ý[Ûˆ[œÙ\[›ÚXÙUX›JÛÛ[[œÙ\ÛÛ[
+HÂˆÛÛœÝÛÝ\˜ÙHHÝš[™ÊÛÛ[	ÉÊNÂˆYˆ
+S•“ÒPÑWÕP“WÕÒÑS—ÔUT“‹\Ý
+ÛÝ\˜ÙJJHÂˆ™]\›ˆÛÝ\˜ÙKœ™\XÙJ™]È™YÑ^
+–×—J—Ê‰ÒS•“ÒPÑWÕP“WÕÒÑS—ÔUT“‹œÛÝ\˜Ù_WÊÜ˜	ÚIÊK[œÙ\ÛÛ[
+Kœ™\XÙJS•“ÒPÑWÕP“WÕÒÑS—ÔUT“‹[œÙ\ÛÛ[
+NÂˆBˆ™]\›ˆ[œÙ\Y\][[Û”Ù[[˜ÙJÛÝ\˜ÙK[œÙ\ÛÛ[
+NÂŸB‚™[˜Ý[ÛˆZ[^Y\’[›ÚXÙT^[Y[™[Z[™\‘[XZ[
+™\ÜÙ][™ÜËÙ[XÝY›ÝÜËÝ™\œšY\ÈHßK›Ý][™ÈH[
+HÂˆÛÛœÝÙ[XÝY›ÝÜÈH›ÝÜÈ×NÂˆÛÛœÝÛÛ^H^[Y[™[Z[™\•[\]PÛÛ^
+™\ÜÙ[XÝY›ÝÜËÙ[XÝY›Ý][™ÊNÂˆÛÛœÝÝXš™XÝH™[™\”^[Y[™[Z[™\•[\]JÝ™\œšY\ËœÝXš™XÝÙ][™ÜËœ^[Y[™[Z[™\”ÝXš™XÝÛÛ^
+NÂˆÛÛœÝ›ÙHH™[™\”^[Y[™[Z[™\•[\]JÝ™\œšY\Ë˜›ÙHÙ][™ÜËœ^[Y[™[Z[™\›ÙKÛÛ^
+NÂˆÛÛœÝX›T›ÝÜÈHÙ[XÝY›ÝÜÂˆ›X\
+
+›ÝÊHOˆÂˆÛÛœÝÙ]™\š]HHÝ™\™YQ[XZ[Ý[\Ê›ÝË™^\Õ[[YK›ÝËœœÜÝ]\ÊNÂˆÛÛœÝÙ[Ý[HH›Ü™\‹X›ÝÛNŒ\ÛÛY	ÜÙ]™\š]K˜›Ü™\ŸNÜY[™ÎÜÝ™\XØ[X[YÛŽÜÂˆÛÛœÝ›ÝÜ˜\Ù[Ý[HH	ØÙ[Ý[_NÝÚ]K\ÜXÙN››ÝÜ˜\Âˆ™]\›ˆˆˆÝ[OH‰ÜÙ]™\š]Kœ›ÝßH‚ˆÝ[OH‰ØÙ[Ý[_NÙ›Û]ÙZYÚŒÛZ[‹]ÚYŒML‰Ù\ØØ\R[
+›ÝËœÝ[S˜[YJ_OÝ‚ˆÝ[OH‰ØÙ[Ý[_NÛZ[‹]ÚYŒLL‰Ù\ØØ\R[
+›ÝË˜^Y\“˜[YH	ËIÊ_OÝ‚ˆÝ[OH‰Û›ÝÜ˜\Ù[Ý[_NÝ^X[YÛŽœšYÚ‰Û[Û™^J›ÝËš[›ÚXÙP[[Ý[
+_OÝ‚ˆÝ[OH‰Û›ÝÜ˜\Ù[Ý[_NÝ^X[YÛŽœšYÚÙ›Û]ÙZYÚŒ‰Û[Û™^J›ÝËœ™XÙZ]˜X›P˜[[˜ÙJ_OÝ‚ˆÝ[OH‰Û›ÝÜ˜\Ù[Ý[_H‰Ü™]Q]J›ÝË˜^Y\’[›ÚXÙQYQ]J_OÝ‚ˆÝ[OH‰ØÙ[Ý[_NÛZ[‹]ÚYŽ‰Ù\ØØ\R[
+›ÝË˜^Y\•˜Y\’[Ú\™ÙH	ËIÊ_OÝ‚ˆÝ[OH‰Û›ÝÜ˜\Ù[Ý[_H‚ˆÜ[ˆÝ[OH™\Ü^Nš[›[™KX›ØÚÎØ›Ü™\ŽŒ\ÛÛYØ›Ü™\‹\˜Y]\ÎŽNN\ÜY[™ÎŒœÙ›Û\Ú^™NŒLœÙ›Û]ÙZYÚŒÝÚ]K\ÜXÙN››ÝÜ˜\ÉÜÙ]™\š]Kœ[H‰Ù\ØØ\R[
+›ÝËœÝ]\Ê_OÜÜ[‚ˆÝ‚ˆÝ[OH‰Û›ÝÜ˜\Ù[Ý[_NÝ^X[YÛŽœšYÚÙ›Û]ÙZYÚŒØÛÛÜŽ‰ÜÙ]™\š]K^H‰ÛÝ™\™YQ\Ü^U˜[YJ›ÝË™^\Õ[[YJ_OÝ‚ˆÝ˜ÂˆJBˆš›Ú[Š	ÉÊNÂˆÛÛœÝX›R[Hˆ]ˆÝ[OH›Ý™\™›ÝË^˜]]ÎË]ÙXšÚ][Ý™\™›ÝË\ØÜ›Û[™ÎÝXÚØ›Ü™\ŽŒ\ÛÛYÙYL™YŽØ›Ü™\‹\˜Y]\ÎŒLÛX\™Ú[ŽŒMMœÛX^]ÚYŒL	H‚ˆX›HÝ[OH˜›Ü™\‹XÛÛ\ÙN˜ÛÛ\ÙNÝÚY˜]]ÎÛZ[‹]ÚYŒL	NÛX^]ÚY››Û™NÙ›Û\Ú^™NŒLœÛ[™KZZYÚŒKŒNÝX›K[^[Ý]˜]]È‚ˆXY‚ˆˆÝ[OH˜˜XÚÙÜ›Ý[™ˆÙŽ˜Y˜ÎØÛÛÜŽˆÍÌNÝ^]˜[œÙ›Ü›N\\˜Ø\ÙNÙ›Û\Ú^™NŒL\Û]\‹\ÜXÚ[™Î‹Œ[H‚‚HÝ[OH˜›Ü™\‹X›ÝÛNŒ\ÛÛYÙYL™YŽÜY[™ÎÜÝ^X[YÛŽ›YÝÚ]K\ÜXÙN››ÝÜ˜\”Ý[OÝ‚‚HÝ[OH˜›Ü™\‹X›ÝÛNŒ\ÛÛYÙYL™YŽÜY[™ÎÜÝ^X[YÛŽ›YÝÚ]K\ÜXÙN››ÝÜ˜\^Y\Ý‚ˆÝ[OH˜›Ü™\‹X›ÝÛNŒ\ÛÛYÙYL™YŽÜY[™ÎÜÝ^X[YÛŽœšYÚÝÚ]K\ÜXÙN››ÝÜ˜\’[›ÚXÙOÝ‚ˆÝ[OH˜›Ü™\‹X›ÝÛNŒ\ÛÛYÙYL™YŽÜY[™ÎÜÝ^X[YÛŽœšYÚÝÚ]K\ÜXÙN››ÝÜ˜\”™XÙZ]˜X›OÝ‚ˆÝ[OH˜›Ü™\‹X›ÝÛNŒ\ÛÛYÙYL™YŽÜY[™ÎÜÝ^X[YÛŽ›YÝÚ]K\ÜXÙN››ÝÜ˜\‘YH]OÝ‚ˆÝ[OH˜›Ü™\‹X›ÝÛNŒ\ÛÛYÙYL™YŽÜY[™ÎÜÝ^X[YÛŽ›YÝÚ]K\ÜXÙN››ÝÜ˜\•˜Y\Ý‚ˆÝ[OH˜›Ü™\‹X›ÝÛNŒ\ÛÛYÙYL™YŽÜY[™ÎÜÝ^X[YÛŽ›YÝÚ]K\ÜXÙN››ÝÜ˜\”Ý]\ÏÝ‚ˆÝ[OH˜›Ü™\‹X›ÝÛNŒ\ÛÛYÙYL™YŽÜY[™ÎÜÝ^X[YÛŽœšYÚÝÚ]K\ÜXÙN››ÝÜ˜\“Ý™\™YOÝ‚ˆÝ‚ˆÝXY‚ˆ›ÙO‰ÝX›T›ÝÜÈ	ÏÛÛÜ[HŽˆÝ[OHœY[™ÎŒNÝ^X[YÛŽ˜Ù[\ŽØÛÛÜŽˆÍÌH“›È[›ÚXÙ\ÈÙ[XÝYÝÝ‰ßOÝ›ÙO‚ˆÝX›O‚ˆÙ]˜ÂˆÛÛœÝ›ÙR[H^[Y[™[Z[™\ÛÛ[[
+›ÙJNÂˆÛÛœÝ[Ú]X›HH[œÙ\[›ÚXÙUX›J›ÙR[X›R[
+NÂˆÛÛœÝ[›ÚXÙU^HÙ[XÝY›ÝÜË›X\
+
+›ÝÊHOˆ	Ü›ÝËœÝ[S˜[Y_H	Ü›ÝË˜^Y\“˜[YH	ËIßH™XÙZ]˜X›H˜[[˜ÙH	Û[Û™^J›ÝËœ™XÙZ]˜X›P˜[[˜ÙJ_HYH	Ü™]Q]J›ÝË˜^Y\’[›ÚXÙQYQ]J_H	Ü›ÝËœÝ]\ßHÝ™\™YH	ÛÝ™\™YQ\Ü^U˜[YJ›ÝË™^\Õ[[YJ_H^Y\ˆ˜Y\ˆ	Ü›ÝË˜^Y\•˜Y\’[Ú\™ÙH	ËIßX
+Kš›Ú[Š	×‰ÊNÂˆÛÛœÝ›ÙU^H\Ò[X\šÝ\
+›ÙJHÈ[ÔZ[•^
+›ÙJHˆ›ÙNÂˆÛÛœÝ[Hˆ]ˆÝ[OH™›ÛY˜[Z[N’[\‹\šX[Ø[œË\Ù\šYŽØÛÛÜŽˆÌYŒŽLÍÎÛ[™KZZYÚŒKH‚ˆ	Ú[Ú]X›_BˆÙ]˜ÂˆÛÛœÝ^H[œÙ\[›ÚXÙUX›J›ÙU^—‰Ú[›ÚXÙU^W—˜
+NÂˆ™]\›ˆÈÝXš™XÝ›ÙK[^NÂŸB‚˜\Þ[˜È[˜Ý[ÛˆØY^Y\’[›ÚXÙT^[Y[™[Z[™\ÛÛ^
+›ÙHHßKXØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÝ[RYHÝš[™Ê›ÙKœÝ[RY›ÙKœÝ[WÚY	ÉÊKš[J
+NÂˆYˆ
+Z\ÔØ[\Ù›Ü˜ÙRY
+Ý[RY
+JH›ÝÈ\\œ›ÜŠ	ÐH˜[YØ[\Ù›Ü˜ÙHÕSH\È™\]Z\™Y›ÜˆH^[Y[™[Z[™\‹‰Ë
+NÂˆYˆ
+XØÙ\ÜÐÛÛ^
+H]ØZ]™\]Z\™R[\›Ù™šXÙTÝ[PXØÙ\ÜÊÝ[RYXØÙ\ÜÐÛÛ^
+NÂˆÛÛœÝÜÝÜ™YÙ[™\—HH]ØZ]›ÛZ\ÙK˜[
+ÂˆØYÝÜ™Y^Y\’[›ÚXÙQ[XZ[Ù][™ÜÊ
+KˆXØÙ\ÜÐÛÛ^Ë˜ÛY[ˆÈ™\ÛÛ™QÜ˜\[XZ[Ù[™\ŠXØÙ\ÜÐÛÛ^˜ÛY[	Ü^[Y[Ü™[Z[™\œÉÊBˆˆ›ÛZ\ÙKœ™\ÛÛ™J[
+KˆJNÂˆYˆ
+ÝÜ™Y›Y]KœÝÜ˜YÙP]˜Z[X›HOOHYJHÂˆ›ÝÈ\\œ›ÜŠ	Ð^Y\ˆ[›ÚXÙH[XZ[Ù][™ÜÈ\™H[\Ü˜\š[H[˜]˜Z[X›Kˆ^\›˜[^[Y[™[Z[™\œÈ\™H\ØX›Y[[ÝÜ˜YÙH\È™\ÝÜ™Y‰ËLÊNÂˆBˆÛÛœÝÙ][™ÜÈHÂˆ‹‹˜^Y\’[›ÚXÙQ[XZ[Ù][™ÜÊÝÜ™YœÙ][™ÜÊKˆ\Ð^Y\•˜Y\‘š[\Žˆ
+ÝÜ™YœÙ][™ÜË˜^Y\•˜Y\œÈ×JK›[™ÝˆˆNÂˆÛÛœÝ™\ÜH]ØZ]Ø[\Ù›Ü˜ÙP^Y\’[›ÚXÙ\ÑYU\™Ù]Y
+ˆÂˆ^\ÐZXYˆ›ÙK™^\ÐZXYÏÈÙ][™ÜË™^\ÐZXYˆ[˜ÚÜ”Ý[RYˆÝ[RYˆ™\]Y\ÝYÝ[RYÎˆ›ÙKœ™\]Y\ÝYÝ[RYÈ›ÙKš[›ÚXÙTÝ[RYËˆKˆ[ˆXØÙ\ÜÐÛÛ^ˆ
+NÂˆYˆ
+™\Üœ^[Y[™[Z[™\”[\Ð]˜Z[X›HOOHYJHÂˆ›ÝÈ\\œ›ÜŠ	Ð^Y\ˆ[›ÚXÙH™[Z[™\ˆ[\È\™H[\Ü˜\š[H[˜]˜Z[X›Kˆ^\›˜[^[Y[™[Z[™\œÈ\™H\ØX›Y[[ÝÜ˜YÙH\È™\ÝÜ™Y‰ËLÊNÂˆBˆÛÛœÝÙ[XÝYH™\Üœ›ÝÜË™š[™
+
+›ÝÊHOˆ›ÝËœÝ[RYOOHÝ[RY
+NÂˆYˆ
+\Ù[XÝY
+H›ÝÈ\\œ›ÜŠ	ÔÙ[XÝY[›ÚXÙH\È›ÈÛ™Ù\ˆ[ˆHÝ\œ™[Ý]Ý[™[™È[›ÚXÙHÚ[™ÝË‰Ë
+NÂˆÛÛœÝØ[™Y]\ÈH™\Üœ›ÝÜÂˆ™š[\Š
+›ÝÊHOˆ^Y\”™[Z[™\Ø[™Y]PžPXØÛÝ[
+›ÝËÙ[XÝY
+JBˆœÛÜ
+
+KŠHOˆÂˆYˆ
+K˜^Y\’[›ÚXÙQYQ]HOOH‹˜^Y\’[›ÚXÙQYQ]JH™]\›ˆK˜^Y\’[›ÚXÙQYQ]K›ØØ[PÛÛ\\™J‹˜^Y\’[›ÚXÙQYQ]JNÂˆ™]\›ˆÝš[™ÊKœÝ[S˜[YH	ÉÊK›ØØ[PÛÛ\\™JÝš[™Ê‹œÝ[S˜[YH	ÉÊJNÂˆJNÂˆ™]\›ˆÈÙ][™ÜËÙ][™ÜÔ™]š\Ú[ÛŽˆ[X™\ŠÝÜ™Y›Y]Kœ™]š\Ú[Ûˆ
+K™\ÜÙ[XÝYØ[™Y]\ËÙ[™\ˆNÂŸB‚™[˜Ý[Ûˆ™\\™T^[Y[™[Z[™\”›Ý][™Ê™\ÜÙ][™ÜËÙ[XÝYØ[™Y]\ÊHÂˆÛÛœÝ[YÚX›PØ[™Y]\ÈHØ[™Y]\Ë™š[\Š
+›ÝÊHOˆ›ÝËœ^[Y[™[Z[™\‘[YÚX›HOOHYJNÂˆÛÛœÝ›Ý][™ÈH^[Y[™[Z[™\”›Ý][™Ñ›Ü”›ÝÜÊ[YÚX›PØ[™Y]\ÊNÂˆÛÛœÝš\œÝÜ›Ý\H›Ý][™Ë™Ü›Ý\Ë™š[™
+
+Ü›Ý\
+HOˆÜ›Ý\œ›ÝÜËœÛÛYJ
+›ÝÊHOˆ›ÝËœÝ[RYOOHÙ[XÝYœÝ[RY
+JBˆ›Ý][™Ë™Ü›Ý\ÖÌBˆÂˆÙ^Nˆ	ÙY˜][	Ë›ÝÜÎˆ[YÚX›PØ[™Y]\ËÎˆ×KØÎˆ×K˜ØÎˆ×Kˆš[X\žT™XÚ\Y[˜[YNˆÙ[XÝY˜^Y\“˜[YH	ÐÝ\ÝÛY\‰Ë[ÙNˆ	Ø^Y\—ÛÛ›IËØ\›š[™ÜÎˆ×KˆNÂˆÛÛœÝš\œÝÙ[XÝYHš\œÝÜ›Ý\œ›ÝÜË™š[™
+
+›ÝÊHOˆ›ÝËœÝ[RYOOHÙ[XÝYœÝ[RY
+Hš\œÝÜ›Ý\œ›ÝÜÖÌHÙ[XÝYÂˆÛÛœÝ™\\™YÜ›Ý\ÈH›Ý][™Ë™Ü›Ý\Ë›X\
+
+Ü›Ý\
+HOˆÂˆÛÛœÝÜ›Ý\Ù[XÝYHÜ›Ý\œ›ÝÜË™š[™
+
+›ÝÊHOˆ›ÝËœÝ[RYOOHÙ[XÝYœÝ[RY
+HÜ›Ý\œ›ÝÜÖÌHÙ[XÝYÂˆÛÛœÝÜ›Ý\ÛÛ^H^[Y[™[Z[™\•[\]PÛÛ^
+™\ÜÜ›Ý\œ›ÝÜËÜ›Ý\Ù[XÝYÜ›Ý\
+NÂˆ™]\›ˆÂˆ[ÙNˆÜ›Ý\›[ÙKˆÙ^NˆÜ›Ý\šÙ^KˆÎˆÜ›Ý\ËˆØÎˆ[š\]YQ[XZ[\Ý
+Ü›Ý\˜ØË™[™\”^[Y[™[Z[™\‘[XZ[\Ý
+Ù][™ÜËœ^[Y[™[Z[™\ØËÜ›Ý\ÛÛ^
+JKˆ˜ØÎˆ[š\]YQ[XZ[\Ý
+Ü›Ý\˜˜ØË™[™\”^[Y[™[Z[™\‘[XZ[\Ý
+Ù][™ÜËœ^[Y[™[Z[™\˜ØËÜ›Ý\ÛÛ^
+JKˆš[X\žT™XÚ\Y[˜[YNˆÜ›Ý\œš[X\žT™XÚ\Y[˜[YKˆØ\›š[™ÜÎˆÜ›Ý\Ø\›š[™ÜËˆÝ[RYÎˆÜ›Ý\œ›ÝÜË›X\
+
+›ÝÊHOˆ›ÝËœÝ[RY
+KˆNÂˆJNÂˆÛÛœÝš\œÝ™\\™YÜ›Ý\H™\\™YÜ›Ý\Ë™š[™
+
+Ü›Ý\
+HOˆÜ›Ý\šÙ^HOOHš\œÝÜ›Ý\šÙ^JBˆ™\\™YÜ›Ý\ÖÌBˆÈÎˆš\œÝÜ›Ý\ËØÎˆš\œÝÜ›Ý\˜ØË˜ØÎˆš\œÝÜ›Ý\˜˜ØÈNÂˆÛÛœÝ[XZ[HZ[^Y\’[›ÚXÙT^[Y[™[Z[™\‘[XZ[
+™\ÜÙ][™ÜËš\œÝÙ[XÝYš\œÝÜ›Ý\œ›ÝÜËßKš\œÝÜ›Ý\
+NÂˆ™]\›ˆÈ[YÚX›PØ[™Y]\Ë›Ý][™Ëš\œÝÜ›Ý\š\œÝ™\\™YÜ›Ý\™\\™YÜ›Ý\Ë[XZ[NÂŸB‚™[˜Ý[Ûˆ^[Y[™[Z[™\”™\\˜][Û‘š[™Ù\œš[
+ÈØ[™Y]\Ë™\\™YÜ›Ý\ËÙ][™ÜÔ™]š\Ú[ÛˆJHÂˆ™]\›ˆÜ™X]R\Ú
+	ÜÚLM‰ÊK\]J”ÓÓ‹œÝš[™ÚYžJÂˆØ[™Y]\ÎˆØ[™Y]\Ë›X\
+
+›ÝÊHOˆ
+ÂˆÝ[RYˆ›ÝËœÝ[RYˆ\Ý[ÙYšYY]ˆ›ÝË›\Ý[ÙYšYY][ˆ[YÚX›Nˆ›ÝËœ^[Y[™[Z[™\‘[YÚX›HOOHYKˆ[T™]š\Ú[ÛŽˆ[X™\Š›ÝËœ™[Z[™\”[T™]š\Ú[Ûˆ
+Kˆ[U\]Y]ˆ›ÝËœ™[Z[™\”[U\]Y][ˆJJKœÛÜ
+
+YšYÚ
+HOˆYœÝ[RY›ØØ[PÛÛ\\™JšYÚœÝ[RY
+JKˆÜ›Ý\Îˆ™\\™YÜ›Ý\Ë›X\
+
+Ü›Ý\
+HOˆ
+ÂˆÙ^NˆÜ›Ý\šÙ^KˆÝ[RYÎˆË‹‹™Ü›Ý\œÝ[RY×KœÛÜ
+
+KˆÎˆ[š\]YQ[XZ[\Ý
+Ü›Ý\ÊK›X\
+
+[XZ[
+HOˆ[XZ[ÓÝÙ\Ø\ÙJ
+JKœÛÜ
+
+KˆØÎˆ[š\]YQ[XZ[\Ý
+Ü›Ý\˜ØÊK›X\
+
+[XZ[
+HOˆ[XZ[ÓÝÙ\Ø\ÙJ
+JKœÛÜ
+
+Kˆ˜ØÎˆ[š\]YQ[XZ[\Ý
+Ü›Ý\˜˜ØÊK›X\
+
+[XZ[
+HOˆ[XZ[ÓÝÙ\Ø\ÙJ
+JKœÛÜ
+
+KˆJJKœÛÜ
+
+YšYÚ
+HOˆYšÙ^K›ØØ[PÛÛ\\™JšYÚšÙ^JJKˆÙ][™ÜÔ™]š\Ú[Û‹ˆJJK™YÙ\Ý
+	Ú^	ÊNÂŸB‚™[˜Ý[Ûˆ^[Y[™[Z[™\ÛÛ™›XÝ]Z[ÊØ[™Y]\ÈH×JHÂˆ™]\›ˆÂˆØ[™Y]\ÎˆØ[™Y]\Ë›X\
+
+›ÝÊHOˆ
+ÂˆÝ[RYˆ›ÝËœÝ[RYˆÝ[S˜[YNˆ›ÝËœÝ[S˜[YKˆ^Y\“˜[YNˆ›ÝË˜^Y\“˜[YKˆ™XÙZ]˜X›P˜[[˜ÙNˆ›ÝËœ™XÙZ]˜X›P˜[[˜ÙKˆ^Y\’[›ÚXÙQYQ]Nˆ›ÝË˜^Y\’[›ÚXÙQYQ]Kˆ^[Y[™[Z[™\‘[YÚX›Nˆ›ÝËœ^[Y[™[Z[™\‘[YÚX›HOOHYKˆ^[Y[™[Z[™\›ØÚÚ[™Ô™X\ÛÛŽˆ›ÝËœ^[Y[™[Z[™\›ØÚÚ[™Ô™X\ÛÛˆ[ˆ\Ý[ÙYšYY]ˆ›ÝË›\Ý[ÙYšYY][ˆJJKˆNÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ^Y\’[›ÚXÙT^[Y[™[Z[™\”™\\™J›ÙK™\KXØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÝ\Y]H]K››ÝÊ
+NÂˆÛÛœÝXÝ]™PXØÙ\ÜÈHXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆÛÛœÝÈÙ][™ÜËÙ][™ÜÔ™]š\Ú[Û‹™\ÜÙ[XÝYØ[™Y]\ÈHH]ØZ]ØY^Y\’[›ÚXÙT^[Y[™[Z[™\ÛÛ^
+›ÙKXÝ]™PXØÙ\ÜÊNÂˆYˆ
+Ù[XÝYœ^[Y[™[Z[™\‘[YÚX›HOOHYJHÂˆ›ÝÈ\\œ›ÜŠÙ[XÝYœ^[Y[™[Z[™\›ØÚÚ[™Ô™X\ÛÛˆ	Õ\È[›ÚXÙH\È›Ý[YÚX›H›Üˆ[ˆ^\›˜[^[Y[™[Z[™\‹‰ËJNÂˆBˆÛÛœÝÈ›Ý][™Ëš\œÝ™\\™YÜ›Ý\™\\™YÜ›Ý\Ë[XZ[HH™\\™T^[Y[™[Z[™\”›Ý][™Ê™\ÜÙ][™ÜËÙ[XÝYØ[™Y]\ÊNÂˆÛÛœÝ™\\™S\ÈH]K››ÝÊ
+HHÝ\Y]ÂˆÛÛœÝ™\\˜][Û’\ÚH^[Y[™[Z[™\”™\\˜][Û‘š[™Ù\œš[
+ÈØ[™Y]\Ë™\\™YÜ›Ý\ËÙ][™ÜÔ™]š\Ú[ÛˆJNÂˆÛÛœÝ™]šY]ÕÚÙ[ˆHÚYÛ”^[Y[™[Z[™\”™]šY]ÊÂˆ[˜ÚÜ”Ý[RYˆÙ[XÝYœÝ[RYˆØ[™Y]TÝ[RYÎˆØ[™Y]\Ë›X\
+
+›ÝÊHOˆ›ÝËœÝ[RY
+KœÛÜ
+
+Kˆ™\\˜][Û’\ÚˆÙ][™ÜÔ™]š\Ú[Û‹ˆ™\\™S\ËˆK^[Y[™[Z[™\”™]šY]ÔÙXÜ™]
+
+JNÂˆ™]\›ˆÂˆÙ[XÝYˆØ[™Y]\ËˆÎˆš\œÝ™\\™YÜ›Ý\Ëˆ[Îˆ›Ý][™ËËˆØÎˆš\œÝ™\\™YÜ›Ý\˜ØËˆ˜ØÎˆš\œÝ™\\™YÜ›Ý\˜˜ØËˆ]]Ð˜ØÎˆš\œÝ™\\™YÜ›Ý\˜˜ØËˆÝXš™XÝˆÙ][™ÜËœ^[Y[™[Z[™\”ÝXš™XÝˆ›ÙNˆÙ][™ÜËœ^[Y[™[Z[™\›ÙKˆ™]šY]ÎˆÈ[ˆ[XZ[š[^ˆ[XZ[^Kˆ›Ý][™ÑÜ›Ý\Îˆ™\\™YÜ›Ý\Ëˆ›Ý][™ÕØ\›š[™ÜÎˆ›Ý][™ËØ\›š[™ÜËˆÙ][™ÜÔ™]š\Ú[Û‹ˆ™]šY]ÕÚÙ[‹ˆ™\\˜][Û’\Úˆ[Z[™ÜÎˆÈ™\\™S\ÈKˆÙ][™ÜÎˆÂˆ^[Y[™[Z[™\•ÔÛÝ\˜ÙNˆ	Ð^Y\ˆXØÛÝ[Ý˜Y\‹Ü^[Y[[™\ˆ\È^Y\ˆœ›ÚÙ\ˆXØÛÝ[‘[XZ[žH[›ÚXÙH›Ü›X]	Ëˆ[XZ[[]™\žNˆÙ\™\‘[XZ[[]™\žTÝ]\Ê
+Kˆ^\ÐZXYˆ™\Ü™^\ÐZXYˆ^[Y[™[Z[™\ØÎˆÙ][™ÜËœ^[Y[™[Z[™\ØËˆ^[Y[™[Z[™\˜ØÎˆÙ][™ÜËœ^[Y[™[Z[™\˜ØËˆKˆNÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ^Y\’[›ÚXÙT^[Y[™[Z[™\”Ù[™
+›ÙK™\KXØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝXÝ]™PXØÙ\ÜÈHXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆÛÛœÝÙ[XÝYÝ[RYÈH™]ÈÙ]
+
+\œ˜^Kš\Ð\œ˜^J›ÙKš[›ÚXÙTÝ[RYÊHÈ›ÙKš[›ÚXÙTÝ[RYÈˆ×JK›X\
+
+Y
+HOˆÝš[™ÊY	ÉÊKš[J
+JK™š[\Š›ÛÛX[ŠJNÂˆYˆ
+\Ù[XÝYÝ[RYËœÚ^™JH›ÝÈ\\œ›ÜŠ	ÔÙ[XÝ]X\ÝÛ™H[›ÚXÙHÈ[˜ÛYH[ˆH^[Y[™[Z[™\‹‰Ë
+NÂˆÛÛœÝY[\Ý[˜ÞRÙ^HHÝš[™Ê›ÙKšY[\Ý[˜ÞRÙ^H	ÉÊKš[J
+NÂˆYˆ
+Y[\Ý[˜ÞRÙ^K›[™ÝMˆY[\Ý[˜ÞRÙ^K›[™ÝˆŒ
+H›ÝÈ\\œ›ÜŠ	ÐH˜[Y^[Y[™[Z[™\ˆÜ\˜][ÛˆQ\È™\]Z\™Y‰Ë
+NÂˆÛÛœÝ™]šY]ÈH™\šYžT^[Y[™[Z[™\”™]šY]Ê›ÙKœ™]šY]ÕÚÙ[‹^[Y[™[Z[™\”™]šY]ÔÙXÜ™]
+
+JNÂˆÛÛœÝ[˜ÚÜ”Ý[RYHÝš[™Ê›ÙKœÝ[RY	ÉÊKš[J
+NÂˆYˆ
+™]šY]Ë˜[˜ÚÜ”Ý[RYOOH[˜ÚÜ”Ý[RY
+H›ÝÈ\\œ›ÜŠ	ÕH^[Y[™[Z[™\ˆ™]šY]È™[Û™ÜÈÈ[›Ý\ˆ[›ÚXÙKˆ™[Ü[ˆ]™Y›Ü™HÙ[™[™Ë‰ËJNÂˆYˆ
+Ë‹‹œÙ[XÝYÝ[RY×KœÛÛYJ
+Ý[RY
+HOˆ\™]šY]Ë˜Ø[™Y]TÝ[RYÏËš[˜ÛY\ÊÝ[RY
+JJHÂˆ›ÝÈ\\œ›ÜŠ	ÕHÙ[XÝY[›ÚXÙH\ÝÚ[™ÙYY\ˆ™]šY]Ëˆ™[Ü[ˆH^[Y[™[Z[™\ˆ™Y›Ü™HÙ[™[™Ë‰ËJNÂˆBˆÛÛœÝ˜[Y][Û”Ý\Y]H]K››ÝÊ
+NÂˆ]ØZ]™XÛÛ˜Ú[P^Y\’[›ÚXÙPÛÛXÝ[ÛœÊÂˆÛY[ˆXÝ]™PXØÙ\ÜË˜ÛY[ˆ›Ùš[NˆXÝ]™PXØÙ\ÜËœ›Ùš[KˆXØÙ\ÜÐÛÛ^ˆXÝ]™PXØÙ\ÜËˆÝ[RYÎˆË‹‹œÙ[XÝYÝ[RY×KˆJNÂˆÛÛœÝÈÙ][™ÜËÙ][™ÜÔ™]š\Ú[ÛŽˆ]™TÙ][™ÜÔ™]š\Ú[Û‹™\ÜÙ[XÝYØ[™Y]\ËÙ[™\ˆHH]ØZ]ØY^Y\’[›ÚXÙT^[Y[™[Z[™\ÛÛ^
+ˆÈ‹‹˜›ÙK™\]Y\ÝYÝ[RYÎˆ[KˆXÝ]™PXØÙ\ÜËˆ
+NÂˆÛÛœÝ]™T›Ý][™ÈH™\\™T^[Y[™[Z[™\”›Ý][™Ê™\ÜÙ][™ÜËÙ[XÝYØ[™Y]\ÊNÂˆÛÛœÝ]™T™\\˜][Û’\ÚH^[Y[™[Z[™\”™\\˜][Û‘š[™Ù\œš[
+ÂˆØ[™Y]\Ëˆ™\\™YÜ›Ý\Îˆ]™T›Ý][™Ëœ™\\™YÜ›Ý\ËˆÙ][™ÜÔ™]š\Ú[ÛŽˆ]™TÙ][™ÜÔ™]š\Ú[Û‹ˆJNÂˆYˆ
+[X™\Š™]šY]ËœÙ][™ÜÔ™]š\Ú[ÛŠHOOH[X™\Š]™TÙ][™ÜÔ™]š\Ú[ÛŠH™]šY]Ëœ™\\˜][Û’\ÚOOH]™T™\\˜][Û’\Ú
+HÂˆ›ÝÈ\\œ›ÜŠ	ÔØ[\Ù›Ü˜ÙK™[Z[™\ˆ[\Ë™XÚ\Y[ËÜˆ[XZ[Ù][™ÜÈÚ[™ÙYY\ˆ™]šY]Ëˆ™]šY]ÈH™Yœ™\ÚY™[Z[™\ˆ™Y›Ü™HÙ[™[™Ë‰ËK	ÔVSQS•Ô‘SRS‘T—Ô‘U’QU×ÔÕSIË^[Y[™[Z[™\ÛÛ™›XÝ]Z[ÊØ[™Y]\ÊJNÂˆBˆÛÛœÝÙ[XÝ[ÛˆH]˜[X]P^Y\”™[Z[™\”Ù[XÝ[ÛŠØ[™Y]\ËË‹‹œÙ[XÝYÝ[RY×JNÂˆYˆ
+Ù[XÝ[Û‹[šÛ›ÝÛ”Ý[RYË›[™Ý
+HÂˆ›ÝÈ\\œ›ÜŠ	ÕHÙ[XÝY[›ÚXÙH\ÝÚ[™ÙYY\ˆ™]šY]Ëˆ™]šY]ÈH™Yœ™\ÚY™[Z[™\ˆ™Y›Ü™HÙ[™[™Ë‰ËK	ÔVSQS•Ô‘SRS‘T—ÔÑSPÕSÓ—ÔÕSIË^[Y[™[Z[™\ÛÛ™›XÝ]Z[ÊØ[™Y]\ÊJNÂˆBˆYˆ
+Ù[XÝ[Û‹œ™\ÝšXÝY›ÝÜË›[™Ý
+HÂˆ›ÝÈ\\œ›ÜŠÙ[XÝ[Û‹œ™\ÝšXÝY›ÝÜÖÌKœ^[Y[™[Z[™\›ØÚÚ[™Ô™X\ÛÛˆ	ÓÛ™HÜˆ[Ü™HÙ[XÝY[›ÚXÙ\È\™H›ÈÛ™Ù\ˆ[YÚX›H›Üˆ[ˆ^\›˜[^[Y[™[Z[™\‹‰ËK	ÔVSQS•Ô‘SRS‘T—ÔÑSPÕSÓ—Ô‘TÕ’PÕQ	Ë^[Y[™[Z[™\ÛÛ™›XÝ]Z[ÊØ[™Y]\ÊJNÂˆBˆÛÛœÝ›ÝÜÈHÙ[XÝ[Û‹œ›ÝÜÎÂˆÛÛœÝ›Ý][™ÈH^[Y[™[Z[™\”›Ý][™Ñ›Ü”›ÝÜÊ›ÝÜÊNÂˆYˆ
+\›Ý][™Ë™Ü›Ý\Ë›[™Ý
+H›ÝÈ\\œ›ÜŠ	Ó›È^[Y[™[Z[™\ˆ™XÚ\Y[Ü›Ý\ÛÝ[™HZ[‰Ë
+NÂˆYˆ
+P\œ˜^Kš\Ð\œ˜^J›ÙKœ™XÚ\Y[˜]Ú\ÊJHÂˆ›ÝÈ\\œ›ÜŠ	Ô™]šY]ÙY[XZ[™XÚ\Y[šY[È\™H™\]Z\™Yˆ™[Ü[ˆH^[Y[™[Z[™\ˆ™]šY]È[™ÛÛ™š\›HXXÚ[XZ[˜]Ú™Y›Ü™HÙ[™[™Ë‰Ë
+NÂˆBˆÛÛœÝ™]šY]ÙY™XÚ\Y[˜]Ú\ÈH™]ÈX\
+›ÙKœ™XÚ\Y[˜]Ú\Ë™š[\Š
+˜]Ú
+HOˆ˜]ÚËšÙ^JK›X\
+
+˜]Ú
+HOˆØ˜]ÚšÙ^K˜]ÚJJNÂˆÛÛœÝÝ]›Ý[™˜]Ú\ÈH›Ý][™Ë™Ü›Ý\Ë›X\
+
+Ü›Ý\
+HOˆÂˆÛÛœÝÜ›Ý\Ù[XÝYHÜ›Ý\œ›ÝÜË™š[™
+
+›ÝÊHOˆ›ÝËœÝ[RYOOHÙ[XÝYœÝ[RY
+HÜ›Ý\œ›ÝÜÖÌHÙ[XÝYÂˆÛÛœÝ™]šY]ÙY˜]ÚH™]šY]ÙY™XÚ\Y[˜]Ú\Ë™Ù]
+Ü›Ý\šÙ^JNÂˆYˆ
+\™]šY]ÙY˜]Ú
+H›ÝÈ\\œ›ÜŠ™]šY]ÙY™XÚ\Y[šY[È\™HZ\ÜÚ[™È›Üˆ	ÙÜ›Ý\œš[X\žT™XÚ\Y[˜[YH	Ü™XÚ\Y[Ü›Ý\	ßKˆ™[Ü[ˆH™]šY]È™Y›Ü™HÙ[™[™Ë˜
+NÂˆÛÛœÝÈH[š\]YQ[XZ[\Ý
+™]šY]ÙY˜]ÚÈ	ÉÊNÂˆÛÛœÝØÈH[š\]YQ[XZ[\Ý
+™]šY]ÙY˜]Ú˜ØÈ	ÉÊNÂˆÛÛœÝ˜ØÈH[š\]YQ[XZ[\Ý
+™]šY]ÙY˜]Ú˜˜ØÈ	ÉÊNÂˆYˆ
+]Ë›[™Ý
+H›ÝÈ\\œ›ÜŠ^[Y[™[Z[™\ˆ™XÚ\Y[\È™\]Z\™Y›Üˆ	ÙÜ›Ý\œš[X\žT™XÚ\Y[˜[YH	Ü™XÚ\Y[Ü›Ý\	ßK˜
+NÂˆÛÛœÝ[XZ[HZ[^Y\’[›ÚXÙT^[Y[™[Z[™\‘[XZ[
+™\ÜÙ][™ÜËÜ›Ý\Ù[XÝYÜ›Ý\œ›ÝÜËÈÝXš™XÝˆ›ÙKœÝXš™XÝ›ÙNˆ›ÙK˜›ÙHKÈ‹‹™Ü›Ý\ÈJNÂˆ™]\›ˆÈÜ›Ý\ËØË˜ØË[XZ[NÂˆJNÂˆÛÛœÝ˜[Y][Û“\ÈH]K››ÝÊ
+HH˜[Y][Û”Ý\Y]ÂˆÛÛœÝ™\]Y\Ý\ÚH^[Y[™[Z[™\”™\]Y\Ý\Ú
+Âˆ[˜ÚÜ”Ý[RYˆ[›ÚXÙTÝ[RYÎˆË‹‹œÙ[XÝYÝ[RY×Kˆ™XÚ\Y[˜]Ú\Îˆ›ÙKœ™XÚ\Y[˜]Ú\ËˆÝXš™XÝˆ›ÙKœÝXš™XÝˆ›ÙNˆ›ÙK˜›ÙKˆJNÂˆÛÛœÝ™\Ù\˜][ÛˆH]ØZ]™\Ù\™T^[Y[™[Z[™\“Ü\˜][ÛŠXÝ]™PXØÙ\ÜË˜ÛY[ÂˆY[\Ý[˜ÞRÙ^Kˆ™\]Y\Ý\Úˆ[˜ÚÜ”Ý[RYˆÙ[XÝYÝ[RYÎˆË‹‹œÙ[XÝYÝ[RY×Kˆ˜]ÚÛÝ[ˆÝ]›Ý[™˜]Ú\Ë›[™ÝˆXÝÜ•\Ù\’YˆXÝ]™PXØÙ\ÜËœ›Ùš[KšYˆXÝÜ‘[XZ[ˆXÝ]™PXØÙ\ÜËœ›Ùš[K™[XZ[ˆJNÂˆYˆ
+™\Ù\˜][Û‹œ™\^JH™]\›ˆÈÙ[ˆYKY[\Ý[˜ÞT™\^YYˆYK‹‹œ™\Ù\˜][Û‹œ™\Ý[NÂˆYˆ
+™\Ù\˜][Û‹[˜Ù\Z[ŠH›ÝÈ\\œ›ÜŠ	ÐH™]š[Ý\È[]™\žH][\\È[ˆ[˜Ù\Z[ˆZXÜ›ÜÛÙÜ˜\Ý]ÛÛYKˆ™\šYžHÙ[][\È™Y›Ü™H™]žZ[™Ë‰ËJNÂˆYˆ
+™\Ù\˜][Û‹˜›ØÚÙY
+H›ÝÈ\\œ›ÜŠ	Õ\È^[Y[™[Z[™\ˆ\È[™XYH™Z[™È›ØÙ\ÜÙY‰ËJNÂˆÛÛœÝÜ\˜][Û’YH™\Ù\˜][Û‹›Ü\˜][Û’YÂˆÛÛœÝÜ˜\Ý\Y]H]K››ÝÊ
+NÂˆÛÛœÝ[]™\žT™\Ý[ÈH]ØZ]X\^[Y[™[Z[™\˜]Ú\ÊÝ]›Ý[™˜]Ú\Ë\Þ[˜È
+˜]Ú
+HOˆÂˆÛÛœÝ˜]ÚÙ^R\ÚHÜ™X]R\Ú
+	ÜÚLM‰ÊK\]J˜]Ú™Ü›Ý\šÙ^JK™YÙ\Ý
+	Ú^	ÊNÂˆÛÛœÝ˜]Ú™\]Y\Ý\ÚH^[Y[™[Z[™\˜]Ú\Ú
+ÂˆÙ^Nˆ˜]Ú™Ü›Ý\šÙ^KˆÝ[RYÎˆ˜]Ú™Ü›Ý\œ›ÝÜË›X\
+
+›ÝÊHOˆ›ÝËœÝ[RY
+KˆÎˆ˜]ÚËˆØÎˆ˜]Ú˜ØËˆ˜ØÎˆ˜]Ú˜˜ØËˆKÈÝXš™XÝˆ˜]Ú™[XZ[œÝXš™XÝ[ˆ˜]Ú™[XZ[š[JNÂˆÛÛœÝ™XÚ\Y[ÛÝ[H[š\]YQ[XZ[\Ý
+˜]ÚË˜]Ú˜ØË˜]Ú˜˜ØÊK›[™ÝÂˆ]˜]Ú™\Ù\˜][ÛŽÂˆžHÂˆ˜]Ú™\Ù\˜][ÛˆH]ØZ]™\Ù\™T^[Y[™[Z[™\˜]Ú
+XÝ]™PXØÙ\ÜË˜ÛY[ÂˆÜ\˜][Û’Yˆ˜]ÚÙ^R\Úˆ™\]Y\Ý\Úˆ˜]Ú™\]Y\Ý\ÚˆÝ[RYÎˆ˜]Ú™Ü›Ý\œ›ÝÜË›X\
+
+›ÝÊHOˆ›ÝËœÝ[RY
+Kˆ›ÝÐÛÝ[ˆ˜]Ú™Ü›Ý\œ›ÝÜË›[™Ýˆ™XÚ\Y[ÛÝ[ˆJNÂˆHØ]Ú
+\œ›ÜŠHÂˆ™]\›ˆÈ‹‹˜˜]ÚÝ]\Îˆ	Ù˜Z[Y	Ë\œ›ÜÛÙNˆ	ÔVSQS•Ô‘SRS‘T—ÐUÒÔ‘TÑT•‘WÑRSQ	Ë\œ›Ü‹Ü˜\\ÎˆNÂˆBˆYˆ
+˜]Ú™\Ù\˜][Û‹œ™\^JH™]\›ˆÈ‹‹˜˜]ÚÝ]\Îˆ	ØXØÙ\Y	Ë™\^NˆYK›ÝšY\”™\]Y\ÝYˆ˜]Ú™\Ù\˜][Û‹œ›ÝšY\”™\]Y\ÝYÜ˜\\ÎˆNÂˆYˆ
+˜]Ú™\Ù\˜][Û‹[˜Ù\Z[ŠH™]\›ˆÈ‹‹˜˜]ÚÝ]\Îˆ	Ý[˜Ù\Z[‰Ë\œ›ÜÛÙNˆ	ÔVSQS•Ô‘SRS‘T—ÐUÒÕSÑT•RS‰ËÜ˜\\ÎˆNÂˆÛÛœÝ˜]ÚÝ\Y]H]K››ÝÊ
+NÂˆžHÂˆÛÛœÝ™\Ý[H]ØZ]Ù[™Ü\˜][Û˜[XZ[
+ÂˆÎˆ˜]ÚËØÎˆ˜]Ú˜ØË˜ØÎˆ˜]Ú˜˜ØËˆÝXš™XÝˆ˜]Ú™[XZ[œÝXš™XÝ[ˆ˜]Ú™[XZ[š[^ˆ˜]Ú™[XZ[^ˆKÂˆÛY[ˆXÝ]™PXØÙ\ÜË˜ÛY[\œÜÙRÙ^Nˆ	Ü^[Y[Ü™[Z[™\œÉËˆXZ[›ÞÛ˜\ÚÝˆÈYˆÙ[™\‹›XZ[›ÞY[XZ[Y™\ÜÎˆÙ[™\‹™[XZ[Y™\ÜÈKˆJNÂˆÛÛœÝÜ˜\\ÈH]K››ÝÊ
+HH˜]ÚÝ\Y]Âˆ]ØZ]ÛÛ\]T^[Y[™[Z[™\˜]Ú
+XÝ]™PXØÙ\ÜË˜ÛY[ÂˆÜ\˜][Û’Y˜]ÚÙ^R\ÚÝ]\Îˆ	ØXØÙ\Y	Ëˆ›ÝšY\”™\]Y\ÝYˆ™\Ý[šY™\Ý[›Y\ÜØYÙRY[Ü˜\\ËˆJNÂˆ™]\›ˆÈ‹‹˜˜]ÚÝ]\Îˆ	ØXØÙ\Y	Ë™\Ý[Ü˜\\ÈNÂˆHØ]Ú
+\œ›ÜŠHÂˆÛÛœÝÜ˜\\ÈH]K››ÝÊ
+HH˜]ÚÝ\Y]ÂˆÛÛœÝ[˜Ù\Z[ˆH^[Y[™[Z[™\‘[]™\žU[˜Ù\Z[Š\œ›ÜŠNÂˆžHÂˆ]ØZ]ÛÛ\]T^[Y[™[Z[™\˜]Ú
+XÝ]™PXØÙ\ÜË˜ÛY[ÂˆÜ\˜][Û’Y˜]ÚÙ^R\ÚÝ]\Îˆ[˜Ù\Z[ˆÈ	Ý[˜Ù\Z[‰Èˆ	Ù˜Z[Y	ËˆÜ˜\\Ë\œ›ÜÛÙNˆÝš[™Ê\œ›ÜË˜ÛÙH	ÔVSQS•Ô‘SRS‘T—ÑSU‘T–WÑRSQ	ÊKœÛXÙJL
+KˆJNÂˆHØ]Ú
+YÙ\‘\œ›ÜŠHÂˆÛÛœÛÛK™\œ›ÜŠ	ÖÜ^[Y[\™[Z[™\—H[]™\žHYÙ\ˆ\]H˜Z[Y	ËÈ™\]Y\ÝYˆ™\]Y\ÝYœ›ÛJ™\JKÛÙNˆYÙ\‘\œ›ÜË˜ÛÙH[JNÂˆ™]\›ˆÈ‹‹˜˜]ÚÝ]\Îˆ	Ý[˜Ù\Z[‰Ë\œ›ÜÛÙNˆ	ÔVSQS•Ô‘SRS‘T—ÓQÑT—ÕSÑT•RS‰Ë\œ›Ü‹Ü˜\\ÈNÂˆBˆÛÛœÛÛK™\œ›ÜŠ	ÖØ^Y\’[›ÚXÙT^[Y[™[Z[™\”Ù[™H[XZ[›ÝšY\ˆ˜Z[Y	ËÂˆÛÙNˆÝš[™Ê\œ›ÜË˜ÛÙH\œ›ÜË›˜[YH	Ü›ÝšY\—Ù\œ›Ü‰ÊKœÛXÙJ
+Kˆ›ÝšY\ŽˆÜ\˜][Û˜[XZ[ÛÛ™šYÊ
+K™[]™\žSY]ÙˆÐÛÝ[ˆ˜]ÚË›[™ÝØÐÛÝ[ˆ˜]Ú˜ØË›[™Ý˜ØÐÛÝ[ˆ˜]Ú˜˜ØË›[™Ýˆ›ÝÜÎˆ˜]Ú™Ü›Ý\œ›ÝÜË›[™Ý›Ý][™Ó[ÙNˆ˜]Ú™Ü›Ý\›[ÙKˆJNÂˆ™]\›ˆÈ‹‹˜˜]ÚÝ]\Îˆ[˜Ù\Z[ˆÈ	Ý[˜Ù\Z[‰Èˆ	Ù˜Z[Y	Ë\œ›ÜÛÙNˆ\œ›ÜË˜ÛÙH[\œ›Ü‹Ü˜\\ÈNÂˆBˆKÊNÂˆÛÛœÝÜ˜\\ÈH]K››ÝÊ
+HHÜ˜\Ý\Y]ÂˆÛÛœÝXØÙ\YH[]™\žT™\Ý[Ë™š[\Š
+][JHOˆ][KœÝ]\ÈOOH	ØXØÙ\Y	ÊNÂˆÛÛœÝ˜Z[YH[]™\žT™\Ý[Ë™š[\Š
+][JHOˆ][KœÝ]\ÈOOH	Ù˜Z[Y	ÊNÂˆÛÛœÝ[˜Ù\Z[ˆH[]™\žT™\Ý[Ë™š[\Š
+][JHOˆ][KœÝ]\ÈOOH	Ý[˜Ù\Z[‰ÊNÂˆÛÛœÝ™U[Y[[™TÝ]\ÈH[˜Ù\Z[‹›[™ÝÈ	Ý[˜Ù\Z[‰ÈˆXØÙ\Y›[™ÝOOHÝ]›Ý[™˜]Ú\Ë›[™ÝÈ	ØXØÙ\Y	ÈˆXØÙ\Y›[™ÝÈ	Ü\X[	Èˆ	Ù˜Z[Y	ÎÂˆ]ØZ]ÛÛ\]T^[Y[™[Z[™\“Ü\˜][ÛŠXÝ]™PXØÙ\ÜË˜ÛY[ÂˆÜ\˜][Û’YˆÝ]\Îˆ™U[Y[[™TÝ]\ËˆXØÙ\Y˜]ÚÛÝ[ˆXØÙ\Y›[™Ýˆ˜Z[Y˜]ÚÛÝ[ˆ˜Z[Y›[™Ýˆ[Y[[™T™XÛÜ™Yˆ˜[ÙKˆ™\\™S\Îˆ[X™\Š™]šY]Ëœ™\\™S\È
+K˜[Y][Û“\ËÜ˜\\Ë[Y[[™S\Îˆˆ\œ›ÜÛÙNˆ[˜Ù\Z[–ÌOË™\œ›ÜÛÙH˜Z[YÌOË™\œ›ÜÛÙH[ˆJNÂ‚ˆÛÛœÝÛÛXÝ[Û•Ø\›š[™ÜÈH×NÂˆ]ÛÛXÝ[Û”™\Ý[ÈH×NÂˆ][Y[[™S\ÈHÂˆYˆ
+XØÙ\Y›[™Ý
+HÂˆÛÛœÝ[Y[[™TÝ\Y]H]K››ÝÊ
+NÂˆÛÛœÝ[Y[[™T›ÝÜÈHXØÙ\Y™›]X\
+
+][JHOˆÂˆÛÛœÝ™XÚ\Y[ÛÝ[H[š\]YQ[XZ[\Ý
+][KË][K˜ØË][K˜˜ØÊK›[™ÝÂˆÛÛœÝ›ÝHHØ^[Y[™[Z[™\ˆXØÙ\YžHZXÜ›ÜÛÙÜ˜\˜™XÚ\Y[Îˆ	Ü™XÚ\Y[ÛÝ[X›Ý][™Îˆ	Ú][K™Ü›Ý\›[Ù_X[˜ÛYY[›ÚXÙ\Îˆ	Ú][K™Ü›Ý\œ›ÝÜË›[™ÝXKš›Ú[Š	×‰ÊNÂˆÛÛœÝÝXš™XÝ\ÚHÜ™X]R\Ú
+	ÜÚLM‰ÊK\]J][K™[XZ[œÝXš™XÝ
+K™YÙ\Ý
+	Ú^	ÊNÂˆ™]\›ˆ][K™Ü›Ý\œ›ÝÜË›X\
+
+›ÝÊHOˆ
+ÂˆÝ[RYˆ›ÝËœÝ[RYˆÝÛ™\“˜[YNˆ›ÝË˜ÛÛXÝ[ÛË›ÝÛ™\“˜[YHÜ]^Y\•˜Y\“˜[Y\Ê›ÝË˜^Y\•˜Y\’[Ú\™ÙJVÌH	ÉËˆ›ÝK™XÚ\Y[ÛÝ[ÝXš™XÝ\ÚˆJJNÂˆJNÂˆžHÂˆÛÛœÝØ]™YH]ØZ]Ø]™T^[Y[™[Z[™\•[Y[[™JXÝ]™PXØÙ\ÜË˜ÛY[ÂˆÜ\˜][Û’Y›ÝÜÎˆ[Y[[™T›ÝÜËˆXÝÜ•\Ù\’YˆXÝ]™PXØÙ\ÜËœ›Ùš[KšYXÝÜ‘[XZ[ˆXÝ]™PXØÙ\ÜËœ›Ùš[K™[XZ[ˆJNÂˆÛÛXÝ[Û”™\Ý[ÈH
+\œ˜^Kš\Ð\œ˜^JØ]™Y
+HÈØ]™Yˆ×JK›X\
+
+][JHOˆ
+Âˆ][NˆÙ\šX[^™PÛÛXÝ[Û’][J][OËš][JKˆ]™[ˆÙ\šX[^™PÛÛXÝ[Û‘]™[
+][OË™]™[
+KˆJJNÂˆHØ]Ú
+\œ›ÜŠHÂˆÛÛœÛÛK™\œ›ÜŠ	ÖÜ^[Y[\™[Z[™\—H]ÛZXÈ[Y[[™H\]H˜Z[Y	ËÈ™\]Y\ÝYˆ™\]Y\ÝYœ›ÛJ™\JKÛÙNˆ\œ›ÜË˜ÛÙH[JNÂˆÛÛXÝ[Û•Ø\›š[™ÜËœ\Ú
+È\œ›ÜŽˆ	ÕH™[Z[™\ˆØ\ÈÙ[]ÓÔÈÚ[™\Z\ˆ]ÈÛÛXÝ[Ûˆ[Y[[™H\š[™È™XÛÛ˜Ú[X][Û‹‰ÈJNÂˆBˆ[Y[[™S\ÈH]K››ÝÊ
+HH[Y[[™TÝ\Y]ÂˆB‚ˆÛÛœÝÛÛ\]YHXØÙ\Y›[™ÝOOHÝ]›Ý[™˜]Ú\Ë›[™Ý	‰ˆÛÛXÝ[Û•Ø\›š[™ÜË›[™ÝOOHÂˆÛÛœÝš[˜[Ý]\ÈHÛÛ\]YÈ	ØÛÛ\]Y	Èˆ™U[Y[[™TÝ]\ÎÂˆÛÛœÝ™YXÝY™\Ý[HÂˆÜ\˜][Û’Yˆ[XZ[ÎˆXØÙ\Y›[™Ýˆ›ÝÜÎˆXØÙ\Yœ™YXÙJ
+Ý[K][JHOˆÝ[H
+È][K™Ü›Ý\œ›ÝÜË›[™Ý
+Kˆ™XÚ\Y[ÛÝ[ˆXØÙ\Yœ™YXÙJ
+Ý[K][JHOˆÝ[H
+È[š\]YQ[XZ[\Ý
+][KË][K˜ØË][K˜˜ØÊK›[™Ý
+KˆXØÙ\Y˜]ÚÛÝ[ˆXØÙ\Y›[™Ýˆ˜Z[Y˜]ÚÛÝ[ˆ˜Z[Y›[™Ýˆ[˜Ù\Z[˜]ÚÛÝ[ˆ[˜Ù\Z[‹›[™ÝˆNÂˆ]ØZ]ÛÛ\]T^[Y[™[Z[™\“Ü\˜][ÛŠXÝ]™PXØÙ\ÜË˜ÛY[ÂˆÜ\˜][Û’YÝ]\Îˆš[˜[Ý]\ËˆXØÙ\Y˜]ÚÛÝ[ˆXØÙ\Y›[™Ý˜Z[Y˜]ÚÛÝ[ˆ˜Z[Y›[™Ýˆ[Y[[™T™XÛÜ™YˆÛÛXÝ[Û•Ø\›š[™ÜË›[™ÝOOHˆ™\\™S\Îˆ[X™\Š™]šY]Ëœ™\\™S\È
+K˜[Y][Û“\ËÜ˜\\Ë[Y[[™S\Ëˆ™\Ý[Û˜\ÚÝˆ™YXÝY™\Ý[ˆ\œ›ÜÛÙNˆ[˜Ù\Z[–ÌOË™\œ›ÜÛÙH˜Z[YÌOË™\œ›ÜÛÙH[ˆJNÂ‚ˆYˆ
+XXØÙ\Y›[™Ý
+HÂˆÛÛœÝš\œÝ\œ›ÜˆH[˜Ù\Z[–ÌOË™\œ›Üˆ˜Z[YÌOË™\œ›ÜŽÂˆYˆ
+[˜Ù\Z[‹›[™Ý
+H›ÝÈ\\œ›ÜŠ	ÓZXÜ›ÜÛÙÜ˜\[]™\žHÛÝ[›Ý™HÛÛ™š\›YYˆ™\šYžHÙ[][\È™Y›Ü™H™]žZ[™Ë‰ËJNÂˆ›ÝÈš\œÝ\œ›Üˆ\\œ›ÜŠ	ÓZXÜ›ÜÛÙÜ˜\™Z™XÝY]™\žH^[Y[™[Z[™\ˆ˜]Ú‰ËLŠNÂˆB‚ˆØZ][[
+›ÛZ\ÙKœ™\ÛÛ™J
+K[Š
+
+HOˆÂˆ^\™T[[YPØXÚUYÜÊÉÜØ[\Ù›Ü˜ÙN˜^Y\‹Z[›ÚXÙ\É×JNÂˆJK˜Ø]Ú
+
+
+HOˆßJJNÂˆ™]\›ˆÂˆÙ[ˆÛÛ\]Yˆ\X[ˆXÛÛ\]YˆÜ\˜][Û’YˆYˆXØÙ\YÌOËœ™\Ý[ËšYXØÙ\YÌOËœ›ÝšY\”™\]Y\ÝY[ˆ[XZ[ÎˆXØÙ\Y›[™Ýˆ˜]Ú\ÎˆXØÙ\Y›X\
+
+][JHOˆ
+ÂˆÎˆ][KËØÎˆ][K˜ØË˜ØÎˆ][K˜˜ØËˆÝXš™XÝˆ][K™[XZ[œÝXš™XÝ›ÝÜÎˆ][K™Ü›Ý\œ›ÝÜË›[™Ý[ÙNˆ][K™Ü›Ý\›[ÙKˆJJKˆ˜Z[Y˜]Ú\ÎˆË‹‹™˜Z[Y‹‹[˜Ù\Z[—K›X\
+
+][JHOˆ
+ÂˆÙ^Nˆ][K™Ü›Ý\šÙ^K[ÙNˆ][K™Ü›Ý\›[ÙK›ÝÜÎˆ][K™Ü›Ý\œ›ÝÜË›[™ÝˆÝ]\Îˆ][KœÝ]\Ë\œ›ÜÛÙNˆ][K™\œ›ÜÛÙH[ˆJJKˆÎˆ[š\]YQ[XZ[\Ý
+‹‹˜XØÙ\Y›X\
+
+][JHOˆ][KÊJKˆØÎˆ[š\]YQ[XZ[\Ý
+‹‹˜XØÙ\Y›X\
+
+][JHOˆ][K˜ØÊJKˆ˜ØÎˆ[š\]YQ[XZ[\Ý
+‹‹˜XØÙ\Y›X\
+
+][JHOˆ][K˜˜ØÊJKˆÝXš™XÝˆXØÙ\YÌOË™[XZ[œÝXš™XÝ[ˆ›ÝÜÎˆXØÙ\Yœ™YXÙJ
+Ý[K][JHOˆÝ[H
+È][K™Ü›Ý\œ›ÝÜË›[™Ý
+KˆÛÛXÝ[Û”™\Ý[ËˆÛÛXÝ[Û•Ø\›š[™ÜËˆ[Z[™ÜÎˆÈ™\\™S\Îˆ[X™\Š™]šY]Ëœ™\\™S\È
+K˜[Y][Û“\ËÜ˜\\Ë[Y[[™S\ÈKˆNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆÝ\^Y\’[›ÚXÙQ[XZ[[ŠÚ[™ÝÊHÂˆÛÛœÝÛY[HØY™TÝ\X˜\ÙPYZ[ÛY[
+
+NÂˆYˆ
+XÛY[
+H™]\›ˆÈ[ÝÙYˆYK[Žˆ[NÂˆÛÛœÝÈ]K\œ›ÜˆHH]ØZ]ÛY[ˆ™œ›ÛJ	Ø^Y\—Ú[›ÚXÙWÙ[XZ[Ü[œÉÊBˆš[œÙ\
+Âˆ[—ÚÙ^NˆÚ[™ÝËœ[’Ù^KˆØÚY[WÝ[YNˆÚ[™ÝË[YKˆÝ]\Îˆ	Ü[›š[™ÉËˆJBˆœÙ[XÝ
+	ÚY[—ÚÙ^KÝ]\ËÜ™X]YØ]	ÊBˆœÚ[™ÛJ
+NÂˆYˆ
+\œ›ÜË˜ÛÙHOOH	ÌŒÍLIÊH™]\›ˆÈ[ÝÙYˆ˜[ÙK\XØ]NˆYHNÂˆYˆ
+\œ›ÜŠH›ÝÈ\œ›ÜŽÂˆ™]\›ˆÈ[ÝÙYˆYK[Žˆ]HNÂŸB‚˜\Þ[˜È[˜Ý[Ûˆš[š\Ú^Y\’[›ÚXÙQ[XZ[[Š[’Ù^K]ÚHßJHÂˆÛÛœÝÛY[HØY™TÝ\X˜\ÙPYZ[ÛY[
+
+NÂˆYˆ
+XÛY[\[’Ù^JH™]\›ŽÂˆÛÛœÝÈ\œ›ÜˆHH]ØZ]ÛY[ˆ™œ›ÛJ	Ø^Y\—Ú[›ÚXÙWÙ[XZ[Ü[œÉÊBˆ\]JÂˆ‹‹œ]ÚˆÛÛ\]YØ]ˆ™]È]J
+KÒTÓÔÝš[™Ê
+KˆJBˆ™\J	Ü[—ÚÙ^IË[’Ù^JNÂˆYˆ
+\œ›ÜŠHÛÛœÛÛK™\œ›ÜŠ	Ñ˜Z[YÈ\]H^Y\ˆ[›ÚXÙH[XZ[[‰Ë\œ›Ü‹›Y\ÜØYÙJNÂŸB‚™[˜Ý[Ûˆ™\]Z\™PÜ›Û]]Üš^˜][ÛŠ™\JHÂˆÛÛœÝÙXÜ™]H›ØÙ\ÜË™[‹Ô“Ó—ÔÑPÔ‘UÂˆYˆ
+\ÙXÜ™]
+H›ÝÈ\\œ›ÜŠ	ÓZ\ÜÚ[™ÈÔ“Ó—ÔÑPÔ‘U[ˆ™\˜Ù[‰ËL
+NÂˆÛÛœÝXY\ˆH™\OËšXY\œÏË˜]]Üš^˜][Ûˆ™\OËšXY\œÏË]]Üš^˜][Ûˆ	ÉÎÂˆYˆ
+Ýš[™ÊXY\ŠHOOH™X\™\ˆ	ÜÙXÜ™]X
+H›ÝÈ\\œ›ÜŠ	Õ[˜]]Üš^™YÜ›Ûˆ™\]Y\Ý‰ËJNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆÝ]Ý[™[™Ð^Y\’[›ÚXÙ\Ñ[XZ[™\Ü
+›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝXÝ]™PXØÙ\ÜÈHXØÙ\ÜÐÛÛ^
+›ÙKœØÚY[YÈ[ˆ]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆÛÛœÝ[]™\žPÛY[HXÝ]™PXØÙ\ÜÏË˜ÛY[ØY™TÝ\X˜\ÙPYZ[ÛY[
+
+NÂˆYˆ
+Y[]™\žPÛY[
+H›ÝÈ\\œ›ÜŠ	ÑÓÔÈ]X˜\ÙHXØÙ\ÜÈ\È[˜]˜Z[X›H›ÜˆH[\›˜[™\Ü‰ËLÊNÂˆÛÛœÝÝÜ™YH]ØZ]ØYÝÜ™Y^Y\’[›ÚXÙQ[XZ[Ù][™ÜÊ
+NÂˆYˆ
+
+X›ÙKœ™]šY]È	‰ˆX›ÙK™žT[ŠH	‰ˆÝÜ™Y›Y]K˜ÛÛ™šYÝ\™YOOHYJHÂˆ›ÝÈ\\œ›ÜŠ	ÓÝ]Ý[™[™È^Y\ˆ[›ÚXÙH™\Ü™XÚ\Y[È\™H›ÝÛÛ™šYÝ\™YˆÙ[™[™È\È\ØX›Y‰ËLË	Ñ’SSÒPSÔ‘TÔ•Ó“ÕÐÓÓ‘’QÕT‘Q	Ë[™Yš[™YYJNÂˆBˆYˆ
+X›ÙKœ™]šY]È	‰ˆX›ÙK™žT[ˆ	‰ˆ
+TÝš[™ÊÝÜ™YœÙ][™ÜÏËœÝXš™XÝ	ÉÊKš[J
+HTÝš[™ÊÝÜ™YœÙ][™ÜÏËš[›È	ÉÊKš[J
+JJHÂˆ›ÝÈ\\œ›ÜŠ	ÓÝ]Ý[™[™È^Y\ˆ[›ÚXÙH™\ÜÝXš™XÝ[™›ÙH\™H›ÝÛÛ™šYÝ\™YˆÙ[™[™È\È\ØX›Y‰ËLË	Ñ’SSÒPSÔ‘TÔ•ÕSTUWÓ“ÕÐÓÓ‘’QÕT‘Q	Ë[™Yš[™YYJNÂˆBˆÛÛœÝÙ][™ÜÈHÂˆ‹‹˜^Y\’[›ÚXÙQ[XZ[Ù][™ÜÊÝÜ™YœÙ][™ÜÊKˆ\Ð^Y\•˜Y\‘š[\Žˆ
+ÝÜ™YœÙ][™ÜË˜^Y\•˜Y\œÈ×JK›[™ÝˆˆNÂˆYˆ
+X›ÙKœ™]šY]È	‰ˆX›ÙK™žT[ˆ	‰ˆX›ÙK™›Ü˜ÙH	‰ˆZ\Ð^Y\’[›ÚXÙT™\ÜYJÙ][™ÜÊJHÂˆ™]\›ˆÂˆÙ[ˆ˜[ÙKˆÚÚ\YˆYKˆ™X\ÛÛŽˆ	ÐÝ\œ™[Û™ÈÛÛ™È[YH\ÈÝ]ÚYHHÛÛ™šYÝ\™Y™\ÜØÚY[K‰ËˆØÚY[NˆÂˆÙYZÙ^\ÎˆÙ][™ÜËÙYZÙ^\ËˆÙ[™[Y\ÎˆÙ][™ÜËœÙ[™[Y\Ëˆ›ÝÎˆÛ™ÒÛÛ™ÔØÚY[T\Ê
+KˆKˆNÂˆBˆÛÛœÝ™\Ü^[ØYHÈ^\ÐZXYˆÙ][™ÜË™^\ÐZXYNÂˆYˆ
+Ù][™ÜËš\Ð^Y\•˜Y\‘š[\ŠH™\Ü^[ØY˜^Y\•˜Y\œÈHÙ][™ÜË˜^Y\•˜Y\œÎÂˆYˆ
+X›ÙKœ™]šY]È	‰ˆX›ÙK™žT[ŠH™\Ü^[ØY™›Ü˜ÙHHYNÂˆÛÛœÝ™\ÜH]ØZ]Ø[\Ù›Ü˜ÙP^Y\’[›ÚXÙ\ÑYJ™\Ü^[ØY[XÝ]™PXØÙ\ÜÊNÂˆÛÛœÝ[XZ[HZ[^Y\’[›ÚXÙT™\Ü[XZ[
+™\ÜÙ][™ÜÊNÂˆYˆ
+›ÙKœ™]šY]È›ÙK™žT[ŠHÂˆ]ØZ]\]P^Y\’[›ÚXÙQ[XZ[Ù][™ÜÓY]JÂˆ\ÝÜ™]šY]×Ø]ˆ™]È]J
+KÒTÓÔÝš[™Ê
+Kˆ\ÝÜ™]šY]×Ü›Ý×ØÛÝ[ˆ™\Üœ›ÝÜË›[™Ýˆ\ÝÙ\œ›ÜŽˆ[ˆJNÂˆ™]\›ˆÂˆÙ[ˆ˜[ÙKˆ™]šY]ÎˆYKˆÙ][™ÜÎˆÈ‹‹œÙ][™ÜËÎˆÙ][™ÜËËØÎˆÙ][™ÜË˜ØÈKˆ™\ÜˆÂˆ›ÝÜÎˆ™\Üœ›ÝÜËˆÙ^Nˆ™\ÜÙ^KˆYU›ÝYÚˆ™\Ü™YU›ÝYÚˆ^\ÐZXYˆ™\Ü™^\ÐZXYˆ^Y\•˜Y\“Ü[ÛœÎˆ™\Ü˜^Y\•˜Y\“Ü[ÛœËˆÙ[XÝY^Y\•˜Y\œÎˆ™\ÜœÙ[XÝY^Y\•˜Y\œËˆ\Ð^Y\•˜Y\‘š[\Žˆ™\Üš\Ð^Y\•˜Y\‘š[\‹ˆKˆ[XZ[ˆÂˆÝXš™XÝˆ[XZ[œÝXš™XÝˆ[ˆ[XZ[š[ˆ^ˆ[XZ[^ˆÝ[Îˆ[XZ[Ý[ËˆKˆNÂˆBˆ]™\Ý[ÂˆžHÂˆ™\Ý[H]ØZ]Ù[™Ü\˜][Û˜[XZ[
+ÂˆÎˆÙ][™ÜËËˆØÎˆÙ][™ÜË˜ØËˆ˜ØÎˆÙ][™ÜË˜˜ØËˆÝXš™XÝˆ[XZ[œÝXš™XÝˆ[ˆ[XZ[š[ˆ^ˆ[XZ[^ˆKÈÛY[ˆ[]™\žPÛY[\œÜÙRÙ^Nˆ	ÛÝ]Ý[™[™×Ú[›ÚXÙWÜ™\ÜÉÈJNÂˆHØ]Ú
+\œ›ÜŠHÂˆ]ØZ]\]P^Y\’[›ÚXÙQ[XZ[Ù][™ÜÓY]JÈ\ÝÙ\œ›ÜŽˆ\œ›Ü‹›Y\ÜØYÙHJNÂˆ›ÝÈ\œ›ÜŽÂˆBˆ]ØZ]\]P^Y\’[›ÚXÙQ[XZ[Ù][™ÜÓY]JÂˆ\ÝÜÙ[Ø]ˆ™]È]J
+KÒTÓÔÝš[™Ê
+Kˆ\ÝÜÙ[Ü›Ý×ØÛÝ[ˆ™\Üœ›ÝÜË›[™Ýˆ\ÝÙ\œ›ÜŽˆ[ˆJNÂˆ™]\›ˆÂˆÙ[ˆYKˆYˆ™\Ý[šYˆÎˆÙ][™ÜËËˆØÎˆÙ][™ÜË˜ØËˆ˜ØÎˆÙ][™ÜË˜˜ØËˆÝXš™XÝˆ[XZ[œÝXš™XÝˆ›ÝÜÎˆ™\Üœ›ÝÜË›[™ÝˆÝ[Îˆ[XZ[Ý[ËˆNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆÝ]Ý[™[™Ð^Y\’[›ÚXÙ\Ñ[XZ[Ü›ÛŠ›ÙK™\JHÂˆ™\]Z\™PÜ›Û]]Üš^˜][ÛŠ™\JNÂˆYˆ
+Z\Ñ^\›˜[XÝ[Û‘[˜X›Y
+	Ù[XZ[Ù[]™\žIÊJHÂˆ™]\›ˆÂˆÙ[ˆ˜[ÙKˆÚÚ\YˆYKˆØ]YˆYKˆ™X\ÛÛŽˆ	ÔØÚY[Y[XZ[[]™\žH\È™Y[ˆ]\ÙYžH[ˆ[Y\™Ù[˜ÞHÜ\˜][Û˜[ÛÛ›Û‰ËˆNÂˆBˆÛÛœÝÝÜ™YH]ØZ]ØYÝÜ™Y^Y\’[›ÚXÙQ[XZ[Ù][™ÜÊ
+NÂˆYˆ
+ÝÜ™Y›Y]KœÝÜ˜YÙP]˜Z[X›HOOHYJHÂˆ›ÝÈ\\œ›ÜŠ	Ð^Y\ˆ[›ÚXÙH[XZ[Ù][™ÜÈ\™H[\Ü˜\š[H[˜]˜Z[X›KˆØÚY[Y™\ÜÙ[™[™È\È\ØX›Y[[ÝÜ˜YÙH\È™\ÝÜ™Y‰ËLÊNÂˆBˆÛÛœÝÙ][™ÜÈHÂˆ‹‹˜^Y\’[›ÚXÙQ[XZ[Ù][™ÜÊÝÜ™YœÙ][™ÜÊKˆ\Ð^Y\•˜Y\‘š[\Žˆ
+ÝÜ™YœÙ][™ÜË˜^Y\•˜Y\œÈ×JK›[™ÝˆˆNÂˆYˆ
+Ù][™ÜË™[˜X›YOOH˜[ÙJBˆ™]\›ˆÂˆÙ[ˆ˜[ÙKˆÚÚ\YˆYKˆ™X\ÛÛŽˆ	Ñ[XZ[ØÚY[H\È\ØX›Y‰ËˆNÂ‚ˆÛÛœÝÚ[™ÝÈH^Y\’[›ÚXÙTØÚY[YÚ[™ÝÊÙ][™ÜÊNÂˆYˆ
+]Ú[™ÝÊHÂˆ™]\›ˆÂˆÙ[ˆ˜[ÙKˆÚÚ\YˆYKˆ™X\ÛÛŽˆ	ÐÝ\œ™[Û™ÈÛÛ™È[YH\ÈÝ]ÚYHHÛÛ™šYÝ\™Y™\ÜØÚY[K‰ËˆØÚY[NˆÂˆÙYZÙ^\ÎˆÙ][™ÜËÙYZÙ^\ËˆÙ[™[Y\ÎˆÙ][™ÜËœÙ[™[Y\Ëˆ›ÝÎˆÛ™ÒÛÛ™ÔØÚY[T\Ê
+KˆKˆNÂˆB‚ˆÛÛœÝ[ˆH]ØZ]Ý\^Y\’[›ÚXÙQ[XZ[[ŠÚ[™ÝÊNÂˆYˆ
+\[‹˜[ÝÙY
+Bˆ™]\›ˆÂˆÙ[ˆ˜[ÙKˆÚÚ\YˆYKˆ\XØ]NˆYKˆ[’Ù^NˆÚ[™ÝËœ[’Ù^KˆNÂ‚ˆžHÂˆÛÛœÝ™\Ý[H]ØZ]Ý]Ý[™[™Ð^Y\’[›ÚXÙ\Ñ[XZ[™\Ü
+ÂˆÙ][™ÜËˆ›Ü˜ÙNˆYKˆØÚY[YˆYKˆJNÂˆ]ØZ]š[š\Ú^Y\’[›ÚXÙQ[XZ[[ŠÚ[™ÝËœ[’Ù^KÂˆÝ]\Îˆ	ÜÙ[	Ëˆ›ÝÜ×ØÛÝ[ˆ™\Ý[œ›ÝÜËˆÝ[Îˆ™\Ý[Ý[ÈßKˆ›ÝšY\—Ü™\Ý[ˆÂˆYˆ™\Ý[šY[ˆÎˆ™\Ý[È×KˆØÎˆ™\Ý[˜ØÈ×KˆÝXš™XÝˆ™\Ý[œÝXš™XÝ[ˆKˆJNÂˆ™]\›ˆÈ‹‹œ™\Ý[ØÚY[YˆYK[’Ù^NˆÚ[™ÝËœ[’Ù^HNÂˆHØ]Ú
+\œ›ÜŠHÂˆ]ØZ]š[š\Ú^Y\’[›ÚXÙQ[XZ[[ŠÚ[™ÝËœ[’Ù^KÂˆÝ]\Îˆ	Ù˜Z[Y	Ëˆ\œ›ÜŽˆ\œ›Ü‹›Y\ÜØYÙKˆJNÂˆ›ÝÈ\œ›ÜŽÂˆBŸB‚˜\Þ[˜È[˜Ý[ÛˆØ[\Ù›Ü˜ÙQ\Ü]TÝ[\Ê›ÙK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝ[Z]HX]›X^
+LX]›Z[Š[X™\Š›ÙK›[Z]
+HLL
+JNÂˆÛÛœÝ™\]Y\ÝYÝ[RYH\ÔØ[\Ù›Ü˜ÙRY
+Ýš[™Ê›ÙKœÝ[RY	ÉÊKš[J
+JHÈÝš[™Ê›ÙKœÝ[RY
+Kš[J
+Hˆ[ÂˆÛÛœÝÙ\ØÜšX™KXØÛÝ[\ØÜšX™WHH]ØZ]›ÛZ\ÙK˜[
+ÂˆØ[\Ù›Ü˜ÙSØš™XÝšY[ÊÈØš™XÝ˜[YNˆ	ÜÝ[W×ØÉÈJKˆØ[\Ù›Ü˜ÙSØš™XÝšY[ÊÈØš™XÝ˜[YNˆ	ÐXØÛÝ[	ÈJKˆJNÂˆÛÛœÝšY[˜[Y\ÈH\ØÜšX™K™šY[Ë›X\
+
+ŠHOˆ‹›˜[YJNÂˆÛÛœÝ\Ü]PXØÛÝ[šY[ÈH™]ÈÙ]
+
+XØÛÝ[\ØÜšX™K™šY[È×JK›X\
+
+šY[
+HOˆšY[›˜[YJJNÂˆYˆ
+Y\Ü]PXØÛÝ[šY[Ëš\Ê	Ò[˜XÝ]™WÔÝ\Ü[™Y×ØÉÊJHÂˆ›ÝÈ\\œ›ÜŠ	Ñ\Ü]HXØÛÝ[\ØÛÝ™\žHØ[››Ý™\šYžHXÝ]™HØ[\Ù›Ü˜ÙHXØÛÝ[Ë‰ËLË	ÑTÔUWÐPÐÓÕS•ÔÕUT×ÔÐÒSPIË[™Yš[™YYJNÂˆBˆÛÛœÝ[\›Ù™šXÙPÛÛ™][ÛˆH]ØZ][\›Ù™šXÙTÝ[PXØÙ\ÜÐÛÛ™][ÛŠXØÙ\ÜÐÛÛ^šY[˜[Y\ÊNÂˆÛÛœÝ\Ñ\Ü]HHšY[˜[Y\Ëš[˜ÛY\Ê	Ñ\Ü]W×ØÉÊNÂˆÛÛœÝ\Ñ\Ü]TÝ]\ÈHšY[˜[Y\Ëš[˜ÛY\Ê	Ñ\Ü]WÔÝ]\××ØÉÊNÂˆYˆ
+Z\Ñ\Ü]H	‰ˆZ\Ñ\Ü]TÝ]\ÊH™]\›ˆÈ›ÝÜÎˆ×HNÂˆÛÛœÝÝ\Y\’[›ÚXÙQ\ØÜšX™HH]ØZ]Ø[\Ù›Ü˜ÙSØš™XÝšY[ÊÂˆØš™XÝ˜[YNˆ	ÔÝ\Y\—Ò[›ÚXÙW×ØÉËˆJK˜Ø]Ú
+
+
+HOˆ
+ÈšY[Îˆ×HJJNÂˆÛÛœÝÝ\Y\’[›ÚXÙQšY[ÈHÝ\Y\’[›ÚXÙQ\ØÜšX™K™šY[È×NÂˆÛÛœÝÝ\Y\’[›ÚXÙQšY[˜[Y\ÈHÝ\Y\’[›ÚXÙQšY[Ë›X\
+
+ŠHOˆ‹›˜[YJNÂˆÛÛœÝÝ\Y\’[›ÚXÙQšY[žS˜[YHHØš™XÝ™œ›ÛQ[šY\ÊÝ\Y\’[›ÚXÙQšY[Ë›X\
+
+šY[
+HOˆÙšY[›˜[YKšY[JJNÂˆÛÛœÝ^[Y[\ØÜšX™HH]ØZ]Ø[\Ù›Ü˜ÙSØš™XÝšY[ÊÂˆØš™XÝ˜[YNˆ	Ô^[Y[×ØÉËˆJK˜Ø]Ú
+
+
+HOˆ
+ÈšY[Îˆ×HJJNÂˆÛÛœÝ^[Y[šY[ÈH^[Y[\ØÜšX™K™šY[È×NÂˆÛÛœÝ^[Y[šY[˜[Y\ÈH™]ÈÙ]
+^[Y[šY[Ë›X\
+
+šY[
+HOˆšY[›˜[YJJNÂˆÛÛœÝÝ\Y\”Ù][Y[ØÚ[XHH™\ÛÛ™TÝ\Y\”Ù][Y[ØÚ[XJÂˆÝ\Y\’[›ÚXÙQšY[Ëˆ^[Y[šY[ËˆJNÂˆÛÛœÝÝ\Y\’[›ÚXÙT^XX›QšY[HÝ\Y\”Ù][Y[ØÚ[XKš[›ÚXÙT^XX›QšY[ÂˆÛÛœÝÝ\Y\’[›ÚXÙP[[Ý[šY[ÈHÝ\Y\”Ù][Y[ØÚ[XKš[›ÚXÙP[[Ý[šY[ÈÜÝ\Y\”Ù][Y[ØÚ[XKš[›ÚXÙP[[Ý[šY[Hˆ×NÂˆÛÛœÝÝ\Y\’[›ÚXÙQYQ]QšY[ÈHÝ\Y\”Ù][Y[ØÚ[XKš[›ÚXÙQYQ]QšY[ÎÂˆÛÛœÝÝ\Y\’[›ÚXÙQ]QšY[ÈHÝ\Y\”Ù][Y[ØÚ[XKš[›ÚXÙQ]QšY[ÎÂˆÛÛœÝÝ\Y\’[›ÚXÙTÝ]\ÑšY[ÈHÝ\Y\”Ù][Y[ØÚ[XKš[›ÚXÙTÝ]\ÑšY[ÎÂˆÛÛœÝÝ\Y\’[›ÚXÙTÝ\Y\‘šY[ÈHÝ\Y\”Ù][Y[ØÚ[XKœÝ\Y\XØÛÝ[šY[ÎÂˆÛÛœÝÝ\Y\’[›ÚXÙTÝ\Y\“˜[YT™[][ÛœÚ\ÈHÝ\Y\’[›ÚXÙTÝ\Y\‘šY[Ë›X\
+
+šY[
+HOˆÝ\Y\’[›ÚXÙQšY[žS˜[YVÙšY[OËœ™[][ÛœÚ\˜[YJK™š[\Š›ÛÛX[ŠNÂˆÛÛœÝ[™R][Q\ØÜšX™HH]ØZ]Ø[\Ù›Ü˜ÙSØš™XÝšY[ÊÂˆØš™XÝ˜[YNˆ	ÔÕSWÓ[™WÒ][W×ØÉËˆJK˜Ø]Ú
+
+
+HOˆ
+ÈšY[Îˆ×HJJNÂˆÛÛœÝÜšYÚ[˜[Ý\Y\“ÛÚÝ\H™\ÛÛ™SÜšYÚ[˜[Ý\Y\“ÛÚÝ\
+[™R][Q\ØÜšX™K™šY[È×JNÂˆÛÛœÝÜšYÚ[˜[Ý\Y\”™[][ÛœÚ\HÜšYÚ[˜[Ý\Y\“ÛÚÝ\œ™[][ÛœÚ\˜[YH	ÓÜšYÚ[˜[ÔÝ\Y\—×Ü‰ÎÂˆÛÛœÝ^˜PÛÜÝ\ØÜšX™HH]ØZ]Ø[\Ù›Ü˜ÙSØš™XÝšY[ÊÂˆØš™XÝ˜[YNˆ	ÔÕSWÑ^˜WÐÛÜÝ×ØÉËˆJK˜Ø]Ú
+
+
+HOˆ
+ÈšY[Îˆ×HJJNÂˆÛÛœÝ^˜PÛÜÝšY[ÈH^˜PÛÜÝ\ØÜšX™K™šY[È×NÂˆÛÛœÝ^˜PÛÜÝšY[˜[Y\ÈH™]ÈÙ]
+^˜PÛÜÝšY[Ë›X\
+
+šY[
+HOˆšY[›˜[YJJNÂˆÛÛœÝ^˜PÛÜÝÝ\Y\“ÛÚÝ\H™\ÛÛ™Q^˜PÛÜÝÝ\Y\“ÛÚÝ\
+^˜PÛÜÝšY[ÊNÂˆÛÛœÝ^˜PÛÜÝÝ\Y\‘šY[H^˜PÛÜÝÝ\Y\“ÛÚÝ\™šY[˜[YNÂˆÛÛœÝ^˜PÛÜÝÝ\Y\”™[][ÛœÚ\H^˜PÛÜÝÝ\Y\“ÛÚÝ\œ™[][ÛœÚ\˜[YNÂ‚ˆÛÛœÝšY[ÈHÉÒY	Ë	Ó˜[YIË	ÐÜ™X]Y]IË	Ó\Ý[ÙYšYY]I×NÂˆ›Üˆ
+ÛÛœÝšY[ÙˆÉÒÙ^TÝ[W×ØÉË	Ñ[]™\žWÑ]W×ØÉË	Ñ^XÝYÑ[]™\žWÑ]W×ØÉË	ÑUWÔÝ\Ñ]W×ØÉË	Ð^Y\—Ô^WÕ\›WÑ]W×ØÉË	Ò[›ÚXÙWÑYWÑ]W×ØÉË	ÑYWÑ]W×ØÉË	Ð^Y\—Ó˜[YW×ØÉË	Ð^Y\—×ØÉË	ÐXØÛÝ[×ØÉË	Ñ\Ü]W×ØÉË	Ñ\Ü]WÔÝ]\××ØÉË	ÕÝ[Ò[›ÚXÙWÐ[[Ý[×ØÉË	ÕÝ[Ò[›ÚXÙYÐ[[Ý[Ñœ›ÛWÔÝ\Y\œ××ØÉË	Ô^XX›WÐ˜[[˜ÙW×ØÉË	Ô™XÙZ]˜X›WÐ˜[[˜ÙW×ØÉË	ÔSR×ÔÕSWÓ[™WÒ][WÕÝ[ÐÛÜÝ×ØÉË	ÔSR×ÐÛÜÝ×ÕÝ[ÐÛÜÝ×ØÉ×JHÂˆYˆ
+šY[˜[Y\Ëš[˜ÛY\ÊšY[
+JHšY[Ëœ\Ú
+šY[
+NÂˆBˆYˆ
+šY[˜[Y\Ëš[˜ÛY\Ê	Õ™\ÜÙ[×ØÉÊJHšY[Ëœ\Ú
+	Õ™\ÜÙ[×Ü‹“˜[YIÊNÂˆYˆ
+šY[˜[Y\Ëš[˜ÛY\Ê	ÔÜ×ØÉÊJHšY[Ëœ\Ú
+	ÔÜ×Ü‹“˜[YIÊNÂˆYˆ
+šY[˜[Y\Ëš[˜ÛY\Ê	ÐXØÛÝ[×ØÉÊJHšY[Ëœ\Ú
+	ÐXØÛÝ[×Ü‹“˜[YIË	ÐXØÛÝ[×Ü‹’[˜XÝ]™WÔÝ\Ü[™Y×ØÉÊNÂ‚ˆÛÛœÝXÝ]™Q\Ü]TÝ]\ÐÛÛ™][ÛˆHŠ\Ü]WÔÝ]\××ØÈOH[S‘\Ü]WÔÝ]\××ØÈOH	Ó›È\Ü]IÈS‘\Ü]WÔÝ]\××ØÈOH	Ó›È\Ü]\ÉÈS‘\Ü]WÔÝ]\××ØÈOH	Û›È\Ü]IÈS‘\Ü]WÔÝ]\××ØÈOH	Û›È\Ü]\ÉÊHŽÂˆÛÛœÝ\Ü]PÛÛ™][ÛˆH\Ñ\Ü]TÝ]\ÈÈXÝ]™Q\Ü]TÝ]\ÐÛÛ™][Ûˆˆ	Ñ\Ü]W×ØÈHYIÎÂˆÛÛœÝÝ[UÚ\™HHÛÛXš[™UÚ\™PÛÛ™][ÛœÊÙ\Ü]PÛÛ™][Û‹[\›Ù™šXÙPÛÛ™][Û‹™\]Y\ÝYÝ[RYÈYH	ÉÙ\ØØ\TÛÜ[
+™\]Y\ÝYÝ[RY
+_IØˆ	É×JNÂˆÛÛœÝ›ÝÜÈH]ØZ]]Y\žT›ÝÜÊˆˆÑSPÕ	ÖË‹‹›™]ÈÙ]
+šY[ÊWKš›Ú[Š	Ë	Ê_Bˆ”“ÓHÝ[W×ØÂˆÒT‘H	ÜÝ[UÚ\™_BˆÔ‘Tˆ–H\Ý[ÙYšYY]HTÐÂˆSRU	Û[Z]BˆˆÈ[Z]ÛÙ˜Z[ˆYHKˆ
+NÂ‚ˆÛÛœÝÝ[RYÈH›ÝÜË›X\
+
+Ý[JHOˆÝ[K’Y
+K™š[\Š›ÛÛX[ŠNÂˆÛÛœÝ[™R][\ÐžTÝ[HHßNÂˆÛÛœÝ^˜PÛÜÝÐžTÝ[HHßNÂˆÛÛœÝÝ\Y\’[›ÚXÙ\ÐžTÝ[HHßNÂˆÛÛœÝÝ\Y\’[›ÚXÙT^XX›PžTÝ[HHßNÂˆÛÛœÝÝ\Y\”^[Y[ÐžR[›ÚXÙHHßNÂˆÛÛœÝš[˜[^Y\’[›ÚXÙTÝ[RYÈH™]ÈÙ]
+
+NÂ‚ˆYˆ
+Ý[RYË›[™Ý
+HÂˆÛÛœÝÛ[™R][P\œ˜^\Ë^˜PÛÜÝ\œ˜^\ËÝ\Y\’[›ÚXÙP\œ˜^\Ë^Y\’[›ÚXÙP\œ˜^\×HH]ØZ]›ÛZ\ÙK˜[
+ÂˆÛÛ\ÜÚ]T]Y\žT›ÝÜÊˆÚ[šÒYÊÝ[RYÊK›X\
+
+Ú[šÊHOˆÂˆÛÛœÝ[“\ÝHÚ[šË›X\
+
+Y
+HOˆ	ÉÙ\ØØ\TÛÜ[
+Y
+_IØ
+Kš›Ú[Š	Ë	ÊNÂˆ™]\›ˆÂˆÛÜ[ˆˆÑSPÕYÕSW×ØË›ÙXÝ×Ü‹“˜[YKÝ\Y\—Ó˜[YW×ØËˆ	ÛÜšYÚ[˜[Ý\Y\“ÛÚÝ\˜[YÈÜšYÚ[˜[ÔÝ\Y\—×ØË	ÛÜšYÚ[˜[Ý\Y\”™[][ÛœÚ\K“˜[YK	ÛÜšYÚ[˜[Ý\Y\”™[][ÛœÚ\K’[˜XÝ]™WÔÝ\Ü[™Y×ØËˆ	ÉßBˆ^[Y[Õ\›W×ØË]X[]W×ØË]X[]WÑ[]™\™YÔ\—Ð‘—×ØËˆ]X[]WÓX^×ØË]X[]WÚ[—ÓU×ØË\×Ô]X[]WÔ˜[™ÙW×ØËˆšXÙWÔ\—Õ[š]×ØËÛÜÝÔ\—Õ[š]×ØË[š]ÔÙ[Ð]×ØË[š]Ð^WÐ]×ØË[š]ÐÛÜÝ×ØËˆÝ[ÔšXÙW×ØËÝ[ÐÛÜÝ×ØËÝ\Y\—Ò[›ÚXÙW×ØËØ[˜Ù[Y×ØËˆÙ™™\—Ó[™WÒ][W×Ü‹•[š]šXÙKÙ™™\—Ó[™WÒ][W×Ü‹”Ý\Y\—Õ[š]ÔšXÙW×ØÂˆ”“ÓHÕSWÓ[™WÒ][W×ØÂˆÒT‘HÕSW×ØÈSˆ
+	Ú[“\ÝJBˆÔ‘Tˆ–HÕSW×ØËÜ™X]Y]HTÐÂˆSRULˆˆ[Z]ˆLˆÛÙ˜Z[ˆYKˆNÂˆJKˆ
+KˆÛÛ\ÜÚ]T]Y\žT›ÝÜÊˆÚ[šÒYÊÝ[RYÊK›X\
+
+Ú[šÊHOˆÂˆÛÛœÝ[“\ÝHÚ[šË›X\
+
+Y
+HOˆ	ÉÙ\ØØ\TÛÜ[
+Y
+_IØ
+Kš›Ú[Š	Ë	ÊNÂˆÛÛœÝ^˜PÛÜÝÙ[XÝšY[ÈHÉÒY	Ë	ÔÕSW×ØÉË	ÔÝ\Y\—Ó˜[YW×ØÉË	Ô]X[]W×ØÉË	Ô]X[]WÑ[]™\™YÔ\—Ð‘—×ØÉË	Ô]X[]WÚ[—ÓU×ØÉË	Ô]X[]WÔ˜[™ÙWÓX^×ØÉË	Ò\×Ô]X[]WÔ˜[™ÙW×ØÉË	Õ[š]ÔšXÙW×ØÉË	Õ[š]ÐÛÜÝ×ØÉË	Ó[™WÕÝ[×ØÉË	Ó[™WÕÝ[Ð^W×ØÉË	ÔÝ\Y\—Ò[›ÚXÙW×ØÉË	ÐØ[˜Ù[Y×ØÉË^˜PÛÜÝšY[˜[Y\Ëš\Ê	Ô^[Y[Õ\›W×ØÉÊHÈ	Ô^[Y[Õ\›W×ØÉÈˆ[^˜PÛÜÝšY[˜[Y\Ëš\Ê	Ô›ÙXÝ’Y×ØÉÊHÈ	Ô›ÙXÝ’Y×Ü‹“˜[YIÈˆ[^˜PÛÜÝÝ\Y\“ÛÚÝ\˜[YÈ^˜PÛÜÝÝ\Y\‘šY[ˆ[^˜PÛÜÝÝ\Y\“ÛÚÝ\˜[Y	‰ˆ^˜PÛÜÝÝ\Y\”™[][ÛœÚ\È	Ù^˜PÛÜÝÝ\Y\”™[][ÛœÚ\K“˜[YXˆ[^˜PÛÜÝÝ\Y\“ÛÚÝ\˜[Y	‰ˆ^˜PÛÜÝÝ\Y\”™[][ÛœÚ\È	Ù^˜PÛÜÝÝ\Y\”™[][ÛœÚ\K’[˜XÝ]™WÔÝ\Ü[™Y×ØØˆ[K™š[\Š›ÛÛX[ŠNÂˆ™]\›ˆÂˆÛÜ[ˆˆÑSPÕ	ÖË‹‹›™]ÈÙ]
+^˜PÛÜÝÙ[XÝšY[ÊWKš›Ú[Š	Ë	Ê_Bˆ”“ÓHÕSWÑ^˜WÐÛÜÝ×ØÂˆÒT‘HÕSW×ØÈSˆ
+	Ú[“\ÝJBˆSRULˆˆ[Z]ˆLˆÛÙ˜Z[ˆYKˆNÂˆJKˆ
+KˆÝ\Y\’[›ÚXÙQšY[˜[Y\Ëš[˜ÛY\Ê	ÔÕSW×ØÉÊBˆÈÛÛ\ÜÚ]T]Y\žT›ÝÜÊˆÚ[šÒYÊÝ[RYÊK›X\
+
+Ú[šÊHOˆÂˆÛÛœÝ[“\ÝHÚ[šË›X\
+
+Y
+HOˆ	ÉÙ\ØØ\TÛÜ[
+Y
+_IØ
+Kš›Ú[Š	Ë	ÊNÂˆÛÛœÝÝ\Y\’[›ÚXÙTÙ[XÝšY[ÈHÉÔÕSW×ØÉË	ÒY	Ë	Ó˜[YIË	ÐÜ™X]Y]IË	Ó\Ý[ÙYšYY]IË‹‹œÝ\Y\’[›ÚXÙP[[Ý[šY[Ë‹‹œÝ\Y\’[›ÚXÙQYQ]QšY[Ë‹‹œÝ\Y\’[›ÚXÙQ]QšY[Ë‹‹œÝ\Y\’[›ÚXÙTÝ]\ÑšY[ËÝ\Y\’[›ÚXÙT^XX›QšY[Ý\Y\’[›ÚXÙQšY[˜[Y\Ëš[˜ÛY\Ê	ÐÝ\œ™[˜ÞR\ÛÐÛÙIÊHÈ	ÐÝ\œ™[˜ÞR\ÛÐÛÙIÈˆ[Ý\Y\’[›ÚXÙQšY[˜[Y\Ëš[˜ÛY\Ê	ÔÝ\Y\—Ó˜[YW×ØÉÊHÈ	ÔÝ\Y\—Ó˜[YW×ØÉÈˆ[‹‹œÝ\Y\’[›ÚXÙTÝ\Y\‘šY[Ë‹‹œÝ\Y\’[›ÚXÙTÝ\Y\“˜[YT™[][ÛœÚ\Ë™›]X\
+
+™[][ÛœÚ\
+HOˆØ	Ü™[][ÛœÚ\K“˜[YX	Ü™[][ÛœÚ\K’[˜XÝ]™WÔÝ\Ü[™Y×ØØJWK™š[\Š›ÛÛX[ŠNÂˆ™]\›ˆÂˆÛÜ[ˆˆÑSPÕ	ÖË‹‹›™]ÈÙ]
+Ý\Y\’[›ÚXÙTÙ[XÝšY[ÊWKš›Ú[Š	Ë	Ê_Bˆ”“ÓHÝ\Y\—Ò[›ÚXÙW×ØÂˆÒT‘HÕSW×ØÈSˆ
+	Ú[“\ÝJBˆSRULˆˆ[Z]ˆLˆÛÙ˜Z[ˆYKˆNÂˆJKˆ
+Bˆˆ›ÛZ\ÙKœ™\ÛÛ™J×JKˆÛÛ\ÜÚ]T]Y\žT›ÝÜÊÚ[šÒYÊÝ[RYÊK›X\
+
+Ú[šÊHOˆ
+ÂˆÛÜ[ˆÑSPÕY˜[YKÕSW×ØË›Ù›Ü›XW×ØË\™XØ]Y×ØÈ”“ÓH[›ÚXÙW×ØÈÒT‘HÕSW×ØÈSˆ
+	ØÚ[šË›X\
+
+Y
+HOˆ	ÉÙ\ØØ\TÛÜ[
+Y
+_IØ
+Kš›Ú[Š	Ë	Ê_JHSRULˆ[Z]ˆLˆÛÙ˜Z[ˆYKˆJJJKˆJNÂ‚ˆ›Üˆ
+ÛÛœÝ[›ÚXÙHÙˆ^Y\’[›ÚXÙP\œ˜^\Ë™›]
+
+K™š[\Š\Ñš[˜[^Y\’[›ÚXÙJJHYˆ
+[›ÚXÙK”ÕSW×ØÊHš[˜[^Y\’[›ÚXÙTÝ[RYË˜Y
+[›ÚXÙK”ÕSW×ØÊNÂ‚ˆ›Üˆ
+ÛÛœÝ][HÙˆ[™R][P\œ˜^\Ë™›]
+
+JHÂˆYˆ
+Z][K”ÕSW×ØÊHÛÛ[YNÂˆYˆ
+[[™R][\ÐžTÝ[VÚ][K”ÕSW×Ø×JH[™R][\ÐžTÝ[VÚ][K”ÕSW×Ø×HH×NÂˆ[™R][\ÐžTÝ[VÚ][K”ÕSW×Ø×Kœ\Ú
+][JNÂˆBˆ›Üˆ
+ÛÛœÝ][HÙˆ^˜PÛÜÝ\œ˜^\Ë™›]
+
+JHÂˆYˆ
+Z][K”ÕSW×ØÊHÛÛ[YNÂˆYˆ
+Y^˜PÛÜÝÐžTÝ[VÚ][K”ÕSW×Ø×JH^˜PÛÜÝÐžTÝ[VÚ][K”ÕSW×Ø×HH×NÂˆ^˜PÛÜÝÐžTÝ[VÚ][K”ÕSW×Ø×Kœ\Ú
+][JNÂˆBˆ›Üˆ
+ÛÛœÝ[›ÚXÙHÙˆÝ\Y\’[›ÚXÙP\œ˜^\Ë™›]
+
+JHÂˆYˆ
+Z[›ÚXÙK”ÕSW×ØÊHÛÛ[YNÂˆYˆ
+\Ý\Y\’[›ÚXÙ\ÐžTÝ[VÚ[›ÚXÙK”ÕSW×Ø×JHÝ\Y\’[›ÚXÙ\ÐžTÝ[VÚ[›ÚXÙK”ÕSW×Ø×HH×NÂˆÝ\Y\’[›ÚXÙ\ÐžTÝ[VÚ[›ÚXÙK”ÕSW×Ø×Kœ\Ú
+[›ÚXÙJNÂˆYˆ
+Ý\Y\’[›ÚXÙT^XX›QšY[OH[
+HÛÛ[YNÂˆÝ\Y\’[›ÚXÙT^XX›PžTÝ[VÚ[›ÚXÙK”ÕSW×Ø×HH
+Ý\Y\’[›ÚXÙT^XX›PžTÝ[VÚ[›ÚXÙK”ÕSW×Ø×H
+H
+È[X™\Š[›ÚXÙVÜÝ\Y\’[›ÚXÙT^XX›QšY[H
+NÂˆB‚ˆÛÛœÝÝ\Y\’[›ÚXÙRYÈHÝ\Y\’[›ÚXÙP\œ˜^\Âˆ™›]
+
+Bˆ›X\
+
+[›ÚXÙJHOˆ[›ÚXÙK’Y
+Bˆ™š[\Š\ÔØ[\Ù›Ü˜ÙRY
+NÂˆYˆ
+Ý\Y\’[›ÚXÙRYË›[™Ý	‰ˆÝ\Y\”Ù][Y[ØÚ[XKœ^[Y[Ý\Y\’[›ÚXÙQšY[Ë›[™Ý	‰ˆÝ\Y\”Ù][Y[ØÚ[XKœ^[Y[[[Ý[šY[
+HÂˆÛÛœÝ^[Y[Ù[XÝšY[ÈHÉÒY	Ë^[Y[šY[˜[Y\Ëš\Ê	Ó˜[YIÊHÈ	Ó˜[YIÈˆ[^[Y[šY[˜[Y\Ëš\Ê	ÐÜ™X]Y]IÊHÈ	ÐÜ™X]Y]IÈˆ[^[Y[šY[˜[Y\Ëš\Ê	ÐÝ\œ™[˜ÞR\ÛÐÛÙIÊHÈ	ÐÝ\œ™[˜ÞR\ÛÐÛÙIÈˆ[Ý\Y\”Ù][Y[ØÚ[XKœ^[Y[[[Ý[šY[Ý\Y\”Ù][Y[ØÚ[XKœ^[Y[]QšY[‹‹œÝ\Y\”Ù][Y[ØÚ[XKœ^[Y[Ý\Y\’[›ÚXÙQšY[Ë‹‹œÝ\Y\”Ù][Y[ØÚ[XKœ^[Y[Ý]\ÑšY[×K™š[\Š›ÛÛX[ŠNÂˆ]ØZ]›ÛZ\ÙK˜[
+ˆÝ\Y\”Ù][Y[ØÚ[XKœ^[Y[Ý\Y\’[›ÚXÙQšY[Ë›X\
+\Þ[˜È
+ÛÚÝ\šY[
+HOˆÂˆÛÛœÝ^[Y[Ú[šÜÈH]ØZ]ÛÛ\ÜÚ]T]Y\žT›ÝÜÊˆÚ[šÒYÊÝ\Y\’[›ÚXÙRYÊK›X\
+
+Ú[šÊHOˆÂˆÛÛœÝ[“\ÝHÚ[šË›X\
+
+Y
+HOˆ	ÉÙ\ØØ\TÛÜ[
+Y
+_IØ
+Kš›Ú[Š	Ë	ÊNÂˆ™]\›ˆÂˆÛÜ[ˆˆÑSPÕ	ÖË‹‹›™]ÈÙ]
+^[Y[Ù[XÝšY[ÊWKš›Ú[Š	Ë	Ê_Bˆ”“ÓH^[Y[×ØÂˆÒT‘H	ÛÛÚÝ\šY[HSˆ
+	Ú[“\ÝJBˆÔ‘Tˆ–H	ÜÝ\Y\”Ù][Y[ØÚ[XKœ^[Y[]QšY[	ÐÜ™X]Y]IßHTÐÈ•SÈTÕˆSRULˆˆ[Z]ˆLˆÛÙ˜Z[ˆYKˆNÂˆJKˆ
+NÂˆ›Üˆ
+ÛÛœÝ^[Y[Ùˆ^[Y[Ú[šÜË™›]
+
+JHÂˆYˆ
+]˜[YÝ\Y\”Ù][Y[^[Y[
+^[Y[Ý\Y\”Ù][Y[ØÚ[XKœ^[Y[Ý]\ÑšY[ÊJHÛÛ[YNÂˆÛÛœÝ[›ÚXÙRYH^[Y[ÛÛÚÝ\šY[NÂˆYˆ
+Z\ÔØ[\Ù›Ü˜ÙRY
+[›ÚXÙRY
+JHÛÛ[YNÂˆYˆ
+\Ý\Y\”^[Y[ÐžR[›ÚXÙVÚ[›ÚXÙRYJHÝ\Y\”^[Y[ÐžR[›ÚXÙVÚ[›ÚXÙRYHH×NÂˆYˆ
+Ý\Y\”^[Y[ÐžR[›ÚXÙVÚ[›ÚXÙRYKœÛÛYJ
+^\Ý[™ÊHOˆ^\Ý[™ËšYOOH^[Y[’Y
+JHÛÛ[YNÂˆÝ\Y\”^[Y[ÐžR[›ÚXÙVÚ[›ÚXÙRYKœ\Ú
+ÂˆYˆ^[Y[’Yˆ˜[YNˆ^[Y[“˜[YH^[Y[’Yˆ[[Ý[ˆ[X™\Š^[Y[ÜÝ\Y\”Ù][Y[ØÚ[XKœ^[Y[[[Ý[šY[H
+Kˆ]Nˆ^[Y[ÜÝ\Y\”Ù][Y[ØÚ[XKœ^[Y[]QšY[H^[Y[Ü™X]Y]H[ˆÝ\œ™[˜ÞR\ÛÐÛÙNˆ^[Y[Ý\œ™[˜ÞR\ÛÐÛÙH	ÕTÑ	ËˆÝ]\ÎˆÝ\Y\”Ù][Y[ØÚ[XKœ^[Y[Ý]\ÑšY[Ë›X\
+
+šY[
+HOˆ^[Y[ÙšY[JK™š[™
+›ÛÛX[ŠH[ˆJNÂˆBˆJKˆ
+NÂˆBˆB‚ˆ™]\›ˆÂˆ›ÝÜÎˆ›ÝÜÂˆ™š[\Š
+Ý[JHOˆZ\Ñ\Ü]TÝ]\ÈVÉÛ›È\Ü]IË	Û›È\Ü]\É×Kš[˜ÛY\ÊÝš[™ÊÝ[K‘\Ü]WÔÝ]\××ØÈ	ÉÊKÓÝÙ\Ø\ÙJ
+JJBˆ›X\
+
+Ý[JHOˆÂˆÛÛœÝÝ[R\Ñ[]™\žHHH\Ý[K‘[]™\žWÑ]W×ØÎÂˆÛÛœÝ[™R][\ÈH[™R][\ÐžTÝ[VÜÝ[K’YH×NÂˆÛÛœÝ^˜PÛÜÝÈH^˜PÛÜÝÐžTÝ[VÜÝ[K’YH×NÂˆÛÛœÝÝ\Y\’[›ÚXÙ\ÈHÝ\Y\’[›ÚXÙ\ÐžTÝ[VÜÝ[K’YH×NÂˆÛÛœÝÝ\Y\“˜[Y\ÈH™]ÈÙ]
+
+NÂˆÛÛœÝ›ÙXÝ˜[Y\ÈH™]ÈÙ]
+
+NÂˆÛÛœÝÝ\Y\”›ÙXÝZ\œÈH×NÂˆÛÛœÝÝ\Y\”›ÙXÝZ\’Ù^\ÈH™]ÈÙ]
+
+NÂˆÛÛœÝÝ\Y\’[›ÚXÙT›ÙXÝ›ÝÜÐžRYH™]ÈX\
+
+NÂˆÛÛœÝ[š[›ÚXÙY^˜PÛÜÝ›ÙXÝ›ÝÜÈH×NÂˆÛÛœÝÝ\Y\“[™P^PžPXØÛÝ[H™]ÈX\
+
+NÂˆÛÛœÝ[š[›ÚXÙYÝ\Y\“[™P^PžPXØÛÝ[H™]ÈX\
+
+NÂˆ][™TÙ[Ý[HÂˆ]Ý\Y\“[™P^HHÂˆ][š[›ÚXÙYÝ\Y\“[™P^HHÂˆ]^˜TÙ[Ý[HÂˆ]^˜PÛÜÝ^HHÂˆ][›ÚXÙY^˜PÛÜÝ^HHÂˆ]Ù[Û›Q^˜TÙ[HÂˆ]\ÔÝ\Y\’[›ÚXÙHH˜[ÙNÂ‚ˆ›Üˆ
+ÛÛœÝ][HÙˆ[™R][\ÊHÂˆYˆ
+][KØ[˜Ù[Y×ØÊHÛÛ[YNÂˆÛÛœÝÜšYÚ[˜[Ý\Y\’[˜XÝ]™HH][VÛÜšYÚ[˜[Ý\Y\”™[][ÛœÚ\OË’[˜XÝ]™WÔÝ\Ü[™Y×ØÈOOHYNÂˆÛÛœÝÜšYÚ[˜[Ý\Y\XØÛÝ[YHÜšYÚ[˜[Ý\Y\’[˜XÝ]™HÈ[ˆ][K“ÜšYÚ[˜[ÔÝ\Y\—×ØÈ[ÂˆÛÛœÝÜšYÚ[˜[Ý\Y\XØÛÝ[Ù^HH\Ü]TØ[\Ù›Ü˜ÙRYÙ^JÜšYÚ[˜[Ý\Y\XØÛÝ[Y
+NÂˆÛÛœÝÜšYÚ[˜[Ý\Y\“˜[YHHÜšYÚ[˜[Ý\Y\’[˜XÝ]™HÈ[ˆ][VÛÜšYÚ[˜[Ý\Y\”™[][ÛœÚ\OË“˜[YH][K”Ý\Y\—Ó˜[YW×ØÈÜšYÚ[˜[Ý\Y\XØÛÝ[Y[ÂˆYˆ
+ÜšYÚ[˜[Ý\Y\“˜[YJHÝ\Y\“˜[Y\Ë˜Y
+ÜšYÚ[˜[Ý\Y\“˜[YJNÂˆÛÛœÝ›ÙXÝ˜[YHH][VÉÔ›ÙXÝ×Ü‰×OË“˜[YNÂˆYˆ
+›ÙXÝ˜[YJH›ÙXÝ˜[Y\Ë˜Y
+›ÙXÝ˜[YJNÂˆÛÛœÝ]X[]SX™[H[™R][T]X[]SX™[
+][KÝ[R\Ñ[]™\žJNÂˆYˆ
+][K”Ý\Y\—Ò[›ÚXÙW×ØÊHÂˆÛÛœÝ[›ÚXÙT›ÝÜÈHÝ\Y\’[›ÚXÙT›ÙXÝ›ÝÜÐžRY™Ù]
+][K”Ý\Y\—Ò[›ÚXÙW×ØÊH×NÂˆ[›ÚXÙT›ÝÜËœ\Ú
+Âˆ›ÙXÝ˜[YNˆ›ÙXÝ˜[YH][K“˜[YH	Ô›ÙXÝ	Ëˆ]X[]SX™[ˆÝ\Y\“˜[YNˆÜšYÚ[˜[Ý\Y\“˜[YKˆÝ\Y\XØÛÝ[YˆÜšYÚ[˜[Ý\Y\XØÛÝ[Yˆ^[Y[\›Nˆ][K”^[Y[Õ\›W×ØÈ[ˆJNÂˆÝ\Y\’[›ÚXÙT›ÙXÝ›ÝÜÐžRYœÙ]
+][K”Ý\Y\—Ò[›ÚXÙW×ØË[›ÚXÙT›ÝÜÊNÂˆBˆYˆ
+ÜšYÚ[˜[Ý\Y\“˜[YH›ÙXÝ˜[YJHÂˆÛÛœÝZ\’Ù^HH	ÛÜšYÚ[˜[Ý\Y\XØÛÝ[Ù^HÜšYÚ[˜[Ý\Y\“˜[YH	ÉßWL	Ü›ÙXÝ˜[YH	ÉßXÂˆYˆ
+\Ý\Y\”›ÙXÝZ\’Ù^\Ëš\ÊZ\’Ù^JJHÂˆÝ\Y\”›ÙXÝZ\’Ù^\Ë˜Y
+Z\’Ù^JNÂˆÝ\Y\”›ÙXÝZ\œËœ\Ú
+ÂˆÝ\Y\“˜[YNˆÜšYÚ[˜[Ý\Y\“˜[YKˆÝ\Y\XØÛÝ[YˆÜšYÚ[˜[Ý\Y\XØÛÝ[Yˆ›ÙXÝ˜[YNˆ›ÙXÝ˜[YH[ˆJNÂˆBˆBˆ[™TÙ[Ý[
+ÏH[™TÙ[[[Ý[
+][KÝ[R\Ñ[]™\žJNÂˆÛÛœÝ^HH[™P^P[[Ý[
+][KÝ[R\Ñ[]™\žJNÂˆÝ\Y\“[™P^H
+ÏH^NÂˆYˆ
+ÜšYÚ[˜[Ý\Y\XØÛÝ[Ù^JHÂˆÛÛœÝÝ\Y\“[™HHÝ\Y\“[™P^PžPXØÛÝ[™Ù]
+ÜšYÚ[˜[Ý\Y\XØÛÝ[Ù^JHÂˆXØÛÝ[YˆÜšYÚ[˜[Ý\Y\XØÛÝ[YˆÝ\Y\“˜[YNˆÜšYÚ[˜[Ý\Y\“˜[YKˆ[[Ý[ˆˆNÂˆÝ\Y\“[™K˜[[Ý[
+ÏH^NÂˆÝ\Y\“[™P^PžPXØÛÝ[œÙ]
+ÜšYÚ[˜[Ý\Y\XØÛÝ[Ù^KÝ\Y\“[™JNÂˆBˆYˆ
+][K”Ý\Y\—Ò[›ÚXÙW×ØÊHÂˆ\ÔÝ\Y\’[›ÚXÙHHYNÂˆH[ÙHÂˆ[š[›ÚXÙYÝ\Y\“[™P^H
+ÏH^NÂˆYˆ
+ÜšYÚ[˜[Ý\Y\XØÛÝ[Ù^JHÂˆÛÛœÝÝ\Y\“[™HH[š[›ÚXÙYÝ\Y\“[™P^PžPXØÛÝ[™Ù]
+ÜšYÚ[˜[Ý\Y\XØÛÝ[Ù^JHÂˆXØÛÝ[YˆÜšYÚ[˜[Ý\Y\XØÛÝ[YˆÝ\Y\“˜[YNˆÜšYÚ[˜[Ý\Y\“˜[YKˆ[[Ý[ˆˆNÂˆÝ\Y\“[™K˜[[Ý[
+ÏH^NÂˆ[š[›ÚXÙYÝ\Y\“[™P^PžPXØÛÝ[œÙ]
+ÜšYÚ[˜[Ý\Y\XØÛÝ[Ù^KÝ\Y\“[™JNÂˆBˆBˆB‚ˆ›Üˆ
+ÛÛœÝ][HÙˆ^˜PÛÜÝÊHÂˆYˆ
+][KØ[˜Ù[Y×ØÊHÛÛ[YNÂˆÛÛœÝ›ÙXÝ˜[YHH\Ü]T]Y]YQ^˜PÛÜÝ›ÙXÝ˜[YJ][JNÂˆÛÛœÝÝ\Y\’[˜XÝ]™HH^˜PÛÜÝÝ\Y\”™[][ÛœÚ\	‰ˆ][VÙ^˜PÛÜÝÝ\Y\”™[][ÛœÚ\OË’[˜XÝ]™WÔÝ\Ü[™Y×ØÈOOHYNÂˆÛÛœÝÝ\Y\XØÛÝ[YHÝ\Y\’[˜XÝ]™HÈ[ˆ^˜PÛÜÝÝ\Y\‘šY[È][VÙ^˜PÛÜÝÝ\Y\‘šY[Hˆ[ÂˆÛÛœÝÝ\Y\XØÛÝ[Ù^HH\Ü]TØ[\Ù›Ü˜ÙRYÙ^JÝ\Y\XØÛÝ[Y
+NÂˆÛÛœÝÝ\Y\“˜[YHHÝ\Y\’[˜XÝ]™HÈ[ˆ
+^˜PÛÜÝÝ\Y\”™[][ÛœÚ\È][VÙ^˜PÛÜÝÝ\Y\”™[][ÛœÚ\OË“˜[YHˆ[
+H][K”Ý\Y\—Ó˜[YW×ØÈÝ\Y\XØÛÝ[Y[ÂˆYˆ
+›ÙXÝ˜[YJH›ÙXÝ˜[Y\Ë˜Y
+›ÙXÝ˜[YJNÂˆYˆ
+Ý\Y\“˜[YH›ÙXÝ˜[YJHÂˆÛÛœÝZ\’Ù^HH	ÜÝ\Y\XØÛÝ[Ù^HÝ\Y\“˜[YH	ÉßWL	Ü›ÙXÝ˜[YH	ÉßXÂˆYˆ
+\Ý\Y\”›ÙXÝZ\’Ù^\Ëš\ÊZ\’Ù^JJHÂˆÝ\Y\”›ÙXÝZ\’Ù^\Ë˜Y
+Z\’Ù^JNÂˆÝ\Y\”›ÙXÝZ\œËœ\Ú
+ÂˆÝ\Y\“˜[YKˆÝ\Y\XØÛÝ[Yˆ›ÙXÝ˜[YKˆJNÂˆBˆBˆYˆ
+›ÙXÝ˜[YJHÂˆÛÛœÝ›ÙXÝ›ÝÈHÂˆ›ÙXÝ˜[YKˆ]X[]SX™[ˆ[ˆÝ\Y\“˜[YKˆÝ\Y\XØÛÝ[Yˆ^[Y[\›Nˆ][K”^[Y[Õ\›W×ØÈ[ˆÛÝ\˜ÙU\Nˆ	Ù^˜WØÛÜÝ	ËˆÛÝ\˜ÙT™XÛÜ™Yˆ][K’YˆNÂˆYˆ
+][K”Ý\Y\—Ò[›ÚXÙW×ØÊHÂˆÛÛœÝ[›ÚXÙT›ÝÜÈHÝ\Y\’[›ÚXÙT›ÙXÝ›ÝÜÐžRY™Ù]
+][K”Ý\Y\—Ò[›ÚXÙW×ØÊH×NÂˆ[›ÚXÙT›ÝÜËœ\Ú
+›ÙXÝ›ÝÊNÂˆÝ\Y\’[›ÚXÙT›ÙXÝ›ÝÜÐžRYœÙ]
+][K”Ý\Y\—Ò[›ÚXÙW×ØË[›ÚXÙT›ÝÜÊNÂˆH[ÙHÂˆ[š[›ÚXÙY^˜PÛÜÝ›ÙXÝ›ÝÜËœ\Ú
+ÂˆÝ\Y\’[›ÚXÙRYˆ[ˆ[›ÚXÙS˜[YNˆ[ˆ‹‹œ›ÙXÝ›ÝËˆYQ]Nˆ[ˆ›ÙXÝ]X[]SX™[ˆÜ›ÙXÝ›ÝËœ›ÙXÝ˜[YK›ÙXÝ›ÝËœ]X[]SX™[K™š[\Š›ÛÛX[ŠKš›Ú[Š	ÈH	ÊKˆJNÂˆBˆBˆÛÛœÝ^HH^˜P^P[[Ý[
+][KÝ[R\Ñ[]™\žJNÂˆÛÛœÝÙ[H^˜TÙ[[[Ý[
+][KÝ[R\Ñ[]™\žJNÂˆ^˜TÙ[Ý[
+ÏHÙ[ÂˆYˆ
+][K”Ý\Y\—Ò[›ÚXÙW×ØÊHÂˆ[›ÚXÙY^˜PÛÜÝ^H
+ÏH^NÂˆH[ÙHÂˆ^˜PÛÜÝ^H
+ÏH^NÂˆYˆ
+^HOOH	‰ˆÙ[ˆ
+HÙ[Û›Q^˜TÙ[
+ÏHÙ[ÂˆBˆB‚ˆÛÛœÝÝ\Y\˜\ÙHH[X™\ŠÝ[K•Ý[Ò[›ÚXÙYÐ[[Ý[Ñœ›ÛWÔÝ\Y\œ××ØÈ
+H
+È
+\ÔÝ\Y\’[›ÚXÙHÈ[š[›ÚXÙYÝ\Y\“[™P^HˆÝ\Y\“[™P^JNÂˆÛÛœÝ˜]ÔÝ\Y\ˆHÝ\Y\˜\ÙH
+È^˜PÛÜÝ^NÂˆÛÛœÝ[›X]ÚYÙ[Û›Q^˜HH\ÔÝ\Y\’[›ÚXÙHÈX]›X^
+Ù[Û›Q^˜TÙ[H[›ÚXÙY^˜PÛÜÝ^JHˆÂˆÛÛœÝ[ZÔÝ\Y\ÛÜÝHÝ[K”SR×ÔÕSWÓ[™WÒ][WÕÝ[ÐÛÜÝ×ØÈOH[Ý[K”SR×ÐÛÜÝ×ÕÝ[ÐÛÜÝ×ØÈOH[È
+Ý[K”SR×ÔÕSWÓ[™WÒ][WÕÝ[ÐÛÜÝ×ØÈ
+H
+È
+Ý[K”SR×ÐÛÜÝ×ÕÝ[ÐÛÜÝ×ØÈ
+Hˆ[ÂˆÛÛœÝÝ\Y\“Ý™\œÝ][Y[H[ZÔÝ\Y\ÛÜÝOH[Èˆ˜]ÔÝ\Y\ˆH[ZÔÝ\Y\ÛÜÝÂˆÛÛœÝØ[Ý[]YÝ\Y\’[›ÚXÙHH[›X]ÚYÙ[Û›Q^˜Hˆ	‰ˆÝ\Y\“Ý™\œÝ][Y[ˆ	‰ˆÝ\Y\“Ý™\œÝ][Y[H[›X]ÚYÙ[Û›Q^˜H
+ÈŒHÈ[ZÔÝ\Y\ÛÜÝˆ˜]ÔÝ\Y\ŽÂˆÛÛœÝØ[Ý[]Y^Y\’[›ÚXÙHH[™TÙ[Ý[
+È^˜TÙ[Ý[ÂˆÛÛœÝ^Y\’[›ÚXÙT™\ÛÛ][ÛˆH™\ÛÛ™P^Y\‘š[˜[˜ÚX[[[Ý[
+ÈØ[\Ù›Ü˜ÙP[[Ý[ˆÝ[K•Ý[Ò[›ÚXÙWÐ[[Ý[×ØËØ[Ý[]Y[[Ý[ˆØ[Ý[]Y^Y\’[›ÚXÙKš[˜[[›ÚXÙR\ÜÝYYˆš[˜[^Y\’[›ÚXÙTÝ[RYËš\ÊÝ[K’Y
+HJNÂˆÛÛœÝ^Y\’[›ÚXÙP[[Ý[H^Y\’[›ÚXÙT™\ÛÛ][Û‹˜[[Ý[ÂˆÛÛœÝÝ[P˜\ÙT›H^Y\’[›ÚXÙP[[Ý[OH[È[ˆ[X™\Š^Y\’[›ÚXÙP[[Ý[
+HH[X™\ŠØ[Ý[]YÝ\Y\’[›ÚXÙH
+NÂˆÛÛœÝÝ\Y\’[›ÚXÙT^XX›HHÝ\Y\’[›ÚXÙT^XX›PžTÝ[VÜÝ[K’YNÂˆÛÛœÝ^XX›P˜[[˜ÙHHÝ[K”^XX›WÐ˜[[˜ÙW×ØÈÏÈ
+Ý\Y\’[›ÚXÙT^XX›HOH[ÈÝ\Y\’[›ÚXÙT^XX›Hˆ[
+NÂˆÛÛœÝÝ\Y\‘š[˜[˜ÙPžPXØÛÝ[H™]ÈX\
+
+NÂˆÛÛœÝÝ\Y\’[›ÚXÙQYT›ÝÜÈH×NÂˆÛÛœÝÝ\Y\’[›ÚXÙQ^ÜÝ\™T›ÝÜÈH×NÂˆÛÛœÝYÝ\Y\‘š[˜[˜ÙPžPXØÛÝ[H
+XØÛÝ[YÝ\Y\“˜[YK[›ÚXÙP[[Ý[HÝ\Y\”^XX›P˜[[˜ÙHH
+HOˆÂˆÛÛœÝXØÛÝ[Ù^HH\Ü]TØ[\Ù›Ü˜ÙRYÙ^JXØÛÝ[Y
+NÂˆYˆ
+XXØÛÝ[Ù^JH™]\›ŽÂˆÛÛœÝÝ\œ™[HÝ\Y\‘š[˜[˜ÙPžPXØÛÝ[™Ù]
+XØÛÝ[Ù^JHÂˆXØÛÝ[YˆXØÛÝ[Ù^KˆÝ\Y\“˜[YNˆÝ\Y\“˜[YHXØÛÝ[YˆÝ\Y\’[›ÚXÙP[[Ý[ˆˆ^XX›P˜[[˜ÙNˆˆNÂˆÝ\œ™[œÝ\Y\’[›ÚXÙP[[Ý[
+ÏH[X™\Š[›ÚXÙP[[Ý[
+NÂˆÝ\œ™[œ^XX›P˜[[˜ÙH
+ÏH[X™\ŠÝ\Y\”^XX›P˜[[˜ÙH
+NÂˆÝ\Y\‘š[˜[˜ÙPžPXØÛÝ[œÙ]
+XØÛÝ[Ù^KÝ\œ™[
+NÂˆNÂˆ›Üˆ
+ÛÛœÝ[›ÚXÙHÙˆÝ\Y\’[›ÚXÙ\ÊHÂˆÛÛœÝÝ\Y\XØÛÝ[šY[HÝ\Y\’[›ÚXÙTÝ\Y\‘šY[Ë™š[™
+
+šY[
+HOˆ[›ÚXÙVÙšY[JNÂˆÛÛœÝÝ\Y\XØÛÝ[™[][ÛœÚ\HÝ\Y\XØÛÝ[šY[ÈÝ\Y\’[›ÚXÙQšY[žS˜[YVÜÝ\Y\XØÛÝ[šY[OËœ™[][ÛœÚ\˜[YHˆ[ÂˆÛÛœÝÝ\Y\XØÛÝ[[˜XÝ]™HHÝ\Y\XØÛÝ[™[][ÛœÚ\	‰ˆ[›ÚXÙVÜÝ\Y\XØÛÝ[™[][ÛœÚ\OË’[˜XÝ]™WÔÝ\Ü[™Y×ØÈOOHYNÂˆÛÛœÝÝ\Y\XØÛÝ[YHÝ\Y\XØÛÝ[[˜XÝ]™HÈ[ˆÝ\Y\XØÛÝ[šY[È[›ÚXÙVÜÝ\Y\XØÛÝ[šY[Hˆ[ÂˆÛÛœÝÝ\Y\“˜[YHHÝ\Y\XØÛÝ[[˜XÝ]™HÈ[ˆ
+Ý\Y\XØÛÝ[™[][ÛœÚ\È[›ÚXÙVÜÝ\Y\XØÛÝ[™[][ÛœÚ\OË“˜[YHˆ[
+H[›ÚXÙVÉÔÝ\Y\—×Ü‰×OË“˜[YH[›ÚXÙK”Ý\Y\—Ó˜[YW×ØÈ[›ÚXÙVÉÑ^XÝYÔÝ\Y\—×Ü‰×OË“˜[YH[›ÚXÙVÉÔÝXœÝ]]WÔÝ\Y\—×Ü‰×OË“˜[YHÝ\Y\’[›ÚXÙTÝ\Y\“˜[YT™[][ÛœÚ\Ë›X\
+
+™[][ÛœÚ\
+HOˆ[›ÚXÙVÜ™[][ÛœÚ\OË“˜[YJK™š[™
+›ÛÛX[ŠH[ÂˆÛÛœÝ[›ÚXÙP[[Ý[šY[HÝ\Y\’[›ÚXÙP[[Ý[šY[Ë™š[™
+
+šY[
+HOˆ[›ÚXÙVÙšY[HOH[
+NÂˆÛÛœÝ[›ÚXÙP[[Ý[H[›ÚXÙP[[Ý[šY[È[X™\Š[›ÚXÙVÚ[›ÚXÙP[[Ý[šY[H
+HˆÂˆÛÛœÝÝ\Y\”^XX›P˜[[˜ÙU˜[YHHÝ\Y\’[›ÚXÙT^XX›QšY[È[›ÚXÙVÜÝ\Y\’[›ÚXÙT^XX›QšY[Hˆ[ÂˆÛÛœÝÝ\Y\”^XX›P˜[[˜ÙP]˜Z[X›HHÝ\Y\”^XX›P˜[[˜ÙU˜[YHOH[	‰ˆÝ\Y\”^XX›P˜[[˜ÙU˜[YHOOH	ÉÈ	‰ˆ[X™\‹š\Ñš[š]J[X™\ŠÝ\Y\”^XX›P˜[[˜ÙU˜[YJJNÂˆÛÛœÝÝ\Y\”^XX›P˜[[˜ÙHHÝ\Y\”^XX›P˜[[˜ÙP]˜Z[X›HÈ[X™\ŠÝ\Y\”^XX›P˜[[˜ÙU˜[YJHˆÂˆYÝ\Y\‘š[˜[˜ÙPžPXØÛÝ[
+Ý\Y\XØÛÝ[YÝ\Y\“˜[YK[›ÚXÙP[[Ý[Ý\Y\”^XX›P˜[[˜ÙJNÂˆÛÛœÝYQ]QšY[HÝ\Y\’[›ÚXÙQYQ]QšY[Ë™š[™
+
+šY[
+HOˆ[›ÚXÙVÙšY[JNÂˆÛÛœÝYQ]HHYQ]QšY[È[›ÚXÙVÙYQ]QšY[Hˆ[ÂˆÛÛœÝ[›ÚXÙQ]QšY[HÝ\Y\’[›ÚXÙQ]QšY[Ë™š[™
+
+šY[
+HOˆ[›ÚXÙVÙšY[JNÂˆÛÛœÝ[›ÚXÙQ]HH[›ÚXÙQ]QšY[È[›ÚXÙVÚ[›ÚXÙQ]QšY[Hˆ[›ÚXÙKÜ™X]Y]H[ÂˆÛÛœÝ[›ÚXÙTÝ]\ÈHÝ\Y\’[›ÚXÙTÝ]\ÑšY[Ë›X\
+
+šY[
+HOˆ[›ÚXÙVÙšY[JK™š[™
+›ÛÛX[ŠH[ÂˆÛÛœÝ^[Y[›ÝÜÈHÝ\Y\”^[Y[ÐžR[›ÚXÙVÚ[›ÚXÙK’YH×NÂˆÛÛœÝÜÚ]]™T^[Y[ÈH^[Y[›ÝÜË™š[\Š
+^[Y[
+HOˆ[X™\Š^[Y[˜[[Ý[
+Hˆ
+Kœ™YXÙJ
+Ý[K^[Y[
+HOˆÝ[H
+È[X™\Š^[Y[˜[[Ý[
+K
+NÂˆÛÛœÝÝ\Y\”™Y[™ÈHX]˜XœÊ^[Y[›ÝÜË™š[\Š
+^[Y[
+HOˆ[X™\Š^[Y[˜[[Ý[
+H
+Kœ™YXÙJ
+Ý[K^[Y[
+HOˆÝ[H
+È[X™\Š^[Y[˜[[Ý[
+K
+JNÂˆÛÛœÝ^ÜÝ\™HH›Ü›X[^™TÝ\Y\’[›ÚXÙQ^ÜÝ\™JÂˆÝ\Y\’[›ÚXÙRYˆ[›ÚXÙK’Yˆ[›ÚXÙS˜[YNˆ[›ÚXÙK“˜[YKˆÛÝ\˜ÙTÝ[RYˆÝ[K’YˆÝ\Y\XØÛÝ[YˆÝ\Y\“˜[YKˆÝ\œ™[˜ÞR\ÛÐÛÙNˆ[›ÚXÙKÝ\œ™[˜ÞR\ÛÐÛÙH	ÕTÑ	ËˆYQ]Kˆ[›ÚXÙQ]KˆÜ™X]Y]Nˆ[›ÚXÙKÜ™X]Y]H[ˆ[›ÚXÙP[[Ý[ˆ^XX›P˜[[˜ÙNˆÝ\Y\”^XX›P˜[[˜ÙKˆ^XX›P˜[[˜ÙP]˜Z[X›NˆÝ\Y\”^XX›P˜[[˜ÙP]˜Z[X›KˆÝ]\Îˆ[›ÚXÙTÝ]\Ëˆ^[Y[Îˆ^[Y[›ÝÜËˆJNÂˆÛÛœÝ™]^[Y[]Y]HÜÚ]]™T^[Y[ÈHÝ\Y\”™Y[™ÎÂˆÛÛœÝ^XÝYZYHX]›X^
+^ÜÝ\™Kš[›ÚXÙP[[Ý[H^ÜÝ\™Kœ^XX›P˜[[˜ÙJNÂˆÛÛœÝ^ÜÝ\™UØ\›š[™ÜÈHË‹‹™^ÜÝ\™KØ\›š[™Ü×NÂˆYˆ
+Y\Ü]TØ[\Ù›Ü˜ÙRYÙ^JÝ\Y\XØÛÝ[Y
+JHÂˆ^ÜÝ\™UØ\›š[™ÜËœ\Ú
+	ÔÝ\Y\ˆ[›ÚXÙH\È›È˜[YÝ\Y\ˆXØÛÝ[ÛÚÝ\‰ÊNÂˆBˆYˆ
+^[Y[›ÝÜË›[™Ý	‰ˆX]˜XœÊ^XÝYZYH™]^[Y[]Y]
+HˆŒJHÂˆ^ÜÝ\™UØ\›š[™ÜËœ\Ú
+	Ô^[Y[™XÛÜ™ÈÈ›Ý™XÛÛ˜Ú[HÈHÝ\œ™[^XX›H˜[[˜ÙNÈš[˜[˜ÙHÛÛ™š\›X][Ûˆ\È™\]Z\™Y‰ÊNÂˆBˆÝ\Y\’[›ÚXÙQ^ÜÝ\™T›ÝÜËœ\Ú
+Âˆ‹‹™^ÜÝ\™Kˆ^[Y[Îˆ^[Y[›ÝÜËˆÜÚ]]™T^[Y[ËˆÝ\Y\”™Y[™Ëˆ™]^[Y[]Y]ˆÝ]\Îˆ[›ÚXÙTÝ]\ËˆØ\›š[™ÜÎˆË‹‹›™]ÈÙ]
+^ÜÝ\™UØ\›š[™ÜÊWKˆJNÂˆÛÛœÝ›ÙXÝ›ÝÜÈHÝ\Y\’[›ÚXÙT›ÙXÝ›ÝÜÐžRY™Ù]
+[›ÚXÙK’Y
+H×NÂˆYˆ
+›ÙXÝ›ÝÜË›[™Ý
+HÂˆ›Üˆ
+ÛÛœÝ›ÙXÝ›ÝÈÙˆ›ÙXÝ›ÝÜÊHÂˆÝ\Y\’[›ÚXÙQYT›ÝÜËœ\Ú
+ÂˆÝ\Y\’[›ÚXÙRYˆ[›ÚXÙK’Y[ˆ[›ÚXÙS˜[YNˆ[›ÚXÙK“˜[YH[ˆÝ\Y\“˜[YNˆ›ÙXÝ›ÝËœÝ\Y\“˜[YHÝ\Y\“˜[YKˆÝ\Y\XØÛÝ[Yˆ›ÙXÝ›ÝËœÝ\Y\XØÛÝ[YÝ\Y\XØÛÝ[Yˆ^[Y[\›Nˆ›ÙXÝ›ÝËœ^[Y[\›H[ˆYQ]Kˆ›ÙXÝ˜[YNˆ›ÙXÝ›ÝËœ›ÙXÝ˜[YKˆ]X[]SX™[ˆ›ÙXÝ›ÝËœ]X[]SX™[ˆ›ÙXÝ]X[]SX™[ˆÜ›ÙXÝ›ÝËœ›ÙXÝ˜[YK›ÙXÝ›ÝËœ]X[]SX™[K™š[\Š›ÛÛX[ŠKš›Ú[Š	ÈH	ÊKˆJNÂˆBˆH[ÙHÂˆÝ\Y\’[›ÚXÙQYT›ÝÜËœ\Ú
+ÂˆÝ\Y\’[›ÚXÙRYˆ[›ÚXÙK’Y[ˆ[›ÚXÙS˜[YNˆ[›ÚXÙK“˜[YH[ˆÝ\Y\“˜[YKˆÝ\Y\XØÛÝ[Yˆ^[Y[\›Nˆ[ˆYQ]Kˆ›ÙXÝ˜[YNˆ[ˆ]X[]SX™[ˆ[ˆ›ÙXÝ]X[]SX™[ˆ[ˆJNÂˆBˆBˆÝ\Y\’[›ÚXÙQYT›ÝÜËœ\Ú
+‹‹[š[›ÚXÙY^˜PÛÜÝ›ÙXÝ›ÝÜÊNÂˆÛÛœÝÝ\Y\”^[Y[YQ]\ÐžPXØÛÝ[H™]ÈX\
+
+NÂˆ›Üˆ
+ÛÛœÝYT›ÝÈÙˆÝ\Y\’[›ÚXÙQYT›ÝÜÊHÂˆÛÛœÝXØÛÝ[Ù^HH\Ü]TØ[\Ù›Ü˜ÙRYÙ^JYT›ÝËœÝ\Y\XØÛÝ[Y
+NÂˆYˆ
+XXØÛÝ[Ù^HYYT›ÝË™YQ]JHÛÛ[YNÂˆÛÛœÝYQ]\ÈHÝ\Y\”^[Y[YQ]\ÐžPXØÛÝ[™Ù]
+XØÛÝ[Ù^JH™]ÈÙ]
+
+NÂˆYQ]\Ë˜Y
+YT›ÝË™YQ]JNÂˆÝ\Y\”^[Y[YQ]\ÐžPXØÛÝ[œÙ]
+XØÛÝ[Ù^KYQ]\ÊNÂˆBˆÛÛœÝ^[Y[YQ]\Ñ›ÜXØÛÝ[H
+XØÛÝ[Ù^JHOˆË‹‹ŠÝ\Y\”^[Y[YQ]\ÐžPXØÛÝ[™Ù]
+XØÛÝ[Ù^JH×JWKœÛÜ
+
+NÂˆÛÛœÝÝ\[Y[[[™P^PžPXØÛÝ[H\ÔÝ\Y\’[›ÚXÙHÝ\Y\’[›ÚXÙ\Ë›[™ÝÈ[š[›ÚXÙYÝ\Y\“[™P^PžPXØÛÝ[ˆÝ\Y\“[™P^PžPXØÛÝ[Âˆ›Üˆ
+ÛÛœÝÝ\Y\“[™HÙˆÝ\[Y[[[™P^PžPXØÛÝ[˜[Y\Ê
+JHÂˆYÝ\Y\‘š[˜[˜ÙPžPXØÛÝ[
+Ý\Y\“[™K˜XØÛÝ[YÝ\Y\“[™KœÝ\Y\“˜[YKÝ\Y\“[™K˜[[Ý[
+NÂˆBˆÛÛœÝ\Ü]T\T™YÚ\ÝžHHZ[\Ü]T\T™YÚ\ÝžJÂˆÝ[Kˆ[™R][\Ëˆ^˜PÛÜÝËˆÜšYÚ[˜[Ý\Y\”™[][ÛœÚ\ˆ^˜PÛÜÝÝ\Y\‘šY[ˆ^˜PÛÜÝÝ\Y\”™[][ÛœÚ\ˆØÚ[XR\ÜÝY\ÎˆÛÜšYÚ[˜[Ý\Y\“ÛÚÝ\š\ÜÝYK^˜PÛÜÝÝ\Y\“ÛÚÝ\š\ÜÝYWKˆJNÂˆÛÛœÝÝ\Y\Ø[™Y]T›ÝÜÈH\Ü]T\T™YÚ\ÝžKœÝ\Y\œË›X\
+
+\JHOˆÂˆÛÛœÝš[˜[˜ÙHHÝ\Y\‘š[˜[˜ÙPžPXØÛÝ[™Ù]
+\K˜XØÛÝ[Ù^JNÂˆÛÛœÝ^[Y[YQ]\ÈH^[Y[YQ]\Ñ›ÜXØÛÝ[
+\K˜XØÛÝ[Ù^JNÂˆÛÛœÝ[›ÚXÙ\ÈHÝ\Y\’[›ÚXÙQ^ÜÝ\™T›ÝÜË™š[\Š
+[›ÚXÙJHOˆ\Ü]TØ[\Ù›Ü˜ÙRYÙ^J[›ÚXÙKœÝ\Y\XØÛÝ[Y
+HOOH\K˜XØÛÝ[Ù^JNÂˆ™]\›ˆÂˆ‹‹œ\KˆÝ\Y\“˜[YNˆ\K›˜[YKˆÝ]\Îˆ[ˆ\ØÜš\[ÛŽˆ[ˆÝ\Y\’[›ÚXÙP[[Ý[ˆš[˜[˜ÙOËœÝ\Y\’[›ÚXÙP[[Ý[ÏÈ[ˆ^[Y[YQ]Nˆ^[Y[YQ]\ÖÌH[ˆ^[Y[YQ]\Ëˆ^XX›P˜[[˜ÙNˆš[˜[˜ÙOËœ^XX›P˜[[˜ÙHÏÈ[ˆ[›ÚXÙ\ËˆNÂˆJNÂˆÛÛœÝ\Ü]YÝ\Y\’Ù^\ÈH™]ÈÙ]
+\Ü]T\T™YÚ\ÝžKœÝ\Y\œË›X\
+
+\JHOˆ\K˜XØÛÝ[Ù^JJNÂˆÛÛœÝÝ\Y\‘š[˜[˜ÙSÛ›T›ÝÜÈHË‹‹œÝ\Y\‘š[˜[˜ÙPžPXØÛÝ[˜[Y\Ê
+WBˆ™š[\Š
+š[˜[˜ÙJHOˆY\Ü]YÝ\Y\’Ù^\Ëš\Êš[˜[˜ÙK˜XØÛÝ[Ù^JJBˆ›X\
+
+š[˜[˜ÙJHOˆÂˆÛÛœÝ^[Y[YQ]\ÈH^[Y[YQ]\Ñ›ÜXØÛÝ[
+š[˜[˜ÙK˜XØÛÝ[Ù^JNÂˆ™]\›ˆÂˆXØÛÝ[Yˆš[˜[˜ÙK˜XØÛÝ[YˆXØÛÝ[Ù^Nˆš[˜[˜ÙK˜XØÛÝ[Ù^KˆÝ\Y\“˜[YNˆš[˜[˜ÙKœÝ\Y\“˜[YKˆÝ]\Îˆ[ˆÝ\Y\’[›ÚXÙP[[Ý[ˆš[˜[˜ÙKœÝ\Y\’[›ÚXÙP[[Ý[ˆ^[Y[YQ]Nˆ^[Y[YQ]\ÖÌH[ˆ^[Y[YQ]\Ëˆ^XX›P˜[[˜ÙNˆš[˜[˜ÙKœ^XX›P˜[[˜ÙKˆ[›ÚXÙ\ÎˆÝ\Y\’[›ÚXÙQ^ÜÝ\™T›ÝÜË™š[\Š
+[›ÚXÙJHOˆ\Ü]TØ[\Ù›Ü˜ÙRYÙ^J[›ÚXÙKœÝ\Y\XØÛÝ[Y
+HOOHš[˜[˜ÙK˜XØÛÝ[Ù^JKˆNÂˆJNÂˆÛÛœÝÝ\Y\‘š[˜[˜ÙT›ÝÜÐ[HË‹‹œÝ\Y\Ø[™Y]T›ÝÜË‹‹œÝ\Y\‘š[˜[˜ÙSÛ›T›ÝÜ×NÂˆÛÛœÝÝ\Y\‘š[˜[˜ÙT›ÝÜÈHÝ\Y\Ø[™Y]T›ÝÜË›[™ÝÈÝ\Y\Ø[™Y]T›ÝÜÈˆÝ\Y\‘š[˜[˜ÙSÛ›T›ÝÜÎÂˆÛÛœÝ^Y\‘š[˜[˜ÙT›ÝÈHÂˆ^Y\“˜[YNˆ\Ü]T\T™YÚ\ÝžK˜^Y\Ë›˜[YH
+Ý[KXØÛÝ[×ÜË’[˜XÝ]™WÔÝ\Ü[™Y×ØÈOOHYHÈ	ÐXØÛÝ[[˜]˜Z[X›IÈˆÝ[K^Y\—Ó˜[YW×ØÈÝ[VÉÐXØÛÝ[×Ü‰×OË“˜[YHÝ[K^Y\—×ØÈ[
+Kˆ^Y\’[›ÚXÙP[[Ý[ˆ^Y\’[›ÚXÙP[[Ý[ÏÈ[ˆ^Y\’[›ÚXÙP[[Ý[ÛÝ\˜ÙNˆ^Y\’[›ÚXÙT™\ÛÛ][Û‹œÛÝ\˜ÙKˆ^[Y[YQ]NˆÝ[K’[›ÚXÙWÑYWÑ]W×ØÈÝ[K‘YWÑ]W×ØÈÝ[K^Y\—Ô^WÕ\›WÑ]W×ØÈ[ˆ™XÙZ]˜X›P˜[[˜ÙNˆÝ[K”™XÙZ]˜X›WÐ˜[[˜ÙW×ØÈÏÈ[ˆ\Ü]T›ÝÜÎˆ×KˆÝ]\Îˆ[ˆ\ØÜš\[ÛŽˆ[ˆNÂ‚ˆ™]\›ˆÂˆ‹‹œÝ[Kˆ‹‹ŠÝ[KXØÛÝ[×ÜË’[˜XÝ]™WÔÝ\Ü[™Y×ØÈOOHYHÈÈXØÛÝ[×ÜŽˆ[XØÛÝ[×ØÎˆ[HˆßJKˆÝ[Ò[›ÚXÙWÐ[[Ý[×ØÎˆ^Y\’[›ÚXÙP[[Ý[ÏÈÝ[K•Ý[Ò[›ÚXÙWÐ[[Ý[×ØÈÏÈ[ˆÝ[Ò[›ÚXÙYÐ[[Ý[Ñœ›ÛWÔÝ\Y\œ××ØÎˆØ[Ý[]YÝ\Y\’[›ÚXÙHÝ[K•Ý[Ò[›ÚXÙYÐ[[Ý[Ñœ›ÛWÔÝ\Y\œ××ØÈ[ˆÔÝ\Y\—Ó˜[Y\ÎˆË‹‹œÝ\Y\“˜[Y\×KœÛÜ
+
+Kš›Ú[Š	Ë	ÊH[ˆÔ›ÙXÝÓ˜[Y\ÎˆË‹‹œ›ÙXÝ˜[Y\×KœÛÜ
+
+Kš›Ú[Š	Ë	ÊH[ˆÔÝ\Y\—Ô›ÙXÝÔZ\œÎˆÝ\Y\”›ÙXÝZ\œËˆÐ^Y\—Ñ\Ü]\Îˆ×KˆÐ^Y\—Ñ\Ü]WÔ›ÝÜÎˆ×KˆÐ^Y\—Ñš[˜[˜ÙWÔ›ÝÎˆ^Y\‘š[˜[˜ÙT›ÝËˆÔÝ\Y\—Ñ\Ü]\Îˆ×KˆÔÝ\Y\—Ñ\Ü]WÔ›ÝÜÎˆÝ\Y\‘š[˜[˜ÙT›ÝÜËˆÔÝ\Y\—Ñš[˜[˜ÙWÔ›ÝÜ×Ð[ˆÝ\Y\‘š[˜[˜ÙT›ÝÜÐ[ˆÑ\Ü]WÔ\Y\Îˆ\Ü]T\T™YÚ\ÝžKˆÐ^Y\—Ò[›ÚXÙWÑYWÑ]NˆÝ[K’[›ÚXÙWÑYWÑ]W×ØÈÝ[K‘YWÑ]W×ØÈÝ[K^Y\—Ô^WÕ\›WÑ]W×ØÈ[ˆÔÝ\Y\—Ò[›ÚXÙWÑYWÔ›ÝÜÎˆÝ\Y\’[›ÚXÙQYT›ÝÜËˆÔÝ\Y\—Ò[›ÚXÙWÑ^ÜÝ\™WÔ›ÝÜÎˆÝ\Y\’[›ÚXÙQ^ÜÝ\™T›ÝÜËˆÔÝ\Y\—ÔÙ][Y[ÔØÚ[XNˆÝ\Y\”Ù][Y[ØÚ[XKˆÔÝ[WÐ˜\ÙWÔ›ˆÝ[P˜\ÙT›ˆÐ^Y\—Ñ\Ü]WÓX™[ˆ[ˆÔÝ\Y\—Ñ\Ü]WÓX™[ˆ[ˆÔÝ\Y\—Ò[›ÚXÙWÔÜ]ÓX™[ˆÝ\Y\‘š[˜[˜ÙT›ÝÜË›X\
+
+\Ü]JHOˆ\Ü]KœÝ\Y\’[›ÚXÙP[[Ý[
+Kš›Ú[Š	×‰ÊH[ˆÔ^XX›WÐ˜[[˜ÙWÔÜ]ÓX™[ˆÝ\Y\‘š[˜[˜ÙT›ÝÜË›X\
+
+\Ü]JHOˆ\Ü]Kœ^XX›P˜[[˜ÙJKš›Ú[Š	×‰ÊH[ˆÔ^XX›WÐ˜[[˜ÙNˆ^XX›P˜[[˜ÙKˆÑ\Ü^WÓ˜[YNˆ›Ü›X]Ý[S˜[YJÝ[JKˆÐ^Y\—Ó˜[YNˆÝ[KXØÛÝ[×ÜË’[˜XÝ]™WÔÝ\Ü[™Y×ØÈOOHYHÈ	ÐXØÛÝ[[˜]˜Z[X›IÈˆÝ[K^Y\—Ó˜[YW×ØÈÝ[VÉÐXØÛÝ[×Ü‰×OË“˜[YHÝ[K^Y\—×ØÈ[ˆÑY™™XÝ]™WÑ]NˆÝ[K‘[]™\žWÑ]W×ØÈÝ[K‘^XÝYÑ[]™\žWÑ]W×ØÈ[ˆNÂˆJKˆNÂŸB‚™[˜Ý[ÛˆÙ\šX[^™Q\Ü]UÛÜšÙ›ÝÔ\J›ÝÊHÂˆYˆ
+\›ÝÊH™]\›ˆ[Âˆ™]\›ˆÂˆYˆ›ÝËšYˆØ\ÙRYˆ›ÝË˜Ø\ÙWÚY›ÝË˜Ø\ÙRYˆÝ[RYˆ›ÝËœÝ[WÚY›ÝËœÝ[RYˆXØÛÝ[Yˆ›ÝË˜XØÛÝ[ÚY›ÝË˜XØÛÝ[YˆXØÛÝ[Ù^Nˆ›ÝË˜XØÛÝ[ÚÙ^H›ÝË˜XØÛÝ[Ù^Kˆ˜[YNˆ›ÝË˜XØÛÝ[Û˜[YH›ÝË›˜[YH›ÝË˜XØÛÝ[ÚY›ÝË˜XØÛÝ[Yˆ›Û\Îˆ\œ˜^Kš\Ð\œ˜^J›ÝËœ›Û\ÊHÈ›ÝËœ›Û\Èˆ×KˆÛÝ\˜ÙU\\Îˆ\œ˜^Kš\Ð\œ˜^J›ÝËœÛÝ\˜ÙWÝ\\ÊHÈ›ÝËœÛÝ\˜ÙWÝ\\Èˆ›ÝËœÛÝ\˜ÙU\\È×KˆÛÝ\˜ÙT™XÛÜ™YÎˆ\œ˜^Kš\Ð\œ˜^J›ÝËœÛÝ\˜ÙWÜ™XÛÜ™ÚYÊHÈ›ÝËœÛÝ\˜ÙWÜ™XÛÜ™ÚYÈˆ›ÝËœÛÝ\˜ÙT™XÛÜ™YÈ×Kˆ^[Y[\›\Îˆ\œ˜^Kš\Ð\œ˜^J›ÝËœ^[Y[Ý\›\ÊHÈ›ÝËœ^[Y[Ý\›\Èˆ›ÝËœ^[Y[\›\È×Kˆ›ÙXÝÎˆ\œ˜^Kš\Ð\œ˜^J›ÝËœ›ÙXÝÊHÈ›ÝËœ›ÙXÝÈˆ×KˆØ[˜Ù[YÛÝ\˜ÙSÛ›Nˆ›ÝË˜Ø[˜Ù[YÜÛÝ\˜ÙWÛÛ›HOOHYH›ÝË˜Ø[˜Ù[YÛÝ\˜ÙSÛ›HOOHYKˆÜ™X]Y]ˆ›ÝË˜Ü™X]YØ]›ÝË˜Ü™X]Y][ˆ\]Y]ˆ›ÝË\]YØ]›ÝË\]Y][ˆNÂŸB‚™[˜Ý[Ûˆ\Ü]T™YÚ\ÝžUÚ]Ù[XÝ[ÛŠ™YÚ\ÝžK\T›ÝÜÈH×JHÂˆÛÛœÝÙ[XÝYH×NÂˆÛÛœÝ\ÜÝY\ÈHË‹‹Š™YÚ\ÝžOËš\ÜÝY\È×JWNÂˆÛÛœÝØ[™Y]PžRÙ^HH™]ÈX\
+
+™YÚ\ÝžOË˜Ø[™Y]\È×JK›X\
+
+Ø[™Y]JHOˆØØ[™Y]K˜XØÛÝ[Ù^KØ[™Y]WJJNÂˆ›Üˆ
+ÛÛœÝ›ÝÈÙˆ\T›ÝÜÊHÂˆÛÛœÝÝÜ™YHÙ\šX[^™Q\Ü]UÛÜšÙ›ÝÔ\J›ÝÊNÂˆÛÛœÝØ[™Y]HHØ[™Y]PžRÙ^K™Ù]
+ÝÜ™Y˜XØÛÝ[Ù^JNÂˆYˆ
+XØ[™Y]JHÂˆ\ÜÝY\Ëœ\Ú
+ÂˆÛÙNˆ	ÜÙ[XÝYØXØÛÝ[ÜÝ[IËˆY\ÜØYÙNˆ	ÜÝÜ™Y›˜[Y_H\È›ÈÛ™Ù\ˆH^Y\ˆÜˆHÝ\Y\ˆÛˆ\ÈÕSK˜ˆ™XÛÜ™YÎˆÝÜ™YœÛÝ\˜ÙT™XÛÜ™YËˆ]Z[ÎˆÈXØÛÝ[YˆÝÜ™Y˜XØÛÝ[YKˆJNÂˆÛÛ[YNÂˆBˆÙ[XÝYœ\Ú
+Âˆ‹‹˜Ø[™Y]KˆYˆÝÜ™YšYˆØ\ÙRYˆÝÜ™Y˜Ø\ÙRYˆÙ[XÝYˆYKˆJNÂˆBˆÛÛœÝØ[™Y]TØÚ[XU˜[YH™YÚ\ÝžOË˜Ø[™Y]TØÚ[XU˜[YOOHYNÂˆÛÛœÝÙ[XÝ[Û•˜[YHÙ[XÝY›[™Ýˆ	‰ˆZ\ÜÝY\ËœÛÛYJ
+][JHOˆ][K˜ÛÙHOOH	ÜÙ[XÝYØXØÛÝ[ÜÝ[IÊNÂˆ™]\›ˆÂˆ‹‹œ™YÚ\ÝžKˆØ[™Y]TØÚ[XU˜[YˆÙ[XÝ[Û•˜[Yˆ˜[YˆØ[™Y]TØÚ[XU˜[Y	‰ˆÙ[XÝ[Û•˜[YˆÙ[XÝYˆ\ÜÝY\ËˆNÂŸB‚™[˜Ý[Ûˆ\ÜÙ\˜[Y\Ü]T\Y\ÊÝ[K\T›ÝÜÈH×JHÂˆÛÛœÝ™YÚ\ÝžHH\Ü]T™YÚ\ÝžUÚ]Ù[XÝ[ÛŠÝ[OË—Ñ\Ü]WÔ\Y\Ë\T›ÝÜÊNÂˆYˆ
+\Ý[OË—Ñ\Ü]WÔ\Y\ÊH›ÝÈ\\œ›ÜŠ	ÔØ[\Ù›Ü˜ÙH\Ü]H\HØ[™Y]\ÈÛÝ[›Ý™H™\ÛÛ™Y‰ËLŠNÂˆYˆ
+™YÚ\ÝžK˜[Y
+H™]\›ˆ™YÚ\ÝžNÂˆÛÛœÝY\ÜØYÙ\ÈH™YÚ\ÝžKš\ÜÝY\Ë›X\
+
+][JHOˆ][K›Y\ÜØYÙJK™š[\Š›ÛÛX[ŠNÂˆYˆ
+\™YÚ\ÝžKœÙ[XÝ[Û•˜[Y	‰ˆ[Y\ÜØYÙ\Ë›[™Ý
+HY\ÜØYÙ\Ëœ\Ú
+	ÔÙ[XÝ]X\ÝÛ™H\Ü]YXØÛÝ[‰ÊNÂˆ›ÝÈ\\œ›ÜŠÛÜœ™XÝH\Ü]H\HÙ[XÝ[Ûˆ™Y›Ü™HÛÛ[Z[™Îˆ	ÛY\ÜØYÙ\Ëš›Ú[Š	È	Ê_X
+NÂŸB‚˜\Þ[˜È[˜Ý[ÛˆØYÝ\œ™[\Ü]TÝ[JÝ[RYXØÙ\ÜÐÛÛ^
+HÂˆÛÛœÝ™\Ý[H]ØZ]Ø[\Ù›Ü˜ÙQ\Ü]TÝ[\ÊÈÝ[RY[Z]ˆLK[XØÙ\ÜÐÛÛ^
+NÂˆÛÛœÝÝ[HH
+™\Ý[œ›ÝÜÈ×JK™š[™
+
+›ÝÊHOˆ\Ü]TØ[\Ù›Ü˜ÙRYÙ^J›ÝË’Y
+HOOH\Ü]TØ[\Ù›Ü˜ÙRYÙ^JÝ[RY
+JNÂˆYˆ
+\Ý[JH›ÝÈ\\œ›ÜŠ	ÕH\Ü]YÝ[HÛÝ[›Ý™H›Ý[™[ˆHÝ\œ™[Ø[\Ù›Ü˜ÙH\Ü]H]Y]YK‰Ë
+NÂˆ™]\›ˆÝ[NÂŸB‚™[˜Ý[ÛˆØ[›ÛšXØ[\Ü]PXÝ[Û•\™Ù]
+[œ]\TÚYK™YÚ\ÝžJHÂˆÛÛœÝXØÛÝ[YHÝš[™Ê[œ]œ\PXØÛÝ[Y[œ]œ\WØXØÛÝ[ÚY	ÉÊKš[J
+NÂˆYˆ
+XXØÛÝ[Y
+H›ÝÈ\\œ›ÜŠ	ÐHØ[\Ù›Ü˜ÙH\HXØÛÝ[Q\È™\]Z\™Y›Üˆ]™\žH\Ü]HXÝ[Û‹‰Ë
+NÂˆÛÛœÝØ[™Y]HHš[™\Ü]T\J™YÚ\ÝžK\TÚYKXØÛÝ[Y
+NÂˆÛÛœÝ\HH
+™YÚ\ÝžOËœÙ[XÝY×JK™š[™
+
+Ù[XÝY
+HOˆÙ[XÝY˜XØÛÝ[Ù^HOOHØ[™Y]OË˜XØÛÝ[Ù^JNÂˆYˆ
+XØ[™Y]H\\JH›ÝÈ\\œ›ÜŠHÙ[XÝY	Ü\TÚY_HXØÛÝ[\È›ÝÙ[XÝY›Üˆ\È\Ü]Kˆ™Yœ™\Ú[™Ù[XÝH\HYØZ[‹˜
+NÂˆ™]\›ˆ\NÂŸB‚™[˜Ý[Ûˆ›Ü›X[^™Q\Ü]P™]TÝ]\Ê˜[YK[ÝÙY˜[˜XÚÊHÂˆÛÛœÝ˜]ÈHÝš[™Ê˜[YH	ÉÊKš[J
+NÂˆ™]\›ˆ[ÝÙYš[˜ÛY\Ê˜]ÊHÈ˜]Èˆ˜[˜XÚÎÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ\Ü]UÛÜšÙ›ÝÐØ\Xš[]Y\ÊÛY[›Ùš[HHßJHÂˆÛÛœÝÚ\Ð\›Ý™\‹\ÐXØÛÝ[[™×HH]ØZ]›ÛZ\ÙK˜[
+Ý\Ù\’\ÐØ\Xš[]JÛY[›Ùš[K	Ù\Ü]\×Ø\›Ý™IÊK\Ù\’\ÐØ\Xš[]JÛY[›Ùš[K	Ù\Ü]\×ØXØÛÝ[	ÊWJNÂˆÛÛœÝØ[XØÙ\^\›˜[ÛÜÝ\™HH›Ùš[K\Ù\—Ý\HOOH	ØYZ[š\Ý˜]Ü‰Âˆ
+›Ùš[K\Ù\—Ý\HOOH	ÙÙ[™\˜[ÛX[˜YÙ\‰È	‰ˆ
+]ØZ]ØYXÝ]™QÙ[™\˜[X[˜YÙ\ŠÛY[
+JKšYOOH›Ùš[KšY
+NÂˆ™]\›ˆÂˆ›ÛNˆ›Ùš[K\Ù\—Ý\H	Ý\Ù\‰ËˆØ[”™\\™NˆYKˆØ[\›Ý™Nˆ\Ð\›Ý™\‹ˆØ[XØÛÝ[ˆ\ÐXØÛÝ[[™ËˆØ[ÛÜÙNˆ\ÐXØÛÝ[[™ËˆØ[XØÙ\^\›˜[ÛÜÝ\™KˆØ[•šY]Ð[[\ÎˆYKˆNÂŸB‚™[˜Ý[Ûˆ\Ü]P™]PØ\ÙQœ›ÛTÝ[JÝ[HHßJHÂˆ™]\›ˆÂˆÝ[WÚYˆÝ[K’YˆÝ[WÛ˜[YNˆÝ[K—Ñ\Ü^WÓ˜[YHÝ[K“˜[YHÝ[K’Ù^TÝ[W×ØÈÝ[K’Yˆ^Y\—Û˜[YNˆÝ[K—Ð^Y\—Ó˜[YHÝ[K^Y\—Ó˜[YW×ØÈ[ˆÝ\Y\—Û˜[Y\ÎˆÝ[K—ÔÝ\Y\—Ó˜[Y\È[ˆÝ\œ™[ÜØ[\Ù›Ü˜ÙWÜÝ]\ÎˆÝ[K‘\Ü]WÔÝ]\××ØÈ[ˆNÂŸB‚™[˜Ý[ÛˆYØXÞPÛÜÙY\Ü]PØ\ÙJÝ[HHßJHÂˆÛÛœÝØ[\Ù›Ü˜ÙTÝ]\ÈHÝš[™ÊÝ[K‘\Ü]WÔÝ]\××ØÈ	ÉÊKš[J
+NÂˆYˆ
+Z\ÔØ[\Ù›Ü˜ÙQ\Ü]PÛÜÙY
+Ø[\Ù›Ü˜ÙTÝ]\ÊJH™]\›ˆ[Âˆ™]\›ˆÂˆYˆ[ˆÝ[RYˆÝ[K’YˆÝ[S˜[YNˆÝ[K—Ñ\Ü^WÓ˜[YHÝ[K“˜[YHÝ[K’Ù^TÝ[W×ØÈÝ[K’Yˆ^Y\“˜[YNˆÝ[K—Ð^Y\—Ó˜[YHÝ[K^Y\—Ó˜[YW×ØÈ	ÉËˆÝ\Y\“˜[Y\ÎˆÝ[K—ÔÝ\Y\—Ó˜[Y\È	ÉËˆÝ\œ™[Ø[\Ù›Ü˜ÙTÝ]\ÎˆØ[\Ù›Ü˜ÙTÝ]\ËˆÛÜšÙ›ÝÔÝ]\Îˆ	ÐÛÜÙY	Ëˆ\›Ý˜[Ý]\Îˆ	Ð\›Ý™Y	Ëˆ]\Ý›ÝNˆ	ÐÛÜÙY[ˆØ[\Ù›Ü˜ÙH™Y›Ü™HÓÔÈÛÜšÙ›ÝÈ˜XÚÚ[™Ë‰ËˆÙ][Y[š[˜[˜ÚX[ÎˆßKˆÙ][Y[›ˆˆØ[\Ù›Ü˜ÙUÜš]X˜XÚÔÝ]\Îˆ	ÛYØXÞIËˆYØXÞT™XYÛ›NˆYKˆNÂŸB‚™[˜Ý[ÛˆÙ\šX[^™Q\Ü]P™]PØ\ÙJ›ÝÊHÂˆYˆ
+\›ÝÊH™]\›ˆ[Âˆ™]\›ˆÂˆYˆ›ÝËšYˆÝ[RYˆ›ÝËœÝ[WÚYˆÝ[S˜[YNˆ›ÝËœÝ[WÛ˜[YH	ÉËˆ^Y\“˜[YNˆ›ÝË˜^Y\—Û˜[YH	ÉËˆÝ\Y\“˜[Y\Îˆ›ÝËœÝ\Y\—Û˜[Y\È	ÉËˆÝ\œ™[Ø[\Ù›Ü˜ÙTÝ]\Îˆ›ÝË˜Ý\œ™[ÜØ[\Ù›Ü˜ÙWÜÝ]\È	ÉËˆÛÜšÙ›ÝÔÝ]\Îˆ›ÝËÛÜšÙ›Ý×ÜÝ]\È	Ñ˜Y	Ëˆ\›Ý˜[Ý]\Îˆ›ÝË˜\›Ý˜[ÜÝ]\È	Ñ˜Y	Ëˆ]\Ý›ÝNˆ›ÝË›]\ÝÛ›ÝH	ÉËˆÝX›Z]YžNˆ›ÝËœÝX›Z]YØžH[ˆÝX›Z]YžQ[XZ[ˆ›ÝËœÝX›Z]YØžWÙ[XZ[[ˆÝX›Z]Y]ˆ›ÝËœÝX›Z]YØ][ˆ\›Ý™YžNˆ›ÝË˜\›Ý™YØžH[ˆ\›Ý™YžQ[XZ[ˆ›ÝË˜\›Ý™YØžWÙ[XZ[[ˆ\›Ý™Y]ˆ›ÝË˜\›Ý™YØ][ˆ™Z™XÝYžNˆ›ÝËœ™Z™XÝYØžH[ˆ™Z™XÝYžQ[XZ[ˆ›ÝËœ™Z™XÝYØžWÙ[XZ[[ˆ™Z™XÝY]ˆ›ÝËœ™Z™XÝYØ][ˆ™Z™XÝ[Û”™X\ÛÛŽˆ›ÝËœ™Z™XÝ[Û—Ü™X\ÛÛˆ[ˆÛÜÙYžNˆ›ÝË˜ÛÜÙYØžH[ˆÛÜÙYžQ[XZ[ˆ›ÝË˜ÛÜÙYØžWÙ[XZ[[ˆÛÜÙY]ˆ›ÝË˜ÛÜÙYØ][ˆÙ][Y[š[˜[˜ÚX[Îˆ›ÝËœÙ][Y[Ùš[˜[˜ÚX[ÈßKˆÙ][Y[›ˆ[X™\Š›ÝËœÙ][Y[Ü›
+KˆØ[\Ù›Ü˜ÙUÜš]X˜XÚÔÝ]\Îˆ›ÝËœØ[\Ù›Ü˜ÙWÝÜš]X˜XÚ×ÜÝ]\È	Û›ÝÜÝ\Y	ËˆØ[\Ù›Ü˜ÙUÜš]X˜XÚÑ\œ›ÜŽˆ›ÝËœØ[\Ù›Ü˜ÙWÝÜš]X˜XÚ×Ù\œ›Üˆ[ˆ^\›˜[ÛÜÝ\™Q]XÝY]ˆ›ÝË™^\›˜[ØÛÜÝ\™WÙ]XÝYØ][ˆ^\›˜[ÛÜÝ\™TØ[\Ù›Ü˜ÙTÝ]\Îˆ›ÝË™^\›˜[ØÛÜÝ\™WÜØ[\Ù›Ü˜ÙWÜÝ]\È[ˆ^\›˜[ÛÜÝ\™TØ[\Ù›Ü˜ÙS[ÙYšYY]ˆ›ÝË™^\›˜[ØÛÜÝ\™WÜØ[\Ù›Ü˜ÙWÛ[ÙYšYYØ][ˆ^\›˜[ÛÜÝ\™PXØÙ\Y]ˆ›ÝË™^\›˜[ØÛÜÝ\™WØXØÙ\YØ][ˆ^\›˜[ÛÜÝ\™PXØÙ\YžNˆ›ÝË™^\›˜[ØÛÜÝ\™WØXØÙ\YØžH[ˆ^\›˜[ÛÜÝ\™PXØÙ\YžQ[XZ[ˆ›ÝË™^\›˜[ØÛÜÝ\™WØXØÙ\YØžWÙ[XZ[[ˆ^\›˜[ÛÜÝ\™PXØÙ\[˜ÙT™X\ÛÛŽˆ›ÝË™^\›˜[ØÛÜÝ\™WØXØÙ\[˜ÙWÜ™X\ÛÛˆ[ˆÜ™X]Y]ˆ›ÝË˜Ü™X]YØ][ˆ\]Y]ˆ›ÝË\]YØ][ˆNÂŸB‚™[˜Ý[ÛˆÙ\šX[^™Q\Ü]TÝ\Y\’[œÝXÝ[ÛŠ›ÝÊHÂˆYˆ
+\›ÝÊH™]\›ˆ[Âˆ™]\›ˆÂˆYˆ›ÝËšYˆØ\ÙRYˆ›ÝË˜Ø\ÙWÚYˆXÝ[Û’Yˆ›ÝË˜XÝ[Û—ÚYˆ\RYˆ›ÝËœ\WÚYˆÝ[RYˆ›ÝËœÝ[WÚYˆ[œÝXÝ[Û•\Nˆ›ÝËš[œÝXÝ[Û—Ý\Kˆ[œÝXÝ[Û“X™[ˆ›ÝËš[œÝXÝ[Û—Ý\HOOH	ÝÚ]ÛÝ[œZY	ÈÈ	ÑÈ›Ý^IÈˆ	ÑÙ]˜XÚÈZY[[Ý[	Ëˆ™XÛÝ™\žSY]Ùˆ›ÝËœ™XÛÝ™\žWÛY]Ù[ˆÛÝ\˜ÙTÝ\Y\’[›ÚXÙRYˆ›ÝËœÛÝ\˜ÙWÜÝ\Y\—Ú[›ÚXÙWÚYˆÛÝ\˜ÙTÝ\Y\’[›ÚXÙS˜[YNˆ›ÝËœÛÝ\˜ÙWÜÝ\Y\—Ú[›ÚXÙWÛ˜[YH	ÉËˆÛÝ\˜ÙTÝ[RYˆ›ÝËœÛÝ\˜ÙWÜÝ[WÚY›ÝËœÝ[WÚYˆ\™Ù]Ý\Y\’[›ÚXÙRYˆ›ÝË\™Ù]ÜÝ\Y\—Ú[›ÚXÙWÚY[ˆ\™Ù]Ý\Y\’[›ÚXÙS˜[YNˆ›ÝË\™Ù]ÜÝ\Y\—Ú[›ÚXÙWÛ˜[YH	ÉËˆ\™Ù]Ý[RYˆ›ÝË\™Ù]ÜÝ[WÚY[ˆÝ\œ™[˜ÞR\ÛÐÛÙNˆ›ÝË˜Ý\œ™[˜ÞWÚ\Û×ØÛÙH	ÕTÑ	Ëˆ[›™Y[[Ý[ˆ[X™\Š›ÝËœ[›™YØ[[Ý[
+Kˆ[ØØ]Y[[Ý[ˆ[X™\Š›ÝË˜[ØØ]YØ[[Ý[
+KˆÛÝ\˜ÙR[›ÚXÙP[[Ý[Û˜\ÚÝˆ[X™\Š›ÝËœÛÝ\˜ÙWÚ[›ÚXÙWØ[[Ý[ÜÛ˜\ÚÝ
+KˆÛÝ\˜ÙT^XX›P˜[[˜ÙTÛ˜\ÚÝˆ[X™\Š›ÝËœÛÝ\˜ÙWÜ^XX›WØ˜[[˜ÙWÜÛ˜\ÚÝ
+KˆÛÝ\˜ÙTZY[[Ý[Û˜\ÚÝˆ[X™\Š›ÝËœÛÝ\˜ÙWÜZYØ[[Ý[ÜÛ˜\ÚÝ
+Kˆ\™Ù][›ÚXÙP[[Ý[Û˜\ÚÝˆ›ÝË\™Ù]Ú[›ÚXÙWØ[[Ý[ÜÛ˜\ÚÝOH[È[ˆ[X™\Š›ÝË\™Ù]Ú[›ÚXÙWØ[[Ý[ÜÛ˜\ÚÝ
+Kˆ\™Ù]^XX›P[[Ý[Û˜\ÚÝˆ›ÝË\™Ù]Ü^XX›WØ[[Ý[ÜÛ˜\ÚÝOH[È[ˆ[X™\Š›ÝË\™Ù]Ü^XX›WØ[[Ý[ÜÛ˜\ÚÝ
+KˆÛÝ\˜ÙR[›ÚXÙTÛ˜\ÚÝˆ›ÝËœÛÝ\˜ÙWÚ[›ÚXÙWÜÛ˜\ÚÝßKˆÛÝ\˜ÙTÝ[TÛ˜\ÚÝˆ›ÝËœÛÝ\˜ÙWÜÝ[WÜÛ˜\ÚÝßKˆ\™Ù][›ÚXÙTÛ˜\ÚÝˆ›ÝË\™Ù]Ú[›ÚXÙWÜÛ˜\ÚÝßKˆ\™Ù]Ý[TÛ˜\ÚÝˆ›ÝË\™Ù]ÜÝ[WÜÛ˜\ÚÝßKˆ^[Y[Û˜\ÚÝˆ›ÝËœ^[Y[ÜÛ˜\ÚÝßKˆ[ØØ][Û‘š[™Ù\œš[ˆ›ÝË˜[ØØ][Û—Ùš[™Ù\œš[	ÉËˆÝ]\Îˆ›ÝËœÝ]\È	Ô[™[™ÈXØÛÝ[[™ÉËˆX]ÚYØ[\Ù›Ü˜ÙT^[Y[Yˆ›ÝË›X]ÚYÜØ[\Ù›Ü˜ÙWÜ^[Y[ÚY[ˆX]Ú[™Ô^[Y[Û˜\ÚÝˆ›ÝË›X]Ú[™×Ü^[Y[ÜÛ˜\ÚÝßKˆ[œÝXÝ[Û”™Y™\™[˜ÙNˆ›ÝËš[œÝXÝ[Û—Ü™Y™\™[˜ÙH	ÉËˆ[œÝXÝ[Û‘]Nˆ›ÝËš[œÝXÝ[Û—Ù]H[ˆ[œÝXÝ[Û[[Ý[ˆ›ÝËš[œÝXÝ[Û—Ø[[Ý[OH[È[ˆ[X™\Š›ÝËš[œÝXÝ[Û—Ø[[Ý[
+KˆÙ][Y[™Y™\™[˜ÙNˆ›ÝËœÙ][Y[Ü™Y™\™[˜ÙH	ÉËˆÙ][Y[]Nˆ›ÝËœÙ][Y[Ù]H[ˆÙ][Y[[[Ý[ˆ›ÝËœÙ][Y[Ø[[Ý[OH[È[ˆ[X™\Š›ÝËœÙ][Y[Ø[[Ý[
+KˆXØÛÝ[[™Ó›ÝNˆ›ÝË˜XØÛÝ[[™×Û›ÝH	ÉËˆ™]š\Ú[ÛŽˆ[X™\Š›ÝËœ™]š\Ú[ÛˆJKˆXÚÛ›ÝÛYÙYžNˆ›ÝË˜XÚÛ›ÝÛYÙYØžH[ˆXÚÛ›ÝÛYÙYžQ[XZ[ˆ›ÝË˜XÚÛ›ÝÛYÙYØžWÙ[XZ[[ˆXÚÛ›ÝÛYÙY]ˆ›ÝË˜XÚÛ›ÝÛYÙYØ][ˆÙ]YžNˆ›ÝËœÙ]YØžH[ˆÙ]YžQ[XZ[ˆ›ÝËœÙ]YØžWÙ[XZ[[ˆÙ]Y]ˆ›ÝËœÙ]YØ][ˆÜ™X]Y]ˆ›ÝË˜Ü™X]YØ][ˆ\]Y]ˆ›ÝË\]YØ][ˆNÂŸB‚™[˜Ý[ÛˆÙ\šX[^™Q\Ü]P™]PXÝ[ÛŠ›ÝË\SX\H™]ÈX\
+
+K[œÝXÝ[Û”›ÝÜÈH×JHÂˆYˆ
+\›ÝÊH™]\›ˆ[ÂˆÛÛœÝ\HH\SX\™Ù]
+›ÝËœ\WÚY
+H[ÂˆÛÛœÝXÝ[Û•\HH›ÝË˜XÝ[Û—Ý\NÂˆÛÛœÝÝ\Y\’[œÝXÝ[ÛœÈH[œÝXÝ[Û”›ÝÜË™š[\Š
+[œÝXÝ[ÛŠHOˆ[œÝXÝ[Û‹˜XÝ[Û—ÚYOOH›ÝËšY	‰ˆ[œÝXÝ[Û‹œÝ]\ÈOOH	ÔÝ\\œÙYY	ÊK›X\
+Ù\šX[^™Q\Ü]TÝ\Y\’[œÝXÝ[ÛŠNÂˆÛÛœÝ[›ÚXÙP[ØØ][Û“X\H™]ÈX\
+
+NÂˆ›Üˆ
+ÛÛœÝ[œÝXÝ[ÛˆÙˆÝ\Y\’[œÝXÝ[ÛœÊHÂˆÛÛœÝ^\Ý[™ÈH[›ÚXÙP[ØØ][Û“X\™Ù]
+[œÝXÝ[Û‹œÛÝ\˜ÙTÝ\Y\’[›ÚXÙRY
+HÂˆÝ\Y\’[›ÚXÙRYˆ[œÝXÝ[Û‹œÛÝ\˜ÙTÝ\Y\’[›ÚXÙRYˆ[›ÚXÙS˜[YNˆ[œÝXÝ[Û‹œÛÝ\˜ÙTÝ\Y\’[›ÚXÙS˜[YKˆ[[Ý[ˆ[œÝXÝ[Û‹˜[ØØ]Y[[Ý[ˆNÂˆ^\Ý[™Ë˜[[Ý[HX]›X^
+^\Ý[™Ë˜[[Ý[[œÝXÝ[Û‹˜[ØØ]Y[[Ý[
+NÂˆ[›ÚXÙP[ØØ][Û“X\œÙ]
+[œÝXÝ[Û‹œÛÝ\˜ÙTÝ\Y\’[›ÚXÙRY^\Ý[™ÊNÂˆBˆÛÛœÝÛÜÙT™X\ÛÛˆHXÝ[Û•\HOOH	ØÛÜÙWÜÝ\Y\—Ù\Ü]IÈÈØ[›ÛšXØ[\Ü]P™]PÛÜÙT™X\ÛÛŠ›ÝË˜ÛÜÙWÜ™X\ÛÛ‹TÔUWÐ‘UWÔÕTQT—ÐÓÔÑWÔ‘PTÓÓ”ÊHˆXÝ[Û•\HOOH	ØÛÜÙWØ^Y\—Ù\Ü]IÈÈØ[›ÛšXØ[\Ü]P™]PÛÜÙT™X\ÛÛŠ›ÝË˜ÛÜÙWÜ™X\ÛÛ‹TÔUWÐ‘UWÐ•VQT—ÐÓÔÑWÔ‘PTÓÓ”ÊHˆ›ÝË˜ÛÜÙWÜ™X\ÛÛŽÂˆ™]\›ˆÂˆYˆ›ÝËšYˆØ\ÙRYˆ›ÝË˜Ø\ÙWÚYˆÝ[RYˆ›ÝËœÝ[WÚYˆ\RYˆ›ÝËœ\WÚYˆ\TÚYNˆ›ÝËœ\WÜÚYKˆ\U\Nˆ›ÝËœ\WÜÚYKˆ\S˜[YNˆ\OË˜XØÛÝ[Û˜[YH\OË›˜[YH	ÉËˆ\PXØÛÝ[Yˆ\OË˜XØÛÝ[ÚY\OË˜XØÛÝ[Y[ˆ\RÙ^Nˆ\OË˜XØÛÝ[ÚYÈXØÛÝ[‰Ü\K˜XØÛÝ[ÚYXˆ\OË˜XØÛÝ[YÈXØÛÝ[‰Ü\K˜XØÛÝ[YXˆ[ˆ\T›Û\Îˆ\OËœ›Û\È×KˆXÝ[Û•\KˆXÝ[Û“X™[ˆTÔUWÐ‘UWÐPÕSÓ—ÓP‘SÖØXÝ[Û•\WH›ÝË˜XÝ[Û—ÛX™[XÝ[Û•\Kˆ[[Ý[ˆ›ÝË˜[[Ý[OH[È[ˆ[X™\Š›ÝË˜[[Ý[
+Kˆ\Ü]P[[Ý[ˆ›ÝË˜[[Ý[OH[È[ˆ[X™\Š›ÝË˜[[Ý[
+KˆÝ\œ™[˜ÞR\ÛÐÛÙNˆÝ\Y\’[œÝXÝ[ÛœÖÌOË˜Ý\œ™[˜ÞR\ÛÐÛÙH	ÕTÑ	Ëˆ[›ÚXÙP[ØØ][ÛœÎˆË‹‹š[›ÚXÙP[ØØ][Û“X\˜[Y\Ê
+WKˆÝ\Y\’[œÝXÝ[ÛœËˆÝ[Ó›Ý^NˆÝ\Y\’[œÝXÝ[ÛœË™š[\Š
+[œÝXÝ[ÛŠHOˆ[œÝXÝ[Û‹š[œÝXÝ[Û•\HOOH	ÝÚ]ÛÝ[œZY	ÊKœ™YXÙJ
+Ý[K[œÝXÝ[ÛŠHOˆÝ[H
+È[œÝXÝ[Û‹œ[›™Y[[Ý[
+KˆÝ[Ù]˜XÚÔZYˆÝ\Y\’[œÝXÝ[ÛœË™š[\Š
+[œÝXÝ[ÛŠHOˆ[œÝXÝ[Û‹š[œÝXÝ[Û•\HOOH	ÙÙ]Ø˜XÚ×ÜZY	ÊKœ™YXÙJ
+Ý[K[œÝXÝ[ÛŠHOˆÝ[H
+È[œÝXÝ[Û‹œ[›™Y[[Ý[
+KˆÝ\Y\‘\Ü]P[[Ý[™\]Z\™Yˆ›ÝËœ\WÜÚYHOOH	ÜÝ\Y\‰È	‰ˆTÔUWÓQÐPÖWÔÕTQT—Ñ’SSÒPSÐPÕSÓ”Ëš\Ê›ÝË˜XÝ[Û—Ý\JH	‰ˆ›ÝË˜[[Ý[OH[ˆÝ\Y\’[œÝXÝ[ÛÛÛ™\œÚ[Û”™\]Z\™Yˆ›ÝËœ\WÜÚYHOOH	ÜÝ\Y\‰È	‰ˆ›ÝË˜[[Ý[OH[	‰ˆTÔUWÓQÐPÖWÔÕTQT—Ñ’SSÒPSÐPÕSÓ”Ëš\Ê›ÝË˜XÝ[Û—Ý\JKˆÜXÚX[Ù[šXÙNˆ›ÝËœÜXÚX[ÜÙ[ÜšXÙHOH[È[ˆ[X™\Š›ÝËœÜXÚX[ÜÙ[ÜšXÙJKˆÜXÚX[^TšXÙNˆ›ÝËœÜXÚX[Ø^WÜšXÙHOH[È[ˆ[X™\Š›ÝËœÜXÚX[Ø^WÜšXÙJKˆ]X[]Nˆ›ÝËœ]X[]HOH[È[ˆ[X™\Š›ÝËœ]X[]JKˆ]X[]U[š]ˆ›ÝËœ]X[]WÝ[š]	ÓU	ËˆÛÜÙT™X\ÛÛŽˆÛÜÙT™X\ÛÛˆ[ˆ˜[[˜ÙT^[Y[[œÝXÝ[ÛŽˆ›ÝË˜˜[[˜ÙWÜ^[Y[Ú[œÝXÝ[Ûˆ[ˆ\ØÜš\[ÛŽˆ›ÝË™\ØÜš\[Ûˆ	ÉËˆ™\]Z\™\Ð]XÚY[ˆ›ÝËœ™\]Z\™\×Ø]XÚY[OOHYKˆXØÛÝ[[™ÔÝ]\Îˆ›ÝË™^XÝ][Û—ÜÝ]\È	Ô[™[™ÈXØÛÝ[[™ÉËˆ^XÝ][Û”Ý]\Îˆ›ÝË™^XÝ][Û—ÜÝ]\È	Ô[™[™ÈXØÛÝ[[™ÉËˆ[œÝXÝ[Û”™Y™\™[˜ÙNˆ›ÝËš[œÝXÝ[Û—Ü™Y™\™[˜ÙH	ÉËˆ[œÝXÝ[Û‘]Nˆ›ÝËš[œÝXÝ[Û—Ù]H[ˆ[œÝXÝ[Û[[Ý[ˆ›ÝËš[œÝXÝ[Û—Ø[[Ý[OH[È[ˆ[X™\Š›ÝËš[œÝXÝ[Û—Ø[[Ý[
+KˆÙ][Y[™Y™\™[˜ÙNˆ›ÝËœÙ][Y[Ü™Y™\™[˜ÙH	ÉËˆÙ][Y[]Nˆ›ÝËœÙ][Y[Ù]H[ˆÙ][Y[[[Ý[ˆ›ÝËœÙ][Y[Ø[[Ý[OH[È[ˆ[X™\Š›ÝËœÙ][Y[Ø[[Ý[
+KˆXØÛÝ[[™Ó›ÝNˆ›ÝË˜XØÛÝ[[™×Û›ÝH	ÉËˆXØÛÝ[[™ÐžNˆ›ÝË˜XØÛÝ[[™×ØžH[ˆXØÛÝ[[™ÐžQ[XZ[ˆ›ÝË˜XØÛÝ[[™×ØžWÙ[XZ[[ˆXØÛÝ[[™Ð]ˆ›ÝË˜XØÛÝ[[™×Ø][ˆ^XÝ]YžNˆ›ÝË™^XÝ]YØžH[ˆ^XÝ]YžQ[XZ[ˆ›ÝË™^XÝ]YØžWÙ[XZ[[ˆ^XÝ]Y]ˆ›ÝË™^XÝ]YØ][ˆ^XÝ][Û“›ÝNˆ›ÝË™^XÝ][Û—Û›ÝH[ˆ[šÙYYÜ™YYÛÛ\[œØ][Û’Yˆ›ÝË›[šÙYØYÜ™YYØÛÛ\[œØ][Û—ÚY[ˆ[šÙYÛÛ\[œØ][Û”Û˜\ÚÝˆ›ÝË›[šÙYØÛÛ\[œØ][Û—ÜÛ˜\ÚÝßKˆ[šÙYÛÛ\[œØ][ÛžNˆ›ÝË›[šÙYØÛÛ\[œØ][Û—ØžH[ˆ[šÙYÛÛ\[œØ][ÛžQ[XZ[ˆ›ÝË›[šÙYØÛÛ\[œØ][Û—ØžWÙ[XZ[[ˆ[šÙYÛÛ\[œØ][Û]ˆ›ÝË›[šÙYØÛÛ\[œØ][Û—Ø][ˆÜ™X]YžNˆ›ÝË˜Ü™X]YØžH[ˆÜ™X]YžQ[XZ[ˆ›ÝË˜Ü™X]YØžWÙ[XZ[[ˆ\]YžNˆ›ÝË\]YØžH[ˆ\]YžQ[XZ[ˆ›ÝË\]YØžWÙ[XZ[[ˆÜ™X]Y]ˆ›ÝË˜Ü™X]YØ][ˆ\]Y]ˆ›ÝË\]YØ][ˆNÂŸB‚™[˜Ý[ÛˆÙ\šX[^™Q\Ü]UÛÜšÙ›ÝÑØÝ[Y[
+›ÝÊHÂˆYˆ
+\›ÝÊH™]\›ˆ[ÂˆÛÛœÝš[S˜[YHH›ÝËœÛX\Ùš[[˜[YH›ÝË›ÜšYÚ[˜[Ùš[[˜[YH	Ñ\Ü]HØÝ[Y[	ÎÂˆÛÛœÝ™\œÚ[Û’YH›ÝËœØ[\Ù›Ü˜ÙWØÛÛ[Ý™\œÚ[Û—ÚYÂˆ™]\›ˆÂˆYˆ›ÝËšYˆØ\ÙRYˆ›ÝË˜Ø\ÙWÚYˆXÝ[Û’Yˆ›ÝË˜XÝ[Û—ÚY[ˆÝ\Y\’[œÝXÝ[Û’Yˆ›ÝËœÝ\Y\—Ú[œÝXÝ[Û—ÚY[ˆ\RYˆ›ÝËœ\WÚYˆÝ[RYˆ›ÝËœÝ[WÚYˆ\TÚYNˆ›ÝËœ\WÜÚYKˆ\U\Nˆ›ÝËœ\WÜÚYKˆ\S˜[YNˆ›ÝËœ\WÛ˜[YH	ÉËˆ\PXØÛÝ[Yˆ›ÝËœ\WØXØÛÝ[ÚY[ˆØÝ[Y[\™XÝ[ÛŽˆ›ÝË™ØÝ[Y[Ù\™XÝ[Û‹ˆØÝ[Y[\Nˆ›ÝË™ØÝ[Y[Ý\KˆÜšYÚ[˜[š[S˜[YNˆ›ÝË›ÜšYÚ[˜[Ùš[[˜[YKˆ™\]Y\ÝYš[S˜[YNˆ›ÝËœ™\]Y\ÝYÙš[[˜[YHš[S˜[YKˆš[S˜[YKˆÛX\š[S˜[YNˆš[S˜[YKˆÛÛ[\Nˆ›ÝË˜ÛÛ[Ý\H	Ø\XØ][Û‹ÛØÝ]\Ý™X[IËˆš[Q^[œÚ[ÛŽˆ›ÝË™š[WÙ^[œÚ[Ûˆ	ÉËˆÛÛ[Ú^™Nˆ[X™\Š›ÝË˜ÛÛ[ÜÚ^™H
+KˆÛÛ[™\œÚ[Û’Yˆ™\œÚ[Û’YˆÛÛ[ØÝ[Y[Yˆ›ÝËœØ[\Ù›Ü˜ÙWØÛÛ[ÙØÝ[Y[ÚY[ˆ[šÙY™XÛÜ™Yˆ›ÝËœØ[\Ù›Ü˜ÙWÛ[šÙYÜ™XÛÜ™ÚYˆ[šÙY™XÛÜ™YÎˆ›ÝËœØ[\Ù›Ü˜ÙWÛ[šÙYÜ™XÛÜ™ÚYÈÜ›ÝËœØ[\Ù›Ü˜ÙWÛ[šÙYÜ™XÛÜ™ÚYHˆ×Kˆ\ØYÝ]\Îˆ›ÝË\ØYÜÝ]\È	ØÛÛ\]IËˆØ[\Ù›Ü˜ÙU\›ˆ›ÝËœØ[\Ù›Ü˜ÙWÝ\›[ˆÝÛ›ØY\›ˆØ\KÙ[˜Ý[ÛœËÜØ[\Ù›Ü˜ÙQØÝ[Y[ÝÛ›ØYÚÚ[™XÛÛ[™\œÚ[Û‰šYIÙ[˜ÛÙUT’PÛÛ\Û™[
+™\œÚ[Û’Y
+_I™š[[˜[YOIÙ[˜ÛÙUT’PÛÛ\Û™[
+š[S˜[YJ_Xˆ\ØYYžNˆ›ÝË\ØYYØžH[ˆ\ØYYžQ[XZ[ˆ›ÝË\ØYYØžWÙ[XZ[[ˆÜ™X]Y]ˆ›ÝË˜Ü™X]YØ][ˆNÂŸB‚™[˜Ý[ÛˆÙ\šX[^™Q\Ü]P™]Q]™[
+›ÝÊHÂˆYˆ
+\›ÝÊH™]\›ˆ[Âˆ™]\›ˆÂˆYˆ›ÝËšYˆØ\ÙRYˆ›ÝË˜Ø\ÙWÚYˆXÝ[Û’Yˆ›ÝË˜XÝ[Û—ÚY[ˆÝ[RYˆ›ÝËœÝ[WÚYˆ]™[\Nˆ›ÝË™]™[Ý\Kˆ›ÝNˆ›ÝË››ÝH	ÉËˆY]Y]Nˆ›ÝË›Y]Y]HßKˆXÝÜ•\Ù\’Yˆ›ÝË˜XÝÜ—Ý\Ù\—ÚY[ˆXÝÜ‘[XZ[ˆ›ÝË˜XÝÜ—Ù[XZ[[ˆÜ™X]Y]ˆ›ÝË˜Ü™X]YØ][ˆNÂŸB‚™[˜Ý[Ûˆ\Ü]P™]PXÝ[Û”\U\JXÝ[Û•\K[œ]\U\JHÂˆYˆ
+XÝ[Û•\HOOH	Ú\ÜÝYWØ^Y\—ØÜ™Y]Û›ÝIÈXÝ[Û•\HOOH	ØÛÜÙWØ^Y\—Ù\Ü]IÊH™]\›ˆ	Ø^Y\‰ÎÂˆYˆ
+XÝ[Û•\HOOH	ÚÛÜÝ\Y\—Ü^[Y[	ÈXÝ[Û•\HOOH	Ü^WÙ[ÜÝ\Y\—Ú[›ÚXÙIÈXÝ[Û•\HOOH	ÙYXÝÜÜXÚYšX×Ø[[Ý[	ÈXÝ[Û•\HOOH	Ü™\ÛÛ™WÜÝ\Y\—Ù\Ü]IÈXÝ[Û•\HOOH	ØÛÜÙWÜÝ\Y\—Ù\Ü]IÊH™]\›ˆ	ÜÝ\Y\‰ÎÂˆ™]\›ˆÝš[™Ê[œ]\U\H	ÉÊKÓÝÙ\Ø\ÙJ
+HOOH	Ø^Y\‰ÈÈ	Ø^Y\‰Èˆ	ÜÝ\Y\‰ÎÂŸB‚™[˜Ý[Ûˆ›Ü›X[^™Q\Ü]P™]PXÝ[ÛŠ[œ]HßKØ\ÙT›ÝË›Ùš[HHßK™YÚ\ÝžJHÂˆÛÛœÝXÝ[Û•\HHÝš[™Ê[œ]˜XÝ[Û•\H[œ]˜XÝ[Û—Ý\H	ÉÊKš[J
+NÂˆYˆ
+QTÔUWÐ‘UWÐPÕSÓ—ÓP‘SÖØXÝ[Û•\WJH›ÝÈ\\œ›ÜŠ	Õ˜[Y\Ü]HÛÜšÙ›ÝÈXÝ[Ûˆ\H\È™\]Z\™Y‰Ë
+NÂˆÛÛœÝ\TÚYHH\Ü]P™]PXÝ[Û”\U\JXÝ[Û•\K[œ]œ\TÚYH[œ]œ\WÜÚYH[œ]œ\U\H[œ]œ\WÝ\JNÂˆÛÛœÝ\HHØ[›ÛšXØ[\Ü]PXÝ[Û•\™Ù]
+[œ]\TÚYK™YÚ\ÝžJNÂˆÛÛœÝ[[Ý[HXÚ[X[Ü“[
+[œ]˜[[Ý[
+NÂˆYˆ
+XÝ[Û•\HOOH	ÙYXÝÜÜXÚYšX×Ø[[Ý[	È	‰ˆ[[Ý[OH[
+H›ÝÈ\\œ›ÜŠ	ÑYXÝ[Ûˆ[[Ý[\È™\]Z\™Y‰Ë
+NÂˆYˆ
+XÝ[Û•\HOOH	Ü™\ÛÛ™WÜÝ\Y\—Ù\Ü]IÈ	‰ˆ
+[[Ý[OH[[[Ý[H
+JHÂˆ›ÝÈ\\œ›ÜŠ	Ñ[\ˆ[ˆYÜ™YYÝ\Y\ˆ™XÛÝ™\žH[[Ý[X›Ý™H™\›ËÜˆÚÛÜÙHÛÜÙH\Ü]HÚ]Ý\Y\ˆ
+›È™XÛÝ™\žJK‰Ë
+NÂˆBˆYˆ
+XÝ[Û•\HOOH	Ú\ÜÝYWØ^Y\—ØÜ™Y]Û›ÝIÈ	‰ˆ
+[[Ý[OH[[[Ý[H
+JHÂˆ›ÝÈ\\œ›ÜŠ	Ñ[\ˆ[ˆYÜ™YY^Y\ˆÜ™Y]›ÝH[[Ý[X›Ý™H™\›ËÜˆÚÛÜÙHÛÜÙH\Ü]HÚ]^Y\ˆ
+›ÈÜ™Y]›ÝJK‰Ë
+NÂˆBˆÛÛœÝÛÜÙT™X\ÛÛ’[œ]HÝš[™Ê[œ]˜ÛÜÙT™X\ÛÛˆ[œ]˜ÛÜÙWÜ™X\ÛÛˆ	ÉÊKš[J
+NÂˆÛÛœÝÛÜÙT™X\ÛÛˆHXÝ[Û•\HOOH	ØÛÜÙWÜÝ\Y\—Ù\Ü]IÈÈØ[›ÛšXØ[\Ü]P™]PÛÜÙT™X\ÛÛŠÛÜÙT™X\ÛÛ’[œ]TÔUWÐ‘UWÔÕTQT—ÐÓÔÑWÔ‘PTÓÓ”ÊHˆXÝ[Û•\HOOH	ØÛÜÙWØ^Y\—Ù\Ü]IÈÈØ[›ÛšXØ[\Ü]P™]PÛÜÙT™X\ÛÛŠÛÜÙT™X\ÛÛ’[œ]TÔUWÐ‘UWÐ•VQT—ÐÓÔÑWÔ‘PTÓÓ”ÊHˆÛÜÙT™X\ÛÛ’[œ][ÂˆYˆ
+XÝ[Û•\HOOH	ØÛÜÙWÜÝ\Y\—Ù\Ü]IÈ	‰ˆQTÔUWÐ‘UWÔÕTQT—ÐÓÔÑWÔ‘PTÓÓ”Ëš[˜ÛY\ÊÛÜÙT™X\ÛÛŠJHÂˆ›ÝÈ\\œ›ÜŠ	Õ˜[YÝ\Y\ˆÛÜÙH™X\ÛÛˆ\È™\]Z\™Y‰Ë
+NÂˆBˆYˆ
+XÝ[Û•\HOOH	ØÛÜÙWØ^Y\—Ù\Ü]IÈ	‰ˆQTÔUWÐ‘UWÐ•VQT—ÐÓÔÑWÔ‘PTÓÓ”Ëš[˜ÛY\ÊÛÜÙT™X\ÛÛŠJHÂˆ›ÝÈ\\œ›ÜŠ	Õ˜[Y^Y\ˆÛÜÙH™X\ÛÛˆ\È™\]Z\™Y‰Ë
+NÂˆBˆÛÛœÝ˜[[˜ÙT^[Y[[œÝXÝ[ÛˆHÝš[™Ê[œ]˜˜[[˜ÙT^[Y[[œÝXÝ[Ûˆ[œ]˜˜[[˜ÙWÜ^[Y[Ú[œÝXÝ[Ûˆ	ÉÊKš[J
+H[ÂˆYˆ
+˜[[˜ÙT^[Y[[œÝXÝ[Ûˆ	‰ˆQTÔUWÐ‘UWÐSSÑWÔVSQS•ÒS”Õ•PÕSÓ”Ëš[˜ÛY\Ê˜[[˜ÙT^[Y[[œÝXÝ[ÛŠJHÂˆ›ÝÈ\\œ›ÜŠ	Õ˜[Y˜[[˜ÙH^[Y[[œÝXÝ[Ûˆ\È™\]Z\™Y‰Ë
+NÂˆBˆYˆ
+XÝ[Û•\HOOH	ØÛÜÙWÜÝ\Y\—Ù\Ü]IÈ	‰ˆX˜[[˜ÙT^[Y[[œÝXÝ[ÛŠHÂˆ›ÝÈ\\œ›ÜŠ	Ð˜[[˜ÙH^[Y[[œÝXÝ[Ûˆ\È™\]Z\™YÚ[ˆÛÜÚ[™ÈHÝ\Y\ˆ\Ü]HÚ]Ý]™XÛÝ™\žK‰Ë
+NÂˆBˆÛÛœÝÝ\œ™[˜ÞR\ÛÐÛÙHBˆÝš[™Ê[œ]˜Ý\œ™[˜ÞR\ÛÐÛÙH[œ]˜Ý\œ™[˜ÞWÚ\Û×ØÛÙH	ÕTÑ	ÊBˆš[J
+BˆÕ\\Ø\ÙJ
+H	ÕTÑ	ÎÂˆYˆ
+XÝ[Û•\HOOH	Ü™\ÛÛ™WÜÝ\Y\—Ù\Ü]IÈ	‰ˆK×–ÐKV—^ÌßIË\Ý
+Ý\œ™[˜ÞR\ÛÐÛÙJJHÂˆ›ÝÈ\\œ›ÜŠ	ÔÝ\Y\ˆ\Ü]HÝ\œ™[˜ÞH]\Ý™HH™YK[]\ˆTÓÈÛÙK‰Ë
+NÂˆB‚ˆ™]\›ˆÂˆÝ[WÚYˆØ\ÙT›ÝËœÝ[WÚYˆ\WÚYˆ\KšYˆ\WÜÚYNˆ\TÚYKˆ\WØXØÛÝ[ÚÙ^Nˆ\K˜XØÛÝ[Ù^KˆXÝ[Û—Ý\NˆXÝ[Û•\KˆXÝ[Û—ÛX™[ˆTÔUWÐ‘UWÐPÕSÓ—ÓP‘SÖØXÝ[Û•\WKˆ[[Ý[ˆÜXÚX[ÜÙ[ÜšXÙNˆXÚ[X[Ü“[
+[œ]œÜXÚX[Ù[šXÙHÏÈ[œ]œÜXÚX[ÜÙ[ÜšXÙJKˆÜXÚX[Ø^WÜšXÙNˆXÚ[X[Ü“[
+[œ]œÜXÚX[^TšXÙHÏÈ[œ]œÜXÚX[Ø^WÜšXÙJKˆ]X[]NˆXÚ[X[Ü“[
+[œ]œ]X[]JKˆ]X[]WÝ[š]ˆÝš[™Ê[œ]œ]X[]U[š][œ]œ]X[]WÝ[š]	ÓU	ÊKš[J
+H	ÓU	ËˆÛÜÙWÜ™X\ÛÛŽˆÛÜÙT™X\ÛÛ‹ˆ˜[[˜ÙWÜ^[Y[Ú[œÝXÝ[ÛŽˆ˜[[˜ÙT^[Y[[œÝXÝ[Û‹ˆ\ØÜš\[ÛŽˆÝš[™Ê[œ]™\ØÜš\[Ûˆ	ÉÊKš[J
+Kˆ™\]Z\™\×Ø]XÚY[ˆ›ÛÛX[Š[œ]œ™\]Z\™\Ð]XÚY[ÏÈ[œ]œ™\]Z\™\×Ø]XÚY[
+Kˆ^XÝ][Û—ÜÝ]\Îˆ›Ü›X[^™Q\Ü]P™]TÝ]\Ê[œ]˜XØÛÝ[[™ÔÝ]\È[œ]™^XÝ][Û”Ý]\È[œ]™^XÝ][Û—ÜÝ]\ËTÔUWÐ‘UWÑVPÕUSÓ—ÔÕUTÑTË	Ô[™[™ÈXØÛÝ[[™ÉÊKˆÝ\œ™[˜ÞWÚ\Û×ØÛÙNˆÝ\œ™[˜ÞR\ÛÐÛÙKˆ[›ÚXÙWØ[ØØ][ÛœÎˆ\œ˜^Kš\Ð\œ˜^J[œ]š[›ÚXÙP[ØØ][ÛœÈ[œ]š[›ÚXÙWØ[ØØ][ÛœÊHÈ[œ]š[›ÚXÙP[ØØ][ÛœÈ[œ]š[›ÚXÙWØ[ØØ][ÛœÈˆ×Kˆ\]YØžNˆ›Ùš[KšYˆ\]YØžWÙ[XZ[ˆ›Ùš[K™[XZ[ˆNÂŸB‚™[˜Ý[Ûˆ™\\™TÝ\Y\”Ù][Y[XÝ[ÛŠXÝ[Û‹Ý\œ™[Ý[JHÂˆYˆ
+XÝ[Û‹˜XÝ[Û—Ý\HOOH	Ü™\ÛÛ™WÜÝ\Y\—Ù\Ü]IÊH™]\›ˆXÝ[ÛŽÂˆÛÛœÝØÚ[XHHÝ\œ™[Ý[OË—ÔÝ\Y\—ÔÙ][Y[ÔØÚ[XNÂˆYˆ
+\ØÚ[XOË˜[Y
+HÂˆ›ÝÈ\\œ›ÜŠÝ\Y\ˆ^[Y[]]ÛX][Ûˆ\È[˜]˜Z[X›Nˆ	ÊØÚ[XOËš\ÜÝY\ÈÉÔØ[\Ù›Ü˜ÙH[›ÚXÙKÜ^[Y[ØÚ[XH\È[˜ÛÛ\]K‰×JKš›Ú[Š	È	Ê_X
+NÂˆBˆÛÛœÝXØÛÝ[Ù^HH\Ü]TØ[\Ù›Ü˜ÙRYÙ^JXÝ[Û‹œ\WØXØÛÝ[ÚÙ^JNÂˆÛÛœÝ[›ÚXÙ\ÈH
+Ý\œ™[Ý[OË—ÔÝ\Y\—Ò[›ÚXÙWÑ^ÜÝ\™WÔ›ÝÜÈ×JK™š[\Š
+[›ÚXÙJHOˆ\Ü]TØ[\Ù›Ü˜ÙRYÙ^J[›ÚXÙKœÝ\Y\XØÛÝ[Y
+HOOHXØÛÝ[Ù^JNÂˆÛÛœÝ[˜[Y[›ÚXÙ\ÈH[›ÚXÙ\Ë™š[\Š
+[›ÚXÙJHOˆ
+[›ÚXÙKØ\›š[™ÜÈ×JKœÛÛYJ
+Ø\›š[™ÊHOˆÛ›È˜[YÝ\Y\ˆXØÛÝ[ÛÚÝ\™YØ]]™_^ÙYYÈ]È[›ÚXÙH[[Ý[ÚK\Ý
+Ø\›š[™ÊJJNÂˆYˆ
+[˜[Y[›ÚXÙ\Ë›[™Ý
+HÂˆ›ÝÈ\\œ›ÜŠ	ÐÛÜœ™XÝHÝ\Y\ˆ[›ÚXÙHXØÛÝ[Üˆ^XX›H˜[[˜ÙH[ˆØ[\Ù›Ü˜ÙH™Y›Ü™HØ]š[™È\ÈÝ\Y\ˆ™\ÛÛ][Û‹‰Ë
+NÂˆBˆÛÛœÝ[ØØ][ÛˆH[ØØ]TÝ\Y\‘\Ü]JÂˆ[›ÚXÙ\Ëˆ\Ü]P[[Ý[ˆXÝ[Û‹˜[[Ý[ˆÝ\œ™[˜ÞR\ÛÐÛÙNˆXÝ[Û‹˜Ý\œ™[˜ÞWÚ\Û×ØÛÙKˆ[›ÚXÙP[ØØ][ÛœÎˆXÝ[Û‹š[›ÚXÙWØ[ØØ][ÛœËˆJNÂˆ™]\›ˆÂˆ‹‹˜XÝ[Û‹ˆ[›ÚXÙWØ[ØØ][ÛœÎˆ[ØØ][Û‹˜[ØØ][ÛœË›X\
+
+][JHOˆ
+ÂˆÝ\Y\—Ú[›ÚXÙWÚYˆ][KœÝ\Y\’[›ÚXÙRYˆ[[Ý[ˆ][K˜[ØØ]Y[[Ý[ˆJJKˆÝ\Y\—Ø[ØØ][ÛŽˆ[ØØ][Û‹ˆÝ\Y\—Ú[œÝXÝ[ÛœÎˆÝ\Y\’[œÝXÝ[Û”›ÝÜÊ[ØØ][ÛŠK›X\
+
+[œÝXÝ[ÛŠHOˆ
+Âˆ‹‹š[œÝXÝ[Û‹ˆÛÝ\˜ÙWÜÝ[WÚYˆÝ\œ™[Ý[K’YˆÛÝ\˜ÙWÜÝ[WÜÛ˜\ÚÝˆÂˆÝ[RYˆÝ\œ™[Ý[K’YˆÝ[S˜[YNˆÝ\œ™[Ý[K—Ñ\Ü^WÓ˜[YHÝ\œ™[Ý[K“˜[YHÝ\œ™[Ý[K’Ù^TÝ[W×ØÈ	ÉËˆ[]™\žQ]NˆÝ\œ™[Ý[K‘[]™\žWÑ]W×ØÈ[ˆKˆJJKˆNÂŸB‚™[˜Ý[ÛˆØ[Ý[]Q\Ü]P™]TÙ][Y[
+XÝ[ÛœÈH×JHÂˆ]^Y\’[\XÝHÂˆ]Ý\Y\’[\XÝHÂˆ]^Y\Ü™Y]›ÝR[\XÝHÂˆ]Ý\Y\Ü™Y]›ÝR[\XÝHÂˆÛÛœÝ[™\ÈH×NÂ‚ˆ›Üˆ
+ÛÛœÝXÝ[ÛˆÙˆXÝ[ÛœÊHÂˆÛÛœÝ[[Ý[H[X™\ŠXÝ[Û‹˜[[Ý[ÏÈXÝ[Û‹˜[[Ý[ØÙ[ÈÏÈ
+HÂˆYˆ
+XÝ[Û‹˜XÝ[Û—Ý\HOOH	Ú\ÜÝYWØ^Y\—ØÜ™Y]Û›ÝIÈXÝ[Û‹˜XÝ[Û•\HOOH	Ú\ÜÝYWØ^Y\—ØÜ™Y]Û›ÝIÊHÂˆ^Y\’[\XÝOH[[Ý[Âˆ[™\Ëœ\Ú
+ÂˆX™[ˆXÝ[Û‹˜XÝ[Û—ÛX™[XÝ[Û‹˜XÝ[Û“X™[	Ð^Y\ˆÜ™Y]›ÝIËˆ[\XÝˆX[[Ý[ˆJNÂˆBˆYˆ
+XÝ[Û‹˜XÝ[Û—Ý\HOOH	ÙYXÝÜÜXÚYšX×Ø[[Ý[	ÈXÝ[Û‹˜XÝ[Û•\HOOH	ÙYXÝÜÜXÚYšX×Ø[[Ý[	ÊHÂˆÝ\Y\’[\XÝ
+ÏH[[Ý[Âˆ[™\Ëœ\Ú
+ÂˆX™[ˆXÝ[Û‹˜XÝ[Û—ÛX™[XÝ[Û‹˜XÝ[Û“X™[	ÔÝ\Y\ˆYXÝ[Û‰Ëˆ[\XÝˆ[[Ý[ˆJNÂˆBˆYˆ
+XÝ[Û‹˜XÝ[Û—Ý\HOOH	Ü™\ÛÛ™WÜÝ\Y\—Ù\Ü]IÈXÝ[Û‹˜XÝ[Û•\HOOH	Ü™\ÛÛ™WÜÝ\Y\—Ù\Ü]IÊHÂˆÝ\Y\’[\XÝ
+ÏH[[Ý[Âˆ[™\Ëœ\Ú
+ÂˆX™[ˆXÝ[Û‹˜XÝ[Û—ÛX™[XÝ[Û‹˜XÝ[Û“X™[	ÔÝ\Y\ˆ\Ü]H™\ÛÛ][Û‰Ëˆ[\XÝˆ[[Ý[ˆJNÂˆB‚ˆÛÛœÝ^Y\Ü™Y]›ÝHH[X™\ŠXÝ[Û‹œÜXÚX[ÜÙ[ÜšXÙHÏÈXÝ[Û‹œÜXÚX[Ù[šXÙJNÂˆYˆ
+[X™\‹š\Ñš[š]J^Y\Ü™Y]›ÝJH	‰ˆ^Y\Ü™Y]›ÝHˆ
+HÂˆÛÛœÝ[\XÝHX^Y\Ü™Y]›ÝNÂˆ^Y\Ü™Y]›ÝR[\XÝ
+ÏH[\XÝÂˆ[™\Ëœ\Ú
+ÂˆX™[ˆ	Ð^Y\ˆYÜ™YYÜ™Y]›ÝIËˆ^Y\Ü™Y]›ÝKˆ[\XÝˆJNÂˆB‚ˆÛÛœÝÝ\Y\Ü™Y]›ÝHH[X™\ŠXÝ[Û‹œÜXÚX[Ø^WÜšXÙHÏÈXÝ[Û‹œÜXÚX[^TšXÙJNÂˆYˆ
+[X™\‹š\Ñš[š]JÝ\Y\Ü™Y]›ÝJH	‰ˆÝ\Y\Ü™Y]›ÝHˆ
+HÂˆÛÛœÝ[\XÝHÝ\Y\Ü™Y]›ÝNÂˆÝ\Y\Ü™Y]›ÝR[\XÝ
+ÏH[\XÝÂˆ[™\Ëœ\Ú
+ÂˆX™[ˆ	ÔÝ\Y\ˆYÜ™YYÜ™Y]›ÝIËˆÝ\Y\Ü™Y]›ÝKˆ[\XÝˆJNÂˆBˆB‚ˆÛÛœÝÙ][Y[›H^Y\’[\XÝ
+ÈÝ\Y\’[\XÝ
+È^Y\Ü™Y]›ÝR[\XÝ
+ÈÝ\Y\Ü™Y]›ÝR[\XÝÂˆ™]\›ˆÂˆ^Y\’[\XÝˆÝ\Y\’[\XÝˆ^Y\Ü™Y]›ÝR[\XÝˆÝ\Y\Ü™Y]›ÝR[\XÝˆÜXÚX[šXÙT›ˆ^Y\Ü™Y]›ÝR[\XÝ
+ÈÝ\Y\Ü™Y]›ÝR[\XÝˆÙ][Y[›ˆ[™\ËˆNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆØY\Ü]P™]UÛÜšÙ›ÝÓX\
+ÛY[Ý[RYÈH×JHÂˆÛÛœÝYÈHË‹‹›™]ÈÙ]
+Ý[RYË™š[\Š›ÛÛX[ŠJWNÂˆYˆ
+ZYË›[™Ý
+H™]\›ˆßNÂˆÛÛœÝØØ\Ù\Ô™\Ë\Y\Ô™\ËXÝ[ÛœÔ™\Ë[œÝXÝ[ÛœÔ™\Ë]™[Ô™\ËØÝ[Y[Ô™\×HH]ØZ]›ÛZ\ÙK˜[
+ÂˆÛY[™œ›ÛJ	Ù\Ü]WØ™]WØØ\Ù\ÉÊKœÙ[XÝ
+TÔUWÐ‘UWÐÐTÑWÔÑSPÕ
+Kš[Š	ÜÝ[WÚY	ËYÊKˆÛY[™œ›ÛJ	Ù\Ü]WÝÛÜšÙ›Ý×Ü\Y\ÉÊKœÙ[XÝ
+TÔUWÕÓÔ’Ñ“Õ×ÔT•WÔÑSPÕ
+Kš[Š	ÜÝ[WÚY	ËYÊK›Ü™\Š	ØÜ™X]YØ]	ËÈ\ØÙ[™[™ÎˆYHJKˆÛY[™œ›ÛJ	Ù\Ü]WØ™]WØXÝ[ÛœÉÊKœÙ[XÝ
+TÔUWÐ‘UWÐPÕSÓ—ÔÑSPÕ
+Kš[Š	ÜÝ[WÚY	ËYÊK›Ü™\Š	ØÜ™X]YØ]	ËÈ\ØÙ[™[™ÎˆYHJKˆÛY[™œ›ÛJ	Ù\Ü]WÝÛÜšÙ›Ý×ÜÝ\Y\—Ú[œÝXÝ[ÛœÉÊKœÙ[XÝ
+TÔUWÔÕTQT—ÒS”Õ•PÕSÓ—ÔÑSPÕ
+Kš[Š	ÜÝ[WÚY	ËYÊK›Ü™\Š	ØÜ™X]YØ]	ËÈ\ØÙ[™[™ÎˆYHJKˆÛY[ˆ™œ›ÛJ	Ù\Ü]WØ™]WÙ]™[ÉÊBˆœÙ[XÝ
+TÔUWÐ‘UWÑU‘S•ÔÑSPÕ
+Bˆš[Š	ÜÝ[WÚY	ËYÊBˆ›Ü™\Š	ØÜ™X]YØ]	ËÈ\ØÙ[™[™Îˆ˜[ÙHJBˆ›[Z]
+X]›X^
+LX]›Z[ŠYË›[™Ý
+ˆKL
+JJKˆÛY[™œ›ÛJ	Ù\Ü]WÝÛÜšÙ›Ý×ÙØÝ[Y[ÉÊKœÙ[XÝ
+TÔUWÕÓÔ’Ñ“Õ×ÑÐÕSQS•ÔÑSPÕ
+Kš[Š	ÜÝ[WÚY	ËYÊK™\J	Ý\ØYÜÝ]\ÉË	ØÛÛ\]IÊK›Ü™\Š	ØÜ™X]YØ]	ËÈ\ØÙ[™[™Îˆ˜[ÙHJKˆJNÂˆYˆ
+Ø\Ù\Ô™\Ë™\œ›ÜŠH›ÝÈØ\Ù\Ô™\Ë™\œ›ÜŽÂˆYˆ
+\Y\Ô™\Ë™\œ›ÜŠH›ÝÈ\Y\Ô™\Ë™\œ›ÜŽÂˆYˆ
+XÝ[ÛœÔ™\Ë™\œ›ÜŠH›ÝÈXÝ[ÛœÔ™\Ë™\œ›ÜŽÂˆYˆ
+[œÝXÝ[ÛœÔ™\Ë™\œ›ÜŠH›ÝÈ[œÝXÝ[ÛœÔ™\Ë™\œ›ÜŽÂˆYˆ
+]™[Ô™\Ë™\œ›ÜŠH›ÝÈ]™[Ô™\Ë™\œ›ÜŽÂˆYˆ
+ØÝ[Y[Ô™\Ë™\œ›ÜŠH›ÝÈØÝ[Y[Ô™\Ë™\œ›ÜŽÂ‚ˆÛÛœÝX\HßNÂˆ›Üˆ
+ÛÛœÝ›ÝÈÙˆØ\Ù\Ô™\Ë™]H×JHÂˆX\Ü›ÝËœÝ[WÚYHHÂˆØ\ÙNˆÙ\šX[^™Q\Ü]P™]PØ\ÙJ›ÝÊKˆ\Y\Îˆ×KˆXÝ[ÛœÎˆ×KˆÝ\Y\’[œÝXÝ[ÛœÎˆ×Kˆ]™[Îˆ×KˆØÝ[Y[Îˆ×KˆNÂˆBˆÛÛœÝ\PžRYH™]ÈX\
+
+NÂˆ›Üˆ
+ÛÛœÝ›ÝÈÙˆ\Y\Ô™\Ë™]H×JHÂˆ\PžRYœÙ]
+›ÝËšY›ÝÊNÂˆYˆ
+[X\Ü›ÝËœÝ[WÚYJBˆX\Ü›ÝËœÝ[WÚYHHÂˆØ\ÙNˆ[ˆ\Y\Îˆ×KˆXÝ[ÛœÎˆ×KˆÝ\Y\’[œÝXÝ[ÛœÎˆ×Kˆ]™[Îˆ×KˆØÝ[Y[Îˆ×KˆNÂˆX\Ü›ÝËœÝ[WÚYKœ\Y\Ëœ\Ú
+Ù\šX[^™Q\Ü]UÛÜšÙ›ÝÔ\J›ÝÊJNÂˆBˆ›Üˆ
+ÛÛœÝ›ÝÈÙˆ[œÝXÝ[ÛœÔ™\Ë™]H×JHÂˆYˆ
+[X\Ü›ÝËœÝ[WÚYJBˆX\Ü›ÝËœÝ[WÚYHHÂˆØ\ÙNˆ[ˆ\Y\Îˆ×KˆXÝ[ÛœÎˆ×KˆÝ\Y\’[œÝXÝ[ÛœÎˆ×Kˆ]™[Îˆ×KˆØÝ[Y[Îˆ×KˆNÂˆX\Ü›ÝËœÝ[WÚYKœÝ\Y\’[œÝXÝ[ÛœËœ\Ú
+Ù\šX[^™Q\Ü]TÝ\Y\’[œÝXÝ[ÛŠ›ÝÊJNÂˆBˆ›Üˆ
+ÛÛœÝ›ÝÈÙˆXÝ[ÛœÔ™\Ë™]H×JHÂˆYˆ
+[X\Ü›ÝËœÝ[WÚYJBˆX\Ü›ÝËœÝ[WÚYHHÂˆØ\ÙNˆ[ˆ\Y\Îˆ×KˆXÝ[ÛœÎˆ×KˆÝ\Y\’[œÝXÝ[ÛœÎˆ×Kˆ]™[Îˆ×KˆØÝ[Y[Îˆ×KˆNÂˆX\Ü›ÝËœÝ[WÚYK˜XÝ[ÛœËœ\Ú
+Ù\šX[^™Q\Ü]P™]PXÝ[ÛŠ›ÝË\PžRY[œÝXÝ[ÛœÔ™\Ë™]H×JJNÂˆBˆ›Üˆ
+ÛÛœÝ›ÝÈÙˆ]™[Ô™\Ë™]H×JHÂˆYˆ
+[X\Ü›ÝËœÝ[WÚYJBˆX\Ü›ÝËœÝ[WÚYHHÂˆØ\ÙNˆ[ˆ\Y\Îˆ×KˆXÝ[ÛœÎˆ×KˆÝ\Y\’[œÝXÝ[ÛœÎˆ×Kˆ]™[Îˆ×KˆØÝ[Y[Îˆ×KˆNÂˆX\Ü›ÝËœÝ[WÚYK™]™[Ëœ\Ú
+Ù\šX[^™Q\Ü]P™]Q]™[
+›ÝÊJNÂˆBˆ›Üˆ
+ÛÛœÝ›ÝÈÙˆØÝ[Y[Ô™\Ë™]H×JHÂˆYˆ
+[X\Ü›ÝËœÝ[WÚYJBˆX\Ü›ÝËœÝ[WÚYHHÂˆØ\ÙNˆ[ˆ\Y\Îˆ×KˆXÝ[ÛœÎˆ×KˆÝ\Y\’[œÝXÝ[ÛœÎˆ×Kˆ]™[Îˆ×KˆØÝ[Y[Îˆ×KˆNÂˆX\Ü›ÝËœÝ[WÚYK™ØÝ[Y[Ëœ\Ú
+Ù\šX[^™Q\Ü]UÛÜšÙ›ÝÑØÝ[Y[
+›ÝÊJNÂˆBˆ™]\›ˆX\ÂŸB‚˜\Þ[˜È[˜Ý[ÛˆÜš]Q\Ü]P™]Q]™[
+ÛY[Ø\ÙT›ÝË]™[\K›Ùš[K^[ØYHßJHÂˆÛÛœÝÈ\œ›ÜˆHH]ØZ]ÛY[™œ›ÛJ	Ù\Ü]WØ™]WÙ]™[ÉÊKš[œÙ\
+ÂˆØ\ÙWÚYˆØ\ÙT›ÝËšYˆXÝ[Û—ÚYˆ^[ØY˜XÝ[Û’Y[ˆÝ[WÚYˆØ\ÙT›ÝËœÝ[WÚYˆ]™[Ý\Nˆ]™[\Kˆ›ÝNˆ^[ØY››ÝH[ˆY]Y]Nˆ^[ØY›Y]Y]HßKˆXÝÜ—Ý\Ù\—ÚYˆ›Ùš[OËšY[ˆXÝÜ—Ù[XZ[ˆ›Ùš[OË™[XZ[[ˆJNÂˆYˆ
+\œ›ÜŠH›ÝÈ\œ›ÜŽÂŸB‚™[˜Ý[Ûˆ\ÜÙ\Ø[\Ù›Ü˜ÙQ\Ü]R\ÓÜ[ŠÝ[HHßJHÂˆYˆ
+Z\ÔØ[\Ù›Ü˜ÙQ\Ü]PÛÜÙY
+Ý[K‘\Ü]WÔÝ]\××ØÊJH™]\›ŽÂˆ›ÝÈ\\œ›ÜŠ\È\Ü]H\È[™XYH	ÔÝš[™ÊÝ[K‘\Ü]WÔÝ]\××ØÊKš[J
+_H[ˆØ[\Ù›Ü˜ÙKˆÛÛ[Y\˜ÚX[ÛÜšÙ›ÝÈÚ[™Ù\È\™HØÚÙYÈš[˜[˜ÙHX^HÛÛ[YH[ˆ[™XYH\›Ý™YÓÔÈXØÛÝ[[™ÈÛÜšÙ›ÝË˜JNÂŸB‚™[˜Ý[Ûˆ\Õ[˜XØÙ\Y^\›˜[\Ü]PÛÜÝ\™JØ\ÙT›ÝËÝ[JHÂˆ™]\›ˆ›ÛÛX[ŠˆØ\ÙT›ÝÏËšYˆ	‰ˆØ\ÙT›ÝËÛÜšÙ›Ý×ÜÝ]\ÈOOH	ÐÛÜÙY	Âˆ	‰ˆ\ÔØ[\Ù›Ü˜ÙQ\Ü]PÛÜÙY
+Ý[OË‘\Ü]WÔÝ]\××ØÊBˆ	‰ˆZ\Ô™XÛÜ™Y˜ÛÜÐÛÜÝ\™UÜš]X˜XÚÊØ\ÙT›ÝÊKˆ
+NÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ™XÛÜ™^\›˜[\Ü]PÛÜÝ\™JÛY[Ø\ÙT›ÝËÝ[K›Ùš[KÛÜšÙ›ÝÔÝ]\ÈH[
+HÂˆYˆ
+Z\Õ[˜XØÙ\Y^\›˜[\Ü]PÛÜÝ\™JØ\ÙT›ÝËÝ[JJH™]\›ˆØ\ÙT›ÝÎÂˆÛÛœÝš\œÝ]XÝ[ÛˆHXØ\ÙT›ÝË™^\›˜[ØÛÜÝ\™WÙ]XÝYØ]ÂˆÛÛœÝ›ÝÒ\ÛÈH™]È]J
+KÒTÓÔÝš[™Ê
+NÂˆÛÛœÝØ[\Ù›Ü˜ÙTÝ]\ÈHÝš[™ÊÝ[K‘\Ü]WÔÝ]\××ØÈ	ÉÊKš[J
+NÂˆÛÛœÝÈ]Nˆ\]YØ\ÙK\œ›ÜˆHH]ØZ]ÛY[ˆ™œ›ÛJ	Ù\Ü]WØ™]WØØ\Ù\ÉÊBˆ\]JÂˆ‹‹ŠÛÜšÙ›ÝÔÝ]\ÈÈÈÛÜšÙ›Ý×ÜÝ]\ÎˆÛÜšÙ›ÝÔÝ]\ÈHˆßJKˆÝ\œ™[ÜØ[\Ù›Ü˜ÙWÜÝ]\ÎˆØ[\Ù›Ü˜ÙTÝ]\ËˆØ[\Ù›Ü˜ÙWÝÜš]X˜XÚ×ÜÝ]\Îˆ	Ù^\›˜[	ËˆØ[\Ù›Ü˜ÙWÝÜš]X˜XÚ×Ù\œ›ÜŽˆ[ˆ^\›˜[ØÛÜÝ\™WÙ]XÝYØ]ˆØ\ÙT›ÝË™^\›˜[ØÛÜÝ\™WÙ]XÝYØ]›ÝÒ\ÛËˆ^\›˜[ØÛÜÝ\™WÜØ[\Ù›Ü˜ÙWÜÝ]\ÎˆØ[\Ù›Ü˜ÙTÝ]\Ëˆ^\›˜[ØÛÜÝ\™WÜØ[\Ù›Ü˜ÙWÛ[ÙYšYYØ]ˆÝ[K“\Ý[ÙYšYY]H[ˆ\]YØ]ˆ›ÝÒ\ÛËˆJBˆ™\J	ÚY	ËØ\ÙT›ÝËšY
+BˆœÙ[XÝ
+TÔUWÐ‘UWÐÐTÑWÔÑSPÕ
+BˆœÚ[™ÛJ
+NÂˆYˆ
+\œ›ÜŠH›ÝÈ\œ›ÜŽÂˆYˆ
+š\œÝ]XÝ[ÛŠHÂˆ]ØZ]Üš]Q\Ü]P™]Q]™[
+ÛY[\]YØ\ÙK	Ù^\›˜[ØÛÜÝ\™WÙ]XÝY	Ë›Ùš[KÂˆ›ÝNˆØ[\Ù›Ü˜ÙHØ\ÈÚ[™ÙY\™XÝHÈ	ÜØ[\Ù›Ü˜ÙTÝ]\ßKˆÓÔÈ™]Z[™YH	Ý\]YØ\ÙKÛÜšÙ›Ý×ÜÝ]\ßHXØÛÝ[[™ÈÝYÙK˜ˆY]Y]NˆÂˆØ[\Ù›Ü˜ÙTÝ]\ËˆØ[\Ù›Ü˜ÙS\Ý[ÙYšYY]ˆÝ[K“\Ý[ÙYšYY]H[ˆ[\›˜[ÛÜšÙ›ÝÔÝ]\Îˆ\]YØ\ÙKÛÜšÙ›Ý×ÜÝ]\ËˆKˆJNÂˆBˆ™]\›ˆ\]YØ\ÙNÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ\œÚ\Ý\Ü]PXØÛÝ[[™ÔÝ]\ÊÛY[Ø\ÙT›ÝËÝ[K›Ùš[KÛÜšÙ›ÝÔÝ]\ÊHÂˆYˆ
+\Õ[˜XØÙ\Y^\›˜[\Ü]PÛÜÝ\™JØ\ÙT›ÝËÝ[JJHÂˆ™]\›ˆ™XÛÜ™^\›˜[\Ü]PÛÜÝ\™JÛY[Ø\ÙT›ÝËÝ[K›Ùš[KÛÜšÙ›ÝÔÝ]\ÊNÂˆBˆ™]\›ˆÜš]Q\Ü]UÛÜšÙ›ÝÔÝ]\ÕÔØ[\Ù›Ü˜ÙJÛY[Ø\ÙT›ÝË›Ùš[KÛÜšÙ›ÝÔÝ]\ÊNÂŸB‚™[˜Ý[Ûˆ›Ú™XÝ^\›˜[PÛÜÙY\Ü]UÛÜšÙ›ÝÜÊÝ[\ÈH×KÛÜšÙ›ÝÓX\HßJHÂˆ›Üˆ
+ÛÛœÝÝ[HÙˆÝ[\ÊHÂˆÛÛœÝÛÜšÙ›ÝÈHÛÜšÙ›ÝÓX\ÜÝ[K’YNÂˆÛÛœÝ›Ú™XÝ[ÛˆH›Ú™XÝ^\›˜[\Ü]PÛÜÝ\™JÛÜšÙ›ÝÏË˜Ø\ÙKÝ[JNÂˆYˆ
+›Ú™XÝ[ÛŠHÛÜšÙ›ÝË˜Ø\ÙHHÈ‹‹ÛÜšÙ›ÝË˜Ø\ÙK‹‹œ›Ú™XÝ[ÛˆNÂˆBŸB‚˜\Þ[˜È[˜Ý[ÛˆØY\Ü]UÛÜšÙ›ÝÔ\Y\ÊÛY[Ø\ÙRY
+HÂˆÛÛœÝÈ]K\œ›ÜˆHH]ØZ]ÛY[™œ›ÛJ	Ù\Ü]WÝÛÜšÙ›Ý×Ü\Y\ÉÊKœÙ[XÝ
+TÔUWÕÓÔ’Ñ“Õ×ÔT•WÔÑSPÕ
+K™\J	ØØ\ÙWÚY	ËØ\ÙRY
+K›Ü™\Š	ØÜ™X]YØ]	ËÈ\ØÙ[™[™ÎˆYHJNÂˆYˆ
+\œ›ÜŠH›ÝÈ\œ›ÜŽÂˆ™]\›ˆ]H×NÂŸB‚™[˜Ý[Ûˆ\Ü]T\T›ÝÓX\
+\T›ÝÜÈH×JHÂˆ™]\›ˆ™]ÈX\
+\T›ÝÜË›X\
+
+\JHOˆÜ\KšY\WJJNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆØY\Ü]UÛÜšÙ›ÝÐXÝ[ÛœÊÛY[Ø\ÙRY
+HÂˆÛÛœÝÜ\T›ÝÜËXÝ[ÛœÔ™\Ý[[œÝXÝ[ÛœÔ™\Ý[HH]ØZ]›ÛZ\ÙK˜[
+ÛØY\Ü]UÛÜšÙ›ÝÔ\Y\ÊÛY[Ø\ÙRY
+KÛY[™œ›ÛJ	Ù\Ü]WØ™]WØXÝ[ÛœÉÊKœÙ[XÝ
+TÔUWÐ‘UWÐPÕSÓ—ÔÑSPÕ
+K™\J	ØØ\ÙWÚY	ËØ\ÙRY
+K›Ü™\Š	ØÜ™X]YØ]	ËÈ\ØÙ[™[™ÎˆYHJKÛY[™œ›ÛJ	Ù\Ü]WÝÛÜšÙ›Ý×ÜÝ\Y\—Ú[œÝXÝ[ÛœÉÊKœÙ[XÝ
+TÔUWÔÕTQT—ÒS”Õ•PÕSÓ—ÔÑSPÕ
+K™\J	ØØ\ÙWÚY	ËØ\ÙRY
+K›Ü™\Š	ØÜ™X]YØ]	ËÈ\ØÙ[™[™ÎˆYHJWJNÂˆYˆ
+XÝ[ÛœÔ™\Ý[™\œ›ÜŠH›ÝÈXÝ[ÛœÔ™\Ý[™\œ›ÜŽÂˆYˆ
+[œÝXÝ[ÛœÔ™\Ý[™\œ›ÜŠH›ÝÈ[œÝXÝ[ÛœÔ™\Ý[™\œ›ÜŽÂˆÛÛœÝ[œÝXÝ[Û”›ÝÜÈH[œÝXÝ[ÛœÔ™\Ý[™]H×NÂˆ™]\›ˆÂˆ\T›ÝÜËˆXÝ[Û”›ÝÜÎˆXÝ[ÛœÔ™\Ý[™]H×Kˆ[œÝXÝ[Û”›ÝÜËˆÝ\Y\’[œÝXÝ[ÛœÎˆ[œÝXÝ[Û”›ÝÜË›X\
+Ù\šX[^™Q\Ü]TÝ\Y\’[œÝXÝ[ÛŠKˆXÝ[ÛœÎˆ
+XÝ[ÛœÔ™\Ý[™]H×JK›X\
+
+›ÝÊHOˆÙ\šX[^™Q\Ü]P™]PXÝ[ÛŠ›ÝË\Ü]T\T›ÝÓX\
+\T›ÝÜÊK[œÝXÝ[Û”›ÝÜÊJKˆNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆÛX\’[˜[Y\Ü]PÛÛ\[œØ][Û“[šÜÊÛY[Ø\ÙT›ÝË›Ùš[JHÂˆÛÛœÝÛÜšÙ›ÝÈH]ØZ]ØY\Ü]UÛÜšÙ›ÝÐXÝ[ÛœÊÛY[Ø\ÙT›ÝËšY
+NÂˆÛÛœÝ\SX\H\Ü]T\T›ÝÓX\
+ÛÜšÙ›ÝËœ\T›ÝÜÊNÂˆÛÛœÝ[˜[YHÛÜšÙ›ÝË˜XÝ[Û”›ÝÜË™š[\Š
+XÝ[ÛŠHOˆÂˆYˆ
+XXÝ[Û‹›[šÙYØYÜ™YYØÛÛ\[œØ][Û—ÚY
+H™]\›ˆ˜[ÙNÂˆÛÛœÝ\HH\SX\™Ù]
+XÝ[Û‹œ\WÚY
+NÂˆÛÛœÝÛ˜\ÚÝXØÛÝ[YHXÝ[Û‹›[šÙYØÛÛ\[œØ][Û—ÜÛ˜\ÚÝË˜XØÛÝ[YÂˆ™]\›ˆVÉØÛÜÙWØ^Y\—Ù\Ü]IË	ØÛÜÙWÜÝ\Y\—Ù\Ü]I×Kš[˜ÛY\ÊXÝ[Û‹˜XÝ[Û—Ý\JBˆÝš[™ÊXÝ[Û‹˜ÛÜÙWÜ™X\ÛÛˆ	ÉÊKš[J
+KÓÝÙ\Ø\ÙJ
+HOOH	Ý[ØÈÜ[™Y	Âˆ\\OË˜XØÛÝ[ÚYˆÛ˜\ÚÝXØÛÝ[YOOH\K˜XØÛÝ[ÚYÂˆJNÂˆ›Üˆ
+ÛÛœÝXÝ[ÛˆÙˆ[˜[Y
+HÂˆÛÛœÝ›ÝÈH™]È]J
+KÒTÓÔÝš[™Ê
+NÂˆÛÛœÝÈ\œ›ÜˆHH]ØZ]ÛY[™œ›ÛJ	Ù\Ü]WØ™]WØXÝ[ÛœÉÊK\]JÂˆ[šÙYØYÜ™YYØÛÛ\[œØ][Û—ÚYˆ[ˆ[šÙYØÛÛ\[œØ][Û—ÜÛ˜\ÚÝˆßKˆ[šÙYØÛÛ\[œØ][Û—ØžNˆ[ˆ[šÙYØÛÛ\[œØ][Û—ØžWÙ[XZ[ˆ[ˆ[šÙYØÛÛ\[œØ][Û—Ø]ˆ[ˆ\]YØžNˆ›Ùš[KšYˆ\]YØžWÙ[XZ[ˆ›Ùš[K™[XZ[ˆ\]YØ]ˆ›ÝËˆJK™\J	ÚY	ËXÝ[Û‹šY
+NÂˆYˆ
+\œ›ÜŠH›ÝÈ\œ›ÜŽÂˆ]ØZ]Üš]Q\Ü]P™]Q]™[
+ÛY[Ø\ÙT›ÝË	ØÛÛ\[œØ][Û—ØÛZ[WÛ[šÙY	Ë›Ùš[KÂˆXÝ[Û’YˆXÝ[Û‹šYˆ›ÝNˆ	ÐYÜ™YYÛÛ\[œØ][ÛˆÛZ[H[šÈÛX\™Y™XØ]\ÙHH\Ü]H\HÜˆÛÜÝ\™H™X\ÛÛˆÚ[™ÙY‰ËˆY]Y]NˆÈÛZ[T™[[Ý™YˆYHKˆJNÂˆBŸB‚˜\Þ[˜È[˜Ý[Ûˆ\ÜÙ\\Ü]U[ØÐÛZ[\Ô™XYQ›ÜÛÜÝ\™JXÝ[ÛœË\T›ÝÜÊHÂˆÛÛœÝ\SX\H\Ü]T\T›ÝÓX\
+\T›ÝÜÊNÂˆ›Üˆ
+ÛÛœÝXÝ[ÛˆÙˆXÝ[ÛœË™š[\Š
+›ÝÊHOˆÝš[™Ê›ÝË˜ÛÜÙWÜ™X\ÛÛˆ	ÉÊKš[J
+KÓÝÙ\Ø\ÙJ
+HOOH	Ý[ØÈÜ[™Y	ÊJHÂˆÛÛœÝ\HH\SX\™Ù]
+XÝ[Û‹œ\WÚY
+NÂˆYˆ
+XXÝ[Û‹›[šÙYØYÜ™YYØÛÛ\[œØ][Û—ÚY
+HÂˆ›ÝÈ\\œ›ÜŠ	Ü\OË˜XØÛÝ[Û˜[YH	ÕH\Ü]H\IßH™\]Z\™\ÈH[šÙYYÜ™YYÛÛ\[œØ][ÛˆÛZ[H™Y›Ü™Hš[˜[ÛÜÝ\™K˜JNÂˆBˆÛÛœÝÛ˜\ÚÝHXÝ[Û‹›[šÙYØÛÛ\[œØ][Û—ÜÛ˜\ÚÝßNÂˆYˆ
+Û˜\ÚÝ›[šÙYÚ[SÜ[ˆOOHYHÛ˜\ÚÝ˜XØÛÝ[YOOH\OË˜XØÛÝ[ÚY
+HÂˆ›ÝÈ\\œ›ÜŠ	Ü\OË˜XØÛÝ[Û˜[YH	ÕH\Ü]H\IßH\È[ˆ[˜[YÛÛ\[œØ][ÛˆÛZ[H[šËˆ™[[Ý™H][™Ù[XÝHÛÜœ™XÝÜ[ˆÛZ[K˜JNÂˆBˆ]ØZ]˜[Y]PYÜ™YYÛÛ\[œØ][ÛÛZ[S[šÊXÝ[Û‹›[šÙYØYÜ™YYØÛÛ\[œØ][Û—ÚY\K˜XØÛÝ[ÚYÈ™\]Z\™SÜ[Žˆ˜[ÙHJNÂˆBŸB‚™[˜Ý[ÛˆÝÜ™YÝ\Y\’[›ÚXÙP[ØØ][ÛœÊ[œÝXÝ[Û”›ÝÜÈH×JHÂˆÛÛœÝ[ØØ][ÛœÈH™]ÈX\
+
+NÂˆ›Üˆ
+ÛÛœÝ[œÝXÝ[ÛˆÙˆ[œÝXÝ[Û”›ÝÜË™š[\Š
+›ÝÊHOˆ›ÝËœÝ]\ÈOOH	ÔÝ\\œÙYY	ÊJHÂˆÛÛœÝYH[œÝXÝ[Û‹œÛÝ\˜ÙWÜÝ\Y\—Ú[›ÚXÙWÚYÂˆYˆ
+ZY
+HÛÛ[YNÂˆ[ØØ][ÛœËœÙ]
+YX]›X^
+[X™\Š[ØØ][ÛœË™Ù]
+Y
+H
+K[X™\Š[œÝXÝ[Û‹˜[ØØ]YØ[[Ý[
+JJNÂˆBˆ™]\›ˆË‹‹˜[ØØ][Ûœ×K›X\
+
+ÜÝ\Y\’[›ÚXÙRY[[Ý[JHOˆ
+ÂˆÝ\Y\’[›ÚXÙRYˆ[[Ý[ˆJJNÂŸB‚™[˜Ý[ÛˆÝ\œ™[Ý\Y\XÝ[Û[ØØ][ÛŠXÝ[Û‹\T›ÝÜË[œÝXÝ[Û”›ÝÜËÝ\œ™[Ý[JHÂˆÛÛœÝ\HH\Ü]T\T›ÝÓX\
+\T›ÝÜÊK™Ù]
+XÝ[Û‹œ\WÚY
+NÂˆYˆ
+\\JH›ÝÈ\\œ›ÜŠ	ÔÝ\Y\ˆ™\ÛÛ][Ûˆ\È›ÈÙ[XÝYXØÛÝ[‰Ë
+NÂˆÛÛœÝXØÛÝ[Ù^HH\Ü]TØ[\Ù›Ü˜ÙRYÙ^J\K˜XØÛÝ[ÚY
+NÂˆÛÛœÝXÝ[Û’[œÝXÝ[ÛœÈH[œÝXÝ[Û”›ÝÜË™š[\Š
+[œÝXÝ[ÛŠHOˆ[œÝXÝ[Û‹˜XÝ[Û—ÚYOOHXÝ[Û‹šY	‰ˆ[œÝXÝ[Û‹œÝ]\ÈOOH	ÔÝ\\œÙYY	ÊNÂˆÛÛœÝÝ\œ™[˜ÞR\ÛÐÛÙHHXÝ[Û’[œÝXÝ[ÛœÖÌOË˜Ý\œ™[˜ÞWÚ\Û×ØÛÙH	ÕTÑ	ÎÂˆÛÛœÝ[›ÚXÙ\ÈH
+Ý\œ™[Ý[OË—ÔÝ\Y\—Ò[›ÚXÙWÑ^ÜÝ\™WÔ›ÝÜÈ×JK™š[\Š
+[›ÚXÙJHOˆ\Ü]TØ[\Ù›Ü˜ÙRYÙ^J[›ÚXÙKœÝ\Y\XØÛÝ[Y
+HOOHXØÛÝ[Ù^JNÂˆYˆ
+XÝ\œ™[Ý[OË—ÔÝ\Y\—ÔÙ][Y[ÔØÚ[XOË˜[Y
+HÂˆ›ÝÈ\\œ›ÜŠÝ\Y\ˆ^[Y[]]ÛX][Ûˆ\È[˜]˜Z[X›Nˆ	ÊÝ\œ™[Ý[OË—ÔÝ\Y\—ÔÙ][Y[ÔØÚ[XOËš\ÜÝY\È×JKš›Ú[Š	È	Ê_XJNÂˆBˆ™]\›ˆ[ØØ]TÝ\Y\‘\Ü]JÂˆ[›ÚXÙ\Ëˆ\Ü]P[[Ý[ˆXÝ[Û‹˜[[Ý[ˆÝ\œ™[˜ÞR\ÛÐÛÙKˆ[›ÚXÙP[ØØ][ÛœÎˆÝÜ™YÝ\Y\’[›ÚXÙP[ØØ][ÛœÊXÝ[Û’[œÝXÝ[ÛœÊKˆJNÂŸB‚™[˜Ý[ÛˆÝ\Y\’[œÝXÝ[Û”Ý]PÚ[™ÙY
+Ý\œ™[›ÝÜÈH×K[ØØ][ÛˆHßJHÂˆÛÛœÝXÝ]™T›ÝÜÈHÝ\œ™[›ÝÜË™š[\Š
+›ÝÊHOˆ›ÝËœÝ]\ÈOOH	ÔÝ\\œÙYY	ÊNÂˆÛÛœÝÝ\œ™[š[™Ù\œš[HXÝ]™T›ÝÜË›X\
+
+›ÝÊHOˆ›ÝË˜[ØØ][Û—Ùš[™Ù\œš[
+K™š[™
+›ÛÛX[ŠNÂˆYˆ
+Ý\œ™[š[™Ù\œš[
+H™]\›ˆÝ\œ™[š[™Ù\œš[OOH[ØØ][Û‹™š[™Ù\œš[ÂˆÛÛœÝÝ\œ™[Ú\HHXÝ]™T›ÝÜË›X\
+
+›ÝÊHOˆ	Ü›ÝËœÛÝ\˜ÙWÜÝ\Y\—Ú[›ÚXÙWÚYN‰Ü›ÝËš[œÝXÝ[Û—Ý\_N‰Ó[X™\Š›ÝËœ[›™YØ[[Ý[
+KÑš^Y
+Š_X
+KœÛÜ
+
+NÂˆÛÛœÝ™^Ú\HHÝ\Y\’[œÝXÝ[Û”›ÝÜÊ[ØØ][ÛŠBˆ›X\
+
+›ÝÊHOˆ	Ü›ÝËœÛÝ\˜ÙWÜÝ\Y\—Ú[›ÚXÙWÚYN‰Ü›ÝËš[œÝXÝ[Û—Ý\_N‰Ó[X™\Š›ÝËœ[›™YØ[[Ý[
+KÑš^Y
+Š_X
+BˆœÛÜ
+
+NÂˆ™]\›ˆ”ÓÓ‹œÝš[™ÚYžJÝ\œ™[Ú\JHOOH”ÓÓ‹œÝš[™ÚYžJ™^Ú\JNÂŸB‚™[˜Ý[Ûˆ\ÜÙ\Ý\Y\[ØØ][ÛœÐÝ\œ™[
+XÝ[ÛœË\T›ÝÜË[œÝXÝ[Û”›ÝÜËÝ\œ™[Ý[JHÂˆ›Üˆ
+ÛÛœÝXÝ[ÛˆÙˆXÝ[ÛœË™š[\Š
+›ÝÊHOˆ›ÝË˜XÝ[Û—Ý\HOOH	Ü™\ÛÛ™WÜÝ\Y\—Ù\Ü]IÊJHÂˆÛÛœÝ[ØØ][ÛˆHÝ\œ™[Ý\Y\XÝ[Û[ØØ][ÛŠXÝ[Û‹\T›ÝÜË[œÝXÝ[Û”›ÝÜËÝ\œ™[Ý[JNÂˆÛÛœÝXÝ[Û’[œÝXÝ[ÛœÈH[œÝXÝ[Û”›ÝÜË™š[\Š
+[œÝXÝ[ÛŠHOˆ[œÝXÝ[Û‹˜XÝ[Û—ÚYOOHXÝ[Û‹šY
+NÂˆYˆ
+Ý\Y\’[œÝXÝ[Û”Ý]PÚ[™ÙY
+XÝ[Û’[œÝXÝ[ÛœË[ØØ][ÛŠJHÂˆ›ÝÈ\\œ›ÜŠ	ÔÝ\Y\ˆ[›ÚXÙH^[Y[]HÚ[™ÙYˆØ]™HH˜YYØZ[ˆÈ™]šY]ÈH\]YÈ›Ý^H[™Ù]˜XÚÈZY[[Ý[[ØØ][Û‹‰ËJNÂˆBˆBŸB‚˜\Þ[˜È[˜Ý[Ûˆ™XÛÛ˜Ú[P\›Ý™YÝ\Y\’[œÝXÝ[ÛœÊÛY[Ø\ÙT›ÝË\T›ÝÜËXÝ[Û”›ÝÜË[œÝXÝ[Û”›ÝÜËÝ\œ™[Ý[K›Ùš[JHÂˆYˆ
+Ø\ÙT›ÝË˜\›Ý˜[ÜÝ]\ÈOOH	Ð\›Ý™Y	ÈØ\ÙT›ÝËÛÜšÙ›Ý×ÜÝ]\ÈOOH	ÐÛÜÙY	ÊHÂˆ™]\›ˆÈÚ[™ÙYˆ˜[ÙK[œÝXÝ[Û”›ÝÜÈNÂˆBˆÛÛœÝ™XÛÛ˜Ú[X][ÛœÈH×NÂˆ›Üˆ
+ÛÛœÝXÝ[ÛˆÙˆXÝ[Û”›ÝÜË™š[\Š
+›ÝÊHOˆ›ÝË˜XÝ[Û—Ý\HOOH	Ü™\ÛÛ™WÜÝ\Y\—Ù\Ü]IÊJHÂˆÛÛœÝ[ØØ][ÛˆHÝ\œ™[Ý\Y\XÝ[Û[ØØ][ÛŠXÝ[Û‹\T›ÝÜË[œÝXÝ[Û”›ÝÜËÝ\œ™[Ý[JNÂˆÛÛœÝÝ\œ™[›ÝÜÈH[œÝXÝ[Û”›ÝÜË™š[\Š
+[œÝXÝ[ÛŠHOˆ[œÝXÝ[Û‹˜XÝ[Û—ÚYOOHXÝ[Û‹šY
+NÂˆYˆ
+\Ý\Y\’[œÝXÝ[Û”Ý]PÚ[™ÙY
+Ý\œ™[›ÝÜË[ØØ][ÛŠJHÛÛ[YNÂˆÛÛœÝÛÝ\˜ÙTÝ[TÛ˜\ÚÝHÂˆÝ[RYˆÝ\œ™[Ý[K’YˆÝ[S˜[YNˆÝ\œ™[Ý[K—Ñ\Ü^WÓ˜[YHÝ\œ™[Ý[K“˜[YHÝ\œ™[Ý[K’Ù^TÝ[W×ØÈ	ÉËˆ[]™\žQ]NˆÝ\œ™[Ý[K‘[]™\žWÑ]W×ØÈ[ˆNÂˆ™XÛÛ˜Ú[X][ÛœËœ\Ú
+ÂˆXÝ[Û—ÚYˆXÝ[Û‹šYˆ[œÝXÝ[ÛœÎˆÝ\Y\’[œÝXÝ[Û”›ÝÜÊ[ØØ][ÛŠK›X\
+
+\Ú\™Y
+HOˆ
+Âˆ‹‹™\Ú\™Yˆ\WÚYˆXÝ[Û‹œ\WÚYˆÛÝ\˜ÙWÜÝ[WÚYˆØ\ÙT›ÝËœÝ[WÚYˆÛÝ\˜ÙWÜÝ[WÜÛ˜\ÚÝˆÛÝ\˜ÙTÝ[TÛ˜\ÚÝˆ[ØØ][Û—Ùš[™Ù\œš[ˆ[ØØ][Û‹™š[™Ù\œš[ˆJJKˆ›ÝNˆÝ\Y\ˆ^[Y[Ú[™ÙYˆÈ›Ý^H\È›ÝÈ	Ø[ØØ][Û‹Ý[Ó›Ý^KÑš^Y
+Š_H	Ø[ØØ][Û‹˜Ý\œ™[˜ÞR\ÛÐÛÙ_NÈÙ]˜XÚÈZY[[Ý[\È	Ø[ØØ][Û‹Ý[Ù]˜XÚÔZYÑš^Y
+Š_H	Ø[ØØ][Û‹˜Ý\œ™[˜ÞR\ÛÐÛÙ_K˜ˆY]Y]NˆÂˆ\Ü]P[[Ý[ˆ[ØØ][Û‹™\Ü]P[[Ý[ˆÝ[Ó›Ý^Nˆ[ØØ][Û‹Ý[Ó›Ý^KˆÝ[Ù]˜XÚÔZYˆ[ØØ][Û‹Ý[Ù]˜XÚÔZYˆ[ØØ][Û‘š[™Ù\œš[ˆ[ØØ][Û‹™š[™Ù\œš[ˆKˆJNÂˆBˆYˆ
+\™XÛÛ˜Ú[X][ÛœË›[™Ý
+HÂˆYˆ
+Z\Õ[˜XØÙ\Y^\›˜[\Ü]PÛÜÝ\™JØ\ÙT›ÝËÝ\œ™[Ý[JH	‰ˆØ\ÙT›ÝËœØ[\Ù›Ü˜ÙWÝÜš]X˜XÚ×ÜÝ]\ÈOOH	Ù˜Z[Y	È	‰ˆÉÐ\›Ý™YH[™[™ÈXØÛÝ[[™ÉË	ÐXØÛÝ[[™È[ˆ›ÙÜ™\ÜÉË	ÔÙ]YH™XYHÈÛÜÙI×Kš[˜ÛY\ÊØ\ÙT›ÝËÛÜšÙ›Ý×ÜÝ]\ÊJHÂˆ]ØZ]Üš]Q\Ü]UÛÜšÙ›ÝÔÝ]\ÕÔØ[\Ù›Ü˜ÙJÛY[Ø\ÙT›ÝË›Ùš[KØ\ÙT›ÝËÛÜšÙ›Ý×ÜÝ]\ÊNÂˆ™]\›ˆÈÚ[™ÙYˆ˜[ÙKÜš]X˜XÚÔ™]šYYˆYK[œÝXÝ[Û”›ÝÜÈNÂˆBˆ™]\›ˆÈÚ[™ÙYˆ˜[ÙKÜš]X˜XÚÔ™]šYYˆ˜[ÙK[œÝXÝ[Û”›ÝÜÈNÂˆBˆÛÛœÝÈ\œ›ÜŽˆ™XÛÛ˜Ú[X][Û‘\œ›ÜˆHH]ØZ]ÛY[œœÊ	Ü™XÛÛ˜Ú[WÙ\Ü]WÜÝ\Y\—Ú[œÝXÝ[ÛœÉËÂˆØØ\ÙWÚYˆØ\ÙT›ÝËšYˆÜ™XÛÛ˜Ú[X][ÛœÎˆ™XÛÛ˜Ú[X][ÛœËˆØXÝÜŽˆÈYˆ›Ùš[KšY[XZ[ˆ›Ùš[K™[XZ[KˆJNÂˆYˆ
+™XÛÛ˜Ú[X][Û‘\œ›ÜŠH›ÝÈ™XÛÛ˜Ú[X][Û‘\œ›ÜŽÂˆÛÛœÝ\]YØ\ÙHH]ØZ]Ù]\Ü]P™]PØ\ÙJÛY[Ø\ÙT›ÝËšY
+NÂˆ]ØZ]\œÚ\Ý\Ü]PXØÛÝ[[™ÔÝ]\ÊÛY[\]YØ\ÙKÝ\œ™[Ý[K›Ùš[K	ÐXØÛÝ[[™È[ˆ›ÙÜ™\ÜÉÊNÂˆÛÛœÝÈ]K\œ›ÜˆHH]ØZ]ÛY[™œ›ÛJ	Ù\Ü]WÝÛÜšÙ›Ý×ÜÝ\Y\—Ú[œÝXÝ[ÛœÉÊKœÙ[XÝ
+TÔUWÔÕTQT—ÒS”Õ•PÕSÓ—ÔÑSPÕ
+K™\J	ØØ\ÙWÚY	ËØ\ÙT›ÝËšY
+K›Ü™\Š	ØÜ™X]YØ]	ËÈ\ØÙ[™[™ÎˆYHJNÂˆYˆ
+\œ›ÜŠH›ÝÈ\œ›ÜŽÂˆ™]\›ˆÂˆÚ[™ÙYˆYKˆÜš]X˜XÚÔ™]šYYˆ˜[ÙKˆ[œÝXÝ[Û”›ÝÜÎˆ]H×KˆNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆØY\Ü]UÛÜšÙ›ÝÑØÝ[Y[ÊÛY[Ø\ÙRY
+HÂˆÛÛœÝÈ]K\œ›ÜˆHH]ØZ]ÛY[™œ›ÛJ	Ù\Ü]WÝÛÜšÙ›Ý×ÙØÝ[Y[ÉÊKœÙ[XÝ
+TÔUWÕÓÔ’Ñ“Õ×ÑÐÕSQS•ÔÑSPÕ
+K™\J	ØØ\ÙWÚY	ËØ\ÙRY
+K™\J	Ý\ØYÜÝ]\ÉË	ØÛÛ\]IÊK›Ü™\Š	ØÜ™X]YØ]	ËÈ\ØÙ[™[™Îˆ˜[ÙHJNÂˆYˆ
+\œ›ÜŠH›ÝÈ\œ›ÜŽÂˆ™]\›ˆ]H×NÂŸB‚˜\Þ[˜È[˜Ý[ÛˆØY\Ü]UÛÜšÙ›ÝÑ]™[ÊÛY[Ø\ÙRY[Z]HL
+HÂˆÛÛœÝÈ]K\œ›ÜˆHH]ØZ]ÛY[™œ›ÛJ	Ù\Ü]WØ™]WÙ]™[ÉÊKœÙ[XÝ
+TÔUWÐ‘UWÑU‘S•ÔÑSPÕ
+K™\J	ØØ\ÙWÚY	ËØ\ÙRY
+K›Ü™\Š	ØÜ™X]YØ]	ËÈ\ØÙ[™[™Îˆ˜[ÙHJK›[Z]
+[Z]
+NÂˆYˆ
+\œ›ÜŠH›ÝÈ\œ›ÜŽÂˆ™]\›ˆ]H×NÂŸB‚™[˜Ý[ÛˆZ\ÜÚ[™Ô™\]Z\™Y\Ü]QØÝ[Y[ÊXÝ[ÛœÈH×KØÝ[Y[ÈH×JHÂˆÛÛœÝXÝ[Û’YÕÚ]ØÝ[Y[ÈH™]ÈÙ]
+ØÝ[Y[Ë›X\
+
+ØÝ[Y[
+HOˆØÝ[Y[˜XÝ[Û—ÚY
+K™š[\Š›ÛÛX[ŠJNÂˆ™]\›ˆXÝ[ÛœË™š[\Š
+XÝ[ÛŠHOˆXÝ[Û‹œ™\]Z\™\×Ø]XÚY[OOHYH	‰ˆXXÝ[Û’YÕÚ]ØÝ[Y[Ëš\ÊXÝ[Û‹šY
+JNÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ\ÜÙ\™\]Z\™Y\Ü]QØÝ[Y[ÊÛY[XÝ[ÛœÈH×JHÂˆÛÛœÝØ\ÙRYHXÝ[ÛœÖÌOË˜Ø\ÙWÚYÂˆÛÛœÝØÝ[Y[ÈHØ\ÙRYÈ]ØZ]ØY\Ü]UÛÜšÙ›ÝÑØÝ[Y[ÊÛY[Ø\ÙRY
+Hˆ×NÂˆYˆ
+XXÝ[ÛœËœÛÛYJ
+XÝ[ÛŠHOˆXÝ[Û‹œ™\]Z\™\×Ø]XÚY[OOHYJJH™]\›ˆØÝ[Y[ÎÂˆÛÛœÝZ\ÜÚ[™ÈHZ\ÜÚ[™Ô™\]Z\™Y\Ü]QØÝ[Y[ÊXÝ[ÛœËØÝ[Y[ÊNÂˆYˆ
+Z\ÜÚ[™Ë›[™Ý
+HÂˆÛÛœÝX™[ÈHZ\ÜÚ[™Ë›X\
+
+XÝ[ÛŠHOˆ	ØXÝ[Û‹˜XÝ[Û—ÛX™[XÝ[Û‹˜XÝ[Û—Ý\_H
+	ØXÝ[Û‹œ\WÜÚY_JX
+NÂˆ›ÝÈ\\œ›ÜŠ\ØYH™\]Z\™YØÝ[Y[›ÜŽˆ	ÛX™[Ëš›Ú[Š	Ë	Ê_K˜
+NÂˆBˆ™]\›ˆØÝ[Y[ÎÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ]Ú\Ü]UÛÜšÙ›ÝÔÝ]\Ò[”Ø[\Ù›Ü˜ÙJØ\ÙT›ÝËØ[\Ù›Ü˜ÙTÝ]\ÊHÂˆÛÛœÝÝ\œ™[›ÝÜÈH]ØZ]]Y\žT›ÝÜÊˆÑSPÕY\Ü]WÔÝ]\××ØË\Ý[ÙYšYY]Bˆ”“ÓHÝ[W×ØÂˆÒT‘HYH	ÉÙ\ØØ\TÛÜ[
+Ø\ÙT›ÝËœÝ[WÚY
+_IÂˆSRUBˆ
+NÂˆÛÛœÝÝ\œ™[Ý[HHÝ\œ™[›ÝÜÖÌNÂˆYˆ
+XÝ\œ™[Ý[JH›ÝÈ\\œ›ÜŠ	ÕH\Ü]YÕSH›ÈÛ™Ù\ˆ^\ÝÈ[ˆØ[\Ù›Ü˜ÙK‰Ë
+NÂ‚ˆYˆ
+\ÔØ[\Ù›Ü˜ÙQ\Ü]PÛÜÙY
+Ý\œ™[Ý[K‘\Ü]WÔÝ]\××ØÊJHÂˆÛÛœÝÛÛ[Z[™Ô™XÛÜ™YÛÜÙHH\ÔØ[\Ù›Ü˜ÙQ\Ü]PÛÜÙY
+Ø[\Ù›Ü˜ÙTÝ]\ÊH	‰ˆ\ÔØ[\Ù›Ü˜ÙQ\Ü]PÛÜÙY
+Ø\ÙT›ÝË˜Ý\œ™[ÜØ[\Ù›Ü˜ÙWÜÝ]\ÊH	‰ˆØ\ÙT›ÝËœØ[\Ù›Ü˜ÙWÝÜš]X˜XÚ×ÜÝ]\ÈOOH	ÜÝXØÙ\ÜÉÎÂˆYˆ
+ÛÛ[Z[™Ô™XÛÜ™YÛÜÙJH™]\›ŽÂˆ\ÜÙ\Ø[\Ù›Ü˜ÙQ\Ü]R\ÓÜ[ŠÝ\œ™[Ý[JNÂˆB‚ˆÛÛœÝY•[›[ÙYšYYÚ[˜ÙHHÝ\œ™[Ý[K“\Ý[ÙYšYY]HÈ™]È]JÝ\œ™[Ý[K“\Ý[ÙYšYY]JKÕUÔÝš[™Ê
+Hˆ[ÂˆžHÂˆ]ØZ]Ù”™\]Y\Ý
+ÜÛØš™XÝËÜÝ[W×ØËÉÙ[˜ÛÙUT’PÛÛ\Û™[
+Ø\ÙT›ÝËœÝ[WÚY
+_XÂˆY]Ùˆ	ÔUÒ	Ëˆ›ÙNˆÈ\Ü]WÔÝ]\××ØÎˆØ[\Ù›Ü˜ÙTÝ]\ÈKˆXY\œÎˆY•[›[ÙYšYYÚ[˜ÙHÈÈ	ÒY‹U[›[ÙYšYYTÚ[˜ÙIÎˆY•[›[ÙYšYYÚ[˜ÙHHˆ[™Yš[™YˆJNÂˆHØ]Ú
+\œ›ÜŠHÂˆYˆ
+\œ›Ü‹œÝ]\ÈOOHLŠHÂˆ›ÝÈ\\œ›ÜŠ	ÔØ[\Ù›Ü˜ÙHÚ[™ÙYÚ[HÓÔÈØ\ÈØ]š[™È\ÈÛÜšÙ›ÝËˆ™Yœ™\ÚH\Ü]HÛÜšÙ›ÝÈ]Y]YH[™žHYØZ[‹‰ËJNÂˆBˆ›ÝÈ\œ›ÜŽÂˆBŸB‚˜\Þ[˜È[˜Ý[Ûˆ™XÛÜ™\Ü]UÛÜšÙ›ÝÔØ[\Ù›Ü˜ÙUÜš]X˜XÚÊÛY[Ø\ÙT›ÝË›Ùš[KØ[\Ù›Ü˜ÙTÝ]\ËÜš]X˜XÚÔÝ]\ÈH	ÜÝXØÙ\ÜÉËÜš]X˜XÚÑ\œ›ÜˆH[
+HÂˆÛÛœÝÈ]Nˆ\]YØ\ÙK\œ›ÜˆHH]ØZ]ÛY[ˆ™œ›ÛJ	Ù\Ü]WØ™]WØØ\Ù\ÉÊBˆ\]JÂˆÝ\œ™[ÜØ[\Ù›Ü˜ÙWÜÝ]\ÎˆÜš]X˜XÚÔÝ]\ÈOOH	ÜÝXØÙ\ÜÉÈÈØ[\Ù›Ü˜ÙTÝ]\ÈˆØ\ÙT›ÝË˜Ý\œ™[ÜØ[\Ù›Ü˜ÙWÜÝ]\ËˆØ[\Ù›Ü˜ÙWÝÜš]X˜XÚ×ÜÝ]\ÎˆÜš]X˜XÚÔÝ]\ËˆØ[\Ù›Ü˜ÙWÝÜš]X˜XÚ×Ù\œ›ÜŽˆÜš]X˜XÚÑ\œ›Ü‹ˆ\]YØ]ˆ™]È]J
+KÒTÓÔÝš[™Ê
+KˆJBˆ™\J	ÚY	ËØ\ÙT›ÝËšY
+BˆœÙ[XÝ
+TÔUWÐ‘UWÐÐTÑWÔÑSPÕ
+BˆœÚ[™ÛJ
+NÂˆYˆ
+\œ›ÜŠH›ÝÈ\œ›ÜŽÂˆ]ØZ]Üš]Q\Ü]P™]Q]™[
+ÛY[\]YØ\ÙK	ÜØ[\Ù›Ü˜ÙWÝÜš]X˜XÚÉË›Ùš[KÂˆ›ÝNˆÜš]X˜XÚÔÝ]\ÈOOH	ÜÝXØÙ\ÜÉÈÈØ[\Ù›Ü˜ÙH\Ü]HÝ]\È\]YÈ	ÜØ[\Ù›Ü˜ÙTÝ]\ßK˜ˆØ[\Ù›Ü˜ÙH\Ü]HÝ]\È\]HÈ	ÜØ[\Ù›Ü˜ÙTÝ]\ßH˜Z[Y˜ˆY]Y]NˆÈØ[\Ù›Ü˜ÙTÝ]\Ë\œ›ÜŽˆÜš]X˜XÚÑ\œ›ÜˆKˆJNÂˆ™]\›ˆ\]YØ\ÙNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆÜš]Q\Ü]UÛÜšÙ›ÝÔÝ]\ÕÔØ[\Ù›Ü˜ÙJÛY[Ø\ÙT›ÝË›Ùš[KØ[\Ù›Ü˜ÙTÝ]\ËÜ[ÛœÈHßJHÂˆ]Üš]X˜XÚÔÝ]\ÈH	ÜÝXØÙ\ÜÉÎÂˆ]Üš]X˜XÚÑ\œ›ÜˆH[Âˆ]Üš]X˜XÚÑ˜Z[\™HH[ÂˆžHÂˆ]ØZ]]Ú\Ü]UÛÜšÙ›ÝÔÝ]\Ò[”Ø[\Ù›Ü˜ÙJØ\ÙT›ÝËØ[\Ù›Ü˜ÙTÝ]\ÊNÂˆHØ]Ú
+\œ›ÜŠHÂˆÜš]X˜XÚÔÝ]\ÈH	Ù˜Z[Y	ÎÂˆÜš]X˜XÚÑ\œ›ÜˆH\œ›Ü‹›Y\ÜØYÙNÂˆÜš]X˜XÚÑ˜Z[\™HH\œ›ÜŽÂˆBˆÛÛœÝ\]YØ\ÙHH]ØZ]™XÛÜ™\Ü]UÛÜšÙ›ÝÔØ[\Ù›Ü˜ÙUÜš]X˜XÚÊÛY[Ø\ÙT›ÝË›Ùš[KØ[\Ù›Ü˜ÙTÝ]\ËÜš]X˜XÚÔÝ]\ËÜš]X˜XÚÑ\œ›ÜŠNÂˆYˆ
+Ü[ÛœËœ™\]Z\™Y	‰ˆÜš]X˜XÚÔÝ]\ÈOOH	Ù˜Z[Y	ÊHÂˆYˆ
+Üš]X˜XÚÑ˜Z[\™OËœÝ]\ÊH›ÝÈÜš]X˜XÚÑ˜Z[\™NÂˆ›ÝÈ\\œ›ÜŠØ[\Ù›Ü˜ÙH\Ü]HÝ]\ÈÛÝ[›Ý™H\]Yˆ	ÝÜš]X˜XÚÑ\œ›ÜŸXLŠNÂˆBˆ™]\›ˆ\]YØ\ÙNÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ\Ù\\Ü]P™]PØ\ÙJÛY[Ý[K^˜HHßJHÂˆÛÛœÝ›ÝÒ\ÛÈH™]È]J
+KÒTÓÔÝš[™Ê
+NÂˆÛÛœÝØ\ÙT^[ØYHÂˆ‹‹™\Ü]P™]PØ\ÙQœ›ÛTÝ[JÝ[JKˆ]\ÝÛ›ÝNˆÝš[™Ê^˜K›]\Ý›ÝHÏÈ^˜K›]\ÝÛ›ÝHÏÈ	ÉÊKš[J
+Kˆ\]YØ]ˆ›ÝÒ\ÛËˆNÂˆYˆ
+^˜KÛÜšÙ›ÝÔÝ]\ÊHØ\ÙT^[ØYÛÜšÙ›Ý×ÜÝ]\ÈH›Ü›X[^™Q\Ü]P™]TÝ]\Ê^˜KÛÜšÙ›ÝÔÝ]\ËTÔUWÐ‘UWÕÓÔ’Ñ“Õ×ÔÕUTÑTË	Ñ˜Y	ÊNÂˆYˆ
+^˜K˜\›Ý˜[Ý]\ÊHØ\ÙT^[ØY˜\›Ý˜[ÜÝ]\ÈH›Ü›X[^™Q\Ü]P™]TÝ]\Ê^˜K˜\›Ý˜[Ý]\ËTÔUWÐ‘UWÐT“ÕSÔÕUTÑTË	Ñ˜Y	ÊNÂˆÛÛœÝÈ]K\œ›ÜˆHH]ØZ]ÛY[™œ›ÛJ	Ù\Ü]WØ™]WØØ\Ù\ÉÊK\Ù\
+Ø\ÙT^[ØYÈÛÛÛ™›XÝˆ	ÜÝ[WÚY	ÈJKœÙ[XÝ
+TÔUWÐ‘UWÐÐTÑWÔÑSPÕ
+KœÚ[™ÛJ
+NÂˆYˆ
+\œ›ÜŠH›ÝÈ\œ›ÜŽÂˆ™]\›ˆ]NÂŸB‚˜\Þ[˜È[˜Ý[ÛˆÙ]\Ü]P™]PØ\ÙJÛY[Ø\ÙRYÜ”Ý[RY
+HÂˆÛÛœÝ˜[YHHÝš[™ÊØ\ÙRYÜ”Ý[RY	ÉÊKš[J
+NÂˆYˆ
+]˜[YJH›ÝÈ\\œ›ÜŠ	ØØ\ÙRYÜˆÝ[RY\È™\]Z\™Y‰Ë
+NÂˆÛÛœÝ]Y\žHHÛY[™œ›ÛJ	Ù\Ü]WØ™]WØØ\Ù\ÉÊKœÙ[XÝ
+TÔUWÐ‘UWÐÐTÑWÔÑSPÕ
+NÂˆÛÛœÝÈ]K\œ›ÜˆHH\ÔØ[\Ù›Ü˜ÙRY
+˜[YJHÈ]ØZ]]Y\žK™\J	ÜÝ[WÚY	Ë˜[YJK›X^X™TÚ[™ÛJ
+Hˆ]ØZ]]Y\žK™\J	ÚY	Ë˜[YJK›X^X™TÚ[™ÛJ
+NÂˆYˆ
+\œ›ÜŠH›ÝÈ\œ›ÜŽÂˆYˆ
+Y]JH›ÝÈ\\œ›ÜŠ	Ñ\Ü]HÛÜšÙ›ÝÈØ\ÙH›Ý›Ý[™‰Ë
+NÂˆ™]\›ˆ]NÂŸB‚™[˜Ý[ÛˆÙ[XÝY\T›ÝÜÑœ›ÛPXØÛÝ[Ê™YÚ\ÝžKXØÛÝ[YÈH×JHÂˆÛÛœÝÙ[XÝYÙ^\ÈH™]ÈÙ]
+XØÛÝ[YË›X\
+\Ü]TØ[\Ù›Ü˜ÙRYÙ^JK™š[\Š›ÛÛX[ŠJNÂˆÛÛœÝØ[™Y]PžRÙ^HH™]ÈX\
+
+™YÚ\ÝžOË˜Ø[™Y]\È×JK›X\
+
+Ø[™Y]JHOˆØØ[™Y]K˜XØÛÝ[Ù^KØ[™Y]WJJNÂˆÛÛœÝ[˜[YÙ^\ÈHË‹‹œÙ[XÝYÙ^\×K™š[\Š
+Ù^JHOˆXØ[™Y]PžRÙ^Kš\ÊÙ^JJNÂˆYˆ
+[˜[YÙ^\Ë›[™Ý
+H›ÝÈ\\œ›ÜŠ	ÓÛ™HÜˆ[Ü™HÙ[XÝYXØÛÝ[È\™H›ÈÛ™Ù\ˆ[YÚX›H›Üˆ\ÈÕSK‰Ë
+NÂˆYˆ
+\Ù[XÝYÙ^\ËœÚ^™JH›ÝÈ\\œ›ÜŠ	ÔÙ[XÝ]X\ÝÛ™H\Ü]YXØÛÝ[™Y›Ü™HØ]š[™Ë‰Ë
+NÂˆ™]\›ˆË‹‹œÙ[XÝYÙ^\×K›X\
+
+Ù^JHOˆÂˆÛÛœÝØ[™Y]HHØ[™Y]PžRÙ^K™Ù]
+Ù^JNÂˆ™]\›ˆÂˆYˆ[ˆØ\ÙWÚYˆ[ˆÝ[WÚYˆ[ˆXØÛÝ[ÚYˆØ[™Y]K˜XØÛÝ[YˆXØÛÝ[ÚÙ^NˆØ[™Y]K˜XØÛÝ[Ù^KˆXØÛÝ[Û˜[YNˆØ[™Y]K›˜[YKˆ›Û\ÎˆØ[™Y]Kœ›Û\ËˆÛÝ\˜ÙWÝ\\ÎˆØ[™Y]KœÛÝ\˜ÙU\\ËˆÛÝ\˜ÙWÜ™XÛÜ™ÚYÎˆØ[™Y]KœÛÝ\˜ÙT™XÛÜ™YËˆ^[Y[Ý\›\ÎˆØ[™Y]Kœ^[Y[\›\Ëˆ›ÙXÝÎˆØ[™Y]Kœ›ÙXÝËˆØ[˜Ù[YÜÛÝ\˜ÙWÛÛ›NˆØ[™Y]K˜Ø[˜Ù[YÛÝ\˜ÙSÛ›KˆNÂˆJNÂŸB‚™[˜Ý[Ûˆ˜[Y]TÝÜ™Y\Ü]PXÝ[ÛœÊXÝ[ÛœË\T›ÝÜË™YÚ\ÝžJHÂˆÛÛœÝ\PžRYH\Ü]T\T›ÝÓX\
+\T›ÝÜÊNÂˆÛÛœÝÙY[ˆH™]ÈÙ]
+
+NÂˆ›Üˆ
+ÛÛœÝXÝ[ÛˆÙˆXÝ[ÛœÈ×JHÂˆÛÛœÝ\HH\PžRY™Ù]
+XÝ[Û‹œ\WÚY
+NÂˆYˆ
+\\JH›ÝÈ\\œ›ÜŠXÝ[Ûˆ	ØXÝ[Û‹˜XÝ[Û—ÛX™[XÝ[Û‹šYH\È›ÈÙ[XÝY\Ü]YXØÛÝ[˜
+NÂˆÛÛœÝØ[™Y]HHš[™\Ü]T\J™YÚ\ÝžKXÝ[Û‹œ\WÜÚYK\K˜XØÛÝ[ÚY
+NÂˆYˆ
+XØ[™Y]JH›ÝÈ\\œ›ÜŠ	Ü\K˜XØÛÝ[Û˜[Y_H\È›ÈÛ™Ù\ˆ[YÚX›HÛˆH	ØXÝ[Û‹œ\WÜÚY_HÚYK˜
+NÂˆÛÛœÝÙ^HH	Ü\K˜XØÛÝ[ÚÙ^_N‰ØXÝ[Û‹œ\WÜÚY_XÂˆYˆ
+ÙY[‹š\ÊÙ^JJH›ÝÈ\\œ›ÜŠÛ›HÛ™H	ØXÝ[Û‹œ\WÜÚY_HXÝ[ÛˆX^H™HYY›Üˆ	Ü\K˜XØÛÝ[Û˜[Y_K˜
+NÂˆÙY[‹˜Y
+Ù^JNÂˆBˆ™]\›ˆXÝ[ÛœÈ×NÂŸB‚™[˜Ý[ÛˆÝ\Y\XÝ[ÛœÓZ\ÜÚ[™Ñ\Ü]P[[Ý[
+XÝ[ÛœÈH×JHÂˆ™]\›ˆXÝ[ÛœË™š[\Š
+XÝ[ÛŠHOˆXÝ[Û‹œ\WÜÚYHOOH	ÜÝ\Y\‰È	‰ˆTÔUWÓQÐPÖWÔÕTQT—Ñ’SSÒPSÐPÕSÓ”Ëš\ÊXÝ[Û‹˜XÝ[Û—Ý\JH	‰ˆXÝ[Û‹˜[[Ý[OH[
+NÂŸB‚™[˜Ý[Ûˆ\ÜÙ\Ý\Y\‘\Ü]P[[Ý[ÊXÝ[ÛœÈH×JHÂˆÛÛœÝZ\ÜÚ[™ÈHÝ\Y\XÝ[ÛœÓZ\ÜÚ[™Ñ\Ü]P[[Ý[
+XÝ[ÛœÊNÂˆYˆ
+Z\ÜÚ[™Ë›[™Ý
+HÂˆ›ÝÈ\\œ›ÜŠ	ÔÝ\Y\ˆ\Ü]H[[Ý[™\]Z\™Yˆ™XÛÜ™HYÜ™YY[[Ý[™Y›Ü™H\ÈYØXÞHÛÜšÙ›ÝÈØ[ˆ›ÙÜ™\ÜË‰ËJNÂˆBˆÛÛœÝYØXÞHHXÝ[ÛœË™š[\Š
+XÝ[ÛŠHOˆXÝ[Û‹œ\WÜÚYHOOH	ÜÝ\Y\‰È	‰ˆTÔUWÓQÐPÖWÔÕTQT—Ñ’SSÒPSÐPÕSÓ”Ëš\ÊXÝ[Û‹˜XÝ[Û—Ý\JJNÂˆYˆ
+YØXÞK›[™Ý
+HÂˆ›ÝÈ\\œ›ÜŠ	ÐÛÛ™\XXÚYØXÞHÝ\Y\ˆXÝ[Ûˆ[È[›ÚXÙK[]™[š[˜[˜ÙH[œÝXÝ[ÛœÈ™Y›Ü™H\ÈÛÜšÙ›ÝÈØ[ˆ›ÙÜ™\ÜË‰ËJNÂˆBŸB‚˜\Þ[˜È[˜Ý[Ûˆ\Ü]P™]S\Ý
+›ÙHHßK™\KXØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÈÛY[›Ùš[HHHXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆÛÛœÝ[Z]H›ÙK›[Z]LÂˆÛÛœÝØXÚYH]ØZ]ØXÚYØ[\Ù›Ü˜ÙU˜[YJÂˆ˜[Y\ÜXÙNˆ	ÜØ[\Ù›Ü˜ÙKY\Ü]K\]Y]YIËˆÙXÛÛ™ÎˆÌˆ^[ØYˆÈ[Z]KˆYÜÎˆÉÜØ[\Ù›Ü˜ÙN™\Ü]\ÉË	ÜØ[\Ù›Ü˜ÙNœÝ[IË	ÜØ[\Ù›Ü˜ÙN˜XØÛÝ[	×Kˆ›ÙKˆ™\KˆXØÙ\ÜÐÛÛ^ˆXØÙ\ÜÐÛÛ^ÈÛY[›Ùš[HKˆØY\Žˆ
+
+HOˆØ[\Ù›Ü˜ÙQ\Ü]TÝ[\ÊÈ[Z]K[XØÙ\ÜÐÛÛ^ÈÛY[›Ùš[HJKˆJNÂˆÛÛœÝØ[\Ù›Ü˜ÙQ]HHØXÚY˜[YNÂˆÛÛœÝ›ÝÜÈHØ[\Ù›Ü˜ÙQ]Kœ›ÝÜÈ×NÂˆ]ÝÛÜšÙ›ÝÓX\Ø\Xš[]Y\×HH]ØZ]›ÛZ\ÙK˜[
+ÂˆØY\Ü]P™]UÛÜšÙ›ÝÓX\
+ˆÛY[ˆ›ÝÜË›X\
+
+›ÝÊHOˆ›ÝË’Y
+Kˆ
+Kˆ\Ü]UÛÜšÙ›ÝÐØ\Xš[]Y\ÊÛY[›Ùš[JKˆJNÂˆ]™XÛÛ˜Ú[YH˜[ÙNÂˆÛÛœÝ™XÛÛ˜Ú[X][Û‘\œ›ÜœÈH™]ÈX\
+
+NÂˆ›Üˆ
+ÛÛœÝÝ[HÙˆ›ÝÜÊHÂˆÛÛœÝÛÜšÙ›ÝÈHÛÜšÙ›ÝÓX\ÜÝ[K’YNÂˆYˆ
+ÛÜšÙ›ÝÏË˜Ø\ÙOË˜\›Ý˜[Ý]\ÈOOH	Ð\›Ý™Y	ÈÛÜšÙ›ÝË˜Ø\ÙKÛÜšÙ›ÝÔÝ]\ÈOOH	ÐÛÜÙY	È]ÛÜšÙ›ÝË˜XÝ[ÛœËœÛÛYJ
+XÝ[ÛŠHOˆXÝ[Û‹˜XÝ[Û•\HOOH	Ü™\ÛÛ™WÜÝ\Y\—Ù\Ü]IÊH\Ý[K—ÔÝ\Y\—ÔÙ][Y[ÔØÚ[XOË˜[Y
+HÛÛ[YNÂˆžHÂˆÛÛœÝØ\ÙT›ÝÈH]ØZ]Ù]\Ü]P™]PØ\ÙJÛY[ÛÜšÙ›ÝË˜Ø\ÙKšY
+NÂˆÛÛœÝÝÜ™YH]ØZ]ØY\Ü]UÛÜšÙ›ÝÐXÝ[ÛœÊÛY[Ø\ÙT›ÝËšY
+NÂˆÛÛœÝ™\Ý[H]ØZ]™XÛÛ˜Ú[P\›Ý™YÝ\Y\’[œÝXÝ[ÛœÊÛY[Ø\ÙT›ÝËÝÜ™Yœ\T›ÝÜËÝÜ™Y˜XÝ[Û”›ÝÜËÝÜ™Yš[œÝXÝ[Û”›ÝÜËÝ[K›Ùš[JNÂˆ™XÛÛ˜Ú[YH™XÛÛ˜Ú[Y™\Ý[˜Ú[™ÙY™\Ý[Üš]X˜XÚÔ™]šYYÂˆHØ]Ú
+\œ›ÜŠHÂˆÛÛœÛÛK™\œ›ÜŠ	ÖÙ\Ü]K]ÛÜšÙ›Ý×HÝ\Y\ˆ™XÛÛ˜Ú[X][Ûˆ˜Z[Y	ËÂˆ™\]Y\ÝYˆ™\]Y\ÝYœ›ÛJ™\JKˆÛÙNˆ\œ›ÜË˜ÛÙH[ˆJNÂˆ™XÛÛ˜Ú[X][Û‘\œ›ÜœËœÙ]
+Ý[K’Y	ÔÝ\Y\ˆ^[Y[™XÛÛ˜Ú[X][Ûˆ\È[\Ü˜\š[H[˜]˜Z[X›Kˆš[˜[˜ÙHXØÛÝ[[™È™[XZ[œÈ[˜Ú[™ÙY‰ÊNÂˆBˆBˆYˆ
+™XÛÛ˜Ú[Y
+HÂˆÛÜšÙ›ÝÓX\H]ØZ]ØY\Ü]P™]UÛÜšÙ›ÝÓX\
+ˆÛY[ˆ›ÝÜË›X\
+
+›ÝÊHOˆ›ÝË’Y
+Kˆ
+NÂˆBˆ›Üˆ
+ÛÛœÝÜÝ[RY\œ›Ü—HÙˆ™XÛÛ˜Ú[X][Û‘\œ›ÜœÊHÂˆYˆ
+ÛÜšÙ›ÝÓX\ÜÝ[RYJHÛÜšÙ›ÝÓX\ÜÝ[RYKœ™XÛÛ˜Ú[X][Û‘\œ›ÜˆH\œ›ÜŽÂˆBˆ›Ú™XÝ^\›˜[PÛÜÙY\Ü]UÛÜšÙ›ÝÜÊ›ÝÜËÛÜšÙ›ÝÓX\
+NÂˆ™]\›ˆÂˆ\Ñ\Ü]PYZ[ŽˆØ\Xš[]Y\Ë˜Ø[\›Ý™Kˆ\Ñ\Ü]PXØÛÝ[[™ÎˆØ\Xš[]Y\Ë˜Ø[XØÛÝ[ˆØ\Xš[]Y\Ëˆ™\]Z\™YØ[\Ù›Ü˜ÙQšY[ÓZ\ÜÚ[™ÎˆYKˆšY[Ø\›š[™Îˆ	Ñ\Ü]YXØÛÝ[Ë\›Ý˜[XØÛÝ[[™ËØÝ[Y[Ë[™]Y]Ý]H\™HÝÜ™Y[ˆÝ\X˜\ÙKˆØ[\Ù›Ü˜ÙH™XÙZ]™\ÈÛ›HHYÚ[]™[ÕSH\Ü]HÝ]\Ë‰Ëˆ›ÝÜÎˆ›ÝÜË›X\
+
+›ÝÊHOˆÂˆÛÛœÝÛÜšÙ›ÝÈHÛÜšÙ›ÝÓX\Ü›ÝË’YHÂˆØ\ÙNˆ[ˆ\Y\Îˆ×KˆXÝ[ÛœÎˆ×KˆÝ\Y\’[œÝXÝ[ÛœÎˆ×Kˆ]™[Îˆ×KˆØÝ[Y[Îˆ×KˆNÂˆYˆ
+]ÛÜšÙ›ÝË˜Ø\ÙJHÛÜšÙ›ÝË˜Ø\ÙHHYØXÞPÛÜÙY\Ü]PØ\ÙJ›ÝÊNÂˆ™]\›ˆÂˆ‹‹œ›ÝËˆÑ\Ü]WÔ\Y\Îˆ\Ü]T™YÚ\ÝžUÚ]Ù[XÝ[ÛŠ›ÝË—Ñ\Ü]WÔ\Y\ËÛÜšÙ›ÝËœ\Y\ÊKˆÑ\Ü]WÕÛÜšÙ›ÝÎˆÛÜšÙ›ÝËˆNÂˆJKˆNÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ\Ü]P™]TØ]™Q˜Y
+›ÙHHßK™\KXØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÈÛY[›Ùš[HHHXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆÛÛœÝÝ[HH›ÙKœÝ[HßNÂˆÛÛœÝÝ[RYHÝ[K’Y›ÙKœÝ[RYÂˆYˆ
+\Ý[RY
+H›ÝÈ\\œ›ÜŠ	ÜÝ[RY\È™\]Z\™Y‰Ë
+NÂˆÛÛœÝØÝ\œ™[Ý[K^\Ý[™ÐØ\ÙT™\Ý[HH]ØZ]›ÛZ\ÙK˜[
+ÛØYÝ\œ™[\Ü]TÝ[JÝ[RYXØÙ\ÜÐÛÛ^ÈÛY[›Ùš[HJKÛY[™œ›ÛJ	Ù\Ü]WØ™]WØØ\Ù\ÉÊKœÙ[XÝ
+TÔUWÐ‘UWÐÐTÑWÔÑSPÕ
+K™\J	ÜÝ[WÚY	ËÝ[RY
+K›X^X™TÚ[™ÛJ
+WJNÂˆ\ÜÙ\Ø[\Ù›Ü˜ÙQ\Ü]R\ÓÜ[ŠÝ\œ™[Ý[JNÂˆÛÛœÝØ[™Y]T™YÚ\ÝžHHÝ\œ™[Ý[K—Ñ\Ü]WÔ\Y\ÎÂˆYˆ
+XØ[™Y]T™YÚ\ÝžOË˜Ø[™Y]TØÚ[XU˜[Y
+HÂˆÛÛœÝY\ÜØYÙ\ÈH
+Ø[™Y]T™YÚ\ÝžOËš\ÜÝY\È×JK›X\
+
+][JHOˆ][K›Y\ÜØYÙJK™š[\Š›ÛÛX[ŠNÂˆ›ÝÈ\\œ›ÜŠÛÜœ™XÝHØ[\Ù›Ü˜ÙHXØÛÝ[ÛÝ\˜Ù\È™Y›Ü™HÛÛ[Z[™Îˆ	ÛY\ÜØYÙ\Ëš›Ú[Š	È	Ê_X
+NÂˆBˆYˆ
+^\Ý[™ÐØ\ÙT™\Ý[™\œ›ÜŠH›ÝÈ^\Ý[™ÐØ\ÙT™\Ý[™\œ›ÜŽÂˆÛÛœÝ^\Ý[™ÐØ\ÙHH^\Ý[™ÐØ\ÙT™\Ý[™]NÂˆYˆ
+^\Ý[™ÐØ\ÙH	‰ˆVÉÑ˜Y	Ë	Ô™Z™XÝY	Ë	Ô™]š\Ú[Ûˆ™\]Y\ÝY	×Kš[˜ÛY\Ê^\Ý[™ÐØ\ÙKÛÜšÙ›Ý×ÜÝ]\ÊJHÂˆ›ÝÈ\\œ›ÜŠ	Õ˜Y\ˆ[œÝXÝ[ÛœÈ\™HØÚÙYY\ˆÝX›Z\ÜÚ[Û‹ˆ™\]Y\ÝH™]š\Ú[Ûˆ™Y›Ü™HY][™È[K‰Ë
+NÂˆBˆÛÛœÝÙ[XÝY\T›ÝÜÈHÙ[XÝY\T›ÝÜÑœ›ÛPXØÛÝ[ÊØ[™Y]T™YÚ\ÝžK›ÙKœÙ[XÝY\PXØÛÝ[YÈ×JNÂˆYˆ
+^\Ý[™ÐØ\ÙJHÂˆÛÛœÝÙ[XÝYXØÛÝ[Ù^\ÈH™]ÈÙ]
+Ù[XÝY\T›ÝÜË›X\
+
+\JHOˆ\K˜XØÛÝ[ÚÙ^JJNÂˆÛÛœÝÜÝÜ™Y\Y\Ô™\Ý[ÝÜ™YØÝ[Y[Ô™\Ý[HH]ØZ]›ÛZ\ÙK˜[
+ØÛY[™œ›ÛJ	Ù\Ü]WÝÛÜšÙ›Ý×Ü\Y\ÉÊKœÙ[XÝ
+	ÚYXØÛÝ[ÚÙ^KXØÛÝ[Û˜[YIÊK™\J	ØØ\ÙWÚY	Ë^\Ý[™ÐØ\ÙKšY
+KÛY[™œ›ÛJ	Ù\Ü]WÝÛÜšÙ›Ý×ÙØÝ[Y[ÉÊKœÙ[XÝ
+	Ü\WÚY	ÊK™\J	ØØ\ÙWÚY	Ë^\Ý[™ÐØ\ÙKšY
+WJNÂˆYˆ
+ÝÜ™Y\Y\Ô™\Ý[™\œ›ÜŠH›ÝÈÝÜ™Y\Y\Ô™\Ý[™\œ›ÜŽÂˆYˆ
+ÝÜ™YØÝ[Y[Ô™\Ý[™\œ›ÜŠH›ÝÈÝÜ™YØÝ[Y[Ô™\Ý[™\œ›ÜŽÂˆÛÛœÝØÝ[Y[Y\RYÈH™]ÈÙ]
+
+ÝÜ™YØÝ[Y[Ô™\Ý[™]H×JK›X\
+
+ØÝ[Y[
+HOˆØÝ[Y[œ\WÚY
+K™š[\Š›ÛÛX[ŠJNÂˆÛÛœÝØÝ[Y[Y™[[Ý™Y\Y\ÈH
+ÝÜ™Y\Y\Ô™\Ý[™]H×JK™š[\Š
+\JHOˆ\Ù[XÝYXØÛÝ[Ù^\Ëš\Ê\K˜XØÛÝ[ÚÙ^JH	‰ˆØÝ[Y[Y\RYËš\Ê\KšY
+JNÂˆYˆ
+ØÝ[Y[Y™[[Ý™Y\Y\Ë›[™Ý
+HÂˆÛÛœÝ˜[Y\ÈHØÝ[Y[Y™[[Ý™Y\Y\Ë›X\
+
+\JHOˆ\K˜XØÛÝ[Û˜[YH\K˜XØÛÝ[ÚÙ^JKš›Ú[Š	Ë	ÊNÂˆ›ÝÈ\\œ›ÜŠÙY\	Û˜[Y\ßHÙ[XÝY™XØ]\ÙH\Ü]HØÝ[Y[È\™H[™XYH[šÙYÈHXØÛÝ[˜
+NÂˆBˆBˆÛÛœÝ™YÚ\ÝžHH\Ü]T™YÚ\ÝžUÚ]Ù[XÝ[ÛŠØ[™Y]T™YÚ\ÝžKÙ[XÝY\T›ÝÜÊNÂˆÛÛœÝØ\ÙR[œ]HÈYˆ^\Ý[™ÐØ\ÙOËšY[Ý[WÚYˆÝ[RYNÂˆÛÛœÝ›Ü›X[^™YXÝ[ÛœÈH
+›ÙK˜XÝ[ÛœÈ×JK›X\
+
+XÝ[ÛŠHO‚ˆ™\\™TÝ\Y\”Ù][Y[XÝ[ÛŠˆÂˆYˆÝš[™ÊXÝ[Û‹šY	ÉÊKš[J
+H[ˆ‹‹››Ü›X[^™Q\Ü]P™]PXÝ[ÛŠXÝ[Û‹Ø\ÙR[œ]›Ùš[K™YÚ\ÝžJKˆKˆÝ\œ™[Ý[Kˆ
+Kˆ
+NÂˆÛÛœÝÙY[XÝ[Û”ÚY\ÈH™]ÈÙ]
+
+NÂˆ›Üˆ
+ÛÛœÝXÝ[ÛˆÙˆ›Ü›X[^™YXÝ[ÛœÊHÂˆÛÛœÝÙ^HH	ØXÝ[Û‹œ\WØXØÛÝ[ÚÙ^_N‰ØXÝ[Û‹œ\WÜÚY_XÂˆYˆ
+ÙY[XÝ[Û”ÚY\Ëš\ÊÙ^JJH›ÝÈ\\œ›ÜŠ	ÓÛ›HÛ™HXÝ[Ûˆ\ˆÙ[XÝYXØÛÝ[ÚYH\È[ÝÙY‰Ë
+NÂˆÙY[XÝ[Û”ÚY\Ë˜Y
+Ù^JNÂˆBˆÛÛœÝš[˜[˜ÚX[ÈHØ[Ý[]Q\Ü]P™]TÙ][Y[
+›Ü›X[^™YXÝ[ÛœÊNÂˆ]ØZ]]Ú\Ü]UÛÜšÙ›ÝÔÝ]\Ò[”Ø[\Ù›Ü˜ÙJ^\Ý[™ÐØ\ÙHÈÝ[WÚYˆÝ[RYK	ÓÜ[ˆH˜Y\ˆ™]šY]ÉÊNÂˆÛÛœÝØ\ÙT^[ØYHÂˆ‹‹™\Ü]P™]PØ\ÙQœ›ÛTÝ[JÝ\œ™[Ý[JKˆÝ\œ™[ÜØ[\Ù›Ü˜ÙWÜÝ]\Îˆ	ÓÜ[ˆH˜Y\ˆ™]šY]ÉËˆÛÜšÙ›Ý×ÜÝ]\Îˆ	Ñ˜Y	Ëˆ\›Ý˜[ÜÝ]\Îˆ	Ñ˜Y	Ëˆ]\ÝÛ›ÝNˆÝš[™Ê›ÙK›]\Ý›ÝH	ÉÊKš[J
+KˆÙ][Y[Ùš[˜[˜ÚX[Îˆš[˜[˜ÚX[ËˆÙ][Y[Ü›ˆš[˜[˜ÚX[ËœÙ][Y[›ˆNÂˆÛÛœÝÈ]NˆØ]™YØ\ÙRY\œ›ÜŽˆØ]™Q\œ›ÜˆHH]ØZ]ÛY[œœÊ	ÜØ]™WÙ\Ü]WÝÛÜšÙ›Ý×Ù˜Y	ËÂˆØØ\ÙNˆØ\ÙT^[ØYˆÜ\Y\ÎˆÙ[XÝY\T›ÝÜË›X\
+
+\JHOˆ
+ÂˆXØÛÝ[ÚYˆ\K˜XØÛÝ[ÚYˆXØÛÝ[ÚÙ^Nˆ\K˜XØÛÝ[ÚÙ^KˆXØÛÝ[Û˜[YNˆ\K˜XØÛÝ[Û˜[YKˆ›Û\Îˆ\Kœ›Û\ËˆÛÝ\˜ÙWÝ\\Îˆ\KœÛÝ\˜ÙWÝ\\ËˆÛÝ\˜ÙWÜ™XÛÜ™ÚYÎˆ\KœÛÝ\˜ÙWÜ™XÛÜ™ÚYËˆ^[Y[Ý\›\Îˆ\Kœ^[Y[Ý\›\Ëˆ›ÙXÝÎˆ\Kœ›ÙXÝËˆØ[˜Ù[YÜÛÝ\˜ÙWÛÛ›Nˆ\K˜Ø[˜Ù[YÜÛÝ\˜ÙWÛÛ›KˆJJKˆØXÝ[ÛœÎˆ›Ü›X[^™YXÝ[ÛœËˆØXÝÜŽˆÈYˆ›Ùš[KšY[XZ[ˆ›Ùš[K™[XZ[KˆÙ]™[Û›ÝNˆ›ÙK›]\Ý›ÝH	Ñ˜YØ]™Y‰ËˆJNÂˆYˆ
+Ø]™Q\œ›ÜŠH›ÝÈØ]™Q\œ›ÜŽÂˆÛÛœÝ\]YØ\ÙHH]ØZ]Ù]\Ü]P™]PØ\ÙJÛY[Ø]™YØ\ÙRYÝ[RY
+NÂˆ]ØZ]ÛX\’[˜[Y\Ü]PÛÛ\[œØ][Û“[šÜÊÛY[\]YØ\ÙK›Ùš[JNÂˆÛÛœÝÛÜšÙ›ÝÔ›ÛZ\ÙHHØY\Ü]UÛÜšÙ›ÝÐXÝ[ÛœÊÛY[\]YØ\ÙKšY
+NÂˆÛÛœÝØÝ[Y[Ô›ÛZ\ÙHHØY\Ü]UÛÜšÙ›ÝÑØÝ[Y[ÊÛY[\]YØ\ÙKšY
+NÂˆÛÛœÝÝ]\Ô›ÛZ\ÙHH™XÛÜ™\Ü]UÛÜšÙ›ÝÔØ[\Ù›Ü˜ÙUÜš]X˜XÚÊÛY[\]YØ\ÙK›Ùš[K	ÓÜ[ˆH˜Y\ˆ™]šY]ÉÊNÂˆÛÛœÝÞÈ\T›ÝÜËXÝ[ÛœËÝ\Y\’[œÝXÝ[ÛœÈKØÝ[Y[ËÝ]\ÐØ\ÙWHH]ØZ]›ÛZ\ÙK˜[
+ÝÛÜšÙ›ÝÔ›ÛZ\ÙKØÝ[Y[Ô›ÛZ\ÙKÝ]\Ô›ÛZ\ÙWJNÂˆÛÛœÝ]™[ÈH]ØZ]ØY\Ü]UÛÜšÙ›ÝÑ]™[ÊÛY[\]YØ\ÙKšY
+NÂˆ™]\›ˆÂˆØ\ÙNˆÙ\šX[^™Q\Ü]P™]PØ\ÙJÝ]\ÐØ\ÙJKˆ\Y\Îˆ\T›ÝÜË›X\
+Ù\šX[^™Q\Ü]UÛÜšÙ›ÝÔ\JKˆXÝ[ÛœËˆÝ\Y\’[œÝXÝ[ÛœËˆ]™[Îˆ]™[Ë›X\
+Ù\šX[^™Q\Ü]P™]Q]™[
+KˆØÝ[Y[ÎˆØÝ[Y[Ë›X\
+Ù\šX[^™Q\Ü]UÛÜšÙ›ÝÑØÝ[Y[
+KˆNÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ\Ü]P™]TÝX›Z]\›Ý˜[
+›ÙHHßK™\KXØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÈÛY[›Ùš[HHHXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆÛÛœÝØ\ÙT›ÝÈH]ØZ]Ù]\Ü]P™]PØ\ÙJÛY[›ÙK˜Ø\ÙRY›ÙKœÝ[RY
+NÂˆ]ØZ]™\]Z\™R[\›Ù™šXÙTÝ[PXØÙ\ÜÊØ\ÙT›ÝËœÝ[WÚYXØÙ\ÜÐÛÛ^ÈÛY[›Ùš[HJNÂˆÛÛœÝÝ\œ™[Ý[HH]ØZ]ØYÝ\œ™[\Ü]TÝ[JØ\ÙT›ÝËœÝ[WÚYXØÙ\ÜÐÛÛ^ÈÛY[›Ùš[HJNÂˆ\ÜÙ\Ø[\Ù›Ü˜ÙQ\Ü]R\ÓÜ[ŠÝ\œ™[Ý[JNÂˆÛÛœÝÈ\T›ÝÜËXÝ[Û”›ÝÜË[œÝXÝ[Û”›ÝÜËXÝ[ÛœÎˆÙ\šX[^™YXÝ[ÛœÈHH]ØZ]ØY\Ü]UÛÜšÙ›ÝÐXÝ[ÛœÊÛY[Ø\ÙT›ÝËšY
+NÂˆÛÛœÝ™YÚ\ÝžHH\ÜÙ\˜[Y\Ü]T\Y\ÊÝ\œ™[Ý[K\T›ÝÜÊNÂˆÛÛœÝXÝ[ÛœÈH˜[Y]TÝÜ™Y\Ü]PXÝ[ÛœÊXÝ[Û”›ÝÜË\T›ÝÜË™YÚ\ÝžJNÂˆYˆ
+XXÝ[ÛœÏË›[™Ý
+H›ÝÈ\\œ›ÜŠ	ÐY]X\ÝÛ™H˜Y\ˆXÝ[Ûˆ™Y›Ü™HÝX›Z][™È›Üˆ\›Ý˜[‰Ë
+NÂˆ\ÜÙ\Ý\Y\‘\Ü]P[[Ý[ÊXÝ[ÛœÊNÂˆ\ÜÙ\Ý\Y\[ØØ][ÛœÐÝ\œ™[
+XÝ[ÛœË\T›ÝÜË[œÝXÝ[Û”›ÝÜËÝ\œ™[Ý[JNÂˆYˆ
+VÉÑ˜Y	Ë	Ô™Z™XÝY	Ë	Ô™]š\Ú[Ûˆ™\]Y\ÝY	×Kš[˜ÛY\ÊØ\ÙT›ÝËÛÜšÙ›Ý×ÜÝ]\ÊJHÂˆ›ÝÈ\\œ›ÜŠ	ÓÛ›H˜Y™Z™XÝYÜˆ™]š\Ú[Û‹\™\]Y\ÝYØ\Ù\ÈØ[ˆ™HÝX›Z]Y‰Ë
+NÂˆBˆ]ØZ]\ÜÙ\™\]Z\™Y\Ü]QØÝ[Y[ÊÛY[XÝ[ÛœÊNÂˆ]ØZ]]Ú\Ü]UÛÜšÙ›ÝÔÝ]\Ò[”Ø[\Ù›Ü˜ÙJØ\ÙT›ÝË	Ô[™[™È\›Ý˜[	ÊNÂˆÛÛœÝ›ÝÒ\ÛÈH™]È]J
+KÒTÓÔÝš[™Ê
+NÂˆÛÛœÝÈ]Nˆ\]YØ\ÙK\œ›ÜˆHH]ØZ]ÛY[ˆ™œ›ÛJ	Ù\Ü]WØ™]WØØ\Ù\ÉÊBˆ\]JÂˆÛÜšÙ›Ý×ÜÝ]\Îˆ	Ô[™[™È\›Ý˜[	Ëˆ\›Ý˜[ÜÝ]\Îˆ	Ô[™[™È\›Ý˜[	ËˆÝX›Z]YØžNˆ›Ùš[KšYˆÝX›Z]YØžWÙ[XZ[ˆ›Ùš[K™[XZ[ˆÝX›Z]YØ]ˆ›ÝÒ\ÛËˆ]\ÝÛ›ÝNˆÝš[™Ê›ÙK››ÝHØ\ÙT›ÝË›]\ÝÛ›ÝH	ÉÊKš[J
+Kˆ\]YØ]ˆ›ÝÒ\ÛËˆJBˆ™\J	ÚY	ËØ\ÙT›ÝËšY
+BˆœÙ[XÝ
+TÔUWÐ‘UWÐÐTÑWÔÑSPÕ
+BˆœÚ[™ÛJ
+NÂˆYˆ
+\œ›ÜŠH›ÝÈ\œ›ÜŽÂˆ]ØZ]Üš]Q\Ü]P™]Q]™[
+ÛY[\]YØ\ÙK	ÜÝX›Z]Y	Ë›Ùš[KÂˆ›ÝNˆ›ÙK››ÝH	ÔÝX›Z]Y›Üˆ\Ü]HYZ[š\Ý˜]Üˆ\›Ý˜[‰ËˆJNÂˆÛÛœÝÝ]\ÐØ\ÙHH]ØZ]™XÛÜ™\Ü]UÛÜšÙ›ÝÔØ[\Ù›Ü˜ÙUÜš]X˜XÚÊÛY[\]YØ\ÙK›Ùš[K	Ô[™[™È\›Ý˜[	ÊNÂˆÛÛœÝØÝ[Y[ÈH]ØZ]ØY\Ü]UÛÜšÙ›ÝÑØÝ[Y[ÊÛY[Ø\ÙT›ÝËšY
+NÂˆ™]\›ˆÂˆØ\ÙNˆÙ\šX[^™Q\Ü]P™]PØ\ÙJÝ]\ÐØ\ÙJKˆ\Y\Îˆ\T›ÝÜË›X\
+Ù\šX[^™Q\Ü]UÛÜšÙ›ÝÔ\JKˆXÝ[ÛœÎˆÙ\šX[^™YXÝ[ÛœËˆØÝ[Y[ÎˆØÝ[Y[Ë›X\
+Ù\šX[^™Q\Ü]UÛÜšÙ›ÝÑØÝ[Y[
+KˆNÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ\Ü]P™]P\›Ý™J›ÙHHßK™\KXØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÈÛY[›Ùš[HHHXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ]ØZ]™\]Z\™PØ\Xš[]JÛY[›Ùš[K	Ù\Ü]\×Ø\›Ý™IË	Ñ\Ü]H\›Ý˜[\›Z\ÜÚ[Ûˆ\È™\]Z\™Y‰ËÊNÂˆÛÛœÝØ\ÙT›ÝÈH]ØZ]Ù]\Ü]P™]PØ\ÙJÛY[›ÙK˜Ø\ÙRY›ÙKœÝ[RY
+NÂˆ]ØZ]™\]Z\™R[\›Ù™šXÙTÝ[PXØÙ\ÜÊØ\ÙT›ÝËœÝ[WÚYXØÙ\ÜÐÛÛ^ÈÛY[›Ùš[HJNÂˆYˆ
+Ø\ÙT›ÝË˜\›Ý˜[ÜÝ]\ÈOOH	Ô[™[™È\›Ý˜[	ÊH›ÝÈ\\œ›ÜŠ	ÓÛ›H[™[™È\Ü]HÛÜšÙ›ÝÈØ\Ù\ÈØ[ˆ™H\›Ý™Y‰Ë
+NÂˆÛÛœÝÝ\œ™[Ý[HH]ØZ]ØYÝ\œ™[\Ü]TÝ[JØ\ÙT›ÝËœÝ[WÚYXØÙ\ÜÐÛÛ^ÈÛY[›Ùš[HJNÂˆ\ÜÙ\Ø[\Ù›Ü˜ÙQ\Ü]R\ÓÜ[ŠÝ\œ™[Ý[JNÂˆÛÛœÝÈ\T›ÝÜËXÝ[Û”›ÝÜË[œÝXÝ[Û”›ÝÜÈHH]ØZ]ØY\Ü]UÛÜšÙ›ÝÐXÝ[ÛœÊÛY[Ø\ÙT›ÝËšY
+NÂˆÛÛœÝ™YÚ\ÝžHH\ÜÙ\˜[Y\Ü]T\Y\ÊÝ\œ™[Ý[K\T›ÝÜÊNÂˆÛÛœÝXÝ[ÛœÈH˜[Y]TÝÜ™Y\Ü]PXÝ[ÛœÊXÝ[Û”›ÝÜË\T›ÝÜË™YÚ\ÝžJNÂˆ\ÜÙ\Ý\Y\‘\Ü]P[[Ý[ÊXÝ[ÛœÊNÂˆ\ÜÙ\Ý\Y\[ØØ][ÛœÐÝ\œ™[
+XÝ[ÛœË\T›ÝÜË[œÝXÝ[Û”›ÝÜËÝ\œ™[Ý[JNÂˆ]ØZ]\ÜÙ\™\]Z\™Y\Ü]QØÝ[Y[ÊÛY[XÝ[ÛœÈ×JNÂˆÛÛœÝØ[\Ù›Ü˜ÙTÝ]\ÈH	Ð\›Ý™YH[™[™ÈXØÛÝ[[™ÉÎÂˆÛÛœÝÈ\œ›ÜŽˆ[™[™Ñ\œ›ÜˆHH]ØZ]ÛY[ˆ™œ›ÛJ	Ù\Ü]WØ™]WØØ\Ù\ÉÊBˆ\]JÂˆØ[\Ù›Ü˜ÙWÝÜš]X˜XÚ×ÜÝ]\Îˆ	Û›ÝÜÝ\Y	ËˆØ[\Ù›Ü˜ÙWÝÜš]X˜XÚ×Ù\œ›ÜŽˆ[ˆ\]YØ]ˆ™]È]J
+KÒTÓÔÝš[™Ê
+KˆJBˆ™\J	ÚY	ËØ\ÙT›ÝËšY
+NÂˆYˆ
+[™[™Ñ\œ›ÜŠH›ÝÈ[™[™Ñ\œ›ÜŽÂˆžHÂˆ]ØZ]]Ú\Ü]UÛÜšÙ›ÝÔÝ]\Ò[”Ø[\Ù›Ü˜ÙJØ\ÙT›ÝËØ[\Ù›Ü˜ÙTÝ]\ÊNÂˆHØ]Ú
+\œ›ÜŠHÂˆ]ØZ]™XÛÜ™\Ü]UÛÜšÙ›ÝÔØ[\Ù›Ü˜ÙUÜš]X˜XÚÊÛY[Ø\ÙT›ÝË›Ùš[KØ[\Ù›Ü˜ÙTÝ]\Ë	Ù˜Z[Y	Ë\œ›Ü‹›Y\ÜØYÙJNÂˆ›ÝÈ\œ›ÜŽÂˆBˆÛÛœÝÈ\œ›ÜŽˆ\›Ý˜[\œ›ÜˆHH]ØZ]ÛY[œœÊ	Ø\›Ý™WÙ\Ü]WÝÛÜšÙ›Ý×ØØ\ÙIËÂˆØØ\ÙWÚYˆØ\ÙT›ÝËšYˆØXÝÜŽˆÈYˆ›Ùš[KšY[XZ[ˆ›Ùš[K™[XZ[KˆÛ›ÝNˆ›ÙK››ÝH	Ð\›Ý™YžH\Ü]HYZ[š\Ý˜]Ü‹‰ËˆÜØ[\Ù›Ü˜ÙWÜÝ]\ÎˆØ[\Ù›Ü˜ÙTÝ]\ËˆJNÂˆYˆ
+\›Ý˜[\œ›ÜŠH›ÝÈ\›Ý˜[\œ›ÜŽÂˆ]\]YØ\ÙHH]ØZ]Ù]\Ü]P™]PØ\ÙJÛY[Ø\ÙT›ÝËšY
+NÂˆYˆ
+\]YØ\ÙKÛÜšÙ›Ý×ÜÝ]\ÈOOHØ[\Ù›Ü˜ÙTÝ]\ÊHÂˆ\]YØ\ÙHH]ØZ]Üš]Q\Ü]UÛÜšÙ›ÝÔÝ]\ÕÔØ[\Ù›Ü˜ÙJÛY[\]YØ\ÙK›Ùš[K\]YØ\ÙKÛÜšÙ›Ý×ÜÝ]\ÊNÂˆBˆÛÛœÝXØÛÝ[[™ÔÝ]HH]ØZ]ØY\Ü]UÛÜšÙ›ÝÐXÝ[ÛœÊÛY[Ø\ÙT›ÝËšY
+NÂˆÛÛœÝØÝ[Y[ÈH]ØZ]ØY\Ü]UÛÜšÙ›ÝÑØÝ[Y[ÊÛY[Ø\ÙT›ÝËšY
+NÂˆ™]\›ˆÂˆØ\ÙNˆÙ\šX[^™Q\Ü]P™]PØ\ÙJ\]YØ\ÙJKˆ\Y\Îˆ\T›ÝÜË›X\
+Ù\šX[^™Q\Ü]UÛÜšÙ›ÝÔ\JKˆXÝ[ÛœÎˆXØÛÝ[[™ÔÝ]K˜XÝ[ÛœËˆÝ\Y\’[œÝXÝ[ÛœÎˆXØÛÝ[[™ÔÝ]KœÝ\Y\’[œÝXÝ[ÛœËˆØÝ[Y[ÎˆØÝ[Y[Ë›X\
+Ù\šX[^™Q\Ü]UÛÜšÙ›ÝÑØÝ[Y[
+KˆÜš]X˜XÚÔ™\Ý[Îˆ×KˆNÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ\Ü]P™]T™Z™XÝ
+›ÙHHßK™\KXØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÈÛY[›Ùš[HHHXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ]ØZ]™\]Z\™PØ\Xš[]JÛY[›Ùš[K	Ù\Ü]\×Ø\›Ý™IË	Ñ\Ü]H\›Ý˜[\›Z\ÜÚ[Ûˆ\È™\]Z\™Y‰ËÊNÂˆÛÛœÝØ\ÙT›ÝÈH]ØZ]Ù]\Ü]P™]PØ\ÙJÛY[›ÙK˜Ø\ÙRY›ÙKœÝ[RY
+NÂˆ]ØZ]™\]Z\™R[\›Ù™šXÙTÝ[PXØÙ\ÜÊØ\ÙT›ÝËœÝ[WÚYXØÙ\ÜÐÛÛ^ÈÛY[›Ùš[HJNÂˆÛÛœÝÝ\œ™[Ý[HH]ØZ]ØYÝ\œ™[\Ü]TÝ[JØ\ÙT›ÝËœÝ[WÚYXØÙ\ÜÐÛÛ^ÈÛY[›Ùš[HJNÂˆ\ÜÙ\Ø[\Ù›Ü˜ÙQ\Ü]R\ÓÜ[ŠÝ\œ™[Ý[JNÂˆYˆ
+Ø\ÙT›ÝË˜\›Ý˜[ÜÝ]\ÈOOH	Ô[™[™È\›Ý˜[	ÊH›ÝÈ\\œ›ÜŠ	ÓÛ›H[™[™È\Ü]HÛÜšÙ›ÝÈØ\Ù\ÈØ[ˆ™H™Z™XÝYÜˆ™]\›™Y›Üˆ™]š\Ú[Û‹‰Ë
+NÂˆÛÛœÝ™]š\Ú[Û”™\]Y\ÝYH›ÛÛX[Š›ÙKœ™]š\Ú[Û”™\]Y\ÝY
+NÂˆÛÛœÝ™X\ÛÛˆHÝš[™Ê›ÙKœ™X\ÛÛˆ	ÉÊKš[J
+NÂˆYˆ
+\™X\ÛÛŠH›ÝÈ\\œ›ÜŠ™]š\Ú[Û”™\]Y\ÝYÈ	Ô™]š\Ú[Ûˆ™X\ÛÛˆ\È™\]Z\™Y‰Èˆ	Ô™Z™XÝ[Ûˆ™X\ÛÛˆ\È™\]Z\™Y‰Ë
+NÂˆÛÛœÝØ[\Ù›Ü˜ÙTÝ]\ÈH™]š\Ú[Û”™\]Y\ÝYÈ	Ô™]š\Ú[Ûˆ™\]Y\ÝY	Èˆ	Ô™Z™XÝY	ÎÂˆ]ØZ]]Ú\Ü]UÛÜšÙ›ÝÔÝ]\Ò[”Ø[\Ù›Ü˜ÙJØ\ÙT›ÝËØ[\Ù›Ü˜ÙTÝ]\ÊNÂˆÛÛœÝ›ÝÒ\ÛÈH™]È]J
+KÒTÓÔÝš[™Ê
+NÂˆÛÛœÝÈ]Nˆ\]YØ\ÙK\œ›ÜˆHH]ØZ]ÛY[ˆ™œ›ÛJ	Ù\Ü]WØ™]WØØ\Ù\ÉÊBˆ\]JÂˆÛÜšÙ›Ý×ÜÝ]\Îˆ™]š\Ú[Û”™\]Y\ÝYÈ	Ô™]š\Ú[Ûˆ™\]Y\ÝY	Èˆ	Ô™Z™XÝY	Ëˆ\›Ý˜[ÜÝ]\Îˆ™]š\Ú[Û”™\]Y\ÝYÈ	Ô™]š\Ú[Ûˆ™\]Y\ÝY	Èˆ	Ô™Z™XÝY	Ëˆ™Z™XÝYØžNˆ›Ùš[KšYˆ™Z™XÝYØžWÙ[XZ[ˆ›Ùš[K™[XZ[ˆ™Z™XÝYØ]ˆ›ÝÒ\ÛËˆ™Z™XÝ[Û—Ü™X\ÛÛŽˆ™X\ÛÛ‹ˆ\]YØ]ˆ›ÝÒ\ÛËˆJBˆ™\J	ÚY	ËØ\ÙT›ÝËšY
+BˆœÙ[XÝ
+TÔUWÐ‘UWÐÐTÑWÔÑSPÕ
+BˆœÚ[™ÛJ
+NÂˆYˆ
+\œ›ÜŠH›ÝÈ\œ›ÜŽÂˆ]ØZ]Üš]Q\Ü]P™]Q]™[
+ÛY[\]YØ\ÙK™]š\Ú[Û”™\]Y\ÝYÈ	Ü™]š\Ú[Û—Ü™\]Y\ÝY	Èˆ	Ü™Z™XÝY	Ë›Ùš[KÂˆ›ÝNˆ™X\ÛÛ‹ˆJNÂˆÛÛœÝÝ]\ÐØ\ÙHH]ØZ]™XÛÜ™\Ü]UÛÜšÙ›ÝÔØ[\Ù›Ü˜ÙUÜš]X˜XÚÊÛY[\]YØ\ÙK›Ùš[KØ[\Ù›Ü˜ÙTÝ]\ÊNÂˆ™]\›ˆÈØ\ÙNˆÙ\šX[^™Q\Ü]P™]PØ\ÙJÝ]\ÐØ\ÙJHNÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ\Ü]UÛÜšÙ›ÝÑØÝ[Y[Ê›ÙHHßK™\KXØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÈÛY[›Ùš[HHHXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆÛÛœÝØ\ÙT›ÝÈH]ØZ]Ù]\Ü]P™]PØ\ÙJÛY[›ÙK˜Ø\ÙRY›ÙKœÝ[RY
+NÂˆ]ØZ]™\]Z\™R[\›Ù™šXÙTÝ[PXØÙ\ÜÊØ\ÙT›ÝËœÝ[WÚYXØÙ\ÜÐÛÛ^ÈÛY[›Ùš[HJNÂˆÛÛœÝØÝ[Y[ÈH]ØZ]ØY\Ü]UÛÜšÙ›ÝÑØÝ[Y[ÊÛY[Ø\ÙT›ÝËšY
+NÂˆ™]\›ˆÈØÝ[Y[ÎˆØÝ[Y[Ë›X\
+Ù\šX[^™Q\Ü]UÛÜšÙ›ÝÑØÝ[Y[
+HNÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ\Ü]UÛÜšÙ›ÝÕ\ØYØÝ[Y[
+›ÙHHßK™\KXØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÈÛY[›Ùš[HHHXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ™\]Z\™Q^\›˜[XÝ[Û‘Ø]J	ÜØ[\Ù›Ü˜ÙWÝÜš]IÊNÂˆÛÛœÝØ\ÙT›ÝÈH]ØZ]Ù]\Ü]P™]PØ\ÙJÛY[›ÙK˜Ø\ÙRY›ÙKœÝ[RY
+NÂˆ]ØZ]™\]Z\™R[\›Ù™šXÙTÝ[PXØÙ\ÜÊØ\ÙT›ÝËœÝ[WÚYXØÙ\ÜÐÛÛ^ÈÛY[›Ùš[HJNÂˆÛÛœÝÝ\œ™[Ý[HH]ØZ]ØYÝ\œ™[\Ü]TÝ[JØ\ÙT›ÝËœÝ[WÚYXØÙ\ÜÐÛÛ^ÈÛY[›Ùš[HJNÂˆ\ÜÙ\Ø[\Ù›Ü˜ÙQ\Ü]R\ÓÜ[ŠÝ\œ™[Ý[JNÂˆÛÛœÝ\T›ÝÜÈH]ØZ]ØY\Ü]UÛÜšÙ›ÝÔ\Y\ÊÛY[Ø\ÙT›ÝËšY
+NÂˆÛÛœÝ™YÚ\ÝžHH\ÜÙ\˜[Y\Ü]T\Y\ÊÝ\œ™[Ý[K\T›ÝÜÊNÂˆÛÛœÝÝÜ™YÛÜšÙ›ÝÈH]ØZ]ØY\Ü]UÛÜšÙ›ÝÐXÝ[ÛœÊÛY[Ø\ÙT›ÝËšY
+NÂˆ˜[Y]TÝÜ™Y\Ü]PXÝ[ÛœÊÝÜ™YÛÜšÙ›ÝË˜XÝ[Û”›ÝÜË\T›ÝÜË™YÚ\ÝžJNÂˆYˆ
+Ø\ÙT›ÝË˜\›Ý˜[ÜÝ]\ÈOOH	Ð\›Ý™Y	ÊHÂˆÛÛœÝ™XÛÛ˜Ú[X][ÛˆH]ØZ]™XÛÛ˜Ú[P\›Ý™YÝ\Y\’[œÝXÝ[ÛœÊÛY[Ø\ÙT›ÝË\T›ÝÜËÝÜ™YÛÜšÙ›ÝË˜XÝ[Û”›ÝÜËÝÜ™YÛÜšÙ›ÝËš[œÝXÝ[Û”›ÝÜËÝ\œ™[Ý[K›Ùš[JNÂˆYˆ
+™XÛÛ˜Ú[X][Û‹˜Ú[™ÙY
+HÂˆ›ÝÈ\\œ›ÜŠ	ÔÝ\Y\ˆ^[Y[ÈÚ[™ÙYˆÓÔÈ\]YHXØÛÝ[[™È[ŽÈ™[Ü[ˆHØÝ[Y[\ØY[™[šÈ]ÈH™]š\ÙY[œÝXÝ[Û‹‰ËJNÂˆBˆH[ÙHÂˆ\ÜÙ\Ý\Y\[ØØ][ÛœÐÝ\œ™[
+ÝÜ™YÛÜšÙ›ÝË˜XÝ[Û”›ÝÜË\T›ÝÜËÝÜ™YÛÜšÙ›ÝËš[œÝXÝ[Û”›ÝÜËÝ\œ™[Ý[JNÂˆBˆÛÛœÝØ[‘Y]HÉÑ˜Y	Ë	Ô™Z™XÝY	Ë	Ô™]š\Ú[Ûˆ™\]Y\ÝY	×Kš[˜ÛY\ÊØ\ÙT›ÝËÛÜšÙ›Ý×ÜÝ]\ÊNÂˆÛÛœÝØØ[\›Ý™QØÝ[Y[ËØ[XØÛÝ[ØÝ[Y[×HH]ØZ]›ÛZ\ÙK˜[
+Ý\Ù\’\ÐØ\Xš[]JÛY[›Ùš[K	Ù\Ü]\×Ø\›Ý™IÊK\Ù\’\ÐØ\Xš[]JÛY[›Ùš[K	Ù\Ü]\×ØXØÛÝ[	ÊWJNÂˆYˆ
+XØ[‘Y]	‰ˆXØ[\›Ý™QØÝ[Y[È	‰ˆXØ[XØÛÝ[ØÝ[Y[ÊHÂˆ›ÝÈ\\œ›ÜŠ	ÓÛ›HXØÛÝ[[™ÈÜˆYZ[š\Ý˜]ÜœÈØ[ˆYØÝ[Y[ÈY\ˆ˜Y\ˆÝX›Z\ÜÚ[Û‹‰ËÊNÂˆB‚ˆÛÛœÝXÝ[Û’YHÝš[™Ê›ÙK˜XÝ[Û’Y	ÉÊKš[J
+H[ÂˆÛÛœÝÝ\Y\’[œÝXÝ[Û’YHÝš[™Ê›ÙKœÝ\Y\’[œÝXÝ[Û’Y	ÉÊKš[J
+H[Âˆ]XÝ[ÛˆH[ÂˆYˆ
+XÝ[Û’Y
+HÂˆÛÛœÝÈ]K\œ›ÜˆHH]ØZ]ÛY[™œ›ÛJ	Ù\Ü]WØ™]WØXÝ[ÛœÉÊKœÙ[XÝ
+TÔUWÐ‘UWÐPÕSÓ—ÔÑSPÕ
+K™\J	ÚY	ËXÝ[Û’Y
+K™\J	ØØ\ÙWÚY	ËØ\ÙT›ÝËšY
+K›X^X™TÚ[™ÛJ
+NÂˆYˆ
+\œ›ÜŠH›ÝÈ\œ›ÜŽÂˆYˆ
+Y]JH›ÝÈ\\œ›ÜŠ	ÕHÙ[XÝYÛÜšÙ›ÝÈXÝ[ÛˆØ\È›Ý›Ý[™‰Ë
+NÂˆXÝ[ÛˆH]NÂˆBˆ]Ý\Y\’[œÝXÝ[ÛˆH[ÂˆYˆ
+Ý\Y\’[œÝXÝ[Û’Y
+HÂˆÛÛœÝÈ]K\œ›ÜˆHH]ØZ]ÛY[™œ›ÛJ	Ù\Ü]WÝÛÜšÙ›Ý×ÜÝ\Y\—Ú[œÝXÝ[ÛœÉÊKœÙ[XÝ
+TÔUWÔÕTQT—ÒS”Õ•PÕSÓ—ÔÑSPÕ
+K™\J	ÚY	ËÝ\Y\’[œÝXÝ[Û’Y
+K™\J	ØØ\ÙWÚY	ËØ\ÙT›ÝËšY
+K›X^X™TÚ[™ÛJ
+NÂˆYˆ
+\œ›ÜŠH›ÝÈ\œ›ÜŽÂˆYˆ
+Y]JH›ÝÈ\\œ›ÜŠ	ÕHÙ[XÝYÝ\Y\ˆ[œÝXÝ[ÛˆØ\È›Ý›Ý[™‰Ë
+NÂˆÝ\Y\’[œÝXÝ[ÛˆH]NÂˆYˆ
+XÝ[Ûˆ	‰ˆÝ\Y\’[œÝXÝ[Û‹˜XÝ[Û—ÚYOOHXÝ[Û‹šY
+HÂˆ›ÝÈ\\œ›ÜŠ	ÕHÝ\Y\ˆ[œÝXÝ[ÛˆÙ\È›Ý™[Û™ÈÈHÙ[XÝYXÝ[Û‹‰Ë
+NÂˆBˆYˆ
+XXÝ[ÛŠHÂˆÛÛœÝÈ]Nˆ[šÙYXÝ[Û‹\œ›ÜŽˆ[šÙYXÝ[Û‘\œ›ÜˆHH]ØZ]ÛY[™œ›ÛJ	Ù\Ü]WØ™]WØXÝ[ÛœÉÊKœÙ[XÝ
+TÔUWÐ‘UWÐPÕSÓ—ÔÑSPÕ
+K™\J	ÚY	ËÝ\Y\’[œÝXÝ[Û‹˜XÝ[Û—ÚY
+K™\J	ØØ\ÙWÚY	ËØ\ÙT›ÝËšY
+K›X^X™TÚ[™ÛJ
+NÂˆYˆ
+[šÙYXÝ[Û‘\œ›ÜŠH›ÝÈ[šÙYXÝ[Û‘\œ›ÜŽÂˆXÝ[ÛˆH[šÙYXÝ[ÛŽÂˆBˆBˆÛÛœÝ\RYHÝš[™Ê›ÙKœ\RYXÝ[ÛËœ\WÚY	ÉÊKš[J
+NÂˆÛÛœÝ\T›ÝÈH\T›ÝÜË™š[™
+
+\JHOˆ\KšYOOH\RY
+NÂˆYˆ
+\\T›ÝÊH›ÝÈ\\œ›ÜŠ	ÔÙ[XÝHØ]™Y\Ü]YXØÛÝ[™Y›Ü™H\ØY[™ÈHØÝ[Y[‰Ë
+NÂˆÛÛœÝ\TÚYHHÝš[™Ê›ÙKœ\TÚYHXÝ[ÛËœ\WÜÚYH	ÉÊBˆš[J
+BˆÓÝÙ\Ø\ÙJ
+NÂˆYˆ
+VÉØ^Y\‰Ë	ÜÝ\Y\‰×Kš[˜ÛY\Ê\TÚYJJH›ÝÈ\\œ›ÜŠ	ÔÙ[XÝH^Y\ˆÜˆÝ\Y\ˆÚYH›Üˆ\ÈØÝ[Y[‰Ë
+NÂˆÛÛœÝ\HHš[™\Ü]T\J™YÚ\ÝžK\TÚYK\T›ÝË˜XØÛÝ[ÚY
+NÂˆYˆ
+\\HJ™YÚ\ÝžKœÙ[XÝY×JKœÛÛYJ
+Ù[XÝY
+HOˆÙ[XÝY˜XØÛÝ[Ù^HOOH\K˜XØÛÝ[Ù^JJHÂˆ›ÝÈ\\œ›ÜŠ	ÕHÙ[XÝYXØÛÝ[ÚYH\È›ÈÛ™Ù\ˆ˜[Y›Üˆ\ÈÕSK‰Ë
+NÂˆBˆYˆ
+XÝ[Ûˆ	‰ˆ
+XÝ[Û‹œ\WÚYOOH\T›ÝËšYXÝ[Û‹œ\WÜÚYHOOH\TÚYJJHÂˆ›ÝÈ\\œ›ÜŠ	ÕHÙ[XÝYXÝ[ÛˆÙ\È›Ý™[Û™ÈÈ\ÈXØÛÝ[ÚYK‰Ë
+NÂˆB‚ˆÛÛœÝØÝ[Y[\HHÝš[™Ê›ÙK™ØÝ[Y[\H	ÉÊKš[J
+NÂˆYˆ
+QTÔUWÕÓÔ’Ñ“Õ×ÑÐÕSQS•ÕTTËš\ÊØÝ[Y[\JJH›ÝÈ\\œ›ÜŠ	Õ˜[YØÝ[Y[\H\È™\]Z\™Y‰Ë
+NÂˆÛÛœÝØÝ[Y[\™XÝ[ÛˆHÝš[™Ê›ÙK™ØÝ[Y[\™XÝ[Ûˆ	ÉÊBˆš[J
+BˆÓÝÙ\Ø\ÙJ
+NÂˆYˆ
+QTÔUWÕÓÔ’Ñ“Õ×ÑÐÕSQS•ÑT‘PÕSÓ”Ëš\ÊØÝ[Y[\™XÝ[ÛŠJH›ÝÈ\\œ›ÜŠ	ÔÙ[XÝH˜[YØÝ[Y[\™XÝ[Û‹‰Ë
+NÂˆYˆ
+YØÝ[Y[\™XÝ[Û‹™[™ÕÚ]
+ÉÜ\TÚY_X
+JH›ÝÈ\\œ›ÜŠØÝ[Y[\™XÝ[Ûˆ]\ÝX]ÚH	Ü\TÚY_HÚYK˜
+NÂˆÛÛœÝÜšYÚ[˜[š[S˜[YHHÝš[™Ê›ÙK›ÜšYÚ[˜[š[S˜[YH	ÉÊKš[J
+NÂˆYˆ
+[ÜšYÚ[˜[š[S˜[YJH›ÝÈ\\œ›ÜŠ	ÑØÝ[Y[š[[˜[YH\È™\]Z\™Y‰Ë
+NÂˆÛÛœÝ˜]Ð˜\ÙMHÝš[™Ê›ÙK˜˜\ÙM	ÉÊBˆœ™\XÙJ×™]N–×Ž×JÎØ˜\ÙMË	ÉÊBˆœ™\XÙJ×ÊËÙË	ÉÊNÂˆYˆ
+\˜]Ð˜\ÙM
+H›ÝÈ\\œ›ÜŠ	ÑØÝ[Y[ÛÛ[\È™\]Z\™Y‰Ë
+NÂˆÛÛœÝY™™\ˆHY™™\‹™œ›ÛJ˜]Ð˜\ÙM	Ø˜\ÙM	ÊNÂˆYˆ
+XY™™\‹›[™Ý
+H›ÝÈ\\œ›ÜŠ	ÑØÝ[Y[ÛÛ[\È[\HÜˆ[˜[Y‰Ë
+NÂˆYˆ
+Y™™\‹›[™ÝˆTÔUWÕÓÔ’Ñ“Õ×ÓPVÑÐÕSQS•Ð–UTÊH›ÝÈ\\œ›ÜŠ	ÑØÝ[Y[\ÈÛÈ\™ÙKˆX^[][HÚ^™H\ÈÈP‹‰ËLÊNÂ‚ˆÛÛœÝ\S˜[YHH\K›˜[YNÂˆÛÛœÝ[šÙY™XÛÜ™YHØ\ÙT›ÝËœÝ[WÚYÂˆÛÛœÝ^[œÚ[ÛˆH\Ü]UÛÜšÙ›ÝÑš[Q^[œÚ[ÛŠÜšYÚ[˜[š[S˜[YJNÂˆYˆ
+Y^[œÚ[ÛŠH›ÝÈ\\œ›ÜŠ	ÕHÙ[XÝYØÝ[Y[]\Ý]™HHš[[˜[YH^[œÚ[Û‹‰Ë
+NÂˆÛÛœÝ\™XÝ[Û“X™[H\Ü]UÛÜšÙ›ÝÑ\™XÝ[Û“X™[
+ØÝ[Y[\™XÝ[ÛŠNÂˆÛÛœÝÝYÙÙ\ÝY˜\ÙS˜[YHH	Ù\Ü]UÛÜšÙ›ÝÒÛ™ÒÛÛ™Ñ]UÚÙ[Š
+_H	Ù\™XÝ[Û“X™[XÂˆÛÛœÝ™\]Y\ÝY[œ]HÝš[™Ê›ÙKœ™\]Y\ÝYš[S˜[YH	ÉÊKœ™\XÙJ™]È™YÑ^
+‰Ù^[œÚ[ÛŸI	ÚIÊK	ÉÊNÂˆÛÛœÝ™\]Y\ÝY˜\ÙS˜[YHH\Ü]UÛÜšÙ›ÝÑY]X›Qš[[˜[YJ™\]Y\ÝY[œ]ÝYÙÙ\ÝY˜\ÙS˜[YJNÂˆÛÛœÝÛÛ[\HHÝš[™Ê›ÙK˜ÛÛ[\H	Ø\XØ][Û‹ÛØÝ]\Ý™X[IÊKš[J
+H	Ø\XØ][Û‹ÛØÝ]\Ý™X[IÎÂˆ]ØÝ[Y[›ÝÈH[Âˆ›Üˆ
+]ÝY™š^HÈÝY™š^LÈÝY™š^
+ÏHJHÂˆÛÛœÝÛX\š[S˜[YHH	Ü™\]Y\ÝY˜\ÙS˜[Y_IÜÝY™š^ÈIÜÝY™š^Xˆ	ÉßK‰Ù^[œÚ[ÛŸXÂˆÛÛœÝÈ]K\œ›ÜˆHH]ØZ]ÛY[ˆ™œ›ÛJ	Ù\Ü]WÝÛÜšÙ›Ý×ÙØÝ[Y[ÉÊBˆš[œÙ\
+ÂˆØ\ÙWÚYˆØ\ÙT›ÝËšYˆXÝ[Û—ÚYˆXÝ[ÛËšYXÝ[Û’YˆÝ\Y\—Ú[œÝXÝ[Û—ÚYˆÝ\Y\’[œÝXÝ[Û’Yˆ\WÚYˆ\T›ÝËšYˆ\WÜÚYNˆ\TÚYKˆÝ[WÚYˆØ\ÙT›ÝËœÝ[WÚYˆ\WÛ˜[YNˆ\S˜[YKˆ\WØXØÛÝ[ÚYˆ\K˜XØÛÝ[YˆØÝ[Y[Ù\™XÝ[ÛŽˆØÝ[Y[\™XÝ[Û‹ˆØÝ[Y[Ý\NˆØÝ[Y[\KˆÜšYÚ[˜[Ùš[[˜[YNˆÜšYÚ[˜[š[S˜[YKˆ™\]Y\ÝYÙš[[˜[YNˆ	Ü™\]Y\ÝY˜\ÙS˜[Y_K‰Ù^[œÚ[ÛŸXˆÛX\Ùš[[˜[YNˆÛX\š[S˜[YKˆ\ØYÜÝ]\Îˆ	Ü[™[™ÉËˆÛÛ[Ý\NˆÛÛ[\Kˆš[WÙ^[œÚ[ÛŽˆ^[œÚ[Û‹ˆÛÛ[ÜÚ^™NˆY™™\‹›[™ÝˆØ[\Ù›Ü˜ÙWØÛÛ[Ý™\œÚ[Û—ÚYˆ[ˆØ[\Ù›Ü˜ÙWÛ[šÙYÜ™XÛÜ™ÚYˆ[šÙY™XÛÜ™Yˆ\ØYYØžNˆ›Ùš[KšYˆ\ØYYØžWÙ[XZ[ˆ›Ùš[K™[XZ[ˆJBˆœÙ[XÝ
+TÔUWÕÓÔ’Ñ“Õ×ÑÐÕSQS•ÔÑSPÕ
+BˆœÚ[™ÛJ
+NÂˆYˆ
+Y\œ›ÜŠHÂˆØÝ[Y[›ÝÈH]NÂˆœ™XZÎÂˆBˆYˆ
+\œ›Ü‹˜ÛÙHOOH	ÌŒÍLIÊH›ÝÈ\œ›ÜŽÂˆBˆYˆ
+YØÝ[Y[›ÝÊH›ÝÈ\\œ›ÜŠ	ÐH[š\]YHØÝ[Y[š[[˜[YHÛÝ[›Ý™H™\Ù\™Y‰ËJNÂ‚ˆÛÛœÝÛX\š[S˜[YHHØÝ[Y[›ÝËœÛX\Ùš[[˜[YNÂˆÛÛœÝ]HHÛX\š[S˜[YKœÛXÙJJ^[œÚ[Û‹›[™Ý
+ÈJJNÂˆ]ÛÛ[™\œÚ[Û’YH[Âˆ]ÛÛ[ØÝ[Y[YH[Â‚ˆžHÂˆÛÛœÝÛÛ[™\œÚ[ÛˆH]ØZ]Ù”™\]Y\Ý
+	ËÜÛØš™XÝËÐÛÛ[™\œÚ[Û‰ËÂˆY]Ùˆ	ÔÔÕ	Ëˆ›ÙNˆÂˆ]Nˆ]Kˆ]ÛÛY[ˆÉÜÛX\š[S˜[Y_Xˆ™\œÚ[Û‘]NˆY™™\‹ÔÝš[™Ê	Ø˜\ÙM	ÊKˆš\œÝX›\ÚØØ][Û’Yˆ[šÙY™XÛÜ™YˆKˆJNÂˆÛÛ[™\œÚ[Û’YHÛÛ[™\œÚ[ÛËšYÂˆYˆ
+Z\ÔØ[\Ù›Ü˜ÙRY
+ÛÛ[™\œÚ[Û’Y
+JH›ÝÈ\\œ›ÜŠ	ÔØ[\Ù›Ü˜ÙHY›Ý™]\›ˆHÛÛ[™\œÚ[ÛˆY‰ËLŠNÂˆÛÛœÝ™\œÚ[Û”›ÝÜÈH]ØZ]]Y\žT›ÝÜÊÑSPÕYÛÛ[ØÝ[Y[Y”“ÓHÛÛ[™\œÚ[ÛˆÒT‘HYH	ÉÙ\ØØ\TÛÜ[
+ÛÛ[™\œÚ[Û’Y
+_IÈSRUXÈÛÙ˜Z[ˆYHJNÂˆÛÛ[ØÝ[Y[YH™\œÚ[Û”›ÝÜÖÌOËÛÛ[ØÝ[Y[Y[ÂˆYˆ
+Z\ÔØ[\Ù›Ü˜ÙRY
+ÛÛ[ØÝ[Y[Y
+JH›ÝÈ\\œ›ÜŠ	ÔØ[\Ù›Ü˜ÙHY›Ý™]\›ˆHÛÛ[ØÝ[Y[Y‰ËLŠNÂˆÛÛœÝØ[\Ù›Ü˜ÙU\›H	ÙÙ][œÝ[˜ÙU\›
+
+_KÛYÚš[™ËÜ‹ÐÛÛ[ØÝ[Y[ÉØÛÛ[ØÝ[Y[YKÝšY]ØÂˆÛÛœÝÈ]NˆÛÛ\]YØÝ[Y[\œ›ÜŽˆØÝ[Y[\œ›ÜˆHH]ØZ]ÛY[ˆ™œ›ÛJ	Ù\Ü]WÝÛÜšÙ›Ý×ÙØÝ[Y[ÉÊBˆ\]JÂˆ\ØYÜÝ]\Îˆ	ØÛÛ\]IËˆØ[\Ù›Ü˜ÙWØÛÛ[Ý™\œÚ[Û—ÚYˆÛÛ[™\œÚ[Û’YˆØ[\Ù›Ü˜ÙWØÛÛ[ÙØÝ[Y[ÚYˆÛÛ[ØÝ[Y[YˆØ[\Ù›Ü˜ÙWÝ\›ˆØ[\Ù›Ü˜ÙU\›ˆJBˆ™\J	ÚY	ËØÝ[Y[›ÝËšY
+Bˆ™\J	Ý\ØYÜÝ]\ÉË	Ü[™[™ÉÊBˆœÙ[XÝ
+TÔUWÕÓÔ’Ñ“Õ×ÑÐÕSQS•ÔÑSPÕ
+BˆœÚ[™ÛJ
+NÂˆYˆ
+ØÝ[Y[\œ›ÜŠH›ÝÈØÝ[Y[\œ›ÜŽÂˆØÝ[Y[›ÝÈHÛÛ\]YØÝ[Y[ÂˆHØ]Ú
+\œ›ÜŠHÂˆYˆ
+ÛÛ[ØÝ[Y[Y
+H]ØZ]Ù”™\]Y\Ý
+ÜÛØš™XÝËÐÛÛ[ØÝ[Y[ÉÙ[˜ÛÙUT’PÛÛ\Û™[
+ÛÛ[ØÝ[Y[Y
+_XÈY]Ùˆ	ÑSUIÈJK˜Ø]Ú
+
+
+HOˆ[
+NÂˆ[ÙHYˆ
+ÛÛ[™\œÚ[Û’Y
+H]ØZ]Ù”™\]Y\Ý
+ÜÛØš™XÝËÐÛÛ[™\œÚ[Û‹ÉÙ[˜ÛÙUT’PÛÛ\Û™[
+ÛÛ[™\œÚ[Û’Y
+_XÈY]Ùˆ	ÑSUIÈJK˜Ø]Ú
+
+
+HOˆ[
+NÂˆ]ØZ]ÛY[™œ›ÛJ	Ù\Ü]WÝÛÜšÙ›Ý×ÙØÝ[Y[ÉÊK™[]J
+K™\J	ÚY	ËØÝ[Y[›ÝËšY
+NÂˆ›ÝÈ\œ›ÜŽÂˆBˆ]ØZ]Üš]Q\Ü]P™]Q]™[
+ÛY[Ø\ÙT›ÝË	ÙØÝ[Y[Ý\ØYY	Ë›Ùš[KÂˆXÝ[Û’Yˆ›ÝNˆ	ÜÛX\š[S˜[Y_H\ØYYÈØ[\Ù›Ü˜ÙK˜ˆY]Y]NˆÂˆØÝ[Y[YˆØÝ[Y[›ÝËšYˆØÝ[Y[\KˆØÝ[Y[\™XÝ[Û‹ˆ\TÚYKˆ\S˜[YKˆ\PXØÛÝ[Yˆ\K˜XØÛÝ[YˆÝ\Y\’[œÝXÝ[Û’YˆÛÛ[™\œÚ[Û’YˆØÝ[Y[›ÝËœØ[\Ù›Ü˜ÙWØÛÛ[Ý™\œÚ[Û—ÚYˆ[šÙY™XÛÜ™YÎˆÛ[šÙY™XÛÜ™YKˆKˆJNÂˆ™]\›ˆÈØÝ[Y[ˆÙ\šX[^™Q\Ü]UÛÜšÙ›ÝÑØÝ[Y[
+ØÝ[Y[›ÝÊHNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆÝ\Y\“Ù™œÙ][›ÚXÙSÜ[ÛœÊÈÝ\Y\XØÛÝ[YÝ\œ™[˜ÞR\ÛÐÛÙK^ÛYR[›ÚXÙRYÈH×KXØÙ\ÜÐÛÛ^H[HHßJHÂˆYˆ
+Z\ÔØ[\Ù›Ü˜ÙRY
+Ý\Y\XØÛÝ[Y
+JH›ÝÈ\\œ›ÜŠ	Õ˜[YÝ\Y\ˆXØÛÝ[\È™\]Z\™Y‰Ë
+NÂˆÛÛœÝÚ[›ÚXÙQ\ØÜšX™K^[Y[\ØÜšX™WHH]ØZ]›ÛZ\ÙK˜[
+ÂˆØ[\Ù›Ü˜ÙSØš™XÝšY[ÊÈØš™XÝ˜[YNˆ	ÔÝ\Y\—Ò[›ÚXÙW×ØÉÈJKˆØ[\Ù›Ü˜ÙSØš™XÝšY[ÊÈØš™XÝ˜[YNˆ	Ô^[Y[×ØÉÈJK˜Ø]Ú
+
+
+HOˆ
+ÂˆšY[Îˆ×KˆJJKˆJNÂˆÛÛœÝ[›ÚXÙQšY[ÈH[›ÚXÙQ\ØÜšX™K™šY[È×NÂˆÛÛœÝ[›ÚXÙQšY[˜[Y\ÈH™]ÈÙ]
+[›ÚXÙQšY[Ë›X\
+
+šY[
+HOˆšY[›˜[YJJNÂˆÛÛœÝ[›ÚXÙQšY[žS˜[YHHØš™XÝ™œ›ÛQ[šY\Ê[›ÚXÙQšY[Ë›X\
+
+šY[
+HOˆÙšY[›˜[YKšY[JJNÂˆÛÛœÝØÚ[XHH™\ÛÛ™TÝ\Y\”Ù][Y[ØÚ[XJÂˆÝ\Y\’[›ÚXÙQšY[Îˆ[›ÚXÙQšY[Ëˆ^[Y[šY[Îˆ^[Y[\ØÜšX™K™šY[È×KˆJNÂˆYˆ
+\ØÚ[XK˜[Y
+HÂˆ›ÝÈ\\œ›ÜŠÝ\Y\ˆÙ™œÙ]Ü[ÛœÈ\™H[˜]˜Z[X›Nˆ	ÜØÚ[XKš\ÜÝY\Ëš›Ú[Š	È	Ê_XJNÂˆBˆÛÛœÝ™[][ÛœÚ\ÈHØÚ[XKœÝ\Y\XØÛÝ[šY[Ë›X\
+
+šY[
+HOˆ[›ÚXÙQšY[žS˜[YVÙšY[OËœ™[][ÛœÚ\˜[YJK™š[\Š›ÛÛX[ŠNÂˆÛÛœÝÙ[XÝšY[ÈHÉÒY	Ë	Ó˜[YIË	ÐÜ™X]Y]IË[›ÚXÙQšY[˜[Y\Ëš\Ê	ÔÕSW×ØÉÊHÈ	ÔÕSW×ØÉÈˆ[[›ÚXÙQšY[˜[Y\Ëš\Ê	ÐÝ\œ™[˜ÞR\ÛÐÛÙIÊHÈ	ÐÝ\œ™[˜ÞR\ÛÐÛÙIÈˆ[ØÚ[XKš[›ÚXÙP[[Ý[šY[ØÚ[XKš[›ÚXÙT^XX›QšY[‹‹œØÚ[XKš[›ÚXÙQYQ]QšY[Ë‹‹œØÚ[XKš[›ÚXÙQ]QšY[Ë‹‹œØÚ[XKš[›ÚXÙTÝ]\ÑšY[Ë‹‹œØÚ[XKœÝ\Y\XØÛÝ[šY[Ë‹‹œ™[][ÛœÚ\Ë›X\
+
+™[][ÛœÚ\
+HOˆ	Ü™[][ÛœÚ\K“˜[YX
+WK™š[\Š›ÛÛX[ŠNÂˆÛÛœÝXØÛÝ[ÛÛ™][ÛˆHØÚ[XKœÝ\Y\XØÛÝ[šY[Ë›X\
+
+šY[
+HOˆ	ÙšY[HH	ÉÙ\ØØ\TÛÜ[
+Ý\Y\XØÛÝ[Y
+_IØ
+Kš›Ú[Š	ÈÔˆ	ÊNÂˆÛÛœÝ›ÝÜÈH]ØZ]]Y\žT›ÝÜÊˆˆÑSPÕ	ÖË‹‹›™]ÈÙ]
+Ù[XÝšY[ÊWKš›Ú[Š	Ë	Ê_Bˆ”“ÓHÝ\Y\—Ò[›ÚXÙW×ØÂˆÒT‘H
+	ØXØÛÝ[ÛÛ™][ÛŸJBˆÔ‘Tˆ–HÜ™X]Y]HTÐÂˆSRUŒˆˆÈ[Z]ˆŒÛÙ˜Z[ˆYHKˆ
+NÂˆÛÛœÝ^ÛYYH™]ÈÙ]
+^ÛYR[›ÚXÙRYË›X\
+
+Y
+HOˆÝš[™ÊY
+KœÛXÙJMJJJNÂˆÛÛœÝÜ[ÛœÈH×NÂˆ›Üˆ
+ÛÛœÝ[›ÚXÙHÙˆ›ÝÜÊHÂˆYˆ
+^ÛYYš\ÊÝš[™Ê[›ÚXÙK’Y	ÉÊKœÛXÙJMJJJHÛÛ[YNÂˆYˆ
+[›ÚXÙK”ÕSW×ØÊHÂˆÛÛœÝ[ÝÙYH]ØZ]™\]Z\™R[\›Ù™šXÙTÝ[PXØÙ\ÜÊ[›ÚXÙK”ÕSW×ØËXØÙ\ÜÐÛÛ^
+Bˆ[Š
+
+HOˆYJBˆ˜Ø]Ú
+
+
+HOˆ˜[ÙJNÂˆYˆ
+X[ÝÙY
+HÛÛ[YNÂˆBˆÛÛœÝÝ\Y\‘šY[HØÚ[XKœÝ\Y\XØÛÝ[šY[Ë™š[™
+
+šY[
+HOˆ[›ÚXÙVÙšY[JNÂˆYˆ
+\Ü]TØ[\Ù›Ü˜ÙRYÙ^J[›ÚXÙVÜÝ\Y\‘šY[JHOOH\Ü]TØ[\Ù›Ü˜ÙRYÙ^JÝ\Y\XØÛÝ[Y
+JHÛÛ[YNÂˆÛÛœÝYQ]HHØÚ[XKš[›ÚXÙQYQ]QšY[Ë›X\
+
+šY[
+HOˆ[›ÚXÙVÙšY[JK™š[™
+›ÛÛX[ŠH[ÂˆÛÛœÝ[›ÚXÙQ]HHØÚ[XKš[›ÚXÙQ]QšY[Ë›X\
+
+šY[
+HOˆ[›ÚXÙVÙšY[JK™š[™
+›ÛÛX[ŠH[›ÚXÙKÜ™X]Y]H[ÂˆÛÛœÝÝ]\ÈHØÚ[XKš[›ÚXÙTÝ]\ÑšY[Ë›X\
+
+šY[
+HOˆ[›ÚXÙVÙšY[JK™š[™
+›ÛÛX[ŠH[ÂˆÛÛœÝÝ]\ÕÚÙ[ˆHÝš[™ÊÝ]\È	ÉÊBˆÓÝÙ\Ø\ÙJ
+Bˆœ™\XÙJÖ×˜K^ŒNWJËÙË	ÉÊNÂˆYˆ
+ÉØÛÜÙY	Ë	ÜZY	Ë	ØØ[˜Ù[Y	Ë	ØØ[˜Ù[Y	Ë	Ý›ÚY	Ë	Ü™Z™XÝY	×KœÛÛYJ
+ÚÙ[ŠHOˆÝ]\ÕÚÙ[‹š[˜ÛY\ÊÚÙ[ŠJJHÛÛ[YNÂˆÛÛœÝ^ÜÝ\™HH›Ü›X[^™TÝ\Y\’[›ÚXÙQ^ÜÝ\™JÂˆÝ\Y\’[›ÚXÙRYˆ[›ÚXÙK’Yˆ[›ÚXÙS˜[YNˆ[›ÚXÙK“˜[YKˆÛÝ\˜ÙTÝ[RYˆ[›ÚXÙK”ÕSW×ØËˆÝ\Y\XØÛÝ[Yˆ[›ÚXÙVÜÝ\Y\‘šY[KˆÝ\Y\“˜[YNˆ™[][ÛœÚ\Ë›X\
+
+™[][ÛœÚ\
+HOˆ[›ÚXÙVÜ™[][ÛœÚ\OË“˜[YJK™š[™
+›ÛÛX[ŠH	ÉËˆÝ\œ™[˜ÞR\ÛÐÛÙNˆ[›ÚXÙKÝ\œ™[˜ÞR\ÛÐÛÙH	ÕTÑ	ËˆYQ]Kˆ[›ÚXÙQ]KˆÜ™X]Y]Nˆ[›ÚXÙKÜ™X]Y]Kˆ[›ÚXÙP[[Ý[ˆ[›ÚXÙVÜØÚ[XKš[›ÚXÙP[[Ý[šY[Kˆ^XX›P˜[[˜ÙNˆ[›ÚXÙVÜØÚ[XKš[›ÚXÙT^XX›QšY[KˆÝ]\ËˆJNÂˆYˆ
+^ÜÝ\™Kœ^XX›P˜[[˜ÙHHŒH^ÜÝ\™K˜Ý\œ™[˜ÞR\ÛÐÛÙHOOHÝ\œ™[˜ÞR\ÛÐÛÙJHÛÛ[YNÂˆÜ[ÛœËœ\Ú
+ÂˆÝ\Y\’[›ÚXÙRYˆ^ÜÝ\™KœÝ\Y\’[›ÚXÙRYˆ[›ÚXÙS˜[YNˆ^ÜÝ\™Kš[›ÚXÙS˜[YKˆÝ[RYˆ[›ÚXÙK”ÕSW×ØÈ[ˆÝ\œ™[˜ÞR\ÛÐÛÙNˆ^ÜÝ\™K˜Ý\œ™[˜ÞR\ÛÐÛÙKˆ[›ÚXÙP[[Ý[ˆ^ÜÝ\™Kš[›ÚXÙP[[Ý[ˆ^XX›P˜[[˜ÙNˆ^ÜÝ\™Kœ^XX›P˜[[˜ÙKˆYQ]Nˆ^ÜÝ\™K™YQ]Kˆ[›ÚXÙQ]Nˆ^ÜÝ\™Kš[›ÚXÙQ]KˆÝ]\ËˆJNÂˆBˆ™]\›ˆÜ[ÛœÎÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ\Ü]UÛÜšÙ›ÝÔÝ\Y\“Ù™œÙ]Ü[ÛœÊ›ÙHHßK™\KXØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÈÛY[›Ùš[HHHXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ]ØZ]™\]Z\™PØ\Xš[]JÛY[›Ùš[K	Ù\Ü]\×ØXØÛÝ[	Ë	Ñ\Ü]HXØÛÝ[[™È\›Z\ÜÚ[Ûˆ\È™\]Z\™Y›ÜˆÝ\Y\ˆÙ™œÙ]Ü[ÛœË‰ÊNÂˆÛÛœÝ[œÝXÝ[Û’YHÝš[™Ê›ÙKš[œÝXÝ[Û’Y	ÉÊKš[J
+NÂˆÛÛœÝÈ]Nˆ[œÝXÝ[Û‹\œ›ÜˆHH]ØZ]ÛY[™œ›ÛJ	Ù\Ü]WÝÛÜšÙ›Ý×ÜÝ\Y\—Ú[œÝXÝ[ÛœÉÊKœÙ[XÝ
+TÔUWÔÕTQT—ÒS”Õ•PÕSÓ—ÔÑSPÕ
+K™\J	ÚY	Ë[œÝXÝ[Û’Y
+K›X^X™TÚ[™ÛJ
+NÂˆYˆ
+\œ›ÜŠH›ÝÈ\œ›ÜŽÂˆYˆ
+Z[œÝXÝ[ÛŠH›ÝÈ\\œ›ÜŠ	ÔÝ\Y\ˆ[œÝXÝ[Ûˆ›Ý›Ý[™‰Ë
+NÂˆYˆ
+[œÝXÝ[Û‹š[œÝXÝ[Û—Ý\HOOH	ÙÙ]Ø˜XÚ×ÜZY	ÊH›ÝÈ\\œ›ÜŠ	ÓÛ›HÙ]˜XÚÈZY[[Ý[[œÝXÝ[ÛœÈØ[ˆ\ÙH[ˆÙ™œÙ][›ÚXÙK‰Ë
+NÂˆÛÛœÝØ\ÙT›ÝÈH]ØZ]Ù]\Ü]P™]PØ\ÙJÛY[[œÝXÝ[Û‹˜Ø\ÙWÚY
+NÂˆ]ØZ]™\]Z\™R[\›Ù™šXÙTÝ[PXØÙ\ÜÊØ\ÙT›ÝËœÝ[WÚYXØÙ\ÜÐÛÛ^ÈÛY[›Ùš[HJNÂˆÛÛœÝ\T›ÝÜÈH]ØZ]ØY\Ü]UÛÜšÙ›ÝÔ\Y\ÊÛY[Ø\ÙT›ÝËšY
+NÂˆÛÛœÝ\HH\T›ÝÜË™š[™
+
+›ÝÊHOˆ›ÝËšYOOH[œÝXÝ[Û‹œ\WÚY
+NÂˆYˆ
+\\JH›ÝÈ\\œ›ÜŠ	ÔÝ\Y\ˆ[œÝXÝ[Ûˆ\È›ÈÙ[XÝYXØÛÝ[‰Ë
+NÂˆÛÛœÝÜ[ÛœÈH]ØZ]Ý\Y\“Ù™œÙ][›ÚXÙSÜ[ÛœÊÂˆÝ\Y\XØÛÝ[Yˆ\K˜XØÛÝ[ÚYˆÝ\œ™[˜ÞR\ÛÐÛÙNˆ[œÝXÝ[Û‹˜Ý\œ™[˜ÞWÚ\Û×ØÛÙKˆ^ÛYR[›ÚXÙRYÎˆÚ[œÝXÝ[Û‹œÛÝ\˜ÙWÜÝ\Y\—Ú[›ÚXÙWÚYKˆXØÙ\ÜÐÛÛ^ˆXØÙ\ÜÐÛÛ^ÈÛY[›Ùš[HKˆJNÂˆÛÛœÝÈ]Nˆ™\Ù\˜][ÛœË\œ›ÜŽˆ™\Ù\˜][Û‘\œ›ÜˆHH]ØZ]ÛY[™œ›ÛJ	Ù\Ü]WÝÛÜšÙ›Ý×ÜÝ\Y\—Ú[œÝXÝ[ÛœÉÊKœÙ[XÝ
+	ÚY\™Ù]ÜÝ\Y\—Ú[›ÚXÙWÚY[›™YØ[[Ý[Ý]\Ë™XÛÝ™\žWÛY]Ù	ÊK™\J	Ü™XÛÝ™\žWÛY]Ù	Ë	Ù]\™WÚ[›ÚXÙWÛÙ™œÙ]	ÊK››Ý
+	Ý\™Ù]ÜÝ\Y\—Ú[›ÚXÙWÚY	Ë	Ú\ÉË[
+NÂˆYˆ
+™\Ù\˜][Û‘\œ›ÜŠH›ÝÈ™\Ù\˜][Û‘\œ›ÜŽÂˆÛÛœÝ™\Ù\™YžR[›ÚXÙHH™]ÈX\
+
+NÂˆ›Üˆ
+ÛÛœÝ™\Ù\˜][ÛˆÙˆ™\Ù\˜][ÛœÈ×JHÂˆYˆ
+™\Ù\˜][Û‹šYOOH[œÝXÝ[Û‹šYÉÓ›Ý™\]Z\™Y	Ë	ÔÝ\\œÙYY	×Kš[˜ÛY\Ê™\Ù\˜][Û‹œÝ]\ÊJHÛÛ[YNÂˆÛÛœÝÙ^HHÝš[™Ê™\Ù\˜][Û‹\™Ù]ÜÝ\Y\—Ú[›ÚXÙWÚY	ÉÊKœÛXÙJMJNÂˆ™\Ù\™YžR[›ÚXÙKœÙ]
+Ù^K[X™\Š™\Ù\™YžR[›ÚXÙK™Ù]
+Ù^JH
+H
+È[X™\Š™\Ù\˜][Û‹œ[›™YØ[[Ý[
+JNÂˆBˆÛÛœÝ]˜Z[X›SÜ[ÛœÈHÜ[ÛœÂˆ›X\
+
+Ü[ÛŠHOˆÂˆÛÛœÝ™\Ù\™Y[[Ý[H[X™\Š™\Ù\™YžR[›ÚXÙK™Ù]
+Ýš[™ÊÜ[Û‹œÝ\Y\’[›ÚXÙRY	ÉÊKœÛXÙJMJJH
+NÂˆ™]\›ˆÂˆ‹‹›Ü[Û‹ˆ™\Ù\™Y[[Ý[ˆ[œ™\Ù\™Y^XX›P˜[[˜ÙNˆX]›X^
+[X™\ŠÜ[Û‹œ^XX›P˜[[˜ÙH
+HH™\Ù\™Y[[Ý[
+KˆNÂˆJBˆ™š[\Š
+Ü[ÛŠHOˆÜ[Û‹[œ™\Ù\™Y^XX›P˜[[˜ÙH
+ÈŒHH[X™\Š[œÝXÝ[Û‹œ[›™YØ[[Ý[
+JNÂˆ™]\›ˆÈÜ[ÛœÎˆ]˜Z[X›SÜ[ÛœÈNÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ\Ü]UÛÜšÙ›ÝÔÝ\Y\’[œÝXÝ[Û•\]J›ÙHHßK™\KXØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÈÛY[›Ùš[HHHXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ]ØZ]™\]Z\™PØ\Xš[]JÛY[›Ùš[K	Ù\Ü]\×ØXØÛÝ[	Ë	Ñ\Ü]HXØÛÝ[[™È\›Z\ÜÚ[Ûˆ\È™\]Z\™Y›ÜˆÝ\Y\ˆ[œÝXÝ[ÛœË‰ÊNÂˆÛÛœÝ[œÝXÝ[Û’YHÝš[™Ê›ÙKš[œÝXÝ[Û’Y	ÉÊKš[J
+NÂˆYˆ
+Z[œÝXÝ[Û’Y
+H›ÝÈ\\œ›ÜŠ	Ú[œÝXÝ[Û’Y\È™\]Z\™Y‰Ë
+NÂˆÛÛœÝÈ]NˆÜšYÚ[˜[[œÝXÝ[Û‹\œ›ÜŽˆÛÚÝ\\œ›ÜˆHH]ØZ]ÛY[™œ›ÛJ	Ù\Ü]WÝÛÜšÙ›Ý×ÜÝ\Y\—Ú[œÝXÝ[ÛœÉÊKœÙ[XÝ
+TÔUWÔÕTQT—ÒS”Õ•PÕSÓ—ÔÑSPÕ
+K™\J	ÚY	Ë[œÝXÝ[Û’Y
+K›X^X™TÚ[™ÛJ
+NÂˆYˆ
+ÛÚÝ\\œ›ÜŠH›ÝÈÛÚÝ\\œ›ÜŽÂˆYˆ
+[ÜšYÚ[˜[[œÝXÝ[ÛŠH›ÝÈ\\œ›ÜŠ	ÔÝ\Y\ˆ[œÝXÝ[Ûˆ›Ý›Ý[™‰Ë
+NÂˆÛÛœÝØ\ÙT›ÝÈH]ØZ]Ù]\Ü]P™]PØ\ÙJÛY[ÜšYÚ[˜[[œÝXÝ[Û‹˜Ø\ÙWÚY
+NÂˆ]ØZ]™\]Z\™R[\›Ù™šXÙTÝ[PXØÙ\ÜÊØ\ÙT›ÝËœÝ[WÚYXØÙ\ÜÐÛÛ^ÈÛY[›Ùš[HJNÂˆÛÛœÝÝ\œ™[Ý[HH]ØZ]ØYÝ\œ™[\Ü]TÝ[JØ\ÙT›ÝËœÝ[WÚYXØÙ\ÜÐÛÛ^ÈÛY[›Ùš[HJNÂˆYˆ
+Z\Õ[˜XØÙ\Y^\›˜[\Ü]PÛÜÝ\™JØ\ÙT›ÝËÝ\œ™[Ý[JJH\ÜÙ\Ø[\Ù›Ü˜ÙQ\Ü]R\ÓÜ[ŠÝ\œ™[Ý[JNÂˆ]ÛÜšÙ›ÝÈH]ØZ]ØY\Ü]UÛÜšÙ›ÝÐXÝ[ÛœÊÛY[Ø\ÙT›ÝËšY
+NÂˆÛÛœÝ™YÚ\ÝžHH\ÜÙ\˜[Y\Ü]T\Y\ÊÝ\œ™[Ý[KÛÜšÙ›ÝËœ\T›ÝÜÊNÂˆ˜[Y]TÝÜ™Y\Ü]PXÝ[ÛœÊÛÜšÙ›ÝË˜XÝ[Û”›ÝÜËÛÜšÙ›ÝËœ\T›ÝÜË™YÚ\ÝžJNÂˆ\ÜÙ\Ý\Y\‘\Ü]P[[Ý[ÊÛÜšÙ›ÝË˜XÝ[Û”›ÝÜÊNÂˆÛÛœÝ™XÛÛ˜Ú[X][ÛˆH]ØZ]™XÛÛ˜Ú[P\›Ý™YÝ\Y\’[œÝXÝ[ÛœÊÛY[Ø\ÙT›ÝËÛÜšÙ›ÝËœ\T›ÝÜËÛÜšÙ›ÝË˜XÝ[Û”›ÝÜËÛÜšÙ›ÝËš[œÝXÝ[Û”›ÝÜËÝ\œ™[Ý[K›Ùš[JNÂˆYˆ
+™XÛÛ˜Ú[X][Û‹˜Ú[™ÙY
+HÛÜšÙ›ÝÈH]ØZ]ØY\Ü]UÛÜšÙ›ÝÐXÝ[ÛœÊÛY[Ø\ÙT›ÝËšY
+NÂˆÛÛœÝ[œÝXÝ[ÛˆHÛÜšÙ›ÝËš[œÝXÝ[Û”›ÝÜË™š[™
+
+›ÝÊHOˆ›ÝËšYOOH[œÝXÝ[Û’Y
+NÂˆYˆ
+Z[œÝXÝ[Ûˆ[œÝXÝ[Û‹œÝ]\ÈOOH	ÔÝ\\œÙYY	ÊHÂˆ›ÝÈ\\œ›ÜŠ	ÔÝ\Y\ˆ^[Y[]HÚ[™ÙY[™\È[œÝXÝ[ÛˆØ\È™\XÙYˆ™]šY]ÈH\]YXØÛÝ[[™È[‹‰ËJNÂˆBˆÛÛœÝ™\]Y\ÝY™]š\Ú[ÛˆH[X™\Š›ÙKœ™]š\Ú[ÛŠNÂˆYˆ
+[X™\‹š\Ò[YÙ\Š™\]Y\ÝY™]š\Ú[ÛŠH	‰ˆ™\]Y\ÝY™]š\Ú[ÛˆOOH[X™\Š[œÝXÝ[Û‹œ™]š\Ú[ÛˆJJHÂˆ›ÝÈ\\œ›ÜŠ	Õ\ÈÝ\Y\ˆ[œÝXÝ[ÛˆÚ[™ÙYY\ˆ]Ø\ÈÜ[™Yˆ™Yœ™\Ú[™™]šY]ÈH]\Ý˜[Y\Ë‰ËJNÂˆBˆÛÛœÝÝ]\ÈHÝš[™Ê›ÙKœÝ]\È	ÉÊKš[J
+NÂˆYˆ
+QTÔUWÔÕTQT—ÒS”Õ•PÕSÓ—ÔÕUTÑTËš\ÊÝ]\ÊHÝ]\ÈOOH	ÔÝ\\œÙYY	ÊHÂˆ›ÝÈ\\œ›ÜŠ	Õ˜[YÝ\Y\ˆ[œÝXÝ[ÛˆÝ]\È\È™\]Z\™Y‰Ë
+NÂˆBˆYˆ
+Ø\ÙT›ÝË˜\›Ý˜[ÜÝ]\ÈOOH	Ð\›Ý™Y	ÊHÂˆYˆ
+[œÝXÝ[Û‹š[œÝXÝ[Û—Ý\HOOH	ÝÚ]ÛÝ[œZY	ÈÝ]\ÈOOH	ÒÛXÚÛ›ÝÛYÙY	ÊHÂˆ›ÝÈ\\œ›ÜŠ	Ð™Y›Ü™H\›Ý˜[š[˜[˜ÙHØ[ˆÛ›HXÚÛ›ÝÛYÙH[ˆ[[YYX]HÈ›Ý^H[œÝXÝ[Û‹‰Ë
+NÂˆBˆBˆÛÛœÝ[œÝXÝ[Û”™Y™\™[˜ÙHHÝš[™Ê›ÙKš[œÝXÝ[Û”™Y™\™[˜ÙH	ÉÊKš[J
+NÂˆÛÛœÝ[œÝXÝ[Û‘]HHÝš[™Ê›ÙKš[œÝXÝ[Û‘]H	ÉÊKš[J
+H[ÂˆÛÛœÝÙ][Y[™Y™\™[˜ÙHHÝš[™Ê›ÙKœÙ][Y[™Y™\™[˜ÙH	ÉÊKš[J
+NÂˆÛÛœÝÙ][Y[]HHÝš[™Ê›ÙKœÙ][Y[]H	ÉÊKš[J
+H[ÂˆÛÛœÝXØÛÝ[[™Ó›ÝHHÝš[™Ê›ÙK˜XØÛÝ[[™Ó›ÝH	ÉÊKš[J
+NÂˆYˆ
+[œÝXÝ[Û‘]H	‰ˆK×—ÍKWÌŸKWÌŸIË\Ý
+[œÝXÝ[Û‘]JJH›ÝÈ\\œ›ÜŠ	Ò[œÝXÝ[Ûˆ]H\È[˜[Y‰Ë
+NÂˆYˆ
+Ù][Y[]H	‰ˆK×—ÍKWÌŸKWÌŸIË\Ý
+Ù][Y[]JJH›ÝÈ\\œ›ÜŠ	ÔÙ][Y[]H\È[˜[Y‰Ë
+NÂˆÛÛœÝ™XÛÝ™\žSY]ÙH[œÝXÝ[Û‹š[œÝXÝ[Û—Ý\HOOH	ÙÙ]Ø˜XÚ×ÜZY	ÈÈÝš[™Ê›ÙKœ™XÛÝ™\žSY]Ù[œÝXÝ[Û‹œ™XÛÝ™\žWÛY]Ù	ÉÊKš[J
+H[ˆ[ÂˆYˆ
+[œÝXÝ[Û‹š[œÝXÝ[Û—Ý\HOOH	ÙÙ]Ø˜XÚ×ÜZY	È	‰ˆÉÒ[œÝXÝ[Ûˆ\ÜÝYY	Ë	ÔÙ]Y	×Kš[˜ÛY\ÊÝ]\ÊH	‰ˆVÉØØ\ÚÜ™Y[™	Ë	Ù]\™WÚ[›ÚXÙWÛÙ™œÙ]	×Kš[˜ÛY\Ê™XÛÝ™\žSY]Ù
+JHÂˆ›ÝÈ\\œ›ÜŠ	ÐÚÛÜÙHØ\Ú™Y[™Üˆ]\™H[›ÚXÙHÙ™œÙ]›ÜˆÙ]˜XÚÈZY[[Ý[‰Ë
+NÂˆBˆYˆ
+Ý]\ÈOOH	Ò[œÝXÝ[Ûˆ\ÜÝYY	È	‰ˆ
+Z[œÝXÝ[Û‘]H
+Z[œÝXÝ[Û”™Y™\™[˜ÙH	‰ˆXXØÛÝ[[™Ó›ÝJJJHÂˆ›ÝÈ\\œ›ÜŠ	Ò[œÝXÝ[Ûˆ\ÜÝYY™\]Z\™\È[ˆ[œÝXÝ[Ûˆ]H[™H™Y™\™[˜ÙHÜˆXØÛÝ[[™È›ÝK‰Ë
+NÂˆBˆYˆ
+Ý]\ÈOOH	Ó›Ý™\]Z\™Y	È	‰ˆXXØÛÝ[[™Ó›ÝJH›ÝÈ\\œ›ÜŠ	Ñ^Z[ˆÚH\ÈÝ\Y\ˆ[œÝXÝ[Ûˆ\È›Ý™\]Z\™Y‰Ë
+NÂˆÛÛœÝØÝ[Y[ÈH]ØZ]ØY\Ü]UÛÜšÙ›ÝÑØÝ[Y[ÊÛY[Ø\ÙT›ÝËšY
+NÂˆÛÛœÝ\Ñ]šY[˜ÙHHØÝ[Y[ËœÛÛYJ
+ØÝ[Y[
+HOˆØÝ[Y[œÝ\Y\—Ú[œÝXÝ[Û—ÚYOOH[œÝXÝ[Û‹šY	‰ˆÉÜÝ\Y\—ØÜ™Y]Û›ÝIË	ÜÙ][Y[ØYÜ™Y[Y[	Ë	Ü›ÛÙ—ÛÙ—Ü^[Y[	×Kš[˜ÛY\ÊØÝ[Y[™ØÝ[Y[Ý\JJNÂˆYˆ
+Ý]\ÈOOH	ÔÙ]Y	È	‰ˆ
+\Ù][Y[]H
+\Ù][Y[™Y™\™[˜ÙH	‰ˆZ\Ñ]šY[˜ÙJJJHÂˆ›ÝÈ\\œ›ÜŠ	ÔÙ]Y™\]Z\™\ÈHÙ][Y[]H[™Z]\ˆ[ˆ\ØYYÝ\Y\ˆØÝ[Y[ÜˆHš[˜[˜ÙH™Y™\™[˜ÙK‰Ë
+NÂˆBˆÛÛœÝ[›™Y[[Ý[H[X™\Š[œÝXÝ[Û‹œ[›™YØ[[Ý[
+NÂˆÛÛœÝÙ][Y[[[Ý[HXÚ[X[Ü“[
+›ÙKœÙ][Y[[[Ý[
+HÏÈ
+Ý]\ÈOOH	ÔÙ]Y	ÈÈ[›™Y[[Ý[ˆ[
+NÂˆYˆ
+Ý]\ÈOOH	ÔÙ]Y	È	‰ˆX]˜XœÊ[X™\ŠÙ][Y[[[Ý[
+HH[›™Y[[Ý[
+HˆŒJHÂˆ›ÝÈ\\œ›ÜŠ	ÔÙ][Y[[[Ý[]\Ý\]X[HÝ\œ™[Ý\Y\ˆ[œÝXÝ[Ûˆ[[Ý[‰Ë
+NÂˆB‚ˆÛÛœÝ\HHÛÜšÙ›ÝËœ\T›ÝÜË™š[™
+
+›ÝÊHOˆ›ÝËšYOOH[œÝXÝ[Û‹œ\WÚY
+NÂˆ]\™Ù][›ÚXÙHH[ÂˆYˆ
+™XÛÝ™\žSY]ÙOOH	Ù]\™WÚ[›ÚXÙWÛÙ™œÙ]	ÊHÂˆÛÛœÝ\™Ù]Ý\Y\’[›ÚXÙRYHÝš[™Ê›ÙK\™Ù]Ý\Y\’[›ÚXÙRY	ÉÊKš[J
+NÂˆYˆ
+]\™Ù]Ý\Y\’[›ÚXÙRY
+H›ÝÈ\\œ›ÜŠ	ÔÙ[XÝHÝ\Y\ˆ[›ÚXÙH]Ú[™XÙZ]™HHÙ™œÙ]‰Ë
+NÂˆÛÛœÝÜ[ÛœÈH]ØZ]Ý\Y\“Ù™œÙ][›ÚXÙSÜ[ÛœÊÂˆÝ\Y\XØÛÝ[Yˆ\OË˜XØÛÝ[ÚYˆÝ\œ™[˜ÞR\ÛÐÛÙNˆ[œÝXÝ[Û‹˜Ý\œ™[˜ÞWÚ\Û×ØÛÙKˆ^ÛYR[›ÚXÙRYÎˆÚ[œÝXÝ[Û‹œÛÝ\˜ÙWÜÝ\Y\—Ú[›ÚXÙWÚYKˆXØÙ\ÜÐÛÛ^ˆXØÙ\ÜÐÛÛ^ÈÛY[›Ùš[HKˆJNÂˆ\™Ù][›ÚXÙHHÜ[ÛœË™š[™
+
+Ü[ÛŠHOˆÝš[™ÊÜ[Û‹œÝ\Y\’[›ÚXÙRY
+KœÛXÙJMJHOOHÝš[™Ê\™Ù]Ý\Y\’[›ÚXÙRY
+KœÛXÙJMJJNÂˆYˆ
+]\™Ù][›ÚXÙJH›ÝÈ\\œ›ÜŠ	ÕHÙ[XÝYÙ™œÙ][›ÚXÙH\È›ÈÛ™Ù\ˆ[YÚX›H›Üˆ\ÈÝ\Y\ˆXØÛÝ[[™Ý\œ™[˜ÞK‰ËJNÂˆYˆ
+\™Ù][›ÚXÙKœ^XX›P˜[[˜ÙH
+ÈŒH[›™Y[[Ý[
+H›ÝÈ\\œ›ÜŠ	ÕHÙ[XÝYÙ™œÙ][›ÚXÙHÙ\È›Ý]™H[›ÝYÚ^XX›H˜[[˜ÙK‰Ë
+NÂˆBˆ]X]ÚY^[Y[YH[Âˆ]X]ÚY^[Y[H[ÂˆYˆ
+™XÛÝ™\žSY]ÙOOH	ØØ\ÚÜ™Y[™	È	‰ˆ›ÙK›X]ÚYØ[\Ù›Ü˜ÙT^[Y[Y
+HÂˆÛÛœÝ^ÜÝ\™HH
+Ý\œ™[Ý[K—ÔÝ\Y\—Ò[›ÚXÙWÑ^ÜÝ\™WÔ›ÝÜÈ×JK™š[™
+
+›ÝÊHOˆ›ÝËœÝ\Y\’[›ÚXÙRYOOH[œÝXÝ[Û‹œÛÝ\˜ÙWÜÝ\Y\—Ú[›ÚXÙWÚY
+NÂˆX]ÚY^[Y[H
+^ÜÝ\™OËœ^[Y[È×JK™š[™
+
+›ÝÊHOˆ›ÝËšYOOH›ÙK›X]ÚYØ[\Ù›Ü˜ÙT^[Y[Y	‰ˆ[X™\Š›ÝË˜[[Ý[
+H	‰ˆX]˜XœÊX]˜XœÊ[X™\Š›ÝË˜[[Ý[
+JHH[›™Y[[Ý[
+HHŒH	‰ˆ
+›ÝË˜Ý\œ™[˜ÞR\ÛÐÛÙH	ÕTÑ	ÊHOOH[œÝXÝ[Û‹˜Ý\œ™[˜ÞWÚ\Û×ØÛÙJNÂˆYˆ
+[X]ÚY^[Y[
+H›ÝÈ\\œ›ÜŠ	ÕHÙ[XÝYØ[\Ù›Ü˜ÙH™Y[™›ÈÛ™Ù\ˆX]Ú\È\ÈÝ\Y\ˆ[›ÚXÙKÝ\œ™[˜ÞK[™[[Ý[‰ËJNÂˆX]ÚY^[Y[YHX]ÚY^[Y[šYÂˆB‚ˆÛÛœÝ]™[\HHÝ]\ÈOOH	ÒÛXÚÛ›ÝÛYÙY	ÈÈ	ÜÝ\Y\—ÚÛØXÚÛ›ÝÛYÙY	ÈˆÝ]\ÈOOH	ÔÙ]Y	ÈÈ	ÜÝ\Y\—Ü™XÛÝ™\žWÜÙ]Y	Èˆ™XÛÝ™\žSY]Ù	‰ˆ™XÛÝ™\žSY]ÙOOH[œÝXÝ[Û‹œ™XÛÝ™\žWÛY]ÙÈ	ÜÝ\Y\—Ü™XÛÝ™\žWÛY]ÙÜÙ[XÝY	Èˆ	ØXØÛÝ[[™×Ý\]Y	ÎÂˆÛÛœÝ]™[›ÝHH	Ú[œÝXÝ[Û‹š[œÝXÝ[Û—Ý\HOOH	ÝÚ]ÛÝ[œZY	ÈÈ	ÑÈ›Ý^IÈˆ	ÑÙ]˜XÚÈZY[[Ý[	ßH\]YÈ	ÜÝ]\ßK˜ÂˆÛÛœÝ[œÝXÝ[Û•˜[Y\ÈHÂˆÝ]\Ëˆ™XÛÝ™\žWÛY]Ùˆ™XÛÝ™\žSY]Ùˆ\™Ù]ÜÝ\Y\—Ú[›ÚXÙWÚYˆ\™Ù][›ÚXÙOËœÝ\Y\’[›ÚXÙRY[ˆ\™Ù]ÜÝ\Y\—Ú[›ÚXÙWÛ˜[YNˆ\™Ù][›ÚXÙOËš[›ÚXÙS˜[YH[ˆ\™Ù]ÜÝ[WÚYˆ\™Ù][›ÚXÙOËœÝ[RY[ˆ\™Ù]Ú[›ÚXÙWØ[[Ý[ÜÛ˜\ÚÝˆ\™Ù][›ÚXÙOËš[›ÚXÙP[[Ý[ÏÈ[ˆ\™Ù]Ü^XX›WØ[[Ý[ÜÛ˜\ÚÝˆ\™Ù][›ÚXÙOËœ^XX›P˜[[˜ÙHÏÈ[ˆ\™Ù]Ú[›ÚXÙWÜÛ˜\ÚÝˆ\™Ù][›ÚXÙHßKˆ\™Ù]ÜÝ[WÜÛ˜\ÚÝˆ\™Ù][›ÚXÙOËœÝ[RYÈÈÝ[RYˆ\™Ù][›ÚXÙKœÝ[RYHˆßKˆX]ÚYÜØ[\Ù›Ü˜ÙWÜ^[Y[ÚYˆX]ÚY^[Y[YˆX]Ú[™×Ü^[Y[ÜÛ˜\ÚÝˆX]ÚY^[Y[ßKˆ[œÝXÝ[Û—Ü™Y™\™[˜ÙNˆ[œÝXÝ[Û”™Y™\™[˜ÙH[ˆ[œÝXÝ[Û—Ù]Nˆ[œÝXÝ[Û‘]Kˆ[œÝXÝ[Û—Ø[[Ý[ˆXÚ[X[Ü“[
+›ÙKš[œÝXÝ[Û[[Ý[
+HÏÈ
+Ý]\ÈOOH	Ò[œÝXÝ[Ûˆ\ÜÝYY	ÈÈ[›™Y[[Ý[ˆ[
+KˆÙ][Y[Ü™Y™\™[˜ÙNˆÙ][Y[™Y™\™[˜ÙH[ˆÙ][Y[Ù]NˆÙ][Y[]KˆÙ][Y[Ø[[Ý[ˆÙ][Y[[[Ý[ˆXØÛÝ[[™×Û›ÝNˆXØÛÝ[[™Ó›ÝH[ˆ]™[Ý\Nˆ]™[\Kˆ]™[Û›ÝNˆ]™[›ÝKˆ]™[ÛY]Y]NˆÂˆÝ\Y\’[œÝXÝ[Û’Yˆ[œÝXÝ[Û‹šYˆ™XÛÝ™\žSY]Ùˆ\™Ù]Ý\Y\’[›ÚXÙRYˆ\™Ù][›ÚXÙOËœÝ\Y\’[›ÚXÙRY[ˆX]ÚYØ[\Ù›Ü˜ÙT^[Y[YˆX]ÚY^[Y[Yˆ[›™Y[[Ý[ˆÝ\œ™[˜ÞR\ÛÐÛÙNˆ[œÝXÝ[Û‹˜Ý\œ™[˜ÞWÚ\Û×ØÛÙKˆKˆNÂˆÛÛœÝÈ\œ›ÜŽˆ\]Q\œ›ÜˆHH]ØZ]ÛY[œœÊ	Ý\]WÙ\Ü]WÜÝ\Y\—Ú[œÝXÝ[Û‰ËÂˆÚ[œÝXÝ[Û—ÚYˆ[œÝXÝ[Û‹šYˆÙ^XÝYÜ™]š\Ú[ÛŽˆ[X™\Š[œÝXÝ[Û‹œ™]š\Ú[ÛˆJKˆÝ˜[Y\Îˆ[œÝXÝ[Û•˜[Y\ËˆÝ\™Ù]Ü^XX›WØ[[Ý[ˆ\™Ù][›ÚXÙOËœ^XX›P˜[[˜ÙHÏÈ[ˆØXÝÜŽˆÈYˆ›Ùš[KšY[XZ[ˆ›Ùš[K™[XZ[KˆJNÂˆYˆ
+\]Q\œ›ÜŠHÂˆYˆ
+Ýš[™Ê\]Q\œ›Ü‹›Y\ÜØYÙH	ÉÊKš[˜ÛY\Ê	Ü™]š\Ú[ÛˆÛÛ™›XÝ	ÊJHÂˆ›ÝÈ\\œ›ÜŠ	Õ\ÈÝ\Y\ˆ[œÝXÝ[ÛˆØ\È\]YžH[›Ý\ˆ\Ù\‹ˆ™Yœ™\Ú[™žHYØZ[‹‰ËJNÂˆBˆYˆ
+Ýš[™Ê\]Q\œ›Ü‹›Y\ÜØYÙH	ÉÊKš[˜ÛY\Ê	Ø[™XYH™\Ù\™Y	ÊJHÂˆ›ÝÈ\\œ›ÜŠ	ÕHÙ[XÝYÙ™œÙ][›ÚXÙH›ÈÛ™Ù\ˆ\È[›ÝYÚ[œ™\Ù\™Y^XX›H˜[[˜ÙKˆ™Yœ™\ÚHÙ™œÙ]Ü[ÛœË‰ËJNÂˆBˆ›ÝÈ\]Q\œ›ÜŽÂˆB‚ˆYˆ
+Ø\ÙT›ÝË˜\›Ý˜[ÜÝ]\ÈOOH	Ð\›Ý™Y	ÊHÂˆÛÛœÝ™Yœ™\ÚYH]ØZ]ØY\Ü]UÛÜšÙ›ÝÐXÝ[ÛœÊÛY[Ø\ÙT›ÝËšY
+NÂˆ™]\›ˆÂˆØ\ÙNˆÙ\šX[^™Q\Ü]P™]PØ\ÙJØ\ÙT›ÝÊKˆ\Y\Îˆ™Yœ™\ÚYœ\T›ÝÜË›X\
+Ù\šX[^™Q\Ü]UÛÜšÙ›ÝÔ\JKˆXÝ[ÛœÎˆ™Yœ™\ÚY˜XÝ[ÛœËˆÝ\Y\’[œÝXÝ[ÛœÎˆ™Yœ™\ÚYœÝ\Y\’[œÝXÝ[ÛœËˆØÝ[Y[ÎˆØÝ[Y[Ë›X\
+Ù\šX[^™Q\Ü]UÛÜšÙ›ÝÑØÝ[Y[
+KˆNÂˆBˆ]\]YØ\ÙHH]ØZ]Ù]\Ü]P™]PØ\ÙJÛY[Ø\ÙT›ÝËšY
+NÂˆ\]YØ\ÙHH]ØZ]\œÚ\Ý\Ü]PXØÛÝ[[™ÔÝ]\ÊÛY[\]YØ\ÙKÝ\œ™[Ý[K›Ùš[K\]YØ\ÙKÛÜšÙ›Ý×ÜÝ]\ÊNÂˆÛÛœÝ™Yœ™\ÚYH]ØZ]ØY\Ü]UÛÜšÙ›ÝÐXÝ[ÛœÊÛY[Ø\ÙT›ÝËšY
+NÂˆ™]\›ˆÂˆØ\ÙNˆÙ\šX[^™Q\Ü]P™]PØ\ÙJ\]YØ\ÙJKˆ\Y\ÎˆÛÜšÙ›ÝËœ\T›ÝÜË›X\
+Ù\šX[^™Q\Ü]UÛÜšÙ›ÝÔ\JKˆXÝ[ÛœÎˆ™Yœ™\ÚY˜XÝ[ÛœËˆÝ\Y\’[œÝXÝ[ÛœÎˆ™Yœ™\ÚYœÝ\Y\’[œÝXÝ[ÛœËˆØÝ[Y[ÎˆØÝ[Y[Ë›X\
+Ù\šX[^™Q\Ü]UÛÜšÙ›ÝÑØÝ[Y[
+KˆNÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ\Ü]UÛÜšÙ›ÝÔÝ\Y\[[Ý[[Y[™
+›ÙHHßK™\KXØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÈÛY[›Ùš[HHHXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆÛÛœÝXÝ[Û’YHÝš[™Ê›ÙK˜XÝ[Û’Y	ÉÊKš[J
+NÂˆÛÛœÝ[[Ý[HXÚ[X[Ü“[
+›ÙK™\Ü]P[[Ý[ÏÈ›ÙK˜[[Ý[
+NÂˆÛÛœÝ›ÝHHÝš[™Ê›ÙK››ÝH›ÙK™\ØÜš\[Ûˆ	ÉÊKš[J
+NÂˆÛÛœÝÝ\œ™[˜ÞR\ÛÐÛÙHHÝš[™Ê›ÙK˜Ý\œ™[˜ÞR\ÛÐÛÙH	ÕTÑ	ÊBˆš[J
+BˆÕ\\Ø\ÙJ
+NÂˆYˆ
+XXÝ[Û’Y
+H›ÝÈ\\œ›ÜŠ	ØXÝ[Û’Y\È™\]Z\™Y‰Ë
+NÂˆYˆ
+[[Ý[OH[[[Ý[
+H›ÝÈ\\œ›ÜŠ	ÔÝ\Y\ˆ\Ü]H[[Ý[]\Ý™H™\›ÈÜˆÜ™X]\‹‰Ë
+NÂˆYˆ
+K×–ÐKV—^ÌßIË\Ý
+Ý\œ™[˜ÞR\ÛÐÛÙJJH›ÝÈ\\œ›ÜŠ	ÔÝ\Y\ˆ\Ü]HÝ\œ™[˜ÞH]\Ý™HH™YK[]\ˆTÓÈÛÙK‰Ë
+NÂˆYˆ
+[[Ý[OOH	‰ˆ[›ÝJH›ÝÈ\\œ›ÜŠ	Ñ^Z[ˆÚH›ÈÝ\Y\ˆ™XÛÝ™\žH\È™\]Z\™Y‰Ë
+NÂˆÛÛœÝÈ]NˆXÝ[Û‹\œ›ÜŽˆXÝ[Û‘\œ›ÜˆHH]ØZ]ÛY[™œ›ÛJ	Ù\Ü]WØ™]WØXÝ[ÛœÉÊKœÙ[XÝ
+TÔUWÐ‘UWÐPÕSÓ—ÔÑSPÕ
+K™\J	ÚY	ËXÝ[Û’Y
+K›X^X™TÚ[™ÛJ
+NÂˆYˆ
+XÝ[Û‘\œ›ÜŠH›ÝÈXÝ[Û‘\œ›ÜŽÂˆYˆ
+XXÝ[ÛˆXÝ[Û‹œ\WÜÚYHOOH	ÜÝ\Y\‰ÊH›ÝÈ\\œ›ÜŠ	ÔÝ\Y\ˆXÝ[Ûˆ›Ý›Ý[™‰Ë
+NÂˆÛÛœÝØ\ÙT›ÝÈH]ØZ]Ù]\Ü]P™]PØ\ÙJÛY[XÝ[Û‹˜Ø\ÙWÚY
+NÂˆÛÛœÝXÝÜ‘[XZ[HÝš[™Ê›Ùš[K™[XZ[	ÉÊBˆš[J
+BˆÓÝÙ\Ø\ÙJ
+NÂˆÛÛœÝ™\ÜÛœÚX›U˜Y\ˆBˆXÝ[Û‹˜Ü™X]YØžHOOH›Ùš[KšYˆØ\ÙT›ÝËœÝX›Z]YØžHOOH›Ùš[KšYˆØXÝ[Û‹˜Ü™X]YØžWÙ[XZ[Ø\ÙT›ÝËœÝX›Z]YØžWÙ[XZ[KœÛÛYJˆ
+[XZ[
+HO‚ˆÝš[™Ê[XZ[	ÉÊBˆš[J
+BˆÓÝÙ\Ø\ÙJ
+HOOHXÝÜ‘[XZ[ˆ
+NÂˆYˆ
+Z\ÐYZ[š\Ý˜]Ü•\Ù\•\J›Ùš[K\Ù\—Ý\JH	‰ˆ\™\ÜÛœÚX›U˜Y\ŠHÂˆ›ÝÈ\\œ›ÜŠ	ÓÛ›HH™\ÜÛœÚX›H˜Y\ˆÜˆ[ˆYZ[š\Ý˜]ÜˆØ[ˆ™XÛÜ™\ÈÝ\Y\ˆ\Ü]H[[Ý[‰ËÊNÂˆBˆYˆ
+Ø\ÙT›ÝËÛÜšÙ›Ý×ÜÝ]\ÈOOH	ÐÛÜÙY	ÊH›ÝÈ\\œ›ÜŠ	ÐÛÜÙY\Ü]\ÈØ[››Ý™H[Y[™Y‰Ë
+NÂˆ]ØZ]™\]Z\™R[\›Ù™šXÙTÝ[PXØÙ\ÜÊØ\ÙT›ÝËœÝ[WÚYXØÙ\ÜÐÛÛ^ÈÛY[›Ùš[HJNÂˆÛÛœÝÝ\œ™[Ý[HH]ØZ]ØYÝ\œ™[\Ü]TÝ[JØ\ÙT›ÝËœÝ[WÚYXØÙ\ÜÐÛÛ^ÈÛY[›Ùš[HJNÂˆYˆ
+Z\Õ[˜XØÙ\Y^\›˜[\Ü]PÛÜÝ\™JØ\ÙT›ÝËÝ\œ™[Ý[JJH\ÜÙ\Ø[\Ù›Ü˜ÙQ\Ü]R\ÓÜ[ŠÝ\œ™[Ý[JNÂˆÛÛœÝÛÜšÙ›ÝÈH]ØZ]ØY\Ü]UÛÜšÙ›ÝÐXÝ[ÛœÊÛY[Ø\ÙT›ÝËšY
+NÂˆÛÛœÝ™YÚ\ÝžHH\ÜÙ\˜[Y\Ü]T\Y\ÊÝ\œ™[Ý[KÛÜšÙ›ÝËœ\T›ÝÜÊNÂˆ˜[Y]TÝÜ™Y\Ü]PXÝ[ÛœÊÛÜšÙ›ÝË˜XÝ[Û”›ÝÜËÛÜšÙ›ÝËœ\T›ÝÜË™YÚ\ÝžJNÂˆÛÛœÝ\PžRYH\Ü]T\T›ÝÓX\
+ÛÜšÙ›ÝËœ\T›ÝÜÊNÂˆÛÛœÝ^\Ý[™Ð[[Ý[HXÚ[X[Ü“[
+XÝ[Û‹˜[[Ý[
+NÂˆÛÛœÝÛÛ[Y\˜ÚX[[[Ý[Ú[™ÙYH^\Ý[™Ð[[Ý[OH[X]˜XœÊ^\Ý[™Ð[[Ý[H[[Ý[
+HˆŒNÂˆÛÛœÝY]X›TÝYÙHHÉÑ˜Y	Ë	Ô™Z™XÝY	Ë	Ô™]š\Ú[Ûˆ™\]Y\ÝY	×Kš[˜ÛY\ÊØ\ÙT›ÝËÛÜšÙ›Ý×ÜÝ]\ÊNÂˆÛÛœÝ[Y[™YÝYÙHHY]X›TÝYÙHÈØ\ÙT›ÝËÛÜšÙ›Ý×ÜÝ]\ÈˆÛÛ[Y\˜ÚX[[[Ý[Ú[™ÙYÈ	Ô™]š\Ú[Ûˆ™\]Y\ÝY	ÈˆØ\ÙT›ÝË˜\›Ý˜[ÜÝ]\ÈOOH	Ð\›Ý™Y	ÈÈ	ÐXØÛÝ[[™È[ˆ›ÙÜ™\ÜÉÈˆØ\ÙT›ÝËÛÜšÙ›Ý×ÜÝ]\ÎÂˆÛÛœÝ[Y[™Y\›Ý˜[H[Y[™YÝYÙHOOH	Ñ˜Y	ÈÈ	Ñ˜Y	Èˆ[Y[™YÝYÙHOOH	Ô™]š\Ú[Ûˆ™\]Y\ÝY	ÈÈ	Ô™]š\Ú[Ûˆ™\]Y\ÝY	ÈˆØ\ÙT›ÝË˜\›Ý˜[ÜÝ]\ÎÂˆÛÛœÝœÐXÝ[ÛœÈHÛÜšÙ›ÝË˜XÝ[Û”›ÝÜË›X\
+
+›ÝÊHOˆÂˆÛÛœÝ\HH\PžRY™Ù]
+›ÝËœ\WÚY
+NÂˆÛÛœÝ˜\ÙHHÂˆ‹‹œ›ÝËˆ\WØXØÛÝ[ÚÙ^Nˆ\OË˜XØÛÝ[ÚÙ^KˆNÂˆYˆ
+›ÝËšYOOHXÝ[Û‹šY
+H™]\›ˆ˜\ÙNÂˆ™]\›ˆ™\\™TÝ\Y\”Ù][Y[XÝ[ÛŠˆÂˆ‹‹˜˜\ÙKˆXÝ[Û—Ý\Nˆ	Ü™\ÛÛ™WÜÝ\Y\—Ù\Ü]IËˆXÝ[Û—ÛX™[ˆTÔUWÐ‘UWÐPÕSÓ—ÓP‘SËœ™\ÛÛ™WÜÝ\Y\—Ù\Ü]Kˆ[[Ý[ˆÜXÚX[Ø^WÜšXÙNˆ[ˆ\ØÜš\[ÛŽˆ›ÝH›ÝË™\ØÜš\[Ûˆ	ÉËˆÝ\œ™[˜ÞWÚ\Û×ØÛÙNˆÝ\œ™[˜ÞR\ÛÐÛÙKˆ[›ÚXÙWØ[ØØ][ÛœÎˆ\œ˜^Kš\Ð\œ˜^J›ÙKš[›ÚXÙP[ØØ][ÛœÊHÈ›ÙKš[›ÚXÙP[ØØ][ÛœÈˆ×Kˆ^XÝ][Û—ÜÝ]\Îˆ	Ô[™[™ÈXØÛÝ[[™ÉËˆKˆÝ\œ™[Ý[Kˆ
+NÂˆJNÂˆÛÛœÝš[˜[˜ÚX[ÈHØ[Ý[]Q\Ü]P™]TÙ][Y[
+œÐXÝ[ÛœÊNÂˆÛÛœÝØ[\Ù›Ü˜ÙTÝ]\ÈH[Y[™YÝYÙHOOH	Ñ˜Y	ÈÈ	ÓÜ[ˆH˜Y\ˆ™]šY]ÉÈˆ[Y[™YÝYÙNÂˆÛÛœÝØ\ÙT^[ØYHÂˆ‹‹™\Ü]P™]PØ\ÙQœ›ÛTÝ[JÝ\œ™[Ý[JKˆÝ\œ™[ÜØ[\Ù›Ü˜ÙWÜÝ]\ÎˆØ[\Ù›Ü˜ÙTÝ]\ËˆÛÜšÙ›Ý×ÜÝ]\Îˆ[Y[™YÝYÙKˆ\›Ý˜[ÜÝ]\Îˆ[Y[™Y\›Ý˜[ˆ]\ÝÛ›ÝNˆ›ÝH	ÔÝ\Y\ˆ\Ü]H[[Ý[™XÛÜ™Y‰ËˆÙ][Y[Ùš[˜[˜ÚX[Îˆš[˜[˜ÚX[ËˆÙ][Y[Ü›ˆš[˜[˜ÚX[ËœÙ][Y[›ˆNÂˆÛÛœÝÈ]NˆØ]™YØ\ÙRY\œ›ÜŽˆØ]™Q\œ›ÜˆHH]ØZ]ÛY[œœÊ	ÜØ]™WÙ\Ü]WÝÛÜšÙ›Ý×Ù˜Y	ËÂˆØØ\ÙNˆØ\ÙT^[ØYˆÜ\Y\ÎˆÛÜšÙ›ÝËœ\T›ÝÜË›X\
+
+\JHOˆ
+ÂˆXØÛÝ[ÚYˆ\K˜XØÛÝ[ÚYˆXØÛÝ[ÚÙ^Nˆ\K˜XØÛÝ[ÚÙ^KˆXØÛÝ[Û˜[YNˆ\K˜XØÛÝ[Û˜[YKˆ›Û\Îˆ\Kœ›Û\ËˆÛÝ\˜ÙWÝ\\Îˆ\KœÛÝ\˜ÙWÝ\\ËˆÛÝ\˜ÙWÜ™XÛÜ™ÚYÎˆ\KœÛÝ\˜ÙWÜ™XÛÜ™ÚYËˆ^[Y[Ý\›\Îˆ\Kœ^[Y[Ý\›\Ëˆ›ÙXÝÎˆ\Kœ›ÙXÝËˆØ[˜Ù[YÜÛÝ\˜ÙWÛÛ›Nˆ\K˜Ø[˜Ù[YÜÛÝ\˜ÙWÛÛ›KˆJJKˆØXÝ[ÛœÎˆœÐXÝ[ÛœËˆØXÝÜŽˆÈYˆ›Ùš[KšY[XZ[ˆ›Ùš[K™[XZ[KˆÙ]™[Û›ÝNˆ›ÝH	ÔÝ\Y\ˆ\Ü]H[[Ý[™XÛÜ™Y‰ËˆJNÂˆYˆ
+Ø]™Q\œ›ÜŠH›ÝÈØ]™Q\œ›ÜŽÂˆÛÛœÝ\]YØ\ÙHH]ØZ]Ù]\Ü]P™]PØ\ÙJÛY[Ø]™YØ\ÙRYØ\ÙT›ÝËšY
+NÂˆ]ØZ]]Ú\Ü]UÛÜšÙ›ÝÔÝ]\Ò[”Ø[\Ù›Ü˜ÙJ\]YØ\ÙKØ[\Ù›Ü˜ÙTÝ]\ÊNÂˆÛÛœÝÝ]\ÐØ\ÙHH]ØZ]™XÛÜ™\Ü]UÛÜšÙ›ÝÔØ[\Ù›Ü˜ÙUÜš]X˜XÚÊÛY[\]YØ\ÙK›Ùš[KØ[\Ù›Ü˜ÙTÝ]\ÊNÂˆYˆ
+[Y[™YÝYÙHOOH	Ô™]š\Ú[Ûˆ™\]Y\ÝY	ÊHÂˆ]ØZ]Üš]Q\Ü]P™]Q]™[
+ÛY[Ý]\ÐØ\ÙK	Ü™]š\Ú[Û—Ü™\]Y\ÝY	Ë›Ùš[KÂˆXÝ[Û’YˆXÝ[Û‹šYˆ›ÝNˆ	ÔÝ\Y\ˆ\Ü]H[[Ý[YYÈ[ˆ^\Ý[™ÈÛÜšÙ›ÝÎÈ\›Ý˜[\È™\]Z\™YYØZ[‹‰ËˆY]Y]NˆÈ\Ü]P[[Ý[ˆ[[Ý[Ý\œ™[˜ÞR\ÛÐÛÙHKˆJNÂˆH[ÙHYˆ
+XÛÛ[Y\˜ÚX[[[Ý[Ú[™ÙY	‰ˆXÝ[Û‹˜XÝ[Û—Ý\HOOH	Ü™\ÛÛ™WÜÝ\Y\—Ù\Ü]IÊHÂˆ]ØZ]Üš]Q\Ü]P™]Q]™[
+ÛY[Ý]\ÐØ\ÙK	ÜÝ\Y\—Ü^[Y[Ü™XÛÛ˜Ú[Y	Ë›Ùš[KÂˆXÝ[Û’YˆXÝ[Û‹šYˆ›ÝNˆ	Ñ^\Ý[™ÈÝ\Y\ˆ[[Ý[ÛÛ™\Y[È[›ÚXÙK[]™[š[˜[˜ÙH[œÝXÝ[ÛœË‰ËˆY]Y]NˆÈ\Ü]P[[Ý[ˆ[[Ý[Ý\œ™[˜ÞR\ÛÐÛÙHKˆJNÂˆBˆÛÛœÝ™Yœ™\ÚYH]ØZ]ØY\Ü]UÛÜšÙ›ÝÐXÝ[ÛœÊÛY[Ø\ÙT›ÝËšY
+NÂˆÛÛœÝØÝ[Y[ÈH]ØZ]ØY\Ü]UÛÜšÙ›ÝÑØÝ[Y[ÊÛY[Ø\ÙT›ÝËšY
+NÂˆ™]\›ˆÂˆØ\ÙNˆÙ\šX[^™Q\Ü]P™]PØ\ÙJÝ]\ÐØ\ÙJKˆ\Y\Îˆ™Yœ™\ÚYœ\T›ÝÜË›X\
+Ù\šX[^™Q\Ü]UÛÜšÙ›ÝÔ\JKˆXÝ[ÛœÎˆ™Yœ™\ÚY˜XÝ[ÛœËˆÝ\Y\’[œÝXÝ[ÛœÎˆ™Yœ™\ÚYœÝ\Y\’[œÝXÝ[ÛœËˆØÝ[Y[ÎˆØÝ[Y[Ë›X\
+Ù\šX[^™Q\Ü]UÛÜšÙ›ÝÑØÝ[Y[
+KˆNÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ\Ü]UÛÜšÙ›ÝÐXØÛÝ[[™Õ\]J›ÙHHßK™\KXØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÈÛY[›Ùš[HHHXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ]ØZ]™\]Z\™PØ\Xš[]JÛY[›Ùš[K	Ù\Ü]\×ØXØÛÝ[	Ë	Ñ\Ü]HXØÛÝ[[™È\›Z\ÜÚ[Ûˆ\È™\]Z\™Y›ÜˆXØÛÝ[[™È\]\Ë‰ÊNÂˆÛÛœÝXÝ[Û’YHÝš[™Ê›ÙK˜XÝ[Û’Y	ÉÊKš[J
+NÂˆYˆ
+XXÝ[Û’Y
+H›ÝÈ\\œ›ÜŠ	ØXÝ[Û’Y\È™\]Z\™Y‰Ë
+NÂˆÛÛœÝÈ]NˆXÝ[Û‹\œ›ÜŽˆXÝ[Û“ÛÚÝ\\œ›ÜˆHH]ØZ]ÛY[™œ›ÛJ	Ù\Ü]WØ™]WØXÝ[ÛœÉÊKœÙ[XÝ
+TÔUWÐ‘UWÐPÕSÓ—ÔÑSPÕ
+K™\J	ÚY	ËXÝ[Û’Y
+K›X^X™TÚ[™ÛJ
+NÂˆYˆ
+XÝ[Û“ÛÚÝ\\œ›ÜŠH›ÝÈXÝ[Û“ÛÚÝ\\œ›ÜŽÂˆYˆ
+XXÝ[ÛŠH›ÝÈ\\œ›ÜŠ	Ñ\Ü]HÛÜšÙ›ÝÈXÝ[Ûˆ›Ý›Ý[™‰Ë
+NÂˆYˆ
+XÝ[Û‹˜XÝ[Û—Ý\HOOH	Ü™\ÛÛ™WÜÝ\Y\—Ù\Ü]IÊHÂˆ›ÝÈ\\œ›ÜŠ	Õ\]HXXÚÝ\Y\ˆ[›ÚXÙH[œÝXÝ[Ûˆ[œÝXYÙˆH\™[Ý\Y\ˆ™\ÛÛ][Û‹‰Ë
+NÂˆBˆÛÛœÝØ\ÙT›ÝÈH]ØZ]Ù]\Ü]P™]PØ\ÙJÛY[XÝ[Û‹˜Ø\ÙWÚY
+NÂˆ]ØZ]™\]Z\™R[\›Ù™šXÙTÝ[PXØÙ\ÜÊØ\ÙT›ÝËœÝ[WÚYXØÙ\ÜÐÛÛ^ÈÛY[›Ùš[HJNÂˆÛÛœÝ\T›ÝÜÈH]ØZ]ØY\Ü]UÛÜšÙ›ÝÔ\Y\ÊÛY[Ø\ÙT›ÝËšY
+NÂˆÛÛœÝÝ\œ™[Ý[HH]ØZ]ØYÝ\œ™[\Ü]TÝ[JØ\ÙT›ÝËœÝ[WÚYXØÙ\ÜÐÛÛ^ÈÛY[›Ùš[HJNÂˆÛÛœÝ^\›˜[ÛÜÝ\™HH\Õ[˜XØÙ\Y^\›˜[\Ü]PÛÜÝ\™JØ\ÙT›ÝËÝ\œ™[Ý[JNÂˆYˆ
+Y^\›˜[ÛÜÝ\™JH\ÜÙ\Ø[\Ù›Ü˜ÙQ\Ü]R\ÓÜ[ŠÝ\œ™[Ý[JNÂˆÛÛœÝ™YÚ\ÝžHH\ÜÙ\˜[Y\Ü]T\Y\ÊÝ\œ™[Ý[K\T›ÝÜÊNÂˆÛÛœÝÝÜ™YÛÜšÙ›ÝÈH]ØZ]ØY\Ü]UÛÜšÙ›ÝÐXÝ[ÛœÊÛY[Ø\ÙT›ÝËšY
+NÂˆ˜[Y]TÝÜ™Y\Ü]PXÝ[ÛœÊÝÜ™YÛÜšÙ›ÝË˜XÝ[Û”›ÝÜË\T›ÝÜË™YÚ\ÝžJNÂˆ\ÜÙ\Ý\Y\‘\Ü]P[[Ý[ÊÝÜ™YÛÜšÙ›ÝË˜XÝ[Û”›ÝÜÊNÂˆYˆ
+Ø\ÙT›ÝË˜\›Ý˜[ÜÝ]\ÈOOH	Ð\›Ý™Y	ÈØ\ÙT›ÝËÛÜšÙ›Ý×ÜÝ]\ÈOOH	ÐÛÜÙY	ÊHÂˆ›ÝÈ\\œ›ÜŠ	ÐXØÛÝ[[™ÈØ[ˆ\]HXÝ[ÛœÈÛ›HY\ˆ\›Ý˜[[™™Y›Ü™HÛÜÝ\™K‰Ë
+NÂˆBˆ]ØZ]™XÛÛ˜Ú[P\›Ý™YÝ\Y\’[œÝXÝ[ÛœÊÛY[Ø\ÙT›ÝË\T›ÝÜËÝÜ™YÛÜšÙ›ÝË˜XÝ[Û”›ÝÜËÝÜ™YÛÜšÙ›ÝËš[œÝXÝ[Û”›ÝÜËÝ\œ™[Ý[K›Ùš[JNÂ‚ˆÛÛœÝXØÛÝ[[™ÔÝ]\ÈH›Ü›X[^™Q\Ü]P™]TÝ]\Ê›ÙK˜XØÛÝ[[™ÔÝ]\È›ÙK™^XÝ][Û”Ý]\ËTÔUWÐ‘UWÑVPÕUSÓ—ÔÕUTÑTË	ÉÊNÂˆYˆ
+XXØÛÝ[[™ÔÝ]\ÊH›ÝÈ\\œ›ÜŠ	Õ˜[YXØÛÝ[[™ÈÝ]\È\È™\]Z\™Y‰Ë
+NÂˆÛÛœÝ[œÝXÝ[Û”™Y™\™[˜ÙHHÝš[™Ê›ÙKš[œÝXÝ[Û”™Y™\™[˜ÙH	ÉÊKš[J
+NÂˆÛÛœÝ[œÝXÝ[Û‘]HHÝš[™Ê›ÙKš[œÝXÝ[Û‘]H	ÉÊKš[J
+H[ÂˆÛÛœÝÙ][Y[™Y™\™[˜ÙHHÝš[™Ê›ÙKœÙ][Y[™Y™\™[˜ÙH	ÉÊKš[J
+NÂˆÛÛœÝÙ][Y[]HHÝš[™Ê›ÙKœÙ][Y[]H	ÉÊKš[J
+H[ÂˆÛÛœÝXØÛÝ[[™Ó›ÝHHÝš[™Ê›ÙK˜XØÛÝ[[™Ó›ÝH›ÙK››ÝH	ÉÊKš[J
+NÂˆYˆ
+[œÝXÝ[Û‘]H	‰ˆK×—ÍKWÌŸKWÌŸIË\Ý
+[œÝXÝ[Û‘]JJH›ÝÈ\\œ›ÜŠ	Ò[œÝXÝ[Ûˆ]H\È[˜[Y‰Ë
+NÂˆYˆ
+Ù][Y[]H	‰ˆK×—ÍKWÌŸKWÌŸIË\Ý
+Ù][Y[]JJH›ÝÈ\\œ›ÜŠ	ÔÙ][Y[]H\È[˜[Y‰Ë
+NÂˆYˆ
+XØÛÝ[[™ÔÝ]\ÈOOH	Ò[œÝXÝ[Ûˆ\ÜÝYY	È	‰ˆ
+Z[œÝXÝ[Û‘]H
+Z[œÝXÝ[Û”™Y™\™[˜ÙH	‰ˆXXØÛÝ[[™Ó›ÝJJJHÂˆ›ÝÈ\\œ›ÜŠ	Ò[œÝXÝ[Ûˆ\ÜÝYY™\]Z\™\È[ˆ[œÝXÝ[Ûˆ]H[™H™Y™\™[˜ÙHÜˆXØÛÝ[[™È›ÝK‰Ë
+NÂˆBˆÛÛœÝØÝ[Y[ÈH]ØZ]ØY\Ü]UÛÜšÙ›ÝÑØÝ[Y[ÊÛY[Ø\ÙT›ÝËšY
+NÂˆÛÛœÝ\ÔÙ][Y[ØÝ[Y[HØÝ[Y[ËœÛÛYJ
+ØÝ[Y[
+HOˆØÝ[Y[˜XÝ[Û—ÚYOOHXÝ[Û’Y	‰ˆÉÜÙ][Y[ØYÜ™Y[Y[	Ë	Ø^Y\—ØÜ™Y]Û›ÝIË	ÜÝ\Y\—ØÜ™Y]Û›ÝIË	Ü›ÛÙ—ÛÙ—Ü^[Y[	×Kš[˜ÛY\ÊØÝ[Y[™ØÝ[Y[Ý\JJNÂˆYˆ
+XØÛÝ[[™ÔÝ]\ÈOOH	ÔÙ]Y	È	‰ˆ
+\Ù][Y[]H
+\Ù][Y[™Y™\™[˜ÙH	‰ˆZ\ÔÙ][Y[ØÝ[Y[
+JJHÂˆ›ÝÈ\\œ›ÜŠ	ÔÙ]Y™\]Z\™\ÈHÙ][Y[]H[™Z]\ˆH™Y™\™[˜ÙHÜˆÙ][Y[ØÝ[Y[‰Ë
+NÂˆBˆÛÛœÝ›Ý™\]Z\™Y[YÚXš[]HH\Ü]S›Ý™\]Z\™Y[YÚXš[]JXÝ[Û‹\T›ÝÜËÝ\œ™[Ý[JNÂˆÛÛœÝ›Ý™\]Z\™Y™X\ÛÛ•ØZ]™YHXØÛÝ[[™ÔÝ]\ÈOOH	Ó›Ý™\]Z\™Y	È	‰ˆXXØÛÝ[[™Ó›ÝH	‰ˆ›Ý™\]Z\™Y[YÚXš[]K™[YÚX›NÂˆYˆ
+XØÛÝ[[™ÔÝ]\ÈOOH	Ó›Ý™\]Z\™Y	È	‰ˆXXØÛÝ[[™Ó›ÝH	‰ˆ[›Ý™\]Z\™Y™X\ÛÛ•ØZ]™Y
+HÂˆYˆ
+›Ý™\]Z\™Y[YÚXš[]K˜˜[[˜ÙU\H	‰ˆ›Ý™\]Z\™Y[YÚXš[]K˜˜[[˜ÙHOH[
+HÂˆ›ÝÈ\\œ›ÜŠHÝ\œ™[	Û›Ý™\]Z\™Y[YÚXš[]K˜˜[[˜ÙSX™[H˜[[˜ÙH\È[˜]˜Z[X›Kˆ[\ˆ[ˆXØÛÝ[[™È™X\ÛÛˆ™Y›Ü™HÙ[XÝ[™È›Ý™\]Z\™Y˜
+NÂˆBˆYˆ
+›Ý™\]Z\™Y[YÚXš[]K˜˜[[˜ÙU\JHÂˆ›ÝÈ\\œ›ÜŠHÝ\œ™[	Û›Ý™\]Z\™Y[YÚXš[]K˜˜[[˜ÙSX™[H˜[[˜ÙH\È	Û›Ý™\]Z\™Y[YÚXš[]K˜˜[[˜ÙKÑš^Y
+Š_K›ÝŒˆ™Yœ™\ÚH\Ü]HÜˆ[\ˆ[ˆXØÛÝ[[™È™X\ÛÛ‹˜JNÂˆBˆ›ÝÈ\\œ›ÜŠ	Ñ^Z[ˆÚHXØÛÝ[[™È\È›Ý™\]Z\™Y‰Ë
+NÂˆB‚ˆÛÛœÝÈ]NˆÝ\œ™[XÝ[Û”›ÝÜË\œ›ÜŽˆÝ\œ™[XÝ[ÛœÑ\œ›ÜˆHH]ØZ]ÛY[™œ›ÛJ	Ù\Ü]WØ™]WØXÝ[ÛœÉÊKœÙ[XÝ
+TÔUWÐ‘UWÐPÕSÓ—ÔÑSPÕ
+K™\J	ØØ\ÙWÚY	ËØ\ÙT›ÝËšY
+K›Ü™\Š	ØÜ™X]YØ]	ËÈ\ØÙ[™[™ÎˆYHJNÂˆYˆ
+Ý\œ™[XÝ[ÛœÑ\œ›ÜŠH›ÝÈÝ\œ™[XÝ[ÛœÑ\œ›ÜŽÂˆÛÛœÝ›Ú™XÝYXÝ[ÛœÈH
+Ý\œ™[XÝ[Û”›ÝÜÈ×JK›X\
+
+›ÝÊHOˆ
+›ÝËšYOOHXÝ[Û’YÈÈ‹‹œ›ÝË^XÝ][Û—ÜÝ]\ÎˆXØÛÝ[[™ÔÝ]\ÈHˆ›ÝÊJNÂˆÛÛœÝ[Ù]YH›Ú™XÝYXÝ[ÛœË›[™Ýˆ	‰ˆ›Ú™XÝYXÝ[ÛœË™]™\žJ
+›ÝÊHOˆ›ÝË™^XÝ][Û—ÜÝ]\ÈOOH	ÔÙ]Y	È›ÝË™^XÝ][Û—ÜÝ]\ÈOOH	Ó›Ý™\]Z\™Y	ÊNÂˆÛÛœÝ\ÐXØÛÝ[[™Ô›ÙÜ™\ÜÈH›Ú™XÝYXÝ[ÛœËœÛÛYJ
+›ÝÊHOˆ›ÝË™^XÝ][Û—ÜÝ]\ÈOOH	Ô[™[™ÈXØÛÝ[[™ÉÊNÂˆÛÛœÝÛÜšÙ›ÝÔÝ]\ÈH[Ù]YÈ	ÔÙ]YH™XYHÈÛÜÙIÈˆ\ÐXØÛÝ[[™Ô›ÙÜ™\ÜÈÈ	ÐXØÛÝ[[™È[ˆ›ÙÜ™\ÜÉÈˆ	Ð\›Ý™YH[™[™ÈXØÛÝ[[™ÉÎÂˆYˆ
+Y^\›˜[ÛÜÝ\™JH]ØZ]]Ú\Ü]UÛÜšÙ›ÝÔÝ]\Ò[”Ø[\Ù›Ü˜ÙJØ\ÙT›ÝËÛÜšÙ›ÝÔÝ]\ÊNÂ‚ˆÛÛœÝ›ÝÒ\ÛÈH™]È]J
+KÒTÓÔÝš[™Ê
+NÂˆÛÛœÝÈ]Nˆ\]YXÝ[Û‹\œ›ÜˆHH]ØZ]ÛY[ˆ™œ›ÛJ	Ù\Ü]WØ™]WØXÝ[ÛœÉÊBˆ\]JÂˆ^XÝ][Û—ÜÝ]\ÎˆXØÛÝ[[™ÔÝ]\Ëˆ[œÝXÝ[Û—Ü™Y™\™[˜ÙNˆ[œÝXÝ[Û”™Y™\™[˜ÙH[ˆ[œÝXÝ[Û—Ù]Nˆ[œÝXÝ[Û‘]Kˆ[œÝXÝ[Û—Ø[[Ý[ˆXÚ[X[Ü“[
+›ÙKš[œÝXÝ[Û[[Ý[
+KˆÙ][Y[Ü™Y™\™[˜ÙNˆÙ][Y[™Y™\™[˜ÙH[ˆÙ][Y[Ù]NˆÙ][Y[]KˆÙ][Y[Ø[[Ý[ˆXÚ[X[Ü“[
+›ÙKœÙ][Y[[[Ý[
+KˆXØÛÝ[[™×Û›ÝNˆXØÛÝ[[™Ó›ÝH[ˆXØÛÝ[[™×ØžNˆ›Ùš[KšYˆXØÛÝ[[™×ØžWÙ[XZ[ˆ›Ùš[K™[XZ[ˆXØÛÝ[[™×Ø]ˆ›ÝÒ\ÛËˆ^XÝ]YØžNˆXØÛÝ[[™ÔÝ]\ÈOOH	ÔÙ]Y	ÈÈ›Ùš[KšYˆ[ˆ^XÝ]YØžWÙ[XZ[ˆXØÛÝ[[™ÔÝ]\ÈOOH	ÔÙ]Y	ÈÈ›Ùš[K™[XZ[ˆ[ˆ^XÝ]YØ]ˆXØÛÝ[[™ÔÝ]\ÈOOH	ÔÙ]Y	ÈÈ›ÝÒ\ÛÈˆ[ˆ^XÝ][Û—Û›ÝNˆXØÛÝ[[™Ó›ÝH[ˆ\]YØžNˆ›Ùš[KšYˆ\]YØžWÙ[XZ[ˆ›Ùš[K™[XZ[ˆ\]YØ]ˆ›ÝÒ\ÛËˆJBˆ™\J	ÚY	ËXÝ[Û’Y
+BˆœÙ[XÝ
+TÔUWÐ‘UWÐPÕSÓ—ÔÑSPÕ
+BˆœÚ[™ÛJ
+NÂˆYˆ
+\œ›ÜŠH›ÝÈ\œ›ÜŽÂˆ]ØZ]Üš]Q\Ü]P™]Q]™[
+ÛY[Ø\ÙT›ÝË	ØXØÛÝ[[™×Ý\]Y	Ë›Ùš[KÂˆXÝ[Û’Yˆ›ÝNˆ	Ý\]YXÝ[Û‹˜XÝ[Û—ÛX™[H\]YÈ	ØXØÛÝ[[™ÔÝ]\ßK˜ˆY]Y]NˆÂˆXØÛÝ[[™ÔÝ]\Ëˆ[œÝXÝ[Û”™Y™\™[˜ÙKˆ[œÝXÝ[Û‘]KˆÙ][Y[™Y™\™[˜ÙKˆÙ][Y[]Kˆ›Ý™\]Z\™Y™X\ÛÛ•ØZ]™Yˆ™\šYšYY˜[[˜ÙNˆ›Ý™\]Z\™Y™X\ÛÛ•ØZ]™YÈ›Ý™\]Z\™Y[YÚXš[]K˜˜[[˜ÙHˆ[ˆ™\šYšYY˜[[˜ÙU\Nˆ›Ý™\]Z\™Y™X\ÛÛ•ØZ]™YÈ›Ý™\]Z\™Y[YÚXš[]K˜˜[[˜ÙU\Hˆ[ˆ\PXØÛÝ[Yˆ›Ý™\]Z\™Y™X\ÛÛ•ØZ]™YÈ›Ý™\]Z\™Y[YÚXš[]Kœ\PXØÛÝ[Yˆ[ˆKˆJNÂˆÛÛœÝÈ]NˆXÝ[Û”›ÝÜË\œ›ÜŽˆXÝ[ÛœÑ\œ›ÜˆHH]ØZ]ÛY[™œ›ÛJ	Ù\Ü]WØ™]WØXÝ[ÛœÉÊKœÙ[XÝ
+TÔUWÐ‘UWÐPÕSÓ—ÔÑSPÕ
+K™\J	ØØ\ÙWÚY	ËØ\ÙT›ÝËšY
+K›Ü™\Š	ØÜ™X]YØ]	ËÈ\ØÙ[™[™ÎˆYHJNÂˆYˆ
+XÝ[ÛœÑ\œ›ÜŠH›ÝÈXÝ[ÛœÑ\œ›ÜŽÂˆÛÛœÝXÝ[ÛœÈHXÝ[Û”›ÝÜÈ×NÂˆÛÛœÝÈ]NˆÝ]\ÐØ\ÙK\œ›ÜŽˆØ\ÙQ\œ›ÜˆHH]ØZ]ÛY[™œ›ÛJ	Ù\Ü]WØ™]WØØ\Ù\ÉÊK\]JÈÛÜšÙ›Ý×ÜÝ]\ÎˆÛÜšÙ›ÝÔÝ]\Ë\]YØ]ˆ›ÝÒ\ÛÈJK™\J	ÚY	ËØ\ÙT›ÝËšY
+KœÙ[XÝ
+TÔUWÐ‘UWÐÐTÑWÔÑSPÕ
+KœÚ[™ÛJ
+NÂˆYˆ
+Ø\ÙQ\œ›ÜŠH›ÝÈØ\ÙQ\œ›ÜŽÂˆÛÛœÝØ[\Ù›Ü˜ÙPØ\ÙHH^\›˜[ÛÜÝ\™BˆÈ]ØZ]™XÛÜ™^\›˜[\Ü]PÛÜÝ\™JÛY[Ý]\ÐØ\ÙKÝ\œ™[Ý[K›Ùš[KÛÜšÙ›ÝÔÝ]\ÊBˆˆ]ØZ]™XÛÜ™\Ü]UÛÜšÙ›ÝÔØ[\Ù›Ü˜ÙUÜš]X˜XÚÊÛY[Ý]\ÐØ\ÙK›Ùš[KÛÜšÙ›ÝÔÝ]\ÊNÂˆÛÛœÝ\SX\H\Ü]T\T›ÝÓX\
+\T›ÝÜÊNÂˆ™]\›ˆÂˆØ\ÙNˆÙ\šX[^™Q\Ü]P™]PØ\ÙJØ[\Ù›Ü˜ÙPØ\ÙJKˆ\Y\Îˆ\T›ÝÜË›X\
+Ù\šX[^™Q\Ü]UÛÜšÙ›ÝÔ\JKˆXÝ[ÛŽˆÙ\šX[^™Q\Ü]P™]PXÝ[ÛŠ\]YXÝ[Û‹\SX\
+KˆXÝ[ÛœÎˆ
+XÝ[ÛœÈ×JK›X\
+
+][JHOˆÙ\šX[^™Q\Ü]P™]PXÝ[ÛŠ][K\SX\
+JKˆØÝ[Y[ÎˆØÝ[Y[Ë›X\
+Ù\šX[^™Q\Ü]UÛÜšÙ›ÝÑØÝ[Y[
+KˆNÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ\Ü]P™]SX\šÑ^XÝ]Y
+›ÙHHßK™\KXØÙ\ÜÐÛÛ^H[
+HÂˆ™]\›ˆ\Ü]UÛÜšÙ›ÝÐXØÛÝ[[™Õ\]JˆÂˆ‹‹˜›ÙKˆXØÛÝ[[™ÔÝ]\Îˆ	ÔÙ]Y	ËˆÙ][Y[]Nˆ›ÙKœÙ][Y[]H™]È]J
+KÒTÓÔÝš[™Ê
+KœÛXÙJL
+KˆÙ][Y[™Y™\™[˜ÙNˆ›ÙKœÙ][Y[™Y™\™[˜ÙH›ÙK››ÝKˆXØÛÝ[[™Ó›ÝNˆ›ÙK˜XØÛÝ[[™Ó›ÝH›ÙK››ÝKˆKˆ™\KˆXØÙ\ÜÐÛÛ^ˆ
+NÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ\Ü]UÛÜšÙ›ÝÐÛÛ\[œØ][ÛÛZ[\Ê›ÙHHßK™\KXØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆÛÛœÝXÝ[Û’YHÝš[™Ê›ÙK˜XÝ[Û’Y	ÉÊKš[J
+NÂˆYˆ
+K×–ÌNXKY—^ÎKVÌNXKY—^ÍKVÌKMWVÌNXKY—^ÌßKVÎXX—VÌNXKY—^ÌßKVÌNXKY—^ÌLŸIÚK\Ý
+XÝ[Û’Y
+JH›ÝÈ\\œ›ÜŠ	Õ˜[Y\Ü]HXÝ[Ûˆ\È™\]Z\™Y‰Ë
+NÂˆÛÛœÝÈ]NˆXÝ[Û‹\œ›ÜˆHH]ØZ]ÛÛ^˜ÛY[ˆ™œ›ÛJ	Ù\Ü]WØ™]WØXÝ[ÛœÉÊBˆœÙ[XÝ
+	ÚYØ\ÙWÚYÝ[WÚYXÝ[Û—Ý\KÛÜÙWÜ™X\ÛÛ‹\WÚY\]YØ]\Ü]WÝÛÜšÙ›Ý×Ü\Y\ÊXØÛÝ[ÚYXØÛÝ[Û˜[YJIÊBˆ™\J	ÚY	ËXÝ[Û’Y
+Bˆ›X^X™TÚ[™ÛJ
+NÂˆYˆ
+\œ›ÜŠH›ÝÈ\œ›ÜŽÂˆYˆ
+XXÝ[ÛŠH›ÝÈ\\œ›ÜŠ	Ñ\Ü]HXÝ[ÛˆØ\È›Ý›Ý[™‰Ë
+NÂˆ]ØZ]™\]Z\™R[\›Ù™šXÙTÝ[PXØÙ\ÜÊXÝ[Û‹œÝ[WÚYÛÛ^
+NÂˆYˆ
+VÉØÛÜÙWØ^Y\—Ù\Ü]IË	ØÛÜÙWÜÝ\Y\—Ù\Ü]I×Kš[˜ÛY\ÊXÝ[Û‹˜XÝ[Û—Ý\JHÝš[™ÊXÝ[Û‹˜ÛÜÙWÜ™X\ÛÛˆ	ÉÊKš[J
+KÓÝÙ\Ø\ÙJ
+HOOH	Ý[ØÈÜ[™Y	ÊHÂˆ›ÝÈ\\œ›ÜŠ	ÐÛÛ\[œØ][ÛˆÛZ[\È\™H]˜Z[X›HÛ›H›ÜˆHSÐÈÜ[™YÛÜÝ\™HXÝ[Û‹‰ËJNÂˆBˆÛÛœÝXØÛÝ[YHXÝ[Û‹™\Ü]WÝÛÜšÙ›Ý×Ü\Y\ÏË˜XØÛÝ[ÚYÂˆÛÛœÝÛZ[\ÈH]ØZ]YÜ™YYÛÛ\[œØ][ÛÛZ[\Ñ›ÜXØÛÝ[
+XØÛÝ[YÈ[˜ÛYPÛÜÙYˆ˜[ÙHJNÂˆ™]\›ˆÂˆXÝ[Û’YˆXÝ[Û•\]Y]ˆXÝ[Û‹\]YØ]ˆXØÛÝ[ˆÈXØÛÝ[YXØÛÝ[˜[YNˆXÝ[Û‹™\Ü]WÝÛÜšÙ›Ý×Ü\Y\ÏË˜XØÛÝ[Û˜[YH	ÉÈKˆÛZ[\ËˆNÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ\Ü]UÛÜšÙ›ÝÐÛÛ\[œØ][ÛÛZ[S[šÊ›ÙHHßK™\KXØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆÛÛœÝXÝ[Û’YHÝš[™Ê›ÙK˜XÝ[Û’Y	ÉÊKš[J
+NÂˆÛÛœÝÈ]NˆXÝ[Û‹\œ›ÜˆHH]ØZ]ÛÛ^˜ÛY[™œ›ÛJ	Ù\Ü]WØ™]WØXÝ[ÛœÉÊKœÙ[XÝ
+	ÚYÝ[WÚY	ÊK™\J	ÚY	ËXÝ[Û’Y
+K›X^X™TÚ[™ÛJ
+NÂˆYˆ
+\œ›ÜŠH›ÝÈ\œ›ÜŽÂˆYˆ
+XXÝ[ÛŠH›ÝÈ\\œ›ÜŠ	Ñ\Ü]HXÝ[ÛˆØ\È›Ý›Ý[™‰Ë
+NÂˆ]ØZ]™\]Z\™R[\›Ù™šXÙTÝ[PXØÙ\ÜÊXÝ[Û‹œÝ[WÚYÛÛ^
+NÂˆ™]\›ˆ[šÑ\Ü]PYÜ™YYÛÛ\[œØ][ÛÛZ[J›ÙK[›Ù™šXÚX[ÛÛ\[œØ][Û”Ù\šXÙPÛÛ^
+ÛÛ^
+JNÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ™\]Z\™Q^\›˜[\Ü]PÛÜÝ\™P]]Üš]JÛY[›Ùš[JHÂˆYˆ
+›Ùš[OË\Ù\—Ý\HOOH	ØYZ[š\Ý˜]Ü‰ÊH™]\›ŽÂˆYˆ
+›Ùš[OË\Ù\—Ý\HOOH	ÙÙ[™\˜[ÛX[˜YÙ\‰ÊHÂˆÛÛœÝÙ[™\˜[X[˜YÙ\ˆH]ØZ]ØYXÝ]™QÙ[™\˜[X[˜YÙ\ŠÛY[
+NÂˆYˆ
+Ù[™\˜[X[˜YÙ\‹šYOOH›Ùš[KšY
+H™]\›ŽÂˆBˆ›ÝÈ\\œ›ÜŠ	ÓÛ›H[ˆYZ[š\Ý˜]ÜˆÜˆHXÝ]™HÙ[™\˜[X[˜YÙ\ˆØ[ˆXØÙ\H\Ü]HÛÜÙY\™XÝH[ˆØ[\Ù›Ü˜ÙK‰ËÊNÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ\Ü]UÛÜšÙ›ÝÐXØÙ\^\›˜[ÛÜÝ\™J›ÙHHßK™\KXØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÈÛY[›Ùš[HHHXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ]ØZ]™\]Z\™Q^\›˜[\Ü]PÛÜÝ\™P]]Üš]JÛY[›Ùš[JNÂˆÛÛœÝ™X\ÛÛˆHÝš[™Ê›ÙKœ™X\ÛÛˆ›ÙK››ÝH	ÉÊKš[J
+NÂˆYˆ
+\™X\ÛÛŠH›ÝÈ\\œ›ÜŠ	ÐH™X\ÛÛˆ\È™\]Z\™YÈXØÙ\H^\›˜[Ø[\Ù›Ü˜ÙHÛÜÝ\™K‰Ë
+NÂˆ]Ø\ÙT›ÝÈH]ØZ]Ù]\Ü]P™]PØ\ÙJÛY[›ÙK˜Ø\ÙRY›ÙKœÝ[RY
+NÂˆ]ØZ]™\]Z\™R[\›Ù™šXÙTÝ[PXØÙ\ÜÊØ\ÙT›ÝËœÝ[WÚYXØÙ\ÜÐÛÛ^ÈÛY[›Ùš[HJNÂˆÛÛœÝÝ\œ™[Ý[HH]ØZ]ØYÝ\œ™[\Ü]TÝ[JØ\ÙT›ÝËœÝ[WÚYXØÙ\ÜÐÛÛ^ÈÛY[›Ùš[HJNÂˆYˆ
+Z\Õ[˜XØÙ\Y^\›˜[\Ü]PÛÜÝ\™JØ\ÙT›ÝËÝ\œ™[Ý[JJHÂˆ›ÝÈ\\œ›ÜŠ	Õ\È\Ü]H\È›Ý]ØZ][™ÈXØÙ\[˜ÙHÙˆ[ˆ^\›˜[Ø[\Ù›Ü˜ÙHÛÜÝ\™K‰ËJNÂˆBˆØ\ÙT›ÝÈH]ØZ]™XÛÜ™^\›˜[\Ü]PÛÜÝ\™JÛY[Ø\ÙT›ÝËÝ\œ™[Ý[K›Ùš[JNÂˆ]È\T›ÝÜËXÝ[Û”›ÝÜË[œÝXÝ[Û”›ÝÜÈHH]ØZ]ØY\Ü]UÛÜšÙ›ÝÐXÝ[ÛœÊÛY[Ø\ÙT›ÝËšY
+NÂˆÛÛœÝ™YÚ\ÝžHH\ÜÙ\˜[Y\Ü]T\Y\ÊÝ\œ™[Ý[K\T›ÝÜÊNÂˆÛÛœÝ™XÛÛ˜Ú[X][ÛˆH]ØZ]™XÛÛ˜Ú[P\›Ý™YÝ\Y\’[œÝXÝ[ÛœÊÛY[Ø\ÙT›ÝË\T›ÝÜËXÝ[Û”›ÝÜË[œÝXÝ[Û”›ÝÜËÝ\œ™[Ý[K›Ùš[JNÂˆYˆ
+™XÛÛ˜Ú[X][Û‹˜Ú[™ÙY
+HÂˆ›ÝÈ\\œ›ÜŠ	ÔÝ\Y\ˆ^[Y[ÈÚ[™ÙYˆÓÔÈ\]YHXØÛÝ[[™È[ŽÈš[˜[˜ÙH]\ÝÛÛ\]HH™]š\ÙY[œÝXÝ[ÛœÈ™Y›Ü™HXØÙ\[™ÈH^\›˜[ÛÜÝ\™K‰ËJNÂˆBˆYˆ
+Ø\ÙT›ÝË˜\›Ý˜[ÜÝ]\ÈOOH	Ð\›Ý™Y	ÈØ\ÙT›ÝËÛÜšÙ›Ý×ÜÝ]\ÈOOH	ÔÙ]YH™XYHÈÛÜÙIÊHÂˆ›ÝÈ\\œ›ÜŠ	ÐÛÛ\]HH\›Ý™YÓÔÈXØÛÝ[[™ÈÛÜšÙ›ÝÈ™Y›Ü™HXØÙ\[™ÈH^\›˜[Ø[\Ù›Ü˜ÙHÛÜÝ\™K‰ËJNÂˆBˆÛÛœÝXÝ[ÛœÈH˜[Y]TÝÜ™Y\Ü]PXÝ[ÛœÊXÝ[Û”›ÝÜË\T›ÝÜË™YÚ\ÝžJNÂˆ\ÜÙ\Ý\Y\‘\Ü]P[[Ý[ÊXÝ[ÛœÊNÂˆÛÛœÝXÝ]™TÝ\Y\’[œÝXÝ[ÛœÈH[œÝXÝ[Û”›ÝÜË™š[\Š
+[œÝXÝ[ÛŠHOˆ[œÝXÝ[Û‹œÝ]\ÈOOH	ÔÝ\\œÙYY	ÊNÂˆYˆ
+XÝ]™TÝ\Y\’[œÝXÝ[ÛœËœÛÛYJ
+[œÝXÝ[ÛŠHOˆVÉÔÙ]Y	Ë	Ó›Ý™\]Z\™Y	×Kš[˜ÛY\Ê[œÝXÝ[Û‹œÝ]\ÊJJHÂˆ›ÝÈ\\œ›ÜŠ	Ñ]™\žHÝ\Y\ˆ[›ÚXÙH[œÝXÝ[Ûˆ]\Ý™HÙ]YÜˆ›Ý™\]Z\™Y™Y›Ü™HXØÙ\[™ÈH^\›˜[ÛÜÝ\™K‰ËJNÂˆBˆYˆ
+XXÝ[ÛœË›[™ÝXXÝ[ÛœË™]™\žJ
+XÝ[ÛŠHOˆÉÔÙ]Y	Ë	Ó›Ý™\]Z\™Y	×Kš[˜ÛY\ÊXÝ[Û‹™^XÝ][Û—ÜÝ]\ÊJJHÂˆ›ÝÈ\\œ›ÜŠ	Ñ]™\žHXØÛÝ[[™ÈXÝ[Ûˆ]\Ý™HÙ]YÜˆ›Ý™\]Z\™Y™Y›Ü™HXØÙ\[™ÈH^\›˜[ÛÜÝ\™K‰ËJNÂˆBˆ]ØZ]\ÜÙ\\Ü]U[ØÐÛZ[\Ô™XYQ›ÜÛÜÝ\™JXÝ[ÛœË\T›ÝÜÊNÂˆÛÛœÝØÝ[Y[ÈH]ØZ]\ÜÙ\™\]Z\™Y\Ü]QØÝ[Y[ÊÛY[XÝ[ÛœÊNÂˆÛÛœÝ›ÝÒ\ÛÈH™]È]J
+KÒTÓÔÝš[™Ê
+NÂˆÛÛœÝÈ]Nˆ\]YØ\ÙK\œ›ÜˆHH]ØZ]ÛY[ˆ™œ›ÛJ	Ù\Ü]WØ™]WØØ\Ù\ÉÊBˆ\]JÂˆÛÜšÙ›Ý×ÜÝ]\Îˆ	ÐÛÜÙY	Ëˆ]\ÝÛ›ÝNˆ™X\ÛÛ‹ˆÝ\œ™[ÜØ[\Ù›Ü˜ÙWÜÝ]\ÎˆÝš[™ÊÝ\œ™[Ý[K‘\Ü]WÔÝ]\××ØÈ	ÉÊKš[J
+KˆØ[\Ù›Ü˜ÙWÝÜš]X˜XÚ×ÜÝ]\Îˆ	Ù^\›˜[	ËˆØ[\Ù›Ü˜ÙWÝÜš]X˜XÚ×Ù\œ›ÜŽˆ[ˆ^\›˜[ØÛÜÝ\™WØXØÙ\YØ]ˆ›ÝÒ\ÛËˆ^\›˜[ØÛÜÝ\™WØXØÙ\YØžNˆ›Ùš[KšYˆ^\›˜[ØÛÜÝ\™WØXØÙ\YØžWÙ[XZ[ˆ›Ùš[K™[XZ[ˆ^\›˜[ØÛÜÝ\™WØXØÙ\[˜ÙWÜ™X\ÛÛŽˆ™X\ÛÛ‹ˆÛÜÙYØžNˆ›Ùš[KšYˆÛÜÙYØžWÙ[XZ[ˆ›Ùš[K™[XZ[ˆÛÜÙYØ]ˆ›ÝÒ\ÛËˆ\]YØ]ˆ›ÝÒ\ÛËˆJBˆ™\J	ÚY	ËØ\ÙT›ÝËšY
+Bˆ™\J	ÝÛÜšÙ›Ý×ÜÝ]\ÉË	ÔÙ]YH™XYHÈÛÜÙIÊBˆœÙ[XÝ
+TÔUWÐ‘UWÐÐTÑWÔÑSPÕ
+Bˆ›X^X™TÚ[™ÛJ
+NÂˆYˆ
+\œ›ÜŠH›ÝÈ\œ›ÜŽÂˆYˆ
+]\]YØ\ÙJH›ÝÈ\\œ›ÜŠ	ÕH\Ü]HÚ[™ÙY™Y›Ü™HH^\›˜[ÛÜÝ\™HØ\ÈXØÙ\Yˆ™Yœ™\Ú[™™]šY]È]YØZ[‹‰ËJNÂˆ]ØZ]Üš]Q\Ü]P™]Q]™[
+ÛY[\]YØ\ÙK	Ù^\›˜[ØÛÜÝ\™WØXØÙ\Y	Ë›Ùš[KÂˆ›ÝNˆ™X\ÛÛ‹ˆY]Y]NˆÂˆØ[\Ù›Ü˜ÙTÝ]\ÎˆÝ\œ™[Ý[K‘\Ü]WÔÝ]\××ØËˆØ[\Ù›Ü˜ÙS\Ý[ÙYšYY]ˆÝ\œ™[Ý[K“\Ý[ÙYšYY]H[ˆXØÛÝ[[™ÐÛÛ\]YˆYKˆKˆJNÂˆÛÛœÝ\SX\H\Ü]T\T›ÝÓX\
+\T›ÝÜÊNÂˆ™]\›ˆÂˆØ\ÙNˆÙ\šX[^™Q\Ü]P™]PØ\ÙJ\]YØ\ÙJKˆ\Y\Îˆ\T›ÝÜË›X\
+Ù\šX[^™Q\Ü]UÛÜšÙ›ÝÔ\JKˆXÝ[ÛœÎˆXÝ[ÛœË›X\
+
+XÝ[ÛŠHOˆÙ\šX[^™Q\Ü]P™]PXÝ[ÛŠXÝ[Û‹\SX\
+JKˆØÝ[Y[ÎˆØÝ[Y[Ë›X\
+Ù\šX[^™Q\Ü]UÛÜšÙ›ÝÑØÝ[Y[
+KˆNÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ\Ü]P™]PÛÜÙJ›ÙHHßK™\KXØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÈÛY[›Ùš[HHHXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ]ØZ]™\]Z\™PØ\Xš[]JÛY[›Ùš[K	Ù\Ü]\×ØXØÛÝ[	Ë	Ñ\Ü]HXØÛÝ[[™È\›Z\ÜÚ[Ûˆ\È™\]Z\™YÈÛÜÙHH\Ü]K‰ÊNÂˆÛÛœÝØ\ÙT›ÝÈH]ØZ]Ù]\Ü]P™]PØ\ÙJÛY[›ÙK˜Ø\ÙRY›ÙKœÝ[RY
+NÂˆ]ØZ]™\]Z\™R[\›Ù™šXÙTÝ[PXØÙ\ÜÊØ\ÙT›ÝËœÝ[WÚYXØÙ\ÜÐÛÛ^ÈÛY[›Ùš[HJNÂˆÛÛœÝÝ\œ™[Ý[HH]ØZ]ØYÝ\œ™[\Ü]TÝ[JØ\ÙT›ÝËœÝ[WÚYXØÙ\ÜÐÛÛ^ÈÛY[›Ùš[HJNÂˆYˆ
+Z\Ô™XÛÜ™Y˜ÛÜÐÛÜÝ\™UÜš]X˜XÚÊØ\ÙT›ÝÊJH\ÜÙ\Ø[\Ù›Ü˜ÙQ\Ü]R\ÓÜ[ŠÝ\œ™[Ý[JNÂˆ]È\T›ÝÜËXÝ[Û”›ÝÜË[œÝXÝ[Û”›ÝÜÈHH]ØZ]ØY\Ü]UÛÜšÙ›ÝÐXÝ[ÛœÊÛY[Ø\ÙT›ÝËšY
+NÂˆÛÛœÝ™YÚ\ÝžHH\ÜÙ\˜[Y\Ü]T\Y\ÊÝ\œ™[Ý[K\T›ÝÜÊNÂˆÛÛœÝ™XÛÛ˜Ú[X][ÛˆH]ØZ]™XÛÛ˜Ú[P\›Ý™YÝ\Y\’[œÝXÝ[ÛœÊÛY[Ø\ÙT›ÝË\T›ÝÜËXÝ[Û”›ÝÜË[œÝXÝ[Û”›ÝÜËÝ\œ™[Ý[K›Ùš[JNÂˆYˆ
+™XÛÛ˜Ú[X][Û‹˜Ú[™ÙY
+HÂˆÛÛœÝ™[ØYYH]ØZ]ØY\Ü]UÛÜšÙ›ÝÐXÝ[ÛœÊÛY[Ø\ÙT›ÝËšY
+NÂˆ\T›ÝÜÈH™[ØYYœ\T›ÝÜÎÂˆXÝ[Û”›ÝÜÈH™[ØYY˜XÝ[Û”›ÝÜÎÂˆ[œÝXÝ[Û”›ÝÜÈH™[ØYYš[œÝXÝ[Û”›ÝÜÎÂˆ›ÝÈ\\œ›ÜŠ	ÔÝ\Y\ˆ^[Y[ÈÚ[™ÙYY\ˆ\›Ý˜[ˆÓÔÈ\]YHXØÛÝ[[™È[ŽÈš[˜[˜ÙH]\ÝÛÛ\]HH™]š\ÙY[œÝXÝ[ÛœÈ™Y›Ü™HÛÜÝ\™K‰ËJNÂˆBˆYˆ
+Ø\ÙT›ÝË˜\›Ý˜[ÜÝ]\ÈOOH	Ð\›Ý™Y	ÊH›ÝÈ\\œ›ÜŠ	ÓÛ›H\›Ý™Y\Ü]HÛÜšÙ›ÝÈØ\Ù\ÈØ[ˆ™HÛÜÙY‰Ë
+NÂˆYˆ
+Ø\ÙT›ÝËÛÜšÙ›Ý×ÜÝ]\ÈOOH	ÔÙ]YH™XYHÈÛÜÙIÊH›ÝÈ\\œ›ÜŠ	ÐÛÛ\]HXØÛÝ[[™ÈÙ][Y[›Üˆ]™\žHXÝ[Ûˆ™Y›Ü™HÛÜÚ[™Ë‰Ë
+NÂˆÛÛœÝš[˜[›ÝHHÝš[™Ê›ÙK››ÝH	ÉÊKš[J
+NÂˆYˆ
+Yš[˜[›ÝJH›ÝÈ\\œ›ÜŠ	Ñš[˜[ÛÜÝ\™H›ÝH\È™\]Z\™Y‰Ë
+NÂˆÛÛœÝXÝ[ÛœÈH˜[Y]TÝÜ™Y\Ü]PXÝ[ÛœÊXÝ[Û”›ÝÜË\T›ÝÜË™YÚ\ÝžJNÂˆ\ÜÙ\Ý\Y\‘\Ü]P[[Ý[ÊXÝ[ÛœÊNÂˆÛÛœÝXÝ]™TÝ\Y\’[œÝXÝ[ÛœÈH[œÝXÝ[Û”›ÝÜË™š[\Š
+[œÝXÝ[ÛŠHOˆ[œÝXÝ[Û‹œÝ]\ÈOOH	ÔÝ\\œÙYY	ÊNÂˆYˆ
+XÝ]™TÝ\Y\’[œÝXÝ[ÛœËœÛÛYJ
+[œÝXÝ[ÛŠHOˆVÉÔÙ]Y	Ë	Ó›Ý™\]Z\™Y	×Kš[˜ÛY\Ê[œÝXÝ[Û‹œÝ]\ÊJJHÂˆ›ÝÈ\\œ›ÜŠ	Ñ]™\žHÝ\Y\ˆ[›ÚXÙH[œÝXÝ[Ûˆ]\Ý™HÙ]YÜˆ›Ý™\]Z\™Y™Y›Ü™HÛÜÝ\™K‰Ë
+NÂˆBˆYˆ
+JXÝ[ÛœÈ×JK›[™ÝJXÝ[ÛœÈ×JK™]™\žJ
+XÝ[ÛŠHOˆXÝ[Û‹™^XÝ][Û—ÜÝ]\ÈOOH	ÔÙ]Y	ÈXÝ[Û‹™^XÝ][Û—ÜÝ]\ÈOOH	Ó›Ý™\]Z\™Y	ÊJHÂˆ›ÝÈ\\œ›ÜŠ	Ñ]™\žHXØÛÝ[[™ÈXÝ[Ûˆ]\Ý™HÙ]YÜˆ›Ý™\]Z\™Y™Y›Ü™HÛÜÝ\™K‰Ë
+NÂˆBˆ]ØZ]\ÜÙ\\Ü]U[ØÐÛZ[\Ô™XYQ›ÜÛÜÝ\™JXÝ[ÛœË\T›ÝÜÊNÂˆÛÛœÝØÝ[Y[ÈH]ØZ]\ÜÙ\™\]Z\™Y\Ü]QØÝ[Y[ÊÛY[XÝ[ÛœÈ×JNÂˆÛÛœÝÝ]\ÐØ\ÙHH]ØZ]Üš]Q\Ü]UÛÜšÙ›ÝÔÝ]\ÕÔØ[\Ù›Ü˜ÙJÛY[Ø\ÙT›ÝË›Ùš[K	ÐÛÜÙY	ËÈ™\]Z\™YˆYHJNÂˆÛÛœÝ›ÝÒ\ÛÈH™]È]J
+KÒTÓÔÝš[™Ê
+NÂˆÛÛœÝÈ]Nˆ\]YØ\ÙK\œ›ÜˆHH]ØZ]ÛY[ˆ™œ›ÛJ	Ù\Ü]WØ™]WØØ\Ù\ÉÊBˆ\]JÂˆÛÜšÙ›Ý×ÜÝ]\Îˆ	ÐÛÜÙY	Ëˆ]\ÝÛ›ÝNˆš[˜[›ÝKˆÝ\œ™[ÜØ[\Ù›Ü˜ÙWÜÝ]\Îˆ	ÐÛÜÙY	ËˆØ[\Ù›Ü˜ÙWÝÜš]X˜XÚ×ÜÝ]\Îˆ	ÜÝXØÙ\ÜÉËˆØ[\Ù›Ü˜ÙWÝÜš]X˜XÚ×Ù\œ›ÜŽˆ[ˆÛÜÙYØžNˆ›Ùš[KšYˆÛÜÙYØžWÙ[XZ[ˆ›Ùš[K™[XZ[ˆÛÜÙYØ]ˆ›ÝÒ\ÛËˆ\]YØ]ˆ›ÝÒ\ÛËˆJBˆ™\J	ÚY	ËÝ]\ÐØ\ÙKšY
+BˆœÙ[XÝ
+TÔUWÐ‘UWÐÐTÑWÔÑSPÕ
+BˆœÚ[™ÛJ
+NÂˆYˆ
+\œ›ÜŠH›ÝÈ\œ›ÜŽÂˆ]ØZ]Üš]Q\Ü]P™]Q]™[
+ÛY[\]YØ\ÙK	ØÛÜÙY	Ë›Ùš[KÂˆ›ÝNˆš[˜[›ÝKˆJNÂˆÛÛœÝ\SX\H\Ü]T\T›ÝÓX\
+\T›ÝÜÊNÂˆ™]\›ˆÂˆØ\ÙNˆÙ\šX[^™Q\Ü]P™]PØ\ÙJ\]YØ\ÙJKˆ\Y\Îˆ\T›ÝÜË›X\
+Ù\šX[^™Q\Ü]UÛÜšÙ›ÝÔ\JKˆXÝ[ÛœÎˆ
+XÝ[ÛœÈ×JK›X\
+
+][JHOˆÙ\šX[^™Q\Ü]P™]PXÝ[ÛŠ][K\SX\
+JKˆØÝ[Y[ÎˆØÝ[Y[Ë›X\
+Ù\šX[^™Q\Ü]UÛÜšÙ›ÝÑØÝ[Y[
+KˆNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆØ[\Ù›Ü˜ÙTÝ[Q]Z[[˜ØXÚY
+›ÙK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÈÝ[RY\]\ËÚ[Øš™XÝÚ[YÚ[\]\ÈHH›ÙNÂˆYˆ
+\Ý[RY
+H›ÝÈ™]È\œ›ÜŠ	ÜÝ[RY™\]Z\™Y	ÊNÂ‚ˆ]XÝX[Ý[RYHÝ[RYÂˆYˆ
+Ý[RY›[™ÝMJHÂˆÛÛœÝÛÚÝ\H]ØZ]]Y\žT›ÝÜÊÑSPÕY”“ÓHÝ[W×ØÈÒT‘HÙ^TÝ[W×ØÈH	ÉÙ\ØØ\TÛÜ[
+Ý[RY
+_IÈSRUXÈÛÙ˜Z[ˆYHJNÂˆYˆ
+[ÛÚÝ\›[™Ý
+H›ÝÈ™]È\œ›ÜŠÕSHÚ]Ù^TÝ[W×ØÈ	ÉÜÝ[RYIÈ›Ý›Ý[™
+NÂˆXÝX[Ý[RYHÛÚÝ\ÌK’YÂˆBˆ]ØZ]™\]Z\™R[\›Ù™šXÙTÝ[PXØÙ\ÜÊXÝX[Ý[RYXØÙ\ÜÐÛÛ^
+NÂ‚ˆYˆ
+Ú[Øš™XÝ	‰ˆÚ[Y	‰ˆÚ[\]\È	‰ˆØš™XÝšÙ^\ÊÚ[\]\ÊK›[™Ýˆ
+HÂˆ]ØZ]Ù”™\]Y\Ý
+ÜÛØš™XÝËÉØÚ[Øš™XÝKÉØÚ[YXÂˆY]Ùˆ	ÔUÒ	Ëˆ›ÙNˆÚ[\]\ËˆJNÂˆBˆYˆ
+\]\È	‰ˆØš™XÝšÙ^\Ê\]\ÊK›[™Ýˆ
+HÂˆ]ØZ]Ù”™\]Y\Ý
+ÜÛØš™XÝËÜÝ[W×ØËÉØXÝX[Ý[RYXÂˆY]Ùˆ	ÔUÒ	Ëˆ›ÙNˆ\]\ËˆJNÂˆB‚ˆÛÛœÝÜ™XÛÜ™˜]Ë[™R][\Ë^˜PÛÜÝË^Y\œ›ÚÙ\œË^Y\’[›ÚXÙ\×HH]ØZ]›ÛZ\ÙK˜[
+ÂˆÙ”™\]Y\Ý
+ÜÛØš™XÝËÜÝ[W×ØËÉØXÝX[Ý[RYX
+K[ŠÛX[”™XÛÜ™
+Kˆ]Y\žT›ÝÜÊÑSPÕY˜[YKÕSW×ØË›ÙXÝ×ØË›ÙXÝ×Ü‹“˜[YK›ÙXÝ×Ü‹‘˜[Z[KÝ\Y\—Ó˜[YW×ØË‘—ÐÛÛ\[žW×ØË]X[]W×ØË]X[]WÑ[]™\™YÔ\—Ð‘—×ØË]X[]WÓX^×ØË]X[]WÚ[—ÓU×ØË\×Ô]X[]WÔ˜[™ÙW×ØËšXÙWÔ\—Õ[š]×ØËÛÜÝÔ\—Õ[š]×ØË[š]ÔÙ[Ð]×ØË[š]Ð^WÐ]×ØË[š]ÐÛÜÝ×ØËÝXÝ[ÔÙ[Ð]×ØËÝXÝ[Ð^WÐ]×ØËÝ[ÔšXÙW×ØËÝ[ÐÛÜÝ×ØËÝ\Y\—Ò[›ÚXÙW×ØË^[Y[Õ\›W×ØË‘—Ó[X™\—×ØËØ[˜Ù[Y×ØË^Y\œ×Ðœ›ÚÙ\—×ØË^Y\—Ðœ›ÚÙ\—×ØË^Y\œ×Ðœ›ÚÙ\œ×ÐÛÛ[Z\ÜÚ[Û—Ô\—Õ[š]×ØË^Y\œ×Ðœ›ÚÙ\œ×ÐÛÛ[Z\ÜÚ[Û—Ó[\Ý[W×ØËÛÛ[Z\ÜÚ[Û—ÐÛÜÝ×ØËÝ\Y\—Ðœ›ÚÙ\—×ØËÝ\Y\œ×Ðœ›ÚÙ\œ×ÐÛÛ[Z\ÜÚ[Û—Ô\—Õ[š]×ØËÝ\Y\œ×Ðœ›ÚÙ\œ×ÐÛÛ[Z\ÜÚ[Û—Ó[\Ý[W×ØËÙ™™\—Ó[™WÒ][W×Ü‹•[š]šXÙKÙ™™\—Ó[™WÒ][W×Ü‹”Ý\Y\—Õ[š]ÔšXÙW×ØÈ”“ÓHÕSWÓ[™WÒ][W×ØÈÒT‘HÕSW×ØÈH	ÉØXÝX[Ý[RYIÈÔ‘Tˆ–HÜ™X]Y]HTÐØÈÛÙ˜Z[ˆYHJKˆ]Y\žT›ÝÜÊÑSPÕY˜[YK\ØÜš\[Û—×ØË›ÙXÝ’Y×ØË›ÙXÝ’Y×Ü‹“˜[YK›ÙXÝ’Y×Ü‹‘˜[Z[KÝ\Y\—Ó˜[YW×ØË]X[]W×ØË]X[]WÑ[]™\™YÔ\—Ð‘—×ØË]X[]WÚ[—ÓU×ØË]X[]WÔ˜[™ÙWÓX^×ØË\×Ô]X[]WÔ˜[™ÙW×ØË[š]ÔšXÙW×ØË[š]ÐÛÜÝ×ØË[™WÕÝ[×ØË[™WÕÝ[Ð^W×ØËÝ\Y\—Ò[›ÚXÙW×ØËÝ\Y\—Ò\ÜÝYY×ØË^[Y[Õ\›W×ØËØ[˜Ù[Y×ØÈ”“ÓHÕSWÑ^˜WÐÛÜÝ×ØÈÒT‘HÕSW×ØÈH	ÉØXÝX[Ý[RYIÈÔ‘Tˆ–HÜ™X]Y]HTÐØÈÛÙ˜Z[ˆYHJKˆ]Y\žT›ÝÜÊÑSPÕYÕSW×ØË^Y\—Ðœ›ÚÙ\—×ØË™Y˜ÛÙWÒ[™^×ØË^ÜY×ØËÛÛ[Z\ÜÚ[Û—Ó[\Ý[W×ØËÕSWÓ[™WÒ][W×Ü‹’Y”“ÓHÕSWÐ^Y\—Ðœ›ÚÙ\—×ØÈÒT‘HÕSW×ØÈH	ÉØXÝX[Ý[RYIÈÔ‘Tˆ–HÜ™X]Y]HTÐØÈÛÙ˜Z[ˆYHJKˆ]Y\žT›ÝÜÊÑSPÕY˜[YKÕSW×ØË›Ù›Ü›XW×ØË\™XØ]Y×ØË[[Ý[×ØÈ”“ÓH[›ÚXÙW×ØÈÒT‘HÕSW×ØÈH	ÉØXÝX[Ý[RYIÈÔ‘Tˆ–HÜ™X]Y]HTÐØÈÛÙ˜Z[ˆYHJKˆJNÂˆÛÛœÝÝ\Y\’[›ÚXÙRYÈHË‹‹›™]ÈÙ]
+Ë‹‹›[™R][\Ë›X\
+
+][JHOˆ][K”Ý\Y\—Ò[›ÚXÙW×ØÊK‹‹™^˜PÛÜÝË›X\
+
+][JHOˆ][K”Ý\Y\—Ò[›ÚXÙW×ØÊWK™š[\Š\ÔØ[\Ù›Ü˜ÙRY
+JWNÂˆÛÛœÝÝ\Y\’[›ÚXÙS˜[YSX\H]ØZ]˜[Y\ÐžRYÊ	ÔÝ\Y\—Ò[›ÚXÙW×ØÉËÝ\Y\’[›ÚXÙRYÊNÂˆÛÛœÝÝ\Y\’[›ÚXÙTÝ\Y\“˜[YSX\HßNÂˆ›Üˆ
+ÛÛœÝ][HÙˆË‹‹›[™R][\Ë‹‹™^˜PÛÜÝ×JHÂˆYˆ
+][K”Ý\Y\—Ò[›ÚXÙW×ØÈ	‰ˆ][K”Ý\Y\—Ó˜[YW×ØÈ	‰ˆ\Ý\Y\’[›ÚXÙTÝ\Y\“˜[YSX\Ú][K”Ý\Y\—Ò[›ÚXÙW×Ø×JHÂˆÝ\Y\’[›ÚXÙTÝ\Y\“˜[YSX\Ú][K”Ý\Y\—Ò[›ÚXÙW×Ø×HH][K”Ý\Y\—Ó˜[YW×ØÎÂˆBˆB‚ˆÛÛœÝœ›ÚÙ\XØÛÝ[YÈHË‹‹›™]ÈÙ]
+Ë‹‹›[™R][\Ë›X\
+
+][JHOˆ][K”Ý\Y\—Ðœ›ÚÙ\—×ØÊK™š[\Š›ÛÛX[ŠK‹‹›[™R][\Ë›X\
+
+][JHOˆ][K^Y\œ×Ðœ›ÚÙ\—×ØÈ][K^Y\—Ðœ›ÚÙ\—×ØÊK™š[\Š›ÛÛX[ŠK‹‹˜^Y\œ›ÚÙ\œË›X\
+
+][JHOˆ][K^Y\—Ðœ›ÚÙ\—×ØÊK™š[\Š›ÛÛX[ŠWJWNÂˆÛÛœÝœ›ÚÙ\XØÛÝ[X\H]ØZ]˜[Y\ÐžRYÊ	ÐXØÛÝ[	Ëœ›ÚÙ\XØÛÝ[YÊNÂˆ›Üˆ
+ÛÛœÝÚY˜[YWHÙˆØš™XÝ™[šY\Êœ›ÚÙ\XØÛÝ[X\
+JHœ›ÚÙ\XØÛÝ[X\ÔÝš[™ÊY
+KœÛXÙJMJWHH˜[YNÂˆÛÛœÝœ›ÚÙ\ÛÛ[Z\ÜÚ[Û‘Ü›Ý\ÐžTÝ[HHZ[œ›ÚÙ\ÛÛ[Z\ÜÚ[Û‘Ü›Ý\ÊÂˆÝ[SX\ˆÈØXÝX[Ý[RYNˆ™XÛÜ™˜]ÈKˆ[™R][\Ëˆ^Y\œ›ÚÙ\œËˆXØÛÝ[X\ˆœ›ÚÙ\XØÛÝ[X\ˆJNÂˆÛÛœÝœ›ÚÙ\ÛÛ[Z\ÜÚ[Û‘Ü›Ý\ÈHœ›ÚÙ\ÛÛ[Z\ÜÚ[Û‘Ü›Ý\ÐžTÝ[VØXÝX[Ý[RYH×NÂˆÛÛœÝÝ[R\Ñ[]™\žHHH\™XÛÜ™˜]Ë‘[]™\žWÑ]W×ØÎÂˆÛÛœÝ^XX›P[[Ý[Ø[™Y]\ÈHÝ[T^XX›P[[Ý[Ø[™Y]\ÊÂˆÝ[Nˆ™XÛÜ™˜]Ëˆ[™R][\Ëˆ^˜PÛÜÝËˆJNÂ‚ˆ]Ý\Y\’[›ÚXÙT^[Y[ÈH×NÂˆ]^Y\’[›ÚXÙT^[Y[ÈH×NÂˆÛÛœÝœ›ÚÙ\ÛÛ[Z\ÜÚ[Û”^[Y[X\H™]ÈX\
+
+NÂˆÛÛœÝ^[Y[\ØÜšX™HH]ØZ]Ø[\Ù›Ü˜ÙSØš™XÝšY[ÊÂˆØš™XÝ˜[YNˆ	Ô^[Y[×ØÉËˆJK˜Ø]Ú
+
+
+HOˆ
+ÈšY[Îˆ×HJJNÂˆÛÛœÝ^[Y[šY[ÈH^[Y[\ØÜšX™K™šY[È×NÂˆÛÛœÝ^[Y[šY[˜[Y\ÈH™]ÈÙ]
+^[Y[šY[Ë›X\
+
+šY[
+HOˆšY[›˜[YJJNÂˆÛÛœÝ^[Y[[[Ý[šY[HÉÐ[[Ý[×ØÉË	Ô^[Y[Ð[[Ý[×ØÉË	ÔZYÐ[[Ý[×ØÉË	Ô™XÙZ]™YÐ[[Ý[×ØÉË	ÕÝ[Ð[[Ý[×ØÉË	Ð[[Ý[ÔZY×ØÉË	Ô^[Y[Õ˜[YW×ØÉË	ÐXÝX[Ð[[Ý[×ØÉ×K™š[™
+
+šY[
+HOˆ^[Y[šY[˜[Y\Ëš\ÊšY[
+JNÂˆÛÛœÝ^[Y[]QšY[Hš\œÝ]˜Z[X›QšY[
+^[Y[šY[˜[Y\ËÉÑ]W×ØÉË	Ô^[Y[Ñ]W×ØÉË	Ô™XÙZ]™YÑ]W×ØÉË	ÔZYÑ]W×ØÉË	ÐÜ™X]Y]I×JNÂˆÛÛœÝÝ\Y\’[›ÚXÙSÛÚÝ\šY[ÈH[˜ÛÛZ[™Ô^[Y[Ý\Y\’[›ÚXÙQšY[Ê^[Y[šY[ÊNÂˆÛÛœÝ^[Y[™Y™\™[˜ÙQšY[ÈH[˜ÛÛZ[™Ô^[Y[™Y™\™[˜ÙQšY[Ê^[Y[šY[ÊNÂˆÛÛœÝ^[Y[\™XÝ[Û‘šY[ÈH[˜ÛÛZ[™Ô^[Y[\™XÝ[Û‘šY[Ê^[Y[šY[ÊNÂˆÛÛœÝ^[Y[Ý]\ÑšY[ÈHÙ[XÝYšY[Ê^[Y[šY[˜[Y\ËÉÔÝ]\××ØÉË	Ô^[Y[ÔÝ]\××ØÉ×JNÂˆÛÛœÝ^[Y[\QšY[ÈHÙ[XÝYšY[Ê^[Y[šY[˜[Y\ËÉÕ\W×ØÉË	Ô^[Y[Õ\W×ØÉ×JNÂˆÛÛœÝ^[Y[Ù[XÝšY[ÈHÉÒY	Ë^[Y[šY[˜[Y\Ëš\Ê	Ó˜[YIÊHÈ	Ó˜[YIÈˆ[^[Y[šY[˜[Y\Ëš\Ê	Ô™XÛÜ™\RY	ÊHÈ	Ô™XÛÜ™\RY	Èˆ[^[Y[šY[˜[Y\Ëš\Ê	Ô™XÛÜ™\RY	ÊHÈ	Ô™XÛÜ™\K“˜[YIÈˆ[^[Y[šY[˜[Y\Ëš\Ê	Ô™XÛÜ™\RY	ÊHÈ	Ô™XÛÜ™\K‘]™[Ü\“˜[YIÈˆ[^[Y[šY[˜[Y\Ëš\Ê	ÔÕSW×ØÉÊHÈ	ÔÕSW×ØÉÈˆ[^[Y[šY[˜[Y\Ëš\Ê	ÐÜ™X]Y]IÊHÈ	ÐÜ™X]Y]IÈˆ[^[Y[]QšY[‹‹œÝ\Y\’[›ÚXÙSÛÚÝ\šY[Ë^[Y[[[Ý[šY[‹‹œ^[Y[™Y™\™[˜ÙQšY[Ë‹‹œ^[Y[Ý]\ÑšY[Ë‹‹œ^[Y[\QšY[Ë‹‹œ^[Y[\™XÝ[Û‘šY[×K™š[\Š›ÛÛX[ŠNÂˆÛÛœÝ^[Y[Ü™\ˆH^[Y[]QšY[È	Ü^[Y[]QšY[HTÐÈ•SÈTÕÜ™X]Y]HTÐØˆ	ÐÜ™X]Y]HTÐÉÎÂˆYˆ
+^[Y[Ù[XÝšY[Ë›[™ÝˆJHÂˆÛÛœÝÙ[XÝY^[Y[šY[ÈHË‹‹›™]ÈÙ]
+^[Y[Ù[XÝšY[ÊWNÂˆÛÛœÝ^[Y[]U˜[YHH
+^[Y[
+HOˆ
+^[Y[]QšY[È^[Y[Ü^[Y[]QšY[Hˆ[
+H^[Y[‘]W×ØÈ^[Y[Ü™X]Y]H[ÂˆÛÛœÝÛÜ^[Y[›ÝÜÈH
+›ÝÜÊHOˆ›ÝÜËœÛÜ
+
+KŠHOˆÝš[™Ê^[Y[]U˜[YJŠH	ÉÊK›ØØ[PÛÛ\\™JÝš[™Ê^[Y[]U˜[YJJH	ÉÊJJNÂˆÛÛœÝXÛÜ˜]T^[Y[H
+^[Y[Ý\Y\’[›ÚXÙRYH[
+HOˆ
+Âˆ‹‹œ^[Y[ˆ]W×ØÎˆ^[Y[]U˜[YJ^[Y[
+KˆÔ^[Y[Ð[[Ý[ˆ^[Y[[[Ý[šY[È^[Y[Ü^[Y[[[Ý[šY[Hˆ[ˆÔ^[Y[Ð[[Ý[ÑšY[ˆ^[Y[[[Ý[šY[[ˆÔÝ\Y\—Ò[›ÚXÙWÓ˜[YNˆÝ\Y\’[›ÚXÙRYÈÝ\Y\’[›ÚXÙS˜[YSX\ÜÝ\Y\’[›ÚXÙRYHÝ\Y\’[›ÚXÙRYˆ[ˆJNÂˆÛÛœÝÝ\Y\”^[Y[X\H™]ÈX\
+
+NÂˆÛÛœÝ^Y\”^[Y[X\H™]ÈX\
+
+NÂˆÛÛœÝYœ›ÚÙ\ÛÛ[Z\ÜÚ[Û”^[Y[H
+^[Y[œ›ÚÙ\“X]Ú
+HOˆÂˆYˆ
+\^[Y[Ë’YXœ›ÚÙ\“X]Ú
+H™]\›ŽÂˆÝ\Y\”^[Y[X\™[]J^[Y[’Y
+NÂˆ^Y\”^[Y[X\™[]J^[Y[’Y
+NÂˆYˆ
+Xœ›ÚÙ\ÛÛ[Z\ÜÚ[Û”^[Y[X\š\Êœ›ÚÙ\“X]ÚšÙ^JJHÂˆœ›ÚÙ\ÛÛ[Z\ÜÚ[Û”^[Y[X\œÙ]
+œ›ÚÙ\“X]ÚšÙ^KÂˆ‹‹˜œ›ÚÙ\“X]Úˆ^[Y[Îˆ×KˆJNÂˆBˆœ›ÚÙ\ÛÛ[Z\ÜÚ[Û”^[Y[X\™Ù]
+œ›ÚÙ\“X]ÚšÙ^JKœ^[Y[Ëœ\Ú
+XÛÜ˜]T^[Y[
+^[Y[
+JNÂˆNÂˆÛÛœÝYÝ\Y\”^[Y[H
+^[Y[Ý\Y\’[›ÚXÙRYH[
+HOˆÂˆYˆ
+\^[Y[Ë’Y
+H™]\›ŽÂˆÛÛœÝ[›ÚXÙRYHÝ\Y\’[›ÚXÙRY[˜ÛÛZ[™Ô^[Y[Ý\Y\’[›ÚXÙRY
+^[Y[Ý\Y\’[›ÚXÙSÛÚÝ\šY[ÊNÂˆÝ\Y\”^[Y[X\œÙ]
+^[Y[’YÂˆ‹‹™XÛÜ˜]T^[Y[
+^[Y[[›ÚXÙRY
+KˆÔÝ\Y\—Ò[›ÚXÙWÓ˜[YNˆ[›ÚXÙRYÈÝ\Y\’[›ÚXÙS˜[YSX\Ú[›ÚXÙRYH[›ÚXÙRYˆ	ÔÝ\Y\ˆ^[Y[	ËˆÔÝ\Y\—Ó˜[YNˆ[›ÚXÙRYÈÝ\Y\’[›ÚXÙTÝ\Y\“˜[YSX\Ú[›ÚXÙRYHÝ\Y\’[›ÚXÙS˜[YSX\Ú[›ÚXÙRYH[›ÚXÙRYˆ	ÔÝ\Y\ˆ^[Y[	ËˆJNÂˆNÂˆÛÛœÝY^Y\”^[Y[H
+^[Y[
+HOˆÂˆYˆ
+\^[Y[Ë’Y
+H™]\›ŽÂˆ^Y\”^[Y[X\œÙ]
+^[Y[’YXÛÜ˜]T^[Y[
+^[Y[
+JNÂˆNÂ‚ˆYˆ
+Ý\Y\’[›ÚXÙRYË›[™Ý	‰ˆÝ\Y\’[›ÚXÙSÛÚÝ\šY[Ë›[™Ý
+HÂˆ]ØZ]›ÛZ\ÙK˜[
+ˆÝ\Y\’[›ÚXÙSÛÚÝ\šY[Ë›X\
+\Þ[˜È
+šY[
+HOˆÂˆÛÛœÝ^[Y[Ú[šÜÈH]ØZ]ÛÛ\ÜÚ]T]Y\žT›ÝÜÊˆÚ[šÒYÊÝ\Y\’[›ÚXÙRYÊK›X\
+
+Ú[šÊHOˆÂˆÛÛœÝ[“\ÝHÚ[šË›X\
+
+Y
+HOˆ	ÉÙ\ØØ\TÛÜ[
+Y
+_IØ
+Kš›Ú[Š	Ë	ÊNÂˆ™]\›ˆÂˆÛÜ[ˆˆÑSPÕ	ÜÙ[XÝY^[Y[šY[Ëš›Ú[Š	Ë	Ê_Bˆ”“ÓH^[Y[×ØÂˆÒT‘H	ÙšY[HSˆ
+	Ú[“\ÝJBˆÔ‘Tˆ–H	Ü^[Y[Ü™\ŸBˆSRUŒˆˆ[Z]ˆŒˆÛÙ˜Z[ˆYKˆNÂˆJKˆ
+NÂˆ›Üˆ
+ÛÛœÝ^[Y[Ùˆ^[Y[Ú[šÜË™›]
+
+JHYÝ\Y\”^[Y[
+^[Y[^[Y[ÙšY[JNÂˆJKˆ
+NÂˆBˆYˆ
+^[Y[šY[˜[Y\Ëš\Ê	ÔÕSW×ØÉÊJHÂˆÛÛœÝÝ[T^[Y[ÈH]ØZ]]Y\žT›ÝÜÊˆˆÑSPÕ	ÜÙ[XÝY^[Y[šY[Ëš›Ú[Š	Ë	Ê_Bˆ”“ÓH^[Y[×ØÂˆÒT‘HÕSW×ØÈH	ÉÙ\ØØ\TÛÜ[
+XÝX[Ý[RY
+_IÂˆÔ‘Tˆ–H	Ü^[Y[Ü™\ŸBˆSRUŒˆˆÈ[Z]ˆŒÛÙ˜Z[ˆYHKˆ
+NÂˆ›Üˆ
+ÛÛœÝ^[Y[ÙˆÝ[T^[Y[ÊHÂˆYˆ
+[˜ÛÛZ[™Ô^[Y[\Ô™XÙZ]˜X›T™[Z][˜ÙJ^[Y[Ë‹‹œ^[Y[™Y™\™[˜ÙQšY[Ë‹‹œ^[Y[\™XÝ[Û‘šY[Ë‹‹œ^[Y[\QšY[Ë‹‹œ^[Y[Ý]\ÑšY[×JJHÛÛ[YNÂˆÛÛœÝ[[Ý[H^[Y[[[Ý[šY[È[˜ÛÛZ[™Ô^[Y[[X™\Š^[Y[Ü^[Y[[[Ý[šY[JHˆ[ÂˆÛÛœÝœ›ÚÙ\ÛÛ[Z\ÜÚ[Û“X]ÚHš[™œ›ÚÙ\ÛÛ[Z\ÜÚ[Û”^[Y[X]Ú
+^[Y[[[Ý[œ›ÚÙ\ÛÛ[Z\ÜÚ[Û‘Ü›Ý\ËË‹‹œ^[Y[™Y™\™[˜ÙQšY[Ë‹‹œ^[Y[\™XÝ[Û‘šY[Ë‹‹œ^[Y[\QšY[Ë‹‹œ^[Y[Ý]\ÑšY[×JNÂˆYˆ
+œ›ÚÙ\ÛÛ[Z\ÜÚ[Û“X]Ú
+HÂˆYœ›ÚÙ\ÛÛ[Z\ÜÚ[Û”^[Y[
+^[Y[œ›ÚÙ\ÛÛ[Z\ÜÚ[Û“X]Ú
+NÂˆÛÛ[YNÂˆBˆÛÛœÝ˜[šÐÚ\™ÙHH[˜ÛÛZ[™Ô^[Y[ÛÚÜÐ˜[šÐÚ\™ÙJ^[Y[Âˆ™Y™\™[˜ÙQšY[Îˆ^[Y[™Y™\™[˜ÙQšY[Ëˆ\™XÝ[Û‘šY[Îˆ^[Y[\™XÝ[Û‘šY[Ëˆ\QšY[Îˆ^[Y[\QšY[ËˆÝ]\ÑšY[Îˆ^[Y[Ý]\ÑšY[ËˆJNÂˆYˆ
+˜[šÐÚ\™ÙJHÛÛ[YNÂˆÛÛœÝÝ\Y\”ÚYHH[˜ÛÛZ[™Ô^[Y[ÛÚÜÔÝ\Y\”ÚYJ^[Y[ÂˆÝ\Y\’[›ÚXÙQšY[ÎˆÝ\Y\’[›ÚXÙSÛÚÝ\šY[Ëˆ\™XÝ[Û‘šY[Îˆ^[Y[\™XÝ[Û‘šY[Ëˆ\QšY[Îˆ^[Y[\QšY[ËˆÝ]\ÑšY[Îˆ^[Y[Ý]\ÑšY[ËˆJNÂˆYˆ
+Ý\Y\”ÚYJHÂˆYÝ\Y\”^[Y[
+^[Y[
+NÂˆH[ÙHYˆ
+ˆ[˜ÛÛZ[™Ô^[Y[ÛÚÜÔÝ[T^XX›PØ[Ý[][ÛŠ^[Y[Âˆ[[Ý[ˆ^XX›P[[Ý[Îˆ^XX›P[[Ý[Ø[™Y]\Ëˆ™Y™\™[˜ÙQšY[Îˆ^[Y[™Y™\™[˜ÙQšY[Ëˆ\™XÝ[Û‘šY[Îˆ^[Y[\™XÝ[Û‘šY[Ëˆ\QšY[Îˆ^[Y[\QšY[ËˆÝ]\ÑšY[Îˆ^[Y[Ý]\ÑšY[Ëˆ[ÝÐ›[šÔÚYÛ˜[ˆ\Ý[R\Ñ[]™\žKˆJBˆ
+HÂˆÛÛ[YNÂˆH[ÙHYˆ
+[[Ý[OH[[[Ý[H
+HÂˆY^Y\”^[Y[
+^[Y[
+NÂˆBˆBˆBˆÝ\Y\’[›ÚXÙT^[Y[ÈHÛÜ^[Y[›ÝÜÊË‹‹œÝ\Y\”^[Y[X\˜[Y\Ê
+WJNÂˆ^Y\’[›ÚXÙT^[Y[ÈHÛÜ^[Y[›ÝÜÊË‹‹˜^Y\”^[Y[X\˜[Y\Ê
+WJNÂˆB‚ˆÛÛœÝÝ™\ÜÙ[˜[YKÜ˜[YKYÙ[˜[YKXØÛÝ[˜[YK^Y\œ›ÚÙ\“˜[YK˜XÝÜš[™Ò[›ÚXÙS˜[YWHH]ØZ]›ÛZ\ÙK˜[
+Ü™XÛÜ™˜]Ë•™\ÜÙ[×ØÈÈ™\ÛÛ™UšXT]Y\žJ	Õ™\ÜÙ[×ØÉË™XÛÜ™˜]Ë•™\ÜÙ[×ØË	Ó˜[YIÊHˆ›ÛZ\ÙKœ™\ÛÛ™J[
+K™XÛÜ™˜]Ë”Ü×ØÈÈ™\ÛÛ™UšXT]Y\žJ	ÔÜ×ØÉË™XÛÜ™˜]Ë”Ü×ØË	Ó˜[YIÊHˆ›ÛZ\ÙKœ™\ÛÛ™J[
+K™XÛÜ™˜]ËYÙ[×ØÈÈ™\ÛÛ™UšXT]Y\žJ	ÐXØÛÝ[	Ë™XÛÜ™˜]ËYÙ[×ØË	Ó˜[YIÊHˆ›ÛZ\ÙKœ™\ÛÛ™J[
+K™XÛÜ™˜]ËXØÛÝ[×ØÈÈ™\ÛÛ™UšXT]Y\žJ	ÐXØÛÝ[	Ë™XÛÜ™˜]ËXØÛÝ[×ØË	Ó˜[YIÊHˆ›ÛZ\ÙKœ™\ÛÛ™J[
+K™XÛÜ™˜]Ë^Y\—Ðœ›ÚÙ\—×ØÈÈ™\ÛÛ™UšXT]Y\žJ	ÐXØÛÝ[	Ë™XÛÜ™˜]Ë^Y\—Ðœ›ÚÙ\—×ØË	Ó˜[YIÊHˆ›ÛZ\ÙKœ™\ÛÛ™J[
+K™XÛÜ™˜]Ë‘˜XÝÜš[™×Ò[›ÚXÙW×ØÈÈ™\ÛÛ™UšXT]Y\žJ	Ò[›ÚXÙW×ØÉË™XÛÜ™˜]Ë‘˜XÝÜš[™×Ò[›ÚXÙW×ØË	Ó˜[YIÊHˆ›ÛZ\ÙKœ™\ÛÛ™J[
+WJNÂ‚ˆÛÛœÝ^Y\œ›ÚÙ\œÕÚ]˜[Y\ÈH]ØZ]›ÛZ\ÙK˜[
+ˆ^Y\œ›ÚÙ\œË›X\
+\Þ[˜È
+˜ŠHOˆ
+Âˆ‹‹˜˜‹ˆÐ^Y\—Ðœ›ÚÙ\—Ó˜[YNˆ˜‹^Y\—Ðœ›ÚÙ\—×ØÈÈœ›ÚÙ\XØÛÝ[X\Ø˜‹^Y\—Ðœ›ÚÙ\—×Ø×Hœ›ÚÙ\XØÛÝ[X\ÔÝš[™Ê˜‹^Y\—Ðœ›ÚÙ\—×ØÊKœÛXÙJMJWH
+]ØZ]™\ÛÛ™UšXT]Y\žJ	ÐXØÛÝ[	Ë˜‹^Y\—Ðœ›ÚÙ\—×ØË	Ó˜[YIÊJHˆ[ˆJJKˆ
+NÂ‚ˆÛÛœÝÝ\Y\œ›ÚÙ\’YÈHË‹‹›™]ÈÙ]
+[™R][\Ë›X\
+
+JHOˆK”Ý\Y\—Ðœ›ÚÙ\—×ØÊK™š[\Š›ÛÛX[ŠJWNÂˆÛÛœÝÝ\Y\œ›ÚÙ\“˜[YSX\HßNÂˆ]ØZ]›ÛZ\ÙK˜[
+ˆÝ\Y\œ›ÚÙ\’YË›X\
+\Þ[˜È
+Y
+HOˆÂˆÝ\Y\œ›ÚÙ\“˜[YSX\ÚYHHœ›ÚÙ\XØÛÝ[X\ÚYHœ›ÚÙ\XØÛÝ[X\ÔÝš[™ÊY
+KœÛXÙJMJWH
+]ØZ]™\ÛÛ™UšXT]Y\žJ	ÐXØÛÝ[	ËY	Ó˜[YIÊJNÂˆJKˆ
+NÂ‚ˆÛÛœÝ[™R][\ÕÚ]˜[Y\ÈH[™R][\Ë›X\
+
+JHOˆÂˆÛÛœÝØ[Ý[]Y]X[]HHš[˜[˜ÚX[]X[]JKÝ[R\Ñ[]™\žJNÂˆÛÛœÝØ[Ý[]YÙ[H[™TÙ[[[Ý[
+KÝ[R\Ñ[]™\žJNÂˆÛÛœÝØ[Ý[]Y^HH[™P^P[[Ý[
+KÝ[R\Ñ[]™\žJNÂˆ™]\›ˆÂˆ‹‹›KˆÑš[˜[˜ÚX[Ô]X[]NˆØ[Ý[]Y]X[]KˆÑš[˜[˜ÚX[Ô]X[]WÕ[š]ˆ	ÓU	Ëˆ‹‹Š\Ý[R\Ñ[]™\žBˆÈÂˆÝ[ÔšXÙW×ØÎˆØ[Ý[]YÙ[ˆÝ[ÐÛÜÝ×ØÎˆØ[Ý[]Y^KˆBˆˆßJKˆÔ›ÙXÝÓ˜[YNˆVÉÔ›ÙXÝ×Ü‰×OË“˜[YHÏÈ[ˆÔÝ\Y\—Ðœ›ÚÙ\—Ó˜[YNˆK”Ý\Y\—Ðœ›ÚÙ\—×ØÈÈÝ\Y\œ›ÚÙ\“˜[YSX\ÛK”Ý\Y\—Ðœ›ÚÙ\—×Ø×Hˆ[ˆNÂˆJNÂˆÛÛœÝ^˜PÛÜÝÕÚ]˜[Y\ÈH^˜PÛÜÝË›X\
+
+XÊHOˆÂˆÛÛœÝØ[Ý[]Y]X[]HHš[˜[˜ÚX[]X[]JXËÝ[R\Ñ[]™\žK	Ô]X[]WÔ˜[™ÙWÓX^×ØÉÊNÂˆÛÛœÝØ[Ý[]YÙ[H^˜TÙ[[[Ý[
+XËÝ[R\Ñ[]™\žJNÂˆÛÛœÝØ[Ý[]Y^HH^˜P^P[[Ý[
+XËÝ[R\Ñ[]™\žJNÂˆ™]\›ˆÂˆ‹‹™XËˆÑš[˜[˜ÚX[Ô]X[]NˆØ[Ý[]Y]X[]KˆÑš[˜[˜ÚX[Ô]X[]WÕ[š]ˆ	ÓU	Ëˆ‹‹Š\Ý[R\Ñ[]™\žBˆÈÂˆ[™WÕÝ[×ØÎˆØ[Ý[]YÙ[ˆ[™WÕÝ[Ð^W×ØÎˆØ[Ý[]Y^KˆBˆˆßJKˆÔ›ÙXÝÓ˜[YNˆXÖÉÔ›ÙXÝ’Y×Ü‰×OË“˜[YHÏÈ[ˆNÂˆJNÂˆÛÛœÝØ[Ý[]Y[™R][TÙ[H[™R][\Ëœ™YXÙJ
+Ý[KJHOˆÂˆYˆ
+KØ[˜Ù[Y×ØÊH™]\›ˆÝ[NÂˆ™]\›ˆÝ[H
+È[™TÙ[[[Ý[
+KÝ[R\Ñ[]™\žJNÂˆK
+NÂˆÛÛœÝØ[Ý[]Y^˜PÛÜÝÙ[H^˜PÛÜÝËœ™YXÙJ
+Ý[KXÊHOˆÂˆYˆ
+XËØ[˜Ù[Y×ØÊH™]\›ˆÝ[NÂˆ™]\›ˆÝ[H
+È^˜TÙ[[[Ý[
+XËÝ[R\Ñ[]™\žJNÂˆK
+NÂˆÛÛœÝØ[Ý[]Y[™]Y^Y\’[›ÚXÙHHØ[Ý[]Y[™R][TÙ[
+ÈØ[Ý[]Y^˜PÛÜÝÙ[ÂˆÛÛœÝ^Y\’[›ÚXÙT™\ÛÛ][ÛˆH™\ÛÛ™P^Y\‘š[˜[˜ÚX[[[Ý[
+ÈØ[\Ù›Ü˜ÙP[[Ý[ˆ™XÛÜ™˜]Ë•Ý[Ò[›ÚXÙWÐ[[Ý[×ØËØ[Ý[]Y[[Ý[ˆØ[Ý[]Y[™]Y^Y\’[›ÚXÙKš[˜[[›ÚXÙR\ÜÝYYˆ^Y\’[›ÚXÙ\ËœÛÛYJ\Ñš[˜[^Y\’[›ÚXÙJHJNÂˆÛÛœÝØ[Ý[]YÝ\Y\’[›ÚXÙHH^XX›P[[Ý[Ø[™Y]\ÖÌHÏÈÂˆÛÛœÝ™XÛÜ™HÂˆ‹‹œ™XÛÜ™˜]ËˆÝ[Ò[›ÚXÙWÐ[[Ý[×ØÎˆ^Y\’[›ÚXÙT™\ÛÛ][Û‹˜[[Ý[ˆÐ^Y\—Ò[›ÚXÙWÐ[[Ý[ÔÛÝ\˜ÙNˆ^Y\’[›ÚXÙT™\ÛÛ][Û‹œÛÝ\˜ÙKˆÐ^Y\—Ò[›ÚXÙWÒ\ÜÝYYˆ^Y\’[›ÚXÙ\ËœÛÛYJ\Ñš[˜[^Y\’[›ÚXÙJKˆÔÝ\Y\—Ò[›ÚXÙWÐ[[Ý[ˆØ[Ý[]YÝ\Y\’[›ÚXÙKˆÐ^Y\—Ô^WÕ\›WÑ]NˆØ[Ý[]Y^Y\”^U\›Q]J™XÛÜ™˜]ÊH™XÛÜ™˜]Ë’[›ÚXÙWÑYWÑ]W×ØÈ™XÛÜ™˜]Ë^Y\—Ô^WÕ\›WÑ]W×ØËˆÐ^Y\—Ó˜[YNˆ™XÛÜ™˜]Ë^Y\—Ó˜[YW×ØÈXØÛÝ[˜[YH™XÛÜ™˜]Ë^Y\—×ØÈ[ˆÕ™\ÜÙ[Ó˜[YNˆ™\ÜÙ[˜[YKˆÔÜÓ˜[YNˆÜ˜[YKˆÐYÙ[Ó˜[YNˆYÙ[˜[YKˆÐXØÛÝ[Ó˜[YNˆXØÛÝ[˜[YKˆÐ^Y\—Ðœ›ÚÙ\—Ó˜[YNˆ^Y\œ›ÚÙ\“˜[YKˆÑ˜XÝÜš[™×Ò[›ÚXÙWÓ˜[YNˆ˜XÝÜš[™Ò[›ÚXÙS˜[YKˆNÂ‚ˆ™]\›ˆÂˆ™XÛÜ™ˆ[™R][\Îˆ[™R][\ÕÚ]˜[Y\Ëˆ^˜PÛÜÝÎˆ^˜PÛÜÝÕÚ]˜[Y\Ëˆ^Y\œ›ÚÙ\œÎˆ^Y\œ›ÚÙ\œÕÚ]˜[Y\ËˆÝ\Y\’[›ÚXÙT^[Y[Ëˆ^Y\’[›ÚXÙT^[Y[Ëˆœ›ÚÙ\ÛÛ[Z\ÜÚ[Û”^[Y[ÎˆË‹‹˜œ›ÚÙ\ÛÛ[Z\ÜÚ[Û”^[Y[X\˜[Y\Ê
+WK›X\
+
+Ü›Ý\
+HOˆ
+Âˆ‹‹™Ü›Ý\ˆ^[Y[ÎˆÜ›Ý\œ^[Y[ËœÛÜ
+
+KŠHOˆÝš[™Ê‹‘]W×ØÈ	ÉÊK›ØØ[PÛÛ\\™JÝš[™ÊK‘]W×ØÈ	ÉÊJJKˆJJKˆNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆØ[\Ù›Ü˜ÙTÝ[Q]Z[[
+›ÙK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝ\ÕÜš]HH›ÛÛX[Š
+›ÙOË\]\È	‰ˆØš™XÝšÙ^\Ê›ÙK\]\ÊK›[™Ý
+H
+›ÙOË˜Ú[\]\È	‰ˆØš™XÝšÙ^\Ê›ÙK˜Ú[\]\ÊK›[™Ý
+JNÂˆYˆ
+\ÕÜš]JH™]\›ˆØ[\Ù›Ü˜ÙTÝ[Q]Z[[˜ØXÚY
+›ÙK™\KXØÙ\ÜÐÛÛ^
+NÂˆÛÛœÝÝ[RYHÝš[™Ê›ÙOËœÝ[RY	ÉÊKš[J
+NÂˆÛÛœÝØXÚYH]ØZ]ØXÚYØ[\Ù›Ü˜ÙU˜[YJÂˆ˜[Y\ÜXÙNˆ	ÜØ[\Ù›Ü˜ÙK\Ý[KY]Z[]Œ‰ËˆÙXÛÛ™ÎˆMKˆ^[ØYˆÈÝ[RYKˆYÜÎˆÉÜØ[\Ù›Ü˜ÙNœÝ[IËØ[\Ù›Ü˜ÙNœÝ[N‰ÜÝ[RYXKˆ›ÙKˆ™\KˆXØÙ\ÜÐÛÛ^ˆØY\Žˆ
+
+HOˆØ[\Ù›Ü˜ÙTÝ[Q]Z[[˜ØXÚY
+ÈÝ[RYK™\KXØÙ\ÜÐÛÛ^
+KˆJNÂˆ™]\›ˆØXÚY˜[YNÂŸB‚™[˜Ý[Ûˆ[š\]YT™\Ù[˜[Y\Ê˜[Y\ÊHÂˆ™]\›ˆË‹‹›™]ÈÙ]
+˜[Y\Ë™š[\Š
+˜[YJHOˆ˜[YHOH[	‰ˆ˜[YHOOH	ÉÊJWNÂŸB‚™[˜Ý[ÛˆÚ[™ÛSÜ“Z^Y
+˜[Y\ÊHÂˆÛÛœÝ[š\]YHH[š\]YT™\Ù[˜[Y\Ê˜[Y\ÊNÂˆYˆ
+][š\]YK›[™Ý
+H™]\›ˆ[Âˆ™]\›ˆ[š\]YK›[™ÝOOHHÈ[š\]YVÌHˆ	ÓZ^Y	ÎÂŸB‚™[˜Ý[Ûˆ]\Ý\ÛÑ]J˜[Y\ÊHÂˆÛÛœÝ]\ÈH[š\]YT™\Ù[˜[Y\Ê˜[Y\ÊK™š[\Š
+˜[YJHOˆ×—ÍKWÌŸKWÌŸKË\Ý
+Ýš[™Ê˜[YJJJNÂˆ™]\›ˆ]\ËœÛÜ
+
+K˜]
+LJH[ÂŸB‚™[˜Ý[ÛˆYœ›ÚÙ\”›ÙXÝ]X[]JÜ›Ý\›ÝÊHÂˆÛÛœÝ›ÙXÝ˜[YHH›ÝËœ›ÙXÝ˜[Z[H›ÝËœ›ÙXÝ˜[YH	ø %	ÎÂˆÛÛœÝ[š]H›ÝËœ]X[]U[š]	ÕSÓH›ÝÙ]	ÎÂˆÛÛœÝÙ^HH	Ü›ÙXÝ˜[Y_NŽ‰Ý[š]XÂˆYˆ
+YÜ›Ý\—Ü›ÙXÝX\š\ÊÙ^JJHÂˆÜ›Ý\—Ü›ÙXÝX\œÙ]
+Ù^KÂˆ›ÙXÝ˜[YKˆ›ÙXÝ˜[Z[Nˆ›ÝËœ›ÙXÝ˜[Z[H›ÙXÝ˜[YKˆ]X[]Nˆˆ\Ô]X[]Nˆ˜[ÙKˆ[š]ˆJNÂˆBˆÛÛœÝ][HHÜ›Ý\—Ü›ÙXÝX\™Ù]
+Ù^JNÂˆÛÛœÝ]HH[Y\šXÕ˜[YJ›ÝË˜™”]X[]JNÂˆYˆ
+]HOH[
+HÂˆ][Kœ]X[]H
+ÏH]NÂˆ][Kš\Ô]X[]HHYNÂˆBŸB‚™[˜Ý[ÛˆÛÛXš[™Pœ›ÚÙ\ÛÛ[Z\ÜÚ[Û”›ÝÜÊ›ÝÜÊHÂˆÛÛœÝÜ›Ý\ÈH™]ÈX\
+
+NÂˆ›Üˆ
+ÛÛœÝ›ÝÈÙˆ›ÝÜÊHÂˆÛÛœÝœ›ÚÙ\’Ù^HH›ÝË˜œ›ÚÙ\’Y›ÝË˜œ›ÚÙ\“˜[YH	ÉÎÂˆÛÛœÝÙ^HHÜ›ÝËœÝ[RY›ÝË˜œ›ÚÙ\•\Kœ›ÚÙ\’Ù^WKš›Ú[Š	ÎŽ‰ÊNÂˆYˆ
+YÜ›Ý\Ëš\ÊÙ^JJHÂˆÜ›Ý\ËœÙ]
+Ù^KÂˆ‹‹œ›ÝËˆYˆ	Ü›ÝË˜œ›ÚÙ\•\_KIÜ›ÝËœÝ[RYKIØœ›ÚÙ\’Ù^_Xœ™\XÙJ×ÊËÙË	ËIÊKˆÛÛ[Z\ÜÚ[Û[[Ý[ˆˆÜ›ÙXÝX\ˆ™]ÈX\
+
+KˆØÛÛ[Z\ÜÚ[Û•[š]šXÙ\Îˆ×KˆØÛÛ[Z\ÜÚ[Û•[š][™\Îˆ×KˆÜ^[Y[]\Îˆ×KˆÜ^[Y[]SX™[Îˆ×KˆÜ^[Y[[^\Îˆ×KˆJNÂˆBˆÛÛœÝÜ›Ý\HÜ›Ý\Ë™Ù]
+Ù^JNÂˆÜ›Ý\˜ÛÛ[Z\ÜÚ[Û[[Ý[
+ÏH[X™\Š›ÝË˜ÛÛ[Z\ÜÚ[Û[[Ý[
+NÂˆYˆ
+›ÝË˜ÛÛ[Z\ÜÚ[Û•[š]šXÙHOH[
+HÜ›Ý\—ØÛÛ[Z\ÜÚ[Û•[š]šXÙ\Ëœ\Ú
+[X™\Š›ÝË˜ÛÛ[Z\ÜÚ[Û•[š]šXÙJJNÂˆÜ›Ý\—ØÛÛ[Z\ÜÚ[Û•[š][™\Ëœ\Ú
+Âˆ›ÙXÝ˜[YNˆ›ÝËœ›ÙXÝ˜[Z[H›ÝËœ›ÙXÝ˜[YH	ø %	Ëˆ˜[YNˆ[Y\šXÕ˜[YJ›ÝË˜ÛÛ[Z\ÜÚ[Û•[š]šXÙJKˆ[š]ˆ›ÝËœ]X[]U[š]	ÕSÓH›ÝÙ]	ËˆJNÂˆYˆ
+›ÝËœ^[Y[]JHÜ›Ý\—Ü^[Y[]\Ëœ\Ú
+›ÝËœ^[Y[]JNÂˆYˆ
+›ÝËœ^[Y[]SX™[
+HÜ›Ý\—Ü^[Y[]SX™[Ëœ\Ú
+›ÝËœ^[Y[]SX™[
+NÂˆYˆ
+›ÝËœ^[Y[[^HOH[
+HÜ›Ý\—Ü^[Y[[^\Ëœ\Ú
+[X™\Š›ÝËœ^[Y[[^JJNÂˆYœ›ÚÙ\”›ÙXÝ]X[]JÜ›Ý\›ÝÊNÂˆB‚ˆ™]\›ˆË‹‹™Ü›Ý\Ë˜[Y\Ê
+WK›X\
+
+Ü›Ý\
+HOˆÂˆÛÛœÝ[š]šXÙ\ÈH[š\]YT™\Ù[˜[Y\ÊÜ›Ý\—ØÛÛ[Z\ÜÚ[Û•[š]šXÙ\ÊNÂˆÛÛœÝ^[Y[]\ÈH[š\]YT™\Ù[˜[Y\ÊÜ›Ý\—Ü^[Y[]\ÊNÂˆÛÛœÝ^[Y[[^\ÈH[š\]YT™\Ù[˜[Y\ÊÜ›Ý\—Ü^[Y[[^\ÊNÂˆÛÛœÝÛÛ[Z\ÜÚ[Û•[š]šXÙS[™\ÈHÜ›Ý\—ØÛÛ[Z\ÜÚ[Û•[š][™\Ë›X\
+
+][JHOˆ
+Âˆ›ÙXÝ˜[YNˆ][Kœ›ÙXÝ˜[YKˆ˜[YNˆ][K˜[YKˆ[š]ˆ][K[š]ˆX™[ˆ][K˜[YHOH[È	Û[Û™^J][K˜[YJ_HÈ	Ú][K[š]Xˆ	ø %	ËˆJJNÂˆÛÛœÝ›ÙXÝ]X[]Y\ÈHË‹‹™Ü›Ý\—Ü›ÙXÝX\˜[Y\Ê
+WK›X\
+
+][JHOˆ
+Âˆ›ÙXÝ˜[YNˆ][Kœ›ÙXÝ˜[YKˆ›ÙXÝ˜[Z[Nˆ][Kœ›ÙXÝ˜[Z[H][Kœ›ÙXÝ˜[YKˆ]X[]Nˆ][Kš\Ô]X[]HÈ][Kœ]X[]Hˆ[ˆ]X[]U[š]ˆ][K[š]ˆX™[ˆ][Kš\Ô]X[]HÈ	Ú][Kœ›ÙXÝ˜[Y_HH	Ù›Ü›X]]X[]SX™[
+][Kœ]X[]K][K[š]
+_Xˆ][Kœ›ÙXÝ˜[YKˆJJNÂˆ™]\›ˆÂˆ‹‹™Ü›Ý\ˆ›ÙXÝ˜[YNˆ›ÙXÝ]X[]Y\Ë›X\
+
+][JHOˆ][Kœ›ÙXÝ˜[YJKš›Ú[Š	ÎÈ	ÊKˆ™”]X[]Nˆ›ÙXÝ]X[]Y\Ë›[™ÝOOHHÈ›ÙXÝ]X[]Y\ÖÌKœ]X[]Hˆ[ˆ]X[]U[š]ˆ›ÙXÝ]X[]Y\Ë›[™ÝOOHHÈ›ÙXÝ]X[]Y\ÖÌKœ]X[]U[š]ˆ	ÓZ^Y	Ëˆ›ÙXÝ]X[]Y\Ëˆ›ÙXÝ]X[]SX™[ˆ›ÙXÝ]X[]Y\Ë›X\
+
+][JHOˆ][K›X™[
+Kš›Ú[Š	ÎÈ	ÊKˆÛÛ[Z\ÜÚ[Û•[š]šXÙNˆ[š]šXÙ\Ë›[™ÝOOHHÈ[š]šXÙ\ÖÌHˆ[ˆÛÛ[Z\ÜÚ[Û•[š]šXÙS[™\ËˆÛÛ[Z\ÜÚ[Û•[š]šXÙSX™[ˆÛÛ[Z\ÜÚ[Û•[š]šXÙS[™\Ë›X\
+
+][JHOˆ][K›X™[
+Kš›Ú[Š	ÎÈ	ÊKˆ^[Y[]Nˆ^[Y[]\Ë›[™ÝHHÈ^[Y[]\ÖÌH[ˆ	ÓZ^Y	Ëˆ^[Y[]TÛÜˆ]\Ý\ÛÑ]J^[Y[]\ÊKˆ^[Y[]SX™[ˆÚ[™ÛSÜ“Z^Y
+Ü›Ý\—Ü^[Y[]SX™[ÊHÜ›Ý\œ^[Y[]SX™[ˆ^[Y[[^Nˆ^[Y[[^\Ë›[™ÝOOHHÈ^[Y[[^\ÖÌHˆ[ˆ^[Y[[^SX™[ˆ^[Y[[^\Ë›[™ÝˆHÈ	ÓZ^Y	Èˆ[ˆÜ›ÙXÝX\ˆ[™Yš[™YˆØÛÛ[Z\ÜÚ[Û•[š]šXÙ\Îˆ[™Yš[™YˆØÛÛ[Z\ÜÚ[Û•[š][™\Îˆ[™Yš[™YˆÜ^[Y[]\Îˆ[™Yš[™YˆÜ^[Y[]SX™[Îˆ[™Yš[™YˆÜ^[Y[[^\Îˆ[™Yš[™YˆNÂˆJNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆØ[\Ù›Ü˜ÙPœ›ÚÙ\”™YÚ\Ý\•[˜ØXÚY
+›ÙK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝ[Z]HX]›Z[Š[X™\Š›ÙK›[Z]
+HŒÌ
+NÂˆÛÛœÝÛ[™R][Q\ØÜšX™K›ÙXÝ\ØÜšX™WHH]ØZ]›ÛZ\ÙK˜[
+ÂˆØ[\Ù›Ü˜ÙSØš™XÝšY[ÊÈØš™XÝ˜[YNˆ	ÔÕSWÓ[™WÒ][W×ØÉÈJK˜Ø]Ú
+
+
+HOˆ
+ÈšY[Îˆ×HJJKˆØ[\Ù›Ü˜ÙSØš™XÝšY[ÊÈØš™XÝ˜[YNˆ	Ô›ÙXÝ‰ÈJK˜Ø]Ú
+
+
+HOˆ
+ÈšY[Îˆ×HJJKˆJNÂˆÛÛœÝ[™R][U[ÛQšY[Hš[™\Ú›Ø\™[ÛQšY[
+[™R][Q\ØÜšX™K™šY[È×K	Û[™R][IÊNÂˆÛÛœÝ›ÙXÝ[ÛQšY[Hš[™\Ú›Ø\™[ÛQšY[
+›ÙXÝ\ØÜšX™K™šY[È×K	Ü›ÙXÝ	ÊNÂˆÛÛœÝ˜]]™U[ÛTÙ[XÝHÂˆ[™R][U[ÛQšY[ˆ›ÙXÝ[ÛQšY[È›ÙXÝ×Ü‹‰Ü›ÙXÝ[ÛQšY[Xˆ[ˆK™š[\Š›ÛÛX[ŠNÂˆÛÛœÝ[\›Ù™šXÙPÛÛ™][ÛˆH]ØZ][\›Ù™šXÙTÝ[PXØÙ\ÜÐÛÛ™][ÛŠXØÙ\ÜÐÛÛ^
+NÂˆÛÛœÝÚ\™PÛ]\ÙHH[\›Ù™šXÙPÛÛ™][ÛˆÈÒT‘H	Ú[\›Ù™šXÙPÛÛ™][ÛŸXˆ	ÉÎÂˆÛÛœÝÝ[\ÈH]ØZ]]Y\žT›ÝÜÊˆˆÑSPÕY˜[YK[]™\žWÑ]W×ØË^[Y[Ñ]W×ØË^Y\—Ô^WÕ\›WÑ]W×ØÂˆ”“ÓHÝ[W×ØÂˆ	ÝÚ\™PÛ]\Ù_BˆÔ‘Tˆ–H[]™\žWÑ]W×ØÈTÐÈ•SÈTÕˆSRU	Û[Z]BˆˆÈ[Z]Kˆ
+NÂˆÛÛœÝÝ[SX\HØš™XÝ™œ›ÛQ[šY\ÊÝ[\Ë›X\
+
+Ý[JHOˆÜÝ[K’YÝ[WJJNÂˆÛÛœÝÝ[RYÈHÝ[\Ë›X\
+
+Ý[JHOˆÝ[K’Y
+NÂˆYˆ
+\Ý[RYË›[™Ý
+H™]\›ˆÈ›ÝÜÎˆ×HNÂ‚ˆÛÛœÝÝ[PÚ[šÜÈHÚ[šÒYÊÝ[RYÊNÂˆÛÛœÝÛ[™R][PÚ[šÜË^Y\œ›ÚÙ\Ú[šÜË^Y\”^[Y[Ú[šÜË^Y\’[›ÚXÙPÚ[šÜ×HH]ØZ]›ÛZ\ÙK˜[
+ÂˆÛÛ\ÜÚ]T]Y\žT›ÝÜÊˆÝ[PÚ[šÜË›X\
+
+Ú[šÊHOˆÂˆÛÛœÝYÈHÚ[šË›X\
+
+Y
+HOˆ	ÉÚYIØ
+Kš›Ú[Š	Ë	ÊNÂˆ™]\›ˆÂˆÛÜ[ˆˆÑSPÕ	ÖÉÒY	Ë	Ó˜[YIË	ÔÕSW×ØÉË	Ô›ÙXÝ×Ü‹“˜[YIË	Ô›ÙXÝ×Ü‹‘˜[Z[IË	ÔÝ\Y\—Ò[›ÚXÙW×ØÉËˆ‹‹›˜]]™U[ÛTÙ[XÝˆKš›Ú[Š	Ë	Ê_KˆÝ\Y\—Ðœ›ÚÙ\—×ØËÝ\Y\œ×Ðœ›ÚÙ\œ×ÐÛÛ[Z\ÜÚ[Û—Ô\—Õ[š]×ØËˆ]X[]WÑ[]™\™YÔ\—Ð‘—×ØË]X[]W×ØË]X[]WÚ[—ÓU×ØËÛÛ[Z\ÜÚ[Û—ÐÛÜÝ×ØËØ[˜Ù[Y×ØËˆ^Y\œ×Ðœ›ÚÙ\—×ØË^Y\—Ðœ›ÚÙ\—×ØË^Y\œ×Ðœ›ÚÙ\œ×ÐÛÛ[Z\ÜÚ[Û—Ô\—Õ[š]×ØËˆ^Y\œ×Ðœ›ÚÙ\œ×ÐÛÛ[Z\ÜÚ[Û—Ó[\Ý[W×ØÂˆ”“ÓHÕSWÓ[™WÒ][W×ØÂˆÒT‘HÕSW×ØÈSˆ
+	ÚYßJBˆSRULˆˆ[Z]ˆLˆNÂˆJKˆ
+KˆÛÛ\ÜÚ]T]Y\žT›ÝÜÊˆÝ[PÚ[šÜË›X\
+
+Ú[šÊHOˆÂˆÛÛœÝYÈHÚ[šË›X\
+
+Y
+HOˆ	ÉÚYIØ
+Kš›Ú[Š	Ë	ÊNÂˆ™]\›ˆÂˆÛÜ[ˆˆÑSPÕY˜[YKÕSW×ØË^Y\—Ðœ›ÚÙ\—×ØÂˆ”“ÓHÕSWÐ^Y\—Ðœ›ÚÙ\—×ØÂˆÒT‘HÕSW×ØÈSˆ
+	ÚYßJBˆSRULˆˆ[Z]ˆLˆNÂˆJKˆ
+KˆÛÛ\ÜÚ]T]Y\žT›ÝÜÊˆÝ[PÚ[šÜË›X\
+
+Ú[šÊHOˆÂˆÛÛœÝYÈHÚ[šË›X\
+
+Y
+HOˆ	ÉÚYIØ
+Kš›Ú[Š	Ë	ÊNÂˆ™]\›ˆÂˆÛÜ[ˆˆÑSPÕÕSW×ØË]W×ØÂˆ”“ÓH^[Y[×ØÂˆÒT‘HÕSW×ØÈSˆ
+	ÚYßJHS‘Ý\Y\—Ò[›ÚXÙW×ØÈH[ˆÔ‘Tˆ–H]W×ØÈTÐÂˆSRULˆˆ[Z]ˆLˆNÂˆJKˆ
+KˆÛÛ\ÜÚ]T]Y\žT›ÝÜÊˆÝ[PÚ[šÜË›X\
+
+Ú[šÊHOˆÂˆÛÛœÝYÈHÚ[šË›X\
+
+Y
+HOˆ	ÉÚYIØ
+Kš›Ú[Š	Ë	ÊNÂˆ™]\›ˆÂˆÛÜ[ˆˆÑSPÕÕSW×ØË[›ÚXÙWÑYWÑ]W×ØÂˆ”“ÓH[›ÚXÙW×ØÂˆÒT‘HÕSW×ØÈSˆ
+	ÚYßJBˆÔ‘Tˆ–H[›ÚXÙWÑYWÑ]W×ØÈTÐÂˆSRULˆˆ[Z]ˆLˆNÂˆJKˆ
+KˆJNÂ‚ˆÛÛœÝ[™R][\ÈH[™R][PÚ[šÜË™›]
+
+NÂˆÛÛœÝ^Y\œ›ÚÙ\œÈH^Y\œ›ÚÙ\Ú[šÜË™›]
+
+NÂˆÛÛœÝ^Y\”^[Y[ÈH^Y\”^[Y[Ú[šÜË™›]
+
+NÂˆÛÛœÝ^Y\’[›ÚXÙ\ÈH^Y\’[›ÚXÙPÚ[šÜË™›]
+
+NÂˆÛÛœÝXØÛÝ[YÈHË‹‹›™]ÈÙ]
+Ë‹‹›[™R][\Ë›X\
+
+][JHOˆ][K”Ý\Y\—Ðœ›ÚÙ\—×ØÊK™š[\Š›ÛÛX[ŠK‹‹›[™R][\Ë›X\
+
+][JHOˆ][K^Y\œ×Ðœ›ÚÙ\—×ØÈ][K^Y\—Ðœ›ÚÙ\—×ØÊK™š[\Š›ÛÛX[ŠK‹‹˜^Y\œ›ÚÙ\œË›X\
+
+][JHOˆ][K^Y\—Ðœ›ÚÙ\—×ØÊK™š[\Š›ÛÛX[ŠWJWNÂ‚ˆÛÛœÝXØÛÝ[Ú[šÜÈH]ØZ]ÛÛ\ÜÚ]T]Y\žT›ÝÜÊˆÚ[šÒYÊXØÛÝ[YÊK›X\
+
+Ú[šÊHOˆÂˆÛÛœÝYÈHÚ[šË›X\
+
+Y
+HOˆ	ÉÚYIØ
+Kš›Ú[Š	Ë	ÊNÂˆ™]\›ˆYÂˆÈÂˆÛÜ[ˆÑSPÕY˜[YKY[—Ðœ›ÚÙ\—×ØËY[—Ðœ›ÚÙ\—ÐÛÛ\[žW×ØÈ”“ÓHXØÛÝ[ÒT‘HYSˆ
+	ÚYßJHS‘[˜XÝ]™WÔÝ\Ü[™Y×ØÈH˜[ÙXˆÛÙ˜Z[ˆYKˆBˆˆ[ÂˆJKˆ
+NÂˆÛÛœÝXØÛÝ[X\HßNÂˆÛÛœÝXØÛÝ[›YÓX\HßNÂˆ›Üˆ
+ÛÛœÝXØÛÝ[ÙˆXØÛÝ[Ú[šÜË™›]
+
+JHÂˆÛÛœÝ›YÜÈHÂˆY[œ›ÚÙ\’[™]šYX[ˆXØÛÝ[’Y[—Ðœ›ÚÙ\—×ØÈOOHYKˆY[œ›ÚÙ\ÛÛ\[žNˆXØÛÝ[’Y[—Ðœ›ÚÙ\—ÐÛÛ\[žW×ØÈOOHYKˆNÂˆXØÛÝ[X\ØXØÛÝ[’YHHXØÛÝ[“˜[YNÂˆXØÛÝ[X\ÔÝš[™ÊXØÛÝ[’Y
+KœÛXÙJMJWHHXØÛÝ[“˜[YNÂˆXØÛÝ[›YÓX\ØXØÛÝ[’YHH›YÜÎÂˆXØÛÝ[›YÓX\ÔÝš[™ÊXØÛÝ[’Y
+KœÛXÙJMJWHH›YÜÎÂˆB‚ˆÛÛœÝÝ\Y\’[›ÚXÙRYÈHË‹‹›™]ÈÙ]
+[™R][\Ë›X\
+
+][JHOˆ][K”Ý\Y\—Ò[›ÚXÙW×ØÊK™š[\Š›ÛÛX[ŠJWNÂˆÛÛœÝ^[Y[]PžR[›ÚXÙHHßNÂˆÛÛœÝ^[Y[Ú[šÜÈH]ØZ]ÛÛ\ÜÚ]T]Y\žT›ÝÜÊˆÚ[šÒYÊÝ\Y\’[›ÚXÙRYÊK›X\
+
+Ú[šÊHOˆÂˆÛÛœÝYÈHÚ[šË›X\
+
+Y
+HOˆ	ÉÚYIØ
+Kš›Ú[Š	Ë	ÊNÂˆ™]\›ˆYÂˆÈÂˆÛÜ[ˆÑSPÕÝ\Y\—Ò[›ÚXÙW×ØË]W×ØÈ”“ÓH^[Y[×ØÈÒT‘HÝ\Y\—Ò[›ÚXÙW×ØÈSˆ
+	ÚYßJHÔ‘Tˆ–H]W×ØÈTÐØˆÛÙ˜Z[ˆYKˆBˆˆ[ÂˆJKˆ
+NÂˆ›Üˆ
+ÛÛœÝ^[Y[Ùˆ^[Y[Ú[šÜË™›]
+
+JHÂˆYˆ
+^[Y[”Ý\Y\—Ò[›ÚXÙW×ØÈ	‰ˆ\^[Y[]PžR[›ÚXÙVÜ^[Y[”Ý\Y\—Ò[›ÚXÙW×Ø×JH^[Y[]PžR[›ÚXÙVÜ^[Y[”Ý\Y\—Ò[›ÚXÙW×Ø×HH^[Y[‘]W×ØÎÂˆB‚ˆÛÛœÝ^Y\”^[Y[]PžTÝ[HHßNÂˆ›Üˆ
+ÛÛœÝ^[Y[Ùˆ^Y\”^[Y[ÊHÂˆYˆ
+^[Y[”ÕSW×ØÈ	‰ˆX^Y\”^[Y[]PžTÝ[VÜ^[Y[”ÕSW×Ø×JH^Y\”^[Y[]PžTÝ[VÜ^[Y[”ÕSW×Ø×HH^[Y[‘]W×ØÎÂˆBˆÛÛœÝ^Y\’[›ÚXÙQYQ]PžTÝ[HHßNÂˆ›Üˆ
+ÛÛœÝ[›ÚXÙHÙˆ^Y\’[›ÚXÙ\ÊHÂˆYˆ
+[›ÚXÙK”ÕSW×ØÈ	‰ˆX^Y\’[›ÚXÙQYQ]PžTÝ[VÚ[›ÚXÙK”ÕSW×Ø×JH^Y\’[›ÚXÙQYQ]PžTÝ[VÚ[›ÚXÙK”ÕSW×Ø×HH[›ÚXÙK’[›ÚXÙWÑYWÑ]W×ØÎÂˆB‚ˆÛÛœÝ^Y\œ›ÚÙ\œÐžTÝ[HHßNÂˆ›Üˆ
+ÛÛœÝ][HÙˆ^Y\œ›ÚÙ\œÊHÂˆYˆ
+Z][K”ÕSW×ØÊHÛÛ[YNÂˆYˆ
+X^Y\œ›ÚÙ\œÐžTÝ[VÚ][K”ÕSW×Ø×JH^Y\œ›ÚÙ\œÐžTÝ[VÚ][K”ÕSW×Ø×HH×NÂˆ^Y\œ›ÚÙ\œÐžTÝ[VÚ][K”ÕSW×Ø×Kœ\Ú
+][JNÂˆB‚ˆÛÛœÝ˜]Ô›ÝÜÈH×NÂˆÛÛœÝš[˜[˜ÚX[Ø\›š[™ÜÈH™]ÈÙ]
+
+NÂˆ›Üˆ
+ÛÛœÝ][HÙˆ[™R][\ÊHÂˆÛÛœÝÝ[HHÝ[SX\Ú][K”ÕSW×Ø×NÂˆYˆ
+\Ý[JHÛÛ[YNÂˆÛÛœÝ˜]]™T]X[]HH˜]]™Qš[˜[˜ÚX[]X[]J][KÂˆÝ[R\Ñ[]™\žNˆH\Ý[K‘[]™\žWÑ]W×ØËˆ[™R][U[ÛQšY[ˆ›ÙXÝ[ÛQšY[ˆJNÂˆÛÛœÝ]HH˜]]™T]X[]Kœ]X[]NÂˆÛÛœÝ]X[]U[š]H˜]]™T]X[]K[š]Ù“YX\Ý\™H	ÕSÓH›ÝÙ]	ÎÂˆYˆ
+˜]]™T]X[]KØ\›š[™ÊHš[˜[˜ÚX[Ø\›š[™ÜË˜Y
+	ÜÝ[K“˜[YH	ÔÕSIßH0­È	Ú][K“˜[YH][K’YNˆ	Û˜]]™T]X[]KØ\›š[™ßX
+NÂˆÛÛœÝÝ\Y\[[Ý[H][KØ[˜Ù[Y×ØÈÈˆœ›ÚÙ\[[Ý[
+][K”Ý\Y\œ×Ðœ›ÚÙ\œ×ÐÛÛ[Z\ÜÚ[Û—Ô\—Õ[š]×ØË]JNÂˆYˆ
+][K”Ý\Y\—Ðœ›ÚÙ\—×ØÈ	‰ˆÝ\Y\[[Ý[OOH
+HÂˆ˜]Ô›ÝÜËœ\Ú
+ÂˆYˆÝ\Y\‹IÚ][K’YXˆÝ[RYˆ][K”ÕSW×ØËˆÝ[S˜[YNˆÝ[K“˜[YKˆœ›ÚÙ\’Yˆ][K”Ý\Y\—Ðœ›ÚÙ\—×ØËˆ›ÙXÝ˜[YNˆ][VÉÔ›ÙXÝ×Ü‰×OË“˜[YH][K“˜[YH	ø %	Ëˆ›ÙXÝ˜[Z[Nˆ][VÉÔ›ÙXÝ×Ü‰×OË‘˜[Z[H][VÉÔ›ÙXÝ×Ü‰×OË“˜[YH][K“˜[YH	ø %	Ëˆ™”]X[]Nˆ]H[ˆ]X[]U[š]ˆ[]™\žQ]NˆÝ[K‘[]™\žWÑ]W×ØËˆœ›ÚÙ\•\Nˆ	ÔÝ\Y\ˆœ›ÚÙ\‰Ëˆœ›ÚÙ\“˜[YNˆXØÛÝ[X\Ú][K”Ý\Y\—Ðœ›ÚÙ\—×Ø×H][K”Ý\Y\—Ðœ›ÚÙ\—×ØËˆY[œ›ÚÙ\’[™]šYX[ˆXØÛÝ[›YÓX\Ú][K”Ý\Y\—Ðœ›ÚÙ\—×Ø×OËšY[œ›ÚÙ\’[™]šYX[˜[ÙKˆY[œ›ÚÙ\ÛÛ\[žNˆXØÛÝ[›YÓX\Ú][K”Ý\Y\—Ðœ›ÚÙ\—×Ø×OËšY[œ›ÚÙ\ÛÛ\[žH˜[ÙKˆÛÛ[Z\ÜÚ[Û•[š]šXÙNˆ][K”Ý\Y\œ×Ðœ›ÚÙ\œ×ÐÛÛ[Z\ÜÚ[Û—Ô\—Õ[š]×ØÈÏÈ[ˆÛÛ[Z\ÜÚ[Û[[Ý[ˆÝ\Y\[[Ý[ˆ^[Y[]Nˆ^[Y[]PžR[›ÚXÙVÚ][K”Ý\Y\—Ò[›ÚXÙW×Ø×H[ˆ^[Y[]SX™[ˆ	ÔZY]IËˆJNÂˆB‚ˆÛÛœÝ^Y\œ›ÚÙ\’YH][K^Y\œ×Ðœ›ÚÙ\—×ØÈ][K^Y\—Ðœ›ÚÙ\—×ØÎÂˆÛÛœÝ\ÔÝ\Y\œ›ÚÙ\•[š]H[X™\Š][K”Ý\Y\œ×Ðœ›ÚÙ\œ×ÐÛÛ[Z\ÜÚ[Û—Ô\—Õ[š]×ØÈ
+HOOHÂˆÛÛœÝ^Y\”\•[š][[Ý[Hœ›ÚÙ\[[Ý[
+][K^Y\œ×Ðœ›ÚÙ\œ×ÐÛÛ[Z\ÜÚ[Û—Ô\—Õ[š]×ØË]JNÂˆÛÛœÝ^Y\“[\Ý[P[[Ý[H[X™\Š][K^Y\œ×Ðœ›ÚÙ\œ×ÐÛÛ[Z\ÜÚ[Û—Ó[\Ý[W×ØÈ
+NÂˆÛÛœÝ^Y\[[Ý[H^Y\“[\Ý[P[[Ý[^Y\”\•[š][[Ý[ÂˆYˆ
+^Y\œ›ÚÙ\’Y	‰ˆ^Y\[[Ý[OOH
+HÂˆ˜]Ô›ÝÜËœ\Ú
+ÂˆYˆ^Y\‹IÚ][K’YXˆÝ[RYˆ][K”ÕSW×ØËˆÝ[S˜[YNˆÝ[K“˜[YKˆœ›ÚÙ\’Yˆ^Y\œ›ÚÙ\’Yˆ›ÙXÝ˜[YNˆ][VÉÔ›ÙXÝ×Ü‰×OË“˜[YH][K“˜[YH	ø %	Ëˆ›ÙXÝ˜[Z[Nˆ][VÉÔ›ÙXÝ×Ü‰×OË‘˜[Z[H][VÉÔ›ÙXÝ×Ü‰×OË“˜[YH][K“˜[YH	ø %	Ëˆ™”]X[]Nˆ]H[ˆ]X[]U[š]ˆ[]™\žQ]NˆÝ[K‘[]™\žWÑ]W×ØËˆœ›ÚÙ\•\Nˆ	Ð^Y\ˆœ›ÚÙ\‰Ëˆœ›ÚÙ\“˜[YNˆXØÛÝ[X\Ø^Y\œ›ÚÙ\’YH^Y\œ›ÚÙ\’YˆY[œ›ÚÙ\’[™]šYX[ˆXØÛÝ[›YÓX\Ø^Y\œ›ÚÙ\’YOËšY[œ›ÚÙ\’[™]šYX[˜[ÙKˆY[œ›ÚÙ\ÛÛ\[žNˆXØÛÝ[›YÓX\Ø^Y\œ›ÚÙ\’YOËšY[œ›ÚÙ\ÛÛ\[žH˜[ÙKˆÛÛ[Z\ÜÚ[Û•[š]šXÙNˆ][K^Y\œ×Ðœ›ÚÙ\œ×ÐÛÛ[Z\ÜÚ[Û—Ô\—Õ[š]×ØÈÏÈ
+]HÈ^Y\[[Ý[È]Hˆ[
+KˆÛÛ[Z\ÜÚ[Û[[Ý[ˆ^Y\[[Ý[ˆ^[Y[]NˆÝ[K”^[Y[Ñ]W×ØÈ^Y\”^[Y[]PžTÝ[VÚ][K”ÕSW×Ø×H[ˆ^[Y[]SX™[ˆ	Ô™XÙZ]™Y]IËˆ^[Y[[^Nˆ^[Y[[^Q^\ÊÝ[K”^[Y[Ñ]W×ØÈ^Y\”^[Y[]PžTÝ[VÚ][K”ÕSW×Ø×K^Y\’[›ÚXÙQYQ]PžTÝ[VÚ][K”ÕSW×Ø×HÝ[K^Y\—Ô^WÕ\›WÑ]W×ØÊKˆJNÂˆB‚ˆÛÛœÝÙXÛÛ™\žP[[Ý[HZ\ÔÝ\Y\œ›ÚÙ\•[š]	‰ˆ][KÛÛ[Z\ÜÚ[Û—ÐÛÜÝ×ØÈOH[È[X™\Š][KÛÛ[Z\ÜÚ[Û—ÐÛÜÝ×ØÈ
+HH^Y\”\•[š][[Ý[ˆÂˆÛÛœÝÙXÛÛ™\žPœ›ÚÙ\œÈH
+^Y\œ›ÚÙ\œÐžTÝ[VÚ][K”ÕSW×Ø×H×JK™š[\Š
+œ›ÚÙ\ŠHOˆÂˆYˆ
+Xœ›ÚÙ\‹^Y\—Ðœ›ÚÙ\—×ØÊH™]\›ˆYNÂˆYˆ
+X^Y\œ›ÚÙ\’Y
+H™]\›ˆYNÂˆ™]\›ˆÝš[™Êœ›ÚÙ\‹^Y\—Ðœ›ÚÙ\—×ØÊKœÛXÙJMJHOOHÝš[™Ê^Y\œ›ÚÙ\’Y
+KœÛXÙJMJNÂˆJNÂˆYˆ
+ÙXÛÛ™\žP[[Ý[ˆ	‰ˆÙXÛÛ™\žPœ›ÚÙ\œË›[™Ýˆ
+HÂˆ›Üˆ
+ÛÛœÝœ›ÚÙ\ˆÙˆÙXÛÛ™\žPœ›ÚÙ\œÊHÂˆ˜]Ô›ÝÜËœ\Ú
+ÂˆYˆÙXÛÛ™\žKIÚ][K’YKIØœ›ÚÙ\‹’YXˆÝ[RYˆ][K”ÕSW×ØËˆÝ[S˜[YNˆÝ[K“˜[YKˆœ›ÚÙ\’Yˆœ›ÚÙ\‹^Y\—Ðœ›ÚÙ\—×ØÈ[ˆ›ÙXÝ˜[YNˆ][VÉÔ›ÙXÝ×Ü‰×OË“˜[YH][K“˜[YH	ø %	Ëˆ›ÙXÝ˜[Z[Nˆ][VÉÔ›ÙXÝ×Ü‰×OË‘˜[Z[H][VÉÔ›ÙXÝ×Ü‰×OË“˜[YH][K“˜[YH	ø %	Ëˆ™”]X[]Nˆ]H[ˆ]X[]U[š]ˆ[]™\žQ]NˆÝ[K‘[]™\žWÑ]W×ØËˆœ›ÚÙ\•\Nˆ	ÔÙXÛÛ™\žH^Y\ˆœ›ÚÙ\‰Ëˆœ›ÚÙ\“˜[YNˆXØÛÝ[X\Øœ›ÚÙ\‹^Y\—Ðœ›ÚÙ\—×Ø×Hœ›ÚÙ\‹^Y\—Ðœ›ÚÙ\—×ØÈ	ÔÙXÛÛ™\žH^Y\ˆœ›ÚÙ\‰ËˆY[œ›ÚÙ\’[™]šYX[ˆXØÛÝ[›YÓX\Øœ›ÚÙ\‹^Y\—Ðœ›ÚÙ\—×Ø×OËšY[œ›ÚÙ\’[™]šYX[˜[ÙKˆY[œ›ÚÙ\ÛÛ\[žNˆXØÛÝ[›YÓX\Øœ›ÚÙ\‹^Y\—Ðœ›ÚÙ\—×Ø×OËšY[œ›ÚÙ\ÛÛ\[žH˜[ÙKˆÛÛ[Z\ÜÚ[Û•[š]šXÙNˆ]HÈÙXÛÛ™\žP[[Ý[È]Hˆ[ˆÛÛ[Z\ÜÚ[Û[[Ý[ˆÙXÛÛ™\žP[[Ý[ˆ^[Y[]NˆÝ[K”^[Y[Ñ]W×ØÈ^Y\”^[Y[]PžTÝ[VÚ][K”ÕSW×Ø×H[ˆ^[Y[]SX™[ˆ	Ô™XÙZ]™Y]IËˆ^[Y[[^Nˆ^[Y[[^Q^\ÊÝ[K”^[Y[Ñ]W×ØÈ^Y\”^[Y[]PžTÝ[VÚ][K”ÕSW×Ø×K^Y\’[›ÚXÙQYQ]PžTÝ[VÚ][K”ÕSW×Ø×HÝ[K^Y\—Ô^WÕ\›WÑ]W×ØÊKˆJNÂˆBˆBˆB‚ˆÛÛœÝ›ÝÜÈHÛÛXš[™Pœ›ÚÙ\ÛÛ[Z\ÜÚ[Û”›ÝÜÊ˜]Ô›ÝÜÊNÂˆ›ÝÜËœÛÜ
+
+KŠHOˆÝš[™Ê‹™[]™\žQ]H	ÉÊK›ØØ[PÛÛ\\™JÝš[™ÊK™[]™\žQ]H	ÉÊJJNÂˆ™]\›ˆÈ›ÝÜËØ\›š[™ÜÎˆË‹‹™š[˜[˜ÚX[Ø\›š[™Ü×HNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆØ[\Ù›Ü˜ÙPœ›ÚÙ\”™YÚ\Ý\‘[
+›ÙK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝ[Z]HX]›Z[Š[X™\Š›ÙK›[Z]
+HŒÌ
+NÂˆÛÛœÝØXÚYH]ØZ]ØXÚYØ[\Ù›Ü˜ÙU˜[YJÂˆ˜[Y\ÜXÙNˆ	ÜØ[\Ù›Ü˜ÙKXœ›ÚÙ\‹\™YÚ\Ý\‰ËˆÙXÛÛ™ÎˆŒˆ^[ØYˆÈ[Z]KˆYÜÎˆÉÜØ[\Ù›Ü˜ÙN˜œ›ÚÙ\‹\™YÚ\Ý\‰Ë	ÜØ[\Ù›Ü˜ÙNœÝ[IË	ÜØ[\Ù›Ü˜ÙN˜XØÛÝ[	×Kˆ›ÙKˆ™\KˆXØÙ\ÜÐÛÛ^ˆØY\Žˆ
+
+HOˆØ[\Ù›Ü˜ÙPœ›ÚÙ\”™YÚ\Ý\•[˜ØXÚY
+È[Z]K™\KXØÙ\ÜÐÛÛ^
+KˆJNÂˆ™]\›ˆØXÚY˜[YNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆYÙPØ\Xš[]Y\ÊÛÛ^
+HÂˆÛÛœÝ[šY\ÈH]ØZ]›ÛZ\ÙK˜[
+Âˆ	ÚYÙWØ›ÛÚ×ÛX[˜YÙIËˆ	ÚYÙWÜÙ][Y[ÛX[˜YÙIËˆ	ÚYÙWØÛÜÙWØ\›Ý™IËˆ	ÚYÙWØYZ[‰ËˆK›X\
+\Þ[˜È
+Ø\Xš[]JHOˆØØ\Xš[]K]ØZ]\Ù\’\ÐØ\Xš[]JÛÛ^˜ÛY[ÛÛ^œ›Ùš[KØ\Xš[]JWJJNÂˆ™]\›ˆØš™XÝ™œ›ÛQ[šY\Ê[šY\ÊNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆYÙQ\ÚÑ[]J›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ™]\›ˆÂˆ]Nˆ]ØZ][™RYÙQ\ÚÑ[]J›ÙKÛÛ^œ›Ùš[KÂˆÛY[ˆÛÛ^˜ÛY[ˆØ\Xš[]Y\Îˆ]ØZ]YÙPØ\Xš[]Y\ÊÛÛ^
+KˆJKˆNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆYÙSX\šÙ]Ê›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆYˆ
+›ÙK˜XÝ[ÛˆOOH	Ú[[YÙ[˜ÙWØœšYY‰ÊH™]\›ˆÈ]Nˆ]ØZ]ØYX\šÙ][[YÙ[˜ÙPœšYYŠÛÛ^˜ÛY[›ÙJHNÂˆYˆ
+›ÙK˜XÝ[ÛˆOOH	Ú[[YÙ[˜ÙWØÝ\™IÊH™]\›ˆÈ]Nˆ]ØZ]ØYX\šÙ][[YÙ[˜ÙPÝ\™JÛÛ^˜ÛY[›ÙJHNÂˆYˆ
+›ÙK˜XÝ[ÛˆOOH	Ú[[YÙ[˜ÙWÝ˜[X][Û‰ÊH™]\›ˆÈ]Nˆ]ØZ]ØYÛÝ™\›™YX\šÙ]˜[X][ÛŠÛÛ^˜ÛY[›ÙJHNÂˆYˆ
+›ÙK˜XÝ[ÛˆOOH	Ù›ÜØ\™Ù˜[˜XÚ×ÜØ]™IÊHÂˆ]ØZ]™\]Z\™PØ\Xš[]JÛÛ^˜ÛY[ÛÛ^œ›Ùš[K	ÚYÙWØ›ÛÚ×ÛX[˜YÙIË	ÒYÙH›ÛÚÈX[˜YÙ[Y[\›Z\ÜÚ[Ûˆ\È™\]Z\™YÈØ]™HH›ÜØ\™˜[˜XÚË‰ÊNÂˆ™]\›ˆÈ]Nˆ]ØZ]Ø]™SX\šÙ]›ÜØ\™˜[˜XÚÊÛÛ^˜ÛY[ÛÛ^œ›Ùš[K›ÙJHNÂˆBˆYˆ
+›ÙK˜XÝ[ÛˆOOH	Ú[[YÙ[˜ÙWØ[\Ü[\×ÙÙ]	ÊH™]\›ˆÈ]Nˆ]ØZ]Ù]X\šÙ][[YÙ[˜ÙP[\[\ÊÛÛ^˜ÛY[
+HNÂˆYˆ
+›ÙK˜XÝ[ÛˆOOH	Ú[[YÙ[˜ÙWØ[\Ü[\×ÜØ]™IÊHÂˆ]ØZ]™\]Z\™PØ\Xš[]JÛÛ^˜ÛY[ÛÛ^œ›Ùš[K	ÚYÙWØYZ[‰Ë	ÒYÙHYZ[š\Ý˜][Ûˆ\›Z\ÜÚ[Ûˆ\È™\]Z\™YÈÚ[™ÙHX\šÙ][\[\Ë‰ÊNÂˆ™]\›ˆÈ]Nˆ]ØZ]Ø]™SX\šÙ][[YÙ[˜ÙP[\[\ÊÛÛ^˜ÛY[ÛÛ^œ›Ùš[K›ÙJHNÂˆBˆYˆ
+›ÙK˜XÝ[ÛˆOOH	Ú[[YÙ[˜ÙWØÝ\™WØÝ]Ý™\—ÜØ]™IÊHÂˆ]ØZ]™\]Z\™PØ\Xš[]JÛÛ^˜ÛY[ÛÛ^œ›Ùš[K	ÚYÙWØYZ[‰Ë	ÒYÙHYZ[š\Ý˜][Ûˆ\›Z\ÜÚ[Ûˆ\È™\]Z\™YÈ\›Ý™HHÝ\™HÝ]Ý™\‹‰ÊNÂˆ™]\›ˆÈ]Nˆ]ØZ]Ø]™SX\šÙ]Ý\™TÚYÝÐÝ]Ý™\ŠÛÛ^˜ÛY[ÛÛ^œ›Ùš[K›ÙJHNÂˆBˆÛÛœÝ]HH]ØZ][™RYÙSX\šÙ]Ê›ÙKÛÛ^œ›Ùš[KÂˆÛY[ˆÛÛ^˜ÛY[ˆØ\Xš[]Y\Îˆ]ØZ]YÙPØ\Xš[]Y\ÊÛÛ^
+KˆJNÂˆYˆ
+ÉØÜ™X]IË	Ý\]IË	Ù[]IË	ÜØ]™WÜÜ™XYÉË	Ý™\šYžWÛ[Û	Ë	ÛX\šÙ]Ü™\ÜÚ[\Ü	×Kš[˜ÛY\ÊÝš[™Ê›ÙK˜XÝ[Ûˆ	ÉÊJJHÂˆ]ØZ]^\™T[[YPØXÚUYÜÊÉÛX\šÙ]ÉË	ÚYÙN›X\šÙ]ÉË	ÛX\šÙ]š[[YÙ[˜ÙIË	ÛX\šÙ]œ[ÙI×JNÂˆBˆ™]\›ˆÈ]HNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆX\šÙ][[YÙ[˜ÙPœšYYŠ›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ™]\›ˆØYX\šÙ][[YÙ[˜ÙPœšYYŠÛÛ^˜ÛY[›ÙJNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆX\šÙ][ÙTÛ˜\ÚÝ
+›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆÛÛœÝÜÛ˜\ÚÝØ\Xš[]Y\×HH]ØZ]›ÛZ\ÙK˜[
+ÂˆØYX\šÙ][ÙTÛ˜\ÚÝ
+ÛÛ^˜ÛY[È‹‹˜›ÙK›Ü˜ÙNˆ™\]Y\Ý›Ü˜Ù\Ô™Yœ™\Ú
+›ÙK™\JHJKˆYÙPØ\Xš[]Y\ÊÛÛ^
+KˆJNÂˆ™]\›ˆÂˆ‹‹œÛ˜\ÚÝˆËÈØ\Xš[]Y\È\™H]XÚYY\ˆHÚ\™YŒ\ÙXÛÛ™X\šÙ]Y]HØXÚH™\ÛÛ™\Ë‚ˆËÈ^H]\Ý™]™\ˆ™HÝÜ™Y[‹Üˆ[š\š]Yœ›ÛK]Ü›ÜÜË]\Ù\ˆØXÚH[žK‚ˆØ\Xš[]Y\ÎˆÂˆYÙWØ›ÛÚ×ÛX[˜YÙNˆØ\Xš[]Y\ÏËšYÙWØ›ÛÚ×ÛX[˜YÙHOOHYKˆYÙWØYZ[ŽˆØ\Xš[]Y\ÏËšYÙWØYZ[ˆOOHYKˆKˆNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆX\šÙ][[YÙ[˜ÙPÝ\™J›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ™]\›ˆØYX\šÙ][[YÙ[˜ÙPÝ\™JÛÛ^˜ÛY[›ÙJNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆX\šÙ]™\ÜØ][ÙÝYJ›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ™]\›ˆØYX\šÙ]™\ÜØ][ÙÝYJÛÛ^˜ÛY[›ÙJNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆX\šÙ]™\Ü[˜[\Ú\Ê›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ™]\›ˆ[˜[^™SX\šÙ]™\ÜXœ˜\žJÛÛ^˜ÛY[ÛÛ^œ›Ùš[K›ÙKÂˆÛ•\ØYÙNˆ
+\ØYÙJHOˆ™XÛÜ™\Ú›Ø\™ZU\ØYÙJÛÛ^˜ÛY[ÛÛ^œ›Ùš[K\ØYÙJKˆJNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆX\šÙ][[YÙ[˜ÙU˜[X][ÛŠ›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ™]\›ˆØYÛÝ™\›™YX\šÙ]˜[X][ÛŠÛÛ^˜ÛY[›ÙJNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆX\šÙ]›ÜØ\™˜[˜XÚÔØ]™J›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ™]\›ˆØ]™SX\šÙ]›ÜØ\™˜[˜XÚÊÛÛ^˜ÛY[ÛÛ^œ›Ùš[K›ÙJNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆX\šÙ][[YÙ[˜ÙP[\[\ÑÙ]
+Ø›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ™]\›ˆÙ]X\šÙ][[YÙ[˜ÙP[\[\ÊÛÛ^˜ÛY[
+NÂŸB‚˜\Þ[˜È[˜Ý[ÛˆX\šÙ][[YÙ[˜ÙP[\[\ÔØ]™J›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ™]\›ˆØ]™SX\šÙ][[YÙ[˜ÙP[\[\ÊÛÛ^˜ÛY[ÛÛ^œ›Ùš[K›ÙJNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆX\šÙ][[YÙ[˜ÙPÝ\™PÝ]Ý™\”Ø]™J›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ™]\›ˆØ]™SX\šÙ]Ý\™TÚYÝÐÝ]Ý™\ŠÛÛ^˜ÛY[ÛÛ^œ›Ùš[K›ÙJNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆX\šÙ][[YÙ[˜ÙP\˜Ú]™T™\^J›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ]ØZ]™\]Z\™PØ\Xš[]JÛÛ^˜ÛY[ÛÛ^œ›Ùš[K	ÚYÙWØYZ[‰Ë	ÒYÙHYZ[š\Ý˜][Ûˆ\›Z\ÜÚ[Ûˆ\È™\]Z\™YÈ™XÛÛ˜Ú[HHXÙ[œÙYX\šÙ]\˜Ú]™K‰ÊNÂˆ™\]Z\™Q^\›˜[XÝ[Û‘Ø]J	ÙÛÛÙÛWÙš]™IÊNÂˆÛÛœÝXØÙ\ÜÕÚÙ[ˆH]ØZ]ÛÛÙÛQš]™SX\šÙ]XØÙ\ÜÕÚÙ[Š
+NÂˆÛÛœÝ™\Ý[H]ØZ][“X\šÙ]™\Ü\˜Ú]™T™\^P˜]Ú
+ÛÛ^˜ÛY[ÂˆXØÙ\ÜÕÚÙ[‹ˆÝ\œÛÜŽˆ›ÙK˜Ý\œÛÜ‹ˆ^XÝY\˜Ú]™Qš[™Ù\œš[ˆ›ÙK˜\˜Ú]™Qš[™Ù\œš[[ˆJNÂˆYˆ
+™\Ý[œ™\^YYÛÝ[ˆ™\Ý[˜œšYYÛÛ\]YÛÝ[ˆ
+HÂˆ]ØZ]^\™T[[YPØXÚUYÜÊÉÛX\šÙ]ÉË	ÚYÙN›X\šÙ]ÉË	ÛX\šÙ]š[[YÙ[˜ÙI×JNÂˆBˆ™]\›ˆ™\Ý[ÂŸB‚˜\Þ[˜È[˜Ý[ÛˆX\šÙ][˜Y^TÛ˜\ÚÝ™]šY]Ê›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ]ØZ]™\]Z\™PØ\Xš[]JÛÛ^˜ÛY[ÛÛ^œ›Ùš[K	ÚYÙWØ›ÛÚ×ÛX[˜YÙIË	ÓX\šÙ]Y]HX[˜YÙ[Y[\›Z\ÜÚ[Ûˆ\È™\]Z\™YÈ™]šY]ÈH›Ýš\Ú[Û˜[\\ˆÛ˜\ÚÝ‰ÊNÂˆ™]\›ˆ™]šY]ÓX\šÙ][˜Y^TÛ˜\ÚÝ
+ÛÛ^œ›Ùš[K›ÙJNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆX\šÙ][˜Y^TÛ˜\ÚÝØ]™J›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ]ØZ]™\]Z\™PØ\Xš[]JÛÛ^˜ÛY[ÛÛ^œ›Ùš[K	ÚYÙWØ›ÛÚ×ÛX[˜YÙIË	ÓX\šÙ]Y]HX[˜YÙ[Y[\›Z\ÜÚ[Ûˆ\È™\]Z\™YÈØ]™HH›Ýš\Ú[Û˜[\\ˆÛ˜\ÚÝ‰ÊNÂˆÛÛœÝØ]™YH]ØZ]Ø]™SX\šÙ][˜Y^TÛ˜\ÚÝ
+ÛÛ^˜ÛY[ÛÛ^œ›Ùš[K›ÙJNÂˆ]ØZ]™XÛÛ˜Ú[SX\šÙ][˜Y^Q]JÛÛ^˜ÛY[›ÙK›X\šÙ]]KÛÛ^œ›Ùš[JK˜Ø]Ú
+
+
+HOˆ
+È[œÙ\YÛÝ[ˆJJNÂˆ]ØZ]^\™T[[YPØXÚUYÜÊÉÛX\šÙ]ÉË	ÚYÙN›X\šÙ]ÉË	ÛX\šÙ]š[[YÙ[˜ÙIË	ÛX\šÙ]œ[ÙIË	ÛX\šÙ]š[˜Y^I×JNÂˆ™]\›ˆØ]™YÂŸB‚˜\Þ[˜È[˜Ý[ÛˆX\šÙ][˜Y^U[Y[[™J›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ™]\›ˆØYX\šÙ][˜Y^U[Y[[™JÛÛ^˜ÛY[›ÙJNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆYÙQ\ÚÔ\œÙS[ÜÊ›ÙHHßJHÂˆ™]\›ˆÈÚÎˆYK‹‹œ\œÙS[ÜÕ^
+›ÙKœ˜]×Ú[œ]›ÙK^›ÙKš[œ]	ÉÊHNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆYÙQ\ÚÑÙ[™\˜]R[›ÚXÙJ›ÙHHßJHÂˆÛÛœÝÙ[™\˜]YHÙ[™\˜]RYÙR[›ÚXÙTŠ›ÙJNÂˆ™]\›ˆÂˆÚÎˆYKˆ˜\ÙMˆÙ[™\˜]Y˜Y™™\‹ÔÝš[™Ê	Ø˜\ÙM	ÊKˆZ[YU\Nˆ	Ø\XØ][Û‹Ü‰Ëˆš[[˜[YNˆÙ[™\˜]Y™š[[˜[YKˆNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆYÙQ\ÚÔØ]™R[›ÚXÙTŠ›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ]ØZ]™\]Z\™PØ\Xš[]JÛÛ^˜ÛY[ÛÛ^œ›Ùš[K	ÚYÙWÜÙ][Y[ÛX[˜YÙIË	ÒYÙHÙ][Y[\›Z\ÜÚ[Ûˆ\È™\]Z\™YÈÝÜ™H[›ÚXÙHØÝ[Y[Ë‰ÊNÂˆ™]\›ˆØ]™RYÙR[›ÚXÙTŠÛÛ^˜ÛY[ÛÛ^œ›Ùš[K›ÙJNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆYÙQ\ÚÔÙ[™[›ÚXÙQ[XZ[
+›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ]ØZ]™\]Z\™PØ\Xš[]JÛÛ^˜ÛY[ÛÛ^œ›Ùš[K	ÚYÙWÜÙ][Y[ÛX[˜YÙIË	ÒYÙHÙ][Y[\›Z\ÜÚ[Ûˆ\È™\]Z\™YÈÙ[™Ù][Y[[›ÚXÙ\Ë‰ÊNÂˆ™]\›ˆÙ[™YÙR[›ÚXÙQ[XZ[Y[\Ý[
+ÛÛ^˜ÛY[ÛÛ^œ›Ùš[K›ÙJNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆYÙQ\ÚÔÙœÔ™\Ü
+›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ™]\›ˆÙ]YÙTÙœÓ[Û™\Ü
+ÛÛ^˜ÛY[›ÙK›[Û
+NÂŸB‚˜\Þ[˜È[˜Ý[ÛˆYÙQ\ÚÔÙœÑš[J›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ™]\›ˆÙ]YÙTÙœÑš[JÛÛ^˜ÛY[›ÙJNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆYÙQ\ÚÔÙœÔÙ[™
+›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ]ØZ]™\]Z\™PØ\Xš[]JÛÛ^˜ÛY[ÛÛ^œ›Ùš[K	ÚYÙWØÛÜÙWØ\›Ý™IË	ÒYÙH[ÛXÛÜÙH\›Ý˜[\›Z\ÜÚ[Ûˆ\È™\]Z\™YÈÙ[™Ñ”È™\ÜË‰ÊNÂˆ™]\›ˆ\›Ý™P[™Ù[™YÙTÙœÔ™\Ü
+ÛÛ^˜ÛY[ÛÛ^œ›Ùš[K›ÙJNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆYÙQ\ÚÔØ[\Ù›Ü˜ÙT\Ú
+›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ]ØZ]™\]Z\™PØ\Xš[]JÛÛ^˜ÛY[ÛÛ^œ›Ùš[K	ÚYÙWØ›ÛÚ×ÛX[˜YÙIË	ÒYÙH›ÛÚÈX[˜YÙ[Y[\›Z\ÜÚ[Ûˆ\È™\]Z\™Y›ÜˆØ[\Ù›Ü˜ÙHÞ[˜Ú›Ûš^˜][Û‹‰ÊNÂˆ™]\›ˆ\ÚYÙTØ[\Ù›Ü˜ÙJÛÛ^˜ÛY[ÛÛ^œ›Ùš[K›ÙJNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆYÙQ\ÚÔØ[\Ù›Ü˜ÙT™]šY]Ê›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ]ØZ]™\]Z\™PØ\Xš[]JÛÛ^˜ÛY[ÛÛ^œ›Ùš[K	ÚYÙWØ›ÛÚ×ÛX[˜YÙIË	ÒYÙH›ÛÚÈX[˜YÙ[Y[\›Z\ÜÚ[Ûˆ\È™\]Z\™Y›ÜˆØ[\Ù›Ü˜ÙH[ØØ][Ûˆ™]šY]ÜË‰ÊNÂˆ™]\›ˆ™]šY]ÒYÙTØ[\Ù›Ü˜ÙJÛÛ^˜ÛY[ÛÛ^œ›Ùš[K›ÙJNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆYÙQ\ÚÔØ[\Ù›Ü˜ÙSX\[™Ê›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆÛÛœÝØ\Xš[]Y\ÈH]ØZ]YÙPØ\Xš[]Y\ÊÛÛ^
+NÂˆ›ÚY›ÙNÂˆ™]\›ˆÈ‹‹Š]ØZ]Ù]YÙTØ[\Ù›Ü˜ÙSX\[™ÊÛÛ^˜ÛY[
+JKØ[“X[˜YÙNˆØ\Xš[]Y\ËšYÙWØYZ[ˆOOHYHNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆYÙQ\ÚÐ\ÜÚ\Ý[
+›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ™]\›ˆ[’YÙP\ÜÚ\Ý[
+ÛÛ^˜ÛY[ÛÛ^œ›Ùš[K›ÙJNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆYÙQ\ÚÐ\ÜÚ\Ý[Ù][™ÜÊ›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆÛÛœÝØ\Xš[]Y\ÈH]ØZ]YÙPØ\Xš[]Y\ÊÛÛ^
+NÂˆ™]\›ˆÈ‹‹Š]ØZ]YÙP\ÜÚ\Ý[Ù][™ÜÊÛÛ^˜ÛY[
+JKØ[“X[˜YÙNˆØ\Xš[]Y\ËšYÙWØYZ[ˆOOHYHNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆYÙQ\ÚÓXZ[[˜[˜ÙPÜ›ÛŠ›ÙHHßK™\HH[
+HÂˆ™\]Z\™PÜ›Û]]Üš^˜][ÛŠ™\JNÂˆ™]\›ˆ[’YÙSXZ[[˜[˜ÙJÝ\X˜\ÙPYZ[ÛY[
+
+KÂˆ›Ü˜ÙRXÙNˆ›ÙK™›Ü˜ÙRXÙHOOHYKˆžT[Žˆ›ÙK™žT[ˆOOHYKˆJNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆX\šÙ]™\Üš]™TÞ[˜ÐÜ›ÛŠØ›ÙHHßK™\HH[
+HÂˆ™\]Z\™PÜ›Û]]Üš^˜][ÛŠ™\JNÂˆ™\]Z\™Q^\›˜[XÝ[Û‘Ø]J	ÙÛÛÙÛWÙš]™IÊNÂˆÛÛœÝÛY[HÝ\X˜\ÙPYZ[ÛY[
+
+NÂˆÛÛœÝXØÙ\ÜÕÚÙ[ˆH]ØZ]ÛÛÙÛQš]™SX\šÙ]XØÙ\ÜÕÚÙ[Š
+NÂˆÛÛœÝ™\Ý[H]ØZ][“X\šÙ]™\Üš]™TÞ[˜ÊÛY[ÈXØÙ\ÜÕÚÙ[ˆJNÂˆYˆ
+™\Ý[œÝ]\ÈOOH	Ù˜Z[Y	ÊHÂˆ›ÝÈ\\œ›ÜŠ	ÔØÚY[YÛÛÙÛHš]™HX\šÙ]\™\ÜÞ[˜Ú›Ûš^˜][ÛˆY›ÝÛÛ\]K‰ËL‹™\Ý[™\œ›ÜÛÙH	ÓPT’ÑUÑ’U‘WÔÖS×ÑRSQ	Ë[™Yš[™YYJNÂˆBˆYˆ
+™\Ý[š[\ÜYÛÝ[ˆ
+H]ØZ]^\™T[[YPØXÚUYÜÊÉÛX\šÙ]ÉË	ÚYÙN›X\šÙ]ÉË	ÛX\šÙ]š[[YÙ[˜ÙI×JNÂˆ]ØZ]™\ÛÛ™T™XÛÝ™\™YÞ\Ý[Q\œ›Ü’[™\ŠÛY[	ÛX\šÙ]™\Üš]™TÞ[˜ÐÜ›Û‰ËÈ™\ÛÛ™Y›ÝYÚˆ™]È]J
+HJK˜Ø]Ú
+
+
+HOˆßJNÂˆ™]\›ˆ™\Ý[ÂŸB‚˜ÛÛœÝÚ]X\Ý\ÛÛ˜XÝ\Ù\ˆH
+Ù\šXÙJHOˆ\Þ[˜È
+›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HOˆÙ\šXÙJ›ÙKXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJJNÂ˜ÛÛœÝX\Ý\ÛÛ˜XÝÓ\ÝHÚ]X\Ý\ÛÛ˜XÝ\Ù\Š\ÝX\Ý\ÛÛ˜XÝÔÙ\šXÙJNÂ˜ÛÛœÝX\Ý\ÛÛ˜XÝ]Z[HÚ]X\Ý\ÛÛ˜XÝ\Ù\ŠÙ]X\Ý\ÛÛ˜XÝÙ\šXÙJNÂ˜ÛÛœÝX\Ý\ÛÛ˜XÝØ]™HHÚ]X\Ý\ÛÛ˜XÝ\Ù\ŠØ]™SX\Ý\ÛÛ˜XÝÙ\šXÙJNÂ˜ÛÛœÝX\Ý\ÛÛ˜XÝXÚ\Ú[ÛˆHÚ]X\Ý\ÛÛ˜XÝ\Ù\ŠXÚYSX\Ý\ÛÛ˜XÝÙ\šXÙJNÂ˜ÛÛœÝX\Ý\ÛÛ˜XÝ]šY[˜ÙT™\\™HHÚ]X\Ý\ÛÛ˜XÝ\Ù\Š™\\™SX\Ý\ÛÛ˜XÝ]šY[˜ÙTÙ\šXÙJNÂ˜ÛÛœÝX\Ý\ÛÛ˜XÝ]šY[˜ÙPÛÛ\]HHÚ]X\Ý\ÛÛ˜XÝ\Ù\ŠÛÛ\]SX\Ý\ÛÛ˜XÝ]šY[˜ÙTÙ\šXÙJNÂ˜ÛÛœÝX\Ý\ÛÛ˜XÝ]šY[˜ÙU\›HÚ]X\Ý\ÛÛ˜XÝ\Ù\ŠÙ]X\Ý\ÛÛ˜XÝ]šY[˜ÙU\›Ù\šXÙJNÂ˜ÛÛœÝX\Ý\ÛÛ˜XÝÜ[ÛœÈHÚ]X\Ý\ÛÛ˜XÝ\Ù\ŠX\Ý\ÛÛ˜XÝÜ[ÛœÔÙ\šXÙJNÂ˜ÛÛœÝX\Ý\ÛÛ˜XÝ™\ÜÙ[Ü™X]HHÚ]X\Ý\ÛÛ˜XÝ\Ù\ŠÜ™X]SX\Ý\ÛÛ˜XÝ™\ÜÙ[Ù\šXÙJNÂ˜ÛÛœÝX\Ý\ÛÛ˜XÝ™Y›YÚHÚ]X\Ý\ÛÛ˜XÝ\Ù\Š™Y›YÚX\Ý\ÛÛ˜XÝÙ\šXÙJNÂ˜ÛÛœÝX\Ý\ÛÛ˜XÝ˜]ÚÜ™X]HHÚ]X\Ý\ÛÛ˜XÝ\Ù\ŠÜ™X]SX\Ý\ÛÛ˜XÝ˜]ÚÙ\šXÙJNÂ˜ÛÛœÝX\Ý\ÛÛ˜XÝšXÙT™\ÛÛ™HHÚ]X\Ý\ÛÛ˜XÝ\Ù\Š™\ÛÛ™SX\Ý\ÛÛ˜XÝšXÙTÙ\šXÙJNÂ˜ÛÛœÝX\Ý\ÛÛ˜XÝšXÙP\HHÚ]X\Ý\ÛÛ˜XÝ\Ù\Š\SX\Ý\ÛÛ˜XÝšXÙTÙ\šXÙJNÂ˜ÛÛœÝX\Ý\ÛÛ˜XÝ™X]\™TØ]™HHÚ]X\Ý\ÛÛ˜XÝ\Ù\ŠØ]™SX\Ý\ÛÛ˜XÝ™X]\™TÙ\šXÙJNÂ˜ÛÛœÝX\Ý\ÛÛ˜XÝ™XÛÛ˜Ú[HHÚ]X\Ý\ÛÛ˜XÝ\Ù\Š™XÛÛ˜Ú[SX\Ý\ÛÛ˜XÝÔÙ\šXÙJNÂ‚˜\Þ[˜È[˜Ý[ÛˆX\Ý\ÛÛ˜XÝ™XÛÛ˜Ú[PÜ›ÛŠ›ÙHHßK™\HH[
+HÂˆ™\]Z\™PÜ›Û]]Üš^˜][ÛŠ™\JNÂˆ™]\›ˆ™XÛÛ˜Ú[SX\Ý\ÛÛ˜XÝÔÙ\šXÙJ›ÙKÂˆÛY[ˆÝ\X˜\ÙPYZ[ÛY[
+
+Kˆ›Ùš[NˆÈYˆ[[XZ[ˆ[\Ù\—Ý\Nˆ	ÜÞ\Ý[IÈKˆJNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆÜXÚX[\›\ÕÛÜšÜÜXÙJ›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆÛÛœÝÝÛÜšÜÜXÙKØ[\›Ý™PÛ]\Ù\×HH]ØZ]›ÛZ\ÙK˜[
+Âˆ\ÝÜXÚX[\›\ÊÈ›Ü˜ÙNˆ›ÙK™›Ü˜ÙHOOHYHJKˆ\Ù\’\ÐØ\Xš[]JÛÛ^˜ÛY[ÛÛ^œ›Ùš[K	ÜÜXÚX[Ý\›\×ØÛ]\ÙWØ\›Ý™IÊKˆJNÂˆÛÛœÝXÝ]™QÙ[™\˜[X[˜YÙ\ˆHÛÛ^œ›Ùš[K\Ù\—Ý\HOOH	ÙÙ[™\˜[ÛX[˜YÙ\‰ÈÈ]ØZ]ØYXÝ]™QÙ[™\˜[X[˜YÙ\ŠÛÛ^˜ÛY[
+Hˆ[ÂˆÛÛœÝØ[\›Ý™T™]š\Ú[ÛœÈHØ[\›Ý™PÛ]\Ù\È	‰ˆ
+\ÐYZ[š\Ý˜]Ü•\Ù\•\JÛÛ^œ›Ùš[K\Ù\—Ý\JHXÝ]™QÙ[™\˜[X[˜YÙ\ËšYOOHÛÛ^œ›Ùš[KšY
+NÂˆ™]\›ˆÂˆ‹‹ÛÜšÜÜXÙKˆØ[“X[˜YÙNˆYKˆØ[‘˜YˆYKˆØ[\›Ý™PÛ]\Ù\ÎˆØ[\›Ý™T™]š\Ú[ÛœËˆØ[\›Ý™T™]š\Ú[ÛœËˆÝ\œ™[\Ù\‘[XZ[ˆÛÛ^œ›Ùš[K™[XZ[	ÉËˆNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆÜXÚX[\›\ÔÝ[[X\žS\Ý
+›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆÛÛœÝÜÝ[[X\žKØÚ[XKØ[\›Ý™PÛ]\Ù\×HH]ØZ]›ÛZ\ÙK˜[
+Âˆ\ÝÜXÚX[\›TÝ[[X\šY\Ê›ÙJKˆ™\ÛÛ™TÜXÚX[\›\ÔØÚ[XJ
+Kˆ\Ù\’\ÐØ\Xš[]JÛÛ^˜ÛY[ÛÛ^œ›Ùš[K	ÜÜXÚX[Ý\›\×ØÛ]\ÙWØ\›Ý™IÊKˆJNÂˆÛÛœÝXÝ]™QÙ[™\˜[X[˜YÙ\ˆHÛÛ^œ›Ùš[K\Ù\—Ý\HOOH	ÙÙ[™\˜[ÛX[˜YÙ\‰ÈÈ]ØZ]ØYXÝ]™QÙ[™\˜[X[˜YÙ\ŠÛÛ^˜ÛY[
+Hˆ[ÂˆÛÛœÝØ[\›Ý™T™]š\Ú[ÛœÈHØ[\›Ý™PÛ]\Ù\È	‰ˆ
+\ÐYZ[š\Ý˜]Ü•\Ù\•\JÛÛ^œ›Ùš[K\Ù\—Ý\JHXÝ]™QÙ[™\˜[X[˜YÙ\ËšYOOHÛÛ^œ›Ùš[KšY
+NÂˆ™]\›ˆÂˆ‹‹œÝ[[X\žKˆ\›\Îˆ
+Ý[[X\žK\›\È×JK›X\
+
+\›JHOˆXØ[\›Ý™T™]š\Ú[ÛœÈ	‰ˆ\›K›™^XÝ[ÛˆOOH	Ü™]šY]×ÜX›\Ú	ÈÈÈ‹‹\›K™^XÝ[ÛŽˆ	ØÛÛ[YIÈHˆ\›JKˆØ[‘˜YˆYKˆØ[\›Ý™PÛ]\Ù\ÎˆØ[\›Ý™T™]š\Ú[ÛœËˆØ[\›Ý™T™]š\Ú[ÛœËˆÝ\œ™[\Ù\‘[XZ[ˆÛÛ^œ›Ùš[K™[XZ[	ÉËˆÛ]\ÙPØ]YÛÜžSÜ[ÛœÎˆØÚ[XK˜Û]\ÙPØ]YÛÜžSÜ[ÛœËˆNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆÜXÚX[\›\ÑØÝ[Y[^Ü
+›ÙHHßK™\K™\ËXØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆÛÛœÝ›Ü›X]HÝš[™Ê›ÙK™›Ü›X]	Ü‰ÊKš[J
+KÓÝÙ\Ø\ÙJ
+NÂˆÛÛœÝÛÝ\˜ÙHHÝš[™Ê›ÙKœÛÝ\˜ÙH	Û]™IÊKš[J
+KÓÝÙ\Ø\ÙJ
+NÂˆYˆ
+VÉÜ‰Ë	ÙØÞ	×Kš[˜ÛY\Ê›Ü›X]
+JH›ÝÈ\\œ›ÜŠ	ÐÚÛÜÙHˆÜˆÛÜ™ØÝ[Y[›Ü›X]‰Ë	ÔÔPÒPSÕT“T×ÑÐÕSQS•Ñ“Ô“PUÒS•SQ	ÊNÂˆYˆ
+VÉÛ]™IË	Ù˜Y	×Kš[˜ÛY\ÊÛÝ\˜ÙJJH›ÝÈ\\œ›ÜŠ	ÐÚÛÜÙHH]™HØÝ[Y[ÜˆØ]™Y˜Y™]šY]Ë‰Ë	ÔÔPÒPSÕT“T×ÑÐÕSQS•ÔÓÕTÑWÒS•SQ	ÊNÂˆYˆ
+ÛÝ\˜ÙHOOH	Ù˜Y	È	‰ˆ›Ü›X]OOH	Ü‰ÊH›ÝÈ\\œ›ÜŠ	ÔØ]™Y˜YÈX^H™HÝÛ›ØYY\ÈØ]\›X\šÙYˆÛ›K‰ËK	ÔÔPÒPSÕT“T×ÑÐÕSQS•ÑQ•Ñ“Ô“PUÔ‘TÕ’PÕQ	ÊNÂˆÛÛœÝ\›HH]ØZ]Ù]ÜXÚX[\›QØÝ[Y[›Ü‘^Ü
+›ÙK\›RYÂˆÛÝ\˜ÙKˆ™]š\Ú[Û’Yˆ›ÙKœ™]š\Ú[Û’Yˆ^XÝY\Ý[ÙYšYY]ˆ›ÙK™^XÝY\Ý[ÙYšYY]ˆ^XÝY™]š\Ú[Û“\Ý[ÙYšYY]ˆ›ÙK™^XÝY™]š\Ú[Û“\Ý[ÙYšYY]ˆ›Ü˜ÙNˆYKˆJNÂˆÛÛœÝÙ[™\˜]YH]ØZ]Ù[™\˜]TÜXÚX[\›\ÑØÝ[Y[
+\›KÂˆ›Ü›X]ˆÛÝ\˜ÙKˆ\XØ]R[™^ˆ›ÙK™\XØ]R[™^ˆJNÂˆ]ØZ]Üš]PYZ[]Y]
+ÛÛ^˜ÛY[ÛÛ^œ›Ùš[K	ÜÜXÚX[Ý\›\×ÙØÝ[Y[Ù^ÜY	Ë[[Âˆ\›PÛÝ[ˆKˆ\›RYˆ\›KšYˆ›Ü›X]ˆÛÝ\˜ÙKˆYÙPÛÝ[ˆ[X™\‹š\Ñš[š]JÙ[™\˜]YœYÙPÛÝ[
+HÈÙ[™\˜]YœYÙPÛÝ[ˆ[ˆÝ]ÛÛYNˆ	ÜÝXØÙ\ÜÉËˆJNÂˆÛÛœÝ\ØÚZQš[[˜[YHHÙ[™\˜]Y™š[[˜[YKœ™\XÙJÖ×—ŒWÑWKÙË	×ÉÊKœ™\XÙJÈ‹ÙË	ÉÊNÂˆ™\ËœÝ]\ÐÛÙHHŒÂˆ™\ËœÙ]XY\Š	ØØXÚKXÛÛ›Û	Ë	Û›Ë\ÝÜ™IÊNÂˆ™\ËœÙ]XY\Š	ØÛÛ[]\IËÙ[™\˜]Y˜ÛÛ[\JNÂˆ™\ËœÙ]XY\Š	ØÛÛ[Y\ÜÜÚ][Û‰Ë]XÚY[Èš[[˜[YOH‰Ø\ØÚZQš[[˜[Y_HŽÈš[[˜[YJUU‹N	ÉÉÙ[˜ÛÙUT’PÛÛ\Û™[
+Ù[™\˜]Y™š[[˜[YJ_X
+NÂˆ›Üˆ
+ÛÛœÝÛ˜[YK˜[YWHÙˆØš™XÝ™[šY\Ê[[Y]žT™\ÜÛœÙRXY\œÊ
+JJH™\ËœÙ]XY\Š˜[YK˜[YJNÂˆ™\Ë™[™
+Ù[™\˜]Y˜Y™™\ŠNÂŸB‚‹ÊŠˆ™]Z[™YÛ›H›Üˆ\ÞYYÓÔÈÛY[È]Ø[HÜšYÚ[˜[›Ý]Kˆ
+‹Â˜\Þ[˜È[˜Ý[ÛˆÜXÚX[\›\Ô‘^Ü
+›ÙHHßK™\K™\ËXØÙ\ÜÐÛÛ^H[
+HÂˆ™]\›ˆÜXÚX[\›\ÑØÝ[Y[^Ü
+È‹‹˜›ÙK›Ü›X]ˆ	Ü‰ËÛÝ\˜ÙNˆ›ÙKœÛÝ\˜ÙH	Û]™IÈK™\K™\ËXØÙ\ÜÐÛÛ^
+NÂŸB‚˜\Þ[˜È[˜Ý[ÛˆÜXÚX[\›\ÓÜ[ÛœÊ›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ™]\›ˆÈÜ[ÛœÎˆ]ØZ]ÜXÚX[\›SÜ[ÛœÊ›ÙJHNÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ\ÔÜXÚX[\›PÛ]\ÙP\›Ý™\ŠÛÛ^
+HÂˆÛÛœÝ\ÐØ\Xš[]HH]ØZ]\Ù\’\ÐØ\Xš[]JÛÛ^˜ÛY[ÛÛ^œ›Ùš[K	ÜÜXÚX[Ý\›\×ØÛ]\ÙWØ\›Ý™IÊNÂˆYˆ
+Z\ÐØ\Xš[]JH™]\›ˆ˜[ÙNÂˆÛÛœÝ\ÐYZ[š\Ý˜]ÜˆHÛÛ^œ›Ùš[K\Ù\—Ý\HOOH	ØYZ[š\Ý˜]Ü‰ÎÂˆÛÛœÝXÝ]™QÙ[™\˜[X[˜YÙ\ˆHÛÛ^œ›Ùš[K\Ù\—Ý\HOOH	ÙÙ[™\˜[ÛX[˜YÙ\‰ÂˆÈ]ØZ]ØYXÝ]™QÙ[™\˜[X[˜YÙ\ŠÛÛ^˜ÛY[
+Bˆˆ[Âˆ™]\›ˆ\ÐYZ[š\Ý˜]ÜˆXÝ]™QÙ[™\˜[X[˜YÙ\ËšYOOHÛÛ^œ›Ùš[KšYÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ™\]Z\™TÜXÚX[\›PÛ]\ÙP\›Ý™\ŠÛÛ^
+HÂˆYˆ
+J]ØZ]\ÔÜXÚX[\›PÛ]\ÙP\›Ý™\ŠÛÛ^
+JJH›ÝÈ\\œ›ÜŠ	ÓÛ›HHXÝ]™HÙ[™\˜[X[˜YÙ\ˆÜˆ[ˆYZ[š\Ý˜]ÜˆX^H\›Ý™HÛ]\ÙHÛÜ™[™È[™ZYÜ˜][ÛœË‰ËË	ÔÔPÒPSÕT“T×ÐÓUTÑWÐT“Õ‘T—Ô‘TURT‘Q	ÊNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆÜXÚX[\›Q]Z[
+›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆÛÛœÝÙ]Z[ØÚ[XKØ[\›Ý™PÛ]\Ù\×HH]ØZ]›ÛZ\ÙK˜[
+ÂˆÙ]ÜXÚX[\›Q]Z[
+›ÙK\›RYÈ›Ü˜ÙNˆ›ÙK™›Ü˜ÙHOOHYHJKˆ™\ÛÛ™TÜXÚX[\›\ÔØÚ[XJ
+Kˆ\Ù\’\ÐØ\Xš[]JÛÛ^˜ÛY[ÛÛ^œ›Ùš[K	ÜÜXÚX[Ý\›\×ØÛ]\ÙWØ\›Ý™IÊKˆJNÂˆÛÛœÝXÝ]™QÙ[™\˜[X[˜YÙ\ˆHÛÛ^œ›Ùš[K\Ù\—Ý\HOOH	ÙÙ[™\˜[ÛX[˜YÙ\‰ÈÈ]ØZ]ØYXÝ]™QÙ[™\˜[X[˜YÙ\ŠÛÛ^˜ÛY[
+Hˆ[ÂˆÛÛœÝØ[\›Ý™T™]š\Ú[ÛœÈHØ[\›Ý™PÛ]\Ù\È	‰ˆ
+\ÐYZ[š\Ý˜]Ü•\Ù\•\JÛÛ^œ›Ùš[K\Ù\—Ý\JHXÝ]™QÙ[™\˜[X[˜YÙ\ËšYOOHÛÛ^œ›Ùš[KšY
+NÂˆ™]\›ˆÂˆ‹‹™]Z[ˆØ[‘˜YˆYKˆØ[\›Ý™PÛ]\Ù\ÎˆØ[\›Ý™T™]š\Ú[ÛœËˆØ[\›Ý™T™]š\Ú[ÛœËˆÝ\œ™[\Ù\‘[XZ[ˆÛÛ^œ›Ùš[K™[XZ[	ÉËˆÛ]\ÙPØ]YÛÜžSÜ[ÛœÎˆØÚ[XK˜Û]\ÙPØ]YÛÜžSÜ[ÛœËˆ]YY[˜ÙSÜ[ÛœÎˆØÚ[XK˜]YY[˜ÙSÜ[ÛœËˆÛÝ[žSÜ[ÛœÎˆØÚ[XK˜ÛÝ[žSÜ[ÛœËˆNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆÜXÚX[\›PÛ]\ÙP˜[šÊ›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ™]\›ˆ\ÝÜXÚX[\›PÛ]\ÙP˜[šÊ›ÙJNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆÜXÚX[\›PÛ]\ÙTÚ[Z[\Š›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ™]\›ˆ\ÝÜXÚX[\›PÛ]\ÙTÚ[Z[\Š›ÙK˜Û]\ÙRYÈ[Z]ˆ›ÙK›[Z]JNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆÜXÚX[\›PÛ]\ÙQY]™]šY]Ê›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ™]\›ˆÙ]ÜXÚX[\›PÛ]\ÙQY]™]šY]Ê›ÙKÈØ[”X›\Úˆ]ØZ]\ÔÜXÚX[\›PÛ]\ÙP\›Ý™\ŠÛÛ^
+HJNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆÜXÚX[\›PÛ]\ÙQÛØ˜[X›\Ú
+›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ]ØZ]™\]Z\™TÜXÚX[\›PÛ]\ÙP\›Ý™\ŠÛÛ^
+NÂˆ™]\›ˆX›\ÚÜXÚX[\›PÛ]\ÙQÛØ˜[JÛÛ^˜ÛY[ÛÛ^œ›Ùš[K›ÙJNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆÜXÚX[\›Q[]T™]šY]Ê›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆÛÛœÝÜ[ÛœÈHÈ\Ð\›Ý™\Žˆ]ØZ]\ÔÜXÚX[\›PÛ]\ÙP\›Ý™\ŠÛÛ^
+HNÂˆYˆ
+›ÙK™[]U\HOOH	ØÛ]\ÙIÈ›ÙK™[]U\HOOH	ØÛ]\ÙU™\œÚ[Û‰ÊH™]\›ˆ™]šY]ÔÜXÚX[\›PÛ]\ÙQ[][ÛŠÛÛ^˜ÛY[ÛÛ^œ›Ùš[K›ÙKÜ[ÛœÊNÂˆ™]\›ˆ™]šY]ÔÜXÚX[\›Q[][ÛŠÛÛ^˜ÛY[ÛÛ^œ›Ùš[K›ÙKÜ[ÛœÊNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆÜXÚX[\›SZYÜ˜][Û’[™[ÜžJ›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ]ØZ]™\]Z\™TÜXÚX[\›PÛ]\ÙP\›Ý™\ŠÛÛ^
+NÂˆ™]\›ˆÙ]ÜXÚX[\›SZYÜ˜][Û’[™[ÜžJÈ›Ü˜ÙNˆ›ÙK™›Ü˜ÙHOOHYHJNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆÜXÚX[\›PÛ]\ÙQ˜YØ]™J›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ™]\›ˆØ]™TÜXÚX[\›PÛ]\ÙQ˜Y
+ÛÛ^˜ÛY[ÛÛ^œ›Ùš[K›ÙJNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆÜXÚX[\›PÛ]\ÙP\›Ý™J›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ]ØZ]™\]Z\™TÜXÚX[\›PÛ]\ÙP\›Ý™\ŠÛÛ^
+NÂˆ™]\›ˆ\›Ý™TÜXÚX[\›PÛ]\ÙJÛÛ^˜ÛY[ÛÛ^œ›Ùš[K›ÙJNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆÜXÚX[\›PÛ]\ÙT™]\™J›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ]ØZ]™\]Z\™TÜXÚX[\›PÛ]\ÙP\›Ý™\ŠÛÛ^
+NÂˆ™]\›ˆ™]\™TÜXÚX[\›PÛ]\ÙJÛÛ^˜ÛY[ÛÛ^œ›Ùš[K›ÙJNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆÜXÚX[\›PÛ]\ÙQ[]J›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ™]\›ˆ[]TÜXÚX[\›PÛ]\ÙJÛÛ^˜ÛY[ÛÛ^œ›Ùš[K›ÙKÈ\Ð\›Ý™\Žˆ]ØZ]\ÔÜXÚX[\›PÛ]\ÙP\›Ý™\ŠÛÛ^
+HJNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆÜXÚX[\›PÛ]\ÙQ˜Y\ØØ\™
+›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ™]\›ˆ\ØØ\™ÜXÚX[\›PÛ]\ÙQ˜Y
+ÛÛ^˜ÛY[ÛÛ^œ›Ùš[K›ÙKÈ\Ð\›Ý™\Žˆ]ØZ]\ÔÜXÚX[\›PÛ]\ÙP\›Ý™\ŠÛÛ^
+HJNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆÜXÚX[\›PÛ]\ÙPÛÛœÛÛY][Û“\Ý
+›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ™]\›ˆ\ÝÜXÚX[\›PÛ]\ÙPÛÛœÛÛY][ÛœÊÈ[˜ÛYPÛÜÙYˆ›ÙKš[˜ÛYPÛÜÙYOOHYHJNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆÜXÚX[\›PÛ]\ÙPÛÛœÛÛY][Û”Ý\
+›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ]ØZ]™\]Z\™TÜXÚX[\›PÛ]\ÙP\›Ý™\ŠÛÛ^
+NÂˆ™]\›ˆÝ\ÜXÚX[\›PÛ]\ÙPÛÛœÛÛY][ÛŠÛÛ^˜ÛY[ÛÛ^œ›Ùš[K›ÙJNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆÜXÚX[\›PÛ]\ÙPÛÛœÛÛY][Û”™[[šÊ›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ™]\›ˆ™[[šÔÜXÚX[\›PÛ]\ÙPÛÛœÛÛY][ÛŠÛÛ^˜ÛY[ÛÛ^œ›Ùš[K›ÙJNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆÜXÚX[\›PÛ]\ÙPÛÛœÛÛY][ÛØ[˜Ù[
+›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ]ØZ]™\]Z\™TÜXÚX[\›PÛ]\ÙP\›Ý™\ŠÛÛ^
+NÂˆ™]\›ˆØ[˜Ù[ÜXÚX[\›PÛ]\ÙPÛÛœÛÛY][ÛŠÛÛ^˜ÛY[ÛÛ^œ›Ùš[K›ÙJNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆÜXÚX[\›PÛ]\ÙPÛÛœÛÛY][ÛÛÛ\]J›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ]ØZ]™\]Z\™TÜXÚX[\›PÛ]\ÙP\›Ý™\ŠÛÛ^
+NÂˆ™]\›ˆÛÛ\]TÜXÚX[\›PÛ]\ÙPÛÛœÛÛY][ÛŠÛÛ^˜ÛY[ÛÛ^œ›Ùš[K›ÙJNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆÜXÚX[\›PÛÛ\ÜÚ][Û”Ø]™J›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ›ÝÈ\\œ›ÜŠ	Ñ\™XÝ›Ú™XÝ[ÛˆÛÛ\ÜÚ][Ûˆ\È™]\™YˆØ]™HHÛÛ\]HÜXÚX[\›H™]š\Ú[Ûˆ[œÝXY‰ËK	ÔÔPÒPSÕT“T×ÕÒÓWÔ‘U’TÒSÓ—Ô‘TURT‘Q	ÊNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆÜXÚX[\›SZYÜ˜][Û”™]šY]Ê›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ™]\›ˆ™]šY]ÔÜXÚX[\›SZYÜ˜][ÛŠ›ÙK\›RYÈ›Ú™XÝ[ÛŽˆ›ÙKœ›Ú™XÝ[Ûˆ	Ý\›\Õ^	ÈJNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆÜXÚX[\›SZYÜ˜][Û”Ø]™J›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ™]\›ˆØ]™TÜXÚX[\›SZYÜ˜][Û”™]šY]ÊÛÛ^˜ÛY[ÛÛ^œ›Ùš[K›ÙJNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆÜXÚX[\›SZYÜ˜][Û”Ø]™P[
+›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ™]\›ˆØ]™P[ÜXÚX[\›SZYÜ˜][Û”™]šY]ÊÛÛ^˜ÛY[ÛÛ^œ›Ùš[K›ÙJNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆÜXÚX[\›SZYÜ˜][ÛXÝ]˜]J›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ›ÝÈ\\œ›ÜŠ	Ô›Ú™XÝ[Û‹[]™[XÝ]˜][Ûˆ\È™]\™Yˆ\›Ý™H[™XÝ]˜]HHÛÛ\]HÜXÚX[\›H™]š\Ú[Û‹‰ËK	ÔÔPÒPSÕT“T×ÕÒÓWÔ‘U’TÒSÓ—Ô‘TURT‘Q	ÊNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆÜXÚX[\›SZYÜ˜][Û”™]šY]Ð[
+›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ™]\›ˆ™]šY]ÔÜXÚX[\›SZYÜ˜][Û[
+›ÙK\›RY
+NÂŸB‚˜\Þ[˜È[˜Ý[ÛˆÜXÚX[\›SZYÜ˜][Û”›Û˜XÚÊ›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ›ÝÈ\\œ›ÜŠ	Ô›Ú™XÝ[Û‹[]™[›Û˜XÚÈ\È™]\™Yˆ›Û˜XÚÈHÛÛ\]HÜXÚX[\›H™]š\Ú[Û‹‰ËK	ÔÔPÒPSÕT“T×ÕÒÓWÔ‘U’TÒSÓ—Ô‘TURT‘Q	ÊNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆÜXÚX[\›T™]š\Ú[Û”Ø]™J›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ™]\›ˆØ]™TÜXÚX[\›T™]š\Ú[ÛŠÛÛ^˜ÛY[ÛÛ^œ›Ùš[K›ÙJNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆÜXÚX[\›T™]š\Ú[ÛÛÛ[Z]
+›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ™]\›ˆÛÛ[Z]ÜXÚX[\›T™]š\Ú[ÛŠÛÛ^˜ÛY[ÛÛ^œ›Ùš[K›ÙKÈØ[\›Ý™Nˆ]ØZ]\ÔÜXÚX[\›PÛ]\ÙP\›Ý™\ŠÛÛ^
+HJNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆÜXÚX[\›T™]š\Ú[Û\›Ý™J›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ]ØZ]™\]Z\™TÜXÚX[\›PÛ]\ÙP\›Ý™\ŠÛÛ^
+NÂˆ™]\›ˆ\›Ý™TÜXÚX[\›T™]š\Ú[ÛŠÛÛ^˜ÛY[ÛÛ^œ›Ùš[K›ÙJNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆÜXÚX[\›T™]š\Ú[Û”›Û˜XÚÊ›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ]ØZ]™\]Z\™TÜXÚX[\›PÛ]\ÙP\›Ý™\ŠÛÛ^
+NÂˆ™]\›ˆ›Û˜XÚÔÜXÚX[\›T™]š\Ú[ÛŠÛÛ^˜ÛY[ÛÛ^œ›Ùš[K›ÙJNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆÜXÚX[\›SZYÜ˜][Û˜]Ú\Ý
+›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ™]\›ˆ\ÝÜXÚX[\›SZYÜ˜][Û˜]Ú\ÊÈ›Ü˜ÙNˆ›ÙK™›Ü˜ÙHOOHYHJNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆÜXÚX[\›P\›Ý˜[]Y]YJ›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ™]\›ˆ\ÝÜXÚX[\›P\›Ý˜[]Y]YJÈ›Ü˜ÙNˆ›ÙK™›Ü˜ÙHOOHYK[Z]ˆ›ÙK›[Z]JNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆÜXÚX[\›PÛ]\ÙPZQ˜Y
+›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ™]\›ˆ˜YÜXÚX[\›PÛ]\Ù\ÕÚ]ZJÛÛ^˜ÛY[ÛÛ^œ›Ùš[K›ÙJNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆÜXÚX[\›\ÔØ]™J›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ]ØZ]™\]Z\™PØ\Xš[]JÛÛ^˜ÛY[ÛÛ^œ›Ùš[K	ÜÜXÚX[Ý\›\×ÛX[˜YÙIË	ÔÜXÚX[\›\È˜Y[™È\›Z\ÜÚ[Ûˆ\È™\]Z\™Y‰ÊNÂˆ™]\›ˆØ]™TÜXÚX[\›JÛÛ^˜ÛY[ÛÛ^œ›Ùš[K›ÙJNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆÜXÚX[\›\Ñ[]J›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ]ØZ]™\]Z\™PØ\Xš[]JÛÛ^˜ÛY[ÛÛ^œ›Ùš[K	ÜÜXÚX[Ý\›\×ÛX[˜YÙIË	ÔÜXÚX[\›\ÈX[˜YÙ[Y[\›Z\ÜÚ[Ûˆ\È™\]Z\™Y‰ÊNÂˆ™]\›ˆ[]TÜXÚX[\›JÛÛ^˜ÛY[ÛÛ^œ›Ùš[K›ÙKÈ\Ð\›Ý™\Žˆ]ØZ]\ÔÜXÚX[\›PÛ]\ÙP\›Ý™\ŠÛÛ^
+HJNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆÜXÚX[\›T[TØ]™J›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ]ØZ]™\]Z\™PØ\Xš[]JÛÛ^˜ÛY[ÛÛ^œ›Ùš[K	ÜÜXÚX[Ý\›\×ÛX[˜YÙIË	ÔÜXÚX[\›\È˜Y[™È\›Z\ÜÚ[Ûˆ\È™\]Z\™Y‰ÊNÂˆ™]\›ˆØ]™TÜXÚX[\›T[JÛÛ^˜ÛY[ÛÛ^œ›Ùš[K›ÙJNÂŸB‚˜\Þ[˜È[˜Ý[ÛˆÜXÚX[\›T[Q[]J›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆÛÛœÝÛÛ^HXØÙ\ÜÐÛÛ^
+]ØZ]™\]Z\™PXÝ]™U\Ù\Š™\JJNÂˆ]ØZ]™\]Z\™PØ\Xš[]JÛÛ^˜ÛY[ÛÛ^œ›Ùš[K	ÜÜXÚX[Ý\›\×ÛX[˜YÙIË	ÔÜXÚX[\›\ÈX[˜YÙ[Y[\›Z\ÜÚ[Ûˆ\È™\]Z\™Y‰ÊNÂˆ™]\›ˆ[]TÜXÚX[\›T[JÛÛ^˜ÛY[ÛÛ^œ›Ùš[K›ÙKÈ\Ð\›Ý™\Žˆ]ØZ]\ÔÜXÚX[\›PÛ]\ÙP\›Ý™\ŠÛÛ^
+HJNÂŸB‚™[˜Ý[Ûˆ˜]]™Q[XZ[›Ý]\‘\[™[˜ÚY\ÊXØÙ\ÜÐÛÛ^
+HÂˆ™]\›ˆÈÛY[ˆXØÙ\ÜÐÛÛ^˜ÛY[›Ùš[NˆXØÙ\ÜÐÛÛ^œ›Ùš[HNÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ[XZ[›Ý]\“\Ý
+›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆ™]\›ˆ˜]]™Q[XZ[›Ý]\“\Ý
+™\K›ÙK˜]]™Q[XZ[›Ý]\‘\[™[˜ÚY\ÊXØÙ\ÜÐÛÛ^
+JNÂŸB˜\Þ[˜È[˜Ý[Ûˆ[XZ[›Ý]\˜XÚÙÜ›Ý[™Þ[˜Ê›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆ™]\›ˆ˜]]™Q[XZ[›Ý]\˜XÚÙÜ›Ý[™Þ[˜Ê™\K›ÙK˜]]™Q[XZ[›Ý]\‘\[™[˜ÚY\ÊXØÙ\ÜÐÛÛ^
+JNÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ[XZ[›Ý]\“X]™J›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆ™]\›ˆ˜]]™Q[XZ[›Ý]\“X]™J™\K›ÙK˜]]™Q[XZ[›Ý]\‘\[™[˜ÚY\ÊXØÙ\ÜÐÛÛ^
+JNÂŸB˜\Þ[˜È[˜Ý[Ûˆ[XZ[›Ý]\“X]™TØ]™J›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆ™]\›ˆ˜]]™Q[XZ[›Ý]\“X]™TØ]™J™\K›ÙK˜]]™Q[XZ[›Ý]\‘\[™[˜ÚY\ÊXØÙ\ÜÐÛÛ^
+JNÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ[XZ[›Ý]\‘]Z[
+›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆ™]\›ˆ˜]]™Q[XZ[›Ý]\‘]Z[
+™\K›ÙK˜]]™Q[XZ[›Ý]\‘\[™[˜ÚY\ÊXØÙ\ÜÐÛÛ^
+JNÂŸB˜\Þ[˜È[˜Ý[Ûˆ[XZ[›Ý]\‘\™XÝÜžJ›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆ™]\›ˆ˜]]™Q[XZ[›Ý]\‘\™XÝÜžJ™\K›ÙK˜]]™Q[XZ[›Ý]\‘\[™[˜ÚY\ÊXØÙ\ÜÐÛÛ^
+JNÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ[XZ[›Ý]\‘\™XÝÜžT™Yœ™\Ú
+›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆ™]\›ˆ˜]]™Q[XZ[›Ý]\‘\™XÝÜžT™Yœ™\Ú
+™\K›ÙK˜]]™Q[XZ[›Ý]\‘\[™[˜ÚY\ÊXØÙ\ÜÐÛÛ^
+JNÂŸB˜\Þ[˜È[˜Ý[Ûˆ[XZ[›Ý]\”™\Ù]Ê›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆ™]\›ˆ˜]]™Q[XZ[›Ý]\”™\Ù]Ê™\K›ÙK˜]]™Q[XZ[›Ý]\‘\[™[˜ÚY\ÊXØÙ\ÜÐÛÛ^
+JNÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ[XZ[›Ý]\XÝ[ÛŠ›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆ™]\›ˆ˜]]™Q[XZ[›Ý]\XÝ[ÛŠ™\K›ÙK˜]]™Q[XZ[›Ý]\‘\[™[˜ÚY\ÊXØÙ\ÜÐÛÛ^
+JNÂŸB˜\Þ[˜È[˜Ý[Ûˆ[XZ[›Ý]\XÝ[Û”Ý]\Ê›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆ™]\›ˆ˜]]™Q[XZ[›Ý]\XÝ[Û”Ý]\Ê™\K›ÙK˜]]™Q[XZ[›Ý]\‘\[™[˜ÚY\ÊXØÙ\ÜÐÛÛ^
+JNÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ[XZ[›Ý]\•[™Ê›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆ™]\›ˆ˜]]™Q[XZ[›Ý]\•[™Ê™\K›ÙK˜]]™Q[XZ[›Ý]\‘\[™[˜ÚY\ÊXØÙ\ÜÐÛÛ^
+JNÂŸB˜\Þ[˜È[˜Ý[Ûˆ[XZ[›Ý]\”™]žJ›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆ™]\›ˆ˜]]™Q[XZ[›Ý]\”™]žJ™\K›ÙK˜]]™Q[XZ[›Ý]\‘\[™[˜ÚY\ÊXØÙ\ÜÐÛÛ^
+JNÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ[XZ[›Ý]\‘š[[™Ô™]žJ›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆ™]\›ˆ˜]]™Q[XZ[›Ý]\‘š[[™Ô™]žJ™\K›ÙK˜]]™Q[XZ[›Ý]\‘\[™[˜ÚY\ÊXØÙ\ÜÐÛÛ^
+JNÂŸB˜\Þ[˜È[˜Ý[Ûˆ[XZ[›Ý]\]XÚY[\›
+›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆ™]\›ˆ˜]]™Q[XZ[›Ý]\]XÚY[\›
+™\K›ÙK˜]]™Q[XZ[›Ý]\‘\[™[˜ÚY\ÊXØÙ\ÜÐÛÛ^
+JNÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ[XZ[›Ý]\]XÚY[^
+›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆ™]\›ˆ˜]]™Q[XZ[›Ý]\]XÚY[^
+™\K›ÙK˜]]™Q[XZ[›Ý]\‘\[™[˜ÚY\ÊXØÙ\ÜÐÛÛ^
+JNÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ[XZ[›Ý]\’X[
+›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆ™]\›ˆ˜]]™Q[XZ[›Ý]\’X[
+™\K›ÙK˜]]™Q[XZ[›Ý]\‘\[™[˜ÚY\ÊXØÙ\ÜÐÛÛ^
+JNÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ[XZ[›Ý]\Yš\ÛÜŠ›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆ™]\›ˆ˜]]™Q[XZ[›Ý]\Yš\ÛÜŠ™\K›ÙK˜]]™Q[XZ[›Ý]\‘\[™[˜ÚY\ÊXØÙ\ÜÐÛÛ^
+JNÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ[XZ[›Ý]\”Ù][™ÜÊ›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆ™]\›ˆ˜]]™Q[XZ[›Ý]\”Ù][™ÜÊ™\K›ÙK˜]]™Q[XZ[›Ý]\‘\[™[˜ÚY\ÊXØÙ\ÜÐÛÛ^
+JNÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ[XZ[›Ý]\”Ù][™ÜÔØ]™J›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆ™]\›ˆ˜]]™Q[XZ[›Ý]\”Ù][™ÜÔØ]™J™\K›ÙK˜]]™Q[XZ[›Ý]\‘\[™[˜ÚY\ÊXØÙ\ÜÐÛÛ^
+JNÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ[XZ[›Ý]\“Ý]›Þ
+›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆ™]\›ˆ˜]]™Q[XZ[›Ý]\“Ý]›Þ
+™\K›ÙK˜]]™Q[XZ[›Ý]\‘\[™[˜ÚY\ÊXØÙ\ÜÐÛÛ^
+JNÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ[XZ[›Ý]\‘[J›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆ™]\›ˆ˜]]™Q[XZ[›Ý]\‘[J™\K›ÙK˜]]™Q[XZ[›Ý]\‘\[™[˜ÚY\ÊXØÙ\ÜÐÛÛ^
+JNÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ[XZ[›Ý]\”ÝXœØÜš\[ÛŠ›ÙHHßK™\HH[XØÙ\ÜÐÛÛ^H[
+HÂˆ™]\›ˆ˜]]™Q[XZ[›Ý]\”ÝXœØÜš\[ÛŠ™\K›ÙK˜]]™Q[XZ[›Ý]\‘\[™[˜ÚY\ÊXØÙ\ÜÐÛÛ^
+JNÂŸB‚˜\Þ[˜È[˜Ý[Ûˆ[XZ[›Ý]\“XZ[[˜[˜ÙPÜ›ÛŠØ›ÙHHßK™\HH[
+HÂˆ™\]Z\™PÜ›Û]]Üš^˜][ÛŠ™\JNÂˆÛÛœÝXZ[[˜[˜ÙTÝ\Y]H™]È]J
+NÂˆÛÛœÝÛY[HÜ™X]Q[XZ[›Ý]\”Ù\šXÙPÛY[
+
+NÂˆÛÛœÝ\™XÝÜžTÞ[˜ÈH]ØZ]ÛY[œœÊ	ÜÞ[˜×Ù[XZ[›Ý]\—Ù˜ÛÜ×Ù\Ý[˜][ÛœÉËÈØXÝÜŽˆ[JNÂˆÛÛœÝXZ[›ÞH]ØZ]Ý\œ™[[XZ[›Ý]\“XZ[›Þ
+ÛY[
+NÂˆÛÛœÝÝ]›ÞH]ØZ]›ØÙ\ÜÑ[XZ[›Ý]\“Ý]›Þ
+ÈÛY[XZ[›Þ[Z]ˆHJNÂˆÛÛœÝX\›š[™ÈH]ØZ]›ØÙ\ÜÑ[XZ[›Ý]\“X\›š[™Ò›ØœÊÈÛY[XZ[›Þ[Z]ˆLJK˜Ø]Ú
+
+\œ›ÜŠHOˆ
+ÈÝ]\Îˆ	ÝØ\›š[™ÉËÛÙNˆ\œ›Ü‹˜ÛÙH	ÑSPRSÔ“ÕUT—ÓPT“’S‘×ÑRSQ	ÈJJNÂˆÛÛœÝÞ[˜Ú›Ûš^˜][ÛˆHßNÂˆ›Üˆ
+ÛÛœÝ›Û\ˆÙˆÉÚ[˜›Þ	Ë	ÜÙ[][\ÉË	Ø\˜Ú]™I×JHÂˆÞ[˜Ú›Ûš^˜][Û–Ù›Û\—HH]ØZ]Þ[˜Ñ[XZ[›Ý]\‘›Û\‘œ›ÛTÝÜ™YÝ\œÛÜŠÈÛY[XZ[›Þ›Û\‹X^YÙ\ÎˆLJNÂˆBˆ]ÝXœØÜš\[ÛœÈH×NÂˆžHÂˆÝXœØÜš\[ÛœÈH]ØZ]XZ[Z[‘[XZ[›Ý]\”ÝXœØÜš\[ÛœÊÈÛY[XZ[›ÞJNÂˆ]ØZ]™\ÛÛ™Q[XZ[›Ý]\[\
+ÛY[ÈY\RÙ^NˆXZ[›Þ‰ÛXZ[›ÞšYNœÝXœØÜš\[ÛœØJNÂˆHØ]Ú
+\œ›ÜŠHÂˆ]ØZ]™XÛÜ™[XZ[›Ý]\[\
+ÛY[ÈXZ[›ÞYˆXZ[›ÞšYÛÙNˆ\œ›Ü‹˜ÛÙH	Ù[XZ[Ü›Ý]\—ÜÝXœØÜš\[Û—Ù˜Z[Y	ËÙ]™\š]Nˆ	ØÜš]XØ[	ËY\RÙ^NˆXZ[›Þ‰ÛXZ[›ÞšYNœÝXœØÜš\[ÛœØJNÂˆ›ÝÈ\œ›ÜŽÂˆBˆYˆ
+Y\™XÝÜžTÞ[˜Ë™\œ›Üˆ	‰ˆX\›š[™ÏËœÝ]\ÈOOH	ÝØ\›š[™ÉÊHÂˆ]ØZ]™\ÛÛ™T™XÛÝ™\™YÞ\Ý[Q\œ›Ü’[™\ŠÛY[	Ù[XZ[›Ý]\“XZ[[˜[˜ÙPÜ›Û‰ËÂˆ™\ÛÛ™Y›ÝYÚˆXZ[[˜[˜ÙTÝ\Y]ˆÙY[”Ú[˜ÙNˆ™]È]JXZ[[˜[˜ÙTÝ\Y]™Ù][YJ
+HHMH
+ˆŒÌ
+KˆJK˜Ø]Ú
+
+\œ›ÜŠHOˆÂˆÛÛœÛÛKØ\›Š	ÖÙ[XZ[\›Ý]\—H™XÛÝ™\™YXZ[[˜[˜ÙH›ÝYšXØ][ÛˆÛÝ[›Ý™H™\ÛÛ™Y‰ËÂˆÛÙNˆ\œ›ÜË˜ÛÙH	ÑSPRSÔ“ÕUT—Ó“ÕQ’PÐUSÓ—Ô‘PÓÕ‘T–WÑRSQ	ËˆJNÂˆJNÂˆBˆ™]\›ˆÂˆÚÎˆYKˆ\™XÝÜžNˆ\™XÝÜžTÞ[˜Ë™\œ›ÜˆÈÈÝ]\Îˆ	ÝØ\›š[™ÉÈHˆÈÝ]\Îˆ	ÜÞ[˜Ú›Ûš^™Y	ÈKˆÝ]›ÞˆX\›š[™ËˆÞ[˜Ú›Ûš^˜][ÛŽˆØš™XÝ™œ›ÛQ[šY\ÊØš™XÝ™[šY\ÊÞ[˜Ú›Ûš^˜][ÛŠK›X\
+
+Ù›Û\‹™\Ý[JHOˆÙ›Û\‹ÈÞ[˜ÙYˆ™\Ý[œÞ[˜ÙY™[[Ý™Yˆ™\Ý[œ™[[Ý™YYÙ\Îˆ™\Ý[œYÙ\ËÛÛ\]Nˆ\™\Ý[›™^[šÈWJJKˆÝXœØÜš\[ÛœÎˆÝXœØÜš\[ÛœË›X\
+
+][JHOˆ
+È›Û\Žˆ][K™›Û\‹Ý]Nˆ][KœÝ]K^\™\Ð]ˆ][K™^\™\Ð]JJKˆNÂŸB‚˜ÛÛœÝ\›Ò[™\œÈHÜ™X]V\›Ò[™\œÊÈ™\]Z\™PXÝ]™U\Ù\‹™\ÛÛ™T™XÛÝ™\™YÞ\Ý[Q\œ›Ü’[™\ˆJNÂ˜ÛÛœÝ[™\œÈHÂˆ]]ÛÛ^ˆÜ[\XØ][ÛœÓ\ÝˆÜ[\XØ][Û“][˜ÚˆÜ[ÚYÛ“Ý]ˆÜ[[][Y[Þ[˜ÐÜ›Û‹ˆÛÛX›Ü˜][Û“\ÝˆÛÛX›Ü˜][Û‘]Z[ˆÛÛX›Ü˜][ÛÜ™X]KˆÛÛX›Ü˜][Û•\]KˆÛÛX›Ü˜][Û[Õ\]KˆÛÛX›Ü˜][Û‘›ÛÝÙ\•ÙÙÛKˆÛÛX›Ü˜][Û‘\[™[˜ÞTØ]™KˆÛÛX›Ü˜][Û‘\[™[˜ÞT™[[Ý™KˆÛÛX›Ü˜][Û“Z[\ÝÛ™TØ]™KˆÛÛX›Ü˜][Û•[\]S\ÝˆÛÛX›Ü˜][Û•[\]TØ]™KˆÛÛX›Ü˜][Û\˜Ú]™KˆÛÛX›Ü˜][ÛÛÛ[Y[Ø]™KˆÛÛX›Ü˜][ÛÛÛ[Y[[]KˆÛÛX›Ü˜][Û]XÚY[™\\™KˆÛÛX›Ü˜][Û]XÚY[ÛÛ\]KˆÛÛX›Ü˜][Û]XÚY[\›ˆÛÛX›Ü˜][Û]XÚY[[]KˆÛÛX›Ü˜][Û“›ÝYšXØ][ÛœÓ\ÝˆÛÛX›Ü˜][Û“›ÝYšXØ][ÛœÔ™XYˆÛÛX›Ü˜][Û‘Z[PÜ›Û‹ˆ[\›Ý™[Y[Ó\Ýˆ[\›Ý™[Y[]Z[ˆ[\›Ý™[Y[Ü™X]Kˆ[\›Ý™[Y[›ÜÜÙKˆ[\›Ý™[Y[XÚ\Ú[Û‹ˆ[\›Ý™[Y[]XÚY[™\\™Kˆ[\›Ý™[Y[]XÚY[ÛÛ\]Kˆ[\›Ý™[Y[]XÚY[\›ˆ[\›Ý™[Y[]XÚY[[]KˆÛÜšÓ›ÝYšXØ][ÛœÓ\ÝˆÛÜšÓ›ÝYšXØ][ÛœÔ™XYˆÛÜšÓ›ÝYšXØ][ÛœÔÝ]KˆÞ\Ý[Q\œ›Ü•™\šYžKˆÛÜšÐÛÛ[Z]Y[Ó\Ýˆ˜]šYØ][Û”™Y™\™[˜Ù\ÑÙ]ˆ˜]šYØ][Û”™Y™\™[˜Ù\ÔØ]™Kˆ˜]šYØ][Û”™Y™\™[˜Ù\Ô™\Ù]ˆÛÜšÜÜXÙT™Y™\™[˜Ù\ÑÙ]ˆÛÜšÜÜXÙT™Y™\™[˜Ù\ÔØ]™Kˆ[XZ[›Ý]\“\Ýˆ[XZ[›Ý]\˜XÚÙÜ›Ý[™Þ[˜Ëˆ[XZ[›Ý]\“X]™Kˆ[XZ[›Ý]\“X]™TØ]™Kˆ[XZ[›Ý]\‘]Z[ˆ[XZ[›Ý]\‘\™XÝÜžKˆ[XZ[›Ý]\‘\™XÝÜžT™Yœ™\Úˆ[XZ[›Ý]\”™\Ù]Ëˆ[XZ[›Ý]\XÝ[Û‹ˆ[XZ[›Ý]\XÝ[Û”Ý]\Ëˆ[XZ[›Ý]\•[™Ëˆ[XZ[›Ý]\”™]žKˆ[XZ[›Ý]\‘š[[™Ô™]žKˆ[XZ[›Ý]\]XÚY[\›ˆ[XZ[›Ý]\]XÚY[^ˆ[XZ[›Ý]\’X[ˆ[XZ[›Ý]\Yš\ÛÜ‹ˆ[XZ[›Ý]\”Ù][™ÜËˆ[XZ[›Ý]\”Ù][™ÜÔØ]™Kˆ[XZ[›Ý]\“Ý]›Þˆ[XZ[›Ý]\‘[Kˆ[XZ[›Ý]\”ÝXœØÜš\[Û‹ˆ[XZ[›Ý]\“XZ[[˜[˜ÙPÜ›Û‹‹‹ž\›Ò[™\œËˆYÙQ\ÚÑ[]KˆYÙSX\šÙ]ËˆX\šÙ][ÙTÛ˜\ÚÝˆX\šÙ][[YÙ[˜ÙPœšYY‹ˆX\šÙ][[YÙ[˜ÙPÝ\™KˆX\šÙ]™\ÜØ][ÙÝYKˆX\šÙ]™\Ü[˜[\Ú\ËˆX\šÙ][[YÙ[˜ÙU˜[X][Û‹ˆX\šÙ]›ÜØ\™˜[˜XÚÔØ]™KˆX\šÙ][[YÙ[˜ÙP[\[\ÑÙ]ˆX\šÙ][[YÙ[˜ÙP[\[\ÔØ]™KˆX\šÙ][[YÙ[˜ÙPÝ\™PÝ]Ý™\”Ø]™KˆX\šÙ][[YÙ[˜ÙP\˜Ú]™T™\^KˆX\šÙ][˜Y^TÛ˜\ÚÝ™]šY]ËˆX\šÙ][˜Y^TÛ˜\ÚÝØ]™KˆX\šÙ][˜Y^U[Y[[™KˆYÙQ\ÚÔ\œÙS[ÜËˆYÙQ\ÚÑÙ[™\˜]R[›ÚXÙKˆYÙQ\ÚÔØ]™R[›ÚXÙT‹ˆYÙQ\ÚÔÙ[™[›ÚXÙQ[XZ[ˆYÙQ\ÚÔÙœÔ™\ÜˆYÙQ\ÚÔÙœÑš[KˆYÙQ\ÚÔÙœÔÙ[™ˆYÙQ\ÚÔØ[\Ù›Ü˜ÙT\ÚˆYÙQ\ÚÔØ[\Ù›Ü˜ÙT™]šY]ËˆYÙQ\ÚÔØ[\Ù›Ü˜ÙSX\[™ËˆYÙQ\ÚÐ\ÜÚ\Ý[ˆYÙQ\ÚÐ\ÜÚ\Ý[Ù][™ÜËˆYÙQ\ÚÓXZ[[˜[˜ÙPÜ›Û‹ˆX\šÙ]™\Üš]™TÞ[˜ÐÜ›Û‹ˆX\Ý\ÛÛ˜XÝÓ\ÝˆX\Ý\ÛÛ˜XÝ]Z[ˆX\Ý\ÛÛ˜XÝØ]™KˆX\Ý\ÛÛ˜XÝXÚ\Ú[Û‹ˆX\Ý\ÛÛ˜XÝ]šY[˜ÙT™\\™KˆX\Ý\ÛÛ˜XÝ]šY[˜ÙPÛÛ\]KˆX\Ý\ÛÛ˜XÝ]šY[˜ÙU\›ˆX\Ý\ÛÛ˜XÝÜ[ÛœËˆX\Ý\ÛÛ˜XÝ™\ÜÙ[Ü™X]KˆX\Ý\ÛÛ˜XÝ™Y›YÚˆX\Ý\ÛÛ˜XÝ˜]ÚÜ™X]KˆX\Ý\ÛÛ˜XÝšXÙT™\ÛÛ™KˆX\Ý\ÛÛ˜XÝšXÙP\KˆX\Ý\ÛÛ˜XÝ™X]\™TØ]™KˆX\Ý\ÛÛ˜XÝ™XÛÛ˜Ú[KˆX\Ý\ÛÛ˜XÝ™XÛÛ˜Ú[PÜ›Û‹ˆÜXÚX[\›\ÕÛÜšÜÜXÙKˆÜXÚX[\›\ÔÝ[[X\žS\ÝˆÜXÚX[\›\ÓÜ[ÛœËˆÜXÚX[\›Q]Z[ˆÜXÚX[\›PÛ]\ÙP˜[šËˆÜXÚX[\›PÛ]\ÙTÚ[Z[\‹ˆÜXÚX[\›PÛ]\ÙQY]™]šY]ËˆÜXÚX[\›PÛ]\ÙQÛØ˜[X›\ÚˆÜXÚX[\›Q[]T™]šY]ËˆÜXÚX[\›SZYÜ˜][Û’[™[ÜžKˆÜXÚX[\›PÛ]\ÙQ˜YØ]™KˆÜXÚX[\›PÛ]\ÙP\›Ý™KˆÜXÚX[\›PÛ]\ÙT™]\™KˆÜXÚX[\›PÛ]\ÙQ[]KˆÜXÚX[\›PÛ]\ÙQ˜Y\ØØ\™ˆÜXÚX[\›PÛ]\ÙPÛÛœÛÛY][Û“\ÝˆÜXÚX[\›PÛ]\ÙPÛÛœÛÛY][Û”Ý\ˆÜXÚX[\›PÛ]\ÙPÛÛœÛÛY][Û”™[[šËˆÜXÚX[\›PÛ]\ÙPÛÛœÛÛY][ÛØ[˜Ù[ˆÜXÚX[\›PÛ]\ÙPÛÛœÛÛY][ÛÛÛ\]KˆÜXÚX[\›PÛÛ\ÜÚ][Û”Ø]™KˆÜXÚX[\›SZYÜ˜][Û”™]šY]ËˆÜXÚX[\›SZYÜ˜][Û”™]šY]Ð[ˆÜXÚX[\›SZYÜ˜][Û”Ø]™P[ˆÜXÚX[\›SZYÜ˜][Û”Ø]™KˆÜXÚX[\›SZYÜ˜][ÛXÝ]˜]KˆÜXÚX[\›SZYÜ˜][Û”›Û˜XÚËˆÜXÚX[\›T™]š\Ú[Û”Ø]™KˆÜXÚX[\›T™]š\Ú[ÛÛÛ[Z]ˆÜXÚX[\›T™]š\Ú[Û\›Ý™KˆÜXÚX[\›T™]š\Ú[Û”›Û˜XÚËˆÜXÚX[\›SZYÜ˜][Û˜]Ú\ÝˆÜXÚX[\›P\›Ý˜[]Y]YKˆÜXÚX[\›PÛ]\ÙPZQ˜YˆÜXÚX[\›\ÔØ]™KˆÜXÚX[\›\Ñ[]KˆÜXÚX[\›T[TØ]™KˆÜXÚX[\›T[Q[]KˆÜ›ÝÝ™\Ü[™Ó[™\Ó\ÝˆÜ›ÝÝ™\Ü[™Ó[™TØ]™KˆÜ›ÝÝ™\Ü[™Ó[™\ÔØ]™P˜]ÚˆÜ›ÝÝÛØXÚ[™Ð›ÛÝÝ˜\ˆÜ›ÝÝ[”Ø]™KˆÜ›ÝÝ[ÛÜÙ[Ý]ˆÜ›ÝÝÛØ[Ø]™KˆÜ›ÝÝÛØ[ÝX›Z]ˆÜ›ÝÝÛØ[XÚ\Ú[Û‹ˆÜ›ÝÝÛØ[›ÙÜ™\ÜÔØ]™KˆÜ›ÝÝÛØ[ÛÛ\][Û‹ˆÜ›ÝÝÛØ[]šY[˜ÙSÜ[ÛœËˆÜ›ÝÝÛØ[]šY[˜ÙTØ]™KˆÛØXÚ[™Ô™[][ÛœÚ\[š]KˆÛØXÚ[™Ô™[][ÛœÚ\™\ÜÛ™ˆÛØXÚ[™Ô™[][ÛœÚ\[™ˆÛØXÚ[™ÔÙ\ÜÚ[Û”Ø]™KˆÛØXÚ[™ÔÙ\ÜÚ[ÛÛÛ[Ø]™KˆÛØXÚ[™ÔÙ\ÜÚ[ÛÛÛ™š\›KˆÛØXÚ[™ÔÙ\ÜÚ[ÛØ[˜Ù[ˆÛØXÚ[™ÐXÝ[Û”Ø]™KˆÛØXÚ[™ÐXÝ[Û”X›\ÚˆÛØXÚ[™ÐXÝ[Û”›ÜÜØ[™\ÜÛ™ˆÜ›ÝÝ]XÚY[™\\™KˆÜ›ÝÝ]XÚY[ÛÛ\]KˆÜ›ÝÝ]XÚY[\›ˆÜ›ÝÝ[XZ[™Y™\™[˜Ù\ÔØ]™KˆÛØXÚ[™ÐØ[[™\”™\ÛÛ™KˆÛØXÚ[™ÐØ[[™\”™]žKˆÜ›ÝÝÛØXÚ[™ÑZ[PÜ›Û‹ˆØ[\Ù›Ü˜ÙTØÚ[XKˆØ[\Ù›Ü˜ÙSØš™XÝšY[Ëˆ\Ú›Ø\™š[\“Ü[ÛœËˆØ[\Ù›Ü˜ÙQ[ØÚ[XKˆØ[\Ù›Ü˜ÙQ\Ú›Ø\™ˆØ[\Ù›Ü˜ÙQ\Ú›Ø\™š[\™YˆØ[\Ù›Ü˜ÙQ\Ú›Ø\™š[\™YÛÛ\]Xš[]Kˆ\Ú›Ø\™Ý[[X\žKˆ\Ú›Ø\™Ý[S\Ýˆ\Ú›Ø\™[˜[]XÜËˆ\Ú›Ø\™XØÛÝ[[œÚYÚˆ\Ú›Ø\™XØÛÝ[Ü™Y]\™XÝÜžKˆ\Ú›Ø\™XØÛÝ[Ü™Y]Ý][Y[ˆ\Ú›Ø\™Ü™Y]›Ü™XØ\ÝÙ][™ÜÔØ]™Kˆ\Ú›Ø\™ÛÝ[\œ\TÙX\˜Úˆ\Ú›Ø\™XØÛÝ[^ÜÝ\™P˜]Úˆ\Ú›Ø\™ZTÙX\˜Úˆ\Ú›Ø\™ZTÙ][™ÜÑÙ]ˆ\Ú›Ø\™ZTÙ][™ÜÔØ]™KˆØ[\Ù›Ü˜ÙTÝ[Q]Z[ˆØ[\Ù›Ü˜ÙTÝ[Q]Z[[ˆØ[\Ù›Ü˜ÙTÝ[QØÝ[Y[Ëˆ[›Ù™šXÚX[ÛÛ\[œØ][Û“\Ýˆ[›Ù™šXÚX[ÛÛ\[œØ][Û“Ü[ÛœËˆ[›Ù™šXÚX[ÛÛ\[œØ][ÛÛZ[PÜ™X]Kˆ[›Ù™šXÚX[ÛÛ\[œØ][ÛÛZ[QÜ›Ý\Ý]\Ëˆ[›Ù™šXÚX[ÛÛ\[œØ][Û”™XÛÝ™\žPÜ™X]Kˆ[›Ù™šXÚX[ÛÛ\[œØ][Û”™XÛÝ™\žQ[]Kˆ^Ù\[Û”™]šY]ÕÛÜšÙ›ÝÓ\Ýˆ^Ù\[Û”™]šY]ÕÛÜšÙ›ÝÔØ]™KˆØ[\Ù›Ü˜ÙQ\ØÜšX™PÚ[™[‹ˆØ[\Ù›Ü˜ÙUÜ^Y\œËˆØ[\Ù›Ü˜ÙPœ›ÚÙ\”™YÚ\Ý\ŽˆØ[\Ù›Ü˜ÙPœ›ÚÙ\”™YÚ\Ý\‘[ˆØ[\Ù›Ü˜ÙP^Y\’[›ÚXÙ\ÑYKˆ^Y\’[›ÚXÙPÛÛXÝ[Û“\Ýˆ^Y\’[›ÚXÙPÛÛXÝ[Û”Ø]™Kˆ^Y\’[›ÚXÙPÛÛXÝ[Û‘]™[Ü™X]Kˆ^Y\’[›ÚXÙT^[Y[YšXÙTØ]™Kˆ^[Y[ÛÛXÝ[ÛœÔ™XÛÛ˜Ú[KˆÚ\YÙ[Ú\™Ù\Ó\ÝˆÚ\YÙ[Ú\™Ù\Ñ]Z[ˆÚ\YÙ[Ú\™Ù\ÓÜ[ÛœËˆÚ\YÙ[Ú\™Ù\ÔØ]™PÛÛ™š\›KˆÚ\YÙ[Ú\™Ù\ÑÛSÝ™\œšYKˆÚ\YÙ[Ú\™Ù\ÔÜÝ[›ÚXÙT™\ÛÛ™KˆÚ\YÙ[Ú\™Ù\ÔÞ[˜Ëˆ˜\šXX›PÚ\™Ù\Ó\Ýˆ˜\šXX›PÚ\™Ù\Ñ]Z[ˆ˜\šXX›PÚ\™Ù\Ð[˜ÚÜ˜YÙTØ]™K˜\šXX›PÚ\™Ù\Õ™\ÜÙ[œØ]™K˜\šXX›PÚ\™Ù\ÓYÚY\ÔØ]™K˜\šXX›PÚ\™Ù\ÔÙ][™ÜÑÙ]˜\šXX›PÚ\™Ù\ÔÙ][™ÜÔØ]™Kˆ˜\šXX›PÚ\™Ù\ÓÜ[ÛœËˆ˜\šXX›PÚ\™Ù\ÔÝ\Y\•™\šYžKˆ˜\šXX›PÚ\™Ù\Ð^Y\ÛÛ™š\›Kˆ˜\šXX›PÚ\™Ù\ÔÚYP\ÜÚYÛ‹ˆ˜\šXX›PÚ\™Ù\ÔÚYPÛÛ™š\›Kˆ˜\šXX›PÚ\™Ù\ÑÛSÝ™\œšYKˆ˜\šXX›PÚ\™Ù\ÔÜÝ[›ÚXÙT™\ÛÛ™Kˆ˜\šXX›PÚ\™Ù\ÔÞ[˜Ëˆ^Y\’[›ÚXÙTÜÝ[™Ô™[Z[™\“Ý™\œšYTØ]™Kˆ^[Y[ÛÛXÝ[ÛœÔ™XÛÛ˜Ú[PÜ›Û‹ˆ^Y\’[›ÚXÙQ[XZ[Ù][™ÜÑÙ]ˆ^Y\’[›ÚXÙQ[XZ[Ù][™ÜÔØ]™Kˆ^Y\’[›ÚXÙT™[Z[™\”[\Ó\Ýˆ^Y\’[›ÚXÙT™[Z[™\”[TØ]™Kˆ^Y\’[›ÚXÙT™[Z[™\”[T™[[Ý™Kˆ^Y\’[›ÚXÙT^[Y[™[Z[™\”™\\™Kˆ^Y\’[›ÚXÙT^[Y[™[Z[™\”Ù[™ˆÝ]Ý[™[™Ð^Y\’[›ÚXÙ\Ñ[XZ[™\ÜˆÝ]Ý[™[™Ð^Y\’[›ÚXÙ\Ñ[XZ[Ü›Û‹ˆ[˜ÛÛZ[™Ô^[Y[Ó\Ýˆ[˜ÛÛZ[™Ô^[Y[[XZ[Ù][™ÜÑÙ]ˆ[˜ÛÛZ[™Ô^[Y[[XZ[Ù][™ÜÔØ]™Kˆ[˜ÛÛZ[™Ô^[Y[[\™\ÝÙ][™ÜÑÙ]ˆ[˜ÛÛZ[™Ô^[Y[[\™\ÝÙ][™ÜÔØ]™Kˆ[˜ÛÛZ[™Ô^[Y[[XZ[™\Üˆ[˜ÛÛZ[™Ô^[Y[[\™\Ý[›ÚXÙT™\]Y\Ýˆ[˜ÛÛZ[™Ô^[Y[Ù][™ÜÑÙ]ˆ[˜ÛÛZ[™Ô^[Y[Ù][™ÜÔØ]™Kˆ[˜ÛÛZ[™Ô^[Y[[ØØ][ÛÛÛ™š\›KˆØ\Ú›ÝÑ›Ü™XØ\ÝˆØ\Ú›ÝÐ^Y\”^[Y[\™›Ü›X[˜ÙKˆØ\Ú›ÝÔÙ][™ÜÑÙ]ˆØ\Ú›ÝÔÙ][™ÜÔØ]™KˆØ\Ú›ÝÒÛY^PØ[[™\‹ˆØ[\Ù›Ü˜ÙQ\Ü]TÝ[\Ëˆ\Ü]P™]S\Ýˆ\Ü]P™]TØ]™Q˜Yˆ\Ü]P™]TÝX›Z]\›Ý˜[ˆ\Ü]P™]P\›Ý™Kˆ\Ü]P™]T™Z™XÝˆ\Ü]P™]SX\šÑ^XÝ]Yˆ\Ü]P™]PÛÜÙKˆ\Ü]UÛÜšÙ›ÝÓ\Ýˆ\Ü]P™]S\Ýˆ\Ü]UÛÜšÙ›ÝÔØ]™Q˜Yˆ\Ü]P™]TØ]™Q˜Yˆ\Ü]UÛÜšÙ›ÝÔÝX›Z]\›Ý˜[ˆ\Ü]P™]TÝX›Z]\›Ý˜[ˆ\Ü]UÛÜšÙ›ÝÐ\›Ý™Nˆ\Ü]P™]P\›Ý™Kˆ\Ü]UÛÜšÙ›ÝÔ™Z™XÝˆ\Ü]P™]T™Z™XÝˆ\Ü]UÛÜšÙ›ÝÐXØÛÝ[[™Õ\]Kˆ\Ü]UÛÜšÙ›ÝÔÝ\Y\’[œÝXÝ[Û•\]Kˆ\Ü]UÛÜšÙ›ÝÔÝ\Y\“Ù™œÙ]Ü[ÛœËˆ\Ü]UÛÜšÙ›ÝÔÝ\Y\[[Ý[[Y[™ˆ\Ü]UÛÜšÙ›ÝÕ\ØYØÝ[Y[ˆ\Ü]UÛÜšÙ›ÝÑØÝ[Y[Ëˆ\Ü]UÛÜšÙ›ÝÓX\šÑ^XÝ]Yˆ\Ü]P™]SX\šÑ^XÝ]Yˆ\Ü]UÛÜšÙ›ÝÐÛÜÙNˆ\Ü]P™]PÛÜÙKˆ\Ü]UÛÜšÙ›ÝÐÛÛ\[œØ][ÛÛZ[\Ëˆ\Ü]UÛÜšÙ›ÝÐÛÛ\[œØ][ÛÛZ[S[šËˆ\Ü]UÛÜšÙ›ÝÐXØÙ\^\›˜[ÛÜÝ\™KˆÝ[T›ˆÝ[T›[ˆœ˜[šÙ\\•\ÙÛžT˜]Kˆœ›ÚÙ\ÛÛ[Z\ÜÚ[Û”Ù][™ÜÑÙ]ˆœ›ÚÙ\ÛÛ[Z\ÜÚ[Û”Ù][™ÜÔØ]™Kˆ™\Ü^ÜÜ™X]Kˆ™\Ü^ÜÓ\Ýˆ™\Ü^Ü™[˜[YKˆ™\Ü^Ü[]Kˆ™\Ü^ÜÝÛ›ØYˆ^Y\œÐYZ[š\Ý˜]Ü“\Ýˆ^Y\œÐYZ[š\Ý˜]Ü”Ø]™KˆXØÛÝ[X[˜YÙ\œÓ\ÝˆXØÛÝ[X[˜YÙ\œÔØ]™KˆXØÛÝ[X[˜YÙ\œÔØ]™S›ÝKˆXØÛÝ[X[˜YÙ\œÔ™]žTÞ[˜ËˆXØÛÝ[XÑ\™XÝÜžS\ÝˆXØÛÝ[XÐXØÛÝ[Ü[ÛœËˆXØÛÝ[XÕ˜Y\“Ü[ÛœËˆXØÛÝ[XÑ\™XÝÜžQ]Z[ˆXØÛÝ[XÑ\™XÝÜžTØ]™KˆXØÛÝ[XÑ\™XÝÜžR[\ÜˆXØÛÝ[XÔ›ÝÐÛÛÜœÔØ]™Kˆ[XZ[Ù[™\”Ý]\Ëˆ[XZ[Ù[™\“XZ[›ÞØ]™Kˆ[XZ[Ù[™\”›Ý]TØ]™KˆÞ\Ý[RX[ˆYZ[•\Ù\œÓ\ÝˆYZ[]Y]ÙÜËˆYZ[•\Ù\”Ø]™KˆYZ[•\Ù\‘[]KˆYZ[”Ü[XØÙ\ÜÔØ]™KˆYZ[”Ü[XØÙ\ÜÔ™]žKˆYZ[”Ü[\XØ][ÛœÒX[ˆYZ[•\Ù\•\TØ]™KˆYZ[•\Ù\•\Q[]KˆYZ[‘˜ÛÜÕ\]\Ó\ÝˆYZ[‘˜ÛÜÕ\]\ÔÞ[˜ËˆYZ[‘˜ÛÜÕ\]R][TØ]™KˆYZ[‘˜ÛÜÕ\]P˜]ÚØ]™KˆYZ[‘˜ÛÜÕ\]P˜]ÚØ[˜Ù[ˆYZ[‘˜ÛÜÕ\]R][TÚÚ\ˆYZ[‘˜ÛÜÕ\]R][T™\ÝÜ™KˆYZ[‘˜ÛÜÕ\]P˜]ÚÙ[™ˆYZ[‘˜ÛÜÕ\]Q[]™\žT™]žKˆ[š]™\œØ[]Y]˜Z[ŸNÂ‚˜ÛÛœÝ[™\œÕÚ]Ý]XØÙ\ÜÔÛXÞHHØš™XÝšÙ^\Ê[™\œÊK™š[\Š
+[™\“˜[YJHOˆZ[™\”ÛXÞQ›ÜŠS‘T—ÔÓPÖWÔ‘QÒTÕ–K[™\“˜[YJJNÂšYˆ
+[™\œÕÚ]Ý]XØÙ\ÜÔÛXÞK›[™Ý
+HÂˆ›ÝÈ™]È\œ›ÜŠÓÔÈ[™\ˆXØÙ\ÜÈÛXÞH\ÈZ\ÜÚ[™È›ÜŽˆ	Ú[™\œÕÚ]Ý]XØÙ\ÜÔÛXÞKš›Ú[Š	Ë	Ê_X
+NÂŸB‚™^ÜY˜][\Þ[˜È[˜Ý[Ûˆ[™\Š™\K™\ÊHÂˆÛÛœÝ\›H™]ÈT“
+™\K\›	Ú‹ËÛØØ[ÜÝ	ÊNÂˆÛÛœÝ˜[YHH\›œ]˜[YKœÜ]
+	ËÉÊKœÜ
+
+NÂˆÛÛœÝ™\]Y\ÝYH™\]Y\ÝYœ›ÛJ™\JNÂˆ™]\›ˆ[•Ú]™\]Y\Ý[[Y]žJˆÂˆ[™\Žˆ˜[YKˆ™\]Y\ÝYˆKˆ\Þ[˜È
+
+HOˆÂˆžHÂˆÛÛœÝ[™\”ÛXÞHH[™\”ÛXÞQ›ÜŠS‘T—ÔÓPÖWÔ‘QÒTÕ–K˜[YJNÂˆYˆ
+[™\”ÛXÞH	‰ˆ\[Ùˆ™\ÏËœÙ]XY\ˆOOH	Ù[˜Ý[Û‰ÊHÂˆ™\ËœÙ]XY\Š	ÖQÓÔËR[™\‹S]]][Û‰Ë[™\”ÛXÞK›]]][ÛˆÈ	ÌIÈˆ	Ì	ÊNÂˆ™\ËœÙ]XY\Š	ÖQÓÔËQ^\›˜[PXÝ[Û‰Ë[™\”ÛXÞK™^\›˜[XÝ[ÛˆÈ	ÌIÈˆ	Ì	ÊNÂˆBˆYˆ
+˜[YHOOH	ÜØ[\Ù›Ü˜ÙQØÝ[Y[ÝÛ›ØY	ÊHÂˆ]ØZ]™\]Z\™R[™\XØÙ\ÜÊ˜[YK™\JNÂˆ™]\›ˆ]ØZ]Ø[\Ù›Ü˜ÙQØÝ[Y[ÝÛ›ØY
+™\K™\ÊNÂˆBˆYˆ
+˜[YHOOH	Ù\Ú›Ø\™XØÛÝ[[œÚYÚ^Ü	ÊHÂˆÛÛœÝXØÙ\ÜÐÛÛ^H]ØZ]™\]Z\™R[™\XØÙ\ÜÊ˜[YK™\JNÂˆÛÛœÝ›ÙHH]ØZ]™XY›ÙJ™\JNÂˆ™]\›ˆ]ØZ]\Ú›Ø\™XØÛÝ[[œÚYÚ^Ü
+›ÙK™\K™\ËXØÙ\ÜÐÛÛ^
+NÂˆBˆYˆ
+˜[YHOOH	ÜÜXÚX[\›\Ô‘^Ü	È˜[YHOOH	ÜÜXÚX[\›\ÑØÝ[Y[^Ü	ÊHÂˆÛÛœÝXØÙ\ÜÐÛÛ^H]ØZ]™\]Z\™R[™\XØÙ\ÜÊ˜[YK™\JNÂˆÛÛœÝ›ÙHH]ØZ]™XY›ÙJ™\JNÂˆ™]\›ˆ˜[YHOOH	ÜÜXÚX[\›\Ô‘^Ü	ÂˆÈ]ØZ]ÜXÚX[\›\Ô‘^Ü
+›ÙK™\K™\ËXØÙ\ÜÐÛÛ^
+Bˆˆ]ØZ]ÜXÚX[\›\ÑØÝ[Y[^Ü
+›ÙK™\K™\ËXØÙ\ÜÐÛÛ^
+NÂˆBˆÛÛœÝ›ˆH[™\œÖÛ˜[YWNÂˆYˆ
+Y›ŠH™]\›ˆÙ[™œÛÛŠ™\ËÈ\œ›ÜŽˆ[šÛ›ÝÛˆ[˜Ý[ÛŽˆ	Û˜[Y_XK
+NÂˆÛÛœÝXØÙ\ÜÐÛÛ^H]ØZ]™\]Z\™R[™\XØÙ\ÜÊ˜[YK™\JNÂˆÛÛœÝ›ÙHH]ØZ]™XY›ÙJ™\JNÂˆÛÛœÝÛÛ˜XÝH˜[Y]Q[˜Ý[Û”™\]Y\Ý
+˜[YK›ÙJNÂˆYˆ
+XÛÛ˜XÝ›ÚÊHÂˆ›ÝÈ\\œ›ÜŠ[˜[Y	Û˜[Y_H™\]Y\Ýˆ	ØÛÛ˜XÝš\ÜÝY\Ëš›Ú[Š	ÎÈ	Ê_K˜	Ñ•SÕSÓ—ÐÓÓ•PÕÒS•SQ	ËÂˆÛÛ˜XÝ™\œÚ[ÛŽˆ•SÕSÓ—ÐÓÓ•PÕÕ‘T”ÒSÓ‹ˆJNÂˆBˆÛÛœÝ]HH]ØZ]›Š›ÙK™\KXØÙ\ÜÐÛÛ^
+NÂˆ™]\›ˆÙ[™œÛÛŠ™\Ë]JNÂˆHØ]Ú
+\œ›ÜŠHÂˆÛÛœÝÝ]\ÈH\œ›Ü‹œÝ]\È\œ›Ü‹œÝ]\ÐÛÙHLÂˆ™XÛÜ™™\]Y\Ý˜Z[\™J\œ›Ü‹Ý]\ÊNÂˆYˆ
+ÚÝ[›ÝYžTÞ\Ý[Q\œ›ÜŠÝ]\ÊJHÂˆžHÂˆ]ØZ]™\ÜÞ\Ý[Q\œ›ÜŠØY™TÝ\X˜\ÙPYZ[ÛY[
+
+KÂˆ[™\Žˆ˜[YKˆ\œ›Ü‹ˆÝ]\Ëˆ™\]Y\ÝYˆJNÂˆHØ]Ú
+›ÝYšXØ][Û‘\œ›ÜŠHÂˆÛÛœÛÛK™\œ›ÜŠ	ÖÜÞ\Ý[KY\œ›Ü‹[›ÝYšXØ][Û—H™XÛÜ™[™È˜Z[Y	ËÂˆ[™\Žˆ˜[YKˆY\ÜØYÙNˆ›ÝYšXØ][Û‘\œ›Ü‹›Y\ÜØYÙKˆJNÂˆBˆBˆ™]\›ˆÙ[™œÛÛŠ™\ËX›XÐ\Q\œ›Ü”^[ØY
+\œ›Ü‹Ý]\Ë™\]Y\ÝY
+KÝ]\ÊNÂˆHš[˜[HÂˆÙÔ™\]Y\Ý[[Y]žJ™\ËœÝ]\ÐÛÙHL
+NÂˆBˆKˆ
+NÂŸB
