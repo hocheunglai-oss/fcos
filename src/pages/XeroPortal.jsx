@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import {
   AlertTriangle,
   Archive,
+  BookOpen,
   CheckCircle2,
   Download,
   ExternalLink,
@@ -51,6 +52,7 @@ const STATUS_OPTIONS = [
 
 const RECEIPT_CURRENCIES = ['HKD', 'USD', 'SGD', 'CNY', 'EUR', 'GBP', 'AUD', 'NZD', 'CAD', 'JPY'];
 const XeroFinancialSync = lazy(() => import('@/components/xero/XeroFinancialSync'));
+const XeroPortalManual = lazy(() => import('@/components/xero/XeroPortalManual'));
 
 export default function XeroPortal() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -288,6 +290,10 @@ export default function XeroPortal() {
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
+            <Button type="button" variant="outline" onClick={() => setTab('manual')}>
+              <BookOpen className="mr-2 h-4 w-4" />
+              User manual
+            </Button>
             <Button type="button" variant="outline" onClick={() => load({ force: true })} disabled={Boolean(busy)}>
               {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
               Refresh
@@ -350,6 +356,7 @@ export default function XeroPortal() {
             <TabsTrigger value="accounting">Accounting Sync</TabsTrigger>
             <TabsTrigger value="receipts">Receipts</TabsTrigger>
             <TabsTrigger value="automation">Auto-Created Contacts</TabsTrigger>
+            <TabsTrigger value="manual">User Manual</TabsTrigger>
           </TabsList>
 
           <TabsContent value="contacts" className="space-y-4">
@@ -634,6 +641,12 @@ export default function XeroPortal() {
                 </Table>
               </div>
             </section>
+          </TabsContent>
+
+          <TabsContent value="manual" className="space-y-4">
+            <Suspense fallback={<StateBlock icon={Loader2} title="Loading Xero Portal manual" description="FCOS is loading the English and Traditional Chinese user guide." />}>
+              <XeroPortalManual />
+            </Suspense>
           </TabsContent>
         </Tabs>
       </div>
