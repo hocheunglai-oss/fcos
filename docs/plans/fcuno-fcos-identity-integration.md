@@ -17,7 +17,7 @@ Implementation state: Additive provider and consumer foundations in isolated bra
   existing authorization record and rejects stale, inactive, unverified or
   non-entitled identities at every authenticated API boundary.
 - The exact federation contract is pinned to FCUNO commit
-  `bd013104a6046904d3f69ed0f016b80a7a8ce742` and aggregate SHA-256
+  `7a3df3e4b75401b0ec3397271bf05c4b82cdbe8f` and aggregate SHA-256
   `7fc54e7c3bd79fb014ad81dc6d9190d021549d9428486ef85ed78fdff95d7cc2`.
 - Otto's existing SPC profile is linked by exact unique email. FCUNO owns its
   sign-in and revocation; SPC continues to own role, office, route, Supplier
