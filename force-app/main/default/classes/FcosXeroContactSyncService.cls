@@ -33,6 +33,7 @@ public without sharing class FcosXeroContactSyncService {
 
     public static void enqueueForOpportunities(List<Opportunity> rows, Map<Id, Opportunity> oldMap) {
         if (ContextManager.skipTriggers || ContextManager.avoidEnquiryFiring) return;
+        if (!currentConfig().isReady()) return;
         List<SourceRecord> records = new List<SourceRecord>();
         Set<String> seen = new Set<String>();
         for (Opportunity row : rows) {
@@ -44,6 +45,7 @@ public without sharing class FcosXeroContactSyncService {
 
     public static void enqueueForQuotes(List<Quote> rows, Map<Id, Quote> oldMap) {
         if (ContextManager.skipTriggers || ContextManager.avoidQuoteFiring) return;
+        if (!currentConfig().isReady()) return;
         Map<Id, Boolean> eligibleEnquiries = eligibleOpportunityIds(opportunityIds(rows, 'OpportunityId'));
         List<SourceRecord> records = new List<SourceRecord>();
         Set<String> seen = new Set<String>();
@@ -59,6 +61,7 @@ public without sharing class FcosXeroContactSyncService {
 
     public static void enqueueForBrokerEnquiries(List<Broker_Enquiry__c> rows, Map<Id, Broker_Enquiry__c> oldMap) {
         if (ContextManager.skipTriggers || ContextManager.avoidEnquiryBrokerFiring) return;
+        if (!currentConfig().isReady()) return;
         Map<Id, Boolean> eligibleEnquiries = eligibleOpportunityIds(parentIds(brokerEnquiriesAsSObjects(rows), 'Enquiry__c'));
         List<SourceRecord> records = new List<SourceRecord>();
         Set<String> seen = new Set<String>();
@@ -73,6 +76,7 @@ public without sharing class FcosXeroContactSyncService {
 
     public static void enqueueForSupplierBids(List<Supplier_Bid__c> rows, Map<Id, Supplier_Bid__c> oldMap) {
         if (ContextManager.skipTriggers || ContextManager.avoidSupplierBidRecursion) return;
+        if (!currentConfig().isReady()) return;
         Map<Id, Boolean> eligibleEnquiries = eligibleOpportunityIds(parentIds(supplierBidsAsSObjects(rows), 'Enquiry__c'));
         List<SourceRecord> records = new List<SourceRecord>();
         Set<String> seen = new Set<String>();
@@ -87,6 +91,7 @@ public without sharing class FcosXeroContactSyncService {
 
     public static void enqueueForStems(List<STEM__c> rows, Map<Id, STEM__c> oldMap) {
         if (ContextManager.skipTriggers || ContextManager.avoidStemRecursion) return;
+        if (!currentConfig().isReady()) return;
         List<SourceRecord> records = new List<SourceRecord>();
         Set<String> seen = new Set<String>();
         for (STEM__c row : rows) {
@@ -100,6 +105,7 @@ public without sharing class FcosXeroContactSyncService {
 
     public static void enqueueForStemLineItems(List<STEM_Line_Item__c> rows, Map<Id, STEM_Line_Item__c> oldMap) {
         if (ContextManager.skipTriggers || ContextManager.avoidSTEMLineItemFiring) return;
+        if (!currentConfig().isReady()) return;
         Map<Id, Boolean> eligibleStems = eligibleStemIds(parentIds(stemLineItemsAsSObjects(rows), 'STEM__c'));
         List<SourceRecord> records = new List<SourceRecord>();
         Set<String> seen = new Set<String>();
@@ -116,6 +122,7 @@ public without sharing class FcosXeroContactSyncService {
 
     public static void enqueueForStemExtraCosts(List<STEM_Extra_Cost__c> rows, Map<Id, STEM_Extra_Cost__c> oldMap) {
         if (ContextManager.skipTriggers || ContextManager.avoidSTEMExtraCostFiring) return;
+        if (!currentConfig().isReady()) return;
         Map<Id, Boolean> eligibleStems = eligibleStemIds(parentIds(stemExtraCostsAsSObjects(rows), 'STEM__c'));
         List<SourceRecord> records = new List<SourceRecord>();
         Set<String> seen = new Set<String>();
@@ -128,6 +135,7 @@ public without sharing class FcosXeroContactSyncService {
 
     public static void enqueueForVariableChargeSuppliers(List<STEM_Variable_Charge_Supplier__c> rows, Map<Id, STEM_Variable_Charge_Supplier__c> oldMap) {
         if (ContextManager.skipTriggers) return;
+        if (!currentConfig().isReady()) return;
         Map<Id, Boolean> eligibleStems = eligibleStemIds(parentIds(variableChargeSuppliersAsSObjects(rows), 'STEM__c'));
         List<SourceRecord> records = new List<SourceRecord>();
         Set<String> seen = new Set<String>();
@@ -140,6 +148,7 @@ public without sharing class FcosXeroContactSyncService {
 
     public static void enqueueForStemBuyerBrokers(List<STEM_Buyer_Broker__c> rows, Map<Id, STEM_Buyer_Broker__c> oldMap) {
         if (ContextManager.skipTriggers) return;
+        if (!currentConfig().isReady()) return;
         Map<Id, Boolean> eligibleStems = eligibleStemIds(parentIds(stemBuyerBrokersAsSObjects(rows), 'STEM__c'));
         List<SourceRecord> records = new List<SourceRecord>();
         Set<String> seen = new Set<String>();

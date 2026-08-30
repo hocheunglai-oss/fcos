@@ -1,4 +1,6 @@
 const ANCHORAGE_DUES_NAMES = new Set(['ANCHORAGE DUE', 'ANCHORAGE DUES']);
+const INCLUDED_BASIC_CALLING_NAMES = new Set(['AGENCY FEE', 'LIGHT DUES']);
+const LOCKED_BASIC_CALLING_NAMES = new Set(['AGENCY FEE', 'PORT CLEARANCE FEE', 'LIGHT DUES']);
 
 function normalizedProductName(value) {
   return String(value ?? '')
@@ -27,7 +29,37 @@ export function buyerPriceWithAnchorageDefault(item, pricingType = 'fixed') {
     ? item?.fixedPrice ?? item?.fixed_price ?? item?.Lumpsum_Price__c
     : item?.price ?? item?.unitPrice ?? item?.unit_price ?? item?.Unit_Price__c;
   if (existing != null && existing !== '') return existing;
-  return isHongKongAnchorageDuesItem(item) ? 0 : '';
+  const suggested = item?.buyerDefault?.unitOrFixedUsd ?? item?.buyer_default?.unit_or_fixed_usd;
+  if (suggested != null && suggested !== '') return suggested;
+  if (isHongKongAnchorageDuesItem(item)) {
+    return pricingType === 'fixed'
+      ? item?.fixedCost ?? item?.fixed_cost ?? item?.Lumpsum_Cost__c ?? ''
+      : item?.cost ?? item?.unitCost ?? item?.unit_cost ?? item?.Unit_Cost__c ?? '';
+  }
+  return '';
+}
+
+export function buyerDecisionDefaultForItem(item) {
+  return item?.buyerDefault?.decision ?? item?.buyer_default?.decision ?? '';
+}
+
+export function buyerDecisionLockedForItem(item) {
+  return item?.buyerDefault?.locked === true || item?.buyer_default?.locked === true
+    || (item?.managedBasicCallingBundle === true
+      && LOCKED_BASIC_CALLING_NAMES.has(normalizedProductName(item?.productName ?? item?.Product2Id__r?.Name)));
+}
+
+export function supplierCostLockedForItem(item) {
+  return item?.supplierCostLocked === true || item?.supplier_cost_locked === true;
+}
+
+export function isPortClearanceItem(item) {
+  return normalizedProductName(item?.productName ?? item?.Product2Id__r?.Name) === 'PORT CLEARANCE FEE';
+}
+
+export function isIncludedBasicCallingItem(item) {
+  return item?.managedBasicCallingBundle === true
+    && INCLUDED_BASIC_CALLING_NAMES.has(normalizedProductName(item?.productName ?? item?.Product2Id__r?.Name));
 }
 
 export function buyerDecisionOptionsForItem(item) {
@@ -40,8 +72,8 @@ export function buyerDecisionOptionsForItem(item) {
   }
   return [
     { value: '', label: 'Pending', tone: 'bg-slate-100 text-slate-800' },
-    { value: 'include', label: 'Charge Excess', tone: 'bg-blue-100 text-blue-900' },
-    { value: 'exclude', label: 'No Charge · 12h or less', tone: 'bg-slate-200 text-slate-900' },
+    { value: 'include', label: 'Pass Through', tone: 'bg-blue-100 text-blue-900' },
+    { value: 'exclude', label: 'No Supplier Charge', tone: 'bg-slate-200 text-slate-900' },
   ];
 }
 

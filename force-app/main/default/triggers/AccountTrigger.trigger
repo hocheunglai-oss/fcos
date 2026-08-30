@@ -12,6 +12,7 @@ trigger AccountTrigger on Account (before insert, before update, after insert, a
             //AccountTriggerHandler.setSharedCheckbox(Trigger.new);
             if(Trigger.isUpdate){
                 VariableChargeInvoiceReadinessService.invalidateForAccountChanges(Trigger.newMap, Trigger.oldMap);
+                HongKongBasicCallingBundleService.afterAccountChange(Trigger.newMap, Trigger.oldMap);
                 AccountTriggerHandler.populateMailingRequirement(Trigger.newMap, Trigger.oldMap);
             }
             AccountTriggerHandler.setDefaultContact(Trigger.new, Trigger.oldMap);

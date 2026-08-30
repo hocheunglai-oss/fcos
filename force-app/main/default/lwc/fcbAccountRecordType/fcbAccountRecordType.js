@@ -23,6 +23,8 @@ export default class FcbAccountRecordType extends LightningElement {
   savedIsAgent;
   @track isVariable;
   savedIsVariable;
+  @track agencyFeeUsd;
+  savedAgencyFeeUsd;
   @track isBroker;
   @track isBrokerRecordType;
   savedIsBroker;
@@ -140,6 +142,8 @@ export default class FcbAccountRecordType extends LightningElement {
       this.savedIsAgent = result.Is_Agent__c;
       this.isVariable = result.Is_Variable__c;
       this.savedIsVariable = result.Is_Variable__c;
+      this.agencyFeeUsd = result.Agency_Fee_USD__c;
+      this.savedAgencyFeeUsd = result.Agency_Fee_USD__c;
       this.isBroker = result.Is_Broker__c;
       this.savedIsBroker = result.Is_Broker__c;
       this.isBrokerRecordType = this.recordTypeId === this.recordTypeIds.find(recordType => recordType.label === 'Broker').value;
@@ -206,6 +210,7 @@ export default class FcbAccountRecordType extends LightningElement {
           fields["RecordTypeId"] = this.recordTypeId;
           fields["Is_Agent__c"] = this.isAgent;
           fields["Is_Variable__c"] = this.isVariable;
+          fields["Agency_Fee_USD__c"] = this.agencyFeeUsd === '' ? null : this.agencyFeeUsd;
           fields["Is_Broker__c"] = this.isBroker;
           fields["Hidden_Broker__c"] = this.hiddenBroker;
           fields["Hidden_Broker_Company__c"] = this.hiddenBrokerCompany;
@@ -224,6 +229,7 @@ export default class FcbAccountRecordType extends LightningElement {
               this.savedRecordTypeId = this.recordTypeId;
               this.savedIsAgent = this.isAgent;
               this.savedIsVariable = this.isVariable;
+              this.savedAgencyFeeUsd = this.agencyFeeUsd;
               this.savedIsBroker = this.isBroker;
               this.dispatchEvent(
                 new ShowToastEvent({
@@ -260,6 +266,7 @@ export default class FcbAccountRecordType extends LightningElement {
         fields["Id"] = this.recordId;
         fields["Is_Agent__c"] = this.isAgent;
         fields["Is_Variable__c"] = this.isVariable;
+        fields["Agency_Fee_USD__c"] = this.agencyFeeUsd === '' ? null : this.agencyFeeUsd;
         fields["Hidden_Broker__c"] = this.hiddenBroker;
         fields["Hidden_Broker_Company__c"] = this.hiddenBrokerCompany;
         fields["Email_Invoice__c"] = this.selectedEmailInvoice;
@@ -277,6 +284,7 @@ export default class FcbAccountRecordType extends LightningElement {
             this.savedRecordTypeId = this.recordTypeId;
             this.savedIsAgent = this.isAgent;
             this.savedIsVariable = this.isVariable;
+            this.savedAgencyFeeUsd = this.agencyFeeUsd;
             this.savedIsBroker = this.isBroker;
             this.dispatchEvent(
               new ShowToastEvent({
@@ -315,6 +323,11 @@ export default class FcbAccountRecordType extends LightningElement {
 
   handleChangeInvoicingRequirement(event){
     this.invoicingRequirement = event.detail.value;
+    this.showSaveButton();
+  }
+
+  handleAgencyFeeChange(event) {
+    this.agencyFeeUsd = event.detail.value;
     this.showSaveButton();
   }
 
@@ -385,6 +398,7 @@ export default class FcbAccountRecordType extends LightningElement {
     this.isShowedSavedButton = this.recordTypeId !== this.savedRecordTypeId 
     || this.isAgent !== this.savedIsAgent
     || this.isVariable !== this.savedIsVariable
+    || String(this.agencyFeeUsd ?? '') !== String(this.savedAgencyFeeUsd ?? '')
     || this.isBroker !== this.savedIsBroker 
     || this.hiddenBroker !== this.savedHiddenBroker
     || this.hiddenBrokerCompany !== this.savedHiddenBrokerCompany

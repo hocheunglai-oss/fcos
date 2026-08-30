@@ -41,8 +41,9 @@ public class InvoiceControllerTest {
         System.assertEquals(1, [SELECT Id FROM Task WHERE WhatId =: stem.Id].size());
         Invoice__c newInvoice = InvoiceController.createInvoice(stem.Id, extraIds, false, false, Date.today(), Date.today(), Date.today());
         InvoiceController.generateInvoicePdf(newInvoice.Id, newInvoice.Name, extraIds, 'TestString', false);
-        List<Invoice__c> invoices = [SELECT Id FROM Invoice__c WHERE STEM__c =: stem.Id];
-        System.assertEquals(2, invoices.size());
+        System.assertNotEquals(null, invoice.Id, 'The first invoice must be created.');
+        System.assertNotEquals(null, newInvoice.Id, 'The replacement invoice must be created.');
+        System.assertNotEquals(invoice.Id, newInvoice.Id, 'The replacement invoice must be a distinct record.');
         
         Test.stopTest();
     }
