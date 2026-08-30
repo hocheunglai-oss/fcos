@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { calculateMasterContractSplitPrice, masterContractBenchmark, masterContractDonWindow, masterContractLiveVariances, masterContractPreflight, masterContractPricingPosition, masterContractQuantitySummary } from '../src/lib/masterContracts.js';
+import { applyMasterContractPaymentTerms, applyMasterContractPortAssignment, applyMasterContractPortLocation, calculateMasterContractSplitPrice, masterContractBenchmark, masterContractDonWindow, masterContractLineKey, masterContractLiveVariances, masterContractPaymentTerms, masterContractPortAssignment, masterContractPortSettings, masterContractPreflight, masterContractPricingPosition, masterContractQuantitySummary } from '../src/lib/masterContracts.js';
 import { sfCompositeQueries, sfQuery, sfRequest } from './_salesforce.js';
 
 const EVIDENCE_BUCKET = 'master-contract-evidence';
@@ -70,7 +70,80 @@ function normalizedSnapshot(input = {}) {
   snapshot.products = Array.isArray(snapshot.products) ? snapshot.products : [];
   snapshot.deliveries = Array.isArray(snapshot.deliveries) ? snapshot.deliveries : [];
   snapshot.chargeRules = Array.isArray(snapshot.chargeRules) ? snapshot.chargeRules : [];
-  return snapshot;
+  let normalized = applyMasterContractPaymentTerms(snapshot, masterContractPaymentTerms(snapshot));
+  normalized = applyMasterContractPortAssignment(normalized, masterContractPortAssignment(normalized));
+  for (const setting of masterContractPortSettings(normalized)) {
+    if (['Berth', 'Anchorage', 'TBD'].includes(setting.supplyLocation)) normalized = applyMasterContractPortLocation(normalized, setting);
+  }
+  return normalized;
+}
+
+async function reserveMasterContractKeys(client, { contractCount = 0, deliveryCount = 0 } = {}) {
+  if (!contractCount && !deliveryCount) return { contractKeys: [], deliveryKeys: [] };
+  const { data, error: reserveError } = await client.rpc('reserve_master_contract_keys', {
+    p_contract_count: contractCount,
+    p_delivery_count: deliveryCount,
+  });
+  if (reserveError) throw reserveError;
+  return {
+    contractKeys: Array.isArray(data?.contractKeys) ? data.contractKeys : [],
+    deliveryKeys: Array.isArray(data?.deliveryKeys) ? data.deliveryKeys : [],
+  };
+}
+
+async function assignMasterContractKeys(client, { contractId, existing, snapshot }) {
+  const existingDeliveries = Array.isArray(existing?.current_snapshot?.deliveries)
+    ? existing.current_snapshot.deliveries
+    : [];
+  let persistedDeliveries = [];
+  if (contractId) {
+    const { data, error: deliveryError } = await client
+      .from('master_contract_deliveries')
+      .select('id,delivery_key')
+      .eq('contract_id', contractId);
+    if (deliveryError) throw deliveryError;
+    persistedDeliveries = data || [];
+  }
+  const existingById = new Map([
+    ...existingDeliveries.filter((row) => row?.id).map((row) => [row.id, row]),
+    ...persistedDeliveries.map((row) => [row.id, { deliveryKey: row.delivery_key }]),
+  ]);
+  const existingByKey = new Map(existingDeliveries.filter((row) => row?.deliveryKey).map((row) => [row.deliveryKey, row]));
+  const newIndexes = [];
+  const deliveries = snapshot.deliveries.map((delivery, index) => {
+    const persisted = (delivery.id && existingById.get(delivery.id))
+      || (delivery.deliveryKey && existingByKey.get(delivery.deliveryKey));
+    if (persisted?.deliveryKey) return { ...delivery, deliveryKey: persisted.deliveryKey };
+    newIndexes.push(index);
+    return { ...delivery, deliveryKey: '' };
+  });
+  const reserved = await reserveMasterContractKeys(client, {
+    contractCount: contractId ? 0 : 1,
+    deliveryCount: newIndexes.length,
+  });
+  const contractKey = contractId ? existing.contract_key : reserved.contractKeys[0];
+  if (!contractKey || reserved.deliveryKeys.length !== newIndexes.length) {
+    throw error('FCOS could not reserve the required Master Contract keys.', 503, 'MASTER_CONTRACT_KEY_RESERVATION_FAILED');
+  }
+  newIndexes.forEach((index, reservedIndex) => {
+    deliveries[index].deliveryKey = reserved.deliveryKeys[reservedIndex];
+  });
+  const newIndexSet = new Set(newIndexes);
+  return {
+    contractKey,
+    snapshot: {
+      ...snapshot,
+      deliveries: deliveries.map((delivery, index) => ({
+        ...delivery,
+        products: (delivery.products || []).map((product) => ({
+          ...product,
+          contractLineKey: newIndexSet.has(index) || !product.contractLineKey
+            ? masterContractLineKey(contractKey, delivery.deliveryKey, product.productKey)
+            : product.contractLineKey,
+        })),
+      })),
+    },
+  };
 }
 
 function selectedDeliveryKeys(body = {}) {
@@ -241,7 +314,7 @@ export async function getMasterContract(body, context) {
 }
 
 export async function saveMasterContract(body, context) {
-  const snapshot = normalizedSnapshot(body?.snapshot);
+  let snapshot = normalizedSnapshot(body?.snapshot);
   const contractId = body?.contractId ? validUuid(body.contractId, 'Master Contract') : null;
   let existing = null;
   if (contractId) {
@@ -253,9 +326,11 @@ export async function saveMasterContract(body, context) {
   if (existing?.status && !['draft', 'approved', 'active'].includes(existing.status)) {
     throw error('This Master Contract cannot be edited while an approval is pending.', 409, 'MASTER_CONTRACT_APPROVAL_PENDING');
   }
-  const contractKey = text(body?.contractKey || existing?.contract_key, 80).toUpperCase();
+  const assigned = await assignMasterContractKeys(context.client, { contractId, existing, snapshot });
+  snapshot = assigned.snapshot;
+  const contractKey = assigned.contractKey;
   const title = text(body?.title || existing?.title, 300);
-  if (!/^[A-Z0-9][A-Z0-9_-]{5,79}$/.test(contractKey) || !title) throw error('Contract key and title are required.');
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{5,79}$/.test(contractKey) || !title) throw error('Contract key and title are required.');
   const request = { contractId, contractKey, title, expectedRevision: body?.expectedRevision ?? null, snapshot };
   const requestHash = sha256(request);
   const { data, error: rpcError } = await context.client.rpc('save_master_contract_snapshot', {

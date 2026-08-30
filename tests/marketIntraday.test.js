@@ -126,7 +126,7 @@ test('same-date movement and structure remain exact-snapshot and exact-contract'
 test('intraday handlers, permissions, service-only schema and UI review are wired', () => {
   const handler = read('api/functions/[name].js');
   const policy = read('api/_handlerPolicyRegistry.js');
-  const migration = read('supabase/migrations/20260821143812_market_intraday_snapshots.sql');
+  const migration = read('supabase/migrations/20260821145209_market_intraday_snapshots.sql');
   const workspace = read('src/hedge/views/MarketIntelligenceWorkspace.jsx');
   const strip = read('src/hedge/views/market-intelligence/MarketIntradayStrip.jsx');
   const pulse = read('src/components/market-pulse/MarketPulse.jsx');

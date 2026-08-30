@@ -22,7 +22,6 @@ export const APP_MODULES = [
   { id: 'cashflow_forecast', label: 'Cashflow Forecast', path: '/cashflow-forecast', sortOrder: 47 },
   { id: 'pnl', label: 'Dashboard and Qlik Validator Tool', path: '/pnl', sortOrder: 50 },
   { id: 'brokers', label: "Broker's Commission", path: '/brokers', sortOrder: 70 },
-  { id: 'report_archive', label: 'Reports Archive', path: '/brokers?tab=archive', sortOrder: 75 },
   { id: 'buyers_administrator', label: 'Account Managers', path: '/account-managers', sortOrder: 85 },
   { id: 'master_contracts', label: 'Master Contracts', path: '/master-contracts', sortOrder: 84 },
   { id: 'markets', label: 'Markets', path: '/markets', sortOrder: 86 },

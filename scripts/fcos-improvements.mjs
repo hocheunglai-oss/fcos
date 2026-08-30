@@ -1,13 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { improvementAgentPropose, improvementAgentShow } from '../api/_fcosImprovements.js';
-
-function requiredEnv(...names) {
-  for (const name of names) {
-    const value = String(process.env[name] || '').trim();
-    if (value) return value;
-  }
-  throw new Error(`${names.join(' or ')} is required.`);
-}
+import { serverSupabaseConfig } from '../api/_supabaseConfig.js';
+import { fcosConnectionIdentifier } from '../config/fcosConnections.js';
 
 function option(name) {
   const index = process.argv.indexOf(name);
@@ -64,9 +58,12 @@ async function main() {
   const command = String(process.argv[2] || '').trim().toLowerCase();
   const ticketKey = String(process.argv[3] || '').trim().toUpperCase();
   if (!command || !ticketKey) throw new Error(usage());
-  const url = requiredEnv('SUPABASE_URL', 'VITE_SUPABASE_URL');
-  const key = requiredEnv('SUPABASE_SERVICE_ROLE_KEY');
-  const client = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+  const supabase = serverSupabaseConfig();
+  if (!supabase.configured) throw new Error(`${supabase.missingEnv.join(' and ')} is required.`);
+  const projectRef = new URL(supabase.url).hostname.split('.')[0];
+  const expectedProjectRef = fcosConnectionIdentifier('supabase', 'Project ref');
+  if (projectRef !== expectedProjectRef) throw new Error(`Supabase identity mismatch; expected project ${expectedProjectRef}.`);
+  const client = createClient(supabase.url, supabase.key, { auth: { persistSession: false, autoRefreshToken: false } });
   let result;
   if (command === 'show') {
     result = await improvementAgentShow({ ticketKey }, client);

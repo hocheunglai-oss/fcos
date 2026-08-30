@@ -3,12 +3,14 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { fcosConnectionProvider } from '../config/fcosConnections.js';
 
-const EXPECTED = Object.freeze({
-  'fcos-devee': { orgId: '00D1m0000008kioEAA', sandbox: true },
-  'fcos-qat': { orgId: '00D1s0000008lFEEAY', sandbox: true },
-  'source-salesforce': { orgId: '00D2x000000Ei4oEAC', sandbox: false },
-});
+const EXPECTED = Object.freeze(Object.fromEntries(
+  fcosConnectionProvider('salesforce').environments.map((environment) => [
+    environment.alias,
+    { orgId: environment.orgId, sandbox: environment.isSandbox },
+  ]),
+));
 
 function argument(name) {
   const index = process.argv.indexOf(name);

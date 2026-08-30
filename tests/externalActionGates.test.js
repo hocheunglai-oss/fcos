@@ -48,7 +48,8 @@ test('retained live paths include emergency controls at their server boundary', 
   const source = await readFile(new URL('../api/functions/[name].js', import.meta.url), 'utf8');
   const graphSource = await readFile(new URL('../api/_microsoftGraphMail.js', import.meta.url), 'utf8');
   const operationalSource = await readFile(new URL('../api/_operationalMail.js', import.meta.url), 'utf8');
-  assert.match(source, /async function googleDriveAccessToken\(\) \{\s*requireExternalActionGate\('google_drive'\)/);
+  assert.match(source, /async function googleDriveMarketAccessToken\(\) \{\s*requireExternalActionGate\('google_drive'\)/);
+  assert.doesNotMatch(source, /async function googleDriveAccessToken\(\)/);
   assert.match(source, /from '\.\.\/_operationalMail\.js'/);
   assert.match(operationalSource, /sendGraphPurposeMail/);
   assert.doesNotMatch(operationalSource, /smtp/i);

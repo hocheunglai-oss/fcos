@@ -2,6 +2,122 @@ const SF_ID_RE = /^[A-Za-z0-9]{15}([A-Za-z0-9]{3})?$/;
 
 export const MASTER_CONTRACT_PRODUCT_ORDER = ['hsfo', 'mgo'];
 
+export function masterContractPortAssignment(snapshot = {}) {
+  const configured = snapshot?.terms?.portAssignment || {};
+  if (configured.mode === 'one_port') {
+    return {
+      mode: 'one_port',
+      portId: configured.portId || '',
+      portName: configured.portName || '',
+    };
+  }
+  if (configured.mode === 'per_delivery') return { mode: 'per_delivery', portId: '', portName: '' };
+  const deliveries = (snapshot.deliveries || []).filter((delivery) => delivery.status !== 'cancelled');
+  const resolved = deliveries.filter((delivery) => delivery.portId);
+  const ids = new Set(resolved.map((delivery) => delivery.portId));
+  if (deliveries.length && resolved.length === deliveries.length && ids.size === 1) {
+    return {
+      mode: 'one_port',
+      portId: resolved[0].portId,
+      portName: resolved[0].portName || '',
+    };
+  }
+  return { mode: 'per_delivery', portId: '', portName: '' };
+}
+
+export function masterContractPaymentTerms(snapshot = {}) {
+  const deliveries = (snapshot.deliveries || []).filter((delivery) => delivery.status !== 'cancelled');
+  const uniqueTerm = (side) => {
+    const explicit = String(snapshot?.parties?.[side]?.paymentTerm || '').trim();
+    if (explicit) return explicit;
+    const values = [...new Set(deliveries.map((delivery) => String(delivery?.[`${side}PaymentTerm`] || '').trim()).filter(Boolean))];
+    return values.length === 1 ? values[0] : '';
+  };
+  return { buyerPaymentTerm: uniqueTerm('buyer'), supplierPaymentTerm: uniqueTerm('supplier') };
+}
+
+export function masterContractPortSettings(snapshot = {}) {
+  const stored = Array.isArray(snapshot?.terms?.portSettings) ? snapshot.terms.portSettings : [];
+  const deliveries = (snapshot.deliveries || []).filter((delivery) => delivery.status !== 'cancelled');
+  const assignment = masterContractPortAssignment(snapshot);
+  const ports = new Map();
+  if (assignment.mode === 'one_port' && assignment.portId) {
+    ports.set(assignment.portId, { portId: assignment.portId, portName: assignment.portName || '' });
+  }
+  for (const delivery of deliveries) {
+    if (!delivery.portId) continue;
+    if (!ports.has(delivery.portId)) ports.set(delivery.portId, { portId: delivery.portId, portName: delivery.portName || '' });
+  }
+  return [...ports.values()].map((port) => {
+    const saved = stored.find((setting) => setting.portId === port.portId);
+    const values = [...new Set(deliveries
+      .filter((delivery) => delivery.portId === port.portId)
+      .map((delivery) => String(delivery.supplyLocation || '').trim())
+      .filter(Boolean))];
+    const supplyLocation = saved?.supplyLocation || (values.length === 1 ? values[0] : '');
+    return { ...port, supplyLocation, conflicting: !saved?.supplyLocation && values.length > 1 };
+  });
+}
+
+export function applyMasterContractPaymentTerms(snapshot = {}, terms = {}) {
+  const buyerPaymentTerm = String(terms.buyerPaymentTerm || '').trim();
+  const supplierPaymentTerm = String(terms.supplierPaymentTerm || '').trim();
+  return {
+    ...snapshot,
+    parties: {
+      ...(snapshot.parties || {}),
+      buyer: { ...(snapshot.parties?.buyer || {}), paymentTerm: buyerPaymentTerm },
+      supplier: { ...(snapshot.parties?.supplier || {}), paymentTerm: supplierPaymentTerm },
+    },
+    deliveries: (snapshot.deliveries || []).map((delivery) => ({
+      ...delivery,
+      buyerPaymentTerm,
+      supplierPaymentTerm,
+    })),
+  };
+}
+
+export function applyMasterContractPortLocation(snapshot = {}, setting = {}) {
+  const portId = String(setting.portId || '');
+  const portName = String(setting.portName || '');
+  const supplyLocation = String(setting.supplyLocation || '');
+  const settings = masterContractPortSettings(snapshot)
+    .filter((row) => row.portId !== portId)
+    .map((row) => ({
+      portId: row.portId,
+      portName: row.portName,
+      supplyLocation: row.supplyLocation,
+    }));
+  if (portId) settings.push({ portId, portName, supplyLocation });
+  return {
+    ...snapshot,
+    terms: { ...(snapshot.terms || {}), portSettings: settings },
+    deliveries: (snapshot.deliveries || []).map((delivery) => (
+      delivery.portId === portId ? { ...delivery, supplyLocation } : delivery
+    )),
+  };
+}
+
+export function applyMasterContractPortAssignment(snapshot = {}, assignment = {}) {
+  const mode = assignment.mode === 'one_port' ? 'one_port' : 'per_delivery';
+  const portId = mode === 'one_port' ? String(assignment.portId || '') : '';
+  const portName = mode === 'one_port' ? String(assignment.portName || '') : '';
+  const next = {
+    ...snapshot,
+    terms: {
+      ...(snapshot.terms || {}),
+      portAssignment: { mode, portId, portName },
+    },
+    deliveries: mode === 'one_port' && portId
+      ? (snapshot.deliveries || []).map((delivery) => ({ ...delivery, portId, portName }))
+      : (snapshot.deliveries || []),
+  };
+  const existingLocation = masterContractPortSettings(next).find((setting) => setting.portId === portId);
+  return mode === 'one_port' && portId && existingLocation?.supplyLocation
+    ? applyMasterContractPortLocation(next, existingLocation)
+    : next;
+}
+
 function externalKeyPart(value, fallback) {
   const normalized = String(value || '')
     .trim()
@@ -179,6 +295,8 @@ export function masterContractPreflight(snapshot = {}, { selectedDeliveryIds = n
   const terms = snapshot.terms || {};
   const selected = selectedDeliveryIds ? new Set(selectedDeliveryIds) : null;
   const allDeliveries = snapshot.deliveries || [];
+  const portAssignment = masterContractPortAssignment(snapshot);
+  const portSettings = masterContractPortSettings(snapshot);
   const deliveryIdentities = (delivery) => [
     delivery.id,
     delivery.deliveryId,
@@ -197,6 +315,10 @@ export function masterContractPreflight(snapshot = {}, { selectedDeliveryIds = n
   const donMax = numberOrNull(terms?.don?.maxDays);
   if (!Number.isInteger(donMin) || !Number.isInteger(donMax) || donMin < 0 || donMax > 365 || donMin > donMax) blockers.push({ code: 'DON_WINDOW_REQUIRED', message: 'Enter a valid DON X–Y day window between 0 and 365 days.' });
   if (!['contract', 'per_delivery'].includes(terms?.variableCharges?.mode)) blockers.push({ code: 'VARIABLE_CHARGES_MODE_REQUIRED', message: 'Choose the Variable Charges selection mode.' });
+  if (portAssignment.mode === 'one_port' && !SF_ID_RE.test(portAssignment.portId || '')) blockers.push({ code: 'CONTRACT_PORT_REQUIRED', message: 'Resolve the exact Port used by all deliveries.' });
+  for (const port of portSettings) {
+    if (!['Berth', 'Anchorage', 'TBD'].includes(port.supplyLocation)) blockers.push({ code: 'PORT_LOCATION_REQUIRED', portId: port.portId, message: `${port.portName || 'Port'}: choose one supply location for this contract.` });
+  }
   if (terms?.variableCharges?.mode === 'contract' && (!Array.isArray(terms?.variableCharges?.supplierIds) || terms.variableCharges.supplierIds.some((id) => !SF_ID_RE.test(id)))) blockers.push({ code: 'VARIABLE_CHARGES_REQUIRED', message: 'Complete the contract-wide Variable Charges supplier selection with exact Account identities.' });
   if (!deliveries.length) blockers.push({ code: 'DELIVERY_REQUIRED', message: 'Select at least one uncreated delivery.' });
   if (selected) {

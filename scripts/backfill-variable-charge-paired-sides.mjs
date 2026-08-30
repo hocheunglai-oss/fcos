@@ -5,14 +5,17 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createClient } from '@supabase/supabase-js';
 import { variableChargeInternals } from '../api/_variableCharges.js';
+import { serverSupabaseConfig } from '../api/_supabaseConfig.js';
+import { fcosConnectionIdentifier, fcosSalesforceEnvironment } from '../config/fcosConnections.js';
 
+const PRODUCTION_ORG = fcosSalesforceEnvironment('production');
 const EXPECTED_ORG = Object.freeze({
-  alias: 'source-salesforce',
-  orgId: '00D2x000000Ei4oEAC',
-  username: 'vincent@cosulich.com.hk',
-  sandbox: false,
+  alias: PRODUCTION_ORG.alias,
+  orgId: PRODUCTION_ORG.orgId,
+  username: PRODUCTION_ORG.username,
+  sandbox: PRODUCTION_ORG.isSandbox,
 });
-const EXPECTED_SUPABASE_REF = 'pjforfvchygdyqfcgpmw';
+const EXPECTED_SUPABASE_REF = fcosConnectionIdentifier('supabase', 'Project ref');
 const API_VERSION = 'v67.0';
 const PAGE_SIZE = 1_000;
 const SALESFORCE_ID = /^[A-Za-z0-9]{15}(?:[A-Za-z0-9]{3})?$/;
@@ -159,12 +162,11 @@ function assertOrg(alias) {
 }
 
 function supabaseClient() {
-  const url = String(process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '').trim();
-  const key = String(process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
-  if (!url || !key) throw new Error('VITE_SUPABASE_URL and SUPABASE_SECRET_KEY or SUPABASE_SERVICE_ROLE_KEY are required.');
-  const parsed = new URL(url);
+  const config = serverSupabaseConfig();
+  if (!config.configured) throw new Error(`${config.missingEnv.join(' and ')} is required.`);
+  const parsed = new URL(config.url);
   if (!parsed.hostname.startsWith(`${EXPECTED_SUPABASE_REF}.`)) throw new Error(`Supabase identity mismatch; expected project ${EXPECTED_SUPABASE_REF}.`);
-  return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+  return createClient(config.url, config.key, { auth: { persistSession: false, autoRefreshToken: false } });
 }
 
 async function loadLedger(client) {

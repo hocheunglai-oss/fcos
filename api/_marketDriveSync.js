@@ -75,7 +75,7 @@ async function driveBuffer(fetchImpl, accessToken, fileId) {
   return buffer;
 }
 
-async function verifyDriveAuthority(fetchImpl, accessToken, config) {
+export async function verifyMarketDriveAuthority(fetchImpl, accessToken, config) {
   const about = await driveJson(fetchImpl, accessToken, 'about', { fields: 'user(emailAddress)' });
   if (String(about.user?.emailAddress || '').trim().toLowerCase() !== config.accountEmail.toLowerCase()) {
     throw syncError('Google Drive market-report authorization does not match the approved account.', 'MARKET_DRIVE_IDENTITY_MISMATCH', 503);
@@ -104,6 +104,7 @@ async function verifyDriveAuthority(fetchImpl, accessToken, config) {
       && shortcut.shortcutDetails?.targetMimeType === DRIVE_FOLDER_MIME_TYPE)
     .map((shortcut) => shortcut.shortcutDetails.targetId));
 
+  const folders = [];
   for (const folder of config.folders) {
     const metadata = await driveJson(fetchImpl, accessToken, `files/${encodeURIComponent(folder.folderId)}`, {
       fields: 'id,name,mimeType,trashed,parents',
@@ -116,7 +117,18 @@ async function verifyDriveAuthority(fetchImpl, accessToken, config) {
           && !approvedShortcutTargets.has(folder.folderId))) {
       throw syncError('Google Drive market-report folders do not match the approved hierarchy.', 'MARKET_DRIVE_FOLDER_MISMATCH', 503);
     }
+    folders.push({
+      label: folder.label,
+      folderId: metadata.id,
+      folderName: metadata.name || null,
+    });
   }
+  return {
+    accountEmail: String(about.user?.emailAddress || '').trim().toLowerCase(),
+    rootFolderId: root.id,
+    rootFolderName: root.name || null,
+    folders,
+  };
 }
 
 async function listDriveReports(fetchImpl, accessToken, folder) {
@@ -209,7 +221,7 @@ export async function runMarketReportArchiveReplayBatch(client, {
   reviewedReportDateOverrides = REVIEWED_REPORT_DATE_OVERRIDES,
 } = {}) {
   if (!client || !accessToken) throw syncError('Market archive replay authorization is unavailable.', 'MARKET_ARCHIVE_AUTH_UNAVAILABLE', 503);
-  await verifyDriveAuthority(fetchImpl, accessToken, config);
+  await verifyMarketDriveAuthority(fetchImpl, accessToken, config);
   const folderFiles = await Promise.all(config.folders.map((folder) => listDriveReports(fetchImpl, accessToken, folder)));
   const archive = reviewedArchiveFiles(folderFiles.flat(), reviewedArchive);
   const normalizedCursor = Number(cursor);
@@ -441,7 +453,7 @@ export async function runMarketReportDriveSync(client, {
     libraryRepairedCount: 0,
   };
   try {
-    await verifyDriveAuthority(fetchImpl, accessToken, config);
+    await verifyMarketDriveAuthority(fetchImpl, accessToken, config);
     const [storedReportIndex, ...folderFiles] = await Promise.all([
       loadStoredReportIndex(client),
       ...config.folders.map((folder) => listDriveReports(fetchImpl, accessToken, folder)),
@@ -488,12 +500,12 @@ export async function runMarketReportDriveSync(client, {
           || storedImport.report_date !== parsed.reportDate)) {
           throw syncError('A stored report checksum no longer matches its immutable identity.', 'MARKET_DRIVE_STORED_IDENTITY_MISMATCH', 409);
         }
-        const saved = storedImport
-          ? await client.rpc('record_market_report_product_library', {
+        const saveReport = () => storedImport
+          ? client.rpc('record_market_report_product_library', {
             p_import_id: storedImport.id,
             p_observations: parsed.libraryObservations || [],
           })
-          : await client.rpc('save_market_drive_report_import', {
+          : client.rpc('save_market_drive_report_import', {
             p_idempotency_key: `market-drive-${parsed.sourceHash}`,
             p_source_document_type: file.documentType,
             p_source_hash: parsed.sourceHash,
@@ -505,6 +517,11 @@ export async function runMarketReportDriveSync(client, {
             p_availability: parsed.availabilityEvidence || [],
             p_library_observations: parsed.libraryObservations || [],
           });
+        let saved = await saveReport();
+        // Both database functions are idempotent. Retry once when the first
+        // response is lost or Supabase has a transient gateway/statement error;
+        // the immutable source hash prevents duplicate report evidence.
+        if (saved.error) saved = await saveReport();
         if (saved.error) throw syncError('A parsed market report could not be saved.', 'MARKET_DRIVE_IMPORT_FAILED');
         const publicationStatus = saved.data?.mopsPublication?.status;
         if (publicationStatus === 'published') summary.mopsPublishedCount += 1;

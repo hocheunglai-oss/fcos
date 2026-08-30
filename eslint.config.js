@@ -102,9 +102,11 @@ export default [
   {
     files: [
       "api/**/*.{js,mjs,cjs}",
+      "config/**/*.{js,mjs,cjs}",
       "shared/**/*.{js,mjs,cjs}",
       "scripts/**/*.{js,mjs,cjs}",
       "tests/**/*.{js,mjs,cjs}",
+      "*.config.js",
     ],
     ...pluginJs.configs.recommended,
     languageOptions: {

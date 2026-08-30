@@ -13,10 +13,12 @@ import {
   suggestClauseCategory,
   suggestClauseShortName,
 } from '../api/_specialTermClauseModel.js';
+import { fcosSalesforceEnvironment } from '../config/fcosConnections.js';
 
 const SALESFORCE_API_VERSION = 'v67.0';
-const SALESFORCE_ALIAS = process.env.SALESFORCE_ORG_ALIAS || 'source-salesforce';
-const EXPECTED_ORG_ID = '00D2x000000Ei4oEAC';
+const PRODUCTION_ORG = fcosSalesforceEnvironment('production');
+const SALESFORCE_ALIAS = process.env.SALESFORCE_ORG_ALIAS || PRODUCTION_ORG.alias;
+const EXPECTED_ORG_ID = PRODUCTION_ORG.orgId;
 const APPLY = process.argv.includes('--apply');
 const WITH_AI = process.argv.includes('--ai');
 const DIAGNOSTICS = process.argv.includes('--diagnostics');
@@ -34,14 +36,21 @@ const PROJECTIONS = Object.freeze([
 ]);
 
 function orgIdentity() {
+  if (SALESFORCE_ALIAS !== PRODUCTION_ORG.alias) throw new Error(`Special Terms migration is Production-only; use Salesforce alias ${PRODUCTION_ORG.alias}.`);
   const result = spawnSync('sf', ['org', 'display', '--target-org', SALESFORCE_ALIAS, '--json'], {
     encoding: 'utf8',
     env: { ...process.env, SF_TEMP_SHOW_SECRETS: 'true' },
   });
   if (result.status !== 0) throw new Error(result.stderr || result.stdout || 'Salesforce CLI authentication failed.');
   const org = JSON.parse(result.stdout).result || {};
-  if (org.id !== EXPECTED_ORG_ID) throw new Error(`Salesforce identity mismatch. Expected ${EXPECTED_ORG_ID}; received ${org.id || 'unknown'}.`);
   if (!org.accessToken || !org.instanceUrl) throw new Error('Salesforce CLI did not return a usable authenticated org.');
+  const isSandbox = org.isSandbox === true || String(org.instanceUrl || '').includes('.sandbox.') || String(org.instanceUrl || '').includes('--');
+  if (
+    org.id !== EXPECTED_ORG_ID
+    || org.username !== PRODUCTION_ORG.username
+    || new URL(org.instanceUrl).origin !== new URL(PRODUCTION_ORG.instanceUrl).origin
+    || isSandbox !== PRODUCTION_ORG.isSandbox
+  ) throw new Error(`Salesforce identity mismatch. Expected ${EXPECTED_ORG_ID} / ${PRODUCTION_ORG.username} / Production.`);
   return org;
 }
 

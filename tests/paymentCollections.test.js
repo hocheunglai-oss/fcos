@@ -80,7 +80,7 @@ test('FCOS exposes fixed personal, trading, cross-functional, finance and tools 
   assert.match(layout, /id: 'trading'[\s\S]*workspaceNavigation\('dashboard'[\s\S]*workspaceNavigation\('buyers_administrator'/);
   assert.match(layout, /id: 'cross_functions'[\s\S]*workspaceNavigation\('payment_collections'[\s\S]*workspaceNavigation\('disputes'[\s\S]*workspaceNavigation\('unofficial_compensation'[\s\S]*workspaceNavigation\('brokers'/);
   assert.match(layout, /id: 'finance'[\s\S]*workspaceNavigation\('cashflow_forecast'/);
-  assert.match(layout, /hiddenItemIds: \['review', 'pnl', 'report_archive'\]/);
+  assert.match(layout, /hiddenItemIds: \['review', 'pnl'\]/);
   assert.match(layout, /DragDropContext/);
   assert.match(layout, /navigationPreferencesSave/);
   assert.match(layout, /legacyTradingOrder/);

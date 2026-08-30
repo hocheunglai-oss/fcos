@@ -4,8 +4,9 @@ import { requireExternalActionGate } from './_externalActionGates.js';
 import { serverSupabaseConfig } from './_supabaseConfig.js';
 import { sfQuery } from './_salesforce.js';
 import { recordSupabaseRequest } from './_requestTelemetry.js';
+import { fcosSalesforceEnvironment } from '../config/fcosConnections.js';
 
-const SALESFORCE_PRODUCTION_ORG_ID = '00D2x000000Ei4oEAC';
+const SALESFORCE_PRODUCTION_ORG_ID = fcosSalesforceEnvironment('production').orgId;
 const MAX_JSON_BODY_BYTES = 256 * 1024;
 export const XERO_IDENTITY_BASE = 'https://identity.xero.com';
 export const XERO_API_BASE = 'https://api.xero.com';

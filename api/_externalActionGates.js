@@ -9,7 +9,7 @@ const GATE_DEFINITIONS = Object.freeze({
     envName: 'FCOS_DISABLE_GOOGLE_DRIVE',
     defaultEnabled: true,
     label: 'Google Drive reports',
-    description: 'Google Drive report archive actions, licensed market-report synchronization, and complete-triple MOPS settlement publication.',
+    description: 'Licensed market-report synchronization and complete-triple MOPS settlement publication.',
   },
   email_delivery: {
     envName: 'FCOS_DISABLE_EMAIL_DELIVERY',

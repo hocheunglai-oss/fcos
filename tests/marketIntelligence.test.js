@@ -197,7 +197,7 @@ test('archive replay impact is deterministic and distinguishes matches, creates 
 
 test('archive replay fails closed on a Supabase project mismatch before live access', () => {
   const replay = read('scripts/replay-market-report-archive.mjs');
-  assert.match(replay, /EXPECTED_SUPABASE_PROJECT_REF = 'pjforfvchygdyqfcgpmw'/);
+  assert.match(replay, /EXPECTED_SUPABASE_PROJECT_REF = fcosConnectionIdentifier\('supabase', 'Project ref'\)/);
   assert.match(replay, /projectRef !== EXPECTED_SUPABASE_PROJECT_REF/);
   assert.match(replay, /Supabase identity mismatch/);
 });

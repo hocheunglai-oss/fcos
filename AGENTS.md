@@ -2,6 +2,8 @@
 
 These connection identities are specific to this repository. Do not infer or reuse an account from another Codex project.
 
+For every external connection, use this order without exception: verified purpose-built API or connector first, target-locked CLI second, and the pinned Chrome profile only as the final fallback. Verify the exact account, organization, project, repository, environment, scope, and permissions before any read or mutation at every layer. Fail closed on a mismatch.
+
 - GitHub repository: `hocheunglai-oss/fcos`
 - Required GitHub account for mutations: `hocheunglai-oss`
 - Vercel project: `hocheunglai-6535s-projects/fcos`
@@ -19,15 +21,16 @@ These connection identities are specific to this repository. Do not infer or reu
 - Google Drive market-report browser authentication profile: `Vincent`
 - Google Drive market-report root: `1wzRycxzPAb42EvfhjPV22mkFwliXZv8d` (`Bunkerwire`: `19ACtDV2U9_JrV_AmRJuHL7A29-Yxini7`; `European Marketscan`: `14uXNTTleIO2K78gTEVDEAl8IfJZH4Aj1`)
 
-Before any GitHub mutation, verify the authenticated GitHub identity. If the GitHub CLI identity is not exactly `hocheunglai-oss`, do not attempt a command-line push and do not change machine-wide credentials. Use the authorized GitHub connector for this repository or stop with a clear account-mismatch message.
+Use the authorized GitHub connector/API for this repository first. Before any CLI fallback mutation, verify the authenticated GitHub identity. If the GitHub CLI identity is not exactly `hocheunglai-oss`, do not attempt a command-line push and do not change machine-wide credentials; stop with a clear account-mismatch message.
 
-Before any Supabase, Vercel, or browser mutation, verify the target project or profile against the identifiers above. Fail closed on a mismatch.
+Before any Supabase, Vercel, or browser mutation, verify the target project or profile against the identifiers above. Use an approved API/connector before the CLI, and the CLI before Chrome. Fail closed on a mismatch.
 
-Google Drive market reports use the pinned server OAuth refresh token for normal scheduled reads. Use Chrome profile `Vincent` only when CLI/API authentication cannot be renewed without browser interaction, verify `vince.less@gmail.com` before authorizing, and return immediately to server/API verification. Never store or expose Drive credential material.
+Google Drive market reports use the dedicated `GOOGLE_DRIVE_MARKET_REFRESH_TOKEN` with the approved server OAuth client. The separate legacy XLS Report Archive is retired; local XLS downloads remain available and must not be uploaded by FCOS. Use the Drive API first, a verified CLI only when the API cannot complete the operation, and Chrome profile `Vincent` only when both non-browser routes are blocked. Verify `vince.less@gmail.com` before authorizing and return immediately to server/API verification. Never store or expose Drive credential material.
+Treat Google OAuth `invalid_grant` as revoked authorization, not as a report-parser or market-data failure. Hourly retries may continue recording the deduplicated incident, but recovery requires an explicitly authorized reauthentication and replacement of only the pinned Drive OAuth credentials.
 
 Before any Salesforce metadata mutation, verify the exact org ID, username where pinned, and sandbox flag. DEVEE is the only development/source environment. Make and verify every Salesforce code or configuration change in DEVEE first; do not develop independently in QAT or Production.
 
-Salesforce browser authentication is an environment-specific, authentication-only fallback after the CLI is blocked. Use `Otto` for DEVEE or QAT, `Vincent` for Production, and return immediately to CLI verification. Never store, inspect, export, or attest browser credentials or passkey material. The `vincexai` profile remains exclusive to the shared Salesforce GitHub repository and must not be used for Salesforce org login.
+Salesforce browser authentication is an environment-specific, authentication-only fallback after both the API and CLI are blocked. Use `Otto` for DEVEE or QAT, `Vincent` for Production, and return immediately to API or CLI verification. Never store, inspect, export, or attest browser credentials or passkey material. The `vincexai` profile remains exclusive to the shared Salesforce GitHub repository and must not be used for Salesforce org login.
 
 The mandatory Salesforce promotion order is:
 

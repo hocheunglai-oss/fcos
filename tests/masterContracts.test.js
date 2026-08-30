@@ -5,14 +5,73 @@ import {
   calculateMasterContractSplitPrice,
   calculateMasterContractDonPrice,
   masterContractBenchmark,
+  applyMasterContractPaymentTerms,
+  applyMasterContractPortAssignment,
+  applyMasterContractPortLocation,
   masterContractDonWindow,
   masterContractInvoicePriceReady,
   masterContractLineKey,
+  masterContractPaymentTerms,
+  masterContractPortAssignment,
+  masterContractPortSettings,
   masterContractLiveVariances,
   masterContractPreflight,
   masterContractPricingPosition,
   masterContractQuantitySummary,
 } from '../src/lib/masterContracts.js';
+
+test('one-port Master Contracts apply the exact port to every delivery', () => {
+  const snapshot = {
+    terms: {},
+    deliveries: [
+      { deliveryKey: 'D01', portId: '', portName: '' },
+      { deliveryKey: 'D02', portId: 'old', portName: 'Old port' },
+    ],
+  };
+  const updated = applyMasterContractPortAssignment(snapshot, {
+    mode: 'one_port',
+    portId: 'a0P000000000001AAA',
+    portName: 'Hong Kong',
+  });
+  assert.deepEqual(masterContractPortAssignment(updated), {
+    mode: 'one_port',
+    portId: 'a0P000000000001AAA',
+    portName: 'Hong Kong',
+  });
+  assert.ok(updated.deliveries.every(({ portId, portName }) => portId === 'a0P000000000001AAA' && portName === 'Hong Kong'));
+  const perDelivery = applyMasterContractPortAssignment(updated, { mode: 'per_delivery' });
+  assert.equal(masterContractPortAssignment(perDelivery).mode, 'per_delivery');
+  assert.equal(perDelivery.deliveries[0].portName, 'Hong Kong');
+});
+
+test('Master Contract payment terms and port locations are contract-wide', () => {
+  const snapshot = {
+    parties: { buyer: {}, supplier: {} },
+    terms: { portAssignment: { mode: 'per_delivery' }, portSettings: [] },
+    deliveries: [
+      { deliveryKey: 'Delivery_1', portId: 'a0P000000000001AAA', portName: 'Hong Kong', supplyLocation: 'TBD' },
+      { deliveryKey: 'Delivery_2', portId: 'a0P000000000001AAA', portName: 'Hong Kong', supplyLocation: 'Berth' },
+      { deliveryKey: 'Delivery_3', portId: 'a0P000000000002AAA', portName: 'Singapore', supplyLocation: 'Anchorage' },
+    ],
+  };
+  const withTerms = applyMasterContractPaymentTerms(snapshot, {
+    buyerPaymentTerm: '30 days',
+    supplierPaymentTerm: '15 days',
+  });
+  assert.deepEqual(masterContractPaymentTerms(withTerms), {
+    buyerPaymentTerm: '30 days',
+    supplierPaymentTerm: '15 days',
+  });
+  assert.ok(withTerms.deliveries.every((row) => row.buyerPaymentTerm === '30 days' && row.supplierPaymentTerm === '15 days'));
+  assert.equal(masterContractPortSettings(withTerms).find((row) => row.portName === 'Hong Kong').conflicting, true);
+  const located = applyMasterContractPortLocation(withTerms, {
+    portId: 'a0P000000000001AAA',
+    portName: 'Hong Kong',
+    supplyLocation: 'Berth',
+  });
+  assert.ok(located.deliveries.filter((row) => row.portName === 'Hong Kong').every((row) => row.supplyLocation === 'Berth'));
+  assert.equal(located.deliveries.find((row) => row.portName === 'Singapore').supplyLocation, 'Anchorage');
+});
 
 const read = (path) => readFile(new URL(`../${path}`, import.meta.url), 'utf8');
 
@@ -210,8 +269,9 @@ test('live reconciliation detects exact approved-versus-Salesforce changes witho
 });
 
 test('migration is private, revisioned, idempotent, and feature-disabled by default', async () => {
-  const sql = await read('supabase/migrations/20260824134500_master_term_contracts.sql');
+  const sql = await read('supabase/migrations/20260824171836_master_term_contracts.sql');
   const splitSql = await read('supabase/migrations/20260825033751_master_contract_split_pricing_evidence.sql');
+  const keySql = await read('supabase/migrations/20260830044825_master_contract_incremental_keys.sql');
   const tables = [
     'master_contract_settings', 'master_contracts', 'master_contract_product_terms',
     'master_contract_deliveries', 'master_contract_delivery_products', 'master_contract_charge_rules',
@@ -241,6 +301,15 @@ test('migration is private, revisioned, idempotent, and feature-disabled by defa
   assert.match(splitSql, /revoke all on function public\.save_master_contract_price_resolution_v2[\s\S]*from public, anon, authenticated/i);
   assert.match(splitSql, /grant execute on function public\.save_master_contract_price_resolution_v2[\s\S]*to service_role/i);
   assert.doesNotMatch(splitSql, /security definer/i);
+  assert.match(keySql, /create sequence if not exists public\.master_contract_key_seq/i);
+  assert.match(keySql, /create sequence if not exists public\.master_contract_delivery_key_seq/i);
+  assert.match(keySql, /'Master_Contract_' \|\| nextval/i);
+  assert.match(keySql, /'Delivery_' \|\| nextval/i);
+  assert.match(keySql, /create or replace function public\.reserve_master_contract_keys/i);
+  assert.match(keySql, /security invoker/i);
+  assert.match(keySql, /revoke all on function public\.reserve_master_contract_keys\(integer, integer\) from public, anon, authenticated/i);
+  assert.match(keySql, /grant execute on function public\.reserve_master_contract_keys\(integer, integer\) to service_role/i);
+  assert.doesNotMatch(keySql, /security definer/i);
 });
 
 test('API and Salesforce package preserve exact-ID, all-or-none, and invoice-gate boundaries', async () => {
@@ -263,6 +332,8 @@ test('API and Salesforce package preserve exact-ID, all-or-none, and invoice-gat
   assert.match(api, /complete official MOPS publication is required for both pricing dates/);
   assert.match(api, /RecordType\.Name IN/);
   assert.match(api, /save_master_contract_price_resolution_v2/);
+  assert.match(api, /reserve_master_contract_keys/);
+  assert.match(api, /MASTER_CONTRACT_KEY_RESERVATION_FAILED/);
   assert.match(api, /productName:[^\n]+\|\| 'Unnamed product'/);
   assert.doesNotMatch(api, /productName:[^\n]+\|\| productKey/);
   assert.match(apex, /Savepoint checkpoint = Database\.setSavepoint\(\)/);
@@ -282,6 +353,12 @@ test('API and Salesforce package preserve exact-ID, all-or-none, and invoice-gat
   assert.match(page, /masterContractLineKey/);
   assert.match(page, /Total Quantity Min/);
   assert.match(page, /Total Quantity Max/);
+  assert.match(page, /Master Contract key/);
+  assert.match(page, /Assigned automatically when saved/);
+  assert.match(page, /One port for all deliveries/);
+  assert.match(page, /One supply location per port/);
+  assert.match(page, /Buyer payment term/);
+  assert.match(page, /Supplier payment term/);
   assert.match(page, /Supplier pricing date/);
   assert.match(page, /Buyer pricing date/);
   assert.match(page, /SearchableEntitySelect/);
