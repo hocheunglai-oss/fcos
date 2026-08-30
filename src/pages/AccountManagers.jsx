@@ -20,6 +20,7 @@ import { appClient } from '@/api/appClient';
 import { useNavigationAwareRequest } from '@/hooks/useNavigationAwareRequest';
 import PageHeader from '@/components/common/PageHeader';
 import PageMethodology from '@/components/common/PageMethodology';
+import PageUserManual from '@/components/common/PageUserManual';
 import DataStatus from '@/components/common/DataStatus';
 import StateBlock from '@/components/common/StateBlock';
 import TableShell from '@/components/common/TableShell';
@@ -45,6 +46,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/use-toast';
 import { accountClKeyLabel, accountSearchDisplayText } from '@/lib/accountDisplay';
 import { ACCOUNT_MANAGERS_METHODOLOGY } from '@/lib/pageMethodologies';
+import { ACCOUNT_MANAGERS_USER_MANUAL } from '@/lib/pageUserManuals';
 
 const PAGE_SIZE = 100;
 const UNASSIGNED_FILTER = '__unassigned__';
@@ -425,6 +427,7 @@ export default function AccountManagers() {
           activeView={workspaceView}
           onViewChange={setWorkspaceView}
           methodology={ACCOUNT_MANAGERS_METHODOLOGY}
+          userManual={ACCOUNT_MANAGERS_USER_MANUAL}
         />
       </div>
     );
@@ -439,6 +442,7 @@ export default function AccountManagers() {
         actions={(
           <>
             <PageMethodology {...ACCOUNT_MANAGERS_METHODOLOGY} />
+            <PageUserManual {...ACCOUNT_MANAGERS_USER_MANUAL} />
             <DataStatus meta={responseMeta} state={loading || refreshing ? 'refreshing' : undefined} label="Accounts" />
             <Button
               variant="outline"

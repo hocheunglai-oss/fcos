@@ -4,6 +4,7 @@ import { format } from 'date-fns';
 import { appClient } from '@/api/appClient';
 import PageHeader from '@/components/common/PageHeader';
 import PageMethodology from '@/components/common/PageMethodology';
+import PageUserManual from '@/components/common/PageUserManual';
 import DataStatus from '@/components/common/DataStatus';
 import StateBlock from '@/components/common/StateBlock';
 import TableShell from '@/components/common/TableShell';
@@ -25,6 +26,7 @@ import {
 } from '@/lib/disputeWorkflowDefaults';
 import { DISPUTE_BUYER_CLOSE_REASONS, DISPUTE_SUPPLIER_CLOSE_REASONS } from '@/lib/disputeWorkflowOptions';
 import { DISPUTE_WORKFLOW_METHODOLOGY } from '@/lib/pageMethodologies';
+import { DISPUTE_WORKFLOW_USER_MANUAL } from '@/lib/pageUserManuals';
 import { useAuth } from '@/lib/AuthContext';
 import { cn } from '@/lib/utils';
 import { useNavigationAwareRequest } from '@/hooks/useNavigationAwareRequest';
@@ -2039,6 +2041,7 @@ export default function DisputeWorkflow() {
         actions={(
           <div className="flex gap-2">
             <PageMethodology {...DISPUTE_WORKFLOW_METHODOLOGY} />
+            <PageUserManual {...DISPUTE_WORKFLOW_USER_MANUAL} />
             <Button variant="outline" onClick={() => setRulesOpen(true)} className="gap-2"><BookOpen className="h-4 w-4" /> Workflow Rules</Button>
             <Button variant="outline" onClick={() => loadRows({ force: true })} disabled={loading} className="gap-2">
               {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Refresh

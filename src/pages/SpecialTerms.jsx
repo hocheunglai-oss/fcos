@@ -4,6 +4,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { appClient } from '@/api/appClient';
 import PageHeader from '@/components/common/PageHeader';
 import PageMethodology from '@/components/common/PageMethodology';
+import PageUserManual from '@/components/common/PageUserManual';
 import StateBlock from '@/components/common/StateBlock';
 import DataStatus from '@/components/common/DataStatus';
 import WorkspaceViewBar from '@/components/common/WorkspaceViewBar';
@@ -19,6 +20,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
 import { SPECIAL_TERMS_METHODOLOGY } from '@/lib/pageMethodologies';
+import { SPECIAL_TERMS_USER_MANUAL } from '@/lib/pageUserManuals';
 import { prefetchSpecialTermDetail } from '@/lib/specialTermDetailPrefetch';
 
 const ClauseBankPanel = lazy(() => import('@/components/special-terms/ClauseBankPanel'));
@@ -242,7 +244,7 @@ export default function SpecialTerms() {
       <PageHeader
         title="Special Terms"
         description="Find a term, make the complete update in one editor, and publish it through Salesforce governance."
-        actions={<div className="flex flex-wrap gap-2"><PageMethodology {...SPECIAL_TERMS_METHODOLOGY} /><Button variant="outline" onClick={() => load({ force: true, preserve: true })} disabled={refreshing}><RefreshCw className={`mr-2 h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />Refresh</Button>{workspace === 'terms' ? <Button onClick={() => { setCreateSaveAttempted(false); setCreateForm({ name: '', addToConfirmation: true, addToNomination: false }); }}><Plus className="mr-2 h-4 w-4" />New Special Term</Button> : null}</div>}
+        actions={<div className="flex flex-wrap gap-2"><PageMethodology {...SPECIAL_TERMS_METHODOLOGY} /><PageUserManual {...SPECIAL_TERMS_USER_MANUAL} /><Button variant="outline" onClick={() => load({ force: true, preserve: true })} disabled={refreshing}><RefreshCw className={`mr-2 h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />Refresh</Button>{workspace === 'terms' ? <Button onClick={() => { setCreateSaveAttempted(false); setCreateForm({ name: '', addToConfirmation: true, addToNomination: false }); }}><Plus className="mr-2 h-4 w-4" />New Special Term</Button> : null}</div>}
       />
 
       {message ? <Alert><ShieldCheck className="h-4 w-4" /><AlertDescription>{message}</AlertDescription></Alert> : null}
