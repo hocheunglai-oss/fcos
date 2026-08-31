@@ -12262,7 +12262,7 @@ async function incomingPaymentsList(body, req = null, accessContext = null) {
 }
 
 async function salesforceAuditCount(objectName, whereClause) {
-  const result = await queryResult(`SELECT Id FROM ${objectName} WHERE ${whereClause} LIMIT 1`, { limit: 1, softFail: false });
+  const result = await queryResult(`SELECT COUNT() FROM ${objectName} WHERE ${whereClause}`, { limit: 1, softFail: false });
   return Number(result.totalSize || 0);
 }
 
@@ -12343,7 +12343,7 @@ async function legacyPaymentDataAudit(body = {}, req = null, accessContext = nul
       ORDER BY Delivery_Date__c DESC NULLS LAST, Expected_Delivery_Date__c DESC NULLS LAST, CreatedDate DESC, Id
       LIMIT ${limit} OFFSET ${offset}
     `, { limit, softFail: false });
-    total = Number(result.totalSize || 0);
+    total = query ? await salesforceAuditCount('stem__c', where) : staleBuyerBalanceCount;
     rows = (result.records || []).map((stem) => ({
       id: stem.Id,
       evidenceType: 'Stale buyer receivable balance',
@@ -12373,7 +12373,7 @@ async function legacyPaymentDataAudit(body = {}, req = null, accessContext = nul
       ORDER BY STEM__r.Delivery_Date__c DESC NULLS LAST, STEM__r.Expected_Delivery_Date__c DESC NULLS LAST, CreatedDate DESC, Id
       LIMIT ${limit} OFFSET ${offset}
     `, { limit, softFail: false });
-    total = Number(result.totalSize || 0);
+    total = query ? await salesforceAuditCount('Supplier_Invoice__c', where) : staleSupplierBalanceCount;
     rows = (result.records || []).map((invoice) => ({
       id: invoice.Id,
       evidenceType: 'Stale supplier payable balance',
@@ -12428,7 +12428,7 @@ async function legacyPaymentDataAudit(body = {}, req = null, accessContext = nul
       ORDER BY ${dateField} DESC NULLS LAST, CreatedDate DESC, Id
       LIMIT ${limit} OFFSET ${offset}
     `, { limit, softFail: false });
-    total = Number(result.totalSize || 0);
+    total = await salesforceAuditCount('Payment__c', where);
     rows = (result.records || []).map((payment) => {
       const supplierInvoice = paymentSupplierInvoiceRelationship ? payment[paymentSupplierInvoiceRelationship] : null;
       const stem = payment.STEM__r || supplierInvoice?.STEM__r || {};

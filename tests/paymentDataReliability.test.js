@@ -72,6 +72,7 @@ test('legacy audit stays compatible with the single-currency production schema',
   const start = source.indexOf('async function legacyPaymentDataAudit');
   const end = source.indexOf('\nasync function incomingPaymentAllocationConfirm', start);
   const auditSource = source.slice(start, end);
+  assert.match(source, /SELECT COUNT\(\) FROM \$\{objectName\} WHERE \$\{whereClause\}/);
   assert.doesNotMatch(auditSource, /Account__r\.Name, CurrencyIsoCode/);
   assert.doesNotMatch(auditSource, /CreatedDate, CurrencyIsoCode, Payable_Balance__c/);
   assert.match(auditSource, /selectedFields\(paymentNames, \['CurrencyIsoCode', 'Currency__c'\]\)/);
