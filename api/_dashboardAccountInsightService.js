@@ -923,7 +923,7 @@ export async function loadDashboardAccountInsight({ body = {}, accessContext, fo
   const cachePayload = { accountId: idKey(accountId), role, period };
   const cached = await getOrLoadRuntimeCache({
     namespace: 'salesforce-dashboard-account-insight',
-    version: '3',
+    version: '4-payment-reliability',
     accessScope: interoffice ? 'interoffice' : 'standard',
     apiVersion: `${getApiVersion()}@${getInstanceUrl()}`,
     payload: cachePayload,

@@ -8,10 +8,12 @@ import BrokerFilters from '@/components/brokers/BrokerFilters';
 import BrokerRegisterTable from '@/components/brokers/BrokerRegisterTable';
 import StemDetailModal from '@/components/dashboard/StemDetailModal';
 import PageHeader from '@/components/common/PageHeader';
+import PaymentDataReliabilityBadge from '@/components/common/PaymentDataReliabilityBadge';
 import TableShell from '@/components/common/TableShell';
 import StateBlock from '@/components/common/StateBlock';
 import { numericValue, textValue } from '@/lib/displayValue';
 import { useNavigationAwareRequest } from '@/hooks/useNavigationAwareRequest';
+import { LEGACY_PAYMENT_DATA_LABEL, PAYMENT_DATA_RELIABILITY_LABEL } from '@/lib/paymentDataReliability';
 
 const fmtMoney = (value) => {
   const number = numericValue(value);
@@ -145,6 +147,7 @@ export default function BrokerRegister() {
   const { request: requestBrokerRows } = useNavigationAwareRequest('operational');
   const [initialDateRange] = useState(() => previousQuarterRange());
   const [rows, setRows] = useState([]);
+  const [paymentDataReliability, setPaymentDataReliability] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [search, setSearch] = useState('');
@@ -171,6 +174,7 @@ export default function BrokerRegister() {
         if (res.data?.error) setError(res.data.error);
         else setError(null);
         setRows(res.data?.rows || []);
+        setPaymentDataReliability(res.data?.paymentDataReliability || null);
       },
     });
     setLoading(false);
@@ -285,6 +289,7 @@ export default function BrokerRegister() {
     ['Broker Type', selectedTypes.length ? selectedTypes.map(brokerTypeLabel).join(', ') : 'All'],
     ['Date Range', `${fromDate || 'Any'} to ${toDate || 'Any'}`],
     ['Excluded Rows', visibleExcludedCount ? `${visibleExcludedCount.toLocaleString()} excluded from totals and export` : 'None'],
+    ['Payment Data Reliability', PAYMENT_DATA_RELIABILITY_LABEL],
   ];
   const workbookCell = (value, styleId = 'Text', mergeAcross = 0) => {
     const mergeAttr = mergeAcross ? ` ss:MergeAcross="${mergeAcross}"` : '';
@@ -506,6 +511,7 @@ export default function BrokerRegister() {
       paymentDateLabel: row.paymentDateLabel,
       paymentDate: fmtDate(row.paymentDate),
       paymentDelay: row.paymentDelayLabel || (brokerTypeLabel(row.brokerType) === 'Buyer Broker' ? fmtDelay(row.paymentDelay) : ''),
+      paymentDataReliability: row.paymentDataReliable === false ? LEGACY_PAYMENT_DATA_LABEL : PAYMENT_DATA_RELIABILITY_LABEL,
     }));
     const hasCommissionPayable = detailRows.some((row) => numericValue(row.commissionPayable) != null);
     const hasCommissionReceivable = detailRows.some((row) => numericValue(row.commissionReceivable) != null);
@@ -523,6 +529,7 @@ export default function BrokerRegister() {
       { key: 'paymentDateLabel', header: 'Payment Date Label', value: (row) => row.paymentDateLabel, cell: (row) => workbookCell(row.paymentDateLabel), minWidth: 85, maxWidth: 180 },
       { key: 'paymentDate', header: 'Payment Date', value: (row) => row.paymentDate, cell: (row) => workbookCell(row.paymentDate), minWidth: 85, maxWidth: 180 },
       ...(hasPaymentDelay ? [{ key: 'paymentDelay', header: 'Payment Delay', value: (row) => row.paymentDelay, cell: (row) => workbookCell(row.paymentDelay, 'TextRight'), minWidth: 85, maxWidth: 180 }] : []),
+      { key: 'paymentDataReliability', header: 'Payment Data Reliability', value: (row) => row.paymentDataReliability, cell: (row) => workbookCell(row.paymentDataReliability), minWidth: 130, maxWidth: 220 },
     ];
     const detailBrokerSections = [];
     for (const row of detailRows) {
@@ -638,6 +645,7 @@ export default function BrokerRegister() {
         meta={`${filteredRows.length.toLocaleString()} rows · ${fmtMoney(total)} filtered commission total`}
         actions={(
           <>
+          <PaymentDataReliabilityBadge excludedCount={paymentDataReliability?.excludedLegacyRecordCount} />
           <Button type="button" size="sm" variant={showCny ? 'default' : 'outline'} onClick={() => setShowCny(value => !value)} className="gap-2 w-fit">
             CNY
           </Button>

@@ -408,6 +408,35 @@ test('applies the established CIA rule and preserves live collection state per S
   assert.equal(result.stems.rows[0].reconciliationState, 'advice_pending');
 });
 
+test('legacy STEMs retain commercial P&L but expose no payment balances or timing statistics', () => {
+  const legacyStem = stem(STEM_A, {
+    Delivery_Date__c: '2025-12-31',
+    Expected_Delivery_Date__c: '2026-01-05',
+    Receivable_Balance__c: 600,
+  });
+  const result = buildDashboardAccountInsight(dataset({
+    stems: [legacyStem],
+    buyerPaymentsByStem: {
+      [STEM_A]: [{ paymentId: 'a04000000000003AAA', paymentDate: '2026-01-10', amount: 500, currency: 'USD' }],
+    },
+    collectionByStem: {
+      [STEM_A]: { item: { status: 'To Contact', reconciliationState: 'payment_posting_pending' }, events: [] },
+    },
+  }), { today: '2026-08-05' });
+
+  assert.equal(result.kpis.turnover, 1100);
+  assert.equal(result.kpis.grossProfit, 100);
+  assert.equal(result.paymentDataReliability.excludedLegacyRecordCount, 1);
+  assert.equal(result.paymentDataReliability.reliableRecordCount, 0);
+  assert.equal(result.payments.buyer.paymentCount, 0);
+  assert.equal(result.payments.buyer.weightedDso, null);
+  assert.equal(result.collection.needsAction, 0);
+  assert.equal(result.stems.rows[0].receivableBalance, null);
+  assert.equal(result.stems.rows[0].buyerPaymentCount, null);
+  assert.equal(result.stems.rows[0].paymentDataReliability, 'Unavailable before 1 Jan 2026');
+  assert.ok(result.warnings.some((warning) => warning.startsWith('No reliable payment data')));
+});
+
 test('uses live receivable balance for Full CIA and excludes future balances from aging', () => {
   const result = buildDashboardAccountInsight(dataset({
     stems: [stem(STEM_A, { Receivable_Balance__c: 0, Invoice_Due_Date__c: '2026-08-20' })],
@@ -487,6 +516,7 @@ test('creates analysis-ready CSV and a figure-rich PDF without empty legacy sect
   assert.ok(csvText.startsWith('\uFEFFRow Type,Account Name'));
   assert.match(csvText, /STEM,Buyer One,BUY001,001000000000001AAA,buyer,HK260001T/);
   assert.match(csvText, /TOTALS,Buyer One/);
+  assert.match(csvText.split('\r\n')[0], /Payment Data Reliability/);
   const columnCounts = csvText.replace(/^\uFEFF/, '').split('\r\n').map((row) => row.split(',').length);
   assert.ok(columnCounts.every((count) => count === columnCounts[0]));
   assert.equal(pdf.filename, '20260805 Buyer One BUY001 Account Insight.pdf');

@@ -42,6 +42,7 @@ import { useToast } from '@/components/ui/use-toast';
 import { readPageState, writePageState } from '@/lib/pageStateCache';
 import { CASHFLOW_FORECAST_METHODOLOGY } from '@/lib/pageMethodologies';
 import { cn } from '@/lib/utils';
+import PaymentDataReliabilityBadge from '@/components/common/PaymentDataReliabilityBadge';
 
 const PAGE_STATE_KEY = 'cashflow-forecast';
 
@@ -252,6 +253,7 @@ export default function CashflowForecast() {
   }, [filteredRows, sort]);
 
   const filteredSummary = useMemo(() => summarizeRows(filteredRows, bucket), [filteredRows, bucket]);
+  const noReliablePaymentData = !rows.length && Number(data.paymentDataReliability?.excludedLegacyRecordCount || 0) > 0;
 
   const updateSort = (key) => {
     setSort((current) => (
@@ -340,6 +342,7 @@ export default function CashflowForecast() {
         )}
         actions={(
           <>
+            <PaymentDataReliabilityBadge excludedCount={data.paymentDataReliability?.excludedLegacyRecordCount} />
             <PageMethodology {...CASHFLOW_FORECAST_METHODOLOGY} />
             <Button onClick={() => load({ force: true })} disabled={loading}>
               {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
@@ -415,12 +418,14 @@ export default function CashflowForecast() {
         </div>
       )}
 
-      <div className="mb-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+      {noReliablePaymentData ? (
+        <div className="mb-4"><StateBlock title="No reliable payment data in this period" description="Earlier obligations are confirmed settled, but their Salesforce payment details are incomplete and excluded." /></div>
+      ) : <div className="mb-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         <StatCard label="Projected Buyer Receipts" value={fmtMoney(filteredSummary.totals.buyerReceipts)} sub={`${numberFmt(filteredRows.filter((row) => row.direction === 'inflow').length)} forecast receipt rows`} icon={TrendingUp} color="green" />
         <StatCard label="Projected Supplier Payments" value={fmtMoney(filteredSummary.totals.supplierPayments)} sub="Assumed paid on contractual due date" icon={TrendingDown} color="amber" />
         <StatCard label="Net Cashflow" value={fmtMoney(filteredSummary.totals.netCashflow)} sub="Buyer receipts minus supplier payments" icon={WalletCards} color={filteredSummary.totals.netCashflow >= 0 ? 'blue' : 'red'} />
         <StatCard label="Overdue-Risk Receipts" value={fmtMoney(filteredSummary.totals.overdueRiskReceipts)} sub="Open buyer invoices already past due" icon={AlertTriangle} color="red" />
-      </div>
+      </div>}
 
       <TableShell title="Cashflow Movement" meta={`${filteredSummary.buckets.length.toLocaleString()} ${bucket} buckets`} className="mb-4" bodyClassName="p-4">
         {loading ? (

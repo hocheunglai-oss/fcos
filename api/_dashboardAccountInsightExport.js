@@ -1,4 +1,5 @@
 import { jsPDF } from 'jspdf';
+import { LEGACY_PAYMENT_DATA_LABEL, PAYMENT_DATA_RELIABILITY_LABEL } from '../src/lib/paymentDataReliability.js';
 
 function text(value) {
   return String(value ?? '').trim();
@@ -52,7 +53,7 @@ function csvRows(insight) {
     'Products', 'Product Families', 'Volume MT', 'Turnover Allocation', 'Supplier Cost Allocation', 'Gross Profit Allocation', 'Gross Margin %',
     'Buyer Invoice Amount', 'Buyer Payments Received', 'Receivable Balance', 'Latest Buyer Payment Date', 'Broker Commissions', 'Extra Cost Amount', 'Supplier Allocation %',
     'Supplier Invoice Amount', 'Supplier Paid Amount', 'Supplier Payable', 'Latest Supplier Payment Date', 'Cancelled Lines', 'Cancelled Extra Costs',
-    'Collection Status', 'Reconciliation State', 'Buyer Payment Count', 'Supplier Invoice Count', 'Data Warnings',
+    'Collection Status', 'Reconciliation State', 'Buyer Payment Count', 'Supplier Invoice Count', 'Data Warnings', 'Payment Data Reliability',
   ];
   const rows = (insight.exportRows || insight.stems?.rows || []).map((row) => {
     return [
@@ -63,7 +64,7 @@ function csvRows(insight) {
       row.grossMarginPct, row.invoiceAmount, row.buyerPaymentsReceived, row.receivableBalance, row.latestBuyerPaymentDate, row.brokerCommissions, row.extraCostAmount, row.supplierAllocation?.share == null ? null : row.supplierAllocation.share * 100,
       row.supplierInvoiceAmount, row.supplierPaidAmount, row.supplierPayable, row.latestSupplierPaymentDate,
       row.cancelledLineCount, row.cancelledExtraCostCount, row.collectionStatus || '', row.reconciliationState || '',
-      row.buyerPaymentCount ?? '', row.supplierInvoiceCount ?? '', '',
+      row.buyerPaymentCount ?? '', row.supplierInvoiceCount ?? '', '', row.paymentDataReliable === false ? LEGACY_PAYMENT_DATA_LABEL : PAYMENT_DATA_RELIABILITY_LABEL,
     ];
   });
   const kpis = insight.kpis || {};
@@ -73,13 +74,13 @@ function csvRows(insight) {
         'CURRENCY TOTAL', insight.identity?.name, insight.identity?.clKey, insight.identity?.accountId, insight.activeRole,
         `${total.currency} totals`, '', '', '', '', '', '', '', '', '', '', '', total.currency, '', '', '', '', '', '',
         total.turnover, total.supplierSpend, total.grossProfit, total.grossMarginPct, '', '', '', '', total.brokerCommissions, total.extraCosts,
-        '', '', '', '', '', '', '', '', '', '', '', '', '',
+        '', '', '', '', '', '', '', '', '', '', '', '', '', PAYMENT_DATA_RELIABILITY_LABEL,
       ]);
     }
   }
   rows.push([
     'TOTALS', insight.identity?.name, insight.identity?.clKey, insight.identity?.accountId, insight.activeRole, `${kpis.stemCount || 0} STEMs`, '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '',
-    kpis.totalVolumeMt, kpis.turnover, kpis.supplierSpend, kpis.grossProfit, kpis.grossMarginPct, '', '', '', '', '', '', '', '', '', '', '', kpis.cancelledChildRecords, '', '', '', insight.payments?.buyer?.paymentCount ?? '', insight.payments?.supplier?.rows?.length ?? '', (insight.warnings || []).join(' | '),
+    kpis.totalVolumeMt, kpis.turnover, kpis.supplierSpend, kpis.grossProfit, kpis.grossMarginPct, '', '', '', '', '', '', '', '', '', '', '', kpis.cancelledChildRecords, '', '', '', insight.payments?.buyer?.paymentCount ?? '', insight.payments?.supplier?.rows?.length ?? '', (insight.warnings || []).join(' | '), PAYMENT_DATA_RELIABILITY_LABEL,
   ]);
   return `\uFEFF${[headers, ...rows].map((row) => row.map(csvCell).join(',')).join('\r\n')}`;
 }
@@ -283,6 +284,13 @@ function pdfBuffer(insight, actor, generatedAt) {
     { label: 'Disputed STEMs', value: metric(kpis.disputedStems) },
     { label: 'Last activity', value: kpis.lastStemDate || 'Unavailable' },
   ], y);
+  y = addWrappedText(
+    context,
+    `${PAYMENT_DATA_RELIABILITY_LABEL}. Earlier obligations are company-confirmed settled; incomplete historical payment details are excluded from payment figures. Excluded legacy records in this scope: ${Number(insight.paymentDataReliability?.excludedLegacyRecordCount || 0).toLocaleString('en-US')}.`,
+    CONTENT_X + 2,
+    y,
+    CONTENT_WIDTH - 4,
+  );
 
   const performanceRows = financialRows.length === 1 ? recentPerformanceRows(kpis, financialCurrency) : [];
   if (performanceRows.length) {

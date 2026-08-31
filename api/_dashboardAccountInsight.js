@@ -4,6 +4,7 @@ import { grossMarginPercent } from './_dashboardMetrics.js';
 import { isFinalBuyerInvoice, resolveBuyerFinancialAmount } from './_buyerFinancialAmount.js';
 import { earliestEtaDate, summarizeBuyerPaymentEvidence } from '../src/lib/paymentCollectionEvidence.js';
 import { financialQuantityValue as financialQuantity, nativeFinancialQuantity } from './_financialQuantity.js';
+import { LEGACY_PAYMENT_DATA_LABEL, paymentDataReliabilityMetadata, paymentDataReliabilityState } from '../src/lib/paymentDataReliability.js';
 
 const DAY_MS = 86_400_000;
 const ZERO_TOLERANCE = 0.005;
@@ -866,6 +867,7 @@ function buildStemFinancialRow(stem, context) {
     ...activeLines.flatMap((item) => [item.Supplier_Broker__r?.Name, item.Buyers_Broker__r?.Name]),
     ...buyerBrokers.flatMap((item) => [item.Buyer_Broker__r?.Name, item._Buyer_Broker_Name]),
   ]);
+  const paymentReliability = paymentDataReliabilityState(stem);
   return {
     stemId: stem.Id,
     stemName: stem.KeyStem__c || stem.Name,
@@ -885,6 +887,10 @@ function buildStemFinancialRow(stem, context) {
     dueDate: dueDate(stem),
     invoiceDate: dateOnly(stem.Original_Invoice_Sent_Date__c),
     createdDate: dateOnly(stem.CreatedDate),
+    paymentDataReliable: paymentReliability.reliable,
+    paymentReliabilityDate: paymentReliability.effectiveDate,
+    paymentReliabilityBasis: paymentReliability.dateBasis,
+    paymentDataReliability: paymentReliability.reliable ? null : LEGACY_PAYMENT_DATA_LABEL,
     status: stemStatus(stem),
     cancelled: isCancelledStem(stem),
     disputed: isDisputedStem(stem),
@@ -990,19 +996,22 @@ export function buildDashboardAccountInsight(dataset, {
     financialComparisonCurrency: comparisonCurrencyCompatible ? summary.moneyByCurrency[0].currency : null,
   } : null;
   const activeRows = rows.filter((row) => !row.cancelled);
-  const activeStemIds = new Set(activeRows.map((row) => row.stemId));
-  const buyerPayments = role === 'supplier' ? null : buyerPaymentMetrics(activeRows, dataset.buyerPaymentsByStem, today);
-  const supplierPayments = role === 'supplier' ? supplierPaymentMetrics((dataset.supplierInvoices || []).filter((invoice) => activeStemIds.has(invoice.stemId)), today) : null;
-  const collection = role === 'supplier' ? null : summarizeCollection(dataset.collectionByStem, activeRows, today);
+  const reliablePaymentRows = activeRows.filter((row) => row.paymentDataReliable);
+  const reliablePaymentStemIds = new Set(reliablePaymentRows.map((row) => row.stemId));
+  const excludedLegacyRecordCount = activeRows.length - reliablePaymentRows.length;
+  const buyerPayments = role === 'supplier' ? null : buyerPaymentMetrics(reliablePaymentRows, dataset.buyerPaymentsByStem, today);
+  const supplierPayments = role === 'supplier' ? supplierPaymentMetrics((dataset.supplierInvoices || []).filter((invoice) => reliablePaymentStemIds.has(invoice.stemId)), today) : null;
+  const collection = role === 'supplier' ? null : summarizeCollection(dataset.collectionByStem, reliablePaymentRows, today);
   const dispute = summarizeDisputes(dataset.workflows, rows, dataset.identity.accountId, role, today);
   const compensationAccountIds = role === 'group' ? visibleScopeAccounts.map((account) => account.accountId) : [dataset.identity.accountId];
   const compensation = summarizeCompensation(dataset.compensation, compensationAccountIds, today);
   const cancelledChildRecords = rows.reduce((sum, row) => sum + row.cancelledLineCount + row.cancelledExtraCostCount, 0);
   const totalChildRecords = rows.reduce((sum, row) => sum + row.totalLineCount + row.totalExtraCostCount, 0);
   const enrichedRows = rows.map((row) => {
-    const collectionState = dataset.collectionByStem?.[row.stemId]?.item || null;
-    const stemBuyerPayments = dataset.buyerPaymentsByStem?.[row.stemId] || [];
-    const stemSupplierInvoices = (dataset.supplierInvoices || []).filter((invoice) => invoice.stemId === row.stemId);
+    const reliable = row.paymentDataReliable;
+    const collectionState = reliable ? dataset.collectionByStem?.[row.stemId]?.item || null : null;
+    const stemBuyerPayments = reliable ? dataset.buyerPaymentsByStem?.[row.stemId] || [] : [];
+    const stemSupplierInvoices = reliable ? (dataset.supplierInvoices || []).filter((invoice) => invoice.stemId === row.stemId) : [];
     const supplierInvoiceAmount = stemSupplierInvoices.some((invoice) => number(invoice.invoiceAmount) != null) ? stemSupplierInvoices.reduce((sum, invoice) => sum + valueOrZero(invoice.invoiceAmount), 0) : null;
     const supplierPayable = stemSupplierInvoices.some((invoice) => number(invoice.payableBalance) != null) ? stemSupplierInvoices.reduce((sum, invoice) => sum + valueOrZero(invoice.payableBalance), 0) : null;
     const supplierPaymentDates = stemSupplierInvoices.flatMap((invoice) => invoice.payments || []).map((payment) => payment.date).filter(Boolean).sort();
@@ -1010,14 +1019,15 @@ export function buildDashboardAccountInsight(dataset, {
       ...row,
       collectionStatus: collectionState?.status || null,
       reconciliationState: collectionState?.reconciliationState || null,
-      buyerPaymentCount: stemBuyerPayments.length,
-      buyerPaymentsReceived: stemBuyerPayments.reduce((sum, payment) => sum + valueOrZero(payment.amount), 0),
-      latestBuyerPaymentDate: stemBuyerPayments.map((payment) => payment.paymentDate).filter(Boolean).sort().at(-1) || null,
-      supplierInvoiceCount: stemSupplierInvoices.length,
-      supplierInvoiceAmount,
-      supplierPaidAmount: supplierInvoiceAmount == null || supplierPayable == null ? null : Math.max(0, supplierInvoiceAmount - supplierPayable),
-      supplierPayable,
-      latestSupplierPaymentDate: supplierPaymentDates.at(-1) || null,
+      receivableBalance: reliable ? row.receivableBalance : null,
+      buyerPaymentCount: reliable ? stemBuyerPayments.length : null,
+      buyerPaymentsReceived: reliable ? stemBuyerPayments.reduce((sum, payment) => sum + valueOrZero(payment.amount), 0) : null,
+      latestBuyerPaymentDate: reliable ? stemBuyerPayments.map((payment) => payment.paymentDate).filter(Boolean).sort().at(-1) || null : null,
+      supplierInvoiceCount: reliable ? stemSupplierInvoices.length : null,
+      supplierInvoiceAmount: reliable ? supplierInvoiceAmount : null,
+      supplierPaidAmount: reliable && supplierInvoiceAmount != null && supplierPayable != null ? Math.max(0, supplierInvoiceAmount - supplierPayable) : null,
+      supplierPayable: reliable ? supplierPayable : null,
+      latestSupplierPaymentDate: reliable ? supplierPaymentDates.at(-1) || null : null,
     };
   });
   const offset = Math.max(0, Number(cursor) || 0);
@@ -1037,7 +1047,7 @@ export function buildDashboardAccountInsight(dataset, {
       turnoverContributionPct: childSummary.moneyByCurrency.length === 1 && summary.moneyByCurrency.length === 1 && childSummary.moneyByCurrency[0].currency === summary.moneyByCurrency[0].currency
         ? percentage(childSummary.turnover, summary.turnover)
         : null,
-      receivable: childRows.some((row) => number(row.receivableBalance) != null) ? childRows.reduce((sum, row) => sum + valueOrZero(row.receivableBalance), 0) : null,
+      receivable: childRows.some((row) => row.paymentDataReliable && number(row.receivableBalance) != null) ? childRows.filter((row) => row.paymentDataReliable).reduce((sum, row) => sum + valueOrZero(row.receivableBalance), 0) : null,
       lastActivityDate: childSummary.lastStemDate,
     };
   }).sort((left, right) => right.volumeMt - left.volumeMt || right.stemCount - left.stemCount || left.name.localeCompare(right.name)) : [];
@@ -1071,7 +1081,8 @@ export function buildDashboardAccountInsight(dataset, {
     ...(dataset.warnings || []),
     ...(!dataset.identity.clKey ? ['CL Key is not set for this Salesforce Account.'] : []),
     ...(summary.multipleCurrencies ? ['Financial totals and profitability comparisons are separated by currency. FCOS does not net currencies without an authoritative exchange rate.'] : []),
-    ...(role !== 'supplier' && rows.some((row) => row.receivableBalance == null) ? ['One or more Salesforce receivable balances are unavailable and are not treated as zero.'] : []),
+    ...(role !== 'supplier' && reliablePaymentRows.some((row) => row.receivableBalance == null) ? ['One or more Salesforce receivable balances are unavailable and are not treated as zero.'] : []),
+    ...(activeRows.length > 0 && !reliablePaymentRows.length ? ['No reliable payment data in this period. Earlier obligations are confirmed settled, but payment details are incomplete.'] : []),
     ...(rows.some((row) => row.invoiceValueSource === 'unavailable') ? ['One or more STEM values are unavailable because neither an invoiced nor estimated amount could be derived.'] : []),
     ...(dataset.truncated ? ['Salesforce returned more records than the Account Insight safety limit. Refine the period for complete totals.'] : []),
     ...(missingFinancialUomCount ? [`${missingFinancialUomCount} quantity-based financial line${missingFinancialUomCount === 1 ? '' : 's'} have no Salesforce UOM. FCOS preserved native quantities and did not infer a unit.`] : []),
@@ -1105,6 +1116,7 @@ export function buildDashboardAccountInsight(dataset, {
     },
     comparisons,
     payments: { buyer: buyerPayments, supplier: supplierPayments },
+    paymentDataReliability: paymentDataReliabilityMetadata(excludedLegacyRecordCount, reliablePaymentRows.length),
     collection: collection ? { ...collection, reminderPolicy: dataset.reminderPolicy || null } : null,
     risk: {
       dispute,

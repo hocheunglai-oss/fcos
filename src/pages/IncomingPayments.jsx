@@ -10,6 +10,7 @@ import ReorderableDataTable from '@/components/common/ReorderableDataTable';
 import StemDetailLink from '@/components/common/StemDetailLink';
 import StateBlock from '@/components/common/StateBlock';
 import DataStatus from '@/components/common/DataStatus';
+import PaymentDataReliabilityBadge from '@/components/common/PaymentDataReliabilityBadge';
 import TableShell from '@/components/common/TableShell';
 import StatCard from '@/components/dashboard/StatCard';
 import StemDetailModal from '@/components/dashboard/StemDetailModal';
@@ -1077,6 +1078,7 @@ export default function IncomingPayments({ reconciliationItems = [], embedded = 
         actions={(
           <>
             <DataStatus meta={responseMeta} state={loading ? 'refreshing' : undefined} label="Salesforce" />
+            {!embedded ? <PaymentDataReliabilityBadge excludedCount={data?.paymentDataReliability?.excludedLegacyRecordCount} /> : null}
             <Button variant="outline" onClick={() => setSettingsOpen(true)}>
               <Settings2 className="mr-2 h-4 w-4" />
               Global Settings

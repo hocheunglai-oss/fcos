@@ -309,6 +309,7 @@ const HANDLER_BEHAVIOR = Object.freeze({
   outstandingBuyerInvoicesEmailReport: mutationPolicy({"cache":"none","externalAction":true,"capability":null}),
   outstandingBuyerInvoicesEmailCron: mutationPolicy({"cache":"none","externalAction":true,"capability":null}),
   incomingPaymentsList: readPolicy({"cache":"server","externalAction":false,"capability":null}),
+  legacyPaymentDataAudit: readPolicy({"cache":"none","externalAction":false,"capability":null}),
   incomingPaymentEmailSettingsGet: readPolicy({"cache":"none","externalAction":false,"capability":null}),
   incomingPaymentEmailSettingsSave: mutationPolicy({"cache":"none","externalAction":false,"capability":"financial_report_settings_manage"}),
   incomingPaymentInterestSettingsGet: readPolicy({"cache":"none","externalAction":false,"capability":null}),

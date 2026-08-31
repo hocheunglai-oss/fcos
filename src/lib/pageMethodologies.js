@@ -54,7 +54,7 @@ export const CASHFLOW_FORECAST_METHODOLOGY = {
   sections: [
     {
       title: 'Purpose and scope',
-      body: 'The page forecasts AR receipts and AP payments for planning; it does not post accounting entries. STEMs delivered before 1 January 2026 are excluded, and currencies remain separate because this page performs no currency conversion.',
+      body: 'The page forecasts AR receipts and AP payments for planning; it does not post accounting entries. Payment data is reliable from 1 January 2026. FCOS classifies each STEM by actual Delivery Date, then Expected Delivery Date, then its Hong Kong Created Date when both delivery dates are absent. Earlier obligations are company-confirmed as settled and their incomplete payment fields are excluded. Currencies remain separate because this page performs no currency conversion.',
     },
     {
       title: 'Buyer receipts',
@@ -184,6 +184,10 @@ export const DASHBOARD_METHODOLOGY = {
     {
       title: 'Completeness and navigation',
       body: 'Overview totals are shown only when FCOS has processed the complete matching scope. An incomplete Salesforce response suppresses financial totals and asks you to narrow the filters; an incomplete previous-year scope independently suppresses YoY lines. The STEMs and Account identity lists are server-paginated and sorted. Accounts merges exact-ID Buyer receivable and Supplier payable exposure by currency and computes period buyer/supplier gross profit through the same complete Dashboard calculation. Informational receivable-minus-payable net is hidden whenever either direction is incomplete and never nets currencies. Account Insight opens over the Dashboard, preserves the Account directory page, filters, exposure results, scroll and focus, and keeps a linkable URL. It loads only the selected tab, inherits the exact Dashboard period, Port, COUNTRY, and dispute scope, and offers an explicit Account-wide toggle. The combined Credit Statement alone carries the net-exposure risk warning. Rankings exclude the Fratelli Cosulich GROUP identity and every descendant Account resolved through the live Salesforce hierarchy.',
+    },
+    {
+      title: 'Payment data reliability',
+      body: 'Payment data is reliable from 1 January 2026. FCOS classifies normal payment evidence by actual Delivery Date, then Expected Delivery Date, then Hong Kong Created Date when both delivery dates are absent. Earlier obligations are company-confirmed as settled: All History retains their volume, turnover, costs and gross profit, but shows payment fields as unavailable and excludes them from balances, timing, completion and collection statistics. Buyer Credit Statement keeps its stricter actual-or-expected-delivery boundary and never admits an undated STEM through Created Date.',
     },
     {
       title: 'Buyer-leg credit statements',
@@ -319,7 +323,7 @@ export const PAYMENT_COLLECTIONS_METHODOLOGIES = {
     sections: [
       {
         title: 'Case identity and status',
-        body: 'Collection work is managed once per Salesforce STEM. Status represents the current collection stage; reminders, calls, notes, promises, advice, payments, ownership changes, and reconciliation outcomes remain timeline events.',
+        body: 'Collection work is managed once per Salesforce STEM. Payment data is reliable from 1 January 2026, classified by actual Delivery Date, then Expected Delivery Date, then Hong Kong Created Date. Earlier obligations are company-confirmed as settled and never enter normal collection work. Status represents the current collection stage; reminders, calls, notes, promises, advice, payments, ownership changes, and reconciliation outcomes remain timeline events.',
       },
       {
         title: 'Dispute visibility',
@@ -353,7 +357,7 @@ export const PAYMENT_COLLECTIONS_METHODOLOGIES = {
     sections: [
       {
         title: 'Payment source',
-        body: 'Incoming Payments displays Salesforce payment records and their linked STEM information. FCOS does not create, alter, or post Salesforce payments from this workspace.',
+        body: 'Incoming Payments displays Salesforce payment records and their linked STEM information. Payments linked directly or through a Supplier Invoice to a pre-cutoff STEM are excluded, even when the Payment record itself is dated in 2026. FCOS does not create, alter, or post Salesforce payments from this workspace.',
       },
       {
         title: 'Collection cross-link',
@@ -396,6 +400,24 @@ export const PAYMENT_COLLECTIONS_METHODOLOGIES = {
       {
         title: 'Refresh behavior',
         body: 'The workspace reconciles on live refresh and through a scheduled background check. Refresh Salesforce bypasses caches and updates collection state idempotently without creating Salesforce financial records.',
+      },
+    ],
+  },
+  legacy: {
+    title: 'Legacy settled data',
+    description: 'A privileged, read-only audit of incomplete Salesforce payment evidence before the FCOS cutover.',
+    sections: [
+      {
+        title: 'Company-confirmed settlement',
+        body: 'Every STEM classified before 1 January 2026 is treated as settled by company confirmation. FCOS does not create historical payments, invent payment dates, change Salesforce balances, or describe stale formula values as outstanding.',
+      },
+      {
+        title: 'Classification and visibility',
+        body: 'Classification uses actual Delivery Date, then Expected Delivery Date, then Hong Kong Created Date. Buyer Credit Statement remains stricter: only actual or expected delivery on or after the cutoff can enter credit exposure. The audit is restricted to Finance, the uniquely active General Manager, and Administrators.',
+      },
+      {
+        title: 'Audit evidence',
+        body: 'Summary cards show counts only. Searchable rows cover stale buyer receivable formulas, stale supplier payable formulas, and post-cutover Payment records linked to legacy STEMs. Raw Salesforce values appear only inside row details and are labelled unreliable, not outstanding. The large zero-balance undated population remains a count rather than an itemized list.',
       },
     ],
   },
@@ -466,7 +488,7 @@ export const BROKER_METHODOLOGIES = {
       },
       {
         title: 'Reports and payment state',
-        body: 'Exports capture the selected register and methodology at generation time. Payment or approval actions follow their existing authorization and evidence rules and do not arise solely from a report calculation.',
+        body: 'Exports capture the selected register and methodology at generation time. Commission values remain available for historical commercial reporting, but payment dates and delays are unavailable for STEMs classified before 1 January 2026 using actual Delivery Date, Expected Delivery Date, then Hong Kong Created Date. Those obligations are company-confirmed settled and their incomplete historical payment fields are excluded from normal payment statistics. Payment or approval actions follow their existing authorization and evidence rules and do not arise solely from a report calculation.',
       },
     ],
   },

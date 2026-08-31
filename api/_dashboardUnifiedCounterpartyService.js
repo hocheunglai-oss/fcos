@@ -4,6 +4,7 @@ import { resolveExtraCostSupplierLookup, resolveOriginalSupplierLookup } from '.
 import { CREDIT_EXPOSURE_DELIVERY_START, selectUltimateCreditGroup } from './_dashboardAccountCreditStatement.js';
 import { estimateUninvoicedSupplierChild, resolveSupplierInvoiceIdentity } from './_dashboardSupplierCreditStatement.js';
 import { findDashboardUomField } from './_dashboardVolume.js';
+import { paymentDataReliableSoql } from '../src/lib/paymentDataReliability.js';
 
 const ID = /^[A-Za-z0-9]{15}(?:[A-Za-z0-9]{3})?$/;
 const MAX_IDENTITIES = 100;
@@ -351,6 +352,7 @@ async function loadDashboardAccountExposureBatchUncached({ body = {}, accessCont
   if (!stemMap.has('Account__c') || !stemMap.has('QLIK_Receivable_Balance__c') || !stemMap.has('Delivery_Date__c') || !stemMap.has('Expected_Delivery_Date__c') || !invoiceMap.has('Supplier__c') || !invoiceMap.has('Payable_Balance__c') || !lineLookup.valid || !extraLookup.valid) throw error('Salesforce exposure schema is incomplete.', 503, 'UNIFIED_COUNTERPARTY_SCHEMA');
   const filters = normalizedFilters(body.filters); const scoped = await scopeWhere(filters, stemMap, force);
   const relatedStemScope = stemChildScope(scoped);
+  const supplierReliabilityScope = paymentDataReliableSoql('STEM__r.');
   const lineUom = findDashboardUomField([...lineMap.values()], 'lineItem');
   const extraUom = findDashboardUomField([...extraMap.values()], 'lineItem');
   const lineSelect = ['Id', 'STEM__c', lineLookup.fieldName, 'Supplier_Invoice__c', 'Quantity__c', 'Quantity_Delivered_Per_BDN__c', 'Quantity_Max__c', 'Is_Quantity_Range__c', 'Cost_Per_Unit__c', 'Unit_Buy_At__c', 'Unit_Cost__c', lineUom, 'CurrencyIsoCode'].filter((field) => field && lineMap.has(field));
@@ -361,9 +363,9 @@ async function loadDashboardAccountExposureBatchUncached({ body = {}, accessCont
   const buyerExposureScope = `((Delivery_Date__c >= ${CREDIT_EXPOSURE_DELIVERY_START}) OR (Delivery_Date__c = null AND Expected_Delivery_Date__c >= ${CREDIT_EXPOSURE_DELIVERY_START}))`;
   const [buyerStemChunks, directInvoiceChunks, lineChunks, extraChunks] = await Promise.all([
     Promise.all(accountChunks.map((part) => all(`SELECT ${buyerSelect.join(',')} FROM STEM__c WHERE Account__c IN (${values(part)}) AND QLIK_Receivable_Balance__c != 0 AND ${buyerExposureScope}${scoped ? ` AND ${scoped}` : ''}`))),
-    Promise.all(accountChunks.map((part) => all(`SELECT ${invoiceSelect.join(',')} FROM Supplier_Invoice__c WHERE Supplier__c IN (${values(part)}) AND Payable_Balance__c != 0${relatedStemScope ? ` AND (${relatedStemScope})` : ''}`))),
-    Promise.all(accountChunks.map((part) => all(`SELECT ${lineSelect.join(',')} FROM STEM_Line_Item__c WHERE Cancelled__c = false AND ${lineLookup.fieldName} IN (${values(part)})${relatedStemScope ? ` AND (${relatedStemScope})` : ''}`))),
-    Promise.all(accountChunks.map((part) => all(`SELECT ${extraSelect.join(',')} FROM STEM_Extra_Cost__c WHERE Cancelled__c = false AND ${extraLookup.fieldName} IN (${values(part)})${relatedStemScope ? ` AND (${relatedStemScope})` : ''}`))),
+    Promise.all(accountChunks.map((part) => all(`SELECT ${invoiceSelect.join(',')} FROM Supplier_Invoice__c WHERE Supplier__c IN (${values(part)}) AND Payable_Balance__c != 0 AND ${supplierReliabilityScope}${relatedStemScope ? ` AND (${relatedStemScope})` : ''}`))),
+    Promise.all(accountChunks.map((part) => all(`SELECT ${lineSelect.join(',')} FROM STEM_Line_Item__c WHERE Cancelled__c = false AND ${lineLookup.fieldName} IN (${values(part)}) AND ${supplierReliabilityScope}${relatedStemScope ? ` AND (${relatedStemScope})` : ''}`))),
+    Promise.all(accountChunks.map((part) => all(`SELECT ${extraSelect.join(',')} FROM STEM_Extra_Cost__c WHERE Cancelled__c = false AND ${extraLookup.fieldName} IN (${values(part)}) AND ${supplierReliabilityScope}${relatedStemScope ? ` AND (${relatedStemScope})` : ''}`))),
   ]);
   const buyerStems = buyerStemChunks.flat(); const lines = lineChunks.flat(); const extras = extraChunks.flat();
   const linkedSupplierIdsByInvoice = new Map();
@@ -374,7 +376,7 @@ async function loadDashboardAccountExposureBatchUncached({ body = {}, accessCont
   }
   const linkedInvoiceIds = [...linkedSupplierIdsByInvoice.keys()];
   const linkedInvoiceChunks = linkedInvoiceIds.length
-    ? (await Promise.all(chunkIds(linkedInvoiceIds).map((part) => all(`SELECT ${invoiceSelect.join(',')} FROM Supplier_Invoice__c WHERE Id IN (${values(part)}) AND Payable_Balance__c != 0${relatedStemScope ? ` AND (${relatedStemScope})` : ''}`)))).flat()
+    ? (await Promise.all(chunkIds(linkedInvoiceIds).map((part) => all(`SELECT ${invoiceSelect.join(',')} FROM Supplier_Invoice__c WHERE Id IN (${values(part)}) AND Payable_Balance__c != 0 AND ${supplierReliabilityScope}${relatedStemScope ? ` AND (${relatedStemScope})` : ''}`)))).flat()
     : [];
   const invoicesById = new Map([...directInvoiceChunks.flat(), ...linkedInvoiceChunks].map((row) => [key(row.Id), row]));
   const conflictingOwnerIds = new Set();
@@ -420,7 +422,7 @@ async function loadDashboardAccountExposureBatchUncached({ body = {}, accessCont
 export async function loadDashboardAccountExposureBatch({ body = {}, accessContext, force = false }) {
   const entities = (Array.isArray(body.entities) ? body.entities : []).map((row) => ({ entityType: row?.entityType, entityId: row?.entityId }));
   const cached = await getOrLoadRuntimeCache({
-    namespace: 'salesforce-dashboard-account-exposure-batch', version: '3', accessScope: interoffice(accessContext) ? 'interoffice' : 'standard', apiVersion: `${getApiVersion()}@${getInstanceUrl()}`,
+    namespace: 'salesforce-dashboard-account-exposure-batch', version: '4-payment-reliability', accessScope: interoffice(accessContext) ? 'interoffice' : 'standard', apiVersion: `${getApiVersion()}@${getInstanceUrl()}`,
     payload: { entities, filters: normalizedFilters(body.filters) }, ttlSeconds: 60,
     tags: ['salesforce:dashboard', 'salesforce:account', 'salesforce:group', 'salesforce:stem', 'salesforce:supplier-invoice', 'salesforce:line-item', 'salesforce:extra-cost', 'salesforce:account-credit'], force,
     loader: () => loadDashboardAccountExposureBatchUncached({ body, accessContext, force }),

@@ -9,6 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import DataStatus from '@/components/common/DataStatus';
 import SalesforceSyncBadge from '@/components/common/SalesforceSyncBadge';
 import StemDetailModal from '@/components/dashboard/StemDetailModal';
+import PaymentDataReliabilityBadge from '@/components/common/PaymentDataReliabilityBadge';
 import { navigationCacheOptions } from '@/lib/navigationCachePolicy';
 
 const PERIODS = [
@@ -269,6 +270,10 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
     ? ['both', 'buyer', 'supplier']
     : [role === 'supplier' ? 'supplier' : 'buyer'];
   const displayedRole = activeTab === 'credit' && statementSide === 'both' ? 'both' : (data?.activeRole || role);
+  const hasOnlyLegacyPaymentData = Boolean(
+    data?.paymentDataReliability?.excludedLegacyRecordCount
+      && data?.paymentDataReliability?.reliableRecordCount === 0,
+  );
 
   return (
     <>
@@ -281,6 +286,7 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
                 <span className="rounded-sm bg-sky-100 px-2 py-0.5 text-[11px] font-semibold uppercase text-sky-800">Account Insight</span>
                 <span className="rounded-sm border border-border px-2 py-0.5 text-[11px] font-semibold">{ROLE_LABELS[displayedRole] || displayedRole}</span>
                 <SalesforceSyncBadge />
+                <PaymentDataReliabilityBadge excludedCount={data.paymentDataReliability?.excludedLegacyRecordCount} />
                 {meta ? <DataStatus meta={meta} label="Salesforce" /> : null}
               </div>
               <DialogTitle className="truncate text-xl">{identity.name || account?.name || 'Account'}</DialogTitle>
@@ -410,7 +416,13 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
                 </TabsContent>
 
                 <TabsContent value="payments" className="mt-0 space-y-5">
-                  {data.activeRole === 'supplier' ? (
+                  {hasOnlyLegacyPaymentData ? (
+                    <Section title="Payment history" description="Earlier commercial activity remains available in Account Insight">
+                      <div className="rounded-md border border-slate-200 bg-slate-50 px-4 py-5 text-sm font-medium text-slate-700">
+                        No reliable payment data in this period
+                      </div>
+                    </Section>
+                  ) : data.activeRole === 'supplier' ? (
                     <>
                       <Section title="Supplier payment exposure" description="Currencies remain separate"><MoneyRows rows={supplierPayments?.byCurrency} columns={[{ key: 'invoiceAmount', label: 'Invoiced' }, { key: 'paidAmount', label: 'Paid' }, { key: 'outstandingPayable', label: 'Payable' }, { key: 'overduePayable', label: 'Overdue' }, { key: 'dueWithin7Days', label: 'Due 7 days' }, { key: 'dueWithin30Days', label: 'Due 30 days' }]} /></Section>
                       <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-8"><Kpi label="Unpaid invoices" value={formatNumber(supplierPayments?.states?.unpaid)} /><Kpi label="Partly paid" value={formatNumber(supplierPayments?.states?.partlyPaid)} /><Kpi label="Paid invoices" value={formatNumber(supplierPayments?.states?.paid)} /><Kpi label="Completion" value={formatPercent(supplierPayments?.completionRatePct)} /><Kpi label="Average payment delay" value={formatDays(supplierPayments?.averagePaymentDelayDays, 1)} /><Kpi label="On-time payments" value={formatPercent(supplierPayments?.onTimePaymentRatePct)} /><Kpi label="Latest payment" value={formatDate(supplierPayments?.latestPayment?.date)} /><Kpi label="Payment terms" value={formatNumber(supplierPayments?.paymentTerms?.length)} /></div>
