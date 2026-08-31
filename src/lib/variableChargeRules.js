@@ -69,6 +69,25 @@ export function stepPortClearanceApplicationCount(value, direction) {
   return Math.max(1, portClearanceApplicationCount(value) + delta);
 }
 
+export function supplierInputAmountUsd(value, inputCurrency = 'USD', usdHkdRate = null) {
+  if (value == null || value === '') return null;
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return null;
+  if (String(inputCurrency || 'USD').trim().toUpperCase() !== 'HKD') return amount;
+  const rate = Number(usdHkdRate);
+  return Number.isFinite(rate) && rate > 0 ? amount / rate : null;
+}
+
+export function variableChargeQuantityLabel(item, quantity, unitOfMeasure) {
+  if (quantity == null || quantity === '') return 'Not set';
+  if (isPortClearanceItem(item)) {
+    const count = portClearanceApplicationCount(quantity);
+    return `${count} ${count === 1 ? 'application' : 'applications'}`;
+  }
+  const unit = String(unitOfMeasure ?? '').trim() || 'Not set';
+  return `${quantity} ${unit}`;
+}
+
 function positiveNumber(value) {
   if (value == null || value === '') return null;
   const amount = Number(value);

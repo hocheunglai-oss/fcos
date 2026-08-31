@@ -894,6 +894,15 @@ function finiteAmount(value) {
   return Number.isFinite(number) ? number : null;
 }
 
+function extraCostFinancialAmount(row, side) {
+  const fixed = finiteAmount(side === 'cost' ? row.Lumpsum_Cost__c : row.Lumpsum_Price__c);
+  if (fixed != null) return fixed;
+  const unit = finiteAmount(side === 'cost' ? row.Unit_Cost__c : row.Unit_Price__c);
+  const quantity = finiteAmount(row.Quantity__c);
+  if (unit != null && quantity != null) return unit * quantity;
+  return finiteAmount(side === 'cost' ? row.Line_Total_Buy__c : row.Line_Total__c);
+}
+
 function financialSummary(live) {
   const stemCurrency = text(live.stem?.CurrencyIsoCode, 3).toUpperCase() || null;
   const hongKongDelivery = isHongKongStem(live.stem);
@@ -906,9 +915,9 @@ function financialSummary(live) {
     })),
     ...live.extraCosts.map((row) => ({
       supplierId: row.Supplier__c,
-      cost: finiteAmount(row.Line_Total_Buy__c),
-      charge: finiteAmount(row.Line_Total__c) ?? (hongKongDelivery && isAnchorageDuesRow(row)
-        ? finiteAmount(row.Line_Total_Buy__c)
+      cost: extraCostFinancialAmount(row, 'cost'),
+      charge: extraCostFinancialAmount(row, 'charge') ?? (hongKongDelivery && isAnchorageDuesRow(row)
+        ? extraCostFinancialAmount(row, 'cost')
         : hongKongDelivery && isLightDuesRow(row) ? 0 : null),
       currency: text(row.CurrencyIsoCode, 3).toUpperCase() || stemCurrency,
     })),
@@ -1344,7 +1353,7 @@ function anchorageEvidence(live, settings) {
     fxSettingsRevision: settings.revision,
     calculation,
     rows: rows.map((row) => {
-      const currency = text(row.CurrencyIsoCode || live.stem.CurrencyIsoCode, 3).toUpperCase();
+      const currency = text(row.CurrencyIsoCode || live.stem.CurrencyIsoCode, 3).toUpperCase() || 'USD';
       const allocationHkd = allocatedById.get(row.Id) ?? row.Anchorage_Dues_Allocation_HKD__c ?? null;
       const supplierAmount = finiteAmount(row.Line_Total_Buy__c);
       const appliedRate = row.Anchorage_Calculation_Version__c

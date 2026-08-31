@@ -13,6 +13,8 @@ import {
   portClearanceApplicationCount,
   statutorySupplierHkdDefault,
   stepPortClearanceApplicationCount,
+  supplierInputAmountUsd,
+  variableChargeQuantityLabel,
 } from '../src/lib/variableChargeRules.js';
 
 const repositoryFile = (path) => readFile(new URL(`../${path}`, import.meta.url), 'utf8');
@@ -116,6 +118,31 @@ test('Port Clearance application stepper defaults to one and never decrements be
   assert.equal(stepPortClearanceApplicationCount(1, -1), 1);
   assert.equal(stepPortClearanceApplicationCount(1, 1), 2);
   assert.equal(stepPortClearanceApplicationCount(2, 1), 3);
+  assert.equal(variableChargeQuantityLabel({ productName: 'PORT CLEARANCE FEE' }, 1, '1.'), '1 application');
+  assert.equal(variableChargeQuantityLabel({ productName: 'PORT CLEARANCE FEE' }, 2, '1.'), '2 applications');
+  assert.equal(variableChargeQuantityLabel({ productName: 'OTHER' }, 2, 'MT'), '2 MT');
+});
+
+test('HKD supplier inputs are converted to USD before margin calculations', () => {
+  assert.equal(supplierInputAmountUsd(1950, 'HKD', 7.84), 1950 / 7.84);
+  assert.equal(supplierInputAmountUsd(248.72, 'USD', 7.84), 248.72);
+  assert.equal(supplierInputAmountUsd(1950, 'HKD', null), null);
+});
+
+test('financial totals derive per-unit costs when Salesforce line totals are stale', () => {
+  const summary = variableChargeInternals.financialSummary({
+    stem: { CurrencyIsoCode: 'USD' },
+    lineItems: [],
+    accounts: [{ Id: '0012x0000000001AAA', Name: 'Hong Kong Agent' }],
+    extraCosts: [{
+      Supplier__c: '0012x0000000001AAA', Quantity__c: 2,
+      Unit_Cost__c: 7.4, Unit_Price__c: 7.4,
+      Line_Total_Buy__c: 0, Line_Total__c: 0, CurrencyIsoCode: 'USD',
+    }],
+  });
+  assert.equal(summary.supplierCostTotal, 14.8);
+  assert.equal(summary.buyerChargeTotal, 14.8);
+  assert.equal(summary.margin, 0);
 });
 
 test('calculated Light and Anchorage Dues prefill an otherwise empty Supplier Leg in HKD', () => {
