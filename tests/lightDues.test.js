@@ -39,6 +39,50 @@ test('only the exact active LIGHT DUES product is statutory evidence', () => {
   assert.equal(variableChargeInternals.isLightDuesRow({ Product2Id__r: { Name: 'LIGHT DIESEL OIL', IsActive: true } }), false);
 });
 
+test('Light Dues derives the entry date from the earliest saved arrival for the exact supplier', () => {
+  const live = {
+    extraCosts: [
+      {
+        Supplier__c: 'supplier-a',
+        Anchorage_Arrival__c: '2026-08-28T17:30:00.000Z',
+        Product2Id__r: { Name: 'ANCHORAGE DUES', IsActive: true },
+      },
+      {
+        Supplier__c: 'supplier-a',
+        Anchorage_Arrival__c: '2026-08-28T16:15:00.000Z',
+        Product2Id__r: { Name: 'ANCHORAGE DUES', IsActive: true },
+      },
+      {
+        Supplier__c: 'supplier-b',
+        Anchorage_Arrival__c: '2026-08-27T16:00:00.000Z',
+        Product2Id__r: { Name: 'ANCHORAGE DUES', IsActive: true },
+      },
+    ],
+  };
+
+  assert.deepEqual(
+    variableChargeInternals.lightDuesArrivalEvidence(live, { Supplier__c: 'supplier-a' }),
+    { arrival: '2026-08-28T16:15:00.000Z', entryDate: '2026-08-29' },
+  );
+});
+
+test('Light Dues review has no editable date or category controls', async () => {
+  const [component, service, methodology] = await Promise.all([
+    repositoryFile('src/components/payments/VariableCharges.jsx'),
+    repositoryFile('api/_variableCharges.js'),
+    repositoryFile('src/lib/pageMethodologies.js'),
+  ]);
+  const panel = component.slice(component.indexOf('function LightDuesPanel'), component.indexOf('function HongKongStatutoryChargesPanel'));
+  const saveHandler = service.slice(service.indexOf('export async function saveVariableChargeLightDues'), service.indexOf('function operationIdentity'));
+
+  assert.doesNotMatch(panel, /Confirmed Entry Date|Vessel Category.*<Select|River-trade only/);
+  assert.match(panel, /Entry date comes from the saved Hong Kong arrival/);
+  assert.match(panel, /Vessel category <strong>All other vessels/);
+  assert.match(saveHandler, /LIGHT_DUES_CATEGORY_ALL_OTHER/);
+  assert.doesNotMatch(saveHandler, /input\?\.entryDate|input\?\.category|Delivery_Date__c/);
+  assert.match(methodology, /earliest saved Hong Kong anchorage arrival for the same supplier/);
+});
+
 test('supplier dual currency preserves reviewed rates and labels legacy current rates', () => {
   assert.deepEqual(supplierDualCurrency({ usdAmount: 100, savedRate: 7.84, currentRate: 7.9 }), {
     complete: true, usdAmount: 100, hkdAmount: 784, rate: 7.84, basis: 'reviewed_rate',

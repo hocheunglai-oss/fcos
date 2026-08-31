@@ -370,6 +370,10 @@ test('FCOS handlers are explicit, fail-closed, atomic, and do not send email', a
   assert.match(ui, /Charge Buyer/);
   assert.match(ui, /Do Not Charge/);
   assert.match(ui, /Pending/);
+  assert.match(ui, /aria-pressed=\{active\}/);
+  assert.match(ui, /bg-slate-700 text-white/);
+  assert.match(ui, /bg-emerald-700 text-white/);
+  assert.match(ui, /bg-amber-400 text-slate-950/);
   assert.match(ui, /!fixedPricing && <span>Quantity/);
   assert.match(ui, /fixedPricing \? 'Fixed charge' : 'Per Unit'/);
   assert.match(ui, /valueOf\(row\.item, \['productName'\]\)/);

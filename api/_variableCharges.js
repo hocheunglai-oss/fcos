@@ -10,7 +10,6 @@ import {
 import {
   LIGHT_DUES_CALCULATION_VERSION,
   LIGHT_DUES_CATEGORY_ALL_OTHER,
-  LIGHT_DUES_CATEGORY_RIVER_TRADE,
   calculateHongKongLightDues,
   convertHkdToUsd,
   supplierDualCurrency,
@@ -1338,6 +1337,16 @@ function anchorageEvidence(live, settings) {
   };
 }
 
+function lightDuesArrivalEvidence(live, row) {
+  const arrival = live.extraCosts
+    .filter((candidate) => isAnchorageDuesRow(candidate)
+      && candidate.Supplier__c === row.Supplier__c
+      && candidate.Anchorage_Arrival__c)
+    .map((candidate) => candidate.Anchorage_Arrival__c)
+    .sort((left, right) => new Date(left).getTime() - new Date(right).getTime())[0] || null;
+  return { arrival, entryDate: hongKongDateOnly(arrival) };
+}
+
 function lightDuesEvidence(live, settings) {
   const rows = live.extraCosts.filter((row) => isLightDuesRow(row));
   if (!isHongKongStem(live.stem) || !rows.length) return null;
@@ -1348,8 +1357,8 @@ function lightDuesEvidence(live, settings) {
     companyUsdHkdRate: settings.usdHkdRate,
     fxSettingsRevision: settings.revision,
     rows: rows.map((row) => {
-      const entryDate = row.Light_Dues_Entry_Date__c || live.stem.Delivery_Date__c || null;
-      const category = row.Light_Dues_Category__c || LIGHT_DUES_CATEGORY_ALL_OTHER;
+      const { arrival, entryDate } = lightDuesArrivalEvidence(live, row);
+      const category = LIGHT_DUES_CATEGORY_ALL_OTHER;
       const calculation = calculateHongKongLightDues({ nrt: vesselNrt, entryDate, category });
       const appliedRate = row.Light_Dues_Calculation_Version__c
         ? finiteAmount(row.Light_Dues_USD_HKD_Rate__c)
@@ -1367,7 +1376,9 @@ function lightDuesEvidence(live, settings) {
         extraCostId: row.Id,
         supplierId: row.Supplier__c,
         supplierName: accountNames.get(row.Supplier__c) || 'Supplier',
+        arrival,
         entryDate,
+        entryDateSource: 'anchorage_arrival',
         category,
         calculation,
         calculatedUsd: calculatedHkd == null ? null : convertHkdToUsd(calculatedHkd, appliedRate),
@@ -1376,6 +1387,8 @@ function lightDuesEvidence(live, settings) {
         supplierVarianceHkd: supplierHkd != null && calculatedHkd != null ? Math.round((supplierHkd - calculatedHkd) * 100) / 100 : null,
         buyerDefaultUsd: 0,
         appliedNrt: row.Light_Dues_NRT_Snapshot__c ?? null,
+        appliedEntryDate: row.Light_Dues_Entry_Date__c || null,
+        appliedCategory: row.Light_Dues_Category__c || null,
         appliedRateHkd: row.Light_Dues_Rate_HKD__c ?? null,
         appliedAmountHkd: row.Light_Dues_Amount_HKD__c ?? null,
         appliedUsdHkdRate: row.Light_Dues_USD_HKD_Rate__c ?? null,
@@ -1651,12 +1664,8 @@ export async function saveVariableChargeLightDues(body, context) {
     if (text(input?.expectedLastModifiedDate, 80) !== text(row.LastModifiedDate, 80)) {
       throw httpError('A Light Dues row changed after it was opened. Refresh and try again.', 409, 'LIGHT_DUES_ROW_CHANGED');
     }
-    const category = text(input?.category, 80) || LIGHT_DUES_CATEGORY_ALL_OTHER;
-    if (![LIGHT_DUES_CATEGORY_ALL_OTHER, LIGHT_DUES_CATEGORY_RIVER_TRADE].includes(category)) {
-      throw httpError('Choose All other vessels or River-trade only.', 400, 'LIGHT_DUES_CATEGORY_INVALID');
-    }
-    const entryDate = isoDate(input?.entryDate || row.Light_Dues_Entry_Date__c || live.stem.Delivery_Date__c);
-    const calculation = calculateHongKongLightDues({ nrt: vesselNrt, category, entryDate });
+    const { entryDate } = lightDuesArrivalEvidence(live, row);
+    const calculation = calculateHongKongLightDues({ nrt: vesselNrt, category: LIGHT_DUES_CATEGORY_ALL_OTHER, entryDate });
     if (!calculation.complete) throw httpError(calculation.errors[0], 400, 'LIGHT_DUES_CALCULATION_INCOMPLETE', calculation.errors);
     return { row, calculation };
   });
@@ -2551,7 +2560,10 @@ async function assertLightDuesApprovalReady(live, supplierId, context, side) {
   }
   if (selected.some((row) => !row.savedCalculationVersion
     || Number(row.appliedNrt) !== Number(evidence.vesselNrt)
+    || row.appliedEntryDate !== row.entryDate
+    || row.appliedCategory !== LIGHT_DUES_CATEGORY_ALL_OTHER
     || row.appliedAmountHkd == null
+    || Math.abs(Number(row.appliedAmountHkd) - Number(row.calculation?.amountHkd)) > 0.005
     || !(Number(row.appliedUsdHkdRate) > 0))) {
     throw httpError('The Vessel NRT or Light Dues evidence changed. Save the Light Dues details again before approval.', 409, 'LIGHT_DUES_EVIDENCE_STALE');
   }
@@ -3022,6 +3034,7 @@ export const variableChargeInternals = {
   isLightDuesRow,
   isHongKongStem,
   isVariableChargeAccount,
+  lightDuesArrivalEvidence,
   liveFingerprint,
   normalizedEmail,
   normalizedName,

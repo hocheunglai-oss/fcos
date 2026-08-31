@@ -7,8 +7,12 @@ import {
   buyerAmountWithAnchorageDecision,
   buyerDecisionOptionsForItem,
   buyerPriceWithAnchorageDefault,
+  canApproveBothVariableChargeLegs,
   isAnchorageDuesItem,
   isHongKongAnchorageDuesItem,
+  portClearanceApplicationCount,
+  statutorySupplierHkdDefault,
+  stepPortClearanceApplicationCount,
 } from '../src/lib/variableChargeRules.js';
 
 const repositoryFile = (path) => readFile(new URL(`../${path}`, import.meta.url), 'utf8');
@@ -102,6 +106,77 @@ test('Anchorage Dues contributes its supplier pass-through to financial totals b
   assert.equal(summary.buyerChargeTotal, 500);
   assert.equal(summary.margin, 0);
   assert.equal(summary.chargesComplete, true);
+});
+
+test('Port Clearance application stepper defaults to one and never decrements below one', () => {
+  assert.equal(portClearanceApplicationCount(null), 1);
+  assert.equal(portClearanceApplicationCount(0), 1);
+  assert.equal(portClearanceApplicationCount(3), 3);
+  assert.equal(stepPortClearanceApplicationCount(null, -1), 1);
+  assert.equal(stepPortClearanceApplicationCount(1, -1), 1);
+  assert.equal(stepPortClearanceApplicationCount(1, 1), 2);
+  assert.equal(stepPortClearanceApplicationCount(2, 1), 3);
+});
+
+test('calculated Light and Anchorage Dues prefill an otherwise empty Supplier Leg in HKD', () => {
+  assert.deepEqual(statutorySupplierHkdDefault({
+    productName: 'LIGHT DUES',
+    hongKongVariableCharges: true,
+    fixedCost: 0,
+    supplierCurrency: { inputAmount: null },
+    lightDuesVerification: { calculation: { complete: true, amountHkd: 3010 } },
+  }), { amountHkd: 3010, source: 'light_dues_calculation' });
+  assert.deepEqual(statutorySupplierHkdDefault({
+    productName: 'ANCHORAGE DUES',
+    hongKongVariableCharges: true,
+    fixedCost: 0,
+    supplierCurrency: { inputAmount: null },
+    anchorageVerification: { allocationHkd: 2520 },
+  }), { amountHkd: 2520, source: 'anchorage_dues_calculation' });
+  assert.deepEqual(statutorySupplierHkdDefault({
+    productName: 'ANCHORAGE DUES',
+    hongKongVariableCharges: true,
+    fixedCost: 0,
+    supplierCurrency: { inputAmount: null },
+    anchorageVerification: { allocationHkd: 0 },
+  }), { amountHkd: 0, source: 'anchorage_dues_calculation' });
+  assert.equal(statutorySupplierHkdDefault({
+    productName: 'LIGHT DUES',
+    hongKongVariableCharges: true,
+    fixedCost: 100,
+    lightDuesVerification: { calculation: { complete: true, amountHkd: 3010 } },
+  }), null);
+  assert.equal(statutorySupplierHkdDefault({
+    productName: 'LIGHT DUES',
+    hongKongVariableCharges: true,
+    fixedCost: 0,
+    supplierCurrency: { inputAmount: 0 },
+    lightDuesVerification: { calculation: { complete: true, amountHkd: 3010 } },
+  }), null);
+});
+
+test('General Manager review of both legs enables one atomic approval without changing assignments', () => {
+  assert.equal(canApproveBothVariableChargeLegs({
+    commonOwner: false,
+    reviewingBothAsGeneralManager: true,
+    bothOpen: true,
+    canCostEdit: true,
+    canBuyerEdit: true,
+  }), true);
+  assert.equal(canApproveBothVariableChargeLegs({
+    commonOwner: false,
+    reviewingBothAsGeneralManager: false,
+    bothOpen: true,
+    canCostEdit: true,
+    canBuyerEdit: true,
+  }), false);
+  assert.equal(canApproveBothVariableChargeLegs({
+    commonOwner: false,
+    reviewingBothAsGeneralManager: true,
+    bothOpen: true,
+    canCostEdit: true,
+    canBuyerEdit: false,
+  }), false);
 });
 
 test('Is Variable triggers review globally while Hong Kong charge rules remain port-specific', () => {
