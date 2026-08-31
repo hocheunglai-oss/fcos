@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Navigate, useLocation } from 'react-router-dom';
 import { Boxes, Loader2, LockKeyhole, TriangleAlert } from 'lucide-react';
 import { useAuth } from '@/lib/AuthContext';
@@ -24,6 +24,8 @@ export default function Login() {
     isSupabaseConfigured: supabaseReady,
     authMode,
     authError,
+    authChecked,
+    isLoadingAuth,
     fcunoOidcEnabled,
     legacyPasswordLoginEnabled,
   } = useAuth();
@@ -32,6 +34,7 @@ export default function Login() {
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [logoutWarning, setLogoutWarning] = useState('');
+  const automaticFcunoAttempted = useRef(false);
   const [federatedReturnTo] = useState(() => safeLocalReturnTo(
     window.sessionStorage.getItem('fcos:fcuno-return-to'),
   ));
@@ -43,6 +46,19 @@ export default function Login() {
         ? authError.message
         : '';
   const visibleError = error || contextError;
+  const federatedParams = new URLSearchParams(location.search);
+  const isFederatedCallback = federatedParams.get('federated') === '1';
+  const hasFederatedError = federatedParams.has('error')
+    || federatedParams.has('error_code')
+    || /(?:^|[#&])error(?:_code|_description)?=/.test(location.hash);
+  const automaticFcunoEligible = authMode === 'supabase'
+    && fcunoOidcEnabled
+    && authChecked
+    && !isLoadingAuth
+    && !isAuthenticated
+    && (!authError || authError.type === 'auth_required')
+    && !isFederatedCallback
+    && !hasFederatedError;
 
   useEffect(() => {
     document.title = 'Sign in · FCOS';
@@ -57,6 +73,21 @@ export default function Login() {
     if (isAuthenticated) window.sessionStorage.removeItem('fcos:fcuno-return-to');
   }, [isAuthenticated]);
 
+  useEffect(() => {
+    if (!automaticFcunoEligible || automaticFcunoAttempted.current) return;
+    automaticFcunoAttempted.current = true;
+    setError('');
+    setSubmitting(true);
+    const from = location.state?.from;
+    const returnTo = from
+      ? `${from.pathname || '/'}${from.search || ''}${from.hash || ''}`
+      : '/';
+    loginWithFcuno(returnTo).catch((err) => {
+      setError(err.message || 'FCUNO sign-in could not be started.');
+      setSubmitting(false);
+    });
+  }, [automaticFcunoEligible, location.state, loginWithFcuno]);
+
   if (isAuthenticated) {
     const from = location.state?.from;
     const stateReturnTo = from
@@ -64,6 +95,15 @@ export default function Login() {
       : null;
     const returnTo = safeLocalReturnTo(stateReturnTo) || federatedReturnTo || '/';
     return <Navigate to={returnTo} replace />;
+  }
+
+  if (automaticFcunoEligible && !visibleError) {
+    return (
+      <div className="grid min-h-screen place-items-center bg-slate-50" role="status" aria-live="polite">
+        <Loader2 className="h-7 w-7 animate-spin text-primary" aria-hidden="true" />
+        <span className="sr-only">Opening FCUNO sign-in</span>
+      </div>
+    );
   }
 
   const submit = async (event) => {

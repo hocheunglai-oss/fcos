@@ -332,6 +332,10 @@ test('FCOS uses the custom FCUNO OIDC provider behind public migration flags and
   assert.match(authContext, /sessionStorage\.setItem\(FCUNO_FORCE_REAUTH_KEY, 'true'\)/);
   assert.match(authContext, /if \(result\.user\) window\.sessionStorage\.removeItem\(FCUNO_FORCE_REAUTH_KEY\)/);
   assert.match(authContext, /VITE_FCOS_ENABLE_FCUNO_LEGACY_PASSWORD_LOGIN/);
+  assert.match(login, /automaticFcunoEligible/);
+  assert.match(login, /automaticFcunoAttempted\.current/);
+  assert.match(login, /isFederatedCallback/);
+  assert.match(login, /Opening FCUNO sign-in/);
   assert.match(login, /Continue with FCUNO/);
   assert.match(serverBoundary, /enforceFcunoFederatedAccess/);
 });
