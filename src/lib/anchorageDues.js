@@ -1,6 +1,7 @@
 export const ANCHORAGE_CALCULATION_VERSION = 'hk-md-2026-v1';
 export const ANCHORAGE_FREE_MINUTES = 12 * 60;
 export const ANCHORAGE_LOCATION_ELSEWHERE = 'Elsewhere in Hong Kong';
+export const ANCHORAGE_LOCATION_ELSEWHERE_LABEL = 'Anywhere except Victoria Port';
 export const ANCHORAGE_LOCATION_VICTORIA = 'Victoria Port';
 
 const RATES = new Map([

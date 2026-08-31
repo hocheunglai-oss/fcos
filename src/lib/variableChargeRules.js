@@ -116,7 +116,7 @@ export function canApproveBothVariableChargeLegs({
 }
 
 export function isIncludedBasicCallingItem(item) {
-  return item?.managedBasicCallingBundle === true
+  return (item?.basicCallingBundleSupport === true || item?.managedBasicCallingBundle === true)
     && INCLUDED_BASIC_CALLING_NAMES.has(normalizedProductName(item?.productName ?? item?.Product2Id__r?.Name));
 }
 

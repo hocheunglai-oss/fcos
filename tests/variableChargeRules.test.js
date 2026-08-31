@@ -234,3 +234,90 @@ test('Variable Charges presents native-HKD selected totals and removes duplicate
   assert.match(service, /Agency_Fee_Currency__c/);
   assert.match(service, /inputCurrency === 'HKD'[\s\S]*nativeTotal \/ rate/);
 });
+
+test('manual Hong Kong support rows inherit the exact supplier Basic Calling Cost defaults', () => {
+  const supplierId = '0012x0000000001AAA';
+  const basic = {
+    Id: 'a04000000000001AAA', Supplier__c: supplierId,
+    Product2Id__r: { Name: 'BASIC CALLING COST' },
+    Lumpsum_Cost__c: 0, Lumpsum_Price__c: 1000, Line_Total_Buy__c: 0, Line_Total__c: 1000,
+  };
+  const agency = {
+    Id: 'a04000000000002AAA', Supplier__c: supplierId,
+    Product2Id__r: { Name: 'AGENCY FEE' },
+    Lumpsum_Cost__c: 250, Lumpsum_Price__c: null, Line_Total_Buy__c: 250, Line_Total__c: 0,
+    Hong_Kong_Bundle_Managed__c: false,
+  };
+  const port = {
+    Id: 'a04000000000003AAA', Supplier__c: supplierId,
+    Product2Id__r: { Name: 'PORT CLEARANCE FEE' },
+    Quantity__c: 2, Unit_Cost__c: 7.4, Unit_Price__c: 0, Line_Total_Buy__c: 14.8,
+    Supplier_Cost_Input_Currency__c: 'HKD', Supplier_Cost_Input_Value__c: 58,
+    Supplier_Cost_USD_HKD_Rate__c: 7.84,
+    Hong_Kong_Bundle_Managed__c: false,
+  };
+  const live = {
+    stem: { Port__r: { Name: 'HONG KONG' } },
+    lineItems: [],
+    extraCosts: [basic, agency, port],
+    accounts: [{
+      Id: supplierId,
+      Name: 'Hong Kong Agent',
+      Agency_Fee_USD__c: 1950,
+      Agency_Fee_Currency__c: 'HKD',
+    }],
+  };
+  const settings = { usdHkdRate: 7.84, revision: 4 };
+  const supplierIds = variableChargeInternals.basicCallingSupplierIds(live);
+  const options = { basicCallingSupplierIds: supplierIds, accountsById: new Map(live.accounts.map((row) => [row.Id, row])) };
+
+  const serializedBasic = variableChargeInternals.serializeLiveRow(basic, 'extra_cost', settings, options);
+  const serializedAgency = variableChargeInternals.serializeLiveRow(agency, 'extra_cost', settings, options);
+  const serializedPort = variableChargeInternals.serializeLiveRow(port, 'extra_cost', settings, options);
+  assert.equal(serializedBasic.buyerDefault.decision, 'include');
+  assert.equal(serializedAgency.basicCallingBundleSupport, true);
+  assert.equal(serializedAgency.managedBasicCallingBundle, false);
+  assert.equal(serializedAgency.supplierCostLocked, true);
+  assert.equal(serializedAgency.supplierCurrency.inputCurrency, 'HKD');
+  assert.equal(serializedAgency.supplierCurrency.inputAmount, 1950);
+  assert.equal(serializedAgency.supplierCurrency.unitOrFixed.usdAmount, 248.72);
+  assert.deepEqual(serializedAgency.buyerDefault, { decision: 'exclude', unitOrFixedUsd: 0, totalUsd: 0, locked: true });
+  assert.equal(serializedPort.buyerDefault.decision, 'include');
+  assert.equal(serializedPort.buyerDefault.unitOrFixedUsd, 3.7);
+
+  const summary = variableChargeInternals.supplierDualCurrencySummary(live, settings).bySupplier[0];
+  assert.equal(summary.hkd, 2066);
+  assert.equal(summary.usd, 263.52);
+});
+
+test('server applies Basic Calling, Agency, Port Clearance and Light Dues buyer defaults to legacy manual rows', () => {
+  const supplierId = '0012x0000000001AAA';
+  const rows = [
+    { Id: 'a04000000000001AAA', Supplier__c: supplierId, Product2Id__r: { Name: 'BASIC CALLING COST' }, Lumpsum_Cost__c: 0, Lumpsum_Price__c: 1000, LastModifiedDate: '2026-08-31T00:00:00.000Z' },
+    { Id: 'a04000000000002AAA', Supplier__c: supplierId, Product2Id__r: { Name: 'AGENCY FEE' }, Lumpsum_Cost__c: 248.72, Lumpsum_Price__c: null, LastModifiedDate: '2026-08-31T00:00:01.000Z' },
+    { Id: 'a04000000000003AAA', Supplier__c: supplierId, Product2Id__r: { Name: 'PORT CLEARANCE FEE' }, Quantity__c: 2, Unit_Cost__c: 7.4, Unit_Price__c: 0, LastModifiedDate: '2026-08-31T00:00:02.000Z' },
+    { Id: 'a04000000000004AAA', Supplier__c: supplierId, Product2Id__r: { Name: 'LIGHT DUES' }, Lumpsum_Cost__c: 202.93, Lumpsum_Price__c: null, LastModifiedDate: '2026-08-31T00:00:03.000Z' },
+  ];
+  const result = variableChargeInternals.applyHongKongBuyerDefaults({
+    reviews: rows.map((row) => ({ sourceId: row.Id, reviewed: true, buyerChargeDecision: '' })),
+    extraCostUpdates: [],
+  }, rows, { hongKongDelivery: true, usdHkdRate: 7.84 });
+  const decisions = new Map(result.reviews.map((row) => [row.sourceId, row.buyerChargeDecision]));
+  assert.equal(decisions.get(rows[0].Id), 'include');
+  assert.equal(decisions.get(rows[1].Id), 'exclude');
+  assert.equal(decisions.get(rows[2].Id), 'include');
+  assert.equal(decisions.get(rows[3].Id), 'exclude');
+  const updates = new Map(result.extraCostUpdates.map((row) => [row.extraCostId, row]));
+  assert.equal(updates.get(rows[1].Id).buyerPrice, 0);
+  assert.equal(updates.get(rows[2].Id).buyerPrice, 3.7);
+  assert.equal(updates.get(rows[3].Id).buyerPrice, 0);
+});
+
+test('Anchorage location keeps the Salesforce value while showing the clearer user label', async () => {
+  const [component, field] = await Promise.all([
+    repositoryFile('src/components/payments/VariableCharges.jsx'),
+    repositoryFile('force-app/main/default/objects/STEM_Extra_Cost__c/fields/Anchorage_Location__c.field-meta.xml'),
+  ]);
+  assert.match(component, /ANCHORAGE_LOCATION_ELSEWHERE_LABEL/);
+  assert.match(field, /<fullName>Elsewhere in Hong Kong<\/fullName>[\s\S]*<label>Anywhere except Victoria Port<\/label>/);
+});

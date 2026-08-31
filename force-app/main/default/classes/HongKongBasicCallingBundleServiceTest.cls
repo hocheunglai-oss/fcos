@@ -177,6 +177,80 @@ private class HongKongBasicCallingBundleServiceTest {
     }
 
     @IsTest
+    static void manualSupportRowsUseTheSameInvoiceReadinessRules() {
+        STEM_Extra_Cost__c basic = [
+            SELECT Id, STEM__c, Supplier__c, Payment_Term__c FROM STEM_Extra_Cost__c
+            WHERE Product2Id__r.Name = :HongKongBasicCallingBundleService.BASIC_CALLING_COST LIMIT 1
+        ];
+        STEM_Extra_Cost__c generatedAgency = [
+            SELECT Id FROM STEM_Extra_Cost__c
+            WHERE Hong_Kong_Bundle_Managed__c = true AND Product2Id__r.Name = 'AGENCY FEE' LIMIT 1
+        ];
+        STEM_Extra_Cost__c portClearance = [
+            SELECT Id FROM STEM_Extra_Cost__c
+            WHERE Hong_Kong_Bundle_Managed__c = true AND Product2Id__r.Name = 'PORT CLEARANCE FEE' LIMIT 1
+        ];
+        Product2 agencyProduct = [SELECT Id FROM Product2 WHERE Name = 'AGENCY FEE' AND IsActive = true LIMIT 1];
+        STEM_Extra_Cost__c manualAgency = new STEM_Extra_Cost__c(
+            STEM__c = basic.STEM__c,
+            Supplier__c = basic.Supplier__c,
+            Product2Id__c = agencyProduct.Id,
+            RecordTypeId = Schema.SObjectType.STEM_Extra_Cost__c.getRecordTypeInfosByName().get('STEM Charge').getRecordTypeId(),
+            Payment_Term__c = basic.Payment_Term__c,
+            Fixed__c = true,
+            Lumpsum_Cost__c = 250,
+            Lumpsum_Price__c = 0,
+            Quantity__c = 1,
+            Quantity_Delivered_Per_BDN__c = 1,
+            Unit_of_Measure__c = '1.',
+            Supplier_Cost_Input_Currency__c = 'USD',
+            Supplier_Cost_Input_Value__c = 250,
+            Supplier_Cost_USD_HKD_Rate__c = 7.84,
+            Supplier_Cost_FX_Settings_Revision__c = 1,
+            Cancelled__c = false
+        );
+        ContextManager.skipTriggers = true;
+        try {
+            update new STEM_Extra_Cost__c(Id = generatedAgency.Id, Cancelled__c = true);
+            update new STEM_Extra_Cost__c(
+                Id = portClearance.Id,
+                Unit_Cost__c = 7.40,
+                Unit_Price__c = 0,
+                Supplier_Cost_USD_HKD_Rate__c = 7.84,
+                Supplier_Cost_FX_Settings_Revision__c = 1
+            );
+            insert manualAgency;
+        } finally {
+            ContextManager.skipTriggers = false;
+        }
+
+        Test.startTest();
+        VariableChargeInvoiceReadinessService.assertHongKongBundleConfirmationReady(
+            basic.STEM__c,
+            basic.Supplier__c,
+            new Set<String>{'cost', 'buyer_charge'}
+        );
+        ContextManager.skipTriggers = true;
+        try {
+            update new STEM_Extra_Cost__c(Id = manualAgency.Id, Lumpsum_Price__c = 1);
+        } finally {
+            ContextManager.skipTriggers = false;
+        }
+        Boolean blocked = false;
+        try {
+            VariableChargeInvoiceReadinessService.assertHongKongBundleConfirmationReady(
+                basic.STEM__c,
+                basic.Supplier__c,
+                new Set<String>{'buyer_charge'}
+            );
+        } catch (Exception ex) {
+            blocked = ex.getMessage().contains('included in Basic Calling Cost');
+        }
+        Test.stopTest();
+        System.assertEquals(true, blocked, 'A manual Agency Fee must retain the bundle buyer-zero rule.');
+    }
+
+    @IsTest
     static void leavingHongKongCancelsOnlyUnissuedManagedRows() {
         STEM_Extra_Cost__c basic = [
             SELECT Id, STEM__c FROM STEM_Extra_Cost__c

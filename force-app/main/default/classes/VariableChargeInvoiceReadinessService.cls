@@ -254,13 +254,41 @@ public without sharing class VariableChargeInvoiceReadinessService {
                 Port_Clearance_Rate_HKD__c, Port_Clearance_Calculation_Version__c
             FROM STEM_Extra_Cost__c
             WHERE STEM__c = :stemId AND Supplier__c = :supplierId
-                AND Cancelled__c = false AND Hong_Kong_Bundle_Managed__c = true
+                AND Cancelled__c = false
         ];
+        Boolean hasBasicCallingCost = false;
+        for (STEM_Extra_Cost__c row : rows) {
+            if (normalizeProductName(row.Product2Id__r?.Name) == HongKongBasicCallingBundleService.BASIC_CALLING_COST) {
+                hasBasicCallingCost = true;
+                break;
+            }
+        }
+        if (!hasBasicCallingCost) return null;
+        Account supplier;
+        if (supplierSide) {
+            supplier = [
+                SELECT Id, Agency_Fee_USD__c, Agency_Fee_Currency__c
+                FROM Account WHERE Id = :supplierId LIMIT 1
+            ];
+        }
         for (STEM_Extra_Cost__c row : rows) {
             String productName = normalizeProductName(row.Product2Id__r?.Name);
             if (productName == HongKongBasicCallingBundleService.AGENCY_FEE) {
-                if (supplierSide && (row.Lumpsum_Cost__c == null || row.Lumpsum_Cost__c <= 0)) {
-                    return 'Set the Agreed Agency Fee and Currency on the supplier Account before approving Agency Fee.';
+                if (supplierSide) {
+                    String nativeCurrency = String.isBlank(supplier.Agency_Fee_Currency__c) ? 'USD' : supplier.Agency_Fee_Currency__c;
+                    Decimal nativeAmount = supplier.Agency_Fee_USD__c;
+                    if (nativeAmount == null || nativeAmount <= 0 || (nativeCurrency != 'USD' && nativeCurrency != 'HKD')
+                        || row.Supplier_Cost_Input_Currency__c != nativeCurrency
+                        || row.Supplier_Cost_Input_Value__c != nativeAmount
+                        || row.Supplier_Cost_USD_HKD_Rate__c == null || row.Supplier_Cost_USD_HKD_Rate__c <= 0) {
+                        return 'Set the Agreed Agency Fee and Currency on the supplier Account before approving Agency Fee.';
+                    }
+                    Decimal expectedUsd = nativeCurrency == 'HKD'
+                        ? (nativeAmount / row.Supplier_Cost_USD_HKD_Rate__c).setScale(2)
+                        : nativeAmount.setScale(2);
+                    if (row.Lumpsum_Cost__c == null || (row.Lumpsum_Cost__c - expectedUsd).abs() > 0.005) {
+                        return 'Agency Fee no longer matches the supplier Account’s Agreed Agency Fee and Currency.';
+                    }
                 }
                 if (!supplierSide && row.Lumpsum_Price__c != null && row.Lumpsum_Price__c.abs() > 0.005) {
                     return 'Agency Fee is included in Basic Calling Cost and must remain USD 0 on the Buyer Leg.';
@@ -283,11 +311,16 @@ public without sharing class VariableChargeInvoiceReadinessService {
                 }
                 if (!supplierSide) {
                     Decimal buyerUnitPrice = row.Unit_Price__c == null ? 0 : row.Unit_Price__c;
-                    if (row.Quantity__c == 1 && buyerUnitPrice.abs() > 0.005) {
-                        return 'The first Port Clearance application is included in Basic Calling Cost and must remain USD 0.';
+                    if (row.Supplier_Cost_USD_HKD_Rate__c == null || row.Supplier_Cost_USD_HKD_Rate__c <= 0) {
+                        return 'The Port Clearance buyer pass-through rate is unavailable.';
                     }
-                    if (row.Quantity__c > 1 && buyerUnitPrice <= 0) {
-                        return 'Additional Port Clearance applications must be reviewed as a buyer pass-through.';
+                    Decimal buyerHkd = (row.Quantity__c - 1) * HongKongBasicCallingBundleService.PORT_CLEARANCE_RATE_HKD;
+                    Decimal buyerTotalUsd = (buyerHkd / row.Supplier_Cost_USD_HKD_Rate__c).setScale(2);
+                    Decimal expectedBuyerUnitUsd = (buyerTotalUsd / row.Quantity__c).setScale(2);
+                    if ((buyerUnitPrice - expectedBuyerUnitUsd).abs() > 0.005) {
+                        return row.Quantity__c == 1
+                            ? 'The first Port Clearance application is included in Basic Calling Cost and must remain USD 0.'
+                            : 'Additional Port Clearance applications must use the reviewed zero-margin buyer pass-through.';
                     }
                 }
             }

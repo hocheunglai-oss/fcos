@@ -61,7 +61,11 @@ import {
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
 import { PAYMENT_COLLECTIONS_METHODOLOGIES } from '@/lib/pageMethodologies';
-import { calculateHongKongAnchorageDues } from '@/lib/anchorageDues';
+import {
+  ANCHORAGE_LOCATION_ELSEWHERE,
+  ANCHORAGE_LOCATION_ELSEWHERE_LABEL,
+  calculateHongKongAnchorageDues,
+} from '@/lib/anchorageDues';
 import { LIGHT_DUES_CATEGORY_ALL_OTHER, calculateHongKongLightDues } from '@/lib/lightDues';
 import { cn } from '@/lib/utils';
 import {
@@ -424,7 +428,7 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
     setAnchorageDrafts(Object.fromEntries((nextDetail.anchorage?.rows || []).map((row) => [row.extraCostId, {
       arrival: row.arrival || '',
       departure: row.departure || '',
-      location: row.location || 'Elsewhere in Hong Kong',
+      location: row.location || ANCHORAGE_LOCATION_ELSEWHERE,
       allocationHkd: row.allocationHkd ?? '',
       expectedLastModifiedDate: row.lastModifiedDate || '',
     }])));
@@ -1332,7 +1336,7 @@ function AnchorageDuesPanel({ evidence, drafts, canEdit, saving, canEditRate, on
               {multiple && <div className="md:col-span-4 text-sm font-medium text-amber-950">{row.supplierName}</div>}
               <div className="space-y-1.5"><Label htmlFor={`anchorage-arrival-${row.extraCostId}`}>Arrival · Hong Kong time</Label><Input id={`anchorage-arrival-${row.extraCostId}`} type="datetime-local" value={hongKongDateTimeLocal(draft.arrival)} disabled={!canEdit || saving} onChange={(event) => onChange(row.extraCostId, { arrival: hongKongLocalToIso(event.target.value) })} /></div>
               <div className="space-y-1.5"><Label htmlFor={`anchorage-departure-${row.extraCostId}`}>Departure · Hong Kong time</Label><Input id={`anchorage-departure-${row.extraCostId}`} type="datetime-local" value={hongKongDateTimeLocal(draft.departure)} disabled={!canEdit || saving} onChange={(event) => onChange(row.extraCostId, { departure: hongKongLocalToIso(event.target.value) })} /></div>
-              <div className="space-y-1.5"><Label>Location</Label><Select value={draft.location || 'Elsewhere in Hong Kong'} disabled={!canEdit || saving} onValueChange={(location) => onChange(row.extraCostId, { location })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="Elsewhere in Hong Kong">Elsewhere in Hong Kong</SelectItem><SelectItem value="Victoria Port">Victoria Port</SelectItem></SelectContent></Select></div>
+              <div className="space-y-1.5"><Label>Location</Label><Select value={draft.location || ANCHORAGE_LOCATION_ELSEWHERE} disabled={!canEdit || saving} onValueChange={(location) => onChange(row.extraCostId, { location })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value={ANCHORAGE_LOCATION_ELSEWHERE}>{ANCHORAGE_LOCATION_ELSEWHERE_LABEL}</SelectItem><SelectItem value="Victoria Port">Victoria Port</SelectItem></SelectContent></Select></div>
               <div className="space-y-1.5"><Label htmlFor={`anchorage-allocation-${row.extraCostId}`}>{multiple ? `Agent allocation ${index + 1} (HKD)` : 'Expected dues (HKD)'}</Label><Input id={`anchorage-allocation-${row.extraCostId}`} inputMode="decimal" value={multiple ? draft.allocationHkd ?? '' : calculation.allocations?.[0]?.amountHkd ?? ''} disabled={!canEdit || saving || !multiple} onChange={(event) => onChange(row.extraCostId, { allocationHkd: event.target.value })} /></div>
               <div className="md:col-span-4 flex flex-wrap gap-x-5 gap-y-1 border-t border-amber-100 pt-2 text-xs text-amber-950">
                 {row.savedCalculationVersion && <span>Reviewed basis <strong>NRT {row.appliedNrt ?? 'Unavailable'} · USD 1 = HKD {row.appliedUsdHkdRate ?? 'Unavailable'}</strong></span>}
