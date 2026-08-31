@@ -12336,7 +12336,7 @@ async function legacyPaymentDataAudit(body = {}, req = null, accessContext = nul
     const where = [legacyWhere, 'Receivable_Balance__c != 0', search].filter(Boolean).join(' AND ');
     const result = await queryResult(`
       SELECT Id, Name, KeyStem__c, CreatedDate, Delivery_Date__c, Expected_Delivery_Date__c,
-             Account__c, Account__r.Name, CurrencyIsoCode, Total_Invoice_Amount__c,
+             Account__c, Account__r.Name, Total_Invoice_Amount__c,
              Total_Receiving_Amount__c, Receivable_Balance__c, QLIK_Receivable_Balance__c
       FROM stem__c
       WHERE ${where}
@@ -12351,7 +12351,7 @@ async function legacyPaymentDataAudit(body = {}, req = null, accessContext = nul
       stemName: formatStemName(stem),
       accountName: stem.Account__r?.Name || null,
       ...legacyAuditEffective(stem),
-      currency: stem.CurrencyIsoCode || 'USD',
+      currency: 'USD',
       rawValues: {
         invoiceAmount: stem.Total_Invoice_Amount__c ?? null,
         receivedAmount: stem.Total_Receiving_Amount__c ?? null,
@@ -12364,7 +12364,7 @@ async function legacyPaymentDataAudit(body = {}, req = null, accessContext = nul
     const search = legacyAuditSearchCondition(query, ['Name', 'STEM__r.Name', 'STEM__r.KeyStem__c', 'Supplier__r.Name']);
     const where = [supplierLegacyWhere, 'Payable_Balance__c != 0', search].filter(Boolean).join(' AND ');
     const result = await queryResult(`
-      SELECT Id, Name, CreatedDate, CurrencyIsoCode, Payable_Balance__c, Invoice_Amount__c,
+      SELECT Id, Name, CreatedDate, Payable_Balance__c, Invoice_Amount__c,
              STEM__c, STEM__r.Name, STEM__r.KeyStem__c, STEM__r.CreatedDate,
              STEM__r.Delivery_Date__c, STEM__r.Expected_Delivery_Date__c,
              Supplier__c, Supplier__r.Name
@@ -12381,7 +12381,7 @@ async function legacyPaymentDataAudit(body = {}, req = null, accessContext = nul
       stemName: formatStemName(invoice.STEM__r || {}),
       accountName: invoice.Supplier__r?.Name || null,
       ...legacyAuditEffective(invoice.STEM__r),
-      currency: invoice.CurrencyIsoCode || 'USD',
+      currency: 'USD',
       rawValues: {
         supplierInvoiceAmount: invoice.Invoice_Amount__c ?? null,
         payableBalance: invoice.Payable_Balance__c ?? null,
@@ -12404,7 +12404,7 @@ async function legacyPaymentDataAudit(body = {}, req = null, accessContext = nul
     ].filter(Boolean));
     const where = [`${dateField} >= ${paymentDateStart}`, paymentLegacyWhere, search].filter(Boolean).join(' AND ');
     const select = [
-      'Id', 'Name', 'CreatedDate', 'CurrencyIsoCode', dateField, amountField,
+      'Id', 'Name', 'CreatedDate', ...selectedFields(paymentNames, ['CurrencyIsoCode', 'Currency__c']), dateField, amountField,
       paymentNames.has('STEM__c') ? 'STEM__c' : null,
       paymentNames.has('STEM__c') ? 'STEM__r.Name' : null,
       paymentNames.has('STEM__c') ? 'STEM__r.KeyStem__c' : null,
@@ -12439,7 +12439,7 @@ async function legacyPaymentDataAudit(body = {}, req = null, accessContext = nul
         stemName: formatStemName(stem),
         accountName: stem.Account__r?.Name || null,
         ...legacyAuditEffective(stem),
-        currency: payment.CurrencyIsoCode || 'USD',
+        currency: payment.CurrencyIsoCode || payment.Currency__c || 'USD',
         rawValues: {
           paymentDate: payment[dateField] ?? null,
           paymentAmount: amountField ? payment[amountField] ?? null : null,

@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import {
   LEGACY_PAYMENT_DATA_LABEL,
@@ -64,4 +65,14 @@ test('response metadata declares count, policy, and reliable-only totals', () =>
     displayedTotalsUseReliableEvidenceOnly: true,
     legacyTreatment: 'Settled before FCOS cutover',
   });
+});
+
+test('legacy audit stays compatible with the single-currency production schema', () => {
+  const source = readFileSync(new URL('../api/functions/[name].js', import.meta.url), 'utf8');
+  const start = source.indexOf('async function legacyPaymentDataAudit');
+  const end = source.indexOf('\nasync function incomingPaymentAllocationConfirm', start);
+  const auditSource = source.slice(start, end);
+  assert.doesNotMatch(auditSource, /Account__r\.Name, CurrencyIsoCode/);
+  assert.doesNotMatch(auditSource, /CreatedDate, CurrencyIsoCode, Payable_Balance__c/);
+  assert.match(auditSource, /selectedFields\(paymentNames, \['CurrencyIsoCode', 'Currency__c'\]\)/);
 });
