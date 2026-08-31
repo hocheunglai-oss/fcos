@@ -1,9 +1,9 @@
 # FCUNO-Centred Identity Integration with Conflict-Safe Releases
 
-Status: Production pilot
+Status: Production controlled rollout
 Decision date: 24 August 2026
 Last architecture review: 31 August 2026
-Implementation state: Identity synchronization and FCUNO-backed FCOS sign-in are active in Production for the approved Vincent Lee and Otto Lai pilot. Company-wide entitlement and the wider SPC cutover remain disabled.
+Implementation state: Identity synchronization and FCUNO-backed FCOS sign-in are active in Production. Vincent Lee and Otto Lai completed the two-user pilot; Chengyuan Li is the sole second-batch entitlement and is awaiting his own first federated sign-in. Company-wide entitlement and the wider SPC cutover remain disabled.
 
 ## Implemented foundation
 
@@ -50,6 +50,20 @@ Implementation state: Identity synchronization and FCUNO-backed FCOS sign-in are
 - The immutable paired release evidence is recorded in
   `docs/releases/fcuno-fcos-oidc-pilot-2026-08-31.md`.
 
+## Controlled rollout batch 2
+
+- `chengyuan@cosulich.com.hk` is the sole second-batch identity. FCUNO enabled
+  only `Use FCOS`; the FCUNO role, `Use SPC`, credential revision and password
+  state were unchanged.
+- The resulting FCUNO identity revision `2` was delivered once and applied by
+  FCOS without an error. Chengyuan's existing active FCOS Trader authorization
+  record remains authoritative and unchanged.
+- Production now has three active, verified FCUNO identities entitled to FCOS.
+  Vincent and Otto remain Auth-linked; Chengyuan's synchronized link is
+  eligible but remains unclaimed until he completes his own first FCUNO sign-in.
+- No other FCUNO identity was enabled. The batch evidence is recorded in
+  `docs/releases/fcuno-fcos-oidc-chengyuan-2026-08-31.md`.
+
 ## Activation gates
 
 The two-user Production pilot passed its activation gates: both migrations are
@@ -57,6 +71,10 @@ applied to their separately pinned Supabase projects, the pilot reconciliation
 has no duplicates or unresolved entitled users, OIDC and signing secrets remain
 in their owning systems, repository checks passed, and the paired release record
 identifies both Git commits and Production deployments.
+
+The second-batch Chengyuan entitlement passed its synchronization and
+role-preservation gates. User-performed first sign-in and subsequent revocation
+verification remain outstanding; this does not authorize another batch.
 
 Company-wide activation remains fail-closed until each additional user is
 explicitly enabled in FCUNO, synchronized without ambiguity, and verified in a
