@@ -17,12 +17,27 @@ function sha256(value) {
 
 async function fetchPinnedFile(file) {
   if (localDirectory) return readFile(resolve(localDirectory, file));
+  const repositoryPath = pin.providerRepository
+    .split('/')
+    .map((segment) => encodeURIComponent(segment))
+    .join('/');
+  const contractFilePath = `${pin.contractPath}/${file}`
+    .split('/')
+    .map((segment) => encodeURIComponent(segment))
+    .join('/');
   const url = new URL(
-    `${pin.providerCommit}/${pin.contractPath}/${file}`,
-    `https://raw.githubusercontent.com/${pin.providerRepository}/`,
+    `/repos/${repositoryPath}/contents/${contractFilePath}`,
+    'https://api.github.com',
   );
+  url.searchParams.set('ref', pin.providerCommit);
+  const token = process.env.GITHUB_TOKEN?.trim();
   const response = await fetch(url, {
-    headers: { Accept: 'application/vnd.github.raw+json' },
+    headers: {
+      Accept: 'application/vnd.github.raw+json',
+      'User-Agent': 'fcos-fcuno-contract-verifier',
+      'X-GitHub-Api-Version': '2022-11-28',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
     redirect: 'error',
     signal: AbortSignal.timeout(15_000),
   });
