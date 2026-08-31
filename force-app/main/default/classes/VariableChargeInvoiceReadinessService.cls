@@ -260,7 +260,7 @@ public without sharing class VariableChargeInvoiceReadinessService {
             String productName = normalizeProductName(row.Product2Id__r?.Name);
             if (productName == HongKongBasicCallingBundleService.AGENCY_FEE) {
                 if (supplierSide && (row.Lumpsum_Cost__c == null || row.Lumpsum_Cost__c <= 0)) {
-                    return 'Set Agreed Agency Fee (USD) on the supplier Account before approving Agency Fee.';
+                    return 'Set the Agreed Agency Fee and Currency on the supplier Account before approving Agency Fee.';
                 }
                 if (!supplierSide && row.Lumpsum_Price__c != null && row.Lumpsum_Price__c.abs() > 0.005) {
                     return 'Agency Fee is included in Basic Calling Cost and must remain USD 0 on the Buyer Leg.';
@@ -348,7 +348,7 @@ public without sharing class VariableChargeInvoiceReadinessService {
             'WHERE STEM__c = :stemId AND Cancelled__c = false ORDER BY Id', binds);
         for (SObject row : lineRows) parts.add('P|' + String.valueOf(row.get('Id')));
         for (SObject row : fingerprintRows(Account.SObjectType,
-            new List<String>{'Id','Is_Agent__c','Is_Variable__c','Supplier_Payment_Term__c','Agency_Fee_USD__c'},
+            new List<String>{'Id','Is_Agent__c','Is_Variable__c','Supplier_Payment_Term__c','Agency_Fee_USD__c','Agency_Fee_Currency__c'},
             'WHERE Id = :supplierId', binds)) {
             parts.add('A|' + JSON.serialize(row));
         }
@@ -603,7 +603,8 @@ public without sharing class VariableChargeInvoiceReadinessService {
                 || before.Is_Variable__c != after.Is_Variable__c
                 || before.Inactive_Suspended__c != after.Inactive_Suspended__c)) bothIds.add(id);
             if (before != null && (before.Supplier_Payment_Term__c != after.Supplier_Payment_Term__c
-                || before.Agency_Fee_USD__c != after.Agency_Fee_USD__c)) costIds.add(id);
+                || before.Agency_Fee_USD__c != after.Agency_Fee_USD__c
+                || before.Agency_Fee_Currency__c != after.Agency_Fee_Currency__c)) costIds.add(id);
         }
         Set<Id> ids = new Set<Id>();
         ids.addAll(bothIds);

@@ -24,6 +24,15 @@
     min-width: min(100%, 14rem);
 }
 
+.record-type-field_agency-fee {
+    min-width: min(100%, 12rem);
+}
+
+.record-type-field_agency-currency {
+    min-width: min(100%, 7rem);
+    max-width: 9rem;
+}
+
 .invoicing-requirement {
     margin-top: 0.75rem;
 }

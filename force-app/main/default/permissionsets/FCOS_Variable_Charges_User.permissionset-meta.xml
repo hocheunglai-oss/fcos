@@ -6,6 +6,7 @@
     <fieldPermissions><editable>true</editable><field>Account.Is_Agent__c</field><readable>true</readable></fieldPermissions>
     <fieldPermissions><editable>true</editable><field>Account.Is_Variable__c</field><readable>true</readable></fieldPermissions>
     <fieldPermissions><editable>true</editable><field>Account.Agency_Fee_USD__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>Account.Agency_Fee_Currency__c</field><readable>true</readable></fieldPermissions>
     <fieldPermissions><editable>true</editable><field>Vessel__c.NRT__c</field><readable>true</readable></fieldPermissions>
     <fieldPermissions><editable>false</editable><field>STEM_Extra_Cost__c.Anchorage_Arrival__c</field><readable>true</readable></fieldPermissions>
     <fieldPermissions><editable>false</editable><field>STEM_Extra_Cost__c.Anchorage_Departure__c</field><readable>true</readable></fieldPermissions>

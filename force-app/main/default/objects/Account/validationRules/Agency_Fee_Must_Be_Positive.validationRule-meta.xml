@@ -5,5 +5,5 @@
     <description>An agreed Agency Fee must be greater than zero when supplied.</description>
     <errorConditionFormula>AND(NOT(ISBLANK(Agency_Fee_USD__c)), Agency_Fee_USD__c &lt;= 0)</errorConditionFormula>
     <errorDisplayField>Agency_Fee_USD__c</errorDisplayField>
-    <errorMessage>Agreed Agency Fee (USD) must be greater than zero.</errorMessage>
+    <errorMessage>Agreed Agency Fee must be greater than zero.</errorMessage>
 </ValidationRule>

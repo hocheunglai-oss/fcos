@@ -229,6 +229,44 @@ private class HongKongBasicCallingBundleServiceTest {
     }
 
     @IsTest
+    static void hkdAccountFeeRetainsNativeEvidenceForGovernedConversion() {
+        STEM_Line_Item__c line = [SELECT Original_Supplier__c FROM STEM_Line_Item__c LIMIT 1];
+        STEM_Extra_Cost__c agency = [
+            SELECT Id, Lumpsum_Cost__c, Line_Total_Buy__c
+            FROM STEM_Extra_Cost__c
+            WHERE Hong_Kong_Bundle_Managed__c = true AND Product2Id__r.Name = 'AGENCY FEE' LIMIT 1
+        ];
+
+        Test.startTest();
+        Account before = new Account(
+            Id = line.Original_Supplier__c,
+            Agency_Fee_USD__c = 250,
+            Agency_Fee_Currency__c = 'USD'
+        );
+        Account after = new Account(
+            Id = line.Original_Supplier__c,
+            Agency_Fee_USD__c = 1950,
+            Agency_Fee_Currency__c = 'HKD'
+        );
+        HongKongBasicCallingBundleService.afterAccountChange(
+            new Map<Id, Account>{after.Id => after},
+            new Map<Id, Account>{before.Id => before}
+        );
+        Test.stopTest();
+
+        agency = [
+            SELECT Lumpsum_Cost__c, Line_Total_Buy__c, Supplier_Cost_Input_Currency__c,
+                Supplier_Cost_Input_Value__c, Supplier_Cost_USD_HKD_Rate__c
+            FROM STEM_Extra_Cost__c WHERE Id = :agency.Id
+        ];
+        System.assertEquals(null, agency.Lumpsum_Cost__c);
+        System.assertEquals(Decimal.valueOf('0'), agency.Line_Total_Buy__c);
+        System.assertEquals('HKD', agency.Supplier_Cost_Input_Currency__c);
+        System.assertEquals(Decimal.valueOf('1950'), agency.Supplier_Cost_Input_Value__c);
+        System.assertEquals(null, agency.Supplier_Cost_USD_HKD_Rate__c);
+    }
+
+    @IsTest
     static void ordinaryBasicCostUpdateKeepsBundleSynchronized() {
         STEM_Extra_Cost__c basic = [
             SELECT Id, Description__c FROM STEM_Extra_Cost__c

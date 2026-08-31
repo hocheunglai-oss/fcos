@@ -384,6 +384,8 @@ function liveFingerprint(liveCase) {
       isAgent: row.Is_Agent__c === true,
       isVariable: row.Is_Variable__c === true,
       agencyFeeUsd: row.Agency_Fee_USD__c ?? null,
+      agencyFeeAmount: row.Agency_Fee_USD__c ?? null,
+      agencyFeeCurrency: row.Agency_Fee_Currency__c || 'USD',
       paymentTerm: row.Supplier_Payment_Term__c || null,
     })).sort((a, b) => a.id.localeCompare(b.id)),
     supplierStages: (liveCase.supplierStages || []).map((row) => ({ id: row.Id, supplierId: row.Supplier__c, manual: row.Manual_Review_Required__c === true, status: row.Supplier_Status__c, revision: row.Revision__c ?? null, fingerprint: row.Reviewed_Source_Fingerprint__c || null })).sort((a, b) => String(a.supplierId).localeCompare(String(b.supplierId))),
@@ -406,6 +408,8 @@ function supplierLiveFingerprint(liveCase, supplierId) {
       isAgent: row.Is_Agent__c === true,
       isVariable: row.Is_Variable__c === true,
       agencyFeeUsd: row.Agency_Fee_USD__c ?? null,
+      agencyFeeAmount: row.Agency_Fee_USD__c ?? null,
+      agencyFeeCurrency: row.Agency_Fee_Currency__c || 'USD',
       paymentTerm: row.Supplier_Payment_Term__c || null,
     })),
     lineItems: liveCase.lineItems.filter((row) => row.Original_Supplier__c === supplierId).map((row) => ({
@@ -450,6 +454,8 @@ function buyerChargeLiveFingerprint(liveCase, supplierId) {
     account: liveCase.accounts.filter((row) => row.Id === supplierId).map((row) => ({
       id: row.Id, isAgent: row.Is_Agent__c === true, isVariable: row.Is_Variable__c === true,
       agencyFeeUsd: row.Agency_Fee_USD__c ?? null,
+      agencyFeeAmount: row.Agency_Fee_USD__c ?? null,
+      agencyFeeCurrency: row.Agency_Fee_Currency__c || 'USD',
     })),
     lineItems: liveCase.lineItems.filter((row) => row.Original_Supplier__c === supplierId).map((row) => ({
       kind: 'line_item', id: row.Id, supplierId: row.Original_Supplier__c,
@@ -647,7 +653,7 @@ async function loadLiveCases({ client, stemIds = null, stemAccessCondition = nul
     ...allLineItems.map((row) => row.Original_Supplier__c),
     ...allExtraCosts.map((row) => row.Supplier__c), ...supplierStages.map((row) => row.Supplier__c),
   ].filter(Boolean))];
-  const accounts = (await queryIds('Account', 'Id, Name, Is_Agent__c, Is_Variable__c, Agency_Fee_USD__c, Supplier_Payment_Term__c, Inactive_Suspended__c, LastModifiedDate', supplierIds))
+  const accounts = (await queryIds('Account', 'Id, Name, Is_Agent__c, Is_Variable__c, Agency_Fee_USD__c, Agency_Fee_Currency__c, Supplier_Payment_Term__c, Inactive_Suspended__c, LastModifiedDate', supplierIds))
     .filter((account) => account.Inactive_Suspended__c !== true);
   const accountMap = new Map(accounts.map((row) => [row.Id, row]));
   const manualPairKeys = new Set(supplierStages.filter((row) => row.Manual_Review_Required__c === true).map((row) => `${row.STEM__c}:${row.Supplier__c}`));
@@ -998,6 +1004,8 @@ function serializeCase(live, stored, profile, gm, dueDate, sideRows = [], profil
     isAgent: row.Is_Agent__c === true,
     isVariable: row.Is_Variable__c === true,
     agencyFeeUsd: row.Agency_Fee_USD__c ?? null,
+    agencyFeeAmount: row.Agency_Fee_USD__c ?? null,
+    agencyFeeCurrency: row.Agency_Fee_Currency__c || 'USD',
     paymentTerm: row.Supplier_Payment_Term__c || null,
   }));
   const assignedBuyerTrader = assignee.id ? assignee : {
@@ -1404,20 +1412,36 @@ function lightDuesEvidence(live, settings) {
 function supplierDualCurrencySummary(live, settings) {
   if (!isHongKongStem(live.stem)) return null;
   const rows = [
-    ...live.lineItems.map((row) => ({ supplierId: row.Original_Supplier__c, usd: finiteAmount(row.Total_Cost__c), rate: settings.usdHkdRate, reviewed: false })),
-    ...live.extraCosts.map((row) => ({
-      supplierId: row.Supplier__c,
-      usd: finiteAmount(row.Line_Total_Buy__c),
-      rate: finiteAmount(row.Supplier_Cost_USD_HKD_Rate__c) || settings.usdHkdRate,
-      reviewed: finiteAmount(row.Supplier_Cost_USD_HKD_Rate__c) > 0,
-    })),
+    ...live.lineItems.map((row) => {
+      const usd = finiteAmount(row.Total_Cost__c);
+      return { supplierId: row.Original_Supplier__c, usd, hkd: usd == null ? null : usd * settings.usdHkdRate, rate: settings.usdHkdRate, reviewed: false };
+    }),
+    ...live.extraCosts.map((row) => {
+      const rate = finiteAmount(row.Supplier_Cost_USD_HKD_Rate__c) || settings.usdHkdRate;
+      const inputCurrency = text(row.Supplier_Cost_Input_Currency__c, 3).toUpperCase();
+      const inputAmount = finiteAmount(row.Supplier_Cost_Input_Value__c);
+      const fixedNativeAmount = isAgencyFeeRow(row) || row.Lumpsum_Cost__c != null;
+      const nativeTotal = inputAmount == null ? null : fixedNativeAmount
+        ? inputAmount
+        : finiteAmount(row.Quantity__c) == null ? null : inputAmount * Number(row.Quantity__c);
+      const recordedUsd = finiteAmount(row.Line_Total_Buy__c);
+      const usd = inputCurrency === 'HKD' && nativeTotal != null && rate > 0 ? nativeTotal / rate : recordedUsd;
+      const hkd = inputCurrency === 'HKD' && nativeTotal != null ? nativeTotal : usd == null ? null : usd * rate;
+      return {
+        supplierId: row.Supplier__c,
+        usd,
+        hkd,
+        rate,
+        reviewed: finiteAmount(row.Supplier_Cost_USD_HKD_Rate__c) > 0,
+      };
+    }),
   ];
   const summarize = (selected) => {
-    const complete = selected.every((row) => row.usd != null && row.rate > 0);
+    const complete = selected.every((row) => row.usd != null && row.hkd != null && row.rate > 0);
     const rates = [...new Set(selected.map((row) => row.rate).filter((rate) => rate > 0))];
     return {
       usd: complete ? Math.round(selected.reduce((sum, row) => sum + row.usd, 0) * 100) / 100 : null,
-      hkd: complete ? Math.round(selected.reduce((sum, row) => sum + (row.usd * row.rate), 0) * 100) / 100 : null,
+      hkd: complete ? Math.round(selected.reduce((sum, row) => sum + row.hkd, 0) * 100) / 100 : null,
       complete,
       rateLabel: rates.length > 1 ? 'Multiple reviewed rates' : rates.length === 1 ? `USD 1 = HKD ${rates[0]}` : 'Rate unavailable',
     };
@@ -1946,6 +1970,30 @@ function supplierInputEvidence(input, settings, label) {
   };
 }
 
+function managedAgencyFeeFields(live, supplierId, settings, { includeBuyerFields = false } = {}) {
+  const supplier = (live.accounts || []).find((row) => row.Id === supplierId);
+  const nativeAmount = finiteAmount(supplier?.Agency_Fee_USD__c);
+  if (!(nativeAmount > 0)) {
+    throw httpError('Set the Agreed Agency Fee and Currency on the supplier Account before approving Agency Fee.', 409, 'AGENCY_FEE_UNAVAILABLE');
+  }
+  const inputCurrency = text(supplier?.Agency_Fee_Currency__c, 3).toUpperCase() || 'USD';
+  if (!['USD', 'HKD'].includes(inputCurrency)) {
+    throw httpError('The supplier Account Agency Fee Currency must be USD or HKD.', 409, 'AGENCY_FEE_CURRENCY_INVALID');
+  }
+  if (!(finiteAmount(settings?.usdHkdRate) > 0)) {
+    throw httpError('The company USD/HKD rate is unavailable. Refresh Variable Charges settings before approval.', 503, 'VARIABLE_CHARGE_SETTINGS_UNAVAILABLE');
+  }
+  const usdAmount = inputCurrency === 'HKD' ? nativeAmount / settings.usdHkdRate : nativeAmount;
+  return {
+    Lumpsum_Cost__c: roundedSalesforceCurrency(usdAmount),
+    Supplier_Cost_Input_Currency__c: inputCurrency,
+    Supplier_Cost_Input_Value__c: nativeAmount,
+    Supplier_Cost_USD_HKD_Rate__c: settings.usdHkdRate,
+    Supplier_Cost_FX_Settings_Revision__c: settings.revision,
+    ...(includeBuyerFields ? { Lumpsum_Price__c: 0 } : {}),
+  };
+}
+
 async function salesforceSupplierChargeWrites(body, live, supplierId, context, { includeBuyerFields = false } = {}) {
   const updates = Array.isArray(body?.extraCostUpdates) ? body.extraCostUpdates : [];
   const additions = Array.isArray(body?.extraCostAdds) ? body.extraCostAdds : [];
@@ -1975,11 +2023,11 @@ async function salesforceSupplierChargeWrites(body, live, supplierId, context, {
           url: `/services/data/${apiVersion}/sobjects/STEM_Extra_Cost__c/${id}`,
           referenceId: `buyerUpdate${reference++}`,
           httpHeaders: lastModifiedHeaders(current.LastModifiedDate),
-          body: { Lumpsum_Price__c: 0 },
+          body: managedAgencyFeeFields(live, supplierId, settings, { includeBuyerFields: true }),
         });
         continue;
       }
-      throw httpError('Agency Fee is locked to Agreed Agency Fee (USD) on the supplier Account.', 409, 'AGENCY_FEE_LOCKED');
+      throw httpError('Agency Fee is locked to the Agreed Agency Fee and Currency on the supplier Account.', 409, 'AGENCY_FEE_LOCKED');
     }
     if (isManagedBasicCallingRow(current) && isPortClearanceRow(current)) {
       const calculation = calculatePortClearance({
@@ -2075,6 +2123,16 @@ async function salesforceSupplierChargeWrites(body, live, supplierId, context, {
   if (hongKongDelivery) {
     for (const current of live.extraCosts) {
       if (current.Supplier__c !== supplierId || explicitlyUpdatedIds.has(current.Id) || explicitlyCancelledIds.has(current.Id)) continue;
+      if (isManagedBasicCallingRow(current) && isAgencyFeeRow(current)) {
+        requests.push({
+          method: 'PATCH',
+          url: `/services/data/${apiVersion}/sobjects/STEM_Extra_Cost__c/${current.Id}`,
+          referenceId: `agencyFeeSnapshot${reference++}`,
+          httpHeaders: lastModifiedHeaders(current.LastModifiedDate),
+          body: managedAgencyFeeFields(live, supplierId, settings, { includeBuyerFields }),
+        });
+        continue;
+      }
       if (finiteAmount(current.Supplier_Cost_USD_HKD_Rate__c) > 0) continue;
       const currentSupplierCost = current.Lumpsum_Cost__c ?? current.Unit_Cost__c ?? null;
       if (finiteAmount(currentSupplierCost) == null) continue;
@@ -2578,7 +2636,7 @@ async function assertBasicCallingApprovalReady(live, supplierId, context, side) 
   if (!rows.length) return;
   const agency = rows.find(isAgencyFeeRow);
   if (agency && side === 'cost' && !(finiteAmount(agency.Lumpsum_Cost__c) > 0)) {
-    throw httpError('Set Agreed Agency Fee (USD) on the supplier Account before approving Agency Fee.', 409, 'AGENCY_FEE_ACCOUNT_SETUP_REQUIRED');
+    throw httpError('Set the Agreed Agency Fee and Currency on the supplier Account before approving Agency Fee.', 409, 'AGENCY_FEE_ACCOUNT_SETUP_REQUIRED');
   }
   if (side === 'buyer_charge') {
     for (const row of rows.filter((item) => isAgencyFeeRow(item) || isLightDuesRow(item))) {

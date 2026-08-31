@@ -63,7 +63,8 @@ public without sharing class HongKongBasicCallingBundleService {
         Set<Id> supplierIds = new Set<Id>();
         for (Account row : newRows.values()) {
             Account before = oldRows.get(row.Id);
-            if (before != null && row.Agency_Fee_USD__c != before.Agency_Fee_USD__c) supplierIds.add(row.Id);
+            if (before != null && (row.Agency_Fee_USD__c != before.Agency_Fee_USD__c
+                || row.Agency_Fee_Currency__c != before.Agency_Fee_Currency__c)) supplierIds.add(row.Id);
         }
         fillMissingAgencyFees(supplierIds, newRows);
     }
@@ -241,13 +242,15 @@ public without sharing class HongKongBasicCallingBundleService {
         } else {
             row.Fixed__c = true;
             if (productName == AGENCY_FEE) {
-                row.Lumpsum_Cost__c = supplier == null ? null : supplier.Agency_Fee_USD__c;
+                String feeCurrency = agencyFeeCurrency(supplier);
+                Decimal fee = supplier == null ? null : supplier.Agency_Fee_USD__c;
+                row.Lumpsum_Cost__c = feeCurrency == 'USD' ? fee : null;
                 row.Lumpsum_Price__c = 0;
                 row.Line_Total_Buy__c = row.Lumpsum_Cost__c == null ? 0 : row.Lumpsum_Cost__c;
                 row.Line_Total__c = 0;
-                if (row.Lumpsum_Cost__c != null) {
-                    row.Supplier_Cost_Input_Currency__c = 'USD';
-                    row.Supplier_Cost_Input_Value__c = row.Lumpsum_Cost__c;
+                if (fee != null) {
+                    row.Supplier_Cost_Input_Currency__c = feeCurrency;
+                    row.Supplier_Cost_Input_Value__c = fee;
                 }
             } else if (productName == LIGHT_DUES) {
                 row.Lumpsum_Price__c = 0;
@@ -281,13 +284,15 @@ public without sharing class HongKongBasicCallingBundleService {
             row.Supplier_Cost_Input_Currency__c = 'HKD';
             row.Supplier_Cost_Input_Value__c = PORT_CLEARANCE_RATE_HKD;
             if (row.Unit_Price__c == null) row.Unit_Price__c = 0;
-        } else if (productName == AGENCY_FEE && row.Lumpsum_Cost__c == null
-            && supplier != null && supplier.Agency_Fee_USD__c != null) {
-            row.Lumpsum_Cost__c = supplier.Agency_Fee_USD__c;
-            row.Supplier_Cost_Input_Currency__c = 'USD';
+        } else if (productName == AGENCY_FEE && supplier != null && supplier.Agency_Fee_USD__c != null) {
+            String feeCurrency = agencyFeeCurrency(supplier);
+            row.Supplier_Cost_Input_Currency__c = feeCurrency;
             row.Supplier_Cost_Input_Value__c = supplier.Agency_Fee_USD__c;
             if (row.Lumpsum_Price__c == null) row.Lumpsum_Price__c = 0;
-            row.Line_Total_Buy__c = supplier.Agency_Fee_USD__c;
+            if (feeCurrency == 'USD' && row.Lumpsum_Cost__c == null) {
+                row.Lumpsum_Cost__c = supplier.Agency_Fee_USD__c;
+                row.Line_Total_Buy__c = supplier.Agency_Fee_USD__c;
+            }
             row.Line_Total__c = row.Lumpsum_Price__c;
         }
     }
@@ -305,13 +310,25 @@ public without sharing class HongKongBasicCallingBundleService {
                 WHERE Supplier__c IN :supplierIds AND Hong_Kong_Bundle_Managed__c = true
                     AND Product2Id__r.Name = :AGENCY_FEE
             ]) {
-                Decimal fee = accounts.get(row.Supplier__c)?.Agency_Fee_USD__c;
-                if (fee == null || row.Lumpsum_Cost__c != null || !isUnissued(row) || row.Cancelled__c == true) continue;
-                row.Lumpsum_Cost__c = fee;
+                Account supplier = accounts.get(row.Supplier__c);
+                Decimal fee = supplier?.Agency_Fee_USD__c;
+                if (fee == null || !isUnissued(row) || row.Cancelled__c == true) continue;
+                String feeCurrency = agencyFeeCurrency(supplier);
+                Boolean evidenceChanged = row.Supplier_Cost_Input_Currency__c != feeCurrency
+                    || row.Supplier_Cost_Input_Value__c != fee;
+                if (!evidenceChanged && (feeCurrency == 'HKD' || row.Lumpsum_Cost__c != null)) continue;
                 if (row.Lumpsum_Price__c == null) row.Lumpsum_Price__c = 0;
-                row.Supplier_Cost_Input_Currency__c = 'USD';
+                row.Supplier_Cost_Input_Currency__c = feeCurrency;
                 row.Supplier_Cost_Input_Value__c = fee;
-                row.Line_Total_Buy__c = fee;
+                if (feeCurrency == 'USD') {
+                    row.Lumpsum_Cost__c = fee;
+                    row.Line_Total_Buy__c = fee;
+                } else if (evidenceChanged) {
+                    row.Lumpsum_Cost__c = null;
+                    row.Line_Total_Buy__c = 0;
+                    row.Supplier_Cost_USD_HKD_Rate__c = null;
+                    row.Supplier_Cost_FX_Settings_Revision__c = null;
+                }
                 row.Line_Total__c = row.Lumpsum_Price__c;
                 updates.add(row);
             }
@@ -380,8 +397,12 @@ public without sharing class HongKongBasicCallingBundleService {
         Set<Id> ids = new Set<Id>();
         for (STEM_Extra_Cost__c row : rows) if (row.Supplier__c != null) ids.add(row.Supplier__c);
         return ids.isEmpty() ? new Map<Id, Account>() : new Map<Id, Account>([
-            SELECT Id, Agency_Fee_USD__c FROM Account WHERE Id IN :ids
+            SELECT Id, Agency_Fee_USD__c, Agency_Fee_Currency__c FROM Account WHERE Id IN :ids
         ]);
+    }
+
+    private static String agencyFeeCurrency(Account supplier) {
+        return supplier != null && supplier.Agency_Fee_Currency__c == 'HKD' ? 'HKD' : 'USD';
     }
 
     private static List<STEM_Extra_Cost__c> matchingRows(

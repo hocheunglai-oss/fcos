@@ -421,7 +421,7 @@ export const PAYMENT_COLLECTIONS_METHODOLOGIES = {
       },
       {
         title: 'Hong Kong Basic Calling Cost bundle',
-        body: 'An exact active BASIC CALLING COST on a Hong Kong STEM identifies a bunkers-only-call bundle for that exact supplier. FCOS creates the supporting supplier rows once, in this order: Agency Fee, Port Clearance Fee, Light Dues and Anchorage Dues. Agency Fee, the first Port Clearance application and Light Dues are already included in the buyer-facing Basic Calling Cost and therefore remain USD 0 on the Buyer Leg. Agency Fee is copied from the supplier Account’s Agreed Agency Fee (USD) and is locked for review. Existing matching manual rows remain user-managed and prevent duplicate automatic rows.',
+        body: 'An exact active BASIC CALLING COST on a Hong Kong STEM identifies a bunkers-only-call bundle for that exact supplier. FCOS creates the supporting supplier rows once, in this order: Agency Fee, Port Clearance Fee, Light Dues and Anchorage Dues. Agency Fee, the first Port Clearance application and Light Dues are already included in the buyer-facing Basic Calling Cost and therefore remain USD 0 on the Buyer Leg. Agency Fee is copied from the supplier Account’s Agreed Agency Fee and Currency and is locked for review. Existing matching manual rows remain user-managed and prevent duplicate automatic rows.',
       },
       {
         title: 'Port Clearance applications and pass-throughs',

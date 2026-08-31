@@ -15,15 +15,23 @@
                         checked={isAgent} onchange={handleChangeRecordType}>
                     </lightning-input>
                 </div>
+                <template if:true={isAgent}>
+                    <div class="record-type-field record-type-field_agency-fee">
+                        <lightning-input name="agencyFeeUsd" type="number" label="Agreed Agency Fee"
+                            variant="label-stacked" min="0.01" step="0.01" value={agencyFeeUsd}
+                            onchange={handleAgencyFeeChange}>
+                        </lightning-input>
+                    </div>
+                    <div class="record-type-field record-type-field_agency-currency">
+                        <lightning-combobox name="agencyFeeCurrency" label="Currency" variant="label-stacked"
+                            value={agencyFeeCurrency} options={agencyFeeCurrencyOptions}
+                            onchange={handleAgencyFeeCurrencyChange}>
+                        </lightning-combobox>
+                    </div>
+                </template>
                 <div class="record-type-field">
                     <lightning-input name="isVariable" type="checkbox" label="Is Variable" variant="label-stacked"
                         checked={isVariable} onchange={handleChangeRecordType}>
-                    </lightning-input>
-                </div>
-                <div class="record-type-field">
-                    <lightning-input name="agencyFeeUsd" type="number" label="Agreed Agency Fee (USD)"
-                        variant="label-stacked" min="0.01" step="0.01" value={agencyFeeUsd}
-                        onchange={handleAgencyFeeChange}>
                     </lightning-input>
                 </div>
                 <template if:false={isBrokerRecordType}>

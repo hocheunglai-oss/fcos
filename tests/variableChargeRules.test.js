@@ -187,26 +187,50 @@ test('Is Variable triggers review globally while Hong Kong charge rules remain p
   assert.equal(variableChargeInternals.isHongKongStem({ Port__r: { Name: 'SINGAPORE', Country__c: 'SINGAPORE' } }), false);
 });
 
-test('Is Variable is a history-tracked Account field placed beside Is Agent in both Account forms', async () => {
-  const [field, controller, recordMarkup, recordController, newMarkup, userPermission, integrationPermission] = await Promise.all([
+test('Is Variable and native-currency Agency Fee fields are placed and persisted consistently', async () => {
+  const [field, agencyCurrencyField, controller, recordMarkup, recordController, newMarkup, newController, userPermission, integrationPermission] = await Promise.all([
     repositoryFile('force-app/main/default/objects/Account/fields/Is_Variable__c.field-meta.xml'),
+    repositoryFile('force-app/main/default/objects/Account/fields/Agency_Fee_Currency__c.field-meta.xml'),
     repositoryFile('force-app/main/default/classes/AccountController.cls'),
     repositoryFile('force-app/main/default/lwc/fcbAccountRecordType/fcbAccountRecordType.html'),
     repositoryFile('force-app/main/default/lwc/fcbAccountRecordType/fcbAccountRecordType.js'),
     repositoryFile('force-app/main/default/lwc/fcbNewAccountOverride/fcbNewAccountOverride.html'),
+    repositoryFile('force-app/main/default/lwc/fcbNewAccountOverride/fcbNewAccountOverride.js'),
     repositoryFile('force-app/main/default/permissionsets/FCOS_Variable_Charges_User.permissionset-meta.xml'),
     repositoryFile('force-app/main/default/permissionsets/FCOS_Variable_Charges_Integration.permissionset-meta.xml'),
   ]);
   assert.match(field, /<fullName>Is_Variable__c<\/fullName>/);
   assert.match(field, /<label>Is Variable<\/label>/);
   assert.match(field, /<trackHistory>true<\/trackHistory>/);
-  assert.match(controller, /Is_Agent__c, Is_Variable__c, Agency_Fee_USD__c, Is_Broker__c/);
+  assert.match(agencyCurrencyField, /<fullName>Agency_Fee_Currency__c<\/fullName>/);
+  assert.match(agencyCurrencyField, /<fullName>USD<\/fullName>[\s\S]*<fullName>HKD<\/fullName>/);
+  assert.match(controller, /Is_Agent__c, Is_Variable__c, Agency_Fee_USD__c, Agency_Fee_Currency__c, Is_Broker__c/);
   assert.ok(recordMarkup.indexOf('name="isAgent"') < recordMarkup.indexOf('name="isVariable"'));
+  assert.ok(recordMarkup.indexOf('name="isAgent"') < recordMarkup.indexOf('name="agencyFeeUsd"'));
+  assert.ok(recordMarkup.indexOf('name="agencyFeeUsd"') < recordMarkup.indexOf('name="agencyFeeCurrency"'));
+  assert.match(recordMarkup, /<template if:true=\{isAgent\}>[\s\S]*name="agencyFeeUsd"[\s\S]*name="agencyFeeCurrency"[\s\S]*<\/template>/);
   assert.ok(recordMarkup.indexOf('name="isVariable"') < recordMarkup.indexOf('name="isBroker"'));
   assert.ok(newMarkup.indexOf('field-name="Is_Agent__c"') < newMarkup.indexOf('field-name="Is_Variable__c"'));
+  assert.match(newMarkup, /<template if:true=\{isAgent\}>[\s\S]*Agency_Fee_USD__c[\s\S]*Agency_Fee_Currency__c[\s\S]*<\/template>/);
   assert.ok(newMarkup.indexOf('field-name="Is_Variable__c"') < newMarkup.indexOf('field-name="Is_Broker__c"'));
   assert.match(recordController, /fields\["Is_Variable__c"\] = this\.isVariable/);
+  assert.match(recordController, /fields\["Agency_Fee_Currency__c"\] = this\.agencyFeeCurrency/);
+  assert.match(newController, /attribute === 'Is_Agent__c'[\s\S]*this\.isAgent = event\.target\.value/);
   assert.match(recordController, /showSaveButton\(\)[\s\S]*this\.isVariable !== this\.savedIsVariable/);
   assert.match(userPermission, /Account\.Is_Variable__c/);
+  assert.match(userPermission, /Account\.Agency_Fee_Currency__c/);
   assert.match(integrationPermission, /Account\.Is_Variable__c/);
+  assert.match(integrationPermission, /Account\.Agency_Fee_Currency__c/);
+});
+
+test('Variable Charges presents native-HKD selected totals and removes duplicated leg-header totals', async () => {
+  const [component, service] = await Promise.all([
+    repositoryFile('src/components/payments/VariableCharges.jsx'),
+    repositoryFile('api/_variableCharges.js'),
+  ]);
+  assert.match(component, /agencyFeeCurrency === 'HKD'[\s\S]*about \$\{formatMoney\(total\.usd, 'USD'\)\}/);
+  assert.doesNotMatch(component, /<LegHeader[^>]+totalLabel="Total Supplier Cost"/);
+  assert.doesNotMatch(component, /<LegHeader[^>]+totalLabel="Total Buyer Charge"/);
+  assert.match(service, /Agency_Fee_Currency__c/);
+  assert.match(service, /inputCurrency === 'HKD'[\s\S]*nativeTotal \/ rate/);
 });
