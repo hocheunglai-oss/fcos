@@ -1,9 +1,9 @@
 # FCUNO-Centred Identity Integration with Conflict-Safe Releases
 
-Status: In implementation
+Status: Production pilot
 Decision date: 24 August 2026
 Last architecture review: 31 August 2026
-Implementation state: Additive provider and consumer foundations are deployed; production flags remain disabled
+Implementation state: Identity synchronization and FCUNO-backed FCOS sign-in are active in Production for the approved Vincent Lee and Otto Lai pilot. Company-wide entitlement and the wider SPC cutover remain disabled.
 
 ## Implemented foundation
 
@@ -30,19 +30,44 @@ Implementation state: Additive provider and consumer foundations are deployed; p
   is exposed. Enabling synchronization never enables the FCOS login UI or
   server-side federation enforcement.
 
+## Production pilot evidence
+
+- The approved pilot identities are `vincent@cosulich.com.hk` and
+  `otto@cosulich.com.hk`. They are the only active, verified FCUNO identities
+  with `Use FCOS` enabled. No non-pilot identity is entitled to FCOS.
+- FCOS has 13 synchronized identity records. Exactly the two entitled pilot
+  identities are claimed by FCOS Auth profiles; neither has an unresolved
+  link. The remaining active FCOS profiles retain their authorization records
+  but are shown as awaiting FCUNO linkage and cannot cross the federated API
+  boundary.
+- All 16 FCUNO identity-delivery events are delivered and all 16 FCOS
+  synchronization transactions are applied. No duplicate verified email exists
+  in either active identity set.
+- Vincent and Otto retain their existing FCOS roles and permissions. Live
+  verification on 31 August 2026 confirmed Vincent's General Manager session,
+  both pilot rows as `Identity · FCUNO`, and the explicit account-switch path
+  after FCOS sign-out.
+- The immutable paired release evidence is recorded in
+  `docs/releases/fcuno-fcos-oidc-pilot-2026-08-31.md`.
+
 ## Activation gates
 
-Production activation remains fail-closed until both migrations are reviewed
-and applied to their separately pinned Supabase projects, the exact identity
-reconciliation report has no duplicates or unresolved active users, OIDC and
-signing secrets are configured only in their owning systems, both immutable
-previews pass compatibility and authenticated browser checks, and an approved
-paired release record identifies both Git commits and Vercel deployments.
+The two-user Production pilot passed its activation gates: both migrations are
+applied to their separately pinned Supabase projects, the pilot reconciliation
+has no duplicates or unresolved entitled users, OIDC and signing secrets remain
+in their owning systems, repository checks passed, and the paired release record
+identifies both Git commits and Production deployments.
 
-Activation order is fixed: configure current/next signing keys while every
-flag is off, enable identity synchronization and reconcile its outbox, then
-enable the OIDC provider and FCOS login only after the pilot identity and
-rollback evidence are approved.
+Company-wide activation remains fail-closed until each additional user is
+explicitly enabled in FCUNO, synchronized without ambiguity, and verified in a
+controlled batch. An existing FCOS profile that is not yet linked is expected
+during the pilot and receives no federated access; it must not be counted as an
+unresolved entitled identity.
+
+Activation order remains fixed for every later batch: enable the FCUNO
+entitlement, reconcile the signed outbox and exact FCOS profile, verify the
+identity and retained application permissions, then admit that user to the
+federated login. Do not enable all remaining users as one unverified batch.
 
 ## Summary
 
