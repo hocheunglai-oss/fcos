@@ -81,6 +81,8 @@ public without sharing class VariableChargeInvoiceReadinessService {
         if (actionability.ready != true) {
             return blockedForActionability(actionability, stemId, supplierId, true);
         }
+        String currencyProblem = agentCurrencyProblem(stemId, supplierId);
+        if (String.isNotBlank(currencyProblem)) return blocked(currencyProblem, stemId, supplierId, true);
         String bundleProblem = hongKongBundleProblem(stemId, supplierId, true);
         if (String.isNotBlank(bundleProblem)) return blocked(bundleProblem, stemId, supplierId, true);
         if (context.stage == null || context.stage.Supplier_Status__c != 'Verified') {
@@ -173,6 +175,8 @@ public without sharing class VariableChargeInvoiceReadinessService {
         if (context.required != true) return new Readiness(true, false, null, stemId, supplierId);
         Actionability actionability = calculateActionability(context.stem, context.hasProductLineItems);
         if (actionability.ready != true) return blockedForActionability(actionability, stemId, supplierId, true);
+        String currencyProblem = agentCurrencyProblem(stemId, supplierId);
+        if (String.isNotBlank(currencyProblem)) return blocked(currencyProblem, stemId, supplierId, true);
         String bundleProblem = hongKongBundleProblem(stemId, supplierId, false);
         if (String.isNotBlank(bundleProblem)) return blocked(bundleProblem, stemId, supplierId, true);
         if (context.stage == null || context.stage.Buyer_Charge_Status__c != 'Verified') {
@@ -231,6 +235,8 @@ public without sharing class VariableChargeInvoiceReadinessService {
 
     public static void assertHongKongBundleConfirmationReady(Id stemId, Id supplierId, Set<String> sides) {
         if (sides == null || sides.isEmpty()) return;
+        String currencyProblem = agentCurrencyProblem(stemId, supplierId);
+        if (String.isNotBlank(currencyProblem)) throw messageException(currencyProblem);
         if (sides.contains('cost')) {
             String costProblem = hongKongBundleProblem(stemId, supplierId, true);
             if (String.isNotBlank(costProblem)) throw messageException(costProblem);
@@ -239,6 +245,46 @@ public without sharing class VariableChargeInvoiceReadinessService {
             String buyerProblem = hongKongBundleProblem(stemId, supplierId, false);
             if (String.isNotBlank(buyerProblem)) throw messageException(buyerProblem);
         }
+    }
+
+    private static String agentCurrencyProblem(Id stemId, Id supplierId) {
+        List<Account> suppliers = [
+            SELECT Id, Is_Agent__c, Agency_Fee_Currency__c
+            FROM Account WHERE Id = :supplierId LIMIT 1
+        ];
+        if (suppliers.isEmpty() || suppliers[0].Is_Agent__c != true) return null;
+        String requiredCurrency = suppliers[0].Agency_Fee_Currency__c;
+        if (requiredCurrency != 'USD' && requiredCurrency != 'HKD') {
+            return 'Set the Agreed Agency Fee Currency on the supplier Account before reviewing its costs.';
+        }
+        for (STEM_Extra_Cost__c row : [
+            SELECT Id, Product2Id__r.Name, Unit_Cost__c, Lumpsum_Cost__c,
+                Supplier_Cost_Input_Currency__c, Supplier_Cost_Input_Value__c,
+                Supplier_Cost_USD_HKD_Rate__c
+            FROM STEM_Extra_Cost__c
+            WHERE STEM__c = :stemId AND Supplier__c = :supplierId AND Cancelled__c = false
+        ]) {
+            Decimal storedUsd = row.Lumpsum_Cost__c != null ? row.Lumpsum_Cost__c : row.Unit_Cost__c;
+            Decimal inputValue = row.Supplier_Cost_Input_Value__c;
+            Decimal rate = row.Supplier_Cost_USD_HKD_Rate__c;
+            String productName = displayProductName(row.Product2Id__r?.Name);
+            if (row.Supplier_Cost_Input_Currency__c != requiredCurrency || inputValue == null
+                || rate == null || rate <= 0 || storedUsd == null) {
+                return productName + ' must be reviewed in the supplier Account\'s agreed ' + requiredCurrency + ' currency.';
+            }
+            Decimal expectedUsd = (requiredCurrency == 'HKD' ? inputValue / rate : inputValue).setScale(2);
+            if ((storedUsd - expectedUsd).abs() > 0.005) {
+                return productName + ' no longer reconciles to its reviewed ' + requiredCurrency + ' supplier cost.';
+            }
+        }
+        return null;
+    }
+
+    private static String displayProductName(String value) {
+        String normalized = normalizeProductName(value);
+        return normalized == HongKongBasicCallingBundleService.LEGACY_PORT_CLEARANCE_FEE
+            ? HongKongBasicCallingBundleService.PORT_CLEARANCE_EXTENSION
+            : (String.isBlank(value) ? 'Supplier charge' : value);
     }
 
     private static String hongKongBundleProblem(Id stemId, Id supplierId, Boolean supplierSide) {
@@ -267,7 +313,7 @@ public without sharing class VariableChargeInvoiceReadinessService {
         Account supplier;
         if (supplierSide) {
             supplier = [
-                SELECT Id, Agency_Fee_USD__c, Agency_Fee_Currency__c
+                SELECT Id, Is_Agent__c, Agency_Fee_USD__c, Agency_Fee_Currency__c
                 FROM Account WHERE Id = :supplierId LIMIT 1
             ];
         }
@@ -297,30 +343,38 @@ public without sharing class VariableChargeInvoiceReadinessService {
                 if (!supplierSide && row.Lumpsum_Price__c != null && row.Lumpsum_Price__c.abs() > 0.005) {
                     return 'Light Dues are included in Basic Calling Cost and must remain USD 0 on the Buyer Leg.';
                 }
-            } else if (productName == HongKongBasicCallingBundleService.PORT_CLEARANCE_FEE) {
+            } else if (productName == HongKongBasicCallingBundleService.PORT_CLEARANCE_EXTENSION
+                || productName == HongKongBasicCallingBundleService.LEGACY_PORT_CLEARANCE_FEE) {
                 if (row.Quantity__c == null || row.Quantity__c < 1 || row.Quantity__c != row.Quantity__c.setScale(0)) {
-                    return 'Enter the whole-number Port Clearance application count reported by the supplier.';
+                    return 'Enter the whole-number Port Clearance Extension count reported by the supplier.';
                 }
+                String requiredCurrency = supplierSide && supplier.Is_Agent__c == true
+                    ? supplier.Agency_Fee_Currency__c
+                    : 'HKD';
+                Decimal expectedNativeRate = requiredCurrency == 'USD' && row.Supplier_Cost_USD_HKD_Rate__c != null
+                    && row.Supplier_Cost_USD_HKD_Rate__c > 0
+                    ? (HongKongBasicCallingBundleService.PORT_CLEARANCE_RATE_HKD / row.Supplier_Cost_USD_HKD_Rate__c).setScale(2)
+                    : HongKongBasicCallingBundleService.PORT_CLEARANCE_RATE_HKD;
                 if (supplierSide && (row.Port_Clearance_Rate_HKD__c != HongKongBasicCallingBundleService.PORT_CLEARANCE_RATE_HKD
                     || row.Port_Clearance_Calculation_Version__c != HongKongBasicCallingBundleService.PORT_CLEARANCE_VERSION
-                    || row.Supplier_Cost_Input_Currency__c != 'HKD'
-                    || row.Supplier_Cost_Input_Value__c != HongKongBasicCallingBundleService.PORT_CLEARANCE_RATE_HKD
+                    || row.Supplier_Cost_Input_Currency__c != requiredCurrency
+                    || row.Supplier_Cost_Input_Value__c != expectedNativeRate
                     || row.Supplier_Cost_USD_HKD_Rate__c == null || row.Supplier_Cost_USD_HKD_Rate__c <= 0
                     || row.Unit_Cost__c == null || row.Unit_Cost__c <= 0)) {
-                    return 'Confirm the supplier-reported Port Clearance application count before approval.';
+                    return 'Confirm the supplier-reported Port Clearance Extension application count before approval.';
                 }
                 if (!supplierSide) {
                     Decimal buyerUnitPrice = row.Unit_Price__c == null ? 0 : row.Unit_Price__c;
                     if (row.Supplier_Cost_USD_HKD_Rate__c == null || row.Supplier_Cost_USD_HKD_Rate__c <= 0) {
-                        return 'The Port Clearance buyer pass-through rate is unavailable.';
+                        return 'The Port Clearance Extension buyer pass-through rate is unavailable.';
                     }
                     Decimal buyerHkd = (row.Quantity__c - 1) * HongKongBasicCallingBundleService.PORT_CLEARANCE_RATE_HKD;
                     Decimal buyerTotalUsd = (buyerHkd / row.Supplier_Cost_USD_HKD_Rate__c).setScale(2);
                     Decimal expectedBuyerUnitUsd = (buyerTotalUsd / row.Quantity__c).setScale(2);
                     if ((buyerUnitPrice - expectedBuyerUnitUsd).abs() > 0.005) {
                         return row.Quantity__c == 1
-                            ? 'The first Port Clearance application is included in Basic Calling Cost and must remain USD 0.'
-                            : 'Additional Port Clearance applications must use the reviewed zero-margin buyer pass-through.';
+                            ? 'The first port clearance is included in Basic Calling Cost and must remain USD 0.'
+                            : 'Port Clearance Extensions must use the reviewed zero-margin buyer pass-through.';
                     }
                 }
             }

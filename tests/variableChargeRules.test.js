@@ -258,7 +258,12 @@ test('Variable Charges presents native-HKD selected totals and removes duplicate
   assert.match(component, /agencyFeeCurrency === 'HKD'[\s\S]*about \$\{formatMoney\(total\.usd, 'USD'\)\}/);
   assert.doesNotMatch(component, /<LegHeader[^>]+totalLabel="Total Supplier Cost"/);
   assert.doesNotMatch(component, /<LegHeader[^>]+totalLabel="Total Buyer Charge"/);
+  assert.match(component, />Add Extra Cost<\/Button>/);
+  assert.match(component, />Remove Extra Cost<\/AlertDialogAction>/);
+  assert.match(component, /Agent Agreed Currency/);
   assert.match(service, /Agency_Fee_Currency__c/);
+  assert.match(service, /requiredInputCurrency: agentCurrency/);
+  assert.match(service, /AGENT_COST_CURRENCY_MISMATCH/);
   assert.match(service, /inputCurrency === 'HKD'[\s\S]*nativeTotal \/ rate/);
 });
 
@@ -275,6 +280,14 @@ test('manual Hong Kong support rows inherit the exact supplier Basic Calling Cos
     Lumpsum_Cost__c: 250, Lumpsum_Price__c: null, Line_Total_Buy__c: 250, Line_Total__c: 0,
     Hong_Kong_Bundle_Managed__c: false,
   };
+  const light = {
+    Id: 'a04000000000004AAA', Supplier__c: supplierId,
+    Product2Id__r: { Name: 'LIGHT DUES' },
+    Lumpsum_Cost__c: 202.93, Lumpsum_Price__c: 0, Line_Total_Buy__c: 202.93, Line_Total__c: 0,
+    Supplier_Cost_Input_Currency__c: 'USD', Supplier_Cost_Input_Value__c: 202.93,
+    Supplier_Cost_USD_HKD_Rate__c: 7.84,
+    Hong_Kong_Bundle_Managed__c: false,
+  };
   const port = {
     Id: 'a04000000000003AAA', Supplier__c: supplierId,
     Product2Id__r: { Name: 'PORT CLEARANCE FEE' },
@@ -286,10 +299,11 @@ test('manual Hong Kong support rows inherit the exact supplier Basic Calling Cos
   const live = {
     stem: { Port__r: { Name: 'HONG KONG' } },
     lineItems: [],
-    extraCosts: [basic, agency, port],
+    extraCosts: [basic, agency, port, light],
     accounts: [{
       Id: supplierId,
       Name: 'Hong Kong Agent',
+      Is_Agent__c: true,
       Agency_Fee_USD__c: 1950,
       Agency_Fee_Currency__c: 'HKD',
     }],
@@ -301,6 +315,7 @@ test('manual Hong Kong support rows inherit the exact supplier Basic Calling Cos
   const serializedBasic = variableChargeInternals.serializeLiveRow(basic, 'extra_cost', settings, options);
   const serializedAgency = variableChargeInternals.serializeLiveRow(agency, 'extra_cost', settings, options);
   const serializedPort = variableChargeInternals.serializeLiveRow(port, 'extra_cost', settings, options);
+  const serializedLight = variableChargeInternals.serializeLiveRow(light, 'extra_cost', settings, options);
   assert.equal(serializedBasic.buyerDefault.decision, 'include');
   assert.equal(serializedAgency.basicCallingBundleSupport, true);
   assert.equal(serializedAgency.managedBasicCallingBundle, false);
@@ -311,13 +326,20 @@ test('manual Hong Kong support rows inherit the exact supplier Basic Calling Cos
   assert.deepEqual(serializedAgency.buyerDefault, { decision: 'exclude', unitOrFixedUsd: 0, totalUsd: 0, locked: true });
   assert.equal(serializedPort.buyerDefault.decision, 'include');
   assert.equal(serializedPort.buyerDefault.unitOrFixedUsd, 3.7);
+  assert.equal(serializedPort.productName, 'PORT CLEARANCE EXTENSION');
+  assert.equal(serializedPort.supplierCurrency.requiredInputCurrency, 'HKD');
+  assert.equal(serializedPort.supplierCurrency.lockedToAgentCurrency, true);
+  assert.equal(serializedLight.supplierCurrency.inputCurrency, 'HKD');
+  assert.equal(serializedLight.supplierCurrency.inputAmount, 1590.9712);
+  assert.equal(serializedLight.supplierCurrency.requiredInputCurrency, 'HKD');
+  assert.equal(serializedLight.supplierCurrency.normalizedFromStoredUsd, true);
 
   const summary = variableChargeInternals.supplierDualCurrencySummary(live, settings).bySupplier[0];
-  assert.equal(summary.hkd, 2066);
-  assert.equal(summary.usd, 263.52);
+  assert.equal(summary.hkd, 3656.97);
+  assert.equal(summary.usd, 466.45);
 });
 
-test('server applies Basic Calling, Agency, Port Clearance and Light Dues buyer defaults to legacy manual rows', () => {
+test('server applies Basic Calling, Agency, Port Clearance Extension and Light Dues buyer defaults to legacy manual rows', () => {
   const supplierId = '0012x0000000001AAA';
   const rows = [
     { Id: 'a04000000000001AAA', Supplier__c: supplierId, Product2Id__r: { Name: 'BASIC CALLING COST' }, Lumpsum_Cost__c: 0, Lumpsum_Price__c: 1000, LastModifiedDate: '2026-08-31T00:00:00.000Z' },

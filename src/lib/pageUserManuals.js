@@ -146,7 +146,7 @@ export const VARIABLE_CHARGES_USER_MANUAL = Object.freeze({
       summary: 'Save the evidence needed for Anchorage Dues, Light Dues, and Basic Calling Cost support rows.',
       steps: [
         'Confirm or save the Vessel NRT when the statutory calculation requires it.',
-        'Enter the requested anchorage period, location, Light Dues entry details, or Port Clearance application count.',
+        'Enter the requested anchorage period, location, Light Dues details, or Port Clearance Extension application count.',
         'Review the calculated HKD amount, the USD conversion, and any supplier-charge difference.',
         'Save the statutory evidence separately before approving the affected charge row.',
       ],

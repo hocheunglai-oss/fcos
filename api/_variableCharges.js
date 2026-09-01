@@ -18,15 +18,16 @@ import {
   AGENCY_FEE,
   ANCHORAGE_DUES,
   BASIC_CALLING_COST,
+  LEGACY_PORT_CLEARANCE_FEE,
   LIGHT_DUES,
   PORT_CLEARANCE_CALCULATION_VERSION,
-  PORT_CLEARANCE_FEE,
+  PORT_CLEARANCE_EXTENSION,
   PORT_CLEARANCE_RATE_HKD,
   basicCallingSequence,
   calculatePortClearance,
   isAgencyFee,
   isBasicCallingSupport,
-  isPortClearanceFee,
+  isPortClearanceExtension,
   normalizedChargeProduct,
 } from '../src/lib/hongKongBasicCalling.js';
 
@@ -110,7 +111,34 @@ function isAgencyFeeRow(row) {
 }
 
 function isPortClearanceRow(row) {
-  return isPortClearanceFee(rowProductName(row));
+  return isPortClearanceExtension(rowProductName(row));
+}
+
+function displayChargeProductName(value) {
+  return canonicalChargeProduct(value) === PORT_CLEARANCE_EXTENSION
+    ? PORT_CLEARANCE_EXTENSION
+    : value;
+}
+
+function canonicalChargeProduct(value) {
+  const normalized = normalizedChargeProduct(value);
+  return normalized === LEGACY_PORT_CLEARANCE_FEE ? PORT_CLEARANCE_EXTENSION : normalized;
+}
+
+function configuredAgentCurrency(account) {
+  if (account?.Is_Agent__c !== true) return null;
+  const currency = text(account?.Agency_Fee_Currency__c, 3).toUpperCase();
+  return ['USD', 'HKD'].includes(currency) ? currency : null;
+}
+
+function requiredAgentCurrency(live, supplierId) {
+  const account = (live?.accounts || []).find((row) => row.Id === supplierId);
+  if (account?.Is_Agent__c !== true) return null;
+  const currency = configuredAgentCurrency(account);
+  if (!currency) {
+    throw httpError('Set the Agreed Agency Fee Currency on the supplier Account before reviewing its costs.', 409, 'AGENT_COST_CURRENCY_UNAVAILABLE');
+  }
+  return currency;
 }
 
 function isHongKongStem(stem) {
@@ -791,8 +819,11 @@ function agencyFeeAccountDefault(account, settings) {
 function serializeLiveRow(row, kind, settings = { usdHkdRate: null, revision: null }, options = {}) {
   const supplierId = kind === 'line_item' ? row.Original_Supplier__c : row.Supplier__c;
   const productId = kind === 'line_item' ? row.Product__c : row.Product2Id__c;
-  const productName = kind === 'line_item' ? row.Product__r?.Name : row.Product2Id__r?.Name;
-  const productKey = normalizedChargeProduct(productName);
+  const sourceProductName = kind === 'line_item' ? row.Product__r?.Name : row.Product2Id__r?.Name;
+  const productName = displayChargeProductName(sourceProductName);
+  const productKey = canonicalChargeProduct(sourceProductName);
+  const supplierAccount = options.accountsById?.get(supplierId);
+  const agentCurrency = configuredAgentCurrency(supplierAccount);
   const basicCallingBundleSupport = kind === 'extra_cost'
     && isBasicCallingBundleSupportRow(row, options.basicCallingSupplierIds);
   const accountAgencyFee = basicCallingBundleSupport && productKey === AGENCY_FEE
@@ -801,12 +832,19 @@ function serializeLiveRow(row, kind, settings = { usdHkdRate: null, revision: nu
   const supplierRateUsd = accountAgencyFee?.usdAmount ?? (kind === 'line_item' ? row.Unit_Buy_At__c ?? null
     : row.Lumpsum_Cost__c ?? row.Unit_Cost__c ?? null);
   const supplierTotalUsd = accountAgencyFee?.usdAmount ?? (kind === 'line_item' ? row.Total_Cost__c ?? null : row.Line_Total_Buy__c ?? null);
-  const supplierInputCurrency = accountAgencyFee?.inputCurrency
-    ?? (kind === 'extra_cost' ? text(row.Supplier_Cost_Input_Currency__c, 3).toUpperCase() || null : null);
-  const supplierInputValue = accountAgencyFee?.nativeAmount
-    ?? (kind === 'extra_cost' ? row.Supplier_Cost_Input_Value__c ?? null : null);
+  const recordedInputCurrency = kind === 'extra_cost' ? text(row.Supplier_Cost_Input_Currency__c, 3).toUpperCase() || null : null;
+  const recordedInputValue = kind === 'extra_cost' ? row.Supplier_Cost_Input_Value__c ?? null : null;
+  const recordedRateSnapshot = kind === 'extra_cost' ? row.Supplier_Cost_USD_HKD_Rate__c ?? null : null;
+  const normalizeAgentCurrency = kind === 'extra_cost' && agentCurrency
+    && (recordedInputCurrency !== agentCurrency || recordedInputValue == null);
   const supplierRateSnapshot = accountAgencyFee?.rate
-    ?? (kind === 'extra_cost' ? row.Supplier_Cost_USD_HKD_Rate__c ?? null : null);
+    ?? (normalizeAgentCurrency ? settings.usdHkdRate : recordedRateSnapshot);
+  const supplierInputCurrency = accountAgencyFee?.inputCurrency
+    ?? (normalizeAgentCurrency ? agentCurrency : recordedInputCurrency);
+  const supplierInputValue = accountAgencyFee?.nativeAmount
+    ?? (normalizeAgentCurrency && supplierRateUsd != null
+      ? Math.round((agentCurrency === 'HKD' ? Number(supplierRateUsd) * Number(settings.usdHkdRate) : Number(supplierRateUsd)) * 1_000_000) / 1_000_000
+      : recordedInputValue);
   const supplierRateDual = supplierDualCurrency({ usdAmount: supplierRateUsd, inputCurrency: supplierInputCurrency, inputAmount: supplierInputValue, savedRate: supplierRateSnapshot, currentRate: settings.usdHkdRate });
   const nativeSupplierTotal = kind === 'extra_cost' && supplierInputValue != null
     ? row.Lumpsum_Cost__c != null
@@ -830,7 +868,7 @@ function serializeLiveRow(row, kind, settings = { usdHkdRate: null, revision: nu
     ? { decision: 'include', unitOrFixedUsd: row.Lumpsum_Price__c ?? row.Unit_Price__c ?? null, totalUsd: row.Line_Total__c ?? null, locked: false }
     : basicCallingBundleSupport && (productKey === AGENCY_FEE || productKey === LIGHT_DUES)
       ? { decision: 'exclude', unitOrFixedUsd: 0, totalUsd: 0, locked: true }
-      : basicCallingBundleSupport && productKey === PORT_CLEARANCE_FEE && portClearance?.complete
+      : basicCallingBundleSupport && productKey === PORT_CLEARANCE_EXTENSION && portClearance?.complete
         ? { decision: portClearance.additionalApplications > 0 ? 'include' : 'exclude', unitOrFixedUsd: portClearance.buyerUnitUsd, totalUsd: portClearance.buyerTotalUsd, locked: true }
       : productKey === ANCHORAGE_DUES && supplierRateUsd != null
         ? { decision: supplierRateUsd > 0 ? 'include' : 'exclude', unitOrFixedUsd: supplierRateUsd, totalUsd: supplierTotalUsd, locked: false }
@@ -858,10 +896,15 @@ function serializeLiveRow(row, kind, settings = { usdHkdRate: null, revision: nu
     supplierCurrency: {
       inputCurrency: supplierInputCurrency || 'USD',
       inputAmount: supplierInputValue,
+      requiredInputCurrency: agentCurrency,
+      lockedToAgentCurrency: Boolean(agentCurrency),
+      normalizedFromStoredUsd: normalizeAgentCurrency,
       usdHkdRate: supplierRateDual.rate,
       fxSettingsRevision: accountAgencyFee?.fxSettingsRevision
         ?? (kind === 'extra_cost' ? row.Supplier_Cost_FX_Settings_Revision__c ?? null : null),
-      rateBasis: accountAgencyFee ? 'Account agreed fee · current company rate' : supplierRateDual.basis,
+      rateBasis: accountAgencyFee
+        ? 'Account agreed fee · current company rate'
+        : normalizeAgentCurrency ? 'Agent agreed currency · current company rate' : supplierRateDual.basis,
       unitOrFixed: supplierRateDual,
       total: supplierTotalDual,
     },
@@ -2010,9 +2053,12 @@ function roundedSalesforceCurrency(value) {
   return Math.round((Number(value) + Number.EPSILON) * 100) / 100;
 }
 
-function supplierInputEvidence(input, settings, label) {
+function supplierInputEvidence(input, settings, label, requiredCurrency = null) {
   const inputCurrency = text(input?.inputCurrency || input?.supplierInputCurrency, 3).toUpperCase() || 'USD';
   if (!['USD', 'HKD'].includes(inputCurrency)) throw httpError('Supplier Input Currency must be HKD or USD.', 400, 'SUPPLIER_INPUT_CURRENCY_INVALID');
+  if (requiredCurrency && inputCurrency !== requiredCurrency) {
+    throw httpError(`This agent's supplier costs must be entered in its agreed ${requiredCurrency} currency. Refresh and review the charge again.`, 409, 'AGENT_COST_CURRENCY_MISMATCH');
+  }
   const nativeAmount = numeric(input?.supplierCost ?? input?.cost ?? input?.fixedAmount ?? input?.unitPrice, label, { nullable: false });
   if (Number(input?.expectedFxSettingsRevision) !== Number(settings.revision)) {
     throw httpError('The company USD/HKD rate changed after this charge was opened. Refresh before saving.', 409, 'FX_SETTINGS_REVISION_CONFLICT');
@@ -2062,8 +2108,9 @@ async function salesforceSupplierChargeWrites(body, live, supplierId, context, {
   if (recordTypes.length !== 1) throw httpError('The Salesforce STEM Charge record type is unavailable.', 503, 'STEM_CHARGE_RECORD_TYPE_UNAVAILABLE');
   const requests = [];
   const hongKongDelivery = isHongKongStem(live.stem);
+  const agentCurrency = requiredAgentCurrency(live, supplierId);
   const bundleSupplierIds = basicCallingSupplierIds(live);
-  const settings = hongKongDelivery ? await variableChargeSettings(context.client) : null;
+  const settings = hongKongDelivery || agentCurrency ? await variableChargeSettings(context.client) : null;
   const apiVersion = getApiVersion();
   let reference = 0;
   const explicitlyUpdatedIds = new Set();
@@ -2108,8 +2155,8 @@ async function salesforceSupplierChargeWrites(body, live, supplierId, context, {
           Lumpsum_Price__c: null,
           Unit_Cost__c: calculation.supplierUnitUsd,
           Unit_Price__c: calculation.buyerUnitUsd,
-          Supplier_Cost_Input_Currency__c: 'HKD',
-          Supplier_Cost_Input_Value__c: PORT_CLEARANCE_RATE_HKD,
+          Supplier_Cost_Input_Currency__c: agentCurrency || 'HKD',
+          Supplier_Cost_Input_Value__c: agentCurrency === 'USD' ? calculation.supplierUnitUsd : PORT_CLEARANCE_RATE_HKD,
           Supplier_Cost_USD_HKD_Rate__c: settings.usdHkdRate,
           Supplier_Cost_FX_Settings_Revision__c: settings.revision,
           Port_Clearance_Rate_HKD__c: PORT_CLEARANCE_RATE_HKD,
@@ -2134,7 +2181,9 @@ async function salesforceSupplierChargeWrites(body, live, supplierId, context, {
       continue;
     }
     const bodyPatch = { Description__c: text(update.description, 32_000) || null };
-    const supplierInput = hongKongDelivery ? supplierInputEvidence(update, settings, mode === 'fixed' ? 'Fixed supplier cost' : 'Supplier unit cost') : null;
+    const supplierInput = hongKongDelivery || agentCurrency
+      ? supplierInputEvidence(update, settings, mode === 'fixed' ? 'Fixed supplier cost' : 'Supplier unit cost', agentCurrency)
+      : null;
     if (supplierInput) Object.assign(bodyPatch, supplierInput.fields);
     if (mode === 'fixed') {
       bodyPatch.Lumpsum_Cost__c = supplierInput?.usdAmount ?? numeric(update.supplierCost ?? update.cost ?? update.fixedAmount, 'Fixed supplier cost');
@@ -2167,7 +2216,9 @@ async function salesforceSupplierChargeWrites(body, live, supplierId, context, {
     if (!paymentTerm) throw httpError('The supplier payment term is unavailable or ambiguous and cannot be guessed.', 409, 'PAYMENT_TERM_UNAVAILABLE');
     const mode = (addition.pricingType || addition.pricingMode) === 'per_unit' ? 'per_unit' : 'fixed';
     const create = { STEM__c: live.stem.Id, Supplier__c: supplierId, Product2Id__c: productId, RecordTypeId: recordTypes[0].Id, Payment_Term__c: paymentTerm, Cancelled__c: false, Description__c: text(addition.description, 32_000) || 'STEM Charge' };
-    const supplierInput = hongKongDelivery ? supplierInputEvidence(addition, settings, mode === 'fixed' ? 'Fixed supplier cost' : 'Supplier unit cost') : null;
+    const supplierInput = hongKongDelivery || agentCurrency
+      ? supplierInputEvidence(addition, settings, mode === 'fixed' ? 'Fixed supplier cost' : 'Supplier unit cost', agentCurrency)
+      : null;
     if (supplierInput) Object.assign(create, supplierInput.fields);
     if (mode === 'fixed') {
       create.Lumpsum_Cost__c = supplierInput?.usdAmount ?? numeric(addition.supplierCost ?? addition.cost ?? addition.fixedAmount, 'Fixed supplier cost');
@@ -2182,7 +2233,7 @@ async function salesforceSupplierChargeWrites(body, live, supplierId, context, {
     }
     requests.push({ method: 'POST', url: `/services/data/${apiVersion}/sobjects/STEM_Extra_Cost__c`, referenceId: `supplierCreate${reference++}`, body: create });
   }
-  if (hongKongDelivery) {
+  if (hongKongDelivery || agentCurrency) {
     for (const current of live.extraCosts) {
       if (current.Supplier__c !== supplierId || explicitlyUpdatedIds.has(current.Id) || explicitlyCancelledIds.has(current.Id)) continue;
       if (isBasicCallingBundleSupportRow(current, bundleSupplierIds) && isAgencyFeeRow(current)) {
@@ -2195,17 +2246,30 @@ async function salesforceSupplierChargeWrites(body, live, supplierId, context, {
         });
         continue;
       }
-      if (finiteAmount(current.Supplier_Cost_USD_HKD_Rate__c) > 0) continue;
       const currentSupplierCost = current.Lumpsum_Cost__c ?? current.Unit_Cost__c ?? null;
       if (finiteAmount(currentSupplierCost) == null) continue;
+      const currentInputCurrency = text(current.Supplier_Cost_Input_Currency__c, 3).toUpperCase();
+      const currentInputValue = finiteAmount(current.Supplier_Cost_Input_Value__c);
+      const currentRate = finiteAmount(current.Supplier_Cost_USD_HKD_Rate__c);
+      if (agentCurrency && currentInputCurrency === agentCurrency && currentInputValue != null && currentRate > 0) continue;
+      if (!agentCurrency && currentInputValue != null && currentRate > 0) continue;
+      const snapshotCurrency = agentCurrency || currentInputCurrency || 'USD';
+      const snapshotValue = snapshotCurrency === 'HKD'
+        ? Math.round(Number(currentSupplierCost) * Number(settings.usdHkdRate) * 1_000_000) / 1_000_000
+        : Number(currentSupplierCost);
+      const snapshotCurrent = text(current.Supplier_Cost_Input_Currency__c, 3).toUpperCase() === snapshotCurrency
+        && finiteAmount(current.Supplier_Cost_Input_Value__c) != null
+        && Math.abs(Number(current.Supplier_Cost_Input_Value__c) - snapshotValue) <= 0.000001
+        && Math.abs((finiteAmount(current.Supplier_Cost_USD_HKD_Rate__c) ?? 0) - Number(settings.usdHkdRate)) <= 0.000001;
+      if (snapshotCurrent) continue;
       requests.push({
         method: 'PATCH',
         url: `/services/data/${apiVersion}/sobjects/STEM_Extra_Cost__c/${current.Id}`,
         referenceId: `supplierSnapshot${reference++}`,
         httpHeaders: lastModifiedHeaders(current.LastModifiedDate),
         body: {
-          Supplier_Cost_Input_Currency__c: 'USD',
-          Supplier_Cost_Input_Value__c: currentSupplierCost,
+          Supplier_Cost_Input_Currency__c: snapshotCurrency,
+          Supplier_Cost_Input_Value__c: snapshotValue,
           Supplier_Cost_USD_HKD_Rate__c: settings.usdHkdRate,
           Supplier_Cost_FX_Settings_Revision__c: settings.revision,
         },
@@ -2565,7 +2629,7 @@ function applyHongKongBuyerDefaults(body, supplierRows, { hongKongDelivery = fal
     if (!row?.Supplier__c) continue;
     const review = reviewById.get(row.Id);
     if (!review) continue;
-    const product = normalizedChargeProduct(rowProductName(row));
+    const product = canonicalChargeProduct(rowProductName(row));
     const bundleSupport = isBasicCallingBundleSupportRow(row, bundleSupplierIds);
     const pricingType = row.Lumpsum_Cost__c != null || row.Lumpsum_Price__c != null ? 'fixed' : 'per_unit';
     const existing = updatesById.get(row.Id) || {};
@@ -2575,7 +2639,7 @@ function applyHongKongBuyerDefaults(body, supplierRows, { hongKongDelivery = fal
     } else if (bundleSupport && (product === AGENCY_FEE || product === LIGHT_DUES)) {
       review.buyerChargeDecision = 'exclude';
       buyerPrice = 0;
-    } else if (bundleSupport && product === PORT_CLEARANCE_FEE) {
+    } else if (bundleSupport && product === PORT_CLEARANCE_EXTENSION) {
       const calculation = calculatePortClearance({
         applicationCount: row.Quantity__c,
         usdHkdRate: row.Supplier_Cost_USD_HKD_Rate__c || usdHkdRate,
@@ -2698,7 +2762,33 @@ async function assertLightDuesApprovalReady(live, supplierId, context, side) {
   }
 }
 
+async function assertAgentCostCurrencyReady(live, supplierId, context, side) {
+  if (side !== 'cost') return;
+  const account = (live.accounts || []).find((row) => row.Id === supplierId);
+  if (account?.Is_Agent__c !== true) return;
+  const requiredCurrency = requiredAgentCurrency(live, supplierId);
+  const settings = await variableChargeSettings(context.client);
+  for (const row of live.extraCosts.filter((item) => item.Supplier__c === supplierId)) {
+    const product = displayChargeProductName(rowProductName(row)) || 'Supplier charge';
+    const inputCurrency = text(row.Supplier_Cost_Input_Currency__c, 3).toUpperCase();
+    const inputValue = finiteAmount(row.Supplier_Cost_Input_Value__c);
+    const rate = finiteAmount(row.Supplier_Cost_USD_HKD_Rate__c);
+    const storedUsd = finiteAmount(row.Lumpsum_Cost__c ?? row.Unit_Cost__c);
+    if (inputCurrency !== requiredCurrency || inputValue == null || !(rate > 0) || storedUsd == null) {
+      throw httpError(`${product} must be reviewed in the supplier Account's agreed ${requiredCurrency} currency.`, 409, 'AGENT_COST_CURRENCY_EVIDENCE_INCOMPLETE');
+    }
+    const expectedUsd = roundedSalesforceCurrency(requiredCurrency === 'HKD' ? inputValue / rate : inputValue);
+    if (Math.abs(storedUsd - expectedUsd) > 0.005) {
+      throw httpError(`${product} no longer reconciles to its reviewed ${requiredCurrency} supplier cost. Refresh and review it again.`, 409, 'AGENT_COST_CURRENCY_EVIDENCE_STALE');
+    }
+    if (Math.abs(rate - Number(settings.usdHkdRate)) > 0.000001 && row.Supplier_Cost_FX_Settings_Revision__c == null) {
+      throw httpError(`${product} has incomplete reviewed exchange-rate evidence. Refresh and review it again.`, 409, 'AGENT_COST_FX_EVIDENCE_INCOMPLETE');
+    }
+  }
+}
+
 async function assertBasicCallingApprovalReady(live, supplierId, context, side) {
+  await assertAgentCostCurrencyReady(live, supplierId, context, side);
   if (!isHongKongStem(live.stem)) return;
   const supplierRows = live.extraCosts.filter((row) => row.Supplier__c === supplierId);
   if (!supplierRows.some((row) => normalizedChargeProduct(rowProductName(row)) === BASIC_CALLING_COST)) return;
@@ -2734,16 +2824,19 @@ async function assertBasicCallingApprovalReady(live, supplierId, context, side) 
       usdHkdRate: portClearance.Supplier_Cost_USD_HKD_Rate__c || settings?.usdHkdRate,
     });
     if (!calculation.complete) throw httpError(calculation.errors[0], 409, 'PORT_CLEARANCE_EVIDENCE_INCOMPLETE');
+    const supplierAccount = (live.accounts || []).find((row) => row.Id === supplierId);
+    const requiredCurrency = configuredAgentCurrency(supplierAccount) || 'HKD';
+    const expectedNativeRate = requiredCurrency === 'HKD' ? PORT_CLEARANCE_RATE_HKD : calculation.supplierUnitUsd;
     if (side === 'cost' && (finiteAmount(portClearance.Port_Clearance_Rate_HKD__c) !== PORT_CLEARANCE_RATE_HKD
       || portClearance.Port_Clearance_Calculation_Version__c !== PORT_CLEARANCE_CALCULATION_VERSION
-      || text(portClearance.Supplier_Cost_Input_Currency__c, 3).toUpperCase() !== 'HKD'
-      || finiteAmount(portClearance.Supplier_Cost_Input_Value__c) !== PORT_CLEARANCE_RATE_HKD
-      || !(finiteAmount(portClearance.Unit_Cost__c) > 0))) {
-      throw httpError('Confirm the supplier-reported Port Clearance application count before approval.', 409, 'PORT_CLEARANCE_EVIDENCE_STALE');
+      || text(portClearance.Supplier_Cost_Input_Currency__c, 3).toUpperCase() !== requiredCurrency
+      || Math.abs((finiteAmount(portClearance.Supplier_Cost_Input_Value__c) ?? 0) - expectedNativeRate) > 0.005
+      || Math.abs((finiteAmount(portClearance.Unit_Cost__c) ?? 0) - calculation.supplierUnitUsd) > 0.005)) {
+      throw httpError('Confirm the supplier-reported Port Clearance Extension application count before approval.', 409, 'PORT_CLEARANCE_EVIDENCE_STALE');
     }
     if (side === 'buyer_charge'
       && Math.abs((finiteAmount(portClearance.Unit_Price__c) ?? 0) - calculation.buyerUnitUsd) > 0.005) {
-      throw httpError('The Port Clearance buyer pass-through changed. Refresh and review the Buyer Leg again.', 409, 'PORT_CLEARANCE_BUYER_PRICE_STALE');
+      throw httpError('The Port Clearance Extension buyer pass-through changed. Refresh and review the Buyer Leg again.', 409, 'PORT_CLEARANCE_BUYER_PRICE_STALE');
     }
   }
 }

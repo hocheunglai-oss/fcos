@@ -1,17 +1,21 @@
 public without sharing class HongKongBasicCallingBundleService {
     public static final String BASIC_CALLING_COST = 'BASIC CALLING COST';
     public static final String AGENCY_FEE = 'AGENCY FEE';
-    public static final String PORT_CLEARANCE_FEE = 'PORT CLEARANCE FEE';
+    public static final String PORT_CLEARANCE_EXTENSION = 'PORT CLEARANCE EXTENSION';
+    public static final String LEGACY_PORT_CLEARANCE_FEE = 'PORT CLEARANCE FEE';
     public static final String LIGHT_DUES = 'LIGHT DUES';
     public static final String ANCHORAGE_DUES = 'ANCHORAGE DUES';
     public static final Decimal PORT_CLEARANCE_RATE_HKD = 58;
     public static final String PORT_CLEARANCE_VERSION = 'HK-PC-2026-01';
 
     private static final List<String> SUPPORT_NAMES = new List<String>{
-        AGENCY_FEE, PORT_CLEARANCE_FEE, LIGHT_DUES, ANCHORAGE_DUES
+        AGENCY_FEE, PORT_CLEARANCE_EXTENSION, LIGHT_DUES, ANCHORAGE_DUES
     };
     private static final Set<String> ALL_PRODUCT_NAMES = new Set<String>{
-        BASIC_CALLING_COST, AGENCY_FEE, PORT_CLEARANCE_FEE, LIGHT_DUES, ANCHORAGE_DUES
+        BASIC_CALLING_COST, AGENCY_FEE, PORT_CLEARANCE_EXTENSION, LEGACY_PORT_CLEARANCE_FEE, LIGHT_DUES, ANCHORAGE_DUES
+    };
+    private static final Set<String> REQUIRED_PRODUCT_NAMES = new Set<String>{
+        BASIC_CALLING_COST, AGENCY_FEE, PORT_CLEARANCE_EXTENSION, LIGHT_DUES, ANCHORAGE_DUES
     };
     private static Boolean synchronizing = false;
 
@@ -230,10 +234,12 @@ public without sharing class HongKongBasicCallingBundleService {
             Hong_Kong_Bundle_Source__c = basic.Id,
             Description__c = title(productName)
         );
-        if (productName == PORT_CLEARANCE_FEE) {
+        String supplierCurrency = supplierCostCurrency(supplier);
+        if (supplierCurrency != null) row.Supplier_Cost_Input_Currency__c = supplierCurrency;
+        if (productName == PORT_CLEARANCE_EXTENSION) {
             row.Fixed__c = false;
-            row.Supplier_Cost_Input_Currency__c = 'HKD';
-            row.Supplier_Cost_Input_Value__c = PORT_CLEARANCE_RATE_HKD;
+            row.Supplier_Cost_Input_Currency__c = supplierCurrency == null ? 'HKD' : supplierCurrency;
+            row.Supplier_Cost_Input_Value__c = row.Supplier_Cost_Input_Currency__c == 'HKD' ? PORT_CLEARANCE_RATE_HKD : null;
             row.Unit_Price__c = 0;
             row.Line_Total_Buy__c = 0;
             row.Line_Total__c = 0;
@@ -275,14 +281,16 @@ public without sharing class HongKongBasicCallingBundleService {
         row.Payment_Term__c = basic.Payment_Term__c;
         row.Hong_Kong_Bundle_Source__c = basic.Id;
         row.Hong_Kong_Bundle_Sequence__c = sequence;
-        if (productName == PORT_CLEARANCE_FEE) {
+        String supplierCurrency = supplierCostCurrency(supplier);
+        if (supplierCurrency != null) row.Supplier_Cost_Input_Currency__c = supplierCurrency;
+        if (productName == PORT_CLEARANCE_EXTENSION) {
             row.Fixed__c = false;
             row.Port_Clearance_Rate_HKD__c = PORT_CLEARANCE_RATE_HKD;
             row.Port_Clearance_Calculation_Version__c = PORT_CLEARANCE_VERSION;
             if (row.Quantity__c == null || row.Quantity__c < 1 || row.Quantity__c != row.Quantity__c.setScale(0)) row.Quantity__c = 1;
             row.Unit_of_Measure__c = '1.';
-            row.Supplier_Cost_Input_Currency__c = 'HKD';
-            row.Supplier_Cost_Input_Value__c = PORT_CLEARANCE_RATE_HKD;
+            row.Supplier_Cost_Input_Currency__c = supplierCurrency == null ? 'HKD' : supplierCurrency;
+            row.Supplier_Cost_Input_Value__c = row.Supplier_Cost_Input_Currency__c == 'HKD' ? PORT_CLEARANCE_RATE_HKD : null;
             if (row.Unit_Price__c == null) row.Unit_Price__c = 0;
         } else if (productName == AGENCY_FEE && supplier != null && supplier.Agency_Fee_USD__c != null) {
             String feeCurrency = agencyFeeCurrency(supplier);
@@ -373,7 +381,7 @@ public without sharing class HongKongBasicCallingBundleService {
     private static Map<String, Product2> exactActiveProducts() {
         Map<String, Product2> result = new Map<String, Product2>();
         for (Product2 product : [SELECT Id, Name, IsActive FROM Product2 WHERE IsActive = true AND Name IN :ALL_PRODUCT_NAMES]) {
-            String name = normalize(product.Name);
+            String name = canonicalProductName(product.Name);
             if (result.containsKey(name)) {
                 // Keep unrelated Extra Cost saves working. A qualifying Hong Kong
                 // bundle fails closed later when this null catalog entry is used.
@@ -386,7 +394,7 @@ public without sharing class HongKongBasicCallingBundleService {
     }
 
     private static void requireCompleteProducts(Map<String, Product2> products) {
-        for (String name : ALL_PRODUCT_NAMES) {
+        for (String name : REQUIRED_PRODUCT_NAMES) {
             if (!products.containsKey(name) || products.get(name) == null) {
                 throw new BundleConfigurationException('No unique active Product is named exactly ' + title(name) + '.');
             }
@@ -397,12 +405,19 @@ public without sharing class HongKongBasicCallingBundleService {
         Set<Id> ids = new Set<Id>();
         for (STEM_Extra_Cost__c row : rows) if (row.Supplier__c != null) ids.add(row.Supplier__c);
         return ids.isEmpty() ? new Map<Id, Account>() : new Map<Id, Account>([
-            SELECT Id, Agency_Fee_USD__c, Agency_Fee_Currency__c FROM Account WHERE Id IN :ids
+            SELECT Id, Is_Agent__c, Agency_Fee_USD__c, Agency_Fee_Currency__c FROM Account WHERE Id IN :ids
         ]);
     }
 
     private static String agencyFeeCurrency(Account supplier) {
         return supplier != null && supplier.Agency_Fee_Currency__c == 'HKD' ? 'HKD' : 'USD';
+    }
+
+    private static String supplierCostCurrency(Account supplier) {
+        if (supplier?.Is_Agent__c != true) return null;
+        return supplier.Agency_Fee_Currency__c == 'HKD' || supplier.Agency_Fee_Currency__c == 'USD'
+            ? supplier.Agency_Fee_Currency__c
+            : null;
     }
 
     private static List<STEM_Extra_Cost__c> matchingRows(
@@ -415,7 +430,7 @@ public without sharing class HongKongBasicCallingBundleService {
         for (STEM_Extra_Cost__c row : rows) {
             if (row.Supplier__c == supplierId && row.Cancelled__c != true
                 && row.Hong_Kong_Bundle_Managed__c == managed
-                && row.Product2Id__r != null && normalize(row.Product2Id__r.Name) == productName) result.add(row);
+                && row.Product2Id__r != null && canonicalProductName(row.Product2Id__r.Name) == productName) result.add(row);
         }
         return result;
     }
@@ -450,7 +465,13 @@ public without sharing class HongKongBasicCallingBundleService {
     }
 
     private static String bundleKey(Id stemId, Id supplierId, String productName) {
-        return 'HKBC|' + stemId + '|' + supplierId + '|' + productName.replace(' ', '_');
+        String stableName = productName == PORT_CLEARANCE_EXTENSION ? LEGACY_PORT_CLEARANCE_FEE : productName;
+        return 'HKBC|' + stemId + '|' + supplierId + '|' + stableName.replace(' ', '_');
+    }
+
+    private static String canonicalProductName(String value) {
+        String productName = normalize(value);
+        return productName == LEGACY_PORT_CLEARANCE_FEE ? PORT_CLEARANCE_EXTENSION : productName;
     }
 
     private static String normalize(String value) {

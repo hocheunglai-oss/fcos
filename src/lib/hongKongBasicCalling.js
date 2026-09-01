@@ -1,6 +1,7 @@
 export const BASIC_CALLING_COST = 'BASIC CALLING COST';
 export const AGENCY_FEE = 'AGENCY FEE';
-export const PORT_CLEARANCE_FEE = 'PORT CLEARANCE FEE';
+export const PORT_CLEARANCE_EXTENSION = 'PORT CLEARANCE EXTENSION';
+export const LEGACY_PORT_CLEARANCE_FEE = 'PORT CLEARANCE FEE';
 export const LIGHT_DUES = 'LIGHT DUES';
 export const ANCHORAGE_DUES = 'ANCHORAGE DUES';
 export const PORT_CLEARANCE_RATE_HKD = 58;
@@ -8,7 +9,8 @@ export const PORT_CLEARANCE_CALCULATION_VERSION = 'HK-PC-2026-01';
 
 const ORDER = new Map([
   [AGENCY_FEE, 1],
-  [PORT_CLEARANCE_FEE, 2],
+  [PORT_CLEARANCE_EXTENSION, 2],
+  [LEGACY_PORT_CLEARANCE_FEE, 2],
   [LIGHT_DUES, 3],
   [ANCHORAGE_DUES, 4],
 ]);
@@ -21,9 +23,13 @@ export function isAgencyFee(value) {
   return normalizedChargeProduct(value) === AGENCY_FEE;
 }
 
-export function isPortClearanceFee(value) {
-  return normalizedChargeProduct(value) === PORT_CLEARANCE_FEE;
+export function isPortClearanceExtension(value) {
+  const product = normalizedChargeProduct(value);
+  return product === PORT_CLEARANCE_EXTENSION || product === LEGACY_PORT_CLEARANCE_FEE;
 }
+
+// Compatibility export for clients deployed before the Product rename.
+export const isPortClearanceFee = isPortClearanceExtension;
 
 export function isBasicCallingSupport(value) {
   return ORDER.has(normalizedChargeProduct(value));

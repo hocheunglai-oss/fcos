@@ -1,8 +1,8 @@
 const ANCHORAGE_DUES_NAMES = new Set(['ANCHORAGE DUE', 'ANCHORAGE DUES']);
 const LIGHT_DUES_NAME = 'LIGHT DUES';
-const PORT_CLEARANCE_FEE_NAME = 'PORT CLEARANCE FEE';
+const PORT_CLEARANCE_EXTENSION_NAMES = new Set(['PORT CLEARANCE EXTENSION', 'PORT CLEARANCE FEE']);
 const INCLUDED_BASIC_CALLING_NAMES = new Set(['AGENCY FEE', 'LIGHT DUES']);
-const LOCKED_BASIC_CALLING_NAMES = new Set(['AGENCY FEE', 'PORT CLEARANCE FEE', 'LIGHT DUES']);
+const LOCKED_BASIC_CALLING_NAMES = new Set(['AGENCY FEE', 'PORT CLEARANCE EXTENSION', 'PORT CLEARANCE FEE', 'LIGHT DUES']);
 
 function normalizedProductName(value) {
   return String(value ?? '')
@@ -56,7 +56,7 @@ export function supplierCostLockedForItem(item) {
 }
 
 export function isPortClearanceItem(item) {
-  return normalizedProductName(item?.productName ?? item?.Product2Id__r?.Name) === PORT_CLEARANCE_FEE_NAME;
+  return PORT_CLEARANCE_EXTENSION_NAMES.has(normalizedProductName(item?.productName ?? item?.Product2Id__r?.Name));
 }
 
 export function portClearanceApplicationCount(value) {

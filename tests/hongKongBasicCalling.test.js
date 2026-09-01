@@ -25,6 +25,8 @@ test('port clearance rejects missing, fractional, zero, and invalid FX values', 
 
 test('basic calling support sequence is stable and exact', () => {
   assert.equal(basicCallingSequence('Agency Fee'), 1);
+  assert.equal(basicCallingSequence('PORT CLEARANCE EXTENSION'), 2);
+  // Existing Salesforce rows remain compatible during the controlled Product rename.
   assert.equal(basicCallingSequence('PORT CLEARANCE FEE'), 2);
   assert.equal(basicCallingSequence('Light Dues'), 3);
   assert.equal(basicCallingSequence('Anchorage Dues'), 4);

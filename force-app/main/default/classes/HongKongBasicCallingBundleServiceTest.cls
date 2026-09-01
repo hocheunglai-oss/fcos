@@ -7,7 +7,7 @@ private class HongKongBasicCallingBundleServiceTest {
         for (String name : new List<String>{
             HongKongBasicCallingBundleService.BASIC_CALLING_COST,
             HongKongBasicCallingBundleService.AGENCY_FEE,
-            HongKongBasicCallingBundleService.PORT_CLEARANCE_FEE,
+            HongKongBasicCallingBundleService.PORT_CLEARANCE_EXTENSION,
             HongKongBasicCallingBundleService.LIGHT_DUES,
             HongKongBasicCallingBundleService.ANCHORAGE_DUES
         }) {
@@ -88,7 +88,7 @@ private class HongKongBasicCallingBundleServiceTest {
         System.assertEquals('AGENCY FEE', rows[0].Product2Id__r.Name);
         System.assertEquals(Decimal.valueOf('250'), rows[0].Lumpsum_Cost__c);
         System.assertEquals(Decimal.valueOf('0'), rows[0].Lumpsum_Price__c);
-        System.assertEquals('PORT CLEARANCE FEE', rows[1].Product2Id__r.Name);
+        System.assertEquals('PORT CLEARANCE EXTENSION', rows[1].Product2Id__r.Name);
         System.assertEquals(Decimal.valueOf('1'), rows[1].Quantity__c);
         System.assertEquals('1.', rows[1].Unit_of_Measure__c);
         System.assertEquals('HKD', rows[1].Supplier_Cost_Input_Currency__c);
@@ -114,7 +114,7 @@ private class HongKongBasicCallingBundleServiceTest {
         STEM_Extra_Cost__c portClearance = [
             SELECT Id, STEM__c, Quantity__c, Unit_Cost__c
             FROM STEM_Extra_Cost__c
-            WHERE Hong_Kong_Bundle_Managed__c = true AND Product2Id__r.Name = 'PORT CLEARANCE FEE'
+            WHERE Hong_Kong_Bundle_Managed__c = true AND Product2Id__r.Name = 'PORT CLEARANCE EXTENSION'
             LIMIT 1
         ];
         ContextManager.skipTriggers = true;
@@ -138,6 +138,37 @@ private class HongKongBasicCallingBundleServiceTest {
         System.assertEquals(Decimal.valueOf('58'), portClearance.Port_Clearance_Rate_HKD__c);
         System.assertEquals(4, managedRows().size());
         System.assertNotEquals(null, basic.Id);
+    }
+
+    @IsTest
+    static void agentBundleUsesTheAccountAgreedCurrencyForEverySupplierExtraCost() {
+        STEM_Extra_Cost__c basic = [
+            SELECT STEM__c, Supplier__c FROM STEM_Extra_Cost__c
+            WHERE Product2Id__r.Name = :HongKongBasicCallingBundleService.BASIC_CALLING_COST LIMIT 1
+        ];
+        ContextManager.skipTriggers = true;
+        try {
+            update new Account(
+                Id = basic.Supplier__c,
+                Is_Agent__c = true,
+                Agency_Fee_USD__c = 1950,
+                Agency_Fee_Currency__c = 'HKD'
+            );
+        } finally {
+            ContextManager.skipTriggers = false;
+        }
+
+        Test.startTest();
+        HongKongBasicCallingBundleService.synchronizeStemIds(new Set<Id>{basic.STEM__c});
+        Test.stopTest();
+
+        List<STEM_Extra_Cost__c> rows = managedRows();
+        System.assertEquals(4, rows.size());
+        for (STEM_Extra_Cost__c row : rows) {
+            System.assertEquals('HKD', row.Supplier_Cost_Input_Currency__c, row.Product2Id__r.Name);
+        }
+        System.assertEquals(Decimal.valueOf('1950'), rows[0].Supplier_Cost_Input_Value__c);
+        System.assertEquals(Decimal.valueOf('58'), rows[1].Supplier_Cost_Input_Value__c);
     }
 
     @IsTest
@@ -188,7 +219,7 @@ private class HongKongBasicCallingBundleServiceTest {
         ];
         STEM_Extra_Cost__c portClearance = [
             SELECT Id FROM STEM_Extra_Cost__c
-            WHERE Hong_Kong_Bundle_Managed__c = true AND Product2Id__r.Name = 'PORT CLEARANCE FEE' LIMIT 1
+            WHERE Hong_Kong_Bundle_Managed__c = true AND Product2Id__r.Name = 'PORT CLEARANCE EXTENSION' LIMIT 1
         ];
         Product2 agencyProduct = [SELECT Id FROM Product2 WHERE Name = 'AGENCY FEE' AND IsActive = true LIMIT 1];
         STEM_Extra_Cost__c manualAgency = new STEM_Extra_Cost__c(

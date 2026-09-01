@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
     <fullName>Port_Clearance_Calculation_Version__c</fullName>
-    <description>Version of the supplier-reported Hong Kong Port Clearance application calculation.</description>
-    <label>Port Clearance Calculation Version</label>
+    <description>Version of the supplier-reported Hong Kong Port Clearance Extension application calculation.</description>
+    <label>Port Clearance Extension Calc Version</label>
     <length>32</length>
     <required>false</required>
     <trackHistory>true</trackHistory>
