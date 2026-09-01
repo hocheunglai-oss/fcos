@@ -275,7 +275,10 @@ private class VariableChargeReadinessTest {
                 STEM__c = ids.get('stem'), Supplier__c = ids.get('supplier'), Product2Id__c = productId,
                 Cancelled__c = false, Anchorage_Calculation_Version__c = 'hk-md-2026-v1',
                 Anchorage_Arrival__c = System.now().addHours(-20), Anchorage_Departure__c = System.now(),
-                Anchorage_Location__c = 'Elsewhere in Hong Kong'
+                Anchorage_Location__c = 'Elsewhere in Hong Kong', Anchorage_Dues_Allocation_HKD__c = 840,
+                Anchorage_NRT_Snapshot__c = 7000, Anchorage_USD_HKD_Rate__c = 7.84,
+                Anchorage_Buyer_Default_USD__c = 112, Anchorage_Buyer_Rate_USD__c = 0.002,
+                Anchorage_Buyer_Calc_Version__c = 'hk-buyer-nrt-hour-2026-v1'
             );
         } finally {
             ContextManager.skipTriggers = false;

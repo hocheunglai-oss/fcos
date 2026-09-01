@@ -221,6 +221,10 @@ private class HongKongBasicCallingBundleServiceTest {
             SELECT Id FROM STEM_Extra_Cost__c
             WHERE Hong_Kong_Bundle_Managed__c = true AND Product2Id__r.Name = 'PORT CLEARANCE EXTENSION' LIMIT 1
         ];
+        STEM_Extra_Cost__c anchorage = [
+            SELECT Id FROM STEM_Extra_Cost__c
+            WHERE Hong_Kong_Bundle_Managed__c = true AND Product2Id__r.Name = 'ANCHORAGE DUES' LIMIT 1
+        ];
         Product2 agencyProduct = [SELECT Id FROM Product2 WHERE Name = 'AGENCY FEE' AND IsActive = true LIMIT 1];
         STEM_Extra_Cost__c manualAgency = new STEM_Extra_Cost__c(
             STEM__c = basic.STEM__c,
@@ -249,6 +253,18 @@ private class HongKongBasicCallingBundleServiceTest {
                 Unit_Price__c = 0,
                 Supplier_Cost_USD_HKD_Rate__c = 7.84,
                 Supplier_Cost_FX_Settings_Revision__c = 1
+            );
+            update new STEM_Extra_Cost__c(
+                Id = anchorage.Id,
+                Lumpsum_Cost__c = 0,
+                Lumpsum_Price__c = 0,
+                Anchorage_Dues_Allocation_HKD__c = 0,
+                Anchorage_NRT_Snapshot__c = 7000,
+                Anchorage_USD_HKD_Rate__c = 7.84,
+                Anchorage_Calculation_Version__c = 'hk-md-2026-v1',
+                Anchorage_Buyer_Default_USD__c = 0,
+                Anchorage_Buyer_Rate_USD__c = 0.002,
+                Anchorage_Buyer_Calc_Version__c = 'hk-buyer-nrt-hour-2026-v1'
             );
             insert manualAgency;
         } finally {
@@ -279,6 +295,58 @@ private class HongKongBasicCallingBundleServiceTest {
         }
         Test.stopTest();
         System.assertEquals(true, blocked, 'A manual Agency Fee must retain the bundle buyer-zero rule.');
+    }
+
+    @IsTest
+    static void anchorageBuyerReviewRequiresTheIndependentRateEvidence() {
+        STEM_Extra_Cost__c anchorage = [
+            SELECT Id, STEM__c, Supplier__c FROM STEM_Extra_Cost__c
+            WHERE Hong_Kong_Bundle_Managed__c = true AND Product2Id__r.Name = 'ANCHORAGE DUES' LIMIT 1
+        ];
+        STEM_Extra_Cost__c basic = [
+            SELECT Id FROM STEM_Extra_Cost__c
+            WHERE Product2Id__r.Name = :HongKongBasicCallingBundleService.BASIC_CALLING_COST LIMIT 1
+        ];
+        ContextManager.skipTriggers = true;
+        try {
+            update new STEM_Extra_Cost__c(Id = basic.Id, Cancelled__c = true);
+            update new STEM_Extra_Cost__c(
+                Id = anchorage.Id,
+                Lumpsum_Cost__c = 255.91,
+                Lumpsum_Price__c = 267.51,
+                Anchorage_Dues_Allocation_HKD__c = 2006.30,
+                Anchorage_NRT_Snapshot__c = 3615,
+                Anchorage_USD_HKD_Rate__c = 7.84,
+                Anchorage_Calculation_Version__c = 'hk-md-2026-v1',
+                Anchorage_Buyer_Default_USD__c = 267.51,
+                Anchorage_Buyer_Rate_USD__c = 0.002,
+                Anchorage_Buyer_Calc_Version__c = 'hk-buyer-nrt-hour-2026-v1'
+            );
+        } finally {
+            ContextManager.skipTriggers = false;
+        }
+        VariableChargeInvoiceReadinessService.assertHongKongBundleConfirmationReady(
+            anchorage.STEM__c,
+            anchorage.Supplier__c,
+            new Set<String>{'buyer_charge'}
+        );
+        ContextManager.skipTriggers = true;
+        try {
+            update new STEM_Extra_Cost__c(Id = anchorage.Id, Anchorage_Buyer_Rate_USD__c = 0.001);
+        } finally {
+            ContextManager.skipTriggers = false;
+        }
+        Boolean blocked = false;
+        try {
+            VariableChargeInvoiceReadinessService.assertHongKongBundleConfirmationReady(
+                anchorage.STEM__c,
+                anchorage.Supplier__c,
+                new Set<String>{'buyer_charge'}
+            );
+        } catch (Exception ex) {
+            blocked = ex.getMessage().contains('USD 0.002 per NRT-hour');
+        }
+        System.assertEquals(true, blocked);
     }
 
     @IsTest

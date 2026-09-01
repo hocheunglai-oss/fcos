@@ -147,7 +147,7 @@ export const VARIABLE_CHARGES_USER_MANUAL = Object.freeze({
       steps: [
         'Confirm or save the Vessel NRT when the statutory calculation requires it.',
         'Enter the requested anchorage period, location, Light Dues details, or Port Clearance Extension application count.',
-        'Review the calculated HKD amount, the USD conversion, and any supplier-charge difference.',
+        'Review the supplier statutory HKD amount and USD equivalent, then review the separate buyer default calculated at USD 0.002 per NRT-hour.',
         'Save the statutory evidence separately before approving the affected charge row.',
       ],
       note: 'The statutory calculation verifies the charge. It does not overwrite a reviewed supplier or buyer financial amount automatically.',

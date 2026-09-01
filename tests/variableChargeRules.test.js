@@ -19,22 +19,30 @@ import {
 
 const repositoryFile = (path) => readFile(new URL(`../${path}`, import.meta.url), 'utf8');
 
-test('Anchorage Dues buyer charge defaults to the reviewed supplier charge without overwriting an existing charge', () => {
-  const item = { productName: 'ANCHORAGE DUES', fixedCost: 500, fixedPrice: null, hongKongVariableCharges: true };
+test('Anchorage Dues buyer charge uses the independent NRT-hour default without overwriting an amendment', () => {
+  const item = {
+    productName: 'ANCHORAGE DUES', fixedCost: 500, fixedPrice: null, hongKongVariableCharges: true,
+    anchorageVerification: { buyerDefault: { available: true, amountUsd: 267.51, applyCalculatedDefault: true } },
+  };
   assert.equal(isAnchorageDuesItem(item), true);
   assert.equal(isAnchorageDuesItem({ productName: ' anchorage   due ' }), true);
   assert.equal(isAnchorageDuesItem({ productName: 'Agency Fee' }), false);
   assert.equal(isHongKongAnchorageDuesItem(item), true);
   assert.equal(isHongKongAnchorageDuesItem({ ...item, hongKongVariableCharges: false }), false);
-  assert.equal(buyerPriceWithAnchorageDefault(item, 'fixed'), 500);
-  assert.equal(buyerPriceWithAnchorageDefault({ ...item, fixedPrice: 125.5 }, 'fixed'), 125.5);
+  assert.equal(buyerPriceWithAnchorageDefault(item, 'fixed'), 267.51);
+  assert.equal(buyerPriceWithAnchorageDefault({
+    ...item,
+    fixedPrice: 125.5,
+    anchorageVerification: { buyerDefault: { available: true, amountUsd: 267.51, applyCalculatedDefault: false } },
+  }, 'fixed'), 125.5);
+  assert.equal(buyerPriceWithAnchorageDefault({ ...item, anchorageVerification: null }, 'fixed'), '');
   assert.equal(buyerPriceWithAnchorageDefault({ productName: 'Agency Fee', fixedPrice: null }, 'fixed'), '');
 });
 
-test('Anchorage Dues uses explicit pass-through buyer decisions', () => {
+test('Anchorage Dues uses explicit buyer decisions', () => {
   const hongKongAnchorage = { productName: 'ANCHORAGE DUES', hongKongVariableCharges: true };
   const options = buyerDecisionOptionsForItem(hongKongAnchorage);
-  assert.deepEqual(options.map((row) => row.label), ['Pending', 'Pass Through', 'No Supplier Charge']);
+  assert.deepEqual(options.map((row) => row.label), ['Pending', 'Charge Buyer', 'Do Not Charge']);
   assert.deepEqual(
     buyerDecisionOptionsForItem({ productName: 'Agency Fee' }).map((row) => row.label),
     ['Pending', 'Charge Buyer', 'Do Not Charge'],
@@ -54,11 +62,12 @@ test('Anchorage Dues uses explicit pass-through buyer decisions', () => {
   );
 });
 
-test('server writes a zero buyer price when excluded Anchorage Dues has no zero stored', () => {
+test('server applies the independent buyer default and writes zero when Anchorage Dues is excluded', () => {
   const row = {
     Id: 'a042x0000000001AAA', Supplier__c: '0012x0000000001AAA',
     Product2Id__r: { Name: 'ANCHORAGE DUES' }, Lumpsum_Cost__c: 500,
-    Lumpsum_Price__c: null, LastModifiedDate: '2026-08-27T01:00:00.000+0000',
+    Lumpsum_Price__c: null, Anchorage_Buyer_Default_USD__c: 267.51,
+    LastModifiedDate: '2026-08-27T01:00:00.000+0000',
   };
   const result = variableChargeInternals.applyAnchorageBuyerDefaults(
     { extraCostUpdates: [] },
@@ -85,7 +94,13 @@ test('server writes a zero buyer price when excluded Anchorage Dues has no zero 
     { hongKongDelivery: true },
   );
   assert.equal(included.extraCostUpdates.length, 1);
-  assert.equal(included.extraCostUpdates[0].buyerPrice, 500);
+  assert.equal(included.extraCostUpdates[0].buyerPrice, 267.51);
+  assert.equal(variableChargeInternals.applyAnchorageBuyerDefaults(
+    { extraCostUpdates: [] },
+    [{ ...row, Lumpsum_Price__c: 300 }],
+    [{ sourceId: row.Id, buyerChargeDecision: 'include' }],
+    { hongKongDelivery: true },
+  ).extraCostUpdates.length, 0);
   assert.equal(variableChargeInternals.applyAnchorageBuyerDefaults(
     { extraCostUpdates: [] },
     [row],
@@ -94,7 +109,7 @@ test('server writes a zero buyer price when excluded Anchorage Dues has no zero 
   ).extraCostUpdates.length, 0);
 });
 
-test('Anchorage Dues contributes its supplier pass-through to financial totals before Salesforce is saved', () => {
+test('Anchorage Dues contributes its independent buyer default to financial totals before Salesforce is saved', () => {
   const summary = variableChargeInternals.financialSummary({
     stem: { CurrencyIsoCode: 'HKD', Port__r: { Name: 'HONG KONG', Country__c: 'HONG KONG' } },
     lineItems: [],
@@ -102,12 +117,23 @@ test('Anchorage Dues contributes its supplier pass-through to financial totals b
     extraCosts: [{
       Id: 'a042x0000000001AAA', Supplier__c: '0012x0000000001AAA',
       Product2Id__r: { Name: 'ANCHORAGE DUES' }, Line_Total_Buy__c: 500,
-      Line_Total__c: null, CurrencyIsoCode: 'HKD',
+      Lumpsum_Cost__c: 500, Lumpsum_Price__c: 500,
+      Line_Total__c: 500, Anchorage_Buyer_Default_USD__c: 267.51, CurrencyIsoCode: 'HKD',
     }],
   });
-  assert.equal(summary.buyerChargeTotal, 500);
-  assert.equal(summary.margin, 0);
+  assert.equal(summary.buyerChargeTotal, 267.51);
+  assert.equal(summary.margin, -232.49);
   assert.equal(summary.chargesComplete, true);
+  const amended = variableChargeInternals.financialSummary({
+    stem: { CurrencyIsoCode: 'USD', Port__r: { Name: 'HONG KONG' } },
+    lineItems: [], accounts: [{ Id: '0012x0000000001AAA', Name: 'Hong Kong Agent' }],
+    extraCosts: [{
+      Supplier__c: '0012x0000000001AAA', Product2Id__r: { Name: 'ANCHORAGE DUES' },
+      Lumpsum_Cost__c: 500, Lumpsum_Price__c: 300, Anchorage_Buyer_Default_USD__c: 267.51,
+      CurrencyIsoCode: 'USD',
+    }],
+  });
+  assert.equal(amended.buyerChargeTotal, 300);
 });
 
 test('Port Clearance application stepper defaults to one and never decrements below one', () => {
@@ -369,4 +395,23 @@ test('Anchorage location keeps the Salesforce value while showing the clearer us
   ]);
   assert.match(component, /ANCHORAGE_LOCATION_ELSEWHERE_LABEL/);
   assert.match(field, /<fullName>Elsewhere in Hong Kong<\/fullName>[\s\S]*<label>Anywhere except Victoria Port<\/label>/);
+});
+
+test('Variable Charges exposes separate supplier statutory and buyer NRT-hour anchorage evidence', async () => {
+  const [component, service, readiness, integrationPermission] = await Promise.all([
+    repositoryFile('src/components/payments/VariableCharges.jsx'),
+    repositoryFile('api/_variableCharges.js'),
+    repositoryFile('force-app/main/default/classes/VariableChargeInvoiceReadinessService.cls'),
+    repositoryFile('force-app/main/default/permissionsets/FCOS_Variable_Charges_Integration.permissionset-meta.xml'),
+  ]);
+  assert.match(component, /Supplier <strong>HKD 0\.015 \/ 0\.020 per NRT-hour<\/strong>/);
+  assert.match(component, /Buyer <strong>USD 0\.002 per NRT-hour<\/strong>/);
+  assert.match(component, /Buyer formula/);
+  assert.match(service, /ANCHORAGE_BUYER_RATE_USD_PER_NRT_HOUR/);
+  assert.match(service, /Anchorage_Buyer_Default_USD__c/);
+  assert.match(readiness, /ANCHORAGE_BUYER_RATE_USD = 0\.002/);
+  assert.match(readiness, /Anchorage_Buyer_Calc_Version__c/);
+  for (const field of ['Anchorage_Buyer_Default_USD__c', 'Anchorage_Buyer_Rate_USD__c', 'Anchorage_Buyer_Calc_Version__c']) {
+    assert.match(integrationPermission, new RegExp(`STEM_Extra_Cost__c\\.${field}`));
+  }
 });

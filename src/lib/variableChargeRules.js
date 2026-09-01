@@ -30,14 +30,13 @@ export function buyerPriceWithAnchorageDefault(item, pricingType = 'fixed') {
   const existing = pricingType === 'fixed'
     ? item?.fixedPrice ?? item?.fixed_price ?? item?.Lumpsum_Price__c
     : item?.price ?? item?.unitPrice ?? item?.unit_price ?? item?.Unit_Price__c;
+  const calculated = item?.anchorageVerification?.buyerDefault ?? item?.anchorage_verification?.buyer_default;
+  if (isHongKongAnchorageDuesItem(item) && calculated?.available === true && calculated?.applyCalculatedDefault === true) {
+    return calculated.amountUsd ?? calculated.amount_usd ?? '';
+  }
   if (existing != null && existing !== '') return existing;
   const suggested = item?.buyerDefault?.unitOrFixedUsd ?? item?.buyer_default?.unit_or_fixed_usd;
   if (suggested != null && suggested !== '') return suggested;
-  if (isHongKongAnchorageDuesItem(item)) {
-    return pricingType === 'fixed'
-      ? item?.fixedCost ?? item?.fixed_cost ?? item?.Lumpsum_Cost__c ?? ''
-      : item?.cost ?? item?.unitCost ?? item?.unit_cost ?? item?.Unit_Cost__c ?? '';
-  }
   return '';
 }
 
@@ -149,8 +148,8 @@ export function buyerDecisionOptionsForItem(item) {
   }
   return [
     { value: '', label: 'Pending', tone: 'bg-slate-100 text-slate-800' },
-    { value: 'include', label: 'Pass Through', tone: 'bg-blue-100 text-blue-900' },
-    { value: 'exclude', label: 'No Supplier Charge', tone: 'bg-slate-200 text-slate-900' },
+    { value: 'include', label: 'Charge Buyer', tone: 'bg-blue-100 text-blue-900' },
+    { value: 'exclude', label: 'Do Not Charge', tone: 'bg-slate-200 text-slate-900' },
   ];
 }
 

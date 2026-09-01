@@ -1,6 +1,8 @@
 public without sharing class VariableChargeInvoiceReadinessService {
     public static final String FCOS_URL_PREFIX = 'https://fcos.fcuno.com/payment-collections?tab=variable-charges&stemId=';
     public static final Date STEM_CREATED_FROM = Date.newInstance(2026, 1, 1);
+    private static final Decimal ANCHORAGE_BUYER_RATE_USD = 0.002;
+    private static final String ANCHORAGE_BUYER_CALCULATION_VERSION = 'hk-buyer-nrt-hour-2026-v1';
     private static Boolean invalidationInProgress = false;
 
     public class Readiness {
@@ -85,6 +87,8 @@ public without sharing class VariableChargeInvoiceReadinessService {
         if (String.isNotBlank(currencyProblem)) return blocked(currencyProblem, stemId, supplierId, true);
         String bundleProblem = hongKongBundleProblem(stemId, supplierId, true);
         if (String.isNotBlank(bundleProblem)) return blocked(bundleProblem, stemId, supplierId, true);
+        String anchorageProblem = hongKongAnchorageProblem(stemId, supplierId, true);
+        if (String.isNotBlank(anchorageProblem)) return blocked(anchorageProblem, stemId, supplierId, true);
         if (context.stage == null || context.stage.Supplier_Status__c != 'Verified') {
             return blocked('Confirm ' + context.supplier.Name + ' costs in FCOS before creating this Supplier Invoice.', stemId, supplierId, true);
         }
@@ -179,6 +183,8 @@ public without sharing class VariableChargeInvoiceReadinessService {
         if (String.isNotBlank(currencyProblem)) return blocked(currencyProblem, stemId, supplierId, true);
         String bundleProblem = hongKongBundleProblem(stemId, supplierId, false);
         if (String.isNotBlank(bundleProblem)) return blocked(bundleProblem, stemId, supplierId, true);
+        String anchorageProblem = hongKongAnchorageProblem(stemId, supplierId, false);
+        if (String.isNotBlank(anchorageProblem)) return blocked(anchorageProblem, stemId, supplierId, true);
         if (context.stage == null || context.stage.Buyer_Charge_Status__c != 'Verified') {
             return blocked('Confirm ' + context.supplier.Name + ' buyer charges in FCOS before creating the final Buyer Invoice.', stemId, supplierId, true);
         }
@@ -240,10 +246,14 @@ public without sharing class VariableChargeInvoiceReadinessService {
         if (sides.contains('cost')) {
             String costProblem = hongKongBundleProblem(stemId, supplierId, true);
             if (String.isNotBlank(costProblem)) throw messageException(costProblem);
+            String anchorageCostProblem = hongKongAnchorageProblem(stemId, supplierId, true);
+            if (String.isNotBlank(anchorageCostProblem)) throw messageException(anchorageCostProblem);
         }
         if (sides.contains('buyer_charge')) {
             String buyerProblem = hongKongBundleProblem(stemId, supplierId, false);
             if (String.isNotBlank(buyerProblem)) throw messageException(buyerProblem);
+            String anchorageBuyerProblem = hongKongAnchorageProblem(stemId, supplierId, false);
+            if (String.isNotBlank(anchorageBuyerProblem)) throw messageException(anchorageBuyerProblem);
         }
     }
 
@@ -382,6 +392,45 @@ public without sharing class VariableChargeInvoiceReadinessService {
         return null;
     }
 
+    private static String hongKongAnchorageProblem(Id stemId, Id supplierId, Boolean supplierSide) {
+        List<STEM__c> stems = [
+            SELECT Id, Port__r.Name, Port__r.Country__c
+            FROM STEM__c WHERE Id = :stemId LIMIT 1
+        ];
+        if (stems.isEmpty() || !isHongKongPort(stems[0])) return null;
+        for (STEM_Extra_Cost__c row : [
+            SELECT Id, Product2Id__r.Name, Unit_Price__c, Lumpsum_Price__c,
+                Anchorage_Dues_Allocation_HKD__c, Anchorage_NRT_Snapshot__c,
+                Anchorage_USD_HKD_Rate__c, Anchorage_Calculation_Version__c,
+                Anchorage_Buyer_Default_USD__c, Anchorage_Buyer_Rate_USD__c,
+                Anchorage_Buyer_Calc_Version__c
+            FROM STEM_Extra_Cost__c
+            WHERE STEM__c = :stemId AND Supplier__c = :supplierId AND Cancelled__c = false
+        ]) {
+            String productName = normalizeProductName(row.Product2Id__r?.Name);
+            if (productName != 'ANCHORAGE DUE' && productName != 'ANCHORAGE DUES') continue;
+            if (supplierSide) {
+                if (row.Anchorage_Calculation_Version__c == null
+                    || row.Anchorage_Dues_Allocation_HKD__c == null
+                    || row.Anchorage_Dues_Allocation_HKD__c < 0
+                    || row.Anchorage_NRT_Snapshot__c == null || row.Anchorage_NRT_Snapshot__c <= 0
+                    || row.Anchorage_USD_HKD_Rate__c == null || row.Anchorage_USD_HKD_Rate__c <= 0) {
+                    return 'Save complete Hong Kong Anchorage Dues evidence before approving supplier costs.';
+                }
+            } else {
+                Decimal buyerPrice = row.Lumpsum_Price__c != null ? row.Lumpsum_Price__c : row.Unit_Price__c;
+                if (row.Anchorage_Buyer_Default_USD__c == null || row.Anchorage_Buyer_Default_USD__c < 0
+                    || row.Anchorage_Buyer_Rate_USD__c == null
+                    || (row.Anchorage_Buyer_Rate_USD__c - ANCHORAGE_BUYER_RATE_USD).abs() > 0.0000005
+                    || row.Anchorage_Buyer_Calc_Version__c != ANCHORAGE_BUYER_CALCULATION_VERSION
+                    || buyerPrice == null || buyerPrice < 0) {
+                    return 'Save the USD 0.002 per NRT-hour Anchorage Dues buyer calculation before approving buyer charges.';
+                }
+            }
+        }
+        return null;
+    }
+
     private static Boolean isHongKongPort(STEM__c stem) {
         String name = normalizeProductName(stem?.Port__r?.Name);
         String country = normalizeProductName(stem?.Port__r?.Country__c);
@@ -458,6 +507,7 @@ public without sharing class VariableChargeInvoiceReadinessService {
             'Anchorage_Arrival__c','Anchorage_Departure__c','Anchorage_Location__c',
             'Anchorage_Dues_Allocation_HKD__c','Anchorage_NRT_Snapshot__c','Anchorage_USD_HKD_Rate__c',
             'Anchorage_FX_Settings_Revision__c','Anchorage_Calculation_Version__c',
+            'Anchorage_Buyer_Default_USD__c','Anchorage_Buyer_Rate_USD__c','Anchorage_Buyer_Calc_Version__c',
             'Light_Dues_Entry_Date__c','Light_Dues_Category__c','Light_Dues_NRT_Snapshot__c',
             'Light_Dues_Rate_HKD__c','Light_Dues_Amount_HKD__c','Light_Dues_USD_HKD_Rate__c',
             'Light_Dues_FX_Settings_Revision__c','Light_Dues_Calculation_Version__c',
@@ -506,6 +556,7 @@ public without sharing class VariableChargeInvoiceReadinessService {
             'Anchorage_Arrival__c','Anchorage_Departure__c','Anchorage_Location__c',
             'Anchorage_Dues_Allocation_HKD__c','Anchorage_NRT_Snapshot__c','Anchorage_USD_HKD_Rate__c',
             'Anchorage_FX_Settings_Revision__c','Anchorage_Calculation_Version__c',
+            'Anchorage_Buyer_Default_USD__c','Anchorage_Buyer_Rate_USD__c','Anchorage_Buyer_Calc_Version__c',
             'Light_Dues_Entry_Date__c','Light_Dues_Category__c','Light_Dues_NRT_Snapshot__c',
             'Light_Dues_Rate_HKD__c','Light_Dues_Amount_HKD__c','Light_Dues_USD_HKD_Rate__c',
             'Light_Dues_FX_Settings_Revision__c','Light_Dues_Calculation_Version__c',
@@ -565,7 +616,8 @@ public without sharing class VariableChargeInvoiceReadinessService {
         List<String> anchorageFields = new List<String>{
             'Id','Anchorage_Arrival__c','Anchorage_Departure__c','Anchorage_Location__c',
             'Anchorage_Dues_Allocation_HKD__c','Anchorage_NRT_Snapshot__c','Anchorage_USD_HKD_Rate__c',
-            'Anchorage_FX_Settings_Revision__c','Anchorage_Calculation_Version__c'
+            'Anchorage_FX_Settings_Revision__c','Anchorage_Calculation_Version__c',
+            'Anchorage_Buyer_Default_USD__c','Anchorage_Buyer_Rate_USD__c','Anchorage_Buyer_Calc_Version__c'
         };
         List<String> supplierInputFields = new List<String>{
             'Id','Supplier_Cost_Input_Currency__c','Supplier_Cost_Input_Value__c',
@@ -648,7 +700,7 @@ public without sharing class VariableChargeInvoiceReadinessService {
         Set<String> sharedPairs = new Set<String>();
         if (newRecords != null) for (STEM_Extra_Cost__c row : newRecords) {
             STEM_Extra_Cost__c oldRow = oldMap == null ? null : oldMap.get(row.Id);
-            if (oldRow == null || changed(row, oldRow, new List<String>{'STEM__c','Supplier__c','Cancelled__c','Product2Id__c','Description__c','STEM_Line_Item__c','Quantity__c','Quantity_Delivered_Per_BDN__c','Quantity_Range_Max__c','Unit_of_Measure__c','CurrencyIsoCode','Supplier_Cost_Input_Currency__c','Supplier_Cost_Input_Value__c','Supplier_Cost_USD_HKD_Rate__c','Supplier_Cost_FX_Settings_Revision__c','Anchorage_Arrival__c','Anchorage_Departure__c','Anchorage_Location__c','Anchorage_Dues_Allocation_HKD__c','Anchorage_NRT_Snapshot__c','Anchorage_USD_HKD_Rate__c','Anchorage_FX_Settings_Revision__c','Anchorage_Calculation_Version__c','Light_Dues_Entry_Date__c','Light_Dues_Category__c','Light_Dues_NRT_Snapshot__c','Light_Dues_Rate_HKD__c','Light_Dues_Amount_HKD__c','Light_Dues_USD_HKD_Rate__c','Light_Dues_FX_Settings_Revision__c','Light_Dues_Calculation_Version__c','Hong_Kong_Bundle_Key__c','Hong_Kong_Bundle_Managed__c','Hong_Kong_Bundle_Sequence__c','Hong_Kong_Bundle_Source__c','Port_Clearance_Rate_HKD__c','Port_Clearance_Calculation_Version__c'}))
+            if (oldRow == null || changed(row, oldRow, new List<String>{'STEM__c','Supplier__c','Cancelled__c','Product2Id__c','Description__c','STEM_Line_Item__c','Quantity__c','Quantity_Delivered_Per_BDN__c','Quantity_Range_Max__c','Unit_of_Measure__c','CurrencyIsoCode','Supplier_Cost_Input_Currency__c','Supplier_Cost_Input_Value__c','Supplier_Cost_USD_HKD_Rate__c','Supplier_Cost_FX_Settings_Revision__c','Anchorage_Arrival__c','Anchorage_Departure__c','Anchorage_Location__c','Anchorage_Dues_Allocation_HKD__c','Anchorage_NRT_Snapshot__c','Anchorage_USD_HKD_Rate__c','Anchorage_FX_Settings_Revision__c','Anchorage_Calculation_Version__c','Anchorage_Buyer_Default_USD__c','Anchorage_Buyer_Rate_USD__c','Anchorage_Buyer_Calc_Version__c','Light_Dues_Entry_Date__c','Light_Dues_Category__c','Light_Dues_NRT_Snapshot__c','Light_Dues_Rate_HKD__c','Light_Dues_Amount_HKD__c','Light_Dues_USD_HKD_Rate__c','Light_Dues_FX_Settings_Revision__c','Light_Dues_Calculation_Version__c','Hong_Kong_Bundle_Key__c','Hong_Kong_Bundle_Managed__c','Hong_Kong_Bundle_Sequence__c','Hong_Kong_Bundle_Source__c','Port_Clearance_Rate_HKD__c','Port_Clearance_Calculation_Version__c'}))
                 addChangedPairs(sharedPairs, row, oldRow, 'Supplier__c');
             if (oldRow != null && changed(row, oldRow, new List<String>{'Payment_Term__c','Unit_Cost__c','Lumpsum_Cost__c','Line_Total_Buy__c','Supplier_Invoice__c'}))
                 addChangedPairs(costPairs, row, oldRow, 'Supplier__c');

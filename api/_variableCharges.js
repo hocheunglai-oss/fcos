@@ -2,10 +2,11 @@ import { createHash } from 'node:crypto';
 import { requireExternalActionGate } from './_externalActionGates.js';
 import { getApiVersion, getInstanceUrl, sfCompositeQueries, sfQuery, sfRequest } from './_salesforce.js';
 import {
+  ANCHORAGE_BUYER_CALCULATION_VERSION,
+  ANCHORAGE_BUYER_RATE_USD_PER_NRT_HOUR,
   ANCHORAGE_CALCULATION_VERSION,
   ANCHORAGE_LOCATION_ELSEWHERE,
   calculateHongKongAnchorageDues,
-  convertAnchorageHkd,
 } from '../src/lib/anchorageDues.js';
 import {
   LIGHT_DUES_CALCULATION_VERSION,
@@ -377,6 +378,9 @@ function extraFingerprint(row) {
       usdHkdRate: row.Anchorage_USD_HKD_Rate__c ?? null,
       fxRevision: row.Anchorage_FX_Settings_Revision__c ?? null,
       version: row.Anchorage_Calculation_Version__c,
+      buyerDefaultUsd: row.Anchorage_Buyer_Default_USD__c ?? null,
+      buyerRateUsd: row.Anchorage_Buyer_Rate_USD__c ?? null,
+      buyerVersion: row.Anchorage_Buyer_Calc_Version__c || null,
     } } : {}),
     ...(row.Light_Dues_Calculation_Version__c ? { lightDues: {
       entryDate: row.Light_Dues_Entry_Date__c || null,
@@ -686,7 +690,7 @@ async function loadLiveCases({ client, stemIds = null, stemAccessCondition = nul
   if (stemIds && requested.length !== stemIds.length) throw httpError('A valid Salesforce STEM is required.', 400, 'INVALID_STEM_ID');
   const [allLineItems, allExtraCosts] = await Promise.all([
     queryAll(`SELECT Id, STEM__c, Original_Supplier__c, Product__c, Product__r.Name, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_Max__c, Unit_of_Measure__c, Unit_Sell_At__c, Unit_Buy_At__c, Total_Cost__c, Total_Price__c, Commission_Cost__c, Payment_Term__c, Buyer_Invoice__c, Supplier_Invoice__c, Cancelled__c, LastModifiedDate FROM STEM_Line_Item__c WHERE Cancelled__c = false AND STEM__r.CreatedDate >= ${VARIABLE_CHARGE_STEM_CREATED_FROM}${candidateWhere(requested)}`),
-    queryAll(`SELECT Id, STEM__c, STEM_Line_Item__c, Supplier__c, Supplier_Invoice__c, Product2Id__c, Product2Id__r.Name, Product2Id__r.IsActive, Description__c, RecordTypeId, RecordType.Name, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_Range_Max__c, Unit_of_Measure__c, Unit_Cost__c, Unit_Price__c, Lumpsum_Cost__c, Lumpsum_Price__c, Line_Total_Buy__c, Line_Total__c, Payment_Term__c, Buyer_Invoice__c, Cancelled__c, Supplier_Cost_Input_Currency__c, Supplier_Cost_Input_Value__c, Supplier_Cost_USD_HKD_Rate__c, Supplier_Cost_FX_Settings_Revision__c, Anchorage_Arrival__c, Anchorage_Departure__c, Anchorage_Location__c, Anchorage_Dues_Allocation_HKD__c, Anchorage_NRT_Snapshot__c, Anchorage_USD_HKD_Rate__c, Anchorage_FX_Settings_Revision__c, Anchorage_Calculation_Version__c, Light_Dues_Entry_Date__c, Light_Dues_Category__c, Light_Dues_NRT_Snapshot__c, Light_Dues_Rate_HKD__c, Light_Dues_Amount_HKD__c, Light_Dues_USD_HKD_Rate__c, Light_Dues_FX_Settings_Revision__c, Light_Dues_Calculation_Version__c, Hong_Kong_Bundle_Key__c, Hong_Kong_Bundle_Managed__c, Hong_Kong_Bundle_Sequence__c, Hong_Kong_Bundle_Source__c, Port_Clearance_Rate_HKD__c, Port_Clearance_Calculation_Version__c, LastModifiedDate FROM STEM_Extra_Cost__c WHERE Cancelled__c = false AND Supplier__c != null AND STEM__r.CreatedDate >= ${VARIABLE_CHARGE_STEM_CREATED_FROM}${candidateWhere(requested)}`),
+    queryAll(`SELECT Id, STEM__c, STEM_Line_Item__c, Supplier__c, Supplier_Invoice__c, Product2Id__c, Product2Id__r.Name, Product2Id__r.IsActive, Description__c, RecordTypeId, RecordType.Name, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_Range_Max__c, Unit_of_Measure__c, Unit_Cost__c, Unit_Price__c, Lumpsum_Cost__c, Lumpsum_Price__c, Line_Total_Buy__c, Line_Total__c, Payment_Term__c, Buyer_Invoice__c, Cancelled__c, Supplier_Cost_Input_Currency__c, Supplier_Cost_Input_Value__c, Supplier_Cost_USD_HKD_Rate__c, Supplier_Cost_FX_Settings_Revision__c, Anchorage_Arrival__c, Anchorage_Departure__c, Anchorage_Location__c, Anchorage_Dues_Allocation_HKD__c, Anchorage_NRT_Snapshot__c, Anchorage_USD_HKD_Rate__c, Anchorage_FX_Settings_Revision__c, Anchorage_Calculation_Version__c, Anchorage_Buyer_Default_USD__c, Anchorage_Buyer_Rate_USD__c, Anchorage_Buyer_Calc_Version__c, Light_Dues_Entry_Date__c, Light_Dues_Category__c, Light_Dues_NRT_Snapshot__c, Light_Dues_Rate_HKD__c, Light_Dues_Amount_HKD__c, Light_Dues_USD_HKD_Rate__c, Light_Dues_FX_Settings_Revision__c, Light_Dues_Calculation_Version__c, Hong_Kong_Bundle_Key__c, Hong_Kong_Bundle_Managed__c, Hong_Kong_Bundle_Sequence__c, Hong_Kong_Bundle_Source__c, Port_Clearance_Rate_HKD__c, Port_Clearance_Calculation_Version__c, LastModifiedDate FROM STEM_Extra_Cost__c WHERE Cancelled__c = false AND Supplier__c != null AND STEM__r.CreatedDate >= ${VARIABLE_CHARGE_STEM_CREATED_FROM}${candidateWhere(requested)}`),
   ]);
   const supplierStages = await queryAll(`SELECT Id, STEM__c, Supplier__c, Manual_Review_Required__c, Supplier_Status__c, Verified_At__c, Verified_By_Email__c, Reviewed_Source_Fingerprint__c, Revision__c, Buyer_Charge_Status__c, Buyer_Charge_Reviewed_Source_Fingerprint__c, Buyer_Charge_Confirmed_At__c, Buyer_Charge_Confirmed_By_Email__c, Buyer_Charge_Revision__c, LastModifiedDate FROM STEM_Variable_Charge_Supplier__c WHERE STEM__r.CreatedDate >= ${VARIABLE_CHARGE_STEM_CREATED_FROM}${candidateWhere(requested)}`);
   const supplierIds = [...new Set([
@@ -864,14 +868,40 @@ function serializeLiveRow(row, kind, settings = { usdHkdRate: null, revision: nu
       fxSettingsRevision: row.Supplier_Cost_FX_Settings_Revision__c ?? null,
     }
     : null;
+  const anchorageBuyerDefaultUsd = kind === 'extra_cost' && productKey === ANCHORAGE_DUES
+    ? finiteAmount(row.Anchorage_Buyer_Default_USD__c)
+    : null;
+  const anchorageCurrentBuyerUsd = kind === 'extra_cost' && productKey === ANCHORAGE_DUES
+    ? finiteAmount(row.Lumpsum_Price__c ?? row.Unit_Price__c)
+    : null;
+  const anchorageFormerPassThroughUsd = kind === 'extra_cost' && productKey === ANCHORAGE_DUES
+    ? finiteAmount(row.Lumpsum_Cost__c ?? row.Unit_Cost__c)
+    : null;
+  const anchorageMatches = (left, right) => left != null && right != null && Math.abs(left - right) <= 0.005;
+  const applyAnchorageBuyerDefault = anchorageBuyerDefaultUsd != null && (
+    anchorageCurrentBuyerUsd == null || Math.abs(anchorageCurrentBuyerUsd) <= 0.005
+    || anchorageMatches(anchorageCurrentBuyerUsd, anchorageFormerPassThroughUsd)
+    || anchorageMatches(anchorageCurrentBuyerUsd, anchorageBuyerDefaultUsd)
+  );
   const buyerDefault = productKey === BASIC_CALLING_COST
     ? { decision: 'include', unitOrFixedUsd: row.Lumpsum_Price__c ?? row.Unit_Price__c ?? null, totalUsd: row.Line_Total__c ?? null, locked: false }
     : basicCallingBundleSupport && (productKey === AGENCY_FEE || productKey === LIGHT_DUES)
       ? { decision: 'exclude', unitOrFixedUsd: 0, totalUsd: 0, locked: true }
       : basicCallingBundleSupport && productKey === PORT_CLEARANCE_EXTENSION && portClearance?.complete
         ? { decision: portClearance.additionalApplications > 0 ? 'include' : 'exclude', unitOrFixedUsd: portClearance.buyerUnitUsd, totalUsd: portClearance.buyerTotalUsd, locked: true }
-      : productKey === ANCHORAGE_DUES && supplierRateUsd != null
-        ? { decision: supplierRateUsd > 0 ? 'include' : 'exclude', unitOrFixedUsd: supplierRateUsd, totalUsd: supplierTotalUsd, locked: false }
+      : productKey === ANCHORAGE_DUES && anchorageBuyerDefaultUsd != null
+        ? {
+          decision: 'include',
+          unitOrFixedUsd: anchorageBuyerDefaultUsd,
+          totalUsd: anchorageBuyerDefaultUsd,
+          rateUsdPerNrtHour: row.Anchorage_Buyer_Rate_USD__c ?? null,
+          calculationVersion: row.Anchorage_Buyer_Calc_Version__c || null,
+          applyCalculatedDefault: applyAnchorageBuyerDefault,
+          adjusted: anchorageCurrentBuyerUsd != null
+            && !applyAnchorageBuyerDefault
+            && !anchorageMatches(anchorageCurrentBuyerUsd, anchorageBuyerDefaultUsd),
+          locked: false,
+        }
         : null;
   return {
     id: row.Id, kind, supplierId, productId, productName: productName || null,
@@ -917,6 +947,9 @@ function serializeLiveRow(row, kind, settings = { usdHkdRate: null, revision: nu
       usdHkdRate: row.Anchorage_USD_HKD_Rate__c ?? null,
       fxSettingsRevision: row.Anchorage_FX_Settings_Revision__c ?? null,
       calculationVersion: row.Anchorage_Calculation_Version__c || null,
+      buyerDefaultUsd: row.Anchorage_Buyer_Default_USD__c ?? null,
+      buyerRateUsd: row.Anchorage_Buyer_Rate_USD__c ?? null,
+      buyerCalculationVersion: row.Anchorage_Buyer_Calc_Version__c || null,
     } : null,
     lightDues: kind === 'extra_cost' && isLightDuesRow(row) ? {
       entryDate: row.Light_Dues_Entry_Date__c || null,
@@ -946,6 +979,19 @@ function extraCostFinancialAmount(row, side) {
   return finiteAmount(side === 'cost' ? row.Line_Total_Buy__c : row.Line_Total__c);
 }
 
+function buyerExtraCostFinancialAmount(row, { hongKongDelivery = false } = {}) {
+  const actual = extraCostFinancialAmount(row, 'charge');
+  if (!hongKongDelivery || !isAnchorageDuesRow(row)) return actual;
+  const calculatedDefault = finiteAmount(row.Anchorage_Buyer_Default_USD__c);
+  if (calculatedDefault == null) return actual;
+  const supplierPassThrough = extraCostFinancialAmount(row, 'cost');
+  const matches = (left, right) => left != null && right != null && Math.abs(left - right) <= 0.005;
+  return actual == null || Math.abs(actual) <= 0.005
+    || matches(actual, supplierPassThrough) || matches(actual, calculatedDefault)
+    ? calculatedDefault
+    : actual;
+}
+
 function financialSummary(live) {
   const stemCurrency = text(live.stem?.CurrencyIsoCode, 3).toUpperCase() || null;
   const hongKongDelivery = isHongKongStem(live.stem);
@@ -959,9 +1005,8 @@ function financialSummary(live) {
     ...live.extraCosts.map((row) => ({
       supplierId: row.Supplier__c,
       cost: extraCostFinancialAmount(row, 'cost'),
-      charge: extraCostFinancialAmount(row, 'charge') ?? (hongKongDelivery && isAnchorageDuesRow(row)
-        ? extraCostFinancialAmount(row, 'cost')
-        : hongKongDelivery && isLightDuesRow(row) ? 0 : null),
+      charge: buyerExtraCostFinancialAmount(row, { hongKongDelivery })
+        ?? (hongKongDelivery && isLightDuesRow(row) ? 0 : null),
       currency: text(row.CurrencyIsoCode, 3).toUpperCase() || stemCurrency,
     })),
   ];
@@ -1390,6 +1435,7 @@ function anchorageEvidence(live, settings) {
     allocations,
   });
   const allocatedById = new Map((calculation.allocations || []).map((row) => [row.id, row.amountHkd]));
+  const buyerAllocatedById = new Map((calculation.buyer?.allocations || []).map((row) => [row.id, row.amountUsd]));
   return {
     vesselNrt: live.stem.Vessel__r?.NRT__c ?? null,
     companyUsdHkdRate: settings.usdHkdRate,
@@ -1413,7 +1459,35 @@ function anchorageEvidence(live, settings) {
           : currency === 'USD' && supplierAmount != null && supplierRate > 0
             ? { available: true, amount: Math.round(supplierAmount * supplierRate * 100) / 100, rate: supplierRate, basis: `USD 1 = HKD ${supplierRate}` }
             : { available: false, reason: supplierAmount == null ? 'Supplier charge is unavailable.' : `${currency || 'This currency'} is not supported for Hong Kong anchorage-dues comparison.` };
-      const buyerSuggestion = convertAnchorageHkd(allocationHkd, currency, appliedRate);
+      const supplierEquivalentUsd = supplierHkd.available && supplierRate > 0
+        ? Math.round((supplierHkd.amount / supplierRate) * 100) / 100
+        : null;
+      const buyerDefaultUsd = buyerAllocatedById.get(row.Id) ?? null;
+      const currentBuyerUsd = finiteAmount(row.Lumpsum_Price__c ?? row.Unit_Price__c);
+      const formerSupplierPassThroughUsd = finiteAmount(row.Lumpsum_Cost__c ?? row.Unit_Cost__c);
+      const storedBuyerDefaultUsd = finiteAmount(row.Anchorage_Buyer_Default_USD__c);
+      const matches = (left, right) => left != null && right != null && Math.abs(left - right) <= 0.005;
+      const applyCalculatedDefault = buyerDefaultUsd != null && (
+        currentBuyerUsd == null || Math.abs(currentBuyerUsd) <= 0.005
+        || matches(currentBuyerUsd, formerSupplierPassThroughUsd)
+        || matches(currentBuyerUsd, storedBuyerDefaultUsd)
+      );
+      const buyerDefault = buyerDefaultUsd == null
+        ? { available: false, reason: 'Complete and allocate the Anchorage Dues evidence before calculating the buyer default.' }
+        : {
+          available: true,
+          amountUsd: buyerDefaultUsd,
+          rateUsdPerNrtHour: calculation.buyer.rateUsdPerNrtHour,
+          chargeableHours: calculation.buyer.chargeableHours,
+          nrt: calculation.nrt,
+          version: calculation.buyer.version,
+          currentAmountUsd: currentBuyerUsd,
+          adjusted: currentBuyerUsd != null
+            && !applyCalculatedDefault
+            && !matches(currentBuyerUsd, buyerDefaultUsd),
+          differenceUsd: currentBuyerUsd == null ? null : Math.round((currentBuyerUsd - buyerDefaultUsd) * 100) / 100,
+          applyCalculatedDefault,
+        };
       return {
         extraCostId: row.Id,
         supplierId: row.Supplier__c,
@@ -1424,12 +1498,19 @@ function anchorageEvidence(live, settings) {
         location: row.Anchorage_Location__c || ANCHORAGE_LOCATION_ELSEWHERE,
         allocationHkd,
         supplierChargeHkd: supplierHkd,
+        supplierEquivalentUsd,
         supplierVarianceHkd: supplierHkd.available && allocationHkd != null ? Math.round((supplierHkd.amount - allocationHkd) * 100) / 100 : null,
-        buyerSuggestion,
+        buyerSuggestion: buyerDefault.available
+          ? { available: true, amount: buyerDefault.amountUsd, rate: buyerDefault.rateUsdPerNrtHour, basis: 'USD 0.002 per NRT-hour' }
+          : buyerDefault,
+        buyerDefault,
         appliedNrt: row.Anchorage_NRT_Snapshot__c ?? null,
         appliedUsdHkdRate: row.Anchorage_USD_HKD_Rate__c ?? null,
         appliedFxSettingsRevision: row.Anchorage_FX_Settings_Revision__c ?? null,
         savedCalculationVersion: row.Anchorage_Calculation_Version__c || null,
+        appliedBuyerDefaultUsd: row.Anchorage_Buyer_Default_USD__c ?? null,
+        appliedBuyerRateUsd: row.Anchorage_Buyer_Rate_USD__c ?? null,
+        savedBuyerCalculationVersion: row.Anchorage_Buyer_Calc_Version__c || null,
         lastModifiedDate: row.LastModifiedDate || null,
       };
     }),
@@ -1706,6 +1787,7 @@ export async function saveVariableChargeAnchorage(body, context) {
   if (!calculation.complete) throw httpError(calculation.errors[0] || 'Anchorage dues could not be calculated.', 400, 'ANCHORAGE_CALCULATION_INCOMPLETE', calculation.errors);
   if (!calculation.allocationComplete) throw httpError('Allocate the calculated total across all agent rows. Allocations must match within HKD 0.10.', 400, 'ANCHORAGE_ALLOCATION_INCOMPLETE', calculation);
   const allocationById = new Map(calculation.allocations.map((row) => [row.id, row.amountHkd]));
+  const buyerAllocationById = new Map(calculation.buyer.allocations.map((row) => [row.id, row.amountUsd]));
   const apiVersion = getApiVersion();
   const compositeRequest = inputs.map((input, index) => ({
     method: 'PATCH',
@@ -1721,6 +1803,9 @@ export async function saveVariableChargeAnchorage(body, context) {
       Anchorage_USD_HKD_Rate__c: settings.usdHkdRate,
       Anchorage_FX_Settings_Revision__c: settings.revision,
       Anchorage_Calculation_Version__c: ANCHORAGE_CALCULATION_VERSION,
+      Anchorage_Buyer_Default_USD__c: buyerAllocationById.get(input.id),
+      Anchorage_Buyer_Rate_USD__c: ANCHORAGE_BUYER_RATE_USD_PER_NRT_HOUR,
+      Anchorage_Buyer_Calc_Version__c: ANCHORAGE_BUYER_CALCULATION_VERSION,
     },
   }));
   requireExternalActionGate('salesforce_write');
@@ -2649,13 +2734,20 @@ function applyHongKongBuyerDefaults(body, supplierRows, { hongKongDelivery = fal
         buyerPrice = calculation.buyerUnitUsd;
       }
     } else if (isAnchorageDuesRow(row)) {
-      const reviewedSupplierPrice = finiteAmount(pricingType === 'fixed' ? row.Lumpsum_Cost__c : row.Unit_Cost__c);
-      if (reviewedSupplierPrice != null) {
+      const calculatedBuyerDefault = finiteAmount(row.Anchorage_Buyer_Default_USD__c);
+      const formerSupplierPassThrough = finiteAmount(pricingType === 'fixed' ? row.Lumpsum_Cost__c : row.Unit_Cost__c);
+      const storedBuyerPrice = finiteAmount(pricingType === 'fixed' ? row.Lumpsum_Price__c : row.Unit_Price__c);
+      const matches = (left, right) => left != null && right != null && Math.abs(left - right) <= 0.005;
+      if (calculatedBuyerDefault != null) {
         if (!['include', 'exclude'].includes(review.buyerChargeDecision)) {
-          review.buyerChargeDecision = reviewedSupplierPrice > 0 ? 'include' : 'exclude';
+          review.buyerChargeDecision = 'include';
         }
         if (!updatesById.has(row.Id)) {
-          buyerPrice = review.buyerChargeDecision === 'include' ? reviewedSupplierPrice : 0;
+          const identifiableDefault = storedBuyerPrice == null || Math.abs(storedBuyerPrice) <= 0.005
+            || matches(storedBuyerPrice, formerSupplierPassThrough)
+            || matches(storedBuyerPrice, calculatedBuyerDefault);
+          if (review.buyerChargeDecision === 'exclude') buyerPrice = 0;
+          else if (identifiableDefault) buyerPrice = calculatedBuyerDefault;
         }
       }
     }
@@ -2699,7 +2791,7 @@ async function validateBuyerSide(body, supplierRows, files, { hongKongDelivery =
       const buyerPrice = update
         ? finiteAmount(update.buyerPrice ?? update.price ?? update.fixedBuyerAmount ?? update.buyerUnitPrice)
         : finiteAmount(pricingType === 'fixed' ? row.Lumpsum_Price__c : row.Unit_Price__c);
-      if (!(buyerPrice > 0)) throw httpError('Enter a positive Anchorage Dues buyer charge when the reviewed supplier charge was incurred.', 400, 'ANCHORAGE_PASS_THROUGH_REQUIRED');
+      if (buyerPrice == null || buyerPrice < 0) throw httpError('Enter a valid non-negative Anchorage Dues buyer charge.', 400, 'ANCHORAGE_BUYER_CHARGE_REQUIRED');
     }
     const evidence = reviewEvidence(review);
     if (!evidence.reference) throw httpError('The buyer-charge side requires a note for every reviewed row.', 400, 'BUYER_NOTE_REQUIRED');
@@ -2735,8 +2827,15 @@ async function assertAnchorageApprovalReady(live, supplierId, context, side) {
   if (side === 'cost' && selected.some((row) => row.supplierChargeHkd?.available !== true)) {
     throw httpError('The supplier Anchorage Dues charge cannot be compared in its current currency.', 409, 'ANCHORAGE_SUPPLIER_COMPARISON_UNAVAILABLE');
   }
-  if (side === 'buyer_charge' && selected.some((row) => row.buyerSuggestion?.available !== true)) {
-    throw httpError('The buyer Anchorage Dues suggestion cannot be converted in its current currency.', 409, 'ANCHORAGE_BUYER_SUGGESTION_UNAVAILABLE');
+  if (side === 'buyer_charge' && selected.some((row) => row.buyerDefault?.available !== true)) {
+    throw httpError('The buyer Anchorage Dues default cannot be calculated until the complete anchorage evidence is saved.', 409, 'ANCHORAGE_BUYER_DEFAULT_UNAVAILABLE');
+  }
+  if (side === 'buyer_charge' && selected.some((row) => (
+    row.savedBuyerCalculationVersion !== ANCHORAGE_BUYER_CALCULATION_VERSION
+    || Math.abs(Number(row.appliedBuyerRateUsd) - ANCHORAGE_BUYER_RATE_USD_PER_NRT_HOUR) > 0.0000005
+    || Math.abs(Number(row.appliedBuyerDefaultUsd) - Number(row.buyerDefault?.amountUsd)) > 0.005
+  ))) {
+    throw httpError('The buyer Anchorage Dues calculation changed. Save the anchorage details again before approval.', 409, 'ANCHORAGE_BUYER_EVIDENCE_STALE');
   }
 }
 

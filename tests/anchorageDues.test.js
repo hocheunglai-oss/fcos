@@ -16,6 +16,7 @@ test('Hong Kong anchorage dues are zero through twelve aggregate hours', () => {
   const result = calculateHongKongAnchorageDues({ nrt: 7000, periods: [period('a', '2026-08-01T00:00:00Z', '2026-08-01T12:00:00Z')] });
   assert.equal(result.statutoryAmountHkd, 0);
   assert.equal(result.allocationComplete, true);
+  assert.equal(result.buyer.totalUsd, 0);
 });
 
 test('acceptance case: 7,000 NRT times 18 Victoria chargeable hours is HKD 2,520', () => {
@@ -23,6 +24,19 @@ test('acceptance case: 7,000 NRT times 18 Victoria chargeable hours is HKD 2,520
   assert.equal(result.complete, true);
   assert.equal(result.locations[0].chargeableHours, 18);
   assert.equal(result.statutoryAmountHkd, 2520);
+  assert.equal(result.buyer.totalUsd, 252);
+  assert.equal(result.buyer.rateUsdPerNrtHour, 0.002);
+});
+
+test('HK2627315T buyer default is independent from the statutory supplier calculation', () => {
+  const result = calculateHongKongAnchorageDues({
+    nrt: 3615,
+    periods: [period('a', '2026-08-01T00:00:00Z', '2026-08-03T01:00:00Z')],
+  });
+  assert.equal(result.locations[0].chargeableHours, 37);
+  assert.equal(result.statutoryAmountHkd, 2006.3);
+  assert.equal(result.buyer.totalUsd, 267.51);
+  assert.deepEqual(result.buyer.allocations, [{ id: 'a', amountUsd: 267.51 }]);
 });
 
 test('partial excess hours round up per location and statutory minimum applies', () => {
@@ -40,6 +54,8 @@ test('mixed locations aggregate and round each location independently', () => {
   assert.deepEqual(result.locations.map((row) => row.chargeableHours), [2, 2]);
   assert.equal(result.statutoryAmountHkd, 490);
   assert.equal(result.allocationComplete, true);
+  assert.equal(result.buyer.totalUsd, 56);
+  assert.deepEqual(result.buyer.allocations, [{ id: 'a', amountUsd: 24 }, { id: 'b', amountUsd: 32 }]);
 });
 
 test('overlaps and invalid NRT fail closed', () => {
@@ -55,7 +71,10 @@ test('overlaps and invalid NRT fail closed', () => {
 test('multiple rows require exact manual allocation within HKD 0.10', () => {
   const periods = [period('a', '2026-08-01T00:00:00Z', '2026-08-01T13:00:00Z'), period('b', '2026-08-01T14:00:00Z', '2026-08-01T15:00:00Z')];
   assert.equal(calculateHongKongAnchorageDues({ nrt: 7000, periods }).allocationComplete, false);
-  assert.equal(calculateHongKongAnchorageDues({ nrt: 7000, periods, allocations: [{ id: 'a', amountHkd: 105 }, { id: 'b', amountHkd: 105 }] }).allocationComplete, true);
+  const result = calculateHongKongAnchorageDues({ nrt: 7000, periods, allocations: [{ id: 'a', amountHkd: 105 }, { id: 'b', amountHkd: 105 }] });
+  assert.equal(result.allocationComplete, true);
+  assert.equal(result.buyer.totalUsd, 28);
+  assert.deepEqual(result.buyer.allocations, [{ id: 'a', amountUsd: 14 }, { id: 'b', amountUsd: 14 }]);
 });
 
 test('HKD and USD conversions are explicit and unsupported currencies remain unavailable', () => {
@@ -75,7 +94,7 @@ test('Salesforce metadata and service-only settings preserve NRT and calculation
   assert.match(nrtField, /<scale>0<\/scale>/);
   assert.match(nrtField, /<trackHistory>true<\/trackHistory>/);
   assert.match(vesselLayout, /<field>NRT__c<\/field>/);
-  for (const field of ['Anchorage_Arrival__c', 'Anchorage_Departure__c', 'Anchorage_Location__c', 'Anchorage_Dues_Allocation_HKD__c', 'Anchorage_NRT_Snapshot__c', 'Anchorage_USD_HKD_Rate__c', 'Anchorage_FX_Settings_Revision__c', 'Anchorage_Calculation_Version__c']) {
+  for (const field of ['Anchorage_Arrival__c', 'Anchorage_Departure__c', 'Anchorage_Location__c', 'Anchorage_Dues_Allocation_HKD__c', 'Anchorage_NRT_Snapshot__c', 'Anchorage_USD_HKD_Rate__c', 'Anchorage_FX_Settings_Revision__c', 'Anchorage_Calculation_Version__c', 'Anchorage_Buyer_Default_USD__c', 'Anchorage_Buyer_Rate_USD__c', 'Anchorage_Buyer_Calc_Version__c']) {
     assert.match(integrationPermission, new RegExp(`STEM_Extra_Cost__c\\.${field}`));
     assert.match(service, new RegExp(field));
   }
