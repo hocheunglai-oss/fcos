@@ -28,6 +28,9 @@
     <fieldPermissions><editable>true</editable><field>Special_Term_Clause_Consolidation_Map__c.Confirmed_At__c</field><readable>true</readable></fieldPermissions>
     <fieldPermissions><editable>true</editable><field>Special_Term_Revision__c.Revision_Number__c</field><readable>true</readable></fieldPermissions>
     <fieldPermissions><editable>true</editable><field>Special_Term_Revision__c.Revision_Key__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>Special_Term_Revision__c.Retirement_Reason__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>Special_Term_Revision__c.Retired_By_Email__c</field><readable>true</readable></fieldPermissions>
+    <fieldPermissions><editable>true</editable><field>Special_Term_Revision__c.Retired_At__c</field><readable>true</readable></fieldPermissions>
     <fieldPermissions><editable>true</editable><field>Special_Term_Revision__c.Status__c</field><readable>true</readable></fieldPermissions>
     <fieldPermissions><editable>true</editable><field>Special_Term_Revision__c.Revision_Reason__c</field><readable>true</readable></fieldPermissions>
     <fieldPermissions><editable>true</editable><field>Special_Term_Revision__c.Proposed_By_Email__c</field><readable>true</readable></fieldPermissions>

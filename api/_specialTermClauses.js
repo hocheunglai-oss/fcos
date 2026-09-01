@@ -2164,8 +2164,19 @@ async function saveSpecialTermRevisionGraph(client, profile, body, schema, compo
       sfQuery(`SELECT Id FROM Special_Term_Revision_Rule__c WHERE Special_Term_Revision__c = '${soql(updatingRevision.Id)}' LIMIT 500`, { clean: true, limit: 500 }),
     ]);
     if (existingClauses.totalSize > existingClauses.records.length || existingRules.totalSize > existingRules.records.length) throw specialTermsError('This revision exceeds the safe update limit.', 409, 'SPECIAL_TERMS_RESULT_LIMIT');
-    if (existingClauses.records.length) requests.push({ method: 'DELETE', url: `/services/data/${getApiVersion()}/composite/sobjects?ids=${existingClauses.records.map((row) => row.Id).join(',')}&allOrNone=true`, referenceId: 'deleteRevisionClauses' });
-    if (existingRules.records.length) requests.push({ method: 'DELETE', url: `/services/data/${getApiVersion()}/composite/sobjects?ids=${existingRules.records.map((row) => row.Id).join(',')}&allOrNone=true`, referenceId: 'deleteRevisionRules' });
+    // Composite Graph accepts standard sObject operations, but not the bulk
+    // collection-delete endpoint supported by the regular Composite API.
+    // Keep each delete in the same graph so replacement remains atomic.
+    existingClauses.records.forEach((row, index) => requests.push({
+      method: 'DELETE',
+      url: `/services/data/${getApiVersion()}/sobjects/${OBJECTS.revisionClause}/${row.Id}`,
+      referenceId: `deleteRevisionClause${index}`,
+    }));
+    existingRules.records.forEach((row, index) => requests.push({
+      method: 'DELETE',
+      url: `/services/data/${getApiVersion()}/sobjects/Special_Term_Revision_Rule__c/${row.Id}`,
+      referenceId: `deleteRevisionRule${index}`,
+    }));
     requests.push({ method: 'PATCH', url: `/services/data/${getApiVersion()}/sobjects/${OBJECTS.revision}/${updatingRevision.Id}`, referenceId: 'revision', body: revisionBody });
   } else {
     requests.push({ method: 'POST', url: `/services/data/${getApiVersion()}/sobjects/${OBJECTS.revision}`, referenceId: 'revision', body: {
@@ -2236,8 +2247,25 @@ async function saveSpecialTermRevisionGraph(client, profile, body, schema, compo
   return finishOperation(client, reservation.operation, { success: true, id: termId, revisionId: updatingRevision?.Id || revisionResponse?.body?.id || null, revisionKey, status: 'In Review', projectionCount: compositions.length });
 }
 
+function apexUtcTimestamp(value) {
+  const timestamp = Date.parse(String(value || ''));
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : value;
+}
+
+function apexUtcTimestampMap(values) {
+  return values && typeof values === 'object'
+    ? Object.fromEntries(Object.entries(values).map(([key, value]) => [key, apexUtcTimestamp(value)]))
+    : values;
+}
+
 async function callRevisionApex(revisionId, termId, action, reason, expectedLastModifiedAt, approverEmail = null, expectedVersionTimestamps = null) {
-  const result = await sfRequest(`/apexrest/fcos/special-term-revisions/${encodeURIComponent(revisionId)}/${action}`, { method: 'POST', body: { termId, approverEmail, reason, expectedLastModifiedAt, expectedVersionTimestamps } });
+  const result = await sfRequest(`/apexrest/fcos/special-term-revisions/${encodeURIComponent(revisionId)}/${action}`, { method: 'POST', body: {
+    termId,
+    approverEmail,
+    reason,
+    expectedLastModifiedAt: apexUtcTimestamp(expectedLastModifiedAt),
+    expectedVersionTimestamps: apexUtcTimestampMap(expectedVersionTimestamps),
+  } });
   if (result?.success !== true) throw specialTermsError('Salesforce did not confirm the Special Term revision action.', 502, 'SPECIAL_TERMS_REVISION_ACTION_UNCONFIRMED');
   return result;
 }
@@ -2498,6 +2526,8 @@ export async function draftSpecialTermClausesWithAi(client, profile, body = {}, 
 export const specialTermClauseServiceInternals = Object.freeze({
   CLAUSE_CATEGORIES,
   GLOBAL_PUBLICATION_PREVIEW_TTL_MS,
+  apexUtcTimestamp,
+  apexUtcTimestampMap,
   assertCompositeGraph,
   cleanClauseText,
   cleanShortName,

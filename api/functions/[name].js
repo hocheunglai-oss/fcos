@@ -219,7 +219,7 @@ import {
   saveMasterContractFeature as saveMasterContractFeatureService,
 } from '../_masterContracts.js';
 import { loadMarketIntradayTimeline, previewMarketIntradaySnapshot, reconcileMarketIntradayDate, saveMarketIntradaySnapshot } from '../_marketIntraday.js';
-import { deleteSpecialTerm, deleteSpecialTermRule, getSpecialTermDocumentForExport, listSpecialTermSummaries, listSpecialTerms, previewSpecialTermDeletion, resolveSpecialTermsSchema, saveSpecialTerm, saveSpecialTermRule, specialTermOptions } from '../_specialTerms.js';
+import { deleteSpecialTerm, deleteSpecialTermRule, getSpecialTermDocumentForExport, listSpecialTermSummaries, listSpecialTerms, previewSpecialTermDeletion, resolveSpecialTermsSchema, retireSpecialTerm, saveSpecialTerm, saveSpecialTermRule, specialTermOptions } from '../_specialTerms.js';
 import {
   approveSpecialTermClause,
   getSpecialTermDetail,
@@ -1371,6 +1371,7 @@ const HANDLER_MODULE_ACCESS = {
   specialTermApprovalQueue: ['special_terms'],
   specialTermClauseAiDraft: ['special_terms'],
   specialTermsSave: ['special_terms'],
+  specialTermsTermRetire: ['special_terms'],
   specialTermsDelete: ['special_terms'],
   specialTermRuleSave: ['special_terms'],
   specialTermRuleDelete: ['special_terms'],
@@ -18786,6 +18787,12 @@ async function specialTermsSave(body = {}, req = null, accessContext = null) {
   return saveSpecialTerm(context.client, context.profile, body);
 }
 
+async function specialTermsTermRetire(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  await requireSpecialTermClauseApprover(context);
+  return retireSpecialTerm(context.client, context.profile, body);
+}
+
 async function specialTermsDelete(body = {}, req = null, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
   await requireCapability(context.client, context.profile, 'special_terms_manage', 'Special Terms management permission is required.');
@@ -19080,6 +19087,7 @@ const handlers = {
   specialTermApprovalQueue,
   specialTermClauseAiDraft,
   specialTermsSave,
+  specialTermsTermRetire,
   specialTermsDelete,
   specialTermRuleSave,
   specialTermRuleDelete,

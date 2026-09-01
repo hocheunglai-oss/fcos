@@ -11,6 +11,20 @@ private class SpecialTermRevisionServiceTest {
         return [SELECT Id, Clause__c FROM Special_Term_Clause_Version__c WHERE Id = :version.Id];
     }
 
+    private static Special_Term__c approvedNominationTerm(String name, String key) {
+        Special_Term__c term = new Special_Term__c(Name = name, Add_to_Confirmation__c = false, Add_to_Nomination__c = false, Clause_Structure_Status__c = 'Legacy', Confirmation_Clause_Status__c = 'Legacy', Nomination_Clause_Status__c = 'Legacy', Approval_Status__c = 'Legacy');
+        insert term;
+        Special_Term_Clause_Version__c version = approvedVersion(name + ' Clause', key, 'Supplier-only approved wording.');
+        Special_Term_Revision__c revision = new Special_Term_Revision__c(Special_Term__c = term.Id, Revision_Number__c = 1, Status__c = 'Draft', Revision_Reason__c = 'Approve supplier-only term');
+        insert revision;
+        insert new Special_Term_Revision_Clause__c(Special_Term_Revision__c = revision.Id, Clause__c = version.Clause__c, Clause_Version__c = version.Id, Projection__c = 'Nomination Remark', Sequence__c = 1, State__c = 'Proposed');
+        revision.Status__c = 'In Review';
+        Database.update(revision, AccessLevel.SYSTEM_MODE);
+        revision = [SELECT Id, LastModifiedDate FROM Special_Term_Revision__c WHERE Id = :revision.Id];
+        SpecialTermRevisionService.activate(revision.Id, 'gm@example.com', 'Approved supplier-only term.', String.valueOfGmt(revision.LastModifiedDate));
+        return [SELECT Id, LastModifiedDate, Current_Revision__c FROM Special_Term__c WHERE Id = :term.Id];
+    }
+
     @isTest static void activatesWholeRevisionAndBlocksDirectLifecycleChanges() {
         Special_Term__c term = new Special_Term__c(Name = 'Revision lifecycle term', Terms_Text__c = 'Legacy contractual wording.', Special_Remark_in_Confirmation__c = '- Legacy confirmation.', Special_Remark_in_Nomination__c = '- Legacy nomination.', Clause_Structure_Status__c = 'Legacy', Confirmation_Clause_Status__c = 'Legacy', Nomination_Clause_Status__c = 'Legacy', Approval_Status__c = 'Legacy');
         insert term;
@@ -59,6 +73,46 @@ private class SpecialTermRevisionServiceTest {
         Special_Term_Clause_Assignment__c retainedAssignment = [SELECT Id FROM Special_Term_Clause_Assignment__c WHERE Special_Term__c = :term.Id AND State__c = 'Historical' LIMIT 1];
         try { delete retainedAssignment; System.assert(false, 'Historical assignment lineage must not be deleted.'); } catch (DmlException error) { System.assert(error.getMessage().contains('lineage must be retained')); }
         System.assertEquals('Rolled Back', [SELECT Status__c FROM Special_Term_Revision__c WHERE Id = :revision.Id].Status__c);
+    }
+
+    @isTest static void retiresUnusedApprovedTermAndPreservesLineage() {
+        Special_Term__c term = approvedNominationTerm('Retirement lifecycle term', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+        Id activeRevisionId = term.Current_Revision__c;
+
+        Test.startTest();
+        Id retiredRevisionId = SpecialTermRevisionService.retireTerm(term.Id, 'gm@example.com', 'Replaced by supplier-specific terms.', String.valueOfGmt(term.LastModifiedDate));
+        Test.stopTest();
+
+        System.assertEquals(activeRevisionId, retiredRevisionId);
+        term = [SELECT Approval_Status__c, Current_Revision__c, Special_Remark_in_Nomination__c FROM Special_Term__c WHERE Id = :term.Id];
+        System.assertEquals('Retired', term.Approval_Status__c);
+        System.assertEquals(activeRevisionId, term.Current_Revision__c);
+        System.assert(term.Special_Remark_in_Nomination__c.contains('Supplier-only approved wording.'));
+        Special_Term_Revision__c revision = [SELECT Status__c, Approval_Reason__c, Retirement_Reason__c, Retired_By_Email__c, Retired_At__c FROM Special_Term_Revision__c WHERE Id = :activeRevisionId];
+        System.assertEquals('Retired', revision.Status__c);
+        System.assertEquals('Approved supplier-only term.', revision.Approval_Reason__c, 'Retirement must not overwrite the original approval reason.');
+        System.assertEquals('Replaced by supplier-specific terms.', revision.Retirement_Reason__c);
+        System.assertEquals('gm@example.com', revision.Retired_By_Email__c);
+        System.assertNotEquals(null, revision.Retired_At__c);
+        System.assertEquals(0, [SELECT COUNT() FROM Special_Term_Clause_Assignment__c WHERE Special_Term__c = :term.Id AND State__c = 'Active']);
+        System.assertEquals(1, [SELECT COUNT() FROM Special_Term_Clause_Assignment__c WHERE Special_Term__c = :term.Id AND State__c = 'Historical']);
+        try { delete term; System.assert(false, 'Retired term history must be retained.'); }
+        catch (DmlException error) { System.assert(error.getMessage().contains('Approved and retired Special Terms must be retained')); }
+    }
+
+    @isTest static void retirementFailsClosedForStaleOrRuledTerm() {
+        Special_Term__c stale = approvedNominationTerm('Stale retirement term', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');
+        try { SpecialTermRevisionService.retireTerm(stale.Id, 'gm@example.com', 'Stale retirement.', '2000-01-01 00:00:00'); System.assert(false, 'Stale retirement must fail.'); }
+        catch (SpecialTermRevisionService.RevisionException error) { System.assert(error.getMessage().contains('changed after it was opened')); }
+
+        Special_Term__c ruled = approvedNominationTerm('Ruled retirement term', 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc');
+        SpecialTermRuleRevisionHandler.allowRevisionUpdate = true;
+        try { insert new Special_Term_Rule__c(Special_Term__c = ruled.Id, Supplier_Buyer__c = 'Supplier', Country__c = 'CHINA'); }
+        finally { SpecialTermRuleRevisionHandler.allowRevisionUpdate = false; }
+        ruled = [SELECT Id, LastModifiedDate FROM Special_Term__c WHERE Id = :ruled.Id];
+        try { SpecialTermRevisionService.retireTerm(ruled.Id, 'gm@example.com', 'Blocked retirement.', String.valueOfGmt(ruled.LastModifiedDate)); System.assert(false, 'A ruled term must not retire.'); }
+        catch (SpecialTermRevisionService.RevisionException error) { System.assert(error.getMessage().contains('matching rule')); }
+        System.assertEquals('Approved', [SELECT Approval_Status__c FROM Special_Term__c WHERE Id = :ruled.Id].Approval_Status__c);
     }
 
     @isTest static void rejectsActivatedRevisionClauseDirectEdit() {

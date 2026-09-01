@@ -244,6 +244,53 @@ public without sharing class SpecialTermRevisionService {
         activate(revisionId, approverEmail, approvalReason, null);
     }
 
+    public static Id retireTerm(Id termId, String actorEmail, String retirementReason, String expectedLastModifiedAt) {
+        require(termId != null, 'A Special Term is required.');
+        require(!String.isBlank(actorEmail) && !String.isBlank(retirementReason), 'Retirement identity and reason are required.');
+        require(!String.isBlank(expectedLastModifiedAt), 'The expected Special Term timestamp is required. Refresh before retiring.');
+        Special_Term__c term = [
+            SELECT Id, LastModifiedDate, Approval_Status__c, Current_Revision__c
+            FROM Special_Term__c WHERE Id = :termId FOR UPDATE
+        ];
+        require(matchesExpectedLastModified(term.LastModifiedDate, expectedLastModifiedAt), 'This Special Term changed after it was opened. Refresh before retiring.');
+        require(term.Approval_Status__c == 'Approved' && term.Current_Revision__c != null, 'Only an approved Special Term can be retired.');
+        require([SELECT COUNT() FROM Enquiry_Special_Term__c WHERE Special_Term__c = :termId] == 0, 'A Special Term linked to an Enquiry cannot be retired.');
+        require([SELECT COUNT() FROM Special_Term_Rule__c WHERE Special_Term__c = :termId] == 0, 'Remove or revise every matching rule before retiring this Special Term.');
+        require([
+            SELECT COUNT() FROM Special_Term_Revision__c
+            WHERE Special_Term__c = :termId
+            AND Id != :term.Current_Revision__c
+            AND Status__c IN ('Draft', 'In Review', 'Approved', 'Active')
+        ] == 0, 'Complete or discard the pending Special Term revision before retiring.');
+
+        SpecialTermAssignmentHandler.suppressRecompile = true;
+        SpecialTermRevisionHandler.allowLifecycleUpdate = true;
+        SpecialTermTriggerHandler.allowCompiledProjectionUpdate = true;
+        SpecialTermTriggerHandler.allowRevisionLifecycleUpdate = true;
+        try {
+            List<Special_Term_Clause_Assignment__c> assignments = [
+                SELECT Id, State__c FROM Special_Term_Clause_Assignment__c
+                WHERE Special_Term__c = :termId AND State__c = 'Active'
+            ];
+            for (Special_Term_Clause_Assignment__c assignment : assignments) assignment.State__c = 'Historical';
+            if (!assignments.isEmpty()) update assignments;
+            update new Special_Term_Revision__c(
+                Id = term.Current_Revision__c,
+                Status__c = 'Retired',
+                Retirement_Reason__c = retirementReason,
+                Retired_By_Email__c = actorEmail,
+                Retired_At__c = System.now()
+            );
+            update new Special_Term__c(Id = termId, Approval_Status__c = 'Retired');
+        } finally {
+            SpecialTermAssignmentHandler.suppressRecompile = false;
+            SpecialTermRevisionHandler.allowLifecycleUpdate = false;
+            SpecialTermTriggerHandler.allowCompiledProjectionUpdate = false;
+            SpecialTermTriggerHandler.allowRevisionLifecycleUpdate = false;
+        }
+        return term.Current_Revision__c;
+    }
+
     public static void rollback(Id revisionId, String reason, String expectedLastModifiedAt) {
         require(revisionId != null && !String.isBlank(reason), 'Revision and rollback reason are required.');
         require(!String.isBlank(expectedLastModifiedAt), 'The expected Special Term revision timestamp is required. Refresh before rolling back.');

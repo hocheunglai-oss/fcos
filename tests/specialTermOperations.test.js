@@ -48,12 +48,22 @@ test('stale Salesforce timestamps fail closed', () => {
   assert.throws(() => assertCurrent({ LastModifiedDate: 'not-a-timestamp' }, '2026-08-10T00:00:00.000Z'), /Refresh before saving/i);
 });
 
+test('Apex lifecycle timestamps normalize Salesforce REST offsets to UTC', () => {
+  assert.equal(specialTermDeletionInternals.apexUtcTimestamp('2026-09-01T18:16:16.000+0000'), '2026-09-01T18:16:16.000Z');
+  assert.equal(specialTermClauseServiceInternals.apexUtcTimestamp('2026-09-01T18:16:16.000+0000'), '2026-09-01T18:16:16.000Z');
+  assert.deepEqual(
+    specialTermClauseServiceInternals.apexUtcTimestampMap({ versionA: '2026-09-01T18:16:12.000+0000', versionB: '2026-09-01T18:16:13.000Z' }),
+    { versionA: '2026-09-01T18:16:12.000Z', versionB: '2026-09-01T18:16:13.000Z' },
+  );
+  assert.equal(specialTermClauseServiceInternals.apexUtcTimestamp(null), null);
+});
+
 test('safe deletion authorization normalizes creator email and preserves protected history', () => {
   assert.equal(specialTermDeletionInternals.normalizedEmail('  Creator@Example.COM '), 'creator@example.com');
   assert.equal(specialTermDeletionInternals.deletionAuthorization({ isCreator: true }), true);
   assert.equal(specialTermDeletionInternals.deletionAuthorization({ isApprover: true }), true);
   assert.equal(specialTermDeletionInternals.deletionAuthorization({}), false);
-  for (const status of ['Approved', 'Active', 'Superseded', 'Rejected', 'Rolled Back']) {
+  for (const status of ['Approved', 'Active', 'Superseded', 'Rejected', 'Rolled Back', 'Retired']) {
     assert.equal(specialTermDeletionInternals.PROTECTED_TERM_REVISION_STATUSES.has(status), true);
   }
   assert.equal(specialTermDeletionInternals.PROTECTED_TERM_REVISION_STATUSES.has('Draft'), false);
@@ -92,6 +102,10 @@ test('whole-term revision API uses durable Salesforce revisions and never partia
   assert.match(apexService, /Snapshot_Type__c == 'Proposed'/);
   assert.match(apexService, /SpecialTermRuleRevisionHandler\.allowRevisionUpdate = true/);
   assert.match(service, /specialTermWholeRevision/);
+  const revisionGraph = service.match(/async function saveSpecialTermRevisionGraph[\s\S]*?function apexUtcTimestamp/)?.[0] || '';
+  assert.doesNotMatch(revisionGraph, /composite\/sobjects\?ids=/);
+  assert.match(revisionGraph, /deleteRevisionClause\$\{index\}/);
+  assert.match(revisionGraph, /deleteRevisionRule\$\{index\}/);
   assert.match(service, /callRevisionApex\(.*'activate'/s);
   assert.match(service, /callRevisionApex\(revisionId, termId, 'approve-publish'/);
   assert.match(service, /callRevisionApex\(.*'rollback'/s);
