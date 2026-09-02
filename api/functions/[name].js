@@ -4854,9 +4854,21 @@ async function paymentCollectionsReconcile(body, req, accessContext = null) {
   const stemAccessCondition = isInterofficeAccess(context)
     ? await interofficeStemAccessCondition(context)
     : null;
-  const shipAgentCharges = await syncShipAgentCharges({ ...context, stemAccessCondition }, { stemIds: body.stemIds });
+  let shipAgentCharges;
+  let variableChargeSyncWarning = null;
+  try {
+    shipAgentCharges = await syncShipAgentCharges({ ...context, stemAccessCondition }, { stemIds: body.stemIds });
+  } catch (error) {
+    variableChargeSyncWarning = 'Variable Charges synchronization is temporarily unavailable. Payment reconciliation remains current.';
+    shipAgentCharges = { unavailable: true };
+    console.error('[payment-collections] variable charges sync failed', {
+      errorName: error?.name || null,
+      errorCode: error?.code || null,
+    });
+  }
   return {
     ...result,
+    warnings: [...(result.warnings || []), ...(variableChargeSyncWarning ? [variableChargeSyncWarning] : [])],
     shipAgentCharges,
     capabilities: {
       canOverridePostingReminder: canOverridePaymentPostingReminder(profile),
@@ -5095,8 +5107,24 @@ async function paymentCollectionsReconcileCron(body, req) {
   if (!client) throw appError('Supabase service configuration is required for Payment Collections reconciliation.', 503);
   const paymentReminderTimelines = await repairPaymentReminderTimelines(client, 50);
   const collections = await reconcileBuyerInvoiceCollections({ client, profile: null, accessContext: null });
-  const shipAgentCharges = await syncShipAgentCharges({ client, profile: null });
-  return { ...collections, paymentReminderTimelines, shipAgentCharges };
+  let shipAgentCharges;
+  let variableChargeSyncWarning = null;
+  try {
+    shipAgentCharges = await syncShipAgentCharges({ client, profile: null });
+  } catch (error) {
+    variableChargeSyncWarning = 'Variable Charges synchronization is temporarily unavailable. Payment reconciliation remains current.';
+    shipAgentCharges = { unavailable: true };
+    console.error('[payment-collections-cron] variable charges sync failed', {
+      errorName: error?.name || null,
+      errorCode: error?.code || null,
+    });
+  }
+  return {
+    ...collections,
+    warnings: [...(collections.warnings || []), ...(variableChargeSyncWarning ? [variableChargeSyncWarning] : [])],
+    paymentReminderTimelines,
+    shipAgentCharges,
+  };
 }
 
 function paymentAdviceExtension(fileName) {
