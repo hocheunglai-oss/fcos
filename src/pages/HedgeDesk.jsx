@@ -59,7 +59,7 @@ export default function HedgeDesk() {
     if (tab === 'physical') return <PhysicalView data={data} settings={settings} quickCreateSignal={quickCreateSignals.physical} readOnly={!capabilities.hedge_book_manage} />;
     if (tab === 'hedges') return <HedgesView data={data} settings={settings} quickCreateSignal={quickCreateSignals.hedges} readOnly={!capabilities.hedge_book_manage} />;
     if (tab === 'settlement') return <SettlementView data={data} settings={settings} readOnly={!capabilities.hedge_settlement_manage} canClose={capabilities.hedge_close_approve === true} canManageBrokerSettlements={capabilities.hedge_settlement_manage === true || capabilities.hedge_close_approve === true} />;
-    if (tab === 'counterparties') return <CounterpartiesView data={data} settings={settings} readOnly={!capabilities.hedge_book_manage} />;
+    if (tab === 'counterparties') return <CounterpartiesView data={data} settings={settings} readOnly={!capabilities.hedge_book_manage} onManageHedges={() => changeTab('hedges')} />;
     if (tab === 'administration' && canAdmin) return <div className="rounded-lg border border-border bg-card p-4 lg:p-5"><HedgeSettingsPanel /></div>;
     return <OverviewView data={data} settings={settings} readOnly={readOnly} onNavigate={(path) => { if (path === '/markets') navigate('/markets'); else if (path === '/audit') navigate('/settings?section=audit'); else changeTab(path === '/hedges' ? 'hedges' : path === '/settlement' ? 'settlement' : 'overview'); }} />;
   }, [canAdmin, capabilities, data, navigate, quickCreateSignals, readOnly, settings, tab]);

@@ -278,6 +278,16 @@ import {
 import { createEmailRouterServiceClient, currentEmailRouterMailbox, emailRouterGraphFetch, maintainEmailRouterSubscriptions, processEmailRouterOutbox, recordEmailRouterAlert, resolveEmailRouterAlert, syncEmailRouterFolderFromStoredCursor } from '../_emailRouterCore.js';
 import { processEmailRouterLearningJobs } from '../_emailRouterLearning.js';
 import { createXeroHandlers, XERO_HANDLER_MODULE_ACCESS } from '../_xeroHandlers.js';
+import {
+  importCashflowBankStatement as importCashflowBankStatementService,
+  loadCashflowBankOverview,
+  previewCashflowBankStatement as previewCashflowBankStatementService,
+  saveCashflowBankAccount as saveCashflowBankAccountService,
+  saveCashflowBankBalance as saveCashflowBankBalanceService,
+  saveCashflowBankMatch as saveCashflowBankMatchService,
+  saveCashflowLiquidityInstrument as saveCashflowLiquidityInstrumentService,
+  saveCashflowPlannedMovement as saveCashflowPlannedMovementService,
+} from '../_cashflowBankReconciliation.js';
 export const config = { maxDuration: 300 };
 
 async function readBody(req) {
@@ -407,6 +417,11 @@ const ADMIN_CAPABILITIES = [
     id: 'cashflow_forecast_manage',
     label: 'Manage Cashflow Settings',
     description: 'Change forecast assumptions and blocked dates.',
+  },
+  {
+    id: 'cashflow_bank_reconcile',
+    label: 'Reconcile Cashflow Banks',
+    description: 'Maintain reviewed UBS, DBS, and Intesa balances, statements, matches, deposits, and guarantees.',
   },
   { id: 'hedge_book_manage', label: 'Manage Hedge Book', description: 'Create and maintain physical trades, paper hedges, markets, and counterparties.' },
   { id: 'hedge_settlement_manage', label: 'Manage Hedge Settlement', description: 'Manage clearing entries, settlement invoices, and settlement notices.' },
@@ -579,6 +594,7 @@ const FALLBACK_TYPE_CAPABILITIES = {
     buyer_invoices_manage: true,
     financial_report_settings_manage: false,
     cashflow_forecast_manage: true,
+    cashflow_bank_reconcile: false,
     hedge_book_manage: true,
     hedge_settlement_manage: false,
     hedge_close_approve: false,
@@ -593,6 +609,7 @@ const FALLBACK_TYPE_CAPABILITIES = {
     buyer_invoices_manage: true,
     financial_report_settings_manage: true,
     cashflow_forecast_manage: true,
+    cashflow_bank_reconcile: true,
     hedge_book_manage: false,
     hedge_settlement_manage: true,
     hedge_close_approve: false,
@@ -607,6 +624,7 @@ const FALLBACK_TYPE_CAPABILITIES = {
     buyer_invoices_manage: false,
     financial_report_settings_manage: false,
     cashflow_forecast_manage: false,
+    cashflow_bank_reconcile: false,
     hedge_book_manage: false,
     hedge_settlement_manage: false,
     hedge_close_approve: false,
@@ -621,6 +639,7 @@ const FALLBACK_TYPE_CAPABILITIES = {
     buyer_invoices_manage: false,
     financial_report_settings_manage: false,
     cashflow_forecast_manage: false,
+    cashflow_bank_reconcile: false,
     hedge_book_manage: false,
     hedge_settlement_manage: false,
     hedge_close_approve: false,
@@ -634,6 +653,7 @@ const FALLBACK_TYPE_CAPABILITIES = {
     buyer_invoices_manage: false,
     financial_report_settings_manage: false,
     cashflow_forecast_manage: false,
+    cashflow_bank_reconcile: false,
     hedge_book_manage: false,
     hedge_settlement_manage: false,
     hedge_close_approve: false,
@@ -1506,6 +1526,14 @@ const HANDLER_MODULE_ACCESS = {
   cashflowSettingsGet: ['cashflow_forecast'],
   cashflowSettingsSave: ['cashflow_forecast'],
   cashflowHolidayCalendar: ['cashflow_forecast'],
+  cashflowBankOverview: ['cashflow_forecast'],
+  cashflowBankAccountSave: ['cashflow_forecast'],
+  cashflowBankBalanceSave: ['cashflow_forecast'],
+  cashflowBankStatementPreview: ['cashflow_forecast'],
+  cashflowBankStatementImport: ['cashflow_forecast'],
+  cashflowBankMatchSave: ['cashflow_forecast'],
+  cashflowLiquidityInstrumentSave: ['cashflow_forecast'],
+  cashflowBankPlannedMovementSave: ['cashflow_forecast'],
   stemPnl: ['pnl'],
   salesforceBrokerRegister: ['brokers'],
   frankfurterUsdCnyRate: ['brokers'],
@@ -11134,7 +11162,12 @@ async function cashflowForecast(body, req = null, accessContext = null) {
       return String(a.counterparty || '').localeCompare(String(b.counterparty || ''));
     });
   const summary = cashflowSummarizeRows(rows, bucket);
-  const canManageSettings = accessContext ? await userHasCapability(accessContext.client, accessContext.profile, 'cashflow_forecast_manage') : false;
+  const [canManageSettings, canReconcileBanks] = accessContext
+    ? await Promise.all([
+        userHasCapability(accessContext.client, accessContext.profile, 'cashflow_forecast_manage'),
+        userHasCapability(accessContext.client, accessContext.profile, 'cashflow_bank_reconcile'),
+      ])
+    : [false, false];
   return {
     dateFrom,
     dateTo,
@@ -11152,7 +11185,7 @@ async function cashflowForecast(body, req = null, accessContext = null) {
     paymentDataReliability: paymentDataReliabilityMetadata(
       Number(buyerSamplesData.excludedLegacyRecordCount || 0) + Number(supplierData.excludedLegacyRecordCount || 0),
     ),
-    capabilities: { canManageSettings },
+    capabilities: { canManageSettings, canReconcileBanks },
   };
 }
 
@@ -11256,6 +11289,63 @@ async function cashflowHolidayCalendar(body, req) {
     holidaySourceStatus: data.statuses,
     warnings,
   };
+}
+
+async function cashflowBankContext(req, accessContext) {
+  const context = accessContext || (await requireActiveUser(req));
+  await requireCapability(
+    context.client,
+    context.profile,
+    'cashflow_bank_reconcile',
+    'Cashflow bank reconciliation permission is required.',
+  );
+  return context;
+}
+
+async function cashflowBankOverview(body, req, accessContext = null) {
+  const context = await cashflowBankContext(req, accessContext);
+  const forecast = await cashflowForecast(body, req, context);
+  const bankData = await loadCashflowBankOverview({
+    client: context.client,
+    dateFrom: forecast.dateFrom,
+    dateTo: forecast.dateTo,
+    forecastRows: forecast.rows,
+  });
+  return {
+    dateFrom: forecast.dateFrom,
+    dateTo: forecast.dateTo,
+    paymentDataReliability: forecast.paymentDataReliability,
+    forecastWarnings: forecast.warnings,
+    ...bankData,
+  };
+}
+
+async function cashflowBankAccountSave(body, req, accessContext = null) {
+  return saveCashflowBankAccountService(body, await cashflowBankContext(req, accessContext));
+}
+
+async function cashflowBankBalanceSave(body, req, accessContext = null) {
+  return saveCashflowBankBalanceService(body, await cashflowBankContext(req, accessContext));
+}
+
+async function cashflowBankStatementPreview(body, req, accessContext = null) {
+  return previewCashflowBankStatementService(body, await cashflowBankContext(req, accessContext));
+}
+
+async function cashflowBankStatementImport(body, req, accessContext = null) {
+  return importCashflowBankStatementService(body, await cashflowBankContext(req, accessContext));
+}
+
+async function cashflowBankMatchSave(body, req, accessContext = null) {
+  return saveCashflowBankMatchService(body, await cashflowBankContext(req, accessContext));
+}
+
+async function cashflowLiquidityInstrumentSave(body, req, accessContext = null) {
+  return saveCashflowLiquidityInstrumentService(body, await cashflowBankContext(req, accessContext));
+}
+
+async function cashflowBankPlannedMovementSave(body, req, accessContext = null) {
+  return saveCashflowPlannedMovementService(body, await cashflowBankContext(req, accessContext));
 }
 
 function incomingPaymentNumber(value) {
@@ -19229,6 +19319,14 @@ const handlers = {
   cashflowSettingsGet,
   cashflowSettingsSave,
   cashflowHolidayCalendar,
+  cashflowBankOverview,
+  cashflowBankAccountSave,
+  cashflowBankBalanceSave,
+  cashflowBankStatementPreview,
+  cashflowBankStatementImport,
+  cashflowBankMatchSave,
+  cashflowLiquidityInstrumentSave,
+  cashflowBankPlannedMovementSave,
   salesforceDisputeStems,
   disputeBetaList,
   disputeBetaSaveDraft,

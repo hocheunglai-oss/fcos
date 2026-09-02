@@ -72,6 +72,14 @@ export const CASHFLOW_FORECAST_METHODOLOGY = {
       title: 'Business days and controls',
       body: 'Dates use Hong Kong time. Weekends, Singapore public holidays, US bank or public holidays, and authorized manual blocked dates move a forecast to the next available day. Only users with Cashflow settings authority may change model parameters or manual dates.',
     },
+    {
+      title: 'Bank reconciliation and liquidity routing',
+      body: 'Finance, the General Manager and Administrators may align reviewed bank balances and CSV statement entries with exact Salesforce Payments. UBS supports USD and EUR day-to-day trading but never HKD. DBS supports USD, EUR, HKD and CNY and may carry trading, general expenses and payroll. Intesa Sanpaolo is a treasury pool for reviewed fixed-term deposits and bank guarantees, not an automatic trading route. One active operating account per currency receives forecast movements. Bank entries are matched only when currency, direction, amount, date window and bank evidence agree; suggestions always require confirmation.',
+    },
+    {
+      title: 'Liquidity safeguards',
+      body: 'Currencies are projected separately. The latest reviewed available balance is adjusted by later statement movement, routed Salesforce forecast movement and reviewed term-deposit placement or maturity. Active guarantees reduce available liquidity without inventing a cash movement. Raw bank files, account credentials and online-banking access are never stored. Bank data does not create, edit or post Salesforce, Xero or bank transactions.',
+    },
   ],
 };
 

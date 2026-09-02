@@ -331,6 +331,10 @@ function sanitizeInvoicePayload(payload, current = null) {
 
 function sanitizeSwapPayload(payload, { creating = false } = {}) {
   const sanitized = { ...(payload || {}) };
+  sanitized.counterparty = String(sanitized.counterparty || '').trim().toUpperCase();
+  if (!sanitized.counterparty) {
+    throw httpError('Choose the legal settlement counterparty. A broker is not the counterparty.', 400, 'HEDGE_COUNTERPARTY_REQUIRED');
+  }
   delete sanitized.is_expired;
   if (creating) sanitized.is_expired = false;
   return sanitized;

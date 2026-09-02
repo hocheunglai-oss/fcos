@@ -124,6 +124,10 @@ export function HedgesView({ data, settings, quickCreateSignal = 0, readOnly = f
   }, [quickCreateSignal]);
 
   const months = useMemo(() => [...new Set(data.swaps.map((record) => record.swap_month || record.leg1_month).filter(Boolean))].sort().reverse(), [data.swaps]);
+  const counterpartyOptions = useMemo(() => [...new Set([
+    ...(data.counterparties || []).map((record) => String(record.short_name || "").trim().toUpperCase()),
+    ...(settings.lists.counterparts || []).map((value) => String(value || "").trim().toUpperCase()),
+  ].filter(Boolean))].sort(), [data.counterparties, settings.lists.counterparts]);
   const rows = useMemo(() => data.swaps
     .filter((record) => status === "all" || (status === "live" ? isSwapLive(record) : !isSwapLive(record)))
     .filter((record) => month === "all" || [record.swap_month, record.leg1_month, record.leg2_month].includes(month))
@@ -153,8 +157,12 @@ export function HedgesView({ data, settings, quickCreateSignal = 0, readOnly = f
       setFormError(new Error("Trade date, product, quantity, and venue are required."));
       return;
     }
-    if (form.venue === "ICE" && !form.broker && !form.counterparty) {
-      setFormError(new Error("ICE hedges require a broker or counterparty."));
+    if (!String(form.counterparty || "").trim()) {
+      setFormError(new Error("Choose the legal settlement counterparty. A broker is not the counterparty."));
+      return;
+    }
+    if (form.venue === "ICE" && !form.broker) {
+      setFormError(new Error("ICE hedges require a broker."));
       return;
     }
     if (form.trade_type === "SPREAD" && (!form.leg1_month || !form.leg2_month || !form.leg1_price || !form.leg2_price)) {
@@ -335,8 +343,8 @@ export function HedgesView({ data, settings, quickCreateSignal = 0, readOnly = f
             <Field label="Quantity" required><input className="app-input" type="number" step="any" value={form.quantity ?? ""} onChange={(event) => setField("quantity", event.target.value)} /></Field>
             <Field label="Unit"><Select value={form.unit || "MT"} onChange={(event) => setField("unit", event.target.value)}><option value="MT">MT</option><option value="BBL">BBL</option></Select></Field>
             <Field label="Venue" required><Select value={form.venue || ""} onChange={(event) => setField("venue", event.target.value)}>{settings.lists.venues.map((value) => <option key={value}>{value}</option>)}</Select></Field>
-            <Field label="Broker"><Select value={form.broker || ""} onChange={(event) => setField("broker", event.target.value)}><option value="">No broker</option>{settings.lists.brokers.map((value) => <option key={value}>{value}</option>)}</Select></Field>
-            <Field label="Counterparty" className="app-field--span-2"><Select value={form.counterparty || ""} onChange={(event) => setField("counterparty", event.target.value)}><option value="">No counterparty</option>{settings.lists.counterparts.map((value) => <option key={value}>{value}</option>)}</Select></Field>
+            <Field label="Broker" hint="The intermediary that arranged the trade."><Select value={form.broker || ""} onChange={(event) => setField("broker", event.target.value)}><option value="">No broker</option>{settings.lists.brokers.map((value) => <option key={value}>{value}</option>)}</Select></Field>
+            <Field label="Legal settlement counterparty" hint="Required. This is separate from the broker and controls Counterparties and settlement reporting." required className="app-field--span-2"><Select value={form.counterparty || ""} onChange={(event) => setField("counterparty", event.target.value)}><option value="">Select counterparty</option>{counterpartyOptions.map((value) => <option key={value} value={value}>{value}</option>)}</Select></Field>
           </div>
         </section>
         {form.trade_type === "SPREAD" ? (
