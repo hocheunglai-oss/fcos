@@ -5,16 +5,6 @@
         <field>STEM_Extra_Cost__c.FCOS_Hedge_Allocation_Key__c</field>
         <readable>true</readable>
     </fieldPermissions>
-    <objectPermissions>
-        <allowCreate>true</allowCreate>
-        <allowDelete>false</allowDelete>
-        <allowEdit>true</allowEdit>
-        <allowRead>true</allowRead>
-        <modifyAllRecords>false</modifyAllRecords>
-        <object>STEM_Extra_Cost__c</object>
-        <viewAllFields>false</viewAllFields>
-        <viewAllRecords>false</viewAllRecords>
-    </objectPermissions>
     <hasActivationRequired>false</hasActivationRequired>
     <label>FCOS Hedge Integration</label>
 </PermissionSet>
