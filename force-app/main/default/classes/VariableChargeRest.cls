@@ -1,5 +1,7 @@
 @RestResource(urlMapping='/fcos/variable-charges/*')
 global without sharing class VariableChargeRest {
+    private class RequestException extends Exception {}
+
     global class RequestBody {
         public String stemId;
         public String supplierId;
@@ -14,6 +16,9 @@ global without sharing class VariableChargeRest {
     }
 
     global class ResponseBody {
+        public Boolean success;
+        public String errorCode;
+        public String message;
         public String stemId;
         public String supplierId;
         public String stageId;
@@ -30,6 +35,14 @@ global without sharing class VariableChargeRest {
 
     @HttpPost
     global static ResponseBody post() {
+        try {
+            return dispatchPost();
+        } catch (RequestException error) {
+            return failureResponse(error);
+        }
+    }
+
+    private static ResponseBody dispatchPost() {
         RequestBody body = (RequestBody)JSON.deserialize(RestContext.request.requestBody.toString(), RequestBody.class);
         List<String> parts = pathParts();
         if (body == null) body = new RequestBody();
@@ -55,6 +68,14 @@ global without sharing class VariableChargeRest {
 
     @HttpGet
     global static ResponseBody get() {
+        try {
+            return dispatchGet();
+        } catch (RequestException error) {
+            return failureResponse(error);
+        }
+    }
+
+    private static ResponseBody dispatchGet() {
         List<String> parts = pathParts();
         if (parts.size() < 4 || parts[1].toLowerCase() != 'supplier') throw requestError('Unsupported Variable Charges readiness request.');
         Id stemId = Id.valueOf(parts[0]);
@@ -194,6 +215,7 @@ global without sharing class VariableChargeRest {
 
     private static ResponseBody baseResponse(Id stemId, Id supplierId) {
         ResponseBody response = new ResponseBody();
+        response.success = true;
         response.stemId = String.valueOf(stemId);
         response.supplierId = supplierId == null ? null : String.valueOf(supplierId);
         return response;
@@ -207,7 +229,19 @@ global without sharing class VariableChargeRest {
     }
 
     private static void assertTimestamp(Datetime actual, String expected, String message) {
-        if (String.isBlank(expected) || iso(actual) != expected) throw requestError(message);
+        if (!matchesTimestamp(actual, expected)) throw requestError(message);
+    }
+
+    private static Boolean matchesTimestamp(Datetime actual, String expected) {
+        if (actual == null || String.isBlank(expected)) return false;
+        String value = expected.trim();
+        return value == iso(actual)
+            || value == actual.formatGmt('yyyy-MM-dd\'T\'HH:mm:ss\'Z\'')
+            || value == actual.formatGmt('yyyy-MM-dd\'T\'HH:mm:ss.SSS+0000')
+            || value == actual.formatGmt('yyyy-MM-dd\'T\'HH:mm:ss+0000')
+            || value == actual.formatGmt('yyyy-MM-dd\'T\'HH:mm:ss.SSS+00:00')
+            || value == actual.formatGmt('yyyy-MM-dd\'T\'HH:mm:ss+00:00')
+            || value == String.valueOfGmt(actual);
     }
 
     private static String normalizeEmail(String value) {
@@ -224,10 +258,16 @@ global without sharing class VariableChargeRest {
         return value == null ? null : value.formatGmt('yyyy-MM-dd\'T\'HH:mm:ss.SSS\'Z\'');
     }
 
-    private static AuraHandledException requestError(String message) {
+    private static RequestException requestError(String message) {
+        return new RequestException(message);
+    }
+
+    private static ResponseBody failureResponse(RequestException error) {
         RestContext.response.statusCode = 409;
-        AuraHandledException error = new AuraHandledException(message);
-        error.setMessage(message);
-        return error;
+        ResponseBody response = new ResponseBody();
+        response.success = false;
+        response.errorCode = 'VARIABLE_CHARGE_REQUEST_REJECTED';
+        response.message = error.getMessage();
+        return response;
     }
 }

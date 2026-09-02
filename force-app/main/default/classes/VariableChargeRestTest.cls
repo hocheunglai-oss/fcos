@@ -42,6 +42,10 @@ private class VariableChargeRestTest {
         return value.formatGmt('yyyy-MM-dd\'T\'HH:mm:ss.SSS\'Z\'');
     }
 
+    private static String restIso(Datetime value) {
+        return value.formatGmt('yyyy-MM-dd\'T\'HH:mm:ss.SSS+0000');
+    }
+
     private static void request(String method, String suffix, Object body) {
         RestRequest request = new RestRequest();
         request.httpMethod = method;
@@ -67,8 +71,8 @@ private class VariableChargeRestTest {
         supplierBody.expectedFingerprint = VariableChargeInvoiceReadinessService.supplierFingerprint(
             ids.get('stem'), ids.get('supplier')
         );
-        supplierBody.expectedStageLastModifiedAt = iso(stage.LastModifiedDate);
-        supplierBody.expectedStemLastModifiedAt = iso(stem.LastModifiedDate);
+        supplierBody.expectedStageLastModifiedAt = restIso(stage.LastModifiedDate);
+        supplierBody.expectedStemLastModifiedAt = restIso(stem.LastModifiedDate);
         supplierBody.gmOverrideReason = 'Test GM override';
         request(
             'POST',
@@ -104,13 +108,10 @@ private class VariableChargeRestTest {
         buyerBody.expectedStemLastModifiedAt = iso(stem.LastModifiedDate);
         request('POST', String.valueOf(ids.get('stem')) + '/buyer/confirm', buyerBody);
         Test.startTest();
-        try {
-            VariableChargeRest.post();
-            System.assert(false, 'The legacy aggregate buyer action must not bypass exact side ownership.');
-        } catch (AuraHandledException expected) {
-            System.assertEquals(409, RestContext.response.statusCode);
-            System.assert(expected.getMessage().contains('Refresh FCOS'));
-        }
+        VariableChargeRest.ResponseBody rejected = VariableChargeRest.post();
+        System.assertEquals(409, RestContext.response.statusCode);
+        System.assertEquals(false, rejected.success);
+        System.assert(rejected.message.contains('Refresh FCOS'));
         Test.stopTest();
     }
 
@@ -153,11 +154,38 @@ private class VariableChargeRestTest {
         );
 
         request('POST', String.valueOf(ids.get('stem')) + '/unsupported', new VariableChargeRest.RequestBody());
-        try {
-            VariableChargeRest.post();
-            System.assert(false, 'Unsupported actions must fail closed.');
-        } catch (AuraHandledException expected) {
-            System.assertEquals(409, RestContext.response.statusCode);
-        }
+        VariableChargeRest.ResponseBody rejected = VariableChargeRest.post();
+        System.assertEquals(409, RestContext.response.statusCode);
+        System.assertEquals(false, rejected.success);
+        System.assertEquals('VARIABLE_CHARGE_REQUEST_REJECTED', rejected.errorCode);
+    }
+
+    @IsTest
+    static void staleStemTimestampReturnsStructuredConflict() {
+        Map<String, Id> ids = prepareRequiredSupplier();
+        STEM__c stem = [SELECT LastModifiedDate FROM STEM__c WHERE Id = :ids.get('stem')];
+        STEM_Variable_Charge_Supplier__c stage = [
+            SELECT LastModifiedDate FROM STEM_Variable_Charge_Supplier__c WHERE Id = :ids.get('stage')
+        ];
+        VariableChargeRest.RequestBody body = new VariableChargeRest.RequestBody();
+        body.stemId = String.valueOf(ids.get('stem'));
+        body.supplierId = String.valueOf(ids.get('supplier'));
+        body.verifierEmail = 'gm@example.com';
+        body.expectedFingerprint = VariableChargeInvoiceReadinessService.supplierFingerprint(ids.get('stem'), ids.get('supplier'));
+        body.expectedStageLastModifiedAt = restIso(stage.LastModifiedDate);
+        body.expectedStemLastModifiedAt = restIso(stem.LastModifiedDate.addSeconds(-1));
+        body.gmOverrideReason = 'Test GM override';
+        request(
+            'POST',
+            String.valueOf(ids.get('stem')) + '/supplier/' + String.valueOf(ids.get('supplier')) + '/verify',
+            body
+        );
+
+        VariableChargeRest.ResponseBody rejected = VariableChargeRest.post();
+
+        System.assertEquals(409, RestContext.response.statusCode);
+        System.assertEquals(false, rejected.success);
+        System.assertEquals('VARIABLE_CHARGE_REQUEST_REJECTED', rejected.errorCode);
+        System.assertEquals('The STEM changed after it was opened.', rejected.message);
     }
 }

@@ -71,6 +71,19 @@ function text(value, max = 1000) {
   return String(value ?? '').trim().slice(0, max);
 }
 
+function apexUtcTimestamp(value, { required = false, label = 'Salesforce record' } = {}) {
+  const raw = text(value, 80);
+  if (!raw) {
+    if (required) throw httpError(`${label} timestamp is unavailable. Refresh and try again.`, 409, 'SALESFORCE_TIMESTAMP_UNAVAILABLE');
+    return null;
+  }
+  const timestamp = Date.parse(raw);
+  if (!Number.isFinite(timestamp)) {
+    throw httpError(`${label} timestamp is invalid. Refresh and try again.`, 409, 'SALESFORCE_TIMESTAMP_INVALID');
+  }
+  return new Date(timestamp).toISOString();
+}
+
 function isAnchorageDuesRow(row) {
   const productName = text(row?.Product2Id__r?.Name || row?.Product__r?.Name, 255)
     .normalize('NFKC')
@@ -2565,8 +2578,8 @@ export async function verifyVariableChargeSupplier(body, context) {
         supplierId,
         verifierEmail: context.profile.email,
         expectedFingerprint: readinessSnapshot?.fingerprint,
-        expectedStemLastModifiedAt: refreshed.stem.LastModifiedDate,
-        expectedStageLastModifiedAt: refreshedRequirement?.lastModifiedAt || null,
+        expectedStemLastModifiedAt: apexUtcTimestamp(refreshed.stem.LastModifiedDate, { required: true, label: 'STEM' }),
+        expectedStageLastModifiedAt: apexUtcTimestamp(refreshedRequirement?.lastModifiedAt, { label: 'Supplier stage' }),
         gmOverrideReason: gm.isGeneralManager && !assigned ? overrideReason : null,
       },
     });
@@ -3084,8 +3097,8 @@ export async function confirmVariableChargeSides(body, context) {
           stemId, supplierId, sides, verifierEmail: context.profile.email,
           expectedCostFingerprint: costSnapshot?.costFingerprint || costSnapshot?.fingerprint || null,
           expectedBuyerFingerprint: buyerSnapshot?.buyerFingerprint || buyerSnapshot?.fingerprint || null,
-          expectedStemLastModifiedAt: refreshed.stem.LastModifiedDate,
-          expectedStageLastModifiedAt: refreshedRequirement?.lastModifiedAt || null,
+          expectedStemLastModifiedAt: apexUtcTimestamp(refreshed.stem.LastModifiedDate, { required: true, label: 'STEM' }),
+          expectedStageLastModifiedAt: apexUtcTimestamp(refreshedRequirement?.lastModifiedAt, { label: 'Supplier stage' }),
           gmOverrideReason: normalAuthority ? null : overrideReason,
         },
       });
@@ -3358,6 +3371,7 @@ function isShipAgentAccount(account) {
 }
 
 export const variableChargeInternals = {
+  apexUtcTimestamp,
   applyAnchorageBuyerDefaults,
   applyHongKongBuyerDefaults,
   basicCallingSupplierIds,

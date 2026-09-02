@@ -36,6 +36,18 @@ test('Variable Charges detection uses Is Agent or Is Variable and assignment nor
   assert.equal(variableChargeInternals.normalizedName('José  De-Silva'), 'jose de silva');
 });
 
+test('Variable Charges canonicalizes Salesforce REST timestamps before Apex confirmation', () => {
+  assert.equal(
+    variableChargeInternals.apexUtcTimestamp('2026-09-02T03:02:32.000+0000', { required: true, label: 'STEM' }),
+    '2026-09-02T03:02:32.000Z',
+  );
+  assert.equal(variableChargeInternals.apexUtcTimestamp(null), null);
+  assert.throws(
+    () => variableChargeInternals.apexUtcTimestamp('not-a-timestamp', { required: true, label: 'STEM' }),
+    /timestamp is invalid/i,
+  );
+});
+
 test('Variable Charges queues include only STEM records created from 1 January 2026', async () => {
   assert.equal(variableChargeInternals.VARIABLE_CHARGE_STEM_CREATED_FROM, '2026-01-01T00:00:00Z');
   const service = await repositoryFile('api/_variableCharges.js');
