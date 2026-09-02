@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Special_Term__c</fullName>
+    <deleteConstraint>SetNull</deleteConstraint>
+    <description>The special term we are attaching to enquiry</description>
+    <label>Special Term</label>
+    <lookupFilter>
+        <active>true</active>
+        <booleanFilter>1</booleanFilter>
+        <filterItems>
+            <field>Special_Term__c.Approval_Status__c</field>
+            <operation>notEqual</operation>
+            <value>Retired</value>
+        </filterItems>
+        <isOptional>false</isOptional>
+    </lookupFilter>
+    <referenceTo>Special_Term__c</referenceTo>
+    <relationshipLabel>Enquiry Special Terms</relationshipLabel>
+    <relationshipName>Enquiry_Special_Terms</relationshipName>
+    <required>false</required>
+    <trackTrending>false</trackTrending>
+    <type>Lookup</type>
+</CustomField>

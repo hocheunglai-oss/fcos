@@ -1,0 +1,192 @@
+<template>
+    <lightning-card title="Reconfirm" icon-name="custom:custom18">
+        <div class="reconfirm-shell">
+            <header class="workspace-intro">
+                <div>
+                    <p class="eyebrow">Enquiry controls</p>
+                    <h2 class="workspace-title">Reconfirm suppliers and final charges</h2>
+                    <p class="workspace-description">
+                        Review STEM instructions, CIA payment dates, and supplier charge requirements in one place.
+                        Each section saves independently.
+                    </p>
+                </div>
+                <div class="summary-list" aria-label="Reconfirm summary">
+                    <span class="summary-pill">{messageSummary}</span>
+                    <span class="summary-pill">{ciaSummary}</span>
+                    <span class="summary-pill summary-pill_accent">{variableChargeSummary}</span>
+                </div>
+            </header>
+
+            <template if:true={showStemSection}>
+                <section class="section-card" aria-labelledby="stem-message-heading">
+                    <div class="section-header">
+                        <div class="section-heading">
+                            <span class="section-icon"><lightning-icon icon-name="utility:note" size="x-small"></lightning-icon></span>
+                            <div>
+                                <h3 id="stem-message-heading" class="section-title">STEM reconfirmation messages</h3>
+                                <p class="section-description">Instructions shown to the team when these STEMs are reconfirmed.</p>
+                            </div>
+                        </div>
+                        <template if:true={disabledMessage}>
+                            <lightning-button onclick={editMessages} variant="neutral" label="Edit messages" disabled={messageBusy}></lightning-button>
+                        </template>
+                        <template if:false={disabledMessage}>
+                            <div class="section-actions">
+                                <lightning-button onclick={cancelMessages} variant="neutral" label="Discard" disabled={messageBusy}></lightning-button>
+                                <lightning-button onclick={saveMessages} variant="brand" label="Save messages" disabled={messageBusy}></lightning-button>
+                            </div>
+                        </template>
+                    </div>
+
+                    <div class="message-grid">
+                        <template for:each={stems} for:item="stem">
+                            <article key={stem.Id} class="message-card">
+                                <div class="item-heading">{stem.messageLabel}</div>
+                                <lightning-textarea variant="label-hidden" label={stem.messageLabel} value={stem.Message__c}
+                                    data-id={stem.Id} onchange={handleChangeMessage} disabled={disabledMessage}>
+                                </lightning-textarea>
+                            </article>
+                        </template>
+                    </div>
+                </section>
+            </template>
+
+            <section class="section-card" aria-labelledby="cia-heading">
+                <div class="section-header">
+                    <div class="section-heading">
+                        <span class="section-icon"><lightning-icon icon-name="utility:date_time" size="x-small"></lightning-icon></span>
+                        <div>
+                            <h3 id="cia-heading" class="section-title">CIA supplier reconfirmation</h3>
+                            <p class="section-description">
+                                Set the intended payment date and mark the supplier for reconfirmation. Weekend and US bank-holiday dates are adjusted on save.
+                            </p>
+                        </div>
+                    </div>
+                    <template if:true={showCiaSection}>
+                        <div class="section-actions">
+                            <lightning-button onclick={discardCiaChanges} variant="neutral" label="Discard" disabled={ciaActionsDisabled}></lightning-button>
+                            <lightning-button onclick={saveCiaChanges} variant="brand" label="Save CIA changes" disabled={ciaSaveDisabled}></lightning-button>
+                        </div>
+                    </template>
+                </div>
+
+                <template if:true={actionExecuting}>
+                    <div class="section-progress" role="status">
+                        <lightning-spinner size="small" alternative-text="Updating CIA supplier reconfirmation"></lightning-spinner>
+                        <span>Updating CIA supplier reconfirmation…</span>
+                    </div>
+                </template>
+
+                <template if:true={showCiaSection}>
+                    <div class="stem-list">
+                        <template for:each={supplierCiaGroups} for:item="group">
+                            <article key={group.key} class="stem-group">
+                                <header class="stem-group-header">
+                                    <div>
+                                        <p class="stem-label">STEM</p>
+                                        <h4 class="stem-name">{group.stemName}</h4>
+                                    </div>
+                                    <span class="count-pill">{group.supplierLabel}</span>
+                                </header>
+                                <div class="supplier-list">
+                                    <template for:each={group.rows} for:item="row">
+                                        <div key={row.key} class={row.ciaRowClass}>
+                                            <div class="supplier-identity">
+                                                <span class="supplier-name">{row.supplierName}</span>
+                                                <span class="item-detail">CIA payment terms</span>
+                                            </div>
+                                            <div class="cia-date">
+                                                <lightning-input type="date" label="Intended payment date" value={row.intendedPaymentDate}
+                                                    data-key={row.key} onchange={handleCiaDateChange} disabled={actionExecuting}>
+                                                </lightning-input>
+                                            </div>
+                                            <div class="cia-toggle">
+                                                <lightning-input type="checkbox" label="Reconfirm supplier" checked={row.reconfirm}
+                                                    data-key={row.key} onchange={handleCiaReconfirmChange} disabled={actionExecuting}>
+                                                </lightning-input>
+                                            </div>
+                                        </div>
+                                    </template>
+                                </div>
+                            </article>
+                        </template>
+                    </div>
+                </template>
+                <template if:false={showCiaSection}>
+                    <div class="empty-state">No CIA supplier reconfirmation is required for this enquiry.</div>
+                </template>
+            </section>
+
+            <template if:true={showVariableChargeSection}>
+                <section class="section-card section-card_accent" aria-labelledby="final-supplier-charge-heading">
+                    <div class="section-header">
+                        <div class="section-heading">
+                            <span class="section-icon section-icon_accent"><lightning-icon icon-name="utility:currency" size="x-small"></lightning-icon></span>
+                            <div>
+                                <h3 id="final-supplier-charge-heading" class="section-title">Who must confirm final supplier charges?</h3>
+                                <p class="section-description">
+                                    Choose the suppliers that need a final cost check before their Supplier Invoice.
+                                </p>
+                            </div>
+                        </div>
+                        <lightning-button variant="brand" label="Save review requirements"
+                            onclick={saveVariableChargeRequirements} disabled={variableChargeSaveDisabled}>
+                        </lightning-button>
+                    </div>
+
+                    <template if:true={variableChargeBusy}>
+                        <div class="section-progress" role="status">
+                            <lightning-spinner size="small" alternative-text="Checking Variable Charges"></lightning-spinner>
+                            <span>Checking the latest supplier requirements…</span>
+                        </div>
+                    </template>
+
+                    <div class="stem-list">
+                        <template for:each={variableChargeGroups} for:item="group">
+                            <article key={group.key} class="stem-group">
+                                <header class="stem-group-header">
+                                    <div>
+                                        <p class="stem-label">STEM</p>
+                                        <h4 class="stem-name">{group.stemName}</h4>
+                                    </div>
+                                    <div class="group-counts">
+                                        <span class="count-pill">{group.supplierLabel}</span>
+                                        <span class="count-pill count-pill_accent">{group.requiredLabel}</span>
+                                    </div>
+                                </header>
+                                <div class="supplier-list">
+                                    <template for:each={group.rows} for:item="row">
+                                        <div key={row.key} class={row.variableRowClass}>
+                                            <div class="supplier-identity">
+                                                <span class="supplier-name">{row.supplierName}</span>
+                                                <span class="item-detail">{row.itemSummary}</span>
+                                            </div>
+                                            <div class="supplier-trader">
+                                                <span class="field-label">Supplier Trader</span>
+                                                <span class={row.assignmentClass}>{row.supplierTraderName}</span>
+                                                <template if:true={row.assignmentMessage}>
+                                                    <span class="field-error">{row.assignmentMessage}</span>
+                                                </template>
+                                            </div>
+                                            <div class="requirement-control">
+                                                <lightning-input type="checkbox" label={row.requirementLabel}
+                                                    data-key={row.key} checked={row.effectiveRequired}
+                                                    disabled={row.requirementLocked} onchange={handleVariableChargeRequirement}>
+                                                </lightning-input>
+                                                <span class="item-detail">{row.requirementHelp}</span>
+                                            </div>
+                                            <div class="supplier-status">
+                                                <span class={row.sourceClass}>{row.reviewState}</span>
+                                                <span class={row.statusClass}>{row.supplierStatus}</span>
+                                            </div>
+                                        </div>
+                                    </template>
+                                </div>
+                            </article>
+                        </template>
+                    </div>
+                </section>
+            </template>
+        </div>
+    </lightning-card>
+</template>

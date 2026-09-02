@@ -1,0 +1,57 @@
+:host {
+    display: block;
+}
+
+.record-type-panel,
+.preference-panel {
+    padding: 0.75rem 1rem 1rem;
+}
+
+.record-type-grid,
+.preference-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(10.5rem, 1fr));
+    gap: 0.75rem 1rem;
+    align-items: end;
+    width: 100%;
+}
+
+.record-type-field {
+    min-width: 0;
+}
+
+.record-type-field_primary {
+    min-width: min(100%, 14rem);
+}
+
+.record-type-field_agency-fee {
+    min-width: min(100%, 12rem);
+}
+
+.record-type-field_agency-currency {
+    min-width: min(100%, 7rem);
+    max-width: 9rem;
+}
+
+.invoicing-requirement {
+    margin-top: 0.75rem;
+}
+
+.preference-panel {
+    border-top: 1px solid #e5e5e5;
+}
+
+.preference-grid {
+    align-items: start;
+}
+
+.preference-grid_secondary {
+    margin-top: 1rem;
+}
+
+@media (max-width: 48rem) {
+    .record-type-grid,
+    .preference-grid {
+        grid-template-columns: 1fr;
+    }
+}

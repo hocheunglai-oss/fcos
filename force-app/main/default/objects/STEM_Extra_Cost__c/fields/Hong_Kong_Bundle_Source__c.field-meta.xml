@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Hong_Kong_Bundle_Source__c</fullName>
+    <deleteConstraint>SetNull</deleteConstraint>
+    <description>Exact Basic Calling Cost row that created this managed support row.</description>
+    <label>Hong Kong Bundle Source</label>
+    <referenceTo>STEM_Extra_Cost__c</referenceTo>
+    <relationshipLabel>Hong Kong Bundle Charges</relationshipLabel>
+    <relationshipName>Hong_Kong_Bundle_Charges</relationshipName>
+    <required>false</required>
+    <trackHistory>true</trackHistory>
+    <trackTrending>false</trackTrending>
+    <type>Lookup</type>
+</CustomField>

@@ -2,18 +2,26 @@ import * as React from "react"
 
 import { cn } from "@/lib/utils"
 
-const Table = React.forwardRef(({ className, ...props }, ref) => (
-  <div className="relative w-full overflow-auto">
+const Table = React.forwardRef(({ className, containerClassName, scrollLabel, ...props }, ref) => (
+  <div
+    className={cn(
+      "material-table relative w-full max-w-full overflow-auto rounded-[var(--radius-control)] border border-border bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-2",
+      containerClassName,
+    )}
+    role="region"
+    aria-label={scrollLabel || props['aria-label'] || 'Scrollable data table'}
+    tabIndex={0}
+  >
     <table
       ref={ref}
-      className={cn("w-full caption-bottom text-sm", className)}
+      className={cn("w-full min-w-max caption-bottom text-sm", className)}
       {...props} />
   </div>
 ))
 Table.displayName = "Table"
 
 const TableHeader = React.forwardRef(({ className, ...props }, ref) => (
-  <thead ref={ref} className={cn("[&_tr]:border-b", className)} {...props} />
+  <thead ref={ref} className={cn("sticky top-0 z-10 bg-card/95 backdrop-blur-sm [&_tr]:border-b", className)} {...props} />
 ))
 TableHeader.displayName = "TableHeader"
 
@@ -48,7 +56,7 @@ const TableHead = React.forwardRef(({ className, ...props }, ref) => (
   <th
     ref={ref}
     className={cn(
-      "h-10 px-2 text-left align-middle font-medium text-muted-foreground [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]",
+      "h-10 whitespace-nowrap px-2 text-left align-middle text-[0.6875rem] font-semibold uppercase tracking-[0.035em] text-muted-foreground [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]",
       className
     )}
     {...props} />

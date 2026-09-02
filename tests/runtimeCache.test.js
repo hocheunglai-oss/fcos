@@ -12,6 +12,11 @@ import {
   resetRuntimeCacheForTests,
   stableRuntimeCacheJson,
 } from '../api/_runtimeCache.js';
+import {
+  recordSalesforceCall,
+  runWithRequestTelemetry,
+  telemetryResponseHeaders,
+} from '../api/_requestTelemetry.js';
 
 test.beforeEach(() => resetRuntimeCacheForTests());
 
@@ -49,6 +54,29 @@ test('returns a cache hit until TTL expiry', async () => {
   assert.equal(second.cache.status, 'hit');
   assert.equal(third.cache.status, 'miss');
   assert.equal(loads, 2);
+});
+
+test('preserves Salesforce source freshness across a server cache hit', async () => {
+  const cache = createMemoryRuntimeCacheAdapter();
+  const options = {
+    namespace: 'salesforce-backed', ttlSeconds: 60, cacheAdapter: cache, now: () => 1_000,
+    loader: async () => {
+      recordSalesforceCall({ logicalQueries: 1, rows: 1 });
+      return { value: 'live' };
+    },
+  };
+  await runWithRequestTelemetry({ handler: 'first' }, async () => {
+    await getOrLoadRuntimeCache(options);
+    assert.equal(telemetryResponseHeaders()['x-fcos-salesforce-backed'], '1');
+  });
+  await runWithRequestTelemetry({ handler: 'cached' }, async () => {
+    const cached = await getOrLoadRuntimeCache(options);
+    const headers = telemetryResponseHeaders();
+    assert.equal(cached.cache.status, 'hit');
+    assert.equal(headers['x-fcos-salesforce-calls'], '0');
+    assert.equal(headers['x-fcos-salesforce-backed'], '1');
+    assert.equal(headers['x-fcos-salesforce-fetched-at'], '1970-01-01T00:00:01.000Z');
+  });
 });
 
 test('force bypass refreshes the value and marks the response as bypass', async () => {
@@ -119,6 +147,44 @@ test('deduplicates concurrent local loads for the same cache key', async () => {
   assert.equal(loads, 1);
   assert.equal(a.value, 'loaded');
   assert.equal(b.value, 'loaded');
+});
+
+test('preserves Salesforce freshness for callers joining an in-flight load', async () => {
+  const cache = createMemoryRuntimeCacheAdapter();
+  let release;
+  let markStarted;
+  const pending = new Promise((resolve) => { release = resolve; });
+  const started = new Promise((resolve) => { markStarted = resolve; });
+  const options = {
+    namespace: 'shared-salesforce-load',
+    ttlSeconds: 60,
+    cacheAdapter: cache,
+    now: () => 2_000,
+    loader: async () => {
+      recordSalesforceCall({ logicalQueries: 1, rows: 1 });
+      markStarted();
+      await pending;
+      return 'loaded';
+    },
+  };
+
+  const first = runWithRequestTelemetry({ handler: 'first' }, async () => {
+    await getOrLoadRuntimeCache(options);
+    return telemetryResponseHeaders();
+  });
+  await started;
+  const joined = runWithRequestTelemetry({ handler: 'joined' }, async () => {
+    await getOrLoadRuntimeCache(options);
+    return telemetryResponseHeaders();
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  release();
+
+  const [firstHeaders, joinedHeaders] = await Promise.all([first, joined]);
+  assert.equal(firstHeaders['x-fcos-salesforce-backed'], '1');
+  assert.equal(joinedHeaders['x-fcos-salesforce-calls'], '0');
+  assert.equal(joinedHeaders['x-fcos-salesforce-backed'], '1');
+  assert.equal(joinedHeaders['x-fcos-salesforce-fetched-at'], '1970-01-01T00:00:02.000Z');
 });
 
 test('does not cache oversized values or loader errors', async () => {

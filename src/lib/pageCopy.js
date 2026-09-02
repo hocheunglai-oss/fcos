@@ -1,13 +1,33 @@
 const PAGE_COPY = {
+  'Growth & Coaching': {
+    eyebrow: 'Development',
+    title: 'Growth & Coaching',
+    description: 'Set measurable development goals and hold private, equal-participant coaching conversations.',
+  },
+  'Projects & Tasks': {
+    eyebrow: 'Collaboration',
+    title: 'Projects & Tasks',
+    description: 'Plan shared work, assign accountability, and keep progress, discussion, and files together.',
+  },
   Dashboard: {
-    eyebrow: 'Review',
+    eyebrow: '',
     title: 'Dashboard',
-    description: 'Filter STEMs, review KPIs, and inspect records.',
+    description: '',
   },
   'Outstanding Buyer Invoices': {
     eyebrow: 'Collection',
-    title: 'Buyer Invoices',
-    description: 'Track overdue and due buyer invoices.',
+    title: 'Payment Collections',
+    description: 'Prioritize overdue receivables, buyer commitments, payment advice, and settlement.',
+  },
+  'Payment Collections': {
+    eyebrow: 'Collection',
+    title: 'Payment Collections',
+    description: 'Prioritize overdue receivables, buyer commitments, payment advice, and settlement.',
+  },
+  'Unofficial Compensation': {
+    eyebrow: 'Recovery',
+    title: 'Unofficial Compensation',
+    description: 'Monitor agreed compensation claims, UOC recoveries, deadlines, and outstanding Account balances.',
   },
   'Incoming Payment': {
     eyebrow: 'Receipts',
@@ -61,8 +81,8 @@ const PAGE_COPY = {
   },
   'Admin Control': {
     eyebrow: 'Access',
-    title: 'Admin Control',
-    description: 'Manage users, roles, and page access.',
+    title: 'Users & Access',
+    description: 'Manage users, access rights, and controlled FCOS update communications.',
   },
 };
 

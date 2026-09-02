@@ -1,0 +1,331 @@
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { ArrowRight, Bell, BellRing, Check, CheckCheck, Clock3, Loader2, RotateCcw, ShieldCheck, TriangleAlert } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { appClient } from "@/api/appClient";
+import { Button } from "@/components/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { cn } from "@/lib/utils";
+import { groupWorkNotifications } from "@/lib/workNotificationGroups";
+
+const REFRESH_INTERVAL_MS = 60_000;
+const NOTIFICATION_LIMIT = 40;
+
+const SOURCE_LABELS = {
+  collaboration: "Projects & Tasks",
+  projects_tasks: "Projects & Tasks",
+  projects: "Projects & Tasks",
+  growth_coaching: "Growth & Coaching",
+  growth: "Growth & Coaching",
+  coaching: "Growth & Coaching",
+  fcos_improvements: "FCOS Improvements",
+  variable_charges: "Variable Charges",
+  email_router: "Email Router",
+  markets: "Markets",
+  system_error: "System",
+  system: "System",
+};
+
+function formatNotificationTime(value) {
+  if (!value) return "";
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Hong_Kong",
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function sourceLabel(source) {
+  return SOURCE_LABELS[source] || source || "Work";
+}
+
+function sourceBadgeClass(source) {
+  if (source === "system_error" || source === "system") return "bg-red-50 text-red-900 ring-red-700/10 dark:bg-red-950/50 dark:text-red-200 dark:ring-red-500/25";
+  if (source === "email_router") return "bg-amber-50 text-amber-900 ring-amber-700/10 dark:bg-amber-950/50 dark:text-amber-200 dark:ring-amber-500/25";
+  if (source === "fcos_improvements") return "bg-cyan-50 text-cyan-900 ring-cyan-700/10 dark:bg-cyan-950/50 dark:text-cyan-200 dark:ring-cyan-500/25";
+  if (source === "variable_charges") return "bg-violet-50 text-violet-900 ring-violet-700/10 dark:bg-violet-950/50 dark:text-violet-200 dark:ring-violet-500/25";
+  if (source === "markets") return "bg-teal-50 text-teal-900 ring-teal-700/10 dark:bg-teal-950/50 dark:text-teal-200 dark:ring-teal-500/25";
+  return source === "growth_coaching" || source === "growth" || source === "coaching" ? "bg-emerald-50 text-emerald-800 ring-emerald-700/10 dark:bg-emerald-950/50 dark:text-emerald-200 dark:ring-emerald-500/25" : "bg-blue-50 text-blue-800 ring-blue-700/10 dark:bg-blue-950/50 dark:text-blue-200 dark:ring-blue-500/25";
+}
+
+export default function WorkNotifications() {
+  const navigate = useNavigate();
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [updating, setUpdating] = useState(false);
+  const [notifications, setNotifications] = useState([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [unavailableSources, setUnavailableSources] = useState([]);
+  const [stateFilter, setStateFilter] = useState("active");
+  const [sourceFilter, setSourceFilter] = useState("all");
+
+  const applyResponse = useCallback((data) => {
+    setNotifications(Array.isArray(data?.notifications) ? data.notifications : []);
+    setUnreadCount(Number(data?.unreadCount || 0));
+    setUnavailableSources(Array.isArray(data?.unavailableSources) ? data.unavailableSources : []);
+  }, []);
+
+  const loadNotifications = useCallback(
+    async ({ quiet = false } = {}) => {
+      if (!quiet) setLoading(true);
+
+      try {
+        const response = await appClient.functions.invoke(
+          "workNotificationsList",
+          {
+            limit: NOTIFICATION_LIMIT,
+            state: stateFilter,
+            source: sourceFilter,
+          },
+          { force: true },
+        );
+
+        if (response.data?.error) {
+          setUnavailableSources(["Notifications"]);
+        } else {
+          applyResponse(response.data);
+        }
+      } finally {
+        if (!quiet) setLoading(false);
+      }
+    },
+    [applyResponse, sourceFilter, stateFilter],
+  );
+
+  useEffect(() => {
+    loadNotifications({ quiet: true });
+
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        loadNotifications({ quiet: true });
+      }
+    }, REFRESH_INTERVAL_MS);
+    const handleChanged = () => loadNotifications({ quiet: true });
+    window.addEventListener("fcos:work-notifications-changed", handleChanged);
+
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("fcos:work-notifications-changed", handleChanged);
+    };
+  }, [loadNotifications]);
+
+  const markRead = useCallback(
+    async (notificationIds) => {
+      setUpdating(true);
+      try {
+        const response = await appClient.functions.invoke("workNotificationsRead", notificationIds ? { notificationIds } : {}, { force: true });
+        if (!response.data?.error) applyResponse(response.data);
+      } finally {
+        setUpdating(false);
+      }
+    },
+    [applyResponse],
+  );
+
+  const openNotification = async (notification) => {
+    if (!notification.readAt) await markRead(notification.notificationIds || [notification.id]);
+    setOpen(false);
+    if (typeof notification.link === "string" && notification.link) {
+      navigate(notification.link);
+    }
+  };
+
+  const updateNotification = useCallback(
+    async (notification, state) => {
+      setUpdating(true);
+      try {
+        const snoozedUntil = state === "snoozed" ? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() : undefined;
+        const response = await appClient.functions.invoke(
+          "workNotificationsState",
+          {
+            notificationIds: notification.notificationIds || [notification.id],
+            state,
+            snoozedUntil,
+            listState: stateFilter,
+            source: sourceFilter,
+            limit: NOTIFICATION_LIMIT,
+          },
+          { force: true },
+        );
+        if (!response.data?.error) applyResponse(response.data);
+      } finally {
+        setUpdating(false);
+      }
+    },
+    [applyResponse, sourceFilter, stateFilter],
+  );
+
+  const verifySystemIncident = useCallback(async (notification) => {
+    if (!notification?.incidentSignature) return;
+    setUpdating(true);
+    try {
+      const response = await appClient.functions.invoke("systemErrorVerify", {
+        incidentSignature: notification.incidentSignature,
+      }, { force: true });
+      if (!response.data?.error) await loadNotifications({ quiet: true });
+    } finally {
+      setUpdating(false);
+    }
+  }, [loadNotifications]);
+
+  const unavailableLabel = unavailableSources.map(sourceLabel).join(", ");
+  const hasUnavailableSources = unavailableSources.length > 0;
+  const visibleNotifications = useMemo(() => groupWorkNotifications(notifications), [notifications]);
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (next) loadNotifications();
+      }}
+    >
+      <PopoverTrigger asChild>
+        <Button type="button" variant="ghost" size="icon" className="relative h-8 w-8 shrink-0 text-muted-foreground hover:bg-accent hover:text-foreground" aria-label={unreadCount ? `${unreadCount} unread work notifications` : "Work notifications"} title={hasUnavailableSources ? "Some work notifications are temporarily unavailable" : "Work notifications"}>
+          {unreadCount ? <BellRing className="h-4 w-4" /> : <Bell className="h-4 w-4" />}
+          {unreadCount > 0 && <span className="absolute -right-0.5 -top-0.5 flex min-h-4 min-w-4 items-center justify-center rounded-full bg-blue-600 px-1 text-[9px] font-bold text-white">{unreadCount > 99 ? "99+" : unreadCount}</span>}
+          {hasUnavailableSources && <span className="absolute bottom-0 right-0 h-2 w-2 rounded-full border border-background bg-amber-500" />}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="glass-floating w-[calc(100vw-24px)] max-w-[400px] overflow-hidden p-0">
+        <div className="app-navigation-caption-material flex min-w-0 items-center justify-between gap-3 border-b border-border px-4 py-3">
+          <div className="min-w-0">
+            <div className="text-sm font-semibold">Notifications</div>
+            <div className="text-xs text-muted-foreground">{unreadCount.toLocaleString()} unread</div>
+          </div>
+          {unreadCount > 0 && (
+            <Button type="button" variant="ghost" size="sm" className="shrink-0" disabled={updating} onClick={() => markRead()}>
+              <CheckCheck className="mr-1.5 h-3.5 w-3.5" />
+              Mark all read
+            </Button>
+          )}
+        </div>
+
+        <div className="space-y-2 border-b border-border px-3 py-2.5">
+          <div className="grid grid-cols-4 gap-1 rounded-md bg-muted p-1">
+            {[
+              ["active", "Active"],
+              ["unread", "Unread"],
+              ["snoozed", "Snoozed"],
+              ["handled", "Handled"],
+            ].map(([value, label]) => (
+              <Button key={value} type="button" size="sm" variant={stateFilter === value ? "secondary" : "ghost"} className="h-7 px-1 text-[11px]" onClick={() => setStateFilter(value)}>
+                {label}
+              </Button>
+            ))}
+          </div>
+          <Select value={sourceFilter} onValueChange={setSourceFilter}>
+            <SelectTrigger className="h-8 text-xs" aria-label="Filter notification source">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All work</SelectItem>
+              <SelectItem value="collaboration">Projects & Tasks</SelectItem>
+              <SelectItem value="growth_coaching">Growth & Coaching</SelectItem>
+              <SelectItem value="fcos_improvements">FCOS Improvements</SelectItem>
+              <SelectItem value="variable_charges">Variable Charges</SelectItem>
+              <SelectItem value="email_router">Email Router</SelectItem>
+              <SelectItem value="markets">Markets</SelectItem>
+              <SelectItem value="system_error">System errors</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        {hasUnavailableSources && (
+          <div className="flex gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-950 dark:border-amber-700/60 dark:bg-amber-950/45 dark:text-amber-100">
+            <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span>{unavailableLabel} notifications are temporarily unavailable.</span>
+          </div>
+        )}
+
+        <ScrollArea className="h-[min(420px,60vh)]">
+          {loading && !notifications.length ? (
+            <div className="flex items-center justify-center py-12 text-sm text-muted-foreground">
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              Loading notifications
+            </div>
+          ) : visibleNotifications.length ? (
+            <div className="divide-y divide-border">
+              {visibleNotifications.map((notification) => (
+                <div key={notification.groupKey || notification.id} className={cn("flex items-start gap-1 px-2 py-1.5 transition-colors hover:bg-muted/60", !notification.readAt && "bg-blue-50/70 dark:bg-blue-950/35")}>
+                  <button type="button" className="flex min-w-0 flex-1 items-start gap-3 px-2 py-1.5 text-left" onClick={() => openNotification(notification)}>
+                    <span className={cn("mt-1.5 h-2 w-2 shrink-0 rounded-full", notification.readAt ? "bg-muted-foreground/40" : "bg-blue-600")} />
+                    <span className="min-w-0 flex-1">
+                      <span className="mb-1 flex flex-wrap items-center gap-2">
+                        <span className={cn("rounded px-1.5 py-0.5 text-[10px] font-medium ring-1 ring-inset", sourceBadgeClass(notification.source))}>{sourceLabel(notification.source)}</span>
+                        {notification.occurrenceCount > 1 && <span className="rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-800" aria-label={`${notification.occurrenceCount} occurrences`}>{notification.occurrenceCount}×</span>}
+                        <span className="text-[11px] text-muted-foreground">{formatNotificationTime(notification.createdAt)}</span>
+                      </span>
+                      <span className="block break-words text-sm font-medium text-foreground">{notification.title}</span>
+                      {notification.message && <span className="mt-0.5 line-clamp-2 block break-words text-xs text-muted-foreground">{notification.message}</span>}
+                      {notification.diagnosticRef && (
+                        <span className="mt-1 block break-all text-[10px] font-medium text-red-700">
+                          Diagnostic reference: {notification.diagnosticRef}
+                        </span>
+                      )}
+                      {notification.outcome && (
+                        <span className="mt-1 block text-[11px] text-muted-foreground">Save outcome: {notification.outcome}</span>
+                      )}
+                      {notification.actionLabel && (
+                        <span className="mt-1 block text-[11px] font-semibold text-blue-700">{notification.actionLabel}</span>
+                      )}
+                    </span>
+                  </button>
+                  <span className="flex shrink-0 items-center gap-0.5 pt-1">
+                    {notification.source === "system_error" && notification.verificationAvailable && stateFilter !== "handled" && (
+                      <Button type="button" size="icon" variant="ghost" className="h-7 w-7 text-blue-700" title="Verify this exact incident is fixed" disabled={updating} onClick={() => verifySystemIncident(notification)}>
+                        <ShieldCheck className="h-3.5 w-3.5" />
+                      </Button>
+                    )}
+                    {stateFilter === "handled" ? (
+                      <Button type="button" size="icon" variant="ghost" className="h-7 w-7" title="Return to active" disabled={updating} onClick={() => updateNotification(notification, "unhandled")}>
+                        <RotateCcw className="h-3.5 w-3.5" />
+                      </Button>
+                    ) : stateFilter === "snoozed" ? (
+                      <Button type="button" size="icon" variant="ghost" className="h-7 w-7" title="Return to active" disabled={updating} onClick={() => updateNotification(notification, "unhandled")}>
+                        <RotateCcw className="h-3.5 w-3.5" />
+                      </Button>
+                    ) : (
+                      <>
+                        <Button type="button" size="icon" variant="ghost" className="h-7 w-7" title="Remind me tomorrow" disabled={updating} onClick={() => updateNotification(notification, "snoozed")}>
+                          <Clock3 className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button type="button" size="icon" variant="ghost" className="h-7 w-7" title="Mark handled" disabled={updating} onClick={() => updateNotification(notification, "handled")}>
+                          <Check className="h-3.5 w-3.5" />
+                        </Button>
+                      </>
+                    )}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="px-4 py-12 text-center text-sm text-muted-foreground">No work notifications.</div>
+          )}
+        </ScrollArea>
+        <div className="border-t border-border p-2">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="w-full justify-between"
+            onClick={() => {
+              setOpen(false);
+              navigate('/my-commitments?source=system_error');
+            }}
+          >
+            Open Error Centre
+            <ArrowRight className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}

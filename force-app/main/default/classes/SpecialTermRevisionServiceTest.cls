@@ -1,0 +1,268 @@
+@isTest
+private class SpecialTermRevisionServiceTest {
+    private static Special_Term_Clause_Version__c approvedVersion(String name, String key, String wording) {
+        Special_Term_Clause__c clauseRow = new Special_Term_Clause__c(Name = name, Short_Name_Key__c = name.toLowerCase(), Canonical_Text_Key__c = key, Category__c = 'Other', Status__c = 'Draft', Origin__c = 'Manual', Latest_Approved_Version_Number__c = 0);
+        Database.insert(clauseRow, AccessLevel.SYSTEM_MODE);
+        Special_Term_Clause_Version__c version = new Special_Term_Clause_Version__c(Clause__c = clauseRow.Id, Revision_Number__c = 1, Clause_Text__c = wording, Status__c = 'Draft', Revision_Reason__c = 'Test wording', Draft_Source__c = 'Manual');
+        Database.insert(version, AccessLevel.SYSTEM_MODE);
+        version.Status__c = 'Approved'; version.Approved_By_Email__c = 'approver@example.com'; version.Approved_At__c = System.now(); version.Approval_Reason__c = 'Test approval';
+        Database.update(version, AccessLevel.SYSTEM_MODE);
+        Database.update(new Special_Term_Clause__c(Id = clauseRow.Id, Status__c = 'Active', Latest_Approved_Version_Number__c = 1, Last_Approved_At__c = System.now()), AccessLevel.SYSTEM_MODE);
+        return [SELECT Id, Clause__c FROM Special_Term_Clause_Version__c WHERE Id = :version.Id];
+    }
+
+    private static Special_Term__c approvedNominationTerm(String name, String key) {
+        Special_Term__c term = new Special_Term__c(Name = name, Add_to_Confirmation__c = false, Add_to_Nomination__c = false, Clause_Structure_Status__c = 'Legacy', Confirmation_Clause_Status__c = 'Legacy', Nomination_Clause_Status__c = 'Legacy', Approval_Status__c = 'Legacy');
+        insert term;
+        Special_Term_Clause_Version__c version = approvedVersion(name + ' Clause', key, 'Supplier-only approved wording.');
+        Special_Term_Revision__c revision = new Special_Term_Revision__c(Special_Term__c = term.Id, Revision_Number__c = 1, Status__c = 'Draft', Revision_Reason__c = 'Approve supplier-only term');
+        insert revision;
+        insert new Special_Term_Revision_Clause__c(Special_Term_Revision__c = revision.Id, Clause__c = version.Clause__c, Clause_Version__c = version.Id, Projection__c = 'Nomination Remark', Sequence__c = 1, State__c = 'Proposed');
+        revision.Status__c = 'In Review';
+        Database.update(revision, AccessLevel.SYSTEM_MODE);
+        revision = [SELECT Id, LastModifiedDate FROM Special_Term_Revision__c WHERE Id = :revision.Id];
+        SpecialTermRevisionService.activate(revision.Id, 'gm@example.com', 'Approved supplier-only term.', String.valueOfGmt(revision.LastModifiedDate));
+        return [SELECT Id, LastModifiedDate, Current_Revision__c FROM Special_Term__c WHERE Id = :term.Id];
+    }
+
+    @isTest static void activatesWholeRevisionAndBlocksDirectLifecycleChanges() {
+        Special_Term__c term = new Special_Term__c(Name = 'Revision lifecycle term', Terms_Text__c = 'Legacy contractual wording.', Special_Remark_in_Confirmation__c = '- Legacy confirmation.', Special_Remark_in_Nomination__c = '- Legacy nomination.', Clause_Structure_Status__c = 'Legacy', Confirmation_Clause_Status__c = 'Legacy', Nomination_Clause_Status__c = 'Legacy', Approval_Status__c = 'Legacy');
+        insert term;
+        Special_Term_Clause_Version__c termsVersion = approvedVersion('Revision Payment Clause', '1111111111111111111111111111111111111111111111111111111111111111', 'Buyer shall pay the final invoice when due.');
+        Special_Term_Clause_Version__c confirmationVersion = approvedVersion('Revision Confirmation Clause', '2222222222222222222222222222222222222222222222222222222222222222', 'Confirmation shall be binding when issued.');
+        Special_Term_Clause_Version__c nominationVersion = approvedVersion('Revision Nomination Clause', '3333333333333333333333333333333333333333333333333333333333333333', 'Nomination shall identify the receiving party.');
+        Special_Term_Revision__c revision = new Special_Term_Revision__c(Special_Term__c = term.Id, Revision_Number__c = 1, Status__c = 'Draft', Revision_Reason__c = 'Structured migration', Proposed_By_Email__c = 'drafter@example.com');
+        insert revision;
+        insert new List<Special_Term_Revision_Clause__c>{
+            new Special_Term_Revision_Clause__c(Special_Term_Revision__c = revision.Id, Clause__c = termsVersion.Clause__c, Clause_Version__c = termsVersion.Id, Projection__c = 'Terms Text', Sequence__c = 1, State__c = 'Proposed'),
+            new Special_Term_Revision_Clause__c(Special_Term_Revision__c = revision.Id, Clause__c = confirmationVersion.Clause__c, Clause_Version__c = confirmationVersion.Id, Projection__c = 'Confirmation Remark', Sequence__c = 1, State__c = 'Proposed'),
+            new Special_Term_Revision_Clause__c(Special_Term_Revision__c = revision.Id, Clause__c = nominationVersion.Clause__c, Clause_Version__c = nominationVersion.Id, Projection__c = 'Nomination Remark', Sequence__c = 1, State__c = 'Proposed')
+        };
+        revision.Status__c = 'In Review'; Database.update(revision, AccessLevel.SYSTEM_MODE);
+        revision = [SELECT Id, LastModifiedDate FROM Special_Term_Revision__c WHERE Id = :revision.Id];
+        Test.startTest(); SpecialTermRevisionService.activate(revision.Id, 'gm@example.com', 'Approved as a complete revision.', String.valueOfGmt(revision.LastModifiedDate)); Test.stopTest();
+        term = [SELECT Approval_Status__c, Current_Revision__c, Terms_Text__c, Special_Remark_in_Confirmation__c, Special_Remark_in_Nomination__c, Original_Terms_Text__c, Clause_Structure_Status__c FROM Special_Term__c WHERE Id = :term.Id];
+        System.assertEquals('Approved', term.Approval_Status__c);
+        System.assertEquals(revision.Id, term.Current_Revision__c);
+        System.assertEquals('1. Buyer shall pay the final invoice when due.', term.Terms_Text__c);
+        System.assertEquals('- Confirmation shall be binding when issued.', term.Special_Remark_in_Confirmation__c);
+        System.assertEquals('- Nomination shall identify the receiving party.', term.Special_Remark_in_Nomination__c);
+        System.assertEquals('Legacy contractual wording.', term.Original_Terms_Text__c);
+        System.assertEquals(3, [SELECT COUNT() FROM Special_Term_Clause_Assignment__c WHERE Special_Term__c = :term.Id AND State__c = 'Active']);
+        term.Approval_Status__c = 'Legacy';
+        try { update term; System.assert(false, 'Direct lifecycle change must fail.'); } catch (DmlException error) { System.assert(error.getMessage().contains('controlled FCOS revision action')); }
+    }
+
+    @isTest static void rollbackRestoresOriginalWholeTerm() {
+        Special_Term__c term = new Special_Term__c(Name = 'Rollback revision term', Terms_Text__c = 'Legacy wording.', Add_to_Confirmation__c = false, Add_to_Nomination__c = false, Clause_Structure_Status__c = 'Legacy', Confirmation_Clause_Status__c = 'Legacy', Nomination_Clause_Status__c = 'Legacy', Approval_Status__c = 'Legacy'); insert term;
+        Special_Term_Clause_Version__c version = approvedVersion('Rollback Clause', '4444444444444444444444444444444444444444444444444444444444444444', 'Approved replacement wording.');
+        Special_Term_Revision__c revision = new Special_Term_Revision__c(Special_Term__c = term.Id, Revision_Number__c = 1, Status__c = 'Draft', Revision_Reason__c = 'Rollback coverage'); insert revision;
+        revision.Status__c = 'In Review'; Database.update(revision, AccessLevel.SYSTEM_MODE);
+        insert new Special_Term_Revision_Clause__c(Special_Term_Revision__c = revision.Id, Clause__c = version.Clause__c, Clause_Version__c = version.Id, Projection__c = 'Terms Text', Sequence__c = 1, State__c = 'Proposed');
+        revision = [SELECT Id, LastModifiedDate FROM Special_Term_Revision__c WHERE Id = :revision.Id];
+        SpecialTermRevisionService.activate(revision.Id, 'gm@example.com', 'Activate test revision.', String.valueOfGmt(revision.LastModifiedDate));
+        revision = [SELECT Id, LastModifiedDate FROM Special_Term_Revision__c WHERE Id = :revision.Id];
+        SpecialTermRevisionService.rollback(revision.Id, 'Restore original wording.', String.valueOfGmt(revision.LastModifiedDate));
+        term = [SELECT Approval_Status__c, Current_Revision__c, Terms_Text__c, Clause_Structure_Status__c FROM Special_Term__c WHERE Id = :term.Id];
+        System.assertEquals('Legacy', term.Approval_Status__c);
+        System.assertEquals(null, term.Current_Revision__c);
+        System.assertEquals('Legacy wording.', term.Terms_Text__c);
+        System.assertEquals('Legacy', term.Clause_Structure_Status__c);
+        System.assertEquals(0, [SELECT COUNT() FROM Special_Term_Clause_Assignment__c WHERE Special_Term__c = :term.Id AND State__c = 'Active']);
+        System.assertEquals(1, [SELECT COUNT() FROM Special_Term_Clause_Assignment__c WHERE Special_Term__c = :term.Id AND State__c = 'Historical']);
+        Special_Term_Clause_Assignment__c retainedAssignment = [SELECT Id FROM Special_Term_Clause_Assignment__c WHERE Special_Term__c = :term.Id AND State__c = 'Historical' LIMIT 1];
+        try { delete retainedAssignment; System.assert(false, 'Historical assignment lineage must not be deleted.'); } catch (DmlException error) { System.assert(error.getMessage().contains('lineage must be retained')); }
+        System.assertEquals('Rolled Back', [SELECT Status__c FROM Special_Term_Revision__c WHERE Id = :revision.Id].Status__c);
+    }
+
+    @isTest static void retiresUnusedApprovedTermAndPreservesLineage() {
+        Special_Term__c term = approvedNominationTerm('Retirement lifecycle term', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+        Id activeRevisionId = term.Current_Revision__c;
+
+        Test.startTest();
+        Id retiredRevisionId = SpecialTermRevisionService.retireTerm(term.Id, 'gm@example.com', 'Replaced by supplier-specific terms.', String.valueOfGmt(term.LastModifiedDate));
+        Test.stopTest();
+
+        System.assertEquals(activeRevisionId, retiredRevisionId);
+        term = [SELECT Approval_Status__c, Current_Revision__c, Special_Remark_in_Nomination__c FROM Special_Term__c WHERE Id = :term.Id];
+        System.assertEquals('Retired', term.Approval_Status__c);
+        System.assertEquals(activeRevisionId, term.Current_Revision__c);
+        System.assert(term.Special_Remark_in_Nomination__c.contains('Supplier-only approved wording.'));
+        Special_Term_Revision__c revision = [SELECT Status__c, Approval_Reason__c, Retirement_Reason__c, Retired_By_Email__c, Retired_At__c FROM Special_Term_Revision__c WHERE Id = :activeRevisionId];
+        System.assertEquals('Retired', revision.Status__c);
+        System.assertEquals('Approved supplier-only term.', revision.Approval_Reason__c, 'Retirement must not overwrite the original approval reason.');
+        System.assertEquals('Replaced by supplier-specific terms.', revision.Retirement_Reason__c);
+        System.assertEquals('gm@example.com', revision.Retired_By_Email__c);
+        System.assertNotEquals(null, revision.Retired_At__c);
+        System.assertEquals(0, [SELECT COUNT() FROM Special_Term_Clause_Assignment__c WHERE Special_Term__c = :term.Id AND State__c = 'Active']);
+        System.assertEquals(1, [SELECT COUNT() FROM Special_Term_Clause_Assignment__c WHERE Special_Term__c = :term.Id AND State__c = 'Historical']);
+        try { delete term; System.assert(false, 'Retired term history must be retained.'); }
+        catch (DmlException error) { System.assert(error.getMessage().contains('Approved and retired Special Terms must be retained')); }
+    }
+
+    @isTest static void retirementFailsClosedForStaleOrRuledTerm() {
+        Special_Term__c stale = approvedNominationTerm('Stale retirement term', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');
+        try { SpecialTermRevisionService.retireTerm(stale.Id, 'gm@example.com', 'Stale retirement.', '2000-01-01 00:00:00'); System.assert(false, 'Stale retirement must fail.'); }
+        catch (SpecialTermRevisionService.RevisionException error) { System.assert(error.getMessage().contains('changed after it was opened')); }
+
+        Special_Term__c ruled = approvedNominationTerm('Ruled retirement term', 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc');
+        SpecialTermRuleRevisionHandler.allowRevisionUpdate = true;
+        try { insert new Special_Term_Rule__c(Special_Term__c = ruled.Id, Supplier_Buyer__c = 'Supplier', Country__c = 'CHINA'); }
+        finally { SpecialTermRuleRevisionHandler.allowRevisionUpdate = false; }
+        ruled = [SELECT Id, LastModifiedDate FROM Special_Term__c WHERE Id = :ruled.Id];
+        try { SpecialTermRevisionService.retireTerm(ruled.Id, 'gm@example.com', 'Blocked retirement.', String.valueOfGmt(ruled.LastModifiedDate)); System.assert(false, 'A ruled term must not retire.'); }
+        catch (SpecialTermRevisionService.RevisionException error) { System.assert(error.getMessage().contains('matching rule')); }
+        System.assertEquals('Approved', [SELECT Approval_Status__c FROM Special_Term__c WHERE Id = :ruled.Id].Approval_Status__c);
+    }
+
+    @isTest static void rejectsActivatedRevisionClauseDirectEdit() {
+        Special_Term__c term = new Special_Term__c(Name = 'Revision direct edit term', Add_to_Confirmation__c = false, Add_to_Nomination__c = false, Clause_Structure_Status__c = 'Legacy', Confirmation_Clause_Status__c = 'Legacy', Nomination_Clause_Status__c = 'Legacy', Approval_Status__c = 'Legacy'); insert term;
+        Special_Term_Clause_Version__c version = approvedVersion('Revision Direct Clause', '5555555555555555555555555555555555555555555555555555555555555555', 'Approved wording.');
+        Special_Term_Revision__c revision = new Special_Term_Revision__c(Special_Term__c = term.Id, Revision_Number__c = 1, Status__c = 'Draft', Revision_Reason__c = 'Direct edit coverage'); insert revision;
+        revision.Status__c = 'In Review'; Database.update(revision, AccessLevel.SYSTEM_MODE);
+        Special_Term_Revision_Clause__c row = new Special_Term_Revision_Clause__c(Special_Term_Revision__c = revision.Id, Clause__c = version.Clause__c, Clause_Version__c = version.Id, Projection__c = 'Terms Text', Sequence__c = 1, State__c = 'Proposed'); insert row;
+        revision = [SELECT Id, LastModifiedDate FROM Special_Term_Revision__c WHERE Id = :revision.Id];
+        SpecialTermRevisionService.activate(revision.Id, 'gm@example.com', 'Activate test revision.', String.valueOfGmt(revision.LastModifiedDate));
+        row = [SELECT Id, Special_Term_Revision__c, Clause__c, Clause_Version__c, Projection__c, Sequence__c, State__c FROM Special_Term_Revision_Clause__c WHERE Id = :row.Id]; row.Sequence__c = 2;
+        Database.SaveResult protectedEdit = Database.update(row, false, AccessLevel.SYSTEM_MODE);
+        System.assertEquals(false, protectedEdit.isSuccess(), 'Active revision clauses are immutable.');
+        System.assert(protectedEdit.getErrors().size() > 0, 'Protected edit must return a validation error.');
+    }
+
+    @isTest static void protectsApprovedRulesAndRevisionRuleSnapshots() {
+        Special_Term__c term = new Special_Term__c(Name = 'Revision rule term', Add_to_Confirmation__c = false, Add_to_Nomination__c = false, Clause_Structure_Status__c = 'Legacy', Confirmation_Clause_Status__c = 'Legacy', Nomination_Clause_Status__c = 'Legacy', Approval_Status__c = 'Legacy');
+        insert term;
+        Special_Term_Rule__c rule = new Special_Term_Rule__c(Special_Term__c = term.Id, Supplier_Buyer__c = 'Buyer', Country__c = 'ARGENTINA');
+        insert rule;
+        rule = [SELECT Id, LastModifiedDate, Supplier_Buyer__c, Country__c FROM Special_Term_Rule__c WHERE Id = :rule.Id];
+        Special_Term_Revision__c revision = new Special_Term_Revision__c(Special_Term__c = term.Id, Revision_Number__c = 1, Status__c = 'Draft', Revision_Reason__c = 'Rule snapshot coverage');
+        insert revision;
+        Special_Term_Revision_Rule__c snapshot = new Special_Term_Revision_Rule__c(Special_Term_Revision__c = revision.Id, Special_Term_Rule__c = rule.Id, Snapshot_Type__c = 'Baseline', Sequence__c = 1, Audience__c = 'Buyer', Country__c = 'ARGENTINA', Source_Last_Modified__c = rule.LastModifiedDate, State__c = 'Proposed');
+        Special_Term_Revision_Rule__c proposal = new Special_Term_Revision_Rule__c(Special_Term_Revision__c = revision.Id, Special_Term_Rule__c = rule.Id, Snapshot_Type__c = 'Proposed', Sequence__c = 1, Audience__c = 'Buyer', Country__c = 'AUSTRALIA', Source_Last_Modified__c = rule.LastModifiedDate, State__c = 'Proposed');
+        insert new List<Special_Term_Revision_Rule__c>{ snapshot, proposal };
+        revision.Status__c = 'In Review'; Database.update(revision, AccessLevel.SYSTEM_MODE);
+        revision = [SELECT Id, LastModifiedDate FROM Special_Term_Revision__c WHERE Id = :revision.Id];
+        SpecialTermRevisionService.activate(revision.Id, 'gm@example.com', 'Approve rule snapshot.', String.valueOfGmt(revision.LastModifiedDate));
+        snapshot = [SELECT Id, State__c FROM Special_Term_Revision_Rule__c WHERE Id = :snapshot.Id];
+        System.assertEquals('Active', snapshot.State__c);
+        Special_Term_Rule__c activatedRule = [SELECT Country__c FROM Special_Term_Rule__c WHERE Special_Term__c = :term.Id LIMIT 1];
+        System.assertEquals('AUSTRALIA', activatedRule.Country__c, 'Approval must atomically materialize the proposed rule snapshot.');
+        snapshot.State__c = 'Proposed';
+        try { Database.update(snapshot, AccessLevel.SYSTEM_MODE); System.assert(false, 'Active revision rules are immutable.'); } catch (DmlException error) { System.assert(error.getMessage().contains('immutable')); }
+        activatedRule.Country__c = 'CHINA';
+        try { Database.update(activatedRule, AccessLevel.SYSTEM_MODE); System.assert(false, 'Approved term rules must be frozen.'); } catch (DmlException error) { System.assert(error.getMessage().contains('frozen')); }
+    }
+
+    @isTest static void restEndpointRequiresExactActionAndReturnsOnlyIdentifiers() {
+        Special_Term__c term = new Special_Term__c(Name = 'REST revision term', Add_to_Confirmation__c = false, Add_to_Nomination__c = false, Clause_Structure_Status__c = 'Legacy', Confirmation_Clause_Status__c = 'Legacy', Nomination_Clause_Status__c = 'Legacy', Approval_Status__c = 'Legacy'); insert term;
+        Special_Term_Clause_Version__c version = approvedVersion('REST Clause', '6666666666666666666666666666666666666666666666666666666666666666', 'REST approved wording.');
+        Special_Term_Revision__c revision = new Special_Term_Revision__c(Special_Term__c = term.Id, Revision_Number__c = 1, Status__c = 'Draft', Revision_Reason__c = 'REST coverage'); insert revision;
+        revision.Status__c = 'In Review'; Database.update(revision, AccessLevel.SYSTEM_MODE);
+        insert new Special_Term_Revision_Clause__c(Special_Term_Revision__c = revision.Id, Clause__c = version.Clause__c, Clause_Version__c = version.Id, Projection__c = 'Terms Text', Sequence__c = 1, State__c = 'Proposed');
+        revision = [SELECT Id, LastModifiedDate FROM Special_Term_Revision__c WHERE Id = :revision.Id];
+        RestRequest request = new RestRequest(); request.httpMethod = 'POST'; request.requestURI = '/services/apexrest/fcos/special-term-revisions/' + revision.Id + '/activate'; request.requestBody = Blob.valueOf(JSON.serialize(new Map<String, Object>{ 'termId' => term.Id, 'approverEmail' => 'gm@example.com', 'reason' => 'REST approval.', 'expectedLastModifiedAt' => String.valueOfGmt(revision.LastModifiedDate) }));
+        RestContext.request = request; RestContext.response = new RestResponse();
+        Test.startTest(); SpecialTermRevisionRest.ResponseBody response = SpecialTermRevisionRest.execute(); Test.stopTest();
+        System.assertEquals(true, response.success); System.assertEquals(revision.Id, response.revisionId); System.assertEquals(term.Id, response.termId); System.assertEquals('Active', response.status); System.assertEquals(200, RestContext.response.statusCode);
+        request = new RestRequest(); request.httpMethod = 'POST'; request.requestURI = '/services/apexrest/fcos/special-term-revisions/' + revision.Id + '/delete'; request.requestBody = Blob.valueOf('{}');
+        RestContext.request = request; RestContext.response = new RestResponse();
+        response = SpecialTermRevisionRest.execute();
+        System.assertEquals(false, response.success); System.assertEquals(400, RestContext.response.statusCode);
+    }
+
+    @isTest static void rejectsStaleRevisionActivation() {
+        Special_Term__c term = new Special_Term__c(Name = 'Stale revision term', Add_to_Confirmation__c = false, Add_to_Nomination__c = false, Clause_Structure_Status__c = 'Legacy', Confirmation_Clause_Status__c = 'Legacy', Nomination_Clause_Status__c = 'Legacy', Approval_Status__c = 'Legacy'); insert term;
+        Special_Term_Clause_Version__c version = approvedVersion('Stale Clause', '7777777777777777777777777777777777777777777777777777777777777777', 'Stale approved wording.');
+        Special_Term_Revision__c revision = new Special_Term_Revision__c(Special_Term__c = term.Id, Revision_Number__c = 1, Status__c = 'Draft', Revision_Reason__c = 'Stale coverage'); insert revision;
+        revision.Status__c = 'In Review'; Database.update(revision, AccessLevel.SYSTEM_MODE);
+        insert new Special_Term_Revision_Clause__c(Special_Term_Revision__c = revision.Id, Clause__c = version.Clause__c, Clause_Version__c = version.Id, Projection__c = 'Terms Text', Sequence__c = 1, State__c = 'Proposed');
+        try { SpecialTermRevisionService.activate(revision.Id, 'gm@example.com', 'Stale test.', '2000-01-01 00:00:00'); System.assert(false, 'Stale activation must fail.'); } catch (SpecialTermRevisionService.RevisionException error) { System.assert(error.getMessage().contains('changed after it was opened')); }
+    }
+
+    @isTest static void approvesDraftClauseAndPublishesTermInOneTransaction() {
+        Special_Term__c term = new Special_Term__c(Name = 'Atomic scoped wording term', Add_to_Confirmation__c = false, Add_to_Nomination__c = false, Clause_Structure_Status__c = 'Legacy', Confirmation_Clause_Status__c = 'Legacy', Nomination_Clause_Status__c = 'Legacy', Approval_Status__c = 'Legacy');
+        insert term;
+        Special_Term_Clause_Version__c base = approvedVersion('Atomic Scoped Clause', '8888888888888888888888888888888888888888888888888888888888888888', 'Buyer shall submit its claim within 14 days.');
+        Special_Term_Clause_Version__c draft = new Special_Term_Clause_Version__c(Clause__c = base.Clause__c, Revision_Number__c = 2, Clause_Text__c = 'The Buyer shall submit its claim within 14 days.', Status__c = 'Draft', Revision_Reason__c = 'Simplify wording', Draft_Source__c = 'Manual');
+        insert draft;
+        Special_Term_Revision__c revision = new Special_Term_Revision__c(Special_Term__c = term.Id, Revision_Number__c = 1, Status__c = 'Draft', Revision_Reason__c = 'Publish scoped wording');
+        insert revision;
+        insert new Special_Term_Revision_Clause__c(Special_Term_Revision__c = revision.Id, Clause__c = base.Clause__c, Clause_Version__c = draft.Id, Projection__c = 'Terms Text', Sequence__c = 1, State__c = 'Proposed');
+        revision.Status__c = 'In Review';
+        Database.update(revision, AccessLevel.SYSTEM_MODE);
+        revision = [SELECT Id, LastModifiedDate FROM Special_Term_Revision__c WHERE Id = :revision.Id];
+        draft = [SELECT Id, LastModifiedDate FROM Special_Term_Clause_Version__c WHERE Id = :draft.Id];
+        Map<String, String> expectedVersions = new Map<String, String>{ String.valueOf(draft.Id) => String.valueOfGmt(draft.LastModifiedDate) };
+
+        Test.startTest();
+        SpecialTermRevisionService.approveDraftClausesAndActivate(revision.Id, 'gm@example.com', 'Approve and publish one complete update.', String.valueOfGmt(revision.LastModifiedDate), expectedVersions);
+        Test.stopTest();
+
+        System.assertEquals('Superseded', [SELECT Status__c FROM Special_Term_Clause_Version__c WHERE Id = :base.Id].Status__c);
+        System.assertEquals('Approved', [SELECT Status__c FROM Special_Term_Clause_Version__c WHERE Id = :draft.Id].Status__c);
+        term = [SELECT Approval_Status__c, Terms_Text__c FROM Special_Term__c WHERE Id = :term.Id];
+        System.assertEquals('Approved', term.Approval_Status__c);
+        System.assertEquals('1. The Buyer shall submit its claim within 14 days.', term.Terms_Text__c);
+    }
+
+    @isTest static void materialDifferenceRollsBackClauseAndTermPublication() {
+        Special_Term__c term = new Special_Term__c(Name = 'Material qualifier guard term', Add_to_Confirmation__c = false, Add_to_Nomination__c = false, Clause_Structure_Status__c = 'Legacy', Confirmation_Clause_Status__c = 'Legacy', Nomination_Clause_Status__c = 'Legacy', Approval_Status__c = 'Legacy');
+        insert term;
+        Special_Term_Clause_Version__c base = approvedVersion('Material Guard Clause', '9999999999999999999999999999999999999999999999999999999999999999', 'Buyer shall submit its claim within 14 days.');
+        Special_Term_Clause_Version__c draft = new Special_Term_Clause_Version__c(Clause__c = base.Clause__c, Revision_Number__c = 2, Clause_Text__c = 'Buyer shall submit its claim within 15 days.', Status__c = 'Draft', Revision_Reason__c = 'Change deadline', Draft_Source__c = 'Manual');
+        insert draft;
+        Special_Term_Revision__c revision = new Special_Term_Revision__c(Special_Term__c = term.Id, Revision_Number__c = 1, Status__c = 'Draft', Revision_Reason__c = 'Material guard');
+        insert revision;
+        insert new Special_Term_Revision_Clause__c(Special_Term_Revision__c = revision.Id, Clause__c = base.Clause__c, Clause_Version__c = draft.Id, Projection__c = 'Terms Text', Sequence__c = 1, State__c = 'Proposed');
+        revision.Status__c = 'In Review';
+        Database.update(revision, AccessLevel.SYSTEM_MODE);
+        revision = [SELECT Id, LastModifiedDate FROM Special_Term_Revision__c WHERE Id = :revision.Id];
+        draft = [SELECT Id, LastModifiedDate FROM Special_Term_Clause_Version__c WHERE Id = :draft.Id];
+        try {
+            SpecialTermRevisionService.approveDraftClausesAndActivate(revision.Id, 'gm@example.com', 'Attempt material change.', String.valueOfGmt(revision.LastModifiedDate), new Map<String, String>{ String.valueOf(draft.Id) => String.valueOfGmt(draft.LastModifiedDate) });
+            System.assert(false, 'A material qualifier change must be rejected.');
+        } catch (SpecialTermRevisionService.RevisionException error) {
+            System.assert(error.getMessage().contains('material qualifier'));
+        }
+        System.assertEquals('Approved', [SELECT Status__c FROM Special_Term_Clause_Version__c WHERE Id = :base.Id].Status__c);
+        System.assertEquals('Draft', [SELECT Status__c FROM Special_Term_Clause_Version__c WHERE Id = :draft.Id].Status__c);
+        System.assertEquals('Legacy', [SELECT Approval_Status__c FROM Special_Term__c WHERE Id = :term.Id].Approval_Status__c);
+    }
+
+    @isTest static void deletesOnlyTransientUngovernedTermGraph() {
+        Special_Term__c disposable = new Special_Term__c(Name = 'Disposable draft term', Approval_Status__c = 'Draft', Clause_Structure_Status__c = 'Legacy', Confirmation_Clause_Status__c = 'Legacy', Nomination_Clause_Status__c = 'Legacy');
+        insert disposable;
+        Special_Term_Revision__c draftRevision = new Special_Term_Revision__c(Special_Term__c = disposable.Id, Revision_Number__c = 1, Status__c = 'Draft', Revision_Reason__c = 'Disposable draft', Proposed_By_Email__c = 'creator@example.com');
+        insert draftRevision;
+        Special_Term_Rule__c disposableRule = new Special_Term_Rule__c(Special_Term__c = disposable.Id, Supplier_Buyer__c = 'Buyer', Country__c = 'ARGENTINA');
+        insert disposableRule;
+        delete draftRevision;
+        delete disposableRule;
+        delete disposable;
+        System.assertEquals(0, [SELECT COUNT() FROM Special_Term__c WHERE Id = :disposable.Id]);
+
+        Special_Term__c retained = new Special_Term__c(Name = 'Rejected history term', Approval_Status__c = 'Legacy', Clause_Structure_Status__c = 'Legacy', Confirmation_Clause_Status__c = 'Legacy', Nomination_Clause_Status__c = 'Legacy');
+        insert retained;
+        Special_Term_Revision__c rejected = new Special_Term_Revision__c(Special_Term__c = retained.Id, Revision_Number__c = 1, Status__c = 'Draft', Revision_Reason__c = 'Rejected draft', Proposed_By_Email__c = 'creator@example.com');
+        insert rejected;
+        rejected.Status__c = 'Rejected';
+        Database.update(rejected, AccessLevel.SYSTEM_MODE);
+        try { delete retained; System.assert(false, 'Rejected revision history must block term deletion.'); }
+        catch (DmlException error) { System.assert(error.getMessage().contains('revision history must be retained')); }
+        try { delete rejected; System.assert(false, 'Rejected revisions must be retained.'); }
+        catch (DmlException error) { System.assert(error.getMessage().contains('Historical revision lineage must be retained')); }
+    }
+
+    @isTest static void blocksRuleDeletionWhenRevisionSnapshotExists() {
+        Special_Term__c term = new Special_Term__c(Name = 'Referenced rule term', Approval_Status__c = 'Legacy', Clause_Structure_Status__c = 'Legacy', Confirmation_Clause_Status__c = 'Legacy', Nomination_Clause_Status__c = 'Legacy');
+        insert term;
+        Special_Term_Rule__c rule = new Special_Term_Rule__c(Special_Term__c = term.Id, Supplier_Buyer__c = 'Buyer', Country__c = 'CHINA');
+        insert rule;
+        rule = [SELECT Id, LastModifiedDate FROM Special_Term_Rule__c WHERE Id = :rule.Id];
+        Special_Term_Revision__c revision = new Special_Term_Revision__c(Special_Term__c = term.Id, Revision_Number__c = 1, Status__c = 'Draft', Revision_Reason__c = 'Retained rule snapshot');
+        insert revision;
+        insert new Special_Term_Revision_Rule__c(Special_Term_Revision__c = revision.Id, Special_Term_Rule__c = rule.Id, Snapshot_Type__c = 'Baseline', Sequence__c = 1, Audience__c = 'Buyer', Country__c = 'CHINA', Source_Last_Modified__c = rule.LastModifiedDate, State__c = 'Proposed');
+        try { delete rule; System.assert(false, 'Revision-referenced rules must be retained.'); }
+        catch (DmlException error) { System.assert(error.getMessage().contains('rule revision lineage must be retained')); }
+    }
+}

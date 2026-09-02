@@ -19,6 +19,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useToast } from '@/components/ui/use-toast';
+import { useNavigationAwareRequest } from '@/hooks/useNavigationAwareRequest';
 
 const statusClasses = {
   active: 'border-emerald-200 bg-emerald-50 text-emerald-700',
@@ -84,8 +85,14 @@ function filterSummary(metadata = {}) {
     .join(' · ');
 }
 
-export default function ReportArchive() {
+function reportTypeLabel(value) {
+  if (value === 'broker_commission') return 'Broker Commissions';
+  return String(value || '').replaceAll('_', ' ').replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+export default function ReportArchive({ defaultReportType = 'all' }) {
   const { toast } = useToast();
+  const { request: requestReports } = useNavigationAwareRequest('collaboration');
   const { isAdministrator, moduleAccessLevels } = useAuth();
   const [reports, setReports] = useState([]);
   const [showDeleted, setShowDeleted] = useState(false);
@@ -96,28 +103,38 @@ export default function ReportArchive() {
   const [renameValue, setRenameValue] = useState('');
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [auditTarget, setAuditTarget] = useState(null);
+  const [reportType, setReportType] = useState(defaultReportType);
 
   const loadReports = async (options = {}) => {
     setLoading(true);
     setError('');
-    const res = await appClient.functions.invoke('reportExportsList', {
-      includeDeleted: showDeleted,
-      limit: 200,
-    }, { cache: true, force: options.force });
-    if (res.data?.error) {
-      setError(res.data.error);
-      setReports([]);
-    } else {
-      setReports(res.data?.reports || []);
-    }
+    await requestReports({
+      name: 'reportExportsList',
+      payload: { includeDeleted: showDeleted, limit: 200 },
+      force: options.force,
+      apply: (res) => {
+        if (res.data?.error) {
+          setError(res.data.error);
+          setReports([]);
+        } else {
+          setError('');
+          setReports(res.data?.reports || []);
+        }
+      },
+    });
     setLoading(false);
   };
 
   useEffect(() => {
-    loadReports({ force: true });
+    loadReports();
   }, [showDeleted]);
 
-  const activeCount = useMemo(() => reports.filter((report) => report.status === 'active').length, [reports]);
+  const reportTypeOptions = useMemo(() => [...new Map([
+    ...(defaultReportType !== 'all' ? [[defaultReportType, reportTypeLabel(defaultReportType)]] : []),
+    ...reports.map((report) => [report.reportType, report.reportLabel || reportTypeLabel(report.reportType)]),
+  ]).entries()].filter(([value]) => value).sort((a, b) => String(a[1]).localeCompare(String(b[1]))), [defaultReportType, reports]);
+  const filteredReports = useMemo(() => reportType === 'all' ? reports : reports.filter((report) => report.reportType === reportType), [reportType, reports]);
+  const activeCount = useMemo(() => filteredReports.filter((report) => report.status === 'active').length, [filteredReports]);
   const canManageArchive = isAdministrator || moduleAccessLevels?.report_archive === 'full';
 
   const startRename = (report) => {
@@ -191,9 +208,13 @@ export default function ReportArchive() {
         eyebrow="Google Drive report archive"
         title="Reports Archive"
         description="Review exported XLS reports, audit trail, and Google Drive file actions."
-        meta={`${activeCount.toLocaleString()} active reports · ${reports.length.toLocaleString()} shown · ${canManageArchive ? 'Full access' : 'Read only'}`}
+        meta={`${activeCount.toLocaleString()} active reports · ${filteredReports.length.toLocaleString()} shown · ${canManageArchive ? 'Full access' : 'Read only'}`}
         actions={(
           <>
+            <select value={reportType} onChange={(event) => setReportType(event.target.value)} className="h-9 rounded-md border border-input bg-background px-3 text-sm" aria-label="Report type">
+              <option value="all">All Reports</option>
+              {reportTypeOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </select>
             <Button type="button" variant={showDeleted ? 'default' : 'outline'} size="sm" onClick={() => setShowDeleted((value) => !value)}>
               {showDeleted ? 'Showing Deleted' : 'Show Deleted'}
             </Button>
@@ -213,7 +234,7 @@ export default function ReportArchive() {
       >
         {loading ? (
           <StateBlock icon={Loader2} title="Loading report archive..." description="Fetching report metadata and audit events." />
-        ) : reports.length ? (
+        ) : filteredReports.length ? (
           <Table>
             <TableHeader className="sticky top-0 z-10 bg-muted/80 backdrop-blur">
               <TableRow>
@@ -229,7 +250,7 @@ export default function ReportArchive() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {reports.map((report) => (
+              {filteredReports.map((report) => (
                 <TableRow key={report.id}>
                   <TableCell className="whitespace-nowrap text-xs">{formatDateTime(report.createdAt)}</TableCell>
                   <TableCell className="whitespace-nowrap font-medium">{report.reportLabel || report.reportType}</TableCell>

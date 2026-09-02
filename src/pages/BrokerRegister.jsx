@@ -8,10 +8,12 @@ import BrokerFilters from '@/components/brokers/BrokerFilters';
 import BrokerRegisterTable from '@/components/brokers/BrokerRegisterTable';
 import StemDetailModal from '@/components/dashboard/StemDetailModal';
 import PageHeader from '@/components/common/PageHeader';
+import PaymentDataReliabilityBadge from '@/components/common/PaymentDataReliabilityBadge';
 import TableShell from '@/components/common/TableShell';
 import StateBlock from '@/components/common/StateBlock';
 import { numericValue, textValue } from '@/lib/displayValue';
-import { readExchangeRateSettings } from '@/lib/exchangeRateSettings';
+import { useNavigationAwareRequest } from '@/hooks/useNavigationAwareRequest';
+import { LEGACY_PAYMENT_DATA_LABEL, PAYMENT_DATA_RELIABILITY_LABEL } from '@/lib/paymentDataReliability';
 
 const fmtMoney = (value) => {
   const number = numericValue(value);
@@ -82,15 +84,6 @@ const downloadBlob = (blob, filename) => {
   link.click();
   URL.revokeObjectURL(url);
 };
-const textToBase64 = (value) => {
-  const bytes = new TextEncoder().encode(value);
-  const chunkSize = 0x8000;
-  let binary = '';
-  for (let index = 0; index < bytes.length; index += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
-  }
-  return btoa(binary);
-};
 const roundCurrency = (value) => {
   const number = numericValue(value);
   return number == null ? null : Math.round((number + Number.EPSILON) * 100) / 100;
@@ -151,8 +144,10 @@ const rowIdValue = (row) => textValue(row?.id, '');
 
 export default function BrokerRegister() {
   const { toast } = useToast();
+  const { request: requestBrokerRows } = useNavigationAwareRequest('operational');
   const [initialDateRange] = useState(() => previousQuarterRange());
   const [rows, setRows] = useState([]);
+  const [paymentDataReliability, setPaymentDataReliability] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [search, setSearch] = useState('');
@@ -162,20 +157,26 @@ export default function BrokerRegister() {
   const [fromDate, setFromDate] = useState(() => initialDateRange.from);
   const [toDate, setToDate] = useState(() => initialDateRange.to);
   const [selectedStemId, setSelectedStemId] = useState(null);
-  const [exchangeRateProvider] = useState(() => readExchangeRateSettings().provider);
   const [exchangeRate, setExchangeRate] = useState(null);
   const [exchangeRateLoading, setExchangeRateLoading] = useState(false);
   const [exchangeRateError, setExchangeRateError] = useState(null);
   const [showCny, setShowCny] = useState(false);
   const [excludedRowIds, setExcludedRowIds] = useState([]);
-  const [archivingExport, setArchivingExport] = useState(false);
 
   const loadRows = async (options = {}) => {
     setLoading(true);
     setError(null);
-    const res = await appClient.functions.invoke('salesforceBrokerRegister', { limit: 2000 }, { cache: true, force: options.force });
-    if (res.data?.error) setError(res.data.error);
-    setRows(res.data?.rows || []);
+    await requestBrokerRows({
+      name: 'salesforceBrokerRegister',
+      payload: { limit: 2000 },
+      force: options.force,
+      apply: (res) => {
+        if (res.data?.error) setError(res.data.error);
+        else setError(null);
+        setRows(res.data?.rows || []);
+        setPaymentDataReliability(res.data?.paymentDataReliability || null);
+      },
+    });
     setLoading(false);
   };
 
@@ -263,7 +264,6 @@ export default function BrokerRegister() {
       setExchangeRateError(null);
       const res = await appClient.functions.invoke('frankfurterUsdCnyRate', {
         date: exchangeRateTargetDate,
-        provider: exchangeRateProvider,
       });
       if (cancelled) return;
       if (res.data?.error) {
@@ -276,7 +276,7 @@ export default function BrokerRegister() {
     };
     loadExchangeRate();
     return () => { cancelled = true; };
-  }, [exchangeRateProvider, exchangeRateTargetDate, showCny]);
+  }, [exchangeRateTargetDate, showCny]);
 
   const commissionPayableTotal = includedSortedRows.reduce((sum, row) => sum + Number(payableAmount(row) || 0), 0);
   const commissionReceivableTotal = includedSortedRows.reduce((sum, row) => sum + Number(receivableAmount(row) || 0), 0);
@@ -289,6 +289,7 @@ export default function BrokerRegister() {
     ['Broker Type', selectedTypes.length ? selectedTypes.map(brokerTypeLabel).join(', ') : 'All'],
     ['Date Range', `${fromDate || 'Any'} to ${toDate || 'Any'}`],
     ['Excluded Rows', visibleExcludedCount ? `${visibleExcludedCount.toLocaleString()} excluded from totals and export` : 'None'],
+    ['Payment Data Reliability', PAYMENT_DATA_RELIABILITY_LABEL],
   ];
   const workbookCell = (value, styleId = 'Text', mergeAcross = 0) => {
     const mergeAttr = mergeAcross ? ` ss:MergeAcross="${mergeAcross}"` : '';
@@ -464,8 +465,7 @@ export default function BrokerRegister() {
         </Borders>
       </Style>` : ''}
     </Styles>`;
-  const exportXls = async () => {
-    if (archivingExport) return;
+  const exportXls = () => {
     const generatedAt = format(new Date(), 'dd MMM yyyy HH:mm');
     const bankBuyRateMethodology = 'Frankfurter USD/CNY API rate is treated as the mid-rate. Bank buy rate is calculated as mid-rate less 0.2%, i.e. mid-rate x 0.998.';
     const targetDateMethodology = 'The default exchange-rate target is the last working day of the quarter based on the selected To Date, otherwise selected From Date, otherwise the latest payment/delivery date in filtered rows, otherwise today. Weekends are moved back to Friday; public holidays are handled by the API fallback to prior available dates.';
@@ -478,7 +478,7 @@ export default function BrokerRegister() {
       ['Rows Exported', includedSortedRows.length.toLocaleString()],
       ['Source', exchangeRate?.source || 'Frankfurter API'],
       ['API URL', exchangeRate?.apiUrl || 'https://api.frankfurter.dev/v2/rate/USD/CNY'],
-      ['Provider / Rate Type', exchangeRate ? `${exchangeRate.providerLabel} / ${exchangeRate.rateType}` : exchangeRateProvider],
+      ['Provider / Rate Type', exchangeRate ? `${exchangeRate.providerLabel} / ${exchangeRate.rateType}` : 'Company setting unavailable'],
       ['Exchange-rate target date', exchangeRateTargetDate],
       ['Requested rate date', exchangeRate?.requestedDate || exchangeRateTargetDate],
       ['Applied rate date', exchangeRate?.date || 'Unavailable'],
@@ -491,7 +491,7 @@ export default function BrokerRegister() {
       ['导出行数', includedSortedRows.length.toLocaleString()],
       ['来源', exchangeRate?.source || 'Frankfurter API'],
       ['API 地址', exchangeRate?.apiUrl || 'https://api.frankfurter.dev/v2/rate/USD/CNY'],
-      ['提供方 / 汇率类型', exchangeRate ? `${exchangeRate.providerLabel} / ${exchangeRate.rateType}` : exchangeRateProvider],
+      ['提供方 / 汇率类型', exchangeRate ? `${exchangeRate.providerLabel} / ${exchangeRate.rateType}` : '公司设置不可用'],
       ['汇率目标日期', exchangeRateTargetDate],
       ['请求汇率日期', exchangeRate?.requestedDate || exchangeRateTargetDate],
       ['实际使用汇率日期', exchangeRate?.date || '不可用'],
@@ -511,6 +511,7 @@ export default function BrokerRegister() {
       paymentDateLabel: row.paymentDateLabel,
       paymentDate: fmtDate(row.paymentDate),
       paymentDelay: row.paymentDelayLabel || (brokerTypeLabel(row.brokerType) === 'Buyer Broker' ? fmtDelay(row.paymentDelay) : ''),
+      paymentDataReliability: row.paymentDataReliable === false ? LEGACY_PAYMENT_DATA_LABEL : PAYMENT_DATA_RELIABILITY_LABEL,
     }));
     const hasCommissionPayable = detailRows.some((row) => numericValue(row.commissionPayable) != null);
     const hasCommissionReceivable = detailRows.some((row) => numericValue(row.commissionReceivable) != null);
@@ -528,6 +529,7 @@ export default function BrokerRegister() {
       { key: 'paymentDateLabel', header: 'Payment Date Label', value: (row) => row.paymentDateLabel, cell: (row) => workbookCell(row.paymentDateLabel), minWidth: 85, maxWidth: 180 },
       { key: 'paymentDate', header: 'Payment Date', value: (row) => row.paymentDate, cell: (row) => workbookCell(row.paymentDate), minWidth: 85, maxWidth: 180 },
       ...(hasPaymentDelay ? [{ key: 'paymentDelay', header: 'Payment Delay', value: (row) => row.paymentDelay, cell: (row) => workbookCell(row.paymentDelay, 'TextRight'), minWidth: 85, maxWidth: 180 }] : []),
+      { key: 'paymentDataReliability', header: 'Payment Data Reliability', value: (row) => row.paymentDataReliability, cell: (row) => workbookCell(row.paymentDataReliability), minWidth: 130, maxWidth: 220 },
     ];
     const detailBrokerSections = [];
     for (const row of detailRows) {
@@ -628,58 +630,10 @@ export default function BrokerRegister() {
       </Workbook>`;
     const blob = new Blob([workbookXml], { type: 'application/vnd.ms-excel;charset=utf-8;' });
     downloadBlob(blob, exportFileName);
-    setArchivingExport(true);
-    try {
-      const res = await appClient.functions.invoke('reportExportCreate', {
-        reportType: 'broker_commission',
-        reportLabel: "Broker's Commission",
-        fileName: exportFileName,
-        mimeType: 'application/vnd.ms-excel',
-        contentBase64: textToBase64(workbookXml),
-        metadata: {
-          reportTitle: "Broker's Commission",
-          generatedAt,
-          rowCount: includedSortedRows.length,
-          excludedRowCount: visibleExcludedCount,
-          totalCommission: roundCurrency(total),
-          commissionPayableTotal: roundCurrency(commissionPayableTotal),
-          commissionReceivableTotal: roundCurrency(commissionReceivableTotal),
-          cnyEnabled: showCny,
-          exchangeRate: showCny ? {
-            source: exchangeRate?.source || 'Frankfurter API',
-            targetDate: exchangeRateTargetDate,
-            requestedDate: exchangeRate?.requestedDate || exchangeRateTargetDate,
-            appliedDate: exchangeRate?.date || null,
-            midRate: exchangeRate?.rate ?? null,
-            bankBuyRate,
-            summary: exchangeRateSummary,
-          } : null,
-          filters: Object.fromEntries(filterSummaryRows),
-          filterSummaryRows,
-        },
-      });
-      if (res.data?.error) {
-        toast({
-          title: 'XLS downloaded, Drive archive failed',
-          description: res.data.error,
-          variant: 'destructive',
-        });
-      } else {
-        toast({
-          title: 'XLS downloaded and archived',
-          description: `${exportFileName} was saved to Google Drive.`,
-        });
-        appClient.functions.clearCache();
-      }
-    } catch (archiveError) {
-      toast({
-        title: 'XLS downloaded, Drive archive failed',
-        description: archiveError.message || 'Unable to save this report to Google Drive.',
-        variant: 'destructive',
-      });
-    } finally {
-      setArchivingExport(false);
-    }
+    toast({
+      title: 'XLS downloaded',
+      description: `${exportFileName} was saved to this device.`,
+    });
   };
 
   return (
@@ -691,11 +645,12 @@ export default function BrokerRegister() {
         meta={`${filteredRows.length.toLocaleString()} rows · ${fmtMoney(total)} filtered commission total`}
         actions={(
           <>
+          <PaymentDataReliabilityBadge excludedCount={paymentDataReliability?.excludedLegacyRecordCount} />
           <Button type="button" size="sm" variant={showCny ? 'default' : 'outline'} onClick={() => setShowCny(value => !value)} className="gap-2 w-fit">
             CNY
           </Button>
-          <Button variant="outline" onClick={exportXls} disabled={loading || archivingExport || !includedSortedRows.length} className="gap-2 w-fit">
-            {archivingExport ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />} Export XLS
+          <Button variant="outline" onClick={exportXls} disabled={loading || !includedSortedRows.length} className="gap-2 w-fit">
+            <Download className="w-4 h-4" /> Export XLS
           </Button>
           <Button variant="outline" onClick={() => loadRows({ force: true })} disabled={loading} className="gap-2 w-fit">
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> Refresh
@@ -743,7 +698,7 @@ export default function BrokerRegister() {
         >
           <BrokerRegisterTable
             rows={sortedRows}
-            onRowClick={setSelectedStemId}
+            onStemClick={setSelectedStemId}
             exchangeRate={exchangeRate}
             exchangeRateLoading={exchangeRateLoading}
             exchangeRateError={exchangeRateError}

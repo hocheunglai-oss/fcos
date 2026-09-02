@@ -6,6 +6,8 @@ const migrationUrl = new URL('../supabase/migrations/20260712120242_operational_
 const functionUrl = new URL('../api/functions/[name].js', import.meta.url);
 const appClientUrl = new URL('../src/api/appClient.js', import.meta.url);
 const authContextUrl = new URL('../src/lib/AuthContext.jsx', import.meta.url);
+const loginUrl = new URL('../src/pages/Login.jsx', import.meta.url);
+const packageUrl = new URL('../package.json', import.meta.url);
 
 test('operational migration adds atomic collection and exception workflow writes', async () => {
   const sql = await readFile(migrationUrl, 'utf8');
@@ -23,7 +25,7 @@ test('sensitive workflow actions use managed capabilities', async () => {
   const source = await readFile(functionUrl, 'utf8');
   assert.match(source, /requireCapability\(client, profile, 'disputes_approve'/);
   assert.match(source, /requireCapability\(client, profile, 'disputes_account'/);
-  assert.match(source, /requireCapability\(client, profile, 'buyer_invoices_manage'/);
+  assert.match(source, /requireCapability\(client, profile, 'financial_report_settings_manage'/);
   assert.match(source, /requireCapability\(client, profile, 'cashflow_forecast_manage'/);
   assert.doesNotMatch(source, /DISPUTE_BETA_APPROVER_EMAILS/);
 });
@@ -31,27 +33,43 @@ test('sensitive workflow actions use managed capabilities', async () => {
 test('short-lived function cache expires and can be cleared at an auth boundary', async () => {
   const source = await readFile(appClientUrl, 'utf8');
   assert.match(source, /DEFAULT_FUNCTION_CACHE_TTL_MS = 30_000/);
-  assert.match(source, /Date\.now\(\) - cached\.cachedAtMs <= ttlMs/);
+  assert.match(source, /navigationCacheDecision\(/);
+  assert.match(source, /ageMs: cached \? Date\.now\(\) - cached\.cachedAtMs : 0/);
+  assert.match(source, /decision === 'expired'/);
   assert.match(source, /functionResponseCache\.delete\(cacheKey\)/);
   assert.match(source, /clearFunctionCache\(\);\s*\n\s*if \(isSupabaseConfigured\) await supabase\.auth\.signOut/);
 });
 
 test('browser authentication loads protected profile data through the server API', async () => {
-  const [serverSource, clientSource] = await Promise.all([
+  const [serverSource, clientSource, appClientSource, loginSource, packageSource] = await Promise.all([
     readFile(functionUrl, 'utf8'),
     readFile(authContextUrl, 'utf8'),
+    readFile(appClientUrl, 'utf8'),
+    readFile(loginUrl, 'utf8'),
+    readFile(packageUrl, 'utf8'),
   ]);
   assert.match(serverSource, /async function authContext\(/);
   assert.match(serverSource, /authContext: \[\]/);
   assert.match(clientSource, /functions\.invoke\('authContext'/);
+  assert.match(clientSource, /if \(!result\?\.user\) throw new Error\(loginFailureMessage/);
   assert.doesNotMatch(clientSource, /\.from\('user_profiles'\)/);
   assert.doesNotMatch(clientSource, /\.from\('user_module_permissions'\)/);
   assert.doesNotMatch(clientSource, /\.from\('user_type_module_permissions'\)/);
+  assert.match(appClientSource, /responseIsJson/);
+  assert.match(appClientSource, /The FCOS server API is unavailable/);
+  assert.match(loginSource, /visibleError/);
+  const scripts = JSON.parse(packageSource).scripts;
+  assert.equal(scripts.dev, 'node scripts/dev-server.mjs');
+  assert.equal(
+    scripts['dev:full'],
+    'node scripts/dev-server.mjs -- node scripts/fcos-connections.mjs run vercel -- dev',
+  );
+  assert.equal(scripts['dev:stop'], 'node scripts/dev-server.mjs stop');
 });
 
-test('report archive compensates cross-system failures', async () => {
+test('legacy Google Drive XLS archive is retired without affecting local XLS exports', async () => {
   const source = await readFile(functionUrl, 'utf8');
-  assert.match(source, /googleDriveTrashFile\(driveFile\.id\)/);
-  assert.match(source, /googleDriveRenameFile\(current\.drive_file_id, current\.file_name\)/);
-  assert.match(source, /googleDriveRestoreFile\(current\.drive_file_id\)/);
+  assert.match(source, /legacy Google Drive XLS Report Archive has been retired/);
+  assert.doesNotMatch(source, /GOOGLE_DRIVE_REPORT_FOLDER_ID/);
+  assert.doesNotMatch(source, /googleDriveUploadFile/);
 });

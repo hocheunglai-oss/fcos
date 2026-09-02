@@ -1,0 +1,145 @@
+<template>
+    <div style="position: relative; z-index: 9999">
+        
+    </div>
+    <section role="dialog" tabindex="-1" aria-labelledby="modal-heading-01" aria-modal="true"
+        aria-describedby="modal-content-id-1" class="slds-modal slds-fade-in-open">
+        <template if:true={actionExecuting}>
+            <lightning-spinner alternative-text="Loading..."></lightning-spinner>
+        </template>
+        <div class="slds-modal__container">
+            <header class="slds-modal__header">
+                <button class="slds-button slds-button_icon slds-modal__close slds-button_icon-inverse" title="Close"
+                    onclick={closeModal}>
+                    <lightning-icon icon-name="utility:close" alternative-text="close" variant="inverse" size="small">
+                    </lightning-icon>
+                    <span class="slds-assistive-text">Close</span>
+                </button>
+                <h2 id="modal-heading-01" class="slds-text-heading_medium slds-hyphenate">{modalTitle}</h2>
+            </header>
+            <div class="slds-modal__content slds-p-around_medium" id="modal-content-id-1">
+                <div class="slds-text-body_regular">
+                    Please enter STEM details as they should appear for the buyer, they maybe edited later.
+                </div>
+                <template if:true={currentStemLineItem}>
+                    <lightning-record-edit-form object-api-name="STEM_Line_Item__c" record-id={currentStemLineItem.Id}
+                        onsubmit={handleSubmitForm} onerror={handleErrorForm} onsuccess={handleStemLineItemAdded}
+                        onchange={handleStemLineItemChange}>
+                        <lightning-messages></lightning-messages>
+                        <lightning-input-field field-name="STEM__c.Id" value={recordId} disabled variant="label-stacked">
+                        </lightning-input-field>
+                        <!-- <template if:true={hasEnquiryLineItems}>
+                            <lightning-combobox name="enquiryLineItems" label="Select Enquiry Stop"
+                                placeholder="Select Stop" options={options} disabled onchange={handleStopChange}
+                                required>
+                            </lightning-combobox>
+                        </template> -->
+                        <div class="slds-grid">
+                            <div class="slds-col slds-size_1-of-3">
+                                <lightning-input-field field-name="Port__c" value={currentStemLineItem.Port__c}
+                                     disabled variant="label-stacked">
+                                </lightning-input-field>
+                                <lightning-input-field field-name="Product__c" value={currentStemLineItem.Product__c}
+                                    required variant="label-stacked">
+                                </lightning-input-field>
+                                <lightning-input-field field-name="Quantity__c" value={currentStemLineItem.Quantity__c}
+                                    required variant="label-stacked">
+                                </lightning-input-field>
+                                <lightning-input-field field-name="Is_Quantity_Range__c"
+                                    value={currentStemLineItem.Is_Quantity_Range__c} onchange={handleQuantityRangeChange}
+                                    variant="label-stacked">
+                                </lightning-input-field>
+                                <template if:true={currentStemLineItem.Is_Quantity_Range__c}>
+                                    <lightning-input-field field-name="Quantity_Max__c"
+                                        value={currentStemLineItem.Quantity_Max__c}
+                                        variant="label-stacked">
+                                    </lightning-input-field>
+                                </template>
+                            </div>
+                            <div class="slds-col slds-size_1-of-3">
+                                <lightning-input-field field-name="Unit_of_Measure__c"
+                                    value={currentStemLineItem.Unit_of_Measure__c} required variant="label-stacked">
+                                </lightning-input-field>
+                                <lightning-input-field field-name="Transportation_Type_Buy__c"
+                                    value={currentStemLineItem.Transportation_Type_Buy__c} onchange={handleTransportationBuyChange}
+                                    variant="label-stacked">
+                                </lightning-input-field>
+                                <lightning-input-field field-name="Transportation_Type_Sell__c"
+                                    value={currentStemLineItem.Transportation_Type_Sell__c} onchange={handleTransportationSellChange}
+                                    variant="label-stacked">
+                                </lightning-input-field>
+                                <lightning-combobox name="paymentTermPicklist"
+                                                label="Supplier Payment Term"
+                                                value={currentStemLineItem.Payment_Term__c}
+                                                placeholder="Select Payment Term"
+                                                options={paymentTermOptions}
+                                                required={supplierPaymentTermRequired}
+                                                onchange={handlePaymentTermChange}>
+                            </lightning-combobox>
+                            <lightning-input-field field-name="Partial_CIA__c" value={currentStemLineItem.Partial_CIA__c}
+                                    variant="label-stacked">
+                            </lightning-input-field>
+                            </div>
+                            <div class="slds-col slds-size_1-of-3">
+                                <lightning-input-field field-name="Original_Supplier__c" value={currentStemLineItem.Original_Supplier__c}
+                                    variant="label-stacked">
+                                </lightning-input-field>
+                                <lightning-input-field field-name="BDN_Company__c" value={currentStemLineItem.BDN_Company__c} 
+                                    variant="label-stacked">
+                                </lightning-input-field>
+                                <lightning-input-field field-name="Supplier_Broker__c"
+                                    value={currentStemLineItem.Supplier_Broker__c} variant="label-stacked">
+                                </lightning-input-field>
+                                <c-fcb-offer-broker-pricing-input field-label="Supplier's Broker Commission"
+                                    field-name="Suppliers_Brokers_Commission_Per_Unit__c" decimal-places=3 step=0.001 min=0.000
+                                    initial-value={currentStemLineItem.Suppliers_Brokers_Commission_Per_Unit__c}
+                                    onchange={calculateFormulas} disabled={disabledSupplierBrokerComm}>
+                                </c-fcb-offer-broker-pricing-input>
+                                <c-fcb-offer-broker-pricing-input field-label="Unit Sell At" field-name="Unit_Sell_At__c"
+                                    decimal-places=3 step=0.001 min=0.000 required initial-value={unitSellAt}
+                                    onchange={calculateFormulas}>
+                                </c-fcb-offer-broker-pricing-input>
+                                <c-fcb-offer-broker-pricing-input field-label="Unit Buy At"
+                                    field-name="Unit_Buy_At__c" decimal-places=3 step=0.001 min=0.000
+                                    initial-value={unitBuyAt} onchange={calculateFormulas}>
+                                </c-fcb-offer-broker-pricing-input>
+                                <lightning-input-field field-name="Partial_Lumpsum_Buy_At__c" value={currentStemLineItem.Partial_Lumpsum_Buy_At__c} 
+                                    variant="label-stacked" disabled={isDisabledPartialCIA}>
+                                </lightning-input-field>
+                                <c-fcb-offer-broker-pricing-input field-label={buyerBrokerCommissionLabel}
+                                    field-name="Buyers_Brokers_Commission_Per_Unit__c" decimal-places=3 step=0.001 min=0.000
+                                    initial-value={currentStemLineItem.Buyers_Brokers_Commission_Per_Unit__c}
+                                    onchange={calculateFormulas} disabled={disabledBuyerBrokerComm}>
+                                </c-fcb-offer-broker-pricing-input>
+                                <template for:each={stemBuyerBrokers} for:item="stemBuyerBroker">
+                                    <lightning-input class="slds-m-top_x-small slds-p-left_xx-small slds-p-right_xx-small" key={stemBuyerBroker.Id} type="number" step=".001"
+                                        label={stemBuyerBroker.label} value={stemBuyerBroker.commission} onchange={handleChangeBuyerBrokerCommission} data-id={stemBuyerBroker.Id}>
+                                    </lightning-input>
+                                </template>
+                            </div>
+                        </div>
+                        <lightning-input-field field-name="Supplier_Constraints__c"
+                            value={currentStemLineItem.Supplier_Constraints__c} variant="label-stacked">
+                        </lightning-input-field>
+                        <input type="submit" class="slds-hidden" />
+                    </lightning-record-edit-form>
+                </template>
+            </div>
+            <c-fcb-stem-line-item-extra-costs stem-id={recordId} stem-line-item={currentStemLineItem}>
+            </c-fcb-stem-line-item-extra-costs>
+            <c-fcb-stem-unofficial-compensations record-id={recordId} stem-line-item-id={currentStemLineItem.Id} 
+                stem-line-item={currentStemLineItem}>
+            </c-fcb-stem-unofficial-compensations>
+                <!-- PRODUCT EXTRA COSTS -->
+            <!-- <c-fcb-stem-extra-costs stem-line-item-id={currentStemLineItem.Id} record-id={recordId}
+                show-quantity-b-d-n={notShowQuantityBDN} is-product-extra-charge={isProductExtraCharge} supplier-id={currentStemLineItem.Original_Supplier__c}
+                add-button-title="Add Product Extra Charge" quantity-delivered-per-bdn={currentStemLineItem.Quantity_Delivered_Per_BDN__c}>
+            </c-fcb-stem-extra-costs> -->
+            <footer class="slds-modal__footer">
+                <button class="slds-button slds-button_success" onclick={handleAddAction}>Save</button>
+                <button class="slds-button slds-button_neutral" onclick={closeModal}>Cancel</button>
+            </footer>
+        </div>
+    </section>
+    <div class="slds-backdrop slds-backdrop_open"></div>
+</template>

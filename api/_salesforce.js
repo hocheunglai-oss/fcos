@@ -11,11 +11,12 @@ import {
 import { expireRuntimeCacheTags } from './_runtimeCache.js';
 
 const DEFAULT_INSTANCE_URL = 'https://fratellicosulich.my.salesforce.com';
-const DEFAULT_API_VERSION = 'v59.0';
+const DEFAULT_API_VERSION = 'v67.0';
 
 let cachedToken = null;
 let cachedTokenExpiresAt = 0;
 let cachedInstanceUrl = null;
+let tokenRefreshPromise = null;
 
 export function sendJson(res, data, status = 200) {
   res.statusCode = status;
@@ -33,6 +34,13 @@ export function getInstanceUrl() {
 
 export function getApiVersion() {
   return process.env.SALESFORCE_API_VERSION || DEFAULT_API_VERSION;
+}
+
+export function salesforceServiceUrl(path, instanceUrl = getInstanceUrl(), apiVersion = getApiVersion()) {
+  const normalizedPath = String(path || '');
+  return normalizedPath.startsWith('/apexrest/')
+    ? `${instanceUrl}/services${normalizedPath}`
+    : `${instanceUrl}/services/data/${apiVersion}${normalizedPath}`;
 }
 
 async function refreshAccessToken() {
@@ -175,15 +183,23 @@ export function salesforceAuthMode() {
   return 'missing';
 }
 
+export function salesforceConfiguredAuthModes() {
+  return [
+    ...(hasJwtBearerConfig() ? ['jwt'] : []),
+    ...(hasRefreshTokenConfig() ? ['refresh_token'] : []),
+    ...(hasNonBlankEnv('SALESFORCE_ACCESS_TOKEN') ? ['access_token'] : []),
+  ];
+}
+
 export async function getAccessToken({ forceRefresh = false } = {}) {
   if (hasJwtBearerConfig()) {
     if (!forceRefresh && cachedToken && Date.now() < cachedTokenExpiresAt) return cachedToken;
-    return jwtBearerAccessToken();
+    return sharedTokenRefresh(jwtBearerAccessToken);
   }
 
   if (hasRefreshTokenConfig()) {
     if (!forceRefresh && cachedToken && Date.now() < cachedTokenExpiresAt) return cachedToken;
-    return refreshAccessToken();
+    return sharedTokenRefresh(refreshAccessToken);
   }
 
   if (process.env.SALESFORCE_ACCESS_TOKEN) return process.env.SALESFORCE_ACCESS_TOKEN;
@@ -194,6 +210,17 @@ export async function getAccessToken({ forceRefresh = false } = {}) {
   }
 
   throw new Error('Missing Salesforce env vars. Configure Salesforce JWT bearer env vars or set SALESFORCE_CLIENT_ID, SALESFORCE_CLIENT_SECRET, and SALESFORCE_REFRESH_TOKEN in Vercel.');
+}
+
+async function sharedTokenRefresh(loader) {
+  if (tokenRefreshPromise) return tokenRefreshPromise;
+  const pending = Promise.resolve().then(loader);
+  tokenRefreshPromise = pending;
+  try {
+    return await pending;
+  } finally {
+    if (tokenRefreshPromise === pending) tokenRefreshPromise = null;
+  }
 }
 
 export function cleanRecord(obj) {
@@ -227,7 +254,7 @@ export async function sfRequest(path, {
   if (!['GET', 'HEAD'].includes(normalizedMethod) && !readOnly) requireExternalActionGate('salesforce_write');
   const startedAt = Date.now();
   const accessToken = await getAccessToken();
-  const url = `${getInstanceUrl()}/services/data/${getApiVersion()}${path}`;
+  const url = salesforceServiceUrl(path);
   let res;
   let data = {};
   let limit = null;
@@ -329,6 +356,24 @@ export async function sfQuery(soql, { clean = false, limit = 2000, softFail = fa
 
     while (data.nextRecordsUrl && records.length < limit) {
       data = await sfRequest(data.nextRecordsUrl.replace(`/services/data/${getApiVersion()}`, ''));
+      records = records.concat(data.records || []);
+    }
+
+    return { records: clean ? records.map(cleanRecord) : records, totalSize };
+  } catch (error) {
+    if (softFail) return { records: [], totalSize: 0, error: error.message };
+    throw error;
+  }
+}
+
+export async function sfQueryAll(soql, { clean = false, limit = 2000, softFail = false } = {}) {
+  try {
+    let data = await sfRequest(`/queryAll/?q=${encodeURIComponent(soql)}`, { readOnly: true });
+    let records = data.records || [];
+    const totalSize = data.totalSize ?? records.length;
+
+    while (data.nextRecordsUrl && records.length < limit) {
+      data = await sfRequest(data.nextRecordsUrl.replace(`/services/data/${getApiVersion()}`, ''), { readOnly: true });
       records = records.concat(data.records || []);
     }
 

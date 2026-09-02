@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ValidationRule xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Show_only_active_products</fullName>
+    <active>false</active>
+    <description>Legacy rule retained inactive. Product availability is enforced by the current enquiry workflow.</description>
+    <errorConditionFormula>IF(ISNEW(), Product2.IsActive = true, true)</errorConditionFormula>
+    <errorMessage>Select Active Product</errorMessage>
+</ValidationRule>

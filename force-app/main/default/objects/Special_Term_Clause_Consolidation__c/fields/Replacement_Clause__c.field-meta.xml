@@ -1,0 +1,2 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata"><fullName>Replacement_Clause__c</fullName><deleteConstraint>Restrict</deleteConstraint><label>Replacement Clause</label><referenceTo>Special_Term_Clause__c</referenceTo><relationshipLabel>Replacement Consolidations</relationshipLabel><relationshipName>Replacement_Consolidations</relationshipName><required>true</required><type>Lookup</type></CustomField>

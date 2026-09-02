@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ValidationRule xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>NRT_Must_Be_Positive</fullName>
+    <active>true</active>
+    <description>NRT is optional, but when entered it must be a positive whole number.</description>
+    <errorConditionFormula>AND(NOT(ISBLANK(NRT__c)), NRT__c &lt;= 0)</errorConditionFormula>
+    <errorDisplayField>NRT__c</errorDisplayField>
+    <errorMessage>Net Registered Tonnage (NRT) must be a positive whole number.</errorMessage>
+</ValidationRule>

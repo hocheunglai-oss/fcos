@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Agency_Fee_USD__c</fullName>
+    <description>Agreed fixed supplier Agency Fee in the currency selected by Agency Fee Currency for Hong Kong Basic Calling Cost bundles.</description>
+    <externalId>false</externalId>
+    <label>Agreed Agency Fee</label>
+    <precision>18</precision>
+    <required>false</required>
+    <scale>2</scale>
+    <trackHistory>true</trackHistory>
+    <trackTrending>false</trackTrending>
+    <type>Number</type>
+    <unique>false</unique>
+</CustomField>

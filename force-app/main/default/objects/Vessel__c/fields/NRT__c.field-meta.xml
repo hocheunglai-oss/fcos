@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>NRT__c</fullName>
+    <description>Optional net registered tonnage used to verify Hong Kong anchorage dues.</description>
+    <externalId>false</externalId>
+    <label>Net Registered Tonnage (NRT)</label>
+    <precision>12</precision>
+    <required>false</required>
+    <scale>0</scale>
+    <trackHistory>true</trackHistory>
+    <trackTrending>false</trackTrending>
+    <type>Number</type>
+    <unique>false</unique>
+</CustomField>

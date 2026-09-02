@@ -1,0 +1,2 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata"><fullName>Anchorage_Arrival__c</fullName><description>Hong Kong anchorage arrival timestamp for this continuous agent period.</description><label>Anchorage Arrival</label><required>false</required><trackTrending>false</trackTrending><type>DateTime</type></CustomField>

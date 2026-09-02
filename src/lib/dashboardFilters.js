@@ -13,25 +13,27 @@ export const THIS_MONTH = now.getMonth() + 1;
 export const getRecentYears = (baseYear = THIS_YEAR, count = 3) =>
   Array.from({ length: count }, (_, index) => baseYear - index);
 
-export function buildEffectiveDateRange(startDate, endDate) {
-  return `((Delivery_Date__c >= ${startDate} AND Delivery_Date__c <= ${endDate}) OR (Delivery_Date__c = null AND Expected_Delivery_Date__c >= ${startDate} AND Expected_Delivery_Date__c <= ${endDate}))`;
-}
+export function buildDashboardDateWindows(years, months) {
+  const normalizedYears = [...new Set((years || []).map(Number).filter(Number.isInteger))].sort((a, b) => a - b);
+  const normalizedMonths = [...new Set((months || []).map(Number).filter((month) => Number.isInteger(month) && month >= 1 && month <= 12))].sort((a, b) => a - b);
+  const useFullYear = normalizedMonths.length === 0 || normalizedMonths.length === 12;
+  const windows = [];
 
-export function buildDeliveryWhere(years, months) {
-  if (!years.length) return '';
-  const conditions = [];
-  for (const yr of years) {
-    if (!months.length || months.length === 12) {
-      conditions.push(buildEffectiveDateRange(`${yr}-01-01`, `${yr}-12-31`));
-    } else {
-      for (const mo of months) {
-        const mm = String(mo).padStart(2, '0');
-        const lastDay = new Date(Number(yr), Number(mo), 0).getDate();
-        conditions.push(buildEffectiveDateRange(`${yr}-${mm}-01`, `${yr}-${mm}-${lastDay}`));
-      }
+  for (const year of normalizedYears) {
+    if (useFullYear) {
+      windows.push({ startDate: `${year}-01-01`, endDate: `${year}-12-31` });
+      continue;
+    }
+    for (const month of normalizedMonths) {
+      const monthToken = String(month).padStart(2, '0');
+      const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+      windows.push({
+        startDate: `${year}-${monthToken}-01`,
+        endDate: `${year}-${monthToken}-${String(lastDay).padStart(2, '0')}`,
+      });
     }
   }
-  return conditions.join(' OR ');
+  return windows;
 }
 
 export function formatSelectedMonths(selectedMonths) {
@@ -42,4 +44,153 @@ export function formatSelectedMonths(selectedMonths) {
     .map(month => MONTHS.find(item => item.value === Number(month))?.label)
     .filter(Boolean)
     .join(', ');
+}
+
+export const DASHBOARD_FILTER_STORAGE_KEY = 'fcos:dashboard-filter-v3';
+export const DASHBOARD_SAVED_VIEWS_STORAGE_KEY = 'fcos:dashboard-saved-views-v1';
+
+export function normalizeDashboardSavedViews(input) {
+  if (!Array.isArray(input)) return [];
+  const names = new Set();
+  return input.slice(0, 10).map((view, index) => {
+    const name = String(view?.name || '').trim().slice(0, 60);
+    const key = name.toLowerCase();
+    if (!name || names.has(key)) return null;
+    names.add(key);
+    return {
+      id: String(view?.id || `saved-${index + 1}`),
+      name,
+      filters: normalizeDashboardFilters(view?.filters || {}),
+      createdAt: String(view?.createdAt || ''),
+    };
+  }).filter(Boolean);
+}
+
+export const DASHBOARD_DATE_PRESETS = [
+  { value: 'this_month', label: 'This month' },
+  { value: 'last_month', label: 'Last month' },
+  { value: 'this_quarter', label: 'This quarter' },
+  { value: 'year_to_date', label: 'Year to date' },
+  { value: 'custom', label: 'Custom' },
+];
+
+const suggestionLabel = (option) => String(option?.label ?? option?.name ?? option?.value ?? option ?? '');
+const suggestionFields = (option) => [
+  suggestionLabel(option),
+  option?.name,
+  option?.countryCode,
+  option?.clKey,
+].map((value) => String(value || '').trim().toLowerCase()).filter(Boolean);
+const suggestionKindPriority = (option) => ['group', 'country'].includes(option?.kind) ? 0 : 1;
+
+export function dashboardSuggestionMatches(options = [], draft = '', limit = 10) {
+  const query = String(draft || '').trim().toLowerCase();
+  const ranked = (Array.isArray(options) ? options : [])
+    .map((option, index) => {
+      const fields = suggestionFields(option);
+      const label = suggestionLabel(option).toLowerCase();
+      if (query && !fields.some((value) => value.includes(query))) return null;
+      const rank = !query ? 3
+        : fields.some((value) => value === query) ? 0
+          : label.startsWith(query) ? 1
+            : fields.some((value) => value.startsWith(query)) ? 2
+              : 3;
+      return { option, index, rank, label };
+    })
+    .filter(Boolean)
+    .sort((left, right) => suggestionKindPriority(left.option) - suggestionKindPriority(right.option) || left.rank - right.rank || left.label.localeCompare(right.label) || left.index - right.index);
+  const size = Math.max(1, Math.min(Number(limit) || 10, 50));
+  const selected = ranked.slice(0, size);
+  const isHighlighted = (entry) => ['group', 'country'].includes(entry.option?.kind);
+  const firstHighlighted = ranked.find(isHighlighted);
+  const firstRegular = ranked.find((entry) => !isHighlighted(entry));
+
+  // A long list of company/port matches must not crowd the corresponding
+  // GROUP/country result out of the combined picker.
+  if (selected.length === size && firstHighlighted && firstRegular) {
+    if (!selected.some(isHighlighted)) selected[selected.length - 1] = firstHighlighted;
+    if (!selected.some((entry) => !isHighlighted(entry))) selected[selected.length - 1] = firstRegular;
+  }
+  return [...new Map(selected
+    .sort((left, right) => suggestionKindPriority(left.option) - suggestionKindPriority(right.option) || left.rank - right.rank || left.label.localeCompare(right.label) || left.index - right.index)
+    .map((entry) => [`${entry.option?.kind || ''}:${entry.option?.id || entry.option?.value || entry.label}`, entry.option])).values()];
+}
+
+function previousMonth(year, month) {
+  return month === 1 ? { year: year - 1, month: 12 } : { year, month: month - 1 };
+}
+
+export function presetDashboardPeriod(preset, currentDate = new Date()) {
+  const year = currentDate.getFullYear();
+  const month = currentDate.getMonth() + 1;
+  if (preset === 'last_month') {
+    const prior = previousMonth(year, month);
+    return { selectedYears: [prior.year], selectedMonths: [prior.month] };
+  }
+  if (preset === 'this_quarter') {
+    const quarterStart = Math.floor((month - 1) / 3) * 3 + 1;
+    return { selectedYears: [year], selectedMonths: [quarterStart, quarterStart + 1, quarterStart + 2] };
+  }
+  if (preset === 'year_to_date') return { selectedYears: [year], selectedMonths: Array.from({ length: month }, (_, index) => index + 1) };
+  return { selectedYears: [year], selectedMonths: [month] };
+}
+
+export function normalizeDashboardFilters(input = {}) {
+  const datePreset = DASHBOARD_DATE_PRESETS.some((item) => item.value === input.datePreset) ? input.datePreset : 'year_to_date';
+  const fallbackPeriod = presetDashboardPeriod(datePreset);
+  const years = [...new Set((input.selectedYears || fallbackPeriod.selectedYears).map(Number).filter(Number.isInteger))].sort((a, b) => a - b);
+  const months = [...new Set((input.selectedMonths || fallbackPeriod.selectedMonths).map(Number).filter((month) => month >= 1 && month <= 12))].sort((a, b) => a - b);
+  const legacyLocationId = String(input.portCountryId ?? '').trim();
+  const legacyCountry = legacyLocationId.toLowerCase().startsWith('country:');
+  return {
+    datePreset,
+    selectedYears: years.length ? years : [THIS_YEAR],
+    selectedMonths: months.length ? months : [THIS_MONTH],
+    disputeOnly: input.disputeOnly === true,
+    counterpartyMode: input.counterpartyMode === 'supplier' ? 'supplier' : 'buyer',
+    counterparty: input.counterparty && typeof input.counterparty === 'object' && input.counterparty.entityId
+      ? {
+        entityKey: String(input.counterparty.entityKey || ''),
+        entityType: input.counterparty.entityType === 'group' ? 'group' : 'account',
+        entityId: String(input.counterparty.entityId),
+        name: String(input.counterparty.name || ''),
+        clKey: String(input.counterparty.clKey || ''),
+        groupName: String(input.counterparty.groupName || ''),
+        roles: [...new Set((Array.isArray(input.counterparty.roles) ? input.counterparty.roles : []).filter((role) => role === 'buyer' || role === 'supplier'))],
+        buyerStemCount: Number(input.counterparty.buyerStemCount || 0),
+        supplierStemCount: Number(input.counterparty.supplierStemCount || 0),
+      }
+      : null,
+    company: String(input.company ?? input.companyKeyword ?? '').trim(),
+    companyId: String(input.companyId ?? '').trim(),
+    group: String(input.group ?? '').trim(),
+    groupId: String(input.groupId ?? '').trim(),
+    groupAccountIds: [...new Set((Array.isArray(input.groupAccountIds) ? input.groupAccountIds : []).map((value) => String(value || '').trim()).filter(Boolean))],
+    port: String(input.port ?? (legacyCountry ? '' : input.portCountry ?? '')).trim(),
+    portId: String(input.portId ?? (legacyCountry ? '' : legacyLocationId)).trim(),
+    country: String(input.country ?? (legacyCountry ? input.portCountry ?? '' : '')).trim(),
+    countryCode: String(input.countryCode ?? (legacyCountry ? legacyLocationId.slice('country:'.length) : '')).trim().toUpperCase(),
+  };
+}
+
+export function dashboardFilterPayload(input = {}) {
+  const filters = normalizeDashboardFilters(input);
+  const legacyAccountIds = filters.counterpartyMode === 'buyer'
+    ? filters.groupAccountIds.length ? filters.groupAccountIds : filters.companyId ? [filters.companyId] : []
+    : [];
+  const legacySupplierIds = filters.counterpartyMode === 'supplier' && filters.companyId ? [filters.companyId] : [];
+  const countryCodes = filters.countryCode ? [filters.countryCode] : [];
+  const portIds = filters.portId ? [filters.portId] : [];
+  return {
+    dateWindows: buildDashboardDateWindows(filters.selectedYears, filters.selectedMonths),
+    disputeOnly: filters.disputeOnly,
+    counterpartyMode: filters.counterpartyMode,
+    counterparty: filters.counterparty ? { entityType: filters.counterparty.entityType, entityId: filters.counterparty.entityId } : null,
+    filters: { accountIds: legacyAccountIds, supplierIds: legacySupplierIds, portIds, countryCodes },
+  };
+}
+
+export function dashboardFilterKey(input = {}) {
+  const filters = dashboardFilterPayload(input);
+  return JSON.stringify(filters);
 }

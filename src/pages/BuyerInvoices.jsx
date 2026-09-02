@@ -16,15 +16,21 @@ import {
   Search,
   Send,
   ShieldCheck,
+  Scale,
+  Upload,
   X,
 } from 'lucide-react';
 import ReactQuill from 'react-quill-new';
 import 'react-quill-new/dist/quill.snow.css';
 import { appClient } from '@/api/appClient';
+import { useNavigationAwareRequest } from '@/hooks/useNavigationAwareRequest';
 import PageHeader from '@/components/common/PageHeader';
+import DataStatus from '@/components/common/DataStatus';
 import DraftNotice from '@/components/common/DraftNotice';
 import StateBlock from '@/components/common/StateBlock';
+import StemDetailLink from '@/components/common/StemDetailLink';
 import TableShell from '@/components/common/TableShell';
+import WorkflowValidationSummary from '@/components/common/WorkflowValidationSummary';
 import StemDetailModal from '@/components/dashboard/StemDetailModal';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -40,25 +46,38 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { accountClKeyLabel } from '@/lib/accountDisplay';
+import { canonicalizeBuyerInvoiceEmailValue } from '@/lib/buyerInvoiceEmailSettings';
+import { paymentReminderCopyLine } from '@/lib/paymentReminderClipboard';
+import { latestPaymentReminderSentAt } from '@/lib/paymentReminderState';
 import { numericValue, textValue } from '@/lib/displayValue';
 import { cn } from '@/lib/utils';
+import { classifyBuyerPaymentEvidence } from '@/lib/paymentCollectionEvidence';
+import { matchesPaymentCollectionDisputeFilter, paymentCollectionDisputeState } from '@/lib/paymentCollectionDisputes';
 import { clearDraft, readDraft, sameDraftValue, useDraftAutosave } from '@/lib/draftAutosave';
+import { collectionWorkflowIssues } from '@/lib/workflowValidation';
 
-const EMAIL_SETTINGS_KEY = 'fcos:buyer_invoice_email_settings';
 const INVOICE_TABLE_TOKEN = '{{invoiceTable}}';
 const OLD_DEFAULT_EMAIL_INTRO = 'Please find below the latest overdue buyer invoices and buyer invoices due soon.';
-const COLLECTION_STATUSES = ['Not Started', 'Reminder Sent', 'Awaiting Buyer Reply', 'Promise to Pay', 'Escalated', 'Paid / Closed', 'On Hold'];
+const COLLECTION_STATUSES = ['To Contact', 'Awaiting Buyer', 'Promise to Pay', 'Payment Advice Received', 'Escalated', 'On Hold', 'Paid / Closed'];
+const PAYMENT_EVIDENCE_FILTERS = [
+  ['partial_cia', 'Partial CIA'],
+  ['partial_payment', 'Partial Payment'],
+  ['full_cia', 'Full CIA'],
+  ['full_payment', 'Full Payment'],
+];
+const PAYMENT_ADVICE_SOURCE_STATUSES = new Set(['Awaiting Buyer', 'Promise to Pay', 'Escalated', 'Payment Advice Received']);
+const PAYMENT_POSTING_EXCEPTION_STATES = new Set(['payment_posting_pending', 'payment_partially_posted', 'payment_posting_mismatch', 'payment_posting_overdue']);
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
 const HONG_KONG_TIME_ZONE = 'Asia/Hong_Kong';
 const HONG_KONG_TIME_LABEL = 'HKT (GMT+8)';
 const DEFAULT_EMAIL_SETTINGS = {
   enabled: true,
-  from: 'Fratelli Cosulich <info@cosulich.com.hk>',
-  to: 'bt@cosulich.com.hk',
-  cc: 'lousia@cosulich.com.hk, laureen@cosulich.com.hk',
+  to: '',
+  cc: '',
+  bcc: '',
   daysAhead: 7,
-  subject: 'Outstanding Buyer Invoices Report',
-  intro: '<h2>Outstanding Buyer Invoices</h2><p>Please find below the latest overdue buyer invoices and buyer invoices due in {{daysAhead}} days.</p><p>Report window: {{reportStart}} to {{reportEnd}}. Overdue invoices are always included.</p>',
+  subject: '',
+  intro: '',
   includeSummary: true,
   includeTable: true,
   weekdays: WEEKDAYS,
@@ -119,7 +138,6 @@ const PAYMENT_REMINDER_VARIABLE_GROUPS = [
     ],
   },
 ];
-const PAYMENT_REMINDER_STEPS = ['Select invoices', 'Review recipients', 'Email preview'];
 const REMINDER_RULES_PAGE_SIZE = 100;
 
 const COPY_ROW_FIELDS = [
@@ -165,6 +183,24 @@ function hongKongDateKey(value = new Date()) {
   return `${byType.year}-${byType.month}-${byType.day}`;
 }
 
+function nextHongKongBusinessDate(value = new Date()) {
+  const start = hongKongDateKey(value);
+  const date = new Date(`${start}T00:00:00.000Z`);
+  do {
+    date.setUTCDate(date.getUTCDate() + 1);
+  } while ([0, 6].includes(date.getUTCDay()));
+  return date.toISOString().slice(0, 10);
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || '').split(',').pop() || '');
+    reader.onerror = () => reject(reader.error || new Error('Unable to read the selected file.'));
+    reader.readAsDataURL(file);
+  });
+}
+
 const fmtDate = (value) => {
   if (!value) return '-';
   const date = parseDateValue(value);
@@ -180,6 +216,61 @@ const fmtDate = (value) => {
     return textValue(value);
   }
 };
+
+function paymentEvidenceCodes(row) {
+  const scheduleCodes = (row?.paymentEvidenceSummary?.payments || [])
+    .map((payment) => payment?.evidence?.code)
+    .filter(Boolean);
+  return new Set(scheduleCodes.length ? scheduleCodes : [row?.paymentEvidence?.code].filter(Boolean));
+}
+
+function paymentComparisonText(evidence) {
+  if (!evidence?.receivedDate) return '';
+  return [
+    `Received ${fmtDate(evidence.receivedDate)}`,
+    evidence.earliestEtaDate ? `Earliest ETA ${fmtDate(evidence.earliestEtaDate)}` : null,
+    evidence.actualDeliveryDate ? `Delivered ${fmtDate(evidence.actualDeliveryDate)}` : null,
+    !evidence.earliestEtaDate && !evidence.actualDeliveryDate ? 'CIA boundary unavailable' : null,
+  ].filter(Boolean).join(' · ');
+}
+
+function paymentPostingLabel(state) {
+  if (state === 'payment_partially_posted') return 'Payment partly posted';
+  if (state === 'payment_posting_mismatch') return 'Payment posting mismatch';
+  if (state === 'payment_posting_overdue') return 'Payment posting overdue';
+  if (state === 'payment_posting_pending') return 'Payment posting pending';
+  return '';
+}
+
+function PaymentEvidenceDisplay({ latestPayment, evidence, summary, postingState = '' }) {
+  if (!latestPayment) return '-';
+  const payments = summary?.payments || [];
+  const postingException = PAYMENT_POSTING_EXCEPTION_STATES.has(postingState);
+  return (
+    <div className="min-w-[230px]">
+      <span className={postingException ? 'font-medium text-amber-700' : 'font-medium text-emerald-700'}>
+        {postingException ? paymentPostingLabel(postingState) : evidence?.label || 'Buyer payment'}
+      </span>
+      <div>{latestPayment.amount != null ? fmtMoney(latestPayment.amount) : '-'}</div>
+      <div className="mt-0.5 text-[11px] leading-4 text-muted-foreground">{paymentComparisonText(evidence) || fmtDate(latestPayment.paymentDate)}</div>
+      {payments.length > 1 && (
+        <details className="mt-1.5">
+          <summary className="cursor-pointer text-[11px] font-medium text-primary">
+            {payments.length} payments · CIA {fmtMoney(summary.ciaReceivedAmount)} · Other {fmtMoney(summary.otherReceivedAmount)}
+          </summary>
+          <div className="mt-1 space-y-1 border-l-2 border-border pl-2 text-[11px] leading-4">
+            {payments.map((payment) => (
+              <div key={payment.paymentId || `${payment.paymentDate}:${payment.amount}`}>
+                <span className="font-medium text-foreground">{payment.evidence?.label || 'Buyer payment'}</span>
+                {' · '}{fmtMoney(payment.amount)} · {fmtDate(payment.paymentDate)}
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+    </div>
+  );
+}
 
 const fmtDateTime = (value) => {
   if (!value) return '-';
@@ -237,6 +328,24 @@ function uniqueEmailList(...values) {
   };
   values.forEach(add);
   return emails;
+}
+
+function paymentReminderOperationId() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  return `payment-reminder-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function isLocalPaymentReminderCandidate(candidate, anchor) {
+  if (!candidate || !anchor) return false;
+  if (candidate.stemId === anchor.stemId) return true;
+  const accountId = String(anchor.buyerAccountId || '').slice(0, 15);
+  if (accountId && String(candidate.buyerAccountId || '').slice(0, 15) === accountId) return true;
+  const parentId = String(anchor.buyerParentAccountId || '').slice(0, 15);
+  return Boolean(
+    parentId
+    && !/\bfratelli\s+cosulich\b/i.test(String(anchor.buyerGroupName || ''))
+    && String(candidate.buyerParentAccountId || '').slice(0, 15) === parentId,
+  );
 }
 
 function richTemplateValue(value, fallback = DEFAULT_EMAIL_SETTINGS.paymentReminderBody) {
@@ -321,7 +430,6 @@ function invoiceTablePreviewHtml(rows = []) {
         <td style="${cellStyle};text-align:right;font-weight:600">${fmtMoney(row.receivableBalance)}</td>
         <td style="${cellStyle}">${fmtDate(row.buyerInvoiceDueDate)}</td>
         <td style="${cellStyle};white-space:normal;min-width:95px">${escapeHtml(row.buyerTraderInCharge || '-')}</td>
-        <td style="${cellStyle};white-space:normal;min-width:90px">${escapeHtml(row.prpspStatus || '-')}</td>
         <td style="${cellStyle};text-align:right;font-weight:600">${escapeHtml(overdueDisplayValue(row.daysUntilDue))}</td>
       </tr>`;
   }).join('');
@@ -336,7 +444,6 @@ function invoiceTablePreviewHtml(rows = []) {
             <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:right;white-space:nowrap">Receivable</th>
             <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:left;white-space:nowrap">Due Date</th>
             <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:left;white-space:nowrap">Trader</th>
-            <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:left;white-space:nowrap">PSPRS</th>
             <th style="border-bottom:1px solid #d9e2ef;padding:7px 8px;text-align:right;white-space:nowrap">Overdue</th>
           </tr>
         </thead>
@@ -397,31 +504,23 @@ function insertTokenIntoQuill(editor, token) {
 
 function emailSettingsToForm(settings = DEFAULT_EMAIL_SETTINGS) {
   const merged = { ...DEFAULT_EMAIL_SETTINGS, ...settings };
-  if (String(merged.from || '').includes('admin@fcuno.com')) merged.from = DEFAULT_EMAIL_SETTINGS.from;
+  delete merged.from;
   if (!merged.intro || merged.intro === OLD_DEFAULT_EMAIL_INTRO) merged.intro = DEFAULT_EMAIL_SETTINGS.intro;
   const paymentReminderBody = textValue(merged.paymentReminderBody, DEFAULT_EMAIL_SETTINGS.paymentReminderBody)
     .replace(/Dear\s+\{\{\s*buyerName\s*\}\}/i, 'Dear {{primaryRecipientName}}')
     .replace(/To\s+\{\{\s*buyerName\s*\}\}/i, 'To {{primaryRecipientName}}');
   return {
     ...merged,
-    to: arrayToInput(merged.to),
-    cc: arrayToInput(merged.cc),
+    to: arrayToInput(canonicalizeBuyerInvoiceEmailValue(merged.to)),
+    cc: arrayToInput(canonicalizeBuyerInvoiceEmailValue(merged.cc)),
+    bcc: arrayToInput(canonicalizeBuyerInvoiceEmailValue(merged.bcc)),
     sendTimes: arrayToInput(merged.sendTimes),
     weekdays: Array.isArray(merged.weekdays) ? merged.weekdays : WEEKDAYS,
     intro: richTemplateValue(merged.intro, DEFAULT_EMAIL_SETTINGS.intro),
-    paymentReminderCc: arrayToInput(merged.paymentReminderCc),
-    paymentReminderBcc: arrayToInput(merged.paymentReminderBcc),
+    paymentReminderCc: arrayToInput(canonicalizeBuyerInvoiceEmailValue(merged.paymentReminderCc)),
+    paymentReminderBcc: arrayToInput(canonicalizeBuyerInvoiceEmailValue(merged.paymentReminderBcc)),
     paymentReminderBody: richTemplateValue(paymentReminderBody),
   };
-}
-
-function readLegacyEmailSettings() {
-  try {
-    const raw = localStorage.getItem(EMAIL_SETTINGS_KEY);
-    return emailSettingsToForm(raw ? JSON.parse(raw) : DEFAULT_EMAIL_SETTINGS);
-  } catch {
-    return emailSettingsToForm(DEFAULT_EMAIL_SETTINGS);
-  }
 }
 
 function sameSettings(a, b) {
@@ -440,7 +539,7 @@ function SummaryCard({ label, value, tone = 'default' }) {
   return (
     <div className="rounded-xl border border-border bg-card p-4">
       <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
-      <p className={`mt-1 font-dm text-2xl font-bold ${toneClass}`}>{value}</p>
+      <p className={`mt-1 font-ui text-2xl font-semibold ${toneClass}`}>{value}</p>
     </div>
   );
 }
@@ -534,26 +633,11 @@ function statusPill(status, daysUntilDue) {
 function collectionPill(status) {
   if (status === 'Escalated') return 'bg-red-50 text-red-700 border-red-200';
   if (status === 'Promise to Pay') return 'bg-emerald-50 text-emerald-700 border-emerald-200';
-  if (status === 'Reminder Sent' || status === 'Awaiting Buyer Reply') return 'bg-blue-50 text-blue-700 border-blue-200';
+  if (status === 'Payment Advice Received') return 'bg-cyan-50 text-cyan-800 border-cyan-200';
+  if (status === 'Awaiting Buyer') return 'bg-blue-50 text-blue-700 border-blue-200';
   if (status === 'On Hold') return 'bg-amber-50 text-amber-700 border-amber-200';
   if (status === 'Paid / Closed') return 'bg-muted text-muted-foreground border-border';
   return 'bg-background text-foreground border-border';
-}
-
-function isPaymentReminderSentEvent(event) {
-  return /^Payment reminder sent\b/i.test(textValue(event?.note, ''));
-}
-
-function latestPaymentReminderSentEvent(row) {
-  const events = Array.isArray(row?.collectionEvents) ? row.collectionEvents : [];
-  return events
-    .filter(isPaymentReminderSentEvent)
-    .filter((event) => event.createdAt)
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
-}
-
-function latestPaymentReminderSentAt(row) {
-  return latestPaymentReminderSentEvent(row)?.createdAt || null;
 }
 
 function wasPaymentReminderSentToday(row, todayKey = hongKongDateKey()) {
@@ -593,7 +677,14 @@ function escapeHtml(value) {
 }
 
 function invoiceRecordPlainText(row) {
-  return COPY_ROW_FIELDS.map((getValue) => copyCell(getValue(row))).join(' - ').toUpperCase();
+  const values = COPY_ROW_FIELDS.map((getValue) => copyCell(getValue(row)));
+  return paymentReminderCopyLine({
+    stemName: values[0],
+    buyerName: values[1],
+    amount: values[2],
+    dueDate: values[3].replace(/^Due Date\s*/i, ''),
+    status: values[4],
+  });
 }
 
 function invoiceRecordHtml(row) {
@@ -626,8 +717,17 @@ function isCopyCandidate(row, selected) {
 function matchesInvoiceKeyword(row, keyword) {
   const terms = String(keyword || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
   if (!terms.length) return true;
-  const searchable = `${row?.stemName || ''} ${row?.buyerName || ''}`.toLowerCase();
+  const dispute = disputePresentation(row?.disputeStatus);
+  const searchable = `${row?.stemName || ''} ${row?.buyerName || ''} ${row?.disputeStatus || ''} ${dispute.state.replace('-', ' ')} ${dispute.label || ''}`.toLowerCase();
   return terms.every((term) => searchable.includes(term));
+}
+
+function disputePresentation(status) {
+  const state = paymentCollectionDisputeState(status);
+  if (state === 'active') return { state, label: 'Dispute open', accent: 'border-l-amber-400', badge: 'border-amber-300 bg-amber-50 text-amber-800' };
+  if (state === 'closed') return { state, label: 'Dispute history', accent: 'border-l-slate-400', badge: 'border-slate-300 bg-slate-100 text-slate-700' };
+  if (state === 'issue') return { state, label: 'Status issue', accent: 'border-l-red-400', badge: 'border-red-300 bg-red-50 text-red-700' };
+  return { state, label: null, accent: 'border-l-transparent', badge: '' };
 }
 
 function brokerRoutingLabel(mode) {
@@ -701,7 +801,7 @@ function readInitialFilters() {
 }
 
 function collectionStatus(row) {
-  return row.collection?.status || 'Not Started';
+  return row.collection?.status || 'To Contact';
 }
 
 function defaultCollectionOwner(row) {
@@ -712,33 +812,55 @@ function collectionOwner(row) {
   return row.collection?.ownerName || defaultCollectionOwner(row);
 }
 
+function promiseAmountFromReceivable(row) {
+  return row?.receivableBalance == null ? '' : String(row.receivableBalance);
+}
+
 function isFollowUpDue(row, today) {
   const date = row.collection?.nextFollowUpDate;
   return Boolean(date && date <= today && collectionStatus(row) !== 'Paid / Closed');
 }
 
 function isNeedsAction(row, today) {
-  return row.status === 'Overdue' || isFollowUpDue(row, today);
+  const collection = row.collection || {};
+  if (PAYMENT_POSTING_EXCEPTION_STATES.has(collection.reconciliationState) || ['advice_overdue', 'balance_unavailable', 'manual_closure_mismatch', 'reopened'].includes(collection.reconciliationState)) return true;
+  if (collectionStatus(row) === 'Payment Advice Received' && collection.adviceVerificationDate && collection.adviceVerificationDate <= today) return true;
+  if (collectionStatus(row) === 'Promise to Pay' && collection.promisedPaymentDate && collection.promisedPaymentDate <= today) return true;
+  if (isFollowUpDue(row, today)) return true;
+  const upcomingActionDate = nextHongKongBusinessDate(new Date(`${today}T04:00:00.000Z`));
+  if (collection.nextFollowUpDate && collection.nextFollowUpDate > today && collection.nextFollowUpDate <= upcomingActionDate) return true;
+  return ['Overdue', 'Due Today'].includes(row.status) && collectionStatus(row) === 'To Contact';
 }
 
 function uniqueNames(values) {
   return [...new Set(values.map((value) => textValue(value, '').trim()).filter(Boolean))];
 }
 
-function CollectionModal({ row, open, onClose, onSaved, ownerOptions = [] }) {
+function CollectionModal({ row, open, onClose, onSaved, onSendReminder, ownerOptions = [] }) {
   const draftKey = row?.stemId ? `buyer-invoices:collection:${row.stemId}` : null;
   const [form, setForm] = useState({
-    status: 'Not Started',
+    status: 'To Contact',
     ownerName: '',
     latestNote: '',
     nextFollowUpDate: '',
     promisedPaymentDate: '',
     promisedAmount: '',
+    onHoldReason: '',
+    onHoldReviewDate: '',
+    adviceReceivedDate: '',
+    adviceAmount: '',
+    adviceReference: '',
+    adviceVerificationDate: '',
+    activityType: 'status_change',
   });
+  const [adviceFile, setAdviceFile] = useState(null);
+  const [adviceDragActive, setAdviceDragActive] = useState(false);
   const [baseForm, setBaseForm] = useState(null);
   const [restoredAt, setRestoredAt] = useState(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+  const [saveAttempted, setSaveAttempted] = useState(false);
+  const ownerSelectRef = useRef(null);
   const rowTraderOptions = useMemo(() => splitBuyerTraderNames(row?.buyerTraderInCharge), [row?.buyerTraderInCharge]);
   const ownerChoices = useMemo(() => uniqueNames([
     ...rowTraderOptions,
@@ -754,7 +876,14 @@ function CollectionModal({ row, open, onClose, onSaved, ownerOptions = [] }) {
       latestNote: row.collection?.latestNote || '',
       nextFollowUpDate: row.collection?.nextFollowUpDate || '',
       promisedPaymentDate: row.collection?.promisedPaymentDate || '',
-      promisedAmount: row.collection?.promisedAmount ?? '',
+      promisedAmount: row.collection?.promisedAmount ?? promiseAmountFromReceivable(row),
+      onHoldReason: row.collection?.onHoldReason || '',
+      onHoldReviewDate: row.collection?.onHoldReviewDate || '',
+      adviceReceivedDate: row.collection?.adviceReceivedDate || '',
+      adviceAmount: row.collection?.adviceAmount ?? '',
+      adviceReference: row.collection?.adviceReference || '',
+      adviceVerificationDate: row.collection?.adviceVerificationDate || '',
+      activityType: 'status_change',
     };
     const draft = readDraft(draftKey);
     const nextForm = draft?.data && !sameDraftValue(draft.data, nextBase)
@@ -763,10 +892,17 @@ function CollectionModal({ row, open, onClose, onSaved, ownerOptions = [] }) {
     setBaseForm(nextBase);
     setForm(nextForm);
     setRestoredAt(draft?.data && !sameDraftValue(draft.data, nextBase) ? draft.updatedAt : null);
+    setAdviceFile(null);
     setError(null);
+    setSaveAttempted(false);
   }, [draftKey, ownerChoices, ownerOptions, row, rowTraderOptions]);
 
   const formDirty = Boolean(baseForm && !sameDraftValue(form, baseForm));
+  const validationIssues = useMemo(() => collectionWorkflowIssues({
+    form,
+    adviceFile,
+    existingAdviceDocumentIds: row?.collection?.adviceDocumentIds || [],
+  }), [adviceFile, form, row?.collection?.adviceDocumentIds]);
   useDraftAutosave(draftKey, form, {
     enabled: open && Boolean(row),
     dirty: formDirty,
@@ -775,20 +911,64 @@ function CollectionModal({ row, open, onClose, onSaved, ownerOptions = [] }) {
 
   if (!open || !row) return null;
 
-  const update = (key, value) => setForm((prev) => ({ ...prev, [key]: value }));
+  const update = (key, value) => setForm((prev) => {
+    const next = { ...prev, [key]: value };
+    if (key === 'status' && value === 'Payment Advice Received') {
+      next.adviceReceivedDate ||= hongKongDateKey();
+      next.adviceVerificationDate ||= nextHongKongBusinessDate();
+      next.nextFollowUpDate ||= next.adviceVerificationDate;
+      next.adviceAmount ||= row.receivableBalance == null ? '' : String(row.receivableBalance);
+    }
+    if (key === 'status' && value === 'Promise to Pay') {
+      next.promisedPaymentDate ||= next.nextFollowUpDate || nextHongKongBusinessDate();
+      next.promisedAmount ||= promiseAmountFromReceivable(row);
+    }
+    if (key === 'status' && value === 'On Hold') next.onHoldReviewDate ||= nextHongKongBusinessDate();
+    return next;
+  });
   const discardDraft = () => {
     clearDraft(draftKey);
     if (baseForm) setForm(baseForm);
     setRestoredAt(null);
   };
   const save = async () => {
+    setSaveAttempted(true);
+    if (validationIssues.length) {
+      setError(validationIssues[0].message);
+      return;
+    }
     setSaving(true);
     setError(null);
-    const res = await appClient.functions.invoke('buyerInvoiceCollectionSave', {
+    let functionName = 'buyerInvoiceCollectionSave';
+    let payload = {
       stemId: row.stemId,
       updates: form,
+      event: { eventType: form.activityType || 'status_change' },
       expectedUpdatedAt: row.collection?.updatedAt || null,
-    });
+    };
+    if (form.status === 'Payment Advice Received') {
+      let base64 = null;
+      try {
+        base64 = adviceFile ? await fileToBase64(adviceFile) : null;
+      } catch (fileError) {
+        setError(fileError.message || 'Unable to read the payment advice document.');
+        setSaving(false);
+        return;
+      }
+      functionName = 'buyerInvoicePaymentAdviceSave';
+      payload = {
+        stemId: row.stemId,
+        adviceReceivedDate: form.adviceReceivedDate,
+        adviceAmount: Number(form.adviceAmount),
+        adviceReference: form.adviceReference,
+        adviceVerificationDate: form.adviceVerificationDate,
+        expectedUpdatedAt: row.collection?.updatedAt || null,
+        originalFileName: adviceFile?.name || null,
+        contentType: adviceFile?.type || null,
+        base64,
+      };
+    }
+    const res = await appClient.functions.invoke(functionName, payload);
     if (res.data?.error) {
       setError(res.data.error);
     } else {
@@ -817,22 +997,63 @@ function CollectionModal({ row, open, onClose, onSaved, ownerOptions = [] }) {
         <div className="grid max-h-[calc(90vh-76px)] gap-4 overflow-auto p-4 lg:grid-cols-[1fr_0.9fr]">
           <div className="space-y-4">
             <DraftNotice restoredAt={restoredAt} label="Collection draft restored" onDiscard={discardDraft} />
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" size="sm" variant="outline" disabled={formDirty || row.paymentReminderEligible !== true} title={formDirty ? 'Save or discard the collection changes first.' : row.paymentReminderBlockingReason || 'Send payment reminder'} onClick={() => onSendReminder?.(row)}>
+                Send Reminder
+              </Button>
+              {[
+                ['Awaiting Buyer', 'Log Contact', 'contact'],
+                ['Promise to Pay', 'Record Promise', 'promise'],
+                ['Payment Advice Received', 'Record Payment Advice', 'payment_advice'],
+                ['Escalated', 'Escalate', 'status_change'],
+                ['On Hold', 'Put On Hold', 'status_change'],
+              ].map(([status, label, activityType]) => (
+                <Button
+                  key={status}
+                  type="button"
+                  size="sm"
+                  variant={form.status === status ? 'default' : 'outline'}
+                  disabled={status === 'Payment Advice Received' && !PAYMENT_ADVICE_SOURCE_STATUSES.has(collectionStatus(row))}
+                  title={status === 'Payment Advice Received' && !PAYMENT_ADVICE_SOURCE_STATUSES.has(collectionStatus(row)) ? 'Record contact or escalation before payment advice.' : undefined}
+                  onClick={() => setForm((current) => ({
+                    ...current,
+                    status,
+                    activityType,
+                    ...(status === 'Promise to Pay' ? {
+                      promisedPaymentDate: current.promisedPaymentDate || current.nextFollowUpDate || nextHongKongBusinessDate(),
+                      promisedAmount: current.promisedAmount || promiseAmountFromReceivable(row),
+                    } : {}),
+                    ...(status === 'Payment Advice Received' ? { adviceReceivedDate: current.adviceReceivedDate || hongKongDateKey(), adviceVerificationDate: current.adviceVerificationDate || nextHongKongBusinessDate(), adviceAmount: current.adviceAmount || (row.receivableBalance == null ? '' : String(row.receivableBalance)) } : {}),
+                  }))}
+                >
+                  {label}
+                </Button>
+              ))}
+              <Button type="button" size="sm" variant="outline" onClick={() => { setForm((current) => ({ ...current, activityType: 'owner_change' })); ownerSelectRef.current?.focus(); }}>
+                Assign Handler
+              </Button>
+            </div>
             <div className="grid gap-3 md:grid-cols-2">
               <div className="space-y-1.5">
                 <Label className="text-xs text-muted-foreground">Collection Status</Label>
                 <select
                   value={form.status}
-                  onChange={(event) => update('status', event.target.value)}
+                  onChange={(event) => { update('status', event.target.value); update('activityType', 'status_change'); }}
                   className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
                 >
-                  {COLLECTION_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}
+                  {COLLECTION_STATUSES.map((status) => (
+                    <option key={status} value={status} disabled={status === 'Payment Advice Received' && !PAYMENT_ADVICE_SOURCE_STATUSES.has(collectionStatus(row))}>
+                      {status}
+                    </option>
+                  ))}
                 </select>
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs text-muted-foreground">Payment Handler</Label>
                 <select
+                  ref={ownerSelectRef}
                   value={form.ownerName}
-                  onChange={(event) => update('ownerName', event.target.value)}
+                  onChange={(event) => { update('ownerName', event.target.value); update('activityType', 'owner_change'); }}
                   className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
                 >
                   {!ownerChoices.length && <option value="">No buyer trader assigned</option>}
@@ -849,7 +1070,7 @@ function CollectionModal({ row, open, onClose, onSaved, ownerOptions = [] }) {
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs text-muted-foreground">Promised Amount</Label>
-                <Input type="number" min="0" step="0.01" value={form.promisedAmount} onChange={(event) => update('promisedAmount', event.target.value)} />
+                <Input type="text" inputMode="decimal" value={form.promisedAmount} onChange={(event) => update('promisedAmount', event.target.value)} />
               </div>
               <div className="rounded-lg border border-border bg-muted/20 p-3 text-xs text-muted-foreground">
                 <div><span className="font-semibold text-foreground">Due:</span> {fmtDate(row.buyerInvoiceDueDate)}</div>
@@ -857,10 +1078,48 @@ function CollectionModal({ row, open, onClose, onSaved, ownerOptions = [] }) {
                 <div><span className="font-semibold text-foreground">PSPRS:</span> {row.prpspStatus || '-'}</div>
               </div>
             </div>
+            {form.status === 'Promise to Pay' && (
+              <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-900">
+                Promise date and amount are required. A missed promise returns the case to Needs Action without changing its status automatically.
+              </div>
+            )}
+            {form.status === 'On Hold' && (
+              <div className="grid gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3 md:grid-cols-2">
+                <div className="space-y-1.5"><Label>Hold reason</Label><Input value={form.onHoldReason} onChange={(event) => update('onHoldReason', event.target.value)} placeholder="Why collection activity is paused" /></div>
+                <div className="space-y-1.5"><Label>Review date</Label><Input type="date" value={form.onHoldReviewDate} onChange={(event) => update('onHoldReviewDate', event.target.value)} /></div>
+              </div>
+            )}
+            {form.status === 'Payment Advice Received' && (
+              <div className="space-y-3 rounded-lg border border-cyan-200 bg-cyan-50/60 p-4">
+                <div>
+                  <h3 className="text-sm font-semibold text-cyan-950">Payment advice evidence</h3>
+                  <p className="mt-1 text-xs text-cyan-900">This pauses reminders until verification. Settlement still depends on the live Salesforce receivable balance.</p>
+                </div>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div className="space-y-1.5"><Label>Advice received date</Label><Input type="date" value={form.adviceReceivedDate} onChange={(event) => update('adviceReceivedDate', event.target.value)} /></div>
+                  <div className="space-y-1.5"><Label>Advised amount ({row.currency || 'STEM currency'})</Label><Input type="number" min="0.01" step="0.01" value={form.adviceAmount} onChange={(event) => update('adviceAmount', event.target.value)} /></div>
+                  <div className="space-y-1.5"><Label>Buyer reference</Label><Input value={form.adviceReference} onChange={(event) => update('adviceReference', event.target.value)} placeholder="Reference from remittance advice" /></div>
+                  <div className="space-y-1.5"><Label>Verification date</Label><Input type="date" value={form.adviceVerificationDate} onChange={(event) => { update('adviceVerificationDate', event.target.value); update('nextFollowUpDate', event.target.value); }} /></div>
+                </div>
+                <label
+                  className={cn('flex min-h-24 cursor-pointer flex-col items-center justify-center gap-2 rounded-md border border-dashed px-4 py-4 text-center', adviceDragActive ? 'border-cyan-600 bg-cyan-100' : 'border-cyan-300 bg-white')}
+                  onDragEnter={(event) => { event.preventDefault(); setAdviceDragActive(true); }}
+                  onDragOver={(event) => { event.preventDefault(); setAdviceDragActive(true); }}
+                  onDragLeave={() => setAdviceDragActive(false)}
+                  onDrop={(event) => { event.preventDefault(); setAdviceDragActive(false); setAdviceFile(event.dataTransfer.files?.[0] || null); }}
+                >
+                  <Upload className="h-5 w-5 text-cyan-800" />
+                  <span className="max-w-full truncate text-sm font-medium">{adviceFile?.name || 'Drop payment advice here or choose a file'}</span>
+                  <span className="text-xs text-muted-foreground">Optional when a buyer reference is entered · Maximum 3 MB</span>
+                  <input type="file" className="sr-only" accept=".pdf,.png,.jpg,.jpeg,.webp,.doc,.docx,.xls,.xlsx,.csv,.txt,.msg" onChange={(event) => setAdviceFile(event.target.files?.[0] || null)} />
+                </label>
+              </div>
+            )}
             <div className="space-y-1.5">
               <Label className="text-xs text-muted-foreground">Latest Note</Label>
               <Textarea value={form.latestNote} onChange={(event) => update('latestNote', event.target.value)} className="min-h-32" placeholder="Add the latest follow-up note..." />
             </div>
+            <WorkflowValidationSummary issues={saveAttempted ? validationIssues : []} />
             {error && <div className="rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
@@ -891,6 +1150,12 @@ function CollectionModal({ row, open, onClose, onSaved, ownerOptions = [] }) {
                         {event.nextFollowUpDate && <span>Next follow-up: {fmtDate(event.nextFollowUpDate)}</span>}
                         {event.promisedPaymentDate && <span>Promise date: {fmtDate(event.promisedPaymentDate)}</span>}
                         {event.promisedAmount != null && <span>Promise amount: {fmtMoney(event.promisedAmount)}</span>}
+                        {event.metadata?.adviceReceivedDate && <span>Advice received: {fmtDate(event.metadata.adviceReceivedDate)}</span>}
+                        {event.metadata?.adviceAmount != null && <span>Advised amount: {event.metadata.currency || row.currency || ''} {Number(event.metadata.adviceAmount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>}
+                        {event.metadata?.adviceVerificationDate && <span>Verify by: {fmtDate(event.metadata.adviceVerificationDate)}</span>}
+                        {event.metadata?.onHoldReason && <span>Hold reason: {event.metadata.onHoldReason}</span>}
+                        {event.metadata?.onHoldReviewDate && <span>Review hold: {fmtDate(event.metadata.onHoldReviewDate)}</span>}
+                        {event.metadata?.document?.downloadUrl && <a href={event.metadata.document.downloadUrl} target="_blank" rel="noreferrer" className="font-medium text-primary hover:underline">Preview {event.metadata.document.fileName || 'payment advice'}</a>}
                         {event.actorEmail && <span>Updated by: {event.actorEmail}</span>}
                       </div>
                     </div>
@@ -1318,7 +1583,7 @@ function ReminderRulesModal({ open, onClose, onChanged }) {
   );
 }
 
-function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose, onSent }) {
+function PaymentReminderModal({ row, rows = [], initialSettings, open, daysAhead, canManageSettings, onClose, onSent }) {
   const draftKey = row?.stemId ? `buyer-invoices:payment-reminder:${row.stemId}:${daysAhead}` : null;
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
@@ -1326,10 +1591,14 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
   const [error, setError] = useState(null);
   const [templateMessage, setTemplateMessage] = useState('');
   const [templateEditing, setTemplateEditing] = useState(false);
+  const [recipientsEditing, setRecipientsEditing] = useState(false);
+  const [authoritativeReady, setAuthoritativeReady] = useState(false);
+  const [idempotencyKey, setIdempotencyKey] = useState(() => paymentReminderOperationId());
+  const [hasSubmitted, setHasSubmitted] = useState(false);
   const [data, setData] = useState(null);
   const [selectedIds, setSelectedIds] = useState([]);
-  const [currentStep, setCurrentStep] = useState(0);
   const reminderBodyEditorRef = useRef(null);
+  const skipNextPrepareRef = useRef(false);
   const [form, setForm] = useState({
     recipientBatches: {},
     subject: '',
@@ -1339,17 +1608,36 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
   const [restoredAt, setRestoredAt] = useState(null);
 
   useEffect(() => {
-    if (open) setCurrentStep(0);
-  }, [open, row?.stemId]);
-
-  useEffect(() => {
     if (!open || !row) return;
+    if (skipNextPrepareRef.current) {
+      skipNextPrepareRef.current = false;
+      return;
+    }
     let cancelled = false;
     const load = async () => {
       setLoading(true);
       setError(null);
       setTemplateMessage('');
       setTemplateEditing(false);
+      setRecipientsEditing(false);
+      setAuthoritativeReady(false);
+      setIdempotencyKey(paymentReminderOperationId());
+      setHasSubmitted(false);
+      const localCandidates = rows
+        .filter((candidate) => isLocalPaymentReminderCandidate(candidate, row))
+        .sort((left, right) => String(left.buyerInvoiceDueDate || '').localeCompare(String(right.buyerInvoiceDueDate || '')) || String(left.stemName || '').localeCompare(String(right.stemName || '')));
+      const localSelectedIds = localCandidates.filter((candidate) => candidate.paymentReminderEligible === true).map((candidate) => candidate.stemId);
+      const localForm = {
+        recipientBatches: {},
+        templateCc: initialSettings?.paymentReminderCc || '',
+        templateBcc: initialSettings?.paymentReminderBcc || '',
+        subject: initialSettings?.paymentReminderSubject || DEFAULT_EMAIL_SETTINGS.paymentReminderSubject,
+        body: richTemplateValue(initialSettings?.paymentReminderBody || DEFAULT_EMAIL_SETTINGS.paymentReminderBody),
+      };
+      setData({ selected: row, candidates: localCandidates, routingGroups: [], routingWarnings: [], settings: { emailDelivery: { hasServerProvider: true } }, previewToken: null, localSeed: true });
+      setSelectedIds(localSelectedIds);
+      setForm(localForm);
+      setBaseDraftValue({ form: localForm, selectedIds: localSelectedIds });
       const res = await appClient.functions.invoke('buyerInvoicePaymentReminderPrepare', {
         stemId: row.stemId,
         daysAhead,
@@ -1357,7 +1645,6 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
       if (cancelled) return;
       if (res.data?.error) {
         setError(res.data.error);
-        setData(null);
       } else {
         const candidates = res.data.candidates || [];
         const baseRecipientBatches = Object.fromEntries((res.data.routingGroups || []).map((group) => [
@@ -1391,6 +1678,7 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
             }
           : baseForm;
         setData(res.data);
+        setAuthoritativeReady(Boolean(res.data.previewToken));
         setSelectedIds(draftSelectedIds.length ? draftSelectedIds : baseSelectedIds);
         setForm(nextForm);
         const nextBaseDraftValue = { form: baseForm, selectedIds: baseSelectedIds };
@@ -1404,7 +1692,7 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
     return () => {
       cancelled = true;
     };
-  }, [daysAhead, draftKey, open, row]);
+  }, [daysAhead, draftKey, initialSettings, open, row, rows]);
 
   const candidates = data?.candidates || [];
   const eligibleCandidates = useMemo(
@@ -1505,8 +1793,17 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
 
   if (!open || !row) return null;
 
-  const updateForm = (key, value) => setForm((prev) => ({ ...prev, [key]: value }));
+  const resetSubmittedOperation = () => {
+    if (!hasSubmitted) return;
+    setHasSubmitted(false);
+    setIdempotencyKey(paymentReminderOperationId());
+  };
+  const updateForm = (key, value) => {
+    resetSubmittedOperation();
+    setForm((prev) => ({ ...prev, [key]: value }));
+  };
   const updateBatchRecipient = (groupKey, field, value) => {
+    resetSubmittedOperation();
     setForm((prev) => ({
       ...prev,
       recipientBatches: {
@@ -1544,6 +1841,7 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
   };
   const toggleInvoice = (stemId) => {
     if (!eligibleCandidates.some((candidate) => candidate.stemId === stemId)) return;
+    resetSubmittedOperation();
     setSelectedIds((prev) => (
       prev.includes(stemId)
         ? prev.filter((id) => id !== stemId)
@@ -1551,6 +1849,7 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
     ));
   };
   const toggleAll = () => {
+    resetSubmittedOperation();
     setSelectedIds((prev) => (
       prev.length === eligibleCandidates.length ? [] : eligibleCandidates.map((candidate) => candidate.stemId)
     ));
@@ -1569,11 +1868,15 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
     }));
     const missingRecipientBatch = reviewedRecipientBatches.find((batch) => !uniqueEmailList(batch.to).length);
     if (missingRecipientBatch) {
-      setCurrentStep(1);
       setError('Enter at least one To email before sending.');
       return;
     }
+    if (!authoritativeReady || !data?.previewToken) {
+      setError('Live Salesforce verification must finish before sending.');
+      return;
+    }
     setSending(true);
+    setHasSubmitted(true);
     setError(null);
     const hasServerEmailProvider = Boolean(data?.settings?.emailDelivery?.hasServerProvider);
     if (!hasServerEmailProvider) {
@@ -1588,14 +1891,62 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
       recipientBatches: reviewedRecipientBatches,
       subject: form.subject,
       body: form.body,
-    });
+      previewToken: data.previewToken,
+      idempotencyKey,
+    }, { invalidateCache: false });
     if (res.data?.error) {
       setError(res.data.error);
+      if (['PAYMENT_REMINDER_REVIEW_STALE', 'PAYMENT_REMINDER_SELECTION_STALE', 'PAYMENT_REMINDER_SELECTION_RESTRICTED'].includes(res.data.code)) {
+        setLoading(true);
+        setAuthoritativeReady(false);
+        const refreshed = await appClient.functions.invoke('buyerInvoicePaymentReminderPrepare', {
+          stemId: row.stemId,
+          daysAhead,
+        }, { invalidateCache: false });
+        if (!refreshed.data?.error) {
+          const refreshedCandidates = refreshed.data.candidates || [];
+          const eligibleIds = refreshedCandidates.filter((candidate) => candidate.paymentReminderEligible === true).map((candidate) => candidate.stemId);
+          const eligibleSet = new Set(eligibleIds);
+          const preservedIds = selectedIds.filter((stemId) => eligibleSet.has(stemId));
+          const refreshedRecipientBatches = Object.fromEntries((refreshed.data.routingGroups || []).map((group) => [group.key, routingGroupRecipients(group)]));
+          const refreshedBaseForm = {
+            recipientBatches: refreshedRecipientBatches,
+            templateCc: refreshed.data.settings?.paymentReminderCc || '',
+            templateBcc: refreshed.data.settings?.paymentReminderBcc || '',
+            subject: refreshed.data.subject || '',
+            body: richTemplateValue(refreshed.data.body || ''),
+          };
+          const refreshedForm = {
+            ...refreshedBaseForm,
+            ...form,
+            recipientBatches: Object.fromEntries((refreshed.data.routingGroups || []).map((group) => [
+              group.key,
+              form.recipientBatches?.[group.key] || refreshedRecipientBatches[group.key],
+            ])),
+          };
+          const nextSelectedIds = preservedIds.length ? preservedIds : eligibleIds;
+          setData(refreshed.data);
+          setForm(refreshedForm);
+          setSelectedIds(nextSelectedIds);
+          setBaseDraftValue({ form: refreshedBaseForm, selectedIds: eligibleIds });
+          setAuthoritativeReady(Boolean(refreshed.data.previewToken));
+          setIdempotencyKey(paymentReminderOperationId());
+          setHasSubmitted(false);
+          setError(`${res.data.error} The live review has been refreshed.`);
+        }
+        setLoading(false);
+      }
     } else {
       clearDraft(draftKey);
-      appClient.functions.clearCache();
+      appClient.functions.invalidateCache({ names: ['salesforceBuyerInvoicesDue', 'buyerInvoiceCollectionList', 'paymentCollectionsReconcile'] });
+      skipNextPrepareRef.current = res.data.partial === true;
       onSent(res.data);
-      onClose();
+      if (res.data.partial) {
+        const failedCount = res.data.failedBatches?.length || 0;
+        setError(`${res.data.emails || 0} email batch${res.data.emails === 1 ? '' : 'es'} sent. ${failedCount} batch${failedCount === 1 ? '' : 'es'} require review before retrying.`);
+      } else {
+        onClose();
+      }
     }
     setSending(false);
   };
@@ -1605,20 +1956,44 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
     setError(null);
     const res = await appClient.functions.invoke('buyerInvoiceEmailSettingsSave', {
       settings: {
-        ...(data?.settings || {}),
-	        paymentReminderSubject: form.subject,
-	        paymentReminderCc: form.templateCc || '',
-	        paymentReminderBcc: form.templateBcc || '',
-	        paymentReminderBody: form.body,
-	      },
-	    });
+        paymentReminderSubject: form.subject,
+        paymentReminderCc: form.templateCc || '',
+        paymentReminderBcc: form.templateBcc || '',
+        paymentReminderBody: form.body,
+      },
+      expectedRevision: data?.settingsRevision,
+    }, { invalidateCache: false });
     if (res.data?.error) {
       setError(res.data.error);
     } else {
-	      setBaseDraftValue((prev) => prev ? { ...prev, form: { ...prev.form, templateCc: form.templateCc, templateBcc: form.templateBcc, subject: form.subject, body: form.body } } : prev);
-      clearDraft(draftKey);
-      setTemplateMessage('Payment reminder template saved.');
-      setTemplateEditing(false);
+      setAuthoritativeReady(false);
+      const prepared = await appClient.functions.invoke('buyerInvoicePaymentReminderPrepare', {
+        stemId: row.stemId,
+        daysAhead,
+      }, { invalidateCache: false });
+      if (prepared.data?.error) {
+        setError(`Template saved, but live reminder verification failed: ${prepared.data.error}`);
+      } else {
+        const refreshedRecipientBatches = Object.fromEntries((prepared.data.routingGroups || []).map((group) => [group.key, routingGroupRecipients(group)]));
+        const refreshedForm = {
+          recipientBatches: refreshedRecipientBatches,
+          templateCc: prepared.data.settings?.paymentReminderCc || '',
+          templateBcc: prepared.data.settings?.paymentReminderBcc || '',
+          subject: prepared.data.subject || '',
+          body: richTemplateValue(prepared.data.body || ''),
+        };
+        const refreshedSelectedIds = (prepared.data.candidates || []).filter((candidate) => candidate.paymentReminderEligible === true).map((candidate) => candidate.stemId);
+        setData(prepared.data);
+        setForm(refreshedForm);
+        setSelectedIds(refreshedSelectedIds);
+        setBaseDraftValue({ form: refreshedForm, selectedIds: refreshedSelectedIds });
+        setAuthoritativeReady(Boolean(prepared.data.previewToken));
+        setIdempotencyKey(paymentReminderOperationId());
+        setHasSubmitted(false);
+        clearDraft(draftKey);
+        setTemplateMessage('Payment reminder template saved and live review refreshed.');
+        setTemplateEditing(false);
+      }
     }
     setTemplateSaving(false);
   };
@@ -1635,28 +2010,11 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
     setTemplateEditing(false);
   };
 
-  const goToStep = (step) => {
-    if (step > 0 && !selectedRows.length) {
-      setError('Select at least one invoice before continuing.');
-      return;
-    }
-    if (step > 1 && hasMissingRecipient) {
-      setError('Enter at least one To email before sending.');
-      setCurrentStep(1);
-      return;
-    }
-    setError(null);
-    setCurrentStep(Math.max(0, Math.min(step, PAYMENT_REMINDER_STEPS.length - 1)));
-  };
-
-  const goNext = () => goToStep(currentStep + 1);
-  const goBack = () => goToStep(currentStep - 1);
-
   return (
     <Dialog open={open && Boolean(row)} onOpenChange={(nextOpen) => {
       if (!nextOpen && !sending) onClose();
     }}>
-      <DialogContent className="payment-reminder-dialog max-h-[94vh] w-[96vw] max-w-[1500px] gap-0 overflow-hidden p-0 text-slate-950">
+      <DialogContent className="payment-reminder-dialog grid h-[94vh] max-h-[94vh] w-[96vw] max-w-[1500px] grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0 text-slate-950">
         <DialogHeader className="border-b border-slate-200 px-5 py-4 text-left">
           <div className="flex flex-wrap items-start justify-between gap-4 pr-8">
             <div className="min-w-0">
@@ -1681,20 +2039,32 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
           </div>
         </DialogHeader>
 
-        <div className="max-h-[calc(94vh-152px)] overflow-auto px-5 py-4">
-          {loading && (
+        <div className="min-h-0 overflow-auto px-5 py-4">
+          {loading && !data && (
             <StateBlock icon={Loader2} title="Preparing reminder..." description="Finding related buyer and buyer group invoices in the current due window." />
           )}
 
-          {!loading && error && (
+          {error && !data && (
             <div className="mb-4 rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">
               {error}
             </div>
           )}
 
-          {!loading && data && (
+          {data && (
             <div className="space-y-4">
               <DraftNotice restoredAt={restoredAt} label="Draft restored" onDiscard={discardDraft} />
+
+              {loading ? (
+                <div className="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800" role="status">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Verifying live Salesforce balances, eligibility, routing, and sender configuration…
+                </div>
+              ) : authoritativeReady ? (
+                <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800" role="status">
+                  <Check className="h-4 w-4" />
+                  Live review ready. FCOS will verify the selected invoices again immediately before delivery.
+                </div>
+              ) : null}
 
               <div className="grid gap-3 lg:grid-cols-[1.4fr_1fr]">
                 <div className="rounded-lg border border-slate-200 bg-white p-3">
@@ -1720,39 +2090,6 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
                 </div>
               </div>
 
-              <div className="flex flex-wrap gap-2 border-b border-slate-200 pb-3">
-                {PAYMENT_REMINDER_STEPS.map((step, index) => {
-                  const isActive = currentStep === index;
-                  const isComplete = index < currentStep;
-                  const disabled = loading || (index > 0 && !selectedRows.length) || (index > 1 && hasMissingRecipient);
-                  return (
-                    <button
-                      key={step}
-                      type="button"
-                      disabled={disabled}
-                      onClick={() => goToStep(index)}
-                      className={cn(
-                        'inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium transition-colors',
-                        isActive
-                          ? 'border-blue-600 bg-blue-600 text-white'
-                          : isComplete
-                            ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                            : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50',
-                        disabled && !isActive && 'cursor-not-allowed opacity-50 hover:bg-white',
-                      )}
-                    >
-                      <span className={cn(
-                        'flex h-5 w-5 items-center justify-center rounded-full text-[11px]',
-                        isActive ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600',
-                      )}>
-                        {isComplete ? <Check className="h-3 w-3" /> : index + 1}
-                      </span>
-                      {step}
-                    </button>
-                  );
-                })}
-              </div>
-
               {selectedRoutingWarnings.length > 0 && (
                 <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
                   <div className="font-semibold">Check broker routing</div>
@@ -1762,7 +2099,7 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
                 </div>
               )}
 
-              {currentStep === 0 && (
+              {(
                 <div className="space-y-3">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
@@ -1773,7 +2110,7 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
                       {selectedIds.length === eligibleCandidates.length ? 'Clear all' : 'Select eligible'}
                     </Button>
                   </div>
-                  <div className="max-h-[52vh] overflow-auto rounded-lg border border-slate-200 bg-white">
+                  <div className="max-h-[32vh] overflow-auto rounded-lg border border-slate-200 bg-white">
                     <table className="w-full min-w-[1180px] text-sm">
                       <thead>
                         <tr className="border-b border-slate-200 bg-slate-50">
@@ -1858,11 +2195,16 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
                 </div>
               )}
 
-              {currentStep === 1 && (
+              {(
                 <div className="space-y-3">
-                  <div>
-                    <h3 className="text-base font-semibold text-slate-950">Review recipients</h3>
-                    <p className="text-xs text-slate-500">Only the addresses shown here will be used.</p>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <h3 className="text-base font-semibold text-slate-950">Recipients</h3>
+                      <p className="text-xs text-slate-500">Only the reviewed addresses below will be used.</p>
+                    </div>
+                    <Button type="button" variant="outline" size="sm" onClick={() => setRecipientsEditing((value) => !value)} disabled={loading || sending}>
+                      {recipientsEditing ? 'Finish editing recipients' : 'Edit recipients'}
+                    </Button>
                   </div>
                   <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                     {selectedRecipientBatches.map((group, index) => (
@@ -1885,17 +2227,18 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
                             <Input
                               value={group.recipients.to}
                               onChange={(event) => updateBatchRecipient(group.key, 'to', event.target.value)}
+                              disabled={!recipientsEditing}
                               placeholder="Enter recipient email"
                               className={cn(!uniqueEmailList(group.recipients.to).length && 'border-red-300 focus-visible:ring-red-400')}
                             />
                           </div>
                           <div className="space-y-1.5">
                             <Label className="text-xs text-slate-500">CC</Label>
-                            <Input value={group.recipients.cc} onChange={(event) => updateBatchRecipient(group.key, 'cc', event.target.value)} />
+                            <Input value={group.recipients.cc} onChange={(event) => updateBatchRecipient(group.key, 'cc', event.target.value)} disabled={!recipientsEditing} />
                           </div>
                           <div className="space-y-1.5">
                             <Label className="text-xs text-slate-500">BCC</Label>
-                            <Input value={group.recipients.bcc} onChange={(event) => updateBatchRecipient(group.key, 'bcc', event.target.value)} />
+                            <Input value={group.recipients.bcc} onChange={(event) => updateBatchRecipient(group.key, 'bcc', event.target.value)} disabled={!recipientsEditing} />
                           </div>
                         </div>
                       </div>
@@ -1904,7 +2247,7 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
                 </div>
               )}
 
-              {currentStep === 2 && (
+              {(
                 <div className="space-y-3">
                   <div>
                     <h3 className="text-base font-semibold text-slate-950">Email preview</h3>
@@ -2014,19 +2357,19 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
               )}
             </div>
             <div className="flex flex-wrap justify-end gap-2">
-              {canManageSettings && data && currentStep === PAYMENT_REMINDER_STEPS.length - 1 && (
+              {canManageSettings && data && (
                 !templateEditing ? (
-                  <Button type="button" variant="outline" onClick={() => setTemplateEditing(true)} disabled={sending} className="gap-2">
+                  <Button type="button" variant="outline" onClick={() => setTemplateEditing(true)} disabled={loading || sending} className="gap-2">
                     <Mail className="h-4 w-4" />
-                    Edit Template
+                    Edit message
                   </Button>
                 ) : (
                   <>
-                    <Button type="button" variant="outline" onClick={cancelPaymentReminderTemplateChanges} disabled={sending || templateSaving} className="gap-2">
+                    <Button type="button" variant="outline" onClick={cancelPaymentReminderTemplateChanges} disabled={loading || sending || templateSaving} className="gap-2">
                       <X className="h-4 w-4" />
                       Cancel
                     </Button>
-                    <Button type="button" variant="outline" onClick={savePaymentReminderTemplateFromModal} disabled={sending || templateSaving} className="gap-2">
+                    <Button type="button" variant="outline" onClick={savePaymentReminderTemplateFromModal} disabled={loading || sending || templateSaving} className="gap-2">
                       {templateSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
                       Save Template
                     </Button>
@@ -2034,18 +2377,10 @@ function PaymentReminderModal({ row, open, daysAhead, canManageSettings, onClose
                 )
               )}
               <Button type="button" variant="outline" onClick={onClose} disabled={sending}>Close</Button>
-              {data && currentStep > 0 && (
-                <Button type="button" variant="outline" onClick={goBack} disabled={sending}>Back</Button>
-              )}
-              {data && currentStep < PAYMENT_REMINDER_STEPS.length - 1 && (
-                <Button type="button" onClick={goNext} disabled={sending || (currentStep === 0 && !selectedRows.length)}>
-                  Next
-                </Button>
-              )}
-              {data && currentStep === PAYMENT_REMINDER_STEPS.length - 1 && (
-                <Button type="button" onClick={sendReminder} disabled={sending || !selectedRows.length} className="gap-2">
+              {data && (
+                <Button type="button" onClick={sendReminder} disabled={sending || loading || !authoritativeReady || !selectedRows.length || hasMissingRecipient} className="gap-2">
                   {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                  Send Email
+                  {sending ? 'Sending…' : `Send ${selectedRows.length.toLocaleString()} invoice${selectedRows.length === 1 ? '' : 's'}`}
                 </Button>
               )}
             </div>
@@ -2154,12 +2489,14 @@ function CopyInvoiceSelectionModal({ row, candidates = [], open, onClose, onCopy
   );
 }
 
-export default function BuyerInvoices() {
+export default function BuyerInvoices({ defaultQueueView = 'all', reconciliationItems = [], dataRefreshToken = 0, embedded = false }) {
+  const { request: requestInvoices } = useNavigationAwareRequest('collaboration');
   const initialFilters = useMemo(() => readInitialFilters(), []);
   const today = useMemo(() => hongKongDateKey(), []);
   const [daysAhead, setDaysAhead] = useState(initialFilters.daysAhead);
   const [rows, setRows] = useState([]);
   const [meta, setMeta] = useState(null);
+  const [responseMeta, setResponseMeta] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selectedStemId, setSelectedStemId] = useState(null);
@@ -2168,9 +2505,10 @@ export default function BuyerInvoices() {
   const [showReminderRules, setShowReminderRules] = useState(false);
   const [copySelection, setCopySelection] = useState(null);
   const [showEmailSchedule, setShowEmailSchedule] = useState(false);
-  const [savedEmailSettings, setSavedEmailSettings] = useState(readLegacyEmailSettings);
+  const [savedEmailSettings, setSavedEmailSettings] = useState(() => emailSettingsToForm(DEFAULT_EMAIL_SETTINGS));
   const [emailSettings, setEmailSettings] = useState(savedEmailSettings);
   const [emailMeta, setEmailMeta] = useState(null);
+  const [emailSettingsRevision, setEmailSettingsRevision] = useState(0);
   const [canManageEmailSettings, setCanManageEmailSettings] = useState(false);
   const [emailLoading, setEmailLoading] = useState(true);
   const [emailBusy, setEmailBusy] = useState(false);
@@ -2179,32 +2517,60 @@ export default function BuyerInvoices() {
   const [internalEmailEditing, setInternalEmailEditing] = useState(false);
   const [emailMessage, setEmailMessage] = useState(null);
   const [emailError, setEmailError] = useState(null);
-  const [emailDraftRestoredAt, setEmailDraftRestoredAt] = useState(null);
   const [selectedBuyerTraders, setSelectedBuyerTraders] = useState([]);
   const [selectedCollectionStatuses, setSelectedCollectionStatuses] = useState(COLLECTION_STATUSES);
   const [invoiceKeyword, setInvoiceKeyword] = useState('');
   const [severityFilter, setSeverityFilter] = useState('all');
   const [followUpFilter, setFollowUpFilter] = useState('all');
-  const [actionOnly, setActionOnly] = useState(false);
+  const [paymentEvidenceFilter, setPaymentEvidenceFilter] = useState('all');
+  const [disputeFilter, setDisputeFilter] = useState('all');
+  const [queueView, setQueueView] = useState(defaultQueueView);
   const [copiedRowIds, setCopiedRowIds] = useState(() => new Set());
   const traderFilterInitialized = useRef(false);
   const initialBuyerTraderFilter = useRef(initialFilters);
   const internalEmailEditorRef = useRef(null);
+  const deepLinkedCollectionOpened = useRef(false);
 
   const emailDirty = useMemo(() => !sameSettings(emailSettings, savedEmailSettings), [emailSettings, savedEmailSettings]);
-  useDraftAutosave('buyer-invoices:email-settings', emailSettings, {
-    enabled: canManageEmailSettings && !emailLoading,
-    dirty: emailDirty,
-    message: 'Autosaved internal email reminder/template draft. Save or discard it before leaving.',
-  });
+  const reconciliationByStem = useMemo(() => new Map(
+    reconciliationItems
+      .filter((entry) => entry?.item?.stemId)
+      .map((entry) => [entry.item.stemId, entry]),
+  ), [reconciliationItems]);
+  const collectionRows = useMemo(() => rows.map((row) => {
+    const live = reconciliationByStem.get(row.stemId);
+    if (!live) return row;
+    const postingReminderPaused = PAYMENT_POSTING_EXCEPTION_STATES.has(live.item?.reconciliationState)
+      && live.item?.postingReminderOverrideActive !== true;
+    return {
+      ...row,
+      buyerName: live.buyerName || row.buyerName,
+      buyerGroupName: live.buyerGroupName || row.buyerGroupName,
+      buyerInvoiceDueDate: live.buyerInvoiceDueDate || row.buyerInvoiceDueDate,
+      currency: live.currency || row.currency,
+      receivableBalance: live.item.verifiedReceivableBalance ?? row.receivableBalance,
+      collection: live.item,
+      latestPayment: live.latestPayment || live.item.latestPaymentSnapshot || row.latestPayment || null,
+      earliestEtaDate: live.earliestEtaDate || row.earliestEtaDate || null,
+      actualDeliveryDate: live.actualDeliveryDate || row.actualDeliveryDate || row.deliveryDate || null,
+      paymentEvidence: live.paymentEvidence || row.paymentEvidence || null,
+      paymentEvidenceSummary: live.paymentEvidenceSummary || row.paymentEvidenceSummary || null,
+      disputeStatus: live.disputeStatus || row.disputeStatus || null,
+      collectionEvents: live.event ? [live.event, ...(row.collectionEvents || [])] : row.collectionEvents,
+      paymentReminderEligible: postingReminderPaused ? false : row.paymentReminderEligible,
+      paymentReminderBlockingReason: postingReminderPaused
+        ? 'A detected buyer payment does not reconcile to the Salesforce receivable balance. External reminders are paused pending Finance review.'
+        : row.paymentReminderBlockingReason,
+    };
+  }), [reconciliationByStem, rows]);
 
   const buyerTraderOptions = useMemo(() => (
-    [...new Set(rows.flatMap((row) => [
+    [...new Set(collectionRows.flatMap((row) => [
       ...splitBuyerTraderNames(row.buyerTraderInCharge),
       collectionOwner(row),
     ].filter(Boolean)))]
       .sort((a, b) => a.localeCompare(b))
-  ), [rows]);
+  ), [collectionRows]);
 
   useEffect(() => {
     if (!buyerTraderOptions.length) {
@@ -2227,8 +2593,35 @@ export default function BuyerInvoices() {
     });
   }, [buyerTraderOptions]);
 
+  const closedRows = useMemo(() => reconciliationItems
+    .filter((entry) => entry?.item?.status === 'Paid / Closed')
+    .map((entry) => ({
+      id: entry.item.stemId,
+      stemId: entry.item.stemId,
+      stemName: entry.stemName || entry.item.stemId,
+      buyerName: entry.buyerName || null,
+      buyerGroupName: entry.buyerGroupName || null,
+      currency: entry.currency || entry.latestPayment?.currency || 'USD',
+      receivableBalance: entry.item.verifiedReceivableBalance,
+      invoiceAmount: null,
+      buyerInvoiceDueDate: entry.buyerInvoiceDueDate || null,
+      buyerTraderInCharge: null,
+      collection: entry.item,
+      collectionEvents: entry.event ? [entry.event] : [],
+      latestPayment: entry.latestPayment || entry.item.latestPaymentSnapshot || null,
+      earliestEtaDate: entry.earliestEtaDate || null,
+      actualDeliveryDate: entry.actualDeliveryDate || null,
+      paymentEvidence: entry.paymentEvidence || null,
+      paymentEvidenceSummary: entry.paymentEvidenceSummary || null,
+      disputeStatus: entry.disputeStatus || null,
+      status: 'Settled',
+      daysUntilDue: null,
+      paymentReminderEligible: false,
+      paymentReminderBlockingReason: 'This collection is closed because Salesforce confirms the buyer balance is settled.',
+    })), [reconciliationItems]);
+
   const filteredRows = useMemo(() => {
-    let next = rows;
+    let next = queueView === 'closed' ? closedRows : collectionRows.filter((row) => collectionStatus(row) !== 'Paid / Closed');
     if (invoiceKeyword.trim()) {
       next = next.filter((row) => matchesInvoiceKeyword(row, invoiceKeyword));
     }
@@ -2252,22 +2645,65 @@ export default function BuyerInvoices() {
     }
     if (followUpFilter === 'due') next = next.filter((row) => isFollowUpDue(row, today));
     if (followUpFilter === 'scheduled') next = next.filter((row) => Boolean(row.collection?.nextFollowUpDate));
-    if (actionOnly) next = next.filter((row) => isNeedsAction(row, today));
+    if (paymentEvidenceFilter !== 'all') next = next.filter((row) => paymentEvidenceCodes(row).has(paymentEvidenceFilter));
+    if (disputeFilter !== 'all') next = next.filter((row) => matchesPaymentCollectionDisputeFilter(row.disputeStatus, disputeFilter));
+    if (queueView === 'needs-action') next = next.filter((row) => isNeedsAction(row, today));
+    if (queueView === 'needs-action') {
+      next = [...next].sort((a, b) => {
+        const priority = (row) => {
+          if (PAYMENT_POSTING_EXCEPTION_STATES.has(row.collection?.reconciliationState) || ['manual_closure_mismatch', 'balance_unavailable', 'reopened'].includes(row.collection?.reconciliationState)) return 0;
+          if (row.collection?.reconciliationState === 'advice_overdue') return 1;
+          if (collectionStatus(row) === 'Promise to Pay' && row.collection?.promisedPaymentDate && row.collection.promisedPaymentDate <= today) return 2;
+          if (isFollowUpDue(row, today)) return 3;
+          if (row.status === 'Overdue' && collectionStatus(row) === 'To Contact') return 4;
+          return 5;
+        };
+        return priority(a) - priority(b) || Number(a.daysUntilDue || 0) - Number(b.daysUntilDue || 0) || Number(b.receivableBalance || 0) - Number(a.receivableBalance || 0);
+      });
+    }
     return next;
-  }, [actionOnly, buyerTraderOptions, followUpFilter, invoiceKeyword, rows, selectedBuyerTraders, selectedCollectionStatuses, severityFilter, today]);
+  }, [buyerTraderOptions, closedRows, collectionRows, disputeFilter, followUpFilter, invoiceKeyword, paymentEvidenceFilter, queueView, selectedBuyerTraders, selectedCollectionStatuses, severityFilter, today]);
+
+  const paymentEvidenceCounts = useMemo(() => {
+    const sourceRows = queueView === 'closed'
+      ? closedRows
+      : collectionRows.filter((row) => collectionStatus(row) !== 'Paid / Closed');
+    return Object.fromEntries(PAYMENT_EVIDENCE_FILTERS.map(([code]) => [
+      code,
+      sourceRows.filter((row) => paymentEvidenceCodes(row).has(code)).length,
+    ]));
+  }, [closedRows, collectionRows, queueView]);
+
+  const disputeCounts = useMemo(() => {
+    const sourceRows = queueView === 'closed'
+      ? closedRows
+      : collectionRows.filter((row) => collectionStatus(row) !== 'Paid / Closed');
+    return {
+      withDispute: sourceRows.filter((row) => matchesPaymentCollectionDisputeFilter(row.disputeStatus, 'with-dispute')).length,
+      noDispute: sourceRows.filter((row) => matchesPaymentCollectionDisputeFilter(row.disputeStatus, 'no-dispute')).length,
+    };
+  }, [closedRows, collectionRows, queueView]);
 
   const loadRows = async (options = {}) => {
     const nextDays = Math.max(0, Math.min(Number(daysAhead) || 0, 365));
     setLoading(true);
     setError(null);
-    const res = await appClient.functions.invoke('salesforceBuyerInvoicesDue', { daysAhead: nextDays }, { cache: true, force: options.force });
-    if (res.data?.error) {
-      setError(res.data.error);
-      setRows([]);
-    } else {
-      setRows(res.data?.rows || []);
-      setMeta(res.data || null);
-    }
+    await requestInvoices({
+      name: 'salesforceBuyerInvoicesDue',
+      payload: { daysAhead: nextDays },
+      force: options.force,
+      apply: (res) => {
+        setResponseMeta(res.data?.error ? { ...res.meta, cacheStatus: 'UNAVAILABLE' } : res.meta);
+        if (res.data?.error) {
+          setError(res.data.error);
+          setRows([]);
+        } else {
+          setError(null);
+          setRows(res.data?.rows || []);
+          setMeta(res.data || null);
+        }
+      },
+    });
     setLoading(false);
   };
 
@@ -2278,14 +2714,10 @@ export default function BuyerInvoices() {
       setEmailError(res.data.error);
     } else {
       const formSettings = emailSettingsToForm(res.data.settings);
-      const draft = readDraft('buyer-invoices:email-settings');
-      const nextSettings = draft?.data && !sameSettings(draft.data, formSettings)
-        ? emailSettingsToForm(draft.data)
-        : formSettings;
       setSavedEmailSettings(formSettings);
-      setEmailSettings(nextSettings);
-      setEmailDraftRestoredAt(draft?.data && !sameSettings(nextSettings, formSettings) ? draft.updatedAt : null);
+      setEmailSettings(formSettings);
       setEmailMeta(res.data.meta || null);
+      setEmailSettingsRevision(Number(res.data.meta?.revision || 0));
       setCanManageEmailSettings(res.data.capabilities?.canManageSettings === true);
       setEmailError(null);
     }
@@ -2296,6 +2728,29 @@ export default function BuyerInvoices() {
     loadRows();
     loadEmailSettings();
   }, []);
+
+  useEffect(() => {
+    if (dataRefreshToken > 0) loadRows({ force: true });
+  }, [dataRefreshToken]);
+
+  useEffect(() => {
+    if (deepLinkedCollectionOpened.current || (!collectionRows.length && !reconciliationItems.length)) return;
+    const stemId = new URLSearchParams(window.location.search).get('collectionStemId');
+    if (!stemId) return;
+    const closedEntry = reconciliationItems.find((entry) => entry?.item?.stemId === stemId);
+    const row = collectionRows.find((item) => item.stemId === stemId) || (closedEntry ? {
+      id: stemId,
+      stemId,
+      stemName: closedEntry.stemName || stemId,
+      currency: closedEntry.latestPayment?.currency || 'USD',
+      receivableBalance: closedEntry.item.verifiedReceivableBalance,
+      collection: closedEntry.item,
+      collectionEvents: closedEntry.event ? [closedEntry.event] : [],
+    } : null);
+    if (!row) return;
+    deepLinkedCollectionOpened.current = true;
+    setSelectedCollectionRow(row);
+  }, [collectionRows, reconciliationItems]);
 
   const totals = useMemo(() => {
     const overdue = filteredRows.filter((row) => row.status === 'Overdue');
@@ -2318,7 +2773,6 @@ export default function BuyerInvoices() {
       daysAhead: Number(emailSettings.daysAhead || daysAhead || 7),
       buyerTraders: hasBuyerTraderFilter ? selectedBuyerTraders : [],
       hasBuyerTraderFilter,
-      appUrl: window.location.origin,
     };
   };
 
@@ -2390,16 +2844,18 @@ export default function BuyerInvoices() {
   const saveEmailSettings = async () => {
     setEmailBusy(true);
     setEmailError(null);
-    const res = await appClient.functions.invoke('buyerInvoiceEmailSettingsSave', { settings: settingsForServer() });
+    const res = await appClient.functions.invoke('buyerInvoiceEmailSettingsSave', {
+      settings: settingsForServer(),
+      expectedRevision: emailSettingsRevision,
+    }, { invalidateCache: true });
     if (res.data?.error) {
       setEmailError(res.data.error);
     } else {
       const formSettings = emailSettingsToForm(res.data.settings);
-      clearDraft('buyer-invoices:email-settings');
       setSavedEmailSettings(formSettings);
       setEmailSettings(formSettings);
-      setEmailDraftRestoredAt(null);
       setEmailMeta(res.data.meta || null);
+      setEmailSettingsRevision(Number(res.data.meta?.revision || emailSettingsRevision + 1));
       setEmailMessage('Email report schedule saved.');
       setInternalEmailEditing(false);
     }
@@ -2407,9 +2863,7 @@ export default function BuyerInvoices() {
   };
 
   const cancelEmailSettings = () => {
-    clearDraft('buyer-invoices:email-settings');
     setEmailSettings(savedEmailSettings);
-    setEmailDraftRestoredAt(null);
     setEmailMessage(null);
     setEmailError(null);
     setInternalEmailEditing(false);
@@ -2440,7 +2894,7 @@ export default function BuyerInvoices() {
     setEmailAction(preview ? 'preview' : 'send');
     setEmailError(null);
     setEmailMessage(null);
-    const res = await appClient.functions.invoke('outstandingBuyerInvoicesEmailReport', { settings: settingsForServer(), preview, force: !preview });
+    const res = await appClient.functions.invoke('outstandingBuyerInvoicesEmailReport', { preview, force: !preview });
     if (res.data?.error) {
       setEmailError(res.data.error);
     } else if (preview) {
@@ -2484,17 +2938,23 @@ export default function BuyerInvoices() {
     <div className="p-6 lg:p-8 space-y-6">
       <PageHeader
         icon={ReceiptText}
-        eyebrow="Buyer invoice follow-up"
-        title="Outstanding Buyer Invoices"
-        description="Manage overdue buyer invoices, due invoices, and AR collection follow-up."
-        meta={meta ? `Window: ${fmtDate(meta.today)} to ${fmtDate(meta.dueThrough)} · ${filteredRows.length.toLocaleString()} of ${rows.length.toLocaleString()} invoices` : undefined}
+        eyebrow="Accounts receivable follow-up"
+        title="Payment Collections"
+        sticky={!embedded}
+        description="Prioritize buyer follow-up, promises, payment advice, and settlement using the live Salesforce receivable balance."
+        meta={meta ? (
+          <span className="flex flex-wrap items-center gap-2">
+            <span>Window: {fmtDate(meta.today)} to {fmtDate(meta.dueThrough)} · {filteredRows.length.toLocaleString()} of {collectionRows.length.toLocaleString()} invoices</span>
+            {responseMeta ? <DataStatus meta={responseMeta} label="Salesforce" /> : null}
+          </span>
+        ) : undefined}
         actions={(
           <>
             <Button variant="outline" onClick={() => setShowReminderRules(true)} className="gap-2 w-fit">
               <ShieldCheck className="h-4 w-4" /> Reminder Rules
             </Button>
-            <Button variant="outline" onClick={toggleEmailSchedule} className="gap-2 w-fit">
-              <Mail className="h-4 w-4" /> Outstanding Buyer Invoices - Internal Daily Report
+            <Button variant="outline" onClick={toggleEmailSchedule} className="h-auto max-w-full gap-2 whitespace-normal text-left" title="Outstanding Buyer Invoices - Internal Daily Report">
+              <Mail className="h-4 w-4 shrink-0" /> Internal Daily Report
             </Button>
             <Button variant="outline" onClick={() => loadRows({ force: true })} disabled={loading} className="gap-2 w-fit">
               <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /> Refresh
@@ -2506,7 +2966,7 @@ export default function BuyerInvoices() {
       {meta?.paymentReminderRulesAvailable === false && (
         <div className="flex gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-          Buyer Invoice reminder rules are temporarily unavailable. Invoice data remains available, but external payment reminder sending is disabled.
+          Payment Collection reminder rules are temporarily unavailable. Receivable data remains available, but external payment reminder sending is disabled.
         </div>
       )}
 
@@ -2525,14 +2985,14 @@ export default function BuyerInvoices() {
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="invoice-keyword" className="text-xs text-muted-foreground">Search STEM / Buyer</Label>
+            <Label htmlFor="invoice-keyword" className="text-xs text-muted-foreground">Search STEM / Buyer / Dispute</Label>
             <div className="relative">
               <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 id="invoice-keyword"
                 value={invoiceKeyword}
                 onChange={(event) => setInvoiceKeyword(event.target.value)}
-                placeholder="Stem name or buyer name"
+                placeholder="Stem, buyer, or dispute status"
                 className="h-9 w-72 pl-8 pr-8"
               />
               {invoiceKeyword && (
@@ -2551,17 +3011,22 @@ export default function BuyerInvoices() {
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <CalendarClock className="h-4 w-4" />}
             Apply
           </Button>
-          <Button variant={actionOnly ? 'default' : 'outline'} onClick={() => setActionOnly((value) => !value)} className="gap-2">
-            <MessageSquareText className="h-4 w-4" />
-            Needs Action Today
-          </Button>
+          <div className="flex rounded-md border border-input bg-background p-0.5">
+            {[
+              ['needs-action', 'Needs Action'],
+              ['all', 'All Open'],
+              ['closed', 'Closed'],
+            ].map(([value, label]) => (
+              <Button key={value} type="button" size="sm" variant={queueView === value ? 'default' : 'ghost'} className="h-8" onClick={() => setQueueView(value)}>{label}</Button>
+            ))}
+          </div>
           <p className="pb-2 text-xs text-muted-foreground">Overdue invoices are always included.</p>
         </div>
 
         <div className="mt-4 grid gap-4 border-t border-border pt-4 xl:grid-cols-[1fr_1fr]">
           {buyerTraderOptions.length > 0 && (
             <div className="space-y-2">
-              <div className="flex items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-2">
                 <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Buyer Trader / Payment Handler</Label>
                 <button type="button" onClick={toggleAllBuyerTraders} className="text-xs text-primary hover:underline">
                   {selectedBuyerTraders.length === buyerTraderOptions.length ? 'Clear all' : 'Select all'}
@@ -2587,7 +3052,7 @@ export default function BuyerInvoices() {
           )}
 
           <div className="space-y-2">
-            <div className="flex items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-2">
               <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Collection Status</Label>
               <button
                 type="button"
@@ -2635,6 +3100,33 @@ export default function BuyerInvoices() {
               <option value="scheduled">Follow-up scheduled</option>
             </select>
           </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">Payment Evidence</Label>
+            <div className="flex flex-wrap rounded-md border border-input bg-background p-0.5">
+              <Button type="button" size="sm" variant={paymentEvidenceFilter === 'all' ? 'default' : 'ghost'} className="h-8" onClick={() => setPaymentEvidenceFilter('all')}>
+                All
+              </Button>
+              {PAYMENT_EVIDENCE_FILTERS.map(([code, label]) => (
+                <Button key={code} type="button" size="sm" variant={paymentEvidenceFilter === code ? 'default' : 'ghost'} className="h-8" onClick={() => setPaymentEvidenceFilter(code)}>
+                  {label} {paymentEvidenceCounts[code] || 0}
+                </Button>
+              ))}
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">Dispute</Label>
+            <div className="flex flex-wrap rounded-md border border-input bg-background p-0.5">
+              <Button type="button" size="sm" variant={disputeFilter === 'all' ? 'default' : 'ghost'} className="h-8" onClick={() => setDisputeFilter('all')}>
+                All
+              </Button>
+              <Button type="button" size="sm" variant={disputeFilter === 'with-dispute' ? 'default' : 'ghost'} className="h-8" onClick={() => setDisputeFilter('with-dispute')}>
+                With dispute {disputeCounts.withDispute}
+              </Button>
+              <Button type="button" size="sm" variant={disputeFilter === 'no-dispute' ? 'default' : 'ghost'} className="h-8" onClick={() => setDisputeFilter('no-dispute')}>
+                No dispute {disputeCounts.noDispute}
+              </Button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -2656,7 +3148,6 @@ export default function BuyerInvoices() {
 
             <div className="grid min-h-0 flex-1 gap-4 overflow-hidden p-4 lg:grid-cols-[430px_minmax(0,1fr)]">
               <div className="min-h-0 space-y-3 overflow-auto pr-1">
-                <DraftNotice restoredAt={emailDraftRestoredAt} label="Email reminder settings draft restored" onDiscard={cancelEmailSettings} />
 
                 <div className="grid gap-2 md:grid-cols-2">
                   <div className="rounded-lg border border-border bg-muted/20 p-3 text-xs">
@@ -2684,16 +3175,16 @@ export default function BuyerInvoices() {
 
                 <div className="grid gap-3 md:grid-cols-2">
                   <div className="space-y-1.5 md:col-span-2">
-                    <Label className="text-xs text-muted-foreground">From</Label>
-                    <Input value={emailSettings.from} onChange={(event) => updateEmailSetting('from', event.target.value)} disabled={!internalEmailEditing} />
-                  </div>
-                  <div className="space-y-1.5 md:col-span-2">
                     <Label className="text-xs text-muted-foreground">To</Label>
                     <Input value={emailSettings.to} onChange={(event) => updateEmailSetting('to', event.target.value)} disabled={!internalEmailEditing} />
                   </div>
                   <div className="space-y-1.5 md:col-span-2">
                     <Label className="text-xs text-muted-foreground">CC</Label>
                     <Input value={emailSettings.cc} onChange={(event) => updateEmailSetting('cc', event.target.value)} disabled={!internalEmailEditing} />
+                  </div>
+                  <div className="space-y-1.5 md:col-span-2">
+                    <Label className="text-xs text-muted-foreground">BCC</Label>
+                    <Input value={emailSettings.bcc} onChange={(event) => updateEmailSetting('bcc', event.target.value)} disabled={!internalEmailEditing} />
                   </div>
                   <div className="space-y-1.5 md:col-span-2">
                     <Label className="text-xs text-muted-foreground">Subject</Label>
@@ -2760,7 +3251,7 @@ export default function BuyerInvoices() {
                 </div>
 
                 <div className="rounded-xl border border-border/70 bg-muted/20 p-3 text-xs text-muted-foreground">
-                  Send Now and scheduled reports use the same shared server sender. Template and schedule changes are restricted to authorized managers.
+                  Send Now and scheduled reports use the Microsoft Graph mailbox assigned to Outstanding Invoice Reports in Settings. Template and schedule changes are restricted to authorized managers.
                 </div>
 
                 {emailMessage && <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">{emailMessage}</div>}
@@ -2841,43 +3332,78 @@ export default function BuyerInvoices() {
       )}
 
       {!loading && !error && (
-        <TableShell title="Buyer Invoice Due List" meta={`${filteredRows.length.toLocaleString()} rows`} bodyClassName="p-0">
+        <TableShell title={queueView === 'needs-action' ? 'Needs Action' : queueView === 'closed' ? 'Closed Collections' : 'Open Collections'} meta={`${filteredRows.length.toLocaleString()} rows`} bodyClassName="p-0">
           {filteredRows.length ? (
             <div className="max-h-[68vh] overflow-auto">
-              <table className="w-full min-w-[1680px] text-sm">
+              <table className="w-full min-w-[1120px] table-fixed text-xs xl:min-w-0">
+                <colgroup>
+                  <col className="w-[7%]" />
+                  <col className="w-[9%]" />
+                  <col className="w-[7%]" />
+                  <col className="w-[7%]" />
+                  <col className="w-[8%]" />
+                  <col className="w-[7%]" />
+                  <col className="w-[7%]" />
+                  <col className="w-[5%]" />
+                  <col className="w-[8%]" />
+                  <col className="w-[7%]" />
+                  <col className="w-[9%]" />
+                  <col className="w-[6%]" />
+                  <col className="w-[4%]" />
+                  <col className="w-[9%]" />
+                </colgroup>
                 <thead>
                   <tr className="border-b border-border bg-muted/40">
-                    <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Stem</th>
-                    <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Buyer</th>
-                    <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Buyer Broker</th>
-                    <th className="sticky top-0 z-10 bg-card px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Invoice Amount</th>
-                    <th className="sticky top-0 z-10 bg-card px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Receivable Balance</th>
-                    <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Buyer Invoice Due Date</th>
-                    <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Buyer Trader</th>
-                    <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">PSPRS</th>
-                    <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Payment Collection Handler</th>
-                    <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Next Follow-up</th>
-                    <th className="sticky top-0 z-10 bg-card px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Status</th>
-                    <th className="sticky top-0 z-10 bg-card px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Overdue</th>
-                    <th className="sticky top-0 z-10 bg-card px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Actions</th>
+                    <th className="sticky top-0 z-10 bg-card px-2 py-2 text-left text-[10px] font-semibold uppercase leading-tight tracking-wide text-muted-foreground">Stem</th>
+                    <th className="sticky top-0 z-10 bg-card px-2 py-2 text-left text-[10px] font-semibold uppercase leading-tight tracking-wide text-muted-foreground">Buyer</th>
+                    <th className="sticky top-0 z-10 bg-card px-2 py-2 text-left text-[10px] font-semibold uppercase leading-tight tracking-wide text-muted-foreground">Buyer broker</th>
+                    <th className="sticky top-0 z-10 bg-card px-2 py-2 text-right text-[10px] font-semibold uppercase leading-tight tracking-wide text-muted-foreground">Invoice amount</th>
+                    <th className="sticky top-0 z-10 bg-card px-2 py-2 text-right text-[10px] font-semibold uppercase leading-tight tracking-wide text-muted-foreground">Receivable balance</th>
+                    <th className="sticky top-0 z-10 bg-card px-2 py-2 text-left text-[10px] font-semibold uppercase leading-tight tracking-wide text-muted-foreground">Invoice due</th>
+                    <th className="sticky top-0 z-10 bg-card px-2 py-2 text-left text-[10px] font-semibold uppercase leading-tight tracking-wide text-muted-foreground">Buyer trader</th>
+                    <th className="sticky top-0 z-10 bg-card px-2 py-2 text-left text-[10px] font-semibold uppercase leading-tight tracking-wide text-muted-foreground">PSPRS</th>
+                    <th className="sticky top-0 z-10 bg-card px-2 py-2 text-left text-[10px] font-semibold uppercase leading-tight tracking-wide text-muted-foreground">Collection handler</th>
+                    <th className="sticky top-0 z-10 bg-card px-2 py-2 text-left text-[10px] font-semibold uppercase leading-tight tracking-wide text-muted-foreground">Next follow-up</th>
+                    <th className="sticky top-0 z-10 bg-card px-2 py-2 text-left text-[10px] font-semibold uppercase leading-tight tracking-wide text-muted-foreground">Payment evidence</th>
+                    <th className="sticky top-0 z-10 bg-card px-2 py-2 text-left text-[10px] font-semibold uppercase leading-tight tracking-wide text-muted-foreground">Status</th>
+                    <th className="sticky top-0 z-10 bg-card px-2 py-2 text-right text-[10px] font-semibold uppercase leading-tight tracking-wide text-muted-foreground">Overdue</th>
+                    <th className="sticky top-0 z-10 bg-card px-2 py-2 text-right text-[10px] font-semibold uppercase leading-tight tracking-wide text-muted-foreground">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {filteredRows.map((row, idx) => {
                     const reminderSentToday = wasPaymentReminderSentToday(row);
                     const rowCopied = copiedRowIds.has(row.id);
+                    const dispute = disputePresentation(row.disputeStatus);
+                    const latestBuyerPayment = row.collection?.latestPaymentSnapshot || row.latestPayment || null;
+                    const paymentEvidence = row.paymentEvidence || (latestBuyerPayment
+                      ? classifyBuyerPaymentEvidence({
+                          paymentDate: latestBuyerPayment.paymentDate,
+                          etaStartDate: row.earliestEtaDate,
+                          deliveryDate: row.actualDeliveryDate || row.deliveryDate,
+                          isFull: row.collection?.reconciliationState === 'settled' || collectionStatus(row) === 'Paid / Closed',
+                        })
+                      : null);
                     return (
-                      <tr
-                        key={row.id}
-                        onClick={() => setSelectedStemId(row.stemId)}
-                        className={`cursor-pointer border-b border-border/40 transition-colors ${rowSeverityClass(row, idx)}`}
-                      >
-                      <td className="px-4 py-3 font-medium text-foreground">{row.stemName || '-'}</td>
-                      <td className="px-4 py-3 text-muted-foreground">
-                        <div>{row.buyerName || '-'}</div>
+                      <tr key={row.id} className={`border-b border-border/40 transition-colors ${rowSeverityClass(row, idx)}`}>
+                      <td className={cn('border-l-4 px-2 py-2 text-foreground', dispute.accent)} data-dispute-state={dispute.state}>
+                        <div className="truncate" title={row.stemName || ''}><StemDetailLink stemId={row.stemId} onOpen={setSelectedStemId}>{row.stemName || '-'}</StemDetailLink></div>
+                        {dispute.label && (
+                          <span
+                            className={cn('mt-1 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium', dispute.badge)}
+                            title={`Salesforce dispute status: ${row.disputeStatus}`}
+                          >
+                            <Scale className="h-3 w-3" />
+                            {dispute.label}
+                            <span className="sr-only">: {row.disputeStatus}</span>
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-2 py-2 text-muted-foreground">
+                        <div className="truncate" title={row.buyerName || ''}>{row.buyerName || '-'}</div>
                         {row.effectiveReminderPolicy === 'overdue_only' && (
                           <span
-                            className="mt-1 inline-flex rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800"
+                            className="mt-1 inline-flex max-w-full truncate rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800"
                             title={[
                               row.reminderRuleSource === 'group' && row.reminderRuleSourceAccountName
                                 ? `Inherited from ${row.reminderRuleSourceAccountName}.`
@@ -2889,34 +3415,46 @@ export default function BuyerInvoices() {
                           </span>
                         )}
                       </td>
-                      <td className="px-4 py-3 text-muted-foreground">{row.buyerBrokerNames || '-'}</td>
-                      <td className="px-4 py-3 text-right font-semibold text-foreground">{fmtMoney(row.invoiceAmount)}</td>
-                      <td className="px-4 py-3 text-right font-semibold text-foreground">{fmtMoney(row.receivableBalance)}</td>
-                      <td className="px-4 py-3 text-foreground">{fmtDate(row.buyerInvoiceDueDate)}</td>
-                      <td className="px-4 py-3 text-muted-foreground">{row.buyerTraderInCharge || '-'}</td>
-                      <td className="px-4 py-3 text-muted-foreground">{row.prpspStatus || '-'}</td>
-                      <td className="px-4 py-3">
+                      <td className="truncate px-2 py-2 text-muted-foreground" title={row.buyerBrokerNames || ''}>{row.buyerBrokerNames || '-'}</td>
+                      <td className="whitespace-nowrap px-2 py-2 text-right font-semibold text-foreground">{fmtMoney(row.invoiceAmount)}</td>
+                      <td className="whitespace-nowrap px-2 py-2 text-right font-semibold text-foreground">{fmtMoney(row.receivableBalance)}</td>
+                      <td className="whitespace-nowrap px-2 py-2 text-foreground">{fmtDate(row.buyerInvoiceDueDate)}</td>
+                      <td className="truncate px-2 py-2 text-muted-foreground" title={row.buyerTraderInCharge || ''}>{row.buyerTraderInCharge || '-'}</td>
+                      <td className="truncate px-2 py-2 text-muted-foreground" title={row.prpspStatus || ''}>{row.prpspStatus || '-'}</td>
+                      <td className="px-2 py-2">
                         <div className="flex flex-col gap-1">
-                          <span className={`w-fit rounded-full border px-2 py-0.5 text-xs font-medium ${collectionPill(collectionStatus(row))}`}>
+                          <span className={`w-fit max-w-full truncate rounded-full border px-2 py-0.5 text-xs font-medium ${collectionPill(collectionStatus(row))}`} title={collectionStatus(row)}>
                             {collectionStatus(row)}
                           </span>
-                          {collectionOwner(row) && <span className="text-xs text-muted-foreground">{collectionOwner(row)}</span>}
+                          {collectionOwner(row) && <span className="truncate text-xs text-muted-foreground" title={collectionOwner(row)}>{collectionOwner(row)}</span>}
                         </div>
                       </td>
-                      <td className="px-4 py-3 text-foreground">
+                      <td className="whitespace-nowrap px-2 py-2 text-foreground">
                         <div className={isFollowUpDue(row, today) ? 'font-semibold text-amber-800' : ''}>
                           {fmtDate(row.collection?.nextFollowUpDate)}
                         </div>
                       </td>
-                      <td className="px-4 py-3">
-                        <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-medium ${statusPill(row.status, row.daysUntilDue)}`}>
+                      <td className="px-2 py-2 text-[11px] text-muted-foreground">
+                        {row.collection?.adviceReceivedDate ? (
+                          <div><span className="font-medium text-cyan-800">Advice {fmtDate(row.collection.adviceReceivedDate)}</span><div>{row.currency || ''} {Number(row.collection.adviceAmount || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div></div>
+                        ) : latestBuyerPayment ? (
+                          <PaymentEvidenceDisplay
+                            latestPayment={latestBuyerPayment}
+                            evidence={paymentEvidence}
+                            summary={row.paymentEvidenceSummary}
+                            postingState={row.collection?.reconciliationState}
+                          />
+                        ) : '-'}
+                      </td>
+                      <td className="px-2 py-2">
+                        <span className={`inline-flex max-w-full truncate rounded-full border px-2 py-0.5 text-xs font-medium ${statusPill(row.status, row.daysUntilDue)}`} title={row.status}>
                           {row.status}
                         </span>
                       </td>
-                      <td className={`px-4 py-3 text-right font-medium ${dueTextClass(row.daysUntilDue)}`}>
+                      <td className={`whitespace-nowrap px-2 py-2 text-right font-medium ${dueTextClass(row.daysUntilDue)}`}>
                         {overdueDisplayValue(row.daysUntilDue)}
                       </td>
-                      <td className="px-4 py-3 text-right">
+                      <td className="px-2 py-2 text-right">
                         <div className="flex justify-end gap-1.5">
                           <Button
                             type="button"
@@ -3007,10 +3545,16 @@ export default function BuyerInvoices() {
         open={!!selectedCollectionRow}
         onClose={() => setSelectedCollectionRow(null)}
         onSaved={mergeCollectionResult}
+        onSendReminder={(row) => {
+          setSelectedCollectionRow(null);
+          setSelectedReminderRow(row);
+        }}
         ownerOptions={buyerTraderOptions}
       />
       <PaymentReminderModal
         row={selectedReminderRow}
+        rows={collectionRows}
+        initialSettings={savedEmailSettings}
         open={!!selectedReminderRow}
         daysAhead={Math.max(0, Math.min(Number(daysAhead) || 0, 365))}
         canManageSettings={canManageEmailSettings}

@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState } from 'react';
 import { appClient } from '@/api/appClient';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -7,11 +7,15 @@ import { AlertCircle, Loader2, Download, Play, TrendingUp, BarChart2 } from 'luc
 import { format } from 'date-fns';
 import StemDetailModal from '@/components/dashboard/StemDetailModal';
 import PageHeader from '@/components/common/PageHeader';
+import PageMethodology from '@/components/common/PageMethodology';
+import StemDetailLink from '@/components/common/StemDetailLink';
 import FilterSummary, { FilterChip } from '@/components/common/FilterSummary';
 import TableShell from '@/components/common/TableShell';
 import StateBlock from '@/components/common/StateBlock';
-import { buildDeliveryWhere } from '@/lib/dashboardFilters';
+import DataStatus from '@/components/common/DataStatus';
+import { buildDashboardDateWindows } from '@/lib/dashboardFilters';
 import { numericValue, textValue } from '@/lib/displayValue';
+import { QLIK_VALIDATOR_METHODOLOGY } from '@/lib/pageMethodologies';
 
 const fmt = (v, isPercent = false) => {
   const number = numericValue(v);
@@ -85,16 +89,14 @@ export default function StemPnlReport() {
   const [sortDir, setSortDir] = useState(-1);
   const [search, setSearch] = useState('');
   const [selectedStemId, setSelectedStemId] = useState(null);
+  const [responseMeta, setResponseMeta] = useState(null);
 
-  const buildWhere = useCallback(() => {
-    return buildDeliveryWhere([year], month === 'all' ? [] : [month]);
-  }, [year, month]);
-
-  const run = async () => {
+  const run = async (force = true) => {
     setLoading(true);
     setError(null);
-    const where = buildWhere();
-    const reportRes = await appClient.functions.invoke('stemPnl', { where, limit: 1000 });
+    const dateWindows = buildDashboardDateWindows([year], month === 'all' ? [] : [month]);
+    const reportRes = await appClient.functions.invoke('stemPnl', { dateWindows, limit: 1000 }, { cache: true, force });
+    setResponseMeta(reportRes.data?.error ? { ...reportRes.meta, cacheStatus: 'UNAVAILABLE' } : reportRes.meta);
     if (reportRes.data?.error) {
       setError(reportRes.data.error);
     } else {
@@ -161,10 +163,16 @@ export default function StemPnlReport() {
           title="Dashboard and Qlik Validator Tool"
           description="Validate calculated Gross Profit against Qlik reference values and inspect the underlying STEM detail."
           meta={rows.length > 0 ? `${filtered.length.toLocaleString()} of ${rows.length.toLocaleString()} stems shown` : undefined}
-          actions={rows.length > 0 && (
-            <Button variant="outline" size="sm" onClick={exportCsv} className="gap-1.5">
-              <Download className="w-3.5 h-3.5" /> Export CSV
-            </Button>
+          actions={(
+            <>
+              <PageMethodology {...QLIK_VALIDATOR_METHODOLOGY} size="sm" />
+              <DataStatus meta={responseMeta} state={loading ? 'refreshing' : undefined} label="Salesforce" />
+              {rows.length > 0 && (
+                <Button variant="outline" size="sm" onClick={exportCsv} className="gap-1.5">
+                  <Download className="w-3.5 h-3.5" /> Export CSV
+                </Button>
+              )}
+            </>
           )}
         />
 
@@ -188,7 +196,7 @@ export default function StemPnlReport() {
                 {MONTH_OPTIONS.map(m => <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>)}
               </SelectContent>
             </Select>
-            <Button size="sm" onClick={run} disabled={loading} className="gap-1.5">
+            <Button size="sm" onClick={() => run(true)} disabled={loading} className="gap-1.5">
               {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
               Run
             </Button>
@@ -259,7 +267,7 @@ export default function StemPnlReport() {
                 <tbody>
                   {filtered.map((row, i) => {
                     return (
-                      <tr key={row.Id || i} onClick={() => setSelectedStemId(row.Id)} className="border-b border-border/40 hover:bg-muted/20 transition-colors cursor-pointer">
+                      <tr key={row.Id || i} className="border-b border-border/40 hover:bg-muted/20 transition-colors">
                         {COLUMNS.map(col => {
                           const v = row[col.key];
                           let display;
@@ -275,7 +283,9 @@ export default function StemPnlReport() {
                           } else if (col.isDate) display = fmtDate(v);
                           else if (col.isPercent) display = fmt(v, true);
                           else if (col.num) display = fmt(v);
-                          else display = v ?? '—';
+                          else if (col.key === 'Key') {
+                            display = <StemDetailLink stemId={row.Id} onOpen={setSelectedStemId}>{v ?? '—'}</StemDetailLink>;
+                          } else display = v ?? '—';
 
                           const isProfit = ['Net_Profit', 'Qlik_Total_Profit'].includes(col.key);
                           const isDifference = col.key === 'Diff';

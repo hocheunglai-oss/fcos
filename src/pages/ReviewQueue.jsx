@@ -8,25 +8,25 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import PageHeader from '@/components/common/PageHeader';
+import StemDetailLink from '@/components/common/StemDetailLink';
+import PageMethodology from '@/components/common/PageMethodology';
 import FilterSummary, { FilterChip } from '@/components/common/FilterSummary';
 import TableShell from '@/components/common/TableShell';
 import StateBlock from '@/components/common/StateBlock';
+import DataStatus from '@/components/common/DataStatus';
 import StatCard from '@/components/dashboard/StatCard';
 import StemDetailModal from '@/components/dashboard/StemDetailModal';
-import { BackboneFinanceHandoffDialog, BackboneFinanceHandoffPanel } from '@/components/review/BackboneFinanceHandoffPanel';
 import { matchesExceptionReviewSearch } from '@/lib/exceptionReviewSearch';
+import { classifyExceptionReviewStem } from '@/lib/exceptionReviewClassifier';
 import {
   EXCEPTION_REVIEW_DATE_BASIS,
   buildExceptionReviewDateWindows,
-  exceptionScheduleDaysSinceEnd,
-  isExceptionPotentialDelay,
-  normalizeExceptionSchedule,
 } from '@/lib/exceptionReviewSchedule';
 import { cn } from '@/lib/utils';
-import { MONTHS, THIS_MONTH, THIS_YEAR, buildDeliveryWhere, formatSelectedMonths, getRecentYears } from '@/lib/dashboardFilters';
+import { MONTHS, THIS_MONTH, THIS_YEAR, formatSelectedMonths, getRecentYears } from '@/lib/dashboardFilters';
+import { EXCEPTION_REVIEW_METHODOLOGY } from '@/lib/pageMethodologies';
+import { useNavigationAwareRequest } from '@/hooks/useNavigationAwareRequest';
 
-const BUYER_FIELD = 'Total_Invoice_Amount__c';
-const SUPPLIER_FIELD = 'Total_Invoiced_Amount_From_Suppliers__c';
 const STORAGE_KEY = 'review_queue_filters';
 const YEARS = getRecentYears();
 const WORKFLOW_STATUSES = ['Open', 'Acknowledged', 'In Progress', 'Resolved', 'Dismissed'];
@@ -51,46 +51,6 @@ const fmtDate = (value) => {
   try { return format(new Date(value), 'dd MMM yyyy'); } catch { return value; }
 };
 
-function classifyStem(row) {
-  const buyer = row[BUYER_FIELD];
-  const supplier = row[SUPPLIER_FIELD];
-  const buyerBroker = row.__buyerCommCalc || 0;
-  const supplierBroker = row.__suppCommPerUnitCalc || 0;
-  const brokerTotal = buyerBroker + supplierBroker;
-  const grossProfit = row.__netPnlCalc != null
-    ? row.__netPnlCalc
-      : buyer != null && supplier != null
-      ? buyer - supplier - brokerTotal
-      : null;
-  const reasons = [];
-  const exceptionSchedule = row._Exception_Schedule || normalizeExceptionSchedule(row);
-  const scheduleDelayDays = exceptionScheduleDaysSinceEnd(exceptionSchedule);
-
-  if (isExceptionPotentialDelay({ ...row, _Exception_Schedule: exceptionSchedule })) {
-    reasons.push({ key: 'potential-delay', label: 'Potential Delay', severity: 'high' });
-  }
-  if (buyer == null || Number(buyer) === 0) {
-    reasons.push({ key: 'missing-buyer', label: 'Missing buyer invoice', severity: 'high' });
-  }
-  if (supplier == null || Number(supplier) === 0) {
-    reasons.push({ key: 'missing-supplier', label: 'Missing supplier invoice', severity: 'high' });
-  }
-  if (grossProfit != null && grossProfit < 0) {
-    reasons.push({ key: 'negative-gross', label: 'Negative gross profit', severity: 'high' });
-  }
-  const severity = reasons.some(r => r.severity === 'high') ? 'high' : reasons.length ? 'medium' : 'clear';
-  return {
-    ...row,
-    reviewReasons: reasons,
-    reviewSeverity: severity,
-    grossProfit,
-    _Exception_Schedule: exceptionSchedule,
-    scheduleDelayDays,
-    effectiveDate: row.Delivery_Date__c || exceptionSchedule.endDate,
-    usesScheduleDate: !row.Delivery_Date__c,
-  };
-}
-
 function ReasonBadge({ reason }) {
   return (
     <span className={cn(
@@ -105,6 +65,7 @@ function ReasonBadge({ reason }) {
 }
 
 export default function ReviewQueue() {
+  const { request: requestExceptionData } = useNavigationAwareRequest('operational');
   const savedFilters = (() => { try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); } catch { return {}; } })();
   const [selectedYears, setSelectedYears] = useState(savedFilters.selectedYears ?? [THIS_YEAR]);
   const [selectedMonths, setSelectedMonths] = useState(savedFilters.selectedMonths ?? [THIS_MONTH]);
@@ -117,6 +78,7 @@ export default function ReviewQueue() {
   const [search, setSearch] = useState('');
   const [data, setData] = useState(null);
   const [lastRefresh, setLastRefresh] = useState(null);
+  const [responseMeta, setResponseMeta] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [selectedStemId, setSelectedStemId] = useState(null);
@@ -125,16 +87,11 @@ export default function ReviewQueue() {
   const [selectedWorkflowRow, setSelectedWorkflowRow] = useState(null);
   const [workflowSaving, setWorkflowSaving] = useState(false);
   const [workflowError, setWorkflowError] = useState('');
-  const [backboneHandoffs, setBackboneHandoffs] = useState([]);
-  const [backboneHandoffError, setBackboneHandoffError] = useState('');
-  const [selectedBackboneHandoff, setSelectedBackboneHandoff] = useState(null);
-  const [backboneHandoffDetail, setBackboneHandoffDetail] = useState(null);
-  const [backboneHandoffDetailError, setBackboneHandoffDetailError] = useState('');
-  const [backboneHandoffDetailLoading, setBackboneHandoffDetailLoading] = useState(false);
   const [workflowForm, setWorkflowForm] = useState({
     status: 'Open', department: 'Unassigned', ownerUserId: '', priority: 'High', dueDate: '', latestNote: '', resolutionNote: '',
   });
   const debounceRef = useRef(null);
+  const workflowRequestRef = useRef(0);
 
   const toggleYear = (yr) => setSelectedYears(prev =>
     prev.includes(yr) ? (prev.length > 1 ? prev.filter(y => y !== yr) : prev) : [...prev, yr]
@@ -149,41 +106,41 @@ export default function ReviewQueue() {
   );
 
   const load = async (yrs = selectedYears, mos = selectedMonths, options = {}) => {
+    workflowRequestRef.current += 1;
     setLoading(true);
     setError(null);
-    setBackboneHandoffError('');
-    const where = buildDeliveryWhere(yrs, mos);
     const dateWindows = buildExceptionReviewDateWindows(yrs, mos);
-    const [res, handoffsRes] = await Promise.all([
-      appClient.functions.invoke('salesforceDashboardFiltered', {
-        mode: 'exception_review',
-        where,
-        trendYear: THIS_YEAR,
-        dateBasis: EXCEPTION_REVIEW_DATE_BASIS,
-        dateWindows,
-      }, { cache: true, force: options.force }),
-      appClient.functions.invoke('backboneFinanceHandoffs', { limit: 50 }, { cache: true, force: options.force }),
-    ]);
-    if (handoffsRes.data?.error) {
-      setBackboneHandoffError(handoffsRes.data.error);
-      setBackboneHandoffs([]);
-    } else {
-      setBackboneHandoffs(handoffsRes.data?.handoffs || []);
-    }
-    if (res.data?.error) {
-      setError(res.data.error);
-    } else {
+    const applyExceptionData = (res) => {
+      setResponseMeta(res.data?.error ? { ...res.meta, cacheStatus: 'UNAVAILABLE' } : res.meta);
+      if (res.data?.error) {
+        setError(res.data.error);
+        return;
+      }
+      setError(null);
       setData(res.data);
       setLastRefresh(new Date(res.meta?.cachedAt || Date.now()));
       const stemIds = (res.data?.recentStems || []).map((row) => row.Id).filter(Boolean);
-      const workflowRes = await appClient.functions.invoke('exceptionReviewWorkflowList', { stemIds }, { cache: true, force: options.force });
-      if (workflowRes.data?.error) {
-        setError(workflowRes.data.error);
-      } else {
-        setWorkflowByStemId(workflowRes.data.byStemId || {});
-        setOwnerOptions(workflowRes.data.ownerOptions || []);
-      }
-    }
+      const workflowRequestId = ++workflowRequestRef.current;
+      appClient.functions.invoke('exceptionReviewWorkflowList', { stemIds }, { cache: false }).then((workflowRes) => {
+        if (workflowRequestId !== workflowRequestRef.current) return;
+        if (workflowRes.data?.error) setError(workflowRes.data.error);
+        else {
+          setWorkflowByStemId(workflowRes.data.byStemId || {});
+          setOwnerOptions(workflowRes.data.ownerOptions || []);
+        }
+      });
+    };
+    await requestExceptionData({
+      name: 'salesforceDashboardFiltered',
+      payload: {
+        mode: 'exception_review',
+        trendYear: THIS_YEAR,
+        dateBasis: EXCEPTION_REVIEW_DATE_BASIS,
+        dateWindows,
+      },
+      force: options.force,
+      apply: applyExceptionData,
+    });
     setLoading(false);
   };
 
@@ -201,7 +158,7 @@ export default function ReviewQueue() {
   const selectedMonthLabel = formatSelectedMonths(selectedMonths);
 
   const reviewRows = useMemo(() => {
-    const rows = (data?.recentStems || []).map(classifyStem).filter(row => row.reviewReasons.length > 0).map((row) => ({
+    const rows = (data?.recentStems || []).map((row) => classifyExceptionReviewStem(row)).filter(row => row.reviewReasons.length > 0).map((row) => ({
       ...row,
       exceptionWorkflow: workflowByStemId[row.Id] || null,
     }));
@@ -217,7 +174,7 @@ export default function ReviewQueue() {
     return filteredByType.filter(row => matchesExceptionReviewSearch(row, search));
   }, [data?.recentStems, activeReviewType, search, workflowByStemId, workflowScope]);
 
-  const classifiedRows = useMemo(() => (data?.recentStems || []).map(classifyStem), [data?.recentStems]);
+  const classifiedRows = useMemo(() => (data?.recentStems || []).map((row) => classifyExceptionReviewStem(row)), [data?.recentStems]);
   const highPriorityCount = classifiedRows.filter(row => row.reviewSeverity === 'high').length;
   const potentialDelayCount = classifiedRows.filter(row => row.reviewReasons.some(reason => reason.key === 'potential-delay')).length;
   const clearCount = classifiedRows.filter(row => row.reviewReasons.length === 0).length;
@@ -262,20 +219,6 @@ export default function ReviewQueue() {
     setSelectedWorkflowRow(null);
   };
 
-  const openBackboneHandoff = async (handoff) => {
-    setSelectedBackboneHandoff(handoff);
-    setBackboneHandoffDetail(null);
-    setBackboneHandoffDetailError('');
-    setBackboneHandoffDetailLoading(true);
-    const res = await appClient.functions.invoke('backboneFinanceHandoffDetail', { handoffId: handoff.handoffId }, { cache: true });
-    setBackboneHandoffDetailLoading(false);
-    if (res.data?.error) {
-      setBackboneHandoffDetailError(res.data.error);
-      return;
-    }
-    setBackboneHandoffDetail(res.data);
-  };
-
   const exportCsv = () => {
     if (!reviewRows.length) return;
     const headers = ['Priority', 'Exception Reason', 'Name', 'Buyer Name', 'Delivery Date', 'Schedule Range', 'Buyer Invoice', 'Supplier Invoice', 'Gross Profit'];
@@ -315,6 +258,8 @@ export default function ReviewQueue() {
         meta={lastRefresh ? `Last updated ${format(lastRefresh, 'HH:mm:ss')}` : 'Auto-loaded from Salesforce'}
         actions={(
           <>
+            <PageMethodology {...EXCEPTION_REVIEW_METHODOLOGY} />
+            <DataStatus meta={responseMeta} state={loading ? 'refreshing' : undefined} label="Salesforce" />
             <Button variant="outline" onClick={exportCsv} disabled={loading || !reviewRows.length} className="gap-2">
               <Download className="w-3.5 h-3.5" /> Export CSV
             </Button>
@@ -426,13 +371,6 @@ export default function ReviewQueue() {
         </div>
       )}
 
-      <BackboneFinanceHandoffPanel
-        handoffs={backboneHandoffs}
-        loading={loading && !data}
-        error={backboneHandoffError}
-        onOpen={openBackboneHandoff}
-      />
-
       <TableShell
         title="Exception List"
         meta={`${reviewRows.length.toLocaleString()} matching items`}
@@ -481,7 +419,7 @@ export default function ReviewQueue() {
               </thead>
               <tbody>
                 {reviewRows.map(row => (
-                  <tr key={row.Id} onClick={() => setSelectedStemId(row.Id)} className="cursor-pointer border-b border-border/50 hover:bg-muted/30 transition-colors">
+                  <tr key={row.Id} className="border-b border-border/50 hover:bg-muted/30 transition-colors">
                     <td className="py-2.5 px-3 whitespace-nowrap">
                       <span className={cn(
                         'inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-semibold uppercase',
@@ -495,7 +433,9 @@ export default function ReviewQueue() {
                         {row.reviewReasons.map(reason => <ReasonBadge key={`${row.Id}-${reason.key}-${reason.label}`} reason={reason} />)}
                       </div>
                     </td>
-                    <td className="py-2.5 px-3 font-medium text-foreground whitespace-nowrap">{row.Name || '-'}</td>
+                    <td className="py-2.5 px-3 text-foreground whitespace-nowrap">
+                      <StemDetailLink stemId={row.Id} onOpen={setSelectedStemId}>{row.Name || '-'}</StemDetailLink>
+                    </td>
                     <td className="py-2.5 px-3 text-muted-foreground whitespace-nowrap">{row.Buyer_Name__c || row.Buyer__c || '-'}</td>
                     <td className="py-2.5 px-3 whitespace-nowrap">
                       {row.Delivery_Date__c
@@ -522,10 +462,7 @@ export default function ReviewQueue() {
                         size="sm"
                         variant="outline"
                         className="gap-2"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          openWorkflow(row);
-                        }}
+                        onClick={() => openWorkflow(row)}
                       >
                         <UserCog className="h-3.5 w-3.5" /> Manage
                       </Button>
@@ -545,19 +482,6 @@ export default function ReviewQueue() {
         open={!!selectedStemId}
         onClose={() => setSelectedStemId(null)}
         onUpdated={() => load(selectedYears, selectedMonths, { force: true })}
-      />
-
-      <BackboneFinanceHandoffDialog
-        selected={selectedBackboneHandoff}
-        detail={backboneHandoffDetail}
-        loading={backboneHandoffDetailLoading}
-        error={backboneHandoffDetailError}
-        onOpenChange={(open) => {
-          if (open) return;
-          setSelectedBackboneHandoff(null);
-          setBackboneHandoffDetail(null);
-          setBackboneHandoffDetailError('');
-        }}
       />
 
       <Dialog open={Boolean(selectedWorkflowRow)} onOpenChange={(open) => !open && setSelectedWorkflowRow(null)}>

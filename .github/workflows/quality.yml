@@ -1,0 +1,76 @@
+name: FCOS quality
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: fcos-quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  code-and-database:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run verify:fcuno-contract
+      - run: npm test
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run verify:graph-only
+      - run: npm run build
+      - run: npm run verify:performance
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.113.0
+      - run: supabase start -x studio,imgproxy,edge-runtime,logflare,vector,supavisor
+      - run: FCOS_MIGRATION_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres FCOS_REQUIRE_LIVE_MIGRATION_CHECK=1 npm run verify:migrations
+      - name: Stop temporary Supabase services
+        if: ${{ always() }}
+        run: supabase stop --no-backup
+
+  authenticated-browser:
+    # The former permanent FCOS CI viewer was deliberately deleted. Keep the
+    # authenticated suite available, but run it only when a governed renewable
+    # test identity has been explicitly provisioned and enabled.
+    if: ${{ vars.FCOS_AUTH_E2E_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    env:
+      FCOS_E2E_BASE_URL: https://fcos.fcuno.com
+      FCOS_E2E_STORAGE_STATE: /tmp/fcos-e2e-storage.json
+      FCOS_E2E_EMAIL: ${{ secrets.FCOS_E2E_EMAIL }}
+      FCOS_E2E_PASSWORD: ${{ secrets.FCOS_E2E_PASSWORD }}
+      FCOS_REQUIRE_AUTH_E2E: 1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chrome
+      - name: Verify renewable authenticated browser credentials
+        run: |
+          test -n "$FCOS_E2E_BASE_URL"
+          test -n "$FCOS_E2E_EMAIL"
+          test -n "$FCOS_E2E_PASSWORD"
+      - run: npm run test:e2e
+
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+          # FCOS is a Vite SPA and does not enable React Router Server Components/actions.
+          allow-ghsas: GHSA-qwww-vcr4-c8h2
