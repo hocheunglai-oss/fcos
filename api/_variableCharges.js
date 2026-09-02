@@ -725,10 +725,11 @@ async function loadLiveCases({ client, stemIds = null, stemAccessCondition = nul
     stemRows.push(...await queryAll(`SELECT Id, Name, KeyStem__c, Account__c, Account__r.Name, Vessel__c, Vessel__r.Name, Vessel__r.NRT__c, Vessel__r.LastModifiedDate, Port__c, Port__r.Name, Port__r.Country__c, CreatedDate, Delivery_Date__c, ETA_Start_Date__c, ETA_End_Date__c, ETB_Start_Date__c, ETB_End_Date__c, ETCD_Start_Date__c, ETCD_End_Date__c, ETD_Start_Date__c, ETD_End_Date__c, Payment_Term__c, Total__c, Costs_Total__c, Total_Invoice_Amount__c, Receivable_Balance__c, Payable_Balance__c, Variable_Charges_Confirmed__c, LastModifiedDate FROM STEM__c WHERE Id IN (${quotedIds(group)}) AND CreatedDate >= ${VARIABLE_CHARGE_STEM_CREATED_FROM}${accessClause}`));
   }
   const accessibleStemIds = new Set(stemRows.map((row) => row.Id));
-  const [nominations, supplierNominations, invoices] = await Promise.all([
+  const [nominations, supplierNominations, invoices, supplierInvoices] = await Promise.all([
     accessibleStemIds.size ? queryAll(`SELECT Id, STEM__c, Buyer_Supplier_Trader__c, BT_ST_Email_Address__c, Buyer_Confirmation__c, LastModifiedDate FROM Nomination__c WHERE STEM__c IN (${quotedIds([...accessibleStemIds])}) AND Deprecated__c = false AND RecordType.DeveloperName = 'Buyer'`) : [],
     accessibleStemIds.size ? queryAll(`SELECT Id, STEM__c, Account__c, Buyer_Supplier_Trader__c, BT_ST_Email_Address__c, LastModifiedDate FROM Nomination__c WHERE STEM__c IN (${quotedIds([...accessibleStemIds])}) AND Deprecated__c = false AND RecordType.DeveloperName = 'Supplier'`) : [],
     accessibleStemIds.size ? queryAll(`SELECT Id, Name, STEM__c, Proforma__c, Sent__c, File__c, LastModifiedDate FROM Invoice__c WHERE STEM__c IN (${quotedIds([...accessibleStemIds])})`) : [],
+    accessibleStemIds.size ? queryAll(`SELECT Id, STEM__c, Supplier__c, LastModifiedDate FROM Supplier_Invoice__c WHERE STEM__c IN (${quotedIds([...accessibleStemIds])})`) : [],
   ]);
   const result = stemRows.map((stem) => {
     const stemLineItems = allLineItems.filter((row) => row.STEM__c === stem.Id).sort(compareVariableChargeRows);
@@ -742,6 +743,7 @@ async function loadLiveCases({ client, stemIds = null, stemAccessCondition = nul
       supplierNominations: supplierNominations.filter((row) => row.STEM__c === stem.Id && usedAccountIds.has(row.Account__c)),
       supplierStages: supplierStages.filter((row) => row.STEM__c === stem.Id && usedAccountIds.has(row.Supplier__c)),
       invoices: invoices.filter((row) => row.STEM__c === stem.Id),
+      supplierInvoices: supplierInvoices.filter((row) => row.STEM__c === stem.Id && usedAccountIds.has(row.Supplier__c)),
       hasVariableCharges: lineItems.length > 0 || extraCosts.length > 0,
       hasShipAgent: lineItems.length > 0 || extraCosts.length > 0,
       hasProductLineItems: stemLineItems.length > 0,
@@ -1162,6 +1164,7 @@ function serializeCase(live, stored, profile, gm, dueDate, sideRows = [], profil
   };
   const profileMap = new Map(profiles.map((row) => [row.id, row]));
   const normalTrader = !VIEW_ONLY_USER_TYPES.has(text(profile?.user_type, 100).toLowerCase());
+  const hasFinalBuyerInvoice = live.invoices.some(finalInvoice);
   const supplierRequirements = (live.supplierRequirements || []).map((row) => {
     const sideState = (side) => sideRows.find((state) => state.supplier_account_id === row.supplierId && state.side === side) || null;
     const serializeSide = (side) => {
@@ -1179,6 +1182,10 @@ function serializeCase(live, stored, profile, gm, dueDate, sideRows = [], profil
       const frozen = verified;
       const isCurrentAssignee = synchronized && assignedId === profile?.id && normalTrader;
       const isDefaultAssignee = synchronized && defaultId === profile?.id && normalTrader;
+      const supplierInvoiceCreated = (live.supplierInvoices || []).some((invoice) => invoice.Supplier__c === row.supplierId)
+        || live.lineItems.some((item) => item.Original_Supplier__c === row.supplierId && item.Supplier_Invoice__c)
+        || live.extraCosts.some((item) => item.Supplier__c === row.supplierId && item.Supplier_Invoice__c);
+      const invoiceCreated = side === 'cost' ? supplierInvoiceCreated : hasFinalBuyerInvoice;
       return {
         side,
         status: verified ? 'verified' : salesforceStatus === 'Invalidated' ? 'invalidated' : 'pending',
@@ -1190,9 +1197,16 @@ function serializeCase(live, stored, profile, gm, dueDate, sideRows = [], profil
         fingerprint,
         reviewedFingerprint: reviewedFingerprint || null,
         confirmationTime: confirmedAt || null,
+        invoiceCreated,
+        amendBlockedReason: invoiceCreated
+          ? side === 'cost'
+            ? 'Locked after this supplier invoice was created.'
+            : 'Locked after the final Buyer Invoice was created.'
+          : null,
         permissions: {
           canEdit: !frozen && isCurrentAssignee,
           canConfirm: !frozen && isCurrentAssignee,
+          canReopen: frozen && isCurrentAssignee && !invoiceCreated,
           canAssignToBuyer: !frozen && isDefaultAssignee && Boolean(assignedBuyerTrader.id) && assignedId !== assignedBuyerTrader.id,
           canTakeBack: !frozen && isDefaultAssignee && assignedId !== defaultId,
           canGmOverride: !frozen && gm.isGeneralManager,
@@ -3156,6 +3170,113 @@ export async function confirmVariableChargeSides(body, context) {
   } catch (error) {
     if (!salesforceWritten) {
       await completeOperation(context.client, operationId, 'uncertain', { stemId, supplierId, errorCode: error.code || 'SIDE_CONFIRM_UNCERTAIN' }).catch(() => {});
+    }
+    throw error;
+  }
+}
+
+export async function reopenVariableChargeSides(body, context) {
+  if (!pairedWorkflowEnabled()) throw httpError('The paired Variable Charges workflow is not enabled yet.', 409, 'PAIRED_WORKFLOW_DISABLED');
+  const stemId = text(body?.stemId, 18);
+  const supplierId = text(body?.supplierId, 18);
+  const sides = selectedSides(body);
+  const operationId = operationIdentity(body);
+  const revisions = expectedSideRevisions(body, sides);
+  const reason = text(body?.reason, 1000);
+  if (reason.length < 5) throw httpError('Enter an amendment reason of at least 5 characters.', 400, 'AMENDMENT_REASON_REQUIRED');
+
+  const liveBefore = await liveCaseForStem(stemId, context);
+  const requirement = (liveBefore.supplierRequirements || []).find((row) => row.supplierId === supplierId && row.effectiveRequired);
+  if (!requirement) throw httpError('This exact supplier is not required in Variable Charges.', 409, 'SUPPLIER_STAGE_NOT_REQUIRED');
+  const states = await sideStatesForSupplier(context, stemId, supplierId, sides);
+  const gm = await activeGeneralManager(context.client, context.profile.id);
+  const normalAuthority = states.every((state) => state.assigned_user_id === context.profile.id)
+    && !VIEW_ONLY_USER_TYPES.has(text(context.profile?.user_type).toLowerCase());
+  if (!normalAuthority && !gm.isGeneralManager) throw httpError('Only the currently assigned trader may amend an approved Variable Charges leg.', 403, 'SIDE_ASSIGNEE_REQUIRED');
+  for (const state of states) {
+    if (state.status !== 'verified') throw httpError('Only an approved Variable Charges leg may be amended.', 409, 'SIDE_NOT_APPROVED');
+    if (Number(state.revision) !== revisions[state.side]) throw httpError('This leg changed after it was opened. Refresh and try again.', 409, 'SIDE_REVISION_CONFLICT');
+  }
+  if (text(body?.expectedStemLastModifiedAt, 80) !== text(liveBefore.stem.LastModifiedDate, 80)) {
+    throw httpError('The Salesforce STEM changed after it was opened. Refresh and try again.', 409, 'STEM_LAST_MODIFIED_CONFLICT');
+  }
+  const supplierInvoiceCreated = (liveBefore.supplierInvoices || []).some((invoice) => invoice.Supplier__c === supplierId)
+    || liveBefore.lineItems.some((row) => row.Original_Supplier__c === supplierId && row.Supplier_Invoice__c)
+    || liveBefore.extraCosts.some((row) => row.Supplier__c === supplierId && row.Supplier_Invoice__c);
+  if (sides.includes('cost') && supplierInvoiceCreated) {
+    throw httpError('Supplier costs cannot be amended after this supplier invoice has been created.', 409, 'SUPPLIER_INVOICE_ALREADY_CREATED');
+  }
+  if (sides.includes('buyer_charge') && liveBefore.invoices.some(finalInvoice)) {
+    throw httpError('Buyer charges cannot be amended after the final Buyer Invoice has been created.', 409, 'BUYER_INVOICE_ALREADY_CREATED');
+  }
+  requireExternalActionGate('salesforce_write');
+
+  const requestFingerprint = sha256({ stemId, supplierId, sides, revisions, reason });
+  const reservation = await reserveOperation(context.client, {
+    operationId, type: 'side_reopen', stemId, fingerprint: requestFingerprint, actorId: context.profile.id,
+  });
+  if (reservation?.status === 'succeeded') return reservation.result || {};
+  if (['failed', 'uncertain'].includes(reservation?.status)) {
+    throw httpError('This amendment operation cannot be resumed safely. Refresh and use a new operation.', 409, 'OPERATION_NOT_RESUMABLE');
+  }
+
+  let salesforceWritten = reservation?.status === 'salesforce_written';
+  try {
+    if (!salesforceWritten) {
+      const refreshedRequirement = (liveBefore.supplierRequirements || []).find((row) => row.supplierId === supplierId);
+      const salesforceResult = await sfRequest(`/apexrest/fcos/variable-charges/${encodeURIComponent(stemId)}/supplier/${encodeURIComponent(supplierId)}/reopen`, {
+        method: 'POST',
+        body: {
+          stemId,
+          supplierId,
+          sides,
+          verifierEmail: context.profile.email,
+          expectedStemLastModifiedAt: apexUtcTimestamp(liveBefore.stem.LastModifiedDate, { required: true, label: 'STEM' }),
+          expectedStageLastModifiedAt: apexUtcTimestamp(refreshedRequirement?.lastModifiedAt, { required: true, label: 'Supplier stage' }),
+          gmOverrideReason: normalAuthority ? null : reason,
+        },
+      });
+      await completeOperation(context.client, operationId, 'salesforce_written', {
+        stemId, supplierId, sides, stageLastModifiedAt: salesforceResult?.lastModifiedAt || null,
+      });
+      salesforceWritten = true;
+    }
+
+    const refreshed = await liveCaseForStem(stemId, context);
+    const refreshedRequirement = (refreshed.supplierRequirements || []).find((row) => row.supplierId === supplierId);
+    if (!refreshedRequirement) throw httpError('The supplier stage changed during amendment.', 409, 'POST_WRITE_LIVE_DATA_CONFLICT');
+    if (sides.includes('cost') && refreshedRequirement.status !== 'Invalidated') {
+      throw httpError('The Supplier Leg did not reopen in Salesforce.', 409, 'POST_WRITE_LIVE_DATA_CONFLICT');
+    }
+    if (sides.includes('buyer_charge') && refreshedRequirement.buyerChargeStatus !== 'Invalidated') {
+      throw httpError('The Buyer Leg did not reopen in Salesforce.', 409, 'POST_WRITE_LIVE_DATA_CONFLICT');
+    }
+    const reopenRows = sides.map((side) => ({
+      side,
+      expectedRevision: revisions[side],
+      sourceFingerprint: side === 'cost' ? refreshedRequirement.sourceFingerprint : refreshedRequirement.buyerChargeSourceFingerprint,
+      salesforceStageLastModifiedAt: refreshedRequirement.lastModifiedAt || null,
+    }));
+    const { data, error } = await context.client.rpc('record_variable_charge_side_reopens', {
+      p_operation_id: operationId,
+      p_stem_id: stemId,
+      p_supplier_account_id: supplierId,
+      p_sides: reopenRows,
+      p_actor_user_id: context.profile.id,
+      p_actor_email: context.profile.email,
+      p_override_reason: normalAuthority ? null : reason,
+    });
+    if (error) {
+      if (/changed after it was opened|revision/i.test(error.message || '')) throw httpError(error.message, 409, 'SIDE_REVISION_CONFLICT');
+      throw error;
+    }
+    await syncVariableCharges(context, { stemIds: [stemId] }).catch(() => null);
+    return { stemId, supplierId, sides: data?.sides || [], operationId, status: 'reopened' };
+  } catch (error) {
+    if (!salesforceWritten) {
+      await completeOperation(context.client, operationId, 'uncertain', {
+        stemId, supplierId, errorCode: error.code || 'SIDE_REOPEN_UNCERTAIN',
+      }).catch(() => {});
     }
     throw error;
   }

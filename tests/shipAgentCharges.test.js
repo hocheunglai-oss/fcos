@@ -342,6 +342,7 @@ test('FCOS handlers are explicit, fail-closed, atomic, and do not send email', a
     'variableChargesBuyerConfirm',
     'variableChargesSideAssign',
     'variableChargesSideConfirm',
+    'variableChargesSideReopen',
     'variableChargesGmOverride',
     'variableChargesPostInvoiceResolve',
     'variableChargesSync',
@@ -374,6 +375,9 @@ test('FCOS handlers are explicit, fail-closed, atomic, and do not send email', a
   assert.match(ui, /Approve Supplier Costs/);
   assert.match(ui, /Approve Buyer Charges/);
   assert.match(ui, /Approve Both/);
+  assert.match(ui, /Amend Supplier Costs/);
+  assert.match(ui, /Amend Buyer Charges/);
+  assert.match(ui, /Continue to Amend/);
   assert.match(ui, /Review as General Manager/);
   assert.doesNotMatch(ui, /Temporary Assignee/);
   assert.match(ui, /Audit Details/);

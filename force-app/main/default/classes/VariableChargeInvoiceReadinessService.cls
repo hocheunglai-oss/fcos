@@ -201,6 +201,25 @@ public without sharing class VariableChargeInvoiceReadinessService {
         if (readiness.ready != true) throw messageException(readiness.reason);
     }
 
+    public static Boolean hasFinalBuyerInvoice(Id stemId) {
+        if (stemId == null) return false;
+        for (Invoice__c invoice : [
+            SELECT Id, Name, Proforma__c
+            FROM Invoice__c
+            WHERE STEM__c = :stemId
+        ]) if (isFinalBuyerInvoice(invoice)) return true;
+        return false;
+    }
+
+    public static Boolean hasSupplierInvoice(Id stemId, Id supplierId) {
+        if (stemId == null || supplierId == null) return false;
+        return [
+            SELECT COUNT()
+            FROM Supplier_Invoice__c
+            WHERE STEM__c = :stemId AND Supplier__c = :supplierId
+        ] > 0;
+    }
+
     public static void assertPersistedInvoicesAllowed(Set<Id> invoiceIds) {
         if (invoiceIds == null || invoiceIds.isEmpty()) return;
         List<Invoice__c> invoices = [SELECT Id, Name, STEM__c, Proforma__c FROM Invoice__c WHERE Id IN :invoiceIds];

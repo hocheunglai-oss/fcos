@@ -56,6 +56,12 @@ const connectionPolicy = {
       browserProfile: 'Vincent',
       rootFolderId: '1wzRycxzPAb42EvfhjPV22mkFwliXZv8d',
       syncSchedule: '0 * * * *',
+      secondaryMopsCsv: {
+        folderId: '1wzRycxzPAb42EvfhjPV22mkFwliXZv8d',
+        filenamePrefix: 'Core_Export_Data',
+        mimeType: 'text/csv',
+        startDate: '2025-01-01',
+      },
       folders: [
         { documentType: 'bunkerwire', folderId: '19ACtDV2U9_JrV_AmRJuHL7A29-Yxini7', label: 'Bunkerwire' },
         { documentType: 'european_marketscan', folderId: '14uXNTTleIO2K78gTEVDEAl8IfJZH4Aj1', label: 'European Marketscan' },
@@ -286,6 +292,16 @@ export function validateFcosConnectionPolicy(value = connectionPolicy) {
   }
   requireString(value.integrations?.googleDriveMarketReports?.rootFolderId, 'integrations.googleDriveMarketReports.rootFolderId');
   requireString(value.integrations?.googleDriveMarketReports?.syncSchedule, 'integrations.googleDriveMarketReports.syncSchedule');
+  const secondaryMopsCsv = value.integrations?.googleDriveMarketReports?.secondaryMopsCsv;
+  requireString(secondaryMopsCsv?.folderId, 'integrations.googleDriveMarketReports.secondaryMopsCsv.folderId');
+  requireString(secondaryMopsCsv?.filenamePrefix, 'integrations.googleDriveMarketReports.secondaryMopsCsv.filenamePrefix');
+  requireString(secondaryMopsCsv?.mimeType, 'integrations.googleDriveMarketReports.secondaryMopsCsv.mimeType');
+  requireString(secondaryMopsCsv?.startDate, 'integrations.googleDriveMarketReports.secondaryMopsCsv.startDate');
+  if (secondaryMopsCsv.folderId !== value.integrations.googleDriveMarketReports.rootFolderId
+      || secondaryMopsCsv.mimeType !== 'text/csv'
+      || secondaryMopsCsv.startDate !== '2025-01-01') {
+    throw new Error('The secondary MOPS CSV must remain pinned to the approved market-report root and 2025 cutover.');
+  }
   if (!Array.isArray(value.integrations?.googleDriveMarketReports?.folders)
       || value.integrations.googleDriveMarketReports.folders.length !== 2) {
     throw new Error('Google Drive market reports require exactly two source folders.');

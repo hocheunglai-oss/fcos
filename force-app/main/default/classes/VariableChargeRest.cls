@@ -56,6 +56,7 @@ global without sharing class VariableChargeRest {
             return confirmSupplierSides(stemId, body);
         }
         if (action == 'supplier' && parts.size() == 4 && parts[3].toLowerCase() == 'confirm') return confirmSupplierSides(stemId, body);
+        if (action == 'supplier' && parts.size() == 4 && parts[3].toLowerCase() == 'reopen') return reopenSupplierSides(stemId, body);
         if (action == 'supplier' && parts.size() == 5 && parts[4].toLowerCase() == 'confirm') {
             body.sides = new List<String>{normalizedSide(parts[3])};
             return confirmSupplierSides(stemId, body);
@@ -166,6 +167,75 @@ global without sharing class VariableChargeRest {
         response.costFingerprint = costFingerprint;
         response.buyerFingerprint = buyerFingerprint;
         response.fingerprint = sides.size() == 1 ? (sides.contains('cost') ? costFingerprint : buyerFingerprint) : null;
+        response.buyerConfirmed = [SELECT Variable_Charges_Confirmed__c FROM STEM__c WHERE Id = :stemId].Variable_Charges_Confirmed__c;
+        response.lastModifiedAt = iso(stage.LastModifiedDate);
+        return response;
+    }
+
+    private static ResponseBody reopenSupplierSides(Id stemId, RequestBody body) {
+        if (String.isBlank(body.supplierId) || String.isBlank(body.verifierEmail)) throw requestError('An exact supplier and requesting trader email are required.');
+        Set<String> sides = new Set<String>();
+        for (String requested : body.sides == null ? new List<String>() : body.sides) sides.add(normalizedSide(requested));
+        sides.remove(null);
+        if (sides.isEmpty()) throw requestError('Select at least one approved Variable Charges side to amend.');
+        Id supplierId = Id.valueOf(body.supplierId);
+        STEM__c stem = [SELECT Id, Variable_Charges_Confirmed__c, LastModifiedDate FROM STEM__c WHERE Id = :stemId LIMIT 1 FOR UPDATE];
+        assertTimestamp(stem.LastModifiedDate, body.expectedStemLastModifiedAt, 'The STEM changed after it was opened.');
+        if (!VariableChargeInvoiceReadinessService.exactSupplierIds(stemId).contains(supplierId)) throw requestError('The selected Account is not an exact active supplier on this STEM.');
+        if (!VariableChargeInvoiceReadinessService.requiredSupplierIds(stemId).contains(supplierId)) throw requestError('This supplier is not currently required in Variable Charges.');
+        if (sides.contains('cost') && VariableChargeInvoiceReadinessService.hasSupplierInvoice(stemId, supplierId)) {
+            throw requestError('Supplier costs cannot be amended after this supplier invoice has been created.');
+        }
+        if (sides.contains('buyer_charge') && VariableChargeInvoiceReadinessService.hasFinalBuyerInvoice(stemId)) {
+            throw requestError('Buyer charges cannot be amended after the final Buyer Invoice has been created.');
+        }
+
+        String key = String.valueOf(stemId) + ':' + String.valueOf(supplierId);
+        List<STEM_Variable_Charge_Supplier__c> existing = [
+            SELECT Id, External_Key__c, STEM__c, Supplier__c, Supplier_Status__c,
+                Verified_At__c, Verified_By_Email__c, Reviewed_Source_Fingerprint__c,
+                Buyer_Charge_Status__c, Buyer_Charge_Reviewed_Source_Fingerprint__c,
+                Buyer_Charge_Confirmed_At__c, Buyer_Charge_Confirmed_By_Email__c,
+                Revision__c, Buyer_Charge_Revision__c, LastModifiedDate
+            FROM STEM_Variable_Charge_Supplier__c
+            WHERE External_Key__c = :key
+            LIMIT 1 FOR UPDATE
+        ];
+        if (existing.isEmpty()) throw requestError('The approved supplier stage is unavailable. Refresh FCOS.');
+        STEM_Variable_Charge_Supplier__c stage = existing[0];
+        assertTimestamp(stage.LastModifiedDate, body.expectedStageLastModifiedAt, 'The supplier stage changed after it was opened.');
+        if (sides.contains('cost')) {
+            if (stage.Supplier_Status__c != 'Verified') throw requestError('Only approved supplier costs may be amended.');
+            stage.Supplier_Status__c = 'Invalidated';
+            stage.Verified_At__c = null;
+            stage.Verified_By_Email__c = null;
+            stage.Reviewed_Source_Fingerprint__c = null;
+        }
+        if (sides.contains('buyer_charge')) {
+            if (stage.Buyer_Charge_Status__c != 'Verified') throw requestError('Only approved buyer charges may be amended.');
+            stage.Buyer_Charge_Status__c = 'Invalidated';
+            stage.Buyer_Charge_Confirmed_At__c = null;
+            stage.Buyer_Charge_Confirmed_By_Email__c = null;
+            stage.Buyer_Charge_Reviewed_Source_Fingerprint__c = null;
+        }
+        update stage;
+        if (sides.contains('buyer_charge') && stem.Variable_Charges_Confirmed__c == true) {
+            stem.Variable_Charges_Confirmed__c = false;
+            update stem;
+        }
+
+        stage = [
+            SELECT Id, Supplier_Status__c, Buyer_Charge_Status__c, Revision__c,
+                Buyer_Charge_Revision__c, LastModifiedDate
+            FROM STEM_Variable_Charge_Supplier__c
+            WHERE Id = :stage.Id
+        ];
+        ResponseBody response = baseResponse(stemId, supplierId);
+        response.stageId = stage.Id;
+        response.supplierStatus = stage.Supplier_Status__c;
+        response.buyerChargeStatus = stage.Buyer_Charge_Status__c;
+        response.revision = stage.Revision__c == null ? 0 : stage.Revision__c.intValue();
+        response.buyerChargeRevision = stage.Buyer_Charge_Revision__c == null ? 0 : stage.Buyer_Charge_Revision__c.intValue();
         response.buyerConfirmed = [SELECT Variable_Charges_Confirmed__c FROM STEM__c WHERE Id = :stemId].Variable_Charges_Confirmed__c;
         response.lastModifiedAt = iso(stage.LastModifiedDate);
         return response;

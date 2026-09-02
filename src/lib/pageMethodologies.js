@@ -439,7 +439,7 @@ export const PAYMENT_COLLECTIONS_METHODOLOGIES = {
       },
       {
         title: 'Review and controlled changes',
-        body: 'The Supplier Leg and Buyer Leg may be completed in either order. Pending remains unresolved and blocks approval. The cost owner marks each exact-supplier charge as Correct or Edit Cost, controls additions, cancellations and shared fields, and records a Review Note. The buyer-side owner selects Charge Buyer or Do Not Charge, controls permitted buyer pricing, and records a Review Note. Existing product lines remain read-only in FCOS and Salesforce Files are optional supplier evidence.',
+        body: 'The Supplier Leg and Buyer Leg may be completed in either order. Pending remains unresolved and blocks approval. The cost owner marks each exact-supplier charge as Correct or Edit Cost, controls additions, cancellations and shared fields, and records a Review Note. The buyer-side owner selects Charge Buyer or Do Not Charge, controls permitted buyer pricing, and records a Review Note. An assigned trader may reopen their approved leg with an amendment reason and reapprove it while the related invoice has not been created: Supplier Costs lock at that exact Supplier Invoice, and Buyer Charges lock at the final Buyer Invoice. Existing product lines remain read-only in FCOS and Salesforce Files are optional supplier evidence.',
       },
       {
         title: 'Hong Kong Basic Calling Cost bundle',

@@ -172,6 +172,16 @@ export const VARIABLE_CHARGES_USER_MANUAL = Object.freeze({
         'If an invoice already exists, follow the red action-required panel instead of changing history silently.',
       ],
     },
+    {
+      title: 'Amend an approved leg before invoicing',
+      summary: 'The assigned trader may reopen their own approved leg while its related invoice has not been created.',
+      steps: [
+        'Choose Amend Supplier Costs or Amend Buyer Charges in the approved leg header.',
+        'Enter a short amendment reason and choose Continue to Amend.',
+        'Make the required changes, resolve every Pending row, and approve the leg again.',
+        'Supplier costs lock when that exact supplier invoice is created; buyer charges lock when the final Buyer Invoice is created.',
+      ],
+    },
   ],
   reminders: [
     'Pending always blocks approval.',

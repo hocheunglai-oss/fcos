@@ -296,6 +296,7 @@ const HANDLER_BEHAVIOR = Object.freeze({
   variableChargesBuyerConfirm: mutationPolicy({"cache":"none","externalAction":true,"capability":null}),
   variableChargesSideAssign: mutationPolicy({"cache":"none","externalAction":false,"capability":null}),
   variableChargesSideConfirm: mutationPolicy({"cache":"none","externalAction":true,"capability":null}),
+  variableChargesSideReopen: mutationPolicy({"cache":"none","externalAction":true,"capability":null}),
   variableChargesGmOverride: mutationPolicy({"cache":"none","externalAction":true,"capability":null}),
   variableChargesPostInvoiceResolve: mutationPolicy({"cache":"none","externalAction":false,"capability":null}),
   variableChargesSync: mutationPolicy({"cache":"none","externalAction":false,"capability":null}),

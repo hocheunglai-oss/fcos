@@ -5,6 +5,8 @@ import { buyerCaseBackfillStatus, requiredSupplierIds } from '../scripts/backfil
 
 const migration = readFile(new URL('../supabase/migrations/20260818145155_variable_charges_two_stage_cutover.sql', import.meta.url), 'utf8');
 const pairedMigration = readFile(new URL('../supabase/migrations/20260826125205_variable_charge_side_by_side_workflow.sql', import.meta.url), 'utf8');
+const reopenMigration = readFile(new URL('../supabase/migrations/20260902035652_variable_charge_pre_invoice_reopen.sql', import.meta.url), 'utf8');
+const reopenCompletionMigration = readFile(new URL('../supabase/migrations/20260902050000_variable_charge_reopen_operation_completion.sql', import.meta.url), 'utf8');
 const pairedBackfill = readFile(new URL('../scripts/backfill-variable-charge-paired-sides.mjs', import.meta.url), 'utf8');
 
 test('Variable Charges renames the existing workflow ledger without losing rollback compatibility', async () => {
@@ -52,6 +54,31 @@ test('paired assignment and confirmation enforce revisions, exact assignees, fin
   assert.match(confirmation, /v_state\.status = 'verified'/);
   assert.match(confirmation, /p_operation_id/);
   assert.match(confirmation, /jsonb_array_length\(p_sides\) > 1/);
+});
+
+test('pre-invoice amendments reopen only approved assigned sides with immutable audit evidence', async () => {
+  const sql = await reopenMigration;
+  assert.match(sql, /'side_reopen'/);
+  assert.match(sql, /'side_reopened'/);
+  assert.match(sql, /create or replace function public\.record_variable_charge_side_reopens/);
+  assert.match(sql, /v_state\.status not in \('verified', 'invalidated'\)/);
+  assert.match(sql, /v_state\.assigned_user_id is distinct from v_actor\.id and not v_override/);
+  assert.match(sql, /v_state\.revision = v_expected_revision/);
+  assert.match(sql, /set status = 'invalidated'/);
+  assert.match(sql, /v_operation\.status <> 'salesforce_written'/);
+  assert.match(sql, /security invoker/);
+  assert.match(sql, /revoke all on function public\.record_variable_charge_side_reopens[\s\S]+from public, anon, authenticated/);
+  assert.match(sql, /grant execute on function public\.record_variable_charge_side_reopens[\s\S]+to service_role/);
+  assert.doesNotMatch(sql, /unit_price|lumpsum_price|line_total|payment_term|document_content/i);
+});
+
+test('pre-invoice reopen completion uses the existing operation-ledger timestamp', async () => {
+  const sql = await reopenCompletionMigration;
+  assert.match(sql, /create or replace function public\.record_variable_charge_side_reopens/);
+  assert.match(sql, /completed_at = clock_timestamp\(\)/);
+  assert.doesNotMatch(sql, /updated_at = clock_timestamp\(\)/);
+  assert.match(sql, /security invoker/);
+  assert.match(sql, /grant execute on function public\.record_variable_charge_side_reopens[\s\S]+to service_role/);
 });
 
 test('paired historical backfill is service-only, idempotent, and preserves historical actors', async () => {

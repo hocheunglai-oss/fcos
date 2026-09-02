@@ -109,6 +109,7 @@ import {
   getVariableChargeDetail, getVariableChargeSettings,
   assignVariableChargeSides,
   confirmVariableChargeSides,
+  reopenVariableChargeSides,
   confirmVariableChargeBuyer,
   listShipAgentCharges,
   listVariableCharges,
@@ -1476,6 +1477,7 @@ const HANDLER_MODULE_ACCESS = {
   variableChargesBuyerConfirm: ['buyer_invoices', 'incoming_payments'],
   variableChargesSideAssign: ['buyer_invoices', 'incoming_payments'],
   variableChargesSideConfirm: ['buyer_invoices', 'incoming_payments'],
+  variableChargesSideReopen: ['buyer_invoices', 'incoming_payments'],
   variableChargesGmOverride: ['buyer_invoices', 'incoming_payments'],
   variableChargesPostInvoiceResolve: ['buyer_invoices', 'incoming_payments'],
   variableChargesSync: ['buyer_invoices', 'incoming_payments'],
@@ -4950,6 +4952,13 @@ async function variableChargesSideConfirm(body, req, accessContext = null) {
   return confirmVariableChargeSides(body, context);
 }
 
+async function variableChargesSideReopen(body, req, accessContext = null) {
+  const context = await shipAgentChargesContext(req, accessContext);
+  await requireShipAgentStemAccess(body, context);
+  if (!isSalesforceId(String(body?.supplierId || '').trim())) throw appError('A valid exact Supplier Account is required.', 400);
+  return reopenVariableChargeSides(body, context);
+}
+
 async function variableChargesGmOverride(body, req, accessContext = null) {
   const context = await shipAgentChargesContext(req, accessContext);
   await requireShipAgentStemAccess(body, context);
@@ -6560,15 +6569,18 @@ async function googleDriveHealthRow() {
             folderName: folder.folderName,
           }));
           const healthClient = supabaseAdminClient();
-          const [syncRun, imports, published, matched, incomplete, conflicts] = await Promise.all([
+          const [syncRun, imports, published, matched, incomplete, conflicts, secondaryMops] = await Promise.all([
             healthClient.from('market_report_sync_runs').select('status,discovered_count,skipped_count,imported_count,failed_count,deferred_count,error_code,started_at,completed_at').eq('status', 'completed').order('completed_at', { ascending: false }).limit(1).maybeSingle(),
             healthClient.from('market_report_imports').select('id', { count: 'exact', head: true }).gte('report_date', '2025-01-01'),
             healthClient.from('market_report_imports').select('id', { count: 'exact', head: true }).eq('mops_publication_status', 'published'),
             healthClient.from('market_report_imports').select('id', { count: 'exact', head: true }).eq('mops_publication_status', 'matched'),
             healthClient.from('market_report_imports').select('id', { count: 'exact', head: true }).eq('mops_publication_status', 'incomplete'),
             healthClient.from('market_report_imports').select('id', { count: 'exact', head: true }).eq('mops_publication_status', 'conflict'),
+            healthClient.from('market_mops_secondary_imports')
+              .select('status,drive_modified_at,source_row_count,comparison_value_count,matched_value_count,conflict_value_count,published_date_count,matched_date_count,conflict_date_count,created_at')
+              .order('created_at', { ascending: false }).limit(1).maybeSingle(),
           ]);
-          const marketDatabaseError = [syncRun, imports, published, matched, incomplete, conflicts].find((entry) => entry.error)?.error;
+          const marketDatabaseError = [syncRun, imports, published, matched, incomplete, conflicts, secondaryMops].find((entry) => entry.error)?.error;
           if (marketDatabaseError) throw marketDatabaseError;
           return {
             accessTokenExpiresAt: addSecondsIso(token.expires_in),
@@ -6583,6 +6595,18 @@ async function googleDriveHealthRow() {
             mopsDatesMatched: matched.count || 0,
             missingMopsTriples: incomplete.count || 0,
             mopsConflicts: conflicts.count || 0,
+            secondaryMopsCsv: secondaryMops.data ? {
+              status: secondaryMops.data.status,
+              driveModifiedAt: secondaryMops.data.drive_modified_at,
+              importedAt: secondaryMops.data.created_at,
+              sourceRowCount: secondaryMops.data.source_row_count,
+              comparisonValueCount: secondaryMops.data.comparison_value_count,
+              matchedValueCount: secondaryMops.data.matched_value_count,
+              conflictValueCount: secondaryMops.data.conflict_value_count,
+              publishedDateCount: secondaryMops.data.published_date_count,
+              matchedDateCount: secondaryMops.data.matched_date_count,
+              conflictDateCount: secondaryMops.data.conflict_date_count,
+            } : null,
           };
         })
       : null;
@@ -6591,7 +6615,7 @@ async function googleDriveHealthRow() {
       id: 'google-drive',
       name: 'Google Drive Reports',
       category: 'Reports',
-      purpose: 'Reads licensed Bunkerwire and European Marketscan PDFs for the hourly Markets update.',
+      purpose: 'Reads licensed Bunkerwire and European Marketscan PDFs plus the historically verified root-folder MOPS CSV for the hourly Markets update.',
       scope: 'server',
       provider: 'Google Drive API',
       endpoint: 'https://www.googleapis.com/drive/v3',
@@ -6606,9 +6630,10 @@ async function googleDriveHealthRow() {
         marketReportAccount: CONNECTION_INTEGRATIONS.googleDriveMarketReports.accountEmail,
         marketReportBrowserProfile: CONNECTION_INTEGRATIONS.googleDriveMarketReports.browserProfile,
         marketReportRootFolder: maskValue(CONNECTION_INTEGRATIONS.googleDriveMarketReports.rootFolderId, 6, 4),
+        secondaryMopsCsvPrefix: CONNECTION_INTEGRATIONS.googleDriveMarketReports.secondaryMopsCsv.filenamePrefix,
         marketReportSchedule: CONNECTION_INTEGRATIONS.googleDriveMarketReports.syncSchedule,
       },
-      notes: gateEnabled ? ['The legacy XLS Report Archive is retired. XLS exports download locally only. Market-report PDFs are read only; FCOS stores configured observations and checksums, not PDF bytes or report text.'] : ['Google Drive market-report reads are paused by the emergency control.'],
+      notes: gateEnabled ? ['The legacy XLS Report Archive is retired. XLS exports download locally only. Licensed PDFs remain primary. The root-folder Core Export CSV is a historically gated secondary MOPS source; FCOS stores structured date evidence and checksums, not source files or report text.'] : ['Google Drive market-report reads are paused by the emergency control.'],
     },
     result,
   );
@@ -19174,6 +19199,7 @@ const handlers = {
   variableChargesBuyerConfirm,
   variableChargesSideAssign,
   variableChargesSideConfirm,
+  variableChargesSideReopen,
   variableChargesGmOverride,
   variableChargesPostInvoiceResolve,
   variableChargesSync,
