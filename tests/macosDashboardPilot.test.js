@@ -12,6 +12,7 @@ test('Dashboard uses the shared native workspace surfaces without changing its d
   ]);
   assert.match(page, /workspace-page workspace-dashboard/);
   assert.match(filters, /app-navigation-material workspace-filter-rail/);
+  assert.doesNotMatch(filters, /workspace-filter-rail workspace-primary-navigation/);
   assert.match(filters, /workspace-filter-panel/);
   assert.match(kpis, /workspace-kpi-card/);
   assert.doesNotMatch(kpis, /glass-surface/);
