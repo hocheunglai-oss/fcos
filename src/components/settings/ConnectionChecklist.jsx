@@ -55,6 +55,7 @@ const WARNING_LABELS = {
   credential_expired: 'Credential expired',
   credential_expiry_unknown: 'Credential expiry is unavailable',
   permission_probe_failed: 'Permission probe failed',
+  shared_metadata_out_of_date: 'Shared Salesforce metadata is out of date',
   target_pin_missing: 'Target pin is missing or invalid',
   salesforce_auth_not_isolated: 'Salesforce host authorization is protected but not repo-local',
 };

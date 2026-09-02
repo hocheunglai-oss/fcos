@@ -29,12 +29,15 @@ import { PAYMENT_COLLECTIONS_METHODOLOGIES } from '@/lib/pageMethodologies';
 import { VARIABLE_CHARGES_USER_MANUAL } from '@/lib/pageUserManuals';
 import StemDetailModal from '@/components/dashboard/StemDetailModal';
 import VariableCharges from '@/components/payments/VariableCharges';
+import LegacyPaymentDataAudit from '@/components/payments/LegacyPaymentDataAudit';
+import PaymentDataReliabilityBadge from '@/components/common/PaymentDataReliabilityBadge';
 
 const TABS = [
   { id: 'collections', label: 'Collection Queue', icon: ListChecks, moduleId: 'buyer_invoices' },
   { id: 'incoming', label: 'Incoming Payments', icon: Banknote, moduleId: 'incoming_payments' },
   { id: 'reconciliation', label: 'Reconciliation Exceptions', icon: Scale, moduleIds: ['buyer_invoices', 'incoming_payments'] },
   { id: 'variable-charges', label: 'Variable Charges', icon: ClipboardCheck, moduleIds: ['buyer_invoices', 'incoming_payments'] },
+  { id: 'legacy', label: 'Legacy settled data', icon: ShieldCheck, moduleIds: ['buyer_invoices', 'incoming_payments'], privileged: true },
 ];
 
 function money(value) {
@@ -77,11 +80,12 @@ function currencyMoney(currency, value) {
 }
 
 export default function PaymentCollections() {
-  const { hasModuleAccess } = useAuth();
+  const { hasModuleAccess, user } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const availableTabs = useMemo(() => TABS.filter((tab) => (
-    tab.moduleIds ? tab.moduleIds.some((moduleId) => hasModuleAccess(moduleId)) : hasModuleAccess(tab.moduleId)
-  )), [hasModuleAccess]);
+    (!tab.privileged || ['finance', 'general_manager', 'administrator'].includes(user?.user_type))
+    && (tab.moduleIds ? tab.moduleIds.some((moduleId) => hasModuleAccess(moduleId)) : hasModuleAccess(tab.moduleId))
+  )), [hasModuleAccess, user?.user_type]);
   const requestedTabValue = searchParams.get('tab');
   const requestedTab = requestedTabValue === 'ship-agent-charges' ? 'variable-charges' : requestedTabValue;
   const defaultTab = hasModuleAccess('buyer_invoices') ? 'collections' : 'incoming';
@@ -209,6 +213,7 @@ export default function PaymentCollections() {
           trailing={(
             <>
             <SalesforceSyncBadge />
+            <PaymentDataReliabilityBadge excludedCount={reconciliation?.paymentDataReliability?.excludedLegacyRecordCount} />
             {reconciling
               ? <DataStatus meta={reconciliationMeta} state="refreshing" label="Reconciliation" />
               : reconciliationMeta
@@ -230,6 +235,7 @@ export default function PaymentCollections() {
       {activeTab === 'collections' && <BuyerInvoices embedded defaultQueueView="needs-action" reconciliationItems={reconciliation?.items || []} dataRefreshToken={collectionDataRefreshToken} />}
       {activeTab === 'incoming' && <IncomingPayments embedded reconciliationItems={reconciliation?.items || []} />}
       {activeTab === 'variable-charges' && <VariableCharges onOpenStem={setSelectedStemId} initialStemId={searchParams.get('stemId') || ''} onTaskOpen={openVariableChargeTask} onTaskClose={closeVariableChargeTask} />}
+      {activeTab === 'legacy' && <LegacyPaymentDataAudit />}
       {activeTab === 'reconciliation' && (
         <div className="space-y-5 p-4 lg:p-8">
           <div className="flex flex-wrap items-start justify-between gap-3">

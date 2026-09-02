@@ -283,9 +283,16 @@ test('stale session reprints remain evidence but cannot publish settlement MOPS'
 });
 
 test('exposure valuation switches only after governed curve cutover and fails closed on a missing mark', () => {
+  const currentMonthParts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Hong_Kong',
+    year: 'numeric',
+    month: '2-digit',
+  }).formatToParts(new Date());
+  const currentMonth = `${currentMonthParts.find((part) => part.type === 'year').value}-${currentMonthParts.find((part) => part.type === 'month').value}`;
+  const contractMonth = shiftContractMonth(currentMonth, 1);
   const swap = {
     id: 'swap-1', counterparty: 'Counterparty', product: 'S0.5', unit: 'MT', quantity: 100,
-    direction: 'BUY', price: 620, swap_month: '2026-09', pricing_basis: 'WMA', trade_type: 'OUTRIGHT', is_expired: false,
+    direction: 'BUY', price: 620, swap_month: contractMonth, pricing_basis: 'WMA', trade_type: 'OUTRIGHT', is_expired: false,
   };
   const mops = [{ price_date: '2026-08-21', s05: 600, s380: 500, sgo: 80, is_estimate: false }];
   const shadow = buildExposureRows([], [swap], mops, 7.45, { s05: 10 }, { mode: 'legacy_active_curve_shadow', settlements: [] });
@@ -293,8 +300,8 @@ test('exposure valuation switches only after governed curve cutover and fails cl
 
   const active = buildExposureRows([], [swap], mops, 7.45, { s05: 10 }, {
     mode: 'platts_curve_active',
-    settlements: [{ productKey: 'vlsfo', contractMonth: '2026-09', available: true, authorizedForValuation: true }],
-    valuationPoints: tradingDaysInMonth('2026-09').map((priceDate) => ({ priceDate, value: 650, source: 'verified_report', productKey: 'vlsfo', contractMonth: '2026-09', unit: 'USD/MT', period: 'future' })),
+    settlements: [{ productKey: 'vlsfo', contractMonth, available: true, authorizedForValuation: true }],
+    valuationPoints: tradingDaysInMonth(contractMonth).map((priceDate) => ({ priceDate, value: 650, source: 'verified_report', productKey: 'vlsfo', contractMonth, unit: 'USD/MT', period: 'future' })),
   });
   assert.equal(active[0].swapMtm, 3000);
   assert.equal(active[0].combinedPnl, 3000);

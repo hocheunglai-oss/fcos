@@ -133,5 +133,8 @@ test('complete connection checks replace stale providers and publication evidenc
 
 test('full-stack development uses the verified Vercel runner', async () => {
   const packageJson = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
-  assert.equal(packageJson.scripts['dev:full'], 'node scripts/fcos-connections.mjs run vercel -- dev');
+  assert.equal(
+    packageJson.scripts['dev:full'],
+    'node scripts/dev-server.mjs -- node scripts/fcos-connections.mjs run vercel -- dev',
+  );
 });

@@ -1,5 +1,7 @@
 @RestResource(urlMapping='/fcos/variable-charges/*')
 global without sharing class VariableChargeRest {
+    private class RequestException extends Exception {}
+
     global class RequestBody {
         public String stemId;
         public String supplierId;
@@ -14,6 +16,9 @@ global without sharing class VariableChargeRest {
     }
 
     global class ResponseBody {
+        public Boolean success;
+        public String errorCode;
+        public String message;
         public String stemId;
         public String supplierId;
         public String stageId;
@@ -30,6 +35,14 @@ global without sharing class VariableChargeRest {
 
     @HttpPost
     global static ResponseBody post() {
+        try {
+            return dispatchPost();
+        } catch (RequestException error) {
+            return failureResponse(error);
+        }
+    }
+
+    private static ResponseBody dispatchPost() {
         RequestBody body = (RequestBody)JSON.deserialize(RestContext.request.requestBody.toString(), RequestBody.class);
         List<String> parts = pathParts();
         if (body == null) body = new RequestBody();
@@ -43,6 +56,7 @@ global without sharing class VariableChargeRest {
             return confirmSupplierSides(stemId, body);
         }
         if (action == 'supplier' && parts.size() == 4 && parts[3].toLowerCase() == 'confirm') return confirmSupplierSides(stemId, body);
+        if (action == 'supplier' && parts.size() == 4 && parts[3].toLowerCase() == 'reopen') return reopenSupplierSides(stemId, body);
         if (action == 'supplier' && parts.size() == 5 && parts[4].toLowerCase() == 'confirm') {
             body.sides = new List<String>{normalizedSide(parts[3])};
             return confirmSupplierSides(stemId, body);
@@ -55,6 +69,14 @@ global without sharing class VariableChargeRest {
 
     @HttpGet
     global static ResponseBody get() {
+        try {
+            return dispatchGet();
+        } catch (RequestException error) {
+            return failureResponse(error);
+        }
+    }
+
+    private static ResponseBody dispatchGet() {
         List<String> parts = pathParts();
         if (parts.size() < 4 || parts[1].toLowerCase() != 'supplier') throw requestError('Unsupported Variable Charges readiness request.');
         Id stemId = Id.valueOf(parts[0]);
@@ -110,6 +132,7 @@ global without sharing class VariableChargeRest {
         }
         String costFingerprint;
         String buyerFingerprint;
+        VariableChargeInvoiceReadinessService.assertHongKongBundleConfirmationReady(stemId, supplierId, sides);
         if (sides.contains('cost')) {
             costFingerprint = VariableChargeInvoiceReadinessService.supplierFingerprint(stemId, supplierId);
             String expectedCost = String.isNotBlank(body.expectedCostFingerprint) ? body.expectedCostFingerprint : body.expectedFingerprint;
@@ -144,6 +167,75 @@ global without sharing class VariableChargeRest {
         response.costFingerprint = costFingerprint;
         response.buyerFingerprint = buyerFingerprint;
         response.fingerprint = sides.size() == 1 ? (sides.contains('cost') ? costFingerprint : buyerFingerprint) : null;
+        response.buyerConfirmed = [SELECT Variable_Charges_Confirmed__c FROM STEM__c WHERE Id = :stemId].Variable_Charges_Confirmed__c;
+        response.lastModifiedAt = iso(stage.LastModifiedDate);
+        return response;
+    }
+
+    private static ResponseBody reopenSupplierSides(Id stemId, RequestBody body) {
+        if (String.isBlank(body.supplierId) || String.isBlank(body.verifierEmail)) throw requestError('An exact supplier and requesting trader email are required.');
+        Set<String> sides = new Set<String>();
+        for (String requested : body.sides == null ? new List<String>() : body.sides) sides.add(normalizedSide(requested));
+        sides.remove(null);
+        if (sides.isEmpty()) throw requestError('Select at least one approved Variable Charges side to amend.');
+        Id supplierId = Id.valueOf(body.supplierId);
+        STEM__c stem = [SELECT Id, Variable_Charges_Confirmed__c, LastModifiedDate FROM STEM__c WHERE Id = :stemId LIMIT 1 FOR UPDATE];
+        assertTimestamp(stem.LastModifiedDate, body.expectedStemLastModifiedAt, 'The STEM changed after it was opened.');
+        if (!VariableChargeInvoiceReadinessService.exactSupplierIds(stemId).contains(supplierId)) throw requestError('The selected Account is not an exact active supplier on this STEM.');
+        if (!VariableChargeInvoiceReadinessService.requiredSupplierIds(stemId).contains(supplierId)) throw requestError('This supplier is not currently required in Variable Charges.');
+        if (sides.contains('cost') && VariableChargeInvoiceReadinessService.hasSupplierInvoice(stemId, supplierId)) {
+            throw requestError('Supplier costs cannot be amended after this supplier invoice has been created.');
+        }
+        if (sides.contains('buyer_charge') && VariableChargeInvoiceReadinessService.hasFinalBuyerInvoice(stemId)) {
+            throw requestError('Buyer charges cannot be amended after the final Buyer Invoice has been created.');
+        }
+
+        String key = String.valueOf(stemId) + ':' + String.valueOf(supplierId);
+        List<STEM_Variable_Charge_Supplier__c> existing = [
+            SELECT Id, External_Key__c, STEM__c, Supplier__c, Supplier_Status__c,
+                Verified_At__c, Verified_By_Email__c, Reviewed_Source_Fingerprint__c,
+                Buyer_Charge_Status__c, Buyer_Charge_Reviewed_Source_Fingerprint__c,
+                Buyer_Charge_Confirmed_At__c, Buyer_Charge_Confirmed_By_Email__c,
+                Revision__c, Buyer_Charge_Revision__c, LastModifiedDate
+            FROM STEM_Variable_Charge_Supplier__c
+            WHERE External_Key__c = :key
+            LIMIT 1 FOR UPDATE
+        ];
+        if (existing.isEmpty()) throw requestError('The approved supplier stage is unavailable. Refresh FCOS.');
+        STEM_Variable_Charge_Supplier__c stage = existing[0];
+        assertTimestamp(stage.LastModifiedDate, body.expectedStageLastModifiedAt, 'The supplier stage changed after it was opened.');
+        if (sides.contains('cost')) {
+            if (stage.Supplier_Status__c != 'Verified') throw requestError('Only approved supplier costs may be amended.');
+            stage.Supplier_Status__c = 'Invalidated';
+            stage.Verified_At__c = null;
+            stage.Verified_By_Email__c = null;
+            stage.Reviewed_Source_Fingerprint__c = null;
+        }
+        if (sides.contains('buyer_charge')) {
+            if (stage.Buyer_Charge_Status__c != 'Verified') throw requestError('Only approved buyer charges may be amended.');
+            stage.Buyer_Charge_Status__c = 'Invalidated';
+            stage.Buyer_Charge_Confirmed_At__c = null;
+            stage.Buyer_Charge_Confirmed_By_Email__c = null;
+            stage.Buyer_Charge_Reviewed_Source_Fingerprint__c = null;
+        }
+        update stage;
+        if (sides.contains('buyer_charge') && stem.Variable_Charges_Confirmed__c == true) {
+            stem.Variable_Charges_Confirmed__c = false;
+            update stem;
+        }
+
+        stage = [
+            SELECT Id, Supplier_Status__c, Buyer_Charge_Status__c, Revision__c,
+                Buyer_Charge_Revision__c, LastModifiedDate
+            FROM STEM_Variable_Charge_Supplier__c
+            WHERE Id = :stage.Id
+        ];
+        ResponseBody response = baseResponse(stemId, supplierId);
+        response.stageId = stage.Id;
+        response.supplierStatus = stage.Supplier_Status__c;
+        response.buyerChargeStatus = stage.Buyer_Charge_Status__c;
+        response.revision = stage.Revision__c == null ? 0 : stage.Revision__c.intValue();
+        response.buyerChargeRevision = stage.Buyer_Charge_Revision__c == null ? 0 : stage.Buyer_Charge_Revision__c.intValue();
         response.buyerConfirmed = [SELECT Variable_Charges_Confirmed__c FROM STEM__c WHERE Id = :stemId].Variable_Charges_Confirmed__c;
         response.lastModifiedAt = iso(stage.LastModifiedDate);
         return response;
@@ -193,6 +285,7 @@ global without sharing class VariableChargeRest {
 
     private static ResponseBody baseResponse(Id stemId, Id supplierId) {
         ResponseBody response = new ResponseBody();
+        response.success = true;
         response.stemId = String.valueOf(stemId);
         response.supplierId = supplierId == null ? null : String.valueOf(supplierId);
         return response;
@@ -206,7 +299,19 @@ global without sharing class VariableChargeRest {
     }
 
     private static void assertTimestamp(Datetime actual, String expected, String message) {
-        if (String.isBlank(expected) || iso(actual) != expected) throw requestError(message);
+        if (!matchesTimestamp(actual, expected)) throw requestError(message);
+    }
+
+    private static Boolean matchesTimestamp(Datetime actual, String expected) {
+        if (actual == null || String.isBlank(expected)) return false;
+        String value = expected.trim();
+        return value == iso(actual)
+            || value == actual.formatGmt('yyyy-MM-dd\'T\'HH:mm:ss\'Z\'')
+            || value == actual.formatGmt('yyyy-MM-dd\'T\'HH:mm:ss.SSS+0000')
+            || value == actual.formatGmt('yyyy-MM-dd\'T\'HH:mm:ss+0000')
+            || value == actual.formatGmt('yyyy-MM-dd\'T\'HH:mm:ss.SSS+00:00')
+            || value == actual.formatGmt('yyyy-MM-dd\'T\'HH:mm:ss+00:00')
+            || value == String.valueOfGmt(actual);
     }
 
     private static String normalizeEmail(String value) {
@@ -223,10 +328,16 @@ global without sharing class VariableChargeRest {
         return value == null ? null : value.formatGmt('yyyy-MM-dd\'T\'HH:mm:ss.SSS\'Z\'');
     }
 
-    private static AuraHandledException requestError(String message) {
+    private static RequestException requestError(String message) {
+        return new RequestException(message);
+    }
+
+    private static ResponseBody failureResponse(RequestException error) {
         RestContext.response.statusCode = 409;
-        AuraHandledException error = new AuraHandledException(message);
-        error.setMessage(message);
-        return error;
+        ResponseBody response = new ResponseBody();
+        response.success = false;
+        response.errorCode = 'VARIABLE_CHARGE_REQUEST_REJECTED';
+        response.message = error.getMessage();
+        return response;
     }
 }

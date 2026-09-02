@@ -54,7 +54,7 @@ export const CASHFLOW_FORECAST_METHODOLOGY = {
   sections: [
     {
       title: 'Purpose and scope',
-      body: 'The page forecasts AR receipts and AP payments for planning; it does not post accounting entries. STEMs delivered before 1 January 2026 are excluded, and currencies remain separate because this page performs no currency conversion.',
+      body: 'The page forecasts AR receipts and AP payments for planning; it does not post accounting entries. Payment data is reliable from 1 January 2026. FCOS classifies each STEM by actual Delivery Date, then Expected Delivery Date, then its Hong Kong Created Date when both delivery dates are absent. Earlier obligations are company-confirmed as settled and their incomplete payment fields are excluded. Currencies remain separate because this page performs no currency conversion.',
     },
     {
       title: 'Buyer receipts',
@@ -71,6 +71,14 @@ export const CASHFLOW_FORECAST_METHODOLOGY = {
     {
       title: 'Business days and controls',
       body: 'Dates use Hong Kong time. Weekends, Singapore public holidays, US bank or public holidays, and authorized manual blocked dates move a forecast to the next available day. Only users with Cashflow settings authority may change model parameters or manual dates.',
+    },
+    {
+      title: 'Bank reconciliation and liquidity routing',
+      body: 'Finance, the General Manager and Administrators may align reviewed bank balances and CSV statement entries with exact Salesforce Payments. UBS supports USD and EUR day-to-day trading but never HKD. DBS supports USD, EUR, HKD and CNY and may carry trading, general expenses and payroll. Intesa Sanpaolo is a treasury pool for reviewed fixed-term deposits and bank guarantees, not an automatic trading route. One active operating account per currency receives forecast movements. Bank entries are matched only when currency, direction, amount, date window and bank evidence agree; suggestions always require confirmation.',
+    },
+    {
+      title: 'Liquidity safeguards',
+      body: 'Currencies are projected separately. The latest reviewed available balance is adjusted by later statement movement, routed Salesforce forecast movement and reviewed term-deposit placement or maturity. Active guarantees reduce available liquidity without inventing a cash movement. Raw bank files, account credentials and online-banking access are never stored. Bank data does not create, edit or post Salesforce, Xero or bank transactions.',
     },
   ],
 };
@@ -184,6 +192,10 @@ export const DASHBOARD_METHODOLOGY = {
     {
       title: 'Completeness and navigation',
       body: 'Overview totals are shown only when FCOS has processed the complete matching scope. An incomplete Salesforce response suppresses financial totals and asks you to narrow the filters; an incomplete previous-year scope independently suppresses YoY lines. The STEMs and Account identity lists are server-paginated and sorted. Accounts merges exact-ID Buyer receivable and Supplier payable exposure by currency and computes period buyer/supplier gross profit through the same complete Dashboard calculation. Informational receivable-minus-payable net is hidden whenever either direction is incomplete and never nets currencies. Account Insight opens over the Dashboard, preserves the Account directory page, filters, exposure results, scroll and focus, and keeps a linkable URL. It loads only the selected tab, inherits the exact Dashboard period, Port, COUNTRY, and dispute scope, and offers an explicit Account-wide toggle. The combined Credit Statement alone carries the net-exposure risk warning. Rankings exclude the Fratelli Cosulich GROUP identity and every descendant Account resolved through the live Salesforce hierarchy.',
+    },
+    {
+      title: 'Payment data reliability',
+      body: 'Payment data is reliable from 1 January 2026. FCOS classifies normal payment evidence by actual Delivery Date, then Expected Delivery Date, then Hong Kong Created Date when both delivery dates are absent. Earlier obligations are company-confirmed as settled: All History retains their volume, turnover, costs and gross profit, but shows payment fields as unavailable and excludes them from balances, timing, completion and collection statistics. Buyer Credit Statement keeps its stricter actual-or-expected-delivery boundary and never admits an undated STEM through Created Date.',
     },
     {
       title: 'Buyer-leg credit statements',
@@ -319,7 +331,7 @@ export const PAYMENT_COLLECTIONS_METHODOLOGIES = {
     sections: [
       {
         title: 'Case identity and status',
-        body: 'Collection work is managed once per Salesforce STEM. Status represents the current collection stage; reminders, calls, notes, promises, advice, payments, ownership changes, and reconciliation outcomes remain timeline events.',
+        body: 'Collection work is managed once per Salesforce STEM. Payment data is reliable from 1 January 2026, classified by actual Delivery Date, then Expected Delivery Date, then Hong Kong Created Date. Earlier obligations are company-confirmed as settled and never enter normal collection work. Status represents the current collection stage; reminders, calls, notes, promises, advice, payments, ownership changes, and reconciliation outcomes remain timeline events.',
       },
       {
         title: 'Dispute visibility',
@@ -353,7 +365,7 @@ export const PAYMENT_COLLECTIONS_METHODOLOGIES = {
     sections: [
       {
         title: 'Payment source',
-        body: 'Incoming Payments displays Salesforce payment records and their linked STEM information. FCOS does not create, alter, or post Salesforce payments from this workspace.',
+        body: 'Incoming Payments displays Salesforce payment records and their linked STEM information. Payments linked directly or through a Supplier Invoice to a pre-cutoff STEM are excluded, even when the Payment record itself is dated in 2026. FCOS does not create, alter, or post Salesforce payments from this workspace.',
       },
       {
         title: 'Collection cross-link',
@@ -399,6 +411,24 @@ export const PAYMENT_COLLECTIONS_METHODOLOGIES = {
       },
     ],
   },
+  legacy: {
+    title: 'Legacy settled data',
+    description: 'A privileged, read-only audit of incomplete Salesforce payment evidence before the FCOS cutover.',
+    sections: [
+      {
+        title: 'Company-confirmed settlement',
+        body: 'Every STEM classified before 1 January 2026 is treated as settled by company confirmation. FCOS does not create historical payments, invent payment dates, change Salesforce balances, or describe stale formula values as outstanding.',
+      },
+      {
+        title: 'Classification and visibility',
+        body: 'Classification uses actual Delivery Date, then Expected Delivery Date, then Hong Kong Created Date. Buyer Credit Statement remains stricter: only actual or expected delivery on or after the cutoff can enter credit exposure. The audit is restricted to Finance, the uniquely active General Manager, and Administrators.',
+      },
+      {
+        title: 'Audit evidence',
+        body: 'Summary cards show counts only. Searchable rows cover stale buyer receivable formulas, stale supplier payable formulas, and post-cutover Payment records linked to legacy STEMs. Raw Salesforce values appear only inside row details and are labelled unreliable, not outstanding. The large zero-balance undated population remains a count rather than an itemized list.',
+      },
+    ],
+  },
   'variable-charges': {
     title: 'Variable Charges',
     description: 'How each supplier’s costs and buyer charges are reviewed side by side with independent invoice gates.',
@@ -417,15 +447,23 @@ export const PAYMENT_COLLECTIONS_METHODOLOGIES = {
       },
       {
         title: 'Review and controlled changes',
-        body: 'The Supplier Leg and Buyer Leg may be completed in either order. Pending remains unresolved and blocks approval. The cost owner marks each exact-supplier charge as Correct or Edit Cost, controls additions, cancellations and shared fields, and records a Review Note. The buyer-side owner selects Charge Buyer or Do Not Charge, controls permitted buyer pricing, and records a Review Note. For Hong Kong deliveries, Anchorage Dues default to a zero buyer charge for the first 12 aggregate anchoring hours; when the vessel stays longer, the Buyer Trader enters only the excess amount and may amend it before approval. Existing product lines remain read-only in FCOS and Salesforce Files are optional supplier evidence.',
+        body: 'The Supplier Leg and Buyer Leg may be completed in either order. Pending remains unresolved and blocks approval. The cost owner marks each exact-supplier charge as Correct or Edit Cost, controls additions, cancellations and shared fields, and records a Review Note. The buyer-side owner selects Charge Buyer or Do Not Charge, controls permitted buyer pricing, and records a Review Note. An assigned trader may reopen their approved leg with an amendment reason and reapprove it while the related invoice has not been created: Supplier Costs lock at that exact Supplier Invoice, and Buyer Charges lock at the final Buyer Invoice. Existing product lines remain read-only in FCOS and Salesforce Files are optional supplier evidence.',
+      },
+      {
+        title: 'Hong Kong Basic Calling Cost bundle',
+        body: 'An exact active BASIC CALLING COST on a Hong Kong STEM identifies a bunkers-only-call bundle for that exact supplier and defaults to Charge Buyer. FCOS creates the supporting supplier rows once, in this order: Agency Fee, Port Clearance Extension, Light Dues and Anchorage Dues. Agency Fee, the first port clearance and Light Dues are already included in the buyer-facing Basic Calling Cost and therefore remain USD 0 on the Buyer Leg. Agency Fee is copied from the supplier Account’s Agreed Agency Fee and Currency and is locked for review. Existing matching manual rows prevent duplicates and retain their manual lifecycle, while the same permanent bundle pricing and buyer-default rules still apply.',
+      },
+      {
+        title: 'Port Clearance Extensions and pass-throughs',
+        body: 'The Port Clearance Extension row records the whole-number application count reported by the supplier. Each application is valid for 72 hours from its start, but FCOS never infers the count from port stay, ETD or departure duration. The locked statutory supplier rate is HKD 58 per application. The first application is included in Basic Calling Cost; every additional application defaults to a zero-margin buyer pass-through using the reviewed row-level USD/HKD rate.',
       },
       {
         title: 'Hong Kong anchorage dues',
-        body: 'For exact Anchorage Due or Anchorage Dues charges on a Hong Kong delivery, FCOS uses the Vessel’s positive whole-number NRT and each saved arrival, departure and location in Hong Kong time. The first 12 aggregate hours are free; later time is grouped by Victoria Port or elsewhere in Hong Kong and rounded up to the next hour for each location. Rates are HKD 0.02 or HKD 0.015 per NRT-hour respectively, subject to the HKD 100 minimum and final rounding down to HKD 0.10. One agent row receives the calculated total automatically; multiple agent rows require allocations matching within HKD 0.10. Supplier comparison and the buyer amount are verification and suggestion only—FCOS never overwrites either financial value automatically. The saved Vessel NRT, company USD/HKD rate, settings revision and calculation version preserve the reviewed evidence.',
+        body: 'For exact Anchorage Due or Anchorage Dues charges on a Hong Kong delivery, FCOS uses the Vessel’s positive whole-number NRT and each saved arrival, departure and location in Hong Kong time. The first 12 aggregate hours are free; later time is grouped by Victoria Port or Anywhere except Victoria Port and rounded up to the next hour for each location. Supplier evidence uses the Hong Kong statutory rate: HKD 0.020 in Victoria Port or HKD 0.015 anywhere else per NRT-hour, subject to the HKD 100 minimum and final rounding down to HKD 0.10. It remains HKD-based and is also shown as a USD equivalent using the reviewed row-level rate. The Buyer Leg is calculated independently at USD 0.002 per NRT per chargeable hour for either location and defaults to Charge Buyer. One agent row receives each calculated total automatically; with multiple agents, supplier HKD allocations must match within HKD 0.10 and the buyer USD total is divided proportionally, with the cent residual on the final row. The Marine Department calculation remains verification evidence and never overwrites a differing reviewed supplier charge or an explicit Buyer Trader amendment automatically.',
       },
       {
         title: 'Hong Kong NRT, currencies and Light Dues',
-        body: 'Authorized reviewers may update the shared Salesforce Vessel NRT with conflict protection; the change can reopen other statutory-charge reviews using that Vessel. Supplier amounts remain authoritative in Salesforce USD and are displayed in both USD and HKD. Editable extra charges accept reviewed HKD or USD input and preserve the original amount, currency, FX rate and settings revision. Buyer charges and margins remain USD. Exact LIGHT DUES rows use the confirmed entry date and NRT rounded up to each 100-ton block: HKD 43 for all other vessels or HKD 18 for river-trade-only vessels. The buyer decision starts at USD 0, and all statutory calculations remain review evidence rather than automatic financial changes.',
+        body: 'Authorized reviewers may update the shared Salesforce Vessel NRT with conflict protection; the change can reopen other statutory-charge reviews using that Vessel. For an Is Agent supplier, every Supplier Leg extra cost must use the exact Agreed Agency Fee Currency configured on that Account. FCOS preserves that native amount and its reviewed FX evidence while Salesforce remains financially authoritative in USD. The Buyer Leg and margins remain USD. Exact LIGHT DUES rows use the earliest saved Hong Kong anchorage arrival for the same supplier and always use the All other vessels category. NRT is rounded up to each 100-ton block and charged at HKD 43 per block. The arrival and category are derived, not entered separately. Light Dues remain USD 0 on the Buyer Leg because they are included in Basic Calling Cost. All statutory calculations remain review evidence rather than automatic financial changes.',
       },
       {
         title: 'Permissions and overrides',
@@ -458,7 +496,7 @@ export const BROKER_METHODOLOGIES = {
       },
       {
         title: 'Reports and payment state',
-        body: 'Exports capture the selected register and methodology at generation time. Payment or approval actions follow their existing authorization and evidence rules and do not arise solely from a report calculation.',
+        body: 'Exports capture the selected register and methodology at generation time. Commission values remain available for historical commercial reporting, but payment dates and delays are unavailable for STEMs classified before 1 January 2026 using actual Delivery Date, Expected Delivery Date, then Hong Kong Created Date. Those obligations are company-confirmed settled and their incomplete historical payment fields are excluded from normal payment statistics. Payment or approval actions follow their existing authorization and evidence rules and do not arise solely from a report calculation.',
       },
     ],
   },

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<LightningComponentBundle xmlns="urn:metadata.tooling.soap.sforce.com" fqn="fcbContractsFillingProcessing">
+    <apiVersion>65.0</apiVersion>
+    <isExposed>false</isExposed>
+    <targets>
+        <target>lightning__Tab</target>
+        <target>lightning__FlowScreen</target>
+    </targets>
+</LightningComponentBundle>

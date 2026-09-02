@@ -25,6 +25,8 @@ Use the authorized GitHub connector/API for this repository first. Before any CL
 
 Before any Supabase, Vercel, or browser mutation, verify the target project or profile against the identifiers above. Use an approved API/connector before the CLI, and the CLI before Chrome. Fail closed on a mismatch.
 
+`config/fcosConnections.js` is the canonical machine-readable source for external provider identifiers and Salesforce environment identity. API modules and operational scripts must import its helpers instead of repeating org IDs, project refs, aliases, usernames, or instance URLs. A provider-specific connection check must merge into the existing safe local status; only a complete four-provider check may replace the full snapshot.
+
 Google Drive market reports use the dedicated `GOOGLE_DRIVE_MARKET_REFRESH_TOKEN` with the approved server OAuth client. The separate legacy XLS Report Archive is retired; local XLS downloads remain available and must not be uploaded by FCOS. Use the Drive API first, a verified CLI only when the API cannot complete the operation, and Chrome profile `Vincent` only when both non-browser routes are blocked. Verify `vince.less@gmail.com` before authorizing and return immediately to server/API verification. Never store or expose Drive credential material.
 Treat Google OAuth `invalid_grant` as revoked authorization, not as a report-parser or market-data failure. Hourly retries may continue recording the deduplicated incident, but recovery requires an explicitly authorized reauthentication and replacement of only the pinned Drive OAuth credentials.
 

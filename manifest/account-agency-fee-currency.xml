@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Package xmlns="http://soap.sforce.com/2006/04/metadata">
+    <types>
+        <members>AccountController</members>
+        <members>AccountControllerTest</members>
+        <members>HongKongBasicCallingBundleService</members>
+        <members>HongKongBasicCallingBundleServiceTest</members>
+        <members>VariableChargeInvoiceReadinessService</members>
+        <members>VariableChargeReadinessTest</members>
+        <members>VariableChargeRestTest</members>
+        <name>ApexClass</name>
+    </types>
+    <types>
+        <members>Account.Agency_Fee_Currency__c</members>
+        <members>Account.Agency_Fee_USD__c</members>
+        <name>CustomField</name>
+    </types>
+    <types>
+        <members>Account.Agency_Fee_Must_Be_Positive</members>
+        <name>ValidationRule</name>
+    </types>
+    <types>
+        <members>fcbAccountRecordType</members>
+        <members>fcbNewAccountOverride</members>
+        <name>LightningComponentBundle</name>
+    </types>
+    <types>
+        <members>FCOS_Variable_Charges_Integration</members>
+        <members>FCOS_Variable_Charges_User</members>
+        <name>PermissionSet</name>
+    </types>
+    <version>67.0</version>
+</Package>

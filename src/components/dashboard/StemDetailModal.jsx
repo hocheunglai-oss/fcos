@@ -7,6 +7,8 @@ import { Loader2, AlertCircle, ExternalLink, FileText, Download, Settings, Searc
 import { numericValue, textValue } from '@/lib/displayValue';
 import { useDownloadAuthToken, withDownloadAuth } from '@/lib/authenticatedDownloadUrl';
 import { readDocumentSettings } from '@/lib/documentSettings';
+import PaymentDataReliabilityBadge from '@/components/common/PaymentDataReliabilityBadge';
+import { LEGACY_PAYMENT_DATA_LABEL } from '@/lib/paymentDataReliability';
 
 const SF_BASE = "https://fratellicosulich.my.salesforce.com";
 
@@ -598,12 +600,13 @@ function FinancialMetric({ label, value, tone = 'default' }) {
   return (
     <div className="rounded-lg border border-border bg-card px-3 py-2">
       <div className="text-xs text-muted-foreground">{label}</div>
-      <div className={`mt-0.5 text-base font-semibold ${toneClass}`}>{fmtMoney(value)}</div>
+      <div className={`mt-0.5 text-base font-semibold ${toneClass}`}>{value === LEGACY_PAYMENT_DATA_LABEL ? value : fmtMoney(value)}</div>
     </div>
   );
 }
 
 function FinancialSummaryCard({ record, supplierPayments, buyerPayments, brokerCommissionPayments }) {
+  const paymentDataReliable = record._Payment_Data_Reliable !== false;
   const buyerBrokerGroups = (brokerCommissionPayments || []).filter((group) => group.brokerType === 'Buyer Broker');
   const secondaryBuyerBrokerGroups = (brokerCommissionPayments || []).filter((group) => group.brokerType === 'Secondary Buyer Broker');
   const supplierBrokerGroups = (brokerCommissionPayments || []).filter((group) => group.brokerType === 'Supplier Broker');
@@ -618,17 +621,17 @@ function FinancialSummaryCard({ record, supplierPayments, buyerPayments, brokerC
           </div>
           <div className="grid gap-2 sm:grid-cols-2">
             <FinancialMetric label={record._Buyer_Invoice_Amount_Source === 'calculated_unissued' ? 'Expected Buyer Invoice (Not issued)' : 'Buyer Invoice Amount'} value={record.Total_Invoice_Amount__c} />
-            <FinancialMetric label="Receivable Balance" value={record.Receivable_Balance__c} tone="receivable" />
+            <FinancialMetric label="Receivable Balance" value={paymentDataReliable ? record.Receivable_Balance__c : LEGACY_PAYMENT_DATA_LABEL} tone="receivable" />
           </div>
-          <div>
+          {paymentDataReliable ? <div>
             <div className="mb-2 flex items-center justify-between gap-3">
               <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Payment from Buyer</h4>
               <span className="text-xs text-muted-foreground">{buyerPayments.length} date{buyerPayments.length === 1 ? '' : 's'}</span>
             </div>
             <PaymentRowsTable rows={buyerPayments} type="buyer" />
-          </div>
-          <BrokerCommissionPaymentTables groups={buyerBrokerGroups} type="buyer" />
-          <BrokerCommissionPaymentTables groups={secondaryBuyerBrokerGroups} type="buyer" />
+          </div> : <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-3 text-sm font-medium text-slate-700">{LEGACY_PAYMENT_DATA_LABEL}</div>}
+          {paymentDataReliable ? <BrokerCommissionPaymentTables groups={buyerBrokerGroups} type="buyer" /> : null}
+          {paymentDataReliable ? <BrokerCommissionPaymentTables groups={secondaryBuyerBrokerGroups} type="buyer" /> : null}
         </div>
         <div className="space-y-3 rounded-xl border border-amber-100 bg-amber-50/40 p-3">
           <div>
@@ -637,16 +640,16 @@ function FinancialSummaryCard({ record, supplierPayments, buyerPayments, brokerC
           </div>
           <div className="grid gap-2 sm:grid-cols-2">
             <FinancialMetric label="Supplier Invoice Amount" value={record._Supplier_Invoice_Amount} />
-            <FinancialMetric label="Payable Balance" value={record.Payable_Balance__c} tone="payable" />
+            <FinancialMetric label="Payable Balance" value={paymentDataReliable ? record.Payable_Balance__c : LEGACY_PAYMENT_DATA_LABEL} tone="payable" />
           </div>
-          <div>
+          {paymentDataReliable ? <div>
             <div className="mb-2 flex items-center justify-between gap-3">
               <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Payment to Supplier</h4>
               <span className="text-xs text-muted-foreground">{supplierPayments.length} date{supplierPayments.length === 1 ? '' : 's'}</span>
             </div>
             <PaymentRowsTable rows={supplierPayments} type="supplier" />
-          </div>
-          <BrokerCommissionPaymentTables groups={supplierBrokerGroups} type="supplier" />
+          </div> : <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-3 text-sm font-medium text-slate-700">{LEGACY_PAYMENT_DATA_LABEL}</div>}
+          {paymentDataReliable ? <BrokerCommissionPaymentTables groups={supplierBrokerGroups} type="supplier" /> : null}
         </div>
       </div>
     </div>
@@ -753,6 +756,7 @@ export default function StemDetailModal({ stemId, open, onClose }) {
                 <DialogTitle className="font-ui text-xl font-semibold">
                   {record?.Name || stemId}
                 </DialogTitle>
+                {record ? <div className="mt-2"><PaymentDataReliabilityBadge excludedCount={record._Payment_Data_Reliable === false ? 1 : 0} /></div> : null}
                 {record?._Vessel_Name && (
                   <p className="text-sm text-muted-foreground mt-0.5">
                     {record._Vessel_Name}

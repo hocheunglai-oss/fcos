@@ -1,0 +1,156 @@
+<apex:page controller="ConfirmationToBuyerTemplateController" renderAs="pdf" showHeader="false" sidebar="false" standardStylesheets="false" applyBodyTag="false">
+
+<head>
+    <style type="text/css" media="print">
+        body {
+            font-family: Helvetica, Arial Unicode MS;
+            font-size: 8pt;
+            color: #000;
+        }
+
+        b, strong {
+            font-family: Helvetica;
+            font-weight: bold;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            line-height: 1.1;
+        }
+
+        td {
+            vertical-align: top;
+            padding: 3px;
+        }
+
+        tr {
+            line-height: 1.1;
+        }
+
+        .normalRow td {
+            padding-top: 2px;
+            padding-bottom: 2px;
+            line-height: 1.1;
+        }
+
+        .hiddenRow td {
+            padding-bottom: 2px;
+            line-height: 0.8;
+        }
+
+        .label {
+            width: 120px;
+        }
+
+        .colon {
+            width: 10px;
+            text-align: center;
+        }
+
+        .no-break {
+            page-break-inside: avoid;
+        }
+
+        @page {
+            margin-bottom: 200px;
+            @bottom-center {
+                content: element(footer);
+            }
+        }
+        .footer {
+            position: running(footer);
+        }
+
+        .footer-square {
+            position: absolute;
+            left: 300px;
+            top: 0;
+            width: 280px;
+            height: 100px;
+        }
+
+        .footer-round {
+            position: absolute;
+            left: 450px;
+            top: 0;
+            width: 100px;
+            height: 100px;
+        }
+        .content{
+            margin-top: 20px;
+        }
+    </style>
+</head>
+    <div class="footer">
+        <apex:image value="{!URLFOR($Resource.InvoiceSquareChop)}"
+                    rendered="{!nomination.Account__r.Chop_Type__c = 'Square'}"
+                    styleClass="footer-square"/>
+
+        <apex:image value="{!URLFOR($Resource.InvoiceRoundChop)}"
+                    rendered="{!nomination.Account__r.Chop_Type__c = 'Round'}"
+                    styleClass="footer-round"/>
+
+        <apex:image value="{!URLFOR($Resource.InvoiceRoundChopWithSignature)}"
+                    rendered="{!AND(
+                        nomination.Account__r.Chop_Type__c != 'Square',
+                        nomination.Account__r.Chop_Type__c != 'Round'
+                    )}"
+                    styleClass="footer-round"/>
+    </div>
+    <c:PDFTemplateHeader ></c:PDFTemplateHeader>
+    <div class="content">
+        <table>
+            <apex:repeat value="{!inputs}" var="row">
+                <tr class="{!
+                    IF(
+                        AND(row.isHidden = true, ISBLANK(row.labelColSpan)),
+                        'hiddenRow',
+                        'normalRow'
+                    )
+                }">
+                    <td class="label"
+                        colspan="{!IF(ISBLANK(row.labelColSpan), 1, row.labelColSpan)}">
+                        <apex:outputText value="{!row.label}" />
+                    </td>
+
+                    <apex:outputPanel rendered="{!row.labelColSpan == null}" layout="none">
+                        <td class="colon">
+                            <apex:outputText value="{!IF(row.isHidden == false, ':', '')}" />
+                        </td>
+
+                        <td class="value">
+                            <apex:outputText value="{!IF(row.isHidden == false, row.value, '')}" />
+                        </td>
+                    </apex:outputPanel>
+                </tr>
+            </apex:repeat>
+
+            <tr>
+                <td class="label">
+                    <apex:outputText value="{!specialTermsLabel}" />
+                </td>
+                <td class="colon">
+                    <apex:outputText value=":" />
+                </td>
+                <td>
+                    <apex:outputText value="{!specialTermsValue}" escape="false"/>
+                </td>
+            </tr>
+        </table>
+        <div class="no-break">
+            <p style="text-align: left;margin-left: 2px; text-decoration: underline;">SANCTIONS COMPLIANCE</p>
+            <p style="text-align: left; margin: 0 0 0 2px;">THE BUYER AGREES THAT THE FRATELLI COSULICH SANCTIONS COMPLIANCE CLAUSE FORMS PART OF THIS CONTRACT. THE FULL TEXT IS ATTACHED HERE TO AS A SEPARATE DOCUMENT AND IS ALSO AVAILABLE ONLINE AT THIS <a href="https://marine-energy.cosulich.com/pdf/general-files/FC%20ME%20-%20Sanction%20Compliance%20Clause.pdf">HYPERLINK</a>. THE BUYER FURTHER CONFIRMS THAT IT HAS READ AND ACCEPTED THE CLAUSE IN FULL.</p>
+        </div>
+        <div class="no-break">
+            <p style="text-align: left;margin-left: 2px; text-decoration: underline;">GENERAL TERMS AND CONDITIONS</p>
+            <p style="text-align: left; margin: 0 0 0 2px;">THIS SALE OF MARINE FUELS IS SUBJECT TO THE FRATELLI COSULICH GENERAL TERMS AND CONDITIONS OF SALE AND DELIVERY [LATEST EDITION OCTOBER 2022] WHICH IS AVAILABLE ONLINE AT THIS <a href="https://cosulich.com/docs/FratelliCosulich%20GENERAL%20TermsAndConditions.pdf">HYPERLINK</a>. THESE TERMS APPLY AND WILL OVERRIDE ANY CONFLICTING AGREEMENT UNLESS OTHERWISE SPECIFICALLY AGREED.</p>
+        </div>
+        <br/>
+        <p style="text-align: left; margin: 0 0 0 2px;">WE THANK YOU FOR YOUR NOMINATION</p>
+        <br/>
+        <p style="text-align: left; margin: 0 0 0 2px;">REGARDS</p>
+        <p style="text-align: left; margin: 0 0 0 2px;">FRATELLI COSULICH BUNKERS (HK) LTD.</p>
+        <p style="text-align: left; margin: 0 0 0 2px;">{!IF(nomination.BT_ST_Visible__c, UPPER(nomination.Buyer_Supplier_Trader__c), '')}</p>
+    </div>
+</apex:page>

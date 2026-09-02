@@ -16,6 +16,16 @@
                         <div class="slds-p-horizontal_x-small">
                             <lightning-input-field field-name="Is_Agent__c" variant="label-stacked"></lightning-input-field>
                         </div>
+                        <template if:true={isAgent}>
+                            <div class="slds-grid slds-wrap slds-gutters_x-small slds-p-horizontal_x-small">
+                                <div class="slds-col slds-size_2-of-3">
+                                    <lightning-input-field field-name="Agency_Fee_USD__c" variant="label-stacked"></lightning-input-field>
+                                </div>
+                                <div class="slds-col slds-size_1-of-3">
+                                    <lightning-input-field field-name="Agency_Fee_Currency__c" variant="label-stacked"></lightning-input-field>
+                                </div>
+                            </div>
+                        </template>
                         <div class="slds-p-horizontal_x-small">
                             <lightning-input-field field-name="Is_Variable__c" variant="label-stacked"></lightning-input-field>
                         </div>

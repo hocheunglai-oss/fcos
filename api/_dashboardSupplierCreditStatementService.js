@@ -13,6 +13,7 @@ import {
   supplierOpenUninvoicedRows,
 } from './_dashboardSupplierCreditStatement.js';
 import { normalizeRequestedGroupAccountIds, resolveGroupAccountScope } from './_dashboardGroupAccountScope.js';
+import { isPaymentDataReliableStem, paymentDataReliabilityMetadata } from '../src/lib/paymentDataReliability.js';
 
 const SALESFORCE_ID = /^[A-Za-z0-9]{15}(?:[A-Za-z0-9]{3})?$/;
 const MAX_ROWS = 50_000;
@@ -573,7 +574,9 @@ async function loadSupplierCreditStatementUncached({ body, accessContext, force 
     const result = await queryAll(`SELECT ${stemSelect(stemMap).join(',')} FROM STEM__c WHERE Id IN (${ids.map((id) => `'${soql(id)}'`).join(',')}) LIMIT ${MAX_ROWS + 1}`, MAX_ROWS + 1);
     stems.push(...result.records.slice(0, MAX_ROWS));
   }
-  const scopedStems = stems.filter((stem) => stemMatchesStatementScope(stem, filters, locationPortIds, interoffice));
+  const locationScopedStems = stems.filter((stem) => stemMatchesStatementScope(stem, filters, locationPortIds, interoffice));
+  const scopedStems = locationScopedStems.filter(isPaymentDataReliableStem);
+  const excludedLegacyRecordCount = locationScopedStems.length - scopedStems.length;
   const allowedStemIds = new Set(scopedStems.map((stem) => idKey(stem.Id)));
   const stemsById = Object.fromEntries(scopedStems.map((stem) => [stem.Id, stem]));
   const scopedInvoices = includedInvoices.filter((invoice) => allowedStemIds.has(idKey(invoice.STEM__c)));
@@ -641,6 +644,7 @@ async function loadSupplierCreditStatementUncached({ body, accessContext, force 
       partial: groupScope.partial,
     },
     scope,
+    paymentDataReliability: paymentDataReliabilityMetadata(excludedLegacyRecordCount),
     statement: { ...statement, pageSize: limit },
     conflicts,
     meta: {
@@ -668,7 +672,7 @@ export async function loadDashboardSupplierCreditStatement({ body = {}, accessCo
   const interoffice = accessContext?.profile?.user_type === 'interoffice';
   const cache = await getOrLoadRuntimeCache({
     namespace: 'salesforce-dashboard-supplier-credit-statement',
-    version: '2',
+    version: '3-payment-reliability',
     accessScope: interoffice ? 'interoffice' : 'standard',
     apiVersion: `${getApiVersion()}@${getInstanceUrl()}`,
     payload: { accountId: idKey(accountId), entityType, includedAccountIds: includedAccountIds?.map(idKey).sort() || null, scope, includeGroup, cursor: body.cursor || null, limit, filters },

@@ -26,6 +26,7 @@ import {
 } from './_dashboardSupplierCreditStatementService.js';
 import { loadDashboardUnifiedCreditDirectory } from './_dashboardUnifiedCounterpartyService.js';
 import { normalizeRequestedGroupAccountIds, resolveGroupAccountScope } from './_dashboardGroupAccountScope.js';
+import { paymentDataReliabilityMetadata } from '../src/lib/paymentDataReliability.js';
 
 const SALESFORCE_ID = /^[A-Za-z0-9]{15}(?:[A-Za-z0-9]{3})?$/;
 const INTEROFFICE_EXCLUDED_GROUP = 'FRATELLI COSULICH';
@@ -991,6 +992,7 @@ async function loadAccountCreditStatementUncached({ body, accessContext, force }
       partial: groupScope.partial,
     },
     scope,
+    paymentDataReliability: paymentDataReliabilityMetadata(0),
     statement: {
       rows: model.rows,
       total: statement.total,
@@ -1061,6 +1063,10 @@ export async function loadDashboardAccountCreditStatement({ body = {}, accessCon
       groupScope: buyer.groupScope || supplier.groupScope || null,
       combined: { currencies, warning: currencies.every((row) => row.netOpening != null) ? null : 'Combined net exposure is suppressed where either buyer or supplier evidence is incomplete.' },
       complete: buyer.meta?.complete === true && supplier.meta?.complete === true,
+      paymentDataReliability: {
+        buyer: buyer.paymentDataReliability || paymentDataReliabilityMetadata(0),
+        supplier: supplier.paymentDataReliability || paymentDataReliabilityMetadata(0),
+      },
       meta: { redacted: true, cache: buyer.meta?.cache || supplier.meta?.cache || null },
     };
   }
@@ -1072,7 +1078,7 @@ export async function loadDashboardAccountCreditStatement({ body = {}, accessCon
   const interoffice = accessContext?.profile?.user_type === 'interoffice';
   const cache = await getOrLoadRuntimeCache({
     namespace: 'salesforce-dashboard-account-credit-statement',
-    version: '13',
+    version: '15-payment-reliability',
     accessScope: interoffice ? 'interoffice' : 'standard',
     apiVersion: `${getApiVersion()}@${getInstanceUrl()}`,
     payload: {

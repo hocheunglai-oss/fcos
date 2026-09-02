@@ -17,9 +17,33 @@ test('Special Terms is a default-visible Trading page with controlled management
   assert.match(auth, /id: 'special_terms_manage'/);
   assert.match(auth, /id: 'special_terms_clause_approve'/);
   assert.match(functions, /specialTermsSave:[\s\S]*\['special_terms'\]/);
+  assert.match(functions, /specialTermsTermRetire:[\s\S]*\['special_terms'\]/);
   assert.match(functions, /specialTermsPdfExport: \['special_terms'\]/);
   assert.match(functions, /requireCapability\(context\.client, context\.profile, 'special_terms_manage'/);
   assert.match(functions, /activeGeneralManager\?\.id === context\.profile\.id/);
+});
+
+test('approved Special Terms can be retired only through the guarded lifecycle', () => {
+  const service = read('api/_specialTerms.js');
+  const functions = read('api/functions/[name].js');
+  const apex = read('force-app/main/default/classes/SpecialTermRevisionService.cls');
+  const rest = read('force-app/main/default/classes/SpecialTermRevisionRest.cls');
+  const statusField = read('force-app/main/default/objects/Special_Term_Revision__c/fields/Status__c.field-meta.xml');
+  const enquiryLookup = read('force-app/main/default/objects/Enquiry_Special_Term__c/fields/Special_Term__c.field-meta.xml');
+
+  assert.match(service, /term_retire: OBJECTS\.term/);
+  assert.match(service, /export async function retireSpecialTerm/);
+  assert.match(service, /Approval_Status__c != 'Retired'/);
+  assert.match(service, /PROTECTED_TERM_REVISION_STATUSES[\s\S]*'Retired'/);
+  assert.match(functions, /requireSpecialTermClauseApprover\(context\)[\s\S]*retireSpecialTerm/);
+  assert.match(apex, /public static Id retireTerm/);
+  assert.match(apex, /Enquiry_Special_Term__c WHERE Special_Term__c = :termId/);
+  assert.match(apex, /Special_Term_Rule__c WHERE Special_Term__c = :termId/);
+  assert.match(apex, /Retirement_Reason__c = retirementReason/);
+  assert.match(apex, /State__c = 'Historical'/);
+  assert.match(rest, /action == 'retire'/);
+  assert.match(statusField, /<fullName>Retired<\/fullName>/);
+  assert.match(enquiryLookup, /Special_Term__c\.Approval_Status__c[\s\S]*<operation>notEqual<\/operation>[\s\S]*<value>Retired<\/value>/);
 });
 
 test('Special Terms validates the authoritative Salesforce schema and rule lookups', () => {

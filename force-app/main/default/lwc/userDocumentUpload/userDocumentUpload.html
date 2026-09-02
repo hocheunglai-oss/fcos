@@ -1,0 +1,26 @@
+<template>
+    <lightning-card title="Contracts Filing" icon-name="custom:custom63">
+        <template if:true={isLoading}>
+            <lightning-spinner alternative-text="Loading"></lightning-spinner>
+        </template>
+        <div class="slds-m-around_medium">
+            <c-file-upload-data-table key-field="Id"
+                                      data={data}
+                                      columns={columns}
+                                      onuploadfinished={handleUploadFinished}
+                                      onrowaction={handleRowAction}
+                                      onsave={handleSave}
+                                      oncancel={handleCancel}
+                                      onselectedbuyersuppliertrader={handleSelectedBuyerSupplierTrader}
+                                      onselectedcontact={handleSelectedContact}
+                                      hide-checkbox-column>
+            </c-file-upload-data-table>
+        </div>
+    </lightning-card>
+    <c-fcb-supplier-nomination-form></c-fcb-supplier-nomination-form>
+    <c-fcb-buyer-confirmation-form></c-fcb-buyer-confirmation-form>
+    <c-fcb-email-nomination-confirmation-modal onrefreshnominationtable={handleTableRefresh}></c-fcb-email-nomination-confirmation-modal>
+    <c-fcb-email-additional-confirmation-modal onrefreshnominationtable={handleTableRefresh}></c-fcb-email-additional-confirmation-modal>
+    <c-fcb-email-trustee-modal onrefreshnominationtable={handleTableRefresh}></c-fcb-email-trustee-modal>
+    <c-fcb-upload-sanctions-compliance onrefreshnominationtable={handleTableRefresh}></c-fcb-upload-sanctions-compliance>
+</template>

@@ -4,6 +4,17 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.192',
+    releasedAt: '2026-08-30',
+    title: 'Stabilize operational workflows and connections',
+    changes: [
+      'Adds the Hong Kong Basic Calling Cost bundle and reviewed statutory-charge evidence without automatically overwriting supplier or buyer financial amounts.',
+      'Hardens Salesforce-to-Xero contact synchronization, adds bilingual Xero guidance, and keeps every financial synchronization action explicitly gated.',
+      'Adds guided workflow manuals, project-local development safeguards, and clearer Variable Charges task handling.',
+      'Removes the obsolete Google Fonts connection entry and recognizes the approved live Xero Portal contact-sync state in System Health.',
+    ],
+  },
+  {
     version: '2.0.191',
     releasedAt: '2026-08-29',
     title: 'Improve evidence, search and operational visibility',

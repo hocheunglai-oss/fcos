@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { Building2, Edit3, Mail, MapPin, Plus, Trash2 } from "lucide-react";
+import { AlertTriangle, Building2, Edit3, Mail, MapPin, Plus, Trash2 } from "lucide-react";
 import { Counterparty } from "@/hedge/api/entities";
 import { useActions } from "../data/ActionsContext";
 import {
@@ -27,7 +27,7 @@ const BLANK_COUNTERPARTY = {
   notes: "",
 };
 
-export function CounterpartiesView({ data, settings, readOnly = false }) {
+export function CounterpartiesView({ data, settings, readOnly = false, onManageHedges = null }) {
   const actions = useActions();
   const [search, setSearch] = useState("");
   const [drawer, setDrawer] = useState(null);
@@ -36,9 +36,20 @@ export function CounterpartiesView({ data, settings, readOnly = false }) {
   const [error, setError] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
 
+  const assignmentCounts = useMemo(() => {
+    const counts = new Map();
+    for (const swap of data.swaps || []) {
+      const key = String(swap.counterparty || "").trim().toUpperCase();
+      if (!key) continue;
+      counts.set(key, (counts.get(key) || 0) + 1);
+    }
+    return counts;
+  }, [data.swaps]);
+  const unassignedCount = useMemo(() => (data.swaps || []).filter((swap) => !String(swap.counterparty || "").trim()).length, [data.swaps]);
   const rows = useMemo(() => [...data.counterparties]
+    .map((record) => ({ ...record, paperHedgeCount: assignmentCounts.get(String(record.short_name || "").trim().toUpperCase()) || 0 }))
     .filter((record) => `${record.short_name || ""} ${record.full_name || ""} ${record.emails || ""} ${record.address_line1 || ""} ${record.notes || ""}`.toLowerCase().includes(search.toLowerCase()))
-    .sort((left, right) => String(left.short_name || "").localeCompare(String(right.short_name || ""))), [data.counterparties, search]);
+    .sort((left, right) => String(left.short_name || "").localeCompare(String(right.short_name || ""))), [assignmentCounts, data.counterparties, search]);
 
   const openCreate = () => {
     setForm(BLANK_COUNTERPARTY);
@@ -100,11 +111,13 @@ export function CounterpartiesView({ data, settings, readOnly = false }) {
   return (
     <div className="app-page">
       <PageHeader eyebrow="Directory" title="Counterparties" description="Maintain legal identities, invoice recipients, and addresses used in settlement documents." actions={!readOnly ? <Button variant="primary" icon={Plus} onClick={openCreate}>New counterparty</Button> : null} />
+      {unassignedCount > 0 && <div className="app-callout app-callout--warning"><AlertTriangle size={18} aria-hidden="true" /><div><strong>{unassignedCount} paper hedge{unassignedCount === 1 ? " is" : "s are"} unassigned</strong><p>Broker and settlement counterparty are separate. Assign the legal counterparty before settlement.</p></div>{onManageHedges && <Button size="sm" onClick={onManageHedges}>Review paper hedges</Button>}</div>}
       <div className="app-toolbar"><SearchInput value={search} onChange={setSearch} placeholder="Search name, email, address..." /><span className="app-toolbar__summary">{rows.length} counterparties</span></div>
       <TableFrame>
-        {rows.length ? <table className="app-table app-table--counterparties"><thead><tr><th>Counterparty</th><th>Legal name</th><th>Invoice contact</th><th>Address</th><th aria-label="Actions" /></tr></thead><tbody>{rows.map((record) => (
+        {rows.length ? <table className="app-table app-table--counterparties"><thead><tr><th>Counterparty</th><th>Paper hedges</th><th>Legal name</th><th>Invoice contact</th><th>Address</th><th aria-label="Actions" /></tr></thead><tbody>{rows.map((record) => (
           <tr key={record.id}>
             <td><div className="app-party-name"><span>{String(record.short_name || "?").slice(0, 2)}</span><strong>{record.short_name}</strong></div></td>
+            <td><strong>{record.paperHedgeCount}</strong><small>Assigned records</small></td>
             <td><strong>{record.full_name || "Not provided"}</strong><small>{record.attention ? `Attn: ${record.attention}` : "No attention line"}</small></td>
             <td>{record.emails ? <><span className="app-inline-icon"><Mail size={14} />{record.emails}</span><StatusBadge tone="positive">Ready</StatusBadge></> : <StatusBadge tone="warning">Missing email</StatusBadge>}</td>
             <td><span className="app-inline-icon"><MapPin size={14} />{[record.address_line1, record.address_line2, record.address_line3].filter(Boolean).join(", ") || "Not provided"}</span></td>

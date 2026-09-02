@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Package xmlns="http://soap.sforce.com/2006/04/metadata">
+    <types>
+        <members>FcosXeroContactSyncService</members>
+        <members>FcosXeroContactSyncServiceTest</members>
+        <name>ApexClass</name>
+    </types>
+    <types>
+        <members>FcosXeroContactSyncBrokerEnquiryTrigger</members>
+        <members>FcosXeroContactSyncOpportunityTrigger</members>
+        <members>FcosXeroContactSyncQuoteTrigger</members>
+        <members>FcosXeroContactSyncStemBuyerBrokerTrigger</members>
+        <members>FcosXeroContactSyncStemExtraCostTrigger</members>
+        <members>FcosXeroContactSyncStemLineItemTrigger</members>
+        <members>FcosXeroContactSyncStemTrigger</members>
+        <members>FcosXeroContactSyncSupplierBidTrigger</members>
+        <members>FcosXeroContactSyncVariableChargeSupplierTrigger</members>
+        <name>ApexTrigger</name>
+    </types>
+    <types>
+        <members>Xero_Contact_Sync_Setting__c</members>
+        <name>CustomObject</name>
+    </types>
+    <types>
+        <members>Xero_Contact_Sync_Setting__c.Enabled__c</members>
+        <members>Xero_Contact_Sync_Setting__c.Endpoint__c</members>
+        <members>Xero_Contact_Sync_Setting__c.Signing_Secret__c</members>
+        <name>CustomField</name>
+    </types>
+    <types>
+        <members>FCOS_Xero_Contact_Sync</members>
+        <name>RemoteSiteSetting</name>
+    </types>
+    <version>64.0</version>
+</Package>

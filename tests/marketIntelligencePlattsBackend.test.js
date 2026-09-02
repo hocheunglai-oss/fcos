@@ -49,6 +49,23 @@ test('curve product identity prefers canonical observation metadata and exact sy
   ).marketFamily, 'context');
 });
 
+test('curve completeness treats source-published N/A as available evidence instead of missing data', () => {
+  const snapshot = [
+    ['hsfo380', 'M1'], ['hsfo380', 'M2'],
+    ['vlsfo', 'BM'], ['vlsfo', 'M1'], ['vlsfo', 'M2'],
+    ['lsmgo', 'M1'], ['lsmgo', 'M2'],
+  ].map(([productKey, tenor]) => ({ productKey, tenor, reportDate: '2026-08-21', qualityStatus: 'verified' }));
+  const availability = [{
+    productKey: 'lsmgo', tenor: 'BM', reportDate: '2026-08-21', status: 'published_na',
+    source: 'european_marketscan', sourcePage: 4, sourceSymbol: 'BSGSL00',
+  }];
+  const result = marketIntelligenceTradingInternals.curveCompleteness(snapshot, ['hsfo380', 'vlsfo', 'lsmgo'], '2026-08-21', availability);
+  assert.equal(result.complete, true);
+  assert.deepEqual(result.missing, []);
+  assert.equal(result.publishedNa.length, 1);
+  assert.equal(result.publishedNa[0].sourceSymbol, 'BSGSL00');
+});
+
 test('brief availability keeps page-four published N/A authoritative and removes stale missing warnings', async () => {
   const { curveAvailabilityForBrief, uniqueBriefWarnings } = marketIntelligenceTradingInternals;
   const definitions = [
@@ -475,7 +492,7 @@ test('alert-rule save executes without consulting unrelated fallback variables',
   assert.equal(saved.revision, 2);
 });
 
-test('hourly expected-session scan publishes a deduplicated stale London alert even without a new Drive file', async () => {
+test('hourly expected-session scan waits until 16:00 Hong Kong on the next working day', async () => {
   const published = [];
   const query = (table) => {
     const filters = {};
@@ -497,10 +514,44 @@ test('hourly expected-session scan publishes a deduplicated stale London alert e
       return { data: { created: true }, error: null };
     },
   };
-  const result = await scanExpectedMarketSessions(client, { now: new Date('2026-08-21T21:00:00Z') });
+  const early = await scanExpectedMarketSessions(client, { now: new Date('2026-08-24T07:00:00Z') });
+  assert.equal(early.evaluated, 0);
+  const result = await scanExpectedMarketSessions(client, { now: new Date('2026-08-24T09:00:00Z') });
   assert.equal(result.evaluated, 2);
   assert.equal(result.published, 1);
+  assert.equal(result.reportDate, '2026-08-21');
   assert.equal(published[0].p_alert_type, 'stale_london_moc_session');
+});
+
+test('completed report reconciliation handles only recovered market notifications', async () => {
+  const states = [];
+  const client = {
+    from: (table) => {
+      const builder = {
+        select: () => builder,
+        eq: () => builder,
+        in: async () => ({
+          data: table === 'market_intelligence_alert_events' ? [
+            { id: 'failure', alert_type: 'market_drive_import_failed', message: 'Import failed.' },
+            { id: 'false-na', alert_type: 'data_quality', message: 'LSMGO BM is missing.' },
+            { id: 'still-current', alert_type: 'data_quality', message: 'VLSFO M1 is missing.' },
+          ] : [],
+          error: null,
+        }),
+        then: (resolve, reject) => Promise.resolve({ data: table === 'user_profiles' ? [{ id: 'user-1' }] : [], error: null }).then(resolve, reject),
+      };
+      return builder;
+    },
+    rpc: async (name, payload) => {
+      states.push({ name, payload });
+      return { data: {}, error: null };
+    },
+  };
+  const result = await marketIntelligenceTradingInternals.handleRecoveredMarketAlerts(client, '2026-08-21', ['VLSFO M1 is missing.']);
+  assert.equal(result.eventCount, 2);
+  assert.equal(result.stateCount, 2);
+  assert.deepEqual(states.map((row) => row.payload.p_alert_event_id), ['failure', 'false-na']);
+  assert.ok(states.every((row) => row.payload.p_state === 'handled'));
 });
 
 test('fixed data-quality alerts remain enabled when adaptive alerts are disabled', async () => {

@@ -36,6 +36,18 @@ test('Variable Charges detection uses Is Agent or Is Variable and assignment nor
   assert.equal(variableChargeInternals.normalizedName('José  De-Silva'), 'jose de silva');
 });
 
+test('Variable Charges canonicalizes Salesforce REST timestamps before Apex confirmation', () => {
+  assert.equal(
+    variableChargeInternals.apexUtcTimestamp('2026-09-02T03:02:32.000+0000', { required: true, label: 'STEM' }),
+    '2026-09-02T03:02:32.000Z',
+  );
+  assert.equal(variableChargeInternals.apexUtcTimestamp(null), null);
+  assert.throws(
+    () => variableChargeInternals.apexUtcTimestamp('not-a-timestamp', { required: true, label: 'STEM' }),
+    /timestamp is invalid/i,
+  );
+});
+
 test('Variable Charges queues include only STEM records created from 1 January 2026', async () => {
   assert.equal(variableChargeInternals.VARIABLE_CHARGE_STEM_CREATED_FROM, '2026-01-01T00:00:00Z');
   const service = await repositoryFile('api/_variableCharges.js');
@@ -330,6 +342,7 @@ test('FCOS handlers are explicit, fail-closed, atomic, and do not send email', a
     'variableChargesBuyerConfirm',
     'variableChargesSideAssign',
     'variableChargesSideConfirm',
+    'variableChargesSideReopen',
     'variableChargesGmOverride',
     'variableChargesPostInvoiceResolve',
     'variableChargesSync',
@@ -362,6 +375,9 @@ test('FCOS handlers are explicit, fail-closed, atomic, and do not send email', a
   assert.match(ui, /Approve Supplier Costs/);
   assert.match(ui, /Approve Buyer Charges/);
   assert.match(ui, /Approve Both/);
+  assert.match(ui, /Amend Supplier Costs/);
+  assert.match(ui, /Amend Buyer Charges/);
+  assert.match(ui, /Continue to Amend/);
   assert.match(ui, /Review as General Manager/);
   assert.doesNotMatch(ui, /Temporary Assignee/);
   assert.match(ui, /Audit Details/);
@@ -370,6 +386,10 @@ test('FCOS handlers are explicit, fail-closed, atomic, and do not send email', a
   assert.match(ui, /Charge Buyer/);
   assert.match(ui, /Do Not Charge/);
   assert.match(ui, /Pending/);
+  assert.match(ui, /aria-pressed=\{active\}/);
+  assert.match(ui, /bg-slate-700 text-white/);
+  assert.match(ui, /bg-emerald-700 text-white/);
+  assert.match(ui, /bg-amber-400 text-slate-950/);
   assert.match(ui, /!fixedPricing && <span>Quantity/);
   assert.match(ui, /fixedPricing \? 'Fixed charge' : 'Per Unit'/);
   assert.match(ui, /valueOf\(row\.item, \['productName'\]\)/);

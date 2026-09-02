@@ -24,7 +24,9 @@ test('Salesforce mirror manifest contains identifiers and no credentials', () =>
   assert.equal(manifest.sourceRepository, 'hocheunglai-oss/fcos');
   assert.equal(manifest.sourceRoot, 'force-app/main/default/');
   assert.equal(manifest.targetRoot, 'src/');
-  assert.doesNotMatch(JSON.stringify(manifest), /token|password|credential|secret/i);
+  assert.ok(manifest.files.includes('objects/Xero_Contact_Sync_Setting__c/fields/Signing_Secret__c.field-meta.xml'));
+  assert.doesNotMatch(JSON.stringify({ ...manifest, files: [] }), /token|password|credential|secret/i);
+  assert.doesNotMatch(JSON.stringify(manifest.files.filter((file) => file !== 'objects/Xero_Contact_Sync_Setting__c/fields/Signing_Secret__c.field-meta.xml')), /token|password|credential|secret/i);
 });
 
 test('FCOS pushes with Salesforce changes require a current shared mirror', async () => {

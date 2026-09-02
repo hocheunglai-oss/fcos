@@ -1,0 +1,10 @@
+.replace-link{
+    cursor:pointer;
+    color:#006dcc;
+}
+.replace-link:hover {
+    text-decoration:underline;
+}
+:host {
+    --sds-c-textarea-sizing-min-height: 300px;
+ }

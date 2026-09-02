@@ -146,8 +146,8 @@ export const VARIABLE_CHARGES_USER_MANUAL = Object.freeze({
       summary: 'Save the evidence needed for Anchorage Dues, Light Dues, and Basic Calling Cost support rows.',
       steps: [
         'Confirm or save the Vessel NRT when the statutory calculation requires it.',
-        'Enter the requested anchorage period, location, Light Dues entry details, or Port Clearance application count.',
-        'Review the calculated HKD amount, the USD conversion, and any supplier-charge difference.',
+        'Enter the requested anchorage period, location, Light Dues details, or Port Clearance Extension application count.',
+        'Review the supplier statutory HKD amount and USD equivalent, then review the separate buyer default calculated at USD 0.002 per NRT-hour.',
         'Save the statutory evidence separately before approving the affected charge row.',
       ],
       note: 'The statutory calculation verifies the charge. It does not overwrite a reviewed supplier or buyer financial amount automatically.',
@@ -170,6 +170,16 @@ export const VARIABLE_CHARGES_USER_MANUAL = Object.freeze({
         'Complete the Buyer Leg after all required supplier reviews are approved.',
         'If you own both legs, use Approve Both only after both notes and all row decisions are complete.',
         'If an invoice already exists, follow the red action-required panel instead of changing history silently.',
+      ],
+    },
+    {
+      title: 'Amend an approved leg before invoicing',
+      summary: 'The assigned trader may reopen their own approved leg while its related invoice has not been created.',
+      steps: [
+        'Choose Amend Supplier Costs or Amend Buyer Charges in the approved leg header.',
+        'Enter a short amendment reason and choose Continue to Amend.',
+        'Make the required changes, resolve every Pending row, and approve the leg again.',
+        'Supplier costs lock when that exact supplier invoice is created; buyer charges lock when the final Buyer Invoice is created.',
       ],
     },
   ],

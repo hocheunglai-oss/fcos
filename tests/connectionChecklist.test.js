@@ -64,12 +64,28 @@ test('one schema-validated policy owns the approved targets and API-first order'
     'cli_fallback',
     'browser_fallback',
   ]);
-  assert.equal(CONNECTION_POLICY_VERSION, 9);
+  assert.equal(CONNECTION_POLICY_VERSION, 11);
   assert.equal(APPROVED_CONNECTION_BROWSER_PROFILE, 'Otto');
   assert.equal(CONNECTION_PROFILE_NAME, 'fcos-production');
   assert.equal(CONNECTION_LOCAL_STATE_DIRECTORY, '.fcos-cli');
   assert.equal(CONNECTION_VERIFY_COMMAND, 'npm run connections:verify');
   assert.equal(CONNECTION_INTEGRATIONS.googleDriveMarketReports.accountEmail, 'vince.less@gmail.com');
+  assert.deepEqual(CONNECTION_INTEGRATIONS.fcunoIdentityFederation, {
+    issuer: 'https://fcuno.com',
+    protocolVersion: '1.0',
+    oidcProvider: 'custom:fcuno',
+    oidcClientId: 'fcos-production',
+    oidcCallbackUrl: 'https://pjforfvchygdyqfcgpmw.supabase.co/auth/v1/callback',
+    syncAudience: 'fcos-identity-sync',
+    syncEndpoint: 'https://fcos.fcuno.com/api/fcuno/identity-sync',
+    syncJwksEndpoint: 'https://fcuno.com/api/fcos-identity-sync/jwks',
+    providerRepository: 'hocheunglai-oss/bunker-map',
+    providerCommit: '9d8e05cd338e6105b6a495d68512f63692d3a48c',
+    contractPath: 'contracts/fcuno-fcos/v1',
+    contractSha256: '7fc54e7c3bd79fb014ad81dc6d9190d021549d9428486ef85ed78fdff95d7cc2',
+    providerVercelProjectId: 'prj_8OifIFDF7Gcpd2i4VSRJOHjL3A9Q',
+    providerSupabaseProjectRef: 'gglyugbrnyvyfktgwert',
+  });
   assert.equal(CONNECTION_INTEGRATIONS.googleDriveMarketReports.browserProfile, 'Vincent');
   assert.equal(CONNECTION_INTEGRATIONS.googleDriveMarketReports.rootFolderId, '1wzRycxzPAb42EvfhjPV22mkFwliXZv8d');
   assert.deepEqual(CONNECTION_INTEGRATIONS.googleDriveMarketReports.folders.map(({ documentType, folderId }) => [documentType, folderId]), [

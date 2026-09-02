@@ -21,6 +21,7 @@ const SALESFORCE_ID = /^[A-Za-z0-9]{15}(?:[A-Za-z0-9]{3})?$/;
 const OPERATION_OBJECTS = Object.freeze({
   term_create: OBJECTS.term,
   term_update: OBJECTS.term,
+  term_retire: OBJECTS.term,
   term_delete: OBJECTS.term,
   rule_create: OBJECTS.rule,
   rule_update: OBJECTS.rule,
@@ -302,11 +303,12 @@ export async function listSpecialTerms({ force = false, scope = null } = {}) {
         ruleConditions.push(scopedProductIds.length ? `(Product__c = null OR Product__c IN (${scopedProductIds.map((id) => `'${soql(id)}'`).join(',')}))` : 'Product__c = null');
         ruleConditions.push(scopedCountries.length ? `(Country__c = null OR Country__c IN (${scopedCountries.map((country) => `'${soql(country)}'`).join(',')}))` : 'Country__c = null');
       }
-      const ruleResult = await sfQuery(`SELECT Id,Name,Special_Term__c,Special_Term__r.Name,Account__c,Account__r.Name,Account__r.Company_Code__c,Port__c,Port__r.Name,Port__r.Country__c,Product__c,Product__r.Name,Country__c,Supplier_Buyer__c,Priority__c,LastModifiedDate FROM Special_Term_Rule__c${ruleConditions.filter(Boolean).length ? ` WHERE ${ruleConditions.filter(Boolean).join(' AND ')}` : ''} ORDER BY Priority__c,Name LIMIT 10000`, { clean: true, limit: 10000 });
+      ruleConditions.push("(Special_Term__r.Approval_Status__c = null OR Special_Term__r.Approval_Status__c != 'Retired')");
+      const ruleResult = await sfQuery(`SELECT Id,Name,Special_Term__c,Special_Term__r.Name,Account__c,Account__r.Name,Account__r.Company_Code__c,Port__c,Port__r.Name,Port__r.Country__c,Product__c,Product__r.Name,Country__c,Supplier_Buyer__c,Priority__c,LastModifiedDate FROM Special_Term_Rule__c WHERE ${ruleConditions.filter(Boolean).join(' AND ')} ORDER BY Priority__c,Name LIMIT 10000`, { clean: true, limit: 10000 });
       const termIds = [...new Set(ruleResult.records.map((rule) => rule.Special_Term__c).filter(isSalesforceRecordId))];
       const termWhere = isScoped
-        ? (termIds.length ? ` WHERE Id IN (${termIds.map((id) => `'${soql(id)}'`).join(',')})` : ' WHERE Id = null')
-        : '';
+        ? (termIds.length ? ` WHERE (Approval_Status__c = null OR Approval_Status__c != 'Retired') AND Id IN (${termIds.map((id) => `'${soql(id)}'`).join(',')})` : ' WHERE Id = null')
+        : " WHERE (Approval_Status__c = null OR Approval_Status__c != 'Retired')";
       const termResult = await sfQuery(`SELECT Id,Name,Terms_Text__c,Add_to_Confirmation__c,Add_to_Nomination__c,Special_Remark_in_Confirmation__c,Special_Remark_in_Nomination__c,Approval_Status__c,Current_Revision__c,Clause_Structure_Status__c,Clause_Compiled_Hash__c,Original_Terms_Text__c,Clause_Migration_Batch_Id__c,Confirmation_Clause_Status__c,Confirmation_Clause_Style__c,Confirmation_Compiled_Hash__c,Original_Confirmation_Remark__c,Confirmation_Migration_Batch_Id__c,Nomination_Clause_Status__c,Nomination_Clause_Style__c,Nomination_Compiled_Hash__c,Original_Nomination_Remark__c,Nomination_Migration_Batch_Id__c,LastModifiedDate FROM Special_Term__c${termWhere} ORDER BY Name LIMIT 5000`, { clean: true, limit: 5000 });
       const loadedTermIds = termResult.records.map((term) => term.Id).filter(isSalesforceRecordId);
       const assignmentResult = loadedTermIds.length
@@ -394,7 +396,7 @@ export async function listSpecialTermSummaries({ query = '', action = '', status
     force,
     loader: async () => {
       const [termResult, assignmentResult, ruleResult, revisionResult, consolidationResult] = await Promise.all([
-        sfQuery('SELECT Id,Name,Add_to_Confirmation__c,Add_to_Nomination__c,Approval_Status__c,Current_Revision__c,Clause_Structure_Status__c,Confirmation_Clause_Status__c,Confirmation_Clause_Style__c,Nomination_Clause_Status__c,Nomination_Clause_Style__c,LastModifiedDate FROM Special_Term__c ORDER BY Name,Id LIMIT 5000', { clean: true, limit: 5000 }),
+        sfQuery("SELECT Id,Name,Add_to_Confirmation__c,Add_to_Nomination__c,Approval_Status__c,Current_Revision__c,Clause_Structure_Status__c,Confirmation_Clause_Status__c,Confirmation_Clause_Style__c,Nomination_Clause_Status__c,Nomination_Clause_Style__c,LastModifiedDate FROM Special_Term__c WHERE (Approval_Status__c = null OR Approval_Status__c != 'Retired') ORDER BY Name,Id LIMIT 5000", { clean: true, limit: 5000 }),
         sfQuery('SELECT Special_Term__c,Projection__c,State__c,Clause__c,Clause__r.Name,Clause_Version__r.Revision_Number__c,Clause__r.Latest_Approved_Version_Number__c FROM Special_Term_Clause_Assignment__c WHERE State__c IN (\'Active\',\'Proposed\') LIMIT 10000', { clean: true, limit: 10000 }),
         sfQuery('SELECT Special_Term__c termId,COUNT(Id) ruleCount FROM Special_Term_Rule__c GROUP BY Special_Term__c LIMIT 2000', { clean: true, limit: 2000 }),
         sfQuery("SELECT Id,Special_Term__c,Status__c,Proposed_By_Email__c,LastModifiedDate FROM Special_Term_Revision__c WHERE Status__c IN ('Draft','In Review','Ready for Approval','Changes Requested') ORDER BY LastModifiedDate DESC LIMIT 5000", { clean: true, limit: 5000 }),
@@ -761,6 +763,11 @@ export function assertCurrent(record, expectedLastModifiedAt) {
   }
 }
 
+function apexUtcTimestamp(value) {
+  const timestamp = Date.parse(String(value || ''));
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : value;
+}
+
 export function termMetadataPayload(body, { create = false } = {}) {
   const name = text(body.name, 80);
   if (name.length < 2) throw specialTermsError('Special Term name must contain at least two characters.');
@@ -831,7 +838,38 @@ export async function saveSpecialTerm(client, profile, body = {}) {
   }
 }
 
-const PROTECTED_TERM_REVISION_STATUSES = new Set(['Approved', 'Active', 'Superseded', 'Rejected', 'Rolled Back']);
+export async function retireSpecialTerm(client, profile, body = {}) {
+  await resolveSpecialTermsSchema({ force: true, write: true });
+  const id = salesforceId(body.termId || body.id, 'Special Term');
+  const reason = text(body.retirementReason || body.auditReason, 1000);
+  if (reason.length < 3) throw specialTermsError('A retirement reason is required.', 400, 'SPECIAL_TERMS_RETIREMENT_REASON_REQUIRED');
+  const term = await currentRecord(OBJECTS.term, id, ['Id', 'Approval_Status__c', 'Current_Revision__c', 'LastModifiedDate']);
+  assertCurrent(term, body.expectedLastModifiedAt);
+  if (term.Approval_Status__c !== 'Approved' || !term.Current_Revision__c) throw specialTermsError('Only an approved Special Term can be retired.', 409, 'SPECIAL_TERMS_TERM_NOT_APPROVED');
+  const reservation = await reserveOperation(client, profile, body, 'term_retire', {
+    id,
+    expectedLastModifiedAt: body.expectedLastModifiedAt,
+    deletionReasonHash: clauseHash(reason),
+  });
+  if (reservation.replay) return { ...reservation.replay, idempotencyReplayed: true };
+  try {
+    const result = await sfRequest(`/apexrest/fcos/special-term-revisions/${encodeURIComponent(id)}/retire`, {
+      method: 'POST',
+      body: {
+        termId: id,
+        approverEmail: normalizedEmail(profile?.email),
+        reason,
+        expectedLastModifiedAt: apexUtcTimestamp(body.expectedLastModifiedAt),
+      },
+    });
+    if (result?.success !== true || result?.status !== 'Retired') throw specialTermsError('Salesforce did not confirm the Special Term retirement.', 502, 'SPECIAL_TERMS_RETIREMENT_UNCONFIRMED');
+    return finishOperation(client, reservation.operation, { success: true, id, revisionId: result.revisionId || term.Current_Revision__c, status: 'Retired' });
+  } catch (error) {
+    return failOperation(client, reservation.operation, error);
+  }
+}
+
+const PROTECTED_TERM_REVISION_STATUSES = new Set(['Approved', 'Active', 'Superseded', 'Rejected', 'Rolled Back', 'Retired']);
 
 function deletionPreview(entityType, row, { action, blockers = [], counts = {}, authorized = false, isCreator = false, isApprover = false } = {}) {
   return {
@@ -1012,4 +1050,4 @@ export async function deleteSpecialTermRule(client, profile, body = {}, options 
   }
 }
 
-export const specialTermDeletionInternals = Object.freeze({ PROTECTED_TERM_REVISION_STATUSES, deletionAuthorization, normalizedEmail });
+export const specialTermDeletionInternals = Object.freeze({ PROTECTED_TERM_REVISION_STATUSES, deletionAuthorization, normalizedEmail, apexUtcTimestamp });

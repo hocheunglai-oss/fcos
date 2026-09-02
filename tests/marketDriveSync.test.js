@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
-import { loadPendingMarketIntelligenceDates, marketDriveRunKey, prioritizeMarketDriveCandidates, runMarketReportArchiveReplayBatch, runMarketReportDriveSync, verifyMarketDriveAuthority } from '../api/_marketDriveSync.js';
+import { loadPendingMarketIntelligenceDates, marketDriveRunKey, parseMarketMopsCsv, prioritizeMarketDriveCandidates, runMarketReportArchiveReplayBatch, runMarketReportDriveSync, verifyMarketDriveAuthority } from '../api/_marketDriveSync.js';
 
 const config = {
   accountEmail: 'vince.less@gmail.com',
   rootFolderId: 'rootfolder12345',
+  secondaryMopsCsv: {
+    folderId: 'rootfolder12345', filenamePrefix: 'Core_Export_Data', mimeType: 'text/csv', startDate: '2025-01-01',
+  },
   folders: [
     { documentType: 'bunkerwire', folderId: 'bunkerfolder12345', label: 'Bunkerwire' },
     { documentType: 'european_marketscan', folderId: 'europefolder12345', label: 'European Marketscan' },
@@ -20,7 +23,7 @@ function response(data, { ok = true, binary = false } = {}) {
   };
 }
 
-function clientMock({ knownMd5 = [], storedReports = [], publicationStatus = null, pairedImports = [], briefs = [], saveFailuresBeforeSuccess = 0 } = {}) {
+function clientMock({ knownMd5 = [], storedReports = [], secondaryImports = [], secondaryResult = {}, publicationStatus = null, pairedImports = [], briefs = [], saveFailuresBeforeSuccess = 0 } = {}) {
   const rpcCalls = [];
   let remainingSaveFailures = saveFailuresBeforeSuccess;
   return {
@@ -37,10 +40,18 @@ function clientMock({ knownMd5 = [], storedReports = [], publicationStatus = nul
         return { data: { status: 'completed', mopsPublication: publicationStatus ? { status: publicationStatus, conflictCode: publicationStatus === 'conflict' ? 'MOPS_LEDGER_VALUE_MISMATCH' : null } : null }, error: null };
       }
       if (name === 'record_market_report_product_library') return { data: { libraryObservationCount: payload.p_observations.length, libraryInsertedCount: payload.p_observations.length }, error: null };
+      if (name === 'save_market_mops_secondary_csv') return { data: {
+        status: 'completed', comparisonValueCount: 60, matchedValueCount: 60,
+        publishedDateCount: 0, matchedDateCount: 20, conflictDateCount: 0,
+        ...secondaryResult,
+      }, error: null };
       return { data: null, error: new Error('Unexpected RPC') };
     },
     from: (table) => ({
       select: (columns) => {
+        if (table === 'market_mops_secondary_imports' && columns === 'source_hash,source_md5') return {
+          range: async () => ({ data: secondaryImports, error: null }),
+        };
         if (table === 'market_report_imports' && columns === 'id,source_md5,source_hash,source_document_type,report_date,library_observation_count') return {
           not: () => ({ range: async () => ({ data: [
             ...knownMd5.map((source_md5) => ({ id: `import-${source_md5}`, source_md5, library_observation_count: 1 })),
@@ -50,6 +61,24 @@ function clientMock({ knownMd5 = [], storedReports = [], publicationStatus = nul
         if (table === 'market_report_imports' && columns === 'report_date,source_document_type') return {
           gte: () => ({ order: () => ({ limit: async () => ({ data: pairedImports, error: null }) }) }),
         };
+        if (table === 'market_report_imports' && columns === 'id,source_document_type,source_hash') {
+          const query = {
+            eq: () => query,
+            in: () => query,
+            then: (resolve, reject) => Promise.resolve({ data: [
+              { id: 'expected-bw', source_document_type: 'bunkerwire', source_hash: 'a'.repeat(64) },
+              { id: 'expected-eum', source_document_type: 'european_marketscan', source_hash: 'b'.repeat(64) },
+            ], error: null }).then(resolve, reject),
+          };
+          return query;
+        }
+        if (table === 'market_price_observations' && columns === 'id,series_id,import_id,price_date') {
+          const query = {
+            eq: () => query,
+            limit: async () => ({ data: [{ id: 'expected-session-observation' }], error: null }),
+          };
+          return query;
+        }
         if (table === 'market_report_imports' && columns.includes('drive_file_id')) return {
           eq: () => ({ in: () => ({ not: async () => ({ data: [], error: null }) }) }),
         };
@@ -62,13 +91,16 @@ function clientMock({ knownMd5 = [], storedReports = [], publicationStatus = nul
   };
 }
 
-function driveFetch({ files = [], accountEmail = config.accountEmail, pdf = Buffer.from('%PDF-test'), shortcutHierarchy = false } = {}) {
+function driveFetch({ files = [], csvFiles = [], accountEmail = config.accountEmail, pdf = Buffer.from('%PDF-test'), binaryById = {}, shortcutHierarchy = false } = {}) {
   const calls = [];
   const fetchImpl = async (input) => {
     const url = new URL(String(input));
     calls.push(url.toString());
     if (url.pathname.endsWith('/about')) return response({ user: { emailAddress: accountEmail } });
-    if (url.searchParams.get('alt') === 'media') return response(pdf, { binary: true });
+    if (url.searchParams.get('alt') === 'media') {
+      const requestedId = url.pathname.split('/').at(-1);
+      return response(binaryById[requestedId] || pdf, { binary: true });
+    }
     const fileId = url.pathname.split('/').at(-1);
     if (fileId === config.rootFolderId) {
       return response({ id: fileId, name: 'Market reports', mimeType: 'application/vnd.google-apps.folder', trashed: false });
@@ -90,6 +122,9 @@ function driveFetch({ files = [], accountEmail = config.accountEmail, pdf = Buff
           })) : [],
         });
       }
+      if (String(url.searchParams.get('q')).includes("mimeType = 'text/csv'")) {
+        return response({ files: csvFiles, nextPageToken: null });
+      }
       const folder = config.folders.find((entry) => String(url.searchParams.get('q')).includes(entry.folderId));
       return response({ files: files.filter((file) => file.documentType === folder?.documentType), nextPageToken: null });
     }
@@ -100,6 +135,83 @@ function driveFetch({ files = [], accountEmail = config.accountEmail, pdf = Buff
 
 test('market Drive run keys are stable UTC-hour idempotency boundaries', () => {
   assert.equal(marketDriveRunKey(new Date('2026-08-20T09:59:59.999Z')), 'market-drive:2026-08-20T09');
+});
+
+function secondaryCsvFixture({ duplicateDate = false, missingSgo = false } = {}) {
+  const headers = [
+    'DATE', 'COMMENTARY', 'SINGAPORE FUEL OIL 0.5% (AMFSA00): CLOSE',
+    'SINGAPORE 380 CST (PPXDK00): CLOSE',
+    ...(missingSgo ? [] : ['SINGAPORE GASOIL (POABC00): CLOSE']),
+  ];
+  const rows = Array.from({ length: 21 }, (_, index) => {
+    const date = new Date(Date.UTC(2026, 0, index + 1)).toISOString().slice(0, 10);
+    return [date, '"quoted, evidence"', String(700 + index), String(500 + index), ...(missingSgo ? [] : [String(100 + index / 10)])].join(',');
+  });
+  if (duplicateDate) rows[20] = rows[20].replace('2026-01-21', '2026-01-20');
+  rows.push('2026-02-01,"incomplete",750,,105');
+  return Buffer.from(`sep=,\n${headers.join(',')}\n${rows.join('\n')}\n`);
+}
+
+test('secondary MOPS CSV parser accepts exact complete triples and skips incomplete dates', () => {
+  const parsed = parseMarketMopsCsv(secondaryCsvFixture(), { filename: 'Core_Export_Data.csv' });
+  assert.equal(parsed.completeRowCount, 21);
+  assert.equal(parsed.incompleteRowCount, 1);
+  assert.deepEqual(parsed.rows[0], { reportDate: '2026-01-01', s05: 700, s380: 500, sgo: 100 });
+  assert.deepEqual(parsed.rows.at(-1), { reportDate: '2026-01-21', s05: 720, s380: 520, sgo: 102 });
+  assert.match(parsed.sourceHash, /^[a-f0-9]{64}$/);
+  assert.match(parsed.sourceMd5, /^[a-f0-9]{32}$/);
+});
+
+test('secondary MOPS CSV parser fails closed on missing columns and duplicate complete dates', () => {
+  assert.throws(() => parseMarketMopsCsv(secondaryCsvFixture({ missingSgo: true })), (error) => error.code === 'MARKET_SECONDARY_CSV_COLUMNS_INVALID');
+  assert.throws(() => parseMarketMopsCsv(secondaryCsvFixture({ duplicateDate: true })), (error) => error.code === 'MARKET_SECONDARY_CSV_DATE_DUPLICATE');
+});
+
+test('hourly sync imports a historically verified root-folder MOPS CSV without completing a report pair', async () => {
+  const csv = secondaryCsvFixture();
+  const { createHash } = await import('node:crypto');
+  const md5 = createHash('md5').update(csv).digest('hex');
+  const file = {
+    id: 'secondarycsv12345', name: 'Core_Export_Data - 2026-09-01.csv', mimeType: 'text/csv',
+    size: String(csv.length), md5Checksum: md5, modifiedTime: '2026-09-01T07:21:22Z', parents: [config.rootFolderId],
+  };
+  const client = clientMock({ secondaryResult: {
+    comparisonValueCount: 63, matchedValueCount: 63,
+    publishedDateCount: 1, matchedDateCount: 20, conflictDateCount: 0,
+  } });
+  const drive = driveFetch({ csvFiles: [file], binaryById: { [file.id]: csv } });
+  const result = await runMarketReportDriveSync(client, {
+    accessToken: 'token', fetchImpl: drive.fetchImpl, config, now: new Date('2026-09-01T08:00:00Z'),
+  });
+  assert.equal(result.status, 'completed');
+  assert.equal(result.secondaryMopsImportedCount, 1);
+  assert.equal(result.secondaryMopsPublishedDateCount, 1);
+  assert.equal(result.briefCompletedCount, 0);
+  const saved = client.rpcCalls.find(({ name }) => name === 'save_market_mops_secondary_csv');
+  assert.equal(saved.payload.p_source_md5, md5);
+  assert.equal(saved.payload.p_rows.length, 21);
+  assert.deepEqual(saved.payload.p_rows[0], { reportDate: '2026-01-01', s05: 700, s380: 500, sgo: 100 });
+});
+
+test('a quarantined historical CSV discrepancy does not overwrite or fail the hourly sync', async () => {
+  const csv = secondaryCsvFixture();
+  const { createHash } = await import('node:crypto');
+  const md5 = createHash('md5').update(csv).digest('hex');
+  const file = {
+    id: 'secondaryconflict12345', name: 'Core_Export_Data - verified.csv', mimeType: 'text/csv',
+    size: String(csv.length), md5Checksum: md5, modifiedTime: '2026-09-01T07:21:22Z', parents: [config.rootFolderId],
+  };
+  const client = clientMock({ secondaryResult: {
+    status: 'completed_with_conflicts', comparisonValueCount: 63, matchedValueCount: 62,
+    publishedDateCount: 0, matchedDateCount: 20, conflictDateCount: 1,
+  } });
+  const result = await runMarketReportDriveSync(client, {
+    accessToken: 'token', fetchImpl: driveFetch({ csvFiles: [file], binaryById: { [file.id]: csv } }).fetchImpl,
+    config, now: new Date('2026-09-01T09:00:00Z'),
+  });
+  assert.equal(result.status, 'completed');
+  assert.equal(result.secondaryMopsConflictDateCount, 1);
+  assert.equal(result.failedCount, 0);
 });
 
 test('hourly sync prioritizes unseen reports, then current library repairs, before legacy cleanup', () => {
@@ -359,6 +471,19 @@ test('hourly market sync migration is service-only and stores no PDF or report t
   assert.match(sql, /security invoker/i);
   assert.match(sql, /save_market_drive_report_import/i);
   assert.doesNotMatch(sql, /security definer|pdf_bytes|report_text/i);
+});
+
+test('secondary MOPS CSV migration is service-only, historically gated, and stores no source content', () => {
+  const sql = fs.readFileSync(new URL('../supabase/migrations/20260902043000_market_mops_secondary_csv.sql', import.meta.url), 'utf8');
+  assert.match(sql, /alter table public\.market_mops_secondary_imports enable row level security/i);
+  assert.match(sql, /alter table public\.market_mops_secondary_evidence enable row level security/i);
+  assert.match(sql, /revoke all on table public\.market_mops_secondary_imports from public, anon, authenticated/i);
+  assert.match(sql, /security invoker/i);
+  assert.match(sql, /v_matched_values \* 1000 < v_comparison_values \* 995/i);
+  assert.match(sql, /v_recent_conflicts > 0/i);
+  assert.match(sql, /MARKET_SECONDARY_HISTORY_VERIFICATION_FAILED/i);
+  assert.doesNotMatch(sql, /security definer|csv_bytes|csv_text/i);
+  assert.doesNotMatch(sql.replace(/\s+/g, ''), /raw_input=(?!null)/i);
 });
 
 test('production scheduling is exactly hourly and keeps the cron secret protected', () => {

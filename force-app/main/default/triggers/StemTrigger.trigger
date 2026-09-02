@@ -29,6 +29,7 @@ trigger StemTrigger on STEM__c(before insert, before update, after insert, after
         StemTriggerHandler.updateIsChangedCSVField(Trigger.new, Trigger.oldMap);
         StemTriggerHandler.updateVesselAndPort(Trigger.new, Trigger.oldMap);
         StemTriggerHandler.updateDisputes(Trigger.new, Trigger.oldMap);
+        HongKongBasicCallingBundleService.afterStemChange(Trigger.new, Trigger.oldMap);
     }
     if(Trigger.isDelete && Trigger.isBefore){
         StemTriggerHandler.deleteInvoices(Trigger.oldMap);

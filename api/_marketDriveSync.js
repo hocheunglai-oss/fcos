@@ -7,6 +7,8 @@ import { reconcileMarketIntradayDate } from './_marketIntraday.js';
 const DRIVE_FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder';
 const DRIVE_SHORTCUT_MIME_TYPE = 'application/vnd.google-apps.shortcut';
 const DRIVE_PDF_MIME_TYPE = 'application/pdf';
+const DRIVE_CSV_MIME_TYPE = 'text/csv';
+const MAX_SECONDARY_MOPS_CSV_BYTES = 2 * 1024 * 1024;
 const DEFAULT_IMPORT_LIMIT = 25;
 // The licensed local audit inspected 855 downloaded files, including 23 extra
 // local copies. The governed Drive replay is pinned to the files that actually
@@ -57,6 +59,108 @@ function reportDateFromFilename(value) {
   return match ? `${match[1]}-${match[2]}-${match[3]}` : null;
 }
 
+function parseCsvRecords(value) {
+  const records = [];
+  let record = [];
+  let field = '';
+  let quoted = false;
+  const text = String(value || '').replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    if (quoted) {
+      if (character === '"' && text[index + 1] === '"') {
+        field += '"';
+        index += 1;
+      } else if (character === '"') quoted = false;
+      else field += character;
+    } else if (character === '"') quoted = true;
+    else if (character === ',') {
+      record.push(field);
+      field = '';
+    } else if (character === '\n') {
+      record.push(field);
+      if (record.some((cell) => cell.length)) records.push(record);
+      record = [];
+      field = '';
+    } else field += character;
+  }
+  if (quoted) throw syncError('The secondary MOPS CSV contains an unterminated quoted field.', 'MARKET_SECONDARY_CSV_INVALID', 409);
+  record.push(field);
+  if (record.some((cell) => cell.length)) records.push(record);
+  return records;
+}
+
+function secondaryMopsNumber(value) {
+  const normalized = String(value ?? '').trim().replace(/,/g, '');
+  if (!normalized || /^(?:N\/?A|NA|null|-)$/i.test(normalized)) return null;
+  if (!/^[+]?(?:\d+(?:\.\d+)?|\.\d+)$/.test(normalized)) return null;
+  const number = Number(normalized);
+  return Number.isFinite(number) && number > 0 ? number : null;
+}
+
+export function parseMarketMopsCsv(buffer, { filename = '', startDate = '2025-01-01' } = {}) {
+  if (!Buffer.isBuffer(buffer) || !buffer.length || buffer.length > MAX_SECONDARY_MOPS_CSV_BYTES) {
+    throw syncError('The secondary MOPS CSV is empty or exceeds its configured size limit.', 'MARKET_SECONDARY_CSV_SIZE_INVALID', 409);
+  }
+  const records = parseCsvRecords(buffer.toString('utf8'));
+  if (/^sep=$/i.test(String(records[0]?.[0] || '').trim())
+      && records[0].slice(1).every((cell) => !String(cell || '').trim())) records.shift();
+  if (records.length < 2) throw syncError('The secondary MOPS CSV has no data rows.', 'MARKET_SECONDARY_CSV_INVALID', 409);
+  const headers = records.shift().map((value) => String(value || '').trim().replace(/\s+/g, ' '));
+  const normalizedHeaders = headers.map((value) => value.toUpperCase());
+  const symbolCloseIndex = (symbol) => {
+    const matches = normalizedHeaders.map((value, index) => (
+      new RegExp(`(?:^|[^A-Z0-9])${symbol}(?:[^A-Z0-9]|$)`).test(value) && /(?:^|[^A-Z])CLOSE\s*$/.test(value)
+    ) ? index : -1).filter((index) => index >= 0);
+    if (matches.length !== 1) throw syncError(`The secondary MOPS CSV requires exactly one ${symbol} CLOSE column.`, 'MARKET_SECONDARY_CSV_COLUMNS_INVALID', 409);
+    return matches[0];
+  };
+  const dateColumns = ['DATE', 'TIMESTAMP'].flatMap((label) => normalizedHeaders
+    .map((value, index) => value === label ? index : -1).filter((index) => index >= 0));
+  if (dateColumns.length !== 1) throw syncError('The secondary MOPS CSV requires exactly one DATE or TIMESTAMP column.', 'MARKET_SECONDARY_CSV_COLUMNS_INVALID', 409);
+  const dateIndex = dateColumns[0];
+  const s05Index = symbolCloseIndex('AMFSA00');
+  const s380Index = symbolCloseIndex('PPXDK00');
+  const sgoIndex = symbolCloseIndex('POABC00');
+  const rows = [];
+  const dates = new Set();
+  let incompleteRowCount = 0;
+  let ignoredBeforeStartCount = 0;
+  for (const record of records) {
+    const reportDate = String(record[dateIndex] || '').trim();
+    if (!reportDate) continue;
+    if (!/^20\d{2}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])$/.test(reportDate)
+        || new Date(`${reportDate}T00:00:00Z`).toISOString().slice(0, 10) !== reportDate) {
+      throw syncError('The secondary MOPS CSV contains an invalid publication date.', 'MARKET_SECONDARY_CSV_DATE_INVALID', 409);
+    }
+    if (reportDate < startDate) {
+      ignoredBeforeStartCount += 1;
+      continue;
+    }
+    const s05 = secondaryMopsNumber(record[s05Index]);
+    const s380 = secondaryMopsNumber(record[s380Index]);
+    const sgo = secondaryMopsNumber(record[sgoIndex]);
+    if (s05 == null || s380 == null || sgo == null) {
+      incompleteRowCount += 1;
+      continue;
+    }
+    if (dates.has(reportDate)) throw syncError('The secondary MOPS CSV contains duplicate complete publication dates.', 'MARKET_SECONDARY_CSV_DATE_DUPLICATE', 409);
+    dates.add(reportDate);
+    rows.push({ reportDate, s05, s380, sgo });
+  }
+  if (rows.length < 20) throw syncError('The secondary MOPS CSV has insufficient complete history for verification.', 'MARKET_SECONDARY_CSV_HISTORY_INSUFFICIENT', 409);
+  rows.sort((left, right) => left.reportDate.localeCompare(right.reportDate));
+  return {
+    filename: String(filename || '').slice(0, 255),
+    sourceHash: createHash('sha256').update(buffer).digest('hex'),
+    sourceMd5: createHash('md5').update(buffer).digest('hex'),
+    rows,
+    completeRowCount: rows.length,
+    incompleteRowCount,
+    ignoredBeforeStartCount,
+  };
+}
+
 async function driveJson(fetchImpl, accessToken, path, query = {}) {
   const url = new URL(`https://www.googleapis.com/drive/v3/${path.replace(/^\//, '')}`);
   for (const [key, value] of Object.entries(query)) if (value != null) url.searchParams.set(key, String(value));
@@ -76,6 +180,11 @@ async function driveBuffer(fetchImpl, accessToken, fileId) {
 }
 
 export async function verifyMarketDriveAuthority(fetchImpl, accessToken, config) {
+  if (config?.secondaryMopsCsv?.folderId !== config?.rootFolderId
+      || config?.secondaryMopsCsv?.mimeType !== DRIVE_CSV_MIME_TYPE
+      || config?.secondaryMopsCsv?.startDate !== REVIEWED_ARCHIVE.startDate) {
+    throw syncError('The secondary MOPS CSV source does not match the approved root-folder policy.', 'MARKET_SECONDARY_CSV_CONFIG_INVALID', 500);
+  }
   const about = await driveJson(fetchImpl, accessToken, 'about', { fields: 'user(emailAddress)' });
   if (String(about.user?.emailAddress || '').trim().toLowerCase() !== config.accountEmail.toLowerCase()) {
     throw syncError('Google Drive market-report authorization does not match the approved account.', 'MARKET_DRIVE_IDENTITY_MISMATCH', 503);
@@ -127,6 +236,12 @@ export async function verifyMarketDriveAuthority(fetchImpl, accessToken, config)
     accountEmail: String(about.user?.emailAddress || '').trim().toLowerCase(),
     rootFolderId: root.id,
     rootFolderName: root.name || null,
+    secondaryMopsCsv: {
+      folderId: config.secondaryMopsCsv.folderId,
+      filenamePrefix: config.secondaryMopsCsv.filenamePrefix,
+      mimeType: config.secondaryMopsCsv.mimeType,
+      startDate: config.secondaryMopsCsv.startDate,
+    },
     folders,
   };
 }
@@ -159,6 +274,67 @@ async function listDriveReports(fetchImpl, accessToken, folder) {
     pageToken = data.nextPageToken || null;
   } while (pageToken);
   return files;
+}
+
+async function listSecondaryMopsCsvFiles(fetchImpl, accessToken, config) {
+  const secondary = config?.secondaryMopsCsv;
+  if (!secondary
+      || secondary.folderId !== config.rootFolderId
+      || secondary.mimeType !== DRIVE_CSV_MIME_TYPE
+      || secondary.startDate !== REVIEWED_ARCHIVE.startDate) {
+    throw syncError('The secondary MOPS CSV source is not pinned to the approved market-report root.', 'MARKET_SECONDARY_CSV_CONFIG_INVALID', 500);
+  }
+  const files = [];
+  let pageToken = null;
+  do {
+    const data = await driveJson(fetchImpl, accessToken, 'files', {
+      q: `'${secondary.folderId}' in parents and trashed = false and mimeType = '${DRIVE_CSV_MIME_TYPE}' and name contains '${secondary.filenamePrefix.replace(/'/g, "\\'")}'`,
+      fields: 'nextPageToken,files(id,name,mimeType,size,md5Checksum,modifiedTime,parents)',
+      pageSize: 1000,
+      orderBy: 'modifiedTime desc,name desc',
+      spaces: 'drive',
+      supportsAllDrives: 'true',
+      includeItemsFromAllDrives: 'true',
+      pageToken,
+    });
+    for (const file of data.files || []) {
+      const name = String(file.name || '').slice(0, 255);
+      if (!safeDriveId(file.id)
+          || file.mimeType !== DRIVE_CSV_MIME_TYPE
+          || !Array.isArray(file.parents)
+          || !file.parents.includes(secondary.folderId)
+          || !name.startsWith(secondary.filenamePrefix)
+          || !name.toLowerCase().endsWith('.csv')) continue;
+      files.push({
+        id: file.id,
+        name,
+        size: Number(file.size || 0),
+        md5: safeMd5(file.md5Checksum),
+        modifiedAt: validIsoDateTime(file.modifiedTime),
+      });
+    }
+    pageToken = data.nextPageToken || null;
+  } while (pageToken);
+  return files.sort((left, right) => String(right.modifiedAt || '').localeCompare(String(left.modifiedAt || ''))
+    || right.name.localeCompare(left.name)
+    || right.id.localeCompare(left.id));
+}
+
+async function loadStoredSecondaryMopsHashes(client) {
+  const sourceHashes = new Set();
+  const md5Hashes = new Set();
+  for (let offset = 0; ; offset += 1000) {
+    const result = await client.from('market_mops_secondary_imports')
+      .select('source_hash,source_md5')
+      .range(offset, offset + 999);
+    if (result.error) throw syncError('Stored secondary MOPS CSV hashes could not be loaded.', 'MARKET_SECONDARY_CSV_INDEX_FAILED');
+    for (const row of result.data || []) {
+      if (/^[a-f0-9]{64}$/.test(String(row.source_hash || ''))) sourceHashes.add(row.source_hash);
+      if (/^[a-f0-9]{32}$/.test(String(row.source_md5 || ''))) md5Hashes.add(row.source_md5);
+    }
+    if ((result.data || []).length < 1000) break;
+  }
+  return { sourceHashes, md5Hashes };
 }
 
 function reviewedArchiveFiles(files, policy = REVIEWED_ARCHIVE) {
@@ -426,7 +602,8 @@ export async function runMarketReportDriveSync(client, {
   processDerived = processMarketIntelligenceDate,
 } = {}) {
   if (!client || !accessToken) throw syncError('Market sync authorization is unavailable.', 'MARKET_DRIVE_AUTH_UNAVAILABLE', 503);
-  if (!config?.accountEmail || !config?.rootFolderId || !Array.isArray(config?.folders) || config.folders.length !== 2) {
+  if (!config?.accountEmail || !config?.rootFolderId || !config?.secondaryMopsCsv
+      || !Array.isArray(config?.folders) || config.folders.length !== 2) {
     throw syncError('Market sync target configuration is incomplete.', 'MARKET_DRIVE_CONFIG_INVALID', 500);
   }
   const runKey = marketDriveRunKey(now);
@@ -451,16 +628,81 @@ export async function runMarketReportDriveSync(client, {
     marketShadowRecordedCount: 0,
     libraryObservationCount: 0,
     libraryRepairedCount: 0,
+    secondaryMopsDiscoveredCount: 0,
+    secondaryMopsImportedCount: 0,
+    secondaryMopsPublishedDateCount: 0,
+    secondaryMopsMatchedDateCount: 0,
+    secondaryMopsConflictDateCount: 0,
+    secondaryMopsComparisonValueCount: 0,
+    secondaryMopsMatchedValueCount: 0,
   };
   try {
     await verifyMarketDriveAuthority(fetchImpl, accessToken, config);
-    const [storedReportIndex, ...folderFiles] = await Promise.all([
+    const [storedReportIndex, storedSecondaryIndex, secondaryMopsFiles, ...folderFiles] = await Promise.all([
       loadStoredReportIndex(client),
+      loadStoredSecondaryMopsHashes(client),
+      listSecondaryMopsCsvFiles(fetchImpl, accessToken, config),
       ...config.folders.map((folder) => listDriveReports(fetchImpl, accessToken, folder)),
     ]);
     const { completeMd5, storedByMd5 } = storedReportIndex;
     const files = folderFiles.flat().sort((left, right) => String(left.modifiedAt || '').localeCompare(String(right.modifiedAt || '')) || left.name.localeCompare(right.name) || left.id.localeCompare(right.id));
-    summary.discoveredCount = files.length;
+    summary.secondaryMopsDiscoveredCount = secondaryMopsFiles.length;
+    summary.discoveredCount = files.length + secondaryMopsFiles.length;
+
+    for (const file of secondaryMopsFiles) {
+      try {
+        if (!file.md5) throw syncError('A secondary MOPS CSV has no Google Drive checksum.', 'MARKET_SECONDARY_CSV_CHECKSUM_MISSING', 409);
+        if (file.size <= 0 || file.size > MAX_SECONDARY_MOPS_CSV_BYTES) {
+          throw syncError('A secondary MOPS CSV exceeds the configured size limit.', 'MARKET_SECONDARY_CSV_SIZE_INVALID', 409);
+        }
+        if (storedSecondaryIndex.md5Hashes.has(file.md5)) {
+          summary.skippedCount += 1;
+          continue;
+        }
+        const buffer = await driveBuffer(fetchImpl, accessToken, file.id);
+        const parsed = parseMarketMopsCsv(buffer, {
+          filename: file.name,
+          startDate: config.secondaryMopsCsv.startDate,
+        });
+        if (parsed.sourceMd5 !== file.md5) throw syncError('Google Drive secondary MOPS CSV checksum validation failed.', 'MARKET_SECONDARY_CSV_CHECKSUM_MISMATCH', 409);
+        if (storedSecondaryIndex.sourceHashes.has(parsed.sourceHash)) {
+          summary.skippedCount += 1;
+          continue;
+        }
+        const saveSecondary = () => client.rpc('save_market_mops_secondary_csv', {
+          p_idempotency_key: `market-mops-secondary-${parsed.sourceHash}`,
+          p_source_hash: parsed.sourceHash,
+          p_source_md5: parsed.sourceMd5,
+          p_drive_file_id: file.id,
+          p_drive_modified_at: file.modifiedAt,
+          p_rows: parsed.rows,
+        });
+        let saved = await saveSecondary();
+        if (saved.error) saved = await saveSecondary();
+        if (saved.error) throw syncError('The verified secondary MOPS CSV could not be saved.', 'MARKET_SECONDARY_CSV_IMPORT_FAILED', 409);
+        storedSecondaryIndex.sourceHashes.add(parsed.sourceHash);
+        storedSecondaryIndex.md5Hashes.add(parsed.sourceMd5);
+        summary.secondaryMopsImportedCount += 1;
+        summary.secondaryMopsPublishedDateCount += Number(saved.data?.publishedDateCount || 0);
+        summary.secondaryMopsMatchedDateCount += Number(saved.data?.matchedDateCount || 0);
+        summary.secondaryMopsConflictDateCount += Number(saved.data?.conflictDateCount || 0);
+        summary.secondaryMopsComparisonValueCount += Number(saved.data?.comparisonValueCount || 0);
+        summary.secondaryMopsMatchedValueCount += Number(saved.data?.matchedValueCount || 0);
+        summary.importedCount += 1;
+      } catch (error) {
+        summary.failedCount += 1;
+        if (!summary.errorCode) summary.errorCode = normalizedErrorCode(error);
+        const alert = await publishMarketDataQualityAlert(client, {
+          reportDate: null,
+          code: normalizedErrorCode(error),
+          title: 'Secondary MOPS CSV processing failed',
+          message: 'The root-folder MOPS CSV could not be parsed, historically verified, or imported.',
+          severity: 'critical',
+          evidence: { sourceType: 'secondary_mops_csv' },
+        }).catch(() => ({ created: false }));
+        if (alert.created) summary.marketAlertsPublishedCount += 1;
+      }
+    }
 
     const candidates = [];
     const queuedMd5 = new Set();

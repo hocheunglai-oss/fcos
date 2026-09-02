@@ -41,6 +41,7 @@ export const APP_CAPABILITIES = [
   { id: 'buyer_invoices_manage', label: 'Manage invoice email settings', description: 'Change buyer invoice templates and schedules.' },
   { id: 'financial_report_settings_manage', label: 'Manage financial report settings', description: 'Change approved recipients and templates for internal financial reports.' },
   { id: 'cashflow_forecast_manage', label: 'Manage cashflow settings', description: 'Change forecast settings and manual overrides.' },
+  { id: 'cashflow_bank_reconcile', label: 'Reconcile cashflow banks', description: 'Maintain reviewed UBS, DBS, and Intesa balances, statements, matches, deposits, and guarantees.' },
   { id: 'hedge_book_manage', label: 'Manage Hedge Book', description: 'Create and maintain trades, hedges, markets, and counterparties.' },
   { id: 'hedge_settlement_manage', label: 'Manage Hedge Settlement', description: 'Manage settlement, invoices, and clearing entries.' },
   { id: 'hedge_close_approve', label: 'Approve Hedge Close', description: 'Close or reopen months and approve SFS reports.' },

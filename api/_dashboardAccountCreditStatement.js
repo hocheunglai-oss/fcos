@@ -3,6 +3,7 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const ONE_DAY_MS = 86_400_000;
 
 import { SALESFORCE_CORPORATE_CURRENCY } from './_decisionDashboard.js';
+import { PAYMENT_DATA_RELIABLE_FROM } from '../src/lib/paymentDataReliability.js';
 import {
   BUYER_PAYMENT_CONSERVATIVENESS,
   DEFAULT_BUYER_PAYMENT_CONSERVATIVENESS,
@@ -11,7 +12,7 @@ import {
 } from './_buyerPaymentPerformance.js';
 
 export const CREDIT_RECONCILIATION_TOLERANCE = 1;
-export const CREDIT_EXPOSURE_DELIVERY_START = '2026-01-01';
+export const CREDIT_EXPOSURE_DELIVERY_START = PAYMENT_DATA_RELIABLE_FROM;
 
 function text(value) {
   return String(value ?? '').trim();

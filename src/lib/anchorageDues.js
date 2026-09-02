@@ -1,6 +1,9 @@
 export const ANCHORAGE_CALCULATION_VERSION = 'hk-md-2026-v1';
+export const ANCHORAGE_BUYER_CALCULATION_VERSION = 'hk-buyer-nrt-hour-2026-v1';
+export const ANCHORAGE_BUYER_RATE_USD_PER_NRT_HOUR = 0.002;
 export const ANCHORAGE_FREE_MINUTES = 12 * 60;
 export const ANCHORAGE_LOCATION_ELSEWHERE = 'Elsewhere in Hong Kong';
+export const ANCHORAGE_LOCATION_ELSEWHERE_LABEL = 'Anywhere except Victoria Port';
 export const ANCHORAGE_LOCATION_VICTORIA = 'Victoria Port';
 
 const RATES = new Map([
@@ -22,6 +25,21 @@ function instant(value) {
 
 function roundMoney(value) {
   return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+function allocateBuyerTotal(totalUsd, supplierAllocations, supplierTotalHkd) {
+  if (!supplierAllocations.length) return [];
+  if (!(supplierTotalHkd > 0) || !(totalUsd > 0)) {
+    return supplierAllocations.map((row) => ({ id: row.id, amountUsd: 0 }));
+  }
+  let allocatedUsd = 0;
+  return supplierAllocations.map((row, index) => {
+    const amountUsd = index === supplierAllocations.length - 1
+      ? roundMoney(totalUsd - allocatedUsd)
+      : roundMoney(totalUsd * (Number(row.amountHkd || 0) / supplierTotalHkd));
+    allocatedUsd = roundMoney(allocatedUsd + amountUsd);
+    return { id: row.id, amountUsd };
+  });
 }
 
 export function calculateHongKongAnchorageDues({ nrt, periods = [], allocations = [] } = {}) {
@@ -87,6 +105,12 @@ export function calculateHongKongAnchorageDues({ nrt, periods = [], allocations 
   const allocationComplete = effectiveAllocations.length === normalized.length
     && effectiveAllocations.every((row) => row.id && row.amountHkd != null && row.amountHkd >= 0)
     && Math.abs(effectiveAllocations.reduce((sum, row) => sum + row.amountHkd, 0) - statutoryAmountHkd) <= 0.1;
+  const buyerChargeableHours = locations.reduce((sum, row) => sum + row.chargeableHours, 0);
+  const buyerRawAmountUsd = tonnage * buyerChargeableHours * ANCHORAGE_BUYER_RATE_USD_PER_NRT_HOUR;
+  const buyerTotalUsd = roundMoney(buyerRawAmountUsd);
+  const buyerAllocations = allocationComplete
+    ? allocateBuyerTotal(buyerTotalUsd, effectiveAllocations, statutoryAmountHkd)
+    : [];
   return {
     complete: true,
     errors: [],
@@ -104,6 +128,15 @@ export function calculateHongKongAnchorageDues({ nrt, periods = [], allocations 
     automaticAllocation: Boolean(autoAllocation),
     allocationComplete,
     allocationDifferenceHkd: roundMoney(effectiveAllocations.reduce((sum, row) => sum + (row.amountHkd || 0), 0) - statutoryAmountHkd),
+    buyer: {
+      complete: allocationComplete,
+      version: ANCHORAGE_BUYER_CALCULATION_VERSION,
+      rateUsdPerNrtHour: ANCHORAGE_BUYER_RATE_USD_PER_NRT_HOUR,
+      chargeableHours: buyerChargeableHours,
+      rawAmountUsd: buyerRawAmountUsd,
+      totalUsd: buyerTotalUsd,
+      allocations: buyerAllocations,
+    },
   };
 }
 

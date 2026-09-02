@@ -42,6 +42,8 @@ import { useToast } from '@/components/ui/use-toast';
 import { readPageState, writePageState } from '@/lib/pageStateCache';
 import { CASHFLOW_FORECAST_METHODOLOGY } from '@/lib/pageMethodologies';
 import { cn } from '@/lib/utils';
+import PaymentDataReliabilityBadge from '@/components/common/PaymentDataReliabilityBadge';
+import CashflowBankReconciliation from '@/components/cashflow/CashflowBankReconciliation';
 
 const PAGE_STATE_KEY = 'cashflow-forecast';
 
@@ -156,6 +158,7 @@ export default function CashflowForecast() {
       keyword: '',
       buyerGroup: '',
       supplier: '',
+      view: 'forecast',
     };
   }, []);
   const initialState = useMemo(() => readPageState(PAGE_STATE_KEY, defaults), [defaults]);
@@ -165,6 +168,7 @@ export default function CashflowForecast() {
   const [keyword, setKeyword] = useState(initialState.keyword || '');
   const [buyerGroup, setBuyerGroup] = useState(initialState.buyerGroup || '');
   const [supplier, setSupplier] = useState(initialState.supplier || '');
+  const [activeView, setActiveView] = useState(initialState.view === 'bank' ? 'bank' : 'forecast');
   const [data, setData] = useState({ rows: [], buckets: [], totals: {}, performance: [], settings: null, holidayOverrides: [], holidaySourceStatus: [], warnings: [] });
   const [settingsDraft, setSettingsDraft] = useState(null);
   const [overrideDraft, setOverrideDraft] = useState({ date: '', countryCode: 'MANUAL', name: '' });
@@ -176,8 +180,8 @@ export default function CashflowForecast() {
   const [selectedStemId, setSelectedStemId] = useState(null);
 
   useEffect(() => {
-    writePageState(PAGE_STATE_KEY, { dateFrom, dateTo, bucket, keyword, buyerGroup, supplier });
-  }, [dateFrom, dateTo, bucket, keyword, buyerGroup, supplier]);
+    writePageState(PAGE_STATE_KEY, { dateFrom, dateTo, bucket, keyword, buyerGroup, supplier, view: activeView });
+  }, [dateFrom, dateTo, bucket, keyword, buyerGroup, supplier, activeView]);
 
   const load = async ({ force = false } = {}) => {
     setLoading(true);
@@ -208,6 +212,7 @@ export default function CashflowForecast() {
 
   const rows = data.rows || [];
   const canManageSettings = data.capabilities?.canManageSettings === true;
+  const canReconcileBanks = data.capabilities?.canReconcileBanks === true;
   const buyerGroupOptions = useMemo(() => (
     [...new Set(rows.map((row) => row.buyerGroup).filter(Boolean))]
       .sort((a, b) => a.localeCompare(b))
@@ -252,6 +257,7 @@ export default function CashflowForecast() {
   }, [filteredRows, sort]);
 
   const filteredSummary = useMemo(() => summarizeRows(filteredRows, bucket), [filteredRows, bucket]);
+  const noReliablePaymentData = !rows.length && Number(data.paymentDataReliability?.excludedLegacyRecordCount || 0) > 0;
 
   const updateSort = (key) => {
     setSort((current) => (
@@ -331,7 +337,9 @@ export default function CashflowForecast() {
         icon={WalletCards}
         eyebrow="AR and AP forecast"
         title="Cashflow Forecast"
-        description="Predict buyer receipts from historical payment delay and supplier outflows on due date, adjusted for weekends, Singapore holidays, and US holidays."
+        description={activeView === 'bank' && canReconcileBanks
+          ? 'Align reviewed UBS, DBS, and Intesa balances with bank evidence, Salesforce payments, forecast cash movements, deposits, and guarantees.'
+          : 'Predict buyer receipts from historical payment delay and supplier outflows on due date, adjusted for weekends, Singapore holidays, and US holidays.'}
         meta={(
           <span className="flex flex-wrap items-center gap-2">
             <span>Hong Kong timezone. Range: {fmtDate(dateFrom)} to {fmtDate(dateTo)}.</span>
@@ -340,14 +348,26 @@ export default function CashflowForecast() {
         )}
         actions={(
           <>
+            <PaymentDataReliabilityBadge excludedCount={data.paymentDataReliability?.excludedLegacyRecordCount} />
             <PageMethodology {...CASHFLOW_FORECAST_METHODOLOGY} />
-            <Button onClick={() => load({ force: true })} disabled={loading}>
+            {activeView === 'forecast' && <Button onClick={() => load({ force: true })} disabled={loading}>
               {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
               Refresh
-            </Button>
+            </Button>}
           </>
         )}
       />
+
+      {canReconcileBanks && (
+        <div className="mb-4 flex w-fit items-center gap-1 rounded-[var(--radius-control)] border border-border bg-card p-1 shadow-sm">
+          <Button size="sm" variant={activeView === 'forecast' ? 'default' : 'ghost'} onClick={() => setActiveView('forecast')}>Forecast</Button>
+          <Button size="sm" variant={activeView === 'bank' ? 'default' : 'ghost'} onClick={() => setActiveView('bank')}>Bank reconciliation</Button>
+        </div>
+      )}
+
+      {activeView === 'bank' && canReconcileBanks ? (
+        <CashflowBankReconciliation dateFrom={dateFrom} dateTo={dateTo} />
+      ) : <>
 
       <TableShell title="Forecast Filters" bodyClassName="p-4" className="mb-4">
         <div className="grid gap-3 lg:grid-cols-[1fr_1fr_150px_1.5fr_1.5fr_1.5fr_auto] lg:items-end">
@@ -415,12 +435,14 @@ export default function CashflowForecast() {
         </div>
       )}
 
-      <div className="mb-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+      {noReliablePaymentData ? (
+        <div className="mb-4"><StateBlock title="No reliable payment data in this period" description="Earlier obligations are confirmed settled, but their Salesforce payment details are incomplete and excluded." /></div>
+      ) : <div className="mb-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         <StatCard label="Projected Buyer Receipts" value={fmtMoney(filteredSummary.totals.buyerReceipts)} sub={`${numberFmt(filteredRows.filter((row) => row.direction === 'inflow').length)} forecast receipt rows`} icon={TrendingUp} color="green" />
         <StatCard label="Projected Supplier Payments" value={fmtMoney(filteredSummary.totals.supplierPayments)} sub="Assumed paid on contractual due date" icon={TrendingDown} color="amber" />
         <StatCard label="Net Cashflow" value={fmtMoney(filteredSummary.totals.netCashflow)} sub="Buyer receipts minus supplier payments" icon={WalletCards} color={filteredSummary.totals.netCashflow >= 0 ? 'blue' : 'red'} />
         <StatCard label="Overdue-Risk Receipts" value={fmtMoney(filteredSummary.totals.overdueRiskReceipts)} sub="Open buyer invoices already past due" icon={AlertTriangle} color="red" />
-      </div>
+      </div>}
 
       <TableShell title="Cashflow Movement" meta={`${filteredSummary.buckets.length.toLocaleString()} ${bucket} buckets`} className="mb-4" bodyClassName="p-4">
         {loading ? (
@@ -600,6 +622,7 @@ export default function CashflowForecast() {
           </div>
         </TableShell>
       </div>
+      </>}
 
       <StemDetailModal stemId={selectedStemId} open={!!selectedStemId} onClose={() => setSelectedStemId(null)} />
     </div>

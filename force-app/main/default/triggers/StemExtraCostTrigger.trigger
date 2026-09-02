@@ -38,6 +38,10 @@ trigger StemExtraCostTrigger on STEM_Extra_Cost__c(before insert ,before update,
             }
             StemExtraCostTriggerHandler.updateUninvoicedPayments(Trigger.new, Trigger.oldMap, Trigger.operationType);
             StemExtraCostTriggerHandler.createReconfirmTasks(Trigger.new, Trigger.oldMap, Trigger.operationType);
+            HongKongBasicCallingBundleService.afterExtraCostChange(
+                Trigger.new,
+                Trigger.isUpdate ? Trigger.oldMap : null
+            );
         }
         if(Trigger.isBefore && Trigger.isDelete){
             StemExtraCostTriggerHandler.deprecateNomination(Trigger.oldMap);
@@ -48,6 +52,7 @@ trigger StemExtraCostTrigger on STEM_Extra_Cost__c(before insert ,before update,
             StemExtraCostTriggerHandler.deleteCashflows(Trigger.oldMap);
             StemExtraCostTriggerHandler.setTotalSellBuyAt(Trigger.oldMap);
             StemExtraCostTriggerHandler.updateUninvoicedPayments(Trigger.new, Trigger.oldMap, Trigger.operationType);
+            HongKongBasicCallingBundleService.afterExtraCostChange(null, Trigger.oldMap);
         }
     }
 }

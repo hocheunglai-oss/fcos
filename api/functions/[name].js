@@ -7,6 +7,15 @@ import { isFinalBuyerInvoice, resolveBuyerFinancialAmount } from '../_buyerFinan
 import { buyerInvoiceEmailSettingsPatch, canonicalizeBuyerInvoiceEmail } from '../../src/lib/buyerInvoiceEmailSettings.js';
 import { earliestEtaDate, summarizeBuyerPaymentEvidence } from '../../src/lib/paymentCollectionEvidence.js';
 import { PAYMENT_POSTING_ISSUE_STATES, reconcileBuyerPaymentPosting } from '../../src/lib/paymentPostingReconciliation.js';
+import {
+  LEGACY_PAYMENT_DATA_LABEL,
+  PAYMENT_DATA_RELIABLE_FROM,
+  isPaymentDataReliableStem,
+  legacyPaymentDataSoql,
+  paymentDataReliabilityMetadata,
+  paymentDataReliabilityState,
+  paymentDataReliableSoql,
+} from '../../src/lib/paymentDataReliability.js';
 import { grossMarginPercent } from '../_dashboardMetrics.js';
 import { buildDashboardDateScopeWhere } from '../_dashboardDateScope.js';
 import { dashboardLineItemVolume, dashboardVolumeLabel, findDashboardUomField } from '../_dashboardVolume.js';
@@ -40,6 +49,7 @@ import { allocateSupplierDispute, normalizeSupplierInvoiceExposure, resolveSuppl
 import { currentRequestTelemetry, logRequestTelemetry, recordRequestFailure, recordSupabaseRequest, requestIdFrom, runWithRequestTelemetry, salesforceLimitFromBody, telemetryResponseHeaders } from '../_requestTelemetry.js';
 import { parseSupabasePrometheusMetrics } from '../_supabaseMetrics.js';
 import { serverSupabaseConfig } from '../_supabaseConfig.js';
+import { enforceFcunoFederatedAccess, fcunoFederationConfig } from '../_fcunoIdentityFederation.js';
 import { GOOGLE_DRIVE_MARKET_OAUTH_REQUIRED_ENV, exchangeGoogleDriveRefreshToken, googleDriveMarketOAuthConfig } from '../_googleDriveOAuth.js';
 import { CONNECTION_INTEGRATIONS, connectionAttestationState, sanitizeConnectionAttestation } from '../../src/lib/connectionChecklist.js';
 import { expireRuntimeCacheTags, getOrLoadRuntimeCache } from '../_runtimeCache.js';
@@ -99,6 +109,7 @@ import {
   getVariableChargeDetail, getVariableChargeSettings,
   assignVariableChargeSides,
   confirmVariableChargeSides,
+  reopenVariableChargeSides,
   confirmVariableChargeBuyer,
   listShipAgentCharges,
   listVariableCharges,
@@ -209,7 +220,7 @@ import {
   saveMasterContractFeature as saveMasterContractFeatureService,
 } from '../_masterContracts.js';
 import { loadMarketIntradayTimeline, previewMarketIntradaySnapshot, reconcileMarketIntradayDate, saveMarketIntradaySnapshot } from '../_marketIntraday.js';
-import { deleteSpecialTerm, deleteSpecialTermRule, getSpecialTermDocumentForExport, listSpecialTermSummaries, listSpecialTerms, previewSpecialTermDeletion, resolveSpecialTermsSchema, saveSpecialTerm, saveSpecialTermRule, specialTermOptions } from '../_specialTerms.js';
+import { deleteSpecialTerm, deleteSpecialTermRule, getSpecialTermDocumentForExport, listSpecialTermSummaries, listSpecialTerms, previewSpecialTermDeletion, resolveSpecialTermsSchema, retireSpecialTerm, saveSpecialTerm, saveSpecialTermRule, specialTermOptions } from '../_specialTerms.js';
 import {
   approveSpecialTermClause,
   getSpecialTermDetail,
@@ -267,6 +278,16 @@ import {
 import { createEmailRouterServiceClient, currentEmailRouterMailbox, emailRouterGraphFetch, maintainEmailRouterSubscriptions, processEmailRouterOutbox, recordEmailRouterAlert, resolveEmailRouterAlert, syncEmailRouterFolderFromStoredCursor } from '../_emailRouterCore.js';
 import { processEmailRouterLearningJobs } from '../_emailRouterLearning.js';
 import { createXeroHandlers, XERO_HANDLER_MODULE_ACCESS } from '../_xeroHandlers.js';
+import {
+  importCashflowBankStatement as importCashflowBankStatementService,
+  loadCashflowBankOverview,
+  previewCashflowBankStatement as previewCashflowBankStatementService,
+  saveCashflowBankAccount as saveCashflowBankAccountService,
+  saveCashflowBankBalance as saveCashflowBankBalanceService,
+  saveCashflowBankMatch as saveCashflowBankMatchService,
+  saveCashflowLiquidityInstrument as saveCashflowLiquidityInstrumentService,
+  saveCashflowPlannedMovement as saveCashflowPlannedMovementService,
+} from '../_cashflowBankReconciliation.js';
 export const config = { maxDuration: 300 };
 
 async function readBody(req) {
@@ -396,6 +417,11 @@ const ADMIN_CAPABILITIES = [
     id: 'cashflow_forecast_manage',
     label: 'Manage Cashflow Settings',
     description: 'Change forecast assumptions and blocked dates.',
+  },
+  {
+    id: 'cashflow_bank_reconcile',
+    label: 'Reconcile Cashflow Banks',
+    description: 'Maintain reviewed UBS, DBS, and Intesa balances, statements, matches, deposits, and guarantees.',
   },
   { id: 'hedge_book_manage', label: 'Manage Hedge Book', description: 'Create and maintain physical trades, paper hedges, markets, and counterparties.' },
   { id: 'hedge_settlement_manage', label: 'Manage Hedge Settlement', description: 'Manage clearing entries, settlement invoices, and settlement notices.' },
@@ -568,6 +594,7 @@ const FALLBACK_TYPE_CAPABILITIES = {
     buyer_invoices_manage: true,
     financial_report_settings_manage: false,
     cashflow_forecast_manage: true,
+    cashflow_bank_reconcile: false,
     hedge_book_manage: true,
     hedge_settlement_manage: false,
     hedge_close_approve: false,
@@ -582,6 +609,7 @@ const FALLBACK_TYPE_CAPABILITIES = {
     buyer_invoices_manage: true,
     financial_report_settings_manage: true,
     cashflow_forecast_manage: true,
+    cashflow_bank_reconcile: true,
     hedge_book_manage: false,
     hedge_settlement_manage: true,
     hedge_close_approve: false,
@@ -596,6 +624,7 @@ const FALLBACK_TYPE_CAPABILITIES = {
     buyer_invoices_manage: false,
     financial_report_settings_manage: false,
     cashflow_forecast_manage: false,
+    cashflow_bank_reconcile: false,
     hedge_book_manage: false,
     hedge_settlement_manage: false,
     hedge_close_approve: false,
@@ -610,6 +639,7 @@ const FALLBACK_TYPE_CAPABILITIES = {
     buyer_invoices_manage: false,
     financial_report_settings_manage: false,
     cashflow_forecast_manage: false,
+    cashflow_bank_reconcile: false,
     hedge_book_manage: false,
     hedge_settlement_manage: false,
     hedge_close_approve: false,
@@ -623,6 +653,7 @@ const FALLBACK_TYPE_CAPABILITIES = {
     buyer_invoices_manage: false,
     financial_report_settings_manage: false,
     cashflow_forecast_manage: false,
+    cashflow_bank_reconcile: false,
     hedge_book_manage: false,
     hedge_settlement_manage: false,
     hedge_close_approve: false,
@@ -753,8 +784,14 @@ async function requireActiveUser(req) {
   const { data: userData, error: userError } = await client.auth.getUser(token);
   if (userError || !userData?.user) throw appError('Invalid or expired session. Sign in again.', 401);
 
-  const { data: profile, error: profileError } = await client.from('user_profiles').select('id,email,full_name,user_type,active,use_type_defaults').eq('id', userData.user.id).maybeSingle();
+  const { data: storedProfile, error: profileError } = await client.from('user_profiles').select('id,email,full_name,user_type,active,use_type_defaults').eq('id', userData.user.id).maybeSingle();
   if (profileError) throw profileError;
+  const profile = await enforceFcunoFederatedAccess({
+    client,
+    authUser: userData.user,
+    profile: storedProfile,
+    accessToken: token,
+  });
   if (!profile) throw appError('User is not registered.', 403);
   if (!profile.active) throw appError('User is inactive.', 403);
 
@@ -1355,6 +1392,7 @@ const HANDLER_MODULE_ACCESS = {
   specialTermApprovalQueue: ['special_terms'],
   specialTermClauseAiDraft: ['special_terms'],
   specialTermsSave: ['special_terms'],
+  specialTermsTermRetire: ['special_terms'],
   specialTermsDelete: ['special_terms'],
   specialTermRuleSave: ['special_terms'],
   specialTermRuleDelete: ['special_terms'],
@@ -1443,6 +1481,7 @@ const HANDLER_MODULE_ACCESS = {
   buyerInvoiceCollectionEventCreate: ['buyer_invoices'],
   buyerInvoicePaymentAdviceSave: ['buyer_invoices'],
   paymentCollectionsReconcile: ['buyer_invoices', 'incoming_payments'],
+  legacyPaymentDataAudit: ['buyer_invoices', 'incoming_payments'],
   shipAgentChargesList: ['buyer_invoices', 'incoming_payments'],
   shipAgentChargesDetail: ['buyer_invoices', 'incoming_payments'],
   shipAgentChargesOptions: ['buyer_invoices', 'incoming_payments'],
@@ -1458,6 +1497,7 @@ const HANDLER_MODULE_ACCESS = {
   variableChargesBuyerConfirm: ['buyer_invoices', 'incoming_payments'],
   variableChargesSideAssign: ['buyer_invoices', 'incoming_payments'],
   variableChargesSideConfirm: ['buyer_invoices', 'incoming_payments'],
+  variableChargesSideReopen: ['buyer_invoices', 'incoming_payments'],
   variableChargesGmOverride: ['buyer_invoices', 'incoming_payments'],
   variableChargesPostInvoiceResolve: ['buyer_invoices', 'incoming_payments'],
   variableChargesSync: ['buyer_invoices', 'incoming_payments'],
@@ -1486,6 +1526,14 @@ const HANDLER_MODULE_ACCESS = {
   cashflowSettingsGet: ['cashflow_forecast'],
   cashflowSettingsSave: ['cashflow_forecast'],
   cashflowHolidayCalendar: ['cashflow_forecast'],
+  cashflowBankOverview: ['cashflow_forecast'],
+  cashflowBankAccountSave: ['cashflow_forecast'],
+  cashflowBankBalanceSave: ['cashflow_forecast'],
+  cashflowBankStatementPreview: ['cashflow_forecast'],
+  cashflowBankStatementImport: ['cashflow_forecast'],
+  cashflowBankMatchSave: ['cashflow_forecast'],
+  cashflowLiquidityInstrumentSave: ['cashflow_forecast'],
+  cashflowBankPlannedMovementSave: ['cashflow_forecast'],
   stemPnl: ['pnl'],
   salesforceBrokerRegister: ['brokers'],
   frankfurterUsdCnyRate: ['brokers'],
@@ -2023,6 +2071,10 @@ async function ensureReportArchiveManageModule(client) {
 async function persistManagedUser(client, body, actor = null) {
   const payload = await sanitizeManagedUserPayload(client, body);
   const isUpdate = Boolean(payload.id);
+  const identityManagedByFcuno = fcunoFederationConfig().federationEnabled;
+  if (identityManagedByFcuno && !isUpdate) {
+    throw appError('Create company identities in FCUNO User Management, then assign FCOS access here.', 409, 'FCUNO_IDENTITY_CREATE_REQUIRED');
+  }
   const generalManager = await loadActiveGeneralManager(client);
   let authUser = isUpdate ? { id: payload.id } : await findAuthUserByEmail(client, payload.email);
   let managedProfile = null;
@@ -2035,6 +2087,15 @@ async function persistManagedUser(client, body, actor = null) {
       .maybeSingle();
     if (error) throw error;
     managedProfile = data;
+    if (!managedProfile) throw appError('User not found.', 404);
+    if (identityManagedByFcuno && (
+      String(payload.email || '').toLowerCase() !== String(managedProfile?.email || '').toLowerCase()
+      || String(payload.full_name || '') !== String(managedProfile?.full_name || '')
+      || payload.active !== (managedProfile?.active !== false)
+      || Boolean(payload.password)
+    )) {
+      throw appError('Email, name, active state and credentials are managed in FCUNO. Only FCOS authorization can be changed here.', 409, 'FCUNO_IDENTITY_READ_ONLY');
+    }
     await assertAdministratorContinuity(client, {
       userId: authUser.id,
       nextActive: payload.active,
@@ -2056,12 +2117,14 @@ async function persistManagedUser(client, body, actor = null) {
     : payload.user_type;
 
   if (authUser?.id) {
-    const updatePayload = {
-      email: payload.email,
-      user_metadata: { full_name: payload.full_name },
-      app_metadata: { user_type: stagedUserType },
-    };
-    if (payload.password) updatePayload.password = payload.password;
+    const updatePayload = identityManagedByFcuno
+      ? { app_metadata: { user_type: stagedUserType } }
+      : {
+          email: payload.email,
+          user_metadata: { full_name: payload.full_name },
+          app_metadata: { user_type: stagedUserType },
+          ...(payload.password ? { password: payload.password } : {}),
+        };
     const { data, error } = await client.auth.admin.updateUserById(authUser.id, updatePayload);
     if (error) throw error;
     authUser = data.user;
@@ -2080,13 +2143,16 @@ async function persistManagedUser(client, body, actor = null) {
   if (!authUser?.id) throw appError('Supabase did not return a user id.', 500);
 
   const nowIso = new Date().toISOString();
+  const effectiveEmail = identityManagedByFcuno ? managedProfile.email : payload.email;
+  const effectiveFullName = identityManagedByFcuno ? managedProfile.full_name : payload.full_name;
+  const effectiveActive = identityManagedByFcuno ? managedProfile.active !== false : payload.active;
   const { error: profileError } = await client.from('user_profiles').upsert(
     {
       id: authUser.id,
-      email: payload.email,
-      full_name: payload.full_name,
+      email: effectiveEmail,
+      full_name: effectiveFullName,
       user_type: stagedUserType,
-      active: payload.active,
+      active: effectiveActive,
       use_type_defaults: payload.use_type_defaults,
       updated_at: nowIso,
     },
@@ -2170,14 +2236,15 @@ async function persistManagedUser(client, body, actor = null) {
     capabilities: Object.entries(payload.capabilities)
       .filter(([, allowed]) => allowed)
       .map(([id]) => id),
+    identity_authority: identityManagedByFcuno ? 'fcuno' : 'fcos',
   });
 
   return {
     id: authUser.id,
-    email: payload.email,
-    full_name: payload.full_name,
+    email: effectiveEmail,
+    full_name: effectiveFullName,
     user_type: payload.user_type,
-    active: payload.active,
+    active: effectiveActive,
     use_type_defaults: payload.use_type_defaults,
     permissions: payload.permissions,
     capabilities: payload.capabilities,
@@ -2193,6 +2260,16 @@ async function adminUsersList(body, req) {
   if (profileError) throw profileError;
 
   const userIds = (profiles || []).map((profile) => profile.id);
+  const identityManagedByFcuno = fcunoFederationConfig().federationEnabled;
+  let linkedIdentityIds = new Set();
+  if (identityManagedByFcuno && userIds.length) {
+    const { data: identityRows, error: identityError } = await client
+      .from('fcos_external_identity_links')
+      .select('auth_user_id')
+      .in('auth_user_id', userIds);
+    if (identityError) throw identityError;
+    linkedIdentityIds = new Set((identityRows || []).map((row) => row.auth_user_id).filter(Boolean));
+  }
   let permissionRows = [];
   if (userIds.length) {
     const { data, error } = await client.from('user_module_permissions').select('user_id,module_id,can_view').in('user_id', userIds);
@@ -2225,6 +2302,9 @@ async function adminUsersList(body, req) {
 
   const users = (profiles || []).map((profile) => ({
     ...profile,
+    identity_source: identityManagedByFcuno
+      ? linkedIdentityIds.has(profile.id) ? 'fcuno' : 'pending_fcuno_link'
+      : 'fcos',
     type_label: userTypes.find((type) => type.id === profile.user_type)?.label || profile.user_type,
     use_type_defaults: isAdministratorUserType(profile.user_type) ? true : profile.use_type_defaults !== false,
     permissions: isAdministratorUserType(profile.user_type) ? ADMIN_FULL_ACCESS : profile.use_type_defaults !== false ? normalizePermissions(profile.user_type, typePermissions[profile.user_type] || {}) : normalizePermissions(profile.user_type, permissionsByUser[profile.id] || {}),
@@ -2248,6 +2328,7 @@ async function adminUsersList(body, req) {
       name: generalManager.full_name || generalManager.email,
       email: generalManager.email,
     },
+    identityAuthority: identityManagedByFcuno ? 'fcuno' : 'fcos',
   };
 }
 
@@ -2694,6 +2775,9 @@ async function adminUserDelete(body, req) {
   const { data: target, error: targetError } = await client.from('user_profiles').select('id,email,full_name,user_type,active').eq('id', userId).maybeSingle();
   if (targetError) throw targetError;
   if (!target) throw appError('User not found.', 404);
+  if (fcunoFederationConfig().federationEnabled) {
+    throw appError('Company identities must be deactivated or removed in FCUNO User Management.', 409, 'FCUNO_IDENTITY_DELETE_REQUIRED');
+  }
   await assertAdministratorContinuity(client, {
     userId: target.id,
     deleting: true,
@@ -4258,6 +4342,11 @@ async function persistBuyerInvoiceCollection(body, req, eventOverride = null, ac
   const stemId = String(body.stemId || body.stem_id || '').trim();
   if (!stemId) throw appError('stemId is required.', 400);
   await requireInterofficeStemAccess(stemId, { client, profile });
+  const reliabilityLive = await buyerCollectionSalesforceState([stemId], accessContext);
+  const reliabilityStem = reliabilityLive.stems[stemId];
+  if (!reliabilityStem || !isPaymentDataReliableStem(reliabilityStem)) {
+    throw appError('This STEM is settled legacy data. Payment collection changes are unavailable before 1 Jan 2026.', 409);
+  }
 
   const current = await currentBuyerInvoiceCollection(client, stemId);
   const updates = normalizeCollectionUpdates(body.updates || body, profile);
@@ -4372,6 +4461,7 @@ async function buyerCollectionSalesforceState(stemIds, accessContext = null) {
   const stemFields = [
     'Id',
     'Name',
+    'CreatedDate',
     'Receivable_Balance__c',
     ...selectedFields(stemFieldNames, [
       'KeyStem__c',
@@ -4566,18 +4656,23 @@ async function reconcileBuyerInvoiceCollections({ client, profile = null, access
   if (requestedIds.length) query = query.in('stem_id', requestedIds);
   const { data: items, error } = await query;
   if (error) throw error;
-  if (!(items || []).length) return { items: [], exceptions: [], summary: { checked: 0, closed: 0, reopened: 0, exceptions: 0 }, warnings: [] };
+  if (!(items || []).length) return { items: [], exceptions: [], summary: { checked: 0, closed: 0, reopened: 0, exceptions: 0 }, warnings: [], paymentDataReliability: paymentDataReliabilityMetadata(0) };
   const thresholdState = await loadPaymentCollectionThresholds(client);
   const today = hongKongScheduleParts().date;
   const reconciliationNow = new Date();
   const live = await buyerCollectionSalesforceState(items.map((item) => item.stem_id), accessContext);
   const reconciled = [];
   const exceptions = [];
+  let excludedLegacyRecordCount = 0;
   let closed = 0;
   let reopened = 0;
   for (const item of items) {
     const stem = live.stems[item.stem_id];
     if (!stem) continue;
+    if (!isPaymentDataReliableStem(stem)) {
+      excludedLegacyRecordCount += 1;
+      continue;
+    }
     const thresholdPolicy = paymentCollectionThresholdPolicy(thresholdState, stem.CurrencyIsoCode);
     const buyerPayments = live.buyerPayments[item.stem_id] || [];
     const latestPayment = live.latestPayments[item.stem_id] || null;
@@ -4740,7 +4835,16 @@ async function reconcileBuyerInvoiceCollections({ client, profile = null, access
     reconciled.push(serialized);
     if (['advice_overdue', 'balance_unavailable', 'manual_closure_mismatch', 'payment_posting_pending', 'payment_partially_posted', 'payment_posting_mismatch', 'payment_posting_overdue', 'reopened'].includes(decision.state)) exceptions.push(serialized);
   }
-  return { items: reconciled, exceptions, summary: { checked: reconciled.length, closed, reopened, exceptions: exceptions.length }, warnings: live.warnings };
+  return {
+    items: reconciled,
+    exceptions,
+    summary: { checked: reconciled.length, closed, reopened, exceptions: exceptions.length },
+    warnings: [
+      ...(live.warnings || []),
+      ...(excludedLegacyRecordCount ? [`${excludedLegacyRecordCount} settled legacy collection record${excludedLegacyRecordCount === 1 ? '' : 's'} excluded.`] : []),
+    ],
+    paymentDataReliability: paymentDataReliabilityMetadata(excludedLegacyRecordCount),
+  };
 }
 
 async function paymentCollectionsReconcile(body, req, accessContext = null) {
@@ -4750,9 +4854,21 @@ async function paymentCollectionsReconcile(body, req, accessContext = null) {
   const stemAccessCondition = isInterofficeAccess(context)
     ? await interofficeStemAccessCondition(context)
     : null;
-  const shipAgentCharges = await syncShipAgentCharges({ ...context, stemAccessCondition }, { stemIds: body.stemIds });
+  let shipAgentCharges;
+  let variableChargeSyncWarning = null;
+  try {
+    shipAgentCharges = await syncShipAgentCharges({ ...context, stemAccessCondition }, { stemIds: body.stemIds });
+  } catch (error) {
+    variableChargeSyncWarning = 'Variable Charges synchronization is temporarily unavailable. Payment reconciliation remains current.';
+    shipAgentCharges = { unavailable: true };
+    console.error('[payment-collections] variable charges sync failed', {
+      errorName: error?.name || null,
+      errorCode: error?.code || null,
+    });
+  }
   return {
     ...result,
+    warnings: [...(result.warnings || []), ...(variableChargeSyncWarning ? [variableChargeSyncWarning] : [])],
     shipAgentCharges,
     capabilities: {
       canOverridePostingReminder: canOverridePaymentPostingReminder(profile),
@@ -4876,6 +4992,13 @@ async function variableChargesSideConfirm(body, req, accessContext = null) {
   return confirmVariableChargeSides(body, context);
 }
 
+async function variableChargesSideReopen(body, req, accessContext = null) {
+  const context = await shipAgentChargesContext(req, accessContext);
+  await requireShipAgentStemAccess(body, context);
+  if (!isSalesforceId(String(body?.supplierId || '').trim())) throw appError('A valid exact Supplier Account is required.', 400);
+  return reopenVariableChargeSides(body, context);
+}
+
 async function variableChargesGmOverride(body, req, accessContext = null) {
   const context = await shipAgentChargesContext(req, accessContext);
   await requireShipAgentStemAccess(body, context);
@@ -4984,8 +5107,24 @@ async function paymentCollectionsReconcileCron(body, req) {
   if (!client) throw appError('Supabase service configuration is required for Payment Collections reconciliation.', 503);
   const paymentReminderTimelines = await repairPaymentReminderTimelines(client, 50);
   const collections = await reconcileBuyerInvoiceCollections({ client, profile: null, accessContext: null });
-  const shipAgentCharges = await syncShipAgentCharges({ client, profile: null });
-  return { ...collections, paymentReminderTimelines, shipAgentCharges };
+  let shipAgentCharges;
+  let variableChargeSyncWarning = null;
+  try {
+    shipAgentCharges = await syncShipAgentCharges({ client, profile: null });
+  } catch (error) {
+    variableChargeSyncWarning = 'Variable Charges synchronization is temporarily unavailable. Payment reconciliation remains current.';
+    shipAgentCharges = { unavailable: true };
+    console.error('[payment-collections-cron] variable charges sync failed', {
+      errorName: error?.name || null,
+      errorCode: error?.code || null,
+    });
+  }
+  return {
+    ...collections,
+    warnings: [...(collections.warnings || []), ...(variableChargeSyncWarning ? [variableChargeSyncWarning] : [])],
+    paymentReminderTimelines,
+    shipAgentCharges,
+  };
 }
 
 function paymentAdviceExtension(fileName) {
@@ -5867,7 +6006,7 @@ function daysBetween(fromDate, toDate) {
 }
 
 function isBeforeCashflowForecastStart(dateString) {
-  return Boolean(dateString && String(dateString).slice(0, 10) < CASHFLOW_FORECAST_START_DATE);
+  return !dateString || String(dateString).slice(0, 10) < PAYMENT_DATA_RELIABLE_FROM;
 }
 
 const FRANKFURTER_PROVIDER_DETAILS = {
@@ -6009,7 +6148,7 @@ function traderEmailLookupKey(value) {
 }
 
 const MIN_BUYER_INVOICE_DUE_DATE = '2026-01-01';
-const CASHFLOW_FORECAST_START_DATE = '2026-01-01';
+const CASHFLOW_FORECAST_START_DATE = PAYMENT_DATA_RELIABLE_FROM;
 const INVOICE_TABLE_TOKEN_PATTERN = /\{\{\s*invoiceTable\s*\}\}/i;
 const DEFAULT_BUYER_INVOICE_EMAIL_SETTINGS = {
   enabled: true,
@@ -6486,15 +6625,18 @@ async function googleDriveHealthRow() {
             folderName: folder.folderName,
           }));
           const healthClient = supabaseAdminClient();
-          const [syncRun, imports, published, matched, incomplete, conflicts] = await Promise.all([
+          const [syncRun, imports, published, matched, incomplete, conflicts, secondaryMops] = await Promise.all([
             healthClient.from('market_report_sync_runs').select('status,discovered_count,skipped_count,imported_count,failed_count,deferred_count,error_code,started_at,completed_at').eq('status', 'completed').order('completed_at', { ascending: false }).limit(1).maybeSingle(),
             healthClient.from('market_report_imports').select('id', { count: 'exact', head: true }).gte('report_date', '2025-01-01'),
             healthClient.from('market_report_imports').select('id', { count: 'exact', head: true }).eq('mops_publication_status', 'published'),
             healthClient.from('market_report_imports').select('id', { count: 'exact', head: true }).eq('mops_publication_status', 'matched'),
             healthClient.from('market_report_imports').select('id', { count: 'exact', head: true }).eq('mops_publication_status', 'incomplete'),
             healthClient.from('market_report_imports').select('id', { count: 'exact', head: true }).eq('mops_publication_status', 'conflict'),
+            healthClient.from('market_mops_secondary_imports')
+              .select('status,drive_modified_at,source_row_count,comparison_value_count,matched_value_count,conflict_value_count,published_date_count,matched_date_count,conflict_date_count,created_at')
+              .order('created_at', { ascending: false }).limit(1).maybeSingle(),
           ]);
-          const marketDatabaseError = [syncRun, imports, published, matched, incomplete, conflicts].find((entry) => entry.error)?.error;
+          const marketDatabaseError = [syncRun, imports, published, matched, incomplete, conflicts, secondaryMops].find((entry) => entry.error)?.error;
           if (marketDatabaseError) throw marketDatabaseError;
           return {
             accessTokenExpiresAt: addSecondsIso(token.expires_in),
@@ -6509,6 +6651,18 @@ async function googleDriveHealthRow() {
             mopsDatesMatched: matched.count || 0,
             missingMopsTriples: incomplete.count || 0,
             mopsConflicts: conflicts.count || 0,
+            secondaryMopsCsv: secondaryMops.data ? {
+              status: secondaryMops.data.status,
+              driveModifiedAt: secondaryMops.data.drive_modified_at,
+              importedAt: secondaryMops.data.created_at,
+              sourceRowCount: secondaryMops.data.source_row_count,
+              comparisonValueCount: secondaryMops.data.comparison_value_count,
+              matchedValueCount: secondaryMops.data.matched_value_count,
+              conflictValueCount: secondaryMops.data.conflict_value_count,
+              publishedDateCount: secondaryMops.data.published_date_count,
+              matchedDateCount: secondaryMops.data.matched_date_count,
+              conflictDateCount: secondaryMops.data.conflict_date_count,
+            } : null,
           };
         })
       : null;
@@ -6517,7 +6671,7 @@ async function googleDriveHealthRow() {
       id: 'google-drive',
       name: 'Google Drive Reports',
       category: 'Reports',
-      purpose: 'Reads licensed Bunkerwire and European Marketscan PDFs for the hourly Markets update.',
+      purpose: 'Reads licensed Bunkerwire and European Marketscan PDFs plus the historically verified root-folder MOPS CSV for the hourly Markets update.',
       scope: 'server',
       provider: 'Google Drive API',
       endpoint: 'https://www.googleapis.com/drive/v3',
@@ -6532,9 +6686,10 @@ async function googleDriveHealthRow() {
         marketReportAccount: CONNECTION_INTEGRATIONS.googleDriveMarketReports.accountEmail,
         marketReportBrowserProfile: CONNECTION_INTEGRATIONS.googleDriveMarketReports.browserProfile,
         marketReportRootFolder: maskValue(CONNECTION_INTEGRATIONS.googleDriveMarketReports.rootFolderId, 6, 4),
+        secondaryMopsCsvPrefix: CONNECTION_INTEGRATIONS.googleDriveMarketReports.secondaryMopsCsv.filenamePrefix,
         marketReportSchedule: CONNECTION_INTEGRATIONS.googleDriveMarketReports.syncSchedule,
       },
-      notes: gateEnabled ? ['The legacy XLS Report Archive is retired. XLS exports download locally only. Market-report PDFs are read only; FCOS stores configured observations and checksums, not PDF bytes or report text.'] : ['Google Drive market-report reads are paused by the emergency control.'],
+      notes: gateEnabled ? ['The legacy XLS Report Archive is retired. XLS exports download locally only. Licensed PDFs remain primary. The root-folder Core Export CSV is a historically gated secondary MOPS source; FCOS stores structured date evidence and checksums, not source files or report text.'] : ['Google Drive market-report reads are paused by the emergency control.'],
     },
     result,
   );
@@ -6918,22 +7073,6 @@ function vercelRuntimeHealthRow() {
   );
 }
 
-function googleFontsHealthRow() {
-  return healthRow({
-    id: 'google-fonts',
-    name: 'Google Fonts',
-    category: 'Frontend Asset',
-    purpose: 'Loads Inter and DM Sans web fonts from the CSS import.',
-    scope: 'browser',
-    provider: 'Google Fonts',
-    endpoint: 'https://fonts.googleapis.com',
-    authType: 'No API key',
-    configured: true,
-    tokenExpiry: 'Not applicable.',
-    notes: ['Loaded by the browser as a frontend asset, not through the server API.'],
-  });
-}
-
 function providerDashboardLinks() {
   const supabaseHost = (() => {
     try {
@@ -7056,7 +7195,7 @@ async function systemHealth(body = {}, req = null, accessContext) {
     connectionAttestationHealthRow(),
   ]);
   const rows = [...providerRows, connectionAttestation.row];
-  rows.push(externalActionGateHealthRow(), cronHealthRow(), vercelRuntimeHealthRow(), googleFontsHealthRow());
+  rows.push(externalActionGateHealthRow(), cronHealthRow(), vercelRuntimeHealthRow());
   const summary = rows.reduce(
     (acc, row) => {
       acc.total += 1;
@@ -9936,10 +10075,11 @@ async function salesforceBuyerInvoicesSnapshot(body, req = null, accessContext =
       traderEmailByName: {},
       hasBuyerTraderFilter: false,
       selectedBuyerTradersInput: [],
+      paymentDataReliability: paymentDataReliabilityMetadata(0),
     };
   }
 
-  const fields = ['Id', 'Name'];
+  const fields = ['Id', 'Name', 'CreatedDate'];
   if (fieldNames.includes('LastModifiedDate')) fields.push('LastModifiedDate');
   for (const field of dueFields) fields.push(field);
   if (fieldNames.includes('KeyStem__c')) fields.push('KeyStem__c');
@@ -9972,7 +10112,7 @@ async function salesforceBuyerInvoicesSnapshot(body, req = null, accessContext =
   const dueCondition = [storedDueCondition, calculatedDueCondition].filter(Boolean).join(' OR ');
   const outstandingConditions = [];
   if (fieldNames.includes('Payment_Date__c')) outstandingConditions.push('Payment_Date__c = null');
-  const whereParts = [`(${dueCondition})`, ...outstandingConditions];
+  const whereParts = [`(${dueCondition})`, paymentDataReliableSoql(), ...outstandingConditions];
   if (interofficeCondition) whereParts.push(interofficeCondition);
 
   const anchorStemId = isSalesforceId(String(body.anchorStemId || '').trim())
@@ -10258,6 +10398,7 @@ async function salesforceBuyerInvoicesSnapshot(body, req = null, accessContext =
     hasBuyerTraderFilter,
     selectedBuyerTradersInput,
     targetScope,
+    paymentDataReliability: paymentDataReliabilityMetadata(0),
   };
 }
 
@@ -10302,6 +10443,7 @@ async function buyerInvoiceReportFromSnapshot(snapshot, body = {}) {
     hasBuyerTraderFilter,
     paymentReminderRulesAvailable: reminderRulesState.available,
     targetScope: snapshot.targetScope || null,
+    paymentDataReliability: snapshot.paymentDataReliability || paymentDataReliabilityMetadata(0),
   };
 }
 
@@ -10312,7 +10454,7 @@ async function salesforceBuyerInvoicesDue(body, req = null, accessContext = null
   const cached = await cachedSalesforceValue({
     namespace: 'salesforce-buyer-invoices',
     ttlSeconds: 60,
-    payload: { daysAhead, thresholdCacheKey },
+    payload: { daysAhead, thresholdCacheKey, paymentDataReliableFrom: PAYMENT_DATA_RELIABLE_FROM },
     tags: ['salesforce:buyer-invoices', 'salesforce:stem', 'salesforce:account'],
     body,
     req,
@@ -10669,7 +10811,7 @@ async function cashflowBuyerPaymentSamples({ lookbackMonths, accessContext = nul
     : { fields: [] };
   const accountFieldNames = new Set((accountDescribe.fields || []).map((field) => field.name));
   const interofficeCondition = await interofficeStemAccessCondition(accessContext, stemFieldNames, accountFieldNames);
-  const stemSelectFields = ['Id', 'Name', ...selectedFields(stemFieldNames, ['KeyStem__c', 'Buyer_Name__c', 'Buyer__c', 'Account__c', 'Payment_Term__c', 'Invoice_Due_Date__c', 'Buyer_Pay_Term_Date__c', 'Due_Date__c', 'Delivery_Date__c', 'Delivery_Date_Or_Expected__c', 'Expected_Delivery_Date__c'])];
+  const stemSelectFields = ['Id', 'Name', 'CreatedDate', ...selectedFields(stemFieldNames, ['KeyStem__c', 'Buyer_Name__c', 'Buyer__c', 'Account__c', 'Payment_Term__c', 'Invoice_Due_Date__c', 'Buyer_Pay_Term_Date__c', 'Due_Date__c', 'Delivery_Date__c', 'Delivery_Date_Or_Expected__c', 'Expected_Delivery_Date__c'])];
   if (stemFieldNames.has('Account__c')) {
     stemSelectFields.push('Account__r.Name');
     if (accountFieldNames.has('Group_Name__c')) stemSelectFields.push('Account__r.Group_Name__c');
@@ -10696,10 +10838,14 @@ async function cashflowBuyerPaymentSamples({ lookbackMonths, accessContext = nul
 
   const textFields = [...referenceFields, ...directionFields, ...typeFields, ...statusFields];
   const samples = [];
+  let excludedLegacyRecordCount = 0;
   for (const payment of eligiblePayments) {
     const stem = stemMap[payment.STEM__c];
     if (!stem) continue;
-    if (isBeforeCashflowForecastStart(stem.Delivery_Date__c)) continue;
+    if (!isPaymentDataReliableStem(stem)) {
+      excludedLegacyRecordCount += 1;
+      continue;
+    }
     const amount = incomingPaymentNumber(payment[amountField]);
     if (amount == null || amount <= 0) continue;
     const text = cashflowPaymentText(payment, textFields);
@@ -10741,7 +10887,7 @@ async function cashflowBuyerPaymentSamples({ lookbackMonths, accessContext = nul
       amount,
     });
   }
-  return { samples, warnings: [] };
+  return { samples, warnings: [], excludedLegacyRecordCount };
 }
 
 function cashflowBucketKey(date, bucket = 'daily') {
@@ -10851,7 +10997,7 @@ async function cashflowSupplierInvoiceRows({ dateTo, blockedMap, accessContext =
       : { fields: [] };
     const accountFieldNames = new Set((accountDescribe.fields || []).map((field) => field.name));
     const interofficeCondition = await interofficeStemAccessCondition(accessContext, stemFieldNames, accountFieldNames);
-    const stemSelectFields = ['Id', 'Name', ...selectedFields(stemFieldNames, ['KeyStem__c', 'Delivery_Date__c'])];
+    const stemSelectFields = ['Id', 'Name', 'CreatedDate', ...selectedFields(stemFieldNames, ['KeyStem__c', 'Delivery_Date__c', 'Expected_Delivery_Date__c'])];
     if (stemFieldNames.has('Vessel__c')) stemSelectFields.push('Vessel__r.Name');
     if (stemFieldNames.has('Port__c')) stemSelectFields.push('Port__r.Name');
     const stemRows = await compositeQueryRows(
@@ -10873,6 +11019,7 @@ async function cashflowSupplierInvoiceRows({ dateTo, blockedMap, accessContext =
     for (const stem of stemRows.flat()) stemMap[stem.Id] = stem;
   }
   const rows = [];
+  let excludedLegacyRecordCount = 0;
   for (const invoice of invoices) {
     const amount = Number(payableField ? invoice[payableField] : invoice[amountField]);
     if (!Number.isFinite(amount) || amount <= 0) continue;
@@ -10882,7 +11029,14 @@ async function cashflowSupplierInvoiceRows({ dateTo, blockedMap, accessContext =
     const adjusted = cashflowBusinessDayAdjustment(originalDate, blockedMap);
     const stem = stemMap[invoice[stemField]] || null;
     if (isInterofficeAccess(accessContext) && invoice[stemField] && !stem) continue;
-    if (isBeforeCashflowForecastStart(stem?.Delivery_Date__c)) continue;
+    if (!stem) {
+      warnings.push(`Supplier Invoice ${invoice.Name || invoice.Id} is not linked to a readable STEM and was excluded.`);
+      continue;
+    }
+    if (!isPaymentDataReliableStem(stem)) {
+      excludedLegacyRecordCount += 1;
+      continue;
+    }
     const counterparty = supplierRelationships.map((relationship) => invoice[relationship]?.Name).find(Boolean) || invoice.Supplier_Name__c || supplierFields.map((field) => invoice[field]).find(Boolean) || invoice.Name || 'Supplier';
     rows.push({
       id: `supplier-${invoice.Id}`,
@@ -10906,7 +11060,7 @@ async function cashflowSupplierInvoiceRows({ dateTo, blockedMap, accessContext =
       sourceRecordName: invoice.Name || null,
     });
   }
-  return { rows, warnings };
+  return { rows, warnings, excludedLegacyRecordCount };
 }
 
 async function cashflowBuyerReceiptRows({ dateTo, settings, models, blockedMap, accessContext = null }) {
@@ -10915,7 +11069,6 @@ async function cashflowBuyerReceiptRows({ dateTo, settings, models, blockedMap, 
   const invoiceData = await salesforceBuyerInvoicesDue({ daysAhead }, null, accessContext);
   const rows = [];
   for (const invoice of invoiceData.rows || []) {
-    if (isBeforeCashflowForecastStart(invoice.deliveryDate)) continue;
     const amount = Number(invoice.receivableBalance || 0);
     if (!Number.isFinite(amount) || amount <= 0) continue;
     const dueDate = invoice.buyerInvoiceDueDate;
@@ -10995,6 +11148,7 @@ async function cashflowForecast(body, req = null, accessContext = null) {
     payload: {
       dateTo,
       settings,
+      paymentDataReliableFrom: PAYMENT_DATA_RELIABLE_FROM,
       paymentThresholds: paymentCollectionThresholdCacheKey(incomingSettings),
       blockedDates,
     },
@@ -11036,7 +11190,12 @@ async function cashflowForecast(body, req = null, accessContext = null) {
       return String(a.counterparty || '').localeCompare(String(b.counterparty || ''));
     });
   const summary = cashflowSummarizeRows(rows, bucket);
-  const canManageSettings = accessContext ? await userHasCapability(accessContext.client, accessContext.profile, 'cashflow_forecast_manage') : false;
+  const [canManageSettings, canReconcileBanks] = accessContext
+    ? await Promise.all([
+        userHasCapability(accessContext.client, accessContext.profile, 'cashflow_forecast_manage'),
+        userHasCapability(accessContext.client, accessContext.profile, 'cashflow_bank_reconcile'),
+      ])
+    : [false, false];
   return {
     dateFrom,
     dateTo,
@@ -11051,7 +11210,10 @@ async function cashflowForecast(body, req = null, accessContext = null) {
     holidayOverrides: holidayData.overrides,
     holidaySourceStatus: holidayData.statuses,
     warnings: [...new Set(warnings.filter(Boolean))],
-    capabilities: { canManageSettings },
+    paymentDataReliability: paymentDataReliabilityMetadata(
+      Number(buyerSamplesData.excludedLegacyRecordCount || 0) + Number(supplierData.excludedLegacyRecordCount || 0),
+    ),
+    capabilities: { canManageSettings, canReconcileBanks },
   };
 }
 
@@ -11071,6 +11233,7 @@ async function cashflowBuyerPaymentPerformance(body, req = null, accessContext =
     samples: data.samples || [],
     performance: cashflowPerformanceRows(data.samples || [], models),
     warnings: data.warnings || [],
+    paymentDataReliability: paymentDataReliabilityMetadata(data.excludedLegacyRecordCount || 0),
   };
 }
 
@@ -11154,6 +11317,63 @@ async function cashflowHolidayCalendar(body, req) {
     holidaySourceStatus: data.statuses,
     warnings,
   };
+}
+
+async function cashflowBankContext(req, accessContext) {
+  const context = accessContext || (await requireActiveUser(req));
+  await requireCapability(
+    context.client,
+    context.profile,
+    'cashflow_bank_reconcile',
+    'Cashflow bank reconciliation permission is required.',
+  );
+  return context;
+}
+
+async function cashflowBankOverview(body, req, accessContext = null) {
+  const context = await cashflowBankContext(req, accessContext);
+  const forecast = await cashflowForecast(body, req, context);
+  const bankData = await loadCashflowBankOverview({
+    client: context.client,
+    dateFrom: forecast.dateFrom,
+    dateTo: forecast.dateTo,
+    forecastRows: forecast.rows,
+  });
+  return {
+    dateFrom: forecast.dateFrom,
+    dateTo: forecast.dateTo,
+    paymentDataReliability: forecast.paymentDataReliability,
+    forecastWarnings: forecast.warnings,
+    ...bankData,
+  };
+}
+
+async function cashflowBankAccountSave(body, req, accessContext = null) {
+  return saveCashflowBankAccountService(body, await cashflowBankContext(req, accessContext));
+}
+
+async function cashflowBankBalanceSave(body, req, accessContext = null) {
+  return saveCashflowBankBalanceService(body, await cashflowBankContext(req, accessContext));
+}
+
+async function cashflowBankStatementPreview(body, req, accessContext = null) {
+  return previewCashflowBankStatementService(body, await cashflowBankContext(req, accessContext));
+}
+
+async function cashflowBankStatementImport(body, req, accessContext = null) {
+  return importCashflowBankStatementService(body, await cashflowBankContext(req, accessContext));
+}
+
+async function cashflowBankMatchSave(body, req, accessContext = null) {
+  return saveCashflowBankMatchService(body, await cashflowBankContext(req, accessContext));
+}
+
+async function cashflowLiquidityInstrumentSave(body, req, accessContext = null) {
+  return saveCashflowLiquidityInstrumentService(body, await cashflowBankContext(req, accessContext));
+}
+
+async function cashflowBankPlannedMovementSave(body, req, accessContext = null) {
+  return saveCashflowPlannedMovementService(body, await cashflowBankContext(req, accessContext));
 }
 
 function incomingPaymentNumber(value) {
@@ -11554,7 +11774,7 @@ async function incomingBuyerCiaInvoices({ thresholdState, accessContext = null }
     : { fields: [] };
   const accountFieldNames = new Set((accountDescribe.fields || []).map((field) => field.name));
   const interofficeCondition = await interofficeStemAccessCondition(accessContext, fieldNames, accountFieldNames);
-  const selectFields = ['Id', 'Name', ...selectedFields(fieldNames, ['KeyStem__c', 'Buyer_Name__c', 'Buyer__c', 'Account__c', 'Payment_Term__c', 'Total_Invoice_Amount__c', 'Receivable_Balance__c', 'Payment_Date__c', 'Delivery_Date__c', 'Expected_Delivery_Date__c', 'CurrencyIsoCode'])];
+  const selectFields = ['Id', 'Name', 'CreatedDate', ...selectedFields(fieldNames, ['KeyStem__c', 'Buyer_Name__c', 'Buyer__c', 'Account__c', 'Payment_Term__c', 'Total_Invoice_Amount__c', 'Receivable_Balance__c', 'Payment_Date__c', 'Delivery_Date__c', 'Expected_Delivery_Date__c', 'CurrencyIsoCode'])];
   if (fieldNames.has('Vessel__c')) selectFields.push('Vessel__r.Name');
   if (fieldNames.has('Port__c')) selectFields.push('Port__r.Name');
   if (fieldNames.has('Account__c')) {
@@ -11565,7 +11785,7 @@ async function incomingBuyerCiaInvoices({ thresholdState, accessContext = null }
 
   const whereParts = ["Payment_Term__c LIKE '%CIA%'"];
   if (fieldNames.has('Payment_Date__c')) whereParts.push('Payment_Date__c = null');
-  if (fieldNames.has('Delivery_Date__c')) whereParts.push('(Delivery_Date__c = null OR Delivery_Date__c >= 2026-01-01)');
+  whereParts.push(paymentDataReliableSoql());
   if (interofficeCondition) whereParts.push(interofficeCondition);
   const orderBy = fieldNames.has('Delivery_Date__c') ? 'Delivery_Date__c DESC NULLS LAST, CreatedDate DESC' : 'CreatedDate DESC';
 
@@ -11705,6 +11925,7 @@ async function incomingPaymentsListSnapshot(body, req = null, accessContext = nu
       summary: {},
       settings,
       schemaWarnings: ['Payment__c is not queryable.'],
+      paymentDataReliability: paymentDataReliabilityMetadata(0),
     };
 
   const dateField = firstAvailableField(paymentFieldNames, ['Date__c', 'Payment_Date__c', 'Received_Date__c', 'Paid_Date__c', 'CreatedDate']);
@@ -11788,7 +12009,7 @@ async function incomingPaymentsListSnapshot(body, req = null, accessContext = nu
     : { fields: [] };
   const accountFieldNames = new Set((accountDescribe.fields || []).map((field) => field.name));
   const interofficeCondition = await interofficeStemAccessCondition(accessContext, stemFieldNames, accountFieldNames);
-  const stemSelectFields = ['Id', 'Name', ...selectedFields(stemFieldNames, ['KeyStem__c', 'Buyer_Name__c', 'Buyer__c', 'Account__c', 'Total_Invoice_Amount__c', 'Total_Invoiced_Amount_From_Suppliers__c', 'Receivable_Balance__c', 'Payable_Balance__c', 'Total_Costs__c', 'Total_Cost__c', 'Total_Cost_Amount__c', 'Payment_Date__c', 'Payment_Term__c', 'Invoice_Due_Date__c', 'Buyer_Pay_Term_Date__c', 'Due_Date__c', 'Delivery_Date__c', 'Delivery_Date_Or_Expected__c', 'Expected_Delivery_Date__c', 'CurrencyIsoCode'])];
+  const stemSelectFields = ['Id', 'Name', 'CreatedDate', ...selectedFields(stemFieldNames, ['KeyStem__c', 'Buyer_Name__c', 'Buyer__c', 'Account__c', 'Total_Invoice_Amount__c', 'Total_Invoiced_Amount_From_Suppliers__c', 'Receivable_Balance__c', 'Payable_Balance__c', 'Total_Costs__c', 'Total_Cost__c', 'Total_Cost_Amount__c', 'Payment_Date__c', 'Payment_Term__c', 'Invoice_Due_Date__c', 'Buyer_Pay_Term_Date__c', 'Due_Date__c', 'Delivery_Date__c', 'Delivery_Date_Or_Expected__c', 'Expected_Delivery_Date__c', 'CurrencyIsoCode'])];
   if (stemFieldNames.has('Vessel__c')) stemSelectFields.push('Vessel__r.Name');
   if (stemFieldNames.has('Port__c')) stemSelectFields.push('Port__r.Name');
   if (stemFieldNames.has('Account__c')) {
@@ -11903,6 +12124,7 @@ async function incomingPaymentsListSnapshot(body, req = null, accessContext = nu
 
   const availableStemKeys = new Set();
   const availableBalancesByGroup = {};
+  let excludedLegacyRecordCount = 0;
   const allRows = eligiblePayments
     .map((payment) => {
       const supplierInvoiceId = incomingPaymentSupplierInvoiceId(payment, supplierInvoiceLookupFields);
@@ -11910,6 +12132,10 @@ async function incomingPaymentsListSnapshot(body, req = null, accessContext = nu
       const stemId = payment.STEM__c || supplierInvoice?.STEM__c || null;
       const stem = stemId ? stemMap[stemId] || null : null;
       if (stemId && !stem) return null;
+      if (stem && !isPaymentDataReliableStem(stem)) {
+        excludedLegacyRecordCount += 1;
+        return null;
+      }
       const amount = amountField ? incomingPaymentNumber(payment[amountField]) : null;
       const brokerCommissionMatch = stem?.Id ? findBrokerCommissionPaymentMatch(payment, amount, brokerCommissionGroupsByStem[stem.Id] || [], [...referenceFields, ...directionFields, ...typeFields, ...statusFields]) : null;
       const bankCharge = incomingPaymentLooksBankCharge(payment, {
@@ -12117,6 +12343,7 @@ async function incomingPaymentsListSnapshot(body, req = null, accessContext = nu
       supplierInvoiceAmountField,
     },
     schemaWarnings: [amountField ? null : 'No amount-like field was found on Payment__c.', dateField ? null : 'No date-like field was found on Payment__c.', 'Supplier-invoice-linked negative payments are classified as supplier refunds. Confirm if Salesforce uses the opposite sign.'].filter(Boolean),
+    paymentDataReliability: paymentDataReliabilityMetadata(excludedLegacyRecordCount),
     summary: {
       totalRows: rowsWithInterestNotifications.length,
       incomingRows: includedIncomingRows.length,
@@ -12139,7 +12366,7 @@ async function incomingPaymentsList(body, req = null, accessContext = null) {
   const limit = Math.max(100, Math.min(Number(body.limit) || 5000, 10000));
   const { value: snapshot } = await cachedSalesforceValue({
     namespace: 'incoming-payments',
-    payload: { dateFrom, dateTo, limit, thresholds: paymentCollectionThresholdCacheKey(settings) },
+    payload: { dateFrom, dateTo, limit, thresholds: paymentCollectionThresholdCacheKey(settings), paymentDataReliableFrom: PAYMENT_DATA_RELIABLE_FROM },
     ttlSeconds: 60,
     tags: ['salesforce:incoming-payments', 'salesforce:stem', 'salesforce:account', 'salesforce:object:Payment__c', 'salesforce:object:Supplier_Invoice__c'],
     body,
@@ -12175,6 +12402,221 @@ async function incomingPaymentsList(body, req = null, accessContext = null) {
         interestInvoiceNotificationPending: ['sending', 'uncertain'].includes(notification?.deliveryStatus),
       };
     }),
+  };
+}
+
+async function salesforceAuditCount(objectName, whereClause) {
+  const result = await queryResult(`SELECT COUNT() FROM ${objectName} WHERE ${whereClause}`, { limit: 1, softFail: false });
+  return Number(result.totalSize || 0);
+}
+
+function legacyAuditSearchCondition(query, fields = []) {
+  const needle = String(query || '').trim();
+  if (!needle || !fields.length) return null;
+  const like = `%${escapeSoql(needle)}%`;
+  return `(${fields.map((field) => `${field} LIKE '${like}'`).join(' OR ')})`;
+}
+
+function legacyAuditEffective(stem) {
+  const reliability = paymentDataReliabilityState(stem || {});
+  return {
+    effectiveDate: reliability.effectiveDate,
+    dateBasis: reliability.dateBasis,
+  };
+}
+
+async function legacyPaymentDataAudit(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  const userType = String(context.profile?.user_type || '');
+  const isAuthorizedGeneralManager = userType === 'general_manager'
+    ? (await loadActiveGeneralManager(context.client)).id === context.profile.id
+    : false;
+  if (!['finance', 'administrator'].includes(userType) && !isAuthorizedGeneralManager) {
+    throw appError('Finance, the General Manager, or an Administrator is required to view legacy settled data.', 403);
+  }
+  const category = ['buyer_balance', 'supplier_balance', 'cross_cutover_payment'].includes(body.category)
+    ? body.category
+    : 'buyer_balance';
+  const limit = Math.max(10, Math.min(Number(body.limit) || 50, 100));
+  const offset = Math.max(0, Math.min(Number(body.offset) || 0, 1900));
+  const query = String(body.query || '').trim().slice(0, 100);
+  const datedLegacyWhere = `(Delivery_Date__c < ${PAYMENT_DATA_RELIABLE_FROM} OR (Delivery_Date__c = NULL AND Expected_Delivery_Date__c < ${PAYMENT_DATA_RELIABLE_FROM}))`;
+  const undatedLegacyWhere = `(Delivery_Date__c = NULL AND Expected_Delivery_Date__c = NULL AND CreatedDate < 2025-12-31T16:00:00.000Z)`;
+  const legacyWhere = legacyPaymentDataSoql();
+  const supplierLegacyWhere = legacyPaymentDataSoql('STEM__r.');
+  const paymentDescribe = await salesforceObjectFields({ objectName: 'Payment__c' });
+  const paymentFields = paymentDescribe.fields || [];
+  const paymentNames = new Set(paymentFields.map((field) => field.name));
+  const paymentFieldByName = Object.fromEntries(paymentFields.map((field) => [field.name, field]));
+  const paymentDateField = firstAvailableField(paymentNames, ['Date__c', 'Payment_Date__c', 'Received_Date__c', 'Paid_Date__c', 'CreatedDate']);
+  const paymentSupplierInvoiceField = incomingPaymentSupplierInvoiceFields(paymentFields)[0] || null;
+  const paymentSupplierInvoiceRelationship = paymentSupplierInvoiceField
+    ? paymentFieldByName[paymentSupplierInvoiceField]?.relationshipName || null
+    : null;
+  const paymentDateStart = paymentDateField
+    ? paymentDateField === 'CreatedDate'
+      ? soqlHongKongDateTimeValue(PAYMENT_DATA_RELIABLE_FROM, false)
+      : soqlDateValue(paymentDateField, paymentFieldByName[paymentDateField]?.type, PAYMENT_DATA_RELIABLE_FROM, false)
+    : null;
+  const paymentLegacyRelationships = [
+    paymentNames.has('STEM__c') ? legacyPaymentDataSoql('STEM__r.') : null,
+    paymentSupplierInvoiceRelationship ? legacyPaymentDataSoql(`${paymentSupplierInvoiceRelationship}.STEM__r.`) : null,
+  ].filter(Boolean);
+  const paymentLegacyWhere = paymentLegacyRelationships.length
+    ? `(${paymentLegacyRelationships.join(' OR ')})`
+    : null;
+
+  const [legacyDeliveredStemCount, staleBuyerBalanceCount, staleSupplierBalanceCount, undatedZeroBalanceStemCount] = await Promise.all([
+    salesforceAuditCount('stem__c', datedLegacyWhere),
+    salesforceAuditCount('stem__c', `${legacyWhere} AND Receivable_Balance__c != 0`),
+    salesforceAuditCount('Supplier_Invoice__c', `${supplierLegacyWhere} AND Payable_Balance__c != 0`),
+    salesforceAuditCount('stem__c', `${undatedLegacyWhere} AND (Receivable_Balance__c = 0 OR Receivable_Balance__c = NULL)`),
+  ]);
+
+  let rows = [];
+  let total = 0;
+  if (category === 'buyer_balance') {
+    const search = legacyAuditSearchCondition(query, ['Name', 'KeyStem__c', 'Account__r.Name']);
+    const where = [legacyWhere, 'Receivable_Balance__c != 0', search].filter(Boolean).join(' AND ');
+    const result = await queryResult(`
+      SELECT Id, Name, KeyStem__c, CreatedDate, Delivery_Date__c, Expected_Delivery_Date__c,
+             Account__c, Account__r.Name, Total_Invoice_Amount__c,
+             Total_Receiving_Amount__c, Receivable_Balance__c, QLIK_Receivable_Balance__c
+      FROM stem__c
+      WHERE ${where}
+      ORDER BY Delivery_Date__c DESC NULLS LAST, Expected_Delivery_Date__c DESC NULLS LAST, CreatedDate DESC, Id
+      LIMIT ${limit} OFFSET ${offset}
+    `, { limit, softFail: false });
+    total = query ? await salesforceAuditCount('stem__c', where) : staleBuyerBalanceCount;
+    rows = (result.records || []).map((stem) => ({
+      id: stem.Id,
+      evidenceType: 'Stale buyer receivable balance',
+      stemId: stem.Id,
+      stemName: formatStemName(stem),
+      accountName: stem.Account__r?.Name || null,
+      ...legacyAuditEffective(stem),
+      currency: 'USD',
+      rawValues: {
+        invoiceAmount: stem.Total_Invoice_Amount__c ?? null,
+        receivedAmount: stem.Total_Receiving_Amount__c ?? null,
+        receivableBalance: stem.Receivable_Balance__c ?? null,
+        qlikReceivableBalance: stem.QLIK_Receivable_Balance__c ?? null,
+      },
+      salesforceUrl: `${getInstanceUrl()}/lightning/r/STEM__c/${stem.Id}/view`,
+    }));
+  } else if (category === 'supplier_balance') {
+    const search = legacyAuditSearchCondition(query, ['Name', 'STEM__r.Name', 'STEM__r.KeyStem__c', 'Supplier__r.Name']);
+    const where = [supplierLegacyWhere, 'Payable_Balance__c != 0', search].filter(Boolean).join(' AND ');
+    const result = await queryResult(`
+      SELECT Id, Name, CreatedDate, Payable_Balance__c, Invoice_Amount__c,
+             STEM__c, STEM__r.Name, STEM__r.KeyStem__c, STEM__r.CreatedDate,
+             STEM__r.Delivery_Date__c, STEM__r.Expected_Delivery_Date__c,
+             Supplier__c, Supplier__r.Name
+      FROM Supplier_Invoice__c
+      WHERE ${where}
+      ORDER BY STEM__r.Delivery_Date__c DESC NULLS LAST, STEM__r.Expected_Delivery_Date__c DESC NULLS LAST, CreatedDate DESC, Id
+      LIMIT ${limit} OFFSET ${offset}
+    `, { limit, softFail: false });
+    total = query ? await salesforceAuditCount('Supplier_Invoice__c', where) : staleSupplierBalanceCount;
+    rows = (result.records || []).map((invoice) => ({
+      id: invoice.Id,
+      evidenceType: 'Stale supplier payable balance',
+      stemId: invoice.STEM__c,
+      stemName: formatStemName(invoice.STEM__r || {}),
+      accountName: invoice.Supplier__r?.Name || null,
+      ...legacyAuditEffective(invoice.STEM__r),
+      currency: 'USD',
+      rawValues: {
+        supplierInvoiceAmount: invoice.Invoice_Amount__c ?? null,
+        payableBalance: invoice.Payable_Balance__c ?? null,
+      },
+      salesforceUrl: `${getInstanceUrl()}/lightning/r/Supplier_Invoice__c/${invoice.Id}/view`,
+    }));
+  } else {
+    const dateField = paymentDateField;
+    const amountField = firstAvailableField(paymentNames, ['Amount__c', 'Payment_Amount__c', 'Paid_Amount__c', 'Received_Amount__c', 'Total_Amount__c']);
+    if (!dateField || !paymentLegacyWhere) throw appError('Payment audit relationships are unavailable in Salesforce.', 503);
+    const supplierStemPrefix = paymentSupplierInvoiceRelationship ? `${paymentSupplierInvoiceRelationship}.STEM__r.` : null;
+    const search = legacyAuditSearchCondition(query, [
+      'Name',
+      paymentNames.has('STEM__c') ? 'STEM__r.Name' : null,
+      paymentNames.has('STEM__c') ? 'STEM__r.KeyStem__c' : null,
+      paymentNames.has('STEM__c') ? 'STEM__r.Account__r.Name' : null,
+      supplierStemPrefix ? `${supplierStemPrefix}Name` : null,
+      supplierStemPrefix ? `${supplierStemPrefix}KeyStem__c` : null,
+      supplierStemPrefix ? `${supplierStemPrefix}Account__r.Name` : null,
+    ].filter(Boolean));
+    const where = [`${dateField} >= ${paymentDateStart}`, paymentLegacyWhere, search].filter(Boolean).join(' AND ');
+    const select = [
+      'Id', 'Name', 'CreatedDate', ...selectedFields(paymentNames, ['CurrencyIsoCode', 'Currency__c']), dateField, amountField,
+      paymentNames.has('STEM__c') ? 'STEM__c' : null,
+      paymentNames.has('STEM__c') ? 'STEM__r.Name' : null,
+      paymentNames.has('STEM__c') ? 'STEM__r.KeyStem__c' : null,
+      paymentNames.has('STEM__c') ? 'STEM__r.CreatedDate' : null,
+      paymentNames.has('STEM__c') ? 'STEM__r.Delivery_Date__c' : null,
+      paymentNames.has('STEM__c') ? 'STEM__r.Expected_Delivery_Date__c' : null,
+      paymentNames.has('STEM__c') ? 'STEM__r.Account__r.Name' : null,
+      paymentSupplierInvoiceField,
+      supplierStemPrefix ? `${paymentSupplierInvoiceRelationship}.STEM__c` : null,
+      supplierStemPrefix ? `${supplierStemPrefix}Name` : null,
+      supplierStemPrefix ? `${supplierStemPrefix}KeyStem__c` : null,
+      supplierStemPrefix ? `${supplierStemPrefix}CreatedDate` : null,
+      supplierStemPrefix ? `${supplierStemPrefix}Delivery_Date__c` : null,
+      supplierStemPrefix ? `${supplierStemPrefix}Expected_Delivery_Date__c` : null,
+      supplierStemPrefix ? `${supplierStemPrefix}Account__r.Name` : null,
+    ].filter(Boolean);
+    const result = await queryResult(`
+      SELECT ${[...new Set(select)].join(', ')}
+      FROM Payment__c
+      WHERE ${where}
+      ORDER BY ${dateField} DESC NULLS LAST, CreatedDate DESC, Id
+      LIMIT ${limit} OFFSET ${offset}
+    `, { limit, softFail: false });
+    total = await salesforceAuditCount('Payment__c', where);
+    rows = (result.records || []).map((payment) => {
+      const supplierInvoice = paymentSupplierInvoiceRelationship ? payment[paymentSupplierInvoiceRelationship] : null;
+      const stem = payment.STEM__r || supplierInvoice?.STEM__r || {};
+      return {
+        id: payment.Id,
+        evidenceType: 'Post-cutover payment linked to legacy STEM',
+        stemId: payment.STEM__c || supplierInvoice?.STEM__c || null,
+        stemName: formatStemName(stem),
+        accountName: stem.Account__r?.Name || null,
+        ...legacyAuditEffective(stem),
+        currency: payment.CurrencyIsoCode || payment.Currency__c || 'USD',
+        rawValues: {
+          paymentDate: payment[dateField] ?? null,
+          paymentAmount: amountField ? payment[amountField] ?? null : null,
+        },
+        salesforceUrl: `${getInstanceUrl()}/lightning/r/Payment__c/${payment.Id}/view`,
+      };
+    });
+  }
+
+  const crossCutoverPaymentCount = category === 'cross_cutover_payment'
+    ? total
+    : paymentDateField && paymentLegacyWhere
+      ? await salesforceAuditCount('Payment__c', `${paymentDateField} >= ${paymentDateStart} AND ${paymentLegacyWhere}`)
+      : 0;
+  return {
+    category,
+    query,
+    rows,
+    pagination: {
+      offset,
+      limit,
+      total,
+      nextOffset: offset + rows.length < total ? offset + rows.length : null,
+    },
+    summary: {
+      legacyDeliveredStemCount,
+      staleBuyerBalanceCount,
+      staleSupplierBalanceCount,
+      crossCutoverPaymentCount,
+      undatedZeroBalanceStemCount,
+    },
+    paymentDataReliability: paymentDataReliabilityMetadata(total),
+    readOnly: true,
   };
 }
 
@@ -12321,7 +12763,7 @@ async function incomingPaymentInterestCalculation(body = {}, accessContext = nul
   const accountFieldNames = new Set(accountFields.map((field) => field.name));
   const interestField = incomingPaymentInterestRateField(accountFields);
 
-  const stemSelectFields = ['Id', 'Name', ...selectedFields(stemFieldNames, ['KeyStem__c', 'Buyer_Name__c', 'Buyer__c', 'Account__c', 'Total_Invoice_Amount__c', 'Receivable_Balance__c', 'Payment_Term__c', 'Invoice_Due_Date__c', 'Buyer_Pay_Term_Date__c', 'Due_Date__c', 'Delivery_Date__c', 'Delivery_Date_Or_Expected__c', 'Expected_Delivery_Date__c'])];
+  const stemSelectFields = ['Id', 'Name', 'CreatedDate', ...selectedFields(stemFieldNames, ['KeyStem__c', 'Buyer_Name__c', 'Buyer__c', 'Account__c', 'Total_Invoice_Amount__c', 'Receivable_Balance__c', 'Payment_Term__c', 'Invoice_Due_Date__c', 'Buyer_Pay_Term_Date__c', 'Due_Date__c', 'Delivery_Date__c', 'Delivery_Date_Or_Expected__c', 'Expected_Delivery_Date__c'])];
   if (stemFieldNames.has('Vessel__c')) stemSelectFields.push('Vessel__r.Name');
   if (stemFieldNames.has('Port__c')) stemSelectFields.push('Port__r.Name');
   if (stemFieldNames.has('Account__c')) {
@@ -12342,6 +12784,9 @@ async function incomingPaymentInterestCalculation(body = {}, accessContext = nul
   );
   const stem = stemRows[0];
   if (!stem) throw appError('STEM was not found in Salesforce.', 404);
+  if (!isPaymentDataReliableStem(stem)) {
+    throw appError('This STEM is settled legacy data. Late-payment interest actions are unavailable before 1 Jan 2026.', 409);
+  }
 
   const dateField = firstAvailableField(paymentFieldNames, ['Date__c', 'Payment_Date__c', 'Received_Date__c', 'Paid_Date__c', 'CreatedDate']);
   const amountField = firstAvailableField(paymentFieldNames, ['Amount__c', 'Payment_Amount__c', 'Paid_Amount__c', 'Received_Amount__c', 'Total_Amount__c', 'Amount_Paid__c', 'Payment_Value__c', 'Actual_Amount__c']);
@@ -17275,6 +17720,7 @@ async function salesforceStemDetailUncached(body, req = null, accessContext = nu
   });
   const brokerCommissionGroups = brokerCommissionGroupsByStem[actualStemId] || [];
   const stemHasDelivery = !!recordRaw.Delivery_Date__c;
+  const paymentReliability = paymentDataReliabilityState(recordRaw);
   const payableAmountCandidates = stemPayableAmountCandidates({
     stem: recordRaw,
     lineItems,
@@ -17298,7 +17744,7 @@ async function salesforceStemDetailUncached(body, req = null, accessContext = nu
   const paymentTypeFields = selectedFields(paymentFieldNames, ['Type__c', 'Payment_Type__c']);
   const paymentSelectFields = ['Id', paymentFieldNames.has('Name') ? 'Name' : null, paymentFieldNames.has('RecordTypeId') ? 'RecordTypeId' : null, paymentFieldNames.has('RecordTypeId') ? 'RecordType.Name' : null, paymentFieldNames.has('RecordTypeId') ? 'RecordType.DeveloperName' : null, paymentFieldNames.has('STEM__c') ? 'STEM__c' : null, paymentFieldNames.has('CreatedDate') ? 'CreatedDate' : null, paymentDateField, ...supplierInvoiceLookupFields, paymentAmountField, ...paymentReferenceFields, ...paymentStatusFields, ...paymentTypeFields, ...paymentDirectionFields].filter(Boolean);
   const paymentOrder = paymentDateField ? `${paymentDateField} DESC NULLS LAST, CreatedDate DESC` : 'CreatedDate DESC';
-  if (paymentSelectFields.length > 1) {
+  if (paymentReliability.reliable && paymentSelectFields.length > 1) {
     const selectedPaymentFields = [...new Set(paymentSelectFields)];
     const paymentDateValue = (payment) => (paymentDateField ? payment[paymentDateField] : null) || payment.Date__c || payment.CreatedDate || null;
     const sortPaymentRows = (rows) => rows.sort((a, b) => String(paymentDateValue(b) || '').localeCompare(String(paymentDateValue(a) || '')));
@@ -17480,11 +17926,22 @@ async function salesforceStemDetailUncached(body, req = null, accessContext = nu
   const calculatedSupplierInvoice = payableAmountCandidates[0] ?? 0;
   const record = {
     ...recordRaw,
+    ...(paymentReliability.reliable ? {} : {
+      Receivable_Balance__c: null,
+      Payable_Balance__c: null,
+      Payment_Date__c: LEGACY_PAYMENT_DATA_LABEL,
+    }),
     Total_Invoice_Amount__c: buyerInvoiceResolution.amount,
     _Buyer_Invoice_Amount_Source: buyerInvoiceResolution.source,
     _Buyer_Invoice_Issued: buyerInvoices.some(isFinalBuyerInvoice),
     _Supplier_Invoice_Amount: calculatedSupplierInvoice,
-    _Buyer_Pay_Term_Date: calculatedBuyerPayTermDate(recordRaw) || recordRaw.Invoice_Due_Date__c || recordRaw.Buyer_Pay_Term_Date__c,
+    _Buyer_Pay_Term_Date: paymentReliability.reliable
+      ? calculatedBuyerPayTermDate(recordRaw) || recordRaw.Invoice_Due_Date__c || recordRaw.Buyer_Pay_Term_Date__c
+      : LEGACY_PAYMENT_DATA_LABEL,
+    _Payment_Data_Reliable: paymentReliability.reliable,
+    _Payment_Data_Reliability: paymentReliability.display,
+    _Payment_Reliability_Date: paymentReliability.effectiveDate,
+    _Payment_Reliability_Basis: paymentReliability.dateBasis,
     _Buyer_Name: recordRaw.Buyer_Name__c || accountName || recordRaw.Buyer__c || null,
     _Vessel_Name: vesselName,
     _Port_Name: portName,
@@ -17505,6 +17962,7 @@ async function salesforceStemDetailUncached(body, req = null, accessContext = nu
       ...group,
       payments: group.payments.sort((a, b) => String(b.Date__c || '').localeCompare(String(a.Date__c || ''))),
     })),
+    paymentDataReliability: paymentDataReliabilityMetadata(paymentReliability.reliable ? 0 : 1, paymentReliability.reliable ? 1 : 0),
   };
 }
 
@@ -17651,7 +18109,8 @@ async function salesforceBrokerRegisterUncached(body, req = null, accessContext 
   const whereClause = interofficeCondition ? `WHERE ${interofficeCondition}` : '';
   const stems = await queryRows(
     `
-    SELECT Id, Name, Delivery_Date__c, Payment_Date__c, Buyer_Pay_Term_Date__c
+    SELECT Id, Name, CreatedDate, Delivery_Date__c, Expected_Delivery_Date__c,
+           Payment_Date__c, Buyer_Pay_Term_Date__c
     FROM stem__c
     ${whereClause}
     ORDER BY Delivery_Date__c DESC NULLS LAST
@@ -17799,6 +18258,7 @@ async function salesforceBrokerRegisterUncached(body, req = null, accessContext 
   for (const item of lineItems) {
     const stem = stemMap[item.STEM__c];
     if (!stem) continue;
+    const paymentReliability = paymentDataReliabilityState(stem);
     const nativeQuantity = nativeFinancialQuantity(item, {
       stemHasDelivery: !!stem.Delivery_Date__c,
       lineItemUomField,
@@ -17825,8 +18285,9 @@ async function salesforceBrokerRegisterUncached(body, req = null, accessContext 
         hiddenBrokerCompany: accountFlagMap[item.Supplier_Broker__c]?.hiddenBrokerCompany || false,
         commissionUnitPrice: item.Suppliers_Brokers_Commission_Per_Unit__c ?? null,
         commissionAmount: supplierAmount,
-        paymentDate: paymentDateByInvoice[item.Supplier_Invoice__c] || null,
-        paymentDateLabel: 'Paid Date',
+        paymentDate: paymentReliability.reliable ? paymentDateByInvoice[item.Supplier_Invoice__c] || null : null,
+        paymentDateLabel: paymentReliability.reliable ? 'Paid Date' : LEGACY_PAYMENT_DATA_LABEL,
+        paymentDataReliable: paymentReliability.reliable,
       });
     }
 
@@ -17852,9 +18313,10 @@ async function salesforceBrokerRegisterUncached(body, req = null, accessContext 
         hiddenBrokerCompany: accountFlagMap[buyerBrokerId]?.hiddenBrokerCompany || false,
         commissionUnitPrice: item.Buyers_Brokers_Commission_Per_Unit__c ?? (qty ? buyerAmount / qty : null),
         commissionAmount: buyerAmount,
-        paymentDate: stem.Payment_Date__c || buyerPaymentDateByStem[item.STEM__c] || null,
-        paymentDateLabel: 'Received Date',
-        paymentDelay: paymentDelayDays(stem.Payment_Date__c || buyerPaymentDateByStem[item.STEM__c], buyerInvoiceDueDateByStem[item.STEM__c] || stem.Buyer_Pay_Term_Date__c),
+        paymentDate: paymentReliability.reliable ? stem.Payment_Date__c || buyerPaymentDateByStem[item.STEM__c] || null : null,
+        paymentDateLabel: paymentReliability.reliable ? 'Received Date' : LEGACY_PAYMENT_DATA_LABEL,
+        paymentDelay: paymentReliability.reliable ? paymentDelayDays(stem.Payment_Date__c || buyerPaymentDateByStem[item.STEM__c], buyerInvoiceDueDateByStem[item.STEM__c] || stem.Buyer_Pay_Term_Date__c) : null,
+        paymentDataReliable: paymentReliability.reliable,
       });
     }
 
@@ -17882,9 +18344,10 @@ async function salesforceBrokerRegisterUncached(body, req = null, accessContext 
           hiddenBrokerCompany: accountFlagMap[broker.Buyer_Broker__c]?.hiddenBrokerCompany || false,
           commissionUnitPrice: qty ? secondaryAmount / qty : null,
           commissionAmount: secondaryAmount,
-          paymentDate: stem.Payment_Date__c || buyerPaymentDateByStem[item.STEM__c] || null,
-          paymentDateLabel: 'Received Date',
-          paymentDelay: paymentDelayDays(stem.Payment_Date__c || buyerPaymentDateByStem[item.STEM__c], buyerInvoiceDueDateByStem[item.STEM__c] || stem.Buyer_Pay_Term_Date__c),
+          paymentDate: paymentReliability.reliable ? stem.Payment_Date__c || buyerPaymentDateByStem[item.STEM__c] || null : null,
+          paymentDateLabel: paymentReliability.reliable ? 'Received Date' : LEGACY_PAYMENT_DATA_LABEL,
+          paymentDelay: paymentReliability.reliable ? paymentDelayDays(stem.Payment_Date__c || buyerPaymentDateByStem[item.STEM__c], buyerInvoiceDueDateByStem[item.STEM__c] || stem.Buyer_Pay_Term_Date__c) : null,
+          paymentDataReliable: paymentReliability.reliable,
         });
       }
     }
@@ -17892,7 +18355,11 @@ async function salesforceBrokerRegisterUncached(body, req = null, accessContext 
 
   const rows = combineBrokerCommissionRows(rawRows);
   rows.sort((a, b) => String(b.deliveryDate || '').localeCompare(String(a.deliveryDate || '')));
-  return { rows, warnings: [...financialWarnings] };
+  return {
+    rows,
+    warnings: [...financialWarnings],
+    paymentDataReliability: paymentDataReliabilityMetadata(rows.filter((row) => row.paymentDataReliable === false).length, rows.filter((row) => row.paymentDataReliable !== false).length),
+  };
 }
 
 async function salesforceBrokerRegisterFull(body, req = null, accessContext = null) {
@@ -17900,7 +18367,7 @@ async function salesforceBrokerRegisterFull(body, req = null, accessContext = nu
   const cached = await cachedSalesforceValue({
     namespace: 'salesforce-broker-register',
     ttlSeconds: 60,
-    payload: { limit },
+    payload: { limit, paymentDataReliableFrom: PAYMENT_DATA_RELIABLE_FROM },
     tags: ['salesforce:broker-register', 'salesforce:stem', 'salesforce:account'],
     body,
     req,
@@ -18463,6 +18930,12 @@ async function specialTermsSave(body = {}, req = null, accessContext = null) {
   return saveSpecialTerm(context.client, context.profile, body);
 }
 
+async function specialTermsTermRetire(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  await requireSpecialTermClauseApprover(context);
+  return retireSpecialTerm(context.client, context.profile, body);
+}
+
 async function specialTermsDelete(body = {}, req = null, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
   await requireCapability(context.client, context.profile, 'special_terms_manage', 'Special Terms management permission is required.');
@@ -18757,6 +19230,7 @@ const handlers = {
   specialTermApprovalQueue,
   specialTermClauseAiDraft,
   specialTermsSave,
+  specialTermsTermRetire,
   specialTermsDelete,
   specialTermRuleSave,
   specialTermRuleDelete,
@@ -18827,6 +19301,7 @@ const handlers = {
   buyerInvoiceCollectionEventCreate,
   buyerInvoicePaymentAdviceSave,
   paymentCollectionsReconcile,
+  legacyPaymentDataAudit,
   shipAgentChargesList,
   shipAgentChargesDetail,
   shipAgentChargesOptions,
@@ -18842,6 +19317,7 @@ const handlers = {
   variableChargesBuyerConfirm,
   variableChargesSideAssign,
   variableChargesSideConfirm,
+  variableChargesSideReopen,
   variableChargesGmOverride,
   variableChargesPostInvoiceResolve,
   variableChargesSync,
@@ -18871,6 +19347,14 @@ const handlers = {
   cashflowSettingsGet,
   cashflowSettingsSave,
   cashflowHolidayCalendar,
+  cashflowBankOverview,
+  cashflowBankAccountSave,
+  cashflowBankBalanceSave,
+  cashflowBankStatementPreview,
+  cashflowBankStatementImport,
+  cashflowBankMatchSave,
+  cashflowLiquidityInstrumentSave,
+  cashflowBankPlannedMovementSave,
   salesforceDisputeStems,
   disputeBetaList,
   disputeBetaSaveDraft,

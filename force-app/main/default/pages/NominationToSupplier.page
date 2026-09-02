@@ -1,0 +1,117 @@
+<apex:page controller="ConfirmationToBuyerTemplateController" renderAs="pdf" showHeader="false" sidebar="false" standardStylesheets="false" applyBodyTag="false">
+
+<head>
+    <style type="text/css" media="print">
+        body { font-family: Arial Unicode MS; }
+        font { font-family: Arial Unicode MS !important; }
+        body {
+            font-size: 8pt;
+            color: #000;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            line-height: 1.1;
+        }
+
+        td {
+            vertical-align: top;
+            padding: 3px;
+        }
+
+        tr {
+            line-height: 1.1;
+        }
+
+        .normalRow td {
+            padding-top: 2px;
+            padding-bottom: 2px;
+            line-height: 1.1;
+        }
+
+        .hiddenRow td {
+            padding-bottom: 2px;
+            line-height: 0.8;
+        }
+
+        .label {
+            width: 120px;
+        }
+
+        .colon {
+            width: 10px;
+            text-align: center;
+        }
+        .content{
+            margin-top: 20px;
+        }
+    </style>
+</head>
+    <c:PDFTemplateHeader ></c:PDFTemplateHeader>
+    <div class="content">
+    <table>
+        <apex:repeat value="{!inputs}" var="row">
+            <tr class="{!
+                IF(
+                    AND(row.isHidden = true, ISBLANK(row.labelColSpan)),
+                    'hiddenRow',
+                    'normalRow'
+                )
+            }">
+                <td class="label"
+                    colspan="{!IF(ISBLANK(row.labelColSpan), 1, row.labelColSpan)}">
+                    <apex:outputText value="{!row.label}" />
+                </td>
+
+                <apex:outputPanel rendered="{!row.labelColSpan == null}" layout="none">
+                    <td class="colon">
+                        <apex:outputText value="{!IF(row.isHidden == false, ':', '')}" />
+                    </td>
+
+                    <td class="value">
+                        <apex:outputText value="{!IF(row.isHidden == false, row.value, '')}" />
+                    </td>
+                </apex:outputPanel>
+            </tr>
+        </apex:repeat>
+
+        <tr>
+            <td class="label">
+                <apex:outputText value="{!specialTermsLabel}" />
+            </td>
+            <td class="colon">
+                <apex:outputText value=":" />
+            </td>
+            <td>
+                <apex:outputText value="{!specialTermsValue}" escape="false"/>
+            </td>
+        </tr>
+    </table>
+
+            <p style="text-align: left;margin-left: 2px; font-weight: boldl">THIS BUNKER NOMINATION IS SUBJECT TO THE FOLLOWING SPECIAL CONDITIONS, WHICH WILL PREVAIL OVER ANY DIFFERENT APPLICABLE CONTRACTUAL CONDITIONS:
+                <ol>
+                    <li><p style="text-align: left; margin: 0 0 0 2px;">THIS NOMINATION IS ASSUMED TO BE ACCEPTED AND CONFIRMED AS PER TERMS HEREIN UNLESS WRITTEN MESSAGE STATING OTHERWISE IS RECEIVED IMMEDIATELY.</p></li>
+                    <li><p style="text-align: left; margin: 0 0 0 2px;">MARPOL ANNEX VI: SULFUR CONTENT AS PER STATUTORY REGULATIONS. BUNKER RECEIPTS TO CONTAIN INFORMATION AS SPECIFIED IN REGULATION 18.
+                     SUPPLIER TO PROVIDE THE SHIP A MATERIAL SAFETY DATA SHEET (MSDS) FOR EACH GRADE TO BE SUPPLIED,
+                     IN ACCORDANCE WITH ANNEX 1 AND ANNEX 2 OF SOLAS REGULATION VI/4-1 IN EFFECT FROM 1ST JULY 2009.</p></li>
+                    <li><p style="text-align: left; margin: 0 0 0 2px;">BUNKER SUPPLIERS/BARGE OPERATORS WARRANT AND ENSURE AT ALL TIMES THAT PRODUCTS SUPPLIED ARE HOMOGENOUS
+                     AND DO NOT INCLUDE ANY ADDED SUBSTANCE OF CHEMICAL WATER, LUBE OIL,
+                     RESIDUES FROM SLOPS AND SLUDGE, OR ANY OTHER SUBSTANCE THAT COULD DAMAGE THE SAFETY OF SHIPS, THE PERFORMANCE OF THE MACHINERY, BE HARMFUL TO PERSONNEL, OR CONTRIBUTE TO POLLUTION.</p></li>
+                     <li><p style="text-align: left; margin: 0 0 0 2px;">FLASHPOINT DECLARATION / SOLAS COMPLIANCE: THIS BUNKER NOMINATION IS SUBMITTED UNDER THE STRICT CONDITION THAT THE SELLER SHALL COMPLY
+                      WITH THE APPLICABLE FLASHPOINT REQUIREMENTS. TO THIS END, CONFIRMING THIS BUNKER NOMINATION THE SELLER ENSURES AND UNDERTAKES THAT (I) PRIOR TO THE COMMENCEMENT OF BUNKERING
+                      HE WILL PROVIDE THE RECEIVING VESSEL, DIRECTLY OR THROUGH HIS LOCAL AGENT, WITH A SIGNED DECLARATION CERTIFYING THAT THE MARINE FUEL TO BE SUPPLIED IS IN CONFORMITY
+                      WITH THE REQUIREMENTS SET FORTH BY CHAPTER II-2, REGULATION 4 OF THE INTERNATIONAL CONVENTION FOR THE SAFETY OF LIFE AT SEA (SOLAS), AS AMENDED BY RESOLUTION MSC.520(106),
+                      SPECIFYING THE TEST METHOD USED FOR DETERMINING THE FLASHPOINT, AND THAT (II) THE BUNKER DELIVERY NOTE (BDN) FOR THE MARINE FUEL DELIVERED SHALL CONTAIN EITHER THE MEASURED FLASHPOINT
+                      VALUE OR A STATEMENT THAT THE FLASHPOINT HAS BEEN MEASURED AT OR ABOVE 70°C. CONFIRMING THIS BUNKER NOMINATION THE SELLER ALSO ACCEPTS THAT THE FAILED SUBMISSION
+                      OF THE AFOREMENTIONED DECLARATION SHALL BE DEEMED AS A MATERIAL BREACH OF THE SUPPLY CONTRACT, ENTITLING THE BUYER (I) TO REFUSE TO COMMENCE OF THE BUNKERING OPERATIONS
+                      UNTIL SUCH DECLARATION IS PROVIDED AND (II) TO CLAIM RELEVANT DAMAGES.</p></li>
+                </ol>
+            </p>
+            <p style="text-align: left; margin: 0 0 0 2px;">ACCEPTING THIS ORDER AND CONFIRMING THIS BUNKER NOMINATION THE SELLER HEREBY WARRANTS THAT THE PRODUCT TO BE SUPPLIED (AND ITS BLENDED SUBSTANCES, IF ANY) DOES NOT ORIGINATE FROM A COUNTRY OR ENTITY DESIGNATED IN ANY SANCTION LIST ISSUED BY THE UNITED NATIONS, UNITED STATES, UNITED KINGDOM AND/OR EUROPEAN UNION; AND/OR FROM AN ENTITY OWNED 50% OR MORE – ALSO IN THE AGGREGATE – OR CONTROLLED BY ANY PERSON OR ENTITY DESIGNATED IN ANY SANCTIONS LIST ISSUED BY THE UNITED NATIONS, UNITED STATES, UNITED KINGDOM AND/OR EUROPEAN UNION.</p>
+            <br/>
+            <p style="text-align: left; margin: 0 0 0 2px;">REGARDS</p>
+            <p style="text-align: left; margin: 0 0 0 2px;">FRATELLI COSULICH BUNKERS (HK) LTD.</p>
+            <p style="text-align: left; margin: 0 0 0 2px;">{!UPPER(nomination.Buyer_Supplier_Trader__c)}</p>
+    </div>
+</apex:page>

@@ -7,6 +7,7 @@ import ACCOUNT_OBJECT from '@salesforce/schema/Account';
 export default class FcbNewAccountOverride extends LightningElement {
   @api recordType;
   @track isBroker;
+  @track isAgent = false;
   @track shippingAddress = {
     street: "",
     city: "",
@@ -652,7 +653,9 @@ export default class FcbNewAccountOverride extends LightningElement {
 
   handleChange(event){
     let attribute = event.target.fieldName; 
-    if(attribute === 'Is_Broker__c'){
+    if(attribute === 'Is_Agent__c'){
+      this.isAgent = event.target.value;
+    } else if(attribute === 'Is_Broker__c'){
       this.isBroker = event.target.value;
     }
   }
