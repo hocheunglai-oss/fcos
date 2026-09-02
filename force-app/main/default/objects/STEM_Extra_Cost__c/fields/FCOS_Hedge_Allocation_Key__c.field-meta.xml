@@ -7,7 +7,7 @@
     <label>FCOS Hedge Allocation Key</label>
     <length>100</length>
     <required>false</required>
-    <trackHistory>true</trackHistory>
+    <trackHistory>false</trackHistory>
     <trackTrending>false</trackTrending>
     <type>Text</type>
     <unique>true</unique>

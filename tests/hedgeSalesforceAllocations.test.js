@@ -68,6 +68,7 @@ test('Physical Trade synchronization uses the approved mapping, external key and
   assert.match(legacy, /externalKeyField: 'FCOS_Hedge_Allocation_Key__c'/);
   assert.match(field, /<externalId>true<\/externalId>/);
   assert.match(field, /<unique>true<\/unique>/);
+  assert.match(field, /<trackHistory>false<\/trackHistory>/);
   assert.match(service, /allOrNone: true, compositeRequest: requests/);
   assert.match(service, /previewFingerprint/);
   assert.match(service, /sfQueryAll/);
