@@ -24,6 +24,9 @@ test('critical external actions and mutations carry checked policy metadata', ()
   assert.equal(registeredHandlerBehavior('specialTermDeletePreview').cache, 'none');
   assert.equal(registeredHandlerBehavior('specialTermClauseDelete').externalAction, true);
   assert.equal(registeredHandlerBehavior('specialTermClauseDraftDiscard').capability, null);
+  assert.equal(registeredHandlerBehavior('specialTermsTermRetire').mutation, true);
+  assert.equal(registeredHandlerBehavior('specialTermsTermRetire').externalAction, true);
+  assert.equal(registeredHandlerBehavior('specialTermsTermRetire').capability, 'special_terms_clause_approve');
   assert.equal(registeredHandlerBehavior('emailRouterActionStatus').externalAction, true);
 });
 

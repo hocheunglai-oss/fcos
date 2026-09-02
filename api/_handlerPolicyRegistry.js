@@ -188,6 +188,7 @@ const HANDLER_BEHAVIOR = Object.freeze({
   specialTermApprovalQueue: readPolicy({"cache":"none","externalAction":false,"capability":null}),
   specialTermClauseAiDraft: mutationPolicy({"cache":"none","externalAction":true,"capability":null}),
   specialTermsSave: mutationPolicy({"cache":"none","externalAction":true,"capability":"special_terms_manage"}),
+  specialTermsTermRetire: mutationPolicy({"cache":"none","externalAction":true,"capability":"special_terms_clause_approve"}),
   specialTermsDelete: mutationPolicy({"cache":"none","externalAction":true,"capability":"special_terms_manage"}),
   specialTermRuleSave: mutationPolicy({"cache":"none","externalAction":true,"capability":"special_terms_manage"}),
   specialTermRuleDelete: mutationPolicy({"cache":"none","externalAction":true,"capability":"special_terms_manage"}),
