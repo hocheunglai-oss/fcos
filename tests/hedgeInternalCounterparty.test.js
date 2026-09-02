@@ -57,7 +57,7 @@ test('FCBHK remains in counterparty reconciliation with unchanged MTM and fees',
 });
 
 test('FCBHK database migration seeds and protects the internal workflow', async () => {
-  const migration = await readFile(new URL('../supabase/migrations/20260902072223_add_internal_fcbhk_counterparty.sql', import.meta.url), 'utf8');
+  const migration = await readFile(new URL('../supabase/migrations/20260902080713_add_internal_fcbhk_counterparty.sql', import.meta.url), 'utf8');
   const service = await readFile(new URL('../api/_hedgeDeskService.js', import.meta.url), 'utf8');
   const documents = await readFile(new URL('../api/_hedgeDocuments.js', import.meta.url), 'utf8');
   for (const token of [
