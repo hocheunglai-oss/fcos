@@ -1,6 +1,5 @@
 import React, { useMemo, useState } from "react";
 import {
-  CloudUpload,
   Copy,
   Download,
   Edit3,
@@ -8,7 +7,6 @@ import {
   Trash2,
 } from "lucide-react";
 import { ClearingAccount, SwapHedge } from "@/hedge/api/entities";
-import { previewHedgeSalesforce, pushHedgeToSalesforce } from "@/hedge/api/backendFunctions";
 import {
   BROKER_EXCHANGE,
   calcSwapFees,
@@ -115,7 +113,6 @@ export function HedgesView({ data, settings, quickCreateSignal = 0, readOnly = f
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
-  const [salesforceDrawer, setSalesforceDrawer] = useState(null);
 
   React.useEffect(() => {
     if (quickCreateSignal) {
@@ -260,34 +257,6 @@ export function HedgesView({ data, settings, quickCreateSignal = 0, readOnly = f
     }
   };
 
-  const loadSalesforcePreview = async (record) => {
-    setSalesforceDrawer({ record, loading: true, preview: null, error: null, syncing: false, result: null });
-    try {
-      const preview = await previewHedgeSalesforce({ swapId: record.id, expectedRevision: record.revision });
-      setSalesforceDrawer((current) => current?.record.id === record.id ? { ...current, loading: false, preview } : current);
-    } catch (error) {
-      setSalesforceDrawer((current) => current?.record.id === record.id ? { ...current, loading: false, error } : current);
-    }
-  };
-
-  const syncSalesforce = async () => {
-    const current = salesforceDrawer;
-    if (!current?.preview?.ready || current.syncing) return;
-    setSalesforceDrawer((value) => ({ ...value, syncing: true, error: null, result: null }));
-    try {
-      const result = await pushHedgeToSalesforce({
-        swapId: current.record.id,
-        expectedRevision: current.record.revision,
-        previewFingerprint: current.preview.previewFingerprint,
-        idempotencyKey: globalThis.crypto?.randomUUID?.() || `${Date.now()}-${current.record.id}`,
-      });
-      const preview = await previewHedgeSalesforce({ swapId: current.record.id, expectedRevision: current.record.revision });
-      setSalesforceDrawer((value) => ({ ...value, syncing: false, result, preview }));
-    } catch (error) {
-      setSalesforceDrawer((value) => ({ ...value, syncing: false, error }));
-    }
-  };
-
   const exportRows = () => downloadCsv(
     `hedges_${hktToday()}.csv`,
     ["Trade date", "Type", "Product", "Direction", "Month", "Quantity", "Unit", "Price", "Venue", "Broker", "Counterparty", "Initial margin", "Expired"],
@@ -354,10 +323,10 @@ export function HedgesView({ data, settings, quickCreateSignal = 0, readOnly = f
                     <td><strong className={record.trade_type === "SPREAD" ? "app-text-violet" : record.direction === "BUY" ? "app-text-positive" : "app-text-negative"}>{record.trade_type === "SPREAD" ? "SPREAD" : record.direction}</strong><small>{record.trade_type === "SPREAD" ? `${formatMonth(record.leg1_month)} / ${formatMonth(record.leg2_month)}` : formatMonth(record.swap_month)}</small></td>
                     <td><strong>{formatQuantity(record.quantity, record.unit)}</strong>{record.round_trip && <small>Round trip</small>}</td>
                     <td><strong>{record.trade_type === "SPREAD" ? `$${record.leg1_price} / $${record.leg2_price}` : `$${record.price}`}</strong><small>{mtm?.isSpread ? "Two-leg MTM" : mtm?.mtmAvg != null ? `Market $${mtm.mtmAvg.toFixed(3)}` : "Market pending"}</small></td>
-                    <td><strong>{record.venue || "-"}{record.broker ? ` / ${record.broker}` : ""}</strong><small>{record.counterparty || "No counterparty"}</small></td>
+                    <td><strong>{record.venue || "-"}{record.broker ? ` / ${record.broker}` : ""}</strong><small>{record.counterparty || "No counterparty"}</small><small>{record.physical_trade_ids?.length ? `${record.physical_trade_ids.length} linked Physical Trade${record.physical_trade_ids.length === 1 ? "" : "s"}` : "No linked Physical Trade"}</small></td>
                     <td><strong>{formatMoney(record.initial_margin || estimateSwapInitialMargin(record, settings.iceMargins, settings.general.sgo_bbl_per_mt), { digits: 0 })}</strong><small>Fees {formatMoney(-totalFees, { digits: 2 })}</small></td>
                     <td><Money value={mtm ? mtm.value - totalFees : null} strong /></td>
-                    <td><div className="app-row-actions">{!readOnly && <>{!live && <IconButton label="Preview Salesforce allocation" icon={CloudUpload} variant="quiet" onClick={() => loadSalesforcePreview(record)} />}<IconButton label="Duplicate hedge" icon={Copy} variant="quiet" onClick={() => duplicate(record)} /><IconButton label="Edit hedge" icon={Edit3} variant="quiet" onClick={() => openEdit(record)} /><IconButton label="Delete hedge" icon={Trash2} variant="danger" onClick={() => setDeleteTarget(record)} /></>}</div></td>
+                    <td><div className="app-row-actions">{!readOnly && <><IconButton label="Duplicate hedge" icon={Copy} variant="quiet" onClick={() => duplicate(record)} /><IconButton label="Edit hedge" icon={Edit3} variant="quiet" onClick={() => openEdit(record)} /><IconButton label="Delete hedge" icon={Trash2} variant="danger" onClick={() => setDeleteTarget(record)} /></>}</div></td>
                   </tr>
                 );
               })}
@@ -416,40 +385,6 @@ export function HedgesView({ data, settings, quickCreateSignal = 0, readOnly = f
           <label className="app-check"><input type="checkbox" checked={Boolean(form.round_trip)} onChange={(event) => setField("round_trip", event.target.checked)} /><span>Round trip fees</span></label>
           <div className="app-callout app-callout--neutral">Expiry is automatic. FCOS waits until every contract month reaches its final Platts trading day, every scheduled MOPS row is complete, and manual verification text has been saved for the final monthly average.</div>
         </section>
-      </Drawer>
-
-      <Drawer
-        open={Boolean(salesforceDrawer)}
-        onClose={() => !salesforceDrawer?.syncing && setSalesforceDrawer(null)}
-        title="Salesforce hedge allocation"
-        description="Review final paper-hedge P&L and its one-per-STEM allocations before the all-or-none Salesforce transaction."
-        footer={<><Button onClick={() => setSalesforceDrawer(null)} disabled={salesforceDrawer?.syncing}>Close</Button>{!readOnly && <Button variant="primary" icon={CloudUpload} onClick={syncSalesforce} disabled={!salesforceDrawer?.preview?.ready || salesforceDrawer?.syncing}>{salesforceDrawer?.syncing ? "Synchronizing..." : "Synchronize all allocations"}</Button>}</>}
-      >
-        {salesforceDrawer?.loading && <p className="app-muted-copy">Calculating final MOPS and validating live Salesforce records...</p>}
-        {salesforceDrawer?.error && <InlineError error={salesforceDrawer.error} />}
-        {salesforceDrawer?.result && <div className="app-callout app-callout--positive">Salesforce synchronized {salesforceDrawer.result.results?.length || 0} allocation(s) in one transaction.</div>}
-        {salesforceDrawer?.preview && <div className="app-stack">
-          <section className="app-form-section">
-            <div className="app-form-section__title">Final calculation</div>
-            <div className="app-kpi-grid app-kpi-grid--4">
-              <div className="app-kpi"><span>Gross P&amp;L</span><strong>{formatMoney(salesforceDrawer.preview.financials.grossPnl, { signed: true, digits: 2 })}</strong></div>
-              <div className="app-kpi"><span>Fees</span><strong>{formatMoney(-salesforceDrawer.preview.financials.fees, { signed: true, digits: 2 })}</strong></div>
-              <div className="app-kpi"><span>Net P&amp;L</span><strong>{formatMoney(salesforceDrawer.preview.financials.netPnl, { signed: true, digits: 2 })}</strong></div>
-              <div className="app-kpi"><span>Salesforce cost</span><strong>{formatMoney(salesforceDrawer.preview.financials.salesforceCost, { signed: true, digits: 2 })}</strong></div>
-            </div>
-            <p className="app-muted-copy">Contract month(s): {salesforceDrawer.preview.financials.contractMonths.join(', ') || 'Not set'}. A gain becomes a negative STEM cost; a loss becomes a positive STEM cost.</p>
-          </section>
-          {salesforceDrawer.preview.issues.length > 0 && <section className="app-callout app-callout--warning"><strong>Synchronization blocked</strong><ul>{salesforceDrawer.preview.issues.map((issue) => <li key={issue}>{issue}</li>)}</ul></section>}
-          <section className="app-form-section">
-            <div className="app-form-section__title">STEM allocations</div>
-            <TableFrame>
-              <table className="app-table app-table--compact">
-                <thead><tr><th>STEM</th><th>Supplier</th><th>Allocation</th><th>Gross P&amp;L</th><th>Fees</th><th>Net P&amp;L</th><th>Salesforce cost</th><th>Action</th></tr></thead>
-                <tbody>{salesforceDrawer.preview.allocations.map((allocation) => <tr key={allocation.salesforceStemId}><td><strong>{allocation.stemKey}</strong></td><td><strong>{allocation.supplierName}</strong>{allocation.supplierClKey && <small>{allocation.supplierClKey}</small>}</td><td>{allocation.allocationPercentage.toFixed(4)}%</td><td>{formatMoney(allocation.grossPnl, { signed: true, digits: 2 })}</td><td>{formatMoney(-allocation.feeAmount, { signed: true, digits: 2 })}</td><td>{formatMoney(allocation.netPnl, { signed: true, digits: 2 })}</td><td>{formatMoney(allocation.salesforceCost, { signed: true, digits: 2 })}</td><td><StatusBadge tone={allocation.reviewIssue ? "negative" : allocation.action === "create" ? "warning" : "positive"}>{allocation.reviewIssue ? "Review" : allocation.action === "create" ? "Create" : "Update"}</StatusBadge>{allocation.existingPaymentTerm && <small>Keep {allocation.existingPaymentTerm}</small>}</td></tr>)}</tbody>
-              </table>
-            </TableFrame>
-          </section>
-        </div>}
       </Drawer>
 
       <ConfirmDialog open={Boolean(deleteTarget)} onClose={() => setDeleteTarget(null)} onConfirm={remove} busy={saving} title="Delete hedge?" description={deleteTarget ? `${deleteTarget.product} ${deleteTarget.direction || deleteTarget.trade_type} ${formatMonth(deleteTarget.swap_month || deleteTarget.leg1_month)}` : ""} />

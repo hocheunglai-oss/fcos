@@ -186,7 +186,12 @@ import { parseMopsText } from '../_hedgeMops.js';
 import { generateHedgeInvoicePdf, saveHedgeInvoicePdf, sendHedgeInvoiceEmailIdempotent } from '../_hedgeDocuments.js';
 import { approveAndSendHedgeSfsReport, getHedgeSfsFile, getHedgeSfsMonthReport, hedgeSfsHealth } from '../_hedgeSfsService.js';
 import { hedgeAssistantSettings, runHedgeAssistant } from '../_hedgeAssistant.js';
-import { getHedgeSalesforceMapping, previewHedgeSalesforce, pushHedgeSalesforce } from '../_hedgeSalesforce.js';
+import { getHedgeSalesforceMapping, previewHedgeSalesforce } from '../_hedgeSalesforce.js';
+import {
+  applyPhysicalHedgeSalesforce,
+  getPhysicalHedgeSalesforceStatuses,
+  previewPhysicalHedgeSalesforce,
+} from '../_hedgePhysicalSalesforce.js';
 import { financialQuantityLabel, financialQuantityValue as financialQuantity, nativeFinancialQuantity } from '../_financialQuantity.js';
 import { buildHandlerPolicyRegistry, handlerPolicyFor } from '../_handlerPolicyRegistry.js';
 import { runHedgeMaintenance } from '../_hedgeMaintenance.js';
@@ -1335,6 +1340,9 @@ const HANDLER_MODULE_ACCESS = {
   hedgeDeskSalesforcePush: ['hedge_desk'],
   hedgeDeskSalesforcePreview: ['hedge_desk'],
   hedgeDeskSalesforceMapping: ['hedge_desk'],
+  hedgePhysicalSalesforceStatus: ['hedge_desk'],
+  hedgePhysicalSalesforcePreview: ['hedge_desk'],
+  hedgePhysicalSalesforceApply: ['hedge_desk'],
   hedgeDeskAssistant: ['hedge_desk'],
   hedgeDeskAssistantSettings: ['hedge_desk', 'settings'],
   hedgeDeskMaintenanceCron: [],
@@ -18572,7 +18580,8 @@ async function hedgeDeskSfsSend(body = {}, req = null, accessContext = null) {
 async function hedgeDeskSalesforcePush(body = {}, req = null, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
   await requireCapability(context.client, context.profile, 'hedge_book_manage', 'Hedge book management permission is required for Salesforce synchronization.');
-  return pushHedgeSalesforce(context.client, context.profile, body);
+  void body;
+  throw appError('Paper Hedge Salesforce synchronization has been retired. Use the linked Physical Trade and review its Salesforce hedge result.', 409, 'HEDGE_SALESFORCE_USE_PHYSICAL_TRADE');
 }
 
 async function hedgeDeskSalesforcePreview(body = {}, req = null, accessContext = null) {
@@ -18586,6 +18595,23 @@ async function hedgeDeskSalesforceMapping(body = {}, req = null, accessContext =
   const capabilities = await hedgeCapabilities(context);
   void body;
   return { ...(await getHedgeSalesforceMapping(context.client)), canManage: capabilities.hedge_admin === true };
+}
+
+async function hedgePhysicalSalesforceStatus(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  return getPhysicalHedgeSalesforceStatuses(context.client, context.profile, body);
+}
+
+async function hedgePhysicalSalesforcePreview(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  await requireCapability(context.client, context.profile, 'hedge_book_manage', 'Hedge book management permission is required to review Salesforce hedge results.');
+  return previewPhysicalHedgeSalesforce(context.client, context.profile, body);
+}
+
+async function hedgePhysicalSalesforceApply(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  await requireCapability(context.client, context.profile, 'hedge_book_manage', 'Hedge book management permission is required to update Salesforce hedge results.');
+  return applyPhysicalHedgeSalesforce(context.client, context.profile, body);
 }
 
 async function hedgeDeskAssistant(body = {}, req = null, accessContext = null) {
@@ -19177,6 +19203,9 @@ const handlers = {
   hedgeDeskSalesforcePush,
   hedgeDeskSalesforcePreview,
   hedgeDeskSalesforceMapping,
+  hedgePhysicalSalesforceStatus,
+  hedgePhysicalSalesforcePreview,
+  hedgePhysicalSalesforceApply,
   hedgeDeskAssistant,
   hedgeDeskAssistantSettings,
   hedgeDeskMaintenanceCron,

@@ -14,6 +14,9 @@ test('critical external actions and mutations carry checked policy metadata', ()
   assert.equal(registeredHandlerBehavior('buyerInvoicePaymentReminderSend').externalAction, true);
   assert.equal(registeredHandlerBehavior('outstandingBuyerInvoicesEmailReport').mutation, true);
   assert.equal(registeredHandlerBehavior('hedgeDeskSalesforcePush').externalAction, true);
+  assert.equal(registeredHandlerBehavior('hedgePhysicalSalesforceStatus').externalAction, false);
+  assert.equal(registeredHandlerBehavior('hedgePhysicalSalesforcePreview').externalAction, false);
+  assert.equal(registeredHandlerBehavior('hedgePhysicalSalesforceApply').externalAction, true);
   assert.equal(registeredHandlerBehavior('dashboardAccountInsight').cache, 'server');
   assert.equal(registeredHandlerBehavior('specialTermsPdfExport').mutation, false);
   assert.equal(registeredHandlerBehavior('specialTermMigrationInventory').capability, 'special_terms_clause_approve');

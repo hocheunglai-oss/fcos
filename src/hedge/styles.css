@@ -1255,7 +1255,7 @@
   table-layout: auto;
 }
 
-.hedge-desk-root .app-table--physical { min-width: 1180px; }
+.hedge-desk-root .app-table--physical { min-width: 1360px; }
 .hedge-desk-root .app-table--hedges { min-width: 1300px; }
 .hedge-desk-root .app-table--counterparties { min-width: 1050px; }
 

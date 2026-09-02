@@ -826,7 +826,7 @@ async function loadWorkflowState(client, salesforceData, interoffice, force) {
   const hedgeByStem = {};
   let exceptions = { count: 0, overdue: 0, reasons: [] };
   if (stemIds.length) {
-    const [collectionItems, collectionEvents, cases, parties, actions, instructions, exceptionItems, hedgeAllocations] = await Promise.all([
+    const [collectionItems, collectionEvents, cases, parties, actions, instructions, exceptionItems, hedgeAllocations, physicalHedgeCosts] = await Promise.all([
       selectSupabaseRowsByStem(client, 'buyer_invoice_collection_items', 'stem_id,status,next_follow_up_date,promised_payment_date,advice_verification_date,reconciliation_state', stemIds),
       selectSupabaseRowsByStem(client, 'buyer_invoice_collection_events', 'stem_id,event_type,created_at', stemIds, { order: { column: 'created_at', ascending: false } }),
       selectSupabaseRowsByStem(client, 'dispute_beta_cases', 'id,stem_id,workflow_status,approval_status,submitted_at,created_at,closed_at', stemIds),
@@ -835,8 +835,9 @@ async function loadWorkflowState(client, salesforceData, interoffice, force) {
       selectSupabaseRowsByStem(client, 'dispute_workflow_supplier_instructions', 'id,case_id,stem_id,party_id,instruction_type,status,currency_iso_code,planned_amount,recovery_method,created_at,settled_at', stemIds),
       selectSupabaseRowsByStem(client, 'exception_review_items', 'stem_id,status,department,priority,due_date', stemIds),
       selectSupabaseRowsByStem(client, 'hedge_salesforce_allocations', 'salesforce_stem_id,paper_hedge_id,venue,allocation_percentage,net_pnl,sync_state', stemIds, { field: 'salesforce_stem_id' }),
+      selectSupabaseRowsByStem(client, 'hedge_physical_salesforce_costs', 'salesforce_stem_id,physical_trade_id,venue,gross_pnl,salesforce_cost,sync_state', stemIds, { field: 'salesforce_stem_id' }),
     ]);
-    const unavailableWorkflowSources = [collectionItems, collectionEvents, cases, parties, actions, instructions, exceptionItems, hedgeAllocations]
+    const unavailableWorkflowSources = [collectionItems, collectionEvents, cases, parties, actions, instructions, exceptionItems, hedgeAllocations, physicalHedgeCosts]
       .filter((result) => result.error).length;
     if (unavailableWorkflowSources) {
       warnings.push(`${unavailableWorkflowSources} internal workflow source${unavailableWorkflowSources === 1 ? ' is' : 's are'} temporarily unavailable.`);
@@ -853,6 +854,18 @@ async function loadWorkflowState(client, salesforceData, interoffice, force) {
     for (const allocation of hedgeAllocations.data || []) {
       const values = hedgeByStem[allocation.salesforce_stem_id] || [];
       values.push({ venue: allocation.venue, allocationPercentage: number(allocation.allocation_percentage), netPnl: number(allocation.net_pnl), syncState: allocation.sync_state });
+      hedgeByStem[allocation.salesforce_stem_id] = values;
+    }
+    for (const allocation of physicalHedgeCosts.data || []) {
+      const values = hedgeByStem[allocation.salesforce_stem_id] || [];
+      values.push({
+        source: 'physical_trade',
+        physicalTradeId: allocation.physical_trade_id,
+        venue: allocation.venue,
+        grossPnl: number(allocation.gross_pnl),
+        salesforceCost: number(allocation.salesforce_cost),
+        syncState: allocation.sync_state,
+      });
       hedgeByStem[allocation.salesforce_stem_id] = values;
     }
     const uncancelledLineStemIds = new Set(salesforceData.lineItems

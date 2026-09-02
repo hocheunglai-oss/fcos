@@ -49,11 +49,14 @@ export const PAGE_METHODOLOGIES = {
     ],
   },
   "Physical trades": {
-    summary: "Physical positions are valued from their buy and sell pricing legs, premiums, quantities, pricing months, and any linked paper hedges.",
+    summary: "Physical positions are valued from their buy and sell pricing legs, premiums, quantities, pricing months, linked paper hedges, and explicitly reviewed Salesforce hedge-result costs.",
     steps: [
       "Fixed legs use the entered fixed price. MOPS legs use the selected monthly or balance-month average plus the entered premium.",
       "SGO quantities are normalized with the configured barrel-per-metric-ton conversion when required.",
       "Physical P&L is sell value less buy value. Combined P&L adds mark-to-market from linked active hedges.",
+      "A final Paper Hedge result is allocated across its linked Physical Trades by normalized midpoint quantity. The Salesforce preview uses gross hedge P&L before broker, exchange, clearing, or settlement fees; a gain becomes a negative STEM cost and a loss becomes a positive STEM cost.",
+      "FCOS groups each Physical Trade result by venue and checks live Salesforce, including deleted or cancelled rows. Calculation and reconciliation are read-only until an authorized user reviews the exact Physical Trade and confirms Add, Update, Recreate, Restore, or Adopt.",
+      "One managed SWAPS STEM Charge is maintained for each Physical Trade and venue. Changed calculations remain visibly pending until confirmed; invoiced rows are locked and unmanaged matches are never adopted silently.",
       "Open and closed status follows the trade close flag and retained settlement history.",
     ],
   },

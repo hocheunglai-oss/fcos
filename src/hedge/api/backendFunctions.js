@@ -13,7 +13,9 @@ export const getSfsReportFile = (payload) => invokeHedgeFunction('hedgeDeskSfsFi
 export const generateOtcInvoice = (payload) => invokeHedgeFunction('hedgeDeskGenerateInvoice', payload);
 export const saveInvoicePdf = (payload) => invokeHedgeFunction('hedgeDeskSaveInvoicePdf', payload);
 export const sendInvoiceEmail = (payload) => invokeHedgeFunction('hedgeDeskSendInvoiceEmail', payload);
-export const pushHedgeToSalesforce = (payload) => invokeHedgeFunction('hedgeDeskSalesforcePush', payload);
 export const previewHedgeSalesforce = (payload) => invokeHedgeFunction('hedgeDeskSalesforcePreview', payload);
 export const getHedgeSalesforceMapping = () => invokeHedgeFunction('hedgeDeskSalesforceMapping');
+export const getPhysicalHedgeSalesforceStatus = (payload) => invokeHedgeFunction('hedgePhysicalSalesforceStatus', payload);
+export const previewPhysicalHedgeSalesforce = (payload) => invokeHedgeFunction('hedgePhysicalSalesforcePreview', payload);
+export const applyPhysicalHedgeSalesforce = (payload) => invokeHedgeFunction('hedgePhysicalSalesforceApply', payload);
 export const runHedgeAssistant = (payload) => invokeHedgeFunction('hedgeDeskAssistant', payload);

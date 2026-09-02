@@ -4,6 +4,17 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.193',
+    releasedAt: '2026-09-02',
+    title: 'Add reviewed Physical Trade hedge results',
+    changes: [
+      'Adds calculation-only gross Paper Hedge P&L allocations to linked Physical Trades, grouped by venue and displayed as proposed Salesforce STEM costs.',
+      'Adds explicit Add, Update, Recreate, Restore, and Adopt review paths while keeping every preview and recalculation read-only.',
+      'Detects deleted, cancelled, manually changed, conflicting, and invoiced Salesforce rows through managed external keys and immutable FCOS history.',
+      'Moves Salesforce hedge-result review from Paper Hedges to each recipient Physical Trade and preserves legacy allocation evidence for Account Insight.',
+    ],
+  },
+  {
     version: '2.0.192',
     releasedAt: '2026-08-30',
     title: 'Stabilize operational workflows and connections',

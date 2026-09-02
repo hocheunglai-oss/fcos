@@ -366,6 +366,24 @@ export async function sfQuery(soql, { clean = false, limit = 2000, softFail = fa
   }
 }
 
+export async function sfQueryAll(soql, { clean = false, limit = 2000, softFail = false } = {}) {
+  try {
+    let data = await sfRequest(`/queryAll/?q=${encodeURIComponent(soql)}`, { readOnly: true });
+    let records = data.records || [];
+    const totalSize = data.totalSize ?? records.length;
+
+    while (data.nextRecordsUrl && records.length < limit) {
+      data = await sfRequest(data.nextRecordsUrl.replace(`/services/data/${getApiVersion()}`, ''), { readOnly: true });
+      records = records.concat(data.records || []);
+    }
+
+    return { records: clean ? records.map(cleanRecord) : records, totalSize };
+  } catch (error) {
+    if (softFail) return { records: [], totalSize: 0, error: error.message };
+    throw error;
+  }
+}
+
 function compositeQueryUrl(soql) {
   return `/services/data/${getApiVersion()}/query/?q=${encodeURIComponent(soql)}`;
 }

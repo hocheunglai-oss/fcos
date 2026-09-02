@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>FCOS_Hedge_Allocation_Key__c</fullName>
+    <caseSensitive>false</caseSensitive>
+    <description>Unique FCOS Physical Trade, hedge venue, and recreation generation that owns this SWAPS cost.</description>
+    <externalId>true</externalId>
+    <label>FCOS Hedge Allocation Key</label>
+    <length>100</length>
+    <required>false</required>
+    <trackHistory>true</trackHistory>
+    <trackTrending>false</trackTrending>
+    <type>Text</type>
+    <unique>true</unique>
+</CustomField>

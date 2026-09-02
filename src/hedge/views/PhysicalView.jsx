@@ -1,16 +1,25 @@
 import React, { useMemo, useState } from "react";
 import {
+  CloudUpload,
   Copy,
   Download,
   Edit3,
+  ExternalLink,
   Plus,
+  RefreshCw,
   Trash2,
 } from "lucide-react";
 import { PhysicalTrade } from "@/hedge/api/entities";
 import {
+  applyPhysicalHedgeSalesforce,
+  getPhysicalHedgeSalesforceStatus,
+  previewPhysicalHedgeSalesforce,
+} from "@/hedge/api/backendFunctions";
+import {
   calcPhysicalPnl,
   downloadCsv,
   formatDate,
+  formatMoney,
   formatMonth,
   formatQuantity,
   hktThisMonth,
@@ -35,6 +44,33 @@ import {
   StatusBadge,
   TableFrame,
 } from "../components/ui";
+
+const SALESFORCE_STATUS = {
+  checking: { label: "Checking", tone: "neutral" },
+  no_stem: { label: "No STEM", tone: "neutral" },
+  no_linked_hedge: { label: "No linked hedge", tone: "neutral" },
+  waiting_final: { label: "Waiting for final result", tone: "warning" },
+  ready_to_add: { label: "Ready to add", tone: "warning" },
+  added: { label: "Added", tone: "positive" },
+  update_required: { label: "Update required", tone: "warning" },
+  removed: { label: "Removed in Salesforce", tone: "negative" },
+  changed_salesforce: { label: "Changed in Salesforce", tone: "negative" },
+  locked_by_invoice: { label: "Locked by invoice", tone: "neutral" },
+  conflict: { label: "Conflict", tone: "negative" },
+};
+
+function salesforceStatusMeta(value) {
+  return SALESFORCE_STATUS[value] || SALESFORCE_STATUS.checking;
+}
+
+function salesforceReviewLabel(status) {
+  if (status === "ready_to_add") return "Add to Salesforce";
+  if (status === "update_required") return "Review update";
+  if (status === "removed") return "Recreate";
+  if (["changed_salesforce", "conflict"].includes(status)) return "Review conflict";
+  if (status === "added") return "View Salesforce result";
+  return "Review Salesforce hedge result";
+}
 
 const BLANK_PHYSICAL = {
   trade_date: hktToday(),
@@ -134,6 +170,32 @@ export function PhysicalView({ data, settings, quickCreateSignal = 0, readOnly =
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const [salesforceStatuses, setSalesforceStatuses] = useState({});
+  const [salesforceLoading, setSalesforceLoading] = useState(false);
+  const [salesforceError, setSalesforceError] = useState(null);
+  const [salesforceDrawer, setSalesforceDrawer] = useState(null);
+
+  const loadSalesforceStatuses = React.useCallback(async () => {
+    const physicalTradeIds = data.physicals.map((record) => record.id).filter(Boolean);
+    if (!physicalTradeIds.length) {
+      setSalesforceStatuses({});
+      return;
+    }
+    setSalesforceLoading(true);
+    setSalesforceError(null);
+    try {
+      const response = await getPhysicalHedgeSalesforceStatus({ physicalTradeIds, persist: true });
+      setSalesforceStatuses(Object.fromEntries((response.rows || []).map((row) => [row.physicalTradeId, row])));
+    } catch (error) {
+      setSalesforceError(error);
+    } finally {
+      setSalesforceLoading(false);
+    }
+  }, [data.physicals]);
+
+  React.useEffect(() => {
+    loadSalesforceStatuses().catch(() => {});
+  }, [loadSalesforceStatuses]);
 
   React.useEffect(() => {
     if (quickCreateSignal) {
@@ -228,10 +290,47 @@ export function PhysicalView({ data, settings, quickCreateSignal = 0, readOnly =
     }
   };
 
+  const openSalesforceReview = async (record) => {
+    setSalesforceDrawer({ record, loading: true, preview: null, error: null, saving: false, result: null, reason: "" });
+    try {
+      const preview = await previewPhysicalHedgeSalesforce({ physicalTradeId: record.id, expectedRevision: record.revision });
+      setSalesforceDrawer((current) => current?.record.id === record.id ? { ...current, loading: false, preview } : current);
+    } catch (error) {
+      setSalesforceDrawer((current) => current?.record.id === record.id ? { ...current, loading: false, error } : current);
+    }
+  };
+
+  const confirmSalesforceResult = async () => {
+    const current = salesforceDrawer;
+    if (!current?.preview || current.saving) return;
+    const hasConflict = current.preview.venues.some((row) => row.state === "conflict");
+    const hasChanged = current.preview.venues.some((row) => row.state === "changed_salesforce");
+    const action = hasConflict ? "adopt" : hasChanged ? "restore" : "apply";
+    setSalesforceDrawer((value) => ({ ...value, saving: true, error: null, result: null }));
+    try {
+      const result = await applyPhysicalHedgeSalesforce({
+        physicalTradeId: current.record.id,
+        expectedRevision: current.record.revision,
+        previewFingerprint: current.preview.previewFingerprint,
+        action,
+        reason: current.reason,
+        idempotencyKey: globalThis.crypto?.randomUUID?.() || `${Date.now()}-${current.record.id}`,
+      });
+      const preview = await previewPhysicalHedgeSalesforce({ physicalTradeId: current.record.id, expectedRevision: current.record.revision });
+      setSalesforceDrawer((value) => ({ ...value, saving: false, result, preview }));
+      await loadSalesforceStatuses();
+    } catch (error) {
+      setSalesforceDrawer((value) => ({ ...value, saving: false, error }));
+    }
+  };
+
   const exportRows = () => downloadCsv(
     `physical_trades_${hktToday()}.csv`,
-    ["Trade date", "Product", "Counterparty", "Qty min", "Qty max", "Unit", "Vessel", "Delivery from", "Delivery to", "Sell type", "Sell price", "Sell premium", "Buy type", "Buy price", "Buy premium", "Stem", "Closed"],
-    rows.map((record) => [record.trade_date, record.product, record.counterparty, record.qty_min, record.qty_max, record.unit, record.vessel_name, record.delivery_date_from, record.delivery_date_to, record.sell_price_type, record.sell_price, record.sell_premium, record.buy_price_type, record.buy_price, record.buy_premium, record.stem_number, record.is_closed ? "Yes" : "No"]),
+    ["Trade date", "Product", "Counterparty", "Qty min", "Qty max", "Unit", "Vessel", "Delivery from", "Delivery to", "Sell type", "Sell price", "Sell premium", "Buy type", "Buy price", "Buy premium", "Stem", "Salesforce hedge result", "Proposed Salesforce cost", "Current Salesforce cost", "Closed"],
+    rows.map((record) => {
+      const result = salesforceStatuses[record.id];
+      return [record.trade_date, record.product, record.counterparty, record.qty_min, record.qty_max, record.unit, record.vessel_name, record.delivery_date_from, record.delivery_date_to, record.sell_price_type, record.sell_price, record.sell_premium, record.buy_price_type, record.buy_price, record.buy_premium, record.stem_number, salesforceStatusMeta(result?.state).label, result?.proposedSalesforceCost ?? "", result?.currentSalesforceCost ?? "", record.is_closed ? "Yes" : "No"];
+    }),
   );
 
   return (
@@ -260,20 +359,25 @@ export function PhysicalView({ data, settings, quickCreateSignal = 0, readOnly =
           {months.map((value) => <option key={value} value={value}>{formatMonth(value)}</option>)}
         </Select>
         <IconButton label="Export filtered physical trades" icon={Download} onClick={exportRows} />
+        <IconButton label="Refresh Salesforce hedge results" icon={RefreshCw} onClick={loadSalesforceStatuses} disabled={salesforceLoading} />
       </div>
+
+      {salesforceError && <InlineError error={salesforceError} action={<Button onClick={loadSalesforceStatuses}>Try again</Button>} />}
 
       <TableFrame>
         {rows.length ? (
           <table className="app-table app-table--physical">
             <thead>
               <tr>
-                <th>Status</th><th>Trade</th><th>Product</th><th>Counterparty</th><th>Quantity</th><th>Vessel / delivery</th><th>Pricing</th><th>P&amp;L</th><th aria-label="Actions" />
+                <th>Status</th><th>Trade</th><th>Product</th><th>Counterparty</th><th>Quantity</th><th>Vessel / delivery</th><th>Pricing</th><th>P&amp;L</th><th>Salesforce hedge result</th><th aria-label="Actions" />
               </tr>
             </thead>
             <tbody>
               {rows.map((record) => {
                 const pnl = calcPhysicalPnl(record, data.mops, settings.general.sgo_bbl_per_mt, data.marketValuation)?.value;
                 const closed = physicalStatus(record) === "closed";
+                const hedgeResult = salesforceStatuses[record.id] || { state: "checking", venues: [] };
+                const hedgeResultMeta = salesforceStatusMeta(hedgeResult.state);
                 return (
                   <tr key={record.id}>
                     <td><StatusBadge tone={closed ? "neutral" : "positive"}>{closed ? "Closed" : "Open"}</StatusBadge></td>
@@ -285,7 +389,14 @@ export function PhysicalView({ data, settings, quickCreateSignal = 0, readOnly =
                     <td><strong>{formatMonth(record.sell_pricing_month || record.buy_pricing_month)}</strong><small>{record.sell_price_type || "-"} / {record.buy_price_type || "-"}</small></td>
                     <td><Money value={pnl} strong /></td>
                     <td>
+                      <StatusBadge tone={hedgeResultMeta.tone}>{hedgeResultMeta.label}</StatusBadge>
+                      {hedgeResult.proposedSalesforceCost != null && <strong>{formatMoney(hedgeResult.proposedSalesforceCost, { signed: true, digits: 2 })}</strong>}
+                      {hedgeResult.currentSalesforceCost != null && <small>Current {formatMoney(hedgeResult.currentSalesforceCost, { signed: true, digits: 2 })}</small>}
+                      {hedgeResult.difference != null && Math.abs(hedgeResult.difference) >= 0.005 && <small>Difference {formatMoney(hedgeResult.difference, { signed: true, digits: 2 })}</small>}
+                    </td>
+                    <td>
                       <div className="app-row-actions">
+                        {!readOnly && <IconButton label={salesforceReviewLabel(hedgeResult.state)} icon={hedgeResult.state === "added" ? ExternalLink : CloudUpload} variant={hedgeResult.state === "removed" || hedgeResult.state === "conflict" ? "danger" : "quiet"} onClick={() => openSalesforceReview(record)} disabled={salesforceLoading} />}
                         {!readOnly && <><IconButton label="Duplicate physical trade" icon={Copy} variant="quiet" onClick={() => duplicate(record)} /><IconButton label="Edit physical trade" icon={Edit3} variant="quiet" onClick={() => openEdit(record)} /><IconButton label="Delete physical trade" icon={Trash2} variant="danger" onClick={() => setDeleteTarget(record)} /></>}
                       </div>
                     </td>
@@ -328,6 +439,64 @@ export function PhysicalView({ data, settings, quickCreateSignal = 0, readOnly =
           <Field label="Notes"><textarea className="app-input app-textarea" rows="4" value={form.notes || ""} onChange={(event) => setField("notes", event.target.value)} /></Field>
           <label className="app-check"><input type="checkbox" checked={Boolean(form.is_closed)} onChange={(event) => setField("is_closed", event.target.checked)} /><span>Mark this physical trade as closed</span></label>
         </section>
+      </Drawer>
+
+      <Drawer
+        open={Boolean(salesforceDrawer)}
+        onClose={() => !salesforceDrawer?.saving && setSalesforceDrawer(null)}
+        title="Salesforce hedge result"
+        description={salesforceDrawer?.record ? `${salesforceDrawer.record.stem_number || "No STEM"} · ${salesforceDrawer.record.product || "No product"}` : undefined}
+        width="xl"
+        footer={<>
+          <Button onClick={() => setSalesforceDrawer(null)} disabled={salesforceDrawer?.saving}>Close</Button>
+          {!readOnly && salesforceDrawer?.preview?.venues?.length > 0 && salesforceDrawer.preview.venues.some((row) => row.state !== "added") && (
+            <Button
+              variant="primary"
+              icon={CloudUpload}
+              onClick={confirmSalesforceResult}
+              disabled={salesforceDrawer?.saving || salesforceDrawer?.preview?.venues?.some((row) => ["waiting_final", "locked_by_invoice"].includes(row.state) || (row.state === "conflict" && !row.salesforceRecordId))}
+            >
+              {salesforceDrawer?.saving ? "Saving..." : salesforceDrawer.preview.state === "ready_to_add" ? "Confirm add" : salesforceDrawer.preview.state === "removed" ? "Confirm recreate" : "Confirm update"}
+            </Button>
+          )}
+        </>}
+      >
+        {salesforceDrawer?.loading && <p className="app-muted-copy">Calculating the final gross hedge result and checking Salesforce...</p>}
+        {salesforceDrawer?.error && <InlineError error={salesforceDrawer.error} />}
+        {salesforceDrawer?.result && <div className="app-callout app-callout--positive">Salesforce updated {salesforceDrawer.result.results?.length || 0} hedge-result row(s).</div>}
+        {salesforceDrawer?.preview && <div className="app-stack">
+          <section className="app-form-section">
+            <div className="app-form-section__title">Physical Trade result</div>
+            <div className="app-kpi-grid app-kpi-grid--3">
+              <div className="app-kpi"><span>Final gross hedge P&amp;L</span><strong>{formatMoney(-salesforceDrawer.preview.proposedSalesforceCost, { signed: true, digits: 2 })}</strong></div>
+              <div className="app-kpi"><span>Proposed Salesforce cost</span><strong>{formatMoney(salesforceDrawer.preview.proposedSalesforceCost, { signed: true, digits: 2 })}</strong></div>
+              <div className="app-kpi"><span>Current Salesforce cost</span><strong>{salesforceDrawer.preview.currentSalesforceCost == null ? "Not added" : formatMoney(salesforceDrawer.preview.currentSalesforceCost, { signed: true, digits: 2 })}</strong></div>
+            </div>
+            <p className="app-muted-copy">Broker, exchange, clearing and settlement fees are excluded. A hedge gain becomes a negative STEM cost; a hedge loss becomes a positive STEM cost.</p>
+          </section>
+          {salesforceDrawer.preview.issues.length > 0 && <section className="app-callout app-callout--warning"><strong>Review required</strong><ul>{salesforceDrawer.preview.issues.map((issue) => <li key={issue}>{issue}</li>)}</ul></section>}
+          <section className="app-form-section">
+            <div className="app-form-section__title">Venue rows</div>
+            <TableFrame>
+              <table className="app-table app-table--compact">
+                <thead><tr><th>Venue / Supplier</th><th>Linked Paper Hedges</th><th>Gross P&amp;L</th><th>Proposed cost</th><th>Current cost</th><th>Difference</th><th>Status</th></tr></thead>
+                <tbody>{salesforceDrawer.preview.venues.map((row) => {
+                  const meta = salesforceStatusMeta(row.state);
+                  return <tr key={row.venue}>
+                    <td><strong>{row.venue}</strong><small>{row.supplierName}</small></td>
+                    <td><strong>{row.contributions.length}</strong><small>{row.contributions.map((item) => `${item.allocationPercentage.toFixed(4)}%`).join(" · ")}</small></td>
+                    <td>{formatMoney(row.grossPnl, { signed: true, digits: 2 })}</td>
+                    <td>{formatMoney(row.salesforceCost, { signed: true, digits: 2 })}</td>
+                    <td>{row.currentSalesforceCost == null ? "—" : formatMoney(row.currentSalesforceCost, { signed: true, digits: 2 })}</td>
+                    <td>{row.currentSalesforceCost == null ? "—" : formatMoney(row.salesforceCost - row.currentSalesforceCost, { signed: true, digits: 2 })}</td>
+                    <td><StatusBadge tone={meta.tone}>{meta.label}</StatusBadge>{row.salesforceUrl && <a className="app-source-link" href={row.salesforceUrl} target="_blank" rel="noreferrer"><ExternalLink size={13} /> Open Salesforce</a>}</td>
+                  </tr>;
+                })}</tbody>
+              </table>
+            </TableFrame>
+          </section>
+          {salesforceDrawer.preview.venues.some((row) => ["conflict", "changed_salesforce"].includes(row.state)) && <section className="app-form-section"><Field label="Reason" required hint="Required when adopting or restoring a Salesforce row."><textarea className="app-input app-textarea" rows="3" value={salesforceDrawer.reason || ""} onChange={(event) => setSalesforceDrawer((current) => ({ ...current, reason: event.target.value }))} /></Field></section>}
+        </div>}
       </Drawer>
 
       <ConfirmDialog open={Boolean(deleteTarget)} onClose={() => setDeleteTarget(null)} onConfirm={remove} busy={saving} title="Delete physical trade?" description={deleteTarget ? `${deleteTarget.product || "Physical"} for ${deleteTarget.counterparty || "unassigned counterparty"} on ${formatDate(deleteTarget.trade_date)}` : ""} />

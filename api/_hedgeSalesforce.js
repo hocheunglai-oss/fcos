@@ -19,7 +19,7 @@ const VENUES = ['ICE', 'FCBS'];
 const MAX_ALLOCATIONS = 25;
 
 const APPROVED_MAPPING = Object.freeze({
-  mappingRevision: 1,
+  mappingRevision: 2,
   objectName: 'STEM_Extra_Cost__c',
   stemObjectName: 'STEM__c',
   stemNameField: 'KeyStem__c',
@@ -31,6 +31,10 @@ const APPROVED_MAPPING = Object.freeze({
   fixedField: 'Fixed__c',
   quantityField: 'Quantity_Delivered_Per_BDN__c',
   paymentTermField: 'Payment_Term__c',
+  externalKeyField: 'FCOS_Hedge_Allocation_Key__c',
+  cancelledField: 'Cancelled__c',
+  buyerInvoiceField: 'Buyer_Invoice__c',
+  supplierInvoiceField: 'Supplier_Invoice__c',
   recordTypeId: '0122x000000cwlgAAA',
   productId: '01tfu000002zAEDAA2',
   quantity: 1,
@@ -113,11 +117,32 @@ function mergeMapping(saved) {
   return {
     ...APPROVED_MAPPING,
     ...source,
+    mappingRevision: Math.max(Number(APPROVED_MAPPING.mappingRevision), Number(source.mappingRevision || 0)),
     venues: {
       ICE: { ...APPROVED_MAPPING.venues.ICE, ...(source.venues?.ICE || {}) },
       FCBS: { ...APPROVED_MAPPING.venues.FCBS, ...(source.venues?.FCBS || {}) },
     },
   };
+}
+
+export async function loadValidatedHedgeSalesforceMapping(client) {
+  const config = await mapping(client);
+  const identities = await validateMapping(config);
+  return { config, identities };
+}
+
+export async function loadFinalPaperHedgeAllocation(client, swapId) {
+  const inputs = await loadInputs(client, swapId);
+  const financials = await loadFinalFinancials(client, inputs);
+  return { inputs, financials };
+}
+
+export function hedgeSalesforceFingerprint(value) {
+  return fingerprint(value);
+}
+
+export function hedgeSalesforceFailure(message, statusCode = 400, code = null, details = undefined) {
+  return failure(message, statusCode, code, details);
 }
 
 async function mapping(client) {
@@ -375,8 +400,8 @@ function mappingResponse(config, identities) {
 }
 
 export async function getHedgeSalesforceMapping(client) {
-  const config = await mapping(client);
-  return mappingResponse(config, await validateMapping(config));
+  const { config, identities } = await loadValidatedHedgeSalesforceMapping(client);
+  return mappingResponse(config, identities);
 }
 
 export async function previewHedgeSalesforce(client, profile, body = {}, { persist = true } = {}) {
