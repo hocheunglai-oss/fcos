@@ -4,6 +4,7 @@ import {
   calcSwapFees,
   DEFAULT_RATES,
   hedgeSettlementPaymentDirection,
+  isInternalHedgeCounterparty,
   roundMoney,
 } from '../src/hedge/lib/domain.js';
 import { decorateMopsMonthVerifications, mopsMonthDateBounds, prepareManualMopsVerification } from './_hedgeMops.js';
@@ -64,7 +65,7 @@ const ENTITY_CONFIG = {
   Counterparty: {
     table: 'hedge_counterparties',
     capability: 'hedge_book_manage',
-    fields: [...COMMON_FIELDS, 'short_name', 'full_name', 'address_line1', 'address_line2', 'address_line3', 'attention', 'emails', 'notes'],
+    fields: [...COMMON_FIELDS, 'short_name', 'full_name', 'address_line1', 'address_line2', 'address_line3', 'attention', 'emails', 'notes', 'settlement_mode', 'is_system_managed'],
   },
   AppConfig: {
     table: 'hedge_settings',
@@ -312,11 +313,39 @@ function sanitizeAppConfigPayload(payload, configKey) {
   };
 }
 
-function sanitizeInvoicePayload(payload, current = null) {
+async function counterpartyDirectoryRecord(client, value) {
+  const normalized = String(value || '').trim();
+  if (!normalized || isInternalHedgeCounterparty(normalized)) return null;
+  const { data, error } = await client.from('hedge_counterparties').select('*').ilike('short_name', normalized).limit(2);
+  if (error) throw httpError(`The settlement counterparty could not be validated: ${error.message}`, 502);
+  if ((data || []).length > 1) throw httpError('The settlement counterparty identity is ambiguous.', 409, 'HEDGE_COUNTERPARTY_AMBIGUOUS');
+  return data?.[0] || null;
+}
+
+async function assertExternalSettlementDocument(client, counterparty, swapIds = []) {
+  if (isInternalHedgeCounterparty(counterparty)) {
+    throw httpError('Internal hedge — no external settlement document.', 409, 'HEDGE_INTERNAL_SETTLEMENT_DOCUMENT_BLOCKED');
+  }
+  const record = await counterpartyDirectoryRecord(client, counterparty);
+  if (record && isInternalHedgeCounterparty(record)) {
+    throw httpError('Internal hedge — no external settlement document.', 409, 'HEDGE_INTERNAL_SETTLEMENT_DOCUMENT_BLOCKED');
+  }
+  const ids = normalizedIds(swapIds);
+  if (!ids.length) return;
+  const result = await client.from('hedge_swap_hedges').select('id,counterparty').in('id', ids);
+  if (result.error) throw httpError(`Paper hedge settlement eligibility could not be validated: ${result.error.message}`, 502);
+  if ((result.data || []).length !== ids.length) throw httpError('One or more selected paper hedges are invalid or stale.', 409);
+  if ((result.data || []).some((swap) => isInternalHedgeCounterparty(swap.counterparty))) {
+    throw httpError('Internal hedge — no external settlement document.', 409, 'HEDGE_INTERNAL_SETTLEMENT_DOCUMENT_BLOCKED');
+  }
+}
+
+async function sanitizeInvoicePayload(client, payload, current = null) {
   const subtotal = Number(payload?.subtotal ?? current?.subtotal);
   if (!Number.isFinite(subtotal)) throw httpError('A signed settlement amount is required for an FCBHK invoice.', 400);
   const counterparty = String(payload?.counterparty ?? current?.counterparty ?? '').trim();
   if (!counterparty) throw httpError('A counterparty is required for an FCBHK invoice.', 400);
+  await assertExternalSettlementDocument(client, counterparty, payload?.swap_ids ?? current?.swap_ids ?? []);
   const paymentDirection = hedgeSettlementPaymentDirection(subtotal, counterparty);
   const sanitized = { ...payload, invoice_type: paymentDirection.invoiceType };
   if (payload?.pdf_payload && typeof payload.pdf_payload === 'object') {
@@ -502,6 +531,68 @@ async function replaceRelationships(client, entity, recordId, relationships) {
   }
 }
 
+function internalHedgePersistenceError(error) {
+  const message = String(error?.message || '');
+  const mappings = [
+    ['HEDGE_INTERNAL_PHYSICAL_REQUIRED', 'FCBHK internal hedges require at least one linked physical trade.'],
+    ['HEDGE_INTERNAL_STEM_REQUIRED', 'Every linked FCBHK physical trade must have a STEM number.'],
+    ['HEDGE_INTERNAL_PHYSICAL_COUNTERPARTY', 'Every linked physical trade must use FCBHK as its counterparty.'],
+    ['HEDGE_INTERNAL_PRODUCT_MISMATCH', 'Every linked physical trade must use the same product as the paper hedge.'],
+    ['HEDGE_PHYSICAL_LINK_INVALID', 'One or more selected physical trades are invalid or stale.'],
+    ['HEDGE_PHYSICAL_LINK_DUPLICATE', 'A physical trade cannot be linked more than once.'],
+    ['REVISION_CONFLICT', 'This Hedge Desk record changed after it was opened. Refresh before saving.'],
+  ];
+  const match = mappings.find(([code]) => message.includes(code));
+  return match ? httpError(match[1], match[0] === 'REVISION_CONFLICT' ? 409 : 400, match[0]) : null;
+}
+
+async function saveSwapWithLinks(client, { id = null, expectedRevision = null, clean, relationships, profile }) {
+  const ids = normalizedIds(relationships.physical_trade_ids || []);
+  const result = await client.rpc('save_hedge_swap_with_links', {
+    p_swap_id: id,
+    p_expected_revision: expectedRevision,
+    p_payload: clean,
+    p_physical_trade_ids: ids,
+    p_actor_user_id: profile.id,
+    p_actor_email: String(profile.email || '').toLowerCase(),
+  });
+  if (!result.error) return loadOne(client, 'SwapHedge', configFor('SwapHedge'), result.data?.id || id);
+  const mapped = internalHedgePersistenceError(result.error);
+  if (mapped) throw mapped;
+  const rpcUnavailable = /save_hedge_swap_with_links|PGRST202|could not find the function/i.test(result.error.message || '');
+  if (rpcUnavailable && isInternalHedgeCounterparty(clean.counterparty)) {
+    throw httpError('FCBHK internal hedge controls are being activated. Try again after the release completes.', 503, 'HEDGE_INTERNAL_CONTROLS_PENDING');
+  }
+  if (rpcUnavailable) return null;
+  throw httpError(`The paper hedge and its physical links could not be saved atomically: ${result.error.message}`, 502, 'HEDGE_SWAP_ATOMIC_SAVE_FAILED');
+}
+
+async function internalSwapsLinkedToPhysical(client, physicalId) {
+  const links = await client.from('hedge_swap_physical_links').select('swap_id').eq('physical_trade_id', physicalId);
+  if (links.error) throw httpError(`Linked paper hedges could not be validated: ${links.error.message}`, 502);
+  const ids = normalizedIds((links.data || []).map((row) => row.swap_id));
+  if (!ids.length) return [];
+  const swaps = await client.from('hedge_swap_hedges').select('id,counterparty,product').in('id', ids);
+  if (swaps.error) throw httpError(`Linked paper hedges could not be validated: ${swaps.error.message}`, 502);
+  return (swaps.data || []).filter((swap) => isInternalHedgeCounterparty(swap.counterparty));
+}
+
+async function assertPhysicalInternalLinkSafety(client, before, clean = null, { deleting = false } = {}) {
+  const swaps = await internalSwapsLinkedToPhysical(client, before.id);
+  if (!swaps.length) return;
+  if (deleting) throw httpError('This physical trade is linked to an FCBHK internal hedge and cannot be deleted.', 409, 'HEDGE_INTERNAL_PHYSICAL_DELETE_BLOCKED');
+  const next = { ...before, ...(clean || {}) };
+  if (!isInternalHedgeCounterparty(next.counterparty)) {
+    throw httpError('This physical trade must remain assigned to FCBHK while it is linked to an internal hedge.', 409, 'HEDGE_INTERNAL_PHYSICAL_COUNTERPARTY');
+  }
+  if (!String(next.stem_number || '').trim()) {
+    throw httpError('This physical trade must retain its STEM number while it is linked to an internal hedge.', 409, 'HEDGE_INTERNAL_STEM_REQUIRED');
+  }
+  if (swaps.some((swap) => swap.product !== next.product)) {
+    throw httpError('This physical trade must retain the paper hedge product while it is linked to an internal hedge.', 409, 'HEDGE_INTERNAL_PRODUCT_MISMATCH');
+  }
+}
+
 async function deleteInvoiceWithDocuments(client, invoice, expectedRevision) {
   const { data, error } = await client.rpc('delete_hedge_invoice_with_documents', {
     p_invoice_id: invoice.id,
@@ -618,9 +709,19 @@ export async function handleHedgeDeskEntity(body, profile, { client, capabilitie
   await requireWriteCapability(capabilities, writeConfig);
 
   if (action === 'create') {
-    if (entity === 'Invoice') body = { ...body, payload: sanitizeInvoicePayload(body.payload) };
+    if (entity === 'Counterparty' && (isInternalHedgeCounterparty(body.payload) || body.payload?.settlement_mode === 'internal_no_invoice')) {
+      throw httpError('FCBHK is a system-managed internal counterparty and cannot be created manually.', 409, 'HEDGE_SYSTEM_COUNTERPARTY_CREATE_BLOCKED');
+    }
+    if (entity === 'Invoice') body = { ...body, payload: await sanitizeInvoicePayload(client, body.payload) };
     if (entity === 'SwapHedge') body = { ...body, payload: sanitizeSwapPayload(body.payload, { creating: true }) };
     const { clean, relationships } = cleanPayload(config, body.payload, profile, { creating: true });
+    if (entity === 'SwapHedge') {
+      const atomicRecord = await saveSwapWithLinks(client, { clean, relationships, profile });
+      if (atomicRecord) {
+        await writeEvent(client, { eventType: 'record_created', entity, record: atomicRecord, profile, label: body.label || null });
+        return atomicRecord;
+      }
+    }
     const { data, error } = await client.from(config.table).insert(clean).select('*').single();
     if (error) throw httpError(`Hedge Desk record could not be created: ${error.message}`, 502);
     try {
@@ -642,9 +743,26 @@ export async function handleHedgeDeskEntity(body, profile, { client, capabilitie
     if (!Number.isInteger(expectedRevision) || expectedRevision !== Number(before.revision)) {
       throw httpError('This Hedge Desk record changed after it was opened. Refresh before saving.', 409, 'REVISION_CONFLICT', { current: before });
     }
-    if (entity === 'Invoice') body = { ...body, payload: sanitizeInvoicePayload(body.payload, before) };
+    if (entity === 'Counterparty' && (before.is_system_managed === true || isInternalHedgeCounterparty(before))) {
+      throw httpError('FCBHK is system managed and cannot be edited.', 409, 'HEDGE_SYSTEM_COUNTERPARTY_IDENTITY_BLOCKED');
+    }
+    if (entity === 'Invoice') body = { ...body, payload: await sanitizeInvoicePayload(client, body.payload, before) };
     if (entity === 'SwapHedge') body = { ...body, payload: sanitizeSwapPayload(body.payload) };
     const { clean, relationships } = cleanPayload(config, body.payload, profile);
+    if (entity === 'PhysicalTrade') await assertPhysicalInternalLinkSafety(client, before, clean);
+    if (entity === 'SwapHedge') {
+      const atomicRecord = await saveSwapWithLinks(client, {
+        id: before.id,
+        expectedRevision,
+        clean,
+        relationships: Object.hasOwn(relationships, 'physical_trade_ids') ? relationships : { physical_trade_ids: before.physical_trade_ids || [] },
+        profile,
+      });
+      if (atomicRecord) {
+        await writeEvent(client, { eventType: 'record_updated', entity, record: atomicRecord, before, profile, label: body.label || null });
+        return atomicRecord;
+      }
+    }
     const { data, error } = await client.from(config.table).update(clean).eq('id', before.id).eq('revision', expectedRevision).select('*').maybeSingle();
     if (error) throw httpError(`Hedge Desk record could not be updated: ${error.message}`, 502);
     if (!data) throw httpError('This Hedge Desk record changed after it was opened. Refresh before saving.', 409, 'REVISION_CONFLICT');
@@ -662,6 +780,10 @@ export async function handleHedgeDeskEntity(body, profile, { client, capabilitie
       throw httpError('This Hedge Desk record changed after it was opened. Refresh before deleting.', 409, 'REVISION_CONFLICT', { current: before });
     }
     let deleteMetadata = {};
+    if (entity === 'Counterparty' && (before.is_system_managed === true || isInternalHedgeCounterparty(before))) {
+      throw httpError('FCBHK is system managed and cannot be deleted.', 409, 'HEDGE_SYSTEM_COUNTERPARTY_DELETE_BLOCKED');
+    }
+    if (entity === 'PhysicalTrade') await assertPhysicalInternalLinkSafety(client, before, null, { deleting: true });
     if (entity === 'Invoice') {
       deleteMetadata = await deleteInvoiceWithDocuments(client, before, expectedRevision);
     } else {

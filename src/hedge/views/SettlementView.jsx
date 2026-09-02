@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { ClearingAccount, Invoice } from "@/hedge/api/entities";
 import {
+  buildCounterpartySettlementGroups,
   calcSwapFees,
   calcSwapMtm,
   formatDate,
@@ -67,49 +68,6 @@ const EMAIL_EDITOR_MODULES = {
 function pdfBlob(result) {
   const bytes = Uint8Array.from(atob(result?.base64 || ''), (character) => character.charCodeAt(0));
   return new Blob([bytes], { type: result?.mimeType || 'application/pdf' });
-}
-
-function buildCounterpartyGroups(swaps, mops, rates, sgoRatio, governedValuation) {
-  const grouped = new Map();
-  swaps.forEach((swap) => {
-    const key = swap.counterparty || "Unassigned";
-    if (!grouped.has(key)) grouped.set(key, []);
-    grouped.get(key).push(swap);
-  });
-  return [...grouped.entries()].map(([counterparty, records]) => {
-    const rows = records.map((swap) => {
-      const mtm = calcSwapMtm(swap, mops, sgoRatio, governedValuation)?.value ?? null;
-      const fees = calcSwapFees(swap, rates);
-      const iceCost = fees.brokerFee + fees.sfsCommission + fees.ice + fees.iceClearing + fees.iceSettlement;
-      const attributedFeeAmount = counterparty === "FCBS"
-        ? fees.cpHandlingFee
-        : swap.venue === "ICE"
-          ? iceCost
-          : fees.cpHandlingFee + fees.fcbsVenueFee;
-      const attributedFeeImpact = swap.venue === "ICE" && counterparty !== "FCBS"
-        ? -attributedFeeAmount
-        : attributedFeeAmount;
-      return {
-        swap,
-        mtm: mtm == null ? null : roundMoney(mtm),
-        fees,
-        attributedFeeAmount: roundMoney(attributedFeeAmount),
-        attributedFeeImpact: roundMoney(attributedFeeImpact),
-        net: mtm == null ? null : roundMoney(-mtm + attributedFeeImpact),
-      };
-    });
-    const valuationAvailable = rows.every((row) => row.mtm != null);
-    return {
-      key: counterparty,
-      counterparty,
-      records,
-      rows,
-      mtm: valuationAvailable ? roundMoney(rows.reduce((sum, row) => sum - row.mtm, 0)) : null,
-      fees: roundMoney(rows.reduce((sum, row) => sum + row.attributedFeeAmount, 0)),
-      net: valuationAvailable ? roundMoney(rows.reduce((sum, row) => sum + row.net, 0)) : null,
-      valuationAvailable,
-    };
-  }).sort((left, right) => Number(right.valuationAvailable) - Number(left.valuationAvailable) || Math.abs(right.net || 0) - Math.abs(left.net || 0));
 }
 
 function buildInvoicePayload(group, invoiceNumber, invoiceDate, settlementMonth, counterpartyRecord) {
@@ -175,7 +133,7 @@ export function SettlementView({ data, settings, readOnly = false, canClose = fa
   const summary = useMemo(() => settlementSummary(data.swaps, data.mops, settings.rates, month, settings.general.sgo_bbl_per_mt, data.marketValuation), [data.marketValuation, data.mops, data.swaps, month, settings.general.sgo_bbl_per_mt, settings.rates]);
   const brokerCommissionMonths = useMemo(() => monthlyBrokerCommissionSummary(data.swaps, settings.rates), [data.swaps, settings.rates]);
   const brokerSettlementMap = useMemo(() => new Map((data.brokerSettlements || []).map((row) => [`${row.trade_month}:${row.broker_key}`, row])), [data.brokerSettlements]);
-  const groups = useMemo(() => buildCounterpartyGroups(summary.monthSwaps, data.mops, settings.rates, settings.general.sgo_bbl_per_mt, data.marketValuation), [data.marketValuation, data.mops, settings.general.sgo_bbl_per_mt, settings.rates, summary.monthSwaps]);
+  const groups = useMemo(() => buildCounterpartySettlementGroups(summary.monthSwaps, data.mops, settings.rates, settings.general.sgo_bbl_per_mt, data.marketValuation, data.counterparties), [data.counterparties, data.marketValuation, data.mops, settings.general.sgo_bbl_per_mt, settings.rates, summary.monthSwaps]);
   const closed = settings.closedMonths.includes(month);
   const filteredInvoices = useMemo(() => data.invoices
     .filter((invoice) => invoiceStatus === "all" || invoice.status === invoiceStatus)
@@ -251,6 +209,10 @@ export function SettlementView({ data, settings, readOnly = false, canClose = fa
   };
 
   const openInvoice = (group) => {
+    if (group?.internal) {
+      setError(new Error("Internal hedge — no external settlement document."));
+      return;
+    }
     if (!group?.valuationAvailable || group?.net == null) {
       setError(new Error("Settlement document generation is blocked until every hedge has a governed market value."));
       return;
@@ -481,18 +443,18 @@ export function SettlementView({ data, settings, readOnly = false, canClose = fa
   const renderCounterparties = () => (
     <div className="app-settlement-groups">
       {groups.length ? groups.map((group) => {
-        const paymentDirection = group.valuationAvailable ? paymentDirectionFor(group.net, group.counterparty) : null;
+        const paymentDirection = group.valuationAvailable && !group.internal ? paymentDirectionFor(group.net, group.counterparty) : null;
         return (
           <Panel key={group.key} className="app-counterparty-settlement">
             <div className="app-counterparty-settlement__header">
-              <div><h2>{group.counterparty}</h2><p>{group.records.length} hedges</p></div>
-              <div className="app-counterparty-settlement__net"><strong>{paymentDirection ? formatMoney(paymentDirection.amount, { digits: 2 }) : "Unavailable"}</strong>{!readOnly && paymentDirection && <Button size="sm" icon={FileText} onClick={() => openInvoice(group)}>Generate {paymentDirection.invoiceType.toLowerCase()}</Button>}</div>
+              <div><h2>{group.counterparty}</h2><p>{group.records.length} hedges{group.internal ? " · Internal · System managed" : ""}</p></div>
+              <div className="app-counterparty-settlement__net"><strong>{group.valuationAvailable ? formatMoney(Math.abs(group.net), { digits: 2 }) : "Unavailable"}</strong>{!readOnly && paymentDirection && <Button size="sm" icon={FileText} onClick={() => openInvoice(group)}>Generate {paymentDirection.invoiceType.toLowerCase()}</Button>}</div>
             </div>
-            {paymentDirection ? <div className={`app-payment-direction app-payment-direction--${paymentDirection.isReceivable ? "receivable" : "payable"}`}>
+            {group.internal ? <div className="app-payment-direction app-payment-direction--internal"><span>Settlement</span><strong>Internal hedge — no external settlement document</strong><small>MTM, fees and internal net result remain included in FCOS reporting.</small></div> : paymentDirection ? <div className={`app-payment-direction app-payment-direction--${paymentDirection.isReceivable ? "receivable" : "payable"}`}>
               <span>Payment direction</span><strong>{paymentDirection.label}</strong><small>Beneficiary: {paymentDirection.beneficiary.fullName}</small>
             </div> : <InlineError error={new Error("Settlement is blocked until every hedge has a governed market value.")} />}
             <div className="app-table-frame app-table-frame--flush">
-              <table className="app-table app-table--compact"><thead><tr><th>Trade</th><th>Product</th><th>Venue</th><th>Quantity</th><th>MTM from CP</th><th>Fee impact</th><th>Net to FCBHK</th></tr></thead><tbody>{group.rows.map(({ swap, mtm, attributedFeeImpact, net }) => (
+              <table className="app-table app-table--compact"><thead><tr><th>Trade</th><th>Product</th><th>Venue</th><th>Quantity</th><th>{group.internal ? "Internal MTM" : "MTM from CP"}</th><th>Fee impact</th><th>{group.internal ? "Internal net result" : "Net to FCBHK"}</th></tr></thead><tbody>{group.rows.map(({ swap, mtm, attributedFeeImpact, net }) => (
                 <tr key={swap.id}><td>{formatDate(swap.trade_date)}</td><td><ProductBadge product={swap.product} /></td><td>{swap.venue}</td><td>{formatQuantity(swap.quantity, swap.unit)}</td><td><Money value={mtm == null ? null : -mtm} digits={2} /></td><td><Money value={attributedFeeImpact} digits={2} /></td><td><Money value={net} digits={2} strong /></td></tr>
               ))}</tbody></table>
             </div>

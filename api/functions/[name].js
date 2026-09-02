@@ -18529,7 +18529,9 @@ async function hedgeDeskParseMops(body = {}) {
   return { ok: true, ...parseMopsText(body.raw_input || body.text || body.input || '') };
 }
 
-async function hedgeDeskGenerateInvoice(body = {}) {
+async function hedgeDeskGenerateInvoice(body = {}, req = null, accessContext = null) {
+  const context = accessContext || (await requireActiveUser(req));
+  await requireCapability(context.client, context.profile, 'hedge_settlement_manage', 'Hedge settlement permission is required to generate invoice documents.');
   const generated = generateHedgeInvoicePdf(body);
   return {
     ok: true,

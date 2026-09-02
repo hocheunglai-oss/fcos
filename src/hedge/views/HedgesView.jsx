@@ -21,6 +21,7 @@ import {
   formatQuantity,
   hktThisMonth,
   hktToday,
+  isInternalHedgeCounterparty,
   isSwapLive,
   paperHedgeExpiryStatus,
 } from "../lib/domain";
@@ -124,10 +125,22 @@ export function HedgesView({ data, settings, quickCreateSignal = 0, readOnly = f
   }, [quickCreateSignal]);
 
   const months = useMemo(() => [...new Set(data.swaps.map((record) => record.swap_month || record.leg1_month).filter(Boolean))].sort().reverse(), [data.swaps]);
-  const counterpartyOptions = useMemo(() => [...new Set([
-    ...(data.counterparties || []).map((record) => String(record.short_name || "").trim().toUpperCase()),
-    ...(settings.lists.counterparts || []).map((value) => String(value || "").trim().toUpperCase()),
-  ].filter(Boolean))].sort(), [data.counterparties, settings.lists.counterparts]);
+  const counterpartyOptions = useMemo(() => {
+    const records = new Map();
+    for (const record of data.counterparties || []) {
+      const value = String(record.short_name || "").trim().toUpperCase();
+      if (value) records.set(value, record);
+    }
+    for (const candidate of settings.lists.counterparts || []) {
+      const value = String(candidate || "").trim().toUpperCase();
+      if (value && !records.has(value)) records.set(value, { short_name: value });
+    }
+    return [...records.entries()].map(([value, record]) => ({
+      value,
+      internal: isInternalHedgeCounterparty(record),
+      label: isInternalHedgeCounterparty(record) ? `${value} — Internal hedge` : value,
+    })).sort((left, right) => left.value.localeCompare(right.value));
+  }, [data.counterparties, settings.lists.counterparts]);
   const rows = useMemo(() => data.swaps
     .filter((record) => status === "all" || (status === "live" ? isSwapLive(record) : !isSwapLive(record)))
     .filter((record) => month === "all" || [record.swap_month, record.leg1_month, record.leg2_month].includes(month))
@@ -179,6 +192,25 @@ export function HedgesView({ data, settings, quickCreateSignal = 0, readOnly = f
     if (missingBalanceDate) {
       setFormError(new Error("A balance start date is required for balance-month pricing."));
       return;
+    }
+    if (isInternalHedgeCounterparty(form.counterparty)) {
+      const linked = (form.physical_trade_ids || []).map((id) => data.physicals.find((record) => record.id === id)).filter(Boolean);
+      if (!linked.length) {
+        setFormError(new Error("FCBHK internal hedges require at least one linked physical trade."));
+        return;
+      }
+      if (linked.some((record) => !isInternalHedgeCounterparty(record.counterparty))) {
+        setFormError(new Error("Every linked physical trade must use FCBHK as its counterparty."));
+        return;
+      }
+      if (linked.some((record) => record.product !== form.product)) {
+        setFormError(new Error("Every linked physical trade must use the same product as the paper hedge."));
+        return;
+      }
+      if (linked.some((record) => !String(record.stem_number || "").trim())) {
+        setFormError(new Error("Every linked FCBHK physical trade must have a STEM number."));
+        return;
+      }
     }
     setSaving(true);
     setFormError(null);
@@ -268,6 +300,14 @@ export function HedgesView({ data, settings, quickCreateSignal = 0, readOnly = f
       ? current.physical_trade_ids.filter((value) => value !== id)
       : [...(current.physical_trade_ids || []), id],
   }));
+  const internalAllocation = isInternalHedgeCounterparty(form.counterparty);
+  const eligiblePhysicals = data.physicals.filter((record) => {
+    const selected = (form.physical_trade_ids || []).includes(record.id);
+    if (!selected && record.is_closed) return false;
+    if (form.product && record.product !== form.product) return false;
+    if (!internalAllocation) return true;
+    return isInternalHedgeCounterparty(record.counterparty) && Boolean(String(record.stem_number || "").trim());
+  });
 
   return (
     <div className="app-page">
@@ -344,7 +384,7 @@ export function HedgesView({ data, settings, quickCreateSignal = 0, readOnly = f
             <Field label="Unit"><Select value={form.unit || "MT"} onChange={(event) => setField("unit", event.target.value)}><option value="MT">MT</option><option value="BBL">BBL</option></Select></Field>
             <Field label="Venue" required><Select value={form.venue || ""} onChange={(event) => setField("venue", event.target.value)}>{settings.lists.venues.map((value) => <option key={value}>{value}</option>)}</Select></Field>
             <Field label="Broker" hint="The intermediary that arranged the trade."><Select value={form.broker || ""} onChange={(event) => setField("broker", event.target.value)}><option value="">No broker</option>{settings.lists.brokers.map((value) => <option key={value}>{value}</option>)}</Select></Field>
-            <Field label="Legal settlement counterparty" hint="Required. This is separate from the broker and controls Counterparties and settlement reporting." required className="app-field--span-2"><Select value={form.counterparty || ""} onChange={(event) => setField("counterparty", event.target.value)}><option value="">Select counterparty</option>{counterpartyOptions.map((value) => <option key={value} value={value}>{value}</option>)}</Select></Field>
+            <Field label={internalAllocation ? "Internal allocation" : "Legal settlement counterparty"} hint={internalAllocation ? "FCBHK hedges must link to an FCBHK physical trade with the same product and a STEM number. No settlement document will be issued." : "Required. This is separate from the broker and controls Counterparties and settlement reporting."} required className="app-field--span-2"><Select value={form.counterparty || ""} onChange={(event) => setField("counterparty", event.target.value)}><option value="">Select counterparty</option>{counterpartyOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</Select></Field>
           </div>
         </section>
         {form.trade_type === "SPREAD" ? (
@@ -363,10 +403,11 @@ export function HedgesView({ data, settings, quickCreateSignal = 0, readOnly = f
         )}
         <section className="app-form-section">
           <div className="app-form-section__title">Linked physical trades</div>
+          {internalAllocation && <div className="app-callout app-callout--neutral">Internal hedge — link at least one matching FCBHK physical trade with a STEM number. No settlement document will be issued.</div>}
           <div className="app-link-list">
-            {data.physicals.filter((record) => !record.is_closed && (!form.product || record.product === form.product)).length ? data.physicals.filter((record) => !record.is_closed && (!form.product || record.product === form.product)).map((record) => (
+            {eligiblePhysicals.length ? eligiblePhysicals.map((record) => (
               <label key={record.id} className="app-link-option"><input type="checkbox" checked={(form.physical_trade_ids || []).includes(record.id)} onChange={() => togglePhysical(record.id)} /><span><strong>{record.vessel_name || record.counterparty || "Physical trade"}</strong><small>{record.product} {formatQuantity(record.qty_min, record.unit)} | {formatDate(record.trade_date)}</small></span></label>
-            )) : <span className="app-muted-copy">No open physical trades match this product.</span>}
+            )) : <span className="app-muted-copy">{internalAllocation ? "No eligible FCBHK physical trades match this product and contain a STEM number." : "No open physical trades match this product."}</span>}
           </div>
         </section>
         <section className="app-form-section">

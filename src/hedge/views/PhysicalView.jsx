@@ -15,6 +15,7 @@ import {
   formatQuantity,
   hktThisMonth,
   hktToday,
+  isInternalHedgeCounterparty,
 } from "../lib/domain";
 import { useActions } from "../data/ActionsContext";
 import {
@@ -142,6 +143,21 @@ export function PhysicalView({ data, settings, quickCreateSignal = 0, readOnly =
   }, [quickCreateSignal]);
 
   const months = useMemo(() => [...new Set(data.physicals.map((record) => String(record.trade_date || record.sell_pricing_month || "").slice(0, 7)).filter(Boolean))].sort().reverse(), [data.physicals]);
+  const counterpartyOptions = useMemo(() => {
+    const records = new Map();
+    for (const record of data.counterparties || []) {
+      const value = String(record.short_name || "").trim().toUpperCase();
+      if (value) records.set(value, record);
+    }
+    for (const candidate of settings.lists.counterparts || []) {
+      const value = String(candidate || "").trim().toUpperCase();
+      if (value && !records.has(value)) records.set(value, { short_name: value });
+    }
+    return [...records.entries()].map(([value, record]) => ({
+      value,
+      label: isInternalHedgeCounterparty(record) ? `${value} — Internal hedge` : value,
+    })).sort((left, right) => left.value.localeCompare(right.value));
+  }, [data.counterparties, settings.lists.counterparts]);
   const rows = useMemo(() => data.physicals
     .filter((record) => status === "all" || physicalStatus(record) === status)
     .filter((record) => month === "all" || [record.trade_date, record.sell_pricing_month, record.buy_pricing_month].some((value) => String(value || "").startsWith(month)))
@@ -172,6 +188,10 @@ export function PhysicalView({ data, settings, quickCreateSignal = 0, readOnly =
   const save = async () => {
     if (!form.trade_date || !form.product || !form.qty_min) {
       setFormError(new Error("Trade date, product, and quantity are required."));
+      return;
+    }
+    if (isInternalHedgeCounterparty(form.counterparty) && !String(form.stem_number || "").trim()) {
+      setFormError(new Error("An FCBHK internal physical trade requires a STEM number."));
       return;
     }
     setSaving(true);
@@ -292,7 +312,7 @@ export function PhysicalView({ data, settings, quickCreateSignal = 0, readOnly =
           <div className="app-form-grid app-form-grid--2">
             <Field label="Trade date" required><input className="app-input" type="date" value={form.trade_date || ""} onChange={(event) => setField("trade_date", event.target.value)} /></Field>
             <Field label="Product" required><Select value={form.product || ""} onChange={(event) => { setField("product", event.target.value); if (event.target.value === "SGO") setField("unit", "BBL"); }}><option value="">Select product</option>{settings.lists.products.map((value) => <option key={value}>{value}</option>)}</Select></Field>
-            <Field label="Counterparty"><Select value={form.counterparty || ""} onChange={(event) => setField("counterparty", event.target.value)}><option value="">Unassigned</option>{settings.lists.counterparts.map((value) => <option key={value}>{value}</option>)}</Select></Field>
+            <Field label="Counterparty" hint={isInternalHedgeCounterparty(form.counterparty) ? "FCBHK is an internal hedge allocation and requires a STEM number." : undefined}><Select value={form.counterparty || ""} onChange={(event) => setField("counterparty", event.target.value)}><option value="">Unassigned</option>{counterpartyOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</Select></Field>
             <Field label="Vessel name"><input className="app-input" value={form.vessel_name || ""} onChange={(event) => setField("vessel_name", event.target.value)} /></Field>
             <Field label="Minimum quantity" required><input className="app-input" type="number" step="any" value={form.qty_min ?? ""} onChange={(event) => setField("qty_min", event.target.value)} /></Field>
             <Field label="Maximum quantity" hint="Defaults to minimum"><input className="app-input" type="number" step="any" value={form.qty_max ?? ""} onChange={(event) => setField("qty_max", event.target.value)} /></Field>

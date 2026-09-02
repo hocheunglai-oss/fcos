@@ -8,7 +8,7 @@ test('paper hedges require a legal settlement counterparty independently of brok
   const view = read('src/hedge/views/HedgesView.jsx');
   const service = read('api/_hedgeDeskService.js');
 
-  assert.match(view, /label="Legal settlement counterparty"/);
+  assert.match(view, /internalAllocation \? "Internal allocation" : "Legal settlement counterparty"/);
   assert.match(view, /A broker is not the counterparty/);
   assert.match(view, /data\.counterparties/);
   assert.match(service, /HEDGE_COUNTERPARTY_REQUIRED/);

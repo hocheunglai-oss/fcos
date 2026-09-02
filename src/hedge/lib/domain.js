@@ -223,7 +223,7 @@ export const DEFAULT_LISTS = {
   products: ["S380", "S0.5", "SGO"],
   brokers: ["Ginga", "FIS"],
   venues: ["ICE", "FCBS"],
-  counterparts: ["COSGE", "FCBS", "HSIN MING"],
+  counterparts: ["COSGE", "FCBS", "HSIN MING", "FCBHK"],
 };
 
 export const DEFAULT_GOOGLE_AUTH = {
@@ -252,6 +252,27 @@ export const ICE_IM_FALLBACK = {
 };
 
 export const BROKER_EXCHANGE = ["Ginga", "FIS"];
+export const INTERNAL_HEDGE_COUNTERPARTY = Object.freeze({
+  shortName: "FCBHK",
+  fullName: "FRATELLI COSULICH BUNKERS (HK) LTD",
+  settlementMode: "internal_no_invoice",
+  isSystemManaged: true,
+});
+
+export function normalizeHedgeCounterpartyName(value) {
+  const candidate = value && typeof value === "object"
+    ? value.short_name ?? value.shortName ?? value.full_name ?? value.fullName
+    : value;
+  return String(candidate ?? "").normalize("NFKC").trim().replace(/\s+/g, " ").toUpperCase();
+}
+
+export function isInternalHedgeCounterparty(value) {
+  if (value && typeof value === "object") {
+    const mode = String(value.settlement_mode ?? value.settlementMode ?? "").trim().toLowerCase();
+    if (mode === INTERNAL_HEDGE_COUNTERPARTY.settlementMode) return true;
+  }
+  return normalizeHedgeCounterpartyName(value) === INTERNAL_HEDGE_COUNTERPARTY.shortName;
+}
 export const PRODUCT_COLORS = {
   S380: "#d6532f",
   "S0.5": "#087f8c",
@@ -928,6 +949,54 @@ export function settlementSummary(swaps = [], mops = [], rates = DEFAULT_RATES, 
   };
 }
 
+export function buildCounterpartySettlementGroups(swaps = [], mops = [], rates = DEFAULT_RATES, sgoRatio = 7.45, governedValuation = null, counterparties = []) {
+  const directory = new Map((counterparties || []).map((record) => [normalizeHedgeCounterpartyName(record), record]));
+  const grouped = new Map();
+  swaps.forEach((swap) => {
+    const key = swap.counterparty || "Unassigned";
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key).push(swap);
+  });
+  return [...grouped.entries()].map(([counterparty, records]) => {
+    const counterpartyRecord = directory.get(normalizeHedgeCounterpartyName(counterparty)) || null;
+    const rows = records.map((swap) => {
+      const mtm = calcSwapMtm(swap, mops, sgoRatio, governedValuation)?.value ?? null;
+      const fees = calcSwapFees(swap, rates);
+      const iceCost = fees.brokerFee + fees.sfsCommission + fees.ice + fees.iceClearing + fees.iceSettlement;
+      const attributedFeeAmount = counterparty === "FCBS"
+        ? fees.cpHandlingFee
+        : swap.venue === "ICE"
+          ? iceCost
+          : fees.cpHandlingFee + fees.fcbsVenueFee;
+      const attributedFeeImpact = swap.venue === "ICE" && counterparty !== "FCBS"
+        ? -attributedFeeAmount
+        : attributedFeeAmount;
+      return {
+        swap,
+        mtm: mtm == null ? null : roundMoney(mtm),
+        fees,
+        attributedFeeAmount: roundMoney(attributedFeeAmount),
+        attributedFeeImpact: roundMoney(attributedFeeImpact),
+        net: mtm == null ? null : roundMoney(-mtm + attributedFeeImpact),
+      };
+    });
+    const valuationAvailable = rows.every((row) => row.mtm != null);
+    return {
+      key: counterparty,
+      counterparty,
+      counterpartyRecord,
+      internal: isInternalHedgeCounterparty(counterpartyRecord || counterparty),
+      settlementMode: counterpartyRecord?.settlement_mode || counterpartyRecord?.settlementMode || (isInternalHedgeCounterparty(counterparty) ? "internal_no_invoice" : "external"),
+      records,
+      rows,
+      mtm: valuationAvailable ? roundMoney(rows.reduce((sum, row) => sum - row.mtm, 0)) : null,
+      fees: roundMoney(rows.reduce((sum, row) => sum + row.attributedFeeAmount, 0)),
+      net: valuationAvailable ? roundMoney(rows.reduce((sum, row) => sum + row.net, 0)) : null,
+      valuationAvailable,
+    };
+  }).sort((left, right) => Number(right.valuationAvailable) - Number(left.valuationAvailable) || Math.abs(right.net || 0) - Math.abs(left.net || 0));
+}
+
 export function monthlyBrokerCommissionSummary(swaps = [], rates = DEFAULT_RATES) {
   const months = new Map();
 
@@ -983,6 +1052,11 @@ function settlementParty(counterparty) {
 }
 
 export function hedgeSettlementPaymentDirection(netAmount, counterparty) {
+  if (isInternalHedgeCounterparty(counterparty)) {
+    const error = new Error("Internal hedge — no external settlement document.");
+    error.code = "HEDGE_INTERNAL_SETTLEMENT_DOCUMENT_BLOCKED";
+    throw error;
+  }
   const signedAmount = roundMoney(netAmount);
   const externalParty = settlementParty(counterparty);
   const isReceivable = signedAmount >= 0;

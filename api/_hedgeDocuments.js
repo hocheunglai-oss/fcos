@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { jsPDF } from 'jspdf';
 import { resolveGraphEmailSender, sendGraphPurposeMail } from './_graphEmail.js';
 import { richTextPlainLength, sanitizeRichText } from './_richText.js';
-import { hedgeSettlementPaymentDirection } from '../src/hedge/lib/domain.js';
+import { hedgeSettlementPaymentDirection, isInternalHedgeCounterparty } from '../src/hedge/lib/domain.js';
 
 const BUCKET = 'hedge-documents';
 const MAX_PDF_BYTES = 3 * 1024 * 1024;
@@ -69,6 +69,9 @@ export function normalizeHedgeInvoice(input = {}) {
   const counterparty = typeof invoice.counterparty === 'object' && invoice.counterparty
     ? invoice.counterparty
     : { full_name: String(invoice.counterparty || 'COUNTERPARTY') };
+  if (isInternalHedgeCounterparty(counterparty)) {
+    throw hedgeDocumentError('Internal hedge — no external settlement document.', 409, 'HEDGE_INTERNAL_SETTLEMENT_DOCUMENT_BLOCKED');
+  }
   const paymentDirection = hedgeSettlementPaymentDirection(number(netAmount, lineItems.reduce((sum, line) => sum + line.netValue, 0)), counterparty);
   return {
     invoiceNumber: String(invoice.invoiceNumber || invoice.invoice_number || 'FCBHK Invoice').slice(0, 100),
@@ -320,7 +323,7 @@ async function invoiceCounterparty(client, shortName) {
   if (!shortName) return null;
   const { data, error } = await client
     .from('hedge_counterparties')
-    .select('short_name,full_name,address_line1,address_line2,address_line3,attention')
+    .select('*')
     .eq('short_name', String(shortName))
     .maybeSingle();
   if (error) throw hedgeDocumentError(`Counterparty invoice details could not be loaded: ${error.message}`, 502);
@@ -349,12 +352,28 @@ export async function saveHedgeInvoicePdf(client, profile, body = {}) {
   if (action === 'get_invoice_pdf') {
     const storagePath = String(body.storagePath || '').replace(/^supabase:\/\/hedge-documents\//, '');
     if (!storagePath || storagePath.includes('..')) throw hedgeDocumentError('The invoice document path is invalid.', 400);
+    const document = await client
+      .from('hedge_documents')
+      .select('invoice_id')
+      .eq('storage_path', storagePath)
+      .maybeSingle();
+    if (document.error) throw hedgeDocumentError(`Invoice document access could not be verified: ${document.error.message}`, 502);
+    if (!document.data?.invoice_id) throw hedgeDocumentError('The invoice document is not registered.', 404);
+    const invoice = await invoiceRecord(client, document.data.invoice_id);
+    const counterparty = await invoiceCounterparty(client, invoice.counterparty);
+    if (isInternalHedgeCounterparty(counterparty || invoice.counterparty)) {
+      throw hedgeDocumentError('Internal hedge — no external settlement document.', 409, 'HEDGE_INTERNAL_SETTLEMENT_DOCUMENT_BLOCKED');
+    }
     const { data, error } = await client.storage.from(BUCKET).createSignedUrl(storagePath, 300);
     if (error) throw hedgeDocumentError(`Invoice preview could not be prepared: ${error.message}`, 502);
     return { ok: true, url: data.signedUrl, expiresIn: 300 };
   }
 
   const invoice = await invoiceRecord(client, body.invoiceId);
+  const counterparty = await invoiceCounterparty(client, invoice.counterparty);
+  if (isInternalHedgeCounterparty(counterparty || invoice.counterparty)) {
+    throw hedgeDocumentError('Internal hedge — no external settlement document.', 409, 'HEDGE_INTERNAL_SETTLEMENT_DOCUMENT_BLOCKED');
+  }
   const encoded = String(body.pdfBase64 || '').replace(/^data:application\/pdf;base64,/, '');
   const buffer = Buffer.from(encoded, 'base64');
   if (!buffer.length || buffer.subarray(0, 4).toString() !== '%PDF') throw hedgeDocumentError('The invoice PDF is invalid.', 400);
@@ -391,6 +410,12 @@ export async function saveHedgeInvoicePdf(client, profile, body = {}) {
 
 export async function sendHedgeInvoiceEmail(client, profile, body = {}, { mailboxSnapshot = null } = {}) {
   const invoice = body.invoiceId ? await invoiceRecord(client, body.invoiceId) : null;
+  if (invoice) {
+    const counterparty = await invoiceCounterparty(client, invoice.counterparty);
+    if (isInternalHedgeCounterparty(counterparty || invoice.counterparty)) {
+      throw hedgeDocumentError('Internal hedge — no external settlement document.', 409, 'HEDGE_INTERNAL_SETTLEMENT_DOCUMENT_BLOCKED');
+    }
+  }
   const documentPayload = await authoritativeInvoicePayload(client, invoice, body.pdfPayload || null);
   const generated = generateHedgeInvoicePdf(invoice ? documentPayload : body);
   const sanitizedBody = sanitizeRichText(body.body || body.html || '', 32_768);

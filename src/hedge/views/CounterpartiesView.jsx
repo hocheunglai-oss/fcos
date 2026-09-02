@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from "react";
 import { AlertTriangle, Building2, Edit3, Mail, MapPin, Plus, Trash2 } from "lucide-react";
 import { Counterparty } from "@/hedge/api/entities";
+import { isInternalHedgeCounterparty } from "../lib/domain";
 import { useActions } from "../data/ActionsContext";
 import {
   Button,
@@ -114,16 +115,18 @@ export function CounterpartiesView({ data, settings, readOnly = false, onManageH
       {unassignedCount > 0 && <div className="app-callout app-callout--warning"><AlertTriangle size={18} aria-hidden="true" /><div><strong>{unassignedCount} paper hedge{unassignedCount === 1 ? " is" : "s are"} unassigned</strong><p>Broker and settlement counterparty are separate. Assign the legal counterparty before settlement.</p></div>{onManageHedges && <Button size="sm" onClick={onManageHedges}>Review paper hedges</Button>}</div>}
       <div className="app-toolbar"><SearchInput value={search} onChange={setSearch} placeholder="Search name, email, address..." /><span className="app-toolbar__summary">{rows.length} counterparties</span></div>
       <TableFrame>
-        {rows.length ? <table className="app-table app-table--counterparties"><thead><tr><th>Counterparty</th><th>Paper hedges</th><th>Legal name</th><th>Invoice contact</th><th>Address</th><th aria-label="Actions" /></tr></thead><tbody>{rows.map((record) => (
-          <tr key={record.id}>
-            <td><div className="app-party-name"><span>{String(record.short_name || "?").slice(0, 2)}</span><strong>{record.short_name}</strong></div></td>
+        {rows.length ? <table className="app-table app-table--counterparties"><thead><tr><th>Counterparty</th><th>Paper hedges</th><th>Legal name</th><th>Invoice contact</th><th>Address</th><th aria-label="Actions" /></tr></thead><tbody>{rows.map((record) => {
+          const internal = isInternalHedgeCounterparty(record);
+          const systemManaged = record.is_system_managed === true || internal;
+          return <tr key={record.id}>
+            <td><div className="app-party-name"><span>{String(record.short_name || "?").slice(0, 2)}</span><strong>{record.short_name}</strong></div><div className="app-row-actions">{internal && <StatusBadge tone="neutral">Internal</StatusBadge>}{systemManaged && <StatusBadge tone="neutral">System managed</StatusBadge>}</div></td>
             <td><strong>{record.paperHedgeCount}</strong><small>Assigned records</small></td>
             <td><strong>{record.full_name || "Not provided"}</strong><small>{record.attention ? `Attn: ${record.attention}` : "No attention line"}</small></td>
-            <td>{record.emails ? <><span className="app-inline-icon"><Mail size={14} />{record.emails}</span><StatusBadge tone="positive">Ready</StatusBadge></> : <StatusBadge tone="warning">Missing email</StatusBadge>}</td>
-            <td><span className="app-inline-icon"><MapPin size={14} />{[record.address_line1, record.address_line2, record.address_line3].filter(Boolean).join(", ") || "Not provided"}</span></td>
-            <td><div className="app-row-actions">{!readOnly && <><IconButton label="Edit counterparty" icon={Edit3} variant="quiet" onClick={() => openEdit(record)} /><IconButton label="Delete counterparty" icon={Trash2} variant="danger" onClick={() => setDeleteTarget(record)} /></>}</div></td>
+            <td>{internal ? <StatusBadge tone="neutral">Not required</StatusBadge> : record.emails ? <><span className="app-inline-icon"><Mail size={14} />{record.emails}</span><StatusBadge tone="positive">Ready</StatusBadge></> : <StatusBadge tone="warning">Missing email</StatusBadge>}</td>
+            <td><span className="app-inline-icon"><MapPin size={14} />{internal ? "Internal allocation" : [record.address_line1, record.address_line2, record.address_line3].filter(Boolean).join(", ") || "Not provided"}</span></td>
+            <td><div className="app-row-actions">{!readOnly && !systemManaged && <><IconButton label="Edit counterparty" icon={Edit3} variant="quiet" onClick={() => openEdit(record)} /><IconButton label="Delete counterparty" icon={Trash2} variant="danger" onClick={() => setDeleteTarget(record)} /></>}</div></td>
           </tr>
-        ))}</tbody></table> : <EmptyState icon={Building2} title="No counterparties match" description="Adjust the search or create a new counterparty record." action={<Button variant="primary" icon={Plus} onClick={openCreate}>New counterparty</Button>} />}
+        })}</tbody></table> : <EmptyState icon={Building2} title="No counterparties match" description="Adjust the search or create a new counterparty record." action={<Button variant="primary" icon={Plus} onClick={openCreate}>New counterparty</Button>} />}
       </TableFrame>
 
       <Drawer open={Boolean(drawer)} onClose={() => setDrawer(null)} title={drawer?.mode === "edit" ? `Edit ${drawer.record.short_name}` : "New counterparty"} description="These details populate invoice documents and recipient lists." footer={<><Button onClick={() => setDrawer(null)} disabled={saving}>Cancel</Button><Button variant="primary" onClick={save} disabled={saving}>{saving ? "Saving..." : drawer?.mode === "edit" ? "Save changes" : "Create counterparty"}</Button></>}>

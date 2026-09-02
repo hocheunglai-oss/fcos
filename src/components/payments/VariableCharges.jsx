@@ -67,6 +67,7 @@ import {
   calculateHongKongAnchorageDues,
 } from '@/lib/anchorageDues';
 import { LIGHT_DUES_CATEGORY_ALL_OTHER, calculateHongKongLightDues } from '@/lib/lightDues';
+import { calculatePortClearance } from '@/lib/hongKongBasicCalling';
 import { cn } from '@/lib/utils';
 import {
   buyerAmountWithAnchorageDecision,
@@ -1238,9 +1239,17 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
 
 function itemLabel(row) {
   const productName = text(valueOf(row.item, ['productName']));
-  return productName.toUpperCase() === 'PORT CLEARANCE FEE'
-    ? 'PORT CLEARANCE EXTENSION'
+  return isPortClearanceItem(row.item)
+    ? 'Port Clearance Fee / Extension'
     : productName || 'Product name unavailable';
+}
+
+function supplierItemLabel(row) {
+  return isPortClearanceItem(row.item) ? 'Port Clearance Fee' : itemLabel(row);
+}
+
+function buyerItemLabel(row) {
+  return isPortClearanceItem(row.item) ? 'Port Clearance Extension' : itemLabel(row);
 }
 
 function viewTone(value) {
@@ -1474,11 +1483,14 @@ function PairedChargeRow({ row, review, draft, currency, companyRate, canCostEdi
   const values = rowFinancials(row, draft, currency);
   const description = text(valueOf(row.item, ['description']));
   const product = itemLabel(row);
-  const descriptionVisible = description && description.localeCompare(product, undefined, { sensitivity: 'base' }) !== 0;
+  const descriptionVisible = description && ![product, supplierItemLabel(row), buyerItemLabel(row), 'PORT CLEARANCE FEE', 'PORT CLEARANCE EXTENSION']
+    .some((label) => description.localeCompare(label, undefined, { sensitivity: 'base' }) === 0);
   const fixedPricing = values.pricingType === 'fixed';
   const supplierEditing = review.outcome === 'changed' || review.outcome === 'cancelled';
   const anchorageDues = isHongKongAnchorageDuesItem(row.item);
   const portClearance = isPortClearanceItem(row.item);
+  const supplierProduct = supplierItemLabel(row);
+  const buyerProduct = buyerItemLabel(row);
   const supplierLocked = supplierCostLockedForItem(row.item);
   const buyerLocked = buyerDecisionLockedForItem(row.item);
   const includedInBasicCalling = isIncludedBasicCallingItem(row.item);
@@ -1492,7 +1504,27 @@ function PairedChargeRow({ row, review, draft, currency, companyRate, canCostEdi
     onDraftChange({ cancelled: true });
     onReviewChange({ outcome: 'cancelled' });
   };
-  return <article className="border-t border-border"><div className="border-b border-border bg-muted/25 px-4 py-3"><div className="flex flex-wrap items-start justify-between gap-3"><div className="min-w-0"><h3 className="font-semibold">{product}</h3>{descriptionVisible && <p className="mt-0.5 text-sm text-muted-foreground">{description}</p>}</div><div className="flex flex-wrap items-start gap-x-5 gap-y-1 text-xs text-muted-foreground">{!fixedPricing && <span>Quantity <strong className="text-foreground">{variableChargeQuantityLabel(row.item, values.quantity, draft?.unitOfMeasure || valueOf(row.item, ['unitOfMeasure']))}</strong></span>}<span>Pricing Basis <strong className="text-foreground">{fixedPricing ? 'Fixed charge' : 'Per Unit'}</strong></span><div><span>Margin</span><MarginAmount value={displayedMargin} currency="USD" unavailableReason={unavailableReason} /></div>{removable && <AlertDialog><AlertDialogTrigger asChild><Button type="button" size="sm" variant="ghost" className="-my-1 h-7 text-rose-700 hover:bg-rose-50 hover:text-rose-800" disabled={!canCostEdit}>Remove</Button></AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Remove this extra cost?</AlertDialogTitle><AlertDialogDescription>The row remains in Salesforce history but is cancelled and no longer active.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Keep</AlertDialogCancel><AlertDialogAction className="bg-rose-600 hover:bg-rose-700" onClick={removeCharge}>Remove Extra Cost</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>}</div></div></div><div className="grid grid-cols-2"><section className="min-h-[210px] space-y-3 border-r-2 border-slate-300 bg-slate-50/30 p-4">{costApproved ? <ApprovedDecision ariaLabel={`${product} supplier review approved`} /> : <DecisionButtons ariaLabel={`${product} supplier review`} selected={review.outcome === 'cancelled' ? 'changed' : review.outcome || ''} disabled={!canCostEdit} onChange={(outcome) => { if (outcome === 'changed' && review.outcome === 'cancelled') onDraftChange({ cancelled: false }); onReviewChange({ outcome }); }} options={[{ value: '', label: 'Pending', tone: 'bg-slate-100 text-slate-800' }, { value: 'correct', label: 'Correct', tone: 'bg-emerald-100 text-emerald-900' }, { value: 'changed', label: supplierLocked ? 'Review Setup' : 'Edit Cost', tone: 'bg-amber-100 text-amber-950' }]} />}<SupplierDualAmount label={fixedPricing ? 'Supplier Fixed Cost' : 'Supplier Unit Cost'} row={row} draft={draft} companyRate={companyRate} />{!costApproved && supplierEditing && (row.readOnly ? <SalesforceEditNotice sourceId={row.sourceId} instanceUrl={instanceUrl} /> : portClearance ? <ManagedPortClearanceFields row={row} draft={draft} disabled={!canCostEdit} onChange={onDraftChange} /> : supplierLocked ? <LockedAgencyFeeFields row={row} instanceUrl={instanceUrl} /> : <PairedExtraCostFields row={row} draft={draft} disabled={!canCostEdit} onChange={onDraftChange} />)}</section><section className="min-h-[210px] space-y-3 bg-blue-50/20 p-4">{buyerApproved ? <ApprovedDecision ariaLabel={`${product} buyer review approved`} /> : <DecisionButtons ariaLabel={`${product} buyer review`} selected={review.buyerChargeDecision || ''} disabled={!canBuyerEdit || buyerLocked} onChange={(buyerChargeDecision) => onReviewChange({ buyerChargeDecision })} options={buyerDecisionOptions} />}{anchorageDues && <p className="text-xs text-blue-900">Buyer default: Vessel NRT × rounded chargeable hours after the first 12 aggregate hours × USD 0.002. The Buyer Trader may amend the USD amount.</p>}{includedInBasicCalling && <p className="text-xs text-blue-900">Included in Basic Calling Cost · buyer charge remains USD 0.</p>}{portClearance && <p className="text-xs text-blue-900">The first application is included. Additional supplier-reported applications are passed through at HKD 58 each using the reviewed row rate.</p>}<AmountDisplay label={fixedPricing ? 'Buyer Fixed Charge' : 'Buyer Unit Price'} amount={displayedBuyerRate} currency="USD" unavailableReason={unavailableReason} />{!buyerApproved && review.buyerChargeDecision === 'include' && !buyerLocked && <div><Button type="button" size="sm" variant="outline" disabled={!canBuyerEdit} onClick={() => setBuyerPriceOpen((open) => !open)}>{anchorageDues ? 'Edit Buyer Amount' : 'Edit Buyer Price'}</Button>{buyerPriceOpen && (row.readOnly ? <SalesforceEditNotice sourceId={row.sourceId} instanceUrl={instanceUrl} /> : <div className="mt-3 space-y-2"><Label htmlFor={`paired-buyer-price-${row.sourceId}`}>{anchorageDues ? 'Buyer Anchorage Dues Charge (USD)' : fixedPricing ? 'Buyer Fixed Charge (USD)' : 'Buyer Unit Price (USD)'}</Label><Input id={`paired-buyer-price-${row.sourceId}`} inputMode="decimal" value={draft?.buyerPrice ?? ''} disabled={!canBuyerEdit} onChange={(event) => onDraftChange({ buyerPrice: event.target.value })} /></div>)}</div>}</section></div></article>;
+  const changePortClearance = (patch) => {
+    if (!Object.prototype.hasOwnProperty.call(patch, 'quantity')) {
+      onDraftChange(patch);
+      return;
+    }
+    const applicationCount = portClearanceApplicationCount(patch.quantity);
+    const usdHkdRate = finiteNumber(valueOf(row.item, ['supplierCurrency.usdHkdRate'], companyRate));
+    const calculation = calculatePortClearance({ applicationCount, usdHkdRate });
+    onDraftChange({
+      ...patch,
+      quantity: applicationCount,
+      ...(calculation.complete ? {
+        buyerPrice: calculation.buyerUnitUsd,
+        statutoryBuyerDefaultPending: true,
+      } : {}),
+    });
+    if (calculation.complete) {
+      onReviewChange({ buyerChargeDecision: calculation.additionalApplications > 0 ? 'include' : 'exclude' });
+    }
+  };
+  return <article className="border-t border-border"><div className="border-b border-border bg-muted/25"><div className={cn(portClearance ? 'grid grid-cols-2' : 'px-4 py-3')}><div className={cn('min-w-0', portClearance && 'border-r-2 border-slate-300 px-4 py-3')}><h3 className="font-semibold">{portClearance ? supplierProduct : product}</h3>{descriptionVisible && <p className="mt-0.5 text-sm text-muted-foreground">{description}</p>}</div>{portClearance && <div className="min-w-0 bg-blue-50/20 px-4 py-3"><h3 className="font-semibold text-blue-950">{buyerProduct}</h3></div>}</div><div className="flex flex-wrap items-start gap-x-5 gap-y-1 border-t border-border/70 px-4 py-2 text-xs text-muted-foreground">{!fixedPricing && <span>Quantity <strong className="text-foreground">{variableChargeQuantityLabel(row.item, values.quantity, draft?.unitOfMeasure || valueOf(row.item, ['unitOfMeasure']))}</strong></span>}<span>Pricing Basis <strong className="text-foreground">{fixedPricing ? 'Fixed charge' : 'Per Unit'}</strong></span><div><span>Margin</span><MarginAmount value={displayedMargin} currency="USD" unavailableReason={unavailableReason} /></div>{removable && <AlertDialog><AlertDialogTrigger asChild><Button type="button" size="sm" variant="ghost" className="-my-1 h-7 text-rose-700 hover:bg-rose-50 hover:text-rose-800" disabled={!canCostEdit}>Remove</Button></AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Remove this extra cost?</AlertDialogTitle><AlertDialogDescription>The row remains in Salesforce history but is cancelled and no longer active.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Keep</AlertDialogCancel><AlertDialogAction className="bg-rose-600 hover:bg-rose-700" onClick={removeCharge}>Remove Extra Cost</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>}</div></div><div className="grid grid-cols-2"><section className="min-h-[210px] space-y-3 border-r-2 border-slate-300 bg-slate-50/30 p-4">{costApproved ? <ApprovedDecision ariaLabel={`${supplierProduct} supplier review approved`} /> : <DecisionButtons ariaLabel={`${supplierProduct} supplier review`} selected={review.outcome === 'cancelled' ? 'changed' : review.outcome || ''} disabled={!canCostEdit} onChange={(outcome) => { if (outcome === 'changed' && review.outcome === 'cancelled') onDraftChange({ cancelled: false }); onReviewChange({ outcome }); }} options={[{ value: '', label: 'Pending', tone: 'bg-slate-100 text-slate-800' }, { value: 'correct', label: 'Correct', tone: 'bg-emerald-100 text-emerald-900' }, { value: 'changed', label: supplierLocked ? 'Review Setup' : 'Edit Cost', tone: 'bg-amber-100 text-amber-950' }]} />}<SupplierDualAmount label={fixedPricing ? 'Supplier Fixed Cost' : 'Supplier Unit Cost'} row={row} draft={draft} companyRate={companyRate} />{!costApproved && supplierEditing && (row.readOnly ? <SalesforceEditNotice sourceId={row.sourceId} instanceUrl={instanceUrl} /> : portClearance ? <ManagedPortClearanceFields row={row} draft={draft} disabled={!canCostEdit} onChange={changePortClearance} /> : supplierLocked ? <LockedAgencyFeeFields row={row} instanceUrl={instanceUrl} /> : <PairedExtraCostFields row={row} draft={draft} disabled={!canCostEdit} onChange={onDraftChange} />)}</section><section className="min-h-[210px] space-y-3 bg-blue-50/20 p-4">{buyerApproved ? <ApprovedDecision ariaLabel={`${buyerProduct} buyer review approved`} /> : <DecisionButtons ariaLabel={`${buyerProduct} buyer review`} selected={review.buyerChargeDecision || ''} disabled={!canBuyerEdit || buyerLocked} onChange={(buyerChargeDecision) => onReviewChange({ buyerChargeDecision })} options={buyerDecisionOptions} />}{anchorageDues && <p className="text-xs text-blue-900">Buyer default: Vessel NRT × rounded chargeable hours after the first 12 aggregate hours × USD 0.002. The Buyer Trader may amend the USD amount.</p>}{includedInBasicCalling && <p className="text-xs text-blue-900">Included in Basic Calling Cost · buyer charge remains USD 0.</p>}{portClearance && <p className="text-xs text-blue-900">The first application is included. Additional supplier-reported applications are passed through at HKD 58 each using the reviewed row rate. This default updates immediately when the Supplier Leg application count changes.</p>}<AmountDisplay label={fixedPricing ? 'Buyer Fixed Charge' : 'Buyer Unit Price'} amount={displayedBuyerRate} currency="USD" unavailableReason={unavailableReason} />{!buyerApproved && review.buyerChargeDecision === 'include' && !buyerLocked && <div><Button type="button" size="sm" variant="outline" disabled={!canBuyerEdit} onClick={() => setBuyerPriceOpen((open) => !open)}>{anchorageDues ? 'Edit Buyer Amount' : 'Edit Buyer Price'}</Button>{buyerPriceOpen && (row.readOnly ? <SalesforceEditNotice sourceId={row.sourceId} instanceUrl={instanceUrl} /> : <div className="mt-3 space-y-2"><Label htmlFor={`paired-buyer-price-${row.sourceId}`}>{anchorageDues ? 'Buyer Anchorage Dues Charge (USD)' : fixedPricing ? 'Buyer Fixed Charge (USD)' : 'Buyer Unit Price (USD)'}</Label><Input id={`paired-buyer-price-${row.sourceId}`} inputMode="decimal" value={draft?.buyerPrice ?? ''} disabled={!canBuyerEdit} onChange={(event) => onDraftChange({ buyerPrice: event.target.value })} /></div>)}</div>}</section></div></article>;
 }
 
 function PairedNewChargeRow({ draft, products, canCostEdit, canBuyerEdit, commonOwner, onChange, onRemove }) {

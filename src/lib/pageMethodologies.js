@@ -454,8 +454,8 @@ export const PAYMENT_COLLECTIONS_METHODOLOGIES = {
         body: 'An exact active BASIC CALLING COST on a Hong Kong STEM identifies a bunkers-only-call bundle for that exact supplier and defaults to Charge Buyer. FCOS creates the supporting supplier rows once, in this order: Agency Fee, Port Clearance Extension, Light Dues and Anchorage Dues. Agency Fee, the first port clearance and Light Dues are already included in the buyer-facing Basic Calling Cost and therefore remain USD 0 on the Buyer Leg. Agency Fee is copied from the supplier Account’s Agreed Agency Fee and Currency and is locked for review. Existing matching manual rows prevent duplicates and retain their manual lifecycle, while the same permanent bundle pricing and buyer-default rules still apply.',
       },
       {
-        title: 'Port Clearance Extensions and pass-throughs',
-        body: 'The Port Clearance Extension row records the whole-number application count reported by the supplier. Each application is valid for 72 hours from its start, but FCOS never infers the count from port stay, ETD or departure duration. The locked statutory supplier rate is HKD 58 per application. The first application is included in Basic Calling Cost; every additional application defaults to a zero-margin buyer pass-through using the reviewed row-level USD/HKD rate.',
+        title: 'Port Clearance fees and extensions',
+        body: 'The same underlying charge is labelled Port Clearance Fee on the Supplier Leg and Port Clearance Extension on the Buyer Leg. The Supplier Trader records the whole-number application count reported by the supplier. Each application is valid for 72 hours from its start, but FCOS never infers the count from port stay, ETD or departure duration. The locked supplier rate is HKD 58 per application. The first application is included in Basic Calling Cost; every additional application immediately updates the Buyer Leg default as a zero-margin pass-through using the reviewed row-level USD/HKD rate, even before saving.',
       },
       {
         title: 'Hong Kong anchorage dues',
