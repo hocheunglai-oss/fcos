@@ -5,6 +5,24 @@ function dateOnly(value) {
   return ISO_DATE_RE.test(normalized) ? normalized : null;
 }
 
+export function resolveBdnDeliveryDate(products = []) {
+  const lineItems = Array.isArray(products)
+    ? products.filter((product) => product?.objectName === 'STEM_Line_Item__c')
+    : [];
+  if (lineItems.length === 0) return { date: null, status: 'none', lineItemCount: 0 };
+
+  const normalizedDates = lineItems.map((product) => dateOnly(product?.bdnDeliveryDate));
+  if (normalizedDates.some((date) => !date)) {
+    return { date: null, status: 'missing', lineItemCount: lineItems.length };
+  }
+
+  const dates = [...new Set(normalizedDates)];
+  if (dates.length !== 1) {
+    return { date: null, status: 'multiple', lineItemCount: lineItems.length };
+  }
+  return { date: dates[0], status: 'single', lineItemCount: lineItems.length };
+}
+
 export function addInvoiceCalendarDays(value, days) {
   const normalized = dateOnly(value);
   if (!normalized || !Number.isInteger(days)) return null;

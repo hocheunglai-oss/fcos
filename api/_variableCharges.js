@@ -1207,7 +1207,14 @@ function serializeCase(live, stored, profile, gm, dueDate, sideRows = [], profil
         permissions: {
           canEdit: !frozen && isCurrentAssignee,
           canConfirm: !frozen && isCurrentAssignee,
-          canReopen: frozen && isCurrentAssignee && !invoiceCreated,
+          canReopen: frozen && !invoiceCreated && (isCurrentAssignee || gm.isGeneralManager),
+          reopenAuthority: frozen && !invoiceCreated
+            ? isCurrentAssignee
+              ? 'assigned_trader'
+              : gm.isGeneralManager
+                ? 'general_manager'
+                : null
+            : null,
           canAssignToBuyer: !frozen && isDefaultAssignee && Boolean(assignedBuyerTrader.id) && assignedId !== assignedBuyerTrader.id,
           canTakeBack: !frozen && isDefaultAssignee && assignedId !== defaultId,
           canGmOverride: !frozen && gm.isGeneralManager,
