@@ -2251,7 +2251,10 @@ async function salesforceSupplierChargeWrites(body, live, supplierId, context, {
     }
     if (isBasicCallingBundleSupportRow(current, bundleSupplierIds) && isPortClearanceRow(current)) {
       const calculation = calculatePortClearance({
-        applicationCount: update.quantity,
+        // Buyer-only paired updates do not need to repeat unchanged supplier
+        // evidence. Retain the live Salesforce count when the update omits it,
+        // while still validating any count that the reviewer explicitly sends.
+        applicationCount: portClearanceWriteApplicationCount(update, current),
         usdHkdRate: settings?.usdHkdRate,
       });
       if (!calculation.complete) throw httpError(calculation.errors[0], 400, 'PORT_CLEARANCE_APPLICATION_COUNT_INVALID');
@@ -2682,6 +2685,13 @@ function mergePairedWrites(costBody, buyerBody) {
     extraCostAdds: [...additionsByKey.values()],
     cancellations: costBody?.cancellations || [],
   };
+}
+
+function portClearanceWriteApplicationCount(update, current) {
+  const supplied = update && Object.prototype.hasOwnProperty.call(update, 'quantity')
+    ? update.quantity
+    : undefined;
+  return supplied == null ? current?.Quantity__c : supplied;
 }
 
 async function validateCostSide(body, supplierRows) {
@@ -3519,6 +3529,7 @@ export const variableChargeInternals = {
   normalizedName,
   normalizeBuyerReviewPayload,
   normalizeSupplierReviewPayload,
+  portClearanceWriteApplicationCount,
   nextHongKongBusinessDay,
   variableChargeActionability,
   plainLanguageWorkflow,
