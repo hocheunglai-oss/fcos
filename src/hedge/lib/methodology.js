@@ -56,7 +56,7 @@ export const PAGE_METHODOLOGIES = {
       "Physical P&L is sell value less buy value. Combined P&L adds mark-to-market from linked active hedges.",
       "A final Paper Hedge result is allocated across its linked Physical Trades by normalized midpoint quantity. The Salesforce preview uses gross hedge P&L before broker, exchange, clearing, or settlement fees; a gain becomes a negative STEM cost and a loss becomes a positive STEM cost.",
       "FCOS groups each Physical Trade result by venue and checks live Salesforce, including deleted or cancelled rows. Calculation and reconciliation are read-only until an authorized user reviews the exact Physical Trade and confirms Add, Update, Recreate, Restore, or Adopt.",
-      "One managed SWAPS STEM Charge is maintained for each Physical Trade and venue. Changed calculations remain visibly pending until confirmed; invoiced rows are locked and unmanaged matches are never adopted silently.",
+      "One managed SWAPS STEM Charge is maintained for each Physical Trade and venue with fixed quantity 1 and unit of measure 1. Changed calculations remain visibly pending until confirmed; invoiced rows are locked and unmanaged matches are never adopted silently.",
       "Open and closed status follows the trade close flag and retained settlement history.",
     ],
   },

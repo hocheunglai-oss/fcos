@@ -19,7 +19,7 @@ const VENUES = ['ICE', 'FCBS'];
 const MAX_ALLOCATIONS = 25;
 
 const APPROVED_MAPPING = Object.freeze({
-  mappingRevision: 2,
+  mappingRevision: 3,
   objectName: 'STEM_Extra_Cost__c',
   stemObjectName: 'STEM__c',
   stemNameField: 'KeyStem__c',
@@ -30,6 +30,8 @@ const APPROVED_MAPPING = Object.freeze({
   supplierLookupField: 'Supplier__c',
   fixedField: 'Fixed__c',
   quantityField: 'Quantity_Delivered_Per_BDN__c',
+  uomField: 'Unit_of_Measure__c',
+  unitOfMeasure: '1.',
   paymentTermField: 'Payment_Term__c',
   externalKeyField: 'FCOS_Hedge_Allocation_Key__c',
   cancelledField: 'Cancelled__c',
@@ -181,6 +183,10 @@ async function validateMapping(config) {
   requireField(fields, objectName, apiName(config.descriptionField, 'description field'), { createable: true, updateable: true });
   requireField(fields, objectName, apiName(config.fixedField, 'fixed field'), { createable: true });
   requireField(fields, objectName, apiName(config.quantityField, 'quantity field'), { createable: true });
+  const uomField = requireField(fields, objectName, apiName(config.uomField, 'unit-of-measure field'), { createable: true, updateable: true });
+  if (uomField.type !== 'picklist' || !(uomField.picklistValues || []).some((option) => option.active === true && option.value === config.unitOfMeasure)) {
+    throw failure(`Salesforce ${objectName}.${config.uomField} must allow the unit ${config.unitOfMeasure}.`, 503, 'HEDGE_SALESFORCE_SCHEMA_INVALID');
+  }
   requireField(fields, objectName, apiName(config.paymentTermField, 'payment term field'), { createable: true });
   if (!(stemDescribe.fields || []).some((field) => field.name === config.stemNameField)) throw failure(`Salesforce ${stemObjectName}.${config.stemNameField} is unavailable.`, 503, 'HEDGE_SALESFORCE_SCHEMA_INVALID');
 
@@ -313,7 +319,7 @@ async function resolveSalesforceRows(config, identities, groups, previousAllocat
   const stemIds = [...stemRows.values()].map((row) => row.Id);
   if (!stemIds.length) return { stemRows, extraCosts: [], liveById: new Map(), issues };
   const objectName = apiName(config.objectName, 'extra-cost object');
-  const fields = ['Id', 'Name', 'LastModifiedDate', config.stemLookupField, config.productLookupField, config.supplierLookupField, config.amountField, config.paymentTermField, config.descriptionField].map((field) => apiName(field, 'extra-cost field'));
+  const fields = ['Id', 'Name', 'LastModifiedDate', config.stemLookupField, config.productLookupField, config.supplierLookupField, config.amountField, config.paymentTermField, config.descriptionField, config.uomField].map((field) => apiName(field, 'extra-cost field'));
   const previousIds = previousAllocations.map((row) => row.salesforce_record_id).filter((id) => SALESFORCE_ID.test(String(id || '')));
   const legacyIds = groups.flatMap((group) => group.physicals.flatMap((physical) => Object.values(parseLegacyRecordIds(physical.sf_record_id)))).filter((id) => SALESFORCE_ID.test(String(id || '')));
   const linkedIds = [...new Set([...previousIds, ...legacyIds])];
@@ -525,6 +531,7 @@ export async function pushHedgeSalesforce(client, profile, body = {}) {
       const bodyPayload = {
         [config.amountField]: allocation.salesforceCost,
         [config.descriptionField]: allocation.description,
+        [config.uomField]: config.unitOfMeasure,
       };
       if (allocation.action === 'update') {
         return {

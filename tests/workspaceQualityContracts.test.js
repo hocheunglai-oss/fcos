@@ -124,6 +124,7 @@ test('STEM detail remains a shared control in the STEM column workspaces', async
     'src/pages/StemPnlReport.jsx',
     'src/components/dashboard/PnlTable.jsx',
     'src/components/brokers/BrokerRegisterTable.jsx',
+    'src/hedge/views/PhysicalView.jsx',
   ];
   for (const path of paths) {
     const source = await file(path);
