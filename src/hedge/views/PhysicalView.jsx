@@ -74,6 +74,15 @@ function salesforceReviewLabel(status) {
   return "Review Salesforce hedge result";
 }
 
+function salesforceConfirmLabel(preview, saving) {
+  if (saving) return "Saving...";
+  if (preview?.state === "ready_to_add") return "Confirm add";
+  if (preview?.state === "removed") return "Confirm recreate";
+  if (preview?.venues?.some((row) => row.state === "conflict")) return "Confirm adoption";
+  if (preview?.venues?.some((row) => row.state === "changed_salesforce")) return "Confirm restore";
+  return "Confirm update";
+}
+
 const BLANK_PHYSICAL = {
   trade_date: hktToday(),
   product: "",
@@ -461,9 +470,9 @@ export function PhysicalView({ data, settings, quickCreateSignal = 0, readOnly =
               variant="primary"
               icon={CloudUpload}
               onClick={confirmSalesforceResult}
-              disabled={salesforceDrawer?.saving || salesforceDrawer?.preview?.venues?.some((row) => ["waiting_final", "locked_by_invoice"].includes(row.state) || (row.state === "conflict" && !row.salesforceRecordId))}
+              disabled={salesforceDrawer?.saving || salesforceDrawer?.preview?.venues?.some((row) => row.cannotApply || ["waiting_final", "locked_by_invoice"].includes(row.state) || (row.state === "conflict" && !row.salesforceRecordId))}
             >
-              {salesforceDrawer?.saving ? "Saving..." : salesforceDrawer.preview.state === "ready_to_add" ? "Confirm add" : salesforceDrawer.preview.state === "removed" ? "Confirm recreate" : "Confirm update"}
+              {salesforceConfirmLabel(salesforceDrawer.preview, salesforceDrawer?.saving)}
             </Button>
           )}
         </>}
