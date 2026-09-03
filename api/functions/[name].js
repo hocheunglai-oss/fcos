@@ -2,7 +2,7 @@ import { chunkIds, cleanRecord, getApiVersion, getInstanceUrl, salesforceAuthMod
 import { disputeWorkflowDirectionLabel, disputeWorkflowEditableFilename, disputeWorkflowFileExtension, disputeWorkflowHongKongDateToken } from '../_disputeDocuments.js';
 import { buildDisputePartyRegistry, disputeSalesforceIdKey, findDisputeParty, resolveExtraCostSupplierLookup, resolveOriginalSupplierLookup } from '../_disputeParties.js';
 import { disputeQueueExtraCostProductName } from '../_disputeQueue.js';
-import { calculatedBuyerPayTermDate } from '../_buyerInvoiceDates.js';
+import { resolvedBuyerInvoiceDueDate } from '../_buyerInvoiceDates.js';
 import { isFinalBuyerInvoice, resolveBuyerFinancialAmount } from '../_buyerFinancialAmount.js';
 import { buyerInvoiceEmailSettingsPatch, canonicalizeBuyerInvoiceEmail } from '../../src/lib/buyerInvoiceEmailSettings.js';
 import { earliestEtaDate, summarizeBuyerPaymentEvidence } from '../../src/lib/paymentCollectionEvidence.js';
@@ -4481,6 +4481,8 @@ async function buyerCollectionSalesforceState(stemIds, accessContext = null) {
       'Delivery_Date_Or_Expected__c',
       'Expected_Delivery_Date__c',
       'Payment_Term__c',
+      'Due_Date_Override__c',
+      'Not_Cancelled_STEM_Line_Item_Quantity__c',
       'Buyer_Name__c',
       'Buyer__c',
       'Dispute_Status__c',
@@ -4831,7 +4833,7 @@ async function reconcileBuyerInvoiceCollections({ client, profile = null, access
       buyerName: incomingPaymentBuyerName(stem),
       buyerGroupName: incomingPaymentBuyerGroup(stem),
       disputeStatus: stem.Dispute_Status__c || null,
-      buyerInvoiceDueDate: calculatedBuyerPayTermDate(stem) || stem.Invoice_Due_Date__c || stem.Due_Date__c || stem.Buyer_Pay_Term_Date__c || earliestDate((live.dueFields || []).map((field) => stem[field])),
+      buyerInvoiceDueDate: resolvedBuyerInvoiceDueDate(stem),
       currency: stem.CurrencyIsoCode || latestPayment?.currency || 'USD',
       latestPayment,
       earliestEtaDate: earliestEtaDate(stem.ETA_Start_Date__c, stem.ETA_End_Date__c),
@@ -6135,10 +6137,6 @@ async function frankfurterUsdCnyRate(body, req = null, accessContext = null) {
     }
   }
   throw new Error(lastError?.message || 'Unable to fetch USD/CNY exchange rate');
-}
-
-function earliestDate(values) {
-  return values.filter(Boolean).sort()[0] || null;
 }
 
 function splitBuyerTraderNames(value) {
@@ -10098,6 +10096,8 @@ async function salesforceBuyerInvoicesSnapshot(body, req = null, accessContext =
   if (fieldNames.includes('ETA_Start_Date__c')) fields.push('ETA_Start_Date__c');
   if (fieldNames.includes('ETA_End_Date__c')) fields.push('ETA_End_Date__c');
   if (fieldNames.includes('Payment_Term__c')) fields.push('Payment_Term__c');
+  if (fieldNames.includes('Due_Date_Override__c')) fields.push('Due_Date_Override__c');
+  if (fieldNames.includes('Not_Cancelled_STEM_Line_Item_Quantity__c')) fields.push('Not_Cancelled_STEM_Line_Item_Quantity__c');
   if (fieldNames.includes('Vessel__c')) fields.push('Vessel__r.Name');
   if (fieldNames.includes('Port__c')) fields.push('Port__r.Name');
   if (fieldNames.includes('Buyer_Name__c')) fields.push('Buyer_Name__c');
@@ -10343,7 +10343,7 @@ async function salesforceBuyerInvoicesSnapshot(body, req = null, accessContext =
 
   const allRows = stems
     .map((stem) => {
-      const dueDate = calculatedBuyerPayTermDate(stem) || stem.Invoice_Due_Date__c || stem.Due_Date__c || stem.Buyer_Pay_Term_Date__c || earliestDate(dueFields.map((field) => stem[field]));
+      const dueDate = resolvedBuyerInvoiceDueDate(stem);
       if (!dueDate || dueDate > dueThrough) return null;
       if (dueDate < MIN_BUYER_INVOICE_DUE_DATE) return null;
       if (stem.KeyStem__c && stem.KeyStem__c.startsWith('T')) return null;
@@ -10819,7 +10819,7 @@ async function cashflowBuyerPaymentSamples({ lookbackMonths, accessContext = nul
     : { fields: [] };
   const accountFieldNames = new Set((accountDescribe.fields || []).map((field) => field.name));
   const interofficeCondition = await interofficeStemAccessCondition(accessContext, stemFieldNames, accountFieldNames);
-  const stemSelectFields = ['Id', 'Name', 'CreatedDate', ...selectedFields(stemFieldNames, ['KeyStem__c', 'Buyer_Name__c', 'Buyer__c', 'Account__c', 'Payment_Term__c', 'Invoice_Due_Date__c', 'Buyer_Pay_Term_Date__c', 'Due_Date__c', 'Delivery_Date__c', 'Delivery_Date_Or_Expected__c', 'Expected_Delivery_Date__c'])];
+  const stemSelectFields = ['Id', 'Name', 'CreatedDate', ...selectedFields(stemFieldNames, ['KeyStem__c', 'Buyer_Name__c', 'Buyer__c', 'Account__c', 'Payment_Term__c', 'Invoice_Due_Date__c', 'Buyer_Pay_Term_Date__c', 'Due_Date__c', 'Due_Date_Override__c', 'Not_Cancelled_STEM_Line_Item_Quantity__c', 'Delivery_Date__c', 'Delivery_Date_Or_Expected__c', 'Expected_Delivery_Date__c'])];
   if (stemFieldNames.has('Account__c')) {
     stemSelectFields.push('Account__r.Name');
     if (accountFieldNames.has('Group_Name__c')) stemSelectFields.push('Account__r.Group_Name__c');
@@ -10877,7 +10877,7 @@ async function cashflowBuyerPaymentSamples({ lookbackMonths, accessContext = nul
       statusFields,
     });
     if (type !== 'Buyer Payment') continue;
-    const dueDate = calculatedBuyerPayTermDate(stem) || stem.Invoice_Due_Date__c || stem.Due_Date__c || stem.Buyer_Pay_Term_Date__c || null;
+    const dueDate = resolvedBuyerInvoiceDueDate(stem);
     const paymentDate = dateOnly(payment[dateField] || payment.CreatedDate);
     if (!dueDate || !paymentDate) continue;
     if (isBeforeCashflowForecastStart(paymentDate)) continue;
@@ -12017,7 +12017,7 @@ async function incomingPaymentsListSnapshot(body, req = null, accessContext = nu
     : { fields: [] };
   const accountFieldNames = new Set((accountDescribe.fields || []).map((field) => field.name));
   const interofficeCondition = await interofficeStemAccessCondition(accessContext, stemFieldNames, accountFieldNames);
-  const stemSelectFields = ['Id', 'Name', 'CreatedDate', ...selectedFields(stemFieldNames, ['KeyStem__c', 'Buyer_Name__c', 'Buyer__c', 'Account__c', 'Total_Invoice_Amount__c', 'Total_Invoiced_Amount_From_Suppliers__c', 'Receivable_Balance__c', 'Payable_Balance__c', 'Total_Costs__c', 'Total_Cost__c', 'Total_Cost_Amount__c', 'Payment_Date__c', 'Payment_Term__c', 'Invoice_Due_Date__c', 'Buyer_Pay_Term_Date__c', 'Due_Date__c', 'Delivery_Date__c', 'Delivery_Date_Or_Expected__c', 'Expected_Delivery_Date__c', 'CurrencyIsoCode'])];
+  const stemSelectFields = ['Id', 'Name', 'CreatedDate', ...selectedFields(stemFieldNames, ['KeyStem__c', 'Buyer_Name__c', 'Buyer__c', 'Account__c', 'Total_Invoice_Amount__c', 'Total_Invoiced_Amount_From_Suppliers__c', 'Receivable_Balance__c', 'Payable_Balance__c', 'Total_Costs__c', 'Total_Cost__c', 'Total_Cost_Amount__c', 'Payment_Date__c', 'Payment_Term__c', 'Invoice_Due_Date__c', 'Buyer_Pay_Term_Date__c', 'Due_Date__c', 'Due_Date_Override__c', 'Not_Cancelled_STEM_Line_Item_Quantity__c', 'Delivery_Date__c', 'Delivery_Date_Or_Expected__c', 'Expected_Delivery_Date__c', 'CurrencyIsoCode'])];
   if (stemFieldNames.has('Vessel__c')) stemSelectFields.push('Vessel__r.Name');
   if (stemFieldNames.has('Port__c')) stemSelectFields.push('Port__r.Name');
   if (stemFieldNames.has('Account__c')) {
@@ -12187,7 +12187,7 @@ async function incomingPaymentsListSnapshot(body, req = null, accessContext = nu
         incomingAmount = type === 'Supplier Refund' && amount != null ? Math.abs(amount) : amount;
       }
       const paymentDate = dateField ? payment[dateField] || null : payment.CreatedDate || null;
-      const buyerInvoiceDueDate = type === 'Buyer Payment' && stem ? calculatedBuyerPayTermDate(stem) || stem.Invoice_Due_Date__c || stem.Due_Date__c || stem.Buyer_Pay_Term_Date__c || null : null;
+      const buyerInvoiceDueDate = type === 'Buyer Payment' && stem ? resolvedBuyerInvoiceDueDate(stem) : null;
       const delayDays = type === 'Buyer Payment' && buyerInvoiceDueDate && paymentDate ? daysBetween(buyerInvoiceDueDate, dateOnly(paymentDate)) : null;
       const status = incomingPaymentStatus({
         type,
@@ -12771,7 +12771,7 @@ async function incomingPaymentInterestCalculation(body = {}, accessContext = nul
   const accountFieldNames = new Set(accountFields.map((field) => field.name));
   const interestField = incomingPaymentInterestRateField(accountFields);
 
-  const stemSelectFields = ['Id', 'Name', 'CreatedDate', ...selectedFields(stemFieldNames, ['KeyStem__c', 'Buyer_Name__c', 'Buyer__c', 'Account__c', 'Total_Invoice_Amount__c', 'Receivable_Balance__c', 'Payment_Term__c', 'Invoice_Due_Date__c', 'Buyer_Pay_Term_Date__c', 'Due_Date__c', 'Delivery_Date__c', 'Delivery_Date_Or_Expected__c', 'Expected_Delivery_Date__c'])];
+  const stemSelectFields = ['Id', 'Name', 'CreatedDate', ...selectedFields(stemFieldNames, ['KeyStem__c', 'Buyer_Name__c', 'Buyer__c', 'Account__c', 'Total_Invoice_Amount__c', 'Receivable_Balance__c', 'Payment_Term__c', 'Invoice_Due_Date__c', 'Buyer_Pay_Term_Date__c', 'Due_Date__c', 'Due_Date_Override__c', 'Not_Cancelled_STEM_Line_Item_Quantity__c', 'Delivery_Date__c', 'Delivery_Date_Or_Expected__c', 'Expected_Delivery_Date__c'])];
   if (stemFieldNames.has('Vessel__c')) stemSelectFields.push('Vessel__r.Name');
   if (stemFieldNames.has('Port__c')) stemSelectFields.push('Port__r.Name');
   if (stemFieldNames.has('Account__c')) {
@@ -12895,7 +12895,7 @@ async function incomingPaymentInterestCalculation(body = {}, accessContext = nul
     .filter((payment) => payment.type === 'Buyer Payment' && payment.amount != null && payment.amount > 0 && payment.dateOnly)
     .sort((a, b) => String(a.dateOnly).localeCompare(String(b.dateOnly)) || String(a.id).localeCompare(String(b.id)));
 
-  const rawDueDate = calculatedBuyerPayTermDate(stem) || stem.Invoice_Due_Date__c || stem.Due_Date__c || stem.Buyer_Pay_Term_Date__c || null;
+  const rawDueDate = resolvedBuyerInvoiceDueDate(stem);
   const dueDate = dateOnly(rawDueDate);
   if (!dueDate) throw appError('Buyer invoice due date is missing, so late payment interest cannot be calculated.', 400);
 
@@ -14896,7 +14896,7 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
   const extraCostSupplierRelationship = extraCostSupplierLookup.relationshipName;
 
   const fields = ['Id', 'Name', 'CreatedDate', 'LastModifiedDate'];
-  for (const field of ['KeyStem__c', 'Delivery_Date__c', 'Expected_Delivery_Date__c', 'ETA_Start_Date__c', 'Buyer_Pay_Term_Date__c', 'Invoice_Due_Date__c', 'Due_Date__c', 'Buyer_Name__c', 'Buyer__c', 'Account__c', 'Dispute__c', 'Dispute_Status__c', 'Total_Invoice_Amount__c', 'Total_Invoiced_Amount_From_Suppliers__c', 'Payable_Balance__c', 'Receivable_Balance__c', 'QLIK_STEM_Line_Item_Total_Cost__c', 'QLIK_Costs_Total_Cost__c']) {
+  for (const field of ['KeyStem__c', 'Delivery_Date__c', 'Expected_Delivery_Date__c', 'ETA_Start_Date__c', 'Payment_Term__c', 'Buyer_Pay_Term_Date__c', 'Invoice_Due_Date__c', 'Due_Date__c', 'Due_Date_Override__c', 'Not_Cancelled_STEM_Line_Item_Quantity__c', 'Buyer_Name__c', 'Buyer__c', 'Account__c', 'Dispute__c', 'Dispute_Status__c', 'Total_Invoice_Amount__c', 'Total_Invoiced_Amount_From_Suppliers__c', 'Payable_Balance__c', 'Receivable_Balance__c', 'QLIK_STEM_Line_Item_Total_Cost__c', 'QLIK_Costs_Total_Cost__c']) {
     if (fieldNames.includes(field)) fields.push(field);
   }
   if (fieldNames.includes('Vessel__c')) fields.push('Vessel__r.Name');
@@ -15363,11 +15363,12 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
           });
         const supplierFinanceRowsAll = [...supplierCandidateRows, ...supplierFinanceOnlyRows];
         const supplierFinanceRows = supplierCandidateRows.length ? supplierCandidateRows : supplierFinanceOnlyRows;
+        const buyerInvoiceDueDate = resolvedBuyerInvoiceDueDate(stem);
         const buyerFinanceRow = {
           buyerName: disputePartyRegistry.buyer?.name || (stem.Account__r?.Inactive_Suspended__c === true ? 'Account unavailable' : stem.Buyer_Name__c || stem['Account__r']?.Name || stem.Buyer__c || null),
           buyerInvoiceAmount: buyerInvoiceAmount ?? null,
           buyerInvoiceAmountSource: buyerInvoiceResolution.source,
-          paymentDueDate: stem.Invoice_Due_Date__c || stem.Due_Date__c || stem.Buyer_Pay_Term_Date__c || null,
+          paymentDueDate: buyerInvoiceDueDate,
           receivableBalance: stem.Receivable_Balance__c ?? null,
           disputeRows: [],
           status: null,
@@ -15389,7 +15390,7 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
           _Supplier_Dispute_Rows: supplierFinanceRows,
           _Supplier_Finance_Rows_All: supplierFinanceRowsAll,
           _Dispute_Parties: disputePartyRegistry,
-          _Buyer_Invoice_Due_Date: stem.Invoice_Due_Date__c || stem.Due_Date__c || stem.Buyer_Pay_Term_Date__c || null,
+          _Buyer_Invoice_Due_Date: buyerInvoiceDueDate,
           _Supplier_Invoice_Due_Rows: supplierInvoiceDueRows,
           _Supplier_Invoice_Exposure_Rows: supplierInvoiceExposureRows,
           _Supplier_Settlement_Schema: supplierSettlementSchema,
@@ -17944,7 +17945,7 @@ async function salesforceStemDetailUncached(body, req = null, accessContext = nu
     _Buyer_Invoice_Issued: buyerInvoices.some(isFinalBuyerInvoice),
     _Supplier_Invoice_Amount: calculatedSupplierInvoice,
     _Buyer_Pay_Term_Date: paymentReliability.reliable
-      ? calculatedBuyerPayTermDate(recordRaw) || recordRaw.Invoice_Due_Date__c || recordRaw.Buyer_Pay_Term_Date__c
+      ? resolvedBuyerInvoiceDueDate(recordRaw)
       : LEGACY_PAYMENT_DATA_LABEL,
     _Payment_Data_Reliable: paymentReliability.reliable,
     _Payment_Data_Reliability: paymentReliability.display,

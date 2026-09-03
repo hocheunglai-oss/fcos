@@ -21,6 +21,7 @@ import { getPicklistValues } from 'lightning/uiObjectInfoApi';
 import { getObjectInfo } from 'lightning/uiObjectInfoApi';
 import STEM_OBJECT from '@salesforce/schema/STEM__c';
 import DISPUTE_STATUS_FIELD from '@salesforce/schema/STEM__c.Dispute_Status__c';
+import { calculatedStemInvoiceDueDate } from './invoiceDueDate';
 
 const FIELDS = ['STEM__c.Port__r.Id', 'STEM__c.Port__r.Country__c', 'STEM__c.Payment_Delay__c', 'STEM__c.Invoice_Due_Date__c', 'STEM__c.Payment_Term__c', 'STEM__c.Delivery_Date__c', 'STEM__c.Due_Date_Override__c',
                 'STEM__c.Agent__c', 'STEM__c.ETA_End_Date__c', 'STEM__c.ETA_End_Time__c', 'STEM__c.ETA_Start_Date__c', 'STEM__c.ETA_Start_Time__c',
@@ -237,6 +238,20 @@ export default class FcbStemProcessing extends NavigationMixin(LightningElement)
     return Boolean(this.cancellationChargeDueDateHint);
   }
 
+  get invoiceDueDateRequirement() {
+    if (this.invoiceDueDateValue) return '';
+    if (this.dueDateOverride) return 'Enter the Invoice Due Date.';
+    if (this.isProductLineItemExisting === false) return 'Check Due Date Override and enter the Invoice Due Date.';
+    if (!this.paymentTermValue) return 'Set the Buyer Payment Term before creating the invoice.';
+    if (this.paymentTermValue === 'CIA' && !this.expectedDeliveryDateValue) return 'Set the Expected Delivery Date to calculate the CIA due date.';
+    if (!this.deliveryDateValue) return `Set the ${this.deliveryDateLabel} to calculate the Invoice Due Date.`;
+    return 'The Invoice Due Date could not be calculated. Review the payment term and delivery dates.';
+  }
+
+  get showInvoiceDueDateRequirement() {
+    return Boolean(this.invoiceDueDateRequirement);
+  }
+
   @track fcbsReferenceVisible = false;
   @track fcbsReference;
 
@@ -335,7 +350,10 @@ export default class FcbStemProcessing extends NavigationMixin(LightningElement)
     this.deliveryDateLabel = this.isPumpingCompletionDate ? 'Pumping Completion Date' : 'Delivery Date';
     this.paymentTermValue = this.stem.Payment_Term__c?.value || '';
     this.expectedDeliveryDateValue = this.stem.Expected_Delivery_Date__c.value;
-    this.invoiceDueDateValue = this.stem.Invoice_Due_Date__c.value;
+    this.dueDateOverride = Boolean(this.stem.Due_Date_Override__c.value);
+    this.dueDateDisabled = !this.dueDateOverride;
+    this.dueDateOverrideDisabled = false;
+    this.invoiceDueDateValue = this.dueDateOverride ? this.stem.Invoice_Due_Date__c.value : null;
     this.disputeStatusValue = this.stem.Dispute_Status__c.value;
     this.showDisputes = this.disputeStatusValue != 'No Dispute' ? true : false;
     this.tabBackground = this.stem.Dispute_Status__c.value === 'No Dispute' ? '' : 'redBackground';
@@ -343,9 +361,6 @@ export default class FcbStemProcessing extends NavigationMixin(LightningElement)
       ? 'purpleBackground' 
       : this.tabBackground
     this.showMessage = Boolean(this.stem.Message__c.value);
-    this.dueDateOverride = this.stem.Due_Date_Override__c.value;
-    this.dueDateDisabled = !this.stem.Due_Date_Override__c.value;
-    this.dueDateOverrideDisabled = this.stem.Due_Date_Override__c.value && this.paymentTermValue === "CIA";
     this.partialLumpsumSellAt = this.stem.Partial_Lumpsum_Sell_At__c.value;
     this.isDisabledPartialCIA = !this.stem.Partial_CIA__c.value
     this.invoiceButtonLabel =
@@ -355,13 +370,6 @@ export default class FcbStemProcessing extends NavigationMixin(LightningElement)
         : INVOICE_LABEL;
     this.holdPaymentValue = Boolean(this.stem.Hold_Payment__c.value) ? 'Yes' : 'No';
     this.originatedClass = this.stem.Account__r.value.fields.Inactive_Suspended__c.value === false ? '' : 'slds-theme_warning';
-    if(this.paymentTermValue === 'CIA' && Boolean(this.invoiceDueDateValue) === false){
-      let invoiceDueDate = new Date(this.stem.Expected_Delivery_Date__c.value);
-      invoiceDueDate.setDate(
-        invoiceDueDate.getDate() - 1
-      );
-      this.invoiceDueDateValue = this._convertDate(invoiceDueDate);
-    }
     if (this.stem.Delivery_Date__c.value) {
       this.deliveryDateValue = this.stem.Delivery_Date__c.value;
     } else if(this.stem.Mailing_Requirement__c.value?.includes('-6')){
@@ -370,6 +378,21 @@ export default class FcbStemProcessing extends NavigationMixin(LightningElement)
     this.fcbsReferenceVisible = this.stem.Account__r.value.fields.Name.value === FCBS_NAME && this.stem.Port__r.value.fields.Country__c.value === KOREA_PORT;
     this.fcbsReference = this.stem.FCBS_Reference__c.value;
     this.applyProductInfo();
+  }
+
+  calculatedInvoiceDueDate() {
+    if (this.isProductLineItemExisting === undefined) return null;
+    return calculatedStemInvoiceDueDate({
+      paymentTerm: this.paymentTermValue,
+      deliveryDate: this.deliveryDateValue,
+      expectedDeliveryDate: this.expectedDeliveryDateValue,
+      extraCostOnly: this.isProductLineItemExisting === false,
+    });
+  }
+
+  restoreCalculatedInvoiceDueDate() {
+    if (this.dueDateOverride) return;
+    this.invoiceDueDateValue = this.calculatedInvoiceDueDate();
   }
 
   setDateRange() {
@@ -459,21 +482,7 @@ export default class FcbStemProcessing extends NavigationMixin(LightningElement)
             getEarliestSupplierDeliveryDate({stemId: this.recordId}).then((supplierInvoices) => {
               if(Array.isArray(supplierInvoices) && !(this.stem && this.stem.Delivery_Date__c && this.stem.Delivery_Date__c.value)){
                 this.deliveryDateValue = supplierInvoices.map(supplierInvoice => supplierInvoice.Supplier_Delivery_Date__c)[0];
-                if (this.dueDateDisabled && Boolean(this.invoiceDueDateValue) === false) {
-                  if(this.paymentTermValue === 'CIA'){
-                    let invoiceDueDate = new Date(this.expectedDeliveryDateValue);
-                    invoiceDueDate.setDate(
-                      invoiceDueDate.getDate() - 1
-                    );
-                    this.invoiceDueDateValue = invoiceDueDate;
-                  } else{
-                    let invoiceDueDate = new Date(this.deliveryDateValue);
-                    invoiceDueDate.setDate(
-                      invoiceDueDate.getDate() + Number(this.paymentTermValue.replace( /^\D+/g, '')) - 1
-                    );
-                    this.invoiceDueDateValue = invoiceDueDate;
-                  }
-                }
+                this.restoreCalculatedInvoiceDueDate();
               }
             })
           }
@@ -485,9 +494,8 @@ export default class FcbStemProcessing extends NavigationMixin(LightningElement)
           this.isProductLineItemExisting = false;
           this.deliveryDateDisabled = true;
           this.deliveryDateRequired = false;
-          this.dueDateOverride = true;
-          this.dueDateDisabled = false;
     }
+    this.restoreCalculatedInvoiceDueDate();
   }
 
   @wire(getInvoices, { stemId: "$recordId" })
@@ -794,29 +802,19 @@ export default class FcbStemProcessing extends NavigationMixin(LightningElement)
 
   handlePaymentTermChange(event){
     this.paymentTermValue = event.detail.value;
+    this.restoreCalculatedInvoiceDueDate();
+    this.handleInvoiceFormChange();
   }
 
   handleChangeExpectedDeliveryDate(event){
     this.expectedDeliveryDateValue = event.detail.value;
+    this.restoreCalculatedInvoiceDueDate();
+    this.handleInvoiceFormChange();
   }
 
   handleChangeDeliveryDate(event){
     this.deliveryDateValue = event.detail.value;
-    if (this.dueDateDisabled) {
-      if(this.paymentTermValue === 'CIA'){
-        let invoiceDueDate = new Date(this.expectedDeliveryDateValue);
-        invoiceDueDate.setDate(
-          invoiceDueDate.getDate() - 1
-        );
-        this.invoiceDueDateValue = this._convertDate(invoiceDueDate);
-      } else{
-        let invoiceDueDate = new Date(this.deliveryDateValue);
-        invoiceDueDate.setDate(
-          invoiceDueDate.getDate() + Number(this.paymentTermValue.replace( /^\D+/g, '')) - 1
-        );
-        this.invoiceDueDateValue = this._convertDate(invoiceDueDate);
-      }
-    }
+    this.restoreCalculatedInvoiceDueDate();
     this.handleInvoiceFormChange();
   }
 
@@ -1021,13 +1019,31 @@ export default class FcbStemProcessing extends NavigationMixin(LightningElement)
   }
 
   validateFields(fields) {
-    if ((!this.deliveryDateValue && this.deliveryDateRequired) 
-      || (!this.invoiceDueDateValue && this.template.querySelector(".due-date-input").required)
-      || (this.fcbsReferenceVisible && Boolean(this.fcbsReference) === false)) {
+    if (!this.deliveryDateValue && this.deliveryDateRequired) {
       this.dispatchEvent(
         new ShowToastEvent({
           title: "Error Creating Invoice",
-          message: "Please fill necessary dates",
+          message: `Set the ${this.deliveryDateLabel} before creating the invoice.`,
+          variant: "error",
+        })
+      );
+      return false;
+    }
+    if (!this.invoiceDueDateValue && this.template.querySelector(".due-date-input").required) {
+      this.dispatchEvent(
+        new ShowToastEvent({
+          title: "Error Creating Invoice",
+          message: this.invoiceDueDateRequirement,
+          variant: "error",
+        })
+      );
+      return false;
+    }
+    if (this.fcbsReferenceVisible && Boolean(this.fcbsReference) === false) {
+      this.dispatchEvent(
+        new ShowToastEvent({
+          title: "Error Creating Invoice",
+          message: "Enter the FCBS Reference before creating the invoice.",
           variant: "error",
         })
       );
@@ -1088,13 +1104,10 @@ export default class FcbStemProcessing extends NavigationMixin(LightningElement)
       if ((this.paymentTermValue === "CIA" || this.stem?.Partial_CIA__c?.value) && !this.template.querySelector(".delivery-date-input").value) {
         this.deliveryDateRequired = false;
         this.invoiceButtonLabel = PROFORMA_INVOICE_LABEL;
-        this.dueDateOverride = true;
-        this.dueDateDisabled = false;
-        this.dueDateOverrideDisabled = true;
       } else {
         this.invoiceButtonLabel = INVOICE_LABEL;
-        this.dueDateOverrideDisabled = false;
       }
+      this.dueDateOverrideDisabled = false;
       if (this.selectedProducts.length == 0) {
         this.createInvoiceDisabled = true;
         this.createInvoiceDisabledMessage = "Pick at least one product";
@@ -1106,6 +1119,9 @@ export default class FcbStemProcessing extends NavigationMixin(LightningElement)
         this.createInvoiceDisabled = true;
         this.createInvoiceDisabledMessage =
           "Proforma Invoice cannot be created because product quantities are still in range.";
+      } else if (!this.invoiceDueDateValue) {
+        this.createInvoiceDisabled = true;
+        this.createInvoiceDisabledMessage = this.invoiceDueDateRequirement;
       }  else {
         this.createInvoiceDisabled = false;
       }
@@ -1125,9 +1141,12 @@ export default class FcbStemProcessing extends NavigationMixin(LightningElement)
   }
 
   provideDueDate(event) {
-    this.dueDateOverride = event.target.checked;
-    this.dueDateDisabled = !event.target.checked;
-    this.invoiceDueDateValue = null;
+    const checked = event.target.checked;
+    const calculatedDate = this.calculatedInvoiceDueDate();
+    this.dueDateOverride = checked;
+    this.dueDateDisabled = !checked;
+    this.invoiceDueDateValue = checked ? calculatedDate : null;
+    this.restoreCalculatedInvoiceDueDate();
     this.handleInvoiceFormChange();
   }
 

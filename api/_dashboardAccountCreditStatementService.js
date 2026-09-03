@@ -1,7 +1,7 @@
 import { chunkIds, getApiVersion, getInstanceUrl, sfQuery, sfRequest } from './_salesforce.js';
 import { getOrLoadRuntimeCache } from './_runtimeCache.js';
 import { SALESFORCE_CORPORATE_CURRENCY } from './_decisionDashboard.js';
-import { calculatedBuyerPayTermDate } from './_buyerInvoiceDates.js';
+import { resolvedBuyerInvoiceDueDate } from './_buyerInvoiceDates.js';
 import {
   buildBuyerPaymentDelayModels,
   normalizeBuyerPaymentConservativeness,
@@ -415,7 +415,8 @@ function stemSelectFields(fields) {
   const result = selected(fields, [
     'Id', 'Name', 'CreatedDate', 'LastModifiedDate', 'Account__c', 'Delivery_Date__c', 'Expected_Delivery_Date__c',
     'Expected_Delivery_Date_Payment_Term__c', 'Payment_Term__c', 'Payment_Term_Number__c', 'Invoice_Due_Date__c',
-    'QLIK_Invoice_Due_Date__c', 'Due_Date__c', 'Payment_Date__c', 'Invoice_Status__c', 'Total_Invoice_Amount__c',
+    'QLIK_Invoice_Due_Date__c', 'Due_Date__c', 'Due_Date_Override__c', 'Not_Cancelled_STEM_Line_Item_Quantity__c',
+    'Payment_Date__c', 'Invoice_Status__c', 'Total_Invoice_Amount__c',
     'QLIK_Receivable_Balance__c', 'CurrencyIsoCode',
   ]);
   if (fields.has('Account__c')) result.push('Account__r.Name');
@@ -663,12 +664,7 @@ async function queryBuyerPaymentPerformanceSamples({
     if (!stem || !validBuyerPayment(payment, paymentConfig, accountByStem) || !isCreditExposureStemEligible(stem)) continue;
     const paymentText = [payment.Name, ...paymentConfig.statusFields.map((field) => payment[field])].filter(Boolean).join(' ');
     if (/(bank\s*charge|broker|commission|payable|supplier)/i.test(paymentText)) continue;
-    const dueDate = calculatedBuyerPayTermDate(stem)
-      || stem.Invoice_Due_Date__c
-      || stem.QLIK_Invoice_Due_Date__c
-      || stem.Due_Date__c
-      || stem.Expected_Delivery_Date_Payment_Term__c
-      || null;
+    const dueDate = resolvedBuyerInvoiceDueDate(stem);
     const paymentDate = String(payment[paymentConfig.dateField] || payment.CreatedDate || '').slice(0, 10);
     const delayDays = daysBetween(dueDate, paymentDate);
     if (!dueDate || !paymentDate || delayDays == null) continue;
