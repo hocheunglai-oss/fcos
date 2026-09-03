@@ -499,7 +499,11 @@ export function PhysicalView({ data, settings, quickCreateSignal = 0, readOnly =
                 <tbody>{salesforceDrawer.preview.venues.map((row) => {
                   const meta = salesforceStatusMeta(row.state);
                   return <tr key={row.venue}>
-                    <td><strong>{row.venue}</strong><small>{row.supplierName}</small></td>
+                    <td>
+                      <strong>{row.venue}</strong>
+                      <small>{row.supplierName}</small>
+                      {row.supplierCorrectionRequired && <small className="text-rose-700">Current: {row.currentSupplierName || "Not set"} · will update</small>}
+                    </td>
                     <td><strong>{row.contributions.length}</strong><small>{row.contributions.map((item) => `${item.allocationPercentage.toFixed(4)}%`).join(" · ")}</small></td>
                     <td>{formatMoney(row.grossPnl, { signed: true, digits: 2 })}</td>
                     <td>{formatMoney(row.salesforceCost, { signed: true, digits: 2 })}</td>
