@@ -48,6 +48,7 @@
     <objectPermissions>
         <allowCreate>true</allowCreate><allowDelete>false</allowDelete><allowEdit>true</allowEdit><allowRead>true</allowRead><modifyAllRecords>false</modifyAllRecords><object>STEM_Variable_Charge_Supplier__c</object><viewAllRecords>false</viewAllRecords>
     </objectPermissions>
+    <pageAccesses><apexPage>StemDeleteConfirm</apexPage><enabled>true</enabled></pageAccesses>
     <hasActivationRequired>false</hasActivationRequired>
     <label>FCOS Variable Charges User</label>
 </PermissionSet>

@@ -106,11 +106,26 @@ private class StemTriggerHandlerTest {
     static void testDeleteRelatedRecords(){
         Test.startTest();
         STEM__c stem = [SELECT Id FROM STEM__c];
+        STEM_Line_Item__c lineItem = [
+            SELECT Original_Supplier__c
+            FROM STEM_Line_Item__c
+            WHERE STEM__c = :stem.Id AND Original_Supplier__c != null
+            LIMIT 1
+        ];
+        STEM_Variable_Charge_Supplier__c variableChargeSupplier = new STEM_Variable_Charge_Supplier__c(
+            STEM__c = stem.Id,
+            Supplier__c = lineItem.Original_Supplier__c,
+            Manual_Review_Required__c = true,
+            Supplier_Status__c = 'Pending'
+        );
+        insert variableChargeSupplier;
         System.assertNotEquals(0, [SELECT Id FROM STEM_Payment_Overview__c].size());
         System.assertNotEquals(0, [SELECT Id FROM Mailing_Record__c].size());
+        System.assertEquals(1, [SELECT Count() FROM STEM_Variable_Charge_Supplier__c WHERE STEM__c = :stem.Id]);
         delete stem;
         System.assertEquals(0, [SELECT Id FROM STEM_Payment_Overview__c].size());
         System.assertEquals(0, [SELECT Id FROM Mailing_Record__c].size());
+        System.assertEquals(0, [SELECT Count() FROM STEM_Variable_Charge_Supplier__c WHERE STEM__c = :stem.Id]);
         Test.stopTest();
     }
     

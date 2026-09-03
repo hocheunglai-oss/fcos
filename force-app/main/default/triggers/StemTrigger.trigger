@@ -32,6 +32,7 @@ trigger StemTrigger on STEM__c(before insert, before update, after insert, after
         HongKongBasicCallingBundleService.afterStemChange(Trigger.new, Trigger.oldMap);
     }
     if(Trigger.isDelete && Trigger.isBefore){
+        StemTriggerHandler.deleteVariableChargeSuppliers(Trigger.oldMap);
         StemTriggerHandler.deleteInvoices(Trigger.oldMap);
         StemTriggerHandler.deleteStemPaymentOverviews(Trigger.oldMap);
         StemTriggerHandler.deleteCashflows(Trigger.oldMap);
