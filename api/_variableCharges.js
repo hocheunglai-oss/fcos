@@ -3070,6 +3070,7 @@ export async function confirmVariableChargeSides(body, context) {
   if (!requirement) throw httpError('This exact supplier is not required in Variable Charges.', 409, 'SUPPLIER_STAGE_NOT_REQUIRED');
   assertLiveActionable(liveBefore);
   const states = await sideStatesForSupplier(context, stemId, supplierId, sides);
+  const expectedLedgerFingerprints = Object.fromEntries(states.map((state) => [state.side, state.source_fingerprint]));
   const gm = await activeGeneralManager(context.client, context.profile.id);
   const overrideReason = text(body?.gmOverrideReason || body?.reason, 1000);
   const normalAuthority = states.every((state) => state.assigned_user_id === context.profile.id)
@@ -3168,6 +3169,7 @@ export async function confirmVariableChargeSides(body, context) {
     const confirmationRows = sides.map((side) => ({
       side,
       expectedRevision: revisions[side],
+      expectedSourceFingerprint: expectedLedgerFingerprints[side],
       sourceFingerprint: ledgerFingerprints?.[side],
       salesforceStageLastModifiedAt: salesforceResult?.lastModifiedAt || null,
       rowByRowReviewed: true,

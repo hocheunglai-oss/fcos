@@ -502,3 +502,10 @@ test('database confirmation adopts the post-write fingerprint without storing fi
   assert.match(migration, /revoke all on table public\.ship_agent_charge_cases from public, anon, authenticated/);
   assert.doesNotMatch(migration, /unit_price|lumpsum_price|payment_term|charge_amount/i);
 });
+
+test('paired side confirmation sends distinct pre-write and post-write audit fingerprints', async () => {
+  const service = await repositoryFile('api/_variableCharges.js');
+  assert.match(service, /expectedLedgerFingerprints = Object\.fromEntries/);
+  assert.match(service, /expectedSourceFingerprint: expectedLedgerFingerprints\[side\]/);
+  assert.match(service, /sourceFingerprint: ledgerFingerprints\?\.\[side\]/);
+});

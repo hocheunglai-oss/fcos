@@ -166,3 +166,31 @@ test('supplier confirmation requires a reference and stores only hashes and work
   assert.doesNotMatch(fn, /p_reference_text|p_note|p_message_body/);
   assert.match(fn, /security invoker/);
 });
+
+test('post-write confirmation compares the reviewed fingerprint before storing the new Salesforce fingerprint', async () => {
+  const sql = await readFile(new URL('../supabase/migrations/20260903104102_variable_charge_post_write_fingerprints.sql', import.meta.url), 'utf8');
+  assert.match(sql, /expectedSourceFingerprint/);
+  assert.match(sql, /v_state\.source_fingerprint <> v_expected_fingerprint/);
+  assert.match(sql, /source_fingerprint = v_fingerprint/);
+  assert.match(sql, /revoke all on function public\.record_variable_charge_side_confirmations/);
+  assert.match(sql, /grant execute on function public\.record_variable_charge_side_confirmations[^;]+to service_role/);
+});
+
+test('post-write confirmation safely resumes after Salesforce synchronization wins the audit race', async () => {
+  const sql = await readFile(new URL('../supabase/migrations/20260903105435_variable_charge_post_write_recovery.sql', import.meta.url), 'utf8');
+  assert.match(sql, /v_state\.status = 'verified'/);
+  assert.match(sql, /v_state\.revision = v_expected_revision \+ 1/);
+  assert.match(sql, /v_state\.source_fingerprint = v_fingerprint/);
+  assert.match(sql, /salesforce_stage_last_modified_at is not distinct from v_salesforce_modified_at/);
+  assert.match(sql, /'postWriteRecovery', v_already_synchronized/);
+  assert.match(sql, /revoke all on function public\.record_variable_charge_side_confirmations/);
+  assert.match(sql, /grant execute on function public\.record_variable_charge_side_confirmations[^;]+to service_role/);
+});
+
+test('post-write recovery audit exposes only a redacted workflow boolean', async () => {
+  const sql = await readFile(new URL('../supabase/migrations/20260903105644_variable_charge_post_write_recovery_event_fix.sql', import.meta.url), 'utf8');
+  assert.match(sql, /'postWriteRecovery'/);
+  assert.match(sql, /revoke all on function public\.variable_charge_assert_event_metadata\(jsonb\) from public, anon, authenticated/);
+  assert.match(sql, /grant execute on function public\.variable_charge_assert_event_metadata\(jsonb\) to service_role/);
+  assert.doesNotMatch(sql, /amount|price|noteText|overrideReason/i);
+});
