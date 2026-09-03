@@ -21,7 +21,7 @@ import { getPicklistValues } from 'lightning/uiObjectInfoApi';
 import { getObjectInfo } from 'lightning/uiObjectInfoApi';
 import STEM_OBJECT from '@salesforce/schema/STEM__c';
 import DISPUTE_STATUS_FIELD from '@salesforce/schema/STEM__c.Dispute_Status__c';
-import { calculatedStemInvoiceDueDate } from './invoiceDueDate';
+import { calculatedStemInvoiceDueDate, resolveBdnDeliveryDate } from './invoiceDueDate';
 
 const FIELDS = ['STEM__c.Port__r.Id', 'STEM__c.Port__r.Country__c', 'STEM__c.Payment_Delay__c', 'STEM__c.Invoice_Due_Date__c', 'STEM__c.Payment_Term__c', 'STEM__c.Delivery_Date__c', 'STEM__c.Due_Date_Override__c',
                 'STEM__c.Agent__c', 'STEM__c.ETA_End_Date__c', 'STEM__c.ETA_End_Time__c', 'STEM__c.ETA_Start_Date__c', 'STEM__c.ETA_Start_Time__c',
@@ -193,6 +193,8 @@ export default class FcbStemProcessing extends NavigationMixin(LightningElement)
 
   @track dateRange;
   @track deliveryDateValue;
+  deliveryDateSource = null;
+  selectedBdnDeliveryDateStatus = 'none';
   @track invoiceDueDateValue;
   @track pumpingCompletionDateValue;
   expectedDeliveryDateValue;
@@ -372,8 +374,10 @@ export default class FcbStemProcessing extends NavigationMixin(LightningElement)
     this.originatedClass = this.stem.Account__r.value.fields.Inactive_Suspended__c.value === false ? '' : 'slds-theme_warning';
     if (this.stem.Delivery_Date__c.value) {
       this.deliveryDateValue = this.stem.Delivery_Date__c.value;
+      this.deliveryDateSource = 'stem';
     } else if(this.stem.Mailing_Requirement__c.value?.includes('-6')){
       this.deliveryDateValue = null;
+      this.deliveryDateSource = null;
     }
     this.fcbsReferenceVisible = this.stem.Account__r.value.fields.Name.value === FCBS_NAME && this.stem.Port__r.value.fields.Country__c.value === KOREA_PORT;
     this.fcbsReference = this.stem.FCBS_Reference__c.value;
@@ -475,16 +479,29 @@ export default class FcbStemProcessing extends NavigationMixin(LightningElement)
           this.isProductLineItemExisting = true;
           if(this.stem && this.stem.Delivery_Date__c && this.stem.Delivery_Date__c.value){
             this.deliveryDateValue = this.stem.Delivery_Date__c.value;
-          } else if (selectedSTEMLineItems.filter(product => product.bdnDeliveryDate).length > 0 &&
-            !(this.stem && this.stem.Delivery_Date__c && this.stem.Delivery_Date__c.value)) {
-            this.deliveryDateValue = null;
+            this.deliveryDateSource = 'stem';
           } else{
-            getEarliestSupplierDeliveryDate({stemId: this.recordId}).then((supplierInvoices) => {
-              if(Array.isArray(supplierInvoices) && !(this.stem && this.stem.Delivery_Date__c && this.stem.Delivery_Date__c.value)){
-                this.deliveryDateValue = supplierInvoices.map(supplierInvoice => supplierInvoice.Supplier_Delivery_Date__c)[0];
-                this.restoreCalculatedInvoiceDueDate();
-              }
-            })
+            const invoiceableLineItems = selectedSTEMLineItems.filter((product) => product.issued !== true);
+            const bdnResolution = resolveBdnDeliveryDate(invoiceableLineItems);
+            this.selectedBdnDeliveryDateStatus = bdnResolution.status;
+            if (bdnResolution.status === 'single') {
+              this.deliveryDateValue = bdnResolution.date;
+              this.deliveryDateSource = 'bdn';
+            } else if (bdnResolution.status === 'multiple' || bdnResolution.status === 'missing') {
+              this.deliveryDateValue = null;
+              this.deliveryDateSource = null;
+            } else {
+              getEarliestSupplierDeliveryDate({stemId: this.recordId}).then((supplierInvoices) => {
+                if(Array.isArray(supplierInvoices)
+                  && !(this.stem && this.stem.Delivery_Date__c && this.stem.Delivery_Date__c.value)
+                  && this.deliveryDateSource !== 'manual'){
+                  this.deliveryDateValue = supplierInvoices.map(supplierInvoice => supplierInvoice.Supplier_Delivery_Date__c)[0];
+                  this.deliveryDateSource = this.deliveryDateValue ? 'supplier_invoice' : null;
+                  this.restoreCalculatedInvoiceDueDate();
+                  this.handleInvoiceFormChange();
+                }
+              })
+            }
           }
     } else{
           if (this.productInfo.every(product => product.issued) &&
@@ -814,6 +831,7 @@ export default class FcbStemProcessing extends NavigationMixin(LightningElement)
 
   handleChangeDeliveryDate(event){
     this.deliveryDateValue = event.detail.value;
+    this.deliveryDateSource = 'manual';
     this.restoreCalculatedInvoiceDueDate();
     this.handleInvoiceFormChange();
   }
@@ -1083,6 +1101,17 @@ export default class FcbStemProcessing extends NavigationMixin(LightningElement)
   handleProductChange(event) {
     try {
       this.selectedProducts = event.detail.selectedRows;
+      const storedDeliveryDate = this.stem?.Delivery_Date__c?.value;
+      const selectedBdn = resolveBdnDeliveryDate(this.selectedProducts);
+      this.selectedBdnDeliveryDateStatus = selectedBdn.status;
+      if (storedDeliveryDate) {
+        this.deliveryDateValue = storedDeliveryDate;
+        this.deliveryDateSource = 'stem';
+      } else if (this.deliveryDateSource !== 'manual') {
+        this.deliveryDateValue = selectedBdn.status === 'single' ? selectedBdn.date : null;
+        this.deliveryDateSource = selectedBdn.status === 'single' ? 'bdn' : null;
+      }
+      this.restoreCalculatedInvoiceDueDate();
       this.handleInvoiceFormChange();
     } catch (error) {
       console.error(error)
@@ -1093,9 +1122,14 @@ export default class FcbStemProcessing extends NavigationMixin(LightningElement)
   handleInvoiceFormChange() {
     if(this.template.querySelector(".delivery-date-input")){ 
       this.deliveryDateRequired = this.isProductLineItemExisting ? true : false;
+      const selectedLineItemIds = new Set(this.selectedProducts
+        .filter((product) => product.objectName === 'STEM_Line_Item__c')
+        .map((product) => product.id || product.Id));
+      const selectedStemLineItems = (this.stemLineItems || [])
+        .filter((stemLineItem) => selectedLineItemIds.has(stemLineItem.Id));
       let isQuantityRange = false;
       let quantityDeliveredMissing = false;
-      for (const stemLineItem of this.stemLineItems) {
+      for (const stemLineItem of selectedStemLineItems) {
         if (stemLineItem.Is_Quantity_Range__c) isQuantityRange = true;
         if (!stemLineItem.Quantity_Delivered_Per_BDN__c) quantityDeliveredMissing = true;
       }
@@ -1111,6 +1145,9 @@ export default class FcbStemProcessing extends NavigationMixin(LightningElement)
       if (this.selectedProducts.length == 0) {
         this.createInvoiceDisabled = true;
         this.createInvoiceDisabledMessage = "Pick at least one product";
+      } else if (!this.deliveryDateValue && this.selectedBdnDeliveryDateStatus === 'multiple') {
+        this.createInvoiceDisabled = true;
+        this.createInvoiceDisabledMessage = "Selected products have different BDN Delivery Dates. Select products with one BDN date or enter the Delivery Date.";
       } else if (Boolean(this.template.querySelector(".delivery-date-input").value) && quantityDeliveredMissing) {
         this.createInvoiceDisabled = true;
         this.createInvoiceDisabledMessage =

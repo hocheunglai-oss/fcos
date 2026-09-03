@@ -406,6 +406,8 @@ test('FCOS handlers are explicit, fail-closed, atomic, and do not send email', a
   assert.match(service, /Product2Id__r\.Name/);
   assert.match(service, /productName: productName \|\| null/);
   assert.match(methodology, /'variable-charges'/);
+  assert.match(service, /canReopen: frozen && !invoiceCreated && \(isCurrentAssignee \|\| gm\.isGeneralManager\)/);
+  assert.match(service, /reopenAuthority:[\s\S]+assigned_trader[\s\S]+general_manager/);
 });
 
 test('paired workflow keeps cost and buyer responsibility independent', () => {

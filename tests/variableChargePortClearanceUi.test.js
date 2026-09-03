@@ -10,7 +10,8 @@ test('paired Variable Charges gives Port Clearance each commercial leg label', a
   assert.match(source, /pricingType: 'fixed'/);
   assert.match(source, /supplierCost: draft\?\.inputCurrency === 'USD' \? calculation\.supplierTotalUsd : calculation\.supplierHkd/);
   assert.match(source, /buyerPrice: calculation\.buyerTotalUsd/);
-  assert.match(source, /buyerChargeDecision: calculation\.additionalApplications > 0 \? 'include' : 'exclude'/);
+  assert.match(source, /outcome: 'changed',[\s\S]+buyerChargeDecision: calculation\.additionalApplications > 0 \? 'include' : 'exclude'/);
+  assert.match(source, /if \(outcome === 'correct'\)[\s\S]+onDraftChange\(original\)[\s\S]+initialReview\(row\)\.buyerChargeDecision/);
   assert.equal(
     source.match(/quantity: isPortClearanceItem\(item\) \|\| draft\.pricingType === 'per_unit' \? Number\(draft\.quantity\) : null/g)?.length,
     2,

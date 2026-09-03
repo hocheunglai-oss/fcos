@@ -5,6 +5,7 @@ import {
   addInvoiceCalendarDays,
   calculatedStemInvoiceDueDate,
   invoicePaymentTermDays,
+  resolveBdnDeliveryDate,
 } from '../force-app/main/default/lwc/fcbStemProcessing/invoiceDueDate.js';
 
 test('counts the delivery date as day one for numeric buyer terms', () => {
@@ -27,6 +28,26 @@ test('requires a manual due date for extra-cost-only and incomplete cases', () =
   assert.equal(invoicePaymentTermDays('CIA'), null);
 });
 
+test('defaults invoice delivery to one selected BDN date and exposes unsafe selections', () => {
+  const oneBdn = resolveBdnDeliveryDate([{
+    objectName: 'STEM_Line_Item__c',
+    bdnDeliveryDate: '2026-08-29',
+  }]);
+  assert.deepEqual(oneBdn, { date: '2026-08-29', status: 'single', lineItemCount: 1 });
+  assert.equal(calculatedStemInvoiceDueDate({ paymentTerm: '30', deliveryDate: oneBdn.date }), '2026-09-27');
+
+  assert.equal(resolveBdnDeliveryDate([
+    { objectName: 'STEM_Line_Item__c', bdnDeliveryDate: '2026-08-29' },
+    { objectName: 'STEM_Line_Item__c', bdnDeliveryDate: '2026-08-30' },
+  ]).status, 'multiple');
+  assert.equal(resolveBdnDeliveryDate([
+    { objectName: 'STEM_Line_Item__c', bdnDeliveryDate: null },
+  ]).status, 'missing');
+  assert.equal(resolveBdnDeliveryDate([
+    { objectName: 'STEM_Extra_Cost__c', bdnDeliveryDate: null },
+  ]).status, 'none');
+});
+
 test('STEM Processing preserves saved overrides and never forces them on', async () => {
   const source = await readFile(new URL('../force-app/main/default/lwc/fcbStemProcessing/fcbStemProcessing.js', import.meta.url), 'utf8');
   assert.match(source, /this\.dueDateOverride = Boolean\(this\.stem\.Due_Date_Override__c\.value\)/u);
@@ -34,4 +55,6 @@ test('STEM Processing preserves saved overrides and never forces them on', async
   assert.doesNotMatch(source, /this\.dueDateOverride = true/u);
   assert.match(source, /this\.invoiceDueDateValue = checked \? calculatedDate : null/u);
   assert.match(source, /this\.restoreCalculatedInvoiceDueDate\(\)/u);
+  assert.match(source, /resolveBdnDeliveryDate\(this\.selectedProducts\)/u);
+  assert.match(source, /selectedLineItemIds\.has\(stemLineItem\.Id\)/u);
 });
