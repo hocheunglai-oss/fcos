@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
-import { allocateHedgeSalesforceAmounts } from '../api/_hedgeSalesforce.js';
-import { allocateGrossPnlAcrossPhysicals, physicalHedgeSalesforceWriteBody } from '../api/_hedgePhysicalSalesforce.js';
+import { allocateHedgeSalesforceAmounts, mergeHedgeSalesforceMapping } from '../api/_hedgeSalesforce.js';
+import { allocateGrossPnlAcrossPhysicals, physicalHedgeSalesforceManagedState, physicalHedgeSalesforceWriteBody } from '../api/_hedgePhysicalSalesforce.js';
 import { sanitizeRichText } from '../api/_richText.js';
 
 const read = (path) => fs.readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
@@ -84,7 +84,65 @@ test('Physical Trade synchronization uses the approved mapping, external key and
   assert.match(service, /row\.unmanagedCandidate \? null : row\.salesforceRecordId/);
   assert.match(service, /salesforceWritePerformed: false/);
   assert.match(service, /\['create', 'recreate'\]\.includes\(item\.rowAction\) \? response\?\.body\?\.id : item\.row\.salesforceRecordId/);
-  assert.match(service, /function stateFromManagedRecord[\s\S]*config\.buyerInvoiceField[\s\S]*record\?\.IsDeleted === true[\s\S]*function resolveSalesforce/);
+  assert.match(service, /function physicalHedgeSalesforceManagedState[\s\S]*config\.buyerInvoiceField[\s\S]*record\?\.IsDeleted === true[\s\S]*function resolveSalesforce/);
+});
+
+test('venue supplier mappings cannot be overridden by saved Hedge settings', () => {
+  const mapping = mergeHedgeSalesforceMapping({
+    mappingRevision: 99,
+    venues: {
+      ICE: { supplierId: '0012x00000LGhzUAAT', supplierName: 'Wrong ICE supplier', paymentTerm: '30 I' },
+      FCBS: { supplierId: '001fu00000Zo8eHAAR', supplierName: 'Wrong FCBS supplier', supplierClKey: 'WRONG', paymentTerm: '60 I' },
+    },
+  });
+
+  assert.equal(mapping.venues.ICE.supplierId, '001fu00000Zo8eHAAR');
+  assert.equal(mapping.venues.ICE.supplierName, 'STRAITS FINANCIAL SERVICES PTE LTD');
+  assert.equal(mapping.venues.ICE.paymentTerm, '7 I');
+  assert.equal(mapping.venues.FCBS.supplierId, '0012x00000LGhzUAAT');
+  assert.equal(mapping.venues.FCBS.supplierName, 'FRATELLI COSULICH BUNKERS (S) PTE LTD');
+  assert.equal(mapping.venues.FCBS.supplierClKey, 'HKFCBS');
+  assert.equal(mapping.venues.FCBS.paymentTerm, '7 I');
+  assert.equal(mapping.mappingRevision, 99);
+});
+
+test('wrong FCBS suppliers require an update unless the Salesforce row is invoice-locked', () => {
+  const config = {
+    buyerInvoiceField: 'Buyer_Invoice__c',
+    supplierInvoiceField: 'Supplier_Invoice__c',
+    cancelledField: 'Cancelled__c',
+    stemLookupField: 'STEM__c',
+    productLookupField: 'Product2Id__c',
+    productId: 'swaps-product',
+    supplierLookupField: 'Supplier__c',
+    uomField: 'Unit_of_Measure__c',
+    unitOfMeasure: '1.',
+    orderedQuantityField: 'Quantity__c',
+    quantityField: 'Quantity_Delivered_Per_BDN__c',
+    quantity: 0,
+    amountField: 'Lumpsum_Cost__c',
+  };
+  const row = {
+    salesforceStemId: 'stem',
+    supplierAccountId: '0012x00000LGhzUAAT',
+    supplierName: 'FRATELLI COSULICH BUNKERS (S) PTE LTD',
+    salesforceCost: 100,
+  };
+  const wrongSupplier = {
+    STEM__c: 'stem',
+    Product2Id__c: 'swaps-product',
+    Supplier__c: '001fu00000Zo8eHAAR',
+    Unit_of_Measure__c: '1.',
+    Quantity__c: 0,
+    Quantity_Delivered_Per_BDN__c: 0,
+    Lumpsum_Cost__c: 100,
+  };
+
+  assert.deepEqual(physicalHedgeSalesforceManagedState(wrongSupplier, row, config), {
+    state: 'update_required',
+    issue: 'The Salesforce supplier must be corrected to FRATELLI COSULICH BUNKERS (S) PTE LTD.',
+  });
+  assert.equal(physicalHedgeSalesforceManagedState({ ...wrongSupplier, Buyer_Invoice__c: 'invoice' }, row, config).state, 'locked_by_invoice');
 });
 
 test('Physical Trade updates never PATCH the immutable Salesforce STEM parent', () => {
@@ -104,14 +162,14 @@ test('Physical Trade updates never PATCH the immutable Salesforce STEM parent', 
     paymentTermField: 'Payment_Term__c',
     stemLookupField: 'STEM__c',
     recordTypeId: 'record-type',
-    venues: { ICE: { paymentTerm: '7 I' } },
+    venues: { ICE: { paymentTerm: '7 I' }, FCBS: { paymentTerm: '7 I' } },
   };
   const row = {
     venue: 'ICE',
     salesforceCost: 125.5,
     description: 'Final gross hedge result',
     salesforceStemId: 'stem',
-    supplierAccountId: 'supplier',
+    supplierAccountId: '001fu00000Zo8eHAAR',
   };
 
   for (const rowAction of ['update', 'adopt', 'restore']) {
@@ -122,6 +180,7 @@ test('Physical Trade updates never PATCH the immutable Salesforce STEM parent', 
     assert.equal(body.Quantity__c, 0);
     assert.equal(body.Quantity_Delivered_Per_BDN__c, 0);
     assert.equal(body.Unit_of_Measure__c, '1.');
+    assert.equal(body.Supplier__c, '001fu00000Zo8eHAAR');
   }
 
   const create = physicalHedgeSalesforceWriteBody({ rowAction: 'create', row, config, allocationKey: 'allocation' });
@@ -130,6 +189,10 @@ test('Physical Trade updates never PATCH the immutable Salesforce STEM parent', 
   assert.equal(create.Unit_of_Measure__c, '1.');
   assert.equal(create.Quantity__c, 0);
   assert.equal(create.Quantity_Delivered_Per_BDN__c, 0);
+  assert.equal(create.Supplier__c, '001fu00000Zo8eHAAR');
+
+  const fcbsCreate = physicalHedgeSalesforceWriteBody({ rowAction: 'create', row: { ...row, venue: 'FCBS', supplierAccountId: '0012x00000LGhzUAAT' }, config, allocationKey: 'fcbs-allocation' });
+  assert.equal(fcbsCreate.Supplier__c, '0012x00000LGhzUAAT');
 
   const trigger = read('force-app/main/default/triggers/StemExtraCostTrigger.trigger');
   const handler = read('force-app/main/default/classes/StemExtraCostTriggerHandler.cls');
@@ -147,6 +210,7 @@ test('Physical Trade updates never PATCH the immutable Salesforce STEM parent', 
 
 test('Physical Trade hedge-result mappings and immutable history are service-only', () => {
   const migration = read('supabase/migrations/20260902093000_physical_hedge_salesforce_costs.sql');
+  const venueMigration = read('supabase/migrations/20260903143343_normalize_hedge_salesforce_venue_suppliers.sql');
   assert.match(migration, /unique \(physical_trade_id, venue\)/);
   assert.match(migration, /allocation_key text not null unique/);
   assert.match(migration, /alter table public\.hedge_physical_salesforce_costs enable row level security/);
@@ -155,6 +219,11 @@ test('Physical Trade hedge-result mappings and immutable history are service-onl
   assert.match(migration, /grant select, insert, update on table public\.hedge_physical_salesforce_costs to service_role/);
   assert.match(migration, /grant select, insert on table public\.hedge_physical_salesforce_cost_history to service_role/);
   assert.doesNotMatch(migration, /grant .*update.*hedge_physical_salesforce_cost_history/);
+  assert.match(venueMigration, /001fu00000Zo8eHAAR/);
+  assert.match(venueMigration, /0012x00000LGhzUAAT/);
+  assert.match(venueMigration, /FRATELLI COSULICH BUNKERS \(S\) PTE LTD/);
+  assert.match(venueMigration, /HKFCBS/);
+  assert.match(venueMigration, /is distinct from normalized\.next_value/);
 });
 
 test('legacy Paper Hedge Salesforce writes are rejected in favor of Physical Trades', () => {
@@ -173,6 +242,8 @@ test('Physical Trades show the Salesforce STEM name and open the shared STEM det
   assert.match(physical, /StemDetailLink/);
   assert.match(physical, /StemDetailModal/);
   assert.match(physical, /hedgeResult\.salesforceStemName \|\| record\.stem_number/);
+  assert.match(physical, /supplierCorrectionRequired/);
+  assert.match(physical, /currentSupplierName/);
 });
 
 test('rich-text templates discard active content while retaining approved formatting', () => {

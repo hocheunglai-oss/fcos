@@ -201,7 +201,7 @@ function matchesIdentity(record, row, config) {
     && record?.[config.supplierLookupField] === row.supplierAccountId;
 }
 
-function stateFromManagedRecord(record, row, config) {
+export function physicalHedgeSalesforceManagedState(record, row, config) {
   if (record?.[config.buyerInvoiceField] || record?.[config.supplierInvoiceField]) {
     return { state: 'locked_by_invoice', issue: 'The Salesforce extra cost is already linked to an invoice and cannot be changed here.' };
   }
@@ -215,8 +215,11 @@ function stateFromManagedRecord(record, row, config) {
       cannotApply: true,
     };
   }
-  if (!matchesIdentity(record, row, config)) {
-    return { state: 'changed_salesforce', issue: 'The managed Salesforce row no longer matches the expected STEM, Product, or Supplier.' };
+  if (record?.[config.productLookupField] !== config.productId) {
+    return { state: 'changed_salesforce', issue: 'The managed Salesforce row no longer uses the approved SWAPS Product.' };
+  }
+  if (record?.[config.supplierLookupField] !== row.supplierAccountId) {
+    return { state: 'update_required', issue: `The Salesforce supplier must be corrected to ${row.supplierName}.` };
   }
   if (record?.[config.uomField] !== config.unitOfMeasure) {
     return { state: 'update_required', issue: `The Salesforce unit of measure must be ${config.unitOfMeasure === '1.' ? '1' : config.unitOfMeasure}.` };
@@ -266,7 +269,13 @@ async function resolveSalesforce(client, calculations, existingMappings) {
   const extraResult = clauses.length
     ? await sfQueryAll(`SELECT ${fields.join(',')} FROM ${objectName} WHERE ${clauses.join(' OR ')}`, { clean: true, limit: Math.max(100, stemIds.length * 12) })
     : { records: [] };
-  return { config, identities, stems: stemsByKey, records: extraResult.records || [], mappingByKey };
+  const records = extraResult.records || [];
+  const currentSupplierIds = [...new Set(records.map((record) => record?.[config.supplierLookupField]).filter((id) => SALESFORCE_ID.test(String(id || ''))))];
+  const currentSupplierResult = currentSupplierIds.length
+    ? await sfQuery(`SELECT Id,Name,Company_Code__c FROM Account WHERE Id IN ('${currentSupplierIds.join("','")}')`, { clean: true, limit: Math.max(20, currentSupplierIds.length) })
+    : { records: [] };
+  const supplierAccounts = new Map((currentSupplierResult.records || []).map((account) => [account.Id, account]));
+  return { config, identities, stems: stemsByKey, records, mappingByKey, supplierAccounts };
 }
 
 function statusSummary(rows, fallbackState) {
@@ -308,6 +317,7 @@ function decorateStatuses(calculations, resolved) {
         supplierAccountId: supplier?.Id || resolved.config?.venues?.[venueRow.venue]?.supplierId || null,
         supplierName: supplier?.Name || venueRow.venue,
         supplierClKey: supplier?.Company_Code__c || '',
+        salesforceMappingRevision: Number(resolved.config?.mappingRevision || 0),
         proposedUnitOfMeasure: displayUnitOfMeasure(resolved.config.unitOfMeasure),
         proposedQuantity: Number(resolved.config.quantity),
       };
@@ -339,7 +349,10 @@ function decorateStatuses(calculations, resolved) {
         if (unmanaged.length) return { ...row, state: 'conflict', reviewIssue: unmanaged.length === 1 ? 'An unmanaged matching SWAPS row already exists and requires explicit adoption.' : 'Multiple unmanaged matching SWAPS rows require review.', currentSalesforceCost: unmanaged.length === 1 ? Number(unmanaged[0][resolved.config.amountField] || 0) : null, currentUnitOfMeasure: unmanaged.length === 1 ? displayUnitOfMeasure(unmanaged[0]?.[resolved.config.uomField]) : null, salesforceRecordId: unmanaged.length === 1 ? unmanaged[0].Id : null, salesforceRecordName: unmanaged.length === 1 ? unmanaged[0].Name : null, unmanagedCandidate: unmanaged.length === 1 };
         return { ...row, state: 'ready_to_add', reviewIssue: null, currentSalesforceCost: null, salesforceRecordId: null, salesforceRecordName: null };
       }
-      const state = stateFromManagedRecord(managed, row, resolved.config);
+      const state = physicalHedgeSalesforceManagedState(managed, row, resolved.config);
+      const currentSupplierAccountId = managed?.[resolved.config.supplierLookupField] || null;
+      const currentSupplier = currentSupplierAccountId ? resolved.supplierAccounts?.get(currentSupplierAccountId) || null : null;
+      const supplierCorrectionRequired = currentSupplierAccountId !== row.supplierAccountId;
       return {
         ...row,
         managedRecord: true,
@@ -354,6 +367,10 @@ function decorateStatuses(calculations, resolved) {
         currentDeliveredQuantity: managed?.[resolved.config.quantityField] == null
           ? null
           : Number(managed[resolved.config.quantityField]),
+        currentSupplierAccountId,
+        currentSupplierName: currentSupplier?.Name || (currentSupplierAccountId ? 'Another Salesforce supplier' : null),
+        currentSupplierClKey: currentSupplier?.Company_Code__c || '',
+        supplierCorrectionRequired,
         salesforceRecordId: managed?.Id || null,
         salesforceRecordName: managed?.Name || null,
         salesforceUrl: managed?.Id ? physicalSalesforceRecordUrl(managed.Id) : null,
@@ -379,7 +396,7 @@ function decorateStatuses(calculations, resolved) {
       difference: currentSalesforceCost == null ? null : roundMoney(proposedSalesforceCost - currentSalesforceCost),
       venues: venueRows,
       issues: [...new Set([...calculation.issues, ...venueRows.map((row) => row.reviewIssue).filter(Boolean)])],
-      previewFingerprint: hedgeSalesforceFingerprint({ physicalTradeId: physical.id, physicalRevision: physical.revision, stemKey: calculation.stemKey, venues: venueRows.map((row) => ({ venue: row.venue, generation: row.generation, key: row.allocationKey, recordId: row.salesforceRecordId, modified: row.salesforceLastModifiedAt, state: row.state, cost: row.salesforceCost, fingerprint: row.calculationFingerprint })) }),
+      previewFingerprint: hedgeSalesforceFingerprint({ physicalTradeId: physical.id, physicalRevision: physical.revision, stemKey: calculation.stemKey, venues: venueRows.map((row) => ({ venue: row.venue, generation: row.generation, key: row.allocationKey, recordId: row.salesforceRecordId, modified: row.salesforceLastModifiedAt, state: row.state, cost: row.salesforceCost, supplierAccountId: row.supplierAccountId, currentSupplierAccountId: row.currentSupplierAccountId, mappingRevision: row.salesforceMappingRevision, fingerprint: row.calculationFingerprint })) }),
       calculatedAt: new Date().toISOString(),
     };
   });
@@ -428,7 +445,7 @@ async function persistStatuses(client, profile, statuses) {
         source_hedge_revisions: Object.fromEntries(row.contributions.map((item) => [item.paperHedgeId, item.paperHedgeRevision])),
         calculation_snapshot: { physicalRevision: status.physicalRevision, contributions: row.contributions, description: row.description },
         calculation_fingerprint: row.calculationFingerprint,
-        mapping_revision: 3,
+        mapping_revision: row.salesforceMappingRevision,
         sync_state: row.state,
         review_issue: row.reviewIssue,
         updated_at: now,
@@ -447,7 +464,9 @@ async function persistStatuses(client, profile, statuses) {
           || existing.data.sync_state !== row.state
           || !sameInstant(existing.data.salesforce_last_modified_at, persistedLastModifiedAt)
           || existing.data.salesforce_record_id !== persistedRecordId
-          || Number(existing.data.mapping_revision || 0) !== 3
+          || existing.data.supplier_account_id !== row.supplierAccountId
+          || existing.data.supplier_name_snapshot !== row.supplierName
+          || Number(existing.data.mapping_revision || 0) !== row.salesforceMappingRevision
           || currentCostChanged
           || existing.data.review_issue !== row.reviewIssue;
         if (!changed) continue;
@@ -534,7 +553,10 @@ export function physicalHedgeSalesforceWriteBody({ rowAction, row, config, alloc
     [config.quantityField]: Number(config.quantity),
     [config.uomField]: config.unitOfMeasure,
   };
-  if (rowAction === 'update') return common;
+  if (rowAction === 'update') return {
+    [config.supplierLookupField]: row.supplierAccountId,
+    ...common,
+  };
 
   const writableIdentity = {
     [config.productLookupField]: config.productId,

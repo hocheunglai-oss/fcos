@@ -19,7 +19,7 @@ const VENUES = ['ICE', 'FCBS'];
 const MAX_ALLOCATIONS = 25;
 
 const APPROVED_MAPPING = Object.freeze({
-  mappingRevision: 4,
+  mappingRevision: 5,
   objectName: 'STEM_Extra_Cost__c',
   stemObjectName: 'STEM__c',
   stemNameField: 'KeyStem__c',
@@ -42,8 +42,17 @@ const APPROVED_MAPPING = Object.freeze({
   productId: '01tfu000002zAEDAA2',
   quantity: 0,
   venues: {
-    ICE: { supplierId: '001fu00000Zo8eHAAR', paymentTerm: '7 I' },
-    FCBS: { supplierId: '0012x00000LGhzUAAT', paymentTerm: '7 I' },
+    ICE: {
+      supplierId: '001fu00000Zo8eHAAR',
+      supplierName: 'STRAITS FINANCIAL SERVICES PTE LTD',
+      paymentTerm: '7 I',
+    },
+    FCBS: {
+      supplierId: '0012x00000LGhzUAAT',
+      supplierName: 'FRATELLI COSULICH BUNKERS (S) PTE LTD',
+      supplierClKey: 'HKFCBS',
+      paymentTerm: '7 I',
+    },
   },
 });
 
@@ -115,7 +124,7 @@ export function allocateHedgeSalesforceAmounts({ grossPnl, feeAmount, shares }) 
   }));
 }
 
-function mergeMapping(saved) {
+export function mergeHedgeSalesforceMapping(saved) {
   const source = saved && typeof saved === 'object' ? saved : {};
   return {
     ...APPROVED_MAPPING,
@@ -128,9 +137,12 @@ function mergeMapping(saved) {
     quantity: APPROVED_MAPPING.quantity,
     uomField: APPROVED_MAPPING.uomField,
     unitOfMeasure: APPROVED_MAPPING.unitOfMeasure,
+    // Venue suppliers are accounting identities, not user-configurable
+    // preferences. A stale or edited setting must never route FCBS through
+    // the ICE clearing supplier (or vice versa).
     venues: {
-      ICE: { ...APPROVED_MAPPING.venues.ICE, ...(source.venues?.ICE || {}) },
-      FCBS: { ...APPROVED_MAPPING.venues.FCBS, ...(source.venues?.FCBS || {}) },
+      ICE: { ...(source.venues?.ICE || {}), ...APPROVED_MAPPING.venues.ICE },
+      FCBS: { ...(source.venues?.FCBS || {}), ...APPROVED_MAPPING.venues.FCBS },
     },
   };
 }
@@ -158,7 +170,7 @@ export function hedgeSalesforceFailure(message, statusCode = 400, code = null, d
 async function mapping(client) {
   const { data, error } = await client.from('hedge_settings').select('id,value,revision,updated_date').eq('key', 'salesforce_mapping').maybeSingle();
   if (error) throw failure(`Hedge Desk Salesforce settings could not be loaded: ${error.message}`, 502);
-  const config = mergeMapping(data?.value);
+  const config = mergeHedgeSalesforceMapping(data?.value);
   return { ...config, settingsRevision: Number(data?.revision || 1), settingsUpdatedAt: data?.updated_date || null };
 }
 
@@ -186,7 +198,7 @@ async function validateMapping(config) {
   const fields = fieldMap(extraDescribe);
   requireField(fields, objectName, apiName(config.stemLookupField, 'STEM lookup'), { referenceTo: stemObjectName, createable: true });
   requireField(fields, objectName, apiName(config.productLookupField, 'product lookup'), { referenceTo: 'Product2', createable: true });
-  requireField(fields, objectName, apiName(config.supplierLookupField, 'supplier lookup'), { referenceTo: 'Account', createable: true });
+  requireField(fields, objectName, apiName(config.supplierLookupField, 'supplier lookup'), { referenceTo: 'Account', createable: true, updateable: true });
   requireField(fields, objectName, apiName(config.amountField, 'cost field'), { createable: true, updateable: true });
   requireField(fields, objectName, apiName(config.descriptionField, 'description field'), { createable: true, updateable: true });
   requireField(fields, objectName, apiName(config.fixedField, 'fixed field'), { createable: true });
@@ -215,6 +227,8 @@ async function validateMapping(config) {
   const suppliers = Object.fromEntries(VENUES.map((venue) => {
     const account = accounts.get(config.venues[venue].supplierId);
     if (!account || account.Inactive_Suspended__c === true) throw failure(`The configured ${venue} supplier Account is inactive or unavailable.`, 503, 'HEDGE_SALESFORCE_MAPPING_INVALID');
+    if (account.Name !== config.venues[venue].supplierName) throw failure(`The configured ${venue} supplier Account identity does not match ${config.venues[venue].supplierName}.`, 503, 'HEDGE_SALESFORCE_MAPPING_INVALID');
+    if (config.venues[venue].supplierClKey && account.Company_Code__c !== config.venues[venue].supplierClKey) throw failure(`The configured ${venue} supplier Account must use CL Key ${config.venues[venue].supplierClKey}.`, 503, 'HEDGE_SALESFORCE_MAPPING_INVALID');
     if (String(config.venues[venue].paymentTerm || '') !== '7 I') throw failure(`The configured ${venue} new-record payment term must be 7 I.`, 503, 'HEDGE_SALESFORCE_MAPPING_INVALID');
     return [venue, account];
   }));

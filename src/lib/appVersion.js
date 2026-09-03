@@ -4,6 +4,16 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.196',
+    releasedAt: '2026-09-03',
+    title: 'Route FCBS hedge results correctly',
+    changes: [
+      'Posts FCBS Physical Trade hedge results to FRATELLI COSULICH BUNKERS (S) PTE LTD while ICE results continue to use Straits Financial Services.',
+      'Locks the approved venue supplier identities against stale saved settings and validates the exact live Salesforce Accounts before writing.',
+      'Shows current and proposed suppliers during review and corrects an uninvoiced mismatch only after the user confirms the update.',
+    ],
+  },
+  {
     version: '2.0.195',
     releasedAt: '2026-09-03',
     title: 'Correct Port Clearance buyer defaults',
