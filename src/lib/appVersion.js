@@ -4,6 +4,16 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.194',
+    releasedAt: '2026-09-03',
+    title: 'Clarify Physical Trade STEMs and Salesforce units',
+    changes: [
+      'Shows each Physical Trade\'s full Salesforce STEM Name in a dedicated clickable column that opens the shared STEM detail.',
+      'Sets every reviewed SWAPS extra cost to quantity 1 and the Salesforce unit-of-measure value 1 instead of inheriting MT.',
+      'Prevents STEM Processing from reading Payment Term before its independent Salesforce record wire is ready.',
+    ],
+  },
+  {
     version: '2.0.193',
     releasedAt: '2026-09-02',
     title: 'Add reviewed Physical Trade hedge results',

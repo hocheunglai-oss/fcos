@@ -66,10 +66,15 @@ test('Physical Trade synchronization uses the approved mapping, external key and
   assert.match(legacy, /supplierId: '0012x00000LGhzUAAT'/);
   assert.match(legacy, /paymentTerm: '7 I'/);
   assert.match(legacy, /externalKeyField: 'FCOS_Hedge_Allocation_Key__c'/);
+  assert.match(legacy, /uomField: 'Unit_of_Measure__c'/);
+  assert.match(legacy, /unitOfMeasure: '1\.'/);
+  assert.match(legacy, /\[config\.uomField\]: config\.unitOfMeasure/);
   assert.match(field, /<externalId>true<\/externalId>/);
   assert.match(field, /<unique>true<\/unique>/);
   assert.match(field, /<trackHistory>false<\/trackHistory>/);
   assert.match(service, /allOrNone: true, compositeRequest: requests/);
+  assert.match(service, /\[config\.uomField\]: config\.unitOfMeasure/);
+  assert.match(service, /record\?\.\[config\.uomField\] !== config\.unitOfMeasure/);
   assert.match(service, /previewFingerprint/);
   assert.match(service, /sfQueryAll/);
   assert.match(service, /row\.unmanagedCandidate \? null : row\.salesforceRecordId/);
@@ -96,6 +101,16 @@ test('legacy Paper Hedge Salesforce writes are rejected in favor of Physical Tra
   assert.match(handler, /hedgePhysicalSalesforceStatus/);
   assert.match(handler, /hedgePhysicalSalesforcePreview/);
   assert.match(handler, /hedgePhysicalSalesforceApply/);
+});
+
+test('Physical Trades show the Salesforce STEM name and open the shared STEM detail', () => {
+  const service = read('api/_hedgePhysicalSalesforce.js');
+  const physical = read('src/hedge/views/PhysicalView.jsx');
+  assert.match(service, /SELECT Id,Name,\$\{stemNameField\}/);
+  assert.match(service, /salesforceStemName: stem\?\.Name/);
+  assert.match(physical, /StemDetailLink/);
+  assert.match(physical, /StemDetailModal/);
+  assert.match(physical, /hedgeResult\.salesforceStemName \|\| record\.stem_number/);
 });
 
 test('rich-text templates discard active content while retaining approved formatting', () => {

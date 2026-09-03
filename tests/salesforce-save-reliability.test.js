@@ -48,3 +48,14 @@ test('BDN controls are locked while the sequential save is running', async () =>
   assert.equal((template.match(/disabled=\{isSavingBdnDetails\}/g) || []).length, 2);
   assert.match(template, /alternative-text="Saving BDN details"/);
 });
+
+test('STEM Processing waits for both independent record and product wires before reading payment terms', async () => {
+  const source = await readBundleFile('fcbStemProcessing', 'fcbStemProcessing.js');
+  const productWire = source.slice(source.indexOf('@wire(getProductInfo'), source.indexOf('@wire(getInvoices'));
+
+  assert.match(source, /this\.paymentTermValue = this\.stem\.Payment_Term__c\?\.value \|\| ''/);
+  assert.match(source, /this\.fcbsReference = this\.stem\.FCBS_Reference__c\.value;\s+this\.applyProductInfo\(\);/s);
+  assert.match(productWire, /this\.productInfo = data;\s+this\.applyProductInfo\(\);/s);
+  assert.match(productWire, /applyProductInfo\(\) \{\s+if \(!this\.stem \|\| !Array\.isArray\(this\.productInfo\)\) return;/s);
+  assert.doesNotMatch(productWire, /this\.stem\.Payment_Term__c\.value/);
+});

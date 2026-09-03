@@ -10,6 +10,8 @@ import {
   Trash2,
 } from "lucide-react";
 import { PhysicalTrade } from "@/hedge/api/entities";
+import StemDetailLink from "@/components/common/StemDetailLink";
+import StemDetailModal from "@/components/dashboard/StemDetailModal";
 import {
   applyPhysicalHedgeSalesforce,
   getPhysicalHedgeSalesforceStatus,
@@ -174,6 +176,7 @@ export function PhysicalView({ data, settings, quickCreateSignal = 0, readOnly =
   const [salesforceLoading, setSalesforceLoading] = useState(false);
   const [salesforceError, setSalesforceError] = useState(null);
   const [salesforceDrawer, setSalesforceDrawer] = useState(null);
+  const [selectedStemId, setSelectedStemId] = useState(null);
 
   const loadSalesforceStatuses = React.useCallback(async () => {
     const physicalTradeIds = data.physicals.map((record) => record.id).filter(Boolean);
@@ -224,10 +227,10 @@ export function PhysicalView({ data, settings, quickCreateSignal = 0, readOnly =
     .filter((record) => status === "all" || physicalStatus(record) === status)
     .filter((record) => month === "all" || [record.trade_date, record.sell_pricing_month, record.buy_pricing_month].some((value) => String(value || "").startsWith(month)))
     .filter((record) => {
-      const value = `${record.product || ""} ${record.counterparty || ""} ${record.vessel_name || ""} ${record.stem_number || ""} ${record.notes || ""}`.toLowerCase();
+      const value = `${record.product || ""} ${record.counterparty || ""} ${record.vessel_name || ""} ${record.stem_number || ""} ${salesforceStatuses[record.id]?.salesforceStemName || ""} ${record.notes || ""}`.toLowerCase();
       return value.includes(search.toLowerCase());
     })
-    .sort((left, right) => String(right.trade_date || "").localeCompare(String(left.trade_date || ""))), [data.physicals, month, search, status]);
+    .sort((left, right) => String(right.trade_date || "").localeCompare(String(left.trade_date || ""))), [data.physicals, month, salesforceStatuses, search, status]);
 
   const openCreate = () => {
     setForm({ ...BLANK_PHYSICAL, trade_date: hktToday(), sell_pricing_month: hktThisMonth(), buy_pricing_month: hktThisMonth() });
@@ -326,10 +329,10 @@ export function PhysicalView({ data, settings, quickCreateSignal = 0, readOnly =
 
   const exportRows = () => downloadCsv(
     `physical_trades_${hktToday()}.csv`,
-    ["Trade date", "Product", "Counterparty", "Qty min", "Qty max", "Unit", "Vessel", "Delivery from", "Delivery to", "Sell type", "Sell price", "Sell premium", "Buy type", "Buy price", "Buy premium", "Stem", "Salesforce hedge result", "Proposed Salesforce cost", "Current Salesforce cost", "Closed"],
+    ["Trade date", "Product", "Counterparty", "Qty min", "Qty max", "Unit", "Vessel", "Delivery from", "Delivery to", "Sell type", "Sell price", "Sell premium", "Buy type", "Buy price", "Buy premium", "STEM Name", "STEM Reference", "Salesforce hedge result", "Proposed Salesforce cost", "Current Salesforce cost", "Closed"],
     rows.map((record) => {
       const result = salesforceStatuses[record.id];
-      return [record.trade_date, record.product, record.counterparty, record.qty_min, record.qty_max, record.unit, record.vessel_name, record.delivery_date_from, record.delivery_date_to, record.sell_price_type, record.sell_price, record.sell_premium, record.buy_price_type, record.buy_price, record.buy_premium, record.stem_number, salesforceStatusMeta(result?.state).label, result?.proposedSalesforceCost ?? "", result?.currentSalesforceCost ?? "", record.is_closed ? "Yes" : "No"];
+      return [record.trade_date, record.product, record.counterparty, record.qty_min, record.qty_max, record.unit, record.vessel_name, record.delivery_date_from, record.delivery_date_to, record.sell_price_type, record.sell_price, record.sell_premium, record.buy_price_type, record.buy_price, record.buy_premium, result?.salesforceStemName || "", record.stem_number, salesforceStatusMeta(result?.state).label, result?.proposedSalesforceCost ?? "", result?.currentSalesforceCost ?? "", record.is_closed ? "Yes" : "No"];
     }),
   );
 
@@ -369,7 +372,7 @@ export function PhysicalView({ data, settings, quickCreateSignal = 0, readOnly =
           <table className="app-table app-table--physical">
             <thead>
               <tr>
-                <th>Status</th><th>Trade</th><th>Product</th><th>Counterparty</th><th>Quantity</th><th>Vessel / delivery</th><th>Pricing</th><th>P&amp;L</th><th>Salesforce hedge result</th><th aria-label="Actions" />
+                <th>Status</th><th>Trade</th><th>STEM</th><th>Product</th><th>Counterparty</th><th>Quantity</th><th>Vessel / delivery</th><th>Pricing</th><th>P&amp;L</th><th>Salesforce hedge result</th><th aria-label="Actions" />
               </tr>
             </thead>
             <tbody>
@@ -381,7 +384,11 @@ export function PhysicalView({ data, settings, quickCreateSignal = 0, readOnly =
                 return (
                   <tr key={record.id}>
                     <td><StatusBadge tone={closed ? "neutral" : "positive"}>{closed ? "Closed" : "Open"}</StatusBadge></td>
-                    <td><strong>{formatDate(record.trade_date)}</strong><small>{record.stem_number || "No stem"}</small></td>
+                    <td><strong>{formatDate(record.trade_date)}</strong></td>
+                    <td>
+                      <StemDetailLink stemId={hedgeResult.salesforceStemId} onOpen={setSelectedStemId}>{hedgeResult.salesforceStemName || record.stem_number || "No STEM"}</StemDetailLink>
+                      {hedgeResult.salesforceStemName && record.stem_number && hedgeResult.salesforceStemName !== record.stem_number && <small>{record.stem_number}</small>}
+                    </td>
                     <td><ProductBadge product={record.product} /></td>
                     <td><strong>{record.counterparty || "Unassigned"}</strong></td>
                     <td><strong>{formatQuantity(record.qty_min, record.unit)}</strong>{record.qty_max && Number(record.qty_max) !== Number(record.qty_min) && <small>to {formatQuantity(record.qty_max, record.unit)}</small>}</td>
@@ -445,7 +452,7 @@ export function PhysicalView({ data, settings, quickCreateSignal = 0, readOnly =
         open={Boolean(salesforceDrawer)}
         onClose={() => !salesforceDrawer?.saving && setSalesforceDrawer(null)}
         title="Salesforce hedge result"
-        description={salesforceDrawer?.record ? `${salesforceDrawer.record.stem_number || "No STEM"} · ${salesforceDrawer.record.product || "No product"}` : undefined}
+        description={salesforceDrawer?.record ? `${salesforceDrawer.preview?.salesforceStemName || salesforceDrawer.record.stem_number || "No STEM"} · ${salesforceDrawer.record.product || "No product"}` : undefined}
         width="xl"
         footer={<>
           <Button onClick={() => setSalesforceDrawer(null)} disabled={salesforceDrawer?.saving}>Close</Button>
@@ -479,7 +486,7 @@ export function PhysicalView({ data, settings, quickCreateSignal = 0, readOnly =
             <div className="app-form-section__title">Venue rows</div>
             <TableFrame>
               <table className="app-table app-table--compact">
-                <thead><tr><th>Venue / Supplier</th><th>Linked Paper Hedges</th><th>Gross P&amp;L</th><th>Proposed cost</th><th>Current cost</th><th>Difference</th><th>Status</th></tr></thead>
+                <thead><tr><th>Venue / Supplier</th><th>Linked Paper Hedges</th><th>Gross P&amp;L</th><th>Proposed cost</th><th>Current cost</th><th>Difference</th><th>Salesforce UOM</th><th>Status</th></tr></thead>
                 <tbody>{salesforceDrawer.preview.venues.map((row) => {
                   const meta = salesforceStatusMeta(row.state);
                   return <tr key={row.venue}>
@@ -489,6 +496,7 @@ export function PhysicalView({ data, settings, quickCreateSignal = 0, readOnly =
                     <td>{formatMoney(row.salesforceCost, { signed: true, digits: 2 })}</td>
                     <td>{row.currentSalesforceCost == null ? "—" : formatMoney(row.currentSalesforceCost, { signed: true, digits: 2 })}</td>
                     <td>{row.currentSalesforceCost == null ? "—" : formatMoney(row.salesforceCost - row.currentSalesforceCost, { signed: true, digits: 2 })}</td>
+                    <td><strong>{row.proposedUnitOfMeasure || "1"}</strong>{row.currentUnitOfMeasure && row.currentUnitOfMeasure !== row.proposedUnitOfMeasure && <small>Current {row.currentUnitOfMeasure}</small>}</td>
                     <td><StatusBadge tone={meta.tone}>{meta.label}</StatusBadge>{row.salesforceUrl && <a className="app-source-link" href={row.salesforceUrl} target="_blank" rel="noreferrer"><ExternalLink size={13} /> Open Salesforce</a>}</td>
                   </tr>;
                 })}</tbody>
@@ -498,6 +506,8 @@ export function PhysicalView({ data, settings, quickCreateSignal = 0, readOnly =
           {salesforceDrawer.preview.venues.some((row) => ["conflict", "changed_salesforce"].includes(row.state)) && <section className="app-form-section"><Field label="Reason" required hint="Required when adopting or restoring a Salesforce row."><textarea className="app-input app-textarea" rows="3" value={salesforceDrawer.reason || ""} onChange={(event) => setSalesforceDrawer((current) => ({ ...current, reason: event.target.value }))} /></Field></section>}
         </div>}
       </Drawer>
+
+      <StemDetailModal stemId={selectedStemId} open={Boolean(selectedStemId)} onClose={() => setSelectedStemId(null)} />
 
       <ConfirmDialog open={Boolean(deleteTarget)} onClose={() => setDeleteTarget(null)} onConfirm={remove} busy={saving} title="Delete physical trade?" description={deleteTarget ? `${deleteTarget.product || "Physical"} for ${deleteTarget.counterparty || "unassigned counterparty"} on ${formatDate(deleteTarget.trade_date)}` : ""} />
     </div>

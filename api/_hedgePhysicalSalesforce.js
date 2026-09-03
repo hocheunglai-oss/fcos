@@ -18,6 +18,10 @@ const MONEY_TOLERANCE = 0.005;
 const ACTIONABLE_STATES = new Set(['ready_to_add', 'update_required', 'removed', 'changed_salesforce', 'conflict']);
 const BLOCKING_STATES = new Set(['no_stem', 'no_linked_hedge', 'waiting_final', 'locked_by_invoice']);
 
+function displayUnitOfMeasure(value) {
+  return value === '1.' ? '1' : value || null;
+}
+
 function apiName(value, label) {
   const name = String(value || '');
   if (!API_NAME.test(name)) throw hedgeSalesforceFailure(`Invalid Salesforce ${label} configuration.`, 503, 'HEDGE_SALESFORCE_MAPPING_INVALID');
@@ -207,20 +211,23 @@ function stateFromManagedRecord(record, row, config) {
   if (!matchesIdentity(record, row, config)) {
     return { state: 'changed_salesforce', issue: 'The managed Salesforce row no longer matches the expected STEM, Product, or Supplier.' };
   }
+  if (record?.[config.uomField] !== config.unitOfMeasure) {
+    return { state: 'update_required', issue: `The Salesforce unit of measure must be ${config.unitOfMeasure === '1.' ? '1' : config.unitOfMeasure}.` };
+  }
   const currentCost = Number(record?.[config.amountField] || 0);
   if (Math.abs(currentCost - row.salesforceCost) > MONEY_TOLERANCE) return { state: 'update_required', issue: null };
   return { state: 'added', issue: null };
 }
 
 async function resolveSalesforce(client, calculations, existingMappings) {
-  const actionable = calculations.filter((row) => row.stemKey && row.venues.length);
+  const actionable = calculations.filter((row) => row.stemKey);
   if (!actionable.length) return { config: null, identities: null, stems: new Map(), records: [], mappingByKey: new Map() };
   const { config, identities } = await loadValidatedHedgeSalesforceMapping(client);
   await validatePhysicalMapping(config);
   const stemObject = apiName(config.stemObjectName, 'STEM object');
   const stemNameField = apiName(config.stemNameField, 'STEM key field');
   const keys = [...new Set(actionable.map((row) => escapeSoql(row.stemKey)))];
-  const stemResult = await sfQuery(`SELECT Id,${stemNameField} FROM ${stemObject} WHERE ${stemNameField} IN ('${keys.join("','")}')`, { clean: true, limit: Math.max(20, keys.length * 2) });
+  const stemResult = await sfQuery(`SELECT Id,Name,${stemNameField} FROM ${stemObject} WHERE ${stemNameField} IN ('${keys.join("','")}')`, { clean: true, limit: Math.max(20, keys.length * 2) });
   const stemsByKey = new Map();
   for (const stem of stemResult.records) {
     const key = stem[stemNameField];
@@ -235,7 +242,7 @@ async function resolveSalesforce(client, calculations, existingMappings) {
   const fields = [
     'Id', 'Name', 'IsDeleted', 'LastModifiedDate', config.stemLookupField, config.productLookupField,
     config.supplierLookupField, config.amountField, config.paymentTermField, config.descriptionField,
-    config.externalKeyField, config.cancelledField, config.buyerInvoiceField, config.supplierInvoiceField,
+    config.uomField, config.externalKeyField, config.cancelledField, config.buyerInvoiceField, config.supplierInvoiceField,
   ].map((field) => apiName(field, 'extra-cost field'));
   const supplierIds = VENUES.map((venue) => config.venues[venue].supplierId);
   const clauses = [];
@@ -258,14 +265,24 @@ function decorateStatuses(calculations, resolved) {
   return calculations.map((calculation) => {
     const physical = calculation.physical;
     if (!calculation.stemKey) return { physicalTradeId: physical.id, physicalRevision: Number(physical.revision || 0), stemKey: '', state: 'no_stem', proposedSalesforceCost: null, venues: [], issues: calculation.issues };
-    if (!calculation.venues.length) return { physicalTradeId: physical.id, physicalRevision: Number(physical.revision || 0), stemKey: calculation.stemKey, state: 'no_linked_hedge', proposedSalesforceCost: null, venues: [], issues: calculation.issues };
     const stemMatches = resolved.stems.get(calculation.stemKey) || [];
     const stemIssue = stemMatches.length === 1 ? null : stemMatches.length ? `Salesforce STEM ${calculation.stemKey} is not unique.` : `Salesforce STEM ${calculation.stemKey} was not found.`;
+    const stem = stemMatches.length === 1 ? stemMatches[0] : null;
+    if (!calculation.venues.length) return {
+      physicalTradeId: physical.id,
+      physicalRevision: Number(physical.revision || 0),
+      stemKey: calculation.stemKey,
+      salesforceStemId: stem?.Id || null,
+      salesforceStemName: stem?.Name || null,
+      state: 'no_linked_hedge',
+      proposedSalesforceCost: null,
+      venues: [],
+      issues: [...new Set([...calculation.issues, stemIssue].filter(Boolean))],
+    };
     const venueRows = calculation.venues.map((venueRow) => {
       const mapping = resolved.mappingByKey.get(`${physical.id}:${venueRow.venue}`) || null;
       const generation = Number(mapping?.generation || 1);
       const key = mapping?.allocation_key || allocationKey(physical.id, venueRow.venue, generation);
-      const stem = stemMatches.length === 1 ? stemMatches[0] : null;
       const supplier = resolved.identities?.suppliers?.[venueRow.venue] || null;
       const base = {
         ...venueRow,
@@ -277,6 +294,7 @@ function decorateStatuses(calculations, resolved) {
         supplierAccountId: supplier?.Id || resolved.config?.venues?.[venueRow.venue]?.supplierId || null,
         supplierName: supplier?.Name || venueRow.venue,
         supplierClKey: supplier?.Company_Code__c || '',
+        proposedUnitOfMeasure: displayUnitOfMeasure(resolved.config.unitOfMeasure),
       };
       const description = `FCOS final gross ${venueRow.venue} hedge P&L ${venueRow.grossPnl.toFixed(2)} USD allocated to ${calculation.stemKey}`.slice(0, 255);
       const row = { ...base, description };
@@ -296,13 +314,14 @@ function decorateStatuses(calculations, resolved) {
             state: 'locked_by_invoice',
             reviewIssue: 'A matching unmanaged Salesforce row is already linked to an invoice and cannot be adopted.',
             currentSalesforceCost: Number(unmanaged[0][resolved.config.amountField] || 0),
+            currentUnitOfMeasure: displayUnitOfMeasure(unmanaged[0]?.[resolved.config.uomField]),
             salesforceRecordId: unmanaged[0].Id,
             salesforceRecordName: unmanaged[0].Name,
             salesforceUrl: physicalSalesforceRecordUrl(unmanaged[0].Id),
             unmanagedCandidate: true,
           };
         }
-        if (unmanaged.length) return { ...row, state: 'conflict', reviewIssue: unmanaged.length === 1 ? 'An unmanaged matching SWAPS row already exists and requires explicit adoption.' : 'Multiple unmanaged matching SWAPS rows require review.', currentSalesforceCost: unmanaged.length === 1 ? Number(unmanaged[0][resolved.config.amountField] || 0) : null, salesforceRecordId: unmanaged.length === 1 ? unmanaged[0].Id : null, salesforceRecordName: unmanaged.length === 1 ? unmanaged[0].Name : null, unmanagedCandidate: unmanaged.length === 1 };
+        if (unmanaged.length) return { ...row, state: 'conflict', reviewIssue: unmanaged.length === 1 ? 'An unmanaged matching SWAPS row already exists and requires explicit adoption.' : 'Multiple unmanaged matching SWAPS rows require review.', currentSalesforceCost: unmanaged.length === 1 ? Number(unmanaged[0][resolved.config.amountField] || 0) : null, currentUnitOfMeasure: unmanaged.length === 1 ? displayUnitOfMeasure(unmanaged[0]?.[resolved.config.uomField]) : null, salesforceRecordId: unmanaged.length === 1 ? unmanaged[0].Id : null, salesforceRecordName: unmanaged.length === 1 ? unmanaged[0].Name : null, unmanagedCandidate: unmanaged.length === 1 };
         return { ...row, state: 'ready_to_add', reviewIssue: null, currentSalesforceCost: null, salesforceRecordId: null, salesforceRecordName: null };
       }
       const state = stateFromManagedRecord(managed, row, resolved.config);
@@ -312,6 +331,7 @@ function decorateStatuses(calculations, resolved) {
         state: state.state,
         reviewIssue: state.issue,
         currentSalesforceCost: Number(managed?.[resolved.config.amountField] || 0),
+        currentUnitOfMeasure: displayUnitOfMeasure(managed?.[resolved.config.uomField]),
         salesforceRecordId: managed?.Id || null,
         salesforceRecordName: managed?.Name || null,
         salesforceUrl: managed?.Id ? physicalSalesforceRecordUrl(managed.Id) : null,
@@ -329,6 +349,8 @@ function decorateStatuses(calculations, resolved) {
       physicalTradeId: physical.id,
       physicalRevision: Number(physical.revision || 0),
       stemKey: calculation.stemKey,
+      salesforceStemId: stem?.Id || null,
+      salesforceStemName: stem?.Name || null,
       state,
       proposedSalesforceCost,
       currentSalesforceCost,
@@ -384,7 +406,7 @@ async function persistStatuses(client, profile, statuses) {
         source_hedge_revisions: Object.fromEntries(row.contributions.map((item) => [item.paperHedgeId, item.paperHedgeRevision])),
         calculation_snapshot: { physicalRevision: status.physicalRevision, contributions: row.contributions, description: row.description },
         calculation_fingerprint: row.calculationFingerprint,
-        mapping_revision: 2,
+        mapping_revision: 3,
         sync_state: row.state,
         review_issue: row.reviewIssue,
         updated_at: now,
@@ -403,6 +425,7 @@ async function persistStatuses(client, profile, statuses) {
           || existing.data.sync_state !== row.state
           || !sameInstant(existing.data.salesforce_last_modified_at, persistedLastModifiedAt)
           || existing.data.salesforce_record_id !== persistedRecordId
+          || Number(existing.data.mapping_revision || 0) !== 3
           || currentCostChanged
           || existing.data.review_issue !== row.reviewIssue;
         if (!changed) continue;
@@ -507,6 +530,7 @@ export async function applyPhysicalHedgeSalesforce(client, profile, body = {}) {
         [config.amountField]: row.salesforceCost,
         [config.descriptionField]: row.description,
         [config.externalKeyField]: key,
+        [config.uomField]: config.unitOfMeasure,
       };
       const full = {
         RecordTypeId: config.recordTypeId,

@@ -333,7 +333,7 @@ export default class FcbStemProcessing extends NavigationMixin(LightningElement)
       ? this.stem.Mailing_Requirement__c.value?.includes('-6')
       : false;
     this.deliveryDateLabel = this.isPumpingCompletionDate ? 'Pumping Completion Date' : 'Delivery Date';
-    this.paymentTermValue = this.stem.Payment_Term__c.value;
+    this.paymentTermValue = this.stem.Payment_Term__c?.value || '';
     this.expectedDeliveryDateValue = this.stem.Expected_Delivery_Date__c.value;
     this.invoiceDueDateValue = this.stem.Invoice_Due_Date__c.value;
     this.disputeStatusValue = this.stem.Dispute_Status__c.value;
@@ -345,17 +345,17 @@ export default class FcbStemProcessing extends NavigationMixin(LightningElement)
     this.showMessage = Boolean(this.stem.Message__c.value);
     this.dueDateOverride = this.stem.Due_Date_Override__c.value;
     this.dueDateDisabled = !this.stem.Due_Date_Override__c.value;
-    this.dueDateOverrideDisabled = this.stem.Due_Date_Override__c.value && this.stem.Payment_Term__c.value === "CIA";
+    this.dueDateOverrideDisabled = this.stem.Due_Date_Override__c.value && this.paymentTermValue === "CIA";
     this.partialLumpsumSellAt = this.stem.Partial_Lumpsum_Sell_At__c.value;
     this.isDisabledPartialCIA = !this.stem.Partial_CIA__c.value
     this.invoiceButtonLabel =
-      this.stem.Payment_Term__c.value === "CIA" &&
+      this.paymentTermValue === "CIA" &&
       !this.stem.Delivery_Date__c.value
         ? PROFORMA_INVOICE_LABEL
         : INVOICE_LABEL;
     this.holdPaymentValue = Boolean(this.stem.Hold_Payment__c.value) ? 'Yes' : 'No';
     this.originatedClass = this.stem.Account__r.value.fields.Inactive_Suspended__c.value === false ? '' : 'slds-theme_warning';
-    if(this.stem.Payment_Term__c.value === 'CIA' && Boolean(this.invoiceDueDateValue) === false){
+    if(this.paymentTermValue === 'CIA' && Boolean(this.invoiceDueDateValue) === false){
       let invoiceDueDate = new Date(this.stem.Expected_Delivery_Date__c.value);
       invoiceDueDate.setDate(
         invoiceDueDate.getDate() - 1
@@ -369,6 +369,7 @@ export default class FcbStemProcessing extends NavigationMixin(LightningElement)
     }
     this.fcbsReferenceVisible = this.stem.Account__r.value.fields.Name.value === FCBS_NAME && this.stem.Port__r.value.fields.Country__c.value === KOREA_PORT;
     this.fcbsReference = this.stem.FCBS_Reference__c.value;
+    this.applyProductInfo();
   }
 
   setDateRange() {
@@ -436,9 +437,18 @@ export default class FcbStemProcessing extends NavigationMixin(LightningElement)
     const { data, error } = value;  
     if (data) {
       this.productInfo = data;
-      if(Array.isArray(this.productInfo)){
-        let selectedSTEMLineItems = this.productInfo.filter(product => product.objectName === 'STEM_Line_Item__c');
-        if (Array.isArray(selectedSTEMLineItems) && selectedSTEMLineItems.length > 0) {
+      this.applyProductInfo();
+      this.error = undefined;
+    } else if (error) {
+      console.error(error)
+      this.error = error;
+    }
+  }
+
+  applyProductInfo() {
+    if (!this.stem || !Array.isArray(this.productInfo)) return;
+    let selectedSTEMLineItems = this.productInfo.filter(product => product.objectName === 'STEM_Line_Item__c');
+    if (Array.isArray(selectedSTEMLineItems) && selectedSTEMLineItems.length > 0) {
           this.isProductLineItemExisting = true;
           if(this.stem && this.stem.Delivery_Date__c && this.stem.Delivery_Date__c.value){
             this.deliveryDateValue = this.stem.Delivery_Date__c.value;
@@ -450,8 +460,8 @@ export default class FcbStemProcessing extends NavigationMixin(LightningElement)
               if(Array.isArray(supplierInvoices) && !(this.stem && this.stem.Delivery_Date__c && this.stem.Delivery_Date__c.value)){
                 this.deliveryDateValue = supplierInvoices.map(supplierInvoice => supplierInvoice.Supplier_Delivery_Date__c)[0];
                 if (this.dueDateDisabled && Boolean(this.invoiceDueDateValue) === false) {
-                  if(this.stem.Payment_Term__c.value === 'CIA'){
-                    let invoiceDueDate = new Date(this.stem.Expected_Delivery_Date__c.value);
+                  if(this.paymentTermValue === 'CIA'){
+                    let invoiceDueDate = new Date(this.expectedDeliveryDateValue);
                     invoiceDueDate.setDate(
                       invoiceDueDate.getDate() - 1
                     );
@@ -459,7 +469,7 @@ export default class FcbStemProcessing extends NavigationMixin(LightningElement)
                   } else{
                     let invoiceDueDate = new Date(this.deliveryDateValue);
                     invoiceDueDate.setDate(
-                      invoiceDueDate.getDate() + Number(this.stem.Payment_Term__c.value.replace( /^\D+/g, '')) - 1
+                      invoiceDueDate.getDate() + Number(this.paymentTermValue.replace( /^\D+/g, '')) - 1
                     );
                     this.invoiceDueDateValue = invoiceDueDate;
                   }
@@ -467,7 +477,7 @@ export default class FcbStemProcessing extends NavigationMixin(LightningElement)
               }
             })
           }
-        } else{
+    } else{
           if (this.productInfo.every(product => product.issued) &&
             !(this.stem && this.stem.Delivery_Date__c && this.stem.Delivery_Date__c.value)) {
             this.deliveryDateValue = null;
@@ -477,12 +487,6 @@ export default class FcbStemProcessing extends NavigationMixin(LightningElement)
           this.deliveryDateRequired = false;
           this.dueDateOverride = true;
           this.dueDateDisabled = false;
-        }
-      }
-      this.error = undefined;
-    } else if (error) {
-      console.error(error)
-      this.error = error;
     }
   }
 
@@ -799,8 +803,8 @@ export default class FcbStemProcessing extends NavigationMixin(LightningElement)
   handleChangeDeliveryDate(event){
     this.deliveryDateValue = event.detail.value;
     if (this.dueDateDisabled) {
-      if(this.stem.Payment_Term__c.value === 'CIA'){
-        let invoiceDueDate = new Date(this.stem.Expected_Delivery_Date__c.value);
+      if(this.paymentTermValue === 'CIA'){
+        let invoiceDueDate = new Date(this.expectedDeliveryDateValue);
         invoiceDueDate.setDate(
           invoiceDueDate.getDate() - 1
         );
@@ -808,7 +812,7 @@ export default class FcbStemProcessing extends NavigationMixin(LightningElement)
       } else{
         let invoiceDueDate = new Date(this.deliveryDateValue);
         invoiceDueDate.setDate(
-          invoiceDueDate.getDate() + Number(this.stem.Payment_Term__c.value.replace( /^\D+/g, '')) - 1
+          invoiceDueDate.getDate() + Number(this.paymentTermValue.replace( /^\D+/g, '')) - 1
         );
         this.invoiceDueDateValue = this._convertDate(invoiceDueDate);
       }
@@ -1079,9 +1083,9 @@ export default class FcbStemProcessing extends NavigationMixin(LightningElement)
         if (stemLineItem.Is_Quantity_Range__c) isQuantityRange = true;
         if (!stemLineItem.Quantity_Delivered_Per_BDN__c) quantityDeliveredMissing = true;
       }
-      console.log(this.stem.Partial_CIA__c.value);
+      console.log(this.stem?.Partial_CIA__c?.value);
       
-      if ((this.stem.Payment_Term__c.value === "CIA" || this.stem.Partial_CIA__c.value) && !this.template.querySelector(".delivery-date-input").value) {
+      if ((this.paymentTermValue === "CIA" || this.stem?.Partial_CIA__c?.value) && !this.template.querySelector(".delivery-date-input").value) {
         this.deliveryDateRequired = false;
         this.invoiceButtonLabel = PROFORMA_INVOICE_LABEL;
         this.dueDateOverride = true;
