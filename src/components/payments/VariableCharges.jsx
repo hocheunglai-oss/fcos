@@ -645,7 +645,9 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
         extraCostUpdates.push({
           extraCostId: id, expectedLastModifiedDate, description: draft.description,
           pricingType: draft.pricingType, supplierCost: Number(draft.supplierCost), inputCurrency: draft.inputCurrency || 'USD', expectedFxSettingsRevision: Number(detail?.variableChargeSettings?.revision),
-          quantity: draft.pricingType === 'per_unit' ? Number(draft.quantity) : null,
+          // Port Clearance is stored as a fixed charge, but Quantity__c is the
+          // supplier-reported application count and remains required evidence.
+          quantity: isPortClearanceItem(item) || draft.pricingType === 'per_unit' ? Number(draft.quantity) : null,
           unitOfMeasure: draft.unitOfMeasure,
         });
       }
@@ -810,7 +812,7 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
         && (draft.statutorySupplierDefaultPending === true
           || (supplierOutcome === 'changed' && (isPortClearanceItem(item)
             || changeKey({ description: draft.description, pricingType: draft.pricingType, supplierCost: draft.supplierCost, inputCurrency: draft.inputCurrency, quantity: draft.quantity, unitOfMeasure: draft.unitOfMeasure }) !== changeKey({ description: original.description, pricingType: original.pricingType, supplierCost: original.supplierCost, inputCurrency: original.inputCurrency, quantity: original.quantity, unitOfMeasure: original.unitOfMeasure }))))) {
-        costUpdates.push({ extraCostId: id, expectedLastModifiedDate, description: draft.description, pricingType: draft.pricingType, supplierCost: Number(draft.supplierCost), inputCurrency: draft.inputCurrency || 'USD', expectedFxSettingsRevision: Number(detail?.variableChargeSettings?.revision), quantity: draft.pricingType === 'per_unit' ? Number(draft.quantity) : null, unitOfMeasure: draft.unitOfMeasure });
+        costUpdates.push({ extraCostId: id, expectedLastModifiedDate, description: draft.description, pricingType: draft.pricingType, supplierCost: Number(draft.supplierCost), inputCurrency: draft.inputCurrency || 'USD', expectedFxSettingsRevision: Number(detail?.variableChargeSettings?.revision), quantity: isPortClearanceItem(item) || draft.pricingType === 'per_unit' ? Number(draft.quantity) : null, unitOfMeasure: draft.unitOfMeasure });
       }
       if (buyerSelected && reviews[row?.key]?.buyerChargeDecision === 'include'
         && (draft.statutoryBuyerDefaultPending === true || String(draft.buyerPrice ?? '') !== String(original.buyerPrice ?? ''))) {
