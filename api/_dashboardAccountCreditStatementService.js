@@ -509,7 +509,7 @@ function finalBuyerInvoice(invoice) {
 
 function expectedInvoiceLineItemSelectFields(fields) {
   const result = selected(fields, [
-    'Id', 'STEM__c', 'Cancelled__c', 'Quantity__c', 'Quantity_Max__c', 'Is_Quantity_Range__c',
+    'Id', 'STEM__c', 'Cancelled__c', 'Quantity__c', 'Quantity_Max__c', 'Quantity_Delivered_Per_BDN__c', 'Is_Quantity_Range__c',
     'Price_Per_Unit__c', 'Unit_Sell_At__c',
   ]);
   const offerLookup = fields.get('Offer_Line_Item__c');
@@ -519,18 +519,18 @@ function expectedInvoiceLineItemSelectFields(fields) {
 
 function expectedInvoiceExtraCostSelectFields(fields) {
   return selected(fields, [
-    'Id', 'STEM__c', 'Cancelled__c', 'Quantity__c', 'Quantity_Range_Max__c', 'Is_Quantity_Range__c',
-    'Unit_Price__c', 'Line_Total__c',
+    'Id', 'STEM__c', 'Cancelled__c', 'Quantity__c', 'Quantity_Range_Max__c', 'Quantity_Delivered_Per_BDN__c', 'Is_Quantity_Range__c',
+    'Unit_Price__c', 'Line_Total__c', 'Fixed__c', 'Lumpsum_Price__c', 'Minimum_Sell_At__c',
   ]);
 }
 
 function validateExpectedInvoiceSchema(lineFields, extraCostFields) {
-  requireFields(lineFields, ['Id', 'STEM__c', 'Cancelled__c', 'Quantity__c', 'Quantity_Max__c', 'Is_Quantity_Range__c'], 'STEM Line Item');
+  requireFields(lineFields, ['Id', 'STEM__c', 'Cancelled__c', 'Quantity__c', 'Quantity_Max__c', 'Quantity_Delivered_Per_BDN__c', 'Is_Quantity_Range__c'], 'STEM Line Item');
   if (!['Price_Per_Unit__c', 'Unit_Sell_At__c', 'Offer_Line_Item__c'].some((field) => lineFields.has(field))) {
     throw serviceError('STEM Line Item does not expose a buyer sell unit price for expected invoice calculations.', 503, 'ACCOUNT_CREDIT_SCHEMA');
   }
   requireFields(extraCostFields, [
-    'Id', 'STEM__c', 'Cancelled__c', 'Quantity__c', 'Quantity_Range_Max__c', 'Is_Quantity_Range__c',
+    'Id', 'STEM__c', 'Cancelled__c', 'Quantity__c', 'Quantity_Range_Max__c', 'Quantity_Delivered_Per_BDN__c', 'Is_Quantity_Range__c',
     'Unit_Price__c', 'Line_Total__c',
   ], 'STEM Extra Cost');
 }
@@ -883,6 +883,7 @@ async function loadAccountCreditStatementUncached({ body, accessContext, force }
         clKey: authority.candidate.Company_Code__c || null,
         matchingSnapshotCount: authority.matchingAccountIds.length,
         reconciliationWindowStart: null,
+        reconciliation: authority.reconciliation,
         notice: `Salesforce GROUP credit is held on ${authority.candidate.Name}${authority.candidate.Company_Code__c ? ` · ${authority.candidate.Company_Code__c}` : ''}. The GROUP limit and used-credit snapshot remain fixed while child Account selections change only the displayed exposure.`,
       };
     } else {
@@ -893,6 +894,7 @@ async function loadAccountCreditStatementUncached({ body, accessContext, force }
         clKey: null,
         matchingSnapshotCount: authority.candidates?.length || 0,
         reconciliationWindowStart: null,
+        reconciliation: null,
         notice: null,
       };
     }
@@ -938,7 +940,7 @@ async function loadAccountCreditStatementUncached({ body, accessContext, force }
   const [payments, cashflows, buyerInvoices] = await Promise.all([
     queryPayments(relevantStems, paymentFields, paymentConfig),
     queryCashflows(relevantStems, cashflowFields),
-    queryBuyerInvoices(statement.rows, buyerInvoiceFields),
+    queryBuyerInvoices(relevantStems, buyerInvoiceFields),
   ]);
   const complete = openStemScopeComplete && recentPayments.complete && payments.complete && cashflows.complete;
   const paymentsByStem = indexByStem(payments.rows, (row) => serializePayment(row, paymentConfig));
@@ -947,7 +949,7 @@ async function loadAccountCreditStatementUncached({ body, accessContext, force }
   timings.releaseEvidenceMs = Date.now() - stageStartedAt;
   stageStartedAt = Date.now();
   const notIssuedStems = buyerInvoices.complete
-    ? statement.rows.filter((stem) => !(buyerInvoicesByStem[stem.Id] || []).length)
+    ? relevantStems.filter((stem) => !(buyerInvoicesByStem[stem.Id] || []).length)
     : [];
   const expectedInvoiceEvidence = buyerInvoices.complete
     ? await queryExpectedInvoiceEvidence(notIssuedStems, lineItemFields, extraCostFields)
@@ -964,6 +966,7 @@ async function loadAccountCreditStatementUncached({ body, accessContext, force }
     groupMembers,
     groupScope: group ? { ...groupScope, operationalSubset: true } : groupScope,
     openStems: creditOpenStems,
+    reconciliationOpenStems: fullOpenStems,
     statementStems: statement.rows,
     paymentsByStem,
     cashflowsByStem,

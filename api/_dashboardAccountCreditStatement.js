@@ -508,7 +508,36 @@ function scheduledReleases(cashflows, today) {
     .sort((left, right) => left.date.localeCompare(right.date));
 }
 
-export function buildStemCreditRelease({ stem = {}, payments = [], cashflows = [], today, accountId, paymentModel = null, blockedDates = [] }) {
+function forecastEventsForExposure({ exposure, futurePayments, cashflows, stem, today, paymentModel, blockedDates }) {
+  const forecastEvents = [];
+  let remaining = exposure;
+  if (remaining > 0) {
+    for (const payment of futurePayments) {
+      const released = Math.min(Math.max(payment.amount, 0), remaining);
+      if (!(released > 0)) continue;
+      forecastEvents.push({ date: payment.date, amount: released, source: 'confirmed_payment', sourceLabel: 'Confirmed payment', paymentId: payment.paymentId });
+      remaining -= released;
+      if (remaining <= 0.01) break;
+    }
+  }
+  if (remaining > 0) {
+    for (const scheduled of scheduledReleases(cashflows, today)) {
+      const proposed = scheduled.amount == null ? remaining : scheduled.amount;
+      const released = Math.min(Math.max(proposed, 0), remaining);
+      if (!(released > 0)) continue;
+      forecastEvents.push({ ...scheduled, amount: released });
+      remaining -= released;
+      if (remaining <= 0.01) break;
+    }
+  }
+  if (Math.abs(remaining) > 0.01) {
+    const candidate = releaseCandidate(stem, cashflows, today, paymentModel, blockedDates);
+    forecastEvents.push({ ...candidate, amount: remaining });
+  }
+  return forecastEvents;
+}
+
+export function buildStemCreditRelease({ stem = {}, payments = [], cashflows = [], today, accountId, paymentModel = null, blockedDates = [], exposureRange = null }) {
   const effectiveToday = dateOnly(today);
   if (!effectiveToday) throw new TypeError('today must be an ISO date');
   const exposure = number(stem.QLIK_Receivable_Balance__c) ?? 0;
@@ -526,31 +555,16 @@ export function buildStemCreditRelease({ stem = {}, payments = [], cashflows = [
     .map((payment) => ({ date: paymentDate(payment), amount: paymentAmount(payment), paymentId: payment.paymentId || payment.Id }))
     .filter((row) => row.date && row.amount != null && row.date > effectiveToday)
     .sort((left, right) => left.date.localeCompare(right.date));
-  const forecastEvents = [];
-  let remaining = exposure;
-  if (remaining > 0) {
-    for (const payment of futurePayments) {
-      const released = Math.min(Math.max(payment.amount, 0), remaining);
-      if (!(released > 0)) continue;
-      forecastEvents.push({ date: payment.date, amount: released, source: 'confirmed_payment', sourceLabel: 'Confirmed payment', paymentId: payment.paymentId });
-      remaining -= released;
-      if (remaining <= 0.01) break;
-    }
-  }
-  if (remaining > 0) {
-    for (const scheduled of scheduledReleases(cashflows, effectiveToday)) {
-      const proposed = scheduled.amount == null ? remaining : scheduled.amount;
-      const released = Math.min(Math.max(proposed, 0), remaining);
-      if (!(released > 0)) continue;
-      forecastEvents.push({ ...scheduled, amount: released });
-      remaining -= released;
-      if (remaining <= 0.01) break;
-    }
-  }
-  if (Math.abs(remaining) > 0.01) {
-    const candidate = releaseCandidate(stem, cashflows, effectiveToday, paymentModel, blockedDates);
-    forecastEvents.push({ ...candidate, amount: remaining });
-  }
+  const forecastEvents = forecastEventsForExposure({ exposure, futurePayments, cashflows, stem, today: effectiveToday, paymentModel, blockedDates });
+  const rangeComplete = exposureRange?.complete === true
+    && number(exposureRange.minimumExposure) != null
+    && number(exposureRange.maximumExposure) != null;
+  const minimumForecastEvents = rangeComplete
+    ? forecastEventsForExposure({ exposure: number(exposureRange.minimumExposure), futurePayments, cashflows, stem, today: effectiveToday, paymentModel, blockedDates })
+    : [];
+  const maximumForecastEvents = rangeComplete
+    ? forecastEventsForExposure({ exposure: number(exposureRange.maximumExposure), futurePayments, cashflows, stem, today: effectiveToday, paymentModel, blockedDates })
+    : [];
   const primaryForecast = forecastEvents.find((event) => event.date) || forecastEvents[0] || null;
   return {
     stemId: stem.Id,
@@ -559,8 +573,11 @@ export function buildStemCreditRelease({ stem = {}, payments = [], cashflows = [
     accountName: stem.Account__r?.Name || null,
     currency: text(stem.CurrencyIsoCode) || SALESFORCE_CORPORATE_CURRENCY,
     currentExposure: exposure,
+    exposureRange: exposureRange || null,
     actualReleases,
     forecastEvents,
+    minimumForecastEvents,
+    maximumForecastEvents,
     releaseDate: primaryForecast?.date || null,
     releaseSource: primaryForecast?.source || null,
     releaseSourceLabel: primaryForecast?.sourceLabel || null,
@@ -595,43 +612,97 @@ export function buildCreditReleaseChart({
   groupProjection = true,
   today,
 }) {
-  const forecast = releases.flatMap((release) => release.forecastEvents.map((event) => ({
+  const decorateEvents = (release, events, scenario) => events.map((event) => ({
     ...event,
     stemId: release.stemId,
     stemName: release.stemName,
     accountId: release.accountId,
     accountName: release.accountName,
-  })));
+    scenario,
+  }));
+  const forecast = releases.flatMap((release) => decorateEvents(release, release.forecastEvents, 'midpoint'));
+  const rangeComplete = releases.length > 0 && releases.every((release) => release.exposureRange?.complete === true);
+  const minimumForecast = rangeComplete
+    ? releases.flatMap((release) => decorateEvents(release, release.minimumForecastEvents, 'minimum'))
+    : [];
+  const maximumForecast = rangeComplete
+    ? releases.flatMap((release) => decorateEvents(release, release.maximumForecastEvents, 'maximum'))
+    : [];
   const future = forecast.filter((event) => event.date && event.date >= today);
+  const minimumFuture = minimumForecast.filter((event) => event.date && event.date >= today);
+  const maximumFuture = maximumForecast.filter((event) => event.date && event.date >= today);
   const undated = forecast.filter((event) => !event.date);
-  const granularity = chartGranularity(future);
+  const granularity = chartGranularity([...future, ...minimumFuture, ...maximumFuture]);
   const bucketDate = granularity === 'month' ? monthStart : granularity === 'week' ? startOfWeek : (date) => date;
   const buckets = new Map();
-  for (const event of future) {
+  const addToBucket = (event) => {
     const date = bucketDate(event.date);
-    const current = buckets.get(date) || { date, accountRelease: 0, otherGroupRelease: 0, events: [] };
-    if (idKey(event.accountId) === idKey(selectedAccountId)) current.accountRelease += event.amount;
-    else current.otherGroupRelease += event.amount;
-    current.events.push(event);
+    const current = buckets.get(date) || {
+      date,
+      accountRelease: 0,
+      otherGroupRelease: 0,
+      minimumAccountRelease: 0,
+      minimumOtherGroupRelease: 0,
+      maximumAccountRelease: 0,
+      maximumOtherGroupRelease: 0,
+      events: [],
+    };
+    const selected = idKey(event.accountId) === idKey(selectedAccountId);
+    if (event.scenario === 'minimum') {
+      if (selected) current.minimumAccountRelease += event.amount;
+      else current.minimumOtherGroupRelease += event.amount;
+    } else if (event.scenario === 'maximum') {
+      if (selected) current.maximumAccountRelease += event.amount;
+      else current.maximumOtherGroupRelease += event.amount;
+    } else {
+      if (selected) current.accountRelease += event.amount;
+      else current.otherGroupRelease += event.amount;
+      current.events.push(event);
+    }
     buckets.set(date, current);
+  };
+  for (const event of [...future, ...minimumFuture, ...maximumFuture]) {
+    addToBucket(event);
   }
   let individualExposure = currencyAmount(openingIndividualExposure);
   let groupExposure = currencyAmount(openingGroupExposure);
+  let individualExposureMinimum = rangeComplete ? currencyAmount(releases
+    .filter((release) => idKey(release.accountId) === idKey(selectedAccountId))
+    .reduce((sum, release) => sum + value(release.exposureRange?.minimumExposure), 0)) : null;
+  let individualExposureMaximum = rangeComplete ? currencyAmount(releases
+    .filter((release) => idKey(release.accountId) === idKey(selectedAccountId))
+    .reduce((sum, release) => sum + value(release.exposureRange?.maximumExposure), 0)) : null;
+  let groupExposureMinimum = rangeComplete ? currencyAmount(releases
+    .reduce((sum, release) => sum + value(release.exposureRange?.minimumExposure), 0)) : null;
+  let groupExposureMaximum = rangeComplete ? currencyAmount(releases
+    .reduce((sum, release) => sum + value(release.exposureRange?.maximumExposure), 0)) : null;
   const points = [{
     date: today,
     accountRelease: 0,
     otherGroupRelease: 0,
     individualExposure: individualProjection ? individualExposure : null,
     groupExposure: groupProjection ? groupExposure : null,
+    individualExposureMinimum: individualProjection ? individualExposureMinimum : null,
+    individualExposureMaximum: individualProjection ? individualExposureMaximum : null,
+    groupExposureMinimum: groupProjection ? groupExposureMinimum : null,
+    groupExposureMaximum: groupProjection ? groupExposureMaximum : null,
     events: [],
   }];
   for (const bucket of [...buckets.values()].sort((left, right) => left.date.localeCompare(right.date))) {
     if (individualExposure != null) individualExposure = currencyAmount(individualExposure - bucket.accountRelease);
     if (groupExposure != null) groupExposure = currencyAmount(groupExposure - bucket.accountRelease - bucket.otherGroupRelease);
+    if (individualExposureMinimum != null) individualExposureMinimum = currencyAmount(individualExposureMinimum - bucket.minimumAccountRelease);
+    if (individualExposureMaximum != null) individualExposureMaximum = currencyAmount(individualExposureMaximum - bucket.maximumAccountRelease);
+    if (groupExposureMinimum != null) groupExposureMinimum = currencyAmount(groupExposureMinimum - bucket.minimumAccountRelease - bucket.minimumOtherGroupRelease);
+    if (groupExposureMaximum != null) groupExposureMaximum = currencyAmount(groupExposureMaximum - bucket.maximumAccountRelease - bucket.maximumOtherGroupRelease);
     points.push({
       ...bucket,
       individualExposure: individualProjection ? individualExposure : null,
       groupExposure: groupProjection ? groupExposure : null,
+      individualExposureMinimum: individualProjection ? individualExposureMinimum : null,
+      individualExposureMaximum: individualProjection ? individualExposureMaximum : null,
+      groupExposureMinimum: groupProjection ? groupExposureMinimum : null,
+      groupExposureMaximum: groupProjection ? groupExposureMaximum : null,
     });
   }
   if (individualProjection || groupProjection) {
@@ -643,6 +714,10 @@ export function buildCreditReleaseChart({
       otherGroupRelease: 0,
       individualExposure: individualProjection ? individualExposure : null,
       groupExposure: groupProjection ? groupExposure : null,
+      individualExposureMinimum: individualProjection ? individualExposureMinimum : null,
+      individualExposureMaximum: individualProjection ? individualExposureMaximum : null,
+      groupExposureMinimum: groupProjection ? groupExposureMinimum : null,
+      groupExposureMaximum: groupProjection ? groupExposureMaximum : null,
       events: [],
       residualPlateau: true,
     });
@@ -662,6 +737,11 @@ export function buildCreditReleaseChart({
     granularity,
     points,
     exactEventCount: future.length,
+    range: {
+      complete: rangeComplete,
+      hasRange: releases.some((release) => release.exposureRange?.hasRange === true),
+      basis: 'salesforce_qlik_midpoint_with_fcos_minimum_maximum',
+    },
     undatedExposure: {
       individual: currencyAmount(undated.filter((event) => idKey(event.accountId) === idKey(selectedAccountId)).reduce((sum, event) => sum + value(event.amount), 0)),
       group: currencyAmount(undated.reduce((sum, event) => sum + value(event.amount), 0)),
@@ -693,6 +773,207 @@ function firstNumeric(...values) {
     if (parsed != null) return parsed;
   }
   return null;
+}
+
+function exposureQuantityScenario(item, maxField) {
+  const delivered = number(item?.Quantity_Delivered_Per_BDN__c);
+  if (delivered != null && Math.abs(delivered) > 0.005) {
+    return {
+      complete: true,
+      minimum: delivered,
+      midpoint: delivered,
+      maximum: delivered,
+      basis: 'delivered_bdn',
+      isRange: false,
+    };
+  }
+  const ordered = number(item?.Quantity__c);
+  if (item?.Is_Quantity_Range__c === true) {
+    const maximum = number(item?.[maxField]);
+    if (ordered == null || maximum == null || maximum < ordered) {
+      return { complete: false, minimum: null, midpoint: null, maximum: null, basis: 'range_midpoint', isRange: true };
+    }
+    return {
+      complete: true,
+      minimum: ordered,
+      midpoint: ordered + ((maximum - ordered) / 2),
+      maximum,
+      basis: 'range_midpoint',
+      isRange: maximum > ordered,
+    };
+  }
+  return ordered == null
+    ? { complete: false, minimum: null, midpoint: null, maximum: null, basis: 'ordered_quantity', isRange: false }
+    : { complete: true, minimum: ordered, midpoint: ordered, maximum: ordered, basis: 'ordered_quantity', isRange: false };
+}
+
+function scenarioAmounts(quantity, unitPrice, minimumAmount = null) {
+  const calculate = (value) => {
+    const calculated = value * unitPrice;
+    return minimumAmount == null ? calculated : Math.max(minimumAmount, calculated);
+  };
+  return {
+    minimum: calculate(quantity.minimum),
+    midpoint: calculate(quantity.midpoint),
+    maximum: calculate(quantity.maximum),
+  };
+}
+
+export function buildBuyerExposureRange({ lineItems = [], extraCosts = [], currentExposure = null, complete = true } = {}) {
+  const activeLineItems = lineItems.filter((item) => item?.Cancelled__c !== true);
+  const activeExtraCosts = extraCosts.filter((item) => item?.Cancelled__c !== true);
+  const authoritativeExposure = number(currentExposure);
+  if (!complete || authoritativeExposure == null) {
+    return {
+      complete: false,
+      minimumExposure: null,
+      midpointExposure: authoritativeExposure,
+      maximumExposure: null,
+      maximumDelta: null,
+      hasRange: false,
+      basis: 'salesforce_qlik_midpoint',
+      blockingReason: authoritativeExposure == null ? 'Salesforce QLIK receivable exposure is unavailable.' : 'Quantity-range evidence is incomplete in Salesforce.',
+      children: [],
+    };
+  }
+  if (!activeLineItems.length && !activeExtraCosts.length) {
+    return {
+      complete: false,
+      minimumExposure: null,
+      midpointExposure: authoritativeExposure,
+      maximumExposure: null,
+      maximumDelta: null,
+      hasRange: false,
+      basis: 'salesforce_qlik_midpoint',
+      blockingReason: 'No active buyer-billable rows are available for the quantity-range calculation.',
+      children: [],
+    };
+  }
+
+  const children = [];
+  let minimumTotal = 0;
+  let midpointTotal = 0;
+  let maximumTotal = 0;
+  let missingInput = false;
+  let hasRange = false;
+
+  for (const item of activeLineItems) {
+    const quantity = exposureQuantityScenario(item, 'Quantity_Max__c');
+    const unitPrice = firstNumeric(item.Price_Per_Unit__c, item.Unit_Sell_At__c, item.Offer_Line_Item__r?.UnitPrice);
+    if (!quantity.complete || unitPrice == null) {
+      missingInput = true;
+      children.push({
+        childId: item.Id || null,
+        childType: 'line_item',
+        complete: false,
+        basis: quantity.basis,
+        blockingReason: !quantity.complete ? 'Ordered, maximum, or delivered quantity is invalid.' : 'Buyer sell unit price is unavailable.',
+      });
+      continue;
+    }
+    const amounts = scenarioAmounts(quantity, unitPrice);
+    minimumTotal += amounts.minimum;
+    midpointTotal += amounts.midpoint;
+    maximumTotal += amounts.maximum;
+    hasRange = hasRange || quantity.isRange;
+    children.push({
+      childId: item.Id || null,
+      childType: 'line_item',
+      complete: true,
+      basis: quantity.basis,
+      minimumQuantity: quantity.minimum,
+      midpointQuantity: quantity.midpoint,
+      maximumQuantity: quantity.maximum,
+      unitPrice,
+      minimumAmount: currencyAmount(amounts.minimum),
+      midpointAmount: currencyAmount(amounts.midpoint),
+      maximumAmount: currencyAmount(amounts.maximum),
+    });
+  }
+
+  for (const item of activeExtraCosts) {
+    const fixed = item.Fixed__c === true;
+    const fixedAmount = firstNumeric(item.Lumpsum_Price__c, item.Line_Total__c);
+    const unitPrice = number(item.Unit_Price__c);
+    if (fixed || unitPrice == null) {
+      if (fixedAmount == null) {
+        missingInput = true;
+        children.push({ childId: item.Id || null, childType: 'extra_cost', complete: false, basis: 'fixed', blockingReason: 'Fixed buyer amount is unavailable.' });
+        continue;
+      }
+      minimumTotal += fixedAmount;
+      midpointTotal += fixedAmount;
+      maximumTotal += fixedAmount;
+      children.push({
+        childId: item.Id || null,
+        childType: 'extra_cost',
+        complete: true,
+        basis: 'fixed',
+        minimumQuantity: null,
+        midpointQuantity: null,
+        maximumQuantity: null,
+        unitPrice: null,
+        minimumAmount: currencyAmount(fixedAmount),
+        midpointAmount: currencyAmount(fixedAmount),
+        maximumAmount: currencyAmount(fixedAmount),
+      });
+      continue;
+    }
+    const quantity = exposureQuantityScenario(item, 'Quantity_Range_Max__c');
+    const minimumSell = number(item.Minimum_Sell_At__c);
+    if (!quantity.complete) {
+      missingInput = true;
+      children.push({ childId: item.Id || null, childType: 'extra_cost', complete: false, basis: quantity.basis, blockingReason: 'Ordered, maximum, or delivered quantity is invalid.' });
+      continue;
+    }
+    const amounts = scenarioAmounts(quantity, unitPrice, minimumSell);
+    minimumTotal += amounts.minimum;
+    midpointTotal += amounts.midpoint;
+    maximumTotal += amounts.maximum;
+    hasRange = hasRange || quantity.isRange;
+    children.push({
+      childId: item.Id || null,
+      childType: 'extra_cost',
+      complete: true,
+      basis: quantity.basis,
+      minimumQuantity: quantity.minimum,
+      midpointQuantity: quantity.midpoint,
+      maximumQuantity: quantity.maximum,
+      unitPrice,
+      minimumAmount: currencyAmount(amounts.minimum),
+      midpointAmount: currencyAmount(amounts.midpoint),
+      maximumAmount: currencyAmount(amounts.maximum),
+    });
+  }
+
+  if (missingInput) {
+    return {
+      complete: false,
+      minimumExposure: null,
+      midpointExposure: authoritativeExposure,
+      maximumExposure: null,
+      maximumDelta: null,
+      hasRange,
+      basis: 'salesforce_qlik_midpoint',
+      blockingReason: 'One or more active buyer-billable rows lack complete quantity or pricing evidence.',
+      children,
+    };
+  }
+
+  const midpointOffset = authoritativeExposure - midpointTotal;
+  const minimumExposure = currencyAmount(midpointOffset + minimumTotal);
+  const maximumExposure = currencyAmount(midpointOffset + maximumTotal);
+  return {
+    complete: true,
+    minimumExposure,
+    midpointExposure: currencyAmount(authoritativeExposure),
+    maximumExposure,
+    maximumDelta: currencyAmount(maximumExposure - authoritativeExposure),
+    hasRange,
+    basis: hasRange ? 'salesforce_qlik_midpoint_with_fcos_range' : children.some((child) => child.basis === 'delivered_bdn') ? 'delivered_bdn' : 'ordered_quantity',
+    blockingReason: null,
+    children,
+  };
 }
 
 export function expectedBuyerInvoiceEstimate({
@@ -776,6 +1057,7 @@ export function buildAccountCreditStatement({
   groupMembers = [],
   groupScope = null,
   openStems = [],
+  reconciliationOpenStems = openStems,
   statementStems = [],
   paymentsByStem = {},
   cashflowsByStem = {},
@@ -811,6 +1093,42 @@ export function buildAccountCreditStatement({
       buyerGroupName: group?.Name || null,
     }, paymentPerformanceModels, forecastSettings || {}, { conservativeness: effectiveConservativeness })
     : null;
+  const exposureRangeForStem = (stem) => {
+    const currentExposure = number(stem?.QLIK_Receivable_Balance__c);
+    if (!buyerInvoiceScopeComplete) {
+      return {
+        complete: false,
+        minimumExposure: null,
+        midpointExposure: currentExposure,
+        maximumExposure: null,
+        maximumDelta: null,
+        hasRange: false,
+        basis: 'salesforce_qlik_midpoint',
+        blockingReason: 'Buyer Invoice scope is incomplete, so FCOS cannot determine whether range evidence applies.',
+        children: [],
+      };
+    }
+    if ((buyerInvoicesByStem[stem.Id] || []).length) {
+      return {
+        complete: currentExposure != null,
+        minimumExposure: currentExposure,
+        midpointExposure: currentExposure,
+        maximumExposure: currentExposure,
+        maximumDelta: currentExposure == null ? null : 0,
+        hasRange: false,
+        basis: 'issued_receivable',
+        blockingReason: currentExposure == null ? 'Salesforce QLIK receivable exposure is unavailable.' : null,
+        children: [],
+      };
+    }
+    return buildBuyerExposureRange({
+      lineItems: expectedInvoiceLineItemsByStem[stem.Id] || [],
+      extraCosts: expectedInvoiceExtraCostsByStem[stem.Id] || [],
+      currentExposure,
+      complete: expectedInvoiceScopeComplete,
+    });
+  };
+  const exposureRangesByStem = Object.fromEntries(openStems.map((stem) => [stem.Id, exposureRangeForStem(stem)]));
   const releases = openStems.map((stem) => buildStemCreditRelease({
     stem,
     payments: paymentsByStem[stem.Id] || [],
@@ -819,6 +1137,7 @@ export function buildAccountCreditStatement({
     accountId: stem.Account__c,
     paymentModel: paymentModelForStem(stem),
     blockedDates: blockedForecastDates,
+    exposureRange: exposureRangesByStem[stem.Id],
   }));
   const accountExposure = openStems
     .filter((stem) => idKey(stem.Account__c) === idKey(selectedAccountId))
@@ -845,7 +1164,11 @@ export function buildAccountCreditStatement({
         scoped: true,
         explanation: 'The displayed exposure is an operational subset and is not treated as a reconstruction of Salesforce’s maintained GROUP used-credit snapshot.',
       }
-      : reconcileCreditExposure(snapshot.usedGroup, currencyConflict ? null : groupExposure, { complete: projectionComplete })
+      : reconcileCreditExposure(
+        snapshot.usedGroup,
+        currencyConflict ? null : reconciliationOpenStems.reduce((sum, stem) => sum + value(stem.QLIK_Receivable_Balance__c), 0),
+        { complete: projectionComplete },
+      )
     : { complete: true, matches: true, expected: snapshot.usedGroup, reconstructed: groupExposure, difference: 0, tolerance: CREDIT_RECONCILIATION_TOLERANCE, notApplicable: true };
   const chart = buildCreditReleaseChart({
     releases: projectionComplete ? releases : [],
@@ -869,6 +1192,7 @@ export function buildAccountCreditStatement({
       currency: text(stem.CurrencyIsoCode) || snapshot.currency,
       paymentModel: paymentModelForStem(stem),
       blockedDates: blockedForecastDates,
+      exposureRange: exposureRangesByStem[stem.Id] || exposureRangeForStem(stem),
     });
     const actualReleased = release.actualReleases.reduce((sum, row) => sum + value(row.amount), 0);
     const buyerInvoices = buyerInvoicesByStem[stem.Id] || [];
@@ -884,15 +1208,14 @@ export function buildAccountCreditStatement({
       complete: expectedInvoiceScopeComplete,
     });
     const salesforceCurrentExposure = number(stem.QLIK_Receivable_Balance__c);
-    const statementExposure = buyerInvoices.length
-      ? {
-        amount: salesforceCurrentExposure,
-        complete: salesforceCurrentExposure != null,
-        source: 'salesforce_qlik_receivable_balance',
-        basis: 'salesforce_receivable_balance',
-        blockingReason: salesforceCurrentExposure == null ? 'Salesforce receivable balance is unavailable.' : null,
-      }
-      : expectedInvoice;
+    const statementExposure = {
+      amount: salesforceCurrentExposure,
+      complete: salesforceCurrentExposure != null,
+      source: 'salesforce_qlik_receivable_balance',
+      basis: buyerInvoices.length ? 'issued_receivable' : 'salesforce_qlik_midpoint',
+      blockingReason: salesforceCurrentExposure == null ? 'Salesforce receivable balance is unavailable.' : null,
+    };
+    const exposureRange = exposureRangesByStem[stem.Id] || exposureRangeForStem(stem);
     return {
       stemId: stem.Id,
       stemName: stem.Name || stem.Id,
@@ -929,6 +1252,7 @@ export function buildAccountCreditStatement({
       expectedBuyerInvoiceAmountBasis: expectedInvoice?.basis ?? null,
       expectedBuyerInvoiceAmountBlockingReason: expectedInvoice?.blockingReason ?? null,
       expectedBuyerInvoiceDueDate,
+      exposureRange,
       buyerInvoiceDaysUntilDue: daysBetweenDates(today, buyerInvoiceDueDate),
       buyerInvoiceLastModifiedAt: buyerInvoices.map((invoice) => invoice.LastModifiedDate).filter(Boolean).sort().at(-1) || null,
     };
@@ -936,7 +1260,12 @@ export function buildAccountCreditStatement({
   const projectionWarnings = [
     ...warnings,
     ...(!individualReconciliation.matches ? ['Individual used credit does not reconcile to the selected Account’s current buyer-leg STEM exposure. The individual projection is hidden.'] : []),
-    ...(group && !groupReconciliation.matches ? ['Group used credit does not reconcile to current buyer-leg STEM exposure across the Salesforce GROUP hierarchy. The group projection is hidden.'] : []),
+    ...(creditResolution?.mode === 'group_hierarchy_authority' && creditResolution?.reconciliation?.complete && !creditResolution.reconciliation.matches
+      ? [`Salesforce GROUP used credit does not currently reconcile to live buyer QLIK exposure within the ${CREDIT_RECONCILIATION_TOLERANCE}-unit tolerance. The Salesforce limit, used credit, and effective available credit remain the authoritative snapshot; the selected-Account forecast continues from live buyer exposure.`]
+      : []),
+    ...(creditResolution?.mode === 'group_hierarchy_authority' && creditResolution?.reconciliation?.complete === false
+      ? ['The Salesforce GROUP credit snapshot could not be compared with a complete live buyer QLIK exposure scope. Salesforce credit values remain authoritative.']
+      : []),
     ...(groupScope?.partial ? ['The GROUP forecast includes only the selected active Accounts. Salesforce’s effective available credit and used-credit fields still describe the full GROUP.'] : []),
     ...(groupScope?.operationalSubset && !groupScope?.partial ? ['The GROUP forecast uses the operational buyer-leg exposure scope from 1 January 2026. Salesforce’s used-credit and effective-available fields remain the authoritative full GROUP snapshot.'] : []),
     ...(!complete ? ['Salesforce did not return a complete credit scope. Projected balances are hidden.'] : []),
@@ -944,6 +1273,9 @@ export function buildAccountCreditStatement({
   ];
   const releaseWarnings = releases.some((release) => release.forecastEvents.some((event) => !event.date))
     ? ['One or more open STEMs have no reliable future release date. Their exposure remains visible in the final forecast plateau until reliable evidence is available.']
+    : [];
+  const rangeWarnings = chart.range?.complete === false && releases.length
+    ? ['The Salesforce midpoint forecast remains available, but the FCOS minimum-to-maximum quantity band is hidden because one or more un-invoiced STEMs lack complete range or pricing evidence.']
     : [];
   return {
     identity: {
@@ -983,8 +1315,8 @@ export function buildAccountCreditStatement({
     rows,
     complete,
     projectionWarnings: [...new Set(projectionWarnings.filter(Boolean))],
-    releaseWarnings,
-    warnings: [...new Set([...projectionWarnings, ...releaseWarnings].filter(Boolean))],
+    releaseWarnings: [...releaseWarnings, ...rangeWarnings],
+    warnings: [...new Set([...projectionWarnings, ...releaseWarnings, ...rangeWarnings].filter(Boolean))],
   };
 }
 

@@ -74,11 +74,13 @@ test('resolves COSCO GROUP credit authority from the exact active hierarchy', ()
   assert.equal(result.reconciliation.matches, true);
 
   const selectedStatementStems = [{ ...openStems[0], QLIK_Receivable_Balance__c: 6_519_689 }];
-  assert.equal(resolveGroupCreditAuthority({ group, members: [group, petroleum], openStems: selectedStatementStems, complete: true }).status, 'resolved');
+  const selectedAuthority = resolveGroupCreditAuthority({ group, members: [group, petroleum], openStems: selectedStatementStems, complete: true });
+  assert.equal(selectedAuthority.status, 'resolved');
+  assert.equal(selectedAuthority.reconciliation.matches, false);
   const statement = buildAccountCreditStatement({
     account: group,
     creditAccount: petroleum,
-    creditResolution: { mode: 'group_hierarchy_authority', accountName: petroleum.Name, clKey: petroleum.Company_Code__c },
+    creditResolution: { mode: 'group_hierarchy_authority', accountName: petroleum.Name, clKey: petroleum.Company_Code__c, reconciliation: selectedAuthority.reconciliation },
     group,
     groupMembers: [group, petroleum],
     groupScope: { partial: false, operationalSubset: true },
@@ -90,6 +92,7 @@ test('resolves COSCO GROUP credit authority from the exact active hierarchy', ()
   assert.equal(statement.credit.groupLimit, 20_000_000);
   assert.equal(statement.credit.salesforceAvailable, 11_812_743);
   assert.equal(statement.reconciliation.group.scoped, true);
+  assert.match(statement.projectionWarnings.join(' '), /does not currently reconcile to live buyer QLIK exposure/);
 });
 
 test('accepts identical authority snapshots and rejects conflicting ones', () => {

@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   accountCreditBalances,
   buildAccountCreditStatement,
+  buildBuyerExposureRange,
   buildStemCreditRelease,
   CREDIT_EXPOSURE_DELIVERY_START,
   creditExposureDeliveryDate,
@@ -403,7 +404,8 @@ test('undated residual counts keep selected Account and GROUP STEMs distinct', (
   assert.equal(statement.chart.undatedGroupStemCount, 2);
   assert.deepEqual(statement.chart.undatedAccountStems.map((stem) => stem.stemName), ['ACCOUNT UNDATED']);
   assert.deepEqual(statement.projectionWarnings, []);
-  assert.equal(statement.releaseWarnings.length, 1);
+  assert.equal(statement.releaseWarnings.length, 2);
+  assert.match(statement.releaseWarnings[1], /minimum-to-maximum quantity band is hidden/i);
 });
 
 test('statement rows expose only complete live final buyer-invoice totals for selection', () => {
@@ -431,7 +433,7 @@ test('statement rows expose only complete live final buyer-invoice totals for se
   assert.equal(row.statementExposureAmount, 100);
   assert.equal(row.statementExposureComplete, true);
   assert.equal(row.statementExposureSource, 'salesforce_qlik_receivable_balance');
-  assert.equal(row.statementExposureBasis, 'salesforce_receivable_balance');
+  assert.equal(row.statementExposureBasis, 'issued_receivable');
 
   const incomplete = buildAccountCreditStatement({
     today: '2026-08-17', account: { Id: accountId, Name: 'BUYER A' }, statementStems: [stem],
@@ -454,22 +456,22 @@ test('statement rows expose only complete live final buyer-invoice totals for se
   assert.equal(notIssued.rows[0].expectedBuyerInvoiceAmountComplete, true);
   assert.equal(notIssued.rows[0].expectedBuyerInvoiceAmountSource, 'ordered_buyer_lines');
   assert.equal(notIssued.rows[0].expectedBuyerInvoiceAmountBasis, 'ordered_quantity');
-  assert.equal(notIssued.rows[0].statementExposureAmount, 125);
+  assert.equal(notIssued.rows[0].statementExposureAmount, 100);
   assert.equal(notIssued.rows[0].statementExposureComplete, true);
-  assert.equal(notIssued.rows[0].statementExposureSource, 'ordered_buyer_lines');
-  assert.equal(notIssued.rows[0].statementExposureBasis, 'ordered_quantity');
+  assert.equal(notIssued.rows[0].statementExposureSource, 'salesforce_qlik_receivable_balance');
+  assert.equal(notIssued.rows[0].statementExposureBasis, 'salesforce_qlik_midpoint');
   assert.equal(notIssued.rows[0].expectedBuyerInvoiceDueDate, '2026-09-22');
   assert.equal(notIssued.rows[0].buyerInvoiceDaysUntilDue, null);
 });
 
-test('Not Issued Statement Evidence uses maximum range exposure while forecast exposure remains QLIK-based', () => {
+test('Not Issued Statement Evidence separates Salesforce midpoint exposure from the conservative maximum invoice estimate', () => {
   const stem = {
     Id: 'a01000000000071AAA', Name: 'RANGE STEM', Account__c: accountId,
     Delivery_Date__c: '2026-08-17', QLIK_Receivable_Balance__c: 165,
   };
   const result = buildAccountCreditStatement({
     today: '2026-08-17',
-    account: { Id: accountId, Name: 'BUYER A' },
+    account: { Id: accountId, Name: 'BUYER A', CL_Category__c: 'Individual', CL_Individual__c: 500, CL_Used_Customer__c: 165 },
     openStems: [stem],
     statementStems: [stem],
     expectedInvoiceLineItemsByStem: {
@@ -477,10 +479,19 @@ test('Not Issued Statement Evidence uses maximum range exposure while forecast e
     },
   });
   assert.equal(result.rows[0].currentExposure, 165);
-  assert.equal(result.rows[0].statementExposureAmount, 180);
-  assert.equal(result.rows[0].statementExposureBasis, 'range_max_quantity');
+  assert.equal(result.rows[0].statementExposureAmount, 165);
+  assert.equal(result.rows[0].statementExposureBasis, 'salesforce_qlik_midpoint');
   assert.equal(result.rows[0].statementExposureComplete, true);
+  assert.equal(result.rows[0].expectedBuyerInvoiceAmount, 180);
+  assert.equal(result.rows[0].expectedBuyerInvoiceAmountBasis, 'range_max_quantity');
+  assert.equal(result.rows[0].exposureRange.minimumExposure, 150);
+  assert.equal(result.rows[0].exposureRange.midpointExposure, 165);
+  assert.equal(result.rows[0].exposureRange.maximumExposure, 180);
   assert.equal(result.releases[0].currentExposure, 165);
+  assert.equal(result.chart.points[0].individualExposureMinimum, 150);
+  assert.equal(result.chart.points[0].individualExposureMaximum, 180);
+  assert.equal(result.chart.range.complete, true);
+  assert.equal(result.chart.range.hasRange, true);
 
   const incomplete = buildAccountCreditStatement({
     today: '2026-08-17',
@@ -490,9 +501,42 @@ test('Not Issued Statement Evidence uses maximum range exposure while forecast e
       [stem.Id]: [{ Quantity__c: 50, Quantity_Max__c: null, Is_Quantity_Range__c: true, Unit_Sell_At__c: 3, Cancelled__c: false }],
     },
   });
-  assert.equal(incomplete.rows[0].statementExposureAmount, null);
-  assert.equal(incomplete.rows[0].statementExposureComplete, false);
-  assert.match(incomplete.rows[0].statementExposureBlockingReason, /lack an ordered quantity or sell price/i);
+  assert.equal(incomplete.rows[0].statementExposureAmount, 165);
+  assert.equal(incomplete.rows[0].statementExposureComplete, true);
+  assert.equal(incomplete.rows[0].expectedBuyerInvoiceAmount, null);
+  assert.equal(incomplete.rows[0].expectedBuyerInvoiceAmountComplete, false);
+  assert.equal(incomplete.rows[0].exposureRange.complete, false);
+  assert.match(incomplete.rows[0].exposureRange.blockingReason, /quantity or pricing evidence/i);
+});
+
+test('Salesforce quantity-range exposure uses midpoint until delivered quantity is nonzero', () => {
+  const range = buildBuyerExposureRange({
+    currentExposure: 190,
+    lineItems: [
+      { Id: 'line-range', Quantity__c: 50, Quantity_Max__c: 60, Quantity_Delivered_Per_BDN__c: 0, Is_Quantity_Range__c: true, Unit_Sell_At__c: 3 },
+    ],
+    extraCosts: [
+      { Id: 'extra-fixed', Fixed__c: true, Lumpsum_Price__c: 25 },
+    ],
+  });
+  assert.equal(range.minimumExposure, 175);
+  assert.equal(range.midpointExposure, 190);
+  assert.equal(range.maximumExposure, 205);
+  assert.equal(range.maximumDelta, 15);
+  assert.equal(range.hasRange, true);
+  assert.equal(range.children[0].midpointQuantity, 55);
+
+  const delivered = buildBuyerExposureRange({
+    currentExposure: 162,
+    lineItems: [
+      { Id: 'line-delivered', Quantity__c: 50, Quantity_Max__c: 60, Quantity_Delivered_Per_BDN__c: 54, Is_Quantity_Range__c: true, Unit_Sell_At__c: 3 },
+    ],
+  });
+  assert.equal(delivered.minimumExposure, 162);
+  assert.equal(delivered.midpointExposure, 162);
+  assert.equal(delivered.maximumExposure, 162);
+  assert.equal(delivered.hasRange, false);
+  assert.equal(delivered.children[0].basis, 'delivered_bdn');
 });
 
 test('expected buyer invoice uses ordered and maximum range quantities instead of BDN quantities', () => {
@@ -645,6 +689,7 @@ test('Salesforce loader keeps buyer-leg membership Account-only and loads expect
   assert.match(source, /QLIK_Receivable_Balance__c != 0/);
   assert.match(source, /Delivery_Date__c >= \$\{CREDIT_EXPOSURE_DELIVERY_START\}/);
   assert.match(source, /Expected_Delivery_Date__c >= \$\{CREDIT_EXPOSURE_DELIVERY_START\}/);
+  assert.doesNotMatch(source, /supplierCreditEvidence|supplierExposure/);
   assert.match(source, /filter\(\(stem\) => isCreditExposureStemEligible\(stem\)\)/);
   assert.match(source, /FROM Invoice__c WHERE STEM__c IN/);
   assert.match(source, /Proforma__c = false AND Deprecated__c = false/);
@@ -715,8 +760,11 @@ test('credit statement handlers are authenticated server-cached reads and the UI
   assert.match(statement, /statementExposureBlockingReason/);
   assert.match(statement, /range_max_quantity/);
   assert.match(statement, /BASIS MAX QTY/);
-  assert.match(statement, /Basis Max Qty/);
-  assert.match(statement, /Un-Invoiced STEMs here use mid-qty if in range/);
+  assert.match(statement, /Salesforce Mid Qty/);
+  assert.match(statement, /Show quantity range/);
+  assert.match(statement, /Salesforce GROUP snapshot differs from live buyer exposure/);
+  assert.doesNotMatch(statement, /Supplier Cashflow evidence|supplier payables explained/i);
+  assert.match(statement, /Solid lines use Salesforce QLIK mid-range exposure/);
   assert.match(statement, /aria-pressed=\{series\.account\}/);
   assert.match(statement, /aria-pressed=\{series\.group\}/);
   assert.match(statement, /data\.group && series\.group && data\.reconciliation\.group\.matches/);
