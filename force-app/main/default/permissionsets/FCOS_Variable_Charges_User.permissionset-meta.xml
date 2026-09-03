@@ -3,6 +3,7 @@
     <classAccesses><apexClass>VariableChargeInvoiceReadinessService</apexClass><enabled>true</enabled></classAccesses>
     <classAccesses><apexClass>MasterContractInvoiceReadinessService</apexClass><enabled>true</enabled></classAccesses>
     <classAccesses><apexClass>HongKongBasicCallingBundleService</apexClass><enabled>true</enabled></classAccesses>
+    <classAccesses><apexClass>StemDeleteConfirmController</apexClass><enabled>true</enabled></classAccesses>
     <fieldPermissions><editable>true</editable><field>Account.Is_Agent__c</field><readable>true</readable></fieldPermissions>
     <fieldPermissions><editable>true</editable><field>Account.Is_Variable__c</field><readable>true</readable></fieldPermissions>
     <fieldPermissions><editable>true</editable><field>Account.Agency_Fee_USD__c</field><readable>true</readable></fieldPermissions>
