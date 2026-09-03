@@ -7,7 +7,9 @@ test('paired Variable Charges gives Port Clearance each commercial leg label', a
   assert.match(source, /isPortClearanceItem\(row\.item\) \? 'Port Clearance Fee'/);
   assert.match(source, /isPortClearanceItem\(row\.item\) \? 'Port Clearance Extension'/);
   assert.match(source, /calculatePortClearance\(\{ applicationCount, usdHkdRate \}\)/);
-  assert.match(source, /buyerPrice: calculation\.buyerUnitUsd/);
+  assert.match(source, /pricingType: 'fixed'/);
+  assert.match(source, /supplierCost: draft\?\.inputCurrency === 'USD' \? calculation\.supplierTotalUsd : calculation\.supplierHkd/);
+  assert.match(source, /buyerPrice: calculation\.buyerTotalUsd/);
   assert.match(source, /buyerChargeDecision: calculation\.additionalApplications > 0 \? 'include' : 'exclude'/);
   assert.match(source, /This default updates immediately when the Supplier Leg application count changes/);
 });

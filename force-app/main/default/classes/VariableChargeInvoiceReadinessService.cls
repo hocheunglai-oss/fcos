@@ -323,7 +323,7 @@ public without sharing class VariableChargeInvoiceReadinessService {
         ];
         if (stems.isEmpty() || !isHongKongPort(stems[0])) return null;
         List<STEM_Extra_Cost__c> rows = [
-            SELECT Id, Product2Id__r.Name, Quantity__c, Unit_Cost__c, Unit_Price__c,
+            SELECT Id, Product2Id__r.Name, Fixed__c, Quantity__c, Unit_Cost__c, Unit_Price__c,
                 Lumpsum_Cost__c, Lumpsum_Price__c, Supplier_Cost_Input_Currency__c,
                 Supplier_Cost_Input_Value__c, Supplier_Cost_USD_HKD_Rate__c,
                 Port_Clearance_Rate_HKD__c, Port_Clearance_Calculation_Version__c
@@ -380,27 +380,29 @@ public without sharing class VariableChargeInvoiceReadinessService {
                 String requiredCurrency = supplierSide && supplier.Is_Agent__c == true
                     ? supplier.Agency_Fee_Currency__c
                     : 'HKD';
-                Decimal expectedNativeRate = requiredCurrency == 'USD' && row.Supplier_Cost_USD_HKD_Rate__c != null
+                Decimal supplierHkd = row.Quantity__c * HongKongBasicCallingBundleService.PORT_CLEARANCE_RATE_HKD;
+                Decimal supplierTotalUsd = row.Supplier_Cost_USD_HKD_Rate__c != null
                     && row.Supplier_Cost_USD_HKD_Rate__c > 0
-                    ? (HongKongBasicCallingBundleService.PORT_CLEARANCE_RATE_HKD / row.Supplier_Cost_USD_HKD_Rate__c).setScale(2)
-                    : HongKongBasicCallingBundleService.PORT_CLEARANCE_RATE_HKD;
+                    ? (supplierHkd / row.Supplier_Cost_USD_HKD_Rate__c).setScale(2)
+                    : null;
+                Decimal expectedNativeTotal = requiredCurrency == 'USD' ? supplierTotalUsd : supplierHkd;
                 if (supplierSide && (row.Port_Clearance_Rate_HKD__c != HongKongBasicCallingBundleService.PORT_CLEARANCE_RATE_HKD
                     || row.Port_Clearance_Calculation_Version__c != HongKongBasicCallingBundleService.PORT_CLEARANCE_VERSION
                     || row.Supplier_Cost_Input_Currency__c != requiredCurrency
-                    || row.Supplier_Cost_Input_Value__c != expectedNativeRate
+                    || row.Supplier_Cost_Input_Value__c != expectedNativeTotal
                     || row.Supplier_Cost_USD_HKD_Rate__c == null || row.Supplier_Cost_USD_HKD_Rate__c <= 0
-                    || row.Unit_Cost__c == null || row.Unit_Cost__c <= 0)) {
+                    || row.Fixed__c != true || row.Lumpsum_Cost__c == null
+                    || (row.Lumpsum_Cost__c - supplierTotalUsd).abs() > 0.005)) {
                     return 'Confirm the supplier-reported Port Clearance Extension application count before approval.';
                 }
                 if (!supplierSide) {
-                    Decimal buyerUnitPrice = row.Unit_Price__c == null ? 0 : row.Unit_Price__c;
                     if (row.Supplier_Cost_USD_HKD_Rate__c == null || row.Supplier_Cost_USD_HKD_Rate__c <= 0) {
                         return 'The Port Clearance Extension buyer pass-through rate is unavailable.';
                     }
                     Decimal buyerHkd = (row.Quantity__c - 1) * HongKongBasicCallingBundleService.PORT_CLEARANCE_RATE_HKD;
                     Decimal buyerTotalUsd = (buyerHkd / row.Supplier_Cost_USD_HKD_Rate__c).setScale(2);
-                    Decimal expectedBuyerUnitUsd = (buyerTotalUsd / row.Quantity__c).setScale(2);
-                    if ((buyerUnitPrice - expectedBuyerUnitUsd).abs() > 0.005) {
+                    Decimal buyerFixedCharge = row.Lumpsum_Price__c == null ? 0 : row.Lumpsum_Price__c;
+                    if (row.Fixed__c != true || (buyerFixedCharge - buyerTotalUsd).abs() > 0.005) {
                         return row.Quantity__c == 1
                             ? 'The first port clearance is included in Basic Calling Cost and must remain USD 0.'
                             : 'Port Clearance Extensions must use the reviewed zero-margin buyer pass-through.';

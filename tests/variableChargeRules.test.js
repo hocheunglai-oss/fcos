@@ -351,7 +351,7 @@ test('manual Hong Kong support rows inherit the exact supplier Basic Calling Cos
   assert.equal(serializedAgency.supplierCurrency.unitOrFixed.usdAmount, 248.72);
   assert.deepEqual(serializedAgency.buyerDefault, { decision: 'exclude', unitOrFixedUsd: 0, totalUsd: 0, locked: true });
   assert.equal(serializedPort.buyerDefault.decision, 'include');
-  assert.equal(serializedPort.buyerDefault.unitOrFixedUsd, 3.7);
+  assert.equal(serializedPort.buyerDefault.unitOrFixedUsd, 7.4);
   assert.equal(serializedPort.productName, 'PORT CLEARANCE EXTENSION');
   assert.equal(serializedPort.supplierCurrency.requiredInputCurrency, 'HKD');
   assert.equal(serializedPort.supplierCurrency.lockedToAgentCurrency, true);
@@ -384,7 +384,8 @@ test('server applies Basic Calling, Agency, Port Clearance Extension and Light D
   assert.equal(decisions.get(rows[3].Id), 'exclude');
   const updates = new Map(result.extraCostUpdates.map((row) => [row.extraCostId, row]));
   assert.equal(updates.get(rows[1].Id).buyerPrice, 0);
-  assert.equal(updates.get(rows[2].Id).buyerPrice, 3.7);
+  assert.equal(updates.get(rows[2].Id).pricingType, 'fixed');
+  assert.equal(updates.get(rows[2].Id).buyerPrice, 7.4);
   assert.equal(updates.get(rows[3].Id).buyerPrice, 0);
 });
 
