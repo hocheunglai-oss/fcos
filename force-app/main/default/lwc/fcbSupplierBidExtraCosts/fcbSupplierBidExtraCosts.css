@@ -1,0 +1,11 @@
+.slds-table td, .slds-table th {
+    padding: 0.25rem 0.25rem;
+}
+
+.slds-input {
+    padding: 0 0.25rem 0 0.5rem;
+}
+
+.total-col {
+    text-align: right;
+}
