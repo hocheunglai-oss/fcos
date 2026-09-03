@@ -208,6 +208,13 @@ function stateFromManagedRecord(record, row, config) {
   if (record?.IsDeleted === true || record?.[config.cancelledField] === true) {
     return { state: 'removed', issue: 'The managed Salesforce extra cost was deleted or cancelled.' };
   }
+  if (record?.[config.stemLookupField] !== row.salesforceStemId) {
+    return {
+      state: 'changed_salesforce',
+      issue: 'The managed Salesforce row belongs to a different STEM. Salesforce does not allow that parent relationship to be changed; review the row in Salesforce before continuing.',
+      cannotApply: true,
+    };
+  }
   if (!matchesIdentity(record, row, config)) {
     return { state: 'changed_salesforce', issue: 'The managed Salesforce row no longer matches the expected STEM, Product, or Supplier.' };
   }
@@ -330,6 +337,7 @@ function decorateStatuses(calculations, resolved) {
         managedRecord: true,
         state: state.state,
         reviewIssue: state.issue,
+        cannotApply: state.cannotApply === true,
         currentSalesforceCost: Number(managed?.[resolved.config.amountField] || 0),
         currentUnitOfMeasure: displayUnitOfMeasure(managed?.[resolved.config.uomField]),
         salesforceRecordId: managed?.Id || null,
@@ -503,10 +511,36 @@ function requestedActionForState(state, bodyAction) {
   return null;
 }
 
+export function physicalHedgeSalesforceWriteBody({ rowAction, row, config, allocationKey: key }) {
+  const common = {
+    [config.amountField]: row.salesforceCost,
+    [config.descriptionField]: row.description,
+    [config.externalKeyField]: key,
+    [config.uomField]: config.unitOfMeasure,
+  };
+  if (rowAction === 'update') return common;
+
+  const writableIdentity = {
+    [config.productLookupField]: config.productId,
+    [config.supplierLookupField]: row.supplierAccountId,
+    [config.fixedField]: true,
+    [config.quantityField]: Number(config.quantity || 1),
+    [config.paymentTermField]: config.venues[row.venue].paymentTerm,
+    ...common,
+  };
+  if (rowAction === 'adopt' || rowAction === 'restore') return writableIdentity;
+
+  return {
+    RecordTypeId: config.recordTypeId,
+    [config.stemLookupField]: row.salesforceStemId,
+    ...writableIdentity,
+  };
+}
+
 export async function applyPhysicalHedgeSalesforce(client, profile, body = {}) {
   const preview = await previewPhysicalHedgeSalesforce(client, profile, body);
   if (preview.previewFingerprint !== body.previewFingerprint) throw hedgeSalesforceFailure('The calculation or Salesforce records changed after preview. Review the refreshed values before confirming.', 409, 'HEDGE_PHYSICAL_SALESFORCE_PREVIEW_STALE', { preview });
-  if (preview.venues.some((row) => BLOCKING_STATES.has(row.state)) || !preview.venues.length) throw hedgeSalesforceFailure('Salesforce posting is blocked until every Physical Trade issue is resolved.', 409, 'HEDGE_PHYSICAL_SALESFORCE_NOT_READY', { preview });
+  if (preview.venues.some((row) => BLOCKING_STATES.has(row.state) || row.cannotApply === true) || !preview.venues.length) throw hedgeSalesforceFailure('Salesforce posting is blocked until every Physical Trade issue is resolved.', 409, 'HEDGE_PHYSICAL_SALESFORCE_NOT_READY', { preview });
   const action = String(body.action || 'apply');
   const reason = String(body.reason || '').trim();
   if (preview.venues.some((row) => ['conflict', 'changed_salesforce'].includes(row.state)) && reason.length < 5) throw hedgeSalesforceFailure('Enter a specific reason of at least five characters before adopting or restoring a Salesforce row.');
@@ -526,28 +560,13 @@ export async function applyPhysicalHedgeSalesforce(client, profile, body = {}) {
       if (rowAction === 'none') continue;
       const generation = rowAction === 'recreate' ? row.generation + 1 : row.generation;
       const key = allocationKey(preview.physicalTradeId, row.venue, generation);
-      const common = {
-        [config.amountField]: row.salesforceCost,
-        [config.descriptionField]: row.description,
-        [config.externalKeyField]: key,
-        [config.uomField]: config.unitOfMeasure,
-      };
-      const full = {
-        RecordTypeId: config.recordTypeId,
-        [config.stemLookupField]: row.salesforceStemId,
-        [config.productLookupField]: config.productId,
-        [config.supplierLookupField]: row.supplierAccountId,
-        [config.fixedField]: true,
-        [config.quantityField]: Number(config.quantity || 1),
-        [config.paymentTermField]: config.venues[row.venue].paymentTerm,
-        ...common,
-      };
+      const requestBody = physicalHedgeSalesforceWriteBody({ rowAction, row, config, allocationKey: key });
       const referenceId = `physical${requests.length}`;
       if (['update', 'restore', 'adopt'].includes(rowAction)) {
         if (!SALESFORCE_ID.test(String(row.salesforceRecordId || ''))) throw hedgeSalesforceFailure(`The ${row.venue} Salesforce record is unavailable for ${rowAction}.`, 409);
-        requests.push({ method: 'PATCH', url: `/services/data/${getApiVersion()}/sobjects/${objectName}/${row.salesforceRecordId}`, referenceId, body: rowAction === 'update' ? common : full });
+        requests.push({ method: 'PATCH', url: `/services/data/${getApiVersion()}/sobjects/${objectName}/${row.salesforceRecordId}`, referenceId, body: requestBody });
       } else {
-        requests.push({ method: 'POST', url: `/services/data/${getApiVersion()}/sobjects/${objectName}`, referenceId, body: full });
+        requests.push({ method: 'POST', url: `/services/data/${getApiVersion()}/sobjects/${objectName}`, referenceId, body: requestBody });
       }
       pending.push({ row, rowAction, generation, key, referenceId });
     }
@@ -558,10 +577,10 @@ export async function applyPhysicalHedgeSalesforce(client, profile, body = {}) {
       return response;
     }
     const composite = await sfRequest('/composite', { method: 'POST', body: { allOrNone: true, compositeRequest: requests } });
-    salesforceAccepted = true;
     const responses = composite?.compositeResponse || [];
     const rejected = responses.find((response) => response.httpStatusCode < 200 || response.httpStatusCode >= 300);
     if (rejected) throw hedgeSalesforceFailure(rejected.body?.[0]?.message || rejected.body?.message || 'Salesforce rejected the Physical Trade hedge-result transaction.', rejected.httpStatusCode || 502, 'HEDGE_PHYSICAL_SALESFORCE_COMPOSITE_FAILED');
+    salesforceAccepted = true;
     const now = new Date().toISOString();
     const results = [];
     for (const item of pending) {

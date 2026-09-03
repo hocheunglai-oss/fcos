@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 import { allocateHedgeSalesforceAmounts } from '../api/_hedgeSalesforce.js';
-import { allocateGrossPnlAcrossPhysicals } from '../api/_hedgePhysicalSalesforce.js';
+import { allocateGrossPnlAcrossPhysicals, physicalHedgeSalesforceWriteBody } from '../api/_hedgePhysicalSalesforce.js';
 import { sanitizeRichText } from '../api/_richText.js';
 
 const read = (path) => fs.readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
@@ -81,6 +81,51 @@ test('Physical Trade synchronization uses the approved mapping, external key and
   assert.match(service, /salesforceWritePerformed: false/);
   assert.match(service, /\['create', 'recreate'\]\.includes\(item\.rowAction\) \? response\?\.body\?\.id : item\.row\.salesforceRecordId/);
   assert.match(service, /function stateFromManagedRecord[\s\S]*config\.buyerInvoiceField[\s\S]*record\?\.IsDeleted === true[\s\S]*function resolveSalesforce/);
+});
+
+test('Physical Trade updates never PATCH the immutable Salesforce STEM parent', () => {
+  const config = {
+    amountField: 'Lumpsum_Cost__c',
+    descriptionField: 'Description__c',
+    externalKeyField: 'FCOS_Hedge_Allocation_Key__c',
+    uomField: 'Unit_of_Measure__c',
+    unitOfMeasure: '1.',
+    productLookupField: 'Product2Id__c',
+    productId: 'product',
+    supplierLookupField: 'Supplier__c',
+    fixedField: 'Fixed__c',
+    quantityField: 'Quantity_Delivered_Per_BDN__c',
+    quantity: 1,
+    paymentTermField: 'Payment_Term__c',
+    stemLookupField: 'STEM__c',
+    recordTypeId: 'record-type',
+    venues: { ICE: { paymentTerm: '7 I' } },
+  };
+  const row = {
+    venue: 'ICE',
+    salesforceCost: 125.5,
+    description: 'Final gross hedge result',
+    salesforceStemId: 'stem',
+    supplierAccountId: 'supplier',
+  };
+
+  for (const rowAction of ['update', 'adopt', 'restore']) {
+    const body = physicalHedgeSalesforceWriteBody({ rowAction, row, config, allocationKey: 'allocation' });
+    assert.equal(body.STEM__c, undefined, `${rowAction} must not PATCH the non-reparentable master-detail field`);
+    assert.equal(body.RecordTypeId, undefined, `${rowAction} must not PATCH create-only identity`);
+    assert.equal(body.Lumpsum_Cost__c, 125.5);
+  }
+
+  const create = physicalHedgeSalesforceWriteBody({ rowAction: 'create', row, config, allocationKey: 'allocation' });
+  assert.equal(create.STEM__c, 'stem');
+  assert.equal(create.RecordTypeId, 'record-type');
+  assert.equal(create.Unit_of_Measure__c, '1.');
+
+  const service = read('api/_hedgePhysicalSalesforce.js');
+  assert.ok(service.indexOf('if (rejected) throw') < service.indexOf('salesforceAccepted = true;'));
+  const physical = read('src/hedge/views/PhysicalView.jsx');
+  assert.match(physical, /return "Confirm adoption"/);
+  assert.match(physical, /row\.cannotApply/);
 });
 
 test('Physical Trade hedge-result mappings and immutable history are service-only', () => {
