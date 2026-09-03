@@ -48,6 +48,15 @@ test('Variable Charges canonicalizes Salesforce REST timestamps before Apex conf
   );
 });
 
+test('paired Port Clearance buyer writes retain the live supplier application count', () => {
+  const current = { Quantity__c: 1 };
+  assert.equal(variableChargeInternals.portClearanceWriteApplicationCount({}, current), 1);
+  assert.equal(variableChargeInternals.portClearanceWriteApplicationCount({ buyerPrice: 0 }, current), 1);
+  assert.equal(variableChargeInternals.portClearanceWriteApplicationCount({ quantity: null }, current), 1);
+  assert.equal(variableChargeInternals.portClearanceWriteApplicationCount({ quantity: 3 }, current), 3);
+  assert.equal(variableChargeInternals.portClearanceWriteApplicationCount({ quantity: 0 }, current), 0);
+});
+
 test('Variable Charges queues include only STEM records created from 1 January 2026', async () => {
   assert.equal(variableChargeInternals.VARIABLE_CHARGE_STEM_CREATED_FROM, '2026-01-01T00:00:00Z');
   const service = await repositoryFile('api/_variableCharges.js');
