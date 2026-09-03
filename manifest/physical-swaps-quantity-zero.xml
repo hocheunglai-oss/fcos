@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Package xmlns="http://soap.sforce.com/2006/04/metadata">
+    <types>
+        <members>StemExtraCostTriggerHandler</members>
+        <members>StemExtraCostSwapsNormalizationTest</members>
+        <members>CreditSTEMSyncSchedulerTest</members>
+        <members>EmailCompensationsSchedulerTest</members>
+        <name>ApexClass</name>
+    </types>
+    <types>
+        <members>StemExtraCostTrigger</members>
+        <name>ApexTrigger</name>
+    </types>
+    <version>65.0</version>
+</Package>

@@ -19,7 +19,7 @@ const VENUES = ['ICE', 'FCBS'];
 const MAX_ALLOCATIONS = 25;
 
 const APPROVED_MAPPING = Object.freeze({
-  mappingRevision: 3,
+  mappingRevision: 4,
   objectName: 'STEM_Extra_Cost__c',
   stemObjectName: 'STEM__c',
   stemNameField: 'KeyStem__c',
@@ -29,6 +29,7 @@ const APPROVED_MAPPING = Object.freeze({
   productLookupField: 'Product2Id__c',
   supplierLookupField: 'Supplier__c',
   fixedField: 'Fixed__c',
+  orderedQuantityField: 'Quantity__c',
   quantityField: 'Quantity_Delivered_Per_BDN__c',
   uomField: 'Unit_of_Measure__c',
   unitOfMeasure: '1.',
@@ -39,7 +40,7 @@ const APPROVED_MAPPING = Object.freeze({
   supplierInvoiceField: 'Supplier_Invoice__c',
   recordTypeId: '0122x000000cwlgAAA',
   productId: '01tfu000002zAEDAA2',
-  quantity: 1,
+  quantity: 0,
   venues: {
     ICE: { supplierId: '001fu00000Zo8eHAAR', paymentTerm: '7 I' },
     FCBS: { supplierId: '0012x00000LGhzUAAT', paymentTerm: '7 I' },
@@ -120,6 +121,13 @@ function mergeMapping(saved) {
     ...APPROVED_MAPPING,
     ...source,
     mappingRevision: Math.max(Number(APPROVED_MAPPING.mappingRevision), Number(source.mappingRevision || 0)),
+    // SWAPS are fixed-value accounting charges. Their quantity and UOM are
+    // canonical and must not be overridden by an older saved mapping.
+    orderedQuantityField: APPROVED_MAPPING.orderedQuantityField,
+    quantityField: APPROVED_MAPPING.quantityField,
+    quantity: APPROVED_MAPPING.quantity,
+    uomField: APPROVED_MAPPING.uomField,
+    unitOfMeasure: APPROVED_MAPPING.unitOfMeasure,
     venues: {
       ICE: { ...APPROVED_MAPPING.venues.ICE, ...(source.venues?.ICE || {}) },
       FCBS: { ...APPROVED_MAPPING.venues.FCBS, ...(source.venues?.FCBS || {}) },
@@ -182,7 +190,8 @@ async function validateMapping(config) {
   requireField(fields, objectName, apiName(config.amountField, 'cost field'), { createable: true, updateable: true });
   requireField(fields, objectName, apiName(config.descriptionField, 'description field'), { createable: true, updateable: true });
   requireField(fields, objectName, apiName(config.fixedField, 'fixed field'), { createable: true });
-  requireField(fields, objectName, apiName(config.quantityField, 'quantity field'), { createable: true });
+  requireField(fields, objectName, apiName(config.orderedQuantityField, 'ordered quantity field'), { createable: true, updateable: true });
+  requireField(fields, objectName, apiName(config.quantityField, 'delivered quantity field'), { createable: true, updateable: true });
   const uomField = requireField(fields, objectName, apiName(config.uomField, 'unit-of-measure field'), { createable: true, updateable: true });
   if (uomField.type !== 'picklist' || !(uomField.picklistValues || []).some((option) => option.active === true && option.value === config.unitOfMeasure)) {
     throw failure(`Salesforce ${objectName}.${config.uomField} must allow the unit ${config.unitOfMeasure}.`, 503, 'HEDGE_SALESFORCE_SCHEMA_INVALID');
@@ -531,6 +540,8 @@ export async function pushHedgeSalesforce(client, profile, body = {}) {
       const bodyPayload = {
         [config.amountField]: allocation.salesforceCost,
         [config.descriptionField]: allocation.description,
+        [config.orderedQuantityField]: config.quantity,
+        [config.quantityField]: config.quantity,
         [config.uomField]: config.unitOfMeasure,
       };
       if (allocation.action === 'update') {
@@ -551,7 +562,6 @@ export async function pushHedgeSalesforce(client, profile, body = {}) {
           [config.productLookupField]: config.productId,
           [config.supplierLookupField]: allocation.supplierAccountId,
           [config.fixedField]: true,
-          [config.quantityField]: Number(config.quantity || 1),
           [config.paymentTermField]: config.venues[allocation.venue].paymentTerm,
           ...bodyPayload,
         },

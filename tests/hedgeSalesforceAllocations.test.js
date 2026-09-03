@@ -68,6 +68,10 @@ test('Physical Trade synchronization uses the approved mapping, external key and
   assert.match(legacy, /externalKeyField: 'FCOS_Hedge_Allocation_Key__c'/);
   assert.match(legacy, /uomField: 'Unit_of_Measure__c'/);
   assert.match(legacy, /unitOfMeasure: '1\.'/);
+  assert.match(legacy, /orderedQuantityField: 'Quantity__c'/);
+  assert.match(legacy, /quantity: 0/);
+  assert.match(legacy, /\[config\.orderedQuantityField\]: config\.quantity/);
+  assert.match(legacy, /\[config\.quantityField\]: config\.quantity/);
   assert.match(legacy, /\[config\.uomField\]: config\.unitOfMeasure/);
   assert.match(field, /<externalId>true<\/externalId>/);
   assert.match(field, /<unique>true<\/unique>/);
@@ -94,8 +98,9 @@ test('Physical Trade updates never PATCH the immutable Salesforce STEM parent', 
     productId: 'product',
     supplierLookupField: 'Supplier__c',
     fixedField: 'Fixed__c',
+    orderedQuantityField: 'Quantity__c',
     quantityField: 'Quantity_Delivered_Per_BDN__c',
-    quantity: 1,
+    quantity: 0,
     paymentTermField: 'Payment_Term__c',
     stemLookupField: 'STEM__c',
     recordTypeId: 'record-type',
@@ -114,12 +119,24 @@ test('Physical Trade updates never PATCH the immutable Salesforce STEM parent', 
     assert.equal(body.STEM__c, undefined, `${rowAction} must not PATCH the non-reparentable master-detail field`);
     assert.equal(body.RecordTypeId, undefined, `${rowAction} must not PATCH create-only identity`);
     assert.equal(body.Lumpsum_Cost__c, 125.5);
+    assert.equal(body.Quantity__c, 0);
+    assert.equal(body.Quantity_Delivered_Per_BDN__c, 0);
+    assert.equal(body.Unit_of_Measure__c, '1.');
   }
 
   const create = physicalHedgeSalesforceWriteBody({ rowAction: 'create', row, config, allocationKey: 'allocation' });
   assert.equal(create.STEM__c, 'stem');
   assert.equal(create.RecordTypeId, 'record-type');
   assert.equal(create.Unit_of_Measure__c, '1.');
+  assert.equal(create.Quantity__c, 0);
+  assert.equal(create.Quantity_Delivered_Per_BDN__c, 0);
+
+  const trigger = read('force-app/main/default/triggers/StemExtraCostTrigger.trigger');
+  const handler = read('force-app/main/default/classes/StemExtraCostTriggerHandler.cls');
+  assert.match(trigger, /normalizeSwapsQuantityAndUnit\(Trigger\.new\)/);
+  assert.match(handler, /stemExtraCost\.Quantity__c = 0/);
+  assert.match(handler, /stemExtraCost\.Quantity_Delivered_Per_BDN__c = 0/);
+  assert.match(handler, /stemExtraCost\.Unit_of_Measure__c = '1\.'/);
 
   const service = read('api/_hedgePhysicalSalesforce.js');
   assert.ok(service.indexOf('if (rejected) throw') < service.indexOf('salesforceAccepted = true;'));
