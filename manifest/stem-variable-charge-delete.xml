@@ -3,6 +3,8 @@
     <types>
         <members>StemTriggerHandler</members>
         <members>StemTriggerHandlerTest</members>
+        <members>StemDeleteConfirmController</members>
+        <members>StemDeleteConfirmControllerTest</members>
         <name>ApexClass</name>
     </types>
     <types>

@@ -1,15 +1,21 @@
-<apex:page standardController="STEM__c" lightningStylesheets="true" showHeader="true" sidebar="false">
+<apex:page standardController="STEM__c" extensions="StemDeleteConfirmController" lightningStylesheets="true" showHeader="true" sidebar="false">
     <apex:pageBlock title="Delete STEM">
         <apex:pageMessages />
         <apex:pageBlockSection columns="1">
-            <apex:outputText value="You are about to delete {!STEM__c.Name}. Any associated STEM Variable Charge supplier records listed below will be permanently deleted too. Are you sure you want to continue?" />
+            <apex:outputText value="You are about to delete {!stem.Name}. Any associated STEM Variable Charge supplier records listed below will be permanently deleted too. Are you sure you want to continue?" />
         </apex:pageBlockSection>
+        <apex:pageBlockTable value="{!variableChargeSuppliers}" var="variableCharge" rendered="{!hasVariableChargeSuppliers}">
+            <apex:column headerValue="Variable Charge" value="{!variableCharge.Name}" />
+            <apex:column headerValue="Supplier" value="{!variableCharge.Supplier__r.Name}" />
+            <apex:column headerValue="Supplier Review" value="{!variableCharge.Supplier_Status__c}" />
+            <apex:column headerValue="Buyer Review" value="{!variableCharge.Buyer_Charge_Status__c}" />
+        </apex:pageBlockTable>
+        <apex:outputText value="No active Variable Charge supplier records are linked to this STEM." rendered="{!NOT(hasVariableChargeSuppliers)}" />
     </apex:pageBlock>
-    <apex:relatedList subject="{!STEM__c.Id}" list="Variable_Charge_Suppliers__r" />
-    <apex:form>
-        <apex:pageBlock>
+    <apex:form id="deleteForm">
+        <apex:pageBlock id="deleteActions">
             <apex:pageBlockButtons location="bottom">
-                <apex:commandButton value="Delete STEM and Variable Charges" action="{!delete}" />
+                <apex:commandButton value="Delete STEM and Variable Charges" action="{!deleteStemAndVariableCharges}" />
                 <apex:commandButton value="Cancel" action="{!cancel}" immediate="true" />
             </apex:pageBlockButtons>
         </apex:pageBlock>
