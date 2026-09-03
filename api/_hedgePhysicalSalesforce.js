@@ -221,6 +221,12 @@ function stateFromManagedRecord(record, row, config) {
   if (record?.[config.uomField] !== config.unitOfMeasure) {
     return { state: 'update_required', issue: `The Salesforce unit of measure must be ${config.unitOfMeasure === '1.' ? '1' : config.unitOfMeasure}.` };
   }
+  if (record?.[config.orderedQuantityField] == null
+    || record?.[config.quantityField] == null
+    || Number(record[config.orderedQuantityField]) !== Number(config.quantity)
+    || Number(record[config.quantityField]) !== Number(config.quantity)) {
+    return { state: 'update_required', issue: 'The Salesforce SWAPS quantity must be 0.' };
+  }
   const currentCost = Number(record?.[config.amountField] || 0);
   if (Math.abs(currentCost - row.salesforceCost) > MONEY_TOLERANCE) return { state: 'update_required', issue: null };
   return { state: 'added', issue: null };
@@ -249,7 +255,8 @@ async function resolveSalesforce(client, calculations, existingMappings) {
   const fields = [
     'Id', 'Name', 'IsDeleted', 'LastModifiedDate', config.stemLookupField, config.productLookupField,
     config.supplierLookupField, config.amountField, config.paymentTermField, config.descriptionField,
-    config.uomField, config.externalKeyField, config.cancelledField, config.buyerInvoiceField, config.supplierInvoiceField,
+    config.orderedQuantityField, config.quantityField, config.uomField, config.externalKeyField, config.cancelledField,
+    config.buyerInvoiceField, config.supplierInvoiceField,
   ].map((field) => apiName(field, 'extra-cost field'));
   const supplierIds = VENUES.map((venue) => config.venues[venue].supplierId);
   const clauses = [];
@@ -302,6 +309,7 @@ function decorateStatuses(calculations, resolved) {
         supplierName: supplier?.Name || venueRow.venue,
         supplierClKey: supplier?.Company_Code__c || '',
         proposedUnitOfMeasure: displayUnitOfMeasure(resolved.config.unitOfMeasure),
+        proposedQuantity: Number(resolved.config.quantity),
       };
       const description = `FCOS final gross ${venueRow.venue} hedge P&L ${venueRow.grossPnl.toFixed(2)} USD allocated to ${calculation.stemKey}`.slice(0, 255);
       const row = { ...base, description };
@@ -340,6 +348,12 @@ function decorateStatuses(calculations, resolved) {
         cannotApply: state.cannotApply === true,
         currentSalesforceCost: Number(managed?.[resolved.config.amountField] || 0),
         currentUnitOfMeasure: displayUnitOfMeasure(managed?.[resolved.config.uomField]),
+        currentQuantity: managed?.[resolved.config.orderedQuantityField] == null
+          ? null
+          : Number(managed[resolved.config.orderedQuantityField]),
+        currentDeliveredQuantity: managed?.[resolved.config.quantityField] == null
+          ? null
+          : Number(managed[resolved.config.quantityField]),
         salesforceRecordId: managed?.Id || null,
         salesforceRecordName: managed?.Name || null,
         salesforceUrl: managed?.Id ? physicalSalesforceRecordUrl(managed.Id) : null,
@@ -516,6 +530,8 @@ export function physicalHedgeSalesforceWriteBody({ rowAction, row, config, alloc
     [config.amountField]: row.salesforceCost,
     [config.descriptionField]: row.description,
     [config.externalKeyField]: key,
+    [config.orderedQuantityField]: Number(config.quantity),
+    [config.quantityField]: Number(config.quantity),
     [config.uomField]: config.unitOfMeasure,
   };
   if (rowAction === 'update') return common;
@@ -524,7 +540,6 @@ export function physicalHedgeSalesforceWriteBody({ rowAction, row, config, alloc
     [config.productLookupField]: config.productId,
     [config.supplierLookupField]: row.supplierAccountId,
     [config.fixedField]: true,
-    [config.quantityField]: Number(config.quantity || 1),
     [config.paymentTermField]: config.venues[row.venue].paymentTerm,
     ...common,
   };

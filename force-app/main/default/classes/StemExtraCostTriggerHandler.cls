@@ -3,6 +3,33 @@
  */
 public class StemExtraCostTriggerHandler {
     /**
+     * SWAPS are fixed-value accounting charges rather than traded quantities.
+     * Keep both quantity fields at zero and use the dimensionless "1." UOM for
+     * every insert and update, including edits made directly in Salesforce.
+     */
+    public static void normalizeSwapsQuantityAndUnit(List<STEM_Extra_Cost__c> stemExtraCosts) {
+        Set<Id> productIds = new Set<Id>();
+        for (STEM_Extra_Cost__c stemExtraCost : stemExtraCosts) {
+            if (stemExtraCost.Product2Id__c != null) {
+                productIds.add(stemExtraCost.Product2Id__c);
+            }
+        }
+        if (productIds.isEmpty()) return;
+
+        Set<Id> swapsProductIds = new Map<Id, Product2>([
+            SELECT Id
+            FROM Product2
+            WHERE Id IN :productIds AND Name = 'SWAPS'
+        ]).keySet();
+        for (STEM_Extra_Cost__c stemExtraCost : stemExtraCosts) {
+            if (!swapsProductIds.contains(stemExtraCost.Product2Id__c)) continue;
+            stemExtraCost.Quantity__c = 0;
+            stemExtraCost.Quantity_Delivered_Per_BDN__c = 0;
+            stemExtraCost.Unit_of_Measure__c = '1.';
+        }
+    }
+
+    /**
      * passQuantityBDN
      * When updating the STEM Line Items the Quantity Delivered Per BDN
      * is set to the same [jB]

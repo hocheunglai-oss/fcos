@@ -6,6 +6,7 @@ trigger StemExtraCostTrigger on STEM_Extra_Cost__c(before insert ,before update,
                 StemExtraCostTriggerHandler.setPortAndVessel(Trigger.new);
             }
             StemExtraCostTriggerHandler.passQuantityBDN(Trigger.new);
+            StemExtraCostTriggerHandler.normalizeSwapsQuantityAndUnit(Trigger.new);
             StemExtraCostTriggerHandler.countLineTotalSell(Trigger.new);
             StemExtraCostTriggerHandler.countLineTotalBuy(Trigger.new);
         }

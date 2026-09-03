@@ -14,12 +14,14 @@ public class EmailCompensationsSchedulerTest {
 	@IsTest
     static void testSchedulerExecution(){
         Test.startTest();
-        String CRON = '0 0 0 3 9 ? ' + Date.today().year();
+        Date nextRunDate = Date.today().addDays(1);
+        String CRON = '0 0 0 ' + nextRunDate.day() + ' ' + nextRunDate.month() + ' ? ' + nextRunDate.year();
         Test.setMock(HttpCalloutMock.class, new SyncApiMock());
         String jobId = System.schedule('EmailCompensationsScheduler', CRON, new EmailCompensationsScheduler());
         CronTrigger cronTrigger = [SELECT Id, CronExpression, TimesTriggered, NextFireTime FROM CronTrigger WHERE Id = :jobId]; 
         System.assertEquals(0, cronTrigger.TimesTriggered);
-        System.assertEquals(Date.today().year() + '-09-03 00:00:00', String.valueOf(cronTrigger.NextFireTime));   
+        System.assertEquals(CRON, cronTrigger.CronExpression);
+        System.assert(cronTrigger.NextFireTime > System.now(), 'The test schedule must always be in the future.');
         Test.stopTest();        
     }
 }
