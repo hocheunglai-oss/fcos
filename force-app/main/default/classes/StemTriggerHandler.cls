@@ -584,6 +584,15 @@ public class StemTriggerHandler {
         delete [SELECT Id FROM Invoice__c WHERE STEM__c IN: stemMap.keySet()];
     }
 
+    public static void deleteVariableChargeSuppliers(Map<Id, STEM__c> stemMap){
+        if(stemMap == null || stemMap.isEmpty()) return;
+        delete [
+            SELECT Id
+            FROM STEM_Variable_Charge_Supplier__c
+            WHERE STEM__c IN: stemMap.keySet()
+        ];
+    }
+
     public static void deleteStemPaymentOverviews(Map<Id, STEM__c> stemMap){
         delete [SELECT Id FROM STEM_Payment_Overview__c WHERE STEM__c IN: stemMap.keySet()];
     }
