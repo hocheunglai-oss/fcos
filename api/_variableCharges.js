@@ -3260,7 +3260,7 @@ export async function reopenVariableChargeSides(body, context) {
         },
       });
       await completeOperation(context.client, operationId, 'salesforce_written', {
-        stemId, supplierId, sides, stageLastModifiedAt: salesforceResult?.lastModifiedAt || null,
+        stemId, supplierId, status: 'reopened',
       });
       salesforceWritten = true;
     }

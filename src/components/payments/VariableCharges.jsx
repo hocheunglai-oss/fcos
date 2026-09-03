@@ -781,7 +781,11 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
         const changed = isPortClearanceItem(row.item) || changeKey({ description: draft.description, pricingType: draft.pricingType, supplierCost: draft.supplierCost, inputCurrency: draft.inputCurrency, quantity: draft.quantity, unitOfMeasure: draft.unitOfMeasure })
           !== changeKey({ description: original.description, pricingType: original.pricingType, supplierCost: original.supplierCost, inputCurrency: original.inputCurrency, quantity: original.quantity, unitOfMeasure: original.unitOfMeasure });
         if (!changed) { setSaveError(`Make the intended cost change for ${itemLabel(row)}, or mark it Correct.`); return; }
-        if (!text(draft.description) || finiteNumber(draft.supplierCost) == null || (draft.pricingType === 'per_unit' && (!(finiteNumber(draft.quantity) > 0) || !text(draft.unitOfMeasure)))) {
+        const portClearanceCount = isPortClearanceItem(row.item) ? finiteNumber(draft.quantity) : null;
+        if ((isPortClearanceItem(row.item) && !(Number.isInteger(portClearanceCount) && portClearanceCount >= 1))
+          || (!isPortClearanceItem(row.item) && !text(draft.description))
+          || finiteNumber(draft.supplierCost) == null
+          || (draft.pricingType === 'per_unit' && (!(finiteNumber(draft.quantity) > 0) || !text(draft.unitOfMeasure)))) {
           setSaveError(`Complete the cost details for ${itemLabel(row)}.`); return;
         }
       }
@@ -1608,6 +1612,11 @@ function PairedReviewWorkspace({ caseRow, requirement, requirements, activeSuppl
     const original = initialExtraDraft(row.item);
     const changed = isPortClearanceItem(row.item) || changeKey({ description: draft.description, pricingType: draft.pricingType, supplierCost: draft.supplierCost, inputCurrency: draft.inputCurrency, quantity: draft.quantity, unitOfMeasure: draft.unitOfMeasure })
       !== changeKey({ description: original.description, pricingType: original.pricingType, supplierCost: original.supplierCost, inputCurrency: original.inputCurrency, quantity: original.quantity, unitOfMeasure: original.unitOfMeasure });
+    if (isPortClearanceItem(row.item)) {
+      const applicationCount = finiteNumber(draft.quantity);
+      return changed && Number.isInteger(applicationCount) && applicationCount >= 1
+        && finiteNumber(draft.supplierCost) != null;
+    }
     return changed && text(draft.description) && finiteNumber(draft.supplierCost) != null
       && (draft.pricingType !== 'per_unit' || (finiteNumber(draft.quantity) > 0 && text(draft.unitOfMeasure)));
   }) && Boolean(text(supplierNote));
