@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 import { allocateHedgeSalesforceAmounts, mergeHedgeSalesforceMapping } from '../api/_hedgeSalesforce.js';
-import { allocateGrossPnlAcrossPhysicals, physicalHedgeSalesforceManagedState, physicalHedgeSalesforceWriteBody } from '../api/_hedgePhysicalSalesforce.js';
+import { allocateGrossPnlAcrossPhysicals, allocateVenueHedgeResultAcrossPhysicals, physicalHedgeSalesforceManagedState, physicalHedgeSalesforceWriteBody } from '../api/_hedgePhysicalSalesforce.js';
 import { sanitizeRichText } from '../api/_richText.js';
 
 const read = (path) => fs.readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
@@ -17,7 +17,7 @@ test('allocates final net P&L by STEM and applies the rounding residual to the l
   assert.equal(rows.reduce((sum, row) => sum + row.salesforceCost, 0), -99);
 });
 
-test('Physical Trade Salesforce costs use allocated gross hedge P&L and exclude fees', () => {
+test('ICE Physical Trade Salesforce costs use allocated gross hedge P&L and exclude separately billed fees', () => {
   const rows = allocateGrossPnlAcrossPhysicals({
     grossPnl: 100,
     sgoRatio: 7.45,
@@ -31,6 +31,8 @@ test('Physical Trade Salesforce costs use allocated gross hedge P&L and exclude 
     { physicalTradeId: 'two', grossPnl: 66.67, salesforceCost: -66.67 },
   ]);
   assert.equal(rows.reduce((sum, row) => sum + row.grossPnl, 0), 100);
+  assert.equal(rows.reduce((sum, row) => sum + row.directCosts, 0), 0);
+  assert.equal(rows.reduce((sum, row) => sum + row.netPnl, 0), 100);
 
   const ranged = allocateGrossPnlAcrossPhysicals({
     grossPnl: -25,
@@ -45,13 +47,53 @@ test('Physical Trade Salesforce costs use allocated gross hedge P&L and exclude 
     { physicalTradeId: 'fixed', weight: 50, grossPnl: -6.25, salesforceCost: 6.25 },
   ]);
 
+});
+
+test('FCBS Physical Trade Salesforce costs include direct FCBS charges with deterministic allocation', () => {
+  const rows = allocateVenueHedgeResultAcrossPhysicals({
+    venue: 'FCBS',
+    grossPnl: 100,
+    directCostAmount: 1,
+    sgoRatio: 7.45,
+    physicals: [
+      { id: 'one', qty_min: 100, qty_max: 100, unit: 'MT' },
+      { id: 'two', qty_min: 200, qty_max: 200, unit: 'MT' },
+    ],
+  });
+  assert.deepEqual(rows.map(({ physicalTradeId, grossPnl, directCosts, netPnl, salesforceCost }) => ({ physicalTradeId, grossPnl, directCosts, netPnl, salesforceCost })), [
+    { physicalTradeId: 'one', grossPnl: 33.33, directCosts: 0.33, netPnl: 33, salesforceCost: -33 },
+    { physicalTradeId: 'two', grossPnl: 66.67, directCosts: 0.67, netPnl: 66, salesforceCost: -66 },
+  ]);
+  assert.equal(rows.reduce((sum, row) => sum + row.grossPnl, 0), 100);
+  assert.equal(rows.reduce((sum, row) => sum + row.directCosts, 0), 1);
+  assert.equal(rows.reduce((sum, row) => sum + row.netPnl, 0), 99);
+  assert.equal(rows.reduce((sum, row) => sum + row.salesforceCost, 0), -99);
+
+  const loss = allocateVenueHedgeResultAcrossPhysicals({
+    venue: 'FCBS',
+    grossPnl: -25,
+    directCostAmount: 1,
+    sgoRatio: 7.45,
+    physicals: [
+      { id: 'range', qty_min: 100, qty_max: 200, unit: 'MT' },
+      { id: 'fixed', qty_min: 50, qty_max: 50, unit: 'MT' },
+    ],
+  });
+  assert.deepEqual(loss.map(({ physicalTradeId, grossPnl, directCosts, netPnl, salesforceCost }) => ({ physicalTradeId, grossPnl, directCosts, netPnl, salesforceCost })), [
+    { physicalTradeId: 'range', grossPnl: -18.75, directCosts: 0.75, netPnl: -19.5, salesforceCost: 19.5 },
+    { physicalTradeId: 'fixed', grossPnl: -6.25, directCosts: 0.25, netPnl: -6.5, salesforceCost: 6.5 },
+  ]);
+
   const service = read('api/_hedgePhysicalSalesforce.js');
   const physical = read('src/hedge/views/PhysicalView.jsx');
   const hedges = read('src/hedge/views/HedgesView.jsx');
-  assert.match(service, /grossPnl/);
-  assert.match(service, /salesforceCost: roundMoney\(-grossRows\[index\]\)/);
-  assert.doesNotMatch(service, /calcSwapFees|netPnl|current_margin/);
+  assert.match(service, /loaded\.inputs\.swap\.venue === 'FCBS' \? loaded\.financials\.feeAmount : 0/);
+  assert.match(service, /salesforceCost: roundMoney\(-\(grossRows\[index\] - directCostRows\[index\]\)\)/);
+  assert.match(service, /FCOS final net FCBS hedge result/);
+  assert.doesNotMatch(service, /current_margin/);
   assert.match(physical, /Salesforce hedge result/);
+  assert.match(physical, /FCBS direct costs included/);
+  assert.match(physical, /Billed directly by FCBS/);
   assert.match(physical, /Confirm add/);
   assert.doesNotMatch(hedges, /Preview Salesforce allocation|Synchronize all allocations/);
 });

@@ -60,20 +60,34 @@ function sameInstant(left, right) {
   return Number.isFinite(leftTime) && Number.isFinite(rightTime) ? leftTime === rightTime : String(left) === String(right);
 }
 
-export function allocateGrossPnlAcrossPhysicals({ grossPnl, physicals = [], sgoRatio }) {
+export function allocateVenueHedgeResultAcrossPhysicals({ venue, grossPnl, directCostAmount = 0, physicals = [], sgoRatio }) {
   if (!physicals.length) return [];
   const ordered = [...physicals];
   const weights = ordered.map((row) => Math.max(0, physicalMidQuantity(row, sgoRatio)));
   const totalWeight = weights.reduce((sum, value) => sum + value, 0);
   const shares = weights.map((weight) => totalWeight > 0 ? weight / totalWeight : 1 / weights.length);
   const grossRows = allocateMoney(roundMoney(grossPnl), shares);
+  const includedDirectCosts = String(venue || '').toUpperCase() === 'FCBS' ? roundMoney(directCostAmount) : 0;
+  const directCostRows = allocateMoney(includedDirectCosts, shares);
   return ordered.map((physical, index) => ({
     physicalTradeId: physical.id,
     weight: weights[index],
     share: shares[index],
     grossPnl: grossRows[index],
-    salesforceCost: roundMoney(-grossRows[index]),
+    directCosts: directCostRows[index],
+    netPnl: roundMoney(grossRows[index] - directCostRows[index]),
+    salesforceCost: roundMoney(-(grossRows[index] - directCostRows[index])),
   }));
+}
+
+export function allocateGrossPnlAcrossPhysicals({ grossPnl, physicals = [], sgoRatio }) {
+  return allocateVenueHedgeResultAcrossPhysicals({
+    venue: 'ICE',
+    grossPnl,
+    directCostAmount: 0,
+    physicals,
+    sgoRatio,
+  });
 }
 
 function describeFields(describe) {
@@ -130,8 +144,10 @@ async function calculatePhysicals(client, physicalIds) {
   const swapIds = [...new Set(scope.links.map((row) => row.swap_id))];
   const loadedSwaps = await Promise.all(swapIds.map(async (swapId) => {
     const loaded = await loadFinalPaperHedgeAllocation(client, swapId);
-    const allocations = allocateGrossPnlAcrossPhysicals({
+    const allocations = allocateVenueHedgeResultAcrossPhysicals({
+      venue: loaded.inputs.swap.venue,
       grossPnl: loaded.financials.grossPnl,
+      directCostAmount: loaded.inputs.swap.venue === 'FCBS' ? loaded.financials.feeAmount : 0,
       physicals: loaded.inputs.physicals,
       sgoRatio: loaded.inputs.sgoRatio,
     });
@@ -158,9 +174,11 @@ async function calculatePhysicals(client, physicalIds) {
       if (!VENUES.includes(swap.venue)) issues.push(`Salesforce posting is not configured for venue ${swap.venue || 'Not set'}.`);
       for (const issue of loaded.financials.issues || []) issues.push(issue);
       if (!VENUES.includes(swap.venue)) continue;
-      const row = venues.get(swap.venue) || { venue: swap.venue, grossPnl: 0, salesforceCost: 0, contributions: [] };
+      const row = venues.get(swap.venue) || { venue: swap.venue, grossPnl: 0, directCosts: 0, netPnl: 0, salesforceCost: 0, contributions: [] };
       row.grossPnl = roundMoney(row.grossPnl + allocation.grossPnl);
-      row.salesforceCost = roundMoney(-row.grossPnl);
+      row.directCosts = roundMoney(row.directCosts + allocation.directCosts);
+      row.netPnl = roundMoney(row.grossPnl - row.directCosts);
+      row.salesforceCost = roundMoney(-row.netPnl);
       row.contributions.push({
         paperHedgeId: swap.id,
         paperHedgeRevision: Number(swap.revision || 0),
@@ -170,6 +188,8 @@ async function calculatePhysicals(client, physicalIds) {
         allocationPercentage: Math.round(allocation.share * 100000000) / 1000000,
         physicalMidpointQuantity: allocation.weight,
         grossPnl: allocation.grossPnl,
+        directCosts: allocation.directCosts,
+        netPnl: allocation.netPnl,
         contractMonths: loaded.financials.months,
       });
       venues.set(swap.venue, row);
@@ -187,6 +207,8 @@ async function calculatePhysicals(client, physicalIds) {
           stemKey,
           venue: row.venue,
           grossPnl: row.grossPnl,
+          directCosts: row.directCosts,
+          netPnl: row.netPnl,
           salesforceCost: row.salesforceCost,
           contributions: row.contributions,
         }),
@@ -321,7 +343,9 @@ function decorateStatuses(calculations, resolved) {
         proposedUnitOfMeasure: displayUnitOfMeasure(resolved.config.unitOfMeasure),
         proposedQuantity: Number(resolved.config.quantity),
       };
-      const description = `FCOS final gross ${venueRow.venue} hedge P&L ${venueRow.grossPnl.toFixed(2)} USD allocated to ${calculation.stemKey}`.slice(0, 255);
+      const description = venueRow.venue === 'FCBS'
+        ? `FCOS final net FCBS hedge result ${venueRow.netPnl.toFixed(2)} USD (gross ${venueRow.grossPnl.toFixed(2)} less direct FCBS costs ${venueRow.directCosts.toFixed(2)}) allocated to ${calculation.stemKey}`.slice(0, 255)
+        : `FCOS final gross ${venueRow.venue} hedge P&L ${venueRow.grossPnl.toFixed(2)} USD allocated to ${calculation.stemKey}`.slice(0, 255);
       const row = { ...base, description };
       if (stemIssue || calculation.issues.length) return { ...row, state: 'waiting_final', reviewIssue: stemIssue || calculation.issues[0], currentSalesforceCost: mapping?.current_salesforce_cost == null ? null : Number(mapping.current_salesforce_cost), salesforceRecordId: mapping?.salesforce_record_id || null, salesforceRecordName: mapping?.salesforce_record_name || null };
       const recordsByKey = resolved.records.filter((record) => record?.[resolved.config.externalKeyField] === key);
@@ -380,6 +404,9 @@ function decorateStatuses(calculations, resolved) {
         supplierInvoiceId: managed?.[resolved.config.supplierInvoiceField] || null,
       };
     });
+    const proposedGrossPnl = roundMoney(venueRows.reduce((sum, row) => sum + row.grossPnl, 0));
+    const includedDirectCosts = roundMoney(venueRows.reduce((sum, row) => sum + row.directCosts, 0));
+    const proposedNetPnl = roundMoney(venueRows.reduce((sum, row) => sum + row.netPnl, 0));
     const proposedSalesforceCost = roundMoney(venueRows.reduce((sum, row) => sum + row.salesforceCost, 0));
     const currentValues = venueRows.map((row) => row.currentSalesforceCost).filter((value) => value != null);
     const currentSalesforceCost = currentValues.length === venueRows.length ? roundMoney(currentValues.reduce((sum, value) => sum + value, 0)) : null;
@@ -391,12 +418,15 @@ function decorateStatuses(calculations, resolved) {
       salesforceStemId: stem?.Id || null,
       salesforceStemName: stem?.Name || null,
       state,
+      proposedGrossPnl,
+      includedDirectCosts,
+      proposedNetPnl,
       proposedSalesforceCost,
       currentSalesforceCost,
       difference: currentSalesforceCost == null ? null : roundMoney(proposedSalesforceCost - currentSalesforceCost),
       venues: venueRows,
       issues: [...new Set([...calculation.issues, ...venueRows.map((row) => row.reviewIssue).filter(Boolean)])],
-      previewFingerprint: hedgeSalesforceFingerprint({ physicalTradeId: physical.id, physicalRevision: physical.revision, stemKey: calculation.stemKey, venues: venueRows.map((row) => ({ venue: row.venue, generation: row.generation, key: row.allocationKey, recordId: row.salesforceRecordId, modified: row.salesforceLastModifiedAt, state: row.state, cost: row.salesforceCost, supplierAccountId: row.supplierAccountId, currentSupplierAccountId: row.currentSupplierAccountId, mappingRevision: row.salesforceMappingRevision, fingerprint: row.calculationFingerprint })) }),
+      previewFingerprint: hedgeSalesforceFingerprint({ physicalTradeId: physical.id, physicalRevision: physical.revision, stemKey: calculation.stemKey, proposedGrossPnl, includedDirectCosts, proposedNetPnl, venues: venueRows.map((row) => ({ venue: row.venue, generation: row.generation, key: row.allocationKey, recordId: row.salesforceRecordId, modified: row.salesforceLastModifiedAt, state: row.state, grossPnl: row.grossPnl, directCosts: row.directCosts, netPnl: row.netPnl, cost: row.salesforceCost, supplierAccountId: row.supplierAccountId, currentSupplierAccountId: row.currentSupplierAccountId, mappingRevision: row.salesforceMappingRevision, fingerprint: row.calculationFingerprint })) }),
       calculatedAt: new Date().toISOString(),
     };
   });
@@ -413,7 +443,7 @@ async function writeHistory(client, profile, row, eventType, metadata = {}) {
     gross_pnl: row.grossPnl,
     salesforce_cost: row.salesforceCost,
     calculation_fingerprint: row.calculationFingerprint,
-    snapshot: { state: row.state, currentSalesforceCost: row.currentSalesforceCost, contributions: row.contributions, ...metadata },
+    snapshot: { state: row.state, currentSalesforceCost: row.currentSalesforceCost, directCosts: row.directCosts, netPnl: row.netPnl, contributions: row.contributions, ...metadata },
     actor_user_id: profile?.id || null,
     actor_email: profile?.email || 'system',
   });
@@ -443,7 +473,7 @@ async function persistStatuses(client, profile, statuses) {
         current_salesforce_cost: row.currentSalesforceCost,
         source_hedge_ids: row.contributions.map((item) => item.paperHedgeId),
         source_hedge_revisions: Object.fromEntries(row.contributions.map((item) => [item.paperHedgeId, item.paperHedgeRevision])),
-        calculation_snapshot: { physicalRevision: status.physicalRevision, contributions: row.contributions, description: row.description },
+        calculation_snapshot: { physicalRevision: status.physicalRevision, grossPnl: row.grossPnl, directCosts: row.directCosts, netPnl: row.netPnl, contributions: row.contributions, description: row.description },
         calculation_fingerprint: row.calculationFingerprint,
         mapping_revision: row.salesforceMappingRevision,
         sync_state: row.state,

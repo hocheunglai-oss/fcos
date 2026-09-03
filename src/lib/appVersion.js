@@ -4,6 +4,16 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.197',
+    releasedAt: '2026-09-03',
+    title: 'Include direct FCBS costs in hedge results',
+    changes: [
+      'Deducts the direct FCBS venue charge from FCBS gross Paper Hedge P&L before proposing the Salesforce SWAPS cost.',
+      'Keeps ICE on gross P&L because its broker, exchange, clearing, and settlement charges remain separately billed.',
+      'Shows gross P&L, FCBS direct costs, net hedge result, and the resulting Salesforce cost during review before confirmation.',
+    ],
+  },
+  {
     version: '2.0.196',
     releasedAt: '2026-09-03',
     title: 'Route FCBS hedge results correctly',

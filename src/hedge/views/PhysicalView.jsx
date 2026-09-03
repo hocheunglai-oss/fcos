@@ -477,25 +477,26 @@ export function PhysicalView({ data, settings, quickCreateSignal = 0, readOnly =
           )}
         </>}
       >
-        {salesforceDrawer?.loading && <p className="app-muted-copy">Calculating the final gross hedge result and checking Salesforce...</p>}
+        {salesforceDrawer?.loading && <p className="app-muted-copy">Calculating the final hedge result and checking Salesforce...</p>}
         {salesforceDrawer?.error && <InlineError error={salesforceDrawer.error} />}
         {salesforceDrawer?.result && <div className="app-callout app-callout--positive">Salesforce updated {salesforceDrawer.result.results?.length || 0} hedge-result row(s).</div>}
         {salesforceDrawer?.preview && <div className="app-stack">
           <section className="app-form-section">
             <div className="app-form-section__title">Physical Trade result</div>
-            <div className="app-kpi-grid app-kpi-grid--3">
-              <div className="app-kpi"><span>Final gross hedge P&amp;L</span><strong>{formatMoney(-salesforceDrawer.preview.proposedSalesforceCost, { signed: true, digits: 2 })}</strong></div>
+            <div className="app-kpi-grid app-kpi-grid--4">
+              <div className="app-kpi"><span>Final gross hedge P&amp;L</span><strong>{formatMoney(salesforceDrawer.preview.proposedGrossPnl, { signed: true, digits: 2 })}</strong></div>
+              <div className="app-kpi"><span>FCBS direct costs included</span><strong>{formatMoney(salesforceDrawer.preview.includedDirectCosts, { signed: false, digits: 2 })}</strong></div>
+              <div className="app-kpi"><span>Net hedge result</span><strong>{formatMoney(salesforceDrawer.preview.proposedNetPnl, { signed: true, digits: 2 })}</strong></div>
               <div className="app-kpi"><span>Proposed Salesforce cost</span><strong>{formatMoney(salesforceDrawer.preview.proposedSalesforceCost, { signed: true, digits: 2 })}</strong></div>
-              <div className="app-kpi"><span>Current Salesforce cost</span><strong>{salesforceDrawer.preview.currentSalesforceCost == null ? "Not added" : formatMoney(salesforceDrawer.preview.currentSalesforceCost, { signed: true, digits: 2 })}</strong></div>
             </div>
-            <p className="app-muted-copy">Broker, exchange, clearing and settlement fees are excluded. A hedge gain becomes a negative STEM cost; a hedge loss becomes a positive STEM cost.</p>
+            <p className="app-muted-copy">FCBS rows include the direct FCBS venue charge because FCBS bills it to us. ICE broker, exchange, clearing and settlement fees remain separate. A net hedge gain becomes a negative STEM cost; a net hedge loss becomes a positive STEM cost.</p>
           </section>
           {salesforceDrawer.preview.issues.length > 0 && <section className="app-callout app-callout--warning"><strong>Review required</strong><ul>{salesforceDrawer.preview.issues.map((issue) => <li key={issue}>{issue}</li>)}</ul></section>}
           <section className="app-form-section">
             <div className="app-form-section__title">Venue rows</div>
             <TableFrame>
               <table className="app-table app-table--compact">
-                <thead><tr><th>Venue / Supplier</th><th>Linked Paper Hedges</th><th>Gross P&amp;L</th><th>Proposed cost</th><th>Current cost</th><th>Difference</th><th>Salesforce UOM</th><th>Status</th></tr></thead>
+                <thead><tr><th>Venue / Supplier</th><th>Linked Paper Hedges</th><th>Gross P&amp;L</th><th>Direct costs</th><th>Net result</th><th>Proposed cost</th><th>Current cost</th><th>Difference</th><th>Salesforce UOM</th><th>Status</th></tr></thead>
                 <tbody>{salesforceDrawer.preview.venues.map((row) => {
                   const meta = salesforceStatusMeta(row.state);
                   return <tr key={row.venue}>
@@ -506,6 +507,8 @@ export function PhysicalView({ data, settings, quickCreateSignal = 0, readOnly =
                     </td>
                     <td><strong>{row.contributions.length}</strong><small>{row.contributions.map((item) => `${item.allocationPercentage.toFixed(4)}%`).join(" · ")}</small></td>
                     <td>{formatMoney(row.grossPnl, { signed: true, digits: 2 })}</td>
+                    <td>{row.venue === "FCBS" ? <><strong>{formatMoney(row.directCosts, { digits: 2 })}</strong><small>Billed directly by FCBS</small></> : "—"}</td>
+                    <td>{formatMoney(row.netPnl, { signed: true, digits: 2 })}</td>
                     <td>{formatMoney(row.salesforceCost, { signed: true, digits: 2 })}</td>
                     <td>{row.currentSalesforceCost == null ? "—" : formatMoney(row.currentSalesforceCost, { signed: true, digits: 2 })}</td>
                     <td>{row.currentSalesforceCost == null ? "—" : formatMoney(row.salesforceCost - row.currentSalesforceCost, { signed: true, digits: 2 })}</td>
