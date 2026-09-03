@@ -5,6 +5,7 @@ import { isFinalBuyerInvoice, resolveBuyerFinancialAmount } from './_buyerFinanc
 import { earliestEtaDate, summarizeBuyerPaymentEvidence } from '../src/lib/paymentCollectionEvidence.js';
 import { financialQuantityValue as financialQuantity, nativeFinancialQuantity } from './_financialQuantity.js';
 import { LEGACY_PAYMENT_DATA_LABEL, paymentDataReliabilityMetadata, paymentDataReliabilityState } from '../src/lib/paymentDataReliability.js';
+import { resolvedBuyerInvoiceDueDate } from './_buyerInvoiceDates.js';
 
 const DAY_MS = 86_400_000;
 const ZERO_TOLERANCE = 0.005;
@@ -258,7 +259,7 @@ function effectiveStemDate(stem) {
 }
 
 function dueDate(stem) {
-  return dateOnly(stem.Invoice_Due_Date__c || stem.Buyer_Pay_Term_Date__c || stem.Due_Date__c);
+  return dateOnly(resolvedBuyerInvoiceDueDate(stem));
 }
 
 function paymentState(invoice) {

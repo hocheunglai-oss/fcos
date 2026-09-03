@@ -456,6 +456,30 @@ test('uses live receivable balance for Full CIA and excludes future balances fro
   });
 });
 
+test('Account Insight respects the Salesforce due-date override flag', () => {
+  const calculated = buildDashboardAccountInsight(dataset({
+    stems: [stem(STEM_A, {
+      Delivery_Date__c: '2026-08-28',
+      Payment_Term__c: '30',
+      Due_Date_Override__c: false,
+      Invoice_Due_Date__c: '2026-10-15',
+      Not_Cancelled_STEM_Line_Item_Quantity__c: 2,
+    })],
+  }));
+  assert.equal(calculated.stems.rows[0].dueDate, '2026-09-26');
+
+  const overridden = buildDashboardAccountInsight(dataset({
+    stems: [stem(STEM_A, {
+      Delivery_Date__c: '2026-08-28',
+      Payment_Term__c: '30',
+      Due_Date_Override__c: true,
+      Invoice_Due_Date__c: '2026-10-15',
+      Not_Cancelled_STEM_Line_Item_Quantity__c: 2,
+    })],
+  }));
+  assert.equal(overridden.stems.rows[0].dueDate, '2026-10-15');
+});
+
 test('counts disputes only for the exact Account party outside GROUP scope', () => {
   const result = buildDashboardAccountInsight(dataset({
     workflows: {
