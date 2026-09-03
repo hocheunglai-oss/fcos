@@ -1,0 +1,305 @@
+<template>
+  <div style="overflow:scroll;">
+    <table class="slds-table slds-table_cell-buffer slds-table_bordered">
+      <thead>
+        <tr>
+          <th style="width: 10vw;">Product Extra</th>
+          <th>BDN Company</th>
+          <th>Quantity</th>
+          <th style="width: 1vw;">Is Quantity<br>Range</th>
+          <th>Quantity<br>(Max)</th>
+          <th>Unit<br>(Buy At)</th>
+          <th>Broker<br/>Commission</th>
+          <th style="width: 6vw;">UOM</th>
+          <th>Fixed</th>
+          <th>Min<br>(Buy At)</th>
+          <th>Lumpsum<br>(Buy At)</th>
+        </tr>
+      </thead>
+      <tbody>
+        <template for:each={_supplierBids} for:item="supplierBid">
+          <tr key={supplierBid.Id}>
+            <!--Type-->
+            <td>
+              <template if:true={supplierBid.Product__r}>
+                {supplierBid.Product__r.Name}
+              </template>
+              <template if:true={supplierBid.ProductName}>
+                {supplierBid.ProductName}
+              </template>
+            </td>
+            <td>
+              <lightning-input name="BDN_Company__c" type="text" value={supplierBid.BDN_Company__c}
+              onchange={handleChangeBDNCompany} variant="label-hidden" data-id={supplierBid.Id}></lightning-input>
+            </td>
+            <!--Quantity-->
+            <td>
+              <lightning-input name="Quantity__c" type="number" value={supplierBid.Quantity__c} step=".01"
+              onchange={handleChangeQuantity} variant="label-hidden" data-id={supplierBid.Id}></lightning-input>
+            </td>
+            <!-- Is Quantity Range -->
+            <td style="text-align: center;">
+              <lightning-input name="IsQuantityRange__c" type="checkbox" checked={supplierBid.IsQuantityRange__c}
+              onchange={handleChangeQuantity} variant="label-hidden" data-id={supplierBid.Id}></lightning-input>
+            </td>
+            <!--Quantity (Max)-->
+            <td>
+              <lightning-input name="Quantity_Range_Maximum__c" type="number" value={supplierBid.Quantity_Range_Maximum__c} step=".01"
+              onchange={handleChangeQuantity} variant="label-hidden" data-id={supplierBid.Id} disabled={supplierBid.isQuantityRangeDisabled}></lightning-input>
+            </td>
+            <!--Unit Cost (Buy At)-->
+            <td>
+              <lightning-input class="price-input" name="Supplier_Unit_Price__c" type="number" value={supplierBid.Supplier_Unit_Price__c} formatter="currency" step=".01"
+                onchange={handleChangePrice} variant="label-hidden" data-id={supplierBid.Id} required></lightning-input>
+            </td>
+            <td>
+              <lightning-input type="number" name="Supplier_Broker_Commission__c" value={supplierBid.Supplier_Broker_Commission__c} formatter="currency" step=".01"
+                onchange={handleChangePrice} variant="label-hidden" data-id={supplierBid.Id} disabled={supplierBid.disableComm}></lightning-input>
+            </td>
+            <!--Unit of Measure-->
+            <td>
+              {supplierBid.Unit_of_Measure__c}
+            </td>
+            <!--Fixed-->
+            <td style="text-align: center;">
+              <input type="checkbox" disabled />
+            </td>
+            <!--Minimum (Buy At)-->
+            <td>
+            </td>
+            <!--Lumpsum Cost (Buy At)-->
+            <td>
+            </td>
+          </tr>
+          <template if:true={supplierBid.transportationExtraCost}>
+            <tr key={supplierBid.transportationExtraCost}>
+              <!--Type-->
+              <td>
+                <lightning-combobox data-id={supplierBid.transportationExtraCost.uniqueIndex} name="product2Id" variant="label-hidden"
+                  value={supplierBid.transportationExtraCost.product2Id} options={transportationOptions}
+                  onchange={handleChangeTransportationProduct} data-supplier-bid-id={supplierBid.Id}></lightning-combobox>
+              </td>
+              <!-- BDN Company -->
+              <td></td>
+              <!--Quantity-->
+              <td>
+                <input type="number" name="quantity" placeholder="Quantity" min="1" step="1"
+                  class={supplierBid.transportationExtraCost.quantity.className} disabled={supplierBid.transportationExtraCost.fixedCost}
+                  value={supplierBid.transportationExtraCost.quantity.value} data-supplier-bid-id={supplierBid.Id} onchange={handleTransportationExtraCostChange} />
+              </td>
+              <!-- Is Quantity Range -->
+              <td>
+
+              </td>
+              <!--Quantity (Max)-->
+              <td>
+                <input type="number" name="quantityMaximum" placeholder="Max" min="1" step="1"
+                  class={supplierBid.transportationExtraCost.quantityMaximum.className}
+                  disabled={supplierBid.transportationExtraCost.isQuantityRangeDisabled}
+                  value={supplierBid.transportationExtraCost.quantityMaximum.value} data-supplier-bid-id={supplierBid.Id} onchange={handleTransportationExtraCostChange} />
+              </td>
+              <!--Unit Cost (Buy At)-->
+              <td>
+                <input type="number" name="unitCost" placeholder="Unit Cost (Buy At)"
+                  class={supplierBid.transportationExtraCost.unitCost.className} min="1" step="0.01"
+                  disabled={supplierBid.transportationExtraCost.unitCost.disabled} value={supplierBid.transportationExtraCost.unitCost.value}
+                  data-supplier-bid-id={supplierBid.Id} onchange={handleTransportationExtraCostChange} />
+              </td>
+              <!-- Broker Commission -->
+              <td></td>
+              <!--Unit of Measure-->
+              <td>
+                {supplierBid.transportationExtraCost.unitOfMeasure}
+              </td>
+              <!--Fixed-->
+              <td style="text-align: center;">
+                <input type="checkbox" name="fixedCost" checked={supplierBid.transportationExtraCost.fixedCost}
+                  disabled={supplierBid.transportationExtraCost.isTransportationTypeIncluded}
+                  data-supplier-bid-id={supplierBid.Id} onchange={handleTransportationExtraCostChange} />
+              </td>
+              <!--Minimum (Buy At)-->
+              <td>
+                <input type="number" name="minimumBuyAt" placeholder="Minimum (Buy At)"
+                  class={supplierBid.transportationExtraCost.minimumBuyAt.className} min="1" step="0.01"
+                  disabled={supplierBid.transportationExtraCost.minimumBuyAt.disabled}
+                  data-supplier-bid-id={supplierBid.Id} value={supplierBid.transportationExtraCost.minimumBuyAt.value} onchange={handleTransportationExtraCostChange} />
+              </td>
+              <!--Lumpsum Cost (Buy At)-->
+              <td>
+                <input type="number" name="lumpsumCostBuyAt" value={supplierBid.transportationExtraCost.lumpsumCostBuyAt.value}
+                  disabled={supplierBid.transportationExtraCost.isFixedCostDisabled} placeholder="Lumpsum Cost (Buy At)"
+                  class={supplierBid.transportationExtraCost.lumpsumCostBuyAt.className} min="1" step="0.01"
+                  data-supplier-bid-id={supplierBid.Id} onchange={handleTransportationExtraCostChange} />
+              </td>
+            </tr>
+          </template>
+          <template for:each={supplierBid.extraCosts} for:item="extraCost" for:index="index">
+            <tr key={extraCost.uniqueIndex} row={extraCost.uniqueIndex}>
+              <!--Type-->
+              <td>
+                <template if:true={extraCost.id}>
+                  {extraCost.product2Name}
+                </template>
+                <template if:false={extraCost.id}>
+                  <lightning-combobox data-id={extraCost.uniqueIndex} name="product2Id" variant="label-hidden"
+                    value={extraCost.product2Id.value} options={extraCostProducts} class={extraCost.product2Id.className}
+                    onchange={handleChange} data-supplier-bid-id={supplierBid.Id}></lightning-combobox>
+                  </template>
+              </td>
+              <!-- BDN Company -->
+              <td></td>
+              <!--Quantity-->
+              <td>
+                <input type="number" name="quantity" placeholder="Quantity" min="1" step="1"
+                  class={extraCost.quantity.className} disabled={extraCost.fixedCost} value={extraCost.quantity.value}
+                  data-id={extraCost.uniqueIndex} onchange={handleChange} data-supplier-bid-id={supplierBid.Id}/>
+              </td>
+              <!-- Is Quantity Range -->
+              <td>
+
+              </td>
+              <!--Quantity (Max)-->
+              <td>
+                <input type="number" name="quantityMaximum" placeholder="Max" min="1" step="1"
+                  class={extraCost.quantityMaximum.className} disabled={extraCost.isQuantityRangeDisabled}
+                  value={extraCost.quantityMaximum.value} data-id={extraCost.uniqueIndex} onchange={handleChange} data-supplier-bid-id={supplierBid.Id}/>
+              </td>
+              <!--Unit Cost (Buy At)-->
+              <td>
+                <input type="number" name="unitCost" placeholder="Unit Cost (Buy At)" min="1"
+                  step="0.01" disabled={extraCost.fixedCost} value={extraCost.unitCost.value} data-id={extraCost.uniqueIndex} class={extraCost.unitCost.className}
+                  onchange={handleChange} data-supplier-bid-id={supplierBid.Id}/>
+              </td>
+              <!-- Broker Commission -->
+              <td></td>
+              <!--Unit of Measure-->
+              <td>
+                <template if:true={unitOfMeasureOptions}>
+                  <lightning-combobox data-id={extraCost.uniqueIndex} name="unitOfMeasure" value={extraCost.unitOfMeasure}
+                    variant="label-hidden" options={unitOfMeasureOptions} onchange={handleChange} data-supplier-bid-id={supplierBid.Id}></lightning-combobox>
+                </template>
+              </td>
+              <!--Fixed-->
+              <td style="text-align: center;">
+                <input type="checkbox" name="fixedCost" checked={extraCost.fixedCost} data-id={extraCost.uniqueIndex}
+                  onchange={handleChange} data-supplier-bid-id={supplierBid.Id}/>
+              </td>
+              <!--Minimum (Buy At)-->
+              <td>
+                <input type="number" name="minimumBuyAt" placeholder="Minimum (Buy At)"
+                  class={extraCost.minimumBuyAt.className} min="1" step="0.01" disabled={extraCost.fixedCost}
+                  value={extraCost.minimumBuyAt.value} data-id={extraCost.uniqueIndex} onchange={handleChange} data-supplier-bid-id={supplierBid.Id}/>
+              </td>
+              <!--Lumpsum Cost (Buy At)-->
+              <td>
+                <input type="number" name="lumpsumCostBuyAt" value={extraCost.lumpsumCostBuyAt.value}
+                  data-id={extraCost.uniqueIndex} onchange={handleChange} placeholder="Lumpsum Cost (Buy At)"
+                  class={extraCost.lumpsumCostBuyAt.className} min="1" step="0.01" disabled={extraCost.isFixedCostDisabled} data-supplier-bid-id={supplierBid.Id}/>
+              </td>
+              <td>
+                <lightning-button onclick={removeExtraCostLine} data-id={extraCost.uniqueIndex} data-supplier-bid-id={supplierBid.Id} variant="base"
+                  title="Remove extra cost" icon-name="utility:close" class="slds-m-left_x-small"></lightning-button>
+              </td>
+            </tr>
+          </template>
+          <tr key={supplierBid.Id}>
+            <td colspan="8">
+              <lightning-button-icon size="x-small" icon-name="utility:add" variant="brand" alternative-text="Add Cost"
+                onclick={addNewTableLine} data-supplier-bid-id={supplierBid.Id}>
+              </lightning-button-icon>
+            </td>
+          </tr>
+        </template>
+      </tbody>
+    </table>
+    <table class="slds-table slds-table_cell-buffer slds-table_bordered">
+      <thead>
+        <tr>
+          <th style="width: 10vw;">STEM Extra</th>
+          <th>Quantity</th>
+          <th style="width: 1vw;">Is Quantity<br>Range</th>
+          <th>Quantity<br>(Max)</th>
+          <th>Unit<br>(Buy At)</th>
+          <th style="width: 6vw;">UOM</th>
+          <th>Fixed</th>
+          <th>Min<br>(Buy At)</th>
+          <th>Lumpsum<br>(Buy At)</th>
+        </tr>
+      </thead>
+      <tbody>
+        <template for:each={stemCharges} for:item="stemCharge" for:index="index">
+            <tr key={stemCharge.uniqueIndex} row={stemCharge.uniqueIndex}>
+              <!--Type-->
+              <td>
+                <template if:true={stemCharge.id}>
+                  {stemCharge.product2Name}
+                </template>
+                <template if:false={stemCharge.id}>
+                  <lightning-combobox data-id={stemCharge.uniqueIndex} name="product2Id" variant="label-hidden"
+                    value={stemCharge.product2Id.value} options={extraCostProducts} class={stemCharge.product2Id.className}
+                    onchange={handleChange}></lightning-combobox>
+                </template>
+              </td>
+              <!--Quantity-->
+              <td>
+                <input type="number" name="quantity" placeholder="Quantity" min="1" step="1"
+                  class={stemCharge.quantity.className} disabled={stemCharge.fixedCost} value={stemCharge.quantity.value}
+                  data-id={stemCharge.uniqueIndex} onchange={handleChange} />
+              </td>
+              <!-- Is Quantity Range -->
+              <td>
+
+              </td>
+              <!--Quantity (Max)-->
+              <td>
+                <input type="number" name="quantityMaximum" placeholder="Max" min="1" step="1"
+                  class={stemCharge.quantityMaximum.className} disabled={stemCharge.isQuantityRangeDisabled}
+                  value={stemCharge.quantityMaximum.value} data-id={stemCharge.uniqueIndex} onchange={handleChange} />
+              </td>
+              <!--Unit Cost (Buy At)-->
+              <td>
+                <input type="number" name="unitCost" placeholder="Unit Cost (Buy At)" min="1"
+                  step="0.01" disabled={stemCharge.fixedCost} value={stemCharge.unitCost.value} data-id={stemCharge.uniqueIndex} class={stemCharge.unitCost.className}
+                  onchange={handleChange} />
+              </td>
+              <!--Unit of Measure-->
+              <td>
+                <template if:true={unitOfMeasureOptions}>
+                  <lightning-combobox data-id={stemCharge.uniqueIndex} name="unitOfMeasure" value={stemCharge.unitOfMeasure}
+                    variant="label-hidden" options={unitOfMeasureOptions} onchange={handleChange}></lightning-combobox>
+                </template>
+              </td>
+              <!--Fixed-->
+              <td style="text-align: center;">
+                <input type="checkbox" name="fixedCost" checked={stemCharge.fixedCost} data-id={stemCharge.uniqueIndex}
+                  onchange={handleChange} />
+              </td>
+              <!--Minimum (Buy At)-->
+              <td>
+                <input type="number" name="minimumBuyAt" placeholder="Minimum (Buy At)"
+                  class={stemCharge.minimumBuyAt.className} min="1" step="0.01" disabled={stemCharge.fixedCost}
+                  value={stemCharge.minimumBuyAt.value} data-id={stemCharge.uniqueIndex} onchange={handleChange} />
+              </td>
+              <!--Lumpsum Cost (Buy At)-->
+              <td>
+                <input type="number" name="lumpsumCostBuyAt" value={stemCharge.lumpsumCostBuyAt.value}
+                  data-id={stemCharge.uniqueIndex} onchange={handleChange} placeholder="Lumpsum Cost (Buy At)"
+                  class={stemCharge.lumpsumCostBuyAt.className} min="1" step="0.01" disabled={stemCharge.isFixedCostDisabled}/>
+              </td>
+              <td>
+                <lightning-button onclick={removeExtraCostLine} data-id={stemCharge.uniqueIndex} variant="base"
+                  title="Remove extra cost" icon-name="utility:close" class="slds-m-left_x-small"></lightning-button>
+              </td>
+            </tr>
+        </template>
+        <tr>
+          <td colspan="8">
+            <lightning-button-icon size="x-small" icon-name="utility:add" variant="brand" alternative-text="Add Cost"
+              onclick={addNewStemCharge}>
+            </lightning-button-icon>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</template>
