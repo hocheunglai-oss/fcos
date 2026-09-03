@@ -6,7 +6,7 @@ public without sharing class HongKongBasicCallingBundleService {
     public static final String LIGHT_DUES = 'LIGHT DUES';
     public static final String ANCHORAGE_DUES = 'ANCHORAGE DUES';
     public static final Decimal PORT_CLEARANCE_RATE_HKD = 58;
-    public static final String PORT_CLEARANCE_VERSION = 'HK-PC-2026-01';
+    public static final String PORT_CLEARANCE_VERSION = 'HK-PC-2026-02';
 
     private static final List<String> SUPPORT_NAMES = new List<String>{
         AGENCY_FEE, PORT_CLEARANCE_EXTENSION, LIGHT_DUES, ANCHORAGE_DUES
@@ -237,10 +237,14 @@ public without sharing class HongKongBasicCallingBundleService {
         String supplierCurrency = supplierCostCurrency(supplier);
         if (supplierCurrency != null) row.Supplier_Cost_Input_Currency__c = supplierCurrency;
         if (productName == PORT_CLEARANCE_EXTENSION) {
-            row.Fixed__c = false;
+            // Quantity records the supplier-reported application count. The
+            // financial values are fixed totals because FCOS charges the buyer
+            // for one fewer application and Salesforce currency fields have
+            // only two decimal places.
+            row.Fixed__c = true;
             row.Supplier_Cost_Input_Currency__c = supplierCurrency == null ? 'HKD' : supplierCurrency;
             row.Supplier_Cost_Input_Value__c = row.Supplier_Cost_Input_Currency__c == 'HKD' ? PORT_CLEARANCE_RATE_HKD : null;
-            row.Unit_Price__c = 0;
+            row.Lumpsum_Price__c = 0;
             row.Line_Total_Buy__c = 0;
             row.Line_Total__c = 0;
             row.Port_Clearance_Rate_HKD__c = PORT_CLEARANCE_RATE_HKD;
@@ -284,14 +288,17 @@ public without sharing class HongKongBasicCallingBundleService {
         String supplierCurrency = supplierCostCurrency(supplier);
         if (supplierCurrency != null) row.Supplier_Cost_Input_Currency__c = supplierCurrency;
         if (productName == PORT_CLEARANCE_EXTENSION) {
-            row.Fixed__c = false;
             row.Port_Clearance_Rate_HKD__c = PORT_CLEARANCE_RATE_HKD;
-            row.Port_Clearance_Calculation_Version__c = PORT_CLEARANCE_VERSION;
             if (row.Quantity__c == null || row.Quantity__c < 1 || row.Quantity__c != row.Quantity__c.setScale(0)) row.Quantity__c = 1;
             row.Unit_of_Measure__c = '1.';
             row.Supplier_Cost_Input_Currency__c = supplierCurrency == null ? 'HKD' : supplierCurrency;
-            row.Supplier_Cost_Input_Value__c = row.Supplier_Cost_Input_Currency__c == 'HKD' ? PORT_CLEARANCE_RATE_HKD : null;
-            if (row.Unit_Price__c == null) row.Unit_Price__c = 0;
+            if (row.Supplier_Cost_Input_Value__c == null && row.Supplier_Cost_Input_Currency__c == 'HKD') {
+                row.Supplier_Cost_Input_Value__c = PORT_CLEARANCE_RATE_HKD * row.Quantity__c;
+            }
+            if (row.Fixed__c == true) {
+                row.Port_Clearance_Calculation_Version__c = PORT_CLEARANCE_VERSION;
+                if (row.Lumpsum_Price__c == null) row.Lumpsum_Price__c = 0;
+            }
         } else if (productName == AGENCY_FEE && supplier != null && supplier.Agency_Fee_USD__c != null) {
             String feeCurrency = agencyFeeCurrency(supplier);
             row.Supplier_Cost_Input_Currency__c = feeCurrency;

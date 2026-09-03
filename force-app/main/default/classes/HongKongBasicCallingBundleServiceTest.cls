@@ -94,7 +94,8 @@ private class HongKongBasicCallingBundleServiceTest {
         System.assertEquals('HKD', rows[1].Supplier_Cost_Input_Currency__c);
         System.assertEquals(Decimal.valueOf('58'), rows[1].Supplier_Cost_Input_Value__c);
         System.assertEquals(Decimal.valueOf('58'), rows[1].Port_Clearance_Rate_HKD__c);
-        System.assertEquals(Decimal.valueOf('0'), rows[1].Unit_Price__c);
+        System.assertEquals(true, rows[1].Fixed__c);
+        System.assertEquals(Decimal.valueOf('0'), rows[1].Lumpsum_Price__c);
         System.assertEquals('LIGHT DUES', rows[2].Product2Id__r.Name);
         System.assertEquals(Decimal.valueOf('0'), rows[2].Lumpsum_Price__c);
         System.assertEquals('ANCHORAGE DUES', rows[3].Product2Id__r.Name);
@@ -112,7 +113,7 @@ private class HongKongBasicCallingBundleServiceTest {
             WHERE Product2Id__r.Name = :HongKongBasicCallingBundleService.BASIC_CALLING_COST LIMIT 1
         ];
         STEM_Extra_Cost__c portClearance = [
-            SELECT Id, STEM__c, Quantity__c, Unit_Cost__c
+            SELECT Id, STEM__c, Quantity__c, Lumpsum_Cost__c
             FROM STEM_Extra_Cost__c
             WHERE Hong_Kong_Bundle_Managed__c = true AND Product2Id__r.Name = 'PORT CLEARANCE EXTENSION'
             LIMIT 1
@@ -122,7 +123,8 @@ private class HongKongBasicCallingBundleServiceTest {
             update new STEM_Extra_Cost__c(
                 Id = portClearance.Id,
                 Quantity__c = 3,
-                Unit_Cost__c = 7.40
+                Lumpsum_Cost__c = 22.19,
+                Supplier_Cost_Input_Value__c = 174
             );
         } finally {
             ContextManager.skipTriggers = false;
@@ -132,9 +134,11 @@ private class HongKongBasicCallingBundleServiceTest {
         HongKongBasicCallingBundleService.synchronizeStemIds(new Set<Id>{portClearance.STEM__c});
         Test.stopTest();
 
-        portClearance = [SELECT Quantity__c, Unit_Cost__c, Port_Clearance_Rate_HKD__c FROM STEM_Extra_Cost__c WHERE Id = :portClearance.Id];
+        portClearance = [SELECT Fixed__c, Quantity__c, Lumpsum_Cost__c, Supplier_Cost_Input_Value__c, Port_Clearance_Rate_HKD__c FROM STEM_Extra_Cost__c WHERE Id = :portClearance.Id];
+        System.assertEquals(true, portClearance.Fixed__c);
         System.assertEquals(Decimal.valueOf('3'), portClearance.Quantity__c);
-        System.assertEquals(Decimal.valueOf('7.40'), portClearance.Unit_Cost__c);
+        System.assertEquals(Decimal.valueOf('22.19'), portClearance.Lumpsum_Cost__c);
+        System.assertEquals(Decimal.valueOf('174'), portClearance.Supplier_Cost_Input_Value__c);
         System.assertEquals(Decimal.valueOf('58'), portClearance.Port_Clearance_Rate_HKD__c);
         System.assertEquals(4, managedRows().size());
         System.assertNotEquals(null, basic.Id);
@@ -249,8 +253,10 @@ private class HongKongBasicCallingBundleServiceTest {
             update new STEM_Extra_Cost__c(Id = generatedAgency.Id, Cancelled__c = true);
             update new STEM_Extra_Cost__c(
                 Id = portClearance.Id,
-                Unit_Cost__c = 7.40,
-                Unit_Price__c = 0,
+                Fixed__c = true,
+                Lumpsum_Cost__c = 7.40,
+                Lumpsum_Price__c = 0,
+                Supplier_Cost_Input_Value__c = 58,
                 Supplier_Cost_USD_HKD_Rate__c = 7.84,
                 Supplier_Cost_FX_Settings_Revision__c = 1
             );

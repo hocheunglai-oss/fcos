@@ -4,6 +4,16 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.195',
+    releasedAt: '2026-09-03',
+    title: 'Correct Port Clearance buyer defaults',
+    changes: [
+      'Calculates the Buyer Port Clearance Extension as the supplier-reported application count minus the first included application, at HKD 58 per additional application.',
+      'Updates the buyer USD total immediately when the Supplier Leg application count changes, using the reviewed company USD/HKD rate.',
+      'Stores exact supplier and buyer totals as fixed Salesforce charges to avoid cent rounding drift from per-unit pricing.',
+    ],
+  },
+  {
     version: '2.0.194',
     releasedAt: '2026-09-03',
     title: 'Clarify Physical Trade STEMs and Salesforce units',

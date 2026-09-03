@@ -8,11 +8,11 @@ import {
 
 test('port clearance uses supplier-reported application count and passes through only extras', () => {
   assert.deepEqual(
-    [1, 2, 3].map((applicationCount) => {
+    [1, 2, 3, 4].map((applicationCount) => {
       const result = calculatePortClearance({ applicationCount, usdHkdRate: 7.84 });
-      return [result.supplierHkd, result.buyerHkd];
+      return [result.supplierHkd, result.buyerHkd, result.buyerTotalUsd];
     }),
-    [[58, 0], [116, 58], [174, 116]],
+    [[58, 0, 0], [116, 58, 7.4], [174, 116, 14.8], [232, 174, 22.19]],
   );
 });
 
