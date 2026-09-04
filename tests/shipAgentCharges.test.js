@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFile } from 'node:fs/promises';
 import { variableChargeInternals } from '../api/_variableCharges.js';
+import { buyerInvoiceApprovalProjection } from '../api/_buyerInvoiceApproval.js';
 
 const repositoryFile = (path) => readFile(new URL(`../${path}`, import.meta.url), 'utf8');
 
@@ -81,13 +82,118 @@ test('status requires delivery to pass and reconfirmation after a live source ch
     source_fingerprint: 'current-fingerprint',
   }, '2026-08-08'), 'ready_for_invoice');
 
-  const invoicedChanged = liveCase({ invoices: [{ Id: 'a102x0000000001AAA', Name: '00001T-INV-1', Proforma__c: false }] });
+  const invoicedChanged = liveCase({ invoices: [{ Id: 'a102x0000000001AAA', Name: '00001T-INV-1', Proforma__c: false, File__c: '0692x0000000001AAA' }] });
   assert.equal(variableChargeInternals.deriveStatus(invoicedChanged, {
     workflow_status: 'completed',
     confirmation_status: 'confirmed',
     source_fingerprint: 'older-fingerprint',
     post_invoice_resolution: 'no_adjustment',
   }, '2026-08-08'), 'post_invoice_changes');
+});
+
+function snapshotInvoice(live, overrides = {}) {
+  const current = {
+    Id: 'a102x0000000001AAA', Name: '00001T-INV-1', STEM__c: live.stem.Id,
+    CurrencyIsoCode: 'USD', Amount__c: 5200, Invoice_Date__c: '2026-08-08',
+    Delivery_Date__c: live.stem.Delivery_Date__c, Invoice_Due_Date__c: '2026-09-07',
+    File__c: '0692x0000000001AAA', Proforma__c: false, Deprecated__c: false, Sent__c: false,
+    _buyerInvoiceDocument: { Id: '0692x0000000001AAA', LatestPublishedVersionId: '0682x0000000001AAA' },
+    ...overrides,
+  };
+  return { ...current, Buyer_Charge_Snapshot__c: JSON.stringify(buyerInvoiceApprovalProjection(current, live)) };
+}
+
+function approvedInvoiceLive(overrides = {}) {
+  const base = liveCase({
+    stem: { ...liveCase().stem, CurrencyIsoCode: 'USD', Account__c: '0012x0000000001AAA', Payment_Term__c: '30 days' },
+    allLineItems: [{
+      Id: 'a012x0000000001AAA', Buyer_Invoice__c: 'a102x0000000001AAA', Product__c: '01t2x0000000001AAA',
+      Product__r: { Name: 'VLSFO' }, Quantity__c: 10, Quantity_Delivered_Per_BDN__c: 10,
+      Quantity_Max__c: 10, Unit_of_Measure__c: 'MT', Unit_Sell_At__c: 520, Total_Price__c: 5200, CurrencyIsoCode: 'USD',
+    }],
+    allExtraCosts: [],
+  });
+  const issued = snapshotInvoice(base);
+  return { ...base, lineItems: base.allLineItems, invoices: [issued], ...overrides };
+}
+
+test('issued matching snapshots complete even after workflow invalidation, without being sent', () => {
+  const live = approvedInvoiceLive({
+    supplierRequirements: [{ supplierId: '0012x0000000001AAA', status: 'Invalidated', buyerChargeStatus: 'Invalidated', assignmentStatus: 'resolved' }],
+  });
+  assert.equal(variableChargeInternals.deriveStatus(live, { workflow_status: 'post_invoice_change' }, '2026-08-08'), 'completed');
+});
+
+test('issued snapshot mismatches detect buyer-price changes, cancellation or reassignment, and a replacement PDF', () => {
+  const live = approvedInvoiceLive();
+  assert.equal(variableChargeInternals.deriveStatus({
+    ...live, allLineItems: [{ ...live.allLineItems[0], Unit_Sell_At__c: 521 }],
+  }, {}, '2026-08-08'), 'post_invoice_changes');
+  assert.equal(variableChargeInternals.deriveStatus({ ...live, allLineItems: [] }, {}, '2026-08-08'), 'post_invoice_changes');
+  assert.equal(variableChargeInternals.deriveStatus({
+    ...live, allLineItems: [{ ...live.allLineItems[0], Buyer_Invoice__c: 'a102x0000000002AAA' }],
+  }, {}, '2026-08-08'), 'post_invoice_changes');
+  assert.equal(variableChargeInternals.deriveStatus({
+    ...live,
+    invoices: [{ ...live.invoices[0], _buyerInvoiceDocument: { Id: '0692x0000000001AAA', LatestPublishedVersionId: '0682x0000000002AAA' } }],
+  }, {}, '2026-08-08'), 'post_invoice_changes');
+});
+
+test('drafts and deprecated invoices do not create post-invoice work, while new unassigned charges remain reviewable', () => {
+  const live = approvedInvoiceLive();
+  assert.equal(variableChargeInternals.deriveStatus({
+    ...live, invoices: [{ ...live.invoices[0], Deprecated__c: true, Buyer_Charge_Snapshot__c: '{bad' }],
+    stem: { ...live.stem, Variable_Charges_Confirmed__c: true },
+  }, { confirmation_status: 'confirmed', source_fingerprint: live.fingerprint }, '2026-08-08'), 'ready_for_invoice');
+  assert.equal(variableChargeInternals.deriveStatus({
+    ...live, invoices: [{ ...live.invoices[0], File__c: '', Buyer_Charge_Snapshot__c: '{bad' }],
+    stem: { ...live.stem, Variable_Charges_Confirmed__c: true },
+  }, { confirmation_status: 'confirmed', source_fingerprint: live.fingerprint }, '2026-08-08'), 'ready_for_invoice');
+  assert.equal(variableChargeInternals.deriveStatus({
+    ...live,
+    hasVariableCharges: true,
+    allExtraCosts: [{ Id: 'a022x0000000001AAA', Buyer_Invoice__c: null }],
+    extraCosts: [{ Id: 'a022x0000000001AAA', Buyer_Invoice__c: null }],
+    supplierRequirements: [{ supplierId: '0012x0000000002AAA', status: 'Pending', assignmentStatus: 'missing_nomination' }],
+  }, {}, '2026-08-08'), 'needs_action');
+});
+
+test('a new unbilled buyer row is reviewed even when its older supplier stage is invalidated', () => {
+  const live = approvedInvoiceLive({
+    stem: { ...approvedInvoiceLive().stem, Variable_Charges_Confirmed__c: true },
+    lineItems: [
+      ...approvedInvoiceLive().lineItems,
+      { Id: 'a012x0000000002AAA', Buyer_Invoice__c: null, Unit_Sell_At__c: 10, Total_Price__c: 100 },
+    ],
+    supplierRequirements: [{ supplierId: '0012x0000000001AAA', status: 'Invalidated', assignmentStatus: 'resolved' }],
+  });
+  assert.equal(variableChargeInternals.deriveStatus(live, {
+    confirmation_status: 'confirmed', source_fingerprint: 'current-fingerprint',
+  }, '2026-08-08'), 'ready_for_invoice');
+  assert.equal(variableChargeInternals.deriveStatus({
+    ...live, stem: { ...live.stem, Variable_Charges_Confirmed__c: false },
+  }, { confirmation_status: 'confirmed', source_fingerprint: 'current-fingerprint' }, '2026-08-08'), 'needs_action');
+});
+
+test('a legacy invoice clears a stale post-invoice status only when current approval is confirmed', () => {
+  const live = liveCase({
+    stem: { ...liveCase().stem, Variable_Charges_Confirmed__c: true },
+    invoices: [{ Id: 'a102x0000000001AAA', Name: '00001T-INV-1', Proforma__c: false, File__c: '0692x0000000001AAA' }],
+  });
+  assert.equal(variableChargeInternals.deriveStatus(live, {
+    workflow_status: 'post_invoice_change', confirmation_status: 'confirmed', source_fingerprint: 'current-fingerprint',
+  }, '2026-08-08'), 'completed');
+  assert.equal(variableChargeInternals.deriveStatus({ ...live, stem: { ...live.stem, Variable_Charges_Confirmed__c: false } }, {
+    workflow_status: 'post_invoice_change', post_invoice_resolution: 'no_adjustment', confirmation_status: 'confirmed', source_fingerprint: 'current-fingerprint',
+  }, '2026-08-08'), 'post_invoice_changes');
+  assert.equal(variableChargeInternals.deriveStatus({
+    ...live, hasVariableCharges: false, stem: { ...live.stem, Variable_Charges_Confirmed__c: false },
+  }, { post_invoice_resolution: 'no_adjustment', confirmation_status: 'confirmed', source_fingerprint: 'current-fingerprint' }, '2026-08-08'), 'completed');
+  assert.equal(variableChargeInternals.deriveStatus({
+    ...live,
+    invoices: [],
+    supplierRequirements: [{ supplierId: '0012x0000000001AAA', status: 'Invalidated', assignmentStatus: 'resolved' }],
+  }, { confirmation_status: 'confirmed', source_fingerprint: 'current-fingerprint' }, '2026-08-08'), 'needs_action');
 });
 
 test('extra-cost-only readiness uses the latest normalized schedule date and has no delivery dependency', () => {
@@ -179,6 +285,61 @@ test('live fingerprint detects financial changes but ignores normal buyer-invoic
     ...base,
     allLineItems: [...base.allLineItems, { Id: 'a012x0000000002AAA', LastModifiedDate: '2026-08-02T00:00:00.000Z' }],
   }), original);
+});
+
+test('loader-shaped currency records preserve legacy workflow fingerprints while retaining invoice currency source', () => {
+  const raw = {
+    stem: { Id: 'a002x0000000001AAA', CurrencyIsoCode: 'HKD', Delivery_Date__c: '2026-08-01' },
+    accounts: [], nominations: [], supplierRequirements: [], supplierStages: [],
+    lineItems: [{ Id: 'a012x0000000001AAA', CurrencyIsoCode: 'HKD', Buyer_Invoice__c: 'a102x0000000001AAA' }],
+    extraCosts: [{ Id: 'a022x0000000001AAA', CurrencyIsoCode: 'HKD', Buyer_Invoice__c: 'a102x0000000001AAA' }],
+    allLineItems: [{ Id: 'a012x0000000001AAA', CurrencyIsoCode: 'HKD', Buyer_Invoice__c: 'a102x0000000001AAA' }],
+    allExtraCosts: [{ Id: 'a022x0000000001AAA', CurrencyIsoCode: 'HKD', Buyer_Invoice__c: 'a102x0000000001AAA' }],
+  };
+  const separated = {
+    ...raw,
+    ...variableChargeInternals.separateInvoiceSource(raw),
+  };
+  const legacy = {
+    ...raw,
+    stem: { Id: raw.stem.Id, Delivery_Date__c: raw.stem.Delivery_Date__c },
+    lineItems: raw.lineItems.map(({ CurrencyIsoCode, ...row }) => row),
+    extraCosts: raw.extraCosts.map(({ CurrencyIsoCode, ...row }) => row),
+    allLineItems: raw.allLineItems.map(({ CurrencyIsoCode, ...row }) => row),
+    allExtraCosts: raw.allExtraCosts.map(({ CurrencyIsoCode, ...row }) => row),
+  };
+  assert.equal(variableChargeInternals.liveFingerprint(separated), variableChargeInternals.liveFingerprint(legacy));
+  assert.equal(variableChargeInternals.buyerAggregateFingerprint(separated), variableChargeInternals.buyerAggregateFingerprint(legacy));
+  assert.equal(separated.invoiceSource.stem.CurrencyIsoCode, 'HKD');
+  assert.equal(separated.invoiceSource.allLineItems[0].CurrencyIsoCode, 'HKD');
+});
+
+test('currency SELECTs follow each Salesforce object describe', () => {
+  const withoutCurrency = variableChargeInternals.buyerInvoiceCurrencySupport({
+    Invoice__c: { fields: [{ name: 'Id' }] },
+    STEM__c: { fields: [{ name: 'Id' }] },
+    STEM_Line_Item__c: { fields: [{ name: 'Id' }] },
+    STEM_Extra_Cost__c: { fields: [{ name: 'Id' }] },
+  });
+  assert.deepEqual(withoutCurrency, {
+    Invoice__c: false,
+    STEM__c: false,
+    STEM_Line_Item__c: false,
+    STEM_Extra_Cost__c: false,
+  });
+  for (const objectName of Object.keys(withoutCurrency)) {
+    assert.equal(variableChargeInternals.optionalBuyerInvoiceCurrencyField(withoutCurrency, objectName), '');
+  }
+
+  const withCurrency = variableChargeInternals.buyerInvoiceCurrencySupport({
+    Invoice__c: { fields: [{ name: 'CurrencyIsoCode' }] },
+    STEM__c: { fields: [{ name: 'CurrencyIsoCode' }] },
+    STEM_Line_Item__c: { fields: [{ name: 'CurrencyIsoCode' }] },
+    STEM_Extra_Cost__c: { fields: [{ name: 'CurrencyIsoCode' }] },
+  });
+  for (const objectName of Object.keys(withCurrency)) {
+    assert.equal(variableChargeInternals.optionalBuyerInvoiceCurrencyField(withCurrency, objectName), ', CurrencyIsoCode');
+  }
 });
 
 test('paired fingerprints isolate cost-only and buyer-only changes while sharing identity fields', () => {
@@ -364,13 +525,15 @@ test('FCOS handlers are explicit, fail-closed, atomic, and do not send email', a
   const liveLoader = service.slice(service.indexOf('async function loadLiveCases'), service.indexOf('function effectiveAssignee'));
   const lineItemQuery = liveLoader.match(/SELECT Id, STEM__c, Original_Supplier__c[^`]+FROM STEM_Line_Item__c/)?.[0] || '';
   assert.ok(lineItemQuery);
-  assert.doesNotMatch(lineItemQuery, /CurrencyIsoCode/);
+  assert.match(lineItemQuery, /optionalBuyerInvoiceCurrencyField\(currencySupport, 'STEM_Line_Item__c'\)/);
   const extraCostQuery = liveLoader.match(/SELECT Id, STEM__c, STEM_Line_Item__c, Supplier__c[^`]+FROM STEM_Extra_Cost__c/)?.[0] || '';
   assert.ok(extraCostQuery);
-  assert.doesNotMatch(extraCostQuery, /CurrencyIsoCode/);
+  assert.match(extraCostQuery, /optionalBuyerInvoiceCurrencyField\(currencySupport, 'STEM_Extra_Cost__c'\)/);
   const stemQuery = liveLoader.match(/SELECT Id, Name, KeyStem__c[^`]+FROM STEM__c/)?.[0] || '';
   assert.ok(stemQuery);
-  assert.doesNotMatch(stemQuery, /CurrencyIsoCode/);
+  assert.match(stemQuery, /optionalBuyerInvoiceCurrencyField\(currencySupport, 'STEM__c'\)/);
+  assert.match(liveLoader, /optionalBuyerInvoiceCurrencyField\(currencySupport, 'Invoice__c'\)/);
+  assert.match(service, /sobjects\/\$\{encodeURIComponent\(objectName\)\}\/describe\//);
   assert.match(liveLoader, /Account__r\.Name/);
   assert.match(liveLoader, /Vessel__r\.Name/);
   assert.match(liveLoader, /Port__r\.Name/);

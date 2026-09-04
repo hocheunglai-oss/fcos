@@ -1,6 +1,12 @@
 import { createHash } from 'node:crypto';
 import { requireExternalActionGate } from './_externalActionGates.js';
 import { getApiVersion, getInstanceUrl, sfCompositeQueries, sfQuery, sfRequest } from './_salesforce.js';
+import { getOrLoadRuntimeCache } from './_runtimeCache.js';
+import {
+  buyerInvoiceSnapshotComparison,
+  isFinalBuyerInvoice,
+  isIssuedFinalBuyerInvoice,
+} from './_buyerInvoiceApproval.js';
 import {
   ANCHORAGE_BUYER_CALCULATION_VERSION,
   ANCHORAGE_BUYER_RATE_USD_PER_NRT_HOUR,
@@ -52,6 +58,12 @@ const VARIABLE_CHARGE_SCHEDULE_FIELDS = [
 ];
 const SIMPLE_QUEUE_NAMES = new Set(['my_tasks', 'waiting', 'ready_for_invoice', 'completed', 'all_cases']);
 const SUPPLIER_REVIEW_OUTCOMES = new Set(['correct', 'changed', 'cancelled']);
+const BUYER_INVOICE_CURRENCY_OBJECTS = [
+  'Invoice__c',
+  'STEM__c',
+  'STEM_Line_Item__c',
+  'STEM_Extra_Cost__c',
+];
 
 function pairedWorkflowEnabled() {
   return String(process.env.VARIABLE_CHARGE_PAIRED_WORKFLOW_ENABLED || '').trim().toLowerCase() === 'true';
@@ -339,7 +351,7 @@ function isVariableChargeAccount(account) {
 }
 
 function finalInvoice(invoice) {
-  return invoice?.Proforma__c !== true && !/(?:^|-)CN(?:-|$)/i.test(text(invoice?.Name, 255));
+  return isFinalBuyerInvoice(invoice);
 }
 
 function lineFingerprint(row) {
@@ -698,12 +710,63 @@ function compareVariableChargeRows(a, b) {
   return aName.localeCompare(bName, 'en', { sensitivity: 'base' }) || text(a?.Id, 18).localeCompare(text(b?.Id, 18));
 }
 
+function withoutWorkflowCurrency(record) {
+  const { CurrencyIsoCode: _invoiceCurrency, ...workflowRecord } = record || {};
+  return workflowRecord;
+}
+
+// The existing Variable Charges loader did not select currency.
+// Preserve that historical workflow shape while retaining the raw Salesforce rows
+// required by the immutable Buyer Invoice approval projection.
+function separateInvoiceSource({ stem, lineItems, extraCosts, allLineItems, allExtraCosts }) {
+  return {
+    stem: withoutWorkflowCurrency(stem),
+    lineItems: (lineItems || []).map(withoutWorkflowCurrency),
+    extraCosts: (extraCosts || []).map(withoutWorkflowCurrency),
+    allLineItems: (allLineItems || []).map(withoutWorkflowCurrency),
+    allExtraCosts: (allExtraCosts || []).map(withoutWorkflowCurrency),
+    invoiceSource: { stem, allLineItems: allLineItems || [], allExtraCosts: allExtraCosts || [] },
+  };
+}
+
+function buyerInvoiceCurrencySupport(describes) {
+  return Object.fromEntries(BUYER_INVOICE_CURRENCY_OBJECTS.map((objectName) => [
+    objectName,
+    (describes?.[objectName]?.fields || []).some((field) => field?.name === 'CurrencyIsoCode'),
+  ]));
+}
+
+function optionalBuyerInvoiceCurrencyField(currencySupport, objectName) {
+  return currencySupport?.[objectName] ? ', CurrencyIsoCode' : '';
+}
+
+async function loadBuyerInvoiceCurrencySupport() {
+  const cached = await getOrLoadRuntimeCache({
+    namespace: 'salesforce-variable-charge-invoice-currency-schema',
+    version: '1',
+    accessScope: 'schema',
+    apiVersion: `${getApiVersion()}@${getInstanceUrl()}`,
+    payload: { objects: BUYER_INVOICE_CURRENCY_OBJECTS },
+    ttlSeconds: 5 * 60,
+    tags: ['salesforce:schema', 'salesforce:invoice', 'salesforce:stem', 'salesforce:line-item', 'salesforce:extra-cost'],
+    loader: async () => {
+      const entries = await Promise.all(BUYER_INVOICE_CURRENCY_OBJECTS.map(async (objectName) => [
+        objectName,
+        await sfRequest(`/sobjects/${encodeURIComponent(objectName)}/describe/`, { readOnly: true }),
+      ]));
+      return buyerInvoiceCurrencySupport(Object.fromEntries(entries));
+    },
+  });
+  return cached.value;
+}
+
 async function loadLiveCases({ client, stemIds = null, stemAccessCondition = null }) {
   const requested = stemIds ? [...new Set(stemIds.filter((id) => SALESFORCE_ID.test(String(id || ''))))] : null;
   if (stemIds && requested.length !== stemIds.length) throw httpError('A valid Salesforce STEM is required.', 400, 'INVALID_STEM_ID');
+  const currencySupport = await loadBuyerInvoiceCurrencySupport();
   const [allLineItems, allExtraCosts] = await Promise.all([
-    queryAll(`SELECT Id, STEM__c, Original_Supplier__c, Product__c, Product__r.Name, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_Max__c, Unit_of_Measure__c, Unit_Sell_At__c, Unit_Buy_At__c, Total_Cost__c, Total_Price__c, Commission_Cost__c, Payment_Term__c, Buyer_Invoice__c, Supplier_Invoice__c, Cancelled__c, LastModifiedDate FROM STEM_Line_Item__c WHERE Cancelled__c = false AND STEM__r.CreatedDate >= ${VARIABLE_CHARGE_STEM_CREATED_FROM}${candidateWhere(requested)}`),
-    queryAll(`SELECT Id, STEM__c, STEM_Line_Item__c, Supplier__c, Supplier_Invoice__c, Product2Id__c, Product2Id__r.Name, Product2Id__r.IsActive, Description__c, RecordTypeId, RecordType.Name, Fixed__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_Range_Max__c, Unit_of_Measure__c, Unit_Cost__c, Unit_Price__c, Lumpsum_Cost__c, Lumpsum_Price__c, Line_Total_Buy__c, Line_Total__c, Payment_Term__c, Buyer_Invoice__c, Cancelled__c, Supplier_Cost_Input_Currency__c, Supplier_Cost_Input_Value__c, Supplier_Cost_USD_HKD_Rate__c, Supplier_Cost_FX_Settings_Revision__c, Anchorage_Arrival__c, Anchorage_Departure__c, Anchorage_Location__c, Anchorage_Dues_Allocation_HKD__c, Anchorage_NRT_Snapshot__c, Anchorage_USD_HKD_Rate__c, Anchorage_FX_Settings_Revision__c, Anchorage_Calculation_Version__c, Anchorage_Buyer_Default_USD__c, Anchorage_Buyer_Rate_USD__c, Anchorage_Buyer_Calc_Version__c, Light_Dues_Entry_Date__c, Light_Dues_Category__c, Light_Dues_NRT_Snapshot__c, Light_Dues_Rate_HKD__c, Light_Dues_Amount_HKD__c, Light_Dues_USD_HKD_Rate__c, Light_Dues_FX_Settings_Revision__c, Light_Dues_Calculation_Version__c, Hong_Kong_Bundle_Key__c, Hong_Kong_Bundle_Managed__c, Hong_Kong_Bundle_Sequence__c, Hong_Kong_Bundle_Source__c, Port_Clearance_Rate_HKD__c, Port_Clearance_Calculation_Version__c, LastModifiedDate FROM STEM_Extra_Cost__c WHERE Cancelled__c = false AND Supplier__c != null AND STEM__r.CreatedDate >= ${VARIABLE_CHARGE_STEM_CREATED_FROM}${candidateWhere(requested)}`),
+    queryAll(`SELECT Id, STEM__c, Original_Supplier__c, Product__c, Product__r.Name, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_Max__c, Unit_of_Measure__c, Unit_Sell_At__c, Unit_Buy_At__c, Total_Cost__c, Total_Price__c${optionalBuyerInvoiceCurrencyField(currencySupport, 'STEM_Line_Item__c')}, Commission_Cost__c, Payment_Term__c, Buyer_Invoice__c, Supplier_Invoice__c, Cancelled__c, LastModifiedDate FROM STEM_Line_Item__c WHERE Cancelled__c = false AND STEM__r.CreatedDate >= ${VARIABLE_CHARGE_STEM_CREATED_FROM}${candidateWhere(requested)}`),
+    queryAll(`SELECT Id, STEM__c, STEM_Line_Item__c, Supplier__c, Supplier_Invoice__c, Product2Id__c, Product2Id__r.Name, Product2Id__r.IsActive, Description__c, RecordTypeId, RecordType.Name, Fixed__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_Range_Max__c, Unit_of_Measure__c, Unit_Cost__c, Unit_Price__c, Lumpsum_Cost__c, Lumpsum_Price__c, Line_Total_Buy__c, Line_Total__c${optionalBuyerInvoiceCurrencyField(currencySupport, 'STEM_Extra_Cost__c')}, Payment_Term__c, Buyer_Invoice__c, Cancelled__c, Supplier_Cost_Input_Currency__c, Supplier_Cost_Input_Value__c, Supplier_Cost_USD_HKD_Rate__c, Supplier_Cost_FX_Settings_Revision__c, Anchorage_Arrival__c, Anchorage_Departure__c, Anchorage_Location__c, Anchorage_Dues_Allocation_HKD__c, Anchorage_NRT_Snapshot__c, Anchorage_USD_HKD_Rate__c, Anchorage_FX_Settings_Revision__c, Anchorage_Calculation_Version__c, Anchorage_Buyer_Default_USD__c, Anchorage_Buyer_Rate_USD__c, Anchorage_Buyer_Calc_Version__c, Light_Dues_Entry_Date__c, Light_Dues_Category__c, Light_Dues_NRT_Snapshot__c, Light_Dues_Rate_HKD__c, Light_Dues_Amount_HKD__c, Light_Dues_USD_HKD_Rate__c, Light_Dues_FX_Settings_Revision__c, Light_Dues_Calculation_Version__c, Hong_Kong_Bundle_Key__c, Hong_Kong_Bundle_Managed__c, Hong_Kong_Bundle_Sequence__c, Hong_Kong_Bundle_Source__c, Port_Clearance_Rate_HKD__c, Port_Clearance_Calculation_Version__c, LastModifiedDate FROM STEM_Extra_Cost__c WHERE Cancelled__c = false AND STEM__r.CreatedDate >= ${VARIABLE_CHARGE_STEM_CREATED_FROM}${candidateWhere(requested)}`),
   ]);
   const supplierStages = await queryAll(`SELECT Id, STEM__c, Supplier__c, Manual_Review_Required__c, Supplier_Status__c, Verified_At__c, Verified_By_Email__c, Reviewed_Source_Fingerprint__c, Revision__c, Buyer_Charge_Status__c, Buyer_Charge_Reviewed_Source_Fingerprint__c, Buyer_Charge_Confirmed_At__c, Buyer_Charge_Confirmed_By_Email__c, Buyer_Charge_Revision__c, LastModifiedDate FROM STEM_Variable_Charge_Supplier__c WHERE STEM__r.CreatedDate >= ${VARIABLE_CHARGE_STEM_CREATED_FROM}${candidateWhere(requested)}`);
   const supplierIds = [...new Set([
@@ -722,27 +785,40 @@ async function loadLiveCases({ client, stemIds = null, stemAccessCondition = nul
   const stemRows = [];
   for (const group of chunks(targetStemIds)) {
     const accessClause = stemAccessCondition ? ` AND (${stemAccessCondition})` : '';
-    stemRows.push(...await queryAll(`SELECT Id, Name, KeyStem__c, Account__c, Account__r.Name, Vessel__c, Vessel__r.Name, Vessel__r.NRT__c, Vessel__r.LastModifiedDate, Port__c, Port__r.Name, Port__r.Country__c, CreatedDate, Delivery_Date__c, ETA_Start_Date__c, ETA_End_Date__c, ETB_Start_Date__c, ETB_End_Date__c, ETCD_Start_Date__c, ETCD_End_Date__c, ETD_Start_Date__c, ETD_End_Date__c, Payment_Term__c, Total__c, Costs_Total__c, Total_Invoice_Amount__c, Receivable_Balance__c, Payable_Balance__c, Variable_Charges_Confirmed__c, LastModifiedDate FROM STEM__c WHERE Id IN (${quotedIds(group)}) AND CreatedDate >= ${VARIABLE_CHARGE_STEM_CREATED_FROM}${accessClause}`));
+    stemRows.push(...await queryAll(`SELECT Id, Name, KeyStem__c, Account__c, Account__r.Name, Vessel__c, Vessel__r.Name, Vessel__r.NRT__c, Vessel__r.LastModifiedDate, Port__c, Port__r.Name, Port__r.Country__c, CreatedDate, Delivery_Date__c, ETA_Start_Date__c, ETA_End_Date__c, ETB_Start_Date__c, ETB_End_Date__c, ETCD_Start_Date__c, ETCD_End_Date__c, ETD_Start_Date__c, ETD_End_Date__c, Payment_Term__c${optionalBuyerInvoiceCurrencyField(currencySupport, 'STEM__c')}, Total__c, Costs_Total__c, Total_Invoice_Amount__c, Receivable_Balance__c, Payable_Balance__c, Variable_Charges_Confirmed__c, LastModifiedDate FROM STEM__c WHERE Id IN (${quotedIds(group)}) AND CreatedDate >= ${VARIABLE_CHARGE_STEM_CREATED_FROM}${accessClause}`));
   }
   const accessibleStemIds = new Set(stemRows.map((row) => row.Id));
   const [nominations, supplierNominations, invoices, supplierInvoices] = await Promise.all([
     accessibleStemIds.size ? queryAll(`SELECT Id, STEM__c, Buyer_Supplier_Trader__c, BT_ST_Email_Address__c, Buyer_Confirmation__c, LastModifiedDate FROM Nomination__c WHERE STEM__c IN (${quotedIds([...accessibleStemIds])}) AND Deprecated__c = false AND RecordType.DeveloperName = 'Buyer'`) : [],
     accessibleStemIds.size ? queryAll(`SELECT Id, STEM__c, Account__c, Buyer_Supplier_Trader__c, BT_ST_Email_Address__c, LastModifiedDate FROM Nomination__c WHERE STEM__c IN (${quotedIds([...accessibleStemIds])}) AND Deprecated__c = false AND RecordType.DeveloperName = 'Supplier'`) : [],
-    accessibleStemIds.size ? queryAll(`SELECT Id, Name, STEM__c, Proforma__c, Sent__c, File__c, LastModifiedDate FROM Invoice__c WHERE STEM__c IN (${quotedIds([...accessibleStemIds])})`) : [],
+    accessibleStemIds.size ? queryAll(`SELECT Id, Name, STEM__c${optionalBuyerInvoiceCurrencyField(currencySupport, 'Invoice__c')}, Amount__c, Invoice_Date__c, Delivery_Date__c, Invoice_Due_Date__c, Proforma__c, Deprecated__c, Sent__c, File__c, Buyer_Charge_Snapshot__c, LastModifiedDate FROM Invoice__c WHERE STEM__c IN (${quotedIds([...accessibleStemIds])})`) : [],
     accessibleStemIds.size ? queryAll(`SELECT Id, STEM__c, Supplier__c, LastModifiedDate FROM Supplier_Invoice__c WHERE STEM__c IN (${quotedIds([...accessibleStemIds])})`) : [],
   ]);
+  const documentIds = [...new Set(invoices
+    .filter((invoice) => isIssuedFinalBuyerInvoice(invoice) && text(invoice.Buyer_Charge_Snapshot__c))
+    .map((invoice) => String(invoice.File__c || '').trim().split('/').at(-1))
+    .filter((id) => SALESFORCE_ID.test(id)))];
+  const documents = await queryIds('ContentDocument', 'Id, LatestPublishedVersionId', documentIds);
+  const documentsById = new Map(documents.map((document) => [document.Id, document]));
   const result = stemRows.map((stem) => {
     const stemLineItems = allLineItems.filter((row) => row.STEM__c === stem.Id).sort(compareVariableChargeRows);
     const lineItems = relevantLines.filter((row) => row.STEM__c === stem.Id).sort(compareVariableChargeRows);
     const extraCosts = relevantExtras.filter((row) => row.STEM__c === stem.Id).sort(compareVariableChargeRows);
+    const stemExtraCosts = allExtraCosts.filter((row) => row.STEM__c === stem.Id).sort(compareVariableChargeRows);
+    const workflowSource = separateInvoiceSource({
+      stem, lineItems, extraCosts, allLineItems: stemLineItems, allExtraCosts: stemExtraCosts,
+    });
     const usedAccountIds = new Set([...lineItems.map((row) => row.Original_Supplier__c), ...extraCosts.map((row) => row.Supplier__c)]);
     const entry = {
-      stem, lineItems, extraCosts, allLineItems: stemLineItems,
+      ...workflowSource,
       accounts: [...usedAccountIds].map((id) => accountMap.get(id)).filter(Boolean),
       nominations: nominations.filter((row) => row.STEM__c === stem.Id),
       supplierNominations: supplierNominations.filter((row) => row.STEM__c === stem.Id && usedAccountIds.has(row.Account__c)),
       supplierStages: supplierStages.filter((row) => row.STEM__c === stem.Id && usedAccountIds.has(row.Supplier__c)),
-      invoices: invoices.filter((row) => row.STEM__c === stem.Id),
+      invoices: invoices.filter((row) => row.STEM__c === stem.Id).map((row) => ({
+        ...row,
+        _buyerInvoiceDocument: documentsById.get(String(row.File__c || '').trim().split('/').at(-1)) || null,
+      })),
       supplierInvoices: supplierInvoices.filter((row) => row.STEM__c === stem.Id && usedAccountIds.has(row.Supplier__c)),
       hasVariableCharges: lineItems.length > 0 || extraCosts.length > 0,
       hasShipAgent: lineItems.length > 0 || extraCosts.length > 0,
@@ -794,28 +870,67 @@ function capabilitiesFor(row, profile, gm) {
   };
 }
 
+function unbilledBuyerChargeRows(live) {
+  const requiresInvoice = (row, fields) => {
+    if (row?.Buyer_Invoice__c) return false;
+    const amounts = fields.map((field) => finiteAmount(row?.[field])).filter((value) => value != null);
+    // A deliberate zero is an excluded charge. With no buyer value at all,
+    // the new row is still undecided and needs a buyer review.
+    return amounts.length === 0 || amounts.some((value) => value !== 0);
+  };
+  return [
+    ...(live.lineItems || []).filter((row) => requiresInvoice(row, ['Total_Price__c', 'Unit_Sell_At__c'])),
+    ...(live.extraCosts || []).filter((row) => requiresInvoice(row, ['Line_Total__c', 'Lumpsum_Price__c', 'Unit_Price__c'])),
+  ];
+}
+
 function deriveStatus(live, stored, today = hongKongToday()) {
-  const finals = live.invoices.filter(finalInvoice);
+  const finals = live.invoices.filter(isIssuedFinalBuyerInvoice);
+  const snapshotChecks = finals.map((invoice) => buyerInvoiceSnapshotComparison(invoice, live));
+  const snapshotMismatch = snapshotChecks.some((check) => check.kind === 'snapshot' && check.matches !== true);
+  const hasLegacyFinal = snapshotChecks.some((check) => check.kind === 'legacy');
+  const hasMatchingSnapshotFinal = snapshotChecks.some((check) => check.kind === 'snapshot' && check.matches === true);
+  const pendingSnapshotNonPairedReview = () => (live.supplierRequirements || []).some((row) => (
+    row.assignmentStatus !== 'resolved' || !['Verified', 'Invalidated'].includes(row.status)
+  )) || live.assignment?.status !== 'resolved';
+  const pendingSnapshotBuyerReview = () => (live.supplierRequirements || []).some((row) => (
+    row.assignmentStatus !== 'resolved' || !['Verified', 'Invalidated'].includes(row.buyerChargeStatus)
+  )) || live.assignment?.status !== 'resolved';
+  const hasUnbilledBuyerCharges = unbilledBuyerChargeRows(live).length > 0;
+  if (snapshotMismatch) return 'post_invoice_changes';
+  if (!live.hasVariableCharges) return 'completed';
   if (!pairedWorkflowEnabled()) {
     const sourceChanged = Boolean(stored?.source_fingerprint && stored.source_fingerprint !== live.fingerprint);
     const confirmed = live.stem.Variable_Charges_Confirmed__c === true
       && stored?.confirmation_status === 'confirmed' && !sourceChanged;
-    if (finals.length && (sourceChanged || stored?.workflow_status === 'post_invoice_change')) return 'post_invoice_changes';
-    if (!live.hasVariableCharges) return 'completed';
+    if (finals.length && hasLegacyFinal && sourceChanged) return 'post_invoice_changes';
+    if (finals.length && !hasLegacyFinal && hasMatchingSnapshotFinal) {
+      if (hasUnbilledBuyerCharges) {
+        if (confirmed) return 'ready_for_invoice';
+        return variableChargeActionability(live, today).ready ? 'needs_action' : 'awaiting_delivery';
+      }
+      if (!pendingSnapshotNonPairedReview()) return 'completed';
+      return variableChargeActionability(live, today).ready ? 'needs_action' : 'awaiting_delivery';
+    }
     if (!variableChargeActionability(live, today).ready) return 'awaiting_delivery';
-    if ((live.supplierRequirements || []).some((row) => row.assignmentStatus !== 'resolved' || row.status !== 'Verified')) return 'needs_action';
-    if (live.assignment?.status !== 'resolved') return 'needs_action';
-    if (finals.length) return confirmed || stored?.post_invoice_resolution ? 'completed' : 'post_invoice_changes';
+    if ((live.supplierRequirements || []).some((row) => row.assignmentStatus !== 'resolved' || row.status !== 'Verified')
+      || live.assignment?.status !== 'resolved') return 'needs_action';
+    if (finals.length) return confirmed ? 'completed' : 'post_invoice_changes';
     if (confirmed) return 'ready_for_invoice';
     return 'needs_action';
   }
   const buyerSidesReady = (live.supplierRequirements || []).every((row) => row.buyerChargeStatus === 'Verified');
-  const buyerChanged = (live.supplierRequirements || []).some((row) => row.buyerChargeStatus === 'Invalidated');
   const confirmed = live.stem.Variable_Charges_Confirmed__c === true && buyerSidesReady;
-  if (finals.length && (buyerChanged || stored?.workflow_status === 'post_invoice_change')) return 'post_invoice_changes';
-  if (!live.hasVariableCharges) return 'completed';
+  if (finals.length && !hasLegacyFinal && hasMatchingSnapshotFinal) {
+    if (hasUnbilledBuyerCharges) {
+      if (confirmed) return 'ready_for_invoice';
+      return variableChargeActionability(live, today).ready ? 'needs_action' : 'awaiting_delivery';
+    }
+    if (!pendingSnapshotBuyerReview()) return 'completed';
+    return variableChargeActionability(live, today).ready ? 'needs_action' : 'awaiting_delivery';
+  }
   if (!variableChargeActionability(live, today).ready) return 'awaiting_delivery';
-  if (finals.length) return confirmed || stored?.post_invoice_resolution ? 'completed' : 'post_invoice_changes';
+  if (finals.length) return confirmed ? 'completed' : 'post_invoice_changes';
   if (confirmed) return 'ready_for_invoice';
   return 'needs_action';
 }
@@ -3546,6 +3661,9 @@ export const variableChargeInternals = {
   sha256,
   serializeLiveRow,
   supplierDualCurrencySummary,
+  buyerInvoiceCurrencySupport,
+  optionalBuyerInvoiceCurrencyField,
+  separateInvoiceSource,
   SHIP_AGENT_STEM_CREATED_FROM: VARIABLE_CHARGE_STEM_CREATED_FROM,
   VARIABLE_CHARGE_STEM_CREATED_FROM,
 };
