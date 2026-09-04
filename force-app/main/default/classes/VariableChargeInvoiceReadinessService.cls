@@ -229,20 +229,20 @@ public without sharing class VariableChargeInvoiceReadinessService {
 
     public static void assertInvoiceRecordsAllowed(List<Invoice__c> invoices) {
         if (invoices == null) return;
-        for (Invoice__c invoice : invoices) if (isFinalBuyerInvoice(invoice)) assertFinalBuyerInvoiceAllowed(invoice.STEM__c);
+        for (Invoice__c invoice : invoices) if (isFinalBuyerInvoice(invoice)) {
+            assertFinalBuyerInvoiceAllowed(invoice.STEM__c);
+            // Inserts cannot supply their own historical approval snapshot.
+            if (invoice.Id == null) invoice.Buyer_Charge_Snapshot__c = null;
+        }
     }
 
     public static void assertInvoiceTransitionsAllowed(Map<Id, Invoice__c> newMap, Map<Id, Invoice__c> oldMap) {
         if (newMap == null) return;
-        List<Invoice__c> check = new List<Invoice__c>();
         for (Invoice__c invoice : newMap.values()) {
-            if (!isFinalBuyerInvoice(invoice)) continue;
             Invoice__c oldInvoice = oldMap == null ? null : oldMap.get(invoice.Id);
-            if (oldInvoice == null
-                || (oldInvoice.File__c == null && invoice.File__c != null)
-                || (oldInvoice.Sent__c != true && invoice.Sent__c == true)) check.add(invoice);
+            if (oldInvoice == null) assertInvoiceRecordsAllowed(new List<Invoice__c>{invoice});
+            else BuyerInvoiceApprovalService.beforeUpdate(invoice, oldInvoice);
         }
-        assertInvoiceRecordsAllowed(check);
     }
 
     public static void assertSupplierInvoiceTransitionsAllowed(List<Supplier_Invoice__c> newRecords, Map<Id, Supplier_Invoice__c> oldMap) {
@@ -809,8 +809,9 @@ public without sharing class VariableChargeInvoiceReadinessService {
             STEM__c oldRow = oldMap.get(row.Id);
             if (oldRow == null) continue;
             if (changed(row, oldRow, new List<String>{'Delivery_Date__c','ETA_Start_Date__c','ETA_End_Date__c','ETB_Start_Date__c','ETB_End_Date__c','ETCD_Start_Date__c','ETCD_End_Date__c','ETD_Start_Date__c','ETD_End_Date__c','CurrencyIsoCode'})) bothStems.add(row.Id);
-            if (changed(row, oldRow, new List<String>{'Costs_Total__c','Payable_Balance__c'})) costStems.add(row.Id);
-            if (changed(row, oldRow, new List<String>{'Payment_Term__c','Account__c','Total__c','Total_Invoice_Amount__c','Receivable_Balance__c'})) buyerStems.add(row.Id);
+            // Actual row prices/costs invalidate their own side. Posting an
+            // invoice or payment only changes rollups and must not revoke review.
+            if (changed(row, oldRow, new List<String>{'Payment_Term__c','Account__c'})) buyerStems.add(row.Id);
         }
         Set<Id> buyerAffectedStems = new Set<Id>();
         buyerAffectedStems.addAll(bothStems);

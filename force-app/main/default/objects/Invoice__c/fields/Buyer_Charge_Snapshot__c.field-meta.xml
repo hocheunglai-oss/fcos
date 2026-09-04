@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Buyer_Charge_Snapshot__c</fullName>
+    <description>Versioned buyer invoice content captured automatically when an approved PDF is generated. Compared before email delivery; accounting balances and supplier costs do not reopen invoice approval.</description>
+    <label>Approved Buyer Invoice Content</label>
+    <length>131072</length>
+    <type>LongTextArea</type>
+    <visibleLines>3</visibleLines>
+</CustomField>
