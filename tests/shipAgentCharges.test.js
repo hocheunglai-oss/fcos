@@ -196,6 +196,57 @@ test('a legacy invoice clears a stale post-invoice status only when current appr
   }, { confirmation_status: 'confirmed', source_fingerprint: 'current-fingerprint' }, '2026-08-08'), 'needs_action');
 });
 
+test('an explicit resolution closes only the unchanged issued legacy source', () => {
+  const unresolved = liveCase({
+    stem: { ...liveCase().stem, Variable_Charges_Confirmed__c: false },
+    invoices: [{ Id: 'a102x0000000001AAA', Name: '00001T-INV-1', Proforma__c: false, File__c: '0692x0000000001AAA' }],
+    supplierRequirements: [{ supplierId: '0012x0000000001AAA', status: 'Pending', assignmentStatus: 'missing_nomination' }],
+    assignment: { status: 'unresolved' },
+  });
+  const resolved = {
+    workflow_status: 'completed',
+    post_invoice_resolution: 'no_adjustment',
+    source_fingerprint: unresolved.fingerprint,
+  };
+  assert.equal(variableChargeInternals.deriveStatus(unresolved, resolved, '2026-08-08'), 'completed');
+  assert.equal(variableChargeInternals.deriveStatus(unresolved, {
+    ...resolved,
+    source_fingerprint: 'changed-after-resolution',
+  }, '2026-08-08'), 'post_invoice_changes');
+  assert.equal(variableChargeInternals.deriveStatus({ ...unresolved, invoices: [] }, resolved, '2026-08-08'), 'needs_action');
+});
+
+test('a resolved paired case still fails closed for a mismatched signed invoice snapshot', () => {
+  const previous = process.env.VARIABLE_CHARGE_PAIRED_WORKFLOW_ENABLED;
+  process.env.VARIABLE_CHARGE_PAIRED_WORKFLOW_ENABLED = 'true';
+  try {
+    const unresolved = liveCase({
+      stem: { ...liveCase().stem, Variable_Charges_Confirmed__c: false },
+      invoices: [{ Id: 'a102x0000000001AAA', Name: '00001T-INV-1', Proforma__c: false, File__c: '0692x0000000001AAA' }],
+      supplierRequirements: [{
+        supplierId: '0012x0000000001AAA', status: 'Invalidated', buyerChargeStatus: 'Invalidated', assignmentStatus: 'missing_nomination',
+      }],
+      assignment: { status: 'unresolved' },
+      buyerFingerprint: 'paired-resolution-fingerprint',
+    });
+    const resolved = {
+      workflow_status: 'completed',
+      post_invoice_resolution: 'credit_note',
+      source_fingerprint: unresolved.buyerFingerprint,
+    };
+    assert.equal(variableChargeInternals.deriveStatus(unresolved, resolved, '2026-08-08'), 'completed');
+
+    const signed = approvedInvoiceLive({ buyerFingerprint: unresolved.buyerFingerprint });
+    assert.equal(variableChargeInternals.deriveStatus({
+      ...signed,
+      allLineItems: [{ ...signed.allLineItems[0], Unit_Sell_At__c: 521 }],
+    }, resolved, '2026-08-08'), 'post_invoice_changes');
+  } finally {
+    if (previous == null) delete process.env.VARIABLE_CHARGE_PAIRED_WORKFLOW_ENABLED;
+    else process.env.VARIABLE_CHARGE_PAIRED_WORKFLOW_ENABLED = previous;
+  }
+});
+
 test('extra-cost-only readiness uses the latest normalized schedule date and has no delivery dependency', () => {
   const readiness = variableChargeInternals.variableChargeActionability({
     stem: {

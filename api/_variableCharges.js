@@ -898,6 +898,12 @@ function deriveStatus(live, stored, today = hongKongToday()) {
   )) || live.assignment?.status !== 'resolved';
   const hasUnbilledBuyerCharges = unbilledBuyerChargeRows(live).length > 0;
   if (snapshotMismatch) return 'post_invoice_changes';
+  // An explicit resolution closes the reviewed source state. A later source
+  // change still reopens the case; resolution does not approve Salesforce costs.
+  const resolutionFingerprint = pairedWorkflowEnabled() ? live.buyerFingerprint : live.fingerprint;
+  if (finals.length && stored?.workflow_status === 'completed'
+    && ['no_adjustment', 'revised_invoice', 'credit_note'].includes(stored.post_invoice_resolution)
+    && resolutionFingerprint && stored.source_fingerprint === resolutionFingerprint) return 'completed';
   if (!live.hasVariableCharges) return 'completed';
   if (!pairedWorkflowEnabled()) {
     const sourceChanged = Boolean(stored?.source_fingerprint && stored.source_fingerprint !== live.fingerprint);
@@ -3480,15 +3486,15 @@ export async function resolveVariableChargePostInvoiceChange(body, context) {
   const stemId = text(body?.stemId, 18);
   const operationId = operationIdentity(body);
   const resolution = text(body?.resolution, 40);
-  const reference = text(body?.reference, 1000);
+  const reference = text(body?.reference, 300) || null;
   const note = text(body?.note, 1000);
   if (!['no_adjustment', 'revised_invoice', 'credit_note'].includes(resolution)) throw httpError('Choose No adjustment, Revised invoice, or Credit note.', 400, 'INVALID_POST_INVOICE_RESOLUTION');
-  if (!reference) throw httpError('A resolution reference is required.', 400, 'RESOLUTION_REFERENCE_REQUIRED');
   const live = await liveCaseForStem(stemId, context);
   const stored = currentCaseRow(await storedCases(context.client, [stemId]), stemId);
   const currentFingerprint = pairedWorkflowEnabled() ? live.buyerFingerprint : live.fingerprint;
   if (text(body?.expectedFingerprint, 128) !== currentFingerprint) throw httpError('Salesforce buyer-charge data changed after this case was opened. Refresh before resolving it.', 409, 'LIVE_DATA_CONFLICT');
   await requireCaseAuthority(context, stored, body);
+  expectedRevision(body, stored);
   if (!live.invoices.some(finalInvoice)) throw httpError('A final buyer invoice is required before post-invoice resolution.', 409, 'FINAL_INVOICE_REQUIRED');
   const requestFingerprint = sha256({ stemId, resolution, reference, note, revision: body?.expectedRevision, live: currentFingerprint });
   const { data, error } = await context.client.rpc('resolve_variable_charge_post_invoice_change', {
