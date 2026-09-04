@@ -18,14 +18,32 @@ public without sharing class BuyerInvoiceApprovalService {
         'Unit_Price__c','Lumpsum_Price__c','Line_Total__c','CurrencyIsoCode'
     };
 
+    @TestVisible private static Boolean currencyIsoCodeAvailableForTest;
+
+    // QAT is single-currency and therefore does not expose CurrencyIsoCode on
+    // these records. The snapshot contract still includes the field as null.
+    private static Boolean hasCurrencyIsoCode(Schema.SObjectType objectType) {
+        if (Test.isRunningTest() && currencyIsoCodeAvailableForTest != null) {
+            return currencyIsoCodeAvailableForTest;
+        }
+        return objectType.getDescribe().fields.getMap().containsKey('CurrencyIsoCode');
+    }
+
+    private static List<String> queryFields(List<String> fields, Schema.SObjectType objectType) {
+        if (hasCurrencyIsoCode(objectType)) return fields;
+        List<String> result = new List<String>();
+        for (String field : fields) if (field != 'CurrencyIsoCode') result.add(field);
+        return result;
+    }
+
     public static String snapshot(Invoice__c invoice) {
         Id stemId = invoice.STEM__c, invoiceId = invoice.Id;
-        STEM__c stem = Database.query('SELECT ' + String.join(STEM_FIELDS, ',')
+        STEM__c stem = Database.query('SELECT ' + String.join(queryFields(STEM_FIELDS, STEM__c.SObjectType), ',')
             + ' FROM STEM__c WHERE Id = :stemId LIMIT 1');
-        List<SObject> lines = Database.query('SELECT ' + String.join(LINE_FIELDS, ',')
+        List<SObject> lines = Database.query('SELECT ' + String.join(queryFields(LINE_FIELDS, STEM_Line_Item__c.SObjectType), ',')
             + ' FROM STEM_Line_Item__c WHERE STEM__c = :stemId AND Buyer_Invoice__c = :invoiceId'
             + ' AND Cancelled__c = false ORDER BY Id');
-        List<SObject> extras = Database.query('SELECT ' + String.join(EXTRA_FIELDS, ',')
+        List<SObject> extras = Database.query('SELECT ' + String.join(queryFields(EXTRA_FIELDS, STEM_Extra_Cost__c.SObjectType), ',')
             + ' FROM STEM_Extra_Cost__c WHERE STEM__c = :stemId AND Buyer_Invoice__c = :invoiceId'
             + ' AND Cancelled__c = false ORDER BY Id');
         Id documentId;
@@ -50,6 +68,10 @@ public without sharing class BuyerInvoiceApprovalService {
     private static Map<String, Object> project(SObject row, List<String> fields) {
         Map<String, Object> result = new Map<String, Object>();
         for (String field : fields) {
+            if (field == 'CurrencyIsoCode' && !hasCurrencyIsoCode(row.getSObjectType())) {
+                result.put(field, null);
+                continue;
+            }
             if (field.contains('.')) {
                 SObject related = row.getSObject(field.substringBefore('.'));
                 result.put(field, related == null ? null : related.get(field.substringAfter('.')));
@@ -61,7 +83,7 @@ public without sharing class BuyerInvoiceApprovalService {
     public static void assertPersistedInvoicesCanSend(Set<Id> invoiceIds) {
         if (invoiceIds == null || invoiceIds.isEmpty()) return;
         List<Invoice__c> invoices = Database.query('SELECT Proforma__c, Deprecated__c,'
-            + 'Buyer_Charge_Snapshot__c,' + String.join(INVOICE_FIELDS, ',')
+            + 'Buyer_Charge_Snapshot__c,' + String.join(queryFields(INVOICE_FIELDS, Invoice__c.SObjectType), ',')
             + ' FROM Invoice__c WHERE Id IN :invoiceIds');
         if (invoices.size() != invoiceIds.size()) throw blocked('Invoice approval could not be checked.');
         for (Invoice__c invoice : invoices) assertCanSend(invoice);

@@ -173,6 +173,30 @@ private class BuyerInvoiceApprovalServiceTest {
     }
 
     @IsTest
+    static void singleCurrencySchemaKeepsV1CurrencyKeysNullAndAllowsCapturedInvoiceToSend() {
+        BuyerInvoiceApprovalService.currencyIsoCodeAvailableForTest = false;
+        try {
+            IssuedInvoice issued = issueApprovedInvoice();
+            String serializedSnapshot = [
+                SELECT Buyer_Charge_Snapshot__c FROM Invoice__c WHERE Id = :issued.invoiceId
+            ].Buyer_Charge_Snapshot__c;
+            Map<String, Object> snapshot = (Map<String, Object>) JSON.deserializeUntyped(serializedSnapshot);
+            System.assert(((Map<String, Object>) snapshot.get('invoice')).containsKey('CurrencyIsoCode'));
+            System.assertEquals(null, ((Map<String, Object>) snapshot.get('invoice')).get('CurrencyIsoCode'));
+            System.assert(((Map<String, Object>) snapshot.get('stem')).containsKey('CurrencyIsoCode'));
+            System.assertEquals(null, ((Map<String, Object>) snapshot.get('stem')).get('CurrencyIsoCode'));
+            List<Object> lines = (List<Object>) snapshot.get('lines');
+            System.assert(((Map<String, Object>) lines[0]).containsKey('CurrencyIsoCode'));
+            System.assertEquals(null, ((Map<String, Object>) lines[0]).get('CurrencyIsoCode'));
+
+            BuyerInvoiceApprovalService.assertPersistedInvoicesCanSend(new Set<Id>{issued.invoiceId});
+        } finally {
+            Test.stopTest();
+            BuyerInvoiceApprovalService.currencyIsoCodeAvailableForTest = null;
+        }
+    }
+
+    @IsTest
     static void changedBuyerChargeBlocksCapturedInvoice() {
         IssuedInvoice priceChanged = issueApprovedInvoice();
         ContextManager.skipTriggers = true;
