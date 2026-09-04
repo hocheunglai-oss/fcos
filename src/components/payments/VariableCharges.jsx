@@ -372,7 +372,7 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
   const [gmOpen, setGmOpen] = useState(false);
   const [gmDraft, setGmDraft] = useState({ sides: 'both', reason: '' });
   const [gmSaving, setGmSaving] = useState(false);
-  const [postResolution, setPostResolution] = useState({ resolution: 'no_adjustment', reference: '', note: '' });
+  const [postResolution, setPostResolution] = useState({ resolution: 'no_adjustment', note: '' });
   const [postSaving, setPostSaving] = useState(false);
   const [gmActionReason, setGmActionReason] = useState('');
   const [activeSupplierId, setActiveSupplierId] = useState('');
@@ -486,7 +486,7 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
     setGmReviewSides([]);
     setGmReviewSupplierId('');
     setAmendDialog({ open: false, sides: [], label: '', reason: '' });
-    setPostResolution({ resolution: 'no_adjustment', reference: '', note: '' });
+    setPostResolution({ resolution: 'no_adjustment', note: '' });
     setGmActionReason('');
     setSupplierReviewNotes({});
     setBuyerReviewNote('');
@@ -948,17 +948,12 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
   };
 
   const savePostInvoiceResolution = async () => {
-    const reference = text(postResolution.reference);
-    if (!canResolvePostInvoice || !reference) {
-      setSaveError('A resolution reference is required for every post-invoice change.');
-      return;
-    }
+    if (!canResolvePostInvoice) return;
     setPostSaving(true);
     setSaveError('');
     const response = await appClient.functions.invoke('variableChargesPostInvoiceResolve', {
       stemId: selectedStemId,
       resolution: postResolution.resolution,
-      reference,
       note: text(postResolution.note) || null,
       expectedRevision: valueOf(activeCase, ['revision'], null),
       expectedFingerprint: valueOf(activeCase, ['fingerprint', 'currentFingerprint', 'current_fingerprint'], null),
@@ -1704,4 +1699,4 @@ function ExtraCostFields({ id, value, disabled, supplierStage = false, buyerStag
   return <div className="mt-4 grid gap-3 md:grid-cols-2 lg:grid-cols-6"><div className="space-y-2"><Label htmlFor={`${id}-term`}>Payment term</Label><Input id={`${id}-term`} value={value.paymentTerm || ''} onChange={(event) => onChange({ paymentTerm: event.target.value })} disabled={disabled || paymentTermReadOnly || buyerStage} /></div><div className="space-y-2"><Label>Pricing</Label><Select value={value.pricingType} onValueChange={(pricingType) => onChange({ pricingType })} disabled={disabled || buyerStage}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="fixed">Fixed</SelectItem><SelectItem value="per_unit">Per unit</SelectItem></SelectContent></Select></div>{supplierStage && <div className="space-y-2"><Label>Input Currency</Label><Select value={value.inputCurrency || 'USD'} onValueChange={(inputCurrency) => onChange({ inputCurrency })} disabled={disabled || buyerStage}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="HKD">HKD</SelectItem><SelectItem value="USD">USD</SelectItem></SelectContent></Select></div>}<div className="space-y-2"><Label htmlFor={`${id}-supplier-cost`}>{value.pricingType === 'fixed' ? 'Fixed supplier cost' : 'Supplier cost / unit'} ({value.inputCurrency || 'USD'})</Label><Input id={`${id}-supplier-cost`} inputMode="decimal" value={value.supplierCost ?? ''} onChange={(event) => onChange({ supplierCost: event.target.value })} disabled={disabled || buyerStage} /></div>{!supplierStage && <div className="space-y-2"><Label htmlFor={`${id}-buyer-price`}>{value.pricingType === 'fixed' ? 'Fixed buyer price' : 'Buyer price / unit'} (USD)</Label><Input id={`${id}-buyer-price`} inputMode="decimal" value={value.buyerPrice ?? ''} onChange={(event) => onChange({ buyerPrice: event.target.value })} disabled={disabled} /></div>}{value.pricingType === 'per_unit' && <><div className="space-y-2"><Label htmlFor={`${id}-quantity`}>Quantity</Label><Input id={`${id}-quantity`} inputMode="decimal" value={value.quantity ?? ''} onChange={(event) => onChange({ quantity: event.target.value })} disabled={disabled || buyerStage} /></div><div className="space-y-2"><Label htmlFor={`${id}-uom`}>Unit of measure</Label><Input id={`${id}-uom`} value={value.unitOfMeasure || ''} onChange={(event) => onChange({ unitOfMeasure: event.target.value })} disabled={disabled || buyerStage} /></div></>}</div>;
 }
 
-function PostInvoiceResolution({ value, disabled, saving, onChange, onSave }) { return <section className="space-y-3 rounded-lg border border-rose-300 bg-rose-50 p-4"><h2 className="text-sm font-semibold text-rose-950">Invoice already issued—action required</h2><div className="grid gap-3 md:grid-cols-2"><div className="space-y-2"><Label>Resolution</Label><Select value={value.resolution} onValueChange={(resolution) => onChange({ resolution })} disabled={disabled || saving}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{POST_INVOICE_RESOLUTIONS.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select></div><div className="space-y-2"><Label htmlFor="post-invoice-reference">Reference</Label><Input id="post-invoice-reference" value={value.reference} onChange={(event) => onChange({ reference: event.target.value })} disabled={disabled || saving} /></div></div><div className="space-y-2"><Label htmlFor="post-invoice-note">Resolution Note</Label><Textarea id="post-invoice-note" value={value.note} onChange={(event) => onChange({ note: event.target.value })} disabled={disabled || saving} /></div><Button type="button" variant="outline" onClick={onSave} disabled={disabled || saving}>{saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Save Resolution</Button></section>; }
+function PostInvoiceResolution({ value, disabled, saving, onChange, onSave }) { return <section className="space-y-3 rounded-lg border border-rose-300 bg-rose-50 p-4"><h2 className="text-sm font-semibold text-rose-950">Invoice already issued—action required</h2><div className="space-y-2"><Label>Resolution</Label><Select value={value.resolution} onValueChange={(resolution) => onChange({ resolution })} disabled={disabled || saving}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{POST_INVOICE_RESOLUTIONS.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select></div><div className="space-y-2"><Label htmlFor="post-invoice-note">Resolution Note</Label><Textarea id="post-invoice-note" value={value.note} onChange={(event) => onChange({ note: event.target.value })} disabled={disabled || saving} /></div><Button type="button" variant="outline" onClick={onSave} disabled={disabled || saving}>{saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Save Resolution</Button></section>; }
