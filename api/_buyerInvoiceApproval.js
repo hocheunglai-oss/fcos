@@ -60,17 +60,18 @@ export function isIssuedFinalBuyerInvoice(invoice) {
 }
 
 export function buyerInvoiceApprovalProjection(invoice, liveCase) {
+  const invoiceSource = liveCase?.invoiceSource || liveCase;
   const documentId = contentDocumentId(invoice?.File__c);
   const document = invoice?._buyerInvoiceDocument;
-  if (!invoice || !liveCase?.stem || !documentId || !document
+  if (!invoice || !invoiceSource?.stem || !documentId || !document
     || text(document.Id) !== documentId || !text(document.LatestPublishedVersionId)) return null;
   return {
     version: 1,
     invoice: project(invoice, INVOICE_FIELDS),
-    stem: project(liveCase.stem, STEM_FIELDS),
+    stem: project(invoiceSource.stem, STEM_FIELDS),
     pdf: { Id: document.Id, LatestPublishedVersionId: document.LatestPublishedVersionId },
-    lines: projectRows((liveCase.allLineItems || []).filter((row) => row.Buyer_Invoice__c === invoice.Id), LINE_FIELDS),
-    extras: projectRows((liveCase.allExtraCosts || []).filter((row) => row.Buyer_Invoice__c === invoice.Id), EXTRA_FIELDS),
+    lines: projectRows((invoiceSource.allLineItems || []).filter((row) => row.Buyer_Invoice__c === invoice.Id), LINE_FIELDS),
+    extras: projectRows((invoiceSource.allExtraCosts || []).filter((row) => row.Buyer_Invoice__c === invoice.Id), EXTRA_FIELDS),
   };
 }
 

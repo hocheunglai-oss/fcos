@@ -6,6 +6,7 @@ import {
   buyerInvoiceApprovalProjection,
   buyerInvoiceSnapshotComparison,
 } from '../api/_buyerInvoiceApproval.js';
+import { variableChargeInternals } from '../api/_variableCharges.js';
 
 function invoice(overrides = {}) {
   return {
@@ -55,6 +56,43 @@ test('buyer invoice snapshot comparison accepts an unchanged Apex-compatible pro
   const live = liveCase();
   currentInvoice.Buyer_Charge_Snapshot__c = JSON.stringify(buyerInvoiceApprovalProjection(currentInvoice, live));
   assert.deepEqual(buyerInvoiceSnapshotComparison(currentInvoice, live), { kind: 'snapshot', matches: true });
+});
+
+test('invoice source currency is compared even when the workflow objects retain their legacy shape', () => {
+  const currentInvoice = invoice();
+  const raw = liveCase();
+  const separated = variableChargeInternals.separateInvoiceSource({
+    stem: raw.stem,
+    lineItems: raw.allLineItems,
+    extraCosts: raw.allExtraCosts,
+    allLineItems: raw.allLineItems,
+    allExtraCosts: raw.allExtraCosts,
+  });
+  currentInvoice.Buyer_Charge_Snapshot__c = JSON.stringify(buyerInvoiceApprovalProjection(currentInvoice, separated));
+  assert.equal(buyerInvoiceSnapshotComparison(currentInvoice, separated).matches, true);
+  assert.equal(buyerInvoiceSnapshotComparison(currentInvoice, {
+    ...separated,
+    invoiceSource: {
+      ...separated.invoiceSource,
+      allLineItems: [{ ...separated.invoiceSource.allLineItems[0], CurrencyIsoCode: 'HKD' }],
+    },
+  }).matches, false);
+});
+
+test('snapshot projection retains null currency keys when an object does not expose CurrencyIsoCode', () => {
+  const currentInvoice = invoice({ CurrencyIsoCode: undefined });
+  const live = liveCase({
+    stem: { ...liveCase().stem, CurrencyIsoCode: undefined },
+    allLineItems: [{ ...liveCase().allLineItems[0], CurrencyIsoCode: undefined }],
+    allExtraCosts: [{ ...liveCase().allExtraCosts[0], CurrencyIsoCode: undefined }],
+  });
+  const projection = buyerInvoiceApprovalProjection(currentInvoice, live);
+  assert.equal(projection.invoice.CurrencyIsoCode, null);
+  assert.equal(projection.stem.CurrencyIsoCode, null);
+  assert.equal(projection.lines[0].CurrencyIsoCode, null);
+  assert.equal(projection.extras[0].CurrencyIsoCode, null);
+  currentInvoice.Buyer_Charge_Snapshot__c = JSON.stringify(projection);
+  assert.equal(buyerInvoiceSnapshotComparison(currentInvoice, live).matches, true);
 });
 
 test('buyer invoice comparison normalizes Apex row ordering without accepting an unknown schema', () => {

@@ -287,6 +287,61 @@ test('live fingerprint detects financial changes but ignores normal buyer-invoic
   }), original);
 });
 
+test('loader-shaped currency records preserve legacy workflow fingerprints while retaining invoice currency source', () => {
+  const raw = {
+    stem: { Id: 'a002x0000000001AAA', CurrencyIsoCode: 'HKD', Delivery_Date__c: '2026-08-01' },
+    accounts: [], nominations: [], supplierRequirements: [], supplierStages: [],
+    lineItems: [{ Id: 'a012x0000000001AAA', CurrencyIsoCode: 'HKD', Buyer_Invoice__c: 'a102x0000000001AAA' }],
+    extraCosts: [{ Id: 'a022x0000000001AAA', CurrencyIsoCode: 'HKD', Buyer_Invoice__c: 'a102x0000000001AAA' }],
+    allLineItems: [{ Id: 'a012x0000000001AAA', CurrencyIsoCode: 'HKD', Buyer_Invoice__c: 'a102x0000000001AAA' }],
+    allExtraCosts: [{ Id: 'a022x0000000001AAA', CurrencyIsoCode: 'HKD', Buyer_Invoice__c: 'a102x0000000001AAA' }],
+  };
+  const separated = {
+    ...raw,
+    ...variableChargeInternals.separateInvoiceSource(raw),
+  };
+  const legacy = {
+    ...raw,
+    stem: { Id: raw.stem.Id, Delivery_Date__c: raw.stem.Delivery_Date__c },
+    lineItems: raw.lineItems.map(({ CurrencyIsoCode, ...row }) => row),
+    extraCosts: raw.extraCosts.map(({ CurrencyIsoCode, ...row }) => row),
+    allLineItems: raw.allLineItems.map(({ CurrencyIsoCode, ...row }) => row),
+    allExtraCosts: raw.allExtraCosts.map(({ CurrencyIsoCode, ...row }) => row),
+  };
+  assert.equal(variableChargeInternals.liveFingerprint(separated), variableChargeInternals.liveFingerprint(legacy));
+  assert.equal(variableChargeInternals.buyerAggregateFingerprint(separated), variableChargeInternals.buyerAggregateFingerprint(legacy));
+  assert.equal(separated.invoiceSource.stem.CurrencyIsoCode, 'HKD');
+  assert.equal(separated.invoiceSource.allLineItems[0].CurrencyIsoCode, 'HKD');
+});
+
+test('currency SELECTs follow each Salesforce object describe', () => {
+  const withoutCurrency = variableChargeInternals.buyerInvoiceCurrencySupport({
+    Invoice__c: { fields: [{ name: 'Id' }] },
+    STEM__c: { fields: [{ name: 'Id' }] },
+    STEM_Line_Item__c: { fields: [{ name: 'Id' }] },
+    STEM_Extra_Cost__c: { fields: [{ name: 'Id' }] },
+  });
+  assert.deepEqual(withoutCurrency, {
+    Invoice__c: false,
+    STEM__c: false,
+    STEM_Line_Item__c: false,
+    STEM_Extra_Cost__c: false,
+  });
+  for (const objectName of Object.keys(withoutCurrency)) {
+    assert.equal(variableChargeInternals.optionalBuyerInvoiceCurrencyField(withoutCurrency, objectName), '');
+  }
+
+  const withCurrency = variableChargeInternals.buyerInvoiceCurrencySupport({
+    Invoice__c: { fields: [{ name: 'CurrencyIsoCode' }] },
+    STEM__c: { fields: [{ name: 'CurrencyIsoCode' }] },
+    STEM_Line_Item__c: { fields: [{ name: 'CurrencyIsoCode' }] },
+    STEM_Extra_Cost__c: { fields: [{ name: 'CurrencyIsoCode' }] },
+  });
+  for (const objectName of Object.keys(withCurrency)) {
+    assert.equal(variableChargeInternals.optionalBuyerInvoiceCurrencyField(withCurrency, objectName), ', CurrencyIsoCode');
+  }
+});
+
 test('paired fingerprints isolate cost-only and buyer-only changes while sharing identity fields', () => {
   const supplierId = '0012x0000000001AAA';
   const base = {
@@ -470,15 +525,15 @@ test('FCOS handlers are explicit, fail-closed, atomic, and do not send email', a
   const liveLoader = service.slice(service.indexOf('async function loadLiveCases'), service.indexOf('function effectiveAssignee'));
   const lineItemQuery = liveLoader.match(/SELECT Id, STEM__c, Original_Supplier__c[^`]+FROM STEM_Line_Item__c/)?.[0] || '';
   assert.ok(lineItemQuery);
-  assert.match(lineItemQuery, /CurrencyIsoCode/);
+  assert.match(lineItemQuery, /optionalBuyerInvoiceCurrencyField\(currencySupport, 'STEM_Line_Item__c'\)/);
   const extraCostQuery = liveLoader.match(/SELECT Id, STEM__c, STEM_Line_Item__c, Supplier__c[^`]+FROM STEM_Extra_Cost__c/)?.[0] || '';
   assert.ok(extraCostQuery);
-  assert.match(extraCostQuery, /CurrencyIsoCode/);
+  assert.match(extraCostQuery, /optionalBuyerInvoiceCurrencyField\(currencySupport, 'STEM_Extra_Cost__c'\)/);
   const stemQuery = liveLoader.match(/SELECT Id, Name, KeyStem__c[^`]+FROM STEM__c/)?.[0] || '';
   assert.ok(stemQuery);
-  assert.match(stemQuery, /CurrencyIsoCode/);
-  assert.match(liveLoader, /Total_Price__c, CurrencyIsoCode/);
-  assert.match(liveLoader, /Line_Total__c, CurrencyIsoCode/);
+  assert.match(stemQuery, /optionalBuyerInvoiceCurrencyField\(currencySupport, 'STEM__c'\)/);
+  assert.match(liveLoader, /optionalBuyerInvoiceCurrencyField\(currencySupport, 'Invoice__c'\)/);
+  assert.match(service, /sobjects\/\$\{encodeURIComponent\(objectName\)\}\/describe\//);
   assert.match(liveLoader, /Account__r\.Name/);
   assert.match(liveLoader, /Vessel__r\.Name/);
   assert.match(liveLoader, /Port__r\.Name/);
