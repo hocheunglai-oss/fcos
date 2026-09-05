@@ -7,7 +7,7 @@ Account Insight opens over the existing Dashboard. Its period controls apply to 
 1. Select **Build report** and an Internal, Buyer-facing or Supplier-facing audience.
 2. Check the Account, GROUP children, direction, trading period and statement scope.
 3. Choose sections and their order. Summary is the default; Detailed enables selected columns and complete or selected STEM evidence.
-4. Select **Preview PDF**. Check the actual pages, then download that same document.
+4. Select **Build PDF**. Check the actual paginated preview, then select **Download PDF** for that same document.
 
 Personal presets save presentation choices only. Administrators and the uniquely active General Manager may publish company presets. Saving an existing preset requires its current revision; archived presets retain audit history. No Account, reporting date, financial snapshot or PDF is stored in presets.
 

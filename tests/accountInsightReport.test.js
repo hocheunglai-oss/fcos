@@ -164,6 +164,40 @@ test('external reports omit expected transactions and opposite-leg data, includi
   assert.equal(report.sections.find((section) => section.id === 'stems').rows[0].balance, 700);
 });
 
+test('buyer statements render only current own invoice and credit-note document evidence', () => {
+  const buyer = realisticInsight('buyer');
+  buyer.exportRows[0].buyerDocumentEvidence = [
+    { documentNumber: 'BUY-INV-001', documentType: 'invoice', documentDate: '2026-07-16', currency: 'USD', amount: 1100, current: true },
+    { documentNumber: 'BUY-CN-001', documentType: 'credit_note', documentDate: '2026-07-18', currency: 'USD', amount: -100, current: true },
+    { documentNumber: 'BUY-PROFORMA', documentType: 'invoice', documentDate: '2026-07-19', currency: 'USD', amount: 999, current: false },
+  ];
+  buyer.exportRows[0].supplierDocumentEvidence = [{ documentNumber: 'SUP-INV-SECRET', documentType: 'invoice', documentDate: '2026-07-16', currency: 'USD', amount: 900, current: true }];
+  buyer.statements = { buyer: { statement: { rows: [{ stemId: 'buyer-issued', stemName: 'buyer-issued', effectiveDate: '2026-07-15', currency: 'USD', hasBuyerInvoice: true, buyerInvoiceAmount: 1100, actualReleased: 400, statementExposureAmount: 700, buyerInvoiceDueDate: '2026-08-01' }] } } };
+  const config = { audience: 'buyer', sections: ['statement'], columns: ['stem', 'invoice', 'payments', 'balance'], depth: 'detail', includeExpected: false, includeCharts: false, detailSelection: 'all', selectedStemIds: [] };
+  const report = projectAccountInsightReport(buyer, config);
+  assert.deepEqual(report.sections[0].documents.map(({ number, type, amount }) => ({ number, type, amount })), [
+    { number: 'BUY-INV-001', type: 'Invoice', amount: 1100 }, { number: 'BUY-CN-001', type: 'Credit note', amount: -100 },
+  ]);
+  const raw = buildAccountInsightReportPdf(report, { today: '2026-09-05' }).buffer.toString('latin1');
+  for (const expected of ['Invoice and credit note evidence', 'BUY-INV-001', 'BUY-CN-001', 'Credit note']) assert.ok(raw.includes(expected), expected);
+  for (const forbidden of ['BUY-PROFORMA', 'SUP-INV-SECRET', '999']) assert.equal(JSON.stringify(report).includes(forbidden), false, forbidden);
+});
+
+test('document evidence applies the absolute 2026 delivery evidence boundary and never invents a document date', () => {
+  const config = { audience: 'buyer', sections: ['statement'], columns: ['stem', 'invoice'], depth: 'detail', includeExpected: false, includeCharts: false, detailSelection: 'all', selectedStemIds: [] };
+  const evidence = (number) => [{ documentNumber: number, documentType: 'credit_note', documentDate: null, currency: 'USD', amount: -10, current: true }];
+  const source = {
+    activeRole: 'buyer', exportRows: [
+      { stemId: 'current', stemName: 'CURRENT', deliveryDate: '2026-01-01', buyerInvoiceIssued: true, currency: 'USD', buyerDocumentEvidence: evidence('CURRENT-CN') },
+      { stemId: 'legacy', stemName: 'LEGACY', deliveryDate: '2025-12-31', expectedDeliveryDate: '2026-02-01', buyerInvoiceIssued: true, currency: 'USD', buyerDocumentEvidence: evidence('LEGACY-CN') },
+      { stemId: 'undated', stemName: 'UNDATED', buyerInvoiceIssued: true, currency: 'USD', buyerDocumentEvidence: evidence('UNDATED-CN') },
+    ],
+    statements: { buyer: { statement: { rows: [] } } },
+  };
+  const documents = projectAccountInsightReport(source, config).sections[0].documents;
+  assert.deepEqual(documents, [{ stem: 'CURRENT', number: 'CURRENT-CN', type: 'Credit note', date: null, currency: 'USD', amount: -10 }]);
+});
+
 test('forged supplier audience cannot be projected from buyer-only evidence', () => {
   const config = { audience: 'supplier', sections: ['profile', 'stems'], columns: ['stem', 'currency', 'invoice', 'payments', 'balance'], depth: 'detail', includeExpected: false, includeCharts: false, detailSelection: 'all', selectedStemIds: [] };
   assert.throws(() => projectAccountInsightReport(realisticInsight('buyer'), config), /does not match/);

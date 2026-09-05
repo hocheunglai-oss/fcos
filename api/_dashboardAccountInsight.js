@@ -1,7 +1,7 @@
 import { dashboardLineItemVolume, resolveDashboardItemUom } from './_dashboardVolume.js';
 import { SALESFORCE_CORPORATE_CURRENCY, decisionDashboardSupplierAmount } from './_decisionDashboard.js';
 import { grossMarginPercent } from './_dashboardMetrics.js';
-import { isFinalBuyerInvoice, resolveBuyerFinancialAmount } from './_buyerFinancialAmount.js';
+import { isBuyerCreditNote, isFinalBuyerInvoice, resolveBuyerFinancialAmount } from './_buyerFinancialAmount.js';
 import { earliestEtaDate, summarizeBuyerPaymentEvidence } from '../src/lib/paymentCollectionEvidence.js';
 import { financialQuantityValue as financialQuantity, nativeFinancialQuantity } from './_financialQuantity.js';
 import { LEGACY_PAYMENT_DATA_LABEL, paymentDataReliabilityMetadata, paymentDataReliabilityState } from '../src/lib/paymentDataReliability.js';
@@ -958,6 +958,7 @@ export function buildDashboardAccountInsight(dataset, {
   const lineItemsByStem = mapRows(dataset.lineItems);
   const extraCostsByStem = mapRows(dataset.extraCosts);
   const buyerBrokersByStem = mapRows(dataset.buyerBrokers);
+  const buyerInvoicesByStem = mapRows(dataset.buyerInvoices || []);
   const buyerInvoiceStateKnown = Array.isArray(dataset.buyerInvoices);
   const finalBuyerInvoiceStemIds = new Set((dataset.buyerInvoices || [])
     .filter(isFinalBuyerInvoice)
@@ -1024,6 +1025,16 @@ export function buildDashboardAccountInsight(dataset, {
     const collectionState = reliable ? dataset.collectionByStem?.[row.stemId]?.item || null : null;
     const stemBuyerPayments = reliable ? dataset.buyerPaymentsByStem?.[row.stemId] || [] : [];
     const stemSupplierInvoices = reliable ? (dataset.supplierInvoices || []).filter((invoice) => invoice.stemId === row.stemId) : [];
+    const buyerDocumentEvidence = role === 'supplier' ? [] : (buyerInvoicesByStem.get(row.stemId) || [])
+      .filter((invoice) => invoice.Proforma__c !== true && invoice.Deprecated__c !== true)
+      .map((invoice) => ({
+        documentNumber: text(invoice.Name) || 'Document number unavailable',
+        documentType: isBuyerCreditNote(invoice) ? 'credit_note' : 'invoice',
+        documentDate: dateOnly(invoice.Invoice_Date__c),
+        currency: text(invoice.CurrencyIsoCode) || row.currency,
+        amount: number(invoice.Amount__c),
+        current: true,
+      }));
     const supplierInvoiceAmount = stemSupplierInvoices.some((invoice) => number(invoice.invoiceAmount) != null) ? stemSupplierInvoices.reduce((sum, invoice) => sum + valueOrZero(invoice.invoiceAmount), 0) : null;
     const supplierPayable = stemSupplierInvoices.some((invoice) => number(invoice.payableBalance) != null) ? stemSupplierInvoices.reduce((sum, invoice) => sum + valueOrZero(invoice.payableBalance), 0) : null;
     const supplierPaymentDates = stemSupplierInvoices.flatMap((invoice) => invoice.payments || []).map((payment) => payment.date).filter(Boolean).sort();
@@ -1036,12 +1047,14 @@ export function buildDashboardAccountInsight(dataset, {
       buyerPaymentsReceived: reliable ? stemBuyerPayments.reduce((sum, payment) => sum + valueOrZero(payment.amount), 0) : null,
       latestBuyerPaymentDate: reliable ? stemBuyerPayments.map((payment) => payment.paymentDate).filter(Boolean).sort().at(-1) || null : null,
       buyerPaymentEvidence: reliable ? stemBuyerPayments : null,
+      buyerDocumentEvidence,
       supplierInvoiceCount: reliable ? stemSupplierInvoices.length : null,
       supplierInvoiceAmount: reliable ? supplierInvoiceAmount : null,
       supplierPaidAmount: reliable ? stemSupplierInvoices.flatMap((invoice) => invoice.payments || []).reduce((sum, payment) => sum + valueOrZero(payment.amount), 0) : null,
       supplierPayable: reliable ? supplierPayable : null,
       latestSupplierPaymentDate: reliable ? supplierPaymentDates.at(-1) || null : null,
       supplierPaymentEvidence: reliable ? stemSupplierInvoices.flatMap((invoice) => (invoice.payments || []).map((payment) => ({ paymentName: payment.name, amount: payment.amount, paymentDate: payment.date, currency: invoice.currency, invoiceName: invoice.invoiceName }))) : null,
+      supplierDocumentEvidence: reliable ? stemSupplierInvoices.map((invoice) => ({ documentNumber: text(invoice.invoiceName) || 'Document number unavailable', documentType: 'invoice', documentDate: dateOnly(invoice.invoiceDate), currency: text(invoice.currency) || row.currency, amount: number(invoice.invoiceAmount), current: true })) : [],
     };
   });
   const offset = Math.max(0, Number(cursor) || 0);

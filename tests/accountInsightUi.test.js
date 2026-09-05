@@ -17,15 +17,17 @@ test('Account Insight sends one direction and GROUP scope to the unified insight
   const modal = await source('src/components/dashboard/AccountInsightModal.jsx');
   assert.match(modal, /side: role/);
   assert.match(modal, /includedGroupAccountIds/);
-  assert.match(modal, /\['both', \.\.\.normalRoles\]/);
+  assert.match(modal, /\['both', 'buyer', 'supplier'\]/);
+  assert.match(modal, /disabled=\{!available\}/);
   assert.match(modal, /GroupAccountScopeSelector/);
   assert.match(modal, /currentExposure/);
   assert.match(modal, /selectAccountInsightPresentation/);
   assert.match(modal, /BothLegSummary/);
-  assert.match(modal, /currentExposure\?\.creditUtilizationPct/);
   assert.doesNotMatch(modal, /receivable\) \/ number\(identity\.creditLimit\)/);
   assert.match(modal, /requestAbort\.current\?\.abort\(\)/);
   assert.match(modal, /signal: controller\.signal/);
+  assert.match(modal, /appendAccountInsightStemPage/);
+  assert.match(modal, /retainedScopeStale/);
 });
 
 test('GROUP scope selector is searchable and statement variants can suppress duplicate controls', async () => {
@@ -55,6 +57,8 @@ test('report builder uses server options, report presets, and one preview/downlo
   assert.match(builder, /allowedChoices/);
   assert.match(builder, /ReorderList/);
   assert.match(builder, /expectedRevision: existingPreset\.revision/);
+  assert.match(builder, /setName\(savedPreset\.name \|\| name\.trim\(\)\)/);
+  assert.match(builder, /savePreset\('company', editingPreset\?\.scope === 'company' \? editingPreset : null\)/);
   assert.doesNotMatch(builder, /configuration: config/);
   assert.match(modal, /reportConfig/);
   assert.match(modal, /<iframe src=\{reportPreview.url\}/);
@@ -87,8 +91,25 @@ test('monthly trading chart keeps distinct terracotta GP, sage MT, and plum marg
 test('GROUP entity metadata keeps children disclosures reachable and supplier revenue is labelled accurately in Both', async () => {
   const modal = await source('src/components/dashboard/AccountInsightModal.jsx');
   assert.match(modal, /account\?\.entityType === 'group' \|\| sourceData\?\.entityType === 'group'/);
-  assert.match(modal, /activeRole: 'group'/);
+  assert.match(modal, /const data = sourceData/);
   assert.match(modal, /label === 'Supplier' \? 'allocated revenue' : 'turnover'/);
+  assert.match(modal, /\{isGroupEntity \? <TabsContent value="children"/);
+  assert.match(modal, /GROUP child contribution/);
+});
+
+test('Both keeps leg summaries distinct and labels all lower detail views with their selected leg', async () => {
+  const modal = await source('src/components/dashboard/AccountInsightModal.jsx');
+  for (const label of ['STEMs', 'Volume', 'Gross Margin', 'Selected-leg detail', 'detailRoleLabel', 'STEM evidence']) assert.match(modal, new RegExp(label));
+  assert.match(modal, /changeInsightDirection/);
+  assert.match(modal, /onStatementSideChange=\{changeInsightDirection\}/);
+  assert.match(modal, /Search loaded STEMs/);
+  assert.match(modal, /Loaded evidence only/);
+});
+
+test('GROUP selection stays compact until opened and exposes duplicate account CL Keys', async () => {
+  const selector = await source('src/components/dashboard/GroupAccountScopeSelector.jsx');
+  assert.match(selector, /Choose Accounts · \{selected\.size\} of \{available\.length\} selected/);
+  assert.match(selector, /duplicateName && account\.clKey/);
 });
 
 test('report builder is a topmost Radix dialog, restores focus, and displays the exact shared scope', async () => {
@@ -113,4 +134,16 @@ test('Account Insight has one consolidated freshness signal and does not truncat
   assert.match(modal, /returnFocusRef=\{reportTriggerRef\}/);
   assert.match(modal, /reportScopeDisplay/);
   assert.match(modal, /DialogContent className="z-\[70\] grid h-\[92vh\]/);
+  assert.match(modal, /onCloseAutoFocus=\{\(event\) => \{ if \(reportTriggerRef\.current\)/);
+  assert.match(modal, /<details className="rounded-\[var\(--radius-panel\)\][^>]+>\s*<summary[^>]*>Relationship/);
+  assert.match(modal, /<summary[^>]*>Operational risk/);
+  assert.doesNotMatch(modal, /Credit \/ insurance limit/);
+});
+
+test('report builder keeps optional ordering and detail-column controls behind labelled disclosures', async () => {
+  const builder = await source('src/components/dashboard/AccountInsightReportBuilder.jsx');
+  assert.match(builder, /<summary[^>]*>Section order<\/summary>/);
+  assert.match(builder, /<summary[^>]*>Detail columns<\/summary>/);
+  assert.match(builder, /<ToggleList label="Detail columns"/);
+  assert.match(builder, /<ReorderList label="Column order"/);
 });

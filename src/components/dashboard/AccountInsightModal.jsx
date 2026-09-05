@@ -12,7 +12,7 @@ import AccountInsightReportBuilder from '@/components/dashboard/AccountInsightRe
 import GroupAccountScopeSelector from '@/components/dashboard/GroupAccountScopeSelector';
 import { AccountInsightForecastContext } from '@/components/dashboard/AccountInsightForecastContext';
 import { AccountInsightStatementScopeContext } from '@/components/dashboard/AccountInsightStatementScopeContext';
-import { accountInsightDirection, nextInsightLoadSection, selectAccountInsightPresentation, selectedGroupAccountIds } from '@/components/dashboard/accountInsightPresentation';
+import { accountInsightDirection, accountInsightSelectionKey, activityTiming, appendAccountInsightStemPage, groupIdentityLabel, nextInsightLoadSection, selectAccountInsightPresentation, selectedGroupAccountIds } from '@/components/dashboard/accountInsightPresentation';
 import PaymentDataReliabilityBadge from '@/components/common/PaymentDataReliabilityBadge';
 import { navigationCacheOptions } from '@/lib/navigationCachePolicy';
 
@@ -150,7 +150,7 @@ function BothLegSummary({ buyer, supplier, currentExposure }) {
   const exposureRows = currentExposure?.byCurrency || [];
   const buyerExposure = dtoMoney(exposureRows, 'buyerReceivable');
   const supplierExposure = dtoMoney(exposureRows, 'supplierPayable');
-  const summary = (leg, label, exposure, tone) => <article className={`rounded-lg border p-3 ${tone}`}><div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{label} leg</div><dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-2 text-xs"><div><dt className="text-muted-foreground">Selected-period {label === 'Supplier' ? 'allocated revenue' : 'turnover'}</dt><dd className="mt-0.5 font-semibold">{dtoMoney(leg?.kpis?.moneyByCurrency, 'turnover')}</dd></div><div><dt className="text-muted-foreground">Selected-period Gross Profit</dt><dd className="mt-0.5 font-semibold">{dtoMoney(leg?.kpis?.moneyByCurrency, 'grossProfit')}</dd></div><div className="col-span-2"><dt className="text-muted-foreground">Current exposure</dt><dd className="mt-0.5 font-semibold">{exposure}</dd></div></dl></article>;
+  const summary = (leg, label, exposure, tone) => <article className={`rounded-lg border p-3 ${tone}`}><div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{label} leg</div><dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-2 text-xs"><div><dt className="text-muted-foreground">STEMs</dt><dd className="mt-0.5 font-semibold">{formatNumber(leg?.kpis?.stemCount)}</dd></div><div><dt className="text-muted-foreground">Volume</dt><dd className="mt-0.5 font-semibold">{formatNumber(leg?.kpis?.totalVolumeMt, 1)} MT</dd></div><div><dt className="text-muted-foreground">Selected-period {label === 'Supplier' ? 'allocated revenue' : 'turnover'}</dt><dd className="mt-0.5 font-semibold">{dtoMoney(leg?.kpis?.moneyByCurrency, 'turnover')}</dd></div><div><dt className="text-muted-foreground">Gross Profit</dt><dd className="mt-0.5 font-semibold">{dtoMoney(leg?.kpis?.moneyByCurrency, 'grossProfit')}</dd></div><div><dt className="text-muted-foreground">Gross Margin</dt><dd className="mt-0.5 font-semibold">{formatPercent(leg?.kpis?.grossMarginPct)}</dd></div><div><dt className="text-muted-foreground">Current exposure</dt><dd className="mt-0.5 font-semibold">{exposure}</dd></div></dl></article>;
   return <Section title="Both directions" description="Buyer and supplier results remain distinct; no cross-direction amounts are netted."><div className="grid gap-3 md:grid-cols-2">{summary(buyer, 'Buyer', buyerExposure, 'border-sky-200 bg-sky-50/50')}{summary(supplier, 'Supplier', supplierExposure, 'border-amber-200 bg-amber-50/50')}</div></Section>;
 }
 
@@ -177,10 +177,17 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
   const [statementScope, setStatementScope] = useState('open');
   const [reportBuilderOpen, setReportBuilderOpen] = useState(false);
   const [reportPreview, setReportPreview] = useState(null);
+  const [detailRole, setDetailRole] = useState('buyer');
+  const [stemQuery, setStemQuery] = useState('');
+  const [scopeRefreshNonce, setScopeRefreshNonce] = useState(0);
+  const [retainedResponse, setRetainedResponse] = useState(null);
+  const [retainedScopeStale, setRetainedScopeStale] = useState(false);
   const requestSequence = useRef(0);
   const requestAbort = useRef(null);
   const reportTriggerRef = useRef(null);
-  const selectionKey = account?.accountId ? `${account.accountId}:${account.role || 'buyer'}` : null;
+  const handledScopeRefreshRef = useRef(0);
+  const pendingDirectionRef = useRef(null);
+  const selectionKey = accountInsightSelectionKey(account);
 
   const payload = useMemo(() => ({
     accountId: account?.accountId,
@@ -197,7 +204,7 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
     statementScope,
   }), [account?.accountId, accountWide, dashboardScope, forecastConservativeness, includedGroupAccountIds, periodMode, role, selectedMonths, selectedYears, statementScope]);
 
-  const load = async ({ force = false, cursor = null, append = false, section = activeTab } = {}) => {
+  const load = async ({ force = false, cursor = null, append = false, section = activeTab, appendDirection = role === 'both' ? detailRole : role } = {}) => {
     if (!account?.accountId) return;
     const requestId = ++requestSequence.current;
     requestAbort.current?.abort();
@@ -211,9 +218,11 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
         setMeta(response.meta);
         if (response.data?.error) setError(response.data.error);
         else if (append) {
-          setSections((current) => ({ ...current, [section]: { ...response.data, stems: { ...response.data.stems, rows: [...(current?.[section]?.stems?.rows || []), ...(response.data.stems?.rows || [])] } } }));
+          setSections((current) => ({ ...current, [section]: appendAccountInsightStemPage(current?.[section], response.data, appendDirection) }));
         } else {
           setError(null);
+          setRetainedResponse(null);
+          setRetainedScopeStale(false);
           setSections((current) => ({ ...current, [section]: response.data }));
         }
       };
@@ -243,22 +252,46 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
     setIncludedGroupAccountIds(null);
     setActiveTab(account.initialTab === 'credit' ? 'credit' : 'overview');
     setSections({});
+    setRetainedResponse(null);
+    setRetainedScopeStale(false);
     setAccountWide(dashboardScope?.mode === 'account_wide');
     setError(null);
     setSelectedStemId(null);
     setForecastConservativeness(null);
     setStatementScope('open');
     setReportBuilderOpen(false);
+    setDetailRole('buyer');
+    setStemQuery('');
     setReadySelection(selectionKey);
-  }, [account?.accountId, account?.initialTab, account?.role, dashboardScope?.mode, open, readySelection, safeInitialPeriod, selectionKey]);
+  }, [account?.accountId, account?.entityType, dashboardScope?.mode, open, readySelection, safeInitialPeriod, selectionKey]);
+
+  useEffect(() => {
+    if (!open || readySelection !== selectionKey) return;
+    const externalRole = accountInsightDirection(account);
+    if (pendingDirectionRef.current) {
+      if (pendingDirectionRef.current === externalRole) pendingDirectionRef.current = null;
+      else return;
+    }
+    if (externalRole !== role) {
+      setSections({});
+      setRole(externalRole);
+      setStatementSide(initialStatementSide(account));
+    }
+    const externalTab = account?.initialTab === 'credit' ? 'credit' : account?.initialTab || 'overview';
+    setActiveTab((current) => current === externalTab ? current : externalTab);
+  }, [account?.initialTab, account?.role, account?.roles, open, readySelection, role, selectionKey]);
 
   useEffect(() => { requestAbort.current?.abort(); }, [payload]);
 
   useEffect(() => {
     if (!open || !account?.accountId || readySelection !== selectionKey) return;
     const section = nextInsightLoadSection(activeTab, sections);
-    if (section) load({ section });
-  }, [activeTab, open, payload, readySelection, sections, selectionKey]);
+    const scopeChanged = handledScopeRefreshRef.current !== scopeRefreshNonce;
+    if (section || scopeChanged) {
+      handledScopeRefreshRef.current = scopeRefreshNonce;
+      load({ section: section || activeTab });
+    }
+  }, [activeTab, open, payload, readySelection, scopeRefreshNonce, sections, selectionKey]);
 
   const download = async (formatType, reportConfig = null, { preview = false } = {}) => {
     setExporting(formatType);
@@ -291,10 +324,11 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
   useEffect(() => () => { if (reportPreview?.url) URL.revokeObjectURL(reportPreview.url); }, [reportPreview?.url]);
 
   const accountInsight = sections[activeTab] || null;
-  const responseData = accountInsight || Object.values(sections)[0] || null;
+  const responseData = accountInsight || Object.values(sections)[0] || retainedResponse || null;
   const presentation = selectAccountInsightPresentation(responseData, role);
   const bothResponse = presentation.isBoth ? responseData : null;
-  const sourceData = presentation.primary || {
+  const selectedDetailRole = role === 'both' ? detailRole : role;
+  const sourceData = (presentation.isBoth ? presentation[selectedDetailRole] : presentation.primary) || {
     activeRole: role,
     availableRoles: [role],
     identity: account || {},
@@ -308,7 +342,7 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
     warnings: [],
   };
   const isGroupEntity = account?.entityType === 'group' || sourceData?.entityType === 'group';
-  const data = isGroupEntity ? { ...sourceData, activeRole: 'group' } : sourceData;
+  const data = sourceData;
   const identity = data.identity || bothResponse?.identity || account || {};
   const kpis = data?.kpis || {};
   const trend = kpis.trend || [];
@@ -321,8 +355,9 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
   const financialRows = kpis.moneyByCurrency || [];
   const financialCurrency = financialRows.length === 1 ? financialRows[0].currency : '';
   const currencyValue = (rows, key) => rows?.length === 1 ? formatMoney(rows[0][key], rows[0].currency) : rows?.length ? `${rows.length} currencies` : 'Unavailable';
-  const creditUtilization = currentExposure?.creditUtilizationPct ?? data?.creditUtilizationPct ?? null;
-  const normalRoles = [...new Set((Array.isArray(bothResponse?.availableRoles) ? bothResponse.availableRoles : (Array.isArray(data?.availableRoles) ? data.availableRoles : (Array.isArray(data?.roles) ? data.roles : [role]))).filter((availableRole) => availableRole === 'buyer' || availableRole === 'supplier'))];
+  const reportedRoles = Array.isArray(bothResponse?.availableRoles) ? bothResponse.availableRoles : (Array.isArray(data?.availableRoles) ? data.availableRoles : (Array.isArray(data?.roles) ? data.roles : []));
+  const accountRoles = Array.isArray(account?.roles) ? account.roles : account?.role === 'both' ? ['buyer', 'supplier'] : [account?.role];
+  const normalRoles = [...new Set([...reportedRoles, ...accountRoles].filter((availableRole) => availableRole === 'buyer' || availableRole === 'supplier'))];
   const statementSides = account?.role === 'both' || (Array.isArray(account?.roles) && account.roles.includes('buyer') && account.roles.includes('supplier')) || (Array.isArray(data?.roles) && data.roles.includes('buyer') && data.roles.includes('supplier'))
     ? ['both', 'buyer', 'supplier']
     : [role === 'supplier' ? 'supplier' : 'buyer'];
@@ -342,6 +377,14 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
     periodLabel: data?.period?.label || PERIODS.find((item) => item.value === periodMode)?.label,
     statementAsOf: currentExposure?.sourceTimestamp || currentExposure?.asOf || data?.exposureAsOf ? formatDate(currentExposure?.sourceTimestamp || currentExposure?.asOf || data?.exposureAsOf) : null,
   };
+  const activityCadence = activityTiming(kpis.daysSinceLastActivity);
+  const showingBoth = Boolean(bothResponse && role === 'both');
+  const detailRoleLabel = detailRole === 'supplier' ? 'Supplier' : 'Buyer';
+  const stemRows = data.stems?.rows || [];
+  const normalizedStemQuery = stemQuery.trim().toLowerCase();
+  const visibleStemRows = normalizedStemQuery ? stemRows.filter((row) => [row.stemName, row.status, row.currency, row.vesselName, row.portName, ...(row.products || []).map((item) => item.name)].filter(Boolean).join(' ').toLowerCase().includes(normalizedStemQuery)) : stemRows;
+  const changeInsightDirection = (side) => { pendingDirectionRef.current = side; setSections({}); setRole(side); setStatementSide(side); setDetailRole(side === 'supplier' ? 'supplier' : 'buyer'); onViewChange?.({ role: side, statementSide: side, tab: activeTab, periodMode, accountWide }); };
+  const detailFocus = showingBoth ? <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-2 text-xs"><span className="font-semibold">Selected-leg detail</span>{['buyer', 'supplier'].map((side) => <Button key={side} type="button" size="sm" variant={detailRole === side ? 'default' : 'outline'} aria-pressed={detailRole === side} onClick={() => setDetailRole(side)}>{ROLE_LABELS[side]}</Button>)}</div> : null;
 
   return (
     <>
@@ -360,13 +403,14 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
               <DialogDescription>{identity.clKey ? `CL Key ${identity.clKey}` : 'CL Key not set'} · {data.relationship?.accountManagers?.map((manager) => manager.name).join(' · ') || 'No Account Manager'} · {data?.period?.label || PERIODS.find((item) => item.value === periodMode)?.label}</DialogDescription>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              {normalRoles.length > 1 ? (
-                <div className="flex rounded-md border border-border bg-muted/30 p-1">
-                  {['both', ...normalRoles].map((availableRole) => <button type="button" key={availableRole} aria-pressed={role === availableRole} onClick={() => { if (availableRole !== role) { setSections({}); setRole(availableRole); setStatementSide(availableRole); onViewChange?.({ role: availableRole, tab: activeTab, periodMode, accountWide }); } }} className={`rounded px-3 py-1.5 text-xs font-semibold ${role === availableRole ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground'}`}>{ROLE_LABELS[availableRole]}</button>)}
-                </div>
-              ) : null}
+              <div className="flex rounded-md border border-border bg-muted/30 p-1" aria-label="Account Insight direction">
+                {['both', 'buyer', 'supplier'].map((availableRole) => {
+                  const available = availableRole === 'both' ? normalRoles.includes('buyer') && normalRoles.includes('supplier') : normalRoles.includes(availableRole);
+                  return <button type="button" key={availableRole} disabled={!available} aria-pressed={role === availableRole} onClick={() => { if (available && availableRole !== role) changeInsightDirection(availableRole); }} className={`rounded px-3 py-1.5 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-45 ${role === availableRole ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground'}`}>{ROLE_LABELS[availableRole]}</button>;
+                })}
+              </div>
               {activeTab !== 'credit' ? <Button type="button" variant="outline" size="sm" onClick={() => load({ force: true, section: activeTab })} disabled={loading}><RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />Refresh</Button> : null}
-              <Button ref={reportTriggerRef} type="button" size="sm" onClick={() => setReportBuilderOpen(true)}><FileText className="mr-2 h-4 w-4" />Build report</Button>
+              <Button ref={reportTriggerRef} type="button" size="sm" onClick={() => setReportBuilderOpen(true)} disabled={loading || retainedScopeStale}><FileText className="mr-2 h-4 w-4" />Build report</Button>
             </div>
           </div>
           <div className="mt-3 flex flex-wrap items-center gap-1.5">
@@ -374,13 +418,13 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
             {dashboardScope ? <Button type="button" size="sm" variant={accountWide ? 'outline' : 'secondary'} aria-pressed={!accountWide} onClick={() => { const next = !accountWide; setSections({}); setAccountWide(next); onViewChange?.({ role, tab: activeTab, periodMode, accountWide: next }); }}>{accountWide ? 'Account-wide' : 'Dashboard scope'}</Button> : null}
           </div>
           {dashboardScope && !accountWide ? <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] text-muted-foreground"><span>Inherited filters:</span>{[dashboardScope.labels?.company, dashboardScope.labels?.group, dashboardScope.labels?.port, dashboardScope.labels?.country, dashboardScope.disputeOnly ? 'Disputed only' : null].filter(Boolean).map((label) => <span key={label} className="rounded-full border border-border bg-background px-2 py-0.5">{label}</span>)}{![dashboardScope.labels?.company, dashboardScope.labels?.group, dashboardScope.labels?.port, dashboardScope.labels?.country, dashboardScope.disputeOnly].some(Boolean) ? <span>period only</span> : null}</div> : null}
-          <div className="mt-3"><GroupAccountScopeSelector groupScope={presentation.groupScope} selectedAccountIds={includedGroupAccountIds} onChange={(ids) => { setSections({}); setIncludedGroupAccountIds(ids); }} disabled={loading} /></div>
+          <div className="mt-3"><GroupAccountScopeSelector groupScope={presentation.groupScope} selectedAccountIds={includedGroupAccountIds} onChange={(ids) => { setRetainedResponse(responseData); setRetainedScopeStale(true); setSections({}); setIncludedGroupAccountIds(ids); setScopeRefreshNonce((value) => value + 1); }} disabled={loading} />{retainedScopeStale ? <div className="mt-2 text-xs text-muted-foreground">Refreshing the selected GROUP scope. Export is unavailable until the current scope loads.</div> : null}</div>
         </DialogHeader>
 
         <div className="account-insight-canvas min-h-0 flex-1 overflow-y-auto">
           {error ? <div className="m-5 flex items-start gap-2 rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-800"><ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />{error}</div> : null}
-          {loading && !accountInsight && activeTab !== 'credit' ? <div className="flex h-72 items-center justify-center gap-3 text-sm text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin" />Building Account Insight...</div> : null}
-          {accountInsight || activeTab === 'credit' ? (
+          {loading && !responseData && activeTab !== 'credit' ? <div className="flex h-72 items-center justify-center gap-3 text-sm text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin" />Building Account Insight...</div> : null}
+          {responseData || activeTab === 'credit' ? (
             <Tabs value={activeTab} onValueChange={(nextTab) => { setActiveTab(nextTab); onViewChange?.({ role, tab: nextTab, periodMode, accountWide }); }} className="min-h-full">
               <div className="app-navigation-material sticky top-0 z-20 overflow-x-auto border-b border-border px-5 py-2 sm:px-6">
                 <TabsList className="h-10 w-max">
@@ -394,19 +438,20 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
               <div className="mx-auto max-w-[1440px] p-5 sm:p-6">
                 {data?.warnings?.length && activeTab !== 'credit' ? <div className="mb-5 rounded-md border border-amber-200 bg-amber-50 p-3"><div className="flex items-center gap-2 text-sm font-semibold text-amber-900"><AlertTriangle className="h-4 w-4" />Data warnings</div><ul className="mt-2 space-y-1 text-xs text-amber-900">{data.warnings.slice(0, 6).map((warning) => <li key={warning}>• {warning}</li>)}</ul></div> : null}
 
-                <TabsContent value="credit" className="mt-0 space-y-4"><div><h3 className="text-sm font-semibold">Current exposure</h3><p className="mt-1 text-xs text-muted-foreground">Current credit exposure is separate from selected-period trading performance.</p></div><Suspense fallback={<div className="flex h-72 items-center justify-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin" />Loading Credit Statement tools…</div>}>{statementSide === 'both' ? <CombinedAccountStatement accountId={account?.accountId} entityType={account?.entityType} includedGroupAccountIds={includedGroupAccountIds} onGroupScopeChange={setIncludedGroupAccountIds} hideGroupScopeSelector active={activeTab === 'credit'} dashboardScope={accountWide ? { mode: 'account_wide' } : dashboardScope} statementSide={statementSide} availableStatementSides={statementSides} onStatementSideChange={(side) => { setStatementSide(side); onViewChange?.({ role, statementSide: side, tab: 'credit', periodMode, accountWide }); }} onStemClick={setSelectedStemId} /> : statementSide === 'supplier' ? <SupplierCreditStatement accountId={account?.accountId} entityType={account?.entityType} includedGroupAccountIds={includedGroupAccountIds} onGroupScopeChange={setIncludedGroupAccountIds} hideGroupScopeSelector active={activeTab === 'credit'} filters={accountWide ? {} : dashboardScope?.filters} statementSide={statementSide} availableStatementSides={statementSides} onStatementSideChange={(side) => { setStatementSide(side); onViewChange?.({ role, statementSide: side, tab: 'credit', periodMode, accountWide }); }} onStemClick={setSelectedStemId} /> : <AccountCreditStatement accountId={account?.accountId} entityType={account?.entityType} includedGroupAccountIds={includedGroupAccountIds} onGroupScopeChange={setIncludedGroupAccountIds} hideGroupScopeSelector active={activeTab === 'credit'} statementSide={statementSide} availableStatementSides={statementSides} onStatementSideChange={(side) => { setStatementSide(side); onViewChange?.({ role, statementSide: side, tab: 'credit', periodMode, accountWide }); }} onStemClick={setSelectedStemId} />}</Suspense><details className="rounded-[var(--radius-panel)] border border-border bg-card p-4"><summary className="cursor-pointer text-sm font-semibold">Payment performance, risk, and GROUP details</summary><p className="mt-1 text-xs text-muted-foreground">Open the detailed legacy panels without leaving the consolidated credit view.</p><div className="mt-3 flex flex-wrap gap-2"><Button type="button" size="sm" variant="outline" onClick={() => setActiveTab('payments')}>Payment performance</Button><Button type="button" size="sm" variant="outline" onClick={() => setActiveTab('risk')}>Risk &amp; workflow</Button>{data?.activeRole === 'group' ? <Button type="button" size="sm" variant="outline" onClick={() => setActiveTab('children')}>GROUP children</Button> : null}</div></details></TabsContent>
+                <TabsContent value="credit" className="mt-0 space-y-4"><div><h3 className="text-sm font-semibold">Current exposure</h3><p className="mt-1 text-xs text-muted-foreground">Current credit exposure is separate from selected-period trading performance.</p></div><Suspense fallback={<div className="flex h-72 items-center justify-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin" />Loading Credit Statement tools…</div>}>{statementSide === 'both' ? <CombinedAccountStatement accountId={account?.accountId} entityType={account?.entityType} includedGroupAccountIds={includedGroupAccountIds} onGroupScopeChange={setIncludedGroupAccountIds} hideGroupScopeSelector active={activeTab === 'credit'} dashboardScope={accountWide ? { mode: 'account_wide' } : dashboardScope} statementSide={statementSide} availableStatementSides={statementSides} onStatementSideChange={changeInsightDirection} onStemClick={setSelectedStemId} /> : statementSide === 'supplier' ? <SupplierCreditStatement accountId={account?.accountId} entityType={account?.entityType} includedGroupAccountIds={includedGroupAccountIds} onGroupScopeChange={setIncludedGroupAccountIds} hideGroupScopeSelector active={activeTab === 'credit'} filters={accountWide ? {} : dashboardScope?.filters} statementSide={statementSide} availableStatementSides={statementSides} onStatementSideChange={changeInsightDirection} onStemClick={setSelectedStemId} /> : <AccountCreditStatement accountId={account?.accountId} entityType={account?.entityType} includedGroupAccountIds={includedGroupAccountIds} onGroupScopeChange={setIncludedGroupAccountIds} hideGroupScopeSelector active={activeTab === 'credit'} statementSide={statementSide} availableStatementSides={statementSides} onStatementSideChange={changeInsightDirection} onStemClick={setSelectedStemId} />}</Suspense><details className="rounded-[var(--radius-panel)] border border-border bg-card p-4"><summary className="cursor-pointer text-sm font-semibold">Payment performance, risk, and GROUP details</summary><p className="mt-1 text-xs text-muted-foreground">Open the detailed legacy panels without leaving the consolidated credit view.</p><div className="mt-3 flex flex-wrap gap-2"><Button type="button" size="sm" variant="outline" onClick={() => setActiveTab('payments')}>Payment performance</Button><Button type="button" size="sm" variant="outline" onClick={() => setActiveTab('risk')}>Risk &amp; workflow</Button>{isGroupEntity ? <Button type="button" size="sm" variant="outline" onClick={() => setActiveTab('children')}>GROUP children</Button> : null}</div></details></TabsContent>
 
                 <TabsContent value="overview" className="mt-0 space-y-5">
                   {bothResponse ? <BothLegSummary buyer={bothResponse.buyer} supplier={bothResponse.supplier} currentExposure={currentExposure} /> : null}
-                  <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 xl:grid-cols-6">
+                  {detailFocus}
+                  {!showingBoth ? <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 xl:grid-cols-6">
                     <Kpi label="STEMs" value={formatNumber(kpis.stemCount)} detail={`${formatNumber(kpis.deliveredStems)} delivered`} />
                     <Kpi label="Volume" value={`${formatNumber(kpis.totalVolumeMt, 1)} MT`} detail={<Comparison value={comparison?.volumePct} />} />
                     <Kpi label={data.activeRole === 'supplier' ? 'Allocated Revenue' : 'Turnover'} value={financialRows.length === 1 ? formatMoney(kpis.turnover, financialCurrency) : `${financialRows.length} currencies`} detail={<Comparison value={comparison?.turnoverPct} />} />
                     <Kpi label="Gross Profit" value={financialRows.length === 1 ? formatMoney(kpis.grossProfit, financialCurrency) : `${financialRows.length} currencies`} detail={<Comparison value={comparison?.grossProfitPct} />} tone={financialRows.length === 1 && number(kpis.grossProfit) < 0 ? 'danger' : financialRows.length === 1 ? 'positive' : 'default'} />
                     <Kpi label="Gross Margin" value={formatPercent(kpis.grossMarginPct)} detail={comparison ? <Comparison value={comparison.grossMarginPointChange} suffix=" pts" /> : 'No comparison'} />
                     <Kpi label="Current exposure" value={data.activeRole === 'supplier' ? currencyValue(currentExposureRows, 'supplierPayable') : currencyValue(currentExposureRows, 'buyerReceivable')} detail={currentExposure?.sourceTimestamp || currentExposure?.asOf || data?.exposureAsOf ? `As of ${formatDate(currentExposure?.sourceTimestamp || currentExposure?.asOf || data?.exposureAsOf)}` : 'Current statement basis'} />
-                  </div>
-                  <Section title="Ranked evidence" description="The strongest operational signals behind this Account summary">
+                  </div> : null}
+                  <Section title={showingBoth ? `${detailRoleLabel} detail evidence` : 'Ranked evidence'} description={showingBoth ? 'Selected-leg evidence; use the detail switch to inspect the other direction.' : 'The strongest operational signals behind this Account summary'}>
                     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                       <button type="button" disabled={!kpis.worstStem?.stemId} onClick={() => setSelectedStemId(kpis.worstStem?.stemId)} className="rounded-md border border-red-200 bg-red-50/50 p-3 text-left disabled:opacity-60"><div className="text-[11px] font-semibold uppercase text-red-800">Lowest-profit STEM</div><div className="mt-1 font-semibold text-primary">{kpis.worstStem?.stemName || 'Unavailable'}</div><div className="mt-1 text-xs tabular-nums text-red-800">{formatMoney(kpis.worstStem?.grossProfit, kpis.worstStem?.currency || financialCurrency)}</div></button>
                       <button type="button" disabled={!kpis.bestStem?.stemId} onClick={() => setSelectedStemId(kpis.bestStem?.stemId)} className="rounded-md border border-emerald-200 bg-emerald-50/50 p-3 text-left disabled:opacity-60"><div className="text-[11px] font-semibold uppercase text-emerald-800">Highest-profit STEM</div><div className="mt-1 font-semibold text-primary">{kpis.bestStem?.stemName || 'Unavailable'}</div><div className="mt-1 text-xs tabular-nums text-emerald-800">{formatMoney(kpis.bestStem?.grossProfit, kpis.bestStem?.currency || financialCurrency)}</div></button>
@@ -415,25 +460,28 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
                     </div>
                   </Section>
                   <div className="grid gap-5 lg:grid-cols-2">
-                    <Section title="Relationship" description="Salesforce identity and FCOS ownership context">
+                    <details className="rounded-[var(--radius-panel)] border border-border bg-card p-4 shadow-[var(--shadow-panel)] sm:p-5">
+                      <summary className="cursor-pointer text-sm font-semibold text-foreground">Relationship <span className="ml-1 text-xs font-normal text-muted-foreground">Salesforce identity and FCOS ownership context</span></summary>
+                      <div className="mt-4">
                       <dl className="grid grid-cols-2 gap-x-5 gap-y-3 text-sm">
                         <div><dt className="text-xs text-muted-foreground">Record type</dt><dd className="font-medium">{identity.recordType || 'Unavailable'}</dd></div>
-                        <div><dt className="text-xs text-muted-foreground">GROUP</dt><dd className="font-medium">{identity.group ? [identity.group.name, identity.group.clKey].filter(Boolean).join(' · ') : 'Not applicable'}</dd></div>
-                        <div><dt className="text-xs text-muted-foreground">Credit / insurance limit</dt><dd className="font-medium">{number(identity.creditLimit) == null && number(identity.insuranceLimit) == null ? 'Unavailable' : `${formatMoney(identity.creditLimit, identity.currency)} / ${formatMoney(identity.insuranceLimit, identity.currency)}`}</dd></div>
-                        <div><dt className="text-xs text-muted-foreground">Credit utilization</dt><dd className="font-medium">{formatPercent(creditUtilization)}</dd></div>
+                        <div><dt className="text-xs text-muted-foreground">GROUP</dt><dd className="font-medium">{groupIdentityLabel(identity.group)}</dd></div>
                         <div><dt className="text-xs text-muted-foreground">Risk rating</dt><dd className="font-medium">{identity.creditRating || 'Unavailable'}</dd></div>
                         <div><dt className="text-xs text-muted-foreground">First activity</dt><dd className="font-medium">{formatDate(kpis.firstStemDate)}</dd></div>
-                        <div><dt className="text-xs text-muted-foreground">Last activity</dt><dd className="font-medium">{formatDate(kpis.lastStemDate)}</dd></div>
+                        <div><dt className="text-xs text-muted-foreground">{activityCadence?.isUpcoming ? 'Latest scheduled activity' : 'Last activity'}</dt><dd className="font-medium">{formatDate(kpis.lastStemDate)}</dd></div>
                         <div><dt className="text-xs text-muted-foreground">Relationship age</dt><dd className="font-medium">{formatDays(kpis.relationshipAgeDays)}</dd></div>
-                        <div><dt className="text-xs text-muted-foreground">Since last activity</dt><dd className="font-medium">{formatDays(kpis.daysSinceLastActivity)}</dd></div>
+                        <div><dt className="text-xs text-muted-foreground">{activityCadence?.isUpcoming ? 'Until latest scheduled activity' : 'Since last activity'}</dt><dd className="font-medium">{formatDays(activityCadence?.days)}</dd></div>
                         <div><dt className="text-xs text-muted-foreground">Active months</dt><dd className="font-medium">{formatNumber(kpis.activeMonths)}</dd></div>
                         <div><dt className="text-xs text-muted-foreground">Inactive months</dt><dd className="font-medium">{formatNumber(kpis.inactiveMonths)}</dd></div>
                         <div><dt className="text-xs text-muted-foreground">Average STEMs/month</dt><dd className="font-medium">{formatNumber(kpis.averageStemsPerActiveMonth, 1)}</dd></div>
                         <div><dt className="text-xs text-muted-foreground">Peak activity</dt><dd className="font-medium">{kpis.peakPeriod?.period || 'Unavailable'}{kpis.peakPeriod ? ` · ${formatNumber(kpis.peakPeriod.volumeMt, 1)} MT` : ''}</dd></div>
                       </dl>
                       <div className="mt-4 border-t border-border pt-3"><div className="text-xs text-muted-foreground">Account Managers · {formatNumber(data.relationship?.managerCoverage)} assigned</div><div className="mt-1 text-sm font-medium">{data.relationship?.accountManagers?.map((manager) => manager.name).join(' · ') || 'Not assigned'}</div>{data.relationship?.accountNote ? <p className="mt-2 text-xs text-muted-foreground">{data.relationship.accountNote}</p> : null}</div>
-                    </Section>
-                    <Section title="Operational risk" description="Current workflow signals">
+                      </div>
+                    </details>
+                    <details className="rounded-[var(--radius-panel)] border border-border bg-card p-4 shadow-[var(--shadow-panel)] sm:p-5">
+                      <summary className="cursor-pointer text-sm font-semibold text-foreground">Operational risk <span className="ml-1 text-xs font-normal text-muted-foreground">Current workflow signals</span></summary>
+                      <div className="mt-4">
                       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
                         <Kpi label="Disputed" value={formatNumber(kpis.disputedStems)} detail={formatPercent(kpis.disputeRatePct)} tone={kpis.disputedStems ? 'warning' : 'default'} />
                         <Kpi label="Cancelled" value={formatNumber(kpis.cancelledStems)} detail={formatPercent(kpis.cancellationRatePct)} />
@@ -442,13 +490,15 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
                         <Kpi label="Hedge coverage" value={formatPercent(kpis.hedgeCoveragePct)} detail={`${formatNumber(kpis.hedgedStems)} linked STEMs`} />
                         <Kpi label="Special Terms" value={formatNumber(data.risk?.specialTerms?.count)} tone={data.risk?.specialTerms?.count ? 'warning' : 'default'} />
                       </div>
-                    </Section>
+                      </div>
+                    </details>
                   </div>
                 </TabsContent>
 
                 <TabsContent value="trading" className="mt-0 space-y-5">
                   {bothResponse ? <BothLegSummary buyer={bothResponse.buyer} supplier={bothResponse.supplier} currentExposure={currentExposure} /> : null}
-                  <Section title="Financial performance by currency" description="FCOS does not net currencies without an authoritative exchange rate"><MoneyRows rows={financialRows} columns={[{ key: 'turnover', label: data.activeRole === 'supplier' ? 'Allocated revenue' : 'Turnover' }, { key: 'supplierSpend', label: 'Supplier spend' }, { key: 'grossProfit', label: 'Gross Profit' }, { key: 'brokerCommissions', label: 'Broker commissions' }, { key: 'extraCosts', label: 'Extra costs' }, { key: 'uninvoicedCost', label: 'Uninvoiced cost' }]} /></Section>
+                  {detailFocus}
+                  <Section title={showingBoth ? `${detailRoleLabel} trading detail by currency` : 'Financial performance by currency'} description={showingBoth ? 'Selected-leg trading detail; use the detail switch to inspect the other direction.' : 'FCOS does not net currencies without an authoritative exchange rate'}><MoneyRows rows={financialRows} columns={[{ key: 'turnover', label: data.activeRole === 'supplier' ? 'Allocated revenue' : 'Turnover' }, { key: 'supplierSpend', label: 'Supplier spend' }, { key: 'grossProfit', label: 'Gross Profit' }, { key: 'brokerCommissions', label: 'Broker commissions' }, { key: 'extraCosts', label: 'Extra costs' }, { key: 'uninvoicedCost', label: 'Uninvoiced cost' }]} /></Section>
                   <Section title="Monthly activity" description={`${kpis.trendGranularity === 'year' ? 'Yearly' : 'Monthly'} volume, Gross Profit, and Gross Margin`}>
                     {kpis.currencyTrends?.length ? <div className="grid gap-5 xl:grid-cols-2">{kpis.currencyTrends.map((currencyTrend) => <div key={currencyTrend.currency} className="min-w-0"><div className="mb-2 text-xs font-semibold text-muted-foreground">{currencyTrend.currency}</div><MonthlyTrendChart currency={currencyTrend.currency} rows={currencyTrend.rows} /></div>)}</div> : trend.length ? <MonthlyTrendChart currency={financialCurrency} rows={trend} fallback /> : <Empty />}
                   </Section>
@@ -479,10 +529,13 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
                     <Kpi label="Top product share" value={formatPercent(kpis.topOneProductConcentrationPct)} detail={`${formatPercent(kpis.topThreeProductConcentrationPct)} top three`} />
                     <Kpi label="Top port share" value={formatPercent(kpis.topOnePortConcentrationPct)} detail={`${formatPercent(kpis.topThreePortConcentrationPct)} top three`} />
                   </div>
+                  {isGroupEntity ? <Section title="GROUP child contribution" description="Child contribution remains available for the selected direction."><Button type="button" size="sm" variant="outline" onClick={() => setActiveTab('children')}>Open GROUP children</Button></Section> : null}
                 </TabsContent>
 
                 <TabsContent value="payments" className="mt-0 space-y-5">
                   <div className="flex items-center justify-between rounded-md border border-border bg-muted/30 px-3 py-2"><span className="text-xs text-muted-foreground">Detailed payment performance</span><Button type="button" size="sm" variant="outline" onClick={() => setActiveTab('credit')}>Back to Credit &amp; Payments</Button></div>
+                  {detailFocus}
+                  {showingBoth ? <p className="text-xs text-muted-foreground">Showing {detailRoleLabel} payment detail only; use the detail switch to inspect the other direction.</p> : null}
                   {hasOnlyLegacyPaymentData ? (
                     <Section title="Payment history" description="Earlier commercial activity remains available in Account Insight">
                       <div className="rounded-md border border-slate-200 bg-slate-50 px-4 py-5 text-sm font-medium text-slate-700">
@@ -519,13 +572,16 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
                   <Section title="Unavailable comparisons" description="FCOS does not infer unsupported Account-level figures"><div className="space-y-2">{data.risk?.unavailableKpis?.map((warning) => <div key={warning} className="text-sm text-muted-foreground">{warning}</div>)}</div></Section>
                 </TabsContent>
 
-                <TabsContent value="stems" className="mt-0">
-                  <Section title="Underlying STEMs" description={`${formatNumber(data.stems?.rows?.length)} shown · ${formatNumber(data.stems?.total)} matched`} action={data.stems?.cursor ? <Button type="button" variant="outline" size="sm" onClick={() => load({ cursor: data.stems.cursor, append: true, section: 'stems' })} disabled={loading}>{loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}Load more</Button> : null}>
-                    <div className="overflow-x-auto rounded-md border border-border"><table className="w-full min-w-[1000px] text-sm"><thead className="bg-muted/50 text-left text-xs uppercase text-muted-foreground"><tr><th className="px-3 py-2">STEM</th><th className="px-3 py-2">Date</th><th className="px-3 py-2">Products</th><th className="px-3 py-2 text-right">Volume</th><th className="px-3 py-2 text-right">Turnover</th><th className="px-3 py-2 text-right">Gross Profit</th><th className="px-3 py-2">Status</th></tr></thead><tbody>{data.stems?.rows?.map((row) => <tr key={row.stemId} className="border-t border-border"><td className="px-3 py-2 font-semibold"><button type="button" className="text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => setSelectedStemId(row.stemId)}>{row.stemName}</button></td><td className="px-3 py-2">{formatDate(row.effectiveDate)}</td><td className="max-w-80 px-3 py-2"><div className="truncate" title={row.products?.map((item) => item.name).join(', ')}>{row.products?.map((item) => item.name).join(', ') || '—'}</div></td><td className="px-3 py-2 text-right">{formatNumber(row.volumeMt, 1)} MT</td><td className="px-3 py-2 text-right">{formatMoney(row.turnover, row.currency)}</td><td className={`px-3 py-2 text-right font-semibold ${number(row.grossProfit) < 0 ? 'text-red-700' : 'text-emerald-700'}`}>{formatMoney(row.grossProfit, row.currency)}</td><td className="px-3 py-2">{row.disputed ? <span className="rounded-sm bg-amber-100 px-2 py-1 text-xs text-amber-900">{row.disputeStatus || 'Disputed'}</span> : row.status}</td></tr>)}{!data.stems?.rows?.length ? <tr><td colSpan={7}><Empty /></td></tr> : null}</tbody></table></div>
+                <TabsContent value="stems" className="mt-0 space-y-4">
+                  {bothResponse ? <BothLegSummary buyer={bothResponse.buyer} supplier={bothResponse.supplier} currentExposure={currentExposure} /> : null}
+                  {detailFocus}
+                  <Section title={showingBoth ? `${detailRoleLabel} STEM evidence` : 'Underlying STEMs'} description={`${formatNumber(visibleStemRows.length)} of ${formatNumber(stemRows.length)} loaded rows shown · ${formatNumber(data.stems?.total)} matched`} action={data.stems?.cursor ? <Button type="button" variant="outline" size="sm" onClick={() => load({ cursor: data.stems.cursor, append: true, section: 'stems' })} disabled={loading}>{loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}Load more</Button> : null}>
+                    <div className="mb-3 flex flex-wrap items-center gap-2"><label className="text-xs font-semibold text-muted-foreground" htmlFor="account-insight-stem-search">Search loaded STEMs</label><input id="account-insight-stem-search" value={stemQuery} onChange={(event) => setStemQuery(event.target.value)} className="h-8 min-w-56 rounded-md border border-input bg-background px-2 text-sm" placeholder="STEM, vessel, port, product or status" /><details className="text-xs text-muted-foreground"><summary className="cursor-pointer">Loaded evidence only</summary><p className="mt-1">Search filters currently loaded rows; load more to extend the evidence set.</p></details></div>
+                    <div className="overflow-x-auto rounded-md border border-border"><table className="w-full min-w-[1000px] text-sm"><thead className="bg-muted/50 text-left text-xs uppercase text-muted-foreground"><tr><th className="px-3 py-2">STEM</th><th className="px-3 py-2">Date</th><th className="px-3 py-2">Products</th><th className="px-3 py-2 text-right">Volume</th><th className="px-3 py-2 text-right">Turnover</th><th className="px-3 py-2 text-right">Gross Profit</th><th className="px-3 py-2">Evidence</th><th className="px-3 py-2">Status</th></tr></thead><tbody>{visibleStemRows.map((row) => <tr key={row.stemId} className="border-t border-border"><td className="max-w-64 px-3 py-2 font-semibold"><button type="button" className="break-words text-left text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => setSelectedStemId(row.stemId)}>{row.stemName}</button></td><td className="px-3 py-2">{formatDate(row.effectiveDate)}</td><td className="max-w-80 px-3 py-2"><div className="break-words" title={row.products?.map((item) => item.name).join(', ')}>{row.products?.map((item) => item.name).join(', ') || '—'}</div></td><td className="px-3 py-2 text-right">{formatNumber(row.volumeMt, 1)} MT</td><td className="px-3 py-2 text-right">{formatMoney(row.turnover, row.currency)}</td><td className={`px-3 py-2 text-right font-semibold ${number(row.grossProfit) < 0 ? 'text-red-700' : 'text-emerald-700'}`}>{formatMoney(row.grossProfit, row.currency)}</td><td className="px-3 py-2"><div className="flex flex-wrap gap-1">{row.buyerInvoiceIssued === true || row.supplierInvoiceCount > 0 ? <span className="rounded bg-sky-100 px-1.5 py-0.5 text-xs text-sky-900">Issued</span> : <span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-700">Expected</span>}{number(row.buyerPaymentsReceived ?? row.supplierPaidAmount) > 0 ? <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-xs text-emerald-900">{number(row.receivableBalance ?? row.supplierPayable) > 0 ? 'Part paid' : 'Paid'}</span> : null}{row.overdue ? <span className="rounded bg-red-100 px-1.5 py-0.5 text-xs text-red-900">Overdue</span> : null}{row.paymentDataReliable === false ? <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-900">Unavailable</span> : null}</div></td><td className="px-3 py-2">{row.disputed ? <span className="rounded-sm bg-amber-100 px-2 py-1 text-xs text-amber-900">{row.disputeStatus || 'Disputed'}</span> : row.status}</td></tr>)}{!visibleStemRows.length ? <tr><td colSpan={8}><Empty>{stemQuery ? 'No loaded STEMs match this search.' : undefined}</Empty></td></tr> : null}</tbody></table></div>
                   </Section>
                 </TabsContent>
 
-                {data.activeRole === 'group' ? <TabsContent value="children" className="mt-0"><Section title="GROUP children" description={`${formatNumber(data.relationship?.activeChildCount)} active · ${formatNumber(data.relationship?.childrenWithoutManagers)} without Account Managers`}><div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4"><Kpi label="Child Accounts" value={formatNumber(data.relationship?.childCount)} /><Kpi label="Trading children" value={formatNumber(data.relationship?.tradingChildCount)} /><Kpi label="Top child share" value={formatPercent(data.relationship?.topChildConcentrationPct)} /><Kpi label="Without managers" value={formatNumber(data.relationship?.childrenWithoutManagers)} tone={data.relationship?.childrenWithoutManagers ? 'warning' : 'default'} /></div><div className="overflow-x-auto rounded-md border border-border"><table className="w-full min-w-[1000px] text-sm"><thead className="bg-muted/50 text-left text-xs uppercase text-muted-foreground"><tr><th className="px-3 py-2">Account</th><th className="px-3 py-2 text-right">Managers</th><th className="px-3 py-2 text-right">STEMs</th><th className="px-3 py-2 text-right">Volume</th><th className="px-3 py-2 text-right">Volume share</th><th className="px-3 py-2 text-right">Turnover</th><th className="px-3 py-2 text-right">Turnover share</th><th className="px-3 py-2 text-right">Gross Profit</th><th className="px-3 py-2 text-right">Receivable</th></tr></thead><tbody>{data.children?.map((child) => <tr key={child.accountId} className="border-t border-border"><td className="px-3 py-2"><div className="font-semibold">{child.name}</div><div className="text-xs text-muted-foreground">{child.clKey || 'CL Key not set'}</div></td><td className="px-3 py-2 text-right">{formatNumber(child.managerCount)}</td><td className="px-3 py-2 text-right">{formatNumber(child.stemCount)}</td><td className="px-3 py-2 text-right">{formatNumber(child.volumeMt, 1)} MT</td><td className="px-3 py-2 text-right">{formatPercent(child.volumeContributionPct)}</td><td className="px-3 py-2 text-right">{currencyValue(child.moneyByCurrency, 'turnover')}</td><td className="px-3 py-2 text-right">{formatPercent(child.turnoverContributionPct)}</td><td className="px-3 py-2 text-right">{currencyValue(child.moneyByCurrency, 'grossProfit')}</td><td className="px-3 py-2 text-right">{child.moneyByCurrency?.length === 1 ? formatMoney(child.receivable, child.moneyByCurrency[0].currency) : child.moneyByCurrency?.length ? 'By currency' : 'Unavailable'}</td></tr>)}</tbody></table></div></Section></TabsContent> : null}
+                {isGroupEntity ? <TabsContent value="children" className="mt-0"><Section title="GROUP children" description={`${formatNumber(data.relationship?.activeChildCount)} active · ${formatNumber(data.relationship?.childrenWithoutManagers)} without Account Managers`}><div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4"><Kpi label="Child Accounts" value={formatNumber(data.relationship?.childCount)} /><Kpi label="Trading children" value={formatNumber(data.relationship?.tradingChildCount)} /><Kpi label="Top child share" value={formatPercent(data.relationship?.topChildConcentrationPct)} /><Kpi label="Without managers" value={formatNumber(data.relationship?.childrenWithoutManagers)} tone={data.relationship?.childrenWithoutManagers ? 'warning' : 'default'} /></div><div className="overflow-x-auto rounded-md border border-border"><table className="w-full min-w-[1000px] text-sm"><thead className="bg-muted/50 text-left text-xs uppercase text-muted-foreground"><tr><th className="px-3 py-2">Account</th><th className="px-3 py-2 text-right">Managers</th><th className="px-3 py-2 text-right">STEMs</th><th className="px-3 py-2 text-right">Volume</th><th className="px-3 py-2 text-right">Volume share</th><th className="px-3 py-2 text-right">Turnover</th><th className="px-3 py-2 text-right">Turnover share</th><th className="px-3 py-2 text-right">Gross Profit</th><th className="px-3 py-2 text-right">Receivable</th></tr></thead><tbody>{data.children?.map((child) => <tr key={child.accountId} className="border-t border-border"><td className="px-3 py-2"><div className="font-semibold">{child.name}</div><div className="text-xs text-muted-foreground">{child.clKey || 'CL Key not set'}</div></td><td className="px-3 py-2 text-right">{formatNumber(child.managerCount)}</td><td className="px-3 py-2 text-right">{formatNumber(child.stemCount)}</td><td className="px-3 py-2 text-right">{formatNumber(child.volumeMt, 1)} MT</td><td className="px-3 py-2 text-right">{formatPercent(child.volumeContributionPct)}</td><td className="px-3 py-2 text-right">{currencyValue(child.moneyByCurrency, 'turnover')}</td><td className="px-3 py-2 text-right">{formatPercent(child.turnoverContributionPct)}</td><td className="px-3 py-2 text-right">{currencyValue(child.moneyByCurrency, 'grossProfit')}</td><td className="px-3 py-2 text-right">{child.moneyByCurrency?.length === 1 ? formatMoney(child.receivable, child.moneyByCurrency[0].currency) : child.moneyByCurrency?.length ? 'By currency' : 'Unavailable'}</td></tr>)}</tbody></table></div></Section></TabsContent> : null}
               </div>
             </Tabs>
           ) : null}
@@ -534,7 +590,7 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
     </Dialog></AccountInsightStatementScopeContext.Provider></AccountInsightForecastContext.Provider>
     <StemDetailModal stemId={selectedStemId} open={Boolean(selectedStemId)} onClose={() => setSelectedStemId(null)} onUpdated={() => load({ force: true, section: activeTab })} />
     <AccountInsightReportBuilder open={reportBuilderOpen} onClose={() => setReportBuilderOpen(false)} onBuild={(reportConfig) => download('pdf', reportConfig, { preview: true })} sharedScope={payload} scopeDisplay={reportScopeDisplay} stemRows={data.stems?.rows || []} returnFocusRef={reportTriggerRef} />
-    <Dialog open={Boolean(reportPreview)} onOpenChange={(nextOpen) => { if (!nextOpen) setReportPreview(null); }}><DialogContent className="z-[70] grid h-[92vh] max-w-[min(96vw,90rem)] grid-rows-[auto_minmax(0,1fr)] overflow-hidden"><DialogHeader><DialogTitle className="max-w-full whitespace-normal break-words leading-tight">{reportPreview?.filename || 'Account Insight report'}</DialogTitle><DialogDescription>Preview and download use the exact same server-generated PDF bytes.</DialogDescription></DialogHeader>{reportPreview?.url ? <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3"><div className="flex justify-end"><Button type="button" size="sm" onClick={() => { const anchor = document.createElement('a'); anchor.href = reportPreview.url; anchor.download = reportPreview.filename; document.body.appendChild(anchor); anchor.click(); anchor.remove(); }}><Download className="mr-2 h-4 w-4" />Download PDF</Button></div><iframe src={reportPreview.url} title={reportPreview.filename} className="h-full min-h-[32rem] w-full border border-border" /></div> : null}</DialogContent></Dialog>
+    <Dialog open={Boolean(reportPreview)} onOpenChange={(nextOpen) => { if (!nextOpen) setReportPreview(null); }}><DialogContent className="z-[70] grid h-[92vh] max-w-[min(96vw,90rem)] grid-rows-[auto_minmax(0,1fr)] overflow-hidden" onCloseAutoFocus={(event) => { if (reportTriggerRef.current) { event.preventDefault(); reportTriggerRef.current.focus(); } }}><DialogHeader><DialogTitle className="max-w-full whitespace-normal break-words leading-tight">{reportPreview?.filename || 'Account Insight report'}</DialogTitle><DialogDescription>Preview and download use the exact same server-generated PDF bytes.</DialogDescription></DialogHeader>{reportPreview?.url ? <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3"><div className="flex justify-end"><Button type="button" size="sm" onClick={() => { const anchor = document.createElement('a'); anchor.href = reportPreview.url; anchor.download = reportPreview.filename; document.body.appendChild(anchor); anchor.click(); anchor.remove(); }}><Download className="mr-2 h-4 w-4" />Download PDF</Button></div><iframe src={reportPreview.url} title={reportPreview.filename} className="h-full min-h-[32rem] w-full border border-border" /></div> : null}</DialogContent></Dialog>
     </>
   );
 }

@@ -2,6 +2,7 @@ import {
   DEFAULT_REPORT_CONFIG, REPORT_AUDIENCES, REPORT_COLUMNS, REPORT_PRESETS, REPORT_SECTIONS,
 } from '../src/lib/accountInsightReportCatalogue.js';
 import { accountInsightAgingByCurrency } from './_dashboardAccountInsight.js';
+import { isCreditExposureStemEligible } from './_dashboardAccountCreditStatement.js';
 
 const SECTION_BY_ID = new Map(REPORT_SECTIONS.map((item) => [item.id, item]));
 const COLUMN_BY_ID = new Map(REPORT_COLUMNS.map((item) => [item.id, item]));
@@ -133,6 +134,16 @@ function statementRows(statement, direction, internal, includeExpected, selected
   }));
 }
 
+function ownDocumentRows(rows, direction) {
+  const evidenceKey = direction === 'supplier' ? 'supplierDocumentEvidence' : 'buyerDocumentEvidence';
+  return rows.filter((row) => isCreditExposureStemEligible({ Delivery_Date__c: row?.deliveryDate ?? row?.actualDeliveryDate, Expected_Delivery_Date__c: row?.expectedDeliveryDate })).flatMap((row) => (Array.isArray(row?.[evidenceKey]) ? row[evidenceKey] : []).filter((document) => document?.current === true).map((document) => ({
+    stem: text(row.stemName || row.stem || row.name) || 'STEM not set',
+    number: text(document?.documentNumber) || 'Document number unavailable',
+    type: document?.documentType === 'credit_note' ? 'Credit note' : 'Invoice',
+    date: date(document?.documentDate), currency: text(document?.currency || row.currency) || null, amount: finite(document?.amount),
+  })));
+}
+
 function forecastSections(statement, direction, isGroup) {
   if (direction === 'supplier') return (statement?.chart?.currencies || []).map((chart) => ({ id: 'forecast', direction, currency: chart.currency, rows: (chart?.[isGroup ? 'group' : 'account']?.points || []).map((point) => ({ date: point.date, balance: finite(point.remaining), currency: chart.currency, leg: direction })), basis: 'Authoritative supplier payment schedule; undated residuals remain unreleased.' }));
   // The buyer chart is suppressed by the authoritative engine when currencies or
@@ -248,7 +259,7 @@ export function projectAccountInsightReport(result, config) {
       const history = report.depth === 'detail' ? eligible.flatMap((row) => (row[direction === 'buyer' ? 'buyerPaymentEvidence' : 'supplierPaymentEvidence'] || []).map((payment) => ({ stem: text(row.stemName), reference: text(payment.paymentName), date: date(payment.paymentDate), amount: finite(payment.amount), currency: text(payment.currency || row.currency) }))) : [];
       sections.push({ id, rows: internal ? currencyRows(source, direction) : ownCurrencyTotals(rows), history });
     }
-    else if (id === 'statement') sections.push({ id, includeExpected: report.includeExpected, rows: statementRows(statement, direction, internal, report.includeExpected, selected) });
+    else if (id === 'statement') sections.push({ id, includeExpected: report.includeExpected, rows: statementRows(statement, direction, internal, report.includeExpected, selected), documents: ownDocumentRows(selectedRows, direction) });
     else if (id === 'stems') sections.push({ id, columns: report.columns, rows: report.depth === 'detail' ? rows : [], summaryOnly: report.depth !== 'detail', matchingCount: rows.length });
     else if (id === 'risks' && internal) sections.push({ id, openDisputes: finite(source?.risk?.dispute?.open), exceptions: finite(source?.risk?.exceptions?.count) });
     else if (id === 'methodology') sections.push({ id, sourceTimestamp: text(source?.meta?.salesforceFetchedAt) || null, scope: text(source?.period?.label) || 'Selected period', basis: 'Values retain their source currency and are not netted across currencies.', reliability: ['Payment data is reliable from 1 January 2026. Earlier settled commercial history has unavailable payment metrics.', ...(internal && Array.isArray(source?.warnings) ? source.warnings.map(text).filter(Boolean) : ['Only this recipient direction is included. Expected activity, when selected, is not an issued document.'])] });

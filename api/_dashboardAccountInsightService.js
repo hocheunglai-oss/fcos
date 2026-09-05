@@ -544,7 +544,7 @@ async function querySupplierInvoices({ stemIds, accountId, lineItems, extraCosts
   }
   const invoiceAccountFields = schema.supplierSettlement.supplierAccountFields || [];
   const invoiceAccountRelationships = invoiceAccountFields.map((field) => invoiceFields.get(field)?.relationshipName).filter(Boolean);
-  const selectFields = ['Id', 'Name', 'STEM__c', ...selected(invoiceFields, ['CreatedDate', 'CurrencyIsoCode', 'Supplier_Name__c']), schema.supplierSettlement.invoiceAmountField, schema.supplierSettlement.invoicePayableField, ...schema.supplierSettlement.invoiceDueDateFields, ...schema.supplierSettlement.invoiceDateFields, ...schema.supplierSettlement.invoiceStatusFields, ...invoiceAccountFields, ...invoiceAccountRelationships.map((relationship) => `${relationship}.Name`)].filter(Boolean);
+  const selectFields = ['Id', 'Name', 'STEM__c', ...selected(invoiceFields, ['CurrencyIsoCode', 'Supplier_Name__c']), schema.supplierSettlement.invoiceAmountField, schema.supplierSettlement.invoicePayableField, ...schema.supplierSettlement.invoiceDueDateFields, ...schema.supplierSettlement.invoiceDateFields, ...schema.supplierSettlement.invoiceStatusFields, ...invoiceAccountFields, ...invoiceAccountRelationships.map((relationship) => `${relationship}.Name`)].filter(Boolean);
   const invoiceResults = await sfCompositeQueries(chunkIds(stemIds).map((chunk) => ({
     soql: `SELECT ${[...new Set(selectFields)].join(',')} FROM Supplier_Invoice__c WHERE STEM__c IN (${chunk.map((id) => `'${soql(id)}'`).join(',')}) LIMIT 5000`,
     clean: true,
@@ -598,7 +598,7 @@ async function querySupplierInvoices({ stemIds, accountId, lineItems, extraCosts
         invoiceAmount,
         payableBalance,
         dueDate: schema.supplierSettlement.invoiceDueDateFields.map((field) => invoice[field]).find(Boolean) || null,
-        invoiceDate: schema.supplierSettlement.invoiceDateFields.map((field) => invoice[field]).find(Boolean) || invoice.CreatedDate || null,
+        invoiceDate: schema.supplierSettlement.invoiceDateFields.map((field) => invoice[field]).find(Boolean) || null,
         status: schema.supplierSettlement.invoiceStatusFields.map((field) => invoice[field]).find(Boolean) || null,
         paymentTerm: (paymentTermsByInvoice.get(invoice.Id) || []).join(' · ') || null,
         payments: paymentsByInvoice.get(invoice.Id) || [],
@@ -662,7 +662,9 @@ async function loadSalesforceDataset({ accountId, role, entityType, includedAcco
     productUomField,
   });
   const buyerBrokerConfig = buyerBrokerQueryConfiguration(buyerBrokerFields, accountFields);
-  const buyerInvoiceSelect = selected(buyerInvoiceFields, ['Id', 'Name', 'STEM__c', 'Amount__c', 'Proforma__c', 'Deprecated__c', 'LastModifiedDate']);
+  // Select only described credit-note flags and retain the Name-based classifier
+  // so historical documents remain explicit across schema variants.
+  const buyerInvoiceSelect = selected(buyerInvoiceFields, ['Id', 'Name', 'STEM__c', 'Amount__c', 'CurrencyIsoCode', 'Invoice_Date__c', 'Proforma__c', 'Deprecated__c', 'Is_Credit_Note__c', 'Credit_Note__c', 'CreditNote__c', 'LastModifiedDate']);
   const [lineItems, extraCosts, buyerBrokerRows, buyerInvoices] = await Promise.all([
     queryChildren(allStemIds, [...new Set(lineFieldsToQuery)], 'STEM_Line_Item__c'),
     queryChildren(allStemIds, extraFieldsToQuery, 'STEM_Extra_Cost__c'),
@@ -976,7 +978,7 @@ export async function loadDashboardAccountInsight({ body = {}, accessContext, fo
   const cachePayload = { accountId: idKey(accountId), role, entityType, includedAccountIds, period, paymentEvidence };
   const cached = await getOrLoadRuntimeCache({
     namespace: 'salesforce-dashboard-account-insight',
-    version: '5-scoped-allocation-evidence',
+    version: '6-document-evidence',
     accessScope: interoffice ? 'interoffice' : 'standard',
     apiVersion: `${getApiVersion()}@${getInstanceUrl()}`,
     payload: cachePayload,
