@@ -8,7 +8,7 @@ const PRESET = '22222222-2222-4222-8222-222222222222';
 const REQUEST = '33333333-3333-4333-8333-333333333333';
 const profile = { id: USER, active: true };
 const config = { audience: 'buyer', sections: ['profile', 'stems'], columns: ['stem', 'currency', 'invoice'], depth: 'detail', includeExpected: false, includeCharts: true };
-const migrationUrl = new URL('../supabase/migrations/20260905102212_account_insight_report_presets.sql', import.meta.url);
+const migrationUrl = new URL('../supabase/migrations/20260905105308_account_insight_report_presets.sql', import.meta.url);
 
 function saveContext(result = { data: { id: PRESET, owner_user_id: USER, scope: 'personal', name: 'My report', configuration: config, revision: 1, archived_at: null, updated_at: '2026-09-05T00:00:00Z' }, error: null }) {
   const calls = [];
