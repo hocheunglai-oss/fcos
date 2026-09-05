@@ -24,6 +24,10 @@ import { dashboardAccountRankings } from '../../src/lib/dashboardAccountRankings
 import { loadDashboardAccountInsight } from '../_dashboardAccountInsightService.js';
 import { generateDashboardAccountInsightExport } from '../_dashboardAccountInsightExport.js';
 import { loadDashboardAccountCreditDirectory, loadDashboardAccountCreditStatement } from '../_dashboardAccountCreditStatementService.js';
+import { isPaymentRemittance, paymentRecordTypeToken } from '../_paymentClassification.js';
+import { accountInsightStatementRequest, createAccountInsightReportHandlers } from '../_accountInsightReportScope.js';
+import { validateAccountInsightReportConfig, projectAccountInsightReport, MAX_REPORT_DETAIL_ROWS } from '../_accountInsightReport.js';
+import { buildAccountInsightReportPdf } from '../_accountInsightReportPdf.js';
 import {
   buildBuyerPaymentDelayModels,
   normalizeBuyerPaymentConservativeness,
@@ -1441,6 +1445,10 @@ const HANDLER_MODULE_ACCESS = {
   dashboardStemList: ['dashboard'],
   dashboardAnalytics: ['dashboard'],
   dashboardAccountInsight: ['dashboard'],
+  dashboardAccountInsightReportOptions: ['dashboard'],
+  dashboardAccountInsightReportPresetsList: ['dashboard'],
+  dashboardAccountInsightReportPresetsSave: ['dashboard'],
+  dashboardAccountInsightReportPresetsArchive: ['dashboard'],
   dashboardAccountCreditDirectory: ['dashboard'],
   dashboardAccountCreditStatement: ['dashboard'],
   dashboardCreditForecastSettingsSave: ['dashboard'],
@@ -9670,12 +9678,40 @@ async function salesforceDashboardFilteredFull(body, req = null, accessContext =
 
 async function dashboardAccountInsight(body = {}, req = null, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
-  return loadDashboardAccountInsight({
+  const insight = await loadDashboardAccountInsight({
     body,
     accessContext: context,
     force: requestForcesRefresh(body, req),
   });
+  if (body.section === 'overview' || !body.section) {
+    try {
+      const statement = await dashboardAccountCreditStatement(accountInsightStatementRequest(body), req, context);
+      const buyer = statement.side === 'both' ? statement.buyer : body.side !== 'supplier' && body.contextRole !== 'supplier' ? statement : null;
+      const supplier = statement.side === 'both' ? statement.supplier : statement.side === 'supplier' ? statement : null;
+      const isGroup = body.entityType === 'group' || body.contextRole === 'group';
+      const supplierKpis = supplier?.kpis?.[isGroup ? 'group' : 'account'] || [];
+      const currencies = [...new Set([...Object.keys(buyer?.exposureByCurrency || {}), ...supplierKpis.map((row) => row.currency)])];
+      const byCurrency = currencies.map((currency) => ({
+        currency,
+        receivable: buyer ? buyer.exposureByCurrency?.[currency]?.[isGroup ? 'group' : 'individual'] ?? null : null,
+        buyerReceivable: buyer ? buyer.exposureByCurrency?.[currency]?.[isGroup ? 'group' : 'individual'] ?? null : null,
+        supplierPayable: supplierKpis.find((row) => row.currency === currency)?.totalExposure ?? null,
+        outstandingPayable: supplierKpis.find((row) => row.currency === currency)?.totalExposure ?? null,
+        buyerComplete: buyer?.complete === true, supplierComplete: supplier?.complete === true,
+      }));
+      insight.currentExposure = { byCurrency, asOf: statement.meta?.salesforceFetchedAt || buyer?.meta?.salesforceFetchedAt || supplier?.meta?.salesforceFetchedAt || null, credit: buyer?.credit || null, creditResolution: buyer?.creditResolution || null, warnings: statement.warnings || [] };
+      insight.creditResolution = buyer?.creditResolution || null;
+      if (insight.buyer) insight.buyer.currentExposure = insight.currentExposure;
+      if (insight.supplier) insight.supplier.currentExposure = insight.currentExposure;
+    } catch (error) {
+      insight.currentExposure = { byCurrency: [], unavailable: true, warnings: ['Current exposure is temporarily unavailable. Open Credit & Payments to retry.'] };
+      console.warn('[account-insight] current exposure unavailable', { code: error?.code || null });
+    }
+  }
+  return insight;
 }
+
+const { dashboardAccountInsightReportOptions, dashboardAccountInsightReportPresetsList, dashboardAccountInsightReportPresetsSave, dashboardAccountInsightReportPresetsArchive } = createAccountInsightReportHandlers({ requireActiveUser, canManageCompanyPresets: canManageDashboardCreditForecastSettings, loadInsight: loadDashboardAccountInsight });
 
 async function dashboardAccountCreditDirectory(body = {}, req = null, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
@@ -9823,13 +9859,35 @@ async function dashboardAccountExposureBatch(body = {}, req = null, accessContex
 
 async function dashboardAccountInsightExport(body = {}, req, res, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
+  const reportConfig = String(body.format || '').toLowerCase() === 'pdf' ? validateAccountInsightReportConfig(body.reportConfig) : null;
+  const scopeBody = reportConfig && reportConfig.audience !== 'internal' ? { ...body, side: reportConfig.audience } : body;
   const insight = await loadDashboardAccountInsight({
-    body: { ...body, cursor: 0, pageSize: 100 },
+    body: { ...scopeBody, cursor: 0, pageSize: 100 },
     accessContext: context,
     force: requestForcesRefresh(body, req),
     includeExportRows: true,
   });
-  const generated = generateDashboardAccountInsightExport(insight, {
+  if (reportConfig && reportConfig.sections.some((section) => ['credit', 'forecast', 'aging', 'payments', 'statement'].includes(section))) {
+    insight.statements = {};
+    const directions = scopeBody.side === 'both' ? ['buyer', 'supplier'] : [scopeBody.side || (scopeBody.contextRole === 'supplier' ? 'supplier' : 'buyer')];
+    for (const side of directions) {
+      const request = accountInsightStatementRequest(scopeBody, side);
+      const statement = await dashboardAccountCreditStatement(request, req, context);
+      const rows = [...(statement.statement?.rows || [])];
+      let nextCursor = statement.statement?.nextCursor;
+      const cursors = new Set();
+      while (nextCursor) {
+        if (cursors.has(nextCursor) || rows.length >= MAX_REPORT_DETAIL_ROWS) throw appError('The statement appendix exceeds the supported size. Narrow its scope; no partial PDF was generated.', 413, 'ACCOUNT_INSIGHT_REPORT_TOO_LARGE');
+        cursors.add(nextCursor);
+        const page = await dashboardAccountCreditStatement({ ...request, cursor: nextCursor }, req, context);
+        rows.push(...(page.statement?.rows || []));
+        nextCursor = page.statement?.nextCursor;
+      }
+      if (rows.length > MAX_REPORT_DETAIL_ROWS) throw appError('Narrow the statement scope before generating this PDF.', 413, 'ACCOUNT_INSIGHT_REPORT_TOO_LARGE');
+      insight.statements[side] = { ...statement, rows, statement: { ...statement.statement, rows, nextCursor: null } };
+    }
+  }
+  const generated = reportConfig ? buildAccountInsightReportPdf(projectAccountInsightReport(insight, reportConfig), { actorName: context.profile.full_name || context.profile.email }) : generateDashboardAccountInsightExport(insight.activeRole === 'both' ? insight.buyer : insight, {
     format: body.format,
     actorName: context.profile.full_name || context.profile.email,
   });
@@ -11749,16 +11807,11 @@ function attachBankChargeToPayment(target, charge) {
 }
 
 function incomingPaymentRecordTypeToken(payment) {
-  return normalizedFieldToken([payment?.RecordTypeId, payment?.RecordType?.DeveloperName, payment?.RecordType?.Name].filter(Boolean).join(' '));
+  return paymentRecordTypeToken(payment);
 }
 
 function incomingPaymentIsRemittanceRecord(payment, fields = []) {
-  const token = incomingPaymentRecordTypeToken(payment);
-  if (token.includes('remittance')) return true;
-  return uniqueTextList(fields).some((field) => {
-    const valueToken = normalizedFieldToken(payment?.[field]);
-    return valueToken.includes('receivableremittance') || valueToken.includes('remittancereceivable') || valueToken.includes('payableremittance') || valueToken.includes('remittancepayable');
-  });
+  return isPaymentRemittance(payment, fields);
 }
 
 const incomingPaymentIsReceivableRemittance = incomingPaymentIsRemittanceRecord;
@@ -19306,6 +19359,10 @@ const handlers = {
   dashboardStemList,
   dashboardAnalytics,
   dashboardAccountInsight,
+  dashboardAccountInsightReportOptions,
+  dashboardAccountInsightReportPresetsList,
+  dashboardAccountInsightReportPresetsSave,
+  dashboardAccountInsightReportPresetsArchive,
   dashboardAccountCreditDirectory,
   dashboardAccountCreditStatement,
   dashboardCreditForecastSettingsSave,

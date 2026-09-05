@@ -4,6 +4,17 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.200',
+    releasedAt: '2026-09-05',
+    title: 'Data-led Account Insight and tailored reports',
+    changes: [
+      'Organizes Account Insight into Overview, Trading, Credit & Payments and STEMs with shared direction and GROUP scope.',
+      'Reuses authoritative credit exposure, counts payment allocations once and preserves fixed-charge currency evidence.',
+      'Adds preview-first internal, buyer-facing and supplier-facing PDF reports with selectable sections and columns.',
+      'Supports personal and company report presets; external reports exclude internal profit, credit limits and opposite-leg figures.',
+    ],
+  },
+  {
     version: '2.0.199',
     releasedAt: '2026-09-05',
     title: 'Compact trading-first Dashboard',
