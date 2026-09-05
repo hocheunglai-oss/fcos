@@ -21,9 +21,10 @@ const COLUMN_LABELS = {
 };
 const MONEY_COLUMNS = new Set(['turnover', 'grossProfit']);
 const SORT_FIELDS = { stem: 'name', deliveryDate: 'deliveryDate' };
+const TOOLBAR_BUTTON_CLASS = 'h-8 text-xs';
 
 const money = (value, currency = 'USD') => {
-  if (!Number.isFinite(Number(value))) return '—';
+  if (value === null || value === undefined || value === '' || !Number.isFinite(Number(value))) return '—';
   const safeCurrency = /^[A-Z]{3}$/.test(String(currency || '').toUpperCase()) ? String(currency).toUpperCase() : null;
   if (!safeCurrency) return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(Number(value));
   return new Intl.NumberFormat(undefined, { style: 'currency', currency: safeCurrency, currencyDisplay: 'code', maximumFractionDigits: 0 }).format(Number(value));
@@ -88,15 +89,15 @@ function ProductQuantityValue({ row }) {
 function SupplierProductSupplier({ item, onAccountClick }) {
   const account = item?.supplierAccount;
   const label = account?.name || item?.supplierLabel || 'Supplier unavailable';
-  if (account?.id && onAccountClick) return <button type="button" className="max-w-full text-left text-primary hover:underline" onClick={(event) => { event.stopPropagation(); onAccountClick({ accountId: account.id, name: label, role: 'supplier' }); }}>{label}</button>;
-  return <span className={account?.name || item?.supplierLabel ? '' : 'text-muted-foreground'}>{label}</span>;
+  if (account?.id && onAccountClick) return <button type="button" className="max-w-full break-words text-left text-primary hover:underline" onClick={(event) => { event.stopPropagation(); onAccountClick({ accountId: account.id, name: label, role: 'supplier' }); }}>{label}</button>;
+  return <span className={`break-words ${account?.name || item?.supplierLabel ? '' : 'text-muted-foreground'}`}>{label}</span>;
 }
 
 function SupplierProductItem({ item }) {
   if (!item) return <span className="text-muted-foreground">Product unavailable</span>;
-  return <span className="flex min-w-0 flex-wrap items-center gap-1.5">
+  return <span className="flex min-w-0 flex-wrap items-center gap-1.5 break-words">
     {item.sourceType === 'extra_cost' ? <span className="rounded-full border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-800">Extra cost</span> : null}
-    <strong>{item.itemName || (item.sourceType === 'extra_cost' ? 'Extra cost unavailable' : 'Product unavailable')}</strong>
+    <strong className="min-w-0 break-words">{item.itemName || (item.sourceType === 'extra_cost' ? 'Extra cost unavailable' : 'Product unavailable')}</strong>
     {item.quantityLabel ? <span className="text-muted-foreground">{item.quantityLabel}</span> : null}
   </span>;
 }
@@ -108,12 +109,12 @@ function renderValue(row, column, onAccountClick) {
   if (MONEY_COLUMNS.has(column)) return money(value, row.currency ?? row.CurrencyIsoCode);
   if (column === 'dispute') return <span className={String(value).toLowerCase().includes('dispute') ? 'rounded-full bg-red-50 px-2 py-0.5 text-[11px] font-semibold text-red-800' : 'text-muted-foreground'}>{value || '—'}</span>;
   const account = accountFor(row, column);
-  if (account?.accountId && onAccountClick) return <button type="button" className="max-w-full truncate text-left text-primary hover:underline" onClick={(event) => { event.stopPropagation(); onAccountClick({ ...account, role: account.role || (column === 'supplier' ? 'supplier' : 'buyer') }); }}>{value || account.name || '—'}</button>;
+  if (account?.accountId && onAccountClick) return <button type="button" className="max-w-full break-words text-left text-primary hover:underline" onClick={(event) => { event.stopPropagation(); onAccountClick({ ...account, role: account.role || (column === 'supplier' ? 'supplier' : 'buyer') }); }}>{value || account.name || '—'}</button>;
   return value == null || value === '' ? '—' : String(value);
 }
 
 function Pagination({ loading, hasPrevious, hasNext, page, onPrevious, onNext }) {
-  return <div className="flex items-center justify-end gap-2 border-t border-border px-3 py-2"><Button type="button" variant="ghost" size="sm" className="h-8 text-xs" disabled={loading || !hasPrevious} onClick={onPrevious}><ChevronLeft className="h-3.5 w-3.5" />Previous</Button><span className="text-xs text-muted-foreground">Page {page}</span><Button type="button" variant="ghost" size="sm" className="h-8 text-xs" disabled={loading || !hasNext} onClick={onNext}>Next<ChevronRight className="h-3.5 w-3.5" /></Button></div>;
+  return <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border px-3 py-2 sm:px-4"><span className="text-xs text-muted-foreground">Page {page}</span><div className="flex items-center gap-1.5"><Button type="button" variant="outline" size="sm" className={TOOLBAR_BUTTON_CLASS} disabled={loading || !hasPrevious} onClick={onPrevious}><ChevronLeft className="mr-1 h-3.5 w-3.5" />Previous</Button><Button type="button" variant="outline" size="sm" className={TOOLBAR_BUTTON_CLASS} disabled={loading || !hasNext} onClick={onNext}>Next<ChevronRight className="ml-1 h-3.5 w-3.5" /></Button></div></div>;
 }
 
 export default function DashboardStemTable({ result, loading, search = '', wide = false, onWideChange, onSearch, onPrevious, onNext, onSortChange, onStemClick, onAccountClick }) {
@@ -134,13 +135,13 @@ export default function DashboardStemTable({ result, loading, search = '', wide 
     if (!field) return;
     onSortChange?.({ field, direction: sort.field === field && sort.direction === 'asc' ? 'desc' : 'asc' });
   };
-  const meta = total ? `${Math.min((page - 1) * pageSize + 1, total)}–${Math.min(page * pageSize, total)} of ${total.toLocaleString()} · Server paginated` : 'No matching STEMs';
-  const actions = <><Button type="button" variant="outline" size="sm" className="h-8 text-xs" aria-pressed={wide} onClick={() => onWideChange?.(!wide)}>{wide ? <Minimize2 className="mr-1 h-3.5 w-3.5" /> : <Maximize2 className="mr-1 h-3.5 w-3.5" />}{wide ? 'Normal width' : 'Wide view'}</Button><form className="flex items-center gap-1" onSubmit={(event) => { event.preventDefault(); onSearch?.(searchDraft.trim()); }}><Input value={searchDraft} onChange={(event) => setSearchDraft(event.target.value)} placeholder="Search STEMs" aria-label="Search STEMs" className="h-8 w-36 text-xs" /><Button type="submit" variant="outline" size="sm" className="h-8 px-2" disabled={loading}><Search className="h-3.5 w-3.5" /><span className="sr-only">Search</span></Button></form><Popover><PopoverTrigger asChild><Button type="button" variant="outline" size="sm" className="h-8 text-xs"><Columns3 className="mr-1 h-3.5 w-3.5" />Columns</Button></PopoverTrigger><PopoverContent align="end" className="w-56 p-2">{DEFAULT_COLUMNS.map((column) => <label key={column} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted"><Checkbox checked={visibleColumns.includes(column)} onCheckedChange={() => toggleColumn(column)} />{COLUMN_LABELS[column]}</label>)}</PopoverContent></Popover></>;
+  const meta = total ? `Showing ${Math.min((page - 1) * pageSize + 1, total)}–${Math.min(page * pageSize, total)} of ${total.toLocaleString()} STEMs` : 'No matching STEMs';
+  const actions = <div className="flex flex-wrap items-center gap-1.5"><form className="flex items-center gap-1.5" onSubmit={(event) => { event.preventDefault(); onSearch?.(searchDraft.trim()); }}><Input value={searchDraft} onChange={(event) => setSearchDraft(event.target.value)} placeholder="Search STEMs" aria-label="Search STEMs" className="h-8 w-36 text-xs" /><Button type="submit" variant="outline" size="sm" className="h-8 px-2" disabled={loading}><Search className="h-3.5 w-3.5" /><span className="sr-only">Search STEMs</span></Button></form><Popover><PopoverTrigger asChild><Button type="button" variant="outline" size="sm" className={TOOLBAR_BUTTON_CLASS} aria-label="Choose visible STEM columns"><Columns3 className="mr-1 h-3.5 w-3.5" />Columns</Button></PopoverTrigger><PopoverContent align="end" className="w-56 p-2">{DEFAULT_COLUMNS.map((column) => <label key={column} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted"><Checkbox checked={visibleColumns.includes(column)} onCheckedChange={() => toggleColumn(column)} />{COLUMN_LABELS[column]}</label>)}</PopoverContent></Popover><Button type="button" variant="outline" size="sm" className={TOOLBAR_BUTTON_CLASS} aria-pressed={wide} onClick={() => onWideChange?.(!wide)}>{wide ? <Minimize2 className="mr-1 h-3.5 w-3.5" /> : <Maximize2 className="mr-1 h-3.5 w-3.5" />}{wide ? 'Normal width' : 'Wide view'}</Button></div>;
 
   return <TableShell title="STEMs" meta={meta} bodyClassName="p-0" actions={actions}>
     <div className="divide-y divide-border md:hidden">{rows.map((row, index) => {
       const childRows = supplierProductRows(row);
-      return <div role="button" tabIndex={0} key={row.id ?? row.Id ?? index} onClick={() => onStemClick?.(row)} onKeyDown={(event) => { if (event.currentTarget === event.target && (event.key === 'Enter' || event.key === ' ')) onStemClick?.(row); }} className="block w-full cursor-pointer px-4 py-3 text-left hover:bg-muted/30"><div className="flex items-start justify-between gap-3"><span className="font-semibold">{renderValue(row, 'stem', onAccountClick)}</span>{renderValue(row, 'deliveryDate', onAccountClick)}</div><div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-muted-foreground"><span className="truncate">{renderValue(row, 'buyer', onAccountClick)}</span><span className="text-right font-semibold text-foreground">{renderValue(row, 'grossProfit', onAccountClick)}</span><div className="col-span-2 mt-1 divide-y divide-border/60 rounded-md border border-border bg-background/60">{childRows.length ? childRows.map((item, childIndex) => <div key={`${item.sourceType}:${item.sourceId || childIndex}`} data-source-type={item.sourceType} className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.25fr)] gap-2 px-2 py-1.5"><SupplierProductSupplier item={item} onAccountClick={onAccountClick} /><SupplierProductItem item={item} /></div>) : <div className="px-2 py-1.5 text-muted-foreground">No product or extra-cost rows</div>}</div><span>{renderValue(row, 'port', onAccountClick)}</span></div></div>;
+      return <div role="button" tabIndex={0} key={row.id ?? row.Id ?? index} onClick={() => onStemClick?.(row)} onKeyDown={(event) => { if (event.currentTarget === event.target && (event.key === 'Enter' || event.key === ' ')) onStemClick?.(row); }} className="block w-full cursor-pointer px-4 py-3 text-left hover:bg-muted/30"><div className="flex items-start justify-between gap-3"><span className="min-w-0 break-words font-semibold">{renderValue(row, 'stem', onAccountClick)}</span>{renderValue(row, 'deliveryDate', onAccountClick)}</div><div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-muted-foreground"><span className="min-w-0 break-words">{renderValue(row, 'buyer', onAccountClick)}</span><span className="text-right font-semibold text-foreground">{renderValue(row, 'grossProfit', onAccountClick)}</span><div className="col-span-2 mt-1 divide-y divide-border/60 rounded-md border border-border bg-background/60">{childRows.length ? childRows.map((item, childIndex) => <div key={`${item.sourceType}:${item.sourceId || childIndex}`} data-source-type={item.sourceType} className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.25fr)] gap-2 px-2 py-1.5"><SupplierProductSupplier item={item} onAccountClick={onAccountClick} /><SupplierProductItem item={item} /></div>) : <div className="px-2 py-1.5 text-muted-foreground">No product or extra-cost rows</div>}</div><span className="break-words">{renderValue(row, 'port', onAccountClick)}</span></div></div>;
     })}{!rows.length && !loading ? <div className="px-4 py-14 text-center text-sm text-muted-foreground">No STEMs match these filters. Reset a filter or select a wider period.</div> : null}</div>
     <div className="relative hidden overflow-x-auto md:block">
       <table className="w-full min-w-[1180px] text-sm">
@@ -154,7 +155,7 @@ export default function DashboardStemTable({ result, loading, search = '', wide 
             if (column === 'supplier') return <td key={column} className="max-w-72 px-3 py-2.5 align-top"><SupplierProductSupplier item={item} onAccountClick={onAccountClick} /></td>;
             if (column === 'productQuantity') return <td key={column} className="max-w-96 px-3 py-2.5 align-top"><SupplierProductItem item={item} /></td>;
             if (childIndex > 0) return null;
-            return <td key={column} rowSpan={physicalRows.length} className={`max-w-72 px-3 py-3 align-top ${MONEY_COLUMNS.has(column) ? 'text-right tabular-nums' : 'truncate'}`} title={typeof valueFor(row, column) === 'string' ? valueFor(row, column) : undefined}>{renderValue(row, column, onAccountClick)}</td>;
+            return <td key={column} rowSpan={physicalRows.length} className={`max-w-72 px-3 py-3 align-top ${MONEY_COLUMNS.has(column) ? 'text-right tabular-nums whitespace-nowrap' : 'break-words'}`}>{renderValue(row, column, onAccountClick)}</td>;
           })}</tr>);
         })}
           {!rows.length && !loading ? <tr><td colSpan={displayColumns.length} className="px-4 py-14 text-center text-sm text-muted-foreground">No STEMs match these filters. Reset a filter or select a wider period.</td></tr> : null}
