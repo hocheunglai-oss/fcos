@@ -6,7 +6,6 @@ import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import DashboardFilterBar from '@/components/dashboard/DashboardFilterBar';
 import DashboardKpis from '@/components/dashboard/DashboardKpis';
-import DashboardSavedViews from '@/components/dashboard/DashboardSavedViews';
 import DashboardStemTable from '@/components/dashboard/DashboardStemTable';
 import StemDetailModal from '@/components/dashboard/StemDetailModal';
 import DataStatus from '@/components/common/DataStatus';
@@ -53,6 +52,8 @@ export default function DashboardSettings() {
   const [stemTableWide, setStemTableWide] = useState(false);
   const [aiSearchActive, setAiSearchActive] = useState(false);
   const aborts = useRef({});
+  const dashboardRootRef = useRef(null);
+  const insightScrollContainerRef = useRef(null);
   const insightTriggerRef = useRef(null);
   const insightScrollRef = useRef(null);
   const insightWasOpenRef = useRef(false);
@@ -96,6 +97,18 @@ export default function DashboardSettings() {
   }, [searchParams]);
   const insightDashboardScope = useMemo(() => ({ mode: insightQuery.scope, disputeOnly: insightQuery.disputeOnly, filters: insightQuery.filters, labels: insightQuery.labels }), [insightQuery.disputeOnly, insightQuery.filters, insightQuery.labels, insightQuery.scope]);
 
+  useEffect(() => {
+    const root = dashboardRootRef.current;
+    const header = root?.querySelector('.app-page-header');
+    if (!root || !header) return undefined;
+    const measure = () => root.style.setProperty('--dashboard-header-height', `${Math.ceil(header.getBoundingClientRect().height)}px`);
+    measure();
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure);
+    observer?.observe(header);
+    window.addEventListener('resize', measure);
+    return () => { observer?.disconnect(); window.removeEventListener('resize', measure); };
+  }, []);
+
   useEffect(() => { localStorage.setItem(DASHBOARD_FILTER_STORAGE_KEY, JSON.stringify(filters)); }, [filters]);
   useEffect(() => { let live = true; appClient.functions.invoke('dashboardFilterOptions', { optionType: 'ports' }, { cache: true, cacheTtlMs: 300_000 }).then((ports) => { if (live) setPortOptions(normaliseOptions(ports.data)); }); return () => { live = false; }; }, []);
 
@@ -123,7 +136,10 @@ export default function DashboardSettings() {
       const scrollTop = insightScrollRef.current;
       const trigger = insightTriggerRef.current;
       window.requestAnimationFrame(() => {
-        if (Number.isFinite(scrollTop)) window.scrollTo({ top: scrollTop, left: 0, behavior: 'auto' });
+        if (Number.isFinite(scrollTop)) {
+          if (insightScrollContainerRef.current?.isConnected) insightScrollContainerRef.current.scrollTop = scrollTop;
+          else window.scrollTo({ top: scrollTop, left: 0, behavior: 'auto' });
+        }
         if (trigger?.isConnected) trigger.focus({ preventScroll: true });
       });
     }
@@ -133,7 +149,8 @@ export default function DashboardSettings() {
   const openAccount = useCallback((account, initialTab = 'overview', trigger = null) => {
     if (!account?.accountId) return;
     insightTriggerRef.current = trigger || document.activeElement;
-    insightScrollRef.current = window.scrollY;
+    insightScrollContainerRef.current = dashboardRootRef.current?.closest('.app-workspace-scroll') || null;
+    insightScrollRef.current = insightScrollContainerRef.current?.scrollTop ?? window.scrollY;
     const next = new URLSearchParams(searchParams);
     next.set('insightAccountId', account.accountId);
     next.set('insightName', account.name || 'Account');
@@ -174,11 +191,10 @@ export default function DashboardSettings() {
   }, [location.state, navigate, searchParams]);
   const refresh = () => { if (aiSearchActive) skipNextAutoLoadRef.current = true; setAiSearchActive(false); loadSummary({ force: true }); loadStems({ cursor: aiSearchActive ? null : navigation.cursor, history: aiSearchActive ? [] : navigation.history, sort: aiSearchActive ? DEFAULT_STEM_SORT : navigation.sort, force: true }); if ((tab === 'overview' && analyticsEnabled) || tab === 'accounts') loadAnalytics({ force: true }); };
 
-  return <main className={`workspace-page workspace-dashboard mx-auto p-3 transition-[max-width] duration-200 sm:p-6 lg:p-8 ${stemTableWide && tab === 'stems' ? 'workspace-page-wide max-w-none' : 'max-w-[1600px]'}`}><PageHeader icon={Building2} title="Dashboard" meta={<span className="flex flex-wrap items-center gap-2">{summaryMeta ? <DataStatus meta={summaryMeta} label="Salesforce" /> : <span>Loading current decision data</span>}<PaymentDataReliabilityBadge />{loading.summary && summary ? <span className="text-xs text-muted-foreground">Updating without clearing results…</span> : null}</span>} actions={<><PageMethodology {...DASHBOARD_METHODOLOGY} /><Button type="button" size="sm" variant="outline" onClick={refresh} disabled={loading.summary || loading.stems}><RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${loading.summary || loading.stems ? 'animate-spin' : ''}`} />Refresh</Button></>} />
-    <DashboardSavedViews filters={filters} onApply={changeFilters} />
-    <DashboardFilterBar filters={filters} years={years} portOptions={portOptions} loading={loading.summary || loading.stems} onChange={changeFilters} onReset={() => changeFilters(normalizeDashboardFilters({ ...presetDashboardPeriod('year_to_date'), datePreset: 'year_to_date' }))} onAiSearch={runAiSearch} />
+  return <main ref={dashboardRootRef} className={`workspace-page workspace-dashboard mx-auto p-3 transition-[max-width] duration-200 sm:p-6 lg:p-8 ${stemTableWide && tab === 'stems' ? 'workspace-page-wide max-w-none' : 'max-w-[1600px]'}`}><PageHeader inlineMeta icon={Building2} title="Dashboard" meta={<span className="flex flex-wrap items-center gap-2">{summaryMeta ? <DataStatus meta={summaryMeta} label="Data" compact /> : <span>Loading current decision data</span>}<PaymentDataReliabilityBadge />{loading.summary && summary ? <span className="text-xs text-muted-foreground">Updating without clearing results…</span> : null}</span>} actions={<><PageMethodology {...DASHBOARD_METHODOLOGY} /><Button type="button" size="sm" variant="outline" onClick={refresh} disabled={loading.summary || loading.stems}><RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${loading.summary || loading.stems ? 'animate-spin' : ''}`} />Refresh</Button></>} />
+    <DashboardFilterBar showPerspective={tab !== 'accounts'} filters={filters} years={years} portOptions={portOptions} loading={loading.summary || loading.stems} onChange={changeFilters} onReset={() => changeFilters(normalizeDashboardFilters({ ...presetDashboardPeriod('year_to_date'), datePreset: 'year_to_date' }))} onAiSearch={runAiSearch} />
     {errors.summary ? <ErrorBlock message={errors.summary} onRetry={loadSummary} /> : null}{errors.ai ? <ErrorBlock message={errors.ai} /> : null}<Tabs value={tab} onValueChange={(nextTab) => { setTab(nextTab); const next = new URLSearchParams(searchParams); if (nextTab === 'overview') next.delete('tab'); else next.set('tab', nextTab); setSearchParams(next, { replace: true }); }}><TabsList className="mb-4 w-full justify-start overflow-x-auto"><TabsTrigger value="overview">Overview</TabsTrigger><TabsTrigger value="stems">STEMs</TabsTrigger><TabsTrigger value="accounts">Accounts</TabsTrigger></TabsList>
-      <TabsContent value="overview" className="space-y-4"><DashboardKpis summary={dashboardKpiSummary} />{!summary && loading.summary ? <div className="grid gap-3 md:grid-cols-3">{[1, 2, 3].map((key) => <div key={key} className="h-32 animate-pulse rounded-xl border border-border bg-muted/40" />)}</div> : null}{analyticsEnabled ? <Suspense fallback={<div className="h-56 animate-pulse rounded-xl border border-border bg-card" />}><DashboardAnalytics data={analytics} loading={loading.analytics} error={errors.analytics} onLoad={loadAnalytics} counterpartyMode={filters.counterpartyMode} onAccountClick={(account) => openAccount(account, 'overview')} /></Suspense> : <section className="rounded-xl border border-border bg-card p-4"><h2 className="text-sm font-semibold">Analytics</h2><p className="mt-1 text-xs text-muted-foreground">Load trends and rankings only when you need a deeper view.</p><Button type="button" size="sm" variant="outline" className="mt-3" onClick={() => setAnalyticsEnabled(true)}>Load analytics</Button></section>}</TabsContent>
+      <TabsContent value="overview" className="space-y-4">{!summary && loading.summary ? <div className="dashboard-primary-kpis" role="status" aria-label="Loading Dashboard figures">{[1, 2, 3, 4].map((key) => <div key={key} className="h-32 animate-pulse rounded-xl border border-border bg-muted/40" />)}</div> : <DashboardKpis summary={dashboardKpiSummary} />}{analyticsEnabled ? <Suspense fallback={<div className="h-56 animate-pulse rounded-xl border border-border bg-card" />}><DashboardAnalytics data={analytics} loading={loading.analytics} error={errors.analytics} onLoad={loadAnalytics} counterpartyMode={filters.counterpartyMode} onAccountClick={(account) => openAccount(account, 'overview')} /></Suspense> : <section className="rounded-xl border border-border bg-card p-4"><h2 className="text-sm font-semibold">Analytics</h2><p className="mt-1 text-xs text-muted-foreground">Load trends and rankings only when you need a deeper view.</p><Button type="button" size="sm" variant="outline" className="mt-3" onClick={() => setAnalyticsEnabled(true)}>Load analytics</Button></section>}</TabsContent>
       <TabsContent value="stems" className="space-y-4">{errors.stems ? <ErrorBlock message={errors.stems} onRetry={() => loadStems({ cursor: navigation.cursor, history: navigation.history, sort: navigation.sort })} /> : null}<DashboardStemTable result={stems} loading={loading.stems} search={stemSearch} wide={stemTableWide} onWideChange={setStemTableWide} onSearch={(value) => { setAiSearchActive(false); setStemSearch(value); }} onPrevious={() => loadStems({ cursor: navigation.history.at(-1) ?? null, history: navigation.history.slice(0, -1), sort: navigation.sort })} onNext={() => loadStems({ cursor: stems?.nextCursor ?? stems?.pagination?.nextCursor, history: [...navigation.history, navigation.cursor], sort: navigation.sort })} onSortChange={(sort) => { if (aiSearchActive) skipNextAutoLoadRef.current = true; setAiSearchActive(false); loadStems({ cursor: null, history: [], sort }); }} onStemClick={(row) => setSelectedStemId(row.Id ?? row.id)} onAccountClick={(account) => openAccount(account, 'overview')} /></TabsContent>
       <TabsContent value="accounts" className="space-y-5"><Suspense fallback={<div className="h-48 animate-pulse rounded-xl border border-border bg-card" />}><AccountCreditDirectory counterparty={filterPayload.counterparty} dateWindows={filterPayload.dateWindows} disputeOnly={filterPayload.disputeOnly} filters={filterPayload.filters} onOpen={openAccount} /></Suspense></TabsContent></Tabs>
     <StemDetailModal stemId={selectedStemId} open={Boolean(selectedStemId)} onClose={() => setSelectedStemId(null)} />

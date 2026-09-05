@@ -4,6 +4,17 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.199',
+    releasedAt: '2026-09-05',
+    title: 'Compact trading-first Dashboard',
+    changes: [
+      'Brings gross profit, margin, turnover and product volume together above a compact trading-activity strip.',
+      'Aligns Dashboard filters and results, combines saved views with the filters, and adds a collapsible mobile filter panel.',
+      'Clarifies the combined monthly chart and improves long names, currencies and controls in STEMs and Accounts.',
+      'Preserves filters, financial calculations and Account Insight context when returning to the Dashboard.',
+    ],
+  },
+  {
     version: '2.0.197',
     releasedAt: '2026-09-03',
     title: 'Include direct FCBS costs in hedge results',

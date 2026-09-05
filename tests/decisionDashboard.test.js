@@ -311,6 +311,6 @@ test('new dashboard handlers are authenticated, live-only, and supplier matching
   assert.doesNotMatch(loader, /\['STEM__c', 'Commission_Lumpsum__c'\]/);
   assert.doesNotMatch(analytics, /Monthly gross profit by|MonthlyCounterpartyChart|monthlyCounterparties/);
   assert.match(analytics, /MonthlyPerformanceChart/);
-  assert.match(analytics, /January to December/);
+  assert.match(analytics, /January–December/);
   assert.match(analytics, /TopAccounts/);
 });

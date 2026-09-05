@@ -12,16 +12,16 @@ test('unified chart uses paired actual bars and a distinctive earth-tone palette
   assert.doesNotMatch(component, /setMode\(|Monthly volume<\/button>/);
 });
 
-test('chart assigns profit, volume, and monthly margin to three color-coded axes', () => {
+test('chart assigns profit, volume, and monthly margin to three color-coded labelled axes', () => {
   assert.match(component, /yAxisId="profit"/);
   assert.match(component, /yAxisId="volume" orientation="right"/);
   assert.match(component, /yAxisId="margin" orientation="right"/);
-  assert.doesNotMatch(component, /label=\{\{ value: currency/);
-  assert.doesNotMatch(component, /label=\{\{ value: 'MT'/);
-  assert.doesNotMatch(component, /label=\{\{ value: '%'/);
+  assert.match(component, /label=\{\{ value: `\$\{currency\} GP`/);
+  assert.match(component, /label=\{\{ value: 'MT'/);
+  assert.match(component, /label=\{\{ value: '%'/);
   assert.match(component, /dataKey="currentGrossMarginPct" name="Current gross margin %" stroke="#7a4b5c"/);
   assert.match(component, /dataKey="priorGrossMarginPct" name="Prior-year gross margin %" stroke="#b88a96"[^>]+strokeDasharray="6 4"/);
-  assert.match(component, /<span>Gross margin %<\/span>/);
+  assert.match(component, /<span>Gross margin<\/span>/);
 });
 
 test('month labels and tooltip pair current/prior actuals and retain product detail', () => {
@@ -39,4 +39,15 @@ test('prior-year chart data can be hidden and restored from an in-chart label bu
   assert.match(component, /showPriorYear \? <Bar yAxisId="profit" dataKey="priorGrossProfit"/);
   assert.match(component, /showPriorYear \? <Bar yAxisId="volume" dataKey="priorVolume"/);
   assert.match(component, /showPriorYear \? <Line yAxisId="margin"[^>]+dataKey="priorGrossMarginPct"/);
+});
+
+test('chart provides methodology, an accessible scroll container, and complete account names', () => {
+  assert.match(component, /aria-label="How monthly chart values are calculated"/);
+  assert.match(component, /Monthly chart methodology/);
+  assert.match(component, /Missing or incomplete values remain unavailable rather than being shown as zero/);
+  assert.match(component, /overflow-x-auto[^>]+tabIndex=\{0\}[^>]+aria-label=\{`\$\{currency\} monthly gross profit/);
+  assert.match(component, /Current gross profit · \{currency\}/);
+  assert.match(component, /Prior-year gross margin %/);
+  assert.doesNotMatch(component, /title=\{row\.name\}/);
+  assert.match(component, /break-words text-left/);
 });
