@@ -1016,6 +1016,11 @@ export function expectedBuyerInvoiceEstimate({
     if (quantity.basis === 'range_max_quantity') usesMaximumQuantity = true;
   }
   for (const item of activeExtraCosts) {
+    const fixedPrice = number(item.Lumpsum_Price__c);
+    if (fixedPrice != null) {
+      amount += fixedPrice;
+      continue;
+    }
     const unitPrice = number(item.Unit_Price__c);
     if (unitPrice == null) {
       const fixedAmount = number(item.Line_Total__c);

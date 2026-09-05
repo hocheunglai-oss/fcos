@@ -453,6 +453,7 @@ test('uses live receivable balance for Full CIA and excludes future balances fro
     days31to60: 0,
     days61to90: 0,
     over90: 0,
+    undated: 0,
   });
 });
 

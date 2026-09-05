@@ -9,6 +9,8 @@ import { resolveBuyerReminderRule } from './_buyerInvoiceReminderRules.js';
 import { buildDashboardAccountInsight } from './_dashboardAccountInsight.js';
 import { classifyExceptionReviewStem } from '../src/lib/exceptionReviewClassifier.js';
 import { normalizeExceptionSchedule } from '../src/lib/exceptionReviewSchedule.js';
+import { isBuyerPaymentAllocation } from './_paymentClassification.js';
+import { isPaymentDataReliableStem } from '../src/lib/paymentDataReliability.js';
 
 const SALESFORCE_ID = /^[A-Za-z0-9]{15}(?:[A-Za-z0-9]{3})?$/;
 const INTEROFFICE_EXCLUDED_GROUP = 'FRATELLI COSULICH';
@@ -222,12 +224,16 @@ function projectDashboardAccountInsight(result, requestedSection) {
     identity: result.identity,
     availableRoles: result.availableRoles,
     activeRole: result.activeRole,
+    entityType: result.entityType,
     period: result.period,
     scope: result.scope,
     relationship: result.relationship,
     dashboardScope: result.dashboardScope,
     warnings: result.warnings,
     meta: result.meta,
+    paymentDataReliability: result.paymentDataReliability,
+    groupScope: result.groupScope,
+    creditResolution: result.creditResolution,
     section,
   };
   if (section === 'overview') {
@@ -282,7 +288,8 @@ function serializeAccount(account, { root = false } = {}) {
     parentClKey: account.Parent?.Company_Code__c || null,
     root,
     managerCount: 0,
-    creditLimit: number(account.Credit_Limit__c),
+    // Credit is resolved from the validated complete hierarchy, not this legacy field.
+    creditLimit: null,
     creditRating: account.Credit_Rating__c || null,
     insuranceLimit: number(account.Insurance_Limit__c),
     currency: account.CurrencyIsoCode || null,
@@ -337,6 +344,7 @@ function interofficeStemCondition(accountFields) {
 
 function stemSelectFields(stemFields, accountFields) {
   const values = ['Id', 'Name', 'CreatedDate', ...selected(stemFields, ['LastModifiedDate', 'KeyStem__c', 'Account__c', 'Port__c', 'Vessel__c', 'Buyer_Name__c', 'Delivery_Date__c', 'Expected_Delivery_Date__c', 'ETA_ETB__c', 'ETA_Start_Date__c', 'ETA_End_Date__c', 'ETB_Start_Date__c', 'ETB_End_Date__c', 'Original_Invoice_Sent_Date__c', 'Status__c', 'Type__c', 'Dispute__c', 'Dispute_Status__c', 'Dispute_Type__c', 'Total_Invoice_Amount__c', 'Total_Invoiced_Amount_From_Suppliers__c', 'Costs_Total__c', 'QLIK_STEM_Line_Item_Total_Cost__c', 'QLIK_Costs_Total_Cost__c', 'QLIK_Total_Profit__c', 'Receivable_Balance__c', 'Payable_Balance__c', 'Payment_Term__c', 'Invoice_Due_Date__c', 'Buyer_Pay_Term_Date__c', 'Due_Date__c', 'Due_Date_Override__c', 'Not_Cancelled_STEM_Line_Item_Quantity__c', 'Payment_Date__c', 'CurrencyIsoCode'])];
+  values.push(...selected(stemFields, ['QLIK_Receivable_Balance__c']));
   if (stemFields.has('Account__c')) {
     values.push('Account__r.Name');
     if (accountFields.has('Company_Code__c')) values.push('Account__r.Company_Code__c');
@@ -355,8 +363,11 @@ function stemSelectFields(stemFields, accountFields) {
 
 async function supplierStemIds(accountId, lookup, extraLookup) {
   const queries = [];
-  if (lookup.valid) queries.push({ soql: `SELECT STEM__c FROM STEM_Line_Item__c WHERE Original_Supplier__c = '${soql(accountId)}' LIMIT 50000`, clean: true, limit: MAX_STEMS });
-  if (extraLookup.valid) queries.push({ soql: `SELECT STEM__c FROM STEM_Extra_Cost__c WHERE ${extraLookup.fieldName} = '${soql(accountId)}' LIMIT 50000`, clean: true, limit: MAX_STEMS });
+  for (const ids of chunkIds(Array.isArray(accountId) ? accountId : [accountId])) {
+    const selector = ids.map((id) => `'${soql(id)}'`).join(',');
+    if (lookup.valid) queries.push({ soql: `SELECT STEM__c FROM STEM_Line_Item__c WHERE Original_Supplier__c IN (${selector}) AND Cancelled__c = false LIMIT 50000`, clean: true, limit: MAX_STEMS });
+    if (extraLookup.valid) queries.push({ soql: `SELECT STEM__c FROM STEM_Extra_Cost__c WHERE ${extraLookup.fieldName} IN (${selector}) AND Cancelled__c = false LIMIT 50000`, clean: true, limit: MAX_STEMS });
+  }
   const results = queries.length ? await sfCompositeQueries(queries) : [];
   return {
     ids: unique(results.flatMap((result) => result.records.map((row) => row.STEM__c))),
@@ -414,6 +425,7 @@ function extraCostSelectFields(extraFields, accountFields, productFields, lookup
   productUomField = null,
 } = {}) {
   const values = ['Id', 'STEM__c', ...selected(extraFields, ['Name', 'Description__c', 'Supplier_Name__c', 'Supplier_Invoice__c', 'Cancelled__c', 'Payment_Term__c', 'Product__c', 'Product2Id__c', 'Quantity__c', 'Quantity_Delivered_Per_BDN__c', 'Quantity_in_MT__c', 'Quantity_Range_Max__c', 'Is_Quantity_Range__c', 'Unit_Price__c', 'Unit_Cost__c', 'Line_Total__c', 'Line_Total_Buy__c'])];
+  values.push(...selected(extraFields, ['Fixed__c', 'Lumpsum_Cost__c', 'Lumpsum_Price__c', 'Supplier_Cost_Input_Currency__c', 'Supplier_Cost_Input_Value__c', 'Supplier_Cost_USD_HKD_Rate__c', 'Supplier_Cost_FX_Settings_Revision__c']));
   if (extraCostUomField) values.push(extraCostUomField);
   const productField = extraFields.get('Product2Id__c') || extraFields.get('Product__c');
   if (productField?.relationshipName) {
@@ -479,44 +491,48 @@ async function queryChildren(stemIds, fields, objectName, limit = 50_000) {
 function paymentFieldConfiguration(paymentFields) {
   return {
     amountField: firstAvailable(paymentFields, ['Amount__c', 'Payment_Amount__c', 'Paid_Amount__c', 'Received_Amount__c', 'Total_Amount__c', 'Amount_Paid__c', 'Payment_Value__c', 'Actual_Amount__c']),
-    dateField: firstAvailable(paymentFields, ['Date__c', 'Payment_Date__c', 'Received_Date__c', 'Paid_Date__c', 'CreatedDate']),
+    dateField: firstAvailable(paymentFields, ['Date__c', 'Payment_Date__c', 'Received_Date__c', 'Paid_Date__c']),
+    requireRecordType: paymentFields.has('RecordTypeId'),
     statusFields: selected(paymentFields, ['Status__c', 'Payment_Status__c']),
     supplierInvoiceFields: [...paymentFields.values()].filter((field) => field.type === 'reference' && field.referenceTo?.includes('Supplier_Invoice__c')).map((field) => field.name),
   };
 }
 
-function nonVoidedPayment(payment, statusFields) {
-  return !statusFields.some((field) => /void|cancel|revers|reject/i.test(text(payment[field])));
-}
-
-async function queryBuyerPayments(stemIds, paymentFields) {
+async function queryBuyerPayments(stems, paymentFields) {
+  const stemIds = stems.map((stem) => stem.Id);
+  const buyers = new Map(stems.map((stem) => [idKey(stem.Id), stem.Account__c]));
   const config = paymentFieldConfiguration(paymentFields);
-  if (!paymentFields.has('STEM__c') || !config.amountField || !config.dateField || !stemIds.length) return { byStem: {}, warning: 'Buyer Payment evidence is unavailable because required Payment fields were not found.' };
-  const selectFields = ['Id', 'STEM__c', ...selected(paymentFields, ['Name', 'CreatedDate', 'CurrencyIsoCode']), config.amountField, config.dateField, ...config.statusFields, ...config.supplierInvoiceFields];
+  if (!stemIds.length) return { byStem: {}, warning: null };
+  if (!paymentFields.has('STEM__c') || !config.amountField || !config.dateField) throw serviceError('Buyer Payment evidence is unavailable because required Payment fields were not found.', 503, 'ACCOUNT_INSIGHT_PAYMENT_SCHEMA');
+  const selectFields = ['Id', 'STEM__c', ...selected(paymentFields, ['Account__c', 'Name', 'CreatedDate', 'CurrencyIsoCode']), ...(config.requireRecordType ? ['RecordType.DeveloperName', 'RecordType.Name'] : []), config.amountField, config.dateField, ...config.statusFields, ...config.supplierInvoiceFields];
   const results = await sfCompositeQueries(chunkIds(stemIds).map((chunk) => ({
     soql: `SELECT ${[...new Set(selectFields)].join(',')} FROM Payment__c WHERE STEM__c IN (${chunk.map((id) => `'${soql(id)}'`).join(',')}) ORDER BY ${config.dateField} DESC NULLS LAST LIMIT 5000`,
     clean: true,
     limit: 5000,
-    softFail: true,
+    softFail: false,
   })));
   const byStem = {};
+  if (results.some((result) => result.totalSize > result.records.length || result.error)) throw serviceError('Buyer payment evidence is incomplete. Payment totals are unavailable.', 503, 'ACCOUNT_INSIGHT_PAYMENT_INCOMPLETE');
+  const seen = new Set();
   for (const payment of results.flatMap((result) => result.records)) {
-    if (!nonVoidedPayment(payment, config.statusFields)) continue;
-    if (config.supplierInvoiceFields.some((field) => payment[field])) continue;
+    if (!isBuyerPaymentAllocation(payment, { ...config, buyerAccountId: buyers.get(idKey(payment.STEM__c)) }) || seen.has(idKey(payment.Id))) continue;
+    seen.add(idKey(payment.Id));
     const amount = number(payment[config.amountField]);
     if (!(amount > 0) || !payment.STEM__c) continue;
     if (!byStem[payment.STEM__c]) byStem[payment.STEM__c] = [];
-    byStem[payment.STEM__c].push({ paymentId: payment.Id, paymentName: payment.Name || null, paymentDate: payment[config.dateField] || payment.CreatedDate || null, amount, currency: payment.CurrencyIsoCode || null });
+    byStem[payment.STEM__c].push({ paymentId: payment.Id, paymentName: payment.Name || null, paymentDate: payment[config.dateField] || null, amount, currency: payment.CurrencyIsoCode || null });
   }
   return { byStem, warning: null };
 }
 
 async function querySupplierInvoices({ stemIds, accountId, lineItems, extraCosts, invoiceDescribe, paymentDescribe, schema }) {
+  const supplierKeys = new Set((Array.isArray(accountId) ? accountId : [accountId]).map(idKey));
   const invoiceFields = fieldMap(invoiceDescribe);
-  if (!stemIds.length || !invoiceFields.has('STEM__c')) return { rows: [], warning: 'Supplier invoice linkage is unavailable.' };
+  if (!stemIds.length) return { rows: [], warning: null };
+  if (!invoiceFields.has('STEM__c') || !schema.supplierSettlement.invoiceAmountField || !schema.supplierSettlement.invoicePayableField) throw serviceError('Supplier invoice evidence is unavailable because required fields were not found.', 503, 'ACCOUNT_INSIGHT_SUPPLIER_INVOICE_SCHEMA');
   const supplierSources = [...lineItems, ...extraCosts].filter((row) => {
     const supplierId = row.Original_Supplier__c || row[schema.extraCostSupplierField];
-    return idKey(supplierId) === idKey(accountId);
+    return row.Cancelled__c !== true && supplierKeys.has(idKey(supplierId));
   });
   const sourceInvoiceIds = new Set(supplierSources.map((row) => row.Supplier_Invoice__c).filter((id) => SALESFORCE_ID.test(text(id))));
   const paymentTermsByInvoice = new Map();
@@ -533,11 +549,16 @@ async function querySupplierInvoices({ stemIds, accountId, lineItems, extraCosts
     soql: `SELECT ${[...new Set(selectFields)].join(',')} FROM Supplier_Invoice__c WHERE STEM__c IN (${chunk.map((id) => `'${soql(id)}'`).join(',')}) LIMIT 5000`,
     clean: true,
     limit: 5000,
-    softFail: true,
+    softFail: false,
   })));
+  if (invoiceResults.some((result) => result.totalSize > result.records.length || result.error)) throw serviceError('Supplier invoice evidence is incomplete. Totals are unavailable.', 503, 'ACCOUNT_INSIGHT_SUPPLIER_INCOMPLETE');
+  const conflicts = invoiceResults.flatMap((result) => result.records).filter((invoice) => sourceInvoiceIds.has(invoice.Id) && invoice.Supplier__c && !supplierKeys.has(idKey(invoice.Supplier__c)));
   const invoices = invoiceResults.flatMap((result) => result.records).filter((invoice) => {
+    if (invoice.Supplier__c) return supplierKeys.has(idKey(invoice.Supplier__c));
+    const declaredSupplierIds = invoiceAccountFields.map((field) => invoice[field]).filter(Boolean);
+    if (declaredSupplierIds.some((id) => !supplierKeys.has(idKey(id)))) return false;
     if (sourceInvoiceIds.has(invoice.Id)) return true;
-    return invoiceAccountFields.some((field) => idKey(invoice[field]) === idKey(accountId));
+    return declaredSupplierIds.some((id) => supplierKeys.has(idKey(id)));
   });
   const paymentFields = fieldMap(paymentDescribe);
   const paymentSelectFields = ['Id', ...selected(paymentFields, ['Name', 'CreatedDate', 'CurrencyIsoCode']), schema.supplierSettlement.paymentAmountField, schema.supplierSettlement.paymentDateField, ...schema.supplierSettlement.paymentStatusFields, ...schema.supplierSettlement.paymentSupplierInvoiceFields].filter(Boolean);
@@ -548,14 +569,15 @@ async function querySupplierInvoices({ stemIds, accountId, lineItems, extraCosts
         soql: `SELECT ${[...new Set(paymentSelectFields)].join(',')} FROM Payment__c WHERE ${lookupField} IN (${chunk.map((id) => `'${soql(id)}'`).join(',')}) LIMIT 5000`,
         clean: true,
         limit: 5000,
-        softFail: true,
+        softFail: false,
       })));
+      if (results.some((result) => result.totalSize > result.records.length || result.error)) throw serviceError('Supplier payment evidence is incomplete. Payment statistics are unavailable.', 503, 'ACCOUNT_INSIGHT_SUPPLIER_PAYMENTS_INCOMPLETE');
       for (const payment of results.flatMap((result) => result.records)) {
         if (!validSupplierSettlementPayment(payment, schema.supplierSettlement.paymentStatusFields)) continue;
         const invoiceId = payment[lookupField];
         if (!invoiceId) continue;
         const values = paymentsByInvoice.get(invoiceId) || [];
-        if (!values.some((value) => value.id === payment.Id)) values.push({ id: payment.Id, name: payment.Name || null, amount: number(payment[schema.supplierSettlement.paymentAmountField]) || 0, date: payment[schema.supplierSettlement.paymentDateField] || payment.CreatedDate || null });
+        if (!values.some((value) => value.id === payment.Id)) values.push({ id: payment.Id, name: payment.Name || null, amount: number(payment[schema.supplierSettlement.paymentAmountField]), date: payment[schema.supplierSettlement.paymentDateField] || null });
         paymentsByInvoice.set(invoiceId, values);
       }
     }
@@ -570,7 +592,7 @@ async function querySupplierInvoices({ stemIds, accountId, lineItems, extraCosts
         invoiceId: invoice.Id,
         invoiceName: invoice.Name || invoice.Id,
         stemId: invoice.STEM__c,
-        supplierAccountId: accountField ? invoice[accountField] : accountId,
+        supplierAccountId: accountField ? invoice[accountField] : supplierSources.find((row) => row.Supplier_Invoice__c === invoice.Id)?.[schema.extraCostSupplierField] || supplierSources.find((row) => row.Supplier_Invoice__c === invoice.Id)?.Original_Supplier__c || null,
         supplierName: relationship ? invoice[relationship]?.Name : invoice.Supplier_Name__c || null,
         currency: invoice.CurrencyIsoCode || 'USD',
         invoiceAmount,
@@ -582,11 +604,11 @@ async function querySupplierInvoices({ stemIds, accountId, lineItems, extraCosts
         payments: paymentsByInvoice.get(invoice.Id) || [],
       };
     }),
-    warning: schema.supplierSettlement.valid ? null : schema.supplierSettlement.issues.join(' '),
+    warning: [conflicts.length ? `${conflicts.length} linked supplier invoice identity conflict(s) were excluded from aggregates.` : null, schema.supplierSettlement.valid ? null : schema.supplierSettlement.issues.join(' ')].filter(Boolean).join(' ') || null,
   };
 }
 
-async function loadSalesforceDataset({ accountId, role, period, interoffice, force }) {
+async function loadSalesforceDataset({ accountId, role, entityType, includedAccountIds, period, interoffice, force, paymentEvidence = true }) {
   const [accountDescribe, stemDescribe, lineDescribe, productDescribe, extraDescribe, buyerBrokerDescribe, buyerInvoiceDescribe, invoiceDescribe, paymentDescribe] = await Promise.all([
     describeObject('Account', force),
     describeObject('STEM__c', force),
@@ -594,7 +616,7 @@ async function loadSalesforceDataset({ accountId, role, period, interoffice, for
     describeObject('Product2', force),
     describeObject('STEM_Extra_Cost__c', force),
     describeObject('STEM_Buyer_Broker__c', force).catch(() => ({ fields: [] })),
-    describeObject('Invoice__c', force).catch(() => ({ fields: [] })),
+    describeObject('Invoice__c', force),
     describeObject('Supplier_Invoice__c', force).catch(() => ({ fields: [] })),
     describeObject('Payment__c', force).catch(() => ({ fields: [] })),
   ]);
@@ -605,6 +627,7 @@ async function loadSalesforceDataset({ accountId, role, period, interoffice, for
   const extraFields = fieldMap(extraDescribe);
   const buyerBrokerFields = fieldMap(buyerBrokerDescribe);
   const buyerInvoiceFields = fieldMap(buyerInvoiceDescribe);
+  if (!buyerInvoiceFields.has('STEM__c') || !buyerInvoiceFields.has('Proforma__c') || !buyerInvoiceFields.has('Deprecated__c')) throw serviceError('Issued Buyer Invoice evidence is unavailable. Refresh after invoice access is restored.', 503, 'ACCOUNT_INSIGHT_BUYER_INVOICE_SCHEMA');
   const invoiceFields = fieldMap(invoiceDescribe);
   const paymentFields = fieldMap(paymentDescribe);
   const buyerLookup = stemFields.get('Account__c');
@@ -616,9 +639,12 @@ async function loadSalesforceDataset({ accountId, role, period, interoffice, for
   const extraCostSupplierLookup = resolveExtraCostSupplierLookup(extraDescribe.fields || []);
   if (!originalSupplierLookup.valid) throw serviceError(originalSupplierLookup.issue.message, 503, 'ACCOUNT_INSIGHT_SCHEMA_INVALID');
   if (!extraCostSupplierLookup.valid) throw serviceError(extraCostSupplierLookup.issue.message, 503, 'ACCOUNT_INSIGHT_SCHEMA_INVALID');
-  const scope = await loadAccountScope(accountId, role, accountFields, interoffice);
-  if (role === 'group' && !/group/i.test(text(scope.root.RecordType?.Name))) throw serviceError('The selected Account is not a Salesforce GROUP Account.', 400, 'ACCOUNT_INSIGHT_NOT_GROUP');
-  const supplierScope = await supplierStemIds(accountId, originalSupplierLookup, extraCostSupplierLookup);
+  const fullScope = await loadAccountScope(accountId, entityType === 'group' ? 'group' : role, accountFields, interoffice);
+  if (entityType === 'group' && !/group/i.test(text(fullScope.root.RecordType?.Name))) throw serviceError('The selected Account is not a Salesforce GROUP Account.', 400, 'ACCOUNT_INSIGHT_NOT_GROUP');
+  const selectedKeys = includedAccountIds == null ? null : new Set(includedAccountIds.map(idKey));
+  if (selectedKeys && [...selectedKeys].some((key) => !fullScope.accounts.some((account) => idKey(account.accountId) === key))) throw serviceError('Selected child Accounts are outside this active GROUP.', 403, 'ACCOUNT_INSIGHT_CHILD_SCOPE');
+  const scope = { ...fullScope, accounts: selectedKeys ? fullScope.accounts.filter((account) => selectedKeys.has(idKey(account.accountId))) : fullScope.accounts };
+  const supplierScope = await supplierStemIds(scope.accounts.map((account) => account.accountId), originalSupplierLookup, extraCostSupplierLookup);
   const accessCondition = interoffice ? interofficeStemCondition(accountFields) : '';
   const fields = stemSelectFields(stemFields, accountFields);
   const scopeIds = scope.accounts.map((account) => account.accountId);
@@ -655,7 +681,8 @@ async function loadSalesforceDataset({ accountId, role, period, interoffice, for
   }));
   const currentIds = new Set(current.records.map((stem) => stem.Id));
   const previousIds = new Set(previous.records.map((stem) => stem.Id));
-  const buyerPayments = role === 'supplier' ? { byStem: {}, warning: null } : await queryBuyerPayments([...currentIds], paymentFields);
+  const reliableStems = current.records.filter(isPaymentDataReliableStem);
+  const buyerPayments = role === 'supplier' || !paymentEvidence ? { byStem: {}, warning: null } : await queryBuyerPayments(reliableStems, paymentFields);
   const supplierSettlement = resolveSupplierSettlementSchema({ supplierInvoiceFields: invoiceDescribe.fields || [], paymentFields: paymentDescribe.fields || [] });
   const schema = {
     originalSupplierRelationship: originalSupplierLookup.relationshipName || 'Original_Supplier__r',
@@ -666,13 +693,12 @@ async function loadSalesforceDataset({ accountId, role, period, interoffice, for
     productUomField,
     supplierSettlement,
   };
-  const supplierInvoices = role === 'supplier'
-    ? await querySupplierInvoices({ stemIds: [...currentIds], accountId, lineItems: lineItems.filter((row) => currentIds.has(row.STEM__c)), extraCosts: extraCosts.filter((row) => currentIds.has(row.STEM__c)), invoiceDescribe, paymentDescribe, schema })
+  const supplierInvoices = role === 'supplier' && paymentEvidence
+    ? await querySupplierInvoices({ stemIds: reliableStems.map((stem) => stem.Id), accountId: scopeIds, lineItems: lineItems.filter((row) => currentIds.has(row.STEM__c)), extraCosts: extraCosts.filter((row) => currentIds.has(row.STEM__c)), invoiceDescribe, paymentDescribe, schema })
     : { rows: [], warning: null };
-  const buyerCount = await sfQuery(`SELECT COUNT(Id) total FROM STEM__c WHERE ${combineConditions([`Account__c = '${soql(accountId)}'`, accessCondition])}`, { clean: true, limit: 1, softFail: true });
-  const availableRoles = role === 'group'
-    ? ['group']
-    : [buyerCount.records?.[0]?.total > 0 ? 'buyer' : null, supplierScope.ids.length ? 'supplier' : null, role].filter(Boolean);
+  const buyerCount = await sfQuery(`SELECT COUNT(Id) total FROM STEM__c WHERE ${combineConditions([`Account__c IN (${fullScope.accounts.map((account) => `'${soql(account.accountId)}'`).join(',')})`, accessCondition])}`, { clean: true, limit: 1, softFail: true });
+  const fullSupplierScope = selectedKeys ? await supplierStemIds(fullScope.accounts.map((account) => account.accountId), originalSupplierLookup, extraCostSupplierLookup) : supplierScope;
+  const availableRoles = [buyerCount.records?.[0]?.total > 0 ? 'buyer' : null, fullSupplierScope.ids.length ? 'supplier' : null].filter(Boolean);
   const warnings = unique([
     originalSupplierLookup.issue?.message,
     extraCostSupplierLookup.issue?.message,
@@ -688,6 +714,8 @@ async function loadSalesforceDataset({ accountId, role, period, interoffice, for
       group: scope.root.Parent && scope.root.Parent.Inactive_Suspended__c !== true ? { accountId: scope.root.ParentId, name: scope.root.Parent.Name, clKey: scope.root.Parent.Company_Code__c || '' } : null,
     },
     role,
+    entityType,
+    groupScope: entityType === 'group' ? { selectable: true, accounts: fullScope.accounts, includedAccountIds: scopeIds, availableAccounts: fullScope.accounts.map((account) => ({ ...account, isGroupRoot: account.root, included: scopeIds.includes(account.accountId) })), complete: true } : null,
     availableRoles: unique(availableRoles),
     period,
     scopeAccounts: scope.accounts,
@@ -703,6 +731,7 @@ async function loadSalesforceDataset({ accountId, role, period, interoffice, for
     buyerInvoices,
     buyerPaymentsByStem: buyerPayments.byStem,
     supplierInvoices: supplierInvoices.rows,
+    paymentEvidenceDeferred: !paymentEvidence,
     schema,
     warnings,
     truncated: current.truncated || previous.truncated || supplierScope.truncated,
@@ -818,7 +847,7 @@ async function loadReminderPolicy(client, identity, role) {
   }
 }
 
-async function loadWorkflowState(client, salesforceData, interoffice, force) {
+async function loadWorkflowState(client, salesforceData, interoffice, force, relatedDetails = true) {
   const stemIds = salesforceData.stems.map((stem) => stem.Id);
   const warnings = [];
   const collectionByStem = {};
@@ -890,15 +919,15 @@ async function loadWorkflowState(client, salesforceData, interoffice, force) {
   if (managers.warning) warnings.push(managers.warning);
   if (reminderPolicy.warning) warnings.push(reminderPolicy.warning);
   const scopeAccounts = salesforceData.scopeAccounts.map((account) => ({ ...account, managerCount: managers.accountState.get(idKey(account.accountId))?.managers?.length || 0 }));
-  let compensation = { accounts: [] };
-  try {
+  let compensation = { accounts: [], deferred: !relatedDetails };
+  if (relatedDetails) try {
     compensation = await listUnofficialCompensation({ force, interoffice, accountIds: scopeAccounts.map((account) => account.accountId) });
   } catch (error) {
     console.warn('[account-insight] scoped compensation load failed', { code: error?.code || null });
     warnings.push('Unofficial Compensation is temporarily unavailable.');
   }
-  let specialTerms = { count: 0, terms: [] };
-  try {
+  let specialTerms = { count: relatedDetails ? 0 : null, terms: [], deferred: !relatedDetails };
+  if (relatedDetails) try {
     const accountIds = new Set(scopeAccounts.map((account) => idKey(account.accountId)));
     const portIds = new Set(salesforceData.stems.map((stem) => idKey(stem.Port__c)).filter(Boolean));
     const countries = new Set(salesforceData.stems.map((stem) => text(stem.Port__r?.Country__c).toLowerCase()).filter(Boolean));
@@ -930,23 +959,34 @@ async function loadWorkflowState(client, salesforceData, interoffice, force) {
 
 export async function loadDashboardAccountInsight({ body = {}, accessContext, force = false, includeExportRows = false }) {
   const accountId = salesforceId(body.accountId);
-  const role = ['buyer', 'supplier', 'group'].includes(body.contextRole) ? body.contextRole : 'buyer';
+  const entityType = body.entityType === 'group' || body.contextRole === 'group' ? 'group' : 'account';
+  const side = ['both', 'buyer', 'supplier'].includes(body.side) ? body.side : body.contextRole === 'supplier' ? 'supplier' : 'buyer';
+  if (side === 'both') {
+    const [buyer, supplier] = await Promise.all(['buyer', 'supplier'].map((direction) => loadDashboardAccountInsight({ body: { ...body, entityType, side: direction }, accessContext, force, includeExportRows })));
+    return { ...buyer, activeRole: 'both', side, entityType, buyer, supplier, groupScope: buyer.groupScope || supplier.groupScope, availableRoles: unique([...(buyer.availableRoles || []), ...(supplier.availableRoles || [])]), warnings: unique([...(buyer.warnings || []), ...(supplier.warnings || [])]), meta: { ...buyer.meta, supplierSalesforceFetchedAt: supplier.meta?.salesforceFetchedAt || null } };
+  }
+  const role = side === 'supplier' ? 'supplier' : entityType === 'group' ? 'group' : 'buyer';
+  const selection = body.includedGroupAccountIds ?? body.includedAccountIds;
+  if (selection != null && (!Array.isArray(selection) || selection.length > 1000)) throw serviceError('GROUP Account selection is invalid.', 400, 'ACCOUNT_INSIGHT_CHILD_SCOPE');
+  const includedAccountIds = selection == null ? null : unique(selection.map((id) => salesforceId(id))).sort();
   const period = insightPeriod(body);
   const interoffice = accessContext?.profile?.user_type === 'interoffice';
-  const cachePayload = { accountId: idKey(accountId), role, period };
+  const paymentEvidence = includeExportRows || !['overview', 'trading', 'children'].includes(body.section);
+  const relatedDetails = includeExportRows || !['overview', 'trading', 'children', 'stems', 'payments'].includes(body.section);
+  const cachePayload = { accountId: idKey(accountId), role, entityType, includedAccountIds, period, paymentEvidence };
   const cached = await getOrLoadRuntimeCache({
     namespace: 'salesforce-dashboard-account-insight',
-    version: '4-payment-reliability',
+    version: '5-scoped-allocation-evidence',
     accessScope: interoffice ? 'interoffice' : 'standard',
     apiVersion: `${getApiVersion()}@${getInstanceUrl()}`,
     payload: cachePayload,
     ttlSeconds: 60,
-    tags: ['salesforce:dashboard', 'salesforce:account', 'salesforce:stem', `salesforce:account:${idKey(accountId)}`],
+    tags: ['salesforce:dashboard', 'salesforce:account', 'salesforce:group', 'salesforce:stem', 'salesforce:payment', 'salesforce:invoice', 'salesforce:line-item', 'salesforce:extra-cost', `salesforce:account:${idKey(accountId)}`],
     force,
-    loader: () => loadSalesforceDataset({ accountId, role, period, interoffice, force }),
+    loader: () => loadSalesforceDataset({ accountId, role, entityType, includedAccountIds, period, interoffice, force, paymentEvidence }),
   });
   const scoped = applyDashboardScope(cached.value, body.dashboardScope);
-  const live = await loadWorkflowState(accessContext.client, scoped.dataset, interoffice, force);
+  const live = await loadWorkflowState(accessContext.client, scoped.dataset, interoffice, force, relatedDetails);
   const dataset = {
     ...scoped.dataset,
     scopeAccounts: live.scopeAccounts,
@@ -968,6 +1008,7 @@ export async function loadDashboardAccountInsight({ body = {}, accessContext, fo
     },
   };
   const result = buildDashboardAccountInsight(dataset, { cursor: body.cursor, pageSize: body.pageSize, today: hongKongToday() });
+  if (includeExportRows && (dataset.truncated || result.stems?.truncated)) throw serviceError('The complete report exceeds the retrieval limit. Narrow the period; no partial report was generated.', 413, 'ACCOUNT_INSIGHT_REPORT_TOO_LARGE');
   result.dashboardScope = scoped.scope;
   if (!includeExportRows) delete result.exportRows;
   return includeExportRows ? result : projectDashboardAccountInsight(result, body.section);
@@ -980,4 +1021,5 @@ export const dashboardAccountInsightServiceInternals = {
   projectDashboardAccountInsight,
   buyerBrokerQueryConfiguration,
   extraCostSelectFields,
+  paymentFieldConfiguration,
 };
