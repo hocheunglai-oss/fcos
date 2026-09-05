@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   CalendarRange,
@@ -228,7 +228,7 @@ function FallbackDrawer({ open, onClose, onSaved }) {
       onSaved(result);
       onClose();
     } catch (nextError) {
-      setError(nextError);
+      if (nextError?.name !== 'AbortError') setError(nextError);
     } finally {
       setBusy(false);
     }
@@ -262,7 +262,7 @@ function SnapshotTable({ rows }) {
   );
 }
 
-export function MarketForwardCurves({ readOnly, canManageCutover = false, mode = 'content' }) {
+export function MarketForwardCurves({ active = true, readOnly, canManageCutover = false, mode = 'content', asOfDate = null, refreshKey = 0 }) {
   const initialFilters = useMemo(storedCurveFilters, []);
   const initialProducts = Array.isArray(initialFilters.products) ? initialFilters.products.filter((value) => PRODUCTS.some((item) => item.value === value)) : [];
   const [range, setRange] = useState(() => RANGES.includes(initialFilters.range) ? initialFilters.range : '1m');
@@ -274,18 +274,27 @@ export function MarketForwardCurves({ readOnly, canManageCutover = false, mode =
   const [fallbackOpen, setFallbackOpen] = useState(false);
   const [cutoverReason, setCutoverReason] = useState('');
   const [cutoverBusy, setCutoverBusy] = useState(false);
+  const requestRef = useRef(0);
 
-  const load = async ({ force = false } = {}) => {
+  const load = async ({ force = false, signal } = {}) => {
+    const requestId = ++requestRef.current;
     setBusy(true); setError(null);
     try {
-      setCurve(await loadMarketIntelligenceCurve({ products: PRODUCTS.map((item) => item.value), range }, { force, cache: !force }));
+      const nextCurve = await loadMarketIntelligenceCurve({ products: PRODUCTS.map((item) => item.value), range, ...(asOfDate ? { asOfDate } : {}) }, { force, cache: !force, signal });
+      if (requestId === requestRef.current) setCurve(nextCurve);
     } catch (nextError) {
-      setError(nextError);
+      if (requestId === requestRef.current && nextError?.name !== 'AbortError') setError(nextError);
     } finally {
-      setBusy(false);
+      if (requestId === requestRef.current) setBusy(false);
     }
   };
-  useEffect(() => { load(); }, [range]);
+  useEffect(() => {
+    if (!active) return undefined;
+    const controller = new AbortController();
+    setCurve(null);
+    load({ signal: controller.signal, force: refreshKey > 0 });
+    return () => { requestRef.current += 1; controller.abort(); };
+  }, [active, asOfDate, range, refreshKey]);
 
   const snapshot = useMemo(() => normalizeSnapshot(curve), [curve]);
   const points = useMemo(() => normalizeStructure(curve), [curve]);

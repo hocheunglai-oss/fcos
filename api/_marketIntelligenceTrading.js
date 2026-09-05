@@ -9,6 +9,7 @@ import {
 } from '../shared/plattsMarketModel.js';
 import { marketPublicationEligible, nextMarketPublicationDate } from './_marketIntelligence.js';
 import { mopsMonthInputFingerprint } from './_hedgeMops.js';
+import { readCompletedMarketBrief } from './_marketReportDates.js';
 
 const PRODUCTS = Object.freeze(['hsfo380', 'vlsfo', 'lsmgo']);
 const PRODUCT_UNITS = Object.freeze({ hsfo380: 'USD/MT', vlsfo: 'USD/MT', lsmgo: 'USD/BBL' });
@@ -872,26 +873,12 @@ function latestBriefsByReportDate(rows = [], limit = 3) {
 }
 
 async function briefAtOrBefore(client, date) {
-  const result = await client.from('market_intelligence_briefs')
-    .select('*')
-    .lte('report_date', date)
-    .order('report_date', { ascending: false })
-    .order('revision', { ascending: false })
-    .limit(1);
-  if (result.error) throw intelligenceError(`Market brief could not be loaded: ${result.error.message}`, 502, 'MARKET_BRIEF_LOAD_FAILED');
-  return result.data?.[0] || null;
+  return readCompletedMarketBrief(client, date);
 }
 
 async function adjacentBriefDate(client, date, direction, upperBound) {
-  let query = client.from('market_intelligence_briefs').select('report_date,revision');
-  if (direction === 'previous') {
-    query = query.lt('report_date', date).order('report_date', { ascending: false });
-  } else {
-    query = query.gt('report_date', date).lte('report_date', upperBound).order('report_date', { ascending: true });
-  }
-  const result = await query.order('revision', { ascending: false }).limit(1);
-  if (result.error) throw intelligenceError(`Market brief navigation could not be loaded: ${result.error.message}`, 502, 'MARKET_BRIEF_LOAD_FAILED');
-  return result.data?.[0]?.report_date || null;
+  const brief = await readCompletedMarketBrief(client, date, { direction, upperBound, columns: 'report_date,revision,completeness' });
+  return brief?.report_date || null;
 }
 
 async function curveAvailabilityForBrief(client, brief, curve) {

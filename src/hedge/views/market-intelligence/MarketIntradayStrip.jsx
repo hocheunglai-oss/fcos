@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, ArrowRight, Camera, ChevronDown, ChevronUp, ClipboardPaste, Info, RefreshCw } from 'lucide-react';
+import { Camera, ChevronDown, ChevronUp, ClipboardPaste, Info, RefreshCw } from 'lucide-react';
 import { loadMarketIntradayTimeline, previewMarketIntradaySnapshot, saveMarketIntradaySnapshot } from '@/hedge/api/marketData';
 import { Button, Drawer, Field, InlineError, Panel, Select, StatusBadge } from '@/hedge/components/ui';
 import { MarketSignedValue } from '@/components/markets/MarketSignedValue';
@@ -176,20 +176,28 @@ function SnapshotColumn({ snapshot, title }) {
   </section>;
 }
 
-export function MarketIntradayStrip({ canManage = false, refreshKey = 0 }) {
-  const [date, setDate] = useState(todayHkt);
+export function MarketIntradayStrip({ canManage = false, refreshKey = 0, asOfDate = null }) {
+  const [date, setDate] = useState(() => asOfDate || todayHkt);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [capture, setCapture] = useState(null);
   const [expanded, setExpanded] = useState(false);
-  const load = useCallback(async (nextDate = date, force = false) => {
+  const requestRef = useRef(0);
+  const load = useCallback(async (nextDate = date, force = false, signal) => {
+    const requestId = ++requestRef.current;
     setLoading(true); setError(null);
-    try { setData(await loadMarketIntradayTimeline({ date: nextDate }, { force })); setDate(nextDate); }
-    catch (nextError) { setError(nextError); }
-    finally { setLoading(false); }
+    try { const next = await loadMarketIntradayTimeline({ date: nextDate }, { force, signal }); if (!signal?.aborted && requestId === requestRef.current) { setData(next); setDate(nextDate); } }
+    catch (nextError) { if (requestId === requestRef.current && nextError?.name !== 'AbortError') setError(nextError); }
+    finally { if (requestId === requestRef.current) setLoading(false); }
   }, [date]);
-  useEffect(() => { load(date).catch(() => {}); }, [refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const controller = new AbortController();
+    const nextDate = asOfDate || todayHkt;
+    setData(null);
+    load(nextDate, false, controller.signal).catch(() => {});
+    return () => { requestRef.current += 1; controller.abort(); };
+  }, [asOfDate, refreshKey]); // `load` closes only over the previous display date.
   const morning = data?.snapshots?.find((row) => row.sourceType === 'morning_indication') || null;
   const moc = data?.snapshots?.find((row) => row.sourceType === 'asia_moc_reference') || null;
   const movementRows = useMemo(() => (data?.morningToMoc || []).filter((row) => row.available), [data]);
@@ -206,9 +214,6 @@ export function MarketIntradayStrip({ canManage = false, refreshKey = 0 }) {
       {error ? <InlineError error={error} /> : null}
       {expanded ? <div className="market-intraday-details">
         <div className="market-panel-actions market-intraday-details__actions">
-          <Button size="sm" icon={ArrowLeft} disabled={!data?.previousDate || loading} onClick={() => load(data.previousDate)}>Previous</Button>
-          <label className="market-intraday-date"><span>Market date</span><input className="app-input" type="date" value={date} onChange={(event) => load(event.target.value)} /></label>
-          <Button size="sm" icon={ArrowRight} disabled={!data?.nextDate || loading} onClick={() => load(data.nextDate)}>Next</Button>
           <Button size="sm" icon={RefreshCw} disabled={loading} onClick={() => load(date, true)}>{loading ? 'Loading…' : 'Refresh'}</Button>
           {canManage ? <><Button size="sm" icon={Camera} onClick={() => setCapture('morning')}>Upload morning image</Button><Button size="sm" variant="primary" icon={ClipboardPaste} onClick={() => setCapture('moc')}>Paste MOC reference</Button></> : null}
         </div>

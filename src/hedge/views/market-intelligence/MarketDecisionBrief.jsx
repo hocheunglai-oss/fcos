@@ -1,11 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowDownRight,
   ArrowRight,
   ArrowUpRight,
-  ChevronLeft,
-  ChevronRight,
   FileSearch,
   RefreshCw,
   Waves,
@@ -13,7 +11,8 @@ import {
 import { loadMarketIntelligenceBrief } from '@/hedge/api/marketData';
 import { formatDate } from '@/hedge/lib/domain';
 import { Button, InlineError, Panel, StatusBadge } from '@/hedge/components/ui';
-import { MarketSignedText, MarketSignedValue } from '@/components/markets/MarketSignedValue';
+import { MarketSignedText } from '@/components/markets/MarketSignedValue';
+import { MarketPriceBoard } from '@/components/markets/MarketPriceBoard';
 import {
   projectBriefDriver,
   projectMaterialChange,
@@ -102,99 +101,51 @@ function BriefList({ title, items, empty, icon: Icon = FileSearch, sourceRefs = 
   );
 }
 
-function formatMarketValue(value, unit) {
-  if (value == null || !Number.isFinite(Number(value))) return 'Unavailable';
-  return `${Number(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: unit === 'USD/BBL' ? 3 : 2 })} ${unit}`;
-}
-
-function Movement({ comparison }) {
-  return <MarketSignedValue
-    value={comparison?.available ? comparison.change : null}
-    unit={comparison?.unit}
-    suffix={comparison?.available ? `vs ${formatDate(comparison.previousDate)}` : ''}
-    unavailableLabel="No prior comparison"
-    variant="pill"
-  />;
-}
-
-function spreadFor(product, key) {
-  return array(product?.curve?.spreads).find((row) => row.key === key) || null;
-}
-
-function MarketPriceBoard({ pulse }) {
-  const products = array(pulse?.products);
-  return <Panel className="market-price-board-panel">
-    <div className="app-panel-header"><div><h2>Market at a glance</h2><p>Official prices, published-day movement, current-month estimate, and exact prompt structure.</p></div><StatusBadge tone={pulse?.complete ? 'positive' : 'warning'}>{pulse?.complete ? 'Current official data' : 'Controlled gaps'}</StatusBadge></div>
-    <div className="market-price-board" role="table" aria-label="Compact market price board">
-      <div className="market-price-board__header" role="row"><span>Product</span><span>Latest MOPS</span><span>Published move</span><span>Est. month average</span><span>BM−M1</span><span>M1−M2</span><span>Curve</span></div>
-      {products.map((product) => {
-        const bmM1 = spreadFor(product, 'bmM1');
-        const m1M2 = spreadFor(product, 'm1M2');
-        const status = product.curve?.status || 'unavailable';
-        return <article key={product.productKey} className={`market-price-board__row market-price-board__row--${product.productKey}`} role="row">
-          <div className="market-price-board__product"><strong>{product.productName}</strong><span>({product.sourceCode}) · {formatDate(product.latestMops?.publicationDate)}</span></div>
-          <strong>{formatMarketValue(product.latestMops?.value, product.unit)}</strong>
-          <Movement comparison={product.latestMops?.comparison} />
-          <div><strong>{formatMarketValue(product.monthlyEstimate?.value, product.unit)}</strong><span className="market-price-board__subtle">Calculated estimate</span></div>
-          <div className="market-price-board__spread"><strong><MarketSignedValue value={bmM1?.value} unit={bmM1?.unit || product.unit} /></strong>{bmM1?.comparison ? <Movement comparison={bmM1.comparison} /> : <span className="market-price-board__subtle">Not published</span>}</div>
-          <div className="market-price-board__spread"><strong><MarketSignedValue value={m1M2?.value} unit={m1M2?.unit || product.unit} /></strong>{m1M2?.comparison ? <Movement comparison={m1M2.comparison} /> : null}</div>
-          <span className={`market-curve-state market-curve-state--${status}`}>{status}</span>
-        </article>;
-      })}
-    </div>
-  </Panel>;
-}
-
-export function MarketDecisionBrief({ initialBrief = null, refreshKey = 0, pulse = null, intraday = null, onRefreshPulse = null }) {
+export function MarketDecisionBrief({ initialBrief = null, refreshKey = 0, pulse = null, pulseLoading = false, pulseError = null, intraday = null, requestedDate = null, dateMode = 'latest', onBriefResolved = null, onBriefError = null }) {
   const [brief, setBrief] = useState(initialBrief);
   const [busy, setBusy] = useState(!initialBrief);
   const [error, setError] = useState(null);
   const mountedRef = useRef(true);
   const refreshKeyRef = useRef(refreshKey);
+  const requestRef = useRef(0);
 
-  const load = async ({ force = false, date = null, historyMode = 'replace' } = {}) => {
+  const load = useCallback(async ({ force = false, date = null, signal } = {}) => {
+    const requestId = ++requestRef.current;
     setBusy(true);
     setError(null);
     try {
-      const nextBrief = await loadMarketIntelligenceBrief(date ? { date } : {}, { force, cache: !force });
-      if (!mountedRef.current) return;
+      const nextBrief = await loadMarketIntelligenceBrief(date ? { date } : {}, { force, cache: !force, signal });
+      if (!mountedRef.current || requestId !== requestRef.current) return;
       setBrief(nextBrief);
-      if (nextBrief?.displayedDate && typeof window !== 'undefined') {
-        const url = new URL(window.location.href);
-        url.searchParams.set('marketBriefDate', nextBrief.displayedDate);
-        window.history[historyMode === 'push' ? 'pushState' : 'replaceState']({}, '', `${url.pathname}${url.search}${url.hash}`);
-      }
+      onBriefResolved?.(nextBrief, { mode: dateMode, requestedDate: date, force });
     } catch (nextError) {
-      if (mountedRef.current) setError(nextError);
+      if (mountedRef.current && requestId === requestRef.current && nextError?.name !== 'AbortError') {
+        setError(nextError);
+        onBriefError?.(nextError);
+      }
     } finally {
-      if (mountedRef.current) setBusy(false);
+      if (mountedRef.current && requestId === requestRef.current) setBusy(false);
     }
-  };
+  }, [dateMode, onBriefError, onBriefResolved]);
 
   useEffect(() => {
     mountedRef.current = true;
-    const initialDate = typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('marketBriefDate');
-    load({ date: initialDate });
-    const onPopState = () => {
-      const date = new URLSearchParams(window.location.search).get('marketBriefDate');
-      load({ date, force: false, historyMode: 'replace' });
-    };
-    window.addEventListener('popstate', onPopState);
+    const controller = new AbortController();
+    load({ date: dateMode === 'historical' ? requestedDate : null, signal: controller.signal });
     return () => {
       mountedRef.current = false;
-      window.removeEventListener('popstate', onPopState);
+      requestRef.current += 1;
+      controller.abort();
     };
-  }, []); // The initial request is intentionally independent of background snapshot refreshes.
+  }, [dateMode, load, requestedDate]);
 
   useEffect(() => {
+    // This lightweight controller resolves the shared date even on another tab.
     if (refreshKeyRef.current === refreshKey) return;
     refreshKeyRef.current = refreshKey;
-    const currentDate = typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('marketBriefDate');
-    load({ date: currentDate, force: true });
-  }, [refreshKey]);
+    load({ date: dateMode === 'historical' ? requestedDate : null, force: true });
+  }, [dateMode, load, refreshKey, requestedDate]);
 
-  const completeness = brief?.reportCompleteness || brief?.completeness || {};
-  const curveCoverage = brief?.curveCoverage || {};
   const materialChanges = array(brief?.materialChanges || brief?.moves).map(projectMaterialChange);
   const dislocations = array(brief?.portDislocations || brief?.dislocations).map(projectPortDislocation);
   const physicalPaper = array(brief?.physicalPaperSignals || brief?.physicalVsPaper || brief?.physicalPaper).map(projectPhysicalPaperSignal);
@@ -207,34 +158,11 @@ export function MarketDecisionBrief({ initialBrief = null, refreshKey = 0, pulse
   ];
   const projectedDrivers = flatDrivers.map(projectBriefDriver);
   const risks = array(brief?.risks || brief?.risksToWatch);
-  const requiredReports = Number(completeness.requiredReports ?? completeness.required ?? 2);
-  const completeReports = Number(completeness.completeReports ?? (completeness.complete === true ? requiredReports : array(completeness.reportTypes).length));
   return (
     <div className="market-intelligence-stack" data-testid="market-daily-decision-brief">
-      {error ? <InlineError error={error} action={<Button onClick={() => load({ force: true })}>Retry</Button>} /> : null}
-      <div className="market-overview-context">
-        <div className="market-overview-context__title"><strong>Overview</strong><span>Official prices and deterministic report evidence. No buy or sell recommendation.</span></div>
-        <div className="market-brief-topbar__actions">
-          <Button size="sm" icon={ChevronLeft} onClick={() => load({ date: brief?.previousAvailableDate, historyMode: 'push' })} disabled={busy || !brief?.previousAvailableDate}>Previous</Button>
-          <div className="market-brief-date">
-            <span>Displaying report date</span>
-            <strong>{brief?.displayedDate ? formatDate(brief.displayedDate) : 'Unavailable'}</strong>
-            <StatusBadge tone={brief?.displayedDate && brief.displayedDate === brief?.latestAvailableDate ? 'positive' : 'neutral'}>{brief?.displayedDate && brief.displayedDate === brief?.latestAvailableDate ? 'Latest available' : 'Historical'}</StatusBadge>
-          </div>
-          <Button size="sm" icon={ChevronRight} onClick={() => load({ date: brief?.nextAvailableDate, historyMode: 'push' })} disabled={busy || !brief?.nextAvailableDate}>Next</Button>
-          {brief?.displayedDate && brief.displayedDate !== brief?.latestAvailableDate ? <Button size="sm" onClick={() => load({ date: brief.latestAvailableDate, historyMode: 'push' })} disabled={busy}>Latest</Button> : null}
-          <Button size="sm" icon={RefreshCw} onClick={() => { load({ date: brief?.displayedDate || null, force: true }); onRefreshPulse?.(); }} disabled={busy}>{busy ? 'Updating…' : 'Refresh'}</Button>
-        </div>
-        <div className="market-overview-context__quality">
-          <span>MOPS {formatDate(pulse?.latestMopsPublicationDate)}</span>
-          <StatusBadge tone={completeReports >= requiredReports ? 'positive' : 'warning'}>{completeReports}/{requiredReports} reports</StatusBadge>
-          <StatusBadge tone={Number(curveCoverage.missingCount || 0) ? 'warning' : 'positive'}>{Number(curveCoverage.numericCount || 0)}/{Number(curveCoverage.requiredCount || 8)} curve marks</StatusBadge>
-          {Number(curveCoverage.publishedNaCount || 0) ? <StatusBadge tone="neutral">{Number(curveCoverage.publishedNaCount)} published N/A</StatusBadge> : null}
-          <StatusBadge tone={array(brief?.sourceWarnings || brief?.warnings).length ? 'warning' : 'positive'}>{array(brief?.sourceWarnings || brief?.warnings).length} data notes</StatusBadge>
-        </div>
-      </div>
+      {error ? <InlineError error={error} action={<Button onClick={() => load({ date: dateMode === 'historical' ? requestedDate : null, force: true })}>Retry</Button>} /> : null}
       {brief?.fallbackApplied ? <div className="app-callout app-callout--warning"><AlertTriangle size={15} />Reports for the requested date are not available. Showing the latest completed report: {formatDate(brief.displayedDate)}.</div> : null}
-      <MarketPriceBoard pulse={pulse} />
+      {pulseLoading ? <Panel className="market-price-board-panel"><div className="market-empty-inline"><RefreshCw className="animate-spin" size={20} /><div><strong>Loading market price board</strong><span>Resolving the exact completed report-date snapshot.</span></div></div></Panel> : pulseError ? <InlineError error={pulseError} /> : pulse ? <MarketPriceBoard pulse={{ ...pulse, mode: dateMode }} /> : <Panel className="market-price-board-panel"><div className="market-empty-inline"><RefreshCw size={20} /><div><strong>Market price board unavailable</strong><span>No date-scoped snapshot is available for this report date.</span></div></div></Panel>}
       {intraday}
 
       {array(brief?.sourceWarnings || brief?.warnings).length ? <details className="market-disclosure market-disclosure--warning"><summary><AlertTriangle size={14} /> Data notes ({array(brief?.sourceWarnings || brief?.warnings).length})</summary><div className="market-history-warnings">{array(brief?.sourceWarnings || brief?.warnings).map((warning, index) => <div key={warning?.id || `${warning?.code || 'warning'}:${index}`}><AlertTriangle size={14} /><MarketSignedText>{textOf(warning)}</MarketSignedText></div>)}</div></details> : null}

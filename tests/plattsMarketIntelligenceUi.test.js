@@ -70,20 +70,19 @@ test('forward curve UI requires exact outright fallback identity and shows contr
 
 test('brief and alert views remain evidence-only and source-linked', () => {
   const brief = read('src/hedge/views/market-intelligence/MarketDecisionBrief.jsx');
+  const workspace = read('src/hedge/views/MarketIntelligenceWorkspace.jsx');
   const alerts = read('src/hedge/views/market-intelligence/MarketDriversAlerts.jsx');
-  assert.match(brief, /No buy or sell recommendation/);
+  assert.match(brief, /cannot change a price or create a trading recommendation/);
   assert.match(brief, /Report page/);
   assert.match(brief, /Emerging/);
   assert.match(brief, /Persistent/);
   assert.match(brief, /Fading/);
-  assert.match(brief, /marketBriefDate/);
-  assert.match(brief, />Previous</);
-  assert.match(brief, />Next</);
-  assert.match(brief, />Latest</);
-  assert.match(brief, /Displaying report date/);
-  assert.match(brief, /Latest available/);
+  assert.match(workspace, /marketBriefDate/);
+  assert.match(workspace, />Previous</);
+  assert.match(workspace, />Next</);
+  assert.match(workspace, />Latest</);
+  assert.match(workspace, /Latest available/);
   assert.match(brief, /Reports for the requested date are not available/);
-  assert.match(brief, /published N\/A/);
   assert.match(brief, /Evidence & methodology/);
   assert.match(brief, /Show all/);
   assert.match(alerts, /previous 60-day 95th percentile/);
@@ -156,9 +155,9 @@ test('brief projections understand the authenticated backend DTO without hiding 
   const brief = read('src/hedge/views/market-intelligence/MarketDecisionBrief.jsx');
   const drivers = read('src/hedge/views/market-intelligence/MarketDriversAlerts.jsx');
   const curves = read('src/hedge/views/market-intelligence/MarketForwardCurves.jsx');
-  assert.match(brief, /completeness\.complete === true \? requiredReports/);
-  assert.match(brief, /curveCoverage/);
-  assert.match(brief, /MarketPriceBoard pulse=\{pulse\}/);
+  assert.match(brief, /requestedDate = null/);
+  assert.match(brief, /onBriefResolved/);
+  assert.match(brief, /MarketPriceBoard pulse=\{\{ \.\.\.pulse, mode: dateMode \}\}/);
   assert.match(brief, /Array\.isArray\(drivers\)/);
   assert.match(brief, /sourceRefs/);
   assert.match(brief, /ref\.sourceHash && top\.sourceHash === ref\.sourceHash/);
@@ -183,9 +182,9 @@ test('market data and alert-rule permissions remain separate', () => {
 
 test('curve cutover review is hedge-admin-only, auditable, and fail closed', () => {
   const curves = read('src/hedge/views/market-intelligence/MarketForwardCurves.jsx');
-  assert.match(curves, /loadMarketIntelligenceCurve\(\{ products: PRODUCTS\.map\(\(item\) => item\.value\), range \}/);
+  assert.match(curves, /loadMarketIntelligenceCurve\(\{ products: PRODUCTS\.map\(\(item\) => item\.value\), range, \.\.\.\(asOfDate/);
   assert.match(curves, /PRODUCTS\.filter\(\(product\) => selectedProducts\.includes\(product\.value\)\)/);
-  assert.match(curves, /useEffect\(\(\) => \{ load\(\); \}, \[range\]\)/);
+  assert.match(curves, /\}, \[active, asOfDate, range, refreshKey\]\)/);
   assert.match(curves, /shadow\.status === 'ready_for_variance_review'/);
   assert.match(curves, /shadow\.varianceMetricsAvailable === true/);
   assert.match(curves, /cutoverScopes\.length === 8/);
@@ -241,4 +240,16 @@ test('Markets methodology removes adjustment-based pricing', () => {
   assert.match(methodology, /balance-month outright to remaining publication days including its assessment date/);
   assert.match(methodology, /Legacy per-product adjustments are not trading inputs/);
   assert.doesNotMatch(methodology, /latest actual spot MOPS plus the saved product adjustment/);
+});
+
+test('Markets methodology distinguishes the shared historical date from latest Pulse and represented publication days', () => {
+  const methodology = read('src/hedge/lib/methodology.js');
+  assert.match(methodology, /selected report date applies consistently to every Markets tab/);
+  assert.match(methodology, /floating Market Pulse is intentionally latest-only/);
+  assert.match(methodology, /currently stored MOPS rows dated on or before the selected report date/);
+  assert.match(methodology, /Later corrections may therefore differ/);
+  assert.match(methodology, /actual, estimated and carried counts plus represented publication days/);
+  assert.match(methodology, /not a source-record sample count/);
+  assert.match(methodology, /every available page for the selected range/);
+  assert.match(methodology, /exact-date MOPS observation/);
 });
