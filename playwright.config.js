@@ -18,7 +18,8 @@ export default defineConfig({
   use: {
     baseURL,
     channel: 'chrome',
-    trace: 'retain-on-failure',
+    // Strict authenticated runs must not retain credentials/bypass cookies in traces.
+    trace: process.env.FCOS_REQUIRE_AUTH_E2E === '1' ? 'off' : 'retain-on-failure',
     screenshot: 'only-on-failure',
   },
   webServer: usesExternalServer ? undefined : {

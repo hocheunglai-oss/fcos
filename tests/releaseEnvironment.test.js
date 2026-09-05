@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
-import { assertReleaseBrowserEnvironment, verifyReleasePreviewArtifact } from '../scripts/lib/release-environment.mjs';
+import { assertReleaseBrowserEnvironment, verifyReleasePreviewArtifact, verifyReleaseBrowserPreview } from '../scripts/lib/release-environment.mjs';
 
 const releaseSha = 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678';
 
@@ -82,4 +82,23 @@ test('release command fails before running any gate when preview or authenticati
   assert.notEqual(result.status, 0);
   assert.match(`${result.stdout}\n${result.stderr}`, /FCOS_E2E_BASE_URL is required/);
   assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /\[release gate\]/);
+});
+
+test('protected preview access scopes secrets to the validated artifact and refuses redirects', async () => {
+  const environment = assertReleaseBrowserEnvironment({ ...validEnvironment, FCOS_VERCEL_AUTOMATION_BYPASS_SECRET: 'test-only-bypass' });
+  const calls = [];
+  const request = { get: async (url, options) => {
+    calls.push({ url, options });
+    return { ok: () => true, url: () => url, json: async () => ({ commit: releaseSha }) };
+  } };
+  await verifyReleaseBrowserPreview(environment, request);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, `${environment.baseUrl}/app-version.json`);
+  assert.equal(calls[0].options.headers['x-vercel-protection-bypass'], 'test-only-bypass');
+  assert.equal(calls[0].options.headers['x-vercel-set-bypass-cookie'], 'true');
+  assert.equal(calls[0].options.maxRedirects, 0);
+  assert.equal(calls[0].options.headers.authorization, undefined);
+  await assert.rejects(() => verifyReleaseBrowserPreview({ ...environment, baseUrl: 'https://untrusted.example' }, request), /FCOS Vercel preview/);
+  assert.equal(calls.length, 1);
+  await assert.rejects(() => verifyReleaseBrowserPreview(environment, { get: async () => { throw new Error('test-only-bypass'); } }), (error) => !error.message.includes('test-only-bypass'));
 });

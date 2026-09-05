@@ -68,15 +68,20 @@ export function assertReleaseBrowserEnvironment(environment = process.env) {
     storageState,
     email,
     password,
+    protectionBypass: String(environment.FCOS_VERCEL_AUTOMATION_BYPASS_SECRET || '').trim(),
   };
 }
 
 export async function verifyReleasePreviewArtifact(environment, { fetchImpl = fetch } = {}) {
-  const artifactUrl = `${environment.baseUrl}/app-version.json`;
+  // Validate again at the credential boundary, including injected test callers.
+  const artifactUrl = `${previewUrl(environment.baseUrl).origin}/app-version.json`;
   let response;
   try {
     response = await fetchImpl(artifactUrl, {
-      headers: { accept: 'application/json' },
+      headers: {
+        accept: 'application/json',
+        ...(environment.protectionBypass ? { 'x-vercel-protection-bypass': environment.protectionBypass } : {}),
+      },
       redirect: 'error',
       signal: AbortSignal.timeout(10_000),
     });
@@ -97,4 +102,22 @@ export async function verifyReleasePreviewArtifact(environment, { fetchImpl = fe
     throw new Error(`FCOS preview app-version commit (${commit || 'missing'}) does not match the expected release SHA (${environment.releaseSha}).`);
   }
   return { artifactUrl, commit };
+}
+
+export async function verifyReleaseBrowserPreview(environment, request) {
+  // Context-bound request cookies are retained in the auth storage state. Never
+  // install global headers: FCOS also requests Supabase and other origins.
+  return verifyReleasePreviewArtifact(environment, {
+    fetchImpl: async (url, options) => {
+      const response = await request.get(url, {
+        headers: {
+          ...options.headers,
+          ...(environment.protectionBypass ? { 'x-vercel-set-bypass-cookie': 'true' } : {}),
+        },
+        maxRedirects: 0,
+        timeout: 10_000,
+      });
+      return { ok: response.ok(), url: response.url(), json: () => response.json() };
+    },
+  });
 }

@@ -109,7 +109,7 @@ test('strict release gate includes migrations, Graph-only checks, build, and gov
   assert.match(browserSetup, /FCOS_E2E_EMAIL/);
   assert.match(browserSetup, /FCOS_E2E_PASSWORD/);
   assert.match(browserSetup, /storageState/);
-  assert.match(browserSetup, /verifyReleasePreviewArtifact/);
+  assert.match(browserSetup, /verifyReleaseBrowserPreview/);
   assert.match(releaseGate, /assertReleaseBrowserEnvironment/);
   assert.match(workflow, /preview_url:/);
   assert.match(workflow, /FCOS_E2E_PREVIEW_SHA/);

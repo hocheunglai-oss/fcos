@@ -1,5 +1,5 @@
 import { expect, test as setup } from '@playwright/test';
-import { assertReleaseBrowserEnvironment, verifyReleasePreviewArtifact } from '../scripts/lib/release-environment.mjs';
+import { assertReleaseBrowserEnvironment, verifyReleaseBrowserPreview } from '../scripts/lib/release-environment.mjs';
 
 const authState = process.env.FCOS_E2E_STORAGE_STATE || '';
 const email = String(process.env.FCOS_E2E_EMAIL || '').trim();
@@ -11,7 +11,7 @@ setup('authenticate the dedicated FCOS CI viewer', async ({ page }) => {
   if (process.env.FCOS_REQUIRE_AUTH_E2E === '1') {
     // Keep this guard adjacent to credential use as a defense against a
     // Playwright invocation that bypasses the repository config file.
-    await verifyReleasePreviewArtifact(assertReleaseBrowserEnvironment());
+    await verifyReleaseBrowserPreview(assertReleaseBrowserEnvironment(), page.request);
   }
 
   await page.goto('/login');
