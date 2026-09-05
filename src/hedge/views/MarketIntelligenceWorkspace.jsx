@@ -27,6 +27,7 @@ import {
 import { importMarketReport, loadMarketHistory, previewMarketReport } from '@/hedge/api/marketData';
 import { formatDate, formatMoney } from '@/hedge/lib/domain';
 import { marketSymbolLabel } from '@/hedge/lib/marketLabels';
+import { reconcileDeliveredPortSelection } from '@/hedge/lib/marketDeliveredSelection';
 import { MarketSignedAxisTick, MarketSignedText, MarketSignedValue } from '@/components/markets/MarketSignedValue';
 import {
   Button,
@@ -121,6 +122,7 @@ const PORT_COLORS = {
 };
 const PORT_COLOR_VALUES = Object.values(PORT_COLORS);
 const INITIAL_DELIVERED_PORT_KEYS = Object.keys(PORT_COLORS);
+const EMPTY_DELIVERED_ROWS = Object.freeze([]);
 
 function storedFilters(key) {
   if (typeof window === 'undefined') return {};
@@ -263,7 +265,7 @@ function DeliveredTrendPanel({ panel, mode, visible, mobileActive }) {
 }
 
 function DeliveredBunkers({ active = true, intelligence, asOfDate = null, dateMode = 'latest', refreshKey = 0 }) {
-  const delivered = intelligence?.delivered || [];
+  const delivered = intelligence?.delivered || EMPTY_DELIVERED_ROWS;
   const ports = useMemo(() => [...new Map(delivered.map((row) => [row.portKey, row.portLabel])).entries()], [delivered]);
   const initialFilters = useMemo(() => storedFilters(DELIVERED_FILTERS_KEY), []);
   const validProductKeys = PRODUCTS.map((item) => item.value);
@@ -290,13 +292,7 @@ function DeliveredBunkers({ active = true, intelligence, asOfDate = null, dateMo
   const datedPorts = useMemo(() => [...new Map(datedDelivered.map((row) => [row.portKey, row.portLabel])).entries()], [datedDelivered]);
 
   useEffect(() => {
-    if (!datedPorts.length) return;
-    const available = new Set(datedPorts.map(([key]) => key));
-    setSelectedPorts((current) => {
-      const retained = current.filter((key) => available.has(key));
-      if (retained.length) return retained;
-      return available.has('singapore') ? ['singapore'] : [datedPorts[0][0]];
-    });
+    setSelectedPorts((current) => reconcileDeliveredPortSelection(current, datedPorts));
   }, [datedPorts]);
 
   useEffect(() => {
