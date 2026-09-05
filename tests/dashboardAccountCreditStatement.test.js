@@ -607,8 +607,8 @@ test('Statement Evidence cutoff remains absolute for every history scope', async
   const source = await readFile(new URL('../api/_dashboardAccountCreditStatementService.js', import.meta.url), 'utf8');
   assert.match(source, /scope === 'all'[\s\S]*Account__c IN \([^\n]+\) AND \$\{creditExposureDeliveryWhere\(\)\}/);
   assert.match(source, /Id IN \([^\n]+\) AND \$\{creditExposureDeliveryWhere\(\)\}/);
-  assert.match(source, /mergeStems\(result\.records\)\.filter\(\(stem\) => isCreditExposureStemEligible\(stem\)\)/);
-  assert.match(source, /version: '15-payment-reliability'/);
+  assert.match(source, /mergeStems\(result\.records\)\.filter\(\(stem\) => isCreditExposureStemEligible\(stem\) && matchesScope\(stem\)\)/);
+  assert.match(source, /version: '16-allocation-evidence'/);
 });
 
 test('same-name credit fallback fails closed when more than one compatible snapshot reconciles', () => {
