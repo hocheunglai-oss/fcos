@@ -7,7 +7,9 @@ const money = (value, currency) => {
   if (number(value) == null) return '—';
   const safeCurrency = /^[A-Z]{3}$/.test(String(currency || '').toUpperCase()) ? String(currency).toUpperCase() : null;
   if (!safeCurrency) return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(number(value));
-  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0, style: 'currency', currency: safeCurrency, currencyDisplay: 'code' }).format(number(value));
+  // The ISO code is rendered once in the row label; repeating it in the value
+  // makes monetary cards read as "USD USD 1,000" in several locales.
+  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(number(value));
 };
 
 function currencyRows(summary) {
@@ -19,7 +21,7 @@ function currencyRows(summary) {
 function FinancialCard({ label, field, rows, accent, percent = false, formula, asOf, warnings = [] }) {
   const displayRows = rows.filter((row) => number(row[field]) != null);
   const evidenceValue = displayRows.map((row) => `${row.currency || 'Unspecified'} ${percent ? `${number(row[field]).toFixed(1)}%` : money(row[field], row.currency)}`).join(' · ');
-  return <div className="workspace-kpi-card rounded-[var(--radius-panel)] border border-border bg-card p-4"><div className="flex items-center justify-between gap-2"><p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</p><CalculationEvidence title={label} value={evidenceValue || 'Unavailable'} classification={displayRows.length ? 'calculated' : 'unavailable'} complete={displayRows.length > 0} formula={formula} sources={['Exact Salesforce STEM and child financial records matching the selected Dashboard filters.', 'Amounts remain separated by ISO currency; FCOS does not invent exchange-rate conversions.']} warnings={warnings} asOf={asOf} /></div><div className="mt-3 space-y-1.5">{displayRows.map((row) => <div key={row.currency} className="flex items-baseline justify-between gap-3 text-sm"><span className="text-muted-foreground">{row.currency || 'Unspecified'}</span><span className={`font-semibold tabular-nums ${accent}`}>{percent ? `${number(row[field]).toFixed(1)}%` : money(row[field], row.currency)}</span></div>)}{!displayRows.length ? <span className="text-sm text-muted-foreground">Unavailable</span> : null}</div></div>;
+  return <div className="workspace-kpi-card rounded-[var(--radius-panel)] border border-border bg-card p-4"><div className="flex items-center justify-between gap-2"><p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</p><CalculationEvidence title={label} value={evidenceValue || 'Unavailable'} classification={displayRows.length ? 'calculated' : 'unavailable'} complete={displayRows.length > 0} formula={formula} sources={['Exact Salesforce STEM and child financial records matching the selected Dashboard filters.', 'Amounts remain separated by ISO currency; FCOS does not invent exchange-rate conversions.']} warnings={warnings} asOf={asOf} /></div><div className="mt-3 space-y-1.5">{displayRows.map((row) => <div key={row.currency} className="flex items-baseline justify-between gap-3 text-sm">{percent ? null : <span className="text-muted-foreground">{row.currency || 'Unspecified'}</span>}<span className={`font-semibold tabular-nums ${accent} ${percent ? 'ml-auto' : ''}`} aria-label={percent ? `${row.currency || 'Unspecified'} gross margin` : undefined}>{percent ? `${number(row[field]).toFixed(1)}%` : money(row[field], row.currency)}</span></div>)}{!displayRows.length ? <span className="text-sm text-muted-foreground">Unavailable</span> : null}</div></div>;
 }
 
 const PRODUCT_COLORS = { HSFO: 'bg-teal-600', VLSFO: 'bg-blue-600', LSMGO: 'bg-amber-500' };

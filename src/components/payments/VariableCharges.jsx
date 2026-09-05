@@ -68,6 +68,7 @@ import {
 } from '@/lib/anchorageDues';
 import { LIGHT_DUES_CATEGORY_ALL_OTHER, calculateHongKongLightDues } from '@/lib/lightDues';
 import { calculatePortClearance } from '@/lib/hongKongBasicCalling';
+import { createLatestRequestGate } from '@/lib/latestRequest';
 import { cn } from '@/lib/utils';
 import {
   buyerAmountWithAnchorageDecision,
@@ -353,6 +354,9 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
   const openedInitialStemId = useRef('');
   const returnFocusRef = useRef(null);
   const returnScrollRef = useRef({ element: null, top: 0 });
+  const casesRequestGateRef = useRef(createLatestRequestGate());
+  const detailRequestGateRef = useRef(createLatestRequestGate());
+  const closeRequestedRef = useRef(false);
   const [view, setView] = useState('my_tasks');
   const [cases, setCases] = useState([]);
   const [counts, setCounts] = useState({});
@@ -394,31 +398,48 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
   const [rateSettingsOpen, setRateSettingsOpen] = useState(false);
   const [rateSettingsDraft, setRateSettingsDraft] = useState({ usdHkdRate: '7.84', expectedRevision: 1, reason: '' });
   const [rateSettingsSaving, setRateSettingsSaving] = useState(false);
+  const casesViewRef = useRef(view);
+  casesViewRef.current = view;
+  const selectedStemIdRef = useRef(selectedStemId);
+  selectedStemIdRef.current = selectedStemId;
 
   const loadCases = useCallback(async ({ force = false } = {}) => {
+    const request = casesRequestGateRef.current.begin(view);
+    const isActive = () => request.isCurrent() && casesViewRef.current === view;
     if (force) setRefreshing(true);
     else setLoading(true);
     setError('');
-    if (force) {
-      const syncResponse = await appClient.functions.invoke('variableChargesSync', {}, { force: true });
-      if (syncResponse.data?.error) {
-        setError(syncResponse.data.error);
-        setLoading(false);
-        setRefreshing(false);
-        return;
+    try {
+      if (force) {
+        const syncResponse = await appClient.functions.invoke('variableChargesSync', {}, { force: true, signal: request.signal });
+        if (!isActive()) return;
+        if (syncResponse.data?.error) {
+          setError(syncResponse.data.error);
+          setLoading(false);
+          setRefreshing(false);
+          return;
+        }
       }
+      const response = await appClient.functions.invoke('variableChargesList', { view, force }, { force, signal: request.signal });
+      if (!isActive()) return;
+      if (response.data?.cancelled) {
+        // A current caller can observe transport cancellation without a newer
+        // request (for example, browser shutdown); clear only its own spinner.
+      } else if (response.data?.error) {
+        setError(response.data.error);
+      } else {
+        setCases(Array.isArray(response.data?.cases) ? response.data.cases : []);
+        setCounts(response.data?.counts || {});
+        setCapabilities(response.data?.capabilities || {});
+      }
+    } catch (nextError) {
+      if (!isActive()) return;
+      setError(nextError?.message || 'Unable to load Variable Charges.');
     }
-    const response = await appClient.functions.invoke('variableChargesList', { view, force }, { force });
-    if (response.data?.error) {
-      setError(response.data.error);
-      setCases([]);
-    } else {
-      setCases(Array.isArray(response.data?.cases) ? response.data.cases : []);
-      setCounts(response.data?.counts || {});
-      setCapabilities(response.data?.capabilities || {});
+    if (isActive()) {
+      setLoading(false);
+      setRefreshing(false);
     }
-    setLoading(false);
-    setRefreshing(false);
   }, [view]);
 
   useEffect(() => {
@@ -427,10 +448,26 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
 
   const loadDetail = useCallback(async (stemId, { force = false } = {}) => {
     if (!stemId) return;
+    const request = detailRequestGateRef.current.begin(stemId);
+    const isActive = () => request.isCurrent() && selectedStemIdRef.current === stemId;
     setDetailLoading(true);
     setDetailError('');
     setSaveError('');
-    const response = await appClient.functions.invoke('variableChargesDetail', { stemId, force }, { force });
+    let response;
+    try {
+      response = await appClient.functions.invoke('variableChargesDetail', { stemId, force }, { force, signal: request.signal });
+    } catch (nextError) {
+      if (!isActive()) return;
+      setDetailError(nextError?.message || 'Unable to load this task.');
+      setDetail(null);
+      setDetailLoading(false);
+      return;
+    }
+    if (!isActive()) return;
+    if (response.data?.cancelled) {
+      setDetailLoading(false);
+      return;
+    }
     if (response.data?.error) {
       setDetailError(response.data.error);
       setDetail(null);
@@ -497,28 +534,47 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
     setDetailLoading(false);
   }, []);
 
+  const clearDetailForUrlClose = useCallback(() => {
+    closeRequestedRef.current = false;
+    openedInitialStemId.current = '';
+    detailRequestGateRef.current.invalidate();
+    selectedStemIdRef.current = '';
+    setSelectedStemId('');
+    setDetail(null);
+    setDetailLoading(false);
+    setDetailError('');
+    setSaveError('');
+    requestAnimationFrame(() => {
+      const snapshot = returnScrollRef.current;
+      if (snapshot.element) snapshot.element.scrollTop = snapshot.top;
+      returnFocusRef.current?.focus?.({ preventScroll: true });
+    });
+  }, []);
+
+  useEffect(() => () => {
+    casesRequestGateRef.current.invalidate();
+    detailRequestGateRef.current.invalidate();
+  }, []);
+
   useEffect(() => {
     const stemId = text(initialStemId);
     if (!stemId) {
-      if (openedInitialStemId.current && selectedStemId && !saving && !supplierSavingId && !gmSaving && !postSaving) {
-        openedInitialStemId.current = '';
-        setSelectedStemId('');
-        setDetail(null);
-        setDetailError('');
-        setSaveError('');
-        requestAnimationFrame(() => {
-          const snapshot = returnScrollRef.current;
-          if (snapshot.element) snapshot.element.scrollTop = snapshot.top;
-          returnFocusRef.current?.focus?.({ preventScroll: true });
-        });
+      if (closeRequestedRef.current || (openedInitialStemId.current && selectedStemId)) {
+        if (saving || supplierSavingId || gmSaving || postSaving || amendSaving) {
+          closeRequestedRef.current = true;
+          return;
+        }
+        if (openedInitialStemId.current && selectedStemId) clearDetailForUrlClose();
       }
       return;
     }
+    closeRequestedRef.current = false;
     if (openedInitialStemId.current === stemId) return;
     openedInitialStemId.current = stemId;
+    selectedStemIdRef.current = stemId;
     setSelectedStemId(stemId);
     loadDetail(stemId);
-  }, [gmSaving, initialStemId, loadDetail, postSaving, saving, selectedStemId, supplierSavingId]);
+  }, [amendSaving, clearDetailForUrlClose, gmSaving, initialStemId, loadDetail, postSaving, saving, selectedStemId, supplierSavingId]);
 
   const openDetail = (caseRow, event) => {
     const stemId = caseStemId(caseRow);
@@ -526,6 +582,10 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
     returnFocusRef.current = event?.currentTarget || document.activeElement;
     const scrollElement = scrollContainerFor(returnFocusRef.current);
     returnScrollRef.current = { element: scrollElement, top: scrollElement?.scrollTop || 0 };
+    // Mark this URL-driven task as already opened before notifying the parent,
+    // so URL synchronization cannot start a duplicate detail request.
+    openedInitialStemId.current = stemId;
+    selectedStemIdRef.current = stemId;
     setSelectedStemId(stemId);
     loadDetail(stemId);
     onTaskOpen?.(stemId);
@@ -533,8 +593,12 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
 
   const closeDetail = () => {
     if (saving || supplierSavingId || gmSaving || postSaving || amendSaving) return;
+    detailRequestGateRef.current.invalidate();
+    closeRequestedRef.current = false;
+    selectedStemIdRef.current = '';
     setSelectedStemId('');
     setDetail(null);
+    setDetailLoading(false);
     setDetailError('');
     setSaveError('');
     setGmOpen(false);
@@ -1051,7 +1115,7 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
         </div>
       </div>
 
-      {detailLoading ? <VariableChargeReviewSkeleton /> : detailError ? (
+      {detailLoading ? <div aria-busy="true" aria-live="polite"><span className="sr-only">Refreshing Variable Charges task</span><VariableChargeReviewSkeleton /></div> : detailError ? (
         <StateBlock icon={AlertTriangle} title="Unable to load this task" description={detailError} action={<Button variant="outline" onClick={() => loadDetail(selectedStemId, { force: true })}>Try again</Button>} />
       ) : detail ? (
         <div className="space-y-5">

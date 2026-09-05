@@ -3,6 +3,7 @@ import { disputeWorkflowDirectionLabel, disputeWorkflowEditableFilename, dispute
 import { buildDisputePartyRegistry, disputeSalesforceIdKey, findDisputeParty, resolveExtraCostSupplierLookup, resolveOriginalSupplierLookup } from '../_disputeParties.js';
 import { disputeQueueExtraCostProductName } from '../_disputeQueue.js';
 import { resolvedBuyerInvoiceDueDate } from '../_buyerInvoiceDates.js';
+import { downloadAuthorizedSalesforceDocument, scopeCollectionDocumentMetadata, stemDocumentDownloadUrl } from '../_salesforceDocumentAccess.js';
 import { isFinalBuyerInvoice, resolveBuyerFinancialAmount } from '../_buyerFinancialAmount.js';
 import { buyerInvoiceEmailSettingsPatch, canonicalizeBuyerInvoiceEmail } from '../../src/lib/buyerInvoiceEmailSettings.js';
 import { earliestEtaDate, summarizeBuyerPaymentEvidence } from '../../src/lib/paymentCollectionEvidence.js';
@@ -5201,7 +5202,7 @@ async function buyerInvoicePaymentAdviceSave(body, req, accessContext = null) {
         contentDocumentId,
         versionId: contentVersionId,
         fileName: `${title}.${extension}`,
-        downloadUrl: `/api/functions/salesforceDocumentDownload?kind=contentVersion&id=${encodeURIComponent(contentVersionId)}&filename=${encodeURIComponent(`${title}.${extension}`)}`,
+        downloadUrl: stemDocumentDownloadUrl({ id: contentVersionId, fileName: `${title}.${extension}`, stemId }),
         salesforceUrl: `${getInstanceUrl()}/lightning/r/ContentDocument/${contentDocumentId}/view`,
       };
     } catch (error) {
@@ -7642,7 +7643,7 @@ function serializeCollectionEvent(row) {
     promisedPaymentDate: row.promised_payment_date || null,
     promisedAmount: row.promised_amount == null ? null : Number(row.promised_amount),
     eventKey: row.event_key || null,
-    metadata: row.metadata && typeof row.metadata === 'object' ? row.metadata : {},
+    metadata: scopeCollectionDocumentMetadata(row.metadata, row.stem_id),
     actorUserId: row.actor_user_id || null,
     actorEmail: row.actor_email || null,
     createdAt: row.created_at || null,
@@ -7949,8 +7950,8 @@ function buildContentVersionFilename(document, version) {
   return cleanDownloadFilename(`${title}.${extension}`);
 }
 
-async function salesforceStemDocumentsUncached(body = {}, req = null, accessContext = null) {
-  const actualStemId = await resolveStemId(body.stemId, accessContext);
+async function loadSalesforceStemDocumentGraph(stemId, accessContext = null) {
+  const actualStemId = await resolveStemId(stemId, accessContext);
   const record = await sfRequest(`/sobjects/stem__c/${actualStemId}`).then(cleanRecord);
   const relatedRecords = [];
   const seenRecordIds = new Set();
@@ -8033,6 +8034,11 @@ async function salesforceStemDocumentsUncached(body = {}, req = null, accessCont
     addRelatedRecord(relatedRecords, seenRecordIds, related);
   }
 
+  return { actualStemId, record, relatedRecords };
+}
+
+async function salesforceStemDocumentsUncached(body = {}, req = null, accessContext = null) {
+  const { actualStemId, record, relatedRecords } = await loadSalesforceStemDocumentGraph(body.stemId, accessContext);
   const recordMap = Object.fromEntries(relatedRecords.map((related) => [related.id, related]));
   const relatedIds = relatedRecords.map((related) => related.id);
   let contentLinks = [];
@@ -8090,7 +8096,7 @@ async function salesforceStemDocumentsUncached(body = {}, req = null, accessCont
       sourceLabel: related.sourceLabel || related.name || 'Related Record',
       sourceObject: related.sourceObject || null,
       sourceRecordId: link.LinkedEntityId,
-      downloadUrl: `/api/functions/salesforceDocumentDownload?kind=contentVersion&id=${encodeURIComponent(document.LatestPublishedVersionId)}&filename=${encodeURIComponent(fileName)}`,
+      downloadUrl: stemDocumentDownloadUrl({ id: document.LatestPublishedVersionId, fileName, stemId: actualStemId }),
       salesforceUrl: `${getInstanceUrl()}/${document.Id}`,
     });
   }
@@ -8114,7 +8120,7 @@ async function salesforceStemDocumentsUncached(body = {}, req = null, accessCont
       sourceLabel: related.sourceLabel || related.name || 'Related Record',
       sourceObject: related.sourceObject || null,
       sourceRecordId: attachment.ParentId,
-      downloadUrl: `/api/functions/salesforceDocumentDownload?kind=attachment&id=${encodeURIComponent(attachment.Id)}&filename=${encodeURIComponent(fileName)}`,
+      downloadUrl: stemDocumentDownloadUrl({ kind: 'attachment', id: attachment.Id, fileName, stemId: actualStemId }),
       salesforceUrl: `${getInstanceUrl()}/${attachment.Id}`,
     });
   }
@@ -8150,14 +8156,19 @@ async function salesforceStemDocuments(body = {}, req = null, accessContext = nu
   return cached.value;
 }
 
-async function salesforceDocumentDownload(req, res) {
+async function salesforceDocumentDownload(req, res, accessContext) {
   const url = new URL(req.url, 'http://localhost');
   const kind = url.searchParams.get('kind');
   const id = url.searchParams.get('id');
   const filename = cleanDownloadFilename(url.searchParams.get('filename') || 'salesforce-document');
-  if (!isSalesforceId(id)) return sendJson(res, { error: 'Valid document id required' }, 400);
-  const path = kind === 'attachment' ? `/sobjects/Attachment/${encodeURIComponent(id)}/Body` : `/sobjects/ContentVersion/${encodeURIComponent(id)}/VersionData`;
-  const file = await sfDownload(path);
+  const file = await downloadAuthorizedSalesforceDocument({
+    kind, id, stemId: url.searchParams.get('stemId'), accessContext,
+    interoffice: isInterofficeAccess(accessContext),
+  }, {
+    loadGraph: loadSalesforceStemDocumentGraph,
+    query: (soql) => queryRows(soql, { limit: 1, softFail: false }),
+    download: sfDownload,
+  });
   const asciiFilename = filename.replace(/[^\x20-\x7E]/g, '_');
   res.statusCode = 200;
   res.setHeader('cache-control', 'no-store');
@@ -15738,7 +15749,7 @@ function serializeDisputeWorkflowDocument(row) {
     linkedRecordIds: row.salesforce_linked_record_id ? [row.salesforce_linked_record_id] : [],
     uploadStatus: row.upload_status || 'complete',
     salesforceUrl: row.salesforce_url || null,
-    downloadUrl: `/api/functions/salesforceDocumentDownload?kind=contentVersion&id=${encodeURIComponent(versionId)}&filename=${encodeURIComponent(fileName)}`,
+    downloadUrl: stemDocumentDownloadUrl({ id: versionId, fileName, stemId: row.stem_id }),
     uploadedBy: row.uploaded_by || null,
     uploadedByEmail: row.uploaded_by_email || null,
     createdAt: row.created_at || null,
@@ -19480,8 +19491,8 @@ export default async function handler(req, res) {
           res.setHeader('X-FCOS-External-Action', handlerPolicy.externalAction ? '1' : '0');
         }
         if (name === 'salesforceDocumentDownload') {
-          await requireHandlerAccess(name, req);
-          return await salesforceDocumentDownload(req, res);
+          const accessContext = await requireHandlerAccess(name, req);
+          return await salesforceDocumentDownload(req, res, accessContext);
         }
         if (name === 'dashboardAccountInsightExport') {
           const accessContext = await requireHandlerAccess(name, req);

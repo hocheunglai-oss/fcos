@@ -4,6 +4,16 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      preview_url:
+        description: Exact HTTPS preview URL built for this commit
+        required: true
+        type: string
+      preview_sha:
+        description: Full 40-character Git SHA the supplied preview was built from
+        required: true
+        type: string
 
 concurrency:
   group: fcos-quality-${{ github.ref }}
@@ -20,6 +30,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run verify:fcuno-contract
+      - run: npm run verify:compatibility
       - run: npm test
       - run: npm run lint
       - run: npm run typecheck
@@ -36,16 +47,19 @@ jobs:
         run: supabase stop --no-backup
 
   authenticated-browser:
-    # The former permanent FCOS CI viewer was deliberately deleted. Keep the
-    # authenticated suite available, but run it only when a governed renewable
-    # test identity has been explicitly provisioned and enabled.
-    if: ${{ vars.FCOS_AUTH_E2E_ENABLED == 'true' }}
+    # Browser verification is release-only. PR/push quality never creates or
+    # uses test credentials, and this manual entry point needs an exact preview.
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     env:
-      FCOS_E2E_BASE_URL: https://fcos.fcuno.com
+      FCOS_AUTH_E2E_ENABLED: ${{ vars.FCOS_AUTH_E2E_ENABLED }}
+      FCOS_E2E_BASE_URL: ${{ inputs.preview_url }}
+      FCOS_E2E_PREVIEW_SHA: ${{ inputs.preview_sha }}
+      FCOS_RELEASE_SHA: ${{ github.sha }}
       FCOS_E2E_STORAGE_STATE: /tmp/fcos-e2e-storage.json
       FCOS_E2E_EMAIL: ${{ secrets.FCOS_E2E_EMAIL }}
       FCOS_E2E_PASSWORD: ${{ secrets.FCOS_E2E_PASSWORD }}
+      FCOS_VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.FCOS_VERCEL_AUTOMATION_BYPASS_SECRET }}
       FCOS_REQUIRE_AUTH_E2E: 1
     steps:
       - uses: actions/checkout@v4
@@ -55,9 +69,14 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx playwright install --with-deps chrome
-      - name: Verify renewable authenticated browser credentials
+      - name: Verify preview provenance and renewable browser credentials
         run: |
+          test "$FCOS_AUTH_E2E_ENABLED" = "true"
           test -n "$FCOS_E2E_BASE_URL"
+          test -n "$FCOS_E2E_PREVIEW_SHA"
+          test "$FCOS_E2E_PREVIEW_SHA" = "$FCOS_RELEASE_SHA"
+          case "$FCOS_E2E_BASE_URL" in https://*) ;; *) exit 1 ;; esac
+          test "$FCOS_E2E_BASE_URL" != "https://fcos.fcuno.com"
           test -n "$FCOS_E2E_EMAIL"
           test -n "$FCOS_E2E_PASSWORD"
       - run: npm run test:e2e

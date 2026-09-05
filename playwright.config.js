@@ -1,7 +1,12 @@
 import { defineConfig, devices } from '@playwright/test';
+import { assertReleaseBrowserEnvironment, verifyReleasePreviewArtifact } from './scripts/lib/release-environment.mjs';
 
 const baseURL = process.env.FCOS_E2E_BASE_URL || 'http://127.0.0.1:5173';
 const usesExternalServer = Boolean(process.env.FCOS_E2E_BASE_URL);
+if (process.env.FCOS_REQUIRE_AUTH_E2E === '1') {
+  const releaseEnvironment = assertReleaseBrowserEnvironment();
+  await verifyReleasePreviewArtifact(releaseEnvironment);
+}
 
 export default defineConfig({
   testDir: './e2e',
@@ -13,7 +18,8 @@ export default defineConfig({
   use: {
     baseURL,
     channel: 'chrome',
-    trace: 'retain-on-failure',
+    // Strict authenticated runs must not retain credentials/bypass cookies in traces.
+    trace: process.env.FCOS_REQUIRE_AUTH_E2E === '1' ? 'off' : 'retain-on-failure',
     screenshot: 'only-on-failure',
   },
   webServer: usesExternalServer ? undefined : {

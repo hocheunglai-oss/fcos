@@ -1077,7 +1077,7 @@ export async function loadDashboardAccountCreditStatement({ body = {}, accessCon
   const interoffice = accessContext?.profile?.user_type === 'interoffice';
   const cache = await getOrLoadRuntimeCache({
     namespace: 'salesforce-dashboard-account-credit-statement',
-    version: '15-payment-reliability',
+    version: '16-contractual-due-date-parity',
     accessScope: interoffice ? 'interoffice' : 'standard',
     apiVersion: `${getApiVersion()}@${getInstanceUrl()}`,
     payload: {

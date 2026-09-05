@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
 import { expect, test } from '@playwright/test';
+import { assertReleaseBrowserEnvironment, verifyReleaseBrowserPreview } from '../scripts/lib/release-environment.mjs';
 
 const authState = process.env.FCOS_E2E_STORAGE_STATE || '';
 const requireAuthenticatedCoverage = process.env.FCOS_REQUIRE_AUTH_E2E === '1';
@@ -33,6 +34,9 @@ const mutatingOrMailboxWorkspaces = [
 ];
 
 test('login is usable without an application session', async ({ page }) => {
+  if (requireAuthenticatedCoverage) {
+    await verifyReleaseBrowserPreview(assertReleaseBrowserEnvironment(), page.request);
+  }
   const failures = [];
   page.on('pageerror', (error) => failures.push(error.message));
   await page.goto('/login');

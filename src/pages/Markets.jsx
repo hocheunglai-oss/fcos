@@ -6,6 +6,7 @@ import { EmptyState, InlineError, Button } from '@/hedge/components/ui';
 import { DEFAULT_GENERAL } from '@/hedge/lib/domain';
 import { loadMarketPulseSnapshot, loadMarketSnapshot, MarketPrice, verifyMopsMonth } from '@/hedge/api/marketData';
 import { navigationCacheOptions } from '@/lib/navigationCachePolicy';
+import { createLatestRequestGate } from '@/lib/latestRequest';
 import '@/hedge/styles.css';
 
 const EMPTY = { mops: [], mopsMonthVerifications: [], marketIntelligence: {}, settings: {}, capabilities: {} };
@@ -21,15 +22,18 @@ export default function Markets() {
   const [error, setError] = useState(null);
   const snapshotRef = useRef(null);
   const snapshotRequestRef = useRef(null);
+  const pulseRequestGateRef = useRef(createLatestRequestGate());
+  const snapshotRequestGateRef = useRef(createLatestRequestGate());
 
   const reload = useCallback(async ({ silent = false, force = silent } = {}) => {
+    const request = pulseRequestGateRef.current.begin('market-pulse');
     if (silent) setRefreshing(true);
     else setLoading(true);
     setError(null);
     try {
       const applyPulse = (value) => {
         const next = value || null;
-        setPulse(next);
+        if (request.isCurrent()) setPulse(next);
         return next;
       };
       return applyPulse(await loadMarketPulseSnapshot({
@@ -37,29 +41,37 @@ export default function Markets() {
         force,
       }));
     } catch (nextError) {
+      if (!request.isCurrent()) return null;
       setError(nextError);
       throw nextError;
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (request.isCurrent()) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, []);
 
   const ensureSnapshot = useCallback(async ({ force = false } = {}) => {
     if (!force && snapshotRef.current) return snapshotRef.current;
     if (!force && snapshotRequestRef.current) return snapshotRequestRef.current;
+    const requestGate = snapshotRequestGateRef.current.begin('market-snapshot');
     setSnapshotLoading(true);
     const request = loadMarketSnapshot({
       cache: !force,
       force,
+      signal: requestGate.signal,
     }).then((value) => {
+      if (!requestGate.isCurrent()) return snapshotRef.current;
       const next = { ...EMPTY, ...(value || {}) };
       snapshotRef.current = next;
       setSnapshot(next);
       return next;
     }).finally(() => {
-      snapshotRequestRef.current = null;
-      setSnapshotLoading(false);
+      if (requestGate.isCurrent()) {
+        snapshotRequestRef.current = null;
+        setSnapshotLoading(false);
+      }
     });
     snapshotRequestRef.current = request;
     return request;
@@ -73,6 +85,10 @@ export default function Markets() {
   }, [ensureSnapshot, reload]);
 
   useEffect(() => { reload().catch(() => {}); }, [reload]);
+  useEffect(() => () => {
+    pulseRequestGateRef.current.invalidate();
+    snapshotRequestGateRef.current.invalidate();
+  }, []);
 
   useEffect(() => {
     let intervalId = null;

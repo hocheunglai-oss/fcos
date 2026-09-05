@@ -13,6 +13,8 @@
   "files": [
     "api/_authenticatedFunction.js",
     "api/_requestTelemetry.js",
-    "api/_supabaseConfig.js"
+    "api/_supabaseConfig.js",
+    "api/_buyerInvoiceDates.js",
+    "src/lib/paymentDataReliability.js"
   ]
 }
