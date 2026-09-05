@@ -161,7 +161,7 @@ export function MarketDecisionBrief({ initialBrief = null, refreshKey = 0, pulse
   return (
     <div className="market-intelligence-stack" data-testid="market-daily-decision-brief">
       {error ? <InlineError error={error} action={<Button onClick={() => load({ date: dateMode === 'historical' ? requestedDate : null, force: true })}>Retry</Button>} /> : null}
-      {brief?.fallbackApplied ? <div className="app-callout app-callout--warning"><AlertTriangle size={15} />Reports for the requested date are not available. Showing the latest completed report: {formatDate(brief.displayedDate)}.</div> : null}
+      {brief?.fallbackApplied ? <div className="app-callout app-callout--warning"><AlertTriangle size={15} />{dateMode === 'historical' ? 'Reports for the requested date are not available.' : 'Today’s report pair is not available.'} Showing the latest completed report: {formatDate(brief.displayedDate)}.</div> : null}
       {pulseLoading ? <Panel className="market-price-board-panel"><div className="market-empty-inline"><RefreshCw className="animate-spin" size={20} /><div><strong>Loading market price board</strong><span>Resolving the exact completed report-date snapshot.</span></div></div></Panel> : pulseError ? <InlineError error={pulseError} /> : pulse ? <MarketPriceBoard pulse={{ ...pulse, mode: dateMode }} /> : <Panel className="market-price-board-panel"><div className="market-empty-inline"><RefreshCw size={20} /><div><strong>Market price board unavailable</strong><span>No date-scoped snapshot is available for this report date.</span></div></div></Panel>}
       {intraday}
 

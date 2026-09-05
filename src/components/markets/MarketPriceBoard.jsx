@@ -150,7 +150,7 @@ function SingaporeDelivered({ product, pulse, onSelect }) {
     <strong className="market-price-board__price">{formatValue(delivered.value, unit)}</strong>
     <span>{delivered.publicationDate ? `Published ${formatDate(delivered.publicationDate)}` : 'No Singapore delivered quote'}</span>
     {delivered.dayChange != null ? <MarketSignedValue value={delivered.dayChange} unit={unit} digits={digitsFor(unit)} suffix="day change" /> : null}
-    {premium.value != null ? <span>Premium {formatValue(premium.value, premium.unit || unit)}{premium.date ? ` · ${formatDate(premium.date)}` : ''}</span> : null}
+    {premium.value != null ? <><span>Premium vs MOPS</span><MarketSignedValue value={premium.value} unit={premium.unit || unit} digits={digitsFor(premium.unit || unit)} suffix={premium.date ? `· ${formatDate(premium.date)}` : ''} /></> : null}
   </MetricButton>;
 }
 
@@ -168,7 +168,7 @@ function CurveMetric({ product, pulse, spreadKey, label, onSelect }) {
   const unit = spread.unit || product.unit;
   return <MetricButton label={`${productLabel(product)} ${label}`} onSelect={onSelect} detail={detailsFor({ label: `${productLabel(product)} ${label}`, product, metric: spread, pulse, value: spread.value, unit, extra: [['Day change', spread.comparison?.available ? formatValue(spread.comparison.change, unit) : null]] })}>
     <strong><MarketSignedValue value={spread.value} unit={unit} digits={digitsFor(unit)} unavailableLabel="Not published" /></strong>
-    {spread.comparison ? <MarketSignedValue value={spread.comparison.available ? spread.comparison.change : null} unit={unit} digits={digitsFor(unit)} suffix={spread.comparison.available ? `vs ${formatDate(spread.comparison.previousDate)}` : ''} unavailableLabel="No prior comparison" /> : <span>Not published</span>}
+    {spread.comparison ? <MarketSignedValue value={spread.comparison.available ? spread.comparison.change : null} unit={unit} digits={digitsFor(unit)} suffix={spread.comparison.available ? `vs ${formatDate(spread.comparison.previousDate)}` : ''} unavailableLabel="No prior comparison" /> : null}
   </MetricButton>;
 }
 
