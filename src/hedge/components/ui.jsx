@@ -64,7 +64,7 @@ export function SearchInput({ value, onChange, placeholder = "Search", className
   );
 }
 
-export function PageHeader({ eyebrow, title, description, actions, status }) {
+export function PageHeader({ eyebrow, title, description, actions, status, showSalesforceSync = true }) {
   const methodology = PAGE_METHODOLOGIES[title];
   const methodologySections = methodology ? [
     { title: "Purpose", body: methodology.summary },
@@ -76,7 +76,7 @@ export function PageHeader({ eyebrow, title, description, actions, status }) {
         {eyebrow && <div className="app-eyebrow">{eyebrow}</div>}
         <div className="app-page-header__title-row">
           <h1>{title}</h1>
-          <SalesforceSyncBadge className="app-salesforce-freshness" />
+          {showSalesforceSync ? <SalesforceSyncBadge className="app-salesforce-freshness" /> : null}
           {status}
         </div>
         {description && <p>{description}</p>}

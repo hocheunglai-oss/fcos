@@ -67,12 +67,18 @@ export function loadMarketHistory(payload, options = {}) {
   });
 }
 
-export function loadMarketPulseSnapshot(options = {}) {
-  return requestMarketIntelligence('marketPulseSnapshot', {}, {
+// `payload` is deliberately optional to preserve the original
+// loadMarketPulseSnapshot({ force }) call shape.  A caller can now pass an
+// explicit historical as-of date without making the current Pulse historical.
+export function loadMarketPulseSnapshot(payload = {}, options = {}) {
+  const { asOfDate, ...legacyOptions } = payload;
+  const requestOptions = { ...legacyOptions, ...options };
+  const requestPayload = asOfDate ? { asOfDate } : {};
+  return requestMarketIntelligence('marketPulseSnapshot', requestPayload, {
     cache: true,
     cacheTtlMs: 60_000,
     cacheTags: ['markets', 'market-pulse'],
-    ...options,
+    ...requestOptions,
   });
 }
 

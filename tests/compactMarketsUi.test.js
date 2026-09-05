@@ -21,18 +21,23 @@ test('Markets uses the compact four-tab reading flow and keeps governed tools se
   assert.doesNotMatch(workspace, /<TradingSignals intelligence=/);
 });
 
-test('Overview and Pulse share compact product rows with accessible movement and distinct curve colors', () => {
+test('Overview and Pulse share one accessible product board with compact Pulse rendering', () => {
   const brief = read('src/hedge/views/market-intelligence/MarketDecisionBrief.jsx');
+  const board = read('src/components/markets/MarketPriceBoard.jsx');
   const pulse = read('src/components/market-pulse/MarketPulse.jsx');
   const css = read('src/hedge/views/market-intelligence/marketIntelligence.css');
-  assert.match(brief, /Product<\/span><span>Latest MOPS<\/span><span>Published move/);
-  assert.match(brief, /Est\. month average/);
-  assert.match(brief, /BM−M1/);
-  assert.match(brief, /M1−M2/);
-  assert.match(brief, /MarketSignedValue/);
-  assert.match(pulse, /sm:grid-cols-\[1\.25fr_1fr_1fr_1\.2fr\]/);
+  assert.match(brief, /MarketPriceBoard pulse=\{\{ \.\.\.pulse, mode: dateMode \}\}/);
+  assert.match(board, /export function MarketPriceBoard\(\{ pulse, compact = false \}\)/);
+  assert.match(board, /<span>Product<\/span><span>Latest MOPS<\/span><span>Published move<\/span>/);
+  assert.match(board, /Singapore delivered/);
+  assert.match(board, /Reconstructed month estimate/);
+  assert.match(board, /BM−M1/);
+  assert.match(board, /M1−M2/);
+  assert.match(board, /MarketSignedValue/);
+  assert.match(pulse, /<MarketPriceBoard pulse=\{data\} compact \/>/);
+  assert.doesNotMatch(css, /market-price-board__row \{ display: grid; grid-template-columns:[\s\S]*?min-width: 1080px/);
   assert.match(pulse, /MarketSignedValue/);
-  assert.match(pulse, /backwardation: 'bg-violet-50/);
+  assert.match(board, /backwardation: 'market-price-board__regime--backwardation'/);
   assert.match(css, /market-curve-state--backwardation/);
   assert.match(css, /market-curve-state--contango/);
 });
@@ -96,12 +101,32 @@ test('initial Markets load is Pulse-only and user capabilities are appended afte
   const handler = read('api/functions/[name].js');
   assert.match(page, /await loadMarketPulseSnapshot/);
   assert.match(page, /const ensureSnapshot = useCallback/);
-  assert.match(page, /if \(!force && snapshotRequestRef\.current\) return snapshotRequestRef\.current/);
+  assert.match(page, /snapshotRequestRef\.current\?\.key === key/);
   assert.match(page, /workspace-floating-utility-safe/);
-  assert.match(workspace, /if \(value === 'delivered'\) ensureMarketData\(\)/);
+  assert.doesNotMatch(workspace, /if \(value === 'delivered'\) ensureMarketData/);
   assert.match(handler, /Capabilities are attached after the shared 60-second market-data cache resolves/);
   assert.match(handler, /hedge_book_manage: capabilities\?\.hedge_book_manage === true/);
   assert.match(handler, /hedge_admin: capabilities\?\.hedge_admin === true/);
+});
+
+test('one date controller keeps visible Markets panels on the same historical as-of date', () => {
+  const page = read('src/pages/Markets.jsx');
+  const workspace = read('src/hedge/views/MarketIntelligenceWorkspace.jsx');
+  const curves = read('src/hedge/views/market-intelligence/MarketForwardCurves.jsx');
+  const intraday = read('src/hedge/views/market-intelligence/MarketIntradayStrip.jsx');
+  assert.match(workspace, /marketBriefMode/);
+  assert.match(workspace, /date && params\.get\('marketBriefMode'\) !== 'latest'/);
+  assert.match(workspace, /window\.addEventListener\('popstate'/);
+  assert.match(workspace, /setTab\(nextTab\)/);
+  assert.match(workspace, /<MarketDateToolbar/);
+  assert.match(workspace, /onBriefError=\{resolveBriefError\}/);
+  assert.match(workspace, /endDate: asOfDate/);
+  assert.match(workspace, /historyError && !history/);
+  assert.match(workspace, /historyRetryKey/);
+  assert.match(workspace, /asOfDate=\{displayedDate \|\| null\}/);
+  assert.match(page, /loadMarketPulseSnapshot\(\{ asOfDate \}/);
+  assert.match(curves, /asOfDate = null/);
+  assert.match(intraday, /asOfDate = null/);
 });
 
 test('MOPS mutations refresh both the Pulse and the governed settlement snapshot', () => {
@@ -111,8 +136,21 @@ test('MOPS mutations refresh both the Pulse and the governed settlement snapshot
   assert.match(page, /const reloadAfterMarketMutation = useCallback/);
   assert.match(page, /reload\(\{ silent: true, force: true \}\)/);
   assert.match(page, /ensureSnapshot\(\{ force: true \}\)/);
+  assert.match(page, /refreshVersion=\{refreshVersion\}/);
   assert.match(page, /<ActionsProvider reload=\{reloadAfterMarketMutation\}>/);
   assert.match(marketApi, /fcos:market-pulse-changed/);
   assert.match(pulse, /window\.addEventListener\('fcos:market-pulse-changed'/);
   assert.match(pulse, /if \(open\) load\(\{ force: true \}\)/);
+});
+
+test('global date refresh works outside Overview and latest resolution avoids a second brief request', () => {
+  const workspace = read('src/hedge/views/MarketIntelligenceWorkspace.jsx');
+  const brief = read('src/hedge/views/market-intelligence/MarketDecisionBrief.jsx');
+  const api = read('src/hedge/api/marketData.js');
+  assert.doesNotMatch(brief, /if \(!active\) return/);
+  assert.match(workspace, /requestedDate=\{dateSelection.mode === 'historical' \? dateSelection.date : null\}/);
+  assert.match(workspace, /active=\{tab === 'curves' && dateReady\}/);
+  assert.match(workspace, /refreshVersionRef.current === refreshVersion/);
+  assert.match(api, /const \{ asOfDate, \.\.\.legacyOptions \} = payload/);
+  assert.match(api, /const requestOptions = \{ \.\.\.legacyOptions, \.\.\.options \}/);
 });

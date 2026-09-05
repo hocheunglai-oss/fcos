@@ -134,7 +134,8 @@ test('Market Pulse handler, permissions and caching are wired without a Brent pr
   assert.match(handler, /async function marketPulseSnapshot/);
   assert.match(policy, /marketPulseSnapshot: readPolicy\(\{"cache":"server"/);
   assert.match(api, /ttlSeconds: 60/);
-  assert.match(api, /version: '4'/);
+  assert.match(api, /version: '5'/);
+  assert.match(api, /payload: \{ month: asOfDate\?\.slice\(0, 7\) \|\| hktThisMonth\(\), asOfDate, mode: asOfDate \? 'historical' : 'latest' \}/);
   assert.match(api, /previousMopsRow/);
   assert.match(api, /previousBrief/);
   assert.match(api, /tags: \['markets', 'hedge:markets', 'market:intelligence', 'market:pulse', 'market:intraday'\]/);
@@ -148,7 +149,7 @@ test('Market Pulse handler, permissions and caching are wired without a Brent pr
   assert.match(pulse, /drag to reposition/);
   assert.match(pulse, /Reset position/);
   assert.match(pulse, /Open Markets/);
-  assert.match(pulse, /No prior comparison/);
+  assert.match(pulse, /MarketPriceBoard pulse=\{data\} compact/);
   assert.match(pulse, /align="end" side="bottom"/);
   assert.match(pulse, /max-h-\[calc\(100dvh-24px\)\]/);
   assert.doesNotMatch(pulse, /window\.location\.reload|window\.location\.replace/);
