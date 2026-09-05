@@ -7,6 +7,8 @@ const source = (path) => readFile(new URL(`../${path}`, import.meta.url), 'utf8'
 test('Account Insight keeps the mounted overlay and exposes the four consolidated sections', async () => {
   const modal = await source('src/components/dashboard/AccountInsightModal.jsx');
   assert.match(modal, /<Dialog open=\{open\}/);
+  assert.match(modal, /grid-cols-\[minmax\(0,1fr\)\] grid-rows-\[auto_minmax\(0,1fr\)\]/);
+  assert.match(modal, /max-h-\[45dvh\] overflow-y-auto/);
   for (const label of ['Overview', 'Trading', 'Credit &amp; Payments', 'STEMs']) assert.match(modal, new RegExp(`TabsTrigger value=.*${label}`));
   assert.match(modal, /Payment performance, risk, and GROUP details/);
   assert.match(modal, /setActiveTab\('payments'\)/);

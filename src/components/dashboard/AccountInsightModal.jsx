@@ -389,8 +389,8 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
   return (
     <>
     <AccountInsightForecastContext.Provider value={setForecastConservativeness}><AccountInsightStatementScopeContext.Provider value={setStatementScope}><Dialog open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
-      <DialogContent className="account-insight-window inset-0 left-0 top-0 h-[100dvh] max-h-none w-screen max-w-none translate-x-0 translate-y-0 gap-0 overflow-hidden rounded-none border-0 p-0 shadow-2xl sm:left-[50%] sm:top-[50%] sm:h-[92vh] sm:w-[96vw] sm:max-w-[1500px] sm:translate-x-[-50%] sm:translate-y-[-50%] sm:rounded-[var(--radius-window)] sm:border">
-        <DialogHeader className="app-navigation-material account-insight-toolbar border-b border-border px-5 py-3.5 pr-12 sm:px-6">
+      <DialogContent className="account-insight-window inset-0 left-0 top-0 grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)] h-[100dvh] max-h-none w-screen max-w-none translate-x-0 translate-y-0 gap-0 overflow-hidden rounded-none border-0 p-0 shadow-2xl sm:left-[50%] sm:top-[50%] sm:h-[92vh] sm:w-[96vw] sm:max-w-[1500px] sm:translate-x-[-50%] sm:translate-y-[-50%] sm:rounded-[var(--radius-window)] sm:border">
+        <DialogHeader className="app-navigation-material account-insight-toolbar min-w-0 max-h-[45dvh] overflow-y-auto border-b border-border px-5 py-3.5 pr-12 sm:max-h-none sm:px-6">
           <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
             <div className="min-w-0">
               <div className="mb-1 flex flex-wrap items-center gap-2">
@@ -400,7 +400,7 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
                 {meta ? <DataStatus meta={meta} label="Salesforce" /> : null}
               </div>
               <DialogTitle className="max-w-full whitespace-normal break-words text-xl leading-tight">{identity.name || account?.name || 'Account'}</DialogTitle>
-              <DialogDescription>{identity.clKey ? `CL Key ${identity.clKey}` : 'CL Key not set'} · {data.relationship?.accountManagers?.map((manager) => manager.name).join(' · ') || 'No Account Manager'} · {data?.period?.label || PERIODS.find((item) => item.value === periodMode)?.label}</DialogDescription>
+              <DialogDescription className="break-words">{identity.clKey ? `CL Key ${identity.clKey}` : 'CL Key not set'} · {data.relationship?.accountManagers?.map((manager) => manager.name).join(' · ') || 'No Account Manager'} · {data?.period?.label || PERIODS.find((item) => item.value === periodMode)?.label}</DialogDescription>
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <div className="flex rounded-md border border-border bg-muted/30 p-1" aria-label="Account Insight direction">
@@ -421,7 +421,7 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
           <div className="mt-3"><GroupAccountScopeSelector groupScope={presentation.groupScope} selectedAccountIds={includedGroupAccountIds} onChange={(ids) => { setRetainedResponse(responseData); setRetainedScopeStale(true); setSections({}); setIncludedGroupAccountIds(ids); setScopeRefreshNonce((value) => value + 1); }} disabled={loading} />{retainedScopeStale ? <div className="mt-2 text-xs text-muted-foreground">Refreshing the selected GROUP scope. Export is unavailable until the current scope loads.</div> : null}</div>
         </DialogHeader>
 
-        <div className="account-insight-canvas min-h-0 flex-1 overflow-y-auto">
+        <div className="account-insight-canvas min-w-0 min-h-0 flex-1 overflow-y-auto">
           {error ? <div className="m-5 flex items-start gap-2 rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-800"><ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />{error}</div> : null}
           {loading && !responseData && activeTab !== 'credit' ? <div className="flex h-72 items-center justify-center gap-3 text-sm text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin" />Building Account Insight...</div> : null}
           {responseData || activeTab === 'credit' ? (
