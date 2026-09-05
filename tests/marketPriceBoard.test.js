@@ -32,7 +32,9 @@ test('market board preserves native units, current versus historical labels, and
 test('market board provides a responsive desktop table and readable mobile product cards', () => {
   assert.match(css, /\.market-price-board__desktop \{ overflow-x: auto; \}/);
   assert.match(css, /min-width: 1120px/);
-  assert.match(css, /market-price-board-panel--compact[\s\S]*min-width: 760px/);
+  assert.match(css, /market-price-board-panel--compact[\s\S]*min-width: 800px/);
+  assert.match(css, /minmax\(128px, \.64fr\)/);
+  assert.match(css, /minmax\(128px, \.62fr\)/);
   assert.match(css, /\.market-price-board__mobile \{ display: none; \}/);
   assert.match(css, /@media \(max-width: 720px\).*?\.market-price-board__desktop \{ display: none; \}.*?\.market-price-board__mobile \{ display: grid;[^}]*\}/s);
   assert.match(css, /\.market-price-board__price[^}]*font-size: 15px/);

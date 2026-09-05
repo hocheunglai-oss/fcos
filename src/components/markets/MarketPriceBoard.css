@@ -5,8 +5,8 @@
 .market-price-board__mode, .market-price-board__regime { display: inline-flex; align-items: center; width: max-content; max-width: 100%; border-radius: 999px; font-size: 12px; font-weight: 750; line-height: 1.15; text-transform: capitalize; }
 .market-price-board__mode { padding: 5px 8px; color: var(--app-text-muted, hsl(var(--muted-foreground))); background: color-mix(in srgb, var(--app-surface-soft, hsl(var(--muted))) 76%, transparent); }
 .market-price-board__desktop { overflow-x: auto; }
-.market-price-board__header, .market-price-board__row { display: grid; grid-template-columns: minmax(128px, 1.05fr) minmax(128px, .95fr) minmax(115px, .85fr) minmax(148px, 1.1fr) minmax(150px, 1.1fr) minmax(105px, .8fr) minmax(105px, .8fr) minmax(92px, .64fr); min-width: 1120px; align-items: stretch; }
-.market-price-board-panel--compact .market-price-board__header, .market-price-board-panel--compact .market-price-board__row { grid-template-columns: minmax(112px, 1fr) minmax(122px, 1fr) minmax(105px, .82fr) minmax(140px, 1.16fr) minmax(95px, .76fr) minmax(95px, .76fr) minmax(84px, .62fr); min-width: 760px; }
+.market-price-board__header, .market-price-board__row { display: grid; grid-template-columns: minmax(128px, 1.05fr) minmax(128px, .95fr) minmax(115px, .85fr) minmax(148px, 1.1fr) minmax(150px, 1.1fr) minmax(105px, .8fr) minmax(105px, .8fr) minmax(128px, .64fr); min-width: 1120px; align-items: stretch; }
+.market-price-board-panel--compact .market-price-board__header, .market-price-board-panel--compact .market-price-board__row { grid-template-columns: minmax(112px, 1fr) minmax(122px, 1fr) minmax(105px, .82fr) minmax(140px, 1.16fr) minmax(95px, .76fr) minmax(95px, .76fr) minmax(128px, .62fr); min-width: 800px; }
 .market-price-board__header { background: var(--app-surface-soft, hsl(var(--muted))); color: var(--app-text-muted, hsl(var(--muted-foreground))); font-size: 12px; font-weight: 800; letter-spacing: .025em; text-transform: uppercase; }
 .market-price-board__header > span { padding: 9px 10px; }
 .market-price-board__row { position: relative; border-top: 1px solid var(--app-border, hsl(var(--border))); }
