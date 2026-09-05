@@ -4,6 +4,18 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.198',
+    releasedAt: '2026-09-05',
+    title: 'Strengthen financial evidence and workspace reliability',
+    changes: [
+      'Aligns credit receipt dates with the saved invoice override and inclusive contractual payment-term calculation.',
+      'Includes imported bank movements since each reviewed balance and excludes ineligible or legacy STEM payments from reconciliation.',
+      'Verifies restricted Salesforce document links against the permitted STEM before download.',
+      'Protects Variable Charges, Master Contracts and Markets from obsolete refresh responses, and clarifies Dashboard currency and Market Pulse precision.',
+      'Strengthens exact-preview release checks, connection pinning, and bounded read-only database diagnostics.',
+    ],
+  },
+  {
     version: '2.0.197',
     releasedAt: '2026-09-03',
     title: 'Include direct FCBS costs in hedge results',

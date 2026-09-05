@@ -67,11 +67,15 @@ test('quality gate covers browser libraries, server modules, checked JavaScript,
     read('../config/performance-budgets.json'),
   ]);
   assert.match(eslint, /src\/lib\/\*\*\/\*\.\{js,mjs,cjs,jsx\}/);
+  assert.match(eslint, /src\/components\/ui\/\*\*\/\*\.\{js,mjs,cjs,jsx\}/);
+  assert.match(eslint, /src\/hooks\/\*\*\/\*\.\{js,mjs,cjs,jsx\}/);
   assert.match(eslint, /api\/\*\*\/\*\.\{js,mjs,cjs\}/);
   assert.match(packageJson, /tsc -p \.\/jsconfig\.core\.json/);
   assert.match(packageJson, /"verify:performance"/);
   assert.match(workflow, /npm run verify:performance/);
   assert.match(coreTypes, /"checkJs": true/);
+  assert.match(coreTypes, /api\/_buyerInvoiceDates\.js/);
+  assert.match(coreTypes, /src\/lib\/paymentDataReliability\.js/);
   assert.match(budget, /"workNotificationsDatabase": 1/);
   assert.match(budget, /"emailRouterForegroundPages": 1/);
 });

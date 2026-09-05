@@ -140,13 +140,13 @@ test('release evidence applies payment, scheduled cashflow, invoice due, and ove
   assert.equal(overdue.missedReleaseDate, '2026-08-01');
 });
 
-test('expected delivery plus payment term is the final dated forecast fallback', () => {
+test('numeric terms without actual delivery retain an undated residual', () => {
   const release = buildStemCreditRelease({
     today: '2026-08-16', accountId,
     stem: { Id: 'a01000000000003AAA', Account__c: accountId, QLIK_Receivable_Balance__c: 70, Expected_Delivery_Date__c: '2026-08-20', Payment_Term_Number__c: 30 },
   });
-  assert.equal(release.releaseDate, '2026-09-19');
-  assert.equal(release.releaseSource, 'expected_delivery_term');
+  assert.equal(release.releaseDate, null);
+  assert.equal(release.releaseSource, 'unknown');
 });
 
 test('signed negative receivables remain signed in exposure and projected balance movement', () => {
@@ -608,7 +608,7 @@ test('Statement Evidence cutoff remains absolute for every history scope', async
   assert.match(source, /scope === 'all'[\s\S]*Account__c IN \([^\n]+\) AND \$\{creditExposureDeliveryWhere\(\)\}/);
   assert.match(source, /Id IN \([^\n]+\) AND \$\{creditExposureDeliveryWhere\(\)\}/);
   assert.match(source, /mergeStems\(result\.records\)\.filter\(\(stem\) => isCreditExposureStemEligible\(stem\)\)/);
-  assert.match(source, /version: '15-payment-reliability'/);
+  assert.match(source, /version: '16-contractual-due-date-parity'/);
 });
 
 test('same-name credit fallback fails closed when more than one compatible snapshot reconciles', () => {

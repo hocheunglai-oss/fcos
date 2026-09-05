@@ -1,6 +1,11 @@
 #!/bin/sh
 
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null)"
+git_common_dir="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
+if [ -z "$git_common_dir" ]; then
+  git_common_dir="$repo_root/.git"
+fi
+github_config_dir="$(dirname "$git_common_dir")/.fcos-cli/github"
 expected_account="$(git config --local --get fcos.expectedGithubAccount)"
 remote_name="$1"
 remote_url="$(git remote get-url "$remote_name" 2>/dev/null || printf '%s' "$2")"
@@ -17,7 +22,7 @@ if [ -z "$repo_root" ] || [ "$expected_account" != "hocheunglai-oss" ]; then
   exit 1
 fi
 
-actual_account="$(GH_CONFIG_DIR="$repo_root/.fcos-cli/github" gh api user --jq .login 2>/dev/null || true)"
+actual_account="$(env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR="$github_config_dir" gh api user --jq .login 2>/dev/null || true)"
 if [ "$actual_account" != "$expected_account" ]; then
   echo "FCOS push blocked: the isolated GitHub CLI identity does not match '$expected_account'." >&2
   echo "Run npm run connections:verify -- github before pushing." >&2
@@ -32,7 +37,18 @@ while read -r local_ref local_sha remote_ref remote_sha; do
   esac
   case "$remote_sha" in
     0000000000000000000000000000000000000000)
-      changed_paths="$(git ls-tree -r --name-only "$local_sha" 2>/dev/null)"
+      origin_main="$(git rev-parse --verify refs/remotes/origin/main^{commit} 2>/dev/null || true)"
+      merge_base=""
+      if [ -n "$origin_main" ]; then
+        merge_base="$(git merge-base "$local_sha" "$origin_main" 2>/dev/null || true)"
+      fi
+      if [ -n "$merge_base" ]; then
+        changed_paths="$(git diff --name-only "$merge_base" "$local_sha" 2>/dev/null)"
+      else
+        # Without a verified local origin/main base, inspecting the whole
+        # proposed tree is conservative and cannot bypass mirror publication.
+        changed_paths="$(git ls-tree -r --name-only "$local_sha" 2>/dev/null)"
+      fi
       ;;
     *)
       changed_paths="$(git diff --name-only "$remote_sha..$local_sha" 2>/dev/null)"

@@ -55,6 +55,8 @@ import { classifyBuyerPaymentEvidence } from '@/lib/paymentCollectionEvidence';
 import { matchesPaymentCollectionDisputeFilter, paymentCollectionDisputeState } from '@/lib/paymentCollectionDisputes';
 import { clearDraft, readDraft, sameDraftValue, useDraftAutosave } from '@/lib/draftAutosave';
 import { collectionWorkflowIssues } from '@/lib/workflowValidation';
+import { useDownloadAuthToken, withDownloadAuth } from '@/lib/authenticatedDownloadUrl';
+import { trustedSalesforceDocumentDownloadUrl } from '@/lib/salesforceDocumentDownloadUrl';
 
 const INVOICE_TABLE_TOKEN = '{{invoiceTable}}';
 const OLD_DEFAULT_EMAIL_INTRO = 'Please find below the latest overdue buyer invoices and buyer invoices due soon.';
@@ -866,6 +868,9 @@ function CollectionModal({ row, open, onClose, onSaved, onSendReminder, ownerOpt
     ...rowTraderOptions,
     ...ownerOptions,
   ]), [ownerOptions, rowTraderOptions]);
+  const hasPaymentAdviceDocument = Boolean(row?.collectionEvents?.some((event) => trustedSalesforceDocumentDownloadUrl(event.metadata?.document?.downloadUrl)));
+  const downloadAuthToken = useDownloadAuthToken(hasPaymentAdviceDocument);
+  const paymentAdviceUrl = (url) => withDownloadAuth(trustedSalesforceDocumentDownloadUrl(url), downloadAuthToken);
 
   useEffect(() => {
     if (!row) return;
@@ -1138,8 +1143,9 @@ function CollectionModal({ row, open, onClose, onSaved, onSendReminder, ownerOpt
             <div className="max-h-[58vh] overflow-auto p-3">
               {(row.collectionEvents || []).length ? (
                 <div className="space-y-2">
-                  {row.collectionEvents.map((event) => (
-                    <div key={event.id} className="rounded-lg border border-border bg-card p-3 text-sm">
+                  {row.collectionEvents.map((event) => {
+                    const downloadUrl = paymentAdviceUrl(event.metadata?.document?.downloadUrl);
+                    return <div key={event.id} className="rounded-lg border border-border bg-card p-3 text-sm">
                       <div className="flex items-start justify-between gap-3">
                         <span className="font-medium text-foreground">{event.status || event.eventType}</span>
                         <span className="shrink-0 text-xs text-muted-foreground">{fmtDateTime(event.createdAt)}</span>
@@ -1155,11 +1161,11 @@ function CollectionModal({ row, open, onClose, onSaved, onSendReminder, ownerOpt
                         {event.metadata?.adviceVerificationDate && <span>Verify by: {fmtDate(event.metadata.adviceVerificationDate)}</span>}
                         {event.metadata?.onHoldReason && <span>Hold reason: {event.metadata.onHoldReason}</span>}
                         {event.metadata?.onHoldReviewDate && <span>Review hold: {fmtDate(event.metadata.onHoldReviewDate)}</span>}
-                        {event.metadata?.document?.downloadUrl && <a href={event.metadata.document.downloadUrl} target="_blank" rel="noreferrer" className="font-medium text-primary hover:underline">Preview {event.metadata.document.fileName || 'payment advice'}</a>}
+                        {downloadUrl && <a href={downloadUrl} target="_blank" rel="noreferrer" className="font-medium text-primary hover:underline">Preview {event.metadata.document.fileName || 'payment advice'}</a>}
                         {event.actorEmail && <span>Updated by: {event.actorEmail}</span>}
                       </div>
-                    </div>
-                  ))}
+                    </div>;
+                  })}
                 </div>
               ) : (
                 <StateBlock title="No collection history" description="Save a status or note to create the first collection history entry." />

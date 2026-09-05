@@ -37,7 +37,7 @@ tmp/
 supabase/.branches/
 
 # Repo-isolated provider credentials, CLI state, and local target pins
-.fcos-cli/
+.fcos-cli
 .sf/
 .sfdx/
 supabase/.temp/

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { sfQuery } from './_salesforce.js';
-import { PAYMENT_DATA_RELIABLE_FROM } from '../src/lib/paymentDataReliability.js';
+import { PAYMENT_DATA_RELIABLE_FROM, isPaymentDataReliableStem, paymentDataReliableSoql } from '../src/lib/paymentDataReliability.js';
 
 export const CASHFLOW_BANK_CODES = Object.freeze(['UBS', 'DBS', 'ISP']);
 export const CASHFLOW_BANK_CURRENCIES = Object.freeze(['USD', 'EUR', 'HKD', 'CNY']);
@@ -237,7 +237,9 @@ export function parseCashflowBankStatementCsv(csvText, account = {}) {
       entryHash: hash(`${identity}:${occurrence}`),
     });
   }
-  rows.sort((left, right) => left.bookingDate.localeCompare(right.bookingDate) || left.entryHash.localeCompare(right.entryHash));
+  const closing = statementClosingBalance(rows);
+  // Stable sort preserves the bank's own same-day sequence; hashes are identity, not time.
+  rows.sort((left, right) => left.bookingDate.localeCompare(right.bookingDate));
   return {
     sourceHash: hash(source),
     bankCode,
@@ -249,9 +251,23 @@ export function parseCashflowBankStatementCsv(csvText, account = {}) {
       rowCount: rows.length,
       credits: rows.filter((row) => row.amount > 0).reduce((sum, row) => sum + row.amount, 0),
       debits: rows.filter((row) => row.amount < 0).reduce((sum, row) => sum + Math.abs(row.amount), 0),
-      closingBalance: [...rows].reverse().find((row) => row.runningBalance != null)?.runningBalance ?? null,
+      closingBalance: closing.amount,
+      closingBalanceWarning: closing.warning,
     },
   };
+}
+
+function statementClosingBalance(rows) {
+  const candidates = [rows, [...rows].reverse()].filter((ordered) => ordered.every((row, index) => {
+    if (!index) return true;
+    const previous = ordered[index - 1];
+    if (row.bookingDate < previous.bookingDate) return false;
+    return previous.runningBalance == null || row.runningBalance == null
+      || Math.abs(row.runningBalance - previous.runningBalance - row.amount) < 0.011;
+  }));
+  const amounts = [...new Set(candidates.map((ordered) => ordered.at(-1).runningBalance))];
+  const amount = amounts.length === 1 ? amounts[0] : null;
+  return { amount, warning: amount == null ? 'Closing balance unavailable: the final balance or transaction order is not evidenced. Enter a reviewed bank balance separately.' : null };
 }
 
 function serializeAccount(row) {
@@ -356,6 +372,22 @@ function serializeMatch(row) {
   };
 }
 
+const PAYMENT_FIELDS = `Id, Name, RecordType.DeveloperName, STEM__c, Supplier_Invoice__c,
+  Amount__c, Date__c, Bank__c, Reference__c, Is_Deposit__c, Commission_Invoice__c, Is_Volume_Discount__c,
+  STEM__r.Delivery_Date__c, STEM__r.Expected_Delivery_Date__c, STEM__r.CreatedDate,
+  Supplier_Invoice__r.STEM__c, Supplier_Invoice__r.STEM__r.Delivery_Date__c,
+  Supplier_Invoice__r.STEM__r.Expected_Delivery_Date__c, Supplier_Invoice__r.STEM__r.CreatedDate`;
+
+export function isEligibleCashflowBankPayment(row) {
+  if (!row || !['Receivable', 'Payable'].includes(row.RecordType?.DeveloperName)) return false;
+  if (row.Is_Deposit__c !== false || row.Is_Volume_Discount__c !== false || row.Commission_Invoice__c) return false;
+  if (!dateOnly(row.Date__c) || dateOnly(row.Date__c) < PAYMENT_DATA_RELIABLE_FROM || !(Math.abs(Number(row.Amount__c)) > 0)) return false;
+  const invoiceStemId = row.Supplier_Invoice__r?.STEM__c;
+  if (row.STEM__c && invoiceStemId && row.STEM__c.slice(0, 15) !== invoiceStemId.slice(0, 15)) return false;
+  const stem = row.STEM__c ? row.STEM__r : invoiceStemId ? row.Supplier_Invoice__r.STEM__r : null;
+  return Boolean(stem && isPaymentDataReliableStem(stem));
+}
+
 function normalizePayment(row) {
   const direction = String(row.RecordType?.DeveloperName || '').toLowerCase() === 'receivable' ? 'inflow'
     : String(row.RecordType?.DeveloperName || '').toLowerCase() === 'payable' ? 'outflow' : null;
@@ -363,7 +395,7 @@ function normalizePayment(row) {
     id: row.Id,
     name: row.Name || row.Id,
     direction,
-    stemId: row.STEM__c || null,
+    stemId: row.STEM__c || row.Supplier_Invoice__r?.STEM__c || null,
     supplierInvoiceId: row.Supplier_Invoice__c || null,
     date: dateOnly(row.Date__c),
     amount: Math.abs(Number(row.Amount__c || 0)),
@@ -373,20 +405,26 @@ function normalizePayment(row) {
   };
 }
 
-export async function loadCashflowRecordedPayments(dateFrom, dateTo) {
-  const reliableFrom = String(dateFrom || '') < PAYMENT_DATA_RELIABLE_FROM ? PAYMENT_DATA_RELIABLE_FROM : dateFrom;
-  const result = await sfQuery(`
-    SELECT Id, Name, RecordType.DeveloperName, STEM__c, Supplier_Invoice__c,
-           Amount__c, Date__c, Bank__c, Reference__c
+export async function loadCashflowRecordedPayments(dateFrom, dateTo, query = sfQuery) {
+  const from = dateOnly(dateFrom);
+  const to = dateOnly(dateTo);
+  if (!from || !to || from > to) throw bankError('Choose a valid payment date range.');
+  const reliableFrom = from < PAYMENT_DATA_RELIABLE_FROM ? PAYMENT_DATA_RELIABLE_FROM : from;
+  if (to < reliableFrom) return [];
+  const result = await query(`
+    SELECT ${PAYMENT_FIELDS}
       FROM Payment__c
      WHERE Date__c >= ${reliableFrom}
-       AND Date__c <= ${dateTo}
+       AND Date__c <= ${to}
        AND RecordType.DeveloperName IN ('Receivable','Payable')
        AND Is_Deposit__c = false
        AND Commission_Invoice__c = null
        AND Is_Volume_Discount__c = false
+       AND ((STEM__c != null AND ${paymentDataReliableSoql('STEM__r.')})
+         OR (STEM__c = null AND Supplier_Invoice__r.STEM__c != null AND ${paymentDataReliableSoql('Supplier_Invoice__r.STEM__r.')}))
      ORDER BY Date__c, Id`, { clean: true, limit: 100000 });
-  return (result.records || []).map(normalizePayment).filter((row) => row.direction && row.date && row.amount > 0);
+  if (result.totalSize > (result.records || []).length) throw bankError('Payment evidence exceeds the safe read limit. Narrow the date range.', 503, 'CASHFLOW_BANK_INCOMPLETE');
+  return (result.records || []).filter(isEligibleCashflowBankPayment).map(normalizePayment);
 }
 
 function matchScore(entry, payment, bankCode) {
@@ -438,7 +476,7 @@ function latestBalanceByAccount(rows) {
   return result;
 }
 
-function projectionForAccount(account, balance, entries, forecastRows, instruments, plannedOccurrences, dateTo) {
+export function projectionForAccount(account, balance, entries, forecastRows, instruments, plannedOccurrences, dateTo) {
   const startDate = balance?.balanceDate || null;
   const actualMovement = startDate == null ? 0 : entries
     .filter((row) => row.bankAccountId === account.id && row.bookingDate > startDate && row.bookingDate <= dateTo)
@@ -518,24 +556,33 @@ export function expandCashflowPlannedMovements(rows, dateFrom, dateTo) {
 export async function loadCashflowBankOverview({ client, dateFrom, dateTo, forecastRows = [], payments = null }) {
   const entryFrom = dateOnly(dateFrom) || dateOnly(new Date());
   const entryTo = dateOnly(dateTo) || entryFrom;
-  const [accountResult, balanceResult, importResult, entryResult, matchResult, instrumentResult, plannedResult, recordedPayments] = await Promise.all([
-    client.from('cashflow_bank_accounts').select('*').order('bank_code').order('currency').order('account_label'),
-    client.from('cashflow_bank_balance_snapshots').select('*').lte('balance_date', entryTo).order('balance_date', { ascending: false }),
+  const [accountResult, importResult, instrumentResult, plannedResult, recordedPayments] = await Promise.all([
+    readCompleteBankRows(() => client.from('cashflow_bank_accounts').select('*').order('bank_code').order('currency').order('account_label').order('id')),
     client.from('cashflow_bank_statement_imports').select('*').order('imported_at', { ascending: false }).limit(30),
-    client.from('cashflow_bank_statement_entries').select('*').gte('booking_date', entryFrom).lte('booking_date', entryTo).order('booking_date', { ascending: false }).limit(5000),
-    client.from('cashflow_bank_matches').select('*').order('reviewed_at', { ascending: false }).limit(5000),
-    client.from('cashflow_liquidity_instruments').select('*').order('start_date', { ascending: true }),
-    client.from('cashflow_bank_planned_movements').select('*').order('start_date', { ascending: true }),
+    readCompleteBankRows(() => client.from('cashflow_liquidity_instruments').select('*').order('start_date', { ascending: true }).order('id')),
+    readCompleteBankRows(() => client.from('cashflow_bank_planned_movements').select('*').order('start_date', { ascending: true }).order('id')),
     payments || loadCashflowRecordedPayments(entryFrom, entryTo),
   ]);
-  for (const result of [accountResult, balanceResult, importResult, entryResult, matchResult, instrumentResult, plannedResult]) {
+  for (const result of [accountResult, importResult, instrumentResult, plannedResult]) {
     if (result.error) throw bankError(`Bank reconciliation storage is unavailable: ${result.error.message}`, 503, 'CASHFLOW_BANK_STORAGE_UNAVAILABLE');
   }
   const accounts = (accountResult.data || []).map(serializeAccount);
-  const balanceIndex = latestBalanceByAccount(balanceResult.data || []);
+  const balanceResults = await Promise.all(accounts.map((account) => client.from('cashflow_bank_balance_snapshots').select('*')
+    .eq('bank_account_id', account.id).lte('balance_date', entryTo).order('balance_date', { ascending: false }).order('id').limit(1).maybeSingle()));
+  if (balanceResults.some((result) => result.error)) throw bankError('Reviewed bank balances could not be loaded completely.', 503, 'CASHFLOW_BANK_STORAGE_UNAVAILABLE');
+  const balanceIndex = latestBalanceByAccount(balanceResults.map((result) => result.data).filter(Boolean));
   const balances = [...balanceIndex.values()].map(serializeBalance);
-  const entries = (entryResult.data || []).map(serializeEntry);
-  const matches = (matchResult.data || []).map(serializeMatch);
+  const projectionFrom = balances.reduce((earliest, balance) => balance.balanceDate < earliest ? balance.balanceDate : earliest, entryFrom);
+  const entryResult = await readCompleteBankRows(() => client.from('cashflow_bank_statement_entries').select('*')
+    .gte('booking_date', projectionFrom).lte('booking_date', entryTo).order('booking_date', { ascending: false }).order('id'));
+  const bridgeEntries = entryResult.data.map(serializeEntry);
+  const entries = bridgeEntries.filter((row) => row.bookingDate >= entryFrom);
+  const matches = [];
+  for (let offset = 0; offset < entries.length; offset += 200) {
+    const ids = entries.slice(offset, offset + 200).map((row) => row.id);
+    const result = await readCompleteBankRows(() => client.from('cashflow_bank_matches').select('*').in('statement_entry_id', ids).order('id'));
+    matches.push(...result.data.map(serializeMatch));
+  }
   const instruments = (instrumentResult.data || []).map(serializeInstrument);
   const plannedMovements = (plannedResult.data || []).map(serializePlannedMovement);
   const plannedOccurrences = expandCashflowPlannedMovements(plannedMovements, entryFrom, entryTo);
@@ -543,7 +590,7 @@ export async function loadCashflowBankOverview({ client, dateFrom, dateTo, forec
   const projections = accounts.filter((row) => row.enabled).map((account) => ({
     account,
     balance: balances.find((row) => row.bankAccountId === account.id) || null,
-    projection: projectionForAccount(account, balances.find((row) => row.bankAccountId === account.id) || null, entries, forecastRows, instruments, plannedOccurrences, entryTo),
+    projection: projectionForAccount(account, balances.find((row) => row.bankAccountId === account.id) || null, bridgeEntries, forecastRows, instruments, plannedOccurrences, entryTo),
   }));
   const currencyRouting = Object.fromEntries(CASHFLOW_BANK_CURRENCIES.map((currency) => {
     const candidates = accounts.filter((row) => row.enabled && row.currency === currency && row.isDefaultOperating);
@@ -572,6 +619,8 @@ export async function loadCashflowBankOverview({ client, dateFrom, dateTo, forec
     payments: recordedPayments,
     projections,
     currencyRouting,
+    statementEvidenceFrom: projectionFrom,
+    statementEvidenceComplete: true,
     summary: {
       importedEntries: entries.length,
       confirmed: reconciledEntries.filter((row) => row.reconciliationStatus === 'confirmed').length,
@@ -583,6 +632,19 @@ export async function loadCashflowBankOverview({ client, dateFrom, dateTo, forec
       unallocatedForecastByCurrency: Object.fromEntries(CASHFLOW_BANK_CURRENCIES.map((currency) => [currency, unallocatedForecast.filter((row) => row.currency === currency).length])),
     },
   };
+}
+
+export async function readCompleteBankRows(makeQuery, { maximumRows = 20000, pageSize = 1000 } = {}) {
+  const data = [];
+  // Read until an empty page, including when a server enforces a lower page cap.
+  for (;;) {
+    const result = await makeQuery().range(data.length, data.length + Math.min(pageSize, maximumRows + 1 - data.length) - 1);
+    if (result.error) throw bankError(`Bank reconciliation storage is unavailable: ${result.error.message}`, 503, 'CASHFLOW_BANK_STORAGE_UNAVAILABLE');
+    const page = result.data || [];
+    if (!page.length) return { data };
+    data.push(...page);
+    if (data.length > maximumRows) throw bankError('Bank evidence exceeds the safe read limit. Use a more recent reviewed balance or narrow the date range. No partial liquidity total is shown.', 503, 'CASHFLOW_BANK_INCOMPLETE');
+  }
 }
 
 function actor(context) {
@@ -677,8 +739,10 @@ export async function saveCashflowBankMatch(body, context) {
   let payment = null;
   if (status === 'confirmed') {
     if (!/^a\w{14,17}$/i.test(String(body.salesforcePaymentId || ''))) throw bankError('Choose an exact Salesforce Payment.');
-    const result = await sfQuery(`SELECT Id, Name, RecordType.DeveloperName, STEM__c, Supplier_Invoice__c, Amount__c, Date__c, Bank__c, Reference__c FROM Payment__c WHERE Id = '${String(body.salesforcePaymentId).replaceAll("'", "\\'")}' LIMIT 1`, { clean: true, limit: 1 });
-    payment = result.records?.[0] ? normalizePayment(result.records[0]) : null;
+    const result = await (context.querySalesforce || sfQuery)(`SELECT ${PAYMENT_FIELDS} FROM Payment__c WHERE Id = '${String(body.salesforcePaymentId).replaceAll("'", "\\'")}' LIMIT 1`, { clean: true, limit: 1 });
+    const rawPayment = result.records?.[0];
+    if (rawPayment && !isEligibleCashflowBankPayment(rawPayment)) throw bankError('This Payment is outside reliable trading-payment evidence. Legacy STEMs, deposits, commissions, discounts, and unresolved STEM links cannot be reconciled here.', 409, 'CASHFLOW_BANK_PAYMENT_INELIGIBLE');
+    payment = rawPayment ? normalizePayment(rawPayment) : null;
     if (!payment) throw bankError('The Salesforce Payment could not be re-read.', 409, 'CASHFLOW_BANK_PAYMENT_NOT_FOUND');
     const score = matchScore(entry, payment, account.bankCode);
     if (score == null) throw bankError('The selected Salesforce Payment does not match this bank, currency, direction, amount, and two-day date window.', 409, 'CASHFLOW_BANK_PAYMENT_MISMATCH');

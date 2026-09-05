@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   Check,
@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { appClient } from "@/api/appClient";
+import { createLatestRequestGate } from "@/lib/latestRequest";
 import PageHeader from "@/components/common/PageHeader";
 import PageMethodology from "@/components/common/PageMethodology";
 import StateBlock from "@/components/common/StateBlock";
@@ -1715,6 +1716,11 @@ export default function MasterContracts() {
   const [featureReason, setFeatureReason] = useState("");
   const [preflight, setPreflight] = useState(null);
   const selectedContractId = searchParams.get("contractId") || "";
+  const listRequestGateRef = useRef(createLatestRequestGate());
+  const detailRequestGateRef = useRef(createLatestRequestGate());
+  const optionsRequestGateRef = useRef(createLatestRequestGate());
+  const selectedContractIdRef = useRef(selectedContractId);
+  selectedContractIdRef.current = selectedContractId;
 
   const invoke = useCallback(
     async (name, payload = {}, requestOptions = {}) => {
@@ -1730,25 +1736,34 @@ export default function MasterContracts() {
 
   const loadList = useCallback(
     async ({ force = false } = {}) => {
+      const request = listRequestGateRef.current.begin("master-contract-list");
+      const isActive = () => request.isCurrent();
       force ? setRefreshing(true) : setLoading(true);
       setError("");
       try {
         const result = await invoke(
           "masterContractsList",
           { force },
-          { cache: !force },
+          { cache: !force, signal: request.signal },
         );
+        if (!isActive()) return;
         setList(result);
-        if (!selectedContractId && result.contracts?.length)
+        if (!selectedContractIdRef.current && result.contracts?.length) {
+          selectedContractIdRef.current = result.contracts[0].id;
+          detailRequestGateRef.current.invalidate();
           setSearchParams(
             { contractId: result.contracts[0].id },
             { replace: true },
           );
+        }
       } catch (nextError) {
+        if (!isActive()) return;
         setError(nextError.message);
       }
-      setLoading(false);
-      setRefreshing(false);
+      if (isActive()) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     },
     [invoke, selectedContractId, setSearchParams],
   );
@@ -1756,17 +1771,22 @@ export default function MasterContracts() {
   const loadDetail = useCallback(
     async ({ force = false } = {}) => {
       if (!selectedContractId) {
+        detailRequestGateRef.current.invalidate();
         setDetail(null);
         return;
       }
+      const contractId = selectedContractId;
+      const request = detailRequestGateRef.current.begin(contractId);
+      const isActive = () => request.isCurrent() && selectedContractIdRef.current === contractId;
       force ? setRefreshing(true) : setLoading(true);
       setError("");
       try {
         const result = await invoke("masterContractDetail", {
-          contractId: selectedContractId,
+          contractId,
           includeLive: true,
           force,
-        });
+        }, { signal: request.signal });
+        if (!isActive()) return;
         setDetail(result);
         setPreflight(null);
         const created = new Set(
@@ -1784,8 +1804,10 @@ export default function MasterContracts() {
           ),
         );
       } catch (nextError) {
+        if (!isActive()) return;
         setError(nextError.message);
       }
+      if (!isActive()) return;
       setLoading(false);
       setRefreshing(false);
     },
@@ -1793,27 +1815,29 @@ export default function MasterContracts() {
   );
 
   const loadOptions = useCallback(async () => {
+    const request = optionsRequestGateRef.current.begin("master-contract-options");
     try {
-      setOptions(
-        await invoke(
+      const result = await invoke(
           "masterContractOptions",
           { query: "" },
-          { cache: true, cacheTtlMs: 60_000 },
-        ),
-      );
+          { cache: true, cacheTtlMs: 60_000, signal: request.signal },
+        );
+      if (request.isCurrent()) setOptions(result);
     } catch (nextError) {
-      setError(nextError.message);
+      if (request.isCurrent()) setError(nextError.message);
     }
   }, [invoke]);
 
   const queryOptions = useCallback(
     async ({ query = "", scope = "all", role = "" } = {}) => {
+      const request = optionsRequestGateRef.current.begin("master-contract-options");
       try {
         const result = await invoke(
           "masterContractOptions",
           { query, scope, role },
-          { cache: true, cacheTtlMs: 60_000 },
+          { cache: true, cacheTtlMs: 60_000, signal: request.signal },
         );
+        if (!request.isCurrent()) return;
         setOptions((current) => ({
           accounts: mergeOptionRows(current.accounts, result.accounts),
           products: mergeOptionRows(current.products, result.products),
@@ -1822,7 +1846,7 @@ export default function MasterContracts() {
           owners: mergeOptionRows(current.owners, result.owners),
         }));
       } catch (nextError) {
-        setError(nextError.message);
+        if (request.isCurrent()) setError(nextError.message);
       }
     },
     [invoke],
@@ -1839,6 +1863,7 @@ export default function MasterContracts() {
         imo,
         nrt,
       });
+      optionsRequestGateRef.current.invalidate();
       setOptions((current) => ({
         ...current,
         vessels: [...current.vessels.filter((row) => row.id !== created.id), created],
@@ -1860,16 +1885,27 @@ export default function MasterContracts() {
   useEffect(() => {
     void loadDetail();
   }, [loadDetail]);
+  useEffect(() => () => {
+    listRequestGateRef.current.invalidate();
+    detailRequestGateRef.current.invalidate();
+    optionsRequestGateRef.current.invalidate();
+  }, []);
 
   const refresh = async () => {
     await Promise.all([loadList({ force: true }), loadDetail({ force: true })]);
   };
+  const selectContract = (contractId) => {
+    selectedContractIdRef.current = contractId;
+    detailRequestGateRef.current.invalidate();
+    setSearchParams({ contractId });
+  };
   const save = async ({ contractKey, title, snapshot }) => {
+    const saveContractId = editorNew ? null : detail?.contract.id || null;
     setBusy(true);
     setError("");
     try {
       const result = await invoke("masterContractSave", {
-        contractId: editorNew ? null : detail?.contract.id || null,
+        contractId: saveContractId,
         contractKey,
         title,
         expectedRevision: editorNew
@@ -1882,9 +1918,17 @@ export default function MasterContracts() {
       setMessage(
         "Draft revision saved. Supplier evidence and owner approval are required before Salesforce creation.",
       );
-      if (editorNew) setSearchParams({ contractId: result.contractId });
+      const savedContractId = result.contractId || result.detail?.contract?.id || saveContractId;
+      if (editorNew && savedContractId) {
+        selectedContractIdRef.current = savedContractId;
+        detailRequestGateRef.current.invalidate();
+        setSearchParams({ contractId: savedContractId });
+      }
       await loadList({ force: true });
-      setDetail(result.detail);
+      if (savedContractId && selectedContractIdRef.current === savedContractId && result.detail) {
+        detailRequestGateRef.current.invalidate();
+        setDetail(result.detail);
+      }
     } catch (nextError) {
       setError(nextError.message);
     }
@@ -2193,7 +2237,7 @@ export default function MasterContracts() {
                   type="button"
                   key={contract.id}
                   className={`mb-1 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left ${contract.id === selectedContractId ? "bg-primary/10 text-primary" : "hover:bg-muted"}`}
-                  onClick={() => setSearchParams({ contractId: contract.id })}
+                  onClick={() => selectContract(contract.id)}
                 >
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-sm font-medium">

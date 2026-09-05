@@ -4,6 +4,7 @@ const ONE_DAY_MS = 86_400_000;
 
 import { SALESFORCE_CORPORATE_CURRENCY } from './_decisionDashboard.js';
 import { PAYMENT_DATA_RELIABLE_FROM } from '../src/lib/paymentDataReliability.js';
+import { resolvedBuyerInvoiceDueDate } from './_buyerInvoiceDates.js';
 import {
   BUYER_PAYMENT_CONSERVATIVENESS,
   DEFAULT_BUYER_PAYMENT_CONSERVATIVENESS,
@@ -428,23 +429,17 @@ function earliestDated(rows, fields, today, { allowPast = false } = {}) {
   return candidates.sort((left, right) => left.date.localeCompare(right.date))[0] || null;
 }
 
-function contractualReleaseCandidate(stem, cashflows, today) {
+function contractualReleaseCandidate(stem, cashflows, today, buyerInvoices = []) {
+  const invoiceDue = earliestDated(buyerInvoices, ['Invoice_Due_Date__c'], today, { allowPast: true });
   const cashflowDue = earliestDated(cashflows, ['Invoice_Due_Date__c'], today, { allowPast: true });
-  const stemDue = [stem.Invoice_Due_Date__c, stem.QLIK_Invoice_Due_Date__c, stem.Due_Date__c]
-    .map(dateOnly).filter(Boolean).sort()[0] || null;
-  const authoritativeDue = cashflowDue?.date || stemDue;
+  // Issued invoice/Cashflow evidence stays authoritative. Only the STEM fallback
+  // uses its override-aware contractual calculation, shared with invoice creation.
+  const stemDue = dateOnly(resolvedBuyerInvoiceDueDate(stem));
+  const authoritativeDue = invoiceDue?.date || cashflowDue?.date || stemDue;
   if (authoritativeDue) {
     return authoritativeDue < today
       ? { date: null, missedDate: authoritativeDue, source: 'past_due_unknown', sourceLabel: 'Past due — release unknown' }
-      : { date: authoritativeDue, source: cashflowDue ? 'cashflow_invoice_due' : 'stem_invoice_due', sourceLabel: cashflowDue ? 'Cashflow invoice due' : 'STEM invoice due' };
-  }
-
-  const expectedPayment = dateOnly(stem.Expected_Delivery_Date_Payment_Term__c)
-    || addDays(stem.Delivery_Date__c || stem.Expected_Delivery_Date__c, stem.Payment_Term_Number__c ?? stem.Payment_Term__c);
-  if (expectedPayment) {
-    return expectedPayment < today
-      ? { date: null, missedDate: expectedPayment, source: 'past_due_unknown', sourceLabel: 'Past due — release unknown' }
-      : { date: expectedPayment, source: 'expected_delivery_term', sourceLabel: 'Expected delivery + payment term' };
+      : { date: authoritativeDue, source: invoiceDue ? 'buyer_invoice_due' : cashflowDue ? 'cashflow_invoice_due' : 'stem_invoice_due', sourceLabel: invoiceDue ? 'Buyer invoice due' : cashflowDue ? 'Cashflow invoice due' : 'STEM invoice due' };
   }
   return { date: null, missedDate: null, source: 'unknown', sourceLabel: 'Release date unavailable' };
 }
@@ -466,8 +461,8 @@ export function adjustCreditForecastBusinessDay(date, today, blockedDates = []) 
   return { date: originalDate, originalDate, adjusted: originalDate !== dateOnly(date) };
 }
 
-function releaseCandidate(stem, cashflows, today, paymentModel = null, blockedDates = []) {
-  const contractual = contractualReleaseCandidate(stem, cashflows, today);
+function releaseCandidate(stem, cashflows, today, paymentModel = null, blockedDates = [], buyerInvoices = []) {
+  const contractual = contractualReleaseCandidate(stem, cashflows, today, buyerInvoices);
   if (!contractual.date && !contractual.missedDate) return contractual;
   if (!paymentModel) return contractual;
   const contractualDate = contractual.date || contractual.missedDate;
@@ -508,7 +503,7 @@ function scheduledReleases(cashflows, today) {
     .sort((left, right) => left.date.localeCompare(right.date));
 }
 
-function forecastEventsForExposure({ exposure, futurePayments, cashflows, stem, today, paymentModel, blockedDates }) {
+function forecastEventsForExposure({ exposure, futurePayments, cashflows, stem, today, paymentModel, blockedDates, buyerInvoices }) {
   const forecastEvents = [];
   let remaining = exposure;
   if (remaining > 0) {
@@ -531,13 +526,13 @@ function forecastEventsForExposure({ exposure, futurePayments, cashflows, stem, 
     }
   }
   if (Math.abs(remaining) > 0.01) {
-    const candidate = releaseCandidate(stem, cashflows, today, paymentModel, blockedDates);
+    const candidate = releaseCandidate(stem, cashflows, today, paymentModel, blockedDates, buyerInvoices);
     forecastEvents.push({ ...candidate, amount: remaining });
   }
   return forecastEvents;
 }
 
-export function buildStemCreditRelease({ stem = {}, payments = [], cashflows = [], today, accountId, paymentModel = null, blockedDates = [], exposureRange = null }) {
+export function buildStemCreditRelease({ stem = {}, payments = [], cashflows = [], buyerInvoices = [], today, accountId, paymentModel = null, blockedDates = [], exposureRange = null }) {
   const effectiveToday = dateOnly(today);
   if (!effectiveToday) throw new TypeError('today must be an ISO date');
   const exposure = number(stem.QLIK_Receivable_Balance__c) ?? 0;
@@ -555,15 +550,15 @@ export function buildStemCreditRelease({ stem = {}, payments = [], cashflows = [
     .map((payment) => ({ date: paymentDate(payment), amount: paymentAmount(payment), paymentId: payment.paymentId || payment.Id }))
     .filter((row) => row.date && row.amount != null && row.date > effectiveToday)
     .sort((left, right) => left.date.localeCompare(right.date));
-  const forecastEvents = forecastEventsForExposure({ exposure, futurePayments, cashflows, stem, today: effectiveToday, paymentModel, blockedDates });
+  const forecastEvents = forecastEventsForExposure({ exposure, futurePayments, cashflows, buyerInvoices, stem, today: effectiveToday, paymentModel, blockedDates });
   const rangeComplete = exposureRange?.complete === true
     && number(exposureRange.minimumExposure) != null
     && number(exposureRange.maximumExposure) != null;
   const minimumForecastEvents = rangeComplete
-    ? forecastEventsForExposure({ exposure: number(exposureRange.minimumExposure), futurePayments, cashflows, stem, today: effectiveToday, paymentModel, blockedDates })
+    ? forecastEventsForExposure({ exposure: number(exposureRange.minimumExposure), futurePayments, cashflows, buyerInvoices, stem, today: effectiveToday, paymentModel, blockedDates })
     : [];
   const maximumForecastEvents = rangeComplete
-    ? forecastEventsForExposure({ exposure: number(exposureRange.maximumExposure), futurePayments, cashflows, stem, today: effectiveToday, paymentModel, blockedDates })
+    ? forecastEventsForExposure({ exposure: number(exposureRange.maximumExposure), futurePayments, cashflows, buyerInvoices, stem, today: effectiveToday, paymentModel, blockedDates })
     : [];
   const primaryForecast = forecastEvents.find((event) => event.date) || forecastEvents[0] || null;
   return {
@@ -1133,6 +1128,7 @@ export function buildAccountCreditStatement({
     stem,
     payments: paymentsByStem[stem.Id] || [],
     cashflows: cashflowsByStem[stem.Id] || [],
+    buyerInvoices: buyerInvoicesByStem[stem.Id] || [],
     today,
     accountId: stem.Account__c,
     paymentModel: paymentModelForStem(stem),
@@ -1186,6 +1182,7 @@ export function buildAccountCreditStatement({
       stem,
       payments: paymentsByStem[stem.Id] || [],
       cashflows: cashflowsByStem[stem.Id] || [],
+      buyerInvoices: buyerInvoicesByStem[stem.Id] || [],
       today,
       accountId: stem.Account__c,
       accountName: stem.Account__r?.Name || null,

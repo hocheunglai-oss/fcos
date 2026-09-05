@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Activity, ArrowRight, Loader2, RefreshCw, RotateCcw, TriangleAlert } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { loadMarketPulseSnapshot } from '@/hedge/api/marketData';
@@ -7,6 +7,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { cn } from '@/lib/utils';
+import { createLatestRequestGate } from '@/lib/latestRequest';
 import { MarketSignedText, MarketSignedValue } from '@/components/markets/MarketSignedValue';
 
 const REGIME_CLASSES = {
@@ -19,7 +20,8 @@ const REGIME_CLASSES = {
 
 function formatMarketValue(value, unit) {
   if (value == null || !Number.isFinite(Number(value))) return 'Unavailable';
-  return `${Number(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${unit}`;
+  const decimals = unit === 'USD/BBL' ? 3 : 2;
+  return `${Number(value).toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals })} ${unit}`;
 }
 
 function PublishedComparison({ comparison }) {
@@ -142,18 +144,23 @@ export default function MarketPulse({ open, onOpenChange, onResetPosition, trigg
   const [loading, setLoading] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [error, setError] = useState('');
+  const requestGateRef = useRef(createLatestRequestGate());
 
   const load = useCallback(async ({ force = false } = {}) => {
+    const request = requestGateRef.current.begin('market-pulse-popover');
     if (force) setUpdating(true);
     else setLoading(true);
     setError('');
     try {
-      setData(await loadMarketPulseSnapshot({ force }));
+      const next = await loadMarketPulseSnapshot({ force, signal: request.signal });
+      if (request.isCurrent()) setData(next);
     } catch (loadError) {
-      setError(loadError?.message || 'Market Pulse is temporarily unavailable.');
+      if (request.isCurrent()) setError(loadError?.message || 'Market Pulse is temporarily unavailable.');
     } finally {
-      setLoading(false);
-      setUpdating(false);
+      if (request.isCurrent()) {
+        setLoading(false);
+        setUpdating(false);
+      }
     }
   }, []);
 
@@ -162,9 +169,27 @@ export default function MarketPulse({ open, onOpenChange, onResetPosition, trigg
   }, [data, error, load, loading, open]);
 
   useEffect(() => {
+    if (!open) {
+      requestGateRef.current.invalidate();
+      setData(null);
+      setLoading(false);
+      setUpdating(false);
+      setError('');
+    }
+  }, [open]);
+
+  useEffect(() => () => requestGateRef.current.invalidate(), []);
+
+  useEffect(() => {
     const handleMarketPulseChanged = () => {
       if (open) load({ force: true });
-      else setData(null);
+      else {
+        requestGateRef.current.invalidate();
+        setData(null);
+        setLoading(false);
+        setUpdating(false);
+        setError('');
+      }
     };
     window.addEventListener('fcos:market-pulse-changed', handleMarketPulseChanged);
     return () => window.removeEventListener('fcos:market-pulse-changed', handleMarketPulseChanged);
