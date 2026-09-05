@@ -23,6 +23,10 @@ Manual inspection used the approved Otto profile. The automated Playwright suite
 
 ## Release gates
 
-Publish an isolated draft PR, wait for required quality checks, build an exact-commit Vercel preview, and verify that preview with authenticated Otto desktop/mobile access before promotion. Production authentication verified on the current release is a baseline, not proof of the candidate release. Keep production unchanged if candidate authentication or required checks are unavailable.
+Publish an isolated draft PR and wait for required quality checks. Deploy the exact commit as a staged Production candidate with `vercel deploy --prod --skip-domain`, so the build and runtime use the existing FCUNO configuration without moving the live domain. Verify with authenticated Otto desktop/mobile access before promoting that same deployment. Production authentication verified on the current release is a baseline, not proof of the candidate release. Keep production unchanged if candidate authentication or required checks are unavailable.
+
+Standard Preview settings do not currently contain FCUNO configuration. The first candidate incorrectly used those settings and rendered legacy password login. Do not use that candidate or ask users for FCOS passwords. Hosted builds now fail when the FCUNO client flag, server federation flag, issuer or exact FCOS Supabase URL is absent or mismatched. Never copy Production secrets into Preview to bypass this check.
+
+For staged verification, retain the Production Auth Site URL and permit only the exact immutable candidate callback `/login?federated=1` in the existing FCOS Auth redirect allowlist. Verify the candidate's Vercel project and commit before adding it, preserve every other approved callback, and remove the temporary callback after verification/promotion. Do not use wildcard preview redirects, create test users, enable password login or transfer browser tokens.
 
 Account Insight must preserve its directory request count, rows, filters, pagination, actual workspace scroll container and originating button focus. Updated authenticated E2E assertions cover that release gate.
