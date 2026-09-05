@@ -1,6 +1,8 @@
 import path from 'node:path';
 
-const PREVIEW_HOST = /^fcos-[a-z0-9-]+-hocheunglai-6535s-projects\.vercel\.app$/;
+// Deployment-specific URLs only: mutable fcos-git-* branch aliases are unsafe
+// for a check-then-authenticate release gate.
+const PREVIEW_HOST = /^fcos-[a-z0-9]{9}-hocheunglai-6535s-projects\.vercel\.app$/;
 const FULL_GIT_SHA = /^[0-9a-f]{40}$/;
 const SAFE_STORAGE_STATE = /^\/tmp\/fcos-e2e-[A-Za-z0-9._-]+\.json$/;
 

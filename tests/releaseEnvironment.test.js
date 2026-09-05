@@ -6,7 +6,7 @@ import { assertReleaseBrowserEnvironment, verifyReleasePreviewArtifact, verifyRe
 const releaseSha = 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678';
 
 const validEnvironment = {
-  FCOS_E2E_BASE_URL: 'https://fcos-git-quality-gates-hocheunglai-6535s-projects.vercel.app/',
+  FCOS_E2E_BASE_URL: 'https://fcos-a1b2c3d4e-hocheunglai-6535s-projects.vercel.app/',
   FCOS_E2E_PREVIEW_SHA: releaseSha,
   FCOS_RELEASE_SHA: releaseSha,
   FCOS_E2E_STORAGE_STATE: '/tmp/fcos-e2e-release.json',
@@ -16,7 +16,7 @@ const validEnvironment = {
 
 test('strict release browser verification accepts only a supplied preview linked to the full release SHA', () => {
   const environment = assertReleaseBrowserEnvironment(validEnvironment);
-  assert.equal(environment.baseUrl, 'https://fcos-git-quality-gates-hocheunglai-6535s-projects.vercel.app');
+  assert.equal(environment.baseUrl, 'https://fcos-a1b2c3d4e-hocheunglai-6535s-projects.vercel.app');
   assert.equal(environment.previewSha, validEnvironment.FCOS_RELEASE_SHA);
 });
 
@@ -26,6 +26,16 @@ test('strict release browser verification fails closed without renewable authent
 });
 
 test('strict release browser verification rejects a mismatched, off-host, or unsafe preview target', () => {
+  assert.throws(
+    () => assertReleaseBrowserEnvironment({ ...validEnvironment, FCOS_E2E_BASE_URL: 'https://fcos-git-main-hocheunglai-6535s-projects.vercel.app' }),
+    /FCOS Vercel preview URL/,
+  );
+  for (const alias of ['production', 'qa']) {
+    assert.throws(
+      () => assertReleaseBrowserEnvironment({ ...validEnvironment, FCOS_E2E_BASE_URL: `https://fcos-${alias}-hocheunglai-6535s-projects.vercel.app` }),
+      /FCOS Vercel preview URL/,
+    );
+  }
   assert.throws(
     () => assertReleaseBrowserEnvironment({ ...validEnvironment, FCOS_E2E_PREVIEW_SHA: 'd'.repeat(40) }),
     /must match FCOS_RELEASE_SHA/,
