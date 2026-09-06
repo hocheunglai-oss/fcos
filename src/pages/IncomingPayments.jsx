@@ -30,6 +30,7 @@ import { Label } from '@/components/ui/label';
 import { useToast } from '@/components/ui/use-toast';
 import { useAuth } from '@/lib/AuthContext';
 import { readPageState, writePageState } from '@/lib/pageStateCache';
+import { clientSessionState } from '@/lib/clientSessionState';
 import { cn } from '@/lib/utils';
 
 const PAGE_STATE_KEY = 'incoming-payments';
@@ -352,6 +353,7 @@ function CompactTableEmptyState({ icon: Icon, title, description }) {
 }
 
 export default function IncomingPayments({ reconciliationItems = [], embedded = false }) {
+  const pageSession = useRef(clientSessionState());
   const { request: requestPayments } = useNavigationAwareRequest('collaboration');
   const { toast } = useToast();
   const { isAdministrator, hasCapability } = useAuth();
@@ -403,7 +405,7 @@ export default function IncomingPayments({ reconciliationItems = [], embedded = 
   const setThresholdDrafts = (value) => updatePageState({ thresholdDrafts: value });
 
   useEffect(() => {
-    writePageState(PAGE_STATE_KEY, pageState);
+    writePageState(PAGE_STATE_KEY, pageState, pageSession.current);
   }, [pageState]);
 
   const load = async (options = {}) => {

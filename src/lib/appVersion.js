@@ -4,6 +4,18 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.203',
+    releasedAt: '2026-09-06',
+    title: 'Strengthen access, forecast consistency and release verification',
+    changes: [
+      'Protects STEM document downloads with scoped authorization and keeps session credentials out of document links.',
+      'Aligns credit forecast dates with saved override and contractual payment-term rules.',
+      'Preserves Markets capabilities during background refresh and blocks misconfigured hosted authentication.',
+      'Expands automated checks and patches compatible dependency advisories.',
+      'Isolates browser drafts and cached data between users and protects reference-table CSV exports.',
+    ],
+  },
+  {
     version: '2.0.200',
     releasedAt: '2026-09-05',
     title: 'Data-led Account Insight and tailored reports',

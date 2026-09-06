@@ -1,7 +1,8 @@
-import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { FULL_ACCESS, FULL_CAPABILITIES, isAdministratorUserType } from '@/lib/authModules';
-import { isSupabaseConfigured, supabase } from '@/lib/supabaseClient';
+import { authConfigurationError, isLocalAdminAllowed, isSupabaseConfigured, supabase } from '@/lib/supabaseClient';
 import { appClient } from '@/api/appClient';
+import { clientSessionState, isCurrentClientSession, setClientSessionOwner } from './clientSessionState.js';
 
 const AuthContext = createContext();
 
@@ -89,6 +90,8 @@ async function loadSupabaseUser() {
 }
 
 export const AuthProvider = ({ children }) => {
+  const authRequest = useRef(0);
+  const loggingOut = useRef(false);
   const [user, setUser] = useState(null);
   const [moduleAccess, setModuleAccess] = useState({});
   const [moduleAccessLevels, setModuleAccessLevels] = useState({});
@@ -100,9 +103,11 @@ export const AuthProvider = ({ children }) => {
   const [isLoadingPublicSettings] = useState(false);
   const [authError, setAuthError] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
-  const authMode = isSupabaseConfigured ? 'supabase' : 'local';
+  const authMode = isSupabaseConfigured ? 'supabase' : isLocalAdminAllowed ? 'local' : 'unavailable';
 
   const applyLocalAdmin = useCallback(() => {
+    if (!isLocalAdminAllowed) throw new Error(authConfigurationError);
+    setClientSessionOwner(LOCAL_ADMIN_USER.id);
     setUser(LOCAL_ADMIN_USER);
     setModuleAccess(FULL_ACCESS);
     setModuleAccessLevels(fullAccessLevels());
@@ -116,6 +121,9 @@ export const AuthProvider = ({ children }) => {
   }, []);
 
   const checkUserAuth = useCallback(async ({ showLoader = true } = {}) => {
+    if (loggingOut.current) return { user: null, stale: true };
+    const request = ++authRequest.current;
+    const session = clientSessionState();
     if (showLoader) setIsLoadingAuth(true);
     setAuthError(null);
     try {
@@ -124,6 +132,8 @@ export const AuthProvider = ({ children }) => {
         return { user: LOCAL_ADMIN_USER, error: null };
       }
       const result = await loadSupabaseUser();
+      if (request !== authRequest.current || !isCurrentClientSession(session)) return { user: null, stale: true };
+      setClientSessionOwner(result.user?.id);
       if (result.user) window.sessionStorage.removeItem(FCUNO_FORCE_REAUTH_KEY);
       setUser(result.user);
       setModuleAccess(result.access || {});
@@ -139,6 +149,8 @@ export const AuthProvider = ({ children }) => {
       setAuthChecked(true);
       return result;
     } catch (error) {
+      if (request !== authRequest.current || !isCurrentClientSession(session)) return { user: null, stale: true };
+      setClientSessionOwner(null);
       const nextError = { type: 'local_auth_error', message: error.message };
       setUser(null);
       setModuleAccess({});
@@ -151,7 +163,7 @@ export const AuthProvider = ({ children }) => {
       setAuthChecked(true);
       return { user: null, error: nextError };
     } finally {
-      if (showLoader) setIsLoadingAuth(false);
+      if (request === authRequest.current) setIsLoadingAuth(false);
     }
   }, [applyLocalAdmin]);
 
@@ -161,9 +173,17 @@ export const AuthProvider = ({ children }) => {
 
   useEffect(() => {
     if (!isSupabaseConfigured) return undefined;
-    const { data } = supabase.auth.onAuthStateChange((event) => {
+    const { data } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === 'INITIAL_SESSION' || event === 'TOKEN_REFRESHED') return;
+      if (loggingOut.current) return;
       appClient.functions.clearCache();
+      authRequest.current += 1;
+      if (event === 'SIGNED_OUT' || clientSessionState().ownerId !== session?.user?.id) {
+        setClientSessionOwner(null);
+        setUser(null);
+        setIsAuthenticated(false);
+        setIsLoadingAuth(event !== 'SIGNED_OUT');
+      }
       if (event === 'SIGNED_OUT') {
         setUser(null);
         setModuleAccess({});
@@ -219,6 +239,7 @@ export const AuthProvider = ({ children }) => {
 
   const refreshApplications = async () => {
     if (!isSupabaseConfigured) {
+      if (!isLocalAdminAllowed) throw new Error(authConfigurationError);
       setApplications(LOCAL_APPLICATIONS);
       return LOCAL_APPLICATIONS;
     }
@@ -259,6 +280,14 @@ export const AuthProvider = ({ children }) => {
   };
 
   const logout = async () => {
+    loggingOut.current = true;
+    authRequest.current += 1;
+    setIsLoadingAuth(true);
+    setAuthChecked(false);
+    setClientSessionOwner(null);
+    setUser(null);
+    setIsAuthenticated(false);
+    setAuthError({ type: 'auth_required' });
     appClient.functions.clearCache();
     let portalFailures = [];
     if (isSupabaseConfigured && isAuthenticated) {
@@ -294,7 +323,9 @@ export const AuthProvider = ({ children }) => {
     setBootstrapPreferences(null);
     setIsAuthenticated(false);
     setAuthChecked(true);
-    if (!isSupabaseConfigured) applyLocalAdmin();
+    loggingOut.current = false;
+    setIsLoadingAuth(false);
+    if (isLocalAdminAllowed) applyLocalAdmin();
     return { failures: portalFailures };
   };
 
@@ -342,7 +373,7 @@ export const AuthProvider = ({ children }) => {
     launchApplication,
   };
 
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  return <AuthContext.Provider value={value}><React.Fragment key={user?.id || 'signed-out'}>{children}</React.Fragment></AuthContext.Provider>;
 };
 
 export const useAuth = () => {

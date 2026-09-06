@@ -67,3 +67,30 @@ test('invalid headers and trader CSV assignment fail closed', () => {
   const traderColumn = normalizeAccountPicColumn({ label: 'Buyer Trader', inputType: 'buyer_trader' }, 1);
   assert.throws(() => parseAccountPicGridCsv('Buyer Trader\r\nSomeone\r\n', [traderColumn]), /inside FCOS/i);
 });
+
+test('dynamic PIC exports neutralize untrusted text while preserving numeric cells and exact protected headers', () => {
+  const columns = [
+    normalizeAccountPicColumn({ id: '11111111-1111-4111-8111-111111111111', label: '=Formula Header', inputType: 'text' }, 1),
+    normalizeAccountPicColumn({ id: '22222222-2222-4222-8222-222222222222', label: 'Balance', inputType: 'number' }, 2),
+    normalizeAccountPicColumn({ id: '33333333-3333-4333-8333-333333333333', label: 'Buyer Trader', inputType: 'buyer_trader' }, 3),
+    normalizeAccountPicColumn({ id: '44444444-4444-4444-8444-844444444444', label: 'Supplier Trader', inputType: 'supplier_trader' }, 4),
+  ];
+  const rows = [normalizeAccountPicGridRow({ cells: {
+    [columns[0].id]: '\u0000@malicious-cell',
+    [columns[1].id]: -42,
+    [columns[2].id]: { profileId: 'buyer', name: '=malicious-trader', email: 'buyer@example.test' },
+    [columns[3].id]: { profileId: 'supplier', name: '', email: '+malicious@example.test' },
+  } }, columns, 1)];
+  const exported = accountPicGridCsvText(columns, rows);
+  assert.match(exported, /^\uFEFF'=Formula Header,Balance,Buyer Trader,Supplier Trader\r\n'\u0000@malicious-cell,-42,'=malicious-trader,'\+malicious@example\.test\r\n$/);
+
+  const importableRows = [normalizeAccountPicGridRow({ cells: {
+    [columns[0].id]: 'ordinary text', [columns[1].id]: -42,
+  } }, columns, 1)];
+  const protectedHeaderExport = accountPicGridCsvText(columns, importableRows);
+  assert.equal(parseAccountPicGridCsv(protectedHeaderExport, columns)[0].cells[columns[1].id], -42);
+  assert.throws(
+    () => parseAccountPicGridCsv(protectedHeaderExport.replace("'=Formula Header", "''=Formula Header"), columns),
+    /headers must match/i,
+  );
+});

@@ -18,6 +18,12 @@ not run FCOS serverless API routes and is appropriate only for UI-only work.
 
 ### Authenticated browser CI
 
+Local administrator UI is available only on a loopback Vite development server
+when both Supabase settings are absent. Hosted builds and production bundles
+never use that fallback; incomplete or unapproved authentication configuration
+shows an error. Public configuration accepts a publishable or legacy anonymous
+key, never a secret/service-role key. Server authorization remains mandatory.
+
 Authenticated browser checks are fail-closed. For a pull request, the workflow
 requires a governed renewable FCUNO test identity (`FCOS_E2E_EMAIL` and
 `FCOS_E2E_PASSWORD`) and `FCOS_AUTH_E2E_ENABLED=true`. Using read-only GitHub
@@ -40,6 +46,14 @@ Lint covers all application JavaScript/JSX. Hook-dependency checks are being
 expanded component by component, starting with authenticated document previews.
 JavaScript type checking is deliberately incremental: `jsconfig.core.json` lists
 the covered security and client-core modules; it does not type-check all JSX.
+
+Sensitive page caches, workflow drafts and prefetched responses are bound to the
+verified FCOS user. Logout/account switching clears them and rejects work from
+the previous session. Same-user navigation and scoped draft recovery remain
+available. Legacy drafts without an owner are discarded rather than assigned to
+whichever user signs in next. Appearance and other non-sensitive preferences
+are not cleared. Buyer PIC CSV exports protect text against spreadsheet formula
+evaluation; genuinely numeric columns retain their numeric values.
 
 ## Vercel Environment Variables
 

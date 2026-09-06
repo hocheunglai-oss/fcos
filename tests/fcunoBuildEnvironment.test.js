@@ -8,6 +8,7 @@ const approved = {
   VITE_FCOS_ENABLE_FCUNO_OIDC: 'true', FCOS_ENABLE_FCUNO_FEDERATION: 'true',
   FCUNO_IDENTITY_ISSUER: FCOS_CONNECTION_POLICY.integrations.fcunoIdentityFederation.issuer,
   VITE_SUPABASE_URL: `https://${fcosConnectionIdentifier('supabase', 'Project ref')}.supabase.co`,
+  VITE_SUPABASE_ANON_KEY: 'sb_publishable_fixture',
 };
 test('hosted builds require the same FCUNO consumer and exact FCOS project', () => {
   assert.equal(assertFcunoBuildEnvironment(approved).authentication, 'fcuno');
@@ -15,6 +16,7 @@ test('hosted builds require the same FCUNO consumer and exact FCOS project', () 
   for (const key of ['VITE_FCOS_ENABLE_FCUNO_OIDC', 'FCOS_ENABLE_FCUNO_FEDERATION', 'FCUNO_IDENTITY_ISSUER', 'VITE_SUPABASE_URL']) {
     for (const value of ['', undefined, 'false', 'unapproved']) assert.throws(() => assertFcunoBuildEnvironment({ ...approved, [key]: value }), /FCUNO release configuration/);
   }
+  for (const value of ['', undefined, 'sb_secret_fixture']) assert.throws(() => assertFcunoBuildEnvironment({ ...approved, VITE_SUPABASE_ANON_KEY: value }), /FCUNO release configuration/);
 });
 test('local builds remain available but hosted scope cannot bypass via missing VERCEL marker', () => {
   assert.deepEqual(assertFcunoBuildEnvironment({}), { checked: false });

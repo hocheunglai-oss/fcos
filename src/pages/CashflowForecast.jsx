@@ -40,6 +40,7 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/components/ui/use-toast';
 import { readPageState, writePageState } from '@/lib/pageStateCache';
+import { clientSessionState } from '@/lib/clientSessionState';
 import { CASHFLOW_FORECAST_METHODOLOGY } from '@/lib/pageMethodologies';
 import { cn } from '@/lib/utils';
 import PaymentDataReliabilityBadge from '@/components/common/PaymentDataReliabilityBadge';
@@ -147,6 +148,7 @@ function sortValue(row, key) {
 }
 
 export default function CashflowForecast() {
+  const pageSession = useMemo(() => clientSessionState(), []);
   const { toast } = useToast();
   const { request: requestCashflow } = useNavigationAwareRequest('operational');
   const defaults = useMemo(() => {
@@ -180,8 +182,8 @@ export default function CashflowForecast() {
   const [selectedStemId, setSelectedStemId] = useState(null);
 
   useEffect(() => {
-    writePageState(PAGE_STATE_KEY, { dateFrom, dateTo, bucket, keyword, buyerGroup, supplier, view: activeView });
-  }, [dateFrom, dateTo, bucket, keyword, buyerGroup, supplier, activeView]);
+    writePageState(PAGE_STATE_KEY, { dateFrom, dateTo, bucket, keyword, buyerGroup, supplier, view: activeView }, pageSession);
+  }, [dateFrom, dateTo, bucket, keyword, buyerGroup, supplier, activeView, pageSession]);
 
   const load = async ({ force = false } = {}) => {
     setLoading(true);

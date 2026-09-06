@@ -1,7 +1,9 @@
 import { appClient } from '@/api/appClient';
+import { clientSessionKey, clientSessionState, isCurrentClientSession, onClientSessionReset } from './clientSessionState.js';
 
 const CACHE_TTL_MS = 30_000;
 const detailCache = new Map();
+onClientSessionReset(() => detailCache.clear());
 
 function currentEntry(termId) {
   const entry = detailCache.get(termId);
@@ -15,21 +17,26 @@ function currentEntry(termId) {
 
 export function prefetchSpecialTermDetail(termId) {
   if (!termId) return Promise.resolve(null);
-  const existing = currentEntry(termId);
+  const session = clientSessionState();
+  const key = clientSessionKey('special-term:', termId, session);
+  if (!key) return Promise.reject(new Error('Sign in to view Special Terms.'));
+  const existing = currentEntry(key);
   if (existing) return existing.promise;
   const promise = appClient.functions.invoke('specialTermDetail', { termId }, { cache: false })
     .then((response) => {
+      if (!isCurrentClientSession(session)) throw new Error('Your account changed. Open the term again.');
       if (response.data?.error) throw new Error(response.data.error);
       return response.data;
     })
     .catch((error) => {
-      detailCache.delete(termId);
+      if (detailCache.get(key)?.promise === promise) detailCache.delete(key);
       throw error;
     });
-  detailCache.set(termId, { createdAt: Date.now(), promise });
+  detailCache.set(key, { createdAt: Date.now(), promise });
   return promise;
 }
 
 export function invalidateSpecialTermDetail(termId) {
-  if (termId) detailCache.delete(termId);
+  const key = clientSessionKey('special-term:', termId);
+  if (key) detailCache.delete(key);
 }
