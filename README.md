@@ -7,9 +7,39 @@ FCOS is the live Supabase extension to Salesforce. Its existing Salesforce write
 ## Local Development
 
 ```bash
-pnpm install
-pnpm dev
+npm ci
+npm run dev:full
 ```
+
+`npm run dev:full` starts the Vercel development runtime and is the required
+command for an API-backed local flow. It verifies the FCOS connection profile
+before starting the server. `npm run dev:ui` starts only the Vite UI; it does
+not run FCOS serverless API routes and is appropriate only for UI-only work.
+
+### Authenticated browser CI
+
+Authenticated browser checks are fail-closed. For a pull request, the workflow
+requires a governed renewable FCUNO test identity (`FCOS_E2E_EMAIL` and
+`FCOS_E2E_PASSWORD`) and `FCOS_AUTH_E2E_ENABLED=true`. Using read-only GitHub
+deployment evidence, it discovers the newest Vercel Preview for the exact
+pull-request head commit, waiting at most five minutes with ten-second polls.
+An approved `FCOS_E2E_CANDIDATE_URL` is an optional fallback for a staged candidate;
+do not configure one static URL for multiple pull requests. Either path requires
+the canonical immutable FCOS deployment hostname, never a production alias.
+Before loading credentials, the workflow reads `/app-version.json` without
+redirects and requires its `commit` to equal the checked-out pull-request head SHA.
+It then exports the verified `FCOS_E2E_BASE_URL` for Playwright.
+If the identity or candidate is unavailable,
+browser verification is explicitly disabled and the pull-request job fails;
+it is never silently replaced by a production smoke test. The current FCUNO
+`/admin` form contract is pinned in `e2e/auth.setup.js`; credential entry is
+restricted to the configured FCUNO issuer and the callback must return to the
+exact candidate origin. Forced password changes and missing access fail the run.
+
+Lint covers all application JavaScript/JSX. Hook-dependency checks are being
+expanded component by component, starting with authenticated document previews.
+JavaScript type checking is deliberately incremental: `jsconfig.core.json` lists
+the covered security and client-core modules; it does not type-check all JSX.
 
 ## Vercel Environment Variables
 

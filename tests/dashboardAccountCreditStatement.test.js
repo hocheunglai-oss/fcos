@@ -145,8 +145,25 @@ test('expected delivery plus payment term is the final dated forecast fallback',
     today: '2026-08-16', accountId,
     stem: { Id: 'a01000000000003AAA', Account__c: accountId, QLIK_Receivable_Balance__c: 70, Expected_Delivery_Date__c: '2026-08-20', Payment_Term_Number__c: 30 },
   });
-  assert.equal(release.releaseDate, '2026-09-19');
+  assert.equal(release.releaseDate, '2026-09-18');
   assert.equal(release.releaseSource, 'expected_delivery_term');
+});
+
+
+test('credit due dates honor saved overrides, inclusive terms and manual-only cases', () => {
+  const base = { Id: 'a01000000000003AAA', Account__c: accountId, QLIK_Receivable_Balance__c: 70,
+    Delivery_Date__c: '2026-09-01', Expected_Delivery_Date__c: '2026-08-31', Payment_Term__c: '30',
+    Invoice_Due_Date__c: '2026-10-15', QLIK_Invoice_Due_Date__c: '2026-09-20' };
+  const release = (values, cashflows = []) => buildStemCreditRelease({ today: '2026-08-16', accountId, stem: { ...base, ...values }, cashflows });
+  assert.equal(release({ Due_Date_Override__c: true }).releaseDate, '2026-10-15');
+  assert.equal(release({ Due_Date_Override__c: false }).releaseDate, '2026-09-30');
+  assert.equal(release({ Due_Date_Override__c: false, Payment_Term__c: 'CIA' }).releaseDate, '2026-08-30');
+  assert.equal(release({ Due_Date_Override__c: true, Invoice_Due_Date__c: null }).releaseDate, null);
+  assert.equal(release({ Due_Date_Override__c: false, Not_Cancelled_STEM_Line_Item_Quantity__c: 0 }).releaseDate, null);
+  assert.equal(release({ Due_Date_Override__c: true, Not_Cancelled_STEM_Line_Item_Quantity__c: 0 }).releaseDate, '2026-10-15');
+  assert.equal(release({ Due_Date_Override__c: false, Delivery_Date__c: null }).releaseDate, '2026-09-29');
+  assert.equal(release({ Due_Date_Override__c: false, Delivery_Date__c: null, Expected_Delivery_Date__c: null }).releaseDate, null);
+  assert.equal(release({ Due_Date_Override__c: true }, [{ Invoice_Due_Date__c: '2026-09-25' }]).releaseDate, '2026-09-25');
 });
 
 test('signed negative receivables remain signed in exposure and projected balance movement', () => {
@@ -608,7 +625,7 @@ test('Statement Evidence cutoff remains absolute for every history scope', async
   assert.match(source, /scope === 'all'[\s\S]*Account__c IN \([^\n]+\) AND \$\{creditExposureDeliveryWhere\(\)\}/);
   assert.match(source, /Id IN \([^\n]+\) AND \$\{creditExposureDeliveryWhere\(\)\}/);
   assert.match(source, /mergeStems\(result\.records\)\.filter\(\(stem\) => isCreditExposureStemEligible\(stem\) && matchesScope\(stem\)\)/);
-  assert.match(source, /version: '16-allocation-evidence'/);
+  assert.match(source, /version: '17-due-date-override'/);
 });
 
 test('same-name credit fallback fails closed when more than one compatible snapshot reconciles', () => {

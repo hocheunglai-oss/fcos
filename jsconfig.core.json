@@ -13,6 +13,10 @@
   "files": [
     "api/_authenticatedFunction.js",
     "api/_requestTelemetry.js",
-    "api/_supabaseConfig.js"
+    "api/_supabaseConfig.js",
+    "api/_salesforceDocumentAccess.js",
+    "shared/salesforceReadRequest.js",
+    "src/lib/accountDisplay.js",
+    "src/lib/workNotificationGroups.js"
   ]
 }

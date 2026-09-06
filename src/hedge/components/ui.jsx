@@ -1,4 +1,4 @@
-import React, { useEffect, useId, useRef, useState } from "react";
+import React, { useEffect, useId, useRef } from "react";
 import {
   AlertTriangle,
   ChevronDown,

@@ -55,6 +55,8 @@ import { classifyBuyerPaymentEvidence } from '@/lib/paymentCollectionEvidence';
 import { matchesPaymentCollectionDisputeFilter, paymentCollectionDisputeState } from '@/lib/paymentCollectionDisputes';
 import { clearDraft, readDraft, sameDraftValue, useDraftAutosave } from '@/lib/draftAutosave';
 import { collectionWorkflowIssues } from '@/lib/workflowValidation';
+import { documentPreviewKind } from '@/lib/authenticatedDownloadUrl';
+import { AuthenticatedDocumentDownloadButton, AuthenticatedDocumentPreview } from '@/components/common/AuthenticatedDocumentPreview';
 
 const INVOICE_TABLE_TOKEN = '{{invoiceTable}}';
 const OLD_DEFAULT_EMAIL_INTRO = 'Please find below the latest overdue buyer invoices and buyer invoices due soon.';
@@ -860,6 +862,7 @@ function CollectionModal({ row, open, onClose, onSaved, onSendReminder, ownerOpt
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const [saveAttempted, setSaveAttempted] = useState(false);
+  const [previewDocument, setPreviewDocument] = useState(null);
   const ownerSelectRef = useRef(null);
   const rowTraderOptions = useMemo(() => splitBuyerTraderNames(row?.buyerTraderInCharge), [row?.buyerTraderInCharge]);
   const ownerChoices = useMemo(() => uniqueNames([
@@ -981,6 +984,7 @@ function CollectionModal({ row, open, onClose, onSaved, onSendReminder, ownerOpt
   };
 
   return (
+    <>
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4">
       <div className="max-h-[90vh] w-full max-w-5xl overflow-hidden rounded-xl border border-border bg-card shadow-2xl">
         <div className="flex items-start justify-between gap-4 border-b border-border p-4">
@@ -1155,7 +1159,11 @@ function CollectionModal({ row, open, onClose, onSaved, onSendReminder, ownerOpt
                         {event.metadata?.adviceVerificationDate && <span>Verify by: {fmtDate(event.metadata.adviceVerificationDate)}</span>}
                         {event.metadata?.onHoldReason && <span>Hold reason: {event.metadata.onHoldReason}</span>}
                         {event.metadata?.onHoldReviewDate && <span>Review hold: {fmtDate(event.metadata.onHoldReviewDate)}</span>}
-                        {event.metadata?.document?.downloadUrl && <a href={event.metadata.document.downloadUrl} target="_blank" rel="noreferrer" className="font-medium text-primary hover:underline">Preview {event.metadata.document.fileName || 'payment advice'}</a>}
+                        {event.metadata?.document?.downloadUrl && (documentPreviewKind(event.metadata.document) ? (
+                          <button type="button" onClick={() => setPreviewDocument({ ...event.metadata.document, stemId: row.stemId })} className="font-medium text-primary hover:underline">Preview {event.metadata.document.fileName || 'payment advice'}</button>
+                        ) : (
+                          <AuthenticatedDocumentDownloadButton document={{ ...event.metadata.document, stemId: row.stemId }} stemId={row.stemId} className="inline-flex items-center gap-1 font-medium text-primary hover:underline">Open {event.metadata.document.fileName || 'payment advice'}</AuthenticatedDocumentDownloadButton>
+                        ))}
                         {event.actorEmail && <span>Updated by: {event.actorEmail}</span>}
                       </div>
                     </div>
@@ -1169,6 +1177,14 @@ function CollectionModal({ row, open, onClose, onSaved, onSendReminder, ownerOpt
         </div>
       </div>
     </div>
+    {previewDocument && (
+      <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 p-4" onClick={() => setPreviewDocument(null)}>
+        <div onClick={(event) => event.stopPropagation()}>
+          <AuthenticatedDocumentPreview document={previewDocument} stemId={row.stemId} onClose={() => setPreviewDocument(null)} />
+        </div>
+      </div>
+    )}
+    </>
   );
 }
 

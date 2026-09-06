@@ -1,4 +1,6 @@
 import { chunkIds, cleanRecord, getApiVersion, getInstanceUrl, salesforceAuthMode, salesforceConfiguredAuthModes, sendJson, sfCompositeQueries, sfDownload, sfQuery, sfRequest } from '../_salesforce.js';
+import { assertStemReadRequest } from '../../shared/salesforceReadRequest.js';
+import { authorizeSalesforceDocument, headerBearerToken } from '../_salesforceDocumentAccess.js';
 import { disputeWorkflowDirectionLabel, disputeWorkflowEditableFilename, disputeWorkflowFileExtension, disputeWorkflowHongKongDateToken } from '../_disputeDocuments.js';
 import { buildDisputePartyRegistry, disputeSalesforceIdKey, findDisputeParty, resolveExtraCostSupplierLookup, resolveOriginalSupplierLookup } from '../_disputeParties.js';
 import { disputeQueueExtraCostProductName } from '../_disputeQueue.js';
@@ -757,16 +759,7 @@ function supabaseAdminClient() {
 }
 
 function bearerToken(req) {
-  const header = req?.headers?.authorization || req?.headers?.Authorization || '';
-  const match = String(header).match(/^Bearer\s+(.+)$/i);
-  if (match?.[1]) return match[1];
-
-  try {
-    const url = new URL(req?.url || '', 'http://localhost');
-    return url.searchParams.get('access_token') || url.searchParams.get('token') || null;
-  } catch {
-    return null;
-  }
+  return headerBearerToken(req);
 }
 
 async function requireAdministrator(req) {
@@ -1456,9 +1449,9 @@ const HANDLER_MODULE_ACCESS = {
   dashboardAccountExposureBatch: ['dashboard'],
   dashboardAccountInsightExport: ['dashboard'],
   salesforceTopBuyers: ['dashboard'],
-  salesforceStemDetail: ['dashboard', 'review', 'disputes', 'buyer_invoices', 'incoming_payments', 'cashflow_forecast', 'pnl', 'brokers'],
-  salesforceStemDocuments: ['dashboard', 'review', 'disputes', 'buyer_invoices', 'incoming_payments', 'cashflow_forecast', 'pnl', 'brokers'],
-  salesforceDocumentDownload: ['dashboard', 'review', 'disputes', 'buyer_invoices', 'incoming_payments', 'pnl', 'brokers'],
+  salesforceStemDetail: ['dashboard', 'review', 'disputes', 'buyer_invoices', 'incoming_payments', 'cashflow_forecast', 'pnl', 'brokers', 'hedge_desk'],
+  salesforceStemDocuments: ['dashboard', 'review', 'disputes', 'buyer_invoices', 'incoming_payments', 'cashflow_forecast', 'pnl', 'brokers', 'hedge_desk'],
+  salesforceDocumentDownload: ['dashboard', 'review', 'disputes', 'buyer_invoices', 'incoming_payments', 'cashflow_forecast', 'pnl', 'brokers', 'hedge_desk'],
   unofficialCompensationList: ['unofficial_compensation'],
   unofficialCompensationOptions: ['unofficial_compensation'],
   unofficialCompensationClaimCreate: ['unofficial_compensation'],
@@ -5209,7 +5202,7 @@ async function buyerInvoicePaymentAdviceSave(body, req, accessContext = null) {
         contentDocumentId,
         versionId: contentVersionId,
         fileName: `${title}.${extension}`,
-        downloadUrl: `/api/functions/salesforceDocumentDownload?kind=contentVersion&id=${encodeURIComponent(contentVersionId)}&filename=${encodeURIComponent(`${title}.${extension}`)}`,
+        downloadUrl: `/api/functions/salesforceDocumentDownload?stemId=${encodeURIComponent(stemId)}&kind=contentVersion&id=${encodeURIComponent(contentVersionId)}&filename=${encodeURIComponent(`${title}.${extension}`)}`,
         salesforceUrl: `${getInstanceUrl()}/lightning/r/ContentDocument/${contentDocumentId}/view`,
       };
     } catch (error) {
@@ -5861,41 +5854,6 @@ async function salesforceDashboard(body = {}, req = null, accessContext = null) 
     hasStatus,
     hasType,
     hasAmount,
-  };
-}
-
-async function salesforceStemDetail(body) {
-  const { stemId, updates, childObject, childId, childUpdates } = body;
-  if (!stemId) throw new Error('stemId required');
-  let actualStemId = stemId;
-  if (stemId.length < 15) {
-    const lookup = await sfQuery(`SELECT Id FROM stem__c WHERE KeyStem__c = '${String(stemId).replace(/'/g, "\\'")}' LIMIT 1`, { clean: true });
-    if (!lookup.records.length) throw new Error(`STEM with KeyStem__c '${stemId}' not found`);
-    actualStemId = lookup.records[0].Id;
-  }
-  if (childObject && childId && childUpdates && Object.keys(childUpdates).length) {
-    await sfRequest(`/sobjects/${childObject}/${childId}`, {
-      method: 'PATCH',
-      body: childUpdates,
-    });
-  }
-  if (updates && Object.keys(updates).length) {
-    await sfRequest(`/sobjects/stem__c/${actualStemId}`, {
-      method: 'PATCH',
-      body: updates,
-    });
-  }
-  const [record, lineItems, extraCosts, buyerBrokers] = await Promise.all([
-    sfRequest(`/sobjects/stem__c/${actualStemId}`).then(cleanRecord),
-    sfQuery(`SELECT Id, Name, Product__c, Product__r.Name, Product__r.Family, Supplier_Name__c, BDN_Company__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_Max__c, Subtotal_Sell_At__c, Subtotal_Buy_At__c, Total_Price__c, Total_Cost__c, Supplier_Invoice__c, Payment_Term__c, BDN_Number__c, Quantity_in_MT__c, Is_Quantity_Range__c, Cancelled__c, Buyers_Brokers_Commission_Per_Unit__c, Commission_Cost__c, Supplier_Broker__c, Suppliers_Brokers_Commission_Per_Unit__c, Suppliers_Brokers_Commission_Lumpsum__c, Offer_Line_Item__r.UnitPrice, Offer_Line_Item__r.Supplier_Unit_Price__c FROM STEM_Line_Item__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`, { clean: true, softFail: true }),
-    sfQuery(`SELECT Id, Name, Description__c, Product2Id__c, Product2Id__r.Name, Supplier_Name__c, Quantity__c, Unit_Price__c, Unit_Cost__c, Line_Total__c, Line_Total_Buy__c, Supplier_Invoice__c, Supplier_Issued__c, Payment_Term__c, Cancelled__c FROM STEM_Extra_Cost__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`, { clean: true, softFail: true }),
-    sfQuery(`SELECT Id, Buyer_Broker__c, Refcode_Index__c, Exported__c, Commission_Lumpsum__c, STEM_Line_Item__r.Id FROM STEM_Buyer_Broker__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`, { clean: true, softFail: true }),
-  ]);
-  return {
-    record,
-    lineItems: lineItems.records || [],
-    extraCosts: extraCosts.records || [],
-    buyerBrokers: buyerBrokers.records || [],
   };
 }
 
@@ -7957,7 +7915,7 @@ function buildContentVersionFilename(document, version) {
   return cleanDownloadFilename(`${title}.${extension}`);
 }
 
-async function salesforceStemDocumentsUncached(body = {}, req = null, accessContext = null) {
+async function loadStemDocumentScope(body = {}, accessContext = null) {
   const actualStemId = await resolveStemId(body.stemId, accessContext);
   const record = await sfRequest(`/sobjects/stem__c/${actualStemId}`).then(cleanRecord);
   const relatedRecords = [];
@@ -8041,6 +7999,11 @@ async function salesforceStemDocumentsUncached(body = {}, req = null, accessCont
     addRelatedRecord(relatedRecords, seenRecordIds, related);
   }
 
+  return { actualStemId, record, relatedRecords };
+}
+
+async function salesforceStemDocumentsUncached(body = {}, req = null, accessContext = null) {
+  const { actualStemId, record, relatedRecords } = await loadStemDocumentScope(body, accessContext);
   const recordMap = Object.fromEntries(relatedRecords.map((related) => [related.id, related]));
   const relatedIds = relatedRecords.map((related) => related.id);
   let contentLinks = [];
@@ -8098,7 +8061,7 @@ async function salesforceStemDocumentsUncached(body = {}, req = null, accessCont
       sourceLabel: related.sourceLabel || related.name || 'Related Record',
       sourceObject: related.sourceObject || null,
       sourceRecordId: link.LinkedEntityId,
-      downloadUrl: `/api/functions/salesforceDocumentDownload?kind=contentVersion&id=${encodeURIComponent(document.LatestPublishedVersionId)}&filename=${encodeURIComponent(fileName)}`,
+      downloadUrl: `/api/functions/salesforceDocumentDownload?stemId=${encodeURIComponent(actualStemId)}&kind=contentVersion&id=${encodeURIComponent(document.LatestPublishedVersionId)}&filename=${encodeURIComponent(fileName)}`,
       salesforceUrl: `${getInstanceUrl()}/${document.Id}`,
     });
   }
@@ -8122,7 +8085,7 @@ async function salesforceStemDocumentsUncached(body = {}, req = null, accessCont
       sourceLabel: related.sourceLabel || related.name || 'Related Record',
       sourceObject: related.sourceObject || null,
       sourceRecordId: attachment.ParentId,
-      downloadUrl: `/api/functions/salesforceDocumentDownload?kind=attachment&id=${encodeURIComponent(attachment.Id)}&filename=${encodeURIComponent(fileName)}`,
+      downloadUrl: `/api/functions/salesforceDocumentDownload?stemId=${encodeURIComponent(actualStemId)}&kind=attachment&id=${encodeURIComponent(attachment.Id)}&filename=${encodeURIComponent(fileName)}`,
       salesforceUrl: `${getInstanceUrl()}/${attachment.Id}`,
     });
   }
@@ -8146,7 +8109,7 @@ async function salesforceStemDocumentsUncached(body = {}, req = null, accessCont
 async function salesforceStemDocuments(body = {}, req = null, accessContext = null) {
   const stemId = String(body.stemId || '').trim();
   const cached = await cachedSalesforceValue({
-    namespace: 'salesforce-stem-documents',
+    namespace: 'salesforce-stem-documents-v2-scoped-download',
     ttlSeconds: 15,
     payload: { stemId },
     tags: ['salesforce:documents', 'salesforce:stem', `salesforce:documents:${stemId}`],
@@ -8158,13 +8121,15 @@ async function salesforceStemDocuments(body = {}, req = null, accessContext = nu
   return cached.value;
 }
 
-async function salesforceDocumentDownload(req, res) {
+async function salesforceDocumentDownload(req, res, accessContext) {
   const url = new URL(req.url, 'http://localhost');
   const kind = url.searchParams.get('kind');
   const id = url.searchParams.get('id');
   const filename = cleanDownloadFilename(url.searchParams.get('filename') || 'salesforce-document');
-  if (!isSalesforceId(id)) return sendJson(res, { error: 'Valid document id required' }, 400);
-  const path = kind === 'attachment' ? `/sobjects/Attachment/${encodeURIComponent(id)}/Body` : `/sobjects/ContentVersion/${encodeURIComponent(id)}/VersionData`;
+  const path = await authorizeSalesforceDocument({ kind, id, stemId: url.searchParams.get('stemId') }, {
+    loadScope: (stemId) => loadStemDocumentScope({ stemId }, accessContext),
+    queryRows: (soql) => queryRows(soql, { limit: 2000, softFail: false }),
+  });
   const file = await sfDownload(path);
   const asciiFilename = filename.replace(/[^\x20-\x7E]/g, '_');
   res.statusCode = 200;
@@ -15791,7 +15756,7 @@ function serializeDisputeWorkflowDocument(row) {
     linkedRecordIds: row.salesforce_linked_record_id ? [row.salesforce_linked_record_id] : [],
     uploadStatus: row.upload_status || 'complete',
     salesforceUrl: row.salesforce_url || null,
-    downloadUrl: `/api/functions/salesforceDocumentDownload?kind=contentVersion&id=${encodeURIComponent(versionId)}&filename=${encodeURIComponent(fileName)}`,
+    downloadUrl: `/api/functions/salesforceDocumentDownload?stemId=${encodeURIComponent(row.stem_id)}&kind=contentVersion&id=${encodeURIComponent(versionId)}&filename=${encodeURIComponent(fileName)}`,
     uploadedBy: row.uploaded_by || null,
     uploadedByEmail: row.uploaded_by_email || null,
     createdAt: row.created_at || null,
@@ -17731,29 +17696,8 @@ async function disputeBetaClose(body = {}, req, accessContext = null) {
 }
 
 async function salesforceStemDetailUncached(body, req = null, accessContext = null) {
-  const { stemId, updates, childObject, childId, childUpdates } = body;
-  if (!stemId) throw new Error('stemId required');
-
-  let actualStemId = stemId;
-  if (stemId.length < 15) {
-    const lookup = await queryRows(`SELECT Id FROM stem__c WHERE KeyStem__c = '${escapeSoql(stemId)}' LIMIT 1`, { softFail: true });
-    if (!lookup.length) throw new Error(`STEM with KeyStem__c '${stemId}' not found`);
-    actualStemId = lookup[0].Id;
-  }
-  await requireInterofficeStemAccess(actualStemId, accessContext);
-
-  if (childObject && childId && childUpdates && Object.keys(childUpdates).length > 0) {
-    await sfRequest(`/sobjects/${childObject}/${childId}`, {
-      method: 'PATCH',
-      body: childUpdates,
-    });
-  }
-  if (updates && Object.keys(updates).length > 0) {
-    await sfRequest(`/sobjects/stem__c/${actualStemId}`, {
-      method: 'PATCH',
-      body: updates,
-    });
-  }
+  assertStemReadRequest(body);
+  const actualStemId = await resolveStemId(body.stemId, accessContext);
 
   const [recordRaw, lineItems, extraCosts, buyerBrokers, buyerInvoices] = await Promise.all([
     sfRequest(`/sobjects/stem__c/${actualStemId}`).then(cleanRecord),
@@ -18029,8 +17973,7 @@ async function salesforceStemDetailUncached(body, req = null, accessContext = nu
 }
 
 async function salesforceStemDetailFull(body, req = null, accessContext = null) {
-  const hasWrite = Boolean((body?.updates && Object.keys(body.updates).length) || (body?.childUpdates && Object.keys(body.childUpdates).length));
-  if (hasWrite) return salesforceStemDetailUncached(body, req, accessContext);
+  assertStemReadRequest(body);
   const stemId = String(body?.stemId || '').trim();
   const cached = await cachedSalesforceValue({
     namespace: 'salesforce-stem-detail-v2',
@@ -19537,8 +19480,8 @@ export default async function handler(req, res) {
           res.setHeader('X-FCOS-External-Action', handlerPolicy.externalAction ? '1' : '0');
         }
         if (name === 'salesforceDocumentDownload') {
-          await requireHandlerAccess(name, req);
-          return await salesforceDocumentDownload(req, res);
+          const accessContext = await requireHandlerAccess(name, req);
+          return await salesforceDocumentDownload(req, res, accessContext);
         }
         if (name === 'dashboardAccountInsightExport') {
           const accessContext = await requireHandlerAccess(name, req);

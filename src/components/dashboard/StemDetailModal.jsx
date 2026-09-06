@@ -3,9 +3,10 @@ import { appClient } from '@/api/appClient';
 import { navigationCacheOptions } from '@/lib/navigationCachePolicy';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { format } from 'date-fns';
-import { Loader2, AlertCircle, ExternalLink, FileText, Download, Settings, Search, Eye, X, CheckCircle2 } from 'lucide-react';
+import { Loader2, AlertCircle, ExternalLink, FileText, Settings, Search, Eye, CheckCircle2 } from 'lucide-react';
 import { numericValue, textValue } from '@/lib/displayValue';
-import { useDownloadAuthToken, withDownloadAuth } from '@/lib/authenticatedDownloadUrl';
+import { documentPreviewKind } from '@/lib/authenticatedDownloadUrl';
+import { AuthenticatedDocumentDownloadButton, AuthenticatedDocumentPreview } from '@/components/common/AuthenticatedDocumentPreview';
 import { readDocumentSettings } from '@/lib/documentSettings';
 import PaymentDataReliabilityBadge from '@/components/common/PaymentDataReliabilityBadge';
 import { LEGACY_PAYMENT_DATA_LABEL } from '@/lib/paymentDataReliability';
@@ -160,19 +161,6 @@ function documentSearchText(document) {
   ].filter(Boolean).join(' ').toLowerCase();
 }
 
-function documentExtension(document) {
-  const filenameExtension = String(document.fileName || '').split('.').pop()?.toLowerCase();
-  return String(document.fileExtension || filenameExtension || '').toLowerCase();
-}
-
-function documentPreviewKind(document) {
-  const extension = documentExtension(document);
-  const fileType = String(document.fileType || '').toLowerCase();
-  if (extension === 'pdf' || fileType.includes('pdf')) return 'pdf';
-  if (['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(extension) || fileType.startsWith('image/')) return 'image';
-  return null;
-}
-
 function documentPurpose(document) {
   const sourceGroup = document.sourceGroup || 'Other Related';
   const text = [
@@ -195,11 +183,10 @@ function DocumentsSection({
   settings,
   showAll,
   setShowAll,
+  stemId,
 }) {
   const [searchTerm, setSearchTerm] = useState('');
   const [previewDocument, setPreviewDocument] = useState(null);
-  const downloadAuthToken = useDownloadAuthToken(documents.length > 0);
-  const documentUrl = (url) => withDownloadAuth(url, downloadAuthToken);
   const relevantGroups = new Set(settings.relevantSourceGroups || []);
   const baseDocuments = settings.showOnlyRelevant && !showAll
     ? documents.filter((document) => relevantGroups.has(document.sourceGroup))
@@ -222,7 +209,6 @@ function DocumentsSection({
     found: requirement.test(documents),
   }));
   const missingRequirements = requirementChecklist.filter((item) => !item.found);
-  const previewKind = previewDocument ? documentPreviewKind(previewDocument) : null;
 
   return (
     <div>
@@ -358,14 +344,13 @@ function DocumentsSection({
                           <Eye className="h-3 w-3" /> Open
                         </button>
                       ) : (
-                        <a
-                          href={documentUrl(document.downloadUrl)}
-                          target="_blank"
-                          rel="noopener noreferrer"
+                        <AuthenticatedDocumentDownloadButton
+                          document={document}
+                          stemId={stemId}
                           className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-muted-foreground hover:border-primary/40 hover:text-primary"
                         >
-                          <Download className="h-3 w-3" /> Open
-                        </a>
+                          Open
+                        </AuthenticatedDocumentDownloadButton>
                       )}
                     </div>
                   </div>
@@ -381,50 +366,13 @@ function DocumentsSection({
           className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 p-4"
           onClick={() => setPreviewDocument(null)}
         >
-          <div
-            className="flex h-[88vh] w-[min(1100px,94vw)] flex-col overflow-hidden rounded-xl border border-border bg-card shadow-2xl"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
-              <div className="min-w-0">
-                <div className="truncate text-sm font-semibold text-foreground">{previewDocument.fileName || previewDocument.title}</div>
-                <div className="mt-0.5 text-xs text-muted-foreground">{previewDocument.sourceGroup} · {previewDocument.sourceLabel || documentPurpose(previewDocument)}</div>
-              </div>
-              <div className="flex items-center gap-2">
-                <a
-                  href={documentUrl(previewDocument.downloadUrl)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1.5 text-xs text-muted-foreground hover:border-primary/40 hover:text-primary"
-                >
-                  <Download className="h-3.5 w-3.5" /> Download
-                </a>
-                <button
-                  type="button"
-                  onClick={() => setPreviewDocument(null)}
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border text-muted-foreground hover:border-primary/40 hover:text-primary"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
-            </div>
-            <div className="min-h-0 flex-1 bg-muted/20">
-              {previewKind === 'image' ? (
-                <div className="flex h-full items-center justify-center overflow-auto p-4">
-                  <img
-                    src={documentUrl(previewDocument.downloadUrl)}
-                    alt={previewDocument.fileName || previewDocument.title || 'Document preview'}
-                    className="max-h-full max-w-full rounded-md object-contain"
-                  />
-                </div>
-              ) : (
-                <iframe
-                  title={previewDocument.fileName || previewDocument.title || 'Document preview'}
-                  src={documentUrl(previewDocument.downloadUrl)}
-                  className="h-full w-full border-0 bg-background"
-                />
-              )}
-            </div>
+          <div onClick={(event) => event.stopPropagation()}>
+            <AuthenticatedDocumentPreview
+              document={previewDocument}
+              stemId={stemId}
+              onClose={() => setPreviewDocument(null)}
+              subtitle={`${previewDocument.sourceGroup} · ${previewDocument.sourceLabel || documentPurpose(previewDocument)}`}
+            />
           </div>
         </div>
       )}
@@ -1012,6 +960,7 @@ export default function StemDetailModal({ stemId, open, onClose }) {
                   settings={documentSettings}
                   showAll={showAllDocuments}
                   setShowAll={setShowAllDocuments}
+                  stemId={stemId}
                 />
               </div>
             )}

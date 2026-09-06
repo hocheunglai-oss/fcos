@@ -1,12 +1,14 @@
 import { existsSync } from 'node:fs';
 import { expect, test } from '@playwright/test';
+import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
 
 const authState = process.env.FCOS_E2E_STORAGE_STATE || '';
 const requireAuthenticatedCoverage = process.env.FCOS_REQUIRE_AUTH_E2E === '1';
 const hasRenewableAuth = Boolean(process.env.FCOS_E2E_EMAIL && process.env.FCOS_E2E_PASSWORD);
 const hasAuthenticatedCoverage = Boolean(authState) && (existsSync(authState) || hasRenewableAuth);
+const fcunoIssuer = new URL(FCOS_CONNECTION_POLICY.integrations.fcunoIdentityFederation.issuer).origin;
 if (requireAuthenticatedCoverage && !hasAuthenticatedCoverage) {
-  throw new Error('Authenticated FCOS browser coverage is required. Configure a storage-state file or the dedicated renewable test credentials.');
+  throw new Error('Authenticated FCOS browser coverage is required. Configure a storage-state file or the dedicated renewable FCUNO test credentials.');
 }
 const authenticatedWorkspaces = [
   ['/my-commitments', 'My Commitments'],
@@ -32,17 +34,26 @@ const mutatingOrMailboxWorkspaces = [
   ['/account-managers', 'Account Managers'],
 ];
 
-test('login is usable without an application session', async ({ page }) => {
+test('login delegates to the pinned FCUNO identity issuer', async ({ page }) => {
   const failures = [];
   page.on('pageerror', (error) => failures.push(error.message));
   await page.goto('/login');
-  await expect(page.getByRole('button', { name: /sign in/i })).toBeVisible();
-  await expect(page.locator('body')).not.toContainText('Something went wrong');
+  const continueWithFcuno = page.getByRole('button', { name: 'Continue with FCUNO', exact: true });
+  await expect.poll(async () => {
+    if (new URL(page.url()).origin === fcunoIssuer) return true;
+    return continueWithFcuno.isVisible().catch(() => false);
+  }, { timeout: 15_000 }).toBe(true);
+  if (new URL(page.url()).origin !== fcunoIssuer) {
+    await continueWithFcuno.click();
+    await page.waitForURL((url) => url.origin === fcunoIssuer, { timeout: 15_000 });
+  }
+  expect(new URL(page.url()).origin).toBe(fcunoIssuer);
+  expect(new URL(page.url()).pathname).toBe('/admin');
   expect(failures).toEqual([]);
 });
 
 test.describe('authenticated read-only workspace matrix', () => {
-  test.skip(!hasAuthenticatedCoverage, 'Configure a storage-state file or the dedicated renewable test credentials.');
+  test.skip(!hasAuthenticatedCoverage, 'Configure a storage-state file or the dedicated renewable FCUNO test credentials.');
   test.use({ storageState: authState });
 
   for (const [route, title, heading = title] of authenticatedWorkspaces) {
@@ -61,7 +72,7 @@ test.describe('authenticated read-only workspace matrix', () => {
 });
 
 test.describe('dedicated CI viewer cannot mutate guarded workspaces', () => {
-  test.skip(!hasAuthenticatedCoverage, 'Configure a storage-state file or the dedicated renewable test credentials.');
+  test.skip(!hasAuthenticatedCoverage, 'Configure a storage-state file or the dedicated renewable FCUNO test credentials.');
   test.use({ storageState: authState });
 
   for (const [route, title] of mutatingOrMailboxWorkspaces) {

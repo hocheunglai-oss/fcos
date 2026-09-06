@@ -36,31 +36,52 @@ jobs:
         run: supabase stop --no-backup
 
   authenticated-browser:
-    # The former permanent FCOS CI viewer was deliberately deleted. Keep the
-    # authenticated suite available, but run it only when a governed renewable
-    # test identity has been explicitly provisioned and enabled.
-    if: ${{ vars.FCOS_AUTH_E2E_ENABLED == 'true' }}
+    # A production alias can never stand in for the checked-out PR candidate.
+    # Missing governed credentials or a candidate is an explicit failed check,
+    # rather than a skipped/green browser validation.
+    if: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      deployments: read
     env:
-      FCOS_E2E_BASE_URL: https://fcos.fcuno.com
+      FCOS_E2E_CANDIDATE_URL: ${{ vars.FCOS_E2E_CANDIDATE_URL }}
+      FCOS_E2E_EXPECTED_COMMIT: ${{ github.event.pull_request.head.sha }}
       FCOS_E2E_STORAGE_STATE: /tmp/fcos-e2e-storage.json
-      FCOS_E2E_EMAIL: ${{ secrets.FCOS_E2E_EMAIL }}
-      FCOS_E2E_PASSWORD: ${{ secrets.FCOS_E2E_PASSWORD }}
-      FCOS_REQUIRE_AUTH_E2E: 1
+      FCOS_AUTH_E2E_ENABLED: ${{ vars.FCOS_AUTH_E2E_ENABLED }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
-      - run: npm ci
-      - run: npx playwright install --with-deps chrome
-      - name: Verify renewable authenticated browser credentials
+      - name: Require a renewable identity and exact preview candidate
         run: |
-          test -n "$FCOS_E2E_BASE_URL"
+          if [ "$FCOS_AUTH_E2E_ENABLED" != "true" ]; then
+            echo "::error::Authenticated browser verification is disabled. Provision and enable the governed renewable test identity."
+            exit 1
+          fi
+          test -n "$FCOS_E2E_EXPECTED_COMMIT"
+      - name: Resolve immutable candidate before loading credentials
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/verify-e2e-candidate.mjs
+      - name: Require renewable FCUNO test credentials
+        env:
+          FCOS_E2E_EMAIL: ${{ secrets.FCOS_E2E_EMAIL }}
+          FCOS_E2E_PASSWORD: ${{ secrets.FCOS_E2E_PASSWORD }}
+        run: |
           test -n "$FCOS_E2E_EMAIL"
           test -n "$FCOS_E2E_PASSWORD"
+      - run: npm ci
+      - run: npx playwright install --with-deps chrome
       - run: npm run test:e2e
+        env:
+          FCOS_REQUIRE_AUTH_E2E: 1
+          FCOS_E2E_EMAIL: ${{ secrets.FCOS_E2E_EMAIL }}
+          FCOS_E2E_PASSWORD: ${{ secrets.FCOS_E2E_PASSWORD }}
 
   dependency-review:
     if: github.event_name == 'pull_request'

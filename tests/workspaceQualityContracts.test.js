@@ -109,8 +109,11 @@ test('strict release gate includes migrations, Graph-only checks, build, and gov
   assert.match(browserSetup, /FCOS_E2E_EMAIL/);
   assert.match(browserSetup, /FCOS_E2E_PASSWORD/);
   assert.match(browserSetup, /storageState/);
-  assert.match(workflow, /FCOS_E2E_BASE_URL: https:\/\/fcos\.fcuno\.com/);
-  assert.match(workflow, /if: \$\{\{ vars\.FCOS_AUTH_E2E_ENABLED == 'true' \}\}/);
+  assert.match(workflow, /FCOS_E2E_CANDIDATE_URL: \$\{\{ vars\.FCOS_E2E_CANDIDATE_URL \}\}/);
+  assert.match(workflow, /node scripts\/verify-e2e-candidate\.mjs/);
+  assert.match(workflow, /ref: \$\{\{ github\.event\.pull_request\.head\.sha \}\}/);
+  assert.match(workflow, /FCOS_E2E_EXPECTED_COMMIT: \$\{\{ github\.event\.pull_request\.head\.sha \}\}/);
+  assert.doesNotMatch(workflow, /FCOS_E2E_BASE_URL: https:\/\/fcos\.fcuno\.com/);
   assert.doesNotMatch(workflow, /STORAGE_STATE_BASE64/);
 });
 
