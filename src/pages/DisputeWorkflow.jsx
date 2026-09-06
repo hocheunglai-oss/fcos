@@ -32,6 +32,10 @@ import { useAuth } from '@/lib/AuthContext';
 import { cn } from '@/lib/utils';
 import { useNavigationAwareRequest } from '@/hooks/useNavigationAwareRequest';
 
+const DETAIL_HEADER_LEFT = "px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground";
+const DETAIL_HEADER_RIGHT = "px-3 py-2 text-right font-semibold uppercase tracking-wide text-muted-foreground";
+const STICKY_HEADER_LEFT = "sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground";
+
 const ACTIVE_STAGES = ['Draft', 'Pending Approval', 'Revision Requested', 'Rejected', 'Approved - Pending Accounting', 'Accounting In Progress', 'Settled - Ready to Close', 'Closed'];
 const DISPUTE_DELIVERY_DATE_MIN = '2026-01-01';
 const ACTION_TYPES = [
@@ -706,13 +710,13 @@ function FinancialExposureSection({ stem, selectedAccountIds = [] }) {
           <table className="w-full min-w-[820px] text-xs">
             <thead>
               <tr className="border-b border-border bg-muted/40">
-                <th className="px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">Supplier</th>
-                <th className="px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">Supplier Invoice</th>
-                <th className="px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">Payment Due Date</th>
-                <th className="px-3 py-2 text-right font-semibold uppercase tracking-wide text-muted-foreground">Invoice Amount</th>
-                <th className="px-3 py-2 text-right font-semibold uppercase tracking-wide text-muted-foreground">Paid</th>
-                <th className="px-3 py-2 text-right font-semibold uppercase tracking-wide text-muted-foreground">Payable</th>
-                <th className="px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">Payment State</th>
+                <th className={DETAIL_HEADER_LEFT}>Supplier</th>
+                <th className={DETAIL_HEADER_LEFT}>Supplier Invoice</th>
+                <th className={DETAIL_HEADER_LEFT}>Payment Due Date</th>
+                <th className={DETAIL_HEADER_RIGHT}>Invoice Amount</th>
+                <th className={DETAIL_HEADER_RIGHT}>Paid</th>
+                <th className={DETAIL_HEADER_RIGHT}>Payable</th>
+                <th className={DETAIL_HEADER_LEFT}>Payment State</th>
               </tr>
             </thead>
             <tbody>
@@ -1711,12 +1715,12 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
               <table className="w-full min-w-[980px] text-xs">
                 <thead>
                   <tr className="border-b border-border bg-muted/40">
-                    <th className="px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">Action</th>
-                    <th className="px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">Party</th>
-                    <th className="px-3 py-2 text-right font-semibold uppercase tracking-wide text-muted-foreground">Amount</th>
-                    <th className="px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">Close / Balance</th>
-                    <th className="px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">Accounting</th>
-                    <th className="px-3 py-2 text-right font-semibold uppercase tracking-wide text-muted-foreground">Control</th>
+                    <th className={DETAIL_HEADER_LEFT}>Action</th>
+                    <th className={DETAIL_HEADER_LEFT}>Party</th>
+                    <th className={DETAIL_HEADER_RIGHT}>Amount</th>
+                    <th className={DETAIL_HEADER_LEFT}>Close / Balance</th>
+                    <th className={DETAIL_HEADER_LEFT}>Accounting</th>
+                    <th className={DETAIL_HEADER_RIGHT}>Control</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1801,7 +1805,7 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
             </div>
             <div className="overflow-x-auto rounded-lg border border-border">
               <table className="w-full min-w-[780px] text-xs">
-                <thead><tr className="border-b border-border bg-muted/40"><th className="px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">Document</th><th className="px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">Party / Action</th><th className="px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">Type</th><th className="px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">Uploaded</th><th className="px-3 py-2 text-right font-semibold uppercase tracking-wide text-muted-foreground">Open</th></tr></thead>
+                <thead><tr className="border-b border-border bg-muted/40"><th className={DETAIL_HEADER_LEFT}>Document</th><th className={DETAIL_HEADER_LEFT}>Party / Action</th><th className={DETAIL_HEADER_LEFT}>Type</th><th className={DETAIL_HEADER_LEFT}>Uploaded</th><th className={DETAIL_HEADER_RIGHT}>Open</th></tr></thead>
                 <tbody>
                   {documents.map((document) => {
                     const linkedAction = actions.find((action) => action.id === document.actionId);
@@ -2090,15 +2094,15 @@ export default function DisputeWorkflow() {
             <table className="w-full min-w-[1480px] text-xs">
               <thead>
                 <tr className="border-b border-border bg-muted/40">
-                  <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Stem</th>
-                  <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Workflow</th>
-                  <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Next Owner</th>
-                  <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Buyer / Invoice Due</th>
-                  <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Products</th>
-                  <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Supplier / Invoice Due</th>
-                  <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Salesforce Status</th>
+                  <th className={STICKY_HEADER_LEFT}>Stem</th>
+                  <th className={STICKY_HEADER_LEFT}>Workflow</th>
+                  <th className={STICKY_HEADER_LEFT}>Next Owner</th>
+                  <th className={STICKY_HEADER_LEFT}>Buyer / Invoice Due</th>
+                  <th className={STICKY_HEADER_LEFT}>Products</th>
+                  <th className={STICKY_HEADER_LEFT}>Supplier / Invoice Due</th>
+                  <th className={STICKY_HEADER_LEFT}>Salesforce Status</th>
                   <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-right font-semibold uppercase tracking-wide text-muted-foreground">Dispute P&L</th>
-                  <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Approval</th>
+                  <th className={STICKY_HEADER_LEFT}>Approval</th>
                   <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-right font-semibold uppercase tracking-wide text-muted-foreground">Manage</th>
                 </tr>
               </thead>

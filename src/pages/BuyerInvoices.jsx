@@ -58,6 +58,11 @@ import { collectionWorkflowIssues } from '@/lib/workflowValidation';
 import { documentPreviewKind } from '@/lib/authenticatedDownloadUrl';
 import { AuthenticatedDocumentDownloadButton, AuthenticatedDocumentPreview } from '@/components/common/AuthenticatedDocumentPreview';
 
+const COMPACT_HEADER_LEFT = "sticky top-0 z-10 bg-card px-2 py-2 text-left text-[10px] font-semibold uppercase leading-tight tracking-wide text-muted-foreground";
+const COMPACT_HEADER_RIGHT = "sticky top-0 z-10 bg-card px-2 py-2 text-right text-[10px] font-semibold uppercase leading-tight tracking-wide text-muted-foreground";
+const MUTED_HEADER_LEFT = "sticky top-0 z-10 bg-slate-50 px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500";
+const STANDARD_HEADER_LEFT = "sticky top-0 z-10 bg-card px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground";
+
 const INVOICE_TABLE_TOKEN = '{{invoiceTable}}';
 const OLD_DEFAULT_EMAIL_INTRO = 'Please find below the latest overdue buyer invoices and buyer invoices due soon.';
 const COLLECTION_STATUSES = ['To Contact', 'Awaiting Buyer', 'Promise to Pay', 'Payment Advice Received', 'Escalated', 'On Hold', 'Paid / Closed'];
@@ -2130,15 +2135,15 @@ function PaymentReminderModal({ row, rows = [], initialSettings, open, daysAhead
                     <table className="w-full min-w-[1180px] text-sm">
                       <thead>
                         <tr className="border-b border-slate-200 bg-slate-50">
-                          <th className="sticky top-0 z-10 bg-slate-50 px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Include</th>
-                          <th className="sticky top-0 z-10 bg-slate-50 px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">STEM</th>
-                          <th className="sticky top-0 z-10 bg-slate-50 px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Buyer</th>
-                          <th className="sticky top-0 z-10 bg-slate-50 px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Buyer Broker</th>
-                          <th className="sticky top-0 z-10 bg-slate-50 px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Routing</th>
+                          <th className={MUTED_HEADER_LEFT}>Include</th>
+                          <th className={MUTED_HEADER_LEFT}>STEM</th>
+                          <th className={MUTED_HEADER_LEFT}>Buyer</th>
+                          <th className={MUTED_HEADER_LEFT}>Buyer Broker</th>
+                          <th className={MUTED_HEADER_LEFT}>Routing</th>
                           <th className="sticky top-0 z-10 bg-slate-50 px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">Receivable</th>
-                          <th className="sticky top-0 z-10 bg-slate-50 px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Due Date</th>
+                          <th className={MUTED_HEADER_LEFT}>Due Date</th>
                           <th className="sticky top-0 z-10 bg-slate-50 px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">Overdue</th>
-                          <th className="sticky top-0 z-10 bg-slate-50 px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Collection</th>
+                          <th className={MUTED_HEADER_LEFT}>Collection</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -2461,12 +2466,12 @@ function CopyInvoiceSelectionModal({ row, candidates = [], open, onClose, onCopy
             <table className="w-full min-w-[900px] text-sm">
               <thead>
                 <tr className="border-b border-border bg-muted/40">
-                  <th className="sticky top-0 z-10 bg-card px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Include</th>
-                  <th className="sticky top-0 z-10 bg-card px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Stem</th>
-                  <th className="sticky top-0 z-10 bg-card px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Buyer</th>
-                  <th className="sticky top-0 z-10 bg-card px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Buyer Group</th>
+                  <th className={STANDARD_HEADER_LEFT}>Include</th>
+                  <th className={STANDARD_HEADER_LEFT}>Stem</th>
+                  <th className={STANDARD_HEADER_LEFT}>Buyer</th>
+                  <th className={STANDARD_HEADER_LEFT}>Buyer Group</th>
                   <th className="sticky top-0 z-10 bg-card px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Receivable Balance</th>
-                  <th className="sticky top-0 z-10 bg-card px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Due Date</th>
+                  <th className={STANDARD_HEADER_LEFT}>Due Date</th>
                   <th className="sticky top-0 z-10 bg-card px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">Overdue</th>
                 </tr>
               </thead>
@@ -3370,20 +3375,20 @@ export default function BuyerInvoices({ defaultQueueView = 'all', reconciliation
                 </colgroup>
                 <thead>
                   <tr className="border-b border-border bg-muted/40">
-                    <th className="sticky top-0 z-10 bg-card px-2 py-2 text-left text-[10px] font-semibold uppercase leading-tight tracking-wide text-muted-foreground">Stem</th>
-                    <th className="sticky top-0 z-10 bg-card px-2 py-2 text-left text-[10px] font-semibold uppercase leading-tight tracking-wide text-muted-foreground">Buyer</th>
-                    <th className="sticky top-0 z-10 bg-card px-2 py-2 text-left text-[10px] font-semibold uppercase leading-tight tracking-wide text-muted-foreground">Buyer broker</th>
-                    <th className="sticky top-0 z-10 bg-card px-2 py-2 text-right text-[10px] font-semibold uppercase leading-tight tracking-wide text-muted-foreground">Invoice amount</th>
-                    <th className="sticky top-0 z-10 bg-card px-2 py-2 text-right text-[10px] font-semibold uppercase leading-tight tracking-wide text-muted-foreground">Receivable balance</th>
-                    <th className="sticky top-0 z-10 bg-card px-2 py-2 text-left text-[10px] font-semibold uppercase leading-tight tracking-wide text-muted-foreground">Invoice due</th>
-                    <th className="sticky top-0 z-10 bg-card px-2 py-2 text-left text-[10px] font-semibold uppercase leading-tight tracking-wide text-muted-foreground">Buyer trader</th>
-                    <th className="sticky top-0 z-10 bg-card px-2 py-2 text-left text-[10px] font-semibold uppercase leading-tight tracking-wide text-muted-foreground">PSPRS</th>
-                    <th className="sticky top-0 z-10 bg-card px-2 py-2 text-left text-[10px] font-semibold uppercase leading-tight tracking-wide text-muted-foreground">Collection handler</th>
-                    <th className="sticky top-0 z-10 bg-card px-2 py-2 text-left text-[10px] font-semibold uppercase leading-tight tracking-wide text-muted-foreground">Next follow-up</th>
-                    <th className="sticky top-0 z-10 bg-card px-2 py-2 text-left text-[10px] font-semibold uppercase leading-tight tracking-wide text-muted-foreground">Payment evidence</th>
-                    <th className="sticky top-0 z-10 bg-card px-2 py-2 text-left text-[10px] font-semibold uppercase leading-tight tracking-wide text-muted-foreground">Status</th>
-                    <th className="sticky top-0 z-10 bg-card px-2 py-2 text-right text-[10px] font-semibold uppercase leading-tight tracking-wide text-muted-foreground">Overdue</th>
-                    <th className="sticky top-0 z-10 bg-card px-2 py-2 text-right text-[10px] font-semibold uppercase leading-tight tracking-wide text-muted-foreground">Actions</th>
+                    <th className={COMPACT_HEADER_LEFT}>Stem</th>
+                    <th className={COMPACT_HEADER_LEFT}>Buyer</th>
+                    <th className={COMPACT_HEADER_LEFT}>Buyer broker</th>
+                    <th className={COMPACT_HEADER_RIGHT}>Invoice amount</th>
+                    <th className={COMPACT_HEADER_RIGHT}>Receivable balance</th>
+                    <th className={COMPACT_HEADER_LEFT}>Invoice due</th>
+                    <th className={COMPACT_HEADER_LEFT}>Buyer trader</th>
+                    <th className={COMPACT_HEADER_LEFT}>PSPRS</th>
+                    <th className={COMPACT_HEADER_LEFT}>Collection handler</th>
+                    <th className={COMPACT_HEADER_LEFT}>Next follow-up</th>
+                    <th className={COMPACT_HEADER_LEFT}>Payment evidence</th>
+                    <th className={COMPACT_HEADER_LEFT}>Status</th>
+                    <th className={COMPACT_HEADER_RIGHT}>Overdue</th>
+                    <th className={COMPACT_HEADER_RIGHT}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>

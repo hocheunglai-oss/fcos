@@ -11,6 +11,9 @@ import { readDocumentSettings } from '@/lib/documentSettings';
 import PaymentDataReliabilityBadge from '@/components/common/PaymentDataReliabilityBadge';
 import { LEGACY_PAYMENT_DATA_LABEL } from '@/lib/paymentDataReliability';
 
+const FINANCIAL_HEADER_RIGHT = "sticky top-0 z-10 bg-card text-right py-2.5 px-3 font-semibold text-muted-foreground";
+const FINANCIAL_HEADER_LEFT = "sticky top-0 z-10 bg-card text-left py-2.5 px-3 font-semibold text-muted-foreground";
+
 const SF_BASE = "https://fratellicosulich.my.salesforce.com";
 
 const fmtDate = (v) => {
@@ -789,23 +792,23 @@ export default function StemDetailModal({ stemId, open, onClose }) {
                       <table className="w-full text-xs">
                         <thead>
                           <tr className="bg-muted/40 border-b border-border">
-                            <th className="sticky top-0 z-10 bg-card text-left py-2.5 px-3 font-semibold text-muted-foreground">Product</th>
-                            <th className="sticky top-0 z-10 bg-card text-left py-2.5 px-3 font-semibold text-muted-foreground">Supplier</th>
+                            <th className={FINANCIAL_HEADER_LEFT}>Product</th>
+                            <th className={FINANCIAL_HEADER_LEFT}>Supplier</th>
                             {lineItems.some(li => li.BDN_Company__c) && (
-                              <th className="sticky top-0 z-10 bg-card text-left py-2.5 px-3 font-semibold text-muted-foreground">BDN Company</th>
+                              <th className={FINANCIAL_HEADER_LEFT}>BDN Company</th>
                             )}
-                            <th className="sticky top-0 z-10 bg-card text-right py-2.5 px-3 font-semibold text-muted-foreground">Qty (MT)</th>
-                            <th className="sticky top-0 z-10 bg-card text-right py-2.5 px-3 font-semibold text-muted-foreground">Sell/Unit</th>
-                            <th className="sticky top-0 z-10 bg-card text-right py-2.5 px-3 font-semibold text-muted-foreground">Buy/Unit</th>
-                            <th className="sticky top-0 z-10 bg-card text-right py-2.5 px-3 font-semibold text-muted-foreground">Total Sell</th>
-                            <th className="sticky top-0 z-10 bg-card text-right py-2.5 px-3 font-semibold text-muted-foreground">Total Buy</th>
-                            <th className="sticky top-0 z-10 bg-card text-left py-2.5 px-3 font-semibold text-muted-foreground">Buyer Broker</th>
-                            <th className="sticky top-0 z-10 bg-card text-right py-2.5 px-3 font-semibold text-muted-foreground">Buyer Broker/Unit</th>
+                            <th className={FINANCIAL_HEADER_RIGHT}>Qty (MT)</th>
+                            <th className={FINANCIAL_HEADER_RIGHT}>Sell/Unit</th>
+                            <th className={FINANCIAL_HEADER_RIGHT}>Buy/Unit</th>
+                            <th className={FINANCIAL_HEADER_RIGHT}>Total Sell</th>
+                            <th className={FINANCIAL_HEADER_RIGHT}>Total Buy</th>
+                            <th className={FINANCIAL_HEADER_LEFT}>Buyer Broker</th>
+                            <th className={FINANCIAL_HEADER_RIGHT}>Buyer Broker/Unit</th>
                             {showSecondaryBuyerBrokerUnit && (
-                              <th className="sticky top-0 z-10 bg-card text-right py-2.5 px-3 font-semibold text-muted-foreground">Buyer Broker (Secondary)/Unit</th>
+                              <th className={FINANCIAL_HEADER_RIGHT}>Buyer Broker (Secondary)/Unit</th>
                             )}
-                            <th className="sticky top-0 z-10 bg-card text-left py-2.5 px-3 font-semibold text-muted-foreground">Supp Broker</th>
-                            <th className="sticky top-0 z-10 bg-card text-right py-2.5 px-3 font-semibold text-muted-foreground">Supp Broker/Unit</th>
+                            <th className={FINANCIAL_HEADER_LEFT}>Supp Broker</th>
+                            <th className={FINANCIAL_HEADER_RIGHT}>Supp Broker/Unit</th>
 
                           </tr>
                         </thead>
@@ -874,15 +877,15 @@ export default function StemDetailModal({ stemId, open, onClose }) {
                       <table className="w-full text-xs">
                         <thead>
                           <tr className="bg-muted/40 border-b border-border">
-                            <th className="sticky top-0 z-10 bg-card text-left py-2.5 px-3 font-semibold text-muted-foreground">Name</th>
-                            <th className="sticky top-0 z-10 bg-card text-left py-2.5 px-3 font-semibold text-muted-foreground">Product</th>
-                            <th className="sticky top-0 z-10 bg-card text-left py-2.5 px-3 font-semibold text-muted-foreground">Supplier</th>
-                            <th className="sticky top-0 z-10 bg-card text-right py-2.5 px-3 font-semibold text-muted-foreground">Qty (MT)</th>
-                            <th className="sticky top-0 z-10 bg-card text-right py-2.5 px-3 font-semibold text-muted-foreground">Sell/Unit</th>
-                            <th className="sticky top-0 z-10 bg-card text-right py-2.5 px-3 font-semibold text-muted-foreground">Buy/Unit</th>
-                            <th className="sticky top-0 z-10 bg-card text-right py-2.5 px-3 font-semibold text-muted-foreground">Total Sell</th>
-                            <th className="sticky top-0 z-10 bg-card text-right py-2.5 px-3 font-semibold text-muted-foreground">Total Buy</th>
-                            <th className="sticky top-0 z-10 bg-card text-right py-2.5 px-3 font-semibold text-muted-foreground">Net</th>
+                            <th className={FINANCIAL_HEADER_LEFT}>Name</th>
+                            <th className={FINANCIAL_HEADER_LEFT}>Product</th>
+                            <th className={FINANCIAL_HEADER_LEFT}>Supplier</th>
+                            <th className={FINANCIAL_HEADER_RIGHT}>Qty (MT)</th>
+                            <th className={FINANCIAL_HEADER_RIGHT}>Sell/Unit</th>
+                            <th className={FINANCIAL_HEADER_RIGHT}>Buy/Unit</th>
+                            <th className={FINANCIAL_HEADER_RIGHT}>Total Sell</th>
+                            <th className={FINANCIAL_HEADER_RIGHT}>Total Buy</th>
+                            <th className={FINANCIAL_HEADER_RIGHT}>Net</th>
                           </tr>
                         </thead>
                         <tbody>
