@@ -24,7 +24,7 @@ An approved reviewer starts **FCOS authenticated release evidence** using
 - the exact full lowercase PR head SHA;
 - the exact immutable FCOS Vercel deployment origin for that SHA.
 
-The workflow rejects a non-default-branch dispatch, checks out the immutable
+The workflow rejects a non-default-branch or unprotected-ref dispatch, checks out the immutable
 default-branch dispatch commit (`github.sha`) with checkout credentials disabled,
 and only then pauses at
 the protected `fcos-ci-readonly` environment. That environment must require
@@ -100,6 +100,18 @@ empty and cannot trigger operational reconciliation. Normal user workflows are
 unchanged. Signed identity sync, initial zero-permission identity provisioning
 and security telemetry remain system lifecycle operations, not CI business
 write permissions.
+
+### Preview configuration
+
+The CI branch requires the public OIDC enable flag, federation enable flag and
+pinned issuer in addition to the already-configured Preview backend. Scope
+these non-secret flags, and `FCOS_ENABLE_READ_ONLY_CI`, to the reviewed CI branch
+only. Keep `FCOS_DISABLE_SALESFORCE_WRITE` in place. Do not clone Production
+secrets into Preview, weaken deployment protection, or alter the live domain.
+An older staged Production candidate is not a substitute for the independently
+verified Git-linked Preview required by this harness. A candidate build is not
+an authorization to run credentials against it: the protected human review and
+verified CI entitlement are still required.
 
 ## Acceptance and retirement
 
