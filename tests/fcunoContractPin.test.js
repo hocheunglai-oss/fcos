@@ -37,7 +37,7 @@ test('CI authenticates immutable provider reads and cleans up only attempted dat
   const workflow = await readFile(new URL('../.github/workflows/quality.yml', import.meta.url), 'utf8');
   const codeJob = workflow.split('  code-and-database:')[1].split('  authenticated-browser:')[0];
   assert.match(codeJob, /permissions:\s+contents: read/);
-  assert.match(codeJob, /run: npm run verify:fcuno-contract\s+env:\s+GITHUB_TOKEN: \$\{\{ github\.token \}\}/);
+  assert.match(codeJob, /run: npm run verify:fcuno-contract\s+env:[\s\S]*?GITHUB_TOKEN: \$\{\{ github\.token \}\}/);
   assert.match(codeJob, /id: start-supabase\s+run: supabase start/);
   assert.match(codeJob, /always\(\) && steps\.start-supabase\.outcome != 'skipped' && steps\.start-supabase\.outcome != ''/);
 });

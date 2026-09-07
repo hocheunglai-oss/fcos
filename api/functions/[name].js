@@ -212,6 +212,7 @@ import {
   saveMarketIntelligenceAlertRules,
 } from '../_marketIntelligenceTrading.js';
 import { loadMarketPulseSnapshot } from '../_marketPulse.js';
+import { ciModuleAccess, isReadOnlyCiProfile, requireReadOnlyCiOperation } from '../_readOnlyCiAccess.js';
 import { analyzeMarketReportLibrary, loadMarketReportCatalogue } from '../_marketReportAnalysis.js';
 import {
   applyMasterContractPrice as applyMasterContractPriceService,
@@ -815,11 +816,15 @@ async function loadAuthBootstrapPreferences(client, userId) {
 
 async function authContext(body, req, accessContext) {
   const { client, authUser, profile } = accessContext || (await requireActiveUser(req));
+  const readOnlyCi = isReadOnlyCiProfile(profile);
   const preferencesPromise = loadAuthBootstrapPreferences(client, profile.id);
   let permissionValues;
   let capabilityValues;
 
-  if (isAdministratorUserType(profile.user_type)) {
+  if (readOnlyCi) {
+    permissionValues = ciModuleAccess(ADMIN_APP_MODULES.map((module) => module.id));
+    capabilityValues = Object.fromEntries([...ADMIN_CAPABILITY_IDS].map((id) => [id, false]));
+  } else if (isAdministratorUserType(profile.user_type)) {
     permissionValues = ADMIN_FULL_ACCESS;
     capabilityValues = ADMIN_FULL_CAPABILITIES;
   } else {
@@ -843,13 +848,13 @@ async function authContext(body, req, accessContext) {
   }
 
   const moduleAccess = Object.fromEntries(ADMIN_APP_MODULES.map((module) => [module.id, permissionCanView(module.id, permissionValues[module.id])]));
-  const applications = await listPortalApplicationsForUser({
+  const applications = readOnlyCi ? [] : await listPortalApplicationsForUser({
     client,
     profile,
     moduleAccess,
   });
   const bootstrapPreferences = await preferencesPromise;
-  schedulePortalOutboxRetry(client);
+  if (!readOnlyCi) schedulePortalOutboxRetry(client);
 
   return {
     user: {
@@ -860,6 +865,7 @@ async function authContext(body, req, accessContext) {
       user_type: profile.user_type,
       use_type_defaults: profile.use_type_defaults !== false,
       active: profile.active === true,
+      read_only_ci: readOnlyCi,
     },
     moduleAccess,
     moduleAccessLevels: {
@@ -1603,6 +1609,7 @@ const HANDLER_POLICY_REGISTRY = buildHandlerPolicyRegistry(HANDLER_MODULE_ACCESS
 
 async function userHasAnyModuleAccess(client, profile, moduleIds) {
   if (!moduleIds?.length) return true;
+  if (isReadOnlyCiProfile(profile)) return Object.values(ciModuleAccess(moduleIds)).some(Boolean);
   if (isAdministratorUserType(profile?.user_type)) return true;
 
   const validModuleIds = moduleIds.filter((moduleId) => ADMIN_MODULE_IDS.has(moduleId));
@@ -1623,6 +1630,7 @@ async function userHasAnyModuleAccess(client, profile, moduleIds) {
 }
 
 async function userHasCapability(client, profile, capabilityId) {
+  if (isReadOnlyCiProfile(profile)) return false;
   if (!ADMIN_CAPABILITY_IDS.has(capabilityId)) return false;
   if (isAdministratorUserType(profile?.user_type)) return true;
 
@@ -1773,6 +1781,7 @@ async function requireHandlerAccess(name, req) {
   }
   if (policy.authentication === 'cron') return null;
   const context = await requireActiveUser(req);
+  requireReadOnlyCiOperation(context.profile, name, {}, { mutation: policy.mutation && name !== 'hedgeMarkets' });
   const allowed = await userHasAnyModuleAccess(context.client, context.profile, policy.modules);
   if (!allowed) throw appError('You do not have access to this module.', 403);
   if (policy.capability) {
@@ -19499,6 +19508,7 @@ export default async function handler(req, res) {
         if (!fn) return sendJson(res, { error: `Unknown function: ${name}` }, 404);
         const accessContext = await requireHandlerAccess(name, req);
         const body = await readBody(req);
+        requireReadOnlyCiOperation(accessContext?.profile, name, body);
         const contract = validateFunctionRequest(name, body);
         if (!contract.ok) {
           throw appError(`Invalid ${name} request: ${contract.issues.join('; ')}.`, 400, 'FUNCTION_CONTRACT_INVALID', {

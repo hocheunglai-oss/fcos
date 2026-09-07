@@ -46,6 +46,8 @@ import { applyAppearancePreferences, listenForSystemAppearance, readAppearancePr
 import { WorkspaceChromeProvider } from '@/components/workspace/WorkspaceChrome';
 import DraggableWorkspaceUtility from '@/components/workspace/DraggableWorkspaceUtility';
 import WorkspaceErrorBoundary from '@/components/WorkspaceErrorBoundary';
+import AccessDenied from '@/components/AccessDenied';
+import { canRenderCiWorkspace } from '@/lib/readOnlyCiRoutes';
 
 const VersionAuditHistory = lazy(() => import('@/components/VersionAuditHistory'));
 const MarketPulse = lazy(() => import('@/components/market-pulse/MarketPulse'));
@@ -275,7 +277,7 @@ export default function Layout() {
       ]);
       if (!cancelled && workspaceResponse.data?.preferences) {
         let workspacePreferences = workspaceResponse.data.preferences;
-        if (!workspacePreferences.initialized) {
+        if (!workspacePreferences.initialized && !user.read_only_ci) {
           const currentAppearance = readAppearancePreferences();
           const migrated = await appClient.functions.invoke('workspacePreferencesSave', {
             sidebarMode: 'auto_hide',
@@ -857,7 +859,7 @@ export default function Layout() {
               resetKey={`${location.pathname}${location.search}`}
               onGoHome={() => navigate('/')}
             >
-              <Outlet />
+              {canRenderCiWorkspace(user, location.pathname) ? <Outlet /> : <AccessDenied />}
             </WorkspaceErrorBoundary>
           </div>
         </div>

@@ -131,7 +131,7 @@ test('discovers the newest exact-SHA FCOS Vercel Preview deployment and waits on
       throw new Error(`Unexpected URL ${url}`);
     },
   });
-  assert.deepEqual(result, { candidateUrl, commit, deploymentId: null });
+  assert.deepEqual(result, { candidateUrl, commit, deploymentId: null, githubDeploymentId: 101 });
   assert.equal(statusCalls, 2);
   assert.equal(calls.some((url) => url.includes('/deployments/100/statuses')), false);
 });
@@ -170,18 +170,56 @@ test('never accepts foreign, non-bot, wrong-SHA, or failed deployment records', 
   );
 });
 
-test('uses an explicit validated candidate without a GitHub token', async () => {
+function trustedCandidateResponse(url, providerUrl = candidateUrl) {
+  if (url.includes('/deployments?')) return jsonResponse([
+    { id: 123, sha: commit, environment: 'Preview', creator: { login: 'vercel[bot]' } },
+  ]);
+  if (url.includes('/deployments/123/statuses')) return jsonResponse([
+    { state: 'success', environment_url: providerUrl, creator: { login: 'vercel[bot]' } },
+  ]);
+  assert.equal(url, `${candidateUrl}/app-version.json`);
+  return jsonResponse({ commit, deploymentId: null });
+}
+
+test('explicit candidate must match independent provider evidence before its metadata is read', async () => {
+  const calls = [];
   const result = await resolveFcosE2eCandidate({
     candidateUrl,
     expectedCommit: commit,
+    githubToken: 'test-token',
     project,
     team,
     fetchImpl: async (url) => {
-      assert.equal(url, `${candidateUrl}/app-version.json`);
-      return jsonResponse({ commit, deploymentId: null });
+      calls.push(url);
+      return trustedCandidateResponse(url);
     },
   });
-  assert.deepEqual(result, { candidateUrl, commit, deploymentId: null });
+  assert.deepEqual(result, { candidateUrl, commit, deploymentId: null, githubDeploymentId: 123 });
+  assert.match(calls[0], /^https:\/\/api.github.com\/repos\/hocheunglai-oss\/fcos\/deployments\?/);
+  assert.match(calls[1], /\/deployments\/123\/statuses/);
+  assert.equal(calls[2], `${candidateUrl}/app-version.json`);
+});
+
+test('forged metadata, missing provider proof, and a different candidate URL cannot produce release evidence', async () => {
+  let artifactCalls = 0;
+  await assert.rejects(resolveFcosE2eCandidate({ candidateUrl, expectedCommit: commit,
+    fetchImpl: async () => { artifactCalls++; return jsonResponse({ commit }); },
+  }), /GITHUB_TOKEN is required/);
+  await assert.rejects(resolveFcosE2eCandidate({ candidateUrl, expectedCommit: commit,
+    githubToken: 'test-token', maxWaitMs: 0,
+    fetchImpl: async (url) => {
+      assert.match(url, /^https:\/\/api.github.com\//);
+      return jsonResponse([]);
+    },
+  }), /No successful immutable/);
+  await assert.rejects(resolveFcosE2eCandidate({ candidateUrl, expectedCommit: commit,
+    githubToken: 'test-token', maxWaitMs: 0,
+    fetchImpl: async (url) => {
+      if (url.endsWith('/app-version.json')) artifactCalls++;
+      return trustedCandidateResponse(url, candidateUrl.replace('a1b2c3d4e', 'z9y8x7w6v'));
+    },
+  }), /Requested candidate URL does not match/);
+  assert.equal(artifactCalls, 0);
 });
 
 test('exports only the validated resolved base URL for later workflow steps', async () => {
@@ -190,9 +228,10 @@ test('exports only the validated resolved base URL for later workflow steps', as
     env: {
       FCOS_E2E_CANDIDATE_URL: candidateUrl,
       FCOS_E2E_EXPECTED_COMMIT: commit,
+      GITHUB_TOKEN: 'test-token',
       GITHUB_ENV: '/tmp/github-env',
     },
-    fetchImpl: async () => jsonResponse({ commit, deploymentId: null }),
+    fetchImpl: async (url) => trustedCandidateResponse(url),
     append: async (...args) => writes.push(args),
   });
   assert.equal(result.candidateUrl, candidateUrl);

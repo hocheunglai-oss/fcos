@@ -11,12 +11,15 @@ if (requireAuthenticatedCoverage && !hasAuthenticatedCoverage) {
   throw new Error('Authenticated FCOS browser coverage is required. Configure a storage-state file or the dedicated renewable FCUNO test credentials.');
 }
 const authenticatedWorkspaces = [
+  ['/', 'Dashboard'],
+  ['/markets', 'Markets'],
+];
+
+const mutatingOrMailboxWorkspaces = [
   ['/my-commitments', 'My Commitments'],
   ['/growth-coaching', 'Growth & Coaching'],
   ['/projects-tasks', 'Projects & Tasks'],
   ['/fcos-improvements', 'FCOS Improvements'],
-  ['/', 'Dashboard'],
-  ['/markets', 'Markets'],
   ['/special-terms', 'Special Terms'],
   ['/payment-collections', 'Payment Collections'],
   ['/disputes', 'Dispute Workflow'],
@@ -27,9 +30,6 @@ const authenticatedWorkspaces = [
   ['/pnl', 'Qlik Validator'],
   ['/hedge-desk', 'Hedge Desk', 'Position control'],
   ['/settings', 'Settings'],
-];
-
-const mutatingOrMailboxWorkspaces = [
   ['/email-router', 'Email Router'],
   ['/account-managers', 'Account Managers'],
 ];
@@ -71,14 +71,14 @@ test.describe('authenticated read-only workspace matrix', () => {
   }
 });
 
-test.describe('dedicated CI viewer cannot mutate guarded workspaces', () => {
+test.describe('dedicated read-only CI identity cannot access other workspaces', () => {
   test.skip(!hasAuthenticatedCoverage, 'Configure a storage-state file or the dedicated renewable FCUNO test credentials.');
   test.use({ storageState: authState });
 
   for (const [route, title] of mutatingOrMailboxWorkspaces) {
     test(`${title} is denied`, async ({ page }) => {
       await page.goto(route);
-      await expect(page.getByText('Access denied', { exact: false }).first()).toBeVisible();
+      await expect(page.getByRole('heading', { name: /^Access denied$/i })).toBeVisible();
     });
   }
 });

@@ -47,9 +47,12 @@ export function canonicalFcosE2eCandidateUrl(value, { project = VERCEL_PROJECT, 
   return canonical;
 }
 
+// Checks artifact consistency only. Authentication callers must use the
+// resolver below, which first binds this URL/SHA to independent provider proof.
 export async function verifyFcosE2eCandidate({
   candidateUrl,
   expectedCommit,
+  protectionBypass,
   fetchImpl = globalThis.fetch,
   project = VERCEL_PROJECT,
   team = VERCEL_TEAM,
@@ -57,16 +60,19 @@ export async function verifyFcosE2eCandidate({
   const canonicalUrl = canonicalFcosE2eCandidateUrl(candidateUrl, { project, team });
   const commit = valueOrThrow(expectedCommit, 'FCOS_E2E_EXPECTED_COMMIT');
   if (!SHA.test(commit)) throw new Error('FCOS_E2E_EXPECTED_COMMIT must be a full lowercase Git commit SHA.');
+  if (protectionBypass && !/^[a-zA-Z0-9]{32}$/.test(protectionBypass)) throw new Error('The dedicated candidate protection credential is invalid.');
   if (typeof fetchImpl !== 'function') throw new Error('A fetch implementation is required to verify the candidate.');
   const metadataUrl = `${canonicalUrl}/app-version.json`;
   let response;
   try {
     response = await fetchImpl(metadataUrl, {
+      ...(protectionBypass ? { headers: { 'x-vercel-protection-bypass': protectionBypass } } : {}),
       redirect: 'error',
       signal: AbortSignal.timeout(20_000),
     });
-  } catch (error) {
-    throw new Error(`FCOS_E2E_CANDIDATE_URL must serve app-version.json without redirects: ${error.message}`);
+  } catch {
+    // A transport/provider error can echo request headers. Never log it.
+    throw new Error('FCOS_E2E_CANDIDATE_URL must serve app-version.json without redirects.');
   }
   if (response.redirected || (response.url && response.url !== metadataUrl)) {
     throw new Error('Candidate app-version.json must not redirect.');
@@ -79,7 +85,7 @@ export async function verifyFcosE2eCandidate({
     throw new Error('Candidate app-version.json must contain valid JSON.');
   }
   if (metadata?.commit !== commit) {
-    throw new Error(`Candidate commit ${metadata?.commit || 'missing'} does not match checked-out commit ${commit}.`);
+    throw new Error('Candidate commit does not match the checked-out commit.');
   }
   const deploymentId = metadata?.deploymentId ?? null;
   if (deploymentId !== null && !DEPLOYMENT_ID.test(String(deploymentId))) {
@@ -133,8 +139,8 @@ async function githubJson(fetchImpl, url, token) {
       redirect: 'error',
       signal: AbortSignal.timeout(20_000),
     });
-  } catch (error) {
-    throw new Error(`GitHub deployment lookup failed: ${error.message}`);
+  } catch {
+    throw new Error('GitHub deployment lookup failed.');
   }
   if (response.redirected || (response.url && response.url !== url)) {
     throw new Error('GitHub deployment lookup must not redirect.');
@@ -150,6 +156,7 @@ async function githubJson(fetchImpl, url, token) {
 export async function resolveFcosE2eCandidate({
   candidateUrl,
   expectedCommit,
+  protectionBypass,
   githubToken,
   fetchImpl = globalThis.fetch,
   sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
@@ -162,13 +169,8 @@ export async function resolveFcosE2eCandidate({
 } = {}) {
   const commit = valueOrThrow(expectedCommit, 'FCOS_E2E_EXPECTED_COMMIT');
   if (!SHA.test(commit)) throw new Error('FCOS_E2E_EXPECTED_COMMIT must be a full lowercase Git commit SHA.');
-  if (candidateUrl != null && String(candidateUrl) !== '') return verifyFcosE2eCandidate({
-    candidateUrl,
-    expectedCommit: commit,
-    fetchImpl,
-    project,
-    team,
-  });
+  const requestedUrl = candidateUrl != null && String(candidateUrl) !== ''
+    ? canonicalFcosE2eCandidateUrl(candidateUrl, { project, team }) : null;
   const token = valueOrThrow(githubToken, 'GITHUB_TOKEN');
   if (typeof fetchImpl !== 'function') throw new Error('A fetch implementation is required to resolve the candidate.');
   if (!Number.isFinite(maxWaitMs) || maxWaitMs < 0 || !Number.isFinite(pollMs) || pollMs <= 0) {
@@ -186,13 +188,19 @@ export async function resolveFcosE2eCandidate({
         throw new Error(`Newest FCOS Vercel Preview deployment ${deployment.id} reported ${status.state}.`);
       }
       if (status?.state === 'success' && typeof status.environment_url === 'string' && status.environment_url) {
-        return verifyFcosE2eCandidate({
-          candidateUrl: status.environment_url,
+        const providerUrl = canonicalFcosE2eCandidateUrl(status.environment_url, { project, team });
+        if (requestedUrl && requestedUrl !== providerUrl) {
+          throw new Error('Requested candidate URL does not match the newest successful Vercel Preview deployment for this commit.');
+        }
+        const artifact = await verifyFcosE2eCandidate({
+          candidateUrl: providerUrl,
           expectedCommit: commit,
+          protectionBypass,
           fetchImpl,
           project,
           team,
         });
+        return { ...artifact, githubDeploymentId: deployment.id };
       }
     }
     const remaining = deadline - now();
@@ -207,11 +215,12 @@ export async function main({ env = process.env, fetchImpl = globalThis.fetch, ap
   const verified = await resolveFcosE2eCandidate({
     candidateUrl: env.FCOS_E2E_CANDIDATE_URL,
     expectedCommit: env.FCOS_E2E_EXPECTED_COMMIT,
+    protectionBypass: env.FCOS_E2E_VERCEL_BYPASS,
     githubToken: env.GITHUB_TOKEN,
     fetchImpl,
   });
   if (env.GITHUB_ENV) await append(env.GITHUB_ENV, `FCOS_E2E_BASE_URL=${verified.candidateUrl}\n`, 'utf8');
-  console.log(`Verified FCOS candidate ${verified.candidateUrl} for ${verified.commit} (${verified.deploymentId}).`);
+  console.log(`Verified FCOS candidate ${verified.candidateUrl} for ${verified.commit} (GitHub deployment ${verified.githubDeploymentId}).`);
   return verified;
 }
 

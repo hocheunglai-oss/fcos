@@ -1,8 +1,10 @@
 import { expect, test as setup } from '@playwright/test';
 import { FCOS_CONNECTION_POLICY } from '../config/fcosConnections.js';
+import { FCOS_READ_ONLY_CI } from '../config/fcosCiIdentity.js';
+import { candidateAuthenticationState, writePrivateE2eState } from '../scripts/e2e-private-state.mjs';
 
 const authState = process.env.FCOS_E2E_STORAGE_STATE || '';
-const email = String(process.env.FCOS_E2E_EMAIL || '').trim();
+const email = String(process.env.FCOS_E2E_EMAIL || '').trim().toLowerCase();
 const password = String(process.env.FCOS_E2E_PASSWORD || '');
 const fcunoIssuer = new URL(FCOS_CONNECTION_POLICY.integrations.fcunoIdentityFederation.issuer).origin;
 const candidateBaseUrl = String(process.env.FCOS_E2E_BASE_URL || '').trim();
@@ -28,9 +30,27 @@ function assertFcunoAdminLocation(page) {
   expect(location.pathname).toBe('/admin');
 }
 
+function assertReadOnlyCiAuthorization(result) {
+  expect(result.status).toBe(200);
+  const context = result.body || {};
+  expect(context.user?.email).toBe(FCOS_READ_ONLY_CI.email);
+  expect(context.user?.read_only_ci).toBe(true);
+  expect(context.user?.user_type).toBe('viewer');
+  expect(context.user?.active).toBe(true);
+  const enabledModules = Object.entries(context.moduleAccess || {})
+    .filter(([, allowed]) => allowed === true)
+    .map(([module]) => module)
+    .sort();
+  expect(enabledModules).toEqual([...FCOS_READ_ONLY_CI.modules].sort());
+  const capabilities = Object.values(context.capabilities || {});
+  expect(capabilities.length).toBeGreaterThan(0);
+  expect(capabilities.every((allowed) => allowed === false)).toBe(true);
+}
+
 setup('authenticate through the pinned FCUNO identity issuer', async ({ page }) => {
   if (!authState) throw new Error('FCOS_E2E_STORAGE_STATE is required.');
   if (!email || !password) throw new Error('FCOS_E2E_EMAIL and FCOS_E2E_PASSWORD are required for the renewable FCUNO test identity.');
+  if (email !== FCOS_READ_ONLY_CI.email) throw new Error('Only the pinned read-only FCUNO identity may be used for CI.');
   if (!candidateOrigin || candidateOrigin === 'https://fcos.fcuno.com') throw new Error('FCOS_E2E_BASE_URL must be the verified non-production candidate origin.');
 
   await reachFcunoSignIn(page);
@@ -43,11 +63,22 @@ setup('authenticate through the pinned FCUNO identity issuer', async ({ page }) 
   assertFcunoAdminLocation(page);
   await page.getByLabel('Password', { exact: true }).fill(password);
   assertFcunoAdminLocation(page);
-  await page.getByRole('button', { name: 'Login', exact: true }).click();
+  // Observe the app's own bootstrap response, never inspect session storage or
+  // extract a bearer token from the browser to make an additional request.
+  const [authorizationResponse] = await Promise.all([
+    page.waitForResponse((response) => response.url() === `${candidateOrigin}/api/functions/authContext`
+      && response.request().method() === 'POST', { timeout: 60_000 }),
+    page.getByRole('button', { name: 'Login', exact: true }).click(),
+  ]);
 
   await page.waitForURL((url) => url.origin === candidateOrigin, { timeout: 30_000 });
   expect(new URL(page.url()).origin).toBe(candidateOrigin);
   await expect(page).not.toHaveURL(/\/login(?:\?|$)/);
   await expect(page.getByText('Dashboard', { exact: true }).first()).toBeVisible({ timeout: 30_000 });
-  await page.context().storageState({ path: authState });
+  assertReadOnlyCiAuthorization({ status: authorizationResponse.status(), body: await authorizationResponse.json() });
+  // Keep the FCUNO issuer session out of the persisted candidate state. The
+  // state is collected in memory and written through the private no-overwrite
+  // helper only after the callback reaches the verified candidate origin.
+  const state = candidateAuthenticationState(await page.context().storageState(), candidateOrigin);
+  await writePrivateE2eState({ path: authState, state });
 });

@@ -93,12 +93,13 @@ test('high-risk edit workflows use a shared validation summary', async () => {
 });
 
 test('strict release gate includes migrations, Graph-only checks, build, and governed browser authentication', async () => {
-  const [packageJson, releaseGate, browserSmoke, browserSetup, workflow] = await Promise.all([
+  const [packageJson, releaseGate, browserSmoke, browserSetup, workflow, trustedWorkflow] = await Promise.all([
     file('package.json'),
     file('scripts/verify-release.mjs'),
     file('e2e/workspace-smoke.spec.js'),
     file('e2e/auth.setup.js'),
     file('.github/workflows/quality.yml'),
+    file('.github/workflows/authenticated-release.yml'),
   ]);
   assert.match(packageJson, /verify:release/);
   for (const requirement of ['Unit and integration tests', 'Lint', 'Type checking', 'Migration integrity', 'Graph-only production source', 'Production build', 'Read-only browser smoke tests']) {
@@ -109,10 +110,12 @@ test('strict release gate includes migrations, Graph-only checks, build, and gov
   assert.match(browserSetup, /FCOS_E2E_EMAIL/);
   assert.match(browserSetup, /FCOS_E2E_PASSWORD/);
   assert.match(browserSetup, /storageState/);
-  assert.match(workflow, /FCOS_E2E_CANDIDATE_URL: \$\{\{ vars\.FCOS_E2E_CANDIDATE_URL \}\}/);
-  assert.match(workflow, /node scripts\/verify-e2e-candidate\.mjs/);
-  assert.match(workflow, /ref: \$\{\{ github\.event\.pull_request\.head\.sha \}\}/);
-  assert.match(workflow, /FCOS_E2E_EXPECTED_COMMIT: \$\{\{ github\.event\.pull_request\.head\.sha \}\}/);
+  assert.doesNotMatch(workflow, /secrets\./);
+  assert.match(workflow, /fcos-ci-evidence-/);
+  assert.match(trustedWorkflow, /FCOS_E2E_CANDIDATE_URL: \$\{\{ inputs.candidate_url \}\}/);
+  assert.match(trustedWorkflow, /node scripts\/verify-e2e-candidate\.mjs/);
+  assert.match(trustedWorkflow, /ref: \$\{\{ github.sha \}\}/);
+  assert.match(trustedWorkflow, /FCOS_E2E_EXPECTED_COMMIT: \$\{\{ inputs.expected_commit \}\}/);
   assert.doesNotMatch(workflow, /FCOS_E2E_BASE_URL: https:\/\/fcos\.fcuno\.com/);
   assert.doesNotMatch(workflow, /STORAGE_STATE_BASE64/);
 });

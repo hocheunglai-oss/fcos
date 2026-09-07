@@ -26,25 +26,28 @@ test('type checking describes and expands its real JavaScript coverage', async (
 });
 
 test('local API-backed development and browser CI are candidate-bound', async () => {
-  const [readme, workflow, candidateVerifier, authSetup, workspaceSmoke] = await Promise.all([
+  const [readme, workflow, candidateVerifier, authSetup, workspaceSmoke, trustedWorkflow] = await Promise.all([
     read('../README.md'),
     read('../.github/workflows/quality.yml'),
     read('../scripts/verify-e2e-candidate.mjs'),
     read('../e2e/auth.setup.js'),
     read('../e2e/workspace-smoke.spec.js'),
+    read('../.github/workflows/authenticated-release.yml'),
   ]);
   assert.match(readme, /npm ci/);
   assert.match(readme, /npm run dev:full/);
   assert.match(readme, /npm run dev:ui.*only the Vite UI/);
   assert.match(readme, /never silently replaced by a production smoke test/);
-  assert.match(workflow, /FCOS_E2E_CANDIDATE_URL: \$\{\{ vars\.FCOS_E2E_CANDIDATE_URL \}\}/);
-  assert.match(workflow, /FCOS_E2E_EXPECTED_COMMIT: \$\{\{ github\.event\.pull_request\.head\.sha \}\}/);
-  assert.match(workflow, /FCOS_REQUIRE_AUTH_E2E: 1/);
-  assert.match(workflow, /Resolve immutable candidate before loading credentials/);
-  assert.match(workflow, /node scripts\/verify-e2e-candidate\.mjs/);
-  assert.match(workflow, /deployments: read/);
+  assert.doesNotMatch(workflow, /secrets\./);
+  assert.match(workflow, /const sha = context.payload.pull_request.head.sha/);
+  assert.match(workflow, /fcos-ci-evidence-/);
+  assert.match(trustedWorkflow, /FCOS_E2E_CANDIDATE_URL: \$\{\{ inputs.candidate_url \}\}/);
+  assert.match(trustedWorkflow, /FCOS_E2E_EXPECTED_COMMIT: \$\{\{ inputs.expected_commit \}\}/);
+  assert.match(trustedWorkflow, /FCOS_REQUIRE_AUTH_E2E: 1/);
+  assert.match(trustedWorkflow, /Verify the exact immutable candidate before test authentication/);
+  assert.match(trustedWorkflow, /node scripts\/verify-e2e-candidate\.mjs/);
   assert.match(workflow, /GITHUB_TOKEN: \$\{\{ github\.token \}\}/);
-  assert.match(workflow, /Authenticated browser verification is disabled/);
+  assert.match(trustedWorkflow, /Authenticated browser verification is disabled/);
   assert.doesNotMatch(workflow, /FCOS_E2E_BASE_URL: https:\/\/fcos\.fcuno\.com/);
   assert.match(candidateVerifier, /fcosConnectionIdentifier\('vercel', 'Project'\)/);
   assert.match(candidateVerifier, /fcosConnectionIdentifier\('vercel', 'Team'\)/);
@@ -58,7 +61,7 @@ test('local API-backed development and browser CI are candidate-bound', async ()
   assert.match(authSetup, /Continue with FCUNO/);
   assert.match(authSetup, /assertFcunoAdminLocation\(page\);\n  await page\.getByLabel\('Username', \{ exact: true \}\)\.fill\(email\)/);
   assert.match(authSetup, /assertFcunoAdminLocation\(page\);\n  await page\.getByLabel\('Password', \{ exact: true \}\)\.fill\(password\)/);
-  assert.match(authSetup, /assertFcunoAdminLocation\(page\);\n  await page\.getByRole\('button', \{ name: 'Login', exact: true \}\)\.click\(\)/);
+  assert.match(authSetup, /assertFcunoAdminLocation\(page\);[\s\S]*page\.getByRole\('button', \{ name: 'Login', exact: true \}\)\.click\(\)/);
   assert.match(authSetup, /page\.context\(\)\.storageState/);
   assert.doesNotMatch(authSetup, /signInWithPassword|page\.getByLabel\('Email'\)\.fill/);
   assert.match(workspaceSmoke, /login delegates to the pinned FCUNO identity issuer/);
