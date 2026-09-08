@@ -21,3 +21,20 @@ test('the disposable database release gate verifies CI grants on empty and upgra
     assert.ok(verify.includes(evidence));
   }
 });
+
+
+test('the upgrade replay includes the complete reconciled release additions', async () => {
+  const verify = await readFile(new URL('../scripts/verify-migrations.mjs', import.meta.url), 'utf8');
+  const upgradeSet = verify.match(/const releaseMigrationNames = new Set\(\[([\s\S]*?)\]\);/)[1];
+  for (const name of [
+    '20260904160812_variable_charge_resolution_optional_reference.sql',
+    '20260905105308_account_insight_report_presets.sql',
+    '20260905111234_account_insight_report_preset_indexes.sql',
+    '20260906161240_restrict_browser_role_admin_grants.sql',
+    '20260908074607_fcbs_own_account_settlement.sql',
+  ]) assert.ok(upgradeSet.includes(name));
+  for (const evidence of ['report presets and FCBS operations RLS',
+    'report presets and FCBS operations deny browser grants',
+    'release RPCs retain service-only invoker execution',
+    'Upgrade fixture preserves legacy FCBS invoice basis and amount']) assert.ok(verify.includes(evidence));
+});

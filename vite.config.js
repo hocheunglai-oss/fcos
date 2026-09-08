@@ -18,6 +18,9 @@ export default defineConfig({
   ],
   build: {
     target: 'es2022',
+    // Preserve release size budgets as independently developed features converge.
+    minify: 'terser',
+    terserOptions: { compress: { passes: 2 } },
     rollupOptions: {
       output: {
         manualChunks(id) {
