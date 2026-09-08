@@ -10,7 +10,7 @@ const REQUIRED_CONTROLS = [
   'Disconnect',
   'Preview',
   'Apply selected',
-  'Build read-only preview',
+  'Check everything',
   'Approve mapping',
   'Authorise batch',
   'Run selected',

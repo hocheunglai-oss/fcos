@@ -4,14 +4,17 @@ import StateBlock from '@/components/common/StateBlock';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { toast } from '@/components/ui/use-toast';
 import { appClient } from '@/api/appClient';
+import {
+  XERO_FINANCIAL_CUTOFF,
+  summarizeXeroFinancialReconciliation,
+  xeroFinancialReconciliationRank,
+} from '@/lib/xeroFinancialReconciliation';
 import { xeroPortalUiCopy } from '@/lib/xeroPortalUiCopy';
 import { cn } from '@/lib/utils';
 
-const DEFAULT_CUTOFF = '2026-01-01';
 const DIRECTIONS = ['buyer', 'supplier'];
 const DEFAULT_BANKS = ['DBS', 'UBS'];
 const PAGE_SIZE = 100;
@@ -27,7 +30,6 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
   const [selectedPayments, setSelectedPayments] = useState(new Set());
   const [reviewed, setReviewed] = useState(false);
   const [paymentsReviewed, setPaymentsReviewed] = useState(false);
-  const [cutoffDate, setCutoffDate] = useState(DEFAULT_CUTOFF);
   const [documentPage, setDocumentPage] = useState(0);
   const [paymentPage, setPaymentPage] = useState(0);
   const [mappingPage, setMappingPage] = useState(0);
@@ -66,10 +68,13 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
   const visibleProductMappings = useMemo(() => productMappingRows.slice(mappingPage * MAPPING_PAGE_SIZE, (mappingPage + 1) * MAPPING_PAGE_SIZE), [mappingPage, productMappingRows]);
   const bankMappingIndex = useMemo(() => new Map((mappings?.bankMappings || []).map((mapping) => [mapping.salesforceBankName, mapping])), [mappings]);
   const eligibleRows = useMemo(() => (preview?.rows || []).filter((row) => row.status === 'eligible'), [preview]);
-  const documentPageCount = Math.max(1, Math.ceil((preview?.rows?.length || 0) / PAGE_SIZE));
-  const paymentPageCount = Math.max(1, Math.ceil((payments?.rows?.length || 0) / PAGE_SIZE));
-  const visibleDocuments = useMemo(() => (preview?.rows || []).slice(documentPage * PAGE_SIZE, (documentPage + 1) * PAGE_SIZE), [documentPage, preview]);
-  const visiblePayments = useMemo(() => (payments?.rows || []).slice(paymentPage * PAGE_SIZE, (paymentPage + 1) * PAGE_SIZE), [paymentPage, payments]);
+  const orderedDocuments = useMemo(() => [...(preview?.rows || [])].sort((left, right) => xeroFinancialReconciliationRank(left) - xeroFinancialReconciliationRank(right)), [preview]);
+  const orderedPayments = useMemo(() => [...(payments?.rows || [])].sort((left, right) => xeroFinancialReconciliationRank(left, 'payment') - xeroFinancialReconciliationRank(right, 'payment')), [payments]);
+  const documentPageCount = Math.max(1, Math.ceil(orderedDocuments.length / PAGE_SIZE));
+  const paymentPageCount = Math.max(1, Math.ceil(orderedPayments.length / PAGE_SIZE));
+  const visibleDocuments = useMemo(() => orderedDocuments.slice(documentPage * PAGE_SIZE, (documentPage + 1) * PAGE_SIZE), [documentPage, orderedDocuments]);
+  const visiblePayments = useMemo(() => orderedPayments.slice(paymentPage * PAGE_SIZE, (paymentPage + 1) * PAGE_SIZE), [orderedPayments, paymentPage]);
+  const reconciliation = useMemo(() => summarizeXeroFinancialReconciliation({ documents: preview?.rows, payments: payments?.rows }), [payments, preview]);
   const financialGate = portalStatus?.externalActions?.xero_financial_sync;
   const scopeFlags = portalStatus?.xero?.scopeFlags || {};
 
@@ -77,10 +82,11 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
     setBusy('preview');
     setError('');
     setReviewed(false);
+    setPaymentsReviewed(false);
     setPayments(null);
-    const result = await appClient.functions.invoke('xeroFinancialSyncPreview', { cutoffDate }, { force: true, cache: false, invalidateCache: true });
-    setBusy('');
+    const result = await appClient.functions.invoke('xeroFinancialSyncPreview', { cutoffDate: XERO_FINANCIAL_CUTOFF }, { force: true, cache: false, invalidateCache: true });
     if (result.data?.error) {
+      setBusy('');
       setError(result.data.error);
       return;
     }
@@ -88,6 +94,15 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
     setMappingPage(0);
     setDocumentPage(0);
     setSelected(new Set((result.data.rows || []).filter((row) => row.status === 'eligible').map((row) => row.id)));
+    const paymentResult = await appClient.functions.invoke('xeroFinancialPaymentApply', { mode: 'preview', cutoffDate: XERO_FINANCIAL_CUTOFF }, { force: true, cache: false, invalidateCache: true });
+    setBusy('');
+    if (paymentResult.data?.error) {
+      setError(financialCopy.paymentCheckIncomplete(paymentResult.data.error));
+      return;
+    }
+    setPayments(paymentResult.data);
+    setPaymentPage(0);
+    setSelectedPayments(new Set((paymentResult.data.rows || []).filter((row) => row.action === 'payment_apply' && row.status === 'eligible').map((row) => row.salesforcePaymentId)));
   }
 
   async function authorisePreview() {
@@ -120,12 +135,13 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
     }
     setPreview((current) => ({ ...current, run: result.data.run }));
     toast({ title: financialCopy.batchCompleted, description: financialCopy.outcome(result.data.summary || {}) });
+    await runPreview();
   }
 
   async function previewPayments() {
     setBusy('payment-preview');
     setPaymentsReviewed(false);
-    const result = await appClient.functions.invoke('xeroFinancialPaymentApply', { mode: 'preview', cutoffDate }, { force: true, cache: false });
+    const result = await appClient.functions.invoke('xeroFinancialPaymentApply', { mode: 'preview', cutoffDate: XERO_FINANCIAL_CUTOFF }, { force: true, cache: false });
     setBusy('');
     if (result.data?.error) {
       toast({ title: financialCopy.paymentPreviewFailed, description: result.data.error, variant: 'destructive' });
@@ -139,7 +155,7 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
   async function applyPayments() {
     setBusy('payment-apply');
     const result = await appClient.functions.invoke('xeroFinancialPaymentApply', {
-      mode: 'apply', cutoffDate, reviewed: paymentsReviewed,
+      mode: 'apply', cutoffDate: XERO_FINANCIAL_CUTOFF, reviewed: paymentsReviewed,
       selectedPayments: (payments?.rows || []).filter((row) => selectedPayments.has(row.salesforcePaymentId)).map((row) => ({ id: row.salesforcePaymentId, sourceFingerprint: row.sourceFingerprint })),
     }, { force: true, cache: false, invalidateCache: true });
     setBusy('');
@@ -148,7 +164,7 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
       return;
     }
     toast({ title: financialCopy.paymentsApplied, description: financialCopy.outcome(result.data.summary || {}) });
-    await previewPayments();
+    await runPreview();
   }
 
   function toggleSelection(id, checked, setter) {
@@ -167,71 +183,73 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
     <div className="space-y-4">
       {error ? <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</div> : null}
 
-      <section className="rounded-lg border border-border bg-card p-4">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+      <section className="rounded-xl border border-sky-200 bg-gradient-to-br from-sky-50 to-white p-5">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <div className="flex flex-wrap items-center gap-2">
-              <h2 className="text-base font-semibold">{financialCopy.title}</h2>
-              <Badge variant="outline" className="border-sky-200 bg-sky-50 text-sky-800">{financialCopy.manualOnly}</Badge>
+              <h2 className="text-lg font-semibold">{financialCopy.reconciliationTitle}</h2>
+              <Badge variant="outline" className="border-sky-200 bg-white text-sky-800">{financialCopy.fixedScope}</Badge>
               <Badge variant="outline" className={financialGate?.enabled ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-amber-200 bg-amber-50 text-amber-900'}>
                 {financialGate?.enabled ? financialCopy.gateEnabled : financialCopy.gateLocked}
               </Badge>
             </div>
-            <p className="mt-1 max-w-4xl text-sm text-muted-foreground">{financialCopy.description}</p>
+            <p className="mt-2 max-w-4xl text-sm text-slate-700">{financialCopy.reconciliationDescription}</p>
           </div>
-          <div className="flex flex-wrap items-end gap-2">
-            <label className="block">
-              <span className="text-xs font-semibold text-muted-foreground">{financialCopy.cutoff}</span>
-              <Input type="date" min="2026-01-01" value={cutoffDate} onChange={(event) => setCutoffDate(event.target.value)} className="w-40" />
-            </label>
+          <Button type="button" onClick={runPreview} disabled={Boolean(busy) || !portalStatus?.xero?.connected || !scopeFlags.invoices || !scopeFlags.contacts || !scopeFlags.settingsRead || !scopeFlags.paymentsRead}>
+            {busy === 'preview' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ShieldCheck className="mr-2 h-4 w-4" />}
+            {busy === 'preview' ? financialCopy.checkingEverything : financialCopy.checkEverything}
+          </Button>
+        </div>
+        <div className="mt-5 grid gap-3 lg:grid-cols-[1.2fr_repeat(4,minmax(0,1fr))]">
+          <div className={cn('rounded-lg border px-4 py-3', reconciliation.status === 'reconciled' ? 'border-emerald-200 bg-emerald-50' : reconciliation.status === 'attention_required' ? 'border-rose-200 bg-rose-50' : 'border-sky-200 bg-white')}>
+            <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{financialCopy.completion}</div>
+            <div className="mt-1 text-3xl font-semibold tabular-nums">{reconciliation.completion == null ? '—' : `${reconciliation.completion}%`}</div>
+            <div className="mt-1 text-sm font-medium">{financialCopy.reconciliationStatuses[reconciliation.status]}</div>
+          </div>
+          <CutoverKpi label={financialCopy.salesforceRecords} value={reconciliation.checked ? reconciliation.total : null} />
+          <CutoverKpi label={financialCopy.correctInXero} value={reconciliation.checked ? reconciliation.reconciled : null} tone="emerald" />
+          <CutoverKpi label={financialCopy.awaitingSync} value={reconciliation.checked ? reconciliation.pending : null} tone="amber" />
+          <CutoverKpi label={financialCopy.exceptions} value={reconciliation.checked ? reconciliation.exceptions : null} tone="rose" />
+        </div>
+        <div className="mt-3 rounded-lg border border-sky-100 bg-white/80 px-3 py-2 text-sm text-slate-700">
+          {financialCopy.reconciliationDescriptions[reconciliation.status]}
+        </div>
+        {!scopeFlags.settingsRead || !scopeFlags.paymentsRead ? <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">{financialCopy.reconnect}</div> : null}
+      </section>
+
+      <details className="rounded-lg border border-border bg-card p-4">
+        <summary className="cursor-pointer list-none">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div><h2 className="text-base font-semibold">{financialCopy.setupTitle}</h2><p className="mt-1 text-sm text-muted-foreground">{financialCopy.setupDescription}</p></div>
+            <div className="text-right text-xs text-muted-foreground"><div>{financialCopy.savedMappings((mappings?.productMappings || []).length)}</div>{preview ? <div>{financialCopy.proposalSummary(mappingProposalSummary.proposed, mappingProposalSummary.conflicts)}</div> : null}</div>
+          </div>
+        </summary>
+        <div className="mt-4 space-y-5 border-t border-border pt-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div><h3 className="text-sm font-semibold">{financialCopy.mappingTitle}</h3><p className="mt-1 text-sm text-muted-foreground">{financialCopy.mappingDescription}</p></div>
             <Button type="button" variant="outline" onClick={loadMappings} disabled={Boolean(busy)}><RefreshCw className="mr-2 h-4 w-4" />{financialCopy.mappings}</Button>
-            <Button type="button" onClick={runPreview} disabled={Boolean(busy) || !portalStatus?.xero?.connected || !scopeFlags.invoices || !scopeFlags.contacts || !scopeFlags.settingsRead}>
-              {busy === 'preview' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ShieldCheck className="mr-2 h-4 w-4" />}
-              {financialCopy.preview}
-            </Button>
           </div>
-        </div>
-        {!scopeFlags.settingsRead ? <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">{financialCopy.reconnect}</div> : null}
-      </section>
-
-      <section className="rounded-lg border border-border bg-card p-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+          {products.length ? (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between gap-3 text-sm text-muted-foreground">
+                <span>{financialCopy.mappingRange(mappingPage * MAPPING_PAGE_SIZE + 1, Math.min((mappingPage + 1) * MAPPING_PAGE_SIZE, productMappingRows.length), productMappingRows.length)}</span>
+                <div className="flex gap-2"><Button type="button" size="sm" variant="outline" onClick={() => setMappingPage((page) => Math.max(0, page - 1))} disabled={mappingPage === 0}>{copy.common.previous}</Button><Button type="button" size="sm" variant="outline" onClick={() => setMappingPage((page) => Math.min(mappingPageCount - 1, page + 1))} disabled={mappingPage >= mappingPageCount - 1}>{copy.common.next}</Button></div>
+              </div>
+              <div className="max-h-[520px] overflow-auto rounded-lg border border-border">
+                <Table scrollLabel={financialCopy.productMappingsLabel}>
+                  <TableHeader><TableRow><TableHead>{financialCopy.direction}</TableHead><TableHead>{financialCopy.salesforceProduct}</TableHead><TableHead>{financialCopy.xeroAccount}</TableHead><TableHead>{financialCopy.taxType}</TableHead><TableHead>{financialCopy.action}</TableHead></TableRow></TableHeader>
+                  <TableBody>{visibleProductMappings.map((row) => <ProductMappingRow key={row.key} direction={row.direction} product={row.product} mapping={row.mapping} proposal={row.proposal} accounts={mappings?.accountOptions || []} taxes={mappings?.taxOptions || []} onSaved={loadMappings} copy={copy} />)}</TableBody>
+                </Table>
+              </div>
+            </div>
+          ) : <div className="rounded-lg border border-dashed border-border px-3 py-3 text-sm text-muted-foreground">{financialCopy.noProducts}</div>}
           <div>
-            <h2 className="text-base font-semibold">{financialCopy.mappingTitle}</h2>
-            <p className="mt-1 text-sm text-muted-foreground">{financialCopy.mappingDescription}</p>
-          </div>
-          <div className="text-right text-xs text-muted-foreground">
-            <div>{financialCopy.savedMappings((mappings?.productMappings || []).length)}</div>
-            {preview ? <div>{financialCopy.proposalSummary(mappingProposalSummary.proposed, mappingProposalSummary.conflicts)}</div> : null}
+            <h3 className="text-sm font-semibold">{financialCopy.bankTitle}</h3>
+            <p className="mt-1 text-sm text-muted-foreground">{financialCopy.bankDescription}</p>
+            <div className="mt-3 grid gap-3 lg:grid-cols-2">{DEFAULT_BANKS.map((bank) => <BankMapping key={bank} bank={bank} mapping={bankMappingIndex.get(bank)} accounts={(mappings?.accountOptions || []).filter((account) => account.bank)} onSaved={loadMappings} copy={copy} />)}</div>
           </div>
         </div>
-        {products.length ? (
-          <div className="mt-4 space-y-3">
-            <div className="flex items-center justify-between gap-3 text-sm text-muted-foreground">
-              <span>{financialCopy.mappingRange(mappingPage * MAPPING_PAGE_SIZE + 1, Math.min((mappingPage + 1) * MAPPING_PAGE_SIZE, productMappingRows.length), productMappingRows.length)}</span>
-              <div className="flex gap-2"><Button type="button" size="sm" variant="outline" onClick={() => setMappingPage((page) => Math.max(0, page - 1))} disabled={mappingPage === 0}>{copy.common.previous}</Button><Button type="button" size="sm" variant="outline" onClick={() => setMappingPage((page) => Math.min(mappingPageCount - 1, page + 1))} disabled={mappingPage >= mappingPageCount - 1}>{copy.common.next}</Button></div>
-            </div>
-            <div className="max-h-[520px] overflow-auto rounded-lg border border-border">
-              <Table scrollLabel={financialCopy.productMappingsLabel}>
-                <TableHeader><TableRow><TableHead>{financialCopy.direction}</TableHead><TableHead>{financialCopy.salesforceProduct}</TableHead><TableHead>{financialCopy.xeroAccount}</TableHead><TableHead>{financialCopy.taxType}</TableHead><TableHead>{financialCopy.action}</TableHead></TableRow></TableHeader>
-                <TableBody>
-                  {visibleProductMappings.map((row) => (
-                    <ProductMappingRow key={row.key} direction={row.direction} product={row.product} mapping={row.mapping} proposal={row.proposal} accounts={mappings?.accountOptions || []} taxes={mappings?.taxOptions || []} onSaved={loadMappings} copy={copy} />
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          </div>
-        ) : <div className="mt-3 rounded-lg border border-dashed border-border px-3 py-3 text-sm text-muted-foreground">{financialCopy.noProducts}</div>}
-      </section>
-
-      <section className="rounded-lg border border-border bg-card p-4">
-        <h2 className="text-base font-semibold">{financialCopy.bankTitle}</h2>
-        <p className="mt-1 text-sm text-muted-foreground">{financialCopy.bankDescription}</p>
-        <div className="mt-3 grid gap-3 lg:grid-cols-2">
-          {DEFAULT_BANKS.map((bank) => <BankMapping key={bank} bank={bank} mapping={bankMappingIndex.get(bank)} accounts={(mappings?.accountOptions || []).filter((account) => account.bank)} onSaved={loadMappings} copy={copy} />)}
-        </div>
-      </section>
+      </details>
 
       {preview ? (
         <>
@@ -376,7 +394,9 @@ function BankMapping({ bank, mapping, accounts, onSaved, copy }) {
 
 function CutoverKpi({ label, value, tone = 'neutral' }) {
   const classes = { neutral: 'border-slate-200 bg-slate-50', sky: 'border-sky-200 bg-sky-50', emerald: 'border-emerald-200 bg-emerald-50', amber: 'border-amber-200 bg-amber-50', slate: 'border-zinc-200 bg-zinc-50', rose: 'border-rose-200 bg-rose-50' };
-  return <div className={cn('rounded-lg border px-4 py-3', classes[tone])}><div className="text-xs font-semibold uppercase text-muted-foreground">{label}</div><div className="mt-1 text-2xl font-semibold tabular-nums">{Number(value || 0).toLocaleString()}</div></div>;
+  const number = Number(value);
+  const hasValue = value !== null && value !== undefined && Number.isFinite(number);
+  return <div className={cn('rounded-lg border px-4 py-3', classes[tone])}><div className="text-xs font-semibold uppercase text-muted-foreground">{label}</div><div className="mt-1 text-2xl font-semibold tabular-nums">{hasValue ? number.toLocaleString() : '—'}</div></div>;
 }
 
 function FinancialActionBadge({ action, status, copy }) {

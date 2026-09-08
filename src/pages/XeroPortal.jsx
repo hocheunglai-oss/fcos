@@ -47,7 +47,7 @@ const XeroPortalManual = lazy(() => import('@/components/xero/XeroPortalManual')
 
 export default function XeroPortal() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const [tab, setTab] = useState('contacts');
+  const [tab, setTab] = useState('accounting');
   const [status, setStatus] = useState(null);
   const [receipts, setReceipts] = useState([]);
   const [run, setRun] = useState(null);
@@ -367,8 +367,8 @@ export default function XeroPortal() {
 
         <Tabs value={tab} onValueChange={setTab} className="w-full">
           <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1">
-            <TabsTrigger value="contacts">{copy.tabs.contacts}</TabsTrigger>
             <TabsTrigger value="accounting">{copy.tabs.accounting}</TabsTrigger>
+            <TabsTrigger value="contacts">{copy.tabs.contacts}</TabsTrigger>
             <TabsTrigger value="receipts">{copy.tabs.receipts}</TabsTrigger>
             <TabsTrigger value="automation">{copy.tabs.automation}</TabsTrigger>
             <TabsTrigger value="manual">{copy.tabs.manual}</TabsTrigger>

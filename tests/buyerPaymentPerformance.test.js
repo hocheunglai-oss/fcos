@@ -92,7 +92,7 @@ test('resolves COSCO GROUP credit authority from the exact active hierarchy', ()
   assert.equal(statement.credit.groupLimit, 20_000_000);
   assert.equal(statement.credit.salesforceAvailable, 11_812_743);
   assert.equal(statement.reconciliation.group.scoped, true);
-  assert.match(statement.projectionWarnings.join(' '), /does not currently reconcile to live buyer QLIK exposure/);
+  assert.match(statement.projectionWarnings.join(' '), /full Salesforce GROUP used-credit bridge does not reconcile/);
 });
 
 test('accepts identical authority snapshots and rejects conflicting ones', () => {

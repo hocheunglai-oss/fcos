@@ -5,11 +5,13 @@ import {
   assertXeroFinancialDailyReserve,
   buildXeroAccountingPayload,
   buildFinancialClassifications,
+  classifyXeroFinancialPayment,
   classifyXeroFinancialDocument,
   deriveXeroProductMappingProposals,
   isProtectedXeroDocument,
   xeroFinancialRateSnapshot,
 } from '../api/_xeroFinancialSync.js';
+import { summarizeXeroFinancialReconciliation } from '../src/lib/xeroFinancialReconciliation.js';
 
 const source = {
   salesforceObject: 'Invoice__c',
@@ -78,6 +80,97 @@ test('paid, allocated, and locked authorised Xero history is always protected', 
   const classified = classifyXeroFinancialDocument(source, [xero({ status: 'PAID', amountDue: 0, amountPaid: 1000 })]);
   assert.equal(classified.action, 'protected_legacy');
   assert.equal(classified.status, 'protected');
+});
+
+test('exact protected Xero history can be durably linked without changing accounting history', () => {
+  const exact = xero({
+    status: 'PAID',
+    amountDue: 0,
+    amountPaid: 1000,
+    invoiceNumber: source.documentNumber,
+    date: source.invoiceDate,
+    dueDate: source.dueDate,
+    reference: source.reference,
+    lineItems: [{ Description: 'HSFO 380', Quantity: 10, UnitAmount: 100, AccountCode: '200', TaxType: 'NONE' }],
+  });
+  const classified = classifyXeroFinancialDocument(source, [exact]);
+  assert.equal(classified.action, 'protected_legacy');
+  assert.equal(classified.status, 'eligible');
+  assert.deepEqual(classified.differences, []);
+});
+
+test('stored Xero payment links must still exist and match current Salesforce values', () => {
+  const payment = { Id: 'payment-1', Name: 'PAY-1', Amount__c: 500, Date__c: '2026-07-01', Bank__c: 'DBS', STEM__c: 'stem-1' };
+  const documentMapping = { id: 'document-map-1', xero_document_id: 'xero-invoice-1' };
+  const fingerprint = classifyXeroFinancialPayment(payment, {
+    existingBySalesforce: new Map(),
+    documentMappingById: new Map(),
+    documentBySupplierInvoice: new Map(),
+    buyerByStem: new Map(),
+    bankByName: new Map(),
+    xeroPayments: [],
+    currentDocumentById: new Map(),
+  }).sourceFingerprint;
+  const stored = { id: 'payment-map-1', document_mapping_id: documentMapping.id, xero_payment_id: 'xero-payment-1', source_fingerprint: fingerprint };
+  const xeroPayment = { PaymentID: 'xero-payment-1', Amount: 500, Date: '2026-07-01', Reference: payment.Name, Account: { AccountID: 'xero-bank-1' }, Invoice: { InvoiceID: documentMapping.xero_document_id } };
+  stored.xero_bank_account_id = 'xero-bank-1';
+  const baseContext = {
+    existingBySalesforce: new Map([[payment.Id, stored]]),
+    documentMappingById: new Map([[documentMapping.id, documentMapping]]),
+    xeroPayments: [xeroPayment],
+  };
+  assert.equal(classifyXeroFinancialPayment(payment, baseContext).status, 'protected');
+  const missing = classifyXeroFinancialPayment(payment, { ...baseContext, xeroPayments: [] });
+  assert.equal(missing.status, 'blocked');
+  assert.match(missing.blockers.join(' '), /no longer points/i);
+  const wrongBank = classifyXeroFinancialPayment(payment, { ...baseContext, xeroPayments: [{ ...xeroPayment, Account: { AccountID: 'xero-bank-2' } }] });
+  assert.equal(wrongBank.status, 'blocked');
+  assert.match(wrongBank.blockers.join(' '), /bank account differs/i);
+  const deposit = classifyXeroFinancialPayment({ ...payment, Is_Deposit__c: true }, baseContext);
+  assert.equal(deposit.status, 'blocked');
+  assert.match(deposit.blockers.join(' '), /Deposit payments require Finance allocation/i);
+
+  const unapprovedBank = classifyXeroFinancialPayment(payment, {
+    existingBySalesforce: new Map(),
+    documentMappingById: new Map([[documentMapping.id, documentMapping]]),
+    documentBySupplierInvoice: new Map(),
+    buyerByStem: new Map([[payment.STEM__c, [documentMapping]]]),
+    bankByName: new Map(),
+    xeroPayments: [xeroPayment],
+    currentDocumentById: new Map([[documentMapping.xero_document_id, { status: 'AUTHORISED', amountDue: 500 }]]),
+  });
+  assert.equal(unapprovedBank.status, 'blocked');
+  assert.match(unapprovedBank.blockers.join(' '), /No approved Xero bank mapping/i);
+});
+
+test('combined reconciliation reaches 100 percent only after documents and payments are both exact', () => {
+  const incomplete = summarizeXeroFinancialReconciliation({ documents: [{ action: 'link', status: 'eligible', differences: [] }] });
+  assert.equal(incomplete.status, 'incomplete_check');
+  assert.equal(incomplete.completion, null);
+
+  const summary = summarizeXeroFinancialReconciliation({
+    documents: [
+      { action: 'link', status: 'eligible', differences: [] },
+      { action: 'protected_legacy', status: 'eligible', differences: [] },
+      { action: 'create_draft', status: 'eligible', differences: [] },
+      { action: 'protected_legacy', status: 'protected', differences: [{ field: 'total' }] },
+    ],
+    payments: [
+      { action: 'payment_link', status: 'protected', blockers: [] },
+      { action: 'payment_apply', status: 'eligible', blockers: [] },
+      { action: 'blocked', status: 'blocked', blockers: ['Missing document'] },
+    ],
+  });
+  assert.deepEqual({ total: summary.total, reconciled: summary.reconciled, pending: summary.pending, exceptions: summary.exceptions }, { total: 7, reconciled: 3, pending: 2, exceptions: 2 });
+  assert.equal(summary.status, 'attention_required');
+  assert.equal(summary.completion, 43);
+
+  const complete = summarizeXeroFinancialReconciliation({
+    documents: [{ action: 'link', status: 'eligible', differences: [] }],
+    payments: [{ action: 'payment_link', status: 'protected', blockers: [] }],
+  });
+  assert.equal(complete.status, 'reconciled');
+  assert.equal(complete.completion, 100);
 });
 
 test('identity conflicts block an otherwise matching transaction', () => {
@@ -292,7 +385,9 @@ test('financial handlers and Finance review UI are registered without a schedule
   const server = await readFile(new URL('../api/functions/[name].js', import.meta.url), 'utf8');
   const xeroHandlers = await readFile(new URL('../api/_xeroHandlers.js', import.meta.url), 'utf8');
   const policies = await readFile(new URL('../api/_handlerPolicyRegistry.js', import.meta.url), 'utf8');
+  const financialService = await readFile(new URL('../api/_xeroFinancialSync.js', import.meta.url), 'utf8');
   const ui = await readFile(new URL('../src/components/xero/XeroFinancialSync.jsx', import.meta.url), 'utf8');
+  const portal = await readFile(new URL('../src/pages/XeroPortal.jsx', import.meta.url), 'utf8');
   for (const name of ['xeroFinancialSyncPreview', 'xeroFinancialMappingsGet', 'xeroFinancialMappingsSave', 'xeroFinancialSyncApply', 'xeroFinancialSyncRun', 'xeroFinancialPaymentApply']) {
     assert.match(xeroHandlers, new RegExp(name));
     assert.match(policies, new RegExp(name));
@@ -305,5 +400,12 @@ test('financial handlers and Finance review UI are registered without a schedule
   assert.match(ui, /financialCopy\.approveMapping/);
   assert.match(ui, /MAPPING_PAGE_SIZE = 25/);
   assert.match(ui, /financialCopy\.mappingRange/);
+  assert.match(ui, /summarizeXeroFinancialReconciliation/);
+  assert.match(ui, /cutoffDate: XERO_FINANCIAL_CUTOFF/g);
+  assert.doesNotMatch(ui, /setCutoffDate/);
+  assert.match(portal, /useState\('accounting'\)/);
+  assert.match(financialService, /Date__c = null AND CreatedDate >= \$\{cutoff\}T00:00:00Z/);
+  assert.doesNotMatch(financialService, /RecordType\.DeveloperName IN \('Receivable','Payable'\)/);
+  assert.doesNotMatch(financialService, /AND Is_Deposit__c = false/);
   assert.doesNotMatch(`${server}\n${xeroHandlers}`, /xeroFinancialSyncCron/);
 });
