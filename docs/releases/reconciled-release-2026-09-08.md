@@ -18,7 +18,7 @@ The retained 130 packaged server/config/source files were compared with the dirt
 
 ## Verification
 
-- All 1,369 integrated Node tests, lint, type checking, compatibility registry and pinned FCUNO contract checks pass.
+- All 1,370 integrated Node tests, lint, type checking, compatibility registry and pinned FCUNO contract checks pass.
 - Hosted Preview-configured and Production-configured Vercel builds and strict client/server bundle budgets pass.
 - Clean dependency installation reports zero known vulnerabilities.
 - All 155 migrations replayed successfully from an empty database and through the upgrade fixture on disposable Supabase Postgres 17.6.1.158. Checks include RLS, browser grants, service-only RPCs, indexes, and preservation of a legacy issued FCBS invoice's basis and amounts. The task-owned local database and volumes were removed afterward.
@@ -26,9 +26,9 @@ The retained 130 packaged server/config/source files were compared with the dirt
 
 ## Remaining governed sequence
 
-1. Owner approval for installation/protection was received in this task. Review/install the separate narrow `codex/ci-bootstrap-20260908` PR on main, then protect main with workflow-owner review. It removes the legacy credential-bearing PR job; it deliberately does not install the candidate-evidence consumer before a trusted run can exist.
-2. Use the exact READY Git-linked Preview and SHA for this release. Dispatch the trusted default-branch workflow; its protected `fcos-ci-readonly` environment requires human approval. All three secret names and the enable variable are present; secret contents were not read. main was verified unprotected during this reconciliation.
-3. Complete the governed FCUNO identity prerequisites if login rejects it, retain NONE/no workspace permissions and the inactive zero-permission FCOS profile. Do not bypass identity or environment approval.
+1. Owner-approved CI bootstrap PR #40 is installed on main. The solo-owner policy retains strict required code/database and dependency checks, administrator enforcement, and protected-environment human approval. The second-account review requirement was removed with owner approval because the repository has one collaborator. The legacy credential-bearing PR job is removed.
+2. Use the exact READY Git-linked Preview and SHA for this release. Dispatch the trusted default-branch workflow; its protected `fcos-ci-readonly` environment requires human approval. All three secret names and the enable variable are present; secret contents were not read. main protection is installed and verified. Supabase must explicitly allow the exact candidate `/login?federated=1` callback; verify this whenever the immutable Preview URL changes, without broad wildcard redirects.
+3. Renewable FCUNO login and exact read-only capability assertions passed in run 34214118704 attempt 2. Desktop Dashboard, both workspace matrices, and every deployed API denial passed (42 of 43 checks). The mobile scroll assertion sampled before Playwright revealed the trigger; PR #41 corrects the measurement while retaining exact focus and scroll restoration. A complete successful run remains required. Do not bypass identity or environment approval.
 4. Require exact-candidate authenticated responsive tests and read-only FCBS/Account Insight acceptance. Apply the two pending reviewed migrations only as part of controlled release readiness, then verify live service-only grants/RLS.
 5. Merge/promote the verified release with Production configuration, preserving the Preview-only read-only/write-disable flags' environment scope. A Preview artifact with Salesforce writes disabled must not be blindly promoted to Production. Verify Production auth, version, critical read flows and runtime errors; retain the previous immutable deployment for rollback.
 
