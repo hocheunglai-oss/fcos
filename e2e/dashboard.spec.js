@@ -67,7 +67,7 @@ test.describe('Dashboard', () => {
     });
     const scrollTop = await page.locator('.app-workspace-scroll').evaluate((element) => element.scrollTop);
     await statementButton.click();
-    await expect(page.getByRole('tab', { name: 'Credit Statement' })).toHaveAttribute('data-state', 'active');
+    await expect(page.getByRole('tab', { name: 'Credit & Payments', exact: true })).toHaveAttribute('data-state', 'active');
     await expect(page.getByText('Buyer receivable and supplier payable are reported separately by currency.')).toHaveCount(0);
     const sideToggle = page.getByLabel('Credit statement view');
     await expect(sideToggle).toBeVisible();

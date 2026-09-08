@@ -46,8 +46,8 @@ test('manual authenticated evidence runs only a protected default-branch harness
   assert.match(workflow, /actions\/upload-artifact@v4/);
   assert.match(workflow, /FCOS_E2E_HARNESS_SHA/);
   assert.match(workflow, /candidateSha: process\.env\.FCOS_E2E_EXPECTED_COMMIT/);
-  assert.match(workflow, /--trace=off --screenshot=off/);
-  assert.match(workflow, /--screenshot=off/);
+  assert.match(workflow, /run: npm run test:e2e -- --trace=off\s/);
+  assert.doesNotMatch(workflow, /--screenshot/);
   assert.match(workflow, /e2e-private-state\.mjs prepare/);
   assert.match(workflow, /e2e-private-state\.mjs cleanup/);
 });

@@ -53,6 +53,10 @@ protection storage JSON use separate absolute paths under a runner-created
 restricted to `0600`; cleanup removes only those two files and their dedicated
 directory. Screenshots and traces are disabled for the authenticated harness,
 and neither the password nor protection secret is printed.
+Screenshot and video suppression is enforced in `playwright.config.js` for all
+authenticated projects, including stored-session runs. The command uses only
+supported CLI options; a local `--list` regression check exercises the exact
+workflow arguments without signing in or starting a server.
 
 ## Human-review boundary
 
@@ -120,6 +124,13 @@ identity/module/capability assertions, desktop/mobile Dashboard and Markets
 checks, restricted-workspace matrix and server mutation-denial tests. A skipped
 run, old artifact or an ordinary employee session is not acceptance. No
 production financial mutation is part of verification.
+The direct API checks reuse one app-owned authenticated request against the
+same independently verified Preview origin. Fixed empty/incomplete payloads
+contain no real record IDs or financial values. Every generic, mixed-action,
+document-export and notification-wrapper probe must return HTTP 403 with
+`FCOS_CI_READ_ONLY`, not a generic authentication or validation failure. Tokens
+are never extracted into logs or separately persisted; redirects/retries are
+disabled and failures contain only the probe's fixed path.
 
 Keep the application disabled for this identity until the guarded candidate is
 ready. After acceptance, remove obsolete repository-level CI credentials and

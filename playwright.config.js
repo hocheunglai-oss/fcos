@@ -2,6 +2,8 @@ import { defineConfig, devices } from '@playwright/test';
 
 const baseURL = process.env.FCOS_E2E_BASE_URL || 'http://127.0.0.1:5173';
 const usesExternalServer = Boolean(process.env.FCOS_E2E_BASE_URL);
+const authenticatedRun = Boolean(process.env.FCOS_REQUIRE_AUTH_E2E === '1'
+  || process.env.FCOS_E2E_STORAGE_STATE || process.env.FCOS_E2E_EMAIL || process.env.FCOS_E2E_PASSWORD);
 
 export default defineConfig({
   globalSetup: './scripts/e2e-protection-state.mjs',
@@ -16,7 +18,8 @@ export default defineConfig({
     channel: 'chrome',
     // Authenticated traces contain bearer tokens and financial response bodies.
     trace: 'off',
-    screenshot: 'only-on-failure',
+    screenshot: authenticatedRun ? 'off' : 'only-on-failure',
+    video: 'off',
     storageState: process.env.FCOS_E2E_PROTECTION_STATE || undefined,
   },
   webServer: usesExternalServer ? undefined : {

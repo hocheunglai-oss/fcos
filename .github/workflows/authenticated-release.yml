@@ -89,7 +89,9 @@ jobs:
           FCOS_E2E_VERCEL_BYPASS: ${{ secrets.FCOS_E2E_VERCEL_BYPASS }}
           FCOS_E2E_EMAIL: ${{ secrets.FCOS_E2E_EMAIL }}
           FCOS_E2E_PASSWORD: ${{ secrets.FCOS_E2E_PASSWORD }}
-        run: npm run test:e2e -- --trace=off --screenshot=off
+        # Screenshot/video suppression is configured for every authenticated
+        # project in playwright.config.js; screenshot is not a CLI option.
+        run: npm run test:e2e -- --trace=off
       - name: Record non-secret authenticated candidate evidence
         if: ${{ steps.browser.outcome == 'success' }}
         env:
