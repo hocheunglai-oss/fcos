@@ -25,6 +25,7 @@ test('local Supabase shutdown preserves data and does not stop unrelated contain
   assert.match(localServices, /Docker Desktop remains running because other containers are active/);
 });
 
-test('CI always removes its disposable Supabase services', () => {
-  assert.match(qualityWorkflow, /name: Stop temporary Supabase services[\s\S]*if: \$\{\{ always\(\) \}\}[\s\S]*supabase stop --no-backup/);
+test('CI always removes disposable Supabase services after startup was attempted', () => {
+  assert.match(qualityWorkflow, /id: start-supabase[\s\S]*run: supabase start/);
+  assert.match(qualityWorkflow, /name: Stop temporary Supabase services[\s\S]*if: \$\{\{ always\(\) && steps\.start-supabase\.outcome != 'skipped' && steps\.start-supabase\.outcome != '' \}\}[\s\S]*supabase stop --no-backup/);
 });
