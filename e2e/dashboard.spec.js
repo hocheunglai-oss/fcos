@@ -10,10 +10,19 @@ test.describe('Dashboard', () => {
   test.use({ storageState: authState });
 
   test('keeps combined reference filters and all three views responsive without browser errors', async ({ page }) => {
+    test.setTimeout(90_000);
     const failures = [];
     page.on('pageerror', (error) => failures.push(error.message));
 
-    await page.goto('/');
+    // Analytics starts after the summary response. A cold live Salesforce
+    // load can outlast a short UI assertion even when both requests succeed.
+    const [analyticsResponse] = await Promise.all([
+      page.waitForResponse((response) => new URL(response.url()).pathname === '/api/functions/dashboardAnalytics'
+        && response.request().method() === 'POST', { timeout: 30_000 }),
+      page.goto('/'),
+    ]);
+    expect(analyticsResponse.status(), 'Dashboard analytics must return successfully').toBe(200);
+    expect(await analyticsResponse.finished(), 'Dashboard analytics response must finish').toBeNull();
     const dashboardHeading = page.getByRole('heading', { name: 'Dashboard', exact: true });
     await expect(dashboardHeading).toBeVisible();
     await expect(page.getByRole('tab', { name: 'Overview', exact: true })).toHaveAttribute('data-state', 'active');
