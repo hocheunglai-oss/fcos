@@ -1,0 +1,8 @@
+# The secret-bearing release harness must receive explicit owner review.
+/.github/ @hocheunglai-oss
+/e2e/ @hocheunglai-oss
+/playwright.config.js @hocheunglai-oss
+/scripts/e2e-*.mjs @hocheunglai-oss
+/scripts/verify-e2e-candidate.mjs @hocheunglai-oss
+/config/fcosCiIdentity.js @hocheunglai-oss
+/api/_readOnlyCiAccess.js @hocheunglai-oss

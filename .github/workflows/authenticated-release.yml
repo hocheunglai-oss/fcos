@@ -1,0 +1,115 @@
+name: FCOS authenticated release evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_commit:
+        description: Full lowercase SHA of the reviewed PR candidate.
+        required: true
+        type: string
+      candidate_url:
+        description: Exact immutable Vercel candidate origin for that SHA.
+        required: true
+        type: string
+
+# The trusted harness receives read-only deployment metadata access and never
+# creates a check-run. It publishes non-secret evidence only after acceptance.
+permissions:
+  contents: read
+
+jobs:
+  require-default-branch-dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reject a non-default-branch dispatch
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          TRUSTED_REF_PROTECTED: ${{ github.ref_protected }}
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH" ]; then
+            echo "::error::Run this workflow from the protected default branch only."
+            exit 1
+          fi
+          if [ "$TRUSTED_REF_PROTECTED" != "true" ]; then
+            echo "::error::Protect the default branch and require workflow-owner review before enabling authenticated release evidence."
+            exit 1
+          fi
+
+  authenticated-candidate:
+    needs: require-default-branch-dispatch
+    runs-on: ubuntu-latest
+    # This protected environment must require a human reviewer before any
+    # environment secret is exposed. Its name is deliberately fixed here.
+    environment: fcos-ci-readonly
+    permissions:
+      contents: read
+      deployments: read
+    env:
+      FCOS_E2E_EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+      FCOS_E2E_CANDIDATE_URL: ${{ inputs.candidate_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Never checkout, install, or execute PR-head repository code.
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Configure private state paths on the runner
+        run: |
+          state_dir="$RUNNER_TEMP/fcos-e2e-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "FCOS_E2E_STATE_DIR=$state_dir" >> "$GITHUB_ENV"
+          echo "FCOS_E2E_STORAGE_STATE=$state_dir/auth.json" >> "$GITHUB_ENV"
+          echo "FCOS_E2E_PROTECTION_STATE=$state_dir/protection.json" >> "$GITHUB_ENV"
+      - name: Create private state directory
+        run: node scripts/e2e-private-state.mjs prepare
+      - name: Verify the exact immutable candidate before test authentication
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          FCOS_E2E_VERCEL_BYPASS: ${{ secrets.FCOS_E2E_VERCEL_BYPASS }}
+        run: node scripts/verify-e2e-candidate.mjs
+      - name: Require the governed renewable FCUNO identity
+        env:
+          FCOS_AUTH_E2E_ENABLED: ${{ vars.FCOS_AUTH_E2E_ENABLED }}
+          FCOS_E2E_EMAIL: ${{ secrets.FCOS_E2E_EMAIL }}
+          FCOS_E2E_PASSWORD: ${{ secrets.FCOS_E2E_PASSWORD }}
+        run: |
+          if [ "$FCOS_AUTH_E2E_ENABLED" != "true" ]; then
+            echo "::error::Authenticated browser verification is disabled. Provision and enable the governed renewable test identity."
+            exit 1
+          fi
+          test -n "$FCOS_E2E_EMAIL"
+          test -n "$FCOS_E2E_PASSWORD"
+      - run: npm ci
+      - run: npx playwright install --with-deps chrome
+      - id: browser
+        name: Run the trusted read-only browser harness
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          FCOS_REQUIRE_AUTH_E2E: 1
+          FCOS_E2E_VERCEL_BYPASS: ${{ secrets.FCOS_E2E_VERCEL_BYPASS }}
+          FCOS_E2E_EMAIL: ${{ secrets.FCOS_E2E_EMAIL }}
+          FCOS_E2E_PASSWORD: ${{ secrets.FCOS_E2E_PASSWORD }}
+        # Screenshot/video suppression is configured for every authenticated
+        # project in playwright.config.js; screenshot is not a CLI option.
+        run: npm run test:e2e -- --trace=off
+      - name: Record non-secret authenticated candidate evidence
+        if: ${{ steps.browser.outcome == 'success' }}
+        env:
+          FCOS_E2E_HARNESS_SHA: ${{ github.sha }}
+        run: |
+          umask 077
+          node -e 'const fs = require("node:fs"); fs.writeFileSync(`${process.env.RUNNER_TEMP}/fcos-ci-evidence.json`, `${JSON.stringify({ candidateSha: process.env.FCOS_E2E_EXPECTED_COMMIT, candidateUrl: process.env.FCOS_E2E_BASE_URL, harnessSha: process.env.FCOS_E2E_HARNESS_SHA })}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });'
+      - name: Upload authenticated candidate evidence
+        if: ${{ steps.browser.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: fcos-ci-evidence-${{ inputs.expected_commit }}
+          path: ${{ runner.temp }}/fcos-ci-evidence.json
+          if-no-files-found: error
+          retention-days: 7
+      - name: Remove private browser state
+        if: ${{ always() }}
+        run: node scripts/e2e-private-state.mjs cleanup

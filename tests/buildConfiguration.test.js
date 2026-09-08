@@ -5,15 +5,20 @@ import { readFile } from 'node:fs/promises';
 const readSource = (path) => readFile(new URL(path, import.meta.url), 'utf8');
 
 test('local, CI, and Vercel builds use the same Node major and deterministic installs', async () => {
-  const [packageJson, workflow, vercelConfig, nvmrc] = await Promise.all([
+  const [packageJson, workflow, authenticatedWorkflow, vercelConfig, nvmrc] = await Promise.all([
     readSource('../package.json').then(JSON.parse),
     readSource('../.github/workflows/quality.yml'),
+    readSource('../.github/workflows/authenticated-release.yml'),
     readSource('../vercel.json').then(JSON.parse),
     readSource('../.nvmrc'),
   ]);
   assert.equal(packageJson.engines.node, '24.x');
-  assert.deepEqual([...workflow.matchAll(/node-version:\s*(\d+)/g)].map((match) => match[1]), ['24', '24']);
+  for (const source of [workflow, authenticatedWorkflow]) {
+    assert.deepEqual([...source.matchAll(/node-version:\s*(\d+)/g)].map((match) => match[1]), ['24']);
+    assert.match(source, /run: npm ci/);
+  }
   assert.equal(vercelConfig.installCommand, 'npm ci');
+  assert.equal(vercelConfig.git.deploymentEnabled.main, false, 'main merges must not replace Production before release verification');
   assert.deepEqual(vercelConfig.regions, ['sin1']);
   assert.equal(nvmrc.trim(), '24');
 });
