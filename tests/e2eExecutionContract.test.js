@@ -23,6 +23,21 @@ test('the actual workflow Playwright arguments collect tests without a browser, 
   assert.match(run.stdout, /dashboard\.spec\.js/);
 });
 
+test('the governed CI run collects only its read-only suites and renewable authentication dependency', () => {
+  const run = spawnSync(process.execPath, [cli, 'test', '--list', '--trace=off'], {
+    cwd: root,
+    env: { ...cleanEnv, FCOS_REQUIRE_AUTH_E2E: '1', FCOS_E2E_EMAIL: 'synthetic',
+      FCOS_E2E_PASSWORD: 'synthetic', FCOS_E2E_STORAGE_STATE: '/synthetic/auth.json' },
+    encoding: 'utf8', timeout: 30_000,
+  });
+  assert.equal(run.status, 0, run.stderr);
+  const collectedFiles = [...new Set([...run.stdout.matchAll(/([\w-]+\.(?:spec|setup)\.js):\d+/g)].map((match) => match[1]))].sort();
+  assert.deepEqual(collectedFiles, ['api-denials.spec.js', 'auth.setup.js', 'dashboard.spec.js', 'workspace-smoke.spec.js']);
+  assert.match(run.stdout, /Payment Collections is denied/);
+  assert.match(run.stdout, /Special Terms is denied/);
+  assert.doesNotMatch(run.stdout, /payment-reminders\.spec\.js|special-terms\.spec\.js/);
+});
+
 test('authenticated browser projects disable screenshots, traces and video through supported configuration', () => {
   for (const authEnv of [
     { FCOS_REQUIRE_AUTH_E2E: '1' },

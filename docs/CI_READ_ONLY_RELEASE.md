@@ -57,6 +57,11 @@ Screenshot and video suppression is enforced in `playwright.config.js` for all
 authenticated projects, including stored-session runs. The command uses only
 supported CLI options; a local `--list` regression check exercises the exact
 workflow arguments without signing in or starting a server.
+With `FCOS_REQUIRE_AUTH_E2E=1`, collection is limited to the read-only workspace
+matrix, Dashboard and API-denial suites, plus their renewable authentication
+dependency. Payment-reminder and Special Terms functional suites remain in
+ordinary test runs; this restricted identity tests denial of those pages instead
+of being granted extra permissions to open them.
 
 ## Human-review boundary
 
