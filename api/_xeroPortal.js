@@ -131,12 +131,19 @@ export async function xeroPortalStatus(body = {}, { req = null, env = process.en
   };
 }
 
+// The only supported OAuth destination is the FCOS Xero workspace. In particular,
+// slash-prefixed network paths and backslash variants must never become redirects.
+export function xeroPortalReturnPath(value) {
+  if (value == null || value === '' || value === '/xero-portal') return '/xero-portal';
+  throw portalError('Return to Xero Portal and restart the connection.', 400, 'XERO_PORTAL_INVALID_RETURN_PATH');
+}
+
 export async function xeroPortalConnectStart(body = {}, { req = null, env = process.env } = {}) {
   const config = xeroPortalConfig(env, req);
   if (!config.configured) {
     throw portalError(`Missing Xero credentials: ${config.missing.join(', ')}`, 503, 'XERO_PORTAL_XERO_CONFIG_MISSING');
   }
-  const returnPath = String(body.returnPath || '/xero-portal').startsWith('/') ? String(body.returnPath || '/xero-portal') : '/xero-portal';
+  const returnPath = xeroPortalReturnPath(body.returnPath);
   const state = signXeroOAuthState({ redirectUri: config.redirectUri, returnPath }, env);
   const url = new URL('/identity/connect/authorize', AUTHORIZATION_BASE);
   url.searchParams.set('response_type', 'code');
@@ -154,6 +161,7 @@ export async function xeroPortalConnectStart(body = {}, { req = null, env = proc
 export async function exchangeXeroAuthorizationCode({ code, state, req = null, env = process.env, fetchImpl = fetch } = {}) {
   if (!nonBlank(code)) throw portalError('Xero did not return an authorization code.', 400, 'XERO_PORTAL_AUTH_CODE_MISSING');
   const payload = verifyXeroOAuthState(state, env);
+  const returnPath = xeroPortalReturnPath(payload.returnPath);
   const config = xeroPortalConfig(env, req, payload.redirectUri);
   if (!config.configured) {
     throw portalError(`Missing Xero credentials: ${config.missing.join(', ')}`, 503, 'XERO_PORTAL_XERO_CONFIG_MISSING');
@@ -184,7 +192,7 @@ export async function exchangeXeroAuthorizationCode({ code, state, req = null, e
   await writeStoredXeroConnection(client, connection);
   return {
     tenant,
-    returnPath: String(payload.returnPath || '/xero-portal').startsWith('/') ? String(payload.returnPath || '/xero-portal') : '/xero-portal',
+    returnPath,
   };
 }
 

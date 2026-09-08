@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { normalizeAccountPicRowColorRules } from '../src/lib/accountPicRowColors.js';
+import { spreadsheetCsvTextCell } from '../shared/spreadsheetCsv.js';
 
 export const ACCOUNT_PIC_CSV_HEADERS = Object.freeze([
   'Port / Region',
@@ -163,15 +164,10 @@ export function parseAccountPicCsv(csvText) {
   return normalizeAccountPicRows(rows, { requireAtLeastOne: true });
 }
 
-function csvCell(value) {
-  const normalized = normalizeAccountPicCell(value);
-  return /[",\n]/.test(normalized) ? `"${normalized.replace(/"/g, '""')}"` : normalized;
-}
-
 export function accountPicCsv(rows = []) {
   const normalizedRows = normalizeAccountPicRows(rows);
-  const body = normalizedRows.map((row) => ACCOUNT_PIC_CSV_HEADERS.map((header) => csvCell(row[FIELD_BY_HEADER[header]])).join(','));
-  return `\uFEFF${[ACCOUNT_PIC_CSV_HEADERS.join(','), ...body].join('\r\n')}\r\n`;
+  const body = normalizedRows.map((row) => ACCOUNT_PIC_CSV_HEADERS.map((header) => spreadsheetCsvTextCell(row[FIELD_BY_HEADER[header]])).join(','));
+  return `\uFEFF${[ACCOUNT_PIC_CSV_HEADERS.map(spreadsheetCsvTextCell).join(','), ...body].join('\r\n')}\r\n`;
 }
 
 export function accountPicPayloadHash({ accountId, rows = [] } = {}) {

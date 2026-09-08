@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Copy, Loader2, RefreshCw, Users } from 'lucide-react';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { appClient } from '@/api/appClient';
 import CreditStatementSideToggle from '@/components/dashboard/CreditStatementSideToggle';
 import GroupAccountScopeSelector from '@/components/dashboard/GroupAccountScopeSelector';
+import { AccountInsightStatementScopeContext } from '@/components/dashboard/AccountInsightStatementScopeContext';
 import { Button } from '@/components/ui/button';
 import PaymentDataReliabilityBadge from '@/components/common/PaymentDataReliabilityBadge';
 
@@ -134,7 +135,8 @@ function StatementCard({ row, selected, onSelect, onStemClick }) {
   return <article className={`rounded-lg border p-4 ${row.rowType === 'uninvoiced' ? 'border-amber-200 bg-amber-50/40' : 'border-border bg-card'}`}><div className="flex items-start gap-3"><input type="checkbox" aria-label={`Select ${row.stemName || row.rowId}`} checked={selected} disabled={!selectable} onChange={() => onSelect(row)} /><div className="min-w-0 flex-1"><button type="button" className="font-semibold text-primary hover:underline" onClick={() => onStemClick(row.stemId)}>{row.stemName || 'STEM unavailable'}</button><div className="mt-1 text-xs text-muted-foreground">{row.supplierName || 'Supplier unavailable'} · {row.currency}</div><div className="mt-2 text-sm font-semibold">{evidenceSummary(row)}</div><div className="mt-1 text-xs">{row.rowType === 'issued' ? `Due ${displayDate(row.dueDate)}` : `Expected payment ${displayDate(row.expectedPaymentDate)}`}</div>{!row.exposureComplete ? <div className="mt-2 text-xs text-amber-800">Estimate unavailable: {row.warnings?.[0] || 'Required evidence is incomplete.'}</div> : null}<EvidenceDetails row={row} /></div></div></article>;
 }
 
-export default function SupplierCreditStatement({ accountId, entityType = 'account', includedGroupAccountIds = null, onGroupScopeChange, active, filters = {}, statementSide = 'supplier', availableStatementSides = ['supplier'], onStatementSideChange, onStemClick }) {
+export default function SupplierCreditStatement({ accountId, entityType = 'account', includedGroupAccountIds = null, onGroupScopeChange, hideGroupScopeSelector = false, active, filters = {}, statementSide = 'supplier', availableStatementSides = ['supplier'], onStatementSideChange, onStemClick }) {
+  const sharedStatementScopeChange = useContext(AccountInsightStatementScopeContext);
   const [scope, setScope] = useState('open');
   const [includeGroup, setIncludeGroup] = useState(false);
   const [result, setResult] = useState(null);
@@ -179,6 +181,7 @@ export default function SupplierCreditStatement({ accountId, entityType = 'accou
   }, [accountId, active, entityType, filterPayload, groupIncluded, includedGroupAccountIds, scope]);
 
   useEffect(() => { if (active) load(); return () => requestRef.current?.abort(); }, [active, load]);
+  useEffect(() => { sharedStatementScopeChange?.(scope); }, [scope, sharedStatementScopeChange]);
   useEffect(() => { setSelectedIds(new Set()); setCopied(false); }, [accountId, groupIncluded, includedGroupAccountIds, scope]);
   if (!active) return null;
   if (loading && !result) return <div className="flex h-72 items-center justify-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin" />Loading live Supplier Credit Statement…</div>;
@@ -192,7 +195,7 @@ export default function SupplierCreditStatement({ accountId, entityType = 'accou
 
   return <div className="space-y-5" data-testid="supplier-credit-statement">
     <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-4 lg:flex-row lg:items-center lg:justify-between"><div><div className="flex flex-wrap items-center gap-2"><h2 className="font-semibold">Supplier Credit Statement</h2><PaymentDataReliabilityBadge excludedCount={result.paymentDataReliability?.excludedLegacyRecordCount} /></div><p className="mt-1 text-xs text-muted-foreground">{result.identity.name} · {entityType === 'group' ? 'selected GROUP Accounts' : 'exact supplier Account'}{result.group ? ` · Ultimate GROUP ${result.group.name}` : ''}</p></div><div className="flex flex-wrap gap-2">{SCOPES.map((item) => <Button key={item.value} type="button" size="sm" variant={scope === item.value ? 'default' : 'outline'} onClick={() => { setResult(null); setNavigation({ cursor: null, history: [] }); setScope(item.value); }}>{item.label}</Button>)}{entityType !== 'group' ? <Button type="button" size="sm" variant={includeGroup ? 'secondary' : 'outline'} aria-pressed={includeGroup} onClick={() => { setResult(null); setNavigation({ cursor: null, history: [] }); setIncludeGroup((value) => !value); }} disabled={!result.group}><Users className="mr-1.5 h-4 w-4" />Include GROUP</Button> : null}<Button type="button" size="icon" variant="ghost" aria-label="Refresh Supplier Credit Statement" onClick={() => load({ cursor: navigation.cursor, history: navigation.history, force: true })} disabled={loading}><RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /></Button></div></div>
-    <GroupAccountScopeSelector groupScope={result.groupScope} selectedAccountIds={includedGroupAccountIds} onChange={(ids) => { setNavigation({ cursor: null, history: [] }); setSelectedIds(new Set()); onGroupScopeChange?.(ids); }} disabled={loading} />
+    {!hideGroupScopeSelector ? <GroupAccountScopeSelector groupScope={result.groupScope} selectedAccountIds={includedGroupAccountIds} onChange={(ids) => { setNavigation({ cursor: null, history: [] }); setSelectedIds(new Set()); onGroupScopeChange?.(ids); }} disabled={loading} /> : null}
     {error ? <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800"><AlertTriangle className="mt-0.5 h-4 w-4" />{error}</div> : null}
     {result.warnings?.length ? <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950"><button type="button" className="flex w-full items-center justify-between gap-3 text-left font-semibold" onClick={() => setExpandedWarnings((value) => !value)}><span>Supplier statement safeguards · {result.warnings.length}</span>{expandedWarnings ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}</button>{expandedWarnings ? <ul className="mt-2 space-y-1 text-xs">{result.warnings.map((warning) => <li key={warning}>• {warning}</li>)}</ul> : null}</div> : null}
     <section className={`grid gap-4 ${entityType !== 'group' && groupIncluded && result.group ? 'xl:grid-cols-2' : ''}`}>{entityType !== 'group' ? <CurrencyPosition title="Selected Account" rows={result.kpis?.account} /> : null}{groupIncluded && result.group ? <CurrencyPosition title={entityType === 'group' ? 'Selected GROUP Accounts' : 'GROUP'} rows={result.kpis?.group} /> : null}</section>

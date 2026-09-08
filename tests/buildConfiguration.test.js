@@ -5,14 +5,15 @@ import { readFile } from 'node:fs/promises';
 const readSource = (path) => readFile(new URL(path, import.meta.url), 'utf8');
 
 test('local, CI, and Vercel builds use the same Node major and deterministic installs', async () => {
-  const [packageJson, workflow, vercelConfig, nvmrc] = await Promise.all([
+  const [packageJson, workflow, vercelConfig, nvmrc, authenticatedWorkflow] = await Promise.all([
     readSource('../package.json').then(JSON.parse),
     readSource('../.github/workflows/quality.yml'),
     readSource('../vercel.json').then(JSON.parse),
     readSource('../.nvmrc'),
+    readSource('../.github/workflows/authenticated-release.yml'),
   ]);
   assert.equal(packageJson.engines.node, '24.x');
-  assert.deepEqual([...workflow.matchAll(/node-version:\s*(\d+)/g)].map((match) => match[1]), ['24', '24']);
+  assert.deepEqual([...(workflow + authenticatedWorkflow).matchAll(/node-version:\s*(\d+)/g)].map((match) => match[1]), ['24', '24']);
   assert.equal(vercelConfig.installCommand, 'npm ci');
   assert.deepEqual(vercelConfig.regions, ['sin1']);
   assert.equal(nvmrc.trim(), '24');

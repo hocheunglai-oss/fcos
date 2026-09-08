@@ -1,7 +1,8 @@
-import { isSupabaseConfigured, supabase } from '@/lib/supabaseClient';
+import { authConfigurationError, isLocalAdminAllowed, isSupabaseConfigured, supabase } from '@/lib/supabaseClient';
 import { navigationCacheDecision } from '@/lib/navigationCachePolicy';
 import { publishSalesforceFreshness } from '@/lib/salesforceFreshness';
 import { FUNCTION_CONTRACT_VERSION, validateFunctionRequest } from '@/api/functionContracts';
+import { clientSessionState, isCurrentClientSession, onClientSessionReset, setClientSessionOwner } from '../lib/clientSessionState.js';
 
 const STORAGE_PREFIX = 'fcos';
 const DEFAULT_FUNCTION_CACHE_TTL_MS = 30_000;
@@ -9,6 +10,11 @@ const MAX_FUNCTION_CACHE_ENTRIES = 24;
 const functionResponseCache = new Map();
 const inFlightFunctionRequests = new Map();
 let functionCacheGeneration = 0;
+onClientSessionReset(() => clearFunctionCache());
+
+function changedSessionResponse() {
+  return { data: { error: 'Your account changed. Refresh this view.', cancelled: true }, meta: { cancelled: true, cacheStatus: 'CANCELLED' } };
+}
 
 const DEDICATED_FUNCTION_ENDPOINTS = Object.freeze({
   emailRouterBackgroundSync: '/api/email-router-background-sync',
@@ -56,7 +62,10 @@ function functionCacheKey(name, payload) {
 }
 
 async function requestAuthContext() {
-  if (!isSupabaseConfigured) return { accessToken: null, scope: 'local' };
+  if (!isSupabaseConfigured) {
+    if (!isLocalAdminAllowed) throw new Error(authConfigurationError);
+    return { accessToken: null, scope: 'local' };
+  }
   const { data } = await supabase.auth.getSession();
   return {
     accessToken: data?.session?.access_token || null,
@@ -161,6 +170,7 @@ function createEntityStore(name) {
 }
 
 async function requestFunction(name, payload, options, cacheKey, authContext, cacheGeneration) {
+  const session = clientSessionState();
   const headers = { 'content-type': 'application/json' };
   if (DEDICATED_FUNCTION_ENDPOINTS[name]) headers['x-fcos-function-name'] = name;
   if (options.force) headers['x-fcos-cache-bypass'] = '1';
@@ -203,6 +213,7 @@ async function requestFunction(name, payload, options, cacheKey, authContext, ca
   const responseContentType = res.headers?.get?.('content-type') || '';
   const responseIsJson = responseContentType.toLowerCase().includes('application/json');
   const data = responseIsJson ? await res.json().catch(() => ({})) : {};
+  if (!isCurrentClientSession(session)) return changedSessionResponse();
   const responseHeader = (name) => res.headers?.get?.(name) || null;
   const serverCacheStatus = responseHeader('x-fcos-cache') || 'BYPASS';
   const serverFetchedAt = responseHeader('x-fcos-data-fetched-at') || now();
@@ -304,6 +315,7 @@ function startFunctionRequest(name, payload, options, cacheKey, authContext) {
 }
 
 async function invoke(name, payload = {}, options = {}) {
+  const session = clientSessionState();
   const contract = validateFunctionRequest(name, payload);
   if (!contract.ok) {
     return {
@@ -316,6 +328,7 @@ async function invoke(name, payload = {}, options = {}) {
     };
   }
   const authContext = await requestAuthContext();
+  if (!isCurrentClientSession(session)) return changedSessionResponse();
   const rawCacheKey = options.cacheKey || (options.cache ? functionCacheKey(name, payload) : null);
   const cacheKey = rawCacheKey ? `${authContext.scope}:${rawCacheKey}` : null;
   const cached = cacheKey ? functionResponseCache.get(cacheKey) : null;
@@ -336,6 +349,7 @@ async function invoke(name, payload = {}, options = {}) {
     touchFunctionCache(cacheKey, cached);
     const backgroundRequest = startFunctionRequest(name, payload, { ...options, force: false }, cacheKey, authContext);
     backgroundRequest.then((result) => {
+      if (!isCurrentClientSession(session)) return;
       if (result.data?.error) {
         const fallback = browserCacheResponse(cached, 'STALE_ERROR', false);
         fallback.meta.refreshError = result.data.error;
@@ -344,6 +358,7 @@ async function invoke(name, payload = {}, options = {}) {
       }
       options.onBackgroundUpdate?.(result);
     }).catch((error) => {
+      if (!isCurrentClientSession(session)) return;
       const fallback = browserCacheResponse(cached, 'STALE_ERROR', false);
       fallback.meta.refreshError = error?.message || 'Background refresh failed.';
       options.onBackgroundUpdate?.(fallback);
@@ -355,10 +370,12 @@ async function invoke(name, payload = {}, options = {}) {
 }
 
 async function download(name, payload = {}, options = {}) {
+  const session = clientSessionState();
   const headers = { 'content-type': 'application/json' };
   if (DEDICATED_FUNCTION_ENDPOINTS[name]) headers['x-fcos-function-name'] = name;
   if (options.force) headers['x-fcos-cache-bypass'] = '1';
   const authContext = await requestAuthContext();
+  if (!isCurrentClientSession(session)) throw new Error('Your account changed. Request the download again.');
   if (authContext.accessToken) headers.authorization = `Bearer ${authContext.accessToken}`;
   const response = await fetch(functionEndpoint(name), {
     method: 'POST',
@@ -375,7 +392,9 @@ async function download(name, payload = {}, options = {}) {
   const encoded = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
   const quoted = disposition.match(/filename="([^"]+)"/i)?.[1];
   const filename = encoded ? decodeURIComponent(encoded) : quoted || 'download';
-  return { blob: await response.blob(), filename };
+  const blob = await response.blob();
+  if (!isCurrentClientSession(session)) throw new Error('Your account changed. Request the download again.');
+  return { blob, filename };
 }
 
 function clearFunctionCache() {
@@ -399,6 +418,7 @@ export const appClient = {
         if (error) throw error;
         return data.user;
       }
+      if (!isLocalAdminAllowed) throw new Error(authConfigurationError);
       return {
         id: 'local-admin',
         full_name: 'Vincent',
@@ -407,6 +427,7 @@ export const appClient = {
       };
     },
     async logout() {
+      setClientSessionOwner(null);
       clearFunctionCache();
       if (isSupabaseConfigured) await supabase.auth.signOut();
     },

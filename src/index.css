@@ -570,6 +570,48 @@
 /* Dashboard and Account Insight pilot */
 .workspace-dashboard {
   container-type: inline-size;
+  container-name: dashboard;
+  min-width: 0;
+}
+
+/* Dashboard-only geometry: shared headers on other workspaces remain unchanged. */
+.workspace-dashboard > .app-page-header { margin-bottom: 0.75rem; }
+.workspace-dashboard .dashboard-controls { top: calc(var(--dashboard-header-height, var(--workspace-toolbar-height)) + 0.5rem); }
+.dashboard-filter-content { border-radius: inherit; }
+.dashboard-mobile-filter-summary { display: none; }
+.dashboard-control-topline, .dashboard-period-control, .dashboard-control-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem; min-width: 0; }
+.dashboard-control-topline { justify-content: space-between; }
+.dashboard-control-actions { margin-left: auto; }
+.dashboard-search-row { display: grid; min-width: 0; gap: 0.5rem; }
+.dashboard-search-row.with-perspective { grid-template-columns: 11rem minmax(0, 1fr); }
+.dashboard-keyword-filters { display: grid; grid-template-columns: minmax(0, 1.8fr) minmax(0, 1fr); min-width: 0; gap: 0.5rem; }
+.dashboard-primary-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.75rem; }
+.dashboard-primary-kpi { overflow-wrap: anywhere; }
+.dashboard-activity-strip { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.5rem 1rem; }
+.dashboard-activity-strip > div { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0.25rem 0.5rem; }
+.dashboard-activity-strip dt { font-size: 0.75rem; color: hsl(var(--muted-foreground)); }
+.dashboard-activity-strip dd { font-size: 0.875rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+.dashboard-activity-strip span { flex-basis: 100%; font-size: 0.6875rem; color: hsl(var(--muted-foreground)); }
+
+@container dashboard (max-width: 1099px) {
+  .dashboard-primary-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dashboard-search-row.with-perspective { grid-template-columns: 9rem minmax(0, 1fr); }
+}
+@container dashboard (max-width: 699px) {
+  .dashboard-mobile-filter-summary { display: flex; }
+  .dashboard-filter-content:not(.is-expanded) { display: none; }
+  .dashboard-filter-content.is-expanded { max-height: min(65dvh, calc(100dvh - var(--dashboard-header-height, 7rem) - 5rem)); overflow: auto; }
+  .dashboard-control-actions { margin-left: 0; }
+  .dashboard-search-row.with-perspective { grid-template-columns: minmax(0, 1fr); }
+  .dashboard-perspective { max-width: 14rem; }
+  .dashboard-keyword-filters { grid-template-columns: minmax(0, 1fr); }
+  .dashboard-activity-strip { grid-template-columns: minmax(0, 1fr); gap: 0.5rem; }
+  .dashboard-activity-strip span { flex-basis: auto; }
+}
+@container dashboard (max-width: 479px) {
+  .dashboard-primary-kpis { grid-template-columns: minmax(0, 1fr); }
+  .dashboard-primary-kpi { padding: 0.75rem; }
+  .workspace-dashboard article dl { grid-template-columns: minmax(0, 1fr); }
 }
 
 .workspace-filter-rail {

@@ -3,6 +3,7 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const ONE_DAY_MS = 86_400_000;
 
 import { SALESFORCE_CORPORATE_CURRENCY } from './_decisionDashboard.js';
+import { calculatedBuyerPayTermDate, resolvedBuyerInvoiceDueDate } from './_buyerInvoiceDates.js';
 import { PAYMENT_DATA_RELIABLE_FROM } from '../src/lib/paymentDataReliability.js';
 import {
   BUYER_PAYMENT_CONSERVATIVENESS,
@@ -430,8 +431,8 @@ function earliestDated(rows, fields, today, { allowPast = false } = {}) {
 
 function contractualReleaseCandidate(stem, cashflows, today) {
   const cashflowDue = earliestDated(cashflows, ['Invoice_Due_Date__c'], today, { allowPast: true });
-  const stemDue = [stem.Invoice_Due_Date__c, stem.QLIK_Invoice_Due_Date__c, stem.Due_Date__c]
-    .map(dateOnly).filter(Boolean).sort()[0] || null;
+  const dueBasis = { ...stem, Payment_Term__c: stem.Payment_Term__c ?? stem.Payment_Term_Number__c };
+  const stemDue = resolvedBuyerInvoiceDueDate(dueBasis);
   const authoritativeDue = cashflowDue?.date || stemDue;
   if (authoritativeDue) {
     return authoritativeDue < today
@@ -439,8 +440,13 @@ function contractualReleaseCandidate(stem, cashflows, today) {
       : { date: authoritativeDue, source: cashflowDue ? 'cashflow_invoice_due' : 'stem_invoice_due', sourceLabel: cashflowDue ? 'Cashflow invoice due' : 'STEM invoice due' };
   }
 
-  const expectedPayment = dateOnly(stem.Expected_Delivery_Date_Payment_Term__c)
-    || addDays(stem.Delivery_Date__c || stem.Expected_Delivery_Date__c, stem.Payment_Term_Number__c ?? stem.Payment_Term__c);
+  // A checked override is authoritative even when blank. Known extra-cost-only
+  // cases intentionally have no contractual calculation. Forecasts may use ETA
+  // for product deliveries, but must retain the shared inclusive day-one rule.
+  const expectedPayment = stem.Due_Date_Override__c === true ? null : calculatedBuyerPayTermDate({
+    ...dueBasis,
+    Delivery_Date__c: stem.Delivery_Date__c || stem.Expected_Delivery_Date__c,
+  });
   if (expectedPayment) {
     return expectedPayment < today
       ? { date: null, missedDate: expectedPayment, source: 'past_due_unknown', sourceLabel: 'Past due — release unknown' }
@@ -1016,6 +1022,11 @@ export function expectedBuyerInvoiceEstimate({
     if (quantity.basis === 'range_max_quantity') usesMaximumQuantity = true;
   }
   for (const item of activeExtraCosts) {
+    const fixedPrice = number(item.Lumpsum_Price__c);
+    if (fixedPrice != null) {
+      amount += fixedPrice;
+      continue;
+    }
     const unitPrice = number(item.Unit_Price__c);
     if (unitPrice == null) {
       const fixedAmount = number(item.Line_Total__c);

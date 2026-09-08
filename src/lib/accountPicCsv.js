@@ -1,3 +1,5 @@
+import { spreadsheetCsvTextCell } from '../../shared/spreadsheetCsv.js';
+
 export const ACCOUNT_PIC_CSV_HEADERS = Object.freeze([
   'Port / Region',
   'Responsible Personnel',
@@ -129,16 +131,11 @@ export function parseAccountPicCsv(source) {
   return rows;
 }
 
-function csvValue(value) {
-  const text = normalizedCell(value);
-  return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
-}
-
 export function accountPicCsvText(rows = []) {
   const records = rows.map((row) => normalizeAccountPicRow(row));
   return `\uFEFF${[
-    ACCOUNT_PIC_CSV_HEADERS.join(','),
-    ...records.map((row) => FIELD_NAMES.map((fieldName) => csvValue(row[fieldName])).join(',')),
+    ACCOUNT_PIC_CSV_HEADERS.map(spreadsheetCsvTextCell).join(','),
+    ...records.map((row) => FIELD_NAMES.map((fieldName) => spreadsheetCsvTextCell(row[fieldName])).join(',')),
   ].join('\r\n')}\r\n`;
 }
 

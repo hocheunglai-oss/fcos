@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { isReadOnlyCiProfile, requireReadOnlyCiOperation } from './_readOnlyCiAccess.js';
 import { richTextPlainLength, sanitizeRichText } from './_richText.js';
 import {
   calcSwapFees,
@@ -798,9 +799,12 @@ export async function handleHedgeDeskEntity(body, profile, { client, capabilitie
 }
 
 export async function handleHedgeMarkets(body, profile, { client, capabilities }) {
+  requireReadOnlyCiOperation(profile, 'hedgeMarkets', body);
   const action = String(body?.action || 'snapshot');
   if (action === 'snapshot') {
-    const expiryAutomation = await reconcilePaperHedgeExpiry(client);
+    const expiryAutomation = isReadOnlyCiProfile(profile)
+      ? { status: 'not_run', reason: 'read_only_identity' }
+      : await reconcilePaperHedgeExpiry(client);
     const [mops, settingsResult, marketIntelligence] = await Promise.all([
       listRows(client, 'MopsPrice', configFor('MopsPrice'), { limit: 2000 }),
       client.from('hedge_settings').select('id,key,value,revision,created_date,updated_date').in('key', ['general', 'fwd_spreads']),

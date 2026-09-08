@@ -67,7 +67,7 @@ const STATUS = {
   },
 };
 
-export default function DataStatus({ meta, state, label = 'Data', className }) {
+export default function DataStatus({ meta, state, label = 'Data', className, compact = false }) {
   const key = dataStatusFromMeta(meta, state);
   const definition = STATUS[key] || STATUS.unknown;
   const Icon = definition.icon;
@@ -89,7 +89,7 @@ export default function DataStatus({ meta, state, label = 'Data', className }) {
     >
       <Icon className={cn('h-3.5 w-3.5', ['pending', 'refreshing', 'stale'].includes(key) && 'animate-spin')} />
       <span>{label} · {definition.label}</span>
-      {time ? <span className="font-normal opacity-80">· {time}</span> : null}
+      {time && !compact ? <span className="font-normal opacity-80">· {time}</span> : null}
     </span>
   );
 }

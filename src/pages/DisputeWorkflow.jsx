@@ -18,7 +18,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { useDownloadAuthToken, withDownloadAuth } from '@/lib/authenticatedDownloadUrl';
+import { documentPreviewKind } from '@/lib/authenticatedDownloadUrl';
+import { AuthenticatedDocumentDownloadButton, AuthenticatedDocumentPreview } from '@/components/common/AuthenticatedDocumentPreview';
 import { numericValue, textValue } from '@/lib/displayValue';
 import {
   disputeClosureDefaults,
@@ -30,6 +31,10 @@ import { DISPUTE_WORKFLOW_USER_MANUAL } from '@/lib/pageUserManuals';
 import { useAuth } from '@/lib/AuthContext';
 import { cn } from '@/lib/utils';
 import { useNavigationAwareRequest } from '@/hooks/useNavigationAwareRequest';
+
+const DETAIL_HEADER_LEFT = "px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground";
+const DETAIL_HEADER_RIGHT = "px-3 py-2 text-right font-semibold uppercase tracking-wide text-muted-foreground";
+const STICKY_HEADER_LEFT = "sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground";
 
 const ACTIVE_STAGES = ['Draft', 'Pending Approval', 'Revision Requested', 'Rejected', 'Approved - Pending Accounting', 'Accounting In Progress', 'Settled - Ready to Close', 'Closed'];
 const DISPUTE_DELIVERY_DATE_MIN = '2026-01-01';
@@ -440,14 +445,6 @@ function documentTypeLabel(value) {
   return DOCUMENT_TYPES.find((type) => type.value === value)?.label || value || 'Document';
 }
 
-function documentPreviewKind(document) {
-  const extension = String(document?.fileExtension || document?.fileName || '').split('.').pop()?.toLowerCase();
-  const contentType = String(document?.contentType || '').toLowerCase();
-  if (extension === 'pdf' || contentType.includes('pdf')) return 'pdf';
-  if (['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(extension) || contentType.startsWith('image/')) return 'image';
-  return null;
-}
-
 function nextWorkflowOwner(stage, supplierInstructions = []) {
   if (stage === 'Closed') return 'Complete';
   if (stage === 'Pending Approval') return 'Approver';
@@ -713,13 +710,13 @@ function FinancialExposureSection({ stem, selectedAccountIds = [] }) {
           <table className="w-full min-w-[820px] text-xs">
             <thead>
               <tr className="border-b border-border bg-muted/40">
-                <th className="px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">Supplier</th>
-                <th className="px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">Supplier Invoice</th>
-                <th className="px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">Payment Due Date</th>
-                <th className="px-3 py-2 text-right font-semibold uppercase tracking-wide text-muted-foreground">Invoice Amount</th>
-                <th className="px-3 py-2 text-right font-semibold uppercase tracking-wide text-muted-foreground">Paid</th>
-                <th className="px-3 py-2 text-right font-semibold uppercase tracking-wide text-muted-foreground">Payable</th>
-                <th className="px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">Payment State</th>
+                <th className={DETAIL_HEADER_LEFT}>Supplier</th>
+                <th className={DETAIL_HEADER_LEFT}>Supplier Invoice</th>
+                <th className={DETAIL_HEADER_LEFT}>Payment Due Date</th>
+                <th className={DETAIL_HEADER_RIGHT}>Invoice Amount</th>
+                <th className={DETAIL_HEADER_RIGHT}>Paid</th>
+                <th className={DETAIL_HEADER_RIGHT}>Payable</th>
+                <th className={DETAIL_HEADER_LEFT}>Payment State</th>
               </tr>
             </thead>
             <tbody>
@@ -825,22 +822,10 @@ function WorkflowRulesModal({ open, onClose, capabilities }) {
 }
 
 function DocumentPreviewModal({ document, onClose }) {
-  const downloadAuthToken = useDownloadAuthToken(Boolean(document));
-  const url = document ? withDownloadAuth(document.downloadUrl, downloadAuthToken) : '';
-  const kind = documentPreviewKind(document);
   return (
     <Dialog open={Boolean(document)} onOpenChange={(nextOpen) => { if (!nextOpen) onClose(); }}>
       <DialogContent className="flex h-[92vh] w-[min(1100px,96vw)] max-w-none flex-col overflow-hidden p-0">
-        <DialogHeader className="shrink-0 border-b border-border px-5 py-4"><DialogTitle className="truncate pr-8 text-base">{document?.fileName || 'Document preview'}</DialogTitle></DialogHeader>
-        <div className="min-h-0 flex-1 bg-muted/20 p-3">
-          {kind === 'pdf' && <iframe title={document?.fileName || 'Document'} src={url} className="h-full w-full rounded-md border border-border bg-white" />}
-          {kind === 'image' && <div className="flex h-full items-center justify-center overflow-auto"><img src={url} alt={document?.fileName || 'Document'} className="max-h-full max-w-full object-contain" /></div>}
-          {!kind && <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Preview is not available for this file type.</div>}
-        </div>
-        <div className="flex shrink-0 justify-end gap-2 border-t border-border px-5 py-3">
-          {document?.salesforceUrl && <Button asChild variant="outline"><a href={document.salesforceUrl} target="_blank" rel="noreferrer"><ExternalLink className="mr-2 h-4 w-4" /> Salesforce</a></Button>}
-          <Button variant="outline" onClick={onClose}>Close</Button>
-        </div>
+        <AuthenticatedDocumentPreview document={document} stemId={document?.stemId} onClose={onClose} className="h-full w-full rounded-none border-0 shadow-none" />
       </DialogContent>
     </Dialog>
   );
@@ -1730,12 +1715,12 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
               <table className="w-full min-w-[980px] text-xs">
                 <thead>
                   <tr className="border-b border-border bg-muted/40">
-                    <th className="px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">Action</th>
-                    <th className="px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">Party</th>
-                    <th className="px-3 py-2 text-right font-semibold uppercase tracking-wide text-muted-foreground">Amount</th>
-                    <th className="px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">Close / Balance</th>
-                    <th className="px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">Accounting</th>
-                    <th className="px-3 py-2 text-right font-semibold uppercase tracking-wide text-muted-foreground">Control</th>
+                    <th className={DETAIL_HEADER_LEFT}>Action</th>
+                    <th className={DETAIL_HEADER_LEFT}>Party</th>
+                    <th className={DETAIL_HEADER_RIGHT}>Amount</th>
+                    <th className={DETAIL_HEADER_LEFT}>Close / Balance</th>
+                    <th className={DETAIL_HEADER_LEFT}>Accounting</th>
+                    <th className={DETAIL_HEADER_RIGHT}>Control</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1820,11 +1805,11 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
             </div>
             <div className="overflow-x-auto rounded-lg border border-border">
               <table className="w-full min-w-[780px] text-xs">
-                <thead><tr className="border-b border-border bg-muted/40"><th className="px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">Document</th><th className="px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">Party / Action</th><th className="px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">Type</th><th className="px-3 py-2 text-left font-semibold uppercase tracking-wide text-muted-foreground">Uploaded</th><th className="px-3 py-2 text-right font-semibold uppercase tracking-wide text-muted-foreground">Open</th></tr></thead>
+                <thead><tr className="border-b border-border bg-muted/40"><th className={DETAIL_HEADER_LEFT}>Document</th><th className={DETAIL_HEADER_LEFT}>Party / Action</th><th className={DETAIL_HEADER_LEFT}>Type</th><th className={DETAIL_HEADER_LEFT}>Uploaded</th><th className={DETAIL_HEADER_RIGHT}>Open</th></tr></thead>
                 <tbody>
                   {documents.map((document) => {
                     const linkedAction = actions.find((action) => action.id === document.actionId);
-                    return <tr key={document.id} className="border-b border-border/40"><td className="max-w-[360px] px-3 py-2"><div className="truncate font-medium text-foreground" title={document.fileName}>{document.fileName}</div><div className="truncate text-[11px] text-muted-foreground" title={document.originalFileName}>{document.originalFileName}</div></td><td className="px-3 py-2 text-muted-foreground"><div className="font-medium text-foreground">{document.partyName}</div><div>{linkedAction ? actionLabel(linkedAction.actionType) : documentDirectionLabel(document.documentDirection) || 'Account document'}</div></td><td className="px-3 py-2 text-muted-foreground">{documentTypeLabel(document.documentType)}</td><td className="px-3 py-2 text-muted-foreground"><div>{fmtDateTime(document.createdAt)}</div><div>{document.uploadedByEmail || '—'}</div></td><td className="px-3 py-2 text-right"><div className="flex justify-end gap-1.5">{documentPreviewKind(document) && <Button type="button" variant="outline" size="sm" onClick={() => setPreviewDocument(document)}><Eye className="h-3.5 w-3.5" /></Button>}{document.salesforceUrl && <Button asChild variant="outline" size="sm"><a href={document.salesforceUrl} target="_blank" rel="noreferrer"><ExternalLink className="h-3.5 w-3.5" /></a></Button>}</div></td></tr>;
+                    return <tr key={document.id} className="border-b border-border/40"><td className="max-w-[360px] px-3 py-2"><div className="truncate font-medium text-foreground" title={document.fileName}>{document.fileName}</div><div className="truncate text-[11px] text-muted-foreground" title={document.originalFileName}>{document.originalFileName}</div></td><td className="px-3 py-2 text-muted-foreground"><div className="font-medium text-foreground">{document.partyName}</div><div>{linkedAction ? actionLabel(linkedAction.actionType) : documentDirectionLabel(document.documentDirection) || 'Account document'}</div></td><td className="px-3 py-2 text-muted-foreground">{documentTypeLabel(document.documentType)}</td><td className="px-3 py-2 text-muted-foreground"><div>{fmtDateTime(document.createdAt)}</div><div>{document.uploadedByEmail || '—'}</div></td><td className="px-3 py-2 text-right"><div className="flex justify-end gap-1.5">{documentPreviewKind(document) && <Button type="button" variant="outline" size="sm" onClick={() => setPreviewDocument(document)}><Eye className="h-3.5 w-3.5" /></Button>}{!documentPreviewKind(document) && <AuthenticatedDocumentDownloadButton document={document} stemId={document.stemId} className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-muted-foreground hover:border-primary/40 hover:text-primary">Open</AuthenticatedDocumentDownloadButton>}{document.salesforceUrl && <Button asChild variant="outline" size="sm"><a href={document.salesforceUrl} target="_blank" rel="noreferrer"><ExternalLink className="h-3.5 w-3.5" /></a></Button>}</div></td></tr>;
                   })}
                   {!documents.length && <tr><td colSpan={5} className="px-3 py-8 text-center text-muted-foreground">No dispute documents uploaded yet.</td></tr>}
                 </tbody>
@@ -2109,15 +2094,15 @@ export default function DisputeWorkflow() {
             <table className="w-full min-w-[1480px] text-xs">
               <thead>
                 <tr className="border-b border-border bg-muted/40">
-                  <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Stem</th>
-                  <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Workflow</th>
-                  <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Next Owner</th>
-                  <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Buyer / Invoice Due</th>
-                  <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Products</th>
-                  <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Supplier / Invoice Due</th>
-                  <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Salesforce Status</th>
+                  <th className={STICKY_HEADER_LEFT}>Stem</th>
+                  <th className={STICKY_HEADER_LEFT}>Workflow</th>
+                  <th className={STICKY_HEADER_LEFT}>Next Owner</th>
+                  <th className={STICKY_HEADER_LEFT}>Buyer / Invoice Due</th>
+                  <th className={STICKY_HEADER_LEFT}>Products</th>
+                  <th className={STICKY_HEADER_LEFT}>Supplier / Invoice Due</th>
+                  <th className={STICKY_HEADER_LEFT}>Salesforce Status</th>
                   <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-right font-semibold uppercase tracking-wide text-muted-foreground">Dispute P&L</th>
-                  <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-muted-foreground">Approval</th>
+                  <th className={STICKY_HEADER_LEFT}>Approval</th>
                   <th className="sticky top-0 z-10 bg-card px-3 py-2.5 text-right font-semibold uppercase tracking-wide text-muted-foreground">Manage</th>
                 </tr>
               </thead>

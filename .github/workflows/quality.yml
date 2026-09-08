@@ -12,14 +12,23 @@ concurrency:
 jobs:
   code-and-database:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          # PR code must not receive a reusable GitHub credential through git.
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
       - run: npm ci
       - run: npm run verify:fcuno-contract
+        env:
+          # Read-only token required to fetch FCUNO's pinned contract. It is
+          # intentionally neither a repository secret nor persisted by git.
+          GITHUB_TOKEN: ${{ github.token }}
       - run: npm test
       - run: npm run lint
       - run: npm run typecheck
@@ -29,38 +38,73 @@ jobs:
       - uses: supabase/setup-cli@v1
         with:
           version: 2.113.0
-      - run: supabase start -x studio,imgproxy,edge-runtime,logflare,vector,supavisor
+      - id: start-supabase
+        run: supabase start -x studio,imgproxy,edge-runtime,logflare,vector,supavisor
       - run: FCOS_MIGRATION_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres FCOS_REQUIRE_LIVE_MIGRATION_CHECK=1 npm run verify:migrations
       - name: Stop temporary Supabase services
-        if: ${{ always() }}
+        if: ${{ always() && steps.start-supabase.outcome != 'skipped' && steps.start-supabase.outcome != '' }}
         run: supabase stop --no-backup
 
   authenticated-browser:
-    # The former permanent FCOS CI viewer was deliberately deleted. Keep the
-    # authenticated suite available, but run it only when a governed renewable
-    # test identity has been explicitly provisioned and enabled.
-    if: ${{ vars.FCOS_AUTH_E2E_ENABLED == 'true' }}
+    # This job deliberately has no checkout, repository secrets, protected
+    # environment, or renewable identity. A PR candidate is untrusted code.
+    # The protected default-branch harness publishes a non-secret evidence
+    # artifact instead. A check-run name alone is forgeable by another workflow.
+    if: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
-    env:
-      FCOS_E2E_BASE_URL: https://fcos.fcuno.com
-      FCOS_E2E_STORAGE_STATE: /tmp/fcos-e2e-storage.json
-      FCOS_E2E_EMAIL: ${{ secrets.FCOS_E2E_EMAIL }}
-      FCOS_E2E_PASSWORD: ${{ secrets.FCOS_E2E_PASSWORD }}
-      FCOS_REQUIRE_AUTH_E2E: 1
+    permissions:
+      actions: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Require trusted authenticated-candidate evidence artifact
+        uses: actions/github-script@v7
         with:
-          node-version: 24
-          cache: npm
-      - run: npm ci
-      - run: npx playwright install --with-deps chrome
-      - name: Verify renewable authenticated browser credentials
-        run: |
-          test -n "$FCOS_E2E_BASE_URL"
-          test -n "$FCOS_E2E_EMAIL"
-          test -n "$FCOS_E2E_PASSWORD"
-      - run: npm run test:e2e
+          script: |
+            const sha = context.payload.pull_request.head.sha;
+            const defaultBranch = context.payload.repository.default_branch;
+            const trustedWorkflowPaths = new Set([
+              '.github/workflows/authenticated-release.yml',
+              `.github/workflows/authenticated-release.yml@${defaultBranch}`,
+            ]);
+            let data;
+            try {
+              ({ data } = await github.rest.actions.listWorkflowRuns({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: 'authenticated-release.yml',
+                event: 'workflow_dispatch',
+                status: 'success',
+                per_page: 100,
+              }));
+            } catch (error) {
+              if (error.status === 404) {
+                core.setFailed('The trusted authenticated-release workflow must be reviewed and installed on the default branch.');
+                return;
+              }
+              throw error;
+            }
+            let evidence = null;
+            for (const run of data.workflow_runs) {
+              if (run.conclusion !== 'success'
+                || run.event !== 'workflow_dispatch'
+                || !trustedWorkflowPaths.has(run.path)
+                || run.head_branch !== defaultBranch) continue;
+              const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: run.id,
+                per_page: 100,
+              });
+              evidence = artifacts.find((artifact) => (
+                artifact.name === `fcos-ci-evidence-${sha}` && artifact.expired !== true
+              ));
+              if (evidence) break;
+            }
+            if (!evidence) {
+              core.setFailed(
+                `No successful, non-expired trusted authenticated-candidate evidence artifact exists for ${sha}. `
+                + 'A reviewer must dispatch authenticated-release from the default branch with this exact SHA and immutable candidate URL.',
+              );
+            }
 
   dependency-review:
     if: github.event_name == 'pull_request'
@@ -69,6 +113,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/dependency-review-action@v4
         with:
           fail-on-severity: high

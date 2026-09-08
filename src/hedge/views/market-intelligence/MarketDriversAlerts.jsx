@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   BellRing,
@@ -201,7 +201,7 @@ function MarketReportLibraryAnalysis() {
   </Panel>;
 }
 
-export function MarketDriversAlerts({ readOnly, mode = 'content' }) {
+export function MarketDriversAlerts({ active = true, readOnly, mode = 'content', asOfDate = null, refreshKey = 0 }) {
   const [brief, setBrief] = useState(null);
   const [rulesResponse, setRulesResponse] = useState(null);
   const [draft, setDraft] = useState(DEFAULT_RULES);
@@ -211,24 +211,33 @@ export function MarketDriversAlerts({ readOnly, mode = 'content' }) {
   const [archiveBusy, setArchiveBusy] = useState(false);
   const [archiveError, setArchiveError] = useState(null);
   const [archiveProgress, setArchiveProgress] = useState(null);
+  const requestRef = useRef(0);
 
-  const load = async ({ force = false } = {}) => {
+  const load = async ({ force = false, signal } = {}) => {
+    const requestId = ++requestRef.current;
     setBusy(true); setError(null);
     try {
       const [nextBrief, nextRules] = await Promise.all([
-        loadMarketIntelligenceBrief({}, { force, cache: !force }),
-        loadMarketIntelligenceAlertRules({ force, cache: !force }),
+        loadMarketIntelligenceBrief(asOfDate ? { date: asOfDate } : {}, { force, cache: !force, signal }),
+        loadMarketIntelligenceAlertRules({ force, cache: !force, signal }),
       ]);
+      if (requestId !== requestRef.current) return;
       setBrief(nextBrief);
       setRulesResponse(nextRules);
       setDraft({ ...DEFAULT_RULES, ...(nextRules?.rules || nextRules || {}) });
     } catch (nextError) {
-      setError(nextError);
+      if (requestId === requestRef.current && nextError?.name !== 'AbortError') setError(nextError);
     } finally {
-      setBusy(false);
+      if (requestId === requestRef.current) setBusy(false);
     }
   };
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    if (!active) return undefined;
+    const controller = new AbortController();
+    setBrief(null);
+    load({ signal: controller.signal, force: refreshKey > 0 });
+    return () => { requestRef.current += 1; controller.abort(); };
+  }, [active, asOfDate, refreshKey]);
 
   const drivers = useMemo(() => {
     const source = brief?.drivers || {};

@@ -1,4 +1,5 @@
 import { QueryClient } from '@tanstack/react-query';
+import { onClientSessionReset } from './clientSessionState.js';
 
 
 export const queryClientInstance = new QueryClient({
@@ -9,3 +10,4 @@ export const queryClientInstance = new QueryClient({
 		},
 	},
 });
+onClientSessionReset(() => queryClientInstance.clear());

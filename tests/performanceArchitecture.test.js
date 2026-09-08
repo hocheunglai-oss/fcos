@@ -66,7 +66,7 @@ test('quality gate covers browser libraries, server modules, checked JavaScript,
     read('../jsconfig.core.json'),
     read('../config/performance-budgets.json'),
   ]);
-  assert.match(eslint, /src\/lib\/\*\*\/\*\.\{js,mjs,cjs,jsx\}/);
+  assert.match(eslint, /src\/\*\*\/\*\.\{js,mjs,cjs,jsx\}/);
   assert.match(eslint, /api\/\*\*\/\*\.\{js,mjs,cjs\}/);
   assert.match(packageJson, /tsc -p \.\/jsconfig\.core\.json/);
   assert.match(packageJson, /"verify:performance"/);

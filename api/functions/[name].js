@@ -1,4 +1,6 @@
 import { chunkIds, cleanRecord, getApiVersion, getInstanceUrl, salesforceAuthMode, salesforceConfiguredAuthModes, sendJson, sfCompositeQueries, sfDownload, sfQuery, sfRequest } from '../_salesforce.js';
+import { assertStemReadRequest } from '../../shared/salesforceReadRequest.js';
+import { authorizeSalesforceDocument, headerBearerToken } from '../_salesforceDocumentAccess.js';
 import { disputeWorkflowDirectionLabel, disputeWorkflowEditableFilename, disputeWorkflowFileExtension, disputeWorkflowHongKongDateToken } from '../_disputeDocuments.js';
 import { buildDisputePartyRegistry, disputeSalesforceIdKey, findDisputeParty, resolveExtraCostSupplierLookup, resolveOriginalSupplierLookup } from '../_disputeParties.js';
 import { disputeQueueExtraCostProductName } from '../_disputeQueue.js';
@@ -24,6 +26,10 @@ import { dashboardAccountRankings } from '../../src/lib/dashboardAccountRankings
 import { loadDashboardAccountInsight } from '../_dashboardAccountInsightService.js';
 import { generateDashboardAccountInsightExport } from '../_dashboardAccountInsightExport.js';
 import { loadDashboardAccountCreditDirectory, loadDashboardAccountCreditStatement } from '../_dashboardAccountCreditStatementService.js';
+import { isPaymentRemittance, paymentRecordTypeToken } from '../_paymentClassification.js';
+import { accountInsightStatementRequest, createAccountInsightReportHandlers } from '../_accountInsightReportScope.js';
+import { validateAccountInsightReportConfig, projectAccountInsightReport, MAX_REPORT_DETAIL_ROWS } from '../_accountInsightReport.js';
+import { buildAccountInsightReportPdf } from '../_accountInsightReportPdf.js';
 import {
   buildBuyerPaymentDelayModels,
   normalizeBuyerPaymentConservativeness,
@@ -206,6 +212,7 @@ import {
   saveMarketIntelligenceAlertRules,
 } from '../_marketIntelligenceTrading.js';
 import { loadMarketPulseSnapshot } from '../_marketPulse.js';
+import { ciModuleAccess, isReadOnlyCiProfile, requireReadOnlyCiOperation } from '../_readOnlyCiAccess.js';
 import { analyzeMarketReportLibrary, loadMarketReportCatalogue } from '../_marketReportAnalysis.js';
 import {
   applyMasterContractPrice as applyMasterContractPriceService,
@@ -753,16 +760,7 @@ function supabaseAdminClient() {
 }
 
 function bearerToken(req) {
-  const header = req?.headers?.authorization || req?.headers?.Authorization || '';
-  const match = String(header).match(/^Bearer\s+(.+)$/i);
-  if (match?.[1]) return match[1];
-
-  try {
-    const url = new URL(req?.url || '', 'http://localhost');
-    return url.searchParams.get('access_token') || url.searchParams.get('token') || null;
-  } catch {
-    return null;
-  }
+  return headerBearerToken(req);
 }
 
 async function requireAdministrator(req) {
@@ -818,11 +816,15 @@ async function loadAuthBootstrapPreferences(client, userId) {
 
 async function authContext(body, req, accessContext) {
   const { client, authUser, profile } = accessContext || (await requireActiveUser(req));
+  const readOnlyCi = isReadOnlyCiProfile(profile);
   const preferencesPromise = loadAuthBootstrapPreferences(client, profile.id);
   let permissionValues;
   let capabilityValues;
 
-  if (isAdministratorUserType(profile.user_type)) {
+  if (readOnlyCi) {
+    permissionValues = ciModuleAccess(ADMIN_APP_MODULES.map((module) => module.id));
+    capabilityValues = Object.fromEntries([...ADMIN_CAPABILITY_IDS].map((id) => [id, false]));
+  } else if (isAdministratorUserType(profile.user_type)) {
     permissionValues = ADMIN_FULL_ACCESS;
     capabilityValues = ADMIN_FULL_CAPABILITIES;
   } else {
@@ -846,13 +848,13 @@ async function authContext(body, req, accessContext) {
   }
 
   const moduleAccess = Object.fromEntries(ADMIN_APP_MODULES.map((module) => [module.id, permissionCanView(module.id, permissionValues[module.id])]));
-  const applications = await listPortalApplicationsForUser({
+  const applications = readOnlyCi ? [] : await listPortalApplicationsForUser({
     client,
     profile,
     moduleAccess,
   });
   const bootstrapPreferences = await preferencesPromise;
-  schedulePortalOutboxRetry(client);
+  if (!readOnlyCi) schedulePortalOutboxRetry(client);
 
   return {
     user: {
@@ -863,6 +865,7 @@ async function authContext(body, req, accessContext) {
       user_type: profile.user_type,
       use_type_defaults: profile.use_type_defaults !== false,
       active: profile.active === true,
+      read_only_ci: readOnlyCi,
     },
     moduleAccess,
     moduleAccessLevels: {
@@ -1441,6 +1444,10 @@ const HANDLER_MODULE_ACCESS = {
   dashboardStemList: ['dashboard'],
   dashboardAnalytics: ['dashboard'],
   dashboardAccountInsight: ['dashboard'],
+  dashboardAccountInsightReportOptions: ['dashboard'],
+  dashboardAccountInsightReportPresetsList: ['dashboard'],
+  dashboardAccountInsightReportPresetsSave: ['dashboard'],
+  dashboardAccountInsightReportPresetsArchive: ['dashboard'],
   dashboardAccountCreditDirectory: ['dashboard'],
   dashboardAccountCreditStatement: ['dashboard'],
   dashboardCreditForecastSettingsSave: ['dashboard'],
@@ -1448,9 +1455,9 @@ const HANDLER_MODULE_ACCESS = {
   dashboardAccountExposureBatch: ['dashboard'],
   dashboardAccountInsightExport: ['dashboard'],
   salesforceTopBuyers: ['dashboard'],
-  salesforceStemDetail: ['dashboard', 'review', 'disputes', 'buyer_invoices', 'incoming_payments', 'cashflow_forecast', 'pnl', 'brokers'],
-  salesforceStemDocuments: ['dashboard', 'review', 'disputes', 'buyer_invoices', 'incoming_payments', 'cashflow_forecast', 'pnl', 'brokers'],
-  salesforceDocumentDownload: ['dashboard', 'review', 'disputes', 'buyer_invoices', 'incoming_payments', 'pnl', 'brokers'],
+  salesforceStemDetail: ['dashboard', 'review', 'disputes', 'buyer_invoices', 'incoming_payments', 'cashflow_forecast', 'pnl', 'brokers', 'hedge_desk'],
+  salesforceStemDocuments: ['dashboard', 'review', 'disputes', 'buyer_invoices', 'incoming_payments', 'cashflow_forecast', 'pnl', 'brokers', 'hedge_desk'],
+  salesforceDocumentDownload: ['dashboard', 'review', 'disputes', 'buyer_invoices', 'incoming_payments', 'cashflow_forecast', 'pnl', 'brokers', 'hedge_desk'],
   unofficialCompensationList: ['unofficial_compensation'],
   unofficialCompensationOptions: ['unofficial_compensation'],
   unofficialCompensationClaimCreate: ['unofficial_compensation'],
@@ -1602,6 +1609,7 @@ const HANDLER_POLICY_REGISTRY = buildHandlerPolicyRegistry(HANDLER_MODULE_ACCESS
 
 async function userHasAnyModuleAccess(client, profile, moduleIds) {
   if (!moduleIds?.length) return true;
+  if (isReadOnlyCiProfile(profile)) return Object.values(ciModuleAccess(moduleIds)).some(Boolean);
   if (isAdministratorUserType(profile?.user_type)) return true;
 
   const validModuleIds = moduleIds.filter((moduleId) => ADMIN_MODULE_IDS.has(moduleId));
@@ -1622,6 +1630,7 @@ async function userHasAnyModuleAccess(client, profile, moduleIds) {
 }
 
 async function userHasCapability(client, profile, capabilityId) {
+  if (isReadOnlyCiProfile(profile)) return false;
   if (!ADMIN_CAPABILITY_IDS.has(capabilityId)) return false;
   if (isAdministratorUserType(profile?.user_type)) return true;
 
@@ -1772,6 +1781,7 @@ async function requireHandlerAccess(name, req) {
   }
   if (policy.authentication === 'cron') return null;
   const context = await requireActiveUser(req);
+  requireReadOnlyCiOperation(context.profile, name, {}, { mutation: policy.mutation && name !== 'hedgeMarkets' });
   const allowed = await userHasAnyModuleAccess(context.client, context.profile, policy.modules);
   if (!allowed) throw appError('You do not have access to this module.', 403);
   if (policy.capability) {
@@ -5201,7 +5211,7 @@ async function buyerInvoicePaymentAdviceSave(body, req, accessContext = null) {
         contentDocumentId,
         versionId: contentVersionId,
         fileName: `${title}.${extension}`,
-        downloadUrl: `/api/functions/salesforceDocumentDownload?kind=contentVersion&id=${encodeURIComponent(contentVersionId)}&filename=${encodeURIComponent(`${title}.${extension}`)}`,
+        downloadUrl: `/api/functions/salesforceDocumentDownload?stemId=${encodeURIComponent(stemId)}&kind=contentVersion&id=${encodeURIComponent(contentVersionId)}&filename=${encodeURIComponent(`${title}.${extension}`)}`,
         salesforceUrl: `${getInstanceUrl()}/lightning/r/ContentDocument/${contentDocumentId}/view`,
       };
     } catch (error) {
@@ -5853,41 +5863,6 @@ async function salesforceDashboard(body = {}, req = null, accessContext = null) 
     hasStatus,
     hasType,
     hasAmount,
-  };
-}
-
-async function salesforceStemDetail(body) {
-  const { stemId, updates, childObject, childId, childUpdates } = body;
-  if (!stemId) throw new Error('stemId required');
-  let actualStemId = stemId;
-  if (stemId.length < 15) {
-    const lookup = await sfQuery(`SELECT Id FROM stem__c WHERE KeyStem__c = '${String(stemId).replace(/'/g, "\\'")}' LIMIT 1`, { clean: true });
-    if (!lookup.records.length) throw new Error(`STEM with KeyStem__c '${stemId}' not found`);
-    actualStemId = lookup.records[0].Id;
-  }
-  if (childObject && childId && childUpdates && Object.keys(childUpdates).length) {
-    await sfRequest(`/sobjects/${childObject}/${childId}`, {
-      method: 'PATCH',
-      body: childUpdates,
-    });
-  }
-  if (updates && Object.keys(updates).length) {
-    await sfRequest(`/sobjects/stem__c/${actualStemId}`, {
-      method: 'PATCH',
-      body: updates,
-    });
-  }
-  const [record, lineItems, extraCosts, buyerBrokers] = await Promise.all([
-    sfRequest(`/sobjects/stem__c/${actualStemId}`).then(cleanRecord),
-    sfQuery(`SELECT Id, Name, Product__c, Product__r.Name, Product__r.Family, Supplier_Name__c, BDN_Company__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_Max__c, Subtotal_Sell_At__c, Subtotal_Buy_At__c, Total_Price__c, Total_Cost__c, Supplier_Invoice__c, Payment_Term__c, BDN_Number__c, Quantity_in_MT__c, Is_Quantity_Range__c, Cancelled__c, Buyers_Brokers_Commission_Per_Unit__c, Commission_Cost__c, Supplier_Broker__c, Suppliers_Brokers_Commission_Per_Unit__c, Suppliers_Brokers_Commission_Lumpsum__c, Offer_Line_Item__r.UnitPrice, Offer_Line_Item__r.Supplier_Unit_Price__c FROM STEM_Line_Item__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`, { clean: true, softFail: true }),
-    sfQuery(`SELECT Id, Name, Description__c, Product2Id__c, Product2Id__r.Name, Supplier_Name__c, Quantity__c, Unit_Price__c, Unit_Cost__c, Line_Total__c, Line_Total_Buy__c, Supplier_Invoice__c, Supplier_Issued__c, Payment_Term__c, Cancelled__c FROM STEM_Extra_Cost__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`, { clean: true, softFail: true }),
-    sfQuery(`SELECT Id, Buyer_Broker__c, Refcode_Index__c, Exported__c, Commission_Lumpsum__c, STEM_Line_Item__r.Id FROM STEM_Buyer_Broker__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`, { clean: true, softFail: true }),
-  ]);
-  return {
-    record,
-    lineItems: lineItems.records || [],
-    extraCosts: extraCosts.records || [],
-    buyerBrokers: buyerBrokers.records || [],
   };
 }
 
@@ -7949,7 +7924,7 @@ function buildContentVersionFilename(document, version) {
   return cleanDownloadFilename(`${title}.${extension}`);
 }
 
-async function salesforceStemDocumentsUncached(body = {}, req = null, accessContext = null) {
+async function loadStemDocumentScope(body = {}, accessContext = null) {
   const actualStemId = await resolveStemId(body.stemId, accessContext);
   const record = await sfRequest(`/sobjects/stem__c/${actualStemId}`).then(cleanRecord);
   const relatedRecords = [];
@@ -8033,6 +8008,11 @@ async function salesforceStemDocumentsUncached(body = {}, req = null, accessCont
     addRelatedRecord(relatedRecords, seenRecordIds, related);
   }
 
+  return { actualStemId, record, relatedRecords };
+}
+
+async function salesforceStemDocumentsUncached(body = {}, req = null, accessContext = null) {
+  const { actualStemId, record, relatedRecords } = await loadStemDocumentScope(body, accessContext);
   const recordMap = Object.fromEntries(relatedRecords.map((related) => [related.id, related]));
   const relatedIds = relatedRecords.map((related) => related.id);
   let contentLinks = [];
@@ -8090,7 +8070,7 @@ async function salesforceStemDocumentsUncached(body = {}, req = null, accessCont
       sourceLabel: related.sourceLabel || related.name || 'Related Record',
       sourceObject: related.sourceObject || null,
       sourceRecordId: link.LinkedEntityId,
-      downloadUrl: `/api/functions/salesforceDocumentDownload?kind=contentVersion&id=${encodeURIComponent(document.LatestPublishedVersionId)}&filename=${encodeURIComponent(fileName)}`,
+      downloadUrl: `/api/functions/salesforceDocumentDownload?stemId=${encodeURIComponent(actualStemId)}&kind=contentVersion&id=${encodeURIComponent(document.LatestPublishedVersionId)}&filename=${encodeURIComponent(fileName)}`,
       salesforceUrl: `${getInstanceUrl()}/${document.Id}`,
     });
   }
@@ -8114,7 +8094,7 @@ async function salesforceStemDocumentsUncached(body = {}, req = null, accessCont
       sourceLabel: related.sourceLabel || related.name || 'Related Record',
       sourceObject: related.sourceObject || null,
       sourceRecordId: attachment.ParentId,
-      downloadUrl: `/api/functions/salesforceDocumentDownload?kind=attachment&id=${encodeURIComponent(attachment.Id)}&filename=${encodeURIComponent(fileName)}`,
+      downloadUrl: `/api/functions/salesforceDocumentDownload?stemId=${encodeURIComponent(actualStemId)}&kind=attachment&id=${encodeURIComponent(attachment.Id)}&filename=${encodeURIComponent(fileName)}`,
       salesforceUrl: `${getInstanceUrl()}/${attachment.Id}`,
     });
   }
@@ -8138,7 +8118,7 @@ async function salesforceStemDocumentsUncached(body = {}, req = null, accessCont
 async function salesforceStemDocuments(body = {}, req = null, accessContext = null) {
   const stemId = String(body.stemId || '').trim();
   const cached = await cachedSalesforceValue({
-    namespace: 'salesforce-stem-documents',
+    namespace: 'salesforce-stem-documents-v2-scoped-download',
     ttlSeconds: 15,
     payload: { stemId },
     tags: ['salesforce:documents', 'salesforce:stem', `salesforce:documents:${stemId}`],
@@ -8150,13 +8130,15 @@ async function salesforceStemDocuments(body = {}, req = null, accessContext = nu
   return cached.value;
 }
 
-async function salesforceDocumentDownload(req, res) {
+async function salesforceDocumentDownload(req, res, accessContext) {
   const url = new URL(req.url, 'http://localhost');
   const kind = url.searchParams.get('kind');
   const id = url.searchParams.get('id');
   const filename = cleanDownloadFilename(url.searchParams.get('filename') || 'salesforce-document');
-  if (!isSalesforceId(id)) return sendJson(res, { error: 'Valid document id required' }, 400);
-  const path = kind === 'attachment' ? `/sobjects/Attachment/${encodeURIComponent(id)}/Body` : `/sobjects/ContentVersion/${encodeURIComponent(id)}/VersionData`;
+  const path = await authorizeSalesforceDocument({ kind, id, stemId: url.searchParams.get('stemId') }, {
+    loadScope: (stemId) => loadStemDocumentScope({ stemId }, accessContext),
+    queryRows: (soql) => queryRows(soql, { limit: 2000, softFail: false }),
+  });
   const file = await sfDownload(path);
   const asciiFilename = filename.replace(/[^\x20-\x7E]/g, '_');
   res.statusCode = 200;
@@ -9670,12 +9652,40 @@ async function salesforceDashboardFilteredFull(body, req = null, accessContext =
 
 async function dashboardAccountInsight(body = {}, req = null, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
-  return loadDashboardAccountInsight({
+  const insight = await loadDashboardAccountInsight({
     body,
     accessContext: context,
     force: requestForcesRefresh(body, req),
   });
+  if (body.section === 'overview' || !body.section) {
+    try {
+      const statement = await dashboardAccountCreditStatement(accountInsightStatementRequest(body), req, context);
+      const buyer = statement.side === 'both' ? statement.buyer : body.side !== 'supplier' && body.contextRole !== 'supplier' ? statement : null;
+      const supplier = statement.side === 'both' ? statement.supplier : statement.side === 'supplier' ? statement : null;
+      const isGroup = body.entityType === 'group' || body.contextRole === 'group';
+      const supplierKpis = supplier?.kpis?.[isGroup ? 'group' : 'account'] || [];
+      const currencies = [...new Set([...Object.keys(buyer?.exposureByCurrency || {}), ...supplierKpis.map((row) => row.currency)])];
+      const byCurrency = currencies.map((currency) => ({
+        currency,
+        receivable: buyer ? buyer.exposureByCurrency?.[currency]?.[isGroup ? 'group' : 'individual'] ?? null : null,
+        buyerReceivable: buyer ? buyer.exposureByCurrency?.[currency]?.[isGroup ? 'group' : 'individual'] ?? null : null,
+        supplierPayable: supplierKpis.find((row) => row.currency === currency)?.totalExposure ?? null,
+        outstandingPayable: supplierKpis.find((row) => row.currency === currency)?.totalExposure ?? null,
+        buyerComplete: buyer?.complete === true, supplierComplete: supplier?.complete === true,
+      }));
+      insight.currentExposure = { byCurrency, asOf: statement.meta?.salesforceFetchedAt || buyer?.meta?.salesforceFetchedAt || supplier?.meta?.salesforceFetchedAt || null, credit: buyer?.credit || null, creditResolution: buyer?.creditResolution || null, warnings: statement.warnings || [] };
+      insight.creditResolution = buyer?.creditResolution || null;
+      if (insight.buyer) insight.buyer.currentExposure = insight.currentExposure;
+      if (insight.supplier) insight.supplier.currentExposure = insight.currentExposure;
+    } catch (error) {
+      insight.currentExposure = { byCurrency: [], unavailable: true, warnings: ['Current exposure is temporarily unavailable. Open Credit & Payments to retry.'] };
+      console.warn('[account-insight] current exposure unavailable', { code: error?.code || null });
+    }
+  }
+  return insight;
 }
+
+const { dashboardAccountInsightReportOptions, dashboardAccountInsightReportPresetsList, dashboardAccountInsightReportPresetsSave, dashboardAccountInsightReportPresetsArchive } = createAccountInsightReportHandlers({ requireActiveUser, canManageCompanyPresets: canManageDashboardCreditForecastSettings, loadInsight: loadDashboardAccountInsight });
 
 async function dashboardAccountCreditDirectory(body = {}, req = null, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
@@ -9823,13 +9833,35 @@ async function dashboardAccountExposureBatch(body = {}, req = null, accessContex
 
 async function dashboardAccountInsightExport(body = {}, req, res, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
+  const reportConfig = String(body.format || '').toLowerCase() === 'pdf' ? validateAccountInsightReportConfig(body.reportConfig) : null;
+  const scopeBody = reportConfig && reportConfig.audience !== 'internal' ? { ...body, side: reportConfig.audience } : body;
   const insight = await loadDashboardAccountInsight({
-    body: { ...body, cursor: 0, pageSize: 100 },
+    body: { ...scopeBody, cursor: 0, pageSize: 100 },
     accessContext: context,
     force: requestForcesRefresh(body, req),
     includeExportRows: true,
   });
-  const generated = generateDashboardAccountInsightExport(insight, {
+  if (reportConfig && reportConfig.sections.some((section) => ['credit', 'forecast', 'aging', 'payments', 'statement'].includes(section))) {
+    insight.statements = {};
+    const directions = scopeBody.side === 'both' ? ['buyer', 'supplier'] : [scopeBody.side || (scopeBody.contextRole === 'supplier' ? 'supplier' : 'buyer')];
+    for (const side of directions) {
+      const request = accountInsightStatementRequest(scopeBody, side);
+      const statement = await dashboardAccountCreditStatement(request, req, context);
+      const rows = [...(statement.statement?.rows || [])];
+      let nextCursor = statement.statement?.nextCursor;
+      const cursors = new Set();
+      while (nextCursor) {
+        if (cursors.has(nextCursor) || rows.length >= MAX_REPORT_DETAIL_ROWS) throw appError('The statement appendix exceeds the supported size. Narrow its scope; no partial PDF was generated.', 413, 'ACCOUNT_INSIGHT_REPORT_TOO_LARGE');
+        cursors.add(nextCursor);
+        const page = await dashboardAccountCreditStatement({ ...request, cursor: nextCursor }, req, context);
+        rows.push(...(page.statement?.rows || []));
+        nextCursor = page.statement?.nextCursor;
+      }
+      if (rows.length > MAX_REPORT_DETAIL_ROWS) throw appError('Narrow the statement scope before generating this PDF.', 413, 'ACCOUNT_INSIGHT_REPORT_TOO_LARGE');
+      insight.statements[side] = { ...statement, rows, statement: { ...statement.statement, rows, nextCursor: null } };
+    }
+  }
+  const generated = reportConfig ? buildAccountInsightReportPdf(projectAccountInsightReport(insight, reportConfig), { actorName: context.profile.full_name || context.profile.email }) : generateDashboardAccountInsightExport(insight.activeRole === 'both' ? insight.buyer : insight, {
     format: body.format,
     actorName: context.profile.full_name || context.profile.email,
   });
@@ -11749,16 +11781,11 @@ function attachBankChargeToPayment(target, charge) {
 }
 
 function incomingPaymentRecordTypeToken(payment) {
-  return normalizedFieldToken([payment?.RecordTypeId, payment?.RecordType?.DeveloperName, payment?.RecordType?.Name].filter(Boolean).join(' '));
+  return paymentRecordTypeToken(payment);
 }
 
 function incomingPaymentIsRemittanceRecord(payment, fields = []) {
-  const token = incomingPaymentRecordTypeToken(payment);
-  if (token.includes('remittance')) return true;
-  return uniqueTextList(fields).some((field) => {
-    const valueToken = normalizedFieldToken(payment?.[field]);
-    return valueToken.includes('receivableremittance') || valueToken.includes('remittancereceivable') || valueToken.includes('payableremittance') || valueToken.includes('remittancepayable');
-  });
+  return isPaymentRemittance(payment, fields);
 }
 
 const incomingPaymentIsReceivableRemittance = incomingPaymentIsRemittanceRecord;
@@ -15738,7 +15765,7 @@ function serializeDisputeWorkflowDocument(row) {
     linkedRecordIds: row.salesforce_linked_record_id ? [row.salesforce_linked_record_id] : [],
     uploadStatus: row.upload_status || 'complete',
     salesforceUrl: row.salesforce_url || null,
-    downloadUrl: `/api/functions/salesforceDocumentDownload?kind=contentVersion&id=${encodeURIComponent(versionId)}&filename=${encodeURIComponent(fileName)}`,
+    downloadUrl: `/api/functions/salesforceDocumentDownload?stemId=${encodeURIComponent(row.stem_id)}&kind=contentVersion&id=${encodeURIComponent(versionId)}&filename=${encodeURIComponent(fileName)}`,
     uploadedBy: row.uploaded_by || null,
     uploadedByEmail: row.uploaded_by_email || null,
     createdAt: row.created_at || null,
@@ -17678,29 +17705,8 @@ async function disputeBetaClose(body = {}, req, accessContext = null) {
 }
 
 async function salesforceStemDetailUncached(body, req = null, accessContext = null) {
-  const { stemId, updates, childObject, childId, childUpdates } = body;
-  if (!stemId) throw new Error('stemId required');
-
-  let actualStemId = stemId;
-  if (stemId.length < 15) {
-    const lookup = await queryRows(`SELECT Id FROM stem__c WHERE KeyStem__c = '${escapeSoql(stemId)}' LIMIT 1`, { softFail: true });
-    if (!lookup.length) throw new Error(`STEM with KeyStem__c '${stemId}' not found`);
-    actualStemId = lookup[0].Id;
-  }
-  await requireInterofficeStemAccess(actualStemId, accessContext);
-
-  if (childObject && childId && childUpdates && Object.keys(childUpdates).length > 0) {
-    await sfRequest(`/sobjects/${childObject}/${childId}`, {
-      method: 'PATCH',
-      body: childUpdates,
-    });
-  }
-  if (updates && Object.keys(updates).length > 0) {
-    await sfRequest(`/sobjects/stem__c/${actualStemId}`, {
-      method: 'PATCH',
-      body: updates,
-    });
-  }
+  assertStemReadRequest(body);
+  const actualStemId = await resolveStemId(body.stemId, accessContext);
 
   const [recordRaw, lineItems, extraCosts, buyerBrokers, buyerInvoices] = await Promise.all([
     sfRequest(`/sobjects/stem__c/${actualStemId}`).then(cleanRecord),
@@ -17976,8 +17982,7 @@ async function salesforceStemDetailUncached(body, req = null, accessContext = nu
 }
 
 async function salesforceStemDetailFull(body, req = null, accessContext = null) {
-  const hasWrite = Boolean((body?.updates && Object.keys(body.updates).length) || (body?.childUpdates && Object.keys(body.childUpdates).length));
-  if (hasWrite) return salesforceStemDetailUncached(body, req, accessContext);
+  assertStemReadRequest(body);
   const stemId = String(body?.stemId || '').trim();
   const cached = await cachedSalesforceValue({
     namespace: 'salesforce-stem-detail-v2',
@@ -19306,6 +19311,10 @@ const handlers = {
   dashboardStemList,
   dashboardAnalytics,
   dashboardAccountInsight,
+  dashboardAccountInsightReportOptions,
+  dashboardAccountInsightReportPresetsList,
+  dashboardAccountInsightReportPresetsSave,
+  dashboardAccountInsightReportPresetsArchive,
   dashboardAccountCreditDirectory,
   dashboardAccountCreditStatement,
   dashboardCreditForecastSettingsSave,
@@ -19480,8 +19489,8 @@ export default async function handler(req, res) {
           res.setHeader('X-FCOS-External-Action', handlerPolicy.externalAction ? '1' : '0');
         }
         if (name === 'salesforceDocumentDownload') {
-          await requireHandlerAccess(name, req);
-          return await salesforceDocumentDownload(req, res);
+          const accessContext = await requireHandlerAccess(name, req);
+          return await salesforceDocumentDownload(req, res, accessContext);
         }
         if (name === 'dashboardAccountInsightExport') {
           const accessContext = await requireHandlerAccess(name, req);
@@ -19499,6 +19508,7 @@ export default async function handler(req, res) {
         if (!fn) return sendJson(res, { error: `Unknown function: ${name}` }, 404);
         const accessContext = await requireHandlerAccess(name, req);
         const body = await readBody(req);
+        requireReadOnlyCiOperation(accessContext?.profile, name, body);
         const contract = validateFunctionRequest(name, body);
         if (!contract.ok) {
           throw appError(`Invalid ${name} request: ${contract.issues.join('; ')}.`, 400, 'FUNCTION_CONTRACT_INVALID', {

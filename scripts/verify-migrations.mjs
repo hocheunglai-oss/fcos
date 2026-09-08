@@ -32,6 +32,7 @@ const releaseMigrationNames = new Set([
   '20260806090000_financial_report_settings_and_currency_thresholds.sql',
   '20260806100000_dispute_external_closure_reconciliation.sql',
   '20260807120000_email_router_forward_file_learning.sql',
+  '20260906161240_restrict_browser_role_admin_grants.sql',
 ]);
 const baseline = migrationSources.filter((migration) => !releaseMigrationNames.has(migration.name));
 const upgrade = migrationSources.filter((migration) => releaseMigrationNames.has(migration.name));
@@ -62,6 +63,43 @@ async function assertRows(sql, expected, label, values = []) {
 }
 
 async function verifyRuntimeObjects(label) {
+  const adminTables = ['app_modules', 'user_profiles', 'user_module_permissions',
+    'user_types', 'user_type_module_permissions', 'admin_audit_logs'];
+  await assertRows(
+    `select count(*)::int from pg_class c join pg_namespace n on n.oid = c.relnamespace
+     where n.nspname = 'public' and c.relname = any($1::text[]) and c.relrowsecurity`,
+    adminTables.length, `${label} administration RLS retained`, [adminTables],
+  );
+  await assertRows(
+    `select count(*)::int from unnest($1::text[]) t cross join
+     unnest(array['anon','authenticated']) r cross join
+     unnest(array['INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER']) p
+     where has_table_privilege(r, 'public.' || t, p)`,
+    0, `${label} browser administration writes denied`, [adminTables],
+  );
+  await assertRows(
+    `select count(*)::int from unnest($1::text[]) t where has_table_privilege('authenticated', 'public.' || t, 'SELECT')`,
+    adminTables.length - 1, `${label} existing RLS-filtered browser reads retained`, [adminTables],
+  );
+  await assertRows(
+    `select count(*)::int from unnest($1::text[]) t where has_table_privilege('anon', 'public.' || t, 'SELECT')`,
+    0, `${label} anonymous administration reads denied`, [adminTables],
+  );
+  await assertRows(
+    `select count(*)::int from unnest($1::text[]) t cross join unnest(array['SELECT','INSERT','UPDATE','DELETE']) p
+     where has_table_privilege('service_role', 'public.' || t, p)`,
+    adminTables.length * 4, `${label} service-role administration retained`, [adminTables],
+  );
+  const internalHelpers = ['collaboration_item_key', 'variable_charge_side_confirmation_immutable', 'variable_charge_side_state_before_update'];
+  await assertRows(
+    `select count(*)::int from unnest($1::text[]) f cross join unnest(array['anon','authenticated']) r
+     where has_function_privilege(r, 'public.' || f || '()', 'EXECUTE')`,
+    0, `${label} internal helpers are not browser RPCs`, [internalHelpers],
+  );
+  await assertRows(
+    `select count(*)::int from unnest($1::text[]) f where has_function_privilege('service_role', 'public.' || f || '()', 'EXECUTE')`,
+    internalHelpers.length, `${label} service-role internal helper execution retained`, [internalHelpers],
+  );
   const serviceOnlyTables = [
     'financial_report_settings',
     'financial_report_setting_events',

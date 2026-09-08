@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import pdfParse from 'pdf-parse/lib/pdf-parse.js';
 import { contractMonthForTenor, shiftContractMonth } from '../shared/plattsMarketModel.js';
 import { extractMarketReportLibrary, marketReportPageText } from './_marketReportLibrary.js';
+import { validMarketDate } from './_marketReportDates.js';
 
 const MAX_REPORT_BYTES = 5_000_000;
 const REPORT_TYPES = new Set(['bunkerwire', 'european_marketscan']);
@@ -392,6 +393,7 @@ export async function previewMarketReport(body = {}) {
 }
 
 function numeric(value) {
+  if (value == null || value === '') return null;
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
 }
@@ -422,7 +424,7 @@ export function calculateMarketHorizonStats(points = [], endDate = isoDate(), ho
   return Object.fromEntries(Object.entries(horizons).map(([key, days]) => {
     const start = dateBefore(endDate, days - 1);
     const rows = points
-      .filter((row) => row.date >= start && row.date <= endDate && Number.isFinite(Number(row.spread)))
+      .filter((row) => row.date >= start && row.date <= endDate && numeric(row.spread) != null)
       .sort((left, right) => left.date.localeCompare(right.date));
     const values = rows.map((row) => Number(row.spread));
     return [key, {
@@ -576,20 +578,20 @@ export function buildMarketIntelligenceSnapshot(seriesRows = [], observationRows
 
 export async function loadMarketIntelligence(client) {
   const historyStart = dateBefore(isoDate(), HISTORY_RANGES['3m'] + 7);
-  const [seriesResult, observationsResult, importsResult, conflictsResult, syncRunsResult, publicationsResult] = await Promise.all([
+  const [seriesResult, importsResult, conflictsResult, syncRunsResult, publicationsResult] = await Promise.all([
     client.from('market_intelligence_series').select('*').eq('active', true).order('display_order'),
-    client.from('market_price_observations').select('id,series_id,import_id,price_date,price,day_change,quality_status,source_page').eq('quality_status', 'verified').gte('price_date', historyStart).order('price_date', { ascending: true }).limit(5000),
     client.from('market_report_imports').select('id,source_document_type,report_date,observation_count,status,mops_publication_status,created_at,actor_email').order('created_at', { ascending: false }).limit(20),
     client.from('market_observation_evidence').select('id,series_id,price_date,conflict_code,created_at').eq('disposition', 'quarantined').order('created_at', { ascending: false }).limit(50),
     client.from('market_report_sync_runs').select('status,discovered_count,skipped_count,imported_count,failed_count,deferred_count,error_code,started_at,completed_at').order('started_at', { ascending: false }).limit(1),
     client.from('market_mops_publications').select('report_date,outcome,conflict_code,created_at').order('report_date', { ascending: false }).limit(20),
   ]);
-  const error = seriesResult.error || observationsResult.error || importsResult.error || conflictsResult.error || syncRunsResult.error || publicationsResult.error;
+  const error = seriesResult.error || importsResult.error || conflictsResult.error || syncRunsResult.error || publicationsResult.error;
   if (error) {
     if (/does not exist|schema cache/i.test(error.message || '')) return { available: false, delivered: [], cargoForward: [], signals: { relativeValue: [], forwardStructure: null, vlsfoHsfoM1: null, eastWestM1: null, gasoilM1: null, alerts: [] }, imports: [] };
     throw marketError(`Market intelligence could not be loaded: ${error.message}`, 502, 'MARKET_INTELLIGENCE_LOAD_FAILED');
   }
   const seriesById = new Map((seriesResult.data || []).map((row) => [row.id, row]));
+  const observationRows = await loadCanonicalObservations(client, [...seriesById.keys()], historyStart, isoDate());
   const conflicts = (conflictsResult.data || []).map((row) => ({
     id: row.id,
     priceDate: row.price_date,
@@ -599,7 +601,7 @@ export async function loadMarketIntelligence(client) {
   }));
   return {
     available: true,
-    ...buildMarketIntelligenceSnapshot(seriesResult.data || [], observationsResult.data || [], { conflicts }),
+    ...buildMarketIntelligenceSnapshot(seriesResult.data || [], observationRows, { conflicts }),
     imports: importsResult.data || [],
     automation: {
       latestSync: syncRunsResult.data?.[0] || null,
@@ -616,23 +618,38 @@ function normalizedSelection(value, allowed, fallback) {
   return selected;
 }
 
-async function loadCanonicalObservations(client, seriesIds, startDate, endDate) {
+export async function loadCanonicalObservations(client, seriesIds, startDate, endDate) {
+  if (!seriesIds.length) return [];
   const rows = [];
   for (let offset = 0; ; offset += 1000) {
     const result = await client
       .from('market_price_observations')
-      .select('id,series_id,price_date,price,day_change,quality_status,source_page')
+      .select('id,series_id,import_id,price_date,price,day_change,quality_status,source_page')
       .in('series_id', seriesIds)
       .eq('quality_status', 'verified')
       .gte('price_date', startDate)
       .lte('price_date', endDate)
       .order('price_date', { ascending: true })
+      .order('id', { ascending: true })
       .range(offset, offset + 999);
     if (result.error) throw marketError(`Market history could not be loaded: ${result.error.message}`, 502, 'MARKET_HISTORY_LOAD_FAILED');
     rows.push(...(result.data || []));
     if ((result.data || []).length < 1000) break;
   }
   return rows;
+}
+
+async function loadHistoryConflicts(client, seriesIds, startDate, endDate) {
+  if (!seriesIds.length) return [];
+  const rows = [];
+  for (let offset = 0; ; offset += 1000) {
+    const result = await client.from('market_observation_evidence').select('id,series_id,price_date,conflict_code')
+      .in('series_id', seriesIds).eq('disposition', 'quarantined').gte('price_date', startDate).lte('price_date', endDate)
+      .order('price_date').order('id').range(offset, offset + 999);
+    if (result.error) throw marketError(`Market history validation could not be loaded: ${result.error.message}`, 502, 'MARKET_HISTORY_LOAD_FAILED');
+    rows.push(...(result.data || []));
+    if ((result.data || []).length < 1000) return rows;
+  }
 }
 
 export function buildMarketHistoryResponse(seriesRows = [], observationRows = [], ledgerRows = [], conflictRows = [], request = {}) {
@@ -670,6 +687,7 @@ export function buildMarketHistoryResponse(seriesRows = [], observationRows = []
   const nextCursor = allDates.length > selectedDates.length ? selectedDates.at(-1) : null;
   const ledgerByDate = new Map((ledgerRows || []).map((row) => [row.price_date, row]));
   const mismatchKeys = new Set();
+  const conflictKeys = new Set(conflictRows.map((row) => `${row.series_id}:${row.price_date}`));
   const warnings = [];
 
   const panels = products.map((productKey) => {
@@ -682,15 +700,17 @@ export function buildMarketHistoryResponse(seriesRows = [], observationRows = []
       .map((row) => {
         const ledger = ledgerByDate.get(row.date);
         const ledgerValue = ledger && !ledger.is_estimate ? numeric(ledger[ledgerField]) : null;
-        const mismatch = ledgerValue != null && Math.abs(ledgerValue - row.price) > 0.0005;
+        const mismatch = ledgerValue != null && row.price != null && Math.abs(ledgerValue - row.price) > 0.0005;
+        const conflicted = conflictKeys.has(`${benchmarkSeries.id}:${row.date}`);
         if (mismatch) mismatchKeys.add(`${productKey}:${row.date}`);
         return {
           ...row,
           sourceValue: row.price,
-          usdMt: benchmarkUsdMt(benchmarkSeries, row.price),
+          usdMt: conflicted ? null : benchmarkUsdMt(benchmarkSeries, row.price),
           ledgerValue,
-          ledgerVerified: ledgerValue != null && !mismatch,
+          ledgerVerified: ledgerValue != null && !mismatch && !conflicted,
           mismatch,
+          conflicted,
         };
       });
     const benchmarkByDate = new Map(benchmarkPoints.map((row) => [row.date, row]));
@@ -702,16 +722,18 @@ export function buildMarketHistoryResponse(seriesRows = [], observationRows = []
         .filter((row) => selectedDateSet.has(row.date))
         .map((row) => {
           const benchmark = benchmarkByDate.get(row.date);
-          const spread = benchmark && !benchmark.mismatch && benchmark.usdMt != null && row.price != null
+          const conflicted = conflictKeys.has(`${series.id}:${row.date}`) || benchmark?.conflicted;
+          const spread = benchmark && !benchmark.mismatch && !conflicted && benchmark.usdMt != null && row.price != null
             ? rounded(row.price - benchmark.usdMt)
             : null;
           return {
             date: row.date,
             delivered: row.price,
+            dayChange: row.dayChange,
             mops: benchmark?.usdMt ?? null,
             spread,
             sourcePage: row.sourcePage,
-            suppressionReason: benchmark?.mismatch ? 'MOPS_LEDGER_VALUE_MISMATCH' : benchmark ? null : 'MOPS_DATE_MISSING',
+            suppressionReason: conflicted ? 'QUARANTINED_SOURCE_EVIDENCE' : benchmark?.mismatch ? 'MOPS_LEDGER_VALUE_MISMATCH' : benchmark?.usdMt != null ? null : 'MOPS_DATE_MISSING',
           };
         });
       const spreadPoints = points.filter((row) => row.spread != null);
@@ -784,29 +806,47 @@ export function buildMarketHistoryResponse(seriesRows = [], observationRows = []
   };
 }
 
-export async function loadMarketIntelligenceHistory(client, body = {}) {
+export async function loadMarketIntelligenceHistory(client, body = {}, { overviewOnly = false } = {}) {
   const range = HISTORY_RANGES[body.range] ? body.range : '3m';
   const endDate = body.endDate ? String(body.endDate) : isoDate();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(endDate)) throw marketError('Choose a valid market-history end date.', 400, 'MARKET_HISTORY_DATE_INVALID');
-  const startDate = dateBefore(endDate, HISTORY_RANGES[range] - 1);
+  if (!validMarketDate(endDate)) throw marketError('Choose a valid market-history end date.', 400, 'MARKET_HISTORY_DATE_INVALID');
+  // Matrix details always retain three-month evidence even when the chart is 1W.
+  const startDate = overviewOnly ? endDate : dateBefore(endDate, Math.max(HISTORY_RANGES[range], HISTORY_RANGES['3m']) - 1);
   const seriesResult = await client.from('market_intelligence_series').select('*').eq('active', true).order('display_order');
   if (seriesResult.error) throw marketError(`Market history series could not be loaded: ${seriesResult.error.message}`, 502, 'MARKET_HISTORY_LOAD_FAILED');
   const products = normalizedSelection(body.products, PRODUCT_KEYS, PRODUCT_ORDER);
   const availablePorts = new Set((seriesResult.data || []).filter((row) => row.market_family === 'delivered').map((row) => row.port_key));
   const ports = normalizedSelection(body.ports, availablePorts, [...availablePorts]);
   const selectedSeries = (seriesResult.data || []).filter((row) => (
-    (row.market_family === 'delivered' && products.includes(row.product_key) && ports.includes(row.port_key))
-    || (row.market_family === 'cargo' && products.includes(row.product_key) && BENCHMARK_SYMBOLS[row.product_key] === row.source_symbol)
+    (row.market_family === 'delivered' && PRODUCT_KEYS.has(row.product_key) && (!overviewOnly || row.port_key === 'singapore'))
+    || (row.market_family === 'cargo' && BENCHMARK_SYMBOLS[row.product_key] === row.source_symbol)
   ));
   const seriesIds = selectedSeries.map((row) => row.id);
-  const [observationRows, ledgerResult, conflictsResult] = await Promise.all([
+  const [observationRows, ledgerResult, conflictRows] = await Promise.all([
     loadCanonicalObservations(client, seriesIds, startDate, endDate),
     client.from('hedge_market_prices').select('price_date,s380,s05,sgo,is_estimate').gte('price_date', startDate).lte('price_date', endDate).order('price_date'),
-    client.from('market_observation_evidence').select('series_id,price_date,conflict_code').in('series_id', seriesIds).eq('disposition', 'quarantined').gte('price_date', startDate).lte('price_date', endDate).order('price_date').limit(1000),
+    loadHistoryConflicts(client, seriesIds, startDate, endDate),
   ]);
-  const error = ledgerResult.error || conflictsResult.error;
+  const error = ledgerResult.error;
   if (error) throw marketError(`Market history validation could not be loaded: ${error.message}`, 502, 'MARKET_HISTORY_LOAD_FAILED');
-  return buildMarketHistoryResponse(seriesResult.data || [], observationRows, ledgerResult.data || [], conflictsResult.data || [], { ...body, range, endDate, products, ports });
+  return {
+    ...buildMarketHistoryResponse(seriesResult.data || [], observationRows, ledgerResult.data || [], conflictRows, { ...body, range, endDate, products, ports }),
+    intelligence: buildDatedMarketSnapshot(selectedSeries, observationRows, ledgerResult.data || [], conflictRows, endDate),
+  };
+}
+
+export function buildDatedMarketSnapshot(series, observations, ledger, conflicts, endDate) {
+  const snapshot = buildMarketIntelligenceSnapshot(series, observations, { today: new Date(`${endDate}T00:00:00Z`) });
+  const validated = buildMarketHistoryResponse(series, observations, ledger, conflicts, { endDate, range: '3m', limit: 400 });
+  return { ...snapshot, asOfDate: endDate, available: true, delivered: snapshot.delivered.map((row) => {
+    const evidence = validated.panels.find((panel) => panel.productKey === row.productKey)?.series.find((entry) => entry.id === row.id);
+    const spreadHistory = (evidence?.points || []).filter((point) => point.spread != null);
+    const latestSpread = spreadHistory.at(-1) || null;
+    return { ...row, deliveredPremium: latestSpread && latestSpread.date === row.latest?.priceDate ? latestSpread.spread : null,
+      latestSpread, spreadHistory, horizonStats: evidence?.horizonStats || calculateMarketHorizonStats([], endDate),
+      warnings: validated.warnings.filter((warning) => warning.productKey === row.productKey),
+    };
+  }), signals: { ...snapshot.signals, alerts: [...snapshot.signals.alerts, ...validated.warnings.map((row) => row.message)] } };
 }
 
 export async function importMarketReport(client, profile, body = {}) {

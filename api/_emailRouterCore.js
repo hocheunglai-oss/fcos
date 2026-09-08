@@ -5,6 +5,7 @@ import { requireExternalActionGate } from './_externalActionGates.js';
 import { recordEmailRouterOperation } from './_requestTelemetry.js';
 import { serverSupabaseConfig } from './_supabaseConfig.js';
 import { enforceFcunoFederatedAccess } from './_fcunoIdentityFederation.js';
+import { requireReadOnlyCiOperation } from './_readOnlyCiAccess.js';
 
 const GRAPH_ROOT = 'https://graph.microsoft.com/v1.0';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -98,6 +99,7 @@ export async function requireEmailRouterUser(req, dependencies = {}) {
   const client = createEmailRouterServiceClient(dependencies.env || process.env, dependencies);
   if (dependencies.profile) {
     const profile = dependencies.profile;
+    requireReadOnlyCiOperation(profile, 'emailRouter');
     if (!profile.active || !UUID.test(String(profile.id || ''))) throw routerError('Active FCOS user access required.', 403, 'EMAIL_ROUTER_USER_INACTIVE');
     return { client, profile, authUser: { id: profile.id } };
   }
@@ -119,6 +121,7 @@ export async function requireEmailRouterUser(req, dependencies = {}) {
     env: dependencies.env || process.env,
   });
   if (!profile?.active || profile.id !== auth.user.id || !UUID.test(profile.id)) throw routerError('Active FCOS user access required.', 403, 'EMAIL_ROUTER_USER_INACTIVE');
+  requireReadOnlyCiOperation(profile, 'emailRouter');
   return { client, profile, authUser: auth.user };
 }
 

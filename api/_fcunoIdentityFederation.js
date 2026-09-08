@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
+import { denyCiWithoutFederation, readOnlyCiProfile, validateCiFederation } from './_readOnlyCiAccess.js';
 
 const PROVIDER = 'fcuno';
 const SUPABASE_PROVIDER = 'custom:fcuno';
@@ -361,10 +362,14 @@ async function provisionZeroPermissionProfile(client, authUser, link) {
  */
 export async function enforceFcunoFederatedAccess({ client, authUser, profile = null, accessToken = null, env = process.env } = {}) {
   const config = fcunoFederationConfig(env);
-  if (!config.federationEnabled) return profile;
+  if (!config.federationEnabled) {
+    denyCiWithoutFederation(authUser, profile);
+    return profile;
+  }
   if (!config.issuer) throw fcunoFederationError('FCUNO identity federation is not configured.', 503, 'FCUNO_IDENTITY_CONFIG_MISSING', true);
   const subject = linkedFcunoSubject(authUser);
   if (!subject) {
+    denyCiWithoutFederation(authUser, profile);
     if (profile && legacyAccessAllowed(profile, config)) return profile;
     throw fcunoFederationError('FCUNO-linked sign-in is required for FCOS.', 403, 'FCUNO_IDENTITY_LINK_REQUIRED');
   }
@@ -372,6 +377,7 @@ export async function enforceFcunoFederatedAccess({ client, authUser, profile = 
   if (!link || (link.auth_user_id && link.auth_user_id !== authUser.id)) {
     throw fcunoFederationError('This FCUNO identity is not linked to the FCOS account.', 403, 'FCUNO_IDENTITY_LINK_REQUIRED');
   }
+  const readOnlyCi = validateCiFederation({ authUser, profile, link, issuer: config.issuer, subject, env });
   if (!link.auth_user_id) {
     const { data: claimed, error } = await client.from('fcos_external_identity_links')
       .update({ auth_user_id: authUser.id, updated_at: new Date().toISOString() })
@@ -391,5 +397,6 @@ export async function enforceFcunoFederatedAccess({ client, authUser, profile = 
   const { data: resolvedProfile, error: profileError } = await client.from('user_profiles')
     .select('id,email,full_name,user_type,active,use_type_defaults').eq('id', authUser.id).maybeSingle();
   if (profileError) throw profileError;
-  return resolvedProfile || profile;
+  if (readOnlyCi) validateCiFederation({ authUser, profile: resolvedProfile || profile, link, issuer: config.issuer, subject, env });
+  return readOnlyCi ? readOnlyCiProfile(resolvedProfile || profile) : resolvedProfile || profile;
 }

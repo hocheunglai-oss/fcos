@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { serverSupabaseConfig } from './_supabaseConfig.js';
 import { enforceFcunoFederatedAccess } from './_fcunoIdentityFederation.js';
+import { requireReadOnlyCiOperation } from './_readOnlyCiAccess.js';
 import { reportSystemError, shouldNotifySystemError } from './_systemErrorNotifications.js';
 import {
   logRequestTelemetry,
@@ -159,8 +160,11 @@ export function authenticatedFunction({ handlerName, moduleId = null, mutation =
         res.setHeader('X-FCOS-Handler-Mutation', requestMutation ? '1' : '0');
         res.setHeader('X-FCOS-External-Action', '0');
         const context = await requireActiveUser(req);
+        requireReadOnlyCiOperation(context.profile, resolvedHandlerName, {}, { mutation: requestMutation });
         await requireModuleAccess(context, moduleId);
-        const result = await execute(await readBody(req), req, context);
+        const body = await readBody(req);
+        requireReadOnlyCiOperation(context.profile, resolvedHandlerName, body, { mutation: requestMutation });
+        const result = await execute(body, req, context);
         return sendJson(res, result);
       } catch (error) {
         const status = Number(error?.status || error?.statusCode || 500);

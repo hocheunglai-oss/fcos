@@ -24,20 +24,26 @@ test('Markets and Hedge Desk use native trading chrome without changing market h
 });
 
 test('Market Pulse uses appearance-aware surfaces while preserving signed and regime semantics', async () => {
-  const [pulse, shellCss, marketCss] = await Promise.all([
+  const [pulse, shellCss, board, boardCss, signedCss] = await Promise.all([
     read('src/components/market-pulse/MarketPulse.jsx'),
     read('src/index.css'),
-    read('src/hedge/views/market-intelligence/marketIntelligence.css'),
+    read('src/components/markets/MarketPriceBoard.jsx'),
+    read('src/components/markets/MarketPriceBoard.css'),
+    read('src/components/markets/MarketSignedValue.css'),
   ]);
 
   assert.match(pulse, /market-pulse-surface/);
-  assert.match(pulse, /material-panel/);
   assert.match(pulse, /glass-floating/);
-  assert.match(pulse, /MarketSignedValue/);
-  assert.match(pulse, /backwardation: 'bg-violet-50/);
+  assert.match(pulse, /MarketPriceBoard pulse=\{data\} compact/);
+  assert.match(board, /MarketSignedValue/);
+  assert.match(board, /backwardation: 'market-price-board__regime--backwardation'/);
   assert.doesNotMatch(pulse, /border-slate-200 bg-white/);
   assert.match(shellCss, /\.market-pulse-surface/);
-  assert.match(marketCss, /Appearance-aware semantic materials/);
+  assert.match(boardCss, /background: var\(--app-surface/);
+  assert.match(boardCss, /market-price-board__regime--backwardation[^}]*#6d28d9/);
+  assert.match(boardCss, /market-price-board__regime--contango[^}]*#92400e/);
+  assert.match(signedCss, /market-signed-value--up[^{]*\{[^}]*#087447/);
+  assert.match(signedCss, /market-signed-value--down[^{]*\{[^}]*#c02632/);
 });
 
 test('Account Managers, Buyer PIC References, and Special Terms share reference materials', async () => {

@@ -66,6 +66,17 @@ test('CSV round-trips multiline values without changing the five reference colum
   assert.deepEqual(roundTrip, original);
 });
 
+test('server PIC CSV exports untrusted text as literal spreadsheet cells', () => {
+  const exported = accountPicCsv([{
+    portRegion: '=malicious-header-like-value',
+    responsiblePersonnel: '\u0000@malicious-cell',
+    team: "'=literal-apostrophe",
+    reportingSupervision: '+malicious-cell',
+    vesselTypesCovered: '-malicious-cell',
+  }]);
+  assert.match(exported, /'=malicious-header-like-value,'\u0000@malicious-cell,'=literal-apostrophe,'\+malicious-cell,'-malicious-cell/);
+});
+
 test('rejects malformed CSV, wrong headers, blank Port / Region, and unsafe oversized rows', () => {
   assert.throws(() => parseAccountPicCsv('Port / Region,Team\nA,B'), /headers must be exactly/i);
   assert.throws(() => parseAccountPicCsv(`${ACCOUNT_PIC_CSV_HEADERS.join(',')}\n"unterminated`), /unterminated/i);

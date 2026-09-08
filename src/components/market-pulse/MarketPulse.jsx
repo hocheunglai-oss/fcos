@@ -8,28 +8,12 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTr
 import { useIsMobile } from '@/hooks/use-mobile';
 import { cn } from '@/lib/utils';
 import { MarketSignedText, MarketSignedValue } from '@/components/markets/MarketSignedValue';
-
-const REGIME_CLASSES = {
-  backwardation: 'bg-violet-50 text-violet-800 ring-violet-600/20 dark:bg-violet-950/55 dark:text-violet-200 dark:ring-violet-400/30',
-  contango: 'bg-amber-50 text-amber-800 ring-amber-600/20 dark:bg-amber-950/55 dark:text-amber-200 dark:ring-amber-400/30',
-  flat: 'bg-muted text-muted-foreground ring-border',
-  mixed: 'bg-muted text-muted-foreground ring-border',
-  unavailable: 'bg-muted text-muted-foreground ring-border',
-};
+import { MarketPriceBoard } from '@/components/markets/MarketPriceBoard';
 
 function formatMarketValue(value, unit) {
   if (value == null || !Number.isFinite(Number(value))) return 'Unavailable';
-  return `${Number(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${unit}`;
-}
-
-function PublishedComparison({ comparison }) {
-  return <MarketSignedValue
-    value={comparison?.available ? comparison.change : null}
-    unit={comparison?.unit}
-    suffix={comparison?.available ? `vs ${formatDate(comparison.previousDate)}` : ''}
-    unavailableLabel="No prior comparison"
-    variant="pill"
-  />;
+  const digits = String(unit).toUpperCase() === 'USD/BBL' ? 3 : 2;
+  return `${Number(value).toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits })} ${unit}`;
 }
 
 function formatDate(value) {
@@ -46,18 +30,6 @@ function formatTimestamp(value) {
   return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat('en-GB', {
     day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Hong_Kong', timeZoneName: 'short',
   }).format(date);
-}
-
-function ProductRow({ product, currentMonth }) {
-  return <article className="material-panel grid gap-2 rounded-lg border border-border bg-card p-2.5 shadow-sm sm:grid-cols-[1.25fr_1fr_1fr_1.2fr] sm:items-center">
-    <div className="flex min-w-0 items-start justify-between gap-2 sm:block">
-      <div><strong className="block text-xs text-foreground">{product.productName}</strong><span className="text-[9px] text-muted-foreground">({product.sourceCode}) · {formatDate(product.latestMops?.publicationDate)}</span></div>
-      <span className={cn('shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-semibold capitalize ring-1 ring-inset sm:mt-1 sm:inline-flex', REGIME_CLASSES[product.curve?.status] || REGIME_CLASSES.unavailable)}>{product.curve?.status || 'unavailable'}</span>
-    </div>
-    <div className="grid gap-1 rounded-md bg-muted/55 px-2 py-1.5"><span className="text-[8px] font-semibold uppercase tracking-wide text-muted-foreground">Latest MOPS</span><strong className="text-xs text-foreground">{formatMarketValue(product.latestMops?.value, product.unit)}</strong><PublishedComparison comparison={product.latestMops?.comparison} /></div>
-    <div className="grid gap-1 rounded-md bg-primary/[0.07] px-2 py-1.5"><span className="text-[8px] font-semibold uppercase tracking-wide text-primary">Est. {currentMonth}</span><strong className="text-xs text-foreground">{formatMarketValue(product.monthlyEstimate?.value, product.unit)}</strong><span className="text-[9px] text-muted-foreground">Calculated estimate</span></div>
-    <div className="grid gap-1">{(product.curve?.spreads || []).map((spread) => <div key={spread.key} className="flex flex-wrap items-center justify-between gap-1 rounded-md border border-border bg-muted/55 px-2 py-1"><span className="flex items-center gap-1 text-[9px] font-semibold text-foreground">{spread.label} <MarketSignedValue value={spread.value} unit={spread.unit} /></span><PublishedComparison comparison={spread.comparison} /></div>)}</div>
-  </article>;
 }
 
 function PulseBody({ data, error, loading, updating, onRefresh, onOpenMarkets, onResetPosition }) {
@@ -93,13 +65,13 @@ function PulseBody({ data, error, loading, updating, onRefresh, onOpenMarkets, o
                 The latest refresh failed. Showing the previously loaded Market Pulse. {error}
               </div>
             )}
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
               <span>MOPS {formatDate(data.latestMopsPublicationDate)}</span>
               <span aria-hidden="true">·</span>
               <span>{reportLabel}</span>
               {data.meta?.cache && <><span aria-hidden="true">·</span><span>{data.meta.cache === 'hit' ? 'Cached' : 'Updated'}</span></>}
             </div>
-            <div className="flex flex-wrap gap-1.5 text-[10px] font-medium">
+            <div className="flex flex-wrap gap-1.5 text-xs font-medium">
               <span className={cn('rounded-full px-2 py-0.5 ring-1 ring-inset', data.reportCompleteness?.complete ? 'bg-emerald-50 text-emerald-800 ring-emerald-600/20' : 'bg-amber-50 text-amber-800 ring-amber-600/20')}>
                 {data.reportCompleteness?.completeReports || 0}/{data.reportCompleteness?.requiredReports || 2} reports
               </span>
@@ -109,14 +81,14 @@ function PulseBody({ data, error, loading, updating, onRefresh, onOpenMarkets, o
               {data.curveCompleteness?.publishedNa > 0 && <span className="rounded-full bg-muted px-2 py-0.5 text-muted-foreground ring-1 ring-inset ring-border">{data.curveCompleteness.publishedNa} published N/A</span>}
             </div>
 
-            <div className="space-y-1.5">{(data.products || []).map((product) => <ProductRow key={product.productKey} product={product} currentMonth={data.currentMonth} />)}</div>
+            <MarketPriceBoard pulse={data} compact />
 
-            {data.intraday ? <details className="rounded-lg border border-amber-200 bg-amber-50 text-amber-950 dark:border-amber-700/60 dark:bg-amber-950/45 dark:text-amber-100"><summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-2 text-xs font-semibold"><span>Intraday paper · Provisional</span><span className="text-[9px] font-normal">{formatDate(data.intraday.marketDate)} · Official MOPS unchanged</span></summary><div className="border-t border-amber-200 px-3 py-2 dark:border-amber-700/60"><div className="text-[9px] text-amber-800 dark:text-amber-200">{data.intraday.sourceLabel} · received {formatTimestamp(data.intraday.receivedAt)}</div><div className="mt-2 grid grid-cols-2 gap-1.5">{(data.intraday.observations || []).slice(0, 8).map((row) => <div key={`${row.productKey}:${row.contractMonth}:${row.quoteState}`} className="rounded-md bg-card/75 px-2 py-1.5"><div className="text-[10px] font-semibold">{row.productLabel} · {String(row.contractMonth).slice(0, 7)}</div><div className="text-[11px]">{formatMarketValue(row.price, row.unit)}</div><div className="text-[9px] text-amber-800 dark:text-amber-200">{row.reportedChange == null ? 'No supplied prior-close change' : <MarketSignedValue value={row.reportedChange} unit={row.unit} suffix="vs prior close" />}</div></div>)}</div></div></details> : null}
+            {data.intraday ? <details className="rounded-lg border border-amber-200 bg-amber-50 text-amber-950 dark:border-amber-700/60 dark:bg-amber-950/45 dark:text-amber-100"><summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-2 text-xs font-semibold"><span>Intraday paper · Provisional</span><span className="text-xs font-normal">{formatDate(data.intraday.marketDate)} · Official MOPS unchanged</span></summary><div className="border-t border-amber-200 px-3 py-2 dark:border-amber-700/60"><div className="text-xs text-amber-800 dark:text-amber-200">{data.intraday.sourceLabel} · received {formatTimestamp(data.intraday.receivedAt)}</div><div className="mt-2 grid grid-cols-2 gap-1.5">{(data.intraday.observations || []).slice(0, 8).map((row) => <div key={`${row.productKey}:${row.contractMonth}:${row.quoteState}`} className="rounded-md bg-card/75 px-2 py-1.5"><div className="text-xs font-semibold">{row.productLabel} · {String(row.contractMonth).slice(0, 7)}</div><div className="text-xs">{formatMarketValue(row.price, row.unit)}</div><div className="text-xs text-amber-800 dark:text-amber-200">{row.reportedChange == null ? 'No supplied prior-close change' : <MarketSignedValue value={row.reportedChange} unit={row.unit} suffix="vs prior close" />}</div></div>)}</div></div></details> : null}
 
             {(data.warnings || []).length > 0 && (
               <details className="rounded-lg border border-amber-200 bg-amber-50 text-xs text-amber-950"><summary className="flex cursor-pointer list-none items-center gap-1.5 px-3 py-2 font-semibold"><TriangleAlert className="h-3.5 w-3.5" />Data notes ({data.warnings.length})</summary><ul className="space-y-1 border-t border-amber-200 px-3 py-2 pl-7">{data.warnings.map((warning) => <li key={warning} className="list-disc"><MarketSignedText>{warning}</MarketSignedText></li>)}</ul></details>
             )}
-            <div className="text-[10px] leading-relaxed text-muted-foreground">
+            <div className="text-xs leading-relaxed text-muted-foreground">
               Positive front-minus-back is backwardation; negative is contango. Missing marks are not inferred.
             </div>
           </div>
@@ -199,7 +171,7 @@ export default function MarketPulse({ open, onOpenChange, onResetPosition, trigg
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>
-      <PopoverContent align="end" side="bottom" sideOffset={8} collisionPadding={12} className="glass-floating flex max-h-[calc(100dvh-24px)] w-[min(640px,calc(100vw-24px))] flex-col overflow-hidden p-0">
+      <PopoverContent align="end" side="bottom" sideOffset={8} collisionPadding={12} className="glass-floating flex max-h-[calc(100dvh-24px)] w-[min(1100px,calc(100vw-24px))] flex-col overflow-hidden p-0">
         {body}
       </PopoverContent>
     </Popover>
