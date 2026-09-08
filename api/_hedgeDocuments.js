@@ -4,6 +4,7 @@ import { jsPDF } from 'jspdf';
 import { resolveGraphEmailSender, sendGraphPurposeMail } from './_graphEmail.js';
 import { richTextPlainLength, sanitizeRichText } from './_richText.js';
 import { hedgeSettlementPaymentDirection, isInternalHedgeCounterparty } from '../src/hedge/lib/domain.js';
+import { assertHedgeDocumentScope, isAuthorizedFcbsPayload, isFcbsSettlementInvoice, prepareHedgeInvoiceReview } from './_hedgeFcbsSettlement.js';
 
 const BUCKET = 'hedge-documents';
 const MAX_PDF_BYTES = 3 * 1024 * 1024;
@@ -50,12 +51,17 @@ function displayMonth(value) {
 
 export function normalizeHedgeInvoice(input = {}) {
   const invoice = input.invoice || input;
+  if (isFcbsSettlementInvoice(invoice) && !isAuthorizedFcbsPayload(invoice)) {
+    throw hedgeDocumentError('A server-verified FCBS settlement review is required.', 409, 'HEDGE_FCBS_REVIEW_REQUIRED');
+  }
   const lines = Array.isArray(invoice.lineItems) ? invoice.lineItems : Array.isArray(invoice.line_items) ? invoice.line_items : [];
   const lineItems = lines.map((line) => {
     const mtmValue = number(line.mtmValue ?? line.mtm_value);
     const handlingFee = number(line.handlingFee ?? line.handling_fee);
     return {
       product: String(line.product || ''),
+      tradeDate: line.tradeDate || '',
+      contractMonth: line.contractMonth || '',
       direction: String(line.direction || ''),
       quantity: number(line.quantity),
       unit: String(line.unit || 'MT'),
@@ -74,6 +80,8 @@ export function normalizeHedgeInvoice(input = {}) {
   }
   const paymentDirection = hedgeSettlementPaymentDirection(number(netAmount, lineItems.reduce((sum, line) => sum + line.netValue, 0)), counterparty);
   return {
+    settlementBasis: invoice.settlementBasis || invoice.settlement_basis || 'counterparty',
+    sourceFingerprint: invoice.sourceFingerprint || null,
     invoiceNumber: String(invoice.invoiceNumber || invoice.invoice_number || 'FCBHK Invoice').slice(0, 100),
     invoiceDate: invoice.invoiceDate || invoice.issue_date || '',
     settlementMonth: invoice.settlementMonth || invoice.settlement_month || '',
@@ -90,6 +98,11 @@ export function normalizeHedgeInvoice(input = {}) {
 export function generateHedgeInvoicePdf(input = {}) {
   const invoice = normalizeHedgeInvoice(input);
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  if (invoice.settlementBasis === 'fcbs_own_account_venue') {
+    // Canonical preview and stored PDF have identical bytes, not just matching totals.
+    doc.setCreationDate(new Date(`${invoice.invoiceDate}T00:00:00Z`));
+    doc.setFileId(createHash('sha256').update(JSON.stringify(invoice)).digest('hex').slice(0, 32));
+  }
   const margin = 16;
   const pageWidth = 210;
   const right = pageWidth - margin;
@@ -192,7 +205,7 @@ export function generateHedgeInvoicePdf(input = {}) {
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(6.8);
   doc.setTextColor(...muted);
-  doc.text('Counterparty MTM', paymentSummaryX, y + 8);
+  doc.text(invoice.settlementBasis === 'fcbs_own_account_venue' ? 'FCBHK gross hedge result' : 'Counterparty MTM', paymentSummaryX, y + 8);
   doc.text(`USD ${signedMoney(invoice.totalMtm)}`, right - 4, y + 8, { align: 'right' });
   doc.text('Fee impact', paymentSummaryX, y + 14);
   doc.text(`USD ${signedMoney(invoice.totalHandling)}`, right - 4, y + 14, { align: 'right' });
@@ -229,7 +242,9 @@ export function generateHedgeInvoicePdf(input = {}) {
   drawTableHeader();
 
   invoice.lineItems.forEach((line, rowIndex) => {
-    const productLines = doc.splitTextToSize(line.product || '-', columns[0].width - 4);
+    const productLabel = invoice.settlementBasis === 'fcbs_own_account_venue'
+      ? `${line.product}\n${displayDate(line.tradeDate)}\n${displayMonth(line.contractMonth)}` : line.product || '-';
+    const productLines = doc.splitTextToSize(productLabel, columns[0].width - 4);
     const rowHeight = compactSinglePage ? Math.max(6.5, productLines.length * 2.5 + 2) : Math.max(9, productLines.length * 3.6 + 4);
     if (y + rowHeight > 263) {
       doc.addPage();
@@ -332,6 +347,7 @@ async function invoiceCounterparty(client, shortName) {
 
 async function authoritativeInvoicePayload(client, invoice, requestedPayload = null) {
   if (!invoice) return requestedPayload || {};
+  if (isFcbsSettlementInvoice(invoice)) return prepareHedgeInvoiceReview(client, { invoiceId: invoice.id });
   const storedPayload = invoice.pdf_payload || requestedPayload || {};
   const counterparty = await invoiceCounterparty(client, invoice.counterparty);
   return {
@@ -360,6 +376,7 @@ export async function saveHedgeInvoicePdf(client, profile, body = {}) {
     if (document.error) throw hedgeDocumentError(`Invoice document access could not be verified: ${document.error.message}`, 502);
     if (!document.data?.invoice_id) throw hedgeDocumentError('The invoice document is not registered.', 404);
     const invoice = await invoiceRecord(client, document.data.invoice_id);
+    await assertHedgeDocumentScope(client, invoice);
     const counterparty = await invoiceCounterparty(client, invoice.counterparty);
     if (isInternalHedgeCounterparty(counterparty || invoice.counterparty)) {
       throw hedgeDocumentError('Internal hedge — no external settlement document.', 409, 'HEDGE_INTERNAL_SETTLEMENT_DOCUMENT_BLOCKED');
@@ -370,6 +387,7 @@ export async function saveHedgeInvoicePdf(client, profile, body = {}) {
   }
 
   const invoice = await invoiceRecord(client, body.invoiceId);
+  await assertHedgeDocumentScope(client, invoice, { requireFresh: true });
   const counterparty = await invoiceCounterparty(client, invoice.counterparty);
   if (isInternalHedgeCounterparty(counterparty || invoice.counterparty)) {
     throw hedgeDocumentError('Internal hedge — no external settlement document.', 409, 'HEDGE_INTERNAL_SETTLEMENT_DOCUMENT_BLOCKED');
@@ -378,6 +396,12 @@ export async function saveHedgeInvoicePdf(client, profile, body = {}) {
   const buffer = Buffer.from(encoded, 'base64');
   if (!buffer.length || buffer.subarray(0, 4).toString() !== '%PDF') throw hedgeDocumentError('The invoice PDF is invalid.', 400);
   if (buffer.length > MAX_PDF_BYTES) throw hedgeDocumentError('The invoice PDF exceeds the 3 MB limit.', 400);
+  if (isFcbsSettlementInvoice(invoice)) {
+    if (invoice.status !== 'Draft') throw hedgeDocumentError('Issued settlement PDFs cannot be replaced.', 409, 'HEDGE_FCBS_ISSUED_IMMUTABLE');
+    const canonical = generateHedgeInvoicePdf(await prepareHedgeInvoiceReview(client, { invoiceId: invoice.id }));
+    if (!buffer.equals(canonical.buffer)) throw hedgeDocumentError('This PDF does not match the saved reviewed settlement. Open a new preview.', 409, 'HEDGE_FCBS_PDF_MISMATCH');
+    if (invoice.pdf_data_url) return { ok: true, storagePath: invoice.pdf_data_url, fileName: canonical.filename, replayed: true };
+  }
   const storagePath = `invoices/${invoice.id}/${randomUUID()}.pdf`;
   const upload = await client.storage.from(BUCKET).upload(storagePath, buffer, { contentType: 'application/pdf', upsert: false });
   if (upload.error) throw hedgeDocumentError(`Invoice PDF could not be stored: ${upload.error.message}`, 502);
@@ -410,6 +434,9 @@ export async function saveHedgeInvoicePdf(client, profile, body = {}) {
 
 export async function sendHedgeInvoiceEmail(client, profile, body = {}, { mailboxSnapshot = null } = {}) {
   const invoice = body.invoiceId ? await invoiceRecord(client, body.invoiceId) : null;
+  if (!invoice && (isFcbsSettlementInvoice(body) || isFcbsSettlementInvoice(body.pdfPayload))) throw hedgeDocumentError('Save and review the FCBS settlement before sending it.', 409, 'HEDGE_FCBS_REVIEW_REQUIRED');
+  await assertHedgeDocumentScope(client, invoice || body, { requireFresh: true });
+  if (invoice && isFcbsSettlementInvoice(invoice) && !invoice.pdf_data_url) throw hedgeDocumentError('Save the reviewed settlement PDF before sending it.', 409, 'HEDGE_FCBS_SAVED_PDF_REQUIRED');
   if (invoice) {
     const counterparty = await invoiceCounterparty(client, invoice.counterparty);
     if (isInternalHedgeCounterparty(counterparty || invoice.counterparty)) {

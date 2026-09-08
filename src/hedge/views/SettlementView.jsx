@@ -29,6 +29,7 @@ import {
   roundMoney,
   settlementSummary,
 } from "../lib/domain";
+import { buildFcbsOwnAccountSettlement } from "../lib/fcbsOwnAccountSettlement";
 import { useActions } from "../data/ActionsContext";
 import {
   Button,
@@ -80,14 +81,14 @@ function buildInvoicePayload(group, invoiceNumber, invoiceDate, settlementMonth,
     attention: counterpartyRecord.attention,
   } : { short_name: group.counterparty, full_name: group.counterparty };
   const paymentDirection = hedgeSettlementPaymentDirection(group.net, counterparty);
-  const lineItems = group.rows.map(({ swap, mtm, attributedFeeImpact, net }) => ({
+  const lineItems = group.rows.map(({ swap, mtm, displayMtm, attributedFeeImpact, net }) => ({
     product: swap.product,
     direction: swap.direction,
     quantity: swap.quantity || 0,
     unit: swap.unit || "MT",
     price: swap.trade_type === "SPREAD" ? swap.leg1_price || 0 : swap.price || 0,
     mtmAvg: null,
-    mtmValue: -mtm,
+    mtmValue: displayMtm ?? -mtm,
     handlingFee: attributedFeeImpact,
     netValue: net,
     venue: swap.venue,
@@ -104,6 +105,11 @@ function buildInvoicePayload(group, invoiceNumber, invoiceDate, settlementMonth,
     paymentDirection,
     counterparty,
   };
+}
+
+function newReviewIdempotencyKey() {
+  if (typeof globalThis.crypto?.randomUUID !== "function") throw new Error("A secure review idempotency key could not be created.");
+  return globalThis.crypto.randomUUID();
 }
 
 export function SettlementView({ data, settings, readOnly = false, canClose = false, canManageBrokerSettlements = false }) {
@@ -133,7 +139,25 @@ export function SettlementView({ data, settings, readOnly = false, canClose = fa
   const summary = useMemo(() => settlementSummary(data.swaps, data.mops, settings.rates, month, settings.general.sgo_bbl_per_mt, data.marketValuation), [data.marketValuation, data.mops, data.swaps, month, settings.general.sgo_bbl_per_mt, settings.rates]);
   const brokerCommissionMonths = useMemo(() => monthlyBrokerCommissionSummary(data.swaps, settings.rates), [data.swaps, settings.rates]);
   const brokerSettlementMap = useMemo(() => new Map((data.brokerSettlements || []).map((row) => [`${row.trade_month}:${row.broker_key}`, row])), [data.brokerSettlements]);
-  const groups = useMemo(() => buildCounterpartySettlementGroups(summary.monthSwaps, data.mops, settings.rates, settings.general.sgo_bbl_per_mt, data.marketValuation, data.counterparties), [data.counterparties, data.marketValuation, data.mops, settings.general.sgo_bbl_per_mt, settings.rates, summary.monthSwaps]);
+  const groups = useMemo(() => buildCounterpartySettlementGroups(
+    summary.monthSwaps,
+    data.mops,
+    settings.rates,
+    settings.general.sgo_bbl_per_mt,
+    data.marketValuation,
+    data.counterparties,
+  ), [data.counterparties, data.marketValuation, data.mops, settings.general.sgo_bbl_per_mt, settings.rates, summary.monthSwaps]);
+  const fcbsOwnAccountSettlement = useMemo(() => buildFcbsOwnAccountSettlement({
+    swaps: data.swaps,
+    mops: data.mops,
+    rates: settings.rates,
+    month,
+    sgoRatio: settings.general.sgo_bbl_per_mt,
+    monthlyVerifications: data.mopsMonthVerifications,
+    now: hktToday(),
+    counterparties: data.counterparties,
+    invoices: data.invoices,
+  }), [data.counterparties, data.invoices, data.mops, data.mopsMonthVerifications, data.swaps, month, settings.general.sgo_bbl_per_mt, settings.rates]);
   const closed = settings.closedMonths.includes(month);
   const filteredInvoices = useMemo(() => data.invoices
     .filter((invoice) => invoiceStatus === "all" || invoice.status === invoiceStatus)
@@ -213,12 +237,14 @@ export function SettlementView({ data, settings, readOnly = false, canClose = fa
       setError(new Error("Internal hedge — no external settlement document."));
       return;
     }
-    if (!group?.valuationAvailable || group?.net == null) {
-      setError(new Error("Settlement document generation is blocked until every hedge has a governed market value."));
+    const requiresDocumentReadiness = group?.settlementBasis === "fcbs_own_account_venue";
+    if (!group?.valuationAvailable || group?.net == null || !group?.net || (requiresDocumentReadiness && !group.documentReady)) {
+      const reasons = group?.blockingReasons?.filter(Boolean);
+      setError(new Error(reasons?.length ? reasons.join(" ") : "Settlement document generation is blocked until every hedge has a governed market value and the net amount is non-zero."));
       return;
     }
     setInvoiceDrawer(group);
-    setInvoiceForm({ number: nextInvoiceNumber(data.invoices, settings.general.invoice_prefix), date: hktToday() });
+    setInvoiceForm({ number: group.existingInvoice?.invoice_number || nextInvoiceNumber(data.invoices, settings.general.invoice_prefix), date: group.existingInvoice?.issue_date || hktToday() });
     setError(null);
   };
 
@@ -230,16 +256,30 @@ export function SettlementView({ data, settings, readOnly = false, canClose = fa
     setBusy(true);
     setError(null);
     try {
-      const payload = buildInvoicePayload(invoiceDrawer, invoiceForm.number, invoiceForm.date, month, counterpartyMap.get(invoiceDrawer.counterparty));
-      const result = await generateOtcInvoice(payload);
+      const isFcbsOwnAccount = invoiceDrawer.settlementBasis === "fcbs_own_account_venue";
+      const requestedPayload = isFcbsOwnAccount
+        ? {
+          settlementBasis: invoiceDrawer.settlementBasis,
+          settlementMonth: month,
+          swapIds: invoiceDrawer.records.map((record) => record.id),
+          invoiceNumber: invoiceForm.number,
+          invoiceDate: invoiceForm.date,
+        }
+        : buildInvoicePayload(invoiceDrawer, invoiceForm.number, invoiceForm.date, month, counterpartyMap.get(invoiceDrawer.counterparty));
+      const result = await generateOtcInvoice(requestedPayload);
+      const payload = isFcbsOwnAccount ? result?.reviewPayload : requestedPayload;
+      if (!payload) throw new Error("The settlement document service did not return its canonical review payload.");
       const blob = pdfBlob(result);
       setPdfPreview({
         url: URL.createObjectURL(blob),
         blob,
         payload,
         group: invoiceDrawer,
-        invoiceNumber: invoiceForm.number,
-        existing: null,
+        invoiceNumber: payload.invoiceNumber || invoiceForm.number,
+        existingInvoice: invoiceDrawer.existingInvoice || null,
+        mode: invoiceDrawer.existingInvoice ? "update" : "new",
+        pdfBase64: result.base64,
+        idempotencyKey: newReviewIdempotencyKey(),
       });
       setInvoiceDrawer(null);
     } catch (nextError) {
@@ -255,35 +295,38 @@ export function SettlementView({ data, settings, readOnly = false, canClose = fa
   };
 
   const saveInvoice = async () => {
-    if (!pdfPreview || pdfPreview.existing) return;
+    if (!pdfPreview || pdfPreview.mode === "existing") return;
     setBusy(true);
     setError(null);
     try {
-      const group = pdfPreview.group;
       const payload = pdfPreview.payload;
-      const invoice = await actions.create({
-        entity: Invoice,
-        entityName: "Invoice",
-        payload: {
-          invoice_number: payload.invoiceNumber,
-          invoice_type: payload.paymentDirection.invoiceType,
-          issue_date: payload.invoiceDate,
-          settlement_month: payload.settlementMonth,
-          counterparty: group.counterparty,
-          section: "Trader",
-          line_items: payload.lineItems,
-          subtotal: payload.netAmount,
-          status: "Draft",
-          swap_ids: group.records.map((record) => record.id),
-          pdf_payload: payload,
-        },
-        label: `${payload.invoiceNumber} ${group.counterparty}`,
-      });
-      try {
-        await saveInvoicePdf({ action: "save_invoice_pdf", invoiceId: invoice.id, pdfBase64: pdfPreview.payload ? (await generateOtcInvoice(pdfPreview.payload)).base64 : null });
-      } catch {}
+      const group = pdfPreview.group;
+      const isFcbsOwnAccount = payload.settlementBasis === "fcbs_own_account_venue";
+      const invoicePayload = {
+        invoice_number: payload.invoiceNumber,
+        invoice_type: payload.paymentDirection.invoiceType,
+        issue_date: payload.invoiceDate,
+        settlement_month: payload.settlementMonth,
+        counterparty: group.counterparty,
+        section: "Trader",
+        line_items: payload.lineItems,
+        subtotal: payload.netAmount,
+        status: "Draft",
+        swap_ids: isFcbsOwnAccount ? payload.swapIds : group.records.map((record) => record.id),
+        pdf_payload: payload,
+        ...(isFcbsOwnAccount ? {
+          settlement_basis: payload.settlementBasis,
+          source_fingerprint: payload.sourceFingerprint,
+          idempotency_key: pdfPreview.idempotencyKey,
+        } : {}),
+      };
+      const invoice = pdfPreview.existingInvoice
+        ? await Invoice.update(pdfPreview.existingInvoice.id, invoicePayload, pdfPreview.existingInvoice.revision)
+        : await Invoice.create(invoicePayload);
+      await saveInvoicePdf({ action: "save_invoice_pdf", invoiceId: invoice.id, pdfBase64: pdfPreview.pdfBase64 });
       closePreview();
       await data.reload({ silent: true });
+      actions.notify({ message: `${payload.invoiceNumber} ${pdfPreview.existingInvoice ? "updated" : "created"}` });
       setTab("invoices");
     } catch (nextError) {
       setError(nextError);
@@ -300,9 +343,9 @@ export function SettlementView({ data, settings, readOnly = false, canClose = fa
       if (issued && invoice.pdf_data_url?.startsWith("supabase://hedge-documents/")) {
         const result = await saveInvoicePdf({ action: "get_invoice_pdf", storagePath: invoice.pdf_data_url });
         if (!result?.url) throw new Error("Private invoice PDF could not be opened.");
-        setPdfPreview({ url: result.url, invoiceNumber: invoice.invoice_number, payload: invoice.pdf_payload, existing: invoice });
+        setPdfPreview({ url: result.url, invoiceNumber: invoice.invoice_number, payload: invoice.pdf_payload, existingInvoice: invoice, mode: "existing" });
       } else if (issued && invoice.pdf_data_url && /^(https?:|data:application\/pdf|blob:)/.test(invoice.pdf_data_url)) {
-        setPdfPreview({ url: invoice.pdf_data_url, invoiceNumber: invoice.invoice_number, payload: invoice.pdf_payload, existing: invoice });
+        setPdfPreview({ url: invoice.pdf_data_url, invoiceNumber: invoice.invoice_number, payload: invoice.pdf_payload, existingInvoice: invoice, mode: "existing" });
       } else {
         const counterpartyRecord = counterpartyMap.get(invoice.counterparty);
         const storedPayload = invoice.pdf_payload || {};
@@ -325,8 +368,8 @@ export function SettlementView({ data, settings, readOnly = false, canClose = fa
             attention: counterpartyRecord.attention,
           } : storedPayload.counterparty || { short_name: invoice.counterparty, full_name: invoice.counterparty },
         };
-        const result = await generateOtcInvoice(payload);
-        setPdfPreview({ url: URL.createObjectURL(pdfBlob(result)), invoiceNumber: invoice.invoice_number, payload, existing: invoice });
+        const result = await generateOtcInvoice(invoice.settlement_basis === "fcbs_own_account_venue" ? { invoiceId: invoice.id } : payload);
+        setPdfPreview({ url: URL.createObjectURL(pdfBlob(result)), invoiceNumber: invoice.invoice_number, payload, existingInvoice: invoice, mode: "existing" });
       }
     } catch (nextError) {
       setError(nextError);
@@ -454,13 +497,39 @@ export function SettlementView({ data, settings, readOnly = false, canClose = fa
               <span>Payment direction</span><strong>{paymentDirection.label}</strong><small>Beneficiary: {paymentDirection.beneficiary.fullName}</small>
             </div> : <InlineError error={new Error("Settlement is blocked until every hedge has a governed market value.")} />}
             <div className="app-table-frame app-table-frame--flush">
-              <table className="app-table app-table--compact"><thead><tr><th>Trade</th><th>Product</th><th>Venue</th><th>Quantity</th><th>{group.internal ? "Internal MTM" : "MTM from CP"}</th><th>Fee impact</th><th>{group.internal ? "Internal net result" : "Net to FCBHK"}</th></tr></thead><tbody>{group.rows.map(({ swap, mtm, attributedFeeImpact, net }) => (
-                <tr key={swap.id}><td>{formatDate(swap.trade_date)}</td><td><ProductBadge product={swap.product} /></td><td>{swap.venue}</td><td>{formatQuantity(swap.quantity, swap.unit)}</td><td><Money value={mtm == null ? null : -mtm} digits={2} /></td><td><Money value={attributedFeeImpact} digits={2} /></td><td><Money value={net} digits={2} strong /></td></tr>
+              <table className="app-table app-table--compact"><thead><tr><th>Trade</th><th>Product</th><th>Venue</th><th>Quantity</th><th>{group.internal ? "Internal MTM" : "MTM from CP"}</th><th>Fee impact</th><th>{group.internal ? "Internal net result" : "Net to FCBHK"}</th></tr></thead><tbody>{group.rows.map(({ swap, mtm, displayMtm, attributedFeeImpact, net }) => (
+                <tr key={swap.id}><td>{formatDate(swap.trade_date)}</td><td><ProductBadge product={swap.product} /></td><td>{swap.venue}</td><td>{formatQuantity(swap.quantity, swap.unit)}</td><td><Money value={mtm == null ? null : displayMtm ?? -mtm} digits={2} /></td><td><Money value={attributedFeeImpact} digits={2} /></td><td><Money value={net} digits={2} strong /></td></tr>
               ))}</tbody></table>
             </div>
           </Panel>
         );
-      }) : <EmptyState title="No counterparty settlement" description="There are no counterparty hedges for the selected month." />}
+      }) : !fcbsOwnAccountSettlement && <EmptyState title="No counterparty settlement" description="There are no counterparty hedges for the selected month." />}
+      {fcbsOwnAccountSettlement && (() => {
+        const group = fcbsOwnAccountSettlement;
+        const paymentDirection = group.valuationAvailable && group.net != null && group.net !== 0
+          ? paymentDirectionFor(group.net, group.counterparty)
+          : null;
+        const existing = group.existingInvoice;
+        const immutable = ["Sent", "Settled"].includes(existing?.status);
+        const blockingMessage = group.blockingReasons?.filter(Boolean).join(" ") || "Settlement document generation is blocked until the FCBS venue settlement is final, valued, and non-zero.";
+        return <Panel key={group.key} className="app-counterparty-settlement app-counterparty-settlement--fcbs-own-account">
+          <div className="app-counterparty-settlement__header">
+            <div><h2>FCBS — FCBHK own-account settlement</h2><p>{group.records.length} FCBS-venue hedges · Monthly venue settlement</p></div>
+            <div className="app-counterparty-settlement__net">
+              <strong>{group.valuationAvailable ? formatMoney(Math.abs(group.net || 0), { digits: 2 }) : "Unavailable"}</strong>
+              {!readOnly && existing && <Button size="sm" icon={Eye} onClick={() => immutable ? previewExisting(existing) : openInvoice(group)}>{immutable ? `View ${existing.status.toLowerCase()} document` : "Review draft update"}</Button>}
+              {!readOnly && !existing && paymentDirection && group.documentReady && <Button size="sm" icon={FileText} onClick={() => openInvoice(group)}>Generate {paymentDirection.invoiceType.toLowerCase()}</Button>}
+            </div>
+          </div>
+          {existing && <div className="app-payment-direction app-payment-direction--internal"><span>{immutable ? `${existing.status} document` : "Existing monthly draft"}</span><strong>{existing.invoice_number || "FCBS settlement document"}</strong><small>{immutable ? "Issued FCBS own-account documents are immutable; view the stored document." : "A new reviewed PDF updates this monthly draft and retains its invoice number."}</small></div>}
+          {paymentDirection ? <div className={`app-payment-direction app-payment-direction--${paymentDirection.isReceivable ? "receivable" : "payable"}`}><span>Payment direction</span><strong>{paymentDirection.label}</strong><small>Payer: {paymentDirection.payer.fullName} · Payee: {paymentDirection.payee.fullName}</small></div> : <InlineError error={new Error(blockingMessage)} />}
+          <div className="app-table-frame app-table-frame--flush">
+            <table className="app-table app-table--compact"><thead><tr><th>Trade</th><th>Product</th><th>Venue</th><th>Quantity</th><th>Venue MTM</th><th>Venue fee</th><th>Net to FCBHK</th></tr></thead><tbody>{group.rows.map(({ swap, mtm, displayMtm, attributedFeeImpact, net }) => (
+              <tr key={swap.id}><td>{formatDate(swap.trade_date)}</td><td><ProductBadge product={swap.product} /></td><td>{swap.venue}</td><td>{formatQuantity(swap.quantity, swap.unit)}</td><td><Money value={mtm == null ? null : displayMtm ?? -mtm} digits={2} /></td><td><Money value={attributedFeeImpact} digits={2} /></td><td><Money value={net} digits={2} strong /></td></tr>
+            ))}</tbody></table>
+          </div>
+        </Panel>;
+      })()}
     </div>
   );
 
@@ -512,6 +581,7 @@ export function SettlementView({ data, settings, readOnly = false, canClose = fa
       <TableFrame>
         {filteredInvoices.length ? <table className="app-table"><thead><tr><th>Invoice</th><th>Type</th><th>Month</th><th>Payment direction</th><th>Amount</th><th>Status</th><th>Email</th><th aria-label="Actions" /></tr></thead><tbody>{filteredInvoices.map((invoice) => {
           const paymentDirection = paymentDirectionFor(invoice.subtotal, invoice.counterparty);
+          const immutableFcbsOwnAccount = invoice.settlement_basis === "fcbs_own_account_venue" && ["Sent", "Settled"].includes(invoice.status);
           return (
             <tr key={invoice.id}>
               <td><strong className="app-text-teal">{invoice.invoice_number || "-"}</strong><small>{formatDate(invoice.issue_date)}</small></td>
@@ -519,9 +589,9 @@ export function SettlementView({ data, settings, readOnly = false, canClose = fa
               <td>{formatMonth(invoice.settlement_month)}</td>
               <td><strong>{paymentDirection.label}</strong><small>Beneficiary: {paymentDirection.beneficiary.shortName}</small></td>
               <td><strong>{formatMoney(paymentDirection.amount, { digits: 2 })}</strong></td>
-              <td>{readOnly ? <StatusBadge>{invoice.status || "Draft"}</StatusBadge> : <Select value={invoice.status || "Draft"} onChange={(event) => updateInvoiceStatus(invoice, event.target.value)}><option>Draft</option><option>Sent</option><option>Settled</option></Select>}</td>
+              <td>{readOnly ? <StatusBadge>{invoice.status || "Draft"}</StatusBadge> : <Select aria-label={`${invoice.invoice_number} status`} value={invoice.status || "Draft"} onChange={(event) => updateInvoiceStatus(invoice, event.target.value)}><option disabled={invoice.settlement_basis === "fcbs_own_account_venue" && invoice.status !== "Draft"}>Draft</option><option>Sent</option><option disabled={invoice.settlement_basis === "fcbs_own_account_venue" && invoice.status === "Draft"}>Settled</option></Select>}</td>
               <td>{invoice.email_sent_at ? <StatusBadge tone="positive">Sent {new Date(invoice.email_sent_at).toLocaleDateString("en-GB")}</StatusBadge> : <StatusBadge tone="neutral">Not sent</StatusBadge>}</td>
-              <td><div className="app-row-actions"><IconButton label="Copy invoice number" icon={Copy} variant="quiet" onClick={() => navigator.clipboard.writeText(invoice.invoice_number || "")} /><IconButton label="Preview invoice" icon={Eye} variant="quiet" onClick={() => previewExisting(invoice)} />{!readOnly && <><IconButton label="Send invoice email" icon={Mail} variant="quiet" disabled={!counterpartyMap.get(invoice.counterparty)?.emails && !settings.email.email_to} onClick={() => openEmail(invoice)} /><IconButton label="Delete invoice" icon={Trash2} variant="danger" onClick={() => setDeleteTarget(invoice)} /></>}</div></td>
+              <td><div className="app-row-actions"><IconButton label="Copy invoice number" icon={Copy} variant="quiet" onClick={() => navigator.clipboard.writeText(invoice.invoice_number || "")} /><IconButton label="Preview invoice" icon={Eye} variant="quiet" onClick={() => previewExisting(invoice)} />{!readOnly && !immutableFcbsOwnAccount && <><IconButton label="Send invoice email" icon={Mail} variant="quiet" disabled={!counterpartyMap.get(invoice.counterparty)?.emails && !settings.email.email_to} onClick={() => openEmail(invoice)} />{invoice.settlement_basis !== "fcbs_own_account_venue" && <IconButton label="Delete invoice" icon={Trash2} variant="danger" onClick={() => setDeleteTarget(invoice)} />}</>}</div></td>
             </tr>
           );
         })}</tbody></table> : <EmptyState title="No invoices match" description="Generate an invoice from the Counterparties view or adjust the filters." />}
@@ -530,7 +600,7 @@ export function SettlementView({ data, settings, readOnly = false, canClose = fa
   );
 
   return (
-    <div className="app-page">
+    <div className="app-page app-page--settlement">
       <PageHeader
         eyebrow="Month close"
         title="Settlement"
@@ -539,19 +609,20 @@ export function SettlementView({ data, settings, readOnly = false, canClose = fa
         actions={<><Select value={month} onChange={(event) => setMonth(event.target.value)}>{months.map((value) => <option key={value} value={value}>{formatMonth(value)}</option>)}</Select>{tab !== "fees" && canClose && <Button variant={closed ? "secondary" : "positive"} icon={CheckCircle2} onClick={toggleClosed} disabled={busy}>{closed ? "Reopen month" : "Mark settled"}</Button>}</>}
       />
       {error && <InlineError error={error} action={<Button size="sm" onClick={() => setError(null)}>Dismiss</Button>} />}
-      <SegmentedControl value={tab} onChange={setTab} label="Settlement view" options={[{ value: "sfs", label: "SFS realised P&L" }, { value: "overview", label: "Overview" }, { value: "counterparties", label: "Counterparties", count: groups.length }, { value: "fees", label: "Broker and ICE" }, { value: "invoices", label: "FCBHK Invoices", count: data.invoices.length }]} />
+      <SegmentedControl value={tab} onChange={setTab} label="Settlement view" options={[{ value: "sfs", label: "SFS realised P&L" }, { value: "overview", label: "Overview" }, { value: "counterparties", label: "Counterparties", count: groups.length + Number(Boolean(fcbsOwnAccountSettlement)) }, { value: "fees", label: "Broker and ICE" }, { value: "invoices", label: "FCBHK Invoices", count: data.invoices.length }]} />
       <div className="app-settlement-content">{tab === "sfs" && <SfsReportPanel month={month} canSend={canClose} onDelivered={() => data.reload({ silent: true })} />}{tab === "overview" && renderOverview()}{tab === "counterparties" && renderCounterparties()}{tab === "fees" && renderFees()}{tab === "invoices" && renderInvoices()}</div>
 
       <Drawer open={Boolean(invoiceDrawer)} onClose={() => setInvoiceDrawer(null)} title={invoiceDrawer ? `Generate ${paymentDirectionFor(invoiceDrawer.net, invoiceDrawer.counterparty).invoiceType.toLowerCase()} - ${invoiceDrawer.counterparty}` : "Generate settlement document"} description={invoiceDrawer ? `${formatMonth(month)} settlement | ${paymentDirectionFor(invoiceDrawer.net, invoiceDrawer.counterparty).label}` : ""} width="medium" footer={<><Button onClick={() => setInvoiceDrawer(null)} disabled={busy}>Cancel</Button><Button variant="primary" icon={Eye} onClick={previewInvoice} disabled={busy}>{busy ? "Generating..." : "Preview PDF"}</Button></>}>
         {error && <InlineError error={error} />}
-        <section className="app-form-section"><div className="app-form-grid app-form-grid--2"><Field label="Invoice number" required><input className="app-input" value={invoiceForm.number} onChange={(event) => setInvoiceForm((current) => ({ ...current, number: event.target.value }))} /></Field><Field label="Invoice date" required><input className="app-input" type="date" value={invoiceForm.date} onChange={(event) => setInvoiceForm((current) => ({ ...current, date: event.target.value }))} /></Field></div></section>
+        <section className="app-form-section"><div className="app-form-grid app-form-grid--2"><Field label="Invoice number" required><input className="app-input" value={invoiceForm.number} readOnly={Boolean(invoiceDrawer?.existingInvoice)} onChange={(event) => setInvoiceForm((current) => ({ ...current, number: event.target.value }))} /></Field><Field label="Invoice date" required><input className="app-input" type="date" value={invoiceForm.date} onChange={(event) => setInvoiceForm((current) => ({ ...current, date: event.target.value }))} /></Field></div></section>
         {invoiceDrawer && (() => {
           const paymentDirection = paymentDirectionFor(invoiceDrawer.net, invoiceDrawer.counterparty);
           return <><div className={`app-payment-direction app-payment-direction--${paymentDirection.isReceivable ? "receivable" : "payable"}`}><span>Payment direction</span><strong>{paymentDirection.label}</strong><small>Beneficiary: {paymentDirection.beneficiary.fullName}</small></div><div className="app-invoice-summary"><span><small>Payer</small><strong>{paymentDirection.payer.shortName}</strong></span><span><small>Beneficiary</small><strong>{paymentDirection.beneficiary.shortName}</strong></span><span><small>Amount</small><strong>{formatMoney(paymentDirection.amount, { digits: 2 })}</strong></span></div></>;
         })()}
       </Drawer>
 
-      <Modal open={Boolean(pdfPreview)} onClose={closePreview} title="Invoice PDF preview" description={pdfPreview?.invoiceNumber} size="xl" footer={<>{!pdfPreview?.existing && <Button variant="primary" icon={FileText} onClick={saveInvoice} disabled={busy}>{busy ? "Saving..." : "Save invoice"}</Button>}</>}>
+      <Modal open={Boolean(pdfPreview)} onClose={closePreview} title="Invoice PDF preview" description={pdfPreview?.invoiceNumber} size="xl" footer={<>{pdfPreview?.mode !== "existing" && <Button variant="primary" icon={FileText} onClick={saveInvoice} disabled={busy}>{busy ? "Saving..." : pdfPreview?.mode === "update" ? "Save reviewed update" : "Save invoice"}</Button>}</>}>
+        {error && <InlineError error={error} />}
         {pdfPreview && <iframe className="app-pdf-frame" src={pdfPreview.url} title={`Invoice ${pdfPreview.invoiceNumber}`} />}
       </Modal>
 

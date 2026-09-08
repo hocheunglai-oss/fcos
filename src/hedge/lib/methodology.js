@@ -97,6 +97,7 @@ export const PAGE_METHODOLOGIES = {
       "Each hedge is valued for the selected settlement month using its applicable MOPS average and direction.",
       "Counterparty net settlement combines hedge P&L and configured charges, then determines debit or credit direction.",
       "A positive FCBHK net means the counterparty pays FCBHK; a negative FCBHK net means FCBHK pays the counterparty. The payee is always the document beneficiary.",
+      "FCBHK own-account hedges retain their internal allocation panel. A separate FCBS settlement panel presents those same FCBHK-counterparty, FCBS-venue hedges for external monthly settlement; it does not add exposure, fees or P&L again. Gain is positive, the direct FCBS venue fee is negative, and the payer and payee are stated explicitly. A document is blocked for unavailable valuation, incomplete finality or a zero net amount; an existing monthly document prevents a duplicate, and issued documents remain immutable.",
       "When FCBHK pays the counterparty, FCOS omits counterparty banking details because payment instructions come from the counterparty's own invoice.",
       "Monthly broker commissions group every qualifying ICE trade by its trade month and broker. Amounts use the current configured UOM rate and double for round-trip trades.",
       "Broker settlement status is independent for each broker and trade month. Closing a pricing month or sending an SFS report never closes a broker settlement.",

@@ -971,13 +971,15 @@ export function buildCounterpartySettlementGroups(swaps = [], mops = [], rates =
       const attributedFeeImpact = swap.venue === "ICE" && counterparty !== "FCBS"
         ? -attributedFeeAmount
         : attributedFeeAmount;
+      const ownFcbs = String(counterparty).trim().toUpperCase() === "FCBHK" && swap.venue === "FCBS";
       return {
         swap,
         mtm: mtm == null ? null : roundMoney(mtm),
         fees,
-        attributedFeeAmount: roundMoney(attributedFeeAmount),
-        attributedFeeImpact: roundMoney(attributedFeeImpact),
-        net: mtm == null ? null : roundMoney(-mtm + attributedFeeImpact),
+        displayMtm: mtm == null ? null : roundMoney(ownFcbs ? mtm : -mtm),
+        attributedFeeAmount: roundMoney(ownFcbs ? fees.fcbsVenueFee : attributedFeeAmount),
+        attributedFeeImpact: roundMoney(ownFcbs ? -fees.fcbsVenueFee : attributedFeeImpact),
+        net: mtm == null ? null : roundMoney(ownFcbs ? mtm - fees.fcbsVenueFee : -mtm + attributedFeeImpact),
       };
     });
     const valuationAvailable = rows.every((row) => row.mtm != null);
@@ -989,7 +991,7 @@ export function buildCounterpartySettlementGroups(swaps = [], mops = [], rates =
       settlementMode: counterpartyRecord?.settlement_mode || counterpartyRecord?.settlementMode || (isInternalHedgeCounterparty(counterparty) ? "internal_no_invoice" : "external"),
       records,
       rows,
-      mtm: valuationAvailable ? roundMoney(rows.reduce((sum, row) => sum - row.mtm, 0)) : null,
+      mtm: valuationAvailable ? roundMoney(rows.reduce((sum, row) => sum + row.displayMtm, 0)) : null,
       fees: roundMoney(rows.reduce((sum, row) => sum + row.attributedFeeAmount, 0)),
       net: valuationAvailable ? roundMoney(rows.reduce((sum, row) => sum + row.net, 0)) : null,
       valuationAvailable,

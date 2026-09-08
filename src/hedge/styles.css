@@ -28,6 +28,9 @@
   letter-spacing: 0;
 }
 
+/* Keep settlement navigation scrolling inside the page on narrow screens. */
+.hedge-desk-root .app-page--settlement > .app-segmented { max-width: 100%; min-width: 0; }
+
 /* Markets intelligence */
 .market-intelligence-workspace { gap: 14px; }
 .market-intelligence-stack { display: grid; gap: 14px; }
