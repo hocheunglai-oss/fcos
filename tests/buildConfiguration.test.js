@@ -15,6 +15,7 @@ test('local, CI, and Vercel builds use the same Node major and deterministic ins
   assert.equal(packageJson.engines.node, '24.x');
   assert.deepEqual([...(workflow + authenticatedWorkflow).matchAll(/node-version:\s*(\d+)/g)].map((match) => match[1]), ['24', '24']);
   assert.equal(vercelConfig.installCommand, 'npm ci');
+  assert.equal(vercelConfig.git.deploymentEnabled.main, false, 'Production deployment follows release verification, not an automatic main merge');
   assert.deepEqual(vercelConfig.regions, ['sin1']);
   assert.equal(nvmrc.trim(), '24');
 });

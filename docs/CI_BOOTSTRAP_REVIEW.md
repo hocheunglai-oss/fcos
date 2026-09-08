@@ -75,3 +75,22 @@ No security-setting mutation, workflow dispatch, merge, self-approval or
 Production release is performed by this proposal. If existing required checks
 prevent stage one, stop for the repository owner's governance decision instead
 of disabling or bypassing them.
+
+## Prepared stage-one installation boundary
+
+The `codex/ci-bootstrap-20260908` bootstrap is based on main commit
+`7ee049c963aec4e30955db14a8f0188de264672b`. It includes only the harness
+closure listed above, owner rules, standalone harness tests, and the secret-free
+quality workflow. The old credential-bearing PR browser job is removed. The
+stage-two authenticated evidence consumer is deliberately absent; this does
+not claim authenticated application acceptance. Normal contract, unit test,
+lint, type, source, build, performance, live local migration, and dependency
+review checks remain. Package and lockfile are unchanged.
+
+The quality workflow uses only its ephemeral read-only GitHub token for the
+pinned contract fetch and disables checkout credential persistence. Renewable
+credentials exist only in the manually dispatched protected harness. Installation,
+protection changes, environment approval, candidate dispatch and application
+release remain separate owner-controlled actions.
+
+The bootstrap disables automatic Vercel Git deployments from main in vercel.json. This prevents its older application baseline from replacing the retained live Production fixes during CI installation. Preview branches remain enabled; Production uses explicit verified deployment.
