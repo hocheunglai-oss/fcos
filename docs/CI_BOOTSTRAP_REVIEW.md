@@ -92,3 +92,5 @@ pinned contract fetch and disables checkout credential persistence. Renewable
 credentials exist only in the manually dispatched protected harness. Installation,
 protection changes, environment approval, candidate dispatch and application
 release remain separate owner-controlled actions.
+
+The bootstrap disables automatic Vercel Git deployments from main in vercel.json. This prevents its older application baseline from replacing the retained live Production fixes during CI installation. Preview branches remain enabled; Production uses explicit verified deployment.

@@ -18,6 +18,7 @@ test('local, CI, and Vercel builds use the same Node major and deterministic ins
     assert.match(source, /run: npm ci/);
   }
   assert.equal(vercelConfig.installCommand, 'npm ci');
+  assert.equal(vercelConfig.git.deploymentEnabled.main, false, 'main merges must not replace Production before release verification');
   assert.deepEqual(vercelConfig.regions, ['sin1']);
   assert.equal(nvmrc.trim(), '24');
 });

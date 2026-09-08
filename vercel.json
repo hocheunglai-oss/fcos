@@ -1,6 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "installCommand": "npm ci",
+  "git": { "deploymentEnabled": { "main": false } },
   "regions": ["sin1"],
   "crons": [
     {
