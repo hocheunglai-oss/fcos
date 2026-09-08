@@ -91,9 +91,16 @@ function parseCsvRecords(value) {
 }
 
 function secondaryMopsNumber(value) {
-  const normalized = String(value ?? '').trim().replace(/,/g, '');
+  let normalized = String(value ?? '').trim();
   if (!normalized || /^(?:N\/?A|NA|null|-)$/i.test(normalized)) return null;
-  if (!/^[+]?(?:\d+(?:\.\d+)?|\.\d+)$/.test(normalized)) return null;
+  // Core exports use quoted decimal commas; never remove a decimal separator.
+  // A comma with three trailing digits is accepted only as strict thousands
+  // grouping. Malformed grouping and mixed decimal conventions fail closed.
+  if (/^[+]?\d+,\d{1,2}$/.test(normalized)) normalized = normalized.replace(',', '.');
+  else if (/^[+]?[1-9]\d{0,2}(?:,\d{3})+(?:\.\d+)?$/.test(normalized)) normalized = normalized.replace(/,/g, '');
+  if (!/^[+]?(?:\d+(?:\.\d+)?|\.\d+)$/.test(normalized)) {
+    throw syncError('The secondary MOPS CSV contains an invalid numeric format.', 'MARKET_SECONDARY_CSV_VALUE_INVALID', 409);
+  }
   const number = Number(normalized);
   return Number.isFinite(number) && number > 0 ? number : null;
 }
@@ -678,7 +685,9 @@ export async function runMarketReportDriveSync(client, {
           p_rows: parsed.rows,
         });
         let saved = await saveSecondary();
-        if (saved.error) saved = await saveSecondary();
+        const historyRejected = (error) => error?.message === 'MARKET_SECONDARY_HISTORY_VERIFICATION_FAILED';
+        if (saved.error && !historyRejected(saved.error)) saved = await saveSecondary();
+        if (historyRejected(saved.error)) throw syncError('The secondary MOPS CSV does not match the required verified history.', 'MARKET_SECONDARY_HISTORY_VERIFICATION_FAILED', 409);
         if (saved.error) throw syncError('The verified secondary MOPS CSV could not be saved.', 'MARKET_SECONDARY_CSV_IMPORT_FAILED', 409);
         storedSecondaryIndex.sourceHashes.add(parsed.sourceHash);
         storedSecondaryIndex.md5Hashes.add(parsed.sourceMd5);
