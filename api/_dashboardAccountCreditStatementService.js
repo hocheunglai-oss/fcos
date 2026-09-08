@@ -2,6 +2,7 @@ import { chunkIds, getApiVersion, getInstanceUrl, sfQuery, sfRequest } from './_
 import { getOrLoadRuntimeCache } from './_runtimeCache.js';
 import { SALESFORCE_CORPORATE_CURRENCY } from './_decisionDashboard.js';
 import { resolvedBuyerInvoiceDueDate } from './_buyerInvoiceDates.js';
+import { isBuyerPaymentAllocation } from './_paymentClassification.js';
 import {
   buildBuyerPaymentDelayModels,
   normalizeBuyerPaymentConservativeness,
@@ -9,6 +10,7 @@ import {
 import {
   accountCreditSnapshot,
   buildAccountCreditStatement,
+  buildUsedCreditBridge,
   CREDIT_EXPOSURE_DELIVERY_START,
   decodeAccountCreditCursor,
   encodeAccountCreditCursor,
@@ -395,13 +397,13 @@ async function loadSameNameCreditCandidates(account, accountFields, interoffice)
   return { candidates, groupsByAccountId };
 }
 
-function creditScopeReconciles({ account, group, openStems, complete }) {
+function creditScopeReconciles({ account, group, openStems, supplierExposure = 0, complete }) {
   const snapshot = accountCreditSnapshot(account);
   const selectedId = idKey(account?.Id);
   const accountExposure = openStems
     .filter((stem) => idKey(stem.Account__c) === selectedId)
     .reduce((sum, stem) => sum + Number(stem.QLIK_Receivable_Balance__c || 0), 0);
-  const groupExposure = openStems.reduce((sum, stem) => sum + Number(stem.QLIK_Receivable_Balance__c || 0), 0);
+  const groupExposure = openStems.reduce((sum, stem) => sum + Number(stem.QLIK_Receivable_Balance__c || 0), 0) + Number(supplierExposure || 0);
   const currencies = new Set(openStems.map((stem) => text(stem.CurrencyIsoCode)).filter(Boolean));
   const projectionComplete = complete && currencies.size <= 1;
   const individual = reconcileCreditExposure(snapshot.usedCustomer, accountExposure, { complete: projectionComplete });
@@ -417,9 +419,10 @@ function stemSelectFields(fields) {
     'Expected_Delivery_Date_Payment_Term__c', 'Payment_Term__c', 'Payment_Term_Number__c', 'Invoice_Due_Date__c',
     'QLIK_Invoice_Due_Date__c', 'Due_Date__c', 'Due_Date_Override__c', 'Not_Cancelled_STEM_Line_Item_Quantity__c',
     'Payment_Date__c', 'Invoice_Status__c', 'Total_Invoice_Amount__c',
-    'QLIK_Receivable_Balance__c', 'CurrencyIsoCode',
+    'QLIK_Receivable_Balance__c', 'CurrencyIsoCode', 'Port__c', 'Dispute__c', 'Dispute_Status__c',
   ]);
   if (fields.has('Account__c')) result.push('Account__r.Name');
+  if (fields.has('Port__c')) result.push('Port__r.Name', 'Port__r.Country__c');
   return [...new Set(result)];
 }
 
@@ -436,13 +439,13 @@ async function queryStemsForAccountIds(accountIds, stemFields, extraWhere = '', 
 
 function paymentConfiguration(fields) {
   const amountField = firstAvailable(fields, ['Amount__c', 'Payment_Amount__c', 'Paid_Amount__c', 'Received_Amount__c', 'Total_Amount__c', 'Amount_Paid__c', 'Payment_Value__c', 'Actual_Amount__c']);
-  const dateField = firstAvailable(fields, ['Date__c', 'Payment_Date__c', 'Received_Date__c', 'Paid_Date__c', 'CreatedDate']);
+  const dateField = firstAvailable(fields, ['Date__c', 'Payment_Date__c', 'Received_Date__c', 'Paid_Date__c']);
   const supplierInvoiceFields = [...fields.values()].filter((field) => field.type === 'reference' && field.referenceTo?.includes('Supplier_Invoice__c')).map((field) => field.name);
-  return { amountField, dateField, supplierInvoiceFields, statusFields: selected(fields, ['Status__c', 'Payment_Status__c']) };
+  return { amountField, dateField, supplierInvoiceFields, requireRecordType: fields.has('RecordTypeId'), statusFields: selected(fields, ['Status__c', 'Payment_Status__c']) };
 }
 
 function paymentSelectFields(fields, config) {
-  return [...new Set(['Id', 'STEM__c', 'Account__c', 'Name', 'CreatedDate', 'CurrencyIsoCode', config.amountField, config.dateField, ...config.supplierInvoiceFields, ...config.statusFields].filter((field) => field && fields.has(field)))];
+  return [...new Set(['Id', 'STEM__c', 'Account__c', 'Name', 'CreatedDate', 'CurrencyIsoCode', config.amountField, config.dateField, ...config.supplierInvoiceFields, ...config.statusFields].filter((field) => field && fields.has(field))), ...(fields.has('RecordTypeId') ? ['RecordType.DeveloperName', 'RecordType.Name'] : [])];
 }
 
 function nonVoidedPayment(payment, statusFields) {
@@ -450,10 +453,7 @@ function nonVoidedPayment(payment, statusFields) {
 }
 
 function validBuyerPayment(payment, config, accountByStem) {
-  if (!payment.STEM__c || !nonVoidedPayment(payment, config.statusFields)) return false;
-  if (config.supplierInvoiceFields.some((field) => payment[field])) return false;
-  if (idKey(payment.Account__c) !== idKey(accountByStem.get(idKey(payment.STEM__c)))) return false;
-  return Number(payment[config.amountField]) > 0 && Boolean(payment[config.dateField] || payment.CreatedDate);
+  return isBuyerPaymentAllocation(payment, { ...config, buyerAccountId: accountByStem.get(idKey(payment.STEM__c)) }) && Boolean(payment[config.dateField]);
 }
 
 async function queryPayments(stems, fields, config) {
@@ -588,6 +588,79 @@ async function queryCashflows(stems, fields) {
   return {
     rows: rows.slice(0, MAX_EVIDENCE_ROWS).filter((row) => idKey(row.Account__c) === idKey(accountByStem.get(idKey(row.STEM__c))) && (!row.RecordType?.Name || /^Buyer\b/i.test(row.RecordType.Name))),
     complete,
+  };
+}
+
+function supplierCreditCashflowSelectFields(fields, stemFields) {
+  const result = selected(fields, [
+    'Id', 'Name', 'STEM__c', 'Account__c', 'RecordTypeId', 'STEM_Line_Item__c', 'STEM_Extra_Cost__c',
+    'Supplier_Invoice__c', 'Payment__c', 'Invoice_Due_Date__c',
+    'Payable_Receivable__c', 'Receivable_Payable_Balance_Amount__c', 'Received_Paid_Amount__c',
+    'Received_Paid_Date__c', 'LastModifiedDate',
+  ]);
+  const accountRelationship = fields.get('Account__c')?.relationshipName;
+  const stemRelationship = fields.get('STEM__c')?.relationshipName;
+  if (accountRelationship) result.push(`${accountRelationship}.Name`);
+  if (stemRelationship) {
+    result.push(`${stemRelationship}.Name`, `${stemRelationship}.Delivery_Date__c`, `${stemRelationship}.Expected_Delivery_Date__c`);
+    if (stemFields.has('CurrencyIsoCode')) result.push(`${stemRelationship}.CurrencyIsoCode`);
+  }
+  if (fields.has('RecordTypeId')) result.push('RecordType.Name');
+  return [...new Set(result)];
+}
+
+function nonZeroSupplierCashflow(row) {
+  return [row?.Payable_Receivable__c, row?.Receivable_Payable_Balance_Amount__c, row?.Received_Paid_Amount__c]
+    .some((candidate) => {
+      const parsed = number(candidate);
+      return parsed != null && Math.abs(parsed) > 0.005;
+    });
+}
+
+async function queryGroupSupplierCreditEvidence(accountIds, cashflowFields, stemFields) {
+  if (!accountIds.length) return { rows: [], complete: true };
+  requireFields(cashflowFields, [
+    'Id', 'STEM__c', 'Account__c', 'RecordTypeId', 'Payable_Receivable__c',
+    'Receivable_Payable_Balance_Amount__c', 'Received_Paid_Amount__c',
+  ], 'Cashflow__c');
+  const stemRelationship = cashflowFields.get('STEM__c')?.relationshipName;
+  if (!stemRelationship) throw serviceError('Cashflow__c does not expose the STEM relationship required for supplier credit reconciliation.', 503, 'ACCOUNT_CREDIT_SCHEMA');
+  const select = supplierCreditCashflowSelectFields(cashflowFields, stemFields);
+  const deliveryWhere = `((${stemRelationship}.Delivery_Date__c >= ${CREDIT_EXPOSURE_DELIVERY_START}) OR (${stemRelationship}.Delivery_Date__c = null AND ${stemRelationship}.Expected_Delivery_Date__c >= ${CREDIT_EXPOSURE_DELIVERY_START}))`;
+  const rows = [];
+  let complete = true;
+  for (const ids of chunkIds(accountIds)) {
+    const result = await queryAll(`SELECT ${select.join(',')} FROM Cashflow__c WHERE Account__c IN (${ids.map((id) => `'${soql(id)}'`).join(',')}) AND RecordType.Name IN ('Supplier Invoice','Supplier Payment') AND ${deliveryWhere} AND (Payable_Receivable__c != 0 OR Receivable_Payable_Balance_Amount__c != 0 OR Received_Paid_Amount__c != 0) LIMIT ${MAX_EVIDENCE_ROWS + 1}`, MAX_EVIDENCE_ROWS + 1);
+    rows.push(...result.records);
+    if (result.records.length > MAX_EVIDENCE_ROWS || rows.length > MAX_EVIDENCE_ROWS) complete = false;
+  }
+  return { rows: rows.slice(0, MAX_EVIDENCE_ROWS).filter(nonZeroSupplierCashflow), complete };
+}
+
+function serializeSupplierCreditEvidence(row, cashflowFields) {
+  const accountRelationship = cashflowFields.get('Account__c')?.relationshipName;
+  const stemRelationship = cashflowFields.get('STEM__c')?.relationshipName;
+  const stem = stemRelationship ? row?.[stemRelationship] : null;
+  return {
+    cashflowId: row.Id,
+    cashflowName: row.Name || null,
+    recordType: row.RecordType?.Name || null,
+    stemLineItemId: row.STEM_Line_Item__c || null,
+    stemExtraCostId: row.STEM_Extra_Cost__c || null,
+    supplierInvoiceId: row.Supplier_Invoice__c || null,
+    paymentId: row.Payment__c || null,
+    accountId: row.Account__c || null,
+    accountName: accountRelationship ? row?.[accountRelationship]?.Name || null : null,
+    stemId: row.STEM__c || null,
+    stemName: stem?.Name || row.STEM__c || null,
+    effectiveDate: stem?.Delivery_Date__c || stem?.Expected_Delivery_Date__c || null,
+    currency: stem?.CurrencyIsoCode || SALESFORCE_CORPORATE_CURRENCY,
+    grossAmount: number(row.Payable_Receivable__c),
+    currentBalance: number(row.Receivable_Payable_Balance_Amount__c),
+    receivedPaidAmount: number(row.Received_Paid_Amount__c),
+    receivedPaidDate: row.Received_Paid_Date__c || null,
+    dueDate: row.Invoice_Due_Date__c || null,
+    lastModifiedAt: row.LastModifiedDate || null,
   };
 }
 
@@ -746,7 +819,7 @@ function compareStatementStems(left, right) {
   return String(right.CreatedDate || '').localeCompare(String(left.CreatedDate || '')) || String(right.Id).localeCompare(String(left.Id));
 }
 
-async function statementRows({ accountIds = null, accountId = null, scope, cursor, limit, openStems, recentPayments, stemFields }) {
+async function statementRows({ accountIds = null, accountId = null, scope, cursor, limit, openStems, recentPayments, stemFields, matchesScope = () => true }) {
   const scopedAccountIds = Array.isArray(accountIds) ? accountIds : [accountId].filter(Boolean);
   if (!scopedAccountIds.length) return { rows: [], total: 0, nextCursor: null };
   const accountIdSet = new Set(scopedAccountIds.map(idKey));
@@ -754,7 +827,7 @@ async function statementRows({ accountIds = null, accountId = null, scope, curso
     if (cursor && (cursor.kind !== 'statement' || cursor.scope !== scope)) throw serviceError('Account Statement cursor does not match the selected scope.', 400, 'ACCOUNT_CREDIT_CURSOR_INVALID');
     const result = await queryAll(`SELECT ${stemSelectFields(stemFields).join(',')} FROM STEM__c WHERE Account__c IN (${scopedAccountIds.map((scopedAccountId) => `'${soql(scopedAccountId)}'`).join(',')}) AND ${creditExposureDeliveryWhere()} LIMIT ${MAX_GROUP_OPEN_STEMS + 1}`, MAX_GROUP_OPEN_STEMS + 1);
     if (result.records.length > MAX_GROUP_OPEN_STEMS) throw serviceError('The Account Statement exceeds the supported delivery-sorted history scope. Narrow the statement filter.', 503, 'ACCOUNT_CREDIT_STATEMENT_LIMIT');
-    const sorted = mergeStems(result.records).filter((stem) => isCreditExposureStemEligible(stem));
+    const sorted = mergeStems(result.records).filter((stem) => isCreditExposureStemEligible(stem) && matchesScope(stem));
     const offset = cursor?.offset || 0;
     const rows = sorted.slice(offset, offset + limit);
     return {
@@ -764,12 +837,12 @@ async function statementRows({ accountIds = null, accountId = null, scope, curso
     };
   }
   if (cursor && (cursor.kind !== 'statement' || cursor.scope !== scope)) throw serviceError('Account Statement cursor does not match the selected scope.', 400, 'ACCOUNT_CREDIT_CURSOR_INVALID');
-  const selectedOpen = openStems.filter((stem) => accountIdSet.has(idKey(stem.Account__c)) && isCreditExposureStemEligible(stem));
+  const selectedOpen = openStems.filter((stem) => accountIdSet.has(idKey(stem.Account__c)) && isCreditExposureStemEligible(stem) && matchesScope(stem));
   let rows = selectedOpen;
   if (scope === 'open_recent') {
     const recentStemIds = unique(recentPayments.map((payment) => payment.STEM__c).filter((id) => SALESFORCE_ID.test(text(id))));
     const recentStems = recentStemIds.length ? await queryStemsForAccountIds(scopedAccountIds, stemFields, `Id IN (${recentStemIds.map((id) => `'${soql(id)}'`).join(',')}) AND ${creditExposureDeliveryWhere()}`, 50_000) : [];
-    rows = mergeStems([...selectedOpen, ...recentStems]).filter((stem) => isCreditExposureStemEligible(stem));
+    rows = mergeStems([...selectedOpen, ...recentStems]).filter((stem) => isCreditExposureStemEligible(stem) && matchesScope(stem));
   } else rows = mergeStems(selectedOpen);
   const offset = cursor?.offset || 0;
   const page = rows.slice(offset, offset + limit);
@@ -786,6 +859,12 @@ async function loadAccountCreditStatementUncached({ body, accessContext, force }
   const accountId = salesforceId(body.accountId);
   const entityType = body.entityType === 'group' ? 'group' : 'account';
   const requestedAccountIds = normalizeRequestedGroupAccountIds(body.includedAccountIds);
+  const locationFilters = directoryFilters(body.filters || body.dashboardScope?.filters);
+  const scopedPorts = new Set(locationFilters.portIds.map(idKey));
+  const scopedCountries = new Set(locationFilters.countryCodes.map((country) => country.toUpperCase()));
+  const matchesScope = (stem) => (!scopedPorts.size || scopedPorts.has(idKey(stem.Port__c)))
+    && (!scopedCountries.size || scopedCountries.has(text(stem.Port__r?.Country__c).toUpperCase()))
+    && (!body.disputeOnly || stem.Dispute__c === true || Boolean(stem.Dispute_Status__c && !/^no disputes?$/i.test(stem.Dispute_Status__c)));
   const scope = normalizeAccountCreditScope(body.scope);
   const limit = Math.min(Math.max(Number(body.limit) || 50, 1), 100);
   const cursor = decodeAccountCreditCursor(body.cursor);
@@ -845,7 +924,7 @@ async function loadAccountCreditStatementUncached({ body, accessContext, force }
     canManage: body._canManageForecastSettings === true,
   };
   stageStartedAt = Date.now();
-  const [fullOpenStemsRaw, paymentPerformance] = await Promise.all([
+  const [fullOpenStemsRaw, paymentPerformance, supplierCreditEvidenceResult] = await Promise.all([
     queryStemsForAccountIds(fullGroupAccountIds, stemFields, `QLIK_Receivable_Balance__c != 0 AND ${creditExposureDeliveryWhere()}`),
     loadBuyerPaymentPerformanceModels({
       settings: forecastSettings,
@@ -859,11 +938,23 @@ async function loadAccountCreditStatementUncached({ body, accessContext, force }
       today,
       force,
     }),
+    group ? queryGroupSupplierCreditEvidence(fullGroupAccountIds, cashflowFields, stemFields) : Promise.resolve({ rows: [], complete: true }),
   ]);
   const openStemScopeComplete = fullOpenStemsRaw.length <= MAX_GROUP_OPEN_STEMS;
   const fullOpenStems = fullOpenStemsRaw.slice(0, MAX_GROUP_OPEN_STEMS).filter((stem) => isCreditExposureStemEligible(stem));
+  const supplierCreditEvidence = supplierCreditEvidenceResult.rows.map((row) => serializeSupplierCreditEvidence(row, cashflowFields));
+  const supplierExposureCurrency = fullOpenStems.map((stem) => text(stem.CurrencyIsoCode)).find(Boolean) || SALESFORCE_CORPORATE_CURRENCY;
+  const supplierExposureSeed = buildUsedCreditBridge({
+    salesforceUsed: 0,
+    buyerExposure: 0,
+    supplierEvidence: supplierCreditEvidence,
+    complete: supplierCreditEvidenceResult.complete,
+    currency: supplierExposureCurrency,
+  });
+  const supplierExposure = supplierExposureSeed.supplierPayables;
+  const supplierExposureComplete = supplierExposureSeed.complete;
   const selectedGroupAccountKeys = new Set(groupAccountIds.map(idKey));
-  const openStems = fullOpenStems.filter((stem) => selectedGroupAccountKeys.has(idKey(stem.Account__c)));
+  const openStems = fullOpenStems.filter((stem) => selectedGroupAccountKeys.has(idKey(stem.Account__c)) && matchesScope(stem));
   let creditAccount = account;
   let creditOpenStems = openStems;
   let creditResolution = null;
@@ -872,7 +963,8 @@ async function loadAccountCreditStatementUncached({ body, accessContext, force }
       group,
       members: groupMembers,
       openStems: fullOpenStems,
-      complete: openStemScopeComplete,
+      supplierExposure,
+      complete: openStemScopeComplete && supplierExposureComplete,
     });
     if (authority.status === 'resolved') {
       creditAccount = authority.candidate;
@@ -899,7 +991,7 @@ async function loadAccountCreditStatementUncached({ body, accessContext, force }
       };
     }
   }
-  const selectedReconciliation = creditScopeReconciles({ account, group, openStems: fullOpenStems, complete: openStemScopeComplete });
+  const selectedReconciliation = creditScopeReconciles({ account, group, openStems: fullOpenStems, supplierExposure, complete: openStemScopeComplete && supplierExposureComplete });
   if (entityType !== 'group' && !groupScope.partial && !selectedReconciliation.matches) {
     const duplicateScope = await loadSameNameCreditCandidates(account, accountFields, interoffice);
     const resolution = resolveCreditSnapshotCandidate({
@@ -908,11 +1000,12 @@ async function loadAccountCreditStatementUncached({ body, accessContext, force }
       candidates: duplicateScope.candidates,
       candidateGroupsById: duplicateScope.groupsByAccountId,
       openStems: fullOpenStems,
-      complete: openStemScopeComplete,
+      supplierExposure,
+      complete: openStemScopeComplete && supplierExposureComplete,
     });
     if (resolution.status === 'resolved') {
       creditAccount = resolution.candidate;
-      creditOpenStems = resolution.windowStems;
+      creditOpenStems = resolution.windowStems.filter((stem) => selectedGroupAccountKeys.has(idKey(stem.Account__c)) && matchesScope(stem));
       creditResolution = {
         mode: 'same_name_fallback',
         accountId: resolution.candidate.Id,
@@ -933,7 +1026,7 @@ async function loadAccountCreditStatementUncached({ body, accessContext, force }
   const recentPayments = scope === 'open_recent'
     ? await queryRecentPaymentStemIds(statementAccountIds, oneYearBefore(today), paymentFields, paymentConfig)
     : { rows: [], complete: true };
-  const statement = await statementRows({ accountIds: statementAccountIds, scope, cursor, limit, openStems, recentPayments: recentPayments.rows, stemFields });
+  const statement = await statementRows({ accountIds: statementAccountIds, scope, cursor, limit, openStems, recentPayments: recentPayments.rows, stemFields, matchesScope });
   timings.statementScopeMs = Date.now() - stageStartedAt;
   const relevantStems = mergeStems([...openStems, ...statement.rows]);
   stageStartedAt = Date.now();
@@ -975,6 +1068,8 @@ async function loadAccountCreditStatementUncached({ body, accessContext, force }
     expectedInvoiceLineItemsByStem,
     expectedInvoiceExtraCostsByStem,
     expectedInvoiceScopeComplete: expectedInvoiceEvidence.complete,
+    supplierCreditEvidence,
+    supplierCreditEvidenceComplete: supplierCreditEvidenceResult.complete,
     paymentPerformanceModels: paymentPerformance.models,
     forecastSettings,
     blockedForecastDates: Array.isArray(body._blockedForecastDates) ? body._blockedForecastDates : [],
@@ -1007,6 +1102,8 @@ async function loadAccountCreditStatementUncached({ body, accessContext, force }
       complete: modelComplete,
       buyerInvoiceScopeComplete: buyerInvoices.complete,
       expectedInvoiceScopeComplete: expectedInvoiceEvidence.complete,
+      supplierCreditEvidenceComplete: supplierCreditEvidenceResult.complete,
+      supplierCreditEvidenceCount: supplierCreditEvidence.length,
       paymentPerformanceSampleCount: paymentPerformance.sampleCount,
       paymentPerformanceComplete: paymentPerformance.complete,
       timings,
@@ -1077,7 +1174,7 @@ export async function loadDashboardAccountCreditStatement({ body = {}, accessCon
   const interoffice = accessContext?.profile?.user_type === 'interoffice';
   const cache = await getOrLoadRuntimeCache({
     namespace: 'salesforce-dashboard-account-credit-statement',
-    version: '15-payment-reliability',
+    version: '17-due-date-override',
     accessScope: interoffice ? 'interoffice' : 'standard',
     apiVersion: `${getApiVersion()}@${getInstanceUrl()}`,
     payload: {
@@ -1086,6 +1183,8 @@ export async function loadDashboardAccountCreditStatement({ body = {}, accessCon
       includedAccountIds: includedAccountIds?.map(idKey).sort() || null,
       scope,
       cursor: body.cursor || null,
+      filters: directoryFilters(body.filters || body.dashboardScope?.filters),
+      disputeOnly: body.disputeOnly === true,
       limit,
       forecastConservativeness: normalizeBuyerPaymentConservativeness(body.forecastConservativeness || body._forecastSettings?.creditStatementConservativeness),
       forecastSettingsUpdatedAt: body._forecastSettings?.updatedAt || null,
@@ -1109,6 +1208,7 @@ export const dashboardAccountCreditStatementServiceInternals = {
   validBuyerPayment,
   finalBuyerInvoice,
   creditExposureDeliveryWhere,
+  supplierCreditCashflowSelectFields,
   statementRows,
   resolveGroupAccountScope,
 };

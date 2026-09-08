@@ -93,7 +93,7 @@ test('high-risk edit workflows use a shared validation summary', async () => {
 });
 
 test('strict release gate includes migrations, Graph-only checks, build, and governed browser authentication', async () => {
-  const [packageJson, releaseGate, browserSmoke, browserSetup, workflow, authenticatedWorkflow] = await Promise.all([
+  const [packageJson, releaseGate, browserSmoke, browserSetup, workflow, trustedWorkflow] = await Promise.all([
     file('package.json'),
     file('scripts/verify-release.mjs'),
     file('e2e/workspace-smoke.spec.js'),
@@ -110,15 +110,15 @@ test('strict release gate includes migrations, Graph-only checks, build, and gov
   assert.match(browserSetup, /FCOS_E2E_EMAIL/);
   assert.match(browserSetup, /FCOS_E2E_PASSWORD/);
   assert.match(browserSetup, /storageState/);
-  assert.doesNotMatch(workflow, /secrets\.FCOS_E2E_|FCOS_REQUIRE_AUTH_E2E|authenticated-browser:/);
-  assert.match(authenticatedWorkflow, /workflow_dispatch:/);
-  assert.match(authenticatedWorkflow, /environment: fcos-ci-readonly/);
-  assert.match(authenticatedWorkflow, /FCOS_E2E_CANDIDATE_URL: \$\{\{ inputs\.candidate_url \}\}/);
-  assert.match(authenticatedWorkflow, /FCOS_E2E_EXPECTED_COMMIT: \$\{\{ inputs\.expected_commit \}\}/);
-  assert.match(authenticatedWorkflow, /FCOS_AUTH_E2E_ENABLED/);
-  assert.match(authenticatedWorkflow, /verify-e2e-candidate\.mjs/);
-  assert.match(authenticatedWorkflow, /TRUSTED_REF_PROTECTED/);
-  assert.doesNotMatch(authenticatedWorkflow, /FCOS_E2E_BASE_URL: https:\/\/fcos\.fcuno\.com|STORAGE_STATE_BASE64/);
+  assert.match(workflow, /npm run verify:compatibility/);
+  assert.match(releaseGate, /Compatibility registry/);
+  assert.doesNotMatch(workflow, /secrets\./);
+  assert.match(workflow, /fcos-ci-evidence-/);
+  assert.match(trustedWorkflow, /FCOS_E2E_CANDIDATE_URL: \$\{\{ inputs.candidate_url \}\}/);
+  assert.match(trustedWorkflow, /node scripts\/verify-e2e-candidate\.mjs/);
+  assert.match(trustedWorkflow, /ref: \$\{\{ github.sha \}\}/);
+  assert.match(trustedWorkflow, /FCOS_E2E_EXPECTED_COMMIT: \$\{\{ inputs.expected_commit \}\}/);
+  assert.doesNotMatch(workflow, /FCOS_E2E_BASE_URL: https:\/\/fcos\.fcuno\.com/);
   assert.doesNotMatch(workflow, /STORAGE_STATE_BASE64/);
 });
 

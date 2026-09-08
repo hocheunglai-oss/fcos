@@ -1,3 +1,5 @@
+import { spreadsheetCsvCell, spreadsheetCsvTextCell, spreadsheetLiteralText } from '../../shared/spreadsheetCsv.js';
+
 export const ACCOUNT_PIC_GRID_INPUT_TYPES = Object.freeze([
   { value: 'text', label: 'Free text' },
   { value: 'multiline_text', label: 'Multi-line text' },
@@ -140,7 +142,10 @@ export function parseAccountPicGridCsv(source, columns = []) {
   const records = parseCsvRecords(source);
   if (!records.length) throw new Error('Choose a CSV with a header row.');
   const headers = records.shift().map(normalizedText);
-  if (headers.length !== columns.length || headers.some((header, index) => header !== columns[index].label)) {
+  if (headers.length !== columns.length || headers.some((header, index) => {
+    const currentLabel = columns[index].label;
+    return header !== currentLabel && header !== spreadsheetLiteralText(currentLabel);
+  })) {
     throw new Error(`CSV headers must match the current table exactly: ${columns.map((column) => column.label).join(', ')}.`);
   }
   const dataRows = records.filter((record) => record.some((value) => normalizedText(value)));
@@ -164,17 +169,13 @@ export function parseAccountPicGridCsv(source, columns = []) {
   });
 }
 
-function csvValue(value) {
-  const text = normalizedText(value);
-  return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
-}
-
 export function accountPicGridCsvText(columns = [], rows = []) {
   const records = rows.map((row) => columns.map((column) => {
     const value = row.cells?.[column.id];
     if (column.inputType === 'checkbox') return value ? '✓' : '';
-    if (column.inputType === 'buyer_trader' || column.inputType === 'supplier_trader') return value?.name || value?.email || '';
-    return value ?? '';
+    if (column.inputType === 'number' && typeof value === 'number' && Number.isFinite(value)) return spreadsheetCsvCell(value);
+    if (column.inputType === 'buyer_trader' || column.inputType === 'supplier_trader') return spreadsheetCsvTextCell(normalizedText(value?.name || value?.email));
+    return spreadsheetCsvTextCell(normalizedText(value));
   }));
-  return `\uFEFF${[columns.map((column) => csvValue(column.label)).join(','), ...records.map((record) => record.map(csvValue).join(','))].join('\r\n')}\r\n`;
+  return `\uFEFF${[columns.map((column) => spreadsheetCsvTextCell(column.label)).join(','), ...records.map((record) => record.join(','))].join('\r\n')}\r\n`;
 }

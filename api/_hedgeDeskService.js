@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { isReadOnlyCiProfile, requireReadOnlyCiOperation } from './_readOnlyCiAccess.js';
 import { richTextPlainLength, sanitizeRichText } from './_richText.js';
 import {
   calcSwapFees,
@@ -17,6 +18,7 @@ import {
 } from './_marketIntelligence.js';
 import { loadGovernedMarketValuation, processMarketIntelligenceDate } from './_marketIntelligenceTrading.js';
 import { reconcileMarketIntradayDate } from './_marketIntraday.js';
+import { isFcbsSettlementInvoice, saveFcbsSettlement } from './_hedgeFcbsSettlement.js';
 
 const SETTLEMENT_TEMPLATE_VARIABLES = new Set([
   'invoiceNumber', 'invoiceType', 'settlementMonth', 'counterparty', 'attn',
@@ -708,6 +710,15 @@ export async function handleHedgeDeskEntity(body, profile, { client, capabilitie
   }
   await requireWriteCapability(capabilities, writeConfig);
 
+  if (entity === 'Invoice' && ['create', 'update'].includes(action)) {
+    const current = action === 'update' ? await loadOne(client, entity, config, body.id) : null;
+    if (isFcbsSettlementInvoice(body.payload) || isFcbsSettlementInvoice(current)) {
+      const saved = await saveFcbsSettlement(client, profile, body, current);
+      return loadOne(client, entity, config, saved.invoice_id);
+    }
+    if (body.payload?.settlement_basis && body.payload.settlement_basis !== 'counterparty') throw httpError('Unknown settlement basis.', 400);
+  }
+
   if (action === 'create') {
     if (entity === 'Counterparty' && (isInternalHedgeCounterparty(body.payload) || body.payload?.settlement_mode === 'internal_no_invoice')) {
       throw httpError('FCBHK is a system-managed internal counterparty and cannot be created manually.', 409, 'HEDGE_SYSTEM_COUNTERPARTY_CREATE_BLOCKED');
@@ -775,6 +786,7 @@ export async function handleHedgeDeskEntity(body, profile, { client, capabilitie
 
   if (action === 'delete') {
     const before = await loadOne(client, entity, config, body.id);
+    if (entity === 'Invoice' && isFcbsSettlementInvoice(before)) throw httpError('Own-account settlement history is retained. Review and update the draft instead of deleting it.', 409, 'HEDGE_FCBS_HISTORY_RETAINED');
     const expectedRevision = Number(body.expectedRevision);
     if (!Number.isInteger(expectedRevision) || expectedRevision !== Number(before.revision)) {
       throw httpError('This Hedge Desk record changed after it was opened. Refresh before deleting.', 409, 'REVISION_CONFLICT', { current: before });
@@ -798,9 +810,12 @@ export async function handleHedgeDeskEntity(body, profile, { client, capabilitie
 }
 
 export async function handleHedgeMarkets(body, profile, { client, capabilities }) {
+  requireReadOnlyCiOperation(profile, 'hedgeMarkets', body);
   const action = String(body?.action || 'snapshot');
   if (action === 'snapshot') {
-    const expiryAutomation = await reconcilePaperHedgeExpiry(client);
+    const expiryAutomation = isReadOnlyCiProfile(profile)
+      ? { status: 'not_run', reason: 'read_only_identity' }
+      : await reconcilePaperHedgeExpiry(client);
     const [mops, settingsResult, marketIntelligence] = await Promise.all([
       listRows(client, 'MopsPrice', configFor('MopsPrice'), { limit: 2000 }),
       client.from('hedge_settings').select('id,key,value,revision,created_date,updated_date').in('key', ['general', 'fwd_spreads']),

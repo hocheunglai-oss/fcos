@@ -120,6 +120,24 @@ test('allocates supplier contribution by exact Account ID and reconciles to the 
   assert.equal(rows.reduce((sum, row) => sum + row.grossProfit, 0), 100);
 });
 
+test('keeps current buyer invoice and credit-note document evidence separate from financial aggregates', () => {
+  const result = buildDashboardAccountInsight(dataset({
+    buyerInvoices: [
+      { Id: 'a09000000000001AAA', STEM__c: STEM_A, Name: 'HK260001T-INV-001', Amount__c: 1100, CurrencyIsoCode: 'USD', Invoice_Date__c: '2026-07-20', Proforma__c: false, Deprecated__c: false },
+      { Id: 'a09000000000002AAA', STEM__c: STEM_A, Name: 'HK260001T-CN-001', Amount__c: -100, CurrencyIsoCode: 'USD', CreatedDate: '2026-07-22T12:00:00.000Z', Proforma__c: false, Deprecated__c: false },
+      { Id: 'a09000000000003AAA', STEM__c: STEM_A, Name: 'HK260001T-PROFORMA', Amount__c: 999, CurrencyIsoCode: 'USD', Proforma__c: true, Deprecated__c: false },
+      { Id: 'a09000000000004AAA', STEM__c: STEM_A, Name: 'HK260001T-INV-OLD', Amount__c: 888, CurrencyIsoCode: 'USD', Proforma__c: false, Deprecated__c: true },
+    ],
+  }), { today: '2026-08-05' });
+
+  const row = result.exportRows[0];
+  assert.equal(row.invoiceAmount, 1100, 'document evidence must not change the STEM financial aggregate');
+  assert.deepEqual(row.buyerDocumentEvidence, [
+    { documentNumber: 'HK260001T-INV-001', documentType: 'invoice', documentDate: '2026-07-20', currency: 'USD', amount: 1100, current: true },
+    { documentNumber: 'HK260001T-CN-001', documentType: 'credit_note', documentDate: null, currency: 'USD', amount: -100, current: true },
+  ]);
+});
+
 test('buyer-broker enrichment uses described fields and never assumes Commission_Lumpsum__c exists', () => {
   const fields = new Map([
     ['Id', { name: 'Id', type: 'id' }],
@@ -453,6 +471,7 @@ test('uses live receivable balance for Full CIA and excludes future balances fro
     days31to60: 0,
     days61to90: 0,
     over90: 0,
+    undated: 0,
   });
 });
 

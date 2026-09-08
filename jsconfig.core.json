@@ -13,6 +13,12 @@
   "files": [
     "api/_authenticatedFunction.js",
     "api/_requestTelemetry.js",
-    "api/_supabaseConfig.js"
+    "api/_supabaseConfig.js",
+    "api/_salesforceDocumentAccess.js",
+    "api/_buyerInvoiceDates.js",
+    "shared/salesforceReadRequest.js",
+    "src/lib/accountDisplay.js",
+    "src/lib/workNotificationGroups.js",
+    "src/lib/paymentDataReliability.js"
   ]
 }

@@ -1,7 +1,7 @@
 import { dashboardLineItemVolume, resolveDashboardItemUom } from './_dashboardVolume.js';
 import { SALESFORCE_CORPORATE_CURRENCY, decisionDashboardSupplierAmount } from './_decisionDashboard.js';
 import { grossMarginPercent } from './_dashboardMetrics.js';
-import { isFinalBuyerInvoice, resolveBuyerFinancialAmount } from './_buyerFinancialAmount.js';
+import { isBuyerCreditNote, isFinalBuyerInvoice, resolveBuyerFinancialAmount } from './_buyerFinancialAmount.js';
 import { earliestEtaDate, summarizeBuyerPaymentEvidence } from '../src/lib/paymentCollectionEvidence.js';
 import { financialQuantityValue as financialQuantity, nativeFinancialQuantity } from './_financialQuantity.js';
 import { LEGACY_PAYMENT_DATA_LABEL, paymentDataReliabilityMetadata, paymentDataReliabilityState } from '../src/lib/paymentDataReliability.js';
@@ -115,13 +115,15 @@ function lineBuyAmount(item, stemHasDelivery) {
 }
 
 function extraSellAmount(item, stemHasDelivery) {
-  if (stemHasDelivery) return valueOrZero(item.Line_Total__c);
+  if (number(item.Lumpsum_Price__c) != null) return number(item.Lumpsum_Price__c);
+  if (stemHasDelivery && number(item.Line_Total__c) != null) return number(item.Line_Total__c);
   const unit = firstNumber(item.Unit_Price__c);
   return unit == null ? valueOrZero(item.Line_Total__c) : unit * financialQuantity(item, false, 'Quantity_Range_Max__c');
 }
 
 function extraBuyAmount(item, stemHasDelivery) {
-  if (stemHasDelivery) return valueOrZero(item.Line_Total_Buy__c);
+  if (number(item.Lumpsum_Cost__c) != null) return number(item.Lumpsum_Cost__c);
+  if (stemHasDelivery && number(item.Line_Total_Buy__c) != null) return number(item.Line_Total_Buy__c);
   const unit = firstNumber(item.Unit_Cost__c);
   return unit == null ? valueOrZero(item.Line_Total_Buy__c) : unit * financialQuantity(item, false, 'Quantity_Range_Max__c');
 }
@@ -611,6 +613,23 @@ function summarizeRows(rows, { today, allHistory = false } = {}) {
   };
 }
 
+export function accountInsightAgingByCurrency(rows, today, amountKey = 'receivableBalance') {
+  const buckets = new Map();
+  for (const row of rows) {
+    const current = buckets.get(row.currency) || { currency: row.currency, days1to7: 0, days8to30: 0, days31to60: 0, days61to90: 0, over90: 0, undated: 0 };
+    const amount = number(row[amountKey]);
+    if (amount == null) {
+      for (const key of Object.keys(current)) if (key !== 'currency') current[key] = null;
+    } else if (amount > ZERO_TOLERANCE) {
+      const days = row.dueDate ? daysBetween(today, row.dueDate) : null;
+      const key = days == null ? 'undated' : days <= 0 ? null : days <= 7 ? 'days1to7' : days <= 30 ? 'days8to30' : days <= 60 ? 'days31to60' : days <= 90 ? 'days61to90' : 'over90';
+      if (key && current[key] != null) current[key] += amount;
+    }
+    buckets.set(row.currency, current);
+  }
+  return [...buckets.values()];
+}
+
 function buyerPaymentMetrics(stemRows, buyerPaymentsByStem = {}, today) {
   const delays = [];
   let weightedDsoDays = 0;
@@ -663,24 +682,6 @@ function buyerPaymentMetrics(stemRows, buyerPaymentsByStem = {}, today) {
     }
     ciaByCurrency.set(row.currency, currencyCia);
   }
-  const receivableRows = stemRows.map((row) => ({
-    ...row,
-    overdueDays: row.dueDate && row.dueDate < today && row.receivableBalance > ZERO_TOLERANCE ? daysBetween(today, row.dueDate) : 0,
-  }));
-  const agingByCurrency = new Map();
-  for (const row of receivableRows) {
-    const aging = agingByCurrency.get(row.currency) || { currency: row.currency, days1to7: 0, days8to30: 0, days31to60: 0, days61to90: 0, over90: 0 };
-    if (!(row.overdueDays > 0) || !(row.receivableBalance > ZERO_TOLERANCE)) {
-      agingByCurrency.set(row.currency, aging);
-      continue;
-    }
-    if (row.overdueDays <= 7) aging.days1to7 += row.receivableBalance;
-    else if (row.overdueDays <= 30) aging.days8to30 += row.receivableBalance;
-    else if (row.overdueDays <= 60) aging.days31to60 += row.receivableBalance;
-    else if (row.overdueDays <= 90) aging.days61to90 += row.receivableBalance;
-    else if (row.overdueDays > 90) aging.over90 += row.receivableBalance;
-    agingByCurrency.set(row.currency, aging);
-  }
   return {
     byCurrency: groupedMoney(stemRows, [
       { key: 'invoiceAmount', value: (row) => row.invoiceAmount },
@@ -698,7 +699,7 @@ function buyerPaymentMetrics(stemRows, buyerPaymentsByStem = {}, today) {
         return days != null && days >= 0 && days <= 30 ? Math.max(0, valueOrZero(row.receivableBalance)) : 0;
       } },
     ]).map((row) => ({ ...row, collectionPercentagePct: percentage(valueOrZero(row.invoiceAmount) - valueOrZero(row.receivable), row.invoiceAmount) })),
-    agingByCurrency: [...agingByCurrency.values()],
+    agingByCurrency: accountInsightAgingByCurrency(stemRows, today),
     paymentCount,
     latestPayment,
     weightedDso: weightedDsoAmount ? weightedDsoDays / weightedDsoAmount : null,
@@ -735,9 +736,10 @@ function supplierPaymentMetrics(invoices = [], today) {
   return {
     rows,
     states,
+    agingByCurrency: accountInsightAgingByCurrency(rows, today, 'payableBalance'),
     byCurrency: groupedMoney(rows, [
       { key: 'invoiceAmount', value: (row) => row.invoiceAmount },
-      { key: 'paidAmount', value: (row) => number(row.invoiceAmount) == null || number(row.payableBalance) == null ? null : Math.max(0, row.invoiceAmount - row.payableBalance) },
+      { key: 'paidAmount', value: (row) => Array.isArray(row.payments) ? row.payments.reduce((sum, payment) => sum + valueOrZero(payment.amount), 0) : null },
       { key: 'outstandingPayable', value: (row) => row.payableBalance },
       { key: 'overduePayable', value: (row) => (row.dueDate && row.dueDate < today ? Math.max(0, valueOrZero(row.payableBalance)) : 0) },
       { key: 'dueWithin7Days', value: (row) => {
@@ -813,7 +815,13 @@ function buildStemFinancialRow(stem, context) {
     extraCostSupplierField: context.extraCostSupplierField,
     extraCostSupplierRelationship: context.extraCostSupplierRelationship,
   });
-  const requestedAllocation = allocations.find((allocation) => allocation.accountKey === context.accountKey) || null;
+  const selectedAllocations = allocations.filter((allocation) => context.supplierAccountKeys?.has(allocation.accountKey) || allocation.accountKey === context.accountKey);
+  const requestedAllocation = selectedAllocations.length ? {
+    ...selectedAllocations[0],
+    allocatedRevenue: selectedAllocations.reduce((sum, entry) => sum + entry.allocatedRevenue, 0),
+    allocatedCost: selectedAllocations.reduce((sum, entry) => sum + entry.allocatedCost, 0),
+    grossProfit: selectedAllocations.reduce((sum, entry) => sum + entry.grossProfit, 0),
+  } : null;
   const role = context.role;
   const products = [];
   let volumeMt = 0;
@@ -822,7 +830,7 @@ function buildStemFinancialRow(stem, context) {
   let uninvoicedCost = 0;
   for (const item of activeLines) {
     const itemAccountKey = salesforceIdKey(item.Original_Supplier__c);
-    if (role === 'supplier' && itemAccountKey !== context.accountKey) continue;
+    if (role === 'supplier' && !context.supplierAccountKeys.has(itemAccountKey)) continue;
     const family = dashboardFamily(item);
     const volume = dashboardLineItemVolume(item, stemHasDelivery, {
       lineItemUomField: context.lineItemUomField,
@@ -857,7 +865,7 @@ function buildStemFinancialRow(stem, context) {
       buyPrice: firstNumber(item.Cost_Per_Unit__c, item.Unit_Buy_At__c, item.Unit_Cost__c, item.Offer_Line_Item__r?.Supplier_Unit_Price__c),
     });
   }
-  const roleExtraCosts = activeExtraCosts.filter((item) => role !== 'supplier' || salesforceIdKey(context.extraCostSupplierField ? item[context.extraCostSupplierField] : null) === context.accountKey);
+  const roleExtraCosts = activeExtraCosts.filter((item) => role !== 'supplier' || context.supplierAccountKeys.has(salesforceIdKey(context.extraCostSupplierField ? item[context.extraCostSupplierField] : null)));
   for (const item of roleExtraCosts) if (!item.Supplier_Invoice__c) uninvoicedCost += extraBuyAmount(item, stemHasDelivery);
   const turnover = role === 'supplier' ? requestedAllocation?.allocatedRevenue ?? 0 : buyer;
   const spend = role === 'supplier' ? requestedAllocation?.allocatedCost ?? 0 : supplier;
@@ -871,7 +879,7 @@ function buildStemFinancialRow(stem, context) {
   const paymentReliability = paymentDataReliabilityState(stem);
   return {
     stemId: stem.Id,
-    stemName: stem.KeyStem__c || stem.Name,
+    stemName: stem.Name || stem.KeyStem__c,
     displayName: [stem.KeyStem__c || stem.Name, stem.Vessel__r?.Name, port.Name].filter(Boolean).join(' · '),
     buyerAccountId: stem.Account__c || null,
     buyerName: account.Name || stem.Buyer_Name__c || null,
@@ -904,7 +912,8 @@ function buildStemFinancialRow(stem, context) {
     portCountry: port.Country__c || null,
     vesselName: stem.Vessel__r?.Name || null,
     products,
-    extraCosts: activeExtraCosts.map((item) => productName(item)),
+    extraCosts: roleExtraCosts.map((item) => productName(item)),
+    chargeEvidence: roleExtraCosts.map((item) => ({ id: item.Id, product: productName(item), fixed: item.Fixed__c === true || number(item.Lumpsum_Cost__c) != null || number(item.Lumpsum_Price__c) != null, supplierCost: extraBuyAmount(item, stemHasDelivery), buyerCharge: extraSellAmount(item, stemHasDelivery), inputCurrency: item.Supplier_Cost_Input_Currency__c || null, inputValue: number(item.Supplier_Cost_Input_Value__c), usdHkdRate: number(item.Supplier_Cost_USD_HKD_Rate__c), fxRevision: item.Supplier_Cost_FX_Settings_Revision__c ?? null })),
     volumeMt,
     orderedVolumeMt,
     deliveredVolumeMt,
@@ -916,6 +925,7 @@ function buildStemFinancialRow(stem, context) {
         ? 'estimated'
         : 'unavailable',
     receivableBalance: number(stem.Receivable_Balance__c),
+    salesforceExposure: number(stem.QLIK_Receivable_Balance__c),
     turnover: number(turnover),
     spend: number(spend),
     buyerAmountSource: buyerResolution.source,
@@ -948,6 +958,7 @@ export function buildDashboardAccountInsight(dataset, {
   const lineItemsByStem = mapRows(dataset.lineItems);
   const extraCostsByStem = mapRows(dataset.extraCosts);
   const buyerBrokersByStem = mapRows(dataset.buyerBrokers);
+  const buyerInvoicesByStem = mapRows(dataset.buyerInvoices || []);
   const buyerInvoiceStateKnown = Array.isArray(dataset.buyerInvoices);
   const finalBuyerInvoiceStemIds = new Set((dataset.buyerInvoices || [])
     .filter(isFinalBuyerInvoice)
@@ -956,6 +967,7 @@ export function buildDashboardAccountInsight(dataset, {
   const context = {
     role,
     accountKey,
+    supplierAccountKeys: visibleScopeAccountKeys,
     lineItemsByStem,
     extraCostsByStem,
     buyerBrokersByStem,
@@ -971,7 +983,7 @@ export function buildDashboardAccountInsight(dataset, {
   };
   let rows = dataset.stems.map((stem) => buildStemFinancialRow(stem, context));
   if (role === 'supplier') {
-    rows = rows.filter((row) => row.supplierAllocation || (lineItemsByStem.get(row.stemId) || []).some((item) => salesforceIdKey(item.Original_Supplier__c) === accountKey) || (extraCostsByStem.get(row.stemId) || []).some((item) => salesforceIdKey(dataset.schema.extraCostSupplierField ? item[dataset.schema.extraCostSupplierField] : null) === accountKey));
+    rows = rows.filter((row) => row.supplierAllocation);
   } else if (role === 'group') {
     rows = rows.filter((row) => visibleScopeAccountKeys.has(salesforceIdKey(row.buyerAccountId)));
   }
@@ -1000,8 +1012,8 @@ export function buildDashboardAccountInsight(dataset, {
   const reliablePaymentRows = activeRows.filter((row) => row.paymentDataReliable);
   const reliablePaymentStemIds = new Set(reliablePaymentRows.map((row) => row.stemId));
   const excludedLegacyRecordCount = activeRows.length - reliablePaymentRows.length;
-  const buyerPayments = role === 'supplier' ? null : buyerPaymentMetrics(reliablePaymentRows, dataset.buyerPaymentsByStem, today);
-  const supplierPayments = role === 'supplier' ? supplierPaymentMetrics((dataset.supplierInvoices || []).filter((invoice) => reliablePaymentStemIds.has(invoice.stemId)), today) : null;
+  const buyerPayments = role === 'supplier' || dataset.paymentEvidenceDeferred ? null : buyerPaymentMetrics(reliablePaymentRows, dataset.buyerPaymentsByStem, today);
+  const supplierPayments = role === 'supplier' && !dataset.paymentEvidenceDeferred ? supplierPaymentMetrics((dataset.supplierInvoices || []).filter((invoice) => reliablePaymentStemIds.has(invoice.stemId)), today) : null;
   const collection = role === 'supplier' ? null : summarizeCollection(dataset.collectionByStem, reliablePaymentRows, today);
   const dispute = summarizeDisputes(dataset.workflows, rows, dataset.identity.accountId, role, today);
   const compensationAccountIds = role === 'group' ? visibleScopeAccounts.map((account) => account.accountId) : [dataset.identity.accountId];
@@ -1009,10 +1021,20 @@ export function buildDashboardAccountInsight(dataset, {
   const cancelledChildRecords = rows.reduce((sum, row) => sum + row.cancelledLineCount + row.cancelledExtraCostCount, 0);
   const totalChildRecords = rows.reduce((sum, row) => sum + row.totalLineCount + row.totalExtraCostCount, 0);
   const enrichedRows = rows.map((row) => {
-    const reliable = row.paymentDataReliable;
+    const reliable = row.paymentDataReliable && !dataset.paymentEvidenceDeferred;
     const collectionState = reliable ? dataset.collectionByStem?.[row.stemId]?.item || null : null;
     const stemBuyerPayments = reliable ? dataset.buyerPaymentsByStem?.[row.stemId] || [] : [];
     const stemSupplierInvoices = reliable ? (dataset.supplierInvoices || []).filter((invoice) => invoice.stemId === row.stemId) : [];
+    const buyerDocumentEvidence = role === 'supplier' ? [] : (buyerInvoicesByStem.get(row.stemId) || [])
+      .filter((invoice) => invoice.Proforma__c !== true && invoice.Deprecated__c !== true)
+      .map((invoice) => ({
+        documentNumber: text(invoice.Name) || 'Document number unavailable',
+        documentType: isBuyerCreditNote(invoice) ? 'credit_note' : 'invoice',
+        documentDate: dateOnly(invoice.Invoice_Date__c),
+        currency: text(invoice.CurrencyIsoCode) || row.currency,
+        amount: number(invoice.Amount__c),
+        current: true,
+      }));
     const supplierInvoiceAmount = stemSupplierInvoices.some((invoice) => number(invoice.invoiceAmount) != null) ? stemSupplierInvoices.reduce((sum, invoice) => sum + valueOrZero(invoice.invoiceAmount), 0) : null;
     const supplierPayable = stemSupplierInvoices.some((invoice) => number(invoice.payableBalance) != null) ? stemSupplierInvoices.reduce((sum, invoice) => sum + valueOrZero(invoice.payableBalance), 0) : null;
     const supplierPaymentDates = stemSupplierInvoices.flatMap((invoice) => invoice.payments || []).map((payment) => payment.date).filter(Boolean).sort();
@@ -1024,18 +1046,25 @@ export function buildDashboardAccountInsight(dataset, {
       buyerPaymentCount: reliable ? stemBuyerPayments.length : null,
       buyerPaymentsReceived: reliable ? stemBuyerPayments.reduce((sum, payment) => sum + valueOrZero(payment.amount), 0) : null,
       latestBuyerPaymentDate: reliable ? stemBuyerPayments.map((payment) => payment.paymentDate).filter(Boolean).sort().at(-1) || null : null,
+      buyerPaymentEvidence: reliable ? stemBuyerPayments : null,
+      buyerDocumentEvidence,
       supplierInvoiceCount: reliable ? stemSupplierInvoices.length : null,
       supplierInvoiceAmount: reliable ? supplierInvoiceAmount : null,
-      supplierPaidAmount: reliable && supplierInvoiceAmount != null && supplierPayable != null ? Math.max(0, supplierInvoiceAmount - supplierPayable) : null,
+      supplierPaidAmount: reliable ? stemSupplierInvoices.flatMap((invoice) => invoice.payments || []).reduce((sum, payment) => sum + valueOrZero(payment.amount), 0) : null,
       supplierPayable: reliable ? supplierPayable : null,
       latestSupplierPaymentDate: reliable ? supplierPaymentDates.at(-1) || null : null,
+      supplierPaymentEvidence: reliable ? stemSupplierInvoices.flatMap((invoice) => (invoice.payments || []).map((payment) => ({ paymentName: payment.name, amount: payment.amount, paymentDate: payment.date, currency: invoice.currency, invoiceName: invoice.invoiceName }))) : null,
+      supplierDocumentEvidence: reliable ? stemSupplierInvoices.map((invoice) => ({ documentNumber: text(invoice.invoiceName) || 'Document number unavailable', documentType: 'invoice', documentDate: dateOnly(invoice.invoiceDate), currency: text(invoice.currency) || row.currency, amount: number(invoice.invoiceAmount), current: true })) : [],
     };
   });
   const offset = Math.max(0, Number(cursor) || 0);
   const limit = Math.max(10, Math.min(Number(pageSize) || 50, 100));
   const paginatedRows = enrichedRows.slice(offset, offset + limit);
-  const childSummaries = role === 'group' ? visibleScopeAccounts.filter((account) => !account.root).map((account) => {
-    const childRows = rows.filter((row) => salesforceIdKey(row.buyerAccountId) === salesforceIdKey(account.accountId));
+  const groupEntity = dataset.entityType === 'group' || role === 'group';
+  const childSummaries = groupEntity ? visibleScopeAccounts.map((account) => {
+    const childRows = role === 'supplier'
+      ? dataset.stems.map((stem) => buildStemFinancialRow(stem, { ...context, supplierAccountKeys: new Set([salesforceIdKey(account.accountId)]) })).filter((row) => row.supplierAllocation)
+      : rows.filter((row) => salesforceIdKey(row.buyerAccountId) === salesforceIdKey(account.accountId));
     const childSummary = summarizeRows(childRows, { today });
     return {
       ...account,
@@ -1093,6 +1122,8 @@ export function buildDashboardAccountInsight(dataset, {
     identity: dataset.identity,
     availableRoles: dataset.availableRoles,
     activeRole: role,
+    entityType: dataset.entityType || (role === 'group' ? 'group' : 'account'),
+    groupScope: dataset.groupScope || null,
     period: dataset.period,
     scope: {
       accountCount: visibleScopeAccounts.length,
@@ -1103,12 +1134,12 @@ export function buildDashboardAccountInsight(dataset, {
       accountManagers: dataset.accountManagers || [],
       accountNote: dataset.accountNote || null,
       managerCoverage: dataset.accountManagers?.length || 0,
-      childCount: role === 'group' ? childSummaries.length : 0,
-      activeChildCount: role === 'group' ? childSummaries.length : 0,
+      childCount: groupEntity ? childSummaries.filter((account) => !account.root).length : 0,
+      activeChildCount: groupEntity ? childSummaries.filter((account) => !account.root).length : 0,
       inactiveChildCount: 0,
-      tradingChildCount: role === 'group' ? tradingChildren.length : 0,
-      topChildConcentrationPct: role === 'group' && summary.turnover ? percentage(topTurnoverChild?.turnover, summary.turnover) : null,
-      childrenWithoutManagers: role === 'group' ? childSummaries.filter((row) => !row.managerCount).length : 0,
+      tradingChildCount: groupEntity ? tradingChildren.filter((account) => !account.root).length : 0,
+      topChildConcentrationPct: groupEntity && summary.turnover ? percentage(topTurnoverChild?.turnover, summary.turnover) : null,
+      childrenWithoutManagers: groupEntity ? childSummaries.filter((row) => !row.root && !row.managerCount).length : 0,
     },
     kpis: {
       ...summary,
@@ -1116,7 +1147,7 @@ export function buildDashboardAccountInsight(dataset, {
       cancelledChildRatePct: percentage(cancelledChildRecords, totalChildRecords),
     },
     comparisons,
-    payments: { buyer: buyerPayments, supplier: supplierPayments },
+    payments: { asOfDate: today, deferred: dataset.paymentEvidenceDeferred === true, buyer: buyerPayments, supplier: supplierPayments },
     paymentDataReliability: paymentDataReliabilityMetadata(excludedLegacyRecordCount, reliablePaymentRows.length),
     collection: collection ? { ...collection, reminderPolicy: dataset.reminderPolicy || null } : null,
     risk: {

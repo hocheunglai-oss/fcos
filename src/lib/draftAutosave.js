@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { clientSessionKey, clientSessionState } from './clientSessionState.js';
 
 const DRAFT_PREFIX = 'fcos:draft:';
 const DEFAULT_MAX_AGE_MS = 1000 * 60 * 60 * 24 * 30;
 
-function storageKey(key) {
-  return `${DRAFT_PREFIX}${key}`;
+function storageKey(key, expected) {
+  return clientSessionKey(DRAFT_PREFIX, key, expected);
 }
 
 function safeStringify(value) {
@@ -34,13 +35,15 @@ export function draftTimestampLabel(value) {
 
 export function readDraft(key, { maxAgeMs = DEFAULT_MAX_AGE_MS } = {}) {
   if (!key || typeof window === 'undefined') return null;
+  const ownedKey = storageKey(key);
+  if (!ownedKey) return null;
   try {
-    const raw = window.localStorage.getItem(storageKey(key));
+    const raw = window.localStorage.getItem(ownedKey);
     if (!raw) return null;
     const draft = JSON.parse(raw);
     const updatedAt = draft?.updatedAt ? new Date(draft.updatedAt).getTime() : 0;
     if (!updatedAt || Date.now() - updatedAt > maxAgeMs) {
-      window.localStorage.removeItem(storageKey(key));
+      window.localStorage.removeItem(ownedKey);
       return null;
     }
     return draft;
@@ -49,11 +52,13 @@ export function readDraft(key, { maxAgeMs = DEFAULT_MAX_AGE_MS } = {}) {
   }
 }
 
-export function writeDraft(key, data) {
+export function writeDraft(key, data, expected = clientSessionState()) {
   if (!key || typeof window === 'undefined') return null;
+  const ownedKey = storageKey(key, expected);
+  if (!ownedKey) return null;
   const draft = { data, updatedAt: new Date().toISOString() };
   try {
-    window.localStorage.setItem(storageKey(key), JSON.stringify(draft));
+    window.localStorage.setItem(ownedKey, JSON.stringify(draft));
     return draft;
   } catch {
     return null;
@@ -62,8 +67,10 @@ export function writeDraft(key, data) {
 
 export function clearDraft(key) {
   if (!key || typeof window === 'undefined') return;
+  const ownedKey = storageKey(key);
+  if (!ownedKey) return;
   try {
-    window.localStorage.removeItem(storageKey(key));
+    window.localStorage.removeItem(ownedKey);
   } catch {
     // ignore storage failures
   }
@@ -82,6 +89,7 @@ export function useDraftAutosave(key, value, {
   const [savedAt, setSavedAt] = useState(null);
   const serialized = useMemo(() => safeStringify(value), [value]);
   const valueRef = useRef(value);
+  const sessionRef = useRef(clientSessionState());
 
   useEffect(() => {
     valueRef.current = value;
@@ -90,7 +98,7 @@ export function useDraftAutosave(key, value, {
   useEffect(() => {
     if (!key || !enabled || !dirty) return undefined;
     const timer = window.setTimeout(() => {
-      const draft = writeDraft(key, valueRef.current);
+      const draft = writeDraft(key, valueRef.current, sessionRef.current);
       if (draft?.updatedAt) setSavedAt(draft.updatedAt);
     }, delay);
     return () => window.clearTimeout(timer);

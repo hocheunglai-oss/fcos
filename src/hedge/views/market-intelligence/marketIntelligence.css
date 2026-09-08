@@ -1,14 +1,14 @@
 .market-intelligence-workspace > [role="tabpanel"]:not([hidden]) { display: grid; gap: 14px; }
 
-.market-overview-context {
+.market-date-toolbar {
   position: sticky;
   top: 0;
   z-index: 12;
-  display: grid;
-  grid-template-columns: minmax(220px, 1fr) auto;
+  display: flex;
   align-items: center;
-  gap: 8px 14px;
-  padding: 9px 11px;
+  flex-wrap: wrap;
+  gap: 7px 10px;
+  padding: 7px 10px;
   border: 1px solid var(--app-border);
   border-radius: 11px;
   background: var(--app-surface);
@@ -16,28 +16,13 @@
   box-shadow: var(--app-shadow-sm);
   backdrop-filter: blur(12px);
 }
-.market-overview-context__title { display: grid; gap: 2px; }
-.market-overview-context__title strong { font-size: 15px; }
-.market-overview-context__title span { color: var(--app-text-muted); font-size: 10px; }
-.market-overview-context__quality { grid-column: 1 / -1; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; color: var(--app-text-muted); font-size: 10px; }
+.market-date-toolbar__label { display: grid; min-width: 150px; gap: 1px; margin-right: auto; }
+.market-date-toolbar__label strong { font-size: 12px; }
+.market-date-toolbar__label span { color: var(--app-text-muted); font-size: 11px; }
+.market-date-toolbar__actions { display: flex; align-items: end; flex-wrap: wrap; gap: 6px; }
+.market-date-toolbar__picker { display: grid; gap: 2px; color: var(--app-text-muted); font-size: 9px; font-weight: 800; }
+.market-date-toolbar__picker .app-input { width: 128px; height: 29px; font-size: 11px; }
 
-.market-price-board-panel { overflow: hidden; }
-.market-price-board { overflow-x: auto; border: 1px solid var(--app-border); border-radius: 10px; }
-.market-price-board__header,
-.market-price-board__row { display: grid; grid-template-columns: minmax(170px, 1.3fr) minmax(125px, .9fr) minmax(145px, 1fr) minmax(135px, 1fr) minmax(125px, .85fr) minmax(125px, .85fr) minmax(100px, .7fr); align-items: center; gap: 10px; min-width: 1080px; }
-.market-price-board__header { padding: 7px 10px; background: var(--app-surface-soft); color: var(--app-text-muted); font-size: 9px; font-weight: 850; letter-spacing: .04em; text-transform: uppercase; }
-.market-price-board__row { position: relative; padding: 9px 10px 9px 13px; border-top: 1px solid var(--app-border); }
-.market-price-board__row::before { position: absolute; inset: 0 auto 0 0; width: 4px; content: ''; }
-.market-price-board__row--hsfo380::before { background: #d97706; }
-.market-price-board__row--vlsfo::before { background: #2563eb; }
-.market-price-board__row--lsmgo::before { background: #0f766e; }
-.market-price-board__row > strong, .market-price-board__row > div > strong { font-size: 12px; }
-.market-price-board__product { display: grid; gap: 2px; }
-.market-price-board__product strong { font-size: 12px; }
-.market-price-board__product span, .market-price-board__subtle { color: var(--app-text-muted); font-size: 9px; }
-.market-price-board__spread { display: grid; align-items: start; gap: 3px; }
-.market-price-board__spread .market-signed-value { width: max-content; max-width: 100%; font-size: 9px; }
-.market-price-board__spread .market-signed-value--pill { padding: 2px 5px; font-size: 8px; }
 .market-horizon-stat > span, .market-horizon-stat > small { display: flex; align-items: center; flex-wrap: wrap; gap: 3px; }
 .market-intraday-reconciliation { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; }
 .market-intraday-derived > span { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; }
@@ -92,6 +77,10 @@
 .market-delivered-detail__source { display: grid; justify-items: start; gap: 5px; color: var(--app-text-secondary); font-size: 11px; }
 .market-delivered-detail__source small { color: var(--app-text-muted); }
 .market-chart-controls--sticky { position: sticky; top: 0; z-index: 8; padding: 8px; border: 1px solid var(--app-border); border-radius: 10px; background: var(--app-surface); background: color-mix(in srgb, var(--app-surface) 95%, transparent); backdrop-filter: blur(10px); }
+.market-chart-controls { gap: 8px; }
+.market-chart-controls .market-toggle-group legend { font-size: 9px; }
+.market-delivered-workspace .market-delivered-chart { order: 1; }
+.market-delivered-workspace .market-matrix-panel { order: 2; }
 .market-curve-state { display: inline-flex; width: fit-content; align-items: center; border-radius: 999px; padding: 3px 8px; font-size: 11px; font-weight: 700; text-transform: capitalize; background: var(--app-surface-soft); color: var(--app-text-muted); }
 .market-curve-state--backwardation { background: #f5f3ff; color: #6d28d9; }
 .market-curve-state--contango { background: #fffbeb; color: #b45309; }
@@ -326,9 +315,9 @@
   .market-intraday-date { width: 100%; }
   .market-intraday-observation-list article { grid-template-columns: 1fr; }
   .market-brief-topbar,
-  .market-overview-context,
+  .market-date-toolbar,
   .market-alert-rule-footer { align-items: stretch; flex-direction: column; }
-  .market-overview-context { display: flex; }
+  .market-date-toolbar { display: flex; }
   .market-brief-topbar .market-brief-topbar__actions { justify-content: flex-start; }
   .market-brief-date { order: -1; width: 100%; }
   .market-brief-columns,

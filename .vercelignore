@@ -1,6 +1,6 @@
 .env
 .env.*
-.fcos-cli/
+.fcos-cli
 .sf/
 .sfdx/
 .vercel/

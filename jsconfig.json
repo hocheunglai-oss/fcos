@@ -9,6 +9,9 @@
     "moduleResolution": "bundler",
     "lib": ["esnext", "dom"],
     "target": "esnext",
+    // JavaScript checking is deliberately owned by jsconfig.core.json. This
+    // editor project checks the one TypeScript source file below; checkJs:false
+    // must not be presented as JavaScript type coverage.
     "checkJs": false,
     "noEmit": true,
     "skipLibCheck": true,

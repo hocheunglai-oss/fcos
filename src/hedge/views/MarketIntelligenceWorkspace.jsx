@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowDownRight,
   ArrowUpRight,
+  ChevronLeft,
+  ChevronRight,
   FileUp,
   Gauge,
   Info,
@@ -25,6 +27,7 @@ import {
 import { importMarketReport, loadMarketHistory, previewMarketReport } from '@/hedge/api/marketData';
 import { formatDate, formatMoney } from '@/hedge/lib/domain';
 import { marketSymbolLabel } from '@/hedge/lib/marketLabels';
+import { reconcileDeliveredPortSelection } from '@/hedge/lib/marketDeliveredSelection';
 import { MarketSignedAxisTick, MarketSignedText, MarketSignedValue } from '@/components/markets/MarketSignedValue';
 import {
   Button,
@@ -58,6 +61,48 @@ function initialMarketTab() {
   return TAB_VALUES.has(requested) ? requested : 'brief';
 }
 
+function initialMarketDateSelection() {
+  if (typeof window === 'undefined') return { mode: 'latest', date: null };
+  const params = new URLSearchParams(window.location.search);
+  const date = params.get('marketBriefDate');
+  // Older shared links carried only the completed report date. Keep those
+  // links historical unless the URL explicitly requests the live/latest mode.
+  return date && params.get('marketBriefMode') !== 'latest'
+    ? { mode: 'historical', date }
+    : { mode: 'latest', date: null };
+}
+
+function writeMarketDateSelection(selection, { push = false } = {}) {
+  if (typeof window === 'undefined') return;
+  const url = new URL(window.location.href);
+  if (selection.mode === 'historical' && selection.date) {
+    url.searchParams.set('marketBriefDate', selection.date);
+    url.searchParams.set('marketBriefMode', 'historical');
+  } else {
+    if (selection.date) url.searchParams.set('marketBriefDate', selection.date);
+    else url.searchParams.delete('marketBriefDate');
+    url.searchParams.set('marketBriefMode', 'latest');
+  }
+  window.history[push ? 'pushState' : 'replaceState']({}, '', `${url.pathname}${url.search}${url.hash}`);
+}
+
+function MarketDateToolbar({ brief, selection, loading, error, onSelect, onRefresh }) {
+  const displayedDate = brief?.displayedDate || selection.date;
+  const isHistorical = selection.mode === 'historical';
+  return <div className="market-date-toolbar" aria-label="Market data date controls">
+    <div className="market-date-toolbar__label"><strong>Market date</strong><span>{displayedDate ? formatDate(displayedDate) : 'Resolving latest completed reports…'}</span></div>
+    <StatusBadge tone={isHistorical ? 'neutral' : 'positive'}>{isHistorical ? 'Historical' : 'Latest available'}</StatusBadge>
+    <div className="market-date-toolbar__actions">
+      <Button size="sm" icon={ChevronLeft} onClick={() => onSelect({ mode: 'historical', date: brief?.previousAvailableDate })} disabled={loading || !brief?.previousAvailableDate}>Previous</Button>
+      <label className="market-date-toolbar__picker"><span>Choose date</span><input className="app-input" type="date" value={isHistorical ? selection.date || '' : ''} onChange={(event) => event.target.value && onSelect({ mode: 'historical', date: event.target.value })} /></label>
+      <Button size="sm" icon={ChevronRight} onClick={() => onSelect({ mode: 'historical', date: brief?.nextAvailableDate })} disabled={loading || !brief?.nextAvailableDate}>Next</Button>
+      <Button size="sm" onClick={() => onSelect({ mode: 'latest', date: null })} disabled={loading || !isHistorical}>Latest</Button>
+      <Button size="sm" icon={RefreshCw} onClick={onRefresh} disabled={loading}>{loading ? 'Updating…' : 'Refresh'}</Button>
+    </div>
+    {error ? <InlineError error={error} /> : null}
+  </div>;
+}
+
 const PRODUCTS = [
   { value: 'hsfo380', label: 'HSFO 380', color: '#d97706' },
   { value: 'vlsfo', label: 'S0.5%', color: '#2563eb' },
@@ -67,7 +112,17 @@ const PRODUCTS = [
 const PRODUCT_ORDER = new Map(PRODUCTS.map((product, index) => [product.value, index]));
 const DELIVERED_FILTERS_KEY = 'fcos:markets:delivered:v1';
 
-const PORT_COLORS = ['#2563eb', '#0f766e', '#d97706', '#7c3aed', '#db2777'];
+const PORT_COLORS = {
+  singapore: '#2563eb',
+  'south-korea': '#0f766e',
+  'south-korea-west': '#d97706',
+  zhoushan: '#7c3aed',
+  kaohsiung: '#db2777',
+  'hong-kong': '#0891b2',
+};
+const PORT_COLOR_VALUES = Object.values(PORT_COLORS);
+const INITIAL_DELIVERED_PORT_KEYS = Object.keys(PORT_COLORS);
+const EMPTY_DELIVERED_ROWS = Object.freeze([]);
 
 function storedFilters(key) {
   if (typeof window === 'undefined') return {};
@@ -199,7 +254,7 @@ function DeliveredTrendPanel({ panel, mode, visible, mobileActive }) {
             <Legend iconType="plainline" wrapperStyle={{ fontSize: 11, paddingTop: 5 }} />
             {mode === 'spread' ? <ReferenceLine y={0} stroke="#94a3b8" strokeDasharray="4 4" /> : null}
             {(panel.series || []).filter((series) => series.available).map((series, index) => (
-              <Line key={series.portKey} type="monotone" dataKey={series.portKey} name={series.portLabel} stroke={PORT_COLORS[index % PORT_COLORS.length]} strokeWidth={2} dot={false} connectNulls={false} />
+              <Line key={series.portKey} type="monotone" dataKey={series.portKey} name={series.portLabel} stroke={PORT_COLORS[series.portKey] || PORT_COLOR_VALUES[index % PORT_COLOR_VALUES.length]} strokeWidth={2} dot={false} connectNulls={false} />
             ))}
             {mode === 'price' && panel.benchmark?.points?.length ? <Line type="monotone" dataKey="mops" name={panel.benchmark.label} stroke="#111827" strokeWidth={2} strokeDasharray="5 4" dot={false} connectNulls={false} /> : null}
           </LineChart>
@@ -209,16 +264,18 @@ function DeliveredTrendPanel({ panel, mode, visible, mobileActive }) {
   );
 }
 
-function DeliveredBunkers({ intelligence }) {
-  const delivered = intelligence?.delivered || [];
+function DeliveredBunkers({ active = true, intelligence, asOfDate = null, dateMode = 'latest', refreshKey = 0 }) {
+  const delivered = intelligence?.delivered || EMPTY_DELIVERED_ROWS;
   const ports = useMemo(() => [...new Map(delivered.map((row) => [row.portKey, row.portLabel])).entries()], [delivered]);
   const initialFilters = useMemo(() => storedFilters(DELIVERED_FILTERS_KEY), []);
   const validProductKeys = PRODUCTS.map((item) => item.value);
-  const validPortKeys = ports.map(([key]) => key);
+  // History has not resolved at first render. Preserve saved port controls
+  // against the static supported set, then revalidate them against evidence.
+  const validPortKeys = ports.length ? ports.map(([key]) => key) : INITIAL_DELIVERED_PORT_KEYS;
   const initialProducts = Array.isArray(initialFilters.products) ? initialFilters.products.filter((value) => validProductKeys.includes(value)) : [];
   const initialPorts = Array.isArray(initialFilters.ports) ? initialFilters.ports.filter((value) => validPortKeys.includes(value)) : [];
   const [selectedProducts, setSelectedProducts] = useState(() => initialProducts.length ? initialProducts : validProductKeys);
-  const [selectedPorts, setSelectedPorts] = useState(() => initialPorts.length ? initialPorts : ports.some(([key]) => key === 'singapore') ? ['singapore'] : validPortKeys.slice(0, 1));
+  const [selectedPorts, setSelectedPorts] = useState(() => initialPorts.length ? initialPorts : ports.some(([key]) => key === 'singapore') ? ['singapore'] : validPortKeys.slice(0, 1).length ? validPortKeys.slice(0, 1) : ['singapore']);
   const [mode, setMode] = useState(() => ['price', 'spread'].includes(initialFilters.mode) ? initialFilters.mode : 'price');
   const [range, setRange] = useState(() => ['1w', '1m', '3m', '6m', '1y'].includes(initialFilters.range) ? initialFilters.range : '3m');
   const [includeMops, setIncludeMops] = useState(() => initialFilters.includeMops !== false);
@@ -226,7 +283,17 @@ function DeliveredBunkers({ intelligence }) {
   const [history, setHistory] = useState(null);
   const [historyBusy, setHistoryBusy] = useState(false);
   const [historyError, setHistoryError] = useState(null);
+  const [historyRetryKey, setHistoryRetryKey] = useState(0);
   const [detailRow, setDetailRow] = useState(null);
+  // The bounded history response carries a date-compatible intelligence
+  // snapshot. Never display the previous date's matrix while a new date is
+  // resolving.
+  const datedDelivered = history?.intelligence?.delivered || delivered;
+  const datedPorts = useMemo(() => [...new Map(datedDelivered.map((row) => [row.portKey, row.portLabel])).entries()], [datedDelivered]);
+
+  useEffect(() => {
+    setSelectedPorts((current) => reconcileDeliveredPortSelection(current, datedPorts));
+  }, [datedPorts]);
 
   useEffect(() => {
     if (!selectedProducts.includes(mobileProduct)) setMobileProduct(selectedProducts[0]);
@@ -237,40 +304,50 @@ function DeliveredBunkers({ intelligence }) {
   }, [includeMops, mode, range, selectedPorts, selectedProducts]);
 
   useEffect(() => {
-    if (!intelligence?.available || !selectedProducts.length || !selectedPorts.length) return undefined;
+    if (!active || !asOfDate || !selectedProducts.length || !selectedPorts.length) return undefined;
     const controller = new AbortController();
+    setHistory(null);
     setHistoryBusy(true);
     setHistoryError(null);
-    loadMarketHistory({ range, mode, products: selectedProducts, ports: selectedPorts, includeMops, limit: 400 }, { signal: controller.signal })
-      .then((result) => { if (!result?.cancelled) setHistory(result); })
-      .catch((error) => { if (error?.name !== 'AbortError') setHistoryError(error); })
+    loadMarketHistory({ range, mode, products: selectedProducts, ports: selectedPorts, includeMops, limit: 400, ...(asOfDate ? { endDate: asOfDate } : {}) }, { signal: controller.signal, force: refreshKey > 0, cache: refreshKey === 0 })
+      .then((result) => { if (!controller.signal.aborted && !result?.cancelled) setHistory(result); })
+      .catch((error) => { if (!controller.signal.aborted && error?.name !== 'AbortError') setHistoryError(error); })
       .finally(() => { if (!controller.signal.aborted) setHistoryBusy(false); });
     return () => controller.abort();
-  }, [includeMops, intelligence?.available, mode, range, selectedPorts, selectedProducts]);
+  }, [active, asOfDate, dateMode, historyRetryKey, includeMops, mode, range, refreshKey, selectedPorts, selectedProducts]);
 
-  if (!intelligence?.available) {
+  if (!asOfDate) {
+    return <Panel><div className="market-empty-inline"><RefreshCw className="animate-spin" size={20} /><div><strong>Resolving market date</strong><span>Delivered evidence will load after the completed report date is confirmed.</span></div></div></Panel>;
+  }
+  if (!intelligence?.available && !history && historyBusy) {
+    return <Panel><div className="market-empty-inline"><RefreshCw className="animate-spin" size={20} /><div><strong>Loading delivered prices</strong><span>Loading bounded all-port and three-product evidence for the selected date.</span></div></div></Panel>;
+  }
+  if (historyError && !history) {
+    return <Panel><InlineError error={historyError} action={<Button onClick={() => setHistoryRetryKey((value) => value + 1)}>Retry</Button>} /></Panel>;
+  }
+  if (!intelligence?.available && !history) {
     return <Panel><div className="market-empty-inline"><RefreshCw size={20} /><div><strong>Delivered-price storage is not deployed yet</strong><span>The MOPS market remains available. Apply the reviewed service-only migration to enable delivered data.</span></div></div></Panel>;
   }
 
   return (
-    <div className="market-intelligence-stack">
+    <div className="market-intelligence-stack market-delivered-workspace">
       {(intelligence?.conflicts || []).length ? <div className="app-callout app-callout--warning"><AlertTriangle size={16} /> Conflicting report observations are quarantined. Affected dates are excluded from premium / discount analytics until reviewed.</div> : null}
 
       <Panel className="market-matrix-panel">
         <div className="app-panel-header">
           <div><h2>Major-port delivered prices</h2><p>Latest USD/MT value, published movement, and exact-date premium or discount. Select a cell for full evidence and statistics.</p></div>
-          <StatusBadge tone="neutral">{ports.length} ports · 3 products</StatusBadge>
+          <StatusBadge tone="neutral">{datedPorts.length} ports · 3 products</StatusBadge>
         </div>
         <div className="market-matrix-scroll">
           <table className="market-matrix market-matrix--analytics">
             <thead><tr><th>Port</th>{PRODUCTS.map((item) => <th key={item.value}>{item.label}</th>)}</tr></thead>
-            <tbody>{ports.map(([portKey, portLabel]) => (
+            <tbody>{datedPorts.map(([portKey, portLabel]) => (
               <tr key={portKey}>
                 <th>{portLabel}</th>
                 {PRODUCTS.map((item) => {
-                  const row = delivered.find((entry) => entry.portKey === portKey && entry.productKey === item.value);
+                  const row = datedDelivered.find((entry) => entry.portKey === portKey && entry.productKey === item.value);
                   if (!row || row.sourceType === 'unavailable') return <td key={item.value} className="market-price-cell--unavailable"><strong>Not published</strong><small>No exact licensed series</small></td>;
-                  const latestSpread = row.latestSpread;
+                  const latestSpread = row.latestSpread?.date === row.latest?.priceDate ? row.latestSpread : null;
                   return (
                     <td key={item.value}>
                       <button type="button" className="market-price-cell market-price-cell--compact" onClick={() => setDetailRow(row)} aria-label={`Open ${portLabel} ${item.label} delivered-price details`}>
@@ -307,7 +384,7 @@ function DeliveredBunkers({ intelligence }) {
           <MarketToggleGroup label="View" single options={[{ value: 'price', label: 'Delivered price' }, { value: 'spread', label: 'Premium vs MOPS' }]} selected={mode} onChange={setMode} />
           <MarketToggleGroup label="Range" single options={['1w', '1m', '3m', '6m', '1y'].map((value) => ({ value, label: value.toUpperCase() }))} selected={range} onChange={setRange} />
           <MarketToggleGroup label="Products" options={PRODUCTS} selected={selectedProducts} onChange={setSelectedProducts} />
-          <MarketToggleGroup label="Ports" options={ports.map(([value, label]) => ({ value, label }))} selected={selectedPorts} onChange={setSelectedPorts} />
+          <MarketToggleGroup label="Ports" options={datedPorts.map(([value, label]) => ({ value, label }))} selected={selectedPorts} onChange={setSelectedPorts} />
           <fieldset className="market-toggle-group"><legend>Benchmark</legend><div><button type="button" aria-pressed={includeMops} className={includeMops ? 'is-active' : ''} onClick={() => setIncludeMops((value) => !value)}>MOPS</button></div></fieldset>
         </div>
         {mode === 'spread' ? <div className="app-callout app-callout--neutral"><Info size={15} /> MOPS is represented by the zero line in spread mode. Switch to Delivered price to draw the benchmark line.</div> : null}
@@ -323,7 +400,10 @@ function DeliveredBunkers({ intelligence }) {
       <Drawer open={Boolean(detailRow)} onClose={() => setDetailRow(null)} title={detailRow ? `${detailRow.portLabel} · ${detailRow.productLabel}` : 'Delivered-price detail'} description="Exact-date delivered-price and MOPS evidence with retained three-month statistics." footer={<Button onClick={() => setDetailRow(null)}>Close</Button>}>
         {detailRow ? <div className="market-delivered-detail">
           <div className="market-delivered-detail__headline"><div><span>Latest delivered price</span><strong>{detailRow.latest?.price == null ? 'Unavailable' : `${formatMoney(detailRow.latest.price, { digits: 2 })} USD/MT`}</strong><small>{detailRow.latest?.priceDate ? formatDate(detailRow.latest.priceDate) : 'No source date'}</small></div><MovementBadge value={detailRow.latest?.dayChange} /></div>
-          <div className="market-price-cell__spread"><span>{detailRow.latestSpread?.spread == null ? 'No exact-date MOPS comparison' : <>{detailRow.latestSpread.spread >= 0 ? 'Premium' : 'Discount'} <MarketSignedValue value={detailRow.latestSpread.spread} unit="USD/MT" /></>}</span><small>{detailRow.latestSpread?.date ? formatDate(detailRow.latestSpread.date) : detailRow.benchmark?.label || 'Benchmark unavailable'}</small></div>
+          {(() => {
+            const latestSpread = detailRow.latestSpread?.date === detailRow.latest?.priceDate ? detailRow.latestSpread : null;
+            return <div className="market-price-cell__spread"><span>{latestSpread?.spread == null ? 'No exact-date MOPS comparison' : <>{latestSpread.spread >= 0 ? 'Premium' : 'Discount'} <MarketSignedValue value={latestSpread.spread} unit="USD/MT" /></>}</span><small>{latestSpread?.date ? formatDate(latestSpread.date) : detailRow.benchmark?.label || 'Benchmark unavailable'}</small></div>;
+          })()}
           <SpreadSparkline points={detailRow.spreadHistory || []} color={PRODUCTS.find((item) => item.value === detailRow.productKey)?.color} />
           <div className="market-horizon-grid"><HorizonStat label="1W" value={detailRow.horizonStats?.['1w']} /><HorizonStat label="1M" value={detailRow.horizonStats?.['1m']} /><HorizonStat label="3M" value={detailRow.horizonStats?.['3m']} /></div>
           <div className="market-delivered-detail__source"><StatusBadge tone={sourceTone(detailRow.sourceType)}>{sourceLabel(detailRow.sourceType)}</StatusBadge><span>{marketSymbolLabel(detailRow.sourceSymbol, { productKey: detailRow.productKey, productLabel: detailRow.productLabel, portLabel: detailRow.portLabel, marketFamily: 'delivered' })}</span><small>{detailRow.basisNote || 'Exact licensed series basis retained.'}</small></div>
@@ -514,13 +594,50 @@ function MarketToolsDrawer({ open, onClose, onImport, data, settings, canManageM
   </Drawer>;
 }
 
-export function MarketIntelligenceWorkspace({ data, pulse, marketDataLoaded = false, marketDataLoading = false, ensureMarketData, settings, canManageMarketData = false, canManageAlertRules = false, canManageCurveCutover = false, priceEntity, verifyMonth, reload }) {
+export function MarketIntelligenceWorkspace({ data, pulse, refreshVersion = 0, marketPulseLoading = false, marketPulseError = null, marketDataLoaded = false, marketDataLoading = false, ensureMarketData, onDateResolved, settings, canManageMarketData = false, canManageAlertRules = false, canManageCurveCutover = false, priceEntity, verifyMonth, reload }) {
   const [tab, setTab] = useState(initialMarketTab);
-  const [visitedTabs, setVisitedTabs] = useState(() => new Set([initialMarketTab()]));
+  const [visitedTabs, setVisitedTabs] = useState(() => new Set(['brief', initialMarketTab()]));
   const [importOpen, setImportOpen] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
   const [briefRefreshKey, setBriefRefreshKey] = useState(0);
+  const refreshVersionRef = useRef(refreshVersion);
+  const [dateSelection, setDateSelection] = useState(initialMarketDateSelection);
+  const [brief, setBrief] = useState(null);
+  const [dateLoading, setDateLoading] = useState(true);
+  const [dateError, setDateError] = useState(null);
   const intelligence = data.marketIntelligence || {};
+  const displayedDate = brief?.displayedDate || dateSelection.date;
+  const dateReady = !dateLoading && !dateError && Boolean(displayedDate);
+  const selectDate = useCallback((next, { push = true } = {}) => {
+    if (next.mode === 'historical' && !next.date) return;
+    setDateLoading(true);
+    setDateError(null);
+    if (next.mode === dateSelection.mode && next.date === dateSelection.date) setBriefRefreshKey((value) => value + 1);
+    setDateSelection(next);
+    writeMarketDateSelection(next, { push });
+  }, [dateSelection]);
+  const resolveBrief = useCallback((nextBrief, { mode, force = false }) => {
+    setBrief(nextBrief || null);
+    setDateLoading(false);
+    setDateError(null);
+    const asOfDate = nextBrief?.displayedDate || nextBrief?.asOfDate || null;
+    if (mode === 'latest' && asOfDate) {
+      const latestSelection = { mode: 'latest', date: asOfDate };
+      setDateSelection((current) => current.mode === latestSelection.mode && current.date === latestSelection.date ? current : latestSelection);
+      writeMarketDateSelection(latestSelection);
+    }
+    Promise.resolve(onDateResolved?.({ asOfDate, mode, force })).catch(() => {});
+  }, [onDateResolved]);
+  const resolveBriefError = useCallback((error) => {
+    setDateLoading(false);
+    setDateError(error);
+  }, []);
+  useEffect(() => {
+    if (refreshVersionRef.current === refreshVersion) return;
+    refreshVersionRef.current = refreshVersion;
+    setDateLoading(true);
+    setBriefRefreshKey((value) => value + 1);
+  }, [refreshVersion]);
   const selectTab = (value) => {
     setVisitedTabs((current) => current.has(value) ? current : new Set([...current, value]));
     setTab(value);
@@ -529,26 +646,30 @@ export function MarketIntelligenceWorkspace({ data, pulse, marketDataLoaded = fa
       url.searchParams.set('tab', value);
       window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
     }
-    if (value === 'delivered') ensureMarketData().catch(() => {});
   };
   useEffect(() => {
-    if (tab === 'delivered') ensureMarketData().catch(() => {});
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- Initial deep-link only; later selections load from selectTab.
+    const onPopState = () => {
+      const nextTab = initialMarketTab();
+      setVisitedTabs((current) => current.has(nextTab) ? current : new Set([...current, nextTab]));
+      setTab(nextTab);
+      selectDate(initialMarketDateSelection(), { push: false });
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, [selectDate]);
   const openTools = () => {
     setToolsOpen(true);
     ensureMarketData().catch(() => {});
   };
-  const refreshOverview = () => {
-    reload({ silent: true, force: true }).catch(() => {});
-  };
   return (
     <div className="app-page market-intelligence-workspace workspace-trading-canvas">
-      <PageHeader eyebrow="Trading market intelligence" title="Markets" description="Official prices, delivered-market comparisons, forward curves, and source-linked market evidence." actions={(canManageMarketData || canManageAlertRules) ? <Button icon={Settings2} onClick={openTools}>Market tools</Button> : null} />
+      <PageHeader eyebrow="Trading market intelligence" title="Markets" description="Official prices, delivered-market comparisons, forward curves, and source-linked market evidence." showSalesforceSync={false} actions={(canManageMarketData || canManageAlertRules) ? <Button icon={Settings2} onClick={openTools}>Market tools</Button> : null} />
       <div className="market-workspace-tabs app-navigation-caption-material" role="tablist" aria-label="Market views">{TABS.map((item) => <button key={item.value} type="button" role="tab" aria-selected={tab === item.value} className={tab === item.value ? 'is-active' : ''} onClick={() => selectTab(item.value)}>{item.label}</button>)}</div>
-      {visitedTabs.has('brief') ? <div role="tabpanel" hidden={tab !== 'brief'} aria-label="Overview"><MarketDecisionBrief initialBrief={intelligence.brief || null} refreshKey={briefRefreshKey} pulse={pulse} onRefreshPulse={refreshOverview} intraday={<MarketIntradayStrip canManage={canManageMarketData} refreshKey={briefRefreshKey} />} /></div> : null}
-      {visitedTabs.has('delivered') ? <div role="tabpanel" hidden={tab !== 'delivered'} aria-label="Delivered prices">{marketDataLoaded ? <DeliveredBunkers intelligence={intelligence} /> : <Panel><div className="market-empty-inline"><RefreshCw className={marketDataLoading ? 'animate-spin' : ''} size={20} /><div><strong>{marketDataLoading ? 'Loading delivered prices' : 'Delivered prices are ready to load'}</strong><span>The heavy history snapshot is requested only when this tab is opened.</span></div></div></Panel>}</div> : null}
-      {visitedTabs.has('curves') ? <div role="tabpanel" hidden={tab !== 'curves'} aria-label="Forward curves"><MarketForwardCurves readOnly={!canManageMarketData} canManageCutover={false} /></div> : null}
-      {visitedTabs.has('drivers') ? <div role="tabpanel" hidden={tab !== 'drivers'} aria-label="Research and alerts"><MarketDriversAlerts readOnly /></div> : null}
+      <MarketDateToolbar brief={brief} selection={dateSelection} loading={dateLoading} error={dateError} onSelect={selectDate} onRefresh={() => { setDateLoading(true); setBriefRefreshKey((value) => value + 1); }} />
+      {visitedTabs.has('brief') ? <div role="tabpanel" hidden={tab !== 'brief'} aria-label="Overview"><MarketDecisionBrief initialBrief={intelligence.brief || null} refreshKey={briefRefreshKey} pulse={pulse} pulseLoading={marketPulseLoading} pulseError={marketPulseError} requestedDate={dateSelection.mode === 'historical' ? dateSelection.date : null} dateMode={dateSelection.mode} onBriefResolved={resolveBrief} onBriefError={resolveBriefError} intraday={tab === 'brief' && dateReady ? <MarketIntradayStrip canManage={canManageMarketData} refreshKey={briefRefreshKey} asOfDate={displayedDate || null} /> : null} /></div> : null}
+      {visitedTabs.has('delivered') ? <div role="tabpanel" hidden={tab !== 'delivered'} aria-label="Delivered prices"><DeliveredBunkers active={tab === 'delivered' && dateReady} intelligence={intelligence} asOfDate={displayedDate} dateMode={dateSelection.mode} refreshKey={briefRefreshKey} /></div> : null}
+      {visitedTabs.has('curves') ? <div role="tabpanel" hidden={tab !== 'curves'} aria-label="Forward curves"><MarketForwardCurves active={tab === 'curves' && dateReady} readOnly={!canManageMarketData} canManageCutover={false} asOfDate={displayedDate || null} refreshKey={briefRefreshKey} /></div> : null}
+      {visitedTabs.has('drivers') ? <div role="tabpanel" hidden={tab !== 'drivers'} aria-label="Research and alerts"><MarketDriversAlerts active={tab === 'drivers' && dateReady} readOnly asOfDate={displayedDate || null} refreshKey={briefRefreshKey} /></div> : null}
       {(canManageMarketData || canManageAlertRules) ? <MarketToolsDrawer open={toolsOpen} onClose={() => setToolsOpen(false)} onImport={() => { setToolsOpen(false); setImportOpen(true); }} data={data} settings={settings} canManageMarketData={canManageMarketData} canManageAlertRules={canManageAlertRules} canManageCurveCutover={canManageCurveCutover} priceEntity={priceEntity} verifyMonth={verifyMonth} marketDataLoaded={marketDataLoaded} marketDataLoading={marketDataLoading} /> : null}
       {canManageMarketData ? <ReportImportDrawer open={importOpen} onClose={() => setImportOpen(false)} onImported={() => { setBriefRefreshKey((value) => value + 1); Promise.all([reload({ silent: true }), ensureMarketData?.({ force: true })]).catch(() => {}); }} /> : null}
     </div>

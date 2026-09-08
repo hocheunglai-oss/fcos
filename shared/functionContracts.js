@@ -1,3 +1,5 @@
+import { stemReadRequestIssues } from './salesforceReadRequest.js';
+
 export const FUNCTION_CONTRACT_VERSION = 1;
 
 const objectPayload = (payload) => payload != null && typeof payload === 'object' && !Array.isArray(payload);
@@ -5,6 +7,7 @@ const stringValue = (value) => typeof value === 'string' && value.trim().length 
 const stringArray = (value) => Array.isArray(value) && value.length > 0 && value.every(stringValue);
 
 const CONTRACTS = Object.freeze({
+  salesforceStemDetail: stemReadRequestIssues,
   dashboardAccountCreditStatement(payload) {
     const issues = [];
     if (!['buyer', 'supplier', 'both'].includes(payload.side || 'buyer')) issues.push('side must be buyer, supplier, or both');

@@ -6,6 +6,7 @@ test('critical function contracts fail closed before invalid requests reach the 
   assert.deepEqual(functionContractNames().sort(), [
     'dashboardAccountCreditStatement',
     'dashboardCounterpartySearch',
+    'salesforceStemDetail',
     'systemErrorVerify',
     'workNotificationsRead',
     'workNotificationsState',

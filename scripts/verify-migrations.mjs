@@ -32,6 +32,11 @@ const releaseMigrationNames = new Set([
   '20260806090000_financial_report_settings_and_currency_thresholds.sql',
   '20260806100000_dispute_external_closure_reconciliation.sql',
   '20260807120000_email_router_forward_file_learning.sql',
+  '20260904160812_variable_charge_resolution_optional_reference.sql',
+  '20260905105308_account_insight_report_presets.sql',
+  '20260905111234_account_insight_report_preset_indexes.sql',
+  '20260906161240_restrict_browser_role_admin_grants.sql',
+  '20260908074607_fcbs_own_account_settlement.sql',
 ]);
 const baseline = migrationSources.filter((migration) => !releaseMigrationNames.has(migration.name));
 const upgrade = migrationSources.filter((migration) => releaseMigrationNames.has(migration.name));
@@ -62,6 +67,79 @@ async function assertRows(sql, expected, label, values = []) {
 }
 
 async function verifyRuntimeObjects(label) {
+  const releaseTables = ['account_insight_report_presets', 'account_insight_report_preset_events', 'hedge_fcbs_settlement_operations'];
+  await assertRows(
+    `select count(*)::int from pg_class c join pg_namespace n on n.oid = c.relnamespace
+     where n.nspname = 'public' and c.relname = any($1::text[]) and c.relrowsecurity`,
+    releaseTables.length, `${label} report presets and FCBS operations RLS`, [releaseTables],
+  );
+  await assertRows(
+    `select count(*)::int from unnest($1::text[]) t cross join unnest(array['anon','authenticated']) r
+     cross join unnest(array['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER']) p
+     where has_table_privilege(r, 'public.' || t, p)`,
+    0, `${label} report presets and FCBS operations deny browser grants`, [releaseTables],
+  );
+  await assertRows(
+    `select count(*)::int from unnest($1::text[]) t cross join unnest(array['SELECT','INSERT']) p
+     where has_table_privilege('service_role', 'public.' || t, p)`,
+    releaseTables.length * 2, `${label} report presets and FCBS service-role access`, [releaseTables],
+  );
+  const releaseFunctions = [
+    'save_account_insight_report_preset', 'resolve_variable_charge_post_invoice_change',
+    'hedge_fcbs_settlement_month', 'hedge_fcbs_settlement_evidence',
+    'validate_hedge_fcbs_document', 'protect_hedge_fcbs_issued', 'protect_hedge_fcbs_link_identity',
+    'assert_hedge_fcbs_document', 'set_hedge_fcbs_settlement_status', 'save_hedge_fcbs_settlement',
+  ];
+  await assertRows(
+    `select count(*)::int from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+     where n.nspname='public' and p.proname=any($1::text[]) and not p.prosecdef
+       and has_function_privilege('service_role',p.oid,'EXECUTE')
+       and not has_function_privilege('anon',p.oid,'EXECUTE')
+       and not has_function_privilege('authenticated',p.oid,'EXECUTE')`,
+    releaseFunctions.length, `${label} release RPCs retain service-only invoker execution`, [releaseFunctions],
+  );
+  await assertRows(
+    `select count(*)::int from pg_indexes where schemaname='public' and indexname=any($1::text[])`,
+    3, `${label} report preset reference and active FCBS indexes`,
+    [['account_insight_report_preset_events_preset', 'account_insight_report_presets_editor', 'hedge_fcbs_one_active_month']],
+  );
+  const adminTables = ['app_modules', 'user_profiles', 'user_module_permissions',
+    'user_types', 'user_type_module_permissions', 'admin_audit_logs'];
+  await assertRows(
+    `select count(*)::int from pg_class c join pg_namespace n on n.oid = c.relnamespace
+     where n.nspname = 'public' and c.relname = any($1::text[]) and c.relrowsecurity`,
+    adminTables.length, `${label} administration RLS retained`, [adminTables],
+  );
+  await assertRows(
+    `select count(*)::int from unnest($1::text[]) t cross join
+     unnest(array['anon','authenticated']) r cross join
+     unnest(array['INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER']) p
+     where has_table_privilege(r, 'public.' || t, p)`,
+    0, `${label} browser administration writes denied`, [adminTables],
+  );
+  await assertRows(
+    `select count(*)::int from unnest($1::text[]) t where has_table_privilege('authenticated', 'public.' || t, 'SELECT')`,
+    adminTables.length - 1, `${label} existing RLS-filtered browser reads retained`, [adminTables],
+  );
+  await assertRows(
+    `select count(*)::int from unnest($1::text[]) t where has_table_privilege('anon', 'public.' || t, 'SELECT')`,
+    0, `${label} anonymous administration reads denied`, [adminTables],
+  );
+  await assertRows(
+    `select count(*)::int from unnest($1::text[]) t cross join unnest(array['SELECT','INSERT','UPDATE','DELETE']) p
+     where has_table_privilege('service_role', 'public.' || t, p)`,
+    adminTables.length * 4, `${label} service-role administration retained`, [adminTables],
+  );
+  const internalHelpers = ['collaboration_item_key', 'variable_charge_side_confirmation_immutable', 'variable_charge_side_state_before_update'];
+  await assertRows(
+    `select count(*)::int from unnest($1::text[]) f cross join unnest(array['anon','authenticated']) r
+     where has_function_privilege(r, 'public.' || f || '()', 'EXECUTE')`,
+    0, `${label} internal helpers are not browser RPCs`, [internalHelpers],
+  );
+  await assertRows(
+    `select count(*)::int from unnest($1::text[]) f where has_function_privilege('service_role', 'public.' || f || '()', 'EXECUTE')`,
+    internalHelpers.length, `${label} service-role internal helper execution retained`, [internalHelpers],
+  );
   const serviceOnlyTables = [
     'financial_report_settings',
     'financial_report_setting_events',
@@ -158,9 +236,16 @@ try {
         updated_at = created_at + interval '1 minute'
     where id = 'default';
     update public.incoming_payment_settings set fully_paid_threshold = 50 where id = 'default';
+    insert into public.hedge_invoices (legacy_source_id, invoice_number, counterparty, status, subtotal)
+    values ('release-upgrade-fixture', 'fixture-legacy-invoice', 'FCBS', 'Sent', 123.45);
   `);
   await applyMigrations(upgrade, 'Upgrade fixture');
   await verifyRuntimeObjects('Upgrade fixture');
+  await assertRows(
+    `select count(*)::int from public.hedge_invoices where legacy_source_id='release-upgrade-fixture'
+     and settlement_basis='counterparty' and source_fingerprint is null and status='Sent' and subtotal=123.45`,
+    1, 'Upgrade fixture preserves legacy FCBS invoice basis and amount',
+  );
   await assertRows(
     `select count(*)::int from public.financial_report_settings where purpose_key = 'outstanding_invoice_reports' and configured and settings->'to' = '["finance-fixture@example.invalid"]'::jsonb and not settings ? 'from'`,
     1,

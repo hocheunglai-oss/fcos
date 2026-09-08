@@ -25,7 +25,10 @@ test('local Supabase shutdown preserves data and does not stop unrelated contain
   assert.match(localServices, /Docker Desktop remains running because other containers are active/);
 });
 
-test('CI always removes disposable Supabase services after startup was attempted', () => {
-  assert.match(qualityWorkflow, /id: start-supabase[\s\S]*run: supabase start/);
+test('CI removes disposable Supabase services after every attempted start, including failures', () => {
   assert.match(qualityWorkflow, /name: Stop temporary Supabase services[\s\S]*if: \$\{\{ always\(\) && steps\.start-supabase\.outcome != 'skipped' && steps\.start-supabase\.outcome != '' \}\}[\s\S]*supabase stop --no-backup/);
+  // A failed/cancelled start can leave containers and must still be cleaned up.
+  const shouldCleanUp = (outcome) => outcome !== 'skipped' && outcome !== '';
+  for (const outcome of ['success', 'failure', 'cancelled']) assert.equal(shouldCleanUp(outcome), true);
+  for (const outcome of ['skipped', '']) assert.equal(shouldCleanUp(outcome), false);
 });

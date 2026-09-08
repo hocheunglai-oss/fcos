@@ -1,8 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import path from 'node:path';
 import { readFile } from 'node:fs/promises';
 import {
   canonicalGitRemote,
+  githubConfigDirectory,
   githubCredentialHelperValue,
   mergeSafeConnectionStatus,
   providerCliRunnable,
@@ -29,17 +32,30 @@ test('connection runtimes select pinned executables and repo-local provider conf
   const supabase = providerRuntime('supabase', { requireCredential: false });
   const salesforce = providerRuntime('salesforce', { requireCredential: false });
 
-  assert.equal(github.env.GH_CONFIG_DIR, new URL('../.fcos-cli/github', import.meta.url).pathname.replace(/\/$/, ''));
+  const commonDirectory = spawnSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], {
+    cwd: new URL('..', import.meta.url),
+    encoding: 'utf8',
+  }).stdout.trim();
+  const repoRoot = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
+  const expectedGitHubConfig = path.join(path.dirname(commonDirectory), '.fcos-cli/github');
+  assert.equal(githubConfigDirectory(), expectedGitHubConfig);
+  assert.equal(
+    githubConfigDirectory({ repoRoot: '/tmp/fcos-detached', commonDirectory: '' }),
+    '/tmp/fcos-detached/.fcos-cli/github',
+  );
+  assert.equal(github.env.GH_CONFIG_DIR, expectedGitHubConfig);
   assert.equal(github.env.GH_REPO, 'github.com/hocheunglai-oss/fcos');
   assert.equal(vercel.command, 'vercel');
-  assert.deepEqual(vercel.injectedArgs.slice(0, 2), ['--global-config', `${github.env.GH_CONFIG_DIR.replace(/\/github$/, '')}/vercel`]);
+  assert.deepEqual(vercel.injectedArgs.slice(0, 2), ['--global-config', `${repoRoot}/.fcos-cli/vercel`]);
   assert.equal(supabase.command, new URL('../node_modules/.bin/supabase', import.meta.url).pathname);
-  assert.equal(supabase.env.SUPABASE_HOME, new URL('../.fcos-cli/supabase', import.meta.url).pathname.replace(/\/$/, ''));
-  assert.deepEqual(supabase.injectedArgs.slice(0, 2), ['--workdir', github.env.GH_CONFIG_DIR.replace(/\/\.fcos-cli\/github$/, '')]);
+  assert.equal(supabase.env.SUPABASE_HOME, `${repoRoot}/.fcos-cli/supabase`);
+  assert.deepEqual(supabase.injectedArgs.slice(0, 2), ['--workdir', repoRoot]);
   assert.equal(salesforce.env.SF_TARGET_ORG, 'fcos-devee');
   assert.equal(vercel.env.VERCEL_TOKEN, undefined);
   assert.equal(supabase.env.SUPABASE_ACCESS_TOKEN, undefined);
   assert.match(githubCredentialHelperValue(), /GH_CONFIG_DIR='.*\/\.fcos-cli\/github'/);
+  assert.match(githubCredentialHelperValue(), new RegExp(expectedGitHubConfig.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(githubCredentialHelperValue(), /env -u GH_TOKEN -u GITHUB_TOKEN/);
   assert.match(githubCredentialHelperValue(), /gh auth git-credential/);
 });
 
@@ -91,7 +107,9 @@ test('Salesforce CLI remains available to repair only shared-mirror drift', () =
 
 test('tracked pre-push guard uses the isolated FCOS GitHub identity', async () => {
   const hook = await readFile(new URL('../.githooks/pre-push', import.meta.url), 'utf8');
-  assert.match(hook, /GH_CONFIG_DIR="\$repo_root\/\.fcos-cli\/github" gh api user/);
+  assert.match(hook, /git rev-parse --path-format=absolute --git-common-dir/);
+  assert.match(hook, /env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR="\$github_config_dir" gh api user/);
+  assert.match(hook, /git merge-base "\$local_sha" "\$origin_main"/);
   assert.match(hook, /hocheunglai-oss\/fcos/);
   assert.doesNotMatch(hook, /gh auth switch|gh auth login/);
 });

@@ -4,17 +4,24 @@ import test from 'node:test';
 
 const read = (path) => readFile(new URL(path, import.meta.url), 'utf8');
 
-test('bootstrap PR quality is secret-free and preserves normal gates without circular evidence consumption', async () => {
+test('PR quality is read-only and blocks rather than executing an authenticated harness', async () => {
   const quality = await read('../.github/workflows/quality.yml');
-  assert.doesNotMatch(quality, /authenticated-browser:|listWorkflowRuns|secrets\.|FCOS_REQUIRE_AUTH_E2E|environment:/);
-  assert.doesNotMatch(quality, /head\.repo\.full_name|pull_request_target|checks: write|contents: write/);
+  assert.match(quality, /authenticated-browser/);
+  assert.match(quality, /actions: read/);
+  assert.match(quality, /listWorkflowRuns/);
+  assert.match(quality, /workflow_id: 'authenticated-release\.yml'/);
+  assert.match(quality, /trustedWorkflowPaths = new Set/);
+  assert.match(quality, /!trustedWorkflowPaths\.has\(run\.path\)/);
+  assert.match(quality, /run\.head_branch !== defaultBranch/);
+  assert.match(quality, /fcos-ci-evidence-\$\{sha\}/);
+  assert.match(quality, /artifact\.expired !== true/);
+  assert.match(quality, /No successful, non-expired trusted authenticated-candidate evidence artifact exists/);
+  assert.match(quality, /must be reviewed and installed on the default branch/);
+  assert.doesNotMatch(quality, /secrets\.FCOS_E2E_/);
+  assert.doesNotMatch(quality, /FCOS_REQUIRE_AUTH_E2E/);
+  assert.doesNotMatch(quality, /head\.repo\.full_name/);
+  assert.doesNotMatch(quality, /ref: \$\{\{ github\.event\.pull_request\.head\.sha \}\}/);
   assert.match(quality, /persist-credentials: false/);
-  assert.match(quality, /contents: read/);
-  for (const command of ['npm ci', 'npm run verify:fcuno-contract', 'npm test', 'npm run lint', 'npm run typecheck', 'npm run verify:graph-only', 'npm run build', 'npm run verify:performance', 'npm run verify:migrations']) {
-    assert.ok(quality.includes(command), `Preserve ${command}`);
-  }
-  assert.match(quality, /dependency-review-action@v4/);
-  assert.match(quality, /FCOS_REQUIRE_LIVE_MIGRATION_CHECK=1/);
 });
 
 test('manual authenticated evidence runs only a protected default-branch harness', async () => {

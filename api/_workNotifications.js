@@ -1,4 +1,5 @@
 import { validSystemErrorSignature } from './_systemErrorNotifications.js';
+import { emptyCiNotifications, isReadOnlyCiProfile } from './_readOnlyCiAccess.js';
 import { listSpecialTermApprovalQueue, listSpecialTermClauseConsolidations } from './_specialTermClauses.js';
 
 function cleanIds(values, limit = 100) {
@@ -326,6 +327,7 @@ async function loadDatabaseSnapshot(client, profileId, queryLimit, now, systemWi
 }
 
 export async function workNotificationsList(body = {}, accessContext) {
+  if (isReadOnlyCiProfile(accessContext?.profile)) return emptyCiNotifications(body);
   const { client, profile } = accessContext;
   const canViewMarkets = accessContext?.capabilities?.markets === true;
   const limit = Math.max(10, Math.min(Number(body.limit) || 50, 100));

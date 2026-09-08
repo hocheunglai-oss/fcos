@@ -6,6 +6,7 @@ import {
   buildAccountCreditStatement,
   buildBuyerExposureRange,
   buildStemCreditRelease,
+  buildUsedCreditBridge,
   CREDIT_EXPOSURE_DELIVERY_START,
   creditExposureDeliveryDate,
   decodeAccountCreditCursor,
@@ -22,7 +23,7 @@ import { dashboardAccountCreditStatementServiceInternals } from '../api/_dashboa
 const accountId = '001000000000001AAA';
 const groupId = '001000000000002AAA';
 const otherAccountId = '001000000000003AAA';
-const { compareStatementStems } = dashboardAccountCreditStatementServiceInternals;
+const { compareStatementStems, supplierCreditCashflowSelectFields } = dashboardAccountCreditStatementServiceInternals;
 
 test('credit category formulas preserve Salesforce individual, group, and special constraints', () => {
   const individual = accountCreditBalances({ category: 'Individual', individualLimit: 100, usedCustomer: 30 });
@@ -102,6 +103,29 @@ test('credit exposure defaults to open only and starts from the 2026 delivery cu
   assert.equal(isCreditExposureStemEligible({}), false);
 });
 
+test('supplier credit evidence only selects STEM currency when Production exposes it', () => {
+  const cashflowFields = new Map([
+    ['Id', { name: 'Id' }],
+    ['STEM__c', { name: 'STEM__c', relationshipName: 'STEM__r' }],
+    ['Account__c', { name: 'Account__c', relationshipName: 'Account__r' }],
+  ]);
+  const singleCurrencyFields = new Map([
+    ['Name', { name: 'Name' }],
+    ['Delivery_Date__c', { name: 'Delivery_Date__c' }],
+    ['Expected_Delivery_Date__c', { name: 'Expected_Delivery_Date__c' }],
+  ]);
+  const multiCurrencyFields = new Map(singleCurrencyFields);
+  multiCurrencyFields.set('CurrencyIsoCode', { name: 'CurrencyIsoCode' });
+
+  assert.equal(
+    supplierCreditCashflowSelectFields(cashflowFields, singleCurrencyFields).includes('STEM__r.CurrencyIsoCode'),
+    false,
+  );
+  assert.ok(
+    supplierCreditCashflowSelectFields(cashflowFields, multiCurrencyFields).includes('STEM__r.CurrencyIsoCode'),
+  );
+});
+
 test('ultimate GROUP ancestry chooses the highest named GROUP parent', () => {
   assert.equal(selectUltimateCreditGroup([
     { Id: accountId, Name: 'BUYER A' },
@@ -140,13 +164,30 @@ test('release evidence applies payment, scheduled cashflow, invoice due, and ove
   assert.equal(overdue.missedReleaseDate, '2026-08-01');
 });
 
-test('expected delivery plus payment term is the final dated forecast fallback', () => {
+test('numeric terms without actual delivery retain an undated residual', () => {
   const release = buildStemCreditRelease({
     today: '2026-08-16', accountId,
     stem: { Id: 'a01000000000003AAA', Account__c: accountId, QLIK_Receivable_Balance__c: 70, Expected_Delivery_Date__c: '2026-08-20', Payment_Term_Number__c: 30 },
   });
-  assert.equal(release.releaseDate, '2026-09-19');
+  assert.equal(release.releaseDate, '2026-09-18');
   assert.equal(release.releaseSource, 'expected_delivery_term');
+});
+
+
+test('credit due dates honor saved overrides, inclusive terms and manual-only cases', () => {
+  const base = { Id: 'a01000000000003AAA', Account__c: accountId, QLIK_Receivable_Balance__c: 70,
+    Delivery_Date__c: '2026-09-01', Expected_Delivery_Date__c: '2026-08-31', Payment_Term__c: '30',
+    Invoice_Due_Date__c: '2026-10-15', QLIK_Invoice_Due_Date__c: '2026-09-20' };
+  const release = (values, cashflows = []) => buildStemCreditRelease({ today: '2026-08-16', accountId, stem: { ...base, ...values }, cashflows });
+  assert.equal(release({ Due_Date_Override__c: true }).releaseDate, '2026-10-15');
+  assert.equal(release({ Due_Date_Override__c: false }).releaseDate, '2026-09-30');
+  assert.equal(release({ Due_Date_Override__c: false, Payment_Term__c: 'CIA' }).releaseDate, '2026-08-30');
+  assert.equal(release({ Due_Date_Override__c: true, Invoice_Due_Date__c: null }).releaseDate, null);
+  assert.equal(release({ Due_Date_Override__c: false, Not_Cancelled_STEM_Line_Item_Quantity__c: 0 }).releaseDate, null);
+  assert.equal(release({ Due_Date_Override__c: true, Not_Cancelled_STEM_Line_Item_Quantity__c: 0 }).releaseDate, '2026-10-15');
+  assert.equal(release({ Due_Date_Override__c: false, Delivery_Date__c: null }).releaseDate, '2026-09-29');
+  assert.equal(release({ Due_Date_Override__c: false, Delivery_Date__c: null, Expected_Delivery_Date__c: null }).releaseDate, null);
+  assert.equal(release({ Due_Date_Override__c: true }, [{ Invoice_Due_Date__c: '2026-09-25' }]).releaseDate, '2026-09-25');
 });
 
 test('signed negative receivables remain signed in exposure and projected balance movement', () => {
@@ -539,6 +580,27 @@ test('Salesforce quantity-range exposure uses midpoint until delivered quantity 
   assert.equal(delivered.children[0].basis, 'delivered_bdn');
 });
 
+test('COSCO workbook snapshot reconciles Salesforce used credit through supplier Cashflow exposure and ignores zero children', () => {
+  const bridge = buildUsedCreditBridge({
+    salesforceUsed: 7_939_684.58,
+    buyerExposure: 7_031_667.08,
+    currency: 'USD',
+    supplierEvidence: [
+      { cashflowId: 'cf-1', supplierInvoiceId: 'si-1', recordType: 'Supplier Invoice', accountId, accountName: 'COSCO', stemId: 'stem-1', stemName: 'HK2627211T', effectiveDate: '2026-08-01', currency: 'USD', grossAmount: 771_764, currentBalance: 771_764 },
+      { cashflowId: 'cf-1-duplicate', supplierInvoiceId: 'si-1', recordType: 'Supplier Invoice', accountId, accountName: 'COSCO', stemId: 'stem-1', stemName: 'HK2627211T', effectiveDate: '2026-08-01', currency: 'USD', grossAmount: 771_764, currentBalance: 771_764 },
+      { cashflowId: 'cf-2', supplierInvoiceId: 'si-2', recordType: 'Supplier Invoice', accountId, accountName: 'COSCO', stemId: 'stem-2', stemName: 'HK2625739T', effectiveDate: '2026-07-01', currency: 'USD', grossAmount: 136_253.50, currentBalance: 136_253.50 },
+      { cashflowId: 'cf-zero', recordType: 'Supplier Invoice', accountId, stemId: 'stem-zero', currency: 'USD', grossAmount: 0, currentBalance: 0, receivedPaidAmount: 0 },
+    ],
+  });
+  assert.equal(bridge.status, 'supplier_payables_explained');
+  assert.equal(bridge.supplierPayables, 908_017.50);
+  assert.equal(bridge.reconstructedUsed, 7_939_684.58);
+  assert.equal(bridge.unexplainedResidual, 0);
+  assert.equal(bridge.supplierStemCount, 2);
+  assert.equal(bridge.supplierCashflowCount, 3);
+  assert.deepEqual(bridge.evidence.map((row) => row.stemName), ['HK2627211T', 'HK2625739T']);
+});
+
 test('expected buyer invoice uses ordered and maximum range quantities instead of BDN quantities', () => {
   const estimate = expectedBuyerInvoiceEstimate({
     lineItems: [
@@ -607,8 +669,8 @@ test('Statement Evidence cutoff remains absolute for every history scope', async
   const source = await readFile(new URL('../api/_dashboardAccountCreditStatementService.js', import.meta.url), 'utf8');
   assert.match(source, /scope === 'all'[\s\S]*Account__c IN \([^\n]+\) AND \$\{creditExposureDeliveryWhere\(\)\}/);
   assert.match(source, /Id IN \([^\n]+\) AND \$\{creditExposureDeliveryWhere\(\)\}/);
-  assert.match(source, /mergeStems\(result\.records\)\.filter\(\(stem\) => isCreditExposureStemEligible\(stem\)\)/);
-  assert.match(source, /version: '15-payment-reliability'/);
+  assert.match(source, /mergeStems\(result\.records\)\.filter\(\(stem\) => isCreditExposureStemEligible\(stem\) && matchesScope\(stem\)\)/);
+  assert.match(source, /version: '17-due-date-override'/);
 });
 
 test('same-name credit fallback fails closed when more than one compatible snapshot reconciles', () => {
@@ -689,7 +751,9 @@ test('Salesforce loader keeps buyer-leg membership Account-only and loads expect
   assert.match(source, /QLIK_Receivable_Balance__c != 0/);
   assert.match(source, /Delivery_Date__c >= \$\{CREDIT_EXPOSURE_DELIVERY_START\}/);
   assert.match(source, /Expected_Delivery_Date__c >= \$\{CREDIT_EXPOSURE_DELIVERY_START\}/);
-  assert.doesNotMatch(source, /supplierCreditEvidence|supplierExposure/);
+  assert.match(source, /RecordType\.Name IN \('Supplier Invoice','Supplier Payment'\)/);
+  assert.match(source, /Payable_Receivable__c != 0 OR Receivable_Payable_Balance_Amount__c != 0 OR Received_Paid_Amount__c != 0/);
+  assert.match(source, /\$\{stemRelationship\}\.Delivery_Date__c >= \$\{CREDIT_EXPOSURE_DELIVERY_START\}/);
   assert.match(source, /filter\(\(stem\) => isCreditExposureStemEligible\(stem\)\)/);
   assert.match(source, /FROM Invoice__c WHERE STEM__c IN/);
   assert.match(source, /Proforma__c = false AND Deprecated__c = false/);
@@ -762,8 +826,7 @@ test('credit statement handlers are authenticated server-cached reads and the UI
   assert.match(statement, /BASIS MAX QTY/);
   assert.match(statement, /Salesforce Mid Qty/);
   assert.match(statement, /Show quantity range/);
-  assert.match(statement, /Salesforce GROUP snapshot differs from live buyer exposure/);
-  assert.doesNotMatch(statement, /Supplier Cashflow evidence|supplier payables explained/i);
+  assert.match(statement, /used-credit reconciliation/);
   assert.match(statement, /Solid lines use Salesforce QLIK mid-range exposure/);
   assert.match(statement, /aria-pressed=\{series\.account\}/);
   assert.match(statement, /aria-pressed=\{series\.group\}/);

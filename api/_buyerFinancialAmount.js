@@ -8,11 +8,20 @@ function text(value) {
   return String(value || '').trim();
 }
 
+/** Prefer explicit credit-note flags when available; retain legacy CN names. */
+export function isBuyerCreditNote(invoice) {
+  return Boolean(invoice)
+    && (invoice.Is_Credit_Note__c === true
+      || invoice.Credit_Note__c === true
+      || invoice.CreditNote__c === true
+      || /(?:^|-)CN(?:-|$)/i.test(text(invoice.Name)));
+}
+
 export function isFinalBuyerInvoice(invoice) {
   return Boolean(invoice)
     && invoice.Proforma__c !== true
     && invoice.Deprecated__c !== true
-    && !/(?:^|-)CN(?:-|$)/i.test(text(invoice.Name));
+    && !isBuyerCreditNote(invoice);
 }
 
 export function resolveBuyerFinancialAmount({

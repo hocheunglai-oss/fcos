@@ -11,7 +11,7 @@ import {
   xeroContactSyncServiceClient,
 } from './_xeroContactSync.js';
 
-const DEFAULT_CUTOFF = '2026-01-01';
+export const XERO_FINANCIAL_CUTOFF = '2026-01-01';
 const MAX_BATCH_SIZE = 25;
 const DEFAULT_CALLS_PER_MINUTE = 45;
 const DEFAULT_DAILY_LIMIT = 1000;
@@ -19,21 +19,21 @@ const DEFAULT_DAILY_RESERVE_RATIO = 0.2;
 const ACTIVE_XERO_STATUSES = new Set(['DRAFT', 'SUBMITTED', 'AUTHORISED', 'PAID']);
 const MUTABLE_XERO_STATUSES = new Set(['DRAFT', 'SUBMITTED', 'AUTHORISED']);
 const BUYER_INVOICE_QUERY = `
-  SELECT Id, Name, STEM__c, STEM__r.Name, STEM__r.KeyStem__c,
+  SELECT Id, Name, CreatedDate, STEM__c, STEM__r.Name, STEM__r.KeyStem__c,
          STEM__r.Account__c, STEM__r.Account__r.Name, STEM__r.Account__r.Company_Code__c,
          STEM__r.Delivery_Date__c, Amount__c, Invoice_Date__c, Invoice_Due_Date__c, LastModifiedDate
   FROM Invoice__c
-  WHERE Invoice_Date__c >= {cutoff}
+  WHERE (Invoice_Date__c >= {cutoff} OR (Invoice_Date__c = null AND CreatedDate >= {cutoff}T00:00:00Z))
     AND Proforma__c = false
     AND Deprecated__c = false
   ORDER BY Invoice_Date__c, Id`;
 const SUPPLIER_INVOICE_QUERY = `
-  SELECT Id, Name, STEM__c, STEM__r.Name, STEM__r.KeyStem__c,
+  SELECT Id, Name, CreatedDate, STEM__c, STEM__r.Name, STEM__r.KeyStem__c,
          Supplier__c, Supplier__r.Name, Supplier__r.Company_Code__c,
          Invoice_Amount__c, Invoice_Date__c, Invoice_Due_Date__c,
          Payable_Balance__c, LastModifiedDate
   FROM Supplier_Invoice__c
-  WHERE Invoice_Date__c >= {cutoff}
+  WHERE (Invoice_Date__c >= {cutoff} OR (Invoice_Date__c = null AND CreatedDate >= {cutoff}T00:00:00Z))
   ORDER BY Invoice_Date__c, Id`;
 
 export const XERO_FINANCIAL_ACTION_LABELS = Object.freeze({
@@ -123,7 +123,7 @@ export function classifyXeroFinancialDocument(source, candidates, {
   if (isProtectedXeroDocument(match, organisation)) {
     return {
       action: 'protected_legacy',
-      status: 'protected',
+      status: differences.length ? 'protected' : 'eligible',
       blockers: [],
       warnings: differences.length
         ? ['Xero accounting history is protected; Salesforce differences are retained as an exception.']
@@ -280,7 +280,7 @@ export async function xeroFinancialSyncPreview(body = {}, dependencies = {}) {
     fetchImpl = fetch,
     client = xeroContactSyncServiceClient(env),
   } = dependencies;
-  const cutoff = validDate(body.cutoffDate) || DEFAULT_CUTOFF;
+  const cutoff = XERO_FINANCIAL_CUTOFF;
   const actor = actorFields(accessContext);
   const connection = await getFreshXeroConnection(client, { env, fetchImpl });
   assertScopes(connection, ['accounting.invoices', 'accounting.contacts', 'accounting.settings.read'], 'Financial sync preview');
@@ -395,15 +395,15 @@ export async function xeroFinancialSyncRun(body = {}, {
   const outcomes = [];
   try {
     const [currentSalesforce, currentXero] = await Promise.all([
-      loadSalesforceFinancialSnapshot(started.cutoff_date || DEFAULT_CUTOFF),
-      loadXeroDocumentSnapshot(connection, started.cutoff_date || DEFAULT_CUTOFF, { env, fetchImpl, onResponse }),
+      loadSalesforceFinancialSnapshot(XERO_FINANCIAL_CUTOFF),
+      loadXeroDocumentSnapshot(connection, XERO_FINANCIAL_CUTOFF, { env, fetchImpl, onResponse }),
     ]);
     assertXeroFinancialDailyReserve(rate, env);
     assertDocumentRunStillCurrent(rows || [], currentSalesforce, currentXero);
     const rowGroups = chunks(rows || [], MAX_BATCH_SIZE);
     for (const [groupIndex, group] of rowGroups.entries()) {
       const pending = group.filter((row) => !['linked', 'updated', 'created'].includes(row.status));
-      const noWrite = pending.filter((row) => row.proposed_action === 'link');
+      const noWrite = pending.filter((row) => ['link', 'protected_legacy'].includes(row.proposed_action));
       for (const row of noWrite) outcomes.push(await finalizeLinkedItem(client, row));
       const writes = pending.filter((row) => ['safe_update', 'create_draft'].includes(row.proposed_action));
       for (const collection of ['Invoices', 'CreditNotes']) {
@@ -566,7 +566,7 @@ export async function xeroFinancialPaymentApply(body = {}, dependencies = {}) {
 }
 
 async function previewPayments(body, { accessContext, env, fetchImpl, client }) {
-  const cutoff = validDate(body.cutoffDate) || DEFAULT_CUTOFF;
+  const cutoff = XERO_FINANCIAL_CUTOFF;
   const connection = await getFreshXeroConnection(client, { env, fetchImpl });
   assertScopes(connection, ['accounting.payments.read', 'accounting.invoices'], 'Payment preview');
   const [payments, documentMappings, paymentMappings, bankMappings] = await Promise.all([
@@ -583,12 +583,14 @@ async function previewPayments(body, { accessContext, env, fetchImpl, client }) 
     loadAllXeroPages(connection, '/Invoices', 'Invoices', { env, fetchImpl, onResponse }),
   ]);
   const documentBySupplierInvoice = new Map((documentMappings.data || []).filter((row) => row.salesforce_object === 'Supplier_Invoice__c').map((row) => [row.salesforce_id, row]));
+  const documentMappingById = new Map((documentMappings.data || []).map((row) => [row.id, row]));
   const buyerByStem = index((documentMappings.data || []).filter((row) => row.salesforce_object === 'Invoice__c'), (row) => row.retained_differences?.stemId || row.stem_id);
   const existingBySalesforce = new Map((paymentMappings.data || []).map((row) => [row.salesforce_payment_id, row]));
   const bankByName = new Map((bankMappings.data || []).map((row) => [normalizeName(row.salesforce_bank_name), row]));
   const currentDocumentById = new Map(xeroInvoices.map((row) => [row.InvoiceID, normalizeXeroInvoice(row)]));
-  const rows = payments.map((payment) => classifyPayment(payment, {
+  const rows = payments.map((payment) => classifyXeroFinancialPayment(payment, {
     documentBySupplierInvoice,
+    documentMappingById,
     buyerByStem,
     existingBySalesforce,
     bankByName,
@@ -598,12 +600,25 @@ async function previewPayments(body, { accessContext, env, fetchImpl, client }) 
   return { rows, summary: summarizeClassifications(rows), rateLimit: rate, actor: actorFields(accessContext) };
 }
 
-function classifyPayment(payment, context) {
+export function classifyXeroFinancialPayment(payment, context) {
   const existing = context.existingBySalesforce.get(payment.Id);
-  if (existing) return paymentRow(payment, 'payment_link', 'protected', [], existing, null);
+  if (existing) {
+    const xeroPayment = context.xeroPayments.find((row) => row.PaymentID === existing.xero_payment_id);
+    const documentMapping = context.documentMappingById.get(existing.document_mapping_id);
+    const blockers = unsupportedPaymentBlockers(payment);
+    if (!xeroPayment) blockers.push('The stored Xero payment link no longer points to a current payment.');
+    if (!documentMapping) blockers.push('The stored Xero payment no longer has its document mapping.');
+    if (xeroPayment && documentMapping && xeroPayment.Invoice?.InvoiceID !== documentMapping.xero_document_id) blockers.push('The stored Xero payment is allocated to a different Xero transaction.');
+    if (xeroPayment && !sameMoney(xeroPayment.Amount, Math.abs(Number(payment.Amount__c || 0)))) blockers.push('The stored Xero payment amount differs from Salesforce.');
+    if (xeroPayment && dateOnly(xeroPayment.Date) !== dateOnly(payment.Date__c)) blockers.push('The stored Xero payment date differs from Salesforce.');
+    if (xeroPayment && existing.xero_bank_account_id && xeroPayment.Account?.AccountID !== existing.xero_bank_account_id) blockers.push('The stored Xero payment bank account differs from its approved mapping.');
+    if (xeroPayment && String(xeroPayment.Reference || '') !== paymentReference(payment)) blockers.push('The stored Xero payment reference differs from Salesforce.');
+    if (existing.source_fingerprint !== paymentSourceFingerprint(payment)) blockers.push('The Salesforce payment changed after it was linked to Xero.');
+    return paymentRow(payment, blockers.length ? 'blocked' : 'payment_link', blockers.length ? 'blocked' : 'protected', blockers, documentMapping, xeroPayment);
+  }
   const type = String(payment.RecordType?.DeveloperName || '');
   let documentMapping = null;
-  const blockers = [];
+  const blockers = unsupportedPaymentBlockers(payment);
   if (type === 'Payable') {
     documentMapping = context.documentBySupplierInvoice.get(payment.Supplier_Invoice__c);
     if (!payment.Supplier_Invoice__c) blockers.push('Payable payment is not linked to one exact Supplier Invoice.');
@@ -628,7 +643,11 @@ function classifyPayment(payment, context) {
     && sameMoney(row.Amount, amount)
     && dateOnly(row.Date) === dateOnly(payment.Date__c)
   );
-  if (exactExisting.length === 1) return paymentRow(payment, 'payment_link', 'eligible', [], documentMapping, exactExisting[0]);
+  if (exactExisting.length === 1) {
+    if (bank && exactExisting[0].Account?.AccountID !== bank.xero_bank_account_id) blockers.push('The matching Xero payment uses a different bank account.');
+    if (String(exactExisting[0].Reference || '') !== paymentReference(payment)) blockers.push('The matching Xero payment reference differs from Salesforce.');
+    return paymentRow(payment, blockers.length ? 'blocked' : 'payment_link', blockers.length ? 'blocked' : 'eligible', blockers, documentMapping, exactExisting[0]);
+  }
   if (exactExisting.length > 1) blockers.push('More than one Xero payment matches this exact allocation.');
   if (currentDocument && amount > Number(currentDocument.amountDue || 0) + 0.01) blockers.push('Payment exceeds the linked Xero transaction amount due.');
   const proposedPayment = blockers.length ? null : {
@@ -636,7 +655,7 @@ function classifyPayment(payment, context) {
     Account: { AccountID: bank.xero_bank_account_id },
     Date: payment.Date__c,
     Amount: amount,
-    Reference: payment.Reference__c || payment.Name,
+    Reference: paymentReference(payment),
   };
   return paymentRow(payment, blockers.length ? 'blocked' : 'payment_apply', blockers.length ? 'blocked' : 'eligible', blockers, documentMapping, null, proposedPayment);
 }
@@ -658,30 +677,50 @@ function paymentRow(payment, action, status, blockers, mapping, xeroPayment, pro
     documentMappingId: mapping?.id || null,
     xeroPaymentId: xeroPayment?.PaymentID || null,
     proposedPayment,
-    sourceFingerprint: hashJson({ id: payment.Id, amount: payment.Amount__c, date: payment.Date__c, bank: payment.Bank__c, invoice: payment.Supplier_Invoice__c, stem: payment.STEM__c }),
+    sourceFingerprint: paymentSourceFingerprint(payment),
   };
+}
+
+function paymentSourceFingerprint(payment) {
+  return hashJson({ id: payment.Id, amount: payment.Amount__c, date: payment.Date__c, bank: payment.Bank__c, invoice: payment.Supplier_Invoice__c, stem: payment.STEM__c });
+}
+
+function paymentReference(payment) {
+  return String(payment.Reference__c || payment.Name || '');
+}
+
+function unsupportedPaymentBlockers(payment) {
+  const blockers = [];
+  if (payment.Is_Deposit__c) blockers.push('Deposit payments require Finance allocation before Xero sync.');
+  if (payment.Commission_Invoice__c) blockers.push('Commission-linked payments require Finance allocation before Xero sync.');
+  if (payment.Is_Volume_Discount__c) blockers.push('Volume-discount payments require Finance allocation before Xero sync.');
+  return blockers;
 }
 
 async function loadSalesforceFinancialSnapshot(cutoff) {
   const quotedCutoff = cutoff;
   const queries = [
-    BUYER_INVOICE_QUERY.replace('{cutoff}', quotedCutoff),
-    SUPPLIER_INVOICE_QUERY.replace('{cutoff}', quotedCutoff),
+    BUYER_INVOICE_QUERY.replaceAll('{cutoff}', quotedCutoff),
+    SUPPLIER_INVOICE_QUERY.replaceAll('{cutoff}', quotedCutoff),
     `SELECT Id, Name, Buyer_Invoice__c, Supplier_Invoice__c, Product__c, Product__r.Name,
             Quantity_Delivered_Per_BDN__c, Quantity__c, Unit_of_Measure__c,
             Price_Per_Unit__c, Cost_Per_Unit__c, Total_Price__c, Total_Cost__c, LastModifiedDate
        FROM STEM_Line_Item__c
       WHERE Cancelled__c = false
-        AND ((Buyer_Invoice__c != null AND Buyer_Invoice__r.Invoice_Date__c >= ${quotedCutoff})
-          OR (Supplier_Invoice__c != null AND Supplier_Invoice__r.Invoice_Date__c >= ${quotedCutoff}))`,
+        AND ((Buyer_Invoice__c != null AND (Buyer_Invoice__r.Invoice_Date__c >= ${quotedCutoff}
+          OR (Buyer_Invoice__r.Invoice_Date__c = null AND Buyer_Invoice__r.CreatedDate >= ${quotedCutoff}T00:00:00Z)))
+          OR (Supplier_Invoice__c != null AND (Supplier_Invoice__r.Invoice_Date__c >= ${quotedCutoff}
+          OR (Supplier_Invoice__r.Invoice_Date__c = null AND Supplier_Invoice__r.CreatedDate >= ${quotedCutoff}T00:00:00Z))))`,
     `SELECT Id, Name, Description__c, Buyer_Invoice__c, Supplier_Invoice__c, Product2Id__c, Product2Id__r.Name,
             Quantity_Delivered_Per_BDN__c, Quantity__c, Unit_of_Measure__c,
             Unit_Price__c, Unit_Cost__c, Lumpsum_Price__c, Lumpsum_Cost__c,
             Line_Total__c, Line_Total_Buy__c, LastModifiedDate
        FROM STEM_Extra_Cost__c
       WHERE Cancelled__c = false
-        AND ((Buyer_Invoice__c != null AND Buyer_Invoice__r.Invoice_Date__c >= ${quotedCutoff})
-          OR (Supplier_Invoice__c != null AND Supplier_Invoice__r.Invoice_Date__c >= ${quotedCutoff}))`,
+        AND ((Buyer_Invoice__c != null AND (Buyer_Invoice__r.Invoice_Date__c >= ${quotedCutoff}
+          OR (Buyer_Invoice__r.Invoice_Date__c = null AND Buyer_Invoice__r.CreatedDate >= ${quotedCutoff}T00:00:00Z)))
+          OR (Supplier_Invoice__c != null AND (Supplier_Invoice__r.Invoice_Date__c >= ${quotedCutoff}
+          OR (Supplier_Invoice__r.Invoice_Date__c = null AND Supplier_Invoice__r.CreatedDate >= ${quotedCutoff}T00:00:00Z))))`,
   ];
   const results = await sfCompositeQueries(queries.map((soql) => ({ soql, clean: true, limit: 100000 })));
   const [buyerResult, supplierResult, lineResult, extraResult] = results;
@@ -711,15 +750,11 @@ async function loadSalesforceFinancialSnapshot(cutoff) {
 
 async function loadSalesforcePayments(cutoff) {
   const result = await sfQuery(`
-    SELECT Id, Name, RecordType.DeveloperName, STEM__c, Account__c, Amount__c, Date__c,
+    SELECT Id, Name, CreatedDate, RecordType.DeveloperName, STEM__c, Account__c, Amount__c, Date__c,
            Supplier_Invoice__c, Reference__c, Bank__c, Is_Deposit__c,
            Commission_Invoice__c, Is_Volume_Discount__c, LastModifiedDate
       FROM Payment__c
-     WHERE Date__c >= ${cutoff}
-       AND RecordType.DeveloperName IN ('Receivable','Payable')
-       AND Is_Deposit__c = false
-       AND Commission_Invoice__c = null
-       AND Is_Volume_Discount__c = false
+     WHERE (Date__c >= ${cutoff} OR (Date__c = null AND CreatedDate >= ${cutoff}T00:00:00Z))
      ORDER BY Date__c, Id`, { clean: true, limit: 100000 });
   return result.records || [];
 }
@@ -1083,8 +1118,11 @@ function buildAccountingLine(row, direction, credit, mappingByKey) {
 
 function mergeClassification(source, classification) {
   const combinedBlockers = uniqueStrings([...(source.blockers || []), ...(classification.blockers || [])]);
+  const protectedExact = classification.action === 'protected_legacy'
+    && !combinedBlockers.length
+    && !(classification.differences || []).length;
   const status = classification.action === 'protected_legacy'
-    ? 'protected'
+    ? (protectedExact ? 'eligible' : 'protected')
     : combinedBlockers.length ? 'blocked' : classification.status;
   const proposedPayload = combinedBlockers.length || classification.action === 'protected_legacy'
     ? null
@@ -1309,7 +1347,7 @@ function summarizeClassifications(rows) {
   const summary = { total: rows.length, eligible: 0, protected: 0, blocked: 0, link: 0, safeUpdate: 0, createDraft: 0, paymentApply: 0, paymentLink: 0 };
   for (const row of rows) {
     if (row.status === 'eligible') summary.eligible += 1;
-    if (row.status === 'protected') summary.protected += 1;
+    if (row.action === 'protected_legacy') summary.protected += 1;
     if (row.status === 'blocked') summary.blocked += 1;
     if (row.action === 'link') summary.link += 1;
     if (row.action === 'safe_update') summary.safeUpdate += 1;

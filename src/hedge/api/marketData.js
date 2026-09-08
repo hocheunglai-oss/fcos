@@ -17,10 +17,35 @@ async function request(payload, options = { cache: false }) {
   return response.data?.data;
 }
 
+function marketIntelligenceError(response) {
+  const envelope = response?.data;
+  if (!envelope || typeof envelope !== 'object') return null;
+  return envelope.error || envelope.data?.error || null;
+}
+
+function unwrapMarketIntelligenceResponse(response) {
+  return response?.data?.data ?? response?.data;
+}
+
+function isMarketIntelligenceDto(value) {
+  return value !== null && typeof value === 'object' && !value.error;
+}
+
 async function requestMarketIntelligence(handler, payload = {}, options = {}) {
-  const response = await appClient.functions.invoke(handler, payload, options);
-  if (response.data?.error) throw new Error(response.data.error);
-  return response.data?.data ?? response.data;
+  const backgroundUpdate = options.onBackgroundUpdate;
+  const response = await appClient.functions.invoke(handler, payload, {
+    ...options,
+    onBackgroundUpdate: backgroundUpdate
+      ? (result) => {
+        if (marketIntelligenceError(result)) return;
+        const data = unwrapMarketIntelligenceResponse(result);
+        if (isMarketIntelligenceDto(data)) backgroundUpdate(data);
+      }
+      : undefined,
+  });
+  const error = marketIntelligenceError(response);
+  if (error) throw new Error(error);
+  return unwrapMarketIntelligenceResponse(response);
 }
 
 export const MarketPrice = {
@@ -67,12 +92,18 @@ export function loadMarketHistory(payload, options = {}) {
   });
 }
 
-export function loadMarketPulseSnapshot(options = {}) {
-  return requestMarketIntelligence('marketPulseSnapshot', {}, {
+// `payload` is deliberately optional to preserve the original
+// loadMarketPulseSnapshot({ force }) call shape.  A caller can now pass an
+// explicit historical as-of date without making the current Pulse historical.
+export function loadMarketPulseSnapshot(payload = {}, options = {}) {
+  const { asOfDate, ...legacyOptions } = payload;
+  const requestOptions = { ...legacyOptions, ...options };
+  const requestPayload = asOfDate ? { asOfDate } : {};
+  return requestMarketIntelligence('marketPulseSnapshot', requestPayload, {
     cache: true,
     cacheTtlMs: 60_000,
     cacheTags: ['markets', 'market-pulse'],
-    ...options,
+    ...requestOptions,
   });
 }
 

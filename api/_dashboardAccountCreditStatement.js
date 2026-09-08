@@ -3,6 +3,7 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const ONE_DAY_MS = 86_400_000;
 
 import { SALESFORCE_CORPORATE_CURRENCY } from './_decisionDashboard.js';
+import { calculatedBuyerPayTermDate, resolvedBuyerInvoiceDueDate } from './_buyerInvoiceDates.js';
 import { PAYMENT_DATA_RELIABLE_FROM } from '../src/lib/paymentDataReliability.js';
 import {
   BUYER_PAYMENT_CONSERVATIVENESS,
@@ -216,6 +217,7 @@ export function resolveCreditSnapshotCandidate({
   candidates = [],
   candidateGroupsById = {},
   openStems = [],
+  supplierExposure = 0,
   complete = true,
 } = {}) {
   const selectedId = idKey(selectedAccount?.Id);
@@ -250,7 +252,7 @@ export function resolveCreditSnapshotCandidate({
       const individualExposure = windowStems
         .filter((stem) => idKey(stem.Account__c) === selectedId)
         .reduce((sum, stem) => sum + value(stem.QLIK_Receivable_Balance__c), 0);
-      const groupExposure = windowStems.reduce((sum, stem) => sum + value(stem.QLIK_Receivable_Balance__c), 0);
+      const groupExposure = windowStems.reduce((sum, stem) => sum + value(stem.QLIK_Receivable_Balance__c), 0) + value(supplierExposure);
       const snapshot = accountCreditSnapshot(candidate);
       const individual = reconcileCreditExposure(snapshot.usedCustomer, individualExposure, { complete });
       const group = reconcileCreditExposure(snapshot.usedGroup, groupExposure, { complete });
@@ -290,12 +292,12 @@ function groupCreditSnapshotSignature(snapshot = {}) {
   return JSON.stringify(normalized);
 }
 
-export function resolveGroupCreditAuthority({ group = null, members = [], openStems = [], complete = true } = {}) {
+export function resolveGroupCreditAuthority({ group = null, members = [], openStems = [], supplierExposure = 0, complete = true } = {}) {
   const groupId = idKey(group?.Id);
   if (!groupId || !complete) return { status: 'unresolved', candidates: [] };
   const currencies = new Set(openStems.map((stem) => text(stem?.CurrencyIsoCode)).filter(Boolean));
   if (currencies.size > 1) return { status: 'unresolved', candidates: [] };
-  const groupExposure = openStems.reduce((sum, stem) => sum + value(stem?.QLIK_Receivable_Balance__c), 0);
+  const groupExposure = openStems.reduce((sum, stem) => sum + value(stem?.QLIK_Receivable_Balance__c), 0) + value(supplierExposure);
   const matches = (members || []).filter((member) => member?.Inactive_Suspended__c !== true).flatMap((member) => {
     const snapshot = accountCreditSnapshot(member);
     if (snapshot.category !== 'Group' || !(number(snapshot.groupLimit) > 0)) return [];
@@ -405,6 +407,127 @@ export function reconcileCreditExposure(expected, reconstructed, { complete = tr
   return { complete: true, matches: Math.abs(difference) <= tolerance, expected: authoritative, reconstructed: calculated, difference, tolerance };
 }
 
+export function buildUsedCreditBridge({
+  salesforceUsed = null,
+  buyerExposure = null,
+  supplierEvidence = [],
+  complete = true,
+  currency = SALESFORCE_CORPORATE_CURRENCY,
+} = {}) {
+  const authoritative = number(salesforceUsed);
+  const buyer = number(buyerExposure);
+  const activeSupplierEvidence = (supplierEvidence || []).filter((row) => [
+    row?.grossAmount,
+    row?.currentBalance,
+    row?.receivedPaidAmount,
+  ].some((candidate) => {
+    const parsed = number(candidate);
+    return parsed != null && Math.abs(parsed) > 0.005;
+  }));
+  const grouped = new Map();
+  const countedGrossKeys = new Set();
+  const countedBalanceKeys = new Set();
+  const countedPaymentKeys = new Set();
+  const currencies = new Set();
+  let supplierPayables = 0;
+
+  for (const row of activeSupplierEvidence) {
+    const rowCurrency = text(row?.currency) || currency;
+    currencies.add(rowCurrency);
+    const key = `${idKey(row?.accountId) || text(row?.accountId)}:${idKey(row?.stemId) || text(row?.stemId)}:${rowCurrency}`;
+    const current = grouped.get(key) || {
+      accountId: row?.accountId || null,
+      accountName: row?.accountName || null,
+      stemId: row?.stemId || null,
+      stemName: row?.stemName || null,
+      effectiveDate: dateOnly(row?.effectiveDate),
+      currency: rowCurrency,
+      grossAmount: 0,
+      currentBalance: 0,
+      receivedPaidAmount: 0,
+      dueDate: dateOnly(row?.dueDate),
+      receivedPaidDate: dateOnly(row?.receivedPaidDate),
+      cashflowCount: 0,
+    };
+    current.cashflowCount += 1;
+    const recordType = text(row?.recordType);
+    const gross = number(row?.grossAmount);
+    if (/^Supplier Invoice$/i.test(recordType) && gross != null && Math.abs(gross) > 0.005) {
+      const grossKey = text(row?.supplierInvoiceId)
+        || text(row?.stemLineItemId)
+        || text(row?.stemExtraCostId)
+        || text(row?.cashflowId)
+        || `${key}:gross:${current.cashflowCount}`;
+      if (!countedGrossKeys.has(grossKey)) {
+        countedGrossKeys.add(grossKey);
+        supplierPayables += gross;
+        current.grossAmount += gross;
+      }
+    }
+    const balance = number(row?.currentBalance);
+    if (/^Supplier Invoice$/i.test(recordType) && balance != null && Math.abs(balance) > 0.005) {
+      const balanceKey = text(row?.supplierInvoiceId)
+        || text(row?.stemLineItemId)
+        || text(row?.stemExtraCostId)
+        || text(row?.cashflowId)
+        || `${key}:balance:${current.cashflowCount}`;
+      if (!countedBalanceKeys.has(balanceKey)) {
+        countedBalanceKeys.add(balanceKey);
+        current.currentBalance += balance;
+      }
+    }
+    const receivedPaid = number(row?.receivedPaidAmount);
+    if (/^Supplier Payment$/i.test(recordType) && receivedPaid != null && Math.abs(receivedPaid) > 0.005) {
+      const paymentKey = text(row?.paymentId) || text(row?.cashflowId) || `${key}:payment:${current.cashflowCount}`;
+      if (!countedPaymentKeys.has(paymentKey)) {
+        countedPaymentKeys.add(paymentKey);
+        current.receivedPaidAmount += receivedPaid;
+      }
+    }
+    const dueDate = dateOnly(row?.dueDate);
+    if (dueDate && (!current.dueDate || dueDate < current.dueDate)) current.dueDate = dueDate;
+    const receivedPaidDate = dateOnly(row?.receivedPaidDate);
+    if (receivedPaidDate && (!current.receivedPaidDate || receivedPaidDate > current.receivedPaidDate)) current.receivedPaidDate = receivedPaidDate;
+    grouped.set(key, current);
+  }
+
+  const currencyConflict = currencies.size > 1 || (currencies.size === 1 && !currencies.has(currency));
+  const bridgeComplete = complete && !currencyConflict && authoritative != null && buyer != null;
+  const supplier = currencyAmount(supplierPayables);
+  const reconstructed = buyer == null ? null : currencyAmount(buyer + supplier);
+  const buyerReconciliation = reconcileCreditExposure(authoritative, buyer, { complete: bridgeComplete });
+  const totalReconciliation = reconcileCreditExposure(authoritative, reconstructed, { complete: bridgeComplete });
+  let status = 'unexplained';
+  if (!bridgeComplete) status = 'incomplete';
+  else if (Math.abs(supplier) > CREDIT_RECONCILIATION_TOLERANCE && totalReconciliation.matches) status = 'supplier_payables_explained';
+  else if (Math.abs(supplier) <= CREDIT_RECONCILIATION_TOLERANCE && buyerReconciliation.matches) status = 'buyer_only_reconciled';
+
+  return {
+    complete: bridgeComplete,
+    status,
+    currency,
+    salesforceUsed: authoritative,
+    buyerReceivables: buyer,
+    supplierPayables: supplier,
+    reconstructedUsed: reconstructed,
+    unexplainedResidual: bridgeComplete ? currencyAmount(authoritative - reconstructed) : null,
+    tolerance: CREDIT_RECONCILIATION_TOLERANCE,
+    currencyConflict,
+    buyerStemCount: null,
+    supplierStemCount: [...grouped.values()].filter((row) => Math.abs(row.grossAmount) > 0.005).length,
+    supplierCashflowCount: activeSupplierEvidence.length,
+    evidence: [...grouped.values()]
+      .map((row) => ({
+        ...row,
+        grossAmount: currencyAmount(row.grossAmount),
+        currentBalance: currencyAmount(row.currentBalance),
+        receivedPaidAmount: currencyAmount(row.receivedPaidAmount),
+      }))
+      .filter((row) => [row.grossAmount, row.currentBalance, row.receivedPaidAmount].some((candidate) => Math.abs(candidate || 0) > 0.005))
+      .sort((left, right) => String(right.effectiveDate || '').localeCompare(String(left.effectiveDate || '')) || String(left.stemName || '').localeCompare(String(right.stemName || ''))),
+  };
+}
+
 function paymentDate(payment) {
   return dateOnly(payment.paymentDate || payment.Date__c || payment.Payment_Date__c || payment.CreatedDate);
 }
@@ -428,19 +551,25 @@ function earliestDated(rows, fields, today, { allowPast = false } = {}) {
   return candidates.sort((left, right) => left.date.localeCompare(right.date))[0] || null;
 }
 
-function contractualReleaseCandidate(stem, cashflows, today) {
+function contractualReleaseCandidate(stem, cashflows, today, buyerInvoices = []) {
+  const invoiceDue = earliestDated(buyerInvoices, ['Invoice_Due_Date__c'], today, { allowPast: true });
   const cashflowDue = earliestDated(cashflows, ['Invoice_Due_Date__c'], today, { allowPast: true });
-  const stemDue = [stem.Invoice_Due_Date__c, stem.QLIK_Invoice_Due_Date__c, stem.Due_Date__c]
-    .map(dateOnly).filter(Boolean).sort()[0] || null;
-  const authoritativeDue = cashflowDue?.date || stemDue;
+  const dueBasis = { ...stem, Payment_Term__c: stem.Payment_Term__c ?? stem.Payment_Term_Number__c };
+  const stemDue = resolvedBuyerInvoiceDueDate(dueBasis);
+  const authoritativeDue = invoiceDue?.date || cashflowDue?.date || stemDue;
   if (authoritativeDue) {
     return authoritativeDue < today
       ? { date: null, missedDate: authoritativeDue, source: 'past_due_unknown', sourceLabel: 'Past due — release unknown' }
-      : { date: authoritativeDue, source: cashflowDue ? 'cashflow_invoice_due' : 'stem_invoice_due', sourceLabel: cashflowDue ? 'Cashflow invoice due' : 'STEM invoice due' };
+      : { date: authoritativeDue, source: invoiceDue ? 'buyer_invoice_due' : cashflowDue ? 'cashflow_invoice_due' : 'stem_invoice_due', sourceLabel: invoiceDue ? 'Buyer invoice due' : cashflowDue ? 'Cashflow invoice due' : 'STEM invoice due' };
   }
 
-  const expectedPayment = dateOnly(stem.Expected_Delivery_Date_Payment_Term__c)
-    || addDays(stem.Delivery_Date__c || stem.Expected_Delivery_Date__c, stem.Payment_Term_Number__c ?? stem.Payment_Term__c);
+  // A checked override is authoritative even when blank. Known extra-cost-only
+  // cases intentionally have no contractual calculation. Forecasts may use ETA
+  // for product deliveries, but must retain the shared inclusive day-one rule.
+  const expectedPayment = stem.Due_Date_Override__c === true ? null : calculatedBuyerPayTermDate({
+    ...dueBasis,
+    Delivery_Date__c: stem.Delivery_Date__c || stem.Expected_Delivery_Date__c,
+  });
   if (expectedPayment) {
     return expectedPayment < today
       ? { date: null, missedDate: expectedPayment, source: 'past_due_unknown', sourceLabel: 'Past due — release unknown' }
@@ -466,8 +595,8 @@ export function adjustCreditForecastBusinessDay(date, today, blockedDates = []) 
   return { date: originalDate, originalDate, adjusted: originalDate !== dateOnly(date) };
 }
 
-function releaseCandidate(stem, cashflows, today, paymentModel = null, blockedDates = []) {
-  const contractual = contractualReleaseCandidate(stem, cashflows, today);
+function releaseCandidate(stem, cashflows, today, paymentModel = null, blockedDates = [], buyerInvoices = []) {
+  const contractual = contractualReleaseCandidate(stem, cashflows, today, buyerInvoices);
   if (!contractual.date && !contractual.missedDate) return contractual;
   if (!paymentModel) return contractual;
   const contractualDate = contractual.date || contractual.missedDate;
@@ -508,7 +637,7 @@ function scheduledReleases(cashflows, today) {
     .sort((left, right) => left.date.localeCompare(right.date));
 }
 
-function forecastEventsForExposure({ exposure, futurePayments, cashflows, stem, today, paymentModel, blockedDates }) {
+function forecastEventsForExposure({ exposure, futurePayments, cashflows, stem, today, paymentModel, blockedDates, buyerInvoices }) {
   const forecastEvents = [];
   let remaining = exposure;
   if (remaining > 0) {
@@ -531,13 +660,13 @@ function forecastEventsForExposure({ exposure, futurePayments, cashflows, stem, 
     }
   }
   if (Math.abs(remaining) > 0.01) {
-    const candidate = releaseCandidate(stem, cashflows, today, paymentModel, blockedDates);
+    const candidate = releaseCandidate(stem, cashflows, today, paymentModel, blockedDates, buyerInvoices);
     forecastEvents.push({ ...candidate, amount: remaining });
   }
   return forecastEvents;
 }
 
-export function buildStemCreditRelease({ stem = {}, payments = [], cashflows = [], today, accountId, paymentModel = null, blockedDates = [], exposureRange = null }) {
+export function buildStemCreditRelease({ stem = {}, payments = [], cashflows = [], buyerInvoices = [], today, accountId, paymentModel = null, blockedDates = [], exposureRange = null }) {
   const effectiveToday = dateOnly(today);
   if (!effectiveToday) throw new TypeError('today must be an ISO date');
   const exposure = number(stem.QLIK_Receivable_Balance__c) ?? 0;
@@ -555,15 +684,15 @@ export function buildStemCreditRelease({ stem = {}, payments = [], cashflows = [
     .map((payment) => ({ date: paymentDate(payment), amount: paymentAmount(payment), paymentId: payment.paymentId || payment.Id }))
     .filter((row) => row.date && row.amount != null && row.date > effectiveToday)
     .sort((left, right) => left.date.localeCompare(right.date));
-  const forecastEvents = forecastEventsForExposure({ exposure, futurePayments, cashflows, stem, today: effectiveToday, paymentModel, blockedDates });
+  const forecastEvents = forecastEventsForExposure({ exposure, futurePayments, cashflows, buyerInvoices, stem, today: effectiveToday, paymentModel, blockedDates });
   const rangeComplete = exposureRange?.complete === true
     && number(exposureRange.minimumExposure) != null
     && number(exposureRange.maximumExposure) != null;
   const minimumForecastEvents = rangeComplete
-    ? forecastEventsForExposure({ exposure: number(exposureRange.minimumExposure), futurePayments, cashflows, stem, today: effectiveToday, paymentModel, blockedDates })
+    ? forecastEventsForExposure({ exposure: number(exposureRange.minimumExposure), futurePayments, cashflows, buyerInvoices, stem, today: effectiveToday, paymentModel, blockedDates })
     : [];
   const maximumForecastEvents = rangeComplete
-    ? forecastEventsForExposure({ exposure: number(exposureRange.maximumExposure), futurePayments, cashflows, stem, today: effectiveToday, paymentModel, blockedDates })
+    ? forecastEventsForExposure({ exposure: number(exposureRange.maximumExposure), futurePayments, cashflows, buyerInvoices, stem, today: effectiveToday, paymentModel, blockedDates })
     : [];
   const primaryForecast = forecastEvents.find((event) => event.date) || forecastEvents[0] || null;
   return {
@@ -1016,6 +1145,11 @@ export function expectedBuyerInvoiceEstimate({
     if (quantity.basis === 'range_max_quantity') usesMaximumQuantity = true;
   }
   for (const item of activeExtraCosts) {
+    const fixedPrice = number(item.Lumpsum_Price__c);
+    if (fixedPrice != null) {
+      amount += fixedPrice;
+      continue;
+    }
     const unitPrice = number(item.Unit_Price__c);
     if (unitPrice == null) {
       const fixedAmount = number(item.Line_Total__c);
@@ -1066,6 +1200,8 @@ export function buildAccountCreditStatement({
   expectedInvoiceLineItemsByStem = {},
   expectedInvoiceExtraCostsByStem = {},
   expectedInvoiceScopeComplete = true,
+  supplierCreditEvidence = [],
+  supplierCreditEvidenceComplete = true,
   paymentPerformanceModels = null,
   forecastSettings = null,
   blockedForecastDates = [],
@@ -1133,6 +1269,7 @@ export function buildAccountCreditStatement({
     stem,
     payments: paymentsByStem[stem.Id] || [],
     cashflows: cashflowsByStem[stem.Id] || [],
+    buyerInvoices: buyerInvoicesByStem[stem.Id] || [],
     today,
     accountId: stem.Account__c,
     paymentModel: paymentModelForStem(stem),
@@ -1143,6 +1280,18 @@ export function buildAccountCreditStatement({
     .filter((stem) => idKey(stem.Account__c) === idKey(selectedAccountId))
     .reduce((sum, stem) => sum + value(stem.QLIK_Receivable_Balance__c), 0);
   const groupExposure = openStems.reduce((sum, stem) => sum + value(stem.QLIK_Receivable_Balance__c), 0);
+  const fullGroupBuyerExposure = reconciliationOpenStems.reduce((sum, stem) => sum + value(stem.QLIK_Receivable_Balance__c), 0);
+  const bridgeCurrencies = [...new Set(reconciliationOpenStems.map(stemCurrency).filter(Boolean))];
+  const usedCreditBridge = group
+    ? buildUsedCreditBridge({
+      salesforceUsed: snapshot.usedGroup,
+      buyerExposure: bridgeCurrencies.length > 1 ? null : fullGroupBuyerExposure,
+      supplierEvidence: supplierCreditEvidence,
+      complete: supplierCreditEvidenceComplete && bridgeCurrencies.length <= 1,
+      currency: bridgeCurrencies[0] || snapshot.currency,
+    })
+    : null;
+  if (usedCreditBridge) usedCreditBridge.buyerStemCount = reconciliationOpenStems.length;
   const exposureByCurrency = Object.fromEntries(currencyLabels.map((currency) => [currency, {
     individual: openStems
       .filter((stem) => idKey(stem.Account__c) === idKey(selectedAccountId) && stemCurrency(stem) === currency)
@@ -1166,8 +1315,8 @@ export function buildAccountCreditStatement({
       }
       : reconcileCreditExposure(
         snapshot.usedGroup,
-        currencyConflict ? null : reconciliationOpenStems.reduce((sum, stem) => sum + value(stem.QLIK_Receivable_Balance__c), 0),
-        { complete: projectionComplete },
+        currencyConflict || !usedCreditBridge?.complete ? null : usedCreditBridge.reconstructedUsed,
+        { complete: projectionComplete && usedCreditBridge?.complete === true },
       )
     : { complete: true, matches: true, expected: snapshot.usedGroup, reconstructed: groupExposure, difference: 0, tolerance: CREDIT_RECONCILIATION_TOLERANCE, notApplicable: true };
   const chart = buildCreditReleaseChart({
@@ -1186,6 +1335,7 @@ export function buildAccountCreditStatement({
       stem,
       payments: paymentsByStem[stem.Id] || [],
       cashflows: cashflowsByStem[stem.Id] || [],
+      buyerInvoices: buyerInvoicesByStem[stem.Id] || [],
       today,
       accountId: stem.Account__c,
       accountName: stem.Account__r?.Name || null,
@@ -1260,12 +1410,10 @@ export function buildAccountCreditStatement({
   const projectionWarnings = [
     ...warnings,
     ...(!individualReconciliation.matches ? ['Individual used credit does not reconcile to the selected Account’s current buyer-leg STEM exposure. The individual projection is hidden.'] : []),
-    ...(creditResolution?.mode === 'group_hierarchy_authority' && creditResolution?.reconciliation?.complete && !creditResolution.reconciliation.matches
-      ? [`Salesforce GROUP used credit does not currently reconcile to live buyer QLIK exposure within the ${CREDIT_RECONCILIATION_TOLERANCE}-unit tolerance. The Salesforce limit, used credit, and effective available credit remain the authoritative snapshot; the selected-Account forecast continues from live buyer exposure.`]
-      : []),
-    ...(creditResolution?.mode === 'group_hierarchy_authority' && creditResolution?.reconciliation?.complete === false
-      ? ['The Salesforce GROUP credit snapshot could not be compared with a complete live buyer QLIK exposure scope. Salesforce credit values remain authoritative.']
-      : []),
+    ...(groupReconciliation.scoped && usedCreditBridge && ['incomplete', 'unexplained'].includes(usedCreditBridge.status) ? ['The full Salesforce GROUP used-credit bridge does not reconcile to the available buyer and supplier evidence. The displayed forecast covers only the selected operational buyer scope; Salesforce credit values remain authoritative.'] : []),
+    ...(group && !groupReconciliation.matches ? [usedCreditBridge?.status === 'incomplete'
+      ? 'The Salesforce GROUP used-credit bridge is incomplete. The GROUP projection is hidden, while exact buyer evidence remains available.'
+      : 'Salesforce GROUP used credit is not explained by current buyer receivables plus included supplier Cashflow exposure within the one-unit tolerance. The GROUP projection is hidden.'] : []),
     ...(groupScope?.partial ? ['The GROUP forecast includes only the selected active Accounts. Salesforce’s effective available credit and used-credit fields still describe the full GROUP.'] : []),
     ...(groupScope?.operationalSubset && !groupScope?.partial ? ['The GROUP forecast uses the operational buyer-leg exposure scope from 1 January 2026. Salesforce’s used-credit and effective-available fields remain the authoritative full GROUP snapshot.'] : []),
     ...(!complete ? ['Salesforce did not return a complete credit scope. Projected balances are hidden.'] : []),
@@ -1308,6 +1456,7 @@ export function buildAccountCreditStatement({
       default: DEFAULT_BUYER_PAYMENT_CONSERVATIVENESS,
     },
     reconciliation: { individual: individualReconciliation, group: groupReconciliation },
+    usedCreditBridge,
     exposureByCurrency,
     releases,
     chart,

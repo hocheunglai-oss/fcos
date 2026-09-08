@@ -60,6 +60,25 @@ function executableExists(command) {
   return spawnSync('/usr/bin/which', [resolved], { stdio: 'ignore' }).status === 0;
 }
 
+function commonGitDirectory(repoRoot = REPO_ROOT) {
+  const result = spawnSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+  });
+  if (result.status !== 0) return '';
+  const directory = String(result.stdout || '').trim();
+  return directory ? path.resolve(repoRoot, directory) : '';
+}
+
+export function githubConfigDirectory({ repoRoot = REPO_ROOT, commonDirectory = commonGitDirectory(repoRoot) } = {}) {
+  // Git local config is shared by linked worktrees. Keep its credential helper
+  // pinned to the primary checkout's isolated GH store, rather than rewriting
+  // the helper to whichever worktree most recently ran the verifier.
+  return commonDirectory
+    ? path.join(path.dirname(commonDirectory), target('github').configPath)
+    : path.join(repoRoot, target('github').configPath);
+}
+
 function ensureStateDirectories() {
   mkdirSync(LOCAL_STATE_ROOT, { recursive: true, mode: 0o700 });
   for (const provider of CONNECTION_TARGETS) {
@@ -164,13 +183,14 @@ export function providerRuntime(providerId, { requireCredential = true } = {}) {
     case 'github': {
       delete baseEnv.GH_TOKEN;
       delete baseEnv.GITHUB_TOKEN;
-      credentialAvailable = existsSync(path.join(REPO_ROOT, provider.configPath, 'hosts.yml'));
+      const configDirectory = githubConfigDirectory();
+      credentialAvailable = existsSync(path.join(configDirectory, 'hosts.yml'));
       return {
         command: executablePath(provider.executable),
         credentialAvailable,
         env: {
           ...baseEnv,
-          GH_CONFIG_DIR: path.join(REPO_ROOT, provider.configPath),
+          GH_CONFIG_DIR: configDirectory,
           GH_HOST: 'github.com',
           GH_REPO: `github.com/${identifier('github', 'Repository')}`,
         },
@@ -485,8 +505,8 @@ function shellSingleQuote(value) {
 }
 
 export function githubCredentialHelperValue() {
-  const configDirectory = path.join(REPO_ROOT, target('github').configPath);
-  return `!f() { env GH_CONFIG_DIR=${shellSingleQuote(configDirectory)} gh auth git-credential "$@"; }; f`;
+  const configDirectory = githubConfigDirectory();
+  return `!f() { env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR=${shellSingleQuote(configDirectory)} gh auth git-credential "$@"; }; f`;
 }
 
 function localGitConfigValues(key) {

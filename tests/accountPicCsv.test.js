@@ -44,3 +44,14 @@ test('browser preview rejects the same malformed and oversized input as the serv
     /headers must be exactly/i,
   );
 });
+
+test('browser PIC CSV exports untrusted text as literal spreadsheet cells', () => {
+  const exported = accountPicCsvText([{
+    portRegion: '=malicious-header-like-value',
+    responsiblePersonnel: ' \t+malicious-cell',
+    team: "'=literal-apostrophe",
+    reportingSupervision: '@malicious-cell',
+    vesselTypesCovered: '-malicious-cell',
+  }]);
+  assert.match(exported, /'=malicious-header-like-value,'\+malicious-cell,'=literal-apostrophe,'@malicious-cell,'-malicious-cell/);
+});
