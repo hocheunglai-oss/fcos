@@ -18547,12 +18547,15 @@ async function hedgeDeskParseMops(body = {}) {
 async function hedgeDeskGenerateInvoice(body = {}, req = null, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
   await requireCapability(context.client, context.profile, 'hedge_settlement_manage', 'Hedge settlement permission is required to generate invoice documents.');
-  const generated = generateHedgeInvoicePdf(body);
+  const { prepareHedgeInvoiceReview } = await import('../_hedgeFcbsSettlement.js');
+  const reviewPayload = await prepareHedgeInvoiceReview(context.client, body);
+  const generated = generateHedgeInvoicePdf(reviewPayload);
   return {
     ok: true,
     base64: generated.buffer.toString('base64'),
     mimeType: 'application/pdf',
     filename: generated.filename,
+    ...(reviewPayload.settlementBasis === 'fcbs_own_account_venue' ? { reviewPayload } : {}),
   };
 }
 

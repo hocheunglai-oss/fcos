@@ -17,7 +17,7 @@ test('every live Hedge Desk valuation surface consumes the governed market snaps
   assert.match(physical, /calcPhysicalPnl\([^\n]+data\.marketValuation\)/);
   assert.match(hedges, /calcSwapMtm\([^\n]+data\.marketValuation\)/);
   assert.match(settlement, /settlementSummary\([^\n]+data\.marketValuation\)/);
-  assert.match(settlement, /buildCounterpartySettlementGroups\([^\n]+data\.marketValuation, data\.counterparties\)/);
+  assert.match(settlement, /buildCounterpartySettlementGroups\(\s*summary\.monthSwaps,\s*data\.mops,\s*settings\.rates,\s*settings\.general\.sgo_bbl_per_mt,\s*data\.marketValuation,\s*data\.counterparties,?\s*\)/);
   assert.match(domain, /mtm: mtm == null \? null : roundMoney\(mtm\)/);
   assert.match(settlement, /Settlement document generation is blocked until every hedge has a governed market value/);
   assert.match(assistant, /calcSwapMtm\([^\n]+data\.marketValuation\)/);
