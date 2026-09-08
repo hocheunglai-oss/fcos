@@ -58,3 +58,12 @@ test('trusted harness sources require an explicit repository owner review', asyn
     assert.ok(owners.includes(`${path} @hocheunglai-oss`));
   }
 });
+
+test('runner state paths are configured in a step rather than an unsupported job expression', async () => {
+  const workflow = await readFile(new URL('../.github/workflows/authenticated-release.yml', import.meta.url), 'utf8');
+  assert.doesNotMatch(workflow, /FCOS_E2E_\w+: \$\{\{ runner\.temp/);
+  assert.match(workflow, /state_dir="\$RUNNER_TEMP\/fcos-e2e-/);
+  for (const name of ['FCOS_E2E_STATE_DIR', 'FCOS_E2E_STORAGE_STATE', 'FCOS_E2E_PROTECTION_STATE']) {
+    assert.match(workflow, new RegExp('echo "' + name + '=.*GITHUB_ENV'));
+  }
+});

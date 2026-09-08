@@ -47,9 +47,6 @@ jobs:
     env:
       FCOS_E2E_EXPECTED_COMMIT: ${{ inputs.expected_commit }}
       FCOS_E2E_CANDIDATE_URL: ${{ inputs.candidate_url }}
-      FCOS_E2E_STATE_DIR: ${{ runner.temp }}/fcos-e2e-${{ github.run_id }}-${{ github.run_attempt }}
-      FCOS_E2E_STORAGE_STATE: ${{ runner.temp }}/fcos-e2e-${{ github.run_id }}-${{ github.run_attempt }}/auth.json
-      FCOS_E2E_PROTECTION_STATE: ${{ runner.temp }}/fcos-e2e-${{ github.run_id }}-${{ github.run_attempt }}/protection.json
     steps:
       - uses: actions/checkout@v4
         with:
@@ -60,6 +57,12 @@ jobs:
         with:
           node-version: 24
           cache: npm
+      - name: Configure private state paths on the runner
+        run: |
+          state_dir="$RUNNER_TEMP/fcos-e2e-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "FCOS_E2E_STATE_DIR=$state_dir" >> "$GITHUB_ENV"
+          echo "FCOS_E2E_STORAGE_STATE=$state_dir/auth.json" >> "$GITHUB_ENV"
+          echo "FCOS_E2E_PROTECTION_STATE=$state_dir/protection.json" >> "$GITHUB_ENV"
       - name: Create private state directory
         run: node scripts/e2e-private-state.mjs prepare
       - name: Verify the exact immutable candidate before test authentication
