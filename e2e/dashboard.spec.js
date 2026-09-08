@@ -65,6 +65,9 @@ test.describe('Dashboard', () => {
     page.on('request', (request) => {
       if (/dashboardAccount(?:CreditDirectory|ExposureBatch)/.test(request.url())) directoryRequests.push(request.url());
     });
+    // On mobile, clicking an offscreen trigger scrolls it into view before
+    // the app opens the overlay. Compare against that actual opening position.
+    await statementButton.scrollIntoViewIfNeeded();
     const scrollTop = await page.locator('.app-workspace-scroll').evaluate((element) => element.scrollTop);
     await statementButton.click();
     await expect(page.getByRole('tab', { name: 'Credit & Payments', exact: true })).toHaveAttribute('data-state', 'active');
