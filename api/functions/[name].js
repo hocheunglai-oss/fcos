@@ -5,6 +5,7 @@ import { disputeWorkflowDirectionLabel, disputeWorkflowEditableFilename, dispute
 import { buildDisputePartyRegistry, disputeSalesforceIdKey, findDisputeParty, resolveExtraCostSupplierLookup, resolveOriginalSupplierLookup } from '../_disputeParties.js';
 import { disputeQueueExtraCostProductName } from '../_disputeQueue.js';
 import { resolvedBuyerInvoiceDueDate } from '../_buyerInvoiceDates.js';
+import { scopeCollectionDocumentMetadata } from '../_salesforceDocumentAccess.js';
 import { isFinalBuyerInvoice, resolveBuyerFinancialAmount } from '../_buyerFinancialAmount.js';
 import { buyerInvoiceEmailSettingsPatch, canonicalizeBuyerInvoiceEmail } from '../../src/lib/buyerInvoiceEmailSettings.js';
 import { earliestEtaDate, summarizeBuyerPaymentEvidence } from '../../src/lib/paymentCollectionEvidence.js';
@@ -7617,7 +7618,7 @@ function serializeCollectionEvent(row) {
     promisedPaymentDate: row.promised_payment_date || null,
     promisedAmount: row.promised_amount == null ? null : Number(row.promised_amount),
     eventKey: row.event_key || null,
-    metadata: row.metadata && typeof row.metadata === 'object' ? row.metadata : {},
+    metadata: scopeCollectionDocumentMetadata(row.metadata, row.stem_id),
     actorUserId: row.actor_user_id || null,
     actorEmail: row.actor_email || null,
     createdAt: row.created_at || null,

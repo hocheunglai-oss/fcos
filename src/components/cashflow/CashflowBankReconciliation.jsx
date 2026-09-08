@@ -410,6 +410,7 @@ export default function CashflowBankReconciliation({ dateFrom, dateTo }) {
                 <div><span className="text-muted-foreground">Rows</span><div className="font-medium tabular-nums">{statement.preview.summary.rowCount.toLocaleString()}</div></div>
                 <div><span className="text-muted-foreground">Money in</span><div className="font-medium tabular-nums text-emerald-700">{money(statement.preview.summary.credits, statement.preview.currency)}</div></div>
                 <div><span className="text-muted-foreground">Money out</span><div className="font-medium tabular-nums text-red-700">{money(statement.preview.summary.debits, statement.preview.currency)}</div></div>
+                {statement.preview.summary.closingBalanceWarning && <p className="text-xs text-amber-800 sm:col-span-2 lg:col-span-5">{statement.preview.summary.closingBalanceWarning}</p>}
               </div>
             )}
           </TableShell>

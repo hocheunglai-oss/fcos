@@ -29,6 +29,7 @@ jobs:
           # Read-only token required to fetch FCUNO's pinned contract. It is
           # intentionally neither a repository secret nor persisted by git.
           GITHUB_TOKEN: ${{ github.token }}
+      - run: npm run verify:compatibility
       - run: npm test
       - run: npm run lint
       - run: npm run typecheck

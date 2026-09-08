@@ -110,6 +110,8 @@ test('strict release gate includes migrations, Graph-only checks, build, and gov
   assert.match(browserSetup, /FCOS_E2E_EMAIL/);
   assert.match(browserSetup, /FCOS_E2E_PASSWORD/);
   assert.match(browserSetup, /storageState/);
+  assert.match(workflow, /npm run verify:compatibility/);
+  assert.match(releaseGate, /Compatibility registry/);
   assert.doesNotMatch(workflow, /secrets\./);
   assert.match(workflow, /fcos-ci-evidence-/);
   assert.match(trustedWorkflow, /FCOS_E2E_CANDIDATE_URL: \$\{\{ inputs.candidate_url \}\}/);

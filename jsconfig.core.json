@@ -18,6 +18,7 @@
     "api/_buyerInvoiceDates.js",
     "shared/salesforceReadRequest.js",
     "src/lib/accountDisplay.js",
-    "src/lib/workNotificationGroups.js"
+    "src/lib/workNotificationGroups.js",
+    "src/lib/paymentDataReliability.js"
   ]
 }

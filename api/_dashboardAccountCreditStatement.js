@@ -429,15 +429,16 @@ function earliestDated(rows, fields, today, { allowPast = false } = {}) {
   return candidates.sort((left, right) => left.date.localeCompare(right.date))[0] || null;
 }
 
-function contractualReleaseCandidate(stem, cashflows, today) {
+function contractualReleaseCandidate(stem, cashflows, today, buyerInvoices = []) {
+  const invoiceDue = earliestDated(buyerInvoices, ['Invoice_Due_Date__c'], today, { allowPast: true });
   const cashflowDue = earliestDated(cashflows, ['Invoice_Due_Date__c'], today, { allowPast: true });
   const dueBasis = { ...stem, Payment_Term__c: stem.Payment_Term__c ?? stem.Payment_Term_Number__c };
   const stemDue = resolvedBuyerInvoiceDueDate(dueBasis);
-  const authoritativeDue = cashflowDue?.date || stemDue;
+  const authoritativeDue = invoiceDue?.date || cashflowDue?.date || stemDue;
   if (authoritativeDue) {
     return authoritativeDue < today
       ? { date: null, missedDate: authoritativeDue, source: 'past_due_unknown', sourceLabel: 'Past due — release unknown' }
-      : { date: authoritativeDue, source: cashflowDue ? 'cashflow_invoice_due' : 'stem_invoice_due', sourceLabel: cashflowDue ? 'Cashflow invoice due' : 'STEM invoice due' };
+      : { date: authoritativeDue, source: invoiceDue ? 'buyer_invoice_due' : cashflowDue ? 'cashflow_invoice_due' : 'stem_invoice_due', sourceLabel: invoiceDue ? 'Buyer invoice due' : cashflowDue ? 'Cashflow invoice due' : 'STEM invoice due' };
   }
 
   // A checked override is authoritative even when blank. Known extra-cost-only
@@ -472,8 +473,8 @@ export function adjustCreditForecastBusinessDay(date, today, blockedDates = []) 
   return { date: originalDate, originalDate, adjusted: originalDate !== dateOnly(date) };
 }
 
-function releaseCandidate(stem, cashflows, today, paymentModel = null, blockedDates = []) {
-  const contractual = contractualReleaseCandidate(stem, cashflows, today);
+function releaseCandidate(stem, cashflows, today, paymentModel = null, blockedDates = [], buyerInvoices = []) {
+  const contractual = contractualReleaseCandidate(stem, cashflows, today, buyerInvoices);
   if (!contractual.date && !contractual.missedDate) return contractual;
   if (!paymentModel) return contractual;
   const contractualDate = contractual.date || contractual.missedDate;
@@ -514,7 +515,7 @@ function scheduledReleases(cashflows, today) {
     .sort((left, right) => left.date.localeCompare(right.date));
 }
 
-function forecastEventsForExposure({ exposure, futurePayments, cashflows, stem, today, paymentModel, blockedDates }) {
+function forecastEventsForExposure({ exposure, futurePayments, cashflows, stem, today, paymentModel, blockedDates, buyerInvoices }) {
   const forecastEvents = [];
   let remaining = exposure;
   if (remaining > 0) {
@@ -537,13 +538,13 @@ function forecastEventsForExposure({ exposure, futurePayments, cashflows, stem, 
     }
   }
   if (Math.abs(remaining) > 0.01) {
-    const candidate = releaseCandidate(stem, cashflows, today, paymentModel, blockedDates);
+    const candidate = releaseCandidate(stem, cashflows, today, paymentModel, blockedDates, buyerInvoices);
     forecastEvents.push({ ...candidate, amount: remaining });
   }
   return forecastEvents;
 }
 
-export function buildStemCreditRelease({ stem = {}, payments = [], cashflows = [], today, accountId, paymentModel = null, blockedDates = [], exposureRange = null }) {
+export function buildStemCreditRelease({ stem = {}, payments = [], cashflows = [], buyerInvoices = [], today, accountId, paymentModel = null, blockedDates = [], exposureRange = null }) {
   const effectiveToday = dateOnly(today);
   if (!effectiveToday) throw new TypeError('today must be an ISO date');
   const exposure = number(stem.QLIK_Receivable_Balance__c) ?? 0;
@@ -561,15 +562,15 @@ export function buildStemCreditRelease({ stem = {}, payments = [], cashflows = [
     .map((payment) => ({ date: paymentDate(payment), amount: paymentAmount(payment), paymentId: payment.paymentId || payment.Id }))
     .filter((row) => row.date && row.amount != null && row.date > effectiveToday)
     .sort((left, right) => left.date.localeCompare(right.date));
-  const forecastEvents = forecastEventsForExposure({ exposure, futurePayments, cashflows, stem, today: effectiveToday, paymentModel, blockedDates });
+  const forecastEvents = forecastEventsForExposure({ exposure, futurePayments, cashflows, buyerInvoices, stem, today: effectiveToday, paymentModel, blockedDates });
   const rangeComplete = exposureRange?.complete === true
     && number(exposureRange.minimumExposure) != null
     && number(exposureRange.maximumExposure) != null;
   const minimumForecastEvents = rangeComplete
-    ? forecastEventsForExposure({ exposure: number(exposureRange.minimumExposure), futurePayments, cashflows, stem, today: effectiveToday, paymentModel, blockedDates })
+    ? forecastEventsForExposure({ exposure: number(exposureRange.minimumExposure), futurePayments, cashflows, buyerInvoices, stem, today: effectiveToday, paymentModel, blockedDates })
     : [];
   const maximumForecastEvents = rangeComplete
-    ? forecastEventsForExposure({ exposure: number(exposureRange.maximumExposure), futurePayments, cashflows, stem, today: effectiveToday, paymentModel, blockedDates })
+    ? forecastEventsForExposure({ exposure: number(exposureRange.maximumExposure), futurePayments, cashflows, buyerInvoices, stem, today: effectiveToday, paymentModel, blockedDates })
     : [];
   const primaryForecast = forecastEvents.find((event) => event.date) || forecastEvents[0] || null;
   return {
@@ -1144,6 +1145,7 @@ export function buildAccountCreditStatement({
     stem,
     payments: paymentsByStem[stem.Id] || [],
     cashflows: cashflowsByStem[stem.Id] || [],
+    buyerInvoices: buyerInvoicesByStem[stem.Id] || [],
     today,
     accountId: stem.Account__c,
     paymentModel: paymentModelForStem(stem),
@@ -1197,6 +1199,7 @@ export function buildAccountCreditStatement({
       stem,
       payments: paymentsByStem[stem.Id] || [],
       cashflows: cashflowsByStem[stem.Id] || [],
+      buyerInvoices: buyerInvoicesByStem[stem.Id] || [],
       today,
       accountId: stem.Account__c,
       accountName: stem.Account__r?.Name || null,
