@@ -23,7 +23,7 @@ function response(data, { ok = true, binary = false } = {}) {
   };
 }
 
-function clientMock({ knownMd5 = [], storedReports = [], secondaryImports = [], secondaryResult = {}, publicationStatus = null, pairedImports = [], briefs = [], saveFailuresBeforeSuccess = 0 } = {}) {
+function clientMock({ knownMd5 = [], storedReports = [], secondaryImports = [], secondaryResult = {}, secondaryError = null, publicationStatus = null, pairedImports = [], briefs = [], saveFailuresBeforeSuccess = 0 } = {}) {
   const rpcCalls = [];
   let remainingSaveFailures = saveFailuresBeforeSuccess;
   return {
@@ -44,7 +44,7 @@ function clientMock({ knownMd5 = [], storedReports = [], secondaryImports = [], 
         status: 'completed', comparisonValueCount: 60, matchedValueCount: 60,
         publishedDateCount: 0, matchedDateCount: 20, conflictDateCount: 0,
         ...secondaryResult,
-      }, error: null };
+      }, error: secondaryError };
       return { data: null, error: new Error('Unexpected RPC') };
     },
     from: (table) => ({
@@ -162,6 +162,20 @@ test('secondary MOPS CSV parser accepts exact complete triples and skips incompl
   assert.match(parsed.sourceMd5, /^[a-f0-9]{32}$/);
 });
 
+test('secondary MOPS CSV preserves Core export decimal commas and strict thousands groups', () => {
+  for (const [input, expected] of [['"785,44"', 785.44], ['"172,2"', 172.2], ['"1,234.56"', 1234.56], ['"1,234"', 1234], ['785.44', 785.44]]) {
+    const csv = Buffer.from(secondaryCsvFixture().toString().replace('700,500,100', `${input},500,100`));
+    assert.equal(parseMarketMopsCsv(csv).rows[0].s05, expected);
+  }
+});
+
+test('secondary MOPS CSV rejects malformed numeric separators rather than deleting them', () => {
+  for (const input of ['"12,34,56"', '"1.234,56"', '"1234,567"', '"0,123"', '"1,2.3"']) {
+    const csv = Buffer.from(secondaryCsvFixture().toString().replace('700,500,100', `${input},500,100`));
+    assert.throws(() => parseMarketMopsCsv(csv), (error) => error.code === 'MARKET_SECONDARY_CSV_VALUE_INVALID');
+  }
+});
+
 test('secondary MOPS CSV parser fails closed on missing columns and duplicate complete dates', () => {
   assert.throws(() => parseMarketMopsCsv(secondaryCsvFixture({ missingSgo: true })), (error) => error.code === 'MARKET_SECONDARY_CSV_COLUMNS_INVALID');
   assert.throws(() => parseMarketMopsCsv(secondaryCsvFixture({ duplicateDate: true })), (error) => error.code === 'MARKET_SECONDARY_CSV_DATE_DUPLICATE');
@@ -212,6 +226,23 @@ test('a quarantined historical CSV discrepancy does not overwrite or fail the ho
   assert.equal(result.status, 'completed');
   assert.equal(result.secondaryMopsConflictDateCount, 1);
   assert.equal(result.failedCount, 0);
+});
+
+test('secondary history rejection retains its safe reason and is not retried', async () => {
+  const csv = secondaryCsvFixture();
+  const { createHash } = await import('node:crypto');
+  const file = { id: 'secondaryreject12345', name: 'Core_Export_Data.csv', mimeType: 'text/csv',
+    size: String(csv.length), md5Checksum: createHash('md5').update(csv).digest('hex'),
+    modifiedTime: '2026-09-01T07:21:22Z', parents: [config.rootFolderId] };
+  const client = clientMock({ secondaryError: { code: 'P0001', message: 'MARKET_SECONDARY_HISTORY_VERIFICATION_FAILED' } });
+  const result = await runMarketReportDriveSync(client, {
+    accessToken: 'token', fetchImpl: driveFetch({ csvFiles: [file], binaryById: { [file.id]: csv } }).fetchImpl,
+    config, now: new Date('2026-09-01T09:00:00Z'),
+  });
+  assert.equal(result.errorCode, 'MARKET_SECONDARY_HISTORY_VERIFICATION_FAILED');
+  assert.equal(result.failedCount, 1);
+  assert.equal(result.secondaryMopsImportedCount, 0);
+  assert.equal(client.rpcCalls.filter(({ name }) => name === 'save_market_mops_secondary_csv').length, 1);
 });
 
 test('hourly sync prioritizes unseen reports, then current library repairs, before legacy cleanup', () => {
