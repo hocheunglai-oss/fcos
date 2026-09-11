@@ -80,3 +80,26 @@ test('accepting an automatic statutory default does not require adding a legacy 
   const draft = { ...ui.initialExtraDraft(row.item), statutorySupplierDefaultPending: true };
   assert.deepEqual(ui.supplierCostReviewState(row, { outcome: 'correct' }, draft), { outcome: 'changed', requiresUpdate: true, valid: true });
 });
+
+test('existing charges with blank descriptions can approve edited costs on either review outcome', () => {
+  const row = { ...basic, item: { ...basic.item, description: '' } };
+  for (const outcome of ['changed', 'correct']) {
+    const draft = { ...ui.initialExtraDraft(row.item), supplierCost: '1809.25' };
+    assert.deepEqual(ui.supplierCostReviewState(row, { outcome }, draft), { outcome: 'changed', requiresUpdate: true, valid: true });
+    assert.equal(draft.description, 'BASIC CALLING COST');
+    assert.equal(ui.supplierCostReviewState(row, { outcome }, { ...draft, description: '' }).valid, false);
+    for (const supplierCost of ['', 'invalid', -1]) {
+      assert.equal(ui.supplierCostReviewState(row, { outcome }, { ...draft, supplierCost }).valid, false);
+    }
+    assert.equal(ui.supplierCostReviewState(row, { outcome }, { ...draft, pricingType: 'per_unit', quantity: 0 }).valid, false);
+  }
+});
+
+
+test('description defaults use the product name and retain an existing custom description', () => {
+  assert.equal(ui.initialExtraDraft({ ...basic.item, description: '' }).description, 'BASIC CALLING COST');
+  assert.equal(ui.initialExtraDraft({ ...basic.item, description: 'Reviewed agency services' }).description, 'Reviewed agency services');
+  assert.equal(ui.initialExtraDraft({ ...basic.item, description: '', productName: '' }).description, 'STEM Charge');
+  const row = { ...basic, item: { ...basic.item, description: '' } };
+  assert.equal(ui.supplierCostReviewState(row, { outcome: 'correct' }).requiresUpdate, false, 'a display default alone does not write Salesforce');
+});

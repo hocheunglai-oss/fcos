@@ -2443,6 +2443,9 @@ async function salesforceSupplierChargeWrites(body, live, supplierId, context, {
     const mode = (update.pricingType || update.pricingMode) === 'per_unit' ? 'per_unit' : 'fixed';
     const supplierEditRequested = ['supplierCost', 'cost', 'fixedAmount', 'unitPrice', 'inputCurrency', 'supplierInputCurrency', 'description', 'quantity', 'unitOfMeasure']
       .some((field) => Object.prototype.hasOwnProperty.call(update, field));
+    const buyerEditRequested = includeBuyerFields
+      && (mode === 'fixed' ? ['buyerPrice', 'price', 'fixedBuyerAmount'] : ['buyerPrice', 'price', 'buyerUnitPrice'])
+        .some((field) => Object.prototype.hasOwnProperty.call(update, field));
     if (includeBuyerFields && !supplierEditRequested) {
       requests.push({
         method: 'PATCH',
@@ -2461,13 +2464,13 @@ async function salesforceSupplierChargeWrites(body, live, supplierId, context, {
     if (mode === 'fixed') {
       bodyPatch.Lumpsum_Cost__c = supplierInput?.usdAmount ?? numeric(update.supplierCost ?? update.cost ?? update.fixedAmount, 'Fixed supplier cost');
       bodyPatch.Unit_Cost__c = null;
-      if (includeBuyerFields) bodyPatch.Lumpsum_Price__c = numeric(update.buyerPrice ?? update.price ?? update.fixedBuyerAmount, 'Fixed buyer price');
+      if (buyerEditRequested) bodyPatch.Lumpsum_Price__c = numeric(update.buyerPrice ?? update.price ?? update.fixedBuyerAmount, 'Fixed buyer price');
     } else {
       bodyPatch.Quantity__c = numeric(update.quantity, 'Quantity', { positive: true, nullable: false });
       bodyPatch.Unit_of_Measure__c = text(update.unitOfMeasure || current.Unit_of_Measure__c, 40) || '1.';
       bodyPatch.Unit_Cost__c = supplierInput?.usdAmount ?? numeric(update.supplierCost ?? update.cost ?? update.unitPrice, 'Supplier unit cost');
       bodyPatch.Lumpsum_Cost__c = null;
-      if (includeBuyerFields) bodyPatch.Unit_Price__c = numeric(update.buyerPrice ?? update.price ?? update.buyerUnitPrice, 'Buyer unit price');
+      if (buyerEditRequested) bodyPatch.Unit_Price__c = numeric(update.buyerPrice ?? update.price ?? update.buyerUnitPrice, 'Buyer unit price');
     }
     requests.push({ method: 'PATCH', url: `/services/data/${apiVersion}/sobjects/STEM_Extra_Cost__c/${id}`, referenceId: `supplierUpdate${reference++}`, httpHeaders: lastModifiedHeaders(current.LastModifiedDate), body: bodyPatch });
   }
