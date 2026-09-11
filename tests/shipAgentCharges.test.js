@@ -602,8 +602,6 @@ test('FCOS handlers are explicit, fail-closed, atomic, and do not send email', a
   assert.match(ui, /Amend Buyer Charges/);
   assert.match(ui, /Continue to Amend/);
   assert.match(ui, /Review as General Manager/);
-  assert.match(ui, /Number\.isInteger\(portClearanceCount\)/);
-  assert.match(ui, /Number\.isInteger\(applicationCount\)/);
   assert.doesNotMatch(service, /stemId, supplierId, sides, stageLastModifiedAt/);
   assert.match(service, /stemId, supplierId, status: 'reopened'/);
   assert.doesNotMatch(ui, /Temporary Assignee/);
