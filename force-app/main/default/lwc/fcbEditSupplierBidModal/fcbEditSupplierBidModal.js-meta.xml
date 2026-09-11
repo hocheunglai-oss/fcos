@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<LightningComponentBundle xmlns="http://soap.sforce.com/2006/04/metadata">
+    <apiVersion>51.0</apiVersion>
+    <description>Fcb Edit Supplier Bid Modal</description>
+    <isExposed>false</isExposed>
+    <masterLabel>Fcb Edit Supplier Bid Modal</masterLabel>
+</LightningComponentBundle>

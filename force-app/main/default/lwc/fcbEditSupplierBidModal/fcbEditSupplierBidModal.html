@@ -1,0 +1,190 @@
+<template>
+  <section role="dialog"
+           tabindex="-1"
+           aria-labelledby="modal-heading-01"
+           aria-modal="true"
+           aria-describedby="modal-content-id-1"
+           class="slds-modal slds-fade-in-open">
+    <template if:true={actionExecuting}>
+      <lightning-spinner alternative-text="Loading..."></lightning-spinner>
+    </template>
+    <div class="slds-modal__container">
+      <header class="slds-modal__header">
+        <button class="slds-button slds-button_icon slds-modal__close slds-button_icon-inverse"
+                title="Close"
+                onclick={closeModal}>
+          <lightning-icon icon-name="utility:close"
+                          alternative-text="close"
+                          variant="inverse"
+                          size="small">
+          </lightning-icon>
+          <span class="slds-assistive-text">Close</span>
+        </button>
+        <h2 id="modal-heading-01" class="slds-text-heading_medium slds-hyphenate">Edit Supplier Bid</h2>
+      </header>
+      <div class="slds-modal__content slds-p-around_medium" id="modal-content-id-1">
+        <div class="slds-text-body_regular">
+          Please enter the Supplier's details and products below. The
+          Supplier & Product must match at least one Enquiry Line Item. If
+          the Supplier does not appear in the system database please
+          create a new Supplier record. A entry will be saved as a port
+          supplier.
+        </div>
+        <lightning-record-edit-form class="general-form"
+                                    object-api-name="Supplier_Bid__c"
+                                    record-id={supplierBid.Id}
+                                    onchange={handleSupplierBidChange}
+                                    onsubmit={handleSubmitForm}
+                                    onerror={handleErrorForm}>
+          <lightning-messages></lightning-messages>
+          <div style="display: none">
+            <lightning-input-field field-name="Enquiry_Line_Item__c"
+                                   value={supplierBid.Enquiry_Line_Item__c}>
+            </lightning-input-field>
+          </div>
+          <lightning-combobox name="enquiryLineItems"
+                              label="Select Enquiry Stop"
+                              placeholder="Select Stop"
+                              options={options}
+                              value={supplierBid.Opportunity_Line_Item__c}
+                              disabled
+                              onchange={changeStops}
+                              required>
+          </lightning-combobox>
+          <div class="slds-grid">
+            <div class="slds-col slds-size_1-of-3">
+              <lightning-input-field field-name="Port__c"
+                                     value={supplierBid.Port__c}
+                                     required
+                                     disabled
+                                     variant="label-stacked">
+              </lightning-input-field>
+              <lightning-input-field field-name="Alternative_Product__c"
+                                     variant="label-stacked"
+                                     onchange={handleQuantityChange}>
+              </lightning-input-field>
+              <!-- <lightning-input-field field-name="Quantity__c"
+                                     value={supplierBid.Quantity__c}
+                                     required
+                                     variant="label-stacked"
+                                     onchange={handleQuantityChange}>
+              </lightning-input-field>
+              <lightning-input-field class="slds-p-horizontal_medium"
+                                     field-name="IsQuantityRange__c"
+                                     value={supplierBid.IsQuantityRange__c}
+                                     variant="label-stacked"
+                                     onchange={handleQuantityChange}>
+              </lightning-input-field>
+              <template if:true={supplierBid.IsQuantityRange__c}>
+                <lightning-input-field class="slds-m-top_medium"
+                                       field-name="Quantity_Range_Maximum__c"
+                                       value={supplierBid.Quantity_Range_Maximum__c}
+                                       required
+                                       variant="label-stacked"
+                                       onchange={handleQuantityChange}>
+                </lightning-input-field>
+              </template> -->
+            </div>
+            <div class="slds-col slds-size_1-of-3">
+              <lightning-combobox name="paymentTermPicklist"
+                                class="slds-p-horizontal_xx-small"
+                                label="Supplier Payment Term"
+                                value={supplierBid.Supplier_Payment_Term__c}
+                                placeholder="Select Payment Term"
+                                options={paymentTermOptions}
+                                required="true"
+                                onchange={handlePaymentTermChange}>
+              </lightning-combobox>
+              <lightning-input-field field-name="Partial_CIA__c"
+                                     value={supplierBid.Partial_CIA__c}
+                                     variant="label-stacked">
+              </lightning-input-field>
+              <lightning-input-field field-name="Partial_Lumpsum_Buy_At__c"
+                                     variant="label-stacked"
+                                     value={supplierBid.Partial_Lumpsum_Buy_At__c}
+                                     disabled={supplierBid.isDisabledPartialCIA}>
+              </lightning-input-field>
+              <lightning-input class="slds-m-top_x-small" type="date" label="Validity Date" date-style="short" variant="label-stacked" value={supplierBid.Expiration_Date__c} onchange={handleChangeExpirationDate}>
+              </lightning-input>
+              <lightning-input name="Expiration_Time__c" class="slds-p-horizontal_xx-small"  
+                                label="Validity Time" value={supplierBid.Expiration_Time__c} type="time">
+              </lightning-input>
+              <lightning-input type="date" label="Expected Delivery Date" date-style="short" variant="label-stacked" value={supplierBid.Expected_Delivery_Date__c} required disabled>
+              </lightning-input>
+              <lightning-input-field field-name="Unit_of_Measure__c"
+                                     value={supplierBid.Unit_of_Measure__c}
+                                     required
+                                     variant="label-stacked">
+              </lightning-input-field>
+              <!-- <lightning-input-field class="slds-m-top_x-small"
+                                     field-name="Transportation_Type_Buy__c"
+                                     value={supplierBid.Transportation_Type_Buy__c}
+                                     variant="label-stacked"
+                                     onchange={handleTransportationChange}>
+              </lightning-input-field>
+              <c-fcb-offer-broker-pricing-input field-label="Unit (Buy At)"
+                                                field-name="Supplier_Unit_Price__c"
+                                                initial-value={supplierBid.Supplier_Unit_Price__c}
+                                                decimal-places=3
+                                                step=0.001
+                                                min=0.000
+                                                onchange={handleCustomCurrencyInputChange}>
+              </c-fcb-offer-broker-pricing-input> -->
+            </div>
+            <div class="slds-col slds-size_1-of-3">
+                <lightning-input-field field-name="Supplier__c"
+                                     value={supplierBid.Supplier__c}
+                                     required
+                                     variant="label-stacked"
+                                     disabled>
+              </lightning-input-field>          
+              <!-- <lightning-input-field field-name="BDN_Company__c"
+                                     value={_supplierBid.BDN_Company__c}
+                                     variant="label-stacked">
+              </lightning-input-field> -->
+              <lightning-input-field field-name="Preferred_Supplier__c"
+                                     variant="label-stacked">
+              </lightning-input-field>
+              <lightning-input-field class="slds-m-top_medium"
+                                     field-name="Suppliers_Broker__c"
+                                     required={isSupplierBrokerRequired}
+                                     value={supplierBid.Suppliers_Broker__c}
+                                     variant="label-stacked">
+              </lightning-input-field>
+
+              <!-- <c-fcb-offer-broker-pricing-input field-name="Supplier_Broker_Commission__c"
+                                                field-label="Supplier's Broker Commission"
+                                                initial-value={supplierBid.Supplier_Broker_Commission__c}
+                                                decimal-places="2"
+                                                step="0.01"
+                                                min="0.01"
+                                                onchange={handleCustomCurrencyInputChange}>
+              </c-fcb-offer-broker-pricing-input> -->
+
+              <!-- <c-fcb-offer-broker-pricing-input field-name="Unit_Transportation_Cost__c"
+                                                field-label="Transportation Cost (Per Unit)"
+                                                initial-value={supplierBid.Unit_Transportation_Cost__c}
+                                                decimal-places="2"
+                                                step="0.01"
+                                                min="0.01"
+                                                onchange={handleCustomCurrencyInputChange}>
+              </c-fcb-offer-broker-pricing-input> -->
+            </div>
+          </div>
+          <lightning-input-field field-name="Supplier_Constraints__c"
+            value={supplierBid.Supplier_Constraints__c} variant="label-stacked">
+          </lightning-input-field>
+          <input type="submit" class="hidden"/>
+        </lightning-record-edit-form>
+        <c-fcb-supplier-bid-extra-costs supplier-bids={productSupplierBids}
+            quote-id={quoteId} onchangeprice={handlePriceChange} onchangetransportationtype={handleTransportationChange}
+            onchangequantity={handleQuantityChange} onchangecompany={handleCompanyChange}></c-fcb-supplier-bid-extra-costs>
+        </div>
+      <footer class="slds-modal__footer">
+        <button class="slds-button slds-button_success" onclick={handleAddAction}>Save</button>
+        <button class="slds-button slds-button_neutral" onclick={closeModal}>Cancel</button>
+      </footer>
+    </div>
+  </section>
+  <div class="slds-backdrop slds-backdrop_open"></div>
+</template>

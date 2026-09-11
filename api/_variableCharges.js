@@ -158,6 +158,7 @@ function configuredAgentCurrency(account) {
 }
 
 function requiredAgentCurrency(live, supplierId) {
+  if (!isHongKongStem(live?.stem)) return null;
   const account = (live?.accounts || []).find((row) => row.Id === supplierId);
   if (account?.Is_Agent__c !== true) return null;
   const currency = configuredAgentCurrency(account);
@@ -957,14 +958,15 @@ function agencyFeeAccountDefault(account, settings) {
 }
 
 function serializeLiveRow(row, kind, settings = { usdHkdRate: null, revision: null }, options = {}) {
+  const hongKongDelivery = options.hongKongDelivery === true;
   const supplierId = kind === 'line_item' ? row.Original_Supplier__c : row.Supplier__c;
   const productId = kind === 'line_item' ? row.Product__c : row.Product2Id__c;
   const sourceProductName = kind === 'line_item' ? row.Product__r?.Name : row.Product2Id__r?.Name;
-  const productName = displayChargeProductName(sourceProductName);
+  const productName = hongKongDelivery ? displayChargeProductName(sourceProductName) : sourceProductName;
   const productKey = canonicalChargeProduct(sourceProductName);
   const supplierAccount = options.accountsById?.get(supplierId);
-  const agentCurrency = configuredAgentCurrency(supplierAccount);
-  const basicCallingBundleSupport = kind === 'extra_cost'
+  const agentCurrency = hongKongDelivery ? configuredAgentCurrency(supplierAccount) : null;
+  const basicCallingBundleSupport = hongKongDelivery && kind === 'extra_cost'
     && isBasicCallingBundleSupportRow(row, options.basicCallingSupplierIds);
   const accountAgencyFee = basicCallingBundleSupport && productKey === AGENCY_FEE
     ? agencyFeeAccountDefault(options.accountsById?.get(supplierId), settings)
@@ -993,7 +995,7 @@ function serializeLiveRow(row, kind, settings = { usdHkdRate: null, revision: nu
     : null;
   const supplierTotalDual = supplierDualCurrency({ usdAmount: supplierTotalUsd, inputCurrency: supplierInputCurrency, inputAmount: nativeSupplierTotal, savedRate: supplierRateSnapshot, currentRate: settings.usdHkdRate });
   const managedBasicCallingBundle = kind === 'extra_cost' && isManagedBasicCallingRow(row);
-  const portClearance = kind === 'extra_cost' && isPortClearanceRow(row)
+  const portClearance = hongKongDelivery && kind === 'extra_cost' && isPortClearanceRow(row)
     ? {
       ...calculatePortClearance({
         applicationCount: row.Quantity__c,
@@ -1004,7 +1006,7 @@ function serializeLiveRow(row, kind, settings = { usdHkdRate: null, revision: nu
       fxSettingsRevision: row.Supplier_Cost_FX_Settings_Revision__c ?? null,
     }
     : null;
-  const anchorageBuyerDefaultUsd = kind === 'extra_cost' && productKey === ANCHORAGE_DUES
+  const anchorageBuyerDefaultUsd = hongKongDelivery && kind === 'extra_cost' && productKey === ANCHORAGE_DUES
     ? finiteAmount(row.Anchorage_Buyer_Default_USD__c)
     : null;
   const anchorageCurrentBuyerUsd = kind === 'extra_cost' && productKey === ANCHORAGE_DUES
@@ -1061,21 +1063,27 @@ function serializeLiveRow(row, kind, settings = { usdHkdRate: null, revision: nu
     buyerDefault,
     portClearance,
     supplierCurrency: {
-      inputCurrency: supplierInputCurrency || 'USD',
-      inputAmount: supplierInputValue,
-      requiredInputCurrency: agentCurrency,
+      inputCurrency: hongKongDelivery ? supplierInputCurrency || 'USD' : 'USD',
+      inputAmount: hongKongDelivery ? supplierInputValue : supplierRateUsd,
+      requiredInputCurrency: hongKongDelivery ? agentCurrency : 'USD',
       lockedToAgentCurrency: Boolean(agentCurrency),
       normalizedFromStoredUsd: normalizeAgentCurrency,
-      usdHkdRate: supplierRateDual.rate,
-      fxSettingsRevision: accountAgencyFee?.fxSettingsRevision
+      usdHkdRate: hongKongDelivery ? supplierRateDual.rate : null,
+      fxSettingsRevision: !hongKongDelivery ? null : accountAgencyFee?.fxSettingsRevision
         ?? (kind === 'extra_cost' ? row.Supplier_Cost_FX_Settings_Revision__c ?? null : null),
-      rateBasis: accountAgencyFee
+      rateBasis: !hongKongDelivery ? 'USD'
+        : accountAgencyFee
         ? 'Account agreed fee · current company rate'
         : normalizeAgentCurrency ? 'Agent agreed currency · current company rate' : supplierRateDual.basis,
-      unitOrFixed: supplierRateDual,
-      total: supplierTotalDual,
+      unitOrFixed: hongKongDelivery ? supplierRateDual : { complete: finiteAmount(supplierRateUsd) != null, usdAmount: supplierRateUsd, hkdAmount: null, rate: null, basis: 'USD' },
+      total: hongKongDelivery ? supplierTotalDual : { complete: finiteAmount(supplierTotalUsd) != null, usdAmount: supplierTotalUsd, hkdAmount: null, rate: null, basis: 'USD' },
+      recordedEvidence: {
+        inputCurrency: recordedInputCurrency,
+        inputAmount: recordedInputValue,
+        usdHkdRate: recordedRateSnapshot,
+      },
     },
-    anchorage: kind === 'extra_cost' && isAnchorageDuesRow(row) ? {
+    anchorage: hongKongDelivery && kind === 'extra_cost' && isAnchorageDuesRow(row) ? {
       arrival: row.Anchorage_Arrival__c || null,
       departure: row.Anchorage_Departure__c || null,
       location: row.Anchorage_Location__c || ANCHORAGE_LOCATION_ELSEWHERE,
@@ -1088,7 +1096,7 @@ function serializeLiveRow(row, kind, settings = { usdHkdRate: null, revision: nu
       buyerRateUsd: row.Anchorage_Buyer_Rate_USD__c ?? null,
       buyerCalculationVersion: row.Anchorage_Buyer_Calc_Version__c || null,
     } : null,
-    lightDues: kind === 'extra_cost' && isLightDuesRow(row) ? {
+    lightDues: hongKongDelivery && kind === 'extra_cost' && isLightDuesRow(row) ? {
       entryDate: row.Light_Dues_Entry_Date__c || null,
       category: row.Light_Dues_Category__c || LIGHT_DUES_CATEGORY_ALL_OTHER,
       nrtSnapshot: row.Light_Dues_NRT_Snapshot__c ?? null,
@@ -1806,10 +1814,13 @@ export async function getVariableChargeDetail(body, context) {
     serializeCases(context.client, [live], context.profile),
     linkedSalesforceFiles(live),
     variableChargeOptions({}, context),
-    variableChargeSettings(context.client),
+    isHongKongStem(live.stem)
+      ? variableChargeSettings(context.client)
+      : Promise.resolve({ usdHkdRate: null, revision: null, updatedAt: null }),
   ]);
   const bundleSupplierIds = basicCallingSupplierIds(live);
   const serializeOptions = {
+    hongKongDelivery: isHongKongStem(live.stem),
     basicCallingSupplierIds: bundleSupplierIds,
     accountsById: new Map((live.accounts || []).map((row) => [row.Id, row])),
   };
@@ -2316,6 +2327,25 @@ function supplierInputEvidence(input, settings, label, requiredCurrency = null) 
   };
 }
 
+function supplierInputForPort(input, { hongKongDelivery, settings, requiredCurrency = null }, label) {
+  if (hongKongDelivery) return supplierInputEvidence(input, settings, label, requiredCurrency);
+  for (const value of [input?.inputCurrency, input?.supplierInputCurrency]) {
+    if (value != null && text(value, 255) && text(value, 255).toUpperCase() !== 'USD') {
+      throw httpError('Variable charges outside Hong Kong must be entered in USD.', 400, 'NON_HONG_KONG_CURRENCY_UNSUPPORTED');
+    }
+  }
+  const amount = numeric(input?.supplierCost ?? input?.cost ?? input?.fixedAmount ?? input?.unitPrice, label);
+  return {
+    usdAmount: amount,
+    fields: {
+      Supplier_Cost_Input_Currency__c: 'USD',
+      Supplier_Cost_Input_Value__c: amount,
+      Supplier_Cost_USD_HKD_Rate__c: null,
+      Supplier_Cost_FX_Settings_Revision__c: null,
+    },
+  };
+}
+
 function managedAgencyFeeFields(live, supplierId, settings, { includeBuyerFields = false } = {}) {
   const supplier = (live.accounts || []).find((row) => row.Id === supplierId);
   const nativeAmount = finiteAmount(supplier?.Agency_Fee_USD__c);
@@ -2426,9 +2456,7 @@ async function salesforceSupplierChargeWrites(body, live, supplierId, context, {
       continue;
     }
     const bodyPatch = { Description__c: text(update.description, 32_000) || null };
-    const supplierInput = hongKongDelivery || agentCurrency
-      ? supplierInputEvidence(update, settings, mode === 'fixed' ? 'Fixed supplier cost' : 'Supplier unit cost', agentCurrency)
-      : null;
+    const supplierInput = supplierInputForPort(update, { hongKongDelivery, settings, requiredCurrency: agentCurrency }, mode === 'fixed' ? 'Fixed supplier cost' : 'Supplier unit cost');
     if (supplierInput) Object.assign(bodyPatch, supplierInput.fields);
     if (mode === 'fixed') {
       bodyPatch.Lumpsum_Cost__c = supplierInput?.usdAmount ?? numeric(update.supplierCost ?? update.cost ?? update.fixedAmount, 'Fixed supplier cost');
@@ -2461,9 +2489,7 @@ async function salesforceSupplierChargeWrites(body, live, supplierId, context, {
     if (!paymentTerm) throw httpError('The supplier payment term is unavailable or ambiguous and cannot be guessed.', 409, 'PAYMENT_TERM_UNAVAILABLE');
     const mode = (addition.pricingType || addition.pricingMode) === 'per_unit' ? 'per_unit' : 'fixed';
     const create = { STEM__c: live.stem.Id, Supplier__c: supplierId, Product2Id__c: productId, RecordTypeId: recordTypes[0].Id, Payment_Term__c: paymentTerm, Cancelled__c: false, Description__c: text(addition.description, 32_000) || 'STEM Charge' };
-    const supplierInput = hongKongDelivery || agentCurrency
-      ? supplierInputEvidence(addition, settings, mode === 'fixed' ? 'Fixed supplier cost' : 'Supplier unit cost', agentCurrency)
-      : null;
+    const supplierInput = supplierInputForPort(addition, { hongKongDelivery, settings, requiredCurrency: agentCurrency }, mode === 'fixed' ? 'Fixed supplier cost' : 'Supplier unit cost');
     if (supplierInput) Object.assign(create, supplierInput.fields);
     if (mode === 'fixed') {
       create.Lumpsum_Cost__c = supplierInput?.usdAmount ?? numeric(addition.supplierCost ?? addition.cost ?? addition.fixedAmount, 'Fixed supplier cost');
@@ -3032,7 +3058,7 @@ async function assertLightDuesApprovalReady(live, supplierId, context, side) {
 }
 
 async function assertAgentCostCurrencyReady(live, supplierId, context, side) {
-  if (side !== 'cost') return;
+  if (side !== 'cost' || !isHongKongStem(live.stem)) return;
   const account = (live.accounts || []).find((row) => row.Id === supplierId);
   if (account?.Is_Agent__c !== true) return;
   const requiredCurrency = requiredAgentCurrency(live, supplierId);
@@ -3664,6 +3690,9 @@ export const variableChargeInternals = {
   variableChargeActionability,
   plainLanguageWorkflow,
   supplierLiveFingerprint,
+  supplierInputForPort,
+  requiredAgentCurrency,
+  assertAgentCostCurrencyReady,
   sha256,
   serializeLiveRow,
   supplierDualCurrencySummary,
