@@ -20,7 +20,7 @@ const caseRow = {
 const detail = {
   case: caseRow, pairedWorkflowEnabled: true, lineItems: [], products: [], salesforceFiles: [],
   variableChargeSettings: { usdHkdRate: 7.84, revision: 1 },
-  extraCosts: [{ id: extraId, supplierId, productName: 'BASIC CALLING COST', description: 'STEM Charge', fixed: true, fixedCost: 1771, fixedPrice: 2150, buyerChargeDecision: 'include', lastModifiedDate: '2026-09-11T01:00:00.000Z' }],
+  extraCosts: [{ id: extraId, supplierId, productName: 'BASIC CALLING COST', description: '', fixed: true, fixedCost: 1771, fixedPrice: 2150, buyerChargeDecision: 'include', lastModifiedDate: '2026-09-11T01:00:00.000Z' }],
 };
 window.variableChargeFixture = { requests: [] };
 appClient.functions.invoke = async (name, body) => {
