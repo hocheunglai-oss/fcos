@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import pdfParse from 'pdf-parse/lib/pdf-parse.js';
-import JSZip from 'jszip';
-import { generateSpecialTermDocx, generateSpecialTermPdf, specialTermsExportInternals } from '../api/_specialTermsExport.js';
+import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
+import { generateSpecialTermsDocument, generateSpecialTermPdf, specialTermsExportInternals } from '../api/_specialTermsExport.js';
 import { compiledTermsText } from '../api/_specialTerms.js';
-import { specialTermsDocumentInternals } from '../api/_specialTermsDocumentModel.js';
 
 const term = {
   id: 'a01000000000001AAA',
@@ -35,32 +35,69 @@ test('Special Term PDF preserves Terms Text and creates a safe individual filena
   assert.doesNotMatch(parsed.text, /Must not be exported|Also excluded|Confirmation|Nomination|Last modified|Salesforce/);
 });
 
-test('Special Term DOCX contains editable terms, real numbering, A4 geometry, and repeating letterhead parts', async () => {
-  const generated = await generateSpecialTermDocx({
-    ...term,
-    termsText: '1. First contractual requirement.\n- Internal supporting item\n- Second supporting item\n\n2. Second contractual requirement.',
-  }, { generatedAt: new Date('2026-08-06T02:00:00.000Z') });
-  assert.equal(generated.contentType, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-  assert.equal(generated.filename, '20260806 Low sulphur requirement.docx');
-  assert.equal(generated.buffer.subarray(0, 2).toString(), 'PK');
-  const zip = await JSZip.loadAsync(generated.buffer);
-  const documentXml = await zip.file('word/document.xml').async('string');
-  const headerXml = await zip.file('word/header1.xml').async('string');
-  const footerXml = await zip.file('word/footer1.xml').async('string');
-  const numberingXml = await zip.file('word/numbering.xml').async('string');
-  assert.match(documentXml, /First contractual requirement/);
-  assert.match(documentXml, /Second contractual requirement/);
-  assert.match(headerXml, /FRATELLI COSULICH BUNKERS \(HK\) LTD/);
-  assert.match(headerXml, /SPECIAL TERMS/);
-  assert.match(headerXml, /Low sulphur requirement/);
-  assert.match(footerXml, /Page/);
-  assert.match(numberingXml, /%1\./);
-  assert.match(documentXml, /<w:jc w:val="both"\/>/);
-  assert.equal(specialTermsDocumentInternals.DOCX_BODY_LINE_TWIP, 300);
-  assert.equal(specialTermsDocumentInternals.DOCX_BODY_HALF_POINTS, 24);
-  assert.match(documentXml, /w:w="11906"/); // 210 mm in twentieths of a point
-  assert.match(documentXml, /w:left="1247"/); // 22 mm margin
-  assert.doesNotMatch(documentXml, /Must not be exported|Also excluded/);
+test('Special Terms exports accept PDF only for both live and draft documents', async () => {
+  for (const source of ['live', 'draft']) {
+    for (const format of ['docx', 'html', 'txt']) {
+      await assert.rejects(generateSpecialTermsDocument(term, { source, format }), {
+        status: 400,
+        code: 'SPECIAL_TERMS_DOCUMENT_FORMAT_INVALID',
+        message: 'Special Terms are available as PDF only.',
+      });
+    }
+    const generated = await generateSpecialTermsDocument(term, { source });
+    assert.equal(generated.contentType, 'application/pdf');
+    assert.equal(generated.source, source);
+  }
+});
+
+test('the document API rejects removed formats before reading Salesforce or writing audit events', async () => {
+  const functions = readFileSync(new URL('../api/functions/[name].js', import.meta.url), 'utf8');
+  const start = functions.indexOf('async function specialTermsDocumentExport(');
+  const end = functions.indexOf('/** Retained only for deployed FCOS clients', start);
+  assert.ok(start >= 0 && end > start);
+  const context = vm.createContext({
+    appError: (message, status, code) => Object.assign(new Error(message), { status, code }),
+  });
+  vm.runInContext(functions.slice(start, end), context);
+  // No provider or response methods are available: validation must reject first.
+  for (const source of ['live', 'draft']) {
+    for (const format of ['docx', ' DOCX ', 'html']) {
+      await assert.rejects(context.specialTermsDocumentExport({ format, source }, null, null, {}), {
+        status: 400,
+        code: 'SPECIAL_TERMS_DOCUMENT_FORMAT_INVALID',
+      });
+    }
+  }
+});
+
+test('China and wrapped term headings are centred inside the A4 margins on every live and draft page', async () => {
+  for (const name of ['China', 'China Delivery Requirements for Mainland Ports and Offshore Anchorage Operations']) {
+    for (const source of ['live', 'draft']) {
+      const generated = generateSpecialTermPdf({
+        name,
+        termsText: Array.from({ length: 45 }, (_, index) => `${index + 1}. Requirement ${index + 1} applies at the agreed delivery location.`).join('\n\n'),
+      }, { source });
+      let pagesChecked = 0;
+      await pdfParse(generated.buffer, { pagerender: async (page) => {
+        const { items } = await page.getTextContent();
+        const headings = items.filter((item) => item.str === 'SPECIAL TERMS' || Math.abs(item.transform[0] - 15) < 0.01);
+        const titleLines = headings.filter((item) => item.str !== 'SPECIAL TERMS');
+        assert.equal(titleLines.map((item) => item.str).join(' '), name);
+        assert.equal(headings.filter((item) => item.str === 'SPECIAL TERMS').length, 1);
+        if (name !== 'China') assert.ok(titleLines.length > 1);
+        const centre = (page.view[0] + page.view[2]) / 2;
+        const margin = 22 * 72 / 25.4;
+        for (const item of headings) {
+          assert.ok(Math.abs(item.transform[4] + item.width / 2 - centre) < 1.5, `${item.str} must be centred`);
+          assert.ok(item.transform[4] >= margin - 1 && item.transform[4] + item.width <= page.view[2] - margin + 1);
+        }
+        pagesChecked += 1;
+        return '';
+      } });
+      assert.ok(pagesChecked > 1);
+      assert.equal(pagesChecked, generated.pageCount);
+    }
+  }
 });
 
 test('Special Term PDF repeats the full letterhead and term heading on every page', async () => {
@@ -125,7 +162,7 @@ test('shared document geometry uses readable type and a compact aligned marker c
   assert.equal(tokens.page.leftMm, tokens.page.rightMm);
 });
 
-test('Saved draft PDF is visibly marked and DOCX preserves legacy hard line breaks', async () => {
+test('Saved draft PDF is visibly marked and preserves legacy hard line breaks', async () => {
   const generated = generateSpecialTermPdf({ ...term, termsText: 'An unnumbered legacy sentence.\nSecond legacy line.' }, {
     source: 'draft',
     generatedAt: new Date('2026-08-06T02:00:00.000Z'),
@@ -133,10 +170,7 @@ test('Saved draft PDF is visibly marked and DOCX preserves legacy hard line brea
   const parsed = await pdfParse(generated.buffer);
   assert.match(parsed.text, /DRAFT/);
 
-  const docx = await generateSpecialTermDocx({ ...term, termsText: 'A legacy line.\nA preserved second line.' }, { generatedAt: new Date('2026-08-06T02:00:00.000Z') });
-  const zip = await JSZip.loadAsync(docx.buffer);
-  const documentXml = await zip.file('word/document.xml').async('string');
-  assert.match(documentXml, /<w:br\/>/);
+  assert.match(parsed.text, /An unnumbered legacy sentence\.\nSecond legacy line\./);
 });
 
 test('structured document compilation requires sequential matching approved versions', () => {

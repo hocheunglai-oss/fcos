@@ -1,12 +1,11 @@
 import { readFileSync } from 'node:fs';
-import { Document, Footer, Header, ImageRun, LevelFormat, LevelSuffix, Packer, PageNumber, Paragraph, TextRun, AlignmentType } from 'docx';
 import { Parser } from 'htmlparser2';
 import { jsPDF } from 'jspdf';
 import { SPECIAL_TERMS_DOCUMENT_TOKENS } from '../src/lib/specialTermsDocumentTokens.js';
 
 /**
- * The document token map is deliberately shared by the web preview, PDF, and
- * DOCX renderers.  Do not put customer wording in this module: it is only the
+ * The document token map is deliberately shared by the web preview and PDF
+ * renderer. Do not put customer wording in this module: it is only the
  * deterministic presentation layer for Salesforce-authoritative text.
  */
 export { SPECIAL_TERMS_DOCUMENT_TOKENS };
@@ -23,10 +22,6 @@ const PAGE = Object.freeze({
   footerRule: SPECIAL_TERMS_DOCUMENT_TOKENS.page.footerRuleMm,
   footerText: SPECIAL_TERMS_DOCUMENT_TOKENS.page.footerTextMm,
 });
-const MM_TO_TWIP = 56.6929133858;
-const mmToTwip = (value) => Math.round(value * MM_TO_TWIP);
-const DOCX_BODY_LINE_TWIP = Math.round(SPECIAL_TERMS_DOCUMENT_TOKENS.typography.bodyPt * SPECIAL_TERMS_DOCUMENT_TOKENS.typography.lineMultiplier * 20);
-const DOCX_BODY_HALF_POINTS = Math.round(SPECIAL_TERMS_DOCUMENT_TOKENS.typography.bodyPt * 2);
 const LOGO = (() => {
   try { return readFileSync(new URL('./assets/hedge-letterhead-logo.jpg', import.meta.url)); } catch { return null; }
 })();
@@ -162,11 +157,13 @@ function pdfLetterhead(doc) {
 
 function pdfHeading(doc, model) {
   doc.setTextColor(...BRAND_BLUE); doc.setFont('helvetica', 'bold'); doc.setFontSize(SPECIAL_TERMS_DOCUMENT_TOKENS.typography.sectionLabelPt);
-  doc.text('SPECIAL TERMS', PAGE.left, 54);
+  const headingCentre = (PAGE.left + PAGE.right) / 2;
+  const headingOptions = { align: SPECIAL_TERMS_DOCUMENT_TOKENS.typography.headingAlignment };
+  doc.text('SPECIAL TERMS', headingCentre, 54, headingOptions);
   doc.setFontSize(SPECIAL_TERMS_DOCUMENT_TOKENS.typography.titlePt);
   const titleLines = doc.splitTextToSize(model.name, PAGE.right - PAGE.left);
   let y = 60;
-  for (const line of titleLines) { doc.text(line, PAGE.left, y); y += 6.2; }
+  for (const line of titleLines) { doc.text(line, headingCentre, y, headingOptions); y += 6.2; }
   doc.setDrawColor(...BRAND_BLUE); doc.setLineWidth(0.25); doc.line(PAGE.left, y - 2.6, PAGE.right, y - 2.6);
   return Math.max(PAGE.contentStart, y + 2);
 }
@@ -211,7 +208,7 @@ function pdfRenderBody(doc, model) {
     applyBodyStyle();
   };
   // Typographic points converted to millimetres; the shared token is also
-  // used by the DOCX and browser preview.
+  // used by the browser preview.
   const lineHeight = SPECIAL_TERMS_DOCUMENT_TOKENS.typography.bodyPt * SPECIAL_TERMS_DOCUMENT_TOKENS.typography.lineMultiplier * 0.352778;
   const clauseGap = SPECIAL_TERMS_DOCUMENT_TOKENS.typography.clauseAfterPt * 0.352778;
   applyBodyStyle();
@@ -258,77 +255,4 @@ export function generateSpecialTermsPdfFromModel(model) {
   return { buffer: Buffer.from(doc.output('arraybuffer')), contentType: 'application/pdf', filename: `${model.filenameStem}.pdf`, termName: model.name, pageCount: doc.getNumberOfPages(), source: model.source };
 }
 
-function docxHeader(model) {
-  const children = [];
-  if (LOGO) children.push(new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 0, line: 200 }, children: [new ImageRun({ data: LOGO, transformation: { width: 242, height: 84 }, type: 'jpg' })] }));
-  children.push(new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 0, line: 180 }, border: { bottom: { color: SPECIAL_TERMS_DOCUMENT_TOKENS.colour.brandBlue, space: 1, style: 'single', size: 6 } }, children: [new TextRun({ text: 'FRATELLI COSULICH BUNKERS (HK) LTD', font: 'Arial', size: 20, bold: true, color: SPECIAL_TERMS_DOCUMENT_TOKENS.colour.brandBlue })] }));
-  children.push(new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 0, line: 150 }, border: { bottom: { color: SPECIAL_TERMS_DOCUMENT_TOKENS.colour.brandBlue, space: 1, style: 'single', size: 6 } }, children: [new TextRun({ text: 'UNITS 02-03, 23/F, PLAZA 228, 228 WAN CHAI ROAD, HONG KONG    T +852-25299138    GENERAL@COSULICH.COM.HK', font: 'Arial', size: 13, color: SPECIAL_TERMS_DOCUMENT_TOKENS.colour.brandBlue })] }));
-  // Reserve the complete 10–49 mm letterhead band before the repeated term
-  // heading. LibreOffice and Word both honour paragraph spacing here, whereas
-  // empty header paragraphs collapse differently between the two renderers.
-  children.push(new Paragraph({ spacing: { before: 700, after: 0, line: 160 }, children: [new TextRun({ text: 'SPECIAL TERMS', font: 'Arial', size: 17, bold: true, color: SPECIAL_TERMS_DOCUMENT_TOKENS.colour.brandBlue })] }));
-  children.push(new Paragraph({ spacing: { before: 0, after: 0, line: 260 }, border: { bottom: { color: SPECIAL_TERMS_DOCUMENT_TOKENS.colour.brandBlue, space: 1, style: 'single', size: 6 } }, children: [new TextRun({ text: model.name, font: 'Arial', size: 28, bold: true, color: SPECIAL_TERMS_DOCUMENT_TOKENS.colour.brandBlue })] }));
-  return new Header({ children });
-}
-
-function docxBodyTopMm(model) {
-  const titleLines = Math.max(1, Math.ceil(clean(model?.name).length / 68));
-  return 61 + Math.max(0, titleLines - 1) * 6.2;
-}
-
-function docxFooter() {
-  return new Footer({ children: [new Paragraph({ alignment: AlignmentType.RIGHT, border: { top: { color: SPECIAL_TERMS_DOCUMENT_TOKENS.colour.brandBlue, space: 1, style: 'single', size: 4 } }, children: [new TextRun({ text: 'Page ', font: 'Arial', size: 14, color: SPECIAL_TERMS_DOCUMENT_TOKENS.colour.brandBlue }), new TextRun({ children: [PageNumber.CURRENT], font: 'Arial', size: 14, color: SPECIAL_TERMS_DOCUMENT_TOKENS.colour.brandBlue }), new TextRun({ text: ' of ', font: 'Arial', size: 14, color: SPECIAL_TERMS_DOCUMENT_TOKENS.colour.brandBlue }), new TextRun({ children: [PageNumber.TOTAL_PAGES], font: 'Arial', size: 14, color: SPECIAL_TERMS_DOCUMENT_TOKENS.colour.brandBlue })] })] });
-}
-
-function docxTextRuns(value) {
-  const lines = String(value ?? '').split('\n');
-  return lines.flatMap((line, index) => [
-    ...(index ? [new TextRun({ break: 1 })] : []),
-    new TextRun({ text: line, font: 'Arial', size: DOCX_BODY_HALF_POINTS, color: SPECIAL_TERMS_DOCUMENT_TOKENS.colour.bodyInk }),
-  ]);
-}
-
-function docxBody(model) {
-  const children = [];
-  for (const item of model.body) {
-    for (let p = 0; p < item.paragraphs.length; p += 1) {
-      const paragraph = item.paragraphs[p];
-      const paragraphAfter = item.type === 'clause' && p === item.paragraphs.length - 1
-        ? Math.round(SPECIAL_TERMS_DOCUMENT_TOKENS.typography.clauseAfterPt * 20)
-        : 50;
-      if (paragraph.nested) {
-        children.push(new Paragraph({ alignment: AlignmentType.JUSTIFIED, numbering: { reference: 'special-terms-bullet', level: 0 }, keepLines: true, spacing: { after: paragraphAfter, line: DOCX_BODY_LINE_TWIP }, children: docxTextRuns(paragraph.text) }));
-      } else if (item.type === 'clause' && p === 0) {
-        children.push(new Paragraph({ alignment: AlignmentType.JUSTIFIED, numbering: { reference: 'special-terms-top', level: 0 }, keepLines: true, spacing: { after: paragraphAfter, line: DOCX_BODY_LINE_TWIP }, children: docxTextRuns(paragraph.text) }));
-      } else {
-        children.push(new Paragraph({ alignment: AlignmentType.JUSTIFIED, indent: item.type === 'clause' ? { left: mmToTwip(SPECIAL_TERMS_DOCUMENT_TOKENS.list.textIndentMm) } : undefined, spacing: { after: paragraphAfter, line: DOCX_BODY_LINE_TWIP }, children: docxTextRuns(paragraph.text) }));
-      }
-    }
-  }
-  return children;
-}
-
-export async function generateSpecialTermsDocxFromModel(model) {
-  const doc = new Document({
-    creator: 'FCOS', title: `Special Terms - ${model.name}`, subject: 'Special Terms',
-    numbering: { config: [
-      { reference: 'special-terms-top', levels: [{ level: 0, format: LevelFormat.DECIMAL, text: '%1.', alignment: AlignmentType.RIGHT, suffix: LevelSuffix.TAB, style: { run: { font: 'Arial', size: DOCX_BODY_HALF_POINTS, color: SPECIAL_TERMS_DOCUMENT_TOKENS.colour.bodyInk }, paragraph: { leftTabStop: mmToTwip(SPECIAL_TERMS_DOCUMENT_TOKENS.list.textIndentMm), indent: { left: mmToTwip(SPECIAL_TERMS_DOCUMENT_TOKENS.list.textIndentMm), hanging: mmToTwip(SPECIAL_TERMS_DOCUMENT_TOKENS.list.textIndentMm - SPECIAL_TERMS_DOCUMENT_TOKENS.list.markerRightMm) }, spacing: { line: DOCX_BODY_LINE_TWIP, after: Math.round(SPECIAL_TERMS_DOCUMENT_TOKENS.typography.clauseAfterPt * 20) }, keepLines: true } } }] },
-      { reference: 'special-terms-bullet', levels: [{ level: 0, format: LevelFormat.BULLET, text: '-', alignment: AlignmentType.RIGHT, suffix: LevelSuffix.TAB, style: { run: { font: 'Arial', size: DOCX_BODY_HALF_POINTS, color: SPECIAL_TERMS_DOCUMENT_TOKENS.colour.bodyInk }, paragraph: { leftTabStop: mmToTwip(SPECIAL_TERMS_DOCUMENT_TOKENS.list.nestedTextIndentMm), indent: { left: mmToTwip(SPECIAL_TERMS_DOCUMENT_TOKENS.list.nestedTextIndentMm), hanging: mmToTwip(SPECIAL_TERMS_DOCUMENT_TOKENS.list.nestedTextIndentMm - SPECIAL_TERMS_DOCUMENT_TOKENS.list.nestedMarkerRightMm) }, spacing: { line: DOCX_BODY_LINE_TWIP, after: 50 }, keepLines: true } } }] },
-    ] },
-    sections: [{
-      properties: {
-        page: {
-          size: { width: mmToTwip(210), height: mmToTwip(297) },
-          margin: { top: mmToTwip(docxBodyTopMm(model)), right: mmToTwip(22), bottom: mmToTwip(17), left: mmToTwip(22), header: mmToTwip(10), footer: mmToTwip(8) },
-        },
-      },
-      headers: { default: docxHeader(model) },
-      footers: { default: docxFooter() },
-      children: docxBody(model),
-    }],
-  });
-  const buffer = Buffer.from(await Packer.toBuffer(doc));
-  return { buffer, contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', filename: `${model.filenameStem}.docx`, termName: model.name, source: model.source };
-}
-
-export const specialTermsDocumentInternals = { clean, richTextToPlainText, paragraphsForClause, safelyParseLegacyNumbering, docxBodyTopMm, DOCX_BODY_LINE_TWIP, DOCX_BODY_HALF_POINTS };
+export const specialTermsDocumentInternals = { clean, richTextToPlainText, paragraphsForClause, safelyParseLegacyNumbering };

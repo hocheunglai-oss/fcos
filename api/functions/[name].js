@@ -18726,9 +18726,8 @@ async function specialTermsDocumentExport(body = {}, req, res, accessContext = n
   const context = accessContext || (await requireActiveUser(req));
   const format = String(body.format || 'pdf').trim().toLowerCase();
   const source = String(body.source || 'live').trim().toLowerCase();
-  if (!['pdf', 'docx'].includes(format)) throw appError('Choose PDF or Word document format.', 400, 'SPECIAL_TERMS_DOCUMENT_FORMAT_INVALID');
+  if (format !== 'pdf') throw appError('Special Terms are available as PDF only.', 400, 'SPECIAL_TERMS_DOCUMENT_FORMAT_INVALID');
   if (!['live', 'draft'].includes(source)) throw appError('Choose a live document or saved draft preview.', 400, 'SPECIAL_TERMS_DOCUMENT_SOURCE_INVALID');
-  if (source === 'draft' && format !== 'pdf') throw appError('Saved drafts may be downloaded as watermarked PDF only.', 409, 'SPECIAL_TERMS_DOCUMENT_DRAFT_FORMAT_RESTRICTED');
   const term = await getSpecialTermDocumentForExport(body.termId, {
     source,
     revisionId: body.revisionId,

@@ -245,7 +245,7 @@ export const SPECIAL_TERMS_USER_MANUAL = Object.freeze({
       title: 'Export, inspect history, or delete',
       summary: 'Use the available evidence and remove only safe drafts.',
       steps: [
-        'Download PDF or Word output when a review copy is needed.',
+        'Select Preview PDF to inspect the generated live PDF or a watermarked saved draft. Use Download PDF inside the preview window to save the displayed copy.',
         'Open Salesforce or revision history to verify the authoritative record.',
         'Delete only an eligible Draft or Legacy record with no protected published use.',
         'Refresh after external changes before continuing work.',

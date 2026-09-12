@@ -17,6 +17,7 @@ export default defineConfig({
     react(),
   ],
   build: {
+    manifest: true,
     target: 'es2022',
     // Preserve release size budgets as independently developed features converge.
     minify: 'terser',

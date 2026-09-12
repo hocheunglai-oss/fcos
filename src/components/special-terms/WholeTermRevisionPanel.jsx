@@ -13,6 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea';
 import { SPECIAL_TERM_REVISION_PROJECTIONS, revisionFromDetail, revisionPayload } from '@/lib/specialTermRevision';
 import SpecialTermDocumentPreview from '@/components/special-terms/SpecialTermDocumentPreview';
+import SpecialTermPdfPreviewDialog from '@/components/special-terms/SpecialTermPdfPreviewDialog';
 import { documentPreviewKey, specialTermDocumentModel } from '@/lib/specialTermDocumentPreview';
 
 function operationId() {
@@ -81,7 +82,7 @@ export default function WholeTermRevisionPanel({ detail, canDraft, canApprove, c
   const [revisionReason, setRevisionReason] = useState(initialReason.trim().toUpperCase() === 'N/A' ? '' : initialReason);
   const [reasonNotApplicable, setReasonNotApplicable] = useState(initialReason.trim().toUpperCase() === 'N/A');
   const [activeProjection, setActiveProjection] = useState('termsText');
-  const [exportingDocument, setExportingDocument] = useState(false);
+  const [pdfRequest, setPdfRequest] = useState(null);
   const [savedDraftPreviewKey, setSavedDraftPreviewKey] = useState(null);
   const [relink, setRelink] = useState(null);
   const [legacyPreviews, setLegacyPreviews] = useState(null);
@@ -242,33 +243,18 @@ export default function WholeTermRevisionPanel({ detail, canDraft, canApprove, c
     }, mode === 'approve_publish' ? 'Special Term approved and published.' : 'Special Term submitted for approval.');
   };
 
-  const exportDocument = async (format, mode) => {
-    if (exportingDocument || (mode === 'draft' && !revision?.id)) return;
-    setExportingDocument(true);
-    onError?.('');
-    try {
-      const result = await appClient.functions.download('specialTermsDocumentExport', {
-        termId: detail.term.id,
-        format,
-        source: mode,
-        revisionId: mode === 'draft' ? revision.id : null,
-        expectedLastModifiedAt: detail.term.lastModifiedAt || revision?.termLastModifiedAt || null,
-        expectedRevisionLastModifiedAt: mode === 'draft'
-          ? revision.expectedLastModifiedAt || revision.lastModifiedAt || null
-          : null,
-      });
-      const url = URL.createObjectURL(result.blob);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = result.filename;
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
-    } catch (error) {
-      onError?.(error.message || 'The Special Term document could not be exported.');
-    }
-    setExportingDocument(false);
+  const previewPdf = (mode) => {
+    if (mode === 'draft' && (!revision?.id || unsaved)) return;
+    setPdfRequest({
+      termId: detail.term.id,
+      termName: detail.term.name,
+      source: mode,
+      revisionId: mode === 'draft' ? revision.id : null,
+      expectedLastModifiedAt: detail.term.lastModifiedAt || revision?.termLastModifiedAt || null,
+      expectedRevisionLastModifiedAt: mode === 'draft'
+        ? revision.expectedLastModifiedAt || revision.lastModifiedAt || null
+        : null,
+    });
   };
 
   const editable = canDraft && ['Draft', 'In Review', 'Changes Requested'].includes(status);
@@ -278,12 +264,13 @@ export default function WholeTermRevisionPanel({ detail, canDraft, canApprove, c
   const unsaved = !revision?.id || !savedDraftPreviewKey || savedDraftPreviewKey !== documentPreviewKey(previewModel);
   const selectedProjection = SPECIAL_TERM_REVISION_PROJECTIONS.includes(activeProjection) ? activeProjection : null;
   const clauses = selectedProjection ? <ClauseProjectionSection detail={{ ...detail, projections: revision.projections }} projection={selectedProjection} canManage={editable} canApprove={false} canEditClause={canDraft} canPublishClause={canApprove} localPublicationBlocked={unsaved || hasUnsavedParentChanges} currentTermId={detail?.term?.id} categoryOptions={categoryOptions} onAssignmentsChange={updateAssignments} onChanged={onChanged} onClausePublished={onInlinePublished} onStatusMessage={onStatusMessage} onError={onError} wholeTermRevision /> : null;
-  const preview = hasTermsDocument ? <SpecialTermDocumentPreview term={detail.term} detail={detail} revision={revision} unsaved={unsaved} onExport={exportDocument} /> : null;
+  const preview = hasTermsDocument ? <SpecialTermDocumentPreview term={detail.term} detail={detail} revision={revision} unsaved={unsaved} onPreviewPdf={previewPdf} /> : null;
   useEffect(() => {
     if (!hasTermsDocument && activeProjection === 'preview') setActiveProjection('termsText');
   }, [activeProjection, hasTermsDocument]);
   return (
     <section className="space-y-4 rounded-lg border border-border bg-muted/10 p-4">
+      <SpecialTermPdfPreviewDialog request={pdfRequest} onClose={() => setPdfRequest(null)} />
       {(detail?.consolidationPrompts || []).map((prompt) => <div key={prompt.id} className="flex flex-col gap-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-amber-950 sm:flex-row sm:items-start sm:justify-between"><div className="flex items-start gap-2"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /><div><p className="text-sm font-semibold">Relink required: {prompt.sourceShortName} → {prompt.replacementShortName} v{prompt.replacementRevisionNumber}</p><p className="mt-1 text-xs">{prompt.occurrences.map((row) => `${row.projectionValue} #${row.sequence}`).join(', ')}. Live wording remains unchanged until this whole-term revision is approved.</p></div></div>{canDraft && prompt.status === 'Relinking' ? <Button type="button" size="sm" onClick={() => setRelink({ prompt, reason: '' })} disabled={busy}><Merge className="mr-1.5 h-3.5 w-3.5" />Relink now</Button> : null}</div>)}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div><div className="flex flex-wrap items-center gap-2"><ShieldCheck className="h-4 w-4 text-primary" /><strong className="text-sm">Complete Special Term update</strong><Badge variant={status === 'Approved' || status === 'Active' ? 'default' : 'outline'}>{status}</Badge>{revision.number ? <Badge variant="secondary">Revision {revision.number}</Badge> : null}</div><p className="mt-1 text-xs text-muted-foreground">Edit any section, enter one change reason, then complete the update with one action.</p></div>
@@ -304,7 +291,7 @@ export default function WholeTermRevisionPanel({ detail, canDraft, canApprove, c
       {SPECIAL_TERM_REVISION_PROJECTIONS.includes(activeProjection) && legacyPreviews?.[activeProjection]?.manualReviewRequired ? <MigrationReviewPanel detail={detail} projection={activeProjection} categoryOptions={categoryOptions} canApprove={canDraft} draftOnly onChanged={onChanged} onError={onError} /> : null}
       {activeProjection === 'rules' ? <RevisionRuleEditor rules={revision.rules || []} editable={editable} audienceOptions={audienceOptions} countryOptions={countryOptions} onChange={updateRules} /> : null}
       {activeProjection === 'preview' ? preview : null}
-      {editable ? <div className="sticky bottom-3 z-10 space-y-3 rounded-lg border border-primary/30 bg-background/95 p-3 shadow-lg backdrop-blur"><div className="space-y-1.5"><div className="flex items-center justify-between gap-2"><Label htmlFor="special-term-change-reason">Change reason</Label><Button type="button" size="sm" variant={reasonNotApplicable ? 'default' : 'outline'} aria-pressed={reasonNotApplicable} onClick={() => setReasonNotApplicable((current) => !current)}>N/A</Button></div><Textarea id="special-term-change-reason" value={reasonNotApplicable ? 'N/A' : revisionReason} disabled={reasonNotApplicable} maxLength={1000} onChange={(event) => setRevisionReason(event.target.value)} placeholder="Why this complete Special Term update is needed" rows={2} /></div><div className="flex justify-end"><Button type="button" onClick={() => commit(canApprove ? 'approve_publish' : 'submit')} disabled={busy || legacyPreparing || exportingDocument || (!reasonNotApplicable && revisionReason.trim().length < 3)}>{busy ? 'Working…' : canApprove ? <><CheckCircle2 className="mr-2 h-4 w-4" />Approve &amp; publish</> : <><ShieldCheck className="mr-2 h-4 w-4" />Submit for approval</>}</Button></div></div> : null}
+      {editable ? <div className="sticky bottom-3 z-10 space-y-3 rounded-lg border border-primary/30 bg-background/95 p-3 shadow-lg backdrop-blur"><div className="space-y-1.5"><div className="flex items-center justify-between gap-2"><Label htmlFor="special-term-change-reason">Change reason</Label><Button type="button" size="sm" variant={reasonNotApplicable ? 'default' : 'outline'} aria-pressed={reasonNotApplicable} onClick={() => setReasonNotApplicable((current) => !current)}>N/A</Button></div><Textarea id="special-term-change-reason" value={reasonNotApplicable ? 'N/A' : revisionReason} disabled={reasonNotApplicable} maxLength={1000} onChange={(event) => setRevisionReason(event.target.value)} placeholder="Why this complete Special Term update is needed" rows={2} /></div><div className="flex justify-end"><Button type="button" onClick={() => commit(canApprove ? 'approve_publish' : 'submit')} disabled={busy || legacyPreparing || Boolean(pdfRequest) || (!reasonNotApplicable && revisionReason.trim().length < 3)}>{busy ? 'Working…' : canApprove ? <><CheckCircle2 className="mr-2 h-4 w-4" />Approve &amp; publish</> : <><ShieldCheck className="mr-2 h-4 w-4" />Submit for approval</>}</Button></div></div> : null}
       <details className="rounded-md border border-border bg-background p-3"><summary className="cursor-pointer text-xs font-semibold">Advanced history and provenance</summary>{revision.provenance ? <div className="mt-3 text-xs text-muted-foreground"><span className="font-semibold text-foreground">Source:</span> {revision.provenance.sourceLabel || 'Salesforce wording'}{revision.provenance.migratedAt ? ` · prepared ${revision.provenance.migratedAt}` : ''}{revision.provenance.mappingDecision ? ` · ${revision.provenance.mappingDecision}` : ''}</div> : null}{detail?.revisionHistory?.length ? <ol className="mt-3 space-y-2 border-l border-border pl-4 text-xs text-muted-foreground">{detail.revisionHistory.map((event) => <li key={event.id}><strong className="text-foreground">Revision {event.revisionNumber} · {event.status}</strong>{event.proposedByEmail ? ` · proposed by ${event.proposedByEmail}` : ''}{event.approvedByEmail ? ` · approved by ${event.approvedByEmail}` : ''}{event.approvedAt ? ` · ${event.approvedAt}` : ''}{event.revisionReason ? <span className="block">{event.revisionReason}</span> : null}</li>)}</ol> : <p className="mt-2 text-xs text-muted-foreground">No prior revision history.</p>}{canApprove && revision.sourceRevisionId ? <Button type="button" className="mt-3" size="sm" variant="outline" onClick={() => setConfirm({ type: 'rollback', reason: '' })} disabled={busy}><RotateCcw className="mr-2 h-4 w-4" />Rollback active revision</Button> : null}</details>
 
       <Dialog open={Boolean(confirm)} onOpenChange={(open) => !open && !busy && setConfirm(null)}>
