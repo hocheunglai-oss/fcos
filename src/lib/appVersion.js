@@ -4,6 +4,16 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.209',
+    releasedAt: '2026-09-13',
+    title: 'Professional Special Terms typography',
+    changes: [
+      'Uses IBM Plex Sans in Special Terms PDFs and the document preview, with lighter semibold headings.',
+      'Improves readability with 11-point body text, 15-point line spacing and left-aligned clauses.',
+      'Embeds PDF fonts for consistent viewing and printing while preserving saved contractual wording.',
+    ],
+  },
+  {
     version: '2.0.208',
     releasedAt: '2026-09-13',
     title: 'Simpler Special Terms drafts, approval and PDF preview',

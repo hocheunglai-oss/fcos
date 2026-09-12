@@ -26,6 +26,20 @@ const LOGO = (() => {
   try { return readFileSync(new URL('./assets/hedge-letterhead-logo.jpg', import.meta.url)); } catch { return null; }
 })();
 
+let pdfFonts;
+function registerDocumentFonts(doc) {
+  // Read immutable bundled assets only when exporting. Missing font assets must
+  // fail the export rather than silently issuing a different document layout.
+  pdfFonts ??= [
+    { file: 'IBMPlexSans-Regular.ttf', style: 'normal', data: readFileSync(new URL('./assets/fonts/ibm-plex-sans/IBMPlexSans-Regular.ttf', import.meta.url)).toString('base64') },
+    { file: 'IBMPlexSans-SemiBold.ttf', style: 'bold', data: readFileSync(new URL('./assets/fonts/ibm-plex-sans/IBMPlexSans-SemiBold.ttf', import.meta.url)).toString('base64') },
+  ];
+  for (const font of pdfFonts) {
+    doc.addFileToVFS(font.file, font.data);
+    doc.addFont(font.file, SPECIAL_TERMS_DOCUMENT_TOKENS.typography.family, font.style);
+  }
+}
+
 function clean(value) {
   return String(value ?? '').replace(/\r\n?/g, '\n').replace(/[ \t]+$/gm, '').trim();
 }
@@ -147,16 +161,16 @@ export function buildSpecialTermsDocumentModel(term, { source = 'live', generate
 function pdfLetterhead(doc) {
   if (LOGO) doc.addImage(LOGO, 'JPEG', (PAGE.width - SPECIAL_TERMS_DOCUMENT_TOKENS.logo.widthMm) / 2, 10, SPECIAL_TERMS_DOCUMENT_TOKENS.logo.widthMm, SPECIAL_TERMS_DOCUMENT_TOKENS.logo.heightMm);
   doc.setTextColor(...BRAND_BLUE); doc.setDrawColor(...BRAND_BLUE); doc.setLineWidth(0.25);
-  doc.setFont('helvetica', 'bold'); doc.setFontSize(SPECIAL_TERMS_DOCUMENT_TOKENS.typography.companyPt);
+  doc.setFont(SPECIAL_TERMS_DOCUMENT_TOKENS.typography.family, 'bold'); doc.setFontSize(SPECIAL_TERMS_DOCUMENT_TOKENS.typography.companyPt);
   doc.text('FRATELLI COSULICH BUNKERS (HK) LTD', PAGE.width / 2, 40.2, { align: 'center' });
   doc.line(PAGE.left, 44.3, PAGE.right, 44.3);
-  doc.setFont('helvetica', 'normal'); doc.setFontSize(SPECIAL_TERMS_DOCUMENT_TOKENS.typography.detailsPt);
+  doc.setFont(SPECIAL_TERMS_DOCUMENT_TOKENS.typography.family, 'normal'); doc.setFontSize(SPECIAL_TERMS_DOCUMENT_TOKENS.typography.detailsPt);
   doc.text('UNITS 02-03, 23/F, PLAZA 228, 228 WAN CHAI ROAD, HONG KONG    T +852-25299138    GENERAL@COSULICH.COM.HK', PAGE.width / 2, 47.2, { align: 'center' });
   doc.line(PAGE.left, 49, PAGE.right, 49);
 }
 
 function pdfHeading(doc, model) {
-  doc.setTextColor(...BRAND_BLUE); doc.setFont('helvetica', 'bold'); doc.setFontSize(SPECIAL_TERMS_DOCUMENT_TOKENS.typography.sectionLabelPt);
+  doc.setTextColor(...BRAND_BLUE); doc.setFont(SPECIAL_TERMS_DOCUMENT_TOKENS.typography.family, 'bold'); doc.setFontSize(SPECIAL_TERMS_DOCUMENT_TOKENS.typography.sectionLabelPt);
   const headingCentre = (PAGE.left + PAGE.right) / 2;
   const headingOptions = { align: SPECIAL_TERMS_DOCUMENT_TOKENS.typography.headingAlignment };
   doc.text('SPECIAL TERMS', headingCentre, 54, headingOptions);
@@ -165,17 +179,17 @@ function pdfHeading(doc, model) {
   let y = 60;
   for (const line of titleLines) { doc.text(line, headingCentre, y, headingOptions); y += 6.2; }
   doc.setDrawColor(...BRAND_BLUE); doc.setLineWidth(0.25); doc.line(PAGE.left, y - 2.6, PAGE.right, y - 2.6);
-  return Math.max(PAGE.contentStart, y + 2);
+  return Math.max(PAGE.contentStart, y + 6);
 }
 
 function pdfContentStart(doc, model) {
-  doc.setFont('helvetica', 'bold'); doc.setFontSize(SPECIAL_TERMS_DOCUMENT_TOKENS.typography.titlePt);
+  doc.setFont(SPECIAL_TERMS_DOCUMENT_TOKENS.typography.family, 'bold'); doc.setFontSize(SPECIAL_TERMS_DOCUMENT_TOKENS.typography.titlePt);
   const titleLines = doc.splitTextToSize(model.name, PAGE.right - PAGE.left);
-  return Math.max(PAGE.contentStart, 60 + titleLines.length * 6.2 + 2);
+  return Math.max(PAGE.contentStart, 60 + titleLines.length * 6.2 + 6);
 }
 
 function pdfDrawDraftWatermark(doc) {
-  doc.setTextColor(183, 189, 197); doc.setFont('helvetica', 'bold'); doc.setFontSize(40);
+  doc.setTextColor(183, 189, 197); doc.setFont(SPECIAL_TERMS_DOCUMENT_TOKENS.typography.family, 'bold'); doc.setFontSize(40);
   doc.text('DRAFT', PAGE.width / 2, PAGE.height / 2, { align: 'center', angle: 45 });
 }
 
@@ -186,7 +200,7 @@ function pdfDecorate(doc, model) {
     if (model.isDraft) pdfDrawDraftWatermark(doc);
     pdfLetterhead(doc); pdfHeading(doc, model);
     doc.setDrawColor(...BRAND_BLUE); doc.setLineWidth(0.2); doc.line(PAGE.left, PAGE.footerRule, PAGE.right, PAGE.footerRule);
-    doc.setTextColor(...BRAND_BLUE); doc.setFont('helvetica', 'normal'); doc.setFontSize(7);
+    doc.setTextColor(...BRAND_BLUE); doc.setFont(SPECIAL_TERMS_DOCUMENT_TOKENS.typography.family, 'normal'); doc.setFontSize(7);
     doc.text(`Page ${index} of ${count}`, PAGE.right, PAGE.footerText, { align: 'right' });
   }
 }
@@ -199,7 +213,7 @@ function pdfRenderBody(doc, model) {
   let y = pdfContentStart(doc, model);
   const applyBodyStyle = () => {
     doc.setTextColor(...BODY_INK);
-    doc.setFont('helvetica', 'normal');
+    doc.setFont(SPECIAL_TERMS_DOCUMENT_TOKENS.typography.family, 'normal');
     doc.setFontSize(SPECIAL_TERMS_DOCUMENT_TOKENS.typography.bodyPt);
   };
   const newPage = () => {
@@ -250,7 +264,8 @@ function pdfRenderBody(doc, model) {
 }
 
 export function generateSpecialTermsPdfFromModel(model) {
-  const doc = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait', compress: true });
+  const doc = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait', compress: true, putOnlyUsedFonts: true });
+  registerDocumentFonts(doc);
   pdfRenderBody(doc, model); pdfDecorate(doc, model);
   return { buffer: Buffer.from(doc.output('arraybuffer')), contentType: 'application/pdf', filename: `${model.filenameStem}.pdf`, termName: model.name, pageCount: doc.getNumberOfPages(), source: model.source };
 }

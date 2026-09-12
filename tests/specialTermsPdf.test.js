@@ -154,12 +154,32 @@ test('legacy Salesforce rich text becomes readable plain text before numbering a
 
 test('shared document geometry uses readable type and a compact aligned marker column', () => {
   const tokens = specialTermsExportInternals.SPECIAL_TERMS_DOCUMENT_TOKENS;
-  assert.equal(tokens.typography.bodyPt, 12);
-  assert.equal(tokens.typography.lineMultiplier, 1.25);
-  assert.equal(tokens.typography.bodyAlignment, 'justify');
+  assert.equal(tokens.typography.bodyPt, 11);
+  assert.ok(Math.abs(tokens.typography.bodyPt * tokens.typography.lineMultiplier - 15) < 0.001);
+  assert.equal(tokens.typography.bodyAlignment, 'left');
   assert.equal(tokens.typography.lastLineAlignment, 'left');
   assert.equal(tokens.list.markerRightMm + tokens.list.markerGapMm, tokens.list.textIndentMm);
   assert.equal(tokens.page.leftMm, tokens.page.rightMm);
+});
+
+test('Option C embeds both Plex faces and preserves casing, amounts and punctuation on a 15-point body grid', async () => {
+  const clause = 'UNLESS OTHERWISE STATED, ISO8217:2010 applies. USD 600–850; buyer’s cost €25. ';
+  const generated = generateSpecialTermPdf({ name: 'China', termsText: `1. ${clause.repeat(4)}` });
+  const pdf = generated.buffer.toString('latin1');
+  assert.ok(/\/BaseFont \/IBM#20Plex#20Sans/.test(pdf), 'Plex must be the embedded PDF family');
+  assert.equal((pdf.match(/\/FontFile2\b/g) || []).length, 2);
+  assert.ok(!/\/BaseFont \/Helvetica/.test(pdf), 'export must not fall back to Helvetica');
+  const parsed = await pdfParse(generated.buffer, { pagerender: async (page) => {
+    const { items } = await page.getTextContent();
+    const body = items.filter((item) => Math.abs(item.transform[0] - 11) < 0.01 && item.str !== '1.');
+    assert.ok(body.length > 2);
+    for (let index = 0; index < body.length; index += 1) {
+      assert.ok(Math.abs(body[index].transform[4] - 30.5 * 72 / 25.4) < 0.01, 'body must use a consistent left edge');
+      if (index) assert.ok(Math.abs(body[index - 1].transform[5] - body[index].transform[5] - 15) < 0.01);
+    }
+    return body.map((item) => item.str).join(' ');
+  } });
+  assert.equal(parsed.text.trim(), clause.repeat(4).trim());
 });
 
 test('Saved draft PDF is visibly marked and preserves legacy hard line breaks', async () => {

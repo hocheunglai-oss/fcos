@@ -69,20 +69,20 @@ function DocumentSheet({ model, pageText, nextPageText, pageIndex, pageCount, zo
   return (
     <article
       className={`relative mx-auto aspect-[210/297] bg-white text-slate-950 shadow-sm ring-1 ring-slate-200 ${zoom === '100' ? 'w-[794px] max-w-none' : 'w-full max-w-[794px]'}`}
-      style={{ containerType: 'inline-size', fontFamily: 'Arial, Helvetica, sans-serif', padding: `${pagePercent(PAGE.headerTopMm, PAGE.heightMm)} ${pagePercent(PAGE.leftMm, PAGE.widthMm)} ${pagePercent(PAGE.heightMm - PAGE.footerRuleMm, PAGE.heightMm)}` }}
+      style={{ containerType: 'inline-size', fontFamily: TYPE.browserFamily, padding: `${pagePercent(PAGE.headerTopMm, PAGE.heightMm)} ${pagePercent(PAGE.leftMm, PAGE.widthMm)} ${pagePercent(PAGE.heightMm - PAGE.footerRuleMm, PAGE.heightMm)}` }}
       aria-label={`${model.isDraft ? 'Draft' : 'Live'} A4 document preview, page ${pageIndex + 1} of ${pageCount}`}
     >
-      {model.isDraft ? <div className="pointer-events-none absolute left-1/2 top-1/2 z-0 -translate-x-1/2 -translate-y-1/2 -rotate-45 select-none text-7xl font-bold tracking-[0.25em] text-slate-200/70 sm:text-9xl">DRAFT</div> : null}
+      {model.isDraft ? <div className="pointer-events-none absolute left-1/2 top-1/2 z-0 -translate-x-1/2 -translate-y-1/2 -rotate-45 select-none text-7xl font-semibold tracking-[0.25em] text-slate-200/70 sm:text-9xl">DRAFT</div> : null}
       <header className="relative text-center">
         <img src={letterheadLogo} alt="Fratelli Cosulich Bunkers (HK) Ltd" className="mx-auto object-contain" style={{ width: pagePercent(LOGO.widthMm, PAGE.widthMm), height: pagePercent(LOGO.heightMm, PAGE.heightMm) }} />
-        <p className="mt-1 font-bold tracking-[0.04em]" style={{ fontSize: previewPointSize(TYPE.companyPt) }}>FRATELLI COSULICH BUNKERS (HK) LTD</p>
+        <p className="mt-1 tracking-[0.04em]" style={{ fontWeight: TYPE.headingWeight, fontSize: previewPointSize(TYPE.companyPt) }}>FRATELLI COSULICH BUNKERS (HK) LTD</p>
         <div className="mt-1.5 h-px bg-[#00417b]" />
         <p className="mt-1 whitespace-nowrap tracking-[-0.01em] text-slate-700" style={{ fontSize: previewPointSize(TYPE.detailsPt) }}>{LETTERHEAD_CONTACT}</p>
         <div className="mt-1 h-px bg-[#00417b]" />
       </header>
       <section className="relative" style={{ paddingTop: pagePercent(PAGE.contentStartMm - PAGE.headerBottomMm, PAGE.heightMm) }}>
-        <h2 className="font-bold uppercase tracking-[0.08em] text-[#00417b]" style={{ textAlign: TYPE.headingAlignment, fontSize: previewPointSize(TYPE.sectionLabelPt) }}>Special Terms</h2>
-        <h3 className="mt-2 font-bold leading-[1.15] text-[#00417b]" style={{ textAlign: TYPE.headingAlignment, fontSize: previewPointSize(TYPE.titlePt) }}>{model.title}</h3>
+        <h2 className="uppercase tracking-[0.08em] text-[#00417b]" style={{ fontWeight: TYPE.headingWeight, textAlign: TYPE.headingAlignment, fontSize: previewPointSize(TYPE.sectionLabelPt) }}>Special Terms</h2>
+        <h3 className="mt-2 leading-[1.15] text-[#00417b]" style={{ fontWeight: TYPE.headingWeight, textAlign: TYPE.headingAlignment, fontSize: previewPointSize(TYPE.titlePt) }}>{model.title}</h3>
         <div className="mt-2 h-px bg-[#00417b]" />
         <div className="mt-4 whitespace-pre-wrap text-left" style={{ fontSize: previewPointSize(TYPE.bodyPt), lineHeight: TYPE.lineMultiplier }}>{pageText ? <PreviewPageBody pageText={pageText} nextPageText={nextPageText} numbered={/^\s*1\.\s+/m.test(model.termsText)} /> : null}</div>
       </section>
