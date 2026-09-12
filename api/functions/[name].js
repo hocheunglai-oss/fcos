@@ -14300,7 +14300,9 @@ async function loadBuyerInvoicePaymentReminderContext(body = {}, accessContext =
     {
       daysAhead: body.daysAhead ?? settings.daysAhead,
       anchorStemId: stemId,
-      requestedStemIds: body.requestedStemIds || body.invoiceStemIds,
+      // Review and send must fingerprint the same complete buyer/group scope.
+      // The outbound selection is validated separately after the live comparison.
+      requestedStemIds: [],
     },
     null,
     accessContext,
@@ -14449,7 +14451,7 @@ async function buyerInvoicePaymentReminderSend(body, req, accessContext = null) 
     stemIds: [...selectedStemIds],
   });
   const { settings, settingsRevision: liveSettingsRevision, report, selected, candidates, sender } = await loadBuyerInvoicePaymentReminderContext(
-    { ...body, requestedStemIds: null },
+    { stemId: anchorStemId, daysAhead: body.daysAhead },
     activeAccess,
   );
   const liveRouting = preparePaymentReminderRouting(report, settings, selected, candidates);
@@ -18724,9 +18726,8 @@ async function specialTermsDocumentExport(body = {}, req, res, accessContext = n
   const context = accessContext || (await requireActiveUser(req));
   const format = String(body.format || 'pdf').trim().toLowerCase();
   const source = String(body.source || 'live').trim().toLowerCase();
-  if (!['pdf', 'docx'].includes(format)) throw appError('Choose PDF or Word document format.', 400, 'SPECIAL_TERMS_DOCUMENT_FORMAT_INVALID');
+  if (format !== 'pdf') throw appError('Special Terms are available as PDF only.', 400, 'SPECIAL_TERMS_DOCUMENT_FORMAT_INVALID');
   if (!['live', 'draft'].includes(source)) throw appError('Choose a live document or saved draft preview.', 400, 'SPECIAL_TERMS_DOCUMENT_SOURCE_INVALID');
-  if (source === 'draft' && format !== 'pdf') throw appError('Saved drafts may be downloaded as watermarked PDF only.', 409, 'SPECIAL_TERMS_DOCUMENT_DRAFT_FORMAT_RESTRICTED');
   const term = await getSpecialTermDocumentForExport(body.termId, {
     source,
     revisionId: body.revisionId,

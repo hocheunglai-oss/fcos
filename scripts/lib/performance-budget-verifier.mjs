@@ -44,6 +44,7 @@ export async function verifyPerformanceBudgets({
   const warnings = [];
   const sourceAssurances = [];
   const serverArtifacts = { available: true, unavailable: [] };
+  const clientAssets = { ordinaryBytes: 0, onDemandPdfViewer: null };
   const assertBudget = (condition, message) => {
     if (!condition) failures.push(message);
   };
@@ -57,14 +58,46 @@ export async function verifyPerformanceBudgets({
   if (await exists(assetDirectory)) {
     const files = await readdir(assetDirectory);
     const javascript = [];
-    for (const filename of files.filter((name) => name.endsWith('.js'))) {
+    for (const filename of files.filter((name) => /\.(?:js|mjs)$/.test(name))) {
       const content = await readFile(path.join(assetDirectory, filename));
       javascript.push({ filename, bytes: content.length, gzipBytes: gzipSync(content).length });
     }
-    const largest = javascript.toSorted((left, right) => right.bytes - left.bytes)[0];
-    const largestGzip = javascript.toSorted((left, right) => right.gzipBytes - left.gzipBytes)[0];
-    const chart = javascript.find((item) => item.filename.startsWith('generateCategoricalChart-'));
-    const total = javascript.reduce((sum, item) => sum + item.bytes, 0);
+    let ordinaryJavascript = javascript;
+    // The document renderer is optional, but its cost is never unmeasured.
+    // Only the manifest-proven dynamic entry and its own worker qualify for
+    // this separate budget. Every other JS/MJS asset retains the app budget.
+    if (budgets.onDemandPdfViewer) {
+      try {
+        const manifest = JSON.parse(await readFile(path.join(root, 'dist/.vite/manifest.json'), 'utf8'));
+        const entryKey = 'src/components/special-terms/SpecialTermPdfPages.jsx';
+        const entry = manifest[entryKey];
+        const renderer = javascript.find((item) => `assets/${item.filename}` === entry?.file);
+        const workerFile = manifest['node_modules/pdfjs-dist/build/pdf.worker.min.mjs']?.file;
+        const worker = javascript.find((item) => `assets/${item.filename}` === workerFile && entry?.assets?.includes(workerFile));
+        const isDynamic = entry?.isDynamicEntry === true && !entry.isEntry
+          && Object.values(manifest).some((item) => item.dynamicImports?.includes(entryKey))
+          && !Object.values(manifest).some((item) => item.imports?.includes(entryKey));
+        assertBudget(Boolean(renderer && worker && isDynamic), 'PDF viewer must be a separate dynamic entry with its own worker and no static importer.');
+        if (renderer && worker && isDynamic) {
+          const limit = budgets.onDemandPdfViewer;
+          const bytes = renderer.bytes + worker.bytes;
+          const gzipBytes = renderer.gzipBytes + worker.gzipBytes;
+          assertBudget(renderer.bytes <= limit.rendererBytes, `PDF renderer is ${renderer.bytes} bytes (budget ${limit.rendererBytes}).`);
+          assertBudget(worker.bytes <= limit.workerBytes, `PDF worker is ${worker.bytes} bytes (budget ${limit.workerBytes}).`);
+          assertBudget(bytes <= limit.totalBytes, `On-demand PDF viewer is ${bytes} bytes (budget ${limit.totalBytes}).`);
+          assertBudget(gzipBytes <= limit.totalGzipBytes, `Compressed on-demand PDF viewer is ${gzipBytes} bytes (budget ${limit.totalGzipBytes}).`);
+          clientAssets.onDemandPdfViewer = { bytes, gzipBytes, renderer: renderer.filename, worker: worker.filename };
+          ordinaryJavascript = javascript.filter((item) => item !== renderer && item !== worker);
+        }
+      } catch {
+        assertBudget(false, 'PDF viewer budgeting requires a valid Vite manifest.');
+      }
+    }
+    const largest = ordinaryJavascript.toSorted((left, right) => right.bytes - left.bytes)[0];
+    const largestGzip = ordinaryJavascript.toSorted((left, right) => right.gzipBytes - left.gzipBytes)[0];
+    const chart = ordinaryJavascript.find((item) => item.filename.startsWith('generateCategoricalChart-'));
+    const total = ordinaryJavascript.reduce((sum, item) => sum + item.bytes, 0);
+    clientAssets.ordinaryBytes = total;
     assertBudget(largest?.bytes <= budgets.client.largestJavaScriptBytes, `Largest client chunk ${largest?.filename} is ${largest?.bytes} bytes (budget ${budgets.client.largestJavaScriptBytes}).`);
     assertBudget(largestGzip?.gzipBytes <= budgets.client.largestJavaScriptGzipBytes, `Largest compressed client chunk ${largestGzip?.filename} is ${largestGzip?.gzipBytes} bytes (budget ${budgets.client.largestJavaScriptGzipBytes}).`);
     assertBudget(!chart || chart.bytes <= budgets.client.chartChunkBytes, `Chart chunk ${chart?.filename} is ${chart?.bytes} bytes (budget ${budgets.client.chartChunkBytes}).`);
@@ -130,5 +163,5 @@ export async function verifyPerformanceBudgets({
     else warnings.push(message);
   }
 
-  return { budgets, failures, warnings, sourceAssurances, dispatcherLines, serverArtifacts };
+  return { budgets, failures, warnings, sourceAssurances, dispatcherLines, serverArtifacts, clientAssets };
 }

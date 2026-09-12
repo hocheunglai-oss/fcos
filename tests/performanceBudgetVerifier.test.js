@@ -80,3 +80,90 @@ test('client and configured request thresholds are enforced from the budget file
   assert.match(clientReport.failures.join('\n'), /Largest client chunk/);
   assert.match(requestReport.failures.join('\n'), /notification database snapshot requests/);
 });
+
+async function writePdfViewerFixture() {
+  const root = await writeFixture({ ...defaultBudgets, onDemandPdfViewer: {
+    rendererBytes: 300, workerBytes: 500, totalBytes: 800, totalGzipBytes: 300,
+  } });
+  const key = 'src/components/special-terms/SpecialTermPdfPages.jsx';
+  const manifest = {
+    'index.html': { isEntry: true, file: 'assets/main.js', dynamicImports: [key] },
+    [key]: { isDynamicEntry: true, file: 'assets/SpecialTermPdfPages-test.js', assets: ['assets/pdf.worker.min-test.mjs'] },
+    'node_modules/pdfjs-dist/build/pdf.worker.min.mjs': { file: 'assets/pdf.worker.min-test.mjs' },
+  };
+  await mkdir(path.join(root, 'dist/.vite'));
+  await Promise.all([
+    writeFile(path.join(root, 'dist/.vite/manifest.json'), JSON.stringify(manifest)),
+    writeFile(path.join(root, 'dist/assets/SpecialTermPdfPages-test.js'), 'r'.repeat(200)),
+    writeFile(path.join(root, 'dist/assets/pdf.worker.min-test.mjs'), 'w'.repeat(400)),
+  ]);
+  return { root, manifest, key };
+}
+
+test('on-demand PDF rendering has an explicit budget including its MJS worker', async (t) => {
+  const { root } = await writePdfViewerFixture();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const report = await verifyPerformanceBudgets({ root });
+  assert.deepEqual(report.failures, []);
+  assert.equal(report.clientAssets.onDemandPdfViewer.bytes, 600);
+  assert.equal(report.clientAssets.ordinaryBytes, 'export const asset = true;'.length);
+});
+
+test('a statically imported PDF viewer cannot use the optional budget', async (t) => {
+  const { root, manifest, key } = await writePdfViewerFixture();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  manifest['index.html'].imports = [key];
+  await writeFile(path.join(root, 'dist/.vite/manifest.json'), JSON.stringify(manifest));
+  const report = await verifyPerformanceBudgets({ root });
+  assert.match(report.failures.join('\n'), /no static importer/);
+  assert.equal(report.clientAssets.onDemandPdfViewer, null);
+  assert.ok(report.clientAssets.ordinaryBytes > 600);
+});
+
+test('missing manifest or worker cannot silently exempt PDF assets', async (t) => {
+  for (const missing of ['dist/.vite/manifest.json', 'dist/assets/pdf.worker.min-test.mjs']) {
+    const { root } = await writePdfViewerFixture();
+    t.after(() => rm(root, { recursive: true, force: true }));
+    await rm(path.join(root, missing));
+    const report = await verifyPerformanceBudgets({ root });
+    assert.ok(report.failures.some((message) => /PDF viewer/.test(message)));
+    assert.equal(report.clientAssets.onDemandPdfViewer, null);
+  }
+});
+
+test('renderer and worker must each remain within their explicit limits', async (t) => {
+  const { root } = await writePdfViewerFixture();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await Promise.all([
+    writeFile(path.join(root, 'dist/assets/SpecialTermPdfPages-test.js'), 'r'.repeat(301)),
+    writeFile(path.join(root, 'dist/assets/pdf.worker.min-test.mjs'), 'w'.repeat(501)),
+  ]);
+  const report = await verifyPerformanceBudgets({ root });
+  assert.match(report.failures.join('\n'), /PDF renderer is 301/);
+  assert.match(report.failures.join('\n'), /PDF worker is 501/);
+  assert.match(report.failures.join('\n'), /On-demand PDF viewer is 802/);
+});
+
+test('unrelated MJS and similarly named extra workers retain the ordinary app budget', async (t) => {
+  const { root } = await writePdfViewerFixture();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await Promise.all([
+    writeFile(path.join(root, 'dist/assets/extra.mjs'), 'x'.repeat(600)),
+    writeFile(path.join(root, 'dist/assets/pdf.worker.min-unreferenced.mjs'), 'w'.repeat(600)),
+  ]);
+  const report = await verifyPerformanceBudgets({ root });
+  assert.match(report.failures.join('\n'), /Total client JavaScript/);
+  assert.equal(report.clientAssets.onDemandPdfViewer.bytes, 600);
+  assert.ok(report.clientAssets.ordinaryBytes > 1200);
+});
+
+test('the optional PDF viewer must also satisfy its combined compressed budget', async (t) => {
+  const { root } = await writePdfViewerFixture();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeFile(path.join(root, 'config/performance-budgets.json'), JSON.stringify({
+    ...defaultBudgets,
+    onDemandPdfViewer: { rendererBytes: 300, workerBytes: 500, totalBytes: 800, totalGzipBytes: 1 },
+  }));
+  const report = await verifyPerformanceBudgets({ root });
+  assert.match(report.failures.join('\n'), /Compressed on-demand PDF viewer/);
+});

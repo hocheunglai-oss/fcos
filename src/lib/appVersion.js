@@ -4,6 +4,37 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.210',
+    releasedAt: '2026-09-13',
+    title: 'Reliable Special Terms updates and clearer matching rules',
+    changes: [
+      'Starts updates to published terms from the current live rules, preventing false source-change warnings.',
+      'Accepts equivalent Salesforce timestamps while retaining protection against actual concurrent edits.',
+      'Allows Country, Port and Product rules without an audience and labels Buyer/Supplier as the Account role.',
+    ],
+  },
+  {
+    version: '2.0.209',
+    releasedAt: '2026-09-13',
+    title: 'Professional Special Terms typography',
+    changes: [
+      'Uses IBM Plex Sans in Special Terms PDFs and the document preview, with lighter semibold headings.',
+      'Improves readability with 11-point body text, 15-point line spacing and left-aligned clauses.',
+      'Embeds PDF fonts for consistent viewing and printing while preserving saved contractual wording.',
+    ],
+  },
+  {
+    version: '2.0.208',
+    releasedAt: '2026-09-13',
+    title: 'Simpler Special Terms drafts, approval and PDF preview',
+    changes: [
+      'Saves complete drafts without publishing or submitting them, with warnings before unsaved edits are lost.',
+      'Shows matching-rule errors beside the inputs and keeps one role-based approval action for the complete term.',
+      'Previews PDFs in a window with download controls and centres the Special Terms and country headings.',
+      'Removes Special Terms Word export and preserves draft clauses and rules when reopened.',
+    ],
+  },
+  {
     version: '2.0.203',
     releasedAt: '2026-09-06',
     title: 'Strengthen access, forecast consistency and release verification',

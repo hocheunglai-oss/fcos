@@ -580,7 +580,7 @@ export const SPECIAL_TERMS_METHODOLOGY = {
     },
     {
       title: 'Generated documents',
-      body: 'FCOS generates live PDF and editable Word documents from the authoritative Salesforce Terms Text only. Both formats use the same A4 letterhead, typography, numbering, and page layout; Confirmation and Nomination remarks remain separate. The Preview section and live/draft document controls appear only when live or draft Terms Text contains at least one clause. Saved revisions may be reviewed as watermarked draft PDFs, while unsaved drafts and draft Word files cannot be downloaded. Editing a downloaded Word file never changes Salesforce or creates an approved FCOS revision.',
+      body: 'FCOS generates PDF documents from the authoritative Salesforce Terms Text only. A4 PDFs use centred Special Terms and term-name headings, numbered clauses, and a repeating letterhead; Confirmation and Nomination remarks remain separate. The Preview section and live/draft controls appear when Terms Text contains content. The layout preview estimates page breaks. Preview PDF opens the generated document in a modal with its final layout; Download PDF saves that same copy from the modal. Opening a live PDF revalidates the saved wording. Saved draft revisions may be downloaded as watermarked PDFs; unsaved edits must be saved first. Draft PDFs are review copies and cannot be used as issued documents.',
     },
     {
       title: 'Copying remarks',

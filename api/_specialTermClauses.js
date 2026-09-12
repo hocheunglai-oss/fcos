@@ -1,4 +1,5 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import { SPECIAL_TERM_PENDING_REASON } from '../shared/specialTermDraftPolicy.js';
 import { getApiVersion, getInstanceUrl, sfQuery, sfRequest } from './_salesforce.js';
 import { expireRuntimeCacheTags, getOrLoadRuntimeCache } from './_runtimeCache.js';
 import {
@@ -914,7 +915,7 @@ export async function getSpecialTermDetail(termId, { force = false } = {}) {
   ]);
   const term = termResult.records[0];
   if (!term) throw specialTermsError('The selected Special Term is no longer available.', 409, 'SPECIAL_TERMS_STALE');
-  const pendingRevision = (await sfQuery(`SELECT Id,Status__c,Proposed_By_Email__c,Revision_Reason__c,Revision_Number__c,LastModifiedDate FROM Special_Term_Revision__c WHERE Special_Term__c = '${soql(id)}' AND Status__c = 'In Review' ORDER BY Revision_Number__c DESC LIMIT 1`, { clean: true, limit: 1 })).records[0];
+  const pendingRevision = (await sfQuery(`SELECT Id,Status__c,Proposed_By_Email__c,Revision_Reason__c,Revision_Number__c,LastModifiedDate FROM Special_Term_Revision__c WHERE Special_Term__c = '${soql(id)}' AND Status__c IN ('Draft','In Review','Ready for Approval','Changes Requested') ORDER BY Revision_Number__c DESC LIMIT 1`, { clean: true, limit: 1 })).records[0];
   const revisionRow = pendingRevision || (term.Current_Revision__c
     ? (await sfQuery(`SELECT Id,Status__c,Proposed_By_Email__c,Revision_Reason__c,Revision_Number__c,LastModifiedDate FROM Special_Term_Revision__c WHERE Id = '${soql(term.Current_Revision__c)}' LIMIT 1`, { clean: true, limit: 1 })).records[0]
     : null);
@@ -1029,7 +1030,7 @@ export async function getSpecialTermDetail(termId, { force = false } = {}) {
         ...projectionDetails[config.key],
         rows: revisionClauseRows.filter((row) => projectionConfig(row.Projection__c).key === config.key).map((row) => ({ id: row.Id, clauseId: row.Clause__c, clauseVersionId: row.Clause_Version__c, shortName: row.Clause__r?.Name || '', category: row.Clause__r?.Category__c || 'Other', clauseStatus: row.Clause__r?.Status__c || '', revisionNumber: Number(row.Clause_Version__r?.Revision_Number__c || 0), clauseText: row.Clause_Version__r?.Clause_Text__c || '', versionStatus: row.Clause_Version__r?.Status__c || '', versionLastModifiedAt: row.Clause_Version__r?.LastModifiedDate || null, sequence: Number(row.Sequence__c || 0), state: row.State__c || '', lastModifiedAt: row.LastModifiedDate || null })),
       }])),
-      rules: revisionRuleRows.filter((row) => row.Snapshot_Type__c === 'Proposed').map((row) => ({ id: row.Id, sourceRuleId: row.Special_Term_Rule__c || null, audience: row.Audience__c || '', accountId: row.Account__c || null, accountName: row.Account__r?.Name || '', accountClKey: row.Account__r?.Company_Code__c || '', portId: row.Port__c || null, portName: row.Port__r?.Name || '', portCountry: row.Port__r?.Country__c || '', productId: row.Product__c || null, productName: row.Product__r?.Name || '', country: row.Country__c || '', priority: row.Priority__c == null ? null : Number(row.Priority__c), sequence: Number(row.Sequence__c || 0), state: row.State__c || '', lastModifiedAt: row.LastModifiedDate || null })),
+      rules: revisionRuleRows.filter((row) => row.Snapshot_Type__c === 'Proposed').map((row) => ({ id: row.Id, sourceRuleId: row.Special_Term_Rule__c || null, audience: row.Audience__c || '', accountId: row.Account__c || null, accountName: row.Account__r?.Name || '', accountClKey: row.Account__r?.Company_Code__c || '', portId: row.Port__c || null, portName: row.Port__r?.Name || '', portCountry: row.Port__r?.Country__c || '', productId: row.Product__c || null, productName: row.Product__r?.Name || '', country: row.Country__c || '', priority: row.Priority__c == null ? null : Number(row.Priority__c), sequence: Number(row.Sequence__c || 0), state: row.State__c || '', sourceLastModifiedAt: row.Source_Last_Modified__c || null, lastModifiedAt: row.LastModifiedDate || null })),
     },
     rules: liveRuleResult.records.map(mapDetailRule),
     revisionHistory: revisionHistoryResult.records.map((row) => ({
@@ -1963,14 +1964,14 @@ export async function saveAllSpecialTermMigrationReview(client, profile, body = 
     const config = projectionConfig(item.projection);
     if (seen.has(config.key)) throw specialTermsError('Each legacy projection may occur only once.', 400, 'SPECIAL_TERMS_REVISION_DUPLICATE_PROJECTION');
     seen.add(config.key);
-    return { config, style: projectionStyle(config, item.style), segments: normalizeMigrationSegments(item.segments || [], schema) };
+    return { config, preservePrepared: item.preservePrepared === true, style: projectionStyle(config, item.style), segments: normalizeMigrationSegments(item.segments || [], schema) };
   });
   const reservation = await reserveOperation(client, profile, body, 'migration_review_save', {
     id: termId,
     projection: 'All',
     auditReasonHash: clauseHash(reason),
     expectedLastModifiedAt: body.expectedLastModifiedAt,
-    projections: projections.map(({ config, style, segments }) => ({ projection: config.value, style, segmentKeys: segments.map((segment) => canonicalClauseKey(segment.clauseText)) })),
+    projections: projections.map(({ config, style, segments, preservePrepared }) => ({ projection: config.value, style, preservePrepared, segmentKeys: segments.map((segment) => canonicalClauseKey(segment.clauseText)) })),
   });
   if (reservation.replay) {
     const detail = await getSpecialTermDetail(termId, { force: true });
@@ -1980,21 +1981,29 @@ export async function saveAllSpecialTermMigrationReview(client, profile, body = 
     const termFields = ['Id', 'Name', 'Approval_Status__c', 'LastModifiedDate', ...PROJECTION_LIST.flatMap((config) => [config.textField, config.originalField, config.statusField, config.batchField, ...(config.styleField ? [config.styleField] : [])])];
     const term = await currentRecord(OBJECTS.term, termId, termFields);
     assertCurrent(term, body.expectedLastModifiedAt);
-    for (const { config } of projections) if (term[config.statusField] === 'Active') throw specialTermsError(`Active structured ${config.label} does not use legacy preparation.`, 409, 'SPECIAL_TERMS_ALREADY_STRUCTURED');
+    for (const { config, preservePrepared, segments } of projections) {
+      if (term[config.statusField] === 'Active' && !preservePrepared) throw specialTermsError(`Active structured ${config.label} does not use legacy preparation.`, 409, 'SPECIAL_TERMS_ALREADY_STRUCTURED');
+      if (preservePrepared && segments.length) throw specialTermsError('A preserved projection cannot also supply replacement legacy clauses.');
+    }
 
     const [bank, existing] = await Promise.all([
       loadClauseRows({ force: true }),
-      sfQuery(`SELECT Id FROM ${OBJECTS.assignment} WHERE Special_Term__c = '${soql(termId)}' AND State__c = 'Proposed' LIMIT 500`, { clean: true, limit: 500 }),
+      sfQuery(`SELECT Id,Projection__c FROM ${OBJECTS.assignment} WHERE Special_Term__c = '${soql(termId)}' AND State__c = 'Proposed' LIMIT 500`, { clean: true, limit: 500 }),
     ]);
     if (existing.totalSize > existing.records.length) throw specialTermsError('This legacy preparation exceeds the safe assignment limit.', 409, 'SPECIAL_TERMS_RESULT_LIMIT');
     const usedShortNames = new Map(bank.clauses.map((clause) => [shortNameKey(clause.shortName), clause.id]));
     const plannedByCanonical = new Map();
-    const requests = existing.records.length ? [{ method: 'PATCH', url: `/services/data/${getApiVersion()}/composite/sobjects`, referenceId: 'archivePriorProposals', body: { allOrNone: true, records: existing.records.map((row) => ({ attributes: { type: OBJECTS.assignment }, Id: row.Id, State__c: 'Historical' })) } }] : [];
+    const preserved = new Set(projections.filter((projection) => projection.preservePrepared).map(({ config }) => config.value));
+    for (const { config, preservePrepared } of projections) {
+      if (preservePrepared && term[config.statusField] !== 'Active' && !existing.records.some((row) => projectionConfig(row.Projection__c).value === config.value)) throw specialTermsError(`The prepared ${config.label} is unavailable. Refresh before saving.`, 409, 'SPECIAL_TERMS_STALE');
+    }
+    const requests = existing.records.filter((row) => !preserved.has(projectionConfig(row.Projection__c).value)).map((row, index) => ({ method: 'PATCH', url: `/services/data/${getApiVersion()}/sobjects/${OBJECTS.assignment}/${row.Id}`, referenceId: `archivePriorProposal${index}`, body: { State__c: 'Historical' } }));
     const termPatch = {};
     const resultProjections = [];
 
     for (let projectionIndex = 0; projectionIndex < projections.length; projectionIndex += 1) {
-      const { config, style, segments } = projections[projectionIndex];
+      const { config, style, segments, preservePrepared } = projections[projectionIndex];
+      if (preservePrepared) continue;
       const sourcePopulated = Boolean(String(term[config.textField] || '').trim());
       if (!segments.length && sourcePopulated) throw specialTermsError(`At least one reviewed clause is required for populated ${config.label}.`);
       const candidates = await planMigrationCandidates(profile, segments, { bank, usedShortNames, plannedByCanonical, referencePrefix: `migration${projectionIndex}` });
@@ -2131,7 +2140,7 @@ async function latestRevisionNumber(termId) {
   return Number(result.records[0]?.Revision_Number__c || 0) + 1;
 }
 
-async function saveSpecialTermRevisionGraph(client, profile, body, schema, compositions, reason, revisionId, reservation) {
+async function saveSpecialTermRevisionGraph(client, profile, body, schema, compositions, reason, revisionId, reservation, submitForReview = true) {
   await revisionSchema();
   const termId = salesforceId(body.termId, 'Special Term');
   const term = await currentRecord(OBJECTS.term, termId, ['Id', 'Approval_Status__c', 'Current_Revision__c', 'Confirmation_Clause_Style__c', 'Nomination_Clause_Style__c', 'LastModifiedDate']);
@@ -2140,7 +2149,7 @@ async function saveSpecialTermRevisionGraph(client, profile, body, schema, compo
     ? await currentRecord(OBJECTS.revision, salesforceId(revisionId, 'Special Term revision'), ['Id', 'Special_Term__c', 'Revision_Number__c', 'Revision_Key__c', 'Status__c', 'LastModifiedDate'])
     : null;
   if (updatingRevision) {
-    if (updatingRevision.Special_Term__c !== termId || !['Draft', 'In Review', 'Changes Requested'].includes(updatingRevision.Status__c)) {
+    if (updatingRevision.Special_Term__c !== termId || !['Draft', 'In Review', 'Ready for Approval', 'Changes Requested'].includes(updatingRevision.Status__c)) {
       throw specialTermsError('Only this term’s current unapproved revision can be updated.', 409, 'SPECIAL_TERMS_REVISION_IMMUTABLE');
     }
     assertCurrent(updatingRevision, body.expectedRevisionLastModifiedAt);
@@ -2184,8 +2193,8 @@ async function saveSpecialTermRevisionGraph(client, profile, body, schema, compo
     } });
   }
   const revisionReference = updatingRevision?.Id || '@{revision.id}';
-  const previousPending = await sfQuery(`SELECT Id FROM Special_Term_Revision__c WHERE Special_Term__c = '${soql(termId)}' AND Status__c = 'In Review'${updatingRevision ? ` AND Id != '${soql(updatingRevision.Id)}'` : ''} ORDER BY Revision_Number__c DESC LIMIT 10`, { clean: true, limit: 10 });
-  if (previousPending.records.length) throw specialTermsError('This Special Term already has a revision awaiting approval. Open or reject it before creating another.', 409, 'SPECIAL_TERMS_REVISION_PENDING');
+  const previousPending = await sfQuery(`SELECT Id FROM Special_Term_Revision__c WHERE Special_Term__c = '${soql(termId)}' AND Status__c IN ('Draft','In Review','Ready for Approval','Changes Requested')${updatingRevision ? ` AND Id != '${soql(updatingRevision.Id)}'` : ''} ORDER BY Revision_Number__c DESC LIMIT 10`, { clean: true, limit: 10 });
+  if (previousPending.records.length) throw specialTermsError('This Special Term already has an unfinished revision. Open it before creating another.', 409, 'SPECIAL_TERMS_REVISION_PENDING');
   for (const { config, versionIds } of compositions) {
     const versions = await liveApprovedVersions(versionIds);
     const clauseIds = versions.map((version) => version.Clause__c);
@@ -2207,13 +2216,18 @@ async function saveSpecialTermRevisionGraph(client, profile, body, schema, compo
   if (requestedRules.length > 100) throw specialTermsError('A Special Term revision cannot exceed 100 proposed rules.', 400, 'SPECIAL_TERMS_REVISION_RULE_LIMIT');
   const proposedRules = [];
   for (const requested of requestedRules) {
-    const sourceId = requested.sourceRuleId || requested.ruleId || requested.id || null;
+    const sourceId = Object.hasOwn(requested, 'sourceRuleId') ? requested.sourceRuleId : requested.ruleId || requested.id || null;
     const source = sourceId ? liveById.get(salesforceId(sourceId, 'Special Term rule')) : null;
     if (sourceId && !source) throw specialTermsError('A source rule changed or no longer belongs to this Special Term. Refresh before saving.', 409, 'SPECIAL_TERMS_REVISION_RULE_STALE');
-    if (requested.lastModifiedAt && requested.lastModifiedAt !== source?.LastModifiedDate) throw specialTermsError('A source rule changed after it was opened. Refresh before saving.', 409, 'SPECIAL_TERMS_REVISION_RULE_STALE');
+    if (source && requested.lastModifiedAt) {
+      try { assertCurrent(source, requested.lastModifiedAt); }
+      catch (error) {
+        if (error.code !== 'SPECIAL_TERMS_STALE') throw error;
+        throw specialTermsError('A source rule changed after it was opened. Refresh before saving.', 409, 'SPECIAL_TERMS_REVISION_RULE_STALE');
+      }
+    }
     const audience = text(Object.hasOwn(requested, 'audience') ? requested.audience : source?.Supplier_Buyer__c, 20) || null;
     if (audience && !schema.audienceOptions.some((option) => option.value === audience)) throw specialTermsError('Select Buyer or Supplier for the rule audience.');
-    if (!audience && !source) throw specialTermsError('A new revision rule requires Buyer or Supplier.');
     const country = text(Object.hasOwn(requested, 'country') ? requested.country : source?.Country__c, 100) || null;
     if (country && !schema.countryOptions.some((option) => option.value === country)) throw specialTermsError('The selected country is not an active Salesforce picklist value.');
     const payload = {
@@ -2224,6 +2238,7 @@ async function saveSpecialTermRevisionGraph(client, profile, body, schema, compo
       Product__c: Object.hasOwn(requested, 'productId') ? (requested.productId ? salesforceId(requested.productId, 'Product') : null) : source?.Product__c || null,
       Country__c: country,
     };
+    if (payload.Account__c && !audience && !source) throw specialTermsError('A new account rule requires Buyer or Supplier.');
     if (![payload.Account__c, payload.Port__c, payload.Product__c, payload.Country__c].some(Boolean)) throw specialTermsError('A revision rule requires at least one Account, Port, Product, or Country condition.');
     await validateRuleLookups(payload);
     proposedRules.push({ source, payload });
@@ -2238,13 +2253,13 @@ async function saveSpecialTermRevisionGraph(client, profile, body, schema, compo
     Audience__c: payload.Supplier_Buyer__c, Account__c: payload.Account__c, Port__c: payload.Port__c, Product__c: payload.Product__c,
     Country__c: payload.Country__c, Priority__c: source?.Priority__c || null, Source_Last_Modified__c: source?.LastModifiedDate || null, State__c: 'Proposed',
   } }));
-  requests.push({ method: 'PATCH', url: `/services/data/${getApiVersion()}/sobjects/${OBJECTS.revision}/${revisionReference}`, referenceId: 'revisionReady', body: { Status__c: 'In Review' } });
+  if (submitForReview) requests.push({ method: 'PATCH', url: `/services/data/${getApiVersion()}/sobjects/${OBJECTS.revision}/${revisionReference}`, referenceId: 'revisionReady', body: { Status__c: 'In Review' } });
   if (term.Approval_Status__c !== 'Approved') requests.push({ method: 'PATCH', url: `/services/data/${getApiVersion()}/sobjects/${OBJECTS.term}/${termId}`, referenceId: 'revisionTerm', body: { Approval_Status__c: 'Draft', Current_Revision__c: revisionReference } });
   if (requests.length > 500) throw specialTermsError('This whole-term revision exceeds Salesforce’s 500-operation atomic limit.', 409, 'SPECIAL_TERMS_COMPOSITE_LIMIT');
   const result = await sfRequest('/composite/graph', { method: 'POST', body: { graphs: [{ graphId: 'specialTermWholeRevision', compositeRequest: requests }] } });
   assertCompositeGraph(result, 'Salesforce rejected the whole-term revision draft.');
   const revisionResponse = result.graphs?.[0]?.graphResponse?.compositeResponse?.find((row) => row.referenceId === 'revision');
-  return finishOperation(client, reservation.operation, { success: true, id: termId, revisionId: updatingRevision?.Id || revisionResponse?.body?.id || null, revisionKey, status: 'In Review', projectionCount: compositions.length });
+  return finishOperation(client, reservation.operation, { success: true, id: termId, revisionId: updatingRevision?.Id || revisionResponse?.body?.id || null, revisionKey, status: submitForReview ? 'In Review' : 'Draft', projectionCount: compositions.length });
 }
 
 function apexUtcTimestamp(value) {
@@ -2272,21 +2287,23 @@ async function callRevisionApex(revisionId, termId, action, reason, expectedLast
 
 /** Save all three projections as one correlated Salesforce Composite Graph draft.
  * Existing compiled active wording is untouched until whole-revision approval. */
-export async function saveSpecialTermRevision(client, profile, body = {}) {
+export async function saveSpecialTermRevision(client, profile, body = {}, { submitForReview = true } = {}) {
   const schema = await resolveSpecialTermsSchema({ force: true, write: true });
   const termId = salesforceId(body.termId, 'Special Term');
-  const reason = requiredReason(body.revisionReason || body.auditReason, 'Revision reason');
+  const reason = submitForReview ? requiredReason(body.revisionReason || body.auditReason, 'Revision reason') : text(body.revisionReason || body.auditReason, 1000) || SPECIAL_TERM_PENDING_REASON;
   const compositions = revisionCompositions(body, schema);
   const revisionId = text(body.revisionId || body.operationId, 100);
   if (!revisionId) throw specialTermsError('A revision ID is required.', 400, 'SPECIAL_TERMS_REVISION_ID_REQUIRED');
   const reservation = await reserveOperation(client, profile, body, 'revision_save', {
     id: termId, revisionId, reasonHash: clauseHash(reason), expectedLastModifiedAt: body.expectedLastModifiedAt,
     expectedRevisionLastModifiedAt: body.expectedRevisionLastModifiedAt || null,
+    submitForReview,
+    rulesHash: clauseHash(JSON.stringify(body.rules || body.ruleIds || [])),
     projections: compositions.map(({ config, versionIds, style }) => ({ projection: config.value, versionIds, style })),
   });
   if (reservation.replay) return { ...reservation.replay, idempotencyReplayed: true };
   try {
-    return await saveSpecialTermRevisionGraph(client, profile, body, schema, compositions, reason, revisionId, reservation);
+    return await saveSpecialTermRevisionGraph(client, profile, body, schema, compositions, reason, revisionId, reservation, submitForReview);
   } catch (error) { return failOperation(client, reservation.operation, error); }
 }
 
@@ -2314,11 +2331,13 @@ function childOperationId(operationId, suffix) {
  * publication either completes in full or rolls back in full. */
 export async function commitSpecialTermRevision(client, profile, body = {}, { canApprove = false } = {}) {
   const mode = text(body.mode, 30) || 'submit';
-  if (!['submit', 'approve_publish'].includes(mode)) throw specialTermsError('Revision commit mode must be submit or approve_publish.', 400, 'SPECIAL_TERMS_REVISION_COMMIT_MODE_INVALID');
+  if (!['save_draft', 'submit', 'approve_publish'].includes(mode)) throw specialTermsError('Revision commit mode must be save_draft, submit, or approve_publish.', 400, 'SPECIAL_TERMS_REVISION_COMMIT_MODE_INVALID');
   if (mode === 'approve_publish' && !canApprove) throw specialTermsError('Only the active General Manager or an Administrator may approve and publish a Special Term.', 403, 'SPECIAL_TERMS_CLAUSE_APPROVER_REQUIRED');
   const termId = salesforceId(body.termId, 'Special Term');
-  const reason = requiredReason(body.revisionReason || body.approvalReason || body.auditReason, 'Change reason');
-  const operationType = mode === 'approve_publish' ? 'revision_approve_publish' : 'revision_submit';
+  const requestedReason = text(body.revisionReason || body.approvalReason || body.auditReason, 1000);
+  const reason = mode === 'save_draft' ? requestedReason || SPECIAL_TERM_PENDING_REASON : requiredReason(requestedReason === SPECIAL_TERM_PENDING_REASON ? '' : requestedReason, 'Change reason');
+  if (mode === 'save_draft' && (!Array.isArray(body.projections) || !body.projections.length)) throw specialTermsError('Save Draft requires the complete editor contents.', 400, 'SPECIAL_TERMS_REVISION_PROJECTIONS_REQUIRED');
+  const operationType = mode === 'approve_publish' ? 'revision_approve_publish' : mode === 'save_draft' ? 'revision_save' : 'revision_submit';
   const reservation = await reserveOperation(client, profile, body, operationType, {
     id: termId,
     revisionId: text(body.revisionId, 18) || null,
@@ -2333,6 +2352,7 @@ export async function commitSpecialTermRevision(client, profile, body = {}, { ca
       versionTimestampHash: clauseHash(JSON.stringify(projection.versionTimestamps || {})),
     })),
     ruleCount: Array.isArray(body.rules) ? body.rules.length : 0,
+    rulesHash: clauseHash(JSON.stringify(body.rules || body.ruleIds || [])),
   });
   if (reservation.replay) {
     const detail = await getSpecialTermDetail(termId, { force: true });
@@ -2373,11 +2393,11 @@ export async function commitSpecialTermRevision(client, profile, body = {}, { ca
         revisionId: revisionId || childOperationId(body.operationId, 'revision'),
         revisionReason: reason,
         operationId: childOperationId(body.operationId, 'save'),
-      });
+      }, { submitForReview: mode !== 'save_draft' });
       revisionId = salesforceId(saved.revisionId, 'Saved Special Term revision');
     }
 
-    let status = 'In Review';
+    let status = mode === 'save_draft' ? 'Draft' : 'In Review';
     if (mode === 'approve_publish') {
       const revision = await currentRecord(OBJECTS.revision, revisionId, ['Id', 'Special_Term__c', 'Status__c', 'LastModifiedDate']);
       if (revision.Special_Term__c !== termId || !['In Review', 'Ready for Approval', 'Approved'].includes(revision.Status__c)) throw specialTermsError('The reviewed Special Term revision is no longer ready for approval.', 409, 'SPECIAL_TERMS_REVISION_STALE');
