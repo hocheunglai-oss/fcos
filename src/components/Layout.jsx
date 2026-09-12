@@ -503,6 +503,7 @@ export default function Layout() {
   const unsaved = Object.values(dirtyState).find((state) => state?.dirty);
   const confirmLeaveWithUnsavedChanges = () => {
     if (!unsaved) return true;
+    if (unsaved.confirmLeave) return unsaved.confirmLeave();
     return window.confirm(`${unsaved.message || 'You have unsaved changes.'}\n\nChoose Cancel to stay and save changes, or OK to leave without saving.`);
   };
   const handleNavigation = (event) => {
@@ -512,7 +513,7 @@ export default function Layout() {
   useEffect(() => {
     const openVersionAudit = () => setVersionOpen(true);
     const requestSignOut = () => {
-      if (unsaved && !window.confirm(`${unsaved.message || 'You have unsaved changes.'}\n\nChoose Cancel to stay and save changes, or OK to leave without saving.`)) return;
+      if (unsaved && !(unsaved.confirmLeave ? unsaved.confirmLeave() : window.confirm(`${unsaved.message || 'You have unsaved changes.'}\n\nChoose Cancel to stay and save changes, or OK to leave without saving.`))) return;
       logout();
     };
     window.addEventListener('fcos:version-audit-open', openVersionAudit);

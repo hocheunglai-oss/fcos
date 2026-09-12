@@ -372,7 +372,8 @@ function summaryCursor(offset) {
 
 function summaryWorkflow(term, pendingRevision) {
   if (term.relinkRequiredCount > 0) return { status: 'Relink required', nextAction: 'resolve_relink' };
-  if (pendingRevision) return { status: 'Ready for approval', nextAction: 'review_publish' };
+  if (['Draft', 'Changes Requested'].includes(pendingRevision?.Status__c)) return { status: 'Draft', nextAction: 'continue' };
+  if (['In Review', 'Ready for Approval'].includes(pendingRevision?.Status__c)) return { status: 'Ready for approval', nextAction: 'review_publish' };
   if (term.revisionStatus === 'Draft') return { status: 'Draft', nextAction: 'continue' };
   if ([term.clauseStructureStatus, term.confirmationClauseStatus, term.nominationClauseStatus].some((status) => status !== 'Active')) {
     return { status: 'Legacy', nextAction: 'update' };
@@ -387,7 +388,7 @@ export async function listSpecialTermSummaries({ query = '', action = '', status
   await resolveSpecialTermsSchema({ force });
   const cached = await getOrLoadRuntimeCache({
     namespace: 'salesforce-special-terms-summary',
-    version: '1',
+    version: '2',
     accessScope: 'global',
     apiVersion: `${getApiVersion()}@${getInstanceUrl()}`,
     payload: { view: 'term-first-summary' },

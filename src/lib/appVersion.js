@@ -4,6 +4,17 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.208',
+    releasedAt: '2026-09-13',
+    title: 'Simpler Special Terms drafts, approval and PDF preview',
+    changes: [
+      'Saves complete drafts without publishing or submitting them, with warnings before unsaved edits are lost.',
+      'Shows matching-rule errors beside the inputs and keeps one role-based approval action for the complete term.',
+      'Previews PDFs in a window with download controls and centres the Special Terms and country headings.',
+      'Removes Special Terms Word export and preserves draft clauses and rules when reopened.',
+    ],
+  },
+  {
     version: '2.0.203',
     releasedAt: '2026-09-06',
     title: 'Strengthen access, forecast consistency and release verification',
