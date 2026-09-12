@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
 import { clauseHash, CLAUSE_LIST_STYLES, CLAUSE_PROJECTIONS } from '../api/_specialTermClauseModel.js';
+import { localRevisionFromDetail, revisionPayload } from '../src/lib/specialTermRevision.js';
 import { SPECIAL_TERM_PENDING_REASON } from '../shared/specialTermDraftPolicy.js';
 
 const API_SOURCE = readFileSync(new URL('../api/_specialTermClauses.js', import.meta.url), 'utf8');
@@ -110,6 +111,7 @@ function graphHarness({ liveRules = [], updatingRevision = null, unfinishedRevis
     Special_Term_Revision_Rule__c: ['Special_Term_Revision__c', 'Special_Term_Rule__c', 'Snapshot_Type__c', 'Sequence__c', 'Audience__c', 'Account__c', 'Port__c', 'Product__c', 'Country__c', 'Priority__c', 'Source_Last_Modified__c', 'State__c', 'Rule_Key__c'],
   };
   const context = baseContext({
+    assertCurrent: vm.runInNewContext(`(${specialTermsSourceBetween('export function assertCurrent', 'function apexUtcTimestamp').trim()})`, { specialTermsError }),
     async currentRecord(objectName) {
       if (objectName === 'Special_Term_Revision__c') return updatingRevision;
       assert.equal(objectName, 'Special_Term__c');
@@ -624,4 +626,50 @@ test('Active migration projection requires preservePrepared', async () => {
     (error) => error.code === 'SPECIAL_TERMS_ALREADY_STRUCTURED' && error.status === 409,
   );
   assert.equal(harness.writes.length, 0);
+});
+
+
+test('save accepts equivalent Salesforce timezone formats and rejects actual source changes', async () => {
+  const liveRule = { Id: RULE_ID, Special_Term__c: TERM_ID, Country__c: 'CHINA', LastModifiedDate: '2026-09-12T02:00:00.000+0000' };
+  for (const expected of ['2026-09-12T02:00:00.000Z', '2026-09-12T10:00:00.000+08:00']) {
+    const harness = graphHarness({ liveRules: [liveRule] });
+    await runGraph(harness, { rules: [{ sourceRuleId: RULE_ID, lastModifiedAt: expected }] });
+    assert.equal(harness.writes.length, 1);
+  }
+  for (const expected of ['2026-09-12T02:00:00.001Z', 'invalid timestamp']) {
+    const harness = graphHarness({ liveRules: [liveRule] });
+    await assert.rejects(runGraph(harness, { rules: [{ sourceRuleId: RULE_ID, lastModifiedAt: expected }] }), error => error.code === 'SPECIAL_TERMS_REVISION_RULE_STALE');
+    assert.equal(harness.writes.length, 0);
+  }
+});
+
+test('published China can start and save another revision using its current audience-less country rule', async () => {
+  const liveRule = { Id: RULE_ID, Special_Term__c: TERM_ID, Supplier_Buyer__c: null, Account__c: null, Country__c: 'CHINA', LastModifiedDate: '2026-09-12T21:32:40.000+0000' };
+  const activeRevision = { id: 'a0R000000000000AAA', status: 'Active', rules: [{ id: 'a0T000000000001AAA', sourceRuleId: null, sourceLastModifiedAt: '2020-08-26T17:09:45.000+0000', audience: '', country: 'CHINA' }] };
+  const draft = localRevisionFromDetail({ rules: [{ id: RULE_ID, audience: '', country: 'CHINA', lastModifiedAt: liveRule.LastModifiedDate }] }, activeRevision);
+  const harness = graphHarness({ liveRules: [liveRule] });
+  await runGraph(harness, { rules: revisionPayload(draft).rules });
+  const requests = harness.writes[0].options.body.graphs[0].compositeRequest;
+  const saved = requests.find(r => r.referenceId === 'revisionRuleProposed0').body;
+  assert.equal(saved.Special_Term_Rule__c, RULE_ID);
+  assert.equal(saved.Source_Last_Modified__c, liveRule.LastModifiedDate);
+  assert.equal(saved.Audience__c, null);
+  assert.equal(saved.Country__c, 'CHINA');
+});
+
+test('new geographic/product revision rules save without a role but still require a condition', async () => {
+  for (const condition of [{ country: 'CHINA' }, { portId: 'a09000000000001AAA' }, { productId: '01t000000000001AAA' }]) {
+    const harness = graphHarness();
+    await runGraph(harness, { rules: [{ sourceRuleId: null, audience: '', ...condition }] });
+    const saved = harness.writes[0].options.body.graphs[0].compositeRequest.find(r => r.referenceId === 'revisionRuleProposed0').body;
+    assert.equal(saved.Audience__c, null);
+  }
+});
+
+test('direct rule validation permits general rules and requires a role for accounts', () => {
+  const context = evaluate([specialTermsSourceBetween('export function rulePayload', 'export async function validateRuleLookups')], ['rulePayload'], baseContext());
+  assert.equal(context.rulePayload({ specialTermId: TERM_ID, country: 'CHINA' }, schema()).Supplier_Buyer__c, null);
+  assert.throws(() => context.rulePayload({ specialTermId: TERM_ID, accountId: ACCOUNT_ID }, schema()), /requires Buyer or Supplier/);
+  assert.equal(context.rulePayload({ specialTermId: TERM_ID, accountId: ACCOUNT_ID, audience: 'Buyer' }, schema()).Supplier_Buyer__c, 'Buyer');
+  assert.throws(() => context.rulePayload({ specialTermId: TERM_ID, country: 'CHINA', audience: 'Unknown' }, schema()), /Select Buyer or Supplier/);
 });

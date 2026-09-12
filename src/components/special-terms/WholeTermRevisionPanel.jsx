@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
-import { SPECIAL_TERM_REVISION_PROJECTIONS, revisionDraftSignature, revisionFromDetail, revisionPayload, revisionRuleIssues } from '@/lib/specialTermRevision';
+import { SPECIAL_TERM_REVISION_PROJECTIONS, localRevisionFromDetail, revisionDraftSignature, revisionFromDetail, revisionPayload, revisionRuleAudienceRequired, revisionRuleIssues } from '@/lib/specialTermRevision';
 import { editableRevisionReason, SPECIAL_TERM_PENDING_REASON } from '../../../shared/specialTermDraftPolicy';
 import SpecialTermDocumentPreview from '@/components/special-terms/SpecialTermDocumentPreview';
 import SpecialTermPdfPreviewDialog from '@/components/special-terms/SpecialTermPdfPreviewDialog';
@@ -25,45 +25,24 @@ function ruleLookup(id, label, secondary = '', unavailableLabel = 'Unavailable r
   return id ? { id, label: label || unavailableLabel, secondary } : null;
 }
 
-function localRevisionFromDetail(detail, revision) {
-  const keepSavedDraft = Boolean(revision?.id && ['Draft', 'In Review', 'Ready for Approval', 'Changes Requested'].includes(revision.status));
-  const projections = Object.fromEntries(SPECIAL_TERM_REVISION_PROJECTIONS.map((key) => {
-    const source = revision?.projections?.[key] || detail?.projections?.[key] || {};
-    const sourceRows = revision?.id ? source.rows || source.assignments || [] : source.activeAssignments || source.assignments || [];
-    const assignments = revision?.id ? sourceRows : source.proposedAssignments?.length ? source.proposedAssignments : sourceRows;
-    return [key, {
-      ...source,
-      status: 'Active',
-      assignments,
-      draftAssignments: assignments,
-      activeAssignments: assignments,
-    }];
-  }));
-  return {
-    id: keepSavedDraft ? revision.id : null,
-    number: revision?.revisionNumber || null,
-    sourceRevisionId: keepSavedDraft ? revision.sourceRevisionId || null : revision?.id || null,
-    sourceRevisionLastModifiedAt: keepSavedDraft ? revision.sourceRevisionLastModifiedAt || null : revision?.lastModifiedAt || null,
-    status: keepSavedDraft ? revision.status : 'Draft',
-    lastModifiedAt: revision?.lastModifiedAt || null,
-    termLastModifiedAt: detail?.term?.lastModifiedAt || revision?.termLastModifiedAt || null,
-    projections,
-    rules: revision?.id ? revision.rules || [] : detail?.rules || revision?.rules || [],
-    provenance: revision?.provenance || { sourceLabel: 'Preserved live Salesforce wording' },
-  };
-}
-
 function RevisionRuleEditor({ rules, editable, audienceOptions, countryOptions, issues = [], onChange }) {
   const update = (index, patch) => onChange(rules.map((rule, ruleIndex) => (ruleIndex === index ? { ...rule, ...patch } : rule)));
   const remove = (index) => onChange(rules.filter((_, ruleIndex) => ruleIndex !== index));
-  const add = () => onChange([...rules, { id: `draft:${operationId()}`, sourceRuleId: null, audience: 'Buyer', accountId: null, portId: null, productId: null, country: '' }]);
+  const add = () => onChange([...rules, { id: `draft:${operationId()}`, sourceRuleId: null, audience: '', accountId: null, portId: null, productId: null, country: '' }]);
   return (
     <div className="space-y-3 rounded-md border border-border bg-background p-3">
       <div className="flex flex-wrap items-center justify-between gap-2"><div><p className="text-sm font-semibold">Matching rules</p><p className="text-xs text-muted-foreground">These conditions are part of this revision and replace the live rule set only on approval.</p></div>{editable ? <Button type="button" variant="outline" size="sm" onClick={add} disabled={rules.length >= 100}><Plus className="mr-1.5 h-3.5 w-3.5" />Add rule</Button> : null}</div>
       {!rules.length ? <p className="text-xs text-muted-foreground">No matching rules are proposed.</p> : null}
       {rules.map((rule, index) => (
         <div key={rule.id || rule.sourceRuleId || index} className="grid gap-3 rounded-md border border-border p-3 md:grid-cols-2" aria-describedby={issues.some((issue) => issue.index === index) ? `rule-${index}-errors` : undefined}>
-          <div className="space-y-1.5"><Label>Audience {!(rule.sourceRuleId || (!Object.hasOwn(rule, 'sourceRuleId') && rule.id && !String(rule.id).startsWith('draft:'))) ? <span className="text-destructive">*</span> : null}</Label><Select disabled={!editable} value={rule.audience || ''} onValueChange={(audience) => update(index, { audience })}><SelectTrigger aria-label={`Rule ${index + 1} audience`} aria-invalid={issues.some((issue) => issue.index === index && issue.field === 'audience')}><SelectValue placeholder="Buyer or Supplier" /></SelectTrigger><SelectContent>{audienceOptions.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select></div>
+          <div className="space-y-1.5">
+            <Label>Account role {revisionRuleAudienceRequired(rule) ? <span className="text-destructive">*</span> : null}</Label>
+            <Select disabled={!editable} value={rule.audience || '__none__'} onValueChange={(audience) => update(index, { audience: audience === '__none__' ? '' : audience })}>
+              <SelectTrigger aria-label={`Rule ${index + 1} account role`} aria-required={revisionRuleAudienceRequired(rule)} aria-describedby={`rule-${index}-audience-help`} aria-invalid={issues.some((issue) => issue.index === index && issue.field === 'audience')}><SelectValue /></SelectTrigger>
+              <SelectContent><SelectItem value="__none__">Not specified</SelectItem>{audienceOptions.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent>
+            </Select>
+            <p id={`rule-${index}-audience-help`} className="text-xs text-muted-foreground">Identifies the selected Account as Buyer or Supplier. Not required for rules based only on Country, Port or Product.</p>
+          </div>
           <div className="space-y-1.5"><Label>Country</Label><Select disabled={!editable} value={rule.country || '__any__'} onValueChange={(country) => update(index, { country: country === '__any__' ? '' : country })}><SelectTrigger aria-label={`Rule ${index + 1} country`} aria-invalid={issues.some((issue) => issue.index === index && issue.field === 'country')}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="__any__">Any country</SelectItem>{countryOptions.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select></div>
           <p className="text-xs text-muted-foreground md:col-span-2">Choose at least one condition <span className="text-destructive">*</span>: Account, Port, Product, or Country.</p>
           <SpecialTermLookupField disabled={!editable} label="Account" kind="account" value={ruleLookup(rule.accountId, rule.accountName, rule.accountClKey, 'Unavailable account')} onChange={(account) => update(index, { accountId: account?.id || null, accountName: account?.label || '', accountClKey: account?.secondary || '' })} placeholder="Search Account name or CL Key" />

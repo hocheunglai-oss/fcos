@@ -4,6 +4,16 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.210',
+    releasedAt: '2026-09-13',
+    title: 'Reliable Special Terms updates and clearer matching rules',
+    changes: [
+      'Starts updates to published terms from the current live rules, preventing false source-change warnings.',
+      'Accepts equivalent Salesforce timestamps while retaining protection against actual concurrent edits.',
+      'Allows Country, Port and Product rules without an audience and labels Buyer/Supplier as the Account role.',
+    ],
+  },
+  {
     version: '2.0.209',
     releasedAt: '2026-09-13',
     title: 'Professional Special Terms typography',

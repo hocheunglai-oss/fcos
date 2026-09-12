@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  localRevisionFromDetail,
+  revisionRuleAudienceRequired,
   revisionDraftSignature,
   revisionFromDetail,
   revisionPayload,
@@ -111,11 +113,11 @@ test('revision draft signature ignores reload timestamps and display labels', ()
   assert.equal(revisionDraftSignature(after, '  Update wording  '), revisionDraftSignature(before, 'Update wording'));
 });
 
-test('revision rule issues allow audience-less legacy sources but require audience and conditions for new rules', () => {
+test('revision rule issues require an account role only for new account rules', () => {
   const legacy = { id: SOURCE_RULE_ID, audience: '', country: 'SINGAPORE' };
   const savedNew = { id: SNAPSHOT_RULE_ID, sourceRuleId: null, audience: '', country: '__any__' };
   assert.deepEqual(revisionRuleIssues([legacy]), []);
-  assert.deepEqual(revisionRuleIssues([savedNew]).map(({ index, field }) => [index, field]), [[0, 'audience'], [0, 'conditions']]);
+  assert.deepEqual(revisionRuleIssues([savedNew]).map(({ index, field }) => [index, field]), [[0, 'conditions']]);
 });
 
 test('revision rule issues enforce authoritative options, Salesforce IDs, and the 100-rule limit', () => {
@@ -129,4 +131,51 @@ test('revision rule issues enforce authoritative options, Salesforce IDs, and th
   const tooMany = revisionRuleIssues(Array.from({ length: 101 }, () => ({ audience: 'Buyer', productId: PRODUCT_ID })));
   assert.deepEqual(tooMany[0], { index: -1, field: 'rules', message: 'A Special Term revision cannot exceed 100 proposed rules.' });
   assert.equal(tooMany.length, 1);
+});
+
+
+test('the next revision after publication uses replacement live rules, not historical snapshots', () => {
+  const historical = { id: SNAPSHOT_RULE_ID, sourceRuleId: null, sourceLastModifiedAt: '2020-08-26T17:09:45.000+0000', audience: '', country: 'CHINA' };
+  const live = { id: SOURCE_RULE_ID, audience: '', country: 'CHINA', lastModifiedAt: '2026-09-12T21:32:40.000+0000' };
+  for (const status of ['Active', 'Approved', 'Rolled Back', 'Rejected']) {
+    const sourceRevision = { id: 'a0R000000000001AAA', status, rules: [historical] };
+    const draft = localRevisionFromDetail({ rules: [live] }, sourceRevision);
+    assert.equal(draft.id, null);
+    assert.equal(draft.sourceRevisionId, sourceRevision.id);
+    assert.deepEqual(revisionPayload(draft).rules[0], {
+      sourceRuleId: SOURCE_RULE_ID, lastModifiedAt: live.lastModifiedAt, audience: null,
+      accountId: null, portId: null, productId: null, country: 'CHINA',
+    });
+    assert.deepEqual(revisionRuleIssues(draft.rules), []);
+  }
+});
+
+test('unfinished revisions retain saved rule additions, edits and removals', () => {
+  const proposed = { id: SNAPSHOT_RULE_ID, sourceRuleId: SOURCE_RULE_ID, sourceLastModifiedAt: 'source-before', audience: 'Supplier', accountId: ACCOUNT_ID };
+  for (const status of ['Draft', 'In Review', 'Ready for Approval', 'Changes Requested']) {
+    for (const rules of [[], [proposed]]) {
+      const revision = { id: 'a0R000000000001AAA', status, rules };
+      const reopened = localRevisionFromDetail({ rules: [{ id: SOURCE_RULE_ID, audience: 'Buyer' }] }, revision);
+      assert.equal(reopened.id, revision.id);
+      assert.deepEqual(reopened.rules, rules);
+    }
+  }
+});
+
+test('a rule without a source never sends an orphan historical timestamp', () => {
+  const rule = { id: SNAPSHOT_RULE_ID, sourceRuleId: null, sourceLastModifiedAt: '2020-08-26T17:09:45.000+0000', lastModifiedAt: '2026-09-12T21:32:40.000+0000', country: 'CHINA' };
+  assert.equal(revisionPayload({ rules: [rule] }).rules[0].lastModifiedAt, null);
+});
+
+test('country, port and product rules can omit account role; new account rules cannot', () => {
+  for (const condition of [{ country: 'CHINA' }, { portId: PORT_ID }, { productId: PRODUCT_ID }]) {
+    const rule = { id: 'draft:1', sourceRuleId: null, audience: '', ...condition };
+    assert.equal(revisionRuleAudienceRequired(rule), false);
+    assert.deepEqual(revisionRuleIssues([rule]), []);
+  }
+  const rule = { id: 'draft:1', sourceRuleId: null, audience: '', accountId: ACCOUNT_ID };
+  assert.equal(revisionRuleAudienceRequired(rule), true);
+  assert.deepEqual(revisionRuleIssues([rule]).map(({ field }) => field), ['audience']);
+  assert.deepEqual(revisionRuleIssues([{ ...rule, audience: 'Buyer' }]), []);
+  assert.deepEqual(revisionRuleIssues([{ ...rule, audience: 'Supplier' }]), []);
 });

@@ -791,8 +791,8 @@ export function termMetadataPayload(body, { create = false } = {}) {
 }
 
 export function rulePayload(body, schema) {
-  const audience = text(body.audience, 20);
-  if (!schema.audienceOptions.some((option) => option.value === audience)) throw specialTermsError('Select Buyer or Supplier for the rule audience.');
+  const audience = text(body.audience, 20) || null;
+  if (audience && !schema.audienceOptions.some((option) => option.value === audience)) throw specialTermsError('Select Buyer or Supplier for the rule audience.');
   const payload = {
     Special_Term__c: salesforceId(body.specialTermId, 'Special Term'),
     Supplier_Buyer__c: audience,
@@ -801,6 +801,7 @@ export function rulePayload(body, schema) {
     Product__c: body.productId ? salesforceId(body.productId, 'Product') : null,
     Country__c: text(body.country, 100) || null,
   };
+  if (payload.Account__c && !audience) throw specialTermsError('An account rule requires Buyer or Supplier.');
   if (payload.Country__c && !schema.countryOptions.some((option) => option.value === payload.Country__c)) throw specialTermsError('The selected country is not an active Salesforce picklist value.');
   if (![payload.Account__c, payload.Port__c, payload.Product__c, payload.Country__c].some(Boolean)) throw specialTermsError('A rule requires at least one Account, Port, Product, or Country condition.');
   return payload;

@@ -19,7 +19,7 @@ function ruleSource(rule = {}) {
   const lastModifiedAt = hasExplicitSource
     ? clean(rule.sourceLastModifiedAt) || null
     : clean(rule.sourceLastModifiedAt) || clean(rule.lastModifiedAt) || null;
-  return { sourceRuleId, lastModifiedAt };
+  return { sourceRuleId, lastModifiedAt: sourceRuleId ? lastModifiedAt : null };
 }
 
 function nestedId(value, nested) {
@@ -49,6 +49,36 @@ export function revisionFromDetail(detail) {
     ...revision,
     projections: revision.projections || detail?.projections || {},
     rules: revision.id ? revision.rules || [] : detail?.rules || [],
+  };
+}
+
+export function localRevisionFromDetail(detail, revision) {
+  const keepSavedDraft = Boolean(revision?.id && ['Draft', 'In Review', 'Ready for Approval', 'Changes Requested'].includes(revision.status));
+  const projections = Object.fromEntries(SPECIAL_TERM_REVISION_PROJECTIONS.map((key) => {
+    const source = revision?.projections?.[key] || detail?.projections?.[key] || {};
+    const sourceRows = revision?.id ? source.rows || source.assignments || [] : source.activeAssignments || source.assignments || [];
+    const assignments = revision?.id ? sourceRows : source.proposedAssignments?.length ? source.proposedAssignments : sourceRows;
+    return [key, {
+      ...source,
+      status: 'Active',
+      assignments,
+      draftAssignments: assignments,
+      activeAssignments: assignments,
+    }];
+  }));
+  return {
+    id: keepSavedDraft ? revision.id : null,
+    number: revision?.revisionNumber || null,
+    sourceRevisionId: keepSavedDraft ? revision.sourceRevisionId || null : revision?.id || null,
+    sourceRevisionLastModifiedAt: keepSavedDraft ? revision.sourceRevisionLastModifiedAt || null : revision?.lastModifiedAt || null,
+    status: keepSavedDraft ? revision.status : 'Draft',
+    lastModifiedAt: revision?.lastModifiedAt || null,
+    termLastModifiedAt: detail?.term?.lastModifiedAt || revision?.termLastModifiedAt || null,
+    projections,
+    // Published snapshots refer to the rules replaced during activation. A new
+    // revision must start from today's live rule IDs and source timestamps.
+    rules: keepSavedDraft ? revision.rules || [] : detail?.rules || [],
+    provenance: revision?.provenance || { sourceLabel: 'Preserved live Salesforce wording' },
   };
 }
 
@@ -106,6 +136,11 @@ export function revisionDraftSignature(revision, reason = '') {
   });
 }
 
+export function revisionRuleAudienceRequired(rule) {
+  const normalized = normalizedRule(rule);
+  return Boolean(normalized.accountId && !normalized.sourceRuleId);
+}
+
 export function revisionRuleIssues(rules, { audienceOptions = [], countryOptions = [] } = {}) {
   const requestedRules = Array.isArray(rules) ? rules : [];
   const issues = [];
@@ -119,8 +154,8 @@ export function revisionRuleIssues(rules, { audienceOptions = [], countryOptions
     if (normalized.sourceRuleId && !SALESFORCE_ID.test(normalized.sourceRuleId)) {
       issues.push({ index, field: 'sourceRuleId', message: 'Special Term rule is invalid.' });
     }
-    if (!normalized.audience && !normalized.sourceRuleId) {
-      issues.push({ index, field: 'audience', message: 'A new revision rule requires Buyer or Supplier.' });
+    if (!normalized.audience && revisionRuleAudienceRequired(rule)) {
+      issues.push({ index, field: 'audience', message: 'A new account rule requires Buyer or Supplier.' });
     } else if (normalized.audience && validAudiences.size && !validAudiences.has(normalized.audience)) {
       issues.push({ index, field: 'audience', message: 'Select Buyer or Supplier for the rule audience.' });
     }

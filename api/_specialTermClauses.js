@@ -2216,13 +2216,18 @@ async function saveSpecialTermRevisionGraph(client, profile, body, schema, compo
   if (requestedRules.length > 100) throw specialTermsError('A Special Term revision cannot exceed 100 proposed rules.', 400, 'SPECIAL_TERMS_REVISION_RULE_LIMIT');
   const proposedRules = [];
   for (const requested of requestedRules) {
-    const sourceId = requested.sourceRuleId || requested.ruleId || requested.id || null;
+    const sourceId = Object.hasOwn(requested, 'sourceRuleId') ? requested.sourceRuleId : requested.ruleId || requested.id || null;
     const source = sourceId ? liveById.get(salesforceId(sourceId, 'Special Term rule')) : null;
     if (sourceId && !source) throw specialTermsError('A source rule changed or no longer belongs to this Special Term. Refresh before saving.', 409, 'SPECIAL_TERMS_REVISION_RULE_STALE');
-    if (requested.lastModifiedAt && requested.lastModifiedAt !== source?.LastModifiedDate) throw specialTermsError('A source rule changed after it was opened. Refresh before saving.', 409, 'SPECIAL_TERMS_REVISION_RULE_STALE');
+    if (source && requested.lastModifiedAt) {
+      try { assertCurrent(source, requested.lastModifiedAt); }
+      catch (error) {
+        if (error.code !== 'SPECIAL_TERMS_STALE') throw error;
+        throw specialTermsError('A source rule changed after it was opened. Refresh before saving.', 409, 'SPECIAL_TERMS_REVISION_RULE_STALE');
+      }
+    }
     const audience = text(Object.hasOwn(requested, 'audience') ? requested.audience : source?.Supplier_Buyer__c, 20) || null;
     if (audience && !schema.audienceOptions.some((option) => option.value === audience)) throw specialTermsError('Select Buyer or Supplier for the rule audience.');
-    if (!audience && !source) throw specialTermsError('A new revision rule requires Buyer or Supplier.');
     const country = text(Object.hasOwn(requested, 'country') ? requested.country : source?.Country__c, 100) || null;
     if (country && !schema.countryOptions.some((option) => option.value === country)) throw specialTermsError('The selected country is not an active Salesforce picklist value.');
     const payload = {
@@ -2233,6 +2238,7 @@ async function saveSpecialTermRevisionGraph(client, profile, body, schema, compo
       Product__c: Object.hasOwn(requested, 'productId') ? (requested.productId ? salesforceId(requested.productId, 'Product') : null) : source?.Product__c || null,
       Country__c: country,
     };
+    if (payload.Account__c && !audience && !source) throw specialTermsError('A new account rule requires Buyer or Supplier.');
     if (![payload.Account__c, payload.Port__c, payload.Product__c, payload.Country__c].some(Boolean)) throw specialTermsError('A revision rule requires at least one Account, Port, Product, or Country condition.');
     await validateRuleLookups(payload);
     proposedRules.push({ source, payload });
