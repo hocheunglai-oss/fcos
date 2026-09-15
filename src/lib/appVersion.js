@@ -4,6 +4,15 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.211',
+    releasedAt: '2026-09-15',
+    title: 'Correct units in the dispute queue',
+    changes: [
+      'Displays each fuel line’s saved Salesforce unit of measure in the dispute workflow queue.',
+      'Preserves native quantities and units, including CBM, without assuming MT.',
+    ],
+  },
+  {
     version: '2.0.210',
     releasedAt: '2026-09-13',
     title: 'Reliable Special Terms updates and clearer matching rules',

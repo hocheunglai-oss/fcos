@@ -14965,7 +14965,7 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
           SELECT Id, STEM__c, Product__r.Name, Supplier_Name__c,
                  ${originalSupplierLookup.valid ? `Original_Supplier__c, ${originalSupplierRelationship}.Name, ${originalSupplierRelationship}.Inactive_Suspended__c,` : ''}
                  Payment_Term__c, Quantity__c, Quantity_Delivered_Per_BDN__c,
-                 Quantity_Max__c, Quantity_in_MT__c, Is_Quantity_Range__c,
+                 Quantity_Max__c, Quantity_in_MT__c, Is_Quantity_Range__c, Unit_of_Measure__c,
                  Price_Per_Unit__c, Cost_Per_Unit__c, Unit_Sell_At__c, Unit_Buy_At__c, Unit_Cost__c,
                  Total_Price__c, Total_Cost__c, Supplier_Invoice__c, Cancelled__c,
                  Offer_Line_Item__r.UnitPrice, Offer_Line_Item__r.Supplier_Unit_Price__c
