@@ -1,3 +1,4 @@
+import { createDisputeSettlementEvidenceHandlers } from '../_disputeSettlementEvidence.js';
 import { chunkIds, cleanRecord, getApiVersion, getInstanceUrl, salesforceAuthMode, salesforceConfiguredAuthModes, sendJson, sfCompositeQueries, sfDownload, sfQuery, sfRequest } from '../_salesforce.js';
 import { assertStemReadRequest } from '../../shared/salesforceReadRequest.js';
 import { authorizeSalesforceDocument, headerBearerToken } from '../_salesforceDocumentAccess.js';
@@ -50,7 +51,7 @@ import { createHash } from 'node:crypto';
 import { externalActionGates, isExternalActionEnabled, requireExternalActionGate } from '../_externalActionGates.js';
 import { EXCEPTION_REVIEW_DATE_BASIS, EXCEPTION_SCHEDULE_FIELDS, buildExceptionReviewScheduleWhere, exceptionScheduleSchemaIssues, normalizeExceptionSchedule } from '../../src/lib/exceptionReviewSchedule.js';
 import { DISPUTE_BUYER_CLOSE_REASONS as DISPUTE_BETA_BUYER_CLOSE_REASONS, DISPUTE_SUPPLIER_CLOSE_REASONS as DISPUTE_BETA_SUPPLIER_CLOSE_REASONS } from '../../src/lib/disputeWorkflowOptions.js';
-import { disputeNotRequiredEligibility } from '../_disputeAccounting.js';
+import { zeroBalanceClosureEligibility, disputeAgreementSummary, disputeNotRequiredEligibility } from '../_disputeAccounting.js';
 import { hasRecordedFcosClosureWriteback, isSalesforceDisputeClosed, projectExternalDisputeClosure } from '../_disputeWorkflowStatus.js';
 import { allocateSupplierDispute, normalizeSupplierInvoiceExposure, resolveSupplierSettlementSchema, supplierInstructionRows, validSupplierSettlementPayment } from '../_disputeSupplierSettlement.js';
 import { currentRequestTelemetry, logRequestTelemetry, recordRequestFailure, recordSupabaseRequest, requestIdFrom, runWithRequestTelemetry, salesforceLimitFromBody, telemetryResponseHeaders } from '../_requestTelemetry.js';
@@ -1480,6 +1481,7 @@ const HANDLER_MODULE_ACCESS = {
   disputeWorkflowSubmitApproval: ['disputes'],
   disputeWorkflowApprove: ['disputes'],
   disputeWorkflowReject: ['disputes'],
+  disputeWorkflowSettlementEvidence: ['disputes'],
   disputeWorkflowAccountingUpdate: ['disputes'],
   disputeWorkflowSupplierInstructionUpdate: ['disputes'],
   disputeWorkflowSupplierOffsetOptions: ['disputes'],
@@ -16708,6 +16710,19 @@ async function disputeBetaSubmitApproval(body = {}, req, accessContext = null) {
   };
 }
 
+async function finishDisputeClosure(result, body, req, context) {
+  if (body.closeAfter !== true) return result;
+  try {
+    const closed = await disputeBetaClose({ caseId: result.case.id,
+      zeroBalanceOnly: body.zeroBalanceOnly === true,
+      note: body.closureNote || disputeAgreementSummary(result.actions, result.case.latestNote) || 'Settlement verified and completed by Finance.' }, req, context);
+    return { ...result, ...closed };
+  } catch (error) {
+    // Settlement/approval has already succeeded. Keep its proof and offer closure-only retry.
+    return { ...result, closurePending: true, closureWarning: `Saved successfully. Closure still needs attention: ${error.message}` };
+  }
+}
+
 async function disputeBetaApprove(body = {}, req, accessContext = null) {
   const { client, profile } = accessContext || (await requireActiveUser(req));
   await requireCapability(client, profile, 'disputes_approve', 'Dispute approval permission is required.', 403);
@@ -16722,6 +16737,11 @@ async function disputeBetaApprove(body = {}, req, accessContext = null) {
   assertSupplierDisputeAmounts(actions);
   assertSupplierAllocationsCurrent(actions, partyRows, instructionRows, currentStem);
   await assertRequiredDisputeDocuments(client, actions || []);
+  if (body.closeAfter === true) {
+    await requireCapability(client, profile, 'disputes_account', 'Accounting permission is required to approve and close.');
+    const eligibility = zeroBalanceClosureEligibility(actions, partyRows, currentStem, instructionRows);
+    if (!eligibility.eligible) throw appError(eligibility.reasons.join(' '), 409);
+  }
   const salesforceStatus = 'Approved - Pending Accounting';
   const { error: pendingError } = await client
     .from('dispute_beta_cases')
@@ -16751,6 +16771,17 @@ async function disputeBetaApprove(body = {}, req, accessContext = null) {
   }
   const accountingState = await loadDisputeWorkflowActions(client, caseRow.id);
   const documents = await loadDisputeWorkflowDocuments(client, caseRow.id);
+  if (body.closeAfter === true) {
+    let result = { case: serializeDisputeBetaCase(updatedCase), actions: accountingState.actions };
+    try {
+      for (const action of actions) {
+        result = await disputeWorkflowAccountingUpdate({ actionId: action.id, accountingStatus: 'Not Required' }, req, accessContext || { client, profile });
+      }
+    } catch (error) {
+      return { ...result, closurePending: true, closureWarning: `Approved. Finance completion still needs attention: ${error.message}` };
+    }
+    return finishDisputeClosure(result, { ...body, zeroBalanceOnly: true }, req, accessContext || { client, profile });
+  }
   return {
     case: serializeDisputeBetaCase(updatedCase),
     parties: partyRows.map(serializeDisputeWorkflowParty),
@@ -17115,6 +17146,7 @@ async function disputeWorkflowSupplierOffsetOptions(body = {}, req, accessContex
 async function disputeWorkflowSupplierInstructionUpdate(body = {}, req, accessContext = null) {
   const { client, profile } = accessContext || (await requireActiveUser(req));
   await requireCapability(client, profile, 'disputes_account', 'Dispute accounting permission is required for supplier instructions.');
+  body = await verifiedSettlementInput(body, req, accessContext || { client, profile });
   const instructionId = String(body.instructionId || '').trim();
   if (!instructionId) throw appError('instructionId is required.', 400);
   const { data: originalInstruction, error: lookupError } = await client.from('dispute_workflow_supplier_instructions').select(DISPUTE_SUPPLIER_INSTRUCTION_SELECT).eq('id', instructionId).maybeSingle();
@@ -17221,6 +17253,7 @@ async function disputeWorkflowSupplierInstructionUpdate(body = {}, req, accessCo
     event_type: eventType,
     event_note: eventNote,
     event_metadata: {
+      settlementEvidence: body.verifiedEvidence || null,
       supplierInstructionId: instruction.id,
       recoveryMethod,
       targetSupplierInvoiceId: targetInvoice?.supplierInvoiceId || null,
@@ -17259,13 +17292,13 @@ async function disputeWorkflowSupplierInstructionUpdate(body = {}, req, accessCo
   let updatedCase = await getDisputeBetaCase(client, caseRow.id);
   updatedCase = await persistDisputeAccountingStatus(client, updatedCase, currentStem, profile, updatedCase.workflow_status);
   const refreshed = await loadDisputeWorkflowActions(client, caseRow.id);
-  return {
+  return finishDisputeClosure({
     case: serializeDisputeBetaCase(updatedCase),
     parties: workflow.partyRows.map(serializeDisputeWorkflowParty),
     actions: refreshed.actions,
     supplierInstructions: refreshed.supplierInstructions,
     documents: documents.map(serializeDisputeWorkflowDocument),
-  };
+  }, body, req, accessContext || { client, profile });
 }
 
 async function disputeWorkflowSupplierAmountAmend(body = {}, req, accessContext = null) {
@@ -17390,9 +17423,15 @@ async function disputeWorkflowSupplierAmountAmend(body = {}, req, accessContext 
   };
 }
 
+const { disputeWorkflowSettlementEvidence, verifiedSettlementInput } = createDisputeSettlementEvidenceHandlers({
+  requireActiveUser, requireCapability, getDisputeBetaCase, requireInterofficeStemAccess,
+  loadCurrentDisputeStem, loadDisputeWorkflowActions, assertValidDisputeParties, appError,
+});
+
 async function disputeWorkflowAccountingUpdate(body = {}, req, accessContext = null) {
   const { client, profile } = accessContext || (await requireActiveUser(req));
   await requireCapability(client, profile, 'disputes_account', 'Dispute accounting permission is required for accounting updates.');
+  body = await verifiedSettlementInput(body, req, accessContext || { client, profile });
   const actionId = String(body.actionId || '').trim();
   if (!actionId) throw appError('actionId is required.', 400);
   const { data: action, error: actionLookupError } = await client.from('dispute_beta_actions').select(DISPUTE_BETA_ACTION_SELECT).eq('id', actionId).maybeSingle();
@@ -17489,6 +17528,7 @@ async function disputeWorkflowAccountingUpdate(body = {}, req, accessContext = n
       instructionDate,
       settlementReference,
       settlementDate,
+      settlementEvidence: body.verifiedEvidence || null,
       notRequiredReasonWaived,
       verifiedBalance: notRequiredReasonWaived ? notRequiredEligibility.balance : null,
       verifiedBalanceType: notRequiredReasonWaived ? notRequiredEligibility.balanceType : null,
@@ -17504,13 +17544,13 @@ async function disputeWorkflowAccountingUpdate(body = {}, req, accessContext = n
     ? await recordExternalDisputeClosure(client, statusCase, currentStem, profile, workflowStatus)
     : await recordDisputeWorkflowSalesforceWriteback(client, statusCase, profile, workflowStatus);
   const partyMap = disputePartyRowMap(partyRows);
-  return {
+  return finishDisputeClosure({
     case: serializeDisputeBetaCase(salesforceCase),
     parties: partyRows.map(serializeDisputeWorkflowParty),
     action: serializeDisputeBetaAction(updatedAction, partyMap),
     actions: (actions || []).map((item) => serializeDisputeBetaAction(item, partyMap)),
     documents: documents.map(serializeDisputeWorkflowDocument),
-  };
+  }, body, req, accessContext || { client, profile });
 }
 
 async function disputeBetaMarkExecuted(body = {}, req, accessContext = null) {
@@ -17663,6 +17703,10 @@ async function disputeBetaClose(body = {}, req, accessContext = null) {
   }
   if (caseRow.approval_status !== 'Approved') throw appError('Only approved Dispute Workflow cases can be closed.', 400);
   if (caseRow.workflow_status !== 'Settled - Ready to Close') throw appError('Complete accounting settlement for every action before closing.', 400);
+  if (body.zeroBalanceOnly === true) {
+    const eligibility = zeroBalanceClosureEligibility(actionRows, partyRows, currentStem, instructionRows);
+    if (!eligibility.eligible) throw appError(eligibility.reasons.join(' '), 409);
+  }
   const finalNote = String(body.note || '').trim();
   if (!finalNote) throw appError('Final closure note is required.', 400);
   const actions = validateStoredDisputeActions(actionRows, partyRows, registry);
@@ -19414,6 +19458,7 @@ const handlers = {
   disputeWorkflowSubmitApproval: disputeBetaSubmitApproval,
   disputeWorkflowApprove: disputeBetaApprove,
   disputeWorkflowReject: disputeBetaReject,
+  disputeWorkflowSettlementEvidence,
   disputeWorkflowAccountingUpdate,
   disputeWorkflowSupplierInstructionUpdate,
   disputeWorkflowSupplierOffsetOptions,

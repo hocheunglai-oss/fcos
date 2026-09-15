@@ -4,6 +4,17 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.212',
+    releasedAt: '2026-09-15',
+    title: 'Simpler reconciliation and dispute settlement',
+    changes: [
+      'Restores saved Salesforce–Xero checks, groups work by next action, and repairs mappings in place.',
+      'Combines document review and sync while retaining approval records and revalidating each selected record.',
+      'Uses party agreement cards and four dispute stages with verified settlement suggestions.',
+      'Combines the last settlement with closure and offers approve-and-close for verified zero-balance cases.',
+    ],
+  },
+  {
     version: '2.0.211',
     releasedAt: '2026-09-15',
     title: 'Correct units in the dispute queue',

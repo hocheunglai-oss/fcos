@@ -14,7 +14,7 @@ export const DISPUTE_WORKFLOW_USER_MANUAL = Object.freeze({
         'Select the exact buyer or supplier side and confirm the Account shown for the STEM.',
         'Choose the action that reflects the agreed commercial treatment.',
         'Enter the currency, amount, explanation, and any invoice allocation requested by the form.',
-        'Attach supporting evidence when the action requires it, then save the draft.',
+        'Complete one card per selected Account and role. Attach required evidence, then Submit for approval; Save Draft is optional.',
       ],
     },
     {
@@ -24,7 +24,7 @@ export const DISPUTE_WORKFLOW_USER_MANUAL = Object.freeze({
         'Resolve every validation message shown on the case.',
         'Review the action, party, amount, currency, and supporting documents.',
         'Submit the instruction for approval.',
-        'The reviewer approves it or returns it with a clear revision reason.',
+        'The reviewer approves the agreement or returns it with a revision reason. Approve and close is available only for verified zero balances with no remaining obligations.',
       ],
     },
     {
@@ -32,9 +32,9 @@ export const DISPUTE_WORKFLOW_USER_MANUAL = Object.freeze({
       summary: 'Record the final accounting treatment and evidence after approval.',
       steps: [
         'Open an approved case waiting for Accounting.',
-        'Record the accounting status and the final document or payment references.',
+        'Use verified Salesforce or Xero evidence when suggested, or enter the final document or payment reference. Reuse the agreement summary; extra notes are optional.',
         'Confirm any balance-payment instruction and settlement amount.',
-        'Save the accounting result so the case can advance to closure.',
+        'For the last required settlement, Record settlement and close completes both steps. If closure fails, the settlement stays saved and closure can be retried.',
       ],
     },
     {

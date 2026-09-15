@@ -1,3 +1,4 @@
+import { reconciliationBucket } from './financialWorkflowUi.js';
 export const XERO_FINANCIAL_CUTOFF = '2026-01-01';
 
 export function summarizeXeroFinancialReconciliation({ documents, payments } = {}) {
@@ -60,6 +61,7 @@ function classifyDocumentRow(row = {}) {
 }
 
 function classifyPaymentRow(row = {}) {
+  if (reconciliationBucket(row, 'payment') === 'waiting') return 'pending';
   const blockers = Array.isArray(row.blockers) ? row.blockers : [];
   if (row.status === 'blocked' || blockers.length > 0) return 'exception';
   if (row.action === 'payment_link') return 'reconciled';
