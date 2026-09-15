@@ -177,6 +177,9 @@ test('mirror command refetches and validates the PR before verifying immutable r
   assert.ok(verifyRemote > validate);
   assert.ok(report > verifyRemote);
   assert.match(source, /checkout', '--detach', pullRequest\.headRefOid/);
+  const remoteFetch = source.slice(source.indexOf('function verifyImmutableRemoteHead('), source.indexOf('const fetchedHead ='));
+  assert.match(remoteFetch, /cwd: checkout, env: ghEnvironment/,
+    'A nested FCOS push must not replace the isolated shared-repository identity during git fetch.');
 });
 
 test('mirror synchronization changes only manifest-owned paths and verifies exact bytes', () => {

@@ -385,7 +385,7 @@ function verifyImmutableRemoteHead(checkout, pullRequest, inventory, manifest) {
   run('git', [
     'fetch', '--force', 'origin',
     `refs/heads/${pullRequest.headRefName}:refs/remotes/origin/${pullRequest.headRefName}`,
-  ], { cwd: checkout });
+  ], { cwd: checkout, env: ghEnvironment });
   const fetchedHead = run('git', ['rev-parse', `refs/remotes/origin/${pullRequest.headRefName}`], { cwd: checkout });
   validateFetchedPullRequestHead(fetchedHead, pullRequest);
   run('git', ['checkout', '--detach', pullRequest.headRefOid], { cwd: checkout });
