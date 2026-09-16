@@ -24,7 +24,7 @@ import {
 } from '@/lib/exceptionReviewSchedule';
 import { cn } from '@/lib/utils';
 import { MONTHS, THIS_MONTH, THIS_YEAR, formatSelectedMonths, getRecentYears } from '@/lib/dashboardFilters';
-import { EXCEPTION_REVIEW_METHODOLOGY } from '@/lib/pageMethodologies';
+import { EXCEPTION_REVIEW_METHODOLOGY } from '@/lib/pageMethodologyIndex';
 import { useNavigationAwareRequest } from '@/hooks/useNavigationAwareRequest';
 
 const STORAGE_KEY = 'review_queue_filters';

@@ -1,4 +1,5 @@
 import { createSign } from 'node:crypto';
+import { salesforceReadRetryDelay } from './_salesforceReadRetry.js';
 import { requireExternalActionGate } from './_externalActionGates.js';
 import {
   markRuntimeCacheUnsafe,
@@ -252,66 +253,73 @@ export async function sfRequest(path, {
 } = {}) {
   const normalizedMethod = String(method || 'GET').toUpperCase();
   if (!['GET', 'HEAD'].includes(normalizedMethod) && !readOnly) requireExternalActionGate('salesforce_write');
-  const startedAt = Date.now();
-  const accessToken = await getAccessToken();
-  const url = salesforceServiceUrl(path);
-  let res;
-  let data = {};
-  let limit = null;
-  try {
-    res = await fetch(url, {
-      method: normalizedMethod,
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        ...(body ? { 'content-type': 'application/json' } : {}),
-        ...headers,
-      },
-      body: body ? JSON.stringify(body) : undefined,
-    });
-    limit = parseSforceLimitInfo(res.headers.get('sforce-limit-info'));
-    if (res.status !== 204) data = await res.json().catch(() => ({}));
-  } finally {
-    const responseRows = telemetry.composite === true
-      ? (data?.compositeResponse || []).reduce(
-          (sum, response) => sum + (Array.isArray(response?.body?.records) ? response.body.records.length : 0),
-          0,
-        )
-      : (Array.isArray(data?.records) ? data.records.length : 0);
-    recordSalesforceCall({
-      durationMs: Date.now() - startedAt,
-      rows: responseRows,
-      logicalQueries: telemetry.logicalQueries ?? (/^\/query\/\?q=/i.test(path) ? 1 : 0),
-      composite: telemetry.composite === true,
-      limit,
-    });
-  }
+  let readAttempt = 0;
+  let canRefreshSession = retryOnExpiredSession;
+  for (;;) {
+    const startedAt = Date.now();
+    const accessToken = await getAccessToken();
+    const url = salesforceServiceUrl(path);
+    let res;
+    let data = {};
+    let limit = null;
+    try {
+      res = await fetch(url, {
+        method: normalizedMethod,
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          ...(body ? { 'content-type': 'application/json' } : {}),
+          ...headers,
+        },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      limit = parseSforceLimitInfo(res.headers.get('sforce-limit-info'));
+      if (res.status !== 204) data = await res.json().catch(() => ({}));
+    } finally {
+      const responseRows = telemetry.composite === true
+        ? (data?.compositeResponse || []).reduce(
+            (sum, response) => sum + (Array.isArray(response?.body?.records) ? response.body.records.length : 0),
+            0,
+          )
+        : (Array.isArray(data?.records) ? data.records.length : 0);
+      recordSalesforceCall({
+        durationMs: Date.now() - startedAt,
+        rows: responseRows,
+        logicalQueries: telemetry.logicalQueries ?? (/^\/query\/\?q=/i.test(path) ? 1 : 0),
+        composite: telemetry.composite === true,
+        limit,
+      });
+    }
 
-  if (res.status === 204) {
-    if (!['GET', 'HEAD'].includes(normalizedMethod) && !readOnly) await expireSalesforceWriteCaches();
-    return null;
-  }
-  const errorCode = data.errorCode || data[0]?.errorCode;
-  if (retryOnExpiredSession && errorCode === 'INVALID_SESSION_ID') {
-    cachedToken = null;
-    cachedTokenExpiresAt = 0;
-    return sfRequest(path, {
-      method: normalizedMethod,
-      body,
-      headers,
-      retryOnExpiredSession: false,
-      readOnly,
-      telemetry,
+    if (res.status === 204) {
+      if (!['GET', 'HEAD'].includes(normalizedMethod) && !readOnly) await expireSalesforceWriteCaches();
+      return null;
+    }
+    const errorCode = data.errorCode || data[0]?.errorCode;
+    if (canRefreshSession && errorCode === 'INVALID_SESSION_ID') {
+      cachedToken = null;
+      cachedTokenExpiresAt = 0;
+      canRefreshSession = false;
+      continue;
+    }
+    const retryDelay = salesforceReadRetryDelay({
+      method: normalizedMethod, status: res.status, attempt: readAttempt,
+      retryAfter: res.headers.get('retry-after'),
     });
+    if (retryDelay !== null) {
+      readAttempt += 1;
+      await new Promise((resolve) => setTimeout(resolve, retryDelay));
+      continue;
+    }
+    if (!res.ok || data.errorCode || (Array.isArray(data) && data[0]?.errorCode)) {
+      const error = new Error(data.message || data[0]?.message || `Salesforce request failed (HTTP ${res.status}). Please retry shortly.`);
+      error.status = res.status;
+      error.code = errorCode || `SALESFORCE_HTTP_${res.status}`;
+      throw error;
+    }
+    if (path === '/limits') recordSalesforceLimit(salesforceLimitFromBody(data));
+    if (!['GET', 'HEAD'].includes(normalizedMethod) && !readOnly) await expireSalesforceWriteCaches();
+    return data;
   }
-  if (!res.ok || data.errorCode || (Array.isArray(data) && data[0]?.errorCode)) {
-    const error = new Error(data.message || data[0]?.message || `${normalizedMethod} ${path} failed`);
-    error.status = res.status;
-    error.code = errorCode || null;
-    throw error;
-  }
-  if (path === '/limits') recordSalesforceLimit(salesforceLimitFromBody(data));
-  if (!['GET', 'HEAD'].includes(normalizedMethod) && !readOnly) await expireSalesforceWriteCaches();
-  return data;
 }
 
 export async function sfDownload(path, { retryOnExpiredSession = true } = {}) {

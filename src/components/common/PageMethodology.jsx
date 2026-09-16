@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { BookOpen, ExternalLink } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -15,12 +15,31 @@ export default function PageMethodology({
   description,
   sections = [],
   sources = [],
+  contentUrl,
+  contentKey,
   className,
   triggerIcon: TriggerIcon = BookOpen,
   iconOnly = false,
   triggerLabel = 'Methodology',
 }) {
   const [open, setOpen] = useState(false);
+  const [content, setContent] = useState(null);
+  const [loadError, setLoadError] = useState(false);
+  const [retry, setRetry] = useState(0);
+  useEffect(() => {
+    if (!open || !contentUrl || !contentKey) return undefined;
+    const controller = new AbortController();
+    setContent(null); setLoadError(false);
+    fetch(contentUrl, { signal: controller.signal }).then(async (response) => {
+      if (!response.ok) throw new Error('Methodology unavailable');
+      const documents = await response.json();
+      if (!documents[contentKey]) throw new Error('Methodology unavailable');
+      if (!controller.signal.aborted) setContent(documents[contentKey]);
+    }).catch(() => { if (!controller.signal.aborted) setLoadError(true); });
+    return () => controller.abort();
+  }, [open, contentUrl, contentKey, retry]);
+  const visibleSections = content?.sections || sections;
+  const visibleSources = content?.sources || sources;
 
   return (
     <>
@@ -46,7 +65,8 @@ export default function PageMethodology({
             <DialogDescription>{description}</DialogDescription>
           </DialogHeader>
           <div className="space-y-5 text-sm text-foreground">
-            {sections.map((section) => {
+            {contentUrl && !content && (loadError ? <p role="alert">Methodology could not be loaded. <button className="text-primary underline" onClick={() => setRetry((value) => value + 1)}>Retry</button></p> : <p role="status">Loading methodology…</p>)}
+            {visibleSections.map((section) => {
               const paragraphs = Array.isArray(section.body) ? section.body : [section.body];
               return (
                 <section key={section.title}>
@@ -62,11 +82,11 @@ export default function PageMethodology({
                 </section>
               );
             })}
-            {!!sources.length && (
+            {!!visibleSources.length && (
               <section>
                 <h3 className="font-semibold">Sources</h3>
                 <div className="mt-2 flex flex-col items-start gap-2">
-                  {sources.map((source) => (
+                  {visibleSources.map((source) => (
                     <a
                       key={source.url}
                       href={source.url}

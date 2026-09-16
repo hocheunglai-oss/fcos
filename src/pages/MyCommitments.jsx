@@ -1,3 +1,4 @@
+import { operationalHome, setOperationalHome } from '@/lib/operationalHome';
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
@@ -24,7 +25,7 @@ import WorkspaceViewBar from "@/components/common/WorkspaceViewBar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { MY_COMMITMENTS_METHODOLOGY } from "@/lib/pageMethodologies";
+import { MY_COMMITMENTS_METHODOLOGY } from "@/lib/pageMethodologyIndex";
 
 const SECTIONS = [
   { key: "needs_action", label: "Needs action", icon: CircleDot },
@@ -97,6 +98,8 @@ function sectionTone(key) {
 
 export default function MyCommitments() {
   const navigate = useNavigate();
+  const [home, setHome] = useState(operationalHome);
+  const [homeError, setHomeError] = useState('');
   const { request: requestCommitments } = useNavigationAwareRequest("collaboration");
   const [searchParams, setSearchParams] = useSearchParams();
   const [data, setData] = useState({ commitments: [], counts: {} });
@@ -161,6 +164,7 @@ export default function MyCommitments() {
 
   return (
     <div className="workspace-collaboration space-y-5">
+      {homeError && <p role="alert" className="text-sm text-destructive">{homeError}</p>}
       <PageHeader
         icon={UserRoundCheck}
         eyebrow="Daily Work"
@@ -168,6 +172,11 @@ export default function MyCommitments() {
         description="Your operational work, approvals, development checkpoints, coaching actions, and sessions in one place."
         actions={(
           <>
+            <Button variant="outline" aria-pressed={home === '/my-commitments'} onClick={() => {
+              const next = home === '/my-commitments' ? '/' : '/my-commitments';
+              if (setOperationalHome(next)) { setHome(next); setHomeError(''); }
+              else setHomeError('This browser could not save your home preference.');
+            }}>{home === '/my-commitments' ? 'Home on this browser ✓' : 'Make this my home'}</Button>
             <PageMethodology {...MY_COMMITMENTS_METHODOLOGY} />
             <Button
               type="button"
@@ -264,6 +273,8 @@ export default function MyCommitments() {
                         <span className="mt-1 block text-sm text-muted-foreground">
                           {item.subtitle}
                         </span>
+                        {item.owner && <span className="mt-1 block text-xs text-muted-foreground">Responsible: {item.owner}</span>}
+                        {item.blocker && <span className="mt-1 block text-xs text-amber-800">Blocked: {item.blocker}</span>}
                       </span>
                       <span className="flex shrink-0 items-center gap-3 text-xs text-muted-foreground">
                         <span className="text-right">

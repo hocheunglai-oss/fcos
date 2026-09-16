@@ -12,8 +12,9 @@ const REQUIRED_CONTROLS = [
   'Apply selected',
   'Check everything',
   'Approve mapping',
-  'Authorise batch',
-  'Run selected',
+  'Review and sync selected',
+  'Confirm and sync',
+  'Resume approved sync',
   'Preview payments',
   'Apply exact payments',
   'OCR image',
@@ -59,7 +60,7 @@ test('Xero Portal manual explains every critical write and review control', () =
   for (const label of REQUIRED_CONTROLS) assert.ok(labels.includes(label), `${label} must be documented`);
 
   const xeroWrites = XERO_PORTAL_MANUALS.en.sections.flatMap((section) => section.controls).filter((control) => control[3] === 'xero').map((control) => control[0]);
-  assert.deepEqual(xeroWrites.sort(), ['Apply exact payments', 'Apply selected', 'Create Xero draft bill', 'Run selected', 'Sync'].sort());
+  assert.deepEqual(xeroWrites.sort(), ['Apply exact payments', 'Apply selected', 'Create Xero draft bill', 'Confirm and sync', 'Resume approved sync', 'Sync'].sort());
 });
 
 test('Xero Portal exposes the bilingual manual from both the header and tabs', async () => {

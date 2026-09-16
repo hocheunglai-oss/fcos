@@ -17,6 +17,7 @@ import {
   sanitizeConnectionAttestation,
 } from '../src/lib/connectionChecklist.js';
 import { resolveSalesforceBrowserAuthentication } from '../scripts/fcos-connections.mjs';
+import { parseDeploymentArguments } from '../scripts/deploy-salesforce-environments.mjs';
 
 const VERIFIED_AT = '2026-08-09T08:00:00.000Z';
 const EXPIRES_AT = '2026-08-10T08:00:00.000Z';
@@ -219,30 +220,29 @@ test('Salesforce promotions fail closed and enforce DEVEE, GitHub, QAT, Producti
   assert.match(source, /display\?\.connectedStatus !== 'Connected'/);
   assert.match(source, /organization\?\.IsSandbox !== environment\.isSandbox/);
   assert.match(source, /sync-salesforce-shared-repository\.mjs/);
-  assert.match(source, /promotion requires an explicit reviewed manifest/);
-  assert.match(source, /manifestTestClasses/);
-  assert.match(source, /Apex promotion manifest must include at least one \*Test Apex class/);
+  assert.equal(parseDeploymentArguments([], {}).completeOwnedTree, true);
+  assert.throws(() => parseDeploymentArguments(['--manifest', 'manifest/focused.xml'], {}), /validation-only/);
+  assert.throws(() => parseDeploymentArguments(['--schema-cutover'], {}), /schema-free/);
   assert.match(source, /EXPECTED_ORDER = \['devee', 'qat', 'production'\]/);
   assert.match(source, /writeDeveeSourceState/);
-  assert.match(source, /FCOS_SALESFORCE_TEST_LEVEL/);
-  assert.match(source, /manifestHasApex \? 'RunLocalTests' : 'RunRelevantTests'/);
-  assert.match(source, /\['RunLocalTests', 'RunSpecifiedTests', 'RunRelevantTests'\]\.includes\(TEST_LEVEL\)/);
-  assert.match(source, /deploymentMode: !manifestHasApex && MANIFEST \? 'all-or-none-metadata' : 'validated-quick-deploy'/);
+  assert.match(source, /FULL_SALESFORCE_TEST_LEVEL/);
+  assert.match(source, /--source-dir', COMPLETE_SALESFORCE_SCOPE/);
+  assert.match(source, /'project', 'deploy', 'validate'/);
+  assert.match(source, /'project', 'deploy', 'quick'/);
+  assert.match(source, /'project', 'deploy', 'report', '--target-org', environment\.alias/);
+  assert.match(source, /--async/);
+  assert.match(source, /validationResumeDisposition/);
+  assert.match(source, /deploymentResumeDisposition/);
   assert.match(source, /--schema-cutover/);
   assert.match(source, /--schema-bootstrap/);
-  assert.match(source, /all-or-none-schema-bootstrap/);
-  assert.match(source, /'project', 'deploy', 'start'/);
-  assert.match(source, /FCOS_Variable_Charges_Integration/);
-  assert.match(source, /FCOS_Variable_Charges_API/);
-  assert.match(source, /assignPermission\(environment, VARIABLE_CHARGE_DATA_PERMISSION\)/);
-  assert.match(source, /environment\.isSandbox \? 'NoTestRun' : 'RunRelevantTests'/);
+  assert.doesNotMatch(source, /all-or-none-schema-bootstrap|org', 'assign', 'permset|ensureDataPermission/);
   assert.match(source, /Salesforce source must use LF line endings/);
   assert.ok(
-    source.indexOf('const deveeDeployment = deploy(deveeValidation)') < source.indexOf("['scripts/sync-salesforce-shared-repository.mjs', '--publish']"),
+    source.indexOf('ensureDeployment(devee)') < source.indexOf('ensurePublication()'),
     'DEVEE must be deployed successfully before shared publication.',
   );
   assert.ok(
-    source.indexOf("['scripts/sync-salesforce-shared-repository.mjs', '--publish']") < source.indexOf('salesforce.environments.slice(1)'),
+    source.indexOf('ensurePublication()') < source.indexOf('ensureValidation(qat)'),
     'Shared publication must succeed before QAT and Production promotion.',
   );
 });

@@ -8,7 +8,7 @@ import { cn } from '@/lib/utils';
 import PageHeader from '@/components/common/PageHeader';
 import PageMethodology from '@/components/common/PageMethodology';
 import StateBlock from '@/components/common/StateBlock';
-import { GROWTH_COACHING_METHODOLOGY } from '@/lib/pageMethodologies';
+import { GROWTH_COACHING_METHODOLOGY } from '@/lib/pageMethodologyIndex';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';

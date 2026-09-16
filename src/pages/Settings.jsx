@@ -1,3 +1,4 @@
+import WorkflowMetrics from '@/components/settings/WorkflowMetrics';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Activity,
@@ -571,6 +572,7 @@ function SystemHealthPanel() {
       </div>
       <TabsContent value="overview" className="mt-0">
         <HealthOverviewPanel />
+        <WorkflowMetrics />
       </TabsContent>
       <TabsContent value="connections" className="mt-0">
         <Suspense fallback={<StateBlock icon={Loader2} title="Loading connection checklist" description="Preparing the API-first connection runbook." />}>

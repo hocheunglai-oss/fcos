@@ -5,6 +5,12 @@
     "chartChunkBytes": 405000,
     "totalJavaScriptBytes": 3850000
   },
+  "onDemandPdfViewer": {
+    "rendererBytes": 475000,
+    "workerBytes": 1350000,
+    "totalBytes": 1825000,
+    "totalGzipBytes": 550000
+  },
   "server": {
     "universalDispatcherLines": 19600,
     "universalFunctionKilobytes": 23000,

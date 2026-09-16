@@ -1,3 +1,5 @@
+import { useAuth } from '@/lib/AuthContext';
+import { Link } from 'react-router-dom';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import { ActionsProvider } from '@/hedge/data/ActionsContext';
@@ -13,6 +15,7 @@ const MARKET_DRIVE_REFRESH_OFFSET_MS = 2 * 60 * 1000;
 const MARKET_DRIVE_REFRESH_INTERVAL_MS = 60 * 60 * 1000;
 
 export default function Markets() {
+  const { hasModuleAccess } = useAuth();
   const [pulse, setPulse] = useState(null);
   const [dateScopedPulse, setDateScopedPulse] = useState(null);
   const [datePulseLoading, setDatePulseLoading] = useState(false);
@@ -152,6 +155,7 @@ export default function Markets() {
     <ActionsProvider reload={reloadAfterMarketMutation}>
       <div className="hedge-desk-root workspace-trading">
         {error && <div className="workspace-floating-utility-safe"><InlineError error={error} action={<Button onClick={() => reload()}>Retry</Button>} /></div>}
+        {hasModuleAccess('hedge_desk') && <div className="flex flex-wrap items-center justify-between gap-2 px-6 pt-4 text-xs text-muted-foreground"><span>Compare the dated source observations below with your physical and hedge exposure.</span><Link className="font-medium text-primary underline" to="/hedge-desk">Open Hedge Desk exposure</Link></div>}
         {refreshing && <div className="px-6 pt-4 text-xs text-muted-foreground">Refreshing market data...</div>}
         <MarketIntelligenceWorkspace
           data={{ mops: effectiveSnapshot.mops || [], mopsMonthVerifications: effectiveSnapshot.mopsMonthVerifications || [], marketIntelligence: effectiveSnapshot.marketIntelligence || {} }}

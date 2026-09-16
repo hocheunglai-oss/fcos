@@ -1,3 +1,8 @@
+import { createStemWorkspaceActivity } from '../_stemWorkspaceActivity.js';
+import { createWorkflowMetricsReader, recordWorkflowMetric } from '../_workflowMetrics.js';
+import { createWorkspaceSearch } from '../_workspaceSearch.js';
+import { createSystemIncidentVerifier } from '../_systemIncidentRecovery.js';
+import { createDisputeSettlementEvidenceHandlers } from '../_disputeSettlementEvidence.js';
 import { chunkIds, cleanRecord, getApiVersion, getInstanceUrl, salesforceAuthMode, salesforceConfiguredAuthModes, sendJson, sfCompositeQueries, sfDownload, sfQuery, sfRequest } from '../_salesforce.js';
 import { assertStemReadRequest } from '../../shared/salesforceReadRequest.js';
 import { authorizeSalesforceDocument, headerBearerToken } from '../_salesforceDocumentAccess.js';
@@ -50,7 +55,7 @@ import { createHash } from 'node:crypto';
 import { externalActionGates, isExternalActionEnabled, requireExternalActionGate } from '../_externalActionGates.js';
 import { EXCEPTION_REVIEW_DATE_BASIS, EXCEPTION_SCHEDULE_FIELDS, buildExceptionReviewScheduleWhere, exceptionScheduleSchemaIssues, normalizeExceptionSchedule } from '../../src/lib/exceptionReviewSchedule.js';
 import { DISPUTE_BUYER_CLOSE_REASONS as DISPUTE_BETA_BUYER_CLOSE_REASONS, DISPUTE_SUPPLIER_CLOSE_REASONS as DISPUTE_BETA_SUPPLIER_CLOSE_REASONS } from '../../src/lib/disputeWorkflowOptions.js';
-import { disputeNotRequiredEligibility } from '../_disputeAccounting.js';
+import { zeroBalanceClosureEligibility, disputeAgreementSummary, disputeNotRequiredEligibility } from '../_disputeAccounting.js';
 import { hasRecordedFcosClosureWriteback, isSalesforceDisputeClosed, projectExternalDisputeClosure } from '../_disputeWorkflowStatus.js';
 import { allocateSupplierDispute, normalizeSupplierInvoiceExposure, resolveSupplierSettlementSchema, supplierInstructionRows, validSupplierSettlementPayment } from '../_disputeSupplierSettlement.js';
 import { currentRequestTelemetry, logRequestTelemetry, recordRequestFailure, recordSupabaseRequest, requestIdFrom, runWithRequestTelemetry, salesforceLimitFromBody, telemetryResponseHeaders } from '../_requestTelemetry.js';
@@ -986,101 +991,7 @@ async function workNotificationsState(body = {}, req = null, accessContext = nul
   return workNotificationsStateService(body, await workNotificationsAccessContext(req, accessContext));
 }
 
-async function verifyFinancialReportIncident(client, purposeKey) {
-  await loadFinancialReportSettings(client, purposeKey, { required: true });
-  await resolveGraphEmailSender(client, purposeKey);
-}
-
-async function systemErrorVerify(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  const incidentSignature = String(body.incidentSignature || body.incident_signature || '').trim().toLowerCase();
-  if (!validSystemErrorSignature(incidentSignature)) throw appError('A valid system incident is required.', 400);
-  const { data: incident, error } = await context.client
-    .from('system_error_events')
-    .select('id,dedupe_key,handler')
-    .eq('dedupe_key', incidentSignature)
-    .maybeSingle();
-  if (error) throw error;
-  if (!incident) throw appError('This system incident is no longer available.', 404);
-
-  switch (incident.handler) {
-    case 'outstandingBuyerInvoicesEmailReport':
-    case 'outstandingBuyerInvoicesEmailCron':
-      await verifyFinancialReportIncident(context.client, 'outstanding_invoice_reports');
-      break;
-    case 'incomingPaymentEmailReport':
-      await verifyFinancialReportIncident(context.client, 'incoming_payment_reports');
-      break;
-    case 'buyerInvoicePaymentReminderSend':
-      await resolveGraphEmailSender(context.client, 'payment_reminders');
-      await salesforceObjectFields({ objectName: 'stem__c' });
-      break;
-    case 'disputeWorkflowList': {
-      const stemFields = await salesforceObjectFields({ objectName: 'stem__c' });
-      await interofficeStemAccessCondition(context, stemFields.fields || []);
-      break;
-    }
-    case 'workNotificationsList': {
-      const { error: stateError } = await context.client
-        .from('system_error_notification_states')
-        .select('event_id', { count: 'exact', head: true });
-      if (stateError) throw stateError;
-      break;
-    }
-    case 'specialTermsWorkspace':
-      await listSpecialTerms({ force: true });
-      break;
-    case 'hedgeDeskSalesforceMapping':
-      await getHedgeSalesforceMapping(context.client);
-      break;
-    case 'hedgeMarkets':
-      await hedgeMarkets({ action: 'snapshot' }, req, context);
-      break;
-    case 'emailRouterMaintenanceCron': {
-      const serviceClient = createEmailRouterServiceClient();
-      const mailbox = await currentEmailRouterMailbox(serviceClient);
-      const expectedFolders = ['inbox', 'sentitems', 'archive'];
-      const freshnessCutoff = new Date(Date.now() - 15 * 60_000).toISOString();
-      const [{ data: subscriptions, error: subscriptionsError }, { data: deltaStates, error: deltaStateError }] = await Promise.all([
-        serviceClient
-          .schema('emailrouter')
-          .from('mailbox_subscriptions')
-          .select('resource_key')
-          .eq('mailbox_id', mailbox.id)
-          .eq('state', 'active')
-          .gt('expires_at', new Date().toISOString())
-          .in('resource_key', expectedFolders),
-        serviceClient
-          .schema('emailrouter')
-          .from('mailbox_delta_state')
-          .select('folder_key')
-          .eq('mailbox_id', mailbox.id)
-          .eq('sync_state', 'ready')
-          .gte('last_synced_at', freshnessCutoff)
-          .in('folder_key', expectedFolders),
-      ]);
-      if (subscriptionsError) throw subscriptionsError;
-      if (deltaStateError) throw deltaStateError;
-      const activeFolders = new Set((subscriptions || []).map((row) => row.resource_key));
-      const synchronizedFolders = new Set((deltaStates || []).map((row) => row.folder_key));
-      if (expectedFolders.some((folder) => !activeFolders.has(folder))) {
-        throw appError('Email Router does not have an active future-dated subscription for every managed folder.', 503, 'EMAIL_ROUTER_SUBSCRIPTION_UNAVAILABLE');
-      }
-      if (expectedFolders.some((folder) => !synchronizedFolders.has(folder))) {
-        throw appError('Email Router has not synchronized every managed folder recently.', 503, 'EMAIL_ROUTER_SYNCHRONIZATION_STALE');
-      }
-      break;
-    }
-    case 'salesforceQuery':
-      if (handlers.salesforceQuery) throw appError('The legacy Salesforce query endpoint is still registered.', 503, 'LEGACY_SALESFORCE_QUERY_ACTIVE');
-      break;
-    default:
-      throw appError('This incident requires review in its affected workspace and cannot be verified automatically.', 400);
-  }
-
-  const resolved = await resolveSystemErrorIncident(context.client, incidentSignature);
-  return { verified: true, resolved: resolved.resolved || 0, incidentSignature };
-}
+const systemErrorVerify = createSystemIncidentVerifier({ requireActiveUser, requireAdministratorContext, appError, validSystemErrorSignature, loadFinancialReportSettings, resolveGraphEmailSender, salesforceObjectFields, disputeWorkflowList: disputeBetaList, listSpecialTerms, getHedgeSalesforceMapping, hedgeMarkets, createEmailRouterServiceClient, currentEmailRouterMailbox, resolveSystemErrorIncident, isLegacyQueryRegistered: () => Boolean(handlers.salesforceQuery) });
 
 async function workCommitmentsList(body = {}, req = null, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
@@ -1452,10 +1363,13 @@ const HANDLER_MODULE_ACCESS = {
   dashboardAccountCreditDirectory: ['dashboard'],
   dashboardAccountCreditStatement: ['dashboard'],
   dashboardCreditForecastSettingsSave: ['dashboard'],
+  workflowMetricsRead: [],
+  workspaceSearch: [],
   dashboardCounterpartySearch: ['dashboard'],
   dashboardAccountExposureBatch: ['dashboard'],
   dashboardAccountInsightExport: ['dashboard'],
   salesforceTopBuyers: ['dashboard'],
+  stemWorkspaceActivity: ['dashboard', 'review', 'disputes', 'buyer_invoices', 'incoming_payments', 'cashflow_forecast', 'pnl', 'brokers', 'hedge_desk'],
   salesforceStemDetail: ['dashboard', 'review', 'disputes', 'buyer_invoices', 'incoming_payments', 'cashflow_forecast', 'pnl', 'brokers', 'hedge_desk'],
   salesforceStemDocuments: ['dashboard', 'review', 'disputes', 'buyer_invoices', 'incoming_payments', 'cashflow_forecast', 'pnl', 'brokers', 'hedge_desk'],
   salesforceDocumentDownload: ['dashboard', 'review', 'disputes', 'buyer_invoices', 'incoming_payments', 'cashflow_forecast', 'pnl', 'brokers', 'hedge_desk'],
@@ -1480,6 +1394,7 @@ const HANDLER_MODULE_ACCESS = {
   disputeWorkflowSubmitApproval: ['disputes'],
   disputeWorkflowApprove: ['disputes'],
   disputeWorkflowReject: ['disputes'],
+  disputeWorkflowSettlementEvidence: ['disputes'],
   disputeWorkflowAccountingUpdate: ['disputes'],
   disputeWorkflowSupplierInstructionUpdate: ['disputes'],
   disputeWorkflowSupplierOffsetOptions: ['disputes'],
@@ -9822,6 +9737,10 @@ async function dashboardCreditForecastSettingsSave(body = {}, req = null, access
   };
 }
 
+const workflowMetricsRead = createWorkflowMetricsReader({ requireActiveUser, requireAdministratorContext });
+const stemWorkspaceActivity = createStemWorkspaceActivity({ requireActiveUser, resolveStemId, userHasAnyModuleAccess });
+const workspaceSearch = createWorkspaceSearch({ requireActiveUser, userHasAnyModuleAccess, salesforceObjectFields, interofficeStemAccessCondition, queryRows, loadDashboardCounterpartySearch });
+
 async function dashboardCounterpartySearch(body = {}, req = null, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
   return loadDashboardCounterpartySearch({ body, accessContext: context, force: requestForcesRefresh(body, req) });
@@ -14300,7 +14219,9 @@ async function loadBuyerInvoicePaymentReminderContext(body = {}, accessContext =
     {
       daysAhead: body.daysAhead ?? settings.daysAhead,
       anchorStemId: stemId,
-      requestedStemIds: body.requestedStemIds || body.invoiceStemIds,
+      // Review and send must fingerprint the same complete buyer/group scope.
+      // The outbound selection is validated separately after the live comparison.
+      requestedStemIds: [],
     },
     null,
     accessContext,
@@ -14449,7 +14370,7 @@ async function buyerInvoicePaymentReminderSend(body, req, accessContext = null) 
     stemIds: [...selectedStemIds],
   });
   const { settings, settingsRevision: liveSettingsRevision, report, selected, candidates, sender } = await loadBuyerInvoicePaymentReminderContext(
-    { ...body, requestedStemIds: null },
+    { stemId: anchorStemId, daysAhead: body.daysAhead },
     activeAccess,
   );
   const liveRouting = preparePaymentReminderRouting(report, settings, selected, candidates);
@@ -14963,7 +14884,7 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
           SELECT Id, STEM__c, Product__r.Name, Supplier_Name__c,
                  ${originalSupplierLookup.valid ? `Original_Supplier__c, ${originalSupplierRelationship}.Name, ${originalSupplierRelationship}.Inactive_Suspended__c,` : ''}
                  Payment_Term__c, Quantity__c, Quantity_Delivered_Per_BDN__c,
-                 Quantity_Max__c, Quantity_in_MT__c, Is_Quantity_Range__c,
+                 Quantity_Max__c, Quantity_in_MT__c, Is_Quantity_Range__c, Unit_of_Measure__c,
                  Price_Per_Unit__c, Cost_Per_Unit__c, Unit_Sell_At__c, Unit_Buy_At__c, Unit_Cost__c,
                  Total_Price__c, Total_Cost__c, Supplier_Invoice__c, Cancelled__c,
                  Offer_Line_Item__r.UnitPrice, Offer_Line_Item__r.Supplier_Unit_Price__c
@@ -16706,6 +16627,19 @@ async function disputeBetaSubmitApproval(body = {}, req, accessContext = null) {
   };
 }
 
+async function finishDisputeClosure(result, body, req, context) {
+  if (body.closeAfter !== true) return result;
+  try {
+    const closed = await disputeBetaClose({ caseId: result.case.id,
+      zeroBalanceOnly: body.zeroBalanceOnly === true,
+      note: body.closureNote || disputeAgreementSummary(result.actions, result.case.latestNote) || 'Settlement verified and completed by Finance.' }, req, context);
+    return { ...result, ...closed };
+  } catch (error) {
+    // Settlement/approval has already succeeded. Keep its proof and offer closure-only retry.
+    return { ...result, closurePending: true, closureWarning: `Saved successfully. Closure still needs attention: ${error.message}` };
+  }
+}
+
 async function disputeBetaApprove(body = {}, req, accessContext = null) {
   const { client, profile } = accessContext || (await requireActiveUser(req));
   await requireCapability(client, profile, 'disputes_approve', 'Dispute approval permission is required.', 403);
@@ -16720,6 +16654,11 @@ async function disputeBetaApprove(body = {}, req, accessContext = null) {
   assertSupplierDisputeAmounts(actions);
   assertSupplierAllocationsCurrent(actions, partyRows, instructionRows, currentStem);
   await assertRequiredDisputeDocuments(client, actions || []);
+  if (body.closeAfter === true) {
+    await requireCapability(client, profile, 'disputes_account', 'Accounting permission is required to approve and close.');
+    const eligibility = zeroBalanceClosureEligibility(actions, partyRows, currentStem, instructionRows);
+    if (!eligibility.eligible) throw appError(eligibility.reasons.join(' '), 409);
+  }
   const salesforceStatus = 'Approved - Pending Accounting';
   const { error: pendingError } = await client
     .from('dispute_beta_cases')
@@ -16749,6 +16688,17 @@ async function disputeBetaApprove(body = {}, req, accessContext = null) {
   }
   const accountingState = await loadDisputeWorkflowActions(client, caseRow.id);
   const documents = await loadDisputeWorkflowDocuments(client, caseRow.id);
+  if (body.closeAfter === true) {
+    let result = { case: serializeDisputeBetaCase(updatedCase), actions: accountingState.actions };
+    try {
+      for (const action of actions) {
+        result = await disputeWorkflowAccountingUpdate({ actionId: action.id, accountingStatus: 'Not Required' }, req, accessContext || { client, profile });
+      }
+    } catch (error) {
+      return { ...result, closurePending: true, closureWarning: `Approved. Finance completion still needs attention: ${error.message}` };
+    }
+    return finishDisputeClosure(result, { ...body, zeroBalanceOnly: true }, req, accessContext || { client, profile });
+  }
   return {
     case: serializeDisputeBetaCase(updatedCase),
     parties: partyRows.map(serializeDisputeWorkflowParty),
@@ -17113,6 +17063,7 @@ async function disputeWorkflowSupplierOffsetOptions(body = {}, req, accessContex
 async function disputeWorkflowSupplierInstructionUpdate(body = {}, req, accessContext = null) {
   const { client, profile } = accessContext || (await requireActiveUser(req));
   await requireCapability(client, profile, 'disputes_account', 'Dispute accounting permission is required for supplier instructions.');
+  body = await verifiedSettlementInput(body, req, accessContext || { client, profile });
   const instructionId = String(body.instructionId || '').trim();
   if (!instructionId) throw appError('instructionId is required.', 400);
   const { data: originalInstruction, error: lookupError } = await client.from('dispute_workflow_supplier_instructions').select(DISPUTE_SUPPLIER_INSTRUCTION_SELECT).eq('id', instructionId).maybeSingle();
@@ -17219,6 +17170,7 @@ async function disputeWorkflowSupplierInstructionUpdate(body = {}, req, accessCo
     event_type: eventType,
     event_note: eventNote,
     event_metadata: {
+      settlementEvidence: body.verifiedEvidence || null,
       supplierInstructionId: instruction.id,
       recoveryMethod,
       targetSupplierInvoiceId: targetInvoice?.supplierInvoiceId || null,
@@ -17257,13 +17209,13 @@ async function disputeWorkflowSupplierInstructionUpdate(body = {}, req, accessCo
   let updatedCase = await getDisputeBetaCase(client, caseRow.id);
   updatedCase = await persistDisputeAccountingStatus(client, updatedCase, currentStem, profile, updatedCase.workflow_status);
   const refreshed = await loadDisputeWorkflowActions(client, caseRow.id);
-  return {
+  return finishDisputeClosure({
     case: serializeDisputeBetaCase(updatedCase),
     parties: workflow.partyRows.map(serializeDisputeWorkflowParty),
     actions: refreshed.actions,
     supplierInstructions: refreshed.supplierInstructions,
     documents: documents.map(serializeDisputeWorkflowDocument),
-  };
+  }, body, req, accessContext || { client, profile });
 }
 
 async function disputeWorkflowSupplierAmountAmend(body = {}, req, accessContext = null) {
@@ -17388,9 +17340,15 @@ async function disputeWorkflowSupplierAmountAmend(body = {}, req, accessContext 
   };
 }
 
+const { disputeWorkflowSettlementEvidence, verifiedSettlementInput } = createDisputeSettlementEvidenceHandlers({
+  requireActiveUser, requireCapability, getDisputeBetaCase, requireInterofficeStemAccess,
+  loadCurrentDisputeStem, loadDisputeWorkflowActions, assertValidDisputeParties, appError,
+});
+
 async function disputeWorkflowAccountingUpdate(body = {}, req, accessContext = null) {
   const { client, profile } = accessContext || (await requireActiveUser(req));
   await requireCapability(client, profile, 'disputes_account', 'Dispute accounting permission is required for accounting updates.');
+  body = await verifiedSettlementInput(body, req, accessContext || { client, profile });
   const actionId = String(body.actionId || '').trim();
   if (!actionId) throw appError('actionId is required.', 400);
   const { data: action, error: actionLookupError } = await client.from('dispute_beta_actions').select(DISPUTE_BETA_ACTION_SELECT).eq('id', actionId).maybeSingle();
@@ -17487,6 +17445,7 @@ async function disputeWorkflowAccountingUpdate(body = {}, req, accessContext = n
       instructionDate,
       settlementReference,
       settlementDate,
+      settlementEvidence: body.verifiedEvidence || null,
       notRequiredReasonWaived,
       verifiedBalance: notRequiredReasonWaived ? notRequiredEligibility.balance : null,
       verifiedBalanceType: notRequiredReasonWaived ? notRequiredEligibility.balanceType : null,
@@ -17502,13 +17461,13 @@ async function disputeWorkflowAccountingUpdate(body = {}, req, accessContext = n
     ? await recordExternalDisputeClosure(client, statusCase, currentStem, profile, workflowStatus)
     : await recordDisputeWorkflowSalesforceWriteback(client, statusCase, profile, workflowStatus);
   const partyMap = disputePartyRowMap(partyRows);
-  return {
+  return finishDisputeClosure({
     case: serializeDisputeBetaCase(salesforceCase),
     parties: partyRows.map(serializeDisputeWorkflowParty),
     action: serializeDisputeBetaAction(updatedAction, partyMap),
     actions: (actions || []).map((item) => serializeDisputeBetaAction(item, partyMap)),
     documents: documents.map(serializeDisputeWorkflowDocument),
-  };
+  }, body, req, accessContext || { client, profile });
 }
 
 async function disputeBetaMarkExecuted(body = {}, req, accessContext = null) {
@@ -17661,6 +17620,10 @@ async function disputeBetaClose(body = {}, req, accessContext = null) {
   }
   if (caseRow.approval_status !== 'Approved') throw appError('Only approved Dispute Workflow cases can be closed.', 400);
   if (caseRow.workflow_status !== 'Settled - Ready to Close') throw appError('Complete accounting settlement for every action before closing.', 400);
+  if (body.zeroBalanceOnly === true) {
+    const eligibility = zeroBalanceClosureEligibility(actionRows, partyRows, currentStem, instructionRows);
+    if (!eligibility.eligible) throw appError(eligibility.reasons.join(' '), 409);
+  }
   const finalNote = String(body.note || '').trim();
   if (!finalNote) throw appError('Final closure note is required.', 400);
   const actions = validateStoredDisputeActions(actionRows, partyRows, registry);
@@ -17711,10 +17674,10 @@ async function salesforceStemDetailUncached(body, req = null, accessContext = nu
 
   const [recordRaw, lineItems, extraCosts, buyerBrokers, buyerInvoices] = await Promise.all([
     sfRequest(`/sobjects/stem__c/${actualStemId}`).then(cleanRecord),
-    queryRows(`SELECT Id, Name, STEM__c, Product__c, Product__r.Name, Product__r.Family, Supplier_Name__c, BDN_Company__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_Max__c, Quantity_in_MT__c, Is_Quantity_Range__c, Price_Per_Unit__c, Cost_Per_Unit__c, Unit_Sell_At__c, Unit_Buy_At__c, Unit_Cost__c, Subtotal_Sell_At__c, Subtotal_Buy_At__c, Total_Price__c, Total_Cost__c, Supplier_Invoice__c, Payment_Term__c, BDN_Number__c, Cancelled__c, Buyers_Broker__c, Buyer_Broker__c, Buyers_Brokers_Commission_Per_Unit__c, Buyers_Brokers_Commission_Lumpsum__c, Commission_Cost__c, Supplier_Broker__c, Suppliers_Brokers_Commission_Per_Unit__c, Suppliers_Brokers_Commission_Lumpsum__c, Offer_Line_Item__r.UnitPrice, Offer_Line_Item__r.Supplier_Unit_Price__c FROM STEM_Line_Item__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`, { softFail: true }),
-    queryRows(`SELECT Id, Name, Description__c, Product2Id__c, Product2Id__r.Name, Product2Id__r.Family, Supplier_Name__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_in_MT__c, Quantity_Range_Max__c, Is_Quantity_Range__c, Unit_Price__c, Unit_Cost__c, Line_Total__c, Line_Total_Buy__c, Supplier_Invoice__c, Supplier_Issued__c, Payment_Term__c, Cancelled__c FROM STEM_Extra_Cost__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`, { softFail: true }),
-    queryRows(`SELECT Id, STEM__c, Buyer_Broker__c, Refcode_Index__c, Exported__c, Commission_Lumpsum__c, STEM_Line_Item__r.Id FROM STEM_Buyer_Broker__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`, { softFail: true }),
-    queryRows(`SELECT Id, Name, STEM__c, Proforma__c, Deprecated__c, Amount__c FROM Invoice__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`, { softFail: true }),
+    queryRows(`SELECT Id, Name, STEM__c, Product__c, Product__r.Name, Product__r.Family, Supplier_Name__c, BDN_Company__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_Max__c, Quantity_in_MT__c, Is_Quantity_Range__c, Price_Per_Unit__c, Cost_Per_Unit__c, Unit_Sell_At__c, Unit_Buy_At__c, Unit_Cost__c, Subtotal_Sell_At__c, Subtotal_Buy_At__c, Total_Price__c, Total_Cost__c, Supplier_Invoice__c, Payment_Term__c, BDN_Number__c, Cancelled__c, Buyers_Broker__c, Buyer_Broker__c, Buyers_Brokers_Commission_Per_Unit__c, Buyers_Brokers_Commission_Lumpsum__c, Commission_Cost__c, Supplier_Broker__c, Suppliers_Brokers_Commission_Per_Unit__c, Suppliers_Brokers_Commission_Lumpsum__c, Offer_Line_Item__r.UnitPrice, Offer_Line_Item__r.Supplier_Unit_Price__c FROM STEM_Line_Item__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`, { softFail: false }),
+    queryRows(`SELECT Id, Name, Description__c, Product2Id__c, Product2Id__r.Name, Product2Id__r.Family, Supplier_Name__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_in_MT__c, Quantity_Range_Max__c, Is_Quantity_Range__c, Unit_Price__c, Unit_Cost__c, Line_Total__c, Line_Total_Buy__c, Supplier_Invoice__c, Supplier_Issued__c, Payment_Term__c, Cancelled__c FROM STEM_Extra_Cost__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`, { softFail: false }),
+    queryRows(`SELECT Id, STEM__c, Buyer_Broker__c, Refcode_Index__c, Exported__c FROM STEM_Buyer_Broker__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`, { softFail: false }),
+    queryRows(`SELECT Id, Name, STEM__c, Proforma__c, Deprecated__c, Amount__c FROM Invoice__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`, { softFail: false }),
   ]);
   const supplierInvoiceIds = [...new Set([...lineItems.map((item) => item.Supplier_Invoice__c), ...extraCosts.map((item) => item.Supplier_Invoice__c)].filter(isSalesforceId))];
   const supplierInvoiceNameMap = await namesByIds('Supplier_Invoice__c', supplierInvoiceIds);
@@ -18724,9 +18687,8 @@ async function specialTermsDocumentExport(body = {}, req, res, accessContext = n
   const context = accessContext || (await requireActiveUser(req));
   const format = String(body.format || 'pdf').trim().toLowerCase();
   const source = String(body.source || 'live').trim().toLowerCase();
-  if (!['pdf', 'docx'].includes(format)) throw appError('Choose PDF or Word document format.', 400, 'SPECIAL_TERMS_DOCUMENT_FORMAT_INVALID');
+  if (format !== 'pdf') throw appError('Special Terms are available as PDF only.', 400, 'SPECIAL_TERMS_DOCUMENT_FORMAT_INVALID');
   if (!['live', 'draft'].includes(source)) throw appError('Choose a live document or saved draft preview.', 400, 'SPECIAL_TERMS_DOCUMENT_SOURCE_INVALID');
-  if (source === 'draft' && format !== 'pdf') throw appError('Saved drafts may be downloaded as watermarked PDF only.', 409, 'SPECIAL_TERMS_DOCUMENT_DRAFT_FORMAT_RESTRICTED');
   const term = await getSpecialTermDocumentForExport(body.termId, {
     source,
     revisionId: body.revisionId,
@@ -19322,6 +19284,9 @@ const handlers = {
   dashboardAccountCreditDirectory,
   dashboardAccountCreditStatement,
   dashboardCreditForecastSettingsSave,
+  workflowMetricsRead,
+  stemWorkspaceActivity,
+  workspaceSearch,
   dashboardCounterpartySearch,
   dashboardAccountExposureBatch,
   dashboardAiSearch,
@@ -19413,6 +19378,7 @@ const handlers = {
   disputeWorkflowSubmitApproval: disputeBetaSubmitApproval,
   disputeWorkflowApprove: disputeBetaApprove,
   disputeWorkflowReject: disputeBetaReject,
+  disputeWorkflowSettlementEvidence,
   disputeWorkflowAccountingUpdate,
   disputeWorkflowSupplierInstructionUpdate,
   disputeWorkflowSupplierOffsetOptions,
@@ -19486,6 +19452,9 @@ export default async function handler(req, res) {
       requestId,
     },
     async () => {
+      let metricContext = null;
+      let metricResult = null;
+      const metricStartedAt = Date.now();
       try {
         const handlerPolicy = handlerPolicyFor(HANDLER_POLICY_REGISTRY, name);
         if (handlerPolicy && typeof res?.setHeader === 'function') {
@@ -19511,6 +19480,7 @@ export default async function handler(req, res) {
         const fn = handlers[name];
         if (!fn) return sendJson(res, { error: `Unknown function: ${name}` }, 404);
         const accessContext = await requireHandlerAccess(name, req);
+        metricContext = accessContext;
         const body = await readBody(req);
         requireReadOnlyCiOperation(accessContext?.profile, name, body);
         const contract = validateFunctionRequest(name, body);
@@ -19520,6 +19490,7 @@ export default async function handler(req, res) {
           });
         }
         const data = await fn(body, req, accessContext);
+        metricResult = data;
         return sendJson(res, data);
       } catch (error) {
         const status = error.status || error.statusCode || 500;
@@ -19542,6 +19513,11 @@ export default async function handler(req, res) {
         return sendJson(res, publicApiErrorPayload(error, status, requestId), status);
       } finally {
         logRequestTelemetry(res.statusCode || 500);
+        if (process.env.VERCEL_ENV === 'production' && metricContext?.profile?.read_only_ci !== true
+          && metricContext?.profile?.id && handlerPolicyFor(HANDLER_POLICY_REGISTRY, name)?.mutation) {
+          waitUntil(recordWorkflowMetric(safeSupabaseAdminClient(), { handler: name, status: res.statusCode || 500,
+            data: metricResult, durationMs: Date.now() - metricStartedAt }).catch(() => {}));
+        }
       }
     },
   );

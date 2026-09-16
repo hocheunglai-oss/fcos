@@ -12,7 +12,7 @@ import DataStatus from '@/components/common/DataStatus';
 import PageHeader from '@/components/common/PageHeader';
 import PageMethodology from '@/components/common/PageMethodology';
 import PaymentDataReliabilityBadge from '@/components/common/PaymentDataReliabilityBadge';
-import { DASHBOARD_METHODOLOGY } from '@/lib/pageMethodologies';
+import { DASHBOARD_METHODOLOGY } from '@/lib/pageMethodologyIndex';
 import { DASHBOARD_FILTER_STORAGE_KEY, dashboardFilterKey, dashboardFilterPayload, getRecentYears, normalizeDashboardFilters, presetDashboardPeriod } from '@/lib/dashboardFilters';
 import { useNavigationAwareRequest } from '@/hooks/useNavigationAwareRequest';
 
@@ -52,6 +52,7 @@ export default function DashboardSettings() {
   const [stemTableWide, setStemTableWide] = useState(false);
   const [aiSearchActive, setAiSearchActive] = useState(false);
   const aborts = useRef({});
+  const analyticsAttemptRef = useRef(null);
   const dashboardRootRef = useRef(null);
   const insightScrollContainerRef = useRef(null);
   const insightTriggerRef = useRef(null);
@@ -124,12 +125,31 @@ export default function DashboardSettings() {
 
   const loadSummary = useCallback(async ({ force = false } = {}) => { setLoading((value) => ({ ...value, summary: true })); setErrors((value) => ({ ...value, summary: null })); let request; try { request = await invoke('summary', 'dashboardSummary', filterPayload, { force }); if (request.result) { setSummary(request.result.data); setSummaryMeta(request.result.meta); } } catch (error) { if (error.name !== 'AbortError') setErrors((value) => ({ ...value, summary: error.message || 'Dashboard summary could not be loaded.' })); } finally { if (!request || aborts.current.summary === request.controller) setLoading((value) => ({ ...value, summary: false })); } }, [filterPayload, invoke]);
   const loadStems = useCallback(async ({ cursor = null, history = [], sort = DEFAULT_STEM_SORT, search = stemSearch, force = false } = {}) => { setLoading((value) => ({ ...value, stems: true })); setErrors((value) => ({ ...value, stems: null })); let request; try { request = await invoke('stems', 'dashboardStemList', { ...filterPayload, cursor, pageSize: STEM_PAGE_SIZE, sort, search: search || null }, { force }); if (request.result) { setStems({ ...request.result.data, page: history.length + 1, previousCursor: history.at(-1) ?? null }); setNavigation({ cursor, history, sort: request.result.data.sort || sort }); } } catch (error) { if (error.name !== 'AbortError') setErrors((value) => ({ ...value, stems: error.message || 'STEMs could not be loaded.' })); } finally { if (!request || aborts.current.stems === request.controller) setLoading((value) => ({ ...value, stems: false })); } }, [filterPayload, invoke, stemSearch]);
-  const loadAnalytics = useCallback(async ({ force = false } = {}) => { if (!force && (analytics?.filterKey === filterKey || loading.analytics)) return; setLoading((value) => ({ ...value, analytics: true })); setErrors((value) => ({ ...value, analytics: null })); let request; try { request = await invoke('analytics', 'dashboardAnalytics', filterPayload, { force }); if (request.result) setAnalytics({ ...request.result.data, filterKey }); } catch (error) { if (error.name !== 'AbortError') setErrors((value) => ({ ...value, analytics: error.message || 'Analytics could not be loaded.' })); } finally { if (!request || aborts.current.analytics === request.controller) setLoading((value) => ({ ...value, analytics: false })); } }, [analytics?.filterKey, filterKey, filterPayload, invoke, loading.analytics]);
+  const loadAnalytics = useCallback(async ({ force = false } = {}) => {
+    // A failed attempt stays settled until Retry, Refresh, or a filter change.
+    // Loading state must not recreate the callback used by the child's effect.
+    if (!force && analyticsAttemptRef.current?.filterKey === filterKey) return;
+    const attempt = { filterKey };
+    analyticsAttemptRef.current = attempt;
+    setAnalytics((value) => value?.filterKey === filterKey ? value : null);
+    setLoading((value) => ({ ...value, analytics: true }));
+    setErrors((value) => ({ ...value, analytics: null }));
+    try {
+      const request = await invoke('analytics', 'dashboardAnalytics', filterPayload, { force });
+      if (request.result && analyticsAttemptRef.current === attempt) setAnalytics({ ...request.result.data, filterKey });
+    } catch (error) {
+      if (error.name !== 'AbortError' && analyticsAttemptRef.current === attempt) {
+        setErrors((value) => ({ ...value, analytics: error.message || 'Analytics could not be loaded.' }));
+      }
+    } finally {
+      if (analyticsAttemptRef.current === attempt) setLoading((value) => ({ ...value, analytics: false }));
+    }
+  }, [filterKey, filterPayload, invoke]);
   const runAiSearch = useCallback(async (prompt) => { setErrors((value) => ({ ...value, ai: null })); try { const request = await invoke('ai', 'dashboardAiSearch', { prompt, selectedYears: filters.selectedYears, selectedMonths: filters.selectedMonths, filterSpec: filterPayload }); const aiSearch = request.result?.data?.aiSearch; if (aiSearch?.status !== 'ready') { setErrors((value) => ({ ...value, ai: aiSearch?.clarification?.question || 'AI search needs a more specific request.' })); return; } const rows = request.result.data.recentStems || request.result.data.stems || []; setAiSearchActive(true); setStemSearch(''); setStems({ stems: rows, matchingCount: aiSearch.matchedCount, page: 1, pageSize: rows.length, nextCursor: null, aiSearch }); setNavigation((value) => ({ ...value, cursor: null, history: [] })); setTab('stems'); } catch (error) { if (error.name !== 'AbortError') setErrors((value) => ({ ...value, ai: error.message || 'AI search is unavailable.' })); } }, [filterPayload, filters.selectedMonths, filters.selectedYears, invoke]);
 
   useEffect(() => { if (aiSearchActive) return undefined; if (skipNextAutoLoadRef.current) { skipNextAutoLoadRef.current = false; return undefined; } const timer = window.setTimeout(() => { loadSummary(); loadStems({ cursor: null, history: [], sort: DEFAULT_STEM_SORT }); }, 220); return () => window.clearTimeout(timer); }, [aiSearchActive, filterKey, loadSummary, loadStems]);
   useEffect(() => { if (summary && !analyticsEnabled) setAnalyticsEnabled(true); }, [analyticsEnabled, summary]);
-  useEffect(() => () => { Object.values(aborts.current).forEach((controller) => controller?.abort()); }, []);
+  useEffect(() => () => { analyticsAttemptRef.current = null; Object.values(aborts.current).forEach((controller) => controller?.abort()); }, []);
   useEffect(() => {
     const open = Boolean(insightQuery.accountId);
     if (insightWasOpenRef.current && !open) {
@@ -145,7 +165,7 @@ export default function DashboardSettings() {
     }
     insightWasOpenRef.current = open;
   }, [insightQuery.accountId]);
-  const changeFilters = (next) => { cancelPendingUpdates(); Object.values(aborts.current).forEach((controller) => controller?.abort()); const merged = normalizeDashboardFilters(next); if (merged.datePreset !== filters.datePreset && merged.datePreset !== 'custom') Object.assign(merged, presetDashboardPeriod(merged.datePreset)); setAiSearchActive(false); setFilters(merged); };
+  const changeFilters = (next) => { cancelPendingUpdates(); analyticsAttemptRef.current = null; Object.values(aborts.current).forEach((controller) => controller?.abort()); const merged = normalizeDashboardFilters(next); if (merged.datePreset !== filters.datePreset && merged.datePreset !== 'custom') Object.assign(merged, presetDashboardPeriod(merged.datePreset)); setAiSearchActive(false); setFilters(merged); };
   const openAccount = useCallback((account, initialTab = 'overview', trigger = null) => {
     if (!account?.accountId) return;
     insightTriggerRef.current = trigger || document.activeElement;

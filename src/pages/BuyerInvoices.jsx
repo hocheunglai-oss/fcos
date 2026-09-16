@@ -1074,12 +1074,12 @@ function CollectionModal({ row, open, onClose, onSaved, onSendReminder, ownerOpt
                 <Input type="date" value={form.nextFollowUpDate} onChange={(event) => update('nextFollowUpDate', event.target.value)} />
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">Promised Payment Date</Label>
-                <Input type="date" value={form.promisedPaymentDate} onChange={(event) => update('promisedPaymentDate', event.target.value)} />
+                <Label className="text-xs text-muted-foreground">Promised Payment Date {form.status === 'Promise to Pay' && <span aria-hidden="true">*</span>}</Label>
+                <Input data-field="promisedPaymentDate" type="date" value={form.promisedPaymentDate} onChange={(event) => update('promisedPaymentDate', event.target.value)} />
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">Promised Amount</Label>
-                <Input type="text" inputMode="decimal" value={form.promisedAmount} onChange={(event) => update('promisedAmount', event.target.value)} />
+                <Label className="text-xs text-muted-foreground">Promised Amount {form.status === 'Promise to Pay' && <span aria-hidden="true">*</span>}</Label>
+                <Input data-field="promisedAmount" type="text" inputMode="decimal" value={form.promisedAmount} onChange={(event) => update('promisedAmount', event.target.value)} />
               </div>
               <div className="rounded-lg border border-border bg-muted/20 p-3 text-xs text-muted-foreground">
                 <div><span className="font-semibold text-foreground">Due:</span> {fmtDate(row.buyerInvoiceDueDate)}</div>
@@ -1094,8 +1094,8 @@ function CollectionModal({ row, open, onClose, onSaved, onSendReminder, ownerOpt
             )}
             {form.status === 'On Hold' && (
               <div className="grid gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3 md:grid-cols-2">
-                <div className="space-y-1.5"><Label>Hold reason</Label><Input value={form.onHoldReason} onChange={(event) => update('onHoldReason', event.target.value)} placeholder="Why collection activity is paused" /></div>
-                <div className="space-y-1.5"><Label>Review date</Label><Input type="date" value={form.onHoldReviewDate} onChange={(event) => update('onHoldReviewDate', event.target.value)} /></div>
+                <div className="space-y-1.5"><Label>Hold reason <span aria-hidden="true">*</span></Label><Input data-field="onHoldReason" value={form.onHoldReason} onChange={(event) => update('onHoldReason', event.target.value)} placeholder="Why collection activity is paused" /></div>
+                <div className="space-y-1.5"><Label>Review date <span aria-hidden="true">*</span></Label><Input data-field="onHoldReviewDate" type="date" value={form.onHoldReviewDate} onChange={(event) => update('onHoldReviewDate', event.target.value)} /></div>
               </div>
             )}
             {form.status === 'Payment Advice Received' && (
@@ -1105,10 +1105,10 @@ function CollectionModal({ row, open, onClose, onSaved, onSendReminder, ownerOpt
                   <p className="mt-1 text-xs text-cyan-900">This pauses reminders until verification. Settlement still depends on the live Salesforce receivable balance.</p>
                 </div>
                 <div className="grid gap-3 md:grid-cols-2">
-                  <div className="space-y-1.5"><Label>Advice received date</Label><Input type="date" value={form.adviceReceivedDate} onChange={(event) => update('adviceReceivedDate', event.target.value)} /></div>
-                  <div className="space-y-1.5"><Label>Advised amount ({row.currency || 'STEM currency'})</Label><Input type="number" min="0.01" step="0.01" value={form.adviceAmount} onChange={(event) => update('adviceAmount', event.target.value)} /></div>
-                  <div className="space-y-1.5"><Label>Buyer reference</Label><Input value={form.adviceReference} onChange={(event) => update('adviceReference', event.target.value)} placeholder="Reference from remittance advice" /></div>
-                  <div className="space-y-1.5"><Label>Verification date</Label><Input type="date" value={form.adviceVerificationDate} onChange={(event) => { update('adviceVerificationDate', event.target.value); update('nextFollowUpDate', event.target.value); }} /></div>
+                  <div className="space-y-1.5"><Label>Advice received date <span aria-hidden="true">*</span></Label><Input data-field="adviceReceivedDate" type="date" value={form.adviceReceivedDate} onChange={(event) => update('adviceReceivedDate', event.target.value)} /></div>
+                  <div className="space-y-1.5"><Label>Advised amount ({row.currency || 'STEM currency'}) <span aria-hidden="true">*</span></Label><Input data-field="adviceAmount" type="number" min="0.01" step="0.01" value={form.adviceAmount} onChange={(event) => update('adviceAmount', event.target.value)} /></div>
+                  <div className="space-y-1.5"><Label>Buyer reference</Label><Input data-field="adviceEvidence" value={form.adviceReference} onChange={(event) => update('adviceReference', event.target.value)} placeholder="Reference from remittance advice" /></div>
+                  <div className="space-y-1.5"><Label>Verification date <span aria-hidden="true">*</span></Label><Input data-field="adviceVerificationDate" type="date" value={form.adviceVerificationDate} onChange={(event) => { update('adviceVerificationDate', event.target.value); update('nextFollowUpDate', event.target.value); }} /></div>
                 </div>
                 <label
                   className={cn('flex min-h-24 cursor-pointer flex-col items-center justify-center gap-2 rounded-md border border-dashed px-4 py-4 text-center', adviceDragActive ? 'border-cyan-600 bg-cyan-100' : 'border-cyan-300 bg-white')}

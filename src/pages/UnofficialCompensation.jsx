@@ -1,4 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { usePageState } from '@/hooks/usePageState';
+import { useRecordDraft } from '@/hooks/useRecordDraft';
+import RecordSaveStatus from '@/components/common/RecordSaveStatus';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -35,7 +38,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/use-toast';
 import { accountClKeyLabel, accountSearchDisplayText } from '@/lib/accountDisplay';
-import { UNOFFICIAL_COMPENSATION_METHODOLOGY } from '@/lib/pageMethodologies';
+import { UNOFFICIAL_COMPENSATION_METHODOLOGY } from '@/lib/pageMethodologyIndex';
 import { UNOFFICIAL_COMPENSATION_USER_MANUAL } from '@/lib/pageUserManuals';
 import { unofficialCompensationClaimIssues, unofficialCompensationRecoveryIssues } from '@/lib/workflowValidation';
 
@@ -116,12 +119,15 @@ export default function UnofficialCompensation() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
   const [responseMeta, setResponseMeta] = useState(null);
-  const [view, setView] = useState('outstanding');
-  const [search, setSearch] = useState('');
+  const [view, setView] = usePageState('compensation:view', 'outstanding');
+  const [search, setSearch] = usePageState('compensation:search', '');
   const [expanded, setExpanded] = useState(new Set());
   const [options, setOptions] = useState({ accounts: [], picOptions: [] });
   const [claimDialog, setClaimDialog] = useState(false);
   const [claimDraft, setClaimDraft] = useState(EMPTY_CLAIM);
+  const claimRecovery = useRecordDraft();
+  const { update: updateClaimDraft } = claimRecovery;
+  useLayoutEffect(() => { if (claimDialog) updateClaimDraft(claimDraft); }, [claimDialog, claimDraft, updateClaimDraft]);
   const [managedAccountId, setManagedAccountId] = useState('');
   const [contacts, setContacts] = useState([]);
   const [recoveryDialog, setRecoveryDialog] = useState(null);
@@ -196,9 +202,10 @@ export default function UnofficialCompensation() {
     try {
       const loaded = await ensureOptions();
       const nextAccountId = accountId && loaded.accounts.some((row) => row.accountId === accountId) ? accountId : '';
-      setClaimDraft({ ...EMPTY_CLAIM, accountId: nextAccountId });
+      const restored = claimRecovery.open(`compensation-claim:${nextAccountId || 'new'}`, { ...EMPTY_CLAIM, accountId: nextAccountId, operationId: '' });
+      setClaimDraft({ ...restored, operationId: restored.operationId || operationId() });
       setClaimSaveAttempted(false);
-      if (nextAccountId) await loadContacts(nextAccountId);
+      if (restored.accountId) await loadContacts(restored.accountId);
       setClaimDialog(true);
     } catch (loadError) {
       toast({ title: 'Unable to open claim form', description: loadError.message, variant: 'destructive' });
@@ -208,16 +215,17 @@ export default function UnofficialCompensation() {
   const saveClaim = async () => {
     setClaimSaveAttempted(true);
     const issues = unofficialCompensationClaimIssues(claimDraft);
-    if (issues.length) return;
+    if (issues.length || claimRecovery.recovery) return;
     setSaving(true);
     const response = await appClient.functions.invoke('unofficialCompensationClaimCreate', {
       ...claimDraft,
       contactId: claimDraft.contactId === '__none__' ? null : claimDraft.contactId,
       amount: Number(claimDraft.amount),
-      operationId: operationId(),
+      operationId: claimDraft.operationId,
     });
     setSaving(false);
     if (response.data?.error) return toast({ title: 'Claim not created', description: response.data.error, variant: 'destructive' });
+    claimRecovery.saved();
     setClaimDialog(false);
     toast({ title: 'Claim opened in Salesforce' });
     load(true);
@@ -378,7 +386,7 @@ export default function UnofficialCompensation() {
         bodyClassName="p-0"
       >
         <div className="border-b px-4 py-3">
-          <Tabs value={view} onValueChange={setView}><TabsList><TabsTrigger value="outstanding">Outstanding Accounts</TabsTrigger><TabsTrigger value="closed">Closed / Settled</TabsTrigger><TabsTrigger value="issues">Data Issues</TabsTrigger></TabsList></Tabs>
+          <Tabs value={view} onValueChange={setView}><TabsList><TabsTrigger value="outstanding">Needs action · outstanding</TabsTrigger><TabsTrigger value="closed">Completed · settled</TabsTrigger><TabsTrigger value="issues">Data issues</TabsTrigger><TabsTrigger value="all">All</TabsTrigger></TabsList></Tabs>
         </div>
         {loading ? <StateBlock icon={Loader2} title="Loading Salesforce compensation records" description="Claims and recoveries are being reconciled by Account, Contact, and currency." /> : error ? <StateBlock icon={AlertTriangle} title="Unofficial Compensation unavailable" description={error} action={<Button type="button" variant="outline" onClick={() => load(true)}>Try again</Button>} /> : !visibleAccounts.length ? <StateBlock icon={CheckCircle2} title="No matching Accounts" description="No Accounts match this view and search." /> : (
           <div className="overflow-x-auto">
@@ -426,15 +434,16 @@ export default function UnofficialCompensation() {
 
       <Dialog open={claimDialog} onOpenChange={setClaimDialog}>
         <DialogContent className="max-w-2xl"><DialogHeader><DialogTitle>Open New Agreed Compensation Claim</DialogTitle><DialogDescription>This creates an additional positive claim in Salesforce; it does not edit an existing claim. Currency comes from the selected Account.</DialogDescription></DialogHeader>
+          <RecordSaveStatus draft={claimRecovery} saving={saving} authority="Salesforce" onRecover={() => setClaimDraft(claimRecovery.recoverUnchanged())} onDiscard={() => setClaimDraft({ ...claimRecovery.discard(), operationId: operationId() })} />
           <div className="grid gap-4 sm:grid-cols-2">
-            <div className="sm:col-span-2"><Label>Account</Label><Select value={claimDraft.accountId} onValueChange={async (value) => { setClaimDraft((current) => ({ ...current, accountId: value, contactId: '__none__' })); try { await loadContacts(value); } catch (loadError) { toast({ title: 'Contacts unavailable', description: loadError.message, variant: 'destructive' }); } }}><SelectTrigger><SelectValue placeholder="Select active Account" /></SelectTrigger><SelectContent>{options.accounts.map((account) => <SelectItem key={account.accountId} value={account.accountId}>{accountSearchDisplayText(account.accountName, account.clKey)}</SelectItem>)}</SelectContent></Select></div>
+            <div data-field="accountId" className="sm:col-span-2"><Label>Account <span aria-hidden="true">*</span></Label><Select value={claimDraft.accountId} onValueChange={async (value) => { setClaimDraft((current) => ({ ...current, accountId: value, contactId: '__none__' })); try { await loadContacts(value); } catch (loadError) { toast({ title: 'Contacts unavailable', description: loadError.message, variant: 'destructive' }); } }}><SelectTrigger><SelectValue placeholder="Select active Account" /></SelectTrigger><SelectContent>{options.accounts.map((account) => <SelectItem key={account.accountId} value={account.accountId}>{accountSearchDisplayText(account.accountName, account.clKey)}</SelectItem>)}</SelectContent></Select></div>
             <div><Label>Contact (optional)</Label><Select value={claimDraft.contactId} onValueChange={(value) => setClaimDraft((current) => ({ ...current, contactId: value }))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="__none__">No Contact</SelectItem>{contacts.map((contact) => <SelectItem key={contact.contactId} value={contact.contactId}>{contact.contactName}</SelectItem>)}</SelectContent></Select></div>
-            <div><Label>Salesforce PIC</Label><Select value={claimDraft.pic} onValueChange={(value) => setClaimDraft((current) => ({ ...current, pic: value }))}><SelectTrigger><SelectValue placeholder="Select PIC" /></SelectTrigger><SelectContent>{options.picOptions.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select></div>
-            <div><Label>Agreed amount</Label><Input type="number" min="0.01" step="0.01" value={claimDraft.amount} onChange={(event) => setClaimDraft((current) => ({ ...current, amount: event.target.value }))} /></div>
-            <div><Label>Deadline</Label><Input type="date" value={claimDraft.deadlineDate} onChange={(event) => setClaimDraft((current) => ({ ...current, deadlineDate: event.target.value }))} /></div>
+            <div data-field="pic"><Label>Salesforce PIC <span aria-hidden="true">*</span></Label><Select value={claimDraft.pic} onValueChange={(value) => setClaimDraft((current) => ({ ...current, pic: value }))}><SelectTrigger><SelectValue placeholder="Select PIC" /></SelectTrigger><SelectContent>{options.picOptions.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select></div>
+            <div><Label>Agreed amount <span aria-hidden="true">*</span></Label><Input data-field="amount" aria-required="true" type="number" min="0.01" step="0.01" value={claimDraft.amount} onChange={(event) => setClaimDraft((current) => ({ ...current, amount: event.target.value }))} /></div>
+            <div><Label>Deadline <span aria-hidden="true">*</span></Label><Input data-field="deadlineDate" aria-required="true" type="date" value={claimDraft.deadlineDate} onChange={(event) => setClaimDraft((current) => ({ ...current, deadlineDate: event.target.value }))} /></div>
             <div className="sm:col-span-2"><Label>Description (optional)</Label><Textarea value={claimDraft.description} onChange={(event) => setClaimDraft((current) => ({ ...current, description: event.target.value }))} maxLength={32768} /></div>
             <div className="sm:col-span-2"><WorkflowValidationSummary issues={claimSaveAttempted ? claimValidationIssues : []} /></div>
-          </div><DialogFooter><Button type="button" variant="outline" onClick={() => setClaimDialog(false)}>Cancel</Button><Button type="button" onClick={saveClaim} disabled={saving}>{saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Open Claim</Button></DialogFooter>
+          </div><DialogFooter><Button type="button" variant="outline" onClick={() => setClaimDialog(false)}>Cancel</Button><Button type="button" onClick={saveClaim} disabled={saving || Boolean(claimRecovery.recovery)}>{saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Open Claim</Button></DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -442,14 +451,14 @@ export default function UnofficialCompensation() {
         <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto"><DialogHeader><DialogTitle>Record UOC Recovery</DialogTitle><DialogDescription>FCOS derives Account, currency, Product, quantities, UOM, and recovery amount from live Salesforce records.</DialogDescription></DialogHeader>
           {recoveryDialog && <div className="space-y-4">
             <div className="rounded-md border bg-slate-50 px-4 py-3 text-sm"><div className="font-semibold">{accountSearchDisplayText(recoveryDialog.account.accountName, recoveryDialog.account.clKey)}</div><div className="text-muted-foreground">Contact: {recoveryDialog.group.contactName}</div></div>
-            <div><Label>Open claim</Label><Select value={recoveryDraft.claimId} onValueChange={(value) => setRecoveryDraft((current) => ({ ...current, claimId: value }))}><SelectTrigger><SelectValue placeholder="Select matching claim" /></SelectTrigger><SelectContent>{recoveryDialog.group.claims.filter((claim) => claim.status === 'Opened').map((claim) => <SelectItem key={claim.id} value={claim.id}>{formatMoney(claim.amount, claim.currencyIsoCode)} · due {formatDate(claim.deadlineDate)}</SelectItem>)}</SelectContent></Select></div>
-            <div><Label>Find STEM</Label><div className="flex gap-2"><Input value={recoveryDraft.stemKeyword} onChange={(event) => setRecoveryDraft((current) => ({ ...current, stemKeyword: event.target.value }))} placeholder="Enter at least two STEM characters" onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); searchStems(); } }} /><Button type="button" variant="outline" onClick={searchStems} disabled={recoveryDraft.stemKeyword.trim().length < 2}><Search className="h-4 w-4" /></Button></div></div>
+            <div data-field="claimId"><Label>Open claim <span aria-hidden="true">*</span></Label><Select value={recoveryDraft.claimId} onValueChange={(value) => setRecoveryDraft((current) => ({ ...current, claimId: value }))}><SelectTrigger><SelectValue placeholder="Select matching claim" /></SelectTrigger><SelectContent>{recoveryDialog.group.claims.filter((claim) => claim.status === 'Opened').map((claim) => <SelectItem key={claim.id} value={claim.id}>{formatMoney(claim.amount, claim.currencyIsoCode)} · due {formatDate(claim.deadlineDate)}</SelectItem>)}</SelectContent></Select></div>
+            <div data-field="stemId"><Label>Find STEM <span aria-hidden="true">*</span></Label><div className="flex gap-2"><Input value={recoveryDraft.stemKeyword} onChange={(event) => setRecoveryDraft((current) => ({ ...current, stemKeyword: event.target.value }))} placeholder="Enter at least two STEM characters" onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); searchStems(); } }} /><Button type="button" variant="outline" onClick={searchStems} disabled={recoveryDraft.stemKeyword.trim().length < 2}><Search className="h-4 w-4" /></Button></div></div>
             {!!stemOptions.length && <div><Label>STEM</Label><Select value={recoveryDraft.stemId} onValueChange={selectStem}><SelectTrigger><SelectValue placeholder="Select STEM" /></SelectTrigger><SelectContent>{stemOptions.map((stem) => <SelectItem key={stem.stemId} value={stem.stemId}>{stem.stemName} · {stem.buyerName || 'Buyer not set'}</SelectItem>)}</SelectContent></Select></div>}
             {stemContext && <>
               {!selectedStemAccount ? <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">This Account is not an eligible buyer, broker, supplier, supplier broker, secondary buyer broker, or extra-cost supplier on the selected STEM with an open claim.</div> : !selectedStemClaimIsEligible ? <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">The selected claim no longer matches this participant Account.</div> : null}
-              <div><Label>STEM product line item</Label><Select value={recoveryDraft.lineItemId} onValueChange={(value) => setRecoveryDraft((current) => ({ ...current, lineItemId: value }))}><SelectTrigger><SelectValue placeholder="Select line item" /></SelectTrigger><SelectContent>{stemContext.lineItems.map((line) => <SelectItem key={line.lineItemId} value={line.lineItemId}>{line.productName || line.lineItemName} · {line.deliveredQuantity || line.quantity || 0} {line.unitOfMeasure}</SelectItem>)}</SelectContent></Select></div>
+              <div data-field="lineItemId"><Label>STEM product line item <span aria-hidden="true">*</span></Label><Select value={recoveryDraft.lineItemId} onValueChange={(value) => setRecoveryDraft((current) => ({ ...current, lineItemId: value }))}><SelectTrigger><SelectValue placeholder="Select line item" /></SelectTrigger><SelectContent>{stemContext.lineItems.map((line) => <SelectItem key={line.lineItemId} value={line.lineItemId}>{line.productName || line.lineItemName} · {line.deliveredQuantity || line.quantity || 0} {line.unitOfMeasure}</SelectItem>)}</SelectContent></Select></div>
               <label className="flex items-center gap-2 text-sm font-medium"><Checkbox checked={recoveryDraft.fixed} onCheckedChange={(checked) => setRecoveryDraft((current) => ({ ...current, fixed: checked === true }))} />Fixed lump-sum recovery</label>
-              {recoveryDraft.fixed ? <div><Label>Lump-sum price</Label><Input type="number" min="0.01" step="0.01" value={recoveryDraft.lumpSumPrice} onChange={(event) => setRecoveryDraft((current) => ({ ...current, lumpSumPrice: event.target.value }))} /></div> : <div><Label>Unit price</Label><Input type="number" min="0.01" step="0.01" value={recoveryDraft.unitPrice} onChange={(event) => setRecoveryDraft((current) => ({ ...current, unitPrice: event.target.value }))} /></div>}
+              {recoveryDraft.fixed ? <div data-field="recoveryAmount"><Label>Lump-sum price <span aria-hidden="true">*</span></Label><Input type="number" min="0.01" step="0.01" value={recoveryDraft.lumpSumPrice} onChange={(event) => setRecoveryDraft((current) => ({ ...current, lumpSumPrice: event.target.value }))} /></div> : <div data-field="recoveryAmount"><Label>Unit price <span aria-hidden="true">*</span></Label><Input type="number" min="0.01" step="0.01" value={recoveryDraft.unitPrice} onChange={(event) => setRecoveryDraft((current) => ({ ...current, unitPrice: event.target.value }))} /></div>}
               {selectedRecoveryLine && selectedClaim && <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3"><div className="text-xs font-medium text-emerald-800">Calculated recovery</div><div className="mt-1 text-lg font-semibold tabular-nums text-emerald-900">{formatMoney(recoveryPreview, selectedClaim.currencyIsoCode)}</div><div className="text-xs text-emerald-800">{recoveryDraft.fixed ? 'Lump-sum price' : `${Math.abs(Number(selectedRecoveryLine.deliveredQuantity || 0)) >= 0.005 ? 'Delivered quantity' : 'Line quantity'} × unit price`} · saved as a negative UOC amount</div></div>}
             </>}
             <WorkflowValidationSummary issues={recoverySaveAttempted ? recoveryValidationIssues : []} />

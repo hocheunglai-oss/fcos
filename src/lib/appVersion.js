@@ -4,6 +4,88 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.215',
+    releasedAt: '2026-09-17',
+    title: 'Connected workspaces and reliable drafts',
+    changes: [
+      'Adds a permanent STEM workspace, scoped business-reference search, and related workflow activity.',
+      'Recovers local form drafts, explains changed source fields, and preserves reviewed Xero selections.',
+      'Simplifies unchanged charge reviews, previews documents before downloading, and makes required fields clearer.',
+      'Adds optional My Commitments home, forecast explanations, duplicate task protection, and administrator workflow metrics.',
+      'Keeps uncertain email and financial outcomes open until their actual result is verified.',
+    ],
+  },
+  {
+    version: '2.0.214',
+    releasedAt: '2026-09-16',
+    title: 'Dashboard recovery and clearer system alerts',
+    changes: [
+      'Stops repeated analytics requests after a failed refresh and provides an explicit Retry action.',
+      'Recovers brief Salesforce read outages with bounded retries while leaving writes unchanged.',
+      'Identifies Dashboard failures clearly in system notifications.',
+    ],
+  },
+  {
+    version: '2.0.213',
+    releasedAt: '2026-09-16',
+    title: 'Reliable dispute preparation',
+    changes: [
+      'Keeps Salesforce dispute entries visible when no FCOS agreement has been created yet.',
+      'Opens unstarted disputes in Prepare with the Complete agreement action.',
+    ],
+  },
+  {
+    version: '2.0.212',
+    releasedAt: '2026-09-15',
+    title: 'Simpler reconciliation and dispute settlement',
+    changes: [
+      'Restores saved Salesforce–Xero checks, groups work by next action, and repairs mappings in place.',
+      'Combines document review and sync while retaining approval records and revalidating each selected record.',
+      'Uses party agreement cards and four dispute stages with verified settlement suggestions.',
+      'Combines the last settlement with closure and offers approve-and-close for verified zero-balance cases.',
+    ],
+  },
+  {
+    version: '2.0.211',
+    releasedAt: '2026-09-15',
+    title: 'Correct units in the dispute queue',
+    changes: [
+      'Displays each fuel line’s saved Salesforce unit of measure in the dispute workflow queue.',
+      'Preserves native quantities and units, including CBM, without assuming MT.',
+    ],
+  },
+  {
+    version: '2.0.210',
+    releasedAt: '2026-09-13',
+    title: 'Reliable Special Terms updates and clearer matching rules',
+    changes: [
+      'Starts updates to published terms from the current live rules, preventing false source-change warnings.',
+      'Accepts equivalent Salesforce timestamps while retaining protection against actual concurrent edits.',
+      'Allows Country, Port and Product rules without an audience and labels Buyer/Supplier as the Account role.',
+    ],
+  },
+  {
+    version: '2.0.209',
+    releasedAt: '2026-09-13',
+    title: 'Professional Special Terms typography',
+    changes: [
+      'Uses IBM Plex Sans in Special Terms PDFs and the document preview, with lighter semibold headings.',
+      'Improves readability with 11-point body text, 15-point line spacing and left-aligned clauses.',
+      'Embeds PDF fonts for consistent viewing and printing while preserving saved contractual wording.',
+    ],
+  },
+  {
+    version: '2.0.208',
+    releasedAt: '2026-09-13',
+    title: 'Simpler Special Terms drafts, approval and PDF preview',
+    changes: [
+      'Saves complete drafts without publishing or submitting them, with warnings before unsaved edits are lost.',
+      'Shows matching-rule errors beside the inputs and keeps one role-based approval action for the complete term.',
+      'Previews PDFs in a window with download controls and centres the Special Terms and country headings.',
+      'Removes Special Terms Word export and preserves draft clauses and rules when reopened.',
+    ],
+  },
+  {
     version: '2.0.203',
     releasedAt: '2026-09-06',
     title: 'Strengthen access, forecast consistency and release verification',
