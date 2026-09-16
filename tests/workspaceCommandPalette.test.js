@@ -8,7 +8,7 @@ test('global command palette searches exact Account and GROUP identities without
     readFile(new URL('../src/components/Layout.jsx', import.meta.url), 'utf8'),
   ]);
   assert.match(palette, /query\.trim\(\)\.length < 2/);
-  assert.match(palette, /dashboardCounterpartySearch/);
+  assert.match(palette, /workspaceSearch/);
   assert.match(palette, /insightAccountId/);
   assert.match(palette, /insightEntityType/);
   assert.match(palette, /buyerStemCount/);

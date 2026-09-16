@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
-import { AlertCircle, Download, Loader2, X } from 'lucide-react';
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
+import { useEffect, useState } from 'react';
+import { AlertCircle, Download, Eye, Loader2, X } from 'lucide-react';
 import {
   documentPreviewKind,
   downloadBlob,
@@ -44,49 +45,23 @@ function useDocumentBlob(document, stemId) {
   return state;
 }
 
+// Retain the exported name for existing callers; opening a document now always
+// presents its identity before the user chooses Download from the preview.
 export function AuthenticatedDocumentDownloadButton({ document, stemId, className = '', children }) {
-  const [status, setStatus] = useState('idle');
-  const [error, setError] = useState('');
-  const requestRef = useRef(null);
-
-  useEffect(() => {
-    setStatus('idle');
-    setError('');
-    return () => requestRef.current?.abort();
-  }, [document?.downloadUrl, document?.stemId, stemId]);
-
-  const download = async () => {
-    requestRef.current?.abort();
-    const controller = new AbortController();
-    requestRef.current = controller;
-    setStatus('loading');
-    setError('');
-    try {
-      const { blob } = await fetchAuthenticatedDocument(document.downloadUrl, {
-        stemId: document.stemId || stemId,
-        signal: controller.signal,
-      });
-      if (requestRef.current !== controller || controller.signal.aborted) return;
-      downloadBlob(blob, document.fileName || document.originalFileName || 'salesforce-document');
-      setStatus('idle');
-    } catch (nextError) {
-      if (requestRef.current !== controller || controller.signal.aborted || nextError?.name === 'AbortError') return;
-      setStatus('error');
-      setError(nextError?.message || 'Unable to download this document.');
-    } finally {
-      if (requestRef.current === controller) requestRef.current = null;
-    }
-  };
-
-  return (
-    <span className="inline-flex flex-col items-end gap-1">
-      <button type="button" onClick={download} disabled={status === 'loading'} className={className}>
-        {status === 'loading' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
-        {children || 'Download'}
-      </button>
-      {status === 'error' && <span role="alert" className="max-w-64 text-right text-[11px] text-destructive">{error}</span>}
-    </span>
-  );
+  const [open, setOpen] = useState(false);
+  useEffect(() => setOpen(false), [document?.downloadUrl, document?.stemId, stemId]);
+  return <>
+    <button type="button" onClick={() => setOpen(true)} className={className}>
+      <Eye className="h-3.5 w-3.5" />{children || 'Preview'}
+    </button>
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogContent className="max-w-fit border-0 bg-transparent p-0 [&>button]:hidden">
+        <DialogTitle className="sr-only">Document preview</DialogTitle>
+        <DialogDescription className="sr-only">Review the document and its source before downloading.</DialogDescription>
+        {open && <AuthenticatedDocumentPreview document={document} stemId={stemId} onClose={() => setOpen(false)} />}
+      </DialogContent>
+    </Dialog>
+  </>;
 }
 
 export function AuthenticatedDocumentPreview({ document, stemId, onClose, title, subtitle, className = '' }) {
@@ -101,6 +76,12 @@ export function AuthenticatedDocumentPreview({ document, stemId, onClose, title,
         <div className="min-w-0">
           <div className="truncate text-sm font-semibold text-foreground">{fileName}</div>
           {subtitle && <div className="mt-0.5 text-xs text-muted-foreground">{subtitle}</div>}
+          <dl className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+            {[['STEM', document?.stemName || document?.stemId || stemId], ['Source', document?.sourceLabel || document?.sourceGroup],
+              ['Status', document?.status || document?.documentStatus], ['Version', document?.versionNumber || document?.version],
+              ['Currency', document?.currencyIsoCode || document?.currency], ['Updated', document?.lastModifiedDate || document?.updatedAt]]
+              .filter(([, value]) => value != null && value !== '').map(([label, value]) => <div key={label} className="flex gap-1"><dt>{label}:</dt><dd>{String(value)}</dd></div>)}
+          </dl>
         </div>
         <div className="flex items-center gap-2">
           {status === 'ready' && blob && (

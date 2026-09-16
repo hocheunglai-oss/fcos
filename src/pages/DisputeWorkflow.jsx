@@ -1,5 +1,8 @@
+import { usePageState } from '@/hooks/usePageState';
+import { useRecordDraft } from '@/hooks/useRecordDraft';
+import RecordSaveStatus from '@/components/common/RecordSaveStatus';
 import DisputeSettlementSuggestions from '@/components/common/DisputeSettlementSuggestions';
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, BookOpen, CheckCircle2, CircleDollarSign, ExternalLink, Eye, FileCheck2, Link2, Loader2, Plus, RefreshCw, Search, Send, ShieldCheck, Upload, X } from 'lucide-react';
 import { format } from 'date-fns';
 import { appClient } from '@/api/appClient';
@@ -27,7 +30,7 @@ import {
   zeroBalanceNotRequiredEligibility,
 } from '@/lib/disputeWorkflowDefaults';
 import { DISPUTE_BUYER_CLOSE_REASONS, DISPUTE_SUPPLIER_CLOSE_REASONS } from '@/lib/disputeWorkflowOptions';
-import { DISPUTE_WORKFLOW_METHODOLOGY } from '@/lib/pageMethodologies';
+import { DISPUTE_WORKFLOW_METHODOLOGY } from '@/lib/pageMethodologyIndex';
 import { DISPUTE_WORKFLOW_USER_MANUAL } from '@/lib/pageUserManuals';
 import { useAuth } from '@/lib/AuthContext';
 import { cn } from '@/lib/utils';
@@ -1338,21 +1341,37 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
 
+  const recordDraft = useRecordDraft();
+  const { open: openDraft } = recordDraft;
+  const applyDraft = (value) => {
+    if (!value) return;
+    setSelectedAccountIds(value.selectedAccountIds || []);
+    setActions(value.actions || []);
+    setNote(value.note || '');
+  };
+  useLayoutEffect(() => {
+    if (open && stem) recordDraft.update({ selectedAccountIds, actions, note });
+  }, [open, stem, selectedAccountIds, actions, note, recordDraft.update]);
+
   useEffect(() => {
+    if (!stem || !open) return;
     const nextWorkflow = workflowFromRow(stem);
     const nextSelectedAccountIds = (nextWorkflow.parties || []).map((party) => party.accountId);
     setCaseRow(nextWorkflow.case);
     setParties(nextWorkflow.parties || []);
-    setSelectedAccountIds(nextSelectedAccountIds);
-    setActions(nextWorkflow.actions || []);
+    const recovered = openDraft(`dispute:${stem.Id}`, {
+      selectedAccountIds: nextSelectedAccountIds, actions: nextWorkflow.actions || [], note: nextWorkflow.case?.latestNote || '',
+    }, nextWorkflow.case?.updatedAt);
+    setSelectedAccountIds(recovered.selectedAccountIds);
+    setActions(recovered.actions);
     setSupplierInstructions(nextWorkflow.supplierInstructions || []);
     setEvents(nextWorkflow.events || []);
     setDocuments(nextWorkflow.documents || []);
     setReconciliationError(nextWorkflow.reconciliationError || null);
-    setNote(nextWorkflow.case?.latestNote || '');
+    setNote(recovered.note);
     setDocumentPartyKey('');
     setError(null);
-  }, [stem]);
+  }, [stem, open, openDraft]);
 
   if (!open || !stem) return null;
 
@@ -1363,7 +1382,7 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
   const candidateSchemaValid = partyRegistry?.candidateSchemaValid === true;
   const selectionValid = legacyReadOnly || selectedAccountIds.length > 0;
   const partiesValid = legacyReadOnly || (candidateSchemaValid && selectionValid);
-  const canEdit = !legacyReadOnly && !externalClosure && editableWorkflow(caseRow) && candidateSchemaValid;
+  const canEdit = capabilities?.canPrepare === true && !recordDraft.recovery && !legacyReadOnly && !externalClosure && editableWorkflow(caseRow) && candidateSchemaValid;
   const documentedActionIds = new Set(documents.map((document) => document.actionId).filter(Boolean));
   const missingRequiredDocuments = actions.filter((action) => action.requiresAttachment && (!action.id || !documentedActionIds.has(action.id)));
   const supplierAmountRequired = actions.filter((action) => action.partyType === 'supplier' && action.supplierDisputeAmountRequired);
@@ -1456,8 +1475,17 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
         setError(res.data.error);
         return null;
       }
+      if (name === 'disputeWorkflowSaveDraft') {
+        const savedValues = { selectedAccountIds: (res.data?.parties || parties).map((party) => party.accountId),
+          actions: res.data?.actions || actions, note: res.data?.case?.latestNote ?? note };
+        recordDraft.saved(savedValues);
+        applyDraft(savedValues);
+      }
       await refreshAfter(res.data, options);
       return res.data;
+    } catch (failure) {
+      setError(failure?.message || 'Unable to save. Your edits remain available.');
+      return null;
     } finally {
       setBusy(false);
     }
@@ -1570,6 +1598,8 @@ function ManageWorkflowModal({ stem, open, onClose, onSaved, capabilities }) {
 
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain px-5 py-4">
           {error && <div className="rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}
+          <RecordSaveStatus draft={recordDraft} saving={busy} error={error} authority="the dispute workflow"
+            onRecover={() => applyDraft(recordDraft.recoverUnchanged())} onDiscard={() => applyDraft(recordDraft.discard())} />
           {reconciliationError && <div className="flex gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive"><AlertCircle className="mt-0.5 h-5 w-5 shrink-0" /><div><div className="font-semibold">Supplier payment reconciliation requires attention.</div><div className="mt-1">{reconciliationError}</div><div className="mt-2 text-xs">Submission and final closure are blocked until Salesforce payment data can be reconciled.</div></div></div>}
           {legacyReadOnly && !externalClosure && (
             <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
@@ -1858,8 +1888,8 @@ export default function DisputeWorkflow() {
   const [error, setError] = useState(null);
   const [lastRefresh, setLastRefresh] = useState(null);
   const [responseMeta, setResponseMeta] = useState(null);
-  const [search, setSearch] = useState('');
-  const [selectedStages, setSelectedStages] = useState(['Prepare', 'Approve', 'Settle']);
+  const [search, setSearch] = usePageState('disputes:search', '');
+  const [selectedStages, setSelectedStages] = usePageState('disputes:stages', ['Prepare', 'Approve', 'Settle']);
   const [managedStem, setManagedStem] = useState(null);
   const [selectedStemId, setSelectedStemId] = useState(null);
   const [capabilities, setCapabilities] = useState({ role: 'user', canPrepare: true, canApprove: false, canAccount: false, canClose: false, canViewAllRules: true });

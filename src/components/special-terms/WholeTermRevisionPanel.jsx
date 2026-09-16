@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useRecordDraft } from '@/hooks/useRecordDraft';
+import RecordSaveStatus from '@/components/common/RecordSaveStatus';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Merge, Plus, RotateCcw, Save, ShieldCheck, Trash2 } from 'lucide-react';
 import { appClient } from '@/api/appClient';
 import ClauseProjectionSection from '@/components/special-terms/ClauseProjectionSection';
@@ -75,8 +77,29 @@ export default function WholeTermRevisionPanel({ detail, canDraft, canApprove, e
   const busyRef = useRef(false);
   const [boundaryReviewOpen, setBoundaryReviewOpen] = useState(false);
   const [reviewedBoundaries, setReviewedBoundaries] = useState(false);
+  const recovery = useRecordDraft();
+  const { open: openDraft, update: updateDraft, saved: acknowledgeDraft } = recovery;
+  const draftReady = useRef(false);
+  const applyDraft = useCallback((values) => {
+    if (!values) return;
+    setRevision(values.revision); setRevisionReason(values.revisionReason);
+    setReasonNotApplicable(values.reasonNotApplicable); setReviewedBoundaries(values.reviewedBoundaries);
+    setLegacyPreviews(values.legacyPreviews);
+  }, []);
+  const openRevisionDraft = useCallback((baseRevision, reason, previews = null) => {
+    draftReady.current = true;
+    applyDraft(openDraft(`special-term-revision:${detail.term.id}`, {
+      revision: baseRevision, revisionReason: reason.trim().toUpperCase() === 'N/A' ? '' : reason,
+      reasonNotApplicable: reason.trim().toUpperCase() === 'N/A', reviewedBoundaries: false, legacyPreviews: previews,
+    }, detail.term.lastModifiedAt));
+  }, [detail.term.id, detail.term.lastModifiedAt, openDraft, applyDraft]);
+  useLayoutEffect(() => {
+    if (draftReady.current) updateDraft({ revision, revisionReason, reasonNotApplicable, reviewedBoundaries, legacyPreviews });
+  }, [revision, revisionReason, reasonNotApplicable, reviewedBoundaries, legacyPreviews, updateDraft]);
+
 
   useEffect(() => {
+    draftReady.current = false;
     const nextReason = editableRevisionReason(initialRevision);
     setRevision(localRevisionFromDetail(detail, initialRevision));
     setBaselineSignature(revisionDraftSignature(localRevisionFromDetail(detail, initialRevision), nextReason));
@@ -87,7 +110,12 @@ export default function WholeTermRevisionPanel({ detail, canDraft, canApprove, e
     setSavedDraftPreviewKey(initialRevision?.id
       ? documentPreviewKey(specialTermDocumentModel({ term: detail?.term, detail, revision: initialRevision, mode: 'draft' }))
       : null);
-  }, [detail, initialRevision]);
+    const needsLegacy = !initialRevision?.id && SPECIAL_TERM_REVISION_PROJECTIONS.some((key) => {
+      const projection = detail?.projections?.[key] || {};
+      return projection.status !== 'Active' && !(projection.proposedAssignments || []).length;
+    });
+    if (!needsLegacy) openRevisionDraft(localRevisionFromDetail(detail, initialRevision), nextReason);
+  }, [detail, initialRevision, openRevisionDraft]);
 
   useEffect(() => {
     const legacyKeys = SPECIAL_TERM_REVISION_PROJECTIONS.filter((key) => {
@@ -106,9 +134,8 @@ export default function WholeTermRevisionPanel({ detail, canDraft, canApprove, e
     }).then((entries) => {
       if (cancelled) return;
       const previews = Object.fromEntries(entries);
-      setLegacyPreviews(previews);
-      setRevision((current) => {
-        if (!current) return current;
+      {
+        const current = localRevisionFromDetail(detail, initialRevision);
         const projections = { ...current.projections };
         for (const [projection, preview] of entries) {
           const assignments = (preview.segments || []).map((segment, index) => ({
@@ -126,9 +153,9 @@ export default function WholeTermRevisionPanel({ detail, canDraft, canApprove, e
           projections[projection] = { ...(projections[projection] || {}), status: 'Active', style: preview.style, assignments, draftAssignments: assignments, activeAssignments: assignments };
         }
         const hydrated = { ...current, projections };
-        setBaselineSignature((baseline) => baseline === revisionDraftSignature(current, editableRevisionReason(initialRevision)) ? revisionDraftSignature(hydrated, editableRevisionReason(initialRevision)) : baseline);
-        return hydrated;
-      });
+        setBaselineSignature(revisionDraftSignature(hydrated, editableRevisionReason(initialRevision)));
+        openRevisionDraft(hydrated, editableRevisionReason(initialRevision), previews);
+      }
       setLegacyPreparing(false);
     }).catch((error) => {
       if (cancelled) return;
@@ -136,7 +163,7 @@ export default function WholeTermRevisionPanel({ detail, canDraft, canApprove, e
       onError?.(error.message || 'The preserved legacy wording could not be prepared.');
     });
     return () => { cancelled = true; };
-  }, [detail, initialRevision, onError]);
+  }, [detail, initialRevision, onError, openRevisionDraft]);
 
   const status = revision?.status || detail?.term?.revisionStatus || 'Legacy';
   const updateAssignments = (projectionKey, assignments) => {
@@ -168,6 +195,7 @@ export default function WholeTermRevisionPanel({ detail, canDraft, canApprove, e
     try {
       const response = await appClient.functions.invoke(name, { termId: detail.term.id, ...payload, operationId: operationId() }, { cache: false });
       if (response.data?.error) throw new Error(response.data.error);
+      acknowledgeDraft();
       setConfirm(null);
       setRelink(null);
       if (response.data?.detail) {
@@ -187,7 +215,7 @@ export default function WholeTermRevisionPanel({ detail, canDraft, canApprove, e
   };
 
   const commit = async (mode) => {
-    if (legacyPreparing || busyRef.current || externalBusy || boundaryReviewOpen) return;
+    if (!draftReady.current || recovery.recovery || legacyPreparing || busyRef.current || externalBusy || boundaryReviewOpen) return;
     if (ruleIssues.length) { setActiveProjection('rules'); onError?.('Complete the highlighted matching rules before saving.'); return; }
     if (mode !== 'save_draft' && effectiveReason.trim().length < 3) { setReasonError(true); document.getElementById('special-term-change-reason')?.focus(); return; }
     if (legacyPreviews && Object.values(legacyPreviews).some((preview) => preview.manualReviewRequired)) {
@@ -288,7 +316,7 @@ export default function WholeTermRevisionPanel({ detail, canDraft, canApprove, e
     });
   };
 
-  const editable = canDraft && !busy && !legacyPreparing && !externalBusy && ['Draft', 'In Review', 'Ready for Approval', 'Changes Requested'].includes(status);
+  const editable = canDraft && !recovery.recovery && draftReady.current && !busy && !legacyPreparing && !externalBusy && ['Draft', 'In Review', 'Ready for Approval', 'Changes Requested'].includes(status);
   const previewModel = specialTermDocumentModel({ term: detail.term, detail, revision, mode: 'draft' });
   const livePreviewModel = specialTermDocumentModel({ term: detail.term, detail, revision, mode: 'live' });
   const hasTermsDocument = Boolean(previewModel.termsText.trim() || livePreviewModel.termsText.trim());
@@ -308,6 +336,7 @@ export default function WholeTermRevisionPanel({ detail, canDraft, canApprove, e
       </div>
       {detail?.term?.revisionStatus === 'Legacy' ? <Alert className="border-amber-300 bg-amber-50 text-amber-950"><AlertTriangle className="h-4 w-4" /><AlertDescription>The preserved Salesforce wording remains live. This editor prepares one complete replacement; nothing changes until approval succeeds.</AlertDescription></Alert> : null}
       {legacyPreparing ? <Alert><AlertDescription>Preparing all legacy clauses and exact Clause Library matches…</AlertDescription></Alert> : null}
+      <RecordSaveStatus draft={recovery} saving={busy} authority="Salesforce" onRecover={() => applyDraft(recovery.recoverUnchanged())} onDiscard={() => applyDraft(recovery.discard())} />
       {legacyPreviews && Object.entries(legacyPreviews).some(([, preview]) => preview.manualReviewRequired) ? <Alert variant="destructive"><AlertTriangle className="h-4 w-4" /><AlertDescription>Manual clause-boundary review is required for {Object.entries(legacyPreviews).filter(([, preview]) => preview.manualReviewRequired).map(([key]) => key === 'termsText' ? 'Terms Text' : key === 'confirmationRemark' ? 'Confirmation' : 'Nomination').join(', ')}. The complete update remains blocked until those boundaries are resolved.</AlertDescription></Alert> : null}
       <div className="flex gap-1 overflow-x-auto border-b border-border pb-2" role="tablist" aria-label="Special Term sections">
         {[
@@ -333,7 +362,7 @@ export default function WholeTermRevisionPanel({ detail, canDraft, canApprove, e
         </div>
         <div className="flex flex-wrap items-center justify-between gap-2">
           {ruleIssues.length ? <Button type="button" variant="link" className="h-auto p-0 text-destructive" onClick={() => setActiveProjection('rules')}>Review {ruleIssues.length} matching-rule {ruleIssues.length === 1 ? 'issue' : 'issues'}</Button> : <p className="text-xs text-muted-foreground">{canApprove ? 'Publishes the complete term in one action.' : 'One review covers the complete term.'}</p>}
-          <div className="flex gap-2"><Button type="button" variant="outline" onClick={() => commit('save_draft')} disabled={busy || externalBusy || boundaryReviewOpen || legacyPreparing || Boolean(pdfRequest) || (!dirty && Boolean(revision.id))}><Save className="mr-2 h-4 w-4" />Save Draft</Button><Button type="button" onClick={() => commit(canApprove ? 'approve_publish' : 'submit')} disabled={busy || externalBusy || boundaryReviewOpen || legacyPreparing || Boolean(pdfRequest) || (!canApprove && status === 'In Review' && !dirty)}>{busy ? 'Working…' : canApprove ? <><CheckCircle2 className="mr-2 h-4 w-4" />Approve &amp; publish</> : <><ShieldCheck className="mr-2 h-4 w-4" />Submit for approval</>}</Button></div>
+          <div className="flex gap-2"><Button type="button" variant="outline" onClick={() => commit('save_draft')} disabled={!draftReady.current || Boolean(recovery.recovery) || busy || externalBusy || boundaryReviewOpen || legacyPreparing || Boolean(pdfRequest) || (!dirty && Boolean(revision.id))}><Save className="mr-2 h-4 w-4" />Save Draft</Button><Button type="button" onClick={() => commit(canApprove ? 'approve_publish' : 'submit')} disabled={!draftReady.current || Boolean(recovery.recovery) || busy || externalBusy || boundaryReviewOpen || legacyPreparing || Boolean(pdfRequest) || (!canApprove && status === 'In Review' && !dirty)}>{busy ? 'Working…' : canApprove ? <><CheckCircle2 className="mr-2 h-4 w-4" />Approve &amp; publish</> : <><ShieldCheck className="mr-2 h-4 w-4" />Submit for approval</>}</Button></div>
         </div>
       </div> : null}
       <details className="rounded-md border border-border bg-background p-3"><summary className="cursor-pointer text-xs font-semibold">Advanced history and provenance</summary>{revision.provenance ? <div className="mt-3 text-xs text-muted-foreground"><span className="font-semibold text-foreground">Source:</span> {revision.provenance.sourceLabel || 'Salesforce wording'}{revision.provenance.migratedAt ? ` · prepared ${revision.provenance.migratedAt}` : ''}{revision.provenance.mappingDecision ? ` · ${revision.provenance.mappingDecision}` : ''}</div> : null}{detail?.revisionHistory?.length ? <ol className="mt-3 space-y-2 border-l border-border pl-4 text-xs text-muted-foreground">{detail.revisionHistory.map((event) => <li key={event.id}><strong className="text-foreground">Revision {event.revisionNumber} · {event.status}</strong>{event.proposedByEmail ? ` · proposed by ${event.proposedByEmail}` : ''}{event.approvedByEmail ? ` · approved by ${event.approvedByEmail}` : ''}{event.approvedAt ? ` · ${event.approvedAt}` : ''}{event.revisionReason ? <span className="block">{event.revisionReason}</span> : null}</li>)}</ol> : <p className="mt-2 text-xs text-muted-foreground">No prior revision history.</p>}{canApprove && revision.sourceRevisionId ? <Button type="button" className="mt-3" size="sm" variant="outline" onClick={() => setConfirm({ type: 'rollback', reason: '' })} disabled={busy || dirty}><RotateCcw className="mr-2 h-4 w-4" />Rollback active revision</Button> : null}</details>

@@ -1,4 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { usePageState } from '@/hooks/usePageState';
+import { ROUTINE_COST_NOTE, ROUTINE_BUYER_NOTE } from '../../../shared/routineReviewNote';
+import { useRecordDraft } from '@/hooks/useRecordDraft';
+import RecordSaveStatus from '@/components/common/RecordSaveStatus';
+import { acknowledgeVariableChargeSide } from '@/lib/variableChargeDraft';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowLeft,
@@ -60,7 +65,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
-import { PAYMENT_COLLECTIONS_METHODOLOGIES } from '@/lib/pageMethodologies';
+import { PAYMENT_COLLECTIONS_METHODOLOGIES } from '@/lib/pageMethodologyIndex';
 import {
   ANCHORAGE_LOCATION_ELSEWHERE,
   ANCHORAGE_LOCATION_ELSEWHERE_LABEL,
@@ -418,6 +423,22 @@ function supplierCostReviewState(row, review = {}, draft = initialExtraDraft(row
   };
 }
 
+function routineCostReview(rows, reviews, drafts, additions) {
+  return rows.length > 0 && !additions.length && rows.every((row) => {
+    const state = supplierCostReviewState(row, reviews[row.key], drafts[row.sourceId]);
+    return state.valid && state.outcome === 'correct' && !state.requiresUpdate;
+  });
+}
+function routineBuyerReview(rows, reviews, drafts, additions) {
+  return rows.length > 0 && !additions.length && rows.every((row) => {
+    if (reviews[row.key]?.buyerChargeDecision !== 'include') return false;
+    if (row.sourceType !== 'extra_cost') return true;
+    const original = initialExtraDraft(row.item);
+    const draft = drafts[row.sourceId] || original;
+    return !draft.statutoryBuyerDefaultPending && String(draft.buyerPrice ?? '') === String(original.buyerPrice ?? '');
+  });
+}
+
 function scrollContainerFor(element) {
   let current = element?.parentElement;
   while (current) {
@@ -435,7 +456,7 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
   const casesRequestGateRef = useRef(createLatestRequestGate());
   const detailRequestGateRef = useRef(createLatestRequestGate());
   const closeRequestedRef = useRef(false);
-  const [view, setView] = useState('my_tasks');
+  const [view, setView] = usePageState('variable-charges:view', 'my_tasks');
   const [cases, setCases] = useState([]);
   const [counts, setCounts] = useState({});
   const [capabilities, setCapabilities] = useState({});
@@ -476,6 +497,30 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
   const [rateSettingsOpen, setRateSettingsOpen] = useState(false);
   const [rateSettingsDraft, setRateSettingsDraft] = useState({ usdHkdRate: '7.84', expectedRevision: 1, reason: '' });
   const [rateSettingsSaving, setRateSettingsSaving] = useState(false);
+  const recordDraft = useRecordDraft();
+  const { open: openDraft, acknowledge: acknowledgeDraft } = recordDraft;
+  const applyDraft = useCallback((value) => {
+    if (!value) return;
+    setReviews(value.reviews || {});
+    setExtraDrafts(value.extraDrafts || {});
+    setAddDrafts(value.addDrafts || []);
+    setSupplierReviewNotes(value.supplierReviewNotes || {});
+    setBuyerReviewNote(value.buyerReviewNote || '');
+    setBuyerReviewNotes(value.buyerReviewNotes || {});
+    setAnchorageDrafts(value.anchorageDrafts || {});
+    setVesselNrtDraft(value.vesselNrtDraft || '');
+    setGmActionReason(value.gmActionReason || '');
+    setPostResolution(value.postResolution || { resolution: 'no_adjustment', note: '' });
+  }, []);
+  useLayoutEffect(() => {
+    if (!selectedStemId || !detail || detailLoading) return;
+    recordDraft.update({ reviews, extraDrafts, addDrafts, supplierReviewNotes, buyerReviewNote,
+      buyerReviewNotes, anchorageDrafts, vesselNrtDraft, gmActionReason, postResolution });
+  }, [selectedStemId, detail, detailLoading, reviews, extraDrafts, addDrafts, supplierReviewNotes,
+    buyerReviewNote, buyerReviewNotes, anchorageDrafts, vesselNrtDraft, gmActionReason, postResolution, recordDraft.update]);
+  const acknowledgeSide = (supplierId, sides) => acknowledgeDraft((value) =>
+    acknowledgeVariableChargeSide(value, normalizeReviewRows(detail?.lineItems, detail?.extraCosts)
+      .filter((row) => rowSupplierId(row) === supplierId), supplierId, sides));
   const casesViewRef = useRef(view);
   casesViewRef.current = view;
   const selectedStemIdRef = useRef(selectedStemId);
@@ -579,39 +624,31 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
     };
     const rows = normalizeReviewRows(nextDetail.lineItems, nextDetail.extraCosts);
     setDetail(nextDetail);
-    setReviews(Object.fromEntries(rows.map((row) => [row.key, initialReview(row)])));
-    setExtraDrafts(Object.fromEntries((nextDetail.extraCosts || []).map((item, index) => {
-      const id = rowId(item, 'extra', index);
-      return [id, initialExtraDraft(item)];
-    })));
-    setAnchorageDrafts(Object.fromEntries((nextDetail.anchorage?.rows || []).map((row) => [row.extraCostId, {
-      arrival: row.arrival || '',
-      departure: row.departure || '',
-      location: row.location || ANCHORAGE_LOCATION_ELSEWHERE,
-      allocationHkd: row.allocationHkd ?? '',
-      expectedLastModifiedDate: row.lastModifiedDate || '',
-    }])));
-    setVesselNrtDraft(nextDetail.vessel?.nrt == null ? '' : String(nextDetail.vessel.nrt));
+    applyDraft(openDraft(`variable-charges:${stemId}`, {
+      reviews: Object.fromEntries(rows.map((row) => [row.key, initialReview(row)])),
+      extraDrafts: Object.fromEntries((nextDetail.extraCosts || []).map((item, index) => [rowId(item, 'extra', index), initialExtraDraft(item)])),
+      anchorageDrafts: Object.fromEntries((nextDetail.anchorage?.rows || []).map((row) => [row.extraCostId, {
+        arrival: row.arrival || '', departure: row.departure || '', location: row.location || ANCHORAGE_LOCATION_ELSEWHERE,
+        allocationHkd: row.allocationHkd ?? '', expectedLastModifiedDate: row.lastModifiedDate || '',
+      }])),
+      vesselNrtDraft: nextDetail.vessel?.nrt == null ? '' : String(nextDetail.vessel.nrt),
+      addDrafts: [], supplierReviewNotes: {}, buyerReviewNote: '', buyerReviewNotes: {},
+      postResolution: { resolution: 'no_adjustment', note: '' }, gmActionReason: '',
+    }, nextDetail.case?.fingerprint || nextDetail.case?.revision));
     if (nextDetail.variableChargeSettings) setRateSettingsDraft({
       usdHkdRate: String(nextDetail.variableChargeSettings.usdHkdRate ?? 7.84),
       expectedRevision: Number(nextDetail.variableChargeSettings.revision || 1),
       reason: '',
     });
-    setAddDrafts([]);
     setGmDraft({ sides: 'both', reason: '' });
     setGmReviewSides([]);
     setGmReviewSupplierId('');
     setAmendDialog({ open: false, sides: [], label: '', reason: '' });
-    setPostResolution({ resolution: 'no_adjustment', note: '' });
-    setGmActionReason('');
-    setSupplierReviewNotes({});
-    setBuyerReviewNote('');
-    setBuyerReviewNotes({});
     setShowAllBuyerRows(false);
     const requirements = Array.isArray(nextDetail.case?.supplierRequirements) ? nextDetail.case.supplierRequirements : [];
     setActiveSupplierId(text(requirements.find((row) => row.sides?.cost?.permissions?.canConfirm || row.sides?.buyerCharge?.permissions?.canConfirm || row.canVerify)?.supplierId || requirements[0]?.supplierId));
     setDetailLoading(false);
-  }, []);
+  }, [applyDraft, openDraft]);
 
   const clearDetailForUrlClose = useCallback(() => {
     closeRequestedRef.current = false;
@@ -705,12 +742,12 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
   const pairedWorkflow = detail?.pairedWorkflowEnabled === true || activeCase.pairedWorkflowEnabled === true;
   const activeCostSide = activeSupplierStage?.sides?.cost || null;
   const activeBuyerSide = activeSupplierStage?.sides?.buyerCharge || null;
-  const canSupplierEdit = activeSupplierStage?.canVerify === true || (canGmOverride && text(gmActionReason).length >= 5);
+  const canSupplierEdit = !recordDraft.recovery && (activeSupplierStage?.canVerify === true || (canGmOverride && text(gmActionReason).length >= 5));
   const gmReviewAppliesToActiveSupplier = gmReviewSupplierId === activeSupplierId && text(gmActionReason).length >= 5;
-  const canCostSideEdit = activeCostSide?.permissions?.canEdit === true || (activeCostSide?.permissions?.canGmOverride === true && gmReviewAppliesToActiveSupplier && gmReviewSides.includes('cost'));
-  const canBuyerSideEdit = activeBuyerSide?.permissions?.canEdit === true || (activeBuyerSide?.permissions?.canGmOverride === true && gmReviewAppliesToActiveSupplier && gmReviewSides.includes('buyer_charge'));
+  const canCostSideEdit = !recordDraft.recovery && (activeCostSide?.permissions?.canEdit === true || (activeCostSide?.permissions?.canGmOverride === true && gmReviewAppliesToActiveSupplier && gmReviewSides.includes('cost')));
+  const canBuyerSideEdit = !recordDraft.recovery && (activeBuyerSide?.permissions?.canEdit === true || (activeBuyerSide?.permissions?.canGmOverride === true && gmReviewAppliesToActiveSupplier && gmReviewSides.includes('buyer_charge')));
   const allSuppliersVerified = supplierRequirements.length > 0 && supplierRequirements.every((row) => row.status === 'Verified');
-  const canBuyerConfirm = allSuppliersVerified && (effectiveCapabilities.canBuyerConfirm === true || canEditNormally || (canGmOverride && text(gmActionReason).length >= 5));
+  const canBuyerConfirm = !recordDraft.recovery && (allSuppliersVerified && (effectiveCapabilities.canBuyerConfirm === true || canEditNormally || (canGmOverride && text(gmActionReason).length >= 5)));
   const canResolvePostInvoice = effectiveCapabilities.canResolvePostInvoice === true
     || effectiveCapabilities.canPostInvoiceResolve === true
     || activeCase.canResolvePostInvoice === true;
@@ -766,7 +803,7 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
     const supplierId = text(requirement?.supplierId);
     if (!supplierId || supplierSavingId) return;
     const stageRows = reviewRows.filter((row) => rowSupplierId(row) === supplierId);
-    const supplierReviewNote = text(supplierReviewNotes[supplierId]);
+    const supplierReviewNote = text(supplierReviewNotes[supplierId]) || (routineCostReview(stageRows, reviews, extraDrafts, addDrafts.filter((item) => item.supplierAccountId === supplierId)) ? ROUTINE_COST_NOTE : '');
     if (!supplierReviewNote) { setSaveError('Add one supplier reference or note before confirming the costs.'); return; }
     for (const row of stageRows) {
       const review = reviews[row.key] || {};
@@ -851,6 +888,7 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
         ),
       },
     } : row));
+    acknowledgeSide(supplierId, ['cost']);
     setAddDrafts((current) => current.filter((draft) => text(draft.supplierAccountId) !== supplierId));
     await Promise.all([loadDetail(selectedStemId, { force: true }), loadCases()]);
     setSupplierSavingId('');
@@ -910,8 +948,8 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
     const stageRows = reviewRows.filter((row) => rowSupplierId(row) === supplierId);
     const costSelected = sides.includes('cost');
     const buyerSelected = sides.includes('buyer_charge');
-    const costNote = text(supplierReviewNotes[supplierId]);
-    const buyerNote = text(buyerReviewNotes[supplierId]);
+    const costNote = text(supplierReviewNotes[supplierId]) || (routineCostReview(stageRows, reviews, extraDrafts, addDrafts.filter((item) => item.supplierAccountId === supplierId)) ? ROUTINE_COST_NOTE : '');
+    const buyerNote = text(buyerReviewNotes[supplierId]) || (routineBuyerReview(stageRows, reviews, extraDrafts, addDrafts.filter((item) => item.supplierAccountId === supplierId)) ? ROUTINE_BUYER_NOTE : '');
     if (costSelected && !costNote) { setSaveError('Add the Supplier Leg Review Note before approval.'); return; }
     if (buyerSelected && !buyerNote) { setSaveError('Add the Buyer Leg Review Note before approval.'); return; }
     for (const row of stageRows) {
@@ -1002,6 +1040,7 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
     }, { force: true });
     if (response.data?.error) setSaveError(response.data.error);
     else {
+      acknowledgeSide(supplierId, sides);
       setAddDrafts((current) => current.filter((draft) => text(draft.supplierAccountId) !== supplierId));
       await Promise.all([loadDetail(selectedStemId, { force: true }), loadCases()]);
     }
@@ -1055,6 +1094,8 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
       setSaving(false);
       return;
     }
+    for (const requirement of supplierRequirements) acknowledgeSide(text(requirement.supplierId), ['buyer_charge']);
+    acknowledgeDraft((value) => ({ ...value, buyerReviewNote: '' }));
     setSaving(false);
     await Promise.all([loadDetail(selectedStemId, { force: true }), loadCases()]);
   };
@@ -1180,6 +1221,9 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
         </div>
       </div>
 
+      <RecordSaveStatus draft={recordDraft} saving={saving || Boolean(supplierSavingId) || anchorageSaving || vesselNrtSaving}
+        error={saveError} authority="Salesforce" onRecover={() => applyDraft(recordDraft.recoverUnchanged())}
+        onDiscard={() => applyDraft(recordDraft.discard())} />
       {detailLoading ? <div aria-busy="true" aria-live="polite"><span className="sr-only">Refreshing Variable Charges task</span><VariableChargeReviewSkeleton /></div> : detailError ? (
         <StateBlock icon={AlertTriangle} title="Unable to load this task" description={detailError} action={<Button variant="outline" onClick={() => loadDetail(selectedStemId, { force: true })}>Try again</Button>} />
       ) : detail ? (
@@ -1281,8 +1325,8 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
               </div>
               {canSupplierEdit && <div className="space-y-3"><Button type="button" variant="outline" size="sm" className="gap-2" onClick={() => setAddDrafts((current) => [...current, initialAddDraft(activeCase, activeSupplierId)])}><PackagePlus className="h-4 w-4" /> Add supplier charge</Button>{addDrafts.filter((draft) => text(draft.supplierAccountId) === activeSupplierId).map((draft) => <NewExtraCostEditor key={draft.localId} draft={draft} products={products} supplierAccounts={supplierAccounts.filter((row) => text(row.id) === activeSupplierId)} files={[]} defaultPaymentTerm={supplierPaymentTerm} supplierStage disabled={!canSupplierEdit} onChange={(patch) => updateAddDraft(draft.localId, patch)} onRemove={() => setAddDrafts((current) => current.filter((row) => row.localId !== draft.localId))} />)}</div>}
               <div className="space-y-2">
-                <RequiredLabel htmlFor={`supplier-review-note-${activeSupplierId}`}>Supplier reference or note</RequiredLabel>
-                <Textarea id={`supplier-review-note-${activeSupplierId}`} aria-required="true" value={supplierReviewNotes[activeSupplierId] || ''} onChange={(event) => setSupplierReviewNotes((current) => ({ ...current, [activeSupplierId]: event.target.value.slice(0, 1000) }))} placeholder="Invoice reference, supplier confirmation, or short review note" disabled={!canSupplierEdit || Boolean(supplierSavingId)} />
+                <RequiredLabel required={costNoteRequired} htmlFor={`supplier-review-note-${activeSupplierId}`}>Supplier reference or note</RequiredLabel>
+                <Textarea id={`supplier-review-note-${activeSupplierId}`} aria-required={costNoteRequired} value={supplierReviewNotes[activeSupplierId] || ''} onChange={(event) => setSupplierReviewNotes((current) => ({ ...current, [activeSupplierId]: event.target.value.slice(0, 1000) }))} placeholder="Invoice reference, supplier confirmation, or short review note" disabled={!canSupplierEdit || Boolean(supplierSavingId)} />
                 <p className="text-xs text-muted-foreground">One note covers all charges for this supplier. Salesforce Files remain optional.</p>
               </div>
               {salesforceFiles.length ? <OptionalEvidence files={salesforceFiles} selectedIds={activeSupplierRows[0] ? reviews[activeSupplierRows[0].key]?.evidenceDocumentIds || [] : []} disabled={!canSupplierEdit || Boolean(supplierSavingId)} onToggle={(fileId) => activeSupplierRows.forEach((row) => toggleEvidence(row.key, fileId))} /> : null}
@@ -1491,8 +1535,8 @@ function SalesforceEditNotice({ sourceId, instanceUrl }) {
   return <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-950"><div>Edit this product line in Salesforce, then Refresh.</div>{url && <a className="mt-2 inline-flex items-center gap-1 font-medium text-blue-700 hover:underline" href={url} target="_blank" rel="noreferrer">Open Salesforce <ExternalLink className="h-3.5 w-3.5" /></a>}</div>;
 }
 
-function RequiredLabel({ children, ...props }) {
-  return <Label {...props}>{children}<span aria-hidden="true" className="text-rose-700"> *</span></Label>;
+function RequiredLabel({ children, required = true, ...props }) {
+  return <Label {...props}>{children}{required ? <span aria-hidden="true" className="text-rose-700"> *</span> : <span className="font-normal text-muted-foreground"> (optional)</span>}</Label>;
 }
 
 function PairedExtraCostFields({ row, draft, disabled, onChange }) {
@@ -1726,23 +1770,33 @@ function PairedReviewWorkspace({ caseRow, requirement, requirements, activeSuppl
     };
   };
   const financials = adjustFinancials(rawFinancials, allRows);
+  const costNoteRequired = !routineCostReview(rows, reviews, extraDrafts, addDrafts);
+  const buyerNoteRequired = !routineBuyerReview(rows, reviews, extraDrafts, addDrafts);
   const costReady = rows.length > 0 && rows.every((row) =>
     supplierCostReviewState(row, reviews[row.key], extraDrafts[row.sourceId]).valid
-  ) && Boolean(text(supplierNote));
+  ) && (!costNoteRequired || Boolean(text(supplierNote)));
   const buyerReady = rows.length > 0 && rows.every((row) => {
     const decision = reviews[row.key]?.buyerChargeDecision;
     if (!['include', 'exclude'].includes(decision)) return false;
     if (decision !== 'include' || row.sourceType !== 'extra_cost') return true;
     const buyerPrice = finiteNumber((extraDrafts[row.sourceId] || initialExtraDraft(row.item)).buyerPrice);
     return isHongKongAnchorageDuesItem(row.item) ? buyerPrice > 0 : buyerPrice != null;
-  }) && Boolean(text(buyerNote));
+  }) && (!buyerNoteRequired || Boolean(text(buyerNote)));
   const additionsCostReady = addDrafts.every((draft) => text(draft.productId) && text(draft.description) && finiteNumber(draft.supplierCost) != null && (draft.pricingType !== 'per_unit' || (finiteNumber(draft.quantity) > 0 && text(draft.unitOfMeasure))));
   const additionsBuyerReady = addDrafts.every((draft) => ['include', 'exclude'].includes(draft.buyerChargeDecision) && (draft.buyerChargeDecision !== 'include' || finiteNumber(draft.buyerPrice) != null));
   const busy = saving || supplierSaving || assignmentSaving || amendSaving;
   const canApproveBoth = canApproveBothVariableChargeLegs({ commonOwner, reviewingBothAsGeneralManager, bothOpen, canCostEdit, canBuyerEdit });
+  const blockers = [
+    !rows.length ? 'No active charges are available for approval.' : '',
+    costSide.status !== 'verified' && !canCostEdit ? 'Supplier costs await the assigned reviewer shown above.' : '',
+    buyerSide.status !== 'verified' && !canBuyerEdit ? 'Buyer charges await the assigned reviewer shown above.' : '',
+    canCostEdit && !costReady ? (costNoteRequired && !text(supplierNote) ? 'Supplier leg: review every row and explain changed, cancelled or added costs in the review note.' : 'Supplier leg: mark each row Correct or complete its edited cost.') : '',
+    canBuyerEdit && !buyerReady ? (buyerNoteRequired && !text(buyerNote) ? 'Buyer leg: complete each charge decision and explain changes or exclusions in the review note.' : 'Buyer leg: choose whether to charge each row and enter its price.') : '',
+    !additionsCostReady || !additionsBuyerReady ? 'Complete the required fields on added charges.' : '',
+  ].filter(Boolean);
   const supplierName = requirement.supplierName || 'Not set';
   const supplierControl = requirements.length > 1 ? <Select value={activeSupplierId} onValueChange={onSupplierChange}><SelectTrigger className="mt-1 bg-white font-semibold"><SelectValue /></SelectTrigger><SelectContent>{requirements.map((row) => <SelectItem key={row.supplierId} value={String(row.supplierId)}>{row.supplierName || 'Supplier unavailable'} · Cost {sideStatusLabel(row.sides?.cost)} · Buyer {sideStatusLabel(row.sides?.buyerCharge)}</SelectItem>)}</SelectContent></Select> : null;
-  return <section className="space-y-3"><div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3"><div className="text-sm font-medium">Total Margin</div><MarginAmount value={financials.margin} currency={financials.currency || currency} unavailableReason={financials.blockingReason} /></div><div className="overflow-x-auto rounded-xl border border-border bg-card shadow-sm [scrollbar-gutter:stable]"><div className="min-w-[960px]"><div className="grid grid-cols-2"><div className="border-r-2 border-slate-300"><LegHeader leg="Supplier Leg" name={supplierName} nameControl={supplierControl} traderLabel="Supplier Trader" side={costSide} paymentTerm={supplierPaymentTerm} editable={canCostEdit} assignmentSaving={assignmentSaving} amendSaving={amendSaving} onAmend={() => onAmend(['cost'], 'Amend Supplier Costs')} onAssign={(target) => onAssign(['cost'], target)} /></div><div><LegHeader leg="Buyer Leg" name={caseRow.buyerAccountName || 'Not set'} traderLabel="Buyer Trader" side={buyerSide} paymentTerm={buyerPaymentTerm} buyer editable={canBuyerEdit} assignmentSaving={assignmentSaving} amendSaving={amendSaving} onAmend={() => onAmend(['buyer_charge'], 'Amend Buyer Charges')} onAssign={(target) => onAssign(['buyer_charge'], target)} /></div></div><div className="grid grid-cols-2 border-t border-slate-300"><div className="border-r-2 border-slate-300 bg-slate-50/60 px-4 py-2"><Button type="button" variant="outline" size="sm" onClick={onAdd} disabled={!canCostEdit || costSide.status === 'verified' || busy} title={!canCostEdit ? 'Only the current Supplier Leg reviewer can add an extra cost.' : costSide.status === 'verified' ? 'Approved Supplier costs must be reopened before adding an extra cost.' : undefined}><PackagePlus className="mr-2 h-4 w-4" />Add Extra Cost</Button></div><div className="bg-blue-50/20" /></div>{anchorage && <AnchorageDuesPanel evidence={anchorage} drafts={anchorageDrafts} canEdit={canSaveAnchorage} saving={anchorageSaving} onChange={onAnchorageChange} onSave={onSaveAnchorage} />}{rows.length ? rows.map((row) => <PairedChargeRow key={row.key} row={row} review={reviews[row.key] || initialReview(row)} draft={row.sourceType === 'extra_cost' ? extraDrafts[row.sourceId] || initialExtraDraft(row.item) : null} currency={currency} companyRate={caseRow?.variableChargeSettings?.usdHkdRate} canCostEdit={canCostEdit && costSide.status !== 'verified'} canBuyerEdit={canBuyerEdit && buyerSide.status !== 'verified'} instanceUrl={salesforceInstanceUrl} onReviewChange={(patch) => onReviewChange(row.key, patch)} onDraftChange={(patch) => onDraftChange(row.sourceId, patch)} />) : <div className="border-t border-border px-4 py-10 text-center text-sm text-muted-foreground">No active charges for this supplier</div>}{addDrafts.map((draft) => <PairedNewChargeRow key={draft.localId} draft={draft} products={products} currency={currency} canCostEdit={canCostEdit && costSide.status !== 'verified'} canBuyerEdit={canBuyerEdit && buyerSide.status !== 'verified'} commonOwner={commonOwner} onChange={(patch) => onAddDraftChange(draft.localId, patch)} onRemove={() => onRemoveAdd(draft.localId)} />)}<p className="border-t border-border px-4 py-2 text-xs text-muted-foreground">* Required fields</p><div className="grid grid-cols-2 border-t-2 border-slate-300"><footer className="space-y-3 border-r-2 border-slate-300 bg-slate-50/30 p-4"><div className="space-y-2"><RequiredLabel htmlFor={`supplier-review-note-${activeSupplierId}`}>Review Note</RequiredLabel><Textarea id={`supplier-review-note-${activeSupplierId}`} aria-required="true" value={supplierNote} onChange={(event) => onSupplierNote(event.target.value.slice(0, 1000))} disabled={!canCostEdit || costSide.status === 'verified' || busy} /></div>{files.length > 0 && <OptionalEvidence files={files} selectedIds={rows[0] ? reviews[rows[0].key]?.evidenceDocumentIds || [] : []} disabled={!canCostEdit || costSide.status === 'verified' || busy} onToggle={onToggleEvidence} />}{!canApproveBoth && <div className="flex justify-end"><Button type="button" onClick={() => onApprove(['cost'])} disabled={!canCostEdit || costSide.status === 'verified' || busy || !costReady || !additionsCostReady || !rows.length}>{supplierSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Approve Supplier Costs</Button></div>}</footer><footer className="space-y-3 bg-blue-50/20 p-4"><div className="space-y-2"><RequiredLabel htmlFor={`buyer-review-note-${activeSupplierId}`}>Review Note</RequiredLabel><Textarea id={`buyer-review-note-${activeSupplierId}`} aria-required="true" value={buyerNote} onChange={(event) => onBuyerNote(event.target.value.slice(0, 1000))} disabled={!canBuyerEdit || buyerSide.status === 'verified' || busy} /></div>{!canApproveBoth && <div className="flex justify-end"><Button type="button" onClick={() => onApprove(['buyer_charge'])} disabled={!canBuyerEdit || buyerSide.status === 'verified' || busy || !buyerReady || !rows.length}>{saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Approve Buyer Charges</Button></div>}</footer></div>{canApproveBoth && <div className="flex justify-center border-t border-border bg-background p-4"><Button type="button" onClick={() => onApprove(['cost', 'buyer_charge'])} disabled={busy || !costReady || !buyerReady || !additionsCostReady || !additionsBuyerReady || !rows.length}>{busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Approve Both</Button></div>}</div></div></section>;
+  return <section className="space-y-3">{blockers.length > 0 && <div className="rounded-lg border bg-muted/30 p-3 text-sm"><p className="font-medium">Before approval</p><ul className="mt-1 list-disc pl-5">{blockers.map((message) => <li key={message}>{message}</li>)}</ul></div>}<div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3"><div className="text-sm font-medium">Total Margin</div><MarginAmount value={financials.margin} currency={financials.currency || currency} unavailableReason={financials.blockingReason} /></div><div className="overflow-x-auto rounded-xl border border-border bg-card shadow-sm [scrollbar-gutter:stable]"><div className="min-w-[960px]"><div className="grid grid-cols-2"><div className="border-r-2 border-slate-300"><LegHeader leg="Supplier Leg" name={supplierName} nameControl={supplierControl} traderLabel="Supplier Trader" side={costSide} paymentTerm={supplierPaymentTerm} editable={canCostEdit} assignmentSaving={assignmentSaving} amendSaving={amendSaving} onAmend={() => onAmend(['cost'], 'Amend Supplier Costs')} onAssign={(target) => onAssign(['cost'], target)} /></div><div><LegHeader leg="Buyer Leg" name={caseRow.buyerAccountName || 'Not set'} traderLabel="Buyer Trader" side={buyerSide} paymentTerm={buyerPaymentTerm} buyer editable={canBuyerEdit} assignmentSaving={assignmentSaving} amendSaving={amendSaving} onAmend={() => onAmend(['buyer_charge'], 'Amend Buyer Charges')} onAssign={(target) => onAssign(['buyer_charge'], target)} /></div></div><div className="grid grid-cols-2 border-t border-slate-300"><div className="border-r-2 border-slate-300 bg-slate-50/60 px-4 py-2"><Button type="button" variant="outline" size="sm" onClick={onAdd} disabled={!canCostEdit || costSide.status === 'verified' || busy} title={!canCostEdit ? 'Only the current Supplier Leg reviewer can add an extra cost.' : costSide.status === 'verified' ? 'Approved Supplier costs must be reopened before adding an extra cost.' : undefined}><PackagePlus className="mr-2 h-4 w-4" />Add Extra Cost</Button></div><div className="bg-blue-50/20" /></div>{anchorage && <AnchorageDuesPanel evidence={anchorage} drafts={anchorageDrafts} canEdit={canSaveAnchorage} saving={anchorageSaving} onChange={onAnchorageChange} onSave={onSaveAnchorage} />}{rows.length ? rows.map((row) => <PairedChargeRow key={row.key} row={row} review={reviews[row.key] || initialReview(row)} draft={row.sourceType === 'extra_cost' ? extraDrafts[row.sourceId] || initialExtraDraft(row.item) : null} currency={currency} companyRate={caseRow?.variableChargeSettings?.usdHkdRate} canCostEdit={canCostEdit && costSide.status !== 'verified'} canBuyerEdit={canBuyerEdit && buyerSide.status !== 'verified'} instanceUrl={salesforceInstanceUrl} onReviewChange={(patch) => onReviewChange(row.key, patch)} onDraftChange={(patch) => onDraftChange(row.sourceId, patch)} />) : <div className="border-t border-border px-4 py-10 text-center text-sm text-muted-foreground">No active charges for this supplier</div>}{addDrafts.map((draft) => <PairedNewChargeRow key={draft.localId} draft={draft} products={products} currency={currency} canCostEdit={canCostEdit && costSide.status !== 'verified'} canBuyerEdit={canBuyerEdit && buyerSide.status !== 'verified'} commonOwner={commonOwner} onChange={(patch) => onAddDraftChange(draft.localId, patch)} onRemove={() => onRemoveAdd(draft.localId)} />)}<p className="border-t border-border px-4 py-2 text-xs text-muted-foreground">* Required fields</p><div className="grid grid-cols-2 border-t-2 border-slate-300"><footer className="space-y-3 border-r-2 border-slate-300 bg-slate-50/30 p-4"><div className="space-y-2"><RequiredLabel htmlFor={`supplier-review-note-${activeSupplierId}`}>Review Note</RequiredLabel><Textarea id={`supplier-review-note-${activeSupplierId}`} aria-required={costNoteRequired} value={supplierNote} onChange={(event) => onSupplierNote(event.target.value.slice(0, 1000))} disabled={!canCostEdit || costSide.status === 'verified' || busy} /></div>{files.length > 0 && <OptionalEvidence files={files} selectedIds={rows[0] ? reviews[rows[0].key]?.evidenceDocumentIds || [] : []} disabled={!canCostEdit || costSide.status === 'verified' || busy} onToggle={onToggleEvidence} />}{!canApproveBoth && <div className="flex justify-end"><Button type="button" onClick={() => onApprove(['cost'])} disabled={!canCostEdit || costSide.status === 'verified' || busy || !costReady || !additionsCostReady || !rows.length}>{supplierSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Approve Supplier Costs</Button></div>}</footer><footer className="space-y-3 bg-blue-50/20 p-4"><div className="space-y-2"><RequiredLabel required={buyerNoteRequired} htmlFor={`buyer-review-note-${activeSupplierId}`}>Review Note</RequiredLabel><Textarea id={`buyer-review-note-${activeSupplierId}`} aria-required={buyerNoteRequired} value={buyerNote} onChange={(event) => onBuyerNote(event.target.value.slice(0, 1000))} disabled={!canBuyerEdit || buyerSide.status === 'verified' || busy} /></div>{!canApproveBoth && <div className="flex justify-end"><Button type="button" onClick={() => onApprove(['buyer_charge'])} disabled={!canBuyerEdit || buyerSide.status === 'verified' || busy || !buyerReady || !rows.length}>{saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Approve Buyer Charges</Button></div>}</footer></div>{canApproveBoth && <div className="flex justify-center border-t border-border bg-background p-4"><Button type="button" onClick={() => onApprove(['cost', 'buyer_charge'])} disabled={busy || !costReady || !buyerReady || !additionsCostReady || !additionsBuyerReady || !rows.length}>{busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Approve Both</Button></div>}</div></div></section>;
 }
 
 function GuidedProgress({ currentStep, progress = {} }) {

@@ -23,7 +23,7 @@ const baseline = [
       "FINANCIAL_HEADER_RIGHT": 14,
       "FINANCIAL_HEADER_LEFT": 8
     },
-    "hash": "69e4853a6c5be29949c42342b1799a80c4788d8e19639f8a09807fda39bf8cee"
+    "hash": "f50a4e02c30d3b56de6b6ad5396922ec1bb88c9fedf48c870298d1e9a286802f"
   },
   {
     "file": "src/pages/DisputeWorkflow.jsx",

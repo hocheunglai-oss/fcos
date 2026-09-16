@@ -12,7 +12,7 @@ import DataStatus from '@/components/common/DataStatus';
 import PageHeader from '@/components/common/PageHeader';
 import PageMethodology from '@/components/common/PageMethodology';
 import PaymentDataReliabilityBadge from '@/components/common/PaymentDataReliabilityBadge';
-import { DASHBOARD_METHODOLOGY } from '@/lib/pageMethodologies';
+import { DASHBOARD_METHODOLOGY } from '@/lib/pageMethodologyIndex';
 import { DASHBOARD_FILTER_STORAGE_KEY, dashboardFilterKey, dashboardFilterPayload, getRecentYears, normalizeDashboardFilters, presetDashboardPeriod } from '@/lib/dashboardFilters';
 import { useNavigationAwareRequest } from '@/hooks/useNavigationAwareRequest';
 

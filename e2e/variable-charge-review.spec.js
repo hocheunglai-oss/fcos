@@ -15,13 +15,13 @@ test.describe('variable charge review draft transitions', () => {
     await expect(page.locator('label').filter({ hasText: /^Description/ })).toContainText('*');
     await expect(page.locator('label').filter({ hasText: /^Supplier Fixed Cost/ })).toContainText('*');
     await expect(page.locator('label[for="supplier-review-note-0012x0000000001AAA"]')).toContainText('*');
-    await expect(page.locator('label[for="buyer-review-note-0012x0000000001AAA"]')).toContainText('*');
+    await expect(page.locator('label[for="buyer-review-note-0012x0000000001AAA"]')).toContainText('(optional)');
     await page.getByRole('textbox', { name: 'Supplier Fixed Cost (USD)', exact: true }).fill('1809.25');
     await page.getByRole('button', { name: 'Correct', exact: true }).click();
     await page.locator('#supplier-review-note-0012x0000000001AAA').fill('Supplier invoice reviewed');
     const approveBoth = page.getByRole('button', { name: 'Approve Both', exact: true });
-    await expect(approveBoth).toBeDisabled();
-    await page.locator('#buyer-review-note-0012x0000000001AAA').fill('Buyer invoice reviewed');
+    // An unchanged, included buyer charge gets the standard review note.
+    await expect(approveBoth).toBeEnabled();
     await expect(approveBoth).toBeEnabled();
     await approveBoth.click();
     await expect.poll(() => page.evaluate(() => window.variableChargeFixture.requests.length)).toBe(1);

@@ -1,3 +1,6 @@
+import { Link } from 'react-router-dom';
+import StemContextLinks from '@/components/common/StemContextLinks';
+import DataStatus from '@/components/common/DataStatus';
 import { useState, useEffect } from 'react';
 import { appClient } from '@/api/appClient';
 import { navigationCacheOptions } from '@/lib/navigationCachePolicy';
@@ -17,13 +20,13 @@ const FINANCIAL_HEADER_LEFT = "sticky top-0 z-10 bg-card text-left py-2.5 px-3 f
 const SF_BASE = "https://fratellicosulich.my.salesforce.com";
 
 const fmtDate = (v) => {
-  if (!v) return '—';
+  if (!v) return 'Not set';
   if (typeof v === 'object') return textValue(v);
   try { return format(new Date(v), 'dd MMM yyyy'); } catch { return textValue(v); }
 };
 const fmtMoney = (v) => {
   const number = numericValue(v);
-  return number != null ? `$${number.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—';
+  return number != null ? `$${number.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : 'Not provided';
 };
 const fmtBool = (v) => v === true ? 'Yes' : v === false ? 'No' : '—';
 const fmtQuantity = (v, unit = 'MT') => {
@@ -607,7 +610,14 @@ function FinancialSummaryCard({ record, supplierPayments, buyerPayments, brokerC
   );
 }
 
-export default function StemDetailModal({ stemId, open, onClose }) {
+function InlineSection({ children, className = '' }) { return <section className={className}>{children}</section>; }
+function InlineHeading({ children, className = '' }) { return <h1 className={className}>{children}</h1>; }
+export default function StemDetailModal({ stemId, open, onClose, embedded = false }) {
+  const Container = embedded ? InlineSection : Dialog;
+  const Content = embedded ? InlineSection : DialogContent;
+  const Header = embedded ? InlineSection : DialogHeader;
+  const Title = embedded ? InlineHeading : DialogTitle;
+  const [meta, setMeta] = useState(null);
   const [record, setRecord] = useState(null);
   const [lineItems, setLineItems] = useState([]);
   const [extraCosts, setExtraCosts] = useState([]);
@@ -639,9 +649,14 @@ export default function StemDetailModal({ stemId, open, onClose }) {
     setShowAllDocuments(false);
     setError(null);
     setLoading(true);
+    let active = true;
+    const controller = new AbortController();
     const applyDetail = (res) => {
-      if (res.data?.error) setError(res.data.error);
+      if (!active) return;
+      setMeta(res.meta || res.data?._meta || null);
+      if (res.data?.error || !res.data?.record) setError(res.data?.error || 'STEM details are unavailable.');
       else {
+        setError(null);
         setRecord(res.data.record);
         setLineItems(res.data.lineItems || []);
         setExtraCosts(res.data.extraCosts || []);
@@ -652,15 +667,18 @@ export default function StemDetailModal({ stemId, open, onClose }) {
       }
       setLoading(false);
     };
-    appClient.functions.invoke('salesforceStemDetail', { stemId }, navigationCacheOptions('collaboration', applyDetail)).then(applyDetail);
+    appClient.functions.invoke('salesforceStemDetail', { stemId }, { ...navigationCacheOptions('collaboration', applyDetail), signal: controller.signal }).then(applyDetail).catch(() => { if (active) { setError('STEM details are temporarily unavailable.'); setLoading(false); } });
     const applyDocuments = (res) => {
+      if (!active) return;
       if (res.data?.error) setDocumentsError(res.data.error);
       else {
+        setDocumentsError(null);
         setDocuments(res.data?.documents || []);
       }
       setDocumentsLoading(false);
     };
-    appClient.functions.invoke('salesforceStemDocuments', { stemId }, navigationCacheOptions('collaboration', applyDocuments)).then(applyDocuments);
+    appClient.functions.invoke('salesforceStemDocuments', { stemId }, { ...navigationCacheOptions('collaboration', applyDocuments), signal: controller.signal }).then(applyDocuments).catch(() => { if (active) { setDocumentsError('STEM documents are temporarily unavailable.'); setDocumentsLoading(false); } });
+    return () => { active = false; controller.abort(); };
   }, [open, stemId]);
 
   // Build a map from line item ID → buyer broker info
@@ -697,16 +715,16 @@ export default function StemDetailModal({ stemId, open, onClose }) {
 
   return (
     <>
-      <Dialog open={open} onOpenChange={onClose}>
-        <DialogContent className="max-w-[95vw] w-[1400px] max-h-[92vh] overflow-hidden flex flex-col p-0">
+      <Container open={open} onOpenChange={onClose}>
+        <Content className={embedded ? "flex min-w-0 flex-col rounded-xl border bg-card" : "max-w-[95vw] w-[1400px] max-h-[92vh] overflow-hidden flex flex-col p-0"}>
           {/* Sticky Header */}
-          <DialogHeader className="sticky top-0 z-20 px-7 pt-6 pb-4 border-b border-border shrink-0 bg-card/95 backdrop-blur">
+          <Header className="sticky top-0 z-20 px-7 pt-6 pb-4 border-b border-border shrink-0 bg-card/95 backdrop-blur">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <p className="text-xs text-muted-foreground mb-0.5">Stem Detail</p>
-                <DialogTitle className="font-ui text-xl font-semibold">
+                <p className="text-xs text-muted-foreground mb-0.5">{embedded ? "STEM workspace" : "STEM details"}</p>
+                <Title className="font-ui text-xl font-semibold">
                   {record?.Name || stemId}
-                </DialogTitle>
+                </Title>
                 {record ? <div className="mt-2"><PaymentDataReliabilityBadge excludedCount={record._Payment_Data_Reliable === false ? 1 : 0} /></div> : null}
                 {record?._Vessel_Name && (
                   <p className="text-sm text-muted-foreground mt-0.5">
@@ -716,6 +734,7 @@ export default function StemDetailModal({ stemId, open, onClose }) {
                 )}
               </div>
               <div className="flex items-center gap-2 shrink-0">
+                {!embedded && <Link className="rounded-md border px-2.5 py-1.5 text-xs font-medium text-primary" to={`/stems/${encodeURIComponent(stemId)}`} onClick={onClose}>Open workspace</Link>}
                 {record && (
                   <a
                     href={`${SF_BASE}/${record.Id}`}
@@ -737,7 +756,9 @@ export default function StemDetailModal({ stemId, open, onClose }) {
                 <span>Disputed — {record.Dispute_Status__c}{record.Dispute_Type__c ? ` · ${record.Dispute_Type__c}` : ''}</span>
               </div>
             )}
-          </DialogHeader>
+            <div className="mt-3"><DataStatus meta={meta} state={loading ? "refreshing" : error ? "unavailable" : undefined} label="Salesforce" /></div>
+            {record && <StemContextLinks stemId={record.Id || stemId} className="mt-3" />}
+          </Header>
 
           {/* Scrollable Body */}
           <div className="overflow-y-auto flex-1 px-7 py-6">
@@ -942,7 +963,7 @@ export default function StemDetailModal({ stemId, open, onClose }) {
                             <tr key={bb.Id} className={`border-b border-border/40 hover:bg-muted/20 transition-colors ${idx % 2 === 0 ? '' : 'bg-muted/10'}`}>
                               <td className="py-2.5 px-3 font-medium text-foreground">{bb._Buyer_Broker_Name || '—'}</td>
                               <td className="py-2.5 px-3 text-muted-foreground">{bb.Refcode_Index__c || '—'}</td>
-                              <td className="py-2.5 px-3 text-right text-foreground">{bb.Commission_Lumpsum__c != null ? fmtMoney(bb.Commission_Lumpsum__c) : '—'}</td>
+                              <td className="py-2.5 px-3 text-right text-foreground">{bb.Commission_Lumpsum__c != null ? fmtMoney(bb.Commission_Lumpsum__c) : 'Not applicable'}</td>
                               <td className="py-2.5 px-3">
                                 {bb.Exported__c
                                   ? <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full text-xs font-medium">Exported</span>
@@ -968,8 +989,8 @@ export default function StemDetailModal({ stemId, open, onClose }) {
               </div>
             )}
           </div>
-        </DialogContent>
-      </Dialog>
+        </Content>
+      </Container>
 
     </>
   );

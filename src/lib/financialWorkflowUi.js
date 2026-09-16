@@ -18,6 +18,23 @@ export function retainedReviewSelection(previousRows, nextRows, selectedIds) {
   }).map((row) => row.id));
 }
 
+export function reviewSelectionSnapshot(rows, selectedIds, kind = 'document') {
+  return rows.filter((row) => selectedIds.has(kind === 'payment' ? row.salesforcePaymentId : row.id)).map((row) => ({
+    key: kind === 'payment' ? row.salesforcePaymentId : `${row.salesforceObject}:${row.salesforceId}`,
+    reviewFingerprint: row.reviewFingerprint, sourceFingerprint: row.sourceFingerprint,
+  }));
+}
+
+export function restoreReviewSelection(snapshot, rows, kind = 'document') {
+  const previous = new Map((snapshot || []).map((row) => [row.key, row]));
+  return new Set(rows.filter((row) => {
+    const before = previous.get(kind === 'payment' ? row.salesforcePaymentId : `${row.salesforceObject}:${row.salesforceId}`);
+    return before?.reviewFingerprint && before.reviewFingerprint === row.reviewFingerprint
+      && before.sourceFingerprint === row.sourceFingerprint && row.status === 'eligible'
+      && reconciliationBucket(row, kind) === 'ready';
+  }).map((row) => kind === 'payment' ? row.salesforcePaymentId : row.id));
+}
+
 export function documentReviewTotals(rows) {
   return Object.values(rows.reduce((totals, row) => {
     const key = `${row.currency}:${row.action}`;

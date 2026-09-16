@@ -1,3 +1,5 @@
+import { readPageState, writePageState } from '@/lib/pageStateCache';
+import { clientSessionState } from '@/lib/clientSessionState';
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
@@ -360,15 +362,38 @@ export default function Layout() {
     if (pageOwnsScroll) return undefined;
     const node = workspaceScrollRef.current;
     if (!node) return undefined;
-    const key = `fcos:workspace-scroll:${location.pathname}${location.search}`;
-    const restored = Number(window.sessionStorage.getItem(key) || 0);
-    const frame = window.requestAnimationFrame(() => { node.scrollTop = Number.isFinite(restored) ? restored : 0; });
-    const remember = () => window.sessionStorage.setItem(key, String(node.scrollTop));
+    const key = `workspace-scroll:${location.pathname}${location.search}`;
+    const session = clientSessionState();
+    const restored = Number(readPageState(key, 0));
+    let pending = Number.isFinite(restored) && restored > 0;
+    const restore = () => {
+      if (!pending) return;
+      node.scrollTop = restored;
+      if (Math.abs(node.scrollTop - restored) < 2) pending = false;
+    };
+    const frame = window.requestAnimationFrame(() => { if (pending) restore(); else node.scrollTop = 0; });
+    // Content may arrive after the route's first paint. Stop restoring as soon
+    // as the saved position is reached or the user takes control.
+    const observer = new ResizeObserver(restore);
+    for (const child of node.children) observer.observe(child);
+    const takeControl = () => { pending = false; };
+    const remember = () => { if (!pending) writePageState(key, node.scrollTop, session); };
+    const timeout = window.setTimeout(() => { pending = false; }, 10000);
     node.addEventListener('scroll', remember, { passive: true });
+    node.addEventListener('wheel', takeControl, { passive: true });
+    node.addEventListener('touchstart', takeControl, { passive: true });
+    node.addEventListener('pointerdown', takeControl);
+    node.addEventListener('keydown', takeControl);
     return () => {
       window.cancelAnimationFrame(frame);
+      window.clearTimeout(timeout);
+      observer.disconnect();
       remember();
       node.removeEventListener('scroll', remember);
+      node.removeEventListener('wheel', takeControl);
+      node.removeEventListener('touchstart', takeControl);
+      node.removeEventListener('pointerdown', takeControl);
+      node.removeEventListener('keydown', takeControl);
     };
   }, [location.pathname, location.search, pageOwnsScroll]);
 

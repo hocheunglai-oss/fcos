@@ -4,6 +4,18 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.215',
+    releasedAt: '2026-09-17',
+    title: 'Connected workspaces and reliable drafts',
+    changes: [
+      'Adds a permanent STEM workspace, scoped business-reference search, and related workflow activity.',
+      'Recovers local form drafts, explains changed source fields, and preserves reviewed Xero selections.',
+      'Simplifies unchanged charge reviews, previews documents before downloading, and makes required fields clearer.',
+      'Adds optional My Commitments home, forecast explanations, duplicate task protection, and administrator workflow metrics.',
+      'Keeps uncertain email and financial outcomes open until their actual result is verified.',
+    ],
+  },
+  {
     version: '2.0.214',
     releasedAt: '2026-09-16',
     title: 'Dashboard recovery and clearer system alerts',

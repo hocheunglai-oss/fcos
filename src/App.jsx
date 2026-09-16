@@ -12,6 +12,7 @@ import ModuleGateAny from '@/components/ModuleGateAny';
 import Layout from '@/components/Layout';
 import WorkspaceErrorBoundary from '@/components/WorkspaceErrorBoundary';
 
+const StemWorkspace = lazy(() => import('@/pages/StemWorkspace'));
 const DashboardSettings = lazy(() => import('@/pages/DashboardSettings'));
 const AccountInsight = lazy(() => import('@/pages/AccountInsight'));
 const StemPnlReport = lazy(() => import('@/pages/StemPnlReport'));
@@ -107,6 +108,7 @@ const AuthenticatedApp = () => {
             <Route path="/fcos-improvements" element={<FcosImprovements />} />
             <Route path="/email-router" element={<ModuleGate moduleId="email_router"><EmailRouter /></ModuleGate>} />
             <Route path="/" element={<ModuleGate moduleId="dashboard"><DashboardSettings /></ModuleGate>} />
+            <Route path="/stems/:stemId" element={<ModuleGateAny moduleIds={['dashboard', 'review', 'disputes', 'buyer_invoices', 'incoming_payments', 'cashflow_forecast', 'pnl', 'brokers', 'hedge_desk']}><StemWorkspace /></ModuleGateAny>} />
             <Route path="/accounts/:accountId" element={<ModuleGate moduleId="dashboard"><AccountInsight /></ModuleGate>} />
             <Route path="/settings" element={<SettingsWorkspace />} />
             <Route path="/pnl" element={<ModuleGate moduleId="pnl"><StemPnlReport /></ModuleGate>} />

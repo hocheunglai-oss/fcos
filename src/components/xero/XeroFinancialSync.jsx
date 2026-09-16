@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { usePageState } from '@/hooks/usePageState';
 import { AlertTriangle, ExternalLink, Loader2, Play, RefreshCw, Save, ShieldCheck } from 'lucide-react';
 import StateBlock from '@/components/common/StateBlock';
 import { Badge } from '@/components/ui/badge';
@@ -16,7 +17,7 @@ import { xeroPortalUiCopy } from '@/lib/xeroPortalUiCopy';
 import { cn } from '@/lib/utils';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
-import { reconciliationBucket, retainedReviewSelection, documentReviewTotals, workflowCopy } from '@/lib/financialWorkflowUi';
+import { reconciliationBucket, retainedReviewSelection, reviewSelectionSnapshot, restoreReviewSelection, documentReviewTotals, workflowCopy } from '@/lib/financialWorkflowUi';
 
 const DIRECTIONS = ['buyer', 'supplier'];
 const DEFAULT_BANKS = ['DBS', 'UBS'];
@@ -33,8 +34,11 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
   const [selected, setSelected] = useState(new Set());
   const [selectedPayments, setSelectedPayments] = useState(new Set());
   const [reviewOpen, setReviewOpen] = useState(false);
-  const [view, setView] = useState(() => new URLSearchParams(window.location.search).get('stem') ? 'all' : 'attention');
-  const [search, setSearch] = useState(() => new URLSearchParams(window.location.search).get('stem') || '');
+  const stemContext = new URLSearchParams(window.location.search).get('stem') || '';
+  const [view, setView] = usePageState(`xero-financial:view:${stemContext}`, stemContext ? 'all' : 'attention');
+  const [search, setSearch] = usePageState(`xero-financial:search:${stemContext}`, stemContext);
+  const [selectionState, setSelectionState] = usePageState('xero-financial:selection', null);
+  const initialSelection = useRef(selectionState);
   const [fixMapping, setFixMapping] = useState(null);
   const requestBusy = useRef(false);
   const previewGeneration = useRef(0);
@@ -64,10 +68,22 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
       if (!active || previewGeneration.current > 0 || result.data?.error || !result.data?.preview) return;
       setPreview(result.data.preview);
       setPayments(result.data.preview.payments);
-      setSelected(new Set(result.data.preview.rows.filter((row) => row.selected).map((row) => row.id)));
+      const saved = initialSelection.current;
+      const sameRun = saved?.runId === result.data.preview.run?.id;
+      setSelected(sameRun && result.data.preview.run?.status === 'ready_for_review'
+        ? restoreReviewSelection(saved.documents, result.data.preview.rows)
+        : new Set(result.data.preview.rows.filter((row) => row.selected).map((row) => row.id)));
+      setSelectedPayments(sameRun ? restoreReviewSelection(saved.payments, result.data.preview.payments?.rows || [], 'payment') : new Set());
     }).catch(() => { if (active) setError('The last check could not be loaded. Run Check everything to retry.'); });
     return () => { active = false; };
   }, [loadMappings]);
+
+  useEffect(() => {
+    if (!preview?.run?.id) return;
+    setSelectionState({ runId: preview.run.id,
+      documents: reviewSelectionSnapshot(preview.rows || [], selected),
+      payments: reviewSelectionSnapshot(payments?.rows || [], selectedPayments, 'payment') });
+  }, [preview, payments, selected, selectedPayments, setSelectionState]);
 
   // Refresh on return to this page, keeping a current review stable while its dialog is open.
   useEffect(() => {
@@ -249,6 +265,7 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
 
 
       {preview && <div className="space-y-3">
+        <Button size="sm" variant="ghost" onClick={() => { setView(stemContext ? 'all' : 'attention'); setSearch(stemContext); }}>Reset filters</Button>
         <p className="text-xs text-muted-foreground">{flow.checked}: {new Date(preview.checkedAt || preview.run.createdAt).toLocaleString(copy.locale)} · {flow.saved}</p>
         <div className="flex flex-wrap gap-2">{['attention', 'ready', 'waiting', 'matched', 'all'].map((bucket) => <Button key={bucket} variant={view === bucket ? 'default' : 'outline'} size="sm" onClick={() => { setView(bucket); setDocumentPage(0); setPaymentPage(0); }}>{flow[bucket]} ({[...(preview.rows || []).map((row) => reconciliationBucket(row)), ...(payments?.rows || []).map((row) => reconciliationBucket(row, 'payment'))].filter((value) => bucket === 'all' || bucket === value).length})</Button>)}</div>
         <Input aria-label={flow.search} placeholder={flow.search} value={search} onChange={(event) => { setSearch(event.target.value); setDocumentPage(0); setPaymentPage(0); }} />

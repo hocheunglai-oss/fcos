@@ -7,6 +7,10 @@ const stringValue = (value) => typeof value === 'string' && value.trim().length 
 const stringArray = (value) => Array.isArray(value) && value.length > 0 && value.every(stringValue);
 
 const CONTRACTS = Object.freeze({
+  workspaceSearch(payload) {
+    return typeof payload.query === 'string' && payload.query.trim().length >= 2 && payload.query.length <= 80 ? [] : ['Enter between 2 and 80 characters.'];
+  },
+  stemWorkspaceActivity: stemReadRequestIssues,
   salesforceStemDetail: stemReadRequestIssues,
   dashboardAccountCreditStatement(payload) {
     const issues = [];

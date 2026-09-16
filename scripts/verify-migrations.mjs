@@ -29,6 +29,7 @@ const migrationSources = await Promise.all(names.map(async (name) => ({
   sql: await readFile(new URL(name, migrationDirectory), 'utf8'),
 })));
 const releaseMigrationNames = new Set([
+  '20260916223258_app_workflow_reliability.sql',
   '20260806090000_financial_report_settings_and_currency_thresholds.sql',
   '20260806100000_dispute_external_closure_reconciliation.sql',
   '20260807120000_email_router_forward_file_learning.sql',
@@ -67,7 +68,7 @@ async function assertRows(sql, expected, label, values = []) {
 }
 
 async function verifyRuntimeObjects(label) {
-  const releaseTables = ['account_insight_report_presets', 'account_insight_report_preset_events', 'hedge_fcbs_settlement_operations'];
+  const releaseTables = ['workflow_daily_metrics', 'collaboration_create_requests', 'account_insight_report_presets', 'account_insight_report_preset_events', 'hedge_fcbs_settlement_operations'];
   await assertRows(
     `select count(*)::int from pg_class c join pg_namespace n on n.oid = c.relnamespace
      where n.nspname = 'public' and c.relname = any($1::text[]) and c.relrowsecurity`,

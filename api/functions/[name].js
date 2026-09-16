@@ -1,3 +1,7 @@
+import { createStemWorkspaceActivity } from '../_stemWorkspaceActivity.js';
+import { createWorkflowMetricsReader, recordWorkflowMetric } from '../_workflowMetrics.js';
+import { createWorkspaceSearch } from '../_workspaceSearch.js';
+import { createSystemIncidentVerifier } from '../_systemIncidentRecovery.js';
 import { createDisputeSettlementEvidenceHandlers } from '../_disputeSettlementEvidence.js';
 import { chunkIds, cleanRecord, getApiVersion, getInstanceUrl, salesforceAuthMode, salesforceConfiguredAuthModes, sendJson, sfCompositeQueries, sfDownload, sfQuery, sfRequest } from '../_salesforce.js';
 import { assertStemReadRequest } from '../../shared/salesforceReadRequest.js';
@@ -987,101 +991,7 @@ async function workNotificationsState(body = {}, req = null, accessContext = nul
   return workNotificationsStateService(body, await workNotificationsAccessContext(req, accessContext));
 }
 
-async function verifyFinancialReportIncident(client, purposeKey) {
-  await loadFinancialReportSettings(client, purposeKey, { required: true });
-  await resolveGraphEmailSender(client, purposeKey);
-}
-
-async function systemErrorVerify(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  const incidentSignature = String(body.incidentSignature || body.incident_signature || '').trim().toLowerCase();
-  if (!validSystemErrorSignature(incidentSignature)) throw appError('A valid system incident is required.', 400);
-  const { data: incident, error } = await context.client
-    .from('system_error_events')
-    .select('id,dedupe_key,handler')
-    .eq('dedupe_key', incidentSignature)
-    .maybeSingle();
-  if (error) throw error;
-  if (!incident) throw appError('This system incident is no longer available.', 404);
-
-  switch (incident.handler) {
-    case 'outstandingBuyerInvoicesEmailReport':
-    case 'outstandingBuyerInvoicesEmailCron':
-      await verifyFinancialReportIncident(context.client, 'outstanding_invoice_reports');
-      break;
-    case 'incomingPaymentEmailReport':
-      await verifyFinancialReportIncident(context.client, 'incoming_payment_reports');
-      break;
-    case 'buyerInvoicePaymentReminderSend':
-      await resolveGraphEmailSender(context.client, 'payment_reminders');
-      await salesforceObjectFields({ objectName: 'stem__c' });
-      break;
-    case 'disputeWorkflowList': {
-      const stemFields = await salesforceObjectFields({ objectName: 'stem__c' });
-      await interofficeStemAccessCondition(context, stemFields.fields || []);
-      break;
-    }
-    case 'workNotificationsList': {
-      const { error: stateError } = await context.client
-        .from('system_error_notification_states')
-        .select('event_id', { count: 'exact', head: true });
-      if (stateError) throw stateError;
-      break;
-    }
-    case 'specialTermsWorkspace':
-      await listSpecialTerms({ force: true });
-      break;
-    case 'hedgeDeskSalesforceMapping':
-      await getHedgeSalesforceMapping(context.client);
-      break;
-    case 'hedgeMarkets':
-      await hedgeMarkets({ action: 'snapshot' }, req, context);
-      break;
-    case 'emailRouterMaintenanceCron': {
-      const serviceClient = createEmailRouterServiceClient();
-      const mailbox = await currentEmailRouterMailbox(serviceClient);
-      const expectedFolders = ['inbox', 'sentitems', 'archive'];
-      const freshnessCutoff = new Date(Date.now() - 15 * 60_000).toISOString();
-      const [{ data: subscriptions, error: subscriptionsError }, { data: deltaStates, error: deltaStateError }] = await Promise.all([
-        serviceClient
-          .schema('emailrouter')
-          .from('mailbox_subscriptions')
-          .select('resource_key')
-          .eq('mailbox_id', mailbox.id)
-          .eq('state', 'active')
-          .gt('expires_at', new Date().toISOString())
-          .in('resource_key', expectedFolders),
-        serviceClient
-          .schema('emailrouter')
-          .from('mailbox_delta_state')
-          .select('folder_key')
-          .eq('mailbox_id', mailbox.id)
-          .eq('sync_state', 'ready')
-          .gte('last_synced_at', freshnessCutoff)
-          .in('folder_key', expectedFolders),
-      ]);
-      if (subscriptionsError) throw subscriptionsError;
-      if (deltaStateError) throw deltaStateError;
-      const activeFolders = new Set((subscriptions || []).map((row) => row.resource_key));
-      const synchronizedFolders = new Set((deltaStates || []).map((row) => row.folder_key));
-      if (expectedFolders.some((folder) => !activeFolders.has(folder))) {
-        throw appError('Email Router does not have an active future-dated subscription for every managed folder.', 503, 'EMAIL_ROUTER_SUBSCRIPTION_UNAVAILABLE');
-      }
-      if (expectedFolders.some((folder) => !synchronizedFolders.has(folder))) {
-        throw appError('Email Router has not synchronized every managed folder recently.', 503, 'EMAIL_ROUTER_SYNCHRONIZATION_STALE');
-      }
-      break;
-    }
-    case 'salesforceQuery':
-      if (handlers.salesforceQuery) throw appError('The legacy Salesforce query endpoint is still registered.', 503, 'LEGACY_SALESFORCE_QUERY_ACTIVE');
-      break;
-    default:
-      throw appError('This incident requires review in its affected workspace and cannot be verified automatically.', 400);
-  }
-
-  const resolved = await resolveSystemErrorIncident(context.client, incidentSignature);
-  return { verified: true, resolved: resolved.resolved || 0, incidentSignature };
-}
+const systemErrorVerify = createSystemIncidentVerifier({ requireActiveUser, requireAdministratorContext, appError, validSystemErrorSignature, loadFinancialReportSettings, resolveGraphEmailSender, salesforceObjectFields, disputeWorkflowList: disputeBetaList, listSpecialTerms, getHedgeSalesforceMapping, hedgeMarkets, createEmailRouterServiceClient, currentEmailRouterMailbox, resolveSystemErrorIncident, isLegacyQueryRegistered: () => Boolean(handlers.salesforceQuery) });
 
 async function workCommitmentsList(body = {}, req = null, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
@@ -1453,10 +1363,13 @@ const HANDLER_MODULE_ACCESS = {
   dashboardAccountCreditDirectory: ['dashboard'],
   dashboardAccountCreditStatement: ['dashboard'],
   dashboardCreditForecastSettingsSave: ['dashboard'],
+  workflowMetricsRead: [],
+  workspaceSearch: [],
   dashboardCounterpartySearch: ['dashboard'],
   dashboardAccountExposureBatch: ['dashboard'],
   dashboardAccountInsightExport: ['dashboard'],
   salesforceTopBuyers: ['dashboard'],
+  stemWorkspaceActivity: ['dashboard', 'review', 'disputes', 'buyer_invoices', 'incoming_payments', 'cashflow_forecast', 'pnl', 'brokers', 'hedge_desk'],
   salesforceStemDetail: ['dashboard', 'review', 'disputes', 'buyer_invoices', 'incoming_payments', 'cashflow_forecast', 'pnl', 'brokers', 'hedge_desk'],
   salesforceStemDocuments: ['dashboard', 'review', 'disputes', 'buyer_invoices', 'incoming_payments', 'cashflow_forecast', 'pnl', 'brokers', 'hedge_desk'],
   salesforceDocumentDownload: ['dashboard', 'review', 'disputes', 'buyer_invoices', 'incoming_payments', 'cashflow_forecast', 'pnl', 'brokers', 'hedge_desk'],
@@ -9824,6 +9737,10 @@ async function dashboardCreditForecastSettingsSave(body = {}, req = null, access
   };
 }
 
+const workflowMetricsRead = createWorkflowMetricsReader({ requireActiveUser, requireAdministratorContext });
+const stemWorkspaceActivity = createStemWorkspaceActivity({ requireActiveUser, resolveStemId, userHasAnyModuleAccess });
+const workspaceSearch = createWorkspaceSearch({ requireActiveUser, userHasAnyModuleAccess, salesforceObjectFields, interofficeStemAccessCondition, queryRows, loadDashboardCounterpartySearch });
+
 async function dashboardCounterpartySearch(body = {}, req = null, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
   return loadDashboardCounterpartySearch({ body, accessContext: context, force: requestForcesRefresh(body, req) });
@@ -17757,10 +17674,10 @@ async function salesforceStemDetailUncached(body, req = null, accessContext = nu
 
   const [recordRaw, lineItems, extraCosts, buyerBrokers, buyerInvoices] = await Promise.all([
     sfRequest(`/sobjects/stem__c/${actualStemId}`).then(cleanRecord),
-    queryRows(`SELECT Id, Name, STEM__c, Product__c, Product__r.Name, Product__r.Family, Supplier_Name__c, BDN_Company__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_Max__c, Quantity_in_MT__c, Is_Quantity_Range__c, Price_Per_Unit__c, Cost_Per_Unit__c, Unit_Sell_At__c, Unit_Buy_At__c, Unit_Cost__c, Subtotal_Sell_At__c, Subtotal_Buy_At__c, Total_Price__c, Total_Cost__c, Supplier_Invoice__c, Payment_Term__c, BDN_Number__c, Cancelled__c, Buyers_Broker__c, Buyer_Broker__c, Buyers_Brokers_Commission_Per_Unit__c, Buyers_Brokers_Commission_Lumpsum__c, Commission_Cost__c, Supplier_Broker__c, Suppliers_Brokers_Commission_Per_Unit__c, Suppliers_Brokers_Commission_Lumpsum__c, Offer_Line_Item__r.UnitPrice, Offer_Line_Item__r.Supplier_Unit_Price__c FROM STEM_Line_Item__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`, { softFail: true }),
-    queryRows(`SELECT Id, Name, Description__c, Product2Id__c, Product2Id__r.Name, Product2Id__r.Family, Supplier_Name__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_in_MT__c, Quantity_Range_Max__c, Is_Quantity_Range__c, Unit_Price__c, Unit_Cost__c, Line_Total__c, Line_Total_Buy__c, Supplier_Invoice__c, Supplier_Issued__c, Payment_Term__c, Cancelled__c FROM STEM_Extra_Cost__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`, { softFail: true }),
-    queryRows(`SELECT Id, STEM__c, Buyer_Broker__c, Refcode_Index__c, Exported__c, Commission_Lumpsum__c, STEM_Line_Item__r.Id FROM STEM_Buyer_Broker__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`, { softFail: true }),
-    queryRows(`SELECT Id, Name, STEM__c, Proforma__c, Deprecated__c, Amount__c FROM Invoice__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`, { softFail: true }),
+    queryRows(`SELECT Id, Name, STEM__c, Product__c, Product__r.Name, Product__r.Family, Supplier_Name__c, BDN_Company__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_Max__c, Quantity_in_MT__c, Is_Quantity_Range__c, Price_Per_Unit__c, Cost_Per_Unit__c, Unit_Sell_At__c, Unit_Buy_At__c, Unit_Cost__c, Subtotal_Sell_At__c, Subtotal_Buy_At__c, Total_Price__c, Total_Cost__c, Supplier_Invoice__c, Payment_Term__c, BDN_Number__c, Cancelled__c, Buyers_Broker__c, Buyer_Broker__c, Buyers_Brokers_Commission_Per_Unit__c, Buyers_Brokers_Commission_Lumpsum__c, Commission_Cost__c, Supplier_Broker__c, Suppliers_Brokers_Commission_Per_Unit__c, Suppliers_Brokers_Commission_Lumpsum__c, Offer_Line_Item__r.UnitPrice, Offer_Line_Item__r.Supplier_Unit_Price__c FROM STEM_Line_Item__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`, { softFail: false }),
+    queryRows(`SELECT Id, Name, Description__c, Product2Id__c, Product2Id__r.Name, Product2Id__r.Family, Supplier_Name__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_in_MT__c, Quantity_Range_Max__c, Is_Quantity_Range__c, Unit_Price__c, Unit_Cost__c, Line_Total__c, Line_Total_Buy__c, Supplier_Invoice__c, Supplier_Issued__c, Payment_Term__c, Cancelled__c FROM STEM_Extra_Cost__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`, { softFail: false }),
+    queryRows(`SELECT Id, STEM__c, Buyer_Broker__c, Refcode_Index__c, Exported__c FROM STEM_Buyer_Broker__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`, { softFail: false }),
+    queryRows(`SELECT Id, Name, STEM__c, Proforma__c, Deprecated__c, Amount__c FROM Invoice__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`, { softFail: false }),
   ]);
   const supplierInvoiceIds = [...new Set([...lineItems.map((item) => item.Supplier_Invoice__c), ...extraCosts.map((item) => item.Supplier_Invoice__c)].filter(isSalesforceId))];
   const supplierInvoiceNameMap = await namesByIds('Supplier_Invoice__c', supplierInvoiceIds);
@@ -19367,6 +19284,9 @@ const handlers = {
   dashboardAccountCreditDirectory,
   dashboardAccountCreditStatement,
   dashboardCreditForecastSettingsSave,
+  workflowMetricsRead,
+  stemWorkspaceActivity,
+  workspaceSearch,
   dashboardCounterpartySearch,
   dashboardAccountExposureBatch,
   dashboardAiSearch,
@@ -19532,6 +19452,9 @@ export default async function handler(req, res) {
       requestId,
     },
     async () => {
+      let metricContext = null;
+      let metricResult = null;
+      const metricStartedAt = Date.now();
       try {
         const handlerPolicy = handlerPolicyFor(HANDLER_POLICY_REGISTRY, name);
         if (handlerPolicy && typeof res?.setHeader === 'function') {
@@ -19557,6 +19480,7 @@ export default async function handler(req, res) {
         const fn = handlers[name];
         if (!fn) return sendJson(res, { error: `Unknown function: ${name}` }, 404);
         const accessContext = await requireHandlerAccess(name, req);
+        metricContext = accessContext;
         const body = await readBody(req);
         requireReadOnlyCiOperation(accessContext?.profile, name, body);
         const contract = validateFunctionRequest(name, body);
@@ -19566,6 +19490,7 @@ export default async function handler(req, res) {
           });
         }
         const data = await fn(body, req, accessContext);
+        metricResult = data;
         return sendJson(res, data);
       } catch (error) {
         const status = error.status || error.statusCode || 500;
@@ -19588,6 +19513,11 @@ export default async function handler(req, res) {
         return sendJson(res, publicApiErrorPayload(error, status, requestId), status);
       } finally {
         logRequestTelemetry(res.statusCode || 500);
+        if (process.env.VERCEL_ENV === 'production' && metricContext?.profile?.read_only_ci !== true
+          && metricContext?.profile?.id && handlerPolicyFor(HANDLER_POLICY_REGISTRY, name)?.mutation) {
+          waitUntil(recordWorkflowMetric(safeSupabaseAdminClient(), { handler: name, status: res.statusCode || 500,
+            data: metricResult, durationMs: Date.now() - metricStartedAt }).catch(() => {}));
+        }
       }
     },
   );

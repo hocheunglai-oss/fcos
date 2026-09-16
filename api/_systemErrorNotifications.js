@@ -220,7 +220,7 @@ export async function resolveSystemErrorIncident(client, signature, resolvedAt =
   if (!client || !validSystemErrorSignature(dedupeKey)) return { resolved: 0, skipped: true };
   return resolveSystemErrorEvents(
     client,
-    client.from('system_error_events').select('id').eq('dedupe_key', dedupeKey).limit(1),
+    client.from('system_error_events').select('id').eq('dedupe_key', dedupeKey).lte('last_seen_at', resolvedAt.toISOString()).limit(1),
     resolvedAt,
   );
 }

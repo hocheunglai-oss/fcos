@@ -1,4 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useRecordDraft } from '@/hooks/useRecordDraft';
+import RecordSaveStatus from '@/components/common/RecordSaveStatus';
+import { usePageState } from '@/hooks/usePageState';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { DragDropContext, Draggable, Droppable } from "@hello-pangea/dnd";
 import {
   Archive,
@@ -104,7 +107,7 @@ import {
 } from "@/components/ui/tooltip";
 import { useToast } from "@/components/ui/use-toast";
 import { supabase } from "@/lib/supabaseClient";
-import { PROJECTS_TASKS_METHODOLOGY } from "@/lib/pageMethodologies";
+import { PROJECTS_TASKS_METHODOLOGY } from "@/lib/pageMethodologyIndex";
 import { cn } from "@/lib/utils";
 
 const STATUS_FALLBACK = [
@@ -391,8 +394,8 @@ export default function ProjectsTasks() {
   const { toast } = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
   const [scope, setScope] = useState("my");
-  const [view, setView] = useState("list");
-  const [filters, setFilters] = useState(EMPTY_FILTERS);
+  const [view, setView] = usePageState("projects-tasks:view", "list");
+  const [filters, setFilters] = usePageState("projects-tasks:filters", EMPTY_FILTERS);
   const [items, setItems] = useState([]);
   const [users, setUsers] = useState([]);
   const [projects, setProjects] = useState([]);
@@ -432,6 +435,11 @@ export default function ProjectsTasks() {
     healthNote: "",
     templateId: "none",
   });
+  const createRecovery = useRecordDraft();
+  useLayoutEffect(() => { if (createOpen) createRecovery.update(createDraft); }, [createOpen, createDraft, createRecovery.update]);
+  const possibleDuplicate = items.find((item) => !['Done', 'Cancelled', 'Archived'].includes(item.status)
+    && item.title?.trim().toLowerCase() === createDraft.title.trim().toLowerCase()
+    && item.kind === createDraft.kind && (item.projectId || 'none') === createDraft.projectId);
   const [archiveTarget, setArchiveTarget] = useState(null);
   const [archiveSaving, setArchiveSaving] = useState(false);
   const [commentDraft, setCommentDraft] = useState("");
@@ -740,7 +748,8 @@ export default function ProjectsTasks() {
 
   const openCreate = (kind = "task", parent = null) => {
     const parentIsProject = parent?.kind === "project";
-    setCreateDraft({
+    const values = createRecovery.open(`new-work:${kind}:${parent?.id || "none"}`, {
+      requestId: "",
       kind,
       title: "",
       description: "",
@@ -757,10 +766,12 @@ export default function ProjectsTasks() {
       healthNote: "",
       templateId: "none",
     });
+    setCreateDraft({ ...values, requestId: values.requestId || crypto.randomUUID() });
     setCreateOpen(true);
   };
 
   const createItem = async () => {
+    if (createSaving || createRecovery.recovery) return;
     if (!createDraft.title.trim()) {
       toast({
         variant: "destructive",
@@ -776,6 +787,7 @@ export default function ProjectsTasks() {
       useTemplate ? "collaborationTemplateSave" : "collaborationCreate",
       useTemplate
         ? {
+            requestId: createDraft.requestId,
             mode: "use",
             templateId: createDraft.templateId,
             project: {
@@ -798,6 +810,7 @@ export default function ProjectsTasks() {
             },
           }
         : {
+            requestId: createDraft.requestId,
             kind: createDraft.kind,
             title: createDraft.title,
             description: createDraft.description,
@@ -837,6 +850,7 @@ export default function ProjectsTasks() {
         description: errorText(response),
       });
     } else {
+      createRecovery.saved();
       setCreateOpen(false);
       replaceDetail(response.data);
       setDetailOpen(true);
@@ -1561,6 +1575,7 @@ export default function ProjectsTasks() {
               />
               Include archived
             </label>
+            <Button variant="ghost" onClick={() => setFilters(EMPTY_FILTERS)}>Reset filters</Button>
           </div>
         </TableShell>
 
@@ -1871,6 +1886,11 @@ export default function ProjectsTasks() {
                 Projects group tasks. Subtasks belong directly to a task.
               </DialogDescription>
             </DialogHeader>
+            <RecordSaveStatus draft={createRecovery} saving={createSaving} authority="FCOS"
+              onRecover={() => setCreateDraft(createRecovery.recoverUnchanged())}
+              onDiscard={() => { const values = createRecovery.discard(); setCreateDraft({ ...values, requestId: crypto.randomUUID() }); }} />
+            {possibleDuplicate && <div role="status" className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm">An open {possibleDuplicate.kind} has the same title in this project. <button className="font-medium underline" type="button" onClick={() => { setCreateOpen(false); setItemQuery(possibleDuplicate.id); }}>Open existing work</button></div>}
+
             <div className="grid gap-4 sm:grid-cols-2">
               <SelectField
                 label="Type"
@@ -2101,7 +2121,7 @@ export default function ProjectsTasks() {
               >
                 Cancel
               </Button>
-              <Button onClick={createItem} disabled={createSaving}>
+              <Button onClick={createItem} disabled={createSaving || Boolean(createRecovery.recovery)}>
                 {createSaving && <Loader2 className="animate-spin" />}Create{" "}
                 {humanKind(createDraft.kind)}
               </Button>

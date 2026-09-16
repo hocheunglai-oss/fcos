@@ -1,3 +1,4 @@
+import { routineReviewNote } from '../shared/routineReviewNote.js';
 import { createHash } from 'node:crypto';
 import { requireExternalActionGate } from './_externalActionGates.js';
 import { getApiVersion, getInstanceUrl, sfCompositeQueries, sfQuery, sfRequest } from './_salesforce.js';
@@ -2146,7 +2147,7 @@ function reviewEvidence(review) {
 
 function normalizeSupplierReviewPayload(body, supplierRows) {
   if (!Array.isArray(body?.rowOutcomes)) return body;
-  const supplierReviewNote = text(body?.supplierReviewNote, 1000);
+  const supplierReviewNote = text(body?.supplierReviewNote, 1000) || routineReviewNote(body, 'cost', supplierRows.map((row) => row.Id));
   if (!supplierReviewNote) {
     throw httpError('Add one supplier reference or note before confirming the costs.', 400, 'SUPPLIER_REVIEW_NOTE_REQUIRED');
   }
@@ -2873,7 +2874,7 @@ async function validateCostSide(body, supplierRows) {
 
 function normalizeBuyerSide(body, supplierRows) {
   if (!Array.isArray(body?.rowChargeDecisions)) return body;
-  const note = text(body?.buyerReviewNote || body?.note, 1000);
+  const note = text(body?.buyerReviewNote || body?.note, 1000) || routineReviewNote(body, 'buyer_charge', supplierRows.map((row) => row.Id));
   if (!note) throw httpError('Add a buyer-charge note before confirmation.', 400, 'BUYER_NOTE_REQUIRED');
   const decisions = new Map(body.rowChargeDecisions.map((row) => [
     text(row?.sourceId || row?.id, 64),

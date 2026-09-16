@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
+import { cashflowExplanation, changedCashflowRows } from '@/lib/cashflowExplanation';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   CalendarDays,
@@ -41,7 +42,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useToast } from '@/components/ui/use-toast';
 import { readPageState, writePageState } from '@/lib/pageStateCache';
 import { clientSessionState } from '@/lib/clientSessionState';
-import { CASHFLOW_FORECAST_METHODOLOGY } from '@/lib/pageMethodologies';
+import { CASHFLOW_FORECAST_METHODOLOGY } from '@/lib/pageMethodologyIndex';
 import { cn } from '@/lib/utils';
 import PaymentDataReliabilityBadge from '@/components/common/PaymentDataReliabilityBadge';
 import CashflowBankReconciliation from '@/components/cashflow/CashflowBankReconciliation';
@@ -172,6 +173,8 @@ export default function CashflowForecast() {
   const [supplier, setSupplier] = useState(initialState.supplier || '');
   const [activeView, setActiveView] = useState(initialState.view === 'bank' ? 'bank' : 'forecast');
   const [data, setData] = useState({ rows: [], buckets: [], totals: {}, performance: [], settings: null, holidayOverrides: [], holidaySourceStatus: [], warnings: [] });
+  const previousForecast = useRef(null);
+  const [forecastChanges, setForecastChanges] = useState([]);
   const [settingsDraft, setSettingsDraft] = useState(null);
   const [overrideDraft, setOverrideDraft] = useState({ date: '', countryCode: 'MANUAL', name: '' });
   const [loading, setLoading] = useState(true);
@@ -200,6 +203,9 @@ export default function CashflowForecast() {
           return;
         }
         setError('');
+        const scopeKey = `${dateFrom}:${dateTo}:${bucket}`;
+        setForecastChanges(previousForecast.current?.key === scopeKey ? changedCashflowRows(previousForecast.current.rows, response.data?.rows || []) : []);
+        previousForecast.current = { key: scopeKey, rows: response.data?.rows || [] };
         setData(response.data || {});
         setSettingsDraft(response.data?.settings || null);
       },
@@ -469,6 +475,7 @@ export default function CashflowForecast() {
         )}
       </TableShell>
 
+      {forecastChanges.length > 0 && <details className="mb-4 rounded-lg border bg-blue-50/50 p-3 text-sm"><summary className="cursor-pointer font-medium">{forecastChanges.length} forecast rows changed since the previous snapshot</summary><ul className="mt-2 list-disc pl-5">{forecastChanges.slice(0, 30).map((row) => <li key={row.id}>{row.name}: {row.changes.map((field) => field.replace(/([a-z])([A-Z])/g, '$1 $2')).join(', ')}{row.beforeDate !== row.afterDate ? ` · ${row.beforeDate} → ${row.afterDate}` : ''}</li>)}</ul>{forecastChanges.length > 30 && <p className="mt-2 text-xs">Showing the first 30 changed rows.</p>}</details>}
       <TableShell title="Forecast Rows" meta={`${sortedRows.length.toLocaleString()} rows`} className="mb-4" bodyClassName="p-0">
         <div className="max-h-[520px] overflow-auto">
           <table className="min-w-full text-sm">
@@ -503,8 +510,8 @@ export default function CashflowForecast() {
                   <td className="whitespace-nowrap px-3 py-2">{fmtDate(row.originalDate)}</td>
                   <td className="whitespace-nowrap px-3 py-2 text-right font-semibold">{fmtMoney(row.amount, row.currency)}</td>
                   <td className="min-w-[150px] px-3 py-2">
-                    <div>{row.modelLevel || '—'}</div>
-                    {row.predictedDelayDays != null && <div className="text-xs text-muted-foreground">{row.predictedDelayDays} days · {row.confidence}</div>}
+                    <div>{row.modelLevel || 'Model unavailable'}</div><details className="mt-1 text-xs text-muted-foreground"><summary className="cursor-pointer underline">Why this date?</summary><p className="mt-1 max-w-xs">{cashflowExplanation(row).reason} {row.holidayAdjustment || ''}</p></details>
+                    {row.predictedDelayDays != null && <div className="text-xs text-muted-foreground">{row.predictedDelayDays} days · {cashflowExplanation(row).confidence}</div>}
                   </td>
                   <td className="min-w-[240px] px-3 py-2 text-xs text-muted-foreground">{row.holidayAdjustment || '—'}</td>
                 </tr>
