@@ -4,6 +4,15 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.213',
+    releasedAt: '2026-09-16',
+    title: 'Reliable dispute preparation',
+    changes: [
+      'Keeps Salesforce dispute entries visible when no FCOS agreement has been created yet.',
+      'Opens unstarted disputes in Prepare with the Complete agreement action.',
+    ],
+  },
+  {
     version: '2.0.212',
     releasedAt: '2026-09-15',
     title: 'Simpler reconciliation and dispute settlement',

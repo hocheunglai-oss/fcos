@@ -1,4 +1,4 @@
-# Financial workflow simplification (2.0.212)
+# Financial workflow simplification (2.0.213)
 
 A Finance user can open the last completed Salesforce–Xero check, fix a mapping on its exception row, then review and sync selected documents in one confirmation. Exact existing transactions are linked in FCOS without posting to Xero. Needs attention, Ready to sync, Waiting and Matched separate actionable work from invoice dependencies.
 
@@ -11,6 +11,8 @@ Completed previews persist document and payment results together. Returning to t
 ## Disputes
 
 The visible stages are Prepare, Approve, Settle and Closed; existing database states and audit events remain intact. Each selected Account and role has an agreement card. Submission saves the complete agreement. Notes reuse the agreement summary; reasons for revision, rejection, exceptions and accepting an external closure remain explicit.
+
+Salesforce dispute entries without an FCOS case remain in Prepare and offer Complete agreement. Both explicit null cases and entries without workflow metadata are covered in the desktop and mobile browser fixtures.
 
 Finance can select existing evidence only after the server verifies the same Account, STEM, invoice, amount and currency. Supported suggestions include exact Salesforce supplier refunds, posted Xero credits backed by Salesforce documents, and a single exact credit allocation to a supplier invoice. Ambiguous or combined allocations remain manual. Saving revalidates the evidence fingerprint; no additional cash, invoice, credit or refund is created by the dispute workflow.
 

@@ -6,6 +6,7 @@ export function disputeStage(status) {
   return 'Prepare';
 }
 export function disputeNextAction(caseRow = {}) {
+  caseRow ??= {};
   if (caseRow.workflowStatus === 'Closed') return 'View settlement';
   if (caseRow.externalClosure) return 'Resolve closure mismatch';
   if (caseRow.workflowStatus === 'Pending Approval') return 'Review agreement';
@@ -14,6 +15,7 @@ export function disputeNextAction(caseRow = {}) {
   return 'Complete agreement';
 }
 export function disputeStatusLabel(caseRow = {}) {
+  caseRow ??= {};
   if (caseRow.externalClosure) return 'Commercially closed — Finance completion required';
   if (caseRow.workflowStatus === 'Revision Requested' || caseRow.workflowStatus === 'Rejected') return `Prepare · ${caseRow.workflowStatus}`;
   if (caseRow.workflowStatus === 'Settled - Ready to Close') return 'Settle · Ready to close';

@@ -1,6 +1,19 @@
 import { expect, test } from '@playwright/test';
 test.describe('simplified financial workflows', () => {
   test.skip(process.env.FCOS_E2E_WORKFLOW_FIXTURE !== '1', 'Local fixture only, with every provider operation stubbed.');
+  for (const scenario of ['unstarted', 'missing-workflow']) {
+    test(`Salesforce dispute without an FCOS case opens its agreement (${scenario})`, async ({ page }) => {
+      const errors = [];
+      page.on('pageerror', (error) => errors.push(error.message));
+      await page.goto(`/e2e/fixtures/financial-workflows.html?scenario=${scenario}`);
+      await expect(page.getByRole('row').filter({ hasText: 'TEST STEM' })).toContainText('Prepare');
+      await page.getByRole('button', { name: 'Complete agreement', exact: true }).click();
+      await expect(page.getByRole('dialog').getByRole('navigation', { name: 'Dispute progress' })).toContainText('PrepareApproveSettleClosed');
+      expect(errors).toEqual([]);
+      const writes = await page.evaluate(() => window.workflowFixture.requests.filter((row) => row.name.startsWith('disputeWorkflow') && row.name !== 'disputeWorkflowList'));
+      expect(writes).toEqual([]);
+    });
+  }
   test('saved check, dependency waiting and one reviewed sync action', async ({ page }, testInfo) => {
     await page.goto('/e2e/fixtures/financial-workflows.html');
     await expect(page.getByText('TEST-INV-2', { exact: true })).toBeVisible();

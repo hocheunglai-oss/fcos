@@ -24,6 +24,10 @@ const stem = { Id: stemId, Name: 'TEST STEM', Delivery_Date__c: '2026-09-01', _B
   _Supplier_Invoice_Exposure_Rows: [{ supplierInvoiceId: 'invoice', supplierAccountId: supplierId, supplierName: 'Test Supplier', invoiceAmount: 100, paidAmount: 100, payableBalanceAvailable: true, rawPayableBalance: 0, payableBalance: 0, currencyIsoCode: 'USD', payments: [] }],
   _Dispute_Parties: { candidateSchemaValid: true, candidates: parties, issues: [] },
   _Dispute_Workflow: { case: caseRow, parties, actions: [buyerAction, { ...supplierAction, accountingStatus: scenario === 'settle' ? 'Not Required' : 'Pending Accounting' }], supplierInstructions: [], documents: [], events: [] } };
+if (scenario === 'unstarted') {
+  stem._Dispute_Workflow = { case: null, parties: [], actions: [], supplierInstructions: [], documents: [], events: [] };
+}
+if (scenario === 'missing-workflow') delete stem._Dispute_Workflow;
 if (scenario === 'refund') {
   stem._Dispute_Workflow.case = { ...caseRow, workflowStatus: 'Accounting In Progress', approvalStatus: 'Approved' };
   stem._Dispute_Workflow.actions = [{ ...buyerAction, accountingStatus: 'Settled' }, { ...supplierAction, actionType: 'resolve_supplier_dispute', amount: 100, currencyIsoCode: 'USD' }];

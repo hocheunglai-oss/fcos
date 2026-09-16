@@ -79,6 +79,13 @@ test('four user stages preserve the external closure exception and actionable ne
   assert.match(disputeStatusLabel({ workflowStatus: 'Draft', externalClosure: true }), /Finance completion required/);
 });
 
+test('Salesforce dispute queue entries without an FCOS case remain ready to prepare', () => {
+  for (const absentCase of [null, undefined, {}]) {
+    assert.equal(disputeStatusLabel(absentCase), 'Prepare');
+    assert.equal(disputeNextAction(absentCase), 'Complete agreement');
+  }
+});
+
 
 test('supplier settlement suggestions require the exact live credit allocation to that invoice', () => {
   const record = { Id: 'credit', STEM__c: 'stem', Supplier__c: buyer.account_id, Invoice_Amount__c: -150, Invoice_Date__c: '2026-09-01' };
