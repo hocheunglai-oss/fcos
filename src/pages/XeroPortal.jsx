@@ -292,7 +292,7 @@ export default function XeroPortal() {
             <div className="flex flex-wrap items-center gap-2">
               <h1 className="text-2xl font-semibold tracking-normal">{copy.header.title}</h1>
               <StatusBadge ok={xero.connected} trueLabel={copy.header.connected} falseLabel={copy.header.disconnected} />
-              <StatusBadge ok={actionGate?.enabled} trueLabel={copy.header.writesEnabled} falseLabel={copy.header.writesGated} tone={actionGate?.enabled ? 'emerald' : 'amber'} />
+              <StatusBadge ok={status?.externalActions?.xero_financial_sync?.enabled} trueLabel={language === 'en' ? 'Financial sync enabled' : '財務同步已啟用'} falseLabel={language === 'en' ? 'Financial sync disabled' : '財務同步已停用'} tone={status?.externalActions?.xero_financial_sync?.enabled ? 'emerald' : 'amber'} />
             </div>
             <p className="mt-1 max-w-4xl text-sm text-muted-foreground">{copy.header.subtitle}</p>
           </div>
@@ -337,7 +337,7 @@ export default function XeroPortal() {
 
         {error ? <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div> : null}
 
-        <section className="grid gap-3 lg:grid-cols-4">
+        <details className="rounded-lg border border-border p-3"><summary className="cursor-pointer text-sm">{language === 'en' ? 'Connection and system details' : '連線及系統資料'}</summary><section className="mt-3 grid gap-3 lg:grid-cols-4">
           <ConnectionPanel unavailable={copy.common.unavailable} title={copy.panels.tenant} rows={[
             [copy.panels.organisation, xero.tenantName || copy.panels.notConnected],
             [copy.panels.tenantId, xero.tenantId || copy.common.unavailable],
@@ -363,7 +363,7 @@ export default function XeroPortal() {
             [copy.panels.created, String(autoRun?.summary?.created || 0)],
             [copy.panels.skippedFailed, `${autoRun?.summary?.skipped || 0} / ${autoRun?.summary?.failed || 0}`],
           ]} />
-        </section>
+        </section></details>
 
         <Tabs value={tab} onValueChange={setTab} className="w-full">
           <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1">

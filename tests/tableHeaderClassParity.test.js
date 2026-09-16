@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 // Baseline static class values, in document order, before literal deduplication.
+// The Dispute Workflow baseline includes the reviewed 2.0.212 party cards and mobile layout.
 // Resolving the shared constants must preserve every class byte and occurrence.
 const baseline = [
   {
@@ -31,7 +32,7 @@ const baseline = [
       "DETAIL_HEADER_RIGHT": 6,
       "STICKY_HEADER_LEFT": 8
     },
-    "hash": "e6b17c0afbba8504c29be07aa5d1ac06ef6eb12117d2f9b378c76c7f913cd65d"
+    "hash": "8ccce0b01b7d795cb65299dda39d06256091b06b57c199f5870ff54adfdb92f2"
   }
 ];
 
@@ -50,4 +51,3 @@ for (const { file, counts, hash } of baseline) {
     assert.equal(createHash('sha256').update(JSON.stringify(values)).digest('hex'), hash);
   });
 }
-

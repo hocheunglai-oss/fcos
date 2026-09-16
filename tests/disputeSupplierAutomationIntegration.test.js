@@ -72,7 +72,7 @@ test('new supplier financial outcomes count the commercial amount once', () => {
 test('workflow UI separates commercial outcomes from Finance settlement controls', () => {
   assert.match(workflowPageSource, /value: 'resolve_supplier_dispute'.*partyType: 'supplier'/);
   assert.match(workflowPageSource, /value: 'close_supplier_dispute'.*partyType: 'supplier'/);
-  assert.match(workflowPageSource, /const NEW_ACTION_TYPES = ACTION_TYPES\.filter\(\(action\) => !action\.legacy\)/);
+  assert.match(workflowPageSource, /ACTION_TYPES\.filter\(\(action\) => \(\!action\.legacy \|\| action\.value === draftAction\.actionType\)/);
   assert.match(workflowPageSource, /Trader records the commercial agreement here/);
   assert.match(workflowPageSource, /Supplier invoice currency/);
   assert.match(workflowPageSource, /Read automatically from the supplier invoice/);
