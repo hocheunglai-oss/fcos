@@ -103,7 +103,7 @@ jobs:
             if (!evidence) {
               core.setFailed(
                 `No successful, non-expired trusted authenticated-candidate evidence artifact exists for ${sha}. `
-                + 'A reviewer must dispatch authenticated-release from the default branch with this exact SHA and immutable candidate URL.',
+                + 'Release automation must dispatch authenticated-release from the protected default branch with this exact SHA and immutable candidate URL.',
               );
             }
 

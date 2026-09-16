@@ -25,7 +25,7 @@ export async function verifyRelease({
   cleanup = removePrivateE2eState,
 } = {}) {
   // Run only from reviewed source. This local gate does not create the trusted
-  // workflow's evidence artifact or bypass its protected environment review.
+  // workflow's evidence artifact or replace its protected environment checks.
   const browser = assertReleaseBrowserEnvironment(environment);
   if (checkedOutCommit() !== browser.expectedCommit) throw new Error('Release checkout must match FCOS_E2E_EXPECTED_COMMIT.');
   const candidate = await verify(browser);

@@ -56,3 +56,15 @@ Every DEVEE-deployed Salesforce metadata change must also be published byte-for-
 - When a downstream stage fails and `force-app/main/default/` has not changed, resume at that failed environment after rechecking upstream deployment reports, the DEVEE source hash, the shared mirror, org identity, and permissions. Do not rerun completed DEVEE or QAT stages.
 - Restart from DEVEE only when the authoritative Salesforce source tree changes. Script, documentation, FCOS frontend, Supabase, or deployment-orchestration changes do not invalidate an already successful Salesforce source hash.
 - Prefer a targeted configuration correction and focused tests for confirmed environment drift, then resume the pending environment. A targeted correction must still originate in DEVEE, update the shared draft PR byte-for-byte, and pass through QAT before Production.
+
+
+## Routine FCOS web releases
+
+The repository owner authorized removing recurring release approvals on 16 September 2026.
+
+- The `fcos-ci-readonly` environment must remain limited to the `main` branch, with no required reviewers or wait timer. Do not ask the user to approve this environment for each build or retry.
+- Retain all required branch checks, administrator enforcement, the protected default-branch harness, exact Git/Vercel candidate identity checks, restricted renewable test credentials, API denial tests, and non-secret release evidence. Never replace these checks with an approval or bypass.
+- Review the patch and dispatch the trusted read-only verification automatically as part of an authorized release. Deploy only after every required check passes and the exact candidate is verified.
+- After the one-time standing FCOS Preview callback is configured, reuse it for matching immutable deployment origins. Do not add and remove an individual callback for each matching build. Verify that the callback is limited to the pinned FCOS project/team and the federated login path.
+- New or broader security access changes remain subject to applicable tool confirmation rules. Salesforce promotion order, financial approvals, and customer-message authorization are unchanged.
+- This current policy supersedes recurring human-review instructions in historical release notes. It does not authorize weakening required checks or expanding test-account permissions.
