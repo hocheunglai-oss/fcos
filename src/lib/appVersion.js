@@ -4,6 +4,16 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.214',
+    releasedAt: '2026-09-16',
+    title: 'Dashboard recovery and clearer system alerts',
+    changes: [
+      'Stops repeated analytics requests after a failed refresh and provides an explicit Retry action.',
+      'Recovers brief Salesforce read outages with bounded retries while leaving writes unchanged.',
+      'Identifies Dashboard failures clearly in system notifications.',
+    ],
+  },
+  {
     version: '2.0.213',
     releasedAt: '2026-09-16',
     title: 'Reliable dispute preparation',

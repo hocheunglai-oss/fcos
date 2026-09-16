@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Bar, Cell, ComposedChart, Legend, Line, Rectangle, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Info, Loader2 } from 'lucide-react';
 import StateBlock from '@/components/common/StateBlock';
+import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 
 const MONTH_FORMATTER = new Intl.DateTimeFormat(undefined, { month: 'short', year: 'numeric', timeZone: 'UTC' });
@@ -74,9 +75,10 @@ function TopAccounts({ rows, counterpartyMode, onAccountClick }) {
 export default function DashboardAnalytics({ data, loading, error, onLoad, counterpartyMode = 'buyer', onAccountClick }) {
   useEffect(() => { onLoad?.(); }, [onLoad]);
   if (loading && !data) return <div className="flex min-h-56 items-center justify-center gap-2 rounded-xl border border-border bg-card text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />Loading analytics…</div>;
-  if (error && !data) return <StateBlock title="Analytics unavailable" description={error} />;
+  const failure = error ? <StateBlock title="Analytics unavailable" description={data ? `${error} Showing the last loaded analytics for this selection.` : error} action={<Button type="button" variant="outline" disabled={loading} onClick={() => onLoad?.({ force: true })}>Retry analytics</Button>} /> : null;
+  if (failure && !data) return failure;
   const monthlyComparison = data?.trend?.monthlyComparison || null;
   const ranking = counterpartyMode === 'supplier' ? data?.rankings?.suppliersByNetPnl || [] : data?.rankings?.accountsByNetPnl || [];
-  if (!monthlyComparison?.rows?.length && !ranking.length) return <StateBlock title="No analytics for this selection" description="Try a wider period or remove a filter." />;
-  return <div className="space-y-4"><MonthlyPerformanceChart comparison={monthlyComparison} /><TopAccounts rows={ranking} counterpartyMode={counterpartyMode} onAccountClick={onAccountClick} /></div>;
+  if (!monthlyComparison?.rows?.length && !ranking.length) return failure || <StateBlock title="No analytics for this selection" description="Try a wider period or remove a filter." />;
+  return <div className="space-y-4">{failure}<MonthlyPerformanceChart comparison={monthlyComparison} /><TopAccounts rows={ranking} counterpartyMode={counterpartyMode} onAccountClick={onAccountClick} /></div>;
 }
