@@ -218,3 +218,13 @@ test('all Graph report and reminder handlers pass an explicit database client', 
   assert.match(outstanding, /const deliveryClient = activeAccess\?\.client \|\| safeSupabaseAdminClient\(\)/);
   assert.match(outstanding, /client: deliveryClient, purposeKey: 'outstanding_invoice_reports'/);
 });
+
+test('Dashboard notifications identify the failing workspace and recovery action', () => {
+  for (const handler of ['dashboardSummary', 'dashboardAnalytics', 'dashboardStemList']) {
+    const descriptor = systemErrorPublicDescriptor(handler);
+    assert.match(descriptor.title, /Dashboard/);
+    assert.match(descriptor.message, /retry/i);
+    assert.match(descriptor.link, /^\//);
+  }
+  assert.match(systemErrorPublicDescriptor('dashboardAnalytics').message, /Retry analytics/);
+});

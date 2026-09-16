@@ -1,6 +1,21 @@
 import { createHash } from 'node:crypto';
 
 const HANDLER_CONTEXT = {
+  dashboardSummary: {
+    title: 'Dashboard figures could not be refreshed',
+    message: 'Dashboard figures could not be loaded from Salesforce. Open Dashboard and retry the refresh.',
+    link: '/',
+  },
+  dashboardAnalytics: {
+    title: 'Dashboard analytics could not be refreshed',
+    message: 'Dashboard trends and rankings could not be loaded from Salesforce. Open Dashboard and select Retry analytics.',
+    link: '/',
+  },
+  dashboardStemList: {
+    title: 'Dashboard STEM list could not be refreshed',
+    message: 'The Dashboard STEM list could not be loaded from Salesforce. Open Dashboard and retry the refresh.',
+    link: '/?tab=stems',
+  },
   outstandingBuyerInvoicesEmailReport: {
     title: 'Outstanding buyer invoices report failed',
     message: 'The internal outstanding buyer invoices report could not be completed. The error has been recorded for follow-up.',
