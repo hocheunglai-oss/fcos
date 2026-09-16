@@ -64,7 +64,15 @@ test.describe('Dashboard', () => {
     await expect(page.getByRole('button', { name: 'P&L table', exact: true })).toHaveCount(0);
     await expect(page.getByRole('heading', { name: 'Filtered STEMs P&L' })).toHaveCount(0);
 
-    await page.getByRole('tab', { name: 'Accounts', exact: true }).click();
+    // Account rows render before their initial exposure effect starts. Finish
+    // that initial load before measuring whether the statement causes a refetch.
+    const [exposureResponse] = await Promise.all([
+      page.waitForResponse((response) => new URL(response.url()).pathname === '/api/functions/dashboardAccountExposureBatch'
+        && response.request().method() === 'POST', { timeout: 30_000 }),
+      page.getByRole('tab', { name: 'Accounts', exact: true }).click(),
+    ]);
+    expect(exposureResponse.status(), 'Initial account exposure must return successfully').toBe(200);
+    expect(await exposureResponse.finished(), 'Initial account exposure response must finish').toBeNull();
     await expect(page.getByRole('tab', { name: 'Accounts', exact: true })).toHaveAttribute('data-state', 'active');
     await expect(page.getByRole('heading', { name: 'Accounts', exact: true })).toBeVisible();
     await expect(page.getByText('Netting may conceal gross receivable and payable risk.')).toHaveCount(0);
