@@ -861,31 +861,64 @@ export function buyingPower({ clearing = [], swaps = [], mops = [], margins = IC
   };
 }
 
-export function buildExposureRows(physicals = [], swaps = [], mops = [], sgoRatio = 7.45, forwardSpreads = {}, governedValuation = null) {
+// Quantity coverage is shared by Hedge Desk and the read-only Markets summary.
+// Net opposing hedge directions before taking the absolute covered quantity.
+function quantityCoverageGroups(physicals = [], swaps = [], sgoRatio = 7.45) {
   const groups = new Map();
-  const ensure = (counterparty, product, unit) => {
-    const key = `${counterparty || "Unassigned"}::${product || "Unknown"}`;
-    if (!groups.has(key)) groups.set(key, { key, counterparty: counterparty || "Unassigned", product, unit, physicalQty: 0, hedgeQty: 0, physicalPnl: 0, swapMtm: 0, physicalPnlAvailable: true, swapMtmAvailable: true, valuationWarnings: [] });
+  const ensure = (row) => {
+    const key = `${row.counterparty || "Unassigned"}::${row.product || "Unknown"}`;
+    if (!groups.has(key)) groups.set(key, { key, counterparty: row.counterparty || "Unassigned", product: row.product, unit: row.product === "SGO" ? "BBL" : "MT", physicalQty: 0, hedgeQty: 0 });
     return groups.get(key);
   };
+  physicals.filter((row) => !row.is_closed).forEach((row) => {
+    ensure(row).physicalQty += physicalMidQuantity(row, sgoRatio);
+  });
+  swaps.filter(isCoverageSwap).forEach((row) => {
+    const quantity = row.product === "SGO" && String(row.unit).toLowerCase() === "mt"
+      ? asNumber(row.quantity) * sgoRatio
+      : row.product !== "SGO" && String(row.unit).toLowerCase() === "bbl"
+        ? asNumber(row.quantity) / sgoRatio
+        : asNumber(row.quantity);
+    ensure(row).hedgeQty += quantity * (row.direction === "SELL" ? -1 : 1);
+  });
+  return groups;
+}
+
+export function isCoverageSwap(row) {
+  return isSwapLive(row) && Boolean(row.counterparty) && !BROKER_EXCHANGE.includes(row.counterparty);
+}
+
+function summarizeQuantityCoverage(item) {
+  const hedgeQty = Math.abs(item.hedgeQty);
+  return {
+    physicalQty: roundMoney(item.physicalQty),
+    hedgeQty: roundMoney(hedgeQty),
+    netExposure: roundMoney(item.physicalQty - hedgeQty),
+    hedgeRatio: item.physicalQty > 0 ? (hedgeQty / item.physicalQty) * 100 : null,
+  };
+}
+
+export function buildQuantityCoverageRows(physicals = [], swaps = [], sgoRatio = 7.45) {
+  return [...quantityCoverageGroups(physicals, swaps, sgoRatio).values()]
+    .map((item) => ({ ...item, ...summarizeQuantityCoverage(item) }))
+    .sort((a, b) => Math.abs(b.netExposure) - Math.abs(a.netExposure));
+}
+
+export function buildExposureRows(physicals = [], swaps = [], mops = [], sgoRatio = 7.45, forwardSpreads = {}, governedValuation = null) {
+  const groups = quantityCoverageGroups(physicals, swaps, sgoRatio);
+  for (const item of groups.values()) Object.assign(item, { physicalPnl: 0, swapMtm: 0, physicalPnlAvailable: true, swapMtmAvailable: true, valuationWarnings: [] });
+  const ensure = (counterparty, product) => groups.get(`${counterparty || "Unassigned"}::${product || "Unknown"}`);
 
   physicals.filter((row) => !row.is_closed).forEach((row) => {
-    const item = ensure(row.counterparty, row.product, row.product === "SGO" ? "BBL" : "MT");
-    item.physicalQty += physicalMidQuantity(row, sgoRatio);
+    const item = ensure(row.counterparty, row.product);
     const result = calcPhysicalPnl(row, mops, sgoRatio, governedValuation);
     if (!result) {
       item.physicalPnlAvailable = false;
       item.valuationWarnings.push({ recordId: row.id, type: "physical", reason: governedValuation?.mode === "platts_curve_active" ? "governed_settlement_unavailable" : "market_average_unavailable" });
     } else item.physicalPnl += result.value;
   });
-  swaps.filter((row) => isSwapLive(row) && row.counterparty && !BROKER_EXCHANGE.includes(row.counterparty)).forEach((row) => {
-    const item = ensure(row.counterparty, row.product, row.product === "SGO" ? "BBL" : "MT");
-    const quantity = row.product === "SGO" && String(row.unit).toLowerCase() === "mt"
-      ? asNumber(row.quantity) * sgoRatio
-      : row.product !== "SGO" && String(row.unit).toLowerCase() === "bbl"
-        ? asNumber(row.quantity) / sgoRatio
-        : asNumber(row.quantity);
-    item.hedgeQty += quantity * (row.direction === "SELL" ? -1 : 1);
+  swaps.filter(isCoverageSwap).forEach((row) => {
+    const item = ensure(row.counterparty, row.product);
     const valuationRecords = governedValuation?.mode === "platts_curve_active" ? mops : mopsForExposureSwap(row, mops, forwardSpreads);
     const result = calcSwapMtm(row, valuationRecords, sgoRatio, governedValuation);
     if (!result) {
@@ -895,13 +928,9 @@ export function buildExposureRows(physicals = [], swaps = [], mops = [], sgoRati
   });
 
   return [...groups.values()].map((item) => {
-    const hedgeQty = Math.abs(item.hedgeQty);
     return {
       ...item,
-      physicalQty: roundMoney(item.physicalQty),
-      hedgeQty: roundMoney(hedgeQty),
-      netExposure: roundMoney(item.physicalQty - hedgeQty),
-      hedgeRatio: item.physicalQty > 0 ? (hedgeQty / item.physicalQty) * 100 : null,
+      ...summarizeQuantityCoverage(item),
       physicalPnl: item.physicalPnlAvailable ? roundMoney(item.physicalPnl) : null,
       swapMtm: item.swapMtmAvailable ? roundMoney(item.swapMtm) : null,
       combinedPnl: item.physicalPnlAvailable && item.swapMtmAvailable ? roundMoney(item.physicalPnl + item.swapMtm) : null,

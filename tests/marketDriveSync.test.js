@@ -162,6 +162,13 @@ test('secondary MOPS CSV parser accepts exact complete triples and skips incompl
   assert.match(parsed.sourceMd5, /^[a-f0-9]{32}$/);
 });
 
+test('secondary CSV diagnoses an entirely empty price series without relaxing matched-history guards', () => {
+  const csv = secondaryCsvFixture().toString().replace(/,(5[0-2][0-9]),/g, ',,');
+  assert.throws(() => parseMarketMopsCsv(Buffer.from(csv)), (error) => error.code === 'MARKET_SECONDARY_CSV_EMPTY_SERIES' && error.message.includes('PPXDK00'));
+  const short = secondaryCsvFixture().toString().split('\n').slice(0, 12).join('\n');
+  assert.throws(() => parseMarketMopsCsv(Buffer.from(short)), (error) => error.code === 'MARKET_SECONDARY_CSV_HISTORY_INSUFFICIENT');
+});
+
 test('secondary MOPS CSV preserves Core export decimal commas and strict thousands groups', () => {
   for (const [input, expected] of [['"785,44"', 785.44], ['"172,2"', 172.2], ['"1,234.56"', 1234.56], ['"1,234"', 1234], ['785.44', 785.44]]) {
     const csv = Buffer.from(secondaryCsvFixture().toString().replace('700,500,100', `${input},500,100`));

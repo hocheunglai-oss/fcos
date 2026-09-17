@@ -54,7 +54,7 @@ function digitsFor(unit) {
 }
 
 function formatValue(value, unit) {
-  if (value == null || !Number.isFinite(Number(value))) return 'Unavailable';
+  if (value == null || String(value).trim() === '' || !Number.isFinite(Number(value))) return 'Unavailable';
   return `${Number(value).toLocaleString('en-US', {
     minimumFractionDigits: digitsFor(unit), maximumFractionDigits: digitsFor(unit),
   })}${unit ? ` ${unit}` : ''}`;
@@ -72,6 +72,14 @@ function formatMonth(value) {
   if (!value || !/^\d{4}-\d{2}/.test(value)) return 'Current-month';
   const date = new Date(`${value.slice(0, 7)}-01T00:00:00.000Z`);
   return new Intl.DateTimeFormat('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(date);
+}
+
+function formatDateTime(value) {
+  if (!value) return 'Check time unavailable';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? String(value) : new Intl.DateTimeFormat('en-GB', {
+    day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'UTC', timeZoneName: 'short',
+  }).format(date);
 }
 
 function spreadFor(product, key) {
@@ -98,9 +106,11 @@ function monthEstimateLabel(pulse, estimate) {
   return `${formatMonth(pulse?.currentMonth)} estimate`;
 }
 
-function detailsFor({ label, product, metric, pulse, value, unit, extra = [] }) {
+function detailsFor({ label, product, metric, pulse, value, unit, extra = [], allowProductSourceFallback = true }) {
   const estimate = metric === product?.monthlyEstimate;
-  const sourceCodes = metric?.sourceCodes || product?.sourceCodes || [metric?.sourceCode || product?.sourceCode].filter(Boolean);
+  const sourceCodes = metric?.sourceCodes
+    || (allowProductSourceFallback ? product?.sourceCodes : null)
+    || [metric?.sourceCode || (allowProductSourceFallback ? product?.sourceCode : null)].filter(Boolean);
   const detailRows = [
     ['Value', formatValue(value, unit)],
     ['Unit', unit || 'Unavailable'],
@@ -130,14 +140,21 @@ function LatestMops({ product, pulse, onSelect }) {
   const mops = product.latestMops || {};
   return <MetricButton label={`${productLabel(product)} latest MOPS`} onSelect={onSelect} detail={detailsFor({ label: `${productLabel(product)} latest MOPS`, product, metric: mops, pulse, value: mops.value, unit: product.unit })}>
     <strong className="market-price-board__price">{formatValue(mops.value, product.unit)}</strong>
-    <span>{mops.publicationDate ? `Published ${formatDate(mops.publicationDate)}` : 'No publication date'}</span>
+    <span>{productKey(product) === 'lsmgo' ? 'Singapore gasoil benchmark · ' : ''}{mops.publicationDate ? `Published ${formatDate(mops.publicationDate)}` : 'No publication date'}</span>
   </MetricButton>;
 }
 
 function PublishedMove({ product, pulse, onSelect }) {
   const comparison = product.latestMops?.comparison || {};
   const unit = comparison.unit || product.unit;
-  return <MetricButton label={`${productLabel(product)} published move`} onSelect={onSelect} detail={detailsFor({ label: `${productLabel(product)} published move`, product, metric: comparison, pulse, value: comparison.change, unit, extra: [['Comparison', comparison.available ? `Against ${formatDate(comparison.previousDate)}` : 'No complete prior comparison']] })}>
+  const detailMetric = {
+    ...comparison,
+    publicationDate: comparison.currentDate,
+    basis: comparison.basis || 'Difference between current and previous published MOPS assessments',
+    sourceSampleCount: comparison.available ? comparison.sourceSampleCount ?? 2 : comparison.sourceSampleCount,
+    comparison: { previousDate: comparison.previousDate },
+  };
+  return <MetricButton label={`${productLabel(product)} published move`} onSelect={onSelect} detail={detailsFor({ label: `${productLabel(product)} published move`, product, metric: detailMetric, pulse, value: comparison.available ? comparison.change : null, unit, extra: [['Comparison', comparison.available ? `${formatDate(comparison.currentDate)} against ${formatDate(comparison.previousDate)}` : 'No complete prior comparison']] })}>
     <MarketSignedValue value={comparison.available ? comparison.change : null} unit={unit} digits={digitsFor(unit)} suffix={comparison.available ? `vs ${formatDate(comparison.previousDate)}` : ''} unavailableLabel="No prior comparison" />
   </MetricButton>;
 }
@@ -145,13 +162,17 @@ function PublishedMove({ product, pulse, onSelect }) {
 function SingaporeDelivered({ product, pulse, onSelect }) {
   const delivered = product.singaporeDelivered || {};
   const premium = delivered.premium || {};
-  const unit = delivered.unit || product.unit;
-  return <MetricButton label={`${productLabel(product)} Singapore delivered price`} onSelect={onSelect} detail={detailsFor({ label: `${productLabel(product)} Singapore delivered price`, product, metric: delivered, pulse, value: delivered.value, unit, extra: [['Day change', delivered.dayChange == null ? null : formatValue(delivered.dayChange, unit)], ['Premium', premium.value == null ? null : `${formatValue(premium.value, premium.unit || unit)}${premium.date ? ` · ${formatDate(premium.date)}` : ''}`]] })}>
+  const unit = delivered.unit || 'USD/MT';
+  return <MetricButton label={`${productLabel(product)} Singapore delivered price`} onSelect={onSelect} detail={detailsFor({ label: `${productLabel(product)} Singapore delivered price`, product, metric: delivered, pulse, value: delivered.value, unit, allowProductSourceFallback: false, extra: [['Day change', delivered.dayChange == null ? null : formatValue(delivered.dayChange, unit)], ['Premium basis', premium.basis || null], ['Premium', premium.value == null ? null : `${formatValue(premium.value, premium.unit || unit)}${premium.date ? ` · ${formatDate(premium.date)}` : ''}`]] })}>
     <strong className="market-price-board__price">{formatValue(delivered.value, unit)}</strong>
     <span>{delivered.publicationDate ? `Published ${formatDate(delivered.publicationDate)}` : 'No Singapore delivered quote'}</span>
     {delivered.dayChange != null ? <MarketSignedValue value={delivered.dayChange} unit={unit} digits={digitsFor(unit)} suffix="day change" /> : null}
     {premium.value != null ? <><span>Premium vs MOPS</span><MarketSignedValue value={premium.value} unit={premium.unit || unit} digits={digitsFor(premium.unit || unit)} suffix={premium.date ? `· ${formatDate(premium.date)}` : ''} /></> : null}
   </MetricButton>;
+}
+
+function OptionalSingaporeDelivered({ product, pulse, compact, onSelect }) {
+  return !compact ? <SingaporeDelivered product={product} pulse={pulse} onSelect={onSelect} /> : null;
 }
 
 function MonthlyEstimate({ product, pulse, onSelect }) {
@@ -183,12 +204,11 @@ function ProductIdentity({ product }) {
   return <div className="market-price-board__product"><strong>{productLabel(product)}</strong><span>{product.sourceCode ? `(${product.sourceCode})` : 'Source code unavailable'}</span></div>;
 }
 
-function BoardRow({ product, pulse, compact, onSelect }) {
+function CompactBoardRow({ product, pulse, onSelect }) {
   return <article className={`market-price-board__row market-price-board__row--${productKey(product)}`} role="row">
     <ProductIdentity product={product} />
     <LatestMops product={product} pulse={pulse} onSelect={onSelect} />
     <PublishedMove product={product} pulse={pulse} onSelect={onSelect} />
-    {!compact ? <SingaporeDelivered product={product} pulse={pulse} onSelect={onSelect} /> : null}
     <MonthlyEstimate product={product} pulse={pulse} onSelect={onSelect} />
     <CurveMetric product={product} pulse={pulse} spreadKey="bmM1" label="BM−M1" onSelect={onSelect} />
     <CurveMetric product={product} pulse={pulse} spreadKey="m1M2" label="M1−M2" onSelect={onSelect} />
@@ -199,16 +219,82 @@ function BoardRow({ product, pulse, compact, onSelect }) {
 function MobileCard({ product, pulse, compact, onSelect }) {
   return <article className={`market-price-board__card market-price-board__card--${productKey(product)}`}>
     <ProductIdentity product={product} />
-    <div className="market-price-board__card-grid">
+    <div className={cn('market-price-board__card-grid', !compact && 'market-price-board__card-grid--primary')}>
       <div><span>Latest MOPS</span><LatestMops product={product} pulse={pulse} onSelect={onSelect} /></div>
       <div><span>Published move</span><PublishedMove product={product} pulse={pulse} onSelect={onSelect} /></div>
-      {!compact ? <div><span>Singapore delivered</span><SingaporeDelivered product={product} pulse={pulse} onSelect={onSelect} /></div> : null}
-      <div><span>Month estimate</span><MonthlyEstimate product={product} pulse={pulse} onSelect={onSelect} /></div>
-      <div><span>BM−M1</span><CurveMetric product={product} pulse={pulse} spreadKey="bmM1" label="BM−M1" onSelect={onSelect} /></div>
-      <div><span>M1−M2</span><CurveMetric product={product} pulse={pulse} spreadKey="m1M2" label="M1−M2" onSelect={onSelect} /></div>
-      <div><span>Curve</span><Regime product={product} pulse={pulse} onSelect={onSelect} /></div>
+      {!compact ? <div><span>Singapore delivered</span><OptionalSingaporeDelivered product={product} pulse={pulse} compact={compact} onSelect={onSelect} /></div> : null}
+      {compact ? <><div><span>Month estimate</span><MonthlyEstimate product={product} pulse={pulse} onSelect={onSelect} /></div><div><span>BM−M1</span><CurveMetric product={product} pulse={pulse} spreadKey="bmM1" label="BM−M1" onSelect={onSelect} /></div><div><span>M1−M2</span><CurveMetric product={product} pulse={pulse} spreadKey="m1M2" label="M1−M2" onSelect={onSelect} /></div><div><span>Curve</span><Regime product={product} pulse={pulse} onSelect={onSelect} /></div></> : null}
     </div>
+    {!compact ? <details className="market-price-board__card-secondary"><summary>Month estimate &amp; forward structure</summary><div className="market-price-board__card-grid"><div><span>Month estimate</span><MonthlyEstimate product={product} pulse={pulse} onSelect={onSelect} /></div><div><span>BM−M1</span><CurveMetric product={product} pulse={pulse} spreadKey="bmM1" label="BM−M1" onSelect={onSelect} /></div><div><span>M1−M2</span><CurveMetric product={product} pulse={pulse} spreadKey="m1M2" label="M1−M2" onSelect={onSelect} /></div><div><span>Curve</span><Regime product={product} pulse={pulse} onSelect={onSelect} /></div></div></details> : null}
   </article>;
+}
+
+function PrimaryBoardRow({ product, pulse, onSelect }) {
+  return <article className={`market-price-board__primary-row market-price-board__primary-row--${productKey(product)}`} role="row">
+    <ProductIdentity product={product} />
+    <LatestMops product={product} pulse={pulse} onSelect={onSelect} />
+    <PublishedMove product={product} pulse={pulse} onSelect={onSelect} />
+    <SingaporeDelivered product={product} pulse={pulse} onSelect={onSelect} />
+  </article>;
+}
+
+function SecondaryBoardRow({ product, pulse, onSelect }) {
+  return <article className="market-price-board__secondary-row" role="row">
+    <ProductIdentity product={product} />
+    <MonthlyEstimate product={product} pulse={pulse} onSelect={onSelect} />
+    <CurveMetric product={product} pulse={pulse} spreadKey="bmM1" label="BM−M1" onSelect={onSelect} />
+    <CurveMetric product={product} pulse={pulse} spreadKey="m1M2" label="M1−M2" onSelect={onSelect} />
+    <Regime product={product} pulse={pulse} onSelect={onSelect} />
+  </article>;
+}
+
+function sourceStatusLabel(status) {
+  const normalized = String(status || 'unknown').replaceAll('_', ' ').trim();
+  return normalized ? normalized.charAt(0).toUpperCase() + normalized.slice(1) : 'Unknown';
+}
+
+function SourceHealthNotice({ sourceHealth }) {
+  if (!sourceHealth) return null;
+  const sources = rows(sourceHealth.sources);
+  const status = String(sourceHealth.status || 'unknown').toLowerCase();
+  const impaired = !['healthy', 'ok', 'available', 'current'].includes(status)
+    || sources.some((source) => !['healthy', 'ok', 'available', 'current'].includes(String(source?.status || '').toLowerCase()));
+  return <details className={cn('market-price-board__source-health', impaired && 'market-price-board__source-health--warning')} open={impaired}>
+    <summary>
+      <span><strong>Current source status · {sourceStatusLabel(sourceHealth.status)}</strong><small>Checked {formatDateTime(sourceHealth.checkedAt)}</small></span>
+      <span>{impaired ? 'Review affected sources' : 'All reported sources available'}</span>
+    </summary>
+    <div className="market-price-board__source-list">
+      {sourceHealth.message ? <p className="market-price-board__source-message">{sourceHealth.message}</p> : null}
+      {sources.length ? sources.map((source, index) => <article key={source?.key || `${source?.label || 'source'}:${index}`}>
+        <div><strong>{source?.label || source?.key || 'Market source'}</strong><span className={`market-price-board__source-state market-price-board__source-state--${String(source?.status || 'unknown').toLowerCase()}`}>{sourceStatusLabel(source?.status)}</span></div>
+        <small>{[
+          source?.lastPublicationDate ? `Latest publication ${formatDate(source.lastPublicationDate)}` : null,
+          source?.lastSuccessAt ? `Last successful import ${formatDateTime(source.lastSuccessAt)}` : null,
+        ].filter(Boolean).join(' · ') || 'No successful source timestamp is available'}</small>
+        {source?.message ? <p>{source.message}</p> : null}
+      </article>) : <p>No per-source status was supplied.</p>}
+      {impaired ? <p>The displayed valid market data remains available. This notice applies only to the affected source and its later publications.</p> : null}
+    </div>
+  </details>;
+}
+
+function FullBoard({ products, pulse, reconstructedEstimate, onSelect }) {
+  return <>
+    <SourceHealthNotice sourceHealth={pulse?.sourceHealth} />
+    <div className="market-price-board__primary" role="table" aria-label="Primary market price comparison">
+      <div className="market-price-board__primary-header" role="row"><span>Product</span><span>Latest MOPS</span><span>Previous publication change</span><span>Singapore delivered</span></div>
+      {products.map((product) => <PrimaryBoardRow key={product.productKey || product.productName} product={product} pulse={pulse} onSelect={onSelect} />)}
+    </div>
+    <details className="market-price-board__secondary">
+      <summary><span><strong>Month estimates &amp; forward structure</strong><small>Secondary detail for the same three products</small></span><span>View detail</span></summary>
+      <div className="market-price-board__secondary-table" role="table" aria-label="Month estimates and forward structure">
+        <div className="market-price-board__secondary-header" role="row"><span>Product</span><span>{reconstructedEstimate ? 'Reconstructed month estimate' : 'Month estimate'}</span><span>BM−M1</span><span>M1−M2</span><span>Curve</span></div>
+        {products.map((product) => <SecondaryBoardRow key={product.productKey || product.productName} product={product} pulse={pulse} onSelect={onSelect} />)}
+      </div>
+    </details>
+    <div className="market-price-board__mobile">{products.map((product) => <MobileCard key={product.productKey || product.productName} product={product} pulse={pulse} compact={false} onSelect={onSelect} />)}</div>
+  </>;
 }
 
 export function MarketPriceBoard({ pulse, compact = false }) {
@@ -228,12 +314,11 @@ export function MarketPriceBoard({ pulse, compact = false }) {
   };
 
   return <section className={cn('market-price-board-panel', compact && 'market-price-board-panel--compact')} aria-label={compact ? 'Market Pulse price board' : 'Market price board'}>
-    {!compact ? <div className="market-price-board__heading"><div><h2>Market price board</h2><p>{monthLabel}. Select a metric for source, basis, unit, date, and sample details.</p></div><span className="market-price-board__mode">{pulse?.mode === 'historical' ? 'Historical' : 'Latest'}</span></div> : null}
-    <div className="market-price-board__desktop" role="table" aria-label={compact ? 'Compact Market Pulse price board' : 'Market price board'}>
-      <div className="market-price-board__header" role="row"><span>Product</span><span>Latest MOPS</span><span>Published move</span>{!compact ? <span>Singapore delivered</span> : null}<span>{reconstructedEstimate ? 'Reconstructed month estimate' : 'Month estimate'}</span><span>BM−M1</span><span>M1−M2</span><span>Curve</span></div>
-      {products.map((product) => <BoardRow key={product.productKey || product.productName} product={product} pulse={pulse} compact={compact} onSelect={selectDetail} />)}
-    </div>
-    <div className="market-price-board__mobile">{products.map((product) => <MobileCard key={product.productKey || product.productName} product={product} pulse={pulse} compact={compact} onSelect={selectDetail} />)}</div>
+    {!compact ? <div className="market-price-board__heading"><div><h2>Market price board</h2><p>{monthLabel}. Published assessments · select a price for its source and calculation basis.</p></div><span className="market-price-board__mode">{pulse?.mode === 'historical' ? 'Historical' : 'Latest'}</span></div> : null}
+    {compact ? <><div className="market-price-board__desktop" role="table" aria-label="Compact Market Pulse price board">
+      <div className="market-price-board__header" role="row"><span>Product</span><span>Latest MOPS</span><span>Published move</span><span>{reconstructedEstimate ? 'Reconstructed month estimate' : 'Month estimate'}</span><span>BM−M1</span><span>M1−M2</span><span>Curve</span></div>
+      {products.map((product) => <CompactBoardRow key={product.productKey || product.productName} product={product} pulse={pulse} onSelect={selectDetail} />)}
+    </div><div className="market-price-board__mobile">{products.map((product) => <MobileCard key={product.productKey || product.productName} product={product} pulse={pulse} compact onSelect={selectDetail} />)}</div></> : <FullBoard products={products} pulse={pulse} reconstructedEstimate={reconstructedEstimate} onSelect={selectDetail} />}
     <Dialog open={Boolean(detail)} onOpenChange={(open) => !open && setDetail(null)}>
       <DialogContent className="max-h-[84vh] max-w-xl overflow-y-auto" onCloseAutoFocus={restoreMetricFocus}>
         <DialogHeader><DialogTitle>{detail?.label || 'Market metric details'}</DialogTitle><DialogDescription>Read-only evidence for the displayed market metric.</DialogDescription></DialogHeader>
