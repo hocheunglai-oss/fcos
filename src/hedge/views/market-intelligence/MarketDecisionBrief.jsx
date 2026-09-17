@@ -13,6 +13,7 @@ import { formatDate } from '@/hedge/lib/domain';
 import { Button, InlineError, Panel, StatusBadge } from '@/hedge/components/ui';
 import { MarketSignedText } from '@/components/markets/MarketSignedValue';
 import { MarketPriceBoard } from '@/components/markets/MarketPriceBoard';
+import { MarketBookContext } from '@/components/markets/MarketBookContext';
 import {
   projectBriefDriver,
   projectMaterialChange,
@@ -101,7 +102,51 @@ function BriefList({ title, items, empty, icon: Icon = FileSearch, sourceRefs = 
   );
 }
 
-export function MarketDecisionBrief({ initialBrief = null, refreshKey = 0, pulse = null, pulseLoading = false, pulseError = null, intraday = null, requestedDate = null, dateMode = 'latest', onBriefResolved = null, onBriefError = null }) {
+function selectWhatMatters(groups, limit = 3) {
+  const remaining = groups.map((group) => ({ ...group, items: [...group.items] }));
+  const selected = [];
+  while (selected.length < limit && remaining.some((group) => group.items.length)) {
+    for (const group of remaining) {
+      const item = group.items.shift();
+      if (item) selected.push({ ...group, item });
+      if (selected.length === limit) break;
+    }
+  }
+  return selected;
+}
+
+function WhatMatters({ items, sourceRefs, sourceDate, onNavigateMarketView }) {
+  return <Panel className="market-what-matters">
+    <div className="app-panel-header"><div><h2>What matters</h2><p>Key moves and source-backed developments for this report date.</p></div>{items.length ? <StatusBadge tone="neutral">{items.length} developments</StatusBadge> : null}</div>
+    {items.length ? <ol className="market-what-matters__list">{items.map(({ item, category, view, viewLabel }, index) => {
+      const DirectionIcon = directionIcon(item?.direction);
+      return <li key={item?.id || `${category}:${item?.sourceReportId || ''}:${item?.sourcePage || ''}:${index}`}>
+        <span className="market-what-matters__rank">{index + 1}</span>
+        <DirectionIcon size={18} aria-hidden="true" />
+        <div>
+          <span className="market-what-matters__category">{category}</span>
+          <strong><MarketSignedText>{item?.title || item?.label || textOf(item)}</MarketSignedText></strong>
+          {item?.title || item?.label ? <p><MarketSignedText>{textOf(item)}</MarketSignedText></p> : null}
+          <div className="market-brief-item__meta">
+            {item?.metricBasis ? <span><MarketSignedText>{item.metricBasis}</MarketSignedText></span> : null}
+            {item?.sourcePage ? <span>Report page {item.sourcePage}</span> : null}
+            {lineageFor(item, sourceRefs, sourceDate).map((lineage) => <span key={lineage}>{lineage}</span>)}
+          </div>
+          {onNavigateMarketView ? <button type="button" onClick={() => onNavigateMarketView(view)}>Open {viewLabel}</button> : null}
+        </div>
+      </li>;
+    })}</ol> : <div className="market-empty-inline market-empty-inline--compact"><FileSearch size={20} /><div><strong>No threshold development is available</strong><span>No value is inferred from missing report evidence.</span></div></div>}
+  </Panel>;
+}
+
+function BriefDetail({ title, count, children }) {
+  return <details className="market-brief-detail">
+    <summary><span><strong>{title}</strong><small>Source-linked deterministic detail</small></span><StatusBadge tone="neutral">{count}</StatusBadge></summary>
+    <div>{children}</div>
+  </details>;
+}
+
+export function MarketDecisionBrief({ initialBrief = null, refreshKey = 0, pulse = null, pulseLoading = false, pulseError = null, intraday = null, requestedDate = null, dateMode = 'latest', onBriefResolved = null, onBriefError = null, bookContext = null, bookLoading = false, bookError = null, onRetryBook = null, canReadBook = false, onNavigateMarketView = null }) {
   const [brief, setBrief] = useState(initialBrief);
   const [busy, setBusy] = useState(!initialBrief);
   const [error, setError] = useState(null);
@@ -158,22 +203,29 @@ export function MarketDecisionBrief({ initialBrief = null, refreshKey = 0, pulse
   ];
   const projectedDrivers = flatDrivers.map(projectBriefDriver);
   const risks = array(brief?.risks || brief?.risksToWatch);
+  const driverRisks = [...projectedDrivers, ...risks];
+  const whatMatters = selectWhatMatters([
+    { category: 'Published price move', view: 'curves', viewLabel: 'forward curves', items: materialChanges },
+    { category: 'Physical market', view: 'delivered', viewLabel: 'delivered prices', items: dislocations },
+    { category: 'Physical versus paper', view: 'curves', viewLabel: 'forward curves', items: physicalPaper },
+    { category: 'Driver or risk', view: 'drivers', viewLabel: 'research & alerts', items: driverRisks },
+  ]);
   return (
     <div className="market-intelligence-stack" data-testid="market-daily-decision-brief">
       {error ? <InlineError error={error} action={<Button onClick={() => load({ date: dateMode === 'historical' ? requestedDate : null, force: true })}>Retry</Button>} /> : null}
       {brief?.fallbackApplied ? <div className="app-callout app-callout--warning"><AlertTriangle size={15} />{dateMode === 'historical' ? 'Reports for the requested date are not available.' : 'Today’s report pair is not available.'} Showing the latest completed report: {formatDate(brief.displayedDate)}.</div> : null}
       {pulseLoading ? <Panel className="market-price-board-panel"><div className="market-empty-inline"><RefreshCw className="animate-spin" size={20} /><div><strong>Loading market price board</strong><span>Resolving the exact completed report-date snapshot.</span></div></div></Panel> : pulseError ? <InlineError error={pulseError} /> : pulse ? <MarketPriceBoard pulse={{ ...pulse, mode: dateMode }} /> : <Panel className="market-price-board-panel"><div className="market-empty-inline"><RefreshCw size={20} /><div><strong>Market price board unavailable</strong><span>No date-scoped snapshot is available for this report date.</span></div></div></Panel>}
+      <WhatMatters items={whatMatters} sourceRefs={sourceRefs} sourceDate={brief?.asOfDate} onNavigateMarketView={onNavigateMarketView} />
+      {canReadBook ? <MarketBookContext context={bookContext} loading={bookLoading} error={bookError} onRetry={onRetryBook} historical={dateMode === 'historical'} /> : null}
       {intraday}
 
       {array(brief?.sourceWarnings || brief?.warnings).length ? <details className="market-disclosure market-disclosure--warning"><summary><AlertTriangle size={14} /> Data notes ({array(brief?.sourceWarnings || brief?.warnings).length})</summary><div className="market-history-warnings">{array(brief?.sourceWarnings || brief?.warnings).map((warning, index) => <div key={warning?.id || `${warning?.code || 'warning'}:${index}`}><AlertTriangle size={14} /><MarketSignedText>{textOf(warning)}</MarketSignedText></div>)}</div></details> : null}
 
-      <div className="market-brief-columns">
-        <BriefList title="What changed" items={materialChanges} empty="No material move crossed its controlled threshold" icon={ArrowRight} sourceRefs={sourceRefs} sourceDate={brief?.asOfDate} limit={3} />
-        <BriefList title="Port dislocations" items={dislocations} empty="No exact-date port dislocation is available" icon={Waves} sourceRefs={sourceRefs} sourceDate={brief?.asOfDate} limit={3} />
-      </div>
-      <div className="market-brief-columns">
-        <BriefList title="Physical versus paper" items={physicalPaper} empty="No same-snapshot confirmation or divergence is available" icon={FileSearch} sourceRefs={sourceRefs} sourceDate={brief?.asOfDate} limit={3} />
-        <BriefList title="Drivers & risks" items={[...projectedDrivers, ...risks]} empty="No high-confidence driver or risk is available" icon={FileSearch} sourceRefs={sourceRefs} sourceDate={brief?.asOfDate} limit={3} />
+      <div className="market-brief-detail-grid">
+        <BriefDetail title="Published price moves" count={materialChanges.length}><BriefList title="What changed" items={materialChanges} empty="No material move crossed its controlled threshold" icon={ArrowRight} sourceRefs={sourceRefs} sourceDate={brief?.asOfDate} limit={3} /></BriefDetail>
+        <BriefDetail title="Delivered-port evidence" count={dislocations.length}><BriefList title="Port dislocations" items={dislocations} empty="No exact-date port dislocation is available" icon={Waves} sourceRefs={sourceRefs} sourceDate={brief?.asOfDate} limit={3} /></BriefDetail>
+        <BriefDetail title="Physical and paper evidence" count={physicalPaper.length}><BriefList title="Physical versus paper" items={physicalPaper} empty="No same-snapshot confirmation or divergence is available" icon={FileSearch} sourceRefs={sourceRefs} sourceDate={brief?.asOfDate} limit={3} /></BriefDetail>
+        <BriefDetail title="Drivers and risks" count={driverRisks.length}><BriefList title="Drivers & risks" items={driverRisks} empty="No high-confidence driver or risk is available" icon={FileSearch} sourceRefs={sourceRefs} sourceDate={brief?.asOfDate} limit={3} /></BriefDetail>
       </div>
       <details className="market-disclosure">
         <summary><FileSearch size={14} /> Evidence & methodology</summary>

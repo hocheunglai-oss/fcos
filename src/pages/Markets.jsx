@@ -1,12 +1,11 @@
 import { useAuth } from '@/lib/AuthContext';
-import { Link } from 'react-router-dom';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import { ActionsProvider } from '@/hedge/data/ActionsContext';
 import { MarketIntelligenceWorkspace } from '@/hedge/views/MarketIntelligenceWorkspace';
 import { EmptyState, InlineError, Button } from '@/hedge/components/ui';
 import { DEFAULT_GENERAL } from '@/hedge/lib/domain';
-import { loadMarketPulseSnapshot, loadMarketSnapshot, MarketPrice, verifyMopsMonth } from '@/hedge/api/marketData';
+import { loadMarketBookContext, loadMarketPulseSnapshot, loadMarketSnapshot, MarketPrice, verifyMopsMonth } from '@/hedge/api/marketData';
 import { navigationCacheOptions } from '@/lib/navigationCachePolicy';
 import '@/hedge/styles.css';
 
@@ -16,6 +15,13 @@ const MARKET_DRIVE_REFRESH_INTERVAL_MS = 60 * 60 * 1000;
 
 export default function Markets() {
   const { hasModuleAccess } = useAuth();
+  const canReadBook = hasModuleAccess('markets') && hasModuleAccess('hedge_desk');
+  const [bookContext, setBookContext] = useState(null);
+  const [bookLoading, setBookLoading] = useState(false);
+  const [bookError, setBookError] = useState(null);
+  const [bookHistorical, setBookHistorical] = useState(true);
+  const [bookRetry, setBookRetry] = useState(0);
+  const retryBook = useCallback(() => setBookRetry((value) => value + 1), []);
   const [pulse, setPulse] = useState(null);
   const [dateScopedPulse, setDateScopedPulse] = useState(null);
   const [datePulseLoading, setDatePulseLoading] = useState(false);
@@ -30,6 +36,25 @@ export default function Markets() {
   const snapshotRequestRef = useRef(null);
   const pulseRequestRef = useRef(null);
   const latestPulseRequestRef = useRef(0);
+
+  useEffect(() => {
+    setBookContext(null);
+    setBookError(null);
+    if (!canReadBook || bookHistorical) {
+      setBookLoading(false);
+      return undefined;
+    }
+    const controller = new AbortController();
+    setBookLoading(true);
+    loadMarketBookContext({ signal: controller.signal }).then((context) => {
+      if (!controller.signal.aborted) setBookContext(context);
+    }).catch((nextError) => {
+      if (!controller.signal.aborted) setBookError(nextError);
+    }).finally(() => {
+      if (!controller.signal.aborted) setBookLoading(false);
+    });
+    return () => controller.abort();
+  }, [canReadBook, bookHistorical, bookRetry]);
 
   const reload = useCallback(async ({ silent = false, force = silent } = {}) => {
     const requestId = ++latestPulseRequestRef.current;
@@ -85,7 +110,9 @@ export default function Markets() {
     return request;
   }, []);
 
-  const loadPulseForDate = useCallback(async ({ asOfDate, force = false } = {}) => {
+  const loadPulseForDate = useCallback(async ({ asOfDate, mode, force = false } = {}) => {
+    setBookHistorical(mode !== 'latest');
+    if (mode === 'latest' && force) setBookRetry((value) => value + 1);
     if (pulseRequestRef.current) pulseRequestRef.current.abort();
     setDateScopedPulse(null);
     setDatePulseError(null);
@@ -155,11 +182,15 @@ export default function Markets() {
     <ActionsProvider reload={reloadAfterMarketMutation}>
       <div className="hedge-desk-root workspace-trading">
         {error && <div className="workspace-floating-utility-safe"><InlineError error={error} action={<Button onClick={() => reload()}>Retry</Button>} /></div>}
-        {hasModuleAccess('hedge_desk') && <div className="flex flex-wrap items-center justify-between gap-2 px-6 pt-4 text-xs text-muted-foreground"><span>Compare the dated source observations below with your physical and hedge exposure.</span><Link className="font-medium text-primary underline" to="/hedge-desk">Open Hedge Desk exposure</Link></div>}
         {refreshing && <div className="px-6 pt-4 text-xs text-muted-foreground">Refreshing market data...</div>}
         <MarketIntelligenceWorkspace
           data={{ mops: effectiveSnapshot.mops || [], mopsMonthVerifications: effectiveSnapshot.mopsMonthVerifications || [], marketIntelligence: effectiveSnapshot.marketIntelligence || {} }}
           pulse={displayPulse}
+          canReadBook={canReadBook}
+          bookContext={bookContext}
+          bookLoading={bookLoading || bookHistorical}
+          bookError={bookError}
+          onRetryBook={retryBook}
           refreshVersion={refreshVersion}
           marketPulseLoading={datePulseLoading}
           marketPulseError={datePulseError}

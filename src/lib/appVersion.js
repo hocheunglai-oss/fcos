@@ -4,6 +4,17 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.216',
+    releasedAt: '2026-09-17',
+    title: 'Clearer market prices and accessible book coverage',
+    changes: [
+      'Puts published MOPS, prior-publication changes and Singapore delivered assessments in a readable overview.',
+      'Adds source import status, selected market developments and read-only physical and hedge quantity coverage.',
+      'Keeps historical market views separate from current positions and preserves source dates, units and missing-value warnings.',
+      'Identifies empty secondary CSV price columns and refreshes successful PDF imports even when the CSV needs correction.',
+    ],
+  },
+  {
     version: '2.0.215',
     releasedAt: '2026-09-17',
     title: 'Connected workspaces and reliable drafts',

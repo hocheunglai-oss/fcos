@@ -14,8 +14,8 @@ test('every fixed denial probe is same-origin, nonredirecting and has no usable 
     calls.push(options);
     return reply(options.url);
   } });
-  assert.equal(results.length, 8);
-  assert.deepEqual(calls.map(({ postData }) => JSON.parse(postData)), [{}, {}, {}, {}, { action: 'save_spreads' }, {}, {}, {}]);
+  assert.equal(results.length, 9);
+  assert.deepEqual(calls.map(({ postData }) => JSON.parse(postData)), [{}, {}, {}, {}, {}, { action: 'save_spreads' }, {}, {}, {}]);
   for (const call of calls) {
     assert.equal(new URL(call.url).origin, candidateUrl);
     assert.equal(call.method, 'POST');

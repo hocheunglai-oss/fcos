@@ -218,6 +218,8 @@ import {
   saveMarketIntelligenceAlertRules,
 } from '../_marketIntelligenceTrading.js';
 import { loadMarketPulseSnapshot } from '../_marketPulse.js';
+import { createMarketBookContext } from '../_marketBookContext.js';
+import { secondaryMopsFailureMessage } from '../_marketSourceHealth.js';
 import { ciModuleAccess, isReadOnlyCiProfile, requireReadOnlyCiOperation } from '../_readOnlyCiAccess.js';
 import { analyzeMarketReportLibrary, loadMarketReportCatalogue } from '../_marketReportAnalysis.js';
 import {
@@ -1232,6 +1234,7 @@ const HANDLER_MODULE_ACCESS = {
   hedgeDeskEntity: ['hedge_desk'],
   hedgeMarkets: ['markets'],
   marketPulseSnapshot: ['markets'],
+  marketBookContext: ['markets'],
   marketIntelligenceBrief: ['markets'],
   marketIntelligenceCurve: ['markets'],
   marketReportCatalogue: ['markets'],
@@ -18408,6 +18411,8 @@ async function marketIntelligenceBrief(body = {}, req = null, accessContext = nu
   return loadMarketIntelligenceBrief(context.client, body);
 }
 
+const marketBookContext = createMarketBookContext({ requireActiveUser, userHasAnyModuleAccess });
+
 async function marketPulseSnapshot(body = {}, req = null, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
   const [snapshot, capabilities] = await Promise.all([
@@ -18612,10 +18617,14 @@ async function marketReportDriveSyncCron(_body = {}, req = null) {
   const client = supabaseAdminClient();
   const accessToken = await googleDriveMarketAccessToken();
   const result = await runMarketReportDriveSync(client, { accessToken });
-  if (result.status === 'failed') {
-    throw appError('Scheduled Google Drive market-report synchronization did not complete.', 502, result.errorCode || 'MARKET_DRIVE_SYNC_FAILED', undefined, true);
-  }
+  await expireRuntimeCacheTags(['market:pulse']);
   if (result.importedCount > 0) await expireRuntimeCacheTags(['markets', 'hedge:markets', 'market:intelligence']);
+  if (result.status === 'failed') {
+    const message = String(result.errorCode || '').startsWith('MARKET_SECONDARY_')
+      ? secondaryMopsFailureMessage(result.errorCode)
+      : 'Scheduled Google Drive market-report synchronization did not complete.';
+    throw appError(message, 502, result.errorCode || 'MARKET_DRIVE_SYNC_FAILED', undefined, true);
+  }
   await resolveRecoveredSystemErrorHandler(client, 'marketReportDriveSyncCron', { resolvedThrough: new Date() }).catch(() => {});
   return result;
 }
@@ -19152,6 +19161,7 @@ const handlers = {
   hedgeDeskEntity,
   hedgeMarkets,
   marketPulseSnapshot,
+  marketBookContext,
   marketIntelligenceBrief,
   marketIntelligenceCurve,
   marketReportCatalogue,

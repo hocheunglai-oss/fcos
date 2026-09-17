@@ -8,6 +8,7 @@ export const CI_DENIAL_PROBES = Object.freeze([
   ['/api/functions/variableChargesBuyerConfirm', {}],
   ['/api/functions/hedgePhysicalSalesforceApply', {}],
   ['/api/functions/workspacePreferencesSave', {}],
+  ['/api/functions/marketBookContext', {}],
   ['/api/functions/hedgeMarkets', { action: 'save_spreads' }],
   ['/api/functions/dashboardAccountInsightExport', {}],
   ['/api/functions/salesforceDocumentDownload', {}],

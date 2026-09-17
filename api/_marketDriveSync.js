@@ -3,6 +3,7 @@ import { CONNECTION_INTEGRATIONS } from '../src/lib/connectionChecklist.js';
 import { marketReportLimits, parseMarketReportPdf } from './_marketIntelligence.js';
 import { processMarketIntelligenceDate, publishMarketDataQualityAlert, scanExpectedMarketSessions } from './_marketIntelligenceTrading.js';
 import { reconcileMarketIntradayDate } from './_marketIntraday.js';
+import { secondaryMopsFailureMessage } from './_marketSourceHealth.js';
 
 const DRIVE_FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder';
 const DRIVE_SHORTCUT_MIME_TYPE = 'application/vnd.google-apps.shortcut';
@@ -133,6 +134,7 @@ export function parseMarketMopsCsv(buffer, { filename = '', startDate = '2025-01
   const dates = new Set();
   let incompleteRowCount = 0;
   let ignoredBeforeStartCount = 0;
+  const populated = { AMFSA00: 0, PPXDK00: 0, POABC00: 0 };
   for (const record of records) {
     const reportDate = String(record[dateIndex] || '').trim();
     if (!reportDate) continue;
@@ -147,6 +149,9 @@ export function parseMarketMopsCsv(buffer, { filename = '', startDate = '2025-01
     const s05 = secondaryMopsNumber(record[s05Index]);
     const s380 = secondaryMopsNumber(record[s380Index]);
     const sgo = secondaryMopsNumber(record[sgoIndex]);
+    if (s05 != null) populated.AMFSA00 += 1;
+    if (s380 != null) populated.PPXDK00 += 1;
+    if (sgo != null) populated.POABC00 += 1;
     if (s05 == null || s380 == null || sgo == null) {
       incompleteRowCount += 1;
       continue;
@@ -155,7 +160,11 @@ export function parseMarketMopsCsv(buffer, { filename = '', startDate = '2025-01
     dates.add(reportDate);
     rows.push({ reportDate, s05, s380, sgo });
   }
-  if (rows.length < 20) throw syncError('The secondary MOPS CSV has insufficient complete history for verification.', 'MARKET_SECONDARY_CSV_HISTORY_INSUFFICIENT', 409);
+  const emptySymbols = Object.keys(populated).filter((symbol) => populated[symbol] === 0);
+  if (incompleteRowCount > 0 && emptySymbols.length) {
+    throw syncError(`The secondary MOPS CSV has no usable CLOSE prices for ${emptySymbols.join(', ')}. Re-export these symbols with historical prices and replace the incomplete source file.`, 'MARKET_SECONDARY_CSV_EMPTY_SERIES', 409);
+  }
+  if (rows.length < 20) throw syncError(secondaryMopsFailureMessage('MARKET_SECONDARY_CSV_HISTORY_INSUFFICIENT'), 'MARKET_SECONDARY_CSV_HISTORY_INSUFFICIENT', 409);
   rows.sort((left, right) => left.reportDate.localeCompare(right.reportDate));
   return {
     filename: String(filename || '').slice(0, 255),
@@ -705,7 +714,7 @@ export async function runMarketReportDriveSync(client, {
           reportDate: null,
           code: normalizedErrorCode(error),
           title: 'Secondary MOPS CSV processing failed',
-          message: 'The root-folder MOPS CSV could not be parsed, historically verified, or imported.',
+          message: error.code === 'MARKET_SECONDARY_CSV_EMPTY_SERIES' ? error.message : secondaryMopsFailureMessage(normalizedErrorCode(error)),
           severity: 'critical',
           evidence: { sourceType: 'secondary_mops_csv' },
         }).catch(() => ({ created: false }));
