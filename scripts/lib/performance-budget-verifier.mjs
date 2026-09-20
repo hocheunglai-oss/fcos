@@ -72,7 +72,15 @@ export async function verifyPerformanceBudgets({
         const entryKey = 'src/components/special-terms/SpecialTermPdfPages.jsx';
         const entry = manifest[entryKey];
         const renderer = javascript.find((item) => `assets/${item.filename}` === entry?.file);
-        const workerFile = manifest['node_modules/pdfjs-dist/build/pdf.worker.min.mjs']?.file;
+        // Vite records the worker's real path when an isolated worktree shares
+        // node_modules through a symlink. Match the pinned package suffix so
+        // the same immutable worker is measured in both checkout layouts.
+        const workerManifestEntry = Object.entries(manifest).find(([key, item]) => {
+          const source = String(item?.src || key).replaceAll('\\', '/');
+          return source.endsWith('/node_modules/pdfjs-dist/build/pdf.worker.min.mjs')
+            || source === 'node_modules/pdfjs-dist/build/pdf.worker.min.mjs';
+        })?.[1];
+        const workerFile = workerManifestEntry?.file;
         const worker = javascript.find((item) => `assets/${item.filename}` === workerFile && entry?.assets?.includes(workerFile));
         const isDynamic = entry?.isDynamicEntry === true && !entry.isEntry
           && Object.values(manifest).some((item) => item.dynamicImports?.includes(entryKey))

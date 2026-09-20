@@ -2,12 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { dashboardAccountInsightServiceInternals } from '../api/_dashboardAccountInsightService.js';
+import { dashboardUnifiedCounterpartyServiceInternals } from '../api/_dashboardUnifiedCounterpartyService.js';
 import { dashboardAccountRankings } from '../src/lib/dashboardAccountRankings.js';
 import { dashboardFilterKey, normalizeDashboardSavedViews } from '../src/lib/dashboardFilters.js';
 
 const ACCOUNT = '001000000000001AAA';
 const PORT_A = 'a01000000000001AAA';
 const PORT_B = 'a01000000000002AAA';
+const { normalizedFilters: normalizeUnifiedFilters, scopeWhere, stemChildScope } = dashboardUnifiedCounterpartyServiceInternals;
 
 function scopeDataset() {
   const stems = [
@@ -37,6 +39,35 @@ test('Account-wide mode preserves the exact Account dataset', () => {
   assert.equal(scope.mode, 'account_wide');
 });
 
+test('Korea exclusion keeps missing-country Account Insight records', () => {
+  const source = scopeDataset();
+  source.stems.push(
+    { Id: 'a02000000000003AAA', Port__c: 'a01000000000003AAA', Port__r: { Country__c: 'KOREA' } },
+    { Id: 'a02000000000004AAA', Port__c: 'a01000000000004AAA', Port__r: { Country__c: null } },
+    { Id: 'a02000000000005AAA', Port__c: null },
+  );
+  source.previousStems = source.stems;
+  const { dataset, scope } = dashboardAccountInsightServiceInternals.applyDashboardScope(source, {
+    mode: 'dashboard', filters: { excludedCountryCodes: ['korea'] }, labels: { desk: 'Exclude Korea Desk' },
+  });
+  assert.deepEqual(dataset.stems.map((row) => row.Id), [
+    'a02000000000001AAA', 'a02000000000002AAA', 'a02000000000004AAA', 'a02000000000005AAA',
+  ]);
+  assert.deepEqual(scope.excludedCountryCodes, ['KOREA']);
+  assert.equal(scope.labels.desk, 'Exclude Korea Desk');
+});
+
+test('unified Account scopes retain null countries while excluding Korea on STEM and child queries', async () => {
+  const filters = normalizeUnifiedFilters({ excludedCountryCodes: ['korea'] });
+  const stemScope = await scopeWhere(filters, new Map([['Port__c', {}]]), false);
+  assert.match(stemScope, /Port__c = null/);
+  assert.match(stemScope, /Port__r\.Country__c = null/);
+  assert.match(stemScope, /Port__r\.Country__c NOT IN \('KOREA'\)/);
+  const childScope = stemChildScope(stemScope);
+  assert.match(childScope, /STEM__r\.Port__c = null/);
+  assert.match(childScope, /STEM__r\.Port__r\.Country__c NOT IN/);
+});
+
 test('Account Insight response projection returns only the requested heavy section', () => {
   const result = { identity: { accountId: ACCOUNT }, availableRoles: ['buyer'], activeRole: 'buyer', period: {}, scope: {}, relationship: {}, dashboardScope: {}, warnings: [], meta: {}, kpis: { stemCount: 2 }, comparisons: {}, payments: { buyer: {} }, collection: {}, risk: { dispute: {} }, stems: { rows: [1] }, children: [1] };
   const trading = dashboardAccountInsightServiceInternals.projectDashboardAccountInsight(result, 'trading');
@@ -56,6 +87,12 @@ test('saved Dashboard views normalize filters and reject duplicate names', () =>
   assert.equal(views.length, 1);
   assert.equal(views[0].filters.countryCode, 'SG');
   assert.equal(typeof dashboardFilterKey(views[0].filters), 'string');
+});
+
+test('saved Dashboard views retain Korea exclusion mode', () => {
+  const views = normalizeDashboardSavedViews([{ id: 'korea', name: 'Outside Korea', filters: { koreaDeskMode: 'exclude' } }]);
+  assert.equal(views[0].filters.koreaDeskMode, 'exclude');
+  assert.deepEqual(JSON.parse(dashboardFilterKey(views[0].filters)).filters.excludedCountryCodes, ['KOREA']);
 });
 
 test('complete Account directory rankings retain Achieve Bunker outside the Top 10', () => {

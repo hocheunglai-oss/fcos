@@ -186,12 +186,24 @@ export const DASHBOARD_METHODOLOGY = {
       body: 'Turnover, supplier cost, commissions, gross profit, gross margin, trends, and comparisons are calculated separately for each Salesforce currency. FCOS never combines unlike currencies. Each financial KPI has calculation evidence identifying its formula, authority, exclusions, warnings and evidence time. The pre-redesign Dashboard rule is preserved: until the parent STEM has an actual Delivery Date, financial prices and commissions use ordered quantity or the ordered-range midpoint; after delivery they use the delivered totals and BDN quantity. Supplier cost combines invoiced and eligible uninvoiced costs, and gross profit also deducts buyer and supplier broker commissions. The unified monthly chart pairs actual current and prior-year gross profit, MT volume, and independently calculated monthly gross margin for the same calendar month; its Prior year label button hides or restores every prior-year series together.',
     },
     {
+      title: 'EBIT and financing cost',
+      body: 'Gross Profit remains the default on every fresh Dashboard load. Enabling EBIT changes only that KPI and subtracts financing cost from gross profit separately for each currency. FCOS applies the current company annual financing rate to every selected historical period using Actual/365: financing cost is the sum of each positive daily funded balance multiplied by the annual rate and divided by 365. The funded balance is cumulative actual supplier cash payments less cumulative actual buyer cash receipts. Buyer advances remain in the running balance, only the interest-bearing amount is floored at zero, partial payments change the balance on their actual dates, and a same-day supplier payment and buyer receipt incurs no interest. Salesforce cash allocations include identifiable signed refunds and reversals and exclude remittance headers, volume discounts, write-offs, commissions, and other non-cash adjustments. FCOS preserves the original actual prepayment Payment ID when a later invoice link appears, so that link cannot count the cash twice. A synthetic Is_Deposit allocation without the original actual funding-date linkage makes finance unavailable; FCOS never estimates the funding date or finance cost. A settled STEM stops at its final actual buyer receipt; open funding accrues through the current Hong Kong date. The card shows the rate, rate revision, calculation date, finance-cost deduction, and missing-evidence count. Incomplete or unresolved settlement evidence, including unreliable pre-2026 payment evidence, makes the affected currency unavailable instead of treating an unknown cost as zero.',
+    },
+    {
       title: 'Volume statistics',
       body: 'Product volume is normalized to metric tonnes for statistics only. Litres are divided by 1,000 to KL; HSFO and VLSFO use 0.98 MT per KL, while LSMGO and other products use 0.85 MT per KL. These approximate density conversions never convert prices. Current and prior-year actual MT totals share the unified monthly chart, with product-family detail retained in its tooltip.',
     },
     {
       title: 'Completeness and navigation',
-      body: 'Overview totals are shown only when FCOS has processed the complete matching scope. An incomplete Salesforce response suppresses financial totals and asks you to narrow the filters; an incomplete previous-year scope independently suppresses YoY lines. The STEMs and Account identity lists are server-paginated and sorted. Accounts merges exact-ID Buyer receivable and Supplier payable exposure by currency and computes period buyer/supplier gross profit through the same complete Dashboard calculation. Informational receivable-minus-payable net is hidden whenever either direction is incomplete and never nets currencies. Account Insight opens over the Dashboard, preserves the Account directory page, filters, exposure results, scroll and focus, and keeps a linkable URL. It loads only the selected tab, inherits the exact Dashboard period, Port, COUNTRY, and dispute scope, and offers an explicit Account-wide toggle. The combined Credit Statement alone carries the net-exposure risk warning. Rankings exclude the Fratelli Cosulich GROUP identity and every descendant Account resolved through the live Salesforce hierarchy.',
+      body: 'Overview totals are shown only when FCOS has processed the complete matching scope. An incomplete Salesforce response suppresses financial totals and asks you to narrow the filters; an incomplete previous-year scope independently suppresses YoY lines. The STEMs and Account identity lists are server-paginated and sorted. Accounts merges exact-ID Buyer receivable and Supplier payable exposure by currency and computes period buyer/supplier gross profit through the same complete Dashboard calculation. Informational receivable-minus-payable net is hidden whenever either direction is incomplete and never nets currencies. Account Insight opens over the Dashboard, preserves the Account directory page, filters, exposure results, scroll and focus, and keeps a linkable URL. It loads only the selected tab, inherits the exact Dashboard period, Port, COUNTRY, country exclusion, and dispute scope, and offers an explicit Account-wide toggle. The combined Credit Statement alone carries the net-exposure risk warning. Rankings exclude the Fratelli Cosulich GROUP identity and every descendant Account resolved through the live Salesforce hierarchy.',
+    },
+    {
+      title: 'Korea Desk scope',
+      body: 'Korea Desk matches the verified Salesforce delivery-port country value KOREA. Exclude Korea Desk removes that value; a missing country remains outside Korea Desk and is therefore retained by the exclusion. The two desk choices are mutually exclusive, selecting the active choice returns to All, selecting either choice clears a manual Port or COUNTRY selection, and selecting a manual location clears the desk choice. Date, dispute, and counterparty filters remain combinable. The resulting country inclusion or exclusion applies consistently to KPIs, STEMs, analytics, Accounts, Account Insight and credit statements, exports, saved views, filter persistence, and Dashboard AI interpretation; Reset clears it.',
+    },
+    {
+      title: 'Complete XLS export',
+      body: 'Export XLS uses the ordinary Dashboard selection and retrieves every server page with the active filters, submitted text search, and sort. Progress and cancellation remain visible, and FCOS does not silently download a partial result. The Excel-compatible .xls file is built and downloaded locally, keeps text literal and currency totals separate, splits oversized row sets across worksheets, and includes a Scope sheet with the filters, row count, generation time, and calculation notes. When EBIT is enabled, the export includes finance cost, EBIT, and evidence status while holding one rate revision and calculation date across every page. AI-result mode must be cleared before exporting.',
     },
     {
       title: 'Payment data reliability',
@@ -672,6 +684,24 @@ export const SETTINGS_METHODOLOGIES = {
       {
         title: 'Configuration boundary',
         body: 'Mailbox addresses and purpose assignments are non-secret server settings. Tenant and application credentials remain protected in Vercel, while Exchange administrators control mailbox-scoped authorization.',
+      },
+    ],
+  },
+  finance: {
+    title: 'Finance',
+    description: 'How the company financing rate controls Dashboard EBIT calculations.',
+    sections: [
+      {
+        title: 'Company rate',
+        body: 'Annual financing rate (%) is one company setting used by Dashboard EBIT. It accepts 0 to 100 with at most two decimal places and defaults to 5.00 when the server setting is first created. The current rate applies to historical Dashboard selections, so a saved change recalculates them rather than preserving the rate that existed during the selected period.',
+      },
+      {
+        title: 'Calculation effect',
+        body: 'The Dashboard uses Actual/365 and actual Salesforce cash allocations to calculate the daily funded balance for each STEM and currency. Funding is cumulative supplier cash paid less cumulative buyer cash received; advances stay in the running balance and only a positive balance bears interest. Missing or unresolved evidence, including unreliable pre-2026 payment evidence, withholds the affected finance cost and EBIT instead of recording zero.',
+      },
+      {
+        title: 'Permissions, revision, and refresh',
+        body: 'Existing Finance settings managers, Administrators, and the General Manager may save the rate. Dashboard users without management access can read it. Every save uses the revision that was loaded, rejects a stale concurrent edit, appends server audit history, and invalidates Dashboard finance results so subsequent calculations use the new revision.',
       },
     ],
   },

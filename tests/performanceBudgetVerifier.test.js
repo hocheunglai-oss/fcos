@@ -109,6 +109,22 @@ test('on-demand PDF rendering has an explicit budget including its MJS worker', 
   assert.equal(report.clientAssets.ordinaryBytes, 'export const asset = true;'.length);
 });
 
+test('a symlink-resolved node_modules manifest path keeps the PDF worker in its explicit budget', async (t) => {
+  const { root, manifest } = await writePdfViewerFixture();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const worker = manifest['node_modules/pdfjs-dist/build/pdf.worker.min.mjs'];
+  delete manifest['node_modules/pdfjs-dist/build/pdf.worker.min.mjs'];
+  manifest['../shared-dependencies/node_modules/pdfjs-dist/build/pdf.worker.min.mjs'] = {
+    ...worker,
+    src: '../shared-dependencies/node_modules/pdfjs-dist/build/pdf.worker.min.mjs',
+  };
+  await writeFile(path.join(root, 'dist/.vite/manifest.json'), JSON.stringify(manifest));
+  const report = await verifyPerformanceBudgets({ root });
+  assert.deepEqual(report.failures, []);
+  assert.equal(report.clientAssets.onDemandPdfViewer.bytes, 600);
+  assert.equal(report.clientAssets.ordinaryBytes, 'export const asset = true;'.length);
+});
+
 test('a statically imported PDF viewer cannot use the optional budget', async (t) => {
   const { root, manifest, key } = await writePdfViewerFixture();
   t.after(() => rm(root, { recursive: true, force: true }));

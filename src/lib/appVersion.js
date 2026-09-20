@@ -4,6 +4,17 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.218',
+    releasedAt: '2026-09-20',
+    title: 'Dashboard financing, Korea Desk and complete STEM exports',
+    changes: [
+      'Switch Gross Profit to EBIT using actual daily funding and a company financing rate, with missing payment evidence clearly identified.',
+      'Manage the annual financing rate in Finance settings with revision checks and an audit history.',
+      'Include or exclude Korea Desk across Dashboard views, account drill-downs and saved selections.',
+      'Export every STEM in the ordinary filtered selection to a local XLS workbook, with progress, cancellation and separate currency totals.',
+    ],
+  },
+  {
     version: '2.0.217',
     releasedAt: '2026-09-20',
     title: 'Personal Markets and monthly quantity coverage',

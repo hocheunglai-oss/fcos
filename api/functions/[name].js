@@ -220,6 +220,8 @@ import {
 import { loadMarketPulseSnapshot } from '../_marketPulse.js';
 import { createMarketBookContext } from '../_marketBookContext.js';
 import { createMarketTraderWorkspace } from '../_marketTraderWorkspace.js';
+import { createFinanceSettingsHandlers, loadFinanceSettings } from '../_dashboardFinanceSettings.js';
+import { createDashboardFinanceLoader, financeToday, summarizeDashboardFinance, validateFinanceSnapshot } from '../_dashboardFinance.js';
 import { secondaryMopsFailureMessage } from '../_marketSourceHealth.js';
 import { ciModuleAccess, isReadOnlyCiProfile, requireReadOnlyCiOperation } from '../_readOnlyCiAccess.js';
 import { analyzeMarketReportLibrary, loadMarketReportCatalogue } from '../_marketReportAnalysis.js';
@@ -1358,6 +1360,8 @@ const HANDLER_MODULE_ACCESS = {
   growthCoachingDailyCron: [],
   salesforceDashboard: ['dashboard'],
   salesforceDashboardFiltered: ['dashboard', 'review'],
+  financeSettingsGet: [],
+  financeSettingsSave: [],
   dashboardSummary: ['dashboard'],
   dashboardStemList: ['dashboard'],
   dashboardAnalytics: ['dashboard'],
@@ -5517,7 +5521,7 @@ async function dashboardAiSearch(body, req, accessContext = null) {
   // AI results intentionally use the same paginated, access-filtered scope as
   // the dashboard APIs.  The old 3,000-record dashboard path is not safe for
   // AI because it can turn a complete natural-language result into a subset.
-  const aiScope = await loadDecisionDashboardScope({ force }, req, context, { additionalWhere: where });
+  const aiScope = await loadDecisionDashboardScope({ ...body.filterSpec, force }, req, context, { additionalWhere: where });
   const dashboard = {
     ...decisionDashboardSummary(aiScope.rows, aiScope.completeness),
     recentStems: publicDecisionDashboardRows(aiScope.rows),
@@ -8221,6 +8225,10 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
     if (!portField) throw appError('Country filtering is unavailable because Salesforce Port metadata could not be validated.', 503, 'DASHBOARD_SCHEMA');
     conditions.push(`Port__r.Country__c IN (${decisionDashboardValues(filters.countryCodes)})`);
   }
+  if (filters.excludedCountryCodes.length) {
+    if (!portField) throw appError('Country exclusion is unavailable because Salesforce Port metadata could not be validated.', 503, 'DASHBOARD_SCHEMA');
+    conditions.push(`(Port__c = null OR Port__r.Country__c = null OR Port__r.Country__c NOT IN (${decisionDashboardValues(filters.excludedCountryCodes)}))`);
+  }
   if (!filters.includeCancelled && stemFields.has('Status__c')) {
     const statusField = (stemDescribe.fields || []).find((field) => field.name === 'Status__c');
     const cancelledStatuses = (statusField?.picklistValues || []).map((item) => item.value).filter((value) => /cancel/i.test(String(value || '')));
@@ -8627,20 +8635,28 @@ async function decisionDashboardInternalAccountIdentity(body = {}, req = null, a
   return cached.value;
 }
 
-async function dashboardSummaryUncached(body = {}, req = null, accessContext = null) {
+const enrichDashboardFinance = createDashboardFinanceLoader({
+  queryAll: decisionDashboardQueryAll,
+  describeObject: (objectName) => salesforceObjectFields({ objectName }),
+});
+
+async function dashboardSummaryUncached(body = {}, req = null, accessContext = null, financeContext = null) {
   const scope = await loadDecisionDashboardScope(body, req, accessContext);
+  const financeRows = financeContext ? await enrichDashboardFinance(scope.rows, financeContext.settings, financeContext.asOfDate) : null;
   return {
     ...decisionDashboardSummary(scope.rows.filter((row) => row.buyer != null), scope.completeness),
     ...decisionDashboardOverviewMetrics(scope, body),
+    ...(financeContext ? { finance: summarizeDashboardFinance(financeRows, financeContext.settings, financeContext.asOfDate, scope.completeness) } : {}),
     filters: scope.filters,
     timing: scope.timing,
     dataWarnings: scope.dataWarnings,
   };
 }
 
-async function dashboardStemListUncached(body = {}, req = null, accessContext = null) {
+async function dashboardStemListUncached(body = {}, req = null, accessContext = null, financeContext = null) {
   const scope = await loadDecisionDashboardScope(body, req, accessContext, { pageOnly: true });
-  return { ...scope.completeness, filters: scope.filters, stems: publicDecisionDashboardRows(scope.rows), pageSize: Math.min(Math.max(Number(body.pageSize) || 50, 1), 200), nextCursor: scope.nextCursor, sort: scope.sort, timing: scope.timing, dataWarnings: scope.dataWarnings };
+  const rows = financeContext ? await enrichDashboardFinance(scope.rows, financeContext.settings, financeContext.asOfDate) : scope.rows;
+  return { ...scope.completeness, ...(financeContext ? { finance: summarizeDashboardFinance(rows, financeContext.settings, financeContext.asOfDate) } : {}), filters: scope.filters, stems: publicDecisionDashboardRows(rows), pageSize: Math.min(Math.max(Number(body.pageSize) || 50, 1), 200), nextCursor: scope.nextCursor, sort: scope.sort, timing: scope.timing, dataWarnings: scope.dataWarnings };
 }
 
 async function dashboardAnalyticsUncached(body = {}, req = null, accessContext = null) {
@@ -8758,8 +8774,8 @@ async function dashboardAnalyticsUncached(body = {}, req = null, accessContext =
   };
 }
 
-async function cachedDecisionDashboard(handler, body, req, accessContext, ttlSeconds, loader) {
-  const cachePayload = { ...body };
+async function cachedDecisionDashboard(handler, body, req, accessContext, ttlSeconds, loader, financeContext = null) {
+  const cachePayload = { ...body, ...(financeContext ? { financeSnapshot: { revision: financeContext.settings.revision, asOfDate: financeContext.asOfDate } } : {}) };
   delete cachePayload.force;
   delete cachePayload.forceRefresh;
   delete cachePayload.refresh;
@@ -8771,7 +8787,7 @@ async function cachedDecisionDashboard(handler, body, req, accessContext, ttlSec
         : `decision-dashboard-v9-${handler}`,
     ttlSeconds,
     payload: cachePayload,
-    tags: ['salesforce:dashboard', 'salesforce:stem', `salesforce:dashboard:${handler}`],
+    tags: ['salesforce:dashboard', 'salesforce:stem', `salesforce:dashboard:${handler}`, ...(financeContext ? ['salesforce:payment', 'salesforce:buyer-invoices', 'salesforce:supplier-invoices', 'dashboard:finance-settings'] : [])],
     body,
     req,
     accessContext,
@@ -8780,12 +8796,23 @@ async function cachedDecisionDashboard(handler, body, req, accessContext, ttlSec
   return cached.value;
 }
 
+async function dashboardFinanceContext(body, req, accessContext) {
+  if (body.includeFinanceCosts !== true) return null;
+  const { client } = accessContext || await requireActiveUser(req);
+  const settings = await loadFinanceSettings(client);
+  const asOfDate = financeToday();
+  validateFinanceSnapshot(body.financeSnapshot, settings, asOfDate);
+  return { settings, asOfDate };
+}
+
 async function dashboardSummary(body = {}, req = null, accessContext = null) {
-  return cachedDecisionDashboard('summary', body, req, accessContext, 60, () => dashboardSummaryUncached(body, req, accessContext));
+  const financeContext = await dashboardFinanceContext(body, req, accessContext);
+  return cachedDecisionDashboard('summary', body, req, accessContext, 60, () => dashboardSummaryUncached(body, req, accessContext, financeContext), financeContext);
 }
 
 async function dashboardStemList(body = {}, req = null, accessContext = null) {
-  return cachedDecisionDashboard('stems', body, req, accessContext, 30, () => dashboardStemListUncached(body, req, accessContext));
+  const financeContext = await dashboardFinanceContext(body, req, accessContext);
+  return cachedDecisionDashboard('stems', body, req, accessContext, 30, () => dashboardStemListUncached(body, req, accessContext, financeContext), financeContext);
 }
 
 async function dashboardAnalytics(body = {}, req = null, accessContext = null) {
@@ -9621,6 +9648,7 @@ async function dashboardAccountCreditDirectory(body = {}, req = null, accessCont
   const financialFilters = {
     portIds: Array.isArray(body.filters?.portIds) ? body.filters.portIds : [],
     countryCodes: Array.isArray(body.filters?.countryCodes) ? body.filters.countryCodes : [],
+    excludedCountryCodes: Array.isArray(body.filters?.excludedCountryCodes) ? body.filters.excludedCountryCodes : [],
   };
   const cached = await cachedSalesforceValue({
     namespace: 'dashboard-unified-account-directory-financials-v1',
@@ -18416,6 +18444,7 @@ async function marketIntelligenceBrief(body = {}, req = null, accessContext = nu
 
 const marketBookContext = createMarketBookContext({ requireActiveUser, userHasAnyModuleAccess });
 const { marketTraderWorkspace, marketTraderWorkspaceSave } = createMarketTraderWorkspace({ requireActiveUser, userHasAnyModuleAccess });
+const { financeSettingsGet, financeSettingsSave } = createFinanceSettingsHandlers({ requireActiveUser, userHasAnyModuleAccess, userHasCapability, expireCache: expireRuntimeCacheTags });
 
 async function marketPulseSnapshot(body = {}, req = null, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
@@ -19289,6 +19318,8 @@ const handlers = {
   salesforceFullSchema,
   salesforceDashboard,
   salesforceDashboardFiltered: salesforceDashboardFilteredCompatibility,
+  financeSettingsGet,
+  financeSettingsSave,
   dashboardSummary,
   dashboardStemList,
   dashboardAnalytics,

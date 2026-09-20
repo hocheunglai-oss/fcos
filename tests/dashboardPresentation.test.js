@@ -35,7 +35,10 @@ test('Dashboard uses one compact control panel and hides only the irrelevant Acc
 test('trading figures lead, currencies appear once and incomplete KPI evidence is withheld', async () => {
   const kpis = await source('src/components/dashboard/DashboardKpis.jsx');
   const labels = [...kpis.matchAll(/<FinancialCard[^\n]+label="([^"]+)"/g)].map((item) => item[1]);
-  assert.deepEqual(labels, ['Gross Profit', 'Gross Margin %', 'Turnover']);
+  assert.deepEqual(labels, ['Gross Margin %', 'Turnover']);
+  assert.match(kpis, /function GrossProfitCard\(/);
+  assert.match(kpis, /if \(!ebitEnabled\)[\s\S]*>Gross Profit<\/h2>/);
+  assert.match(kpis, />EBIT<\/h2>[\s\S]*Gross profit net finance costs/);
   assert.match(kpis, /aria-label="Trading activity"/);
   assert.match(kpis, /complete \? number\(row\[field\]\) : null/);
   assert.doesNotMatch(kpis, /style: 'currency'|glass-surface/);

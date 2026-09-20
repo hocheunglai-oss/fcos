@@ -21,12 +21,20 @@ const AccountCreditDirectory = lazy(() => import('@/components/dashboard/Account
 const AccountInsightModal = lazy(() => import('@/components/dashboard/AccountInsightModal'));
 const STEM_PAGE_SIZE = 50;
 const DEFAULT_STEM_SORT = Object.freeze({ field: 'createdDate', direction: 'desc' });
+const HONG_KONG_OFFSET_MS = 8 * 60 * 60 * 1000;
 const INSIGHT_QUERY_KEYS = [
   'insightAccountId', 'insightName', 'insightRole', 'insightRoles', 'insightEntityType', 'insightTab', 'insightStatementSide',
   'insightPeriod', 'insightScope', 'insightYears', 'insightMonths', 'insightDisputeOnly', 'insightAccountIds',
-  'insightSupplierIds', 'insightPortIds', 'insightCountryCodes', 'insightCompany', 'insightGroup', 'insightPort', 'insightCountry',
+  'insightSupplierIds', 'insightPortIds', 'insightCountryCodes', 'insightExcludedCountryCodes', 'insightKoreaDeskMode',
+  'insightCompany', 'insightGroup', 'insightPort', 'insightCountry',
 ];
 const splitQueryList = (value) => String(value || '').split(',').map((item) => item.trim()).filter(Boolean);
+const hongKongCalendarDate = (date = new Date()) => new Date(date.getTime() + HONG_KONG_OFFSET_MS).toISOString().slice(0, 10);
+const millisecondsUntilNextHongKongDate = (date = new Date()) => {
+  const shifted = new Date(date.getTime() + HONG_KONG_OFFSET_MS);
+  const nextMidnight = Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate() + 1);
+  return Math.max(1_000, nextMidnight - shifted.getTime() + 1_000);
+};
 
 function readSavedFilters() { try { return normalizeDashboardFilters(JSON.parse(localStorage.getItem(DASHBOARD_FILTER_STORAGE_KEY) || '{}')); } catch { return normalizeDashboardFilters({ ...presetDashboardPeriod('year_to_date'), datePreset: 'year_to_date' }); } }
 function normaliseOptions(data) { return Array.isArray(data?.options) ? data.options.map((option) => typeof option === 'string' ? { label: option, value: option } : option).filter(Boolean) : []; }
@@ -51,17 +59,27 @@ export default function DashboardSettings() {
   const [stemSearch, setStemSearch] = useState('');
   const [stemTableWide, setStemTableWide] = useState(false);
   const [aiSearchActive, setAiSearchActive] = useState(false);
+  const [ebitEnabled, setEbitEnabled] = useState(false);
   const aborts = useRef({});
+  const summaryAttemptRef = useRef(null);
+  const stemsAttemptRef = useRef(null);
   const analyticsAttemptRef = useRef(null);
   const dashboardRootRef = useRef(null);
   const insightScrollContainerRef = useRef(null);
   const insightTriggerRef = useRef(null);
   const insightScrollRef = useRef(null);
   const insightWasOpenRef = useRef(false);
-  const skipNextAutoLoadRef = useRef(false);
+  const skipNextStemAutoLoadRef = useRef(false);
   const { cancelPendingUpdates } = useNavigationAwareRequest('operational');
   const filterPayload = useMemo(() => dashboardFilterPayload(filters), [filters]);
   const filterKey = useMemo(() => dashboardFilterKey(filters), [filters]);
+  const exportScopeLabels = useMemo(() => ({
+    period: filters.datePreset || 'custom',
+    counterparty: filters.counterparty?.name || filters.company || filters.group || 'All',
+    port: filters.port || 'All',
+    country: filters.country || 'All',
+    koreaDesk: filters.koreaDeskMode === 'include' ? 'Korea Desk' : filters.koreaDeskMode === 'exclude' ? 'Exclude Korea Desk' : 'All',
+  }), [filters.company, filters.counterparty?.name, filters.country, filters.datePreset, filters.group, filters.koreaDeskMode, filters.port]);
   const years = useMemo(() => getRecentYears(Math.max(new Date().getFullYear(), ...filters.selectedYears), 4), [filters.selectedYears]);
   const productVolumeKpi = useMemo(() => ({ unitOfMeasure: summary?.productVolume?.unitOfMeasure || 'MT', quantity: summary?.productVolume?.quantity ?? null, breakdown: summary?.productVolume?.breakdown || [] }), [summary?.productVolume?.breakdown, summary?.productVolume?.quantity, summary?.productVolume?.unitOfMeasure]);
   const productVolumeUnit = productVolumeKpi.unitOfMeasure;
@@ -92,8 +110,9 @@ export default function DashboardSettings() {
         supplierIds: splitQueryList(searchParams.get('insightSupplierIds')),
         portIds: splitQueryList(searchParams.get('insightPortIds')),
         countryCodes: splitQueryList(searchParams.get('insightCountryCodes')),
+        excludedCountryCodes: splitQueryList(searchParams.get('insightExcludedCountryCodes')),
       },
-      labels: { company: searchParams.get('insightCompany') || '', group: searchParams.get('insightGroup') || '', port: searchParams.get('insightPort') || '', country: searchParams.get('insightCountry') || '' },
+      labels: { company: searchParams.get('insightCompany') || '', group: searchParams.get('insightGroup') || '', port: searchParams.get('insightPort') || '', country: searchParams.get('insightCountry') || '', desk: searchParams.get('insightKoreaDeskMode') === 'include' ? 'Korea Desk' : searchParams.get('insightKoreaDeskMode') === 'exclude' ? 'Exclude Korea Desk' : '' },
     };
   }, [searchParams]);
   const insightDashboardScope = useMemo(() => ({ mode: insightQuery.scope, disputeOnly: insightQuery.disputeOnly, filters: insightQuery.filters, labels: insightQuery.labels }), [insightQuery.disputeOnly, insightQuery.filters, insightQuery.labels, insightQuery.scope]);
@@ -123,8 +142,48 @@ export default function DashboardSettings() {
     return { result, controller };
   }, []);
 
-  const loadSummary = useCallback(async ({ force = false } = {}) => { setLoading((value) => ({ ...value, summary: true })); setErrors((value) => ({ ...value, summary: null })); let request; try { request = await invoke('summary', 'dashboardSummary', filterPayload, { force }); if (request.result) { setSummary(request.result.data); setSummaryMeta(request.result.meta); } } catch (error) { if (error.name !== 'AbortError') setErrors((value) => ({ ...value, summary: error.message || 'Dashboard summary could not be loaded.' })); } finally { if (!request || aborts.current.summary === request.controller) setLoading((value) => ({ ...value, summary: false })); } }, [filterPayload, invoke]);
-  const loadStems = useCallback(async ({ cursor = null, history = [], sort = DEFAULT_STEM_SORT, search = stemSearch, force = false } = {}) => { setLoading((value) => ({ ...value, stems: true })); setErrors((value) => ({ ...value, stems: null })); let request; try { request = await invoke('stems', 'dashboardStemList', { ...filterPayload, cursor, pageSize: STEM_PAGE_SIZE, sort, search: search || null }, { force }); if (request.result) { setStems({ ...request.result.data, page: history.length + 1, previousCursor: history.at(-1) ?? null }); setNavigation({ cursor, history, sort: request.result.data.sort || sort }); } } catch (error) { if (error.name !== 'AbortError') setErrors((value) => ({ ...value, stems: error.message || 'STEMs could not be loaded.' })); } finally { if (!request || aborts.current.stems === request.controller) setLoading((value) => ({ ...value, stems: false })); } }, [filterPayload, invoke, stemSearch]);
+  const loadSummary = useCallback(async ({ force = false } = {}) => {
+    const attempt = { filterKey, ebitEnabled };
+    summaryAttemptRef.current = attempt;
+    setLoading((value) => ({ ...value, summary: true }));
+    setErrors((value) => ({ ...value, summary: null }));
+    let request;
+    try {
+      request = await invoke('summary', 'dashboardSummary', ebitEnabled ? { ...filterPayload, includeFinanceCosts: true } : filterPayload, { force });
+      if (request.result && summaryAttemptRef.current === attempt) {
+        setSummary(request.result.data);
+        setSummaryMeta(request.result.meta);
+      }
+    } catch (error) {
+      if (error.name !== 'AbortError' && summaryAttemptRef.current === attempt) setErrors((value) => ({ ...value, summary: error.message || 'Dashboard summary could not be loaded.' }));
+    } finally {
+      if (summaryAttemptRef.current === attempt) setLoading((value) => ({ ...value, summary: false }));
+    }
+  }, [ebitEnabled, filterKey, filterPayload, invoke]);
+  const loadStems = useCallback(async ({ cursor = null, history = [], sort = DEFAULT_STEM_SORT, search = stemSearch, force = false } = {}) => {
+    const attempt = { filterKey, cursor, search, sort };
+    stemsAttemptRef.current = attempt;
+    setLoading((value) => ({ ...value, stems: true }));
+    setErrors((value) => ({ ...value, stems: null }));
+    let request;
+    try {
+      request = await invoke('stems', 'dashboardStemList', { ...filterPayload, cursor, pageSize: STEM_PAGE_SIZE, sort, search: search || null }, { force });
+      if (request.result && stemsAttemptRef.current === attempt) {
+        setStems({ ...request.result.data, page: history.length + 1, previousCursor: history.at(-1) ?? null });
+        setNavigation({ cursor, history, sort: request.result.data.sort || sort });
+      }
+    } catch (error) {
+      if (error.name !== 'AbortError' && stemsAttemptRef.current === attempt) setErrors((value) => ({ ...value, stems: error.message || 'STEMs could not be loaded.' }));
+    } finally {
+      if (stemsAttemptRef.current === attempt) setLoading((value) => ({ ...value, stems: false }));
+    }
+  }, [filterKey, filterPayload, invoke, stemSearch]);
+  const refreshFinanceSummary = useCallback(() => {
+    summaryAttemptRef.current = null;
+    aborts.current.summary?.abort();
+    setSummary((value) => value ? { ...value, finance: null } : value);
+    void loadSummary({ force: true });
+  }, [loadSummary]);
   const loadAnalytics = useCallback(async ({ force = false } = {}) => {
     // A failed attempt stays settled until Retry, Refresh, or a filter change.
     // Loading state must not recreate the callback used by the child's effect.
@@ -147,9 +206,27 @@ export default function DashboardSettings() {
   }, [filterKey, filterPayload, invoke]);
   const runAiSearch = useCallback(async (prompt) => { setErrors((value) => ({ ...value, ai: null })); try { const request = await invoke('ai', 'dashboardAiSearch', { prompt, selectedYears: filters.selectedYears, selectedMonths: filters.selectedMonths, filterSpec: filterPayload }); const aiSearch = request.result?.data?.aiSearch; if (aiSearch?.status !== 'ready') { setErrors((value) => ({ ...value, ai: aiSearch?.clarification?.question || 'AI search needs a more specific request.' })); return; } const rows = request.result.data.recentStems || request.result.data.stems || []; setAiSearchActive(true); setStemSearch(''); setStems({ stems: rows, matchingCount: aiSearch.matchedCount, page: 1, pageSize: rows.length, nextCursor: null, aiSearch }); setNavigation((value) => ({ ...value, cursor: null, history: [] })); setTab('stems'); } catch (error) { if (error.name !== 'AbortError') setErrors((value) => ({ ...value, ai: error.message || 'AI search is unavailable.' })); } }, [filterPayload, filters.selectedMonths, filters.selectedYears, invoke]);
 
-  useEffect(() => { if (aiSearchActive) return undefined; if (skipNextAutoLoadRef.current) { skipNextAutoLoadRef.current = false; return undefined; } const timer = window.setTimeout(() => { loadSummary(); loadStems({ cursor: null, history: [], sort: DEFAULT_STEM_SORT }); }, 220); return () => window.clearTimeout(timer); }, [aiSearchActive, filterKey, loadSummary, loadStems]);
+  useEffect(() => { const timer = window.setTimeout(() => loadSummary(), 220); return () => window.clearTimeout(timer); }, [filterKey, loadSummary]);
+  useEffect(() => { if (aiSearchActive) return undefined; if (skipNextStemAutoLoadRef.current) { skipNextStemAutoLoadRef.current = false; return undefined; } const timer = window.setTimeout(() => loadStems({ cursor: null, history: [], sort: DEFAULT_STEM_SORT }), 220); return () => window.clearTimeout(timer); }, [aiSearchActive, filterKey, loadStems]);
+  useEffect(() => {
+    if (!ebitEnabled) return undefined;
+    const refreshIfDateChanged = () => {
+      if (document.visibilityState !== 'visible') return;
+      const asOfDate = summary?.finance?.asOfDate;
+      if (asOfDate && asOfDate !== hongKongCalendarDate()) refreshFinanceSummary();
+    };
+    const onFinanceSettingsUpdated = () => refreshFinanceSummary();
+    window.addEventListener('fcos:finance-settings-updated', onFinanceSettingsUpdated);
+    document.addEventListener('visibilitychange', refreshIfDateChanged);
+    const dateBoundaryTimer = window.setTimeout(refreshIfDateChanged, millisecondsUntilNextHongKongDate());
+    return () => {
+      window.removeEventListener('fcos:finance-settings-updated', onFinanceSettingsUpdated);
+      document.removeEventListener('visibilitychange', refreshIfDateChanged);
+      window.clearTimeout(dateBoundaryTimer);
+    };
+  }, [ebitEnabled, refreshFinanceSummary, summary?.finance?.asOfDate]);
   useEffect(() => { if (summary && !analyticsEnabled) setAnalyticsEnabled(true); }, [analyticsEnabled, summary]);
-  useEffect(() => () => { analyticsAttemptRef.current = null; Object.values(aborts.current).forEach((controller) => controller?.abort()); }, []);
+  useEffect(() => () => { analyticsAttemptRef.current = null; summaryAttemptRef.current = null; stemsAttemptRef.current = null; Object.values(aborts.current).forEach((controller) => controller?.abort()); }, []);
   useEffect(() => {
     const open = Boolean(insightQuery.accountId);
     if (insightWasOpenRef.current && !open) {
@@ -165,7 +242,24 @@ export default function DashboardSettings() {
     }
     insightWasOpenRef.current = open;
   }, [insightQuery.accountId]);
-  const changeFilters = (next) => { cancelPendingUpdates(); analyticsAttemptRef.current = null; Object.values(aborts.current).forEach((controller) => controller?.abort()); const merged = normalizeDashboardFilters(next); if (merged.datePreset !== filters.datePreset && merged.datePreset !== 'custom') Object.assign(merged, presetDashboardPeriod(merged.datePreset)); setAiSearchActive(false); setFilters(merged); };
+  const changeFilters = (next) => { cancelPendingUpdates(); analyticsAttemptRef.current = null; summaryAttemptRef.current = null; stemsAttemptRef.current = null; Object.values(aborts.current).forEach((controller) => controller?.abort()); const merged = normalizeDashboardFilters(next); if (merged.datePreset !== filters.datePreset && merged.datePreset !== 'custom') Object.assign(merged, presetDashboardPeriod(merged.datePreset)); if (ebitEnabled) setSummary((value) => value ? { ...value, finance: null } : value); setAiSearchActive(false); setFilters(merged); };
+  const changeEbit = useCallback((enabled) => {
+    const next = enabled === true;
+    summaryAttemptRef.current = null;
+    aborts.current.summary?.abort();
+    setErrors((value) => ({ ...value, summary: null }));
+    setSummary((value) => value ? { ...value, finance: null } : value);
+    setLoading((value) => ({ ...value, summary: true }));
+    setEbitEnabled(next);
+  }, []);
+  const submitStemSearch = useCallback((value) => {
+    const search = String(value || '').trim();
+    setStemSearch(search);
+    if (!aiSearchActive) return;
+    skipNextStemAutoLoadRef.current = true;
+    setAiSearchActive(false);
+    loadStems({ cursor: null, history: [], sort: DEFAULT_STEM_SORT, search });
+  }, [aiSearchActive, loadStems]);
   const openAccount = useCallback((account, initialTab = 'overview', trigger = null) => {
     if (!account?.accountId) return;
     insightTriggerRef.current = trigger || document.activeElement;
@@ -187,12 +281,14 @@ export default function DashboardSettings() {
     const queryValues = [
       ['insightAccountIds', filterPayload.filters.accountIds], ['insightSupplierIds', filterPayload.filters.supplierIds],
       ['insightPortIds', filterPayload.filters.portIds], ['insightCountryCodes', filterPayload.filters.countryCodes],
+      ['insightExcludedCountryCodes', filterPayload.filters.excludedCountryCodes],
     ];
     queryValues.forEach(([key, values]) => { if (values.length) next.set(key, values.join(',')); else next.delete(key); });
-    const labels = { insightCompany: filters.counterparty?.entityType === 'account' ? filters.counterparty.name : filters.company, insightGroup: filters.counterparty?.entityType === 'group' ? filters.counterparty.name : filters.group, insightPort: filters.port, insightCountry: filters.country };
+    if (filters.koreaDeskMode !== 'all') next.set('insightKoreaDeskMode', filters.koreaDeskMode); else next.delete('insightKoreaDeskMode');
+    const labels = { insightCompany: filters.counterparty?.entityType === 'account' ? filters.counterparty.name : filters.company, insightGroup: filters.counterparty?.entityType === 'group' ? filters.counterparty.name : filters.group, insightPort: filters.port, insightCountry: filters.country || (filters.koreaDeskMode === 'include' ? 'KOREA Desk' : filters.koreaDeskMode === 'exclude' ? 'Excluding KOREA Desk' : '') };
     Object.entries(labels).forEach(([key, value]) => { if (value) next.set(key, value); else next.delete(key); });
     navigate({ pathname: '/', search: `?${next.toString()}` }, { state: { ...location.state, dashboardInsightOverlay: true } });
-  }, [filterPayload.filters.accountIds, filterPayload.filters.countryCodes, filterPayload.filters.portIds, filterPayload.filters.supplierIds, filters.company, filters.counterparty?.entityType, filters.counterparty?.name, filters.country, filters.disputeOnly, filters.group, filters.port, filters.selectedMonths, filters.selectedYears, location.state, navigate, searchParams]);
+  }, [filterPayload.filters.accountIds, filterPayload.filters.countryCodes, filterPayload.filters.excludedCountryCodes, filterPayload.filters.portIds, filterPayload.filters.supplierIds, filters.company, filters.counterparty?.entityType, filters.counterparty?.name, filters.country, filters.disputeOnly, filters.group, filters.koreaDeskMode, filters.port, filters.selectedMonths, filters.selectedYears, location.state, navigate, searchParams]);
   const updateAccountInsightView = useCallback(({ role, statementSide, tab: insightTab, periodMode, accountWide }) => {
     const next = new URLSearchParams(searchParams);
     if (role) next.set('insightRole', role);
@@ -209,13 +305,13 @@ export default function DashboardSettings() {
     next.set('tab', 'accounts');
     navigate({ pathname: '/', search: `?${next.toString()}` }, { replace: true, state: null });
   }, [location.state, navigate, searchParams]);
-  const refresh = () => { if (aiSearchActive) skipNextAutoLoadRef.current = true; setAiSearchActive(false); loadSummary({ force: true }); loadStems({ cursor: aiSearchActive ? null : navigation.cursor, history: aiSearchActive ? [] : navigation.history, sort: aiSearchActive ? DEFAULT_STEM_SORT : navigation.sort, force: true }); if ((tab === 'overview' && analyticsEnabled) || tab === 'accounts') loadAnalytics({ force: true }); };
+  const refresh = () => { if (aiSearchActive) skipNextStemAutoLoadRef.current = true; setAiSearchActive(false); if (ebitEnabled) setSummary((value) => value ? { ...value, finance: null } : value); loadSummary({ force: true }); loadStems({ cursor: aiSearchActive ? null : navigation.cursor, history: aiSearchActive ? [] : navigation.history, sort: aiSearchActive ? DEFAULT_STEM_SORT : navigation.sort, force: true }); if ((tab === 'overview' && analyticsEnabled) || tab === 'accounts') loadAnalytics({ force: true }); };
 
   return <main ref={dashboardRootRef} className={`workspace-page workspace-dashboard mx-auto p-3 transition-[max-width] duration-200 sm:p-6 lg:p-8 ${stemTableWide && tab === 'stems' ? 'workspace-page-wide max-w-none' : 'max-w-[1600px]'}`}><PageHeader inlineMeta icon={Building2} title="Dashboard" meta={<span className="flex flex-wrap items-center gap-2">{summaryMeta ? <DataStatus meta={summaryMeta} label="Data" compact /> : <span>Loading current decision data</span>}<PaymentDataReliabilityBadge />{loading.summary && summary ? <span className="text-xs text-muted-foreground">Updating without clearing results…</span> : null}</span>} actions={<><PageMethodology {...DASHBOARD_METHODOLOGY} /><Button type="button" size="sm" variant="outline" onClick={refresh} disabled={loading.summary || loading.stems}><RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${loading.summary || loading.stems ? 'animate-spin' : ''}`} />Refresh</Button></>} />
     <DashboardFilterBar showPerspective={tab !== 'accounts'} filters={filters} years={years} portOptions={portOptions} loading={loading.summary || loading.stems} onChange={changeFilters} onReset={() => changeFilters(normalizeDashboardFilters({ ...presetDashboardPeriod('year_to_date'), datePreset: 'year_to_date' }))} onAiSearch={runAiSearch} />
     {errors.summary ? <ErrorBlock message={errors.summary} onRetry={loadSummary} /> : null}{errors.ai ? <ErrorBlock message={errors.ai} /> : null}<Tabs value={tab} onValueChange={(nextTab) => { setTab(nextTab); const next = new URLSearchParams(searchParams); if (nextTab === 'overview') next.delete('tab'); else next.set('tab', nextTab); setSearchParams(next, { replace: true }); }}><TabsList className="mb-4 w-full justify-start overflow-x-auto"><TabsTrigger value="overview">Overview</TabsTrigger><TabsTrigger value="stems">STEMs</TabsTrigger><TabsTrigger value="accounts">Accounts</TabsTrigger></TabsList>
-      <TabsContent value="overview" className="space-y-4">{!summary && loading.summary ? <div className="dashboard-primary-kpis" role="status" aria-label="Loading Dashboard figures">{[1, 2, 3, 4].map((key) => <div key={key} className="h-32 animate-pulse rounded-xl border border-border bg-muted/40" />)}</div> : <DashboardKpis summary={dashboardKpiSummary} />}{analyticsEnabled ? <Suspense fallback={<div className="h-56 animate-pulse rounded-xl border border-border bg-card" />}><DashboardAnalytics data={analytics} loading={loading.analytics} error={errors.analytics} onLoad={loadAnalytics} counterpartyMode={filters.counterpartyMode} onAccountClick={(account) => openAccount(account, 'overview')} /></Suspense> : <section className="rounded-xl border border-border bg-card p-4"><h2 className="text-sm font-semibold">Analytics</h2><p className="mt-1 text-xs text-muted-foreground">Load trends and rankings only when you need a deeper view.</p><Button type="button" size="sm" variant="outline" className="mt-3" onClick={() => setAnalyticsEnabled(true)}>Load analytics</Button></section>}</TabsContent>
-      <TabsContent value="stems" className="space-y-4">{errors.stems ? <ErrorBlock message={errors.stems} onRetry={() => loadStems({ cursor: navigation.cursor, history: navigation.history, sort: navigation.sort })} /> : null}<DashboardStemTable result={stems} loading={loading.stems} search={stemSearch} wide={stemTableWide} onWideChange={setStemTableWide} onSearch={(value) => { setAiSearchActive(false); setStemSearch(value); }} onPrevious={() => loadStems({ cursor: navigation.history.at(-1) ?? null, history: navigation.history.slice(0, -1), sort: navigation.sort })} onNext={() => loadStems({ cursor: stems?.nextCursor ?? stems?.pagination?.nextCursor, history: [...navigation.history, navigation.cursor], sort: navigation.sort })} onSortChange={(sort) => { if (aiSearchActive) skipNextAutoLoadRef.current = true; setAiSearchActive(false); loadStems({ cursor: null, history: [], sort }); }} onStemClick={(row) => setSelectedStemId(row.Id ?? row.id)} onAccountClick={(account) => openAccount(account, 'overview')} /></TabsContent>
+      <TabsContent value="overview" className="space-y-4">{!summary && loading.summary ? <div className="dashboard-primary-kpis" role="status" aria-label="Loading Dashboard figures">{[1, 2, 3, 4].map((key) => <div key={key} className="h-32 animate-pulse rounded-xl border border-border bg-muted/40" />)}</div> : <DashboardKpis summary={dashboardKpiSummary} ebitEnabled={ebitEnabled} onEbitChange={changeEbit} financeLoading={ebitEnabled && loading.summary} financeError={ebitEnabled ? errors.summary : null} />}{analyticsEnabled ? <Suspense fallback={<div className="h-56 animate-pulse rounded-xl border border-border bg-card" />}><DashboardAnalytics data={analytics} loading={loading.analytics} error={errors.analytics} onLoad={loadAnalytics} counterpartyMode={filters.counterpartyMode} onAccountClick={(account) => openAccount(account, 'overview')} /></Suspense> : <section className="rounded-xl border border-border bg-card p-4"><h2 className="text-sm font-semibold">Analytics</h2><p className="mt-1 text-xs text-muted-foreground">Load trends and rankings only when you need a deeper view.</p><Button type="button" size="sm" variant="outline" className="mt-3" onClick={() => setAnalyticsEnabled(true)}>Load analytics</Button></section>}</TabsContent>
+      <TabsContent value="stems" className="space-y-4">{errors.stems ? <ErrorBlock message={errors.stems} onRetry={() => loadStems({ cursor: navigation.cursor, history: navigation.history, sort: navigation.sort })} /> : null}<DashboardStemTable result={stems} loading={loading.stems} search={stemSearch} wide={stemTableWide} onWideChange={setStemTableWide} exportFilterPayload={filterPayload} exportScopeLabels={exportScopeLabels} includeFinanceCosts={ebitEnabled} aiSearchActive={aiSearchActive} onClearAiSearch={() => submitStemSearch('')} onSearch={submitStemSearch} onPrevious={() => loadStems({ cursor: navigation.history.at(-1) ?? null, history: navigation.history.slice(0, -1), sort: navigation.sort })} onNext={() => loadStems({ cursor: stems?.nextCursor ?? stems?.pagination?.nextCursor, history: [...navigation.history, navigation.cursor], sort: navigation.sort })} onSortChange={(sort) => { if (aiSearchActive) skipNextStemAutoLoadRef.current = true; setAiSearchActive(false); loadStems({ cursor: null, history: [], sort }); }} onStemClick={(row) => setSelectedStemId(row.Id ?? row.id)} onAccountClick={(account) => openAccount(account, 'overview')} /></TabsContent>
       <TabsContent value="accounts" className="space-y-5"><Suspense fallback={<div className="h-48 animate-pulse rounded-xl border border-border bg-card" />}><AccountCreditDirectory counterparty={filterPayload.counterparty} dateWindows={filterPayload.dateWindows} disputeOnly={filterPayload.disputeOnly} filters={filterPayload.filters} onOpen={openAccount} /></Suspense></TabsContent></Tabs>
     <StemDetailModal stemId={selectedStemId} open={Boolean(selectedStemId)} onClose={() => setSelectedStemId(null)} />
     {insightQuery.account ? <Suspense fallback={null}><AccountInsightModal account={insightQuery.account} open onClose={closeAccountInsight} selectedYears={insightQuery.years.length ? insightQuery.years : filters.selectedYears} selectedMonths={insightQuery.months.length ? insightQuery.months : filters.selectedMonths} dashboardScope={insightDashboardScope} initialPeriodMode={insightQuery.period} onViewChange={updateAccountInsightView} /></Suspense> : null}</main>;

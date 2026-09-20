@@ -1,0 +1,105 @@
+import { expect, test } from '@playwright/test';
+
+const FIXTURE_PATH = '/e2e/fixtures/dashboard-preview.html';
+const FIXTURE_ORIGIN = new URL(process.env.FCOS_E2E_BASE_URL || 'http://127.0.0.1:5173').origin;
+
+async function expandMobileFilters(page) {
+  const control = page.getByRole('button', { name: /^Filters/ });
+  if (await control.isVisible() && await control.getAttribute('aria-expanded') !== 'true') await control.click();
+}
+
+test.describe('synthetic Dashboard EBIT, Korea, Finance settings, and XLS fixture', () => {
+  test.skip(process.env.FCOS_E2E_DASHBOARD_FIXTURE !== '1', 'Opt-in local Vite fixture; no provider calls or live data.');
+
+  test('keeps the full ordinary selection reviewable on desktop and mobile', async ({ page }) => {
+    const browserErrors = [];
+    const externalRequests = [];
+    const failedResponses = [];
+    const downloads = [];
+    page.on('pageerror', (error) => browserErrors.push(error.message));
+    page.on('console', (message) => { if (message.type() === 'error' && !message.text().startsWith('Failed to load resource:')) browserErrors.push(message.text()); });
+    page.on('response', (response) => { if (response.status() >= 400) failedResponses.push({ status: response.status(), url: response.url() }); });
+    page.on('request', (request) => { if (new URL(request.url()).origin !== FIXTURE_ORIGIN) externalRequests.push(request.url()); });
+    page.on('download', (download) => downloads.push(download.suggestedFilename()));
+
+    await page.goto(FIXTURE_PATH);
+    await expect(page.getByText('Synthetic UI fixture — not live Salesforce data').first()).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Gross Profit', exact: true })).toBeVisible();
+    const ebitToggle = page.getByRole('switch', { name: 'Show EBIT in place of Gross Profit' });
+    await expect(ebitToggle).not.toBeChecked();
+    await ebitToggle.click();
+    await expect(ebitToggle).toBeChecked();
+    await expect(page.getByRole('heading', { name: 'EBIT', exact: true })).toBeVisible();
+    await expect(page.getByText('Gross profit net finance costs')).toBeVisible();
+    await expect(page.getByText(/2 STEMs missing payment evidence/)).toBeVisible();
+    await expect(page.getByText('5.00% annually · Actual/365')).toBeVisible();
+    await expect(page.getByText(/Calculated through 2026-09-05 · Rate revision 1/)).toBeVisible();
+
+    await expandMobileFilters(page);
+    const koreaOnly = page.getByRole('button', { name: 'Korea Desk', exact: true });
+    const excludeKorea = page.getByRole('button', { name: 'Exclude Korea Desk', exact: true });
+    await excludeKorea.click();
+    await expect(excludeKorea).toHaveAttribute('aria-pressed', 'true');
+    await expect(koreaOnly).toHaveAttribute('aria-pressed', 'false');
+    await expect(page.getByText('Exclude Korea Desk', { exact: true }).last()).toBeVisible();
+    const location = page.getByLabel('Port or COUNTRY');
+    await location.fill('Singapore');
+    await location.press('Enter');
+    await expect(excludeKorea).toHaveAttribute('aria-pressed', 'false');
+    await koreaOnly.click();
+    await expect(koreaOnly).toHaveAttribute('aria-pressed', 'true');
+    await koreaOnly.click();
+    await expect(koreaOnly).toHaveAttribute('aria-pressed', 'false');
+    await excludeKorea.click();
+
+    await page.getByRole('tab', { name: 'STEMs', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Export XLS', exact: true })).toBeEnabled();
+    await page.evaluate(() => { window.__fixtureExportDelayMs = 500; });
+    await page.getByRole('button', { name: 'Export XLS', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Cancel', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect(page.getByText('Export cancelled. No file was downloaded.')).toBeVisible();
+    expect(downloads).toEqual([]);
+
+    await page.evaluate(() => { window.__fixtureExportDelayMs = 0; });
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      page.getByRole('button', { name: 'Export XLS', exact: true }).click(),
+    ]);
+    expect(download.suggestedFilename()).toMatch(/^FCOS_Dashboard_STEMs_\d{4}-\d{2}-\d{2}\.xls$/);
+    await expect(page.getByText('Exported 201 STEMs.')).toBeVisible();
+    const exportRequests = await page.evaluate(() => window.__fixtureDashboardStemRequests);
+    const completedRequests = exportRequests.slice(-2);
+    expect(completedRequests).toHaveLength(2);
+    expect(completedRequests[0].filters.excludedCountryCodes).toEqual(['KOREA']);
+    expect(completedRequests[0].includeFinanceCosts).toBe(true);
+    expect(completedRequests[1].financeSnapshot).toEqual({ revision: 1, asOfDate: '2026-09-05' });
+
+    await expandMobileFilters(page);
+    await page.getByRole('button', { name: 'AI search', exact: true }).click();
+    await page.getByLabel('AI search').fill('show Korea desk stems');
+    await page.getByRole('button', { name: 'Apply', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Export XLS', exact: true })).toBeDisabled();
+    await expect(page.getByText(/Export is unavailable for AI results/)).toBeVisible();
+    await page.getByRole('button', { name: 'Clear AI search', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Export XLS', exact: true })).toBeEnabled();
+
+    await page.getByRole('tab', { name: 'Finance settings', exact: true }).click();
+    const rate = page.getByLabel('Annual financing rate (%)');
+    await expect(rate).toHaveValue('5.00');
+    await rate.fill('100.001');
+    await expect(page.getByText('Enter a percentage from 0 to 100 with no more than two decimal places.')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Save rate', exact: true })).toBeDisabled();
+    await rate.fill('6.25');
+    await page.getByRole('button', { name: 'Save rate', exact: true }).click();
+    await expect(rate).toHaveValue('6.25');
+    await expect(page.getByText('2', { exact: true })).toBeVisible();
+    expect(await page.evaluate(() => window.__fixtureFinanceEvents)).toEqual([{ revision: 2 }]);
+
+    expect(await page.locator('body').evaluate((body) => body.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    expect(await page.evaluate(() => document.querySelector('.vite-error-overlay, #webpack-dev-server-client-overlay') ? 'ERROR_OVERLAY' : 'OK')).toBe('OK');
+    expect(externalRequests).toEqual([]);
+    expect(failedResponses.filter(({ url }) => !url.endsWith('/favicon.ico') && !url.includes('/node_modules/@fontsource'))).toEqual([]);
+    expect(browserErrors).toEqual([]);
+  });
+});

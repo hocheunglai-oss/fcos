@@ -135,6 +135,11 @@ export const SETTINGS_METHODOLOGIES = {
     "description": "How Microsoft Graph mailboxes are registered and assigned to FCOS email purposes.",
     contentUrl, "contentKey": "SETTINGS_METHODOLOGIES:email-delivery"
   },
+  "finance": {
+    "title": "Finance",
+    "description": "How the company financing rate controls Dashboard EBIT calculations.",
+    contentUrl, "contentKey": "SETTINGS_METHODOLOGIES:finance"
+  },
   "ai": {
     "title": "AI Models",
     "description": "How FCOS selects models and reports usage without weakening workflow permissions.",

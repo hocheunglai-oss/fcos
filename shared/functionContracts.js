@@ -7,6 +7,14 @@ const stringValue = (value) => typeof value === 'string' && value.trim().length 
 const stringArray = (value) => Array.isArray(value) && value.length > 0 && value.every(stringValue);
 
 const CONTRACTS = Object.freeze({
+  financeSettingsSave(payload) {
+    const issues = [];
+    if (!['number', 'string'].includes(typeof payload.annualInterestRatePct)
+      || !/^\d{1,3}(?:\.\d{1,2})?$/.test(String(payload.annualInterestRatePct).trim())
+      || Number(payload.annualInterestRatePct) > 100) issues.push('Enter a rate from 0 to 100 with at most two decimal places.');
+    if (!Number.isSafeInteger(payload.expectedRevision) || payload.expectedRevision < 1) issues.push('A current settings revision is required.');
+    return issues;
+  },
   marketTraderWorkspace(payload) {
     return payload.visitId == null || /^[a-zA-Z0-9_-]{8,80}$/.test(payload.visitId) ? [] : ['A valid visit identifier is required.'];
   },

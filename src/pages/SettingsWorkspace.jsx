@@ -1,6 +1,7 @@
-import { useEffect, useMemo } from 'react';
+import { lazy, Suspense, useEffect, useMemo } from 'react';
 import {
   Activity,
+  BadgeDollarSign,
   Bot,
   HeartPulse,
   History,
@@ -23,6 +24,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { SETTINGS_METHODOLOGIES } from '@/lib/pageMethodologyIndex';
 import { APP_VERSION } from '@/lib/appVersionMeta';
 
+const FinanceSettings = lazy(() => import('@/components/settings/FinanceSettings'));
+
 const SECTION_GROUPS = [
   {
     id: 'personal',
@@ -37,6 +40,7 @@ const SECTION_GROUPS = [
     sections: [
       { id: 'people', label: 'People & Access', description: 'Users, permissions and reporting lines', icon: UsersRound, access: 'administrator' },
       { id: 'email-delivery', label: 'Email Delivery', description: 'Graph mailboxes and email purposes', icon: Mail, access: 'administrator' },
+      { id: 'finance', label: 'Finance', description: 'Dashboard EBIT financing rate', icon: BadgeDollarSign, access: 'finance' },
       { id: 'ai', label: 'AI Models', description: 'Models, tokens and estimated cost', icon: Bot, access: 'ai' },
       { id: 'updates', label: 'FCOS Updates', description: 'Draft, review and send product updates', icon: Megaphone, access: 'administrator' },
     ],
@@ -92,10 +96,11 @@ export default function SettingsWorkspace() {
     sections: group.sections.filter((section) => {
       if (section.access === 'all') return true;
       if (section.access === 'administrator') return isAdministrator;
+      if (section.access === 'finance') return hasModuleAccess('dashboard') || hasCapability('financial_report_settings_manage');
       if (section.access === 'ai') return isAdministrator || hasCapability('hedge_admin');
       return false;
     }),
-  })).filter((group) => group.sections.length), [hasCapability, isAdministrator]);
+  })).filter((group) => group.sections.length), [hasCapability, hasModuleAccess, isAdministrator]);
   const available = availableGroups.flatMap((group) => group.sections);
   const active = available.some((section) => section.id === requested) ? requested : 'my';
   const activeMethodology = SETTINGS_METHODOLOGIES[active] || SETTINGS_METHODOLOGIES.my;
@@ -193,6 +198,7 @@ export default function SettingsWorkspace() {
         {active === 'my' && <SettingsPage section="my" methodologyAction={methodologyAction} />}
         {active === 'people' && <AdminControl methodologyAction={methodologyAction} />}
         {active === 'email-delivery' && <SettingsPage section="email-delivery" methodologyAction={methodologyAction} />}
+        {active === 'finance' && <Suspense fallback={<div role="status" className="p-6 text-sm text-muted-foreground">Loading Finance settings…</div>}><FinanceSettings methodologyAction={methodologyAction} /></Suspense>}
         {active === 'ai' && <SettingsPage section="ai" methodologyAction={methodologyAction} />}
         {active === 'updates' && <FcosUpdatesSection methodologyAction={methodologyAction} />}
         {active === 'health' && <SettingsPage section="health" methodologyAction={methodologyAction} />}

@@ -1,4 +1,6 @@
 import CalculationEvidence from '@/components/common/CalculationEvidence';
+import { Loader2 } from 'lucide-react';
+import { Switch } from '@/components/ui/switch';
 import { dashboardDisplayNumber as number } from '@/lib/dashboardPresentation';
 
 const money = (value) => number(value)?.toLocaleString(undefined, { maximumFractionDigits: 0 }) ?? 'Unavailable';
@@ -27,6 +29,101 @@ function FinancialCard({ label, field, rows, percent = false, formula, asOf, war
   </article>;
 }
 
+function EbitToggle({ enabled, onChange }) {
+  return <label className="inline-flex shrink-0 cursor-pointer items-center gap-2 rounded-md border border-border bg-background px-2 py-1 text-xs font-medium text-foreground">
+    <span>EBIT</span>
+    <Switch
+      checked={enabled}
+      onCheckedChange={(checked) => onChange?.(checked === true)}
+      aria-label="Show EBIT in place of Gross Profit"
+    />
+  </label>;
+}
+
+function GrossProfitCard({ summary, rows, complete, warnings, asOf, ebitEnabled, onEbitChange, financeLoading, financeError }) {
+  if (!ebitEnabled) {
+    const available = complete && rows.some((row) => number(row.netPnl) != null);
+    const evidenceValue = rows.map((row) => `${row.currency || 'Unspecified'}: ${complete ? money(row.netPnl) : 'Unavailable'}`).join(' · ');
+    return <article className="workspace-kpi-card dashboard-primary-kpi min-w-0 rounded-[var(--radius-panel)] border border-border bg-card p-4">
+      <div className="flex items-start justify-between gap-2">
+        <h2 className="text-[13px] font-medium text-muted-foreground">Gross Profit</h2>
+        <div className="flex items-center gap-2">
+          <EbitToggle enabled={false} onChange={onEbitChange} />
+          <CalculationEvidence title="Gross Profit" value={evidenceValue} classification={available ? 'calculated' : 'unavailable'} complete={Boolean(available)} formula="Buyer-side value minus supplier-side cost and applicable STEM financial adjustments, separately by currency." sources={['Exact Salesforce STEM and child financial records matching the selected Dashboard filters.', 'Amounts remain separated by ISO currency; FCOS does not invent exchange-rate conversions.']} warnings={warnings} asOf={asOf} />
+        </div>
+      </div>
+      <div className="mt-3 space-y-2">{rows.map((row) => {
+        const value = complete ? number(row.netPnl) : null;
+        const accent = value == null ? 'text-muted-foreground' : value < 0 ? 'text-red-700 dark:text-red-400' : value > 0 ? 'text-emerald-700 dark:text-emerald-400' : 'text-foreground';
+        return <div key={row.currency || 'unspecified'} className="flex flex-wrap items-baseline gap-x-2 gap-y-1 tabular-nums">
+          <span className="text-xs text-muted-foreground">{row.currency || 'Unspecified'}</span>
+          <span className={`text-[22px] font-semibold leading-7 ${accent}`} aria-label={`${row.currency || 'Unspecified'} Gross Profit: ${money(value)}`}>{money(value)}</span>
+        </div>;
+      })}</div>
+    </article>;
+  }
+
+  const finance = summary?.finance;
+  const financeByCurrency = new Map((finance?.byCurrency || []).map((row) => [row.currency || 'Unspecified', row]));
+  const currencies = [...new Set([
+    ...rows.map((row) => row.currency || 'Unspecified'),
+    ...(finance?.byCurrency || []).map((row) => row.currency || 'Unspecified'),
+  ])];
+  const ebitRows = currencies.map((currency) => ({
+    currency,
+    grossProfit: number(rows.find((row) => (row.currency || 'Unspecified') === currency)?.netPnl),
+    finance: financeByCurrency.get(currency),
+  }));
+  const financeWarnings = [...warnings, ...(finance?.warnings || [])];
+  const financeUsable = !financeLoading && !financeError;
+  const allAvailable = Boolean(complete && financeUsable && finance && ebitRows.length && ebitRows.every(({ finance: row }) => row?.complete !== false && number(row?.financeCost) != null && number(row?.ebit) != null));
+  const rate = number(finance?.annualInterestRatePct);
+  const rateLabel = rate == null ? 'Rate unavailable' : `${rate.toFixed(2)}% annually`;
+  const basis = finance?.dayCountBasis === 'ACT/365' ? 'Actual/365' : finance?.dayCountBasis || 'Day-count basis unavailable';
+  const calculatedThrough = finance?.asOfDate ? `Calculated through ${finance.asOfDate}` : 'Calculation date unavailable';
+  const evidenceValue = ebitRows.map(({ currency, finance: row }) => `${currency}: ${financeUsable && row?.complete !== false && number(row?.ebit) != null ? money(row.ebit) : 'Unavailable'}`).join(' · ');
+
+  return <article className="workspace-kpi-card dashboard-primary-kpi min-w-0 rounded-[var(--radius-panel)] border border-border bg-card p-4">
+    <div className="flex items-start justify-between gap-2">
+      <div className="min-w-0">
+        <h2 className="text-[13px] font-medium text-muted-foreground">EBIT</h2>
+        <p className="mt-0.5 text-[11px] leading-4 text-muted-foreground">Gross profit net finance costs</p>
+      </div>
+      <div className="flex items-center gap-2">
+        <EbitToggle enabled onChange={onEbitChange} />
+        <CalculationEvidence title="EBIT" value={evidenceValue} classification={allAvailable ? 'calculated' : 'unavailable'} complete={allAvailable} formula="Gross profit minus finance cost. Finance cost is the sum of positive daily funded balances × the current annual rate ÷ 365." sources={['Complete Salesforce cash allocations for the matching STEMs, including payment history outside the selected Dashboard period.', 'Amounts remain separated by ISO currency; FCOS does not invent exchange-rate conversions.']} exclusions={['Non-cash adjustments do not change the funded balance.']} warnings={financeWarnings} asOf={finance?.asOfDate || asOf} />
+      </div>
+    </div>
+
+    {financeLoading ? <div role="status" className="mt-3 flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />Calculating EBIT…</div> : (
+      <div className="mt-3 space-y-3">{ebitRows.map(({ currency, grossProfit, finance: row }) => {
+        const rowComplete = Boolean(complete && financeUsable && row && row.complete !== false && number(row.financeCost) != null && number(row.ebit) != null);
+        const ebit = rowComplete ? number(row.ebit) : null;
+        const financeCost = rowComplete ? number(row.financeCost) : null;
+        const missing = Math.max(0, Number(row?.missingEvidenceCount || 0));
+        const accent = ebit == null ? 'text-muted-foreground' : ebit < 0 ? 'text-red-700 dark:text-red-400' : ebit > 0 ? 'text-emerald-700 dark:text-emerald-400' : 'text-foreground';
+        return <div key={currency} className="tabular-nums">
+          <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+            <span className="text-xs text-muted-foreground">{currency}</span>
+            <span className={`text-[22px] font-semibold leading-7 ${accent}`} aria-label={`${currency} EBIT: ${money(ebit)}`}>{money(ebit)}</span>
+          </div>
+          {rowComplete ? <p className="mt-0.5 text-[11px] text-muted-foreground">Gross profit {money(grossProfit)} − finance cost {money(financeCost)}</p> : (
+            <p className="mt-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-400">
+              Finance cost unavailable{missing ? ` · ${missing.toLocaleString()} STEM${missing === 1 ? '' : 's'} missing payment evidence` : ''}
+            </p>
+          )}
+        </div>;
+      })}</div>
+    )}
+
+    <div className="mt-3 border-t border-border pt-2 text-[11px] leading-4 text-muted-foreground">
+      <p>{rateLabel} · {basis}</p>
+      <p>{calculatedThrough}{finance?.revision != null ? ` · Rate revision ${finance.revision}` : ''}</p>
+    </div>
+    {financeError ? <p role="alert" className="mt-2 text-xs text-red-700 dark:text-red-400">{financeError?.message || String(financeError)}</p> : null}
+  </article>;
+}
+
 function ProductVolumeCard({ productVolume, asOf, warnings = [] }) {
   const quantity = number(productVolume?.quantity);
   const display = quantity == null ? 'Unavailable' : `${quantity.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${productVolume.unitOfMeasure || 'MT'}`;
@@ -37,7 +134,7 @@ function ProductVolumeCard({ productVolume, asOf, warnings = [] }) {
   </article>;
 }
 
-export default function DashboardKpis({ summary }) {
+export default function DashboardKpis({ summary, ebitEnabled = false, onEbitChange, financeLoading = false, financeError = null }) {
   const rows = currencyRows(summary);
   const stemCount = number(summary?.matchingCount ?? summary?.stemCount ?? summary?.stemTotal);
   const accountCount = number(summary?.accountCount ?? summary?.buyerAccountCount);
@@ -49,7 +146,7 @@ export default function DashboardKpis({ summary }) {
   const common = { rows, complete, warnings, asOf };
   return <section aria-label="Dashboard KPIs" className="space-y-3">
     <div className="dashboard-primary-kpis">
-      <FinancialCard {...common} label="Gross Profit" field="netPnl" formula="Buyer-side value minus supplier-side cost and applicable STEM financial adjustments, separately by currency." />
+      <GrossProfitCard {...common} summary={summary} ebitEnabled={ebitEnabled} onEbitChange={onEbitChange} financeLoading={financeLoading} financeError={financeError} />
       <FinancialCard {...common} label="Gross Margin %" field="grossMarginPct" percent formula="Aggregate gross profit ÷ aggregate turnover × 100 for each currency. Monthly or row percentages are not averaged." />
       <FinancialCard {...common} label="Turnover" field="buyer" formula="Sum buyer-side value for the matching STEM scope, separately by currency." />
       <ProductVolumeCard productVolume={summary?.productVolumeKpi || summary?.productVolume} asOf={asOf} warnings={warnings} />
