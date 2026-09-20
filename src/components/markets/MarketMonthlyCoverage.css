@@ -1,0 +1,78 @@
+.market-book-context__views { display: flex; gap: 4px; padding: 8px 12px; overflow-x: auto; border-bottom: 1px solid var(--app-border); background: var(--app-surface-soft); }
+.market-book-context__views button { flex: 0 0 auto; padding: 6px 9px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--app-text-muted); font: inherit; font-size: 10px; font-weight: 800; cursor: pointer; }
+.market-book-context__views button:hover { color: var(--app-text); }
+.market-book-context__views button[aria-selected="true"] { border-color: var(--app-border); background: var(--app-surface); color: #1d4ed8; box-shadow: var(--app-shadow-sm); }
+.market-book-context__views button:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 2px; }
+
+.market-monthly-coverage { min-width: 0; }
+.market-monthly-coverage__intro { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 11px 12px; border-bottom: 1px solid var(--app-border); }
+.market-monthly-coverage__intro > div { display: grid; gap: 3px; }
+.market-monthly-coverage__intro strong { font-size: 11px; }
+.market-monthly-coverage__intro p { max-width: 760px; margin: 0; color: var(--app-text-muted); font-size: 10px; line-height: 1.45; }
+.market-monthly-coverage__intro > span { flex: 0 0 auto; padding: 4px 7px; border-radius: 999px; background: var(--app-surface-soft); color: var(--app-text-muted); font-size: 9px; font-weight: 750; }
+.market-monthly-coverage__filters { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 7px; padding: 9px 12px; border-bottom: 1px solid var(--app-border); }
+.market-monthly-coverage__filters label { display: grid; gap: 3px; color: var(--app-text-muted); font-size: 9px; font-weight: 800; }
+.market-monthly-coverage__filters select { min-width: 132px; height: 29px; padding: 0 26px 0 8px; border: 1px solid var(--app-border); border-radius: 7px; background: var(--app-surface); color: var(--app-text); font: inherit; font-size: 10px; }
+.market-monthly-coverage__filters button, .market-monthly-coverage__expand button { display: inline-flex; align-items: center; gap: 4px; padding: 6px 8px; border: 0; background: transparent; color: #1d4ed8; font: inherit; font-size: 9px; font-weight: 800; cursor: pointer; }
+.market-monthly-coverage__filters select:focus-visible, .market-monthly-coverage__filters button:focus-visible, .market-monthly-coverage__expand button:focus-visible, .market-monthly-coverage__methodology summary:focus-visible, .market-monthly-coverage__fixed summary:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 2px; }
+.market-monthly-coverage__notice { display: flex; align-items: flex-start; gap: 7px; padding: 9px 12px; border-bottom: 1px solid #f2c47b; background: color-mix(in srgb, #fef3c7 40%, var(--app-surface)); color: #7a4b0b; }
+.market-monthly-coverage__notice svg { flex: 0 0 auto; margin-top: 1px; }
+.market-monthly-coverage__notice p { margin: 0; font-size: 9px; line-height: 1.5; }
+.market-monthly-coverage__table-frame { overflow-x: auto; }
+.market-monthly-coverage__table { width: 100%; min-width: 760px; border-collapse: collapse; }
+.market-monthly-coverage__table--pricing { min-width: 1180px; }
+.market-monthly-coverage__table th, .market-monthly-coverage__table td { padding: 9px 10px; border-top: 1px solid var(--app-border); text-align: left; vertical-align: top; }
+.market-monthly-coverage__table thead th { border-top: 0; background: var(--app-surface-soft); color: var(--app-text-muted); font-size: 8px; letter-spacing: .035em; text-transform: uppercase; }
+.market-monthly-coverage__table tbody th { min-width: 180px; }
+.market-monthly-coverage__table tbody th > strong, .market-monthly-coverage__table tbody td > strong { display: block; color: var(--app-text); font-size: 11px; }
+.market-monthly-coverage__table tbody th > span, .market-monthly-coverage__table tbody td > span, .market-monthly-coverage__table tbody td > small { display: block; margin-top: 2px; color: var(--app-text-muted); font-size: 9px; font-weight: 500; }
+.market-monthly-coverage__table tbody td { color: var(--app-text-secondary); font-size: 10px; font-variant-numeric: tabular-nums; }
+.market-monthly-coverage__allocation, .market-monthly-coverage__unknown { width: fit-content; padding: 2px 5px; border-radius: 999px; background: #fff7e6; color: #8a5508 !important; font-size: 8px !important; font-weight: 800 !important; }
+.market-monthly-coverage__fixed { margin-top: 6px; }
+.market-monthly-coverage__fixed summary { display: inline-flex; align-items: center; gap: 3px; color: #1d4ed8; font-size: 9px; font-weight: 750; cursor: pointer; list-style: none; }
+.market-monthly-coverage__fixed summary::-webkit-details-marker { display: none; }
+.market-monthly-coverage__fixed[open] summary svg { transform: rotate(180deg); }
+.market-monthly-coverage__fixed dl { display: grid; gap: 3px; margin: 6px 0 0; padding: 6px; border: 1px solid var(--app-border); border-radius: 6px; background: var(--app-surface-soft); }
+.market-monthly-coverage__fixed dl > div { display: flex; justify-content: space-between; gap: 10px; }
+.market-monthly-coverage__fixed dt { color: var(--app-text-muted); font-size: 8px; font-weight: 650; }
+.market-monthly-coverage__fixed dd { margin: 0; color: var(--app-text-secondary); font-size: 9px; font-weight: 750; font-variant-numeric: tabular-nums; }
+.market-monthly-coverage__residual { display: grid !important; width: fit-content; gap: 1px; margin-top: 0 !important; }
+.market-monthly-coverage__residual strong { font-size: 11px; }
+.market-monthly-coverage__residual span { font-size: 8px; font-weight: 800; text-transform: uppercase; }
+.market-monthly-coverage__residual--positive strong, .market-monthly-coverage__residual--positive span { color: #8a5508; }
+.market-monthly-coverage__residual--negative strong, .market-monthly-coverage__residual--negative span { color: #c02632; }
+.market-monthly-coverage__signed--positive { color: #087447; }
+.market-monthly-coverage__signed--negative { color: #c02632; }
+.market-monthly-coverage__residual--neutral strong, .market-monthly-coverage__residual--neutral span, .market-monthly-coverage__signed--neutral { color: var(--app-text-muted); }
+.market-monthly-coverage__net-detail { margin-top: 5px !important; line-height: 1.5; }
+.market-monthly-coverage__signed { display: inline; font-weight: 800; }
+.market-monthly-coverage__empty { display: flex; align-items: flex-start; gap: 9px; padding: 18px 16px; }
+.market-monthly-coverage__empty > div { display: grid; gap: 3px; }
+.market-monthly-coverage__empty strong { font-size: 11px; }
+.market-monthly-coverage__empty span { color: var(--app-text-muted); font-size: 10px; }
+.market-monthly-coverage__expand { display: flex; justify-content: flex-end; padding: 7px 12px; border-top: 1px solid var(--app-border); }
+.market-monthly-coverage__methodology { border-top: 1px solid var(--app-border); }
+.market-monthly-coverage__methodology > summary { padding: 8px 12px; color: var(--app-text-secondary); font-size: 9px; font-weight: 800; cursor: pointer; }
+.market-monthly-coverage__methodology > div { display: grid; gap: 7px; padding: 0 12px 10px; color: var(--app-text-secondary); font-size: 9px; line-height: 1.5; }
+.market-monthly-coverage__methodology p, .market-monthly-coverage__methodology ul { margin: 0; }
+.market-monthly-coverage__methodology ul { padding-left: 17px; }
+
+@media (max-width: 700px) {
+  .market-monthly-coverage__intro { align-items: stretch; flex-direction: column; }
+  .market-monthly-coverage__intro > span { align-self: flex-start; }
+  .market-monthly-coverage__filters { align-items: stretch; }
+  .market-monthly-coverage__filters label { flex: 1 1 130px; }
+  .market-monthly-coverage__filters select { width: 100%; min-width: 0; }
+  .market-monthly-coverage__table-frame { overflow: visible; padding: 10px; }
+  .market-monthly-coverage__table { display: block; min-width: 0; }
+  .market-monthly-coverage__table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
+  .market-monthly-coverage__table tbody { display: grid; gap: 8px; }
+  .market-monthly-coverage__table tbody tr { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); overflow: hidden; border: 1px solid var(--app-border); border-radius: 9px; }
+  .market-monthly-coverage__table tbody th { grid-column: 1 / -1; padding: 9px 10px; border-top: 0; background: var(--app-surface-soft); }
+  .market-monthly-coverage__table tbody td { display: grid; gap: 2px; padding: 8px 10px; }
+  .market-monthly-coverage__table tbody td::before { content: attr(data-label); color: var(--app-text-muted); font-size: 8px; font-weight: 800; letter-spacing: .035em; text-transform: uppercase; }
+  .market-monthly-coverage__table--pricing tbody td:last-child { grid-column: 1 / -1; }
+}
+
+.dark .market-monthly-coverage__notice { border-color: rgb(180 110 24 / 58%); background: rgb(69 41 10 / 46%); color: #fde68a; }
+.dark .market-monthly-coverage__allocation, .dark .market-monthly-coverage__unknown { background: rgb(120 53 15 / 48%); color: #fde68a !important; }

@@ -29,6 +29,7 @@ const migrationSources = await Promise.all(names.map(async (name) => ({
   sql: await readFile(new URL(name, migrationDirectory), 'utf8'),
 })));
 const releaseMigrationNames = new Set([
+  '20260920105042_market_trader_workspace.sql',
   '20260916223258_app_workflow_reliability.sql',
   '20260806090000_financial_report_settings_and_currency_thresholds.sql',
   '20260806100000_dispute_external_closure_reconciliation.sql',
@@ -68,7 +69,7 @@ async function assertRows(sql, expected, label, values = []) {
 }
 
 async function verifyRuntimeObjects(label) {
-  const releaseTables = ['workflow_daily_metrics', 'collaboration_create_requests', 'account_insight_report_presets', 'account_insight_report_preset_events', 'hedge_fcbs_settlement_operations'];
+  const releaseTables = ['market_trader_workspaces', 'workflow_daily_metrics', 'collaboration_create_requests', 'account_insight_report_presets', 'account_insight_report_preset_events', 'hedge_fcbs_settlement_operations'];
   await assertRows(
     `select count(*)::int from pg_class c join pg_namespace n on n.oid = c.relnamespace
      where n.nspname = 'public' and c.relname = any($1::text[]) and c.relrowsecurity`,
@@ -86,6 +87,7 @@ async function verifyRuntimeObjects(label) {
     releaseTables.length * 2, `${label} report presets and FCBS service-role access`, [releaseTables],
   );
   const releaseFunctions = [
+    'save_market_trader_workspace',
     'save_account_insight_report_preset', 'resolve_variable_charge_post_invoice_change',
     'hedge_fcbs_settlement_month', 'hedge_fcbs_settlement_evidence',
     'validate_hedge_fcbs_document', 'protect_hedge_fcbs_issued', 'protect_hedge_fcbs_link_identity',

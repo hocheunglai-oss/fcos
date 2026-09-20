@@ -1,0 +1,13 @@
+# Personal Markets and monthly quantity context
+
+My Markets saves each active Markets user's pinned series, comparisons and in-app alert rules. A series retains its exact contract month across tenor rollover. Missing or expired selections remain removable. Historical Markets views do not record visits or change personal state.
+
+Only verified observations with a completed, matching source import are eligible. Quarantined dates, conflicting duplicate prices and missing values are excluded. Comparisons intersect exact publication dates and require equal units, currency, assessment session and price type. They never apply automatic price conversions. The comparison range describes the available observations within the current 90-day history window.
+
+Visit changes distinguish new assessments, same-date source corrections and saved-comparison moves. A visit is recorded once per mounted My Markets view; replaying its identifier is idempotent. Alerts require fresh prices and a change between consecutive reviewed publication dates. Acknowledgement and snoozing apply only to the exact event, so a later event is visible again. Alerts appear inside FCOS; this feature sends no external messages.
+
+Personal state is stored in `market_trader_workspaces`. Browser roles have no direct table or RPC grants. The API requires an active owner with Markets access, derives the owner from the authenticated profile, and uses an atomic revision check to prevent one session overwriting another. The governed read-only CI identity cannot use these personal endpoints.
+
+The Overview book card retains its total quantities and adds Delivery months and Pricing months. It requires both Markets and Hedge Desk access. Cross-month or invalid delivery windows remain unallocated. Pricing quantities are separated by product, native unit, counterparty, exact month, pricing basis and balance start date. Fixed-price legs remain separate; incomplete terms suppress residuals. Floating sales minus floating purchases plus BUY hedges minus SELL hedges gives the signed residual. These quantities do not measure P&L, price risk or hedge effectiveness.
+
+Secondary CSV validation requires positive AMFSA00, PPXDK00 and POABC00 CLOSE values before publishing. Completely blank rows are skipped only when the reviewed publication calendar identifies a non-publication date. A failed import leaves existing verified prices intact and exposes bounded diagnostics plus the last successful import and publication dates. An invalid upstream export still requires a corrected source file; this release never invents missing prices.

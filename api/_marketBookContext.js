@@ -1,3 +1,4 @@
+import { buildMonthlyCoverage } from './_marketMonthlyCoverage.js';
 import { buildQuantityCoverageRows, DEFAULT_GENERAL, isCoverageSwap } from '../src/hedge/lib/domain.js';
 
 function bookError(message, statusCode = 502) {
@@ -31,8 +32,8 @@ export function createMarketBookContext({ requireActiveUser, userHasAnyModuleAcc
     )));
     if (!permissions.every(Boolean)) throw bookError('Markets and Hedge Desk access are required to view book coverage.', 403);
     const [physicals, swaps, settings] = await Promise.all([
-      readAllRows(context.client, 'hedge_physical_trades', 'id,counterparty,product,qty_min,qty_max,unit,is_closed'),
-      readAllRows(context.client, 'hedge_swap_hedges', 'id,counterparty,product,quantity,unit,direction,is_expired'),
+      readAllRows(context.client, 'hedge_physical_trades', 'id,counterparty,product,qty_min,qty_max,unit,is_closed,delivery_date_from,delivery_date_to,buy_price_type,sell_price_type,buy_pricing_month,sell_pricing_month,buy_pricing_basis,sell_pricing_basis,buy_bal_date,sell_bal_date'),
+      readAllRows(context.client, 'hedge_swap_hedges', 'id,counterparty,product,quantity,unit,direction,is_expired,trade_type,swap_month,pricing_basis,bal_start_date,leg1_month,leg2_month,leg1_basis,leg2_basis,leg1_bal_date,leg2_bal_date'),
       context.client.from('hedge_settings').select('value').eq('key', 'general').maybeSingle(),
     ]);
     if (settings.error) throw bookError('Book unit settings could not be loaded.');
@@ -41,6 +42,7 @@ export function createMarketBookContext({ requireActiveUser, userHasAnyModuleAcc
     return {
       generatedAt: new Date().toISOString(),
       rows: buildQuantityCoverageRows(physicals, swaps, ratio),
+      monthlyCoverage: buildMonthlyCoverage(physicals, swaps, ratio),
       totals: { openPhysicalCount: physicals.filter((row) => !row.is_closed).length, liveHedgeCount: swaps.filter(isCoverageSwap).length },
       warnings: [],
       methodology: 'Current open physical midpoint quantities and live counterparty hedges, netting opposing hedge directions. Gasoil is in BBL; fuel oil is in MT. Quantity coverage is not a measure of price risk or hedge effectiveness.',

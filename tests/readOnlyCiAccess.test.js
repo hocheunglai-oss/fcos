@@ -61,7 +61,7 @@ test('the CI allowlist admits audited reads and denies financial, admin, email, 
   const profile = ciProfile();
   for (const handler of READ_ONLY_CI_HANDLERS) requireReadOnlyCiOperation(profile, handler);
   for (const handler of ['adminUserSave', 'variableChargesBuyerConfirm', 'hedgePhysicalSalesforceApply',
-    'marketBookContext', 'marketReportAnalysis', 'dashboardAiSearch', 'marketIntradaySnapshotPreview', 'emailRouterBackgroundSync',
+    'marketBookContext', 'marketTraderWorkspace', 'marketTraderWorkspaceSave', 'marketReportAnalysis', 'dashboardAiSearch', 'marketIntradaySnapshotPreview', 'emailRouterBackgroundSync',
     'collaborationAttachmentPrepare', 'workspacePreferencesSave', 'portalApplicationLaunch', 'futureReadEndpoint']) {
     assertDenied(() => requireReadOnlyCiOperation(profile, handler));
     // An accidental Administrator assignment or copied DB row cannot escape.

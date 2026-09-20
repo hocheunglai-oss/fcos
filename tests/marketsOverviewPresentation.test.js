@@ -25,6 +25,10 @@ test('source health is scoped and never suppresses the valid board', () => {
   assert.match(source, /Latest publication/);
   assert.match(source, /Current source status/);
   assert.match(source, /Last successful import/);
+  assert.match(source, /complete source dates/);
+  assert.match(source, /conflicts retained/);
+  assert.match(source, /Latest secondary attempt/);
+  assert.match(source, /source\.lastAttemptError\.message/);
   assert.match(source, /sourceHealth\.message/);
   assert.match(source, /const unit = delivered\.unit \|\| 'USD\/MT'/);
   assert.match(source, /allowProductSourceFallback: false/);

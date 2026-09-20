@@ -219,6 +219,7 @@ import {
 } from '../_marketIntelligenceTrading.js';
 import { loadMarketPulseSnapshot } from '../_marketPulse.js';
 import { createMarketBookContext } from '../_marketBookContext.js';
+import { createMarketTraderWorkspace } from '../_marketTraderWorkspace.js';
 import { secondaryMopsFailureMessage } from '../_marketSourceHealth.js';
 import { ciModuleAccess, isReadOnlyCiProfile, requireReadOnlyCiOperation } from '../_readOnlyCiAccess.js';
 import { analyzeMarketReportLibrary, loadMarketReportCatalogue } from '../_marketReportAnalysis.js';
@@ -1235,6 +1236,8 @@ const HANDLER_MODULE_ACCESS = {
   hedgeMarkets: ['markets'],
   marketPulseSnapshot: ['markets'],
   marketBookContext: ['markets'],
+  marketTraderWorkspace: ['markets'],
+  marketTraderWorkspaceSave: ['markets'],
   marketIntelligenceBrief: ['markets'],
   marketIntelligenceCurve: ['markets'],
   marketReportCatalogue: ['markets'],
@@ -18412,6 +18415,7 @@ async function marketIntelligenceBrief(body = {}, req = null, accessContext = nu
 }
 
 const marketBookContext = createMarketBookContext({ requireActiveUser, userHasAnyModuleAccess });
+const { marketTraderWorkspace, marketTraderWorkspaceSave } = createMarketTraderWorkspace({ requireActiveUser, userHasAnyModuleAccess });
 
 async function marketPulseSnapshot(body = {}, req = null, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
@@ -19162,6 +19166,8 @@ const handlers = {
   hedgeMarkets,
   marketPulseSnapshot,
   marketBookContext,
+  marketTraderWorkspace,
+  marketTraderWorkspaceSave,
   marketIntelligenceBrief,
   marketIntelligenceCurve,
   marketReportCatalogue,

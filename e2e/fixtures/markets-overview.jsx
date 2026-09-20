@@ -68,6 +68,25 @@ const bookContext = {
   ],
   totals: { openPhysicalCount: 6, liveHedgeCount: 5 },
   warnings: ['Fixture coverage note.'],
+  monthlyCoverage: {
+    deliveryRows: [
+      { key: 'delivery-atlas-sep', counterparty: 'Atlas Shipping', product: 'S380', unit: 'MT', month: '2026-09', physicalQty: 1200, tradeCount: 2, unallocated: false },
+      { key: 'delivery-atlas-oct', counterparty: 'Atlas Shipping', product: 'S380', unit: 'MT', month: '2026-10', physicalQty: 300, tradeCount: 1, unallocated: false },
+      { key: 'delivery-blue-sep', counterparty: 'Blue Ocean', product: 'S0.5', unit: 'MT', month: '2026-09', physicalQty: 800, tradeCount: 1, unallocated: false },
+      { key: 'delivery-caspian-sep', counterparty: 'Caspian Marine', product: 'SGO', unit: 'BBL', month: '2026-09', physicalQty: 7450, tradeCount: 1, unallocated: false },
+      { key: 'delivery-delta-oct', counterparty: 'Delta Fleet', product: 'S380', unit: 'MT', month: '2026-10', physicalQty: 500, tradeCount: 1, unallocated: false },
+      { key: 'delivery-far-unallocated', counterparty: 'Far Horizon', product: 'SGO', unit: 'BBL', month: null, physicalQty: null, tradeCount: 1, unallocated: true },
+    ],
+    pricingRows: [
+      { key: 'pricing-atlas-sep', counterparty: 'Atlas Shipping', product: 'S380', unit: 'MT', month: '2026-09', basis: 'WMA', balanceStartDate: null, physicalBuyFloatingQty: 100, physicalSellFloatingQty: 1200, fixedBuyQty: 0, fixedSellQty: 100, buyHedgeQty: 0, sellHedgeQty: 1080, physicalNet: 1100, hedgeNet: -1080, residualNet: 20, uncoveredQty: 20, excessHedgeQty: 0, unknownCount: 0 },
+      { key: 'pricing-atlas-oct', counterparty: 'Atlas Shipping', product: 'S380', unit: 'MT', month: '2026-10', basis: 'WMA', balanceStartDate: null, physicalBuyFloatingQty: 0, physicalSellFloatingQty: 300, fixedBuyQty: 0, fixedSellQty: 0, buyHedgeQty: 0, sellHedgeQty: 350, physicalNet: 300, hedgeNet: -350, residualNet: -50, uncoveredQty: 0, excessHedgeQty: 50, unknownCount: 0 },
+      { key: 'pricing-blue-sep-bal', counterparty: 'Blue Ocean', product: 'S0.5', unit: 'MT', month: '2026-09', basis: 'BAL_TODAY', balanceStartDate: '2026-09-12', physicalBuyFloatingQty: 200, physicalSellFloatingQty: 800, fixedBuyQty: 40, fixedSellQty: 0, buyHedgeQty: 600, sellHedgeQty: 0, physicalNet: 600, hedgeNet: 600, residualNet: null, uncoveredQty: null, excessHedgeQty: null, unknownCount: 1 },
+      { key: 'pricing-caspian-sep', counterparty: 'Caspian Marine', product: 'SGO', unit: 'BBL', month: '2026-09', basis: 'WMA', balanceStartDate: null, physicalBuyFloatingQty: 7450, physicalSellFloatingQty: 0, fixedBuyQty: 0, fixedSellQty: 0, buyHedgeQty: 7450, sellHedgeQty: 0, physicalNet: -7450, hedgeNet: 7450, residualNet: 0, uncoveredQty: 0, excessHedgeQty: 0, unknownCount: 0 },
+      { key: 'pricing-far-unallocated', counterparty: 'Far Horizon', product: 'SGO', unit: 'BBL', month: null, basis: null, balanceStartDate: null, physicalBuyFloatingQty: null, physicalSellFloatingQty: null, fixedBuyQty: null, fixedSellQty: null, buyHedgeQty: null, sellHedgeQty: null, physicalNet: null, hedgeNet: null, residualNet: null, uncoveredQty: null, excessHedgeQty: null, unknownCount: 2 },
+    ],
+    warnings: ['One delivery window crosses a month boundary and remains unallocated.'],
+    methodology: 'Fixture quantities retain their native units and are grouped only within an exact month and pricing basis.',
+  },
 };
 
 // The production brief refreshes on mount; keep that read local and deterministic.

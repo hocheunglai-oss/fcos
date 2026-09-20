@@ -137,7 +137,7 @@ test('market Drive run keys are stable UTC-hour idempotency boundaries', () => {
   assert.equal(marketDriveRunKey(new Date('2026-08-20T09:59:59.999Z')), 'market-drive:2026-08-20T09');
 });
 
-function secondaryCsvFixture({ duplicateDate = false, missingSgo = false } = {}) {
+function secondaryCsvFixture({ duplicateDate = false, incompleteRow = false, missingSgo = false } = {}) {
   const headers = [
     'DATE', 'COMMENTARY', 'SINGAPORE FUEL OIL 0.5% (AMFSA00): CLOSE',
     'SINGAPORE 380 CST (PPXDK00): CLOSE',
@@ -148,14 +148,14 @@ function secondaryCsvFixture({ duplicateDate = false, missingSgo = false } = {})
     return [date, '"quoted, evidence"', String(700 + index), String(500 + index), ...(missingSgo ? [] : [String(100 + index / 10)])].join(',');
   });
   if (duplicateDate) rows[20] = rows[20].replace('2026-01-21', '2026-01-20');
-  rows.push('2026-02-01,"incomplete",750,,105');
+  if (incompleteRow) rows.push('2026-02-01,"incomplete",750,,105');
   return Buffer.from(`sep=,\n${headers.join(',')}\n${rows.join('\n')}\n`);
 }
 
-test('secondary MOPS CSV parser accepts exact complete triples and skips incomplete dates', () => {
+test('secondary MOPS CSV parser accepts exact complete triples', () => {
   const parsed = parseMarketMopsCsv(secondaryCsvFixture(), { filename: 'Core_Export_Data.csv' });
   assert.equal(parsed.completeRowCount, 21);
-  assert.equal(parsed.incompleteRowCount, 1);
+  assert.equal(parsed.incompleteRowCount, 0);
   assert.deepEqual(parsed.rows[0], { reportDate: '2026-01-01', s05: 700, s380: 500, sgo: 100 });
   assert.deepEqual(parsed.rows.at(-1), { reportDate: '2026-01-21', s05: 720, s380: 520, sgo: 102 });
   assert.match(parsed.sourceHash, /^[a-f0-9]{64}$/);
@@ -164,9 +164,33 @@ test('secondary MOPS CSV parser accepts exact complete triples and skips incompl
 
 test('secondary CSV diagnoses an entirely empty price series without relaxing matched-history guards', () => {
   const csv = secondaryCsvFixture().toString().replace(/,(5[0-2][0-9]),/g, ',,');
-  assert.throws(() => parseMarketMopsCsv(Buffer.from(csv)), (error) => error.code === 'MARKET_SECONDARY_CSV_EMPTY_SERIES' && error.message.includes('PPXDK00'));
+  assert.throws(() => parseMarketMopsCsv(Buffer.from(csv)), (error) => error.code === 'MARKET_SECONDARY_CSV_EMPTY_SERIES_PPXDK00'
+    && error.message.includes('PPXDK00: 21 rows') && error.message.includes('2026-01-01'));
   const short = secondaryCsvFixture().toString().split('\n').slice(0, 12).join('\n');
   assert.throws(() => parseMarketMopsCsv(Buffer.from(short)), (error) => error.code === 'MARKET_SECONDARY_CSV_HISTORY_INSUFFICIENT');
+});
+
+test('secondary CSV reports incomplete required rows by series and date', () => {
+  assert.throws(() => parseMarketMopsCsv(secondaryCsvFixture({ incompleteRow: true })), (error) => (
+    error.code === 'MARKET_SECONDARY_CSV_INCOMPLETE_ROWS_PPXDK00'
+      && error.message.includes('1 incomplete required row')
+      && error.message.includes('PPXDK00: 1 row (2026-02-01)')
+  ));
+});
+
+test('secondary CSV skips all-empty reviewed non-publication dates but rejects all-empty expected publication dates', () => {
+  const complete = secondaryCsvFixture().toString().trimEnd();
+  const weekend = parseMarketMopsCsv(Buffer.from(`${complete}\n2026-01-24,"weekend",,,\n`));
+  assert.equal(weekend.completeRowCount, 21);
+  assert.equal(weekend.incompleteRowCount, 0);
+  assert.equal(weekend.skippedNonPublicationRowCount, 1);
+  assert.throws(
+    () => parseMarketMopsCsv(Buffer.from(`${complete}\n2026-01-23,"missing publication",,,\n`)),
+    (error) => error.code === 'MARKET_SECONDARY_CSV_INCOMPLETE_ROWS_AMFSA00_PPXDK00_POABC00'
+      && error.message.includes('AMFSA00: 1 row (2026-01-23)')
+      && error.message.includes('PPXDK00: 1 row (2026-01-23)')
+      && error.message.includes('POABC00: 1 row (2026-01-23)'),
+  );
 });
 
 test('secondary MOPS CSV preserves Core export decimal commas and strict thousands groups', () => {
@@ -176,10 +200,11 @@ test('secondary MOPS CSV preserves Core export decimal commas and strict thousan
   }
 });
 
-test('secondary MOPS CSV rejects malformed numeric separators rather than deleting them', () => {
-  for (const input of ['"12,34,56"', '"1.234,56"', '"1234,567"', '"0,123"', '"1,2.3"']) {
+test('secondary MOPS CSV rejects malformed or non-positive numeric values rather than deleting them', () => {
+  for (const input of ['"12,34,56"', '"1.234,56"', '"1234,567"', '"0,123"', '"1,2.3"', '0']) {
     const csv = Buffer.from(secondaryCsvFixture().toString().replace('700,500,100', `${input},500,100`));
-    assert.throws(() => parseMarketMopsCsv(csv), (error) => error.code === 'MARKET_SECONDARY_CSV_VALUE_INVALID');
+    assert.throws(() => parseMarketMopsCsv(csv), (error) => error.code === 'MARKET_SECONDARY_CSV_VALUE_INVALID_AMFSA00'
+      && error.message.includes('AMFSA00: 1 row (2026-01-01)'));
   }
 });
 
@@ -188,8 +213,26 @@ test('secondary MOPS CSV parser fails closed on missing columns and duplicate co
   assert.throws(() => parseMarketMopsCsv(secondaryCsvFixture({ duplicateDate: true })), (error) => error.code === 'MARKET_SECONDARY_CSV_DATE_DUPLICATE');
 });
 
+test('hourly sync rejects incomplete secondary rows before any market-price save', async () => {
+  const csv = secondaryCsvFixture({ incompleteRow: true });
+  const { createHash } = await import('node:crypto');
+  const file = {
+    id: 'secondaryincomplete12345', name: 'Core_Export_Data - incomplete.csv', mimeType: 'text/csv',
+    size: String(csv.length), md5Checksum: createHash('md5').update(csv).digest('hex'),
+    modifiedTime: '2026-09-01T07:21:22Z', parents: [config.rootFolderId],
+  };
+  const client = clientMock();
+  const result = await runMarketReportDriveSync(client, {
+    accessToken: 'token', fetchImpl: driveFetch({ csvFiles: [file], binaryById: { [file.id]: csv } }).fetchImpl,
+    config, now: new Date('2026-09-01T09:00:00Z'),
+  });
+  assert.equal(result.status, 'failed');
+  assert.equal(result.errorCode, 'MARKET_SECONDARY_CSV_INCOMPLETE_ROWS_PPXDK00');
+  assert.equal(client.rpcCalls.some(({ name }) => name === 'save_market_mops_secondary_csv'), false);
+});
+
 test('hourly sync imports a historically verified root-folder MOPS CSV without completing a report pair', async () => {
-  const csv = secondaryCsvFixture();
+  const csv = Buffer.from(`${secondaryCsvFixture().toString().trimEnd()}\n2026-01-24,"weekend",,,\n`);
   const { createHash } = await import('node:crypto');
   const md5 = createHash('md5').update(csv).digest('hex');
   const file = {
@@ -206,6 +249,7 @@ test('hourly sync imports a historically verified root-folder MOPS CSV without c
   });
   assert.equal(result.status, 'completed');
   assert.equal(result.secondaryMopsImportedCount, 1);
+  assert.equal(result.secondaryMopsSkippedNonPublicationRowCount, 1);
   assert.equal(result.secondaryMopsPublishedDateCount, 1);
   assert.equal(result.briefCompletedCount, 0);
   const saved = client.rpcCalls.find(({ name }) => name === 'save_market_mops_secondary_csv');

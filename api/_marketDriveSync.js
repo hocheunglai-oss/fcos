@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { CONNECTION_INTEGRATIONS } from '../src/lib/connectionChecklist.js';
-import { marketReportLimits, parseMarketReportPdf } from './_marketIntelligence.js';
+import { marketPublicationEligible, marketReportLimits, parseMarketReportPdf } from './_marketIntelligence.js';
 import { processMarketIntelligenceDate, publishMarketDataQualityAlert, scanExpectedMarketSessions } from './_marketIntelligenceTrading.js';
 import { reconcileMarketIntradayDate } from './_marketIntraday.js';
 import { secondaryMopsFailureMessage } from './_marketSourceHealth.js';
@@ -103,7 +103,41 @@ function secondaryMopsNumber(value) {
     throw syncError('The secondary MOPS CSV contains an invalid numeric format.', 'MARKET_SECONDARY_CSV_VALUE_INVALID', 409);
   }
   const number = Number(normalized);
-  return Number.isFinite(number) && number > 0 ? number : null;
+  if (!Number.isFinite(number) || number <= 0) {
+    throw syncError('The secondary MOPS CSV contains an invalid numeric format.', 'MARKET_SECONDARY_CSV_VALUE_INVALID', 409);
+  }
+  return number;
+}
+
+function secondaryMopsMissing(value) {
+  const normalized = String(value ?? '').trim();
+  return !normalized || /^(?:N\/?A|NA|null|-)$/i.test(normalized);
+}
+
+const SECONDARY_MOPS_SERIES = Object.freeze([
+  { symbol: 'AMFSA00', key: 's05' },
+  { symbol: 'PPXDK00', key: 's380' },
+  { symbol: 'POABC00', key: 'sgo' },
+]);
+
+function secondarySeriesErrorCode(base, symbols) {
+  const suffix = SECONDARY_MOPS_SERIES
+    .map(({ symbol }) => symbol)
+    .filter((symbol) => symbols.includes(symbol))
+    .join('_');
+  return suffix ? `${base}_${suffix}` : base;
+}
+
+function secondarySeriesDiagnostic(diagnostics, field) {
+  return SECONDARY_MOPS_SERIES
+    .map(({ symbol }) => {
+      const rows = diagnostics[symbol][field];
+      if (!rows.length) return null;
+      const examples = rows.slice(0, 3).join(', ');
+      return `${symbol}: ${rows.length} row${rows.length === 1 ? '' : 's'} (${examples}${rows.length > 3 ? ', …' : ''})`;
+    })
+    .filter(Boolean)
+    .join('; ');
 }
 
 export function parseMarketMopsCsv(buffer, { filename = '', startDate = '2025-01-01' } = {}) {
@@ -111,8 +145,12 @@ export function parseMarketMopsCsv(buffer, { filename = '', startDate = '2025-01
     throw syncError('The secondary MOPS CSV is empty or exceeds its configured size limit.', 'MARKET_SECONDARY_CSV_SIZE_INVALID', 409);
   }
   const records = parseCsvRecords(buffer.toString('utf8'));
+  let csvDataStartRow = 2;
   if (/^sep=$/i.test(String(records[0]?.[0] || '').trim())
-      && records[0].slice(1).every((cell) => !String(cell || '').trim())) records.shift();
+      && records[0].slice(1).every((cell) => !String(cell || '').trim())) {
+    records.shift();
+    csvDataStartRow = 3;
+  }
   if (records.length < 2) throw syncError('The secondary MOPS CSV has no data rows.', 'MARKET_SECONDARY_CSV_INVALID', 409);
   const headers = records.shift().map((value) => String(value || '').trim().replace(/\s+/g, ' '));
   const normalizedHeaders = headers.map((value) => value.toUpperCase());
@@ -134,35 +172,79 @@ export function parseMarketMopsCsv(buffer, { filename = '', startDate = '2025-01
   const dates = new Set();
   let incompleteRowCount = 0;
   let ignoredBeforeStartCount = 0;
-  const populated = { AMFSA00: 0, PPXDK00: 0, POABC00: 0 };
-  for (const record of records) {
+  let skippedNonPublicationRowCount = 0;
+  const diagnostics = Object.fromEntries(SECONDARY_MOPS_SERIES.map(({ symbol }) => [symbol, {
+    nonEmptyRowCount: 0,
+    missingRows: [],
+    invalidRows: [],
+  }]));
+  const invalidDateRows = [];
+  for (const [recordIndex, record] of records.entries()) {
+    const csvRow = recordIndex + csvDataStartRow;
     const reportDate = String(record[dateIndex] || '').trim();
-    if (!reportDate) continue;
+    if (!reportDate) {
+      invalidDateRows.push(`row ${csvRow}`);
+      continue;
+    }
     if (!/^20\d{2}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])$/.test(reportDate)
         || new Date(`${reportDate}T00:00:00Z`).toISOString().slice(0, 10) !== reportDate) {
-      throw syncError('The secondary MOPS CSV contains an invalid publication date.', 'MARKET_SECONDARY_CSV_DATE_INVALID', 409);
+      invalidDateRows.push(`row ${csvRow}`);
+      continue;
     }
     if (reportDate < startDate) {
       ignoredBeforeStartCount += 1;
       continue;
     }
-    const s05 = secondaryMopsNumber(record[s05Index]);
-    const s380 = secondaryMopsNumber(record[s380Index]);
-    const sgo = secondaryMopsNumber(record[sgoIndex]);
-    if (s05 != null) populated.AMFSA00 += 1;
-    if (s380 != null) populated.PPXDK00 += 1;
-    if (sgo != null) populated.POABC00 += 1;
-    if (s05 == null || s380 == null || sgo == null) {
+    const sourceValues = { AMFSA00: record[s05Index], PPXDK00: record[s380Index], POABC00: record[sgoIndex] };
+    const allSeriesMissing = SECONDARY_MOPS_SERIES.every(({ symbol }) => secondaryMopsMissing(sourceValues[symbol]));
+    if (allSeriesMissing && marketPublicationEligible(reportDate, 'asia_moc') === false) {
+      skippedNonPublicationRowCount += 1;
+      continue;
+    }
+    const parsedValues = {};
+    for (const { symbol, key } of SECONDARY_MOPS_SERIES) {
+      const rawValue = String(sourceValues[symbol] ?? '').trim();
+      let invalidValue = false;
+      if (rawValue && !/^(?:N\/?A|NA|null|-)$/i.test(rawValue)) diagnostics[symbol].nonEmptyRowCount += 1;
+      try {
+        parsedValues[key] = secondaryMopsNumber(rawValue);
+      } catch (error) {
+        if (error?.code !== 'MARKET_SECONDARY_CSV_VALUE_INVALID') throw error;
+        diagnostics[symbol].invalidRows.push(reportDate);
+        invalidValue = true;
+        parsedValues[key] = null;
+      }
+      if (parsedValues[key] == null && !invalidValue) diagnostics[symbol].missingRows.push(reportDate);
+    }
+    if (Object.values(parsedValues).some((value) => value == null)) {
       incompleteRowCount += 1;
       continue;
     }
     if (dates.has(reportDate)) throw syncError('The secondary MOPS CSV contains duplicate complete publication dates.', 'MARKET_SECONDARY_CSV_DATE_DUPLICATE', 409);
     dates.add(reportDate);
-    rows.push({ reportDate, s05, s380, sgo });
+    rows.push({ reportDate, ...parsedValues });
   }
-  const emptySymbols = Object.keys(populated).filter((symbol) => populated[symbol] === 0);
-  if (incompleteRowCount > 0 && emptySymbols.length) {
-    throw syncError(`The secondary MOPS CSV has no usable CLOSE prices for ${emptySymbols.join(', ')}. Re-export these symbols with historical prices and replace the incomplete source file.`, 'MARKET_SECONDARY_CSV_EMPTY_SERIES', 409);
+  if (invalidDateRows.length) {
+    throw syncError(`The secondary MOPS CSV has ${invalidDateRows.length} row${invalidDateRows.length === 1 ? '' : 's'} with an invalid or missing publication date (${invalidDateRows.slice(0, 3).join(', ')}${invalidDateRows.length > 3 ? ', …' : ''}). Correct the DATE or TIMESTAMP values before importing.`, 'MARKET_SECONDARY_CSV_DATE_INVALID', 409);
+  }
+  const emptySymbols = SECONDARY_MOPS_SERIES
+    .map(({ symbol }) => symbol)
+    .filter((symbol) => diagnostics[symbol].nonEmptyRowCount === 0);
+  if (emptySymbols.length) {
+    const detail = secondarySeriesDiagnostic(diagnostics, 'missingRows');
+    throw syncError(`The secondary MOPS CSV has no usable CLOSE prices for ${emptySymbols.join(', ')}. Missing values by series: ${detail}. Re-export these symbols with historical prices and replace the incomplete source file.`, secondarySeriesErrorCode('MARKET_SECONDARY_CSV_EMPTY_SERIES', emptySymbols), 409);
+  }
+  const invalidSymbols = SECONDARY_MOPS_SERIES
+    .map(({ symbol }) => symbol)
+    .filter((symbol) => diagnostics[symbol].invalidRows.length > 0);
+  if (invalidSymbols.length) {
+    throw syncError(`The secondary MOPS CSV has invalid positive numeric CLOSE values. Invalid values by series: ${secondarySeriesDiagnostic(diagnostics, 'invalidRows')}. Correct the listed rows before importing.`, secondarySeriesErrorCode('MARKET_SECONDARY_CSV_VALUE_INVALID', invalidSymbols), 409);
+  }
+  const incompleteSymbols = SECONDARY_MOPS_SERIES
+    .map(({ symbol }) => symbol)
+    .filter((symbol) => diagnostics[symbol].missingRows.length > 0);
+  if (incompleteSymbols.length) {
+    throw syncError(`The secondary MOPS CSV has ${incompleteRowCount} incomplete required row${incompleteRowCount === 1 ? '' : 's'}. Missing values by series: ${secondarySeriesDiagnostic(diagnostics, 'missingRows')}. Re-export complete AMFSA00, PPXDK00 and POABC00 CLOSE triples before importing.`, secondarySeriesErrorCode('MARKET_SECONDARY_CSV_INCOMPLETE_ROWS', incompleteSymbols), 409);
   }
   if (rows.length < 20) throw syncError(secondaryMopsFailureMessage('MARKET_SECONDARY_CSV_HISTORY_INSUFFICIENT'), 'MARKET_SECONDARY_CSV_HISTORY_INSUFFICIENT', 409);
   rows.sort((left, right) => left.reportDate.localeCompare(right.reportDate));
@@ -174,6 +256,7 @@ export function parseMarketMopsCsv(buffer, { filename = '', startDate = '2025-01
     completeRowCount: rows.length,
     incompleteRowCount,
     ignoredBeforeStartCount,
+    skippedNonPublicationRowCount,
   };
 }
 
@@ -646,6 +729,7 @@ export async function runMarketReportDriveSync(client, {
     libraryRepairedCount: 0,
     secondaryMopsDiscoveredCount: 0,
     secondaryMopsImportedCount: 0,
+    secondaryMopsSkippedNonPublicationRowCount: 0,
     secondaryMopsPublishedDateCount: 0,
     secondaryMopsMatchedDateCount: 0,
     secondaryMopsConflictDateCount: 0,
@@ -685,6 +769,7 @@ export async function runMarketReportDriveSync(client, {
           summary.skippedCount += 1;
           continue;
         }
+        summary.secondaryMopsSkippedNonPublicationRowCount += parsed.skippedNonPublicationRowCount;
         const saveSecondary = () => client.rpc('save_market_mops_secondary_csv', {
           p_idempotency_key: `market-mops-secondary-${parsed.sourceHash}`,
           p_source_hash: parsed.sourceHash,
@@ -714,7 +799,9 @@ export async function runMarketReportDriveSync(client, {
           reportDate: null,
           code: normalizedErrorCode(error),
           title: 'Secondary MOPS CSV processing failed',
-          message: error.code === 'MARKET_SECONDARY_CSV_EMPTY_SERIES' ? error.message : secondaryMopsFailureMessage(normalizedErrorCode(error)),
+          message: String(error?.code || '').startsWith('MARKET_SECONDARY_CSV_')
+            ? error.message
+            : secondaryMopsFailureMessage(normalizedErrorCode(error)),
           severity: 'critical',
           evidence: { sourceType: 'secondary_mops_csv' },
         }).catch(() => ({ created: false }));
