@@ -36,7 +36,7 @@ function ClauseProjectionSection({
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="text-sm font-semibold">{projectionDetail.label}</h3>
-            <Badge variant={projectionDetail.status === 'Active' ? 'default' : 'outline'}>{projectionDetail.status}</Badge>
+            <Badge variant={projectionDetail.status === 'Active' ? 'default' : 'outline'}>{wholeTermRevision ? 'Draft selection' : projectionDetail.status}</Badge>
             <Badge variant="secondary">{projectionDetail.style}</Badge>
           </div>
           <p className="mt-1 text-xs text-muted-foreground">
@@ -45,7 +45,7 @@ function ClauseProjectionSection({
               : 'Choose numbered or hyphen bullets during reviewed migration; the marker is never stored inside clause wording.'}
           </p>
         </div>
-        <span className="text-xs text-muted-foreground">{projectionDetail.activeAssignments.length} active · {projectionDetail.proposedAssignments.length} proposed</span>
+        <span className="text-xs text-muted-foreground">{wholeTermRevision ? `${projectionDetail.activeAssignments.length} selected clauses` : `${projectionDetail.activeAssignments.length} active · ${projectionDetail.proposedAssignments.length} proposed`}</span>
       </div>
 
       {projectionDetail.status === 'Active' ? (

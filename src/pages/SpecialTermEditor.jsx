@@ -12,6 +12,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { SPECIAL_TERMS_METHODOLOGY } from '@/lib/pageMethodologies';
 import { SPECIAL_TERMS_USER_MANUAL } from '@/lib/pageUserManuals';
+import { useSpecialTermUnsavedGuard } from '@/lib/useSpecialTermUnsavedGuard';
 import { invalidateSpecialTermDetail, prefetchSpecialTermDetail } from '@/lib/specialTermDetailPrefetch';
 
 export default function SpecialTermEditor() {
@@ -23,6 +24,8 @@ export default function SpecialTermEditor() {
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const requestSequence = useRef(0);
+  const [editState, setEditState] = useState({ dirty: false, busy: false });
+  const confirmLeave = useSpecialTermUnsavedGuard({ key: `special-term:${termId}`, ...editState });
 
   const load = useCallback(async ({ force = false, preserveViewport = false } = {}) => {
     const requestId = ++requestSequence.current;
@@ -54,8 +57,11 @@ export default function SpecialTermEditor() {
   useEffect(() => { void load(); }, [load]);
 
   const mergeCommittedDetail = (nextDetail, successMessage) => {
+    ++requestSequence.current;
+    setRefreshing(false);
+    setLoading(false);
     const viewport = { top: window.scrollY, left: window.scrollX };
-    setDetail(nextDetail);
+    setDetail((current) => ({ ...current, ...nextDetail }));
     setMessage(successMessage || 'Special Term updated.');
     setError('');
     invalidateSpecialTermDetail(termId);
@@ -74,9 +80,9 @@ export default function SpecialTermEditor() {
       <PageHeader
         eyebrow="Special Terms"
         title={detail?.term?.name || 'Special Term'}
-        description="One editor for Terms Text, both remarks, matching rules, and the governed preview."
+        description="Edit clauses and matching rules, save a draft, then submit or publish the complete term."
         meta={<div className="flex flex-wrap gap-2"><Badge variant={detail?.term?.revisionStatus === 'Approved' ? 'default' : 'secondary'}>{detail?.term?.revisionStatus || 'Legacy'}</Badge><Badge variant="outline">{detail?.term?.addToConfirmation ? 'Confirmation PDF' : 'No Confirmation PDF'}</Badge><Badge variant="outline">{detail?.term?.addToNomination ? 'Nomination PDF' : 'No Nomination PDF'}</Badge></div>}
-        actions={<div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => navigate('/special-terms')}><ArrowLeft className="mr-2 h-4 w-4" />Back to terms</Button><PageMethodology {...SPECIAL_TERMS_METHODOLOGY} /><PageUserManual {...SPECIAL_TERMS_USER_MANUAL} /><Button variant="outline" onClick={() => load({ force: true, preserveViewport: true })} disabled={refreshing}><RefreshCw className={`mr-2 h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />Refresh term</Button>{detail?.instanceUrl ? <Button asChild variant="outline"><a href={`${detail.instanceUrl}/${termId}`} target="_blank" rel="noreferrer">Salesforce<ExternalLink className="ml-2 h-4 w-4" /></a></Button> : null}</div>}
+        actions={<div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => navigate('/special-terms')}><ArrowLeft className="mr-2 h-4 w-4" />Back to terms</Button><PageMethodology {...SPECIAL_TERMS_METHODOLOGY} /><PageUserManual {...SPECIAL_TERMS_USER_MANUAL} /><Button variant="outline" onClick={() => { if (confirmLeave()) void load({ force: true, preserveViewport: true }); }} disabled={refreshing || editState.busy}><RefreshCw className={`mr-2 h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />Refresh term</Button>{detail?.instanceUrl ? <Button asChild variant="outline"><a href={`${detail.instanceUrl}/${termId}`} target="_blank" rel="noreferrer">Salesforce<ExternalLink className="ml-2 h-4 w-4" /></a></Button> : null}</div>}
       />
 
       {message ? <Alert><ShieldCheck className="h-4 w-4" /><AlertDescription>{message}</AlertDescription></Alert> : null}
@@ -84,11 +90,13 @@ export default function SpecialTermEditor() {
 
       {detail ? <WholeTermRevisionPanel
         detail={detail}
+        externalBusy={refreshing}
         canDraft={detail.canDraft}
         canApprove={detail.canApproveRevisions}
         categoryOptions={detail.clauseCategoryOptions || []}
         audienceOptions={detail.audienceOptions || []}
         countryOptions={detail.countryOptions || []}
+        onDirtyChange={setEditState}
         onError={setError}
         onStatusMessage={setMessage}
         onCommitted={mergeCommittedDetail}

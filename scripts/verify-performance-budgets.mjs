@@ -1,6 +1,11 @@
 import { verifyPerformanceBudgets } from './lib/performance-budget-verifier.mjs';
 
 const report = await verifyPerformanceBudgets();
+process.stdout.write(`[performance budget] App JavaScript: ${report.clientAssets.ordinaryBytes}/${report.budgets.client.totalJavaScriptBytes} bytes.\n`);
+if (report.clientAssets.onDemandPdfViewer) {
+  const viewer = report.clientAssets.onDemandPdfViewer;
+  process.stdout.write(`[performance budget] On-demand PDF viewer including worker: ${viewer.bytes}/${report.budgets.onDemandPdfViewer.totalBytes} bytes; gzip ${viewer.gzipBytes}/${report.budgets.onDemandPdfViewer.totalGzipBytes} bytes.\n`);
+}
 for (const warning of report.warnings) process.stdout.write(`[performance budget] ${warning}\n`);
 for (const assurance of report.sourceAssurances) {
   process.stdout.write(`[performance budget] Static source assurance ${assurance.name}: ${assurance.actual}/${assurance.limit}.\n`);
