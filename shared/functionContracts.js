@@ -7,6 +7,19 @@ const stringValue = (value) => typeof value === 'string' && value.trim().length 
 const stringArray = (value) => Array.isArray(value) && value.length > 0 && value.every(stringValue);
 
 const CONTRACTS = Object.freeze({
+  marketTraderWorkspace(payload) {
+    return payload.visitId == null || /^[a-zA-Z0-9_-]{8,80}$/.test(payload.visitId) ? [] : ['A valid visit identifier is required.'];
+  },
+  marketTraderWorkspaceSave(payload) {
+    const issues = [];
+    if (!['preferences', 'visit', 'acknowledge', 'snooze'].includes(payload.action)) issues.push('Choose a supported personal Markets action.');
+    if (!Number.isSafeInteger(payload.expectedRevision) || payload.expectedRevision < 0) issues.push('A workspace revision is required.');
+    if (payload.action === 'preferences' && !objectPayload(payload.preferences)) issues.push('Market preferences are required.');
+    if (payload.action === 'visit' && !/^[a-zA-Z0-9_-]{8,80}$/.test(payload.visitId || '')) issues.push('A valid visit identifier is required.');
+    if (['acknowledge', 'snooze'].includes(payload.action) && (!stringValue(payload.subscriptionId) || !stringValue(payload.eventKey))) issues.push('The current alert identifier is required.');
+    if (payload.action === 'snooze' && ![1, 8, 24].includes(payload.hours)) issues.push('Choose a supported snooze duration.');
+    return issues;
+  },
   workspaceSearch(payload) {
     return typeof payload.query === 'string' && payload.query.trim().length >= 2 && payload.query.length <= 80 ? [] : ['Enter between 2 and 80 characters.'];
   },

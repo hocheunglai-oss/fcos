@@ -1,8 +1,14 @@
 import { useState } from 'react';
 import { AlertTriangle, ArrowRight, BookOpen, RefreshCw } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import { MarketMonthlyCoverage } from './MarketMonthlyCoverage';
 
 const DEFAULT_VISIBLE_ROWS = 5;
+const BOOK_VIEWS = [
+  ['total', 'Total quantities'],
+  ['delivery', 'Delivery months'],
+  ['pricing', 'Pricing months'],
+];
 
 function rows(value) {
   return Array.isArray(value) ? value : [];
@@ -43,10 +49,23 @@ function warningText(warning) {
 
 export function MarketBookContext({ context = null, loading = false, error = null, onRetry = null, historical = false }) {
   const [expandedSnapshot, setExpandedSnapshot] = useState('');
+  const [activeView, setActiveView] = useState('total');
   const contextRows = rows(context?.rows);
   const snapshotKey = String(context?.generatedAt || contextRows.map((row) => row?.key).filter(Boolean).join('|') || 'current-book');
   const expanded = expandedSnapshot === snapshotKey;
   const visibleRows = expanded ? contextRows : contextRows.slice(0, DEFAULT_VISIBLE_ROWS);
+  const selectViewFromKey = (event, index) => {
+    const lastIndex = BOOK_VIEWS.length - 1;
+    const nextIndex = event.key === 'Home' ? 0
+      : event.key === 'End' ? lastIndex
+        : event.key === 'ArrowRight' ? (index + 1) % BOOK_VIEWS.length
+          : event.key === 'ArrowLeft' ? (index - 1 + BOOK_VIEWS.length) % BOOK_VIEWS.length
+            : null;
+    if (nextIndex == null) return;
+    event.preventDefault();
+    setActiveView(BOOK_VIEWS[nextIndex][0]);
+    event.currentTarget.parentElement?.querySelectorAll('[role="tab"]')[nextIndex]?.focus();
+  };
 
   if (historical) return <section className="market-book-context market-book-context--historical" aria-labelledby="market-book-context-title">
     <div className="market-book-context__header"><div><span>FCOS quantity context</span><h2 id="market-book-context-title">Your accessible book</h2></div><span className="market-book-context__state">Historical market view</span></div>
@@ -69,25 +88,31 @@ export function MarketBookContext({ context = null, loading = false, error = nul
       <div className="market-book-context__totals" aria-label="Accessible position counts"><span><strong>{context?.totals?.openPhysicalCount ?? 0}</strong> open physicals</span><span><strong>{context?.totals?.liveHedgeCount ?? 0}</strong> live hedges</span></div>
     </div>
 
-    {contextRows.length ? <div className="market-book-context__table-frame">
-      <table className="market-book-context__table">
-        <thead><tr><th>Counterparty / product</th><th>Physical quantity</th><th>Hedge quantity</th><th>Coverage</th><th>Quantity difference</th></tr></thead>
-        <tbody>{visibleRows.map((row, index) => {
-          const coverage = coverageFor(row);
-          return <tr key={row?.key || `${row?.counterparty || 'counterparty'}:${row?.product || 'product'}:${row?.unit || 'unit'}:${index}`}>
-            <th scope="row"><strong>{row?.counterparty || 'Unassigned'}</strong><span>{row?.product || 'Product unavailable'} · {row?.unit || 'Unit unavailable'}</span></th>
-            <td data-label="Physical quantity">{formatQuantity(row?.physicalQty, row?.unit)}</td>
-            <td data-label="Hedge quantity">{formatQuantity(row?.hedgeQty, row?.unit)}</td>
-            <td data-label="Coverage"><span className={`market-book-context__coverage market-book-context__coverage--${coverage.tone}`}>{coverage.label}</span></td>
-            <td data-label="Quantity difference">{quantityDifference(row)}</td>
-          </tr>;
-        })}</tbody>
-      </table>
-    </div> : <div className="market-book-context__empty"><BookOpen size={18} aria-hidden="true" /><div><strong>No accessible open position quantities</strong><span>Open physicals and live hedges will appear here when available.</span></div></div>}
+    <div className="market-book-context__views" role="tablist" aria-label="Book quantity views">
+      {BOOK_VIEWS.map(([value, label], index) => <button key={value} id={`market-book-view-${value}`} type="button" role="tab" aria-selected={activeView === value} aria-controls={`market-book-panel-${value}`} tabIndex={activeView === value ? 0 : -1} onClick={() => setActiveView(value)} onKeyDown={(event) => selectViewFromKey(event, index)}>{label}</button>)}
+    </div>
+
+    {activeView === 'total' ? <div id="market-book-panel-total" role="tabpanel" aria-labelledby="market-book-view-total">
+      {contextRows.length ? <div className="market-book-context__table-frame">
+        <table className="market-book-context__table">
+          <thead><tr><th>Counterparty / product</th><th>Physical quantity</th><th>Hedge quantity</th><th>Coverage</th><th>Quantity difference</th></tr></thead>
+          <tbody>{visibleRows.map((row, index) => {
+            const coverage = coverageFor(row);
+            return <tr key={row?.key || `${row?.counterparty || 'counterparty'}:${row?.product || 'product'}:${row?.unit || 'unit'}:${index}`}>
+              <th scope="row"><strong>{row?.counterparty || 'Unassigned'}</strong><span>{row?.product || 'Product unavailable'} · {row?.unit || 'Unit unavailable'}</span></th>
+              <td data-label="Physical quantity">{formatQuantity(row?.physicalQty, row?.unit)}</td>
+              <td data-label="Hedge quantity">{formatQuantity(row?.hedgeQty, row?.unit)}</td>
+              <td data-label="Coverage"><span className={`market-book-context__coverage market-book-context__coverage--${coverage.tone}`}>{coverage.label}</span></td>
+              <td data-label="Quantity difference">{quantityDifference(row)}</td>
+            </tr>;
+          })}</tbody>
+        </table>
+      </div> : <div className="market-book-context__empty"><BookOpen size={18} aria-hidden="true" /><div><strong>No accessible open position quantities</strong><span>Open physicals and live hedges will appear here when available.</span></div></div>}
+    </div> : <MarketMonthlyCoverage key={activeView} view={activeView} coverage={context?.monthlyCoverage} />}
 
     <div className="market-book-context__footer">
       <span>Snapshot {formatGeneratedAt(context?.generatedAt)}</span>
-      <div>{contextRows.length > DEFAULT_VISIBLE_ROWS ? <button type="button" onClick={() => setExpandedSnapshot(expanded ? '' : snapshotKey)} aria-expanded={expanded}>{expanded ? 'Show first 5' : `Show all ${contextRows.length}`}</button> : null}<Link to="/hedge-desk?tab=physical">Open physicals <ArrowRight size={13} aria-hidden="true" /></Link><Link to="/hedge-desk?tab=hedges">Open hedges <ArrowRight size={13} aria-hidden="true" /></Link></div>
+      <div>{activeView === 'total' && contextRows.length > DEFAULT_VISIBLE_ROWS ? <button type="button" onClick={() => setExpandedSnapshot(expanded ? '' : snapshotKey)} aria-expanded={expanded}>{expanded ? 'Show first 5' : `Show all ${contextRows.length}`}</button> : null}<Link to="/hedge-desk?tab=physical">Open physicals <ArrowRight size={13} aria-hidden="true" /></Link><Link to="/hedge-desk?tab=hedges">Open hedges <ArrowRight size={13} aria-hidden="true" /></Link></div>
     </div>
 
     {rows(context?.warnings).length ? <details className="market-book-context__warnings"><summary><AlertTriangle size={14} aria-hidden="true" /> Coverage notes ({rows(context.warnings).length})</summary><ul>{rows(context.warnings).map((warning, index) => <li key={warning?.code || warning?.id || index}>{warningText(warning)}</li>)}</ul></details> : null}

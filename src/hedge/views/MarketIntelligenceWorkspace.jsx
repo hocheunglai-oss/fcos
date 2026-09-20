@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowDownRight,
@@ -46,8 +46,11 @@ import { MarketIntradayStrip } from './market-intelligence/MarketIntradayStrip';
 import { MarketsView } from './MarketsView';
 import './market-intelligence/marketIntelligence.css';
 
+const MarketTraderWorkspace = lazy(() => import('@/components/markets/MarketTraderWorkspace').then((module) => ({ default: module.MarketTraderWorkspace })));
+
 const TABS = [
   { value: 'brief', label: 'Overview' },
+  { value: 'personal', label: 'My Markets' },
   { value: 'delivered', label: 'Delivered prices' },
   { value: 'curves', label: 'Forward curves' },
   { value: 'drivers', label: 'Research & alerts' },
@@ -667,6 +670,7 @@ export function MarketIntelligenceWorkspace({ data, pulse, canReadBook = false, 
       <div className="market-workspace-tabs app-navigation-caption-material" role="tablist" aria-label="Market views">{TABS.map((item) => <button key={item.value} type="button" role="tab" aria-selected={tab === item.value} className={tab === item.value ? 'is-active' : ''} onClick={() => selectTab(item.value)}>{item.label}</button>)}</div>
       <MarketDateToolbar brief={brief} selection={dateSelection} loading={dateLoading} error={dateError} onSelect={selectDate} onRefresh={() => { setDateLoading(true); setBriefRefreshKey((value) => value + 1); }} />
       {visitedTabs.has('brief') ? <div role="tabpanel" hidden={tab !== 'brief'} aria-label="Overview"><MarketDecisionBrief canReadBook={canReadBook} bookContext={bookContext} bookLoading={bookLoading} bookError={bookError} onRetryBook={onRetryBook} onNavigateMarketView={selectTab} initialBrief={intelligence.brief || null} refreshKey={briefRefreshKey} pulse={pulse} pulseLoading={marketPulseLoading} pulseError={marketPulseError} requestedDate={dateSelection.mode === 'historical' ? dateSelection.date : null} dateMode={dateSelection.mode} onBriefResolved={resolveBrief} onBriefError={resolveBriefError} intraday={tab === 'brief' && dateReady ? <MarketIntradayStrip canManage={canManageMarketData} refreshKey={briefRefreshKey} asOfDate={displayedDate || null} /> : null} /></div> : null}
+      {tab === 'personal' ? <div role="tabpanel" aria-label="My Markets"><Suspense fallback={<Panel><p>Loading your saved Markets workspace…</p></Panel>}><MarketTraderWorkspace historical={dateSelection.mode === 'historical'} refreshKey={briefRefreshKey} /></Suspense></div> : null}
       {visitedTabs.has('delivered') ? <div role="tabpanel" hidden={tab !== 'delivered'} aria-label="Delivered prices"><DeliveredBunkers active={tab === 'delivered' && dateReady} intelligence={intelligence} asOfDate={displayedDate} dateMode={dateSelection.mode} refreshKey={briefRefreshKey} /></div> : null}
       {visitedTabs.has('curves') ? <div role="tabpanel" hidden={tab !== 'curves'} aria-label="Forward curves"><MarketForwardCurves active={tab === 'curves' && dateReady} readOnly={!canManageMarketData} canManageCutover={false} asOfDate={displayedDate || null} refreshKey={briefRefreshKey} /></div> : null}
       {visitedTabs.has('drivers') ? <div role="tabpanel" hidden={tab !== 'drivers'} aria-label="Research and alerts"><MarketDriversAlerts active={tab === 'drivers' && dateReady} readOnly asOfDate={displayedDate || null} refreshKey={briefRefreshKey} /></div> : null}

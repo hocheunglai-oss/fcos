@@ -4,6 +4,17 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.217',
+    releasedAt: '2026-09-20',
+    title: 'Personal Markets and monthly quantity coverage',
+    changes: [
+      'Save favourite ports, products and exact contract months in My Markets, with source dates and price trends.',
+      'Track changes since your last visit, save matched-date comparisons, and manage personal in-app alerts with acknowledgement and snooze.',
+      'Inspect quantities by delivery month and exact pricing window, with fixed and floating terms and unallocated quantities clearly separated.',
+      'Reject incomplete source exports before import and show the last retained prices alongside actionable source diagnostics.',
+    ],
+  },
+  {
     version: '2.0.216',
     releasedAt: '2026-09-17',
     title: 'Clearer market prices and accessible book coverage',

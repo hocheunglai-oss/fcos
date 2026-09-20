@@ -108,6 +108,8 @@ const HANDLER_BEHAVIOR = Object.freeze({
   xeroFinancialPaymentApply: mutationPolicy({"cache":"none","externalAction":true,"capability":"xero_portal_manage"}),
   hedgeDeskEntity: mutationPolicy({"cache":"none","externalAction":false,"capability":null}),
   hedgeMarkets: mutationPolicy({"cache":"none","externalAction":false,"capability":null}),
+  marketTraderWorkspace: readPolicy({"cache":"none","externalAction":false,"capability":null}),
+  marketTraderWorkspaceSave: mutationPolicy({"cache":"none","externalAction":false,"capability":null}),
   marketBookContext: readPolicy({"cache":"none","externalAction":false,"capability":null}),
   marketPulseSnapshot: readPolicy({"cache":"server","externalAction":false,"capability":null}),
   marketIntelligenceBrief: readPolicy({"cache":"none","externalAction":false,"capability":null}),

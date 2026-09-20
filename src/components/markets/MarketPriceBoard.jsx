@@ -253,9 +253,21 @@ function sourceStatusLabel(status) {
   return normalized ? normalized.charAt(0).toUpperCase() + normalized.slice(1) : 'Unknown';
 }
 
+function sourceCoverageLabel(coverage) {
+  if (!coverage) return null;
+  return [
+    coverage.sourceRowCount == null ? null : `${coverage.sourceRowCount} complete source dates`,
+    coverage.comparisonDateCount == null ? null : `${coverage.comparisonDateCount} history comparisons`,
+    coverage.publishedDateCount == null ? null : `${coverage.publishedDateCount} published`,
+    coverage.matchedDateCount == null ? null : `${coverage.matchedDateCount} matched`,
+    coverage.conflictDateCount == null ? null : `${coverage.conflictDateCount} conflicts retained`,
+  ].filter(Boolean).join(' · ') || null;
+}
+
 function SourceHealthNotice({ sourceHealth }) {
   if (!sourceHealth) return null;
   const sources = rows(sourceHealth.sources);
+  const sourceAttemptReported = sources.some((source) => source?.lastAttemptError);
   const status = String(sourceHealth.status || 'unknown').toLowerCase();
   const impaired = !['healthy', 'ok', 'available', 'current'].includes(status)
     || sources.some((source) => !['healthy', 'ok', 'available', 'current'].includes(String(source?.status || '').toLowerCase()));
@@ -266,13 +278,19 @@ function SourceHealthNotice({ sourceHealth }) {
     </summary>
     <div className="market-price-board__source-list">
       {sourceHealth.message ? <p className="market-price-board__source-message">{sourceHealth.message}</p> : null}
+      {sourceHealth.lastAttempt?.status === 'failed' && !sourceAttemptReported ? <p className="market-price-board__source-message">
+        <strong>Latest attempt failed{sourceHealth.lastAttempt.startedAt ? ` ${formatDateTime(sourceHealth.lastAttempt.startedAt)}` : ''}.</strong>{' '}
+        {sourceHealth.lastAttempt.message || 'Existing verified imports remain available.'}
+      </p> : null}
       {sources.length ? sources.map((source, index) => <article key={source?.key || `${source?.label || 'source'}:${index}`}>
         <div><strong>{source?.label || source?.key || 'Market source'}</strong><span className={`market-price-board__source-state market-price-board__source-state--${String(source?.status || 'unknown').toLowerCase()}`}>{sourceStatusLabel(source?.status)}</span></div>
         <small>{[
           source?.lastPublicationDate ? `Latest publication ${formatDate(source.lastPublicationDate)}` : null,
           source?.lastSuccessAt ? `Last successful import ${formatDateTime(source.lastSuccessAt)}` : null,
         ].filter(Boolean).join(' · ') || 'No successful source timestamp is available'}</small>
+        {sourceCoverageLabel(source?.coverage) ? <small>{sourceCoverageLabel(source.coverage)}</small> : null}
         {source?.message ? <p>{source.message}</p> : null}
+        {source?.lastAttemptError ? <p><strong>Latest secondary attempt:</strong> {source.lastAttemptError.message}</p> : null}
       </article>) : <p>No per-source status was supplied.</p>}
       {impaired ? <p>The displayed valid market data remains available. This notice applies only to the affected source and its later publications.</p> : null}
     </div>
