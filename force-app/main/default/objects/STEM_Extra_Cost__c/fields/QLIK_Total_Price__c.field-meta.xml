@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>QLIK_Total_Price__c</fullName>
+    <formula>IF(Fixed__c, Lumpsum_Price__c, IF(Minimum_Sell_At__c &gt; Unit_Price__c * QLIK_Quantity__c, Minimum_Sell_At__c, Unit_Price__c * QLIK_Quantity__c))</formula>
+    <formulaTreatBlanksAs>BlankAsZero</formulaTreatBlanksAs>
+    <label>QLIK Total Price</label>
+    <precision>18</precision>
+    <required>false</required>
+    <scale>2</scale>
+    <trackHistory>false</trackHistory>
+    <trackTrending>false</trackTrending>
+    <type>Currency</type>
+</CustomField>

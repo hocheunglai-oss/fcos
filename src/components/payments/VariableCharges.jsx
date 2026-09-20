@@ -79,7 +79,7 @@ import {
   canApproveBothVariableChargeLegs,
   isIncludedBasicCallingItem,
   isHongKongAnchorageDuesItem,
-  isPortClearanceItem,
+  isPortClearanceItem as isPortClearanceProductName,
   portClearanceApplicationCount,
   statutorySupplierHkdDefault,
   stepPortClearanceApplicationCount,
@@ -166,6 +166,34 @@ function sideStatusTone(side) {
 function pricingTypeFor(item) {
   return item?.fixed === true || valueOf(item, ['pricingType', 'pricing_type']) === 'fixed'
     || valueOf(item, ['fixedCost', 'fixed_cost', 'fixedPrice', 'fixed_price'], null) != null ? 'fixed' : 'per_unit';
+}
+
+function usesHongKongChargeUi(item) {
+  return item?.hongKongVariableCharges === true || item?.hong_kong_variable_charges === true;
+}
+
+function isPortClearanceItem(item) {
+  return usesHongKongChargeUi(item) && isPortClearanceProductName(item);
+}
+
+function isHongKongPortClearanceItem(item) {
+  return isPortClearanceItem(item);
+}
+
+function supplierChargeUiModel(item) {
+  const hongKongVariableCharges = usesHongKongChargeUi(item);
+  return {
+    hongKongVariableCharges,
+    portClearance: isPortClearanceItem(item),
+    showCurrencySelector: hongKongVariableCharges,
+    showHkdPreview: hongKongVariableCharges,
+  };
+}
+
+function variableChargeUiQuantityLabel(item, quantity, unitOfMeasure) {
+  if (isHongKongPortClearanceItem(item)) return variableChargeQuantityLabel(item, quantity, unitOfMeasure);
+  if (quantity == null || quantity === '') return 'Not set';
+  return `${quantity} ${text(unitOfMeasure) || 'Not set'}`;
 }
 
 function rowFinancials(row, draft, fallbackCurrency = 'USD') {
@@ -265,8 +293,9 @@ function initialReview(row) {
 
 function initialExtraDraft(item) {
   const storedPricingType = item.fixed === true || item.Fixed__c === true || valueOf(item, ['pricingType', 'pricing_type']) === 'fixed' || valueOf(item, ['fixedCost', 'fixed_cost', 'fixedPrice', 'fixed_price'], null) != null ? 'fixed' : 'per_unit';
-  const lightDues = item?.hongKongVariableCharges === true && text(valueOf(item, ['productName'])).toUpperCase() === 'LIGHT DUES';
-  const portClearance = isPortClearanceItem(item);
+  const hongKongVariableCharges = usesHongKongChargeUi(item);
+  const lightDues = hongKongVariableCharges && text(valueOf(item, ['productName'])).toUpperCase() === 'LIGHT DUES';
+  const portClearance = isHongKongPortClearanceItem(item);
   // The application count is evidence, not the Salesforce pricing basis. Store
   // the exact supplier and buyer totals as fixed amounts so cent rounding cannot
   // drift when the buyer pays for one fewer application than the supplier.
@@ -276,9 +305,15 @@ function initialExtraDraft(item) {
   const portClearanceCalculation = portClearance && item?.portClearance?.complete === true
     ? item.portClearance
     : null;
-  const requiredInputCurrency = text(valueOf(item, ['supplierCurrency.requiredInputCurrency']));
-  const inputCurrency = requiredInputCurrency
-    || (statutoryDefault ? 'HKD' : text(valueOf(item, ['supplierCurrency.inputCurrency'])) || 'USD');
+  const requiredInputCurrency = hongKongVariableCharges
+    ? text(valueOf(item, ['supplierCurrency.requiredInputCurrency']))
+    : '';
+  const inputCurrency = hongKongVariableCharges
+    ? requiredInputCurrency || (statutoryDefault ? 'HKD' : text(valueOf(item, ['supplierCurrency.inputCurrency'])) || 'USD')
+    : 'USD';
+  const storedSupplierCostUsd = pricingType === 'fixed'
+    ? valueOf(item, ['fixedCost', 'fixed_cost', 'Lumpsum_Cost__c'], '')
+    : valueOf(item, ['cost', 'unitCost', 'unit_cost', 'Unit_Cost__c'], '');
   const anchorageBuyerDefault = item?.anchorageVerification?.buyerDefault;
   const anchorageBuyerSuggestion = anchorageBuyerDefault?.available === true
     && anchorageBuyerDefault?.applyCalculatedDefault === true
@@ -288,9 +323,12 @@ function initialExtraDraft(item) {
     description: text(valueOf(item, ['description', 'Description__c', 'name', 'Name'])),
     paymentTerm: text(valueOf(item, ['paymentTerm', 'payment_term', 'Payment_Term__c'])),
     pricingType,
+    hongKongVariableCharges,
     inputCurrency,
     requiredInputCurrency,
-    supplierCost: portClearanceCalculation
+    supplierCost: !hongKongVariableCharges
+      ? storedSupplierCostUsd
+      : portClearanceCalculation
       ? (inputCurrency === 'HKD' ? portClearanceCalculation.supplierHkd : portClearanceCalculation.supplierTotalUsd)
       : statutoryDefault?.amountHkd ?? valueOf(item, ['supplierCurrency.inputAmount'], null) ?? (pricingType === 'fixed'
       ? valueOf(item, ['fixedCost', 'fixed_cost', 'Lumpsum_Cost__c'], '')
@@ -312,7 +350,8 @@ function initialAddDraft(caseRow, supplierId = '', companyRate = null) {
   const supplierAccounts = Array.isArray(caseRow?.supplierAccounts) ? caseRow.supplierAccounts : [];
   const selectedSupplierId = supplierId || (supplierAccounts.length === 1 ? supplierAccounts[0].id : '');
   const supplierAccount = supplierAccounts.find((row) => text(row.id) === text(selectedSupplierId));
-  const requiredInputCurrency = supplierAccount?.isAgent === true
+  const hongKongVariableCharges = usesHongKongChargeUi(caseRow);
+  const requiredInputCurrency = hongKongVariableCharges && supplierAccount?.isAgent === true
     ? text(supplierAccount.agencyFeeCurrency).toUpperCase()
     : '';
   return {
@@ -321,6 +360,7 @@ function initialAddDraft(caseRow, supplierId = '', companyRate = null) {
     description: 'STEM Charge',
     paymentTerm: text(valueOf(caseRow, ['supplierPaymentTerm', 'supplier_payment_term', 'paymentTerm', 'payment_term'])),
     pricingType: 'fixed',
+    hongKongVariableCharges,
     inputCurrency: requiredInputCurrency || 'USD',
     requiredInputCurrency,
     companyRate,
@@ -490,6 +530,7 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
     });
     const nextDetail = {
       ...rawDetail,
+      case: { ...(rawDetail.case || {}), hongKongVariableCharges },
       lineItems: (rawDetail.lineItems || []).map((item) => ({ ...withReviewStatus(item), hongKongVariableCharges })),
       extraCosts: (rawDetail.extraCosts || []).map((item) => ({
         ...withReviewStatus(item),
@@ -704,7 +745,7 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
       const expectedLastModifiedDate = valueOf(item, ['lastModifiedDate', 'last_modified_date', 'LastModifiedDate'], null);
       if (draft.cancelled && !original.cancelled) { cancellations.push({ extraCostId: id, expectedLastModifiedDate }); return; }
       const matchingRow = stageRows.find((row) => row.sourceId === id);
-      const forceManagedPortReview = isPortClearanceItem(item) && reviews[matchingRow?.key]?.outcome === 'changed';
+      const forceManagedPortReview = isHongKongPortClearanceItem(item) && reviews[matchingRow?.key]?.outcome === 'changed';
       if (forceManagedPortReview || draft.statutorySupplierDefaultPending === true || changeKey({ ...draft, cancelled: false }) !== changeKey({ ...original, cancelled: false })) {
         extraCostUpdates.push({
           extraCostId: id, expectedLastModifiedDate, description: draft.description,
@@ -842,12 +883,12 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
       if (costSelected && row.sourceType === 'extra_cost' && review.outcome === 'changed') {
         const original = initialExtraDraft(row.item);
         const draft = extraDrafts[row.sourceId] || original;
-        const changed = isPortClearanceItem(row.item) || changeKey({ description: draft.description, pricingType: draft.pricingType, supplierCost: draft.supplierCost, inputCurrency: draft.inputCurrency, quantity: draft.quantity, unitOfMeasure: draft.unitOfMeasure })
+        const changed = isHongKongPortClearanceItem(row.item) || changeKey({ description: draft.description, pricingType: draft.pricingType, supplierCost: draft.supplierCost, inputCurrency: draft.inputCurrency, quantity: draft.quantity, unitOfMeasure: draft.unitOfMeasure })
           !== changeKey({ description: original.description, pricingType: original.pricingType, supplierCost: original.supplierCost, inputCurrency: original.inputCurrency, quantity: original.quantity, unitOfMeasure: original.unitOfMeasure });
         if (!changed) { setSaveError(`Make the intended cost change for ${itemLabel(row)}, or mark it Correct.`); return; }
-        const portClearanceCount = isPortClearanceItem(row.item) ? finiteNumber(draft.quantity) : null;
-        if ((isPortClearanceItem(row.item) && !(Number.isInteger(portClearanceCount) && portClearanceCount >= 1))
-          || (!isPortClearanceItem(row.item) && !text(draft.description))
+        const portClearanceCount = isHongKongPortClearanceItem(row.item) ? finiteNumber(draft.quantity) : null;
+        if ((isHongKongPortClearanceItem(row.item) && !(Number.isInteger(portClearanceCount) && portClearanceCount >= 1))
+          || (!isHongKongPortClearanceItem(row.item) && !text(draft.description))
           || finiteNumber(draft.supplierCost) == null
           || (draft.pricingType === 'per_unit' && (!(finiteNumber(draft.quantity) > 0) || !text(draft.unitOfMeasure)))) {
           setSaveError(`Complete the cost details for ${itemLabel(row)}.`); return;
@@ -878,7 +919,7 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
         cancellations.push({ extraCostId: id, expectedLastModifiedDate });
       } else if (costSelected && ['correct', 'changed'].includes(supplierOutcome)
         && (draft.statutorySupplierDefaultPending === true
-          || (supplierOutcome === 'changed' && (isPortClearanceItem(item)
+          || (supplierOutcome === 'changed' && (isHongKongPortClearanceItem(item)
             || changeKey({ description: draft.description, pricingType: draft.pricingType, supplierCost: draft.supplierCost, inputCurrency: draft.inputCurrency, quantity: draft.quantity, unitOfMeasure: draft.unitOfMeasure }) !== changeKey({ description: original.description, pricingType: original.pricingType, supplierCost: original.supplierCost, inputCurrency: original.inputCurrency, quantity: original.quantity, unitOfMeasure: original.unitOfMeasure }))))) {
         costUpdates.push({ extraCostId: id, expectedLastModifiedDate, description: draft.description, pricingType: draft.pricingType, supplierCost: Number(draft.supplierCost), inputCurrency: draft.inputCurrency || 'USD', expectedFxSettingsRevision: Number(detail?.variableChargeSettings?.revision), quantity: isPortClearanceItem(item) || draft.pricingType === 'per_unit' ? Number(draft.quantity) : null, unitOfMeasure: draft.unitOfMeasure });
       }
@@ -1120,9 +1161,9 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
       ) : detail ? (
         <div className="space-y-5">
           {pairedWorkflow ? <CommonReviewSummary caseRow={activeCase} /> : <><GuidedProgress currentStep={currentStep} progress={workflow.progress} /><SimpleCaseSummary caseRow={activeCase} onOpenStem={onOpenStem} /></>}
-          {(detail.vessel?.canSaveNrt || detail.anchorage || detail.lightDues) && <HongKongStatutoryChargesPanel vessel={detail.vessel} nrtDraft={vesselNrtDraft} onNrtChange={setVesselNrtDraft} nrtSaving={vesselNrtSaving} onSaveNrt={saveVesselNrt} anchorage={detail.anchorage} anchorageDrafts={anchorageDrafts} anchorageSaving={anchorageSaving} onAnchorageChange={(id, patch) => setAnchorageDrafts((current) => ({ ...current, [id]: { ...current[id], ...patch } }))} onSaveAnchorage={saveAnchorageDetails} lightDues={detail.lightDues} lightDuesSaving={lightDuesSaving} onSaveLightDues={saveLightDues} canEdit={canCostSideEdit || canBuyerSideEdit || detail.variableChargeSettings?.canSave === true} canEditRate={detail.variableChargeSettings?.canSave === true} onEditRate={() => setRateSettingsOpen(true)} />}
+          {activeCase.hongKongVariableCharges === true && (detail.vessel?.canSaveNrt || detail.anchorage || detail.lightDues) && <HongKongStatutoryChargesPanel vessel={detail.vessel} nrtDraft={vesselNrtDraft} onNrtChange={setVesselNrtDraft} nrtSaving={vesselNrtSaving} onSaveNrt={saveVesselNrt} anchorage={detail.anchorage} anchorageDrafts={anchorageDrafts} anchorageSaving={anchorageSaving} onAnchorageChange={(id, patch) => setAnchorageDrafts((current) => ({ ...current, [id]: { ...current[id], ...patch } }))} onSaveAnchorage={saveAnchorageDetails} lightDues={detail.lightDues} lightDuesSaving={lightDuesSaving} onSaveLightDues={saveLightDues} canEdit={canCostSideEdit || canBuyerSideEdit || detail.variableChargeSettings?.canSave === true} canEditRate={detail.variableChargeSettings?.canSave === true} onEditRate={() => setRateSettingsOpen(true)} />}
           {pairedWorkflow && canGmOverride && (activeCostSide?.status !== 'verified' || activeBuyerSide?.status !== 'verified') && <div className="flex flex-wrap justify-end gap-2">{activeCostSide?.status !== 'verified' && <Button type="button" size="sm" variant="outline" onClick={() => { setGmDraft({ sides: 'cost', reason: '' }); setGmOpen(true); }}><ShieldCheck className="mr-2 h-4 w-4" />Review Supplier Leg as GM</Button>}{activeBuyerSide?.status !== 'verified' && <Button type="button" size="sm" variant="outline" onClick={() => { setGmDraft({ sides: 'buyer_charge', reason: '' }); setGmOpen(true); }}><ShieldCheck className="mr-2 h-4 w-4" />Review Buyer Leg as GM</Button>}</div>}
-          {pairedWorkflow && detail.supplierDualCurrencySummary && (() => {
+          {pairedWorkflow && activeCase.hongKongVariableCharges === true && detail.supplierDualCurrencySummary && (() => {
             const total = detail.supplierDualCurrencySummary.bySupplier?.find((row) => text(row.supplierId) === activeSupplierId) || detail.supplierDualCurrencySummary;
             const agencyFeeCurrency = text(valueOf(activeSupplierAccount, ['agencyFeeCurrency'])).toUpperCase() || 'USD';
             const totalText = !total.complete
@@ -1317,17 +1358,17 @@ export default function VariableCharges({ onOpenStem = null, initialStemId = '',
 
 function itemLabel(row) {
   const productName = text(valueOf(row.item, ['productName']));
-  return isPortClearanceItem(row.item)
+  return row.item?.hongKongVariableCharges === true && isPortClearanceItem(row.item)
     ? 'Port Clearance Fee / Extension'
     : productName || 'Product name unavailable';
 }
 
 function supplierItemLabel(row) {
-  return isPortClearanceItem(row.item) ? 'Port Clearance Fee' : itemLabel(row);
+  return row.item?.hongKongVariableCharges === true && isPortClearanceItem(row.item) ? 'Port Clearance Fee' : itemLabel(row);
 }
 
 function buyerItemLabel(row) {
-  return isPortClearanceItem(row.item) ? 'Port Clearance Extension' : itemLabel(row);
+  return row.item?.hongKongVariableCharges === true && isPortClearanceItem(row.item) ? 'Port Clearance Extension' : itemLabel(row);
 }
 
 function viewTone(value) {
@@ -1428,8 +1469,9 @@ function SalesforceEditNotice({ sourceId, instanceUrl }) {
 
 function PairedExtraCostFields({ row, draft, disabled, onChange }) {
   const id = `paired-${row.sourceId}`;
-  const currencyLocked = Boolean(draft.requiredInputCurrency);
-  return <div className="mt-3 space-y-3 rounded-lg border border-amber-200 bg-amber-50/40 p-3"><div className="text-xs font-semibold uppercase tracking-wide text-amber-950">Edit Charge Details</div><div className="space-y-2"><Label htmlFor={`${id}-description`}>Description</Label><Input id={`${id}-description`} value={draft.description || ''} disabled={disabled} onChange={(event) => onChange({ description: event.target.value })} /></div><div className="grid gap-3 sm:grid-cols-2"><div className="space-y-2"><Label>Pricing Basis</Label><Select value={draft.pricingType} disabled={disabled} onValueChange={(pricingType) => onChange({ pricingType })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="fixed">Fixed</SelectItem><SelectItem value="per_unit">Per Unit</SelectItem></SelectContent></Select></div><div className="space-y-2"><Label>{currencyLocked ? 'Agent Agreed Currency' : 'Input Currency'}</Label><Select value={draft.inputCurrency || 'USD'} disabled={disabled || currencyLocked} onValueChange={(inputCurrency) => onChange({ inputCurrency })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="HKD">HKD</SelectItem><SelectItem value="USD">USD</SelectItem></SelectContent></Select>{currencyLocked && <div className="text-xs text-amber-900">All costs for this agent use the Account’s agreed currency.</div>}</div><div className="space-y-2"><Label htmlFor={`${id}-cost`}>{draft.pricingType === 'fixed' ? 'Supplier Fixed Cost' : 'Supplier Unit Cost'} ({draft.inputCurrency || 'USD'})</Label><Input id={`${id}-cost`} inputMode="decimal" value={draft.supplierCost ?? ''} disabled={disabled} onChange={(event) => onChange({ supplierCost: event.target.value })} /></div>{draft.pricingType === 'per_unit' && <><div className="space-y-2"><Label htmlFor={`${id}-quantity`}>Quantity</Label><Input id={`${id}-quantity`} inputMode="decimal" value={draft.quantity ?? ''} disabled={disabled} onChange={(event) => onChange({ quantity: event.target.value })} /></div><div className="space-y-2"><Label htmlFor={`${id}-uom`}>UOM</Label><Input id={`${id}-uom`} value={draft.unitOfMeasure || ''} disabled={disabled} onChange={(event) => onChange({ unitOfMeasure: event.target.value })} /></div></>}</div></div>;
+  const ui = supplierChargeUiModel(row.item);
+  const currencyLocked = ui.hongKongVariableCharges && Boolean(draft.requiredInputCurrency);
+  return <div className="mt-3 space-y-3 rounded-lg border border-amber-200 bg-amber-50/40 p-3"><div className="text-xs font-semibold uppercase tracking-wide text-amber-950">Edit Charge Details</div><div className="space-y-2"><Label htmlFor={`${id}-description`}>Description</Label><Input id={`${id}-description`} value={draft.description || ''} disabled={disabled} onChange={(event) => onChange({ description: event.target.value })} /></div><div className="grid gap-3 sm:grid-cols-2"><div className="space-y-2"><Label>Pricing Basis</Label><Select value={draft.pricingType} disabled={disabled} onValueChange={(pricingType) => onChange({ pricingType })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="fixed">Fixed</SelectItem><SelectItem value="per_unit">Per Unit</SelectItem></SelectContent></Select></div>{ui.showCurrencySelector && <div className="space-y-2"><Label>{currencyLocked ? 'Agent Agreed Currency' : 'Input Currency'}</Label><Select value={draft.inputCurrency || 'USD'} disabled={disabled || currencyLocked} onValueChange={(inputCurrency) => onChange({ inputCurrency })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="HKD">HKD</SelectItem><SelectItem value="USD">USD</SelectItem></SelectContent></Select>{currencyLocked && <div className="text-xs text-amber-900">All costs for this agent use the Account’s agreed currency.</div>}</div>}<div className="space-y-2"><Label htmlFor={`${id}-cost`}>{draft.pricingType === 'fixed' ? 'Supplier Fixed Cost' : 'Supplier Unit Cost'} ({ui.hongKongVariableCharges ? draft.inputCurrency || 'USD' : 'USD'})</Label><Input id={`${id}-cost`} inputMode="decimal" value={draft.supplierCost ?? ''} disabled={disabled} onChange={(event) => onChange({ supplierCost: event.target.value })} /></div>{draft.pricingType === 'per_unit' && <><div className="space-y-2"><Label htmlFor={`${id}-quantity`}>Quantity</Label><Input id={`${id}-quantity`} inputMode="decimal" value={draft.quantity ?? ''} disabled={disabled} onChange={(event) => onChange({ quantity: event.target.value })} /></div><div className="space-y-2"><Label htmlFor={`${id}-uom`}>UOM</Label><Input id={`${id}-uom`} value={draft.unitOfMeasure || ''} disabled={disabled} onChange={(event) => onChange({ unitOfMeasure: event.target.value })} /></div></>}</div></div>;
 }
 
 function ManagedPortClearanceFields({ row, draft, disabled, onChange }) {
@@ -1538,6 +1580,7 @@ function HongKongStatutoryChargesPanel({ vessel, nrtDraft, onNrtChange, nrtSavin
 }
 
 function SupplierDualAmount({ label, row, draft, total = false, companyRate }) {
+  const ui = supplierChargeUiModel(row.item);
   const values = rowFinancials(row, draft, 'USD');
   const serverDual = valueOf(row.item, [total ? 'supplierCurrency.total' : 'supplierCurrency.unitOrFixed'], null);
   let usd = total ? values.supplierTotal : values.supplierRate;
@@ -1551,7 +1594,7 @@ function SupplierDualAmount({ label, row, draft, total = false, companyRate }) {
       ? (draft.inputCurrency === 'HKD' ? native : native * rate) * Number(draft.quantity)
       : draft.inputCurrency === 'HKD' ? native : native * rate;
   }
-  return <div><div className="text-xs text-muted-foreground">{label}</div><div className="mt-1 font-semibold tabular-nums">{usd == null ? 'Unavailable' : formatMoney(usd, 'USD')}</div><div className="text-xs font-medium tabular-nums text-slate-600">{hkd == null ? 'HKD unavailable' : formatMoney(hkd, 'HKD')}</div>{serverDual?.basis === 'current_rate' && <div className="mt-0.5 text-[11px] text-amber-700">Current company rate</div>}</div>;
+  return <div><div className="text-xs text-muted-foreground">{label}</div><div className="mt-1 font-semibold tabular-nums">{usd == null ? 'Unavailable' : formatMoney(usd, 'USD')}</div>{ui.showHkdPreview && <><div className="text-xs font-medium tabular-nums text-slate-600">{hkd == null ? 'HKD unavailable' : formatMoney(hkd, 'HKD')}</div>{serverDual?.basis === 'current_rate' && <div className="mt-0.5 text-[11px] text-amber-700">Current company rate</div>}</>}</div>;
 }
 
 function PairedChargeRow({ row, review, draft, currency, companyRate, canCostEdit, canBuyerEdit, costApproved: costApprovedProp = false, buyerApproved: buyerApprovedProp = false, instanceUrl, onReviewChange, onDraftChange }) {
@@ -1566,12 +1609,12 @@ function PairedChargeRow({ row, review, draft, currency, companyRate, canCostEdi
   const fixedPricing = values.pricingType === 'fixed';
   const supplierEditing = review.outcome === 'changed' || review.outcome === 'cancelled';
   const anchorageDues = isHongKongAnchorageDuesItem(row.item);
-  const portClearance = isPortClearanceItem(row.item);
+  const portClearance = isHongKongPortClearanceItem(row.item);
   const supplierProduct = supplierItemLabel(row);
   const buyerProduct = buyerItemLabel(row);
-  const supplierLocked = supplierCostLockedForItem(row.item);
-  const buyerLocked = buyerDecisionLockedForItem(row.item);
-  const includedInBasicCalling = isIncludedBasicCallingItem(row.item);
+  const supplierLocked = usesHongKongChargeUi(row.item) && supplierCostLockedForItem(row.item);
+  const buyerLocked = usesHongKongChargeUi(row.item) && buyerDecisionLockedForItem(row.item);
+  const includedInBasicCalling = usesHongKongChargeUi(row.item) && isIncludedBasicCallingItem(row.item);
   const removable = row.sourceType === 'extra_cost' && row.item?.managedBasicCallingBundle !== true;
   const buyerDecisionOptions = buyerDecisionOptionsForItem(row.item);
   const displayedBuyerRate = buyerAmountWithAnchorageDecision(row.item, review.buyerChargeDecision, values.buyerRate);
@@ -1621,10 +1664,11 @@ function PairedChargeRow({ row, review, draft, currency, companyRate, canCostEdi
     if (outcome === 'changed' && review.outcome === 'cancelled') onDraftChange({ cancelled: false });
     onReviewChange({ outcome });
   };
-  return <article className="border-t border-border"><div className="border-b border-border bg-muted/25"><div className={cn(portClearance ? 'grid grid-cols-2' : 'px-4 py-3')}><div className={cn('min-w-0', portClearance && 'border-r-2 border-slate-300 px-4 py-3')}><h3 className="font-semibold">{portClearance ? supplierProduct : product}</h3>{descriptionVisible && <p className="mt-0.5 text-sm text-muted-foreground">{description}</p>}</div>{portClearance && <div className="min-w-0 bg-blue-50/20 px-4 py-3"><h3 className="font-semibold text-blue-950">{buyerProduct}</h3></div>}</div><div className="flex flex-wrap items-start gap-x-5 gap-y-1 border-t border-border/70 px-4 py-2 text-xs text-muted-foreground">{!fixedPricing && <span>Quantity <strong className="text-foreground">{variableChargeQuantityLabel(row.item, values.quantity, draft?.unitOfMeasure || valueOf(row.item, ['unitOfMeasure']))}</strong></span>}<span>Pricing Basis <strong className="text-foreground">{fixedPricing ? 'Fixed charge' : 'Per Unit'}</strong></span><div><span>Margin</span><MarginAmount value={displayedMargin} currency="USD" unavailableReason={unavailableReason} /></div>{removable && <AlertDialog><AlertDialogTrigger asChild><Button type="button" size="sm" variant="ghost" className="-my-1 h-7 text-rose-700 hover:bg-rose-50 hover:text-rose-800" disabled={!canCostEdit}>Remove</Button></AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Remove this extra cost?</AlertDialogTitle><AlertDialogDescription>The row remains in Salesforce history but is cancelled and no longer active.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Keep</AlertDialogCancel><AlertDialogAction className="bg-rose-600 hover:bg-rose-700" onClick={removeCharge}>Remove Extra Cost</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>}</div></div><div className="grid grid-cols-2"><section className="min-h-[210px] space-y-3 border-r-2 border-slate-300 bg-slate-50/30 p-4">{costApproved ? <ApprovedDecision ariaLabel={`${supplierProduct} supplier review approved`} /> : <DecisionButtons ariaLabel={`${supplierProduct} supplier review`} selected={review.outcome === 'cancelled' ? 'changed' : review.outcome || ''} disabled={!canCostEdit} onChange={changeSupplierOutcome} options={[{ value: '', label: 'Pending', tone: 'bg-slate-100 text-slate-800' }, { value: 'correct', label: 'Correct', tone: 'bg-emerald-100 text-emerald-900' }, { value: 'changed', label: supplierLocked ? 'Review Setup' : 'Edit Cost', tone: 'bg-amber-100 text-amber-950' }]} />}<SupplierDualAmount label={fixedPricing ? 'Supplier Fixed Cost' : 'Supplier Unit Cost'} row={row} draft={draft} companyRate={companyRate} />{!costApproved && supplierEditing && (row.readOnly ? <SalesforceEditNotice sourceId={row.sourceId} instanceUrl={instanceUrl} /> : portClearance ? <ManagedPortClearanceFields row={row} draft={draft} disabled={!canCostEdit} onChange={changePortClearance} /> : supplierLocked ? <LockedAgencyFeeFields row={row} instanceUrl={instanceUrl} /> : <PairedExtraCostFields row={row} draft={draft} disabled={!canCostEdit} onChange={onDraftChange} />)}</section><section className="min-h-[210px] space-y-3 bg-blue-50/20 p-4">{buyerApproved ? <ApprovedDecision ariaLabel={`${buyerProduct} buyer review approved`} /> : <DecisionButtons ariaLabel={`${buyerProduct} buyer review`} selected={review.buyerChargeDecision || ''} disabled={!canBuyerEdit || buyerLocked} onChange={(buyerChargeDecision) => onReviewChange({ buyerChargeDecision })} options={buyerDecisionOptions} />}{anchorageDues && <p className="text-xs text-blue-900">Buyer default: Vessel NRT × rounded chargeable hours after the first 12 aggregate hours × USD 0.002. The Buyer Trader may amend the USD amount.</p>}{includedInBasicCalling && <p className="text-xs text-blue-900">Included in Basic Calling Cost · buyer charge remains USD 0.</p>}{portClearance && <p className="text-xs text-blue-900">The first application is included. Additional supplier-reported applications are passed through at HKD 58 each using the reviewed row rate. This default updates immediately when the Supplier Leg application count changes.</p>}<AmountDisplay label={portClearance ? 'Buyer Port Clearance Extension' : fixedPricing ? 'Buyer Fixed Charge' : 'Buyer Unit Price'} amount={portClearance ? displayedBuyerTotal : displayedBuyerRate} currency="USD" unavailableReason={unavailableReason} />{!buyerApproved && review.buyerChargeDecision === 'include' && !buyerLocked && <div><Button type="button" size="sm" variant="outline" disabled={!canBuyerEdit} onClick={() => setBuyerPriceOpen((open) => !open)}>{anchorageDues ? 'Edit Buyer Amount' : 'Edit Buyer Price'}</Button>{buyerPriceOpen && (row.readOnly ? <SalesforceEditNotice sourceId={row.sourceId} instanceUrl={instanceUrl} /> : <div className="mt-3 space-y-2"><Label htmlFor={`paired-buyer-price-${row.sourceId}`}>{anchorageDues ? 'Buyer Anchorage Dues Charge (USD)' : fixedPricing ? 'Buyer Fixed Charge (USD)' : 'Buyer Unit Price (USD)'}</Label><Input id={`paired-buyer-price-${row.sourceId}`} inputMode="decimal" value={draft?.buyerPrice ?? ''} disabled={!canBuyerEdit} onChange={(event) => onDraftChange({ buyerPrice: event.target.value })} /></div>)}</div>}</section></div></article>;
+  return <article className="border-t border-border"><div className="border-b border-border bg-muted/25"><div className={cn(portClearance ? 'grid grid-cols-2' : 'px-4 py-3')}><div className={cn('min-w-0', portClearance && 'border-r-2 border-slate-300 px-4 py-3')}><h3 className="font-semibold">{portClearance ? supplierProduct : product}</h3>{descriptionVisible && <p className="mt-0.5 text-sm text-muted-foreground">{description}</p>}</div>{portClearance && <div className="min-w-0 bg-blue-50/20 px-4 py-3"><h3 className="font-semibold text-blue-950">{buyerProduct}</h3></div>}</div><div className="flex flex-wrap items-start gap-x-5 gap-y-1 border-t border-border/70 px-4 py-2 text-xs text-muted-foreground">{!fixedPricing && <span>Quantity <strong className="text-foreground">{variableChargeUiQuantityLabel(row.item, values.quantity, draft?.unitOfMeasure || valueOf(row.item, ['unitOfMeasure']))}</strong></span>}<span>Pricing Basis <strong className="text-foreground">{fixedPricing ? 'Fixed charge' : 'Per Unit'}</strong></span><div><span>Margin</span><MarginAmount value={displayedMargin} currency="USD" unavailableReason={unavailableReason} /></div>{removable && <AlertDialog><AlertDialogTrigger asChild><Button type="button" size="sm" variant="ghost" className="-my-1 h-7 text-rose-700 hover:bg-rose-50 hover:text-rose-800" disabled={!canCostEdit}>Remove</Button></AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Remove this extra cost?</AlertDialogTitle><AlertDialogDescription>The row remains in Salesforce history but is cancelled and no longer active.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Keep</AlertDialogCancel><AlertDialogAction className="bg-rose-600 hover:bg-rose-700" onClick={removeCharge}>Remove Extra Cost</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>}</div></div><div className="grid grid-cols-2"><section className="min-h-[210px] space-y-3 border-r-2 border-slate-300 bg-slate-50/30 p-4">{costApproved ? <ApprovedDecision ariaLabel={`${supplierProduct} supplier review approved`} /> : <DecisionButtons ariaLabel={`${supplierProduct} supplier review`} selected={review.outcome === 'cancelled' ? 'changed' : review.outcome || ''} disabled={!canCostEdit} onChange={changeSupplierOutcome} options={[{ value: '', label: 'Pending', tone: 'bg-slate-100 text-slate-800' }, { value: 'correct', label: 'Correct', tone: 'bg-emerald-100 text-emerald-900' }, { value: 'changed', label: supplierLocked ? 'Review Setup' : 'Edit Cost', tone: 'bg-amber-100 text-amber-950' }]} />}<SupplierDualAmount label={fixedPricing ? 'Supplier Fixed Cost' : 'Supplier Unit Cost'} row={row} draft={draft} companyRate={companyRate} />{!costApproved && supplierEditing && (row.readOnly ? <SalesforceEditNotice sourceId={row.sourceId} instanceUrl={instanceUrl} /> : portClearance ? <ManagedPortClearanceFields row={row} draft={draft} disabled={!canCostEdit} onChange={changePortClearance} /> : supplierLocked ? <LockedAgencyFeeFields row={row} instanceUrl={instanceUrl} /> : <PairedExtraCostFields row={row} draft={draft} disabled={!canCostEdit} onChange={onDraftChange} />)}</section><section className="min-h-[210px] space-y-3 bg-blue-50/20 p-4">{buyerApproved ? <ApprovedDecision ariaLabel={`${buyerProduct} buyer review approved`} /> : <DecisionButtons ariaLabel={`${buyerProduct} buyer review`} selected={review.buyerChargeDecision || ''} disabled={!canBuyerEdit || buyerLocked} onChange={(buyerChargeDecision) => onReviewChange({ buyerChargeDecision })} options={buyerDecisionOptions} />}{anchorageDues && <p className="text-xs text-blue-900">Buyer default: Vessel NRT × rounded chargeable hours after the first 12 aggregate hours × USD 0.002. The Buyer Trader may amend the USD amount.</p>}{includedInBasicCalling && <p className="text-xs text-blue-900">Included in Basic Calling Cost · buyer charge remains USD 0.</p>}{portClearance && <p className="text-xs text-blue-900">The first application is included. Additional supplier-reported applications are passed through at HKD 58 each using the reviewed row rate. This default updates immediately when the Supplier Leg application count changes.</p>}<AmountDisplay label={portClearance ? 'Buyer Port Clearance Extension' : fixedPricing ? 'Buyer Fixed Charge' : 'Buyer Unit Price'} amount={portClearance ? displayedBuyerTotal : displayedBuyerRate} currency="USD" unavailableReason={unavailableReason} />{!buyerApproved && review.buyerChargeDecision === 'include' && !buyerLocked && <div><Button type="button" size="sm" variant="outline" disabled={!canBuyerEdit} onClick={() => setBuyerPriceOpen((open) => !open)}>{anchorageDues ? 'Edit Buyer Amount' : 'Edit Buyer Price'}</Button>{buyerPriceOpen && (row.readOnly ? <SalesforceEditNotice sourceId={row.sourceId} instanceUrl={instanceUrl} /> : <div className="mt-3 space-y-2"><Label htmlFor={`paired-buyer-price-${row.sourceId}`}>{anchorageDues ? 'Buyer Anchorage Dues Charge (USD)' : fixedPricing ? 'Buyer Fixed Charge (USD)' : 'Buyer Unit Price (USD)'}</Label><Input id={`paired-buyer-price-${row.sourceId}`} inputMode="decimal" value={draft?.buyerPrice ?? ''} disabled={!canBuyerEdit} onChange={(event) => onDraftChange({ buyerPrice: event.target.value })} /></div>)}</div>}</section></div></article>;
 }
 
 function PairedNewChargeRow({ draft, products, canCostEdit, canBuyerEdit, commonOwner, onChange, onRemove }) {
+  const ui = supplierChargeUiModel(draft);
   const pricingType = draft.pricingType || 'fixed';
   const quantity = finiteNumber(draft.quantity);
   const nativeSupplierRate = finiteNumber(draft.supplierCost);
@@ -1633,8 +1677,8 @@ function PairedNewChargeRow({ draft, products, canCostEdit, canBuyerEdit, common
   const supplierTotal = pricingType === 'fixed' ? supplierRate : supplierRate != null && quantity != null ? supplierRate * quantity : null;
   const buyerTotal = pricingType === 'fixed' ? buyerRate : buyerRate != null && quantity != null ? buyerRate * quantity : null;
   const margin = supplierTotal != null && buyerTotal != null ? buyerTotal - supplierTotal : null;
-  const currencyLocked = Boolean(draft.requiredInputCurrency);
-  return <article className="border-t border-dashed border-blue-300"><div className="flex items-center justify-between border-b border-border bg-blue-50/40 px-4 py-3"><div><div className="font-semibold">New Extra Cost</div><div className="text-xs text-muted-foreground">Supplier and payment term are inherited.</div></div><Button type="button" size="sm" variant="ghost" onClick={onRemove} disabled={!canCostEdit}><X className="mr-1 h-4 w-4" />Remove</Button></div><div className="grid grid-cols-2"><section className="space-y-3 border-r-2 border-slate-300 bg-slate-50/30 p-4"><div className="grid gap-3 sm:grid-cols-2"><div className="space-y-2"><Label>Product</Label><Select value={draft.productId || undefined} disabled={!canCostEdit} onValueChange={(productId) => onChange({ productId })}><SelectTrigger><SelectValue placeholder="Select Product" /></SelectTrigger><SelectContent>{products.map((product) => <SelectItem key={valueOf(product, ['id', 'Id'])} value={String(valueOf(product, ['id', 'Id']))}>{valueOf(product, ['name', 'Name'], 'Product')}</SelectItem>)}</SelectContent></Select></div><div className="space-y-2"><Label>Description</Label><Input value={draft.description || ''} disabled={!canCostEdit} onChange={(event) => onChange({ description: event.target.value })} /></div><div className="space-y-2"><Label>Pricing Basis</Label><Select value={pricingType} disabled={!canCostEdit} onValueChange={(value) => onChange({ pricingType: value })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="fixed">Fixed</SelectItem><SelectItem value="per_unit">Per Unit</SelectItem></SelectContent></Select></div><div className="space-y-2"><Label>{currencyLocked ? 'Agent Agreed Currency' : 'Input Currency'}</Label><Select value={draft.inputCurrency || 'USD'} disabled={!canCostEdit || currencyLocked} onValueChange={(inputCurrency) => onChange({ inputCurrency })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="HKD">HKD</SelectItem><SelectItem value="USD">USD</SelectItem></SelectContent></Select>{currencyLocked && <div className="text-xs text-amber-900">All costs for this agent use the Account’s agreed currency.</div>}</div><div className="space-y-2"><Label>{pricingType === 'fixed' ? 'Supplier Fixed Cost' : 'Supplier Unit Cost'} ({draft.inputCurrency || 'USD'})</Label><Input inputMode="decimal" value={draft.supplierCost ?? ''} disabled={!canCostEdit} onChange={(event) => onChange({ supplierCost: event.target.value })} /></div>{pricingType === 'per_unit' && <><div className="space-y-2"><Label>Quantity</Label><Input inputMode="decimal" value={draft.quantity ?? ''} disabled={!canCostEdit} onChange={(event) => onChange({ quantity: event.target.value })} /></div><div className="space-y-2"><Label>UOM</Label><Input value={draft.unitOfMeasure || ''} disabled={!canCostEdit} onChange={(event) => onChange({ unitOfMeasure: event.target.value })} /></div></>}</div></section><section className="space-y-3 bg-blue-50/20 p-4">{commonOwner ? <><DecisionButtons ariaLabel="New charge buyer review" selected={draft.buyerChargeDecision || ''} disabled={!canBuyerEdit} onChange={(buyerChargeDecision) => onChange({ buyerChargeDecision })} options={[{ value: '', label: 'Pending', tone: 'bg-slate-100 text-slate-800' }, { value: 'include', label: 'Charge Buyer', tone: 'bg-blue-100 text-blue-900' }, { value: 'exclude', label: 'Do Not Charge', tone: 'bg-slate-200 text-slate-900' }]} />{draft.buyerChargeDecision === 'include' && <div className="space-y-2"><Label>Buyer {pricingType === 'fixed' ? 'Fixed Charge' : 'Unit Price'} (USD)</Label><Input inputMode="decimal" value={draft.buyerPrice ?? ''} disabled={!canBuyerEdit} onChange={(event) => onChange({ buyerPrice: event.target.value })} /></div>}<div><div className="text-xs text-muted-foreground">Margin</div><MarginAmount value={draft.buyerChargeDecision === 'exclude' && supplierTotal != null ? -supplierTotal : margin} currency="USD" /></div></> : <div className="rounded-md border border-blue-200 bg-white/70 p-3 text-sm text-blue-950">Pending for Buyer Trader after Supplier approval.</div>}</section></div></article>;
+  const currencyLocked = ui.hongKongVariableCharges && Boolean(draft.requiredInputCurrency);
+  return <article className="border-t border-dashed border-blue-300"><div className="flex items-center justify-between border-b border-border bg-blue-50/40 px-4 py-3"><div><div className="font-semibold">New Extra Cost</div><div className="text-xs text-muted-foreground">Supplier and payment term are inherited.</div></div><Button type="button" size="sm" variant="ghost" onClick={onRemove} disabled={!canCostEdit}><X className="mr-1 h-4 w-4" />Remove</Button></div><div className="grid grid-cols-2"><section className="space-y-3 border-r-2 border-slate-300 bg-slate-50/30 p-4"><div className="grid gap-3 sm:grid-cols-2"><div className="space-y-2"><Label>Product</Label><Select value={draft.productId || undefined} disabled={!canCostEdit} onValueChange={(productId) => onChange({ productId })}><SelectTrigger><SelectValue placeholder="Select Product" /></SelectTrigger><SelectContent>{products.map((product) => <SelectItem key={valueOf(product, ['id', 'Id'])} value={String(valueOf(product, ['id', 'Id']))}>{valueOf(product, ['name', 'Name'], 'Product')}</SelectItem>)}</SelectContent></Select></div><div className="space-y-2"><Label>Description</Label><Input value={draft.description || ''} disabled={!canCostEdit} onChange={(event) => onChange({ description: event.target.value })} /></div><div className="space-y-2"><Label>Pricing Basis</Label><Select value={pricingType} disabled={!canCostEdit} onValueChange={(value) => onChange({ pricingType: value })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="fixed">Fixed</SelectItem><SelectItem value="per_unit">Per Unit</SelectItem></SelectContent></Select></div>{ui.showCurrencySelector && <div className="space-y-2"><Label>{currencyLocked ? 'Agent Agreed Currency' : 'Input Currency'}</Label><Select value={draft.inputCurrency || 'USD'} disabled={!canCostEdit || currencyLocked} onValueChange={(inputCurrency) => onChange({ inputCurrency })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="HKD">HKD</SelectItem><SelectItem value="USD">USD</SelectItem></SelectContent></Select>{currencyLocked && <div className="text-xs text-amber-900">All costs for this agent use the Account’s agreed currency.</div>}</div>}<div className="space-y-2"><Label>{pricingType === 'fixed' ? 'Supplier Fixed Cost' : 'Supplier Unit Cost'} ({ui.hongKongVariableCharges ? draft.inputCurrency || 'USD' : 'USD'})</Label><Input inputMode="decimal" value={draft.supplierCost ?? ''} disabled={!canCostEdit} onChange={(event) => onChange({ supplierCost: event.target.value })} /></div>{pricingType === 'per_unit' && <><div className="space-y-2"><Label>Quantity</Label><Input inputMode="decimal" value={draft.quantity ?? ''} disabled={!canCostEdit} onChange={(event) => onChange({ quantity: event.target.value })} /></div><div className="space-y-2"><Label>UOM</Label><Input value={draft.unitOfMeasure || ''} disabled={!canCostEdit} onChange={(event) => onChange({ unitOfMeasure: event.target.value })} /></div></>}</div></section><section className="space-y-3 bg-blue-50/20 p-4">{commonOwner ? <><DecisionButtons ariaLabel="New charge buyer review" selected={draft.buyerChargeDecision || ''} disabled={!canBuyerEdit} onChange={(buyerChargeDecision) => onChange({ buyerChargeDecision })} options={[{ value: '', label: 'Pending', tone: 'bg-slate-100 text-slate-800' }, { value: 'include', label: 'Charge Buyer', tone: 'bg-blue-100 text-blue-900' }, { value: 'exclude', label: 'Do Not Charge', tone: 'bg-slate-200 text-slate-900' }]} />{draft.buyerChargeDecision === 'include' && <div className="space-y-2"><Label>Buyer {pricingType === 'fixed' ? 'Fixed Charge' : 'Unit Price'} (USD)</Label><Input inputMode="decimal" value={draft.buyerPrice ?? ''} disabled={!canBuyerEdit} onChange={(event) => onChange({ buyerPrice: event.target.value })} /></div>}<div><div className="text-xs text-muted-foreground">Margin</div><MarginAmount value={draft.buyerChargeDecision === 'exclude' && supplierTotal != null ? -supplierTotal : margin} currency="USD" /></div></> : <div className="rounded-md border border-blue-200 bg-white/70 p-3 text-sm text-blue-950">Pending for Buyer Trader after Supplier approval.</div>}</section></div></article>;
 }
 
 function PairedReviewWorkspace({ caseRow, requirement, requirements, activeSupplierId, onSupplierChange, rows, allRows, reviews, extraDrafts, addDrafts, products, files, financials: rawFinancials, currency, supplierPaymentTerm, buyerPaymentTerm, canCostEdit, canBuyerEdit, reviewingBothAsGeneralManager = false, saving, supplierSaving, assignmentSaving, amendSaving, supplierNote, buyerNote, salesforceInstanceUrl, anchorage, anchorageDrafts, anchorageSaving, canSaveAnchorage, onAnchorageChange, onSaveAnchorage, onReviewChange, onDraftChange, onAddDraftChange, onAdd, onRemoveAdd, onSupplierNote, onBuyerNote, onToggleEvidence, onAssign, onAmend, onApprove }) {
@@ -1669,9 +1713,9 @@ function PairedReviewWorkspace({ caseRow, requirement, requirements, activeSuppl
     if (outcome !== 'changed') return true;
     const draft = extraDrafts[row.sourceId] || initialExtraDraft(row.item);
     const original = initialExtraDraft(row.item);
-    const changed = isPortClearanceItem(row.item) || changeKey({ description: draft.description, pricingType: draft.pricingType, supplierCost: draft.supplierCost, inputCurrency: draft.inputCurrency, quantity: draft.quantity, unitOfMeasure: draft.unitOfMeasure })
+    const changed = isHongKongPortClearanceItem(row.item) || changeKey({ description: draft.description, pricingType: draft.pricingType, supplierCost: draft.supplierCost, inputCurrency: draft.inputCurrency, quantity: draft.quantity, unitOfMeasure: draft.unitOfMeasure })
       !== changeKey({ description: original.description, pricingType: original.pricingType, supplierCost: original.supplierCost, inputCurrency: original.inputCurrency, quantity: original.quantity, unitOfMeasure: original.unitOfMeasure });
-    if (isPortClearanceItem(row.item)) {
+    if (isHongKongPortClearanceItem(row.item)) {
       const applicationCount = finiteNumber(draft.quantity);
       return changed && Number.isInteger(applicationCount) && applicationCount >= 1
         && finiteNumber(draft.supplierCost) != null;
@@ -1760,7 +1804,19 @@ function NewExtraCostEditor({ draft, products, supplierAccounts, files, defaultP
 }
 
 function ExtraCostFields({ id, value, disabled, supplierStage = false, buyerStage = false, onChange, paymentTermReadOnly = false }) {
-  return <div className="mt-4 grid gap-3 md:grid-cols-2 lg:grid-cols-6"><div className="space-y-2"><Label htmlFor={`${id}-term`}>Payment term</Label><Input id={`${id}-term`} value={value.paymentTerm || ''} onChange={(event) => onChange({ paymentTerm: event.target.value })} disabled={disabled || paymentTermReadOnly || buyerStage} /></div><div className="space-y-2"><Label>Pricing</Label><Select value={value.pricingType} onValueChange={(pricingType) => onChange({ pricingType })} disabled={disabled || buyerStage}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="fixed">Fixed</SelectItem><SelectItem value="per_unit">Per unit</SelectItem></SelectContent></Select></div>{supplierStage && <div className="space-y-2"><Label>Input Currency</Label><Select value={value.inputCurrency || 'USD'} onValueChange={(inputCurrency) => onChange({ inputCurrency })} disabled={disabled || buyerStage}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="HKD">HKD</SelectItem><SelectItem value="USD">USD</SelectItem></SelectContent></Select></div>}<div className="space-y-2"><Label htmlFor={`${id}-supplier-cost`}>{value.pricingType === 'fixed' ? 'Fixed supplier cost' : 'Supplier cost / unit'} ({value.inputCurrency || 'USD'})</Label><Input id={`${id}-supplier-cost`} inputMode="decimal" value={value.supplierCost ?? ''} onChange={(event) => onChange({ supplierCost: event.target.value })} disabled={disabled || buyerStage} /></div>{!supplierStage && <div className="space-y-2"><Label htmlFor={`${id}-buyer-price`}>{value.pricingType === 'fixed' ? 'Fixed buyer price' : 'Buyer price / unit'} (USD)</Label><Input id={`${id}-buyer-price`} inputMode="decimal" value={value.buyerPrice ?? ''} onChange={(event) => onChange({ buyerPrice: event.target.value })} disabled={disabled} /></div>}{value.pricingType === 'per_unit' && <><div className="space-y-2"><Label htmlFor={`${id}-quantity`}>Quantity</Label><Input id={`${id}-quantity`} inputMode="decimal" value={value.quantity ?? ''} onChange={(event) => onChange({ quantity: event.target.value })} disabled={disabled || buyerStage} /></div><div className="space-y-2"><Label htmlFor={`${id}-uom`}>Unit of measure</Label><Input id={`${id}-uom`} value={value.unitOfMeasure || ''} onChange={(event) => onChange({ unitOfMeasure: event.target.value })} disabled={disabled || buyerStage} /></div></>}</div>;
+  const ui = supplierChargeUiModel(value);
+  return <div className="mt-4 grid gap-3 md:grid-cols-2 lg:grid-cols-6"><div className="space-y-2"><Label htmlFor={`${id}-term`}>Payment term</Label><Input id={`${id}-term`} value={value.paymentTerm || ''} onChange={(event) => onChange({ paymentTerm: event.target.value })} disabled={disabled || paymentTermReadOnly || buyerStage} /></div><div className="space-y-2"><Label>Pricing</Label><Select value={value.pricingType} onValueChange={(pricingType) => onChange({ pricingType })} disabled={disabled || buyerStage}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="fixed">Fixed</SelectItem><SelectItem value="per_unit">Per unit</SelectItem></SelectContent></Select></div>{supplierStage && ui.showCurrencySelector && <div className="space-y-2"><Label>Input Currency</Label><Select value={value.inputCurrency || 'USD'} onValueChange={(inputCurrency) => onChange({ inputCurrency })} disabled={disabled || buyerStage}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="HKD">HKD</SelectItem><SelectItem value="USD">USD</SelectItem></SelectContent></Select></div>}<div className="space-y-2"><Label htmlFor={`${id}-supplier-cost`}>{value.pricingType === 'fixed' ? 'Fixed supplier cost' : 'Supplier cost / unit'} ({ui.hongKongVariableCharges ? value.inputCurrency || 'USD' : 'USD'})</Label><Input id={`${id}-supplier-cost`} inputMode="decimal" value={value.supplierCost ?? ''} onChange={(event) => onChange({ supplierCost: event.target.value })} disabled={disabled || buyerStage} /></div>{!supplierStage && <div className="space-y-2"><Label htmlFor={`${id}-buyer-price`}>{value.pricingType === 'fixed' ? 'Fixed buyer price' : 'Buyer price / unit'} (USD)</Label><Input id={`${id}-buyer-price`} inputMode="decimal" value={value.buyerPrice ?? ''} onChange={(event) => onChange({ buyerPrice: event.target.value })} disabled={disabled} /></div>}{value.pricingType === 'per_unit' && <><div className="space-y-2"><Label htmlFor={`${id}-quantity`}>Quantity</Label><Input id={`${id}-quantity`} inputMode="decimal" value={value.quantity ?? ''} onChange={(event) => onChange({ quantity: event.target.value })} disabled={disabled || buyerStage} /></div><div className="space-y-2"><Label htmlFor={`${id}-uom`}>Unit of measure</Label><Input id={`${id}-uom`} value={value.unitOfMeasure || ''} onChange={(event) => onChange({ unitOfMeasure: event.target.value })} disabled={disabled || buyerStage} /></div></>}</div>;
 }
 
 function PostInvoiceResolution({ value, disabled, saving, onChange, onSave }) { return <section className="space-y-3 rounded-lg border border-rose-300 bg-rose-50 p-4"><h2 className="text-sm font-semibold text-rose-950">Invoice already issued—action required</h2><div className="space-y-2"><Label>Resolution</Label><Select value={value.resolution} onValueChange={(resolution) => onChange({ resolution })} disabled={disabled || saving}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{POST_INVOICE_RESOLUTIONS.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select></div><div className="space-y-2"><Label htmlFor="post-invoice-note">Resolution Note</Label><Textarea id="post-invoice-note" value={value.note} onChange={(event) => onChange({ note: event.target.value })} disabled={disabled || saving} /></div><Button type="button" variant="outline" onClick={onSave} disabled={disabled || saving}>{saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Save Resolution</Button></section>; }
+
+export const variableChargeUiInternals = Object.freeze({
+  initialAddDraft,
+  initialExtraDraft,
+  isHongKongPortClearanceItem,
+  itemLabel,
+  PairedExtraCostFields,
+  supplierChargeUiModel,
+  variableChargeUiQuantityLabel,
+  SupplierDualAmount,
+});

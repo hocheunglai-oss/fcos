@@ -14300,7 +14300,9 @@ async function loadBuyerInvoicePaymentReminderContext(body = {}, accessContext =
     {
       daysAhead: body.daysAhead ?? settings.daysAhead,
       anchorStemId: stemId,
-      requestedStemIds: body.requestedStemIds || body.invoiceStemIds,
+      // Review and send must fingerprint the same complete buyer/group scope.
+      // The outbound selection is validated separately after the live comparison.
+      requestedStemIds: [],
     },
     null,
     accessContext,
@@ -14449,7 +14451,7 @@ async function buyerInvoicePaymentReminderSend(body, req, accessContext = null) 
     stemIds: [...selectedStemIds],
   });
   const { settings, settingsRevision: liveSettingsRevision, report, selected, candidates, sender } = await loadBuyerInvoicePaymentReminderContext(
-    { ...body, requestedStemIds: null },
+    { stemId: anchorStemId, daysAhead: body.daysAhead },
     activeAccess,
   );
   const liveRouting = preparePaymentReminderRouting(report, settings, selected, candidates);
