@@ -162,24 +162,35 @@ export function summarizeDashboardFinance(rows, settings, asOfDate, { complete =
   const buckets = new Map();
   for (const row of rows) {
     const key = row.currency || 'Unspecified';
-    if (!buckets.has(key)) buckets.set(key, { currency: key, costCents: 0n, ebitCents: 0n, complete: true, stemCount: 0, missingEvidenceCount: 0, accruingStemCount: 0 });
+    if (!buckets.has(key)) buckets.set(key, { currency: key, costCents: 0n, ebitCents: 0n, grossCents: 0n, excludedCents: 0n, excludedComplete: true, complete: true, stemCount: 0, verifiedStemCount: 0, missingEvidenceCount: 0, accruingStemCount: 0 });
     const bucket = buckets.get(key); bucket.stemCount += 1;
-    if (!row.finance?.complete || cents(row.finance.financeCost) == null || cents(row.finance.ebit) == null) {
+    const gross = cents(row.netPnl);
+    if (!row.finance?.complete || gross == null || cents(row.finance.financeCost) == null || cents(row.finance.ebit) == null) {
       bucket.complete = false; bucket.missingEvidenceCount += 1;
+      if (gross == null) bucket.excludedComplete = false;
+      else bucket.excludedCents += BigInt(gross);
     } else {
+      bucket.verifiedStemCount += 1; bucket.grossCents += BigInt(gross);
       bucket.costCents += BigInt(cents(row.finance.financeCost)); bucket.ebitCents += BigInt(cents(row.finance.ebit));
       if (row.finance.accruing) bucket.accruingStemCount += 1;
     }
   }
-  for (const bucket of buckets.values()) {
-    if ([bucket.costCents, bucket.ebitCents].some((value) => value > BigInt(Number.MAX_SAFE_INTEGER) || value < -BigInt(Number.MAX_SAFE_INTEGER))) bucket.complete = false;
-  }
+  const safe = (value) => value <= BigInt(Number.MAX_SAFE_INTEGER) && value >= -BigInt(Number.MAX_SAFE_INTEGER);
+  for (const bucket of buckets.values()) if (![bucket.costCents, bucket.ebitCents, bucket.grossCents].every(safe)) bucket.complete = false;
   return { annualInterestRatePct: settings.annualInterestRatePct, revision: settings.revision, asOfDate, dayCountBasis: 'ACT/365',
     complete: complete && [...buckets.values()].every((bucket) => bucket.complete),
-    byCurrency: [...buckets.values()].sort((a, b) => a.currency.localeCompare(b.currency)).map(({ costCents, ebitCents, ...bucket }) => ({
-      ...bucket, complete: complete && bucket.complete, financeCost: complete && bucket.complete ? money(costCents) : null,
-      ebit: complete && bucket.complete ? money(ebitCents) : null,
-    })), warnings: [] };
+    byCurrency: [...buckets.values()].sort((a, b) => a.currency.localeCompare(b.currency)).map(({ costCents, ebitCents, grossCents, excludedCents, excludedComplete, ...bucket }) => {
+      // A verified subset is useful, but must never masquerade as the full currency result.
+      const verified = complete && bucket.verifiedStemCount > 0 && [costCents, ebitCents, grossCents].every(safe);
+      return { ...bucket, complete: complete && bucket.complete,
+        financeCost: complete && bucket.complete ? money(costCents) : null,
+        ebit: complete && bucket.complete ? money(ebitCents) : null,
+        verifiedGrossProfit: verified ? money(grossCents) : null,
+        verifiedFinanceCost: verified ? money(costCents) : null,
+        verifiedEbit: verified ? money(ebitCents) : null,
+        excludedGrossProfit: complete && excludedComplete && safe(excludedCents) ? money(excludedCents) : null,
+      };
+    }), warnings: [] };
 }
 
 /** Dependency injection keeps all Salesforce work read-only and testable. */

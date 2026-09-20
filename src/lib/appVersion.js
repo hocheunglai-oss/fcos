@@ -4,6 +4,15 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.219',
+    releasedAt: '2026-09-21',
+    title: 'Useful EBIT figures with partial payment evidence',
+    changes: [
+      'Show verified Partial EBIT with coverage, or gross profit before finance when no payment evidence is usable.',
+      'Separate verified finance totals from full gross profit in XLS exports.',
+    ],
+  },
+  {
     version: '2.0.218',
     releasedAt: '2026-09-20',
     title: 'Dashboard financing, Korea Desk and complete STEM exports',

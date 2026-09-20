@@ -219,7 +219,7 @@ function scopeEntries({ filterPayload, scopeLabels = {}, search, sort, matchingC
       ['Finance snapshot', `${finance?.annualInterestRatePct ?? 'Unavailable'}% annual; revision ${finance?.revision ?? 'Unavailable'}; calculated ${finance?.asOfDate ?? 'Unavailable'}; ${finance?.dayCountBasis || 'ACT/365'}`],
       ['Finance evidence complete', finance?.complete === true ? 'Yes' : 'No'],
       ['Finance methodology', 'Finance cost = sum of positive daily funded balances × annual rate ÷ 365 (Actual/365). Supplier payments increase funding, buyer receipts reduce it, same-day settlement costs zero, and open funding accrues through the calculation date.'],
-      ['Missing-data note', finance?.complete === true ? 'No incomplete finance evidence reported.' : 'Finance cost and EBIT are unavailable for affected currencies or STEMs when payment evidence is incomplete.'],
+      ['Missing-data note', 'Finance totals cover verified STEMs only; compare counts. Unknown costs are never zero.'],
     );
     if (Array.isArray(finance?.warnings) && finance.warnings.length) entries.push(['Finance warnings', finance.warnings.join('; ')]);
   }
@@ -230,7 +230,7 @@ function currencyTotals(rows, includeFinanceCosts) {
   const totals = new Map();
   for (const row of rows) {
     const currency = String(row?.currency || 'Unspecified').toUpperCase();
-    const item = totals.get(currency) || { currency, rowCount: 0, turnover: 0, grossProfit: 0, turnoverComplete: true, grossProfitComplete: true, financeCost: 0, ebit: 0, financeComplete: true };
+    const item = totals.get(currency) || { currency, rowCount: 0, turnover: 0, grossProfit: 0, turnoverComplete: true, grossProfitComplete: true, financeCost: 0, ebit: 0, financeComplete: true, verifiedStemCount: 0, verifiedGrossProfit: 0 };
     item.rowCount += 1;
     const turnover = finiteNumber(row?.buyer);
     const grossProfit = finiteNumber(row?.netPnl);
@@ -241,8 +241,10 @@ function currencyTotals(rows, includeFinanceCosts) {
     if (includeFinanceCosts) {
       const financeCost = finiteNumber(row?.finance?.financeCost);
       const ebit = finiteNumber(row?.finance?.ebit);
-      if (row?.finance?.complete !== true || financeCost == null || ebit == null) item.financeComplete = false;
+      if (row?.finance?.complete !== true || financeCost == null || ebit == null || grossProfit == null) item.financeComplete = false;
       else {
+        item.verifiedStemCount += 1;
+        item.verifiedGrossProfit += grossProfit;
         item.financeCost += financeCost;
         item.ebit += ebit;
       }
@@ -283,7 +285,7 @@ export function buildDashboardStemWorkbookXml({
 
   const entries = scopeEntries({ filterPayload, scopeLabels, search, sort, matchingCount: rows.length, generatedAt, includeFinanceCosts, finance });
   const totals = currencyTotals(rows, includeFinanceCosts);
-  const totalHeaders = ['Currency', 'Row Count', 'Turnover', 'Gross Profit', ...(includeFinanceCosts ? ['Finance Cost', 'EBIT', 'Evidence Complete'] : [])];
+  const totalHeaders = ['Currency', 'Row Count', 'Turnover', 'Gross Profit', ...(includeFinanceCosts ? ['Verified STEMs', 'Verified Gross Profit', 'Verified Finance Cost', 'Verified EBIT', 'Evidence Complete'] : [])];
   const scopeRows = [
     workbookRow([textCell('Dashboard STEM Export Scope'), textCell('')]),
     ...entries.map(([label, value]) => workbookRow([textCell(label), textCell(value)])),
@@ -292,8 +294,10 @@ export function buildDashboardStemWorkbookXml({
     ...totals.map((total) => workbookRow([
       textCell(total.currency), numberCell(total.rowCount), total.turnoverComplete ? numberCell(total.turnover) : textCell('Unavailable'), total.grossProfitComplete ? numberCell(total.grossProfit) : textCell('Unavailable'),
       ...(includeFinanceCosts ? [
-        total.financeComplete ? numberCell(total.financeCost) : textCell('Unavailable'),
-        total.financeComplete ? numberCell(total.ebit) : textCell('Unavailable'),
+        numberCell(total.verifiedStemCount),
+        total.verifiedStemCount ? numberCell(total.verifiedGrossProfit) : textCell('Unavailable'),
+        total.verifiedStemCount ? numberCell(total.financeCost) : textCell('Unavailable'),
+        total.verifiedStemCount ? numberCell(total.ebit) : textCell('Unavailable'),
         textCell(total.financeComplete ? 'Yes' : 'No'),
       ] : []),
     ])),

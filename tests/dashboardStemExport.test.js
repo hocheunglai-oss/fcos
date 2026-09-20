@@ -172,6 +172,23 @@ test('oversized Dashboard selections split into bounded worksheet chunks', () =>
   assert.equal(dashboardStemExportInternals.MAX_DATA_ROWS_PER_SHEET, 60_000);
 });
 
+test('XLS currency summaries label verified subsets without including profit from missing-evidence STEMs', () => {
+  const rows = [
+    { currency: 'USD', netPnl: 300, buyer: 1000, finance: { complete: true, financeCost: 12.5, ebit: 287.5 } },
+    { currency: 'USD', netPnl: 100, buyer: 200, finance: { complete: false, financeCost: null, ebit: null } },
+    { currency: 'EUR', netPnl: 90, buyer: 150, finance: { complete: false } },
+  ];
+  const [eur, usd] = dashboardStemExportInternals.currencyTotals(rows, true);
+  assert.equal(usd.financeComplete, false); assert.equal(usd.rowCount, 2); assert.equal(usd.verifiedStemCount, 1);
+  assert.equal(usd.grossProfit, 400); assert.equal(usd.verifiedGrossProfit, 300);
+  assert.equal(usd.financeCost, 12.5); assert.equal(usd.ebit, 287.5); assert.equal(eur.verifiedStemCount, 0);
+  const scope = buildDashboardStemWorkbookXml({ rows, includeFinanceCosts: true, finance }).split('<Worksheet ss:Name="Scope">')[1];
+  assert.match(scope, /Verified STEMs/); assert.match(scope, /Verified EBIT/);
+  assert.match(scope, /<Data ss:Type="Number">287\.5<\/Data>/);
+  assert.match(scope, /<Data ss:Type="String">Unavailable<\/Data>/);
+  assert.match(scope, /Unknown costs are never zero/);
+});
+
 test('currency totals withhold partial turnover or gross profit instead of summing missing rows as zero', () => {
   const [totals] = dashboardStemExportInternals.currencyTotals([
     { currency: 'USD', buyer: 100, netPnl: 20 },

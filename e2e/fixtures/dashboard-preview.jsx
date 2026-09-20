@@ -55,6 +55,25 @@ const monthlyRows = monthlyValues.map(([currentGrossProfit, currentVolume, curre
   priorProductVolumes: priorVolume == null ? [] : [{ family: index % 2 ? 'HSFO' : 'VLSFO', quantity: priorVolume }],
 }));
 
+const financeScenario = new URLSearchParams(window.location.search).get('finance') || 'partial';
+const financeByScenario = {
+  partial: {
+    complete: false,
+    byCurrency: [{ currency: 'USD', financeCost: null, ebit: null, complete: false, missingEvidenceCount: 112, stemCount: 128, verifiedStemCount: 16, verifiedGrossProfit: 488_350, verifiedFinanceCost: 12_000, verifiedEbit: 476_350, excludedGrossProfit: 1_645_000, accruingStemCount: 4 }],
+    warnings: ['112 STEMs have incomplete payment evidence.'],
+  },
+  none: {
+    complete: false,
+    byCurrency: [{ currency: 'USD', financeCost: null, ebit: null, complete: false, missingEvidenceCount: 128, stemCount: 128, verifiedStemCount: 0, verifiedGrossProfit: null, verifiedFinanceCost: null, verifiedEbit: null, excludedGrossProfit: 2_133_350, accruingStemCount: 4 }],
+    warnings: ['No STEM has complete finance evidence.'],
+  },
+  complete: {
+    complete: true,
+    byCurrency: [{ currency: 'USD', financeCost: 241_000, ebit: 1_892_350, complete: true, missingEvidenceCount: 0, stemCount: 128, verifiedStemCount: 128, verifiedGrossProfit: 2_133_350, verifiedFinanceCost: 241_000, verifiedEbit: 1_892_350, excludedGrossProfit: 0, accruingStemCount: 4 }],
+    warnings: [],
+  },
+};
+
 const dashboardSummary = {
   complete: true,
   generatedAt: '2026-09-05T00:00:00.000Z',
@@ -69,9 +88,7 @@ const dashboardSummary = {
     revision: 1,
     asOfDate: '2026-09-05',
     dayCountBasis: 'ACT/365',
-    complete: false,
-    byCurrency: [{ currency: 'USD', financeCost: null, ebit: null, complete: false, missingEvidenceCount: 2, stemCount: 128, accruingStemCount: 4 }],
-    warnings: ['Two STEMs have incomplete payment evidence.'],
+    ...(financeByScenario[financeScenario] || financeByScenario.partial),
   },
 };
 
@@ -111,7 +128,7 @@ appClient.functions.invoke = async (name, payload = {}, options = {}) => {
     const offset = payload.cursor ? Number(payload.cursor) : 0;
     const rows = exportRows.slice(offset, offset + Number(payload.pageSize || 200));
     const nextOffset = offset + rows.length;
-    return { data: { rows, matchingCount: exportRows.length, nextCursor: nextOffset < exportRows.length ? String(nextOffset) : null, finance: exportFinance }, meta: FIXTURE_META };
+    return { data: { stems: rows, matchingCount: exportRows.length, nextCursor: nextOffset < exportRows.length ? String(nextOffset) : null, finance: exportFinance }, meta: FIXTURE_META };
   }
   const dataByFunction = {
     dashboardCounterpartySearch: { results: FIXTURE_COUNTERPARTIES },

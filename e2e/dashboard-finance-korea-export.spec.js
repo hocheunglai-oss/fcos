@@ -11,6 +11,39 @@ async function expandMobileFilters(page) {
 test.describe('synthetic Dashboard EBIT, Korea, Finance settings, and XLS fixture', () => {
   test.skip(process.env.FCOS_E2E_DASHBOARD_FIXTURE !== '1', 'Opt-in local Vite fixture; no provider calls or live data.');
 
+  test('labels complete, partial, and gross-profit-only finance states accurately', async ({ page }) => {
+    await page.goto(`${FIXTURE_PATH}?finance=partial`);
+    const partialToggle = page.getByRole('switch', { name: 'Show EBIT in place of Gross Profit' });
+    await expect(partialToggle).not.toBeChecked();
+    await partialToggle.click();
+    await expect(page.getByRole('heading', { name: 'Partial EBIT', exact: true })).toBeVisible();
+    await expect(page.getByLabel('USD Partial EBIT: 476,350')).toBeVisible();
+    await expect(page.getByText('16 of 128 STEMs verified · 12.5%')).toBeVisible();
+    await expect(page.getByText('Verified GP 488,350 − verified finance cost 12,000')).toBeVisible();
+    await expect(page.getByText('Full selection gross profit 2,133,350 · 112 STEMs excluded · excluded GP 1,645,000')).toBeVisible();
+    await page.getByRole('button', { name: 'How calculated: Partial EBIT' }).click();
+    await expect(page.getByText(/USD Partial EBIT: 476,350 \(16\/128 STEMs, 12.5% verified\)/)).toBeVisible();
+    await expect(page.getByText('112 STEMs have incomplete payment evidence.')).toBeVisible();
+    await page.keyboard.press('Escape');
+
+    await page.goto(`${FIXTURE_PATH}?finance=none`);
+    const noneToggle = page.getByRole('switch', { name: 'Show EBIT in place of Gross Profit' });
+    await expect(noneToggle).not.toBeChecked();
+    await noneToggle.click();
+    await expect(page.getByRole('heading', { name: 'Gross profit (before finance)', exact: true })).toBeVisible();
+    await expect(page.getByLabel('USD Gross profit before finance: 2,133,350')).toBeVisible();
+    await expect(page.getByText('EBIT unavailable · finance evidence missing')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Partial EBIT', exact: true })).toHaveCount(0);
+
+    await page.goto(`${FIXTURE_PATH}?finance=complete`);
+    const completeToggle = page.getByRole('switch', { name: 'Show EBIT in place of Gross Profit' });
+    await expect(completeToggle).not.toBeChecked();
+    await completeToggle.click();
+    await expect(page.getByRole('heading', { name: 'EBIT', exact: true })).toBeVisible();
+    await expect(page.getByLabel('USD EBIT: 1,892,350')).toBeVisible();
+    await expect(page.getByText('Gross profit 2,133,350 − finance cost 241,000')).toBeVisible();
+  });
+
   test('keeps the full ordinary selection reviewable on desktop and mobile', async ({ page }) => {
     const browserErrors = [];
     const externalRequests = [];
@@ -29,9 +62,9 @@ test.describe('synthetic Dashboard EBIT, Korea, Finance settings, and XLS fixtur
     await expect(ebitToggle).not.toBeChecked();
     await ebitToggle.click();
     await expect(ebitToggle).toBeChecked();
-    await expect(page.getByRole('heading', { name: 'EBIT', exact: true })).toBeVisible();
-    await expect(page.getByText('Gross profit net finance costs')).toBeVisible();
-    await expect(page.getByText(/2 STEMs missing payment evidence/)).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Partial EBIT', exact: true })).toBeVisible();
+    await expect(page.getByText('Verified STEMs only; full gross profit shown for context')).toBeVisible();
+    await expect(page.getByText(/112 STEMs excluded/)).toBeVisible();
     await expect(page.getByText('5.00% annually · Actual/365')).toBeVisible();
     await expect(page.getByText(/Calculated through 2026-09-05 · Rate revision 1/)).toBeVisible();
 

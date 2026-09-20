@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFile } from 'node:fs/promises';
-import { dashboardPeriodLabel, dashboardDisplayNumber } from '../src/lib/dashboardPresentation.js';
+import { dashboardPeriodLabel, dashboardDisplayNumber, dashboardEbitPresentation } from '../src/lib/dashboardPresentation.js';
 
 test('compact period labels preserve disjoint months and years without widening the selection', () => {
   assert.equal(dashboardPeriodLabel([2026], [1, 2, 3, 4, 5, 6, 7, 8, 9]), 'Jan–Sep 2026');
@@ -16,6 +16,18 @@ test('missing and incomplete display values never become financial zero', () => 
   assert.equal(dashboardDisplayNumber(0), 0);
   assert.equal(dashboardDisplayNumber('0.00'), 0);
   assert.equal(dashboardDisplayNumber('-125.50'), -125.5);
+});
+
+test('EBIT presentation distinguishes complete, verified partial, and gross-profit-only values', () => {
+  const full = dashboardEbitPresentation({ summaryComplete: true, financeUsable: true, grossProfit: 1_000, finance: { complete: true, financeCost: 40, ebit: 960 } });
+  assert.deepEqual(full, { type: 'full', amount: 960, profit: 1_000, cost: 40 });
+
+  const partial = dashboardEbitPresentation({ summaryComplete: true, financeUsable: true, grossProfit: 1_000, finance: { complete: false, stemCount: 10, verifiedStemCount: 4, verifiedGrossProfit: 450, verifiedFinanceCost: 20, verifiedEbit: 430, excludedGrossProfit: 550 } });
+  assert.deepEqual(partial, { type: 'partial', amount: 430, profit: 450, cost: 20, count: 4, total: 10, totalProfit: 1_000, excludedCount: 6, coverage: 40, excludedProfit: 550 });
+
+  assert.deepEqual(dashboardEbitPresentation({ summaryComplete: true, financeUsable: true, grossProfit: 1_000, finance: { complete: false, stemCount: 10, missingEvidenceCount: 10, verifiedStemCount: 0, verifiedGrossProfit: null, verifiedFinanceCost: null, verifiedEbit: null } }), { type: 'profit', amount: 1_000, total: 10, missing: 10 });
+  assert.deepEqual(dashboardEbitPresentation({ summaryComplete: true, financeUsable: false, grossProfit: 1_000, finance: null }), { type: 'profit', amount: 1_000 });
+  assert.deepEqual(dashboardEbitPresentation({ summaryComplete: false, financeUsable: true, grossProfit: 1_000, finance: { complete: false, stemCount: 10, verifiedStemCount: 4, verifiedGrossProfit: 450, verifiedFinanceCost: 20, verifiedEbit: 430 } }), { type: 'none', amount: null });
 });
 
 const source = (path) => readFile(new URL(`../${path}`, import.meta.url), 'utf8');
@@ -35,10 +47,12 @@ test('Dashboard uses one compact control panel and hides only the irrelevant Acc
 test('trading figures lead, currencies appear once and incomplete KPI evidence is withheld', async () => {
   const kpis = await source('src/components/dashboard/DashboardKpis.jsx');
   const labels = [...kpis.matchAll(/<FinancialCard[^\n]+label="([^"]+)"/g)].map((item) => item[1]);
-  assert.deepEqual(labels, ['Gross Margin %', 'Turnover']);
+  assert.deepEqual(labels, ['Gross Profit', 'Gross Margin %', 'Turnover']);
   assert.match(kpis, /function GrossProfitCard\(/);
-  assert.match(kpis, /if \(!ebitEnabled\)[\s\S]*>Gross Profit<\/h2>/);
-  assert.match(kpis, />EBIT<\/h2>[\s\S]*Gross profit net finance costs/);
+  assert.match(kpis, /if \(!ebitEnabled\)[\s\S]*<FinancialCard label="Gross Profit"/);
+  assert.match(kpis, /Partial EBIT/);
+  assert.match(kpis, /Gross profit \(before finance\)/);
+  assert.match(kpis, /Gross profit net finance costs/);
   assert.match(kpis, /aria-label="Trading activity"/);
   assert.match(kpis, /complete \? number\(row\[field\]\) : null/);
   assert.doesNotMatch(kpis, /style: 'currency'|glass-surface/);

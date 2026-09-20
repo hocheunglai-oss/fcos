@@ -15,9 +15,13 @@ test('Dashboard Gross Profit card offers an opt-in currency-safe EBIT view', asy
   assert.match(source, /annualInterestRatePct/);
   assert.match(source, /dayCountBasis/);
   assert.match(source, /Calculated through/);
-  assert.match(source, /Gross profit \{money\(grossProfit\)\} − finance cost/);
-  assert.match(source, /missing payment evidence/);
-  assert.match(source, /row\.complete !== false/);
+  assert.match(source, /Partial EBIT/);
+  assert.match(source, /Verified GP/);
+  assert.match(source, /Full selection gross profit/);
+  assert.match(source, /Gross profit before finance/);
+  assert.match(source, /EBIT unavailable · finance evidence missing/);
+  assert.match(source, /STEMs excluded/);
+  assert.match(source, /dashboardEbitPresentation/);
   assert.match(source, /financeLoading/);
   assert.match(source, /financeError/);
 });

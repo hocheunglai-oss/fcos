@@ -137,12 +137,45 @@ test('unpaid invoices without any actual supplier cash have zero finance cost; a
 
 test('currency completeness is independent and aggregate cannot expose a covered subtotal as full EBIT', () => {
   const valid = run([payment('Payable', 100000, '2026-01-01')]);
-  const summary = summarizeDashboardFinance([{ ...stem, finance: valid }, { ...stem, finance: { complete: false } }, { currency: 'EUR', finance: { ...valid, financeCost: 10, ebit: 90 } }], settings, '2026-01-21');
+  const summary = summarizeDashboardFinance([{ ...stem, finance: valid }, { ...stem, finance: { complete: false } }, { currency: 'EUR', netPnl: 100, finance: { ...valid, financeCost: 10, ebit: 90 } }], settings, '2026-01-21');
   assert.equal(summary.complete, false);
   assert.equal(summary.byCurrency.find((row) => row.currency === 'USD').ebit, null);
   assert.equal(summary.byCurrency.find((row) => row.currency === 'USD').missingEvidenceCount, 1);
   assert.equal(summary.byCurrency.find((row) => row.currency === 'EUR').ebit, 90);
   assert.equal(summarizeDashboardFinance([{ ...stem, finance: valid }], settings, '2026-01-21', { complete: false }).byCurrency[0].ebit, null);
+});
+
+test('partial EBIT exposes only verified STEM profit and financing, with excluded gross profit separately', () => {
+  const valid = run([payment('Payable', 100000, '2026-01-01')]);
+  const [result] = summarizeDashboardFinance([
+    { ...stem, finance: valid },
+    { ...stem, netPnl: -500, finance: { complete: false } },
+    { ...stem, netPnl: 0, finance: { complete: true, financeCost: 0, ebit: 0 } },
+  ], settings, '2026-01-21').byCurrency;
+  assert.equal(result.complete, false);
+  assert.equal(result.ebit, null); assert.equal(result.financeCost, null);
+  assert.equal(result.stemCount, 3); assert.equal(result.verifiedStemCount, 2); assert.equal(result.missingEvidenceCount, 1);
+  assert.equal(result.verifiedGrossProfit, 10000); assert.equal(result.verifiedFinanceCost, valid.financeCost);
+  assert.equal(result.verifiedEbit, valid.ebit); assert.equal(result.excludedGrossProfit, -500);
+});
+
+test('all missing evidence never produces a zero verified EBIT and incomplete scopes expose no subtotal', () => {
+  const [missing] = summarizeDashboardFinance([{ ...stem, finance: { complete: false } }], settings, '2026-01-21').byCurrency;
+  assert.equal(missing.verifiedStemCount, 0); assert.equal(missing.excludedGrossProfit, 10000);
+  for (const field of ['verifiedGrossProfit', 'verifiedFinanceCost', 'verifiedEbit']) assert.equal(missing[field], null);
+  const [partialScope] = summarizeDashboardFinance([{ ...stem, finance: run([]) }], settings, '2026-01-21', { complete: false }).byCurrency;
+  for (const field of ['ebit', 'financeCost', 'verifiedGrossProfit', 'verifiedFinanceCost', 'verifiedEbit', 'excludedGrossProfit']) assert.equal(partialScope[field], null);
+});
+
+test('verified finance remains separated by currency and rejects unsafe aggregate precision or missing GP', () => {
+  const row = { ...stem, netPnl: -20, finance: { complete: true, financeCost: 10, ebit: -30 } };
+  const summary = summarizeDashboardFinance([row, { ...row, currency: 'EUR', netPnl: 100, finance: { complete: true, financeCost: 10, ebit: 90 } }], settings, '2026-01-21');
+  assert.deepEqual(summary.byCurrency.map(({ currency, verifiedEbit }) => [currency, verifiedEbit]), [['EUR', 90], ['USD', -30]]);
+  const huge = { ...row, netPnl: 50000000000000, finance: { complete: true, financeCost: 0, ebit: 50000000000000 } };
+  const [unsafe] = summarizeDashboardFinance([huge, huge], settings, '2026-01-21').byCurrency;
+  assert.equal(unsafe.complete, false); assert.equal(unsafe.verifiedEbit, null); assert.equal(unsafe.verifiedGrossProfit, null);
+  const [missing] = summarizeDashboardFinance([{ ...row, netPnl: null }], settings, '2026-01-21').byCurrency;
+  assert.equal(missing.verifiedStemCount, 0); assert.equal(missing.excludedGrossProfit, null);
 });
 
 test('Hong Kong calendar and rate revision lock a multi-page finance export', () => {
