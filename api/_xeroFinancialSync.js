@@ -6,7 +6,7 @@ import {
   hkStrippedClKeyNameMatchKey,
   normalizeName,
   splitScopes,
-  xeroAccountingFetch,
+  xeroAccountingFetch as accountingFetch,
   xeroContactSyncError,
   xeroContactSyncServiceClient,
 } from './_xeroContactSync.js';
@@ -16,6 +16,12 @@ const MAX_BATCH_SIZE = 25;
 const DEFAULT_CALLS_PER_MINUTE = 45;
 const DEFAULT_DAILY_LIMIT = 1000;
 const DEFAULT_DAILY_RESERVE_RATIO = 0.2;
+// Paginated reads and writes use the same per-tenant pace, including parallel scans.
+function xeroAccountingFetch(connection, pathName, options) {
+  const configured = Number(options.env?.XERO_FINANCIAL_CALLS_PER_MINUTE ?? DEFAULT_CALLS_PER_MINUTE);
+  const callsPerMinute = Number.isFinite(configured) ? Math.max(1, Math.min(45, configured)) : DEFAULT_CALLS_PER_MINUTE;
+  return accountingFetch(connection, pathName, { ...options, callsPerMinute });
+}
 const ACTIVE_XERO_STATUSES = new Set(['DRAFT', 'SUBMITTED', 'AUTHORISED', 'PAID']);
 const MUTABLE_XERO_STATUSES = new Set(['DRAFT', 'SUBMITTED', 'AUTHORISED']);
 const BUYER_INVOICE_QUERY = `
@@ -47,7 +53,10 @@ export const XERO_FINANCIAL_ACTION_LABELS = Object.freeze({
 });
 
 export function xeroFinancialRateSnapshot(headers, previous = {}) {
-  const read = (name) => numberOrNull(headers?.get?.(name));
+  const read = (name) => {
+    const value = headers?.get?.(name);
+    return value == null || String(value).trim() === '' ? null : numberOrNull(value);
+  };
   return compactObject({
     minuteRemaining: read('x-minlimit-remaining') ?? previous.minuteRemaining,
     dayRemaining: read('x-daylimit-remaining') ?? previous.dayRemaining,
@@ -1268,7 +1277,7 @@ function mergeClassification(source, classification) {
   };
 }
 
-async function loadAllXeroPages(connection, pathName, collection, { env, fetchImpl, onResponse }) {
+export async function loadAllXeroPages(connection, pathName, collection, { env, fetchImpl, onResponse }) {
   const rows = [];
   for (let page = 1; page <= 100; page += 1) {
     const separator = pathName.includes('?') ? '&' : '?';

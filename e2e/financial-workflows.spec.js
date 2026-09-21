@@ -40,6 +40,19 @@ test.describe('simplified financial workflows', () => {
     await dialog.getByRole('button', { name: 'Approve mapping', exact: true }).click();
     await expect.poll(() => page.evaluate(() => window.workflowFixture.requests.filter((row) => row.name === 'xeroFinancialSyncPreview').length)).toBe(1);
   });
+  test('a rate-limited background check preserves the saved review and stops automatic retries', async ({ page }) => {
+    await page.goto('/e2e/fixtures/financial-workflows.html?scenario=xero-rate-limit');
+    await expect(page.getByRole('alert')).toContainText('Please retry in 60 seconds');
+    await expect(page.getByText('TEST-INV-2', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Ready to sync (1)', exact: true }).click();
+    await page.getByRole('row').filter({ hasText: 'TEST-INV-1' }).getByRole('checkbox').check();
+    await page.evaluate(() => { window.dispatchEvent(new Event('focus')); document.dispatchEvent(new Event('visibilitychange')); });
+    expect(await page.evaluate(() => window.workflowFixture.requests.filter((row) => row.name === 'xeroFinancialSyncPreview').length)).toBe(1);
+    await page.getByRole('button', { name: 'Check everything', exact: true }).click();
+    await expect(page.getByRole('alert')).toContainText('saved reconciliation is retained');
+    expect(await page.evaluate(() => window.workflowFixture.requests.filter((row) => row.name === 'xeroFinancialSyncPreview').length)).toBe(2);
+    expect(await page.evaluate(() => window.workflowFixture.requests.filter((row) => ['xeroFinancialSyncRun', 'xeroFinancialPaymentApply'].includes(row.name)))).toEqual([]);
+  });
   test('party cards and four stages retain the current agreement', async ({ page }, testInfo) => {
     await page.goto('/e2e/fixtures/financial-workflows.html?scenario=prepare');
     await page.getByRole('button', { name: 'Complete agreement', exact: true }).click();

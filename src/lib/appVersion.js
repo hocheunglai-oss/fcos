@@ -4,6 +4,16 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.225',
+    releasedAt: '2026-09-22',
+    title: 'Xero reconciliation rate-limit recovery',
+    changes: [
+      'Pace financial reconciliation reads and recover from temporary Xero rate limits using the provider retry interval.',
+      'Keep saved reconciliation results visible and stop repeated automatic checks after a failed refresh.',
+      'Show an actionable wait message when Xero limits requests and preserve unknown quota headers as unknown.',
+    ],
+  },
+  {
     version: '2.0.224',
     releasedAt: '2026-09-21',
     title: 'Readable XLS amounts and quantities',
