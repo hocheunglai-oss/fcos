@@ -52,7 +52,7 @@ test('trading figures lead, currencies appear once and incomplete KPI evidence i
   assert.match(kpis, /if \(!ebitEnabled\)[\s\S]*<FinancialCard label="Gross Profit"/);
   assert.match(kpis, /Partial EBIT/);
   assert.match(kpis, /Gross profit \(before finance\)/);
-  assert.match(kpis, /Gross profit net finance costs/);
+  assert.match(kpis, /Gross profit net interest and combined bank charges/);
   assert.match(kpis, /aria-label="Trading activity"/);
   assert.match(kpis, /complete \? number\(row\[field\]\) : null/);
   assert.doesNotMatch(kpis, /style: 'currency'|glass-surface/);

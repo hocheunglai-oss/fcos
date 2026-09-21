@@ -4,6 +4,15 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.223',
+    releasedAt: '2026-09-21',
+    title: 'Buyer receipt charges included in EBIT',
+    changes: [
+      'Include actual recorded buyer receipt fees, net of signed refunds, alongside supplier remittance fees in Bank Charge and deduct both from EBIT.',
+      'Keep receipt cash and interest unchanged, validate each fee against its STEM, buyer and currency, and explain the combined charge in Dashboard and XLS.',
+    ],
+  },
+  {
     version: '2.0.222',
     releasedAt: '2026-09-21',
     title: 'Supplier bank charges in Dashboard EBIT and XLS',

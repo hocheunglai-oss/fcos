@@ -10,7 +10,10 @@ test('Dashboard Gross Profit card offers an opt-in currency-safe EBIT view', asy
   assert.match(source, /ebitEnabled = false/);
   assert.match(source, /onCheckedChange=\{\(checked\) => onChange\?\.\(checked === true\)\}/);
   assert.match(source, /Show EBIT in place of Gross Profit/);
-  assert.match(source, /Gross profit net finance costs: interest and bank charges/);
+  assert.match(source, /Gross profit net interest and combined bank charges/);
+  assert.match(source, /combined bank charges/);
+  assert.match(source, /Supplier remittance fees/);
+  assert.doesNotMatch(source, /supplier bank charges/);
   assert.match(source, /summary\?\.finance/);
   assert.match(source, /annualInterestRatePct/);
   assert.match(source, /dayCountBasis/);
@@ -24,6 +27,16 @@ test('Dashboard Gross Profit card offers an opt-in currency-safe EBIT view', asy
   assert.match(source, /dashboardEbitPresentation/);
   assert.match(source, /financeLoading/);
   assert.match(source, /financeError/);
+});
+
+test('Dashboard methodology combines configured supplier fees with recorded buyer receipt charges', async () => {
+  const methodology = await read('src/lib/pageMethodologies.js');
+
+  assert.match(methodology, /Bank Charge combines supplier-remittance fees with recorded buyer-receipt Bank_Charge amounts/);
+  assert.match(methodology, /no receipt default is inferred/);
+  assert.match(methodology, /signed refund charges net the combined total/);
+  assert.match(methodology, /Receipt charges do not change the buyer cash amount or the interest cash-balance timeline/);
+  assert.match(methodology, /Initial defaults are 5\.00%, UBS USD 10, and DBS USD 15/);
 });
 
 test('Finance settings load the server rate, validate edits, and revision-protect saves', async () => {

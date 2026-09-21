@@ -26,7 +26,7 @@ test.describe('synthetic Dashboard EBIT, Korea, Finance settings, and XLS fixtur
     await expect(page.getByRole('heading', { name: 'Partial EBIT', exact: true })).toBeVisible();
     await expect(page.getByLabel('USD Partial EBIT: 475,975')).toBeVisible();
     await expect(page.getByText('16 of 128 STEMs verified · 12.5%')).toBeVisible();
-    await expect(page.getByText('Verified GP 488,350 − verified interest finance cost 12,000 − verified supplier bank charges 375')).toBeVisible();
+    await expect(page.getByText('Verified GP 488,350 − verified interest finance cost 12,000 − verified combined bank charges 375')).toBeVisible();
     await expect(page.getByText('Full selection gross profit 2,133,350 · 112 STEMs excluded · excluded GP 1,645,000')).toBeVisible();
     await page.getByRole('button', { name: 'How calculated: Partial EBIT' }).click();
     await expect(page.getByText(/USD Partial EBIT: 475,975 \(16\/128 STEMs, 12.5% verified\)/)).toBeVisible();
@@ -48,7 +48,7 @@ test.describe('synthetic Dashboard EBIT, Korea, Finance settings, and XLS fixtur
     await completeToggle.click();
     await expect(page.getByRole('heading', { name: 'EBIT', exact: true })).toBeVisible();
     await expect(page.getByLabel('USD EBIT: 1,889,250')).toBeVisible();
-    await expect(page.getByText('Gross profit 2,133,350 − interest finance cost 241,000 − supplier bank charges 3,100')).toBeVisible();
+    await expect(page.getByText('Gross profit 2,133,350 − interest finance cost 241,000 − combined bank charges 3,100')).toBeVisible();
   });
 
   test('keeps the full ordinary selection reviewable on desktop and mobile', async ({ page }) => {
@@ -73,7 +73,7 @@ test.describe('synthetic Dashboard EBIT, Korea, Finance settings, and XLS fixtur
     await expect(page.getByText('Verified STEMs only; full gross profit shown for context')).toBeVisible();
     await expect(page.getByText(/112 STEMs excluded/)).toBeVisible();
     await expect(page.getByText('5.00% annually · Actual/365')).toBeVisible();
-    await expect(page.getByText('UBS USD 10.00 · DBS USD 15.00 per supplier remittance')).toBeVisible();
+    await expect(page.getByText('Supplier remittance fees: UBS USD 10.00 · DBS USD 15.00')).toBeVisible();
     await expect(page.getByText(/Calculated through 2026-09-05 · Finance revision 1/)).toBeVisible();
 
     await expandMobileFilters(page);

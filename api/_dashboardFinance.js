@@ -303,7 +303,7 @@ export function createDashboardFinanceLoader({ queryAll, describeObject, chunkSi
             amount: invoice.Invoice_Amount__c, balance: invoice.Payable_Balance__c,
             currency: invoiceFields.has('CurrencyIsoCode') ? invoice.CurrencyIsoCode : SALESFORCE_CORPORATE_CURRENCY })),
         }, { annualInterestRatePct: settings.annualInterestRatePct, asOfDate });
-        const bank = calculateStemBankCharge({ payments: normalizedPayments, groups: bankGroups,
+        const bank = calculateStemBankCharge({ payments: normalizedPayments, groups: bankGroups, stemId: row.id, buyerAccountId: rawStem?.Account__c,
           sourceComplete: bankSourceComplete && Boolean(rawStem) && !missingLink && !sharedInvoice },
         { bankChargesUsd: settings.bankChargesUsd, asOfDate, currency: row.currency });
         return { ...row, finance: deductBankCharge(finance, bank) };

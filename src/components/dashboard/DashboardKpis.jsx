@@ -77,7 +77,7 @@ function GrossProfitCard({ summary, rows, complete, warnings, asOf, ebitEnabled,
   const grossProfitOnly = kinds.size === 1 && kinds.has('profit');
   const allAvailable = Boolean(finance && ebitRows.length && kinds.size === 1 && kinds.has('full'));
   const title = kinds.size > 1 ? 'EBIT coverage' : partial ? 'Partial EBIT' : grossProfitOnly ? 'Gross profit (before finance)' : 'EBIT';
-  const description = partial ? 'Verified STEMs only; full gross profit shown for context' : grossProfitOnly ? 'Complete selection result before finance deductions' : 'Gross profit net finance costs: interest and bank charges';
+  const description = partial ? 'Verified STEMs only; full gross profit shown for context' : grossProfitOnly ? 'Complete selection result before finance deductions' : 'Gross profit net interest and combined bank charges';
   const stateWarning = allAvailable ? null : 'Incomplete interest or bank-charge evidence: Partial EBIT excludes affected STEMs; gross profit is before finance.';
   const financeWarnings = [...warnings, ...(finance?.warnings || []), ...(stateWarning ? [stateWarning] : [])];
   const rate = number(finance?.annualInterestRatePct);
@@ -85,7 +85,7 @@ function GrossProfitCard({ summary, rows, complete, warnings, asOf, ebitEnabled,
   const basis = finance?.dayCountBasis === 'ACT/365' ? 'Actual/365' : finance?.dayCountBasis || 'Day-count basis unavailable';
   const calculatedThrough = finance?.asOfDate ? `Calculated through ${finance.asOfDate}` : 'Calculation date unavailable';
   const charges = finance?.bankChargesUsd;
-  const chargeLabel = number(charges?.UBS) == null || number(charges?.DBS) == null ? 'Bank-charge settings unavailable' : `UBS USD ${number(charges.UBS).toFixed(2)} · DBS USD ${number(charges.DBS).toFixed(2)} per supplier remittance`;
+  const chargeLabel = number(charges?.UBS) == null || number(charges?.DBS) == null ? 'Supplier fee settings unavailable' : `Supplier remittance fees: UBS USD ${number(charges.UBS).toFixed(2)} · DBS USD ${number(charges.DBS).toFixed(2)}`;
   const evidenceValue = ebitRows.map(({ currency, display: row }) => `${currency} ${EBIT_LABEL[row.type]}: ${money(row.amount)}${row.type === 'partial' ? ` (${row.count}/${row.total} STEMs, ${row.coverage.toFixed(1)}% verified)` : row.type === 'profit' ? '; EBIT unavailable' : ''}`).join(' · ');
 
   return <KpiCard>
@@ -96,7 +96,7 @@ function GrossProfitCard({ summary, rows, complete, warnings, asOf, ebitEnabled,
       </div>
       <div className="flex items-center gap-2">
         <EbitToggle enabled onChange={onEbitChange} />
-        <CalculationEvidence title={title} value={evidenceValue} complete={allAvailable} formula={partial ? 'Verified GP − verified interest finance cost − verified supplier bank charges; full GP is context.' : grossProfitOnly ? 'Gross profit before finance; EBIT needs complete interest and bank-charge evidence.' : 'Gross profit − interest finance cost − supplier remittance bank charges.'} sources={EVIDENCE_SOURCES} warnings={financeWarnings} asOf={finance?.asOfDate || asOf} />
+        <CalculationEvidence title={title} value={evidenceValue} complete={allAvailable} formula={partial ? 'Verified GP − verified interest finance cost − verified combined bank charges; full GP is context.' : grossProfitOnly ? 'Gross profit before finance; EBIT needs complete interest and bank-charge evidence.' : 'Gross profit − interest finance cost − combined bank charges.'} sources={EVIDENCE_SOURCES} warnings={financeWarnings} asOf={finance?.asOfDate || asOf} />
       </div>
     </div>
 
@@ -104,8 +104,8 @@ function GrossProfitCard({ summary, rows, complete, warnings, asOf, ebitEnabled,
       <div className="mt-3 space-y-3">{ebitRows.map(({ currency, finance: currencyFinance, display }) => {
         const { amount, type } = display;
         const label = EBIT_LABEL[type];
-        const detail = type === 'full' ? `Gross profit ${money(display.profit)} − interest finance cost ${money(display.cost)} − supplier bank charges ${money(currencyFinance?.bankCharge)}`
-          : type === 'partial' ? `${display.count.toLocaleString()} of ${display.total.toLocaleString()} STEMs verified · ${display.coverage.toFixed(1)}% · Verified GP ${money(display.profit)} − verified interest finance cost ${money(display.cost)} − verified supplier bank charges ${money(currencyFinance?.verifiedBankCharge)} · Full selection gross profit ${money(display.totalProfit)} · ${display.excludedCount.toLocaleString()} STEMs excluded${display.excludedProfit == null ? '' : ` · excluded GP ${money(display.excludedProfit)}`}`
+        const detail = type === 'full' ? `Gross profit ${money(display.profit)} − interest finance cost ${money(display.cost)} − combined bank charges ${money(currencyFinance?.bankCharge)}`
+          : type === 'partial' ? `${display.count.toLocaleString()} of ${display.total.toLocaleString()} STEMs verified · ${display.coverage.toFixed(1)}% · Verified GP ${money(display.profit)} − verified interest finance cost ${money(display.cost)} − verified combined bank charges ${money(currencyFinance?.verifiedBankCharge)} · Full selection gross profit ${money(display.totalProfit)} · ${display.excludedCount.toLocaleString()} STEMs excluded${display.excludedProfit == null ? '' : ` · excluded GP ${money(display.excludedProfit)}`}`
             : type === 'profit' ? `EBIT unavailable · interest or bank-charge evidence missing${display.missing != null && display.total != null ? ` for ${display.missing.toLocaleString()} of ${display.total.toLocaleString()} STEMs` : ''}` : 'EBIT unavailable';
         return <div key={currency} className="tabular-nums">
           <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">

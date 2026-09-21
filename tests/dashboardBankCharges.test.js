@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { allocateRemittanceCharge, calculateStemBankCharge, deductBankCharge } from '../api/_dashboardBankCharges.js';
-import { createDashboardFinanceLoader, summarizeDashboardFinance } from '../api/_dashboardFinance.js';
+import { allocateRemittanceCharge, calculateReceiptBankCharge, calculateStemBankCharge, deductBankCharge } from '../api/_dashboardBankCharges.js';
+import { calculateStemFinance, createDashboardFinanceLoader, summarizeDashboardFinance } from '../api/_dashboardFinance.js';
 const bankChargesUsd = { UBS: 10, DBS: 15 };
 const settings = { annualInterestRatePct: 5, bankChargesUsd, revision: 2 };
 const asOfDate = '2026-09-21';
@@ -43,7 +43,7 @@ test('refunds, noncash adjustments, cancelled payments and headers never create 
   const cash = p('a03000000000001', 100, { remittanceId: null });
   const others = [p('refund', -100, { status: 'Reversed' }), p('discount', 100, { isVolumeDiscount: true }),
     p('commission', 100, { commissionInvoiceId: 'commission' }), p('void', 100, { status: 'Void' }),
-    p('writeoff', 100, { type: 'Write_Off' }), p('buyerfee', 10, { type: 'Bank_Charge' }), parent];
+    p('writeoff', 100, { type: 'Write_Off' }), parent];
   assert.equal(calc([cash, ...others]).bankCharge, 10);
   assert.equal(calc(others).bankCharge, 0);
   assert.equal(calc([]).bankCharge, 0);
@@ -88,7 +88,7 @@ test('EBIT deducts interest and bank charge once; known interest survives missin
   assert.equal(summary.byCurrency[0].bankCharge, null); assert.deepEqual(summary.bankChargesUsd, bankChargesUsd);
 });
 
-function loaderFixture({ brokenGroups = false } = {}) {
+function loaderFixture({ brokenGroups = false, receiptFee = false } = {}) {
   const fields = ['Id', 'STEM__c', 'Account__c', 'RecordTypeId', 'Amount__c', 'Date__c', 'Supplier_Invoice__c', 'Is_Volume_Discount__c', 'Is_Deposit__c', 'Commission_Invoice__c', 'Remittance__c', 'Bank__c',
     'Supplier__c', 'Invoice_Amount__c', 'Payable_Balance__c', 'QLIK_Receivable_Balance__c', 'Proforma__c', 'Deprecated__c', 'Original_Supplier__c', 'Cancelled__c'];
   const stem = { id: 'a01000000000001', currency: 'USD', netPnl: 10000, buyer: 110000, deliveryDate: '2026-01-01', deliveryDateSource: 'delivery' };
@@ -101,7 +101,7 @@ function loaderFixture({ brokenGroups = false } = {}) {
     if (!query.includes('FROM Payment__c')) return [];
     if (query.includes('WHERE Remittance__c')) { if (brokenGroups) throw new Error('unavailable'); return allocations.map(raw); }
     if (query.includes('WHERE Id')) return [raw(parent)];
-    return [raw(allocations[0])];
+    return [raw(allocations[0]), ...(receiptFee ? [{ ...raw(p('buyerfee', 25, { type: 'Bank_Charge', bank: null, remittanceId: null })), Account__c: '001000000000001' }] : [])];
   } });
   return { loader, stem, queries };
 }
@@ -129,4 +129,66 @@ test('signed credits within a remittance reconcile its net value without another
   assert.equal(calc(children, groups).bankCharge, 10);
   assert.equal(calc([children[0]], groups).bankCharge, 6);
   assert.equal(calc([children[2]], groups).bankCharge, 0);
+});
+
+const receiptSource = { stemId: 'a01000000000001', buyerAccountId: '001000000000001' };
+const receiptContext = { asOfDate, currency: 'USD' };
+const fee = (id, amount, patch = {}) => ({ id, amount, type: 'Bank_Charge', date: '2026-01-11',
+  stemId: receiptSource.stemId, accountId: receiptSource.buyerAccountId, currency: 'USD', ...patch });
+const receiptCalc = (payments, source = {}, context = {}) => calculateReceiptBankCharge({ ...receiptSource, payments, ...source }, { ...receiptContext, ...context });
+
+test('receipt charges use recorded signed amounts once, without requiring a bank or applying defaults', () => {
+  const charge = fee('fee1', 25);
+  const result = receiptCalc([charge, { ...charge }, fee('refund', -5, { status: 'Reversed' }), fee('second', 18, { date: '2025-12-20' }),
+    fee('void', 99, { status: 'Void' }), fee('writeoff', 99, { type: 'Write_Off' }), fee('receipt', 1000, { type: 'Receivable' })]);
+  assert.equal(result.receiptBankCharge, 38); assert.equal(result.receiptBankChargeCount, 3); assert.equal(result.complete, true);
+  assert.equal(receiptCalc([]).receiptBankCharge, 0);
+  assert.equal(receiptCalc([fee('refund', -25)]).receiptBankCharge, -25);
+});
+
+test('receipt charges reject incomplete, conflicting, cross-buyer or cross-currency evidence', () => {
+  const charge = fee('fee1', 25);
+  for (const patch of [{ id: '' }, { stemId: 'other' }, { stemId: null }, { accountId: 'other' }, { supplierInvoiceId: 'invoice' },
+    { currency: 'EUR' }, { amount: null }, { amount: true }, { date: '2026-02-30' }, { date: '2027-01-01' }, { status: 'Reversed' },
+    { isDeposit: true }, { isVolumeDiscount: true }, { commissionInvoiceId: 'commission' }, { isRemittance: true }]) {
+    const result = receiptCalc([{ ...charge, ...patch }]);
+    assert.equal(result.complete, false, JSON.stringify(patch)); assert.equal(result.receiptBankCharge, null);
+  }
+  assert.equal(receiptCalc([charge, { ...charge, amount: 30 }]).complete, false);
+  assert.equal(receiptCalc([], { sourceComplete: false }).receiptBankCharge, null);
+  assert.equal(receiptCalc([charge], { buyerAccountId: null }).complete, false);
+});
+
+test('combined bank charge preserves currencies and never invents receipt FX', () => {
+  const source = { ...receiptSource, payments: [fee('fee1', 25, { currency: 'EUR' })], groups: new Map() };
+  const context = { bankChargesUsd, asOfDate, currency: 'EUR' };
+  const receiptOnly = calculateStemBankCharge(source, context);
+  assert.equal(receiptOnly.bankCharge, 25); assert.equal(receiptOnly.bankChargeUsd, null); assert.equal(receiptOnly.supplierBankChargeUsd, 0);
+  const both = calculateStemBankCharge({ ...source, payments: [...source.payments, p('supplier', 100, { remittanceId: null, currency: 'EUR' })] }, context);
+  assert.equal(both.bankCharge, null); assert.equal(both.receiptBankCharge, 25); assert.equal(both.supplierBankChargeUsd, 10);
+  assert.equal(both.bankChargeUsd, null); assert.equal(both.bankChargeComplete, false);
+});
+
+test('EBIT deducts recorded receipt fees and supplier fees once without reducing actual buyer cash twice', () => {
+  const stem = { id: receiptSource.stemId, buyerAccountId: receiptSource.buyerAccountId, buyer: 110000, receivableBalance: 0,
+    netPnl: 10000, currency: 'USD', deliveryDate: '2026-01-01', deliveryDateSource: 'delivery' };
+  const payments = [p('supplier', 100000, { remittanceId: null, stemId: stem.id, accountId: 'supplier' }),
+    fee('receipt', 109975, { type: 'Receivable' }), fee('fee1', 25)];
+  const interest = calculateStemFinance({ stem, payments, supplierAccountIds: ['supplier'], finalBuyerInvoiceIssued: true }, settingsWithDate());
+  const bank = calculateStemBankCharge({ ...receiptSource, payments, groups: new Map() }, { bankChargesUsd, ...receiptContext });
+  const result = deductBankCharge(interest, bank);
+  assert.equal(result.complete, true); assert.equal(result.buyerCashReceived, 109975); assert.equal(result.financeCost, 136.99);
+  assert.equal(result.supplierBankChargeUsd, 10); assert.equal(result.receiptBankCharge, 25); assert.equal(result.bankCharge, 35);
+  assert.equal(result.bankChargeUsd, 35); assert.equal(result.ebit, 9828.01);
+  const summary = summarizeDashboardFinance([{ currency: 'USD', netPnl: 10000, finance: result }], settings, asOfDate);
+  assert.equal(summary.byCurrency[0].bankCharge, 35); assert.equal(summary.byCurrency[0].ebit, 9828.01);
+});
+function settingsWithDate() { return { annualInterestRatePct: 5, asOfDate }; }
+
+test('loader validates receipt charge ownership and includes it in the shared supplier fee total', async () => {
+  const baseline = loaderFixture(); const charged = loaderFixture({ receiptFee: true });
+  const [before] = await baseline.loader([baseline.stem], settings, asOfDate);
+  const [after] = await charged.loader([charged.stem], settings, asOfDate);
+  assert.equal(after.finance.complete, true); assert.equal(after.finance.bankCharge, 31);
+  assert.equal(after.finance.financeCost, before.finance.financeCost); assert.equal(after.finance.ebit, before.finance.ebit - 25);
 });

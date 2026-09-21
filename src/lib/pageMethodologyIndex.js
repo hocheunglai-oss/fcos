@@ -137,7 +137,7 @@ export const SETTINGS_METHODOLOGIES = {
   },
   "finance": {
     "title": "Finance",
-    "description": "How the company interest rate and supplier-remittance bank fees control Dashboard EBIT calculations.",
+    "description": "How company interest, supplier-remittance fees, and recorded buyer-receipt charges control Dashboard EBIT.",
     contentUrl, "contentKey": "SETTINGS_METHODOLOGIES:finance"
   },
   "ai": {

@@ -81,7 +81,7 @@ function scopeEntries({ filterPayload, scopeLabels = {}, search, sort, matchingC
       ['Bank charge snapshot', bankCharges],
       ['Finance evidence complete', finance?.complete === true ? 'Yes' : 'No'],
       ['Finance methodology', 'Finance cost = sum of positive daily funded balances × annual rate ÷ 365 (Actual/365). Supplier payments increase funding, buyer receipts reduce it, same-day settlement costs zero, and open funding accrues through the calculation date.'],
-      ['Bank charge methodology', 'EBIT = gross profit minus finance cost minus bank charge. One configured fee per remittance is allocated across its full positive cash allocations, including STEMs outside this export. Signed credits reconcile the net wire without another fee. Standalone supplier payments incur one fee each. No foreign exchange rate is invented.'],
+      ['Bank charge methodology', 'EBIT = gross profit minus finance cost minus bank charge. Bank Charge combines supplier remittance fees and actual recorded buyer receipt charges, net of signed fee refunds. No default fee is applied to buyer receipts. Receipt charges do not reduce cash received a second time. One configured supplier fee per remittance is allocated across its full positive cash allocations, including STEMs outside this export. Signed credits reconcile the net wire without another fee. Standalone supplier payments incur one fee each. No foreign exchange rate is invented.'],
       ['Missing-data note', 'Finance totals cover verified STEMs only; compare counts. Unknown costs are never zero; bank or currency costs without evidence are withheld.'],
     );
     if (Array.isArray(finance?.warnings) && finance.warnings.length) entries.push(['Finance warnings', finance.warnings.join('; ')]);

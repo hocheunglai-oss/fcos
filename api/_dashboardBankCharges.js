@@ -56,7 +56,7 @@ export function allocateRemittanceCharge(parent, allocations, bankChargesUsd, as
   return { complete: true, allocations: new Map(shares.map((share) => [share.id, share.value])) };
 }
 
-export function calculateStemBankCharge({ payments, groups, sourceComplete = true }, { bankChargesUsd, asOfDate, currency }) {
+function calculateSupplierBankCharge({ payments, groups, sourceComplete = true }, { bankChargesUsd, asOfDate, currency }) {
   const fees = validateBankChargesUsd(bankChargesUsd);
   const issues = []; const transfers = new Set(); const seen = new Map(); let total = 0n;
   for (const payment of payments) {
@@ -92,6 +92,55 @@ export function calculateStemBankCharge({ payments, groups, sourceComplete = tru
   if (total > 0n && currency !== 'USD') issues.push('The USD bank charge cannot be converted to the STEM currency without verified exchange-rate evidence.');
   return { bankCharge: issues.length ? null : Number(total) / 100, bankChargeUsd,
     bankChargeComplete: issues.length === 0, bankChargeIssues: [...new Set(issues)], bankChargeTransferCount: transfers.size };
+}
+
+/** Recorded receipt fees settle the buyer invoice but are not additional cash receipts. */
+export function calculateReceiptBankCharge({ payments, stemId, buyerAccountId, sourceComplete = true }, { asOfDate, currency }) {
+  const issues = []; const seen = new Map(); let total = 0n; let count = 0;
+  for (const payment of payments) {
+    if (token(payment.type) !== 'bankcharge') continue;
+    const key = idKey(payment.id); const signature = JSON.stringify(payment);
+    if (seen.has(key)) {
+      if (seen.get(key) !== signature) issues.push('Duplicate buyer receipt charge evidence disagrees.');
+      continue;
+    }
+    seen.set(key, signature);
+    if (/void|cancel|reject/i.test(payment.status || '')) continue;
+    const amount = cents(payment.amount);
+    if (!key || amount == null || !validDate(payment.date, asOfDate)
+      || (/revers/i.test(payment.status || '') && amount >= 0)) {
+      issues.push('A buyer receipt charge has an invalid amount, date or signed reversal.'); continue;
+    }
+    if (!stemId || idKey(payment.stemId) !== idKey(stemId) || !buyerAccountId || idKey(payment.accountId) !== idKey(buyerAccountId)
+      || payment.supplierInvoiceId || excluded(payment)) {
+      issues.push('A buyer receipt charge cannot be reconciled to this STEM and buyer.'); continue;
+    }
+    if (!/^[A-Z]{3}$/.test(currency || '') || payment.currency !== currency) {
+      issues.push('A buyer receipt charge cannot be converted to the STEM currency without verified exchange-rate evidence.'); continue;
+    }
+    // Signed fee refunds reduce the recorded expense; never apply a supplier default here.
+    total += BigInt(amount); count += amount !== 0 ? 1 : 0;
+  }
+  if (!sourceComplete) issues.push('Buyer receipt charge evidence could not be loaded completely.');
+  if (total > BigInt(Number.MAX_SAFE_INTEGER) || total < -BigInt(Number.MAX_SAFE_INTEGER)) issues.push('Buyer receipt charges exceed supported monetary precision.');
+  return { receiptBankCharge: issues.length ? null : Number(total) / 100, receiptBankChargeCount: count,
+    complete: issues.length === 0, issues: [...new Set(issues)] };
+}
+
+export function calculateStemBankCharge(source, context) {
+  const supplier = calculateSupplierBankCharge(source, context);
+  const receipt = calculateReceiptBankCharge(source, context);
+  const issues = [...supplier.bankChargeIssues, ...receipt.issues];
+  const total = supplier.bankChargeComplete && receipt.complete
+    ? BigInt(cents(supplier.bankCharge)) + BigInt(cents(receipt.receiptBankCharge)) : null;
+  if (total != null && (total > BigInt(Number.MAX_SAFE_INTEGER) || total < -BigInt(Number.MAX_SAFE_INTEGER))) issues.push('Bank charges exceed supported monetary precision.');
+  const complete = issues.length === 0;
+  return { ...supplier, bankCharge: complete ? Number(total) / 100 : null,
+    bankChargeUsd: context.currency === 'USD' ? (complete ? Number(total) / 100 : null)
+      : receipt.complete && receipt.receiptBankCharge === 0 ? supplier.bankChargeUsd : null,
+    supplierBankChargeUsd: supplier.bankChargeUsd, receiptBankCharge: receipt.receiptBankCharge,
+    receiptBankChargeCount: receipt.receiptBankChargeCount,
+    bankChargeComplete: complete, bankChargeIssues: [...new Set(issues)] };
 }
 
 export function deductBankCharge(finance, bank) {
