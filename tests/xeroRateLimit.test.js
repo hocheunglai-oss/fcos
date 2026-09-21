@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createXeroRequestGate, xeroRetryAfterMs, xeroRateLimitError } from '../api/_xeroRateLimit.js';
 import { xeroAccountingFetch } from '../api/_xeroContactSync.js';
-import { loadAllXeroPages, xeroFinancialRateSnapshot, assertXeroFinancialDailyReserve } from '../api/_xeroFinancialSync.js';
+import { loadAllXeroPages, loadXeroFinancialSnapshot, xeroFinancialRateSnapshot, assertXeroFinancialDailyReserve } from '../api/_xeroFinancialSync.js';
 
 const json = (body, status = 200, headers = {}) => new Response(JSON.stringify(body), { status, headers });
 
@@ -57,12 +57,60 @@ test('read requests recover from 429 by default and preserve every paginated rec
       const page = Number(new URL(url).searchParams.get('page'));
       calls.push(page);
       if (page === 2 && !limited) { limited = true; return json({}, 429, { 'Retry-After': '0' }); }
-      return json({ Invoices: page === 1 ? Array.from({ length: 100 }, (_, id) => ({ InvoiceID: String(id) })) : [{ InvoiceID: '100' }] });
+      assert.equal(new URL(url).searchParams.get('pageSize'), '1000');
+      return json({ Invoices: page === 1 ? Array.from({ length: 1000 }, (_, id) => ({ InvoiceID: String(id) })) : [{ InvoiceID: '1000' }] });
     },
   });
-  assert.equal(result.length, 101);
-  assert.equal(new Set(result.map((row) => row.InvoiceID)).size, 101);
+  assert.equal(result.length, 1001);
+  assert.equal(new Set(result.map((row) => row.InvoiceID)).size, 1001);
   assert.deepEqual(calls, [1, 2, 2]);
+});
+
+test('complete maximum-size preview needs only 45 paced reads and retains historical invoices for payments', async () => {
+  let now = 0;
+  const requestGate = createXeroRequestGate({ now: () => now, wait: async (ms) => { now += ms; } });
+  const requests = [];
+  const snapshot = await loadXeroFinancialSnapshot({ tenantId: 'complete', accessToken: 'test' }, '2026-01-01', {
+    includePayments: true, env: {}, requestGate,
+    fetchImpl: async (value) => {
+      const url = new URL(value);
+      const collection = url.pathname.split('/').at(-1);
+      const page = Number(url.searchParams.get('page'));
+      requests.push({ collection, page });
+      if (collection === 'Organisations') return json({ Organisations: [{}] });
+      assert.equal(url.searchParams.get('pageSize'), '1000');
+      return json({ [collection]: page > 10 ? [] : Array.from({ length: 1000 }, (_, index) => ({
+        InvoiceID: `${page}-${index}`, CreditNoteID: `${page}-${index}`, ContactID: `${page}-${index}`, PaymentID: `${page}-${index}`,
+        Status: 'AUTHORISED', Type: 'ACCREC', Date: collection === 'Invoices' && page === 1 ? '2025-12-31' : '2026-01-01',
+      })) });
+    },
+  });
+  assert.equal(requests.length, 45);
+  assert.ok(now < 60000, `Pacing budget exceeded: ${now}`);
+  assert.equal(snapshot.paymentReadSnapshot.invoices.length, 10000);
+  assert.equal(snapshot.paymentReadSnapshot.payments.length, 10000);
+  assert.equal(snapshot.documents.filter((row) => row.collection === 'Invoices').length, 9000);
+  assert.equal(requests.filter((row) => row.collection === 'Invoices').length, 11);
+});
+
+test('unknown daily reset has no invented retry timestamp and allows a bounded later probe', async () => {
+  let now = 0;
+  const headers = new Headers({ 'X-Rate-Limit-Problem': 'day' });
+  const first = xeroRateLimitError(headers, { now });
+  assert.equal(first.details.retryAt, null);
+  assert.equal(first.details.retryAfterSeconds, null);
+  const gate = createXeroRequestGate({ now: () => now, wait: async () => { throw new Error('must not wait'); } });
+  await gate('tenant', async () => json({}, 429, headers));
+  await assert.rejects(gate('tenant', async () => { throw new Error('must not probe immediately'); }), (error) => error.status === 429 && error.details.retryAt === null);
+  now = 60000;
+  assert.equal((await gate('tenant', async () => json({}))).status, 200);
+});
+
+test('large scans fail explicitly without silently truncating the financial population', async () => {
+  await assert.rejects(loadAllXeroPages({ tenantId: 'oversized', accessToken: 'test' }, '/Invoices', 'Invoices', {
+    env: {}, requestGate: async (_tenant, operation) => operation(),
+    fetchImpl: async () => json({ Invoices: Array.from({ length: 1000 }, () => ({ InvoiceID: 'test' })) }),
+  }), (error) => error.code === 'XERO_FINANCIAL_XERO_INCOMPLETE');
 });
 
 test('daily, long and exhausted rate limits return actionable errors without unsafe replays', async () => {

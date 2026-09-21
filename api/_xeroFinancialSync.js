@@ -302,7 +302,7 @@ export async function xeroFinancialSyncPreview(body = {}, dependencies = {}) {
   const onResponse = ({ headers }) => { Object.assign(rate, xeroFinancialRateSnapshot(headers, rate)); assertXeroFinancialDailyReserve(rate, env); };
   const [salesforce, xero, stored] = await Promise.all([
     loadSalesforceFinancialSnapshot(cutoff),
-    loadXeroFinancialSnapshot(connection, cutoff, { env, fetchImpl, onResponse }),
+    loadXeroFinancialSnapshot(connection, cutoff, { env, fetchImpl, onResponse, includePayments: body.includePayments === true }),
     loadStoredFinancialControls(client),
   ]);
   const classified = buildFinancialClassifications(salesforce, xero, stored);
@@ -348,7 +348,7 @@ export async function xeroFinancialSyncPreview(body = {}, dependencies = {}) {
   }
   let paymentSnapshot = null;
   if (body.includePayments === true) {
-    paymentSnapshot = await previewPayments({ recordExactMatches: body.recordExactMatches === true }, { accessContext, env, fetchImpl, client });
+    paymentSnapshot = await previewPayments({ recordExactMatches: body.recordExactMatches === true }, { accessContext, env, fetchImpl, client, xeroReadSnapshot: xero.paymentReadSnapshot });
     runRow.control_totals = { ...runRow.control_totals, workflowSnapshot: { payments: paymentSnapshot, products: salesforce.products, mappingProposals, checkedAt: now, controlsFingerprint: hashJson(await loadStoredFinancialControls(client)), organisation: xero.organisation } };
     const { error } = await client.from('xero_financial_sync_runs').update({ control_totals: runRow.control_totals }).eq('id', runId);
     if (error) throw storageError(error, 'xero_financial_sync_runs');
@@ -667,7 +667,7 @@ export async function xeroFinancialPaymentApply(body = {}, dependencies = {}) {
   return { outcomes, summary: summarizeOutcomes(outcomes), rateLimit: rate };
 }
 
-async function previewPayments(body, { accessContext, env, fetchImpl, client }) {
+async function previewPayments(body, { accessContext, env, fetchImpl, client, xeroReadSnapshot = null }) {
   const cutoff = XERO_FINANCIAL_CUTOFF;
   const connection = await getFreshXeroConnection(client, { env, fetchImpl });
   assertScopes(connection, ['accounting.payments.read', 'accounting.invoices'], 'Payment preview');
@@ -680,7 +680,7 @@ async function previewPayments(body, { accessContext, env, fetchImpl, client }) 
   for (const result of [documentMappings, paymentMappings, bankMappings]) if (result.error) throw storageError(result.error, 'xero_financial_payment_preview');
   const rate = {};
   const onResponse = ({ headers }) => Object.assign(rate, xeroFinancialRateSnapshot(headers, rate));
-  const [xeroPayments, xeroInvoices] = await Promise.all([
+  const [xeroPayments, xeroInvoices] = xeroReadSnapshot ? [xeroReadSnapshot.payments, xeroReadSnapshot.invoices] : await Promise.all([
     loadAllXeroPages(connection, '/Payments', 'Payments', { env, fetchImpl, onResponse }),
     loadAllXeroPages(connection, '/Invoices', 'Invoices', { env, fetchImpl, onResponse }),
   ]);
@@ -885,20 +885,25 @@ async function loadSalesforcePayments(cutoff) {
   return result.records || [];
 }
 
-async function loadXeroFinancialSnapshot(connection, cutoff, { env, fetchImpl, onResponse }) {
+export async function loadXeroFinancialSnapshot(connection, cutoff, { env, fetchImpl, onResponse = () => {}, includePayments = false, requestGate }) {
   const where = encodeURIComponent(`Date>=DateTime(${cutoff.replaceAll('-', ',')})`);
   let callCount = 0;
   const observed = (event) => { callCount += 1; onResponse(event); };
-  const [invoices, creditNotes, contacts] = await Promise.all([
-    loadAllXeroPages(connection, `/Invoices?where=${where}`, 'Invoices', { env, fetchImpl, onResponse: observed }),
-    loadAllXeroPages(connection, `/CreditNotes?where=${where}`, 'CreditNotes', { env, fetchImpl, onResponse: observed }),
-    loadAllXeroPages(connection, '/Contacts', 'Contacts', { env, fetchImpl, onResponse: observed }),
+  const options = { env, fetchImpl, onResponse: observed, requestGate };
+  // Payment verification needs historical invoices too. Read that complete population once,
+  // then retain the original accounting-date scope for document classifications.
+  // All provider reads finish before any new saved reconciliation is persisted.
+  const [invoices, creditNotes, contacts, payments] = await Promise.all([
+    loadAllXeroPages(connection, includePayments ? '/Invoices' : `/Invoices?where=${where}`, 'Invoices', options),
+    loadAllXeroPages(connection, `/CreditNotes?where=${where}`, 'CreditNotes', options),
+    loadAllXeroPages(connection, '/Contacts', 'Contacts', options),
+    includePayments ? loadAllXeroPages(connection, '/Payments', 'Payments', options) : Promise.resolve(null),
   ]);
   const organisations = await xeroAccountingFetch(connection, '/Organisations', {
-    method: 'GET', env, fetchImpl, onResponse: observed,
+    method: 'GET', ...options,
   }).then((response) => response.Organisations?.[0] || {});
   const documents = [
-    ...invoices.map(normalizeXeroInvoice),
+    ...invoices.filter((row) => !includePayments || dateOnly(row.Date) >= cutoff).map(normalizeXeroInvoice),
     ...creditNotes.map(normalizeXeroCreditNote),
   ];
   return {
@@ -910,6 +915,7 @@ async function loadXeroFinancialSnapshot(connection, cutoff, { env, fetchImpl, o
       endOfYearLockDate: dateOnly(organisations.EndOfYearLockDate),
     },
     callCount,
+    paymentReadSnapshot: includePayments ? { invoices, payments } : null,
     fingerprintBasis: {
       documents: documents.map((row) => ({ id: row.id, status: row.status, updated: row.updatedDateUTC, total: row.total, number: exactDocumentNumber(row) })),
       contacts: contacts.map((row) => ({ id: row.ContactID, name: row.Name, status: row.ContactStatus })),
@@ -1277,17 +1283,20 @@ function mergeClassification(source, classification) {
   };
 }
 
-export async function loadAllXeroPages(connection, pathName, collection, { env, fetchImpl, onResponse }) {
+export async function loadAllXeroPages(connection, pathName, collection, { env, fetchImpl, onResponse, requestGate }) {
   const rows = [];
-  for (let page = 1; page <= 100; page += 1) {
+  const pageSize = 1000;
+  const maxRows = 10_000;
+  for (let page = 1; page <= maxRows / pageSize + 1; page += 1) {
     const separator = pathName.includes('?') ? '&' : '?';
-    const response = await xeroAccountingFetch(connection, `${pathName}${separator}page=${page}`, {
-      method: 'GET', env, fetchImpl, onResponse,
+    const response = await xeroAccountingFetch(connection, `${pathName}${separator}page=${page}&pageSize=${pageSize}`, {
+      method: 'GET', env, fetchImpl, onResponse, requestGate,
     });
     if (!Array.isArray(response[collection])) throw financialError(`Xero ${collection} retrieval was incomplete.`, 502, 'XERO_FINANCIAL_XERO_INCOMPLETE');
     const pageRows = response[collection];
     rows.push(...pageRows);
-    if (pageRows.length < 100) return rows;
+    if (rows.length > maxRows) break;
+    if (pageRows.length < pageSize) return rows;
   }
   throw financialError(`Xero ${collection} retrieval exceeded its complete-scan limit.`, 502, 'XERO_FINANCIAL_XERO_INCOMPLETE');
 }

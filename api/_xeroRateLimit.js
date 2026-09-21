@@ -16,10 +16,11 @@ export function xeroRateLimitError(headers, { now = Date.now(), attempt = 0, ret
   const delay = retryAt == null ? xeroRetryAfterMs(headers, { now, attempt }) : Math.max(0, retryAt - now);
   const seconds = Math.max(1, Math.ceil(delay / 1000));
   const daily = /day|daily/.test(problem);
-  const wait = daily && !headers?.get?.('retry-after') ? 'after the daily allowance resets' : `in ${seconds} seconds`;
+  const unknownReset = daily && !headers?.get?.('retry-after');
+  const wait = unknownReset ? 'after the daily allowance resets' : `in ${seconds} seconds`;
   return Object.assign(new Error(`Xero ${daily ? 'daily allowance' : 'request limit'} reached. Please retry ${wait}. Your saved reconciliation is retained.`), {
     status: 429, code: 'XERO_CONTACT_SYNC_RATE_LIMITED', expose: true,
-    details: { retryAfterSeconds: seconds, retryAt: new Date(now + seconds * 1000).toISOString(), rateLimitProblem: problem },
+    details: { retryAfterSeconds: unknownReset ? null : seconds, retryAt: unknownReset ? null : new Date(now + seconds * 1000).toISOString(), rateLimitProblem: problem },
   });
 }
 
@@ -36,7 +37,7 @@ export function createXeroRequestGate({ now = Date.now, wait = sleep } = {}) {
     state.pending += 1;
     const result = state.tail.then(async () => {
       const cooldown = state.retryAt - now();
-      if (cooldown > maxWaitMs) throw xeroRateLimitError(state.headers, { now: now(), retryAt: state.retryAt });
+      if (cooldown > maxWaitMs || (cooldown > 0 && state.unknownDailyReset)) throw xeroRateLimitError(state.headers, { now: now(), retryAt: state.retryAt });
       const delay = Math.max(state.nextAt, state.retryAt) - now();
       if (delay > 0) await wait(delay);
       state.nextAt = now() + intervalMs;
@@ -44,11 +45,14 @@ export function createXeroRequestGate({ now = Date.now, wait = sleep } = {}) {
       if (response.status === 429) {
         state.headers = response.headers;
         const daily = /day|daily/i.test(String(response.headers?.get?.('x-rate-limit-problem') || ''));
-        const fallback = daily && !response.headers?.get?.('retry-after') ? 86_400_000 : 0;
+        state.unknownDailyReset = daily && !response.headers?.get?.('retry-after');
+        // Unknown reset: fail queued work, then permit a later probe; do not invent a 24-hour lockout.
+        const fallback = state.unknownDailyReset ? 60_000 : 0;
         state.retryAt = now() + Math.max(fallback, xeroRetryAfterMs(response.headers, { now: now() }));
       } else if (response.ok) {
         state.retryAt = 0;
         state.headers = null;
+        state.unknownDailyReset = false;
       }
       return response;
     });

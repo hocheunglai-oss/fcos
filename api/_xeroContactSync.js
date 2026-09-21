@@ -798,7 +798,7 @@ export async function createXeroContactsBatch(connection, contacts, runId, { env
   return outcomes;
 }
 
-export async function xeroAccountingFetch(connection, pathName, { method, body, idempotencyKey, retryOnRateLimit, env = process.env, fetchImpl = fetch, headers: extraHeaders = {}, onResponse = null, callsPerMinute = 0, wait = sleep }) {
+export async function xeroAccountingFetch(connection, pathName, { method, body, idempotencyKey, retryOnRateLimit, env = process.env, fetchImpl = fetch, headers: extraHeaders = {}, onResponse = null, callsPerMinute = 0, wait = sleep, requestGate = xeroRequestGate(fetchImpl) }) {
   const headers = {
     Authorization: `Bearer ${connection.accessToken}`,
     'xero-tenant-id': connection.tenantId,
@@ -809,7 +809,6 @@ export async function xeroAccountingFetch(connection, pathName, { method, body, 
   };
   const requestMethod = String(method || 'GET').toUpperCase();
   const retryRateLimit = retryOnRateLimit ?? requestMethod === 'GET';
-  const rateGate = xeroRequestGate(fetchImpl);
   const intervalMs = callsPerMinute > 0 ? Math.ceil(60_000 / Math.min(45, callsPerMinute)) : 0;
   let rateWaitMs = 0;
   const transientRetryLimit = requestMethod === 'GET' ? xeroTransientRetryLimit(env) : 0;
@@ -817,7 +816,7 @@ export async function xeroAccountingFetch(connection, pathName, { method, body, 
   for (let attempt = 0; attempt < 4; attempt += 1) {
     let response;
     try {
-      response = await rateGate(connection.tenantId, () => fetchImpl(`${XERO_API_BASE}/api.xro/2.0${pathName}`, {
+      response = await requestGate(connection.tenantId, () => fetchImpl(`${XERO_API_BASE}/api.xro/2.0${pathName}`, {
         method: requestMethod,
         headers,
         body: body ? JSON.stringify(body) : undefined,
