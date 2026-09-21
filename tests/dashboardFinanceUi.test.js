@@ -10,7 +10,7 @@ test('Dashboard Gross Profit card offers an opt-in currency-safe EBIT view', asy
   assert.match(source, /ebitEnabled = false/);
   assert.match(source, /onCheckedChange=\{\(checked\) => onChange\?\.\(checked === true\)\}/);
   assert.match(source, /Show EBIT in place of Gross Profit/);
-  assert.match(source, /Gross profit net finance costs/);
+  assert.match(source, /Gross profit net finance costs: interest and bank charges/);
   assert.match(source, /summary\?\.finance/);
   assert.match(source, /annualInterestRatePct/);
   assert.match(source, /dayCountBasis/);
@@ -19,7 +19,7 @@ test('Dashboard Gross Profit card offers an opt-in currency-safe EBIT view', asy
   assert.match(source, /Verified GP/);
   assert.match(source, /Full selection gross profit/);
   assert.match(source, /Gross profit before finance/);
-  assert.match(source, /EBIT unavailable · finance evidence missing/);
+  assert.match(source, /interest or bank-charge evidence missing/);
   assert.match(source, /STEMs excluded/);
   assert.match(source, /dashboardEbitPresentation/);
   assert.match(source, /financeLoading/);
@@ -32,7 +32,12 @@ test('Finance settings load the server rate, validate edits, and revision-protec
   assert.match(source, /financeSettingsGet/);
   assert.match(source, /financeSettingsSave/);
   assert.match(source, /expectedRevision: settings\?\.revision/);
-  assert.match(source, /annualInterestRatePct: Number\(draft\)/);
+  assert.match(source, /annualInterestRatePct: Number\(draft\.annualInterestRatePct\)/);
+  assert.match(source, /bankChargesUsd: \{ UBS: Number\(draft\.UBS\), DBS: Number\(draft\.DBS\) \}/);
+  assert.match(source, /validateBankCharge/);
+  assert.match(source, /charge > 1_000_000/);
+  assert.match(source, /UBS remittance charge/);
+  assert.match(source, /DBS remittance charge/);
   assert.match(source, /Enter 0–100 with up to two decimal places/);
   assert.match(source, /Your draft is still here; refresh the setting/);
   assert.match(source, /invalidateTags: \['finance-settings', 'dashboard'\]/);

@@ -16,10 +16,21 @@ export function validateAnnualFinancingRate(value) {
   return '';
 }
 
+export function validateBankCharge(value) {
+  const text = String(value ?? '').trim();
+  if (!text) return 'Enter a supplier remittance charge.';
+  if (!/^\d+(?:\.\d{1,2})?$/.test(text)) return 'Enter USD 0–1,000,000 with no more than two decimal places.';
+  const charge = Number(text);
+  if (!Number.isFinite(charge) || charge < 0 || charge > 1_000_000) return 'Enter USD 0–1,000,000 with no more than two decimal places.';
+  return '';
+}
+
 function displayRate(value) {
   const rate = Number(value);
   return Number.isFinite(rate) ? rate.toFixed(2) : '';
 }
+
+const displayCharge = displayRate;
 
 function displayDateTime(value) {
   if (!value) return 'No recorded change';
@@ -45,7 +56,7 @@ export default function FinanceSettings({ methodologyAction }) {
   const { toast } = useToast();
   const [settings, setSettings] = useState(null);
   const [permissions, setPermissions] = useState({ canManageSettings: false });
-  const [draft, setDraft] = useState('');
+  const [draft, setDraft] = useState({ annualInterestRatePct: '', UBS: '', DBS: '' });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -68,13 +79,15 @@ export default function FinanceSettings({ methodologyAction }) {
       }
       const next = response.data?.settings;
       const nextRate = Number(next?.annualInterestRatePct);
-      if (!next || !Number.isFinite(nextRate)) {
-        setError('The company financing rate is unavailable.');
+      const ubsCharge = Number(next?.bankChargesUsd?.UBS);
+      const dbsCharge = Number(next?.bankChargesUsd?.DBS);
+      if (!next || !Number.isFinite(nextRate) || !Number.isFinite(ubsCharge) || !Number.isFinite(dbsCharge)) {
+        setError('The company finance settings are unavailable.');
         return;
       }
       setSettings(next);
       setPermissions(response.data?.permissions || { canManageSettings: false });
-      setDraft(displayRate(nextRate));
+      setDraft({ annualInterestRatePct: displayRate(nextRate), UBS: displayCharge(ubsCharge), DBS: displayCharge(dbsCharge) });
     } catch (loadError) {
       if (!signal?.aborted) setError(loadError?.message || 'Finance settings could not be loaded.');
     } finally {
@@ -88,12 +101,21 @@ export default function FinanceSettings({ methodologyAction }) {
     return () => controller.abort();
   }, [load]);
 
-  const validationError = useMemo(() => validateAnnualFinancingRate(draft), [draft]);
-  const dirty = !validationError && settings && Number(draft) !== Number(settings.annualInterestRatePct);
+  const validationErrors = useMemo(() => ({
+    annualInterestRatePct: validateAnnualFinancingRate(draft.annualInterestRatePct),
+    UBS: validateBankCharge(draft.UBS),
+    DBS: validateBankCharge(draft.DBS),
+  }), [draft]);
+  const validationError = Object.values(validationErrors).find(Boolean) || '';
+  const dirty = !validationError && settings && (
+    Number(draft.annualInterestRatePct) !== Number(settings.annualInterestRatePct)
+    || Number(draft.UBS) !== Number(settings.bankChargesUsd?.UBS)
+    || Number(draft.DBS) !== Number(settings.bankChargesUsd?.DBS)
+  );
   const canManage = permissions.canManageSettings === true;
 
   const save = async () => {
-    const invalid = validateAnnualFinancingRate(draft);
+    const invalid = Object.values(validationErrors).find(Boolean);
     if (invalid) {
       setError(invalid);
       return;
@@ -102,7 +124,8 @@ export default function FinanceSettings({ methodologyAction }) {
     setError('');
     try {
       const response = await appClient.functions.invoke('financeSettingsSave', {
-        annualInterestRatePct: Number(draft),
+        annualInterestRatePct: Number(draft.annualInterestRatePct),
+        bankChargesUsd: { UBS: Number(draft.UBS), DBS: Number(draft.DBS) },
         expectedRevision: settings?.revision,
       }, {
         force: true,
@@ -113,24 +136,24 @@ export default function FinanceSettings({ methodologyAction }) {
       });
       if (response.data?.error) {
         if (isRevisionConflict(response.data)) {
-          setError('The company financing rate changed after this page loaded. Your draft is still here; refresh the setting, review the latest revision, and save again.');
+          setError('The company finance settings changed after this page loaded. Your draft is still here; refresh the setting, review the latest revision, and save again.');
         } else {
           setError(response.data.error);
         }
         return;
       }
       const next = response.data?.settings;
-      if (!next || !Number.isFinite(Number(next.annualInterestRatePct))) {
-        setError('The server did not return the saved financing rate. Refresh before making another change.');
+      if (!next || !Number.isFinite(Number(next.annualInterestRatePct)) || !Number.isFinite(Number(next.bankChargesUsd?.UBS)) || !Number.isFinite(Number(next.bankChargesUsd?.DBS))) {
+        setError('The server did not return the saved finance settings. Refresh before making another change.');
         return;
       }
       setSettings(next);
       setPermissions(response.data?.permissions || permissions);
-      setDraft(displayRate(next.annualInterestRatePct));
+      setDraft({ annualInterestRatePct: displayRate(next.annualInterestRatePct), UBS: displayCharge(next.bankChargesUsd.UBS), DBS: displayCharge(next.bankChargesUsd.DBS) });
       window.dispatchEvent(new CustomEvent('fcos:finance-settings-updated', { detail: { revision: next.revision } }));
-      toast({ title: 'Annual financing rate saved', description: `Dashboard EBIT now uses ${displayRate(next.annualInterestRatePct)}% annually.` });
+      toast({ title: 'Finance settings saved', description: `Dashboard EBIT now uses ${displayRate(next.annualInterestRatePct)}% annually, UBS USD ${displayCharge(next.bankChargesUsd.UBS)}, and DBS USD ${displayCharge(next.bankChargesUsd.DBS)} per supplier remittance.` });
     } catch (saveError) {
-      setError(saveError?.message || 'The annual financing rate could not be saved.');
+      setError(saveError?.message || 'The finance settings could not be saved.');
     } finally {
       setSaving(false);
     }
@@ -142,7 +165,7 @@ export default function FinanceSettings({ methodologyAction }) {
         icon={BadgeDollarSign}
         eyebrow="Administration"
         title="Finance"
-        description="Control the company financing rate used to calculate Dashboard EBIT. Historical selections are recalculated with the current rate."
+        description="Control the interest rate and supplier remittance charges used to calculate Dashboard EBIT. Historical selections use the current revision."
         actions={methodologyAction}
       />
 
@@ -150,7 +173,7 @@ export default function FinanceSettings({ methodologyAction }) {
         <div className="flex flex-col gap-3 border-b border-border px-4 py-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <h2 className="text-sm font-semibold text-foreground">Dashboard financing</h2>
-            <p className="mt-0.5 max-w-3xl text-xs leading-5 text-muted-foreground">FCOS applies this company rate to positive daily funded balances using Actual/365. Rate changes are revision protected and recorded in the audit history.</p>
+            <p className="mt-0.5 max-w-3xl text-xs leading-5 text-muted-foreground">FCOS applies interest to positive daily funded balances using Actual/365 and one bank charge per actual supplier remittance. All values save together under one revision.</p>
           </div>
           <Button type="button" variant="outline" size="icon" onClick={() => load({ force: true })} disabled={loading || saving} title="Refresh Finance settings" aria-label="Refresh Finance settings">
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
@@ -160,29 +183,24 @@ export default function FinanceSettings({ methodologyAction }) {
         {error ? <div role="alert" className="flex items-start gap-2 border-b border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /><span>{error}</span></div> : null}
 
         {loading && !settings ? <div role="status" className="flex items-center gap-2 px-4 py-8 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />Loading Finance settings…</div> : (
-          <div className="grid gap-4 px-4 py-4 lg:grid-cols-[minmax(260px,420px)_minmax(220px,1fr)_auto] lg:items-end">
-            <div className="space-y-1.5">
-              <Label htmlFor="annual-financing-rate">Annual financing rate (%)</Label>
-              <div className="relative">
-                <Input
-                  id="annual-financing-rate"
-                  type="text"
-                  inputMode="decimal"
-                  autoComplete="off"
-                  value={draft}
-                  onChange={(event) => {
-                    setDraft(event.target.value);
-                    setError('');
-                  }}
-                  disabled={!canManage || saving || !settings}
-                  aria-invalid={Boolean(settings && validationError)}
-                  aria-describedby="annual-financing-rate-help annual-financing-rate-error"
-                  className="pr-9 tabular-nums"
-                />
-                <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-muted-foreground">%</span>
-              </div>
-              <p id="annual-financing-rate-help" className="text-xs text-muted-foreground">Enter 0–100 with up to two decimal places.</p>
-              {settings && validationError ? <p id="annual-financing-rate-error" className="text-xs text-red-700 dark:text-red-400">{validationError}</p> : <span id="annual-financing-rate-error" />}
+          <div className="grid gap-4 px-4 py-4 lg:grid-cols-[minmax(430px,1.2fr)_minmax(220px,1fr)_auto] lg:items-end">
+            <div className="grid gap-3 sm:grid-cols-3">
+              {[
+                ['annualInterestRatePct', 'Annual financing rate (%)', '%', 'Enter 0–100 with up to two decimal places.'],
+                ['UBS', 'UBS remittance charge', 'USD', 'Per actual supplier remittance.'],
+                ['DBS', 'DBS remittance charge', 'USD', 'Per actual supplier remittance.'],
+              ].map(([field, label, suffix, help]) => {
+                const id = field === 'annualInterestRatePct' ? 'annual-financing-rate' : `${field.toLowerCase()}-bank-charge`;
+                return <div key={field} className="space-y-1.5">
+                  <Label htmlFor={id}>{label}</Label>
+                  <div className="relative">
+                    <Input id={id} type="text" inputMode="decimal" autoComplete="off" value={draft[field]} onChange={(event) => { setDraft((current) => ({ ...current, [field]: event.target.value })); setError(''); }} disabled={!canManage || saving || !settings} aria-invalid={Boolean(settings && validationErrors[field])} aria-describedby={`${id}-help ${id}-error`} className={suffix === '%' ? 'pr-9 tabular-nums' : 'pl-12 tabular-nums'} />
+                    <span className={`pointer-events-none absolute inset-y-0 flex items-center text-xs text-muted-foreground ${suffix === '%' ? 'right-3' : 'left-3'}`}>{suffix}</span>
+                  </div>
+                  <p id={`${id}-help`} className="text-xs text-muted-foreground">{help}</p>
+                  {settings && validationErrors[field] ? <p id={`${id}-error`} className="text-xs text-red-700 dark:text-red-400">{validationErrors[field]}</p> : <span id={`${id}-error`} />}
+                </div>;
+              })}
             </div>
 
             <dl className="grid grid-cols-2 gap-x-5 gap-y-1 text-xs text-muted-foreground">
@@ -194,8 +212,8 @@ export default function FinanceSettings({ methodologyAction }) {
 
             {canManage ? <Button type="button" onClick={save} disabled={!dirty || Boolean(validationError) || loading || saving} className="gap-2">
               {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-              {saving ? 'Saving…' : 'Save rate'}
-            </Button> : <p className="max-w-xs text-xs leading-5 text-muted-foreground">You can view this company rate. Finance settings managers, Administrators, and the General Manager can change it.</p>}
+              {saving ? 'Saving…' : 'Save finance settings'}
+            </Button> : <p className="max-w-xs text-xs leading-5 text-muted-foreground">You can view these company settings. Finance settings managers, Administrators, and the General Manager can change them.</p>}
           </div>
         )}
       </section>

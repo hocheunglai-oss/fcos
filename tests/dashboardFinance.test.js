@@ -1,15 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { calculateStemFinance, createDashboardFinanceLoader, financeDate, financeToday, summarizeDashboardFinance, validateFinanceSnapshot } from '../api/_dashboardFinance.js';
-import { createFinanceSettingsHandlers, validateAnnualInterestRate } from '../api/_dashboardFinanceSettings.js';
+import { createFinanceSettingsHandlers, validateAnnualInterestRate, validateBankChargesUsd } from '../api/_dashboardFinanceSettings.js';
 
-const settings = { annualInterestRatePct: 5, revision: 1 };
+const settings = { annualInterestRatePct: 5, bankChargesUsd: { UBS: 10, DBS: 15 }, revision: 1 };
 const buyer = '001000000000001'; const supplier = '001000000000002';
 const stemId = 'a01000000000001'; const invoiceId = 'a02000000000001';
 const stem = { id: stemId, currency: 'USD', netPnl: 10000, buyer: 110000, buyerAccountId: buyer, receivableBalance: 110000, deliveryDate: '2026-01-01' };
 let sequence = 0;
 const payment = (type, amount, date, patch = {}) => ({ id: `payment${++sequence}`, type, amount, date, stemId, currency: 'USD', accountId: type === 'Payable' ? supplier : buyer, ...patch });
-const run = (payments, extra = {}, asOfDate = '2026-01-21', annualInterestRatePct = 5) => calculateStemFinance({ stem, payments, supplierAccountIds: [supplier], ...extra }, { annualInterestRatePct, asOfDate });
+const run = (payments, extra = {}, asOfDate = '2026-01-21', annualInterestRatePct = 5) => ({ ...calculateStemFinance({ stem, payments, supplierAccountIds: [supplier], ...extra }, { annualInterestRatePct, asOfDate }), bankCharge: 0 });
 
 test('finance uses actual changing cash balances: agreed 219.18 example and settled cutoff', () => {
   const result = run([payment('Payable', 100000, '2026-01-01'), payment('Receivable', 40000, '2026-01-11'), payment('Receivable', 70000, '2026-01-21')], {
@@ -201,7 +201,7 @@ test('partial EBIT exposes only verified STEM profit and financing, with exclude
   const [result] = summarizeDashboardFinance([
     { ...stem, finance: valid },
     { ...stem, netPnl: -500, finance: { complete: false } },
-    { ...stem, netPnl: 0, finance: { complete: true, financeCost: 0, ebit: 0 } },
+    { ...stem, netPnl: 0, finance: { complete: true, bankCharge: 0, financeCost: 0, ebit: 0 } },
   ], settings, '2026-01-21').byCurrency;
   assert.equal(result.complete, false);
   assert.equal(result.ebit, null); assert.equal(result.financeCost, null);
@@ -219,10 +219,10 @@ test('all missing evidence never produces a zero verified EBIT and incomplete sc
 });
 
 test('verified finance remains separated by currency and rejects unsafe aggregate precision or missing GP', () => {
-  const row = { ...stem, netPnl: -20, finance: { complete: true, financeCost: 10, ebit: -30 } };
-  const summary = summarizeDashboardFinance([row, { ...row, currency: 'EUR', netPnl: 100, finance: { complete: true, financeCost: 10, ebit: 90 } }], settings, '2026-01-21');
+  const row = { ...stem, netPnl: -20, finance: { complete: true, bankCharge: 0, financeCost: 10, ebit: -30 } };
+  const summary = summarizeDashboardFinance([row, { ...row, currency: 'EUR', netPnl: 100, finance: { complete: true, bankCharge: 0, financeCost: 10, ebit: 90 } }], settings, '2026-01-21');
   assert.deepEqual(summary.byCurrency.map(({ currency, verifiedEbit }) => [currency, verifiedEbit]), [['EUR', 90], ['USD', -30]]);
-  const huge = { ...row, netPnl: 50000000000000, finance: { complete: true, financeCost: 0, ebit: 50000000000000 } };
+  const huge = { ...row, netPnl: 50000000000000, finance: { complete: true, bankCharge: 0, financeCost: 0, ebit: 50000000000000 } };
   const [unsafe] = summarizeDashboardFinance([huge, huge], settings, '2026-01-21').byCurrency;
   assert.equal(unsafe.complete, false); assert.equal(unsafe.verifiedEbit, null); assert.equal(unsafe.verifiedGrossProfit, null);
   const [missing] = summarizeDashboardFinance([{ ...row, netPnl: null }], settings, '2026-01-21').byCurrency;
@@ -240,7 +240,7 @@ test('Hong Kong calendar and rate revision lock a multi-page finance export', ()
 
 function loaderFixture({ broken = false, directStem = true, paymentDate = '2026-01-01' } = {}) {
   const schemas = {
-    Payment__c: ['Id', 'STEM__c', 'Account__c', 'RecordTypeId', 'Amount__c', 'Date__c', 'Supplier_Invoice__c', 'Volume_Discount__c', 'Is_Volume_Discount__c', 'Is_Deposit__c', 'Commission_Invoice__c', 'Remittance__c'],
+    Payment__c: ['Id', 'STEM__c', 'Account__c', 'RecordTypeId', 'Amount__c', 'Date__c', 'Supplier_Invoice__c', 'Volume_Discount__c', 'Is_Volume_Discount__c', 'Is_Deposit__c', 'Commission_Invoice__c', 'Remittance__c', 'Bank__c'],
     Supplier_Invoice__c: ['Id', 'STEM__c', 'Supplier__c', 'Invoice_Amount__c', 'Payable_Balance__c'],
     STEM__c: ['Id', 'Account__c', 'QLIK_Receivable_Balance__c'],
     Invoice__c: ['Id', 'Name', 'STEM__c', 'Proforma__c', 'Deprecated__c'],
@@ -257,7 +257,7 @@ function loaderFixture({ broken = false, directStem = true, paymentDate = '2026-
       if (object === 'Supplier_Invoice__c') return [{ Id: invoiceId, STEM__c: stemId, Supplier__c: supplier, Invoice_Amount__c: 100000, Payable_Balance__c: 0 }];
       if (object === 'Payment__c') {
         if (!directStem && query.includes('WHERE STEM__c')) return [];
-        return [{ Id: 'a03000000000001', STEM__c: directStem ? stemId : null, Account__c: supplier, Supplier_Invoice__c: invoiceId, Amount__c: 100000, Date__c: paymentDate, RecordType: { DeveloperName: 'Payable' } }];
+        return [{ Id: 'a03000000000001', STEM__c: directStem ? stemId : null, Account__c: supplier, Supplier_Invoice__c: invoiceId, Amount__c: 100000, Date__c: paymentDate, Bank__c: 'UBS', RecordType: { DeveloperName: 'Payable' } }];
       }
       return [];
     },
@@ -298,7 +298,7 @@ test('financing rate validation rejects blanks, coerced booleans, out-of-range a
 });
 
 test('finance settings enforces permissions before reads/writes, actor ownership, stale revisions and invalidation', async () => {
-  const calls = []; const row = { annual_interest_rate_pct: 5, revision: 1, updated_at: '2026-01-01' };
+  const calls = []; const row = { annual_interest_rate_pct: 5, bank_charges_usd: { UBS: 10, DBS: 15 }, revision: 1, updated_at: '2026-01-01' };
   const client = {
     from: () => { calls.push('read'); return { select() { return this; }, eq() { return this; }, async maybeSingle() { return { data: row }; } }; },
     rpc: async (name, args) => { calls.push({ name, args }); return args.p_expected_revision === row.revision ? { data: [{ ...row, annual_interest_rate_pct: args.p_annual_interest_rate_pct, revision: 2 }] } : { error: { code: '40001' } }; },
@@ -315,4 +315,19 @@ test('finance settings enforces permissions before reads/writes, actor ownership
   assert.equal(saved.settings.annualInterestRatePct, 7);
   assert.equal(calls.find((call) => call.args?.p_expected_revision === 1).args.p_actor_user_id, 'actor');
   assert.ok(calls.some((call) => call.tags?.includes('salesforce:dashboard')));
+});
+
+test('bank fee settings reject missing banks, nonnumeric values, excess precision and invalid amounts', () => {
+  assert.deepEqual(validateBankChargesUsd({ UBS: '10.00', DBS: 15 }), { UBS: 10, DBS: 15 });
+  assert.deepEqual(validateBankChargesUsd({ UBS: 0, DBS: 1000000 }), { UBS: 0, DBS: 1000000 });
+  for (const value of [null, [], {}, { UBS: 10 }, { UBS: 10, DBS: 15, OTHER: 5 },
+    ...[null, true, '', '1e1', -1, 1.001, 1000000.01, NaN, Infinity].map((UBS) => ({ UBS, DBS: 15 }))]) {
+    assert.throws(() => validateBankChargesUsd(value));
+  }
+});
+
+test('finance snapshot rejects fee drift or interest drift at an unchanged revision', () => {
+  for (const patch of [{ bankChargesUsd: { UBS: 11, DBS: 15 } }, { bankChargesUsd: {} }, { annualInterestRatePct: 6 }]) {
+    assert.throws(() => validateFinanceSnapshot({ revision: 1, asOfDate: '2026-01-01', ...patch }, settings, '2026-01-01'), { status: 409 });
+  }
 });

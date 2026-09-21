@@ -4,6 +4,16 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.222',
+    releasedAt: '2026-09-21',
+    title: 'Supplier bank charges in Dashboard EBIT and XLS',
+    changes: [
+      'Deduct configured supplier remittance charges from EBIT: UBS USD 10 and DBS USD 15 by default, editable with the interest rate in Finance settings.',
+      'Allocate shared remittance charges across all cash allocations and preserve separate interest, bank-charge and payment-evidence values.',
+      'Add Bank Charge beside Finance Cost in XLS and remove Created Date, Status and Dispute Information.',
+    ],
+  },
+  {
     version: '2.0.221',
     releasedAt: '2026-09-21',
     title: 'Readable Dashboard XLS workbooks and delivery-period filenames',

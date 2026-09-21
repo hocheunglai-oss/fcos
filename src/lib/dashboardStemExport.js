@@ -12,6 +12,22 @@ function assertNotAborted(signal) {
 
 const incomplete = (reason) => new Error(`Dashboard export incomplete: ${reason}. No file was downloaded.`);
 
+function snapshotFromFinance(finance) {
+  if (!finance || finance.revision == null || !finance.asOfDate || !finance.bankChargesUsd || typeof finance.bankChargesUsd !== 'object' || Array.isArray(finance.bankChargesUsd)) return null;
+  const annualInterestRatePct = Number(finance.annualInterestRatePct);
+  if (!Number.isFinite(annualInterestRatePct)) return null;
+  const bankChargesUsd = {};
+  for (const bank of Object.keys(finance.bankChargesUsd).sort()) {
+    const amount = Number(finance.bankChargesUsd[bank]);
+    if (!bank || !Number.isFinite(amount) || amount < 0) return null;
+    bankChargesUsd[bank] = amount;
+  }
+  if (!Object.keys(bankChargesUsd).length) return null;
+  return { annualInterestRatePct, bankChargesUsd, revision: finance.revision, asOfDate: finance.asOfDate };
+}
+
+const sameBankChargeSchedule = (left, right) => JSON.stringify(left) === JSON.stringify(right);
+
 /**
  * Fetches the complete ordinary Dashboard STEM selection. Each page is checked
  * against the first page so a changing result set can never become a partial
@@ -35,6 +51,7 @@ export async function fetchAllDashboardStems({
   let cursor = null;
   let expectedCount = null;
   let finance = null;
+  let financeSnapshot = null;
   const financeWarnings = new Set();
   let pageNumber = 0;
 
@@ -52,7 +69,7 @@ export async function fetchAllDashboardStems({
       sort,
       search: String(search || '').trim() || null,
       ...(includeFinanceCosts ? { includeFinanceCosts: true } : {}),
-      ...(includeFinanceCosts && finance ? { financeSnapshot: { revision: finance.revision, asOfDate: finance.asOfDate } } : {}),
+      ...(includeFinanceCosts && financeSnapshot ? { financeSnapshot } : {}),
     };
     const response = await invoke('dashboardStemList', payload, {
       cache: false,
@@ -77,17 +94,22 @@ export async function fetchAllDashboardStems({
 
     const pageFinance = data.finance;
     if (includeFinanceCosts && pageNumber === 0) {
-      if (!pageFinance || pageFinance.revision == null || !pageFinance.asOfDate) {
+      financeSnapshot = snapshotFromFinance(pageFinance);
+      if (!financeSnapshot) {
         throw incomplete('finance snapshot unavailable');
       }
-      finance = pageFinance;
+      finance = { ...pageFinance, bankChargesUsd: financeSnapshot.bankChargesUsd };
     } else if (includeFinanceCosts && !pageFinance) {
       throw incomplete('finance snapshot missing from a later page');
     } else if (includeFinanceCosts) {
-      if (String(pageFinance.revision) !== String(finance.revision) || String(pageFinance.asOfDate) !== String(finance.asOfDate)) {
+      const pageSnapshot = snapshotFromFinance(pageFinance);
+      if (!pageSnapshot) throw incomplete('finance snapshot missing from a later page');
+      if (String(pageSnapshot.revision) !== String(financeSnapshot.revision) || String(pageSnapshot.asOfDate) !== String(financeSnapshot.asOfDate)) {
         throw incomplete('rate or calculation date changed; please export again');
       }
-      if (Number(pageFinance.annualInterestRatePct) !== Number(finance.annualInterestRatePct) || String(pageFinance.dayCountBasis || '') !== String(finance.dayCountBasis || '')) {
+      if (pageSnapshot.annualInterestRatePct !== financeSnapshot.annualInterestRatePct
+        || !sameBankChargeSchedule(pageSnapshot.bankChargesUsd, financeSnapshot.bankChargesUsd)
+        || String(pageFinance.dayCountBasis || '') !== String(finance.dayCountBasis || '')) {
         throw incomplete('finance methodology changed; please export again');
       }
     }

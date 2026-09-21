@@ -137,7 +137,7 @@ export const SETTINGS_METHODOLOGIES = {
   },
   "finance": {
     "title": "Finance",
-    "description": "How the company financing rate controls Dashboard EBIT calculations.",
+    "description": "How the company interest rate and supplier-remittance bank fees control Dashboard EBIT calculations.",
     contentUrl, "contentKey": "SETTINGS_METHODOLOGIES:finance"
   },
   "ai": {

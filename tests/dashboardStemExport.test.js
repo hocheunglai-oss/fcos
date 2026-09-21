@@ -13,6 +13,7 @@ import { buildDashboardStemWorkbook, dashboardStemWorkbookInternals as dashboard
 
 const finance = {
   annualInterestRatePct: 5,
+  bankChargesUsd: { UBS: 10, DBS: 15 },
   revision: 7,
   asOfDate: '2026-09-20',
   dayCountBasis: 'ACT/365',
@@ -50,7 +51,12 @@ test('Dashboard XLS export fetches every page with stable search, sort, filters,
   assert.equal(calls[0].payload.pageSize, 2);
   assert.equal(calls[0].payload.includeFinanceCosts, true);
   assert.equal('financeSnapshot' in calls[0].payload, false);
-  assert.deepEqual(calls[1].payload.financeSnapshot, { revision: 7, asOfDate: '2026-09-20' });
+  assert.deepEqual(calls[1].payload.financeSnapshot, {
+    annualInterestRatePct: 5,
+    bankChargesUsd: { DBS: 15, UBS: 10 },
+    revision: 7,
+    asOfDate: '2026-09-20',
+  });
   assert.deepEqual(progress.map(({ loaded, total }) => [loaded, total]), [[2, 3], [3, 3]]);
 });
 
@@ -109,6 +115,30 @@ test('Dashboard XLS export rejects count drift, duplicate rows, and incomplete p
       includeFinanceCosts: true,
     }), /rate or calculation date changed/);
   });
+
+  await t.test('bank charge schedule drift with the same revision', async () => {
+    let page = 0;
+    await assert.rejects(fetchAllDashboardStems({
+      invoke: async () => ({ data: page++ === 0
+        ? { matchingCount: 2, stems: [{ id: 'one', finance: { complete: true } }], nextCursor: 'next', finance }
+        : { matchingCount: 2, stems: [{ id: 'two', finance: { complete: true } }], nextCursor: null, finance: { ...finance, bankChargesUsd: { UBS: 11, DBS: 15 } } } }),
+      pageSize: 1,
+      includeFinanceCosts: true,
+    }), /finance methodology changed/);
+  });
+});
+
+test('Dashboard XLS export preserves callers that do not request finance columns', async () => {
+  const calls = [];
+  const result = await fetchAllDashboardStems({
+    invoke: async (_name, payload) => {
+      calls.push(payload);
+      return { data: { matchingCount: 1, stems: [{ id: 'one' }], nextCursor: null } };
+    },
+  });
+  assert.equal(result.finance, null);
+  assert.equal('includeFinanceCosts' in calls[0], false);
+  assert.equal('financeSnapshot' in calls[0], false);
 });
 
 test('Dashboard XLS export cancellation prevents workbook generation', async () => {
@@ -130,6 +160,7 @@ test('binary XLS contains visible STEM and Scope sheets, literal text, numeric a
       name: '=SUM(1,1) & <STEM>',
       createdDate: '2026-09-01',
       deliveryDate: '2026-09-02',
+      deliveryDateSource: 'delivery',
       vessel: { name: 'A "quoted" vessel' },
       account: { name: 'Buyer' },
       supplierNames: ['Supplier A'],
@@ -138,10 +169,13 @@ test('binary XLS contains visible STEM and Scope sheets, literal text, numeric a
       currency: 'USD',
       buyer: 1000.25,
       netPnl: 100.5,
-      finance: { complete: false, financeCost: null, ebit: null, status: 'missing_evidence', issues: ['Buyer receipt missing'] },
+      status: 'Closed',
+      disputeStatus: 'Disputed',
+      disputeInformation: 'Removed dispute detail',
+      finance: { complete: false, financeCost: 7.25, bankCharge: null, bankChargeUsd: null, bankChargeComplete: false, bankChargeIssues: ['Bank evidence missing'], ebit: null, status: 'missing_evidence', issues: ['Buyer receipt missing'] },
     }, {
       id: 'two', name: 'Second', currency: 'EUR', buyer: 2000, netPnl: 300,
-      finance: { complete: true, financeCost: 12.5, ebit: 287.5, status: 'complete', issues: [] },
+      finance: { complete: true, financeCost: 12.5, bankCharge: 10, bankChargeUsd: 10, bankChargeComplete: true, bankChargeIssues: [], ebit: 277.5, status: 'complete', issues: [] },
     }],
     filterPayload: { disputeOnly: true, filters: { countryCodes: [], excludedCountryCodes: ['KOREA'] } },
     scopeLabels: { period: 'Year to date', counterparty: 'Buyer A', port: 'Busan', country: 'All', koreaDesk: 'Exclude Korea Desk' },
@@ -156,15 +190,35 @@ test('binary XLS contains visible STEM and Scope sheets, literal text, numeric a
   const book = read(bytes, { type: 'array' });
   assert.deepEqual(book.SheetNames, ['STEMs', 'Scope']);
   const sheet = book.Sheets.STEMs;
-  assert.equal(utils.sheet_to_json(sheet, { header: 1 }).length, 3);
+  const stemRows = utils.sheet_to_json(sheet, { header: 1 });
+  assert.equal(stemRows.length, 3);
+  assert.deepEqual(stemRows[0], [
+    'STEM', 'Delivery / Expected Date', 'Date Source', 'Vessel', 'Buyer', 'Suppliers',
+    'Products / Quantities', 'Port', 'Country', 'Currency', 'Turnover', 'Gross Profit',
+    'Dispute', 'Finance Cost', 'Bank Charge', 'EBIT', 'Evidence Status',
+  ]);
   assert.deepEqual({ t: sheet.A2.t, v: sheet.A2.v, f: sheet.A2.f }, { t: 's', v: '=SUM(1,1) & <STEM>', f: undefined });
-  assert.equal(sheet.E2.v, 'A "quoted" vessel');
-  assert.equal(sheet.L2.v, 1000.25);
-  assert.equal(sheet.L2.t, 'n');
-  assert.equal(sheet.Q2.v, 'Unavailable');
-  assert.equal(sheet.Q3.v, 12.5);
-  assert.equal(sheet.R3.v, 287.5);
-  assert.match(sheet.S2.v, /Buyer receipt missing/);
+  assert.equal(sheet.B2.v, '2026-09-02');
+  assert.equal(sheet.C2.v, 'Actual delivery');
+  assert.equal(sheet.D2.v, 'A "quoted" vessel');
+  assert.equal(sheet.K2.v, 1000.25);
+  assert.equal(sheet.K2.t, 'n');
+  assert.equal(sheet.M2.v, 'Disputed');
+  assert.equal(sheet.N2.v, 7.25);
+  assert.equal(sheet.N3.v, 12.5);
+  assert.equal(sheet.O2.v, 'Unavailable');
+  assert.equal(sheet.O3.v, 10);
+  assert.equal(sheet.P2.v, 'Unavailable');
+  assert.equal(sheet.P3.v, 277.5);
+  assert.match(sheet.Q2.v, /Buyer receipt missing/);
+  assert.match(sheet.Q2.v, /Bank evidence missing/);
+  assert.ok(!stemRows.flat().includes('Created Date'));
+  assert.ok(!stemRows.flat().includes('Closed'));
+  assert.ok(!stemRows.flat().includes('Removed dispute detail'));
+  assert.deepEqual(
+    buildDashboardStemWorkbook({ includeFinanceCosts: true }).Sheets.STEMs['!cols'].map(({ wch }) => wch),
+    [36, 19, 19, 19, 36, 36, 36, 19, 19, 19, 19, 19, 19, 19, 19, 19, 36],
+  );
   assert.ok(!book.Workbook.Sheets.some((item) => item.Hidden));
   const scope = utils.sheet_to_json(book.Sheets.Scope, { header: 1 });
   const entries = Object.fromEntries(scope);
@@ -172,6 +226,7 @@ test('binary XLS contains visible STEM and Scope sheets, literal text, numeric a
   assert.equal(entries['Submitted text search'], 'literal & search');
   assert.equal(entries['Korea Desk'], 'Exclude Korea Desk');
   assert.match(entries['Finance snapshot'], /revision 7/);
+  assert.match(entries['Bank charge snapshot'], /DBS USD 15 per remittance; UBS USD 10 per remittance/);
   assert.equal(entries['Finance warnings'], 'One <warning>');
   assert.ok(scope.some((row) => row[0] === 'USD'));
   assert.ok(scope.some((row) => row[0] === 'EUR'));
@@ -182,22 +237,40 @@ test('oversized Dashboard selections split into bounded worksheet chunks', () =>
   assert.equal(dashboardStemExportInternals.MAX_DATA_ROWS_PER_SHEET, 60_000);
 });
 
+test('XLS finance and bank charge cells follow their own evidence states', () => {
+  const sheet = buildDashboardStemWorkbook({
+    includeFinanceCosts: true,
+    rows: [
+      { finance: { complete: false, financeCost: 2, bankCharge: null, bankChargeComplete: false, ebit: null } },
+      { finance: { complete: false, financeCost: null, bankCharge: 15, bankChargeComplete: true, ebit: null } },
+    ],
+  }).Sheets.STEMs;
+  assert.equal(sheet.N2.v, 2);
+  assert.equal(sheet.O2.v, 'Unavailable');
+  assert.equal(sheet.N3.v, 'Unavailable');
+  assert.equal(sheet.O3.v, 15);
+  assert.equal(sheet.P2.v, 'Unavailable');
+  assert.equal(sheet.P3.v, 'Unavailable');
+});
+
 test('XLS currency summaries label verified subsets without including profit from missing-evidence STEMs', () => {
   const rows = [
-    { currency: 'USD', netPnl: 300, buyer: 1000, finance: { complete: true, financeCost: 12.5, ebit: 287.5 } },
-    { currency: 'USD', netPnl: 100, buyer: 200, finance: { complete: false, financeCost: null, ebit: null } },
+    { currency: 'USD', netPnl: 300, buyer: 1000, finance: { complete: true, financeCost: 12.5, bankCharge: 10, bankChargeComplete: true, ebit: 277.5 } },
+    { currency: 'USD', netPnl: 100, buyer: 200, finance: { complete: false, financeCost: 2, bankCharge: null, bankChargeComplete: false, ebit: null } },
     { currency: 'EUR', netPnl: 90, buyer: 150, finance: { complete: false } },
   ];
   const [eur, usd] = dashboardStemExportInternals.currencyTotals(rows, true);
   assert.equal(usd.financeComplete, false); assert.equal(usd.rowCount, 2); assert.equal(usd.verifiedStemCount, 1);
   assert.equal(usd.grossProfit, 400); assert.equal(usd.verifiedGrossProfit, 300);
-  assert.equal(usd.financeCost, 12.5); assert.equal(usd.ebit, 287.5); assert.equal(eur.verifiedStemCount, 0);
+  assert.equal(usd.financeCost, 12.5); assert.equal(usd.bankCharge, 10); assert.equal(usd.ebit, 277.5); assert.equal(eur.verifiedStemCount, 0);
   const scope = utils.sheet_to_json(buildDashboardStemWorkbook({ rows, includeFinanceCosts: true, finance }).Sheets.Scope, { header: 1 });
-  assert.ok(scope.some((row) => row.includes('Verified STEMs') && row.includes('Verified EBIT')));
+  assert.ok(scope.some((row) => row.includes('Verified STEMs') && row.includes('Verified Bank Charge') && row.includes('Verified EBIT')));
   const usdRow = scope.find((row) => row[0] === 'USD');
-  assert.equal(usdRow[7], 287.5);
+  assert.equal(usdRow[7], 10);
+  assert.equal(usdRow[8], 277.5);
   const eurRow = scope.find((row) => row[0] === 'EUR');
   assert.equal(eurRow[7], 'Unavailable');
+  assert.equal(eurRow[8], 'Unavailable');
   assert.match(Object.fromEntries(scope)['Missing-data note'], /Unknown costs are never zero/);
 });
 

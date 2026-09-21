@@ -22,8 +22,9 @@ function numberCell(value) {
   return number != null ? { t: 'n', v: number, z: '#,##0.00;[Red](#,##0.00);–' } : textCell('Unavailable');
 }
 
-const BASE_HEADERS = ['STEM', 'Created Date', 'Delivery / Expected Date', 'Date Source', 'Vessel', 'Buyer', 'Suppliers', 'Products / Quantities', 'Port', 'Country', 'Currency', 'Turnover', 'Gross Profit', 'Status', 'Dispute', 'Dispute Information'];
-const FINANCE_HEADERS = ['Finance Cost', 'EBIT', 'Evidence Status'];
+const BASE_HEADERS = ['STEM', 'Delivery / Expected Date', 'Date Source', 'Vessel', 'Buyer', 'Suppliers', 'Products / Quantities', 'Port', 'Country', 'Currency', 'Turnover', 'Gross Profit', 'Dispute'];
+const FINANCE_HEADERS = ['Finance Cost', 'Bank Charge', 'EBIT', 'Evidence Status'];
+const WIDE_HEADERS = new Set(['STEM', 'Buyer', 'Suppliers', 'Products / Quantities', 'Evidence Status']);
 const joined = (values) => [...new Set(values.filter(Boolean).map(String))].join('; ');
 const dated = (value) => value ? String(value).slice(0, 10) : '';
 
@@ -32,21 +33,24 @@ function exportRowCells(row, includeFinanceCosts) {
   products.push(...(row.supplierProductRows || []).map((item) => joined([item.itemName, item.quantityLabel])));
   const dispute = row.disputeStatus || (row.dispute ? 'Disputed' : 'No dispute');
   const cells = [
-    textCell(row.name), textCell(dated(row.createdDate)), textCell(dated(row.deliveryDate)),
+    textCell(row.name), textCell(dated(row.deliveryDate)),
     textCell(row.deliveryDateSource === 'delivery' ? 'Actual delivery' : row.deliveryDateSource === 'expected' ? 'Expected delivery' : ''),
     textCell(row.vessel?.name), textCell(row.account?.name), textCell(joined(row.supplierNames || [])),
     textCell(joined(products)), textCell(row.port?.name), textCell(row.port?.countryCode), textCell(row.currency),
-    numberCell(row.buyer), numberCell(row.netPnl), textCell(row.status), textCell(dispute),
-    textCell(row.disputeInformation || dispute),
+    numberCell(row.buyer), numberCell(row.netPnl), textCell(dispute),
   ];
   if (!includeFinanceCosts) return cells;
   const finance = row.finance;
   const complete = finance?.complete === true;
-  const issues = joined(finance?.issues || []);
+  const financeCost = finiteNumber(finance?.financeCost);
+  const bankCharge = finiteNumber(finance?.bankCharge);
+  const ebit = finiteNumber(finance?.ebit);
+  const issues = joined([...(finance?.issues || []), ...(finance?.bankChargeIssues || [])]);
   const evidence = finance ? `${finance.status || (complete ? 'Complete' : 'Unavailable')}${issues ? `: ${issues}` : ''}` : 'Unavailable';
   cells.push(
-    complete ? numberCell(finance.financeCost) : textCell('Unavailable'),
-    complete ? numberCell(finance.ebit) : textCell('Unavailable'),
+    financeCost != null ? numberCell(financeCost) : textCell('Unavailable'),
+    finance?.bankChargeComplete === true && bankCharge != null ? numberCell(bankCharge) : textCell('Unavailable'),
+    complete && ebit != null ? numberCell(ebit) : textCell('Unavailable'),
     textCell(evidence),
   );
   return cells;
@@ -68,11 +72,17 @@ function scopeEntries({ filterPayload, scopeLabels = {}, search, sort, matchingC
     ['Finance columns included', includeFinanceCosts ? 'Yes' : 'No'],
   ];
   if (includeFinanceCosts) {
+    const bankCharges = Object.entries(finance?.bankChargesUsd || {})
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([bank, amount]) => `${bank} USD ${finiteNumber(amount) ?? 'Unavailable'} per remittance`)
+      .join('; ') || 'Unavailable';
     entries.push(
       ['Finance snapshot', `${finance?.annualInterestRatePct ?? 'Unavailable'}% annual; revision ${finance?.revision ?? 'Unavailable'}; calculated ${finance?.asOfDate ?? 'Unavailable'}; ${finance?.dayCountBasis || 'ACT/365'}`],
+      ['Bank charge snapshot', bankCharges],
       ['Finance evidence complete', finance?.complete === true ? 'Yes' : 'No'],
       ['Finance methodology', 'Finance cost = sum of positive daily funded balances × annual rate ÷ 365 (Actual/365). Supplier payments increase funding, buyer receipts reduce it, same-day settlement costs zero, and open funding accrues through the calculation date.'],
-      ['Missing-data note', 'Finance totals cover verified STEMs only; compare counts. Unknown costs are never zero.'],
+      ['Bank charge methodology', 'EBIT = gross profit minus finance cost minus bank charge. One configured fee per remittance is allocated across its full positive cash allocations, including STEMs outside this export. Signed credits reconcile the net wire without another fee. Standalone supplier payments incur one fee each. No foreign exchange rate is invented.'],
+      ['Missing-data note', 'Finance totals cover verified STEMs only; compare counts. Unknown costs are never zero; bank or currency costs without evidence are withheld.'],
     );
     if (Array.isArray(finance?.warnings) && finance.warnings.length) entries.push(['Finance warnings', finance.warnings.join('; ')]);
   }
@@ -83,7 +93,7 @@ function currencyTotals(rows, includeFinanceCosts) {
   const totals = new Map();
   for (const row of rows) {
     const currency = String(row?.currency || 'Unspecified').toUpperCase();
-    const item = totals.get(currency) || { currency, rowCount: 0, turnover: 0, grossProfit: 0, turnoverComplete: true, grossProfitComplete: true, financeCost: 0, ebit: 0, financeComplete: true, verifiedStemCount: 0, verifiedGrossProfit: 0 };
+    const item = totals.get(currency) || { currency, rowCount: 0, turnover: 0, grossProfit: 0, turnoverComplete: true, grossProfitComplete: true, financeCost: 0, bankCharge: 0, ebit: 0, financeComplete: true, verifiedStemCount: 0, verifiedGrossProfit: 0 };
     item.rowCount += 1;
     const turnover = finiteNumber(row?.buyer);
     const grossProfit = finiteNumber(row?.netPnl);
@@ -93,12 +103,14 @@ function currencyTotals(rows, includeFinanceCosts) {
     else item.grossProfitComplete = false;
     if (includeFinanceCosts) {
       const financeCost = finiteNumber(row?.finance?.financeCost);
+      const bankCharge = finiteNumber(row?.finance?.bankCharge);
       const ebit = finiteNumber(row?.finance?.ebit);
-      if (row?.finance?.complete !== true || financeCost == null || ebit == null || grossProfit == null) item.financeComplete = false;
+      if (row?.finance?.complete !== true || row?.finance?.bankChargeComplete !== true || financeCost == null || bankCharge == null || ebit == null || grossProfit == null) item.financeComplete = false;
       else {
         item.verifiedStemCount += 1;
         item.verifiedGrossProfit += grossProfit;
         item.financeCost += financeCost;
+        item.bankCharge += bankCharge;
         item.ebit += ebit;
       }
     }
@@ -124,11 +136,11 @@ export function buildDashboardStemWorkbook({
   const chunks = splitRows(rows);
   chunks.forEach((chunk, index) => {
     const sheet = utils.aoa_to_sheet([headers.map(textCell), ...chunk.map((row) => exportRowCells(row, includeFinanceCosts))]);
-    sheet['!cols'] = headers.map((_, column) => ({ wch: [0, 5, 6, 7, 15, 18].includes(column) ? 36 : 19 }));
+    sheet['!cols'] = headers.map((header) => ({ wch: WIDE_HEADERS.has(header) ? 36 : 19 }));
     utils.book_append_sheet(book, sheet, chunks.length === 1 ? 'STEMs' : `STEMs ${index + 1}`);
   });
   const entries = scopeEntries({ filterPayload, scopeLabels, search, sort, matchingCount: rows.length, generatedAt, includeFinanceCosts, finance });
-  const totalHeaders = ['Currency', 'Row Count', 'Turnover', 'Gross Profit', ...(includeFinanceCosts ? ['Verified STEMs', 'Verified Gross Profit', 'Verified Finance Cost', 'Verified EBIT', 'Evidence Complete'] : [])];
+  const totalHeaders = ['Currency', 'Row Count', 'Turnover', 'Gross Profit', ...(includeFinanceCosts ? ['Verified STEMs', 'Verified Gross Profit', 'Verified Finance Cost', 'Verified Bank Charge', 'Verified EBIT', 'Evidence Complete'] : [])];
   const scope = utils.aoa_to_sheet([
     [textCell('Dashboard STEM Export Scope'), textCell('')],
     ...entries.map(([label, value]) => [textCell(label), textCell(value)]),
@@ -140,6 +152,7 @@ export function buildDashboardStemWorkbook({
         numberCell(total.verifiedStemCount),
         total.verifiedStemCount ? numberCell(total.verifiedGrossProfit) : textCell('Unavailable'),
         total.verifiedStemCount ? numberCell(total.financeCost) : textCell('Unavailable'),
+        total.verifiedStemCount ? numberCell(total.bankCharge) : textCell('Unavailable'),
         total.verifiedStemCount ? numberCell(total.ebit) : textCell('Unavailable'),
         textCell(total.financeComplete ? 'Yes' : 'No'),
       ] : []),

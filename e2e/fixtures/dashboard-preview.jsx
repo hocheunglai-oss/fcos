@@ -59,17 +59,17 @@ const financeScenario = new URLSearchParams(window.location.search).get('finance
 const financeByScenario = {
   partial: {
     complete: false,
-    byCurrency: [{ currency: 'USD', financeCost: null, ebit: null, complete: false, missingEvidenceCount: 112, stemCount: 128, verifiedStemCount: 16, verifiedGrossProfit: 488_350, verifiedFinanceCost: 12_000, verifiedEbit: 476_350, excludedGrossProfit: 1_645_000, accruingStemCount: 4 }],
+    byCurrency: [{ currency: 'USD', financeCost: null, bankCharge: null, ebit: null, complete: false, missingEvidenceCount: 112, stemCount: 128, verifiedStemCount: 16, verifiedGrossProfit: 488_350, verifiedFinanceCost: 12_000, verifiedBankCharge: 375, verifiedEbit: 475_975, excludedGrossProfit: 1_645_000, accruingStemCount: 4 }],
     warnings: ['112 STEMs have incomplete payment evidence.'],
   },
   none: {
     complete: false,
-    byCurrency: [{ currency: 'USD', financeCost: null, ebit: null, complete: false, missingEvidenceCount: 128, stemCount: 128, verifiedStemCount: 0, verifiedGrossProfit: null, verifiedFinanceCost: null, verifiedEbit: null, excludedGrossProfit: 2_133_350, accruingStemCount: 4 }],
+    byCurrency: [{ currency: 'USD', financeCost: null, bankCharge: null, ebit: null, complete: false, missingEvidenceCount: 128, stemCount: 128, verifiedStemCount: 0, verifiedGrossProfit: null, verifiedFinanceCost: null, verifiedBankCharge: null, verifiedEbit: null, excludedGrossProfit: 2_133_350, accruingStemCount: 4 }],
     warnings: ['No STEM has complete finance evidence.'],
   },
   complete: {
     complete: true,
-    byCurrency: [{ currency: 'USD', financeCost: 241_000, ebit: 1_892_350, complete: true, missingEvidenceCount: 0, stemCount: 128, verifiedStemCount: 128, verifiedGrossProfit: 2_133_350, verifiedFinanceCost: 241_000, verifiedEbit: 1_892_350, excludedGrossProfit: 0, accruingStemCount: 4 }],
+    byCurrency: [{ currency: 'USD', financeCost: 241_000, bankCharge: 3_100, ebit: 1_889_250, complete: true, missingEvidenceCount: 0, stemCount: 128, verifiedStemCount: 128, verifiedGrossProfit: 2_133_350, verifiedFinanceCost: 241_000, verifiedBankCharge: 3_100, verifiedEbit: 1_889_250, excludedGrossProfit: 0, accruingStemCount: 4 }],
     warnings: [],
   },
 };
@@ -85,6 +85,7 @@ const dashboardSummary = {
   priorPeriod: { stemCount: 116 },
   finance: {
     annualInterestRatePct: 5,
+    bankChargesUsd: { UBS: 10, DBS: 15 },
     revision: 1,
     asOfDate: '2026-09-05',
     dayCountBasis: 'ACT/365',
@@ -119,7 +120,7 @@ appClient.functions.invoke = async (name, payload = {}, options = {}) => {
   if (name === 'financeSettingsGet') return { data: { settings: fixtureFinanceSettings, permissions: { canManageSettings: true } }, meta: FIXTURE_META };
   if (name === 'financeSettingsSave') {
     if (payload.expectedRevision !== fixtureFinanceSettings.revision) return { data: { error: 'Finance settings changed after they were opened.', code: 'FINANCE_SETTINGS_REVISION_CONFLICT' }, meta: FIXTURE_META };
-    fixtureFinanceSettings = { ...fixtureFinanceSettings, annualInterestRatePct: payload.annualInterestRatePct, revision: fixtureFinanceSettings.revision + 1, updatedAt: '2026-09-05T09:00:00.000Z' };
+    fixtureFinanceSettings = { ...fixtureFinanceSettings, annualInterestRatePct: payload.annualInterestRatePct, bankChargesUsd: payload.bankChargesUsd, revision: fixtureFinanceSettings.revision + 1, updatedAt: '2026-09-05T09:00:00.000Z' };
     return { data: { settings: fixtureFinanceSettings, permissions: { canManageSettings: true } }, meta: FIXTURE_META };
   }
   if (name === 'dashboardStemList') {
@@ -152,16 +153,18 @@ const stemRows = [
 const exportRows = Array.from({ length: 201 }, (_, index) => {
   const source = stemRows[index % stemRows.length];
   const financeCost = 10 + index / 100;
+  const bankCharge = index % 2 ? 15 : 10;
   return {
     ...source,
     id: `fixture-export-stem-${String(index + 1).padStart(3, '0')}`,
     name: `SYN-EXPORT-${String(index + 1).padStart(3, '0')}`,
-    finance: { complete: true, financeCost, ebit: Number(source.grossProfit || 0) - financeCost, status: 'Complete' },
+    finance: { complete: true, financeCost, bankCharge, bankChargeUsd: bankCharge, bankChargeComplete: true, ebit: Number(source.grossProfit || 0) - financeCost - bankCharge, status: 'Complete' },
   };
 });
 
 const exportFinance = {
   annualInterestRatePct: 5,
+  bankChargesUsd: { UBS: 10, DBS: 15 },
   revision: 1,
   asOfDate: '2026-09-05',
   dayCountBasis: 'ACT/365',
@@ -169,7 +172,7 @@ const exportFinance = {
   warnings: [],
 };
 
-let fixtureFinanceSettings = { annualInterestRatePct: 5, revision: 1, updatedAt: '2026-09-05T08:00:00.000Z', updatedByEmail: 'finance.fixture@example.com' };
+let fixtureFinanceSettings = { annualInterestRatePct: 5, bankChargesUsd: { UBS: 10, DBS: 15 }, revision: 1, updatedAt: '2026-09-05T08:00:00.000Z', updatedByEmail: 'finance.fixture@example.com' };
 window.__fixtureDashboardStemRequests = [];
 window.__fixtureFinanceEvents = [];
 window.__fixtureExportDelayMs = 0;

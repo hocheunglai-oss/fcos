@@ -2,6 +2,7 @@ import { isPaymentDataReliableStem, PAYMENT_DATA_RELIABLE_FROM } from '../src/li
 import { validateAnnualInterestRate, financeError } from './_dashboardFinanceSettings.js';
 import { isFinalBuyerInvoice } from './_buyerFinancialAmount.js';
 import { SALESFORCE_CORPORATE_CURRENCY } from './_decisionDashboard.js';
+import { allocateRemittanceCharge, calculateStemBankCharge, deductBankCharge, isSupplierRemittanceAllocation } from './_dashboardBankCharges.js';
 import { isPaymentRemittance } from './_paymentClassification.js';
 
 const DAY_MS = 86_400_000;
@@ -31,8 +32,10 @@ export function financeToday(now = new Date()) {
 export function validateFinanceSnapshot(snapshot, settings, asOfDate) {
   if (snapshot == null) return;
   if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)
-    || snapshot.revision !== settings.revision || snapshot.asOfDate !== asOfDate) {
-    throw financeError('The financing rate or calculation date changed. Restart the export for a consistent calculation.', 409, 'DASHBOARD_FINANCE_SNAPSHOT_CHANGED');
+    || snapshot.revision !== settings.revision || snapshot.asOfDate !== asOfDate
+    || (snapshot.annualInterestRatePct != null && snapshot.annualInterestRatePct !== settings.annualInterestRatePct)
+    || (snapshot.bankChargesUsd != null && ['UBS', 'DBS'].some((bank) => snapshot.bankChargesUsd[bank] !== settings.bankChargesUsd?.[bank]))) {
+    throw financeError('Finance settings or the calculation date changed. Restart the export for a consistent calculation.', 409, 'DASHBOARD_FINANCE_SNAPSHOT_CHANGED');
   }
 }
 
@@ -166,31 +169,34 @@ export function summarizeDashboardFinance(rows, settings, asOfDate, { complete =
   const buckets = new Map();
   for (const row of rows) {
     const key = row.currency || 'Unspecified';
-    if (!buckets.has(key)) buckets.set(key, { currency: key, costCents: 0n, ebitCents: 0n, grossCents: 0n, excludedCents: 0n, excludedComplete: true, complete: true, stemCount: 0, verifiedStemCount: 0, missingEvidenceCount: 0, accruingStemCount: 0 });
+    if (!buckets.has(key)) buckets.set(key, { currency: key, costCents: 0n, bankCents: 0n, ebitCents: 0n, grossCents: 0n, excludedCents: 0n, excludedComplete: true, complete: true, stemCount: 0, verifiedStemCount: 0, missingEvidenceCount: 0, accruingStemCount: 0 });
     const bucket = buckets.get(key); bucket.stemCount += 1;
     const gross = cents(row.netPnl);
-    if (!row.finance?.complete || gross == null || cents(row.finance.financeCost) == null || cents(row.finance.ebit) == null) {
+    if (!row.finance?.complete || gross == null || cents(row.finance.financeCost) == null || cents(row.finance.ebit) == null || cents(row.finance.bankCharge) == null) {
       bucket.complete = false; bucket.missingEvidenceCount += 1;
       if (gross == null) bucket.excludedComplete = false;
       else bucket.excludedCents += BigInt(gross);
     } else {
       bucket.verifiedStemCount += 1; bucket.grossCents += BigInt(gross);
+      bucket.bankCents += BigInt(cents(row.finance.bankCharge));
       bucket.costCents += BigInt(cents(row.finance.financeCost)); bucket.ebitCents += BigInt(cents(row.finance.ebit));
       if (row.finance.accruing) bucket.accruingStemCount += 1;
     }
   }
   const safe = (value) => value <= BigInt(Number.MAX_SAFE_INTEGER) && value >= -BigInt(Number.MAX_SAFE_INTEGER);
-  for (const bucket of buckets.values()) if (![bucket.costCents, bucket.ebitCents, bucket.grossCents].every(safe)) bucket.complete = false;
-  return { annualInterestRatePct: settings.annualInterestRatePct, revision: settings.revision, asOfDate, dayCountBasis: 'ACT/365',
+  for (const bucket of buckets.values()) if (![bucket.costCents, bucket.bankCents, bucket.ebitCents, bucket.grossCents].every(safe)) bucket.complete = false;
+  return { annualInterestRatePct: settings.annualInterestRatePct, bankChargesUsd: settings.bankChargesUsd, revision: settings.revision, asOfDate, dayCountBasis: 'ACT/365',
     complete: complete && [...buckets.values()].every((bucket) => bucket.complete),
-    byCurrency: [...buckets.values()].sort((a, b) => a.currency.localeCompare(b.currency)).map(({ costCents, ebitCents, grossCents, excludedCents, excludedComplete, ...bucket }) => {
+    byCurrency: [...buckets.values()].sort((a, b) => a.currency.localeCompare(b.currency)).map(({ costCents, bankCents, ebitCents, grossCents, excludedCents, excludedComplete, ...bucket }) => {
       // A verified subset is useful, but must never masquerade as the full currency result.
-      const verified = complete && bucket.verifiedStemCount > 0 && [costCents, ebitCents, grossCents].every(safe);
+      const verified = complete && bucket.verifiedStemCount > 0 && [costCents, bankCents, ebitCents, grossCents].every(safe);
       return { ...bucket, complete: complete && bucket.complete,
         financeCost: complete && bucket.complete ? money(costCents) : null,
+        bankCharge: complete && bucket.complete ? money(bankCents) : null,
         ebit: complete && bucket.complete ? money(ebitCents) : null,
         verifiedGrossProfit: verified ? money(grossCents) : null,
         verifiedFinanceCost: verified ? money(costCents) : null,
+        verifiedBankCharge: verified ? money(bankCents) : null,
         verifiedEbit: verified ? money(ebitCents) : null,
         excludedGrossProfit: complete && excludedComplete && safe(excludedCents) ? money(excludedCents) : null,
       };
@@ -229,7 +235,7 @@ export function createDashboardFinanceLoader({ queryAll, describeObject, chunkSi
       const stemIds = rows.map((row) => row.id);
       const invoiceSelect = select(invoiceFields, ['Id', 'STEM__c', 'Supplier__c', 'Invoice_Amount__c', 'Payable_Balance__c', 'CurrencyIsoCode']);
       const classificationFields = select(paymentFields, ['Name', 'Reference__c', 'Type__c', 'Payment_Type__c', 'Direction__c', 'Payment_Direction__c', 'Status__c', 'Payment_Status__c']);
-      const paymentSelect = [...select(paymentFields, ['Id', 'STEM__c', 'Account__c', 'Amount__c', 'Date__c', 'Supplier_Invoice__c', 'Volume_Discount__c', 'Is_Volume_Discount__c', 'Is_Deposit__c', 'Commission_Invoice__c', 'Remittance__c', 'CurrencyIsoCode']), ...classificationFields, 'RecordType.DeveloperName'];
+      const paymentSelect = [...select(paymentFields, ['Id', 'STEM__c', 'Account__c', 'Amount__c', 'Date__c', 'Supplier_Invoice__c', 'Volume_Discount__c', 'Is_Volume_Discount__c', 'Is_Deposit__c', 'Commission_Invoice__c', 'Remittance__c', 'Bank__c', 'CurrencyIsoCode']), ...classificationFields, 'RecordType.DeveloperName'];
       const [stems, initialInvoices, stemPayments, buyers, lines, extras] = await Promise.all([
         queryByIds('STEM__c', ['Id', 'Account__c', 'QLIK_Receivable_Balance__c'], 'Id', stemIds),
         queryByIds('Supplier_Invoice__c', invoiceSelect, 'STEM__c', stemIds),
@@ -249,6 +255,29 @@ export function createDashboardFinanceLoader({ queryAll, describeObject, chunkSi
       const invoiceById = new Map(invoices.map((row) => [idKey(row.Id), row]));
       const payments = [...stemPayments, ...invoicePayments];
       const remittanceIds = new Set(payments.map((payment) => idKey(payment.Remittance__c)).filter(Boolean));
+      const normalizePayment = (payment) => ({ id: payment.Id, stemId: payment.STEM__c,
+          supplierInvoiceId: payment.Supplier_Invoice__c, accountId: payment.Account__c,
+          amount: payment.Amount__c, date: payment.Date__c, type: payment.RecordType?.DeveloperName,
+          status: payment.Status__c || payment.Payment_Status__c, volumeDiscountId: payment.Volume_Discount__c,
+          isVolumeDiscount: payment.Is_Volume_Discount__c === true, isDeposit: payment.Is_Deposit__c === true,
+          commissionInvoiceId: payment.Commission_Invoice__c, remittanceId: payment.Remittance__c, bank: payment.Bank__c,
+          isRemittance: remittanceIds.has(idKey(payment.Id)) || isPaymentRemittance(payment, classificationFields),
+          currency: paymentFields.has('CurrencyIsoCode') ? payment.CurrencyIsoCode : SALESFORCE_CORPORATE_CURRENCY });
+      const bankGroups = new Map();
+      const bankParentIds = unique(payments.map(normalizePayment).filter(isSupplierRemittanceAllocation).map((payment) => payment.remittanceId));
+      const bankSourceComplete = paymentFields.has('Bank__c');
+      try {
+        if (bankSourceComplete && bankParentIds.length) {
+          const [parents, children] = await Promise.all([
+            queryByIds('Payment__c', paymentSelect, 'Id', bankParentIds),
+            queryByIds('Payment__c', paymentSelect, 'Remittance__c', bankParentIds),
+          ]);
+          const parentById = new Map(parents.map((parent) => [idKey(parent.Id), normalizePayment(parent)]));
+          const normalizedChildren = children.map(normalizePayment);
+          for (const parentId of bankParentIds) bankGroups.set(idKey(parentId), allocateRemittanceCharge(parentById.get(idKey(parentId)),
+            normalizedChildren.filter((child) => idKey(child.remittanceId) === idKey(parentId)), settings.bankChargesUsd, asOfDate));
+        }
+      } catch { /* Missing groups withhold only affected remittances; independent payments remain usable. */ }
       const stemById = new Map(stems.map((row) => [idKey(row.Id), row]));
       const linkedStemIds = new Map();
       for (const child of linkedChildren) if (child.Supplier_Invoice__c) {
@@ -261,14 +290,7 @@ export function createDashboardFinanceLoader({ queryAll, describeObject, chunkSi
         const ownInvoices = invoices.filter(ownsInvoice);
         const invoiceKeys = new Set(ownInvoices.map((invoice) => idKey(invoice.Id)));
         const ownPayments = payments.filter((payment) => idKey(payment.STEM__c) === key || invoiceKeys.has(idKey(payment.Supplier_Invoice__c)));
-        const normalizedPayments = ownPayments.map((payment) => ({ id: payment.Id, stemId: payment.STEM__c,
-          supplierInvoiceId: payment.Supplier_Invoice__c, accountId: payment.Account__c,
-          amount: payment.Amount__c, date: payment.Date__c, type: payment.RecordType?.DeveloperName,
-          status: payment.Status__c || payment.Payment_Status__c, volumeDiscountId: payment.Volume_Discount__c,
-          isVolumeDiscount: payment.Is_Volume_Discount__c === true, isDeposit: payment.Is_Deposit__c === true,
-          commissionInvoiceId: payment.Commission_Invoice__c, remittanceId: payment.Remittance__c,
-          isRemittance: remittanceIds.has(idKey(payment.Id)) || isPaymentRemittance(payment, classificationFields),
-          currency: paymentFields.has('CurrencyIsoCode') ? payment.CurrencyIsoCode : SALESFORCE_CORPORATE_CURRENCY }));
+        const normalizedPayments = ownPayments.map(normalizePayment);
         const ownChildren = linkedChildren.filter((child) => idKey(child.STEM__c) === key);
         const missingLink = ownChildren.some((child) => child.Supplier_Invoice__c && !invoiceById.has(idKey(child.Supplier_Invoice__c)));
         const sharedInvoice = ownInvoices.some((invoice) => (linkedStemIds.get(idKey(invoice.Id)) || []).some((stemKey) => stemKey !== key));
@@ -281,7 +303,10 @@ export function createDashboardFinanceLoader({ queryAll, describeObject, chunkSi
             amount: invoice.Invoice_Amount__c, balance: invoice.Payable_Balance__c,
             currency: invoiceFields.has('CurrencyIsoCode') ? invoice.CurrencyIsoCode : SALESFORCE_CORPORATE_CURRENCY })),
         }, { annualInterestRatePct: settings.annualInterestRatePct, asOfDate });
-        return { ...row, finance };
+        const bank = calculateStemBankCharge({ payments: normalizedPayments, groups: bankGroups,
+          sourceComplete: bankSourceComplete && Boolean(rawStem) && !missingLink && !sharedInvoice },
+        { bankChargesUsd: settings.bankChargesUsd, asOfDate, currency: row.currency });
+        return { ...row, finance: deductBankCharge(finance, bank) };
       });
     } catch {
       return rows.map((row) => ({ ...row, finance: unavailable(['Payment evidence could not be loaded completely. Refresh to retry.']) }));

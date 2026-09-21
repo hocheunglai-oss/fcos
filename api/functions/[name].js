@@ -8775,7 +8775,7 @@ async function dashboardAnalyticsUncached(body = {}, req = null, accessContext =
 }
 
 async function cachedDecisionDashboard(handler, body, req, accessContext, ttlSeconds, loader, financeContext = null) {
-  const cachePayload = { ...body, ...(financeContext ? { financeVersion: 3, financeSnapshot: { revision: financeContext.settings.revision, asOfDate: financeContext.asOfDate } } : {}) };
+  const cachePayload = { ...body, ...(financeContext ? { financeVersion: 4, financeSnapshot: { revision: financeContext.settings.revision, asOfDate: financeContext.asOfDate } } : {}) };
   delete cachePayload.force;
   delete cachePayload.forceRefresh;
   delete cachePayload.refresh;

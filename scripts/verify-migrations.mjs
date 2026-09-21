@@ -29,6 +29,7 @@ const migrationSources = await Promise.all(names.map(async (name) => ({
   sql: await readFile(new URL(name, migrationDirectory), 'utf8'),
 })));
 const releaseMigrationNames = new Set([
+  '20260921061845_dashboard_bank_charges.sql',
   '20260920154626_dashboard_finance_settings.sql',
   '20260920105042_market_trader_workspace.sql',
   '20260916223258_app_workflow_reliability.sql',
@@ -88,7 +89,7 @@ async function verifyRuntimeObjects(label) {
     releaseTables.length * 2, `${label} report presets and FCBS service-role access`, [releaseTables],
   );
   const releaseFunctions = [
-    'save_company_finance_settings',
+    'save_company_finance_settings', 'save_company_finance_settings_v2', 'valid_company_bank_charges',
     'save_market_trader_workspace',
     'save_account_insight_report_preset', 'resolve_variable_charge_post_invoice_change',
     'hedge_fcbs_settlement_month', 'hedge_fcbs_settlement_evidence',
