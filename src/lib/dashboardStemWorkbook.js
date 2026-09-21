@@ -17,27 +17,36 @@ function finiteNumber(value) {
   return Number.isFinite(number) ? number : null;
 }
 
-function numberCell(value) {
+function numberCell(value, format = '#,##0.00') {
   const number = finiteNumber(value);
-  return number != null ? { t: 'n', v: number, z: '#,##0.00;[Red](#,##0.00);–' } : textCell('Unavailable');
+  return number != null ? { t: 'n', v: number, z: format } : textCell('Unavailable');
 }
 
-const BASE_HEADERS = ['STEM', 'Delivery / Expected Date', 'Date Source', 'Vessel', 'Buyer', 'Suppliers', 'Products / Quantities', 'Port', 'Country', 'Currency', 'Turnover', 'Gross Profit', 'Dispute'];
+const BASE_HEADERS = ['STEM', 'Delivery / Expected Date', 'Date Source', 'Vessel', 'Buyer', 'Suppliers', 'Products / Quantities', 'Port', 'Country', 'Turnover', 'Gross Profit', 'Dispute'];
 const FINANCE_HEADERS = ['Finance Cost', 'Bank Charge', 'EBIT', 'Evidence Status'];
+const MONEY_HEADERS = new Set(['Turnover', 'Gross Profit', 'Finance Cost', 'Bank Charge', 'EBIT']);
 const WIDE_HEADERS = new Set(['STEM', 'Buyer', 'Suppliers', 'Products / Quantities', 'Evidence Status']);
 const joined = (values) => [...new Set(values.filter(Boolean).map(String))].join('; ');
 const dated = (value) => value ? String(value).slice(0, 10) : '';
+const currencyCode = (value) => /^[A-Z]{3}$/.test(String(value || '')) ? value : 'Unspecified';
+// Labels may contain ranges; group each endpoint without rounding or touching product names.
+const quantityLabel = (value) => String(value || '').replace(/\d[\d,]*(?:\.\d+)?/g, (amount) => {
+  const [integer, fraction] = amount.replaceAll(',', '').split('.');
+  return integer.replace(/\B(?=(\d{3})+(?!\d))/g, ',') + (fraction == null ? '' : `.${fraction}`);
+});
 
-function exportRowCells(row, includeFinanceCosts) {
-  const products = (row.productQuantities || []).map((item) => joined([item.productName, item.quantityLabel]));
-  products.push(...(row.supplierProductRows || []).map((item) => joined([item.itemName, item.quantityLabel])));
+function exportRowCells(row, includeFinanceCosts, commonCurrency) {
+  const products = (row.productQuantities || []).map((item) => joined([item.productName, quantityLabel(item.quantityLabel)]));
+  products.push(...(row.supplierProductRows || []).map((item) => joined([item.itemName, quantityLabel(item.quantityLabel)])));
+  // Keep numeric cells usable for calculations, with unambiguous currencies in mixed reports.
+  const moneyCell = (value) => numberCell(value, commonCurrency ? '#,##0.00' : `"${currencyCode(row.currency)}" #,##0.00`);
   const dispute = row.disputeStatus || (row.dispute ? 'Disputed' : 'No dispute');
   const cells = [
     textCell(row.name), textCell(dated(row.deliveryDate)),
     textCell(row.deliveryDateSource === 'delivery' ? 'Actual delivery' : row.deliveryDateSource === 'expected' ? 'Expected delivery' : ''),
     textCell(row.vessel?.name), textCell(row.account?.name), textCell(joined(row.supplierNames || [])),
-    textCell(joined(products)), textCell(row.port?.name), textCell(row.port?.countryCode), textCell(row.currency),
-    numberCell(row.buyer), numberCell(row.netPnl), textCell(dispute),
+    textCell(joined(products)), textCell(row.port?.name), textCell(row.port?.countryCode),
+    moneyCell(row.buyer), moneyCell(row.netPnl), textCell(dispute),
   ];
   if (!includeFinanceCosts) return cells;
   const finance = row.finance;
@@ -48,9 +57,9 @@ function exportRowCells(row, includeFinanceCosts) {
   const issues = joined([...(finance?.issues || []), ...(finance?.bankChargeIssues || [])]);
   const evidence = finance ? `${finance.status || (complete ? 'Complete' : 'Unavailable')}${issues ? `: ${issues}` : ''}` : 'Unavailable';
   cells.push(
-    financeCost != null ? numberCell(financeCost) : textCell('Unavailable'),
-    finance?.bankChargeComplete === true && bankCharge != null ? numberCell(bankCharge) : textCell('Unavailable'),
-    complete && ebit != null ? numberCell(ebit) : textCell('Unavailable'),
+    financeCost != null ? moneyCell(financeCost) : textCell('Unavailable'),
+    finance?.bankChargeComplete === true && bankCharge != null ? moneyCell(bankCharge) : textCell('Unavailable'),
+    complete && ebit != null ? moneyCell(ebit) : textCell('Unavailable'),
     textCell(evidence),
   );
   return cells;
@@ -74,7 +83,7 @@ function scopeEntries({ filterPayload, scopeLabels = {}, search, sort, matchingC
   if (includeFinanceCosts) {
     const bankCharges = Object.entries(finance?.bankChargesUsd || {})
       .sort(([left], [right]) => left.localeCompare(right))
-      .map(([bank, amount]) => `${bank} USD ${finiteNumber(amount) ?? 'Unavailable'} per remittance`)
+      .map(([bank, amount]) => `${bank} USD ${finiteNumber(amount)?.toLocaleString('en-US', { maximumFractionDigits: 2 }) ?? 'Unavailable'} per remittance`)
       .join('; ') || 'Unavailable';
     entries.push(
       ['Finance snapshot', `${finance?.annualInterestRatePct ?? 'Unavailable'}% annual; revision ${finance?.revision ?? 'Unavailable'}; calculated ${finance?.asOfDate ?? 'Unavailable'}; ${finance?.dayCountBasis || 'ACT/365'}`],
@@ -133,9 +142,12 @@ export function buildDashboardStemWorkbook({
   if (!Array.isArray(rows)) throw new TypeError('Dashboard export rows must be an array.');
   const book = utils.book_new();
   const headers = includeFinanceCosts ? [...BASE_HEADERS, ...FINANCE_HEADERS] : BASE_HEADERS;
+  const currencies = [...new Set(rows.map((row) => currencyCode(row.currency)))];
+  const commonCurrency = currencies.length === 1 ? currencies[0] : null;
+  const displayHeaders = headers.map((header) => MONEY_HEADERS.has(header) && commonCurrency ? `${header} (${commonCurrency})` : header);
   const chunks = splitRows(rows);
   chunks.forEach((chunk, index) => {
-    const sheet = utils.aoa_to_sheet([headers.map(textCell), ...chunk.map((row) => exportRowCells(row, includeFinanceCosts))]);
+    const sheet = utils.aoa_to_sheet([displayHeaders.map(textCell), ...chunk.map((row) => exportRowCells(row, includeFinanceCosts, commonCurrency))]);
     sheet['!cols'] = headers.map((header) => ({ wch: WIDE_HEADERS.has(header) ? 36 : 19 }));
     utils.book_append_sheet(book, sheet, chunks.length === 1 ? 'STEMs' : `STEMs ${index + 1}`);
   });
@@ -147,9 +159,9 @@ export function buildDashboardStemWorkbook({
     [textCell('Currency totals'), textCell('Totals remain separated by currency.')],
     totalHeaders.map(textCell),
     ...currencyTotals(rows, includeFinanceCosts).map((total) => [
-      textCell(total.currency), numberCell(total.rowCount), total.turnoverComplete ? numberCell(total.turnover) : textCell('Unavailable'), total.grossProfitComplete ? numberCell(total.grossProfit) : textCell('Unavailable'),
+      textCell(total.currency), numberCell(total.rowCount, '#,##0'), total.turnoverComplete ? numberCell(total.turnover) : textCell('Unavailable'), total.grossProfitComplete ? numberCell(total.grossProfit) : textCell('Unavailable'),
       ...(includeFinanceCosts ? [
-        numberCell(total.verifiedStemCount),
+        numberCell(total.verifiedStemCount, '#,##0'),
         total.verifiedStemCount ? numberCell(total.verifiedGrossProfit) : textCell('Unavailable'),
         total.verifiedStemCount ? numberCell(total.financeCost) : textCell('Unavailable'),
         total.verifiedStemCount ? numberCell(total.bankCharge) : textCell('Unavailable'),

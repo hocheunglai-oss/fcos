@@ -115,7 +115,8 @@ test.describe('synthetic Dashboard EBIT, Korea, Finance settings, and XLS fixtur
     expect(workbook.SheetNames).toEqual(['STEMs', 'Scope']);
     const records = utils.sheet_to_json(workbook.Sheets.STEMs, { header: 1 });
     expect(records).toHaveLength(202);
-    expect(records[0]).toContain('Bank Charge');
+    expect(records[0]).toContain('Bank Charge (USD)');
+    expect(records[0]).not.toContain('Currency');
     expect(records[1][0]).toBeTruthy();
     expect(records[201][0]).toBeTruthy();
     const scope = Object.fromEntries(utils.sheet_to_json(workbook.Sheets.Scope, { header: 1 }));

@@ -194,30 +194,33 @@ test('binary XLS contains visible STEM and Scope sheets, literal text, numeric a
   assert.equal(stemRows.length, 3);
   assert.deepEqual(stemRows[0], [
     'STEM', 'Delivery / Expected Date', 'Date Source', 'Vessel', 'Buyer', 'Suppliers',
-    'Products / Quantities', 'Port', 'Country', 'Currency', 'Turnover', 'Gross Profit',
+    'Products / Quantities', 'Port', 'Country', 'Turnover', 'Gross Profit',
     'Dispute', 'Finance Cost', 'Bank Charge', 'EBIT', 'Evidence Status',
   ]);
   assert.deepEqual({ t: sheet.A2.t, v: sheet.A2.v, f: sheet.A2.f }, { t: 's', v: '=SUM(1,1) & <STEM>', f: undefined });
   assert.equal(sheet.B2.v, '2026-09-02');
   assert.equal(sheet.C2.v, 'Actual delivery');
   assert.equal(sheet.D2.v, 'A "quoted" vessel');
-  assert.equal(sheet.K2.v, 1000.25);
-  assert.equal(sheet.K2.t, 'n');
-  assert.equal(sheet.M2.v, 'Disputed');
-  assert.equal(sheet.N2.v, 7.25);
-  assert.equal(sheet.N3.v, 12.5);
+  assert.equal(sheet.J2.v, 1000.25);
+  assert.equal(sheet.J2.t, 'n');
+  assert.equal(sheet.J2.w, 'USD 1,000.25');
+  assert.equal(sheet.J3.w, 'EUR 2,000.00');
+  assert.equal(sheet.L2.v, 'Disputed');
+  assert.equal(sheet.M2.v, 7.25);
+  assert.equal(sheet.M3.v, 12.5);
+  assert.equal(sheet.N2.v, 'Unavailable');
+  assert.equal(sheet.N3.v, 10);
   assert.equal(sheet.O2.v, 'Unavailable');
-  assert.equal(sheet.O3.v, 10);
-  assert.equal(sheet.P2.v, 'Unavailable');
-  assert.equal(sheet.P3.v, 277.5);
-  assert.match(sheet.Q2.v, /Buyer receipt missing/);
-  assert.match(sheet.Q2.v, /Bank evidence missing/);
+  assert.equal(sheet.O3.v, 277.5);
+  assert.match(sheet.P2.v, /Buyer receipt missing/);
+  assert.match(sheet.P2.v, /Bank evidence missing/);
+  assert.ok(!stemRows[0].includes('Currency'));
   assert.ok(!stemRows.flat().includes('Created Date'));
   assert.ok(!stemRows.flat().includes('Closed'));
   assert.ok(!stemRows.flat().includes('Removed dispute detail'));
   assert.deepEqual(
     buildDashboardStemWorkbook({ includeFinanceCosts: true }).Sheets.STEMs['!cols'].map(({ wch }) => wch),
-    [36, 19, 19, 19, 36, 36, 36, 19, 19, 19, 19, 19, 19, 19, 19, 19, 36],
+    [36, 19, 19, 19, 36, 36, 36, 19, 19, 19, 19, 19, 19, 19, 19, 36],
   );
   assert.ok(!book.Workbook.Sheets.some((item) => item.Hidden));
   const scope = utils.sheet_to_json(book.Sheets.Scope, { header: 1 });
@@ -245,12 +248,32 @@ test('XLS finance and bank charge cells follow their own evidence states', () =>
       { finance: { complete: false, financeCost: null, bankCharge: 15, bankChargeComplete: true, ebit: null } },
     ],
   }).Sheets.STEMs;
-  assert.equal(sheet.N2.v, 2);
+  assert.equal(sheet.M2.v, 2);
+  assert.equal(sheet.N2.v, 'Unavailable');
+  assert.equal(sheet.M3.v, 'Unavailable');
+  assert.equal(sheet.N3.v, 15);
   assert.equal(sheet.O2.v, 'Unavailable');
-  assert.equal(sheet.N3.v, 'Unavailable');
-  assert.equal(sheet.O3.v, 15);
-  assert.equal(sheet.P2.v, 'Unavailable');
-  assert.equal(sheet.P3.v, 'Unavailable');
+  assert.equal(sheet.O3.v, 'Unavailable');
+});
+
+test('native XLS groups all amounts and quantity ranges while retaining numeric values and currency labels', async () => {
+  const blob = await createDashboardStemWorkbook({ includeFinanceCosts: true, finance,
+    rows: [{ name: 'STEM-2026001', currency: 'USD', buyer: 1234567.89, netPnl: -2345.67,
+      productQuantities: [{ productName: 'RMG380 (ISO2010)', quantityLabel: '1234.567 MT' }],
+      supplierProductRows: [{ itemName: 'LSMGO', quantityLabel: '2500.125-3500.750 MT' }, { itemName: 'Adjustment', quantityLabel: '-1234.5678 MT' }],
+      finance: { complete: true, bankChargeComplete: true, financeCost: 1234.56, bankCharge: 0, ebit: -3580.23 } }],
+  });
+  const book = read(await blob.arrayBuffer(), { type: 'array', cellNF: true });
+  const sheet = book.Sheets.STEMs;
+  assert.equal(sheet.J1.v, 'Turnover (USD)'); assert.equal(sheet.N1.v, 'Bank Charge (USD)');
+  for (const [cell, value, display] of [['J2', 1234567.89, '1,234,567.89'], ['K2', -2345.67, '-2,345.67'],
+    ['M2', 1234.56, '1,234.56'], ['N2', 0, '0.00'], ['O2', -3580.23, '-3,580.23']]) {
+    assert.equal(sheet[cell].t, 'n'); assert.equal(sheet[cell].v, value); assert.equal(sheet[cell].w, display); assert.equal(sheet[cell].z, '#,##0.00');
+  }
+  assert.equal(sheet.G2.v, 'RMG380 (ISO2010); 1,234.567 MT; LSMGO; 2,500.125-3,500.750 MT; Adjustment; -1,234.5678 MT');
+  assert.equal(sheet.A2.v, 'STEM-2026001');
+  const scopeCells = Object.values(book.Sheets.Scope).filter((cell) => cell?.t === 'n' && cell.v === 1234567.89);
+  assert.equal(scopeCells.length, 1); assert.equal(scopeCells[0].w, '1,234,567.89');
 });
 
 test('XLS currency summaries label verified subsets without including profit from missing-evidence STEMs', () => {

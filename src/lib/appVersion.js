@@ -4,6 +4,15 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.224',
+    releasedAt: '2026-09-21',
+    title: 'Readable XLS amounts and quantities',
+    changes: [
+      'Use standard thousands separators for monetary amounts and quantity labels in Dashboard XLS exports.',
+      'Remove the Currency column while identifying currencies in amount headers or mixed-currency number formats.',
+    ],
+  },
+  {
     version: '2.0.223',
     releasedAt: '2026-09-21',
     title: 'Buyer receipt charges included in EBIT',
