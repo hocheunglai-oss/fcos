@@ -47,6 +47,10 @@ export function calculateStemFinance({ stem, payments = [], supplierInvoices = [
   if (!financeDate(asOfDate)) throw financeError('The financing calculation date is invalid.');
   const issues = [];
   if (!isPaymentDataReliableStem(stem)) issues.push('Payment evidence is unavailable before 1 Jan 2026.');
+  // The 2026 delivery cohort may have been funded before the payment cutover.
+  // Require the server's actual-delivery provenance, never an expected/created date.
+  const actualDeliveryDate = stem.deliveryDateSource === 'delivery' ? financeDate(stem.deliveryDate) : null;
+  const allowPre2026Cash = actualDeliveryDate?.startsWith('2026-') === true;
   if (!sourceComplete) issues.push('Payment evidence could not be loaded completely.');
   if (cents(stem.netPnl) == null || !currency(stem.currency)) issues.push('Gross profit or its currency is unavailable.');
   const invoiceById = new Map(supplierInvoices.map((invoice) => [idKey(invoice.id), invoice]));
@@ -80,7 +84,7 @@ export function calculateStemFinance({ stem, payments = [], supplierInvoices = [
     }
     const nonCash = type !== 'receivable' && type !== 'payable'
       || payment.volumeDiscountId || payment.isVolumeDiscount || payment.isDeposit;
-    if (!nonCash && date < PAYMENT_DATA_RELIABLE_FROM) issues.push('Cash evidence before 1 Jan 2026 is outside the reliable payment history.');
+    if (!nonCash && date < PAYMENT_DATA_RELIABLE_FROM && !allowPre2026Cash) issues.push('Cash evidence before 1 Jan 2026 is outside the reliable payment history.');
     if (payment.currency !== stem.currency) { issues.push('Payment currencies cannot be reconciled without conversion.'); continue; }
     if (payment.stemId && idKey(payment.stemId) !== idKey(stem.id)) { issues.push('A payment points to a different STEM.'); continue; }
     if (type === 'receivable' || type === 'bankcharge' || type === 'writeoff') {

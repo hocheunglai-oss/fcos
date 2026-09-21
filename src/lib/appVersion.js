@@ -4,6 +4,15 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.220',
+    releasedAt: '2026-09-21',
+    title: 'Pre-2026 funding for actual 2026 deliveries',
+    changes: [
+      'Include pre-2026 cash allocations for STEMs actually delivered in 2026, using original payment dates and the full funding period.',
+      'Retain invoice reconciliation, settlement and currency checks, and refresh cached EBIT results.',
+    ],
+  },
+  {
     version: '2.0.219',
     releasedAt: '2026-09-21',
     title: 'Useful EBIT figures with partial payment evidence',

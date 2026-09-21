@@ -94,6 +94,57 @@ test('unresolved settlement and pre-cutover cash evidence cannot produce a compl
   assert.equal(refundAfterFinalReceipt.complete, false);
 });
 
+test('actual 2026 deliveries include pre-cutover supplier cash through final buyer settlement', () => {
+  for (const [paid, paidDate, received, charge, delivered, expectedCost] of [
+    [66780, '2025-12-24', 67282, 18, '2026-01-01', 365.92],
+    [37040, '2025-12-29', 37307, 25, '2026-01-02', 177.59],
+  ]) {
+    const result = run([
+      payment('Payable', paid, paidDate, { supplierInvoiceId: invoiceId }),
+      payment('Receivable', received, '2026-02-02'),
+      payment('Bank_Charge', charge, '2026-02-02'),
+    ], {
+      stem: { ...stem, buyer: received + charge, receivableBalance: 0, deliveryDate: delivered, deliveryDateSource: 'delivery', createdDate: '2025-12-23T08:00:00Z' },
+      finalBuyerInvoiceIssued: true,
+      supplierInvoices: [{ id: invoiceId, stemId, supplierId: supplier, amount: paid, balance: 0, currency: 'USD' }],
+    }, '2026-09-21');
+    assert.equal(result.complete, true); assert.equal(result.financeCost, expectedCost);
+    assert.equal(result.ebit, stem.netPnl - expectedCost);
+    assert.equal(result.status, 'settled'); assert.equal(result.throughDate, '2026-02-02');
+  }
+});
+
+test('2026 delivery exception retains advance receipts, refunds and the full pre-cutover funding period', () => {
+  const delivered = { stem: { ...stem, deliveryDateSource: 'delivery' } };
+  const result = run([
+    payment('Receivable', 50000, '2025-12-01'),
+    payment('Payable', 100000, '2025-12-11'),
+    payment('Payable', -20000, '2025-12-21'),
+  ], delivered, '2026-01-01');
+  assert.equal(result.complete, true); assert.equal(result.financeCost, 113.70);
+  assert.equal(result.accruing, true);
+  assert.equal(run([payment('Receivable', 110000, '2025-12-01'), payment('Payable', 100000, '2025-12-11')], delivered).financeCost, 0);
+});
+
+test('pre-cutover cash exception requires actual 2026 delivery and never bypasses other evidence checks', () => {
+  const paid = payment('Payable', 100000, '2025-12-31');
+  for (const patch of [
+    { deliveryDateSource: 'expected' }, { deliveryDateSource: null },
+    { deliveryDate: null, createdDate: '2026-01-01T00:00:00Z' },
+    { deliveryDate: '2025-12-31', deliveryDateSource: 'delivery' },
+    { deliveryDate: '2027-01-01', deliveryDateSource: 'delivery' },
+    { deliveryDate: '2026-02-30', deliveryDateSource: 'delivery' },
+  ]) assert.equal(run([paid], { stem: { ...stem, ...patch } }).complete, false);
+  const delivered = { ...stem, deliveryDateSource: 'delivery' };
+  for (const result of [
+    run([paid], { stem: delivered, sourceComplete: false }),
+    run([{ ...paid, currency: 'EUR' }], { stem: delivered }),
+    run([{ ...paid, isDeposit: true }], { stem: delivered }),
+    run([paid], { stem: { ...delivered, receivableBalance: 0 } }),
+    run([paid], { stem: delivered, supplierInvoices: [{ id: invoiceId, stemId, supplierId: supplier, amount: 100000, balance: 0, currency: 'USD' }] }),
+  ]) { assert.equal(result.complete, false); assert.equal(result.financeCost, null); }
+});
+
 test('bank charges reconcile final settlement but never become buyer cash receipts', () => {
   const result = run([payment('Payable', 100000, '2026-01-01'), payment('Receivable', 109980, '2026-01-11'), payment('Bank_Charge', 20, '2026-01-11'), payment('Receivable', 0, '2026-01-12')], {
     stem: { ...stem, receivableBalance: 0 }, finalBuyerInvoiceIssued: true,
@@ -187,7 +238,7 @@ test('Hong Kong calendar and rate revision lock a multi-page finance export', ()
   }
 });
 
-function loaderFixture({ broken = false, directStem = true } = {}) {
+function loaderFixture({ broken = false, directStem = true, paymentDate = '2026-01-01' } = {}) {
   const schemas = {
     Payment__c: ['Id', 'STEM__c', 'Account__c', 'RecordTypeId', 'Amount__c', 'Date__c', 'Supplier_Invoice__c', 'Volume_Discount__c', 'Is_Volume_Discount__c', 'Is_Deposit__c', 'Commission_Invoice__c', 'Remittance__c'],
     Supplier_Invoice__c: ['Id', 'STEM__c', 'Supplier__c', 'Invoice_Amount__c', 'Payable_Balance__c'],
@@ -206,7 +257,7 @@ function loaderFixture({ broken = false, directStem = true } = {}) {
       if (object === 'Supplier_Invoice__c') return [{ Id: invoiceId, STEM__c: stemId, Supplier__c: supplier, Invoice_Amount__c: 100000, Payable_Balance__c: 0 }];
       if (object === 'Payment__c') {
         if (!directStem && query.includes('WHERE STEM__c')) return [];
-        return [{ Id: 'a03000000000001', STEM__c: directStem ? stemId : null, Account__c: supplier, Supplier_Invoice__c: invoiceId, Amount__c: 100000, Date__c: '2026-01-01', RecordType: { DeveloperName: 'Payable' } }];
+        return [{ Id: 'a03000000000001', STEM__c: directStem ? stemId : null, Account__c: supplier, Supplier_Invoice__c: invoiceId, Amount__c: 100000, Date__c: paymentDate, RecordType: { DeveloperName: 'Payable' } }];
       }
       return [];
     },
@@ -228,6 +279,17 @@ test('finance source failures retain the STEM and withhold its finance result', 
   const { loader } = loaderFixture({ broken: true });
   const [row] = await loader([stem], settings, '2026-01-31');
   assert.equal(row.id, stem.id); assert.equal(row.netPnl, stem.netPnl); assert.equal(row.finance.complete, false);
+});
+
+test('finance enrichment preserves actual-delivery provenance for pre-2026 cash, including invoice-only links', async () => {
+  for (const directStem of [true, false]) {
+    const { loader } = loaderFixture({ directStem, paymentDate: '2025-12-22' });
+    const [actual, expected] = await loader([
+      { ...stem, deliveryDateSource: 'delivery' }, { ...stem, deliveryDateSource: 'expected' },
+    ], settings, '2026-01-01');
+    assert.equal(actual.finance.complete, true); assert.equal(actual.finance.financeCost, 136.99);
+    assert.equal(expected.finance.complete, false); assert.match(expected.finance.issues.join(' '), /before 1 Jan 2026/);
+  }
 });
 
 test('financing rate validation rejects blanks, coerced booleans, out-of-range and excess precision', () => {
