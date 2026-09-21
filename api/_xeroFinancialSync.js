@@ -300,11 +300,18 @@ export async function xeroFinancialSyncPreview(body = {}, dependencies = {}) {
   const snapshotStartedAt = new Date().toISOString();
   const rate = {};
   const onResponse = ({ headers }) => { Object.assign(rate, xeroFinancialRateSnapshot(headers, rate)); assertXeroFinancialDailyReserve(rate, env); };
-  const [salesforce, xero, stored] = await Promise.all([
+  const [salesforce, stored, sourcePayments, paymentMappings] = await Promise.all([
     loadSalesforceFinancialSnapshot(cutoff),
-    loadXeroFinancialSnapshot(connection, cutoff, { env, fetchImpl, onResponse, includePayments: body.includePayments === true }),
     loadStoredFinancialControls(client),
+    body.includePayments === true ? loadSalesforcePayments(cutoff) : Promise.resolve([]),
+    body.includePayments === true ? allFinancialRows(client, 'xero_financial_payment_mappings') : Promise.resolve({ data: [] }),
   ]);
+  if (paymentMappings.error) throw storageError(paymentMappings.error, 'xero_financial_payment_mappings');
+  const evidenceIds = xeroPaymentEvidenceIds(sourcePayments, stored.documentMappings, paymentMappings.data);
+  const xero = await loadXeroFinancialSnapshot(connection, cutoff, {
+    env, fetchImpl, onResponse, includePayments: body.includePayments === true, ...evidenceIds,
+  });
+  if (xero.paymentReadSnapshot) xero.paymentReadSnapshot.sourcePayments = sourcePayments;
   const classified = buildFinancialClassifications(salesforce, xero, stored);
   const disputeStates = await loadDisputeReconciliationStates(client, classified.rows.map((row) => row.stemId));
   for (const row of classified.rows) row.dispute = disputeStates.get(row.stemId) || null;
@@ -672,7 +679,7 @@ async function previewPayments(body, { accessContext, env, fetchImpl, client, xe
   const connection = await getFreshXeroConnection(client, { env, fetchImpl });
   assertScopes(connection, ['accounting.payments.read', 'accounting.invoices'], 'Payment preview');
   const [payments, documentMappings, paymentMappings, bankMappings] = await Promise.all([
-    loadSalesforcePayments(cutoff),
+    xeroReadSnapshot?.sourcePayments || loadSalesforcePayments(cutoff),
     allFinancialRows(client, 'xero_financial_document_mappings'),
     allFinancialRows(client, 'xero_financial_payment_mappings'),
     allFinancialRows(client, 'xero_financial_bank_mappings', (query) => query.eq('enabled', true)),
@@ -680,10 +687,11 @@ async function previewPayments(body, { accessContext, env, fetchImpl, client, xe
   for (const result of [documentMappings, paymentMappings, bankMappings]) if (result.error) throw storageError(result.error, 'xero_financial_payment_preview');
   const rate = {};
   const onResponse = ({ headers }) => Object.assign(rate, xeroFinancialRateSnapshot(headers, rate));
-  const [xeroPayments, xeroInvoices] = xeroReadSnapshot ? [xeroReadSnapshot.payments, xeroReadSnapshot.invoices] : await Promise.all([
-    loadAllXeroPages(connection, '/Payments', 'Payments', { env, fetchImpl, onResponse }),
-    loadAllXeroPages(connection, '/Invoices', 'Invoices', { env, fetchImpl, onResponse }),
-  ]);
+  const readSnapshot = xeroReadSnapshot || await loadXeroPaymentEvidence(connection, cutoff, {
+    env, fetchImpl, onResponse,
+    ...xeroPaymentEvidenceIds(payments, documentMappings.data, paymentMappings.data),
+  });
+  const [xeroPayments, xeroInvoices] = [readSnapshot.payments, readSnapshot.invoices];
   const documentBySupplierInvoice = new Map((documentMappings.data || []).filter((row) => row.salesforce_object === 'Supplier_Invoice__c').map((row) => [row.salesforce_id, row]));
   const documentMappingById = new Map((documentMappings.data || []).map((row) => [row.id, row]));
   const buyerByStem = index((documentMappings.data || []).filter((row) => row.salesforce_object === 'Invoice__c'), (row) => row.retained_differences?.stemId || row.stem_id);
@@ -885,25 +893,28 @@ async function loadSalesforcePayments(cutoff) {
   return result.records || [];
 }
 
-export async function loadXeroFinancialSnapshot(connection, cutoff, { env, fetchImpl, onResponse = () => {}, includePayments = false, requestGate }) {
+export async function loadXeroFinancialSnapshot(connection, cutoff, { env, fetchImpl, onResponse = () => {}, includePayments = false, requestGate, invoiceIds = [], paymentIds = [] }) {
   const where = encodeURIComponent(`Date>=DateTime(${cutoff.replaceAll('-', ',')})`);
   let callCount = 0;
   const observed = (event) => { callCount += 1; onResponse(event); };
   const options = { env, fetchImpl, onResponse: observed, requestGate };
-  // Payment verification needs historical invoices too. Read that complete population once,
-  // then retain the original accounting-date scope for document classifications.
+  // Read the complete accounting-date scope, then fetch only historical records that
+  // current payments actually reference. Unrelated history must not consume the scan limit.
   // All provider reads finish before any new saved reconciliation is persisted.
   const [invoices, creditNotes, contacts, payments] = await Promise.all([
-    loadAllXeroPages(connection, includePayments ? '/Invoices' : `/Invoices?where=${where}`, 'Invoices', options),
+    loadAllXeroPages(connection, `/Invoices?where=${where}`, 'Invoices', options),
     loadAllXeroPages(connection, `/CreditNotes?where=${where}`, 'CreditNotes', options),
     loadAllXeroPages(connection, '/Contacts', 'Contacts', options),
-    includePayments ? loadAllXeroPages(connection, '/Payments', 'Payments', options) : Promise.resolve(null),
+    includePayments ? loadAllXeroPages(connection, `/Payments?where=${where}`, 'Payments', options) : Promise.resolve(null),
   ]);
+  const paymentReadSnapshot = includePayments ? await loadXeroPaymentEvidence(connection, cutoff, {
+    ...options, invoices, payments, invoiceIds, paymentIds,
+  }) : null;
   const organisations = await xeroAccountingFetch(connection, '/Organisations', {
     method: 'GET', ...options,
   }).then((response) => response.Organisations?.[0] || {});
   const documents = [
-    ...invoices.filter((row) => !includePayments || dateOnly(row.Date) >= cutoff).map(normalizeXeroInvoice),
+    ...invoices.map(normalizeXeroInvoice),
     ...creditNotes.map(normalizeXeroCreditNote),
   ];
   return {
@@ -915,13 +926,61 @@ export async function loadXeroFinancialSnapshot(connection, cutoff, { env, fetch
       endOfYearLockDate: dateOnly(organisations.EndOfYearLockDate),
     },
     callCount,
-    paymentReadSnapshot: includePayments ? { invoices, payments } : null,
+    paymentReadSnapshot,
     fingerprintBasis: {
       documents: documents.map((row) => ({ id: row.id, status: row.status, updated: row.updatedDateUTC, total: row.total, number: exactDocumentNumber(row) })),
       contacts: contacts.map((row) => ({ id: row.ContactID, name: row.Name, status: row.ContactStatus })),
       organisation: { periodLockDate: organisations.PeriodLockDate, endOfYearLockDate: organisations.EndOfYearLockDate },
     },
   };
+}
+
+export function xeroPaymentEvidenceIds(payments = [], documentMappings = [], paymentMappings = []) {
+  const sourceIds = new Set(payments.map((row) => row.Id));
+  const supplierIds = new Set(payments.map((row) => row.Supplier_Invoice__c).filter(Boolean));
+  const stems = new Set(payments.map((row) => row.STEM__c).filter(Boolean));
+  const existing = paymentMappings.filter((row) => sourceIds.has(row.salesforce_payment_id));
+  const mappedDocumentIds = new Set(existing.map((row) => row.document_mapping_id));
+  return {
+    invoiceIds: uniqueStrings(documentMappings.filter((row) => mappedDocumentIds.has(row.id)
+      || (row.salesforce_object === 'Supplier_Invoice__c' && supplierIds.has(row.salesforce_id))
+      || (row.salesforce_object === 'Invoice__c' && stems.has(row.retained_differences?.stemId || row.stem_id)))
+      .map((row) => row.xero_document_id)),
+    paymentIds: uniqueStrings(existing.map((row) => row.xero_payment_id)),
+  };
+}
+
+export async function loadXeroPaymentEvidence(connection, cutoff, {
+  env, fetchImpl, onResponse = () => {}, requestGate, invoices = null, payments = null, invoiceIds = [], paymentIds = [],
+}) {
+  const options = { env, fetchImpl, onResponse, requestGate };
+  const where = encodeURIComponent(`Date>=DateTime(${cutoff.replaceAll('-', ',')})`);
+  const [scopedInvoices, scopedPayments] = await Promise.all([
+    invoices || loadAllXeroPages(connection, `/Invoices?where=${where}`, 'Invoices', options),
+    payments || loadAllXeroPages(connection, `/Payments?where=${where}`, 'Payments', options),
+  ]);
+  const paymentById = new Map(scopedPayments.map((row) => [row.PaymentID, row]));
+  // A previously linked payment may have moved outside the date scope. Re-read it
+  // explicitly so its changed date/amount is still classified as a conflict.
+  for (const id of uniqueStrings(paymentIds).filter((id) => !paymentById.has(id))) {
+    try {
+      const response = await xeroAccountingFetch(connection, `/Payments/${encodeURIComponent(id)}`, { method: 'GET', ...options });
+      if (!Array.isArray(response.Payments)) throw financialError('Xero payment evidence was incomplete.', 502, 'XERO_FINANCIAL_XERO_INCOMPLETE');
+      if (response.Payments.some((row) => row.PaymentID !== id)) throw financialError('Xero returned mismatched payment evidence.', 502, 'XERO_FINANCIAL_XERO_INCOMPLETE');
+      for (const row of response.Payments) paymentById.set(id, row);
+    } catch (error) {
+      if (error.status !== 404) throw error;
+    }
+  }
+  const invoiceById = new Map(scopedInvoices.map((row) => [row.InvoiceID, row]));
+  const requiredIds = uniqueStrings([...invoiceIds, ...[...paymentById.values()].map((row) => row.Invoice?.InvoiceID)]);
+  // Keep encoded UUID lists below the provider's query-string size limit.
+  for (const batch of chunks(requiredIds.filter((id) => !invoiceById.has(id)), 50)) {
+    const historical = await loadAllXeroPages(connection, `/Invoices?IDs=${encodeURIComponent(batch.join(','))}`, 'Invoices', options);
+    if (historical.some((row) => !batch.includes(row.InvoiceID))) throw financialError('Xero returned mismatched invoice evidence.', 502, 'XERO_FINANCIAL_XERO_INCOMPLETE');
+    for (const row of historical) invoiceById.set(row.InvoiceID, row);
+  }
+  return { invoices: [...invoiceById.values()], payments: [...paymentById.values()] };
 }
 
 export async function allFinancialRows(client, table, configure = (query) => query) {

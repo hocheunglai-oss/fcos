@@ -4,6 +4,16 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.226',
+    releasedAt: '2026-09-22',
+    title: 'Complete Xero reconciliation within the 2026 scope',
+    changes: [
+      'Scan every invoice, credit note and payment from 2026 without loading unrelated historical accounting records.',
+      'Re-read older invoices and changed linked payments by their exact Xero identifiers when current payment verification needs them.',
+      'Complete Xero reads before saving the review and preserve rate-limit recovery and financial approval safeguards.',
+    ],
+  },
+  {
     version: '2.0.225',
     releasedAt: '2026-09-22',
     title: 'Xero reconciliation rate-limit recovery',
