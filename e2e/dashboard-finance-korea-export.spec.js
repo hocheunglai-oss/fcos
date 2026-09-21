@@ -1,4 +1,6 @@
 import { expect, test } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
+import { read, utils } from 'xlsx';
 
 const FIXTURE_PATH = '/e2e/fixtures/dashboard-preview.html';
 const FIXTURE_ORIGIN = new URL(process.env.FCOS_E2E_BASE_URL || 'http://127.0.0.1:5173').origin;
@@ -99,7 +101,19 @@ test.describe('synthetic Dashboard EBIT, Korea, Finance settings, and XLS fixtur
       page.waitForEvent('download'),
       page.getByRole('button', { name: 'Export XLS', exact: true }).click(),
     ]);
-    expect(download.suggestedFilename()).toMatch(/^FCOS_Dashboard_STEMs_\d{4}-\d{2}-\d{2}\.xls$/);
+    expect(download.suggestedFilename()).toBe('FCOS_Dashboard_STEMs_2026-01-01_to_2026-12-31_Exclude_Korea_Desk.xls');
+    const bytes = await readFile(await download.path());
+    expect([...bytes.subarray(0, 8)]).toEqual([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
+    const workbook = read(bytes, { type: 'buffer' });
+    expect(workbook.SheetNames).toEqual(['STEMs', 'Scope']);
+    const records = utils.sheet_to_json(workbook.Sheets.STEMs, { header: 1 });
+    expect(records).toHaveLength(202);
+    expect(records[1][0]).toBeTruthy();
+    expect(records[201][0]).toBeTruthy();
+    const scope = Object.fromEntries(utils.sheet_to_json(workbook.Sheets.Scope, { header: 1 }));
+    expect(scope['Exported STEM rows']).toBe('201');
+    expect(scope.Period).toBe('2026-01-01 to 2026-12-31');
+    expect(scope['Korea Desk']).toBe('Exclude Korea Desk');
     await expect(page.getByText('Exported 201 STEMs.')).toBeVisible();
     const exportRequests = await page.evaluate(() => window.__fixtureDashboardStemRequests);
     const completedRequests = exportRequests.slice(-2);

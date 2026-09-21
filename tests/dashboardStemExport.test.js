@@ -2,10 +2,14 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
-  buildDashboardStemWorkbookXml,
-  dashboardStemExportInternals,
+  createDashboardStemWorkbook,
+  dashboardStemExportFileName,
+  dashboardStemExportPeriod,
   fetchAllDashboardStems,
 } from '../src/lib/dashboardStemExport.js';
+
+import { read, utils } from 'xlsx';
+import { buildDashboardStemWorkbook, dashboardStemWorkbookInternals as dashboardStemExportInternals } from '../src/lib/dashboardStemWorkbook.js';
 
 const finance = {
   annualInterestRatePct: 5,
@@ -119,8 +123,8 @@ test('Dashboard XLS export cancellation prevents workbook generation', async () 
   await assert.rejects(request, (error) => error.name === 'AbortError');
 });
 
-test('SpreadsheetML keeps text literal, escapes XML, separates currency totals, and marks unavailable finance', () => {
-  const xml = buildDashboardStemWorkbookXml({
+test('binary XLS contains visible STEM and Scope sheets, literal text, numeric amounts and unavailable evidence', async () => {
+  const blob = await createDashboardStemWorkbook({
     rows: [{
       id: 'one',
       name: '=SUM(1,1) & <STEM>',
@@ -147,24 +151,30 @@ test('SpreadsheetML keeps text literal, escapes XML, separates currency totals, 
     finance: { ...finance, complete: false, warnings: ['One <warning>'] },
     generatedAt: '2026-09-20T01:02:03.000Z',
   });
-
-  assert.match(xml, /<Worksheet ss:Name="STEMs">/);
-  assert.match(xml, /<Worksheet ss:Name="Scope">/);
-  assert.match(xml, /<Data ss:Type="String">=SUM\(1,1\) &amp; &lt;STEM&gt;<\/Data>/);
-  assert.doesNotMatch(xml, /ss:Formula|<Formula|<Macro/);
-  assert.match(xml, /A &quot;quoted&quot; vessel/);
-  assert.match(xml, /literal &amp; search/);
-  assert.match(xml, /excludedCountryCodes/);
-  assert.match(xml, /KOREA/);
-  assert.match(xml, /Year to date/);
-  assert.match(xml, /Exclude Korea Desk/);
-  assert.match(xml, /Finance snapshot/);
-  assert.match(xml, /revision 7/);
-  assert.match(xml, /Actual|ACT\/365/);
-  assert.match(xml, /Unavailable/);
-  assert.match(xml, /Buyer receipt missing/);
-  assert.match(xml, /<Data ss:Type="Number">12\.5<\/Data>/);
-  assert.ok(xml.indexOf('USD') < xml.indexOf('EUR') || xml.indexOf('EUR') < xml.indexOf('USD'));
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  assert.deepEqual([...bytes.slice(0, 8)], [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
+  const book = read(bytes, { type: 'array' });
+  assert.deepEqual(book.SheetNames, ['STEMs', 'Scope']);
+  const sheet = book.Sheets.STEMs;
+  assert.equal(utils.sheet_to_json(sheet, { header: 1 }).length, 3);
+  assert.deepEqual({ t: sheet.A2.t, v: sheet.A2.v, f: sheet.A2.f }, { t: 's', v: '=SUM(1,1) & <STEM>', f: undefined });
+  assert.equal(sheet.E2.v, 'A "quoted" vessel');
+  assert.equal(sheet.L2.v, 1000.25);
+  assert.equal(sheet.L2.t, 'n');
+  assert.equal(sheet.Q2.v, 'Unavailable');
+  assert.equal(sheet.Q3.v, 12.5);
+  assert.equal(sheet.R3.v, 287.5);
+  assert.match(sheet.S2.v, /Buyer receipt missing/);
+  assert.ok(!book.Workbook.Sheets.some((item) => item.Hidden));
+  const scope = utils.sheet_to_json(book.Sheets.Scope, { header: 1 });
+  const entries = Object.fromEntries(scope);
+  assert.equal(entries['Exported STEM rows'], '2');
+  assert.equal(entries['Submitted text search'], 'literal & search');
+  assert.equal(entries['Korea Desk'], 'Exclude Korea Desk');
+  assert.match(entries['Finance snapshot'], /revision 7/);
+  assert.equal(entries['Finance warnings'], 'One <warning>');
+  assert.ok(scope.some((row) => row[0] === 'USD'));
+  assert.ok(scope.some((row) => row[0] === 'EUR'));
 });
 
 test('oversized Dashboard selections split into bounded worksheet chunks', () => {
@@ -182,11 +192,13 @@ test('XLS currency summaries label verified subsets without including profit fro
   assert.equal(usd.financeComplete, false); assert.equal(usd.rowCount, 2); assert.equal(usd.verifiedStemCount, 1);
   assert.equal(usd.grossProfit, 400); assert.equal(usd.verifiedGrossProfit, 300);
   assert.equal(usd.financeCost, 12.5); assert.equal(usd.ebit, 287.5); assert.equal(eur.verifiedStemCount, 0);
-  const scope = buildDashboardStemWorkbookXml({ rows, includeFinanceCosts: true, finance }).split('<Worksheet ss:Name="Scope">')[1];
-  assert.match(scope, /Verified STEMs/); assert.match(scope, /Verified EBIT/);
-  assert.match(scope, /<Data ss:Type="Number">287\.5<\/Data>/);
-  assert.match(scope, /<Data ss:Type="String">Unavailable<\/Data>/);
-  assert.match(scope, /Unknown costs are never zero/);
+  const scope = utils.sheet_to_json(buildDashboardStemWorkbook({ rows, includeFinanceCosts: true, finance }).Sheets.Scope, { header: 1 });
+  assert.ok(scope.some((row) => row.includes('Verified STEMs') && row.includes('Verified EBIT')));
+  const usdRow = scope.find((row) => row[0] === 'USD');
+  assert.equal(usdRow[7], 287.5);
+  const eurRow = scope.find((row) => row[0] === 'EUR');
+  assert.equal(eurRow[7], 'Unavailable');
+  assert.match(Object.fromEntries(scope)['Missing-data note'], /Unknown costs are never zero/);
 });
 
 test('currency totals withhold partial turnover or gross profit instead of summing missing rows as zero', () => {
@@ -198,13 +210,12 @@ test('currency totals withhold partial turnover or gross profit instead of summi
   assert.equal(totals.grossProfit, 20);
   assert.equal(totals.turnoverComplete, false);
   assert.equal(totals.grossProfitComplete, false);
-  const xml = buildDashboardStemWorkbookXml({ rows: [
+  const book = buildDashboardStemWorkbook({ rows: [
     { id: 'one', currency: 'USD', buyer: 100, netPnl: 20 },
     { id: 'two', currency: 'USD', buyer: null, netPnl: null },
   ] });
-  const scope = xml.slice(xml.indexOf('<Worksheet ss:Name="Scope">'));
-  assert.match(scope, /USD/);
-  assert.equal((scope.match(/>Unavailable</g) || []).length, 2);
+  const scope = utils.sheet_to_json(book.Sheets.Scope, { header: 1 });
+  assert.deepEqual(scope.find((row) => row[0] === 'USD'), ['USD', 2, 'Unavailable', 'Unavailable']);
 });
 
 test('enabled EBIT refreshes after a rate update and across Hong Kong date visibility changes', async () => {
@@ -214,4 +225,48 @@ test('enabled EBIT refreshes after a rate update and across Hong Kong date visib
   assert.match(page, /millisecondsUntilNextHongKongDate/);
   assert.match(page, /document\.addEventListener\('visibilitychange'/);
   assert.match(page, /refreshFinanceSummary/);
+});
+
+const halfYear = [1, 2, 3, 4, 5, 6].map((month) => ({ startDate: `2026-${String(month).padStart(2, '0')}-01`, endDate: new Date(Date.UTC(2026, month, 0)).toISOString().slice(0, 10) }));
+
+test('export filenames use selected delivery windows and active desk labels instead of generation date', async () => {
+  const filterPayload = { dateWindows: halfYear, filters: { countryCodes: ['KOREA'] } };
+  assert.equal(dashboardStemExportFileName({ filterPayload }), 'FCOS_Dashboard_STEMs_2026-01-01_to_2026-06-30_Korea_Desk.xls');
+  assert.equal(dashboardStemExportPeriod(filterPayload), '2026-01-01 to 2026-06-30');
+  const blob = await createDashboardStemWorkbook({ filterPayload, scopeLabels: { period: 'custom' } });
+  const scope = utils.sheet_to_json(read(await blob.arrayBuffer(), { type: 'array' }).Sheets.Scope, { header: 1 });
+  assert.equal(Object.fromEntries(scope).Period, '2026-01-01 to 2026-06-30');
+  assert.match(dashboardStemExportFileName({ filterPayload: { ...filterPayload, filters: { excludedCountryCodes: ['KOREA'] }, disputeOnly: true } }), /Exclude_Korea_Desk_Disputed_only\.xls$/);
+  assert.match(dashboardStemExportFileName({ filterPayload, scopeLabels: { counterparty: 'A/B: <buyer>?*' } }), /Korea_Desk_AB_buyer\.xls$/);
+});
+
+test('discontinuous delivery periods stay explicit and filename lengths remain safe', () => {
+  assert.equal(dashboardStemExportPeriod({ dateWindows: [halfYear[2], halfYear[0]] }), '2026-01-01 to 2026-01-31; 2026-03-01 to 2026-03-31');
+  assert.match(dashboardStemExportFileName({ filterPayload: { dateWindows: [halfYear[0], halfYear[2]] } }), /2026-01-31_and_2026-03-01/);
+  assert.match(dashboardStemExportFileName({}), /All_delivery_dates\.xls$/);
+  assert.ok(Buffer.byteLength(dashboardStemExportFileName({ scopeLabels: { counterparty: '韓'.repeat(100) } })) <= 244);
+  assert.throws(() => dashboardStemExportFileName({ filterPayload: { dateWindows: [{ startDate: '2026-02-30', endDate: '2026-03-10' }] } }), /invalid delivery period/);
+});
+
+test('native XLS preserves Unicode and formula-like text without executing or silently truncating it', async () => {
+  const names = ['한국 선박 船舶', '=1+1', '+SUM(1,1)', '-1+1', '@SUM(1,1)', '<tag>&"quoted"', '韓'.repeat(4000)];
+  const blob = await createDashboardStemWorkbook({ rows: names.map((name) => ({ name })) });
+  const book = read(await blob.arrayBuffer(), { type: 'array' });
+  names.forEach((name, index) => {
+    const cell = book.Sheets.STEMs[`A${index + 2}`];
+    assert.equal(cell.v, name); assert.equal(cell.t, 's'); assert.equal(cell.f, undefined);
+  });
+  await assert.rejects(createDashboardStemWorkbook({ rows: [{ name: 'a'.repeat(4001) }] }), /exceeds the supported XLS limit/);
+});
+
+test('native XLS exports more than the legacy worksheet row limit without dropping records', async () => {
+  const rows = Array.from({ length: 65_537 }, (_, index) => ({ name: `STEM-${index}`, currency: 'USD', buyer: 1, netPnl: 0 }));
+  const blob = await createDashboardStemWorkbook({ rows });
+  const book = read(await blob.arrayBuffer(), { type: 'array' });
+  assert.deepEqual(book.SheetNames, ['STEMs 1', 'STEMs 2', 'Scope']);
+  const first = utils.sheet_to_json(book.Sheets['STEMs 1'], { header: 1 });
+  const second = utils.sheet_to_json(book.Sheets['STEMs 2'], { header: 1 });
+  assert.equal(first.length - 1, 60_000); assert.equal(second.length - 1, 5537);
+  assert.equal(first[1][0], 'STEM-0'); assert.equal(second.at(-1)[0], 'STEM-65536');
+  assert.equal(Object.fromEntries(utils.sheet_to_json(book.Sheets.Scope, { header: 1 }))['Exported STEM rows'], '65537');
 });

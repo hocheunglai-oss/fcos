@@ -4,6 +4,15 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.221',
+    releasedAt: '2026-09-21',
+    title: 'Readable Dashboard XLS workbooks and delivery-period filenames',
+    changes: [
+      'Export a native Excel XLS workbook with all selected STEM records, readable in Excel-compatible spreadsheet apps.',
+      'Name exports using the selected delivery period and desk or other active filter labels, and record the exact periods in Scope.',
+    ],
+  },
+  {
     version: '2.0.220',
     releasedAt: '2026-09-21',
     title: 'Pre-2026 funding for actual 2026 deliveries',

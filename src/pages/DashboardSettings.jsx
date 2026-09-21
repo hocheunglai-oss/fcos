@@ -74,7 +74,6 @@ export default function DashboardSettings() {
   const filterPayload = useMemo(() => dashboardFilterPayload(filters), [filters]);
   const filterKey = useMemo(() => dashboardFilterKey(filters), [filters]);
   const exportScopeLabels = useMemo(() => ({
-    period: filters.datePreset || 'custom',
     counterparty: filters.counterparty?.name || filters.company || filters.group || 'All',
     port: filters.port || 'All',
     country: filters.country || 'All',

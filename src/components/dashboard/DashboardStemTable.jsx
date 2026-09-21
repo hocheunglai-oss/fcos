@@ -183,7 +183,7 @@ export default function DashboardStemTable({
       if (controller.signal.aborted || exportAbortRef.current !== controller) return;
       setExportState({ busy: true, message: 'Building XLS locally…' });
       const generatedAt = new Date();
-      const blob = exportModule.createDashboardStemWorkbook({
+      const blob = await exportModule.createDashboardStemWorkbook({
         rows: exported.rows,
         filterPayload: exportFilterPayload,
         scopeLabels: exportScopeLabels,
@@ -194,7 +194,7 @@ export default function DashboardStemTable({
         generatedAt: generatedAt.toISOString(),
       });
       if (controller.signal.aborted || exportAbortRef.current !== controller) return;
-      exportModule.downloadDashboardStemWorkbook(blob, exportModule.dashboardStemExportFileName(generatedAt));
+      exportModule.downloadDashboardStemWorkbook(blob, exportModule.dashboardStemExportFileName({ filterPayload: exportFilterPayload, scopeLabels: exportScopeLabels }));
       setExportState({ message: `Exported ${exported.rows.length.toLocaleString()} STEMs.` });
     } catch (error) {
       if (exportAbortRef.current !== controller) return;

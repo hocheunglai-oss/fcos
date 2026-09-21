@@ -183,3 +183,96 @@ test('the optional PDF viewer must also satisfy its combined compressed budget',
   const report = await verifyPerformanceBudgets({ root });
   assert.match(report.failures.join('\n'), /Compressed on-demand PDF viewer/);
 });
+
+async function writeXlsWriterFixture() {
+  const root = await writeFixture({ ...defaultBudgets, onDemandXlsWriter: {
+    largestAssetBytes: 500, totalBytes: 700, totalGzipBytes: 300,
+  } });
+  const key = 'src/lib/dashboardStemWorkbook.js';
+  const dependencyKey = '_xlsx-core-test.js';
+  const manifest = {
+    'index.html': { isEntry: true, file: 'assets/main.js', dynamicImports: [key] },
+    [key]: { isDynamicEntry: true, file: 'assets/dashboardStemWorkbook-test.js', imports: [dependencyKey] },
+    [dependencyKey]: { file: 'assets/xlsx-core-test.js' },
+  };
+  await mkdir(path.join(root, 'dist/.vite'));
+  await Promise.all([
+    writeFile(path.join(root, 'dist/.vite/manifest.json'), JSON.stringify(manifest)),
+    writeFile(path.join(root, 'dist/assets/dashboardStemWorkbook-test.js'), 'w'.repeat(200)),
+    writeFile(path.join(root, 'dist/assets/xlsx-core-test.js'), 'x'.repeat(400)),
+  ]);
+  return { root, manifest, key, dependencyKey };
+}
+
+test('on-demand XLS writer budgets its complete exclusive static import closure', async (t) => {
+  const { root } = await writeXlsWriterFixture();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const report = await verifyPerformanceBudgets({ root });
+  assert.deepEqual(report.failures, []);
+  assert.deepEqual(report.clientAssets.onDemandXlsWriter.assets.toSorted(), [
+    'dashboardStemWorkbook-test.js',
+    'xlsx-core-test.js',
+  ]);
+  assert.equal(report.clientAssets.onDemandXlsWriter.bytes, 600);
+  assert.equal(report.clientAssets.onDemandXlsWriter.largestBytes, 400);
+  assert.equal(report.clientAssets.ordinaryBytes, 'export const asset = true;'.length);
+});
+
+test('an eagerly reachable XLS writer cannot use the on-demand budget', async (t) => {
+  const { root, manifest, key } = await writeXlsWriterFixture();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  manifest['index.html'].imports = [key];
+  await writeFile(path.join(root, 'dist/.vite/manifest.json'), JSON.stringify(manifest));
+  const report = await verifyPerformanceBudgets({ root });
+  assert.match(report.failures.join('\n'), /no eager reachability/);
+  assert.equal(report.clientAssets.onDemandXlsWriter, null);
+  assert.ok(report.clientAssets.ordinaryBytes > 600);
+});
+
+test('a statically shared XLS dependency cannot be excluded from the ordinary budget', async (t) => {
+  const { root, manifest, dependencyKey } = await writeXlsWriterFixture();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  manifest['other-feature.js'] = { isDynamicEntry: true, file: 'assets/other-feature.js', imports: [dependencyKey] };
+  await Promise.all([
+    writeFile(path.join(root, 'dist/.vite/manifest.json'), JSON.stringify(manifest)),
+    writeFile(path.join(root, 'dist/assets/other-feature.js'), 'o'.repeat(100)),
+  ]);
+  const report = await verifyPerformanceBudgets({ root });
+  assert.match(report.failures.join('\n'), /must not be statically shared/);
+  assert.equal(report.clientAssets.onDemandXlsWriter, null);
+  assert.ok(report.clientAssets.ordinaryBytes > 700);
+});
+
+test('missing XLS manifest, entry, dependency, and emitted assets fail closed', async (t) => {
+  for (const missing of ['manifest-file', 'entry', 'manifest-node', 'emitted-asset']) {
+    const { root, manifest, key, dependencyKey } = await writeXlsWriterFixture();
+    t.after(() => rm(root, { recursive: true, force: true }));
+    if (missing === 'manifest-file') {
+      await rm(path.join(root, 'dist/.vite/manifest.json'));
+    } else if (missing === 'entry') {
+      delete manifest[key];
+      await writeFile(path.join(root, 'dist/.vite/manifest.json'), JSON.stringify(manifest));
+    } else if (missing === 'manifest-node') {
+      delete manifest[dependencyKey];
+      await writeFile(path.join(root, 'dist/.vite/manifest.json'), JSON.stringify(manifest));
+    } else {
+      await rm(path.join(root, 'dist/assets/xlsx-core-test.js'));
+    }
+    const report = await verifyPerformanceBudgets({ root });
+    assert.ok(report.failures.some((message) => /XLS writer/.test(message)));
+    assert.equal(report.clientAssets.onDemandXlsWriter, null);
+  }
+});
+
+test('on-demand XLS writer enforces largest, total, and compressed limits', async (t) => {
+  const { root } = await writeXlsWriterFixture();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeFile(path.join(root, 'config/performance-budgets.json'), JSON.stringify({
+    ...defaultBudgets,
+    onDemandXlsWriter: { largestAssetBytes: 399, totalBytes: 599, totalGzipBytes: 1 },
+  }));
+  const report = await verifyPerformanceBudgets({ root });
+  assert.match(report.failures.join('\n'), /Largest on-demand XLS writer asset .* is 400/);
+  assert.match(report.failures.join('\n'), /On-demand XLS writer is 600/);
+  assert.match(report.failures.join('\n'), /Compressed on-demand XLS writer/);
+});
