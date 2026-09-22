@@ -4,6 +4,102 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.227',
+    releasedAt: '2026-09-22',
+    title: 'Ten-second notifications with accessible history',
+    changes: [
+      'Popups close after ten seconds and remain in the bottom-right thunderbolt history.',
+      'Retain 500 timestamped messages per browser tab, with Clear all and user isolation.',
+      'Include Hedge Desk notifications and preserve Undo and Market Pulse access.',
+    ],
+  },
+  {
+    version: '2.0.226',
+    releasedAt: '2026-09-22',
+    title: 'Complete Xero reconciliation within the 2026 scope',
+    changes: [
+      'Scan every invoice, credit note and payment from 2026 without loading unrelated historical accounting records.',
+      'Re-read older invoices and changed linked payments by their exact Xero identifiers when current payment verification needs them.',
+      'Complete Xero reads before saving the review and preserve rate-limit recovery and financial approval safeguards.',
+    ],
+  },
+  {
+    version: '2.0.225',
+    releasedAt: '2026-09-22',
+    title: 'Xero reconciliation rate-limit recovery',
+    changes: [
+      'Pace financial reconciliation reads and recover from temporary Xero rate limits using the provider retry interval.',
+      'Keep saved reconciliation results visible and stop repeated automatic checks after a failed refresh.',
+      'Show an actionable wait message when Xero limits requests and preserve unknown quota headers as unknown.',
+    ],
+  },
+  {
+    version: '2.0.224',
+    releasedAt: '2026-09-21',
+    title: 'Readable XLS amounts and quantities',
+    changes: [
+      'Use standard thousands separators for monetary amounts and quantity labels in Dashboard XLS exports.',
+      'Remove the Currency column while identifying currencies in amount headers or mixed-currency number formats.',
+    ],
+  },
+  {
+    version: '2.0.223',
+    releasedAt: '2026-09-21',
+    title: 'Buyer receipt charges included in EBIT',
+    changes: [
+      'Include actual recorded buyer receipt fees, net of signed refunds, alongside supplier remittance fees in Bank Charge and deduct both from EBIT.',
+      'Keep receipt cash and interest unchanged, validate each fee against its STEM, buyer and currency, and explain the combined charge in Dashboard and XLS.',
+    ],
+  },
+  {
+    version: '2.0.222',
+    releasedAt: '2026-09-21',
+    title: 'Supplier bank charges in Dashboard EBIT and XLS',
+    changes: [
+      'Deduct configured supplier remittance charges from EBIT: UBS USD 10 and DBS USD 15 by default, editable with the interest rate in Finance settings.',
+      'Allocate shared remittance charges across all cash allocations and preserve separate interest, bank-charge and payment-evidence values.',
+      'Add Bank Charge beside Finance Cost in XLS and remove Created Date, Status and Dispute Information.',
+    ],
+  },
+  {
+    version: '2.0.221',
+    releasedAt: '2026-09-21',
+    title: 'Readable Dashboard XLS workbooks and delivery-period filenames',
+    changes: [
+      'Export a native Excel XLS workbook with all selected STEM records, readable in Excel-compatible spreadsheet apps.',
+      'Name exports using the selected delivery period and desk or other active filter labels, and record the exact periods in Scope.',
+    ],
+  },
+  {
+    version: '2.0.220',
+    releasedAt: '2026-09-21',
+    title: 'Pre-2026 funding for actual 2026 deliveries',
+    changes: [
+      'Include pre-2026 cash allocations for STEMs actually delivered in 2026, using original payment dates and the full funding period.',
+      'Retain invoice reconciliation, settlement and currency checks, and refresh cached EBIT results.',
+    ],
+  },
+  {
+    version: '2.0.219',
+    releasedAt: '2026-09-21',
+    title: 'Useful EBIT figures with partial payment evidence',
+    changes: [
+      'Show verified Partial EBIT with coverage, or gross profit before finance when no payment evidence is usable.',
+      'Separate verified finance totals from full gross profit in XLS exports.',
+    ],
+  },
+  {
+    version: '2.0.218',
+    releasedAt: '2026-09-20',
+    title: 'Dashboard financing, Korea Desk and complete STEM exports',
+    changes: [
+      'Switch Gross Profit to EBIT using actual daily funding and a company financing rate, with missing payment evidence clearly identified.',
+      'Manage the annual financing rate in Finance settings with revision checks and an audit history.',
+      'Include or exclude Korea Desk across Dashboard views, account drill-downs and saved selections.',
+      'Export every STEM in the ordinary filtered selection to a local XLS workbook, with progress, cancellation and separate currency totals.',
+    ],
+  },
+  {
     version: '2.0.217',
     releasedAt: '2026-09-20',
     title: 'Personal Markets and monthly quantity coverage',

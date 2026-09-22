@@ -89,19 +89,27 @@ export default function DashboardFilterBar({ filters, years, portOptions = [], l
   const [aiOpen, setAiOpen] = useState(false);
   const [aiPrompt, setAiPrompt] = useState('');
   const periodLabel = dashboardPeriodLabel(filters.selectedYears, filters.selectedMonths);
-  const hasFilters = filters.disputeOnly || filters.counterparty || filters.port || filters.country || filters.datePreset !== 'year_to_date';
+  const hasFilters = filters.disputeOnly || filters.counterparty || filters.port || filters.country || filters.koreaDeskMode !== 'all' || filters.datePreset !== 'year_to_date';
   const set = (patch) => onChange({ ...filters, ...patch });
+  const setKoreaDeskMode = (mode) => set({
+    koreaDeskMode: filters.koreaDeskMode === mode ? 'all' : mode,
+    port: '', portId: '', country: '', countryCode: '',
+  });
   const setPreset = (datePreset) => { setShowCustom(datePreset === 'custom'); set({ datePreset }); };
   const submitAi = (event) => { event.preventDefault(); if (aiPrompt.trim().length >= 3) onAiSearch?.(aiPrompt.trim()); };
   return <section className="app-navigation-material workspace-filter-rail dashboard-controls sticky z-30 mb-3 rounded-[var(--radius-panel)] border border-border" aria-label="Dashboard filters">
     <button type="button" className="dashboard-mobile-filter-summary flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm" onClick={() => setMobileExpanded((value) => !value)} aria-expanded={mobileExpanded} aria-controls="dashboard-filter-controls">
-      <Filter className="h-4 w-4 shrink-0" /><span className="min-w-0 flex-1"><span className="font-medium">Filters</span><span className="ml-2 text-xs text-muted-foreground">{periodLabel}</span>{filters.counterparty || filters.port || filters.country || filters.disputeOnly ? <span className="block break-words text-xs text-muted-foreground">{[filters.counterparty?.name, filters.country ? `COUNTRY - ${filters.country}` : filters.port, filters.disputeOnly ? 'Disputed only' : ''].filter(Boolean).join(' · ')}</span> : null}</span><ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${mobileExpanded ? 'rotate-180' : ''}`} />
+      <Filter className="h-4 w-4 shrink-0" /><span className="min-w-0 flex-1"><span className="font-medium">Filters</span><span className="ml-2 text-xs text-muted-foreground">{periodLabel}</span>{filters.counterparty || filters.port || filters.country || filters.disputeOnly || filters.koreaDeskMode !== 'all' ? <span className="block break-words text-xs text-muted-foreground">{[filters.counterparty?.name, filters.country ? `COUNTRY - ${filters.country}` : filters.port, filters.koreaDeskMode === 'include' ? 'Korea Desk' : filters.koreaDeskMode === 'exclude' ? 'Exclude Korea Desk' : '', filters.disputeOnly ? 'Disputed only' : ''].filter(Boolean).join(' · ')}</span> : null}</span><ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${mobileExpanded ? 'rotate-180' : ''}`} />
     </button>
     <div id="dashboard-filter-controls" className={`workspace-filter-panel dashboard-filter-content p-3 ${mobileExpanded ? 'is-expanded' : ''}`}>
       <div className="dashboard-control-topline">
         <div className="dashboard-period-control"><Label htmlFor="dashboard-period" className="text-xs font-medium text-muted-foreground">Period</Label><select id="dashboard-period" value={filters.datePreset} onChange={(event) => setPreset(event.target.value)} className="h-9 min-w-0 rounded-md border border-input bg-background px-2 text-sm">{DASHBOARD_DATE_PRESETS.map((preset) => <option key={preset.value} value={preset.value}>{preset.label}</option>)}</select>{filters.datePreset === 'custom' ? <Button type="button" size="sm" variant="outline" className="h-9 text-xs" onClick={() => setShowCustom((value) => !value)} aria-expanded={showCustom} aria-controls="dashboard-custom-period">Edit dates</Button> : null}</div>
         <div className="dashboard-control-actions">
           <button type="button" onClick={() => set({ disputeOnly: !filters.disputeOnly })} aria-pressed={filters.disputeOnly} className={`h-9 rounded-md border px-2.5 text-xs font-medium ${filters.disputeOnly ? 'border-red-300 bg-red-50 text-red-800' : 'border-border text-muted-foreground hover:text-foreground'}`}>Disputed only</button>
+          <div role="group" aria-label="Korea Desk filter" className="flex items-center gap-1">
+            <button type="button" onClick={() => setKoreaDeskMode('include')} aria-pressed={filters.koreaDeskMode === 'include'} className={`h-9 rounded-md border px-2.5 text-xs font-medium ${filters.koreaDeskMode === 'include' ? 'border-primary bg-primary text-primary-foreground' : 'border-border text-muted-foreground hover:text-foreground'}`}>Korea Desk</button>
+            <button type="button" onClick={() => setKoreaDeskMode('exclude')} aria-pressed={filters.koreaDeskMode === 'exclude'} className={`h-9 rounded-md border px-2.5 text-xs font-medium ${filters.koreaDeskMode === 'exclude' ? 'border-primary bg-primary text-primary-foreground' : 'border-border text-muted-foreground hover:text-foreground'}`}>Exclude Korea Desk</button>
+          </div>
           <DashboardSavedViews filters={filters} onApply={onChange} compact />
           <Button type="button" variant="ghost" size="sm" className="h-9 px-2 text-xs" onClick={() => setAiOpen((value) => !value)} aria-expanded={aiOpen} aria-controls="dashboard-ai-form"><Search className="mr-1 h-3.5 w-3.5" />AI search</Button>
           {hasFilters ? <Button type="button" variant="ghost" size="sm" className="h-9 px-2 text-xs" onClick={onReset}><RotateCcw className="mr-1 h-3.5 w-3.5" />Reset</Button> : null}
@@ -118,14 +126,15 @@ export default function DashboardFilterBar({ filters, years, portOptions = [], l
         <div className="dashboard-keyword-filters" data-testid="dashboard-keyword-filter-group">
           <UnifiedCounterpartyPicker selection={filters.counterparty} onCommit={(entry) => { const roles = Array.isArray(entry.roles) ? entry.roles : []; set({ counterparty: entry, counterpartyMode: roles.includes(filters.counterpartyMode) ? filters.counterpartyMode : (roles[0] || 'buyer'), company: '', companyId: '', group: '', groupId: '', groupAccountIds: [] }); }} />
           <Picker id="dashboard-location" label="Port or COUNTRY" value={filters.country || filters.port} onCommit={(option) => option?.kind === 'country'
-            ? set({ country: option?.countryCode || optionLabel(option), countryCode: option?.countryCode || optionValue(option), port: '', portId: '' })
-            : set({ port: option?.name || optionLabel(option), portId: option?.id || optionValue(option), country: '', countryCode: '' })} options={portOptions} placeholder="Port or COUNTRY" />
+            ? set({ country: option?.countryCode || optionLabel(option), countryCode: option?.countryCode || optionValue(option), port: '', portId: '', koreaDeskMode: 'all' })
+            : set({ port: option?.name || optionLabel(option), portId: option?.id || optionValue(option), country: '', countryCode: '', koreaDeskMode: 'all' })} options={portOptions} placeholder="Port or COUNTRY" />
         </div>
       </div>
 
       <div className="mt-2 flex flex-wrap gap-1.5" aria-live="polite">
         <FilterChip onRemove={() => set({ datePreset: 'year_to_date' })}>{periodLabel}</FilterChip>
         {filters.disputeOnly ? <FilterChip onRemove={() => set({ disputeOnly: false })}>Disputed</FilterChip> : null}
+        {filters.koreaDeskMode !== 'all' ? <FilterChip onRemove={() => set({ koreaDeskMode: 'all' })}>{filters.koreaDeskMode === 'include' ? 'Korea Desk' : 'Exclude Korea Desk'}</FilterChip> : null}
         {filters.counterparty ? <FilterChip onRemove={() => set({ counterparty: null })}>{filters.counterparty.entityType === 'group' ? 'GROUP' : 'Account'}: {filters.counterparty.name}</FilterChip> : null}
         {filters.port ? <FilterChip onRemove={() => set({ port: '', portId: '' })}>Port: {filters.port}</FilterChip> : null}
         {filters.country ? <FilterChip onRemove={() => set({ country: '', countryCode: '' })}>COUNTRY: {filters.country}</FilterChip> : null}

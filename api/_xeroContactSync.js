@@ -5,6 +5,7 @@ import { serverSupabaseConfig } from './_supabaseConfig.js';
 import { sfQuery } from './_salesforce.js';
 import { recordSupabaseRequest } from './_requestTelemetry.js';
 import { fcosSalesforceEnvironment } from '../config/fcosConnections.js';
+import { xeroRateLimitError, xeroRequestGate, xeroRetryAfterMs } from './_xeroRateLimit.js';
 
 const SALESFORCE_PRODUCTION_ORG_ID = fcosSalesforceEnvironment('production').orgId;
 const MAX_JSON_BODY_BYTES = 256 * 1024;
@@ -797,7 +798,7 @@ export async function createXeroContactsBatch(connection, contacts, runId, { env
   return outcomes;
 }
 
-export async function xeroAccountingFetch(connection, pathName, { method, body, idempotencyKey, retryOnRateLimit = false, env, fetchImpl, headers: extraHeaders = {}, onResponse = null }) {
+export async function xeroAccountingFetch(connection, pathName, { method, body, idempotencyKey, retryOnRateLimit, env = process.env, fetchImpl = fetch, headers: extraHeaders = {}, onResponse = null, callsPerMinute = 0, wait = sleep, requestGate = xeroRequestGate(fetchImpl) }) {
   const headers = {
     Authorization: `Bearer ${connection.accessToken}`,
     'xero-tenant-id': connection.tenantId,
@@ -807,17 +808,21 @@ export async function xeroAccountingFetch(connection, pathName, { method, body, 
     ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
   };
   const requestMethod = String(method || 'GET').toUpperCase();
+  const retryRateLimit = retryOnRateLimit ?? requestMethod === 'GET';
+  const intervalMs = callsPerMinute > 0 ? Math.ceil(60_000 / Math.min(45, callsPerMinute)) : 0;
+  let rateWaitMs = 0;
   const transientRetryLimit = requestMethod === 'GET' ? xeroTransientRetryLimit(env) : 0;
   let transientRetries = 0;
   for (let attempt = 0; attempt < 4; attempt += 1) {
     let response;
     try {
-      response = await fetchImpl(`${XERO_API_BASE}/api.xro/2.0${pathName}`, {
+      response = await requestGate(connection.tenantId, () => fetchImpl(`${XERO_API_BASE}/api.xro/2.0${pathName}`, {
         method: requestMethod,
         headers,
         body: body ? JSON.stringify(body) : undefined,
-      });
+      }), { intervalMs, maxWaitMs: xeroMaxRetryAfterMs(env) });
     } catch (error) {
+      if (error?.status === 429) throw error;
       if (transientRetries < transientRetryLimit && attempt < 3) {
         await sleep(xeroTransientRetryDelayMs(env, transientRetries));
         transientRetries += 1;
@@ -837,12 +842,14 @@ export async function xeroAccountingFetch(connection, pathName, { method, body, 
         method: requestMethod,
       });
     }
-    if (response.status === 429 && retryOnRateLimit && attempt < 3) {
-      const delay = retryDelayMs(response.headers?.get?.('Retry-After'), attempt);
-      if (isDailyRateLimit(response) || delay > xeroMaxRetryAfterMs(env)) {
-        throw xeroContactSyncError(await formatXeroError(response), response.status, 'XERO_CONTACT_SYNC_RATE_LIMITED');
+    if (response.status === 429) {
+      const delay = xeroRetryAfterMs(response.headers, { attempt });
+      await response.text().catch(() => '');
+      if (!retryRateLimit || attempt >= 3 || isDailyRateLimit(response) || rateWaitMs + delay > xeroMaxRetryAfterMs(env)) {
+        throw xeroRateLimitError(response.headers, { attempt });
       }
-      await sleep(delay);
+      rateWaitMs += delay;
+      await wait(delay);
       continue;
     }
     if ([502, 503, 504].includes(response.status) && transientRetries < transientRetryLimit && attempt < 3) {
@@ -1203,12 +1210,6 @@ function isFresh(updatedAt, freshMs) {
   return Number.isFinite(updatedMs) && Date.now() - updatedMs <= freshMs;
 }
 
-function retryDelayMs(value, attempt) {
-  const seconds = Number(value);
-  if (Number.isFinite(seconds) && seconds > 0) return seconds * 1000;
-  return Math.min(2 ** attempt * 1000, 8000);
-}
-
 function isDailyRateLimit(response) {
   return /daily|day/i.test(String(response.headers?.get?.('x-rate-limit-problem') || ''));
 }
@@ -1218,7 +1219,8 @@ function xeroContactSyncDelayMs(env) {
 }
 
 function xeroMaxRetryAfterMs(env) {
-  return Number(env.XERO_MAX_RETRY_AFTER_MS || '60000');
+  const value = Number(env.XERO_MAX_RETRY_AFTER_MS ?? '60000');
+  return Number.isFinite(value) ? Math.max(0, Math.min(value, 60_000)) : 60_000;
 }
 
 function xeroTransientRetryLimit(env) {

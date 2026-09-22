@@ -25,10 +25,23 @@ export function normalizeDecisionDashboardFilters(input = {}) {
     return output;
   };
   const text = (value) => [...new Set((Array.isArray(value) ? value : []).map((item) => String(item || '').trim()).filter(Boolean))].sort();
+  const countries = (value, label) => {
+    const output = [...new Set(text(value).map((item) => item.toUpperCase()))].sort();
+    if (output.length > 200 || output.some((item) => item.length > 100 || /[\u0000-\u001f\u007f]/.test(item))) {
+      throw new Error(`Dashboard ${label} must contain valid Salesforce country values.`);
+    }
+    return output;
+  };
+  const countryCodes = countries(input.countryCodes || input.countries, 'country filters');
+  const excludedCountryCodes = countries(input.excludedCountryCodes || input.excludedCountries, 'country exclusions');
+  if (countryCodes.some((country) => excludedCountryCodes.includes(country))) {
+    throw new Error('Dashboard country filters and exclusions cannot overlap.');
+  }
   return {
     accountIds: ids(input.accountIds || input.accounts),
     portIds: ids(input.portIds || input.ports),
-    countryCodes: [...new Set(text(input.countryCodes || input.countries).map((value) => value.toUpperCase()))].sort(),
+    countryCodes,
+    excludedCountryCodes,
     supplierIds: ids(input.supplierIds || input.suppliers),
     includeCancelled: input.includeCancelled === true,
   };

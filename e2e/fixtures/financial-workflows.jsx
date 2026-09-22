@@ -12,7 +12,7 @@ const scenario = new URLSearchParams(location.search).get('scenario') || 'xero';
 const stemId = 'a0H000000000001AAA';
 const buyerId = '001000000000001AAA';
 const supplierId = '001000000000002AAA';
-const date = new Date().toISOString();
+const date = new Date(Date.now() - (scenario === 'xero-rate-limit' ? 180000 : 0)).toISOString();
 const doc = { id: 'doc-ready', salesforceId: 'sf-ready', salesforceObject: 'Invoice__c', stemId, documentNumber: 'TEST-INV-1', accountName: 'Test Buyer', stemName: 'TEST STEM', total: 100, currency: 'USD', invoiceDate: '2026-09-01', dueDate: '2026-09-30', documentKind: 'buyer_invoice', action: 'create_draft', status: 'eligible', reviewFingerprint: 'v1', blockers: [], differences: [], mappingProducts: [{ id: 'fuel', name: 'Fuel' }] };
 const blocked = { ...doc, id: 'doc-blocked', salesforceId: 'sf-blocked', documentNumber: 'TEST-INV-2', action: 'blocked', status: 'blocked', blockers: ['Fuel: Finance-approved Xero account mapping is missing.'] };
 let preview = { run: { id: 'run', revision: 1, status: 'ready_for_review', createdAt: date }, checkedAt: date, rows: [doc, blocked, { ...doc, id: 'doc-match', action: 'link', documentNumber: 'TEST-INV-3' }], products: [{ id: 'fuel', name: 'Fuel' }], summary: { total: 3, eligible: 2, blocked: 1 }, mappingProposals: [], payments: { rows: [{ salesforcePaymentId: 'p1', salesforcePaymentName: 'TEST-PAY-1', stemId, type: 'Receivable', amount: 100, currency: 'USD', paymentDate: '2026-09-01', bank: 'DBS', status: 'blocked', action: 'blocked', blockers: ['The linked Xero transaction is not authorised for payment.'] }], summary: { total: 1 } } };
@@ -34,11 +34,19 @@ if (scenario === 'refund') {
   stem._Dispute_Workflow.supplierInstructions = [{ id: 'instruction', actionId: 'supplier-action', instructionType: 'get_back_paid', instructionLabel: 'Get back paid amount', sourceSupplierInvoiceId: 'invoice', sourceSupplierInvoiceName: 'TEST-SUP-1', currencyIsoCode: 'USD', plannedAmount: 100, status: 'Pending Accounting' }];
 }
 window.workflowFixture = { requests: [] };
+const requestCount = document.createElement('output');
+requestCount.setAttribute('aria-label', 'Preview request count');
+requestCount.textContent = '0';
+document.body.append(requestCount);
 appClient.functions.invoke = async (name, body = {}) => {
   window.workflowFixture.requests.push({ name, body: structuredClone(body) });
+  requestCount.textContent = String(window.workflowFixture.requests.filter((row) => row.name === 'xeroFinancialSyncPreview').length);
   if (name === 'xeroFinancialMappingsGet') return { data: { productMappings: [], bankMappings: [], accountOptions: [{ id: 'sales', code: '200', name: 'Fuel Sales' }], taxOptions: [{ taxType: 'NONE', name: 'No tax' }] } };
   if (name === 'xeroFinancialSyncLatest') return { data: { preview } };
-  if (name === 'xeroFinancialSyncPreview') return { data: preview };
+  if (name === 'xeroFinancialSyncPreview') {
+    if (scenario === 'xero-rate-limit') return { data: { error: 'Xero request limit reached. Please retry in 60 seconds. Your saved reconciliation is retained.', code: 'XERO_CONTACT_SYNC_RATE_LIMITED' } };
+    return { data: preview };
+  }
   if (name === 'xeroFinancialMappingsSave') { preview = { ...preview, rows: preview.rows.map((row) => row.id === blocked.id ? { ...row, status: 'eligible', action: 'create_draft', blockers: [] } : row) }; return { data: { ok: true } }; }
   if (name === 'xeroFinancialSyncRun') return { data: { error: 'Test only: no Xero transactions were posted.' } };
   if (name === 'disputeWorkflowList') return { data: { rows: [stem], capabilities: { canPrepare: true, canApprove: true, canAccount: true, canClose: true } }, meta: {} };
@@ -47,4 +55,4 @@ appClient.functions.invoke = async (name, body = {}) => {
   throw new Error(`Unexpected fixture request: ${name}`);
 };
 const status = { xero: { connected: true, scopeFlags: { contacts: true, invoices: true, settingsRead: true, paymentsRead: true } }, externalActions: { xero_financial_sync: { enabled: scenario !== 'locked' } } };
-createRoot(document.getElementById('root')).render(<MemoryRouter><AuthProvider><main className="h-full w-full min-w-0 overflow-hidden p-4">{['xero', 'locked'].includes(scenario) ? <XeroFinancialSync portalStatus={status}/> : <DisputeWorkflow/>}</main></AuthProvider></MemoryRouter>);
+createRoot(document.getElementById('root')).render(<MemoryRouter><AuthProvider><main className="h-full w-full min-w-0 overflow-hidden p-4">{['xero', 'locked', 'xero-rate-limit'].includes(scenario) ? <XeroFinancialSync portalStatus={status}/> : <DisputeWorkflow/>}</main></AuthProvider></MemoryRouter>);

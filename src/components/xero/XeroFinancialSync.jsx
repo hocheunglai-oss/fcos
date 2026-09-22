@@ -41,6 +41,8 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
   const initialSelection = useRef(selectionState);
   const [fixMapping, setFixMapping] = useState(null);
   const requestBusy = useRef(false);
+  const backgroundCheckStopped = useRef(false);
+  const lastCheckAttemptAt = useRef(0);
   const previewGeneration = useRef(0);
   const [paymentsReviewed, setPaymentsReviewed] = useState(false);
   const [documentPage, setDocumentPage] = useState(0);
@@ -89,6 +91,7 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
   useEffect(() => {
     const refresh = () => {
       if (document.visibilityState === 'visible' && !busy && !reviewOpen && !fixMapping && preview
+        && !backgroundCheckStopped.current && Date.now() - lastCheckAttemptAt.current > 120000
         && !['authorised', 'processing', 'partial', 'failed'].includes(preview.run?.status)
         && Date.now() - new Date(preview.checkedAt || preview.run?.createdAt).getTime() > 120000) runPreview(true, true);
     };
@@ -127,8 +130,9 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
   const scopeFlags = portalStatus?.xero?.scopeFlags || {};
 
   async function runPreview(preserveSelection = false, checkChanges = false) {
-    if (requestBusy.current) return;
+    if (requestBusy.current || (checkChanges && backgroundCheckStopped.current)) return;
     requestBusy.current = true;
+    lastCheckAttemptAt.current = Date.now();
     previewGeneration.current += 1;
     setBusy('preview');
     setError('');
@@ -137,11 +141,12 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
     try {
     const result = await appClient.functions.invoke('xeroFinancialSyncPreview', { cutoffDate: XERO_FINANCIAL_CUTOFF, includePayments: true, recordExactMatches: true, ...(checkChanges ? { refreshIfChangedRunId: preview?.run?.id } : {}) }, { force: true, cache: false, invalidateCache: true });
     if (result.data?.error) {
-      requestBusy.current = false;
-      setBusy('');
+      // Keep the saved check and stop render/focus events from retrying a failed scan.
+      backgroundCheckStopped.current = true;
       setError(result.data.error);
       return;
     }
+    backgroundCheckStopped.current = false;
     if (result.data.unchanged) { setPreview((current) => ({ ...current, checkedAt: result.data.checkedAt })); return; }
     setPreview(result.data);
     setMappingPage(0);
@@ -152,6 +157,7 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
     setPaymentPage(0);
     setSelectedPayments(new Set((result.data.payments?.rows || []).filter((row) => row.action === 'payment_apply' && row.status === 'eligible').map((row) => row.salesforcePaymentId)));
     } catch (nextError) {
+      backgroundCheckStopped.current = true;
       setError(nextError.message || 'The check could not be completed. Your last check is retained.');
     } finally { requestBusy.current = false; setBusy(''); }
   }

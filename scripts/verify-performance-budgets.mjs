@@ -6,6 +6,10 @@ if (report.clientAssets.onDemandPdfViewer) {
   const viewer = report.clientAssets.onDemandPdfViewer;
   process.stdout.write(`[performance budget] On-demand PDF viewer including worker: ${viewer.bytes}/${report.budgets.onDemandPdfViewer.totalBytes} bytes; gzip ${viewer.gzipBytes}/${report.budgets.onDemandPdfViewer.totalGzipBytes} bytes.\n`);
 }
+if (report.clientAssets.onDemandXlsWriter) {
+  const writer = report.clientAssets.onDemandXlsWriter;
+  process.stdout.write(`[performance budget] On-demand XLS writer (${writer.assets.length} asset${writer.assets.length === 1 ? '' : 's'}): ${writer.bytes}/${report.budgets.onDemandXlsWriter.totalBytes} bytes; gzip ${writer.gzipBytes}/${report.budgets.onDemandXlsWriter.totalGzipBytes} bytes; largest ${writer.largestBytes}/${report.budgets.onDemandXlsWriter.largestAssetBytes} bytes (${writer.largestAsset}).\n`);
+}
 for (const warning of report.warnings) process.stdout.write(`[performance budget] ${warning}\n`);
 for (const assurance of report.sourceAssurances) {
   process.stdout.write(`[performance budget] Static source assurance ${assurance.name}: ${assurance.actual}/${assurance.limit}.\n`);

@@ -179,7 +179,13 @@ function normalizeFilters(value = {}) {
   const supplierIds = unique(Array.isArray(filters.supplierIds) ? filters.supplierIds : []).map((id) => salesforceId(id, 'Dashboard Supplier'));
   const portIds = unique(Array.isArray(filters.portIds) ? filters.portIds : []).map((id) => salesforceId(id, 'Dashboard Port'));
   const countryCodes = unique(Array.isArray(filters.countryCodes) ? filters.countryCodes : []).map((value) => value.toUpperCase());
-  return { accountIds, supplierIds, portIds, countryCodes };
+  const excludedCountryCodes = unique(Array.isArray(filters.excludedCountryCodes) ? filters.excludedCountryCodes : []).map((value) => value.toUpperCase());
+  const invalidCountry = [...countryCodes, ...excludedCountryCodes].some((country) => country.length > 100 || /[\u0000-\u001f\u007f]/.test(country));
+  if (invalidCountry || countryCodes.some((country) => excludedCountryCodes.includes(country))) {
+    throw serviceError('Dashboard country filters and exclusions are invalid.', 400, 'SUPPLIER_CREDIT_COUNTRY_FILTER_INVALID');
+  }
+  if (countryCodes.length > 200 || excludedCountryCodes.length > 200) throw serviceError('Dashboard country filters exceed the supported scope.', 400, 'SUPPLIER_CREDIT_FILTER_LIMIT');
+  return { accountIds, supplierIds, portIds, countryCodes, excludedCountryCodes };
 }
 
 async function resolveLocationPortIds(filters, portFields) {
@@ -197,6 +203,10 @@ function childStemConditions(filters, locationPortIds) {
   if (filters.accountIds.length) conditions.push(`STEM__r.Account__c IN (${filters.accountIds.map((id) => `'${soql(id)}'`).join(',')})`);
   if (filters.portIds.length || filters.countryCodes.length) {
     conditions.push(locationPortIds.length ? `STEM__r.Port__c IN (${locationPortIds.map((id) => `'${soql(id)}'`).join(',')})` : 'Id = null');
+  }
+  if (filters.excludedCountryCodes.length) {
+    const excluded = filters.excludedCountryCodes.map((country) => `'${soql(country)}'`).join(',');
+    conditions.push(`(STEM__r.Port__c = null OR STEM__r.Port__r.Country__c = null OR STEM__r.Port__r.Country__c NOT IN (${excluded}))`);
   }
   return conditions;
 }
@@ -227,7 +237,7 @@ export async function loadDashboardSupplierCreditDirectory({ body = {}, accessCo
         describeObject('Account', force),
         describeObject('STEM_Line_Item__c', force),
         describeObject('STEM_Extra_Cost__c', force),
-        filters.countryCodes.length ? describeObject('Port__c', force) : Promise.resolve({ fields: [] }),
+        filters.countryCodes.length || filters.excludedCountryCodes.length ? describeObject('Port__c', force) : Promise.resolve({ fields: [] }),
       ]);
       const accountMap = fieldMap(accountDescribe);
       const lineLookup = resolveOriginalSupplierLookup(lineDescribe.fields);
@@ -308,12 +318,15 @@ export async function loadDashboardSupplierCreditDirectory({ body = {}, accessCo
 function stemSelect(fields) {
   const values = selected(fields, ['Id', 'Name', 'CreatedDate', 'LastModifiedDate', 'Account__c', 'Port__c', 'Delivery_Date__c', 'Expected_Delivery_Date__c', 'CurrencyIsoCode']);
   if (fields.has('Account__c')) values.push('Account__r.Name', 'Account__r.Group_Name__c', 'Account__r.Parent.Name');
+  if (fields.has('Port__c')) values.push('Port__r.Country__c');
   return [...new Set(values)];
 }
 
 function stemMatchesStatementScope(stem, filters, locationPortIds, interoffice) {
   if (filters.accountIds.length && !filters.accountIds.some((id) => idKey(id) === idKey(stem.Account__c))) return false;
   if ((filters.portIds.length || filters.countryCodes.length) && !locationPortIds.some((id) => idKey(id) === idKey(stem.Port__c))) return false;
+  const stemCountry = text(stem.Port__r?.Country__c).toUpperCase();
+  if (filters.excludedCountryCodes.includes(stemCountry)) return false;
   if (interoffice && [stem.Account__r?.Name, stem.Account__r?.Group_Name__c, stem.Account__r?.Parent?.Name]
     .some((name) => text(name).toUpperCase() === INTEROFFICE_EXCLUDED_GROUP)) return false;
   return true;
@@ -509,7 +522,7 @@ async function loadSupplierCreditStatementUncached({ body, accessContext, force 
     describeObject('Account', force), describeObject('STEM__c', force), describeObject('STEM_Line_Item__c', force),
     describeObject('STEM_Extra_Cost__c', force), describeObject('Product2', force), describeObject('Supplier_Invoice__c', force),
     describeObject('Payment__c', force), describeObject('Cashflow__c', force),
-    filters.countryCodes.length ? describeObject('Port__c', force) : Promise.resolve({ fields: [] }),
+    filters.countryCodes.length || filters.excludedCountryCodes.length ? describeObject('Port__c', force) : Promise.resolve({ fields: [] }),
   ]);
   timings.schemaMs = Date.now() - stage;
   const accountMap = fieldMap(accountDescribe);
@@ -694,4 +707,5 @@ export const dashboardSupplierCreditStatementServiceInternals = {
   normalizeFilters,
   paginateRows,
   supplierDirectoryCursor,
+  stemMatchesStatementScope,
 };

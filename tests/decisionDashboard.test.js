@@ -112,11 +112,17 @@ test('filters use exact IDs and normalized country codes without text matching',
     accountIds: ['001000000000001', '001000000000001', ' 001000000000002 '],
     portIds: ['a0P000000000001'],
     countryCodes: ['hk', ' HK '],
+    excludedCountryCodes: ['kr', ' KR '],
     supplierIds: ['001000000000003'],
     supplierNames: ['Supplier A'],
   }), {
-    accountIds: ['001000000000001', '001000000000002'], portIds: ['a0P000000000001'], countryCodes: ['HK'], supplierIds: ['001000000000003'], includeCancelled: false,
+    accountIds: ['001000000000001', '001000000000002'], portIds: ['a0P000000000001'], countryCodes: ['HK'], excludedCountryCodes: ['KR'], supplierIds: ['001000000000003'], includeCancelled: false,
   });
+});
+
+test('country exclusions reject malformed and overlapping values', () => {
+  assert.throws(() => normalizeDecisionDashboardFilters({ excludedCountryCodes: ['KOREA\nINJECT'] }), /valid Salesforce country values/);
+  assert.throws(() => normalizeDecisionDashboardFilters({ countryCodes: ['KOREA'], excludedCountryCodes: ['korea'] }), /cannot overlap/);
 });
 
 test('complete financial scopes remain publishable beyond the former 3,000-record boundary', () => {

@@ -232,6 +232,8 @@ const HANDLER_BEHAVIOR = Object.freeze({
   growthCoachingDailyCron: mutationPolicy({"cache":"none","externalAction":true,"capability":null}),
   salesforceDashboard: readPolicy({"cache":"server","externalAction":false,"capability":null}),
   salesforceDashboardFiltered: readPolicy({"cache":"server","externalAction":false,"capability":null}),
+  financeSettingsGet: readPolicy({cache: 'none', externalAction: false, capability: null}),
+  financeSettingsSave: mutationPolicy({cache: 'none', externalAction: false, capability: 'financial_report_settings_manage'}),
   dashboardSummary: readPolicy({"cache":"server","externalAction":false,"capability":null}),
   dashboardStemList: readPolicy({"cache":"server","externalAction":false,"capability":null}),
   dashboardAnalytics: readPolicy({"cache":"server","externalAction":false,"capability":null}),

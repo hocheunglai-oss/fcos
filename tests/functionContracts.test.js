@@ -6,6 +6,7 @@ test('critical function contracts fail closed before invalid requests reach the 
   assert.deepEqual(functionContractNames().sort(), [
     'dashboardAccountCreditStatement',
     'dashboardCounterpartySearch',
+    'financeSettingsSave',
     'marketTraderWorkspace',
     'marketTraderWorkspaceSave',
     'salesforceStemDetail',
@@ -19,6 +20,18 @@ test('critical function contracts fail closed before invalid requests reach the 
   assert.equal(validateFunctionRequest('workNotificationsState', { notificationIds: ['n1'], state: 'handled' }).ok, true);
   assert.equal(validateFunctionRequest('dashboardAccountCreditStatement', { accountId: '001xx', side: 'both', entityType: 'group' }).ok, true);
   assert.equal(validateFunctionRequest('dashboardAccountCreditStatement', { accountId: '001xx', side: 'net' }).ok, false);
+});
+
+test('company finance settings require a current revision and a bounded two-decimal rate', () => {
+  for (const annualInterestRatePct of [0, 5, '5.00', '100.00']) {
+    assert.equal(validateFunctionRequest('financeSettingsSave', { annualInterestRatePct, expectedRevision: 1 }).ok, true);
+  }
+  for (const annualInterestRatePct of [null, true, '', '1e1', -1, 100.01, '5.001']) {
+    assert.equal(validateFunctionRequest('financeSettingsSave', { annualInterestRatePct, expectedRevision: 1 }).ok, false);
+  }
+  for (const expectedRevision of [null, 0, -1, 1.5, '1']) {
+    assert.equal(validateFunctionRequest('financeSettingsSave', { annualInterestRatePct: 5, expectedRevision }).ok, false);
+  }
 });
 
 test('unregistered handlers retain compatibility while the registry expands by domain', () => {
