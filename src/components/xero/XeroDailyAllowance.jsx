@@ -3,7 +3,7 @@ import { formatXeroAllowanceCountdown, formatXeroAllowanceDate } from '@/lib/xer
 
 const COPY = {
   en: ['Daily allowance', 'Calls remaining', 'Daily reset (Hong Kong time)', 'Not supplied by Xero', 'Resets in',
-    'Reset time passed; confirm with the next check.'],
+    'Reset time passed. Check again to confirm.'],
   zh: ['每日限額', '剩餘呼叫次數', '每日重設（香港時間）', 'Xero 未有提供', '距離重設尚餘',
     '重設時間已過；請於下次檢查時確認。'],
 };

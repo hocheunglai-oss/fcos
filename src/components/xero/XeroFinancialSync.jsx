@@ -31,6 +31,8 @@ const DETAIL_CLASS = 'text-xs text-muted-foreground';
 const ACTIONS_CLASS = 'flex flex-wrap items-center gap-2';
 const SECTION_HEADER_CLASS = 'flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between';
 const SELECT_CLASS = 'h-9 rounded-md border border-input bg-background px-3 text-sm';
+const LINK_CLASS = 'block text-xs text-blue-700 underline';
+const BETWEEN_CLASS = 'flex flex-wrap items-center justify-between gap-3';
 const PANEL_CLASS = 'rounded-lg border border-border bg-card p-4';
 const DESCRIPTION_CLASS = 'mt-1 text-sm text-muted-foreground';
 const TABLE_FRAME_CLASS = 'overflow-auto rounded-lg border border-border';
@@ -340,7 +342,7 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
                         <><div>{row.blockers?.[0] || row.warnings?.[0] || (row.differences?.length ? financialCopy.differenceCount(row.differences.length) : copy.common.exact)}</div>
                         {(row.blockers || []).some((reason) => /mapping|tax|account code/i.test(reason)) && <Button variant="link" size="sm" onClick={() => setFixMapping(row)}>{flow.mapping}</Button>}
                         {!!row.differences?.length && <details className="mt-2"><summary>{flow.details}</summary>{row.differences.map((difference, index) => <div key={index} className="text-xs">{difference.field}: Salesforce {formatDifferenceValue(difference.salesforce ?? difference.salesforceLineCount)} → Xero {formatDifferenceValue(difference.xero ?? difference.xeroLineCount)}</div>)}</details>}
-                        {row.stemId && <a className="block text-xs text-blue-700 underline" href={`/disputes?stem=${encodeURIComponent(row.stemId)}`}>{row.dispute?.status ? `Dispute: ${row.dispute.status}` : 'Dispute / settlement'}</a>}</>,
+                        {row.stemId && <a className={LINK_CLASS} href={`/disputes?stem=${encodeURIComponent(row.stemId)}`}>{row.dispute?.status ? `Dispute: ${row.dispute.status}` : 'Dispute / settlement'}</a>}</>,
                       ], { 5: 'tabular-nums', 7: 'max-w-[360px]' })}
                     </TableRow>
                   ))}
@@ -371,7 +373,7 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
                       <Checkbox checked={selectedPayments.has(row.salesforcePaymentId)} disabled={row.action !== 'payment_apply' || row.status !== 'eligible'} onCheckedChange={(value) => toggleSelection(row.salesforcePaymentId, value === true, setSelectedPayments)} />,
                       row.salesforcePaymentName, row.type, row.paymentDate, row.bank || copy.common.notSet,
                       <>{row.currency} {formatAmount(row.amount, copy.locale)}</>,
-                      <>{reconciliationBucket(row, 'payment') === 'waiting' ? flow.waitInvoice : row.blockers?.[0] || financialCopy.actions[row.action] || row.action?.replaceAll('_', ' ')}{(row.blockers || []).some((reason) => /bank mapping/i.test(reason)) && <Button variant="link" size="sm" onClick={() => setFixMapping({ bank: row.bank, documentNumber: row.salesforcePaymentName })}>{flow.mapping}</Button>}{row.stemId && <a className="block text-xs text-blue-700 underline" href={`/disputes?stem=${encodeURIComponent(row.stemId)}`}>Dispute / settlement</a>}{row.xeroDocumentUrl && <a className="block text-blue-700 underline" href={row.xeroDocumentUrl} target="_blank" rel="noreferrer">Xero</a>}</>,
+                      <>{reconciliationBucket(row, 'payment') === 'waiting' ? flow.waitInvoice : row.blockers?.[0] || financialCopy.actions[row.action] || row.action?.replaceAll('_', ' ')}{(row.blockers || []).some((reason) => /bank mapping/i.test(reason)) && <Button variant="link" size="sm" onClick={() => setFixMapping({ bank: row.bank, documentNumber: row.salesforcePaymentName })}>{flow.mapping}</Button>}{row.stemId && <a className={LINK_CLASS} href={`/disputes?stem=${encodeURIComponent(row.stemId)}`}>Dispute / settlement</a>}{row.xeroDocumentUrl && <a className="block text-blue-700 underline" href={row.xeroDocumentUrl} target="_blank" rel="noreferrer">Xero</a>}</>,
                     ], { 1: 'font-medium' })}</TableRow>)}
                   </TableBody></Table>
                 </div>
@@ -382,13 +384,13 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
       ) : <StateBlock icon={AlertTriangle} title={financialCopy.noPreviewTitle} description={financialCopy.noPreviewDescription} />}
       <details className={PANEL_CLASS}>
         <summary className="cursor-pointer list-none">
-          <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className={BETWEEN_CLASS}>
             {sectionHeading(financialCopy.setupTitle, financialCopy.setupDescription)}
             <div className="text-right text-xs text-muted-foreground"><div>{financialCopy.savedMappings((mappings?.productMappings || []).length)}</div>{preview ? <div>{financialCopy.proposalSummary(mappingProposalSummary.proposed, mappingProposalSummary.conflicts)}</div> : null}</div>
           </div>
         </summary>
         <div className="mt-4 space-y-5 border-t border-border pt-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className={BETWEEN_CLASS}>
             {sectionHeading(financialCopy.mappingTitle, financialCopy.mappingDescription, true)}
             <Button type="button" variant="outline" onClick={loadMappings} disabled={Boolean(busy)}><RefreshCw className="mr-2 h-4 w-4" />{financialCopy.mappings}</Button>
           </div>
