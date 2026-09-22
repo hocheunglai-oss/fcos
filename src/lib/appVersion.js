@@ -4,6 +4,16 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.227',
+    releasedAt: '2026-09-22',
+    title: 'Ten-second notifications with accessible history',
+    changes: [
+      'Popups close after ten seconds and remain in the bottom-right thunderbolt history.',
+      'Retain 500 timestamped messages per browser tab, with Clear all and user isolation.',
+      'Include Hedge Desk notifications and preserve Undo and Market Pulse access.',
+    ],
+  },
+  {
     version: '2.0.226',
     releasedAt: '2026-09-22',
     title: 'Complete Xero reconciliation within the 2026 scope',

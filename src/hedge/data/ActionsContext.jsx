@@ -1,5 +1,7 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { CheckCircle2, RotateCcw, X } from "lucide-react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef } from "react";
+import { RotateCcw } from "lucide-react";
+import { toast } from "@/components/ui/use-toast";
+import { clientSessionState, isCurrentClientSession } from "@/lib/clientSessionState";
 
 const ActionsContext = createContext(null);
 
@@ -9,18 +11,39 @@ function cleanRecord(record = {}) {
 }
 
 export function ActionsProvider({ children, reload }) {
-  const [toast, setToast] = useState(null);
-  const timerRef = useRef(null);
+  const notificationRef = useRef(null);
 
-  useEffect(() => () => {
-    if (timerRef.current) clearTimeout(timerRef.current);
-  }, []);
+  useEffect(() => () => notificationRef.current?.dismiss(), []);
 
   const showToast = useCallback((nextToast) => {
-    if (timerRef.current) clearTimeout(timerRef.current);
-    setToast(nextToast);
-    timerRef.current = setTimeout(() => setToast(null), 9000);
-  }, []);
+    notificationRef.current?.dismiss();
+    const session = clientSessionState();
+    const operation = nextToast.operation;
+    let notification;
+    const undo = async () => {
+      if (!isCurrentClientSession(session)) return;
+      notification.dismiss();
+      try {
+        if (operation.action === "create") {
+          await operation.entity.delete(operation.record.id, operation.record.revision);
+        } else if (operation.action === "delete") {
+          await operation.entity.create(cleanRecord(operation.record));
+        } else if (operation.action === "update") {
+          await operation.entity.update(operation.record.id, cleanRecord(operation.before), operation.record.revision);
+        }
+        if (!isCurrentClientSession(session)) return;
+        await reload({ silent: true });
+        notification.update({ description: 'Undone' });
+      } catch (error) {
+        if (isCurrentClientSession(session)) toast({ title: 'Undo failed', description: error.message, variant: 'destructive' });
+      }
+    };
+    notification = toast({
+      title: nextToast.message,
+      action: operation ? <button type="button" className="flex shrink-0 items-center gap-1 text-sm underline" onClick={undo}><RotateCcw size={15} aria-hidden="true" />Undo</button> : undefined,
+    });
+    notificationRef.current = notification;
+  }, [reload]);
 
   const create = useCallback(async ({ entity, entityName, payload, label }) => {
     const record = await entity.create(payload);
@@ -42,40 +65,11 @@ export function ActionsProvider({ children, reload }) {
     showToast({ message: `${label} deleted`, operation: undoable ? { action: "delete", entity, entityName, record, label } : null });
   }, [reload, showToast]);
 
-  const undo = useCallback(async () => {
-    const operation = toast?.operation;
-    if (!operation) return;
-    setToast(null);
-    if (operation.action === "create") {
-      await operation.entity.delete(operation.record.id, operation.record.revision);
-    } else if (operation.action === "delete") {
-      await operation.entity.create(cleanRecord(operation.record));
-    } else if (operation.action === "update") {
-      await operation.entity.update(operation.record.id, cleanRecord(operation.before), operation.record.revision);
-    }
-    await reload({ silent: true });
-  }, [reload, toast]);
-
   const value = useMemo(() => ({ create, update, remove, notify: showToast }), [create, remove, showToast, update]);
 
   return (
     <ActionsContext.Provider value={value}>
       {children}
-      {toast && (
-        <div className="app-toast" role="status">
-          <CheckCircle2 size={18} aria-hidden="true" />
-          <span>{toast.message}</span>
-          {toast.operation && (
-            <button type="button" className="app-toast__undo" onClick={undo}>
-              <RotateCcw size={15} aria-hidden="true" />
-              Undo
-            </button>
-          )}
-          <button type="button" className="app-icon-button app-icon-button--quiet" onClick={() => setToast(null)} aria-label="Dismiss notification">
-            <X size={16} />
-          </button>
-        </div>
-      )}
     </ActionsContext.Provider>
   );
 }
