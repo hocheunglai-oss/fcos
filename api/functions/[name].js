@@ -1,3 +1,4 @@
+import { AUTO_AI_MODEL, AI_MODEL_SELECTIONS, AI_ROUTING_VERSION, isAllowedAiSelection, automaticRoutingFor, resolveAiModel } from '../_aiModelRouting.js';
 import { createStemWorkspaceActivity } from '../_stemWorkspaceActivity.js';
 import { createWorkflowMetricsReader, recordWorkflowMetric } from '../_workflowMetrics.js';
 import { createWorkspaceSearch } from '../_workspaceSearch.js';
@@ -89,7 +90,7 @@ import {
   collaborationTemplateSave as collaborationTemplateSaveService,
   collaborationUpdate as collaborationUpdateService,
 } from '../_collaborationService.js';
-import { DASHBOARD_AI_MODELS, DEFAULT_DASHBOARD_AI_MODEL, compileDashboardAiWhere, dashboardAiModel, interpretDashboardAiSearch, isAllowedDashboardAiModel, normalizeDashboardAiPrompt } from '../_dashboardAi.js';
+import { DASHBOARD_AI_MODELS, compileDashboardAiWhere, dashboardAiModel, interpretDashboardAiSearch, isAllowedDashboardAiModel, normalizeDashboardAiPrompt } from '../_dashboardAi.js';
 import { operationalMailConfig, operationalMailDeliveryAvailable, sendOperationalMail } from '../_operationalMail.js';
 import { loadFinancialReportSettings, saveFinancialReportSettings } from '../_financialReportSettings.js';
 import {
@@ -5240,10 +5241,11 @@ async function salesforceObjectFields(body) {
 const DASHBOARD_AI_SETTINGS_ID = 'default';
 
 function serializeDashboardAiSettings(row = null, storageAvailable = true) {
-  const configuredModel = isAllowedDashboardAiModel(row?.model_id) ? row.model_id : DEFAULT_DASHBOARD_AI_MODEL;
+  const configuredModel = isAllowedAiSelection(row?.model_id) ? row.model_id : AUTO_AI_MODEL;
   return {
     modelId: configuredModel,
-    model: dashboardAiModel(configuredModel),
+    model: configuredModel === AUTO_AI_MODEL ? AI_MODEL_SELECTIONS[0] : dashboardAiModel(configuredModel),
+    automaticRouting: automaticRoutingFor('dashboard_search'),
     revision: Math.max(1, Number(row?.revision || 1)),
     updatedAt: row?.updated_at || null,
     updatedByEmail: row?.updated_by_email || null,
@@ -5352,7 +5354,7 @@ async function dashboardAiSettingsGet(body, req, accessContext = null) {
   const [settings, usage] = await Promise.all([loadDashboardAiSettings(context.client), loadDashboardAiUsage(context.client)]);
   return {
     settings,
-    models: DASHBOARD_AI_MODELS,
+    models: AI_MODEL_SELECTIONS,
     usage,
     capabilities: {
       canManageSettings: isAdministratorUserType(context.profile.user_type),
@@ -5363,7 +5365,7 @@ async function dashboardAiSettingsGet(body, req, accessContext = null) {
 async function dashboardAiSettingsSave(body, req) {
   const { client, profile } = await requireAdministrator(req);
   const modelId = String(body.modelId || body.model_id || '').trim();
-  if (!isAllowedDashboardAiModel(modelId)) {
+  if (!isAllowedAiSelection(modelId)) {
     throw appError('Select an allowed Dashboard AI model.', 400);
   }
   const expectedRevision = Number(body.expectedRevision ?? body.expected_revision);
@@ -5406,7 +5408,7 @@ async function dashboardAiSettingsSave(body, req) {
   await expireRuntimeCacheTags(['dashboard:ai-interpretation']);
   return {
     settings: serializeDashboardAiSettings(data, true),
-    models: DASHBOARD_AI_MODELS,
+    models: AI_MODEL_SELECTIONS,
     usage: await loadDashboardAiUsage(client),
     capabilities: { canManageSettings: true },
   };
@@ -5446,14 +5448,18 @@ async function dashboardAiSearch(body, req, accessContext = null) {
   const settings = await loadDashboardAiSettings(context.client);
   if (!settings.apiConfigured) throw appError('Dashboard AI Search is not configured in Vercel.', 503);
   const force = requestForcesRefresh(body, req);
+  const routing = resolveAiModel({ task: 'dashboard_search', selection: settings.modelId, prompt, clarification });
   const safetyIdentifier = `fcos-dashboard-${createHash('sha256').update(String(context.profile.id)).digest('hex').slice(0, 32)}`;
   const interpretationResult = await getOrLoadRuntimeCache({
     namespace: 'dashboard-ai-interpretation',
-    version: '1',
+    version: AI_ROUTING_VERSION,
     accessScope: salesforceCacheAccessScope(context),
-    apiVersion: settings.modelId,
+    apiVersion: routing.modelId,
     payload: {
       modelId: settings.modelId,
+      revision: settings.revision,
+      selectedPeriodLabel,
+      today: dateOnly(new Date()),
       prompt,
       clarification,
     },
@@ -5468,7 +5474,7 @@ async function dashboardAiSearch(body, req, accessContext = null) {
         selectedPeriodLabel,
         today: dateOnly(new Date()),
         safetyIdentifier,
-        signal: AbortSignal.timeout(15_000),
+        signal: AbortSignal.timeout(60_000),
         onUsage: (usage) => recordDashboardAiUsage(context.client, context.profile, usage),
       }),
   });
@@ -5483,8 +5489,9 @@ async function dashboardAiSearch(body, req, accessContext = null) {
       label: interpretation.dateScope.mode === 'selected_period' ? selectedPeriodLabel : interpretation.dateScope.label,
     },
     clarification: interpretation.clarification,
-    model: settings.model,
-    modelId: settings.modelId,
+    model: dashboardAiModel(interpretation.routing.modelId),
+    modelId: interpretation.routing.modelId,
+    routing: interpretation.routing,
     interpretationCache: interpretationResult.cache.status,
   };
   if (interpretation.status === 'needs_clarification') {

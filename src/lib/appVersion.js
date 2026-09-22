@@ -4,6 +4,14 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.228',
+    releasedAt: '2026-09-23',
+    title: 'Automatic AI model selection by task',
+    changes: [
+      'Route tasks automatically to Luna, Sol or Astra with suitable reasoning; retain manual overrides and actual-model usage.',
+    ],
+  },
+  {
     version: '2.0.227',
     releasedAt: '2026-09-22',
     title: 'Ten-second notifications with accessible history',
