@@ -18,11 +18,24 @@ import { cn } from '@/lib/utils';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { reconciliationBucket, retainedReviewSelection, reviewSelectionSnapshot, restoreReviewSelection, documentReviewTotals, workflowCopy } from '@/lib/financialWorkflowUi';
+import XeroDailyAllowance from '@/components/xero/XeroDailyAllowance';
+import { latestXeroDailyAllowance } from '@/lib/xeroDailyAllowance';
 
 const DIRECTIONS = ['buyer', 'supplier'];
 const DEFAULT_BANKS = ['DBS', 'UBS'];
 const PAGE_SIZE = 100;
 const MAPPING_PAGE_SIZE = 25;
+const FORCE_OPTIONS = { force: true, cache: false };
+const MUTATION_OPTIONS = { ...FORCE_OPTIONS, invalidateCache: true };
+const DETAIL_CLASS = 'text-xs text-muted-foreground';
+const ACTIONS_CLASS = 'flex flex-wrap items-center gap-2';
+const SECTION_HEADER_CLASS = 'flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between';
+const SELECT_CLASS = 'h-9 rounded-md border border-input bg-background px-3 text-sm';
+const LINK_CLASS = 'block text-xs text-blue-700 underline';
+const BETWEEN_CLASS = 'flex flex-wrap items-center justify-between gap-3';
+const PANEL_CLASS = 'rounded-lg border border-border bg-card p-4';
+const DESCRIPTION_CLASS = 'mt-1 text-sm text-muted-foreground';
+const TABLE_FRAME_CLASS = 'overflow-auto rounded-lg border border-border';
 
 export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
   const copy = xeroPortalUiCopy(language);
@@ -50,11 +63,16 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
   const [mappingPage, setMappingPage] = useState(0);
   const [busy, setBusy] = useState('mappings');
   const [error, setError] = useState('');
+  const [dailyAllowance, setDailyAllowance] = useState(null);
+  const captureDailyAllowance = useCallback((value) => {
+    const receivedAt = new Date().toISOString();
+    setDailyAllowance((current) => latestXeroDailyAllowance(current, value, { receivedAt }));
+  }, []);
 
   const loadMappings = useCallback(async () => {
     setBusy('mappings');
     setError('');
-    const result = await appClient.functions.invoke('xeroFinancialMappingsGet', {}, { force: true, cache: false });
+    const result = await appClient.functions.invoke('xeroFinancialMappingsGet', {}, FORCE_OPTIONS);
     setBusy('');
     if (result.data?.error) {
       setError(result.data.error);
@@ -66,8 +84,10 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
   useEffect(() => {
     let active = true;
     loadMappings();
-    appClient.functions.invoke('xeroFinancialSyncLatest', {}, { force: true, cache: false }).then((result) => {
-      if (!active || previewGeneration.current > 0 || result.data?.error || !result.data?.preview) return;
+    appClient.functions.invoke('xeroFinancialSyncLatest', {}, FORCE_OPTIONS).then((result) => {
+      if (!active) return;
+      captureDailyAllowance(result.data);
+      if (previewGeneration.current > 0 || result.data?.error || !result.data?.preview) return;
       setPreview(result.data.preview);
       setPayments(result.data.preview.payments);
       const saved = initialSelection.current;
@@ -78,7 +98,7 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
       setSelectedPayments(sameRun ? restoreReviewSelection(saved.payments, result.data.preview.payments?.rows || [], 'payment') : new Set());
     }).catch(() => { if (active) setError('The last check could not be loaded. Run Check everything to retry.'); });
     return () => { active = false; };
-  }, [loadMappings]);
+  }, [captureDailyAllowance, loadMappings]);
 
   useEffect(() => {
     if (!preview?.run?.id) return;
@@ -139,7 +159,8 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
     setReviewOpen(false);
     setPaymentsReviewed(false);
     try {
-    const result = await appClient.functions.invoke('xeroFinancialSyncPreview', { cutoffDate: XERO_FINANCIAL_CUTOFF, includePayments: true, recordExactMatches: true, ...(checkChanges ? { refreshIfChangedRunId: preview?.run?.id } : {}) }, { force: true, cache: false, invalidateCache: true });
+    const result = await appClient.functions.invoke('xeroFinancialSyncPreview', { cutoffDate: XERO_FINANCIAL_CUTOFF, includePayments: true, recordExactMatches: true, ...(checkChanges ? { refreshIfChangedRunId: preview?.run?.id } : {}) }, MUTATION_OPTIONS);
+    captureDailyAllowance(result.data);
     if (result.data?.error) {
       // Keep the saved check and stop render/focus events from retrying a failed scan.
       backgroundCheckStopped.current = true;
@@ -157,6 +178,7 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
     setPaymentPage(0);
     setSelectedPayments(new Set((result.data.payments?.rows || []).filter((row) => row.action === 'payment_apply' && row.status === 'eligible').map((row) => row.salesforcePaymentId)));
     } catch (nextError) {
+      captureDailyAllowance(nextError);
       backgroundCheckStopped.current = true;
       setError(nextError.message || 'The check could not be completed. Your last check is retained.');
     } finally { requestBusy.current = false; setBusy(''); }
@@ -167,12 +189,14 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
     const result = await appClient.functions.invoke('xeroFinancialSyncRun', {
       runId: preview?.run?.id, revision: preview?.run?.revision,
       ...(preview?.run?.status === 'ready_for_review' ? { reviewed: true, selectedItemIds: [...selected] } : {}),
-    }, { force: true, cache: false, invalidateCache: true });
+    }, MUTATION_OPTIONS);
+    captureDailyAllowance(result.data);
     setBusy('');
     setReviewOpen(false);
     if (result.data?.error) {
       setError(result.data.error);
-      const latest = await appClient.functions.invoke('xeroFinancialSyncLatest', {}, { force: true, cache: false });
+      const latest = await appClient.functions.invoke('xeroFinancialSyncLatest', {}, FORCE_OPTIONS);
+      captureDailyAllowance(latest.data);
       if (latest.data?.preview) setPreview(latest.data.preview);
       return;
     }
@@ -190,7 +214,8 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
   async function previewPayments() {
     setBusy('payment-preview');
     setPaymentsReviewed(false);
-    const result = await appClient.functions.invoke('xeroFinancialPaymentApply', { mode: 'preview', cutoffDate: XERO_FINANCIAL_CUTOFF }, { force: true, cache: false });
+    const result = await appClient.functions.invoke('xeroFinancialPaymentApply', { mode: 'preview', cutoffDate: XERO_FINANCIAL_CUTOFF }, FORCE_OPTIONS);
+    captureDailyAllowance(result.data);
     setBusy('');
     if (result.data?.error) {
       toast({ title: financialCopy.paymentPreviewFailed, description: result.data.error, variant: 'destructive' });
@@ -206,7 +231,8 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
     const result = await appClient.functions.invoke('xeroFinancialPaymentApply', {
       mode: 'apply', cutoffDate: XERO_FINANCIAL_CUTOFF, reviewed: paymentsReviewed,
       selectedPayments: (payments?.rows || []).filter((row) => selectedPayments.has(row.salesforcePaymentId)).map((row) => ({ id: row.salesforcePaymentId, sourceFingerprint: row.sourceFingerprint, reviewFingerprint: row.reviewFingerprint })),
-    }, { force: true, cache: false, invalidateCache: true });
+    }, MUTATION_OPTIONS);
+    captureDailyAllowance(result.data);
     setBusy('');
     if (result.data?.error) {
       toast({ title: financialCopy.paymentStopped, description: result.data.error, variant: 'destructive' });
@@ -235,9 +261,9 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
       {error ? <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</div> : null}
 
       <section className="rounded-xl border border-sky-200 bg-gradient-to-br from-sky-50 to-white p-5">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(320px,430px)] lg:items-start">
           <div>
-            <div className="flex flex-wrap items-center gap-2">
+            <div className={ACTIONS_CLASS}>
               <h2 className="text-lg font-semibold">{financialCopy.reconciliationTitle}</h2>
               <Badge variant="outline" className="border-sky-200 bg-white text-sky-800">{financialCopy.fixedScope}</Badge>
               <Badge variant="outline" className={financialGate?.enabled ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-amber-200 bg-amber-50 text-amber-900'}>
@@ -246,10 +272,13 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
             </div>
             <p className="mt-2 max-w-4xl text-sm text-slate-700">{financialCopy.reconciliationDescription}</p>
           </div>
-          <Button type="button" onClick={() => runPreview()} disabled={Boolean(busy) || !portalStatus?.xero?.connected || !scopeFlags.invoices || !scopeFlags.contacts || !scopeFlags.settingsRead || !scopeFlags.paymentsRead}>
-            {busy === 'preview' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ShieldCheck className="mr-2 h-4 w-4" />}
-            {busy === 'preview' ? financialCopy.checkingEverything : financialCopy.checkEverything}
-          </Button>
+          <div className="space-y-2">
+            <div className="flex justify-end"><Button type="button" onClick={() => runPreview()} disabled={Boolean(busy) || !portalStatus?.xero?.connected || !scopeFlags.invoices || !scopeFlags.contacts || !scopeFlags.settingsRead || !scopeFlags.paymentsRead}>
+              {actionIcon(busy === 'preview', ShieldCheck)}
+              {busy === 'preview' ? financialCopy.checkingEverything : financialCopy.checkEverything}
+            </Button></div>
+            <XeroDailyAllowance snapshot={dailyAllowance} language={language} />
+          </div>
         </div>
         <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-[1.2fr_repeat(4,minmax(0,1fr))]">
           <div className={cn('col-span-2 rounded-lg border px-4 py-3 lg:col-span-1', reconciliation.status === 'reconciled' ? 'border-emerald-200 bg-emerald-50' : reconciliation.status === 'attention_required' ? 'border-rose-200 bg-rose-50' : 'border-sky-200 bg-white')}>
@@ -257,10 +286,12 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
             <div className="mt-1 text-3xl font-semibold tabular-nums">{reconciliation.completion == null ? '—' : `${reconciliation.completion}%`}</div>
             <div className="mt-1 text-sm font-medium">{financialCopy.reconciliationStatuses[reconciliation.status]}</div>
           </div>
-          <CutoverKpi label={financialCopy.salesforceRecords} value={reconciliation.checked ? reconciliation.total : null} />
-          <CutoverKpi label={financialCopy.correctInXero} value={reconciliation.checked ? reconciliation.reconciled : null} tone="emerald" />
-          <CutoverKpi label={financialCopy.awaitingSync} value={reconciliation.checked ? reconciliation.pending : null} tone="amber" />
-          <CutoverKpi label={financialCopy.exceptions} value={reconciliation.checked ? reconciliation.exceptions : null} tone="rose" />
+          {[
+            [financialCopy.salesforceRecords, reconciliation.total],
+            [financialCopy.correctInXero, reconciliation.reconciled, 'emerald'],
+            [financialCopy.awaitingSync, reconciliation.pending, 'amber'],
+            [financialCopy.exceptions, reconciliation.exceptions, 'rose'],
+          ].map(([label, value, tone]) => <CutoverKpi key={label} label={label} value={reconciliation.checked ? value : null} tone={tone} />)}
         </div>
         <div className="mt-3 rounded-lg border border-sky-100 bg-white/80 px-3 py-2 text-sm text-slate-700">
           {financialCopy.reconciliationDescriptions[reconciliation.status]}
@@ -272,7 +303,7 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
 
       {preview && <div className="space-y-3">
         <Button size="sm" variant="ghost" onClick={() => { setView(stemContext ? 'all' : 'attention'); setSearch(stemContext); }}>Reset filters</Button>
-        <p className="text-xs text-muted-foreground">{flow.checked}: {new Date(preview.checkedAt || preview.run.createdAt).toLocaleString(copy.locale)} · {flow.saved}</p>
+        <p className={DETAIL_CLASS}>{flow.checked}: {new Date(preview.checkedAt || preview.run.createdAt).toLocaleString(copy.locale)} · {flow.saved}</p>
         <div className="flex flex-wrap gap-2">{['attention', 'ready', 'waiting', 'matched', 'all'].map((bucket) => <Button key={bucket} variant={view === bucket ? 'default' : 'outline'} size="sm" onClick={() => { setView(bucket); setDocumentPage(0); setPaymentPage(0); }}>{flow[bucket]} ({[...(preview.rows || []).map((row) => reconciliationBucket(row)), ...(payments?.rows || []).map((row) => reconciliationBucket(row, 'payment'))].filter((value) => bucket === 'all' || bucket === value).length})</Button>)}</div>
         <Input aria-label={flow.search} placeholder={flow.search} value={search} onChange={(event) => { setSearch(event.target.value); setDocumentPage(0); setPaymentPage(0); }} />
         {!financialGate?.enabled && <p role="status" className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">{flow.locked}</p>}
@@ -281,43 +312,38 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
         <>
 
 
-          <section className="rounded-lg border border-border bg-card p-4">
-            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-              <div>
-                <h2 className="text-base font-semibold">{financialCopy.reviewTitle}</h2>
-                <p className="mt-1 text-sm text-muted-foreground">{financialCopy.runSummary(preview.run?.id?.slice(0, 8), copy.statuses[preview.run?.status] || preview.run?.status?.replaceAll('_', ' '), selected.size, eligibleRows.length)}</p>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
+          <section className={PANEL_CLASS}>
+            <div className={SECTION_HEADER_CLASS}>
+              {sectionHeading(financialCopy.reviewTitle, financialCopy.runSummary(preview.run?.id?.slice(0, 8), copy.statuses[preview.run?.status] || preview.run?.status?.replaceAll('_', ' '), selected.size, eligibleRows.length))}
+              <div className={ACTIONS_CLASS}>
                 <Button type="button" variant="outline" onClick={() => setSelected(new Set(eligibleRows.map((row) => row.id)))}>{financialCopy.selectEligible}</Button>
                 <Button type="button" variant="outline" onClick={() => setSelected(new Set())}>{copy.common.clear}</Button>
                 <Button type="button" onClick={() => setReviewOpen(true)} disabled={Boolean(busy) || !financialGate?.enabled || !['ready_for_review', 'authorised', 'partial', 'failed'].includes(preview.run?.status) || (preview.run?.status === 'ready_for_review' && !selected.size)}>
-                  {busy === 'run' && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}{preview.run?.status === 'ready_for_review' ? flow.review : flow.resume}
+                  {actionIcon(busy === 'run')}{preview.run?.status === 'ready_for_review' ? flow.review : flow.resume}
                 </Button>
               </div>
             </div>
-            <div className="mt-3 flex items-center justify-between gap-3 text-sm text-muted-foreground">
-              <span>{financialCopy.rowRange(orderedDocuments.length ? documentPage * PAGE_SIZE + 1 : 0, Math.min((documentPage + 1) * PAGE_SIZE, orderedDocuments.length), orderedDocuments.length)}</span>
-              <div className="flex gap-2"><Button type="button" size="sm" variant="outline" onClick={() => setDocumentPage((page) => Math.max(0, page - 1))} disabled={documentPage === 0}>{copy.common.previous}</Button><Button type="button" size="sm" variant="outline" onClick={() => setDocumentPage((page) => Math.min(documentPageCount - 1, page + 1))} disabled={documentPage >= documentPageCount - 1}>{copy.common.next}</Button></div>
-            </div>
-            <div className="mt-4 max-h-[680px] overflow-auto rounded-lg border border-border">
+            {pagination(documentPage, documentPageCount, orderedDocuments.length, PAGE_SIZE, setDocumentPage, financialCopy.rowRange, copy.common, 'mt-3')}
+            <div className={cn('mt-4 max-h-[680px]', TABLE_FRAME_CLASS)}>
               <Table scrollLabel={financialCopy.documentTableLabel}>
-                <TableHeader><TableRow><TableHead className="w-10">{copy.common.use}</TableHead><TableHead>{copy.common.action}</TableHead><TableHead>{financialCopy.salesforceDocument}</TableHead><TableHead>{financialCopy.accountStem}</TableHead><TableHead>{copy.common.date}</TableHead><TableHead>{copy.common.total}</TableHead><TableHead>Xero</TableHead><TableHead>{copy.common.reason}</TableHead></TableRow></TableHeader>
+                {tableHeader([copy.common.use, copy.common.action, financialCopy.salesforceDocument, financialCopy.accountStem, copy.common.date, copy.common.total, 'Xero', copy.common.reason], true)}
                 <TableBody>
                   {!visibleDocuments.length && <TableRow><TableCell colSpan={8}>{flow.noRows}</TableCell></TableRow>}
                   {visibleDocuments.map((row) => (
                     <TableRow key={row.id}>
-                      <TableCell><Checkbox checked={selected.has(row.id)} disabled={row.status !== 'eligible' || reconciliationBucket(row) !== 'ready' || preview.run?.status !== 'ready_for_review'} onCheckedChange={(value) => toggleSelection(row.id, value === true, setSelected)} /></TableCell>
-                      <TableCell><FinancialActionBadge action={row.action} status={row.status} copy={copy} /></TableCell>
-                      <TableCell><div className="font-medium">{row.documentNumber}</div><div className="text-xs text-muted-foreground">{financialCopy.documentKinds[row.documentKind] || row.documentKind?.replaceAll('_', ' ')}</div></TableCell>
-                      <TableCell><div className="font-medium">{row.accountName}</div><div className="text-xs text-muted-foreground">{row.companyCode || copy.common.noClKey} · {row.stemName || copy.common.noStem}</div></TableCell>
-                      <TableCell><div>{row.invoiceDate}</div><div className="text-xs text-muted-foreground">{financialCopy.due} {row.dueDate || copy.common.notSet}</div></TableCell>
-                      <TableCell className="tabular-nums">{row.currency} {formatAmount(row.total, copy.locale)}</TableCell>
-                      <TableCell>{row.xero?.url ? <a href={row.xero.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-blue-700 hover:underline">{row.xero.number || copy.common.open} <ExternalLink className="h-3 w-3" /></a> : financialCopy.noActiveMatch}{row.xero?.status ? <div className="text-xs text-muted-foreground">{row.xero.status}</div> : null}</TableCell>
-                      <TableCell className="max-w-[360px]"><div>{row.blockers?.[0] || row.warnings?.[0] || (row.differences?.length ? financialCopy.differenceCount(row.differences.length) : copy.common.exact)}</div>
+                      {tableCells([
+                        <Checkbox checked={selected.has(row.id)} disabled={row.status !== 'eligible' || reconciliationBucket(row) !== 'ready' || preview.run?.status !== 'ready_for_review'} onCheckedChange={(value) => toggleSelection(row.id, value === true, setSelected)} />,
+                        <FinancialActionBadge action={row.action} status={row.status} copy={copy} />,
+                        detailPair(row.documentNumber, financialCopy.documentKinds[row.documentKind] || row.documentKind?.replaceAll('_', ' ')),
+                        detailPair(row.accountName, <>{row.companyCode || copy.common.noClKey} · {row.stemName || copy.common.noStem}</>),
+                        detailPair(row.invoiceDate, <>{financialCopy.due} {row.dueDate || copy.common.notSet}</>, false),
+                        <>{row.currency} {formatAmount(row.total, copy.locale)}</>,
+                        <>{row.xero?.url ? <a href={row.xero.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-blue-700 hover:underline">{row.xero.number || copy.common.open} <ExternalLink className="h-3 w-3" /></a> : financialCopy.noActiveMatch}{row.xero?.status ? <div className={DETAIL_CLASS}>{row.xero.status}</div> : null}</>,
+                        <><div>{row.blockers?.[0] || row.warnings?.[0] || (row.differences?.length ? financialCopy.differenceCount(row.differences.length) : copy.common.exact)}</div>
                         {(row.blockers || []).some((reason) => /mapping|tax|account code/i.test(reason)) && <Button variant="link" size="sm" onClick={() => setFixMapping(row)}>{flow.mapping}</Button>}
                         {!!row.differences?.length && <details className="mt-2"><summary>{flow.details}</summary>{row.differences.map((difference, index) => <div key={index} className="text-xs">{difference.field}: Salesforce {formatDifferenceValue(difference.salesforce ?? difference.salesforceLineCount)} → Xero {formatDifferenceValue(difference.xero ?? difference.xeroLineCount)}</div>)}</details>}
-                        {row.stemId && <a className="block text-xs text-blue-700 underline" href={`/disputes?stem=${encodeURIComponent(row.stemId)}`}>{row.dispute?.status ? `Dispute: ${row.dispute.status}` : 'Dispute / settlement'}</a>}
-                      </TableCell>
+                        {row.stemId && <a className={LINK_CLASS} href={`/disputes?stem=${encodeURIComponent(row.stemId)}`}>{row.dispute?.status ? `Dispute: ${row.dispute.status}` : 'Dispute / settlement'}</a>}</>,
+                      ], { 5: 'tabular-nums', 7: 'max-w-[360px]' })}
                     </TableRow>
                   ))}
                 </TableBody>
@@ -325,25 +351,30 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
             </div>
           </section>
 
-          <section className="rounded-lg border border-border bg-card p-4">
-            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-              <div><h2 className="text-base font-semibold">{financialCopy.paymentsTitle}</h2><p className="mt-1 text-sm text-muted-foreground">{financialCopy.paymentsDescription}</p></div>
-              <Button type="button" variant="outline" onClick={previewPayments} disabled={Boolean(busy)}>{busy === 'payment-preview' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ShieldCheck className="mr-2 h-4 w-4" />}{financialCopy.previewPayments}</Button>
+          <section className={PANEL_CLASS}>
+            <div className={SECTION_HEADER_CLASS}>
+              {sectionHeading(financialCopy.paymentsTitle, financialCopy.paymentsDescription)}
+              <Button type="button" variant="outline" onClick={previewPayments} disabled={Boolean(busy)}>{actionIcon(busy === 'payment-preview', ShieldCheck)}{financialCopy.previewPayments}</Button>
             </div>
             {payments ? (
               <div className="mt-4 space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="text-sm text-muted-foreground">{financialCopy.paymentSummary(payments.summary?.total || 0, payments.summary?.paymentApply || 0)}</div>
-                  <div className="flex flex-wrap items-center gap-2">
+                  <div className={ACTIONS_CLASS}>
                     <label className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm"><Checkbox checked={paymentsReviewed} onCheckedChange={(value) => setPaymentsReviewed(value === true)} />{financialCopy.financeReviewedPayments}</label>
-                    <Button type="button" onClick={applyPayments} disabled={!paymentsReviewed || !selectedPayments.size || !financialGate?.enabled || Boolean(busy)}>{busy === 'payment-apply' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}{financialCopy.applyPayments}</Button>
+                    <Button type="button" onClick={applyPayments} disabled={!paymentsReviewed || !selectedPayments.size || !financialGate?.enabled || Boolean(busy)}>{actionIcon(busy === 'payment-apply', Play)}{financialCopy.applyPayments}</Button>
                   </div>
                 </div>
-                <div className="flex items-center justify-between gap-3 text-sm text-muted-foreground"><span>{financialCopy.rowRange(orderedPayments.length ? paymentPage * PAGE_SIZE + 1 : 0, Math.min((paymentPage + 1) * PAGE_SIZE, orderedPayments.length), orderedPayments.length)}</span><div className="flex gap-2"><Button type="button" size="sm" variant="outline" onClick={() => setPaymentPage((page) => Math.max(0, page - 1))} disabled={paymentPage === 0}>{copy.common.previous}</Button><Button type="button" size="sm" variant="outline" onClick={() => setPaymentPage((page) => Math.min(paymentPageCount - 1, page + 1))} disabled={paymentPage >= paymentPageCount - 1}>{copy.common.next}</Button></div></div>
-                <div className="max-h-[420px] overflow-auto rounded-lg border border-border">
-                  <Table scrollLabel={financialCopy.paymentTableLabel}><TableHeader><TableRow><TableHead>{copy.common.use}</TableHead><TableHead>{financialCopy.payment}</TableHead><TableHead>{copy.common.type}</TableHead><TableHead>{copy.common.date}</TableHead><TableHead>{copy.common.bank}</TableHead><TableHead>{copy.common.amount}</TableHead><TableHead>{financialCopy.actionReason}</TableHead></TableRow></TableHeader><TableBody>
+                {pagination(paymentPage, paymentPageCount, orderedPayments.length, PAGE_SIZE, setPaymentPage, financialCopy.rowRange, copy.common)}
+                <div className={cn('max-h-[420px]', TABLE_FRAME_CLASS)}>
+                  <Table scrollLabel={financialCopy.paymentTableLabel}>{tableHeader([copy.common.use, financialCopy.payment, copy.common.type, copy.common.date, copy.common.bank, copy.common.amount, financialCopy.actionReason])}<TableBody>
                     {!visiblePayments.length && <TableRow><TableCell colSpan={7}>{flow.noRows}</TableCell></TableRow>}
-                    {visiblePayments.map((row) => <TableRow key={row.salesforcePaymentId}><TableCell><Checkbox checked={selectedPayments.has(row.salesforcePaymentId)} disabled={row.action !== 'payment_apply' || row.status !== 'eligible'} onCheckedChange={(value) => toggleSelection(row.salesforcePaymentId, value === true, setSelectedPayments)} /></TableCell><TableCell className="font-medium">{row.salesforcePaymentName}</TableCell><TableCell>{row.type}</TableCell><TableCell>{row.paymentDate}</TableCell><TableCell>{row.bank || copy.common.notSet}</TableCell><TableCell>{row.currency} {formatAmount(row.amount, copy.locale)}</TableCell><TableCell>{reconciliationBucket(row, 'payment') === 'waiting' ? flow.waitInvoice : row.blockers?.[0] || financialCopy.actions[row.action] || row.action?.replaceAll('_', ' ')}{(row.blockers || []).some((reason) => /bank mapping/i.test(reason)) && <Button variant="link" size="sm" onClick={() => setFixMapping({ bank: row.bank, documentNumber: row.salesforcePaymentName })}>{flow.mapping}</Button>}{row.stemId && <a className="block text-xs text-blue-700 underline" href={`/disputes?stem=${encodeURIComponent(row.stemId)}`}>Dispute / settlement</a>}{row.xeroDocumentUrl && <a className="block text-blue-700 underline" href={row.xeroDocumentUrl} target="_blank" rel="noreferrer">Xero</a>}</TableCell></TableRow>)}
+                    {visiblePayments.map((row) => <TableRow key={row.salesforcePaymentId}>{tableCells([
+                      <Checkbox checked={selectedPayments.has(row.salesforcePaymentId)} disabled={row.action !== 'payment_apply' || row.status !== 'eligible'} onCheckedChange={(value) => toggleSelection(row.salesforcePaymentId, value === true, setSelectedPayments)} />,
+                      row.salesforcePaymentName, row.type, row.paymentDate, row.bank || copy.common.notSet,
+                      <>{row.currency} {formatAmount(row.amount, copy.locale)}</>,
+                      <>{reconciliationBucket(row, 'payment') === 'waiting' ? flow.waitInvoice : row.blockers?.[0] || financialCopy.actions[row.action] || row.action?.replaceAll('_', ' ')}{(row.blockers || []).some((reason) => /bank mapping/i.test(reason)) && <Button variant="link" size="sm" onClick={() => setFixMapping({ bank: row.bank, documentNumber: row.salesforcePaymentName })}>{flow.mapping}</Button>}{row.stemId && <a className={LINK_CLASS} href={`/disputes?stem=${encodeURIComponent(row.stemId)}`}>Dispute / settlement</a>}{row.xeroDocumentUrl && <a className="block text-blue-700 underline" href={row.xeroDocumentUrl} target="_blank" rel="noreferrer">Xero</a>}</>,
+                    ], { 1: 'font-medium' })}</TableRow>)}
                   </TableBody></Table>
                 </div>
               </div>
@@ -351,27 +382,24 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
           </section>
         </>
       ) : <StateBlock icon={AlertTriangle} title={financialCopy.noPreviewTitle} description={financialCopy.noPreviewDescription} />}
-      <details className="rounded-lg border border-border bg-card p-4">
+      <details className={PANEL_CLASS}>
         <summary className="cursor-pointer list-none">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div><h2 className="text-base font-semibold">{financialCopy.setupTitle}</h2><p className="mt-1 text-sm text-muted-foreground">{financialCopy.setupDescription}</p></div>
+          <div className={BETWEEN_CLASS}>
+            {sectionHeading(financialCopy.setupTitle, financialCopy.setupDescription)}
             <div className="text-right text-xs text-muted-foreground"><div>{financialCopy.savedMappings((mappings?.productMappings || []).length)}</div>{preview ? <div>{financialCopy.proposalSummary(mappingProposalSummary.proposed, mappingProposalSummary.conflicts)}</div> : null}</div>
           </div>
         </summary>
         <div className="mt-4 space-y-5 border-t border-border pt-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div><h3 className="text-sm font-semibold">{financialCopy.mappingTitle}</h3><p className="mt-1 text-sm text-muted-foreground">{financialCopy.mappingDescription}</p></div>
+          <div className={BETWEEN_CLASS}>
+            {sectionHeading(financialCopy.mappingTitle, financialCopy.mappingDescription, true)}
             <Button type="button" variant="outline" onClick={loadMappings} disabled={Boolean(busy)}><RefreshCw className="mr-2 h-4 w-4" />{financialCopy.mappings}</Button>
           </div>
           {products.length ? (
             <div className="space-y-3">
-              <div className="flex items-center justify-between gap-3 text-sm text-muted-foreground">
-                <span>{financialCopy.mappingRange(mappingPage * MAPPING_PAGE_SIZE + 1, Math.min((mappingPage + 1) * MAPPING_PAGE_SIZE, productMappingRows.length), productMappingRows.length)}</span>
-                <div className="flex gap-2"><Button type="button" size="sm" variant="outline" onClick={() => setMappingPage((page) => Math.max(0, page - 1))} disabled={mappingPage === 0}>{copy.common.previous}</Button><Button type="button" size="sm" variant="outline" onClick={() => setMappingPage((page) => Math.min(mappingPageCount - 1, page + 1))} disabled={mappingPage >= mappingPageCount - 1}>{copy.common.next}</Button></div>
-              </div>
-              <div className="max-h-[520px] overflow-auto rounded-lg border border-border">
+              {pagination(mappingPage, mappingPageCount, productMappingRows.length, MAPPING_PAGE_SIZE, setMappingPage, financialCopy.mappingRange, copy.common)}
+              <div className={cn('max-h-[520px]', TABLE_FRAME_CLASS)}>
                 <Table scrollLabel={financialCopy.productMappingsLabel}>
-                  <TableHeader><TableRow><TableHead>{financialCopy.direction}</TableHead><TableHead>{financialCopy.salesforceProduct}</TableHead><TableHead>{financialCopy.xeroAccount}</TableHead><TableHead>{financialCopy.taxType}</TableHead><TableHead>{financialCopy.action}</TableHead></TableRow></TableHeader>
+                  {tableHeader([financialCopy.direction, financialCopy.salesforceProduct, financialCopy.xeroAccount, financialCopy.taxType, financialCopy.action])}
                   <TableBody>{visibleProductMappings.map((row) => <ProductMappingRow key={row.key} direction={row.direction} product={row.product} mapping={row.mapping} proposal={row.proposal} accounts={mappings?.accountOptions || []} taxes={mappings?.taxOptions || []} onSaved={loadMappings} copy={copy} />)}</TableBody>
                 </Table>
               </div>
@@ -379,7 +407,7 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
           ) : <div className="rounded-lg border border-dashed border-border px-3 py-3 text-sm text-muted-foreground">{financialCopy.noProducts}</div>}
           <div>
             <h3 className="text-sm font-semibold">{financialCopy.bankTitle}</h3>
-            <p className="mt-1 text-sm text-muted-foreground">{financialCopy.bankDescription}</p>
+            <p className={DESCRIPTION_CLASS}>{financialCopy.bankDescription}</p>
             <div className="mt-3 grid gap-3 lg:grid-cols-2">{DEFAULT_BANKS.map((bank) => <BankMapping key={bank} bank={bank} mapping={bankMappingIndex.get(bank)} accounts={(mappings?.accountOptions || []).filter((account) => account.bank)} onSaved={loadMappings} copy={copy} />)}</div>
           </div>
         </div>
@@ -413,7 +441,7 @@ function ProductMappingRow({ direction, product, mapping, proposal, accounts, ta
     const account = accounts.find((row) => row.code === accountCode);
     if (!account) return;
     setBusy(true);
-    const result = await appClient.functions.invoke('xeroFinancialMappingsSave', { mappingType: 'product', id: mapping?.id || null, revision: mapping?.revision || null, direction, salesforceProductId: product.id, salesforceProductName: product.name, xeroAccountCode: account.code, xeroAccountName: account.name, xeroTaxType: taxType }, { force: true, cache: false, invalidateCache: true });
+    const result = await appClient.functions.invoke('xeroFinancialMappingsSave', { mappingType: 'product', id: mapping?.id || null, revision: mapping?.revision || null, direction, salesforceProductId: product.id, salesforceProductName: product.name, xeroAccountCode: account.code, xeroAccountName: account.name, xeroTaxType: taxType }, MUTATION_OPTIONS);
     setBusy(false);
     if (result.data?.error) toast({ title: financialCopy.mappingSaveFailed, description: result.data.error, variant: 'destructive' }); else { toast({ title: financialCopy.mappingSaved }); await onSaved(); }
   }
@@ -424,7 +452,13 @@ function ProductMappingRow({ direction, product, mapping, proposal, accounts, ta
       : proposal?.status === 'conflict'
         ? financialCopy.conflicting(proposal.alternatives.map((item) => `${item.xeroAccountCode}/${item.xeroTaxType}`).join(', '))
         : financialCopy.noSuggestion;
-  return <TableRow><TableCell>{financialCopy.directions[direction] || direction}</TableCell><TableCell><div className="font-medium">{product.name}</div><div className={cn('mt-1 text-xs', mapping ? 'text-emerald-700' : proposal?.status === 'conflict' ? 'text-amber-700' : 'text-muted-foreground')}>{evidenceLabel}</div></TableCell><TableCell><select value={accountCode} onChange={(event) => setAccountCode(event.target.value)} className="h-9 min-w-[260px] rounded-md border border-input bg-background px-3 text-sm"><option value="">{financialCopy.selectAccount}</option>{accounts.filter((row) => !row.bank).map((row) => <option key={row.id} value={row.code}>{row.code} · {row.name}</option>)}</select></TableCell><TableCell><select value={taxType} onChange={(event) => setTaxType(event.target.value)} className="h-9 min-w-[180px] rounded-md border border-input bg-background px-3 text-sm"><option value="NONE">NONE</option>{taxes.filter((row) => row.taxType !== 'NONE').map((row) => <option key={row.taxType} value={row.taxType}>{row.taxType} · {row.name}</option>)}</select></TableCell><TableCell><Button type="button" size="sm" variant="outline" onClick={save} disabled={!accountCode || busy}>{busy ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Save className="mr-2 h-3.5 w-3.5" />}{mapping ? financialCopy.updateApproval : financialCopy.approveMapping}</Button></TableCell></TableRow>;
+  return <TableRow>{tableCells([
+    financialCopy.directions[direction] || direction,
+    <><div className="font-medium">{product.name}</div><div className={cn('mt-1 text-xs', mapping ? 'text-emerald-700' : proposal?.status === 'conflict' ? 'text-amber-700' : 'text-muted-foreground')}>{evidenceLabel}</div></>,
+    <select value={accountCode} onChange={(event) => setAccountCode(event.target.value)} className={cn(SELECT_CLASS, 'min-w-[260px]')}><option value="">{financialCopy.selectAccount}</option>{accounts.filter((row) => !row.bank).map((row) => <option key={row.id} value={row.code}>{row.code} · {row.name}</option>)}</select>,
+    <select value={taxType} onChange={(event) => setTaxType(event.target.value)} className={cn(SELECT_CLASS, 'min-w-[180px]')}><option value="NONE">NONE</option>{taxes.filter((row) => row.taxType !== 'NONE').map((row) => <option key={row.taxType} value={row.taxType}>{row.taxType} · {row.name}</option>)}</select>,
+    <Button type="button" size="sm" variant="outline" onClick={save} disabled={!accountCode || busy}>{actionIcon(busy, Save, true)}{mapping ? financialCopy.updateApproval : financialCopy.approveMapping}</Button>,
+  ])}</TableRow>;
 }
 
 function mappingReviewRank(row) {
@@ -440,6 +474,32 @@ function mappingEvidenceBasisLabel(basis, financialCopy) {
   return financialCopy.basis.default;
 }
 
+function detailPair(value, detail, emphasis = true) {
+  return <><div className={emphasis ? 'font-medium' : undefined}>{value}</div><div className={DETAIL_CLASS}>{detail}</div></>;
+}
+
+function tableHeader(labels, narrowFirst = false) {
+  return <TableHeader><TableRow>{labels.map((label, index) => <TableHead key={index} className={narrowFirst && index === 0 ? 'w-10' : undefined}>{label}</TableHead>)}</TableRow></TableHeader>;
+}
+
+function tableCells(values, classes = {}) {
+  return values.map((value, index) => <TableCell key={index} className={classes[index]}>{value}</TableCell>);
+}
+
+function actionIcon(busy, Icon, compact = false) {
+  const Graphic = busy ? Loader2 : Icon;
+  return Graphic ? <Graphic className={cn(compact ? 'mr-2 h-3.5 w-3.5' : 'mr-2 h-4 w-4', busy && 'animate-spin')} /> : null;
+}
+
+function sectionHeading(title, description, small = false) {
+  const Heading = small ? 'h3' : 'h2';
+  return <div><Heading className={small ? 'text-sm font-semibold' : 'text-base font-semibold'}>{title}</Heading><p className={DESCRIPTION_CLASS}>{description}</p></div>;
+}
+
+function pagination(page, pageCount, total, pageSize, setPage, range, copy, className = '') {
+  return <div className={cn(className, 'flex items-center justify-between gap-3 text-sm text-muted-foreground')}><span>{range(total ? page * pageSize + 1 : 0, Math.min((page + 1) * pageSize, total), total)}</span><div className="flex gap-2"><Button type="button" size="sm" variant="outline" onClick={() => setPage((current) => Math.max(0, current - 1))} disabled={page === 0}>{copy.previous}</Button><Button type="button" size="sm" variant="outline" onClick={() => setPage((current) => Math.min(pageCount - 1, current + 1))} disabled={page >= pageCount - 1}>{copy.next}</Button></div></div>;
+}
+
 function BankMapping({ bank, mapping, accounts, onSaved, copy }) {
   const financialCopy = copy.financial;
   const [accountId, setAccountId] = useState(mapping?.xeroBankAccountId || '');
@@ -449,15 +509,15 @@ function BankMapping({ bank, mapping, accounts, onSaved, copy }) {
     const account = accounts.find((row) => row.id === accountId);
     if (!account) return;
     setBusy(true);
-    const result = await appClient.functions.invoke('xeroFinancialMappingsSave', { mappingType: 'bank', id: mapping?.id || null, revision: mapping?.revision || null, salesforceBankName: bank, xeroBankAccountId: account.id, xeroBankAccountCode: account.code, xeroBankAccountName: account.name }, { force: true, cache: false, invalidateCache: true });
+    const result = await appClient.functions.invoke('xeroFinancialMappingsSave', { mappingType: 'bank', id: mapping?.id || null, revision: mapping?.revision || null, salesforceBankName: bank, xeroBankAccountId: account.id, xeroBankAccountCode: account.code, xeroBankAccountName: account.name }, MUTATION_OPTIONS);
     setBusy(false);
     if (result.data?.error) toast({ title: financialCopy.bankSaveFailed, description: result.data.error, variant: 'destructive' }); else { toast({ title: financialCopy.bankSaved(bank) }); await onSaved(); }
   }
-  return <div className="rounded-lg border border-border bg-background p-3"><div className="text-sm font-semibold">{bank}</div><div className="mt-2 flex gap-2"><select value={accountId} onChange={(event) => setAccountId(event.target.value)} className="h-9 min-w-0 flex-1 rounded-md border border-input bg-background px-3 text-sm"><option value="">{financialCopy.selectBank}</option>{accounts.map((row) => <option key={row.id} value={row.id}>{row.code ? `${row.code} · ` : ''}{row.name}</option>)}</select><Button type="button" size="sm" variant="outline" aria-label={`${financialCopy.mappings}: ${bank}`} onClick={save} disabled={!accountId || busy}>{busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}</Button></div></div>;
+  return <div className="rounded-lg border border-border bg-background p-3"><div className="text-sm font-semibold">{bank}</div><div className="mt-2 flex gap-2"><select value={accountId} onChange={(event) => setAccountId(event.target.value)} className={cn(SELECT_CLASS, 'min-w-0 flex-1')}><option value="">{financialCopy.selectBank}</option>{accounts.map((row) => <option key={row.id} value={row.id}>{row.code ? `${row.code} · ` : ''}{row.name}</option>)}</select><Button type="button" size="sm" variant="outline" aria-label={`${financialCopy.mappings}: ${bank}`} onClick={save} disabled={!accountId || busy}>{actionIcon(busy, Save, true)}</Button></div></div>;
 }
 
 function CutoverKpi({ label, value, tone = 'neutral' }) {
-  const classes = { neutral: 'border-slate-200 bg-slate-50', sky: 'border-sky-200 bg-sky-50', emerald: 'border-emerald-200 bg-emerald-50', amber: 'border-amber-200 bg-amber-50', slate: 'border-zinc-200 bg-zinc-50', rose: 'border-rose-200 bg-rose-50' };
+  const classes = { neutral: 'border-slate-200 bg-slate-50', emerald: 'border-emerald-200 bg-emerald-50', amber: 'border-amber-200 bg-amber-50', rose: 'border-rose-200 bg-rose-50' };
   const number = Number(value);
   const hasValue = value !== null && value !== undefined && Number.isFinite(number);
   return <div className={cn('rounded-lg border px-4 py-3', classes[tone])}><div className="text-xs font-semibold uppercase text-muted-foreground">{label}</div><div className="mt-1 text-2xl font-semibold tabular-nums">{hasValue ? number.toLocaleString() : '—'}</div></div>;

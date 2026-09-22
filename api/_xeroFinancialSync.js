@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { requireExternalActionGate } from './_externalActionGates.js';
+import { xeroRateLimitSnapshot } from './_xeroRateLimit.js';
 import { sfCompositeQueries, sfQuery } from './_salesforce.js';
 import {
   getFreshXeroConnection,
@@ -52,19 +53,8 @@ export const XERO_FINANCIAL_ACTION_LABELS = Object.freeze({
   payment_apply: 'Apply exact payment',
 });
 
-export function xeroFinancialRateSnapshot(headers, previous = {}) {
-  const read = (name) => {
-    const value = headers?.get?.(name);
-    return value == null || String(value).trim() === '' ? null : numberOrNull(value);
-  };
-  return compactObject({
-    minuteRemaining: read('x-minlimit-remaining') ?? previous.minuteRemaining,
-    dayRemaining: read('x-daylimit-remaining') ?? previous.dayRemaining,
-    appMinuteRemaining: read('x-appminlimit-remaining') ?? previous.appMinuteRemaining,
-    appDayRemaining: read('x-appdaylimit-remaining') ?? previous.appDayRemaining,
-    retryAfterSeconds: read('retry-after') ?? previous.retryAfterSeconds,
-    observedAt: new Date().toISOString(),
-  });
+export function xeroFinancialRateSnapshot(headers, previous = {}, options = {}) {
+  return xeroRateLimitSnapshot(headers, previous, options);
 }
 
 export function assertXeroFinancialDailyReserve(rate, env = process.env) {
@@ -295,7 +285,7 @@ export async function xeroFinancialSyncPreview(body = {}, dependencies = {}) {
   assertScopes(connection, ['accounting.invoices', 'accounting.contacts', 'accounting.settings.read'], 'Financial sync preview');
   if (body.refreshIfChangedRunId) {
     const probe = await financialPreviewChanges(body.refreshIfChangedRunId, { client, connection, env, fetchImpl });
-    if (!probe.changed) return { unchanged: true, checkedAt: new Date().toISOString() };
+    if (!probe.changed) return { unchanged: true, checkedAt: new Date().toISOString(), rateLimit: probe.rateLimit };
   }
   const snapshotStartedAt = new Date().toISOString();
   const rate = {};
@@ -401,7 +391,11 @@ export async function financialPreviewChanges(runId, { client, connection, env =
     .map((object) => ({ soql: `SELECT Id FROM ${object} WHERE SystemModstamp >= ${since.toISOString()} LIMIT 1`, clean: true, limit: 1 })));
   if (changes.some((result) => result?.error)) throw financialError('The background Salesforce check could not be completed.', 502, 'XERO_FINANCIAL_SALESFORCE_INCOMPLETE');
   if (changes.some((result) => result.records?.length)) return { changed: true };
-  const onResponse = ({ headers }) => assertXeroFinancialDailyReserve(xeroFinancialRateSnapshot(headers), env);
+  const rate = {};
+  const onResponse = ({ headers }) => {
+    Object.assign(rate, xeroFinancialRateSnapshot(headers, rate));
+    assertXeroFinancialDailyReserve(rate, env);
+  };
   for (const collection of ['Invoices', 'CreditNotes', 'Payments', 'Contacts']) {
     const result = await accountingFetch(connection, `/${collection}?page=1&pageSize=1`, {
       method: 'GET', headers: { 'If-Modified-Since': since.toUTCString() }, env, fetchImpl, onResponse,
@@ -412,7 +406,7 @@ export async function financialPreviewChanges(runId, { client, connection, env =
   const result = await accountingFetch(connection, '/Organisations', { method: 'GET', env, fetchImpl, onResponse });
   const organisation = result.Organisations?.[0];
   if (!organisation) throw financialError('The Xero period lock could not be checked.', 502, 'XERO_FINANCIAL_XERO_INCOMPLETE');
-  return { changed: hashJson({ periodLockDate: dateOnly(organisation.PeriodLockDate), endOfYearLockDate: dateOnly(organisation.EndOfYearLockDate) }) !== hashJson(snapshot.organisation) };
+  return { changed: hashJson({ periodLockDate: dateOnly(organisation.PeriodLockDate), endOfYearLockDate: dateOnly(organisation.EndOfYearLockDate) }) !== hashJson(snapshot.organisation), rateLimit: rate };
 }
 
 export function xeroReviewFingerprint(row) {

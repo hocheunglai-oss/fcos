@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createXeroRequestGate, xeroRetryAfterMs, xeroRateLimitError } from '../api/_xeroRateLimit.js';
+import { createXeroRequestGate, xeroRetryAfterMs, xeroRateLimitError, xeroRateLimitSnapshot } from '../api/_xeroRateLimit.js';
 import { xeroAccountingFetch } from '../api/_xeroContactSync.js';
 import { loadAllXeroPages, loadXeroFinancialSnapshot, loadXeroPaymentEvidence, xeroPaymentEvidenceIds, xeroFinancialRateSnapshot, assertXeroFinancialDailyReserve } from '../api/_xeroFinancialSync.js';
 
@@ -214,4 +214,65 @@ test('missing quota headers remain unknown and cannot falsely exhaust the daily 
   assert.equal(xeroFinancialRateSnapshot(new Headers(), { dayRemaining: 800 }).dayRemaining, 800);
   assert.throws(() => assertXeroFinancialDailyReserve(xeroFinancialRateSnapshot(new Headers({ 'X-DayLimit-Remaining': '0' }))), /daily allowance reserve/);
   assert.match(xeroRateLimitError(new Headers({ 'X-Rate-Limit-Problem': 'day' })).message, /after the daily allowance resets/);
+});
+
+test('daily reset uses Xero seconds or HTTP date and survives the reserve error envelope', () => {
+  const now = Date.parse('2026-09-23T01:30:00Z');
+  for (const retry of ['5400', 'Wed, 23 Sep 2026 03:00:00 GMT']) {
+    const headers = new Headers({ 'X-Rate-Limit-Problem': 'day', 'X-DayLimit-Remaining': '0', 'Retry-After': retry });
+    const rate = xeroFinancialRateSnapshot(headers, {}, { now });
+    assert.equal(rate.dayResetAt, '2026-09-23T03:00:00.000Z');
+    assert.equal(rate.observedAt, '2026-09-23T01:30:00.000Z');
+    assert.equal(rate.retryAfterSeconds, 5400);
+    assert.equal(xeroRateLimitError(headers, { now }).details.rateLimit.dayResetAt, rate.dayResetAt);
+    assert.throws(() => assertXeroFinancialDailyReserve(rate), (error) => {
+      assert.equal(error.details.rateLimit.dayResetAt, rate.dayResetAt);
+      assert.equal(error.details.rateLimit.dayRemaining, 0);
+      return error.code === 'XERO_FINANCIAL_DAILY_RESERVE';
+    });
+  }
+});
+
+test('a minute limit, local reserve or invalid header cannot invent a daily reset', () => {
+  const now = Date.parse('2026-09-23T01:30:00Z');
+  for (const headers of [
+    { 'X-Rate-Limit-Problem': 'minute', 'Retry-After': '60' },
+    { 'X-DayLimit-Remaining': '199' },
+    { 'Retry-After': '60' },
+    ...['', 'bad', '-1', '1e100'].map((value) => ({ 'X-Rate-Limit-Problem': 'day', 'Retry-After': value })),
+  ]) assert.equal(xeroRateLimitSnapshot(new Headers(headers), {}, { now }).dayResetAt, null);
+  for (const value of ['bad', '-1', '1e100']) {
+    const error = xeroRateLimitError(new Headers({ 'X-Rate-Limit-Problem': 'day', 'Retry-After': value }), { now });
+    assert.equal(error.details.retryAt, null);
+    assert.match(error.message, /after the daily allowance resets/);
+  }
+});
+
+test('new observations never slide an old reset deadline or retain an expired window', () => {
+  const now = Date.parse('2026-09-23T01:30:00Z');
+  const first = xeroRateLimitSnapshot(new Headers({ 'X-Rate-Limit-Problem': 'day', 'Retry-After': '3600', 'X-DayLimit-Remaining': '0' }), {}, { now });
+  const later = xeroRateLimitSnapshot(new Headers(), first, { now: now + 120000 });
+  assert.equal(later.dayResetAt, first.dayResetAt);
+  assert.equal(later.retryAfterSeconds, null);
+  assert.equal(later.retryAt, null);
+  const missingTiming = xeroRateLimitSnapshot(new Headers({ 'X-Rate-Limit-Problem': 'day' }), first, { now: now + 120000 });
+  assert.equal(missingTiming.dayResetAt, first.dayResetAt);
+  const elapsed = xeroRateLimitSnapshot(new Headers({ 'X-DayLimit-Remaining': '950' }), later, { now: now + 3600001 });
+  assert.equal(elapsed.dayResetAt, null);
+  assert.equal(elapsed.dayRemaining, 950);
+  const restoredEarly = xeroRateLimitSnapshot(new Headers({ 'X-DayLimit-Remaining': '950' }), first, { now: now + 120000 });
+  assert.equal(restoredEarly.dayResetAt, null);
+});
+
+test('queued daily errors retain the original provider deadline', async () => {
+  let now = Date.parse('2026-09-23T01:30:00Z');
+  const gate = createXeroRequestGate({ now: () => now, wait: async () => { throw new Error('must not wait'); } });
+  await gate('daily-display', async () => json({}, 429, { 'X-Rate-Limit-Problem': 'day', 'Retry-After': '3600' }));
+  now += 120125;
+  await assert.rejects(gate('daily-display', async () => { throw new Error('must not call Xero'); }), (error) => {
+    assert.equal(error.details.rateLimit.dayResetAt, '2026-09-23T02:30:00.000Z');
+    assert.equal(error.details.retryAt, error.details.rateLimit.dayResetAt);
+    assert.equal(error.details.rateLimit.retryAfterSeconds, 3480);
+    return true;
+  });
 });

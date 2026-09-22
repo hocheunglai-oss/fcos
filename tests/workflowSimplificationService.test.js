@@ -113,8 +113,17 @@ test('background check uses modified-since and detects source, lock and aged sna
   } } };
   const calls = []; const deps = { client: database({ xero_financial_sync_runs: [run] }), connection: {}, now: Date.parse('2026-09-15T10:10:00Z'),
     querySalesforce: async () => Array.from({ length: 8 }, () => ({ records: [] })),
-    accountingFetch: async (_connection, path, options) => { calls.push({ path, options }); const name = path.split('?')[0].slice(1); return { [name]: name === 'Organisations' ? [{}] : [] }; } };
-  assert.equal((await financialPreviewChanges(id, deps)).changed, false);
+    accountingFetch: async (_connection, path, options) => {
+      calls.push({ path, options });
+      options.onResponse({ headers: new Headers({ 'X-DayLimit-Remaining': String(1000 - calls.length) }) });
+      const name = path.split('?')[0].slice(1);
+      return { [name]: name === 'Organisations' ? [{}] : [] };
+    } };
+  const unchanged = await financialPreviewChanges(id, deps);
+  assert.equal(unchanged.changed, false);
+  assert.equal(unchanged.rateLimit.dayRemaining, 995);
+  assert.equal(unchanged.rateLimit.dayResetAt, null);
+  assert.equal(calls.length, 5);
   assert.ok(calls.slice(0, 4).every(({ options }) => options.headers['If-Modified-Since'] === 'Tue, 15 Sep 2026 10:00:00 GMT'));
   assert.equal((await financialPreviewChanges(id, { ...deps, querySalesforce: async () => [{ records: [{ Id: 'changed' }] }] })).changed, true);
   assert.equal((await financialPreviewChanges(id, { ...deps, now: Date.parse('2026-09-16T10:00:00Z') })).changed, true);
