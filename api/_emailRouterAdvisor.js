@@ -1,9 +1,7 @@
+import { AUTO_AI_MODEL, AI_MODEL_SELECTIONS, isAllowedAiSelection, resolveAiModel, aiRequestOptions } from './_aiModelRouting.js';
 import { createHash } from 'node:crypto';
 import {
-  DASHBOARD_AI_MODELS,
-  DEFAULT_DASHBOARD_AI_MODEL,
   dashboardAiUsageFromResponse,
-  isAllowedDashboardAiModel,
 } from './_dashboardAi.js';
 import { fetchEmailRouterDetail, listEmailRouterDirectory } from './_emailRouterCore.js';
 import { listEmailRouterRoutingFolders } from './_emailRouterFolders.js';
@@ -59,7 +57,7 @@ async function advisorSettings(client) {
   return {
     enabled: settings.get('advisor.enabled')?.enabled !== false,
     learningEnabled: settings.get('advisor.learning_enabled')?.enabled !== false,
-    modelId: isAllowedDashboardAiModel(requestedModel) ? requestedModel : DEFAULT_DASHBOARD_AI_MODEL,
+    modelId: isAllowedAiSelection(requestedModel) ? requestedModel : AUTO_AI_MODEL,
   };
 }
 
@@ -174,6 +172,8 @@ export async function runEmailRouterAdvisor({ client, profile, mailbox, messageI
   const apiKey = String(dependencies.apiKey || process.env.OPENAI_API_KEY || '').trim();
   if (!apiKey) throw advisorError('The protected OpenAI service is not configured.', 503, 'OPENAI_NOT_CONFIGURED');
   const settings = await advisorSettings(client);
+  const routing = resolveAiModel({ task: 'email_routing', selection: settings.modelId });
+  settings.modelId = routing.modelId;
   if (!settings.enabled) throw advisorError('Email Router Advisor is disabled in Settings.', 503, 'EMAIL_ROUTER_ADVISOR_DISABLED');
   const [message, directory, folders] = await Promise.all([
     fetchEmailRouterDetail({ client, mailbox, messageId }, dependencies),
@@ -201,8 +201,7 @@ export async function runEmailRouterAdvisor({ client, profile, mailbox, messageI
       body: JSON.stringify({
         model: settings.modelId,
         store: false,
-        max_output_tokens: 1_000,
-        ...(settings.modelId.startsWith('gpt-5') ? { reasoning: { effort: 'low' } } : {}),
+        ...aiRequestOptions(routing, 1000),
         safety_identifier: createHash('sha256').update(String(profile.id)).digest('hex'),
         input: [
           {
@@ -255,6 +254,7 @@ export async function runEmailRouterAdvisor({ client, profile, mailbox, messageI
   return {
     recommendation: { ...recommendation, recommendationId },
     modelId: settings.modelId,
+    routing,
     usage: {
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,
@@ -264,4 +264,4 @@ export async function runEmailRouterAdvisor({ client, profile, mailbox, messageI
   };
 }
 
-export const EMAIL_ROUTER_ADVISOR_MODELS = DASHBOARD_AI_MODELS;
+export const EMAIL_ROUTER_ADVISOR_MODELS = AI_MODEL_SELECTIONS;

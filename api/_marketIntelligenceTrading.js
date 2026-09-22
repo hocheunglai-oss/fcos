@@ -1,3 +1,4 @@
+import { configuredAiSelection, resolveAiModel, aiRequestOptions } from './_aiModelRouting.js';
 import { createHash } from 'node:crypto';
 import {
   evaluateCurveShadow,
@@ -1169,8 +1170,10 @@ export async function generateMarketCommentaryItems(contexts = [], dependencies 
   const prohibitedParticipantNames = participantNamesFromContexts(contexts);
   const apiKey = String(dependencies.apiKey || process.env.OPENAI_API_KEY || '').trim();
   if (!apiKey || !pages.length) return { status: 'unavailable', modelId: null, items: [] };
-  const model = String(dependencies.model || process.env.OPENAI_MARKET_INTELLIGENCE_MODEL || 'gpt-5-mini');
+  let model = null;
   try {
+    const routing = resolveAiModel({ task: 'market_commentary', selection: configuredAiSelection(dependencies.model || process.env.OPENAI_MARKET_INTELLIGENCE_MODEL), contextCount: pages.length });
+    model = routing.modelId;
     const itemProperties = {
       kind: { type: 'string', enum: ['driver', 'risk'] },
       title: { type: 'string' },
@@ -1190,7 +1193,7 @@ export async function generateMarketCommentaryItems(contexts = [], dependencies 
       body: JSON.stringify({
         model,
         store: false,
-        max_output_tokens: 3500,
+        ...aiRequestOptions(routing, 3500),
         input: [{ role: 'system', content: 'Return JSON only. Paraphrase bunker-market drivers and risks. Never quote, recommend trades, name market participants, or invent numbers. Every number needs an exact deterministic sourceHash, page, symbol, and value observation.' }, { role: 'user', content: JSON.stringify({ pages: pages.map((row) => ({ sourceHash: row.sourceHash, page: row.page, text: row.text })), observations: observationEvidence }) }],
         text: {
           format: {
@@ -1222,7 +1225,7 @@ export async function generateMarketCommentaryItems(contexts = [], dependencies 
     const data = await response.json();
     const text = data.output_text || data.output?.flatMap((row) => row.content || []).find((row) => row.type === 'output_text')?.text;
     const items = validateAiItems(JSON.parse(text || '{}').items, pages, observationEvidence, prohibitedParticipantNames);
-    return { status: items.length ? 'completed' : 'invalid', modelId: model, items };
+    return { status: items.length ? 'completed' : 'invalid', modelId: model, routing, items };
   } catch {
     return { status: 'failed', modelId: model, items: [] };
   }

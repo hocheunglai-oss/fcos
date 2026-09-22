@@ -1,62 +1,8 @@
 import { z } from 'zod';
 
-export const DEFAULT_DASHBOARD_AI_MODEL = 'gpt-5-mini-2025-08-07';
-export const DASHBOARD_AI_PRICING_AS_OF = '2026-07-31';
-export const DASHBOARD_AI_PRICING_SOURCE = 'https://developers.openai.com/api/docs/pricing';
-
-function pricing(inputPerMillion, cachedInputPerMillion, outputPerMillion, cacheWritePerMillion = null) {
-  return Object.freeze({
-    currency: 'USD',
-    unitTokens: 1_000_000,
-    serviceTier: 'standard',
-    context: 'short',
-    inputPerMillion,
-    cachedInputPerMillion,
-    cacheWritePerMillion,
-    outputPerMillion,
-    asOf: DASHBOARD_AI_PRICING_AS_OF,
-    sourceUrl: DASHBOARD_AI_PRICING_SOURCE,
-  });
-}
-
-export const DASHBOARD_AI_MODELS = Object.freeze([
-  {
-    id: 'gpt-4o-mini-2024-07-18',
-    label: 'GPT-4o mini',
-    description: 'Lowest cost. Suitable for straightforward searches.',
-    costTier: 'Lowest',
-    pricing: pricing(0.15, 0.075, 0.60),
-  },
-  {
-    id: DEFAULT_DASHBOARD_AI_MODEL,
-    label: 'GPT-5 mini',
-    description: 'Recommended balance of interpretation accuracy, speed, and cost.',
-    costTier: 'Low',
-    recommended: true,
-    pricing: pricing(0.25, 0.025, 2.00),
-  },
-  {
-    id: 'gpt-5.6-luna',
-    label: 'GPT-5.6 Luna',
-    description: 'Stronger interpretation for complex business searches.',
-    costTier: 'Medium',
-    pricing: pricing(0.20, 0.02, 1.20, 0.25),
-  },
-  {
-    id: 'gpt-5.6-terra',
-    label: 'GPT-5.6 Terra',
-    description: 'Higher accuracy for difficult multi-condition searches.',
-    costTier: 'High',
-    pricing: pricing(2.00, 0.20, 12.00, 2.50),
-  },
-  {
-    id: 'gpt-5.6-sol',
-    label: 'GPT-5.6 Sol',
-    description: 'Highest capability and cost. Usually unnecessary for record search.',
-    costTier: 'Highest',
-    pricing: pricing(5.00, 0.50, 30.00, 6.25),
-  },
-]);
+import { DASHBOARD_AI_MODELS, DEFAULT_DASHBOARD_AI_MODEL } from '../shared/aiModelCatalog.js';
+export { DASHBOARD_AI_MODELS, DEFAULT_DASHBOARD_AI_MODEL, DASHBOARD_AI_PRICING_AS_OF, DASHBOARD_AI_PRICING_SOURCE } from '../shared/aiModelCatalog.js';
+import { resolveAiModel, aiRequestOptions } from './_aiModelRouting.js';
 
 const MODEL_IDS = new Set(DASHBOARD_AI_MODELS.map((model) => model.id));
 
@@ -770,7 +716,7 @@ function interpreterInstructions({ today, selectedPeriodLabel }) {
 export async function interpretDashboardAiSearch({
   prompt,
   clarification = '',
-  modelId = DEFAULT_DASHBOARD_AI_MODEL,
+  modelId = 'auto',
   selectedPeriodLabel,
   today,
   safetyIdentifier,
@@ -780,9 +726,8 @@ export async function interpretDashboardAiSearch({
   onUsage,
 } = {}) {
   const normalizedPrompt = normalizeDashboardAiPrompt(prompt);
-  if (!isAllowedDashboardAiModel(modelId)) {
-    throw dashboardAiError('The configured Dashboard AI model is not allowed.', 503, 'DASHBOARD_AI_MODEL');
-  }
+  const routing = resolveAiModel({ task: 'dashboard_search', selection: modelId, prompt: normalizedPrompt, clarification });
+  modelId = routing.modelId;
   if (!String(apiKey || '').trim()) {
     throw dashboardAiError('Dashboard AI Search is not configured.', 503, 'DASHBOARD_AI_NOT_CONFIGURED');
   }
@@ -802,12 +747,7 @@ export async function interpretDashboardAiSearch({
         model: modelId,
         store: false,
         service_tier: 'default',
-        max_output_tokens: 1500,
-        ...(modelId === DEFAULT_DASHBOARD_AI_MODEL
-          ? { reasoning: { effort: 'minimal' } }
-          : modelId.startsWith('gpt-5.6-')
-            ? { reasoning: { effort: 'none' } }
-            : {}),
+        ...aiRequestOptions(routing, 1500),
         ...(safetyIdentifier ? { safety_identifier: safetyIdentifier } : {}),
         input: [
           {
@@ -857,5 +797,7 @@ export async function interpretDashboardAiSearch({
   } catch {
     throw dashboardAiError('The AI search returned invalid structured output.', 502, 'DASHBOARD_AI_RESPONSE_INVALID');
   }
+  // Keep the search-plan contract closed. Routing metadata belongs to the
+  // enclosing API response, not the plan that is validated again by the compiler.
   return parseDashboardAiInterpretation(parsed);
 }
