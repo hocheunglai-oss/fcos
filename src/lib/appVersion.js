@@ -7,7 +7,7 @@ export const APP_VERSION_HISTORY = [
     version: '2.0.230',
     releasedAt: '2026-09-23',
     title: 'Xero daily allowance reset time',
-    changes: ['Show Xero daily allowance and confirmed reset time in Hong Kong time, with unknown and elapsed states.'],
+    changes: ['Show Xero daily allowance and reset countdown in Hong Kong time.'],
   },
   {
     version: '2.0.229',
