@@ -3,9 +3,9 @@ import { formatXeroAllowanceCountdown, formatXeroAllowanceDate } from '@/lib/xer
 
 const COPY = {
   en: ['Daily allowance', 'Calls remaining', 'Daily reset (Hong Kong time)', 'Not supplied by Xero', 'Resets in',
-    'Reset time passed; confirm with the next check.', 'Xero has not supplied the reset time for this organisation.'],
+    'Reset time passed; confirm with the next check.'],
   zh: ['每日限額', '剩餘呼叫次數', '每日重設（香港時間）', 'Xero 未有提供', '距離重設尚餘',
-    '重設時間已過；請於下次檢查時確認。', 'Xero 尚未提供此組織的重設時間。'],
+    '重設時間已過；請於下次檢查時確認。'],
 };
 
 export default function XeroDailyAllowance({ snapshot, language = 'en' }) {
@@ -34,9 +34,7 @@ export default function XeroDailyAllowance({ snapshot, language = 'en' }) {
         <dt className="text-muted-foreground">{copy[1]}</dt><dd className="text-right font-semibold tabular-nums">{remaining}</dd>
         <dt className="text-muted-foreground">{copy[2]}</dt><dd className="text-right font-medium">{resetDate || copy[3]}</dd>
       </dl>
-      <p className={`mt-1.5 text-xs ${resetDate ? 'text-sky-800' : 'text-muted-foreground'}`}>
-        {resetDate ? (countdown ? `${copy[4]} ${countdown}` : copy[5]) : copy[6]}
-      </p>
+      {resetDate && <p className="mt-1.5 text-xs text-sky-800">{countdown ? `${copy[4]} ${countdown}` : copy[5]}</p>}
     </aside>
   );
 }

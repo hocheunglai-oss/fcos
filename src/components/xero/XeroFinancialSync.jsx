@@ -30,6 +30,7 @@ const MUTATION_OPTIONS = { ...FORCE_OPTIONS, invalidateCache: true };
 const DETAIL_CLASS = 'text-xs text-muted-foreground';
 const ACTIONS_CLASS = 'flex flex-wrap items-center gap-2';
 const SECTION_HEADER_CLASS = 'flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between';
+const SELECT_CLASS = 'h-9 rounded-md border border-input bg-background px-3 text-sm';
 const PANEL_CLASS = 'rounded-lg border border-border bg-card p-4';
 const DESCRIPTION_CLASS = 'mt-1 text-sm text-muted-foreground';
 const TABLE_FRAME_CLASS = 'overflow-auto rounded-lg border border-border';
@@ -331,9 +332,9 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
                       {tableCells([
                         <Checkbox checked={selected.has(row.id)} disabled={row.status !== 'eligible' || reconciliationBucket(row) !== 'ready' || preview.run?.status !== 'ready_for_review'} onCheckedChange={(value) => toggleSelection(row.id, value === true, setSelected)} />,
                         <FinancialActionBadge action={row.action} status={row.status} copy={copy} />,
-                        <><div className="font-medium">{row.documentNumber}</div><div className={DETAIL_CLASS}>{financialCopy.documentKinds[row.documentKind] || row.documentKind?.replaceAll('_', ' ')}</div></>,
-                        <><div className="font-medium">{row.accountName}</div><div className={DETAIL_CLASS}>{row.companyCode || copy.common.noClKey} · {row.stemName || copy.common.noStem}</div></>,
-                        <><div>{row.invoiceDate}</div><div className={DETAIL_CLASS}>{financialCopy.due} {row.dueDate || copy.common.notSet}</div></>,
+                        detailPair(row.documentNumber, financialCopy.documentKinds[row.documentKind] || row.documentKind?.replaceAll('_', ' ')),
+                        detailPair(row.accountName, <>{row.companyCode || copy.common.noClKey} · {row.stemName || copy.common.noStem}</>),
+                        detailPair(row.invoiceDate, <>{financialCopy.due} {row.dueDate || copy.common.notSet}</>, false),
                         <>{row.currency} {formatAmount(row.total, copy.locale)}</>,
                         <>{row.xero?.url ? <a href={row.xero.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-blue-700 hover:underline">{row.xero.number || copy.common.open} <ExternalLink className="h-3 w-3" /></a> : financialCopy.noActiveMatch}{row.xero?.status ? <div className={DETAIL_CLASS}>{row.xero.status}</div> : null}</>,
                         <><div>{row.blockers?.[0] || row.warnings?.[0] || (row.differences?.length ? financialCopy.differenceCount(row.differences.length) : copy.common.exact)}</div>
@@ -452,8 +453,8 @@ function ProductMappingRow({ direction, product, mapping, proposal, accounts, ta
   return <TableRow>{tableCells([
     financialCopy.directions[direction] || direction,
     <><div className="font-medium">{product.name}</div><div className={cn('mt-1 text-xs', mapping ? 'text-emerald-700' : proposal?.status === 'conflict' ? 'text-amber-700' : 'text-muted-foreground')}>{evidenceLabel}</div></>,
-    <select value={accountCode} onChange={(event) => setAccountCode(event.target.value)} className="h-9 min-w-[260px] rounded-md border border-input bg-background px-3 text-sm"><option value="">{financialCopy.selectAccount}</option>{accounts.filter((row) => !row.bank).map((row) => <option key={row.id} value={row.code}>{row.code} · {row.name}</option>)}</select>,
-    <select value={taxType} onChange={(event) => setTaxType(event.target.value)} className="h-9 min-w-[180px] rounded-md border border-input bg-background px-3 text-sm"><option value="NONE">NONE</option>{taxes.filter((row) => row.taxType !== 'NONE').map((row) => <option key={row.taxType} value={row.taxType}>{row.taxType} · {row.name}</option>)}</select>,
+    <select value={accountCode} onChange={(event) => setAccountCode(event.target.value)} className={cn(SELECT_CLASS, 'min-w-[260px]')}><option value="">{financialCopy.selectAccount}</option>{accounts.filter((row) => !row.bank).map((row) => <option key={row.id} value={row.code}>{row.code} · {row.name}</option>)}</select>,
+    <select value={taxType} onChange={(event) => setTaxType(event.target.value)} className={cn(SELECT_CLASS, 'min-w-[180px]')}><option value="NONE">NONE</option>{taxes.filter((row) => row.taxType !== 'NONE').map((row) => <option key={row.taxType} value={row.taxType}>{row.taxType} · {row.name}</option>)}</select>,
     <Button type="button" size="sm" variant="outline" onClick={save} disabled={!accountCode || busy}>{actionIcon(busy, Save, true)}{mapping ? financialCopy.updateApproval : financialCopy.approveMapping}</Button>,
   ])}</TableRow>;
 }
@@ -469,6 +470,10 @@ function mappingEvidenceBasisLabel(basis, financialCopy) {
   if (basis === 'exact_line') return financialCopy.basis.exact_line;
   if (basis === 'uniform_document') return financialCopy.basis.uniform_document;
   return financialCopy.basis.default;
+}
+
+function detailPair(value, detail, emphasis = true) {
+  return <><div className={emphasis ? 'font-medium' : undefined}>{value}</div><div className={DETAIL_CLASS}>{detail}</div></>;
 }
 
 function tableHeader(labels, narrowFirst = false) {
@@ -506,7 +511,7 @@ function BankMapping({ bank, mapping, accounts, onSaved, copy }) {
     setBusy(false);
     if (result.data?.error) toast({ title: financialCopy.bankSaveFailed, description: result.data.error, variant: 'destructive' }); else { toast({ title: financialCopy.bankSaved(bank) }); await onSaved(); }
   }
-  return <div className="rounded-lg border border-border bg-background p-3"><div className="text-sm font-semibold">{bank}</div><div className="mt-2 flex gap-2"><select value={accountId} onChange={(event) => setAccountId(event.target.value)} className="h-9 min-w-0 flex-1 rounded-md border border-input bg-background px-3 text-sm"><option value="">{financialCopy.selectBank}</option>{accounts.map((row) => <option key={row.id} value={row.id}>{row.code ? `${row.code} · ` : ''}{row.name}</option>)}</select><Button type="button" size="sm" variant="outline" aria-label={`${financialCopy.mappings}: ${bank}`} onClick={save} disabled={!accountId || busy}>{actionIcon(busy, Save, true)}</Button></div></div>;
+  return <div className="rounded-lg border border-border bg-background p-3"><div className="text-sm font-semibold">{bank}</div><div className="mt-2 flex gap-2"><select value={accountId} onChange={(event) => setAccountId(event.target.value)} className={cn(SELECT_CLASS, 'min-w-0 flex-1')}><option value="">{financialCopy.selectBank}</option>{accounts.map((row) => <option key={row.id} value={row.id}>{row.code ? `${row.code} · ` : ''}{row.name}</option>)}</select><Button type="button" size="sm" variant="outline" aria-label={`${financialCopy.mappings}: ${bank}`} onClick={save} disabled={!accountId || busy}>{actionIcon(busy, Save, true)}</Button></div></div>;
 }
 
 function CutoverKpi({ label, value, tone = 'neutral' }) {
