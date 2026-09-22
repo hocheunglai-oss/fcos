@@ -163,13 +163,9 @@ export default function AiModelSettingsCard({
             <table className="w-full min-w-[900px] text-left text-xs">
               <thead className="bg-muted/40 text-muted-foreground">
                 <tr>
-                  <th className="px-4 py-2 font-semibold">Model</th>
-                  <th className="px-3 py-2 text-right font-semibold">Requests</th>
-                  <th className="px-3 py-2 text-right font-semibold">Input</th>
-                  <th className="px-3 py-2 text-right font-semibold">Cached input</th>
-                  <th className="px-3 py-2 text-right font-semibold">Output</th>
-                  <th className="px-3 py-2 text-right font-semibold">Estimated USD</th>
-                  <th className="px-4 py-2 font-semibold">Last used</th>
+                  {['Model', 'Requests', 'Input', 'Cached input', 'Output', 'Estimated USD', 'Last used'].map((label, index) => (
+                    <th key={label} className={`px-3 py-2 font-semibold ${index > 0 && index < 6 ? 'text-right' : ''}`}>{label}</th>
+                  ))}
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
@@ -189,10 +185,9 @@ export default function AiModelSettingsCard({
                           </p>
                         )}
                       </td>
-                      <td className="px-3 py-2.5 text-right tabular-nums">{integer(usage.requests)}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums">{integer(usage.inputTokens)}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums">{integer(usage.cachedInputTokens)}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums">{integer(usage.outputTokens)}</td>
+                      {['requests', 'inputTokens', 'cachedInputTokens', 'outputTokens'].map((key) => (
+                        <td key={key} className="px-3 py-2.5 text-right tabular-nums">{integer(usage[key])}</td>
+                      ))}
                       <td className="px-3 py-2.5 text-right">
                         <div className="font-medium tabular-nums text-foreground">{usd(usage.estimatedCostUsd)}</div>
                         {periodLabel && <div className="text-[11px] tabular-nums text-muted-foreground">{periodLabel}: {usd(usage.periodCostUsd)}</div>}

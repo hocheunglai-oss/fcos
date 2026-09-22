@@ -18,7 +18,7 @@ test('AI routing migration preserves overrides, revisions, usage totals and serv
     insert into emailrouter.settings(key,value) values('advisor.model','{"modelId":"gpt-5-mini-2025-08-07"}');`);
   await db.exec(await sql('20260730180403_dashboard_ai_settings.sql'));
   await db.exec(await sql('20260730190759_dashboard_ai_usage_tracking.sql'));
-  const migration = await sql('20260922192913_ai_task_model_routing.sql');
+  const migration = await sql('20260922195630_ai_task_model_routing.sql');
   await db.exec(migration);
   assert.deepEqual((await db.query('select model_id,revision::int from dashboard_ai_settings')).rows, [{ model_id: 'auto', revision: 2 }]);
   assert.equal((await db.query('select value from hedge_settings')).rows[0].value, 'auto');
