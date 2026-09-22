@@ -11,7 +11,7 @@ import {
   isAllowedAiSelection,
   resolveAiModel,
 } from '../api/_aiModelRouting.js';
-import { interpretDashboardAiSearch } from '../api/_dashboardAi.js';
+import { interpretDashboardAiSearch, compileDashboardAiWhere } from '../api/_dashboardAi.js';
 
 const LUNA = 'gpt-5.6-luna';
 const SOL = 'gpt-5.6-sol';
@@ -232,8 +232,12 @@ test('resolves auto before the Dashboard upstream call and records usage against
   assert.notEqual(requestBody.model, AUTO_AI_MODEL);
   assert.deepEqual(requestBody.reasoning, { effort: 'low' });
   assert.equal(requestBody.max_output_tokens, 3500);
-  assert.equal(interpretation.routing.modelId, LUNA);
-  assert.equal(interpretation.routing.reasoningEffort, 'low');
+  assert.equal(Object.hasOwn(interpretation, 'routing'), false);
+  const where = compileDashboardAiWhere(interpretation, {
+    stem: { fields: ['Buyer_Name__c', 'Delivery_Date__c', 'Expected_Delivery_Date__c'].map((name) => ({ name, filterable: true })) },
+  }, { selectedYears: [2026], selectedMonths: [9] });
+  assert.match(where, /Buyer_Name__c LIKE '%Acme%'/);
+  assert.match(where, /2026-09-01/);
   assert.equal(recordedUsage.modelId, LUNA);
   assert.equal(recordedUsage.openAiResponseId, 'resp_auto_route_1');
   assert.equal(recordedUsage.reasoningTokens, 10);

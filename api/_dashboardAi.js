@@ -797,5 +797,7 @@ export async function interpretDashboardAiSearch({
   } catch {
     throw dashboardAiError('The AI search returned invalid structured output.', 502, 'DASHBOARD_AI_RESPONSE_INVALID');
   }
-  return { ...parseDashboardAiInterpretation(parsed), routing };
+  // Keep the search-plan contract closed. Routing metadata belongs to the
+  // enclosing API response, not the plan that is validated again by the compiler.
+  return parseDashboardAiInterpretation(parsed);
 }

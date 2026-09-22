@@ -5489,9 +5489,9 @@ async function dashboardAiSearch(body, req, accessContext = null) {
       label: interpretation.dateScope.mode === 'selected_period' ? selectedPeriodLabel : interpretation.dateScope.label,
     },
     clarification: interpretation.clarification,
-    model: dashboardAiModel(interpretation.routing.modelId),
-    modelId: interpretation.routing.modelId,
-    routing: interpretation.routing,
+    model: dashboardAiModel(routing.modelId),
+    modelId: routing.modelId,
+    routing,
     interpretationCache: interpretationResult.cache.status,
   };
   if (interpretation.status === 'needs_clarification') {

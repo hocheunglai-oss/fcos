@@ -1,7 +1,7 @@
 import { DASHBOARD_AI_MODELS } from '../shared/aiModelCatalog.js';
 
 export const AUTO_AI_MODEL = 'auto';
-export const AI_ROUTING_VERSION = '2026-09-23.1';
+export const AI_ROUTING_VERSION = '2026-09-23.2';
 const models = new Map(DASHBOARD_AI_MODELS.map((model) => [model.id, model]));
 const LUNA = 'gpt-5.6-luna';
 const SOL = 'gpt-5.6-sol';

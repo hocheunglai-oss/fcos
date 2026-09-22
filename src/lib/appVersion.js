@@ -4,6 +4,12 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   {
+    version: '2.0.229',
+    releasedAt: '2026-09-23',
+    title: 'Validated automatic AI search',
+    changes: ['Keep routing metadata outside the validated search plan and refresh cached interpretations.'],
+  },
+  {
     version: '2.0.228',
     releasedAt: '2026-09-23',
     title: 'Automatic AI model selection by task',
