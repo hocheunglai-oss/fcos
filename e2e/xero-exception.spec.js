@@ -1,0 +1,33 @@
+import { expect, test } from '@playwright/test';
+
+test('protected link review exposes identity evidence without preselecting it', async ({ page }, testInfo) => {
+  await page.goto('/e2e/fixtures/xero-exception.html');
+  await page.getByRole('button', { name: /Ready to sync/ }).click();
+  const row = page.getByRole('row').filter({ hasText: 'INV-EXCEPTION-1' });
+  await expect(row.getByRole('checkbox')).not.toBeChecked();
+  await row.locator('summary').click();
+  await expect(row).toContainText('Salesforce account ID: 001BUYER0000001');
+  await expect(row).toContainText('STEM reference');
+  await expect(row).toContainText('Two Salesforce accounts share this Xero contact');
+  await expect(row).toContainText('Shared Buyer · CL-B · 001BUYER0000002');
+  await expect(row).toContainText('XERO-77 · xero-invoice-one');
+  await expect(row).toContainText('Salesforce STEM-ONE → Xero OLD-REF');
+  await page.screenshot({ path: testInfo.outputPath('evidence.png'), fullPage: true });
+  await row.getByRole('checkbox').click();
+  await page.getByRole('button', { name: 'Review and sync selected' }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByText(/Xero accounting history remains unchanged/)).toBeVisible();
+  await expect(dialog).toContainText('Shared Buyer · CL-B · 001BUYER0000002');
+  await expect(dialog).toContainText('Two Salesforce accounts share this Xero contact');
+  await page.screenshot({ path: testInfo.outputPath('review.png'), fullPage: true });
+  const retainedDifference = dialog.getByText(/Salesforce STEM-ONE → Xero OLD-REF/);
+  await retainedDifference.scrollIntoViewIfNeeded();
+  await expect(retainedDifference).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('review-differences.png'), fullPage: true });
+  await page.getByRole('button', { name: 'Cancel' }).click();
+  await page.getByRole('button', { name: /Matched/ }).click();
+  const accepted = page.getByRole('row').filter({ hasText: 'INV-ACCEPTED-1' });
+  await expect(accepted).toContainText('Accepted legacy');
+  await accepted.locator('summary').click();
+  await expect(accepted).toContainText('Salesforce STEM-ONE → Xero OLD-REF');
+});

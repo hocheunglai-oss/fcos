@@ -94,7 +94,7 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
       const sameRun = saved?.runId === result.data.preview.run?.id;
       setSelected(sameRun && result.data.preview.run?.status === 'ready_for_review'
         ? restoreReviewSelection(saved.documents, result.data.preview.rows)
-        : new Set(result.data.preview.rows.filter((row) => row.selected).map((row) => row.id)));
+        : new Set(result.data.preview.rows.filter((row) => row.selected && !row.reviewRequired).map((row) => row.id)));
       setSelectedPayments(sameRun ? restoreReviewSelection(saved.payments, result.data.preview.payments?.rows || [], 'payment') : new Set());
     }).catch(() => { if (active) setError('The last check could not be loaded. Run Check everything to retry.'); });
     return () => { active = false; };
@@ -138,8 +138,9 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
   const mappingPageCount = Math.max(1, Math.ceil(productMappingRows.length / MAPPING_PAGE_SIZE));
   const visibleProductMappings = useMemo(() => productMappingRows.slice(mappingPage * MAPPING_PAGE_SIZE, (mappingPage + 1) * MAPPING_PAGE_SIZE), [mappingPage, productMappingRows]);
   const bankMappingIndex = useMemo(() => new Map((mappings?.bankMappings || []).map((mapping) => [mapping.salesforceBankName, mapping])), [mappings]);
-  const eligibleRows = useMemo(() => (preview?.rows || []).filter((row) => row.status === 'eligible' && ['create_draft', 'safe_update'].includes(row.action)), [preview]);
-  const orderedDocuments = useMemo(() => [...(preview?.rows || [])].filter((row) => (view === 'all' || reconciliationBucket(row) === view) && (!search.trim() || [row.documentNumber, row.accountName, row.stemName, row.stemId].join(' ').toLowerCase().includes(search.trim().toLowerCase()))).sort((left, right) => xeroFinancialReconciliationRank(left) - xeroFinancialReconciliationRank(right)), [preview, view, search]);
+  const eligibleRows = useMemo(() => (preview?.rows || []).filter((row) => row.status === 'eligible' && reconciliationBucket(row) === 'ready'), [preview]);
+  const reviewRows = (preview?.rows || []).filter((row) => selected.has(row.id));
+  const orderedDocuments = useMemo(() => [...(preview?.rows || [])].filter((row) => (view === 'all' || reconciliationBucket(row) === view) && (!search.trim() || [row.documentNumber, row.accountName, row.accountId, row.stemName, row.stemId].join(' ').toLowerCase().includes(search.trim().toLowerCase()))).sort((left, right) => xeroFinancialReconciliationRank(left) - xeroFinancialReconciliationRank(right)), [preview, view, search]);
   const orderedPayments = useMemo(() => [...(payments?.rows || [])].filter((row) => (view === 'all' || reconciliationBucket(row, 'payment') === view) && (!search.trim() || [row.salesforcePaymentName, row.stemId].join(' ').toLowerCase().includes(search.trim().toLowerCase()))).sort((left, right) => xeroFinancialReconciliationRank(left, 'payment') - xeroFinancialReconciliationRank(right, 'payment')), [payments, view, search]);
   const documentPageCount = Math.max(1, Math.ceil(orderedDocuments.length / PAGE_SIZE));
   const paymentPageCount = Math.max(1, Math.ceil(orderedPayments.length / PAGE_SIZE));
@@ -173,7 +174,7 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
     setMappingPage(0);
     setDocumentPage(0);
     setSelected(preserveSelection ? retainedReviewSelection(preview?.rows || [], result.data.rows || [], selected)
-      : new Set((result.data.rows || []).filter((row) => row.status === 'eligible' && reconciliationBucket(row) === 'ready').map((row) => row.id)));
+      : new Set((result.data.rows || []).filter((row) => row.status === 'eligible' && !row.reviewRequired && reconciliationBucket(row) === 'ready').map((row) => row.id)));
     setPayments(result.data.payments);
     setPaymentPage(0);
     setSelectedPayments(new Set((result.data.payments?.rows || []).filter((row) => row.action === 'payment_apply' && row.status === 'eligible').map((row) => row.salesforcePaymentId)));
@@ -295,6 +296,7 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
         </div>
         <div className="mt-3 rounded-lg border border-sky-100 bg-white/80 px-3 py-2 text-sm text-slate-700">
           {financialCopy.reconciliationDescriptions[reconciliation.status]}
+          {reconciliation.documents.acceptedLegacy > 0 && <div>{flow.acceptedLegacy}: {reconciliation.documents.acceptedLegacy}</div>}
         </div>
         {!scopeFlags.settingsRead || !scopeFlags.paymentsRead ? <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">{financialCopy.reconnect}</div> : null}
       </section>
@@ -339,9 +341,9 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
                         detailPair(row.invoiceDate, <>{financialCopy.due} {row.dueDate || copy.common.notSet}</>, false),
                         <>{row.currency} {formatAmount(row.total, copy.locale)}</>,
                         <>{row.xero?.url ? <a href={row.xero.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-blue-700 hover:underline">{row.xero.number || copy.common.open} <ExternalLink className="h-3 w-3" /></a> : financialCopy.noActiveMatch}{row.xero?.status ? <div className={DETAIL_CLASS}>{row.xero.status}</div> : null}</>,
-                        <><div>{row.blockers?.[0] || row.warnings?.[0] || (row.differences?.length ? financialCopy.differenceCount(row.differences.length) : copy.common.exact)}</div>
-                        {(row.blockers || []).some((reason) => /mapping|tax|account code/i.test(reason)) && <Button variant="link" size="sm" onClick={() => setFixMapping(row)}>{flow.mapping}</Button>}
-                        {!!row.differences?.length && <details className="mt-2"><summary>{flow.details}</summary>{row.differences.map((difference, index) => <div key={index} className="text-xs">{difference.field}: Salesforce {formatDifferenceValue(difference.salesforce ?? difference.salesforceLineCount)} → Xero {formatDifferenceValue(difference.xero ?? difference.xeroLineCount)}</div>)}</details>}
+                        <><div>{row.blockers?.[0] || (row.status === 'blocked' ? flow.attention : row.acceptedLegacy ? flow.acceptedLegacy : row.warnings?.[0] || (row.differences?.length ? financialCopy.differenceCount(row.differences.length) : copy.common.exact))}</div>
+                        {(row.blockers || []).some((reason) => /Salesforce Product|Xero account mapping|account codes?|tax treatment/i.test(reason)) && <Button variant="link" size="sm" onClick={() => setFixMapping(row)}>{flow.mapping}</Button>}
+                        <DocumentEvidence row={row} flow={flow} copy={copy} />
                         {row.stemId && <a className={LINK_CLASS} href={`/disputes?stem=${encodeURIComponent(row.stemId)}`}>{row.dispute?.status ? `Dispute: ${row.dispute.status}` : 'Dispute / settlement'}</a>}</>,
                       ], { 5: 'tabular-nums', 7: 'max-w-[360px]' })}
                     </TableRow>
@@ -413,8 +415,8 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
         </div>
       </details>
       <Dialog open={reviewOpen} onOpenChange={setReviewOpen}><DialogContent className="max-h-[85vh] max-w-3xl overflow-y-auto"><DialogHeader><DialogTitle>{flow.review}</DialogTitle><DialogDescription>{flow.reviewDescription}</DialogDescription></DialogHeader>
-        <div className="space-y-2">{documentReviewTotals((preview?.rows || []).filter((row) => selected.has(row.id) || row.selected)).map((total) => <p key={`${total.currency}:${total.action}`}>{financialCopy.actions[total.action] || total.action}: {total.count} · {total.currency} {formatAmount(total.total, copy.locale)}</p>)}</div>
-        <div className="max-h-72 overflow-auto">{(preview?.rows || []).filter((row) => selected.has(row.id) || row.selected).map((row) => <div key={row.id} className="border-b py-2 text-sm"><b>{row.documentNumber}</b> · {row.accountName} · {row.currency} {formatAmount(row.total, copy.locale)} · {row.invoiceDate}<div>{financialCopy.actions[row.action] || row.action}</div>{row.differences?.map((difference, i) => <div className="text-xs" key={i}>{difference.field}: {formatDifferenceValue(difference.xero ?? difference.xeroLineCount)} → {formatDifferenceValue(difference.salesforce ?? difference.salesforceLineCount)}</div>)}</div>)}</div>
+        <div className="space-y-2">{documentReviewTotals(reviewRows).map((total) => <p key={`${total.currency}:${total.action}`}>{financialCopy.actions[total.action] || total.action}: {total.count} · {total.currency} {formatAmount(total.total, copy.locale)}</p>)}</div>
+        <div className="max-h-72 overflow-auto">{reviewRows.map((row) => <div key={row.id} className="border-b py-2 text-sm"><b>{row.documentNumber}</b> · {row.accountName} · {row.currency} {formatAmount(row.total, copy.locale)} · {row.invoiceDate}<div>{financialCopy.actions[row.action] || row.action}</div>{row.action === 'protected_legacy' && <p className="font-medium text-amber-800">{flow.legacyReview}</p>}<DocumentEvidence row={row} flow={flow} copy={copy} expanded /></div>)}</div>
         <div className="flex justify-end gap-2"><Button variant="outline" onClick={() => setReviewOpen(false)} disabled={Boolean(busy)}>{flow.cancel}</Button><Button onClick={executeRun} disabled={Boolean(busy) || !financialGate?.enabled}>{flow.confirm}</Button></div>
       </DialogContent></Dialog>
       <Dialog open={Boolean(fixMapping)} onOpenChange={(open) => { if (!open) setFixMapping(null); }}><DialogContent className="max-h-[85vh] max-w-5xl overflow-auto"><DialogHeader><DialogTitle>{flow.mapping} · {fixMapping?.documentNumber}</DialogTitle><DialogDescription>{financialCopy.mappingDescription}</DialogDescription></DialogHeader>
@@ -462,16 +464,11 @@ function ProductMappingRow({ direction, product, mapping, proposal, accounts, ta
 }
 
 function mappingReviewRank(row) {
-  if (row.mapping) return 3;
-  if (row.proposal?.status === 'proposed') return 0;
-  if (row.proposal?.status === 'conflict') return 1;
-  return 2;
+  return row.mapping ? 3 : row.proposal?.status === 'proposed' ? 0 : row.proposal?.status === 'conflict' ? 1 : 2;
 }
 
 function mappingEvidenceBasisLabel(basis, financialCopy) {
-  if (basis === 'exact_line') return financialCopy.basis.exact_line;
-  if (basis === 'uniform_document') return financialCopy.basis.uniform_document;
-  return financialCopy.basis.default;
+  return financialCopy.basis[basis] || financialCopy.basis.default;
 }
 
 function detailPair(value, detail, emphasis = true) {
@@ -497,7 +494,7 @@ function sectionHeading(title, description, small = false) {
 }
 
 function pagination(page, pageCount, total, pageSize, setPage, range, copy, className = '') {
-  return <div className={cn(className, 'flex items-center justify-between gap-3 text-sm text-muted-foreground')}><span>{range(total ? page * pageSize + 1 : 0, Math.min((page + 1) * pageSize, total), total)}</span><div className="flex gap-2"><Button type="button" size="sm" variant="outline" onClick={() => setPage((current) => Math.max(0, current - 1))} disabled={page === 0}>{copy.previous}</Button><Button type="button" size="sm" variant="outline" onClick={() => setPage((current) => Math.min(pageCount - 1, current + 1))} disabled={page >= pageCount - 1}>{copy.next}</Button></div></div>;
+  return <div className={cn(className, 'flex items-center justify-between gap-3 text-sm text-muted-foreground')}><span>{range(total ? page * pageSize + 1 : 0, Math.min((page + 1) * pageSize, total), total)}</span><div className="flex gap-2">{[-1, 1].map((step) => <Button key={step} type="button" size="sm" variant="outline" onClick={() => setPage((current) => Math.max(0, Math.min(pageCount - 1, current + step)))} disabled={step < 0 ? page === 0 : page >= pageCount - 1}>{step < 0 ? copy.previous : copy.next}</Button>)}</div></div>;
 }
 
 function BankMapping({ bank, mapping, accounts, onSaved, copy }) {
@@ -526,6 +523,20 @@ function CutoverKpi({ label, value, tone = 'neutral' }) {
 function FinancialActionBadge({ action, status, copy }) {
   const style = status === 'blocked' ? 'border-rose-200 bg-rose-50 text-rose-800' : status === 'protected' ? 'border-slate-300 bg-slate-100 text-slate-800' : action === 'create_draft' ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-sky-200 bg-sky-50 text-sky-800';
   return <Badge variant="outline" className={cn('whitespace-nowrap', style)}>{copy.financial.actions[action] || copy.statuses[status] || String(action || status).replaceAll('_', ' ')}</Badge>;
+}
+
+function DocumentEvidence({ row, flow, copy, expanded = false }) {
+  const evidence = row.matchEvidence || {};
+  const lines = [
+    `${flow.accountId}: ${row.accountId || copy.common.notSet}`,
+    `${flow.evidence}: ${flow.matchBasis[evidence.basis] || copy.common.notSet}`,
+    ...(row.blockers || []).map((value) => `${flow.blockers}: ${value}`),
+    ...(row.warnings || []).map((value) => `${flow.warnings}: ${value}`),
+    ...(evidence.sharedAccounts || []).map((account) => `${flow.sharedAccounts}: ${[account.accountName, account.companyCode || copy.common.noClKey, account.accountId].join(' · ')}`),
+    ...(evidence.candidates || []).map((candidate) => `${flow.candidates}: ${candidate.number || '—'} · ${candidate.id || '—'}`),
+    ...(row.differences || []).map((difference) => `${flow.differences} · ${difference.field}: Salesforce ${formatDifferenceValue(difference.salesforce ?? difference.salesforceLineCount)} → Xero ${formatDifferenceValue(difference.xero ?? difference.xeroLineCount)}`),
+  ].join('\n');
+  return <details className="mt-2" open={expanded}><summary>{flow.details}</summary><div className="whitespace-pre-line text-xs text-muted-foreground">{lines}</div></details>;
 }
 
 function formatAmount(value, locale) { return Number(value || 0).toLocaleString(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }

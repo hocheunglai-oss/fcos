@@ -7,6 +7,7 @@ export function summarizeXeroFinancialReconciliation({ documents, payments } = {
   const documentsChecked = documentRows !== null;
   const paymentsChecked = paymentRows !== null;
   const documentSummary = summarizeRows(documentRows || [], classifyDocumentRow);
+  documentSummary.acceptedLegacy = (documentRows || []).filter((row) => row.acceptedLegacy && classifyDocumentRow(row) === 'reconciled').length;
   const paymentSummary = summarizeRows(paymentRows || [], classifyPaymentRow);
   const total = documentSummary.total + paymentSummary.total;
   const reconciled = documentSummary.reconciled + paymentSummary.reconciled;
@@ -53,7 +54,10 @@ function summarizeRows(rows, classifier) {
 
 function classifyDocumentRow(row = {}) {
   const differences = Array.isArray(row.differences) ? row.differences : [];
-  if (row.status === 'blocked' || (row.action === 'protected_legacy' && differences.length > 0)) return 'exception';
+  if (['blocked', 'failed'].includes(row.status) || row.blockers?.length) return 'exception';
+  if (row.acceptedLegacy) return 'reconciled';
+  if (row.reviewRequired && row.status === 'eligible') return 'pending';
+  if (row.action === 'protected_legacy' && differences.length > 0) return 'exception';
   if (row.action === 'link' && differences.length === 0) return 'reconciled';
   if (row.action === 'protected_legacy' && differences.length === 0) return 'reconciled';
   if (row.status === 'eligible' && ['create_draft', 'safe_update'].includes(row.action)) return 'pending';

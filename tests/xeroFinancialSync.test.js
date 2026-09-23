@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import {
   assertXeroFinancialDailyReserve,
@@ -79,7 +80,8 @@ test('paid, allocated, and locked authorised Xero history is always protected', 
 
   const classified = classifyXeroFinancialDocument(source, [xero({ status: 'PAID', amountDue: 0, amountPaid: 1000 })]);
   assert.equal(classified.action, 'protected_legacy');
-  assert.equal(classified.status, 'protected');
+  assert.equal(classified.status, 'eligible');
+  assert.equal(classified.reviewRequired, true);
 });
 
 test('exact protected Xero history can be durably linked without changing accounting history', () => {
@@ -100,8 +102,9 @@ test('exact protected Xero history can be durably linked without changing accoun
 });
 
 test('stored Xero payment links must still exist and match current Salesforce values', () => {
-  const payment = { Id: 'payment-1', Name: 'PAY-1', Amount__c: 500, Date__c: '2026-07-01', Bank__c: 'DBS', STEM__c: 'stem-1' };
-  const documentMapping = { id: 'document-map-1', xero_document_id: 'xero-invoice-1' };
+  const payment = { Id: 'payment-1', Name: 'PAY-1', Amount__c: 500, Date__c: '2026-07-01', Bank__c: 'DBS', STEM__c: 'stem-1', Account__c: 'account-1', RecordType: { DeveloperName: 'Receivable' } };
+  const documentMapping = { id: 'document-map-1', xero_document_id: 'xero-invoice-1', xero_document_type: 'ACCREC', xero_contact_id: 'contact-1', salesforce_object: 'Invoice__c', salesforce_id: 'invoice-1', retained_differences: { stemId: 'stem-1', accountId: 'account-1' } };
+  const currentDocument = { id: 'xero-invoice-1', type: 'ACCREC', status: 'AUTHORISED', contactId: 'contact-1', currency: 'USD', amountDue: 500 };
   const fingerprint = classifyXeroFinancialPayment(payment, {
     existingBySalesforce: new Map(),
     documentMappingById: new Map(),
@@ -111,15 +114,31 @@ test('stored Xero payment links must still exist and match current Salesforce va
     xeroPayments: [],
     currentDocumentById: new Map(),
   }).sourceFingerprint;
-  const stored = { id: 'payment-map-1', document_mapping_id: documentMapping.id, xero_payment_id: 'xero-payment-1', source_fingerprint: fingerprint };
+  const stored = { id: 'payment-map-1', salesforce_payment_id: payment.Id, document_mapping_id: documentMapping.id, xero_payment_id: 'xero-payment-1', source_fingerprint: fingerprint };
   const xeroPayment = { PaymentID: 'xero-payment-1', Amount: 500, Date: '2026-07-01', Reference: payment.Name, Account: { AccountID: 'xero-bank-1' }, Invoice: { InvoiceID: documentMapping.xero_document_id } };
   stored.xero_bank_account_id = 'xero-bank-1';
   const baseContext = {
     existingBySalesforce: new Map([[payment.Id, stored]]),
     documentMappingById: new Map([[documentMapping.id, documentMapping]]),
     xeroPayments: [xeroPayment],
+    currentDocumentById: new Map([[documentMapping.xero_document_id, currentDocument]]),
   };
   assert.equal(classifyXeroFinancialPayment(payment, baseContext).status, 'protected');
+  const v1Fields = { id: payment.Id, amount: payment.Amount__c, date: payment.Date__c, bank: payment.Bank__c, stem: payment.STEM__c, reference: payment.Name, type: payment.RecordType.DeveloperName };
+  const v1Fingerprint = createHash('sha256').update(JSON.stringify(Object.fromEntries(Object.entries(v1Fields).sort(([a], [b]) => a.localeCompare(b))))).digest('hex');
+  const legacyContext = { ...baseContext, existingBySalesforce: new Map([[payment.Id, { ...stored, source_fingerprint: v1Fingerprint }]]) };
+  const upgrade = classifyXeroFinancialPayment(payment, legacyContext);
+  assert.equal(upgrade.action, 'payment_link'); assert.equal(upgrade.status, 'eligible');
+  assert.notEqual(upgrade.sourceFingerprint, v1Fingerprint);
+  const unverifiedLegacy = classifyXeroFinancialPayment(payment, { ...legacyContext, documentMappingById: new Map([[documentMapping.id, { ...documentMapping, retained_differences: { stemId: payment.STEM__c } }]]) });
+  assert.equal(unverifiedLegacy.status, 'blocked');
+
+  const centDrift = classifyXeroFinancialPayment(payment, { ...baseContext, xeroPayments: [{ ...xeroPayment, Amount: 500.01 }] });
+  assert.equal(centDrift.status, 'blocked');
+  const missingInvoice = classifyXeroFinancialPayment(payment, { ...baseContext, currentDocumentById: new Map() });
+  assert.equal(missingInvoice.status, 'blocked');
+  const changedContact = classifyXeroFinancialPayment(payment, { ...baseContext, currentDocumentById: new Map([[documentMapping.xero_document_id, { ...currentDocument, contactId: 'wrong-contact' }]]) });
+  assert.equal(changedContact.status, 'blocked');
   const missing = classifyXeroFinancialPayment(payment, { ...baseContext, xeroPayments: [] });
   assert.equal(missing.status, 'blocked');
   assert.match(missing.blockers.join(' '), /no longer points/i);
@@ -137,7 +156,7 @@ test('stored Xero payment links must still exist and match current Salesforce va
     buyerByStem: new Map([[payment.STEM__c, [documentMapping]]]),
     bankByName: new Map(),
     xeroPayments: [xeroPayment],
-    currentDocumentById: new Map([[documentMapping.xero_document_id, { status: 'AUTHORISED', amountDue: 500 }]]),
+    currentDocumentById: new Map([[documentMapping.xero_document_id, currentDocument]]),
   });
   assert.equal(unapprovedBank.status, 'blocked');
   assert.match(unapprovedBank.blockers.join(' '), /No approved Xero bank mapping/i);
