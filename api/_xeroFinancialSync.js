@@ -21,7 +21,7 @@ import {
 } from './_xeroContactSync.js';
 
 export const XERO_FINANCIAL_CUTOFF = '2026-01-01';
-export const XERO_RECONCILIATION_VERSION = 6;
+export const XERO_RECONCILIATION_VERSION = 7;
 const MAX_BATCH_SIZE = 25;
 const DEFAULT_CALLS_PER_MINUTE = 45;
 const DEFAULT_DAILY_LIMIT = 1000;
@@ -911,8 +911,9 @@ function classifyPayment(payment, context) {
   }
   const currentDocument = documentMapping ? context.currentDocumentById.get(documentMapping.xero_document_id) : null;
   blockers.push(...paymentDocumentIdentityBlockers(payment, documentMapping, currentDocument));
-  const bank = context.bankByName.get(normalizeName(payment.Bank__c));
-  if (!bank) blockers.push(`No approved Xero bank mapping exists for ${payment.Bank__c || 'the Salesforce bank'}.`);
+  const bankName = normalizeName(payment.Bank__c);
+  const bank = bankName ? context.bankByName.get(bankName) : null;
+  if (bankName && !bank) blockers.push(`No approved Xero bank mapping exists for ${payment.Bank__c}.`);
   const amount = Number(payment.Amount__c);
   const matched = selectXeroPaymentMatch({ payment, documentMapping, bankAccountId: bank?.xero_bank_account_id,
     xeroPayments: context.xeroPayments, paymentMappings: context.paymentMappings || [...context.existingBySalesforce.values()] });
@@ -942,7 +943,8 @@ function classifyPayment(payment, context) {
 }
 
 function referencePaymentRow(payment, context, mapping, currentDocument, existing = null) {
-  const bank = context.bankByName.get(normalizeName(payment.Bank__c));
+  const bankName = normalizeName(payment.Bank__c);
+  const bank = bankName ? context.bankByName.get(bankName) : null;
   const result = selectXeroReferenceRetentionMatch({ payment, documentMapping: mapping, currentDocument,
     bankAccountId: bank?.xero_bank_account_id, bankAccount: context.bankAccounts?.get(bank?.xero_bank_account_id),
     organisation: context.organisation, xeroPayments: context.xeroPayments,
@@ -1026,6 +1028,7 @@ function paymentReference(payment) {
 
 function unsupportedPaymentBlockers(payment) {
   const blockers = [];
+  if (!normalizeName(payment.Bank__c)) blockers.push('Salesforce payment bank is missing. Identify the actual bank in Salesforce, then recheck this payment.');
   if (payment.Is_Deposit__c) blockers.push('Deposit payments require Finance allocation before Xero sync.');
   if (payment.Commission_Invoice__c) blockers.push('Commission-linked payments require Finance allocation before Xero sync.');
   if (payment.Is_Volume_Discount__c) blockers.push('Volume-discount payments require Finance allocation before Xero sync.');

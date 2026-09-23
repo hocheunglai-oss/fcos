@@ -462,6 +462,21 @@ test('new exact payments require current same-currency bank and org evidence and
   const context = { existingBySalesforce: new Map(), documentMappingById: new Map(), documentBySupplierInvoice: new Map(), buyerByStem: new Map([['stem', [mapping]]]), bankByName: new Map([['DBS', { xero_bank_account_id: 'bank' }]]), xeroPayments: [], currentDocumentById: new Map([['xero-invoice', { id: 'xero-invoice', type: 'ACCREC', status: 'AUTHORISED', contactId: 'contact', currency: 'USD', amountDue: 100 }]]), bankAccounts: new Map([['bank', { CurrencyCode: 'USD' }]]), organisation: { baseCurrency: 'USD' } };
   const good = classifyXeroFinancialPayment(payment, context);
   assert.equal(good.action, 'payment_apply'); assert.equal(good.currency, 'USD');
+  // Captured from v6: named-bank review/source identities must not churn.
+  assert.equal(good.sourceFingerprint, '73768189067ad2eddd69801ee460d6934299c5470261f43854598b8dd5d17bf3');
+  assert.equal(good.reviewFingerprint, '2f196ef79cb1f3243dafeec6eef49fac530dd4d530348eb3d2489d4ee63202c8');
+  const unapproved = classifyXeroFinancialPayment(payment, { ...context, bankByName: new Map() });
+  assert.ok(unapproved.blockers.includes('No approved Xero bank mapping exists for DBS.'));
+  assert.equal(unapproved.blockers.some((message) => /Salesforce payment bank is missing/.test(message)), false);
+  for (const Bank__c of [null, '', '   ', '\t\n']) {
+    let lookups = 0;
+    const blankMapped = classifyXeroFinancialPayment({ ...payment, Bank__c }, { ...context,
+      bankByName: { get(key) { lookups += 1; assert.equal(key, ''); return { xero_bank_account_id: 'bank' }; } } });
+    assert.equal(lookups, 0, 'an erroneous empty-name mapping must never be looked up');
+    assert.equal(blankMapped.action, 'blocked'); assert.equal(blankMapped.status, 'blocked'); assert.equal(blankMapped.proposedPayment, null);
+    assert.ok(blankMapped.blockers.includes('Salesforce payment bank is missing. Identify the actual bank in Salesforce, then recheck this payment.'));
+    assert.notEqual(blankMapped.reviewFingerprint, good.reviewFingerprint);
+  }
   for (const change of [{ bankAccounts: new Map() }, { bankAccounts: new Map([['bank', { CurrencyCode: 'HKD' }]]) }, { organisation: { baseCurrency: 'HKD' } }, { organisation: { baseCurrency: 'USD', periodLockDate: '2026-09-02' } }]) {
     const result = classifyXeroFinancialPayment(payment, { ...context, ...change });
     assert.equal(result.status, 'blocked'); assert.equal(result.proposedPayment, null);
