@@ -749,6 +749,15 @@
   -webkit-backdrop-filter: none;
 }
 
+/* Finance review follows its available workspace width, including the sidebar. */
+.finance-batch-review { container-type: inline-size; }
+.finance-batch-review__wide { display: none; }
+.finance-batch-review__compact { display: block; }
+@container (min-width: 1100px) {
+  .finance-batch-review__wide { display: block; }
+  .finance-batch-review__compact { display: none; }
+}
+
 /* Collaboration, tools, and administration workspaces */
 .workspace-collaboration,
 .workspace-tools,

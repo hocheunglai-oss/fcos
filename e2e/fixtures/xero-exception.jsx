@@ -1,4 +1,6 @@
 import React from 'react';
+import { BrowserRouter } from 'react-router-dom';
+import XeroPortal from '../../src/pages/XeroPortal.jsx';
 import { createRoot } from 'react-dom/client';
 import { appClient } from '../../src/api/appClient.js';
 import XeroFinancialSync from '../../src/components/xero/XeroFinancialSync.jsx';
@@ -80,9 +82,15 @@ const preview = () => ({
   } : mappingBlocked, hardBlocked, readyUpdate, readyDraft, ...batchRows],
   payments: { rows: [] }, products: [{ id: 'prod-1', name: 'HSFO 380' }], mappingProposals: [],
 });
+const portalStatus = {
+  externalActions: { xero_financial_sync: { enabled: new URLSearchParams(window.location.search).get('gate') !== 'off' } },
+  xero: { connected: true, scopeFlags: { invoices: true, contacts: true, settingsRead: true, paymentsRead: true } },
+};
 window.exceptionFixture = { requests };
 appClient.functions.invoke = async (name, body) => {
   requests.push({ name, body });
+  if (name === 'xeroPortalStatus') return { data: portalStatus };
+  if (['xeroPortalReceiptsList', 'xeroPortalContactLifecycleLatest', 'xeroPortalContactAutoCreateLatest'].includes(name)) return { data: {} };
   if (name === 'xeroFinancialMappingsGet') return { data: {
     productMappings: mappingApproved || automaticApproved ? [{ id: 'mapping-1', direction: 'buyer', salesforceProductId: 'prod-1', salesforceProductName: 'HSFO 380', xeroAccountCode: automaticApproved ? '41100' : '41000', xeroAccountName: 'Sales', xeroTaxType: 'NONE', revision: 1 }] : [],
     bankMappings: [], accountOptions: [{ id: 'account-1', code: '41000', name: 'Sales', bank: false }, { id: 'account-2', code: '41100', name: 'Bunker Sales', bank: false }], taxOptions: [],
@@ -98,7 +106,6 @@ appClient.functions.invoke = async (name, body) => {
   return { data: { error: `Unexpected fixture call: ${name}` } };
 };
 
-createRoot(document.getElementById('root')).render(<XeroFinancialSync portalStatus={{
-  externalActions: { xero_financial_sync: { enabled: new URLSearchParams(window.location.search).get('gate') !== 'off' } },
-  xero: { connected: true, scopeFlags: { invoices: true, contacts: true, settingsRead: true, paymentsRead: true } },
-}} language="en" />);
+createRoot(document.getElementById('root')).render(new URLSearchParams(window.location.search).has('portal')
+  ? <BrowserRouter><div className="app-workspace-scroll" style={{ marginInlineStart: window.matchMedia('(min-width: 640px)').matches ? 240 : 0 }}><XeroPortal /></div></BrowserRouter>
+  : <XeroFinancialSync portalStatus={portalStatus} language="en" />);

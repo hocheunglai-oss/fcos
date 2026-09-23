@@ -358,7 +358,7 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
         <>
 
 
-          <section className={PANEL_CLASS}>
+          <section className={cn(PANEL_CLASS, 'finance-batch-review')}>
             <div className={SECTION_HEADER_CLASS}>
               {sectionHeading(financialCopy.reviewTitle, financialCopy.runSummary(preview.run?.id?.slice(0, 8), copy.statuses[preview.run?.status] || preview.run?.status?.replaceAll('_', ' '), selected.size, eligibleRows.length))}
               <div className={ACTIONS_CLASS}>
@@ -370,8 +370,9 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
               </div>
             </div>
             {pagination(documentPage, documentPageCount, orderedDocuments.length, PAGE_SIZE, setDocumentPage, financialCopy.rowRange, copy.common, 'mt-3')}
-            <div className="mt-4 hidden lg:block">
-              <Table scrollLabel={financialCopy.documentTableLabel} containerClassName="max-h-[680px]">
+            <div className="finance-batch-review__wide mt-4">
+              <Table className="table-fixed min-w-0 [&_th]:whitespace-normal [&_td]:[overflow-wrap:anywhere]" scrollLabel={financialCopy.documentTableLabel} containerClassName="max-h-[680px]">
+                <colgroup>{[3, 14, 25, 13, 17, 10, 9, 9].map((width, index) => <col key={index} style={{ width: `${width}%` }} />)}</colgroup>
                 {tableHeader([copy.common.use, financialCopy.salesforceDocument, copy.common.reason, copy.common.action, financialCopy.accountStem, copy.common.date, copy.common.total, 'Xero'], true)}
                 <TableBody>
                   {!visibleDocuments.length && <TableRow><TableCell colSpan={8}>{flow.noRows}</TableCell></TableRow>}
@@ -386,13 +387,13 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
                         detailPair(row.invoiceDate, <>{financialCopy.due} {row.dueDate || copy.common.notSet}</>, false),
                         <>{row.currency} {formatAmount(row.total, copy.locale)}</>,
                         <>{row.xero?.url ? <a href={row.xero.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-blue-700 hover:underline">{row.xero.number || copy.common.open} <ExternalLink className="h-3 w-3" /></a> : financialCopy.noActiveMatch}{row.xero?.status ? <div className={DETAIL_CLASS}>{row.xero.status}</div> : null}</>,
-                      ], { 2: 'min-w-[300px] max-w-[420px]', 6: 'tabular-nums' })}
+                      ], { 2: 'align-top', 6: 'tabular-nums' })}
                     </TableRow>
                   ))}
                 </TableBody>
               </Table>
             </div>
-            <div className="mt-4 lg:hidden">
+            <div className="finance-batch-review__compact mt-4">
               <Table className="table-fixed min-w-0" containerClassName="max-h-[680px]" scrollLabel={financialCopy.documentTableLabel}>
                 {tableHeader([copy.common.use, copy.common.reason], true)}
                 <TableBody>
@@ -586,7 +587,7 @@ function CutoverKpi({ label, value, tone = 'neutral' }) {
 
 function FinancialActionBadge({ action, status, copy }) {
   const style = status === 'blocked' ? 'border-rose-200 bg-rose-50 text-rose-800' : status === 'protected' ? 'border-slate-300 bg-slate-100 text-slate-800' : action === 'create_draft' ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-sky-200 bg-sky-50 text-sky-800';
-  return <Badge variant="outline" className={cn('whitespace-nowrap', style)}>{copy.financial.actions[action] || copy.statuses[status] || String(action || status).replaceAll('_', ' ')}</Badge>;
+  return <Badge variant="outline" className={cn('whitespace-normal break-words', style)}>{copy.financial.actions[action] || copy.statuses[status] || String(action || status).replaceAll('_', ' ')}</Badge>;
 }
 
 function DocumentReason({ row, flow, copy, financialCopy, openDocumentReview, setFixMapping }) {

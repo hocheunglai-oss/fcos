@@ -285,8 +285,8 @@ export default function XeroPortal() {
   }
 
   return (
-    <div className="workspace-tools min-h-full bg-background p-4 text-foreground lg:p-6" lang={language === 'zh-Hant' ? 'zh-Hant-HK' : 'en'}>
-      <div className="mx-auto flex max-w-[1800px] flex-col gap-4">
+    <div className={cn('workspace-tools min-h-full bg-background p-4 text-foreground lg:p-6', tab === 'accounting' && 'workspace-page-wide')} lang={language === 'zh-Hant' ? 'zh-Hant-HK' : 'en'}>
+      <div className={cn('mx-auto flex w-full min-w-0 flex-col gap-4', tab !== 'accounting' && 'max-w-[1800px]')}>
         <header className="flex flex-col gap-3 border-b border-border pb-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <div className="flex flex-wrap items-center gap-2">
