@@ -53,7 +53,21 @@ const readyDraft = {
   blockers: [], differences: [], xero: null,
   sourceFingerprint: 'source-draft', reviewFingerprint: 'review-draft',
 };
+const batchCount = Number(new URLSearchParams(window.location.search).get('rows') || 0);
+const batchRows = Array.from({ length: batchCount }, (_, index) => {
+  const ordinal = String(index + 1).padStart(3, '0');
+  return {
+    ...mappingBlocked,
+    id: `batch-${ordinal}`, salesforceId: `invoice-batch-${ordinal}`,
+    documentNumber: `INV-BATCH-${ordinal}`, accountName: `Pacific Marine Fuels Trading ${ordinal}`,
+    stemId: `stem-batch-${ordinal}`, stemName: `STEM-BATCH-${ordinal}`,
+    blockers: [`HSFO 380: Finance-approved Xero account mapping is missing for Pacific Marine Fuels Trading ${ordinal}.`],
+    sourceFingerprint: `source-batch-${ordinal}`, reviewFingerprint: `review-batch-${ordinal}`,
+  };
+});
 let mappingApproved = false;
+let automaticApproved = false;
+const automaticMapping = new URLSearchParams(window.location.search).get('automatic') === '1';
 const requests = [];
 const preview = () => ({
   run: { id: mappingApproved ? 'local-review-refreshed' : 'local-review-fixture', revision: 1, status: 'ready_for_review', createdAt: checkedAt },
@@ -63,19 +77,23 @@ const preview = () => ({
   }, mappingApproved ? {
     ...mappingBlocked, id: 'mapping-refreshed', action: 'safe_update', status: 'eligible', blockers: [],
     reviewFingerprint: 'review-mapping-approved',
-  } : mappingBlocked, hardBlocked, readyUpdate, readyDraft],
+  } : mappingBlocked, hardBlocked, readyUpdate, readyDraft, ...batchRows],
   payments: { rows: [] }, products: [{ id: 'prod-1', name: 'HSFO 380' }], mappingProposals: [],
 });
 window.exceptionFixture = { requests };
 appClient.functions.invoke = async (name, body) => {
   requests.push({ name, body });
   if (name === 'xeroFinancialMappingsGet') return { data: {
-    productMappings: mappingApproved ? [{ id: 'mapping-1', direction: 'buyer', salesforceProductId: 'prod-1', salesforceProductName: 'HSFO 380', xeroAccountCode: '41000', xeroAccountName: 'Sales', xeroTaxType: 'NONE', revision: 1 }] : [],
-    bankMappings: [], accountOptions: [{ id: 'account-1', code: '41000', name: 'Sales', bank: false }], taxOptions: [],
+    productMappings: mappingApproved || automaticApproved ? [{ id: 'mapping-1', direction: 'buyer', salesforceProductId: 'prod-1', salesforceProductName: 'HSFO 380', xeroAccountCode: automaticApproved ? '41100' : '41000', xeroAccountName: 'Sales', xeroTaxType: 'NONE', revision: 1 }] : [],
+    bankMappings: [], accountOptions: [{ id: 'account-1', code: '41000', name: 'Sales', bank: false }, { id: 'account-2', code: '41100', name: 'Bunker Sales', bank: false }], taxOptions: [],
   } };
   if (name === 'xeroFinancialMappingsSave') { mappingApproved = true; return { data: { saved: true } }; }
   if (name === 'xeroFinancialSyncLatest') return { data: { preview: preview() } };
-  if (name === 'xeroFinancialSyncPreview') return { data: preview() };
+  if (name === 'xeroFinancialSyncPreview') {
+    const changedCount = automaticMapping && !automaticApproved ? 1 : 0;
+    if (automaticMapping) automaticApproved = true;
+    return { data: { ...preview(), automaticMappingPolicy: { id: 'petroleum-products-v1', productCount: automaticMapping ? 1 : 0, approvedCount: automaticMapping ? 1 : 0, changedCount } } };
+  }
   if (name === 'xeroFinancialSyncRun') return { data: { error: 'Fixture blocks real financial writes.' } };
   return { data: { error: `Unexpected fixture call: ${name}` } };
 };

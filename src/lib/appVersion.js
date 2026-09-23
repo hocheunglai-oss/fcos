@@ -3,6 +3,7 @@ import { APP_VERSION } from './appVersionMeta.js';
 export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
+  { version: '2.0.233', releasedAt: '2026-09-23', title: 'Automatic petroleum mappings and visible review reasons', changes: ['Approve petroleum buyer 41100 and supplier 51100 mappings with NONE tax; keep review reasons visible on every page.'] },
   { version: '2.0.232', releasedAt: '2026-09-23', title: 'Finance exception approval actions', changes: ['Review and resolve exceptions in place, then approve the exact document update.'] },
   { version: '2.0.231', releasedAt: '2026-09-23', title: 'Xero exception review', changes: ['Review shared contacts and legacy differences with stronger invoice and payment checks.'] },
   {

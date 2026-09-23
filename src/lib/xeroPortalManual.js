@@ -11,7 +11,7 @@ export const XERO_PORTAL_MANUALS = Object.freeze({
     important: [
       'Preview is safe: a read-only preview never changes Xero.',
       'Only a control marked “Xero write” changes Xero, and it still requires permission and review.',
-      'Finance must confirm Product, tax, bank, document, and payment mappings before approval.',
+      'Petroleum Product mappings follow the approved company rule; Finance reviews other mappings, documents and payments.',
     ],
     effectLabels: {
       read: 'Read only',
@@ -87,6 +87,7 @@ export const XERO_PORTAL_MANUALS = Object.freeze({
         steps: [
           'Click Check everything. The scope is fixed to accounting dates from 1 January 2026 and also includes records created since then with a missing accounting date; both documents and payments must finish before FCOS shows a percentage.',
           'The last completed check opens automatically. Start with Needs attention, then use Ready, Waiting and Matched to focus the work. Returning to the page checks for changes; Check everything always runs a full check.',
+          'Each full check auto-approves Salesforce Petroleum_Product mappings: buyer 41100 Trading Sales, supplier 51100 Trading Purchase, tax NONE. Other product types keep their existing mappings. These approvals are audited in FCOS; Xero transactions still require review.',
           'Use Review / resolve on an exception to inspect every blocker and approve missing Product account/tax mappings in place. Mapping saves recheck the same document before invoice approval.',
           'Saving a mapping refreshes the results automatically and keeps unaffected selections. Exact existing documents and payments are linked in FCOS without a Xero write.',
           'Select ready documents and choose Review and sync selected. Inspect the exact changes and confirm once; FCOS retains the authorisation record internally.',
@@ -179,7 +180,7 @@ export const XERO_PORTAL_MANUALS = Object.freeze({
     important: [
       '預覽是安全的：「唯讀預覽」絕不會更改 Xero。',
       '只有標示「寫入 Xero」的控制項會更改 Xero，而且仍須通過權限及覆核。',
-      '產品、稅項、銀行、文件及付款對應必須先由財務部確認。',
+      '石油產品對應按已核准的公司規則處理；其他對應、文件及付款由財務部覆核。',
     ],
     effectLabels: {
       read: '唯讀',
@@ -255,6 +256,7 @@ export const XERO_PORTAL_MANUALS = Object.freeze({
         steps: [
           '按「檢查全部」。範圍固定為會計日期由 2026 年 1 月 1 日起的紀錄，亦包括此後建立但欠缺會計日期的紀錄；文件及付款均完成前不會顯示百分比。',
           '系統自動載入上次完成的核對。先查看「需要處理」，再使用「可同步」、「等待中」及「已核對」分類。',
+          '每次完整核對自動核准 Salesforce Petroleum_Product 對應：買方 41100 Trading Sales、供應商 51100 Trading Purchase、稅務 NONE。其他產品類型保留原有對應；核准會記錄於 FCOS，Xero 交易仍需覆核。',
           '在例外項目按「檢閱／解決」，查看所有阻礙並核准缺少的產品會計科目／稅務對應。儲存後會重新核對同一文件，再供審批。',
           '儲存對應後自動更新，並保留未受影響的選取。已存在的準確文件及付款會在 FCOS 建立連結，不會寫入 Xero 交易。',
           '選取可同步文件，按「檢閱並同步所選項目」。確認文件、貨幣及金額後按「確認並同步」；審批紀錄仍會保留。',

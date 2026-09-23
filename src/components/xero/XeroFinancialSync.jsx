@@ -71,11 +71,10 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
     setDailyAllowance((current) => latestXeroDailyAllowance(current, value, { receivedAt }));
   }, []);
 
-  const loadMappings = useCallback(async () => {
-    setBusy('mappings');
-    setError('');
+  const loadMappings = useCallback(async ({ keepBusy = false } = {}) => {
+    if (!keepBusy) { setBusy('mappings'); setError(''); }
     const result = await appClient.functions.invoke('xeroFinancialMappingsGet', {}, FORCE_OPTIONS);
-    setBusy('');
+    if (!keepBusy) setBusy('');
     if (result.data?.error) {
       setError(result.data.error);
       return;
@@ -189,6 +188,7 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
     setPayments(result.data.payments);
     setPaymentPage(0);
     setSelectedPayments(new Set((result.data.payments?.rows || []).filter((row) => row.action === 'payment_apply' && row.status === 'eligible').map((row) => row.salesforcePaymentId)));
+    if (Number(result.data.automaticMappingPolicy?.changedCount || 0) > 0) await loadMappings({ keepBusy: true });
     return true;
     } catch (nextError) {
       captureDailyAllowance(nextError);
@@ -370,29 +370,43 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
               </div>
             </div>
             {pagination(documentPage, documentPageCount, orderedDocuments.length, PAGE_SIZE, setDocumentPage, financialCopy.rowRange, copy.common, 'mt-3')}
-            <div className={cn('mt-4 max-h-[680px]', TABLE_FRAME_CLASS)}>
-              <Table scrollLabel={financialCopy.documentTableLabel}>
-                {tableHeader([copy.common.use, copy.common.action, financialCopy.salesforceDocument, financialCopy.accountStem, copy.common.date, copy.common.total, 'Xero', copy.common.reason], true)}
+            <div className="mt-4 hidden lg:block">
+              <Table scrollLabel={financialCopy.documentTableLabel} containerClassName="max-h-[680px]">
+                {tableHeader([copy.common.use, financialCopy.salesforceDocument, copy.common.reason, copy.common.action, financialCopy.accountStem, copy.common.date, copy.common.total, 'Xero'], true)}
                 <TableBody>
                   {!visibleDocuments.length && <TableRow><TableCell colSpan={8}>{flow.noRows}</TableCell></TableRow>}
                   {visibleDocuments.map((row) => (
                     <TableRow key={row.id}>
                       {tableCells([
                         <Checkbox checked={selected.has(row.id)} disabled={row.status !== 'eligible' || reconciliationBucket(row) !== 'ready' || preview.run?.status !== 'ready_for_review'} onCheckedChange={(value) => toggleSelection(row.id, value === true, setSelected)} />,
-                        <FinancialActionBadge action={row.action} status={row.status} copy={copy} />,
                         detailPair(row.documentNumber, financialCopy.documentKinds[row.documentKind] || row.documentKind?.replaceAll('_', ' ')),
+                        <DocumentReason row={row} flow={flow} copy={copy} financialCopy={financialCopy} openDocumentReview={openDocumentReview} setFixMapping={setFixMapping} />,
+                        <FinancialActionBadge action={row.action} status={row.status} copy={copy} />,
                         detailPair(row.accountName, <>{row.companyCode || copy.common.noClKey} · {row.stemName || copy.common.noStem}</>),
                         detailPair(row.invoiceDate, <>{financialCopy.due} {row.dueDate || copy.common.notSet}</>, false),
                         <>{row.currency} {formatAmount(row.total, copy.locale)}</>,
                         <>{row.xero?.url ? <a href={row.xero.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-blue-700 hover:underline">{row.xero.number || copy.common.open} <ExternalLink className="h-3 w-3" /></a> : financialCopy.noActiveMatch}{row.xero?.status ? <div className={DETAIL_CLASS}>{row.xero.status}</div> : null}</>,
-                        <><div>{row.blockers?.[0] || (row.status === 'blocked' ? flow.attention : row.acceptedLegacy ? flow.acceptedLegacy : row.warnings?.[0] || (row.differences?.length ? financialCopy.differenceCount(row.differences.length) : copy.common.exact))}</div>
-                        {['attention', 'ready'].includes(reconciliationBucket(row)) && <Button variant="link" size="sm" onClick={() => openDocumentReview(row)}>{reconciliationBucket(row) === 'attention' ? flow.resolve : flow.singleReview}</Button>}
-                        {(row.blockers || []).some((reason) => /Salesforce Product|Xero account mapping|account codes?|tax treatment/i.test(reason)) && <Button variant="link" size="sm" onClick={() => setFixMapping(row)}>{flow.mapping}</Button>}
-                        <DocumentEvidence row={row} flow={flow} copy={copy} />
-                        {row.stemId && <a className={LINK_CLASS} href={`/disputes?stem=${encodeURIComponent(row.stemId)}`}>{row.dispute?.status ? `Dispute: ${row.dispute.status}` : 'Dispute / settlement'}</a>}</>,
-                      ], { 5: 'tabular-nums', 7: 'max-w-[360px]' })}
+                      ], { 2: 'min-w-[300px] max-w-[420px]', 6: 'tabular-nums' })}
                     </TableRow>
                   ))}
+                </TableBody>
+              </Table>
+            </div>
+            <div className="mt-4 lg:hidden">
+              <Table className="table-fixed min-w-0" containerClassName="max-h-[680px]" scrollLabel={financialCopy.documentTableLabel}>
+                {tableHeader([copy.common.use, copy.common.reason], true)}
+                <TableBody>
+                  {!visibleDocuments.length && <TableRow><TableCell colSpan={2}>{flow.noRows}</TableCell></TableRow>}
+                  {visibleDocuments.map((row) => <TableRow key={row.id}>
+                    <TableCell className="w-9 align-top"><Checkbox checked={selected.has(row.id)} disabled={row.status !== 'eligible' || reconciliationBucket(row) !== 'ready' || preview.run?.status !== 'ready_for_review'} onCheckedChange={(value) => toggleSelection(row.id, value === true, setSelected)} /></TableCell>
+                    <TableCell className="min-w-0 whitespace-normal">
+                      <div className="flex flex-wrap items-center gap-2"><span className="font-medium break-all">{row.documentNumber}</span><FinancialActionBadge action={row.action} status={row.status} copy={copy} /></div>
+                      <div className={DETAIL_CLASS}>{financialCopy.documentKinds[row.documentKind] || row.documentKind?.replaceAll('_', ' ')} · {row.accountName} · {row.companyCode || copy.common.noClKey} · {row.stemName || copy.common.noStem}</div>
+                      <div className={DETAIL_CLASS}>{row.invoiceDate} · {financialCopy.due} {row.dueDate || copy.common.notSet} · {row.currency} {formatAmount(row.total, copy.locale)}</div>
+                      <div className={DETAIL_CLASS}>{row.xero?.url ? <a href={row.xero.url} target="_blank" rel="noreferrer" className={LINK_CLASS}>{row.xero.number || copy.common.open}</a> : financialCopy.noActiveMatch}{row.xero?.status ? ` · ${row.xero.status}` : ''}</div>
+                      <div className="mt-2 border-t border-border pt-2"><div className="text-xs font-semibold text-muted-foreground">{copy.common.reason}</div><DocumentReason row={row} flow={flow} copy={copy} financialCopy={financialCopy} openDocumentReview={openDocumentReview} setFixMapping={setFixMapping} /></div>
+                    </TableCell>
+                  </TableRow>)}
                 </TableBody>
               </Table>
             </div>
@@ -439,8 +453,11 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
         <div className="mt-4 space-y-5 border-t border-border pt-4">
           <div className={BETWEEN_CLASS}>
             {sectionHeading(financialCopy.mappingTitle, financialCopy.mappingDescription, true)}
-            <Button type="button" variant="outline" onClick={loadMappings} disabled={Boolean(busy)}><RefreshCw className="mr-2 h-4 w-4" />{financialCopy.mappings}</Button>
+            <Button type="button" variant="outline" onClick={() => loadMappings()} disabled={Boolean(busy)}><RefreshCw className="mr-2 h-4 w-4" />{financialCopy.mappings}</Button>
           </div>
+          <p className={DESCRIPTION_CLASS}>{language === 'zh-Hant'
+            ? '每次完整核對會自動核准 Salesforce 石油產品的 Xero 對應：買方 41100、供應商 51100，稅務 NONE。'
+            : 'Each full check auto-approves Xero mappings for Salesforce petroleum products: buyer 41100, supplier 51100, tax NONE.'}</p>
           {products.length ? (
             <div className="space-y-3">
               {pagination(mappingPage, mappingPageCount, productMappingRows.length, MAPPING_PAGE_SIZE, setMappingPage, financialCopy.mappingRange, copy.common)}
@@ -570,6 +587,20 @@ function CutoverKpi({ label, value, tone = 'neutral' }) {
 function FinancialActionBadge({ action, status, copy }) {
   const style = status === 'blocked' ? 'border-rose-200 bg-rose-50 text-rose-800' : status === 'protected' ? 'border-slate-300 bg-slate-100 text-slate-800' : action === 'create_draft' ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-sky-200 bg-sky-50 text-sky-800';
   return <Badge variant="outline" className={cn('whitespace-nowrap', style)}>{copy.financial.actions[action] || copy.statuses[status] || String(action || status).replaceAll('_', ' ')}</Badge>;
+}
+
+function DocumentReason({ row, flow, copy, financialCopy, openDocumentReview, setFixMapping }) {
+  const bucket = reconciliationBucket(row);
+  const mappingBlocked = (row.blockers || []).some((reason) => /Salesforce Product|Xero account mapping|account codes?|tax treatment/i.test(reason));
+  return <div className="min-w-0 break-words">
+    <div>{row.blockers?.[0] || (row.status === 'blocked' ? flow.attention : row.acceptedLegacy ? flow.acceptedLegacy : row.warnings?.[0] || (row.differences?.length ? financialCopy.differenceCount(row.differences.length) : copy.common.exact))}</div>
+    <div className="flex flex-wrap items-center gap-2">
+      {['attention', 'ready'].includes(bucket) && <Button variant="link" size="sm" className="h-auto min-h-8 p-0" onClick={() => openDocumentReview(row)}>{bucket === 'attention' ? flow.resolve : flow.singleReview}</Button>}
+      {mappingBlocked && <Button variant="link" size="sm" className="h-auto min-h-8 p-0" onClick={() => setFixMapping(row)}>{flow.mapping}</Button>}
+    </div>
+    <DocumentEvidence row={row} flow={flow} copy={copy} />
+    {row.stemId && <a className={LINK_CLASS} href={`/disputes?stem=${encodeURIComponent(row.stemId)}`}>{row.dispute?.status ? `Dispute: ${row.dispute.status}` : 'Dispute / settlement'}</a>}
+  </div>;
 }
 
 function DocumentEvidence({ row, flow, copy, expanded = false }) {

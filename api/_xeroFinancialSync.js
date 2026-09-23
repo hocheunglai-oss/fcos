@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { approvePetroleumMappings, PETROLEUM_PRODUCT_QUERY } from './_xeroPetroleumMappings.js';
 import { requireExternalActionGate } from './_externalActionGates.js';
 import { paymentDocumentIdentityBlockers, selectXeroPaymentMatch } from './_xeroPaymentIdentity.js';
 import { xeroRateLimitSnapshot } from './_xeroRateLimit.js';
@@ -14,7 +15,7 @@ import {
 } from './_xeroContactSync.js';
 
 export const XERO_FINANCIAL_CUTOFF = '2026-01-01';
-export const XERO_RECONCILIATION_VERSION = 2;
+export const XERO_RECONCILIATION_VERSION = 3;
 const MAX_BATCH_SIZE = 25;
 const DEFAULT_CALLS_PER_MINUTE = 45;
 const DEFAULT_DAILY_LIMIT = 1000;
@@ -343,6 +344,16 @@ export async function xeroFinancialSyncPreview(body = {}, dependencies = {}) {
     env, fetchImpl, onResponse, includePayments: body.includePayments === true, ...evidenceIds,
   });
   if (xero.paymentReadSnapshot) xero.paymentReadSnapshot.sourcePayments = sourcePayments;
+  const [accountResponse, taxResponse, allMappings] = await Promise.all([
+    xeroAccountingFetch(connection, '/Accounts', { method: 'GET', env, fetchImpl, onResponse }),
+    xeroAccountingFetch(connection, '/TaxRates', { method: 'GET', env, fetchImpl, onResponse }),
+    allFinancialRows(client, 'xero_financial_product_mappings'),
+  ]);
+  const automaticMappingPolicy = await approvePetroleumMappings({
+    products: salesforce.productRecords, accounts: accountResponse.Accounts || [], taxRates: taxResponse.TaxRates || [],
+    mappings: allMappings.data, client, actor,
+  });
+  stored.productMappings = (await allFinancialRows(client, 'xero_financial_product_mappings', (query) => query.eq('enabled', true))).data;
   const classified = buildFinancialClassifications(salesforce, xero, stored);
   const disputeStates = await loadDisputeReconciliationStates(client, classified.rows.map((row) => row.stemId));
   for (const row of classified.rows) row.dispute = disputeStates.get(row.stemId) || null;
@@ -387,7 +398,7 @@ export async function xeroFinancialSyncPreview(body = {}, dependencies = {}) {
   let paymentSnapshot = null;
   if (body.includePayments === true) {
     paymentSnapshot = await previewPayments({ recordExactMatches: body.recordExactMatches === true }, { accessContext, env, fetchImpl, client, xeroReadSnapshot: xero.paymentReadSnapshot });
-    runRow.control_totals = { ...runRow.control_totals, workflowSnapshot: { reconciliationVersion: XERO_RECONCILIATION_VERSION, payments: paymentSnapshot, products: salesforce.products, mappingProposals, checkedAt: now, controlsFingerprint: hashJson(await loadStoredFinancialControls(client)), organisation: xero.organisation } };
+    runRow.control_totals = { ...runRow.control_totals, workflowSnapshot: { reconciliationVersion: XERO_RECONCILIATION_VERSION, payments: paymentSnapshot, products: salesforce.products, mappingProposals, automaticMappingPolicy, checkedAt: now, controlsFingerprint: hashJson(await loadStoredFinancialControls(client)), organisation: xero.organisation } };
     const { error } = await client.from('xero_financial_sync_runs').update({ control_totals: runRow.control_totals }).eq('id', runId);
     if (error) throw storageError(error, 'xero_financial_sync_runs');
   }
@@ -407,10 +418,11 @@ export async function xeroFinancialSyncPreview(body = {}, dependencies = {}) {
     rows: classified.rows.map((row, index) => ({ ...serializeClassification(row), id: itemRows[index].id })),
     products: salesforce.products,
     mappingProposals,
+    automaticMappingPolicy,
     controlTotals: classified.controlTotals,
     summary: classified.summary,
     rateLimit: rate,
-    callEstimate: xero.callCount,
+    callEstimate: xero.callCount + 2,
     externalWriteEnabled: financialWriteGateEnabled(env),
   };
 }
@@ -503,7 +515,7 @@ export async function xeroFinancialSyncLatest(_body = {}, { env = process.env, c
       warnings: item.warnings, differences: item.differences, xero: item.xero_payload, proposedPayload: item.proposed_payload }),
     id: item.id, selected: item.selected, dispute: disputeStates.get(item.source_payload?.stemId) || null,
   })), summary: run.classification_summary, products: snapshot.products || [], mappingProposals: snapshot.mappingProposals || [],
-    payments: snapshot.payments || null, checkedAt: snapshot.checkedAt || run.created_at, restored: true } };
+    automaticMappingPolicy: snapshot.automaticMappingPolicy || null, payments: snapshot.payments || null, checkedAt: snapshot.checkedAt || run.created_at, restored: true } };
 }
 
 export async function xeroFinancialSyncApply(body = {}, {
@@ -874,9 +886,10 @@ function unsupportedPaymentBlockers(payment) {
   return blockers;
 }
 
-async function loadSalesforceFinancialSnapshot(cutoff) {
+export async function loadSalesforceFinancialSnapshot(cutoff, querySalesforce = sfCompositeQueries) {
   const quotedCutoff = cutoff;
   const queries = [
+    PETROLEUM_PRODUCT_QUERY,
     BUYER_INVOICE_QUERY.replaceAll('{cutoff}', quotedCutoff),
     SUPPLIER_INVOICE_QUERY.replaceAll('{cutoff}', quotedCutoff),
     `SELECT Id, Name, Buyer_Invoice__c, Supplier_Invoice__c, Product__c, Product__r.Name,
@@ -899,24 +912,26 @@ async function loadSalesforceFinancialSnapshot(cutoff) {
           OR (Supplier_Invoice__c != null AND (Supplier_Invoice__r.Invoice_Date__c >= ${quotedCutoff}
           OR (Supplier_Invoice__r.Invoice_Date__c = null AND Supplier_Invoice__r.CreatedDate >= ${quotedCutoff}T00:00:00Z))))`,
   ];
-  const results = await sfCompositeQueries(queries.map((soql) => ({ soql, clean: true, limit: 100000 })));
-  const [buyerResult, supplierResult, lineResult, extraResult] = results;
-  const allResults = [buyerResult, supplierResult, lineResult, extraResult];
-  const failed = allResults.find((result) => result?.error || Number(result.totalSize || 0) > (result.records || []).length);
-  if (failed) throw financialError(`Salesforce financial snapshot is incomplete: ${failed.error || 'Record limit reached'}`, 502, 'XERO_FINANCIAL_SALESFORCE_INCOMPLETE');
-  const productMap = new Map();
+  const results = await querySalesforce(queries.map((soql) => ({ soql, clean: true, limit: 100000 })));
+  const [productResult, buyerResult, supplierResult, lineResult, extraResult] = results;
+  const allResults = [productResult, buyerResult, supplierResult, lineResult, extraResult];
+  const failedIndex = allResults.findIndex((result) => !Array.isArray(result?.records) || result?.error || Number(result.totalSize || 0) > result.records.length);
+  if (failedIndex >= 0) throw financialError(`Salesforce financial snapshot is incomplete: ${allResults[failedIndex]?.error || 'Record limit reached'}`, 502, 'XERO_FINANCIAL_SALESFORCE_INCOMPLETE');
+  const productMap = new Map((productResult.records || []).filter((row) => row.RecordType?.DeveloperName === 'Petroleum_Product').map((row) => [row.Id, { id: row.Id, name: row.Name }]));
   for (const row of [...(lineResult.records || []), ...(extraResult.records || [])]) {
     const productId = row.Product__c || row.Product2Id__c;
     const productName = row.Product__r?.Name || row.Product2Id__r?.Name;
     if (productId && productName) productMap.set(productId, { id: productId, name: productName });
   }
   return {
+    productRecords: productResult.records || [],
     buyers: buyerResult.records || [],
     suppliers: supplierResult.records || [],
     lines: lineResult.records || [],
     extras: extraResult.records || [],
     products: [...productMap.values()].sort((a, b) => a.name.localeCompare(b.name)),
     fingerprintBasis: {
+      products: productResult.records || [],
       buyers: (buyerResult.records || []).map(financialRecordFingerprint),
       suppliers: (supplierResult.records || []).map(financialRecordFingerprint),
       lines: (lineResult.records || []).map(financialRecordFingerprint),

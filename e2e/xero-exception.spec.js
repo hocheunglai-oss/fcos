@@ -90,3 +90,40 @@ test('single-document approval follows the financial gate', async ({ page }) => 
   await expect(dialog.getByRole('button', { name: 'Approve and update' })).toBeDisabled();
   expect(await page.evaluate(() => window.exceptionFixture.requests.filter((request) => request.name === 'xeroFinancialSyncRun'))).toEqual([]);
 });
+
+test('Reason and resolution action stay within the viewport on both 100-row pages', async ({ page }, testInfo) => {
+  if (testInfo.project.name === 'desktop') await page.setViewportSize({ width: 1024, height: 768 });
+  await page.goto('/e2e/fixtures/xero-exception.html?rows=205');
+  const section = page.locator('section').filter({ has: page.getByRole('heading', { name: 'Finance batch review' }) });
+  const assertRow = async (documentNumber) => {
+    const row = section.getByRole('row').filter({ hasText: documentNumber });
+    await expect(row).toContainText('Finance-approved Xero account mapping is missing');
+    const action = row.getByRole('button', { name: 'Review / resolve' });
+    await expect(action).toBeVisible();
+    const bounds = await action.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return { left: rect.left, right: rect.right, viewportWidth: window.innerWidth };
+    });
+    expect(bounds.left).toBeGreaterThanOrEqual(0);
+    expect(bounds.right).toBeLessThanOrEqual(bounds.viewportWidth);
+    await action.click();
+    await expect(page.getByRole('dialog')).toContainText('Finance-approved Xero account mapping is missing');
+    await page.getByRole('dialog').getByRole('button', { name: 'Cancel' }).click();
+  };
+  await assertRow('INV-BATCH-001');
+  await section.getByRole('button', { name: 'Next', exact: true }).click();
+  await assertRow('INV-BATCH-150');
+  await page.screenshot({ path: testInfo.outputPath('reason-page-two.png'), animations: 'disabled' });
+});
+
+test('automatic petroleum mapping preview refreshes the saved mapping display', async ({ page }) => {
+  await page.goto('/e2e/fixtures/xero-exception.html?automatic=1');
+  await expect(page.getByText('0 saved mappings')).toBeVisible();
+  await page.getByRole('button', { name: 'Check everything' }).click();
+  await expect(page.getByText('1 saved mappings')).toBeVisible();
+  const requests = await page.evaluate(() => window.exceptionFixture.requests.map((request) => request.name));
+  expect(requests.filter((name) => name === 'xeroFinancialMappingsGet')).toHaveLength(2);
+  await page.getByText('Advanced mapping setup').click();
+  await expect(page.getByText('Each full check auto-approves Xero mappings for Salesforce petroleum products: buyer 41100, supplier 51100, tax NONE.')).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Xero product mappings' }).getByRole('row').filter({ hasText: 'HSFO 380' }).first()).toContainText('41100');
+});
