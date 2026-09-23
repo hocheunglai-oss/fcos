@@ -93,22 +93,22 @@ const EN = {
   usageSources: { invoices: 'Invoices, bills, and credit notes', 'bank-transactions': 'Bank transactions', payments: 'Payments', overpayments: 'Overpayments', prepayments: 'Prepayments', 'expense-claims': 'Expense claims', receipts: 'Receipts' },
   recordTypes: { Buyer: 'Buyer', Supplier: 'Supplier', Buyer_Supplier: 'Buyer & Supplier', Broker: 'Broker' },
   financial: {
-    loadingTitle: 'Loading accounting controls', loadingDescription: 'FCOS is loading service-only mappings and the connected Xero Chart of Accounts.',
+    loadingTitle: 'Loading accounting controls', loadingDescription: 'Loading mappings and the Xero Chart of Accounts.',
     gateEnabled: 'Financial write gate enabled', gateLocked: 'Financial write gate locked',
 
     mappings: 'Mappings', preview: 'Build read-only preview', reconnect: 'Reconnect Xero once to grant accounting.settings.read and the write-capable accounting.payments scope.',
     reconciliationTitle: 'Salesforce → Xero reconciliation', fixedScope: 'Fixed scope: from 1 Jan 2026',
-    reconciliationDescription: 'One check compares every in-scope Salesforce buyer invoice, supplier bill, credit note and payment with the connected Xero organisation. Records created since 1 January 2026 with a missing accounting date, and unsupported or incomplete payments, stay visible as exceptions.',
+    reconciliationDescription: 'Compare all in-scope Salesforce invoices, bills, credit notes and payments with Xero. Records created since 1 Jan 2026 with missing dates, and unsupported or incomplete payments, remain exceptions.',
     checkEverything: 'Check everything', checkingEverything: 'Checking documents and payments…', completion: 'Verified completion',
     salesforceRecords: 'Salesforce records', correctInXero: 'Correct in Xero', awaitingSync: 'Awaiting sync', exceptions: 'Exceptions',
     setupTitle: 'Advanced mapping setup', setupDescription: 'Open only when an exception asks for a Product, tax, or bank mapping.',
     reconciliationStatuses: { not_checked: 'Not checked', incomplete_check: 'Check incomplete', attention_required: 'Action required', sync_required: 'Ready for reviewed sync', reconciled: '100% reconciled' },
     reconciliationDescriptions: {
-      not_checked: 'Run Check everything to establish the complete Salesforce and Xero control totals.',
-      incomplete_check: 'Only part of the population was checked. FCOS will not claim a completion percentage until both documents and payments succeed.',
-      attention_required: 'Resolve every exception shown first. Protected Xero history is never overwritten; any difference remains visible for Finance action.',
-      sync_required: 'Every record is classified. Review and authorise the pending document and payment actions, run them, then FCOS will automatically recheck Xero.',
-      reconciled: 'Every in-scope record is matched or explicitly accepted as legacy. Retained legacy differences remain visible; no unresolved blocker remains.',
+      not_checked: 'Run Check everything to compare Salesforce and Xero.',
+      incomplete_check: 'Completion requires successful document and payment checks.',
+      attention_required: 'Resolve the exceptions. Protected Xero history stays unchanged; differences remain visible for Finance review.',
+      sync_required: 'Review and authorise pending actions, then run them. FCOS rechecks Xero automatically.',
+      reconciled: 'All records match or have accepted legacy differences. Retained differences remain visible; no blockers remain.',
     },
 
     mappingTitle: 'Finance-approved Product mappings', mappingDescription: 'Default tax is NONE. Buyer sales and supplier costs are mapped independently. Legacy suggestions are never approved automatically.',
@@ -226,7 +226,7 @@ const ZH_HANT = {
   usageSources: { invoices: '發票、帳單及貸項通知單', 'bank-transactions': '銀行交易', payments: '付款', overpayments: '多付金額', prepayments: '預付款', 'expense-claims': '費用申報', receipts: '收據' },
   recordTypes: { Buyer: '買方', Supplier: '供應商', Buyer_Supplier: '買方及供應商', Broker: '經紀' },
   financial: {
-    loadingTitle: '正在載入會計控制項', loadingDescription: 'FCOS 正在載入只供服務使用的對應設定及已連接的 Xero Chart of Accounts。',
+    loadingTitle: '正在載入會計控制項', loadingDescription: '正在載入對應設定及 Xero 會計科目表。',
     gateEnabled: '財務寫入閘門已啟用', gateLocked: '財務寫入閘門已鎖定',
 
     mappings: '對應設定', preview: '建立唯讀預覽', reconnect: '請重新授權 Xero，以授予 accounting.settings.read 及可寫入的 accounting.payments 授權範圍。',
@@ -238,7 +238,7 @@ const ZH_HANT = {
     reconciliationStatuses: { not_checked: '尚未檢查', incomplete_check: '檢查未完成', attention_required: '需要處理', sync_required: '可供覆核同步', reconciled: '100% 已對帳' },
     reconciliationDescriptions: {
       not_checked: '按「檢查全部」建立完整 Salesforce 及 Xero 控制總數。',
-      incomplete_check: '只完成部分資料檢查。在文件及付款均成功前，FCOS 不會顯示完成百分比。',
+      incomplete_check: '文件及付款均成功核對後，才會顯示完成度。',
       attention_required: '請先解決所有例外。受保護的 Xero 會計紀錄不會被覆寫；任何差異會保留供財務部處理。',
       sync_required: '所有紀錄已分類。請覆核及授權待處理的文件及付款，執行後 FCOS 會自動重新檢查 Xero。',
       reconciled: '所有範圍內紀錄已配對或明確核准舊差異；保留的差異仍可查閱，沒有待處理阻礙。',
