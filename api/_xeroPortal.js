@@ -21,6 +21,7 @@ import { getInstanceUrl, salesforceAuthMode, sfCompositeQueries, sfQuery } from 
 import { externalActionGates, requireExternalActionGate } from './_externalActionGates.js';
 import { xeroRateLimitSnapshot } from './_xeroRateLimit.js';
 import { addUsageYear, hasUsageYearBreakdown, usageYearFields } from './_xeroUsageYears.js';
+import { contactIdentityDecision, contactIdentityFingerprint, contactMatchesSalesforceIdentity, loadAllSalesforceIdentityAccounts, loadContactIdentityDecisions } from './_xeroContactIdentity.js';
 
 const AUTHORIZATION_BASE = 'https://login.xero.com';
 const RECEIPT_BUCKET = 'xero-portal-receipts';
@@ -50,6 +51,8 @@ export const CONTACT_LIFECYCLE_REASON_LABELS = {
   'usage-scan-incomplete': 'Readable Xero usage scan is incomplete',
   'stale-preview': 'Xero contact changed after preview',
   'not-selected': 'Eligible row was not selected for apply',
+  'verified-xero-only': 'Verified Xero-only counterparty; Salesforce Account is not required',
+  'verification-stale': 'Counterparty or Salesforce identity changed after verification; review it again',
 };
 
 export const CONTACT_LIFECYCLE_STATUS_LABELS = {
@@ -333,7 +336,7 @@ export async function xeroPortalContactLifecycleRun(body = {}, { env = process.e
   return { run: await loadLifecycleRun(client, body.runId) };
 }
 
-export async function xeroPortalContactLifecyclePreview(body = {}, { accessContext = null, env = process.env, fetchImpl = fetch, connectionReader = getFreshXeroConnection, accountExporter = exportSalesforceAccountsForLifecycle } = {}) {
+export async function xeroPortalContactLifecyclePreview(body = {}, { accessContext = null, env = process.env, fetchImpl = fetch, connectionReader = getFreshXeroConnection, accountExporter = exportSalesforceAccountsForLifecycle, identityAccountReader = loadAllSalesforceIdentityAccounts } = {}) {
   const client = xeroContactSyncServiceClient(env);
   const runId = randomUUID();
   const lock = await acquireLifecycleLock(client, runId, accessContext?.profile, env);
@@ -341,7 +344,7 @@ export async function xeroPortalContactLifecyclePreview(body = {}, { accessConte
     const startedAt = new Date().toISOString();
     const connection = await connectionReader(client, { env, fetchImpl });
     assertXeroScopes(connection, ['accounting.contacts'], 'Contact lifecycle preview');
-    const [salesforce, contactsResult, usageResult] = await Promise.all([
+    const [salesforce, contactsResult, usageResult, identityDecisions] = await Promise.all([
       accountExporter(env),
       listXeroContactsForLifecycle(connection, { env, fetchImpl }),
       resolveUsageCacheForPreview(client, connection, {
@@ -350,11 +353,22 @@ export async function xeroPortalContactLifecyclePreview(body = {}, { accessConte
         forceUsageRefresh: body.forceUsageRefresh === true,
         incrementalUsageRefresh: body.incrementalUsageRefresh === true,
       }),
+      loadContactIdentityDecisions(client, connection.tenantId),
     ]);
+    const identityAccounts = [...identityDecisions.values()].some((decision) => decision.decision === 'verified_xero_only') ? await identityAccountReader() : [];
     let rows = buildContactLifecycleRows(salesforce.accounts, contactsResult.contacts, usageResult.usageByContactId, {
       usageCoverageComplete: usageResult.coverageComplete,
+      tenantId: connection.tenantId,
+      identityDecisions,
+      identityAccounts,
     });
-    rows = rows.map((row) => ({ ...row, selected: row.status === 'eligible' }));
+    const contactsById = new Map(contactsResult.contacts.map((contact) => [contact.contactId, contact]));
+    rows = rows.map((row) => ({ ...row, selected: row.status === 'eligible',
+      ...(contactsById.has(row.xeroContactId) ? {
+        identityFingerprint: contactIdentityFingerprint(connection.tenantId, contactsById.get(row.xeroContactId)),
+        identityDecision: identityDecisions.get(row.xeroContactId) || null,
+      } : {}),
+    }));
     const summary = {
       ...summarizeContactLifecycleRows(rows, contactsResult.contacts, salesforce.totalRecords),
       usagePolicyVersion: XERO_CONTACT_USAGE_POLICY_VERSION,
@@ -412,12 +426,19 @@ export async function xeroPortalContactLifecycleApply(body = {}, { accessContext
   try {
     const connection = await getFreshXeroConnection(client, { env, fetchImpl });
     assertXeroScopes(connection, ['accounting.contacts'], 'Contact lifecycle apply');
+    if (connection.tenantId !== run.xero?.tenantId) throw portalError('The Xero organization changed. Run a fresh preview.', 409, 'XERO_PORTAL_TENANT_CHANGED');
     const selectedCandidates = run.rows.filter((row) => selectedIds.has(row.id) && canApplyContactLifecycleRow(row));
     const invalidSelections = [...selectedIds].filter((id) => !selectedCandidates.some((row) => row.id === id));
     if (invalidSelections.length) {
       throw portalError('One or more selected rows are no longer eligible. Run a fresh preview.', 409, 'XERO_PORTAL_INVALID_SELECTION', { invalidSelections });
     }
     const archiveUsage = await verifyContactLifecycleArchiveUsage(client, connection, run, selectedCandidates, { env, fetchImpl });
+    if (selectedCandidates.some((row) => row.action === 'archive')) {
+      const decisions = await loadContactIdentityDecisions(client, connection.tenantId);
+      if (selectedCandidates.some((row) => row.action === 'archive' && decisions.get(row.xeroContactId)?.decision === 'verified_xero_only')) {
+        throw portalError('A selected contact has an identity verification. Run a fresh preview before archiving.', 409, 'XERO_PORTAL_IDENTITY_CHANGED');
+      }
+    }
     const fresh = await getXeroContactsByIds(connection, selectedCandidates.map((row) => row.xeroContactId), { env, fetchImpl });
     const verification = verifySelectedLifecycleRows(selectedCandidates, fresh.contacts);
     const verifiedUpdates = verification.updates;
@@ -557,6 +578,18 @@ export function buildContactLifecycleRows(salesforceAccounts, xeroContacts, usag
         reason: 'ambiguous-salesforce-match',
         message: CONTACT_LIFECYCLE_REASON_LABELS['ambiguous-salesforce-match'],
         usage,
+      }));
+      continue;
+    }
+
+    let identity = contactIdentityDecision(options.tenantId, contact, options.identityDecisions?.get(contact.contactId));
+    if (identity === 'verified' && contactMatchesSalesforceIdentity(contact, options.identityAccounts || salesforceAccounts)) identity = 'stale';
+    if (identity) {
+      const verified = identity === 'verified';
+      rows.push(xeroContactRow(contact, {
+        action: verified ? 'keep' : 'exception', status: verified ? 'kept' : 'blocked',
+        reason: verified ? 'verified-xero-only' : 'verification-stale',
+        message: CONTACT_LIFECYCLE_REASON_LABELS[verified ? 'verified-xero-only' : 'verification-stale'], usage,
       }));
       continue;
     }
@@ -1491,7 +1524,7 @@ async function latestAutoCreateRunSummary(client) {
   } : null;
 }
 
-async function acquireLifecycleLock(client, runId, profile = null, env = process.env) {
+export async function acquireLifecycleLock(client, runId, profile = null, env = process.env) {
   const now = new Date();
   const lockedUntil = new Date(now.getTime() + Number(env.XERO_CONTACT_LIFECYCLE_LOCK_SECONDS || '900') * 1000).toISOString();
   const owner = nonBlank(profile?.email || profile?.id) || 'fcos';

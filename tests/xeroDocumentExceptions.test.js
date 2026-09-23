@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildFinancialClassifications, classifyXeroFinancialDocument, xeroReviewFingerprint, blockRepeatedFinancialTargets } from '../api/_xeroFinancialSync.js';
+import { buildFinancialClassifications, classifyXeroFinancialDocument as classifyDocument, xeroReviewFingerprint, blockRepeatedFinancialTargets } from '../api/_xeroFinancialSync.js';
+
+const classifyXeroFinancialDocument = (source, candidates, options = {}) => classifyDocument(source, candidates, { ...options, organisation: { baseCurrency: 'USD', ...options.organisation } });
 
 const account = { accountId: 'account-a', accountName: 'SHENGQING BUNKERS (HK) LTD', companyCode: 'HKSHENGQING' };
 const sharedAccounts = [account, { ...account, accountId: 'account-b', companyCode: 'HKSHENGQING BUNKERS (HK) LTD' }];
@@ -11,7 +13,7 @@ function source(overrides = {}) { return { salesforceObject: 'Invoice__c', sales
   reference: 'HK2625070T · Salesforce buyer invoice', lines: [line], blockers: [], sharedContactAccounts: sharedAccounts, ...overrides }; }
 function xero(overrides = {}) { return { id: 'xero-invoice', type: 'ACCREC', collection: 'Invoices', status: 'AUTHORISED', contactId: 'contact', contactName: account.accountName,
   currency: 'USD', total: 121832.37, amountDue: 121832.37, amountPaid: 0, amountCredited: 0, invoiceNumber: '79402S', date: '2026-01-27', dueDate: '2026-01-27', reference: 'HUAYUE',
-  lineItems: [{ Description: 'INVOICED 28/1/2026', Quantity: 1, UnitAmount: 121832.37, AccountCode: '41100', TaxType: 'NONE' }], ...overrides }; }
+  lineItems: [{ LineItemID: 'line-1', Description: 'INVOICED 28/1/2026', Quantity: 1, UnitAmount: 121832.37, AccountCode: '41100', TaxType: 'NONE' }], ...overrides }; }
 
 test('observed same-name shared Contact becomes a Finance-reviewed safe update with both exact Account IDs', () => {
   const result = classifyXeroFinancialDocument(source(), [xero()]);

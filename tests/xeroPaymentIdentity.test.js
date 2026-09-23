@@ -4,7 +4,7 @@ import { paymentDocumentIdentityBlockers, selectXeroPaymentMatch } from '../api/
 
 const payment = {
   Id: 'sf-payment-1', Name: 'PAY-1', RecordType: { DeveloperName: 'Payable' },
-  Amount__c: 125.5, Date__c: '2026-09-05', Bank__c: 'DBS',
+  CurrencyIsoCode: 'USD', Amount__c: 125.5, Date__c: '2026-09-05', Bank__c: 'DBS',
   Supplier_Invoice__c: 'sf-supplier-invoice-1', STEM__c: 'stem-1', Account__c: 'account-1',
 };
 const mapping = {
@@ -174,4 +174,11 @@ test('exact USD cents avoid confusing a one-cent difference while unrelated paym
   assert.deepEqual(unrelated, { match: null, blockers: [] });
   const noHistory = selectXeroPaymentMatch({ ...matchContext, xeroPayments: [] });
   assert.deepEqual(noHistory, { match: null, blockers: [] });
+});
+
+
+test('payment currency requires authoritative source evidence and never defaults missing evidence to USD', () => {
+  assert.match(paymentDocumentIdentityBlockers({ ...payment, CurrencyIsoCode: undefined }, mapping, currentDocument).join(' '), /currency is missing/);
+  assert.deepEqual(paymentDocumentIdentityBlockers({ ...payment, CurrencyIsoCode: undefined, _currency: { currency: 'HKD' } }, mapping, { ...currentDocument, currency: 'HKD' }), []);
+  assert.match(paymentDocumentIdentityBlockers({ ...payment, CurrencyIsoCode: 'HKD' }, mapping, currentDocument).join(' '), /currency does not match/);
 });

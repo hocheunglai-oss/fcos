@@ -44,6 +44,7 @@ const STATUS_FILTERS = ['eligible', 'blocked', 'kept', 'not-selected', 'updated'
 const RECEIPT_CURRENCIES = ['HKD', 'USD', 'SGD', 'CNY', 'EUR', 'GBP', 'AUD', 'NZD', 'CAD', 'JPY'];
 const XeroFinancialSync = lazy(() => import('@/components/xero/XeroFinancialSync'));
 const XeroPortalManual = lazy(() => import('@/components/xero/XeroPortalManual'));
+const XeroContactResolution = lazy(() => import('@/components/xero/XeroContactResolution'));
 
 export default function XeroPortal() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -57,6 +58,9 @@ export default function XeroPortal() {
   const [error, setError] = useState('');
   const [filters, setFilters] = useState({ action: 'all', status: 'all', reason: 'all', search: '', unmatchedOnly: false });
   const [selectedRows, setSelectedRows] = useState(new Set());
+  const [repairSelected, setRepairSelected] = useState(new Set());
+  const [repairReviewed, setRepairReviewed] = useState(false);
+  const [identityRow, setIdentityRow] = useState(null);
   const [reviewed, setReviewed] = useState(false);
   const [forceUsageRefresh, setForceUsageRefresh] = useState(false);
   const [incrementalUsageRefresh, setIncrementalUsageRefresh] = useState(false);
@@ -90,6 +94,8 @@ export default function XeroPortal() {
       setRun(lifecycleResult.data.run || null);
       setAutoRun(autoResult.data.run || null);
       setSelectedRows(new Set((lifecycleResult.data.run?.rows || []).filter(canApplyRow).map((row) => row.id)));
+      setRepairSelected(new Set());
+      setRepairReviewed(false);
     }
     setLoading(false);
   }, []);
@@ -154,6 +160,7 @@ export default function XeroPortal() {
   }, [filters, run]);
 
   const selectedEligibleCount = filteredRows.filter((row) => canApplyRow(row) && selectedRows.has(row.id)).length;
+  const repairCount = (run?.rows || []).filter((row) => canRepairRow(row) && repairSelected.has(row.id)).length;
   const totalSelectedCount = [...selectedRows].length;
   const visibleContactRows = filteredRows.slice(0, 1000);
 
@@ -179,9 +186,11 @@ export default function XeroPortal() {
     }
   }
 
-  async function previewLifecycle() {
+  async function previewLifecycle({ clearSelection = false } = {}) {
     setBusy('preview');
     setReviewed(false);
+    setRepairReviewed(false);
+    setRepairSelected(new Set());
     const result = await appClient.functions.invoke('xeroPortalContactLifecyclePreview', {
       forceUsageRefresh,
       incrementalUsageRefresh,
@@ -192,8 +201,40 @@ export default function XeroPortal() {
       return;
     }
     setRun(result.data.run);
-    setSelectedRows(new Set((result.data.run?.rows || []).filter(canApplyRow).map((row) => row.id)));
+    setSelectedRows(clearSelection ? new Set() : new Set((result.data.run?.rows || []).filter(canApplyRow).map((row) => row.id)));
     await load({ force: true });
+    if (clearSelection) setSelectedRows(new Set());
+  }
+
+  async function saveIdentityAndRefresh() {
+    setIdentityRow(null);
+    await previewLifecycle({ clearSelection: true });
+  }
+
+  async function applyContactRepair() {
+    const rowIds = (run?.rows || []).filter((row) => canRepairRow(row) && repairSelected.has(row.id)).map((row) => row.id);
+    if (!run?.id || !repairReviewed || !rowIds.length || rowIds.length > 25) return;
+    setBusy('repair');
+    let result;
+    let confirmedContactRepair;
+    try {
+      ({ confirmedContactRepair } = await import('@/lib/xeroContactResolutionResult'));
+      result = await appClient.functions.invoke('xeroContactRepairApply', { runId: run.id, rowIds, reviewed: true }, { force: true, invalidateCache: true });
+    } catch { result = null; }
+    setBusy('');
+    if (result?.data?.error && result.meta?.cacheLayer !== 'network') {
+      toast({ title: copy.contacts.repair.failed, description: result.data.error, variant: 'destructive' }); return;
+    }
+    if (!confirmedContactRepair?.(result?.data, run.id, rowIds)) {
+      setRepairReviewed(false);
+      setRepairSelected(new Set());
+      toast({ title: copy.contacts.repair.uncertain, description: copy.contacts.repair.uncertainDetail, variant: 'destructive' });
+      return;
+    }
+    const summary = result.data.summary;
+    toast({ title: summary.uncertain ? copy.contacts.repair.uncertain : copy.contacts.repair.completed,
+      description: copy.contacts.repair.outcome(summary), variant: summary.uncertain || summary.blocked ? 'destructive' : undefined });
+    await previewLifecycle({ clearSelection: true });
   }
 
   async function applyLifecycle() {
@@ -269,12 +310,27 @@ export default function XeroPortal() {
   }
 
   function toggleRow(rowId, checked) {
+    setReviewed(false);
     setSelectedRows((current) => {
       const next = new Set(current);
       if (checked) next.add(rowId);
       else next.delete(rowId);
       return next;
     });
+  }
+
+  function toggleRepair(rowId, checked) {
+    setRepairReviewed(false);
+    setRepairSelected((current) => {
+      const next = new Set(current);
+      if (checked) next.add(rowId);
+      else next.delete(rowId);
+      return next;
+    });
+  }
+
+  function contactIdentityAction(row) {
+    return canReviewContactIdentity(row) ? <Button type="button" size="sm" variant="link" className="h-auto min-h-8 p-0" disabled={Boolean(busy)} onClick={() => setIdentityRow(row)}>{copy.contacts.identity.review}</Button> : null;
   }
 
   function selectVisibleEligible() {
@@ -396,7 +452,7 @@ export default function XeroPortal() {
                     <ShieldCheck className="mr-2 h-4 w-4" />
                     {filters.unmatchedOnly ? copy.contacts.showAll : copy.contacts.showUnmatched}
                   </Button>
-                  <Button type="button" onClick={previewLifecycle} disabled={busy === 'preview' || !xero.connected || !scopeFlags.contacts}>
+                  <Button type="button" onClick={() => previewLifecycle()} disabled={Boolean(busy) || !xero.connected || !scopeFlags.contacts}>
                     {busy === 'preview' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
                     {copy.contacts.preview}
                   </Button>
@@ -458,11 +514,18 @@ export default function XeroPortal() {
                     <Checkbox checked={reviewed} onCheckedChange={(checked) => setReviewed(checked === true)} />
                     {copy.contacts.reviewed}
                   </label>
-                  <Button type="button" onClick={applyLifecycle} disabled={!run?.id || !reviewed || !selectedEligibleCount || busy === 'apply'}>
+                  <Button type="button" onClick={applyLifecycle} disabled={!run?.id || !reviewed || !selectedEligibleCount || Boolean(busy)}>
                     {busy === 'apply' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Archive className="mr-2 h-4 w-4" />}
                     {copy.contacts.applySelected}
                   </Button>
                 </div>
+              </div>
+
+              <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-border p-3">
+                <span className="text-sm text-muted-foreground">{copy.contacts.repair.selected(repairCount)}</span>
+                <label className="flex items-center gap-2 text-sm"><Checkbox checked={repairReviewed} onCheckedChange={(checked) => setRepairReviewed(checked === true)} />{copy.contacts.repair.reviewed}</label>
+                <Button type="button" variant="outline" onClick={applyContactRepair} disabled={!repairReviewed || !repairCount || repairCount > 25 || Boolean(busy)}>{copy.contacts.repair.createSelected}</Button>
+                {repairCount > 25 && <span role="alert" className="text-sm text-amber-800">{copy.contacts.repair.limit}</span>}
               </div>
 
               <div className="xero-contacts-review__wide mt-4">
@@ -488,7 +551,7 @@ export default function XeroPortal() {
                     {visibleContactRows.length ? visibleContactRows.map((row) => (
                       <TableRow key={row.id}>
                         <TableCell>
-                          <Checkbox aria-label={`${copy.common.use} ${row.xeroContactName || row.salesforceName || row.id}`} checked={selectedRows.has(row.id)} onCheckedChange={(checked) => toggleRow(row.id, checked === true)} disabled={!canApplyRow(row)} />
+                          <Checkbox aria-label={`${copy.common.use} ${row.xeroContactName || row.salesforceName || row.id}`} checked={canRepairRow(row) ? repairSelected.has(row.id) : selectedRows.has(row.id)} onCheckedChange={(checked) => canRepairRow(row) ? toggleRepair(row.id, checked === true) : toggleRow(row.id, checked === true)} disabled={!canApplyRow(row) && !canRepairRow(row)} />
                         </TableCell>
                         <TableCell><ActionBadge action={row.action} copy={copy} wrap /></TableCell>
                         <TableCell><StatusBadgeText status={row.status} copy={copy} wrap /></TableCell>
@@ -496,7 +559,7 @@ export default function XeroPortal() {
                         <TableCell className="break-words [overflow-wrap:anywhere]"><SalesforceContactIdentity row={row} copy={copy} /></TableCell>
                         <TableCell className="break-words [overflow-wrap:anywhere]">{row.matchField ? (copy.matchFields[row.matchField] || matchFieldLabels[row.matchField] || row.matchField) : copy.common.none}</TableCell>
                         <TableCell className="break-words [overflow-wrap:anywhere]"><ContactUsage usage={row.usage} copy={copy} /></TableCell>
-                        <TableCell className="break-words [overflow-wrap:anywhere]"><ContactReason row={row} copy={copy} reasonLabels={reasonLabels} /></TableCell>
+                        <TableCell className="break-words [overflow-wrap:anywhere]"><ContactReason row={row} copy={copy} reasonLabels={reasonLabels} />{contactIdentityAction(row)}</TableCell>
                       </TableRow>
                     )) : (
                       <TableRow><TableCell colSpan={8}><StateBlock icon={CheckCircle2} title={hasLifecycleRun ? copy.contacts.noRowsTitle : copy.contacts.noPreviewTitle} description={hasLifecycleRun ? copy.contacts.noRowsDescription : copy.contacts.noPreviewDescription} /></TableCell></TableRow>
@@ -509,7 +572,7 @@ export default function XeroPortal() {
                   <article key={row.id} className="min-w-0 rounded-lg border border-border bg-background p-3" aria-label={`${copy.contacts.xeroContact}: ${row.xeroContactName || copy.contacts.noXeroMatch}`}>
                     <div className="flex flex-wrap items-center gap-2">
                       <label className="flex items-center gap-2 text-sm font-medium">
-                        <Checkbox checked={selectedRows.has(row.id)} onCheckedChange={(checked) => toggleRow(row.id, checked === true)} disabled={!canApplyRow(row)} />
+                        <Checkbox checked={canRepairRow(row) ? repairSelected.has(row.id) : selectedRows.has(row.id)} onCheckedChange={(checked) => canRepairRow(row) ? toggleRepair(row.id, checked === true) : toggleRow(row.id, checked === true)} disabled={!canApplyRow(row) && !canRepairRow(row)} />
                         {copy.common.use}
                       </label>
                       <ActionBadge action={row.action} copy={copy} wrap />
@@ -517,7 +580,7 @@ export default function XeroPortal() {
                     </div>
                     <div className="mt-3 min-w-0 break-words [overflow-wrap:anywhere]">
                       <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{copy.common.reason}</div>
-                      <ContactReason row={row} copy={copy} reasonLabels={reasonLabels} />
+                      <ContactReason row={row} copy={copy} reasonLabels={reasonLabels} />{contactIdentityAction(row)}
                     </div>
                     <dl className="mt-3 grid min-w-0 gap-3 border-t border-border pt-3 sm:grid-cols-2">
                       <div className="min-w-0 break-words [overflow-wrap:anywhere]"><dt className="text-xs font-semibold text-muted-foreground">{copy.contacts.xeroContact}</dt><dd className="mt-1"><XeroContactIdentity row={row} copy={copy} /></dd></div>
@@ -529,6 +592,7 @@ export default function XeroPortal() {
                 )) : <StateBlock icon={CheckCircle2} title={hasLifecycleRun ? copy.contacts.noRowsTitle : copy.contacts.noPreviewTitle} description={hasLifecycleRun ? copy.contacts.noRowsDescription : copy.contacts.noPreviewDescription} />}
               </div>
             </section>
+            {identityRow && <Suspense fallback={null}><XeroContactResolution row={identityRow} tenantId={run?.xero?.tenantId} language={language} onClose={() => setIdentityRow(null)} onSaved={saveIdentityAndRefresh} /></Suspense>}
           </TabsContent>
 
           <TabsContent value="accounting" className="space-y-4">
@@ -877,6 +941,18 @@ function ContactReason({ row, copy, reasonLabels }) {
 
 function canApplyRow(row) {
   return row?.status === 'eligible' && (row.action === 'rename' || row.action === 'archive') && row.xeroContactId;
+}
+
+const CONTACT_IDENTITY_REASONS = new Set(['used-unmatched-xero-contact', 'unused-unmatched-xero-contact', 'nonzero-balance', 'verification-stale', 'verified-xero-only']);
+
+function canReviewContactIdentity(row) {
+  return Boolean(row?.xeroContactId && !row.salesforceAccountId && row.identityFingerprint
+    && CONTACT_IDENTITY_REASONS.has(row.reason) && String(row.xeroContactStatus || '').toUpperCase() === 'ACTIVE');
+}
+
+function canRepairRow(row) {
+  return row?.reason === 'missing-xero-contact' && row.action === 'exception' && row.status === 'blocked'
+    && Boolean(row.salesforceAccountId) && !row.xeroContactId;
 }
 
 function ContactUsage({ usage = [], copy }) {

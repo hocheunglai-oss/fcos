@@ -1,14 +1,40 @@
+const WAITING_BLOCKER_CODES = new Set(['source_not_issued', 'invoice_link_pending', 'invoice_authorisation_pending']);
+const LEGACY_PAYMENT_DEPENDENCIES = new Set([
+  'No linked buyer invoice exists for this STEM.',
+  'The Salesforce document is not durably linked to Xero. Run the document check again.',
+  'The linked Xero transaction is not authorised for payment.',
+]);
+
+export function savedPostingMode(preview) {
+  return preview?.run?.postingMode || preview?.postingMode || 'draft';
+}
+
+export function previewMatchesPostingMode(preview, mode) {
+  return Boolean(preview?.run?.id && savedPostingMode(preview) === mode);
+}
+
+function waitsOnDependency(row, kind) {
+  const blockers = Array.isArray(row.blockers) ? row.blockers : [];
+  if (!blockers.length) return false;
+  const codes = Array.isArray(row.blockerCodes) ? row.blockerCodes : [];
+  if (codes.length === blockers.length) return codes.every((code) => WAITING_BLOCKER_CODES.has(code));
+  // Older payment previews lack structured codes. These exact server messages
+  // are known dependencies; any additional blocker keeps the row in attention.
+  return kind === 'payment' && !codes.length && blockers.every((reason) => LEGACY_PAYMENT_DEPENDENCIES.has(reason));
+}
+
 export function reconciliationBucket(row = {}, kind = 'document') {
   const blockers = row.blockers || [];
   if (kind === 'payment') {
-    if (blockers.length && blockers.every((reason) => /not durably linked|No linked buyer invoice|not authorised for payment/.test(reason))) return 'waiting';
+    if (waitsOnDependency(row, kind)) return 'waiting';
     if (blockers.length || row.status === 'blocked' || row.status === 'failed') return 'attention';
     return row.action === 'payment_link' ? 'matched' : 'ready';
   }
+  if (waitsOnDependency(row, kind)) return 'waiting';
   if (blockers.length || ['blocked', 'failed'].includes(row.status)) return 'attention';
   if (row.acceptedLegacy) return 'matched';
-  if (row.reviewRequired && row.status === 'eligible') return 'ready';
   if (row.action === 'protected_legacy' && row.differences?.length) return 'attention';
+  if (row.reviewRequired && row.status === 'eligible') return 'ready';
   if (['link', 'protected_legacy'].includes(row.action) || ['linked', 'updated', 'created'].includes(row.status)) return 'matched';
   return 'ready';
 }
@@ -60,6 +86,9 @@ export function documentReviewTarget(rows, target) {
 export function workflowCopy(language) {
   return language === 'zh-Hant' ? {
     attention: '需要處理', ready: '可同步', waiting: '等待中', matched: '已核對', all: '全部',
+    postingMode: 'Xero 文件過帳方式', draftMode: '建立草稿', authorisedMode: '核准已核實文件',
+    savedMode: '已儲存預覽方式', modeChanged: '過帳方式已變更。請重新核對後再選擇或執行文件。',
+    waitingDescription: '文件或付款仍在等待發票發出、連結或核准；未計入已完成。',
     review: '檢閱並同步所選項目', singleReview: '檢閱', resolve: '檢閱／解決', confirm: '確認並同步', cancel: '取消', mapping: '修正對應',
     approveUpdate: '核准並更新', approveDraft: '核准並建立草稿', approveLink: '只核准連結',
     correctAndRecheck: '請先修正阻礙原因，再重新核對。無法略過財務限制。', recheck: '重新核對文件',
@@ -75,6 +104,9 @@ export function workflowCopy(language) {
     matchBasis: { stored_link: '已儲存的連結', document_number: '文件編號', stem_reference: 'STEM 參考資料', date_amount: '日期及金額' },
   } : {
     attention: 'Needs attention', ready: 'Ready to sync', waiting: 'Waiting', matched: 'Matched', all: 'All',
+    postingMode: 'Xero document posting', draftMode: 'Create drafts', authorisedMode: 'Authorise verified documents',
+    savedMode: 'Saved preview mode', modeChanged: 'Posting mode changed. Recheck before selecting or running documents.',
+    waitingDescription: 'Documents or payments await invoice issue, linkage or authorisation and do not count as complete.',
     review: 'Review and sync selected', singleReview: 'Review', resolve: 'Review / resolve', confirm: 'Confirm and sync', cancel: 'Cancel', mapping: 'Fix mapping',
     approveUpdate: 'Approve and update', approveDraft: 'Approve and create draft', approveLink: 'Approve link only',
     correctAndRecheck: 'Correct the blockers, then recheck. Financial safeguards cannot be overridden.', recheck: 'Recheck document',

@@ -1,10 +1,10 @@
 import { expect, test } from '@playwright/test';
 
-test('protected link review exposes identity evidence without preselecting it', async ({ page }, testInfo) => {
+test('protected financial differences stay visible and need attention before acceptance', async ({ page }, testInfo) => {
   await page.goto('/e2e/fixtures/xero-exception.html');
-  await page.getByRole('button', { name: /Ready to sync/ }).click();
   const row = page.getByRole('row').filter({ hasText: 'INV-EXCEPTION-1' });
   await expect(row.getByRole('checkbox')).not.toBeChecked();
+  await expect(row.getByRole('checkbox')).toBeDisabled();
   await row.locator('summary').click();
   await expect(row).toContainText('Salesforce account ID: 001BUYER0000001');
   await expect(row).toContainText('STEM reference');
@@ -13,8 +13,7 @@ test('protected link review exposes identity evidence without preselecting it', 
   await expect(row).toContainText('XERO-77 · xero-invoice-one');
   await expect(row).toContainText('Salesforce STEM-ONE → Xero OLD-REF');
   await page.screenshot({ path: testInfo.outputPath('evidence.png'), fullPage: true });
-  await row.getByRole('checkbox').click();
-  await page.getByRole('button', { name: 'Review and sync selected' }).click();
+  await row.getByRole('button', { name: 'Review / resolve' }).click();
   const dialog = page.getByRole('dialog');
   await expect(dialog.getByText(/Xero accounting history remains unchanged/)).toBeVisible();
   await expect(dialog).toContainText('Shared Buyer · CL-B · 001BUYER0000002');
@@ -23,6 +22,7 @@ test('protected link review exposes identity evidence without preselecting it', 
   const retainedDifference = dialog.getByText(/Salesforce STEM-ONE → Xero OLD-REF/);
   await retainedDifference.scrollIntoViewIfNeeded();
   await expect(retainedDifference).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Approve link only' })).toBeDisabled();
   await page.screenshot({ path: testInfo.outputPath('review-differences.png'), fullPage: true });
   await page.getByRole('button', { name: 'Cancel' }).click();
   await page.getByRole('button', { name: /Matched/ }).click();
@@ -74,11 +74,30 @@ test('single review labels match the action and ignore unrelated preselected doc
   await page.getByRole('row').filter({ hasText: 'INV-UPDATE' }).getByRole('button', { name: 'Review', exact: true }).click();
   await expect(page.getByRole('dialog').getByRole('button', { name: 'Approve and update' })).toBeEnabled();
   await page.getByRole('dialog').getByRole('button', { name: 'Cancel' }).click();
-  await page.getByRole('row').filter({ hasText: 'INV-EXCEPTION-1' }).getByRole('button', { name: 'Review', exact: true }).click();
+  await page.getByRole('row').filter({ hasText: 'INV-LINK' }).getByRole('button', { name: 'Review', exact: true }).click();
   await page.getByRole('dialog').getByRole('button', { name: 'Approve link only' }).click();
   const writes = await page.evaluate(() => window.exceptionFixture.requests.filter((request) => request.name === 'xeroFinancialSyncRun'));
   expect(writes).toHaveLength(1);
-  expect(writes[0].body).toMatchObject({ reviewed: true, selectedItemIds: ['review-one'] });
+  expect(writes[0].body).toMatchObject({ reviewed: true, selectedItemIds: ['ready-link'] });
+});
+
+test('posting-mode change clears old selection and requires a fresh mode-matched preview', async ({ page }) => {
+  await page.goto('/e2e/fixtures/xero-exception.html');
+  await expect(page.getByText('Saved preview mode: Create drafts')).toBeVisible();
+  await page.getByRole('button', { name: /Ready to sync/ }).click();
+  const row = page.getByRole('row').filter({ hasText: 'INV-DRAFT' });
+  await expect(row.getByRole('checkbox')).toBeChecked();
+  await page.getByLabel('Xero document posting').selectOption('authorised');
+  await expect(page.getByText('Posting mode changed. Recheck before selecting or running documents.')).toBeVisible();
+  await expect(row.getByRole('checkbox')).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Review and sync selected' })).toBeDisabled();
+  expect(await page.evaluate(() => window.exceptionFixture.requests.filter((request) => request.name === 'xeroFinancialSyncRun'))).toEqual([]);
+  await page.getByRole('button', { name: 'Check everything' }).click();
+  const previews = await page.evaluate(() => window.exceptionFixture.requests.filter((request) => request.name === 'xeroFinancialSyncPreview'));
+  expect(previews.at(-1).body.postingMode).toBe('authorised');
+  await expect(page.getByText('Saved preview mode: Authorise verified documents')).toBeVisible();
+  await expect(row.getByRole('checkbox')).not.toBeDisabled();
+  await expect(row.getByRole('checkbox')).not.toBeChecked();
 });
 
 test('single-document approval follows the financial gate', async ({ page }) => {

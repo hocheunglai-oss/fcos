@@ -29,6 +29,7 @@ const migrationSources = await Promise.all(names.map(async (name) => ({
   sql: await readFile(new URL(name, migrationDirectory), 'utf8'),
 })));
 const releaseMigrationNames = new Set([
+  '20260923182327_xero_contact_identity_decisions.sql',
   '20260921061845_dashboard_bank_charges.sql',
   '20260920154626_dashboard_finance_settings.sql',
   '20260920105042_market_trader_workspace.sql',
@@ -71,6 +72,15 @@ async function assertRows(sql, expected, label, values = []) {
 }
 
 async function verifyRuntimeObjects(label) {
+  const identityTables = ['xero_contact_identity_decisions', 'xero_contact_identity_audit'];
+  await assertRows(`select count(*)::int from pg_class c join pg_namespace n on n.oid=c.relnamespace
+    where n.nspname='public' and c.relname=any($1::text[]) and c.relrowsecurity`, 2, `${label} contact identity RLS`, [identityTables]);
+  await assertRows(`select count(*)::int from unnest($1::text[]) t cross join unnest(array['anon','authenticated']) r
+    cross join unnest(array['SELECT','INSERT','UPDATE','DELETE']) p where has_table_privilege(r,'public.'||t,p)`, 0, `${label} contact identity browser access denied`, [identityTables]);
+  await assertRows(`select count(*)::int from unnest(array['anon','authenticated']) r where has_function_privilege(r,
+    'public.save_xero_contact_identity_v1(uuid,uuid,text,text,text,text,integer,uuid,text)','EXECUTE')`, 0, `${label} contact identity browser RPC denied`);
+  await assertRows(`select count(*)::int from unnest(array['UPDATE','DELETE','TRUNCATE']) p
+    where has_table_privilege('service_role','public.xero_contact_identity_audit',p)`, 0, `${label} contact identity audit immutable for service`);
   const releaseTables = ['company_finance_settings', 'company_finance_setting_events', 'market_trader_workspaces', 'workflow_daily_metrics', 'collaboration_create_requests', 'account_insight_report_presets', 'account_insight_report_preset_events', 'hedge_fcbs_settlement_operations'];
   await assertRows(
     `select count(*)::int from pg_class c join pg_namespace n on n.oid = c.relnamespace

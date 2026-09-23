@@ -55,6 +55,11 @@ const readyDraft = {
   blockers: [], differences: [], xero: null,
   sourceFingerprint: 'source-draft', reviewFingerprint: 'review-draft',
 };
+const readyLink = {
+  ...row, id: 'ready-link', salesforceId: 'invoice-link', documentNumber: 'INV-LINK',
+  action: 'link', status: 'eligible', reviewRequired: true, selected: false,
+  differences: [], sourceFingerprint: 'source-link', reviewFingerprint: 'review-link',
+};
 const batchCount = Number(new URLSearchParams(window.location.search).get('rows') || 0);
 const batchRows = Array.from({ length: batchCount }, (_, index) => {
   const ordinal = String(index + 1).padStart(3, '0');
@@ -69,17 +74,19 @@ const batchRows = Array.from({ length: batchCount }, (_, index) => {
 });
 let mappingApproved = false;
 let automaticApproved = false;
+let postingMode = 'draft';
 const automaticMapping = new URLSearchParams(window.location.search).get('automatic') === '1';
 const requests = [];
 const preview = () => ({
-  run: { id: mappingApproved ? 'local-review-refreshed' : 'local-review-fixture', revision: 1, status: 'ready_for_review', createdAt: checkedAt },
+  run: { id: mappingApproved ? 'local-review-refreshed' : 'local-review-fixture', revision: 1, status: 'ready_for_review', createdAt: checkedAt, postingMode },
+  postingMode,
   checkedAt, rows: [row, {
     ...row, id: 'accepted-one', salesforceId: 'invoice-accepted', documentNumber: 'INV-ACCEPTED-1',
     status: 'linked', reviewRequired: false, acceptedLegacy: true, sourceFingerprint: 'source-accepted', reviewFingerprint: 'review-accepted',
   }, mappingApproved ? {
     ...mappingBlocked, id: 'mapping-refreshed', action: 'safe_update', status: 'eligible', blockers: [],
     reviewFingerprint: 'review-mapping-approved',
-  } : mappingBlocked, hardBlocked, readyUpdate, readyDraft, ...batchRows],
+  } : mappingBlocked, hardBlocked, readyUpdate, readyDraft, readyLink, ...batchRows],
   payments: { rows: [] }, products: [{ id: 'prod-1', name: 'HSFO 380' }], mappingProposals: [],
 });
 const portalStatus = {
@@ -98,9 +105,10 @@ appClient.functions.invoke = async (name, body) => {
   if (name === 'xeroFinancialMappingsSave') { mappingApproved = true; return { data: { saved: true } }; }
   if (name === 'xeroFinancialSyncLatest') return { data: { preview: preview() } };
   if (name === 'xeroFinancialSyncPreview') {
+    postingMode = body.postingMode || 'draft';
     const changedCount = automaticMapping && !automaticApproved ? 1 : 0;
     if (automaticMapping) automaticApproved = true;
-    return { data: { ...preview(), automaticMappingPolicy: { id: 'petroleum-products-v1', productCount: automaticMapping ? 1 : 0, approvedCount: automaticMapping ? 1 : 0, changedCount } } };
+    return { data: { ...preview(), automaticMappingPolicy: { id: 'petroleum-and-invoice-extras-v2', productCount: automaticMapping ? 1 : 0, approvedCount: automaticMapping ? 1 : 0, changedCount } } };
   }
   if (name === 'xeroFinancialSyncRun') return { data: { error: 'Fixture blocks real financial writes.' } };
   return { data: { error: `Unexpected fixture call: ${name}` } };
