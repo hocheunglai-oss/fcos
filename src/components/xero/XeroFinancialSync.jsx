@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePageState } from '@/hooks/usePageState';
 import { AlertTriangle, ExternalLink, Loader2, Play, RefreshCw, Save, ShieldCheck } from 'lucide-react';
 import StateBlock from '@/components/common/StateBlock';
@@ -555,19 +555,7 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
       </DialogContent></Dialog>
       <Dialog open={Boolean(paymentReferenceTarget)} onOpenChange={(open) => { if (!open && !busy) setPaymentReferenceTarget(null); }}><DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto"><DialogHeader><DialogTitle>{financialCopy.paymentReferenceTitle}</DialogTitle><DialogDescription>{financialCopy.paymentReferenceDescription}</DialogDescription></DialogHeader>
         {!paymentReferenceResult?.eligible && <p role="status" className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">{financialCopy.paymentReferenceEvidenceMissing}</p>}
-        {paymentReferenceRow && <dl className="grid grid-cols-[minmax(9rem,auto)_1fr] gap-x-4 gap-y-2 text-sm">
-          <dt>{financialCopy.payment}</dt><dd>{paymentReferenceRow.salesforcePaymentName}</dd>
-          <dt>{financialCopy.sourceReference}</dt><dd>{paymentReferenceRow.referenceComparison?.sourceReference || financialCopy.missingReference}</dd>
-          <dt>{financialCopy.sourceFallbackReference}</dt><dd>{paymentReferenceRow.referenceComparison?.sourceFallbackReference || paymentReferenceRow.salesforcePaymentName}</dd>
-          <dt>{financialCopy.retainedXeroReference}</dt><dd>{paymentReferenceRow.referenceComparison?.xeroReference || copy.common.notSet}</dd>
-          <dt>{financialCopy.xeroPaymentId}</dt><dd>{paymentReferenceRow.xeroPaymentId || copy.common.notSet}</dd>
-          <dt>{financialCopy.xeroInvoice}</dt><dd>{paymentReferenceRow.xeroDocumentUrl ? <a className="text-blue-700 underline" href={paymentReferenceRow.xeroDocumentUrl} target="_blank" rel="noreferrer">{paymentReferenceRow.xeroDocumentNumber || paymentReferenceRow.xeroDocumentId || paymentReferenceRow.retainedReferenceEvidence?.document?.xero_document_id || paymentReferenceRow.xeroDocumentUrl}</a> : copy.common.notSet}</dd>
-          <dt>{copy.common.bank}</dt><dd>{paymentReferenceRow.bank || copy.common.notSet}</dd>
-          <dt>{financialCopy.bankAccountId}</dt><dd>{paymentReferenceRow.bankAccountId || copy.common.notSet}</dd>
-          <dt>{copy.common.type}</dt><dd>{paymentReferenceRow.type}</dd>
-          <dt>{copy.common.date}</dt><dd>{paymentReferenceRow.paymentDate}</dd>
-          <dt>{copy.common.amount}</dt><dd>{paymentReferenceRow.currency} {formatAmount(paymentReferenceRow.amount, copy.locale)}</dd>
-        </dl>}
+        {paymentReferenceRow && <PaymentReferenceEvidence row={paymentReferenceRow} copy={copy} />}
         <div className="flex justify-end gap-2"><Button type="button" variant="outline" disabled={Boolean(busy)} onClick={() => setPaymentReferenceTarget(null)}>{flow.cancel}</Button><Button type="button" disabled={Boolean(busy) || !financialGate?.enabled || !paymentReferenceResult?.eligible} onClick={linkExistingPaymentReference}>{actionIcon(busy === 'payment-reference-link', ShieldCheck)}{financialCopy.approvePaymentReference}</Button></div>
       </DialogContent></Dialog>
       <Dialog open={Boolean(fixMapping)} onOpenChange={(open) => { if (!open) setFixMapping(null); }}><DialogContent className="max-h-[85vh] max-w-5xl overflow-auto"><DialogHeader><DialogTitle>{flow.mapping} · {fixMapping?.documentNumber}</DialogTitle><DialogDescription>{financialCopy.mappingDescription}</DialogDescription></DialogHeader>
@@ -577,6 +565,27 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
       </DialogContent></Dialog>
     </div>
   );
+}
+
+function PaymentReferenceEvidence({ row, copy }) {
+  const labels = copy.financial;
+  const missing = copy.common.notSet;
+  const invoiceId = row.xeroDocumentNumber || row.xeroDocumentId
+    || row.retainedReferenceEvidence?.document?.xero_document_id || row.xeroDocumentUrl;
+  const details = [
+    [labels.payment, row.salesforcePaymentName],
+    [labels.sourceReference, row.referenceComparison?.sourceReference || labels.missingReference],
+    [labels.sourceFallbackReference, row.referenceComparison?.sourceFallbackReference || row.salesforcePaymentName],
+    [labels.retainedXeroReference, row.referenceComparison?.xeroReference || missing],
+    [labels.xeroPaymentId, row.xeroPaymentId || missing],
+    [labels.xeroInvoice, row.xeroDocumentUrl ? <a className="text-blue-700 underline" href={row.xeroDocumentUrl} target="_blank" rel="noreferrer">{invoiceId}</a> : missing],
+    [copy.common.bank, row.bank || missing],
+    [labels.bankAccountId, row.bankAccountId || missing],
+    [copy.common.type, row.type],
+    [copy.common.date, row.paymentDate],
+    [copy.common.amount, <>{row.currency} {formatAmount(row.amount, copy.locale)}</>],
+  ];
+  return <dl className="grid grid-cols-[minmax(9rem,auto)_1fr] gap-x-4 gap-y-2 text-sm">{details.map(([label, value]) => <Fragment key={label}><dt>{label}</dt><dd>{value}</dd></Fragment>)}</dl>;
 }
 
 function ProductMappingRow({ direction, product, mapping, proposal, accounts, taxes, onSaved, copy }) {
