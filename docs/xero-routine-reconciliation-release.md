@@ -25,6 +25,8 @@ The first live draft pilot passed on 24 September 2026 and was recognised as an 
 
 Version 2.0.239 separates explicit approval eligibility from the Needs attention category. An eligible protected invoice with retained differences can be reviewed and linked without changing Xero accounting history. These rows remain in Needs attention until accepted and are never selected automatically. Finance can approve one link or manually select specific links for the review dialog. Accounting blockers, incomplete or changed evidence, posting-mode changes and the financial write gate continue to prevent approval.
 
+Version 2.0.240 narrows the approval transaction to the chosen invoice rows and any previously selected eligible rows. Unselected rows keep their timestamps. Apply `20260923210832_xero_financial_selection_scope.sql` before the web release. The existing eligibility checks, revision comparison, atomic audit and service-only permissions remain in place. This removes unnecessary row rewrites observed during the two-link pilot; it does not establish the cause of the isolated database timeout or increase timeout limits.
+
 ## Remaining stages
 
 The broader plan still includes the durable unattended queue and automation controls, secure human CLI session handoff, evidence-based historical contact cleanup, non-routine settlements and bank-entry contact repair, controlled reversals/deletions, and operational monitoring. These need their own implementation and acceptance evidence. Never replace unresolved contact identity with a placeholder or infer payment allocation using FIFO.
