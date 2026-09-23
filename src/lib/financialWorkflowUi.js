@@ -67,22 +67,21 @@ export function paymentReferenceReviewEligible(row = {}) {
 
 export function paymentReferenceReviewTarget(rows, target) {
   if (!target) return null;
-  const row = (rows || []).find((candidate) => candidate.salesforcePaymentId === target.salesforcePaymentId) || null;
-  const evidenceMissing = Boolean(row && (!target.sourceFingerprint || !target.reviewFingerprint
-    || !row.sourceFingerprint || !row.reviewFingerprint));
-  const changed = Boolean(row && !evidenceMissing && (target.sourceFingerprint !== row.sourceFingerprint
-    || target.reviewFingerprint !== row.reviewFingerprint));
-  return { row, evidenceMissing, changed, eligible: Boolean(row && !evidenceMissing && !changed && paymentReferenceReviewEligible(row)) };
+  const targets = Array.isArray(target) ? target : [target];
+  const current = targets.map((item) => (rows || []).find((row) => row.salesforcePaymentId === item.salesforcePaymentId));
+  return { rows: current.filter(Boolean), eligible: targets.length > 0 && targets.length <= 25
+    && new Set(targets.map((item) => item.salesforcePaymentId)).size === targets.length
+    && current.every((row, index) => row && paymentReferenceReviewEligible(row)
+      && row.sourceFingerprint === targets[index].sourceFingerprint && row.reviewFingerprint === targets[index].reviewFingerprint) };
+}
+
+export function paymentReferenceOutcomesConfirmed(rows, outcomes = []) {
+  return rows.length > 0 && Array.isArray(outcomes) && outcomes.length === rows.length
+    && rows.every((row) => outcomes.filter((outcome) => outcome.salesforcePaymentId === row.salesforcePaymentId && outcome.status === 'linked').length === 1);
 }
 
 export function retainedReviewSelection(previousRows, nextRows, selectedIds) {
-  const selected = new Map(previousRows.filter((row) => selectedIds.has(row.id)).map((row) => [`${row.salesforceObject}:${row.salesforceId}`, row]));
-  return new Set(nextRows.filter((row) => {
-    const before = selected.get(`${row.salesforceObject}:${row.salesforceId}`);
-    return before?.reviewFingerprint && before.reviewFingerprint === row.reviewFingerprint
-      && before.sourceFingerprint && before.sourceFingerprint === row.sourceFingerprint
-      && documentExplicitReviewEligible(row);
-  }).map((row) => row.id));
+  return restoreReviewSelection(reviewSelectionSnapshot(previousRows, selectedIds), nextRows);
 }
 
 export function reviewSelectionSnapshot(rows, selectedIds, kind = 'document') {
@@ -98,7 +97,7 @@ export function restoreReviewSelection(snapshot, rows, kind = 'document') {
     const before = previous.get(kind === 'payment' ? row.salesforcePaymentId : `${row.salesforceObject}:${row.salesforceId}`);
     return before?.reviewFingerprint && before.reviewFingerprint === row.reviewFingerprint
       && before.sourceFingerprint && before.sourceFingerprint === row.sourceFingerprint
-      && (kind === 'payment' ? row.action === 'payment_apply' && row.status === 'eligible'
+      && (kind === 'payment' ? paymentReferenceReviewEligible(row) || row.action === 'payment_apply' && row.status === 'eligible'
         && !(row.blockers || []).length && reconciliationBucket(row, kind) === 'ready'
         : documentExplicitReviewEligible(row));
   }).map((row) => kind === 'payment' ? row.salesforcePaymentId : row.id));
@@ -109,7 +108,7 @@ export function documentReviewTotals(rows) {
     const key = `${row.currency}:${row.action}`;
     totals[key] ||= { currency: row.currency, action: row.action, count: 0, total: 0 };
     totals[key].count += 1;
-    totals[key].total += Number(row.total || 0);
+    totals[key].total += Number(row.total ?? row.amount ?? 0);
     return totals;
   }, {}));
 }
@@ -129,7 +128,7 @@ export function workflowCopy(language) {
     postingMode: 'Xero 文件過帳方式', draftMode: '建立草稿', authorisedMode: '核准已核實文件',
     savedMode: '已儲存預覽方式', modeChanged: '過帳方式已變更。請重新核對後再選擇或執行文件。',
     waitingDescription: '文件或付款仍在等待發票發出、連結或核准；未計入已完成。',
-    review: '檢閱並同步所選項目', reviewLinks: '檢閱所選連結', singleReview: '檢閱', resolve: '檢閱／解決', confirm: '確認並同步', cancel: '取消', mapping: '修正對應',
+    review: '檢閱並同步所選項目', reviewLinks: '檢閱所選連結', reviewPaymentLinks: '檢閱現有付款連結', singleReview: '檢閱', resolve: '檢閱／解決', confirm: '確認並同步', cancel: '取消', mapping: '修正對應',
     approveUpdate: '核准並更新', approveDraft: '核准並建立草稿', approveLink: '只核准連結', protectedLinkAction: '受保護舊紀錄 · 只連結',
     correctAndRecheck: '請先修正阻礙原因，再重新核對。無法略過財務限制。', recheck: '重新核對文件',
     targetMissing: '此文件已不在最新核對結果中。', targetChanged: 'Salesforce 文件已變更；請關閉並重新檢閱。', targetEvidenceMissing: '文件核對證據不完整；請重新核對。',
@@ -148,7 +147,7 @@ export function workflowCopy(language) {
     postingMode: 'Xero document posting', draftMode: 'Create drafts', authorisedMode: 'Authorise verified documents',
     savedMode: 'Saved preview mode', modeChanged: 'Posting mode changed. Recheck before selecting or running documents.',
     waitingDescription: 'Documents or payments await invoice issue, linkage or authorisation and do not count as complete.',
-    review: 'Review and sync selected', reviewLinks: 'Review selected links', singleReview: 'Review', resolve: 'Review / resolve', confirm: 'Confirm and sync', cancel: 'Cancel', mapping: 'Fix mapping',
+    review: 'Review and sync selected', reviewLinks: 'Review selected links', reviewPaymentLinks: 'Review existing payment links', singleReview: 'Review', resolve: 'Review / resolve', confirm: 'Confirm and sync', cancel: 'Cancel', mapping: 'Fix mapping',
     approveUpdate: 'Approve and update', approveDraft: 'Approve and create draft', approveLink: 'Approve link only', protectedLinkAction: 'Protected legacy · link only',
     correctAndRecheck: 'Correct the blockers, then recheck. Financial safeguards cannot be overridden.', recheck: 'Recheck document',
     targetMissing: 'This document is absent from the latest check.', targetChanged: 'The Salesforce document changed; close and review it again.', targetEvidenceMissing: 'Document review evidence is incomplete; recheck it.',

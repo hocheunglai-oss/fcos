@@ -20,7 +20,8 @@ function fixture(mode = 'draft') {
     Invoice_File__c: 'https://example.test/issued.pdf', CurrencyIsoCode: 'USD', Status__c: 'Issued' };
   const children = [1, 2].map((n) => ({ Id: `a0200000000000${n}`, Name: `LINE-${n}`, Supplier_Invoice__c: supplier.Id,
     Product__c: '01t000000000001', Product__r: { Name: 'Marine fuel' }, Quantity__c: n, Quantity_Delivered_Per_BDN__c: n,
-    Cost_Per_Unit__c: 10.01, Total_Cost__c: n === 1 ? 10.01 : 20.02, CurrencyIsoCode: 'USD',
+    Price_Per_Unit__c: null, Cost_Per_Unit__c: null, Unit_Sell_At__c: 10.01, Unit_Buy_At__c: 10.01,
+    Total_Cost__c: n === 1 ? 10.01 : 20.02, CurrencyIsoCode: 'USD',
     Cancelled__c: false, STEM__c: supplier.STEM__c, Supplier__c: account.Id }));
   const salesforce = { cutoffDate: '2026-01-01', buyers: [], suppliers: [supplier], lines: children, extras: [],
     safetyContext: { fields: {}, singleCurrency: false },
@@ -133,6 +134,86 @@ test('buyer grouped invoices require the same issued-source and accounting proof
   buyer.Proforma__c = true; assert.notEqual(f.build().status, 'eligible');
 });
 
+function authoritativePriceFixture(direction) {
+  const f = fixture();
+  for (const [index, values] of [[50, 438, 430, 21900, 21500], [23, 608, 595, 13984, 13685]].entries()) {
+    const [quantity, sell, buy, totalPrice, totalCost] = values;
+    Object.assign(f.children[index], { Quantity__c: quantity, Quantity_Delivered_Per_BDN__c: quantity,
+      Unit_Sell_At__c: sell, Unit_Buy_At__c: buy, Total_Price__c: totalPrice, Total_Cost__c: totalCost });
+  }
+  f.supplier.Invoice_Amount__c = 35185;
+  const buyer = direction === 'buyer'; const total = buyer ? 35884 : 35185;
+  if (buyer) {
+    const invoice = { ...f.supplier, Amount__c: total, Proforma__c: false, Deprecated__c: false, File__c: f.supplier.Invoice_File__c,
+      STEM__r: { ...f.supplier.STEM__r, Account__c: f.account.Id, Account__r: { Name: f.account.Name, Company_Code__c: f.account.Company_Code__c } } };
+    f.salesforce.buyers = [invoice]; f.salesforce.suppliers = [];
+    for (const line of f.children) Object.assign(line, { Buyer_Invoice__c: invoice.Id, Supplier_Invoice__c: null });
+    f.stored.productMappings[0].direction = 'buyer';
+  }
+  Object.assign(f.rawXero, { Type: buyer ? 'ACCREC' : 'ACCPAY', Total: total, SubTotal: total, AmountDue: total });
+  Object.assign(f.rawXero.LineItems[0], { UnitAmount: total, LineAmount: total });
+  f.xero.documents = [normalizeXeroInvoice(f.rawXero)];
+  return f;
+}
+
+test('real-shaped product totals use authoritative sell/buy units and the Salesforce effective quantity formula', async (t) => {
+  for (const direction of ['buyer', 'supplier']) for (const delivered of ['actual', null, 0]) await t.test(`${direction}: BDN ${delivered}`, () => {
+    const f = authoritativePriceFixture(direction);
+    if (delivered !== 'actual') for (const line of f.children) line.Quantity_Delivered_Per_BDN__c = delivered;
+    const row = f.build();
+    assert.equal(row.groupedPreservation?.eligible, true, JSON.stringify(row.blockers));
+    assert.equal(row.reviewRequired, true); assert.equal(row.proposedPayload, null);
+    assert.deepEqual(row.groupedPreservationProof.accounting.source.lines.map((line) => line.unitAmount), direction === 'buyer' ? ['438', '608'] : ['430', '595']);
+    assert.deepEqual(row.groupedPreservationProof.accounting.source.lines.map((line) => line.quantity), ['50', '23']);
+  });
+});
+
+test('missing or amended authoritative units cannot be reconstructed, and grouped failures identify the exact field', async (t) => {
+  for (const direction of ['buyer', 'supplier']) for (const scenario of ['missing', 'price_changed', 'header_changed', 'number_changed']) await t.test(`${direction}: ${scenario}`, () => {
+    const f = authoritativePriceFixture(direction); const initial = f.build(); const saved = savedItem(initial);
+    const field = direction === 'buyer' ? 'Unit_Sell_At__c' : 'Unit_Buy_At__c';
+    if (scenario === 'missing') { f.children[0][field] = null; f.children[0][direction === 'buyer' ? 'Price_Per_Unit__c' : 'Cost_Per_Unit__c'] = direction === 'buyer' ? 438 : 430; }
+    if (scenario === 'price_changed') f.children[0][field] += 1;
+    if (scenario === 'header_changed') f.xero.documents[0].groupedAccounting.subtotal += 1;
+    if (scenario === 'number_changed') f.xero.documents[0].invoiceNumber = 'Unrelated invoice number';
+    const current = f.build(); assert.notEqual(current.status, 'eligible'); assert.equal(current.proposedPayload, null);
+    assert.equal(changedXeroReviewItems([saved], new Map([[`${current.salesforceObject}:${current.salesforceId}`, current]])).length, 1);
+    if (scenario === 'missing') assert.ok(current.blockers.some((message) => message.startsWith('source.lines[0].unitAmount:')), JSON.stringify(current.blockers));
+    if (scenario === 'number_changed') assert.ok(current.groupedPreservation.blockerCodes.includes('MATCH_BASIS_INVALID'));
+  });
+});
+
+test('new grouped unit evidence preserves existing source fingerprints and ordinary accounting payloads', () => {
+  const f = authoritativePriceFixture('supplier'); f.xero.documents = [];
+  for (const line of f.children) delete line.Unit_Buy_At__c;
+  const before = f.build();
+  f.children[0].Unit_Buy_At__c = 430; f.children[1].Unit_Buy_At__c = 595;
+  const after = f.build();
+  assert.equal(after.sourceFingerprint, before.sourceFingerprint);
+  assert.equal(after.financialFingerprint, before.financialFingerprint);
+  assert.deepEqual(after.proposedPayload, before.proposedPayload);
+});
+
+test('accepted grouped links stay protected when authoritative units change even without a legacy fingerprint change', () => {
+  const f = authoritativePriceFixture('supplier'); const accepted = f.accept();
+  f.children[0].Unit_Buy_At__c = 431;
+  const changed = f.build();
+  assert.equal(changed.sourceFingerprint, accepted.sourceFingerprint);
+  assert.equal(changed.action, 'protected_legacy'); assert.equal(changed.acceptedLegacy, false);
+  assert.notEqual(changed.status, 'eligible'); assert.equal(changed.proposedPayload, null);
+});
+
+test('supplier authoritative unit is schema-selected and retained in the complete fresh snapshot', async () => {
+  const f = fixture(); let selectedQuery;
+  const snapshot = await loadSalesforceFinancialSnapshot('2026-01-01', async (requests) => {
+    selectedQuery = requests[3].soql;
+    return [[], [], [f.supplier], f.children, [], [f.account]].map((records) => ({ records, totalSize: records.length }));
+  }, { fields: { STEM_Line_Item__c: ['Unit_Sell_At__c', 'Unit_Buy_At__c'] } });
+  assert.match(selectedQuery, /\bUnit_Buy_At__c\b/); assert.match(selectedQuery, /\bUnit_Sell_At__c\b/);
+  assert.equal(snapshot.lines[0].Unit_Buy_At__c, 10.01);
+  assert.equal(snapshot.fingerprintBasis.lines[0].Unit_Buy_At__c, 10.01);
+});
+
 test('missing complete raw headers, authoritative line totals or readiness cannot use normalized defaults', async (t) => {
   const cases = [
     ['missing raw Xero total', (f) => { delete f.rawXero.Total; f.xero.documents = [normalizeXeroInvoice(f.rawXero)]; }],
@@ -145,8 +226,9 @@ test('missing complete raw headers, authoritative line totals or readiness canno
     ['source half-cent reconstructed by old builder', (f) => { f.children[0].Total_Cost__c = 10.011; }],
     ['missing issued source file', (f) => { delete f.supplier.Invoice_File__c; }],
     ['positive discount product', (f) => { f.children[0].Product__r.Name = 'Special Discount'; }],
-    ['source zero quantity hidden by old fallback', (f) => { f.children[0].Quantity_Delivered_Per_BDN__c = 0; }],
-    ['source unit mismatch repaired by old builder', (f) => { f.children[0].Cost_Per_Unit__c = 10.00; }],
+    ['source zero quantity hidden by old fallback', (f) => { f.children[0].Quantity_Delivered_Per_BDN__c = 0; f.children[0].Quantity__c = 0; }],
+    ['source authoritative unit missing despite legacy field', (f) => { f.children[0].Unit_Buy_At__c = null; f.children[0].Cost_Per_Unit__c = 10.01; }],
+    ['source unit mismatch repaired by old builder', (f) => { f.children[0].Unit_Buy_At__c = 10.00; }],
   ];
   for (const [name, change] of cases) await t.test(name, () => {
     const f = fixture(); change(f); const row = f.build();
@@ -231,6 +313,7 @@ test('accepted ownership accepts exactly the same canonical SF alias without tre
 
 test('existing accepted normal legacy fingerprint remains compatible when grouped source/header evidence is added', () => {
   const f = fixture();
+  for (const child of f.children) delete child.Unit_Buy_At__c;
   const source = f.build();
   const document = f.xero.documents[0];
   document.lineItems = source.lines.map((line, index) => ({ LineItemID: uuid(40 + index), Description: line.description,
@@ -247,6 +330,7 @@ test('existing accepted normal legacy fingerprint remains compatible when groupe
   f.stored.documentMappings = [{ id: uuid(10), salesforce_object: source.salesforceObject, salesforce_id: source.salesforceId,
     xero_document_id: document.id, xero_document_type: document.type, xero_contact_id: source.contactId, protected_legacy: true,
     source_fingerprint: source.sourceFingerprint, retained_differences: { accountId: source.accountId, reviewFingerprint: legacyFingerprint } }];
+  for (const child of f.children) child.Unit_Buy_At__c = 10.01;
   const accepted = f.build();
   assert.equal(accepted.acceptedLegacy, true, JSON.stringify(accepted.blockers)); assert.equal(accepted.reviewRequired, false);
   assert.equal(accepted.groupedPreservation, undefined); assert.equal(accepted.proposedPayload, null);
@@ -256,7 +340,7 @@ test('existing accepted normal legacy fingerprint remains compatible when groupe
 test('stored grouped policy cannot fall through to normal updates after changes, corruption or equal line counts', async (t) => {
   const cases = [
     ['source amendment', (f) => { f.supplier.Invoice_Due_Date__c = '2026-02-04'; }],
-    ['source collapses to one line', (f) => { f.children.splice(1); f.children[0].Total_Cost__c = f.children[0].Cost_Per_Unit__c = 30.03; }],
+    ['source collapses to one line', (f) => { f.children.splice(1); f.children[0].Total_Cost__c = f.children[0].Unit_Buy_At__c = 30.03; }],
     ['Xero expands to source line count', (f) => { f.xero.documents[0].lineItems = f.children.map((line, index) => ({ ...f.rawXero.LineItems[0], LineItemID: uuid(30 + index), Quantity: line.Quantity__c, UnitAmount: 10.01, LineAmount: line.Total_Cost__c })); }],
     ['protection flag cleared', (f) => { f.stored.documentMappings[0].protected_legacy = false; }],
     ['proof erased', (f) => { f.stored.documentMappings[0].retained_differences.groupedPreservation = null; }],

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { documentExplicitReviewEligible, documentReviewTarget, documentReviewTotals, paymentReferenceReviewEligible, paymentReferenceReviewTarget, previewMatchesPostingMode, reconciliationBucket, retainedReviewSelection, restoreReviewSelection, reviewSelectionSnapshot, savedPostingMode, workflowCopy } from '../src/lib/financialWorkflowUi.js';
+import { readFile } from 'node:fs/promises';
+import { documentExplicitReviewEligible, documentReviewTarget, documentReviewTotals, paymentReferenceReviewEligible, paymentReferenceReviewTarget, paymentReferenceOutcomesConfirmed, previewMatchesPostingMode, reconciliationBucket, retainedReviewSelection, restoreReviewSelection, reviewSelectionSnapshot, savedPostingMode, workflowCopy } from '../src/lib/financialWorkflowUi.js';
 import { summarizeXeroFinancialReconciliation } from '../src/lib/xeroFinancialReconciliation.js';
 import { xeroPortalUiCopy } from '../src/lib/xeroPortalUiCopy.js';
 
@@ -79,7 +80,7 @@ test('retained payment reference requires complete evidence and explicit link re
   assert.equal(reconciliationBucket(retained, 'payment'), 'attention');
   assert.equal(paymentReferenceReviewEligible(retained), true);
   assert.equal(summarizeXeroFinancialReconciliation({ documents: [], payments: [retained] }).exceptions, 1);
-  assert.equal(restoreReviewSelection(reviewSelectionSnapshot([retained], new Set(['payment-1']), 'payment'), [retained], 'payment').size, 0);
+  assert.equal(restoreReviewSelection(reviewSelectionSnapshot([retained], new Set(['payment-1']), 'payment'), [retained], 'payment').size, 1);
   const target = { salesforcePaymentId: 'payment-1', sourceFingerprint: 'source-1', reviewFingerprint: 'review-1' };
   assert.equal(paymentReferenceReviewTarget([retained], target).eligible, true);
   assert.equal(paymentReferenceReviewTarget([{ ...retained, reviewFingerprint: 'changed' }], target).eligible, false);
@@ -97,6 +98,64 @@ test('retained payment reference requires complete evidence and explicit link re
     assert.ok(copy.actions.payment_reference_link);
     assert.ok(copy.paymentReferenceTitle && copy.paymentReferenceDescription && copy.approvePaymentReference);
     assert.ok(copy.sourceReference && copy.sourceFallbackReference && copy.retainedXeroReference);
+  }
+});
+
+const existingPayment = (index, currency = 'USD') => ({ salesforcePaymentId: `payment-${index}`, salesforcePaymentName: `PAY-${index}`,
+  action: 'payment_reference_link', status: 'eligible', reviewRequired: true, blockers: [], amount: 100, currency,
+  sourceFingerprint: `source-${index}`, reviewFingerprint: `review-${index}`, xeroPaymentId: `xero-${index}`,
+  bankAccountId: 'bank', xeroDocumentUrl: 'https://go.xero.com/invoice/1', paymentDate: '2026-09-01',
+  referenceComparison: { sourceReference: '', sourceFallbackReference: `PAY-${index}`, xeroReference: 'HISTORIC' } });
+
+test('existing payment batches require 1–25 unique unchanged eligible links and keep explicit selection through refresh', () => {
+  const rows = Array.from({ length: 26 }, (_, index) => existingPayment(index, index % 2 ? 'HKD' : 'USD'));
+  for (const count of [1, 25]) assert.equal(paymentReferenceReviewTarget(rows, rows.slice(0, count)).eligible, true);
+  for (const targets of [[], rows, [rows[0], rows[0]], [rows[0], { ...rows[1], salesforcePaymentId: 'missing' }]]) {
+    assert.equal(paymentReferenceReviewTarget(rows, targets).eligible, false);
+  }
+  for (const change of [{ sourceFingerprint: 'changed' }, { reviewFingerprint: 'changed' }, { blockers: ['changed'] }, { action: 'payment_apply' }]) {
+    assert.equal(paymentReferenceReviewTarget([{ ...rows[0], ...change }, rows[1]], rows.slice(0, 2)).eligible, false);
+  }
+  const selected = new Set(['payment-0', 'payment-1']);
+  const snapshot = reviewSelectionSnapshot(rows, selected, 'payment');
+  assert.deepEqual([...restoreReviewSelection(snapshot, rows, 'payment')], [...selected]);
+  assert.deepEqual([...restoreReviewSelection(snapshot, [{ ...rows[0], action: 'payment_link' }, rows[1]], 'payment')], ['payment-1']);
+  assert.equal(restoreReviewSelection([], rows, 'payment').size, 0, 'reference links are never selected by default');
+  assert.deepEqual(documentReviewTotals(rows.slice(0, 3)).map(({ currency, count, total }) => ({ currency, count, total })),
+    [{ currency: 'USD', count: 2, total: 200 }, { currency: 'HKD', count: 1, total: 100 }]);
+});
+
+test('payment link confirmation requires exactly one linked outcome for every selected identity', () => {
+  const rows = [existingPayment(0), existingPayment(1)];
+  const outcomes = rows.map((row) => ({ salesforcePaymentId: row.salesforcePaymentId, status: 'linked' }));
+  assert.equal(paymentReferenceOutcomesConfirmed(rows, outcomes.toReversed()), true);
+  for (const result of [undefined, null, [], outcomes.slice(0, 1), [...outcomes, outcomes[0]], [outcomes[0], outcomes[0]],
+    [outcomes[0], { ...outcomes[1], status: 'failed' }], [outcomes[0], { ...outcomes[1], salesforcePaymentId: 'other' }]]) {
+    assert.equal(paymentReferenceOutcomesConfirmed(rows, result), false);
+  }
+});
+
+test('the payment link UI submits once, preserves failure selection, and clears only confirmed links', async () => {
+  const source = await readFile(new URL('../src/components/xero/XeroFinancialSync.jsx', import.meta.url), 'utf8');
+  const method = source.slice(source.indexOf('  async function linkExistingPaymentReference()'), source.indexOf('  function toggleSelection'));
+  const rows = [existingPayment(0), existingPayment(1)];
+  for (const response of ['success', 'incomplete', 'error', 'lost']) {
+    let selected = new Set(['payment-0', 'payment-1', 'unrelated']); let target = rows; let refreshes = 0;
+    const calls = []; const busy = [];
+    const globals = `const busy='', financialGate={enabled:true}, MUTATION_OPTIONS={}, financialCopy={}, captureDailyAllowance=()=>{}, toast=()=>{};
+      const paymentRequest=row=>({id:row.salesforcePaymentId,sourceFingerprint:row.sourceFingerprint,reviewFingerprint:row.reviewFingerprint});`;
+    const run = new Function('appClient', 'paymentReferenceResult', 'paymentReferenceOutcomesConfirmed', 'setSelectedPayments',
+      'setPaymentReferenceTarget', 'setBusy', 'runPreview', `${globals}${method}; return linkExistingPaymentReference();`);
+    await run({ functions: { invoke: async (name, body) => {
+      calls.push({ name, body }); if (response === 'lost') throw new Error('lost');
+      return { data: response === 'error' ? { error: 'stopped' } : { outcomes: rows.slice(0, response === 'incomplete' ? 1 : 2)
+        .map((row) => ({ salesforcePaymentId: row.salesforcePaymentId, status: 'linked' })) } };
+    } } }, { rows, eligible: true }, paymentReferenceOutcomesConfirmed, (update) => { selected = update(selected); },
+    (value) => { target = value; }, (value) => busy.push(value), async () => { refreshes += 1; });
+    assert.equal(calls.length, 1); assert.equal(calls[0].body.mode, 'link_existing'); assert.equal(calls[0].body.reviewed, true);
+    assert.deepEqual(calls[0].body.selectedPayments, rows.map((row) => ({ id: row.salesforcePaymentId, sourceFingerprint: row.sourceFingerprint, reviewFingerprint: row.reviewFingerprint })));
+    assert.deepEqual([...selected], response === 'success' ? ['unrelated'] : ['payment-0', 'payment-1', 'unrelated']);
+    assert.equal(target === null, response === 'success'); assert.equal(refreshes, response === 'success' ? 1 : 0); assert.equal(busy.at(-1), '');
   }
 });
 

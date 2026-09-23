@@ -3,6 +3,7 @@ import { APP_VERSION } from './appVersionMeta.js';
 export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
+  { version: '2.0.243', releasedAt: '2026-09-24', title: 'Batch payment links and precise price evidence', changes: ['Review up to 25 verified existing payment links together, retaining Xero references and an audit trail. Verify grouped invoice lines using the prices behind Salesforce totals and show the exact missing field.'] },
   { version: '2.0.242', releasedAt: '2026-09-24', title: 'Verified grouped invoice links', changes: ['Review proven combined invoice lines without changing Xero history. Serialize document batches and retain protection when a write outcome is uncertain.'] },
   { version: '2.0.241', releasedAt: '2026-09-24', title: 'Review existing payment references', changes: ['Link verified existing payments while retaining historical Xero references through an explicit audited review.', 'Keep accepted historical invoice links protected after source or settlement changes, and preserve selections during review refreshes.'] },
   { version: '2.0.240', releasedAt: '2026-09-24', title: 'Focused Finance batch approvals', changes: ['Save only the reviewed selection and any previous selection changes, reducing database work when approving a small batch from a large review.'] },

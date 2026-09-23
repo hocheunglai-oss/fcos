@@ -20,10 +20,13 @@ export function groupedSourceAccounting(record, children, direction, source, con
       const product = Boolean(child.Product__c);
       const line = source.lines.find((item) => item.sourceId === child.Id);
       const childCurrency = child.CurrencyIsoCode ?? (context.singleCurrency === true ? context.corporateCurrency : null);
+      const delivered = child.Quantity_Delivered_Per_BDN__c;
       return { id: child.Id, productId: child.Product__c || child.Product2Id__c, currency: childCurrency,
-        quantity: child.Quantity_Delivered_Per_BDN__c ?? child.Quantity__c,
-        unitAmount: buyer ? (product ? child.Price_Per_Unit__c : child.Unit_Price__c ?? child.Lumpsum_Price__c)
-          : (product ? child.Cost_Per_Unit__c : child.Unit_Cost__c ?? child.Lumpsum_Cost__c),
+        // STEM product total formulas use explicit Quantity when BDN is blank or
+        // zero, and Unit_Sell_At / Unit_Buy_At (not the legacy price/cost fields).
+        quantity: delivered == null || (product && delivered === 0) ? child.Quantity__c : delivered,
+        unitAmount: buyer ? (product ? child.Unit_Sell_At__c : child.Unit_Price__c ?? child.Lumpsum_Price__c)
+          : (product ? child.Unit_Buy_At__c : child.Unit_Cost__c ?? child.Lumpsum_Cost__c),
         lineAmount: buyer ? (product ? child.Total_Price__c : child.Line_Total__c) : (product ? child.Total_Cost__c : child.Line_Total_Buy__c),
         description: line?.description, accountCode: line?.accountCode, taxType: line?.taxType,
         // FCOS's approved accounting projection has no discounts, tax amounts,

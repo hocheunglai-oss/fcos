@@ -21,7 +21,7 @@ import {
 } from './_xeroContactSync.js';
 
 export const XERO_FINANCIAL_CUTOFF = '2026-01-01';
-export const XERO_RECONCILIATION_VERSION = 5;
+export const XERO_RECONCILIATION_VERSION = 6;
 const MAX_BATCH_SIZE = 25;
 const DEFAULT_CALLS_PER_MINUTE = 45;
 const DEFAULT_DAILY_LIMIT = 1000;
@@ -158,7 +158,7 @@ export function classifyXeroFinancialDocument(source, candidates, {
     && ['AUTHORISED', 'PAID'].includes(match.status))) {
     const grouped = evaluateGroupedFinancialDocument(source, match, groupedContext);
     return { action: 'protected_legacy', status: grouped.eligible ? 'eligible' : 'protected',
-      blockers: grouped.eligible ? [] : uniqueStrings(grouped.blockers.map((blocker) => blocker.message)),
+      blockers: grouped.eligible ? [] : uniqueStrings(grouped.blockers.map((blocker) => blocker.path ? `${blocker.path}: ${blocker.message}` : blocker.message)),
       warnings: [...warnings, 'Review the grouped accounting equivalence and retained line, date and reference differences. Linking preserves every Xero accounting line.'],
       xero: match, differences, matchEvidence: evidence, reviewRequired: grouped.eligible && !grouped.accepted,
       acceptedLegacy: grouped.eligible && grouped.accepted,
@@ -1042,7 +1042,7 @@ export async function loadSalesforceFinancialSnapshot(cutoff, querySalesforce = 
     SUPPLIER_INVOICE_QUERY.replace('LastModifiedDate', `LastModifiedDate${selected('Supplier_Invoice__c', ['CurrencyIsoCode', 'Invoice_File__c', 'Invoice_Upload_Date__c', 'File__c', 'Status__c', 'Invoice_Status__c'])}`).replaceAll('{cutoff}', quotedCutoff),
     `SELECT Id, Name, Buyer_Invoice__c, Supplier_Invoice__c, Product__c, Product__r.Name,
             Quantity_Delivered_Per_BDN__c, Quantity__c, Unit_of_Measure__c,
-            Price_Per_Unit__c, Cost_Per_Unit__c, Total_Price__c, Total_Cost__c, LastModifiedDate${selected('STEM_Line_Item__c', ['CurrencyIsoCode', 'Quantity_Max__c', 'Unit_Sell_At__c', 'Cancelled__c', 'STEM__c', 'Supplier__c'])}
+            Price_Per_Unit__c, Cost_Per_Unit__c, Total_Price__c, Total_Cost__c, LastModifiedDate${selected('STEM_Line_Item__c', ['CurrencyIsoCode', 'Quantity_Max__c', 'Unit_Sell_At__c', 'Unit_Buy_At__c', 'Cancelled__c', 'STEM__c', 'Supplier__c'])}
        FROM STEM_Line_Item__c
       WHERE Cancelled__c = false
         AND ((Buyer_Invoice__c != null AND (Buyer_Invoice__r.Invoice_Date__c >= ${quotedCutoff}
@@ -1515,7 +1515,15 @@ function buildSalesforceDocument(record, direction, children, mappingByKey, cont
 }
 
 function documentSourceFingerprint(record, children) {
-  return hashJson({ record: financialRecordFingerprint(record), children: [...children].sort((left, right) => String(left.Id).localeCompare(String(right.Id))).map(financialRecordFingerprint) });
+  // Unit_Buy_At is newly retrieved exclusively for grouped preservation. Keep
+  // existing accepted document fingerprints byte-compatible; the complete raw
+  // snapshot and grouped accounting proof separately bind this new evidence.
+  const legacyChild = (child) => {
+    if (!child.Product__c) return financialRecordFingerprint(child);
+    const { Unit_Buy_At__c: _groupedBuyUnit, ...legacy } = child;
+    return financialRecordFingerprint(legacy);
+  };
+  return hashJson({ record: financialRecordFingerprint(record), children: [...children].sort((left, right) => String(left.Id).localeCompare(String(right.Id))).map(legacyChild) });
 }
 
 function buildAccountingLine(row, direction, credit, mappingByKey) {
