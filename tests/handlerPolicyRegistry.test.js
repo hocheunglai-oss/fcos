@@ -52,3 +52,12 @@ test('browser cache invalidation uses server mutation metadata instead of handle
   assert.match(source, /options\.invalidateCache !== false/);
   assert.doesNotMatch(source, /isMutationHandler/);
 });
+
+test('saved Xero previews are mutations protected by Finance management permission', () => {
+  for (const name of ['xeroPortalContactLifecyclePreview', 'xeroFinancialSyncPreview']) {
+    assert.equal(registeredHandlerBehavior(name).mutation, true);
+    assert.equal(registeredHandlerBehavior(name).capability, 'xero_portal_manage');
+    assert.equal(registeredHandlerBehavior(name).audit, 'required');
+    assert.equal(registeredHandlerBehavior(name).cache, 'none');
+  }
+});

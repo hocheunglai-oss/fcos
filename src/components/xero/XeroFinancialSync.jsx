@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePageState } from '@/hooks/usePageState';
 import { AlertTriangle, ExternalLink, Loader2, Play, RefreshCw, Save, ShieldCheck } from 'lucide-react';
 import StateBlock from '@/components/common/StateBlock';
@@ -17,7 +17,7 @@ import { xeroPortalUiCopy } from '@/lib/xeroPortalUiCopy';
 import { cn } from '@/lib/utils';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
-import { reconciliationBucket, retainedReviewSelection, reviewSelectionSnapshot, restoreReviewSelection, documentReviewTotals, documentReviewTarget, workflowCopy } from '@/lib/financialWorkflowUi';
+import { reconciliationBucket, documentExplicitReviewEligible, paymentReferenceReviewEligible, paymentReferenceReviewTarget, paymentReferenceOutcomesConfirmed, retainedReviewSelection, reviewSelectionSnapshot, restoreReviewSelection, documentReviewTotals, documentReviewTarget, workflowCopy, savedPostingMode, previewMatchesPostingMode } from '@/lib/financialWorkflowUi';
 import XeroDailyAllowance from '@/components/xero/XeroDailyAllowance';
 import { latestXeroDailyAllowance } from '@/lib/xeroDailyAllowance';
 
@@ -43,11 +43,13 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
   const flow = workflowCopy(language);
   const [mappings, setMappings] = useState(null);
   const [preview, setPreview] = useState(null);
+  const [postingMode, setPostingMode] = useState('draft');
   const [payments, setPayments] = useState(null);
   const [selected, setSelected] = useState(new Set());
   const [selectedPayments, setSelectedPayments] = useState(new Set());
   const [reviewOpen, setReviewOpen] = useState(false);
   const [reviewTarget, setReviewTarget] = useState(null);
+  const [paymentReferenceTarget, setPaymentReferenceTarget] = useState(null);
   const [targetNeedsRecheck, setTargetNeedsRecheck] = useState(false);
   const stemContext = new URLSearchParams(window.location.search).get('stem') || '';
   const [view, setView] = usePageState(`xero-financial:view:${stemContext}`, stemContext ? 'all' : 'attention');
@@ -90,12 +92,16 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
       captureDailyAllowance(result.data);
       if (previewGeneration.current > 0 || result.data?.error || !result.data?.preview) return;
       setPreview(result.data.preview);
+      setPostingMode(savedPostingMode(result.data.preview));
       setPayments(result.data.preview.payments);
       const saved = initialSelection.current;
-      const sameRun = saved?.runId === result.data.preview.run?.id;
-      setSelected(sameRun && result.data.preview.run?.status === 'ready_for_review'
-        ? restoreReviewSelection(saved.documents, result.data.preview.rows)
-        : new Set(result.data.preview.rows.filter((row) => row.selected && !row.reviewRequired).map((row) => row.id)));
+      const sameRun = saved?.runId === result.data.preview.run?.id
+        && saved?.postingMode === savedPostingMode(result.data.preview);
+      setSelected(result.data.preview.run?.status !== 'ready_for_review'
+        ? new Set(result.data.preview.rows.filter((row) => row.selected).map((row) => row.id))
+        : sameRun
+          ? restoreReviewSelection(saved.documents, result.data.preview.rows)
+          : new Set(result.data.preview.rows.filter((row) => row.selected && !row.reviewRequired && reconciliationBucket(row) === 'ready' && documentExplicitReviewEligible(row)).map((row) => row.id)));
       setSelectedPayments(sameRun ? restoreReviewSelection(saved.payments, result.data.preview.payments?.rows || [], 'payment') : new Set());
     }).catch(() => { if (active) setError('The last check could not be loaded. Run Check everything to retry.'); });
     return () => { active = false; };
@@ -103,15 +109,16 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
 
   useEffect(() => {
     if (!preview?.run?.id) return;
-    setSelectionState({ runId: preview.run.id,
+    setSelectionState({ runId: preview.run.id, postingMode,
       documents: reviewSelectionSnapshot(preview.rows || [], selected),
       payments: reviewSelectionSnapshot(payments?.rows || [], selectedPayments, 'payment') });
-  }, [preview, payments, selected, selectedPayments, setSelectionState]);
+  }, [preview, postingMode, payments, selected, selectedPayments, setSelectionState]);
 
-  // Refresh on return to this page, keeping a current review stable while its dialog is open.
+  // Refresh on mount or return, without replacing a selection under active review.
   useEffect(() => {
     const refresh = () => {
-      if (document.visibilityState === 'visible' && !busy && !reviewOpen && !fixMapping && preview
+      const explicitLinkSelected = (preview?.rows || []).some((row) => selected.has(row.id) && row.action === 'protected_legacy');
+      if (document.visibilityState === 'visible' && !busy && !reviewOpen && !paymentReferenceTarget && !fixMapping && !explicitLinkSelected && preview
         && !backgroundCheckStopped.current && Date.now() - lastCheckAttemptAt.current > 120000
         && !['authorised', 'processing', 'partial', 'failed'].includes(preview.run?.status)
         && Date.now() - new Date(preview.checkedAt || preview.run?.createdAt).getTime() > 120000) runPreview(true, true);
@@ -120,7 +127,7 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
     window.addEventListener('focus', refresh);
     document.addEventListener('visibilitychange', refresh);
     return () => { window.removeEventListener('focus', refresh); document.removeEventListener('visibilitychange', refresh); };
-  });
+  }, [preview, busy, reviewOpen, paymentReferenceTarget, fixMapping, selected]);
 
   const products = useMemo(() => preview?.products || [], [preview]);
   const productMappingIndex = useMemo(() => new Map((mappings?.productMappings || []).map((mapping) => [`${mapping.direction}:${mapping.salesforceProductId}`, mapping])), [mappings]);
@@ -140,15 +147,23 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
   const visibleProductMappings = useMemo(() => productMappingRows.slice(mappingPage * MAPPING_PAGE_SIZE, (mappingPage + 1) * MAPPING_PAGE_SIZE), [mappingPage, productMappingRows]);
   const bankMappingIndex = useMemo(() => new Map((mappings?.bankMappings || []).map((mapping) => [mapping.salesforceBankName, mapping])), [mappings]);
   const eligibleRows = useMemo(() => (preview?.rows || []).filter((row) => row.status === 'eligible' && reconciliationBucket(row) === 'ready'), [preview]);
-  const reviewRows = (preview?.rows || []).filter((row) => selected.has(row.id));
+  const canReviewRun = preview?.run?.status === 'ready_for_review';
+  const reviewRows = (preview?.rows || []).filter((row) => canReviewRun ? selected.has(row.id) : row.selected);
+  const selectedLinksOnly = reviewRows.length > 0 && reviewRows.every((row) => ['link', 'protected_legacy'].includes(row.action));
+  const batchSelectionEligible = selected.size > 0 && reviewRows.length === selected.size && reviewRows.every(documentExplicitReviewEligible);
   const targetResult = documentReviewTarget(preview?.rows, reviewTarget);
   const targetRow = targetResult?.row;
   const targetEligible = Boolean(targetResult?.eligible && !targetNeedsRecheck);
-  const canReviewRun = preview?.run?.status === 'ready_for_review';
+  const paymentReferenceResult = paymentReferenceReviewTarget(payments?.rows, paymentReferenceTarget);
+  const selectedPaymentRows = (payments?.rows || []).filter((row) => selectedPayments.has(row.salesforcePaymentId));
+  const paymentLinksEligible = selectedPaymentRows.length === selectedPayments.size && paymentReferenceReviewTarget(payments?.rows, selectedPaymentRows)?.eligible;
+  const paymentWritesEligible = selectedPaymentRows.length > 0 && selectedPaymentRows.length === selectedPayments.size
+    && selectedPaymentRows.every((row) => row.action === 'payment_apply' && row.status === 'eligible' && !row.blockers?.length && row.sourceFingerprint && row.reviewFingerprint);
+  const previewMatchesMode = previewMatchesPostingMode(preview, postingMode);
   const targetMappingBlocked = (targetRow?.blockers || []).some((reason) => /Salesforce Product|Xero account mapping|account codes?|tax treatment/i.test(reason));
   const dialogRows = reviewTarget ? (targetRow ? [targetRow] : []) : reviewRows;
   const singleApproval = targetRow?.action === 'safe_update' ? flow.approveUpdate
-    : targetRow?.action === 'create_draft' ? flow.approveDraft
+    : targetRow?.action === 'create_draft' ? (postingMode === 'authorised' ? flow.authorisedMode : flow.approveDraft)
       : ['protected_legacy', 'link'].includes(targetRow?.action) ? flow.approveLink : flow.confirm;
   const orderedDocuments = useMemo(() => [...(preview?.rows || [])].filter((row) => (view === 'all' || reconciliationBucket(row) === view) && (!search.trim() || [row.documentNumber, row.accountName, row.accountId, row.stemName, row.stemId].join(' ').toLowerCase().includes(search.trim().toLowerCase()))).sort((left, right) => xeroFinancialReconciliationRank(left) - xeroFinancialReconciliationRank(right)), [preview, view, search]);
   const orderedPayments = useMemo(() => [...(payments?.rows || [])].filter((row) => (view === 'all' || reconciliationBucket(row, 'payment') === view) && (!search.trim() || [row.salesforcePaymentName, row.stemId].join(' ').toLowerCase().includes(search.trim().toLowerCase()))).sort((left, right) => xeroFinancialReconciliationRank(left, 'payment') - xeroFinancialReconciliationRank(right, 'payment')), [payments, view, search]);
@@ -160,6 +175,14 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
   const financialGate = portalStatus?.externalActions?.xero_financial_sync;
   const scopeFlags = portalStatus?.xero?.scopeFlags || {};
 
+  function changePostingMode(mode) {
+    if (mode === postingMode) return;
+    setPostingMode(mode);
+    setSelected(new Set());
+    setReviewOpen(false);
+    setReviewTarget(null);
+  }
+
   async function runPreview(preserveSelection = false, checkChanges = false, keepReviewOpen = false) {
     if (requestBusy.current || (checkChanges && backgroundCheckStopped.current)) return false;
     requestBusy.current = true;
@@ -170,7 +193,9 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
     if (!keepReviewOpen) setReviewOpen(false);
     setPaymentsReviewed(false);
     try {
-    const result = await appClient.functions.invoke('xeroFinancialSyncPreview', { cutoffDate: XERO_FINANCIAL_CUTOFF, includePayments: true, recordExactMatches: true, ...(checkChanges ? { refreshIfChangedRunId: preview?.run?.id } : {}) }, MUTATION_OPTIONS);
+    const result = await appClient.functions.invoke('xeroFinancialSyncPreview', { cutoffDate: XERO_FINANCIAL_CUTOFF,
+      includePayments: true, recordExactMatches: true, postingMode,
+      ...(checkChanges && previewMatchesPostingMode(preview, postingMode) ? { refreshIfChangedRunId: preview?.run?.id } : {}) }, MUTATION_OPTIONS);
     captureDailyAllowance(result.data);
     if (result.data?.error) {
       // Keep the saved check and stop render/focus events from retrying a failed scan.
@@ -179,15 +204,21 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
       return false;
     }
     backgroundCheckStopped.current = false;
-    if (result.data.unchanged) { setPreview((current) => ({ ...current, checkedAt: result.data.checkedAt })); return true; }
+    if (result.data.unchanged) {
+      if (!previewMatchesPostingMode(preview, postingMode)) { setError(flow.modeChanged); return false; }
+      setPreview((current) => ({ ...current, checkedAt: result.data.checkedAt })); return true;
+    }
     setPreview(result.data);
     setMappingPage(0);
     setDocumentPage(0);
-    setSelected(preserveSelection ? retainedReviewSelection(preview?.rows || [], result.data.rows || [], selected)
-      : new Set((result.data.rows || []).filter((row) => row.status === 'eligible' && !row.reviewRequired && reconciliationBucket(row) === 'ready').map((row) => row.id)));
-    setPayments(result.data.payments);
-    setPaymentPage(0);
-    setSelectedPayments(new Set((result.data.payments?.rows || []).filter((row) => row.action === 'payment_apply' && row.status === 'eligible').map((row) => row.salesforcePaymentId)));
+    const newModeMatches = previewMatchesPostingMode(result.data, postingMode);
+    const oldModeMatches = previewMatchesPostingMode(preview, postingMode);
+    setSelected((current) => newModeMatches && preserveSelection && oldModeMatches
+      ? retainedReviewSelection(preview?.rows || [], result.data.rows || [], current)
+      : newModeMatches && (oldModeMatches || !preview)
+        ? new Set((result.data.rows || []).filter((row) => !row.reviewRequired && reconciliationBucket(row) === 'ready' && documentExplicitReviewEligible(row)).map((row) => row.id))
+        : new Set());
+    updatePayments(result.data.payments);
     if (Number(result.data.automaticMappingPolicy?.changedCount || 0) > 0) await loadMappings({ keepBusy: true });
     return true;
     } catch (nextError) {
@@ -199,9 +230,9 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
   }
 
   async function executeRun() {
-    if (busy || !financialGate?.enabled || !['ready_for_review', 'authorised', 'partial', 'failed'].includes(preview?.run?.status)) return;
+    if (busy || !previewMatchesMode || !financialGate?.enabled || !['ready_for_review', 'authorised', 'partial', 'failed'].includes(preview?.run?.status)) return;
     if (reviewTarget && (!canReviewRun || !targetEligible)) return;
-    if (!reviewTarget && canReviewRun && !selected.size) return;
+    if (!reviewTarget && canReviewRun && !batchSelectionEligible) return;
     setBusy('run');
     try {
       const result = await appClient.functions.invoke('xeroFinancialSyncRun', {
@@ -256,6 +287,14 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
     setTargetNeedsRecheck(!refreshed);
   }
 
+  function updatePayments(next) {
+    setPayments(next);
+    setPaymentPage(0);
+    setSelectedPayments((current) => payments
+      ? restoreReviewSelection(reviewSelectionSnapshot(payments.rows || [], current, 'payment'), next?.rows || [], 'payment')
+      : new Set((next?.rows || []).filter((row) => row.action === 'payment_apply' && row.status === 'eligible').map((row) => row.salesforcePaymentId)));
+  }
+
   async function previewPayments() {
     setBusy('payment-preview');
     setPaymentsReviewed(false);
@@ -266,16 +305,15 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
       toast({ title: financialCopy.paymentPreviewFailed, description: result.data.error, variant: 'destructive' });
       return;
     }
-    setPayments(result.data);
-    setPaymentPage(0);
-    setSelectedPayments(new Set((result.data.rows || []).filter((row) => row.action === 'payment_apply' && row.status === 'eligible').map((row) => row.salesforcePaymentId)));
+    updatePayments(result.data);
   }
 
   async function applyPayments() {
+    if (busy || !paymentsReviewed || !financialGate?.enabled || !paymentWritesEligible) return;
     setBusy('payment-apply');
     const result = await appClient.functions.invoke('xeroFinancialPaymentApply', {
       mode: 'apply', cutoffDate: XERO_FINANCIAL_CUTOFF, reviewed: paymentsReviewed,
-      selectedPayments: (payments?.rows || []).filter((row) => selectedPayments.has(row.salesforcePaymentId)).map((row) => ({ id: row.salesforcePaymentId, sourceFingerprint: row.sourceFingerprint, reviewFingerprint: row.reviewFingerprint })),
+      selectedPayments: selectedPaymentRows.map(paymentRequest),
     }, MUTATION_OPTIONS);
     captureDailyAllowance(result.data);
     setBusy('');
@@ -287,6 +325,30 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
     await runPreview();
     const changed = (result.data.outcomes || []).filter((row) => row.reviewRequired);
     if (changed.length) setError(`${changed.length} payment allocation(s) changed and need review again. Unchanged selected allocations were processed.`);
+  }
+
+  async function linkExistingPaymentReference() {
+    if (busy || !financialGate?.enabled || !paymentReferenceResult?.eligible) return;
+    const targets = paymentReferenceResult.rows;
+    setBusy('payment-reference-link');
+    try {
+      const result = await appClient.functions.invoke('xeroFinancialPaymentApply', {
+        mode: 'link_existing', reviewed: true,
+        selectedPayments: targets.map(paymentRequest),
+      }, MUTATION_OPTIONS);
+      captureDailyAllowance(result.data);
+      if (result.data?.error || !paymentReferenceOutcomesConfirmed(targets, result.data?.outcomes)) {
+        toast({ title: financialCopy.paymentReferenceStopped,
+          description: result.data?.error || financialCopy.paymentReferenceOutcomeMissing, variant: 'destructive' });
+        return;
+      }
+      setSelectedPayments((current) => new Set([...current].filter((id) => !targets.some((row) => row.salesforcePaymentId === id))));
+      setPaymentReferenceTarget(null);
+      toast({ title: financialCopy.paymentReferenceLinked });
+      await runPreview(true);
+    } catch (nextError) {
+      toast({ title: financialCopy.paymentReferenceStopped, description: nextError.message, variant: 'destructive' });
+    } finally { setBusy(''); }
   }
 
   function toggleSelection(id, checked, setter) {
@@ -318,6 +380,11 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
             <p className="mt-2 max-w-4xl text-sm text-slate-700">{financialCopy.reconciliationDescription}</p>
           </div>
           <div className="space-y-2">
+            <label className="block text-sm font-medium" htmlFor="xero-posting-mode">{flow.postingMode}</label>
+            <select id="xero-posting-mode" className={cn(SELECT_CLASS, 'w-full')} value={postingMode} onChange={(event) => changePostingMode(event.target.value)} disabled={Boolean(busy)}>
+              <option value="draft">{flow.draftMode}</option>
+              <option value="authorised">{flow.authorisedMode}</option>
+            </select>
             <div className="flex justify-end"><Button type="button" onClick={() => runPreview()} disabled={Boolean(busy) || !portalStatus?.xero?.connected || !scopeFlags.invoices || !scopeFlags.contacts || !scopeFlags.settingsRead || !scopeFlags.paymentsRead}>
               {actionIcon(busy === 'preview', ShieldCheck)}
               {busy === 'preview' ? financialCopy.checkingEverything : financialCopy.checkEverything}
@@ -329,7 +396,7 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
           <div className={cn('col-span-2 rounded-lg border px-4 py-3 lg:col-span-1', reconciliation.status === 'reconciled' ? 'border-emerald-200 bg-emerald-50' : reconciliation.status === 'attention_required' ? 'border-rose-200 bg-rose-50' : 'border-sky-200 bg-white')}>
             <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{financialCopy.completion}</div>
             <div className="mt-1 text-3xl font-semibold tabular-nums">{reconciliation.completion == null ? '—' : `${reconciliation.completion}%`}</div>
-            <div className="mt-1 text-sm font-medium">{financialCopy.reconciliationStatuses[reconciliation.status]}</div>
+            <div className="mt-1 text-sm font-medium">{reconciliation.status === 'waiting' ? flow.waiting : financialCopy.reconciliationStatuses[reconciliation.status]}</div>
           </div>
           {[
             [financialCopy.salesforceRecords, reconciliation.total],
@@ -339,7 +406,8 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
           ].map(([label, value, tone]) => <CutoverKpi key={label} label={label} value={reconciliation.checked ? value : null} tone={tone} />)}
         </div>
         <div className="mt-3 rounded-lg border border-sky-100 bg-white/80 px-3 py-2 text-sm text-slate-700">
-          {financialCopy.reconciliationDescriptions[reconciliation.status]}
+          {reconciliation.status === 'waiting' ? flow.waitingDescription : financialCopy.reconciliationDescriptions[reconciliation.status]}
+          {reconciliation.waiting > 0 && <div>{flow.waiting}: {reconciliation.waiting}</div>}
           {reconciliation.documents.acceptedLegacy > 0 && <div>{flow.acceptedLegacy}: {reconciliation.documents.acceptedLegacy}</div>}
         </div>
         {!scopeFlags.settingsRead || !scopeFlags.paymentsRead ? <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">{financialCopy.reconnect}</div> : null}
@@ -349,7 +417,8 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
 
       {preview && <div className="space-y-3">
         <Button size="sm" variant="ghost" onClick={() => { setView(stemContext ? 'all' : 'attention'); setSearch(stemContext); }}>Reset filters</Button>
-        <p className={DETAIL_CLASS}>{flow.checked}: {new Date(preview.checkedAt || preview.run.createdAt).toLocaleString(copy.locale)} · {flow.saved}</p>
+        <p className={DETAIL_CLASS}>{flow.checked}: {new Date(preview.checkedAt || preview.run.createdAt).toLocaleString(copy.locale)} · {flow.saved} · {flow.savedMode}: {savedPostingMode(preview) === 'authorised' ? flow.authorisedMode : flow.draftMode}</p>
+        {!previewMatchesMode && <p role="status" className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">{flow.modeChanged}</p>}
         <div className="flex flex-wrap gap-2">{['attention', 'ready', 'waiting', 'matched', 'all'].map((bucket) => <Button key={bucket} variant={view === bucket ? 'default' : 'outline'} size="sm" onClick={() => { setView(bucket); setDocumentPage(0); setPaymentPage(0); }}>{flow[bucket]} ({[...(preview.rows || []).map((row) => reconciliationBucket(row)), ...(payments?.rows || []).map((row) => reconciliationBucket(row, 'payment'))].filter((value) => bucket === 'all' || bucket === value).length})</Button>)}</div>
         <Input aria-label={flow.search} placeholder={flow.search} value={search} onChange={(event) => { setSearch(event.target.value); setDocumentPage(0); setPaymentPage(0); }} />
         {!financialGate?.enabled && <p role="status" className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">{flow.locked}</p>}
@@ -360,12 +429,12 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
 
           <section className={cn(PANEL_CLASS, 'finance-batch-review')}>
             <div className={SECTION_HEADER_CLASS}>
-              {sectionHeading(financialCopy.reviewTitle, financialCopy.runSummary(preview.run?.id?.slice(0, 8), copy.statuses[preview.run?.status] || preview.run?.status?.replaceAll('_', ' '), selected.size, eligibleRows.length))}
+              {sectionHeading(financialCopy.reviewTitle, financialCopy.runSummary(preview.run?.id?.slice(0, 8), copy.statuses[preview.run?.status] || preview.run?.status?.replaceAll('_', ' '), reviewRows.length, eligibleRows.length))}
               <div className={ACTIONS_CLASS}>
-                <Button type="button" variant="outline" onClick={() => setSelected(new Set(eligibleRows.map((row) => row.id)))}>{financialCopy.selectEligible}</Button>
-                <Button type="button" variant="outline" onClick={() => setSelected(new Set())}>{copy.common.clear}</Button>
-                <Button type="button" onClick={() => { setReviewTarget(null); setReviewOpen(true); }} disabled={Boolean(busy) || !financialGate?.enabled || !['ready_for_review', 'authorised', 'partial', 'failed'].includes(preview.run?.status) || (preview.run?.status === 'ready_for_review' && !selected.size)}>
-                  {actionIcon(busy === 'run')}{preview.run?.status === 'ready_for_review' ? flow.review : flow.resume}
+                <Button type="button" variant="outline" onClick={() => setSelected(new Set(eligibleRows.map((row) => row.id)))} disabled={Boolean(busy) || !canReviewRun || !previewMatchesMode}>{financialCopy.selectEligible}</Button>
+                <Button type="button" variant="outline" onClick={() => setSelected(new Set())} disabled={Boolean(busy) || !canReviewRun}>{copy.common.clear}</Button>
+                <Button type="button" onClick={() => { setReviewTarget(null); setReviewOpen(true); }} disabled={Boolean(busy) || !previewMatchesMode || !financialGate?.enabled || !['ready_for_review', 'authorised', 'partial', 'failed'].includes(preview.run?.status) || (preview.run?.status === 'ready_for_review' && !batchSelectionEligible)}>
+                  {actionIcon(busy === 'run')}{preview.run?.status === 'ready_for_review' ? (selectedLinksOnly ? flow.reviewLinks : flow.review) : flow.resume}
                 </Button>
               </div>
             </div>
@@ -379,10 +448,10 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
                   {visibleDocuments.map((row) => (
                     <TableRow key={row.id}>
                       {tableCells([
-                        <Checkbox checked={selected.has(row.id)} disabled={row.status !== 'eligible' || reconciliationBucket(row) !== 'ready' || preview.run?.status !== 'ready_for_review'} onCheckedChange={(value) => toggleSelection(row.id, value === true, setSelected)} />,
+                        <Checkbox checked={canReviewRun ? selected.has(row.id) : Boolean(row.selected)} disabled={Boolean(busy) || !previewMatchesMode || !documentExplicitReviewEligible(row) || !canReviewRun} onCheckedChange={(value) => toggleSelection(row.id, value === true, setSelected)} />,
                         detailPair(row.documentNumber, financialCopy.documentKinds[row.documentKind] || row.documentKind?.replaceAll('_', ' ')),
                         <DocumentReason row={row} flow={flow} copy={copy} financialCopy={financialCopy} openDocumentReview={openDocumentReview} setFixMapping={setFixMapping} />,
-                        <FinancialActionBadge action={row.action} status={row.status} copy={copy} />,
+                        <FinancialActionBadge action={row.action} status={row.status} copy={copy} flow={flow} />,
                         detailPair(row.accountName, <>{row.companyCode || copy.common.noClKey} · {row.stemName || copy.common.noStem}</>),
                         detailPair(row.invoiceDate, <>{financialCopy.due} {row.dueDate || copy.common.notSet}</>, false),
                         <>{row.currency} {formatAmount(row.total, copy.locale)}</>,
@@ -399,9 +468,9 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
                 <TableBody>
                   {!visibleDocuments.length && <TableRow><TableCell colSpan={2}>{flow.noRows}</TableCell></TableRow>}
                   {visibleDocuments.map((row) => <TableRow key={row.id}>
-                    <TableCell className="w-9 align-top"><Checkbox checked={selected.has(row.id)} disabled={row.status !== 'eligible' || reconciliationBucket(row) !== 'ready' || preview.run?.status !== 'ready_for_review'} onCheckedChange={(value) => toggleSelection(row.id, value === true, setSelected)} /></TableCell>
+                    <TableCell className="w-9 align-top"><Checkbox checked={canReviewRun ? selected.has(row.id) : Boolean(row.selected)} disabled={Boolean(busy) || !previewMatchesMode || !documentExplicitReviewEligible(row) || !canReviewRun} onCheckedChange={(value) => toggleSelection(row.id, value === true, setSelected)} /></TableCell>
                     <TableCell className="min-w-0 whitespace-normal">
-                      <div className="flex flex-wrap items-center gap-2"><span className="font-medium break-all">{row.documentNumber}</span><FinancialActionBadge action={row.action} status={row.status} copy={copy} /></div>
+                      <div className="flex flex-wrap items-center gap-2"><span className="font-medium break-all">{row.documentNumber}</span><FinancialActionBadge action={row.action} status={row.status} copy={copy} flow={flow} /></div>
                       <div className={DETAIL_CLASS}>{financialCopy.documentKinds[row.documentKind] || row.documentKind?.replaceAll('_', ' ')} · {row.accountName} · {row.companyCode || copy.common.noClKey} · {row.stemName || copy.common.noStem}</div>
                       <div className={DETAIL_CLASS}>{row.invoiceDate} · {financialCopy.due} {row.dueDate || copy.common.notSet} · {row.currency} {formatAmount(row.total, copy.locale)}</div>
                       <div className={DETAIL_CLASS}>{row.xero?.url ? <a href={row.xero.url} target="_blank" rel="noreferrer" className={LINK_CLASS}>{row.xero.number || copy.common.open}</a> : financialCopy.noActiveMatch}{row.xero?.status ? ` · ${row.xero.status}` : ''}</div>
@@ -424,7 +493,8 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
                   <div className="text-sm text-muted-foreground">{financialCopy.paymentSummary(payments.summary?.total || 0, payments.summary?.paymentApply || 0)}</div>
                   <div className={ACTIONS_CLASS}>
                     <label className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm"><Checkbox checked={paymentsReviewed} onCheckedChange={(value) => setPaymentsReviewed(value === true)} />{financialCopy.financeReviewedPayments}</label>
-                    <Button type="button" onClick={applyPayments} disabled={!paymentsReviewed || !selectedPayments.size || !financialGate?.enabled || Boolean(busy)}>{actionIcon(busy === 'payment-apply', Play)}{financialCopy.applyPayments}</Button>
+                    <Button type="button" variant="outline" onClick={() => setPaymentReferenceTarget(selectedPaymentRows)} disabled={!paymentLinksEligible || !financialGate?.enabled || Boolean(busy)}>{flow.reviewPaymentLinks} ({selectedPayments.size}/25)</Button>
+                    <Button type="button" onClick={applyPayments} disabled={!paymentsReviewed || !paymentWritesEligible || !financialGate?.enabled || Boolean(busy)}>{actionIcon(busy === 'payment-apply', Play)}{financialCopy.applyPayments}</Button>
                   </div>
                 </div>
                 {pagination(paymentPage, paymentPageCount, orderedPayments.length, PAGE_SIZE, setPaymentPage, financialCopy.rowRange, copy.common)}
@@ -432,10 +502,10 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
                   <Table scrollLabel={financialCopy.paymentTableLabel}>{tableHeader([copy.common.use, financialCopy.payment, copy.common.type, copy.common.date, copy.common.bank, copy.common.amount, financialCopy.actionReason])}<TableBody>
                     {!visiblePayments.length && <TableRow><TableCell colSpan={7}>{flow.noRows}</TableCell></TableRow>}
                     {visiblePayments.map((row) => <TableRow key={row.salesforcePaymentId}>{tableCells([
-                      <Checkbox checked={selectedPayments.has(row.salesforcePaymentId)} disabled={row.action !== 'payment_apply' || row.status !== 'eligible'} onCheckedChange={(value) => toggleSelection(row.salesforcePaymentId, value === true, setSelectedPayments)} />,
+                      <Checkbox checked={selectedPayments.has(row.salesforcePaymentId)} disabled={Boolean(busy) || !(paymentReferenceReviewEligible(row) || row.action === 'payment_apply' && row.status === 'eligible') || row.action === 'payment_reference_link' && !selectedPayments.has(row.salesforcePaymentId) && selectedPayments.size >= 25} onCheckedChange={(value) => toggleSelection(row.salesforcePaymentId, value === true, setSelectedPayments)} />,
                       row.salesforcePaymentName, row.type, row.paymentDate, row.bank || copy.common.notSet,
                       <>{row.currency} {formatAmount(row.amount, copy.locale)}</>,
-                      <>{reconciliationBucket(row, 'payment') === 'waiting' ? flow.waitInvoice : row.blockers?.[0] || financialCopy.actions[row.action] || row.action?.replaceAll('_', ' ')}{(row.blockers || []).some((reason) => /bank mapping/i.test(reason)) && <Button variant="link" size="sm" onClick={() => setFixMapping({ bank: row.bank, documentNumber: row.salesforcePaymentName })}>{flow.mapping}</Button>}{row.stemId && <a className={LINK_CLASS} href={`/disputes?stem=${encodeURIComponent(row.stemId)}`}>Dispute / settlement</a>}{row.xeroDocumentUrl && <a className="block text-blue-700 underline" href={row.xeroDocumentUrl} target="_blank" rel="noreferrer">Xero</a>}</>,
+                      <>{row.blockers?.join('; ') || financialCopy.actions[row.action] || row.action?.replaceAll('_', ' ')}{row.action === 'payment_reference_link' && <Button type="button" variant="link" size="sm" disabled={Boolean(busy) || !financialGate?.enabled || !paymentReferenceReviewEligible(row)} onClick={() => setPaymentReferenceTarget({ salesforcePaymentId: row.salesforcePaymentId, sourceFingerprint: row.sourceFingerprint, reviewFingerprint: row.reviewFingerprint })}>{financialCopy.reviewPaymentReference}</Button>}{row.bank?.trim() && (row.blockers || []).some((reason) => /bank mapping/i.test(reason)) && <Button variant="link" size="sm" onClick={() => setFixMapping({ bank: row.bank, documentNumber: row.salesforcePaymentName })}>{flow.mapping}</Button>}{row.stemId && <a className={LINK_CLASS} href={`/disputes?stem=${encodeURIComponent(row.stemId)}`}>Dispute / settlement</a>}{row.xeroDocumentUrl && <a className="block text-blue-700 underline" href={row.xeroDocumentUrl} target="_blank" rel="noreferrer">Xero</a>}</>,
                     ], { 1: 'font-medium' })}</TableRow>)}
                   </TableBody></Table>
                 </div>
@@ -477,12 +547,18 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
           </div>
         </div>
       </details>
-      <Dialog open={reviewOpen} onOpenChange={setReviewOpen}><DialogContent className="max-h-[85vh] max-w-3xl overflow-y-auto"><DialogHeader><DialogTitle>{reviewTarget ? (targetEligible ? flow.singleReview : flow.resolve) : flow.review}</DialogTitle><DialogDescription>{flow.reviewDescription}</DialogDescription></DialogHeader>
+      <Dialog open={reviewOpen} onOpenChange={setReviewOpen}><DialogContent className="max-h-[85vh] max-w-3xl overflow-y-auto"><DialogHeader><DialogTitle>{reviewTarget ? (targetEligible ? flow.singleReview : flow.resolve) : !canReviewRun ? flow.resume : selectedLinksOnly ? flow.reviewLinks : flow.review}</DialogTitle><DialogDescription>{canReviewRun ? flow.reviewDescription : flow.resumeDescription}</DialogDescription></DialogHeader>
         {reviewTarget && (!targetRow || !targetEligible) && <p role="status" className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">{!targetRow ? flow.targetMissing : targetResult.evidenceMissing ? flow.targetEvidenceMissing : targetResult.changed ? flow.targetChanged : flow.correctAndRecheck}</p>}
         {reviewTarget && !financialGate?.enabled && <p role="status" className="text-sm text-amber-900">{flow.locked}</p>}
-        <div className="space-y-2">{documentReviewTotals(dialogRows).map((total) => <p key={`${total.currency}:${total.action}`}>{financialCopy.actions[total.action] || total.action}: {total.count} · {total.currency} {formatAmount(total.total, copy.locale)}</p>)}</div>
-        <div className="max-h-72 overflow-auto">{dialogRows.map((row) => <div key={row.id} className="border-b py-2 text-sm"><b>{row.documentNumber}</b> · {row.accountName} · {row.currency} {formatAmount(row.total, copy.locale)} · {row.invoiceDate}<div>{financialCopy.actions[row.action] || row.action}</div>{row.action === 'protected_legacy' && <p className="font-medium text-amber-800">{flow.legacyReview}</p>}<DocumentEvidence row={row} flow={flow} copy={copy} expanded /></div>)}</div>
-        <div className="flex flex-wrap justify-end gap-2">{reviewTarget && <Button variant="outline" onClick={recheckTarget} disabled={Boolean(busy)}>{flow.recheck}</Button>}{reviewTarget && targetMappingBlocked && <Button variant="outline" onClick={openMappingFromReview} disabled={Boolean(busy)}>{flow.mapping}</Button>}<Button variant="outline" onClick={() => setReviewOpen(false)} disabled={Boolean(busy)}>{flow.cancel}</Button><Button onClick={executeRun} disabled={Boolean(busy) || !financialGate?.enabled || (reviewTarget ? !canReviewRun || !targetEligible : canReviewRun && !selected.size)}>{reviewTarget ? singleApproval : flow.confirm}</Button></div>
+        <div className="space-y-2">{documentReviewTotals(dialogRows).map((total) => <p key={`${total.currency}:${total.action}`}>{total.action === 'protected_legacy' ? flow.protectedLinkAction : financialCopy.actions[total.action] || total.action}: {total.count} · {total.currency} {formatAmount(total.total, copy.locale)}</p>)}</div>
+        <div className="max-h-72 overflow-auto">{dialogRows.map((row) => <div key={row.id} className="border-b py-2 text-sm"><b>{row.documentNumber}</b> · {row.accountName} · {row.currency} {formatAmount(row.total, copy.locale)} · {row.invoiceDate}<div>{row.action === 'protected_legacy' ? flow.protectedLinkAction : financialCopy.actions[row.action] || row.action}</div>{row.action === 'protected_legacy' && <p className="font-medium text-amber-800">{flow.legacyReview}</p>}<DocumentEvidence row={row} flow={flow} copy={copy} expanded /></div>)}</div>
+        <div className="flex flex-wrap justify-end gap-2">{reviewTarget && <Button variant="outline" onClick={recheckTarget} disabled={Boolean(busy)}>{flow.recheck}</Button>}{reviewTarget && targetMappingBlocked && <Button variant="outline" onClick={openMappingFromReview} disabled={Boolean(busy)}>{flow.mapping}</Button>}<Button variant="outline" onClick={() => setReviewOpen(false)} disabled={Boolean(busy)}>{flow.cancel}</Button><Button onClick={executeRun} disabled={Boolean(busy) || !previewMatchesMode || !financialGate?.enabled || (reviewTarget ? !canReviewRun || !targetEligible : canReviewRun && !batchSelectionEligible)}>{reviewTarget ? singleApproval : !canReviewRun ? flow.resume : selectedLinksOnly ? flow.approveLink : postingMode === 'authorised' ? flow.authorisedMode : flow.confirm}</Button></div>
+      </DialogContent></Dialog>
+      <Dialog open={Boolean(paymentReferenceTarget)} onOpenChange={(open) => { if (!open && !busy) setPaymentReferenceTarget(null); }}><DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto"><DialogHeader><DialogTitle>{financialCopy.paymentReferenceTitle}</DialogTitle><DialogDescription>{financialCopy.paymentReferenceDescription}</DialogDescription></DialogHeader>
+        {!paymentReferenceResult?.eligible && <p role="status" className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">{financialCopy.paymentReferenceEvidenceMissing}</p>}
+        {documentReviewTotals(paymentReferenceResult?.rows || []).map((total) => <p key={total.currency}>{total.count} · {total.currency} {formatAmount(total.total, copy.locale)}</p>)}
+        {paymentReferenceResult?.rows.map((row) => <PaymentReferenceEvidence key={row.salesforcePaymentId} row={row} copy={copy} />)}
+        <div className="flex justify-end gap-2"><Button type="button" variant="outline" disabled={Boolean(busy)} onClick={() => setPaymentReferenceTarget(null)}>{flow.cancel}</Button><Button type="button" disabled={Boolean(busy) || !financialGate?.enabled || !paymentReferenceResult?.eligible} onClick={linkExistingPaymentReference}>{actionIcon(busy === 'payment-reference-link', ShieldCheck)}{financialCopy.approvePaymentReference}</Button></div>
       </DialogContent></Dialog>
       <Dialog open={Boolean(fixMapping)} onOpenChange={(open) => { if (!open) setFixMapping(null); }}><DialogContent className="max-h-[85vh] max-w-5xl overflow-auto"><DialogHeader><DialogTitle>{flow.mapping} · {fixMapping?.documentNumber}</DialogTitle><DialogDescription>{financialCopy.mappingDescription}</DialogDescription></DialogHeader>
         {fixMapping?.bank && <BankMapping bank={fixMapping.bank} mapping={bankMappingIndex.get(fixMapping.bank)} accounts={(mappings?.accountOptions || []).filter((account) => account.bank)} onSaved={mappingSaved} copy={copy} />}
@@ -491,6 +567,31 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
       </DialogContent></Dialog>
     </div>
   );
+}
+
+function paymentRequest(row) {
+  return { id: row.salesforcePaymentId, sourceFingerprint: row.sourceFingerprint, reviewFingerprint: row.reviewFingerprint };
+}
+
+function PaymentReferenceEvidence({ row, copy }) {
+  const labels = copy.financial;
+  const missing = copy.common.notSet;
+  const invoiceId = row.xeroDocumentNumber || row.xeroDocumentId
+    || row.retainedReferenceEvidence?.document?.xero_document_id || row.xeroDocumentUrl;
+  const details = [
+    [labels.payment, row.salesforcePaymentName],
+    [labels.sourceReference, row.referenceComparison?.sourceReference || labels.missingReference],
+    [labels.sourceFallbackReference, row.referenceComparison?.sourceFallbackReference || row.salesforcePaymentName],
+    [labels.retainedXeroReference, row.referenceComparison?.xeroReference || missing],
+    [labels.xeroPaymentId, row.xeroPaymentId || missing],
+    [labels.xeroInvoice, row.xeroDocumentUrl ? <a className="text-blue-700 underline" href={row.xeroDocumentUrl} target="_blank" rel="noreferrer">{invoiceId}</a> : missing],
+    [copy.common.bank, row.bank || missing],
+    [labels.bankAccountId, row.bankAccountId || missing],
+    [copy.common.type, row.type],
+    [copy.common.date, row.paymentDate],
+    [copy.common.amount, <>{row.currency} {formatAmount(row.amount, copy.locale)}</>],
+  ];
+  return <dl className="grid grid-cols-[minmax(9rem,auto)_1fr] gap-x-4 gap-y-2 border-b pb-3 text-sm">{details.map(([label, value]) => <Fragment key={label}><dt>{label}</dt><dd>{value}</dd></Fragment>)}</dl>;
 }
 
 function ProductMappingRow({ direction, product, mapping, proposal, accounts, taxes, onSaved, copy }) {
@@ -585,9 +686,9 @@ function CutoverKpi({ label, value, tone = 'neutral' }) {
   return <div className={cn('rounded-lg border px-4 py-3', classes[tone])}><div className="text-xs font-semibold uppercase text-muted-foreground">{label}</div><div className="mt-1 text-2xl font-semibold tabular-nums">{hasValue ? number.toLocaleString() : '—'}</div></div>;
 }
 
-function FinancialActionBadge({ action, status, copy }) {
+function FinancialActionBadge({ action, status, copy, flow }) {
   const style = status === 'blocked' ? 'border-rose-200 bg-rose-50 text-rose-800' : status === 'protected' ? 'border-slate-300 bg-slate-100 text-slate-800' : action === 'create_draft' ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-sky-200 bg-sky-50 text-sky-800';
-  return <Badge variant="outline" className={cn('whitespace-normal break-words', style)}>{copy.financial.actions[action] || copy.statuses[status] || String(action || status).replaceAll('_', ' ')}</Badge>;
+  return <Badge variant="outline" className={cn('whitespace-normal break-words', style)}>{action === 'protected_legacy' ? flow.protectedLinkAction : copy.financial.actions[action] || copy.statuses[status] || String(action || status).replaceAll('_', ' ')}</Badge>;
 }
 
 function DocumentReason({ row, flow, copy, financialCopy, openDocumentReview, setFixMapping }) {

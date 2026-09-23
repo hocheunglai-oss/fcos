@@ -33,30 +33,38 @@ function database(tables) {
     if (name.startsWith('authorise_')) {
       run.status = 'authorised';
       for (const row of tables.xero_financial_sync_items) if (args.p_selected_item_ids.includes(row.id)) { row.selected = true; row.status = 'selected'; }
-    } else if (name.startsWith('start_')) { assert.ok(['authorised', 'partial', 'failed'].includes(run.status)); run.status = 'processing'; }
+    } else if (name.startsWith('start_')) {
+      if (!['authorised', 'partial', 'failed'].includes(run.status)) return { error: { code: '40001', message: 'Run is not resumable' } };
+      run.status = 'processing';
+    }
     else run.status = args.p_status;
     run.revision += 1;
     return { data: { ...run } };
   } };
 }
-function fixture() {
+function fixture(postingMode = 'draft') {
   const runId = randomUUID();
-  const salesforce = { buyers: [1, 2].map((i) => ({ Id: `invoice-${i}`, Name: `INV-${i}`, Amount__c: 100, Invoice_Date__c: '2026-09-01', Invoice_Due_Date__c: '2026-09-30', STEM__c: `stem-${i}`, STEM__r: { Name: `STEM-${i}`, Account__c: `buyer-${i}`, Account__r: { Name: `Buyer ${i}` } } })),
+  const salesforce = { buyers: [1, 2].map((i) => ({ Id: `invoice-${i}`, Name: `INV-${i}`, CurrencyIsoCode: 'USD', File__c: '069000000000001AAA', Proforma__c: false, Deprecated__c: false, Amount__c: 100, Invoice_Date__c: '2026-09-01', Invoice_Due_Date__c: '2026-09-30', STEM__c: `stem-${i}`, STEM__r: { Name: `STEM-${i}`, Account__c: `buyer-${i}`, Account__r: { Name: `Buyer ${i}` } } })),
     suppliers: [], extras: [], lines: [1, 2].map((i) => ({ Id: `line-${i}`, Buyer_Invoice__c: `invoice-${i}`, Product__c: 'product', Product__r: { Name: 'Fuel' }, Quantity__c: 1, Price_Per_Unit__c: 100, Total_Price__c: 100 })) };
-  const xero = { documents: [], inactiveDocuments: [], contacts: [1, 2].map((i) => ({ id: `contact-${i}`, name: `Buyer ${i}`, status: 'ACTIVE' })), organisation: {} };
+  const xero = { documents: [], inactiveDocuments: [], contacts: [1, 2].map((i) => ({ id: `contact-${i}`, name: `Buyer ${i}`, status: 'ACTIVE' })), organisation: { baseCurrency: 'USD' } };
   const mapping = { id: 'mapping', enabled: true, direction: 'buyer', salesforce_product_id: 'product', xero_account_code: '200', xero_tax_type: 'NONE' };
-  const classified = buildFinancialClassifications(salesforce, xero, { productMappings: [mapping], documentMappings: [] });
+  const classified = buildFinancialClassifications(salesforce, xero, { productMappings: [mapping], documentMappings: [] }, { postingMode });
   assert.ok(classified.rows.every((row) => row.action === 'create_draft' && row.status === 'eligible'));
   const items = classified.rows.map((row, i) => ({ id: randomUUID(), run_id: runId, row_index: i, status: 'eligible', selected: false,
     source_payload: row, proposed_action: row.action, proposed_payload: row.proposedPayload, xero_payload: {}, blockers: [], differences: [] }));
-  const tables = { xero_financial_sync_runs: [{ id: runId, revision: 1, status: 'ready_for_review' }], xero_financial_sync_items: items,
+  const tables = { xero_financial_sync_runs: [{ id: runId, revision: 1, status: 'ready_for_review', control_totals: { postingMode } }], xero_financial_sync_items: items,
     xero_financial_product_mappings: [mapping], xero_financial_document_mappings: [] };
   const client = database(tables); const writes = [];
   const dependencies = { client, env: { FCOS_ENABLE_XERO_FINANCIAL_SYNC: 'true' }, getConnection: async () => ({ scope: 'accounting.invoices accounting.contacts accounting.settings.read' }),
     loadSalesforce: async () => salesforce, loadXero: async () => xero,
     accountingFetch: async (_connection, path, options) => {
       writes.push({ path, ...options });
-      return { Invoices: options.body.Invoices.map((invoice) => ({ ...invoice, InvoiceID: `xero-${invoice.InvoiceNumber}`, Status: 'DRAFT', Total: 100 })) };
+      return { Invoices: options.body.Invoices.map((invoice) => ({
+        InvoiceID: `00000000-0000-4000-8000-${invoice.InvoiceNumber === 'INV-1' ? '000000000001' : '000000000002'}`,
+        Type: 'ACCREC', InvoiceNumber: invoice.InvoiceNumber, Contact: { ContactID: invoice.Contact.ContactID },
+        CurrencyCode: 'USD', Status: invoice.Status, Total: 100, Date: invoice.Date, DueDate: invoice.DueDate,
+        Reference: invoice.Reference, LineItems: invoice.LineItems,
+      })) };
     } };
   return { runId, tables, items, client, dependencies, salesforce, xero, writes,
     request: { runId, revision: 1, reviewed: true, selectedItemIds: items.map((row) => row.id) } };
@@ -73,6 +81,70 @@ test('one confirmation persists approval before sync and keeps successful rows o
   f.tables.xero_financial_sync_runs[0].status = 'partial';
   await xeroFinancialSyncRun({ runId: f.runId, revision: result.run.revision }, f.dependencies);
   assert.equal(f.writes.length, 1, 'resuming does not send completed transactions again');
+});
+
+test('authorised document batch records identities correctly when Xero returns rows in another order', async () => {
+  const f = fixture('authorised'); const send = f.dependencies.accountingFetch;
+  f.dependencies.accountingFetch = async (...args) => { const response = await send(...args); return { Invoices: response.Invoices.reverse() }; };
+  const result = await xeroFinancialSyncRun(f.request, f.dependencies);
+  assert.equal(result.run.status, 'completed');
+  assert.equal(f.items[0].xero_document_id, '00000000-0000-4000-8000-000000000001');
+  assert.equal(f.items[1].xero_document_id, '00000000-0000-4000-8000-000000000002');
+  assert.equal(f.tables.xero_financial_document_mappings.length, 2);
+});
+
+test('unconfirmed authorised responses never store mappings or replay on resume', async () => {
+  for (const changes of [{ Total: undefined }, { Total: 101 }, { Contact: {} }, { CurrencyCode: 'HKD' },
+    { Type: 'ACCPAY' }, { Status: 'DRAFT' }, { InvoiceNumber: 'OTHER' }, { InvoiceID: undefined }]) {
+    const f = fixture('authorised'); const send = f.dependencies.accountingFetch;
+    f.dependencies.accountingFetch = async (...args) => {
+      const response = await send(...args); Object.assign(response.Invoices[0], changes); return response;
+    };
+    await assert.rejects(xeroFinancialSyncRun(f.request, f.dependencies), { code: 'XERO_FINANCIAL_DOCUMENT_POST_UNCERTAIN' });
+    const run = f.tables.xero_financial_sync_runs[0];
+    assert.equal(run.status, 'processing'); assert.equal(f.items[0].status, 'failed');
+    assert.equal(f.items[0].error_code, 'XERO_FINANCIAL_CONFIRMATION_UNCERTAIN');
+    assert.equal(f.tables.xero_financial_document_mappings.length, 1);
+    assert.equal(f.tables.xero_financial_document_mappings[0].salesforce_id, 'invoice-2');
+    await assert.rejects(xeroFinancialSyncRun({ runId: f.runId, revision: run.revision }, f.dependencies), { code: 'XERO_FINANCIAL_STALE_WRITE' });
+    assert.equal(f.writes.length, 1, 'an uncertain posting is never repeated from the same preview');
+    assert.equal(f.client.calls.some((call) => call.name.startsWith('finish_')), false, 'uncertainty keeps the document-run barrier');
+  }
+});
+
+test('duplicate response transaction IDs cannot link distinct Salesforce documents', async () => {
+  const f = fixture('authorised'); const send = f.dependencies.accountingFetch;
+  f.dependencies.accountingFetch = async (...args) => {
+    const response = await send(...args); response.Invoices[1].InvoiceID = response.Invoices[0].InvoiceID; return response;
+  };
+  await assert.rejects(xeroFinancialSyncRun(f.request, f.dependencies), { code: 'XERO_FINANCIAL_DOCUMENT_POST_UNCERTAIN' });
+  assert.equal(f.tables.xero_financial_sync_runs[0].status, 'processing'); assert.ok(f.items.every((row) => row.status === 'failed'));
+  assert.equal(f.tables.xero_financial_document_mappings.length, 0);
+});
+
+test('an authorised update response with another transaction ID cannot replace the reviewed mapping', async () => {
+  const f = fixture('authorised');
+  f.xero.documents = f.items.map((item, index) => {
+    const source = item.source_payload;
+    return { id: `00000000-0000-4000-8000-00000000000${index + 1}`, type: 'ACCREC', collection: 'Invoices',
+      status: 'DRAFT', amountDue: 100, amountPaid: 0, amountCredited: 0, total: 100, currency: 'USD', contactId: source.contactId,
+      invoiceNumber: source.documentNumber, date: source.invoiceDate, dueDate: source.dueDate, reference: source.reference,
+      lineItems: source.lines.map((line) => ({ LineItemID: `line-${index}`, Description: line.description, Quantity: line.quantity,
+        UnitAmount: line.unitAmount, AccountCode: line.accountCode, TaxType: line.taxType })) };
+  });
+  const preview = buildFinancialClassifications(f.salesforce, f.xero, { productMappings: f.tables.xero_financial_product_mappings,
+    documentMappings: [] }, { postingMode: 'authorised' });
+  assert.ok(preview.rows.every((row) => row.action === 'safe_update' && row.status === 'eligible'));
+  f.items.forEach((item, index) => Object.assign(item, { source_payload: preview.rows[index], proposed_action: 'safe_update',
+    proposed_payload: preview.rows[index].proposedPayload, xero_payload: preview.rows[index].xero, differences: preview.rows[index].differences }));
+  const send = f.dependencies.accountingFetch;
+  f.dependencies.accountingFetch = async (...args) => {
+    const response = await send(...args); response.Invoices[0].InvoiceID = '99999999-9999-4999-8999-999999999999'; return response;
+  };
+  await assert.rejects(xeroFinancialSyncRun(f.request, f.dependencies), { code: 'XERO_FINANCIAL_DOCUMENT_POST_UNCERTAIN' });
+  assert.equal(f.tables.xero_financial_sync_runs[0].status, 'processing'); assert.equal(f.items[0].error_code, 'XERO_FINANCIAL_CONFIRMATION_UNCERTAIN');
+  assert.equal(f.items[1].status, 'updated'); assert.equal(f.tables.xero_financial_document_mappings.length, 1);
+  assert.equal(f.tables.xero_financial_document_mappings[0].salesforce_id, 'invoice-2');
 });
 
 test('a changed source is isolated while the unchanged approved document proceeds', async () => {
@@ -109,7 +181,7 @@ test('saved mappings retrieve every page rather than silently stopping at 1000 r
 test('background check uses modified-since and detects source, lock and aged snapshots', async () => {
   const id = randomUUID(); const controls = { bankMappings: [], documentMappings: [], productMappings: [] };
   const run = { id, source_snapshot_at: '2026-09-15T10:00:00Z', control_totals: { workflowSnapshot: {
-    reconciliationVersion: XERO_RECONCILIATION_VERSION, controlsFingerprint: createHash('sha256').update(JSON.stringify(controls)).digest('hex'), organisation: { periodLockDate: null, endOfYearLockDate: null },
+    reconciliationVersion: XERO_RECONCILIATION_VERSION, controlsFingerprint: createHash('sha256').update(JSON.stringify(controls)).digest('hex'), organisation: { periodLockDate: null, endOfYearLockDate: null, baseCurrency: null },
   } } };
   const calls = []; const deps = { client: database({ xero_financial_sync_runs: [run] }), connection: {}, now: Date.parse('2026-09-15T10:10:00Z'),
     querySalesforce: async () => Array.from({ length: 8 }, () => ({ records: [] })),
@@ -198,4 +270,25 @@ test('old saved rule versions force a complete new check without using old selec
     source_snapshot_at: new Date().toISOString(), control_totals: { workflowSnapshot: { controlsFingerprint: 'old' } } }] }), connection: {},
     querySalesforce: async () => { throw new Error('Old classifications should invalidate before probing providers'); } });
   assert.equal(result.changed, true);
+});
+
+
+test('authorised runs apply the exact persisted mode and never promote a reviewed draft by request override', async () => {
+  const f = fixture('authorised');
+  const result = await xeroFinancialSyncRun(f.request, f.dependencies);
+  assert.equal(result.run.status, 'completed');
+  assert.equal(result.run.postingMode, 'authorised');
+  assert.ok(f.writes[0].body.Invoices.every((row) => row.Status === 'AUTHORISED'));
+  const draft = fixture();
+  await assert.rejects(xeroFinancialSyncRun({ ...draft.request, postingMode: 'authorised' }, draft.dependencies), { code: 'XERO_FINANCIAL_POSTING_MODE_CHANGED' });
+  assert.equal(draft.writes.length, 0); assert.equal(draft.client.calls.length, 0);
+});
+
+test('readiness changed after authorised preview blocks only that selected record before Xero writes', async () => {
+  const f = fixture('authorised'); f.salesforce.buyers[0].File__c = null;
+  const result = await xeroFinancialSyncRun(f.request, f.dependencies);
+  assert.equal(result.run.status, 'partial');
+  assert.deepEqual(f.writes[0].body.Invoices.map((row) => row.InvoiceNumber), ['INV-2']);
+  assert.equal(f.items[0].error_code, 'XERO_FINANCIAL_REVIEW_CHANGED');
+  assert.match(f.items[0].error_message, /issued source file/);
 });

@@ -737,23 +737,38 @@ export async function resolveXeroTenant({ accessToken, stored, env, fetchImpl })
 
 export async function listXeroContactsForRename(connection, { env, fetchImpl }) {
   const contacts = [];
-  let page = 1;
-  while (true) {
+  const seen = new Set();
+  let expectedCount = null; let expectedPages = null;
+  const incomplete = () => xeroContactSyncError('The complete Xero contact list could not be verified. Refresh before changing contacts.', 502, 'XERO_CONTACT_LIST_INCOMPLETE');
+  for (let page = 1; page <= 1000; page += 1) {
     const params = new URLSearchParams({ includeArchived: 'true', page: String(page), pageSize: '100' });
     const response = await xeroAccountingFetch(connection, `/Contacts?${params}`, {
-      method: 'GET',
-      retryOnRateLimit: true,
-      env,
-      fetchImpl,
+      method: 'GET', retryOnRateLimit: true, env, fetchImpl,
     });
-    const pageContacts = Array.isArray(response.Contacts) ? response.Contacts : [];
-    contacts.push(...pageContacts.filter((contact) => contact.ContactID).map(toXeroContactForRename));
-    const pageCount = Number(response.pagination?.pageCount || 0);
-    if ((pageCount && page >= pageCount) || pageContacts.length < 100) break;
-    page += 1;
+    if (!Array.isArray(response.Contacts) || response.Contacts.length > 100) throw incomplete();
+    const pageContacts = response.Contacts;
+    const pagination = response.pagination;
+    for (const [field, previous] of [['itemCount', expectedCount], ['pageCount', expectedPages]]) {
+      if (pagination?.[field] === undefined) { if (previous !== null) throw incomplete(); continue; }
+      const value = pagination[field];
+      if (!Number.isInteger(value) || value < 0 || (previous !== null && previous !== value)) throw incomplete();
+      if (field === 'itemCount') expectedCount = value; else expectedPages = value;
+    }
+    if ((expectedPages === 0 && pageContacts.length > 0) || expectedPages > 1000 || (pagination?.page !== undefined && pagination.page !== page)
+      || (pagination?.pageSize !== undefined && pagination.pageSize !== 100)) throw incomplete();
+    for (const contact of pageContacts) {
+      if (!trimValue(contact.ContactID) || !trimValue(contact.Name) || !trimValue(contact.ContactStatus) || seen.has(contact.ContactID)) throw incomplete();
+      seen.add(contact.ContactID); contacts.push(toXeroContactForRename(contact));
+    }
+    const lastPage = expectedPages !== null ? page >= expectedPages : pageContacts.length < 100;
+    if (!lastPage && pageContacts.length !== 100) throw incomplete();
+    if (lastPage) {
+      if (expectedCount !== null && expectedCount !== contacts.length) throw incomplete();
+      return contacts;
+    }
     await sleep(xeroContactSyncDelayMs(env));
   }
-  return contacts;
+  throw incomplete();
 }
 
 export async function createXeroContactsBatch(connection, contacts, runId, { env = process.env, fetchImpl = fetch } = {}) {

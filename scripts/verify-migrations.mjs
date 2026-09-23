@@ -29,6 +29,10 @@ const migrationSources = await Promise.all(names.map(async (name) => ({
   sql: await readFile(new URL(name, migrationDirectory), 'utf8'),
 })));
 const releaseMigrationNames = new Set([
+  '20260923222821_xero_grouped_preservation_link.sql',
+  '20260923213339_xero_payment_reference_link.sql',
+  '20260923210832_xero_financial_selection_scope.sql',
+  '20260923182327_xero_contact_identity_decisions.sql',
   '20260921061845_dashboard_bank_charges.sql',
   '20260920154626_dashboard_finance_settings.sql',
   '20260920105042_market_trader_workspace.sql',
@@ -71,6 +75,15 @@ async function assertRows(sql, expected, label, values = []) {
 }
 
 async function verifyRuntimeObjects(label) {
+  const identityTables = ['xero_contact_identity_decisions', 'xero_contact_identity_audit'];
+  await assertRows(`select count(*)::int from pg_class c join pg_namespace n on n.oid=c.relnamespace
+    where n.nspname='public' and c.relname=any($1::text[]) and c.relrowsecurity`, 2, `${label} contact identity RLS`, [identityTables]);
+  await assertRows(`select count(*)::int from unnest($1::text[]) t cross join unnest(array['anon','authenticated']) r
+    cross join unnest(array['SELECT','INSERT','UPDATE','DELETE']) p where has_table_privilege(r,'public.'||t,p)`, 0, `${label} contact identity browser access denied`, [identityTables]);
+  await assertRows(`select count(*)::int from unnest(array['anon','authenticated']) r where has_function_privilege(r,
+    'public.save_xero_contact_identity_v1(uuid,uuid,text,text,text,text,integer,uuid,text)','EXECUTE')`, 0, `${label} contact identity browser RPC denied`);
+  await assertRows(`select count(*)::int from unnest(array['UPDATE','DELETE','TRUNCATE']) p
+    where has_table_privilege('service_role','public.xero_contact_identity_audit',p)`, 0, `${label} contact identity audit immutable for service`);
   const releaseTables = ['company_finance_settings', 'company_finance_setting_events', 'market_trader_workspaces', 'workflow_daily_metrics', 'collaboration_create_requests', 'account_insight_report_presets', 'account_insight_report_preset_events', 'hedge_fcbs_settlement_operations'];
   await assertRows(
     `select count(*)::int from pg_class c join pg_namespace n on n.oid = c.relnamespace
@@ -88,7 +101,23 @@ async function verifyRuntimeObjects(label) {
      where has_table_privilege('service_role', 'public.' || t, p)`,
     releaseTables.length * 2, `${label} report presets and FCBS service-role access`, [releaseTables],
   );
+  await assertRows(
+    `select count(*)::int from information_schema.columns where table_schema='public'
+     and table_name='xero_financial_payment_mappings' and column_name='retained_reference'
+     and data_type='jsonb' and is_nullable='NO' and column_default='''{}''::jsonb'`,
+    1, `${label} retained payment evidence has a compatible empty default`,
+  );
+  await assertRows(
+    `select count(*)::int from pg_index i join pg_class c on c.oid=i.indexrelid
+     join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and i.indisunique and i.indisvalid
+     and c.relname=any($1::text[])`,
+    2, `${label} payment identities have unique canonical ownership`,
+    [['xero_financial_payment_mappings_canonical_sf_uidx', 'xero_financial_payment_mappings_canonical_xero_uidx']],
+  );
   const releaseFunctions = [
+    'link_xero_grouped_document_v1', 'xero_grouped_salesforce_id_v1', 'protect_xero_grouped_mapping_v1',
+    'link_xero_payment_references_v1',
+    'authorise_xero_financial_sync_run_v1',
     'save_company_finance_settings', 'save_company_finance_settings_v2', 'valid_company_bank_charges',
     'save_market_trader_workspace',
     'save_account_insight_report_preset', 'resolve_variable_charge_post_invoice_change',
@@ -96,6 +125,19 @@ async function verifyRuntimeObjects(label) {
     'validate_hedge_fcbs_document', 'protect_hedge_fcbs_issued', 'protect_hedge_fcbs_link_identity',
     'assert_hedge_fcbs_document', 'set_hedge_fcbs_settlement_status', 'save_hedge_fcbs_settlement',
   ];
+  await assertRows(
+    `select count(*)::int from pg_index i join pg_class c on c.oid=i.indexrelid
+     join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and i.indisunique and i.indisvalid
+     and c.relname=any($1::text[])`,
+    4, `${label} canonical ownership and one active document batch are enforced`,
+    [['xero_financial_documents_canonical_sf_uidx', 'xero_financial_documents_canonical_xero_uidx',
+      'xero_financial_products_canonical_sf_uidx', 'xero_financial_one_processing_document_run_uidx']],
+  );
+  await assertRows(
+    `select count(*)::int from pg_trigger where tgrelid='public.xero_financial_document_mappings'::regclass
+     and tgname='protect_xero_grouped_mapping' and not tgisinternal and tgenabled='O'`,
+    1, `${label} accepted grouped document proof remains protected`,
+  );
   await assertRows(
     `select count(*)::int from pg_proc p join pg_namespace n on n.oid=p.pronamespace
      where n.nspname='public' and p.proname=any($1::text[]) and not p.prosecdef

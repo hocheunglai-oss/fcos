@@ -7,12 +7,14 @@ import {
   buildXeroAccountingPayload,
   buildFinancialClassifications,
   classifyXeroFinancialPayment,
-  classifyXeroFinancialDocument,
+  classifyXeroFinancialDocument as classifyDocument,
   deriveXeroProductMappingProposals,
   isProtectedXeroDocument,
   xeroFinancialRateSnapshot,
 } from '../api/_xeroFinancialSync.js';
 import { summarizeXeroFinancialReconciliation } from '../src/lib/xeroFinancialReconciliation.js';
+
+const classifyXeroFinancialDocument = (source, candidates, options = {}) => classifyDocument(source, candidates, { ...options, organisation: { baseCurrency: 'USD', ...options.organisation } });
 
 const source = {
   salesforceObject: 'Invoice__c',
@@ -49,7 +51,7 @@ function xero(overrides = {}) {
     amountDue: 1000,
     amountPaid: 0,
     amountCredited: 0,
-    lineItems: [{ Description: 'Legacy line', Quantity: 1, UnitAmount: 1000, AccountCode: '200', TaxType: 'NONE' }],
+    lineItems: [{ LineItemID: 'line-1', Description: 'Legacy line', Quantity: 1, UnitAmount: 1000, AccountCode: '200', TaxType: 'NONE' }],
     ...overrides,
   };
 }
@@ -101,8 +103,31 @@ test('exact protected Xero history can be durably linked without changing accoun
   assert.deepEqual(classified.differences, []);
 });
 
+test('accepted preservation cannot become an update after settlement reversal, unlocked period or source amendment', () => {
+  const mapping = { xero_document_id: 'xero-invoice-1', protected_legacy: true,
+    retained_differences: { reviewFingerprint: 'previously-accepted-evidence' } };
+  for (const document of [xero({ status: 'AUTHORISED' }), xero({ status: 'DRAFT' }),
+    xero({ status: 'AUTHORISED', amountPaid: 0, amountCredited: 0, amountDue: 1000 })]) {
+    const result = classifyXeroFinancialDocument({ ...source, sourceFingerprint: 'amended-source' }, [document], { storedMapping: mapping });
+    assert.equal(result.action, 'protected_legacy'); assert.equal(result.reviewRequired, true);
+    assert.equal(result.acceptedLegacy, false); assert.equal(result.status, 'eligible');
+  }
+  const incompatible = classifyXeroFinancialDocument({ ...source, lines: [{ ...source.lines[0], accountCode: 'different-account' }] }, [xero({ status: 'AUTHORISED' })], { storedMapping: mapping });
+  assert.equal(incompatible.action, 'protected_legacy'); assert.equal(incompatible.status, 'protected'); assert.ok(incompatible.blockers.length);
+});
+
+test('changed acceptance requires review even when a preserved document now has no visible differences', () => {
+  const exact = xero({ status: 'AUTHORISED', invoiceNumber: source.documentNumber, date: source.invoiceDate,
+    dueDate: source.dueDate, reference: source.reference,
+    lineItems: [{ Description: 'HSFO 380', Quantity: 10, UnitAmount: 100, AccountCode: '200', TaxType: 'NONE' }] });
+  const result = classifyXeroFinancialDocument(source, [exact], { storedMapping: { xero_document_id: exact.id,
+    protected_legacy: true, retained_differences: { reviewFingerprint: 'different-earlier-source-evidence' } } });
+  assert.equal(result.action, 'protected_legacy'); assert.deepEqual(result.differences, []);
+  assert.equal(result.reviewRequired, true); assert.equal(result.acceptedLegacy, false); assert.equal(result.status, 'eligible');
+});
+
 test('stored Xero payment links must still exist and match current Salesforce values', () => {
-  const payment = { Id: 'payment-1', Name: 'PAY-1', Amount__c: 500, Date__c: '2026-07-01', Bank__c: 'DBS', STEM__c: 'stem-1', Account__c: 'account-1', RecordType: { DeveloperName: 'Receivable' } };
+  const payment = { Id: 'payment-1', CurrencyIsoCode: 'USD', Name: 'PAY-1', Amount__c: 500, Date__c: '2026-07-01', Bank__c: 'DBS', STEM__c: 'stem-1', Account__c: 'account-1', RecordType: { DeveloperName: 'Receivable' } };
   const documentMapping = { id: 'document-map-1', xero_document_id: 'xero-invoice-1', xero_document_type: 'ACCREC', xero_contact_id: 'contact-1', salesforce_object: 'Invoice__c', salesforce_id: 'invoice-1', retained_differences: { stemId: 'stem-1', accountId: 'account-1' } };
   const currentDocument = { id: 'xero-invoice-1', type: 'ACCREC', status: 'AUTHORISED', contactId: 'contact-1', currency: 'USD', amountDue: 500 };
   const fingerprint = classifyXeroFinancialPayment(payment, {
@@ -199,7 +224,7 @@ test('identity conflicts block an otherwise matching transaction', () => {
 });
 
 test('Xero payload preserves authorised state for safe updates and uses Salesforce detailed lines', () => {
-  const payload = buildXeroAccountingPayload(source, 'xero-invoice-1', 'AUTHORISED');
+  const payload = buildXeroAccountingPayload(source, 'xero-invoice-1', 'AUTHORISED', xero());
   assert.equal(payload.InvoiceID, 'xero-invoice-1');
   assert.equal(payload.InvoiceNumber, '24509T-INV-1');
   assert.equal(payload.Status, 'AUTHORISED');
@@ -213,6 +238,7 @@ test('stored Salesforce document links resolve through the current source row', 
     buyers: [{
       Id: source.salesforceId,
       Name: source.documentNumber,
+      CurrencyIsoCode: 'USD',
       Amount__c: 1000,
       Invoice_Date__c: source.invoiceDate,
       Invoice_Due_Date__c: source.dueDate,
@@ -243,7 +269,7 @@ test('stored Salesforce document links resolve through the current source row', 
     documents: [xero({ invoiceNumber: source.documentNumber })],
     inactiveDocuments: [],
     contacts: [{ id: 'contact-1', name: 'Buyer One', status: 'ACTIVE' }],
-    organisation: {},
+    organisation: { baseCurrency: 'USD' },
   };
   const stored = {
     productMappings: [{
@@ -427,4 +453,35 @@ test('financial handlers and Finance review UI are registered without a schedule
   assert.doesNotMatch(financialService, /RecordType\.DeveloperName IN \('Receivable','Payable'\)/);
   assert.doesNotMatch(financialService, /AND Is_Deposit__c = false/);
   assert.doesNotMatch(`${server}\n${xeroHandlers}`, /xeroFinancialSyncCron/);
+});
+
+
+test('new exact payments require current same-currency bank and org evidence and an unlocked date', () => {
+  const payment = { Id: 'payment-new', Name: 'PAY-NEW', CurrencyIsoCode: 'USD', Amount__c: 50, Date__c: '2026-09-01', Bank__c: 'DBS', STEM__c: 'stem', Account__c: 'account', RecordType: { DeveloperName: 'Receivable' } };
+  const mapping = { id: 'map', salesforce_object: 'Invoice__c', salesforce_id: 'sf-invoice', xero_document_id: 'xero-invoice', xero_document_type: 'ACCREC', xero_contact_id: 'contact', retained_differences: { stemId: 'stem', accountId: 'account' } };
+  const context = { existingBySalesforce: new Map(), documentMappingById: new Map(), documentBySupplierInvoice: new Map(), buyerByStem: new Map([['stem', [mapping]]]), bankByName: new Map([['DBS', { xero_bank_account_id: 'bank' }]]), xeroPayments: [], currentDocumentById: new Map([['xero-invoice', { id: 'xero-invoice', type: 'ACCREC', status: 'AUTHORISED', contactId: 'contact', currency: 'USD', amountDue: 100 }]]), bankAccounts: new Map([['bank', { CurrencyCode: 'USD' }]]), organisation: { baseCurrency: 'USD' } };
+  const good = classifyXeroFinancialPayment(payment, context);
+  assert.equal(good.action, 'payment_apply'); assert.equal(good.currency, 'USD');
+  // Captured from v6: named-bank review/source identities must not churn.
+  assert.equal(good.sourceFingerprint, '73768189067ad2eddd69801ee460d6934299c5470261f43854598b8dd5d17bf3');
+  assert.equal(good.reviewFingerprint, '2f196ef79cb1f3243dafeec6eef49fac530dd4d530348eb3d2489d4ee63202c8');
+  const unapproved = classifyXeroFinancialPayment(payment, { ...context, bankByName: new Map() });
+  assert.ok(unapproved.blockers.includes('No approved Xero bank mapping exists for DBS.'));
+  assert.equal(unapproved.blockers.some((message) => /Salesforce payment bank is missing/.test(message)), false);
+  for (const Bank__c of [null, '', '   ', '\t\n']) {
+    let lookups = 0;
+    const blankMapped = classifyXeroFinancialPayment({ ...payment, Bank__c }, { ...context,
+      bankByName: { get(key) { lookups += 1; assert.equal(key, ''); return { xero_bank_account_id: 'bank' }; } } });
+    assert.equal(lookups, 0, 'an erroneous empty-name mapping must never be looked up');
+    assert.equal(blankMapped.action, 'blocked'); assert.equal(blankMapped.status, 'blocked'); assert.equal(blankMapped.proposedPayment, null);
+    assert.ok(blankMapped.blockers.includes('Salesforce payment bank is missing. Identify the actual bank in Salesforce, then recheck this payment.'));
+    assert.notEqual(blankMapped.reviewFingerprint, good.reviewFingerprint);
+  }
+  for (const change of [{ bankAccounts: new Map() }, { bankAccounts: new Map([['bank', { CurrencyCode: 'HKD' }]]) }, { organisation: { baseCurrency: 'HKD' } }, { organisation: { baseCurrency: 'USD', periodLockDate: '2026-09-02' } }]) {
+    const result = classifyXeroFinancialPayment(payment, { ...context, ...change });
+    assert.equal(result.status, 'blocked'); assert.equal(result.proposedPayment, null);
+    assert.notEqual(result.reviewFingerprint, good.reviewFingerprint);
+  }
+  const waiting = classifyXeroFinancialPayment(payment, { ...context, buyerByStem: new Map() });
+  assert.ok(waiting.blockerCodes.every((code) => code === 'invoice_link_pending'));
 });

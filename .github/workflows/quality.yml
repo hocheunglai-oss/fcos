@@ -41,7 +41,15 @@ jobs:
           version: 2.113.0
       - id: start-supabase
         run: supabase start -x studio,imgproxy,edge-runtime,logflare,vector,supavisor
+        env:
+          # setup-cli forces GHCR; a blank override restores the pinned CLI's
+          # built-in registry fallback when that registry throttles downloads.
+          SUPABASE_INTERNAL_IMAGE_REGISTRY: ''
       - run: FCOS_MIGRATION_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres FCOS_REQUIRE_LIVE_MIGRATION_CHECK=1 npm run verify:migrations
+      - name: Verify concurrent grouped invoice preservation
+        run: node --test tests/xeroGroupedPreservationDatabase.test.js
+        env:
+          FCOS_GROUPED_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
       - name: Stop temporary Supabase services
         if: ${{ always() && steps.start-supabase.outcome != 'skipped' && steps.start-supabase.outcome != '' }}
         run: supabase stop --no-backup

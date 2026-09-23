@@ -1,4 +1,6 @@
 import { createSign } from 'node:crypto';
+import { fcosSalesforceEnvironment } from '../config/fcosConnections.js';
+import { parseSalesforceCurrencyEvidence, salesforceUserInfoEnvelope } from './_salesforceCurrency.js';
 import { salesforceReadRetryDelay } from './_salesforceReadRetry.js';
 import { requireExternalActionGate } from './_externalActionGates.js';
 import {
@@ -353,6 +355,36 @@ export async function sfDownload(path, { retryOnExpiredSession = true } = {}) {
       durationMs: Date.now() - startedAt,
       limit,
     });
+  }
+}
+
+// SOAP getUserInfo is read-only and supplies currency evidence in single-currency orgs
+// where REST describes have no CurrencyIsoCode field.
+export async function sfUserCurrencyInfo() {
+  const expectedInstance = fcosSalesforceEnvironment('production').instanceUrl;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const accessToken = await getAccessToken({ forceRefresh: attempt > 0 });
+    if (getInstanceUrl().replace(/\/$/, '') !== expectedInstance) {
+      throw Object.assign(new Error('Salesforce currency lookup requires the configured Production organization.'), { code: 'SALESFORCE_ORG_MISMATCH' });
+    }
+    const startedAt = Date.now();
+    let limit = null;
+    try {
+      const response = await fetch(`${expectedInstance}/services/Soap/u/${getApiVersion().replace(/^v/, '')}`, {
+        method: 'POST',
+        headers: { 'content-type': 'text/xml; charset=UTF-8', SOAPAction: 'getUserInfo' },
+        body: salesforceUserInfoEnvelope(accessToken),
+        redirect: 'error',
+        signal: AbortSignal.timeout(30000),
+      });
+      limit = parseSforceLimitInfo(response.headers.get('sforce-limit-info'));
+      const xml = await response.text();
+      if (attempt === 0 && /INVALID_SESSION_ID/.test(xml)) continue;
+      if (!response.ok) throw Object.assign(new Error('Salesforce company currency lookup failed.'), { code: 'SALESFORCE_CURRENCY_LOOKUP_FAILED', status: response.status });
+      return parseSalesforceCurrencyEvidence(xml);
+    } finally {
+      recordSalesforceCall({ durationMs: Date.now() - startedAt, limit });
+    }
   }
 }
 

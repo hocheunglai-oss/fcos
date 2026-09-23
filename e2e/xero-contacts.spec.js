@@ -147,3 +147,100 @@ test('Contacts table cells fit without overlap just above the wide-view threshol
   expect(measuredZh.badgeOverflow).toEqual([]);
   await page.screenshot({ path: testInfo.outputPath('contacts-threshold-zh.png'), fullPage: true });
 });
+
+test('reviewed Xero-only verification and revocation use the current fingerprint and audited revision', async ({ page }) => {
+  await page.goto('/e2e/fixtures/xero-contacts.html?resolution=1');
+  await page.getByRole('tab', { name: 'Contacts', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Review Xero-only identity' })).toHaveCount(1);
+  await page.getByRole('button', { name: 'Review Xero-only identity' }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toContainText('No decision recorded');
+  await expect(dialog.getByRole('button', { name: 'Verify Xero-only' })).toBeDisabled();
+  await dialog.getByLabel('Evidence reference').fill('Contact registry case 31');
+  await dialog.getByLabel('Evidence note').fill('Confirmed this Xero counterparty has no Salesforce Account.');
+  await dialog.getByRole('checkbox').click();
+  await dialog.getByRole('button', { name: 'Verify Xero-only' }).click();
+  await expect(dialog).toBeHidden();
+  const saves = await page.evaluate(() => window.contactsFixture.requests.filter(({ name }) => name === 'xeroContactIdentitySave'));
+  expect(saves[0].body).toMatchObject({ tenantId: 'f0a97252-7bc7-47b6-a8cf-ef381671aeca',
+    contactId: '0cb5d302-8f2d-4b08-8902-0553d01df644', decision: 'verified_xero_only',
+    expectedRevision: 0, expectedFingerprint: 'a'.repeat(64), reviewed: true });
+  await page.getByRole('button', { name: 'Review Xero-only identity' }).click();
+  await expect(dialog).toContainText('Verified Xero-only');
+  await expect(dialog).toContainText('Contact registry case 31');
+  await dialog.getByLabel('Evidence reference').fill('Contact registry case 32');
+  await dialog.getByLabel('Evidence note').fill('Revoking the prior identity verification after review.');
+  await dialog.getByRole('checkbox').click();
+  await dialog.getByRole('button', { name: 'Revoke verification' }).click();
+  const second = await page.evaluate(() => window.contactsFixture.requests.filter(({ name }) => name === 'xeroContactIdentitySave'));
+  expect(second[1].body).toMatchObject({ decision: 'revoked', expectedRevision: 1, reviewed: true });
+  await page.getByRole('button', { name: '繁體中文' }).click();
+  await expect(page.getByRole('button', { name: '檢閱 Xero 獨有身分' })).toBeVisible();
+});
+
+test('missing-contact repair is separately reviewed and sends only explicit selected rows', async ({ page }) => {
+  const isMobile = (page.viewportSize()?.width || 0) < 1200;
+  if (!isMobile) await page.setViewportSize({ width: 1600, height: 900 });
+  await page.goto('/e2e/fixtures/xero-contacts.html?resolution=1');
+  await page.getByRole('tab', { name: 'Contacts', exact: true }).click();
+  const row = isMobile
+    ? page.locator('.xero-contacts-review__compact').getByRole('article', { name: /No Xero match/ }).filter({ hasText: 'Missing Harbour Buyer' })
+    : page.locator('.xero-contacts-review__wide').getByRole('row').filter({ hasText: 'Missing Harbour Buyer' });
+  await row.getByRole('checkbox').click();
+  await expect(page.getByText('1 missing contacts selected separately')).toBeVisible();
+  const create = page.getByRole('button', { name: 'Create selected missing contacts' });
+  await expect(create).toBeDisabled();
+  await page.getByText('I reviewed these missing Salesforce contacts').click();
+  await expect(create).toBeEnabled();
+  await row.getByRole('checkbox').click();
+  await row.getByRole('checkbox').click();
+  await expect(create).toBeDisabled();
+  await page.getByText('I reviewed these missing Salesforce contacts').click();
+  await expect(create).toBeEnabled();
+  await create.click();
+  await expect.poll(() => page.evaluate(() => window.contactsFixture.requests.filter(({ name }) => name === 'xeroContactRepairApply').length)).toBe(1);
+  const repairs = await page.evaluate(() => window.contactsFixture.requests.filter(({ name }) => name === 'xeroContactRepairApply'));
+  expect(repairs).toHaveLength(1);
+  expect(repairs[0].body).toEqual({ runId: 'contacts-layout-fixture', rowIds: ['missing-contact-row'], reviewed: true });
+  await expect(page.getByText('0 missing contacts selected separately')).toBeVisible();
+});
+
+test('unconfirmed identity and repair responses do not close review or report created contacts', async ({ page }) => {
+  await page.goto('/e2e/fixtures/xero-contacts.html?resolution=1&identityMalformed=1&repairMalformed=1');
+  await page.getByRole('tab', { name: 'Contacts', exact: true }).click();
+  await page.getByRole('button', { name: 'Review Xero-only identity' }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByLabel('Evidence reference').fill('Contact registry case 31');
+  await dialog.getByLabel('Evidence note').fill('Confirmed this Xero counterparty has no Salesforce Account.');
+  await dialog.getByRole('checkbox').click();
+  await dialog.getByRole('button', { name: 'Verify Xero-only' }).click();
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('alert')).toContainText('result is uncertain');
+  await expect(dialog.getByRole('button', { name: 'Verify Xero-only' })).toBeDisabled();
+  await dialog.getByRole('button', { name: 'Cancel' }).click();
+  const isMobile = (page.viewportSize()?.width || 0) < 1200;
+  if (!isMobile) await page.setViewportSize({ width: 1600, height: 900 });
+  const row = isMobile
+    ? page.locator('.xero-contacts-review__compact').getByRole('article', { name: /No Xero match/ }).filter({ hasText: 'Missing Harbour Buyer' })
+    : page.locator('.xero-contacts-review__wide').getByRole('row').filter({ hasText: 'Missing Harbour Buyer' });
+  await row.getByRole('checkbox').click();
+  await page.getByText('I reviewed these missing Salesforce contacts').click();
+  await page.getByRole('button', { name: 'Create selected missing contacts' }).click();
+  await expect.poll(() => page.evaluate(() => window.contactsFixture.requests.filter(({ name }) => name === 'xeroContactRepairApply').length)).toBe(1);
+  await expect(page.getByText('0 missing contacts selected separately')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Create selected missing contacts' })).toBeDisabled();
+  const previews = await page.evaluate(() => window.contactsFixture.requests.filter(({ name }) => name === 'xeroPortalContactLifecyclePreview'));
+  expect(previews).toHaveLength(0);
+});
+
+test('ordinary contact apply review resets when the selected rows change', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/e2e/fixtures/xero-contacts.html');
+  await page.getByRole('tab', { name: 'Contacts', exact: true }).click();
+  await page.getByText('Reviewed', { exact: true }).click();
+  const apply = page.getByRole('button', { name: 'Apply selected' });
+  await expect(apply).toBeEnabled();
+  const row = page.getByRole('article', { name: /PacificMarineFuelTrading/ });
+  await row.getByRole('checkbox').click();
+  await expect(apply).toBeDisabled();
+});

@@ -17,6 +17,11 @@ const accounts = [
 const taxRates = [{ TaxType: 'NONE', Status: 'ACTIVE', DisplayTaxRate: 0, EffectiveRate: 0, CanApplyToRevenue: true, CanApplyToExpenses: true }];
 const actor = { id: 'd1e772f5-9c10-4566-99b3-67f4c4e75a62', email: 'finance@example.test' };
 const initial = () => petroleumMappingPlan(products, accounts, taxRates, []);
+const extras = [
+  { Id: 'a02000000000001AAA', Product2Id__c: products[2].Id, Product2Id__r: { Name: products[2].Name }, Buyer_Invoice__c: 'buyer-1' },
+  { Id: 'a02000000000002AAA', Product2Id__c: products[2].Id, Product2Id__r: { Name: products[2].Name }, Supplier_Invoice__c: 'supplier-1' },
+  { Id: 'a02000000000003AAA', Product2Id__c: products[3].Id, Product2Id__r: { Name: products[3].Name }, Buyer_Invoice__c: 'buyer-2' },
+];
 
 test('exact Salesforce record type controls both directions, including inactive historical products', () => {
   const plan = initial();
@@ -28,7 +33,21 @@ test('exact Salesforce record type controls both directions, including inactive 
   ]);
 });
 
-test('compliant approvals are idempotent; conflicting/disabled petroleum mappings change, others remain untouched', () => {
+test('selected invoice extra relationships receive both defaults, with no product-name or catalog-wide inference', () => {
+  const plan = petroleumMappingPlan(products, accounts, taxRates, [], { extras });
+  assert.equal(plan.productCount, 2);
+  assert.equal(plan.extraProductCount, 2);
+  assert.equal(plan.eligibleProductCount, 4);
+  assert.equal(plan.approvedCount, 8);
+  assert.deepEqual(plan.changes.slice(4).map(({ after }) => [after.salesforce_product_id, after.direction, after.xero_account_code, after.xero_tax_type]), [
+    [products[2].Id, 'buyer', '41100', 'NONE'], [products[2].Id, 'supplier', '51100', 'NONE'],
+    [products[3].Id, 'buyer', '41100', 'NONE'], [products[3].Id, 'supplier', '51100', 'NONE'],
+  ]);
+  assert.ok(!plan.changes.some(({ after }) => after.salesforce_product_id === products[4].Id));
+  assert.deepEqual(petroleumMappingPlan(products, accounts, taxRates, [], { extraProducts: extras }).changes, plan.changes);
+});
+
+test('existing approved overrides, disabled mappings and unrelated mappings remain intact', () => {
   const mappings = initial().changes.map(({ after }, index) => ({ ...after, id: `mapping-${index}`, revision: 7 }));
   const other = { ...mappings[0], id: 'non-fuel', salesforce_product_id: products[2].Id, xero_account_code: '99999' };
   mappings.push(other);
@@ -37,9 +56,16 @@ test('compliant approvals are idempotent; conflicting/disabled petroleum mapping
   mappings[1].enabled = false;
   mappings[2].xero_account_code = '40000';
   const plan = petroleumMappingPlan(products, accounts, taxRates, mappings);
-  assert.equal(plan.changes.length, 3);
-  assert.ok(plan.changes.every(({ before }) => before.revision === 7 && before.id !== 'non-fuel'));
+  assert.equal(plan.changes.length, 0);
+  assert.equal(plan.preservedCount, 4);
+  assert.equal(plan.preservedOverrideCount, 3);
+  assert.equal(plan.approvedCount, 3);
   assert.equal(other.xero_account_code, '99999');
+  const withExtras = petroleumMappingPlan(products, accounts, taxRates, mappings, { extras });
+  assert.equal(withExtras.changes.length, 3);
+  assert.equal(withExtras.preservedCount, 5);
+  assert.equal(withExtras.preservedOverrideCount, 4);
+  assert.ok(withExtras.changes.every(({ before }) => before === null));
 });
 
 test('missing, archived, duplicate or wrong account type and invalid NONE tax all fail before writes', () => {
@@ -50,6 +76,11 @@ test('missing, archived, duplicate or wrong account type and invalid NONE tax al
     assert.throws(() => petroleumMappingPlan(products, accounts, invalid, []), /zero-rate NONE/);
   }
   assert.throws(() => petroleumMappingPlan([products[0], products[0]], accounts, taxRates, []), /duplicated/);
+  assert.throws(() => petroleumMappingPlan(products, accounts, taxRates, [], { extras: [extras[0], extras[0]] }), /duplicated/);
+  assert.throws(() => petroleumMappingPlan(products, accounts, taxRates, [], { extras: [{ ...extras[0], Product2Id__c: '01t000000000099AAA' }] }), /incomplete or inconsistent/);
+  assert.throws(() => petroleumMappingPlan(products, accounts, taxRates, [], { extras: [{ ...extras[0], Product2Id__r: { Name: 'Different' } }] }), /incomplete or inconsistent/);
+  assert.throws(() => petroleumMappingPlan(products, accounts, taxRates, [], { extras: [{ Product2Id__c: products[2].Id }] }), /incomplete or duplicated/);
+  assert.throws(() => petroleumMappingPlan(products, accounts, taxRates, [{ ...initial().changes[0].after }, { ...initial().changes[0].after }]), /duplicated/);
 });
 
 function fakeStore({ mappings = [], failureAt = -1, auditFails = false } = {}) {
@@ -64,28 +95,39 @@ function fakeStore({ mappings = [], failureAt = -1, auditFails = false } = {}) {
       assert.equal(events[0]?.outcome, 'started');
       calls.push(args);
       if (calls.length === failureAt) return { error: { code: '40001' } };
-      mappings.push({ ...initial().changes[calls.length - 1].after, id: `mapping-${calls.length}`, revision: 1 });
+      mappings.push({ direction: args.p_direction, salesforce_product_id: args.p_salesforce_product_id,
+        salesforce_product_name: args.p_salesforce_product_name, xero_account_code: args.p_xero_account_code,
+        xero_account_name: args.p_xero_account_name, xero_tax_type: args.p_xero_tax_type,
+        enabled: args.p_enabled, id: `mapping-${calls.length}`, revision: 1 });
       return { data: mappings.at(-1) };
     },
   };
   return { client, calls, events, mappings };
 }
 
-test('automatic saves use signed-in actor, expected revisions and durable before/after policy audit', async () => {
+test('automatic saves create only missing defaults with signed-in actor and durable policy audit', async () => {
   const store = fakeStore();
   const before = { ...initial().changes[0].after, id: 'existing', revision: 3, xero_account_code: '40000' };
-  const result = await approvePetroleumMappings({ products, accounts, taxRates, mappings: [before], client: store.client, actor });
-  assert.equal(result.changedCount, 4);
-  assert.equal(store.calls[0].p_mapping_id, 'existing');
-  assert.equal(store.calls[0].p_expected_revision, 3);
-  assert.equal(store.calls[1].p_expected_revision, null);
+  const disabled = { ...initial().changes[1].after, id: 'disabled', revision: 4, enabled: false };
+  const result = await approvePetroleumMappings({ products, accounts, taxRates, mappings: [before, disabled], extras,
+    client: store.client, actor });
+  assert.equal(result.changedCount, 6);
+  assert.equal(result.defaultCount, 6);
+  assert.equal(result.preservedOverrideCount, 2);
+  assert.equal(result.approvedCount, 7);
+  assert.equal(store.calls[0].p_mapping_id, null);
+  assert.equal(store.calls[0].p_expected_revision, null);
   assert.equal(store.calls[0].p_actor_id, actor.id);
-  assert.equal(store.events[0].fingerprints.changes[0].before.accountCode, '40000');
+  assert.equal(store.events[0].fingerprints.policy, result.id);
+  assert.equal(store.events[0].fingerprints.changes[0].before, null);
+  assert.equal(store.events[0].record_counts.preservedOverrides, 2);
   assert.equal(store.events[1].outcome, 'success');
-  assert.equal(store.events[1].record_counts.completed, 4);
+  assert.equal(store.events[1].record_counts.completed, 6);
   const again = fakeStore();
-  const second = await approvePetroleumMappings({ products, accounts, taxRates, mappings: store.mappings, client: again.client, actor });
+  const second = await approvePetroleumMappings({ products, accounts, taxRates,
+    mappings: [before, disabled, ...store.mappings], extras, client: again.client, actor });
   assert.equal(second.changedCount, 0);
+  assert.equal(second.preservedOverrideCount, 2);
   assert.equal(again.events.length, 0);
   assert.equal(again.calls.length, 0);
 });
@@ -111,13 +153,16 @@ test('financial snapshot reads the complete product catalog independent of invoi
   const query = async (queries) => {
     assert.match(queries[0].soql, /SELECT Id, Name, RecordType.DeveloperName FROM Product2 ORDER BY Id/);
     assert.doesNotMatch(queries[0].soql, /IsActive|2026/);
-    return [{ records: products, totalSize: products.length }, ...Array.from({ length: 4 }, () => ({ records: [], totalSize: 0 }))];
+    assert.match(queries[5].soql, /FROM Account ORDER BY Id/);
+    assert.doesNotMatch(queries[5].soql, /WHERE|2026/);
+    return [{ records: products, totalSize: products.length }, ...Array.from({ length: 5 }, () => ({ records: [], totalSize: 0 }))];
   };
-  const snapshot = await loadSalesforceFinancialSnapshot('2026-01-01', query);
+  const safetyContext = { fields: {}, singleCurrency: false, corporateCurrency: null };
+  const snapshot = await loadSalesforceFinancialSnapshot('2026-01-01', query, safetyContext);
   assert.equal(snapshot.productRecords.length, 5);
   assert.equal(snapshot.products.length, 2);
-  await assert.rejects(loadSalesforceFinancialSnapshot('2026-01-01', async () => []), { code: 'XERO_FINANCIAL_SALESFORCE_INCOMPLETE' });
+  await assert.rejects(loadSalesforceFinancialSnapshot('2026-01-01', async () => [], safetyContext), { code: 'XERO_FINANCIAL_SALESFORCE_INCOMPLETE' });
   await assert.rejects(loadSalesforceFinancialSnapshot('2026-01-01', async (queries) => {
     const result = await query(queries); result[0].totalSize += 1; return result;
-  }), { code: 'XERO_FINANCIAL_SALESFORCE_INCOMPLETE' });
+  }, safetyContext), { code: 'XERO_FINANCIAL_SALESFORCE_INCOMPLETE' });
 });

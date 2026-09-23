@@ -41,7 +41,8 @@ export function paymentDocumentIdentityBlockers(payment, mapping, currentDocumen
   if (!['AUTHORISED', 'PAID'].includes(String(currentDocument.status || '').toUpperCase())) blockers.push('The linked Xero transaction is not authorised for payment.');
   if (!hasIdentity(currentDocument.contactId)) blockers.push('The current Xero transaction has no verified Contact.');
   else if (mapping.xero_contact_id && currentDocument.contactId !== mapping.xero_contact_id) blockers.push('The current Xero Contact differs from the verified document mapping. Run the document check again.');
-  if (currentDocument.currency !== 'USD') blockers.push('The linked Xero invoice currency does not match the USD Salesforce payment.');
+  const sourceCurrency = paymentCurrency(payment);
+  if (sourceCurrency && currentDocument.currency !== sourceCurrency) blockers.push('The linked Xero invoice currency does not match the authoritative Salesforce payment currency.');
   return blockers;
 }
 
@@ -78,8 +79,97 @@ export function selectXeroPaymentMatch({ payment, documentMapping, bankAccountId
   return { match: null, blockers };
 }
 
+// A missing source reference can be retained only through an explicit link review.
+// This never supplies a payment payload or relaxes the ordinary exact-match path.
+export function selectXeroReferenceRetentionMatch({ payment, documentMapping, currentDocument,
+  bankAccountId, bankAccount, organisation, xeroPayments = [], paymentMappings = [] }) {
+  const blockers = paymentDocumentIdentityBlockers(payment, documentMapping, currentDocument);
+  const fail = (message) => ({ match: null, blockers: [...blockers, message] });
+  if (String(payment.Reference__c || '').trim()) return fail('An explicit Salesforce payment reference differs; Finance must resolve it.');
+  if (!hasIdentity(documentMapping?.retained_differences?.accountId)
+    || documentMapping.retained_differences.accountId !== payment.Account__c) return fail('Exact document Account evidence is required for reference retention.');
+  const currency = paymentCurrency(payment);
+  if (!paymentUuid(bankAccountId) || bankAccount?.AccountID !== bankAccountId
+    || bankAccount?.Type !== 'BANK' || bankAccount?.Status !== 'ACTIVE'
+    || bankAccount.CurrencyCode !== currency || organisation?.baseCurrency !== currency) {
+    return fail('Reference retention requires the approved active bank and verified matching currencies.');
+  }
+  if (blockers.length) return { match: null, blockers };
+  const similar = xeroPayments.filter((row) => row.Invoice?.InvoiceID === documentMapping.xero_document_id
+    && exactAmount(row.Amount, Number(payment.Amount__c)) && paymentDate(row.Date) === paymentDate(payment.Date__c));
+  // Do not choose between competing or deleted allocations using the reference being waived.
+  if (similar.length !== 1) return fail('Reference retention requires one unique existing payment for this invoice, amount and date.');
+  const [match] = similar;
+  const expectedType = payment.RecordType.DeveloperName === 'Payable' ? PAYABLE_INVOICE_TYPE : RECEIVABLE_INVOICE_TYPE;
+  if (!paymentUuid(match.PaymentID) || match.Status !== 'AUTHORISED'
+    || match.Invoice?.Type !== expectedType || match.PaymentType !== `${expectedType}PAYMENT`
+    || match.Account?.AccountID !== bankAccountId || match.Invoice?.CurrencyCode !== currency
+    || match.Invoice?.Contact?.ContactID !== currentDocument.contactId
+    || match.Account?.CurrencyCode !== currency || match.CurrencyRate !== 1
+    || !exactAmount(match.BankAmount, Number(payment.Amount__c))) return fail('Existing payment bank, Contact, type, status or no-FX evidence is incomplete or different.');
+  if (typeof match.Reference !== 'string' || !match.Reference.trim()
+    || match.Reference === String(payment.Name || '')) return fail('A distinct existing Xero reference is required for retained-reference review.');
+  if (match.HasValidationErrors === true || match.HasErrors === true
+    || (match.ValidationErrors !== undefined && (!Array.isArray(match.ValidationErrors) || match.ValidationErrors.length))) return fail('Existing Xero payment validation evidence is unresolved.');
+  if (paymentMappings.some((row) => row.xero_payment_id === match.PaymentID
+    && String(row.salesforce_payment_id).slice(0, 15) !== String(payment.Id).slice(0, 15))) return fail('This Xero payment is already linked to another Salesforce payment.');
+  return { match, blockers: [] };
+}
+
+export function paymentCurrency(payment) {
+  const value = payment?.CurrencyIsoCode ?? payment?._currency?.currency;
+  return typeof value === 'string' && /^[A-Z]{3}$/.test(value) ? value : null;
+}
+
+const paymentUuid = (value) => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value) && !/^0{8}-0{4}-0{4}-0{4}-0{12}$/.test(value);
+const exactAmount = (actual, expected) => typeof actual === 'number' && typeof expected === 'number'
+  && Number.isFinite(actual) && Number.isFinite(expected) && actual > 0 && expected > 0 && Math.abs(actual - expected) < 0.0000001;
+
+export function paymentConfirmationErrors(row, result, expectedPaymentId = null) {
+  const errors = []; const proposed = row.proposedPayment || {};
+  const type = row.type === 'Payable' ? 'ACCPAY' : row.type === 'Receivable' ? 'ACCREC' : null;
+  if (!paymentUuid(result.PaymentID) || (expectedPaymentId && result.PaymentID !== expectedPaymentId)) errors.push('Xero did not confirm the exact payment identity.');
+  if (!paymentUuid(result.Invoice?.InvoiceID) || result.Invoice.InvoiceID !== proposed.Invoice?.InvoiceID) errors.push('Xero did not confirm the reviewed invoice identity.');
+  if (!paymentUuid(result.Account?.AccountID) || result.Account.AccountID !== proposed.Account?.AccountID) errors.push('Xero did not confirm the reviewed bank account identity.');
+  if (!type || result.Invoice?.Type !== type || result.PaymentType !== `${type}PAYMENT`) errors.push('Xero did not confirm the reviewed payment and invoice types.');
+  if (result.Status !== 'AUTHORISED') errors.push('Xero did not confirm an authorised payment.');
+  if (!exactAmount(result.Amount, proposed.Amount)) errors.push('Xero did not confirm the exact reviewed payment amount.');
+  if (!exactAmount(result.BankAmount, proposed.Amount)) errors.push('Xero did not confirm the exact same-currency bank amount.');
+  if (!/^[A-Z]{3}$/.test(row.currency || '') || result.Invoice?.CurrencyCode !== row.currency
+    || (result.Account?.CurrencyCode !== undefined && result.Account.CurrencyCode !== row.currency)
+    || (result.CurrencyRate !== undefined && result.CurrencyRate !== 1)) errors.push('Xero did not confirm the reviewed currency without FX.');
+  if (!paymentDate(result.Date) || paymentDate(result.Date) !== paymentDate(proposed.Date)) errors.push('Xero did not confirm the reviewed payment date.');
+  if (typeof result.Reference !== 'string' || !proposed.Reference || result.Reference !== proposed.Reference) errors.push('Xero did not confirm the reviewed payment reference.');
+  if (result.HasValidationErrors === true || result.HasErrors === true || (result.ValidationErrors !== undefined
+    && (!Array.isArray(result.ValidationErrors) || result.ValidationErrors.length))) errors.push('Xero reported payment validation errors. Review the provider outcome before retrying.');
+  return errors;
+}
+
+export function matchPaymentResponses(rows, responses) {
+  const returned = Array.isArray(responses) ? responses.filter((item) => item && typeof item === 'object') : [];
+  const matches = rows.map((row) => returned.filter((result) => {
+    const proposed = row.proposedPayment || {};
+    return result.Invoice?.InvoiceID === proposed.Invoice?.InvoiceID && result.Account?.AccountID === proposed.Account?.AccountID
+      && result.Invoice?.CurrencyCode === row.currency && exactAmount(result.Amount, proposed.Amount)
+      && paymentDate(result.Date) !== null && paymentDate(result.Date) === paymentDate(proposed.Date) && result.Reference === proposed.Reference;
+  }));
+  return matches.map((items) => {
+    const response = items[0];
+    const ambiguous = items.length !== 1 || matches.filter((candidates) => candidates.includes(response)).length !== 1
+      || returned.filter((item) => item.PaymentID === response?.PaymentID).length !== 1;
+    return ambiguous ? { response: {}, errors: ['Xero did not return a unique payment matching the reviewed invoice, bank, currency, amount, date and reference.'] }
+      : { response, errors: [] };
+  });
+}
+
+export function confirmedPaymentValues(result) {
+  return { xero_payment_id: result.PaymentID, xero_bank_account_id: result.Account.AccountID,
+    amount: result.Amount, currency: result.Invoice.CurrencyCode, payment_date: paymentDate(result.Date) };
+}
+
 function paymentInputBlockers(payment) {
   const blockers = [];
+  if (!paymentCurrency(payment)) blockers.push('Authoritative Salesforce payment currency is missing or invalid.');
   if (!hasIdentity(payment?.Id)) blockers.push('The exact Salesforce payment identity is missing.');
   if (positiveCents(payment?.Amount__c) === null) blockers.push('Payment amount must be positive and finite. Refunds require Finance allocation.');
   if (!paymentDate(payment?.Date__c)) blockers.push('Payment date is missing or invalid.');

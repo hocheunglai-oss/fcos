@@ -19,9 +19,9 @@ export default defineConfig({
   build: {
     manifest: true,
     target: 'es2022',
-    // Preserve release size budgets as independently developed features converge.
+    // Use the existing ES2022 target for equivalent smaller output, without unsafe transforms.
     minify: 'terser',
-    terserOptions: { compress: { passes: 2 } },
+    terserOptions: { ecma: 2022, compress: { passes: 3 } },
     rollupOptions: {
       output: {
         manualChunks(id) {

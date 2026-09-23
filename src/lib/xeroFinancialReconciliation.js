@@ -12,6 +12,7 @@ export function summarizeXeroFinancialReconciliation({ documents, payments } = {
   const total = documentSummary.total + paymentSummary.total;
   const reconciled = documentSummary.reconciled + paymentSummary.reconciled;
   const pending = documentSummary.pending + paymentSummary.pending;
+  const waiting = documentSummary.waiting + paymentSummary.waiting;
   const exceptions = documentSummary.exceptions + paymentSummary.exceptions;
   const checked = documentsChecked && paymentsChecked;
   const completion = checked ? (total ? Math.round((reconciled / total) * 100) : 100) : null;
@@ -22,7 +23,7 @@ export function summarizeXeroFinancialReconciliation({ documents, payments } = {
       : exceptions > 0
         ? 'attention_required'
         : pending > 0
-          ? 'sync_required'
+          ? pending === waiting ? 'waiting' : 'sync_required'
           : 'reconciled';
 
   return {
@@ -32,6 +33,7 @@ export function summarizeXeroFinancialReconciliation({ documents, payments } = {
     total,
     reconciled,
     pending,
+    waiting,
     exceptions,
     documents: documentSummary,
     payments: paymentSummary,
@@ -40,24 +42,26 @@ export function summarizeXeroFinancialReconciliation({ documents, payments } = {
 
 export function xeroFinancialReconciliationRank(row, kind = 'document') {
   const classification = kind === 'payment' ? classifyPaymentRow(row) : classifyDocumentRow(row);
-  return { exception: 0, pending: 1, reconciled: 2 }[classification] ?? 3;
+  return { exception: 0, pending: 1, waiting: 2, reconciled: 3 }[classification] ?? 4;
 }
 
 function summarizeRows(rows, classifier) {
-  const summary = { total: rows.length, reconciled: 0, pending: 0, exceptions: 0 };
+  const summary = { total: rows.length, reconciled: 0, pending: 0, waiting: 0, exceptions: 0 };
   for (const row of rows) {
     const classification = classifier(row);
-    summary[classification === 'exception' ? 'exceptions' : classification] += 1;
+    if (classification === 'waiting') { summary.pending += 1; summary.waiting += 1; }
+    else summary[classification === 'exception' ? 'exceptions' : classification] += 1;
   }
   return summary;
 }
 
 function classifyDocumentRow(row = {}) {
   const differences = Array.isArray(row.differences) ? row.differences : [];
+  if (reconciliationBucket(row) === 'waiting') return 'waiting';
   if (['blocked', 'failed'].includes(row.status) || row.blockers?.length) return 'exception';
   if (row.acceptedLegacy) return 'reconciled';
+  if (row.action === 'protected_legacy' && (differences.length > 0 || row.reviewRequired === true)) return 'exception';
   if (row.reviewRequired && row.status === 'eligible') return 'pending';
-  if (row.action === 'protected_legacy' && differences.length > 0) return 'exception';
   if (row.action === 'link' && differences.length === 0) return 'reconciled';
   if (row.action === 'protected_legacy' && differences.length === 0) return 'reconciled';
   if (row.status === 'eligible' && ['create_draft', 'safe_update'].includes(row.action)) return 'pending';
@@ -65,9 +69,10 @@ function classifyDocumentRow(row = {}) {
 }
 
 function classifyPaymentRow(row = {}) {
-  if (reconciliationBucket(row, 'payment') === 'waiting') return 'pending';
+  if (reconciliationBucket(row, 'payment') === 'waiting') return 'waiting';
   const blockers = Array.isArray(row.blockers) ? row.blockers : [];
-  if (row.status === 'blocked' || blockers.length > 0) return 'exception';
+  if (['blocked', 'failed'].includes(row.status) || blockers.length > 0) return 'exception';
+  if (row.action === 'payment_reference_link') return 'exception';
   if (row.action === 'payment_link') return 'reconciled';
   if (row.action === 'payment_apply' && row.status === 'eligible') return 'pending';
   return 'exception';

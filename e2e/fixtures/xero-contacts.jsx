@@ -39,9 +39,21 @@ const rows = [
     salesforceName: '', matchField: '', usage: [{ source: 'prepayments', records: 4, lastSeenAt: '2026-09-01T00:00:00.000Z' }], message: 'The eligible contact was left out of the reviewed apply selection.',
   },
 ];
+if (new URLSearchParams(window.location.search).get('resolution') === '1') rows.push(
+  {
+    id: 'xero-only-row', action: 'exception', status: 'blocked', reason: 'used-unmatched-xero-contact',
+    xeroContactId: '0cb5d302-8f2d-4b08-8902-0553d01df644', xeroContactName: 'Harbour Counterparty', xeroContactStatus: 'ACTIVE',
+    identityFingerprint: 'a'.repeat(64), identityDecision: null, salesforceName: '', usage: [],
+  },
+  {
+    id: 'missing-contact-row', action: 'exception', status: 'blocked', reason: 'missing-xero-contact',
+    salesforceAccountId: '001000000000001AAA', salesforceName: 'Missing Harbour Buyer', salesforceCompanyCode: 'HK-MISSING', usage: [],
+  },
+);
 
 const run = {
   id: 'contacts-layout-fixture', createdAt: '2026-09-23T00:00:00.000Z', rowCount: rows.length, rows,
+  xero: { tenantId: 'f0a97252-7bc7-47b6-a8cf-ef381671aeca' },
   summary: { nonArchivedXeroContacts: 5, archivedXeroContacts: 0, unmatchedNonArchivedXeroContacts: 1, renameEligible: 1, archiveEligible: 1, exception: 1 },
 };
 const status = {
@@ -56,6 +68,19 @@ appClient.functions.invoke = async (name, body) => {
   if (name === 'xeroPortalStatus') return { data: status };
   if (name === 'xeroPortalReceiptsList') return { data: { receipts: [] } };
   if (name === 'xeroPortalContactLifecycleLatest') return { data: { run } };
+  if (name === 'xeroPortalContactLifecyclePreview') return { data: { run } };
+  if (name === 'xeroContactIdentitySave') {
+    if (new URLSearchParams(window.location.search).has('identityMalformed')) return { data: {} };
+    const row = rows.find((item) => item.xeroContactId === body.contactId);
+    if (row) { row.identityDecision = { tenant_id: body.tenantId, contact_id: body.contactId, fingerprint: body.expectedFingerprint,
+      revision: body.expectedRevision + 1, decision: body.decision, evidence_note: body.evidenceNote,
+      evidence_reference: body.evidenceReference, actor_id: 'd1e772f5-9c10-4566-99b3-67f4c4e75a62', actor_email: 'finance@example.test', updated_at: '2026-09-24T00:00:00Z' };
+      row.reason = body.decision === 'verified_xero_only' ? 'verified-xero-only' : 'used-unmatched-xero-contact'; }
+    return { data: { decision: row?.identityDecision, refreshPreview: true } };
+  }
+  if (name === 'xeroContactRepairApply' && new URLSearchParams(window.location.search).has('repairMalformed')) return { data: {} };
+  if (name === 'xeroContactRepairApply') return { data: { runId: body.runId, outcomes: body.rowIds.map((rowId) => ({ rowId, status: 'created' })), refreshPreview: true,
+    summary: { total: body.rowIds.length, created: body.rowIds.length, existing: 0, blocked: 0, uncertain: 0 } } };
   if (name === 'xeroPortalContactAutoCreateLatest') return { data: { run: null } };
   return { data: { error: `Fixture blocks unexpected call: ${name}` } };
 };
