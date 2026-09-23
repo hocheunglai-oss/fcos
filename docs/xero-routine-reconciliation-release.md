@@ -19,7 +19,11 @@ Apply `20260923182327_xero_contact_identity_decisions.sql` before promoting the 
 
 After release, retrieve a fresh preview and compare selected source evidence with Xero before a small reviewed pilot. Retain the daily API reserve and stop if the provider's remaining allowance is below it. A successful software deployment is not evidence that accounting records have been repaired.
 
-The pre-release saved snapshot on 23 September 2026 contained no bank mappings. Payment posting therefore still needs verified Salesforce-bank to Xero-bank mappings. The live portal subsequently reported 187 daily calls remaining against a 200-call reserve; a live financial pilot cannot proceed until allowance is available.
+The first live draft pilot passed on 24 September 2026 and was recognised as an exact match on the following check. The user subsequently confirmed the USD bank mappings for UBS and DBS; both were saved through the authenticated Finance page. Payment records still require their own invoice, allocation and settlement evidence before posting.
+
+## Protected invoice link review
+
+Version 2.0.239 separates explicit approval eligibility from the Needs attention category. An eligible protected invoice with retained differences can be reviewed and linked without changing Xero accounting history. These rows remain in Needs attention until accepted and are never selected automatically. Finance can approve one link or manually select specific links for the review dialog. Accounting blockers, incomplete or changed evidence, posting-mode changes and the financial write gate continue to prevent approval.
 
 ## Remaining stages
 

@@ -61,6 +61,7 @@ const readyLink = {
   differences: [], sourceFingerprint: 'source-link', reviewFingerprint: 'review-link',
 };
 const batchCount = Number(new URLSearchParams(window.location.search).get('rows') || 0);
+const resumeStatus = new URLSearchParams(window.location.search).get('run');
 const batchRows = Array.from({ length: batchCount }, (_, index) => {
   const ordinal = String(index + 1).padStart(3, '0');
   return {
@@ -78,7 +79,7 @@ let postingMode = 'draft';
 const automaticMapping = new URLSearchParams(window.location.search).get('automatic') === '1';
 const requests = [];
 const preview = () => ({
-  run: { id: mappingApproved ? 'local-review-refreshed' : 'local-review-fixture', revision: 1, status: 'ready_for_review', createdAt: checkedAt, postingMode },
+  run: { id: mappingApproved ? 'local-review-refreshed' : 'local-review-fixture', revision: 1, status: resumeStatus || 'ready_for_review', createdAt: checkedAt, postingMode },
   postingMode,
   checkedAt, rows: [row, {
     ...row, id: 'accepted-one', salesforceId: 'invoice-accepted', documentNumber: 'INV-ACCEPTED-1',
@@ -86,7 +87,13 @@ const preview = () => ({
   }, mappingApproved ? {
     ...mappingBlocked, id: 'mapping-refreshed', action: 'safe_update', status: 'eligible', blockers: [],
     reviewFingerprint: 'review-mapping-approved',
-  } : mappingBlocked, hardBlocked, readyUpdate, readyDraft, readyLink, ...batchRows],
+  } : mappingBlocked, hardBlocked, readyUpdate, readyDraft, readyLink, ...batchRows].map((item) => {
+    if (!['authorised', 'partial', 'failed'].includes(resumeStatus)) return item;
+    if (item.id === row.id) return { ...item, selected: true, status: resumeStatus === 'authorised' ? 'selected' : 'failed' };
+    if (item.id === readyUpdate.id) return { ...item, selected: true, status: resumeStatus === 'authorised' ? 'selected' : 'linked' };
+    if (item.id === readyDraft.id) return { ...item, selected: true, status: 'selected' };
+    return { ...item, selected: false };
+  }),
   payments: { rows: [] }, products: [{ id: 'prod-1', name: 'HSFO 380' }], mappingProposals: [],
 });
 const portalStatus = {

@@ -24,9 +24,12 @@ test('source removal and Xero edits require review even when the total still mat
 });
 
 test('review refresh preserves only the same selected economic records', () => {
-  const old = [{ id: 'a', salesforceObject: 'Invoice', salesforceId: '1', reviewFingerprint: 'same' }, { id: 'b', salesforceObject: 'Invoice', salesforceId: '2', reviewFingerprint: 'old' }];
-  const next = [{ ...old[0], id: 'c', action: 'create_draft', status: 'eligible' }, { ...old[1], id: 'd', action: 'safe_update', reviewFingerprint: 'changed' }];
+  const old = [{ id: 'a', salesforceObject: 'Invoice', salesforceId: '1', sourceFingerprint: 'source-1', reviewFingerprint: 'same' },
+    { id: 'b', salesforceObject: 'Invoice', salesforceId: '2', sourceFingerprint: 'source-2', reviewFingerprint: 'old' }];
+  const next = [{ ...old[0], id: 'c', action: 'create_draft', status: 'eligible' },
+    { ...old[1], id: 'd', action: 'safe_update', status: 'eligible', reviewFingerprint: 'changed' }];
   assert.deepEqual([...retainedReviewSelection(old, next, new Set(['a', 'b']))], ['c']);
+  assert.equal(retainedReviewSelection(old, [{ ...next[0], sourceFingerprint: null }], new Set(['a'])).size, 0);
   assert.notEqual(xeroReviewFingerprint({ proposedPayload: { CurrencyCode: 'USD' } }), xeroReviewFingerprint({ proposedPayload: { CurrencyCode: 'HKD' } }));
 });
 

@@ -1,10 +1,10 @@
 import { expect, test } from '@playwright/test';
 
-test('protected financial differences stay visible and need attention before acceptance', async ({ page }, testInfo) => {
+test('protected financial differences stay in attention while explicit link approval targets only that row', async ({ page }, testInfo) => {
   await page.goto('/e2e/fixtures/xero-exception.html');
   const row = page.getByRole('row').filter({ hasText: 'INV-EXCEPTION-1' });
   await expect(row.getByRole('checkbox')).not.toBeChecked();
-  await expect(row.getByRole('checkbox')).toBeDisabled();
+  await expect(row.getByRole('checkbox')).toBeEnabled();
   await row.locator('summary').click();
   await expect(row).toContainText('Salesforce account ID: 001BUYER0000001');
   await expect(row).toContainText('STEM reference');
@@ -22,15 +22,66 @@ test('protected financial differences stay visible and need attention before acc
   const retainedDifference = dialog.getByText(/Salesforce STEM-ONE → Xero OLD-REF/);
   await retainedDifference.scrollIntoViewIfNeeded();
   await expect(retainedDifference).toBeVisible();
-  await expect(dialog.getByRole('button', { name: 'Approve link only' })).toBeDisabled();
+  await expect(dialog.getByRole('button', { name: 'Approve link only' })).toBeEnabled();
   await page.screenshot({ path: testInfo.outputPath('review-differences.png'), fullPage: true });
-  await page.getByRole('button', { name: 'Cancel' }).click();
+  await dialog.getByRole('button', { name: 'Approve link only' }).click();
+  const writes = await page.evaluate(() => window.exceptionFixture.requests.filter((request) => request.name === 'xeroFinancialSyncRun'));
+  expect(writes).toHaveLength(1);
+  expect(writes[0].body).toMatchObject({ reviewed: true, selectedItemIds: ['review-one'] });
+  await expect(page.getByRole('row').filter({ hasText: 'INV-EXCEPTION-1' })).toBeVisible();
   await page.getByRole('button', { name: /Matched/ }).click();
   const accepted = page.getByRole('row').filter({ hasText: 'INV-ACCEPTED-1' });
   await expect(accepted).toContainText('Accepted legacy');
   await accepted.locator('summary').click();
   await expect(accepted).toContainText('Salesforce STEM-ONE → Xero OLD-REF');
 });
+
+test('protected link requires manual selection and keeps the batch action link only', async ({ page }) => {
+  await page.goto('/e2e/fixtures/xero-exception.html');
+  const row = page.getByRole('row').filter({ hasText: 'INV-EXCEPTION-1' });
+  await expect(row.getByRole('checkbox')).not.toBeChecked();
+  await page.getByRole('button', { name: 'Check everything' }).click();
+  await expect(row.getByRole('checkbox')).not.toBeChecked();
+  await page.getByRole('button', { name: 'Select eligible' }).click();
+  await expect(row.getByRole('checkbox')).not.toBeChecked();
+  await page.getByRole('button', { name: 'Clear', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Review and sync selected' })).toBeDisabled();
+  await row.getByRole('checkbox').check();
+  await page.getByRole('button', { name: 'Review selected links' }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('button', { name: 'Approve link only' })).toBeEnabled();
+  await dialog.getByRole('button', { name: 'Approve link only' }).click();
+  const writes = await page.evaluate(() => window.exceptionFixture.requests.filter((request) => request.name === 'xeroFinancialSyncRun'));
+  expect(writes).toHaveLength(1);
+  expect(writes[0].body).toMatchObject({ reviewed: true, selectedItemIds: ['review-one'] });
+});
+
+for (const status of ['authorised', 'partial', 'failed']) {
+  test(`${status} run resumes its persisted scope without another review selection`, async ({ page }) => {
+    await page.goto(`/e2e/fixtures/xero-exception.html?run=${status}`);
+    const protectedRow = page.getByRole('row').filter({ hasText: 'INV-EXCEPTION-1' });
+    await expect(protectedRow.getByRole('checkbox')).toBeChecked();
+    await expect(protectedRow.getByRole('checkbox')).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Select eligible' })).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Clear', exact: true })).toBeDisabled();
+    await page.getByRole('button', { name: 'Resume approved sync' }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toContainText('saved selection');
+    await expect(dialog).toContainText('Protected legacy · link only: 1');
+    await expect(dialog).toContainText('Safe update: 1');
+    await expect(dialog).toContainText('Create draft: 1');
+    await expect(dialog).toContainText('INV-EXCEPTION-1');
+    await expect(dialog).toContainText('INV-UPDATE');
+    await expect(dialog).toContainText('INV-DRAFT');
+    await expect(dialog).not.toContainText('INV-LINK');
+    await dialog.getByRole('button', { name: 'Resume approved sync' }).click();
+    const writes = await page.evaluate(() => window.exceptionFixture.requests.filter((request) => request.name === 'xeroFinancialSyncRun'));
+    expect(writes).toHaveLength(1);
+    expect(writes[0].body).toMatchObject({ runId: 'local-review-fixture', revision: 1 });
+    expect(writes[0].body).not.toHaveProperty('reviewed');
+    expect(writes[0].body).not.toHaveProperty('selectedItemIds');
+  });
+}
 
 test('hard blocker offers evidence and recheck but no approval override', async ({ page }) => {
   await page.goto('/e2e/fixtures/xero-exception.html');
@@ -107,6 +158,15 @@ test('single-document approval follows the financial gate', async ({ page }) => 
   const dialog = page.getByRole('dialog');
   await expect(dialog).toContainText('Financial sync is disabled');
   await expect(dialog.getByRole('button', { name: 'Approve and update' })).toBeDisabled();
+  expect(await page.evaluate(() => window.exceptionFixture.requests.filter((request) => request.name === 'xeroFinancialSyncRun'))).toEqual([]);
+});
+
+test('protected link approval follows the financial gate', async ({ page }) => {
+  await page.goto('/e2e/fixtures/xero-exception.html?gate=off');
+  const row = page.getByRole('row').filter({ hasText: 'INV-EXCEPTION-1' });
+  await row.getByRole('button', { name: 'Review / resolve' }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('button', { name: 'Approve link only' })).toBeDisabled();
   expect(await page.evaluate(() => window.exceptionFixture.requests.filter((request) => request.name === 'xeroFinancialSyncRun'))).toEqual([]);
 });
 
