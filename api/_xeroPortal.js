@@ -20,6 +20,7 @@ import {
 import { getInstanceUrl, salesforceAuthMode, sfCompositeQueries, sfQuery } from './_salesforce.js';
 import { externalActionGates, requireExternalActionGate } from './_externalActionGates.js';
 import { xeroRateLimitSnapshot } from './_xeroRateLimit.js';
+import { addUsageYear, hasUsageYearBreakdown, usageYearFields } from './_xeroUsageYears.js';
 
 const AUTHORIZATION_BASE = 'https://login.xero.com';
 const RECEIPT_BUCKET = 'xero-portal-receipts';
@@ -332,16 +333,16 @@ export async function xeroPortalContactLifecycleRun(body = {}, { env = process.e
   return { run: await loadLifecycleRun(client, body.runId) };
 }
 
-export async function xeroPortalContactLifecyclePreview(body = {}, { accessContext = null, env = process.env, fetchImpl = fetch } = {}) {
+export async function xeroPortalContactLifecyclePreview(body = {}, { accessContext = null, env = process.env, fetchImpl = fetch, connectionReader = getFreshXeroConnection, accountExporter = exportSalesforceAccountsForLifecycle } = {}) {
   const client = xeroContactSyncServiceClient(env);
   const runId = randomUUID();
   const lock = await acquireLifecycleLock(client, runId, accessContext?.profile, env);
   try {
     const startedAt = new Date().toISOString();
-    const connection = await getFreshXeroConnection(client, { env, fetchImpl });
+    const connection = await connectionReader(client, { env, fetchImpl });
     assertXeroScopes(connection, ['accounting.contacts'], 'Contact lifecycle preview');
     const [salesforce, contactsResult, usageResult] = await Promise.all([
-      exportSalesforceAccountsForLifecycle(env),
+      accountExporter(env),
       listXeroContactsForLifecycle(connection, { env, fetchImpl }),
       resolveUsageCacheForPreview(client, connection, {
         env,
@@ -763,7 +764,7 @@ function scopeAllows(scopes, required) {
   return false;
 }
 
-async function exportSalesforceAccountsForLifecycle(env = process.env) {
+export async function exportSalesforceAccountsForLifecycle(env = process.env, { query = sfQuery, compositeQueries = sfCompositeQueries } = {}) {
   const accountQuery =
     'SELECT Id, Name, Company_Code__c, Inactive_Suspended__c, RecordType.DeveloperName ' +
     'FROM Account ' +
@@ -772,8 +773,8 @@ async function exportSalesforceAccountsForLifecycle(env = process.env) {
     "AND RecordType.DeveloperName IN ('Buyer','Supplier','Buyer_Supplier','Broker')";
   const referenceQueries = recentStemAccountReferenceQueries(env);
   const [accountResult, referenceResults] = await Promise.all([
-    sfQuery(accountQuery, { clean: true, limit: 100000 }),
-    sfCompositeQueries(referenceQueries.map((query) => ({ soql: query.query, clean: true, limit: 100000 }))),
+    query(accountQuery, { clean: true, limit: 100000 }),
+    compositeQueries(referenceQueries.map((query) => ({ soql: query.query, clean: true, limit: 100000 }))),
   ]);
   const recentStemAccountIds = new Set();
   const sources = referenceQueries.map((query, index) => {
@@ -957,7 +958,9 @@ export async function resolveUsageCacheForPreview(client, connection, { env = pr
       continue;
     }
 
-    const reusable = completeUsageCacheRow(cached);
+    // Older aggregates prove usage, but cannot tell the transaction years.
+    // Rebuild once; do not infer years from the cache's last-seen timestamp.
+    const reusable = completeUsageCacheRow(cached) && cached.contact_usage.every(hasUsageYearBreakdown);
     if (reusable && !forceUsageRefresh && !incrementalUsageRefresh) {
       scanned.push(cached);
       continue;
@@ -1096,6 +1099,7 @@ export async function scanXeroContactUsageSource(connection, source, ifModifiedS
             source: source.source,
             label: source.label,
             records: (existing?.records || 0) + 1,
+            ...addUsageYear(existing, record),
             lastSeenAt: scannedAt,
           });
         }
@@ -1131,6 +1135,7 @@ function usageCacheRowFromResult(result) {
       source: evidence.source || result.source,
       label: evidence.label || result.label,
       records: evidence.records || 0,
+      ...usageYearFields(evidence),
       lastSeenAt: evidence.lastSeenAt || result.scanned_at || null,
     })),
     error_message: result.error || result.error_message || null,
@@ -1202,6 +1207,7 @@ function usageMapFromCacheRows(rows) {
         source: row.source,
         label: row.label,
         records: Number(item.records || 0),
+        ...usageYearFields(item),
         lastSeenAt: item.lastSeenAt || item.last_seen_at || row.scanned_at || null,
       };
       const list = usageByContactId.get(contactId) || [];

@@ -35,7 +35,7 @@ function historicalInvoices() {
   return {
     records_scanned: 12,
     records_with_contact: 12,
-    contact_usage: [{ contactId: 'old-contact', source: 'invoices', records: 12, lastSeenAt: '2020-01-01T00:00:00.000Z' }],
+    contact_usage: [{ contactId: 'old-contact', source: 'invoices', records: 12, yearCounts: [{ year: 2020, records: 12 }], undatedRecords: 0, lastSeenAt: '2020-01-01T00:00:00.000Z' }],
   };
 }
 
@@ -427,4 +427,52 @@ test('invalid or changing supplied pagination cannot certify complete history', 
   }
   const empty = usageFetch(() => jsonResponse({ Invoices: [], pagination: { pageCount: 0, itemCount: 0, pageSize: 1000 } }));
   assert.equal((await scanXeroContactUsageSource(connection, invoices, null, { env, callsPerMinute: 0, fetchImpl: empty.fetchImpl })).status, 'complete');
+});
+
+test('year breakdown survives scan, storage, cache reuse and unchanged incremental probes', async () => {
+  const client = cacheClient(cacheRows().filter((row) => !row.source.endsWith(':invoices')));
+  const scan = usageFetch(({ source }) => source.source === 'invoices' ? jsonResponse({ Invoices: [
+    invoice('mixed', 2025), invoice('mixed', 2026),
+    { InvoiceID: 'undated', Contact: { ContactID: 'mixed' }, UpdatedDateUTC: '2026-01-01' },
+  ], pagination: { pageCount: 1 } }) : null);
+  const fresh = await resolveUsageCacheForPreview(client, connection, { env, callsPerMinute: 0, fetchImpl: scan.fetchImpl });
+  const expected = { yearCounts: [{ year: 2025, records: 1 }, { year: 2026, records: 1 }], undatedRecords: 1 };
+  const item = fresh.usageByContactId.get('mixed')[0];
+  assert.equal(item.records, 3);
+  for (const [key, value] of Object.entries(expected)) assert.deepEqual(item[key], value);
+  const reused = await resolveUsageCacheForPreview(client, connection, { env, callsPerMinute: 0, fetchImpl: async () => assert.fail('Complete year evidence should be cached') });
+  const probe = await resolveUsageCacheForPreview(client, connection, { env, callsPerMinute: 0, fetchImpl: usageFetch().fetchImpl, incrementalUsageRefresh: true });
+  assert.deepEqual(reused.usageByContactId.get('mixed'), fresh.usageByContactId.get('mixed'));
+  assert.deepEqual(probe.usageByContactId.get('mixed'), fresh.usageByContactId.get('mixed'));
+});
+
+test('legacy yearless aggregates rebuild without a date cutoff, retaining usage if the rebuild fails', async () => {
+  for (const fail of [false, true]) {
+    const legacy = historicalInvoices();
+    delete legacy.contact_usage[0].yearCounts;
+    delete legacy.contact_usage[0].undatedRecords;
+    const client = cacheClient(cacheRows({ invoices: legacy }));
+    const fetch = usageFetch(({ source, headers }) => {
+      assert.equal(source.source, 'invoices');
+      assert.equal(headers['If-Modified-Since'], undefined);
+      return fail ? jsonResponse({ Message: 'Unavailable' }, { status: 500 })
+        : jsonResponse({ Invoices: [invoice('old-contact', 2025), invoice('old-contact', 2026)], pagination: { pageCount: 1 } });
+    });
+    const result = await resolveUsageCacheForPreview(client, connection, { env, callsPerMinute: 0, fetchImpl: fetch.fetchImpl });
+    assert.equal(result.coverageComplete, !fail);
+    const item = result.usageByContactId.get('old-contact')[0];
+    assert.equal(item.records, fail ? 12 : 2);
+    assert.deepEqual(item.yearCounts, fail ? undefined : [{ year: 2025, records: 1 }, { year: 2026, records: 1 }]);
+  }
+});
+
+test('payments use their actual payment year and count repeated nested contact links only once', async () => {
+  const payments = readableSources.find((source) => source.source === 'payments');
+  const fetch = usageFetch(() => jsonResponse({ Payments: [{ PaymentID: 'p1', Date: '/Date(1767225600000+0000)/',
+    Contact: { ContactID: 'buyer' }, Invoice: { Date: '2025-01-01', Contact: { ContactID: 'buyer' } },
+  }], pagination: { pageCount: 1 } }));
+  const result = await scanXeroContactUsageSource(connection, payments, null, { env, callsPerMinute: 0, fetchImpl: fetch.fetchImpl });
+  assert.equal(result.status, 'complete');
+  assert.equal(result.contacts.get('buyer').records, 1);
+  assert.deepEqual(result.contacts.get('buyer').yearCounts, [{ year: 2026, records: 1 }]);
 });

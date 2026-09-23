@@ -13,7 +13,7 @@ const rows = [
     xeroContactId: 'xero-rename', xeroContactName: longName,
     xeroContactNumber: 'CONTACT-001', xeroAccountNumber: 'ACCOUNT-001', xeroContactStatus: 'ACTIVE',
     salesforceName: 'Pacific Marine Fuels Trading International Division', salesforceCompanyCode: 'HK1234567890', salesforceRecordType: 'Buyer',
-    matchField: 'SalesforceName', usage: [{ source: 'invoices', records: 12 }], message: longMessage,
+    matchField: 'SalesforceName', usage: [{ source: 'invoices', records: 12, yearCounts: [{ year: 2025, records: 9 }, { year: 2026, records: 3 }], undatedRecords: 0 }], message: longMessage,
   },
   {
     id: 'archive-row', action: 'archive', status: 'eligible', reason: 'unused-unmatched-xero-contact',
@@ -24,19 +24,19 @@ const rows = [
     id: 'exception-row', action: 'exception', status: 'blocked', reason: 'ambiguous-salesforce-match',
     xeroContactId: 'xero-exception', xeroContactName: 'Shared Marine Buyer',
     salesforceName: 'Shared Marine Buyer Holdings', salesforceCompanyCode: 'HKEXCEPTION',
-    matchField: 'ClKeyWithoutHk', usage: [{ source: 'credit-notes', records: 2 }],
+    matchField: 'ClKeyWithoutHk', usage: [{ source: 'credit-notes', records: 2, yearCounts: [{ year: 2026, records: 2 }], undatedRecords: 0 }],
     message: 'Two Salesforce accounts match this contact; review the account ownership.',
   },
   {
     id: 'keep-row', action: 'keep', status: 'kept', reason: 'nonzero-balance',
     xeroContactId: 'xero-keep', xeroContactName: 'Active Ocean Carrier',
     salesforceName: 'Active Ocean Carrier', salesforceCompanyCode: 'HKKEEP',
-    matchField: 'SalesforceName', usage: [{ source: 'payments', records: 3 }], message: 'Outstanding balance keeps the contact active.',
+    matchField: 'SalesforceName', usage: [{ source: 'payments', records: 3, yearCounts: [{ year: 2025, records: 1 }], undatedRecords: 2 }], message: 'Outstanding balance keeps the contact active.',
   },
   {
     id: 'not-selected-row', action: 'archive', status: 'not-selected', reason: 'not-selected',
     xeroContactId: 'xero-not-selected', xeroContactName: 'Deferred Contact Audit',
-    salesforceName: '', matchField: '', usage: [], message: 'The eligible contact was left out of the reviewed apply selection.',
+    salesforceName: '', matchField: '', usage: [{ source: 'prepayments', records: 4, lastSeenAt: '2026-09-01T00:00:00.000Z' }], message: 'The eligible contact was left out of the reviewed apply selection.',
   },
 ];
 

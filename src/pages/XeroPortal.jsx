@@ -495,7 +495,7 @@ export default function XeroPortal() {
                         <TableCell className="break-words [overflow-wrap:anywhere]"><XeroContactIdentity row={row} copy={copy} /></TableCell>
                         <TableCell className="break-words [overflow-wrap:anywhere]"><SalesforceContactIdentity row={row} copy={copy} /></TableCell>
                         <TableCell className="break-words [overflow-wrap:anywhere]">{row.matchField ? (copy.matchFields[row.matchField] || matchFieldLabels[row.matchField] || row.matchField) : copy.common.none}</TableCell>
-                        <TableCell className="break-words [overflow-wrap:anywhere]">{usageText(row.usage, copy)}</TableCell>
+                        <TableCell className="break-words [overflow-wrap:anywhere]"><ContactUsage usage={row.usage} copy={copy} /></TableCell>
                         <TableCell className="break-words [overflow-wrap:anywhere]"><ContactReason row={row} copy={copy} reasonLabels={reasonLabels} /></TableCell>
                       </TableRow>
                     )) : (
@@ -523,7 +523,7 @@ export default function XeroPortal() {
                       <div className="min-w-0 break-words [overflow-wrap:anywhere]"><dt className="text-xs font-semibold text-muted-foreground">{copy.contacts.xeroContact}</dt><dd className="mt-1"><XeroContactIdentity row={row} copy={copy} /></dd></div>
                       <div className="min-w-0 break-words [overflow-wrap:anywhere]"><dt className="text-xs font-semibold text-muted-foreground">{copy.contacts.salesforceSource}</dt><dd className="mt-1"><SalesforceContactIdentity row={row} copy={copy} /></dd></div>
                       <div className="min-w-0 break-words [overflow-wrap:anywhere]"><dt className="text-xs font-semibold text-muted-foreground">{copy.contacts.match}</dt><dd className="mt-1">{row.matchField ? (copy.matchFields[row.matchField] || matchFieldLabels[row.matchField] || row.matchField) : copy.common.none}</dd></div>
-                      <div className="min-w-0 break-words [overflow-wrap:anywhere]"><dt className="text-xs font-semibold text-muted-foreground">{copy.contacts.usage}</dt><dd className="mt-1">{usageText(row.usage, copy)}</dd></div>
+                      <div className="min-w-0 break-words [overflow-wrap:anywhere]"><dt className="text-xs font-semibold text-muted-foreground">{copy.contacts.usage}</dt><dd className="mt-1"><ContactUsage usage={row.usage} copy={copy} /></dd></div>
                     </dl>
                   </article>
                 )) : <StateBlock icon={CheckCircle2} title={hasLifecycleRun ? copy.contacts.noRowsTitle : copy.contacts.noPreviewTitle} description={hasLifecycleRun ? copy.contacts.noRowsDescription : copy.contacts.noPreviewDescription} />}
@@ -879,9 +879,23 @@ function canApplyRow(row) {
   return row?.status === 'eligible' && (row.action === 'rename' || row.action === 'archive') && row.xeroContactId;
 }
 
-function usageText(usage = [], copy) {
-  if (!usage.length) return copy.contacts.noReadableUsage;
-  return usage.map((item) => `${copy.usageSources[item.source] || item.label || item.source}: ${item.records || 0}`).join('; ');
+function ContactUsage({ usage = [], copy }) {
+  if (!usage?.length) return copy.contacts.noReadableUsage;
+  const formatCount = (value) => Number(value || 0).toLocaleString(copy.locale);
+  return <ul className="space-y-2">
+    {usage.map((item, index) => {
+      const scanned = Array.isArray(item.yearCounts) && typeof item.undatedRecords === 'number';
+      return <li key={`${item.source || item.label || 'usage'}-${index}`}>
+        <div className="font-medium">{copy.contacts.usageSourceTotal(copy.usageSources[item.source] || item.label || item.source, formatCount(item.records))}</div>
+        {scanned ? (
+          <div className="mt-0.5 flex flex-wrap gap-x-2 text-xs text-muted-foreground">
+            {item.yearCounts.map(({ year, records }) => <span key={year}>{year}: {formatCount(records)}</span>)}
+            {item.undatedRecords > 0 ? <span>{copy.contacts.yearUnavailable(formatCount(item.undatedRecords))}</span> : null}
+          </div>
+        ) : <div className="mt-0.5 text-xs text-muted-foreground">{copy.contacts.yearBreakdownPending}</div>}
+      </li>;
+    })}
+  </ul>;
 }
 
 function summarizeApply(summary, language) {

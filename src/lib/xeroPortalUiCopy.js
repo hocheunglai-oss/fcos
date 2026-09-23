@@ -50,6 +50,8 @@ const EN = {
     noXeroMatch: 'No Xero match', noContactNumber: 'No contact no.', noAccountNumber: 'No account no.', noStatus: 'No status', noSalesforceMatch: 'No Salesforce match',
     noRowsTitle: 'No matching rows', noRowsDescription: 'Adjust filters or run a new preview.', noPreviewTitle: 'No lifecycle preview', noPreviewDescription: 'Run Preview to load Xero contacts, Salesforce matches, and archive exceptions.',
     noReadableUsage: 'No readable usage', previewRequired: 'Preview required',
+    usageSourceTotal: (source, count) => `${source}: ${count}`, yearUnavailable: (count) => `Year unavailable: ${count}`,
+    yearBreakdownPending: 'Year breakdown not yet scanned. Refresh Preview.',
   },
   receipts: {
     title: 'Scan Receipt', file: 'Receipt file', chooseFile: 'Choose file', noFile: 'No file selected', ocr: 'OCR image', reset: 'Reset', merchant: 'Merchant',
@@ -184,6 +186,8 @@ const ZH_HANT = {
     noXeroMatch: '沒有 Xero 配對', noContactNumber: '沒有聯絡人編號', noAccountNumber: '沒有帳戶編號', noStatus: '沒有狀態', noSalesforceMatch: '沒有 Salesforce 配對',
     noRowsTitle: '沒有符合項目', noRowsDescription: '請調整篩選條件或重新預覽。', noPreviewTitle: '尚未建立生命週期預覽', noPreviewDescription: '按「預覽」載入 Xero 聯絡人、Salesforce 配對及封存例外。',
     noReadableUsage: '沒有可讀取的使用紀錄', previewRequired: '需要先預覽',
+    usageSourceTotal: (source, count) => `${source}：${count}`, yearUnavailable: (count) => `年份不明：${count}`,
+    yearBreakdownPending: '尚未掃描年份分布。請重新按「預覽」。',
   },
   receipts: {
     title: '掃描收據', file: '收據檔案', chooseFile: '選擇檔案', noFile: '尚未選擇檔案', ocr: 'OCR 圖片', reset: '重設', merchant: '商戶', date: '日期', total: '總額',
