@@ -1,4 +1,5 @@
 import * as documents from '../src/lib/pageMethodologies.js';
+import { XERO_PORTAL_MANUALS } from '../src/lib/xeroPortalManual.js';
 import { mkdir, writeFile } from 'node:fs/promises';
 
 // Preserve one editable source; browsers load long-form help only on demand.
@@ -15,3 +16,5 @@ for (const [name, value] of Object.entries(documents)) {
 await mkdir(new URL('../src/content/', import.meta.url), { recursive: true });
 await writeFile(new URL('../src/content/page-methodologies.json', import.meta.url), JSON.stringify(contents));
 await writeFile(new URL('../src/lib/pageMethodologyIndex.js', import.meta.url), index);
+
+await writeFile(new URL('../src/content/xero-portal-manual.json', import.meta.url), JSON.stringify(XERO_PORTAL_MANUALS));

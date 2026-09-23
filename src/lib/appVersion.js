@@ -3,6 +3,7 @@ import { APP_VERSION } from './appVersionMeta.js';
 export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
+  { version: '2.0.232', releasedAt: '2026-09-23', title: 'Finance exception approval actions', changes: ['Review and resolve exceptions in place, then approve the exact document update.'] },
   { version: '2.0.231', releasedAt: '2026-09-23', title: 'Xero exception review', changes: ['Review shared contacts and legacy differences with stronger invoice and payment checks.'] },
   {
     version: '2.0.230',

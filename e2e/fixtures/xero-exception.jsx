@@ -26,18 +26,61 @@ const row = {
 };
 
 const checkedAt = new Date().toISOString();
-const preview = {
-  run: { id: 'local-review-fixture', revision: 1, status: 'ready_for_review', createdAt: checkedAt },
+const mappingBlocked = {
+  ...row, id: 'mapping-blocked', salesforceId: 'invoice-mapping', documentNumber: 'INV-MAPPING',
+  action: 'blocked', status: 'blocked', reviewRequired: false,
+  blockers: ['HSFO 380: Finance-approved Xero account mapping is missing.'], warnings: [], differences: [],
+  mappingProducts: [{ id: 'prod-1', name: 'HSFO 380' }],
+  sourceFingerprint: 'source-mapping', reviewFingerprint: 'review-mapping',
+};
+const hardBlocked = {
+  ...row, id: 'hard-blocked', salesforceId: 'invoice-hard', documentNumber: 'INV-HARD',
+  action: 'blocked', status: 'blocked', reviewRequired: false,
+  blockers: ['ambiguous_legacy_match: More than one Xero transaction matches this document.'], warnings: [], differences: [],
+  matchEvidence: { ...row.matchEvidence, candidates: [
+    { id: 'candidate-one', number: 'XERO-1' }, { id: 'candidate-two', number: 'XERO-2' },
+  ] }, sourceFingerprint: 'source-hard', reviewFingerprint: 'review-hard',
+};
+const readyUpdate = {
+  ...row, id: 'update-one', salesforceId: 'invoice-update', documentNumber: 'INV-UPDATE',
+  action: 'safe_update', status: 'eligible', reviewRequired: false, selected: true,
+  blockers: [], differences: [{ field: 'reference', salesforce: 'NEW', xero: 'OLD' }],
+  sourceFingerprint: 'source-update', reviewFingerprint: 'review-update',
+};
+const readyDraft = {
+  ...row, id: 'draft-one', salesforceId: 'invoice-draft', documentNumber: 'INV-DRAFT',
+  action: 'create_draft', status: 'eligible', reviewRequired: false, selected: true,
+  blockers: [], differences: [], xero: null,
+  sourceFingerprint: 'source-draft', reviewFingerprint: 'review-draft',
+};
+let mappingApproved = false;
+const requests = [];
+const preview = () => ({
+  run: { id: mappingApproved ? 'local-review-refreshed' : 'local-review-fixture', revision: 1, status: 'ready_for_review', createdAt: checkedAt },
   checkedAt, rows: [row, {
     ...row, id: 'accepted-one', salesforceId: 'invoice-accepted', documentNumber: 'INV-ACCEPTED-1',
     status: 'linked', reviewRequired: false, acceptedLegacy: true, sourceFingerprint: 'source-accepted', reviewFingerprint: 'review-accepted',
-  }], payments: { rows: [] }, products: [], mappingProposals: [],
+  }, mappingApproved ? {
+    ...mappingBlocked, id: 'mapping-refreshed', action: 'safe_update', status: 'eligible', blockers: [],
+    reviewFingerprint: 'review-mapping-approved',
+  } : mappingBlocked, hardBlocked, readyUpdate, readyDraft],
+  payments: { rows: [] }, products: [{ id: 'prod-1', name: 'HSFO 380' }], mappingProposals: [],
+});
+window.exceptionFixture = { requests };
+appClient.functions.invoke = async (name, body) => {
+  requests.push({ name, body });
+  if (name === 'xeroFinancialMappingsGet') return { data: {
+    productMappings: mappingApproved ? [{ id: 'mapping-1', direction: 'buyer', salesforceProductId: 'prod-1', salesforceProductName: 'HSFO 380', xeroAccountCode: '41000', xeroAccountName: 'Sales', xeroTaxType: 'NONE', revision: 1 }] : [],
+    bankMappings: [], accountOptions: [{ id: 'account-1', code: '41000', name: 'Sales', bank: false }], taxOptions: [],
+  } };
+  if (name === 'xeroFinancialMappingsSave') { mappingApproved = true; return { data: { saved: true } }; }
+  if (name === 'xeroFinancialSyncLatest') return { data: { preview: preview() } };
+  if (name === 'xeroFinancialSyncPreview') return { data: preview() };
+  if (name === 'xeroFinancialSyncRun') return { data: { error: 'Fixture blocks real financial writes.' } };
+  return { data: { error: `Unexpected fixture call: ${name}` } };
 };
-appClient.functions.invoke = async (name) => ({ data: name === 'xeroFinancialMappingsGet'
-  ? { productMappings: [], bankMappings: [], accountOptions: [], taxOptions: [] }
-  : name === 'xeroFinancialSyncLatest' ? { preview } : { error: `Unexpected fixture call: ${name}` } });
 
 createRoot(document.getElementById('root')).render(<XeroFinancialSync portalStatus={{
-  externalActions: { xero_financial_sync: { enabled: true } },
+  externalActions: { xero_financial_sync: { enabled: new URLSearchParams(window.location.search).get('gate') !== 'off' } },
   xero: { connected: true, scopeFlags: { invoices: true, contacts: true, settingsRead: true, paymentsRead: true } },
 }} language="en" />);

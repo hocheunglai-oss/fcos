@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { documentReviewTotals, reconciliationBucket, restoreReviewSelection, reviewSelectionSnapshot, workflowCopy } from '../src/lib/financialWorkflowUi.js';
+import { documentReviewTarget, documentReviewTotals, reconciliationBucket, restoreReviewSelection, reviewSelectionSnapshot, workflowCopy } from '../src/lib/financialWorkflowUi.js';
 import { summarizeXeroFinancialReconciliation } from '../src/lib/xeroFinancialReconciliation.js';
 
 const difference = { field: 'reference', salesforce: 'new', xero: 'historical' };
@@ -41,6 +41,16 @@ test('blockers and blocked status take priority over review or accepted legacy f
     assert.equal(summary.exceptions, 1);
     assert.equal(summary.documents.acceptedLegacy, 0);
   }
+});
+
+test('single-document review follows Salesforce identity across a new preview and rejects changed source or blockers', () => {
+  const target = { salesforceObject: review.salesforceObject, salesforceId: review.salesforceId, sourceFingerprint: review.sourceFingerprint };
+  const refreshed = { ...review, id: 'new-preview-item', reviewFingerprint: 'new-mapping-review' };
+  assert.deepEqual(documentReviewTarget([refreshed], target), { row: refreshed, changed: false, evidenceMissing: false, eligible: true });
+  assert.equal(documentReviewTarget([{ ...refreshed, status: 'blocked', blockers: ['Missing mapping'] }], target).eligible, false);
+  assert.equal(documentReviewTarget([{ ...refreshed, sourceFingerprint: 'changed-source' }], target).changed, true);
+  assert.deepEqual(documentReviewTarget([{ ...refreshed, sourceFingerprint: null }], target), { row: { ...refreshed, sourceFingerprint: null }, changed: false, evidenceMissing: true, eligible: false });
+  assert.deepEqual(documentReviewTarget([], target), { row: null, changed: false, evidenceMissing: false, eligible: false });
 });
 
 test('English and traditional Chinese identify protected links and match evidence', () => {
