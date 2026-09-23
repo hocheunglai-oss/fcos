@@ -3,6 +3,7 @@ import { APP_VERSION } from './appVersionMeta.js';
 export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
+  { version: '2.0.236', releasedAt: '2026-09-23', title: 'Wide Xero Contacts review with visible reasons', changes: ['Use the full Contacts workspace width, wrap long details, and keep reasons visible with All actions and on smaller screens.'] },
   { version: '2.0.235', releasedAt: '2026-09-23', title: 'Complete Xero contact usage history', changes: ['Preserve historical usage during incremental refresh, include credit notes, and recheck complete tenant-specific evidence before archiving.'] },
   { version: '2.0.234', releasedAt: '2026-09-23', title: 'Always-wide Finance batch review', changes: ['Use the full Accounting Sync workspace width and fit review columns without horizontal scrolling.'] },
   { version: '2.0.233', releasedAt: '2026-09-23', title: 'Automatic petroleum mappings and visible review reasons', changes: ['Approve petroleum buyer 41100 and supplier 51100 mappings with NONE tax; keep review reasons visible on every page.'] },

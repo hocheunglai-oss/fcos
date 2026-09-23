@@ -758,6 +758,15 @@
   .finance-batch-review__compact { display: none; }
 }
 
+/* Contact review keeps Reason in view when the available workspace is narrow. */
+.xero-contacts-review { container-type: inline-size; }
+.xero-contacts-review__wide { display: none; }
+.xero-contacts-review__compact { display: block; }
+@container (min-width: 1100px) {
+  .xero-contacts-review__wide { display: block; }
+  .xero-contacts-review__compact { display: none; }
+}
+
 /* Collaboration, tools, and administration workspaces */
 .workspace-collaboration,
 .workspace-tools,
