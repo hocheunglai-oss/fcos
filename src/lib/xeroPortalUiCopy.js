@@ -90,7 +90,7 @@ const EN = {
     'not-selected': 'Eligible row was not selected for apply',
   },
   matchFields: { SalesforceName: 'Salesforce name', ClKeyWithoutHk: 'CL key without HK', SalesforceNameAndClKeyWithoutHk: 'Salesforce name + CL key without HK' },
-  usageSources: { invoices: 'Invoices, bills, and credit notes', 'bank-transactions': 'Bank transactions', payments: 'Payments', overpayments: 'Overpayments', prepayments: 'Prepayments', 'expense-claims': 'Expense claims', receipts: 'Receipts' },
+  usageSources: { invoices: 'Invoices and bills', 'credit-notes': 'Credit notes', 'bank-transactions': 'Bank transactions', payments: 'Payments', overpayments: 'Overpayments', prepayments: 'Prepayments', 'expense-claims': 'Expense claims', receipts: 'Receipts' },
   recordTypes: { Buyer: 'Buyer', Supplier: 'Supplier', Buyer_Supplier: 'Buyer & Supplier', Broker: 'Broker' },
   financial: {
     loadingTitle: 'Loading accounting controls', loadingDescription: 'Loading mappings and the Xero Chart of Accounts.',
@@ -223,7 +223,7 @@ const ZH_HANT = {
     'not-selected': '套用時未有選取此合資格項目',
   },
   matchFields: { SalesforceName: 'Salesforce 名稱', ClKeyWithoutHk: '移除 HK 的 CL Key', SalesforceNameAndClKeyWithoutHk: 'Salesforce 名稱及移除 HK 的 CL Key' },
-  usageSources: { invoices: '發票、帳單及貸項通知單', 'bank-transactions': '銀行交易', payments: '付款', overpayments: '多付金額', prepayments: '預付款', 'expense-claims': '費用申報', receipts: '收據' },
+  usageSources: { invoices: '發票及帳單', 'credit-notes': '貸項通知單', 'bank-transactions': '銀行交易', payments: '付款', overpayments: '多付金額', prepayments: '預付款', 'expense-claims': '費用申報', receipts: '收據' },
   recordTypes: { Buyer: '買方', Supplier: '供應商', Buyer_Supplier: '買方及供應商', Broker: '經紀' },
   financial: {
     loadingTitle: '正在載入會計控制項', loadingDescription: '正在載入對應設定及 Xero 會計科目表。',

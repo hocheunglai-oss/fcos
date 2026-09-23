@@ -58,7 +58,7 @@ export const XERO_PORTAL_MANUALS = Object.freeze({
         title: '2. Clean up contacts',
         purpose: 'Compare Xero contacts with Salesforce. FCOS suggests changes, but nothing is applied until you review and select it.',
         steps: [
-          'Choose the usage refresh depth. Use the cached/default scan normally; use incremental or full refresh only when current usage evidence is required.',
+          'Contact usage covers all transaction dates, including before 2026. The default scan reuses complete history for this Xero organisation; old or incomplete caches rebuild automatically.',
           'Click Preview. Review KPI totals, usage coverage, status explanations, estimated Xero calls, and every proposed row.',
           'Use search and filters to narrow the table. Only Eligible Rename or Archive rows can be selected.',
           'Select approved rows, tick Reviewed, and click Apply selected.',
@@ -68,7 +68,7 @@ export const XERO_PORTAL_MANUALS = Object.freeze({
           ['Show unmatched Xero', 'Shows active Xero contacts that do not have a confirmed Salesforce Account match. Click again as Show all rows to remove the filter.', 'Available after the page loads.', 'navigation'],
           ['Preview', 'Reads Xero contacts and Salesforce Accounts, evaluates name/CL Key matches and usage, and prepares proposed actions. It does not rename or archive anything.', 'Requires a Xero connection and Contacts scope.', 'read'],
           ['Full usage refresh', 'Re-reads every supported Xero usage source before classifying unused contacts. It is slower and consumes more Xero calls.', 'Select before Preview. Selecting it disables Incremental usage refresh.', 'read'],
-          ['Incremental usage refresh', 'Refreshes only usage evidence that can be updated incrementally, reducing calls compared with a full scan.', 'Select before Preview; unavailable while Full usage refresh is selected.', 'read'],
+          ['Incremental usage refresh', 'Checks each source for changes. Unchanged sources retain their full history; changed sources rebuild in full so historical usage cannot disappear or be counted twice.', 'Select before Preview; unavailable while Full usage refresh is selected.', 'read'],
           ['JSON audit', 'Downloads the complete lifecycle run, including summary and row evidence, as JSON.', 'Enabled after a Preview exists.', 'read'],
           ['CSV audit', 'Downloads lifecycle rows as a spreadsheet-friendly CSV file.', 'Enabled after a Preview exists.', 'read'],
           ['Search Xero, Salesforce, CL Key', 'Filters the loaded rows by visible Xero and Salesforce identities, CL Key, Account ID, or reason.', 'Available after a Preview; does not rerun the scan.', 'navigation'],
@@ -77,7 +77,7 @@ export const XERO_PORTAL_MANUALS = Object.freeze({
           ['Select visible eligible', 'Selects all eligible rows currently included by the active filters. Existing selections outside the visible filter are replaced.', 'Enabled when at least one visible row is eligible.', 'navigation'],
           ['Clear', 'Clears all selected contact rows.', 'Always available.', 'navigation'],
           ['Reviewed', 'Confirms that the selected rows and evidence have been reviewed. It is a required acknowledgement, not an action by itself.', 'Tick after review and before Apply selected.', 'navigation'],
-          ['Apply selected', 'Renames or archives the selected Xero contacts, then verifies and records the result.', 'Requires a Preview, Reviewed confirmation, at least one visible eligible selection, permission, and the contact-write gate.', 'xero'],
+          ['Apply selected', 'Renames or archives the selected Xero contacts, then verifies and records the result. Archiving requires a current preview and a fresh complete usage check, including credit notes.', 'Requires a Preview, Reviewed confirmation, at least one visible eligible selection, permission, and the contact-write gate.', 'xero'],
         ],
       },
       {
@@ -227,7 +227,7 @@ export const XERO_PORTAL_MANUALS = Object.freeze({
         title: '2. 整理聯絡人',
         purpose: '把 Xero 聯絡人與 Salesforce 比對。FCOS 只會提出建議，覆核並選取後才會套用。',
         steps: [
-          '選擇使用紀錄更新程度。一般使用快取／預設掃描；只有需要最新使用證據時才使用增量或完整更新。',
+          '聯絡人使用紀錄涵蓋所有交易日期，包括 2026 年之前。預設掃描會重用此 Xero 公司完整的歷史紀錄；舊版或不完整快取會自動重新建立。',
           '按「預覽」，覆核摘要、使用範圍、狀態說明、預計 Xero API 次數及每一建議項目。',
           '用搜尋及篩選收窄結果。只有合資格的「重新命名」或「封存」項目可選取。',
           '選取已核准項目，勾選「已覆核」，再按「套用所選項目」。',
@@ -237,7 +237,7 @@ export const XERO_PORTAL_MANUALS = Object.freeze({
           ['只顯示未配對 Xero', '只顯示沒有已確認 Salesforce Account 配對的現行 Xero 聯絡人。再次按下「顯示所有項目」可取消篩選。', '頁面載入後可用。', 'navigation'],
           ['預覽', '讀取 Xero 聯絡人及 Salesforce Accounts，評估名稱／CL Key 配對與使用情況，並準備建議操作；不會重新命名或封存任何資料。', '需要 Xero 連線及 Contacts scope。', 'read'],
           ['完整更新使用紀錄', '分類未使用聯絡人前，重新讀取所有受支援的 Xero 使用來源；所需時間及 API 次數較多。', '預覽前選取；選取後會停用「增量更新使用紀錄」。', 'read'],
-          ['增量更新使用紀錄', '只更新可增量讀取的使用證據，比完整掃描耗用較少 API 次數。', '預覽前選取；「完整更新使用紀錄」開啟時不可用。', 'read'],
+          ['增量更新使用紀錄', '逐一檢查來源是否有變動。未變動來源保留完整歷史；有變動來源會完整重建，避免歷史使用紀錄遺失或重複計算。', '預覽前選取；「完整更新使用紀錄」開啟時不可用。', 'read'],
           ['JSON 審計檔', '以 JSON 下載完整生命週期批次，包括摘要及每行證據。', '有預覽後啟用。', 'read'],
           ['CSV 審計檔', '以適合試算表的 CSV 下載生命週期項目。', '有預覽後啟用。', 'read'],
           ['搜尋 Xero、Salesforce、CL Key', '按 Xero／Salesforce 身分、CL Key、Account ID 或原因篩選已載入的項目。', '有預覽後可用；不會重新掃描。', 'navigation'],
@@ -246,7 +246,7 @@ export const XERO_PORTAL_MANUALS = Object.freeze({
           ['選取畫面中合資格項目', '選取目前篩選結果內所有合資格項目；會取代篩選結果以外的既有選取。', '至少有一個可見合資格項目時啟用。', 'navigation'],
           ['清除', '清除所有已選聯絡人項目。', '一直可用。', 'navigation'],
           ['已覆核', '確認已覆核所選項目及證據。此勾選本身不會執行更改。', '覆核完成後、「套用所選項目」前勾選。', 'navigation'],
-          ['套用所選項目', '重新命名或封存所選 Xero 聯絡人，然後驗證並記錄結果。', '需要預覽、已覆核、至少一個可見合資格項目、相關權限及聯絡人寫入閘門。', 'xero'],
+          ['套用所選項目', '重新命名或封存所選 Xero 聯絡人，然後驗證並記錄結果。封存前必須有新版預覽，並重新核實完整使用紀錄，包括貸項通知單。', '需要預覽、已覆核、至少一個可見合資格項目、相關權限及聯絡人寫入閘門。', 'xero'],
         ],
       },
       {
