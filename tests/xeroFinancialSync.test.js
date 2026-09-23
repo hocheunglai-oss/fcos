@@ -103,6 +103,29 @@ test('exact protected Xero history can be durably linked without changing accoun
   assert.deepEqual(classified.differences, []);
 });
 
+test('accepted preservation cannot become an update after settlement reversal, unlocked period or source amendment', () => {
+  const mapping = { xero_document_id: 'xero-invoice-1', protected_legacy: true,
+    retained_differences: { reviewFingerprint: 'previously-accepted-evidence' } };
+  for (const document of [xero({ status: 'AUTHORISED' }), xero({ status: 'DRAFT' }),
+    xero({ status: 'AUTHORISED', amountPaid: 0, amountCredited: 0, amountDue: 1000 })]) {
+    const result = classifyXeroFinancialDocument({ ...source, sourceFingerprint: 'amended-source' }, [document], { storedMapping: mapping });
+    assert.equal(result.action, 'protected_legacy'); assert.equal(result.reviewRequired, true);
+    assert.equal(result.acceptedLegacy, false); assert.equal(result.status, 'eligible');
+  }
+  const incompatible = classifyXeroFinancialDocument({ ...source, lines: [{ ...source.lines[0], accountCode: 'different-account' }] }, [xero({ status: 'AUTHORISED' })], { storedMapping: mapping });
+  assert.equal(incompatible.action, 'protected_legacy'); assert.equal(incompatible.status, 'protected'); assert.ok(incompatible.blockers.length);
+});
+
+test('changed acceptance requires review even when a preserved document now has no visible differences', () => {
+  const exact = xero({ status: 'AUTHORISED', invoiceNumber: source.documentNumber, date: source.invoiceDate,
+    dueDate: source.dueDate, reference: source.reference,
+    lineItems: [{ Description: 'HSFO 380', Quantity: 10, UnitAmount: 100, AccountCode: '200', TaxType: 'NONE' }] });
+  const result = classifyXeroFinancialDocument(source, [exact], { storedMapping: { xero_document_id: exact.id,
+    protected_legacy: true, retained_differences: { reviewFingerprint: 'different-earlier-source-evidence' } } });
+  assert.equal(result.action, 'protected_legacy'); assert.deepEqual(result.differences, []);
+  assert.equal(result.reviewRequired, true); assert.equal(result.acceptedLegacy, false); assert.equal(result.status, 'eligible');
+});
+
 test('stored Xero payment links must still exist and match current Salesforce values', () => {
   const payment = { Id: 'payment-1', CurrencyIsoCode: 'USD', Name: 'PAY-1', Amount__c: 500, Date__c: '2026-07-01', Bank__c: 'DBS', STEM__c: 'stem-1', Account__c: 'account-1', RecordType: { DeveloperName: 'Receivable' } };
   const documentMapping = { id: 'document-map-1', xero_document_id: 'xero-invoice-1', xero_document_type: 'ACCREC', xero_contact_id: 'contact-1', salesforce_object: 'Invoice__c', salesforce_id: 'invoice-1', retained_differences: { stemId: 'stem-1', accountId: 'account-1' } };

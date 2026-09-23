@@ -60,7 +60,7 @@ function classifyDocumentRow(row = {}) {
   if (reconciliationBucket(row) === 'waiting') return 'waiting';
   if (['blocked', 'failed'].includes(row.status) || row.blockers?.length) return 'exception';
   if (row.acceptedLegacy) return 'reconciled';
-  if (row.action === 'protected_legacy' && differences.length > 0) return 'exception';
+  if (row.action === 'protected_legacy' && (differences.length > 0 || row.reviewRequired === true)) return 'exception';
   if (row.reviewRequired && row.status === 'eligible') return 'pending';
   if (row.action === 'link' && differences.length === 0) return 'reconciled';
   if (row.action === 'protected_legacy' && differences.length === 0) return 'reconciled';
@@ -71,7 +71,8 @@ function classifyDocumentRow(row = {}) {
 function classifyPaymentRow(row = {}) {
   if (reconciliationBucket(row, 'payment') === 'waiting') return 'waiting';
   const blockers = Array.isArray(row.blockers) ? row.blockers : [];
-  if (row.status === 'blocked' || blockers.length > 0) return 'exception';
+  if (['blocked', 'failed'].includes(row.status) || blockers.length > 0) return 'exception';
+  if (row.action === 'payment_reference_link') return 'exception';
   if (row.action === 'payment_link') return 'reconciled';
   if (row.action === 'payment_apply' && row.status === 'eligible') return 'pending';
   return 'exception';

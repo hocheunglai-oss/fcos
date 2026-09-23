@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { documentExplicitReviewEligible, documentReviewTarget, documentReviewTotals, previewMatchesPostingMode, reconciliationBucket, retainedReviewSelection, restoreReviewSelection, reviewSelectionSnapshot, savedPostingMode, workflowCopy } from '../src/lib/financialWorkflowUi.js';
+import { documentExplicitReviewEligible, documentReviewTarget, documentReviewTotals, paymentReferenceReviewEligible, paymentReferenceReviewTarget, previewMatchesPostingMode, reconciliationBucket, retainedReviewSelection, restoreReviewSelection, reviewSelectionSnapshot, savedPostingMode, workflowCopy } from '../src/lib/financialWorkflowUi.js';
 import { summarizeXeroFinancialReconciliation } from '../src/lib/xeroFinancialReconciliation.js';
+import { xeroPortalUiCopy } from '../src/lib/xeroPortalUiCopy.js';
 
 const difference = { field: 'reference', salesforce: 'new', xero: 'historical' };
 const review = {
@@ -54,6 +55,48 @@ test('explicit protected selection survives unchanged evidence and drops after s
   ]) {
     assert.equal(restoreReviewSelection(snapshot, [changed]).size, 0);
     assert.equal(retainedReviewSelection([review], [changed], new Set([review.id])).size, 0);
+  }
+});
+
+test('protected legacy stays in attention when changed evidence requires review without a visible difference', () => {
+  const sticky = { ...review, differences: [] };
+  assert.equal(reconciliationBucket(sticky), 'attention');
+  assert.equal(documentExplicitReviewEligible(sticky), true);
+  assert.equal(summarizeXeroFinancialReconciliation({ documents: [sticky], payments: [] }).exceptions, 1);
+  assert.deepEqual([...restoreReviewSelection(reviewSelectionSnapshot([sticky], new Set([sticky.id])), [{ ...sticky, id: 'refreshed' }])], ['refreshed']);
+  assert.equal(reconciliationBucket({ ...sticky, status: 'linked', acceptedLegacy: true }), 'matched');
+});
+
+test('retained payment reference requires complete evidence and explicit link review', () => {
+  const retained = {
+    salesforcePaymentId: 'payment-1', salesforcePaymentName: 'PAY-1', action: 'payment_reference_link',
+    status: 'eligible', reviewRequired: true, blockers: [], proposedPayment: null,
+    sourceFingerprint: 'source-1', reviewFingerprint: 'review-1', xeroPaymentId: 'xero-payment-1',
+    bankAccountId: 'xero-bank-1', xeroDocumentUrl: 'https://go.xero.com/invoice/1',
+    paymentDate: '2026-09-01', amount: 100, currency: 'USD',
+    referenceComparison: { sourceReference: '', sourceFallbackReference: 'PAY-1', xeroReference: 'HISTORIC' },
+  };
+  assert.equal(reconciliationBucket(retained, 'payment'), 'attention');
+  assert.equal(paymentReferenceReviewEligible(retained), true);
+  assert.equal(summarizeXeroFinancialReconciliation({ documents: [], payments: [retained] }).exceptions, 1);
+  assert.equal(restoreReviewSelection(reviewSelectionSnapshot([retained], new Set(['payment-1']), 'payment'), [retained], 'payment').size, 0);
+  const target = { salesforcePaymentId: 'payment-1', sourceFingerprint: 'source-1', reviewFingerprint: 'review-1' };
+  assert.equal(paymentReferenceReviewTarget([retained], target).eligible, true);
+  assert.equal(paymentReferenceReviewTarget([{ ...retained, reviewFingerprint: 'changed' }], target).eligible, false);
+  for (const invalid of [
+    { blockers: ['Bank mapping changed'] }, { status: 'blocked' }, { status: 'failed' },
+    { proposedPayment: { amount: 100 } }, { sourceFingerprint: null }, { reviewFingerprint: null },
+    { bankAccountId: null }, { xeroPaymentId: null }, { xeroDocumentUrl: null },
+    { referenceComparison: { ...retained.referenceComparison, sourceReference: 'EXPLICIT' } },
+  ]) assert.equal(paymentReferenceReviewEligible({ ...retained, ...invalid }), false, JSON.stringify(invalid));
+  const accepted = { ...retained, action: 'payment_link', status: 'protected', acceptedReference: true };
+  assert.equal(reconciliationBucket(accepted, 'payment'), 'matched');
+  assert.equal(summarizeXeroFinancialReconciliation({ documents: [], payments: [accepted] }).payments.reconciled, 1);
+  for (const language of ['en', 'zh-Hant']) {
+    const copy = xeroPortalUiCopy(language).financial;
+    assert.ok(copy.actions.payment_reference_link);
+    assert.ok(copy.paymentReferenceTitle && copy.paymentReferenceDescription && copy.approvePaymentReference);
+    assert.ok(copy.sourceReference && copy.sourceFallbackReference && copy.retainedXeroReference);
   }
 });
 

@@ -3,6 +3,7 @@ import { APP_VERSION } from './appVersionMeta.js';
 export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
+  { version: '2.0.241', releasedAt: '2026-09-24', title: 'Review existing payment references', changes: ['Link verified existing payments while retaining historical Xero references through an explicit audited review.', 'Keep accepted historical invoice links protected after source or settlement changes, and preserve selections during review refreshes.'] },
   { version: '2.0.240', releasedAt: '2026-09-24', title: 'Focused Finance batch approvals', changes: ['Save only the reviewed selection and any previous selection changes, reducing database work when approving a small batch from a large review.'] },
   { version: '2.0.239', releasedAt: '2026-09-24', title: 'Review protected invoice links', changes: ['Approve verified links for existing paid invoices while retaining their historical differences and Xero accounting entries.', 'Select these links explicitly for review; accounting blockers and changed evidence continue to prevent approval.'] },
   { version: '2.0.238', releasedAt: '2026-09-24', title: 'Verified Finance posting and contact repairs', changes: ['Review issued documents for authorisation, preserve Xero tracking, and distinguish waiting records from exceptions.', 'Apply default mappings to invoice extras, repair verified missing contacts, and audit Xero-only counterparty decisions.'] },

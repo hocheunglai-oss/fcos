@@ -29,12 +29,13 @@ export function reconciliationBucket(row = {}, kind = 'document') {
   if (kind === 'payment') {
     if (waitsOnDependency(row, kind)) return 'waiting';
     if (blockers.length || row.status === 'blocked' || row.status === 'failed') return 'attention';
+    if (row.action === 'payment_reference_link') return 'attention';
     return row.action === 'payment_link' ? 'matched' : 'ready';
   }
   if (waitsOnDependency(row, kind)) return 'waiting';
   if (blockers.length || ['blocked', 'failed'].includes(row.status)) return 'attention';
   if (row.acceptedLegacy) return 'matched';
-  if (row.action === 'protected_legacy' && row.differences?.length) return 'attention';
+  if (row.action === 'protected_legacy' && (row.differences?.length || row.reviewRequired === true)) return 'attention';
   if (row.reviewRequired && row.status === 'eligible') return 'ready';
   if (['link', 'protected_legacy'].includes(row.action) || ['linked', 'updated', 'created'].includes(row.status)) return 'matched';
   return 'ready';
@@ -47,7 +48,31 @@ export function documentExplicitReviewEligible(row = {}) {
     || !row.sourceFingerprint || !row.reviewFingerprint) return false;
   if (reconciliationBucket(row) === 'ready') return true;
   return row.action === 'protected_legacy' && row.reviewRequired === true
-    && Boolean(row.differences?.length) && reconciliationBucket(row) === 'attention';
+    && reconciliationBucket(row) === 'attention';
+}
+
+// A retained Xero reference is accepted only through its own explicit review.
+// It cannot enter the exact-payment selection or be inferred from a saved check.
+export function paymentReferenceReviewEligible(row = {}) {
+  return row.action === 'payment_reference_link' && row.status === 'eligible'
+    && row.reviewRequired === true && (row.blockers || []).length === 0
+    && !row.proposedPayment && Boolean(row.salesforcePaymentId && row.xeroPaymentId
+    && row.bankAccountId && row.xeroDocumentUrl && row.paymentDate && row.currency
+      && Number.isFinite(Number(row.amount)) && Number(row.amount) > 0
+      && row.sourceFingerprint && row.reviewFingerprint
+      && row.referenceComparison && !row.referenceComparison.sourceReference
+      && (row.referenceComparison.sourceFallbackReference || row.salesforcePaymentName)
+      && row.referenceComparison.xeroReference);
+}
+
+export function paymentReferenceReviewTarget(rows, target) {
+  if (!target) return null;
+  const row = (rows || []).find((candidate) => candidate.salesforcePaymentId === target.salesforcePaymentId) || null;
+  const evidenceMissing = Boolean(row && (!target.sourceFingerprint || !target.reviewFingerprint
+    || !row.sourceFingerprint || !row.reviewFingerprint));
+  const changed = Boolean(row && !evidenceMissing && (target.sourceFingerprint !== row.sourceFingerprint
+    || target.reviewFingerprint !== row.reviewFingerprint));
+  return { row, evidenceMissing, changed, eligible: Boolean(row && !evidenceMissing && !changed && paymentReferenceReviewEligible(row)) };
 }
 
 export function retainedReviewSelection(previousRows, nextRows, selectedIds) {
@@ -73,7 +98,8 @@ export function restoreReviewSelection(snapshot, rows, kind = 'document') {
     const before = previous.get(kind === 'payment' ? row.salesforcePaymentId : `${row.salesforceObject}:${row.salesforceId}`);
     return before?.reviewFingerprint && before.reviewFingerprint === row.reviewFingerprint
       && before.sourceFingerprint && before.sourceFingerprint === row.sourceFingerprint
-      && (kind === 'payment' ? row.status === 'eligible' && reconciliationBucket(row, kind) === 'ready'
+      && (kind === 'payment' ? row.action === 'payment_apply' && row.status === 'eligible'
+        && !(row.blockers || []).length && reconciliationBucket(row, kind) === 'ready'
         : documentExplicitReviewEligible(row));
   }).map((row) => kind === 'payment' ? row.salesforcePaymentId : row.id));
 }

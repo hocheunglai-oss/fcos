@@ -79,6 +79,43 @@ export function selectXeroPaymentMatch({ payment, documentMapping, bankAccountId
   return { match: null, blockers };
 }
 
+// A missing source reference can be retained only through an explicit link review.
+// This never supplies a payment payload or relaxes the ordinary exact-match path.
+export function selectXeroReferenceRetentionMatch({ payment, documentMapping, currentDocument,
+  bankAccountId, bankAccount, organisation, xeroPayments = [], paymentMappings = [] }) {
+  const blockers = paymentDocumentIdentityBlockers(payment, documentMapping, currentDocument);
+  const fail = (message) => ({ match: null, blockers: [...blockers, message] });
+  if (String(payment.Reference__c || '').trim()) return fail('An explicit Salesforce payment reference differs; Finance must resolve it.');
+  if (!hasIdentity(documentMapping?.retained_differences?.accountId)
+    || documentMapping.retained_differences.accountId !== payment.Account__c) return fail('Exact document Account evidence is required for reference retention.');
+  const currency = paymentCurrency(payment);
+  if (!paymentUuid(bankAccountId) || bankAccount?.AccountID !== bankAccountId
+    || bankAccount?.Type !== 'BANK' || bankAccount?.Status !== 'ACTIVE'
+    || bankAccount.CurrencyCode !== currency || organisation?.baseCurrency !== currency) {
+    return fail('Reference retention requires the approved active bank and verified matching currencies.');
+  }
+  if (blockers.length) return { match: null, blockers };
+  const similar = xeroPayments.filter((row) => row.Invoice?.InvoiceID === documentMapping.xero_document_id
+    && exactAmount(row.Amount, Number(payment.Amount__c)) && paymentDate(row.Date) === paymentDate(payment.Date__c));
+  // Do not choose between competing or deleted allocations using the reference being waived.
+  if (similar.length !== 1) return fail('Reference retention requires one unique existing payment for this invoice, amount and date.');
+  const [match] = similar;
+  const expectedType = payment.RecordType.DeveloperName === 'Payable' ? PAYABLE_INVOICE_TYPE : RECEIVABLE_INVOICE_TYPE;
+  if (!paymentUuid(match.PaymentID) || match.Status !== 'AUTHORISED'
+    || match.Invoice?.Type !== expectedType || match.PaymentType !== `${expectedType}PAYMENT`
+    || match.Account?.AccountID !== bankAccountId || match.Invoice?.CurrencyCode !== currency
+    || match.Invoice?.Contact?.ContactID !== currentDocument.contactId
+    || match.Account?.CurrencyCode !== currency || match.CurrencyRate !== 1
+    || !exactAmount(match.BankAmount, Number(payment.Amount__c))) return fail('Existing payment bank, Contact, type, status or no-FX evidence is incomplete or different.');
+  if (typeof match.Reference !== 'string' || !match.Reference.trim()
+    || match.Reference === String(payment.Name || '')) return fail('A distinct existing Xero reference is required for retained-reference review.');
+  if (match.HasValidationErrors === true || match.HasErrors === true
+    || (match.ValidationErrors !== undefined && (!Array.isArray(match.ValidationErrors) || match.ValidationErrors.length))) return fail('Existing Xero payment validation evidence is unresolved.');
+  if (paymentMappings.some((row) => row.xero_payment_id === match.PaymentID
+    && String(row.salesforce_payment_id).slice(0, 15) !== String(payment.Id).slice(0, 15))) return fail('This Xero payment is already linked to another Salesforce payment.');
+  return { match, blockers: [] };
+}
+
 export function paymentCurrency(payment) {
   const value = payment?.CurrencyIsoCode ?? payment?._currency?.currency;
   return typeof value === 'string' && /^[A-Z]{3}$/.test(value) ? value : null;

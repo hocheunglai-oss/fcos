@@ -1,5 +1,89 @@
 import { expect, test } from '@playwright/test';
 
+test('retained payment reference requires explicit evidence review and links only the chosen FCOS mapping', async ({ page }) => {
+  await page.goto('/e2e/fixtures/xero-exception.html?payment-reference=1');
+  const candidate = page.getByRole('row').filter({ hasText: 'PAY-FALLBACK-1' });
+  const blocked = page.getByRole('row').filter({ hasText: 'PAY-BLOCKED' });
+  const missing = page.getByRole('row').filter({ hasText: 'PAY-MISSING' });
+  await expect(candidate.getByRole('checkbox')).toBeDisabled();
+  await expect(candidate.getByRole('checkbox')).not.toBeChecked();
+  await expect(candidate).toContainText('Retained reference · link only');
+  await expect(blocked.getByRole('button', { name: 'Review retained reference' })).toBeDisabled();
+  await expect(missing.getByRole('button', { name: 'Review retained reference' })).toBeDisabled();
+  await page.getByRole('button', { name: 'Check everything' }).click();
+  await expect(candidate.getByRole('checkbox')).not.toBeChecked();
+  await page.getByRole('button', { name: /^All \(/ }).click();
+  await page.getByRole('row').filter({ hasText: 'PAY-EXACT-1' }).getByRole('checkbox').uncheck();
+  await candidate.getByRole('button', { name: 'Review retained reference' }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toContainText('Salesforce payment has no explicit reference');
+  await expect(dialog).toContainText('Absent');
+  await expect(dialog).toContainText('PAY-FALLBACK-1');
+  await expect(dialog).toContainText('HISTORIC-REF');
+  await expect(dialog).toContainText('XERO-77');
+  await expect(dialog).toContainText('xero-bank-1');
+  await expect(dialog).toContainText('2026-09-01');
+  await expect(dialog).toContainText('USD 100');
+  await dialog.getByRole('button', { name: 'Approve link only' }).click();
+  const writes = await page.evaluate(() => window.exceptionFixture.requests.filter((request) => request.name === 'xeroFinancialPaymentApply' && request.body.mode !== 'preview'));
+  expect(writes).toHaveLength(1);
+  expect(writes[0].body).toEqual({ mode: 'link_existing', reviewed: true,
+    selectedPayments: [{ id: 'sf-payment-reference', sourceFingerprint: 'payment-source-1', reviewFingerprint: 'payment-review-1' }] });
+  await page.getByRole('button', { name: /Matched/ }).click();
+  await expect(page.getByRole('row').filter({ hasText: 'PAY-FALLBACK-1' })).toContainText('Linked payment');
+  await page.getByRole('button', { name: /^All \(/ }).click();
+  await expect(page.getByRole('row').filter({ hasText: 'PAY-EXACT-1' }).getByRole('checkbox')).not.toBeChecked();
+});
+
+test('retained reference cannot enter exact payment apply selection', async ({ page }) => {
+  await page.goto('/e2e/fixtures/xero-exception.html?payment-reference=1');
+  await page.getByRole('button', { name: 'Check everything' }).click();
+  await page.getByRole('button', { name: /^All \(/ }).click();
+  const retained = page.getByRole('row').filter({ hasText: 'PAY-FALLBACK-1' });
+  const exact = page.getByRole('row').filter({ hasText: 'PAY-EXACT-1' });
+  await expect(retained.getByRole('checkbox')).toBeDisabled();
+  await expect(retained.getByRole('checkbox')).not.toBeChecked();
+  await expect(exact.getByRole('checkbox')).toBeChecked();
+  await page.getByText('Finance reviewed payments').click();
+  await page.getByRole('button', { name: 'Apply exact payments' }).click();
+  const writes = await page.evaluate(() => window.exceptionFixture.requests.filter((request) => request.name === 'xeroFinancialPaymentApply' && request.body.mode === 'apply'));
+  expect(writes).toHaveLength(1);
+  expect(writes[0].body.selectedPayments).toEqual([{ id: 'sf-payment-exact', sourceFingerprint: 'payment-source-exact', reviewFingerprint: 'payment-review-exact' }]);
+});
+
+test('retained reference approval follows the financial action gate', async ({ page }) => {
+  await page.goto('/e2e/fixtures/xero-exception.html?payment-reference=1&gate=off');
+  const candidate = page.getByRole('row').filter({ hasText: 'PAY-FALLBACK-1' });
+  await expect(candidate.getByRole('button', { name: 'Review retained reference' })).toBeDisabled();
+  const writes = await page.evaluate(() => window.exceptionFixture.requests.filter((request) => request.name === 'xeroFinancialPaymentApply' && request.body.mode === 'link_existing'));
+  expect(writes).toHaveLength(0);
+});
+
+test('protected review remains in attention without a visible difference and never auto-selects', async ({ page }) => {
+  await page.goto('/e2e/fixtures/xero-exception.html?sticky=1');
+  const protectedRow = page.getByRole('row').filter({ hasText: 'INV-EXCEPTION-1' });
+  await expect(protectedRow.getByRole('checkbox')).toBeEnabled();
+  await expect(protectedRow.getByRole('checkbox')).not.toBeChecked();
+  await page.getByRole('button', { name: 'Check everything' }).click();
+  await page.getByRole('button', { name: 'Select eligible' }).click();
+  await expect(protectedRow.getByRole('checkbox')).not.toBeChecked();
+  await protectedRow.getByRole('button', { name: 'Review / resolve' }).click();
+  await expect(page.getByRole('dialog').getByRole('button', { name: 'Approve link only' })).toBeEnabled();
+});
+
+test('an explicit protected selection survives search renders and a stale-page focus event', async ({ page }) => {
+  await page.goto('/e2e/fixtures/xero-exception.html?stale=1');
+  const protectedRow = page.getByRole('row').filter({ hasText: 'INV-EXCEPTION-1' });
+  await expect(protectedRow.getByRole('checkbox')).toBeEnabled();
+  await protectedRow.getByRole('checkbox').check();
+  const before = await page.evaluate(() => window.exceptionFixture.requests.filter((request) => request.name === 'xeroFinancialSyncPreview').length);
+  await page.getByRole('textbox', { name: 'Search document, account ID or STEM' }).fill('INV-EXCEPTION-1');
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect(protectedRow.getByRole('checkbox')).toBeChecked();
+  const after = await page.evaluate(() => window.exceptionFixture.requests.filter((request) => request.name === 'xeroFinancialSyncPreview').length);
+  expect(after).toBe(before);
+});
+
 test('protected financial differences stay in attention while explicit link approval targets only that row', async ({ page }, testInfo) => {
   await page.goto('/e2e/fixtures/xero-exception.html');
   const row = page.getByRole('row').filter({ hasText: 'INV-EXCEPTION-1' });

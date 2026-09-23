@@ -27,7 +27,7 @@ const row = {
   sourceFingerprint: 'source-one', reviewFingerprint: 'review-one',
 };
 
-const checkedAt = new Date().toISOString();
+const checkedAt = new Date(Date.now() - (new URLSearchParams(window.location.search).get('stale') === '1' ? 180000 : 0)).toISOString();
 const mappingBlocked = {
   ...row, id: 'mapping-blocked', salesforceId: 'invoice-mapping', documentNumber: 'INV-MAPPING',
   action: 'blocked', status: 'blocked', reviewRequired: false,
@@ -75,13 +75,34 @@ const batchRows = Array.from({ length: batchCount }, (_, index) => {
 });
 let mappingApproved = false;
 let automaticApproved = false;
+let paymentReferenceLinked = false;
 let postingMode = 'draft';
 const automaticMapping = new URLSearchParams(window.location.search).get('automatic') === '1';
+const paymentReferenceFixture = new URLSearchParams(window.location.search).get('payment-reference') === '1';
+const referencePayment = {
+  salesforcePaymentId: 'sf-payment-reference', salesforcePaymentName: 'PAY-FALLBACK-1',
+  stemId: 'stem-one', supplierInvoiceId: null, type: 'Receivable', amount: 100, currency: 'USD',
+  paymentDate: '2026-09-01', bank: 'DBS', bankAccountId: 'xero-bank-1',
+  action: 'payment_reference_link', status: 'eligible', reviewRequired: true, blockers: [],
+  proposedPayment: null, sourceFingerprint: 'payment-source-1', reviewFingerprint: 'payment-review-1',
+  xeroPaymentId: 'xero-payment-1', xeroDocumentUrl: 'https://go.xero.com/AccountsReceivable/View.aspx?InvoiceID=xero-invoice-one',
+  xeroDocumentId: 'xero-invoice-one', xeroDocumentNumber: 'XERO-77',
+  referenceComparison: { sourceReference: '', sourceFallbackReference: 'PAY-FALLBACK-1', xeroReference: 'HISTORIC-REF' },
+};
+const exactPayment = { ...referencePayment, salesforcePaymentId: 'sf-payment-exact', salesforcePaymentName: 'PAY-EXACT-1',
+  action: 'payment_apply', reviewRequired: false, proposedPayment: { amount: 100 },
+  sourceFingerprint: 'payment-source-exact', reviewFingerprint: 'payment-review-exact' };
+const paymentRows = () => paymentReferenceFixture ? [
+  paymentReferenceLinked ? { ...referencePayment, action: 'payment_link', status: 'protected', acceptedReference: true } : referencePayment,
+  { ...referencePayment, salesforcePaymentId: 'sf-payment-blocked', salesforcePaymentName: 'PAY-BLOCKED', blockers: ['Accounting evidence changed.'] },
+  { ...referencePayment, salesforcePaymentId: 'sf-payment-missing', salesforcePaymentName: 'PAY-MISSING', reviewFingerprint: null },
+  exactPayment,
+] : [];
 const requests = [];
 const preview = () => ({
   run: { id: mappingApproved ? 'local-review-refreshed' : 'local-review-fixture', revision: 1, status: resumeStatus || 'ready_for_review', createdAt: checkedAt, postingMode },
   postingMode,
-  checkedAt, rows: [row, {
+  checkedAt, rows: [new URLSearchParams(window.location.search).get('sticky') === '1' ? { ...row, differences: [] } : row, {
     ...row, id: 'accepted-one', salesforceId: 'invoice-accepted', documentNumber: 'INV-ACCEPTED-1',
     status: 'linked', reviewRequired: false, acceptedLegacy: true, sourceFingerprint: 'source-accepted', reviewFingerprint: 'review-accepted',
   }, mappingApproved ? {
@@ -94,7 +115,7 @@ const preview = () => ({
     if (item.id === readyDraft.id) return { ...item, selected: true, status: 'selected' };
     return { ...item, selected: false };
   }),
-  payments: { rows: [] }, products: [{ id: 'prod-1', name: 'HSFO 380' }], mappingProposals: [],
+  payments: { rows: paymentRows(), summary: { total: paymentRows().length, paymentApply: paymentReferenceFixture ? 1 : 0 } }, products: [{ id: 'prod-1', name: 'HSFO 380' }], mappingProposals: [],
 });
 const portalStatus = {
   externalActions: { xero_financial_sync: { enabled: new URLSearchParams(window.location.search).get('gate') !== 'off' } },
@@ -118,6 +139,17 @@ appClient.functions.invoke = async (name, body) => {
     return { data: { ...preview(), automaticMappingPolicy: { id: 'petroleum-and-invoice-extras-v2', productCount: automaticMapping ? 1 : 0, approvedCount: automaticMapping ? 1 : 0, changedCount } } };
   }
   if (name === 'xeroFinancialSyncRun') return { data: { error: 'Fixture blocks real financial writes.' } };
+  if (name === 'xeroFinancialPaymentApply') {
+    if (body.mode === 'preview') return { data: { rows: paymentRows(), summary: { total: paymentRows().length, paymentApply: paymentReferenceFixture ? 1 : 0 } } };
+    if (body.mode === 'link_existing' && body.reviewed === true && body.selectedPayments?.length === 1
+      && body.selectedPayments[0].id === referencePayment.salesforcePaymentId
+      && body.selectedPayments[0].sourceFingerprint === referencePayment.sourceFingerprint
+      && body.selectedPayments[0].reviewFingerprint === referencePayment.reviewFingerprint) {
+      paymentReferenceLinked = true;
+      return { data: { outcomes: [{ salesforcePaymentId: referencePayment.salesforcePaymentId, xeroPaymentId: referencePayment.xeroPaymentId, status: 'linked' }], summary: { linked: 1, failed: 0 } } };
+    }
+    return { data: { error: 'Fixture blocks unreviewed or non-reference payment writes.' } };
+  }
   return { data: { error: `Unexpected fixture call: ${name}` } };
 };
 

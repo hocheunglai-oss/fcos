@@ -27,6 +27,12 @@ Version 2.0.239 separates explicit approval eligibility from the Needs attention
 
 Version 2.0.240 narrows the approval transaction to the chosen invoice rows and any previously selected eligible rows. Unselected rows keep their timestamps. Apply `20260923210832_xero_financial_selection_scope.sql` before the web release. The existing eligibility checks, revision comparison, atomic audit and service-only permissions remain in place. This removes unnecessary row rewrites observed during the two-link pilot; it does not establish the cause of the isolated database timeout or increase timeout limits.
 
+Version 2.0.241 adds explicit review for an existing payment whose only unresolved difference is a missing Salesforce reference versus a retained Xero reference. The invoice, Account, Contact, bank, amount, date, currency and no-FX evidence must agree. These candidates remain in Needs attention and are never selected for payment posting. Approval records the link and evidence in FCOS only, with an atomic actor audit and the same durable claim barrier used by payment posting. Changed or competing evidence remains blocked; an unchanged retry is safe.
+
+Apply `20260923213339_xero_payment_reference_link.sql` before the web release. Preflight canonical 15-character Salesforce payment IDs and lowercase Xero payment UUIDs for duplicate ownership. The migration adds private retained-reference evidence and service-only atomic persistence without changing existing grants. It refuses ownership conflicts rather than rewriting them.
+
+Accepted historical document links now remain link-only even if a payment is reversed or a period becomes unlocked. Changed evidence requires review even when visible differences disappear. The review screen also preserves active selections and blocks selection changes during a refresh.
+
 ## Remaining stages
 
 The broader plan still includes the durable unattended queue and automation controls, secure human CLI session handoff, evidence-based historical contact cleanup, non-routine settlements and bank-entry contact repair, controlled reversals/deletions, and operational monitoring. These need their own implementation and acceptance evidence. Never replace unresolved contact identity with a placeholder or infer payment allocation using FIFO.

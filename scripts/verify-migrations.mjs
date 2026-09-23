@@ -29,6 +29,7 @@ const migrationSources = await Promise.all(names.map(async (name) => ({
   sql: await readFile(new URL(name, migrationDirectory), 'utf8'),
 })));
 const releaseMigrationNames = new Set([
+  '20260923213339_xero_payment_reference_link.sql',
   '20260923210832_xero_financial_selection_scope.sql',
   '20260923182327_xero_contact_identity_decisions.sql',
   '20260921061845_dashboard_bank_charges.sql',
@@ -99,7 +100,21 @@ async function verifyRuntimeObjects(label) {
      where has_table_privilege('service_role', 'public.' || t, p)`,
     releaseTables.length * 2, `${label} report presets and FCBS service-role access`, [releaseTables],
   );
+  await assertRows(
+    `select count(*)::int from information_schema.columns where table_schema='public'
+     and table_name='xero_financial_payment_mappings' and column_name='retained_reference'
+     and data_type='jsonb' and is_nullable='NO' and column_default='''{}''::jsonb'`,
+    1, `${label} retained payment evidence has a compatible empty default`,
+  );
+  await assertRows(
+    `select count(*)::int from pg_index i join pg_class c on c.oid=i.indexrelid
+     join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and i.indisunique and i.indisvalid
+     and c.relname=any($1::text[])`,
+    2, `${label} payment identities have unique canonical ownership`,
+    [['xero_financial_payment_mappings_canonical_sf_uidx', 'xero_financial_payment_mappings_canonical_xero_uidx']],
+  );
   const releaseFunctions = [
+    'link_xero_payment_references_v1',
     'authorise_xero_financial_sync_run_v1',
     'save_company_finance_settings', 'save_company_finance_settings_v2', 'valid_company_bank_charges',
     'save_market_trader_workspace',

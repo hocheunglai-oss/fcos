@@ -36,8 +36,28 @@ export function paymentClaimEvidenceIds(claims) {
 }
 
 export function reviewPaymentPostingClaim(row, claim, payment) {
-  if (!claim) return row;
+  if (!claim) {
+    if (row.acceptedReference === true) return { ...row, action: 'blocked', status: 'blocked', proposedPayment: null,
+      acceptedReference: false, reviewRequired: false,
+      blockers: [...row.blockers, 'The saved reference-only payment link is missing its durable posting barrier. Finance must resolve the original link before further action.'],
+      blockerCodes: [...row.blockerCodes, 'finance_exception'] };
+    return row;
+  }
   const saved = journal(claim);
+  if (saved?.state === 'reference_linked') {
+    const retained = saved.reviewed;
+    if (claim.status === 'completed' && row.action === 'payment_link' && row.status === 'protected'
+      && row.acceptedReference === true && !row.blockers.length && row.proposedPayment === null
+      && retained?.sourceFingerprint === row.sourceFingerprint
+      && retained.referenceReviewFingerprint === row.referenceReviewFingerprint
+      && retained.xeroPaymentId === row.xeroPaymentId && saved.confirmedPaymentId === payment?.PaymentID
+      && retained.documentMappingId === row.documentMappingId && retained.bankAccountId === payment?.Account?.AccountID) {
+      return { ...row, paymentPostingClaimId: claim.id };
+    }
+    return { ...row, action: 'blocked', status: 'blocked', proposedPayment: null, acceptedReference: false,
+      reviewRequired: false, blockers: [...row.blockers, 'The saved reference-only payment link changed. Review its original identity and evidence; no replacement payment will be posted.'],
+      blockerCodes: [...row.blockerCodes, 'finance_exception'], paymentPostingClaimId: claim.id };
+  }
   const errors = row.action === 'payment_link' && ['eligible', 'protected'].includes(row.status) && saved?.reviewed
     && saved.reviewed.sourceFingerprint === row.sourceFingerprint
     ? paymentConfirmationErrors(saved.reviewed, payment || {}, saved.confirmedPaymentId) : ['A previous posting attempt has no exact, current, confirmed Xero payment.'];
@@ -84,7 +104,7 @@ async function finishClaim(client, claim, actor, state, message, observedPayment
 
 export async function resolvePaymentPostingClaim(client, claim, payment, actor) {
   const saved = journal(claim);
-  if (saved?.state === 'confirmed') return;
+  if (['confirmed', 'reference_linked'].includes(saved?.state)) return;
   if (!saved?.reviewed || paymentConfirmationErrors(saved.reviewed, payment || {}, saved.confirmedPaymentId).length) throw failure('The reread payment does not confirm the original posting.');
   await finishClaim(client, claim, actor, 'confirmed', null, [payment.PaymentID], payment.PaymentID);
 }

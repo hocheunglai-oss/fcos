@@ -2,7 +2,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { accountingPayload, documentConfirmationErrors, documentPostingBlockers, documentReadiness, financialSourceCurrency, loadFinancialSafetyContext, matchDocumentResponses, matchedXeroLines, normalizePostingMode, reviewedPostingMode, safetySelectFields, unownedXeroMetadata } from './_xeroDocumentSafety.js';
 import { approvePetroleumMappings, PETROLEUM_PRODUCT_QUERY } from './_xeroPetroleumMappings.js';
 import { requireExternalActionGate } from './_externalActionGates.js';
-import { paymentCurrency, paymentDocumentIdentityBlockers, selectXeroPaymentMatch } from './_xeroPaymentIdentity.js';
+import { paymentCurrency, paymentDocumentIdentityBlockers, selectXeroPaymentMatch, selectXeroReferenceRetentionMatch } from './_xeroPaymentIdentity.js';
+import { persistReviewedPaymentReferenceLinks } from './_xeroPaymentReferenceLink.js';
 import { loadPaymentPostingClaims, paymentClaimEvidenceIds, postReviewedPaymentBatch, resolvePaymentPostingClaim, reviewPaymentPostingClaim } from './_xeroPaymentPosting.js';
 import { xeroRateLimitSnapshot } from './_xeroRateLimit.js';
 import { sfCompositeQueries, sfQuery } from './_salesforce.js';
@@ -135,16 +136,17 @@ export function classifyXeroFinancialDocument(source, candidates, {
   if (source.postingMode === 'authorised' && ['DRAFT', 'SUBMITTED'].includes(match.status)) differences.push({ field: 'status', xero: match.status, salesforce: 'AUTHORISED' });
   const accepted = storedMapping?.retained_differences?.reviewFingerprint === legacyReviewFingerprint(source, match);
   if (blockers.length) return { action: 'blocked', status: 'blocked', blockers, warnings, xero: match, differences, matchEvidence: evidence, reviewRequired: false, acceptedLegacy: false };
-  if (isProtectedXeroDocument(match, organisation)) {
+  const preserved = storedMapping?.protected_legacy === true;
+  if (preserved || isProtectedXeroDocument(match, organisation)) {
     const compatible = equivalentAccountingLines(source.lines, match.lineItems);
-    if (differences.length && !compatible) {
+    if ((differences.length || preserved) && !compatible) {
       return { action: 'protected_legacy', status: 'protected', blockers: ['Protected Xero history has different or incomplete accounting-line amounts, account codes or tax treatment. Finance must resolve the accounting evidence; FCOS will not rewrite it.'],
         warnings, xero: match, differences, matchEvidence: evidence, reviewRequired: false, acceptedLegacy: false };
     }
     return { action: 'protected_legacy', status: 'eligible', blockers: [],
-      warnings: [...warnings, ...(differences.length ? ['Review and accept the retained legacy differences to link this invoice only. Xero accounting history will remain unchanged.'] : [])],
+      warnings: [...warnings, ...(differences.length || (preserved && !accepted) ? ['Review and accept the retained legacy evidence to link this invoice only. Xero accounting history will remain unchanged.'] : [])],
       xero: match, differences, matchEvidence: evidence,
-      reviewRequired: !accepted && (differences.length > 0 || sharedAccounts.length > 1), acceptedLegacy: accepted && differences.length > 0 };
+      reviewRequired: !accepted && (differences.length > 0 || sharedAccounts.length > 1 || preserved), acceptedLegacy: accepted && (differences.length > 0 || preserved) };
   }
   const updateBlockers = differences.length ? [...documentPostingBlockers(source, organisation, match), ...matchedXeroLines(source.lines, match.lineItems).blockers] : [];
   if (updateBlockers.length) return { action: 'blocked', status: 'blocked', blockers: updateBlockers, warnings, xero: match, differences, matchEvidence: evidence, reviewRequired: false, acceptedLegacy: false };
@@ -644,7 +646,35 @@ export async function xeroFinancialPaymentApply(body = {}, dependencies = {}) {
     paymentPreview = previewPayments,
     getConnection = getFreshXeroConnection,
     accountingFetch = xeroAccountingFetch,
+    persistReferenceLinks = persistReviewedPaymentReferenceLinks,
   } = dependencies;
+  if (body.mode === 'link_existing') {
+    requireExternalActionGate('xero_financial_sync', env);
+    const requested = body.selectedPayments;
+    if (body.reviewed !== true || !Array.isArray(requested) || !requested.length || requested.length > 25
+      || requested.some((row) => !/^[A-Za-z0-9]{15}(?:[A-Za-z0-9]{3})?$/.test(row?.id || '')
+        || !/^[a-f0-9]{64}$/.test(row?.sourceFingerprint || '') || !/^[a-f0-9]{64}$/.test(row?.reviewFingerprint || ''))
+      || new Set(requested.map((row) => row.id.slice(0, 15))).size !== requested.length) {
+      throw financialError('Select up to 25 distinct reviewed existing payment links.', 400, 'XERO_PAYMENT_REFERENCE_REVIEW_REQUIRED');
+    }
+    const preview = await paymentPreview({ ...body, persist: false, recordExactMatches: false }, { accessContext, env, fetchImpl, client });
+    const rows = requested.map((selected) => {
+      const matches = preview.rows.filter((row) => row.salesforcePaymentId === selected.id);
+      const row = matches.length === 1 ? matches[0] : null;
+      if (!row || (row.blockers || []).length || row.proposedPayment
+        || !((row.action === 'payment_reference_link' && row.status === 'eligible' && row.reviewRequired === true)
+          || (row.action === 'payment_link' && row.status === 'protected' && row.acceptedReference === true))
+        || row.sourceFingerprint !== selected.sourceFingerprint || row.reviewFingerprint !== selected.reviewFingerprint
+        || !row.referenceReviewFingerprint || !row.retainedReferenceEvidence) {
+        throw financialError('Existing payment evidence or selection changed. Refresh and review every selected link again.', 409, 'XERO_PAYMENT_REFERENCE_REVIEW_CHANGED');
+      }
+      return row;
+    });
+    const connection = await getConnection(client, { env, fetchImpl });
+    if (!preview.tenantId || preview.tenantId !== connection.tenantId) throw financialError('The Xero tenant changed. Refresh before linking.', 409, 'XERO_PAYMENT_TENANT_CHANGED');
+    assertScopes(connection, ['accounting.payments.read', 'accounting.invoices', 'accounting.settings.read'], 'Existing payment link review');
+    return { ...await persistReferenceLinks(client, { tenantId: preview.tenantId, rows, actor: actorFields(accessContext) }), rateLimit: preview.rateLimit };
+  }
   if (body.mode !== 'apply') return paymentPreview(body, { accessContext, env, fetchImpl, client });
   requireExternalActionGate('xero_financial_sync', env);
   if (body.reviewed !== true) throw financialError('Finance review is required before applying Xero payments.', 400, 'XERO_FINANCIAL_REVIEW_REQUIRED');
@@ -764,11 +794,13 @@ export function classifyXeroFinancialPayment(payment, context) {
 }
 
 function classifyPayment(payment, context) {
-  const existing = context.existingBySalesforce.get(payment.Id);
+  const existing = context.existingBySalesforce.get(payment.Id)
+    || [...context.existingBySalesforce.values()].find((row) => String(row.salesforce_payment_id).slice(0, 15) === String(payment.Id).slice(0, 15));
   if (existing) {
     const xeroPayment = context.xeroPayments.find((row) => row.PaymentID === existing.xero_payment_id);
     const documentMapping = context.documentMappingById.get(existing.document_mapping_id);
     const currentDocument = documentMapping ? context.currentDocumentById?.get(documentMapping.xero_document_id) : null;
+    if (existing.retained_reference && Object.keys(existing.retained_reference).length) return referencePaymentRow(payment, context, documentMapping, currentDocument, existing);
     const blockers = [...unsupportedPaymentBlockers(payment), ...paymentDocumentIdentityBlockers(payment, documentMapping, currentDocument)];
     if (xeroPayment) {
       const selected = selectXeroPaymentMatch({ payment, documentMapping, bankAccountId: existing.xero_bank_account_id,
@@ -807,6 +839,10 @@ function classifyPayment(payment, context) {
   const amount = Number(payment.Amount__c);
   const matched = selectXeroPaymentMatch({ payment, documentMapping, bankAccountId: bank?.xero_bank_account_id,
     xeroPayments: context.xeroPayments, paymentMappings: context.paymentMappings || [...context.existingBySalesforce.values()] });
+  if (!matched.match && !blockers.length) {
+    const retained = referencePaymentRow(payment, context, documentMapping, currentDocument);
+    if (retained?.action === 'payment_reference_link') return retained;
+  }
   blockers.push(...matched.blockers);
   if (matched.match) return paymentRow(payment, blockers.length ? 'blocked' : 'payment_link', blockers.length ? 'blocked' : 'eligible',
     uniqueStrings(blockers), documentMapping, matched.match, null, currentDocument);
@@ -826,6 +862,51 @@ function classifyPayment(payment, context) {
     Reference: paymentReference(payment),
   };
   return paymentRow(payment, blockers.length ? 'blocked' : 'payment_apply', blockers.length ? 'blocked' : 'eligible', uniqueStrings(blockers), documentMapping, null, proposedPayment, currentDocument);
+}
+
+function referencePaymentRow(payment, context, mapping, currentDocument, existing = null) {
+  const bank = context.bankByName.get(normalizeName(payment.Bank__c));
+  const result = selectXeroReferenceRetentionMatch({ payment, documentMapping: mapping, currentDocument,
+    bankAccountId: bank?.xero_bank_account_id, bankAccount: context.bankAccounts?.get(bank?.xero_bank_account_id),
+    organisation: context.organisation, xeroPayments: context.xeroPayments,
+    paymentMappings: context.paymentMappings || [...context.existingBySalesforce.values()] });
+  const blockers = uniqueStrings([...unsupportedPaymentBlockers(payment), ...result.blockers]);
+  const actual = result.match;
+  if (!actual || blockers.length || !context.tenantId || !bank?.id || !Number.isInteger(bank.revision)) {
+    return paymentRow(payment, 'blocked', 'blocked', [...blockers, 'Retained-reference evidence is incomplete or changed. Review the existing payment; no replacement will be created.'], mapping, actual, null, currentDocument);
+  }
+  const sourceFingerprint = paymentSourceFingerprint(payment);
+  const snapshot = (value, keys) => Object.fromEntries(keys.map((key) => [key, value[key] ?? null]));
+  const referenceComparison = { sourceReference: payment.Reference__c || null,
+    sourceFallbackReference: payment.Name, xeroReference: actual.Reference };
+  const evidence = { version: 1, tenantId: context.tenantId, sourceFingerprint, accountId: payment.Account__c,
+    sourcePaymentId: payment.Id, referenceComparison,
+    documentMapping: snapshot(mapping, ['id', 'salesforce_object', 'salesforce_id', 'xero_document_id', 'xero_document_type',
+      'xero_contact_id', 'source_fingerprint', 'retained_differences', 'protected_legacy']),
+    bankMapping: snapshot(bank, ['id', 'salesforce_bank_name', 'xero_bank_account_id', 'revision', 'enabled']),
+    document: snapshot(currentDocument, ['id', 'type', 'contactId', 'currency', 'total']),
+    payment: { id: actual.PaymentID, invoiceId: actual.Invoice.InvoiceID, type: actual.PaymentType, invoiceType: actual.Invoice.Type,
+      contactId: actual.Invoice.Contact.ContactID, bankAccountId: actual.Account.AccountID,
+      currency: actual.Invoice.CurrencyCode, bankCurrency: actual.Account.CurrencyCode, status: actual.Status,
+      amount: actual.Amount, bankAmount: actual.BankAmount, currencyRate: actual.CurrencyRate, date: dateOnly(actual.Date), reference: actual.Reference } };
+  const referenceReviewFingerprint = hashJson(evidence);
+  const proof = existing?.retained_reference;
+  const acceptedReference = Boolean(proof?.version === 1 && proof.tenantId === context.tenantId
+    && proof.sourceFingerprint === sourceFingerprint && proof.referenceReviewFingerprint === referenceReviewFingerprint
+    && existing.xero_payment_id === actual.PaymentID && existing.document_mapping_id === mapping.id
+    && existing.xero_bank_account_id === actual.Account.AccountID && hashJson(proof.evidence ?? null) === referenceReviewFingerprint
+    && existing.status === 'linked' && existing.exception_reason == null && existing.source_fingerprint === sourceFingerprint
+    && Number(existing.amount) === Number(payment.Amount__c) && existing.currency === paymentCurrency(payment)
+    && existing.payment_date === dateOnly(payment.Date__c));
+  if (existing && !acceptedReference) blockers.push('The approved reference-retention evidence changed. Finance must resolve the saved payment link before further action.');
+  return { ...paymentRow(payment, blockers.length ? 'blocked' : acceptedReference ? 'payment_link' : 'payment_reference_link',
+    blockers.length ? 'blocked' : acceptedReference ? 'protected' : 'eligible', blockers, mapping, actual, null, currentDocument),
+  bankAccountId: actual.Account.AccountID, referenceComparison, referenceReviewFingerprint,
+  xeroDocumentId: mapping.xero_document_id, xeroDocumentNumber: mapping.xero_document_number || null,
+  bankAccountCode: context.bankAccounts.get(actual.Account.AccountID)?.Code || null,
+  bankAccountName: context.bankAccounts.get(actual.Account.AccountID)?.Name || null,
+  retainedReferenceEvidence: evidence, reviewFingerprint: referenceReviewFingerprint,
+  reviewRequired: !acceptedReference && !blockers.length, acceptedReference };
 }
 
 function paymentRow(payment, action, status, blockers, mapping, xeroPayment, proposedPayment = null, currentDocument = null) {
