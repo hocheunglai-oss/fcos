@@ -1,6 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { accountingPayload, documentConfirmationErrors, documentPostingBlockers, documentReadiness, financialSourceCurrency, loadFinancialSafetyContext, matchDocumentResponses, matchedXeroLines, normalizePostingMode, reviewedPostingMode, safetySelectFields, unownedXeroMetadata } from './_xeroDocumentSafety.js';
 import { approvePetroleumMappings, PETROLEUM_PRODUCT_QUERY } from './_xeroPetroleumMappings.js';
+import { buildGroupedPreservationContext, completeGroupedAccountSnapshot, evaluateGroupedFinancialDocument, groupedInvoiceNumber,
+  groupedPreservationReview, groupedSourceAccounting, hasGroupedPreservation } from './_xeroGroupedPreservationAdapter.js';
+import { groupedPreservationCanonical } from './_xeroGroupedPreservation.js';
 import { requireExternalActionGate } from './_externalActionGates.js';
 import { paymentCurrency, paymentDocumentIdentityBlockers, selectXeroPaymentMatch, selectXeroReferenceRetentionMatch } from './_xeroPaymentIdentity.js';
 import { persistReviewedPaymentReferenceLinks } from './_xeroPaymentReferenceLink.js';
@@ -18,7 +21,7 @@ import {
 } from './_xeroContactSync.js';
 
 export const XERO_FINANCIAL_CUTOFF = '2026-01-01';
-export const XERO_RECONCILIATION_VERSION = 4;
+export const XERO_RECONCILIATION_VERSION = 5;
 const MAX_BATCH_SIZE = 25;
 const DEFAULT_CALLS_PER_MINUTE = 45;
 const DEFAULT_DAILY_LIMIT = 1000;
@@ -82,26 +85,38 @@ export function classifyXeroFinancialDocument(source, candidates, {
   storedMapping = null,
   organisation = {},
   deletedCandidates = [],
+  groupedContext = null,
 } = {}) {
   const active = candidates.filter((candidate) => candidate.type === source.xeroType
     && ACTIVE_XERO_STATUSES.has(String(candidate.status || '').toUpperCase()));
   const sharedAccounts = source.sharedContactAccounts || [];
+  const groupedSaved = hasGroupedPreservation(storedMapping);
   const evidence = { basis: null, sharedAccounts, candidates: [] };
   const blocked = (code, message, matches = []) => ({
     ...blockedClassification(code, message), matchEvidence: { ...evidence, candidates: matches.map(documentCandidateEvidence) },
   });
-  const stored = storedMapping ? active.find((candidate) => candidate.id === storedMapping.xero_document_id) : null;
+  const stored = storedMapping ? active.find((candidate) => groupedSaved
+    ? String(candidate.id).toLowerCase() === String(storedMapping.xero_document_id).toLowerCase()
+    : candidate.id === storedMapping.xero_document_id) : null;
   if (storedMapping && !stored) return blocked('stored_xero_document_missing', 'The stored Xero link no longer points to an active transaction. Restore or resolve the saved link before syncing.');
-  if (storedMapping?.retained_differences?.accountId && storedMapping.retained_differences.accountId !== source.accountId) {
+  if (storedMapping?.retained_differences?.accountId && (groupedSaved
+    ? String(storedMapping.retained_differences.accountId).slice(0, 15) !== String(source.accountId).slice(0, 15)
+    : storedMapping.retained_differences.accountId !== source.accountId)) {
     return blocked('salesforce_account_changed', 'The Salesforce Account changed after this document was linked. Finance must review the counterparty identity.', stored ? [stored] : []);
   }
-  if (stored && storedMapping.xero_contact_id && storedMapping.xero_contact_id !== stored.contactId) {
+  if (stored && storedMapping.xero_contact_id && (groupedSaved
+    ? String(storedMapping.xero_contact_id).toLowerCase() !== String(stored.contactId).toLowerCase()
+    : storedMapping.xero_contact_id !== stored.contactId)) {
     return blocked('stored_xero_contact_changed', 'The linked Xero transaction changed Contact. Finance must resolve the counterparty before syncing.', [stored]);
   }
   const allNumberMatches = active.filter((candidate) => exactDocumentNumber(candidate) === source.documentNumber);
   // Supplier invoice numbers are not globally unique: the current Contact is part of their identity.
   const numberMatches = source.xeroType.startsWith('ACCPAY')
     ? allNumberMatches.filter((candidate) => candidate.contactId === source.contactId) : allNumberMatches;
+  const groupedNumberMatches = groupedSaved || source.lines?.length > 1 ? active.filter((candidate) => candidate.collection === 'Invoices'
+    && groupedInvoiceNumber(exactDocumentNumber(candidate)) === groupedInvoiceNumber(source.documentNumber)
+    && (source.xeroType !== 'ACCPAY' || candidate.contactId === source.contactId)) : [];
+  if (groupedNumberMatches.length > 1) return blocked('duplicate_xero_document_number', 'More than one active Xero transaction uses this exact normalized invoice number. Finance must resolve the identity.', groupedNumberMatches);
   if (numberMatches.length > 1) return blocked('duplicate_xero_document_number', 'More than one active Xero transaction uses this document number. Finance must identify the exact invoice.', numberMatches);
   if (stored && numberMatches.some((candidate) => candidate.id !== stored.id)) {
     return blocked('conflicting_document_identity', 'The saved link and exact document number identify different Xero transactions. Resolve these links before syncing.', [stored, ...numberMatches]);
@@ -109,7 +124,7 @@ export function classifyXeroFinancialDocument(source, candidates, {
   const supportMatches = active.filter((candidate) => supportingMatch(source, candidate));
   const stemMatches = supportMatches.filter((candidate) => exactStemEvidence(source, candidate));
   const preferred = stemMatches.length ? stemMatches : supportMatches;
-  const match = stored || numberMatches[0] || (preferred.length === 1 ? preferred[0] : null);
+  const match = stored || numberMatches[0] || groupedNumberMatches[0] || (preferred.length === 1 ? preferred[0] : null);
   if (!match && preferred.length > 1) return blocked('ambiguous_legacy_match', 'More than one Xero transaction matches the Contact, currency, amount and supporting evidence. Finance must identify the exact invoice.', preferred);
   const warnings = sharedAccounts.length > 1
     ? ['This Xero Contact is shared by several Salesforce Account IDs. Review the Account IDs and this exact document; no Salesforce Accounts will be merged.'] : [];
@@ -127,7 +142,7 @@ export function classifyXeroFinancialDocument(source, candidates, {
         ? ['A deleted or voided Xero record uses this number; it remains untouched.'] : [])],
       xero: null, differences: [], matchEvidence: evidence, reviewRequired: false, acceptedLegacy: false };
   }
-  evidence.basis = stored ? 'stored_link' : numberMatches.length ? 'document_number' : stemMatches.length ? 'stem_reference' : 'date_amount';
+  evidence.basis = stored ? 'stored_link' : numberMatches.length || groupedNumberMatches.length ? 'document_number' : stemMatches.length ? 'stem_reference' : 'date_amount';
   const blockers = uniqueStrings([...(source.blockers || []), ...documentIdentityProblems(source, match)]);
   if (!sameSharedName && (evidence.basis === 'date_amount' || (stored && storedMapping.retained_differences?.accountId !== source.accountId))) {
     blockers.push('Different Salesforce Account names share this Contact; date and amount alone cannot establish the correct invoice. Finance must resolve the Account identity.');
@@ -136,6 +151,19 @@ export function classifyXeroFinancialDocument(source, candidates, {
   if (source.postingMode === 'authorised' && ['DRAFT', 'SUBMITTED'].includes(match.status)) differences.push({ field: 'status', xero: match.status, salesforce: 'AUTHORISED' });
   const accepted = storedMapping?.retained_differences?.reviewFingerprint === legacyReviewFingerprint(source, match);
   if (blockers.length) return { action: 'blocked', status: 'blocked', blockers, warnings, xero: match, differences, matchEvidence: evidence, reviewRequired: false, acceptedLegacy: false };
+  // Once a grouped proof exists, every recheck stays on this preservation path,
+  // even if line counts, source evidence, settlement or protection flags change.
+  // This branch never constructs an accounting update payload.
+  if (groupedSaved || (source.xeroCollection === 'Invoices' && source.lines?.length > 1 && match.lineItems?.length === 1
+    && ['AUTHORISED', 'PAID'].includes(match.status))) {
+    const grouped = evaluateGroupedFinancialDocument(source, match, groupedContext);
+    return { action: 'protected_legacy', status: grouped.eligible ? 'eligible' : 'protected',
+      blockers: grouped.eligible ? [] : uniqueStrings(grouped.blockers.map((blocker) => blocker.message)),
+      warnings: [...warnings, 'Review the grouped accounting equivalence and retained line, date and reference differences. Linking preserves every Xero accounting line.'],
+      xero: match, differences, matchEvidence: evidence, reviewRequired: grouped.eligible && !grouped.accepted,
+      acceptedLegacy: grouped.eligible && grouped.accepted,
+      groupedPreservation: groupedPreservationReview(grouped), groupedPreservationProof: grouped.evidence || null };
+  }
   const preserved = storedMapping?.protected_legacy === true;
   if (preserved || isProtectedXeroDocument(match, organisation)) {
     const compatible = equivalentAccountingLines(source.lines, match.lineItems);
@@ -210,6 +238,7 @@ export function isProtectedXeroDocument(document, organisation = {}) {
 }
 
 export function buildXeroAccountingPayload(source, xeroDocumentId = null, currentStatus = null, current = null) {
+  if (source.groupedPreservation) throw financialError('Grouped preservation never creates or updates Xero accounting.', 409, 'XERO_GROUPED_PRESERVATION_LINK_ONLY');
   return accountingPayload(source, xeroDocumentId, currentStatus, current);
 }
 
@@ -368,7 +397,8 @@ export async function xeroFinancialSyncPreview(body = {}, dependencies = {}) {
   }
   if (body.recordExactMatches === true) {
     const exact = itemRows.filter((item) => item.status === 'eligible'
-      && ['link', 'protected_legacy'].includes(item.proposed_action) && !item.differences?.length && !item.blockers?.length && !item.source_payload.reviewRequired)
+      && ['link', 'protected_legacy'].includes(item.proposed_action) && !item.differences?.length && !item.blockers?.length && !item.source_payload.reviewRequired
+      && !item.source_payload.groupedPreservation)
       .map((row) => documentMappingRow(row, row.xero_payload, row.proposed_action === 'protected_legacy'));
     for (const batch of chunks(exact, 100)) {
       const { error } = await client.from('xero_financial_document_mappings').upsert(batch, { onConflict: 'salesforce_object,salesforce_id' });
@@ -447,6 +477,7 @@ export async function financialPreviewChanges(runId, { client, connection, env =
 export function xeroReviewFingerprint(row) {
   return hashJson({ postingMode: normalizePostingMode(row.postingMode), source: row.sourceFingerprint, action: row.action, payload: row.proposedPayload || {},
     xero: row.xero && Object.keys(row.xero).length ? row.xero : null, blockers: row.blockers || [], differences: row.differences || [],
+    ...(row.groupedPreservation ? { groupedPreservation: row.groupedPreservation } : {}),
     matchEvidence: row.matchEvidence || null, reviewRequired: Boolean(row.reviewRequired), acceptedLegacy: Boolean(row.acceptedLegacy) });
 }
 
@@ -545,9 +576,15 @@ export async function xeroFinancialSyncRun(body = {}, {
     p_run_id: body.runId,
     p_expected_revision: Number(body.revision),
   });
+  const processingConstraint = 'xero_financial_one_processing_document_run_uidx';
+  if (startError?.code === '23505' && (startError.constraint === processingConstraint
+    || [startError.message, startError.details].some((value) => String(value || '').includes(`"${processingConstraint}"`)))) {
+    throw financialError('Another financial document batch is still processing. Wait for it to finish; if interrupted, Finance must verify its outcome before retrying.', 409, 'XERO_FINANCIAL_RUN_BUSY');
+  }
   if (startError) throw optimisticStorageError(startError, 'Xero financial sync run');
   const rate = {};
   const outcomes = [];
+  let outstandingPost = null;
   try {
   const postingMode = reviewedPostingMode(started, body.postingMode);
   const { data: rows } = await allFinancialRows(client, 'xero_financial_sync_items', (query) => query
@@ -585,25 +622,43 @@ export async function xeroFinancialSyncRun(body = {}, {
     for (const [groupIndex, group] of rowGroups.entries()) {
       const pending = group.filter((row) => !['linked', 'updated', 'created'].includes(row.status));
       const noWrite = pending.filter((row) => ['link', 'protected_legacy'].includes(row.proposed_action));
-      for (const row of noWrite) outcomes.push(await finalizeLinkedItem(client, row));
+      for (const row of noWrite) outcomes.push(await finalizeLinkedItem(client, row, {
+        current: currentBySource.get(`${row.source_object}:${row.source_id}`), run: started, tenantId: connection.tenantId, actor,
+      }));
       const writes = pending.filter((row) => ['safe_update', 'create_draft'].includes(row.proposed_action));
+      if (writes.some((row) => row.source_payload?.groupedPreservation)) throw financialError('Grouped preservation cannot post a Xero document.', 409, 'XERO_GROUPED_PRESERVATION_LINK_ONLY');
       for (const collection of ['Invoices', 'CreditNotes']) {
         const collectionRows = writes.filter((row) => row.source_payload?.xeroCollection === collection);
         if (!collectionRows.length) continue;
         assertXeroFinancialDailyReserve(rate, env);
-        const response = await accountingFetch(connection, `/${collection}?summarizeErrors=false`, {
-          method: 'POST',
-          body: { [collection]: collectionRows.map((row) => row.proposed_payload) },
-          idempotencyKey: `fcos-${body.runId}-${collection}-${collectionRows[0].row_index}`,
-          retryOnRateLimit: true,
-          env,
-          fetchImpl,
-          onResponse,
-        });
-        const confirmations = matchDocumentResponses(collectionRows, response?.[collection]);
-        for (const [index, row] of collectionRows.entries()) {
-          outcomes.push(await finalizeDocumentOutcome(client, row, confirmations[index], actor));
+        const idempotencyKey = `fcos-${body.runId}-${collection}-${collectionRows[0].row_index}`;
+        outstandingPost = { rows: [...collectionRows], attemptCounts: new Map(collectionRows.map((row) => [row.id, Number(row.mutation_attempts || 0) + 1])),
+          collection, idempotencyKey, returnedDocumentIds: [], nonRateLimitResponse: false };
+        let response;
+        try {
+          response = await accountingFetch(connection, `/${collection}?summarizeErrors=false`, {
+            method: 'POST', body: { [collection]: collectionRows.map((row) => row.proposed_payload) },
+            idempotencyKey, retryOnRateLimit: true, env, fetchImpl,
+            onResponse: (event) => {
+              if (event.status !== 429) outstandingPost.nonRateLimitResponse = true;
+              onResponse(event);
+            },
+          });
+        } catch (error) {
+          // A local reserve exception can be thrown by onResponse after Xero
+          // accepted a 200 POST. Status=429 alone therefore proves nothing.
+          if (!outstandingPost.nonRateLimitResponse && ['XERO_CONTACT_SYNC_RATE_LIMITED', 'XERO_CONTACT_SYNC_RATE_LIMIT_RETRY_EXHAUSTED'].includes(error.code)) outstandingPost = null;
+          throw error;
         }
+        const confirmations = documentWriteConfirmations(collectionRows, response?.[collection]);
+        outstandingPost.returnedDocumentIds = confirmations.map((confirmation) => confirmation.response?.InvoiceID || confirmation.response?.CreditNoteID).filter(isUuid);
+        for (const [index, row] of collectionRows.entries()) {
+          const outcome = await finalizeDocumentOutcome(client, row, confirmations[index], actor);
+          outcomes.push(outcome);
+          if (['created', 'updated'].includes(outcome.status) || outcome.definitivelyRejected === true) outstandingPost.rows = outstandingPost.rows.filter((pending) => pending.id !== row.id);
+        }
+        if (outstandingPost.rows.length) throw financialError('Xero did not confirm every accounting result. Finance must verify the existing outcome before further document writes.', 409, 'XERO_FINANCIAL_CONFIRMATION_UNCERTAIN');
+        outstandingPost = null;
       }
       if (groupIndex < rowGroups.length - 1) await sleep(batchDelayMs(env));
     }
@@ -622,6 +677,28 @@ export async function xeroFinancialSyncRun(body = {}, {
     await recordAudit(client, { runId: body.runId, eventType: 'document_apply_completed', outcome: terminal, actor, counts: summary, rate });
     return { run: serializeRun(finished), outcomes, summary, rateLimit: rate };
   } catch (error) {
+    if (outstandingPost?.rows.length) {
+      const message = 'A Xero document POST has an unconfirmed outcome. This run remains processing and blocks other document batches. Finance must verify the existing Xero outcome before this barrier can be released.';
+      const uncertainty = financialError(message, 409, 'XERO_FINANCIAL_DOCUMENT_POST_UNCERTAIN', { runId: body.runId, processingBarrierRetained: true });
+      // The processing row was committed before provider reads. If recording
+      // diagnostics fails, leave that durable barrier intact; never finish here.
+      try {
+        await client.from('xero_financial_sync_runs').update({ error_code: uncertainty.code, error_message: message,
+          rate_limit_snapshot: rate, updated_at: new Date().toISOString() }).eq('id', body.runId).eq('revision', Number(started.revision)).eq('status', 'processing');
+      } catch { /* Retain the already committed processing barrier. */ }
+      for (const row of outstandingPost.rows) {
+        try {
+          await client.from('xero_financial_sync_items').update({ status: 'failed', error_code: 'XERO_FINANCIAL_CONFIRMATION_UNCERTAIN',
+            error_message: message, mutation_attempts: outstandingPost.attemptCounts.get(row.id),
+            updated_at: new Date().toISOString() }).eq('id', row.id);
+        } catch { /* Diagnostics must never turn uncertainty into an unlocked run. */ }
+      }
+      await recordAudit(client, { runId: body.runId, eventType: 'document_post_uncertain', outcome: 'failed', actor,
+        counts: summarizeOutcomes(outcomes), rate, errorCode: uncertainty.code,
+        fingerprints: { collection: outstandingPost.collection, idempotencyKey: outstandingPost.idempotencyKey,
+          uncertainItemIds: outstandingPost.rows.map((row) => row.id), returnedDocumentIds: outstandingPost.returnedDocumentIds } }).catch(() => null);
+      throw uncertainty;
+    }
     const currentRevision = Number(started.revision);
     await client.rpc('finish_xero_financial_sync_run_v1', {
       p_run_id: body.runId,
@@ -982,12 +1059,15 @@ export async function loadSalesforceFinancialSnapshot(cutoff, querySalesforce = 
           OR (Buyer_Invoice__r.Invoice_Date__c = null AND Buyer_Invoice__r.CreatedDate >= ${quotedCutoff}T00:00:00Z)))
           OR (Supplier_Invoice__c != null AND (Supplier_Invoice__r.Invoice_Date__c >= ${quotedCutoff}
           OR (Supplier_Invoice__r.Invoice_Date__c = null AND Supplier_Invoice__r.CreatedDate >= ${quotedCutoff}T00:00:00Z))))`,
+    'SELECT Id, Name, Company_Code__c, Inactive_Suspended__c, RecordType.DeveloperName FROM Account ORDER BY Id',
   ];
   const results = await querySalesforce(queries.map((soql) => ({ soql, clean: true, limit: 100000 })));
-  const [productResult, buyerResult, supplierResult, lineResult, extraResult] = results;
-  const allResults = [productResult, buyerResult, supplierResult, lineResult, extraResult];
+  const [productResult, buyerResult, supplierResult, lineResult, extraResult, accountResult] = results;
+  const allResults = [productResult, buyerResult, supplierResult, lineResult, extraResult, accountResult];
   const failedIndex = allResults.findIndex((result) => !Array.isArray(result?.records) || result?.error || Number(result.totalSize || 0) > result.records.length);
   if (failedIndex >= 0) throw financialError(`Salesforce financial snapshot is incomplete: ${allResults[failedIndex]?.error || 'Record limit reached'}`, 502, 'XERO_FINANCIAL_SALESFORCE_INCOMPLETE');
+  const groupedAccountSnapshot = completeGroupedAccountSnapshot(accountResult);
+  if (!groupedAccountSnapshot.complete) throw financialError('Complete global Salesforce Account identity evidence is unavailable.', 502, 'XERO_FINANCIAL_SALESFORCE_INCOMPLETE');
   const fileIds = uniqueStrings((buyerResult.records || []).filter((row) => row.Buyer_Charge_Snapshot__c).map((row) => String(row.File__c || '').split('/').at(-1))).filter((id) => /^069[a-zA-Z0-9]{12}(?:[a-zA-Z0-9]{3})?$/.test(id));
   const documents = new Map();
   for (const batch of chunks(fileIds, 200)) {
@@ -1004,6 +1084,8 @@ export async function loadSalesforceFinancialSnapshot(cutoff, querySalesforce = 
   }
   return {
     safetyContext,
+    cutoffDate: cutoff,
+    groupedAccountSnapshot,
     productRecords: productResult.records || [],
     buyers: buyerResult.records || [],
     suppliers: supplierResult.records || [],
@@ -1012,6 +1094,7 @@ export async function loadSalesforceFinancialSnapshot(cutoff, querySalesforce = 
     products: [...productMap.values()].sort((a, b) => a.name.localeCompare(b.name)),
     fingerprintBasis: {
       safetyContext,
+      accounts: groupedAccountSnapshot.accounts,
       products: productResult.records || [],
       buyers: (buyerResult.records || []).map(financialRecordFingerprint),
       suppliers: (supplierResult.records || []).map(financialRecordFingerprint),
@@ -1059,6 +1142,9 @@ export async function loadXeroFinancialSnapshot(connection, cutoff, { env, fetch
     ...creditNotes.map(normalizeXeroCreditNote),
   ];
   return {
+    tenantId: connection.tenantId,
+    cutoffDate: cutoff,
+    contactsComplete: true,
     documents: documents.filter((row) => ACTIVE_XERO_STATUSES.has(row.status)),
     inactiveDocuments: documents.filter((row) => !ACTIVE_XERO_STATUSES.has(row.status)),
     contacts: contacts.map(normalizeXeroContact),
@@ -1163,6 +1249,7 @@ export function buildFinancialClassifications(salesforce, xero, stored, { postin
   const buyerSources = salesforce.buyers.map((invoice) => buildSalesforceDocument(invoice, 'buyer', linesByBuyer.get(invoice.Id) || [], mappingByKey, contactIndex, sourceContext));
   const supplierSources = salesforce.suppliers.map((invoice) => buildSalesforceDocument(invoice, 'supplier', linesBySupplier.get(invoice.Id) || [], mappingByKey, contactIndex, sourceContext));
   const allSources = [...buyerSources, ...supplierSources];
+  const groupedContext = buildGroupedPreservationContext(salesforce, xero, stored, allSources);
   const accountsByContact = index(allSources.filter((source) => source.contactId && source.accountId), (source) => source.contactId);
   for (const source of allSources) {
     source.sharedContactAccounts = [...new Map((accountsByContact.get(source.contactId) || []).map((row) => [row.accountId,
@@ -1174,8 +1261,10 @@ export function buildFinancialClassifications(salesforce, xero, stored, { postin
       source,
       xero.documents.filter((row) => row.type === source.xeroType),
       {
-        storedMapping: storedBySource.get(`Invoice__c:${source.salesforceId}`),
+        storedMapping: storedBySource.get(`Invoice__c:${source.salesforceId}`) || stored.documentMappings.find((row) => hasGroupedPreservation(row)
+          && row.salesforce_object === 'Invoice__c' && String(row.salesforce_id).slice(0, 15) === String(source.salesforceId).slice(0, 15)),
         organisation: xero.organisation,
+        groupedContext,
         deletedCandidates: xero.inactiveDocuments.filter((row) => row.type === source.xeroType),
       },
     ), storedByXero)));
@@ -1185,8 +1274,10 @@ export function buildFinancialClassifications(salesforce, xero, stored, { postin
       source,
       xero.documents.filter((row) => row.type === source.xeroType),
       {
-        storedMapping: storedBySource.get(`Supplier_Invoice__c:${source.salesforceId}`),
+        storedMapping: storedBySource.get(`Supplier_Invoice__c:${source.salesforceId}`) || stored.documentMappings.find((row) => hasGroupedPreservation(row)
+          && row.salesforce_object === 'Supplier_Invoice__c' && String(row.salesforce_id).slice(0, 15) === String(source.salesforceId).slice(0, 15)),
         organisation: xero.organisation,
+        groupedContext,
         deletedCandidates: xero.inactiveDocuments.filter((row) => row.type === source.xeroType),
       },
     ), storedByXero)));
@@ -1347,7 +1438,8 @@ function xeroLegacyLineAmount(line) {
 function preventReusedXeroIdentity(source, classification, storedByXero) {
   if (!classification.xero?.id) return classification;
   const assigned = storedByXero.get(`${source.xeroType}:${classification.xero.id}`);
-  if (!assigned || (assigned.salesforce_object === source.salesforceObject && assigned.salesforce_id === source.salesforceId)) return classification;
+  if (!assigned || (assigned.salesforce_object === source.salesforceObject && (assigned.salesforce_id === source.salesforceId
+    || (hasGroupedPreservation(assigned) && String(assigned.salesforce_id).slice(0, 15) === String(source.salesforceId).slice(0, 15))))) return classification;
   return {
     ...classification,
     action: 'blocked',
@@ -1418,6 +1510,7 @@ function buildSalesforceDocument(record, direction, children, mappingByKey, cont
   };
   source.sourceFingerprint = hashJson({ source: documentSourceFingerprint(record, children), postingMode: source.postingMode, currency: source.currency, readiness });
   source.financialFingerprint = hashJson(buildXeroAccountingPayload(source));
+  source.groupedAccounting = groupedSourceAccounting(record, sortedChildren, direction, source, context);
   return source;
 }
 
@@ -1497,7 +1590,7 @@ export async function loadAllXeroPages(connection, pathName, collection, { env, 
   throw financialError(`Xero ${collection} retrieval exceeded its complete-scan limit.`, 502, 'XERO_FINANCIAL_XERO_INCOMPLETE');
 }
 
-function normalizeXeroInvoice(row) {
+export function normalizeXeroInvoice(row) {
   return {
     id: row.InvoiceID,
     collection: 'Invoices',
@@ -1517,6 +1610,12 @@ function normalizeXeroInvoice(row) {
     lineItems: row.LineItems || [],
     unowned: unownedXeroMetadata(row),
     updatedDateUTC: row.UpdatedDateUTC,
+    groupedAccounting: {
+      complete: ['SubTotal', 'Total', 'TotalTax', 'LineAmountTypes', 'IsDiscounted', 'CurrencyRate', 'AmountDue', 'AmountPaid', 'AmountCredited'].every((key) => Object.hasOwn(row, key)) && Array.isArray(row.LineItems),
+      subtotal: row.SubTotal, total: row.Total, totalTax: row.TotalTax, lineAmountTypes: row.LineAmountTypes,
+      isDiscounted: row.IsDiscounted, currencyRate: row.CurrencyRate,
+      amountDue: row.AmountDue, amountPaid: row.AmountPaid, amountCredited: row.AmountCredited,
+    },
   };
 }
 
@@ -1605,7 +1704,30 @@ function compareDocument(source, candidate) {
   return differences;
 }
 
-async function finalizeLinkedItem(client, row) {
+async function finalizeLinkedItem(client, row, context = {}) {
+  if (row.source_payload?.groupedPreservation) {
+    const { current, run, tenantId, actor } = context;
+    const review = current?.groupedPreservation;
+    const proof = current?.groupedPreservationProof;
+    const expectedReview = row.source_payload.groupedReviewFingerprint;
+    if (row.proposed_action !== 'protected_legacy' || !review?.eligible || review.accepted || !proof
+      || !expectedReview || expectedReview !== xeroReviewFingerprint(current)
+      || proof.accounting?.tenantId !== tenantId) throw financialError('The grouped preservation proof changed or is already accepted. Refresh this reviewed link.', 409, 'XERO_GROUPED_PRESERVATION_STALE');
+    const { data, error } = await client.rpc('link_xero_grouped_document_v1', {
+      p_run_id: run.id, p_expected_run_revision: Number(run.revision), p_item_id: row.id,
+      p_expected_item_updated_at: row.updated_at, p_tenant_id: tenantId,
+      p_review: { policyVersion: review.policyVersion, fingerprint: review.fingerprint, evidenceFingerprint: review.evidenceFingerprint,
+        reviewFingerprint: expectedReview, legacyReviewFingerprint: legacyReviewFingerprint(row.source_payload, row.xero_payload), evidence: proof,
+        accountingCanonical: groupedPreservationCanonical({ policyVersion: proof.policyVersion, accounting: proof.accounting }),
+        evidenceCanonical: groupedPreservationCanonical(proof) },
+      p_actor_id: actor.id, p_actor_email: actor.email,
+    });
+    if (error) throw optimisticStorageError(error, 'Grouped invoice preservation');
+    if (data?.id !== row.id || data?.status !== 'linked' || data?.xeroDocumentId !== row.xero_document_id) {
+      throw financialError('The grouped preservation transaction did not confirm the exact reviewed invoice.', 409, 'XERO_GROUPED_PRESERVATION_UNCONFIRMED');
+    }
+    return data;
+  }
   await upsertDocumentMapping(client, row, row.xero_payload, row.proposed_action === 'protected_legacy');
   const { error } = await client.from('xero_financial_sync_items').update({ status: 'linked', applied_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq('id', row.id).eq('status', 'selected');
   if (error) throw storageError(error, 'xero_financial_sync_items');
@@ -1614,6 +1736,16 @@ async function finalizeLinkedItem(client, row) {
 
 async function finalizeDocumentOutcome(client, row, confirmation, actor) {
   const response = confirmation.response;
+  if (definitiveDocumentRejection(row, confirmation)) {
+    const errors = validationMessages(response);
+    const { error } = await client.from('xero_financial_sync_items').update({
+      status: 'failed', mutation_attempts: Number(row.mutation_attempts || 0) + 1,
+      error_code: 'XERO_FINANCIAL_VALIDATION_REJECTED', error_message: errors.join('; '),
+      updated_at: new Date().toISOString(),
+    }).eq('id', row.id);
+    if (error) throw storageError(error, 'xero_financial_sync_items');
+    return { id: row.id, status: 'failed', errors, reviewRequired: true, definitivelyRejected: true };
+  }
   const errors = [...confirmation.errors, ...documentConfirmationErrors(row, response),
     ...(Array.isArray(response.ValidationErrors) ? validationMessages(response) : [])];
   const xeroId = row.source_payload.xeroCollection === 'CreditNotes' ? response.CreditNoteID : response.InvoiceID;
@@ -1635,6 +1767,50 @@ async function finalizeDocumentOutcome(client, row, confirmation, actor) {
   }).eq('id', row.id);
   if (error) throw storageError(error, 'xero_financial_sync_items');
   return { id: row.id, status, xeroDocumentId: xeroId, xeroStatus: normalized.status, actor: actor.email };
+}
+
+// summarizeErrors=false can return HTTP200 with rejected elements. Only an
+// unambiguous, explicitly rejected element proves no write for this exact item.
+// Missing/colliding responses, contradictory success evidence and newly assigned
+// transaction IDs remain uncertain and retain the processing barrier.
+function definitiveDocumentRejection(row, confirmation) {
+  if (confirmation.errors?.length || !confirmation.response) return false;
+  const response = confirmation.response;
+  const source = row.source_payload || {};
+  const credit = source.xeroCollection === 'CreditNotes';
+  const idKey = credit ? 'CreditNoteID' : 'InvoiceID';
+  const numberKey = credit ? 'CreditNoteNumber' : 'InvoiceNumber';
+  const errors = response.ValidationErrors;
+  const explicitFailure = response.HasErrors === true || response.HasValidationErrors === true || response.StatusAttributeString === 'ERROR';
+  if (!explicitFailure || response.StatusAttributeString === 'OK' || response.HasErrors === false || response.HasValidationErrors === false
+    || !Array.isArray(errors) || !errors.length || errors.some((error) => typeof error?.Message !== 'string' || !error.Message.trim())
+    || response.Type !== source.xeroType || response.Contact?.ContactID !== source.contactId
+    || response.CurrencyCode !== source.currency || response[numberKey] !== source.documentNumber || response.Status === 'PAID') return false;
+  const expectedId = row.proposed_payload?.[idKey] || row.xero_document_id;
+  if (row.proposed_action === 'safe_update') return Boolean(expectedId) && response[idKey] === expectedId;
+  return row.proposed_action === 'create_draft' && (!response[idKey] || response[idKey] === '00000000-0000-0000-0000-000000000000');
+}
+
+function documentWriteConfirmations(rows, responses) {
+  const strict = matchDocumentResponses(rows, responses);
+  if (!Array.isArray(responses) || responses.length !== rows.length) return strict;
+  const identity = (row, response) => {
+    const source = row.source_payload || {};
+    const numberKey = source.xeroCollection === 'CreditNotes' ? 'CreditNoteNumber' : 'InvoiceNumber';
+    return response && response.Type === source.xeroType && response.Contact?.ContactID === source.contactId
+      && response.CurrencyCode === source.currency && response[numberKey] === source.documentNumber;
+  };
+  // Several rejected creates legitimately have absent/zero IDs. Correlate ONLY
+  // those proven rejections by unique submitted identity; successful responses
+  // continue using the stricter existing transaction-ID correlation unchanged.
+  return strict.map((confirmation, index) => {
+    const row = rows[index];
+    if (!confirmation.errors.length || row.proposed_action !== 'create_draft') return confirmation;
+    const matches = responses.filter((response) => identity(row, response));
+    if (matches.length !== 1 || rows.filter((candidate) => identity(candidate, matches[0])).length !== 1) return confirmation;
+    const rejection = { response: matches[0], errors: [] };
+    return definitiveDocumentRejection(row, rejection) ? rejection : confirmation;
+  });
 }
 
 function documentMappingRow(row, xero, protectedLegacy) {
@@ -1665,7 +1841,7 @@ async function upsertDocumentMapping(client, row, xero, protectedLegacy) {
   if (error) throw storageError(error, 'xero_financial_document_mappings');
 }
 
-function toSyncItemRow(row, runId, rowIndex, now) {
+export function toSyncItemRow(row, runId, rowIndex, now) {
   return {
     id: randomUUID(), run_id: runId, row_index: rowIndex,
     row_key: `${row.salesforceObject}:${row.salesforceId}`,
@@ -1674,7 +1850,8 @@ function toSyncItemRow(row, runId, rowIndex, now) {
     currency: row.currency || '', source_total: row.total,
     proposed_action: row.action, status: row.status === 'protected' ? 'protected' : row.status,
     selected: false, blockers: row.blockers, warnings: row.warnings,
-    source_payload: stripClassification(row), xero_payload: row.xero || {}, proposed_payload: row.proposedPayload || {}, differences: row.differences,
+    source_payload: { ...stripClassification(row), ...(row.groupedPreservation ? { groupedReviewFingerprint: xeroReviewFingerprint(row) } : {}) },
+    xero_payload: row.xero || {}, proposed_payload: row.proposedPayload || {}, differences: row.differences,
     xero_document_id: row.xero?.id || null, xero_document_status: row.xero?.status || null,
     idempotency_key: `${runId}:${row.salesforceObject}:${row.salesforceId}`,
     created_at: now, updated_at: now,
@@ -1682,7 +1859,8 @@ function toSyncItemRow(row, runId, rowIndex, now) {
 }
 
 function stripClassification(row) {
-  const { action: _action, status: _status, xero: _xero, proposedPayload: _proposedPayload, differences: _differences, warnings: _warnings, ...source } = row;
+  const { action: _action, status: _status, xero: _xero, proposedPayload: _proposedPayload, differences: _differences, warnings: _warnings,
+    groupedPreservationProof: _groupedPreservationProof, groupedAccounting: _groupedAccounting, ...source } = row;
   return source;
 }
 
@@ -1726,6 +1904,7 @@ function serializeClassification(row) {
     sourceFingerprint: row.sourceFingerprint, reviewFingerprint: xeroReviewFingerprint(row),
     mappingProducts: (row.lines || []).map((line) => ({ id: line.productId, name: line.productName })),
     accountId: row.accountId, matchEvidence: row.matchEvidence || null, reviewRequired: Boolean(row.reviewRequired), acceptedLegacy: Boolean(row.acceptedLegacy),
+    ...(row.groupedPreservation ? { groupedPreservation: row.groupedPreservation } : {}),
     accountName: row.accountName, companyCode: row.companyCode, stemName: row.stemName,
     invoiceDate: row.invoiceDate, dueDate: row.dueDate, currency: row.currency, total: row.total,
     action: row.action, actionLabel: row.action === 'create_draft' && row.postingMode === 'authorised' ? 'Create authorised Xero document' : XERO_FINANCIAL_ACTION_LABELS[row.action] || row.action,

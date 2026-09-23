@@ -33,7 +33,10 @@ function database(tables) {
     if (name.startsWith('authorise_')) {
       run.status = 'authorised';
       for (const row of tables.xero_financial_sync_items) if (args.p_selected_item_ids.includes(row.id)) { row.selected = true; row.status = 'selected'; }
-    } else if (name.startsWith('start_')) { assert.ok(['authorised', 'partial', 'failed'].includes(run.status)); run.status = 'processing'; }
+    } else if (name.startsWith('start_')) {
+      if (!['authorised', 'partial', 'failed'].includes(run.status)) return { error: { code: '40001', message: 'Run is not resumable' } };
+      run.status = 'processing';
+    }
     else run.status = args.p_status;
     run.revision += 1;
     return { data: { ...run } };
@@ -97,14 +100,15 @@ test('unconfirmed authorised responses never store mappings or replay on resume'
     f.dependencies.accountingFetch = async (...args) => {
       const response = await send(...args); Object.assign(response.Invoices[0], changes); return response;
     };
-    const result = await xeroFinancialSyncRun(f.request, f.dependencies);
-    assert.equal(result.run.status, 'partial'); assert.equal(f.items[0].status, 'failed');
+    await assert.rejects(xeroFinancialSyncRun(f.request, f.dependencies), { code: 'XERO_FINANCIAL_DOCUMENT_POST_UNCERTAIN' });
+    const run = f.tables.xero_financial_sync_runs[0];
+    assert.equal(run.status, 'processing'); assert.equal(f.items[0].status, 'failed');
     assert.equal(f.items[0].error_code, 'XERO_FINANCIAL_CONFIRMATION_UNCERTAIN');
     assert.equal(f.tables.xero_financial_document_mappings.length, 1);
     assert.equal(f.tables.xero_financial_document_mappings[0].salesforce_id, 'invoice-2');
-    const resumed = await xeroFinancialSyncRun({ runId: f.runId, revision: result.run.revision }, f.dependencies);
+    await assert.rejects(xeroFinancialSyncRun({ runId: f.runId, revision: run.revision }, f.dependencies), { code: 'XERO_FINANCIAL_STALE_WRITE' });
     assert.equal(f.writes.length, 1, 'an uncertain posting is never repeated from the same preview');
-    assert.equal(resumed.outcomes[0].reviewRequired, true);
+    assert.equal(f.client.calls.some((call) => call.name.startsWith('finish_')), false, 'uncertainty keeps the document-run barrier');
   }
 });
 
@@ -113,8 +117,8 @@ test('duplicate response transaction IDs cannot link distinct Salesforce documen
   f.dependencies.accountingFetch = async (...args) => {
     const response = await send(...args); response.Invoices[1].InvoiceID = response.Invoices[0].InvoiceID; return response;
   };
-  const result = await xeroFinancialSyncRun(f.request, f.dependencies);
-  assert.equal(result.run.status, 'partial'); assert.ok(f.items.every((row) => row.status === 'failed'));
+  await assert.rejects(xeroFinancialSyncRun(f.request, f.dependencies), { code: 'XERO_FINANCIAL_DOCUMENT_POST_UNCERTAIN' });
+  assert.equal(f.tables.xero_financial_sync_runs[0].status, 'processing'); assert.ok(f.items.every((row) => row.status === 'failed'));
   assert.equal(f.tables.xero_financial_document_mappings.length, 0);
 });
 
@@ -137,8 +141,8 @@ test('an authorised update response with another transaction ID cannot replace t
   f.dependencies.accountingFetch = async (...args) => {
     const response = await send(...args); response.Invoices[0].InvoiceID = '99999999-9999-4999-8999-999999999999'; return response;
   };
-  const result = await xeroFinancialSyncRun(f.request, f.dependencies);
-  assert.equal(result.run.status, 'partial'); assert.equal(f.items[0].error_code, 'XERO_FINANCIAL_CONFIRMATION_UNCERTAIN');
+  await assert.rejects(xeroFinancialSyncRun(f.request, f.dependencies), { code: 'XERO_FINANCIAL_DOCUMENT_POST_UNCERTAIN' });
+  assert.equal(f.tables.xero_financial_sync_runs[0].status, 'processing'); assert.equal(f.items[0].error_code, 'XERO_FINANCIAL_CONFIRMATION_UNCERTAIN');
   assert.equal(f.items[1].status, 'updated'); assert.equal(f.tables.xero_financial_document_mappings.length, 1);
   assert.equal(f.tables.xero_financial_document_mappings[0].salesforce_id, 'invoice-2');
 });

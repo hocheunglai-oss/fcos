@@ -29,6 +29,7 @@ const migrationSources = await Promise.all(names.map(async (name) => ({
   sql: await readFile(new URL(name, migrationDirectory), 'utf8'),
 })));
 const releaseMigrationNames = new Set([
+  '20260923222821_xero_grouped_preservation_link.sql',
   '20260923213339_xero_payment_reference_link.sql',
   '20260923210832_xero_financial_selection_scope.sql',
   '20260923182327_xero_contact_identity_decisions.sql',
@@ -114,6 +115,7 @@ async function verifyRuntimeObjects(label) {
     [['xero_financial_payment_mappings_canonical_sf_uidx', 'xero_financial_payment_mappings_canonical_xero_uidx']],
   );
   const releaseFunctions = [
+    'link_xero_grouped_document_v1', 'xero_grouped_salesforce_id_v1', 'protect_xero_grouped_mapping_v1',
     'link_xero_payment_references_v1',
     'authorise_xero_financial_sync_run_v1',
     'save_company_finance_settings', 'save_company_finance_settings_v2', 'valid_company_bank_charges',
@@ -123,6 +125,19 @@ async function verifyRuntimeObjects(label) {
     'validate_hedge_fcbs_document', 'protect_hedge_fcbs_issued', 'protect_hedge_fcbs_link_identity',
     'assert_hedge_fcbs_document', 'set_hedge_fcbs_settlement_status', 'save_hedge_fcbs_settlement',
   ];
+  await assertRows(
+    `select count(*)::int from pg_index i join pg_class c on c.oid=i.indexrelid
+     join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and i.indisunique and i.indisvalid
+     and c.relname=any($1::text[])`,
+    4, `${label} canonical ownership and one active document batch are enforced`,
+    [['xero_financial_documents_canonical_sf_uidx', 'xero_financial_documents_canonical_xero_uidx',
+      'xero_financial_products_canonical_sf_uidx', 'xero_financial_one_processing_document_run_uidx']],
+  );
+  await assertRows(
+    `select count(*)::int from pg_trigger where tgrelid='public.xero_financial_document_mappings'::regclass
+     and tgname='protect_xero_grouped_mapping' and not tgisinternal and tgenabled='O'`,
+    1, `${label} accepted grouped document proof remains protected`,
+  );
   await assertRows(
     `select count(*)::int from pg_proc p join pg_namespace n on n.oid=p.pronamespace
      where n.nspname='public' and p.proname=any($1::text[]) and not p.prosecdef

@@ -153,7 +153,9 @@ test('financial snapshot reads the complete product catalog independent of invoi
   const query = async (queries) => {
     assert.match(queries[0].soql, /SELECT Id, Name, RecordType.DeveloperName FROM Product2 ORDER BY Id/);
     assert.doesNotMatch(queries[0].soql, /IsActive|2026/);
-    return [{ records: products, totalSize: products.length }, ...Array.from({ length: 4 }, () => ({ records: [], totalSize: 0 }))];
+    assert.match(queries[5].soql, /FROM Account ORDER BY Id/);
+    assert.doesNotMatch(queries[5].soql, /WHERE|2026/);
+    return [{ records: products, totalSize: products.length }, ...Array.from({ length: 5 }, () => ({ records: [], totalSize: 0 }))];
   };
   const safetyContext = { fields: {}, singleCurrency: false, corporateCurrency: null };
   const snapshot = await loadSalesforceFinancialSnapshot('2026-01-01', query, safetyContext);
