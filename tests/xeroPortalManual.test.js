@@ -14,6 +14,10 @@ const REQUIRED_CONTROLS = [
   'Approve mapping',
   'Review and sync selected',
   'Confirm and sync',
+  'Review / resolve',
+  'Approve and update',
+  'Approve and create draft',
+  'Approve link only',
   'Resume approved sync',
   'Preview payments',
   'Apply exact payments',
@@ -39,7 +43,7 @@ test('Xero Portal manual keeps complete parallel English and Traditional Chinese
     assert.ok(manual.subtitle);
     assert.equal(manual.important.length, 3);
     assert.equal(manual.tasks.length, 4);
-    assert.equal(manual.sections.reduce((sum, section) => sum + section.controls.length, 0), 49);
+    assert.equal(manual.sections.reduce((sum, section) => sum + section.controls.length, 0), 53);
     for (const section of manual.sections) {
       assert.ok(section.title);
       assert.ok(section.purpose);
@@ -60,7 +64,7 @@ test('Xero Portal manual explains every critical write and review control', () =
   for (const label of REQUIRED_CONTROLS) assert.ok(labels.includes(label), `${label} must be documented`);
 
   const xeroWrites = XERO_PORTAL_MANUALS.en.sections.flatMap((section) => section.controls).filter((control) => control[3] === 'xero').map((control) => control[0]);
-  assert.deepEqual(xeroWrites.sort(), ['Apply exact payments', 'Apply selected', 'Create Xero draft bill', 'Confirm and sync', 'Resume approved sync', 'Sync'].sort());
+  assert.deepEqual(xeroWrites.sort(), ['Apply exact payments', 'Apply selected', 'Create Xero draft bill', 'Confirm and sync', 'Resume approved sync', 'Sync', 'Approve and update', 'Approve and create draft'].sort());
 });
 
 test('Xero Portal exposes the bilingual manual from both the header and tabs', async () => {
@@ -76,4 +80,9 @@ test('Xero Portal exposes the bilingual manual from both the header and tabs', a
   assert.match(manual, /<Accordion/);
   assert.match(manual, /<details/);
   assert.doesNotMatch(manual, /<table/);
+});
+
+test('generated on-demand manual retains all bilingual guide content', async () => {
+  const contents = JSON.parse(await readFile(new URL('../src/content/xero-portal-manual.json', import.meta.url), 'utf8'));
+  assert.deepEqual(contents, XERO_PORTAL_MANUALS);
 });

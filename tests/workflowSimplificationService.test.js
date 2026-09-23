@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
 import test from 'node:test';
-import { allFinancialRows, buildFinancialClassifications, financialPreviewChanges, xeroFinancialSyncRun } from '../api/_xeroFinancialSync.js';
+import { allFinancialRows, buildFinancialClassifications, financialPreviewChanges, xeroFinancialSyncRun, XERO_RECONCILIATION_VERSION } from '../api/_xeroFinancialSync.js';
 import { isFinalSettlement } from '../src/lib/disputeWorkflowPresentation.js';
 import { createDisputeSettlementEvidenceHandlers, loadDisputeSettlementEvidence } from '../api/_disputeSettlementEvidence.js';
 
@@ -109,7 +109,7 @@ test('saved mappings retrieve every page rather than silently stopping at 1000 r
 test('background check uses modified-since and detects source, lock and aged snapshots', async () => {
   const id = randomUUID(); const controls = { bankMappings: [], documentMappings: [], productMappings: [] };
   const run = { id, source_snapshot_at: '2026-09-15T10:00:00Z', control_totals: { workflowSnapshot: {
-    controlsFingerprint: createHash('sha256').update(JSON.stringify(controls)).digest('hex'), organisation: { periodLockDate: null, endOfYearLockDate: null },
+    reconciliationVersion: XERO_RECONCILIATION_VERSION, controlsFingerprint: createHash('sha256').update(JSON.stringify(controls)).digest('hex'), organisation: { periodLockDate: null, endOfYearLockDate: null },
   } } };
   const calls = []; const deps = { client: database({ xero_financial_sync_runs: [run] }), connection: {}, now: Date.parse('2026-09-15T10:10:00Z'),
     querySalesforce: async () => Array.from({ length: 8 }, () => ({ records: [] })),
@@ -168,4 +168,34 @@ test('USD credit evidence cannot settle a different currency or closing action',
     { action_type: 'close_buyer_dispute', currency_iso_code: 'USD', amount: 20 }]) {
     assert.deepEqual(await loadDisputeSettlementEvidence({ stem: {}, action, party: {} }, { client: {} }), { candidates: [] });
   }
+});
+
+test('reviewed protected legacy differences are linked without Xero writes and remain accepted only while evidence is unchanged', async () => {
+  const f = fixture();
+  f.xero.documents = f.salesforce.buyers.map((record, index) => ({ id: `xero-${index}`, type: 'ACCREC', collection: 'Invoices',
+    status: 'PAID', amountDue: 0, amountPaid: 100, amountCredited: 0, total: 100, currency: 'USD', contactId: `contact-${index + 1}`,
+    invoiceNumber: record.Name, date: '2026-08-31', dueDate: '2026-08-31', reference: 'Historical reference',
+    lineItems: [{ Description: 'Legacy line', Quantity: 1, UnitAmount: 100, AccountCode: '200', TaxType: 'NONE' }] }));
+  const classify = () => buildFinancialClassifications(f.salesforce, f.xero, { productMappings: f.tables.xero_financial_product_mappings, documentMappings: f.tables.xero_financial_document_mappings });
+  const preview = classify();
+  assert.ok(preview.rows.every(row => row.reviewRequired && row.action === 'protected_legacy' && row.status === 'eligible' && row.proposedPayload === null));
+  f.items.forEach((item, index) => Object.assign(item, { source_payload: preview.rows[index], proposed_action: 'protected_legacy', proposed_payload: {}, xero_payload: preview.rows[index].xero, differences: preview.rows[index].differences }));
+  await xeroFinancialSyncRun(f.request, f.dependencies);
+  assert.equal(f.writes.length, 0, 'Finance acceptance never rewrites protected Xero accounting history');
+  assert.equal(f.tables.xero_financial_document_mappings.length, 2);
+  assert.ok(f.tables.xero_financial_document_mappings.every(row => row.retained_differences.accountId && row.retained_differences.reviewFingerprint));
+  const refreshed = classify();
+  assert.ok(refreshed.rows.every(row => row.acceptedLegacy && !row.reviewRequired && row.differences.length > 0));
+  f.xero.documents[0].reference = 'Changed after review';
+  assert.equal(classify().rows[0].reviewRequired, true);
+  f.xero.documents[1].lineItems[0].AccountCode = '999';
+  assert.ok(classify().rows[1].blockers.length);
+});
+
+test('old saved rule versions force a complete new check without using old selections', async () => {
+  const id = randomUUID();
+  const result = await financialPreviewChanges(id, { client: database({ xero_financial_sync_runs: [{ id,
+    source_snapshot_at: new Date().toISOString(), control_totals: { workflowSnapshot: { controlsFingerprint: 'old' } } }] }), connection: {},
+    querySalesforce: async () => { throw new Error('Old classifications should invalidate before probing providers'); } });
+  assert.equal(result.changed, true);
 });

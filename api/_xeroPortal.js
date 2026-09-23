@@ -19,6 +19,8 @@ import {
 } from './_xeroContactSync.js';
 import { getInstanceUrl, salesforceAuthMode, sfCompositeQueries, sfQuery } from './_salesforce.js';
 import { externalActionGates, requireExternalActionGate } from './_externalActionGates.js';
+import { xeroRateLimitSnapshot } from './_xeroRateLimit.js';
+import { addUsageYear, hasUsageYearBreakdown, usageYearFields } from './_xeroUsageYears.js';
 
 const AUTHORIZATION_BASE = 'https://login.xero.com';
 const RECEIPT_BUCKET = 'xero-portal-receipts';
@@ -60,12 +62,14 @@ export const CONTACT_LIFECYCLE_STATUS_LABELS = {
   failed: 'The row was selected but Xero or validation rejected the mutation.',
 };
 
-const READABLE_USAGE_SOURCES = [
-  { source: 'invoices', label: 'Invoices, bills, and credit notes', pathName: '/Invoices', collection: 'Invoices' },
-  { source: 'bank-transactions', label: 'Bank transactions', pathName: '/BankTransactions', collection: 'BankTransactions' },
-  { source: 'payments', label: 'Payments', pathName: '/Payments', collection: 'Payments' },
-  { source: 'overpayments', label: 'Overpayments', pathName: '/Overpayments', collection: 'Overpayments' },
-  { source: 'prepayments', label: 'Prepayments', pathName: '/Prepayments', collection: 'Prepayments' },
+export const XERO_CONTACT_USAGE_POLICY_VERSION = 2;
+export const READABLE_USAGE_SOURCES = [
+  { source: 'invoices', label: 'Invoices and bills', pathName: '/Invoices', collection: 'Invoices', recordId: 'InvoiceID' },
+  { source: 'credit-notes', label: 'Credit notes', pathName: '/CreditNotes', collection: 'CreditNotes', recordId: 'CreditNoteID' },
+  { source: 'bank-transactions', label: 'Bank transactions', pathName: '/BankTransactions', collection: 'BankTransactions', recordId: 'BankTransactionID' },
+  { source: 'payments', label: 'Payments', pathName: '/Payments', collection: 'Payments', recordId: 'PaymentID' },
+  { source: 'overpayments', label: 'Overpayments', pathName: '/Overpayments', collection: 'Overpayments', recordId: 'OverpaymentID' },
+  { source: 'prepayments', label: 'Prepayments', pathName: '/Prepayments', collection: 'Prepayments', recordId: 'PrepaymentID' },
   { source: 'expense-claims', label: 'Expense claims', pathName: '/ExpenseClaims', collection: 'Invoices', blocked: true },
   { source: 'receipts', label: 'Receipts', pathName: '/Receipts', collection: 'Invoices', blocked: true },
 ];
@@ -329,16 +333,16 @@ export async function xeroPortalContactLifecycleRun(body = {}, { env = process.e
   return { run: await loadLifecycleRun(client, body.runId) };
 }
 
-export async function xeroPortalContactLifecyclePreview(body = {}, { accessContext = null, env = process.env, fetchImpl = fetch } = {}) {
+export async function xeroPortalContactLifecyclePreview(body = {}, { accessContext = null, env = process.env, fetchImpl = fetch, connectionReader = getFreshXeroConnection, accountExporter = exportSalesforceAccountsForLifecycle } = {}) {
   const client = xeroContactSyncServiceClient(env);
   const runId = randomUUID();
   const lock = await acquireLifecycleLock(client, runId, accessContext?.profile, env);
   try {
     const startedAt = new Date().toISOString();
-    const connection = await getFreshXeroConnection(client, { env, fetchImpl });
+    const connection = await connectionReader(client, { env, fetchImpl });
     assertXeroScopes(connection, ['accounting.contacts'], 'Contact lifecycle preview');
     const [salesforce, contactsResult, usageResult] = await Promise.all([
-      exportSalesforceAccountsForLifecycle(env),
+      accountExporter(env),
       listXeroContactsForLifecycle(connection, { env, fetchImpl }),
       resolveUsageCacheForPreview(client, connection, {
         env,
@@ -351,7 +355,10 @@ export async function xeroPortalContactLifecyclePreview(body = {}, { accessConte
       usageCoverageComplete: usageResult.coverageComplete,
     });
     rows = rows.map((row) => ({ ...row, selected: row.status === 'eligible' }));
-    const summary = summarizeContactLifecycleRows(rows, contactsResult.contacts, salesforce.totalRecords);
+    const summary = {
+      ...summarizeContactLifecycleRows(rows, contactsResult.contacts, salesforce.totalRecords),
+      usagePolicyVersion: XERO_CONTACT_USAGE_POLICY_VERSION,
+    };
     const run = {
       id: runId,
       state: 'previewed',
@@ -386,7 +393,7 @@ export async function xeroPortalContactLifecyclePreview(body = {}, { accessConte
   }
 }
 
-export async function xeroPortalContactLifecycleApply(body = {}, { accessContext = null, env = process.env, fetchImpl = fetch } = {}) {
+export async function xeroPortalContactLifecycleApply(body = {}, { accessContext = null, env = process.env, fetchImpl = fetch, client = null } = {}) {
   requireExternalActionGate('xero_contact_sync', env);
   if (body.reviewed !== true) {
     throw portalError('Confirm that the selected Xero contact changes have been reviewed before applying.', 400, 'XERO_PORTAL_REVIEW_REQUIRED');
@@ -394,7 +401,7 @@ export async function xeroPortalContactLifecycleApply(body = {}, { accessContext
   const selectedIds = new Set((Array.isArray(body.rowIds) ? body.rowIds : []).map((value) => String(value || '').trim()).filter(Boolean));
   if (!selectedIds.size) throw portalError('Select at least one eligible contact row to apply.', 400, 'XERO_PORTAL_SELECTION_REQUIRED');
 
-  const client = xeroContactSyncServiceClient(env);
+  client ??= xeroContactSyncServiceClient(env);
   const run = await loadLifecycleRun(client, body.runId);
   if (!run) throw portalError('Contact lifecycle run was not found.', 404, 'XERO_PORTAL_RUN_NOT_FOUND');
   if (run.state !== 'previewed' && run.state !== 'applied') {
@@ -410,6 +417,7 @@ export async function xeroPortalContactLifecycleApply(body = {}, { accessContext
     if (invalidSelections.length) {
       throw portalError('One or more selected rows are no longer eligible. Run a fresh preview.', 409, 'XERO_PORTAL_INVALID_SELECTION', { invalidSelections });
     }
+    const archiveUsage = await verifyContactLifecycleArchiveUsage(client, connection, run, selectedCandidates, { env, fetchImpl });
     const fresh = await getXeroContactsByIds(connection, selectedCandidates.map((row) => row.xeroContactId), { env, fetchImpl });
     const verification = verifySelectedLifecycleRows(selectedCandidates, fresh.contacts);
     const verifiedUpdates = verification.updates;
@@ -458,7 +466,10 @@ export async function xeroPortalContactLifecycleApply(body = {}, { accessContext
         validationErrors: outcome?.errors || ['Xero contact update failed.'],
       };
     });
-    const summary = summarizeContactLifecycleRows(updatedRows, [], run.salesforce?.totalRecords || 0);
+    const summary = {
+      ...summarizeContactLifecycleRows(updatedRows, [], run.salesforce?.totalRecords || 0),
+      ...(run.summary?.usagePolicyVersion ? { usagePolicyVersion: run.summary.usagePolicyVersion } : {}),
+    };
     const updatedRun = {
       ...run,
       state: 'applied',
@@ -466,9 +477,10 @@ export async function xeroPortalContactLifecycleApply(body = {}, { accessContext
       updatedAt: appliedAt,
       xero: {
         ...run.xero,
-        applyVerifyCalls: fresh.xeroCalls,
+        applyVerifyCalls: fresh.xeroCalls + (archiveUsage?.xeroCalls || 0),
         applyMutationCalls: Math.ceil(verifiedUpdates.length / XERO_CONTACT_BATCH_SIZE),
       },
+      usageCache: archiveUsage?.summary || run.usageCache,
       summary,
       rows: updatedRows,
     };
@@ -752,7 +764,7 @@ function scopeAllows(scopes, required) {
   return false;
 }
 
-async function exportSalesforceAccountsForLifecycle(env = process.env) {
+export async function exportSalesforceAccountsForLifecycle(env = process.env, { query = sfQuery, compositeQueries = sfCompositeQueries } = {}) {
   const accountQuery =
     'SELECT Id, Name, Company_Code__c, Inactive_Suspended__c, RecordType.DeveloperName ' +
     'FROM Account ' +
@@ -761,8 +773,8 @@ async function exportSalesforceAccountsForLifecycle(env = process.env) {
     "AND RecordType.DeveloperName IN ('Buyer','Supplier','Buyer_Supplier','Broker')";
   const referenceQueries = recentStemAccountReferenceQueries(env);
   const [accountResult, referenceResults] = await Promise.all([
-    sfQuery(accountQuery, { clean: true, limit: 100000 }),
-    sfCompositeQueries(referenceQueries.map((query) => ({ soql: query.query, clean: true, limit: 100000 }))),
+    query(accountQuery, { clean: true, limit: 100000 }),
+    compositeQueries(referenceQueries.map((query) => ({ soql: query.query, clean: true, limit: 100000 }))),
   ]);
   const recentStemAccountIds = new Set();
   const sources = referenceQueries.map((query, index) => {
@@ -899,90 +911,187 @@ async function getXeroContactsByIds(connection, contactIds, { env = process.env,
   return { contacts, xeroCalls };
 }
 
-async function resolveUsageCacheForPreview(client, connection, { env = process.env, fetchImpl = fetch, forceUsageRefresh = false, incrementalUsageRefresh = false } = {}) {
-  const existing = await loadUsageCacheRows(client);
+// An old, unscoped aggregate may already have lost historical usage. Never
+// promote it to a trusted cache: only a full scan can populate this namespace.
+export function xeroContactUsageCacheKey(tenantId, source) {
+  if (!nonBlank(tenantId)) throw portalError('Xero tenant is required for usage evidence.', 409, 'XERO_PORTAL_USAGE_TENANT_REQUIRED');
+  return `usage-v${XERO_CONTACT_USAGE_POLICY_VERSION}:${encodeURIComponent(nonBlank(tenantId))}:${source}`;
+}
+
+function currentUsageCacheRows(rows, tenantId) {
+  if (!nonBlank(tenantId)) return [];
+  return READABLE_USAGE_SOURCES.flatMap((source) => {
+    const row = rows.find((candidate) => candidate.source === xeroContactUsageCacheKey(tenantId, source.source));
+    return row ? [{ ...row, source: source.source, label: source.label }] : [];
+  });
+}
+
+function completeUsageCacheRow(row) {
+  return row?.status === 'complete' && Array.isArray(row.contact_usage)
+    && Number.isFinite(Date.parse(row.scanned_at));
+}
+
+function completeUsageCoverage(rows) {
+  return READABLE_USAGE_SOURCES.filter((source) => !source.blocked)
+    .every((source) => completeUsageCacheRow(rows.find((row) => row.source === source.source)));
+}
+
+export async function resolveUsageCacheForPreview(client, connection, { env = process.env, fetchImpl = fetch, forceUsageRefresh = false, incrementalUsageRefresh = false, callsPerMinute = 45 } = {}) {
+  const tenantId = nonBlank(connection.tenantId);
+  xeroContactUsageCacheKey(tenantId, 'invoices');
+  const existing = currentUsageCacheRows(await loadUsageCacheRows(client), tenantId);
   const existingBySource = new Map(existing.map((row) => [row.source, row]));
   const scanned = [];
+  const rateState = { snapshot: {} };
   let xeroCalls = 0;
 
   for (const source of READABLE_USAGE_SOURCES) {
     const cached = existingBySource.get(source.source);
     if (source.blocked) {
-      const blocked = cached || usageCacheRowFromResult({
+      const blocked = usageCacheRowFromResult({
         source: source.source,
         label: source.label,
         status: 'blocked',
-        recordsScanned: 0,
-        recordsWithContact: 0,
-        xeroCalls: 0,
-        contacts: new Map(),
         error: 'Current Xero OAuth/API access cannot read this endpoint.',
       });
-      if (!cached) await saveUsageScanResult(client, blocked);
       scanned.push(blocked);
       continue;
     }
 
-    if (cached && !forceUsageRefresh && !incrementalUsageRefresh) {
+    // Older aggregates prove usage, but cannot tell the transaction years.
+    // Rebuild once; do not infer years from the cache's last-seen timestamp.
+    const reusable = completeUsageCacheRow(cached) && cached.contact_usage.every(hasUsageYearBreakdown);
+    if (reusable && !forceUsageRefresh && !incrementalUsageRefresh) {
       scanned.push(cached);
       continue;
     }
 
-    const ifModifiedSince = cached && incrementalUsageRefresh && !forceUsageRefresh ? cached.scanned_at : null;
-    const result = await scanXeroContactUsageSource(connection, source, ifModifiedSince, { env, fetchImpl });
-    xeroCalls += result.xeroCalls;
-    const cacheRow = usageCacheRowFromResult(result);
-    await saveUsageScanResult(client, cacheRow);
+    const ifModifiedSince = reusable && incrementalUsageRefresh && !forceUsageRefresh ? cached.scanned_at : null;
+    let result = await scanXeroContactUsageSource(connection, source, ifModifiedSince, {
+      env, fetchImpl, rateState, callsPerMinute, stopOnFirstRecord: Boolean(ifModifiedSince),
+    });
+    let sourceCalls = result.xeroCalls;
+    let cacheRow;
+    if (ifModifiedSince && result.status === 'complete' && result.recordsScanned === 0) {
+      // A no-change probe advances only the watermark, never the aggregates.
+      cacheRow = { ...cached, scanned_at: result.scanned_at, updated_at: new Date().toISOString(), error_message: null };
+    } else {
+      if (ifModifiedSince && result.status === 'complete') {
+        // Aggregate-only evidence cannot safely apply edits, voids, deletions or
+        // contact reassignments. Rebuild exactly once after detecting a change.
+        result = await scanXeroContactUsageSource(connection, source, null, { env, fetchImpl, rateState, callsPerMinute });
+        sourceCalls += result.xeroCalls;
+      }
+      cacheRow = usageCacheRowFromResult(result);
+      if (result.status !== 'complete' && cached) {
+        // Retain protective evidence, but mark it untrusted for absence checks.
+        // The next attempt must rebuild in full, not resume incrementally.
+        cacheRow = {
+          ...cacheRow,
+          contact_usage: cached.contact_usage,
+          records_scanned: cached.records_scanned,
+          records_with_contact: cached.records_with_contact,
+          scanned_at: cached.scanned_at,
+        };
+      }
+    }
+    cacheRow.xero_calls = sourceCalls;
+    xeroCalls += sourceCalls;
+    await saveUsageScanResult(client, { ...cacheRow, source: xeroContactUsageCacheKey(tenantId, source.source) });
     scanned.push(cacheRow);
   }
 
-  const readableRows = scanned.filter((row) => !READABLE_USAGE_SOURCES.find((source) => source.source === row.source)?.blocked);
-  const coverageComplete = readableRows.length >= READABLE_USAGE_SOURCES.filter((source) => !source.blocked).length
-    && readableRows.every((row) => row.status === 'complete');
+  const coverageComplete = completeUsageCoverage(scanned);
   return {
     usageByContactId: usageMapFromCacheRows(scanned),
     xeroCalls,
     coverageComplete,
-    summary: usageCacheSummary(scanned, xeroCalls, coverageComplete),
+    summary: usageCacheSummary(scanned, xeroCalls, coverageComplete, tenantId),
   };
 }
 
-async function scanXeroContactUsageSource(connection, source, ifModifiedSince = null, { env = process.env, fetchImpl = fetch } = {}) {
-  if (source.blocked) {
-    return {
-      source: source.source,
-      label: source.label,
-      status: 'blocked',
-      recordsScanned: 0,
-      recordsWithContact: 0,
-      xeroCalls: 0,
-      contacts: new Map(),
-      error: 'Current Xero OAuth/API access cannot read this endpoint.',
-    };
+function assertUsageDailyReserve(rate, env) {
+  if (rate?.dayRemaining == null) return;
+  const configuredLimit = Number(env.XERO_DAILY_LIMIT || 1000);
+  const configuredRatio = Number(env.XERO_DAILY_RESERVE_RATIO || 0.2);
+  const limit = Number.isFinite(configuredLimit) ? Math.max(1, configuredLimit) : 1000;
+  const ratio = Number.isFinite(configuredRatio) ? Math.min(0.9, Math.max(0.2, configuredRatio)) : 0.2;
+  const reserve = Math.ceil(limit * ratio);
+  if (Number(rate.dayRemaining) <= reserve) {
+    throw portalError('Xero daily allowance reserve reached. Complete usage evidence is required before archiving.', 429, 'XERO_PORTAL_USAGE_DAILY_RESERVE', { rateLimit: rate, reserve });
   }
+}
 
+export async function scanXeroContactUsageSource(connection, source, ifModifiedSince = null, {
+  env = process.env, fetchImpl = fetch, stopOnFirstRecord = false, rateState = { snapshot: {} }, callsPerMinute = 45,
+} = {}) {
+  // Use request start, not completion: edits made while pages are read must be
+  // visible to the next incremental probe. Usage has no financial date cutoff.
+  const scannedAt = new Date().toISOString();
   const contacts = new Map();
+  const seenRecordIds = new Set();
+  const expectedPagination = {};
   let recordsScanned = 0;
   let recordsWithContact = 0;
   let xeroCalls = 0;
   let page = 1;
+  const result = (status, error = null) => ({
+    source: source.source, label: source.label, status, recordsScanned,
+    recordsWithContact, xeroCalls, contacts, scanned_at: scannedAt, error,
+  });
+  if (source.blocked) return result('blocked', 'Current Xero OAuth/API access cannot read this endpoint.');
 
   try {
     while (true) {
-      const params = new URLSearchParams({ page: String(page), pageSize: '100' });
-      xeroCalls += 1;
+      assertUsageDailyReserve(rateState.snapshot, env);
+      const params = new URLSearchParams({ page: String(page), pageSize: '1000' });
+      if (source.source === 'invoices') params.set('summaryOnly', 'true');
       const response = await xeroAccountingFetch(connection, `${source.pathName}?${params}`, {
         method: 'GET',
         retryOnRateLimit: true,
         headers: ifModifiedSince ? { 'If-Modified-Since': ifModifiedSince } : {},
         env,
         fetchImpl,
+        callsPerMinute,
+        onResponse: ({ headers }) => {
+          xeroCalls += 1;
+          rateState.snapshot = xeroRateLimitSnapshot(headers, rateState.snapshot);
+        },
       });
-      const records = response[source.collection] || [];
+      const records = response[source.collection];
+      if (!Array.isArray(records)) throw new Error(`Xero ${source.label} response did not contain a complete record collection.`);
+      const pagination = response.pagination;
+      if (pagination != null && (typeof pagination !== 'object' || Array.isArray(pagination))) {
+        throw new Error(`Xero ${source.label} returned invalid pagination metadata.`);
+      }
+      for (const field of ['itemCount', 'pageCount', 'pageSize']) {
+        if (!pagination || !Object.hasOwn(pagination, field)) continue;
+        const value = pagination[field];
+        if (!Number.isSafeInteger(value) || value < 0 || (field === 'pageSize' && value === 0)
+          || (field === 'pageCount' && value === 0 && recordsScanned + records.length > 0)) {
+          throw new Error(`Xero ${source.label} returned invalid pagination metadata.`);
+        }
+        if (Object.hasOwn(expectedPagination, field) && expectedPagination[field] !== value) {
+          throw new Error(`Xero ${source.label} pagination changed during the scan. Retry a full scan.`);
+        }
+        expectedPagination[field] = value;
+      }
       recordsScanned += records.length;
       for (const record of records) {
+        const recordId = nonBlank(record?.[source.recordId]);
+        if (!recordId) throw new Error(`Xero ${source.label} returned a record without its required identifier.`);
+        if (seenRecordIds.has(recordId)) throw new Error(`Xero ${source.label} returned duplicate records during pagination. Retry a full scan.`);
+        seenRecordIds.add(recordId);
         const ids = contactIdsFromUsageRecord(record);
-        if (!ids.length) continue;
+        if (!ids.length) {
+          // Xero bank transfers legitimately have no contact. Every other
+          // readable transaction must supply contact evidence; a document ID
+          // alone (including a payment's linked invoice ID) cannot prove disuse.
+          const isBankTransfer = source.source === 'bank-transactions'
+            && ['SPEND-TRANSFER', 'RECEIVE-TRANSFER'].includes(nonBlank(record.Type).toUpperCase());
+          if (isBankTransfer) continue;
+          throw new Error(`Xero ${source.label} returned a transaction without readable contact evidence. Archive coverage is incomplete.`);
+        }
         recordsWithContact += 1;
         for (const contactId of ids) {
           const existing = contacts.get(contactId);
@@ -990,35 +1099,26 @@ async function scanXeroContactUsageSource(connection, source, ifModifiedSince = 
             source: source.source,
             label: source.label,
             records: (existing?.records || 0) + 1,
-            lastSeenAt: new Date().toISOString(),
+            ...addUsageYear(existing, record),
+            lastSeenAt: scannedAt,
           });
         }
       }
-      const pageCount = Number(response.pagination?.pageCount || 0);
-      if ((pageCount && page >= pageCount) || records.length < 100) break;
+      const pageCount = expectedPagination.pageCount || 0;
+      const effectivePageSize = expectedPagination.pageSize || 0;
+      if (stopOnFirstRecord && records.length > 0) break;
+      if (records.length === 0 && pageCount && page < pageCount) throw new Error(`Xero ${source.label} pagination ended before the last page.`);
+      if ((pageCount && page >= pageCount) || records.length === 0
+        || (!pageCount && effectivePageSize > 0 && records.length < effectivePageSize)) {
+        if (expectedPagination.itemCount != null && recordsScanned !== expectedPagination.itemCount) throw new Error(`Xero ${source.label} pagination did not return every record.`);
+        break;
+      }
       page += 1;
       await sleep(xeroContactDelayMs(env));
     }
-    return {
-      source: source.source,
-      label: source.label,
-      status: 'complete',
-      recordsScanned,
-      recordsWithContact,
-      xeroCalls,
-      contacts,
-    };
+    return result('complete');
   } catch (error) {
-    return {
-      source: source.source,
-      label: source.label,
-      status: error?.status === 401 || error?.status === 403 ? 'blocked' : 'failed',
-      recordsScanned,
-      recordsWithContact,
-      xeroCalls,
-      contacts,
-      error: error?.message || 'Xero usage scan failed.',
-    };
+    return result(error?.status === 401 || error?.status === 403 ? 'blocked' : 'failed', error?.message || 'Xero usage scan failed.');
   }
 }
 
@@ -1027,18 +1127,19 @@ function usageCacheRowFromResult(result) {
     source: result.source,
     label: result.label,
     status: result.status,
-    records_scanned: result.recordsScanned || result.records_scanned || 0,
-    records_with_contact: result.recordsWithContact || result.records_with_contact || 0,
-    xero_calls: result.xeroCalls || result.xero_calls || 0,
+    records_scanned: result.recordsScanned ?? result.records_scanned ?? 0,
+    records_with_contact: result.recordsWithContact ?? result.records_with_contact ?? 0,
+    xero_calls: result.xeroCalls ?? result.xero_calls ?? 0,
     contact_usage: Array.isArray(result.contact_usage) ? result.contact_usage : [...(result.contacts || new Map()).entries()].map(([contactId, evidence]) => ({
       contactId,
       source: evidence.source || result.source,
       label: evidence.label || result.label,
       records: evidence.records || 0,
-      lastSeenAt: evidence.lastSeenAt || new Date().toISOString(),
+      ...usageYearFields(evidence),
+      lastSeenAt: evidence.lastSeenAt || result.scanned_at || null,
     })),
     error_message: result.error || result.error_message || null,
-    scanned_at: result.scanned_at || new Date().toISOString(),
+    scanned_at: result.scanned_at || null,
     updated_at: new Date().toISOString(),
   };
 }
@@ -1053,21 +1154,25 @@ async function loadUsageCacheRows(client) {
 }
 
 async function loadUsageCacheSummary(client) {
-  const rows = await loadUsageCacheRows(client).catch((error) => {
-    if (error?.status === 503) return [];
-    throw error;
-  });
-  return usageCacheSummary(rows, 0, rows.filter((row) => !READABLE_USAGE_SOURCES.find((source) => source.source === row.source)?.blocked).every((row) => row.status === 'complete'));
+  const [rows, connection] = await Promise.all([
+    loadUsageCacheRows(client).catch((error) => {
+      if (error?.status === 503) return [];
+      throw error;
+    }),
+    readStoredXeroConnection(client),
+  ]);
+  const currentRows = currentUsageCacheRows(rows, connection?.tenantId);
+  return usageCacheSummary(currentRows, 0, completeUsageCoverage(currentRows), connection?.tenantId);
 }
 
-function usageCacheSummary(rows, xeroCalls, coverageComplete) {
+function usageCacheSummary(rows, xeroCalls, coverageComplete, tenantId) {
   const bySource = Object.fromEntries(READABLE_USAGE_SOURCES.map((source) => {
     const row = rows.find((candidate) => candidate.source === source.source);
     return [source.source, {
       source: source.source,
       label: source.label,
       blockedByDesign: source.blocked === true,
-      status: row?.status || (source.blocked ? 'blocked' : 'missing'),
+      status: row?.status === 'complete' && !completeUsageCacheRow(row) ? 'failed' : row?.status || (source.blocked ? 'blocked' : 'missing'),
       recordsScanned: Number(row?.records_scanned || 0),
       recordsWithContact: Number(row?.records_with_contact || 0),
       contactCount: Array.isArray(row?.contact_usage) ? row.contact_usage.length : 0,
@@ -1076,6 +1181,8 @@ function usageCacheSummary(rows, xeroCalls, coverageComplete) {
     }];
   }));
   return {
+    policyVersion: XERO_CONTACT_USAGE_POLICY_VERSION,
+    tenantId: tenantId || null,
     bySource,
     sources: Object.values(bySource),
     xeroCalls,
@@ -1097,9 +1204,10 @@ function usageMapFromCacheRows(rows) {
       const contactId = nonBlank(item.contactId || item.contact_id);
       if (!contactId) continue;
       const evidence = {
-        source: nonBlank(item.source || row.source),
-        label: nonBlank(item.label || row.label),
+        source: row.source,
+        label: row.label,
         records: Number(item.records || 0),
+        ...usageYearFields(item),
         lastSeenAt: item.lastSeenAt || item.last_seen_at || row.scanned_at || null,
       };
       const list = usageByContactId.get(contactId) || [];
@@ -1108,6 +1216,31 @@ function usageMapFromCacheRows(rows) {
     }
   }
   return usageByContactId;
+}
+
+function currentUsageSummary(summary, tenantId) {
+  return summary?.policyVersion === XERO_CONTACT_USAGE_POLICY_VERSION
+    && summary.tenantId === tenantId && summary.coverageComplete === true
+    && READABLE_USAGE_SOURCES.filter((source) => !source.blocked)
+      .every((source) => summary.bySource?.[source.source]?.status === 'complete'
+        && Number.isFinite(Date.parse(summary.bySource[source.source].scannedAt)));
+}
+
+export async function verifyContactLifecycleArchiveUsage(client, connection, run, selectedRows, { env = process.env, fetchImpl = fetch, callsPerMinute = 45 } = {}) {
+  const archives = selectedRows.filter((row) => row.action === 'archive');
+  if (!archives.length) return null;
+  if (run.summary?.usagePolicyVersion !== XERO_CONTACT_USAGE_POLICY_VERSION
+    || run.xero?.tenantId !== connection.tenantId || !currentUsageSummary(run.usageCache, connection.tenantId)) {
+    throw portalError('This preview does not have complete current usage evidence for this Xero tenant. Run a fresh preview before archiving.', 409, 'XERO_PORTAL_ARCHIVE_USAGE_UNTRUSTED');
+  }
+  const usage = await resolveUsageCacheForPreview(client, connection, { env, fetchImpl, incrementalUsageRefresh: true, callsPerMinute });
+  if (!currentUsageSummary(usage.summary, connection.tenantId)) {
+    throw portalError('Xero usage could not be fully verified. Run a fresh preview before archiving.', 409, 'XERO_PORTAL_ARCHIVE_USAGE_INCOMPLETE');
+  }
+  if (archives.some((row) => usageEvidenceFor(row.xeroContactId, usage.usageByContactId).length > 0)) {
+    throw portalError('A selected contact has Xero usage. Run a fresh preview before archiving.', 409, 'XERO_PORTAL_ARCHIVE_CONTACT_USED');
+  }
+  return usage;
 }
 
 function verifySelectedLifecycleRows(rows, freshContacts) {
@@ -1127,6 +1260,10 @@ function verifySelectedLifecycleRows(rows, freshContacts) {
     }
     if (normalizeName(contact.name) !== normalizeName(row.xeroContactName)) {
       failedRows.push(staleRow(row, 'Xero contact name changed after preview. Run a fresh preview.', checkedAt));
+      continue;
+    }
+    if (row.action === 'archive' && hasNonzeroBalance(contact)) {
+      failedRows.push(staleRow(row, 'Xero contact has a nonzero balance now. Run a fresh preview.', checkedAt));
       continue;
     }
     updates.push({
@@ -1613,13 +1750,14 @@ function toLifecycleContact(contact) {
 }
 
 function contactIdsFromUsageRecord(record) {
-  return [
+  return [...new Set([
     record.Contact?.ContactID,
     record.Invoice?.Contact?.ContactID,
+    record.CreditNote?.Contact?.ContactID,
     record.BankTransaction?.Contact?.ContactID,
     record.Overpayment?.Contact?.ContactID,
     record.Prepayment?.Contact?.ContactID,
-  ].map((id) => nonBlank(id)).filter(Boolean);
+  ].map((id) => nonBlank(id)).filter(Boolean))];
 }
 
 async function updateContactNameCacheFromLifecycle(client, connection, rows) {

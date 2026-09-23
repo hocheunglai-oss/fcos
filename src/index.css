@@ -749,6 +749,24 @@
   -webkit-backdrop-filter: none;
 }
 
+/* Finance review follows its available workspace width, including the sidebar. */
+.finance-batch-review { container-type: inline-size; }
+.finance-batch-review__wide { display: none; }
+.finance-batch-review__compact { display: block; }
+@container (min-width: 1100px) {
+  .finance-batch-review__wide { display: block; }
+  .finance-batch-review__compact { display: none; }
+}
+
+/* Contact review keeps Reason in view when the available workspace is narrow. */
+.xero-contacts-review { container-type: inline-size; }
+.xero-contacts-review__wide { display: none; }
+.xero-contacts-review__compact { display: block; }
+@container (min-width: 1100px) {
+  .xero-contacts-review__wide { display: block; }
+  .xero-contacts-review__compact { display: none; }
+}
+
 /* Collaboration, tools, and administration workspaces */
 .workspace-collaboration,
 .workspace-tools,

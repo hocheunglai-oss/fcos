@@ -155,6 +155,7 @@ export default function XeroPortal() {
 
   const selectedEligibleCount = filteredRows.filter((row) => canApplyRow(row) && selectedRows.has(row.id)).length;
   const totalSelectedCount = [...selectedRows].length;
+  const visibleContactRows = filteredRows.slice(0, 1000);
 
   async function connectXero() {
     setBusy('connect');
@@ -285,8 +286,8 @@ export default function XeroPortal() {
   }
 
   return (
-    <div className="workspace-tools min-h-full bg-background p-4 text-foreground lg:p-6" lang={language === 'zh-Hant' ? 'zh-Hant-HK' : 'en'}>
-      <div className="mx-auto flex max-w-[1800px] flex-col gap-4">
+    <div className={cn('workspace-tools min-h-full bg-background p-4 text-foreground lg:p-6', (tab === 'accounting' || tab === 'contacts') && 'workspace-page-wide')} lang={language === 'zh-Hant' ? 'zh-Hant-HK' : 'en'}>
+      <div className={cn('mx-auto flex w-full min-w-0 flex-col gap-4', tab !== 'accounting' && tab !== 'contacts' && 'max-w-[1800px]')}>
         <header className="flex flex-col gap-3 border-b border-border pb-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <div className="flex flex-wrap items-center gap-2">
@@ -435,7 +436,7 @@ export default function XeroPortal() {
               <StatusLegend labels={statusLabels} copy={copy} />
             </section>
 
-            <section className="rounded-lg border border-border bg-card p-4">
+            <section className="xero-contacts-review rounded-lg border border-border bg-card p-4">
               <div className="grid gap-2 md:grid-cols-5">
                 <div className="relative md:col-span-2">
                   <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
@@ -464,8 +465,13 @@ export default function XeroPortal() {
                 </div>
               </div>
 
-              <div className="mt-4">
-                <Table scrollLabel={copy.contacts.tableLabel}>
+              <div className="xero-contacts-review__wide mt-4">
+                <Table scrollLabel={copy.contacts.tableLabel} className="min-w-0 table-fixed">
+                  <colgroup>
+                    <col style={{ width: '4%' }} /><col style={{ width: '10%' }} /><col style={{ width: '9%' }} />
+                    <col style={{ width: '16%' }} /><col style={{ width: '16%' }} /><col style={{ width: '10%' }} />
+                    <col style={{ width: '11%' }} /><col style={{ width: '24%' }} />
+                  </colgroup>
                   <TableHeader>
                     <TableRow>
                       <TableHead className="w-10">{copy.common.use}</TableHead>
@@ -479,37 +485,48 @@ export default function XeroPortal() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {filteredRows.length ? filteredRows.slice(0, 1000).map((row) => (
+                    {visibleContactRows.length ? visibleContactRows.map((row) => (
                       <TableRow key={row.id}>
                         <TableCell>
-                          <Checkbox checked={selectedRows.has(row.id)} onCheckedChange={(checked) => toggleRow(row.id, checked === true)} disabled={!canApplyRow(row)} />
+                          <Checkbox aria-label={`${copy.common.use} ${row.xeroContactName || row.salesforceName || row.id}`} checked={selectedRows.has(row.id)} onCheckedChange={(checked) => toggleRow(row.id, checked === true)} disabled={!canApplyRow(row)} />
                         </TableCell>
-                        <TableCell><ActionBadge action={row.action} copy={copy} /></TableCell>
-                        <TableCell><StatusBadgeText status={row.status} copy={copy} /></TableCell>
-                        <TableCell className="min-w-[260px]">
-                          <div className="font-medium">{row.xeroContactName || copy.contacts.noXeroMatch}</div>
-                          <div className="mt-1 text-xs text-muted-foreground">
-                            {row.xeroContactNumber || copy.contacts.noContactNumber} · {row.xeroAccountNumber || copy.contacts.noAccountNumber} · {row.xeroContactStatus || copy.contacts.noStatus}
-                          </div>
-                        </TableCell>
-                        <TableCell className="min-w-[260px]">
-                          <div className="font-medium">{row.salesforceName || copy.contacts.noSalesforceMatch}</div>
-                          <div className="mt-1 text-xs text-muted-foreground">
-                            {row.salesforceCompanyCode || copy.common.noClKey} · {copy.recordTypes[row.salesforceRecordType] || row.salesforceRecordType || copy.common.noType}
-                          </div>
-                        </TableCell>
-                        <TableCell>{row.matchField ? (copy.matchFields[row.matchField] || matchFieldLabels[row.matchField] || row.matchField) : copy.common.none}</TableCell>
-                        <TableCell>{usageText(row.usage, copy)}</TableCell>
-                        <TableCell className="max-w-[320px]">
-                          <div className="font-medium">{copy.reasons[row.reason] || reasonLabels[row.reason] || row.reason || copy.common.noIssue}</div>
-                          {row.message ? <div className="mt-1 text-xs text-muted-foreground">{row.message}</div> : null}
-                        </TableCell>
+                        <TableCell><ActionBadge action={row.action} copy={copy} wrap /></TableCell>
+                        <TableCell><StatusBadgeText status={row.status} copy={copy} wrap /></TableCell>
+                        <TableCell className="break-words [overflow-wrap:anywhere]"><XeroContactIdentity row={row} copy={copy} /></TableCell>
+                        <TableCell className="break-words [overflow-wrap:anywhere]"><SalesforceContactIdentity row={row} copy={copy} /></TableCell>
+                        <TableCell className="break-words [overflow-wrap:anywhere]">{row.matchField ? (copy.matchFields[row.matchField] || matchFieldLabels[row.matchField] || row.matchField) : copy.common.none}</TableCell>
+                        <TableCell className="break-words [overflow-wrap:anywhere]"><ContactUsage usage={row.usage} copy={copy} /></TableCell>
+                        <TableCell className="break-words [overflow-wrap:anywhere]"><ContactReason row={row} copy={copy} reasonLabels={reasonLabels} /></TableCell>
                       </TableRow>
                     )) : (
                       <TableRow><TableCell colSpan={8}><StateBlock icon={CheckCircle2} title={hasLifecycleRun ? copy.contacts.noRowsTitle : copy.contacts.noPreviewTitle} description={hasLifecycleRun ? copy.contacts.noRowsDescription : copy.contacts.noPreviewDescription} /></TableCell></TableRow>
                     )}
                   </TableBody>
                 </Table>
+              </div>
+              <div className="xero-contacts-review__compact mt-4 space-y-3">
+                {visibleContactRows.length ? visibleContactRows.map((row) => (
+                  <article key={row.id} className="min-w-0 rounded-lg border border-border bg-background p-3" aria-label={`${copy.contacts.xeroContact}: ${row.xeroContactName || copy.contacts.noXeroMatch}`}>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <label className="flex items-center gap-2 text-sm font-medium">
+                        <Checkbox checked={selectedRows.has(row.id)} onCheckedChange={(checked) => toggleRow(row.id, checked === true)} disabled={!canApplyRow(row)} />
+                        {copy.common.use}
+                      </label>
+                      <ActionBadge action={row.action} copy={copy} wrap />
+                      <StatusBadgeText status={row.status} copy={copy} wrap />
+                    </div>
+                    <div className="mt-3 min-w-0 break-words [overflow-wrap:anywhere]">
+                      <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{copy.common.reason}</div>
+                      <ContactReason row={row} copy={copy} reasonLabels={reasonLabels} />
+                    </div>
+                    <dl className="mt-3 grid min-w-0 gap-3 border-t border-border pt-3 sm:grid-cols-2">
+                      <div className="min-w-0 break-words [overflow-wrap:anywhere]"><dt className="text-xs font-semibold text-muted-foreground">{copy.contacts.xeroContact}</dt><dd className="mt-1"><XeroContactIdentity row={row} copy={copy} /></dd></div>
+                      <div className="min-w-0 break-words [overflow-wrap:anywhere]"><dt className="text-xs font-semibold text-muted-foreground">{copy.contacts.salesforceSource}</dt><dd className="mt-1"><SalesforceContactIdentity row={row} copy={copy} /></dd></div>
+                      <div className="min-w-0 break-words [overflow-wrap:anywhere]"><dt className="text-xs font-semibold text-muted-foreground">{copy.contacts.match}</dt><dd className="mt-1">{row.matchField ? (copy.matchFields[row.matchField] || matchFieldLabels[row.matchField] || row.matchField) : copy.common.none}</dd></div>
+                      <div className="min-w-0 break-words [overflow-wrap:anywhere]"><dt className="text-xs font-semibold text-muted-foreground">{copy.contacts.usage}</dt><dd className="mt-1"><ContactUsage usage={row.usage} copy={copy} /></dd></div>
+                    </dl>
+                  </article>
+                )) : <StateBlock icon={CheckCircle2} title={hasLifecycleRun ? copy.contacts.noRowsTitle : copy.contacts.noPreviewTitle} description={hasLifecycleRun ? copy.contacts.noRowsDescription : copy.contacts.noPreviewDescription} />}
               </div>
             </section>
           </TabsContent>
@@ -783,7 +800,7 @@ function StatusBadge({ ok, trueLabel, falseLabel, tone = ok ? 'emerald' : 'rose'
   return <Badge variant="outline" className={className}>{ok ? trueLabel : falseLabel}</Badge>;
 }
 
-function StatusBadgeText({ status, copy }) {
+function StatusBadgeText({ status, copy, wrap = false }) {
   const value = String(status || 'unknown');
   const tone = {
     eligible: 'border-sky-200 bg-sky-50 text-sky-700',
@@ -800,7 +817,7 @@ function StatusBadgeText({ status, copy }) {
     'already-exists': 'border-slate-200 bg-slate-50 text-slate-700',
     'not-selected': 'border-slate-200 bg-slate-50 text-slate-700',
   }[value] || 'border-slate-200 bg-slate-50 text-slate-700';
-  return <Badge variant="outline" className={cn('whitespace-nowrap', tone)}>{copy?.statuses?.[value] || value.replaceAll('-', ' ')}</Badge>;
+  return <Badge variant="outline" className={cn(wrap ? 'min-w-0 max-w-full whitespace-normal [overflow-wrap:anywhere]' : 'whitespace-nowrap', tone)}>{copy?.statuses?.[value] || value.replaceAll('-', ' ')}</Badge>;
 }
 
 function ReceiptStatusBadge({ status, copy }) {
@@ -817,7 +834,7 @@ function ReceiptStatusBadge({ status, copy }) {
   );
 }
 
-function ActionBadge({ action, copy }) {
+function ActionBadge({ action, copy, wrap = false }) {
   const icon = {
     archive: Archive,
     rename: RefreshCw,
@@ -826,20 +843,59 @@ function ActionBadge({ action, copy }) {
   }[action] || ShieldCheck;
   const Icon = icon;
   return (
-    <Badge variant="outline" className="whitespace-nowrap">
-      <Icon className="mr-1 h-3 w-3" />
+    <Badge variant="outline" className={wrap ? 'min-w-0 max-w-full whitespace-normal px-1.5 [overflow-wrap:anywhere]' : 'whitespace-nowrap'}>
+      <Icon className="mr-1 h-3 w-3 shrink-0" />
       {copy?.actions?.[action] || String(action || copy?.common?.unknown || 'unknown')}
     </Badge>
   );
+}
+
+function XeroContactIdentity({ row, copy }) {
+  return <>
+    <div className="font-medium">{row.xeroContactName || copy.contacts.noXeroMatch}</div>
+    <div className="mt-1 text-xs text-muted-foreground">
+      {row.xeroContactNumber || copy.contacts.noContactNumber} · {row.xeroAccountNumber || copy.contacts.noAccountNumber} · {row.xeroContactStatus || copy.contacts.noStatus}
+    </div>
+  </>;
+}
+
+function SalesforceContactIdentity({ row, copy }) {
+  return <>
+    <div className="font-medium">{row.salesforceName || copy.contacts.noSalesforceMatch}</div>
+    <div className="mt-1 text-xs text-muted-foreground">
+      {row.salesforceCompanyCode || copy.common.noClKey} · {copy.recordTypes[row.salesforceRecordType] || row.salesforceRecordType || copy.common.noType}
+    </div>
+  </>;
+}
+
+function ContactReason({ row, copy, reasonLabels }) {
+  return <>
+    <div className="font-medium">{copy.reasons[row.reason] || reasonLabels[row.reason] || row.reason || copy.common.noIssue}</div>
+    {row.message ? <div className="mt-1 text-xs text-muted-foreground">{row.message}</div> : null}
+  </>;
 }
 
 function canApplyRow(row) {
   return row?.status === 'eligible' && (row.action === 'rename' || row.action === 'archive') && row.xeroContactId;
 }
 
-function usageText(usage = [], copy) {
-  if (!usage.length) return copy.contacts.noReadableUsage;
-  return usage.map((item) => `${copy.usageSources[item.source] || item.label || item.source}: ${item.records || 0}`).join('; ');
+function ContactUsage({ usage = [], copy }) {
+  if (!usage?.length) return copy.contacts.noReadableUsage;
+  const formatCount = (value) => Number(value || 0).toLocaleString(copy.locale);
+  return <ul className="space-y-2">
+    {usage.map((item, index) => {
+      const scanned = Array.isArray(item.yearCounts) && typeof item.undatedRecords === 'number';
+      return <li key={`${item.source || item.label || 'usage'}-${index}`}>
+        <div className="font-medium">{copy.contacts.usageSourceTotal(copy.usageSources[item.source] || item.label || item.source, formatCount(item.records))}</div>
+        {scanned ? (
+          <div className="mt-0.5 flex flex-wrap gap-x-2 text-xs text-muted-foreground">
+            {item.yearCounts.map(({ year, records }) => <span key={year}>{year}: {formatCount(records)}</span>)}
+            {item.undatedRecords > 0 ? <span>{copy.contacts.yearUnavailable(formatCount(item.undatedRecords))}</span> : null}
+          </div>
+        ) : <div className="mt-0.5 text-xs text-muted-foreground">{copy.contacts.yearBreakdownPending}</div>}
+      </li>;
+    })}
+  </ul>;
 }
 
 function summarizeApply(summary, language) {
