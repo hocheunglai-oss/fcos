@@ -7,12 +7,15 @@ const id = (number) => `a01${String(number).padStart(12, '0')}`;
 const parentId = id(1);
 const base = { CurrencyIsoCode: 'USD', Account__c: id(100), Date__c: '2026-09-01',
   Is_Deposit__c: false, Is_Volume_Discount__c: false, Commission_Invoice__c: null,
-  Supplier_Invoice__c: null, Remittance__c: null, Bank__c: null };
+  Supplier_Invoice__c: null, Remittance__c: null, Bank__c: null, STEM__c: id(200) };
 const parent = (changes = {}) => ({ ...base, Id: parentId, RecordType: { DeveloperName: 'Receivable_Remittance' },
   Amount__c: 100, Bank__c: 'UBS', ...changes });
 const child = (number, changes = {}) => ({ ...base, Id: id(number), RecordType: { DeveloperName: 'Receivable' },
   Remittance__c: parentId, Amount__c: 50, ...changes });
 const family = () => [child(2), child(3)];
+const invoiceResult = () => ({ totalSize: 1, records: [{ Id: id(500), STEM__c: id(200),
+  STEM__r: { Account__c: id(100) }, Amount__c: 100, CurrencyIsoCode: 'USD',
+  Proforma__c: false, Deprecated__c: false, Invoice_Date__c: '2025-12-31' }] });
 const resolve = (payment = child(2), remittance = parent(), siblings = family(), complete = true) =>
   resolveRemittanceBankEvidence(payment, { parent: remittance, siblings, complete });
 
@@ -115,37 +118,48 @@ test('negative, zero, net-credit, deposit, discount, commission and unsupported 
   assert.ok(resolve(child(2), parent({ Is_Deposit__c: true }), family()).reason);
 });
 
-test('loader fetches no family for named-bank or noncandidate rows and blocks truncated reads', async () => {
-  const safety = { fields: { Payment__c: ['CurrencyIsoCode'] }, singleCurrency: false };
+test('loader skips remittance reads for named-bank rows but still verifies their buyer inventory', async () => {
+  const safety = { fields: { Payment__c: ['CurrencyIsoCode'], Invoice__c: ['CurrencyIsoCode', 'Credit_Note__c'] }, singleCurrency: false };
   const direct = child(2, { Bank__c: 'DBS' });
   let calls = 0;
-  const loaded = await loadSalesforcePayments('2026-01-01', safety, async () => {
-    calls += 1; return { records: [direct], totalSize: 1 };
+  const loaded = await loadSalesforcePayments('2026-01-01', safety, async (soql) => {
+    calls += 1;
+    if (soql.includes('FROM Invoice__c')) {
+      assert.match(soql, /, Credit_Note__c/);
+      assert.doesNotMatch(soql, /Is_Credit_Note__c|CreditNote__c/);
+      return invoiceResult();
+    }
+    return { records: [direct], totalSize: 1 };
   });
-  assert.equal(calls, 1);
+  assert.equal(calls, 2);
   assert.deepEqual(loaded[0].Bank__c, 'DBS');
+  assert.equal(loaded[0]._buyerDocumentEvidence.eligibleInvoiceId, id(500));
   const query = async (soql) => {
     calls += 1;
+    if (soql.includes('FROM Invoice__c')) return invoiceResult();
     if (soql.includes('WHERE (Date__c')) return { records: [child(2)], totalSize: 1 };
     if (soql.includes('WHERE Id IN')) return { records: [parent()], totalSize: 1 };
     return { records: [child(2)], totalSize: 2 };
   };
   const blocked = await loadSalesforcePayments('2026-01-01', safety, query);
-  assert.equal(calls, 4);
+  assert.equal(calls, 6);
   assert.equal(blocked[0].Bank__c, null);
   assert.match(blocked[0]._bankEvidenceBlocker, /complete remittance/i);
 });
 
 test('loader uses all-sibling query without cutoff and resolves only an exact complete family', async () => {
-  const safety = { fields: { Payment__c: ['CurrencyIsoCode'] }, singleCurrency: false };
+  const safety = { fields: { Payment__c: ['CurrencyIsoCode'], Invoice__c: ['CurrencyIsoCode'] }, singleCurrency: false };
   const queries = [];
   const rows = await loadSalesforcePayments('2026-01-01', safety, async (soql) => {
     queries.push(soql);
+    if (soql.includes('FROM Invoice__c')) return invoiceResult();
     if (soql.includes('WHERE (Date__c')) return { records: [child(2)], totalSize: 1 };
     if (soql.includes('WHERE Id IN')) return { records: [parent()], totalSize: 1 };
     return { records: family(), totalSize: 2 };
   });
   assert.equal(rows[0].Bank__c, 'UBS');
-  assert.match(queries[2], /WHERE Remittance__c IN/);
-  assert.doesNotMatch(queries[2], /2026-01-01/);
+  assert.equal(rows[0]._buyerDocumentEvidence.eligibleInvoiceId, id(500));
+  for (const soql of queries.filter((query) => /FROM Invoice__c|WHERE Remittance__c IN/.test(query))) {
+    assert.doesNotMatch(soql, /2026-01-01/);
+  }
 });

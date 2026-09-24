@@ -7,6 +7,7 @@ import { groupedPreservationCanonical } from './_xeroGroupedPreservation.js';
 import { requireExternalActionGate } from './_externalActionGates.js';
 import { paymentCurrency, paymentDocumentIdentityBlockers, selectXeroPaymentMatch, selectXeroReferenceRetentionMatch } from './_xeroPaymentIdentity.js';
 import { resolveRemittanceBankEvidence } from './_xeroPaymentBankEvidence.js';
+import { buyerPaymentDocumentBlockers, enrichBuyerPaymentDocumentEvidence } from './_xeroBuyerPaymentEvidence.js';
 import { persistReviewedPaymentReferenceLinks } from './_xeroPaymentReferenceLink.js';
 import { loadPaymentPostingClaims, paymentClaimEvidenceIds, postReviewedPaymentBatch, resolvePaymentPostingClaim, reviewPaymentPostingClaim } from './_xeroPaymentPosting.js';
 import { xeroRateLimitSnapshot } from './_xeroRateLimit.js';
@@ -22,7 +23,7 @@ import {
 } from './_xeroContactSync.js';
 
 export const XERO_FINANCIAL_CUTOFF = '2026-01-01';
-export const XERO_RECONCILIATION_VERSION = 8;
+export const XERO_RECONCILIATION_VERSION = 9;
 const MAX_BATCH_SIZE = 25;
 const DEFAULT_CALLS_PER_MINUTE = 45;
 const DEFAULT_DAILY_LIMIT = 1000;
@@ -866,7 +867,10 @@ async function previewPayments(body, { accessContext, env, fetchImpl, client, xe
 
 export function classifyXeroFinancialPayment(payment, context) {
   const row = classifyPayment(payment, context);
-  row.reviewFingerprint = hashJson({ review: row.reviewFingerprint, tenantId: context.tenantId || null });
+  // Keep durable payment/reference identities stable; every actionable review also
+  // binds the complete current source inventory, including unlinked invoices.
+  row.reviewFingerprint = hashJson({ review: row.reviewFingerprint, tenantId: context.tenantId || null,
+    ...(payment.RecordType?.DeveloperName === 'Receivable' ? { buyerDocuments: payment._buyerDocumentEvidence ?? null } : {}) });
   const actual = context.xeroPayments.find((item) => item.PaymentID === row.xeroPaymentId);
   return reviewPaymentPostingClaim(row, context.paymentPostingClaims?.get(payment.Id), actual);
 }
@@ -879,7 +883,8 @@ function classifyPayment(payment, context) {
     const documentMapping = context.documentMappingById.get(existing.document_mapping_id);
     const currentDocument = documentMapping ? context.currentDocumentById?.get(documentMapping.xero_document_id) : null;
     if (existing.retained_reference && Object.keys(existing.retained_reference).length) return referencePaymentRow(payment, context, documentMapping, currentDocument, existing);
-    const blockers = [...unsupportedPaymentBlockers(payment), ...paymentDocumentIdentityBlockers(payment, documentMapping, currentDocument)];
+    const blockers = [...unsupportedPaymentBlockers(payment), ...paymentDocumentIdentityBlockers(payment, documentMapping, currentDocument),
+      ...buyerPaymentDocumentBlockers(payment, documentMapping)];
     if (xeroPayment) {
       const selected = selectXeroPaymentMatch({ payment, documentMapping, bankAccountId: existing.xero_bank_account_id,
         xeroPayments: [xeroPayment], paymentMappings: context.paymentMappings || [...context.existingBySalesforce.values()] });
@@ -912,6 +917,7 @@ function classifyPayment(payment, context) {
   }
   const currentDocument = documentMapping ? context.currentDocumentById.get(documentMapping.xero_document_id) : null;
   blockers.push(...paymentDocumentIdentityBlockers(payment, documentMapping, currentDocument));
+  blockers.push(...buyerPaymentDocumentBlockers(payment, documentMapping));
   const bankName = normalizeName(payment.Bank__c);
   const bank = bankName ? context.bankByName.get(bankName) : null;
   if (bankName && !bank) blockers.push(`No approved Xero bank mapping exists for ${payment.Bank__c}.`);
@@ -950,7 +956,7 @@ function referencePaymentRow(payment, context, mapping, currentDocument, existin
     bankAccountId: bank?.xero_bank_account_id, bankAccount: context.bankAccounts?.get(bank?.xero_bank_account_id),
     organisation: context.organisation, xeroPayments: context.xeroPayments,
     paymentMappings: context.paymentMappings || [...context.existingBySalesforce.values()] });
-  const blockers = uniqueStrings([...unsupportedPaymentBlockers(payment), ...result.blockers]);
+  const blockers = uniqueStrings([...unsupportedPaymentBlockers(payment), ...buyerPaymentDocumentBlockers(payment, mapping), ...result.blockers]);
   const actual = result.match;
   if (!actual || blockers.length || !context.tenantId || !bank?.id || !Number.isInteger(bank.revision)) {
     return paymentRow(payment, 'blocked', 'blocked', [...blockers, 'Retained-reference evidence is incomplete or changed. Review the existing payment; no replacement will be created.'], mapping, actual, null, currentDocument);
@@ -1001,6 +1007,7 @@ function paymentRow(payment, action, status, blockers, mapping, xeroPayment, pro
     paymentDate: payment.Date__c,
     bank: payment.Bank__c,
     ...(payment._bankEvidence ? { bankEvidence: payment._bankEvidence } : {}),
+    ...(payment._buyerDocumentEvidence ? { buyerDocumentEvidence: payment._buyerDocumentEvidence } : {}),
     action,
     status,
     blockers,
@@ -1122,7 +1129,11 @@ export async function loadSalesforcePayments(cutoff, safetyContext = null, query
      ORDER BY Date__c, Id`, { clean: true, limit: 100000 });
   if (result.error || Number(result.totalSize || 0) > (result.records || []).length) throw financialError('Salesforce payment retrieval is incomplete.', 502, 'XERO_FINANCIAL_SALESFORCE_INCOMPLETE');
   const withCurrency = (payment) => ({ ...payment, _currency: financialSourceCurrency(payment, [], safetyContext, 'Payment__c') });
-  const payments = (result.records || []).map(withCurrency);
+  const payments = await enrichBuyerPaymentDocumentEvidence((result.records || []).map(withCurrency), {
+    querySalesforce,
+    currencyFields: safetySelectFields(safetyContext, 'Invoice__c', ['CurrencyIsoCode', 'Is_Credit_Note__c', 'Credit_Note__c', 'CreditNote__c']),
+    currencyForRecord: (record) => financialSourceCurrency(record, [], safetyContext, 'Invoice__c'),
+  });
   const candidates = payments.filter((payment) => payment.RecordType?.DeveloperName === 'Receivable'
     && !normalizeName(payment.Bank__c) && Number(payment.Amount__c) > 0);
   if (!candidates.length) return payments;
