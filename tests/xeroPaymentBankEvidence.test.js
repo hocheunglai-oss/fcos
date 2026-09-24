@@ -64,6 +64,45 @@ test('dates, currency, Accounts, named banks and exact cent totals must agree ac
   for (const [remittance, siblings] of scenarios) assert.ok(resolve(child(2), remittance, siblings).reason);
 });
 
+test('numeric Salesforce scale-two serialization noise resolves while raw values stay in evidence', () => {
+  for (const amount of [16382.480000000003, 227519.15999999997, 53756.19999999998, 4055.679999999993]) {
+    const payment = child(2, { Amount__c: amount });
+    const cash = parent({ Amount__c: amount + 50 });
+    const result = resolve(payment, cash, [payment, child(3)]);
+    assert.equal(result.reason, null, `amount ${amount} should resolve`);
+    assert.equal(result.payment.Amount__c, amount);
+    assert.equal(result.payment._bankEvidence.amount, cash.Amount__c);
+    const canonical = Number(amount.toFixed(2));
+    if (amount !== canonical) {
+      const canonicalPayment = child(2, { Amount__c: canonical });
+      const canonicalCash = parent({ Amount__c: canonical + 50 });
+      const canonicalResult = resolve(canonicalPayment, canonicalCash, [canonicalPayment, child(3)]);
+      assert.notEqual(result.payment._bankEvidence.siblingsDigest, canonicalResult.payment._bankEvidence.siblingsDigest);
+    }
+  }
+});
+
+test('cent tolerance excludes material fractions, non-finite numbers and excess numeric error', () => {
+  for (const amount of [1.005, 50.000000000003, 1000000.00000003,
+    Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NaN]) {
+    const payment = child(2, { Amount__c: amount });
+    const result = resolve(payment, parent({ Amount__c: 100 }), [payment, child(3)]);
+    assert.equal(result.payment.Bank__c, null);
+    assert.match(result.reason, /invalid amount/i);
+  }
+  const mismatched = resolve(child(2), parent({ Amount__c: 100.01 }), family());
+  assert.match(mismatched.reason, /total differs/i);
+});
+
+test('amount strings require exact positive scale-two decimal text', () => {
+  const exact = child(2, { Amount__c: '50.00' });
+  assert.equal(resolve(exact, parent({ Amount__c: '100.00' }), [exact, child(3, { Amount__c: '50' })]).reason, null);
+  for (const amount of ['50.000', '50.000000000003', '1.005', '0', '-1.00', 'Infinity', '90071992547409.92']) {
+    const payment = child(2, { Amount__c: amount });
+    assert.ok(resolve(payment, parent(), [payment, child(3)]).reason, `string ${amount} must stay blocked`);
+  }
+});
+
 test('negative, zero, net-credit, deposit, discount, commission and unsupported children remain blocked', () => {
   const variants = [
     { Amount__c: -50 }, { Amount__c: 0 }, { Amount__c: -0.01 },

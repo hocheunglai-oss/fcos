@@ -6,9 +6,19 @@ const id = (value) => typeof value === 'string' && /^[a-zA-Z0-9]{15}(?:[a-zA-Z0-
 const blank = (value) => value == null || String(value).trim() === '';
 
 function cents(value) {
-  if ((typeof value !== 'number' && typeof value !== 'string') || !/^(?:0|[1-9]\d*)(?:\.\d{1,2})?$/.test(String(value))) return null;
-  const number = Number(value);
-  return Number.isFinite(number) && number > 0 && Number.isSafeInteger(Math.round(number * 100)) ? Math.round(number * 100) : null;
+  if (typeof value === 'string') {
+    if (!/^(?:0|[1-9]\d*)(?:\.\d{1,2})?$/.test(value)) return null;
+    const [whole, fraction = ''] = value.split('.');
+    const exact = BigInt(whole) * 100n + BigInt(fraction.padEnd(2, '0'));
+    return exact > 0n && exact <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(exact) : null;
+  }
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return null;
+  const scaled = value * 100;
+  const rounded = Math.round(scaled);
+  if (!Number.isFinite(scaled) || !Number.isSafeInteger(rounded) || rounded <= 0) return null;
+  // Salesforce Amount__c is scale 2 but may arrive with tiny binary arithmetic noise.
+  const tolerance = Math.min(1e-6, 16 * Number.EPSILON * Math.max(1, Math.abs(scaled)));
+  return Math.abs(scaled - rounded) <= tolerance ? rounded : null;
 }
 
 function validDate(value) {
