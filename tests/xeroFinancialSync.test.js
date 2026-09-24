@@ -13,6 +13,7 @@ import {
   xeroFinancialRateSnapshot,
 } from '../api/_xeroFinancialSync.js';
 import { summarizeXeroFinancialReconciliation } from '../src/lib/xeroFinancialReconciliation.js';
+import { resolveRemittanceBankEvidence } from '../api/_xeroPaymentBankEvidence.js';
 
 const classifyXeroFinancialDocument = (source, candidates, options = {}) => classifyDocument(source, candidates, { ...options, organisation: { baseCurrency: 'USD', ...options.organisation } });
 
@@ -484,4 +485,72 @@ test('new exact payments require current same-currency bank and org evidence and
   }
   const waiting = classifyXeroFinancialPayment(payment, { ...context, buyerByStem: new Map() });
   assert.ok(waiting.blockerCodes.every((code) => code === 'invoice_link_pending'));
+});
+
+test('remittance proof changes source and review identity, and cannot use historical fingerprint fallback', () => {
+  const sfId = (number) => `a01${String(number).padStart(12, '0')}`;
+  const remittanceId = sfId(1);
+  const common = { CurrencyIsoCode: 'USD', Account__c: sfId(100), Date__c: '2026-09-01',
+    Is_Deposit__c: false, Is_Volume_Discount__c: false, Commission_Invoice__c: null, Supplier_Invoice__c: null };
+  const parent = { ...common, Id: remittanceId, RecordType: { DeveloperName: 'Receivable_Remittance' },
+    Bank__c: 'UBS', Amount__c: 100 };
+  const payment = { ...common, Id: sfId(2), Name: 'PAY-2', RecordType: { DeveloperName: 'Receivable' },
+    Remittance__c: remittanceId, Bank__c: null, Amount__c: 50, STEM__c: sfId(200) };
+  const sibling = { ...payment, Id: sfId(3), Name: 'PAY-3' };
+  const derive = (parentRow, children) => resolveRemittanceBankEvidence(payment, {
+    parent: parentRow, siblings: children, complete: true,
+  }).payment;
+  const map = { id: 'document-map', xero_document_id: 'xero-invoice', xero_document_type: 'ACCREC',
+    xero_contact_id: 'contact', salesforce_object: 'Invoice__c', salesforce_id: 'invoice',
+    retained_differences: { stemId: payment.STEM__c, accountId: payment.Account__c } };
+  const context = { existingBySalesforce: new Map(), documentMappingById: new Map([[map.id, map]]),
+    documentBySupplierInvoice: new Map(), buyerByStem: new Map([[payment.STEM__c, [map]]]),
+    bankByName: new Map([['UBS', { xero_bank_account_id: 'bank' }]]), xeroPayments: [],
+    currentDocumentById: new Map([['xero-invoice', { id: 'xero-invoice', type: 'ACCREC',
+      status: 'AUTHORISED', contactId: 'contact', currency: 'USD', amountDue: 100 }]]),
+    bankAccounts: new Map([['bank', { CurrencyCode: 'USD' }]]), organisation: { baseCurrency: 'USD' } };
+  const firstPayment = derive(parent, [payment, sibling]);
+  const first = classifyXeroFinancialPayment(firstPayment, context);
+  assert.equal(first.status, 'eligible');
+  assert.equal(first.bankEvidence.parentId, remittanceId);
+  const changed = classifyXeroFinancialPayment(derive({ ...parent, Reference__c: 'revised cash receipt' }, [payment, sibling]), context);
+  assert.notEqual(changed.sourceFingerprint, first.sourceFingerprint);
+  assert.notEqual(changed.reviewFingerprint, first.reviewFingerprint);
+  const siblingChanged = classifyXeroFinancialPayment(derive(parent, [payment, { ...sibling, Reference__c: 'revised allocation' }]), context);
+  assert.notEqual(siblingChanged.sourceFingerprint, first.sourceFingerprint);
+  const historical = classifyXeroFinancialPayment({ ...firstPayment, _bankEvidence: undefined }, context).sourceFingerprint;
+  const existing = { salesforce_payment_id: payment.Id, document_mapping_id: map.id,
+    xero_payment_id: 'xero-payment', xero_bank_account_id: 'bank', source_fingerprint: historical };
+  const linked = classifyXeroFinancialPayment(firstPayment, { ...context,
+    existingBySalesforce: new Map([[payment.Id, existing]]),
+    xeroPayments: [{ PaymentID: 'xero-payment', Amount: 50, Date: payment.Date__c,
+      Reference: payment.Name, Account: { AccountID: 'bank' }, Invoice: { InvoiceID: 'xero-invoice' } }],
+  });
+  assert.match(linked.blockers.join(' '), /Salesforce payment changed/i);
+  assert.equal(linked.status, 'blocked');
+  const savedContext = { ...context, existingBySalesforce: new Map([[payment.Id, {
+    ...existing, source_fingerprint: first.sourceFingerprint,
+  }]]), xeroPayments: [{ PaymentID: 'xero-payment', Amount: 50, Date: payment.Date__c,
+    Reference: payment.Name, Account: { AccountID: 'bank' }, Invoice: { InvoiceID: 'xero-invoice' } }] };
+  for (const changedParent of [
+    { ...parent, Bank__c: 'DBS' }, { ...parent, Date__c: '2026-09-02' },
+    { ...parent, Account__c: sfId(101) },
+  ]) {
+    const result = classifyXeroFinancialPayment(derive(changedParent, [payment, sibling]), savedContext);
+    assert.equal(result.status, 'blocked');
+    assert.ok(result.blockers.some((message) => /Salesforce payment changed|remittance/i.test(message)));
+  }
+  for (const changedSibling of [
+    { ...sibling, Account__c: sfId(101) }, { ...sibling, Amount__c: 49.99 },
+  ]) {
+    const result = classifyXeroFinancialPayment(derive(parent, [payment, changedSibling]), savedContext);
+    assert.equal(result.status, 'blocked');
+    assert.ok(result.blockers.some((message) => /Salesforce payment changed|remittance/i.test(message)));
+  }
+  const retainedContext = { ...savedContext, existingBySalesforce: new Map([[payment.Id, {
+    ...existing, retained_reference: { version: 1 }, source_fingerprint: first.sourceFingerprint,
+  }]]) };
+  const retained = classifyXeroFinancialPayment(derive(parent, [payment, { ...sibling, Amount__c: 49.99 }]), retainedContext);
+  assert.equal(retained.status, 'blocked');
+  assert.ok(retained.blockers.some((message) => /remittance/i.test(message)));
 });
