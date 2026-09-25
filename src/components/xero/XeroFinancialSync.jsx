@@ -489,6 +489,7 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
             </div>
             {payments ? (
               <div className="mt-4 space-y-3">
+                <PaymentEvidenceHolds holds={payments.paymentEvidenceHolds} copy={copy} />
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="text-sm text-muted-foreground">{financialCopy.paymentSummary(payments.summary?.total || 0, payments.summary?.paymentApply || 0)}</div>
                   <div className={ACTIONS_CLASS}>
@@ -571,6 +572,26 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
 
 function paymentRequest(row) {
   return { id: row.salesforcePaymentId, sourceFingerprint: row.sourceFingerprint, reviewFingerprint: row.reviewFingerprint };
+}
+
+function PaymentEvidenceHolds({ holds = [], copy }) {
+  if (!holds.length) return null;
+  const labels = copy.financial;
+  return <aside aria-label={labels.paymentHoldsTitle} className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
+    <p className="font-semibold">{labels.paymentHoldsCount(holds.length)}</p>
+    <p className="mt-1">{labels.paymentHoldsDescription}</p>
+    <details className="mt-2">
+      <summary className="cursor-pointer font-medium">{labels.paymentHoldsDetails}</summary>
+      <ul className="mt-2 max-h-72 space-y-3 overflow-y-auto">
+        {holds.map((hold, index) => <li key={`${hold.xeroPaymentId || 'missing'}:${index}`} className="break-words border-t border-amber-200 pt-2 dark:border-amber-800">
+          <p className="font-medium">{labels.paymentHoldKinds[hold.documentKind] || labels.paymentHoldKinds.unknown}</p>
+          {hold.currency && typeof hold.amount === 'number' && Number.isFinite(hold.amount) && <p className="tabular-nums">{hold.currency} {formatAmount(hold.amount, copy.locale)}{hold.date ? ` · ${hold.date}` : ''}</p>}
+          <p>{hold.code === 'XERO_PAYMENT_NONINVOICE_REVIEW_REQUIRED' ? labels.paymentHoldRefundReason : labels.paymentHoldInvalidReason}</p>
+          <p className="mt-1 text-xs break-all">{labels.xeroPaymentId}: {hold.xeroPaymentId || copy.common.notSet}</p>
+        </li>)}
+      </ul>
+    </details>
+  </aside>;
 }
 
 function PaymentReferenceEvidence({ row, copy }) {

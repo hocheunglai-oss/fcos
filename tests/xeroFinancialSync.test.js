@@ -139,10 +139,12 @@ test('changed acceptance requires review even when a preserved document now has 
 });
 
 test('stored Xero payment links must still exist and match current Salesforce values', () => {
+  const ids = { invoice: '11111111-1111-4111-8111-111111111111', contact: '22222222-2222-4222-8222-222222222222',
+    payment: '33333333-3333-4333-8333-333333333333', bank: '44444444-4444-4444-8444-444444444444' };
   const payment = { Id: paymentSfId(1), CurrencyIsoCode: 'USD', Name: 'PAY-1', Amount__c: 500, Date__c: '2026-07-01', Bank__c: 'DBS', STEM__c: paymentSfId(2), Account__c: paymentSfId(3), RecordType: { DeveloperName: 'Receivable' } };
-  const documentMapping = { id: 'document-map-1', xero_document_id: 'xero-invoice-1', xero_document_type: 'ACCREC', xero_contact_id: 'contact-1', salesforce_object: 'Invoice__c', salesforce_id: paymentSfId(4), retained_differences: { stemId: payment.STEM__c, accountId: payment.Account__c } };
+  const documentMapping = { id: 'document-map-1', xero_document_id: ids.invoice, xero_document_type: 'ACCREC', xero_contact_id: ids.contact, salesforce_object: 'Invoice__c', salesforce_id: paymentSfId(4), retained_differences: { stemId: payment.STEM__c, accountId: payment.Account__c } };
   payment._buyerDocumentEvidence = buyerDocumentEvidence(payment, documentMapping.salesforce_id);
-  const currentDocument = { id: 'xero-invoice-1', type: 'ACCREC', status: 'AUTHORISED', contactId: 'contact-1', currency: 'USD', amountDue: 500 };
+  const currentDocument = { id: ids.invoice, type: 'ACCREC', status: 'AUTHORISED', contactId: ids.contact, currency: 'USD', amountDue: 500 };
   const fingerprint = classifyXeroFinancialPayment(payment, {
     existingBySalesforce: new Map(),
     documentMappingById: new Map(),
@@ -152,9 +154,10 @@ test('stored Xero payment links must still exist and match current Salesforce va
     xeroPayments: [],
     currentDocumentById: new Map(),
   }).sourceFingerprint;
-  const stored = { id: 'payment-map-1', salesforce_payment_id: payment.Id, document_mapping_id: documentMapping.id, xero_payment_id: 'xero-payment-1', source_fingerprint: fingerprint };
-  const xeroPayment = { PaymentID: 'xero-payment-1', Amount: 500, Date: '2026-07-01', Reference: payment.Name, Account: { AccountID: 'xero-bank-1' }, Invoice: { InvoiceID: documentMapping.xero_document_id } };
-  stored.xero_bank_account_id = 'xero-bank-1';
+  const stored = { id: 'payment-map-1', salesforce_payment_id: payment.Id, document_mapping_id: documentMapping.id, xero_payment_id: ids.payment, source_fingerprint: fingerprint };
+  const xeroPayment = { PaymentID: ids.payment, PaymentType: 'ACCRECPAYMENT', Status: 'AUTHORISED', Amount: 500, Date: '2026-07-01', Reference: payment.Name,
+    Account: { AccountID: ids.bank }, Invoice: { InvoiceID: ids.invoice, Type: 'ACCREC', CurrencyCode: 'USD', Contact: { ContactID: ids.contact } } };
+  stored.xero_bank_account_id = ids.bank;
   const baseContext = {
     existingBySalesforce: new Map([[payment.Id, stored]]),
     documentMappingById: new Map([[documentMapping.id, documentMapping]]),
@@ -180,7 +183,7 @@ test('stored Xero payment links must still exist and match current Salesforce va
   const missing = classifyXeroFinancialPayment(payment, { ...baseContext, xeroPayments: [] });
   assert.equal(missing.status, 'blocked');
   assert.match(missing.blockers.join(' '), /no longer points/i);
-  const wrongBank = classifyXeroFinancialPayment(payment, { ...baseContext, xeroPayments: [{ ...xeroPayment, Account: { AccountID: 'xero-bank-2' } }] });
+  const wrongBank = classifyXeroFinancialPayment(payment, { ...baseContext, xeroPayments: [{ ...xeroPayment, Account: { AccountID: '55555555-5555-4555-8555-555555555555' } }] });
   assert.equal(wrongBank.status, 'blocked');
   assert.match(wrongBank.blockers.join(' '), /bank account differs/i);
   const deposit = classifyXeroFinancialPayment({ ...payment, Is_Deposit__c: true }, baseContext);

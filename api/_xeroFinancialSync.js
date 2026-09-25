@@ -5,7 +5,8 @@ import { buildGroupedPreservationContext, completeGroupedAccountSnapshot, evalua
   groupedPreservationReview, groupedSourceAccounting, hasGroupedPreservation } from './_xeroGroupedPreservationAdapter.js';
 import { groupedPreservationCanonical } from './_xeroGroupedPreservation.js';
 import { requireExternalActionGate } from './_externalActionGates.js';
-import { paymentCurrency, paymentDocumentIdentityBlockers, selectXeroPaymentMatch, selectXeroReferenceRetentionMatch } from './_xeroPaymentIdentity.js';
+import { paymentCurrency, paymentDocumentIdentityBlockers, paymentAssociationBlockers, selectXeroPaymentMatch, selectXeroReferenceRetentionMatch } from './_xeroPaymentIdentity.js';
+import { resolveXeroPaymentAssociation, xeroPaymentEvidenceHold, xeroPaymentSameId } from './_xeroPaymentAssociation.js';
 import { resolveRemittanceBankEvidence } from './_xeroPaymentBankEvidence.js';
 import { buyerPaymentDocumentBlockers, enrichBuyerPaymentDocumentEvidence } from './_xeroBuyerPaymentEvidence.js';
 import { persistReviewedPaymentReferenceLinks } from './_xeroPaymentReferenceLink.js';
@@ -23,7 +24,7 @@ import {
 } from './_xeroContactSync.js';
 
 export const XERO_FINANCIAL_CUTOFF = '2026-01-01';
-export const XERO_RECONCILIATION_VERSION = 9;
+export const XERO_RECONCILIATION_VERSION = 10;
 const MAX_BATCH_SIZE = 25;
 const DEFAULT_CALLS_PER_MINUTE = 45;
 const DEFAULT_DAILY_LIMIT = 1000;
@@ -862,7 +863,8 @@ async function previewPayments(body, { accessContext, env, fetchImpl, client, xe
       if (claim) await resolvePaymentPostingClaim(client, claim, xeroById.get(row.xeroPaymentId), actorFields(accessContext));
     }
   }
-  return { rows, tenantId: connection.tenantId, summary: summarizeClassifications(rows), rateLimit: rate, actor: actorFields(accessContext) };
+  return { rows, tenantId: connection.tenantId, summary: summarizeClassifications(rows),
+    paymentEvidenceHolds: readSnapshot.paymentEvidenceHolds, rateLimit: rate, actor: actorFields(accessContext) };
 }
 
 export function classifyXeroFinancialPayment(payment, context) {
@@ -884,7 +886,9 @@ function classifyPayment(payment, context) {
     const currentDocument = documentMapping ? context.currentDocumentById?.get(documentMapping.xero_document_id) : null;
     if (existing.retained_reference && Object.keys(existing.retained_reference).length) return referencePaymentRow(payment, context, documentMapping, currentDocument, existing);
     const blockers = [...unsupportedPaymentBlockers(payment), ...paymentDocumentIdentityBlockers(payment, documentMapping, currentDocument),
-      ...buyerPaymentDocumentBlockers(payment, documentMapping)];
+      ...buyerPaymentDocumentBlockers(payment, documentMapping),
+      ...paymentAssociationBlockers({ payment, documentMapping, bankAccountId: existing.xero_bank_account_id,
+        xeroPayments: context.xeroPayments })];
     if (xeroPayment) {
       const selected = selectXeroPaymentMatch({ payment, documentMapping, bankAccountId: existing.xero_bank_account_id,
         xeroPayments: [xeroPayment], paymentMappings: context.paymentMappings || [...context.existingBySalesforce.values()] });
@@ -924,7 +928,9 @@ function classifyPayment(payment, context) {
   const amount = Number(payment.Amount__c);
   const matched = selectXeroPaymentMatch({ payment, documentMapping, bankAccountId: bank?.xero_bank_account_id,
     xeroPayments: context.xeroPayments, paymentMappings: context.paymentMappings || [...context.existingBySalesforce.values()] });
-  if (!matched.match && !blockers.length) {
+  const associationBlockers = paymentAssociationBlockers({ payment, documentMapping, bankAccountId: bank?.xero_bank_account_id,
+    xeroPayments: context.xeroPayments });
+  if (!matched.match && !blockers.length && !associationBlockers.length) {
     const retained = referencePaymentRow(payment, context, documentMapping, currentDocument);
     if (retained?.action === 'payment_reference_link') return retained;
   }
@@ -1244,6 +1250,7 @@ export async function loadXeroPaymentEvidence(connection, cutoff, {
     invoices || loadAllXeroPages(connection, `/Invoices?where=${where}`, 'Invoices', options),
     payments || loadAllXeroPages(connection, `/Payments?where=${where}`, 'Payments', options),
   ]);
+  const allPayments = [...scopedPayments];
   const paymentById = new Map(scopedPayments.map((row) => [row.PaymentID, row]));
   // A previously linked payment may have moved outside the date scope. Re-read it
   // explicitly so its changed date/amount is still classified as a conflict.
@@ -1252,20 +1259,37 @@ export async function loadXeroPaymentEvidence(connection, cutoff, {
       const response = await xeroAccountingFetch(connection, `/Payments/${encodeURIComponent(id)}`, { method: 'GET', ...options });
       if (!Array.isArray(response.Payments)) throw financialError('Xero payment evidence was incomplete.', 502, 'XERO_FINANCIAL_XERO_INCOMPLETE');
       if (response.Payments.some((row) => row.PaymentID !== id)) throw financialError('Xero returned mismatched payment evidence.', 502, 'XERO_FINANCIAL_XERO_INCOMPLETE');
-      for (const row of response.Payments) paymentById.set(id, row);
+      for (const row of response.Payments) { allPayments.push(row); paymentById.set(id, row); }
     } catch (error) {
       if (error.status !== 404) throw error;
     }
   }
-  const invoiceById = new Map(scopedInvoices.map((row) => [row.InvoiceID, row]));
-  const requiredIds = uniqueStrings([...invoiceIds, ...[...paymentById.values()].map((row) => row.Invoice?.InvoiceID)]);
+  const invoiceById = new Map(scopedInvoices.map((row) => [String(row.InvoiceID).toLowerCase(), row]));
+  const associations = allPayments.map(resolveXeroPaymentAssociation);
+  const nonInvoiceIds = new Set(associations.filter((row) => row.disposition === 'noninvoice').map((row) => row.documentId.toLowerCase()));
+  const requiredIds = uniqueStrings([...invoiceIds, ...associations.filter((row) => row.disposition === 'invoice').map((row) => row.documentId)])
+    .filter((id, index, values) => !nonInvoiceIds.has(String(id).toLowerCase())
+      && values.findIndex((value) => xeroPaymentSameId(value, id)) === index);
   // Keep encoded UUID lists below the provider's query-string size limit.
-  for (const batch of chunks(requiredIds.filter((id) => !invoiceById.has(id)), 50)) {
+  for (const batch of chunks(requiredIds.filter((id) => !invoiceById.has(String(id).toLowerCase())), 50)) {
     const historical = await loadAllXeroPages(connection, `/Invoices?IDs=${encodeURIComponent(batch.join(','))}`, 'Invoices', options);
-    if (historical.some((row) => !batch.includes(row.InvoiceID))) throw financialError('Xero returned mismatched invoice evidence.', 502, 'XERO_FINANCIAL_XERO_INCOMPLETE');
-    for (const row of historical) invoiceById.set(row.InvoiceID, row);
+    if (historical.some((row) => !batch.some((id) => xeroPaymentSameId(id, row.InvoiceID)))) throw financialError('Xero returned mismatched invoice evidence.', 502, 'XERO_FINANCIAL_XERO_INCOMPLETE');
+    for (const row of historical) invoiceById.set(String(row.InvoiceID).toLowerCase(), row);
   }
-  return { invoices: [...invoiceById.values()], payments: [...paymentById.values()] };
+  const paymentEvidenceHolds = allPayments.map(xeroPaymentEvidenceHold).filter(Boolean);
+  const seenPaymentIds = new Set();
+  for (const row of allPayments) {
+    const id = typeof row?.PaymentID === 'string' ? row.PaymentID.toLowerCase() : null;
+    if (id && seenPaymentIds.has(id)) paymentEvidenceHolds.push({ xeroPaymentId: row.PaymentID,
+      paymentType: row.PaymentType || null, documentKind: null, documentId: null,
+      code: 'XERO_PAYMENT_ID_DUPLICATE', status: 'held', currency: null, amount: null, date: null });
+    if (id) seenPaymentIds.add(id);
+  }
+  for (const id of invoiceIds.filter((value) => nonInvoiceIds.has(String(value).toLowerCase()))) {
+    paymentEvidenceHolds.push({ xeroPaymentId: null, paymentType: null, documentKind: 'invoice', documentId: id,
+      code: 'XERO_PAYMENT_DOCUMENT_ID_CONFLICT', status: 'held' });
+  }
+  return { invoices: [...invoiceById.values()], payments: allPayments, paymentEvidenceHolds };
 }
 
 export async function allFinancialRows(client, table, configure = (query) => query) {
