@@ -174,6 +174,51 @@ test('line matching resolves reordered unique lines but blocks ambiguous corresp
   assert.throws(() => accountingPayload({ ...fixture().build(), lines }, 'existing', 'DRAFT'), { code: 'XERO_FINANCIAL_LINE_IDENTITY_UNSAFE' });
 });
 
+test('single-line identity holds explain observed description, account and tax differences without assuming correspondence', () => {
+  const source = { description: 'Issued fuel', quantity: 1, unitAmount: 100, accountCode: '51100', taxType: 'NONE' };
+  const xero = { LineItemID: 'historical-line', Description: 'Historical charge', Quantity: 1, UnitAmount: 100,
+    LineAmount: 100, AccountCode: '51106', TaxType: 'NONE' };
+  const account = matchedXeroLines([source], [xero]);
+  assert.equal(account.lines, null);
+  assert.equal(account.blockers.length, 1);
+  assert.match(account.blockers[0], /^Line identity cannot be verified:/);
+  assert.match(account.blockers[0], /Salesforce and Xero descriptions differ/);
+  assert.match(account.blockers[0], /mapped account 51100 versus Xero 51106/);
+  assert.doesNotMatch(account.blockers[0], /mapped tax type/);
+
+  const tax = matchedXeroLines([source], [{ ...xero, AccountCode: '51100', TaxType: 'OUTPUT2' }]);
+  assert.equal(tax.lines, null);
+  assert.match(tax.blockers[0], /mapped tax type NONE versus Xero OUTPUT2/);
+  assert.doesNotMatch(tax.blockers[0], /mapped account/);
+  const both = matchedXeroLines([source], [{ ...xero, TaxType: 'OUTPUT2' }]);
+  assert.match(both.blockers[0], /mapped account 51100 versus Xero 51106/);
+  assert.match(both.blockers[0], /mapped tax type NONE versus Xero OUTPUT2/);
+  assert.doesNotMatch(both.blockers[0], /Issued fuel|Historical charge/);
+
+  // The existing algorithm still accepts the same description with changed
+  // accounting and keeps earlier safety gates ahead of this diagnosis.
+  assert.equal(matchedXeroLines([source], [{ ...xero, Description: source.description }]).lines[0].LineItemID, 'historical-line');
+  assert.deepEqual(matchedXeroLines([source], [{ ...xero, LineItemID: '' }]).blockers,
+    ['Xero line identity is missing or duplicated; historical lines cannot be safely updated.']);
+  assert.deepEqual(matchedXeroLines([source], [{ ...xero, DiscountRate: 1 }]).blockers,
+    ['Existing Xero discount or tax amounts require Finance review before line updates.']);
+  assert.deepEqual(matchedXeroLines([source, { ...source, description: 'Second' }], [xero, { ...xero, LineItemID: 'other' }]).blockers,
+    ['Source-to-Xero line correspondence is ambiguous. Review the historical line identity before updating.']);
+});
+
+test('an unmatched single historical line stays blocked with no update payload', () => {
+  const f = fixture(); const baseline = f.build(); const existing = current(baseline);
+  existing.lineItems[0] = { ...existing.lineItems[0], Description: 'Unrelated historical charge', AccountCode: '51106' };
+  f.xero.documents = [existing];
+  const row = f.build();
+  assert.equal(row.action, 'blocked');
+  assert.equal(row.status, 'blocked');
+  assert.equal(row.proposedPayload, null);
+  assert.match(row.blockers.join(' '), /mapped account 200 versus Xero 51106/);
+  assert.throws(() => accountingPayload({ ...row, lines: baseline.lines }, 'xero-id', 'DRAFT', existing),
+    { code: 'XERO_FINANCIAL_LINE_IDENTITY_UNSAFE' });
+});
+
 test('paid or locked accounting can only link unchanged history and target locked dates cannot post', () => {
   for (const protection of [{ status: 'PAID', amountPaid: 100, amountDue: 0 }, { status: 'AUTHORISED', date: '2026-08-01' }]) {
     const f = fixture('authorised'); f.xero.documents = [current(f.build(), protection)]; f.xero.organisation.periodLockDate = '2026-08-31';
