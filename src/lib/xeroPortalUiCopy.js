@@ -456,50 +456,61 @@ const AUTOMATION_COPY = [
   ["emptyDescription", 'A Salesforce trigger run will appear here after a signed event reaches FCOS.', '當已簽署的 Salesforce 事件到達 FCOS 後，批次會顯示於此。']
 ];
 
-const EN = {
-  locale: 'en-GB',
-  languageLabel: 'Xero Portal language',
-  common: bilingualCopy(COMMON_COPY, false),
-  header: bilingualCopy(HEADER_COPY, false),
-  tabs: { contacts: 'Contacts', accounting: 'Salesforce → Xero', receipts: 'Receipts', automation: 'Auto-Created Contacts', manual: 'User Manual' },
-  toasts: bilingualCopy(TOASTS_COPY, false),
-  panels: bilingualCopy(PANELS_COPY, false),
-  contacts: bilingualCopy(CONTACTS_COPY, false),
-  receipts: bilingualCopy(RECEIPTS_COPY, false),
-  automation: bilingualCopy(AUTOMATION_COPY, false),
-  manual: { loadingTitle: 'Loading Xero Portal manual', loadingDescription: 'FCOS is loading the English and Traditional Chinese user guide.' },
-  actions: { archive: 'Archive', rename: 'Rename', exception: 'Exception', keep: 'Keep', unknown: 'Unknown' },
-  statuses: bilingualCopy(STATUSES_COPY, false),
-  statusDescriptions: bilingualCopy(STATUSDESCRIPTIONS_COPY, false),
-  reasons: bilingualCopy(REASONS_COPY, false),
-  matchFields: { SalesforceName: 'Salesforce name', ClKeyWithoutHk: 'CL key without HK', SalesforceNameAndClKeyWithoutHk: 'Salesforce name + CL key without HK' },
-  usageSources: { invoices: 'Invoices and bills', 'credit-notes': 'Credit notes', 'bank-transactions': 'Bank transactions', payments: 'Payments', overpayments: 'Overpayments', prepayments: 'Prepayments', 'expense-claims': 'Expense claims', receipts: 'Receipts' },
-  recordTypes: { Buyer: 'Buyer', Supplier: 'Supplier', Buyer_Supplier: 'Buyer & Supplier', Broker: 'Broker' },
-  financial: bilingualCopy(FINANCIAL_COPY, false),
-};
+const TABS_COPY = [
+  ['contacts', 'Contacts', '聯絡人'], ['accounting', 'Salesforce → Xero', '會計同步'],
+  ['receipts', 'Receipts', '收據'], ['automation', 'Auto-Created Contacts', '自動建立聯絡人'],
+  ['manual', 'User Manual', '使用手冊'],
+];
+const MANUAL_COPY = [
+  ['loadingTitle', 'Loading Xero Portal manual', '正在載入 Xero Portal 使用手冊'],
+  ['loadingDescription', 'FCOS is loading the English and Traditional Chinese user guide.', 'FCOS 正在載入英文及繁體中文使用指引。'],
+];
+const ACTIONS_COPY = [
+  ['archive', 'Archive', '封存'], ['rename', 'Rename', '重新命名'],
+  ['exception', 'Exception', '例外'], ['keep', 'Keep', '保留'], ['unknown', 'Unknown', '未知'],
+];
+const MATCH_FIELDS_COPY = [
+  ['SalesforceName', 'Salesforce name', 'Salesforce 名稱'],
+  ['ClKeyWithoutHk', 'CL key without HK', '移除 HK 的 CL Key'],
+  ['SalesforceNameAndClKeyWithoutHk', 'Salesforce name + CL key without HK', 'Salesforce 名稱及移除 HK 的 CL Key'],
+];
+const USAGE_SOURCES_COPY = [
+  ['invoices', 'Invoices and bills', '發票及帳單'], ['credit-notes', 'Credit notes', '貸項通知單'],
+  ['bank-transactions', 'Bank transactions', '銀行交易'], ['payments', 'Payments', '付款'],
+  ['overpayments', 'Overpayments', '多付金額'], ['prepayments', 'Prepayments', '預付款'],
+  ['expense-claims', 'Expense claims', '費用申報'], ['receipts', 'Receipts', '收據'],
+];
+const RECORD_TYPES_COPY = [
+  ['Buyer', 'Buyer', '買方'], ['Supplier', 'Supplier', '供應商'],
+  ['Buyer_Supplier', 'Buyer & Supplier', '買方及供應商'], ['Broker', 'Broker', '經紀'],
+];
 
-const ZH_HANT = {
-  ...EN,
-  locale: 'zh-HK',
-  languageLabel: 'Xero Portal 語言',
-  common: bilingualCopy(COMMON_COPY, true),
-  header: bilingualCopy(HEADER_COPY, true),
-  tabs: { contacts: '聯絡人', accounting: '會計同步', receipts: '收據', automation: '自動建立聯絡人', manual: '使用手冊' },
-  toasts: bilingualCopy(TOASTS_COPY, true),
-  panels: bilingualCopy(PANELS_COPY, true),
-  contacts: bilingualCopy(CONTACTS_COPY, true),
-  receipts: bilingualCopy(RECEIPTS_COPY, true),
-  automation: bilingualCopy(AUTOMATION_COPY, true),
-  manual: { loadingTitle: '正在載入 Xero Portal 使用手冊', loadingDescription: 'FCOS 正在載入英文及繁體中文使用指引。' },
-  actions: { archive: '封存', rename: '重新命名', exception: '例外', keep: '保留', unknown: '未知' },
-  statuses: bilingualCopy(STATUSES_COPY, true),
-  statusDescriptions: bilingualCopy(STATUSDESCRIPTIONS_COPY, true),
-  reasons: bilingualCopy(REASONS_COPY, true),
-  matchFields: { SalesforceName: 'Salesforce 名稱', ClKeyWithoutHk: '移除 HK 的 CL Key', SalesforceNameAndClKeyWithoutHk: 'Salesforce 名稱及移除 HK 的 CL Key' },
-  usageSources: { invoices: '發票及帳單', 'credit-notes': '貸項通知單', 'bank-transactions': '銀行交易', payments: '付款', overpayments: '多付金額', prepayments: '預付款', 'expense-claims': '費用申報', receipts: '收據' },
-  recordTypes: { Buyer: '買方', Supplier: '供應商', Buyer_Supplier: '買方及供應商', Broker: '經紀' },
-  financial: bilingualCopy(FINANCIAL_COPY, true),
-};
+function buildCopy(chinese) {
+  return {
+    locale: chinese ? 'zh-HK' : 'en-GB',
+    languageLabel: chinese ? 'Xero Portal 語言' : 'Xero Portal language',
+    common: bilingualCopy(COMMON_COPY, chinese),
+    header: bilingualCopy(HEADER_COPY, chinese),
+    tabs: bilingualCopy(TABS_COPY, chinese),
+    toasts: bilingualCopy(TOASTS_COPY, chinese),
+    panels: bilingualCopy(PANELS_COPY, chinese),
+    contacts: bilingualCopy(CONTACTS_COPY, chinese),
+    receipts: bilingualCopy(RECEIPTS_COPY, chinese),
+    automation: bilingualCopy(AUTOMATION_COPY, chinese),
+    manual: bilingualCopy(MANUAL_COPY, chinese),
+    actions: bilingualCopy(ACTIONS_COPY, chinese),
+    statuses: bilingualCopy(STATUSES_COPY, chinese),
+    statusDescriptions: bilingualCopy(STATUSDESCRIPTIONS_COPY, chinese),
+    reasons: bilingualCopy(REASONS_COPY, chinese),
+    matchFields: bilingualCopy(MATCH_FIELDS_COPY, chinese),
+    usageSources: bilingualCopy(USAGE_SOURCES_COPY, chinese),
+    recordTypes: bilingualCopy(RECORD_TYPES_COPY, chinese),
+    financial: bilingualCopy(FINANCIAL_COPY, chinese),
+  };
+}
+
+const EN = buildCopy(false);
+const ZH_HANT = buildCopy(true);
 
 export const XERO_PORTAL_UI_COPY = Object.freeze({ en: EN, 'zh-Hant': ZH_HANT });
 
