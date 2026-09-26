@@ -12,6 +12,7 @@ import { buyerPaymentDocumentBlockers, enrichBuyerPaymentDocumentEvidence } from
 import { persistReviewedPaymentReferenceLinks } from './_xeroPaymentReferenceLink.js';
 import { loadPaymentPostingClaims, paymentClaimEvidenceIds, postReviewedPaymentBatch, resolvePaymentPostingClaim, reviewPaymentPostingClaim } from './_xeroPaymentPosting.js';
 import { xeroRateLimitSnapshot } from './_xeroRateLimit.js';
+import { discoverSupplierFileCandidates, serializeSupplierFileDiscovery, supplierFileDiscoveryParents } from './_xeroSupplierFileDiscovery.js';
 import { sfCompositeQueries, sfQuery } from './_salesforce.js';
 import {
   getFreshXeroConnection,
@@ -367,6 +368,10 @@ export async function xeroFinancialSyncPreview(body = {}, dependencies = {}) {
   });
   stored.productMappings = (await allFinancialRows(client, 'xero_financial_product_mappings', (query) => query.eq('enabled', true))).data;
   const classified = buildFinancialClassifications(salesforce, xero, stored, { postingMode });
+  const supplierFileDiscovery = await discoverSupplierFileCandidates(supplierFileDiscoveryParents(salesforce.suppliers, classified.rows), { querySalesforce: sfCompositeQueries });
+  for (const row of classified.rows) {
+    if (row.salesforceObject === 'Supplier_Invoice__c') row.sourceFileDiscovery = supplierFileDiscovery.get(row.salesforceId) || null;
+  }
   const disputeStates = await loadDisputeReconciliationStates(client, classified.rows.map((row) => row.stemId));
   for (const row of classified.rows) row.dispute = disputeStates.get(row.stemId) || null;
   const mappingProposals = deriveXeroProductMappingProposals(classified.rows);
@@ -1989,6 +1994,7 @@ function serializeClassification(row) {
   return {
     salesforceObject: row.salesforceObject, salesforceId: row.salesforceId,
     documentNumber: row.documentNumber, documentKind: row.documentKind, stemId: row.stemId, dispute: row.dispute || null,
+    sourceFileDiscovery: serializeSupplierFileDiscovery(row.sourceFileDiscovery, row.salesforceId),
     postingMode: row.postingMode || 'draft', blockerCodes: row.blockerCodes || [],
     sourceFingerprint: row.sourceFingerprint, reviewFingerprint: xeroReviewFingerprint(row),
     mappingProducts: (row.lines || []).map((line) => ({ id: line.productId, name: line.productName })),

@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePageState } from '@/hooks/usePageState';
 import { AlertTriangle, ExternalLink, Loader2, Play, RefreshCw, Save, ShieldCheck } from 'lucide-react';
+import StemDetailLink from '@/components/common/StemDetailLink';
 import StateBlock from '@/components/common/StateBlock';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -724,7 +725,23 @@ function DocumentEvidence({ row, flow, copy, expanded = false }) {
     ...(evidence.candidates || []).map((candidate) => `${flow.candidates}: ${candidate.number || '—'} · ${candidate.id || '—'}`),
     ...(row.differences || []).map((difference) => `${flow.differences} · ${difference.field}: Salesforce ${formatDifferenceValue(difference.salesforce ?? difference.salesforceLineCount)} → Xero ${formatDifferenceValue(difference.xero ?? difference.xeroLineCount)}`),
   ].join('\n');
-  return <details className="mt-2" open={expanded}><summary>{flow.details}</summary><div className="whitespace-pre-line text-xs text-muted-foreground">{lines}</div></details>;
+  return <details className="mt-2" open={expanded}><summary>{flow.details}</summary><div className="whitespace-pre-line text-xs text-muted-foreground">{lines}</div><SupplierFileDiscovery row={row} copy={copy.financial.fileDiscovery} locale={copy === xeroPortalUiCopy('zh-Hant') ? 'zh-HK' : 'en-HK'} /></details>;
+}
+
+function SupplierFileDiscovery({ row, copy, locale }) {
+  if (row.salesforceObject !== 'Supplier_Invoice__c') return null;
+  const discovery = row.sourceFileDiscovery;
+  const candidates = discovery?.candidates || [];
+  const status = discovery?.status || 'not_checked';
+  return <section className="mt-3 space-y-1 text-xs text-muted-foreground" aria-label={copy.title}>
+    <div className="font-medium">{copy.title}</div>
+    <div>{status === 'complete' ? candidates.length ? copy.complete : copy.empty : copy[status] || copy.not_checked}</div>
+    {discovery?.capturedAt && <div>{copy.captured}: <time dateTime={discovery.capturedAt}>{new Date(discovery.capturedAt).toLocaleString(locale, { timeZone: 'Asia/Hong_Kong', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })}</time></div>}
+    <div>{copy.description}</div>
+    {discovery && <div>{copy.stale}</div>}
+    {candidates.length > 0 && <><div>{copy.count(candidates.length)}</div><ul className="list-disc pl-4 break-words">{candidates.slice(0, 5).map((candidate) => <li key={candidate.documentId}>{candidate.title} · {candidate.latestPublishedVersionId}</li>)}</ul>{candidates.length > 5 && <div>{copy.displayLimit(5, candidates.length)}</div>}</>}
+    {row.stemId && <StemDetailLink stemId={row.stemId}>{copy.inspect}</StemDetailLink>}
+  </section>;
 }
 
 function formatAmount(value, locale) { return Number(value || 0).toLocaleString(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
