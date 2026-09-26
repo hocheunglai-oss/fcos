@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { accountingPayload, documentConfirmationErrors, documentReadiness, financialSourceCurrency, matchDocumentResponses, matchedXeroLines, normalizePostingMode, reviewedPostingMode, loadFinancialSafetyContext } from '../api/_xeroDocumentSafety.js';
+import { accountingPayload, documentConfirmationErrors, documentPostingBlockers, documentReadiness, financialSourceCurrency, matchDocumentResponses, matchedXeroLines, normalizePostingMode, reviewedPostingMode, loadFinancialSafetyContext } from '../api/_xeroDocumentSafety.js';
 import { buildFinancialClassifications, changedXeroReviewItems, xeroFinancialSyncApply, xeroReviewFingerprint } from '../api/_xeroFinancialSync.js';
 import { buyerInvoiceApprovalProjection } from '../api/_buyerInvoiceApproval.js';
 
@@ -152,6 +152,61 @@ test('exact draft is authorised only in reviewed authorised mode with readiness 
   const f = fixture('authorised'); f.xero.documents = [current(f.build())];
   const row = f.build(); assert.equal(row.action, 'safe_update'); assert.equal(row.proposedPayload.Status, 'AUTHORISED');
   f.buyer.File__c = ''; assert.equal(f.build().status, 'blocked');
+});
+
+test('draft mode updates to existing authorised accounting require issued source readiness', () => {
+  const f = fixture(); const baseline = f.build();
+  f.xero.documents = [current(baseline, { status: 'AUTHORISED', reference: 'old' })];
+  assert.equal(f.build().action, 'safe_update');
+  assert.equal(f.build().proposedPayload.Status, 'AUTHORISED');
+
+  f.buyer.File__c = '';
+  const row = f.build();
+  assert.equal(row.readiness.ready, false);
+  assert.equal(row.status, 'blocked');
+  assert.equal(row.action, 'blocked');
+  assert.equal(row.proposedPayload, null);
+  assert.match(row.blockers.join(' '), /no issued source file/);
+});
+
+test('issued posting fails closed when unreadiness has no explanatory blockers', () => {
+  for (const [postingMode, status] of [['authorised', undefined], ['draft', 'AUTHORISED']]) {
+    for (const readiness of [{ ready: false, blockers: [] }, { blockers: [] }, undefined]) {
+      assert.deepEqual(documentPostingBlockers({ currency: 'USD', postingMode, readiness },
+        { baseCurrency: 'USD' }, { status }), ['Issued source readiness evidence is missing.']);
+    }
+  }
+});
+
+test('missing issued files still permit new drafts and draft or submitted updates', () => {
+  const f = fixture(); const baseline = f.build(); f.buyer.File__c = '';
+  const created = f.build();
+  assert.equal(created.status, 'eligible');
+  assert.equal(created.proposedPayload.Status, 'DRAFT');
+  for (const status of ['DRAFT', 'SUBMITTED']) {
+    f.xero.documents = [current(baseline, { status, reference: 'old' })];
+    const updated = f.build();
+    assert.equal(updated.status, 'eligible');
+    assert.equal(updated.action, 'safe_update');
+    assert.equal(updated.proposedPayload.Status, status);
+  }
+});
+
+test('missing issued files do not gate exact or protected history links without accounting payloads', () => {
+  for (const protection of ['exact', 'paid', 'stored']) {
+    const f = fixture(); const baseline = f.build(); f.buyer.File__c = '';
+    f.xero.documents = [current(baseline, protection === 'paid'
+      ? { status: 'PAID', amountPaid: 100, amountDue: 0 } : { status: 'AUTHORISED' })];
+    if (protection === 'stored') f.stored.documentMappings = [{ salesforce_object: 'Invoice__c',
+      salesforce_id: f.buyer.Id, xero_document_id: 'xero-id', xero_contact_id: baseline.contactId,
+      protected_legacy: true }];
+    const row = f.build();
+    assert.equal(row.readiness.ready, false);
+    assert.equal(row.status, 'eligible');
+    assert.equal(row.action, protection === 'exact' ? 'link' : 'protected_legacy');
+    assert.deepEqual(row.blockers, []);
+    assert.equal(row.proposedPayload, null);
+  }
 });
 
 test('updates preserve Xero line identity, tracking, item metadata and document metadata', () => {

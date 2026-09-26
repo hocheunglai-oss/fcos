@@ -89,9 +89,14 @@ export function documentPostingBlockers(source, organisation = {}, current = nul
   const baseCurrency = currencyCode(organisation.baseCurrency);
   if (!baseCurrency) blockers.push('Verified Xero organisation base currency is missing.');
   else if (source.currency !== baseCurrency) blockers.push('Document currency differs from Xero base currency. Routine FX posting is not supported.');
-  if (source.postingMode === 'authorised') blockers.push(...(source.readiness?.blockers || (source.readiness?.ready === true ? [] : ['Issued source readiness evidence is missing.'])));
+  const authorised = source.postingMode === 'authorised' || current?.status === 'AUTHORISED';
+  if (authorised) {
+    const readinessBlockers = source.readiness?.blockers || [];
+    blockers.push(...readinessBlockers);
+    if (source.readiness?.ready !== true && !readinessBlockers.length) blockers.push('Issued source readiness evidence is missing.');
+  }
   const lockDate = [organisation.periodLockDate, organisation.endOfYearLockDate].filter(Boolean).sort().at(-1);
-  if ((source.postingMode === 'authorised' || current?.status === 'AUTHORISED') && lockDate && source.invoiceDate && source.invoiceDate <= lockDate) {
+  if (authorised && lockDate && source.invoiceDate && source.invoiceDate <= lockDate) {
     blockers.push('The proposed accounting date falls in a locked Xero period.');
   }
   return blockers;

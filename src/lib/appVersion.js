@@ -3,6 +3,7 @@ import { APP_VERSION } from './appVersionMeta.js';
 export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
+  { version: '2.0.248', releasedAt: '2026-09-26', title: 'Verify evidence before updating authorised bills', changes: ['Require issued-source evidence for changes to authorised Xero documents, including in Create drafts mode.'] },
   { version: '2.0.247', releasedAt: '2026-09-26', title: 'Find attached supplier documents during Finance review', changes: ['Show directly attached PDF candidates for blocked supplier invoices with missing file links, including the Hong Kong lookup time and incomplete results.', 'Keep attachment discovery separate from invoice-content verification and financial approval.'] },
   { version: '2.0.244', releasedAt: '2026-09-24', title: 'Clear missing bank guidance', changes: ['Distinguish missing Salesforce bank details from an unapproved mapping, and prevent opening an empty mapping dialog.'] },
   { version: '2.0.243', releasedAt: '2026-09-24', title: 'Batch payment links and precise price evidence', changes: ['Review up to 25 verified existing payment links together, retaining Xero references and an audit trail. Verify grouped invoice lines using the prices behind Salesforce totals and show the exact missing field.'] },
