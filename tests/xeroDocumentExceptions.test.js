@@ -10,7 +10,9 @@ const line = { description: 'Fuel · 194.31 MT', quantity: 1, unitAmount: 121832
 function source(overrides = {}) { return { salesforceObject: 'Invoice__c', salesforceId: 'sf-invoice', ...account, contactName: account.accountName,
   documentNumber: '25070T-INV-1', xeroType: 'ACCREC', xeroCollection: 'Invoices', contactId: 'contact', currency: 'USD', total: 121832.37,
   invoiceDate: '2026-01-28', dueDate: '2026-02-25', deliveryDate: '2026-01-27', stemKey: 'HK2625070T', stemName: 'HK2625070T - HUAYUE - HONG KONG',
-  reference: 'HK2625070T · Salesforce buyer invoice', lines: [line], blockers: [], sharedContactAccounts: sharedAccounts, ...overrides }; }
+  reference: 'HK2625070T · Salesforce buyer invoice', lines: [line], blockers: [],
+  readiness: { ready: true, blockers: [], file: 'synthetic-issued-source.pdf' },
+  sharedContactAccounts: sharedAccounts, ...overrides }; }
 function xero(overrides = {}) { return { id: 'xero-invoice', type: 'ACCREC', collection: 'Invoices', status: 'AUTHORISED', contactId: 'contact', contactName: account.accountName,
   currency: 'USD', total: 121832.37, amountDue: 121832.37, amountPaid: 0, amountCredited: 0, invoiceNumber: '79402S', date: '2026-01-27', dueDate: '2026-01-27', reference: 'HUAYUE',
   lineItems: [{ LineItemID: 'line-1', Description: 'INVOICED 28/1/2026', Quantity: 1, UnitAmount: 121832.37, AccountCode: '41100', TaxType: 'NONE' }], ...overrides }; }

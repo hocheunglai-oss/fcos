@@ -89,9 +89,14 @@ export function documentPostingBlockers(source, organisation = {}, current = nul
   const baseCurrency = currencyCode(organisation.baseCurrency);
   if (!baseCurrency) blockers.push('Verified Xero organisation base currency is missing.');
   else if (source.currency !== baseCurrency) blockers.push('Document currency differs from Xero base currency. Routine FX posting is not supported.');
-  if (source.postingMode === 'authorised') blockers.push(...(source.readiness?.blockers || (source.readiness?.ready === true ? [] : ['Issued source readiness evidence is missing.'])));
+  const authorised = source.postingMode === 'authorised' || current?.status === 'AUTHORISED';
+  if (authorised) {
+    const readinessBlockers = source.readiness?.blockers || [];
+    blockers.push(...readinessBlockers);
+    if (source.readiness?.ready !== true && !readinessBlockers.length) blockers.push('Issued source readiness evidence is missing.');
+  }
   const lockDate = [organisation.periodLockDate, organisation.endOfYearLockDate].filter(Boolean).sort().at(-1);
-  if ((source.postingMode === 'authorised' || current?.status === 'AUTHORISED') && lockDate && source.invoiceDate && source.invoiceDate <= lockDate) {
+  if (authorised && lockDate && source.invoiceDate && source.invoiceDate <= lockDate) {
     blockers.push('The proposed accounting date falls in a locked Xero period.');
   }
   return blockers;
@@ -100,6 +105,7 @@ export function documentPostingBlockers(source, organisation = {}, current = nul
 // Updates retain every existing line. No positional matching, line deletion or implicit recreation.
 export function matchedXeroLines(sourceLines = [], currentLines = []) {
   const failed = (message) => ({ lines: null, blockers: [message] });
+  const ambiguous = 'Source-to-Xero line correspondence is ambiguous. Review the historical line identity before updating.';
   if (!sourceLines.length || sourceLines.length !== currentLines.length) return failed('Source and Xero line counts differ. Finance must resolve historical line additions or removals.');
   const ids = currentLines.map((line) => text(line.LineItemID));
   if (ids.some((id) => !id) || new Set(ids).size !== ids.length) return failed('Xero line identity is missing or duplicated; historical lines cannot be safely updated.');
@@ -117,7 +123,27 @@ export function matchedXeroLines(sourceLines = [], currentLines = []) {
     const matches = scored.filter((item) => item.score > 0 && item.score === highest);
     return matches.length === 1 ? matches[0].index : -1;
   });
-  if (chosen.some((index) => index < 0) || new Set(chosen).size !== sourceLines.length) return failed('Source-to-Xero line correspondence is ambiguous. Review the historical line identity before updating.');
+  if (chosen.some((index) => index < 0) || new Set(chosen).size !== sourceLines.length) {
+    // A single line on each side permits a factual comparison, but does not
+    // establish that the two lines represent the same historical accounting.
+    if (sourceLines.length === 1 && currentLines.length === 1) {
+      const source = sourceLines[0]; const existing = currentLines[0];
+      const descriptionsDiffer = description(source.description) !== description(existing.Description);
+      const accountsDiffer = String(source.accountCode) !== String(existing.AccountCode);
+      const taxesDiffer = String(source.taxType || 'NONE') !== String(existing.TaxType || 'NONE');
+      if (descriptionsDiffer && (accountsDiffer || taxesDiffer)) {
+        const safeCode = (value) => {
+          const code = text(value);
+          return /^[A-Za-z0-9][A-Za-z0-9._/-]{0,31}$/.test(code) ? code : code ? '(unrecognized)' : '(missing)';
+        };
+        const differences = ['Salesforce and Xero descriptions differ'];
+        if (accountsDiffer) differences.push(`mapped account ${safeCode(source.accountCode)} versus Xero ${safeCode(existing.AccountCode)}`);
+        if (taxesDiffer) differences.push(`mapped tax type ${safeCode(source.taxType || 'NONE')} versus Xero ${safeCode(existing.TaxType || 'NONE')}`);
+        return failed(`Line identity cannot be verified: ${differences.join('; ')}. Review the issued invoice and accounting mapping before updating.`);
+      }
+    }
+    return failed(ambiguous);
+  }
   return { blockers: [], lines: sourceLines.map((line, index) => {
     const { LineAmount: _lineAmount, TaxAmount: _taxAmount, ...existing } = currentLines[chosen[index]];
     return { ...existing, Description: line.description, Quantity: line.quantity, UnitAmount: line.unitAmount,
