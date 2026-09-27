@@ -531,7 +531,8 @@ export default function XeroPortal() {
 
         <Tabs value={tab} onValueChange={setTab} className="w-full">
           <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1">
-            {['accounting', 'contacts', 'receipts', 'automation', 'manual'].map((key) => <TabsTrigger key={key} value={key}>{copy.tabs[key]}</TabsTrigger>)}
+            {['accounting', 'contacts', 'receipts', 'automation'].map((key) => <TabsTrigger key={key} value={key}>{copy.tabs[key]}</TabsTrigger>)}
+            <TabsTrigger value="manual">{copy.tabs.manual}</TabsTrigger>
           </TabsList>
 
           <TabsContent value="contacts" className="space-y-4">
