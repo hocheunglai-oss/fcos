@@ -29,6 +29,7 @@ const migrationSources = await Promise.all(names.map(async (name) => ({
   sql: await readFile(new URL(name, migrationDirectory), 'utf8'),
 })));
 const releaseMigrationNames = new Set([
+  '20260927144846_xero_financial_preview_persistence.sql',
   '20260923222821_xero_grouped_preservation_link.sql',
   '20260923213339_xero_payment_reference_link.sql',
   '20260923210832_xero_financial_selection_scope.sql',
@@ -118,6 +119,7 @@ async function verifyRuntimeObjects(label) {
     'link_xero_grouped_document_v1', 'xero_grouped_salesforce_id_v1', 'protect_xero_grouped_mapping_v1',
     'link_xero_payment_references_v1',
     'authorise_xero_financial_sync_run_v1',
+    'persist_xero_financial_preview_v1',
     'save_company_finance_settings', 'save_company_finance_settings_v2', 'valid_company_bank_charges',
     'save_market_trader_workspace',
     'save_account_insight_report_preset', 'resolve_variable_charge_post_invoice_change',
@@ -125,6 +127,12 @@ async function verifyRuntimeObjects(label) {
     'validate_hedge_fcbs_document', 'protect_hedge_fcbs_issued', 'protect_hedge_fcbs_link_identity',
     'assert_hedge_fcbs_document', 'set_hedge_fcbs_settlement_status', 'save_hedge_fcbs_settlement',
   ];
+  await assertRows(
+    `select count(*)::int from pg_index i join pg_class c on c.oid=i.indexrelid
+     join pg_namespace n on n.oid=c.relnamespace where n.nspname='public'
+     and c.relname='xero_financial_preview_request_receipt_uidx' and i.indisunique and i.indisvalid`,
+    1, `${label} preview retry receipts preserve unique request identity`,
+  );
   await assertRows(
     `select count(*)::int from pg_index i join pg_class c on c.oid=i.indexrelid
      join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and i.indisunique and i.indisvalid
