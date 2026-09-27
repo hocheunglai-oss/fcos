@@ -1,4 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { fcosSalesforceEnvironment } from '../config/fcosConnections.js';
+import { persistFinancialPreview, preparePreviewPersistence, previewEvidenceHash } from './_xeroPreviewPersistence.js';
 import { accountingPayload, documentConfirmationErrors, documentPostingBlockers, documentReadiness, financialSourceCurrency, loadFinancialSafetyContext, matchDocumentResponses, matchedXeroLines, normalizePostingMode, reviewedPostingMode, safetySelectFields, unownedXeroMetadata } from './_xeroDocumentSafety.js';
 import { approvePetroleumMappings, PETROLEUM_PRODUCT_QUERY } from './_xeroPetroleumMappings.js';
 import { buildGroupedPreservationContext, completeGroupedAccountSnapshot, evaluateGroupedFinancialDocument, groupedInvoiceNumber,
@@ -346,7 +348,8 @@ export async function xeroFinancialSyncPreview(body = {}, dependencies = {}) {
   const connection = await getConnection(client, { env, fetchImpl });
   assertScopes(connection, ['accounting.invoices', 'accounting.contacts', 'accounting.settings.read'], 'Financial sync preview');
   if (body.refreshIfChangedRunId) {
-    const probe = await financialPreviewChanges(body.refreshIfChangedRunId, { client, connection, env, fetchImpl, postingMode, querySalesforce, accountingFetch });
+    const probe = await financialPreviewChanges(body.refreshIfChangedRunId, { client, connection, env, fetchImpl, postingMode, querySalesforce, accountingFetch,
+      includePayments: body.includePayments === true, recordExactMatches: body.recordExactMatches === true });
     if (!probe.changed) return { unchanged: true, checkedAt: new Date().toISOString(), rateLimit: probe.rateLimit };
   }
   const snapshotStartedAt = new Date().toISOString();
@@ -404,9 +407,38 @@ export async function xeroFinancialSyncPreview(body = {}, dependencies = {}) {
     created_at: now,
     updated_at: now,
   };
+  const itemRows = classified.rows.map((row, rowIndex) => toSyncItemRow(row, runId, rowIndex, now));
+  if (body.recordExactMatches !== true) {
+    // Pure evidence checks may share a pristine complete snapshot. Exact-match
+    // linking retains its separate write order and is never skipped by reuse.
+    const payments = body.includePayments === true
+      ? await paymentPreview({ recordExactMatches: false }, { accessContext, env, fetchImpl, client, xeroReadSnapshot: xero.paymentReadSnapshot }) : null;
+    runRow.control_totals.workflowSnapshot = {
+      reconciliationVersion: XERO_RECONCILIATION_VERSION, payments, products: salesforce.products,
+      mappingProposals, automaticMappingPolicy, checkedAt: now,
+      controlsFingerprint: hashJson(await loadStoredFinancialControls(client)), organisation: xero.organisation,
+    };
+    const { callCount: _callCount, ...xeroEvidence } = xero;
+    const parameters = preparePreviewPersistence(runRow, itemRows, {
+      tenantId: connection.tenantId, includePayments: body.includePayments === true,
+      salesforceOrgId: fcosSalesforceEnvironment('production').orgId,
+      inputEvidenceHash: previewEvidenceHash({ salesforce, xero: xeroEvidence, safetyContext, stored,
+        paymentMappings: paymentMappings.data, accounts: accountResponse.Accounts || [], taxRates: taxResponse.TaxRates || [] }),
+    });
+    const saved = await persistFinancialPreview(client, parameters);
+    // Read saved IDs and states on reuse, including recovery of a committed
+    // request whose response was lost and which Finance has since reviewed.
+    const preview = saved.reused ? await savedFinancialPreview(client, saved.run) : {
+      run: serializeRun(saved.run), postingMode, payments, checkedAt: now,
+      rows: classified.rows.map((row) => ({ ...serializeClassification(row), id: saved.identities.get(`${row.salesforceObject}:${row.salesforceId}`) })),
+      products: salesforce.products, mappingProposals, automaticMappingPolicy,
+      controlTotals: classified.controlTotals, summary: classified.summary,
+    };
+    return { ...preview, reused: saved.reused, verifiedAt: now,
+      rateLimit: rate, callEstimate: xero.callCount + 2, externalWriteEnabled: financialWriteGateEnabled(env) };
+  }
   const { error: runError } = await client.from('xero_financial_sync_runs').insert(runRow);
   if (runError) throw storageError(runError, 'xero_financial_sync_runs');
-  const itemRows = classified.rows.map((row, rowIndex) => toSyncItemRow(row, runId, rowIndex, now));
   for (const chunk of chunks(itemRows, 100)) {
     const { error } = await client.from('xero_financial_sync_items').insert(chunk);
     if (error) throw storageError(error, 'xero_financial_sync_items');
@@ -424,7 +456,9 @@ export async function xeroFinancialSyncPreview(body = {}, dependencies = {}) {
   let paymentSnapshot = null;
   if (body.includePayments === true) {
     paymentSnapshot = await paymentPreview({ recordExactMatches: body.recordExactMatches === true }, { accessContext, env, fetchImpl, client, xeroReadSnapshot: xero.paymentReadSnapshot });
-    runRow.control_totals = { ...runRow.control_totals, workflowSnapshot: { reconciliationVersion: XERO_RECONCILIATION_VERSION, payments: paymentSnapshot, products: salesforce.products, mappingProposals, automaticMappingPolicy, checkedAt: now, controlsFingerprint: hashJson(await loadStoredFinancialControls(client)), organisation: xero.organisation } };
+    runRow.control_totals = { ...runRow.control_totals, workflowSnapshot: { reconciliationVersion: XERO_RECONCILIATION_VERSION,
+      tenantId: connection.tenantId, includePayments: true, recordExactMatches: true,
+      payments: paymentSnapshot, products: salesforce.products, mappingProposals, automaticMappingPolicy, checkedAt: now, controlsFingerprint: hashJson(await loadStoredFinancialControls(client)), organisation: xero.organisation } };
     const { error } = await client.from('xero_financial_sync_runs').update({ control_totals: runRow.control_totals }).eq('id', runId);
     if (error) throw storageError(error, 'xero_financial_sync_runs');
   }
@@ -466,7 +500,7 @@ export async function xeroFinancialSyncPreview(body = {}, dependencies = {}) {
 // Probe for changes on return to the page. Manual checks and checks older than six hours
 // always retrieve the complete population, including hard deletions. Writes always revalidate.
 export async function financialPreviewChanges(runId, { client, connection, env = process.env, fetchImpl = fetch,
-  querySalesforce = sfCompositeQueries, accountingFetch = xeroAccountingFetch, now = Date.now(), postingMode }) {
+  querySalesforce = sfCompositeQueries, accountingFetch = xeroAccountingFetch, now = Date.now(), postingMode, includePayments, recordExactMatches }) {
   if (!isUuid(runId)) throw financialError('A valid saved check is required.', 400, 'XERO_FINANCIAL_RUN_INVALID');
   const { data: run, error } = await client.from('xero_financial_sync_runs').select('*').eq('id', runId).maybeSingle();
   if (error) throw storageError(error, 'xero_financial_sync_runs');
@@ -474,6 +508,11 @@ export async function financialPreviewChanges(runId, { client, connection, env =
   if (postingMode !== undefined && postingMode !== reviewedPostingMode(run)) return { changed: true };
   const since = new Date(run?.source_snapshot_at);
   const snapshot = run?.control_totals?.workflowSnapshot;
+  // A saved documents-only or non-linking check cannot satisfy a request for a
+  // broader workflow. Legacy unknown scopes require one complete fresh check.
+  if ((includePayments !== undefined && snapshot?.includePayments !== includePayments)
+    || (recordExactMatches !== undefined && snapshot?.recordExactMatches !== recordExactMatches)
+    || (connection.tenantId && snapshot?.tenantId !== connection.tenantId)) return { changed: true };
   if (snapshot?.reconciliationVersion !== XERO_RECONCILIATION_VERSION || !snapshot?.controlsFingerprint || !Number.isFinite(since.getTime()) || now - since.getTime() > 21600000) return { changed: true };
   const controls = await loadStoredFinancialControls(client);
   if (hashJson(controls) !== snapshot.controlsFingerprint) return { changed: true };
@@ -539,6 +578,10 @@ export async function xeroFinancialSyncLatest(_body = {}, { env = process.env, c
   if (error) throw storageError(error, 'xero_financial_sync_runs');
   const run = runs?.[0];
   if (!run || run.control_totals?.workflowSnapshot?.reconciliationVersion !== XERO_RECONCILIATION_VERSION) return { preview: null, refreshRequired: Boolean(run) };
+  return { preview: await savedFinancialPreview(client, run) };
+}
+
+async function savedFinancialPreview(client, run) {
   const items = [];
   for (let offset = 0; ; offset += 500) {
     const page = await client.from('xero_financial_sync_items').select('*').eq('run_id', run.id).order('row_index').range(offset, offset + 499);
@@ -548,13 +591,14 @@ export async function xeroFinancialSyncLatest(_body = {}, { env = process.env, c
   }
   const snapshot = run.control_totals?.workflowSnapshot || {};
   const disputeStates = await loadDisputeReconciliationStates(client, items.map((item) => item.source_payload?.stemId));
-  return { preview: { run: serializeRun(run), rows: items.map((item) => ({
+  const { workflowSnapshot: _snapshot, postingMode: _mode, ...controlTotals } = run.control_totals || {};
+  return { run: serializeRun(run), postingMode: reviewedPostingMode(run), controlTotals, rows: items.map((item) => ({
     ...serializeClassification({ ...item.source_payload, action: item.proposed_action, status: item.status,
       blockers: item.error_message ? [...(item.blockers || []), item.error_message] : item.blockers,
       warnings: item.warnings, differences: item.differences, xero: item.xero_payload, proposedPayload: item.proposed_payload }),
     id: item.id, selected: item.selected, dispute: disputeStates.get(item.source_payload?.stemId) || null,
   })), summary: run.classification_summary, products: snapshot.products || [], mappingProposals: snapshot.mappingProposals || [],
-    automaticMappingPolicy: snapshot.automaticMappingPolicy || null, payments: snapshot.payments || null, checkedAt: snapshot.checkedAt || run.created_at, restored: true } };
+    automaticMappingPolicy: snapshot.automaticMappingPolicy || null, payments: snapshot.payments || null, checkedAt: snapshot.checkedAt || run.created_at, restored: true };
 }
 
 export async function xeroFinancialSyncApply(body = {}, {
@@ -887,7 +931,11 @@ async function previewPayments(body, { accessContext, env, fetchImpl, client, xe
     }
   }
   return { rows, tenantId: connection.tenantId, summary: summarizeClassifications(rows),
-    paymentEvidenceHolds: readSnapshot.paymentEvidenceHolds, rateLimit: rate, actor: actorFields(accessContext) };
+    paymentEvidenceHolds: readSnapshot.paymentEvidenceHolds, rateLimit: rate, actor: actorFields(accessContext),
+    evidenceFingerprint: previewEvidenceHash({ payments, documentMappings: documentMappings.data,
+      paymentMappings: paymentMappings.data, bankMappings: bankMappings.data,
+      claims: [...paymentPostingClaims.entries()].sort(([left], [right]) => left.localeCompare(right)),
+      invoices: xeroInvoices, paymentsEvidence: xeroPayments, accounts: accountResponse.Accounts || [], organisation }) };
 }
 
 export function classifyXeroFinancialPayment(payment, context) {
