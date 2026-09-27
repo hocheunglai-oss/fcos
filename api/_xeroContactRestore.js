@@ -9,6 +9,70 @@ const failure = (message, code = 'XERO_CONTACT_RESTORE_INVALID', status = 409) =
 const storageError = () => failure('The durable Contact restoration evidence could not be saved or verified.', 'XERO_CONTACT_RESTORE_STORAGE_FAILED', 503);
 const HASH = /^[a-f0-9]{64}$/;
 const finalStates = new Set(['restored', 'already_active']);
+const diagnosticErrorCodes = new Set(['XERO_CONTACT_SYNC_XERO_REQUEST_FAILED', 'XERO_CONTACT_SYNC_RATE_LIMITED',
+  'XERO_CONTACT_SYNC_RATE_LIMIT_RETRY_EXHAUSTED', 'XERO_CONTACT_SYNC_DAILY_LIMIT', 'XERO_CONTACT_SYNC_DAILY_RESERVE',
+  'XERO_CONTACT_RESTORE_DETAIL_INCOMPLETE']);
+const httpStatus = (value) => Number.isInteger(value) && value >= 100 && value <= 599 ? value : null;
+const contactStatus = (value) => ['ACTIVE', 'ARCHIVED', 'GDPRREQUEST'].includes(value) ? value : null;
+
+function safeProviderError(error) {
+  return { code: diagnosticErrorCodes.has(error?.code) ? error.code : 'UNCLASSIFIED_PROVIDER_ERROR', httpStatus: httpStatus(error?.status) };
+}
+
+function captureHttp(observations) {
+  return ({ status, headers } = {}) => {
+    if (observations.length >= 4) return;
+    const entry = { status: httpStatus(status), correlation: {} };
+    // Never retain arbitrary response headers, provider messages or OAuth data.
+    for (const name of ['xero-correlation-id', 'x-correlation-id', 'x-request-id', 'request-id']) {
+      let value;
+      try { value = headers?.get?.(name); } catch { value = null; }
+      if (typeof value === 'string' && (restoreUuid(value) || /^[a-f0-9]{16,64}$/i.test(value))) entry.correlation[name] = value.toLowerCase();
+    }
+    observations.push(entry);
+  };
+}
+
+function postResponseFacts(response, expectedId) {
+  const contacts = Array.isArray(response?.Contacts) ? response.Contacts : null;
+  const selected = contacts?.filter((row) => restoreUuid(row?.ContactID) === expectedId) || [];
+  const target = selected.length === 1 ? selected[0] : null;
+  const validation = target?.ValidationErrors;
+  return { present: response !== null && response !== undefined, contactsPresent: contacts !== null,
+    contactCount: contacts?.length ?? null, selectedContactCount: selected.length,
+    selectedContactStatus: contactStatus(target?.ContactStatus),
+    hasValidationErrors: typeof target?.HasValidationErrors === 'boolean' ? target.HasValidationErrors : null,
+    validationErrorsPresent: target ? Object.hasOwn(target, 'ValidationErrors') : false,
+    validationErrorCount: Array.isArray(validation) ? validation.length : null,
+    validationErrorsMalformed: validation != null && !Array.isArray(validation),
+    providerErrorNumber: Number.isSafeInteger(response?.ErrorNumber) && response.ErrorNumber >= 0 && response.ErrorNumber <= 999999 ? response.ErrorNumber : null };
+}
+
+function readbackFacts(raw, expectedId, expectedIdentity, expectedBusiness = null) {
+  const present = Boolean(raw && typeof raw === 'object' && !Array.isArray(raw));
+  const id = restoreUuid(raw?.ContactID);
+  const detail = id ? normalizedDetail(raw, id) : null;
+  const identityFingerprint = detail ? contactRestoreHash(contactRestoreIdentity(detail)) : null;
+  let businessFingerprint = null;
+  if (present && id) {
+    try { businessFingerprint = contactRestoreBusinessFingerprint(raw); } catch { /* Diagnostics must not replace the existing outcome rule. */ }
+  }
+  const mismatches = [];
+  if (!present) mismatches.push('readback_unavailable');
+  else {
+    if (id !== expectedId) mismatches.push('contact_id_mismatch');
+    if (raw.MergedToContactID != null && raw.MergedToContactID !== '') mismatches.push('merged_contact');
+    if (!detail) mismatches.push('invalid_contact_record');
+    else if (identityFingerprint !== expectedIdentity) mismatches.push('identity_fingerprint_mismatch');
+    if (expectedBusiness && businessFingerprint !== expectedBusiness) mismatches.push('business_fingerprint_mismatch');
+    if (raw.ContactStatus === 'ARCHIVED') mismatches.push('still_archived');
+    else if (raw.ContactStatus !== 'ACTIVE') mismatches.push('unsupported_contact_status');
+  }
+  return { present, contactId: id, contactStatus: contactStatus(raw?.ContactStatus), sameContactId: id === expectedId,
+    identityFingerprint, identityMatches: identityFingerprint === null ? null : identityFingerprint === expectedIdentity,
+    businessFingerprint, businessMatches: expectedBusiness && businessFingerprint ? businessFingerprint === expectedBusiness : null,
+    mismatchCategory: mismatches[0] || null, mismatchCategories: mismatches };
+}
 
 export const contactRestoreBusinessFingerprint = (contact) => {
   // Keep every business field, including unknown future fields. Only provider
@@ -19,20 +83,20 @@ export const contactRestoreBusinessFingerprint = (contact) => {
   return contactRestoreHash({ ...business, ContactID: restoreUuid(contact.ContactID) });
 };
 
-export async function readXeroContactForRestoration(connection, contactId, { env = process.env, fetchImpl = fetch } = {}) {
+export async function readXeroContactForRestoration(connection, contactId, { env = process.env, fetchImpl = fetch, onResponse = null } = {}) {
   if (!restoreUuid(contactId)) throw failure('A valid exact Contact ID is required.');
   const response = await xeroAccountingFetch(connection, `/Contacts/${encodeURIComponent(contactId)}?includeArchived=true`, {
-    method: 'GET', retryOnRateLimit: true, env, fetchImpl,
+    method: 'GET', retryOnRateLimit: true, env, fetchImpl, onResponse,
   });
   if (!Array.isArray(response?.Contacts) || response.Contacts.length !== 1) throw failure('The exact Contact could not be read completely.', 'XERO_CONTACT_RESTORE_DETAIL_INCOMPLETE', 502);
   return response.Contacts[0];
 }
 
-export async function restoreXeroContactStatus(connection, contactId, idempotencyKey, { env = process.env, fetchImpl = fetch } = {}) {
+export async function restoreXeroContactStatus(connection, contactId, idempotencyKey, { env = process.env, fetchImpl = fetch, onResponse = null } = {}) {
   if (!restoreUuid(contactId) || !/^restore-[a-f0-9]{48}$/.test(idempotencyKey || '')) throw failure('The reviewed restoration operation is invalid.');
   return xeroAccountingFetch(connection, '/Contacts?summarizeErrors=false', {
     method: 'POST', body: { Contacts: [{ ContactID: contactId, ContactStatus: 'ACTIVE' }] },
-    idempotencyKey, retryOnRateLimit: false, env, fetchImpl,
+    idempotencyKey, retryOnRateLimit: false, env, fetchImpl, onResponse,
   });
 }
 
@@ -140,11 +204,12 @@ export async function xeroContactRestoreApply(body = {}, {
       const previous = historyFor(history, contactId);
       const unfinished = previous.unresolved.length > 0 || ['intent', 'uncertain'].includes(saved.journal?.state);
       let sentIntent = null;
+      const diagnostics = { version: 1, post: { attempted: false, http: [], error: null, response: null }, preflight: null, readback: null };
       const finish = async (state, message, extra = {}, code = null, contact = null) => {
         const pendingIntents = sentIntent ? [sentIntent] : previous.unresolved.length ? previous.unresolved
           : Array.isArray(saved.journal?.pendingIntents) ? saved.journal.pendingIntents
             : saved.journal?.state === 'intent' ? [saved.journal] : [];
-        const resultEvidence = { ...evidence, ...extra, ...(state === 'uncertain' ? { pendingIntents } : {}) };
+        const resultEvidence = { ...evidence, ...extra, diagnostics, ...(state === 'uncertain' ? { pendingIntents } : {}) };
         await journal(client, row, { ...resultEvidence, state, message, checkedAt: new Date().toISOString() });
         await audit(client, actor, 'contact_restore_outcome', state, resultEvidence, code);
         const outcome = { rowId: row.row_id, salesforceAccountId: row.salesforce_account_id, xeroContactId: contactId, status: state, message, errorCode: code };
@@ -158,9 +223,13 @@ export async function xeroContactRestoreApply(body = {}, {
         await finish(unfinished ? 'uncertain' : 'blocked', current.blockers[0] || 'Source or Contact collision evidence changed after preview.', {}, 'XERO_CONTACT_RESTORE_IDENTITY_CHANGED'); continue;
       }
       let before;
-      try { before = await contactDetailReader(connection, contactId, { env, fetchImpl }); } catch {
+      diagnostics.preflight = { http: [], error: null };
+      try { before = await contactDetailReader(connection, contactId, { env, fetchImpl, onResponse: captureHttp(diagnostics.preflight.http) }); } catch (error) {
+        diagnostics.preflight.error = safeProviderError(error);
+        Object.assign(diagnostics.preflight, readbackFacts(null, contactId, saved.contactFingerprint));
         await finish(unfinished ? 'uncertain' : 'blocked', 'The exact current Contact could not be verified.', {}, 'XERO_CONTACT_RESTORE_DETAIL_INCOMPLETE'); continue;
       }
+      Object.assign(diagnostics.preflight, readbackFacts(before, contactId, saved.contactFingerprint));
       const detail = normalizedDetail(before, contactId);
       if (!detail || contactRestoreHash(contactRestoreIdentity(detail)) !== saved.contactFingerprint
         || (current.contactStatus === 'ACTIVE' && detail.status !== 'ACTIVE')) {
@@ -186,9 +255,16 @@ export async function xeroContactRestoreApply(body = {}, {
       await journal(client, row, { ...intent, state: 'intent', startedAt: new Date().toISOString() });
       history.push({ event_type: 'contact_restore_intent', outcome: 'intent', fingerprints: intent });
       await verifyLease(client, leaseId);
-      try { await contactUpdater(connection, contactId, evidence.idempotencyKey, { env, fetchImpl }); } catch { /* Only the independent readback can establish the outcome. */ }
+      diagnostics.post.attempted = true;
+      try {
+        const response = await contactUpdater(connection, contactId, evidence.idempotencyKey, { env, fetchImpl, onResponse: captureHttp(diagnostics.post.http) });
+        diagnostics.post.response = postResponseFacts(response, contactId);
+      } catch (error) { diagnostics.post.error = safeProviderError(error); }
       let after;
-      try { after = await contactDetailReader(connection, contactId, { env, fetchImpl }); } catch { /* Keep the durable intent unresolved. */ }
+      diagnostics.readback = { http: [], error: null };
+      try { after = await contactDetailReader(connection, contactId, { env, fetchImpl, onResponse: captureHttp(diagnostics.readback.http) }); }
+      catch (error) { diagnostics.readback.error = safeProviderError(error); }
+      Object.assign(diagnostics.readback, readbackFacts(after, contactId, saved.contactFingerprint, businessFingerprint));
       const confirmed = normalizedDetail(after, contactId);
       if (!confirmed || confirmed.status !== 'ACTIVE' || contactRestoreHash(contactRestoreIdentity(confirmed)) !== saved.contactFingerprint
         || contactRestoreBusinessFingerprint(after) !== businessFingerprint) {
