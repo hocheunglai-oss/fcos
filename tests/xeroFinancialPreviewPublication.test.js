@@ -66,8 +66,10 @@ test('Latest ignores newer building/cancelled and dedicated preservation runs', 
     for (const hidden of ['building', 'cancelled']) f.tables.xero_financial_sync_runs.push({
       ...structuredClone(run), id: randomUUID(), status: hidden, created_at: '9999-01-01T00:00:00Z',
     });
-    f.tables.xero_financial_sync_runs.push({ ...structuredClone(run), id: randomUUID(), created_at: '9999-01-02T00:00:00Z',
-      control_totals: { ...run.control_totals, preservationPolicy: 'issued_supplier_preserve_v1' } });
+    for (const policy of ['issued_supplier_preserve_v1', 'issued_petroleum_preserve_v1']) {
+      f.tables.xero_financial_sync_runs.push({ ...structuredClone(run), id: randomUUID(), created_at: '9999-01-02T00:00:00Z',
+        control_totals: { ...run.control_totals, preservationPolicy: policy } });
+    }
     const latest = (await xeroFinancialSyncLatest({}, { client: f.client })).preview;
     assert.equal(latest.run.id, result.run.id);
     assert.equal(latest.run.status, status);

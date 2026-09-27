@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { xeroFinancialDocumentPreservationPreview as preview, xeroFinancialDocumentPreservationRun as run } from '../api/_xeroIssuedSupplierWorkflow.js';
 import { issuedSupplierWorkflowFixture } from './xeroIssuedSupplierPreservationFixtures.js';
+import { issuedPetroleumFixture } from './xeroIssuedPetroleumPreservationFixtures.js';
 
 const actor = { id: '00000000-0000-4000-8000-000000000099', email: 'finance@example.com' };
 const copy = (value) => structuredClone(value);
@@ -30,6 +31,9 @@ function cohortFixture() {
 }
 
 function harness(f = issuedSupplierWorkflowFixture()) {
+  const petroleum = f.packet.policyVersion === 'issued_petroleum_preserve_v1';
+  const linkRpc = petroleum ? 'link_xero_issued_petroleum_document_v1' : 'link_xero_issued_supplier_document_v1';
+  const eventType = petroleum ? 'issued_petroleum_document_preservation_linked' : 'issued_supplier_document_preservation_linked';
   const calls = [], tables = { xero_financial_sync_runs: [], xero_financial_sync_items: [], dispute_beta_cases: [],
     xero_financial_document_mappings: [], xero_financial_audit_events: [] };
   const controls = { barrier: false, linkFailureAt: 0, uncertainAt: 0, commitUncertain: false };
@@ -78,7 +82,7 @@ function harness(f = issuedSupplierWorkflowFixture()) {
         Object.assign(saved, { status: body.p_status, revision: saved.revision + 1 });
         return { data: copy(saved), error: null };
       }
-      assert.equal(name, 'link_xero_issued_supplier_document_v1', 'No generic accounting RPC is allowed');
+      assert.equal(name, linkRpc, 'Only the policy-specific link RPC is allowed');
       linkCount += 1;
       if (controls.linkFailureAt === linkCount) return { data: null, error: { code: '40001' } };
       const uncertain = controls.uncertainAt === linkCount;
@@ -100,7 +104,7 @@ function harness(f = issuedSupplierWorkflowFixture()) {
         protected_legacy: true, retained_differences: { differences: item.differences, stemId: source.stemId, accountId: source.accountId,
           reviewFingerprint: body.p_review.legacyReviewFingerprint, issuedSupplierPreservation: proof } };
       tables.xero_financial_document_mappings.push(mapping);
-      tables.xero_financial_audit_events.push({ run_id: saved.id, event_type: 'issued_supplier_document_preservation_linked', outcome: 'success',
+      tables.xero_financial_audit_events.push({ run_id: saved.id, event_type: eventType, outcome: 'success',
         actor_id: actor.id, actor_email: actor.email, record_counts: { linked: 1, applied: 0, financialWrites: 0 },
         fingerprints: { tenantId: f.ids.tenant, itemId: item.id, mappingId: mapping.id, issuedSupplierPreservation: proof } });
       Object.assign(item, { status: 'linked', applied_at: '2026-09-28T00:01:00.000Z', updated_at: '2026-09-28T00:01:00.000Z' });
@@ -113,7 +117,8 @@ function harness(f = issuedSupplierWorkflowFixture()) {
     fetchImpl: async () => { assert.fail('No arbitrary provider fetch or financial mutation is permitted'); },
     getConnection: read('connection', () => ({ tenantId: f.ids.tenant })), collectFiles: read('files', () => f.files),
     loadSalesforce: read('salesforce', () => f.salesforce), loadXero: read('xero', () => f.xero),
-    loadControls: read('controls', () => f.stored), collectVessels: read('vessels', () => f.vessels) };
+    loadControls: read('controls', () => f.stored), collectVessels: read('vessels', () => f.vessels),
+    collectPetroleumScope: read('petroleum_scope', () => f.scope) };
   return { f, tables, calls, controls, dependencies,
     preview: () => preview({ packet: f.packet }, dependencies),
     body: (result) => ({ runId: result.run.id, revision: result.run.revision, selectedItemIds: result.rows.map((row) => row.id), reviewed: true }) };
@@ -128,6 +133,48 @@ test('actual preview keeps ordinary readiness false and performs no source or Xe
   assert.deepEqual({ salesforce: h.f.salesforce, xero: h.f.xero }, before);
   assert.deepEqual(h.calls.filter((call) => call.type === 'rpc').map((call) => call.name), ['persist_xero_financial_preview_v1']);
   assert.equal(h.tables.xero_financial_document_mappings.length, 0);
+});
+
+test('petroleum workflow uses its complete historical scope and distinct transaction while retaining original bill details', async () => {
+  const h = harness(issuedPetroleumFixture()); const before = copy(h.f.candidate);
+  const result = await h.preview();
+  assert.equal(result.rows[0].status, 'eligible', JSON.stringify(result.rows[0].blockers));
+  assert.equal(h.tables.xero_financial_sync_runs[0].control_totals.preservationPolicy, 'issued_petroleum_preserve_v1');
+  const source = h.tables.xero_financial_sync_items[0].source_payload;
+  assert.equal(source.readiness.ready, false);
+  assert.notEqual(source.invoiceDate, before.date);
+  assert.equal(h.calls.some((call) => call.name === 'vessels'), false);
+  assert.equal(h.calls.filter((call) => call.name === 'petroleum_scope').length, 1);
+  const response = await run(h.body(result), h.dependencies);
+  assert.equal(response.financialWrites, 0); assert.equal(response.outcomes[0].status, 'linked');
+  assert.equal(h.calls.filter((call) => call.name === 'petroleum_scope').length, 2);
+  const proof = h.tables.xero_financial_document_mappings[0].retained_differences.issuedSupplierPreservation;
+  assert.equal(proof.policyVersion, 'issued_petroleum_preserve_v1');
+  assert.equal(proof.evidence.accounting.deliveryIdentity.deliveryDate, before.date);
+  assert.deepEqual(proof.reviewedXero, before);
+  assert.deepEqual(h.f.candidate, before);
+  assert.equal(h.calls.some((call) => call.name === 'link_xero_issued_supplier_document_v1'), false);
+  h.calls.length = 0;
+  const again = await run(h.body(result), h.dependencies);
+  assert.equal(again.outcomes[0].alreadyLinked, true);
+  assert.equal(h.calls.some((call) => call.type === 'provider' || call.type === 'rpc'), false);
+  h.tables.xero_financial_audit_events[0].event_type = 'issued_supplier_document_preservation_linked';
+  await assert.rejects(run(h.body(result), h.dependencies), /immutable audit receipt/);
+});
+
+test('petroleum scope drift and absent current mapping approval abort before the first link', async () => {
+  for (const mutate of [
+    (h) => { h.f.scope.coverage.targetComplete = false; },
+    (h) => { h.f.scope.sourceClaims.push({ ...copy(h.f.supplier), Id: 'a06000000000002' }); h.f.refreshScope(); },
+    (h) => { h.f.child.Quantity_Delivered_Per_BDN__c = 0; h.f.refreshScope(); },
+    (h) => { h.f.stored.productMappings[0].approved_at = null; },
+  ]) {
+    const h = harness(issuedPetroleumFixture()); const result = await h.preview();
+    assert.equal(result.rows[0].status, 'eligible'); mutate(h); h.calls.length = 0;
+    await assert.rejects(run(h.body(result), h.dependencies), /changed/);
+    assert.equal(h.tables.xero_financial_document_mappings.length, 0);
+    assert.equal(h.calls.some((call) => call.name === 'link_xero_issued_petroleum_document_v1'), false);
+  }
 });
 
 test('exact successful run persists complete proof, source/item identities and authenticated actor', async () => {
@@ -152,6 +199,27 @@ test('missing authentication rejects preview and execution before provider or st
   await assert.rejects(preview({ packet: h.f.packet }, dependencies), { code: 'XERO_ISSUED_PRESERVATION_ACTOR_REQUIRED' });
   await assert.rejects(run({}, dependencies), { code: 'XERO_ISSUED_PRESERVATION_ACTOR_REQUIRED' });
   assert.equal(h.calls.length, 0);
+});
+
+test('unknown packet policies and cross-policy records fail before any provider work', async () => {
+  for (const policyVersion of [null, false, '', 'unknown', 'issued_petroleum_preserve_v1']) {
+    const h = harness();
+    await assert.rejects(preview({ packet: { ...h.f.packet, policyVersion } }, h.dependencies));
+    assert.equal(h.calls.length, 0);
+  }
+  const explicit = harness();
+  const result = await preview({ packet: { ...explicit.f.packet, policyVersion: 'issued_supplier_preserve_v1' } }, explicit.dependencies);
+  assert.equal(result.rows[0].status, 'eligible', 'explicit and legacy trustee packets share the original contract');
+});
+
+test('a saved policy change cannot dispatch trustee items through another link transaction', async () => {
+  for (const policy of ['issued_petroleum_preserve_v1', 'unknown', null]) {
+    const h = harness(); const result = await h.preview();
+    h.tables.xero_financial_sync_runs[0].control_totals.preservationPolicy = policy;
+    h.calls.length = 0;
+    await assert.rejects(run(h.body(result), h.dependencies));
+    assert.equal(h.calls.some((call) => call.type === 'provider' || call.type === 'rpc'), false);
+  }
 });
 
 test('unrelated, duplicate or accounting-write selection is rejected before fresh evidence reads', async () => {

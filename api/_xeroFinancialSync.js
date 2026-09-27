@@ -1,5 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { fcosSalesforceEnvironment } from '../config/fcosConnections.js';
+import { ISSUED_PETROLEUM_POLICY, ISSUED_PRESERVATION_POLICIES, isIssuedPreservationPolicy } from '../config/xeroIssuedPreservationPolicies.js';
+import { currentIssuedPetroleumMatches } from './_xeroIssuedPetroleumSticky.js';
 import { accountingDecimalCents, accountingProductCents, accountingUnitNumber, accountingCentsNumber, accountingCentsText } from './_xeroAccountingLineCents.js';
 import { persistFinancialPreview, preparePreviewPersistence, previewEvidenceHash } from './_xeroPreviewPersistence.js';
 import { accountingPayload, documentConfirmationErrors, documentPostingBlockers, documentReadiness, financialSourceCurrency, loadFinancialSafetyContext, matchDocumentResponses, matchedXeroLines, normalizePostingMode, reviewedPostingMode, safetySelectFields, unownedXeroMetadata } from './_xeroDocumentSafety.js';
@@ -28,7 +30,7 @@ import {
 } from './_xeroContactSync.js';
 
 export const XERO_FINANCIAL_CUTOFF = '2026-01-01';
-export const XERO_RECONCILIATION_VERSION = 11;
+export const XERO_RECONCILIATION_VERSION = 12;
 const MAX_BATCH_SIZE = 25;
 const DEFAULT_CALLS_PER_MINUTE = 45;
 const DEFAULT_DAILY_LIMIT = 1000;
@@ -53,6 +55,7 @@ const BUYER_INVOICE_QUERY = `
 const SUPPLIER_INVOICE_QUERY = `
   SELECT Id, Name, CreatedDate, STEM__c, STEM__r.Name, STEM__r.KeyStem__c,
          Supplier__c, Supplier__r.Name, Supplier__r.Company_Code__c, STEM__r.Delivery_Date__c,
+         STEM__r.Vessel__c, STEM__r.Vessel__r.Name,
          Invoice_Amount__c, Invoice_Date__c, Invoice_Due_Date__c,
          Payable_Balance__c, LastModifiedDate
   FROM Supplier_Invoice__c
@@ -109,7 +112,7 @@ export function classifyXeroFinancialDocument(source, candidates, {
     const proof = storedMapping.retained_differences.issuedSupplierPreservation;
     const target = active.find((row) => String(row.id).toLowerCase() === String(storedMapping.xero_document_id).toLowerCase());
     const withoutTimestamp = (row) => { const { updatedDateUTC: _updated, ...rest } = row || {}; return rest; };
-    const valid = storedMapping.protected_legacy === true && proof?.policyVersion === 'issued_supplier_preserve_v1'
+    const valid = storedMapping.protected_legacy === true && isIssuedPreservationPolicy(proof?.policyVersion)
       && proof?.evidence?.policyVersion === proof.policyVersion
       && proof.fingerprint === hashJson({ policyVersion: proof.policyVersion, accounting: proof.evidence.accounting })
       && proof.evidenceFingerprint === hashJson(proof.evidence)
@@ -117,12 +120,13 @@ export function classifyXeroFinancialDocument(source, candidates, {
       && String(storedMapping.retained_differences.accountId).slice(0, 15) === String(source.accountId).slice(0, 15)
       && source.sourceFingerprint === storedMapping.source_fingerprint
       && source.financialFingerprint === storedMapping.financial_fingerprint
+      && (proof.policyVersion !== ISSUED_PETROLEUM_POLICY || currentIssuedPetroleumMatches(source, groupedContext, proof))
       && hashJson(withoutTimestamp(target)) === hashJson(withoutTimestamp(proof.reviewedXero));
     return valid ? { action: 'protected_legacy', status: 'protected', blockers: [], warnings: ['Previously reviewed bill link retained; Xero details are preserved.'],
       xero: target, proposedPayload: null, differences: storedMapping.retained_differences.differences || [], acceptedLegacy: true, reviewRequired: false,
       issuedSupplierPreservation: { policyVersion: proof.policyVersion, accepted: true, fingerprint: proof.fingerprint } }
       : { ...blocked('issued_preservation_changed', 'This bill has an immutable preservation link. Current evidence differs or is incomplete; review it without updating Xero.', target ? [target] : []),
-        issuedSupplierPreservation: { policyVersion: 'issued_supplier_preserve_v1', accepted: true }, proposedPayload: null };
+        issuedSupplierPreservation: { policyVersion: proof?.policyVersion || null, accepted: true }, proposedPayload: null };
   }
   const stored = storedMapping ? active.find((candidate) => groupedSaved
     ? String(candidate.id).toLowerCase() === String(storedMapping.xero_document_id).toLowerCase()
@@ -597,7 +601,9 @@ async function loadDisputeReconciliationStates(client, stemIds) {
 }
 
 export async function xeroFinancialSyncLatest(_body = {}, { env = process.env, client = xeroContactSyncServiceClient(env) } = {}) {
-  const { data: runs, error } = await client.from('xero_financial_sync_runs').select('*').eq('mode', 'preview').not('control_totals', 'cs', '{"preservationPolicy":"issued_supplier_preserve_v1"}').not('status', 'in', '(building,cancelled)').not('control_totals->workflowSnapshot', 'is', null).order('created_at', { ascending: false }).limit(1);
+  let latestQuery = client.from('xero_financial_sync_runs').select('*').eq('mode', 'preview');
+  for (const policy of ISSUED_PRESERVATION_POLICIES) latestQuery = latestQuery.not('control_totals', 'cs', JSON.stringify({ preservationPolicy: policy }));
+  const { data: runs, error } = await latestQuery.not('status', 'in', '(building,cancelled)').not('control_totals->workflowSnapshot', 'is', null).order('created_at', { ascending: false }).limit(1);
   if (error) throw storageError(error, 'xero_financial_sync_runs');
   const run = runs?.[0];
   if (!run || run.control_totals?.workflowSnapshot?.reconciliationVersion !== XERO_RECONCILIATION_VERSION) return { preview: null, refreshRequired: Boolean(run) };
@@ -1158,7 +1164,7 @@ export async function loadSalesforceFinancialSnapshot(cutoff, querySalesforce = 
     SUPPLIER_INVOICE_QUERY.replace('LastModifiedDate', `LastModifiedDate${selected('Supplier_Invoice__c', ['CurrencyIsoCode', 'Invoice_File__c', 'Invoice_Upload_Date__c', 'File__c', 'Status__c', 'Invoice_Status__c'])}`).replaceAll('{cutoff}', quotedCutoff),
     `SELECT Id, Name, Buyer_Invoice__c, Supplier_Invoice__c, Product__c, Product__r.Name,
             Quantity_Delivered_Per_BDN__c, Quantity__c, Unit_of_Measure__c,
-            Price_Per_Unit__c, Cost_Per_Unit__c, Total_Price__c, Total_Cost__c, LastModifiedDate${selected('STEM_Line_Item__c', ['CurrencyIsoCode', 'Quantity_Max__c', 'Unit_Sell_At__c', 'Unit_Buy_At__c', 'Cancelled__c', 'STEM__c', 'Supplier__c'])}
+            Price_Per_Unit__c, Cost_Per_Unit__c, Total_Price__c, Total_Cost__c, LastModifiedDate${selected('STEM_Line_Item__c', ['CurrencyIsoCode', 'Quantity_Max__c', 'Unit_Sell_At__c', 'Unit_Buy_At__c', 'Cancelled__c', 'STEM__c', 'Original_Supplier__c'])}
        FROM STEM_Line_Item__c
       WHERE Cancelled__c = false
         AND ((Buyer_Invoice__c != null AND (Buyer_Invoice__r.Invoice_Date__c >= ${quotedCutoff}
@@ -1428,6 +1434,8 @@ export function buildFinancialClassifications(salesforce, xero, stored, { postin
   const supplierSources = salesforce.suppliers.map((invoice) => buildSalesforceDocument(invoice, 'supplier', linesBySupplier.get(invoice.Id) || [], mappingByKey, contactIndex, sourceContext));
   const allSources = [...buyerSources, ...supplierSources];
   const groupedContext = buildGroupedPreservationContext(salesforce, xero, stored, allSources);
+  groupedContext.issuedPetroleumCurrent = { suppliers: salesforce.suppliers, lines: salesforce.lines,
+    extras: salesforce.extras, products: salesforce.productRecords };
   const accountsByContact = index(allSources.filter((source) => source.contactId && source.accountId), (source) => source.contactId);
   for (const source of allSources) {
     source.sharedContactAccounts = [...new Map((accountsByContact.get(source.contactId) || []).map((row) => [row.accountId,
@@ -1698,15 +1706,20 @@ function buildSalesforceDocument(record, direction, children, mappingByKey, cont
 }
 
 function documentSourceFingerprint(record, children) {
-  // Unit_Buy_At is newly retrieved exclusively for grouped preservation. Keep
-  // existing accepted document fingerprints byte-compatible; the complete raw
-  // snapshot and grouped accounting proof separately bind this new evidence.
+  // Preserve legacy document fingerprints when adding stricter observations.
+  // The petroleum sticky guard separately binds these current raw identities
+  // and physical economics to its immutable acceptance evidence.
   const legacyChild = (child) => {
     if (!child.Product__c) return financialRecordFingerprint(child);
-    const { Unit_Buy_At__c: _groupedBuyUnit, ...legacy } = child;
+    const { Unit_Buy_At__c: _groupedBuyUnit, Original_Supplier__c: _petroleumSupplier, ...legacy } = child;
     return financialRecordFingerprint(legacy);
   };
-  return hashJson({ record: financialRecordFingerprint(record), children: [...children].sort((left, right) => String(left.Id).localeCompare(String(right.Id))).map(legacyChild) });
+  let legacyRecord = record;
+  if (record.Supplier__c && record.STEM__r) {
+    const { Vessel__c: _petroleumVesselId, Vessel__r: _petroleumVessel, ...stem } = record.STEM__r;
+    legacyRecord = { ...record, STEM__r: stem };
+  }
+  return hashJson({ record: financialRecordFingerprint(legacyRecord), children: [...children].sort((left, right) => String(left.Id).localeCompare(String(right.Id))).map(legacyChild) });
 }
 
 function buildAccountingLine(row, direction, credit, mappingByKey) {
@@ -1817,7 +1830,7 @@ export function normalizeXeroInvoice(row) {
   };
 }
 
-function normalizeXeroCreditNote(row) {
+export function normalizeXeroCreditNote(row) {
   return {
     id: row.CreditNoteID,
     collection: 'CreditNotes',

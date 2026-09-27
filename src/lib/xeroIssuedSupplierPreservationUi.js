@@ -1,19 +1,30 @@
+import { ISSUED_SUPPLIER_POLICY, ISSUED_PETROLEUM_POLICY, isIssuedPreservationPolicy } from '../../config/xeroIssuedPreservationPolicies.js';
+
 export const PRESERVATION_PACKET_MAX_BYTES = 200000;
 
 const RECORD_KEYS = ['sourceId', 'xeroDocumentId', 'documentId', 'versionId', 'sha256', 'review'];
 const REVIEW_KEYS = ['reviewer', 'reviewedAt', 'reviewRecordHash', 'sourceNumber', 'printedNumber', 'sellerName', 'buyerName', 'invoiceDate', 'dueDate', 'currency', 'total', 'totalTax', 'vessel', 'lines'];
+const PETROLEUM_REVIEW_KEYS = [...REVIEW_KEYS, 'numberRule', 'deliveryDate', 'taxEvidence', 'counterparties'];
+const PETROLEUM_LINE_KEYS = ['description', 'quantity', 'unit', 'unitPrice', 'amount', 'sourceProductId', 'sourceProductName', 'productEvidence'];
+const COUNTERPARTY_KEYS = ['accountId', 'contactId', 'tenantId', 'sourceName', 'companyCode', 'printedSeller', 'printedBuyer', 'basis'];
 const object = (value) => value && typeof value === 'object' && !Array.isArray(value);
 const onlyKeys = (value, keys) => object(value) && Object.keys(value).every((key) => keys.includes(key));
 const scalar = (value) => typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value));
 
 export function validatePreservationPacket(data) {
-  if (!onlyKeys(data, ['records']) || !Array.isArray(data.records) || !data.records.length || data.records.length > 25) return false;
+  if (!onlyKeys(data, ['records', 'policyVersion']) || !Array.isArray(data.records) || !data.records.length || data.records.length > 25) return false;
+  const policy = Object.hasOwn(data, 'policyVersion') ? data.policyVersion : ISSUED_SUPPLIER_POLICY;
+  if (!isIssuedPreservationPolicy(policy)) return false;
+  const petroleum = policy === ISSUED_PETROLEUM_POLICY;
   return data.records.every((record) => onlyKeys(record, RECORD_KEYS)
     && RECORD_KEYS.filter((key) => key !== 'review').every((key) => typeof record[key] === 'string' && record[key].trim())
-    && onlyKeys(record.review, REVIEW_KEYS)
+    && onlyKeys(record.review, petroleum ? PETROLEUM_REVIEW_KEYS : REVIEW_KEYS)
     && Object.entries(record.review).every(([key, value]) => key === 'lines'
-      ? Array.isArray(value) && value.every((line) => onlyKeys(line, ['description', 'amount']) && typeof line.description === 'string' && scalar(line.amount))
-      : scalar(value)));
+      ? Array.isArray(value) && value.every((line) => onlyKeys(line, petroleum ? PETROLEUM_LINE_KEYS : ['description', 'amount'])
+        && typeof line.description === 'string' && scalar(line.amount) && Object.values(line).every(scalar))
+      : petroleum && key === 'counterparties'
+        ? onlyKeys(value, COUNTERPARTY_KEYS) && Object.values(value).every((literal) => typeof literal === 'string')
+        : (petroleum && ['deliveryDate', 'totalTax'].includes(key) && value === null) || scalar(value)));
 }
 
 export function preservationSelection(preview, selected) {

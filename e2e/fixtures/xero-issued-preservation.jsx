@@ -14,12 +14,19 @@ const rows = [1, 2, 3].map((number) => ({
   status: number === 3 ? 'blocked' : 'eligible', blockers: number === 3 ? ['Issued invoice amount differs from the existing Xero bill.'] : [],
   fingerprint: number === 3 ? null : String(number).repeat(64), selected: false,
 }));
-const packet = { records: rows.map((row, index) => ({ sourceId: row.sourceId, xeroDocumentId: row.xeroDocumentId,
+const packet = { ...(scenario === 'petroleum' ? { policyVersion: 'issued_petroleum_preserve_v1' } : {}), records: rows.map((row, index) => ({ sourceId: row.sourceId, xeroDocumentId: row.xeroDocumentId,
   documentId: `06900000000000${index + 1}`, versionId: `06800000000000${index + 1}`, sha256: 'a'.repeat(64),
   review: { reviewer: 'Codex offline fixture', reviewedAt: '2026-09-28T00:00:00.000Z', reviewRecordHash: 'b'.repeat(64),
     sourceNumber: row.sourceNumber, printedNumber: row.sourceNumber, sellerName: 'Fixture Supplier', buyerName: 'Fixture Buyer',
     invoiceDate: '2026-01-05', dueDate: '2026-02-03', currency: row.currency, total: row.total, totalTax: 0,
-    vessel: `FIXTURE VESSEL ${index + 1}`, lines: [{ description: 'Issued invoice fixture line', amount: row.total }] } })) };
+    vessel: `FIXTURE VESSEL ${index + 1}`, lines: [{ description: 'Issued invoice fixture line', amount: row.total }],
+    ...(scenario === 'petroleum' ? { numberRule: 'exact', deliveryDate: null, totalTax: null,
+      taxEvidence: 'no_tax_line_or_increment_observed', counterparties: { accountId: `00100000000000${index + 1}`,
+        contactId: uuid(200 + index), tenantId: uuid(300), sourceName: 'Fixture Supplier', companyCode: 'HKFIXTURE',
+        printedSeller: 'Fixture Supplier', printedBuyer: 'Fixture Buyer', basis: 'independently_reviewed_literal_pair' },
+      lines: [{ description: 'Marine Gas Oil', quantity: '1', unit: 'MT', unitPrice: String(row.total), amount: String(row.total),
+        sourceProductId: '01t000000000001', sourceProductName: 'DMA', productEvidence: 'Offline parser fixture only.' }] } : {}),
+  } })) };
 const checkedAt = new Date().toISOString();
 const ordinaryPreview = { run: { id: uuid(60), revision: 1, status: 'ready_for_review', createdAt: checkedAt, postingMode: 'draft' },
   postingMode: 'draft', checkedAt, rows: [], products: [], mappingProposals: [], payments: { rows: [], summary: { total: 0 } } };

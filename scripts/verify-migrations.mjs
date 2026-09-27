@@ -29,6 +29,7 @@ const migrationSources = await Promise.all(names.map(async (name) => ({
   sql: await readFile(new URL(name, migrationDirectory), 'utf8'),
 })));
 const releaseMigrationNames = new Set([
+  '20260927185526_xero_issued_petroleum_preservation_link.sql',
   '20260927175805_xero_issued_supplier_preservation_link.sql',
   '20260927154515_xero_financial_preview_persistence.sql',
   '20260923222821_xero_grouped_preservation_link.sql',
@@ -117,6 +118,7 @@ async function verifyRuntimeObjects(label) {
     [['xero_financial_payment_mappings_canonical_sf_uidx', 'xero_financial_payment_mappings_canonical_xero_uidx']],
   );
   const releaseFunctions = [
+    'link_xero_issued_petroleum_document_v1',
     'link_xero_issued_supplier_document_v1',
     'link_xero_grouped_document_v1', 'xero_grouped_salesforce_id_v1', 'protect_xero_grouped_mapping_v1',
     'link_xero_payment_references_v1',

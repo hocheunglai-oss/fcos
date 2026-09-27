@@ -16,6 +16,30 @@ test('evidence packets exclude PDFs, credentials, unsupported nested values and 
     { records: [{ ...record, sourceId: '' }] }]) assert.equal(validatePreservationPacket(packet), false);
 });
 
+test('petroleum packets retain literal names and absent paper tax/delivery without changing trustee packets', () => {
+  const petroleum = { policyVersion: 'issued_petroleum_preserve_v1', records: [{ ...record, review: {
+    ...record.review, numberRule: 'exact', deliveryDate: null, totalTax: null,
+    taxEvidence: 'no_tax_line_or_increment_observed', counterparties: { accountId: 'account', contactId: 'contact',
+      tenantId: 'tenant', sourceName: 'SUPPLIER LTD', companyCode: 'supplier', printedSeller: 'SUPPLIER LIMITED',
+      printedBuyer: 'BUYER LIMITED', basis: 'independently_reviewed_literal_pair' },
+    lines: [{ description: 'Fuel', quantity: '79.200', unit: 'MT', unitPrice: '721.00', amount: '57103.20',
+      sourceProductId: 'product', sourceProductName: 'Fuel', productEvidence: 'independently reviewed' }],
+  } }] };
+  assert.equal(validatePreservationPacket(petroleum), true);
+  assert.equal(validatePreservationPacket({ records: [record], policyVersion: 'issued_supplier_preserve_v1' }), true);
+  for (const policyVersion of [null, '', 'unknown', 'issued_supplier_preserve_v1']) {
+    assert.equal(validatePreservationPacket({ ...petroleum, policyVersion }), false);
+  }
+  for (const field of ['counterparties', 'lines']) {
+    const altered = structuredClone(petroleum);
+    const nested = field === 'counterparties' ? altered.records[0].review.counterparties : altered.records[0].review.lines[0];
+    nested.credentials = 'unsupported';
+    assert.equal(validatePreservationPacket(altered), false);
+  }
+  const omittedPolicy = structuredClone(petroleum); delete omittedPolicy.policyVersion;
+  assert.equal(validatePreservationPacket(omittedPolicy), false);
+});
+
 test('exact preservation selection fails closed on blocked, stale, duplicate or unverified rows', () => {
   assert.deepEqual(preservationSelection(preview, new Set(['one'])), ['one']);
   for (const selected of [new Set(), new Set(['two']), new Set(['one', 'missing'])]) assert.deepEqual(preservationSelection(preview, selected), []);

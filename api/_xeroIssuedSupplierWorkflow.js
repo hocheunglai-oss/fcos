@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { fcosSalesforceEnvironment } from '../config/fcosConnections.js';
+import { ISSUED_SUPPLIER_POLICY, ISSUED_PETROLEUM_POLICY, isIssuedPreservationPolicy } from '../config/xeroIssuedPreservationPolicies.js';
 import { getFreshXeroConnection, xeroContactSyncServiceClient } from './_xeroContactSync.js';
 import { requireExternalActionGate } from './_externalActionGates.js';
 import { buildFinancialClassifications, loadSalesforceFinancialSnapshot, loadXeroFinancialSnapshot,
@@ -9,12 +10,30 @@ import { buildGroupedPreservationContext } from './_xeroGroupedPreservationAdapt
 import { groupedPreservationCanonical } from './_xeroGroupedPreservation.js';
 import { evaluateIssuedSupplierFinancialDocument } from './_xeroIssuedSupplierPreservationAdapter.js';
 import { collectIssuedSupplierFiles, collectIssuedSupplierVessels, validateIssuedSupplierPacket } from './_xeroIssuedSupplierFiles.js';
+import { evaluatePetroleumFinancialDocument } from './_xeroIssuedPetroleumPreservationAdapter.js';
+import { collectPetroleumPreservationScope } from './_xeroIssuedPetroleumScope.js';
+import { collectIssuedPetroleumFiles, validateIssuedPetroleumPacket } from './_xeroIssuedPetroleumFiles.js';
 import { persistFinancialPreview, preparePreviewPersistence, previewEvidenceHash as hash } from './_xeroPreviewPersistence.js';
 
-const POLICY = 'issued_supplier_preserve_v1';
+const POLICIES = Object.freeze({
+  [ISSUED_SUPPLIER_POLICY]: { validate: validateIssuedSupplierPacket, files: collectIssuedSupplierFiles,
+    evaluate: evaluateIssuedSupplierFinancialDocument, rpc: 'link_xero_issued_supplier_document_v1',
+    event: 'issued_supplier_document_preservation_linked' },
+  [ISSUED_PETROLEUM_POLICY]: { validate: validateIssuedPetroleumPacket, files: collectIssuedPetroleumFiles,
+    evaluate: evaluatePetroleumFinancialDocument, rpc: 'link_xero_issued_petroleum_document_v1',
+    event: 'issued_petroleum_document_preservation_linked' },
+});
 const fail = (message, code = 'XERO_ISSUED_PRESERVATION_INVALID', status = 409) => Object.assign(new Error(message), { code, status });
 const uuid = (value) => /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(value || '');
 const sameId = (a, b) => typeof a === 'string' && typeof b === 'string' && a.slice(0, 15) === b.slice(0, 15);
+function packetPolicy(packet) {
+  if (!packet || typeof packet !== 'object' || Array.isArray(packet)
+    || Object.keys(packet).some((key) => !['records', 'policyVersion'].includes(key))) throw fail('The issued-evidence packet has an unsupported structure.');
+  // Only old packets which omit the discriminator retain the trustee contract.
+  const policy = Object.hasOwn(packet, 'policyVersion') ? packet.policyVersion : ISSUED_SUPPLIER_POLICY;
+  if (!isIssuedPreservationPolicy(policy)) throw fail('The issued-evidence policy is not supported.');
+  return policy;
+}
 const actorFor = (context) => {
   const actor = { id: context?.profile?.id, email: String(context?.profile?.email || '').trim().toLowerCase() };
   if (!uuid(actor.id) || !actor.email || actor.email.length > 320) throw fail('An active authenticated Finance session is required.', 'XERO_ISSUED_PRESERVATION_ACTOR_REQUIRED', 403);
@@ -31,11 +50,13 @@ async function storedRows(client, runId) {
   return result.data;
 }
 
-async function currentEvidence(records, dependencies, rate) {
+async function currentEvidence(records, dependencies, rate, policy) {
+  const descriptor = POLICIES[policy];
   const { env = process.env, fetchImpl = fetch, client = xeroContactSyncServiceClient(env),
     getConnection = getFreshXeroConnection, loadSalesforce = loadSalesforceFinancialSnapshot,
-    loadXero = loadXeroFinancialSnapshot, collectFiles = collectIssuedSupplierFiles,
-    collectVessels = collectIssuedSupplierVessels, loadControls = loadStoredFinancialControls } = dependencies;
+    loadXero = loadXeroFinancialSnapshot, collectFiles = descriptor.files,
+    collectVessels = collectIssuedSupplierVessels, loadControls = loadStoredFinancialControls,
+    collectPetroleumScope = collectPetroleumPreservationScope } = dependencies;
   const connection = await getConnection(client, { env, fetchImpl });
   const onResponse = ({ headers }) => {
     Object.assign(rate, xeroFinancialRateSnapshot(headers, rate));
@@ -43,17 +64,20 @@ async function currentEvidence(records, dependencies, rate) {
   };
   // These adapters only read providers. No accounting mutation client is imported.
   // Verify the pinned Salesforce organisation and exact native documents first.
-  const files = await collectFiles({ records });
+  const files = await collectFiles({ policyVersion: policy, records }, { tenantId: connection.tenantId });
   const [salesforce, xero, stored, vessels] = await Promise.all([
     loadSalesforce(XERO_FINANCIAL_CUTOFF), loadXero(connection, XERO_FINANCIAL_CUTOFF, { env, fetchImpl, onResponse }),
-    loadControls(client), collectVessels(XERO_FINANCIAL_CUTOFF),
+    loadControls(client), policy === ISSUED_SUPPLIER_POLICY ? collectVessels(XERO_FINANCIAL_CUTOFF) : Promise.resolve(new Map()),
   ]);
   if (!uuid(connection.tenantId) || xero.tenantId !== connection.tenantId) throw fail('The current Xero organisation differs from the reviewed scope.');
   const built = buildFinancialClassifications(salesforce, xero, stored, { postingMode: 'draft' });
   for (const source of built.sources) {
     const row = vessels.get(source.salesforceId);
     source.issuedSupplierVessel = row && sameId(row.stemId, source.stemId) ? row.vessel : null;
-    if (source.salesforceObject === 'Supplier_Invoice__c') {
+    // Trustee extras carry Supplier__c. Petroleum delivery lines instead carry
+    // Original_Supplier__c, verified against their exact parent by the dedicated
+    // fresh raw-scope adapter; the ordinary snapshot does not select that field.
+    if (policy === ISSUED_SUPPLIER_POLICY && source.salesforceObject === 'Supplier_Invoice__c') {
       const children = [...salesforce.lines, ...salesforce.extras].filter((child) => sameId(child.Supplier_Invoice__c, source.salesforceId));
       if (children.length !== 1 || children.some((child) => child.Cancelled__c !== false || !sameId(child.STEM__c, source.stemId)
         || !sameId(child.Supplier__c, source.accountId))) source.blockers.push('Exact current child, supplier and STEM associations are required for preservation.');
@@ -61,6 +85,8 @@ async function currentEvidence(records, dependencies, rate) {
   }
   const context = buildGroupedPreservationContext(salesforce, xero, stored, built.sources);
   context.documents = [...xero.documents, ...(xero.inactiveDocuments || [])];
+  if (policy === ISSUED_PETROLEUM_POLICY) context.petroleum = await collectPetroleumScope({ records, connection,
+    salesforce, xero, sources: built.sources, stored }, { env, fetchImpl, onResponse });
   const stemIds = [...new Set(built.sources.filter((s) => records.some((r) => sameId(r.sourceId, s.salesforceId))).map((s) => s.stemId))];
   const disputes = stemIds.length ? await client.from('dispute_beta_cases').select('stem_id,workflow_status').in('stem_id', stemIds) : { data: [] };
   if (disputes.error) throw fail('Current dispute evidence is unavailable.');
@@ -68,11 +94,11 @@ async function currentEvidence(records, dependencies, rate) {
     const source = built.sources.find((s) => sameId(s.salesforceId, request.sourceId));
     const target = context.documents.find((d) => d.id?.toLowerCase() === request.xeroDocumentId.toLowerCase());
     if (!source || source.salesforceObject !== 'Supplier_Invoice__c' || !target) throw fail('A requested source or existing Xero bill is outside the complete current scope.');
-    const result = evaluateIssuedSupplierFinancialDocument(source, target, context, files.get(request.sourceId));
+    const result = descriptor.evaluate(source, target, context, files.get(request.sourceId));
     const blockers = (result.blockers || []).map((b) => `${b.code || 'EVIDENCE'}: ${b.message}`);
     if ((disputes.data || []).some((d) => sameId(d.stem_id, source.stemId) && !['closed', 'resolved', 'cancelled'].includes(String(d.workflow_status).toLowerCase()))) blockers.push('An unresolved dispute affects this STEM.');
     const eligible = result.eligible && !blockers.length;
-    const summary = { policyVersion: POLICY, eligible, accepted: false, requiresExplicitReview: true, fingerprint: result.fingerprint || null,
+    const summary = { policyVersion: policy, eligible, accepted: false, requiresExplicitReview: true, fingerprint: result.fingerprint || null,
       evidenceFingerprint: result.evidenceFingerprint || null };
     const reviewed = { ...source, action: eligible ? 'protected_legacy' : 'blocked', status: eligible ? 'eligible' : 'blocked',
       blockers, warnings: ['Existing Xero bill details will be preserved. This action only records a verified link.'],
@@ -87,9 +113,10 @@ async function currentEvidence(records, dependencies, rate) {
 export async function xeroFinancialDocumentPreservationPreview(body = {}, dependencies = {}) {
   const { env = process.env, client = xeroContactSyncServiceClient(env), accessContext } = dependencies;
   const actor = actorFor(accessContext);
-  const records = validateIssuedSupplierPacket(body.packet);
+  const policy = packetPolicy(body.packet);
+  const records = POLICIES[policy].validate(body.packet);
   const rate = {};
-  const current = await currentEvidence(records, { ...dependencies, client }, rate);
+  const current = await currentEvidence(records, { ...dependencies, client }, rate, policy);
   const now = new Date().toISOString(); const id = randomUUID();
   const items = current.rows.map(({ reviewed, request, reviewFingerprint }, index) => {
     const item = toSyncItemRow(reviewed, id, index, now);
@@ -100,7 +127,7 @@ export async function xeroFinancialDocumentPreservationPreview(body = {}, depend
   const summary = { total: items.length, eligible: items.filter((r) => r.status === 'eligible').length, blocked: items.filter((r) => r.status === 'blocked').length };
   const run = { id, idempotency_key: `issued-preserve:${id}`, mode: 'preview', status: 'building', cutoff_date: XERO_FINANCIAL_CUTOFF,
     source_snapshot_at: now, xero_snapshot_at: now, source_fingerprint: hash(items.map((i) => i.source_payload)),
-    xero_fingerprint: hash(items.map((i) => i.xero_payload)), control_totals: { postingMode: 'draft', preservationPolicy: POLICY,
+    xero_fingerprint: hash(items.map((i) => i.xero_payload)), control_totals: { postingMode: 'draft', preservationPolicy: policy,
       workflowSnapshot: { reconciliationVersion: XERO_RECONCILIATION_VERSION, checkedAt: now } }, classification_summary: summary,
     rate_limit_snapshot: rate, revision: 1, created_by: actor.id, created_by_email: actor.email, created_at: now, updated_at: now };
   const saved = await persistFinancialPreview(client, preparePreviewPersistence(run, items, { tenantId: current.tenantId,
@@ -118,17 +145,19 @@ export async function xeroFinancialDocumentPreservationRun(body = {}, dependenci
     || !Array.isArray(ids) || !ids.length || ids.length > 25 || !ids.every(uuid) || new Set(ids).size !== ids.length) throw fail('Select and review the exact verified preservation rows.');
   const saved = await client.from('xero_financial_sync_runs').select('*').eq('id', body.runId).maybeSingle();
   const run = saved.data;
-  if (saved.error || !run || run.control_totals?.preservationPolicy !== POLICY) throw fail('This is not an issued-supplier preservation review.');
+  const policy = run?.control_totals?.preservationPolicy;
+  if (saved.error || !run || !isIssuedPreservationPolicy(policy)) throw fail('This is not a supported issued-supplier preservation review.');
+  const descriptor = POLICIES[policy];
   let rows = await storedRows(client, run.id);
   const selected = rows.filter((r) => ids.includes(r.id));
   if (selected.length !== ids.length || selected.some((r) => r.proposed_action !== 'protected_legacy'
-    || r.source_payload?.issuedSupplierPreservation?.policyVersion !== POLICY || r.blockers?.length
+    || r.source_payload?.issuedSupplierPreservation?.policyVersion !== policy || r.blockers?.length
     || Object.keys(r.proposed_payload || {}).length || r.mutation_attempts > 0)) throw fail('The selection contains an unverified or accounting-write row.');
   if (run.status === 'completed' && run.reviewed_by === actor.id && run.reviewed_by_email === actor.email
     && rows.filter((r) => r.selected).length === ids.length && selected.every((r) => r.selected && r.status === 'linked')) {
     const [mappings, audits] = await Promise.all([
       client.from('xero_financial_document_mappings').select('*').in('xero_document_id', selected.map((r) => r.xero_document_id)),
-      client.from('xero_financial_audit_events').select('*').eq('run_id', run.id).eq('event_type', 'issued_supplier_document_preservation_linked'),
+      client.from('xero_financial_audit_events').select('*').eq('run_id', run.id).eq('event_type', descriptor.event),
     ]);
     if (mappings.error || audits.error || !Array.isArray(mappings.data) || !Array.isArray(audits.data)) throw fail('The completed link receipts could not be verified.');
     for (const row of selected) {
@@ -143,7 +172,8 @@ export async function xeroFinancialDocumentPreservationRun(body = {}, dependenci
         || !receipt.reviewedXero || hash(receipt.reviewedXero) !== hash(row.xero_payload)
         || !receipt.evidence
         || receipt.fingerprint !== row.source_payload.issuedSupplierPreservation.fingerprint || receipt.evidenceFingerprint !== hash(receipt.evidence)
-        || receipt.fingerprint !== hash({ policyVersion: POLICY, accounting: receipt.evidence?.accounting }) || audit.length !== 1
+        || receipt.policyVersion !== policy || receipt.evidence.policyVersion !== policy
+        || receipt.fingerprint !== hash({ policyVersion: policy, accounting: receipt.evidence?.accounting }) || audit.length !== 1
         || audit[0].outcome !== 'success' || audit[0].actor_id !== actor.id || audit[0].record_counts?.financialWrites !== 0
         || !audit[0].fingerprints?.issuedSupplierPreservation
         || hash(audit[0].fingerprints.issuedSupplierPreservation) !== hash(receipt)) throw fail('A completed preservation link is missing its matching immutable audit receipt.');
@@ -166,7 +196,8 @@ export async function xeroFinancialDocumentPreservationRun(body = {}, dependenci
   try {
     rows = (await storedRows(client, run.id)).filter((r) => r.selected);
     if (rows.length !== ids.length || rows.some((r) => !ids.includes(r.id) || r.status !== 'selected')) throw fail('The selected preservation scope changed.');
-    const current = await currentEvidence(rows.map((r) => r.source_payload.issuedSupplierRequest), { ...dependencies, client }, rate);
+    const requests = descriptor.validate({ policyVersion: policy, records: rows.map((r) => r.source_payload.issuedSupplierRequest) });
+    const current = await currentEvidence(requests, { ...dependencies, client }, rate, policy);
     if (current.tenantId !== run.control_totals.workflowSnapshot.tenantId) throw fail('The reviewed Xero organisation changed.');
     // Recheck the entire selected cohort before any local link is committed.
     for (const [index, row] of rows.entries()) {
@@ -177,12 +208,12 @@ export async function xeroFinancialDocumentPreservationRun(body = {}, dependenci
       const { reviewed, proof, reviewFingerprint } = current.rows[index];
       const summary = reviewed.issuedSupplierPreservation;
       localCommitPending = true;
-      const result = await client.rpc('link_xero_issued_supplier_document_v1', { p_run_id: run.id,
+      const result = await client.rpc(descriptor.rpc, { p_run_id: run.id,
         p_expected_run_revision: started.data.revision, p_item_id: row.id, p_expected_item_updated_at: row.updated_at,
         p_tenant_id: current.tenantId, p_actor_id: actor.id, p_actor_email: actor.email,
-        p_review: { policyVersion: POLICY, fingerprint: summary.fingerprint, evidenceFingerprint: summary.evidenceFingerprint,
+        p_review: { policyVersion: policy, fingerprint: summary.fingerprint, evidenceFingerprint: summary.evidenceFingerprint,
           reviewFingerprint, legacyReviewFingerprint: legacyReviewFingerprint(reviewed, reviewed.xero), evidence: proof,
-          accountingCanonical: groupedPreservationCanonical({ policyVersion: POLICY, accounting: proof.accounting }),
+          accountingCanonical: groupedPreservationCanonical({ policyVersion: policy, accounting: proof.accounting }),
           evidenceCanonical: groupedPreservationCanonical(proof) } });
       if (result.error) { localCommitPending = !result.error.code; throw fail('The preservation transaction was not confirmed. Inspect the saved link before retrying.'); }
       if (result.data?.id !== row.id || result.data?.status !== 'linked' || result.data?.xeroDocumentId !== row.xero_document_id) throw fail('The preservation transaction returned an unexpected identity.');

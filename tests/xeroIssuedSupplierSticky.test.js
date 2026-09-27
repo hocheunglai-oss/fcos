@@ -4,16 +4,20 @@ import { buildFinancialClassifications, buildXeroAccountingPayload, xeroFinancia
 import { buildGroupedPreservationContext } from '../api/_xeroGroupedPreservationAdapter.js';
 import { evaluateIssuedSupplierFinancialDocument } from '../api/_xeroIssuedSupplierPreservationAdapter.js';
 import { issuedSupplierWorkflowFixture } from './xeroIssuedSupplierPreservationFixtures.js';
+import { issuedPetroleumFixture } from './xeroIssuedPetroleumPreservationFixtures.js';
+import { evaluatePetroleumFinancialDocument } from '../api/_xeroIssuedPetroleumPreservationAdapter.js';
 
 const uuid = (number) => `00000000-0000-4000-8000-${String(number).padStart(12, '0')}`;
 const clone = (value) => structuredClone(value);
 
-function acceptedFixture() {
-  const f = issuedSupplierWorkflowFixture();
+function acceptedFixture(petroleum = false) {
+  const f = petroleum ? issuedPetroleumFixture() : issuedSupplierWorkflowFixture();
   const unlinked = buildFinancialClassifications(f.salesforce, f.xero, f.stored, { postingMode: 'draft' });
-  const source = unlinked.sources[0]; source.issuedSupplierVessel = f.vessels.get(source.salesforceId).vessel;
+  const source = unlinked.sources[0];
+  if (!petroleum) source.issuedSupplierVessel = f.vessels.get(source.salesforceId).vessel;
   const context = buildGroupedPreservationContext(f.salesforce, f.xero, f.stored, unlinked.sources);
-  const proof = evaluateIssuedSupplierFinancialDocument(source, f.candidate, context, f.fileEvidence);
+  if (petroleum) context.petroleum = f.scope;
+  const proof = (petroleum ? evaluatePetroleumFinancialDocument : evaluateIssuedSupplierFinancialDocument)(source, f.candidate, context, f.fileEvidence);
   assert.equal(proof.eligible, true, JSON.stringify(proof.blockers));
   const mapping = { id: uuid(90), salesforce_object: source.salesforceObject, salesforce_id: source.salesforceId,
     xero_document_id: f.candidate.id, xero_document_type: f.candidate.type, xero_contact_id: f.candidate.contactId,
@@ -47,6 +51,35 @@ test('only observation timestamp drift preserves an unchanged historical accepta
   const f = acceptedFixture(); f.candidate.updatedDateUTC = '/Date(1790000000000+0000)/';
   const row = f.classify(); assert.equal(row.status, 'protected'); assert.equal(row.acceptedLegacy, true);
   assertNoAccountingFallback(row);
+});
+
+test('accepted petroleum links remain protected after ordinary checks and never permit accounting updates', () => {
+  const f = acceptedFixture(true);
+  const row = f.classify();
+  assert.equal(row.status, 'protected'); assert.equal(row.acceptedLegacy, true);
+  assert.equal(row.issuedSupplierPreservation.policyVersion, 'issued_petroleum_preserve_v1');
+  assert.deepEqual(row.xero, f.candidate); assertNoAccountingFallback(row);
+  assert.notEqual(f.source.invoiceDate, f.candidate.date, 'historical delivery date remains unchanged');
+  for (const change of [
+    (item) => { item.candidate.amountPaid = 1; item.candidate.amountDue -= 1; },
+    (item) => { item.candidate.invoiceNumber = item.source.documentNumber; },
+    (item) => { item.child.Quantity_Delivered_Per_BDN__c += 1; },
+    (item) => { item.mapping.retained_differences.issuedSupplierPreservation.policyVersion = 'issued_supplier_preserve_v1'; },
+  ]) {
+    const altered = acceptedFixture(true); change(altered);
+    const result = altered.classify(); assert.equal(result.status, 'blocked'); assertNoAccountingFallback(result);
+  }
+});
+
+test('new raw petroleum identity observations preserve previously calculated legacy hashes', () => {
+  const f = issuedPetroleumFixture();
+  const original = buildFinancialClassifications(f.salesforce, f.xero, f.stored).sources[0];
+  delete f.child.Original_Supplier__c;
+  delete f.supplier.STEM__r.Vessel__c;
+  delete f.supplier.STEM__r.Vessel__r;
+  const priorShape = buildFinancialClassifications(f.salesforce, f.xero, f.stored).sources[0];
+  assert.equal(original.sourceFingerprint, priorShape.sourceFingerprint);
+  assert.equal(original.financialFingerprint, priorShape.financialFingerprint);
 });
 
 test('corrupt acceptance and source or target changes remain blocked without accounting fallback', async (t) => {
@@ -93,7 +126,7 @@ test('missing accepted target cannot be reassigned to a new matching invoice', (
 });
 
 test('accounting payload construction refuses every present issued-preservation marker', async (t) => {
-  for (const marker of [{ policyVersion: 'issued_supplier_preserve_v1' }, {}, null, false, 'corrupt']) {
+  for (const marker of [{ policyVersion: 'issued_supplier_preserve_v1' }, { policyVersion: 'issued_petroleum_preserve_v1' }, { policyVersion: 'unknown' }, {}, null, false, 'corrupt']) {
     await t.test(JSON.stringify(marker), () => {
       const f = acceptedFixture();
       assert.throws(() => buildXeroAccountingPayload({ ...f.source, issuedSupplierPreservation: marker }, f.candidate.id, 'AUTHORISED', f.candidate),
@@ -103,7 +136,7 @@ test('accounting payload construction refuses every present issued-preservation 
 });
 
 test('generic financial runner rejects a preservation run before authorisation or any provider work', async (t) => {
-  for (const reviewed of [false, true]) await t.test(`reviewed=${reviewed}`, async () => {
+  for (const policy of ['issued_supplier_preserve_v1', 'issued_petroleum_preserve_v1', 'unknown']) for (const reviewed of [false, true]) await t.test(`${policy} reviewed=${reviewed}`, async () => {
     const runId = uuid(60); const events = [];
     const forbidden = (name) => async () => { events.push(name); throw new Error(`Forbidden ${name}`); };
     const client = {
@@ -111,7 +144,7 @@ test('generic financial runner rejects a preservation run before authorisation o
         assert.equal(table, 'xero_financial_sync_runs'); events.push('run_lookup');
         const query = { select(value) { assert.equal(value, 'control_totals'); return query; },
           eq(key, value) { assert.equal(key, 'id'); assert.equal(value, runId); return query; },
-          maybeSingle: async () => ({ data: { control_totals: { preservationPolicy: 'issued_supplier_preserve_v1' } }, error: null }) };
+          maybeSingle: async () => ({ data: { control_totals: { preservationPolicy: policy } }, error: null }) };
         return query;
       },
       rpc: forbidden('authorise_or_start_rpc'),

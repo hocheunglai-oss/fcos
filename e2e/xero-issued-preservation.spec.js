@@ -76,6 +76,20 @@ test.describe('offline issued supplier preservation', () => {
     expect((await calls(page)).filter((call) => ['xeroFinancialSyncRun', 'xeroFinancialPaymentApply'].includes(call.name))).toHaveLength(0);
   });
 
+  test('petroleum packets preserve their policy and literal missing paper fields through the dedicated preview', async ({ page }) => {
+    const dialog = await openPreview(page, 'petroleum');
+    const packet = await page.evaluate(() => window.issuedPreservationFixture.packet);
+    const requests = await calls(page);
+    expect(requests.filter((call) => call.name === 'xeroFinancialDocumentPreservationPreview')).toEqual([
+      { name: 'xeroFinancialDocumentPreservationPreview', body: { packet } },
+    ]);
+    expect(packet.policyVersion).toBe('issued_petroleum_preserve_v1');
+    expect(packet.records[0].review.deliveryDate).toBeNull();
+    expect(packet.records[0].review.totalTax).toBeNull();
+    await expect(dialog.getByRole('row').filter({ hasText: 'SUP-HOLD' }).getByRole('checkbox')).toBeDisabled();
+    expect(requests.filter((call) => ['xeroFinancialSyncRun', 'xeroFinancialPaymentApply'].includes(call.name))).toHaveLength(0);
+  });
+
   test('desktop and mobile layouts contain the preview without horizontal page overflow', async ({ page }) => {
     for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
       await page.setViewportSize(viewport);
