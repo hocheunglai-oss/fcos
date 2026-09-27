@@ -331,35 +331,43 @@ export async function xeroFinancialSyncPreview(body = {}, dependencies = {}) {
     env = process.env,
     fetchImpl = fetch,
     client = xeroContactSyncServiceClient(env),
+    getConnection = getFreshXeroConnection,
+    loadSafetyContext = loadFinancialSafetyContext,
+    loadSalesforce = loadSalesforceFinancialSnapshot,
+    loadPayments = loadSalesforcePayments,
+    loadXero = loadXeroFinancialSnapshot,
+    querySalesforce = sfCompositeQueries,
+    accountingFetch = xeroAccountingFetch,
+    paymentPreview = previewPayments,
   } = dependencies;
   const cutoff = XERO_FINANCIAL_CUTOFF;
   const postingMode = normalizePostingMode(body.postingMode);
   const actor = actorFields(accessContext);
-  const connection = await getFreshXeroConnection(client, { env, fetchImpl });
+  const connection = await getConnection(client, { env, fetchImpl });
   assertScopes(connection, ['accounting.invoices', 'accounting.contacts', 'accounting.settings.read'], 'Financial sync preview');
   if (body.refreshIfChangedRunId) {
-    const probe = await financialPreviewChanges(body.refreshIfChangedRunId, { client, connection, env, fetchImpl, postingMode });
+    const probe = await financialPreviewChanges(body.refreshIfChangedRunId, { client, connection, env, fetchImpl, postingMode, querySalesforce, accountingFetch });
     if (!probe.changed) return { unchanged: true, checkedAt: new Date().toISOString(), rateLimit: probe.rateLimit };
   }
   const snapshotStartedAt = new Date().toISOString();
   const rate = {};
   const onResponse = ({ headers }) => { Object.assign(rate, xeroFinancialRateSnapshot(headers, rate)); assertXeroFinancialDailyReserve(rate, env); };
-  const safetyContext = await loadFinancialSafetyContext();
+  const safetyContext = await loadSafetyContext();
   const [salesforce, stored, sourcePayments, paymentMappings] = await Promise.all([
-    loadSalesforceFinancialSnapshot(cutoff, sfCompositeQueries, safetyContext),
+    loadSalesforce(cutoff, querySalesforce, safetyContext),
     loadStoredFinancialControls(client),
-    body.includePayments === true ? loadSalesforcePayments(cutoff, safetyContext) : Promise.resolve([]),
+    body.includePayments === true ? loadPayments(cutoff, safetyContext) : Promise.resolve([]),
     body.includePayments === true ? allFinancialRows(client, 'xero_financial_payment_mappings') : Promise.resolve({ data: [] }),
   ]);
   if (paymentMappings.error) throw storageError(paymentMappings.error, 'xero_financial_payment_mappings');
   const evidenceIds = xeroPaymentEvidenceIds(sourcePayments, stored.documentMappings, paymentMappings.data);
-  const xero = await loadXeroFinancialSnapshot(connection, cutoff, {
+  const xero = await loadXero(connection, cutoff, {
     env, fetchImpl, onResponse, includePayments: body.includePayments === true, ...evidenceIds,
   });
   if (xero.paymentReadSnapshot) xero.paymentReadSnapshot.sourcePayments = sourcePayments;
   const [accountResponse, taxResponse, allMappings] = await Promise.all([
-    xeroAccountingFetch(connection, '/Accounts', { method: 'GET', env, fetchImpl, onResponse }),
-    xeroAccountingFetch(connection, '/TaxRates', { method: 'GET', env, fetchImpl, onResponse }),
+    accountingFetch(connection, '/Accounts', { method: 'GET', env, fetchImpl, onResponse }),
+    accountingFetch(connection, '/TaxRates', { method: 'GET', env, fetchImpl, onResponse }),
     allFinancialRows(client, 'xero_financial_product_mappings'),
   ]);
   const automaticMappingPolicy = await approvePetroleumMappings({
@@ -368,7 +376,7 @@ export async function xeroFinancialSyncPreview(body = {}, dependencies = {}) {
   });
   stored.productMappings = (await allFinancialRows(client, 'xero_financial_product_mappings', (query) => query.eq('enabled', true))).data;
   const classified = buildFinancialClassifications(salesforce, xero, stored, { postingMode });
-  const supplierFileDiscovery = await discoverSupplierFileCandidates(supplierFileDiscoveryParents(salesforce.suppliers, classified.rows), { querySalesforce: sfCompositeQueries });
+  const supplierFileDiscovery = await discoverSupplierFileCandidates(supplierFileDiscoveryParents(salesforce.suppliers, classified.rows), { querySalesforce });
   for (const row of classified.rows) {
     if (row.salesforceObject === 'Supplier_Invoice__c') row.sourceFileDiscovery = supplierFileDiscovery.get(row.salesforceId) || null;
   }
@@ -381,7 +389,7 @@ export async function xeroFinancialSyncPreview(body = {}, dependencies = {}) {
     id: runId,
     idempotency_key: `preview:${runId}`,
     mode: 'preview',
-    status: 'ready_for_review',
+    status: 'building',
     cutoff_date: cutoff,
     source_snapshot_at: snapshotStartedAt,
     xero_snapshot_at: snapshotStartedAt,
@@ -415,7 +423,7 @@ export async function xeroFinancialSyncPreview(body = {}, dependencies = {}) {
   }
   let paymentSnapshot = null;
   if (body.includePayments === true) {
-    paymentSnapshot = await previewPayments({ recordExactMatches: body.recordExactMatches === true }, { accessContext, env, fetchImpl, client, xeroReadSnapshot: xero.paymentReadSnapshot });
+    paymentSnapshot = await paymentPreview({ recordExactMatches: body.recordExactMatches === true }, { accessContext, env, fetchImpl, client, xeroReadSnapshot: xero.paymentReadSnapshot });
     runRow.control_totals = { ...runRow.control_totals, workflowSnapshot: { reconciliationVersion: XERO_RECONCILIATION_VERSION, payments: paymentSnapshot, products: salesforce.products, mappingProposals, automaticMappingPolicy, checkedAt: now, controlsFingerprint: hashJson(await loadStoredFinancialControls(client)), organisation: xero.organisation } };
     const { error } = await client.from('xero_financial_sync_runs').update({ control_totals: runRow.control_totals }).eq('id', runId);
     if (error) throw storageError(error, 'xero_financial_sync_runs');
@@ -429,8 +437,17 @@ export async function xeroFinancialSyncPreview(body = {}, dependencies = {}) {
     fingerprints: { source: runRow.source_fingerprint, xero: runRow.xero_fingerprint },
     rate,
   });
+  // Publish only after every dependent write succeeds. A failed build remains
+  // non-authorisable and cannot replace the last complete saved preview.
+  const { data: published, error: publishError } = await client.from('xero_financial_sync_runs')
+    .update({ status: 'ready_for_review', updated_at: new Date().toISOString() })
+    .eq('id', runId).eq('status', 'building').eq('revision', 1).select('*').maybeSingle();
+  if (publishError) throw storageError(publishError, 'xero_financial_sync_runs');
+  if (!published || published.id !== runId || published.status !== 'ready_for_review' || published.revision !== 1) {
+    throw financialError('The financial preview changed before it could be published. Run a fresh check.', 409, 'XERO_FINANCIAL_STALE_WRITE');
+  }
   return {
-    run: serializeRun(runRow),
+    run: serializeRun(published),
     postingMode,
     payments: paymentSnapshot,
     checkedAt: now,
@@ -453,6 +470,7 @@ export async function financialPreviewChanges(runId, { client, connection, env =
   if (!isUuid(runId)) throw financialError('A valid saved check is required.', 400, 'XERO_FINANCIAL_RUN_INVALID');
   const { data: run, error } = await client.from('xero_financial_sync_runs').select('*').eq('id', runId).maybeSingle();
   if (error) throw storageError(error, 'xero_financial_sync_runs');
+  if (run?.mode !== 'preview' || ['building', 'cancelled'].includes(run.status)) return { changed: true };
   if (postingMode !== undefined && postingMode !== reviewedPostingMode(run)) return { changed: true };
   const since = new Date(run?.source_snapshot_at);
   const snapshot = run?.control_totals?.workflowSnapshot;
@@ -517,7 +535,7 @@ async function loadDisputeReconciliationStates(client, stemIds) {
 }
 
 export async function xeroFinancialSyncLatest(_body = {}, { env = process.env, client = xeroContactSyncServiceClient(env) } = {}) {
-  const { data: runs, error } = await client.from('xero_financial_sync_runs').select('*').eq('mode', 'preview').not('control_totals->workflowSnapshot', 'is', null).order('created_at', { ascending: false }).limit(1);
+  const { data: runs, error } = await client.from('xero_financial_sync_runs').select('*').eq('mode', 'preview').not('status', 'in', '(building,cancelled)').not('control_totals->workflowSnapshot', 'is', null).order('created_at', { ascending: false }).limit(1);
   if (error) throw storageError(error, 'xero_financial_sync_runs');
   const run = runs?.[0];
   if (!run || run.control_totals?.workflowSnapshot?.reconciliationVersion !== XERO_RECONCILIATION_VERSION) return { preview: null, refreshRequired: Boolean(run) };
