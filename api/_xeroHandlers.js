@@ -25,6 +25,7 @@ import {
 } from './_xeroFinancialSync.js';
 import { xeroContactIdentitySave } from './_xeroContactIdentity.js';
 import { xeroContactRepairApply } from './_xeroContactRepair.js';
+import { xeroFinancialDocumentPreservationPreview, xeroFinancialDocumentPreservationRun } from './_xeroIssuedSupplierWorkflow.js';
 
 export const XERO_HANDLER_MODULE_ACCESS = Object.freeze(Object.fromEntries([
   'xeroPortalStatus',
@@ -50,6 +51,8 @@ export const XERO_HANDLER_MODULE_ACCESS = Object.freeze(Object.fromEntries([
   'xeroFinancialSyncApply',
   'xeroFinancialSyncRun',
   'xeroFinancialPaymentApply',
+  'xeroFinancialDocumentPreservationPreview',
+  'xeroFinancialDocumentPreservationRun',
 ].map((name) => [name, ['xero_portal']])));
 
 export function createXeroHandlers({ requireActiveUser, resolveRecoveredSystemErrorHandler }) {
@@ -94,5 +97,7 @@ export function createXeroHandlers({ requireActiveUser, resolveRecoveredSystemEr
     xeroFinancialSyncApply: wrap(xeroFinancialSyncApply),
     xeroFinancialSyncRun: wrap(xeroFinancialSyncRun),
     xeroFinancialPaymentApply: wrap(xeroFinancialPaymentApply),
+    xeroFinancialDocumentPreservationPreview: wrap(xeroFinancialDocumentPreservationPreview),
+    xeroFinancialDocumentPreservationRun: wrap(xeroFinancialDocumentPreservationRun),
   };
 }

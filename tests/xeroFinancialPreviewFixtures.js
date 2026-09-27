@@ -16,6 +16,10 @@ export function storage({ failAt, race } = {}) {
       not(key, operator, value) {
         if (operator === 'in') filters.push(row => !value.slice(1, -1).split(',').includes(row[key]));
         else if (key === 'control_totals->workflowSnapshot') filters.push(row => row.control_totals?.workflowSnapshot != null);
+        else if (key === 'control_totals' && operator === 'cs') {
+          const expected = JSON.parse(value);
+          filters.push(row => !Object.entries(expected).every(([field, entry]) => row.control_totals?.[field] === entry));
+        }
         else throw new Error(`Unexpected filter ${key}:${operator}`);
         return query;
       },
@@ -89,4 +93,3 @@ export function fixture(options = {}) {
   };
   return { ...store, dependencies, paymentSnapshot, salesforce, xero };
 }
-

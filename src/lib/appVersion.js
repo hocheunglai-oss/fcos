@@ -3,6 +3,7 @@ import { APP_VERSION } from './appVersionMeta.js';
 export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
+  { version: '2.0.250', releasedAt: '2026-09-28', title: 'Preserve verified bills and reconcile exact amounts', changes: ['Verify issued supplier evidence and save selected historical trustee bill links with an immutable audit trail.', 'Preserve existing Xero bill numbers, dates, lines, tax and payments.', 'Keep source line amounts exact to the cent and flag genuine line-to-invoice differences.'] },
   { version: '2.0.249', releasedAt: '2026-09-27', title: 'Complete and reliable Finance reviews', changes: ['Show financial reviews only after all required evidence is saved.', 'Reuse unchanged evidence-only reviews while preserving approvals, original records and audit history.'] },
   { version: '2.0.248', releasedAt: '2026-09-26', title: 'Verify evidence before updating authorised bills', changes: ['Require issued-source evidence for changes to authorised Xero documents, including in Create drafts mode.'] },
   { version: '2.0.247', releasedAt: '2026-09-26', title: 'Find attached supplier documents during Finance review', changes: ['Show directly attached PDF candidates for blocked supplier invoices with missing file links, including the Hong Kong lookup time and incomplete results.', 'Keep attachment discovery separate from invoice-content verification and financial approval.'] },

@@ -56,7 +56,7 @@ for (const race of [{ status: 'cancelled' }, { revision: 2 }]) {
   });
 }
 
-test('Latest ignores newer building/cancelled runs and preserves published execution history', async () => {
+test('Latest ignores newer building/cancelled and dedicated preservation runs', async () => {
   for (const status of ['ready_for_review', 'authorised', 'processing', 'completed', 'partial', 'failed']) {
     const f = fixture({ count: 1 });
     const result = await xeroFinancialSyncPreview({ recordExactMatches: true, includePayments: true }, f.dependencies);
@@ -66,6 +66,8 @@ test('Latest ignores newer building/cancelled runs and preserves published execu
     for (const hidden of ['building', 'cancelled']) f.tables.xero_financial_sync_runs.push({
       ...structuredClone(run), id: randomUUID(), status: hidden, created_at: '9999-01-01T00:00:00Z',
     });
+    f.tables.xero_financial_sync_runs.push({ ...structuredClone(run), id: randomUUID(), created_at: '9999-01-02T00:00:00Z',
+      control_totals: { ...run.control_totals, preservationPolicy: 'issued_supplier_preserve_v1' } });
     const latest = (await xeroFinancialSyncLatest({}, { client: f.client })).preview;
     assert.equal(latest.run.id, result.run.id);
     assert.equal(latest.run.status, status);

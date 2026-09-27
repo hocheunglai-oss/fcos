@@ -108,6 +108,8 @@ const HANDLER_BEHAVIOR = Object.freeze({
   xeroFinancialSyncApply: mutationPolicy({"cache":"none","externalAction":false,"capability":"xero_portal_manage"}),
   xeroFinancialSyncRun: mutationPolicy({"cache":"none","externalAction":true,"capability":"xero_portal_manage"}),
   xeroFinancialPaymentApply: mutationPolicy({"cache":"none","externalAction":true,"capability":"xero_portal_manage"}),
+  xeroFinancialDocumentPreservationPreview: mutationPolicy({"cache":"none","externalAction":true,"capability":"xero_portal_manage"}),
+  xeroFinancialDocumentPreservationRun: mutationPolicy({"cache":"none","externalAction":true,"capability":"xero_portal_manage"}),
   hedgeDeskEntity: mutationPolicy({"cache":"none","externalAction":false,"capability":null}),
   hedgeMarkets: mutationPolicy({"cache":"none","externalAction":false,"capability":null}),
   marketTraderWorkspace: readPolicy({"cache":"none","externalAction":false,"capability":null}),

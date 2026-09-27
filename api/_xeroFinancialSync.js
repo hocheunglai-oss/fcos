@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { fcosSalesforceEnvironment } from '../config/fcosConnections.js';
+import { accountingDecimalCents, accountingProductCents, accountingUnitNumber, accountingCentsNumber, accountingCentsText } from './_xeroAccountingLineCents.js';
 import { persistFinancialPreview, preparePreviewPersistence, previewEvidenceHash } from './_xeroPreviewPersistence.js';
 import { accountingPayload, documentConfirmationErrors, documentPostingBlockers, documentReadiness, financialSourceCurrency, loadFinancialSafetyContext, matchDocumentResponses, matchedXeroLines, normalizePostingMode, reviewedPostingMode, safetySelectFields, unownedXeroMetadata } from './_xeroDocumentSafety.js';
 import { approvePetroleumMappings, PETROLEUM_PRODUCT_QUERY } from './_xeroPetroleumMappings.js';
@@ -27,7 +28,7 @@ import {
 } from './_xeroContactSync.js';
 
 export const XERO_FINANCIAL_CUTOFF = '2026-01-01';
-export const XERO_RECONCILIATION_VERSION = 10;
+export const XERO_RECONCILIATION_VERSION = 11;
 const MAX_BATCH_SIZE = 25;
 const DEFAULT_CALLS_PER_MINUTE = 45;
 const DEFAULT_DAILY_LIMIT = 1000;
@@ -96,11 +97,33 @@ export function classifyXeroFinancialDocument(source, candidates, {
   const active = candidates.filter((candidate) => candidate.type === source.xeroType
     && ACTIVE_XERO_STATUSES.has(String(candidate.status || '').toUpperCase()));
   const sharedAccounts = source.sharedContactAccounts || [];
+  const issuedSaved = Object.hasOwn(storedMapping?.retained_differences || {}, 'issuedSupplierPreservation');
   const groupedSaved = hasGroupedPreservation(storedMapping);
   const evidence = { basis: null, sharedAccounts, candidates: [] };
   const blocked = (code, message, matches = []) => ({
     ...blockedClassification(code, message), matchEvidence: { ...evidence, candidates: matches.map(documentCandidateEvidence) },
   });
+  // Acceptance is sticky, including malformed proofs. It can never enter the
+  // ordinary create/update path after a source edit or settlement change.
+  if (issuedSaved) {
+    const proof = storedMapping.retained_differences.issuedSupplierPreservation;
+    const target = active.find((row) => String(row.id).toLowerCase() === String(storedMapping.xero_document_id).toLowerCase());
+    const withoutTimestamp = (row) => { const { updatedDateUTC: _updated, ...rest } = row || {}; return rest; };
+    const valid = storedMapping.protected_legacy === true && proof?.policyVersion === 'issued_supplier_preserve_v1'
+      && proof?.evidence?.policyVersion === proof.policyVersion
+      && proof.fingerprint === hashJson({ policyVersion: proof.policyVersion, accounting: proof.evidence.accounting })
+      && proof.evidenceFingerprint === hashJson(proof.evidence)
+      && proof.reviewedXero && target && target.contactId === source.contactId
+      && String(storedMapping.retained_differences.accountId).slice(0, 15) === String(source.accountId).slice(0, 15)
+      && source.sourceFingerprint === storedMapping.source_fingerprint
+      && source.financialFingerprint === storedMapping.financial_fingerprint
+      && hashJson(withoutTimestamp(target)) === hashJson(withoutTimestamp(proof.reviewedXero));
+    return valid ? { action: 'protected_legacy', status: 'protected', blockers: [], warnings: ['Previously reviewed bill link retained; Xero details are preserved.'],
+      xero: target, proposedPayload: null, differences: storedMapping.retained_differences.differences || [], acceptedLegacy: true, reviewRequired: false,
+      issuedSupplierPreservation: { policyVersion: proof.policyVersion, accepted: true, fingerprint: proof.fingerprint } }
+      : { ...blocked('issued_preservation_changed', 'This bill has an immutable preservation link. Current evidence differs or is incomplete; review it without updating Xero.', target ? [target] : []),
+        issuedSupplierPreservation: { policyVersion: 'issued_supplier_preserve_v1', accepted: true }, proposedPayload: null };
+  }
   const stored = storedMapping ? active.find((candidate) => groupedSaved
     ? String(candidate.id).toLowerCase() === String(storedMapping.xero_document_id).toLowerCase()
     : candidate.id === storedMapping.xero_document_id) : null;
@@ -193,7 +216,7 @@ function documentCandidateEvidence(row) {
   return { id: row.id, number: exactDocumentNumber(row), contactName: row.contactName, date: row.date, total: row.total, currency: row.currency };
 }
 
-function legacyReviewFingerprint(source, candidate) {
+export function legacyReviewFingerprint(source, candidate) {
   return hashJson({ source: source.sourceFingerprint, accountId: source.accountId, contactId: source.contactId,
     lines: source.lines, document: { id: candidate.id, type: candidate.type, contactId: candidate.contactId,
       number: exactDocumentNumber(candidate), currency: candidate.currency, total: candidate.total, date: candidate.date,
@@ -204,14 +227,12 @@ function legacyReviewFingerprint(source, candidate) {
 // Preserve duplicate lines, while ignoring ordering and descriptions for an explicitly reviewed legacy link.
 function equivalentAccountingLines(sourceLines = [], xeroLines = []) {
   const accounting = (lines, xero) => lines.map((line) => {
-    const quantity = Number(xero ? line.Quantity : line.quantity);
-    const unitAmount = Number(xero ? line.UnitAmount : line.unitAmount);
     const account = String(xero ? line.AccountCode || '' : line.accountCode || '');
     const tax = String((xero ? line.TaxType : line.taxType) || '');
-    const amount = quantity * unitAmount;
-    if (!account || !tax || !Number.isFinite(amount) || (xero && Math.abs(Number(line.TaxAmount || 0)) > 0.005)) return null;
-    if (xero && line.LineAmount != null && !sameMoney(line.LineAmount, amount)) return null;
-    return { account, tax, amount: roundMoney(amount) };
+    const cents = accountingProductCents(xero ? line.Quantity : line.quantity, xero ? line.UnitAmount : line.unitAmount);
+    if (!account || !tax || cents === null || (xero && Math.abs(Number(line.TaxAmount || 0)) > 0.005)) return null;
+    if (xero && line.LineAmount != null && accountingDecimalCents(line.LineAmount) !== cents) return null;
+    return { account, tax, amount: cents.toString() };
   });
   const left = accounting(sourceLines, false); const right = accounting(xeroLines, true);
   return left.length > 0 && left.every(Boolean) && right.every(Boolean)
@@ -224,7 +245,8 @@ function comparableLines(lines = [], xero = false) {
   return lines.map((line) => ({ description: String((xero ? line.Description : line.description) || '').trim().replace(/\s+/g, ' '),
     quantity: Number(xero ? line.Quantity : line.quantity), unitAmount: Number(xero ? line.UnitAmount : line.unitAmount),
     accountCode: String((xero ? line.AccountCode : line.accountCode) || ''), taxType: String((xero ? line.TaxType : line.taxType) || ''),
-    lineAmount: roundMoney(xero ? line.LineAmount ?? Number(line.Quantity) * Number(line.UnitAmount) : Number(line.quantity) * Number(line.unitAmount)),
+    lineAmount: accountingCentsNumber(xero && line.LineAmount != null ? accountingDecimalCents(line.LineAmount)
+      : accountingProductCents(xero ? line.Quantity : line.quantity, xero ? line.UnitAmount : line.unitAmount)),
     taxAmount: Number(xero ? line.TaxAmount || 0 : 0), discount: Number(xero ? line.DiscountRate || 0 : 0) })).sort(compareJson);
 }
 
@@ -244,6 +266,7 @@ export function isProtectedXeroDocument(document, organisation = {}) {
 }
 
 export function buildXeroAccountingPayload(source, xeroDocumentId = null, currentStatus = null, current = null) {
+  if (Object.hasOwn(source || {}, 'issuedSupplierPreservation')) throw financialError('Issued supplier preservation never creates or updates Xero accounting.', 409, 'XERO_ISSUED_PRESERVATION_LINK_ONLY');
   if (source.groupedPreservation) throw financialError('Grouped preservation never creates or updates Xero accounting.', 409, 'XERO_GROUPED_PRESERVATION_LINK_ONLY');
   return accountingPayload(source, xeroDocumentId, currentStatus, current);
 }
@@ -574,7 +597,7 @@ async function loadDisputeReconciliationStates(client, stemIds) {
 }
 
 export async function xeroFinancialSyncLatest(_body = {}, { env = process.env, client = xeroContactSyncServiceClient(env) } = {}) {
-  const { data: runs, error } = await client.from('xero_financial_sync_runs').select('*').eq('mode', 'preview').not('status', 'in', '(building,cancelled)').not('control_totals->workflowSnapshot', 'is', null).order('created_at', { ascending: false }).limit(1);
+  const { data: runs, error } = await client.from('xero_financial_sync_runs').select('*').eq('mode', 'preview').not('control_totals', 'cs', '{"preservationPolicy":"issued_supplier_preserve_v1"}').not('status', 'in', '(building,cancelled)').not('control_totals->workflowSnapshot', 'is', null).order('created_at', { ascending: false }).limit(1);
   if (error) throw storageError(error, 'xero_financial_sync_runs');
   const run = runs?.[0];
   if (!run || run.control_totals?.workflowSnapshot?.reconciliationVersion !== XERO_RECONCILIATION_VERSION) return { preview: null, refreshRequired: Boolean(run) };
@@ -637,6 +660,9 @@ export async function xeroFinancialSyncRun(body = {}, {
   accountingFetch = xeroAccountingFetch,
 } = {}) {
   requireExternalActionGate('xero_financial_sync', env);
+  const { data: executionRun, error: executionError } = await client.from('xero_financial_sync_runs').select('control_totals').eq('id', body.runId).maybeSingle();
+  if (executionError) throw storageError(executionError, 'xero_financial_sync_runs');
+  if (executionRun?.control_totals?.preservationPolicy) throw financialError('Use the dedicated preserve-only action for this review.', 409, 'XERO_ISSUED_PRESERVATION_LINK_ONLY');
   if (body.reviewed === true) {
     const approved = await xeroFinancialSyncApply(body, { accessContext, env, client });
     body = { ...body, revision: approved.run.revision };
@@ -1373,7 +1399,7 @@ export async function allFinancialRows(client, table, configure = (query) => que
   }
 }
 
-async function loadStoredFinancialControls(client) {
+export async function loadStoredFinancialControls(client) {
   const [productMappings, documentMappings, bankMappings] = await Promise.all([
     allFinancialRows(client, 'xero_financial_product_mappings', (query) => query.eq('enabled', true)),
     allFinancialRows(client, 'xero_financial_document_mappings'),
@@ -1426,7 +1452,7 @@ export function buildFinancialClassifications(salesforce, xero, stored, { postin
       source,
       xero.documents.filter((row) => row.type === source.xeroType),
       {
-        storedMapping: storedBySource.get(`Supplier_Invoice__c:${source.salesforceId}`) || stored.documentMappings.find((row) => hasGroupedPreservation(row)
+        storedMapping: storedBySource.get(`Supplier_Invoice__c:${source.salesforceId}`) || stored.documentMappings.find((row) => (hasGroupedPreservation(row) || Object.hasOwn(row.retained_differences || {}, 'issuedSupplierPreservation'))
           && row.salesforce_object === 'Supplier_Invoice__c' && String(row.salesforce_id).slice(0, 15) === String(source.salesforceId).slice(0, 15)),
         organisation: xero.organisation,
         groupedContext,
@@ -1438,7 +1464,7 @@ export function buildFinancialClassifications(salesforce, xero, stored, { postin
     (row) => ({ stored_link: 3, document_number: 2, stem_reference: 1, date_amount: 0 }[row.matchEvidence?.basis] || 0));
   blockRepeatedFinancialTargets(rows, (row) => row.documentNumber && `${row.xeroType}:${row.xeroType.startsWith('ACCPAY') ? row.contactId : ''}:${row.documentNumber}`,
     'More than one Salesforce document uses this invoice identity. Resolve the duplicate source documents before syncing.');
-  return { rows, summary: summarizeClassifications(rows), controlTotals: financialControlTotals(rows) };
+  return { rows, sources: allSources, summary: summarizeClassifications(rows), controlTotals: financialControlTotals(rows) };
 }
 
 export function blockRepeatedFinancialTargets(rows, targetKey, reason, priority = () => 0) {
@@ -1572,11 +1598,9 @@ function exactLegacyLineMatch(sourceLine, xeroLine, singleLineDocument) {
 }
 
 function sourceAccountingLineAmount(line) {
-  const explicit = Number(line?.lineAmount);
-  if (Number.isFinite(explicit)) return explicit;
-  const quantity = Number(line?.quantity);
-  const unitAmount = Number(line?.unitAmount);
-  return Number.isFinite(quantity) && Number.isFinite(unitAmount) ? quantity * unitAmount : Number.NaN;
+  const cents = line?.lineAmount != null ? accountingDecimalCents(line.lineAmount)
+    : accountingProductCents(line?.quantity, line?.unitAmount);
+  return accountingCentsNumber(cents) ?? Number.NaN;
 }
 
 function xeroLegacyLineAmount(line) {
@@ -1627,9 +1651,16 @@ function buildSalesforceDocument(record, direction, children, mappingByKey, cont
   const sourceLines = sortedChildren.map((child) => buildAccountingLine(child, direction, credit, mappingByKey));
   for (const sourceLine of sourceLines) blockers.push(...sourceLine.blockers);
   if (!sourceLines.length) blockers.push('No non-cancelled Salesforce product or extra-cost lines are linked to this document.');
-  const lineTotal = roundMoney(sourceLines.reduce((sum, row) => sum + row.lineAmount, 0));
-  if (Number.isFinite(signedTotal) && Math.abs(lineTotal - Math.abs(signedTotal)) > 0.01) {
-    blockers.push(`Detailed Salesforce lines total ${lineTotal.toFixed(2)}, not document amount ${Math.abs(signedTotal).toFixed(2)}.`);
+  // Reconcile the values that will actually be emitted, after four-decimal
+  // quantity/unit normalization. A one-cent difference is not equality.
+  const emittedCents = sourceLines.map((line) => accountingProductCents(line.quantity, line.unitAmount));
+  const rawHeaderCents = accountingDecimalCents(buyer ? record.Amount__c : record.Invoice_Amount__c);
+  const headerCents = rawHeaderCents === null ? null : rawHeaderCents < 0n ? -rawHeaderCents : rawHeaderCents;
+  if (headerCents === null || emittedCents.some((value) => value === null)) {
+    blockers.push('Salesforce accounting amounts exceed supported decimal precision or bounds.');
+  } else {
+    const lineCents = emittedCents.reduce((sum, value) => sum + value, 0n);
+    if (lineCents !== headerCents) blockers.push(`Detailed Salesforce lines total ${accountingCentsText(lineCents)}, not document amount ${accountingCentsText(headerCents)}.`);
   }
   const contact = contactMatches.length === 1 ? contactMatches[0] : null;
   const source = {
@@ -1683,37 +1714,44 @@ function buildAccountingLine(row, direction, credit, mappingByKey) {
   const productId = row.Product__c || row.Product2Id__c;
   const productName = row.Product__r?.Name || row.Product2Id__r?.Name || row.Name || 'Unidentified Salesforce line';
   const mapping = mappingByKey.get(`${direction}:${productId}`);
+  // Missing values may use the next source field; an explicit zero or malformed
+  // authoritative amount must not silently become quantity times price.
+  const firstPresent = (...values) => values.find((value) => value !== null && value !== undefined && value !== '') ?? null;
   const rawTotal = direction === 'buyer'
-    ? firstNumber(row.Total_Price__c, row.Line_Total__c)
-    : firstNumber(row.Total_Cost__c, row.Line_Total_Buy__c);
+    ? firstPresent(row.Total_Price__c, row.Line_Total__c)
+    : firstPresent(row.Total_Cost__c, row.Line_Total_Buy__c);
   const quantity = firstPositiveNumber(row.Quantity_Delivered_Per_BDN__c, row.Quantity__c) || 1;
   const rawUnit = direction === 'buyer'
-    ? firstNumber(row.Price_Per_Unit__c, row.Unit_Price__c, row.Lumpsum_Price__c)
-    : firstNumber(row.Cost_Per_Unit__c, row.Unit_Cost__c, row.Lumpsum_Cost__c);
-  const signedForDocument = Number(rawTotal || (Number(rawUnit || 0) * quantity));
-  const normalizedAmount = credit ? Math.abs(signedForDocument) : signedForDocument;
-  const lineAmount = Math.abs(normalizedAmount) <= 0.005 ? 0 : normalizedAmount;
+    ? firstPresent(row.Price_Per_Unit__c, row.Unit_Price__c, row.Lumpsum_Price__c)
+    : firstPresent(row.Cost_Per_Unit__c, row.Unit_Cost__c, row.Lumpsum_Cost__c);
+  const signedCents = rawTotal === null ? accountingProductCents(quantity, rawUnit) : accountingDecimalCents(rawTotal);
+  const lineCents = credit && signedCents !== null && signedCents < 0n ? -signedCents : signedCents;
+  const lineAmount = accountingCentsNumber(lineCents);
   const blockers = [];
   if (!productId) blockers.push(`${productName}: Salesforce Product is missing.`);
   if (!mapping) blockers.push(`${productName}: Finance-approved Xero account mapping is missing.`);
-  if (!Number.isFinite(lineAmount) || Math.abs(lineAmount) <= 0.005) blockers.push(`${productName}: line amount is missing or zero.`);
+  if (lineCents === null || lineCents === 0n) blockers.push(`${productName}: line amount is missing or zero.`);
+  if (lineCents === null) blockers.push(`${productName}: line amount exceeds supported decimal precision or bounds.`);
   const descriptionParts = [productName];
   const description = String(row.Description__c || '').trim();
   if (description && normalizeName(description) !== normalizeName(productName)) descriptionParts.push(description);
   if (row.Unit_of_Measure__c) descriptionParts.push(`${quantity} ${row.Unit_of_Measure__c}`);
-  const unitAmount = quantity && Number.isFinite(rawUnit) && sameMoney(Number(rawUnit) * quantity, signedForDocument)
-    ? roundUnit(credit ? Math.abs(Number(rawUnit)) : Number(rawUnit))
-    : roundUnit(lineAmount);
-  const xeroQuantity = quantity && Number.isFinite(rawUnit) && sameMoney(Number(rawUnit) * quantity, signedForDocument) ? quantity : 1;
+  const normalizedQuantity = accountingUnitNumber(quantity);
+  const signedUnit = accountingUnitNumber(rawUnit);
+  const normalizedUnit = credit && signedUnit !== null ? Math.abs(signedUnit) : signedUnit;
+  const preserveUnits = lineCents !== null && normalizedQuantity !== null && normalizedQuantity > 0 && normalizedUnit !== null
+    && accountingProductCents(normalizedQuantity, normalizedUnit) === lineCents;
+  const unitAmount = preserveUnits ? normalizedUnit : lineAmount ?? 0;
+  const xeroQuantity = preserveUnits ? normalizedQuantity : 1;
   return {
     sourceId: row.Id,
     sourceType: lineItem ? 'STEM_Line_Item__c' : 'STEM_Extra_Cost__c',
     productId,
     productName,
     description: descriptionParts.join(' · ').slice(0, 4000),
-    quantity: roundUnit(xeroQuantity),
+    quantity: xeroQuantity,
     unitAmount,
-    lineAmount: roundMoney(lineAmount),
+    lineAmount: lineAmount ?? 0,
     accountCode: mapping?.xero_account_code || '',
     taxType: mapping?.xero_tax_type || 'NONE',
     blockers,
@@ -1865,6 +1903,7 @@ function compareDocument(source, candidate) {
 }
 
 async function finalizeLinkedItem(client, row, context = {}) {
+  if (Object.hasOwn(row.source_payload || {}, 'issuedSupplierPreservation')) throw financialError('Issued supplier preservation requires its dedicated transaction.', 409, 'XERO_ISSUED_PRESERVATION_LINK_ONLY');
   if (row.source_payload?.groupedPreservation) {
     const { current, run, tenantId, actor } = context;
     const review = current?.groupedPreservation;
@@ -2177,15 +2216,6 @@ function sameMoney(left, right) {
 
 function roundMoney(value) {
   return Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
-}
-
-function roundUnit(value) {
-  return Math.round((Number(value || 0) + Number.EPSILON) * 10000) / 10000;
-}
-
-function firstNumber(...values) {
-  for (const value of values) if (value != null && value !== '' && Number.isFinite(Number(value))) return Number(value);
-  return null;
 }
 
 function firstPositiveNumber(...values) {
