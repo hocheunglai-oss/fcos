@@ -55,7 +55,7 @@ jobs:
         env:
           FCOS_PREVIEW_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
       - name: Verify concurrent issued supplier preservation
-        run: node --test tests/xeroIssuedSupplierPreservationDatabase.test.js
+        run: node --test tests/xeroIssuedSupplierPreservationDatabase.test.js tests/xeroIssuedSupplierRoundingDatabase.test.js
         env:
           FCOS_ISSUED_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
       - name: Verify concurrent issued petroleum preservation

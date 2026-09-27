@@ -118,8 +118,14 @@ export async function xeroFinancialDocumentPreservationPreview(body = {}, depend
   const rate = {};
   const current = await currentEvidence(records, { ...dependencies, client }, rate, policy);
   const now = new Date().toISOString(); const id = randomUUID();
-  const items = current.rows.map(({ reviewed, request, reviewFingerprint }, index) => {
+  const items = current.rows.map(({ reviewed, proof, request, reviewFingerprint }, index) => {
     const item = toSyncItemRow(reviewed, id, index, now);
+    // Normal preview serialization deliberately drops groupedAccounting. Retain
+    // only the original raw line needed by the new trustee rounding SQL guard.
+    if (policy === ISSUED_SUPPLIER_POLICY && proof?.accounting?.source?.lines?.[0]?.centRounding) {
+      const { id, quantity, unitAmount, lineAmount } = reviewed.groupedAccounting.lines[0];
+      item.source_payload.issuedSupplierRoundingSource = { id, quantity, unitAmount, lineAmount };
+    }
     item.source_payload.issuedSupplierRequest = request;
     item.source_payload.issuedSupplierReviewFingerprint = reviewFingerprint;
     return item;

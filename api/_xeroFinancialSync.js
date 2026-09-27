@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { fcosSalesforceEnvironment } from '../config/fcosConnections.js';
 import { ISSUED_PETROLEUM_POLICY, ISSUED_PRESERVATION_POLICIES, isIssuedPreservationPolicy } from '../config/xeroIssuedPreservationPolicies.js';
+import { currentIssuedSupplierRoundingMatches, ISSUED_SUPPLIER_PRESERVATION_POLICY } from './_xeroIssuedSupplierPreservation.js';
 import { currentIssuedPetroleumMatches } from './_xeroIssuedPetroleumSticky.js';
 import { accountingDecimalCents, accountingProductCents, accountingUnitNumber, accountingCentsNumber, accountingCentsText } from './_xeroAccountingLineCents.js';
 import { persistFinancialPreview, preparePreviewPersistence, previewEvidenceHash } from './_xeroPreviewPersistence.js';
@@ -121,6 +122,7 @@ export function classifyXeroFinancialDocument(source, candidates, {
       && source.sourceFingerprint === storedMapping.source_fingerprint
       && source.financialFingerprint === storedMapping.financial_fingerprint
       && (proof.policyVersion !== ISSUED_PETROLEUM_POLICY || currentIssuedPetroleumMatches(source, groupedContext, proof))
+      && (proof.policyVersion !== ISSUED_SUPPLIER_PRESERVATION_POLICY || currentIssuedSupplierRoundingMatches(source, proof))
       && hashJson(withoutTimestamp(target)) === hashJson(withoutTimestamp(proof.reviewedXero));
     return valid ? { action: 'protected_legacy', status: 'protected', blockers: [], warnings: ['Previously reviewed bill link retained; Xero details are preserved.'],
       xero: target, proposedPayload: null, differences: storedMapping.retained_differences.differences || [], acceptedLegacy: true, reviewRequired: false,

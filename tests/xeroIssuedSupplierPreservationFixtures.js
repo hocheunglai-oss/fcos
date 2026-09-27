@@ -74,3 +74,11 @@ export function issuedSupplierWorkflowFixture() {
   return { ...f, supplier, child, packet: { records: [request] },
     files: new Map([[ids.source, f.fileEvidence]]), vessels: new Map([[ids.source, { stemId: ids.stem, vessel: 'SEA STELLAR' }]]) };
 }
+
+// Keep the legacy cent-only fixture stable; this is the actual source precision
+// observed for M2601010, not a pre-rounded reconstruction of that provider row.
+export function issuedSupplierRoundedWorkflowFixture() {
+  const f = issuedSupplierWorkflowFixture();
+  f.child.Line_Total_Buy__c = 124.197;
+  return f;
+}

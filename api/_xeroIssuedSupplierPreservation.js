@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { accountingDecimalCents, accountingProductCents } from './_xeroAccountingLineCents.js';
 import { fcosSalesforceEnvironment } from '../config/fcosConnections.js';
 
 export const ISSUED_SUPPLIER_PRESERVATION_POLICY = 'issued_supplier_preserve_v1';
@@ -37,6 +38,32 @@ function decimal(value) {
 export function issuedSupplierCents(value) {
   const parsed = decimal(value);
   return parsed && parsed.scale <= 2 ? parsed.value * 10n ** BigInt(2 - parsed.scale) : null;
+}
+
+// Only the raw source calculation may have sub-cent precision. Headers, paper,
+// settlement and Xero lines always use the strict issuedSupplierCents parser.
+export function issuedSupplierSourceRounding(line) {
+  const amount = decimal(line?.lineAmount); const quantity = decimal(line?.quantity); const unit = decimal(line?.unitAmount);
+  if (!amount || amount.scale <= 2 || amount.value <= 0n || !quantity || quantity.value <= 0n || !unit || unit.value <= 0n
+    || amount.value * 10n ** BigInt(quantity.scale + unit.scale) !== quantity.value * unit.value * 10n ** BigInt(amount.scale)) return null;
+  const cents = accountingDecimalCents(amount.text);
+  if (cents === null || cents <= 0n || cents !== accountingProductCents(quantity.text, unit.text)) return null;
+  return { policy: 'trustee_source_decimal_half_up_v1', rawLineAmount: amount.text, roundedLineAmountCents: cents.toString() };
+}
+
+// Legacy cent-only receipts remain unchanged. A new receipt must retain exactly
+// the derived marker; even a rehashed missing/malformed marker cannot replay.
+export function currentIssuedSupplierRoundingMatches(source, proof) {
+  const raw = source?.groupedAccounting?.lines;
+  const accepted = proof?.evidence?.accounting?.source?.lines;
+  if (!Array.isArray(raw) || raw.length !== 1 || !plain(raw[0])
+    || !Array.isArray(accepted) || accepted.length !== 1 || !plain(accepted[0])) return false;
+  const expected = issuedSupplierSourceRounding(raw[0]); const line = accepted[0];
+  if (!expected) return issuedSupplierCents(raw[0]?.lineAmount) !== null && !Object.hasOwn(line, 'centRounding');
+  return plain(line.centRounding) && issuedSupplierCanonical(line.centRounding) === issuedSupplierCanonical(expected)
+    && issuedSupplierSfId(raw[0].id) === line.id && decimal(raw[0].quantity)?.text === line.quantity
+    && decimal(raw[0].unitAmount)?.text === line.unitAmount && line.lineAmountCents === expected.roundedLineAmountCents
+    && proof.evidence.accounting.source.totalCents === expected.roundedLineAmountCents;
 }
 
 export const issuedSupplierVessel = (number) => typeof number === 'string' ? words(/^\d+PT-(.+)$/.exec(number)?.[1]) : '';
@@ -156,7 +183,10 @@ export function evaluateIssuedSupplierPreservation(input = {}) {
   const paperAmounts = paperLines.map((line, index) => { string(line?.description, `file.review.lines[${index}].description`); return cents(line?.amount, `file.review.lines[${index}].amount`, true); });
   if (paperAmounts.every((value) => value !== null)) equal(paperAmounts.reduce((sum, value) => sum + value, 0n).toString(), sourceHeader.totalCents, 'file.review.lines', 'PAPER_ARITHMETIC_MISMATCH');
   const normalizedLine = (row, path, fromSource) => {
-    const line = plain(row) ? row : {}; const quantity = decimal(line.quantity); const unit = decimal(line.unitAmount); const amount = cents(line.lineAmount, `${path}.lineAmount`, true);
+    const line = plain(row) ? row : {}; const quantity = decimal(line.quantity); const unit = decimal(line.unitAmount);
+    const rounding = fromSource ? issuedSupplierSourceRounding(line) : null;
+    const amount = rounding ? BigInt(rounding.roundedLineAmountCents) : cents(line.lineAmount, `${path}.lineAmount`, true);
+    require(!Object.hasOwn(line, 'centRounding'), 'ROUNDING_EVIDENCE_INVALID', path, 'Rounding evidence is derived only from original source values.');
     require(quantity?.value > 0n && unit?.value > 0n, 'LINE_UNITS_INVALID', path, 'Explicit positive quantities and unit amounts are required.');
     if (quantity && unit && amount !== null) {
       const denominator = 10n ** BigInt(quantity.scale + unit.scale);
@@ -167,7 +197,7 @@ export function evaluateIssuedSupplierPreservation(input = {}) {
     require(Array.isArray(line.tracking) && line.tracking.length === 0 && line.itemCode === '', 'LINE_UNSUPPORTED', path, 'Tracking and inventory items are outside this policy.');
     if (fromSource) { equal(line.currency, 'USD', `${path}.currency`); equal(line.productName, 'TRUSTEE SERVICE', `${path}.productName`, 'PRODUCT_UNSUPPORTED'); }
     return { id: id(line.id, `${path}.id`, fromSource), description: string(line.description, `${path}.description`, true),
-      quantity: quantity?.text, unitAmount: unit?.text, lineAmountCents: amount?.toString(), accountCode: '51106', taxType: 'NONE',
+      quantity: quantity?.text, unitAmount: unit?.text, lineAmountCents: amount?.toString(), ...(rounding ? { centRounding: rounding } : {}), accountCode: '51106', taxType: 'NONE',
       taxAmount: '0', discountRate: '0', discountAmount: '0', tracking: [], itemCode: '',
       ...(fromSource ? { productId: id(line.productId, `${path}.productId`, true), currency: 'USD' } : {}) };
   };

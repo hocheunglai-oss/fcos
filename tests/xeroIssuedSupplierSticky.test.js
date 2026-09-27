@@ -3,15 +3,16 @@ import test from 'node:test';
 import { buildFinancialClassifications, buildXeroAccountingPayload, xeroFinancialSyncRun } from '../api/_xeroFinancialSync.js';
 import { buildGroupedPreservationContext } from '../api/_xeroGroupedPreservationAdapter.js';
 import { evaluateIssuedSupplierFinancialDocument } from '../api/_xeroIssuedSupplierPreservationAdapter.js';
-import { issuedSupplierWorkflowFixture } from './xeroIssuedSupplierPreservationFixtures.js';
+import { issuedSupplierHash, issuedSupplierAccountingFingerprint } from '../api/_xeroIssuedSupplierPreservation.js';
+import { issuedSupplierWorkflowFixture, issuedSupplierRoundedWorkflowFixture } from './xeroIssuedSupplierPreservationFixtures.js';
 import { issuedPetroleumFixture } from './xeroIssuedPetroleumPreservationFixtures.js';
 import { evaluatePetroleumFinancialDocument } from '../api/_xeroIssuedPetroleumPreservationAdapter.js';
 
 const uuid = (number) => `00000000-0000-4000-8000-${String(number).padStart(12, '0')}`;
 const clone = (value) => structuredClone(value);
 
-function acceptedFixture(petroleum = false) {
-  const f = petroleum ? issuedPetroleumFixture() : issuedSupplierWorkflowFixture();
+function acceptedFixture(petroleum = false, rounded = false) {
+  const f = petroleum ? issuedPetroleumFixture() : rounded ? issuedSupplierRoundedWorkflowFixture() : issuedSupplierWorkflowFixture();
   const unlinked = buildFinancialClassifications(f.salesforce, f.xero, f.stored, { postingMode: 'draft' });
   const source = unlinked.sources[0];
   if (!petroleum) source.issuedSupplierVessel = f.vessels.get(source.salesforceId).vessel;
@@ -156,5 +157,25 @@ test('generic financial runner rejects a preservation run before authorisation o
       accountingFetch: forbidden('accounting_write'), fetchImpl: forbidden('fetch'),
     }), { code: 'XERO_ISSUED_PRESERVATION_LINK_ONLY' });
     assert.deepEqual(events, ['run_lookup']);
+  });
+});
+
+
+test('rounded trustee acceptance remains preserve-only and rejects rehashed or same-cent drift', async (t) => {
+  const original = acceptedFixture(false, true);
+  assert.equal(original.classify().status, 'protected'); assertNoAccountingFallback(original.classify());
+  for (const [name, change] of [
+    ['raw source changes within same cent', (f) => { f.child.Line_Total_Buy__c = 124.196; }],
+    ['strip marker', (_f, proof) => { delete proof.evidence.accounting.source.lines[0].centRounding; }],
+    ['unknown marker', (_f, proof) => { proof.evidence.accounting.source.lines[0].centRounding.policy = 'unknown'; }],
+    ['null proof line', (_f, proof) => { proof.evidence.accounting.source.lines[0] = null; }],
+    ['null marker', (_f, proof) => { proof.evidence.accounting.source.lines[0].centRounding = null; }],
+    ['changed raw proof', (_f, proof) => { proof.evidence.accounting.source.lines[0].centRounding.rawLineAmount = '124.196'; }],
+    ['extra marker fields', (_f, proof) => { proof.evidence.accounting.source.lines[0].centRounding.extra = true; }],
+    ['changed quantity', (_f, proof) => { proof.evidence.accounting.source.lines[0].quantity = '248.392'; }],
+  ]) await t.test(name, () => {
+    const f = acceptedFixture(false, true); const proof = f.mapping.retained_differences.issuedSupplierPreservation;
+    change(f, proof); proof.fingerprint = issuedSupplierAccountingFingerprint(proof.evidence); proof.evidenceFingerprint = issuedSupplierHash(proof.evidence);
+    const result = f.classify(); assert.equal(result.status, 'blocked'); assertNoAccountingFallback(result);
   });
 });

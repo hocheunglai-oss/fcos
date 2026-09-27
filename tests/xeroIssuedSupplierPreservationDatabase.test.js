@@ -62,7 +62,10 @@ async function fixture(t, { migrate = true, database = null, evaluator = evaluat
   for (const file of ['20260827145608_xero_contact_sync.sql', '20260829080726_xero_financial_sync.sql', '20260923213339_xero_payment_reference_link.sql', '20260923222821_xero_grouped_preservation_link.sql']) {
     await db.exec((await readFile(new URL(`../supabase/migrations/${file}`, import.meta.url), 'utf8')).replace(/^create extension if not exists pgcrypto;$/m, ''));
   }
-  if (migrate) await db.exec(await readFile(migration, 'utf8'));
+  if (migrate) {
+    await db.exec(await readFile(migration, 'utf8'));
+    await db.exec(await readFile(new URL('../supabase/migrations/20260927223013_xero_trustee_source_cent_rounding.sql', import.meta.url), 'utf8'));
+  }
   const tenant = randomUUID(); const actor = { id: randomUUID(), email: ' FINANCE@example.test ' };
   const ids = { source: 'a01000000000001', account: '001000000000001', product: '01t000000000001', contact: randomUUID(), target: randomUUID(), productMapping: randomUUID() };
   const line = { description: 'Fuel', quantity: '1', unitAmount: '10.01', lineAmount: '10.01', accountCode: '51106',
@@ -537,4 +540,16 @@ test('PostgreSQL overlapping transactions serialize exact retries, ownership rac
     await f.waitForLock(f.primary); await second.query('commit'); assert.equal((await settled).error?.code, '40001');
     const saved = await f.snapshot(); assert.equal(saved.mappings, null); assert.equal(saved.audits, null); assert.equal(saved.items[0].status, 'selected');
   });
+});
+
+
+test('additive cent-rounding upgrade preserves already accepted exact-cent receipt and immutable replay', async (t) => {
+  const f = await fixture(t);
+  await f.db.exec(await readFile(migration, 'utf8'));
+  await f.link(); const before = await f.snapshot();
+  const upgrade = await readFile(new URL('../supabase/migrations/20260927223013_xero_trustee_source_cent_rounding.sql', import.meta.url), 'utf8');
+  await f.db.exec(upgrade); await f.db.exec(upgrade);
+  assert.deepEqual(await f.snapshot(), before);
+  assert.equal((await f.link()).alreadyLinked, true);
+  assert.deepEqual(await f.snapshot(), before);
 });
