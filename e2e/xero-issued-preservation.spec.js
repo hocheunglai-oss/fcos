@@ -3,13 +3,14 @@ import { expect, test } from '@playwright/test';
 const fixture = '/e2e/fixtures/xero-issued-preservation.html';
 const calls = (page) => page.evaluate(() => window.issuedPreservationFixture.requests);
 
-async function openPreview(page, scenario = '') {
+async function openPreview(page, scenario = '', paste = false) {
   await page.goto(`${fixture}${scenario ? `?scenario=${scenario}` : ''}`);
   await page.getByRole('button', { name: 'Preserve verified bills', exact: true }).click();
   const dialog = page.getByRole('dialog');
   await expect(dialog.getByRole('heading', { name: 'Preserve verified bills', exact: true })).toBeVisible();
   const packet = await page.evaluate(() => window.issuedPreservationFixture.packet);
-  await dialog.getByLabel('JSON evidence packet (1–25 records, maximum 200 KB)', { exact: true }).setInputFiles({
+  if (paste) await dialog.getByLabel('Or paste JSON evidence', { exact: true }).fill(JSON.stringify(packet));
+  else await dialog.getByLabel('JSON evidence packet (1–25 records, maximum 200 KB)', { exact: true }).setInputFiles({
     name: 'issued-evidence.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(packet)),
   });
   await dialog.getByRole('button', { name: 'Verify records', exact: true }).click();
@@ -61,7 +62,7 @@ test.describe('offline issued supplier preservation', () => {
   });
 
   test('an unconfirmed response retains the attempt and selection while disabling retries', async ({ page }) => {
-    const dialog = await openPreview(page, 'failure');
+    const dialog = await openPreview(page, 'failure', true);
     const selected = dialog.getByRole('row').filter({ hasText: 'SUP-ONE' });
     await selected.getByRole('checkbox').check();
     const action = dialog.getByRole('button', { name: 'Link and preserve Xero details', exact: true });
@@ -74,6 +75,14 @@ test.describe('offline issued supplier preservation', () => {
     await expect(dialog.getByRole('button', { name: 'Verify records', exact: true })).toBeDisabled();
     expect((await calls(page)).filter((call) => call.name === 'xeroFinancialDocumentPreservationRun')).toHaveLength(1);
     expect((await calls(page)).filter((call) => ['xeroFinancialSyncRun', 'xeroFinancialPaymentApply'].includes(call.name))).toHaveLength(0);
+    const packet = await page.evaluate(() => window.issuedPreservationFixture.packet);
+    packet.records[0].review.reviewer = 'New reviewed evidence';
+    await dialog.getByLabel('Or paste JSON evidence', { exact: true }).fill(JSON.stringify(packet));
+    await expect(selected).toHaveCount(0);
+    await expect(dialog.getByRole('status')).toHaveCount(0);
+    await expect(dialog.getByRole('alert')).toHaveCount(0);
+    await expect(dialog.getByRole('button', { name: 'Verify records', exact: true })).toBeEnabled();
+    expect((await calls(page)).filter((call) => call.name === 'xeroFinancialDocumentPreservationRun')).toHaveLength(1);
   });
 
   test('petroleum packets preserve their policy and literal missing paper fields through the dedicated preview', async ({ page }) => {
@@ -102,5 +111,60 @@ test.describe('offline issued supplier preservation', () => {
       expect(bounds.x + bounds.width).toBeLessThanOrEqual(viewport.width + 1);
       await expect(dialog.getByRole('button', { name: 'Link and preserve Xero details', exact: true })).toBeVisible();
     }
+  });
+
+  test('pasted trustee and petroleum evidence use the same preview and edits clear old selection', async ({ page }) => {
+    for (const scenario of ['', 'petroleum']) {
+      const dialog = await openPreview(page, scenario, true);
+      const packet = await page.evaluate(() => window.issuedPreservationFixture.packet);
+      expect((await calls(page)).filter((call) => call.name === 'xeroFinancialDocumentPreservationPreview')).toEqual([
+        { name: 'xeroFinancialDocumentPreservationPreview', body: { packet } },
+      ]);
+      const row = dialog.getByRole('row').filter({ hasText: 'SUP-ONE' });
+      await expect(row.getByRole('checkbox')).not.toBeChecked();
+      await row.getByRole('checkbox').check();
+      const action = dialog.getByRole('button', { name: 'Link and preserve Xero details', exact: true });
+      await expect(action).toBeEnabled();
+      packet.records[0].review.reviewer = 'Edited offline review';
+      await dialog.getByLabel('Or paste JSON evidence', { exact: true }).fill(JSON.stringify(packet));
+      await expect(row).toHaveCount(0);
+      await expect(action).toBeDisabled();
+      expect((await calls(page)).filter((call) => call.name === 'xeroFinancialDocumentPreservationPreview')).toHaveLength(1);
+      expect((await calls(page)).filter((call) => call.name.endsWith('Run'))).toHaveLength(0);
+      await dialog.getByLabel('JSON evidence packet (1–25 records, maximum 200 KB)', { exact: true }).setInputFiles({
+        name: 'replacement.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(packet)),
+      });
+      await expect(dialog.getByLabel('Or paste JSON evidence', { exact: true })).toHaveValue('');
+      await expect(dialog.getByRole('button', { name: 'Verify records', exact: true })).toBeEnabled();
+      expect((await calls(page)).filter((call) => call.name === 'xeroFinancialDocumentPreservationPreview')).toHaveLength(1);
+    }
+  });
+
+  test('invalid or oversized pasted evidence never verifies and active requests lock both inputs', async ({ page }) => {
+    await page.goto(`${fixture}?scenario=pending`);
+    await page.getByRole('button', { name: 'Preserve verified bills', exact: true }).click();
+    const dialog = page.getByRole('dialog');
+    const paste = dialog.getByLabel('Or paste JSON evidence', { exact: true });
+    const verify = dialog.getByRole('button', { name: 'Verify records', exact: true });
+    const packet = await page.evaluate(() => window.issuedPreservationFixture.packet);
+    for (const text of ['{', JSON.stringify({ ...packet, accessToken: 'forbidden' }),
+      JSON.stringify({ records: [{ ...packet.records[0], review: { ...packet.records[0].review, reviewer: '紙'.repeat(70000) } }] })]) {
+      await paste.fill(text);
+      await expect(dialog.getByRole('alert')).toBeVisible();
+      await expect(verify).toBeDisabled();
+      expect((await calls(page)).filter((call) => call.name === 'xeroFinancialDocumentPreservationPreview')).toHaveLength(0);
+    }
+    await paste.fill(JSON.stringify(packet));
+    await verify.click();
+    await expect(paste).toBeDisabled();
+    await expect(dialog.getByLabel('JSON evidence packet (1–25 records, maximum 200 KB)', { exact: true })).toBeDisabled();
+    await expect(dialog.getByRole('button', { name: 'Verifying records…' })).toBeDisabled();
+    await expect(paste).toHaveValue(JSON.stringify(packet));
+    await page.evaluate(() => window.issuedPreservationFixture.finishPreview());
+    await expect(dialog.getByRole('row').filter({ hasText: 'SUP-ONE' })).toBeVisible();
+    await expect(paste).toHaveValue(JSON.stringify(packet));
+    expect((await calls(page)).filter((call) => call.name === 'xeroFinancialDocumentPreservationPreview')).toEqual([
+      { name: 'xeroFinancialDocumentPreservationPreview', body: { packet } },
+    ]);
   });
 });

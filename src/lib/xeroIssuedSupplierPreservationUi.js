@@ -2,6 +2,13 @@ import { ISSUED_SUPPLIER_POLICY, ISSUED_PETROLEUM_POLICY, isIssuedPreservationPo
 
 export const PRESERVATION_PACKET_MAX_BYTES = 200000;
 
+export function parsePreservationPacket(text) {
+  if (new TextEncoder().encode(text).length > PRESERVATION_PACKET_MAX_BYTES) throw new Error('Evidence exceeds 200 KB.');
+  const packet = JSON.parse(text);
+  if (!validatePreservationPacket(packet)) throw new Error('Unsupported evidence fields or records.');
+  return packet;
+}
+
 const RECORD_KEYS = ['sourceId', 'xeroDocumentId', 'documentId', 'versionId', 'sha256', 'review'];
 const REVIEW_KEYS = ['reviewer', 'reviewedAt', 'reviewRecordHash', 'sourceNumber', 'printedNumber', 'sellerName', 'buyerName', 'invoiceDate', 'dueDate', 'currency', 'total', 'totalTax', 'vessel', 'lines'];
 const PETROLEUM_REVIEW_KEYS = [...REVIEW_KEYS, 'numberRule', 'deliveryDate', 'taxEvidence', 'counterparties'];

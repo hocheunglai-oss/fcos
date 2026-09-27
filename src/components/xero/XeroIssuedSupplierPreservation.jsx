@@ -4,9 +4,10 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { PRESERVATION_PACKET_MAX_BYTES, preservationOutcomes, preservationRowSelectable, preservationSelection, validatePreservationPacket } from '@/lib/xeroIssuedSupplierPreservationUi';
+import { PRESERVATION_PACKET_MAX_BYTES, parsePreservationPacket, preservationOutcomes, preservationRowSelectable, preservationSelection } from '@/lib/xeroIssuedSupplierPreservationUi';
 
 const OPTIONS = { force: true, cache: false, invalidateCache: true };
+const INPUT_ERROR = 'Use valid JSON evidence: 1–25 records, at most 200 KB; printed facts and identifiers only, no PDFs or credentials.';
 
 export default function XeroIssuedSupplierPreservation({ onClose, enabled, onAllowance }) {
   const [packet, setPacket] = useState(null);
@@ -19,26 +20,40 @@ export default function XeroIssuedSupplierPreservation({ onClose, enabled, onAll
   const [error, setError] = useState('');
   const generation = useRef(0);
   const requestBusy = useRef(false);
+  const pastedInput = useRef(null);
   useEffect(() => () => { generation.current += 1; }, []);
   const selectedIds = preservationSelection(preview, selected);
 
-  async function choosePacket(event) {
-    const file = event.target.files?.[0];
+  function resetEvidence(name) {
     const current = ++generation.current;
-    setPacket(null); setPreview(null); setSelected(new Set()); setOutcomes(null); setAttempted(false); setError(''); setBusy('');
-    setFilename(file?.name || '');
+    setPacket(null); setPreview(null); setSelected(new Set()); setOutcomes(null); setAttempted(false); setError('');
+    setFilename(name);
+    return current;
+  }
+
+  function pastePacket(event) {
+    if (busy || requestBusy.current) return;
+    resetEvidence('Pasted evidence');
+    const text = event.target.value;
+    if (!text.trim()) return;
+    try { setPacket(parsePreservationPacket(text)); }
+    catch { setError(INPUT_ERROR); }
+  }
+
+  async function choosePacket(event) {
+    if (busy || requestBusy.current) return;
+    const file = event.target.files?.[0];
+    const current = resetEvidence(file?.name || '');
+    if (pastedInput.current) pastedInput.current.value = '';
     if (!file) return;
     setBusy('reading');
     try {
-      if (file.size > PRESERVATION_PACKET_MAX_BYTES) throw new Error('Choose a JSON evidence packet of at most 200 KB.');
-      const data = JSON.parse(await file.text());
+      if (file.size > PRESERVATION_PACKET_MAX_BYTES) throw new Error(INPUT_ERROR);
+      const data = parsePreservationPacket(await file.text());
       if (current !== generation.current) return;
-      if (!validatePreservationPacket(data)) {
-        throw new Error('The evidence packet contains unsupported fields or invalid records.');
-      }
       setPacket(data);
     } catch {
-      if (current === generation.current) setError('Choose a valid JSON evidence packet with 1–25 records, at most 200 KB. Include printed facts and document identifiers only; exclude PDFs and credentials.');
+      if (current === generation.current) setError(INPUT_ERROR);
     } finally { if (current === generation.current) setBusy(''); }
   }
 
@@ -53,7 +68,7 @@ export default function XeroIssuedSupplierPreservation({ onClose, enabled, onAll
       onAllowance?.(result.data);
       if (result.data?.error) throw new Error(result.data.error);
       if (!result.data?.run?.id || result.data.run.revision == null || !Array.isArray(result.data.rows)) {
-        throw new Error('The verification response was incomplete. No records are selected.');
+        throw new Error('Incomplete verification response. No records selected.');
       }
       setPreview(result.data);
       if (result.data.run.status === 'authorised') setSelected(new Set(result.data.rows.filter((row) => row.selected).map((row) => row.id)));
@@ -76,7 +91,7 @@ export default function XeroIssuedSupplierPreservation({ onClose, enabled, onAll
       onAllowance?.(result.data);
       if (result.data?.error) throw new Error(result.data.error);
       setOutcomes(preservationOutcomes(ids, result.data?.outcomes));
-      if (result.data?.financialWrites !== 0) setError('The preservation response did not confirm zero financial writes. Check the saved run before any further action.');
+      if (result.data?.financialWrites !== 0) setError('Zero financial writes were not confirmed. Check the saved run before another action.');
       if (result.data?.run) setPreview((value) => ({ ...value, run: result.data.run }));
     } catch (failure) {
       if (current === generation.current) {
@@ -91,19 +106,21 @@ export default function XeroIssuedSupplierPreservation({ onClose, enabled, onAll
     <DialogContent className="max-h-[85vh] max-w-4xl overflow-y-auto" onEscapeKeyDown={(event) => { if (busy) event.preventDefault(); }} onInteractOutside={(event) => { if (busy) event.preventDefault(); }}>
       <DialogHeader>
         <DialogTitle>Preserve verified bills</DialogTitle>
-        <DialogDescription>Verify issued Salesforce supplier documents against existing Xero bills, then link only the selected records. Existing Xero bill details, amounts, lines, tax, status, and payments are preserved. This action creates no bills or payments.</DialogDescription>
+        <DialogDescription>Verify issued Salesforce documents and link selected existing Xero bills. Bill details, amounts, lines, tax, status and payments stay unchanged. No bills or payments are created.</DialogDescription>
       </DialogHeader>
       <div className="space-y-2">
         <label className="block text-sm font-medium" htmlFor="xero-preservation-packet">JSON evidence packet (1–25 records, maximum 200 KB)</label>
         <input id="xero-preservation-packet" type="file" accept=".json,application/json" disabled={Boolean(busy)} onChange={choosePacket} className="block w-full rounded-md border p-2 text-sm" />
-        <p className="text-xs text-muted-foreground">Include printed facts and source / Xero document identifiers. The server independently checks the private issued PDFs. Do not include PDF files or credentials.</p>
+        <label className="block text-sm font-medium" htmlFor="xero-preservation-paste">Or paste JSON evidence</label>
+        <textarea id="xero-preservation-paste" ref={pastedInput} rows={3} disabled={Boolean(busy)} onChange={pastePacket} className="block w-full rounded-md border p-2 text-sm" />
+        <p className="text-xs text-muted-foreground">Include printed facts and Salesforce / Xero IDs only; no PDFs or credentials. The server independently checks private issued PDFs.</p>
         <Button type="button" variant="outline" disabled={!packet || Boolean(busy) || attempted} onClick={verifyRecords}>{busy === 'verify' ? 'Verifying records…' : 'Verify records'}</Button>
       </div>
       {error && <p role="alert" className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</p>}
       {preview && <>
         <p className="text-sm">{filename} · {preview.rows.length} records · {preview.rows.filter((row) => row.status === 'eligible').length} eligible · Run {preview.run.id} / revision {preview.run.revision}</p>
         <div className="overflow-auto rounded-md border">
-          <Table><TableHeader><TableRow><TableHead>Select</TableHead><TableHead>Salesforce → Xero bill</TableHead><TableHead>Amount</TableHead><TableHead>Verification / result</TableHead></TableRow></TableHeader>
+          <Table><TableHeader><TableRow>{['Select', 'Salesforce → Xero bill', 'Amount', 'Verification / result'].map((label) => <TableHead key={label}>{label}</TableHead>)}</TableRow></TableHeader>
             <TableBody>{preview.rows.map((row) => {
               const outcome = outcomes?.find((value) => value.id === row.id);
               const eligible = preservationRowSelectable(preview, row);
@@ -116,9 +133,9 @@ export default function XeroIssuedSupplierPreservation({ onClose, enabled, onAll
             })}</TableBody>
           </Table>
         </div>
-        <p className="text-sm">{selectedIds.length} selected. Only these verified records will be linked. Xero financial writes: 0.</p>
+        <p className="text-sm">{selectedIds.length} selected. Only selected verified records will be linked. Xero financial writes: 0.</p>
       </>}
-      {attempted && <p role="status" className="text-sm">{busy === 'link' ? 'Linking the selected records…' : 'The attempt is retained above. Review failed or uncertain results before preparing a new evidence packet; records are never retried automatically.'}</p>}
+      {attempted && <p role="status" className="text-sm">{busy === 'link' ? 'Linking the selected records…' : 'Attempt retained above. Review failed or uncertain results before a new packet. No automatic retries.'}</p>}
       {!enabled && <p className="text-sm text-amber-800">Financial actions are locked. Verification remains available.</p>}
       <div className="flex flex-wrap justify-end gap-2">
         <Button type="button" variant="outline" onClick={onClose} disabled={Boolean(busy)}>Close</Button>

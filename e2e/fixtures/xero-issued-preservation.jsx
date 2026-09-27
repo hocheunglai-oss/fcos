@@ -33,15 +33,19 @@ const ordinaryPreview = { run: { id: uuid(60), revision: 1, status: 'ready_for_r
 const portalStatus = { externalActions: { xero_financial_sync: { enabled: true } },
   xero: { connected: true, scopeFlags: { invoices: true, contacts: true, settingsRead: true, paymentsRead: true } } };
 
-window.issuedPreservationFixture = { requests, packet, rows, runId, financialWrites: 0 };
+let finishPreview;
+window.issuedPreservationFixture = { requests, packet, rows, runId, financialWrites: 0,
+  finishPreview: () => finishPreview?.() };
 appClient.functions.invoke = async (name, body) => {
   requests.push({ name, body: structuredClone(body) });
   if (name === 'xeroFinancialMappingsGet') return { data: { productMappings: [], bankMappings: [], accountOptions: [], taxOptions: [] } };
   if (name === 'xeroFinancialSyncLatest') return { data: { preview: structuredClone(ordinaryPreview) } };
   if (name === 'xeroFinancialSyncPreview') return { data: structuredClone(ordinaryPreview) };
-  if (name === 'xeroFinancialDocumentPreservationPreview') return { data: {
+  if (name === 'xeroFinancialDocumentPreservationPreview') {
+    if (scenario === 'pending') await new Promise((resolve) => { finishPreview = resolve; });
+    return { data: {
     run: { id: runId, revision: 1, status: 'ready_for_review' }, rows: structuredClone(rows), summary: { total: 3, eligible: 2, blocked: 1 }, financialWrites: 0,
-  } };
+  } }; }
   if (name === 'xeroFinancialDocumentPreservationRun') {
     if (scenario === 'failure') return { data: { error: 'The preservation transaction was not confirmed. Inspect the saved link before retrying.' } };
     return { data: { run: { id: runId, revision: 4, status: 'completed' }, financialWrites: 0,

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { preservationOutcomes, preservationSelection, validatePreservationPacket } from '../src/lib/xeroIssuedSupplierPreservationUi.js';
+import { PRESERVATION_PACKET_MAX_BYTES, parsePreservationPacket, preservationOutcomes, preservationSelection, validatePreservationPacket } from '../src/lib/xeroIssuedSupplierPreservationUi.js';
 
 const record = { sourceId: 'source', xeroDocumentId: 'xero', documentId: 'document', versionId: 'version', sha256: 'hash',
   review: { reviewer: 'Codex root Astra', sourceNumber: 'SUP-1', currency: 'USD', total: 100, lines: [{ description: 'Fuel', amount: 100 }] } };
@@ -16,6 +16,21 @@ test('evidence packets exclude PDFs, credentials, unsupported nested values and 
     { records: [{ ...record, sourceId: '' }] }]) assert.equal(validatePreservationPacket(packet), false);
 });
 
+test('file and pasted JSON share schema validation and the actual UTF8 byte limit', () => {
+  const packet = { records: [record] };
+  assert.deepEqual(parsePreservationPacket(JSON.stringify(packet)), packet);
+  for (const text of ['{', JSON.stringify({ ...packet, credentials: 'forbidden' }),
+    JSON.stringify({ records: [{ ...record, review: { ...record.review, token: 'forbidden' } }] })]) {
+    assert.throws(() => parsePreservationPacket(text));
+  }
+  const base = JSON.stringify(packet);
+  assert.deepEqual(parsePreservationPacket(base + ' '.repeat(PRESERVATION_PACKET_MAX_BYTES - Buffer.byteLength(base))), packet);
+  assert.throws(() => parsePreservationPacket(base + ' '.repeat(PRESERVATION_PACKET_MAX_BYTES - Buffer.byteLength(base) + 1)));
+  const multibyte = JSON.stringify({ records: [{ ...record, review: { ...record.review, reviewer: '紙'.repeat(70000) } }] });
+  assert.ok(multibyte.length < PRESERVATION_PACKET_MAX_BYTES);
+  assert.throws(() => parsePreservationPacket(multibyte), /200 KB/);
+});
+
 test('petroleum packets retain literal names and absent paper tax/delivery without changing trustee packets', () => {
   const petroleum = { policyVersion: 'issued_petroleum_preserve_v1', records: [{ ...record, review: {
     ...record.review, numberRule: 'exact', deliveryDate: null, totalTax: null,
@@ -26,6 +41,7 @@ test('petroleum packets retain literal names and absent paper tax/delivery witho
       sourceProductId: 'product', sourceProductName: 'Fuel', productEvidence: 'independently reviewed' }],
   } }] };
   assert.equal(validatePreservationPacket(petroleum), true);
+  assert.deepEqual(parsePreservationPacket(JSON.stringify(petroleum)), petroleum);
   assert.equal(validatePreservationPacket({ records: [record], policyVersion: 'issued_supplier_preserve_v1' }), true);
   for (const policyVersion of [null, '', 'unknown', 'issued_supplier_preserve_v1']) {
     assert.equal(validatePreservationPacket({ ...petroleum, policyVersion }), false);

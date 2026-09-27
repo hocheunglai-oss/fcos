@@ -3,6 +3,7 @@ import { APP_VERSION } from './appVersionMeta.js';
 export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
+  { version: '2.0.253', releasedAt: '2026-09-28', title: 'Paste reviewed bill evidence', changes: ['Load reviewed evidence as JSON text for the existing verification and bill-linking workflow.', 'Retain safe diagnostics for Contact restoration outcomes.'] },
   { version: '2.0.252', releasedAt: '2026-09-28', title: 'Restore verified archived Xero Contacts', changes: ['Review archived Contact matches against complete Salesforce and Xero identity evidence, then restore the same Contact ID while preserving bills, payments and Contact details.', 'Audit each selected restoration and verify interrupted outcomes before any further action.'] },
   { version: '2.0.251', releasedAt: '2026-09-28', title: 'Link verified petroleum bills while preserving history', changes: ['Verify issued petroleum invoices against delivered quantities, prices, vessels and delivery dates before linking existing Xero bills.', 'Check earlier-year and archived competing records, retain all Xero bill details, and save each verified link with an immutable audit trail.'] },
   { version: '2.0.250', releasedAt: '2026-09-28', title: 'Preserve verified bills and reconcile exact amounts', changes: ['Verify issued supplier evidence and save selected historical trustee bill links with an immutable audit trail.', 'Preserve existing Xero bill numbers, dates, lines, tax and payments.', 'Keep source line amounts exact to the cent and flag genuine line-to-invoice differences.'] },
