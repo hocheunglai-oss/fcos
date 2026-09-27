@@ -29,6 +29,7 @@ const migrationSources = await Promise.all(names.map(async (name) => ({
   sql: await readFile(new URL(name, migrationDirectory), 'utf8'),
 })));
 const releaseMigrationNames = new Set([
+  '20260927175805_xero_issued_supplier_preservation_link.sql',
   '20260927154515_xero_financial_preview_persistence.sql',
   '20260923222821_xero_grouped_preservation_link.sql',
   '20260923213339_xero_payment_reference_link.sql',
@@ -116,6 +117,7 @@ async function verifyRuntimeObjects(label) {
     [['xero_financial_payment_mappings_canonical_sf_uidx', 'xero_financial_payment_mappings_canonical_xero_uidx']],
   );
   const releaseFunctions = [
+    'link_xero_issued_supplier_document_v1',
     'link_xero_grouped_document_v1', 'xero_grouped_salesforce_id_v1', 'protect_xero_grouped_mapping_v1',
     'link_xero_payment_references_v1',
     'authorise_xero_financial_sync_run_v1',
@@ -144,7 +146,14 @@ async function verifyRuntimeObjects(label) {
   await assertRows(
     `select count(*)::int from pg_trigger where tgrelid='public.xero_financial_document_mappings'::regclass
      and tgname='protect_xero_grouped_mapping' and not tgisinternal and tgenabled='O'`,
-    1, `${label} accepted grouped document proof remains protected`,
+    1, `${label} accepted document proof remains protected`,
+  );
+  await assertRows(
+    `select count(*)::int from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+     where n.nspname='public' and p.proname='protect_xero_grouped_mapping_v1'
+       and position('issuedSupplierPreservation' in p.prosrc)>0
+       and position('groupedPreservation' in p.prosrc)>0`,
+    1, `${label} both document preservation policies remain immutable`,
   );
   await assertRows(
     `select count(*)::int from pg_proc p join pg_namespace n on n.oid=p.pronamespace

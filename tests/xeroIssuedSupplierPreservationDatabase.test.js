@@ -8,7 +8,7 @@ import { PGlite } from '@electric-sql/pglite';
 import { evaluateIssuedSupplierPreservation } from '../api/_xeroIssuedSupplierPreservation.js';
 import { fcosSalesforceEnvironment } from '../config/fcosConnections.js';
 
-const migration = new URL('../supabase/migrations/20260927170140_xero_issued_supplier_preservation_link.sql', import.meta.url);
+const migration = new URL('../supabase/migrations/20260927175805_xero_issued_supplier_preservation_link.sql', import.meta.url);
 const rpc = 'public.link_xero_issued_supplier_document_v1(uuid,integer,uuid,timestamptz,uuid,jsonb,uuid,text)';
 const sql = 'select public.link_xero_issued_supplier_document_v1($1,$2,$3,$4,$5,$6::jsonb,$7,$8) as result';
 const stable = (value) => JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item)
