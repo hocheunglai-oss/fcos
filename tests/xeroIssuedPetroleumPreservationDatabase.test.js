@@ -575,7 +575,7 @@ async function addCompetingClaim(f, { sourceId = f.source.salesforceId, targetId
   input.deliveryIdentity.parentId = sourceId;
   input.fileEvidence.parentId = sourceId; input.fileEvidence.link.parentId = sourceId;
   input.identity.documentIdentitySourceIds = [sourceId]; input.identity.candidateXeroDocumentIds = [targetId];
-  input.identity.numberCollisionSourceIds = [sourceId];
+  input.identity.numberCollisionSourceIds = [sourceId]; input.identity.numberCollisionXeroIds = [targetId];
   const evaluated = evaluateDatabaseFixture(input); assert.equal(evaluated.eligible, true, JSON.stringify(evaluated.blockers));
   const review = { ...f.review, fingerprint: evaluated.fingerprint, evidenceFingerprint: hash(stable(evaluated.evidence)),
     evidence: evaluated.evidence, accountingCanonical: stable({ policyVersion: evaluated.policyVersion, accounting: evaluated.evidence.accounting }),
@@ -590,9 +590,23 @@ async function addCompetingClaim(f, { sourceId = f.source.salesforceId, targetId
   return { p_run_id: runId, p_item_id: itemId, p_review: review };
 }
 
-test('an independently valid second source proof cannot claim an already accepted target', async (t) => {
+const competingClaimOptions = (f, conflict) => conflict === 'target'
+  ? { sourceId: 'a01000000000099', targetId: f.ids.target.toUpperCase() }
+  : { sourceId: f.ids.source, targetId: randomUUID() };
+
+// Exercise both PostgreSQL race fixtures even when no independent-session server
+// is available. Each claim must first pass the real evaluator and SQL on its own.
+for (const conflict of ['target', 'source']) test(`an independently valid competing ${conflict} claim passes before ownership is accepted`, async (t) => {
   const f = await fixture(t);
-  const competing = await addCompetingClaim(f, { sourceId: 'a01000000000099', targetId: f.ids.target });
+  const options = competingClaimOptions(f, conflict);
+  const competing = await addCompetingClaim(f, options);
+  const accounting = competing.p_review.evidence.accounting;
+  assert.equal(accounting.source.salesforceId, options.sourceId.slice(0, 15));
+  assert.equal(accounting.xero.id, options.targetId.toLowerCase());
+  assert.deepEqual(accounting.identityScope.targetNumberIds.map((id) => id.toLowerCase()), [options.targetId.toLowerCase()]);
+  await f.db.exec('begin');
+  try { assert.equal((await f.link(competing)).status, 'linked'); } finally { await f.db.exec('rollback'); }
+  const before = await f.snapshot(); assert.equal(before.mappings, null); assert.equal(before.audits, null);
   await f.link(); await unchangedOnReject(f, () => f.link(competing));
 });
 
@@ -628,9 +642,7 @@ test('PostgreSQL overlapping transactions serialize exact retries, ownership rac
   });
   for (const conflict of ['target', 'source']) await t.test(`same-run items compete for canonical ${conflict}`, async (child) => {
     const f = await postgresFixture(child); const second = await f.connect();
-    const competing = await addCompetingClaim(f, conflict === 'target'
-      ? { sourceId: 'a01000000000099', targetId: f.ids.target.toUpperCase() }
-      : { sourceId: f.ids.source, targetId: randomUUID() });
+    const competing = await addCompetingClaim(f, competingClaimOptions(f, conflict));
     await f.primary.query('begin'); await f.call(f.primary);
     const pending = f.call(second, competing); const settled = pending.then((value) => ({ value }), (error) => ({ error }));
     await f.waitForLock(second); await f.primary.query('commit');
