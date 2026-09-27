@@ -89,8 +89,14 @@ export function petroleumDistinctStemSuppliers(sourceClaims, stemId, ownership, 
     && !ownership.sourceAccountIds.includes(sf(row.Supplier__c))).every(row => {
     const id = sf(row.Supplier__c);
     const owners = id?.startsWith('001') ? accounts.filter(account => sf(account.id) === id) : [];
-    return owners.length === 1 && row.Supplier__r?.Name === owners[0].name
-      && row.Supplier__r?.Company_Code__c === owners[0].companyCode && !matches(owners[0], ownership.contact);
+    const supplier = row.Supplier__r;
+    const code = supplier?.Company_Code__c;
+    // Complete Account snapshots normalize an explicitly null key to ''. The
+    // related supplier must still return the field; omission is not evidence.
+    return owners.length === 1 && plain(supplier) && string(supplier.Name) && supplier.Name === owners[0].name
+      && Object.hasOwn(supplier, 'Company_Code__c') && (code === null || string(code, true))
+      && string(owners[0].companyCode, true) && (code === null ? '' : code) === owners[0].companyCode
+      && !matches(owners[0], ownership.contact);
   });
 }
 

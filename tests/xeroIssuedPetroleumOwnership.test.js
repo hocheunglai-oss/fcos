@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { derivePetroleumOwnership, bindPetroleumOwnership, validatePetroleumOwnership, currentPetroleumOwnershipMatches,
-  PETROLEUM_OWNERSHIP_POLICY, petroleumOwnershipFingerprint } from '../api/_xeroIssuedPetroleumOwnership.js';
+  PETROLEUM_OWNERSHIP_POLICY, petroleumOwnershipFingerprint, petroleumDistinctStemSuppliers } from '../api/_xeroIssuedPetroleumOwnership.js';
+import { completeGroupedAccountSnapshot } from '../api/_xeroGroupedPreservationAdapter.js';
 import { issuedPetroleumFixture, issuedPetroleumOwnerFixture } from './xeroIssuedPetroleumPreservationFixtures.js';
 import { issuedSupplierHash as hash } from '../api/_xeroIssuedSupplierPreservation.js';
 
@@ -108,4 +109,50 @@ test('other archived Contact padded retained-owner IDs remain stronger competing
       assert.equal(result.eligible, false); assert.match(result.blockers[0].message, /another existing Contact/);
     });
   }
+});
+
+function distinctStemSupplierFixture(companyCode = null) {
+  const f = issuedPetroleumFixture();
+  const other = { ...f.account, Id: '001000000000003', Name: 'INDEPENDENT SURVEYOR LIMITED', Company_Code__c: companyCode };
+  const snapshot = completeGroupedAccountSnapshot({ records: [f.account, other], totalSize: 2 });
+  assert.equal(snapshot.complete, true);
+  const ownership = derivePetroleumOwnership({ ...input(f), accounts: snapshot.accounts });
+  assert.equal(ownership.eligible, true);
+  const claim = { ...f.supplier, Id: 'a06000000000002', Supplier__c: other.Id,
+    Supplier__r: { Name: other.Name, Company_Code__c: other.Company_Code__c } };
+  return { accounts: snapshot.accounts, ownership, claim, stemId: f.ids.stem };
+}
+
+test('a distinct same-STEM supplier with an explicitly null key matches the complete normalized Account snapshot', () => {
+  for (const value of [null, '', 'HKSURVEYOR']) {
+    const f = distinctStemSupplierFixture(value);
+    assert.equal(f.accounts[1].companyCode, value ?? '');
+    const before = structuredClone(f);
+    assert.equal(petroleumDistinctStemSuppliers([f.claim], f.stemId, f.ownership, f.accounts), true);
+    assert.deepEqual(f, before);
+  }
+});
+
+for (const [name, change] of [
+  ['omitted company-code field', f => { delete f.claim.Supplier__r.Company_Code__c; }],
+  ['explicit undefined company code', f => { f.claim.Supplier__r.Company_Code__c = undefined; }],
+  ['inherited company-code field', f => { f.claim.Supplier__r = Object.assign(Object.create({ Company_Code__c: null }), { Name: f.accounts[1].name }); }],
+  ['numeric company code', f => { f.claim.Supplier__r.Company_Code__c = 0; }],
+  ['boolean company code', f => { f.claim.Supplier__r.Company_Code__c = false; }],
+  ['object company code', f => { f.claim.Supplier__r.Company_Code__c = {}; }],
+  ['array company code', f => { f.claim.Supplier__r.Company_Code__c = []; }],
+  ['wrong nonblank company code', f => { f.claim.Supplier__r.Company_Code__c = 'HKOTHER'; }],
+  ['blank raw code against nonblank Account key', f => { f.accounts[1].companyCode = 'HKSURVEYOR'; }],
+  ['missing normalized company code', f => { delete f.accounts[1].companyCode; }],
+  ['malformed normalized company code', f => { f.accounts[1].companyCode = null; }],
+  ['wrong supplier name', f => { f.claim.Supplier__r.Name = 'DIFFERENT SURVEYOR LIMITED'; }],
+  ['missing related supplier', f => { delete f.claim.Supplier__r; }],
+  ['invalid supplier ID', f => { f.claim.Supplier__c = '001invalid'; }],
+  ['unreturned supplier Account', f => { f.accounts.pop(); }],
+  ['duplicate supplier Account', f => { f.accounts.push({ ...f.accounts[1] }); }],
+  ['supplier name matches selected Contact', f => { f.accounts[1].name = f.ownership.contact.name; f.claim.Supplier__r.Name = f.ownership.contact.name; }],
+  ['supplier key matches selected Contact', f => { f.accounts[1].companyCode = `HK${f.ownership.contact.name}`; f.claim.Supplier__r.Company_Code__c = f.accounts[1].companyCode; }],
+]) test(`distinct same-STEM supplier proof rejects ${name}`, () => {
+  const f = distinctStemSupplierFixture(); change(f);
+  assert.equal(petroleumDistinctStemSuppliers([f.claim], f.stemId, f.ownership, f.accounts), false);
 });

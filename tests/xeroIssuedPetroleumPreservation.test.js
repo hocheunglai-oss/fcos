@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { issuedPetroleumFixture } from './xeroIssuedPetroleumPreservationFixtures.js';
+import { issuedPetroleumFixture, issuedPetroleumOwnerFixture } from './xeroIssuedPetroleumPreservationFixtures.js';
 import { normalizeXeroInvoice, normalizeXeroCreditNote, buildFinancialClassifications } from '../api/_xeroFinancialSync.js';
-import { issuedSupplierHash } from '../api/_xeroIssuedSupplierPreservation.js';
+import { issuedSupplierHash, issuedSupplierCents } from '../api/_xeroIssuedSupplierPreservation.js';
+import { collectPetroleumPreservationScope, petroleumScopeFingerprint } from '../api/_xeroIssuedPetroleumScope.js';
+import { evaluatePetroleumFinancialDocument } from '../api/_xeroIssuedPetroleumPreservationAdapter.js';
 
 function target(f, patch) {
   Object.assign(f.raw, patch); Object.assign(f.candidate, normalizeXeroInvoice(f.raw));
@@ -149,4 +151,200 @@ test('known different historical currency is unequal; missing/malformed currency
   const f = issuedPetroleumFixture(); const other = { ...structuredClone(f.supplier), Id: 'a06000000000002', Name: 'OTHER', STEM__c: 'a0H000000000002', CurrencyIsoCode: 'EUR' };
   other.STEM__r.Delivery_Date__c = null; f.scope.sourceClaims.push(other); f.refreshScope(); assert.equal(f.build().eligible, true);
   other.CurrencyIsoCode = 'bad'; blocked(f, 'IDENTITY_SCOPE_INCOMPLETE'); other.CurrencyIsoCode = 'EUR'; other.Name = f.source.documentNumber; blocked(f, 'IDENTITY_AMBIGUOUS');
+});
+
+function impreciseHistoricalSource(amount = 33759.200000000004, make = issuedPetroleumFixture) {
+  const f = make();
+  f.supplier.STEM__r.Vessel__c = 'a0C000000000001';
+  const historical = { ...structuredClone(f.supplier), Id: 'a06000000000002', Name: 'HISTORICAL-OTHER',
+    STEM__c: 'a0H000000000002', Invoice_Amount__c: amount,
+    STEM__r: { KeyStem__c: 'HK2526002T', Vessel__c: 'a0C000000000002', Vessel__r: { Name: 'OTHER VESSEL' }, Delivery_Date__c: '2025-06-22' } };
+  f.scope.sourceClaims.push(historical);
+  f.refreshScope();
+  return { f, historical };
+}
+
+for (const amount of [33759.200000000004, 340614.60000000003, 129295.26000000001,
+  318493.01999999996, 390670.14999999997, 189693.99000000002, 801023.1900000001]) {
+  test(`distinct authoritative source identity excludes raw numeric tail ${amount} without coercion`, () => {
+    const { f, historical } = impreciseHistoricalSource(amount);
+    assert.equal(issuedSupplierCents(amount), null);
+    const before = structuredClone({ scope: f.scope, source: f.source, candidate: f.candidate, file: f.fileEvidence });
+    const result = f.build();
+    assert.equal(result.eligible, true, JSON.stringify(result.blockers));
+    assert.equal(historical.Invoice_Amount__c, amount);
+    assert.equal(issuedSupplierCents(historical.Invoice_Amount__c), null);
+    assert.equal(result.evidence.accounting.identityScope.coverageFingerprint, f.scope.coverage.contentFingerprint);
+    assert.equal(f.scope.sourceClaims.length, 2);
+    assert.deepEqual({ scope: f.scope, source: f.source, candidate: f.candidate, file: f.fileEvidence }, before);
+  });
+}
+
+test('distinct source identity uses actual dates and checksum-valid long vessel IDs without a cutoff', () => {
+  const { f, historical } = impreciseHistoricalSource();
+  f.supplier.STEM__r.Vessel__c = 'a0C000000000001EAA';
+  historical.STEM__r.Vessel__c = 'a0C000000000002EAA';
+  historical.STEM__r.Delivery_Date__c = '2026-07-03';
+  f.refreshScope();
+  assert.equal(f.build().eligible, true);
+});
+
+for (const [name, amount] of [
+  ['positive decimal string', '33759.200000000004'], ['below-cent decimal string', '318493.01999999996'],
+  ['negative numeric tail', -33759.200000000004], ['negative below-cent numeric tail', -318493.01999999996],
+  ['negative string', '-33759.200000000004'], ['null', null], ['undefined', undefined],
+  ['boolean', true], ['object', {}], ['array', []], ['NaN', NaN], ['infinity', Infinity],
+  ['13-digit bound', 1e12], ['large exponent', 1e20], ['small exponent', 1e-10], ['scientific string', '1e5'],
+]) test(`distinct source tuples do not excuse ${name} amount`, () => {
+  const { f, historical } = impreciseHistoricalSource(); historical.Invoice_Amount__c = amount;
+  blocked(f, 'IDENTITY_SCOPE_INCOMPLETE');
+});
+
+for (const [name, change] of [
+  ['missing amount', (_f, row) => { delete row.Invoice_Amount__c; }],
+  ['missing historical vessel ID', (_f, row) => { delete row.STEM__r.Vessel__c; }],
+  ['null historical vessel ID', (_f, row) => { row.STEM__r.Vessel__c = null; }],
+  ['malformed historical vessel ID', (_f, row) => { row.STEM__r.Vessel__c = 'a0Cbad'; }],
+  ['historical vessel checksum mismatch', (_f, row) => { row.STEM__r.Vessel__c = 'a0C000000000002ZZZ'; }],
+  ['wrong historical vessel object type', (_f, row) => { row.STEM__r.Vessel__c = 'a0V000000000002'; }],
+  ['same vessel short ID', (f, row) => { row.STEM__r.Vessel__c = f.supplier.STEM__r.Vessel__c; }],
+  ['same vessel equivalent long ID', (_f, row) => { row.STEM__r.Vessel__c = 'a0C000000000001EAA'; }],
+  ['same vessel equivalent short ID', (f, row) => { f.supplier.STEM__r.Vessel__c = 'a0C000000000001EAA'; row.STEM__r.Vessel__c = 'a0C000000000001'; }],
+  ['missing historical vessel name', (_f, row) => { delete row.STEM__r.Vessel__r.Name; }],
+  ['null historical vessel name', (_f, row) => { row.STEM__r.Vessel__r.Name = null; }],
+  ['blank historical vessel name', (_f, row) => { row.STEM__r.Vessel__r.Name = '  '; }],
+  ['oversize historical vessel name', (_f, row) => { row.STEM__r.Vessel__r.Name = 'A'.repeat(1001); }],
+  ['control in historical vessel name', (_f, row) => { row.STEM__r.Vessel__r.Name = 'OTHER\nVESSEL'; }],
+  ['C1 control in historical vessel name', (_f, row) => { row.STEM__r.Vessel__r.Name = 'OTHER\u0085VESSEL'; }],
+  ['same whitespace-normalized vessel name', (_f, row) => { row.STEM__r.Vessel__r.Name = ' VESSEL  ONE '; }],
+  ['missing historical delivery', (_f, row) => { delete row.STEM__r.Delivery_Date__c; }],
+  ['null historical delivery', (_f, row) => { row.STEM__r.Delivery_Date__c = null; }],
+  ['invalid calendar delivery', (_f, row) => { row.STEM__r.Delivery_Date__c = '2025-02-30'; }],
+  ['same delivery', (f, row) => { row.STEM__r.Delivery_Date__c = f.supplier.STEM__r.Delivery_Date__c; }],
+  ['missing historical source ID', (_f, row) => { delete row.Id; }],
+  ['wrong historical source object', (_f, row) => { row.Id = '001000000000003'; }],
+  ['missing historical STEM ID', (_f, row) => { delete row.STEM__c; }],
+  ['null historical STEM ID', (_f, row) => { row.STEM__c = null; }],
+  ['malformed historical STEM ID', (_f, row) => { row.STEM__c = 'a0Hbad'; }],
+  ['wrong historical STEM object', (_f, row) => { row.STEM__c = 'a0C000000000002'; }],
+  ['historical STEM checksum mismatch', (_f, row) => { row.STEM__c = 'a0H000000000002ZZZ'; }],
+  ['same STEM ID', (f, row) => { row.STEM__c = f.ids.stem; }],
+  ['same STEM equivalent long ID', (_f, row) => { row.STEM__c = 'a0H000000000001EAA'; }],
+  ['different STEM ID with selected key', (f, row) => { row.STEM__r.KeyStem__c = f.source.stemKey; }],
+  ['selected key with surrounding whitespace', (f, row) => { row.STEM__r.KeyStem__c = ` ${f.source.stemKey} `; }],
+  ['same source number', (f, row) => { row.Name = f.source.documentNumber; }],
+  ['same printed number', (f, row) => { row.Name = f.fileEvidence.review.printedNumber; }],
+  ['same target number', (f, row) => { row.Name = f.candidate.invoiceNumber; }],
+  ['missing currency', (_f, row) => { delete row.CurrencyIsoCode; }],
+  ['null currency', (_f, row) => { row.CurrencyIsoCode = null; }],
+  ['malformed currency', (_f, row) => { row.CurrencyIsoCode = 'usd'; }],
+  ['missing selected vessel ID', f => { delete f.supplier.STEM__r.Vessel__c; }],
+  ['wrong selected vessel type', f => { f.supplier.STEM__r.Vessel__c = 'a0V000000000001'; }],
+  ['bad selected vessel checksum', f => { f.supplier.STEM__r.Vessel__c = 'a0C000000000001ZZZ'; }],
+  ['missing selected vessel name', f => { delete f.supplier.STEM__r.Vessel__r.Name; }],
+  ['control in selected vessel name', f => { f.supplier.STEM__r.Vessel__r.Name = 'VESSEL\nONE'; }],
+  ['invalid selected real date', f => { f.supplier.STEM__r.Delivery_Date__c = f.source.deliveryDate = '2026-02-30'; }],
+]) test(`imprecise source still holds ${name}`, () => {
+  const { f, historical } = impreciseHistoricalSource(); change(f, historical);
+  blocked(f, 'IDENTITY_SCOPE_INCOMPLETE');
+});
+
+test('an exact-cent competing source remains an identity collision', () => {
+  const { f, historical } = impreciseHistoricalSource();
+  historical.Invoice_Amount__c = f.supplier.Invoice_Amount__c;
+  historical.STEM__r = { ...structuredClone(f.supplier.STEM__r), KeyStem__c: 'HK2526002T' };
+  blocked(f, 'IDENTITY_AMBIGUOUS');
+});
+
+test('known-cent stronger source claims still scan complete history', () => {
+  for (const field of ['number', 'stem']) {
+    const { f, historical } = impreciseHistoricalSource(10);
+    if (field === 'number') historical.Name = f.source.documentNumber;
+    else historical.STEM__c = f.source.stemId;
+    blocked(f, 'IDENTITY_AMBIGUOUS');
+  }
+});
+
+test('numeric target tails remain held even with a different vessel and date', () => {
+  const { f } = impreciseHistoricalSource();
+  const raw = { ...structuredClone(f.raw), InvoiceID: '00000000-0000-4000-8000-000000000099',
+    InvoiceNumber: '123P-OTHER VESSEL', Date: '2025-06-22', Total: 33759.200000000004 };
+  f.scope.targetClaims.push({ raw, document: normalizeXeroInvoice(raw) });
+  blocked(f, 'IDENTITY_SCOPE_INCOMPLETE');
+});
+
+test('selected source amount precision remains strict', () => {
+  const { f } = impreciseHistoricalSource();
+  f.supplier.Invoice_Amount__c = 33759.200000000004;
+  blocked(f, 'SOURCE_FACTS_INVALID');
+});
+
+for (const stemId of [undefined, null, 'a0Hbad', 'a0H000000000001ZZZ', 'a0C000000000001']) {
+  test(`selected STEM must remain canonical and correctly typed: ${String(stemId)}`, () => {
+    const { f } = impreciseHistoricalSource();
+    f.source.stemId = f.supplier.STEM__c = f.child.STEM__c = stemId;
+    f.scope.coverage.stemIds = [stemId];
+    blocked(f, 'IDENTITY_SCOPE_INCOMPLETE');
+  });
+}
+
+test('real collector retains inactive-owner numeric-tail history, stronger claims and changed proof fingerprints', async () => {
+  const { f, historical } = impreciseHistoricalSource(33759.200000000004, issuedPetroleumOwnerFixture);
+  historical.Supplier__c = '001000000000002';
+  const queries = []; const calls = []; const creditNotes = [];
+  const read = (soql, all) => {
+    queries.push({ soql, all });
+    const records = soql.includes('FROM Organization') ? [{ Id: f.fileEvidence.orgId, IsSandbox: false }]
+      : soql.includes('FROM Supplier_Invoice__c') ? [f.supplier, historical]
+        : soql.includes('FROM STEM_Line_Item__c') ? [f.child]
+          : soql.includes('FROM STEM_Extra_Cost__c') ? [] : [f.product];
+    return { records: structuredClone(records), totalSize: records.length, done: true };
+  };
+  const options = {
+    query: async soql => read(soql, false), queryAll: async soql => read(soql, true),
+    accountingFetch: async (_connection, path, request) => {
+      calls.push({ path, request });
+      if (path.startsWith('/Invoices?')) return { Invoices: structuredClone([f.raw]) };
+      if (path.startsWith('/CreditNotes?')) return { CreditNotes: structuredClone(creditNotes) };
+      if (path === '/Accounts') return { Accounts: f.scope.accountTax.accounts };
+      if (path === '/TaxRates') return { TaxRates: f.scope.accountTax.taxRates };
+      throw Error(`Unexpected mocked path ${path}`);
+    },
+  };
+  const run = async () => {
+    const scope = await collectPetroleumPreservationScope({ records: f.packet.records, connection: { tenantId: f.ids.tenant },
+      salesforce: f.salesforce, xero: f.xero, sources: [f.source], stored: f.stored }, options);
+    const before = structuredClone(scope);
+    const result = evaluatePetroleumFinancialDocument(f.source, f.candidate, { ...f.context, petroleum: scope }, f.fileEvidence);
+    assert.deepEqual(scope, before);
+    assert.equal(scope.coverage.sourceCount, 2); assert.equal(scope.sourceClaims.length, 2);
+    assert.equal(scope.sourceClaims.find(row => row.Id === historical.Id).Invoice_Amount__c, historical.Invoice_Amount__c);
+    assert.equal(scope.coverage.contentFingerprint, petroleumScopeFingerprint(scope));
+    return { scope, result };
+  };
+  const first = await run(); assert.equal(first.result.eligible, true, JSON.stringify(first.result.blockers));
+  assert.deepEqual(first.scope.coverage.sourceAccountIds, ['001000000000001', '001000000000002']);
+  assert.equal(first.result.evidence.accounting.identityOwnership.owners.length, 2);
+  const sourceQuery = queries.find(row => row.soql.includes('FROM Supplier_Invoice__c'));
+  assert.equal(sourceQuery.all, true);
+  assert.match(sourceQuery.soql, /Supplier__c IN \('001000000000001','001000000000002'\)/);
+  assert.doesNotMatch(sourceQuery.soql, /WHERE .*Invoice_Date__c|WHERE .*CreatedDate/);
+  historical.Invoice_Amount__c = 129295.26000000001;
+  const changed = await run(); assert.equal(changed.result.eligible, true);
+  assert.notEqual(first.scope.coverage.contentFingerprint, changed.scope.coverage.contentFingerprint);
+  assert.notEqual(first.result.fingerprint, changed.result.fingerprint);
+  assert.notEqual(first.result.evidenceFingerprint, changed.result.evidenceFingerprint);
+  for (const [key, value] of [['Name', f.source.documentNumber], ['STEM__c', f.source.stemId]]) {
+    const old = historical[key]; historical[key] = value;
+    const held = await run(); assert.equal(held.result.eligible, false);
+    assert.equal(held.result.blockers[0].code, 'IDENTITY_SCOPE_INCOMPLETE'); historical[key] = old;
+  }
+  const oldKey = historical.STEM__r.KeyStem__c; historical.STEM__r.KeyStem__c = f.source.stemKey;
+  assert.equal((await run()).result.eligible, false); historical.STEM__r.KeyStem__c = oldKey;
+  creditNotes.push({ CreditNoteID: '00000000-0000-4000-8000-000000000099', Type: 'ACCPAYCREDIT', Status: 'AUTHORISED',
+    Contact: f.raw.Contact, CreditNoteNumber: 'OTHER-CREDIT', Date: '2025-01-01', CurrencyCode: 'USD', Total: 10,
+    Allocations: [{ Invoice: { InvoiceID: f.ids.target }, Amount: 10 }] });
+  const creditHeld = await run(); assert.equal(creditHeld.result.eligible, false);
+  assert(creditHeld.result.blockers.some(row => row.path === 'identity.creditCollisionIds'));
+  assert(calls.every(({ request }) => request.method === 'GET' && request.body === undefined && request.retryOnRateLimit === false));
 });

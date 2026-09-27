@@ -20,6 +20,28 @@ const reject = (code, message) => ({ eligible: false, policyVersion: POLICY, acc
 const currencyCode = (value) => typeof value === 'string' && /^[A-Z]{3}$/.test(value) ? value : null;
 const unique = (rows, key) => new Set(rows.map(key)).size === rows.length;
 
+const sourceVesselDelivery = (row) => {
+  const id = sf(row?.STEM__r?.Vessel__c);
+  const name = row?.STEM__r?.Vessel__r?.Name;
+  const delivery = row?.STEM__r?.Delivery_Date__c;
+  return id?.startsWith('a0C') && typeof name === 'string' && name.length <= 1000 && words(name)
+    && !/[\u0000-\u001f\u007f-\u009f]/.test(name) && date(delivery)
+    ? { id, name: words(name), delivery } : null;
+};
+
+function distinctImpreciseSourceClaim(row, parent, source, numbers, currency) {
+  const amount = row.Invoice_Amount__c;
+  const historicalStem = sf(row.STEM__c); const selectedStem = sf(parent.STEM__c);
+  if (typeof amount !== 'number' || !Number.isFinite(amount) || amount <= 0 || amount >= 1e12
+    || !/^\d{1,12}(?:\.\d+)?$/.test(String(amount)) || claimCents(amount) !== null || currency !== 'USD'
+    || !sf(row.Id)?.startsWith('a06') || !historicalStem?.startsWith('a0H') || !selectedStem?.startsWith('a0H')
+    || historicalStem === selectedStem || numbers.has(numberKey(row.Name))
+    || hkClaims(row.STEM__r?.KeyStem__c).some((key) => key.toUpperCase() === source.stemKey)) return false;
+  const selected = sourceVesselDelivery(parent); const historical = sourceVesselDelivery(row);
+  return Boolean(selected && historical && selected.id !== historical.id && selected.name !== historical.name
+    && selected.delivery !== historical.delivery);
+}
+
 export function evaluatePetroleumFinancialDocument(source, candidate, context, fileEvidence) {
   let scope = context?.petroleum;
   if (!source || !candidate || context?.complete !== true || !(context.accountsById instanceof Map) || !(context.members instanceof Map)
@@ -86,9 +108,14 @@ export function evaluatePetroleumFinancialDocument(source, candidate, context, f
     && parent.Supplier__r?.Name === source.accountName && parent.Supplier__r?.Company_Code__c === (source.companyCode || '') && account.inactiveSuspended === false;
   const vessel = words(parent.STEM__r?.Vessel__r?.Name); const deliveryDate = parent.STEM__r?.Delivery_Date__c;
   const total = cents(parent.Invoice_Amount__c);
+  const numbers = new Set([source.documentNumber, fileEvidence?.review?.printedNumber, candidate.invoiceNumber].filter(Boolean).map(numberKey));
   const sourceEnvelope = scope.sourceClaims.filter((row) => sourceAccountIds.includes(sf(row.Supplier__c))
     && (!currencyCode(currencyFor(row)) || currencyFor(row) === 'USD')
-    && (claimCents(row.Invoice_Amount__c) === total || claimCents(row.Invoice_Amount__c) === null));
+    && (claimCents(row.Invoice_Amount__c) === total || claimCents(row.Invoice_Amount__c) === null)
+    // Retain the unmodified row in complete history and stronger-claim checks.
+    // Three proven identity differences can exclude a bounded positive numeric
+    // tail here without assigning it a rounded amount or changing its sign.
+    && !distinctImpreciseSourceClaim(row, parent, source, numbers, currencyFor(row)));
   const targetEnvelope = scope.targetClaims.filter(({ raw }) => uuid(raw?.Contact?.ContactID) === uuid(source.contactId)
     && (!currencyCode(raw.CurrencyCode) || raw.CurrencyCode === 'USD')
     && (claimCents(raw.Total) === total || claimCents(raw.Total) === null));
@@ -101,7 +128,6 @@ export function evaluatePetroleumFinancialDocument(source, candidate, context, f
     && words(row.STEM__r?.Vessel__r?.Name) === vessel);
   const targetScope = targetEnvelope.filter(({ raw, document }) => raw.CurrencyCode === 'USD' && document.date === deliveryDate
     && issuedPetroleumVessel(document.invoiceNumber) === vessel);
-  const numbers = new Set([source.documentNumber, fileEvidence?.review?.printedNumber, candidate.invoiceNumber].filter(Boolean).map(numberKey));
   const sourceNumberRows = scope.sourceClaims.filter((row) => sourceAccountIds.includes(sf(row.Supplier__c))
     && (numbers.has(numberKey(row.Name)) || sf(row.STEM__c) === sf(source.stemId)));
   const targetNumberRows = scope.targetClaims.filter(({ raw, document }) => uuid(raw.Contact?.ContactID) === uuid(source.contactId)

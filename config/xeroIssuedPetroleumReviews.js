@@ -6,6 +6,8 @@
 // packet SHA256 5919269927f415085d29629fb6717b0d3ddc9d9fbf7be4858e5aa1485fa1f646.
 // Further factual review: helmsman22-independent-review/packet-review.json.
 // Combined nineteen-row packet SHA256 0c938cfdfae364ecc633ee737095ce37dc5fc8a33354aae7654ed8208525e673.
+// Seven FCB(S) factual reviews: next-cohort-independent-review/packet-review.json.
+// Packet SHA256 1a606cfea970f6c0ad096cc29485698ff9f035a632b02854e9d25ec062462eb9.
 // These are not financial approvals or runtime identity/settlement eligibility.
 export const APPROVED_ISSUED_PETROLEUM_REVIEW_HASHES = Object.freeze([
   "19bd13c3413b8645719765549ca78db333d3e4aca4b43e15d96e7cc4061cabde",
@@ -43,5 +45,12 @@ export const APPROVED_ISSUED_PETROLEUM_REVIEW_HASHES = Object.freeze([
   "d6e99d5ba562a5af4daa610bbb0bebf82beca6d427ba1837f7d6ef0f723fdeed",
   "9ab23ff94539eb27aee60a1a0a44d76d1b87853e00342ba029fe237c733fa3ea",
   "4203245571df09c23e86070d934041d17550d7617371e9732cb6a43d739766b7",
-  "bed5de7784bd70cf5fdd280c0d5552fd094914f17a538406941a88917b129dac"
+  "bed5de7784bd70cf5fdd280c0d5552fd094914f17a538406941a88917b129dac",
+  "ac06fccc92b00e2d077ed247fa968a04813bac20be7d16a49d3f59dc90579a76",
+  "2bfb5aa8fffb6f639651c4c5abe0ca06dd505142fa26185dee44ceb7a16399c9",
+  "2da273e20c91836b2138aec09f4d9e240b09f790763fd7fa1d37e43f9291f200",
+  "0531282407cf47270220c0be1bc5e0e779f739d6e902236dd7b60f9e214d653b",
+  "98d97b1241c12b0b0e6fed4275d5375ad4d6d6774e578f3b536212f1c697070a",
+  "c30f67e7be6a96b28a4f804997061e62c876b727de20df8d165c023dd44f2532",
+  "304c0f7e98369fb7b8f2ea5bcbd4534c744734e37b2aedb19ee95533153dd9c0"
 ]);
