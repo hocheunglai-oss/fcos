@@ -3,6 +3,7 @@ import { APP_VERSION } from './appVersionMeta.js';
 export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
+  { version: '2.0.255', releasedAt: '2026-09-28', title: 'Save verified bill reviews reliably', changes: ['Use the existing atomic preview contract for issued-bill reviews before recording any preservation link.', 'Keep existing Xero bill details and financial approval controls unchanged.'] },
   { version: '2.0.254', releasedAt: '2026-09-28', title: 'Verify bill ownership across inactive Accounts', changes: ['Check every potential supplier Account and its invoice history before linking a verified existing Xero bill.', 'Keep eligible selections stable when other reviewed rows remain blocked, and recognise Salesforce PDF downloads without changing file-integrity checks.'] },
   { version: '2.0.253', releasedAt: '2026-09-28', title: 'Paste reviewed bill evidence', changes: ['Load reviewed evidence as JSON text for the existing verification and bill-linking workflow.', 'Retain safe diagnostics for Contact restoration outcomes.'] },
   { version: '2.0.252', releasedAt: '2026-09-28', title: 'Restore verified archived Xero Contacts', changes: ['Review archived Contact matches against complete Salesforce and Xero identity evidence, then restore the same Contact ID while preserving bills, payments and Contact details.', 'Audit each selected restoration and verify interrupted outcomes before any further action.'] },

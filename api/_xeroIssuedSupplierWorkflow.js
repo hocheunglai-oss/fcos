@@ -125,7 +125,7 @@ export async function xeroFinancialDocumentPreservationPreview(body = {}, depend
     return item;
   });
   const summary = { total: items.length, eligible: items.filter((r) => r.status === 'eligible').length, blocked: items.filter((r) => r.status === 'blocked').length };
-  const run = { id, idempotency_key: `issued-preserve:${id}`, mode: 'preview', status: 'building', cutoff_date: XERO_FINANCIAL_CUTOFF,
+  const run = { id, idempotency_key: `preview:${id}`, mode: 'preview', status: 'building', cutoff_date: XERO_FINANCIAL_CUTOFF,
     source_snapshot_at: now, xero_snapshot_at: now, source_fingerprint: hash(items.map((i) => i.source_payload)),
     xero_fingerprint: hash(items.map((i) => i.xero_payload)), control_totals: { postingMode: 'draft', preservationPolicy: policy,
       workflowSnapshot: { reconciliationVersion: XERO_RECONCILIATION_VERSION, checkedAt: now } }, classification_summary: summary,
