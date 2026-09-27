@@ -1,4 +1,5 @@
 import { fcosSalesforceEnvironment } from '../config/fcosConnections.js';
+import { validatePetroleumOwnership } from './_xeroIssuedPetroleumOwnership.js';
 import { issuedSupplierSfId, issuedSupplierCents, issuedSupplierHash, issuedSupplierCanonical,
   issuedSupplierAccountingFingerprint } from './_xeroIssuedSupplierPreservation.js';
 
@@ -215,7 +216,15 @@ export function evaluateIssuedPetroleumPreservation(input = {}) {
     return { id: id(mapping?.id, 'productMappings.id'), direction: 'supplier', salesforceProductId: productId, xeroAccountCode: '51100', xeroTaxType: 'NONE', enabled: true, revision: mapping?.revision, approvedBy: mapping?.approvedBy, approvedByEmail: mapping?.approvedByEmail, approvedAt: mapping?.approvedAt };
   });
   require(mappings.length === 1, 'MAPPING_INVALID', 'productMappings', 'Exactly one approved petroleum mapping is required.');
-  singleton(identity.candidateContactIds, contactId, 'identity.candidateContactIds'); singleton(identity.accountIdsForContact, accountId, 'identity.accountIdsForContact', true);
+  singleton(identity.candidateContactIds, contactId, 'identity.candidateContactIds');
+  const ownershipPresent = Object.hasOwn(identity, 'identityOwnershipPolicy') || Object.hasOwn(identity, 'identityOwnership');
+  if (ownershipPresent) {
+    require(validatePetroleumOwnership(identity, { tenantId, accountId, contactId, coverageFingerprint: identity.coverageFingerprint,
+      accountIdsForContact: identity.accountIdsForContact }), 'CONTACT_OWNERSHIP_UNPROVEN', 'identity.identityOwnership', 'Complete versioned document-specific ownership proof is required.');
+    const selectedOwner = Array.isArray(identity.identityOwnership?.owners) ? identity.identityOwnership.owners.find(row => row?.id === accountId) : null;
+    equal(selectedOwner?.name, source.accountName, 'identity.identityOwnership.selectedName');
+    equal(selectedOwner?.companyCode, source.companyCode, 'identity.identityOwnership.selectedKey');
+  } else singleton(identity.accountIdsForContact, accountId, 'identity.accountIdsForContact', true);
   singleton(identity.candidateXeroDocumentIds, xeroId, 'identity.candidateXeroDocumentIds'); singleton(identity.documentIdentitySourceIds, sourceId, 'identity.documentIdentitySourceIds', true);
   require(array(identity.numberCollisionXeroIds, 'identity.numberCollisionXeroIds').length === 1 && identity.numberCollisionXeroIds.every((value) => id(value, 'identity.numberCollisionXeroIds') === xeroId), 'NUMBER_COLLISION', 'identity.numberCollisionXeroIds', 'A conflicting invoice number claim exists.');
   singleton(identity.numberCollisionSourceIds, sourceId, 'identity.numberCollisionSourceIds', true);
@@ -228,6 +237,7 @@ export function evaluateIssuedPetroleumPreservation(input = {}) {
   equal(contactIdentity.salesforceAccountId, accountId, 'contactIdentity.account'); equal(contactIdentity.xeroContactId, contactId, 'contactIdentity.contact'); equal(contact.status, 'ACTIVE', 'contactIdentity.status');
   require(['account_name', 'company_key'].includes(contact.matchBasis), 'CONTACT_IDENTITY_INVALID', 'contactIdentity.matchBasis', 'Only approved Account/CL-key identity is supported.');
   equal(contact.sourceMatchValue, contact.xeroMatchValue, 'contactIdentity.values');
+  if (ownershipPresent) equal(words(identity.identityOwnership?.contact?.name).toUpperCase(), contact.xeroMatchValue, 'identity.identityOwnership.contactName');
   equal(xero.status, 'AUTHORISED', 'xero.status', 'SETTLEMENT_UNSUPPORTED');
   const due = cents(xero.amountDue, 'xero.amountDue'); const paid = cents(xero.amountPaid, 'xero.amountPaid'); const credited = cents(xero.amountCredited, 'xero.amountCredited');
   equal(paid, 0n, 'xero.amountPaid', 'SETTLEMENT_UNSUPPORTED'); equal(credited, 0n, 'xero.amountCredited', 'SETTLEMENT_UNSUPPORTED'); equal(due?.toString(), xeroHeader.totalCents, 'xero.amountDue', 'SETTLEMENT_UNSUPPORTED');
@@ -241,7 +251,8 @@ export function evaluateIssuedPetroleumPreservation(input = {}) {
     ...xeroHeader, lines: xeroLines, rawLineItems: xero.rawLineItems, settlementEvidence: xero.settlementEvidence, unowned: plain(xero.unowned) ? xero.unowned : null },
   productMappings: mappings, contactIdentity, issuedFile: file, matchBasis: 'issued_petroleum_vessel_delivery_amount',
   deliveryIdentity: { ...delivery, parentId: sourceId, stemId, supplierId: accountId, vesselId, vessel, childId: sourceLines[0]?.id, productId: sourceLines[0]?.productId, quantity: sourceLines[0]?.quantity, unitAmount: sourceLines[0]?.unitAmount },
-  identityScope: { coverageFingerprint: identity.coverageFingerprint, sourceIds: identity.documentIdentitySourceIds, targetIds: identity.candidateXeroDocumentIds, sourceNumberIds: identity.numberCollisionSourceIds, targetNumberIds: identity.numberCollisionXeroIds }, accountTax: ledger };
+  identityScope: { coverageFingerprint: identity.coverageFingerprint, sourceIds: identity.documentIdentitySourceIds, targetIds: identity.candidateXeroDocumentIds, sourceNumberIds: identity.numberCollisionSourceIds, targetNumberIds: identity.numberCollisionXeroIds }, accountTax: ledger,
+  ...(ownershipPresent ? { identityOwnershipPolicy: identity.identityOwnershipPolicy, identityOwnership: identity.identityOwnership } : {}) };
   require(Array.isArray(xero.paymentClaims) && xero.paymentClaims.length === 0 && Array.isArray(xero.creditClaims) && xero.creditClaims.length === 0 && Array.isArray(xero.prepaymentClaims) && xero.prepaymentClaims.length === 0 && Array.isArray(xero.overpaymentClaims) && xero.overpaymentClaims.length === 0, 'SETTLEMENT_UNSUPPORTED', 'xero.claims', 'Payments and allocations must be absent in the raw current target.');
   require(xero.settlementEvidence?.basis === 'complete_invoice_zero_balances_optional_collections_v1'
     && ['Payments', 'CreditNotes', 'Prepayments', 'Overpayments'].every((key) => typeof xero.settlementEvidence?.collections?.[key]?.present === 'boolean'

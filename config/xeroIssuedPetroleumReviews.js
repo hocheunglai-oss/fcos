@@ -2,6 +2,8 @@
 // Root receipts: petroleum-five-root-review.json / petroleum-next-ten-root-review.json.
 // Packet SHA256: 0c0521f4e777a7c1849145033ef770df8b687e0c1c9cce7b44f6501b2e694be1
 // and 8777ac576c3e7712bad02bcdf24428fd68adf105ff304c1877feddec633590b2.
+// Two further literal reviews: next-two-petroleum/root-review.json;
+// packet SHA256 5919269927f415085d29629fb6717b0d3ddc9d9fbf7be4858e5aa1485fa1f646.
 // These are not financial approvals or runtime identity/settlement eligibility.
 export const APPROVED_ISSUED_PETROLEUM_REVIEW_HASHES = Object.freeze([
   "19bd13c3413b8645719765549ca78db333d3e4aca4b43e15d96e7cc4061cabde",
@@ -18,5 +20,7 @@ export const APPROVED_ISSUED_PETROLEUM_REVIEW_HASHES = Object.freeze([
   "e13c1e7d00e7a0c8cd8ff43b335e6ed2224983391e6f4c9715d97748a5a11ad8",
   "1c5f03916f491ee103e0451336310c6639e1fd9de850a2c8b750966ca3162031",
   "450f484bbb6ff1b06a225b3b0095d6d5895b51b22fe08c17ce654b38a99b10bc",
-  "df49f8834afc60c7ee56cac6b74ef7b6bc16f5ab146e118ae1347025c7b29de3"
+  "df49f8834afc60c7ee56cac6b74ef7b6bc16f5ab146e118ae1347025c7b29de3",
+  "364bb145dd5f42664feea9c97b9c921468f703c070ef2affa182d8eb6a1e9a23",
+  "a836f937ca12e8cb07523357aca3a8a4071d3eff9144f25d293936d905fe282f"
 ]);

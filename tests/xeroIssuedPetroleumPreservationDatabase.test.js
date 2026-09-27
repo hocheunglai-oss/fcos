@@ -7,9 +7,11 @@ import pg from 'pg';
 import { PGlite } from '@electric-sql/pglite';
 import { evaluateIssuedPetroleumPreservation } from '../api/_xeroIssuedPetroleumPreservation.js';
 import { fcosSalesforceEnvironment } from '../config/fcosConnections.js';
-import { issuedPetroleumFixture } from './xeroIssuedPetroleumPreservationFixtures.js';
+import { issuedPetroleumFixture, issuedPetroleumOwnerFixture } from './xeroIssuedPetroleumPreservationFixtures.js';
+import { derivePetroleumOwnership, bindPetroleumOwnership, petroleumOwnershipFingerprint } from '../api/_xeroIssuedPetroleumOwnership.js';
 
-const migration = new URL('../supabase/migrations/20260927185526_xero_issued_petroleum_preservation_link.sql', import.meta.url);
+const originalMigration = new URL('../supabase/migrations/20260927185526_xero_issued_petroleum_preservation_link.sql', import.meta.url);
+const migration = new URL('../supabase/migrations/20260927213024_xero_petroleum_inactive_source_ownership.sql', import.meta.url);
 const rpc = 'public.link_xero_issued_petroleum_document_v1(uuid,integer,uuid,timestamptz,uuid,jsonb,uuid,text)';
 const sql = 'select public.link_xero_issued_petroleum_document_v1($1,$2,$3,$4,$5,$6::jsonb,$7,$8) as result';
 const stable = (value) => JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item)
@@ -23,7 +25,12 @@ const iso = '2026-09-23T22:00:00.000Z';
 // The database suite then tampers/re-hashes evidence to test its own boundaries.
 const evaluateDatabaseFixture = evaluateIssuedPetroleumPreservation;
 
-async function fixture(t, { migrate = true, database = null, evaluator = evaluateDatabaseFixture, configure = () => {} } = {}) {
+async function applyPetroleumMigrations(db, ownership = true) {
+  await db.exec(await readFile(originalMigration, 'utf8'));
+  if (ownership) await db.exec(await readFile(migration, 'utf8'));
+}
+
+async function fixture(t, { migrate = true, ownership = true, database = null, evaluator = evaluateDatabaseFixture, configure = () => {} } = {}) {
   const db = database || new PGlite();
   if (!database) {
     t.after(() => db.close());
@@ -33,7 +40,7 @@ async function fixture(t, { migrate = true, database = null, evaluator = evaluat
   for (const file of ['20260827145608_xero_contact_sync.sql', '20260829080726_xero_financial_sync.sql', '20260923213339_xero_payment_reference_link.sql', '20260923222821_xero_grouped_preservation_link.sql', '20260927175805_xero_issued_supplier_preservation_link.sql']) {
     await db.exec((await readFile(new URL(`../supabase/migrations/${file}`, import.meta.url), 'utf8')).replace(/^create extension if not exists pgcrypto;$/m, ''));
   }
-  if (migrate) await db.exec(await readFile(migration, 'utf8'));
+  if (migrate) await applyPetroleumMigrations(db, ownership);
   const tenant = randomUUID(); const actor = { id: randomUUID(), email: ' FINANCE@example.test ' };
   const ids = { source: 'a01000000000001', account: '001000000000001', product: '01t000000000001', contact: randomUUID(), target: randomUUID(), productMapping: randomUUID() };
   const line = { description: 'Fuel', quantity: '1', unitAmount: '10.01', lineAmount: '10.01', accountCode: '51100',
@@ -138,6 +145,44 @@ async function unchangedOnReject(f, work, error = { code: '40001' }) {
   const before = await f.snapshot(); await assert.rejects(work, error); assert.deepEqual(await f.snapshot(), before);
 }
 
+function configureInactiveOwners(input, inactiveCount = 1, contactPatch = {}) {
+  const selected = { id: input.source.accountId, name: input.source.accountName, companyCode: input.source.companyCode,
+    recordType: 'Supplier', inactiveSuspended: false };
+  const owners = [selected, ...Array.from({ length: inactiveCount }, (_, index) => ({ id: `001${String(index + 2).padStart(12, '0')}`,
+    name: contactPatch.name || selected.name, companyCode: `HKHISTORICAL ${index + 1}`, recordType: 'Buyer', inactiveSuspended: true }))];
+  const contact = { id: input.source.contactId, name: selected.name, status: 'ACTIVE', contactNumber: '', accountNumber: '', ...contactPatch };
+  const facts = derivePetroleumOwnership({ tenantId: input.tenantId, accountId: selected.id, contactId: contact.id,
+    accounts: owners, contacts: [contact], complete: true });
+  assert.equal(facts.eligible, true, JSON.stringify(facts.blockers));
+  const bound = bindPetroleumOwnership(facts, { sourceAccountIds: facts.sourceAccountIds, contentFingerprint: input.identity.coverageFingerprint });
+  assert.ok(bound);
+  Object.assign(input.identity, bound);
+  input.identity.accountIdsForContact = facts.sourceAccountIds;
+  input.identity.contactIdentity.matchBasis = contact.name === selected.name ? 'account_name' : 'company_key';
+  input.identity.contactIdentity.sourceMatchValue = (contact.name === selected.name ? selected.name : selected.companyCode.slice(2)).toUpperCase();
+  input.identity.contactIdentity.xeroMatchValue = contact.name.toUpperCase();
+}
+
+async function rejectedOwnershipMutation(f, change, { repairOwnershipHash = true } = {}) {
+  const review = structuredClone(f.review); const accounting = review.evidence.accounting;
+  change(accounting);
+  if (repairOwnershipHash && accounting.identityOwnership && typeof accounting.identityOwnership === 'object') {
+    accounting.identityOwnership.accountContactFingerprint = petroleumOwnershipFingerprint(accounting.tenantId, accounting.identityOwnership);
+  }
+  review.accountingCanonical = stable({ policyVersion: review.policyVersion, accounting });
+  review.evidenceCanonical = stable(review.evidence);
+  review.fingerprint = hash(review.accountingCanonical); review.evidenceFingerprint = hash(review.evidenceCanonical);
+  const source = { ...f.source, issuedSupplierPreservation: { ...f.source.issuedSupplierPreservation,
+    fingerprint: review.fingerprint, evidenceFingerprint: review.evidenceFingerprint } };
+  const before = await f.snapshot();
+  await f.db.exec('begin');
+  try {
+    await f.db.query('update public.xero_financial_sync_items set source_payload=$1 where id=$2', [JSON.stringify(source), f.itemId]);
+    await assert.rejects(f.link({ p_review: review }), { code: '40001' });
+  } finally { await f.db.exec('rollback'); }
+  assert.deepEqual(await f.snapshot(), before);
+}
+
 test('empty schema migration permits one atomic mapping, item outcome and authenticated actor audit', async (t) => {
   const f = await fixture(t); const result = await f.link();
   assert.deepEqual({ ...result, mappingId: 'id' }, { id: f.itemId, status: 'linked', xeroDocumentId: f.ids.target, mappingId: 'id', alreadyLinked: false });
@@ -156,8 +201,9 @@ test('empty schema migration permits one atomic mapping, item outcome and authen
   assert.equal(saved.items[0].applied_at, saved.mappings[0].created_at);
 });
 
-test('actual normal builder and petroleum adapter proof passes SQL with physical source quantity and original Xero fields', async (t) => {
-  const f = await fixture(t); const real = issuedPetroleumFixture(); const evaluated = real.build();
+for (const [label, buildFixture] of [['singleton', issuedPetroleumFixture], ['inactive owners', issuedPetroleumOwnerFixture]]) {
+test(`actual normal builder and petroleum adapter ${label} proof passes SQL with physical source quantity and original Xero fields`, async (t) => {
+  const f = await fixture(t); const real = buildFixture(); const evaluated = real.build();
   assert.equal(evaluated.eligible, true, JSON.stringify(evaluated.blockers));
   const review = { ...f.review, policyVersion: evaluated.policyVersion, fingerprint: evaluated.fingerprint,
     evidenceFingerprint: evaluated.evidenceFingerprint, evidence: evaluated.evidence,
@@ -183,6 +229,124 @@ test('actual normal builder and petroleum adapter proof passes SQL with physical
   assert.equal(evaluated.evidence.accounting.source.invoiceDate, '2026-04-01');
   assert.equal(evaluated.evidence.accounting.xero.date, '2026-03-17');
 });
+}
+
+test('inactive owners are retained as immutable evidence while only the selected document receives a link', async (t) => {
+  for (const inactiveCount of [1, 2]) {
+    await t.test(`${inactiveCount} inactive owners`, async (child) => {
+      const f = await fixture(child, { configure: input => configureInactiveOwners(input, inactiveCount) });
+      const first = await f.link(); const saved = await f.snapshot();
+      assert.equal(first.status, 'linked'); assert.equal(saved.mappings.length, 1); assert.equal(saved.audits.length, 1);
+      assert.equal(saved.mappings[0].salesforce_id, f.source.salesforceId);
+      assert.deepEqual(saved.mappings[0].retained_differences.issuedSupplierPreservation.evidence, f.review.evidence);
+      assert.equal(f.review.evidence.accounting.identityOwnership.owners.length, inactiveCount + 1);
+      assert.deepEqual(saved.items[0].source_payload, f.source); assert.deepEqual(saved.items[0].xero_payload, f.input.xero);
+      assert.equal(saved.items[0].mutation_attempts, 0);
+      assert.deepEqual(saved.audits[0].record_counts, { linked: 1, applied: 0, financialWrites: 0 });
+      assert.deepEqual(await f.link(), { ...first, alreadyLinked: true }); assert.deepEqual(await f.snapshot(), saved);
+      await unchangedOnReject(f, () => f.db.query("update public.xero_financial_document_mappings set retained_differences=retained_differences #- '{issuedSupplierPreservation,evidence,accounting,identityOwnership}' where id=$1", [first.mappingId]));
+      await unchangedOnReject(f, () => f.db.query('delete from public.xero_financial_document_mappings where id=$1', [first.mappingId]));
+    });
+  }
+});
+
+test('additive ownership upgrade preserves a pre-existing singleton receipt and its exact replay', async (t) => {
+  const f = await fixture(t, { ownership: false });
+  assert.equal(Object.hasOwn(f.review.evidence.accounting, 'identityOwnership'), false);
+  assert.equal(Object.hasOwn(f.review.evidence.accounting, 'identityOwnershipPolicy'), false);
+  const first = await f.link(); const before = await f.snapshot();
+  await f.db.exec(await readFile(migration, 'utf8'));
+  assert.deepEqual(await f.snapshot(), before);
+  assert.deepEqual(await f.link(), { ...first, alreadyLinked: true }); assert.deepEqual(await f.snapshot(), before);
+  const real = issuedPetroleumFixture().build();
+  assert.equal(real.fingerprint, '5f83badf83d013bf405999b4022980f57838a6a702b258d59633b8ab043136d7');
+  assert.equal(real.evidenceFingerprint, 'deda29ca0056df4a7eeeb556ce026782570ab87aac375a06b874fc640340cdc8');
+});
+
+test('independently rehashed malformed ownership proofs cannot create a mapping or audit', async (t) => {
+  const f = await fixture(t, { configure: configureInactiveOwners });
+  const changes = [
+    ['missing discriminator', a => { delete a.identityOwnershipPolicy; }],
+    ['missing proof', a => { delete a.identityOwnership; }],
+    ['null discriminator', a => { a.identityOwnershipPolicy = null; }],
+    ['null proof', a => { a.identityOwnership = null; }],
+    ['unknown discriminator', a => { a.identityOwnershipPolicy = 'future_policy'; }],
+    ['extra proof authority', a => { a.identityOwnership.approved = true; }],
+    ['wrong selected Account', a => { a.identityOwnership.selectedAccountId = '001000000000099'; }],
+    ['wrong Contact', a => { a.identityOwnership.contactId = randomUUID(); }],
+    ['noncanonical Contact', a => { a.identityOwnership.contactId = 'AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA'; }],
+    ['selected owner inactive', a => { a.identityOwnership.owners[0].inactiveSuspended = true; }],
+    ['second active owner', a => { a.identityOwnership.owners[1].inactiveSuspended = false; }],
+    ['unknown owner state', a => { delete a.identityOwnership.owners[1].inactiveSuspended; }],
+    ['string owner state', a => { a.identityOwnership.owners[1].inactiveSuspended = 'true'; }],
+    ['duplicate owners', a => { a.identityOwnership.owners[1] = structuredClone(a.identityOwnership.owners[0]); }],
+    ['18-character owner', a => { a.identityOwnership.owners[1].id = sf18(a.identityOwnership.owners[1].id); }],
+    ['unsupported owner type', a => { a.identityOwnership.owners[1].id = 'a01000000000099'; }],
+    ['unordered owners', a => { a.identityOwnership.owners.reverse(); }],
+    ['one owner marker', a => { a.identityOwnership.owners.pop(); a.identityOwnership.sourceAccountIds.pop(); a.identityOwnership.queriedSourceAccountIds.pop(); }],
+    ['owner absent from source coverage', a => { a.identityOwnership.sourceAccountIds.pop(); }],
+    ['owner absent from queried coverage', a => { a.identityOwnership.queriedSourceAccountIds.pop(); }],
+    ['unrelated batch owner in row proof', a => { a.identityOwnership.queriedSourceAccountIds.push('001000000000099'); }],
+    ['duplicate queried coverage', a => { a.identityOwnership.queriedSourceAccountIds.push(a.identityOwnership.queriedSourceAccountIds[0]); }],
+    ['foreign all-years fingerprint', a => { a.identityOwnership.allYearsCoverageFingerprint = hash('other scope'); }],
+    ['changed selected name', a => { a.identityOwnership.owners[0].name = 'OTHER'; }],
+    ['changed selected key', a => { a.identityOwnership.owners[0].companyCode = 'HKOTHER'; }],
+    ['duplicate selected own key', a => { a.identityOwnership.owners[1].companyCode = a.identityOwnership.owners[0].companyCode; }],
+    ['unrelated purported owner', a => { a.identityOwnership.owners[1].name = 'OTHER'; }],
+    ['unknown owner field', a => { a.identityOwnership.owners[1].verified = true; }],
+    ['nonstring owner literal', a => { a.identityOwnership.owners[1].recordType = 3; }],
+    ['unbounded owner literal', a => { a.identityOwnership.owners[1].recordType = 'x'.repeat(1001); }],
+    ['control character in literal', a => { a.identityOwnership.owners[1].recordType = 'Buyer\n'; }],
+    ['wrong Contact inner ID', a => { a.identityOwnership.contact.id = randomUUID(); }],
+    ['archived Contact', a => { a.identityOwnership.contact.status = 'ARCHIVED'; }],
+    ['unrelated Contact name', a => { a.identityOwnership.contact.name = 'OTHER'; }],
+    ['missing Contact number', a => { delete a.identityOwnership.contact.contactNumber; }],
+    ['merged proof property', a => { a.identityOwnership.contact.mergedToContactId = randomUUID(); }],
+    ['absent foreign Account explicit ID', a => { a.identityOwnership.contact.contactNumber = '001000000000099'; }],
+    ['retained inactive Account explicit ID', a => { a.identityOwnership.contact.accountNumber = a.identityOwnership.owners[1].id; }],
+    ['malformed explicit Account ID', a => { a.identityOwnership.contact.accountNumber = '001BROKEN'; }],
+    ['padded foreign Account ID', a => { a.identityOwnership.contact.accountNumber = ' 001000000000099 '; }],
+    ['padded selected Account ID', a => { a.identityOwnership.contact.contactNumber = ` ${f.ids.account} `; }],
+    ['Unicode-padded Account ID', a => { a.identityOwnership.contact.contactNumber = '\u00a0001000000000099\u00a0'; }],
+    ['bad explicit Account checksum', a => { a.identityOwnership.contact.contactNumber = f.ids.account + 'ZZZ'; }],
+    ['inactive full CL key claim', a => { a.identityOwnership.contact.accountNumber = ' hkhistorical 1 '; }],
+    ['match proof switches basis', a => { a.contactIdentity.matchBasis = 'company_key'; a.contactIdentity.sourceMatchValue = 'OTHER'; a.contactIdentity.xeroMatchValue = 'OTHER'; }],
+    ['competing source claim', a => { a.identityScope.sourceNumberIds.push('a01000000000099'); }],
+  ];
+  for (const [name, change] of changes) await t.test(name, () => rejectedOwnershipMutation(f, change));
+  await t.test('independent ownership digest mismatch', () => rejectedOwnershipMutation(f,
+    a => { a.identityOwnership.accountContactFingerprint = hash('forged'); }, { repairOwnershipHash: false }));
+});
+
+test('same selected Account IDs and arbitrary historical Contact numbers do not become foreign owner claims', async (t) => {
+  for (const number of ['001000000000001', sf18('001000000000001'), 'HISTORICAL-CUSTOMER-42', 'PETROLEUM SUPPLIER']) {
+    await t.test(number, async (child) => {
+      const f = await fixture(child, { configure: input => configureInactiveOwners(input, 1, { contactNumber: number }) });
+      assert.equal((await f.link()).status, 'linked');
+    });
+  }
+});
+
+test('canonical ownership hashes preserve Unicode and escaped literals and support the existing own-key match', async (t) => {
+  await t.test('literal JSON escaping', async (child) => {
+    const f = await fixture(child, { configure(input) {
+      input.source.accountName = 'PÉTROLEUM "SUPPLY" \\ LTD';
+      input.fileEvidence.review.sellerName = input.source.accountName;
+      input.fileEvidence.review.counterparties.sourceName = input.source.accountName;
+      input.fileEvidence.review.counterparties.printedSeller = input.source.accountName;
+      configureInactiveOwners(input);
+    } });
+    assert.equal((await f.link()).status, 'linked');
+  });
+  await t.test('own HK key', async (child) => {
+    const f = await fixture(child, { configure(input) {
+      input.source.companyCode = 'HKTARGET OWN KEY';
+      input.fileEvidence.review.counterparties.companyCode = input.source.companyCode;
+      configureInactiveOwners(input, 1, { name: 'TARGET OWN KEY' });
+    } });
+    assert.equal((await f.link()).status, 'linked');
+  });
+});
 
 test('identical acceptance retry is read-only even after the containing run finishes', async (t) => {
   const f = await fixture(t); const first = await f.link(); const before = await f.snapshot();
@@ -200,7 +364,7 @@ test('the two RPCs reject each other policy and the additive migration does not 
     ('public.link_xero_issued_supplier_document_v1(uuid,integer,uuid,timestamptz,uuid,jsonb,uuid,text)'::regprocedure,
      'public.link_xero_grouped_document_v1(uuid,integer,uuid,timestamptz,uuid,jsonb,uuid,text)'::regprocedure,
      'public.protect_xero_grouped_mapping_v1()'::regprocedure) order by proname`)).rows;
-  const before = await definitions(); await f.db.exec(await readFile(migration, 'utf8'));
+  const before = await definitions(); await applyPetroleumMigrations(f.db);
   assert.deepEqual(await definitions(), before);
   await unchangedOnReject(f, () => f.db.query(sql.replace('link_xero_issued_petroleum_document_v1', 'link_xero_issued_supplier_document_v1'), f.values()), { code: '22023' });
   await unchangedOnReject(f, () => f.link({ p_review: { ...f.review, policyVersion: 'issued_supplier_preserve_v1' } }), { code: '22023' });
@@ -431,8 +595,9 @@ test('existing canonical Salesforce or cross-type UUID ownership is never overwr
   await unchangedOnReject(f, () => ordinaryMapping(f, 'a01000000000099', f.ids.target.toUpperCase(), 'ACCREC'), { code: '23505' });
 });
 
-test('audit and item outcome storage failures roll back the mapping and permit retry after repair', async (t) => {
-  const f = await fixture(t);
+for (const [label, configure] of [['singleton', () => {}], ['inactive owners', configureInactiveOwners]]) {
+test(`audit and item outcome storage failures roll back ${label} mapping and permit retry after repair`, async (t) => {
+  const f = await fixture(t, { configure });
   for (const [table, action] of [['xero_financial_audit_events', 'insert'], ['xero_financial_sync_items', 'update']]) {
     await f.db.exec(`create function public.reject_issued_write() returns trigger language plpgsql as $$
       begin raise exception 'Injected storage failure' using errcode='XX000'; end $$;
@@ -442,6 +607,7 @@ test('audit and item outcome storage failures roll back the mapping and permit r
   }
   assert.equal((await f.link()).alreadyLinked, false);
 });
+}
 
 test('sticky protection rejects ordinary upsert, proof clearing, remapping and deletion but permits reconciliation timestamps', async (t) => {
   const f = await fixture(t); await f.link();
@@ -464,7 +630,7 @@ test('populated upgrade retains ordinary mappings and payment links byte-for-byt
     (salesforce_payment_id,document_mapping_id,xero_payment_id,source_fingerprint,amount,currency,payment_date,status)
     values ('a0S000000000001',$1,$2,'payment',10,'USD','2026-01-01','linked')`, [mapping.id, randomUUID()]);
   const before = await f.snapshot(); const payments = (await f.db.query('select to_jsonb(p) as row from public.xero_financial_payment_mappings p')).rows;
-  await f.db.exec(await readFile(migration, 'utf8')); await f.db.exec(await readFile(migration, 'utf8'));
+  await applyPetroleumMigrations(f.db); await applyPetroleumMigrations(f.db);
   assert.deepEqual(await f.snapshot(), before);
   assert.deepEqual((await f.db.query('select to_jsonb(p) as row from public.xero_financial_payment_mappings p')).rows, payments);
   await f.db.query("update public.xero_financial_document_mappings set source_fingerprint='changed',retained_differences='{\"old\":true}' where id=$1", [mapping.id]);
@@ -482,14 +648,14 @@ test('upgrade preserves existing grouped acceptance and protects either proof ev
   const ordinary = (await ordinaryMapping(f, 'a01000000000099', randomUUID())).rows[0];
   await f.db.query("update public.xero_financial_document_mappings set protected_legacy=true,retained_differences='{\"groupedPreservation\":{\"existing\":true}}' where id=$1", [ordinary.id]);
   const before = await f.snapshot();
-  await f.db.exec(await readFile(migration, 'utf8'));
+  await applyPetroleumMigrations(f.db);
   assert.deepEqual(await f.snapshot(), before);
   await unchangedOnReject(f, () => f.db.query("update public.xero_financial_document_mappings set retained_differences='{}' where id=$1", [ordinary.id]));
   const malformed = (await ordinaryMapping(f, 'a01000000000098', randomUUID())).rows[0];
   await f.db.query("update public.xero_financial_document_mappings set retained_differences='{\"issuedSupplierPreservation\":null}' where id=$1", [malformed.id]);
   await unchangedOnReject(f, () => f.db.query('delete from public.xero_financial_document_mappings where id=$1', [malformed.id]));
   await f.link(); const linked = await f.snapshot();
-  await f.db.exec(await readFile(migration, 'utf8'));
+  await applyPetroleumMigrations(f.db);
   assert.deepEqual(await f.snapshot(), linked);
 });
 
@@ -532,7 +698,7 @@ test('Salesforce canonicalization validates 18-character checksum and preserves 
 // local; create/drop only a uniquely named disposable database, never public in
 // the supplied database. CI supplies its disposable Supabase postgres endpoint.
 const concurrencyUrl = process.env.FCOS_ISSUED_PETROLEUM_TEST_DATABASE_URL;
-async function postgresFixture(t) {
+async function postgresFixture(t, options = {}) {
   const endpoint = new URL(concurrencyUrl);
   assert.ok(['127.0.0.1', 'localhost', '[::1]'].includes(endpoint.hostname), 'Issued petroleum concurrency tests require a local disposable PostgreSQL server');
   assert.ok(['postgres:', 'postgresql:'].includes(endpoint.protocol));
@@ -556,7 +722,7 @@ async function postgresFixture(t) {
     await client.query("set statement_timeout='8s'; set lock_timeout='6s'"); clients.push(client); return client;
   };
   const primary = await connect();
-  const f = await fixture(t, { database: { query: (...args) => primary.query(...args), exec: (text) => primary.query(text) } });
+  const f = await fixture(t, { ...options, database: { query: (...args) => primary.query(...args), exec: (text) => primary.query(text) } });
   const call = (client, overrides) => client.query(sql, f.values(overrides)).then((result) => result.rows[0].result);
   const waitForLock = async (client) => {
     for (let attempt = 0; attempt < 120; attempt += 1) {
@@ -607,6 +773,16 @@ for (const conflict of ['target', 'source']) test(`an independently valid compet
   await f.db.exec('begin');
   try { assert.equal((await f.link(competing)).status, 'linked'); } finally { await f.db.exec('rollback'); }
   const before = await f.snapshot(); assert.equal(before.mappings, null); assert.equal(before.audits, null);
+  await f.link(); await unchangedOnReject(f, () => f.link(competing));
+});
+
+for (const conflict of ['target', 'source']) test(`inactive-owner competing ${conflict} race fixture passes independent SQL before ownership`, async (t) => {
+  const f = await fixture(t, { configure: configureInactiveOwners });
+  const competing = await addCompetingClaim(f, competingClaimOptions(f, conflict));
+  assert.equal(competing.p_review.evidence.accounting.identityOwnership.owners.length, 2);
+  await f.db.exec('begin');
+  try { assert.equal((await f.link(competing)).status, 'linked'); } finally { await f.db.exec('rollback'); }
+  assert.equal((await f.snapshot()).mappings, null);
   await f.link(); await unchangedOnReject(f, () => f.link(competing));
 });
 
@@ -689,6 +865,53 @@ test('PostgreSQL overlapping transactions serialize exact retries, ownership rac
     await second.query('begin');
     await second.query('update public.xero_financial_product_mappings set approved_at=null where id=$1', [f.ids.productMapping]);
     const pending = f.call(f.primary); const settled = pending.then(() => ({}), (error) => ({ error }));
+    await f.waitForLock(f.primary); await second.query('commit');
+    assert.equal((await settled).error?.code, '40001');
+    const saved = await f.snapshot(); assert.equal(saved.mappings, null); assert.equal(saved.audits, null);
+  });
+});
+
+test('PostgreSQL inactive-owner proof validates independently and retains transaction race boundaries', {
+  skip: !concurrencyUrl && 'Set FCOS_ISSUED_PETROLEUM_TEST_DATABASE_URL to a disposable local Supabase-compatible PostgreSQL endpoint', timeout: 60000,
+}, async (t) => {
+  await t.test('new proof retries wait and preserve one exact immutable actor receipt', async (child) => {
+    const f = await postgresFixture(child, { configure: input => configureInactiveOwners(input, 2) });
+    const second = await f.connect();
+    await f.primary.query('begin'); const first = await f.call(f.primary);
+    const settled = f.call(second).then(value => ({ value }), error => ({ error }));
+    await f.waitForLock(second); await f.primary.query('commit');
+    assert.deepEqual((await settled).value, { ...first, alreadyLinked: true });
+    const saved = await f.snapshot(); assert.equal(saved.mappings.length, 1); assert.equal(saved.audits.length, 1);
+    assert.deepEqual(saved.mappings[0].retained_differences.issuedSupplierPreservation.evidence, f.review.evidence);
+    assert.equal(saved.items[0].mutation_attempts, 0);
+    await unchangedOnReject(f, () => f.link({ p_actor_id: randomUUID() }));
+    await unchangedOnReject(f, () => f.primary.query('delete from public.xero_financial_document_mappings where id=$1', [first.mappingId]));
+  });
+  await t.test('rehashed ownership, coverage, policy and explicit-number lies fail with no writes', async (child) => {
+    const f = await postgresFixture(child, { configure: configureInactiveOwners });
+    for (const change of [
+      a => { a.identityOwnership.owners[1].inactiveSuspended = false; },
+      a => { a.identityOwnership.queriedSourceAccountIds.pop(); },
+      a => { a.identityOwnership.contact.accountNumber = '001000000000099'; },
+      a => { a.identityOwnershipPolicy = null; },
+    ]) await rejectedOwnershipMutation(f, change);
+    await rejectedOwnershipMutation(f, a => { a.identityOwnership.accountContactFingerprint = hash('wrong'); }, { repairOwnershipHash: false });
+    assert.equal((await f.link()).status, 'linked');
+  });
+  for (const conflict of ['source', 'target']) await t.test(`inactive-owner proofs compete for canonical ${conflict}`, async (child) => {
+    const f = await postgresFixture(child, { configure: configureInactiveOwners }); const second = await f.connect();
+    const competing = await addCompetingClaim(f, competingClaimOptions(f, conflict));
+    await f.primary.query('begin'); await f.call(f.primary);
+    const settled = f.call(second, competing).then(value => ({ value }), error => ({ error }));
+    await f.waitForLock(second); await f.primary.query('commit');
+    assert.ok(['23505', '40001'].includes((await settled).error?.code));
+    const saved = await f.snapshot(); assert.equal(saved.mappings.length, 1); assert.equal(saved.audits.length, 1);
+  });
+  await t.test('current mapping approval revocation defeats an overlapping inactive-owner acceptance', async (child) => {
+    const f = await postgresFixture(child, { configure: configureInactiveOwners }); const second = await f.connect();
+    await second.query('begin');
+    await second.query('update public.xero_financial_product_mappings set approved_at=null where id=$1', [f.ids.productMapping]);
+    const settled = f.call(f.primary).then(value => ({ value }), error => ({ error }));
     await f.waitForLock(f.primary); await second.query('commit');
     assert.equal((await settled).error?.code, '40001');
     const saved = await f.snapshot(); assert.equal(saved.mappings, null); assert.equal(saved.audits, null);

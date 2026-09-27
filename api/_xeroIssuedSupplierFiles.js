@@ -61,7 +61,7 @@ export async function collectIssuedSupplierFiles(packet, { query = sfQuery, down
     const file = await download(`/sobjects/ContentVersion/${row.versionId}/VersionData`);
     const bytes = file.buffer;
     if (!Buffer.isBuffer(bytes) || bytes.length !== current[0].ContentSize || bytes.subarray(0, 5).toString('ascii') !== '%PDF-'
-      || !['application/pdf', 'application/octet-stream'].includes(String(file.contentType).split(';')[0].trim().toLowerCase())
+      || !['application/pdf', 'application/octet-stream', 'application/octetstream'].includes(String(file.contentType).split(';')[0].trim().toLowerCase())
       || digest(bytes, 'sha256') !== row.sha256 || digest(bytes, 'md5') !== current[0].Checksum.toLowerCase()) throw failure(`${row.review.sourceNumber || row.sourceId}: the current issued PDF bytes differ from the reviewed file.`);
     result.set(row.sourceId, { orgId: production.orgId, parentId: row.sourceId, documentId: row.documentId,
       versionId: row.versionId, sha256: row.sha256, checksum: current[0].Checksum.toLowerCase(), contentSize: bytes.length,

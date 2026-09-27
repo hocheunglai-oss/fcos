@@ -1,14 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { issuedPetroleumFixture } from './xeroIssuedPetroleumPreservationFixtures.js';
+import { issuedPetroleumFixture, issuedPetroleumOwnerFixture } from './xeroIssuedPetroleumPreservationFixtures.js';
+import { buildGroupedPreservationContext } from '../api/_xeroGroupedPreservationAdapter.js';
 import { collectPetroleumPreservationScope, petroleumScopeFingerprint, PETROLEUM_SCOPE_LIMITS } from '../api/_xeroIssuedPetroleumScope.js';
 import { evaluatePetroleumFinancialDocument } from '../api/_xeroIssuedPetroleumPreservationAdapter.js';
 
 const complete = (records) => ({ records, totalSize: records.length, done: true });
 const invalid = { code: 'XERO_PETROLEUM_SCOPE_INCOMPLETE' };
 const uuid = (i) => `11111111-0000-4000-8000-${String(i).padStart(12, '0')}`;
-function fixture() {
-  const f = issuedPetroleumFixture(); const queries = []; const calls = [];
+function fixture(make = issuedPetroleumFixture) {
+  const f = make(); const queries = []; const calls = [];
   const rows = { org: [{ Id: f.fileEvidence.orgId, IsSandbox: false }], parents: structuredClone([f.supplier]),
     lines: structuredClone([f.child]), extras: [], products: structuredClone([f.product]) };
   const responseFor = (soql) => soql.includes('FROM Organization') ? rows.org : soql.includes('FROM Supplier_Invoice__c') ? rows.parents
@@ -28,6 +29,114 @@ function fixture() {
   const input = { records: f.packet.records, connection: { tenantId: f.ids.tenant }, salesforce: f.salesforce, xero: f.xero, sources: [f.source], stored: f.stored };
   return { ...f, input, options, rows, queries, calls };
 }
+
+test('real collector scans every retained inactive owner even with zero supplier obligations', async () => {
+  const f = fixture(issuedPetroleumOwnerFixture);
+  const scope = await collectPetroleumPreservationScope(f.input, f.options);
+  assert.deepEqual(scope.coverage.sourceAccountIds, ['001000000000001', '001000000000002']);
+  const query = f.queries.find(row => row.soql.includes('FROM Supplier_Invoice__c'));
+  assert.equal(query.all, true); assert.match(query.soql, /Supplier__c IN \('001000000000001','001000000000002'\)/);
+  const result = evaluatePetroleumFinancialDocument(f.source, f.candidate, { ...f.context, petroleum: scope }, f.fileEvidence);
+  assert.equal(result.eligible, true, JSON.stringify(result.blockers));
+  assert.equal(result.evidence.accounting.identityOwnership.owners.length, 2);
+});
+
+for (const [name, patch] of [
+  ['pre-cutoff same number', { Invoice_Date__c: '2025-01-01', STEM__c: 'a0H000000000002' }],
+  ['missing date same number', { Invoice_Date__c: null, STEM__c: 'a0H000000000002' }],
+  ['different negative amount same STEM', { Name: 'CR2602138', Invoice_Amount__c: -100, Invoice_Date__c: null }],
+  ['deleted same STEM', { Name: 'CR2602138', IsDeleted: true, Invoice_Amount__c: -100 }],
+  ['equal amount vessel and delivery', { Name: 'OTHER', STEM__c: 'a0H000000000002' }],
+  ['unknown amount', { Name: 'OTHER', STEM__c: 'a0H000000000002', Invoice_Amount__c: null }],
+  ['unknown currency', { Name: 'OTHER', STEM__c: 'a0H000000000002', CurrencyIsoCode: null }],
+]) test(`all-years inactive-owner history holds ${name}`, async () => {
+  const f = fixture(issuedPetroleumOwnerFixture);
+  f.rows.parents.push({ ...structuredClone(f.supplier), Id: 'a06000000000002', Supplier__c: '001000000000002', ...patch });
+  const scope = await collectPetroleumPreservationScope(f.input, f.options);
+  const result = evaluatePetroleumFinancialDocument(f.source, f.candidate, { ...f.context, petroleum: scope }, f.fileEvidence);
+  assert.equal(result.eligible, false); assert.equal(result.evidence, null);
+});
+
+test('HELMSMAN S2602138 and current same-STEM CR2602138 remain a credit identity hold', async () => {
+  const f = fixture(issuedPetroleumOwnerFixture);
+  f.rows.parents.push({ ...structuredClone(f.supplier), Id: 'a06fu00000MjKVoAAN', Name: 'CR2602138', Invoice_Amount__c: -100 });
+  const scope = await collectPetroleumPreservationScope(f.input, f.options);
+  const result = evaluatePetroleumFinancialDocument(f.source, f.candidate, { ...f.context, petroleum: scope }, f.fileEvidence);
+  assert.equal(result.eligible, false);
+  assert(result.blockers.some(row => row.path === 'identity.numberCollisionSourceIds'));
+});
+
+test('same-STEM obligations from a distinct supplier do not become claims of the retained Contact owners', async () => {
+  const f = fixture(issuedPetroleumOwnerFixture);
+  const foreign = { ...structuredClone(f.supplier), Id: 'a06000000000003', Name: 'SEPARATE-SUPPLIER-BILL', Supplier__c: '001000000000003',
+    Supplier__r: { Name: 'OTHER SUPPLIER', Company_Code__c: 'HKOTHER' } };
+  f.salesforce.groupedAccountSnapshot.accounts.push({ id: foreign.Supplier__c, name: 'OTHER SUPPLIER', companyCode: 'HKOTHER', recordType: 'Supplier', inactiveSuspended: false });
+  f.xero.contacts.push({ id: uuid(70), name: 'OTHER SUPPLIER', status: 'ACTIVE' });
+  f.rows.parents.push(foreign);
+  const scope = await collectPetroleumPreservationScope(f.input, f.options);
+  assert.equal(scope.sourceClaims.length, 2); // The broad STEM read is retained; no row is hidden.
+  const context = buildGroupedPreservationContext(f.salesforce, f.xero, f.stored, f.input.sources);
+  const result = evaluatePetroleumFinancialDocument(f.source, f.candidate, { ...context, petroleum: scope }, f.fileEvidence);
+  assert.equal(result.eligible, true, JSON.stringify(result.blockers));
+  // The identical strong STEM claim becomes a hold when it belongs to a retained potential owner.
+  foreign.Supplier__c = '001000000000002'; scope.coverage.contentFingerprint = petroleumScopeFingerprint(scope);
+  const held = evaluatePetroleumFinancialDocument(f.source, f.candidate, { ...context, petroleum: scope }, f.fileEvidence);
+  assert.equal(held.eligible, false); assert(held.blockers.some(row => row.path === 'identity.numberCollisionSourceIds'));
+});
+
+for (const [name, patch] of [
+  ['missing supplier', { Supplier__c: null }],
+  ['malformed supplier', { Supplier__c: '001bad' }],
+  ['unknown current supplier', { Supplier__c: '001000000000099' }],
+  ['deleted missing-date negative claim', { Supplier__c: null, IsDeleted: true, Invoice_Date__c: null, Invoice_Amount__c: -100 }],
+  ['current supplier with contradictory relationship name', { Supplier__c: '001000000000003' }],
+  ['current supplier with missing relationship', { Supplier__c: '001000000000003', Supplier__r: null }],
+]) test(`new owner proof holds same-STEM ${name} in collector and adapter`, async () => {
+  const f = fixture(issuedPetroleumOwnerFixture);
+  f.salesforce.groupedAccountSnapshot.accounts.push({ id: '001000000000003', name: 'OTHER SUPPLIER', companyCode: 'HKOTHER', recordType: 'Supplier', inactiveSuspended: false });
+  const claim = { ...structuredClone(f.supplier), Id: 'a06000000000003', Name: 'STRONG-STEM-CLAIM', ...patch };
+  f.rows.parents.push(claim);
+  await assert.rejects(collectPetroleumPreservationScope(f.input, f.options), error => error.code === invalid.code && /supplier identity/.test(error.message));
+  assert.equal(f.calls.length, 0);
+  // An independently supplied complete transport result cannot bypass the adapter gate.
+  f.scope.sourceClaims.push(claim); f.scope.coverage.sourceCount = f.scope.sourceClaims.length;
+  f.scope.coverage.contentFingerprint = petroleumScopeFingerprint(f.scope);
+  const context = buildGroupedPreservationContext(f.salesforce, f.xero, f.stored, f.input.sources);
+  const result = evaluatePetroleumFinancialDocument(f.source, f.candidate, { ...context, petroleum: f.scope }, f.fileEvidence);
+  assert.equal(result.eligible, false); assert.equal(result.evidence, null);
+  assert(result.blockers.some(row => row.code === 'IDENTITY_SCOPE_INCOMPLETE'));
+});
+
+test('real collector batch and selected-subset scopes yield the same immutable multi-owner row', async () => {
+  const f = fixture(issuedPetroleumOwnerFixture);
+  const second = { ...structuredClone(f.supplier), Id: 'a06000000000003', Supplier__c: '001000000000003', STEM__c: 'a0H000000000003', Name: 'OTHER', Invoice_Amount__c: 50 };
+  const secondSource = { ...structuredClone(f.source), salesforceId: second.Id, accountId: second.Supplier__c, stemId: second.STEM__c,
+    contactId: uuid(70), documentNumber: second.Name };
+  const secondTarget = { ...structuredClone(f.candidate), id: uuid(71), contactId: uuid(70), invoiceNumber: 'OTHER' };
+  f.salesforce.groupedAccountSnapshot.accounts.push({ id: second.Supplier__c, name: 'OTHER', companyCode: 'HKOTHER', recordType: 'Supplier', inactiveSuspended: false });
+  f.xero.contacts.push({ id: uuid(70), name: 'OTHER', status: 'ACTIVE' }); f.xero.documents.push(secondTarget);
+  f.salesforce.suppliers.push(second); f.rows.parents.push(second);
+  f.input.sources.push(secondSource); f.input.records.push({ ...f.packet.records[0], sourceId: second.Id, xeroDocumentId: secondTarget.id });
+  const fetch = f.options.accountingFetch;
+  f.options.accountingFetch = async (connection, path, options) => {
+    if (path.startsWith('/Invoices?') && decodeURIComponent(path).includes(uuid(70))) return { Invoices: [{ ...structuredClone(f.raw), InvoiceID: secondTarget.id,
+      Contact: { ContactID: uuid(70), Name: f.raw.Contact.Name }, InvoiceNumber: 'OTHER' }] };
+    return fetch(connection, path, options);
+  };
+  // The saved normalized second target must be identical to the current mock API projection.
+  const { normalizeXeroInvoice } = await import('../api/_xeroFinancialSync.js');
+  Object.assign(secondTarget, normalizeXeroInvoice({ ...structuredClone(f.raw), InvoiceID: secondTarget.id, Contact: { ContactID: uuid(70), Name: f.raw.Contact.Name }, InvoiceNumber: 'OTHER' }));
+  const batch = await collectPetroleumPreservationScope(f.input, f.options);
+  const context = buildGroupedPreservationContext(f.salesforce, f.xero, f.stored, f.input.sources);
+  const batchResult = evaluatePetroleumFinancialDocument(f.source, f.candidate, { ...context, petroleum: batch }, f.fileEvidence);
+  assert.equal(batchResult.eligible, true, JSON.stringify(batchResult.blockers));
+  f.input.records = [f.input.records[0]]; f.rows.parents = [f.rows.parents[0]];
+  const subset = await collectPetroleumPreservationScope(f.input, f.options);
+  const subsetResult = evaluatePetroleumFinancialDocument(f.source, f.candidate, { ...context, petroleum: subset }, f.fileEvidence);
+  assert.equal(subsetResult.eligible, true, JSON.stringify(subsetResult.blockers));
+  assert.notEqual(batch.coverage.contentFingerprint, subset.coverage.contentFingerprint);
+  assert.equal(batchResult.fingerprint, subsetResult.fingerprint); assert.equal(batchResult.evidenceFingerprint, subsetResult.evidenceFingerprint);
+});
 
 test('collector actually fetches all-years source claims, raw BDN price and authoritative STEM/vessel then bounded full contact history', async () => {
   const f = fixture(); const scope = await collectPetroleumPreservationScope(f.input, f.options);

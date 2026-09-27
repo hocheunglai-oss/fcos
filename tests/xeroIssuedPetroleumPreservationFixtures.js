@@ -68,3 +68,14 @@ export function issuedPetroleumFixture() {
       scope.coverage.creditCount = scope.creditClaims.length; scope.coverage.contentFingerprint = petroleumScopeFingerprint(scope); },
     build: () => evaluatePetroleumFinancialDocument(source, candidate, context, fileEvidence) };
 }
+
+export function issuedPetroleumOwnerFixture() {
+  const f = issuedPetroleumFixture();
+  f.salesforce.groupedAccountSnapshot.accounts.push({ id: '001000000000002', name: f.account.Name,
+    companyCode: 'HKEXAMPLE INTERNATIONAL SUPPLY LTD', recordType: 'Buyer', inactiveSuspended: true });
+  f.scope.coverage.sourceAccountIds.push('001000000000002');
+  f.scope.coverage.sourceAccountIds.sort();
+  f.refreshScope();
+  Object.assign(f.context, buildGroupedPreservationContext(f.salesforce, f.xero, f.stored, [f.source]));
+  return f;
+}

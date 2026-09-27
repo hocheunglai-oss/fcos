@@ -3,11 +3,12 @@ import test from 'node:test';
 import { currentIssuedPetroleumMatches } from '../api/_xeroIssuedPetroleumSticky.js';
 import { buildFinancialClassifications } from '../api/_xeroFinancialSync.js';
 import { buildGroupedPreservationContext } from '../api/_xeroGroupedPreservationAdapter.js';
-import { issuedPetroleumFixture } from './xeroIssuedPetroleumPreservationFixtures.js';
+import { issuedPetroleumFixture, issuedPetroleumOwnerFixture } from './xeroIssuedPetroleumPreservationFixtures.js';
+import { issuedSupplierHash as hash } from '../api/_xeroIssuedSupplierPreservation.js';
 
 const uuid = (number) => `00000000-0000-4000-8000-${String(number).padStart(12, '0')}`;
-function fixture() {
-  const f = issuedPetroleumFixture();
+function fixture(make = issuedPetroleumFixture) {
+  const f = make();
   const proof = f.build();
   assert.equal(proof.eligible, true, JSON.stringify(proof.blockers));
   const refresh = () => {
@@ -165,4 +166,55 @@ test('observation timestamps and equivalent decimal spelling do not change the a
   const { source, context } = f.refresh();
   f.child.Unit_Buy_At__c = '856.8240'; f.child.Quantity_Delivered_Per_BDN__c = '1993.2170';
   assert.equal(currentIssuedPetroleumMatches(source, context, f.proof), true);
+});
+
+test('an unchanged inactive-owner acceptance stays protected and never becomes an accounting payload', () => {
+  const f = fixture(issuedPetroleumOwnerFixture);
+  assert.equal(f.matches(), true); f.accept();
+  const row = f.refresh().row;
+  assert.equal(row.status, 'protected'); assert.equal(row.acceptedLegacy, true);
+  assert.equal(row.proposedPayload, null); assert.equal(f.source.readiness.ready, false);
+});
+
+test('current inactive-owner set, literal facts and stronger Contact claims must match the receipt', async t => {
+  for (const [name, change] of [
+    ['owner removed', f => { f.salesforce.groupedAccountSnapshot.accounts.pop(); }],
+    ['owner added', f => { f.salesforce.groupedAccountSnapshot.accounts.push({ ...f.salesforce.groupedAccountSnapshot.accounts[1], id: '001000000000003', companyCode: 'HKOTHER' }); }],
+    ['inactive owner reactivated', f => { f.salesforce.groupedAccountSnapshot.accounts[1].inactiveSuspended = false; }],
+    ['unknown inactivity', f => { delete f.salesforce.groupedAccountSnapshot.accounts[1].inactiveSuspended; }],
+    ['inactive owner company code', f => { f.salesforce.groupedAccountSnapshot.accounts[1].companyCode += 'CHANGED'; }],
+    ['inactive owner record type', f => { f.salesforce.groupedAccountSnapshot.accounts[1].recordType = 'Buyer_Supplier'; }],
+    ['inactive owner literal name', f => { f.salesforce.groupedAccountSnapshot.accounts[1].name += ' '; }],
+    ['malformed owner checksum', f => { f.salesforce.groupedAccountSnapshot.accounts[1].id += 'ZZZ'; }],
+    ['explicit foreign Account', f => { f.xero.contacts[0].contactNumber = '001000000000099'; }],
+    ['padded foreign Account', f => { f.xero.contacts[0].accountNumber = ' 001000000000099 '; }],
+    ['historical Contact number changed', f => { f.xero.contacts[0].accountNumber = 'HISTORICALNEW'; }],
+    ['archived competing Contact', f => { f.xero.contacts.push({ ...f.xero.contacts[0], id: uuid(84), status: 'ARCHIVED' }); }],
+    ['complete Account scope lost', f => { f.salesforce.groupedAccountSnapshot.complete = false; }],
+    ['complete Contact scope lost', f => { f.xero.contactsComplete = false; }],
+  ]) await t.test(name, () => {
+    const f = fixture(issuedPetroleumOwnerFixture); f.accept(); change(f);
+    assert.equal(f.matches(), false);
+    const row = f.refresh().row; assert.equal(row.status, 'blocked'); assert.equal(row.proposedPayload, null);
+  });
+});
+
+test('rehashed corrupt inactive-owner receipts cannot fall back to the legacy singleton path', async t => {
+  for (const [name, change] of [
+    ['policy removed', a => { delete a.identityOwnershipPolicy; }],
+    ['proof removed', a => { delete a.identityOwnership; }],
+    ['null proof', a => { a.identityOwnership = null; }],
+    ['unknown policy', a => { a.identityOwnershipPolicy = 'ignore_inactive_accounts'; }],
+    ['unqueried owner', a => { a.identityOwnership.queriedSourceAccountIds.pop(); }],
+    ['malformed owners', a => { a.identityOwnership.owners = 'invalid'; }],
+  ]) await t.test(name, () => {
+    const f = fixture(issuedPetroleumOwnerFixture); f.accept();
+    const saved = f.stored.documentMappings[0].retained_differences.issuedSupplierPreservation;
+    change(saved.evidence.accounting);
+    saved.fingerprint = hash({ policyVersion: saved.policyVersion, accounting: saved.evidence.accounting });
+    saved.evidenceFingerprint = hash(saved.evidence);
+    const { source, context, row } = f.refresh();
+    assert.equal(currentIssuedPetroleumMatches(source, context, saved), false);
+    assert.equal(row.status, 'blocked'); assert.equal(row.proposedPayload, null);
+  });
 });

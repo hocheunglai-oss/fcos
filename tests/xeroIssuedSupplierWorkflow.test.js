@@ -3,7 +3,9 @@ import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { xeroFinancialDocumentPreservationPreview as preview, xeroFinancialDocumentPreservationRun as run } from '../api/_xeroIssuedSupplierWorkflow.js';
 import { issuedSupplierWorkflowFixture } from './xeroIssuedSupplierPreservationFixtures.js';
-import { issuedPetroleumFixture } from './xeroIssuedPetroleumPreservationFixtures.js';
+import { issuedPetroleumFixture, issuedPetroleumOwnerFixture } from './xeroIssuedPetroleumPreservationFixtures.js';
+import { collectPetroleumPreservationScope } from '../api/_xeroIssuedPetroleumScope.js';
+import { normalizeXeroInvoice } from '../api/_xeroFinancialSync.js';
 
 const actor = { id: '00000000-0000-4000-8000-000000000099', email: 'finance@example.com' };
 const copy = (value) => structuredClone(value);
@@ -175,6 +177,76 @@ test('petroleum scope drift and absent current mapping approval abort before the
     assert.equal(h.tables.xero_financial_document_mappings.length, 0);
     assert.equal(h.calls.some((call) => call.name === 'link_xero_issued_petroleum_document_v1'), false);
   }
+});
+
+test('real historical collector preserves an eligible selection when a different reviewed row is disputed', async () => {
+  const f = issuedPetroleumOwnerFixture();
+  const second = issuedPetroleumFixture();
+  const sourceId = 'a06000000000002', stemId = 'a0H000000000002', childId = 'a05000000000002';
+  const documentId = '069000000000002', versionId = '068000000000002';
+  const targetId = '00000000-0000-4000-8000-000000000030';
+  Object.assign(second.supplier, { Id: sourceId, Name: 'PET26002', STEM__c: stemId });
+  Object.assign(second.supplier.STEM__r, { KeyStem__c: 'HK2626002T', Name: 'HK2626002T - VESSEL TWO',
+    Vessel__c: 'a0V000000000002', Vessel__r: { Name: 'VESSEL TWO' } });
+  Object.assign(second.child, { Id: childId, Supplier_Invoice__c: sourceId, STEM__c: stemId });
+  Object.assign(second.raw, { InvoiceID: targetId, InvoiceNumber: '79717P-VESSEL TWO' });
+  second.raw.LineItems[0].LineItemID = '00000000-0000-4000-8000-000000000040';
+  Object.assign(second.fileEvidence, { parentId: sourceId, documentId, versionId });
+  Object.assign(second.fileEvidence.link, { id: '06A000000000002', parentId: sourceId, documentId });
+  Object.assign(second.fileEvidence.version, { id: versionId, documentId, latestPublishedVersionId: versionId });
+  Object.assign(second.fileEvidence.review, { sourceNumber: 'PET26002', printedNumber: 'PET-26-002', vessel: 'VESSEL TWO' });
+  f.salesforce.suppliers.push(second.supplier);
+  f.salesforce.lines.push(second.child);
+  f.xero.documents.push(normalizeXeroInvoice(second.raw));
+  f.files.set(sourceId, second.fileEvidence);
+  f.packet.records.push({ sourceId, xeroDocumentId: targetId, documentId, versionId,
+    sha256: second.fileEvidence.sha256, review: second.fileEvidence.review });
+  const h = harness(f), reads = [], collected = [];
+  h.tables.dispute_beta_cases.push({ stem_id: stemId, workflow_status: 'open' });
+  const complete = records => ({ records: copy(records), totalSize: records.length, done: true });
+  const query = async (soql, options) => {
+    reads.push({ kind: 'salesforce', soql, options });
+    if (soql.includes('FROM Organization')) return complete([{ Id: f.fileEvidence.orgId, IsSandbox: false }]);
+    if (soql.includes('FROM Supplier_Invoice__c')) return complete(f.salesforce.suppliers);
+    if (soql.includes('FROM STEM_Line_Item__c')) {
+      const selected = /Supplier_Invoice__c IN \(([^)]+)\)/.exec(soql)?.[1] || '';
+      return complete(f.salesforce.lines.filter(row => selected.includes(`'${row.Supplier_Invoice__c}'`)));
+    }
+    if (soql.includes('FROM STEM_Extra_Cost__c')) return complete([]);
+    assert.match(soql, /FROM Product2/);
+    return complete([f.product]);
+  };
+  h.dependencies.collectPetroleumScope = async input => {
+    const scope = await collectPetroleumPreservationScope(input, { query, queryAll: query,
+      accountingFetch: async (_connection, path, options) => {
+        reads.push({ kind: 'xero', path, method: options.method });
+        assert.equal(options.method, 'GET'); assert.equal(options.body, undefined);
+        if (path.startsWith('/Invoices?')) return { Invoices: copy([f.raw, second.raw]) };
+        if (path.startsWith('/CreditNotes?')) return { CreditNotes: [] };
+        if (path === '/Accounts') return { Accounts: f.scope.accountTax.accounts };
+        assert.equal(path, '/TaxRates'); return { TaxRates: f.scope.accountTax.taxRates };
+      } });
+    collected.push(scope);
+    return scope;
+  };
+  const before = copy(f.xero.documents);
+  const review = await h.preview();
+  assert.equal(review.rows[0].status, 'eligible', JSON.stringify(review.rows[0].blockers));
+  assert.equal(review.rows[1].status, 'blocked');
+  assert(review.rows[1].blockers.some(reason => /unresolved dispute/.test(reason)));
+  const result = await run({ ...h.body(review), selectedItemIds: [review.rows[0].id] }, h.dependencies);
+  assert.deepEqual(result.outcomes.map(row => row.status), ['linked']);
+  assert.equal(result.financialWrites, 0);
+  assert.equal(collected.length, 2, 'Preview and Run each perform real fresh historical collection');
+  assert.equal(collected[0].sourceFacts.size, 2); assert.equal(collected[1].sourceFacts.size, 1);
+  assert.equal(h.tables.xero_financial_document_mappings.length, 1);
+  const receipt = h.tables.xero_financial_document_mappings[0].retained_differences.issuedSupplierPreservation;
+  assert.equal(receipt.evidence.accounting.identityOwnershipPolicy, 'document_specific_inactive_source_owners_v1');
+  assert.deepEqual(receipt.evidence.accounting.identityOwnership.sourceAccountIds, [f.ids.account, '001000000000002']);
+  assert(reads.filter(row => row.kind === 'salesforce' && row.soql.includes('FROM Supplier_Invoice__c'))
+    .every(row => row.soql.includes("'001000000000002'") && !/WHERE .*Invoice_Date__c/.test(row.soql)));
+  assert.deepEqual(f.xero.documents, before);
+  assert.equal(h.tables.xero_financial_sync_items.find(row => row.id === review.rows[1].id).status, 'blocked');
 });
 
 test('exact successful run persists complete proof, source/item identities and authenticated actor', async () => {

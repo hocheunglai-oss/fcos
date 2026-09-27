@@ -141,6 +141,49 @@ test('changed bytes, MD5, SHA, PDF signature, MIME, byte count and buffer type a
   await assert.rejects(collectIssuedSupplierFiles({ records: [{ ...record(), sha256: '0'.repeat(64) }] }, fixture().options), invalid);
 });
 
+test('Salesforce octetstream MIME preserves every independent issued-file integrity guard', async (t) => {
+  for (const contentType of ['application/octetstream', ' Application/Octetstream; charset=binary ']) {
+    const stub = fixture({ file: { buffer: bytes, contentType } });
+    const evidence = (await collectIssuedSupplierFiles({ records: [record()] }, stub.options)).get(sourceId);
+    assert.equal(evidence.contentType, 'application/pdf');
+    assert.equal(evidence.sha256, hash(bytes, 'sha256'));
+    assert.equal(evidence.checksum, hash(bytes, 'md5'));
+    assert.equal(evidence.contentSize, bytes.length);
+    assert.equal(evidence.buffer, undefined);
+    assert.equal(stub.calls.filter((call) => call.type === 'download').length, 1);
+  }
+
+  const version = fixture().currentVersions[0];
+  const changed = Buffer.from(bytes); changed[changed.length - 1] = 0;
+  const unsigned = Buffer.from(bytes); unsigned[0] = '!'.charCodeAt(0);
+  const cases = [
+    { name: 'SHA mismatch with matching MD5, size and PDF signature',
+      file: { buffer: changed, contentType: 'application/octetstream' },
+      versions: [{ ...version, Checksum: hash(changed, 'md5') }] },
+    { name: 'MD5 mismatch with matching SHA, size and PDF signature',
+      versions: [{ ...version, Checksum: '0'.repeat(32) }] },
+    { name: 'metadata size mismatch with unchanged reviewed bytes',
+      versions: [{ ...version, ContentSize: bytes.length + 1 }] },
+    { name: 'non-PDF signature with matching reviewed SHA, MD5 and size',
+      file: { buffer: unsigned, contentType: 'application/octetstream' },
+      versions: [{ ...version, Checksum: hash(unsigned, 'md5') }],
+      row: { ...record(), sha256: hash(unsigned, 'sha256') } },
+    ...['text/html', 'application/octetstream-evil', 'application/octet', undefined].map((contentType) => ({
+      name: `unsupported MIME ${String(contentType)} with unchanged reviewed bytes`, file: { buffer: bytes, contentType },
+    })),
+    { name: 'non-Buffer bytes', file: { buffer: new Uint8Array(bytes), contentType: 'application/octetstream' } },
+  ];
+  for (const { name, row = record(), ...patch } of cases) {
+    await t.test(name, async () => {
+      const stub = fixture({ file: { buffer: bytes, contentType: 'application/octetstream' }, ...patch });
+      // Admit this synthetic test row so failure exercises the download guard, not the review registry.
+      stub.options.approvedReviewHashes = [issuedSupplierHash(row)];
+      await assert.rejects(collectIssuedSupplierFiles({ records: [row] }, stub.options), invalid);
+      assert.deepEqual(stub.calls.map((call) => call.type), ['query', 'query', 'query', 'download']);
+    });
+  }
+});
+
 test('authoritative vessel retrieval requires complete unique source records and accounting scope', async () => {
   const rows = [{ Id: sourceId, STEM__c: 'stem', STEM__r: { Vessel__r: { Name: 'VESSEL ONE' } } },
     { Id: 'a01000000000002AAA', STEM__c: 'stem-two', STEM__r: null }];

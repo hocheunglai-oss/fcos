@@ -30,7 +30,7 @@ import {
 } from './_xeroContactSync.js';
 
 export const XERO_FINANCIAL_CUTOFF = '2026-01-01';
-export const XERO_RECONCILIATION_VERSION = 12;
+export const XERO_RECONCILIATION_VERSION = 13;
 const MAX_BATCH_SIZE = 25;
 const DEFAULT_CALLS_PER_MINUTE = 45;
 const DEFAULT_DAILY_LIMIT = 1000;

@@ -1,6 +1,7 @@
 import { ISSUED_PETROLEUM_POLICY } from '../config/xeroIssuedPreservationPolicies.js';
 import { issuedSupplierSfId as sf, issuedSupplierCents as cents, issuedSupplierHash as hash } from './_xeroIssuedSupplierPreservation.js';
 import { issuedPetroleumDecimal as decimal } from './_xeroIssuedPetroleumPreservation.js';
+import { currentPetroleumOwnershipMatches } from './_xeroIssuedPetroleumOwnership.js';
 
 const MISSING_FILE = 'Supplier invoice has no verified issued source file.';
 const uuid = (value) => typeof value === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(value)
@@ -82,13 +83,17 @@ export function currentIssuedPetroleumMatches(source, context, proof) {
     const matches = account ? context.matchesFor(account) : [];
     const members = context.members.get(uuid(source.contactId));
     const counterparties = accounting.issuedFile?.review?.counterparties;
+    const ownershipPresent = Object.hasOwn(accounting, 'identityOwnershipPolicy') || Object.hasOwn(accounting, 'identityOwnership');
+    const ownershipMatches = ownershipPresent ? currentPetroleumOwnershipMatches(accounting, { tenantId: context.tenantId,
+      accountId: source.accountId, contactId: source.contactId, accounts: [...context.accountsById.values()],
+      contacts: context.identityContacts, complete: context.complete }) : one(members, (row) => row.id, account?.id) && members[0].inactiveSuspended === false;
     if (!account || account.inactiveSuspended !== false || !sameSf(account.id, source.accountId)
       || account.name !== source.accountName || parent.Supplier__r?.Name !== account.name || counterparties?.sourceName !== account.name
       || account.companyCode !== (source.companyCode || '') || parent.Supplier__r?.Company_Code__c !== account.companyCode
       || counterparties.companyCode !== account.companyCode || !sameSf(counterparties.accountId, account.id)
       || uuid(counterparties.contactId) !== uuid(source.contactId) || uuid(counterparties.tenantId) !== uuid(context.tenantId)
       || !Array.isArray(matches) || matches.length !== 1 || matches[0].status !== 'ACTIVE' || uuid(matches[0].id) !== uuid(source.contactId)
-      || !one(members, (row) => row.id, account.id) || members[0].inactiveSuspended !== false
+      || !ownershipMatches
       || accounting.contactIdentity?.evidenceFingerprint !== hash({ policy: 'fcos_contact_name_v1', account, contact: matches[0] })) return false;
 
     const mappings = context.stored.productMappings.filter((row) => row?.direction === 'supplier' && sameSf(row.salesforce_product_id, child.Product__c));

@@ -5,6 +5,7 @@ import { buildGroupedPreservationContext } from './_xeroGroupedPreservationAdapt
 import { normalizeXeroInvoice, normalizeXeroCreditNote, assertXeroFinancialDailyReserve, xeroFinancialRateSnapshot } from './_xeroFinancialSync.js';
 import { safetySelectFields } from './_xeroDocumentSafety.js';
 import { issuedSupplierSfId as sf, issuedSupplierHash as hash } from './_xeroIssuedSupplierPreservation.js';
+import { derivePetroleumOwnership, petroleumDistinctStemSuppliers } from './_xeroIssuedPetroleumOwnership.js';
 
 const POLICY = 'issued_petroleum_preserve_v1';
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
@@ -26,6 +27,27 @@ export function petroleumScopeFingerprint(scope) {
     accountTax: scope?.accountTax, coverage });
 }
 
+// Logical per-document coverage is projected only after validating the complete
+// physical batch. Unselected suppliers cannot change an accepted row's hash.
+export function petroleumScopeForSource(scope, source, ownership) {
+  if (!ownership?.eligible || !ownership.requiresProof || !ownership.sourceAccountIds.every(id => scope.coverage.sourceAccountIds.includes(id))
+    || !scope.coverage.stemIds.includes(sf(source.stemId)) || !scope.coverage.xeroContactIds.includes(uid(source.contactId))) throw fail('Complete owner-union history is required.');
+  const sourceAccountIds = ownership.sourceAccountIds;
+  const stemIds = [sf(source.stemId)]; const xeroContactIds = [uid(source.contactId)];
+  const sourceClaims = scope.sourceClaims.filter(row => sourceAccountIds.includes(sf(row.Supplier__c)) || stemIds.includes(sf(row.STEM__c)));
+  const targetClaims = scope.targetClaims.filter(row => uid(row.document.contactId) === xeroContactIds[0]);
+  const creditClaims = scope.creditClaims.filter(row => uid(row.document.contactId) === xeroContactIds[0]);
+  const logical = { sourceAccountIds, stemIds, xeroContactIds, sourceId: sf(source.salesforceId) };
+  const queryFingerprints = ['Organization', 'Supplier_Invoice__c:queryAll', 'STEM_Line_Item__c:queryAll', 'STEM_Extra_Cost__c:queryAll',
+    'Product2', 'Invoices:allYearsArchived', 'CreditNotes:allYears', 'Accounts', 'TaxRates']
+    .map(query => hash({ policy: 'petroleum_document_logical_scope_v1', query, ...logical }));
+  const projected = { ...scope, sourceFacts: new Map([[sf(source.salesforceId), scope.sourceFacts.get(sf(source.salesforceId))]]), sourceClaims, targetClaims, creditClaims,
+    coverage: { ...scope.coverage, sourceAccountIds, stemIds, xeroContactIds, sourceCount: sourceClaims.length,
+      targetCount: targetClaims.length, creditCount: creditClaims.length, queryFingerprints } };
+  projected.coverage.contentFingerprint = petroleumScopeFingerprint(projected);
+  return projected;
+}
+
 const PARENT_COMPARE = ['Id', 'Name', 'Supplier__c', 'STEM__c', 'Invoice_Amount__c', 'Invoice_Date__c', 'Invoice_Due_Date__c', 'LastModifiedDate', 'CurrencyIsoCode', 'Invoice_File__c', 'File__c'];
 const CHILD_COMPARE = ['Id', 'Supplier_Invoice__c', 'Original_Supplier__c', 'STEM__c', 'Cancelled__c', 'Product__c', 'Product2Id__c', 'Quantity_Delivered_Per_BDN__c', 'Quantity__c', 'Unit_of_Measure__c', 'Unit_Buy_At__c', 'Total_Cost__c', 'LastModifiedDate', 'CurrencyIsoCode'];
 const agree = (fresh, previous, fields) => fields.every((key) => !Object.hasOwn(previous, key) || (Object.hasOwn(fresh, key) && hash(fresh[key]) === hash(previous[key])));
@@ -45,16 +67,19 @@ export async function collectPetroleumPreservationScope({ records, connection, s
     const targets = [...xero.documents, ...(xero.inactiveDocuments || [])].filter((target) => uid(target.id) === uid(record.xeroDocumentId));
     const account = context.accountsById.get(sf(source?.accountId));
     const contacts = account ? context.matchesFor(account) : [];
+    const members = context.members.get(uid(source?.contactId)) || [];
+    const ownership = members.length > 1 ? derivePetroleumOwnership({ tenantId: connection.tenantId,
+      accountId: source?.accountId, contactId: source?.contactId, accounts: [...context.accountsById.values()], contacts: xero.contacts, complete: context.complete }) : null;
     if (!sf(record.sourceId) || !uid(record.xeroDocumentId) || matches.length !== 1 || targets.length !== 1
       || source.salesforceObject !== 'Supplier_Invoice__c' || !sf(source.stemId) || !sf(source.accountId)
       || contacts.length !== 1 || uid(contacts[0].id) !== uid(source.contactId)
-      || (context.members.get(uid(source.contactId)) || []).length !== 1 || targets[0].type !== 'ACCPAY'
+      || (members.length !== 1 && !ownership?.eligible) || targets[0].type !== 'ACCPAY'
       || uid(targets[0].contactId) !== uid(source.contactId)) throw fail('A unique current source Account and Xero Contact/target are required.');
-    return { source, target: targets[0] };
+    return { source, target: targets[0], ownership };
   });
   if (unique(selections.map(({ source }) => sf(source.salesforceId))).length !== records.length
     || unique(selections.map(({ target }) => uid(target.id))).length !== records.length) throw fail('Repeated selected identities are unsupported.');
-  const sourceAccountIds = unique(selections.map(({ source }) => sf(source.accountId)));
+  const sourceAccountIds = unique(selections.flatMap(({ source, ownership }) => ownership?.sourceAccountIds || [sf(source.accountId)]));
   const stemIds = unique(selections.map(({ source }) => sf(source.stemId)));
   const sourceIds = unique(selections.map(({ source }) => sf(source.salesforceId)));
   const xeroContactIds = unique(selections.map(({ source }) => uid(source.contactId)));
@@ -73,6 +98,8 @@ export async function collectPetroleumPreservationScope({ records, connection, s
   const extra = (object, fields) => safetySelectFields(salesforce.safetyContext, object, fields);
   const parents = await read(`SELECT Id, IsDeleted, Name, Supplier__c, Supplier__r.Name, Supplier__r.Company_Code__c, STEM__c, STEM__r.KeyStem__c, STEM__r.Delivery_Date__c, STEM__r.Vessel__c, STEM__r.Vessel__r.Name, STEM__r.LastModifiedDate, Invoice_Amount__c, Invoice_Date__c, Invoice_Due_Date__c, CreatedDate, LastModifiedDate${extra('Supplier_Invoice__c', ['CurrencyIsoCode', 'Invoice_File__c', 'File__c', 'Invoice_Upload_Date__c', 'Status__c', 'Invoice_Status__c'])} FROM Supplier_Invoice__c WHERE Supplier__c IN (${quote(sourceAccountIds)}) OR STEM__c IN (${quote(stemIds)}) ORDER BY Id`, PETROLEUM_SCOPE_LIMITS.parents, true);
   if (parents.some((row) => !sourceAccountIds.includes(sf(row.Supplier__c)) && !stemIds.includes(sf(row.STEM__c)))) throw fail('Salesforce returned an out-of-scope supplier obligation.');
+  for (const { source, ownership } of selections) if (ownership?.requiresProof
+    && !petroleumDistinctStemSuppliers(parents, source.stemId, ownership, [...context.accountsById.values()])) throw fail('A same-STEM obligation has an unproven or contradictory supplier identity.');
   const lines = await read(`SELECT Id, IsDeleted, Name, Supplier_Invoice__c, Original_Supplier__c, STEM__c, Cancelled__c, Product__c, Product__r.Name, Quantity_Delivered_Per_BDN__c, Quantity__c, Unit_of_Measure__c, Unit_Buy_At__c, Total_Cost__c, LastModifiedDate${extra('STEM_Line_Item__c', ['CurrencyIsoCode'])} FROM STEM_Line_Item__c WHERE Supplier_Invoice__c IN (${quote(sourceIds)}) ORDER BY Id`, PETROLEUM_SCOPE_LIMITS.children, true);
   const extras = await read(`SELECT Id, IsDeleted, Supplier_Invoice__c, STEM__c, Cancelled__c FROM STEM_Extra_Cost__c WHERE Supplier_Invoice__c IN (${quote(sourceIds)}) ORDER BY Id`, PETROLEUM_SCOPE_LIMITS.children, true);
   if ([...lines, ...extras].some((row) => !sourceIds.includes(sf(row.Supplier_Invoice__c)))) throw fail('Salesforce returned an out-of-scope child.');

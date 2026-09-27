@@ -1,7 +1,8 @@
 import { hkStrippedClKeyNameMatchKey, normalizeName } from './_xeroContactSync.js';
 import { issuedSupplierSfId as sf, issuedSupplierCents as cents, issuedSupplierHash as hash } from './_xeroIssuedSupplierPreservation.js';
 import { evaluateIssuedPetroleumPreservation, ISSUED_PETROLEUM_PRESERVATION_POLICY as POLICY, issuedPetroleumVessel, issuedPetroleumDecimal } from './_xeroIssuedPetroleumPreservation.js';
-import { petroleumScopeFingerprint } from './_xeroIssuedPetroleumScope.js';
+import { petroleumScopeFingerprint, petroleumScopeForSource } from './_xeroIssuedPetroleumScope.js';
+import { derivePetroleumOwnership, bindPetroleumOwnership, petroleumDistinctStemSuppliers } from './_xeroIssuedPetroleumOwnership.js';
 
 const uuid = (value) => typeof value === 'string' ? value.toLowerCase() : null;
 const words = (value) => typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : '';
@@ -20,13 +21,13 @@ const currencyCode = (value) => typeof value === 'string' && /^[A-Z]{3}$/.test(v
 const unique = (rows, key) => new Set(rows.map(key)).size === rows.length;
 
 export function evaluatePetroleumFinancialDocument(source, candidate, context, fileEvidence) {
-  const scope = context?.petroleum;
+  let scope = context?.petroleum;
   if (!source || !candidate || context?.complete !== true || !(context.accountsById instanceof Map) || !(context.members instanceof Map)
     || typeof context.matchesFor !== 'function' || !Array.isArray(context.stored?.productMappings) || !Array.isArray(context.stored?.documentMappings)
     || scope?.policyVersion !== POLICY || scope.tenantId !== context.tenantId || sf(scope.salesforceOrgId) !== sf(fileEvidence?.orgId) || !(scope.sourceFacts instanceof Map)
     || !Array.isArray(scope.sourceClaims) || !Array.isArray(scope.targetClaims) || !Array.isArray(scope.creditClaims)
     || !Array.isArray(scope.accountTax?.accounts) || !Array.isArray(scope.accountTax?.taxRates)) return reject('EVIDENCE_INCOMPLETE', 'Complete current petroleum snapshots are required.');
-  const coverage = scope.coverage;
+  let coverage = scope.coverage;
   if (!coverage || ['sourceQueryAll', 'sourceComplete', 'targetComplete', 'creditComplete', 'accountTaxComplete'].some((key) => coverage[key] !== true)
     || !coverage.sourceAccountIds?.includes(sf(source.accountId)) || !coverage.stemIds?.includes(sf(source.stemId))
     || !coverage.xeroContactIds?.includes(uuid(source.contactId)) || coverage.sourceCount !== scope.sourceClaims.length
@@ -35,6 +36,20 @@ export function evaluatePetroleumFinancialDocument(source, candidate, context, f
     || coverage.contentFingerprint !== petroleumScopeFingerprint(scope)
     || !unique(scope.sourceClaims, (row) => sf(row.Id)) || !unique(scope.targetClaims, (row) => uuid(row.document?.id))
     || !unique(scope.creditClaims, (row) => uuid(row.document?.id))) return reject('IDENTITY_SCOPE_INCOMPLETE', 'All-years identity coverage is incomplete, duplicated or changed.');
+  const owners = context.members.get(uuid(source.contactId)) || [];
+  let ownershipFields = {};
+  let sourceAccountIds = [sf(source.accountId)];
+  if (owners.length > 1) {
+    const ownership = derivePetroleumOwnership({ tenantId: context.tenantId, accountId: source.accountId, contactId: source.contactId,
+      accounts: [...context.accountsById.values()], contacts: context.identityContacts, complete: context.complete });
+    if (!ownership.eligible || !ownership.requiresProof) return reject('CONTACT_OWNERSHIP_UNPROVEN', ownership.blockers?.[0]?.message || 'Current potential source ownership is incomplete.');
+    if (!petroleumDistinctStemSuppliers(scope.sourceClaims, source.stemId, ownership, [...context.accountsById.values()])) return reject('IDENTITY_SCOPE_INCOMPLETE', 'A same-STEM obligation has an unproven or contradictory supplier identity.');
+    try { scope = petroleumScopeForSource(scope, source, ownership); } catch { return reject('IDENTITY_SCOPE_INCOMPLETE', 'All retained source owners must be included in complete all-years history.'); }
+    coverage = scope.coverage;
+    ownershipFields = bindPetroleumOwnership(ownership, coverage);
+    if (!ownershipFields) return reject('CONTACT_OWNERSHIP_UNPROVEN', 'Current document ownership proof could not be bound.');
+    sourceAccountIds = ownership.sourceAccountIds;
+  }
   const facts = scope.sourceFacts.get(sf(source.salesforceId));
   const parent = facts?.parent; const children = facts?.lines; const product = facts?.product;
   if (!parent || parent.IsDeleted !== false || !Array.isArray(children) || children.length !== 1 || !Array.isArray(facts.extras) || facts.extras.length
@@ -71,7 +86,7 @@ export function evaluatePetroleumFinancialDocument(source, candidate, context, f
     && parent.Supplier__r?.Name === source.accountName && parent.Supplier__r?.Company_Code__c === (source.companyCode || '') && account.inactiveSuspended === false;
   const vessel = words(parent.STEM__r?.Vessel__r?.Name); const deliveryDate = parent.STEM__r?.Delivery_Date__c;
   const total = cents(parent.Invoice_Amount__c);
-  const sourceEnvelope = scope.sourceClaims.filter((row) => sf(row.Supplier__c) === sf(source.accountId)
+  const sourceEnvelope = scope.sourceClaims.filter((row) => sourceAccountIds.includes(sf(row.Supplier__c))
     && (!currencyCode(currencyFor(row)) || currencyFor(row) === 'USD')
     && (claimCents(row.Invoice_Amount__c) === total || claimCents(row.Invoice_Amount__c) === null));
   const targetEnvelope = scope.targetClaims.filter(({ raw }) => uuid(raw?.Contact?.ContactID) === uuid(source.contactId)
@@ -87,7 +102,7 @@ export function evaluatePetroleumFinancialDocument(source, candidate, context, f
   const targetScope = targetEnvelope.filter(({ raw, document }) => raw.CurrencyCode === 'USD' && document.date === deliveryDate
     && issuedPetroleumVessel(document.invoiceNumber) === vessel);
   const numbers = new Set([source.documentNumber, fileEvidence?.review?.printedNumber, candidate.invoiceNumber].filter(Boolean).map(numberKey));
-  const sourceNumberRows = scope.sourceClaims.filter((row) => sf(row.Supplier__c) === sf(source.accountId)
+  const sourceNumberRows = scope.sourceClaims.filter((row) => sourceAccountIds.includes(sf(row.Supplier__c))
     && (numbers.has(numberKey(row.Name)) || sf(row.STEM__c) === sf(source.stemId)));
   const targetNumberRows = scope.targetClaims.filter(({ raw, document }) => uuid(raw.Contact?.ContactID) === uuid(source.contactId)
     && (numbers.has(numberKey(document.invoiceNumber)) || hkClaims(document.reference).some((claim) => claim.toUpperCase() === source.stemKey)));
@@ -125,7 +140,7 @@ export function evaluatePetroleumFinancialDocument(source, candidate, context, f
       .map((row) => ({ id: row.id, direction: row.direction, salesforceProductId: row.salesforce_product_id, xeroAccountCode: row.xero_account_code,
         xeroTaxType: row.xero_tax_type, enabled: row.enabled, revision: row.revision, approvedBy: row.approved_by,
         approvedByEmail: row.approved_by_email, approvedAt: row.approved_at })),
-    identity: { complete: Boolean(exactAccount), coverageFingerprint: coverage.contentFingerprint,
+    identity: { complete: Boolean(exactAccount), coverageFingerprint: coverage.contentFingerprint, ...ownershipFields,
       candidateContactIds: contacts.map((row) => row.id), accountIdsForContact: (context.members.get(uuid(source.contactId)) || []).map((row) => row.id),
       candidateXeroDocumentIds: targetScope.map(({ document }) => document.id), documentIdentitySourceIds: sourceScope.map((row) => row.Id),
       numberCollisionXeroIds: targetNumberRows.map(({ document }) => document.id), numberCollisionSourceIds: sourceNumberRows.map((row) => row.Id),
