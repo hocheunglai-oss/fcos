@@ -3,6 +3,7 @@ import { APP_VERSION } from './appVersionMeta.js';
 export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
+  { version: '2.0.249', releasedAt: '2026-09-27', title: 'Complete and reliable Finance reviews', changes: ['Show financial reviews only after all required evidence is saved.', 'Reuse unchanged evidence-only reviews while preserving approvals, original records and audit history.'] },
   { version: '2.0.248', releasedAt: '2026-09-26', title: 'Verify evidence before updating authorised bills', changes: ['Require issued-source evidence for changes to authorised Xero documents, including in Create drafts mode.'] },
   { version: '2.0.247', releasedAt: '2026-09-26', title: 'Find attached supplier documents during Finance review', changes: ['Show directly attached PDF candidates for blocked supplier invoices with missing file links, including the Hong Kong lookup time and incomplete results.', 'Keep attachment discovery separate from invoice-content verification and financial approval.'] },
   { version: '2.0.244', releasedAt: '2026-09-24', title: 'Clear missing bank guidance', changes: ['Distinguish missing Salesforce bank details from an unapproved mapping, and prevent opening an empty mapping dialog.'] },

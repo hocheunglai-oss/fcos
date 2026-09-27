@@ -6,7 +6,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { PGlite } from '@electric-sql/pglite';
 import pg from 'pg';
 
-const migration = new URL('../supabase/migrations/20260927144846_xero_financial_preview_persistence.sql', import.meta.url);
+const migration = new URL('../supabase/migrations/20260927154515_xero_financial_preview_persistence.sql', import.meta.url);
 const signature = 'public.persist_xero_financial_preview_v1(jsonb,jsonb,text)';
 const statement = 'select public.persist_xero_financial_preview_v1($1::jsonb,$2::jsonb,$3) as result';
 const iso = '2026-09-27T10:00:00.000Z';
