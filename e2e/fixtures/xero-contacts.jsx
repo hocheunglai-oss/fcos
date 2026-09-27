@@ -7,6 +7,7 @@ import '../../src/index.css';
 
 const longName = 'PacificMarineFuelTradingInternationalDivisionContactWithAnUnbrokenIdentifier000000000001';
 const longMessage = 'The contact is protected because ' + 'anunbrokenauditmessagethatmustwrapinsideitsavailablecolumn'.repeat(3);
+const fixtureOptions = new URLSearchParams(window.location.search);
 const rows = [
   {
     id: 'rename-row', action: 'rename', status: 'eligible', reason: 'unchanged-name',
@@ -50,6 +51,17 @@ if (new URLSearchParams(window.location.search).get('resolution') === '1') rows.
     salesforceAccountId: '001000000000001AAA', salesforceName: 'Missing Harbour Buyer', salesforceCompanyCode: 'HK-MISSING', usage: [],
   },
 );
+if (fixtureOptions.has('restoration')) rows.push(...[
+  ['restore-row-1', 'Verified Archived Harbour Buyer', '001000000000011AAA', '613830f6-c5ce-4469-a2ac-1aa4b89fc1c1', true],
+  ['restore-row-2', 'Verified Archived Marine Supplier', '001000000000012AAA', '613830f6-c5ce-4469-a2ac-1aa4b89fc1c2', true],
+  ['restore-held-row', 'Archived Contact With Unresolved Ownership', '001000000000013AAA', '613830f6-c5ce-4469-a2ac-1aa4b89fc1c3', false],
+].map(([id, name, salesforceAccountId, contactId, eligible]) => ({
+  id, action: 'exception', status: 'blocked', reason: 'archived-only-match',
+  salesforceAccountId, salesforceName: name, xeroContactName: name, xeroContactId: contactId,
+  xeroContactStatus: 'ARCHIVED', usage: [],
+  restoration: { eligible, targetContactId: contactId },
+  message: eligible ? 'Verified archived match; restoring this ID preserves its existing bills and payments.' : 'Ownership is unresolved; restoration remains blocked.',
+})));
 
 const run = {
   id: 'contacts-layout-fixture', createdAt: '2026-09-23T00:00:00.000Z', rowCount: rows.length, rows,
@@ -60,6 +72,7 @@ const status = {
   xero: { connected: true, configured: true, tenantName: 'Fixture tenant', scopeFlags: { contacts: true, invoices: true, settingsRead: true, paymentsRead: true, paymentsWrite: true } },
   externalActions: { xero_contact_sync: { enabled: true }, xero_financial_sync: { enabled: true } },
 };
+if (fixtureOptions.has('restoreGateDisabled')) status.externalActions.xero_contact_sync.enabled = false;
 
 const requests = [];
 window.contactsFixture = { requests, rows };
@@ -67,8 +80,25 @@ appClient.functions.invoke = async (name, body) => {
   requests.push({ name, body });
   if (name === 'xeroPortalStatus') return { data: status };
   if (name === 'xeroPortalReceiptsList') return { data: { receipts: [] } };
-  if (name === 'xeroPortalContactLifecycleLatest') return { data: { run } };
-  if (name === 'xeroPortalContactLifecyclePreview') return { data: { run } };
+  if (name === 'xeroPortalContactLifecycleLatest') return { data: { run: structuredClone(run) } };
+  if (name === 'xeroPortalContactLifecyclePreview') return { data: { run: structuredClone(run) } };
+  if (name === 'xeroContactRestoreApply') {
+    if (fixtureOptions.get('restoreOutcome') === 'network') throw new Error('Fixture transport failure after attempted POST');
+    const selected = body.rowIds.map((id) => rows.find((r) => r.id === id));
+    const outcomes = selected.map((row) => ({ rowId: row.id, salesforceAccountId: row.salesforceAccountId,
+      xeroContactId: row.restoration.targetContactId,
+      status: fixtureOptions.get('restoreOutcome') === 'uncertain' ? 'uncertain' : 'restored',
+      message: fixtureOptions.get('restoreOutcome') === 'uncertain' ? 'Provider outcome requires verification.' : 'Existing Contact ID restored.',
+    }));
+    if (fixtureOptions.get('restoreOutcome') === 'mismatch') outcomes[0].xeroContactId = 'a0e80d01-7b25-4aba-9667-5c74668e26fb';
+    if (!fixtureOptions.has('restoreOutcome')) {
+      for (const row of selected) rows[rows.indexOf(row)] = { ...row, restoration: { ...row.restoration, eligible: false },
+        xeroContactStatus: 'ACTIVE', action: 'keep', status: 'kept', reason: 'unchanged-name' };
+    }
+    return { data: { runId: body.runId, outcomes, refreshPreview: true,
+      summary: { total: selected.length, restored: outcomes.filter((o) => o.status === 'restored').length,
+        alreadyActive: 0, blocked: 0, uncertain: outcomes.filter((o) => o.status === 'uncertain').length } } };
+  }
   if (name === 'xeroContactIdentitySave') {
     if (new URLSearchParams(window.location.search).has('identityMalformed')) return { data: {} };
     const row = rows.find((item) => item.xeroContactId === body.contactId);

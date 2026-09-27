@@ -224,6 +224,32 @@ test('contact repair uses only explicit eligible rows and never retries uncertai
   assert.equal(writes, 1);
 });
 
+test('contact restoration requires current explicit candidates and verifies returned identities without retries', async (t) => {
+  const file = await sessionFile(t);
+  const row = { id: 'archived-row', salesforceAccountId: missingAccountId, xeroContactId: contactId,
+    action: 'exception', status: 'blocked', reason: 'archived-only-match', restoration: { eligible: true, targetContactId: contactId } };
+  const run = { ...contactRun, rows: [row] };
+  const outcome = { rowId: row.id, salesforceAccountId: missingAccountId, xeroContactId: contactId, status: 'restored' };
+  const response = { runId, refreshPreview: true, outcomes: [outcome], summary: { total: 1, restored: 1, alreadyActive: 0, blocked: 0, uncertain: 0 } };
+  const fixture = responses({ xeroPortalContactLifecycleLatest: { run }, xeroContactRestoreApply: response });
+  const result = await runXeroFinanceOperator(args(file, 'contact-restore', runId, row.id), { fetchImpl: fixture.fetchImpl });
+  assert.equal(result.summary.restored, 1);
+  assert.deepEqual(JSON.parse(fixture.calls.at(-1).init.body), { runId, rowIds: [row.id], reviewed: true });
+  assert.throws(() => parseOperatorArgs(args(file, 'contact-restore', runId)), { code: 'ARGUMENT_INVALID' });
+  assert.throws(() => parseOperatorArgs(args(file, 'contact-restore', runId, ...Array.from({ length: 26 }, (_, i) => `row-${i}`))), { code: 'ARGUMENT_INVALID' });
+  const invalid = responses({ xeroPortalContactLifecycleLatest: { run: { ...run, rows: [{ ...row, restoration: { eligible: false } }] } } });
+  await assert.rejects(runXeroFinanceOperator(args(file, 'contact-restore', runId, row.id), { fetchImpl: invalid.fetchImpl }), { code: 'ROW_NOT_ELIGIBLE' });
+  assert.equal(invalid.calls.some((call) => call.name === 'xeroContactRestoreApply'), false);
+  const wrongIdentity = responses({ xeroPortalContactLifecycleLatest: { run }, xeroContactRestoreApply: { ...response, outcomes: [{ ...outcome, xeroContactId: userId }] } });
+  await assert.rejects(runXeroFinanceOperator(args(file, 'contact-restore', runId, row.id), { fetchImpl: wrongIdentity.fetchImpl }), { code: 'MUTATION_RESULT_UNKNOWN' });
+  let attempts = 0;
+  await assert.rejects(runXeroFinanceOperator(args(file, 'contact-restore', runId, row.id), { fetchImpl: async (url, init) => {
+    if (url.endsWith('/xeroContactRestoreApply')) { attempts += 1; throw new Error(`lost ${token}`); }
+    return fixture.fetchImpl(url, init);
+  } }), { code: 'MUTATION_RESULT_UNKNOWN' });
+  assert.equal(attempts, 1);
+});
+
 test('financial row evidence is bounded, row-filtered, and excludes raw payloads and URLs', async (t) => {
   const file = await sessionFile(t);
   const reviewed = { ...document, salesforceObject: 'Invoice__c', salesforceId: 'a02000000000001AAA',

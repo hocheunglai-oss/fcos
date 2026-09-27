@@ -7,6 +7,7 @@ import {
   buildContactRenameRows,
   getFreshXeroConnection,
   hkStrippedClKeyNameMatchKey,
+  listXeroContactsComplete,
   normalizeName,
   readStoredXeroConnection,
   requestXeroToken,
@@ -22,6 +23,7 @@ import { externalActionGates, requireExternalActionGate } from './_externalActio
 import { xeroRateLimitSnapshot } from './_xeroRateLimit.js';
 import { addUsageYear, hasUsageYearBreakdown, usageYearFields } from './_xeroUsageYears.js';
 import { contactIdentityDecision, contactIdentityFingerprint, contactMatchesSalesforceIdentity, loadAllSalesforceIdentityAccounts, loadContactIdentityDecisions } from './_xeroContactIdentity.js';
+import { buildContactRestoration } from './_xeroContactRestorePolicy.js';
 
 const AUTHORIZATION_BASE = 'https://login.xero.com';
 const RECEIPT_BUCKET = 'xero-portal-receipts';
@@ -344,7 +346,7 @@ export async function xeroPortalContactLifecyclePreview(body = {}, { accessConte
     const startedAt = new Date().toISOString();
     const connection = await connectionReader(client, { env, fetchImpl });
     assertXeroScopes(connection, ['accounting.contacts'], 'Contact lifecycle preview');
-    const [salesforce, contactsResult, usageResult, identityDecisions] = await Promise.all([
+    const [salesforce, contactsResult, usageResult, identityDecisions, identityAccounts] = await Promise.all([
       accountExporter(env),
       listXeroContactsForLifecycle(connection, { env, fetchImpl }),
       resolveUsageCacheForPreview(client, connection, {
@@ -354,13 +356,15 @@ export async function xeroPortalContactLifecyclePreview(body = {}, { accessConte
         incrementalUsageRefresh: body.incrementalUsageRefresh === true,
       }),
       loadContactIdentityDecisions(client, connection.tenantId),
+      identityAccountReader(),
     ]);
-    const identityAccounts = [...identityDecisions.values()].some((decision) => decision.decision === 'verified_xero_only') ? await identityAccountReader() : [];
     let rows = buildContactLifecycleRows(salesforce.accounts, contactsResult.contacts, usageResult.usageByContactId, {
       usageCoverageComplete: usageResult.coverageComplete,
       tenantId: connection.tenantId,
       identityDecisions,
       identityAccounts,
+      identityAccountsComplete: true,
+      contactsComplete: contactsResult.complete === true,
     });
     const contactsById = new Map(contactsResult.contacts.map((contact) => [contact.contactId, contact]));
     rows = rows.map((row) => ({ ...row, selected: row.status === 'eligible',
@@ -638,17 +642,26 @@ export function buildContactLifecycleRows(salesforceAccounts, xeroContacts, usag
 
   for (const row of renameRows) {
     if (row.xeroContactId) continue;
+    const restoration = row.reason === 'archived-only-match' ? buildContactRestoration(
+      salesforceAccounts.find((account) => account.id === row.salesforceAccountId), options.identityAccounts, xeroContacts,
+      { tenantId: options.tenantId, accountsComplete: options.identityAccountsComplete === true, contactsComplete: options.contactsComplete === true },
+    ) : null;
+    const archivedContact = restoration?.targetContactId ? xeroContacts.find((contact) => contact.contactId === restoration.targetContactId) : null;
     rows.push({
       id: `sf-${row.salesforceAccountId}`,
       action: 'exception',
       status: 'blocked',
       reason: row.reason,
-      message: row.message,
+      message: restoration?.eligible ? 'The existing archived Contact has a verified identity match. Review restoration of this same Contact ID; bills and payments remain unchanged.'
+        : restoration?.blockers?.length ? `${row.message} ${restoration.blockers.join(' ')}` : row.message,
       salesforceAccountId: row.salesforceAccountId,
       salesforceName: row.salesforceName,
       salesforceCompanyCode: row.salesforceCompanyCode,
       salesforceRecordType: row.salesforceRecordType,
       proposedName: row.proposedName,
+      ...(restoration ? { restoration } : {}),
+      ...(archivedContact ? { xeroContactId: archivedContact.contactId, xeroContactName: archivedContact.name,
+        xeroContactNumber: archivedContact.contactNumber, xeroAccountNumber: archivedContact.accountNumber, xeroContactStatus: archivedContact.status } : {}),
       usage: [],
     });
   }
@@ -665,6 +678,7 @@ export function summarizeContactLifecycleRows(rows, xeroContacts = [], totalSale
     archivedXeroContacts: xeroContacts.filter(isArchived).length,
     unmatchedNonArchivedXeroContacts: 0,
     renameEligible: 0,
+    restoreEligible: 0,
     archiveEligible: 0,
     keep: 0,
     exception: 0,
@@ -683,6 +697,7 @@ export function summarizeContactLifecycleRows(rows, xeroContacts = [], totalSale
     summary.statusCounts[row.status] = (summary.statusCounts[row.status] || 0) + 1;
     if (row.reason) summary.reasonCounts[row.reason] = (summary.reasonCounts[row.reason] || 0) + 1;
     if (row.action === 'rename' && row.status === 'eligible') summary.renameEligible += 1;
+    if (row.restoration?.eligible === true) summary.restoreEligible += 1;
     if (row.action === 'archive' && row.status === 'eligible') summary.archiveEligible += 1;
     if (row.xeroContactId && !row.salesforceAccountId && isNonArchivedLifecycleRow(row)) {
       summary.unmatchedNonArchivedXeroContacts += 1;
@@ -903,26 +918,7 @@ function toSalesforceAccountForRename(row) {
 }
 
 async function listXeroContactsForLifecycle(connection, { env = process.env, fetchImpl = fetch } = {}) {
-  const contacts = [];
-  let xeroCalls = 0;
-  let page = 1;
-  while (true) {
-    const params = new URLSearchParams({ includeArchived: 'true', page: String(page), pageSize: '100' });
-    xeroCalls += 1;
-    const response = await xeroAccountingFetch(connection, `/Contacts?${params}`, {
-      method: 'GET',
-      retryOnRateLimit: true,
-      env,
-      fetchImpl,
-    });
-    const pageContacts = Array.isArray(response.Contacts) ? response.Contacts : [];
-    contacts.push(...pageContacts.filter((contact) => contact.ContactID).map(toLifecycleContact));
-    const pageCount = Number(response.pagination?.pageCount || 0);
-    if ((pageCount && page >= pageCount) || pageContacts.length < 100) break;
-    page += 1;
-    await sleep(xeroContactDelayMs(env));
-  }
-  return { contacts, xeroCalls };
+  return listXeroContactsComplete(connection, { env, fetchImpl, contactMapper: toLifecycleContact });
 }
 
 async function getXeroContactsByIds(connection, contactIds, { env = process.env, fetchImpl = fetch } = {}) {
@@ -1774,6 +1770,7 @@ function toLifecycleContact(contact) {
     contactNumber: nonBlank(contact.ContactNumber),
     accountNumber: nonBlank(contact.AccountNumber),
     status: nonBlank(contact.ContactStatus),
+    mergedToContactId: nonBlank(contact.MergedToContactID),
     isCustomer: contact.IsCustomer === true,
     isSupplier: contact.IsSupplier === true,
     accountsReceivableOutstanding: numberValue(contact.Balances?.AccountsReceivable?.Outstanding ?? contact.AccountsReceivable?.Outstanding),
@@ -1791,6 +1788,11 @@ function contactIdsFromUsageRecord(record) {
     record.Overpayment?.Contact?.ContactID,
     record.Prepayment?.Contact?.ContactID,
   ].map((id) => nonBlank(id)).filter(Boolean))];
+}
+
+export async function invalidateContactNameCacheAfterRestore({ client, connection }) {
+  const result = await client.from('xero_contact_name_cache').delete().eq('id', 'primary').eq('tenant_id', connection.tenantId);
+  if (result.error) throw storageError(result.error, 'xero_contact_name_cache');
 }
 
 async function updateContactNameCacheFromLifecycle(client, connection, rows) {

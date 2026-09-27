@@ -244,3 +244,99 @@ test('ordinary contact apply review resets when the selected rows change', async
   await row.getByRole('checkbox').click();
   await expect(apply).toBeDisabled();
 });
+
+async function openRestoration(page, testInfo, query = '') {
+  const mobile = testInfo.project.name.startsWith('mobile');
+  await page.setViewportSize(mobile ? { width: 390, height: 844 } : { width: 1600, height: 900 });
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await page.goto(`/e2e/fixtures/xero-contacts.html?restoration=1&resolution=1${query}`);
+  await page.getByRole('tab', { name: 'Contacts', exact: true }).click();
+  await expect(page.locator('vite-error-overlay')).toHaveCount(0);
+  const scope = page.locator(mobile ? '.xero-contacts-review__compact' : '.xero-contacts-review__wide');
+  const row = (name) => scope.getByRole(mobile ? 'article' : 'row').filter({ hasText: name });
+  const panel = page.getByRole('region', { name: 'Restore verified contacts', exact: true });
+  await expect(panel).toBeVisible();
+  return { panel, row, errors, mobile };
+}
+
+test('verified archived restoration has explicit separate selection/review and re-previews exact successful outcomes', async ({ page }, testInfo) => {
+  const { panel, row, errors, mobile } = await openRestoration(page, testInfo);
+  const first = row('Verified Archived Harbour Buyer');
+  const second = row('Verified Archived Marine Supplier');
+  const held = row('Archived Contact With Unresolved Ownership');
+  const restore = panel.getByRole('button', { name: 'Restore verified contacts', exact: true });
+  await expect(first.getByRole('checkbox')).not.toBeChecked();
+  await expect(second.getByRole('checkbox')).not.toBeChecked();
+  await expect(held.getByRole('checkbox')).toBeDisabled();
+  await expect(held).toContainText('Ownership is unresolved');
+  await expect(first).toContainText('613830f6-c5ce-4469-a2ac-1aa4b89fc1c1');
+  await expect(panel).toContainText('preserves bills, payments and contact details');
+  await expect(panel).toContainText('Document holds are not cleared automatically');
+  await expect(restore).toBeDisabled();
+  await first.getByRole('checkbox').click();
+  await expect(restore).toBeDisabled();
+  await panel.getByRole('checkbox').click();
+  await expect(restore).toBeEnabled();
+  await second.getByRole('checkbox').click();
+  await expect(panel.getByRole('checkbox')).not.toBeChecked();
+  await expect(restore).toBeDisabled();
+  await panel.getByRole('checkbox').click();
+  // A missing-contact repair selection and ordinary review must never enter this request.
+  await row('Missing Harbour Buyer').getByRole('checkbox').click();
+  await page.getByText('Reviewed', { exact: true }).click();
+  await restore.click();
+  await expect(panel).toContainText('2 restored · 0 already active · 0 blocked · 0 uncertain');
+  await expect.poll(() => page.evaluate(() => window.contactsFixture.requests.filter((r) => r.name === 'xeroPortalContactLifecyclePreview').length)).toBe(1);
+  const writes = await page.evaluate(() => window.contactsFixture.requests.filter((r) => r.name.includes('Apply')));
+  expect(writes).toEqual([{ name: 'xeroContactRestoreApply', body: { runId: 'contacts-layout-fixture', rowIds: ['restore-row-1', 'restore-row-2'], reviewed: true } }]);
+  await expect(first).toContainText('ACTIVE');
+  await expect(first.getByRole('checkbox')).toBeDisabled();
+  await expect(panel.getByRole('checkbox')).not.toBeChecked();
+  await assertInsideViewport(panel, page);
+  await assertInsideViewport(held, page);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
+  expect(errors).toEqual([]);
+  await page.screenshot({ path: testInfo.outputPath(`contacts-restoration-${mobile ? 'mobile' : 'desktop'}.png`), fullPage: true });
+});
+
+test('restoration is read-only when the Contact write gate is disabled', async ({ page }, testInfo) => {
+  const { panel, row, errors } = await openRestoration(page, testInfo, '&restoreGateDisabled=1');
+  await expect(row('Verified Archived Harbour Buyer').getByRole('checkbox')).toBeDisabled();
+  await expect(panel.getByRole('checkbox')).toBeDisabled();
+  await expect(panel.getByRole('button', { name: 'Restore verified contacts', exact: true })).toBeDisabled();
+  await expect(panel).toContainText('Contact writes are disabled');
+  expect(await page.evaluate(() => window.contactsFixture.requests.filter((r) => r.name === 'xeroContactRestoreApply'))).toEqual([]);
+  expect(errors).toEqual([]);
+});
+
+test('mismatched, network and uncertain restoration responses require a fresh preview and never repeat POST', async ({ page }, testInfo) => {
+  for (const mode of ['mismatch', 'network', 'uncertain']) {
+    const { panel, row, errors } = await openRestoration(page, testInfo, `&restoreOutcome=${mode}`);
+    const selected = row('Verified Archived Harbour Buyer').getByRole('checkbox');
+    await selected.click();
+    await panel.getByRole('checkbox').click();
+    const restore = panel.getByRole('button', { name: 'Restore verified contacts', exact: true });
+    await restore.click();
+    await expect(panel.getByRole('alert')).toContainText('outcome is uncertain');
+    await expect(panel).toContainText('001000000000011AAA');
+    await expect(panel).toContainText('613830f6-c5ce-4469-a2ac-1aa4b89fc1c1');
+    await expect(restore).toBeDisabled();
+    await expect(selected).not.toBeChecked();
+    await expect(selected).toBeDisabled();
+    await expect(panel.getByRole('checkbox')).not.toBeChecked();
+    const requests = await page.evaluate(() => window.contactsFixture.requests);
+    expect(requests.filter((r) => r.name === 'xeroContactRestoreApply')).toHaveLength(1);
+    expect(requests.filter((r) => r.name === 'xeroPortalContactLifecyclePreview')).toHaveLength(0);
+    await page.getByRole('button', { name: 'Preview', exact: true }).click();
+    await expect(panel.getByRole('alert')).toHaveCount(0);
+    await expect(selected).toBeEnabled();
+    await expect(selected).not.toBeChecked();
+    await expect(restore).toBeDisabled();
+    // A new explicit selection still requires a new review and produces no automatic retry.
+    await selected.click();
+    await expect(restore).toBeDisabled();
+    expect(await page.evaluate(() => window.contactsFixture.requests.filter((r) => r.name === 'xeroContactRestoreApply').length)).toBe(1);
+    expect(errors).toEqual([]);
+  }
+});

@@ -1,4 +1,5 @@
 import {
+  invalidateContactNameCacheAfterRestore,
   xeroPortalConnectStart,
   xeroPortalContactAutoCreateLatest,
   xeroPortalContactAutoCreateRun,
@@ -25,6 +26,7 @@ import {
 } from './_xeroFinancialSync.js';
 import { xeroContactIdentitySave } from './_xeroContactIdentity.js';
 import { xeroContactRepairApply } from './_xeroContactRepair.js';
+import { xeroContactRestoreApply } from './_xeroContactRestore.js';
 import { xeroFinancialDocumentPreservationPreview, xeroFinancialDocumentPreservationRun } from './_xeroIssuedSupplierWorkflow.js';
 
 export const XERO_HANDLER_MODULE_ACCESS = Object.freeze(Object.fromEntries([
@@ -42,6 +44,7 @@ export const XERO_HANDLER_MODULE_ACCESS = Object.freeze(Object.fromEntries([
   'xeroPortalContactLifecycleApply',
   'xeroContactIdentitySave',
   'xeroContactRepairApply',
+  'xeroContactRestoreApply',
   'xeroPortalContactAutoCreateLatest',
   'xeroPortalContactAutoCreateRun',
   'xeroFinancialMappingsGet',
@@ -88,6 +91,7 @@ export function createXeroHandlers({ requireActiveUser, resolveRecoveredSystemEr
     xeroPortalContactLifecycleApply: wrap(xeroPortalContactLifecycleApply),
     xeroContactIdentitySave: wrap(xeroContactIdentitySave),
     xeroContactRepairApply: wrap(xeroContactRepairApply),
+    xeroContactRestoreApply: wrap((body, options) => xeroContactRestoreApply(body, { ...options, onRestored: invalidateContactNameCacheAfterRestore })),
     xeroPortalContactAutoCreateLatest: wrap(xeroPortalContactAutoCreateLatest),
     xeroPortalContactAutoCreateRun: wrap(xeroPortalContactAutoCreateRun),
     xeroFinancialMappingsGet: wrap(xeroFinancialMappingsGet),

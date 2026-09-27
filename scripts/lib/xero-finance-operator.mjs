@@ -2,14 +2,15 @@ import { constants } from 'node:fs';
 import { open, lstat } from 'node:fs/promises';
 import { FCOS_CONNECTION_POLICY } from '../../config/fcosConnections.js';
 import { confirmedContactIdentitySave, confirmedContactRepair } from '../../src/lib/xeroContactResolutionResult.js';
+import { canRestoreContactRow, confirmedContactRestore } from '../../src/lib/xeroContactRestoreResult.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SALESFORCE_ID = /^[a-zA-Z0-9]{15}(?:[a-zA-Z0-9]{3})?$/;
 const IDENTITY_REASONS = new Set(['used-unmatched-xero-contact', 'unused-unmatched-xero-contact', 'nonzero-balance', 'verification-stale', 'verified-xero-only']);
-const ALLOWED_COMMANDS = new Set(['status', 'preview', 'run', 'apply', 'payments', 'mappings', 'contact-repair',
+const ALLOWED_COMMANDS = new Set(['status', 'preview', 'run', 'apply', 'payments', 'mappings', 'contact-repair', 'contact-restore',
   'contacts-status', 'contacts-preview', 'contacts-verify', 'contacts-revoke']);
 const MUTATIONS = new Set(['xeroFinancialSyncPreview', 'xeroFinancialSyncApply', 'xeroFinancialSyncRun', 'xeroFinancialPaymentApply',
-  'xeroPortalContactLifecyclePreview', 'xeroContactIdentitySave', 'xeroContactRepairApply']);
+  'xeroPortalContactLifecyclePreview', 'xeroContactIdentitySave', 'xeroContactRepairApply', 'xeroContactRestoreApply']);
 const PRODUCTION_ORIGIN = new URL(FCOS_CONNECTION_POLICY.attestation.endpoint).origin;
 const FCOS_AUTH_ISSUER = new URL(FCOS_CONNECTION_POLICY.integrations.fcunoIdentityFederation.oidcCallbackUrl).origin + '/auth/v1';
 
@@ -59,8 +60,8 @@ export function parseOperatorArgs(argv) {
   if (!['draft', 'authorised'].includes(options.mode) || (command !== 'preview' && seen.has('--mode'))) throw operatorError('ARGUMENT_INVALID', 'Posting mode is only valid for preview.');
   if ((['status', 'preview', 'mappings', 'contacts-status', 'contacts-preview', 'contacts-verify', 'contacts-revoke'].includes(command) && ids.length)
     || (command === 'run' && ids.length !== 1)
-    || (['apply', 'payments', 'contact-repair'].includes(command) && ids.length < 2)) {
-    throw operatorError('ARGUMENT_INVALID', 'Apply, payments, and contact repair require a run ID and explicit row IDs; run takes one run ID.');
+    || (['apply', 'payments', 'contact-repair', 'contact-restore'].includes(command) && ids.length < 2)) {
+    throw operatorError('ARGUMENT_INVALID', 'Apply, payments, contact repair and restoration require a run ID and explicit row IDs; run takes one run ID.');
   }
   if (['contacts-verify', 'contacts-revoke'].includes(command) !== Boolean(options.inputFile)) {
     throw operatorError('ARGUMENT_INVALID', '--input-file is required only for contacts verify/revoke.');
@@ -73,8 +74,8 @@ export function parseOperatorArgs(argv) {
   if (ids.length && !UUID.test(ids[0])) throw operatorError('ARGUMENT_INVALID', 'Run ID must be a UUID.');
   if (command === 'apply' && ids.slice(1).some((id) => !UUID.test(id))) throw operatorError('ARGUMENT_INVALID', 'Document row IDs must be UUIDs.');
   if (command === 'payments' && ids.slice(1).some((id) => !SALESFORCE_ID.test(id))) throw operatorError('ARGUMENT_INVALID', 'Payment row IDs must be Salesforce IDs.');
-  if (command === 'contact-repair' && (ids.length > 26 || ids.slice(1).some((id) => !/^[a-zA-Z0-9_-]{1,100}$/.test(id)))) {
-    throw operatorError('ARGUMENT_INVALID', 'Contact repair requires 1 to 25 explicit lifecycle row IDs.');
+  if (['contact-repair', 'contact-restore'].includes(command) && (ids.length > 26 || ids.slice(1).some((id) => !/^[a-zA-Z0-9_-]{1,100}$/.test(id)))) {
+    throw operatorError('ARGUMENT_INVALID', 'Contact repair and restore require 1 to 25 explicit lifecycle row IDs.');
   }
   if (new Set(ids.slice(1)).size !== ids.slice(1).length) throw operatorError('ARGUMENT_INVALID', 'Duplicate row IDs are not allowed.');
   return { ...options, command, ids, origin: resolveOperatorOrigin(options.origin, options.allowLocalhost) };
@@ -216,6 +217,9 @@ function contactRow(row) {
   return { id: safeText(row.id), xeroContactId: safeText(row.xeroContactId), xeroContactName: safeText(row.xeroContactName),
     salesforceAccountId: safeText(row.salesforceAccountId), salesforceName: safeText(row.salesforceName),
     action: safeText(row.action), status: safeText(row.status), reason: safeText(row.reason),
+    restorationEligible: canRestoreContactRow(row),
+    restorationTargetContactId: safeText(row.restoration?.targetContactId),
+    restorationBlockers: Array.isArray(row.restoration?.blockers) ? row.restoration.blockers.slice(0, 10).map(safeText) : [],
     identityFingerprint: /^[0-9a-f]{64}$/i.test(row.identityFingerprint || '') ? row.identityFingerprint : null,
     identityRevision: Number.isInteger(row.identityDecision?.revision) ? row.identityDecision.revision : 0,
     identityDecision: safeText(row.identityDecision?.decision),
@@ -328,6 +332,17 @@ export async function runXeroFinanceOperator(argv, { fetchImpl = fetch } = {}) {
       || String(data.decision.actor_email).toLowerCase() !== actor.email.toLowerCase()) throw uncertainMutation();
     return { command: args.command, actor, contact: contactRow(row), decision: safeText(data.decision?.decision),
       revision: Number.isInteger(data.decision?.revision) ? data.decision.revision : null, refreshPreview: data.refreshPreview === true };
+  }
+  if (args.command === 'contact-restore') {
+    const run = requireContactRun(await call('xeroPortalContactLifecycleLatest'), args.ids[0]);
+    const byId = new Map(run.rows.map((row) => [row.id, row]));
+    const selected = args.ids.slice(1).map((id) => byId.get(id));
+    if (!selected.every(canRestoreContactRow)) throw operatorError('ROW_NOT_ELIGIBLE', 'Select only verified archived-Contact restoration candidates from the current preview.');
+    const data = await call('xeroContactRestoreApply', { runId: run.id, rowIds: args.ids.slice(1), reviewed: true });
+    if (!confirmedContactRestore(data, run.id, selected)) throw uncertainMutation();
+    return { command: 'contact-restore', actor, run: contactRunSummary(run), reviewedRows: selected.map(contactRow),
+      summary: counts(data.summary), refreshPreview: true,
+      outcomes: data.outcomes.map((row) => ({ id: safeText(row.rowId), status: safeText(row.status), errorCode: safeText(row.errorCode) })) };
   }
   if (args.command === 'contact-repair') {
     const run = requireContactRun(await call('xeroPortalContactLifecycleLatest'), args.ids[0]);

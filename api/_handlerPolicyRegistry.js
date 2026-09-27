@@ -99,6 +99,7 @@ const HANDLER_BEHAVIOR = Object.freeze({
   xeroPortalContactLifecycleApply: mutationPolicy({"cache":"none","externalAction":true,"capability":"xero_portal_manage"}),
   xeroContactIdentitySave: mutationPolicy({"cache":"none","externalAction":false,"capability":"xero_portal_manage"}),
   xeroContactRepairApply: mutationPolicy({"cache":"none","externalAction":true,"capability":"xero_portal_manage"}),
+  xeroContactRestoreApply: mutationPolicy({"cache":"none","externalAction":true,"capability":"xero_portal_manage"}),
   xeroPortalContactAutoCreateLatest: readPolicy({"cache":"none","externalAction":false,"capability":null}),
   xeroPortalContactAutoCreateRun: readPolicy({"cache":"none","externalAction":false,"capability":null}),
   xeroFinancialMappingsGet: readPolicy({"cache":"none","externalAction":true,"capability":"xero_portal_manage"}),
