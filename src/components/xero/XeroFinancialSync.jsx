@@ -21,6 +21,7 @@ import { Input } from '@/components/ui/input';
 import { reconciliationBucket, documentExplicitReviewEligible, paymentReferenceReviewEligible, paymentReferenceReviewTarget, paymentReferenceOutcomesConfirmed, retainedReviewSelection, reviewSelectionSnapshot, restoreReviewSelection, documentReviewTotals, documentReviewTarget, workflowCopy, savedPostingMode, previewMatchesPostingMode } from '@/lib/financialWorkflowUi';
 import XeroDailyAllowance from '@/components/xero/XeroDailyAllowance';
 import { latestXeroDailyAllowance } from '@/lib/xeroDailyAllowance';
+import { supplierFileStatus } from '@/lib/xeroSupplierFileStatus';
 import './XeroFinancialSync.css';
 
 const XeroIssuedSupplierPreservation = lazy(() => import('./XeroIssuedSupplierPreservation'));
@@ -40,7 +41,8 @@ const PANEL_CLASS = 'rounded-lg border border-border bg-card p-4';
 const DESCRIPTION_CLASS = 'mt-1 text-sm text-muted-foreground';
 const TABLE_FRAME_CLASS = 'overflow-auto rounded-lg border border-border';
 
-export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
+export default function XeroFinancialSync({ portalStatus }) {
+  const language = 'en';
   const copy = xeroPortalUiCopy(language);
   const financialCopy = copy.financial;
   const documentLabels = [financialCopy.salesforceDocument, copy.common.reason, copy.common.action, financialCopy.accountStem, copy.common.date, copy.common.total, 'Xero'];
@@ -518,9 +520,7 @@ export default function XeroFinancialSync({ portalStatus, language = 'en' }) {
             {sectionHeading(financialCopy.mappingTitle, financialCopy.mappingDescription, true)}
             <Button type="button" variant="outline" onClick={() => loadMappings()} disabled={Boolean(busy)}><RefreshCw className="mr-2 h-4 w-4" />{financialCopy.mappings}</Button>
           </div>
-          <p className={DESCRIPTION_CLASS}>{language === 'zh-Hant'
-            ? '每次完整核對會自動核准 Salesforce 石油產品的 Xero 對應：買方 41100、供應商 51100，稅務 NONE。'
-            : 'Each full check auto-approves Xero mappings for Salesforce petroleum products: buyer 41100, supplier 51100, tax NONE.'}</p>
+          <p className={DESCRIPTION_CLASS}>Each full check auto-approves Xero mappings for Salesforce petroleum products: buyer 41100, supplier 51100, tax NONE.</p>
           {products.length ? (
             <div className="space-y-3">
               {pagination(mappingPage, mappingPageCount, productMappingRows.length, MAPPING_PAGE_SIZE, setMappingPage, financialCopy.mappingRange, copy.common)}
@@ -707,8 +707,9 @@ function FinancialActionBadge({ action, status, copy, flow }) {
 function DocumentReason({ row, flow, copy, financialCopy, openDocumentReview, setFixMapping }) {
   const bucket = reconciliationBucket(row);
   const mappingBlocked = (row.blockers || []).some((reason) => /Salesforce Product|Xero account mapping|account codes?|tax treatment/i.test(reason));
+  const { blockers } = supplierFileStatus(row, financialCopy.fileDiscovery);
   return <div className="min-w-0 break-words">
-    <div>{row.blockers?.[0] || (row.status === 'blocked' ? flow.attention : row.acceptedLegacy ? flow.acceptedLegacy : row.warnings?.[0] || (row.differences?.length ? financialCopy.differenceCount(row.differences.length) : copy.common.exact))}</div>
+    <div>{blockers[0] || (row.status === 'blocked' ? flow.attention : row.acceptedLegacy ? flow.acceptedLegacy : row.warnings?.[0] || (row.differences?.length ? financialCopy.differenceCount(row.differences.length) : copy.common.exact))}</div>
     <div className="flex flex-wrap items-center gap-2">
       {['attention', 'ready'].includes(bucket) && <Button variant="link" size="sm" className="h-auto min-h-8 p-0" onClick={() => openDocumentReview(row)}>{bucket === 'attention' ? flow.resolve : flow.singleReview}</Button>}
       {mappingBlocked && <Button variant="link" size="sm" className="h-auto min-h-8 p-0" onClick={() => setFixMapping(row)}>{flow.mapping}</Button>}
@@ -723,23 +724,23 @@ function DocumentEvidence({ row, flow, copy, expanded = false }) {
   const lines = [
     `${flow.accountId}: ${row.accountId || copy.common.notSet}`,
     `${flow.evidence}: ${flow.matchBasis[evidence.basis] || copy.common.notSet}`,
-    ...(row.blockers || []).map((value) => `${flow.blockers}: ${value}`),
+    ...supplierFileStatus(row, copy.financial.fileDiscovery).blockers.map((value) => `${flow.blockers}: ${value}`),
     ...(row.warnings || []).map((value) => `${flow.warnings}: ${value}`),
     ...(evidence.sharedAccounts || []).map((account) => `${flow.sharedAccounts}: ${[account.accountName, account.companyCode || copy.common.noClKey, account.accountId].join(' · ')}`),
     ...(evidence.candidates || []).map((candidate) => `${flow.candidates}: ${candidate.number || '—'} · ${candidate.id || '—'}`),
     ...(row.differences || []).map((difference) => `${flow.differences} · ${difference.field}: Salesforce ${formatDifferenceValue(difference.salesforce ?? difference.salesforceLineCount)} → Xero ${formatDifferenceValue(difference.xero ?? difference.xeroLineCount)}`),
   ].join('\n');
-  return <details className="mt-2" open={expanded}><summary>{flow.details}</summary><div className="whitespace-pre-line text-xs text-muted-foreground">{lines}</div><SupplierFileDiscovery row={row} copy={copy.financial.fileDiscovery} locale={copy === xeroPortalUiCopy('zh-Hant') ? 'zh-HK' : 'en-HK'} /></details>;
+  return <details className="mt-2" open={expanded}><summary>{flow.details}</summary><div className="whitespace-pre-line text-xs text-muted-foreground">{lines}</div><SupplierFileDiscovery row={row} copy={copy.financial.fileDiscovery} locale="en-HK" /></details>;
 }
 
 function SupplierFileDiscovery({ row, copy, locale }) {
-  if (row.salesforceObject !== 'Supplier_Invoice__c') return null;
+  const { status } = supplierFileStatus(row, copy);
+  if (!status) return null;
   const discovery = row.sourceFileDiscovery;
   const candidates = discovery?.candidates || [];
-  const status = discovery?.status || 'not_checked';
   return <section className="mt-3 space-y-1 text-xs text-muted-foreground" aria-label={copy.title}>
     <div className="font-medium">{copy.title}</div>
-    <div>{status === 'complete' ? candidates.length ? copy.complete : copy.empty : copy[status] || copy.not_checked}</div>
+    <div>{copy[status]}</div>
     {discovery?.capturedAt && <div>{copy.captured}: <time dateTime={discovery.capturedAt}>{new Date(discovery.capturedAt).toLocaleString(locale, { timeZone: 'Asia/Hong_Kong', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })}</time></div>}
     <div>{copy.description}</div>
     {discovery && <div>{copy.stale}</div>}

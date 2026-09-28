@@ -1,5 +1,9 @@
 import { expect, test } from '@playwright/test';
 
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => window.localStorage.setItem('fcos:xero-portal-language:v1', 'zh-Hant'));
+});
+
 async function assertInsideViewport(locator, page) {
   const bounds = await locator.boundingBox();
   expect(bounds).not.toBeNull();
@@ -83,19 +87,8 @@ test('Contacts shows Reason and long messages within the workspace for all actio
     await assertInsideViewport(narrowRow, page);
     await page.screenshot({ path: testInfo.outputPath('contacts-narrow.png'), fullPage: true });
   }
-  await page.getByRole('button', { name: '繁體中文' }).click();
-  const chineseRows = compact;
-  const chineseMixed = chineseRows.getByRole('article', { name: /PacificMarineFuelTrading/ });
-  await expect(chineseMixed).toContainText('發票及帳單：12');
-  await expect(chineseMixed).toContainText('2025: 9');
-  await expect(chineseMixed).toContainText('2026: 3');
-  const chineseOneYear = chineseRows.getByRole('article', { name: /Shared Marine Buyer/ });
-  await expect(chineseOneYear).toContainText('貸項通知單：2');
-  await expect(chineseOneYear).toContainText('2026: 2');
-  await expect(chineseOneYear).not.toContainText('2025:');
-  await expect(chineseRows.getByRole('article', { name: /Active Ocean Carrier/ })).toContainText('年份不明：2');
-  await expect(chineseRows.getByRole('article', { name: /Deferred Contact Audit/ })).toContainText('尚未掃描年份分布。請重新按「預覽」。');
-  await page.screenshot({ path: testInfo.outputPath(isMobile ? 'contacts-mobile-zh.png' : 'contacts-narrow-zh.png'), fullPage: true });
+  await expect(page.getByRole('button', { name: '繁體中文' })).toHaveCount(0);
+  await expect(page.locator('.workspace-tools[lang="en"]')).toBeVisible();
   expect(await page.evaluate(() => window.contactsFixture.requests.filter(({ name }) => name.includes('Apply')))).toEqual([]);
 });
 
@@ -139,13 +132,8 @@ test('Contacts table cells fit without overlap just above the wide-view threshol
   await expect(wide.getByRole('row').filter({ hasText: 'PacificMarineFuelTrading' })).toContainText('2025: 9');
   await page.screenshot({ path: testInfo.outputPath('contacts-threshold.png'), fullPage: true });
 
-  await page.getByRole('button', { name: '繁體中文' }).click();
-  await expect(wide.getByRole('row').filter({ hasText: 'PacificMarineFuelTrading' })).toContainText('發票及帳單：12');
-  const measuredZh = await measureOverflow();
-  expect(measuredZh.frameOverflow).toBeLessThanOrEqual(1);
-  expect(measuredZh.cellOverflow).toEqual([]);
-  expect(measuredZh.badgeOverflow).toEqual([]);
-  await page.screenshot({ path: testInfo.outputPath('contacts-threshold-zh.png'), fullPage: true });
+  await expect(page.getByRole('button', { name: '繁體中文' })).toHaveCount(0);
+
 });
 
 test('reviewed Xero-only verification and revocation use the current fingerprint and audited revision', async ({ page }) => {
@@ -174,8 +162,8 @@ test('reviewed Xero-only verification and revocation use the current fingerprint
   await dialog.getByRole('button', { name: 'Revoke verification' }).click();
   const second = await page.evaluate(() => window.contactsFixture.requests.filter(({ name }) => name === 'xeroContactIdentitySave'));
   expect(second[1].body).toMatchObject({ decision: 'revoked', expectedRevision: 1, reviewed: true });
-  await page.getByRole('button', { name: '繁體中文' }).click();
-  await expect(page.getByRole('button', { name: '檢閱 Xero 獨有身分' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Review Xero-only identity' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '繁體中文' })).toHaveCount(0);
 });
 
 test('missing-contact repair is separately reviewed and sends only explicit selected rows', async ({ page }) => {
@@ -339,4 +327,30 @@ test('mismatched, network and uncertain restoration responses require a fresh pr
     expect(await page.evaluate(() => window.contactsFixture.requests.filter((r) => r.name === 'xeroContactRestoreApply').length)).toBe(1);
     expect(errors).toEqual([]);
   }
+});
+
+
+test('saved Chinese preference cannot change portal or manual controls and original counterparty text remains intact', async ({ page }, testInfo) => {
+  const mobile = testInfo.project.name.startsWith('mobile');
+  await page.setViewportSize(mobile ? { width: 390, height: 844 } : { width: 1600, height: 900 });
+  await page.goto('/e2e/fixtures/xero-contacts.html?userDataChinese=1');
+  await expect(page.getByRole('heading', { name: 'Xero Portal', exact: true })).toBeVisible();
+  await expect(page.locator('.workspace-tools[lang="en"]')).toBeVisible();
+  await expect(page.getByRole('button', { name: /^(繁體中文|English)$/ })).toHaveCount(0);
+  await page.getByRole('tab', { name: 'Contacts', exact: true }).click();
+  const row = page.locator(mobile ? '.xero-contacts-review__compact' : '.xero-contacts-review__wide')
+    .getByRole(mobile ? 'article' : 'row').filter({ hasText: 'Active Ocean Carrier' });
+  await expect(row).toContainText('Active Ocean Carrier 航運資料');
+  await expect(row).toContainText('使用者備註');
+  await expect(row).toContainText('Payments: 3');
+  await page.getByRole('button', { name: 'User manual', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Xero Portal User Guide', exact: true })).toBeVisible();
+  await expect(page.locator('section[aria-labelledby="xero-manual-title"]')).toHaveAttribute('lang', 'en');
+  await expect(page.getByRole('button', { name: /^(繁體中文|English)$/ })).toHaveCount(0);
+  await page.getByRole('button', { name: /^Clean up Xero contacts/ }).click();
+  await expect(page.getByRole('heading', { name: 'Follow these steps', exact: true })).toBeVisible();
+  expect(await page.evaluate(() => window.localStorage.getItem('fcos:xero-portal-language:v1'))).toBe('zh-Hant');
+  expect(await page.evaluate(() => window.contactsFixture.requests.filter(({ name }) => name.includes('Apply')))).toEqual([]);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
+  await page.screenshot({ path: testInfo.outputPath('english-only-manual.png'), fullPage: true });
 });

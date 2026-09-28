@@ -1,8 +1,6 @@
 /* Static portal presentation; state, conditional and shared control classes stay in JSX. */
 .xp-restore-target { @apply mt-1 break-words text-xs text-muted-foreground [overflow-wrap:anywhere]; }
 .xp-header { @apply flex flex-col gap-3 border-b border-border pb-4 lg:flex-row lg:items-start lg:justify-between; }
-.xp-languages { @apply inline-flex rounded-lg border border-border bg-muted/30 p-1; }
-.xp-language-icon { @apply mx-2 my-auto h-4 w-4 text-muted-foreground; }
 .xp-error { @apply rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700; }
 .xp-contact-kpis { @apply grid gap-3 md:grid-cols-2 xl:grid-cols-6; }
 .xp-contact-tools { @apply mt-4 grid gap-3 lg:grid-cols-[1.5fr_1fr]; }

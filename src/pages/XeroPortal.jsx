@@ -9,7 +9,6 @@ import {
   ExternalLink,
   FileJson,
   FileText,
-  Languages,
   Loader2,
   PlugZap,
   RefreshCw,
@@ -30,12 +29,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { toast } from '@/components/ui/use-toast';
 import { appClient } from '@/api/appClient';
 import { emptyReceiptFields, parseReceiptText } from '@/lib/receiptExtraction';
-import {
-  XERO_PORTAL_LANGUAGE_STORAGE_KEY,
-  XERO_PORTAL_UI_LANGUAGES,
-  normalizeXeroPortalLanguage,
-  xeroPortalUiCopy,
-} from '@/lib/xeroPortalUiCopy';
+import { xeroPortalUiCopy } from '@/lib/xeroPortalUiCopy';
 import { cn } from '@/lib/utils';
 import './XeroPortal.css';
 import { canRestoreContactRow, confirmedContactRestore } from '@/lib/xeroContactRestoreResult';
@@ -89,15 +83,8 @@ export default function XeroPortal() {
   const [receiptDraft, setReceiptDraft] = useState(emptyReceiptFields);
   const [receiptFile, setReceiptFile] = useState(null);
   const [ocrBusy, setOcrBusy] = useState(false);
-  const [language, setLanguage] = useState(() => normalizeXeroPortalLanguage(
-    typeof window === 'undefined' ? 'en' : window.localStorage.getItem(XERO_PORTAL_LANGUAGE_STORAGE_KEY),
-  ));
-  const copy = xeroPortalUiCopy(language);
-  const restoreCopy = xeroContactRestoreCopy(language);
-
-  useEffect(() => {
-    window.localStorage.setItem(XERO_PORTAL_LANGUAGE_STORAGE_KEY, language);
-  }, [language]);
+  const copy = xeroPortalUiCopy();
+  const restoreCopy = xeroContactRestoreCopy('en');
 
   const load = useCallback(async ({ force = false } = {}) => {
     setLoading(true);
@@ -128,7 +115,7 @@ export default function XeroPortal() {
   useEffect(() => {
     const xero = searchParams.get('xero');
     const message = searchParams.get('message');
-    const callbackCopy = xeroPortalUiCopy(window.localStorage.getItem(XERO_PORTAL_LANGUAGE_STORAGE_KEY));
+    const callbackCopy = xeroPortalUiCopy();
     if (xero === 'connected') toast({ title: callbackCopy.toasts.connected, description: callbackCopy.toasts.connectedDescription });
     if (xero === 'error') toast({ title: callbackCopy.toasts.connectionFailed, description: message || callbackCopy.toasts.connectionFailedDescription, variant: 'destructive' });
     if (xero) {
@@ -320,7 +307,7 @@ export default function XeroPortal() {
     setRun(result.data.run);
     setSelectedRows(new Set());
     setReviewed(false);
-    toast({ title: copy.toasts.changesApplied, description: summarizeApply(result.data.run?.summary || {}, language) });
+    toast({ title: copy.toasts.changesApplied, description: summarizeApply(result.data.run?.summary || {}) });
     await load({ force: true });
   }
 
@@ -445,30 +432,22 @@ export default function XeroPortal() {
   }));
 
   if (loading && !status) {
-    return <div className="workspace-tools p-4 lg:p-6"><StateBlock icon={Loader2} title={copy.header.loadingTitle} description={copy.header.loadingDescription} /></div>;
+    return <div className="workspace-tools p-4 lg:p-6" lang="en"><StateBlock icon={Loader2} title={copy.header.loadingTitle} description={copy.header.loadingDescription} /></div>;
   }
 
   return (
-    <div className={cn('workspace-tools min-h-full bg-background p-4 text-foreground lg:p-6', (tab === 'accounting' || tab === 'contacts') && 'workspace-page-wide')} lang={language === 'zh-Hant' ? 'zh-Hant-HK' : 'en'}>
+    <div className={cn('workspace-tools min-h-full bg-background p-4 text-foreground lg:p-6', (tab === 'accounting' || tab === 'contacts') && 'workspace-page-wide')} lang="en">
       <div className={cn('mx-auto flex w-full min-w-0 flex-col gap-4', tab !== 'accounting' && tab !== 'contacts' && 'max-w-[1800px]')}>
         <header className="xp-header">
           <div>
             <div className={PORTAL_ACTIONS_CLASS}>
               <h1 className="text-2xl font-semibold tracking-normal">{copy.header.title}</h1>
               <StatusBadge ok={xero.connected} trueLabel={copy.header.connected} falseLabel={copy.header.disconnected} />
-              <StatusBadge ok={status?.externalActions?.xero_financial_sync?.enabled} trueLabel={language === 'en' ? 'Financial sync enabled' : '財務同步已啟用'} falseLabel={language === 'en' ? 'Financial sync disabled' : '財務同步已停用'} tone={status?.externalActions?.xero_financial_sync?.enabled ? 'emerald' : 'amber'} />
+              <StatusBadge ok={status?.externalActions?.xero_financial_sync?.enabled} trueLabel="Financial sync enabled" falseLabel="Financial sync disabled" tone={status?.externalActions?.xero_financial_sync?.enabled ? 'emerald' : 'amber'} />
             </div>
             <p className={PORTAL_DESCRIPTION_CLASS}>{copy.header.subtitle}</p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <div aria-label={copy.languageLabel} className="xp-languages">
-              <Languages className="xp-language-icon" />
-              {XERO_PORTAL_UI_LANGUAGES.map((option) => (
-                <Button key={option.id} type="button" size="sm" variant={language === option.id ? 'default' : 'ghost'} className="h-8" aria-pressed={language === option.id} onClick={() => setLanguage(option.id)}>
-                  {option.label}
-                </Button>
-              ))}
-            </div>
             <Button type="button" variant="outline" onClick={() => setTab('manual')}>
               <BookOpen className="mr-2 h-4 w-4" />
               {copy.header.manual}
@@ -501,11 +480,11 @@ export default function XeroPortal() {
 
         {error ? <div role="alert" className="xp-error">{error}</div> : null}
 
-        <details className="rounded-lg border border-border p-3"><summary className="cursor-pointer text-sm">{language === 'en' ? 'Connection and system details' : '連線及系統資料'}</summary><section className="mt-3 grid gap-3 lg:grid-cols-4">
+        <details className="rounded-lg border border-border p-3"><summary className="cursor-pointer text-sm">Connection and system details</summary><section className="mt-3 grid gap-3 lg:grid-cols-4">
           {[[copy.panels.tenant, [
             [copy.panels.organisation, xero.tenantName || copy.panels.notConnected],
             [copy.panels.tenantId, xero.tenantId || copy.common.unavailable],
-            [copy.panels.tokenExpires, formatDateTime(xero.expiresAt, language)],
+            [copy.panels.tokenExpires, formatDateTime(xero.expiresAt)],
             [copy.panels.redirectUri, xero.redirectUri || copy.common.notConfigured],
           ]],
             [copy.panels.scopes, [
@@ -587,11 +566,11 @@ export default function XeroPortal() {
 
               <div className="xp-last-run">
                 {hasLifecycleRun
-                  ? copy.contacts.lastRun(shortId(run.id), formatDateTime(run.createdAt, language), Number(run.rowCount || run.rows?.length || 0).toLocaleString(copy.locale))
+                  ? copy.contacts.lastRun(shortId(run.id), formatDateTime(run.createdAt), Number(run.rowCount || run.rows?.length || 0).toLocaleString(copy.locale))
                   : copy.contacts.noRun}
               </div>
 
-              <UsageCache sources={status?.usageCache?.sources || run?.usageCache?.sources || []} copy={copy} language={language} />
+              <UsageCache sources={status?.usageCache?.sources || run?.usageCache?.sources || []} copy={copy} />
               <StatusLegend labels={statusLabels} copy={copy} />
             </section>
 
@@ -686,12 +665,12 @@ export default function XeroPortal() {
                 )) : <StateBlock icon={CheckCircle2} title={hasLifecycleRun ? copy.contacts.noRowsTitle : copy.contacts.noPreviewTitle} description={hasLifecycleRun ? copy.contacts.noRowsDescription : copy.contacts.noPreviewDescription} />}
               </div>
             </section>
-            {identityRow && <Suspense fallback={null}><XeroContactResolution row={identityRow} tenantId={run?.xero?.tenantId} language={language} onClose={() => setIdentityRow(null)} onSaved={saveIdentityAndRefresh} /></Suspense>}
+            {identityRow && <Suspense fallback={null}><XeroContactResolution row={identityRow} tenantId={run?.xero?.tenantId} language="en" onClose={() => setIdentityRow(null)} onSaved={saveIdentityAndRefresh} /></Suspense>}
           </TabsContent>
 
           <TabsContent value="accounting" className="space-y-4">
             <Suspense fallback={<StateBlock icon={Loader2} title={copy.financial.loadingTitle} description={copy.financial.loadingDescription} />}>
-              <XeroFinancialSync portalStatus={status} language={language} />
+              <XeroFinancialSync portalStatus={status} language="en" />
             </Suspense>
           </TabsContent>
 
@@ -762,7 +741,7 @@ export default function XeroPortal() {
                             {receipt.xeroInvoiceUrl ? <a className="xp-bill-link" href={receipt.xeroInvoiceUrl} target="_blank" rel="noreferrer">{copy.receipts.draftBill} <ExternalLink className="h-3 w-3" /></a> : copy.receipts.notSynced}
                             {receipt.error ? <div className="mt-1 max-w-[260px] text-xs text-red-700">{receipt.error}</div> : null}
                           </TableCell>
-                          <TableCell>{formatDateTime(receipt.updatedAt, language)}</TableCell>
+                          <TableCell>{formatDateTime(receipt.updatedAt)}</TableCell>
                           <TableCell>
                             <Button type="button" size="sm" variant="outline" onClick={() => syncReceipt(receipt.id)} disabled={receipt.status === 'synced' || !xero.connected || !scopeFlags.invoices || !scopeFlags.attachments || busy === `receipt-sync-${receipt.id}`}>
                               {busy === `receipt-sync-${receipt.id}` ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Send className="mr-2 h-3.5 w-3.5" />}
@@ -822,7 +801,7 @@ export default function XeroPortal() {
 
           <TabsContent value="manual" className="space-y-4">
             <Suspense fallback={<StateBlock icon={Loader2} title={copy.manual.loadingTitle} description={copy.manual.loadingDescription} />}>
-              <XeroPortalManual language={language} onLanguageChange={setLanguage} />
+              <XeroPortalManual />
             </Suspense>
           </TabsContent>
         </Tabs>
@@ -866,7 +845,7 @@ function Kpi({ label, value, tone = 'neutral', emptyLabel = '' }) {
   );
 }
 
-function UsageCache({ sources, copy, language }) {
+function UsageCache({ sources, copy }) {
   if (!sources?.length) return null;
   return (
     <div className={PORTAL_CACHE_GRID_CLASS}>
@@ -877,9 +856,9 @@ function UsageCache({ sources, copy, language }) {
             <StatusBadgeText status={source.status} copy={copy} />
           </div>
           <div className={PORTAL_DETAIL_CLASS}>
-            {source.recordsScanned?.toLocaleString?.(copy.locale) || 0} {language === 'zh-Hant' ? '筆紀錄' : 'records'} · {source.contactCount?.toLocaleString?.(copy.locale) || 0} {language === 'zh-Hant' ? '個聯絡人' : 'contacts'}
+            {source.recordsScanned?.toLocaleString?.(copy.locale) || 0} records · {source.contactCount?.toLocaleString?.(copy.locale) || 0} contacts
           </div>
-          <div className="mt-1 text-[11px] text-muted-foreground">{formatDateTime(source.scannedAt, language)}</div>
+          <div className="mt-1 text-[11px] text-muted-foreground">{formatDateTime(source.scannedAt)}</div>
         </div>
       ))}
     </div>
@@ -1051,18 +1030,15 @@ function ContactUsage({ usage = [], copy }) {
   </ul>;
 }
 
-function summarizeApply(summary, language) {
-  return language === 'zh-Hant'
-    ? `已重新命名 ${summary.updated || 0} 個、已封存 ${summary.archived || 0} 個、失敗 ${summary.failed || 0} 個。`
-    : `${summary.updated || 0} renamed, ${summary.archived || 0} archived, ${summary.failed || 0} failed.`;
+function summarizeApply(summary) {
+  return `${summary.updated || 0} renamed, ${summary.archived || 0} archived, ${summary.failed || 0} failed.`;
 }
 
-function formatDateTime(value, language = 'en') {
-  const unavailable = language === 'zh-Hant' ? '不可用' : 'Not available';
-  if (!value) return unavailable;
+function formatDateTime(value) {
+  if (!value) return 'Not available';
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return unavailable;
-  return new Intl.DateTimeFormat(language === 'zh-Hant' ? 'zh-HK' : 'en-GB', {
+  if (Number.isNaN(date.getTime())) return 'Not available';
+  return new Intl.DateTimeFormat('en-GB', {
     day: '2-digit',
     month: 'short',
     year: 'numeric',

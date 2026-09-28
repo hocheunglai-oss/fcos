@@ -63,6 +63,12 @@ if (fixtureOptions.has('restoration')) rows.push(...[
   message: eligible ? 'Verified archived match; restoring this ID preserves its existing bills and payments.' : 'Ownership is unresolved; restoration remains blocked.',
 })));
 
+if (fixtureOptions.has('userDataChinese')) {
+  const row = rows.find((item) => item.id === 'keep-row');
+  row.salesforceName = 'Active Ocean Carrier 航運資料';
+  row.message = 'Outstanding balance keeps the contact active. 使用者備註';
+}
+
 const run = {
   id: 'contacts-layout-fixture', createdAt: '2026-09-23T00:00:00.000Z', rowCount: rows.length, rows,
   xero: { tenantId: 'f0a97252-7bc7-47b6-a8cf-ef381671aeca' },

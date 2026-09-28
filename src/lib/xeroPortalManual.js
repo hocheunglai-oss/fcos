@@ -45,7 +45,7 @@ export const XERO_PORTAL_MANUALS = Object.freeze({
           'Treat “Xero writes gated” as a safety lock: previews remain available, but guarded financial or contact writes cannot run.',
         ],
         controls: [
-          ['User manual', 'Opens this bilingual manual. Use the language selector at the top to switch languages.', 'Always available inside Xero Portal.', 'navigation'],
+          ['User manual', 'Opens the English Xero Portal user guide.', 'Always available inside Xero Portal.', 'navigation'],
           ['Refresh', 'Reloads connection status, receipts, the latest contact lifecycle run, and the latest automatic-contact run.', 'Disabled while another page-level action is running.', 'read'],
           ['Connect Xero', 'Starts Xero OAuth and returns to FCOS after the organisation is authorised.', 'Shown when disconnected and enabled only when the Xero app is configured.', 'fcos'],
           ['Reconnect scopes', 'Runs OAuth again without first deleting the stored connection, so missing accounting or payment scopes can be granted.', 'Shown only when connected but required financial scopes are missing.', 'fcos'],
