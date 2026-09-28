@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { claimReviewedGroupPayment, finishReviewedGroupPayment, groupBankProofMatches, hasGroupBankSourceEvidence } from './_xeroGroupPaymentPersistence.js';
 import { confirmedPaymentValues, matchPaymentResponses, paymentConfirmationErrors } from './_xeroPaymentIdentity.js';
 
 const hash = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -16,8 +17,9 @@ const journal = (claim) => claim?.control_totals?.paymentPosting;
 export async function loadPaymentPostingClaims(client, tenantId, paymentIds) {
   if (!uuid(tenantId)) throw failure('A verified Xero tenant is required.', 'XERO_PAYMENT_TENANT_INVALID');
   const ids = [...new Set(paymentIds)]; const canonicalIds = new Set(ids.map(canonicalPaymentId)); const seen = new Set(); const claims = new Map();
-  for (let offset = 0; offset < ids.length; offset += 200) {
-    const keys = ids.slice(offset, offset + 200).map((id) => paymentPostingKey(tenantId, id));
+  const queryIds = [...canonicalIds];
+  for (let offset = 0; offset < queryIds.length; offset += 200) {
+    const keys = queryIds.slice(offset, offset + 200).map((id) => paymentPostingKey(tenantId, id));
     const result = await client.from('xero_financial_sync_runs').select('*').eq('mode', 'payment_apply').in('idempotency_key', keys);
     if (result.error || !Array.isArray(result.data)) throw storageFailure();
     for (const claim of result.data) {
@@ -44,10 +46,22 @@ export function reviewPaymentPostingClaim(row, claim, payment) {
     return row;
   }
   const saved = journal(claim);
+  if (saved?.state === 'group_linked') {
+    const retained = saved.reviewed;
+    if (claim.status === 'completed' && row.action === 'payment_link' && ['eligible', 'protected'].includes(row.status)
+      && !row.blockers.length && row.proposedPayment === null && groupBankProofMatches(retained, row)
+      && retained.sourceFingerprint === row.sourceFingerprint && retained.xeroPaymentId === row.xeroPaymentId
+      && saved.confirmedPaymentId === payment?.PaymentID && retained.documentMappingId === row.documentMappingId
+      && retained.bankAccountId === payment?.Account?.AccountID) return { ...row, paymentPostingClaimId: claim.id };
+    return { ...row, action: 'blocked', status: 'blocked', proposedPayment: null,
+      blockers: [...row.blockers, 'The saved Group bank-source payment link changed. Resolve its original proof before further action.'],
+      blockerCodes: [...row.blockerCodes, 'finance_exception'], paymentPostingClaimId: claim.id };
+  }
   if (saved?.state === 'reference_linked') {
     const retained = saved.reviewed;
     if (claim.status === 'completed' && row.action === 'payment_link' && row.status === 'protected'
       && row.acceptedReference === true && !row.blockers.length && row.proposedPayment === null
+      && groupBankProofMatches(retained, row)
       && retained?.sourceFingerprint === row.sourceFingerprint
       && retained.referenceReviewFingerprint === row.referenceReviewFingerprint
       && retained.xeroPaymentId === row.xeroPaymentId && saved.confirmedPaymentId === payment?.PaymentID
@@ -59,7 +73,7 @@ export function reviewPaymentPostingClaim(row, claim, payment) {
       blockerCodes: [...row.blockerCodes, 'finance_exception'], paymentPostingClaimId: claim.id };
   }
   const errors = row.action === 'payment_link' && ['eligible', 'protected'].includes(row.status) && saved?.reviewed
-    && saved.reviewed.sourceFingerprint === row.sourceFingerprint
+    && groupBankProofMatches(saved.reviewed, row) && saved.reviewed.sourceFingerprint === row.sourceFingerprint
     ? paymentConfirmationErrors(saved.reviewed, payment || {}, saved.confirmedPaymentId) : ['A previous posting attempt has no exact, current, confirmed Xero payment.'];
   if (!errors.length) return { ...row, paymentPostingClaimId: claim.id, confirmedPayment: confirmedPaymentValues(payment) };
   const message = `${claim.error_message || 'A previous payment posting result is unresolved.'} Refresh the payment check and resolve its exact Xero outcome before another posting.`;
@@ -78,6 +92,7 @@ async function audit(client, claim, actor, outcome, code = null) {
 }
 
 async function claimPayment(client, tenantId, row, actor) {
+  if (hasGroupBankSourceEvidence(row)) return claimReviewedGroupPayment(client, tenantId, row, actor);
   const now = new Date().toISOString();
   const claim = { id: randomUUID(), mode: 'payment_apply', status: 'processing', idempotency_key: paymentPostingKey(tenantId, row.salesforcePaymentId),
     source_fingerprint: row.sourceFingerprint, control_totals: { paymentPosting: { tenantId, paymentId: canonicalPaymentId(row.salesforcePaymentId), reviewed: row, state: 'intent' } },
@@ -91,7 +106,10 @@ async function claimPayment(client, tenantId, row, actor) {
   return claim;
 }
 
-async function finishClaim(client, claim, actor, state, message, observedPaymentIds, confirmedPaymentId = null) {
+async function finishClaim(client, claim, actor, state, message, observedPaymentIds, confirmedPaymentId = null, confirmedValues = null) {
+  if (hasGroupBankSourceEvidence(journal(claim)?.reviewed)) {
+    return finishReviewedGroupPayment(client, claim, actor, state, message, observedPaymentIds, confirmedValues);
+  }
   const saved = { ...journal(claim), state, observedPaymentIds, ...(confirmedPaymentId ? { confirmedPaymentId } : {}) };
   const values = { status: state === 'confirmed' ? 'completed' : 'failed', control_totals: { paymentPosting: saved },
     error_code: state === 'confirmed' ? null : 'XERO_PAYMENT_CONFIRMATION_UNCERTAIN', error_message: message,
@@ -104,9 +122,9 @@ async function finishClaim(client, claim, actor, state, message, observedPayment
 
 export async function resolvePaymentPostingClaim(client, claim, payment, actor) {
   const saved = journal(claim);
-  if (['confirmed', 'reference_linked'].includes(saved?.state)) return;
+  if (['confirmed', 'reference_linked', 'group_linked'].includes(saved?.state)) return;
   if (!saved?.reviewed || paymentConfirmationErrors(saved.reviewed, payment || {}, saved.confirmedPaymentId).length) throw failure('The reread payment does not confirm the original posting.');
-  await finishClaim(client, claim, actor, 'confirmed', null, [payment.PaymentID], payment.PaymentID);
+  await finishClaim(client, claim, actor, 'confirmed', null, [payment.PaymentID], payment.PaymentID, confirmedPaymentValues(payment));
 }
 
 export async function postReviewedPaymentBatch(rows, { client, connection, actor, accountingFetch, options = {} }) {
@@ -135,6 +153,11 @@ export async function postReviewedPaymentBatch(rows, { client, connection, actor
     if (errors.length) {
       await finishClaim(client, claim, actor, 'uncertain', errors.join(' '), observedIds);
       outcomes.push({ salesforcePaymentId: row.salesforcePaymentId, status: 'failed', reviewRequired: true, errors });
+      continue;
+    }
+    if (hasGroupBankSourceEvidence(row)) {
+      await finishClaim(client, claim, actor, 'confirmed', null, [actual.PaymentID], actual.PaymentID, confirmedPaymentValues(actual));
+      outcomes.push({ salesforcePaymentId: row.salesforcePaymentId, xeroPaymentId: actual.PaymentID, status: 'applied' });
       continue;
     }
     const result = await client.from('xero_financial_payment_mappings').upsert({

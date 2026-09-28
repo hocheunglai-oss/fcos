@@ -736,6 +736,10 @@ export async function resolveXeroTenant({ accessToken, stored, env, fetchImpl })
 }
 
 export async function listXeroContactsForRename(connection, { env, fetchImpl }) {
+  return (await listXeroContactsComplete(connection, { env, fetchImpl })).contacts;
+}
+
+export async function listXeroContactsComplete(connection, { env, fetchImpl, contactMapper = toXeroContactForRename }) {
   const contacts = [];
   const seen = new Set();
   let expectedCount = null; let expectedPages = null;
@@ -748,6 +752,7 @@ export async function listXeroContactsForRename(connection, { env, fetchImpl }) 
     if (!Array.isArray(response.Contacts) || response.Contacts.length > 100) throw incomplete();
     const pageContacts = response.Contacts;
     const pagination = response.pagination;
+    if (pagination != null && (typeof pagination !== 'object' || Array.isArray(pagination))) throw incomplete();
     for (const [field, previous] of [['itemCount', expectedCount], ['pageCount', expectedPages]]) {
       if (pagination?.[field] === undefined) { if (previous !== null) throw incomplete(); continue; }
       const value = pagination[field];
@@ -758,13 +763,13 @@ export async function listXeroContactsForRename(connection, { env, fetchImpl }) 
       || (pagination?.pageSize !== undefined && pagination.pageSize !== 100)) throw incomplete();
     for (const contact of pageContacts) {
       if (!trimValue(contact.ContactID) || !trimValue(contact.Name) || !trimValue(contact.ContactStatus) || seen.has(contact.ContactID)) throw incomplete();
-      seen.add(contact.ContactID); contacts.push(toXeroContactForRename(contact));
+      seen.add(contact.ContactID); contacts.push(contactMapper(contact));
     }
     const lastPage = expectedPages !== null ? page >= expectedPages : pageContacts.length < 100;
     if (!lastPage && pageContacts.length !== 100) throw incomplete();
     if (lastPage) {
       if (expectedCount !== null && expectedCount !== contacts.length) throw incomplete();
-      return contacts;
+      return { contacts, xeroCalls: page, complete: true };
     }
     await sleep(xeroContactSyncDelayMs(env));
   }
@@ -1105,6 +1110,7 @@ function toXeroContactForRename(contact) {
     contactNumber: trimValue(contact.ContactNumber),
     accountNumber: trimValue(contact.AccountNumber),
     status: trimValue(contact.ContactStatus),
+    mergedToContactId: trimValue(contact.MergedToContactID),
   };
 }
 

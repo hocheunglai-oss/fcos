@@ -4,13 +4,10 @@ import { formatXeroAllowanceCountdown, formatXeroAllowanceDate } from '@/lib/xer
 const COPY = {
   en: ['Daily allowance', 'Calls remaining', 'Daily reset (Hong Kong time)', 'Not supplied by Xero', 'Resets in',
     'Reset time passed. Check again to confirm.'],
-  zh: ['每日限額', '剩餘呼叫次數', '每日重設（香港時間）', 'Xero 未有提供', '距離重設尚餘',
-    '重設時間已過；請於下次檢查時確認。'],
 };
 
-export default function XeroDailyAllowance({ snapshot, language = 'en' }) {
-  const chinese = language === 'zh-Hant' || language === 'zh-HK';
-  const copy = COPY[chinese ? 'zh' : 'en'];
+export default function XeroDailyAllowance({ snapshot }) {
+  const copy = COPY.en;
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
     const resetAt = Date.parse(snapshot?.dayResetAt);
@@ -24,9 +21,9 @@ export default function XeroDailyAllowance({ snapshot, language = 'en' }) {
     if (resetAt > Date.now()) timer = setInterval(refresh, 1000);
     return () => { if (timer) clearInterval(timer); };
   }, [snapshot?.dayResetAt]);
-  const resetDate = formatXeroAllowanceDate(snapshot?.dayResetAt, language);
-  const countdown = resetDate ? formatXeroAllowanceCountdown(snapshot.dayResetAt, now, chinese ? 'zh' : 'en') : null;
-  const remaining = snapshot?.dayRemaining == null ? copy[3] : Number(snapshot.dayRemaining).toLocaleString(chinese ? 'zh-HK' : 'en-HK');
+  const resetDate = formatXeroAllowanceDate(snapshot?.dayResetAt, 'en');
+  const countdown = resetDate ? formatXeroAllowanceCountdown(snapshot.dayResetAt, now, 'en') : null;
+  const remaining = snapshot?.dayRemaining == null ? copy[3] : Number(snapshot.dayRemaining).toLocaleString('en-HK');
   return (
     <aside aria-label={copy[0]} className="rounded-lg border border-sky-200 bg-white/90 p-3 text-sm">
       <div className="font-semibold">{copy[0]}</div>

@@ -9,7 +9,7 @@ const payment = {
 };
 const mapping = {
   id: 'mapping-1', salesforce_object: 'Supplier_Invoice__c', salesforce_id: payment.Supplier_Invoice__c,
-  xero_document_id: 'xero-invoice-1', xero_document_type: 'ACCPAY', xero_contact_id: 'contact-1',
+  xero_document_id: '11111111-1111-4111-8111-111111111111', xero_document_type: 'ACCPAY', xero_contact_id: '22222222-2222-4222-8222-222222222222',
   retained_differences: { stemId: payment.STEM__c, accountId: payment.Account__c },
 };
 const currentDocument = {
@@ -17,12 +17,13 @@ const currentDocument = {
   contactId: mapping.xero_contact_id, currency: 'USD', amountDue: 500,
 };
 const existingPayment = {
-  PaymentID: 'xero-payment-1', Invoice: { InvoiceID: mapping.xero_document_id },
-  Account: { AccountID: 'bank-1' }, Amount: payment.Amount__c,
+  PaymentID: '33333333-3333-4333-8333-333333333333', PaymentType: 'ACCPAYPAYMENT',
+  Invoice: { InvoiceID: mapping.xero_document_id, Type: 'ACCPAY', CurrencyCode: 'USD', Contact: { ContactID: mapping.xero_contact_id } },
+  Account: { AccountID: '44444444-4444-4444-8444-444444444444' }, Amount: payment.Amount__c,
   Date: payment.Date__c, Reference: payment.Name, Status: 'AUTHORISED',
 };
 const matchContext = {
-  payment, documentMapping: mapping, bankAccountId: 'bank-1', xeroPayments: [existingPayment],
+  payment, documentMapping: mapping, bankAccountId: existingPayment.Account.AccountID, xeroPayments: [existingPayment],
 };
 
 test('current payable and receivable documents require the exact Salesforce source relationship', () => {
@@ -69,25 +70,25 @@ test('retained Salesforce Account identity is checked when present without inven
 });
 
 test('full bank and reference identity selects one of several equal same-day payments', () => {
-  const otherReference = { ...existingPayment, PaymentID: 'xero-payment-2', Reference: 'PAY-2' };
-  const otherBank = { ...existingPayment, PaymentID: 'xero-payment-3', Account: { AccountID: 'bank-2' } };
+  const otherReference = { ...existingPayment, PaymentID: '55555555-5555-4555-8555-555555555555', Reference: 'PAY-2' };
+  const otherBank = { ...existingPayment, PaymentID: '66666666-6666-4666-8666-666666666666', Account: { AccountID: '77777777-7777-4777-8777-777777777777' } };
   const result = selectXeroPaymentMatch({ ...matchContext, xeroPayments: [otherReference, otherBank, existingPayment] });
   assert.equal(result.match, existingPayment);
   assert.deepEqual(result.blockers, []);
 });
 
 test('an explicit Salesforce reference takes precedence over the payment name', () => {
-  const referenced = { ...existingPayment, Reference: 'BANK-TRANSFER-1' };
+  const referenced = { ...existingPayment, PaymentID: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', Reference: 'BANK-TRANSFER-1' };
   const result = selectXeroPaymentMatch({ ...matchContext, payment: { ...payment, Reference__c: referenced.Reference }, xeroPayments: [existingPayment, referenced] });
   assert.equal(result.match, referenced);
   assert.deepEqual(result.blockers, []);
 });
 
 test('multiple full identities and bank or reference near-matches cannot create duplicate payments', () => {
-  const duplicate = selectXeroPaymentMatch({ ...matchContext, xeroPayments: [existingPayment, { ...existingPayment, PaymentID: 'xero-payment-2' }] });
+  const duplicate = selectXeroPaymentMatch({ ...matchContext, xeroPayments: [existingPayment, { ...existingPayment, PaymentID: '55555555-5555-4555-8555-555555555555' }] });
   assert.equal(duplicate.match, null);
   assert.match(duplicate.blockers.join(' '), /More than one active Xero payment/);
-  for (const changed of [{ Reference: 'another-reference' }, { Account: { AccountID: 'another-bank' } }]) {
+  for (const changed of [{ Reference: 'another-reference' }, { Account: { AccountID: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' } }]) {
     const result = selectXeroPaymentMatch({ ...matchContext, xeroPayments: [{ ...existingPayment, ...changed }] });
     assert.equal(result.match, null);
     assert.match(result.blockers.join(' '), /different bank account or reference/);
@@ -111,8 +112,9 @@ test('deleted and inactive payments never link or silently permit replacement', 
   const inactive = selectXeroPaymentMatch({ ...matchContext, xeroPayments: [{ ...existingPayment, Status: 'VOIDED' }] });
   assert.equal(inactive.match, null);
   assert.match(inactive.blockers.join(' '), /inactive Xero payment/);
-  const live = selectXeroPaymentMatch({ ...matchContext, xeroPayments: [deleted, { ...existingPayment, PaymentID: 'live-replacement' }] });
-  assert.equal(live.match.PaymentID, 'live-replacement');
+  const liveId = '99999999-9999-4999-8999-999999999999';
+  const live = selectXeroPaymentMatch({ ...matchContext, xeroPayments: [deleted, { ...existingPayment, PaymentID: liveId }] });
+  assert.equal(live.match.PaymentID, liveId);
   assert.deepEqual(live.blockers, []);
 });
 
@@ -170,7 +172,7 @@ test('missing Xero payment dates cannot silently turn possible existing allocati
 test('exact USD cents avoid confusing a one-cent difference while unrelated payments do not block', () => {
   const differentCent = selectXeroPaymentMatch({ ...matchContext, xeroPayments: [{ ...existingPayment, Amount: 125.51 }] });
   assert.deepEqual(differentCent, { match: null, blockers: [] });
-  const unrelated = selectXeroPaymentMatch({ ...matchContext, xeroPayments: [{ ...existingPayment, Invoice: { InvoiceID: 'other-invoice' } }] });
+  const unrelated = selectXeroPaymentMatch({ ...matchContext, xeroPayments: [{ ...existingPayment, Invoice: { ...existingPayment.Invoice, InvoiceID: '88888888-8888-4888-8888-888888888888' } }] });
   assert.deepEqual(unrelated, { match: null, blockers: [] });
   const noHistory = selectXeroPaymentMatch({ ...matchContext, xeroPayments: [] });
   assert.deepEqual(noHistory, { match: null, blockers: [] });

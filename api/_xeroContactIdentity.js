@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { getFreshXeroConnection, hkStrippedClKeyNameMatchKey, listXeroContactsForRename, normalizeLookupValue, normalizeName, xeroContactSyncServiceClient } from './_xeroContactSync.js';
+import { getFreshXeroConnection, hkStrippedClKeyNameMatchKey, isSalesforceAccountId, listXeroContactsForRename, normalizeLookupValue, normalizeName, xeroContactSyncServiceClient } from './_xeroContactSync.js';
 import { sfQuery } from './_salesforce.js';
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -21,10 +21,15 @@ export async function loadContactIdentityDecisions(client, tenantId) {
   }
   return new Map(rows.map((row) => [row.contact_id, row]));
 }
-export async function loadAllSalesforceIdentityAccounts() {
-  const result = await sfQuery('SELECT Id, Name, Company_Code__c, Inactive_Suspended__c, RecordType.DeveloperName FROM Account', { clean: true, limit: 100000 });
-  if (result.totalSize !== result.records.length) throw error('Salesforce Account evidence is incomplete.');
-  return result.records.map((row) => ({ id: row.Id, name: row.Name, companyCode: row.Company_Code__c, recordType: row.RecordType?.DeveloperName }));
+export async function loadAllSalesforceIdentityAccounts({ query = sfQuery } = {}) {
+  const result = await query('SELECT Id, Name, Company_Code__c, Inactive_Suspended__c, RecordType.DeveloperName FROM Account', { clean: true, limit: 100000 });
+  if (result?.error || result?.done === false || !Array.isArray(result?.records) || !Number.isInteger(result.totalSize) || result.totalSize !== result.records.length
+    || new Set(result.records.map((row) => row.Id)).size !== result.records.length
+    || result.records.some((row) => !isSalesforceAccountId(row.Id) || typeof row.Inactive_Suspended__c !== 'boolean')) {
+    throw error('Complete Salesforce Account identity and active status evidence is unavailable.', 'XERO_CONTACT_IDENTITY_SOURCE_INCOMPLETE', 502);
+  }
+  return result.records.map((row) => ({ id: row.Id, name: row.Name || '', companyCode: row.Company_Code__c || '',
+    recordType: row.RecordType?.DeveloperName || row['RecordType.DeveloperName'] || '', inactiveSuspended: row.Inactive_Suspended__c }));
 }
 export function contactMatchesSalesforceIdentity(contact, accounts) {
   const values = [contact.name, contact.contactNumber, contact.accountNumber].map(normalizeLookupValue).filter(Boolean);

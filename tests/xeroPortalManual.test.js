@@ -67,19 +67,10 @@ test('Xero Portal manual explains every critical write and review control', () =
   assert.deepEqual(xeroWrites.sort(), ['Apply exact payments', 'Apply selected', 'Create Xero draft bill', 'Confirm and sync', 'Resume approved sync', 'Sync', 'Approve and update', 'Approve and create draft'].sort());
 });
 
-test('Xero Portal exposes the bilingual manual from both the header and tabs', async () => {
-  const page = await readFile(new URL('../src/pages/XeroPortal.jsx', import.meta.url), 'utf8');
-  const manual = await readFile(new URL('../src/components/xero/XeroPortalManual.jsx', import.meta.url), 'utf8');
-  assert.match(page, /setTab\('manual'\)/);
-  assert.match(page, /TabsTrigger value="manual">\{copy\.tabs\.manual\}<\/TabsTrigger>/);
-  assert.match(page, /<XeroPortalManual language=\{language\} onLanguageChange=\{setLanguage\} \/>/);
-  assert.match(manual, /XERO_PORTAL_MANUAL_LANGUAGES\.map/);
-  assert.match(manual, /Button-by-button reference/);
-  assert.match(manual, /按鈕逐項參考/);
-  assert.match(manual, /manual\.tasks\.map/);
-  assert.match(manual, /<Accordion/);
-  assert.match(manual, /<details/);
-  assert.doesNotMatch(manual, /<table/);
+test('English manual gives current navigation guidance without a removed language selector', () => {
+  const control = XERO_PORTAL_MANUALS.en.sections.flatMap((section) => section.controls).find(([label]) => label === 'User manual');
+  assert.equal(control[1], 'Opens the English Xero Portal user guide.');
+  assert.doesNotMatch(JSON.stringify(XERO_PORTAL_MANUALS.en), /language selector|bilingual manual/i);
 });
 
 test('generated on-demand manual retains all bilingual guide content', async () => {

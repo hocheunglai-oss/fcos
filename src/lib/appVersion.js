@@ -3,6 +3,20 @@ import { APP_VERSION } from './appVersionMeta.js';
 export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
+  { version: '2.0.260', releasedAt: '2026-09-28', title: 'English Xero Portal and clearer file status', changes: ['Use English throughout Xero Portal, including saved language preferences. Distinguish attached PDFs awaiting verification from missing or unchecked files; respect verified bill links.'] },
+  { version: '2.0.259', releasedAt: '2026-09-28', title: 'Verify Group remittance banks', changes: ['Use complete Group payment evidence while preserving buyer identities, invoice checks and audit history. Keep large Finance reviews responsive.'] },
+  { version: '2.0.258', releasedAt: '2026-09-28', title: 'Clarify payment exceptions', changes: ['Separate verified remittance summaries from payments and preserve partial bill selections.'] },
+  { version: '2.0.257', releasedAt: '2026-09-28', title: 'Verify distinct supplier deliveries', changes: ['Keep unrelated historical invoices from blocking verified bill links.'] },
+  { version: '2.0.256', releasedAt: '2026-09-28', title: 'Verify supplier bill amounts', changes: ['Handle exact trustee fee rounding and preserve verified bill details.'] },
+  { version: '2.0.255', releasedAt: '2026-09-28', title: 'Save verified bill reviews', changes: ['Save and audit verified links while preserving Xero details and financial approvals.'] },
+  { version: '2.0.254', releasedAt: '2026-09-28', title: 'Verify supplier ownership', changes: ['Check inactive owners and invoice history; preserve stable selections and PDF integrity.'] },
+  { version: '2.0.253', releasedAt: '2026-09-28', title: 'Paste reviewed bill evidence', changes: ['Paste JSON for bill verification and linking; retain Contact restoration diagnostics.'] },
+  { version: '2.0.252', releasedAt: '2026-09-28', title: 'Restore verified Xero Contacts', changes: ['Restore verified archived Contacts, preserving their IDs and accounting details; audit selections and verify interrupted outcomes.'] },
+  { version: '2.0.251', releasedAt: '2026-09-28', title: 'Link verified petroleum bills', changes: ['Verify delivered quantities, prices, vessel and dates; preserve bill details with audited links and complete competing-record checks.'] },
+  { version: '2.0.250', releasedAt: '2026-09-28', title: 'Preserve verified bills', changes: ['Audit verified trustee links without changing Xero history; reconcile exact line and invoice amounts.'] },
+  { version: '2.0.249', releasedAt: '2026-09-27', title: 'Complete and reliable Finance reviews', changes: ['Show financial reviews only after all required evidence is saved.', 'Reuse unchanged evidence-only reviews while preserving approvals, original records and audit history.'] },
+  { version: '2.0.248', releasedAt: '2026-09-26', title: 'Verify evidence before updating authorised bills', changes: ['Require issued-source evidence for changes to authorised Xero documents, including in Create drafts mode.'] },
+  { version: '2.0.247', releasedAt: '2026-09-26', title: 'Find supplier attachments', changes: ['Show attached PDFs, lookup time and incomplete results; keep discovery separate from verification and approval.'] },
   { version: '2.0.244', releasedAt: '2026-09-24', title: 'Clear missing bank guidance', changes: ['Distinguish missing Salesforce bank details from an unapproved mapping, and prevent opening an empty mapping dialog.'] },
   { version: '2.0.243', releasedAt: '2026-09-24', title: 'Batch payment links and precise price evidence', changes: ['Review up to 25 verified existing payment links together, retaining Xero references and an audit trail. Verify grouped invoice lines using the prices behind Salesforce totals and show the exact missing field.'] },
   { version: '2.0.242', releasedAt: '2026-09-24', title: 'Verified grouped invoice links', changes: ['Review proven combined invoice lines without changing Xero history. Serialize document batches and retain protection when a write outcome is uncertain.'] },

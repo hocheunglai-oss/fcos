@@ -13,9 +13,15 @@ const stemId = 'a0H000000000001AAA';
 const buyerId = '001000000000001AAA';
 const supplierId = '001000000000002AAA';
 const date = new Date(Date.now() - (scenario === 'xero-rate-limit' ? 180000 : 0)).toISOString();
-const doc = { id: 'doc-ready', salesforceId: 'sf-ready', salesforceObject: 'Invoice__c', stemId, documentNumber: 'TEST-INV-1', accountName: 'Test Buyer', stemName: 'TEST STEM', total: 100, currency: 'USD', invoiceDate: '2026-09-01', dueDate: '2026-09-30', documentKind: 'buyer_invoice', action: 'create_draft', status: 'eligible', reviewFingerprint: 'v1', blockers: [], differences: [], mappingProducts: [{ id: 'fuel', name: 'Fuel' }] };
+const doc = { id: 'doc-ready', salesforceId: 'sf-ready', salesforceObject: 'Invoice__c', stemId, documentNumber: 'TEST-INV-1', accountName: 'Test Buyer', stemName: 'TEST STEM', total: 100, currency: 'USD', invoiceDate: '2026-09-01', dueDate: '2026-09-30', documentKind: 'buyer_invoice', action: 'create_draft', status: 'eligible', reviewFingerprint: 'v1', sourceFingerprint: 'source-v1', blockers: [], differences: [], mappingProducts: [{ id: 'fuel', name: 'Fuel' }] };
 const blocked = { ...doc, id: 'doc-blocked', salesforceId: 'sf-blocked', documentNumber: 'TEST-INV-2', action: 'blocked', status: 'blocked', blockers: ['Fuel: Finance-approved Xero account mapping is missing.'] };
 let preview = { run: { id: 'run', revision: 1, status: 'ready_for_review', createdAt: date }, checkedAt: date, rows: [doc, blocked, { ...doc, id: 'doc-match', action: 'link', documentNumber: 'TEST-INV-3' }], products: [{ id: 'fuel', name: 'Fuel' }], summary: { total: 3, eligible: 2, blocked: 1 }, mappingProposals: [], payments: { rows: [{ salesforcePaymentId: 'p1', salesforcePaymentName: 'TEST-PAY-1', stemId, type: 'Receivable', amount: 100, currency: 'USD', paymentDate: '2026-09-01', bank: 'DBS', status: 'blocked', action: 'blocked', blockers: ['The linked Xero transaction is not authorised for payment.'] }], summary: { total: 1 } } };
+if (scenario === 'xero-refund-holds') {
+  preview.payments.paymentEvidenceHolds = [
+    { xeroPaymentId: '00000000-0000-4000-8000-000000000101', paymentType: 'AROVERPAYMENTPAYMENT', documentKind: 'overpayment', documentId: '00000000-0000-4000-8000-000000000201', currency: 'USD', amount: 1234.5, date: '2026-03-20', status: 'held', code: 'XERO_PAYMENT_NONINVOICE_REVIEW_REQUIRED' },
+    { xeroPaymentId: '00000000-0000-4000-8000-000000000102', paymentType: 'UNKNOWN', documentKind: null, status: 'held', code: 'XERO_PAYMENT_ASSOCIATION_INVALID' },
+  ];
+}
 const parties = [{ id: 'buyer', accountId: buyerId, name: 'Test Buyer', roles: ['buyer'], partyKey: buyerId }, { id: 'supplier', accountId: supplierId, name: 'Test Supplier', roles: ['supplier'], partyKey: supplierId }];
 const buyerAction = { id: 'buyer-action', partyId: 'buyer', partyAccountId: buyerId, partyName: 'Test Buyer', partyType: 'buyer', partySide: 'buyer', actionType: 'close_buyer_dispute', actionLabel: 'Close dispute with buyer', amount: 0, closeReason: 'Full payment received from buyer', accountingStatus: 'Pending Accounting' };
 const supplierAction = { id: 'supplier-action', partyId: 'supplier', partyAccountId: supplierId, partyName: 'Test Supplier', partyType: 'supplier', partySide: 'supplier', actionType: 'close_supplier_dispute', actionLabel: 'Close dispute with supplier', amount: 0, closeReason: 'Full payment received from buyer', balancePaymentInstruction: 'No Balance Payment', accountingStatus: 'Pending Accounting' };
@@ -55,4 +61,4 @@ appClient.functions.invoke = async (name, body = {}) => {
   throw new Error(`Unexpected fixture request: ${name}`);
 };
 const status = { xero: { connected: true, scopeFlags: { contacts: true, invoices: true, settingsRead: true, paymentsRead: true } }, externalActions: { xero_financial_sync: { enabled: scenario !== 'locked' } } };
-createRoot(document.getElementById('root')).render(<MemoryRouter><AuthProvider><main className="h-full w-full min-w-0 overflow-hidden p-4">{['xero', 'locked', 'xero-rate-limit'].includes(scenario) ? <XeroFinancialSync portalStatus={status}/> : <DisputeWorkflow/>}</main></AuthProvider></MemoryRouter>);
+createRoot(document.getElementById('root')).render(<MemoryRouter><AuthProvider><main className="h-full w-full min-w-0 overflow-hidden p-4">{['xero', 'locked', 'xero-rate-limit', 'xero-refund-holds'].includes(scenario) ? <XeroFinancialSync portalStatus={status}/> : <DisputeWorkflow/>}</main></AuthProvider></MemoryRouter>);

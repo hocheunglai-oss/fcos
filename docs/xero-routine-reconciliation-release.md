@@ -35,4 +35,6 @@ Accepted historical document links now remain link-only even if a payment is rev
 
 ## Remaining stages
 
+Version 2.0.248 requires verified issued-source evidence when updating an existing authorised Xero document, including when the review is set to Create drafts. That setting does not turn an existing authorised bill into a draft. Missing readiness blocks the accounting update; draft creation and links that preserve accounting history retain their existing controls.
+
 The broader plan still includes the durable unattended queue and automation controls, secure human CLI session handoff, evidence-based historical contact cleanup, non-routine settlements and bank-entry contact repair, controlled reversals/deletions, and operational monitoring. These need their own implementation and acceptance evidence. Never replace unresolved contact identity with a placeholder or infer payment allocation using FIFO.

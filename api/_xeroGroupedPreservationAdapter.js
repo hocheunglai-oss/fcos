@@ -72,9 +72,10 @@ export function buildGroupedPreservationContext(salesforce, xero, stored, source
   const accountsById = new Map(accounts.map((account) => [canonicalSf(account.id), account]));
   const contactIds = contacts.map((contact) => canonicalXero(contact.id));
   const complete = salesforce.groupedAccountSnapshot?.complete === true && xero.contactsComplete === true
+    && xero.documentIdentityScopeComplete !== false
     && /^\d{4}-\d{2}-\d{2}$/.test(salesforce.cutoffDate || '') && salesforce.cutoffDate === xero.cutoffDate
     && new Set(contactIds).size === contacts.length && contactIds.every(Boolean);
-  return { tenantId: xero.tenantId, complete, accountsById, matchesFor, members, sources, stored,
+  return { tenantId: xero.tenantId, complete, accountsById, matchesFor, members, identityContacts: xero.contacts, sources, stored,
     cutoffDate: salesforce.cutoffDate, documents: xero.documents || [], organisation: xero.organisation || {} };
 }
 

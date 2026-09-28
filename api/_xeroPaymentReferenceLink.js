@@ -1,4 +1,6 @@
 import { paymentPostingKey } from './_xeroPaymentPosting.js';
+import { issuedSupplierCanonical as canonical } from './_xeroIssuedSupplierPreservation.js';
+import { hasGroupBankSourceEvidence, validatedGroupPaymentRow } from './_xeroGroupPaymentPersistence.js';
 
 const uuid = (value) => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
   && value !== '00000000-0000-0000-0000-000000000000';
@@ -18,6 +20,11 @@ function reviewedRow(row) {
     || !object(row.retainedReferenceEvidence) || !Object.keys(row.retainedReferenceEvidence).length) {
     throw failure('Complete, freshly reviewed payment-reference evidence is required.');
   }
+  const group = hasGroupBankSourceEvidence(row) || Object.hasOwn(row.retainedReferenceEvidence, 'bankSourceEvidence');
+  const checked = group ? validatedGroupPaymentRow(row, { requireTarget: true }) : null;
+  if (group && canonical(row.retainedReferenceEvidence.bankSourceEvidence) !== canonical(row.bankSourceEvidence)) {
+    throw failure('Group reference evidence must retain the complete unchanged bank proof.');
+  }
   const evidence = JSON.stringify(row.retainedReferenceEvidence);
   if (Buffer.byteLength(evidence, 'utf8') > 65536) throw failure('Payment-reference evidence exceeds its bounded review size.');
   // Only immutable persistence inputs cross the RPC boundary. No provider payload can be posted here.
@@ -27,6 +34,7 @@ function reviewedRow(row) {
     bankAccountId: row.bankAccountId.toLowerCase(), amount: row.amount, currency: row.currency, paymentDate: row.paymentDate,
     sourceFingerprint: row.sourceFingerprint, referenceReviewFingerprint: row.referenceReviewFingerprint,
     retainedReferenceEvidence: JSON.parse(evidence),
+    ...(checked ? { bankSourceEvidence: checked.bankSourceEvidence, documentMappingSnapshot: checked.documentMappingSnapshot, bankMappingSnapshot: checked.bankMappingSnapshot } : {}),
   };
 }
 
@@ -44,7 +52,7 @@ export async function persistReviewedPaymentReferenceLinks(client, { tenantId, r
   }
   let response;
   try {
-    response = await client.rpc('link_xero_payment_references_v1', {
+    response = await client.rpc(reviewed.some(hasGroupBankSourceEvidence) ? 'link_xero_payment_references_v2' : 'link_xero_payment_references_v1', {
       p_tenant_id: tenantId.toLowerCase(),
       p_rows: reviewed.map((row) => ({ ...row, idempotencyKey: paymentPostingKey(tenantId, row.salesforcePaymentId) })),
       p_actor_id: actor.id, p_actor_email: actor.email.trim().toLowerCase(),

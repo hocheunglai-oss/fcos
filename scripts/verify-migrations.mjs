@@ -29,6 +29,12 @@ const migrationSources = await Promise.all(names.map(async (name) => ({
   sql: await readFile(new URL(name, migrationDirectory), 'utf8'),
 })));
 const releaseMigrationNames = new Set([
+  '20260928053229_xero_document_field_correction_journal.sql',
+  '20260928033217_xero_issued_petroleum_attachment_preservation_v2.sql',
+  '20260927213024_xero_petroleum_inactive_source_ownership.sql',
+  '20260927185526_xero_issued_petroleum_preservation_link.sql',
+  '20260927175805_xero_issued_supplier_preservation_link.sql',
+  '20260927154515_xero_financial_preview_persistence.sql',
   '20260923222821_xero_grouped_preservation_link.sql',
   '20260923213339_xero_payment_reference_link.sql',
   '20260923210832_xero_financial_selection_scope.sql',
@@ -75,6 +81,13 @@ async function assertRows(sql, expected, label, values = []) {
 }
 
 async function verifyRuntimeObjects(label) {
+  const correctionTables = ['xero_document_field_correction_previews', 'xero_document_field_correction_claims', 'xero_document_field_correction_events'];
+  await assertRows(`select count(*)::int from pg_class c join pg_namespace n on n.oid=c.relnamespace
+    where n.nspname='public' and c.relname=any($1::text[]) and c.relrowsecurity`, 3, `${label} correction journal RLS`, [correctionTables]);
+  await assertRows(`select count(*)::int from unnest($1::text[]) t cross join unnest(array['anon','authenticated']) r
+    cross join unnest(array['SELECT','INSERT','UPDATE','DELETE']) p where has_table_privilege(r,'public.'||t,p)`, 0, `${label} correction browser access denied`, [correctionTables]);
+  await assertRows(`select count(*)::int from unnest($1::text[]) t cross join unnest(array['UPDATE','DELETE','TRUNCATE']) p
+    where has_table_privilege('service_role','public.'||t,p)`, 0, `${label} correction journal append-only`, [correctionTables]);
   const identityTables = ['xero_contact_identity_decisions', 'xero_contact_identity_audit'];
   await assertRows(`select count(*)::int from pg_class c join pg_namespace n on n.oid=c.relnamespace
     where n.nspname='public' and c.relname=any($1::text[]) and c.relrowsecurity`, 2, `${label} contact identity RLS`, [identityTables]);
@@ -115,9 +128,14 @@ async function verifyRuntimeObjects(label) {
     [['xero_financial_payment_mappings_canonical_sf_uidx', 'xero_financial_payment_mappings_canonical_xero_uidx']],
   );
   const releaseFunctions = [
+    'claim_xero_document_field_correction_v1', 'finish_xero_document_field_correction_v1', 'read_xero_document_field_correction_page_v1',
+    'link_xero_issued_petroleum_document_v1',
+    'link_xero_issued_petroleum_document_v2', 'xero_issued_petroleum_attachment_manifest_v2',
+    'link_xero_issued_supplier_document_v1',
     'link_xero_grouped_document_v1', 'xero_grouped_salesforce_id_v1', 'protect_xero_grouped_mapping_v1',
     'link_xero_payment_references_v1',
     'authorise_xero_financial_sync_run_v1',
+    'persist_xero_financial_preview_v1',
     'save_company_finance_settings', 'save_company_finance_settings_v2', 'valid_company_bank_charges',
     'save_market_trader_workspace',
     'save_account_insight_report_preset', 'resolve_variable_charge_post_invoice_change',
@@ -125,6 +143,12 @@ async function verifyRuntimeObjects(label) {
     'validate_hedge_fcbs_document', 'protect_hedge_fcbs_issued', 'protect_hedge_fcbs_link_identity',
     'assert_hedge_fcbs_document', 'set_hedge_fcbs_settlement_status', 'save_hedge_fcbs_settlement',
   ];
+  await assertRows(
+    `select count(*)::int from pg_index i join pg_class c on c.oid=i.indexrelid
+     join pg_namespace n on n.oid=c.relnamespace where n.nspname='public'
+     and c.relname='xero_financial_preview_request_receipt_uidx' and i.indisunique and i.indisvalid`,
+    1, `${label} preview retry receipts preserve unique request identity`,
+  );
   await assertRows(
     `select count(*)::int from pg_index i join pg_class c on c.oid=i.indexrelid
      join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and i.indisunique and i.indisvalid
@@ -136,7 +160,14 @@ async function verifyRuntimeObjects(label) {
   await assertRows(
     `select count(*)::int from pg_trigger where tgrelid='public.xero_financial_document_mappings'::regclass
      and tgname='protect_xero_grouped_mapping' and not tgisinternal and tgenabled='O'`,
-    1, `${label} accepted grouped document proof remains protected`,
+    1, `${label} accepted document proof remains protected`,
+  );
+  await assertRows(
+    `select count(*)::int from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+     where n.nspname='public' and p.proname='protect_xero_grouped_mapping_v1'
+       and position('issuedSupplierPreservation' in p.prosrc)>0
+       and position('groupedPreservation' in p.prosrc)>0`,
+    1, `${label} both document preservation policies remain immutable`,
   );
   await assertRows(
     `select count(*)::int from pg_proc p join pg_namespace n on n.oid=p.pronamespace

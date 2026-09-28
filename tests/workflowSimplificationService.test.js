@@ -179,8 +179,8 @@ test('saved mappings retrieve every page rather than silently stopping at 1000 r
 });
 
 test('background check uses modified-since and detects source, lock and aged snapshots', async () => {
-  const id = randomUUID(); const controls = { bankMappings: [], documentMappings: [], productMappings: [] };
-  const run = { id, source_snapshot_at: '2026-09-15T10:00:00Z', control_totals: { workflowSnapshot: {
+  const id = randomUUID(); const controls = { bankMappings: [], documentCorrectionClaims: [], documentCorrectionEvents: [], documentMappings: [], productMappings: [] };
+  const run = { id, mode: 'preview', status: 'ready_for_review', source_snapshot_at: '2026-09-15T10:00:00Z', control_totals: { workflowSnapshot: {
     reconciliationVersion: XERO_RECONCILIATION_VERSION, controlsFingerprint: createHash('sha256').update(JSON.stringify(controls)).digest('hex'), organisation: { periodLockDate: null, endOfYearLockDate: null, baseCurrency: null },
   } } };
   const calls = []; const deps = { client: database({ xero_financial_sync_runs: [run] }), connection: {}, now: Date.parse('2026-09-15T10:10:00Z'),
@@ -199,6 +199,8 @@ test('background check uses modified-since and detects source, lock and aged sna
   assert.ok(calls.slice(0, 4).every(({ options }) => options.headers['If-Modified-Since'] === 'Tue, 15 Sep 2026 10:00:00 GMT'));
   assert.equal((await financialPreviewChanges(id, { ...deps, querySalesforce: async () => [{ records: [{ Id: 'changed' }] }] })).changed, true);
   assert.equal((await financialPreviewChanges(id, { ...deps, now: Date.parse('2026-09-16T10:00:00Z') })).changed, true);
+  const corrected = database({ xero_financial_sync_runs: [run], xero_document_field_correction_events: [{ id: 'confirmed-correction' }] });
+  assert.equal((await financialPreviewChanges(id, { ...deps, client: corrected })).changed, true, 'A correction invalidates the saved financial check');
 });
 
 test('combined closure is offered only on the final action or invoice instruction', () => {

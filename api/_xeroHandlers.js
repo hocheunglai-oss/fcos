@@ -1,4 +1,6 @@
+import { xeroFinancialDocumentCorrectionPreview, xeroFinancialDocumentCorrectionPage, xeroFinancialDocumentCorrectionApply, xeroFinancialDocumentCorrectionVerify } from './_xeroDocumentCorrections.js';
 import {
+  invalidateContactNameCacheAfterRestore,
   xeroPortalConnectStart,
   xeroPortalContactAutoCreateLatest,
   xeroPortalContactAutoCreateRun,
@@ -25,6 +27,8 @@ import {
 } from './_xeroFinancialSync.js';
 import { xeroContactIdentitySave } from './_xeroContactIdentity.js';
 import { xeroContactRepairApply } from './_xeroContactRepair.js';
+import { xeroContactRestoreApply } from './_xeroContactRestore.js';
+import { xeroFinancialDocumentPreservationPreview, xeroFinancialDocumentPreservationRun } from './_xeroIssuedSupplierWorkflow.js';
 
 export const XERO_HANDLER_MODULE_ACCESS = Object.freeze(Object.fromEntries([
   'xeroPortalStatus',
@@ -41,6 +45,7 @@ export const XERO_HANDLER_MODULE_ACCESS = Object.freeze(Object.fromEntries([
   'xeroPortalContactLifecycleApply',
   'xeroContactIdentitySave',
   'xeroContactRepairApply',
+  'xeroContactRestoreApply',
   'xeroPortalContactAutoCreateLatest',
   'xeroPortalContactAutoCreateRun',
   'xeroFinancialMappingsGet',
@@ -50,6 +55,12 @@ export const XERO_HANDLER_MODULE_ACCESS = Object.freeze(Object.fromEntries([
   'xeroFinancialSyncApply',
   'xeroFinancialSyncRun',
   'xeroFinancialPaymentApply',
+  'xeroFinancialDocumentCorrectionPreview',
+  'xeroFinancialDocumentCorrectionPage',
+  'xeroFinancialDocumentCorrectionApply',
+  'xeroFinancialDocumentCorrectionVerify',
+  'xeroFinancialDocumentPreservationPreview',
+  'xeroFinancialDocumentPreservationRun',
 ].map((name) => [name, ['xero_portal']])));
 
 export function createXeroHandlers({ requireActiveUser, resolveRecoveredSystemErrorHandler }) {
@@ -85,6 +96,7 @@ export function createXeroHandlers({ requireActiveUser, resolveRecoveredSystemEr
     xeroPortalContactLifecycleApply: wrap(xeroPortalContactLifecycleApply),
     xeroContactIdentitySave: wrap(xeroContactIdentitySave),
     xeroContactRepairApply: wrap(xeroContactRepairApply),
+    xeroContactRestoreApply: wrap((body, options) => xeroContactRestoreApply(body, { ...options, onRestored: invalidateContactNameCacheAfterRestore })),
     xeroPortalContactAutoCreateLatest: wrap(xeroPortalContactAutoCreateLatest),
     xeroPortalContactAutoCreateRun: wrap(xeroPortalContactAutoCreateRun),
     xeroFinancialMappingsGet: wrap(xeroFinancialMappingsGet),
@@ -94,5 +106,11 @@ export function createXeroHandlers({ requireActiveUser, resolveRecoveredSystemEr
     xeroFinancialSyncApply: wrap(xeroFinancialSyncApply),
     xeroFinancialSyncRun: wrap(xeroFinancialSyncRun),
     xeroFinancialPaymentApply: wrap(xeroFinancialPaymentApply),
+    xeroFinancialDocumentCorrectionPreview: wrap(xeroFinancialDocumentCorrectionPreview),
+    xeroFinancialDocumentCorrectionPage: wrap(xeroFinancialDocumentCorrectionPage),
+    xeroFinancialDocumentCorrectionApply: wrap(xeroFinancialDocumentCorrectionApply),
+    xeroFinancialDocumentCorrectionVerify: wrap(xeroFinancialDocumentCorrectionVerify),
+    xeroFinancialDocumentPreservationPreview: wrap(xeroFinancialDocumentPreservationPreview),
+    xeroFinancialDocumentPreservationRun: wrap(xeroFinancialDocumentPreservationRun),
   };
 }

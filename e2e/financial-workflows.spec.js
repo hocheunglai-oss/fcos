@@ -16,11 +16,11 @@ test.describe('simplified financial workflows', () => {
   }
   test('saved check, dependency waiting and one reviewed sync action', async ({ page }, testInfo) => {
     await page.goto('/e2e/fixtures/financial-workflows.html');
-    await expect(page.getByText('TEST-INV-2', { exact: true })).toBeVisible();
+    await expect(page.getByText('TEST-INV-2', { exact: true }).and(page.locator(':visible'))).toBeVisible();
     await expect(page.getByText('TEST-INV-1', { exact: true })).not.toBeVisible();
     await page.screenshot({ path: `outputs/workflow-simplification/xero-${testInfo.project.name}.png`, animations: 'disabled' });
     await page.getByRole('button', { name: 'Waiting (1)', exact: true }).click();
-    await expect(page.getByRole('cell', { name: /Waiting for invoice sync or Xero approval/ })).toBeVisible();
+    await expect(page.getByRole('cell', { name: /The linked Xero transaction is not authorised for payment/ })).toBeVisible();
     await page.getByRole('button', { name: 'Ready to sync (1)', exact: true }).click();
     await page.getByRole('row').filter({ hasText: 'TEST-INV-1' }).getByRole('checkbox').check();
     await page.getByRole('button', { name: 'Review and sync selected', exact: true }).click();
@@ -31,6 +31,23 @@ test.describe('simplified financial workflows', () => {
     const writes = await page.evaluate(() => window.workflowFixture.requests.filter((row) => row.name === 'xeroFinancialSyncRun'));
     expect(writes).toHaveLength(1); expect(writes[0].body).toMatchObject({ reviewed: true, selectedItemIds: ['doc-ready'] });
     await expect(page.getByRole('alert')).toContainText('no Xero transactions');
+  });
+  test('held Xero refunds remain visible across filters and cannot be selected for posting', async ({ page }) => {
+    await page.goto('/e2e/fixtures/financial-workflows.html?scenario=xero-refund-holds');
+    const holds = page.getByRole('complementary', { name: 'Xero payment evidence requiring review' });
+    await expect(holds).toContainText('2 Xero payment records held for separate review');
+    await holds.getByText('Show held payment records', { exact: true }).click();
+    await expect(holds).toContainText('Overpayment refund');
+    await expect(holds).toContainText('USD 1,234.50');
+    await expect(holds).toContainText('2026-03-20');
+    await expect(holds).toContainText('00000000-0000-4000-8000-000000000102');
+    await expect(holds).toContainText('incomplete or conflicting');
+    await expect(holds.getByRole('checkbox')).toHaveCount(0);
+    await expect(holds.getByRole('button')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Ready to sync (1)', exact: true }).click();
+    await expect(holds).toBeVisible();
+    await expect(holds).toContainText('2 Xero payment records');
+    expect(await page.evaluate(() => window.workflowFixture.requests.filter((row) => ['xeroFinancialSyncRun', 'xeroFinancialPaymentApply'].includes(row.name)))).toEqual([]);
   });
   test('mapping repair refreshes in place', async ({ page }) => {
     await page.goto('/e2e/fixtures/financial-workflows.html');
@@ -43,7 +60,7 @@ test.describe('simplified financial workflows', () => {
   test('a rate-limited background check preserves the saved review and stops automatic retries', async ({ page }) => {
     await page.goto('/e2e/fixtures/financial-workflows.html?scenario=xero-rate-limit');
     await expect(page.getByRole('alert')).toContainText('Please retry in 60 seconds');
-    await expect(page.getByText('TEST-INV-2', { exact: true })).toBeVisible();
+    await expect(page.getByText('TEST-INV-2', { exact: true }).and(page.locator(':visible'))).toBeVisible();
     await page.getByRole('button', { name: 'Ready to sync (1)', exact: true }).click();
     await page.getByRole('row').filter({ hasText: 'TEST-INV-1' }).getByRole('checkbox').check();
     await page.evaluate(() => { window.dispatchEvent(new Event('focus')); document.dispatchEvent(new Event('visibilitychange')); });

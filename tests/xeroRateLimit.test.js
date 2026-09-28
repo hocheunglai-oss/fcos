@@ -95,25 +95,29 @@ test('complete maximum-size scoped preview needs only 45 paced reads without sca
 });
 
 test('scoped reconciliation hydrates historical invoice evidence without adding old matching candidates', async () => {
+  const id = (value) => `00000000-0000-4000-8000-${String(value).padStart(12, '0')}`;
+  const [unpaidOld, alreadyLoaded, movedPayment, movedOld, paidOld, current, contact] = [1, 2, 3, 4, 5, 6, 7].map(id);
+  const ordinary = (PaymentID, InvoiceID, date) => ({ PaymentID, PaymentType: 'ACCPAYPAYMENT', Date: date,
+    Invoice: { InvoiceID, Type: 'ACCPAY', CurrencyCode: 'USD', Contact: { ContactID: contact } } });
   const calls = [];
   const snapshot = await loadXeroFinancialSnapshot({ tenantId: 'historical', accessToken: 'test' }, '2026-01-01', {
-    env: {}, includePayments: true, invoiceIds: ['unpaid-old', 'already-loaded'], paymentIds: ['moved-payment'],
+    env: {}, includePayments: true, invoiceIds: [unpaidOld, alreadyLoaded], paymentIds: [movedPayment],
     requestGate: async (_tenant, operation) => operation(),
     fetchImpl: async (value) => {
       const url = new URL(value); calls.push(url);
-      if (url.pathname.endsWith('/Payments/moved-payment')) return json({ Payments: [{ PaymentID: 'moved-payment', Date: '2025-12-31', Invoice: { InvoiceID: 'moved-old' } }] });
+      if (url.pathname.endsWith(`/Payments/${movedPayment}`)) return json({ Payments: [ordinary(movedPayment, movedOld, '2025-12-31')] });
       const collection = url.pathname.split('/').at(-1);
       if (collection === 'Organisations') return json({ Organisations: [{}] });
       if (collection === 'Invoices' && url.searchParams.has('IDs')) {
-        assert.deepEqual(new Set(url.searchParams.get('IDs').split(',')), new Set(['unpaid-old', 'paid-old', 'moved-old']));
-        return json({ Invoices: ['unpaid-old', 'paid-old', 'moved-old'].map((InvoiceID) => ({ InvoiceID, Date: '2025-12-31', Status: 'AUTHORISED', Type: 'ACCPAY' })) });
+        assert.deepEqual(new Set(url.searchParams.get('IDs').split(',')), new Set([unpaidOld, paidOld, movedOld]));
+        return json({ Invoices: [unpaidOld, paidOld, movedOld].map((InvoiceID) => ({ InvoiceID, Date: '2025-12-31', Status: 'AUTHORISED', Type: 'ACCPAY' })) });
       }
-      if (collection === 'Invoices') return json({ Invoices: [{ InvoiceID: 'already-loaded', Date: '2026-01-01', Status: 'AUTHORISED', Type: 'ACCPAY' }] });
-      if (collection === 'Payments') return json({ Payments: [{ PaymentID: 'current', Date: '2026-01-01', Invoice: { InvoiceID: 'paid-old' } }] });
+      if (collection === 'Invoices') return json({ Invoices: [{ InvoiceID: alreadyLoaded, Date: '2026-01-01', Status: 'AUTHORISED', Type: 'ACCPAY' }] });
+      if (collection === 'Payments') return json({ Payments: [ordinary(current, paidOld, '2026-01-01')] });
       return json({ [collection]: [] });
     },
   });
-  assert.deepEqual(snapshot.documents.map((row) => row.id), ['already-loaded']);
+  assert.deepEqual(snapshot.documents.map((row) => row.id), [alreadyLoaded]);
   assert.equal(snapshot.paymentReadSnapshot.invoices.length, 4);
   assert.equal(snapshot.paymentReadSnapshot.payments.length, 2);
   assert.equal(calls.filter((url) => url.searchParams.has('IDs')).length, 1);
@@ -140,7 +144,7 @@ test('missing targeted evidence remains absent and unexpected records fail close
   const absent = await loadXeroPaymentEvidence({ tenantId: 'missing', accessToken: 'test' }, '2026-01-01', {
     ...options, fetchImpl: async (url) => url.includes('/Payments/') ? json({}, 404) : json({ Invoices: [] }),
   });
-  assert.deepEqual(absent, { invoices: [], payments: [] });
+  assert.deepEqual(absent, { invoices: [], payments: [], paymentEvidenceHolds: [] });
   await assert.rejects(loadXeroPaymentEvidence({ tenantId: 'mismatch', accessToken: 'test' }, '2026-01-01', {
     ...options, paymentIds: [], fetchImpl: async () => json({ Invoices: [{ InvoiceID: 'unrequested' }] }),
   }), (error) => error.code === 'XERO_FINANCIAL_XERO_INCOMPLETE');

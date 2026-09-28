@@ -1,32 +1,18 @@
 import { useEffect, useState } from 'react';
-import { AlertTriangle, BookOpen, CheckCircle2, Languages, ShieldCheck } from 'lucide-react';
+import { AlertTriangle, BookOpen, CheckCircle2, ShieldCheck } from 'lucide-react';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { XERO_PORTAL_UI_LANGUAGES as XERO_PORTAL_MANUAL_LANGUAGES, normalizeXeroPortalLanguage } from '@/lib/xeroPortalUiCopy';
 import { cn } from '@/lib/utils';
 
 const UI_COPY = Object.freeze({
-  en: {
-    loading: 'Loading guide…', loadError: 'The guide could not be loaded.', retry: 'Retry',
-    steps: 'Follow these steps',
-    details: 'Button-by-button reference',
-    detailsHint: 'Open this only when you need the exact availability or data effect of a control.',
-    does: 'What it does',
-    available: 'When available',
-    noButtons: 'This section explains status and recovery rules. There are no controls to operate here.',
-    language: 'Xero Portal language',
-  },
-  'zh-Hant': {
-    loading: '正在載入手冊…', loadError: '未能載入手冊。', retry: '重試',
-    steps: '依照以下步驟',
-    details: '按鈕逐項參考',
-    detailsHint: '只有需要查閱控制項的可用條件或資料影響時才展開。',
-    does: '功能',
-    available: '可用條件',
-    noButtons: '本節說明狀態及復原規則，沒有需要操作的控制項。',
-    language: 'Xero Portal 語言',
-  },
+  loading: 'Loading guide…', loadError: 'The guide could not be loaded.', retry: 'Retry',
+  steps: 'Follow these steps',
+  details: 'Button-by-button reference',
+  detailsHint: 'Open this only when you need the exact availability or data effect of a control.',
+  does: 'What it does',
+  available: 'When available',
+  noButtons: 'This section explains status and recovery rules. There are no controls to operate here.',
 });
 
 const EFFECT_STYLES = Object.freeze({
@@ -36,14 +22,11 @@ const EFFECT_STYLES = Object.freeze({
   navigation: 'border-slate-200 bg-slate-50 text-slate-700',
 });
 
-export default function XeroPortalManual({ language: controlledLanguage, onLanguageChange }) {
-  const [localLanguage, setLocalLanguage] = useState('en');
-  const language = normalizeXeroPortalLanguage(controlledLanguage ?? localLanguage);
+export default function XeroPortalManual() {
   const [openSection, setOpenSection] = useState('');
-  const [manuals, setManuals] = useState(null);
+  const [manual, setManual] = useState(null);
   const [loadError, setLoadError] = useState(false);
   const [retry, setRetry] = useState(0);
-  const manual = manuals?.[language];
   useEffect(() => {
     const controller = new AbortController();
     setLoadError(false);
@@ -51,18 +34,12 @@ export default function XeroPortalManual({ language: controlledLanguage, onLangu
       .then(async (response) => {
         if (!response.ok) throw new Error('Manual unavailable');
         const data = await response.json();
-        if (!data.en?.sections || !data['zh-Hant']?.sections) throw new Error('Manual incomplete');
-        if (!controller.signal.aborted) setManuals(data);
+        if (!data.en?.sections) throw new Error('Manual incomplete');
+        if (!controller.signal.aborted) setManual(data.en);
       }).catch(() => { if (!controller.signal.aborted) setLoadError(true); });
     return () => controller.abort();
   }, [retry]);
-  const copy = UI_COPY[language];
-
-  function changeLanguage(nextLanguage) {
-    const normalized = normalizeXeroPortalLanguage(nextLanguage);
-    if (onLanguageChange) onLanguageChange(normalized);
-    else setLocalLanguage(normalized);
-  }
+  const copy = UI_COPY;
 
   function chooseTask(sectionId) {
     setOpenSection(sectionId);
@@ -71,10 +48,10 @@ export default function XeroPortalManual({ language: controlledLanguage, onLangu
     });
   }
 
-  if (!manual) return <div role={loadError ? 'alert' : 'status'} className="p-4">{loadError ? copy.loadError : copy.loading}{loadError && <Button variant="link" onClick={() => setRetry((value) => value + 1)}>{copy.retry}</Button>}</div>;
+  if (!manual) return <div lang="en" role={loadError ? 'alert' : 'status'} className="p-4">{loadError ? copy.loadError : copy.loading}{loadError && <Button variant="link" onClick={() => setRetry((value) => value + 1)}>{copy.retry}</Button>}</div>;
 
   return (
-    <section aria-labelledby="xero-manual-title" className="space-y-4">
+    <section lang="en" aria-labelledby="xero-manual-title" className="space-y-4">
       <div className="rounded-xl border border-border bg-card p-4 sm:p-5">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0">
@@ -84,22 +61,7 @@ export default function XeroPortalManual({ language: controlledLanguage, onLangu
             </div>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">{manual.subtitle}</p>
           </div>
-          <div aria-label={copy.language} className="inline-flex w-fit rounded-lg border border-border bg-muted/30 p-1">
-            <Languages className="mx-2 my-auto h-4 w-4 text-muted-foreground" />
-            {XERO_PORTAL_MANUAL_LANGUAGES.map((option) => (
-              <Button
-                key={option.id}
-                type="button"
-                size="sm"
-                variant={language === option.id ? 'default' : 'ghost'}
-                className="h-8"
-                aria-pressed={language === option.id}
-                onClick={() => changeLanguage(option.id)}
-              >
-                {option.label}
-              </Button>
-            ))}
-          </div>
+
         </div>
 
         <h3 className="mt-4 text-sm font-semibold">{manual.importantTitle}</h3>

@@ -1,5 +1,9 @@
 import { expect, test } from '@playwright/test';
 
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => window.localStorage.setItem('fcos:xero-portal-language:v1', 'zh-Hant'));
+});
+
 async function assertInsideViewport(locator, page) {
   const bounds = await locator.boundingBox();
   expect(bounds).not.toBeNull();
@@ -83,19 +87,8 @@ test('Contacts shows Reason and long messages within the workspace for all actio
     await assertInsideViewport(narrowRow, page);
     await page.screenshot({ path: testInfo.outputPath('contacts-narrow.png'), fullPage: true });
   }
-  await page.getByRole('button', { name: '繁體中文' }).click();
-  const chineseRows = compact;
-  const chineseMixed = chineseRows.getByRole('article', { name: /PacificMarineFuelTrading/ });
-  await expect(chineseMixed).toContainText('發票及帳單：12');
-  await expect(chineseMixed).toContainText('2025: 9');
-  await expect(chineseMixed).toContainText('2026: 3');
-  const chineseOneYear = chineseRows.getByRole('article', { name: /Shared Marine Buyer/ });
-  await expect(chineseOneYear).toContainText('貸項通知單：2');
-  await expect(chineseOneYear).toContainText('2026: 2');
-  await expect(chineseOneYear).not.toContainText('2025:');
-  await expect(chineseRows.getByRole('article', { name: /Active Ocean Carrier/ })).toContainText('年份不明：2');
-  await expect(chineseRows.getByRole('article', { name: /Deferred Contact Audit/ })).toContainText('尚未掃描年份分布。請重新按「預覽」。');
-  await page.screenshot({ path: testInfo.outputPath(isMobile ? 'contacts-mobile-zh.png' : 'contacts-narrow-zh.png'), fullPage: true });
+  await expect(page.getByRole('button', { name: '繁體中文' })).toHaveCount(0);
+  await expect(page.locator('.workspace-tools[lang="en"]')).toBeVisible();
   expect(await page.evaluate(() => window.contactsFixture.requests.filter(({ name }) => name.includes('Apply')))).toEqual([]);
 });
 
@@ -139,13 +132,8 @@ test('Contacts table cells fit without overlap just above the wide-view threshol
   await expect(wide.getByRole('row').filter({ hasText: 'PacificMarineFuelTrading' })).toContainText('2025: 9');
   await page.screenshot({ path: testInfo.outputPath('contacts-threshold.png'), fullPage: true });
 
-  await page.getByRole('button', { name: '繁體中文' }).click();
-  await expect(wide.getByRole('row').filter({ hasText: 'PacificMarineFuelTrading' })).toContainText('發票及帳單：12');
-  const measuredZh = await measureOverflow();
-  expect(measuredZh.frameOverflow).toBeLessThanOrEqual(1);
-  expect(measuredZh.cellOverflow).toEqual([]);
-  expect(measuredZh.badgeOverflow).toEqual([]);
-  await page.screenshot({ path: testInfo.outputPath('contacts-threshold-zh.png'), fullPage: true });
+  await expect(page.getByRole('button', { name: '繁體中文' })).toHaveCount(0);
+
 });
 
 test('reviewed Xero-only verification and revocation use the current fingerprint and audited revision', async ({ page }) => {
@@ -174,8 +162,8 @@ test('reviewed Xero-only verification and revocation use the current fingerprint
   await dialog.getByRole('button', { name: 'Revoke verification' }).click();
   const second = await page.evaluate(() => window.contactsFixture.requests.filter(({ name }) => name === 'xeroContactIdentitySave'));
   expect(second[1].body).toMatchObject({ decision: 'revoked', expectedRevision: 1, reviewed: true });
-  await page.getByRole('button', { name: '繁體中文' }).click();
-  await expect(page.getByRole('button', { name: '檢閱 Xero 獨有身分' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Review Xero-only identity' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '繁體中文' })).toHaveCount(0);
 });
 
 test('missing-contact repair is separately reviewed and sends only explicit selected rows', async ({ page }) => {
@@ -243,4 +231,126 @@ test('ordinary contact apply review resets when the selected rows change', async
   const row = page.getByRole('article', { name: /PacificMarineFuelTrading/ });
   await row.getByRole('checkbox').click();
   await expect(apply).toBeDisabled();
+});
+
+async function openRestoration(page, testInfo, query = '') {
+  const mobile = testInfo.project.name.startsWith('mobile');
+  await page.setViewportSize(mobile ? { width: 390, height: 844 } : { width: 1600, height: 900 });
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await page.goto(`/e2e/fixtures/xero-contacts.html?restoration=1&resolution=1${query}`);
+  await page.getByRole('tab', { name: 'Contacts', exact: true }).click();
+  await expect(page.locator('vite-error-overlay')).toHaveCount(0);
+  const scope = page.locator(mobile ? '.xero-contacts-review__compact' : '.xero-contacts-review__wide');
+  const row = (name) => scope.getByRole(mobile ? 'article' : 'row').filter({ hasText: name });
+  const panel = page.getByRole('region', { name: 'Restore verified contacts', exact: true });
+  await expect(panel).toBeVisible();
+  return { panel, row, errors, mobile };
+}
+
+test('verified archived restoration has explicit separate selection/review and re-previews exact successful outcomes', async ({ page }, testInfo) => {
+  const { panel, row, errors, mobile } = await openRestoration(page, testInfo);
+  const first = row('Verified Archived Harbour Buyer');
+  const second = row('Verified Archived Marine Supplier');
+  const held = row('Archived Contact With Unresolved Ownership');
+  const restore = panel.getByRole('button', { name: 'Restore verified contacts', exact: true });
+  await expect(first.getByRole('checkbox')).not.toBeChecked();
+  await expect(second.getByRole('checkbox')).not.toBeChecked();
+  await expect(held.getByRole('checkbox')).toBeDisabled();
+  await expect(held).toContainText('Ownership is unresolved');
+  await expect(first).toContainText('613830f6-c5ce-4469-a2ac-1aa4b89fc1c1');
+  await expect(panel).toContainText('preserves bills, payments and contact details');
+  await expect(panel).toContainText('Document holds are not cleared automatically');
+  await expect(restore).toBeDisabled();
+  await first.getByRole('checkbox').click();
+  await expect(restore).toBeDisabled();
+  await panel.getByRole('checkbox').click();
+  await expect(restore).toBeEnabled();
+  await second.getByRole('checkbox').click();
+  await expect(panel.getByRole('checkbox')).not.toBeChecked();
+  await expect(restore).toBeDisabled();
+  await panel.getByRole('checkbox').click();
+  // A missing-contact repair selection and ordinary review must never enter this request.
+  await row('Missing Harbour Buyer').getByRole('checkbox').click();
+  await page.getByText('Reviewed', { exact: true }).click();
+  await restore.click();
+  await expect(panel).toContainText('2 restored · 0 already active · 0 blocked · 0 uncertain');
+  await expect.poll(() => page.evaluate(() => window.contactsFixture.requests.filter((r) => r.name === 'xeroPortalContactLifecyclePreview').length)).toBe(1);
+  const writes = await page.evaluate(() => window.contactsFixture.requests.filter((r) => r.name.includes('Apply')));
+  expect(writes).toEqual([{ name: 'xeroContactRestoreApply', body: { runId: 'contacts-layout-fixture', rowIds: ['restore-row-1', 'restore-row-2'], reviewed: true } }]);
+  await expect(first).toContainText('ACTIVE');
+  await expect(first.getByRole('checkbox')).toBeDisabled();
+  await expect(panel.getByRole('checkbox')).not.toBeChecked();
+  await assertInsideViewport(panel, page);
+  await assertInsideViewport(held, page);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
+  expect(errors).toEqual([]);
+  await page.screenshot({ path: testInfo.outputPath(`contacts-restoration-${mobile ? 'mobile' : 'desktop'}.png`), fullPage: true });
+});
+
+test('restoration is read-only when the Contact write gate is disabled', async ({ page }, testInfo) => {
+  const { panel, row, errors } = await openRestoration(page, testInfo, '&restoreGateDisabled=1');
+  await expect(row('Verified Archived Harbour Buyer').getByRole('checkbox')).toBeDisabled();
+  await expect(panel.getByRole('checkbox')).toBeDisabled();
+  await expect(panel.getByRole('button', { name: 'Restore verified contacts', exact: true })).toBeDisabled();
+  await expect(panel).toContainText('Contact writes are disabled');
+  expect(await page.evaluate(() => window.contactsFixture.requests.filter((r) => r.name === 'xeroContactRestoreApply'))).toEqual([]);
+  expect(errors).toEqual([]);
+});
+
+test('mismatched, network and uncertain restoration responses require a fresh preview and never repeat POST', async ({ page }, testInfo) => {
+  for (const mode of ['mismatch', 'network', 'uncertain']) {
+    const { panel, row, errors } = await openRestoration(page, testInfo, `&restoreOutcome=${mode}`);
+    const selected = row('Verified Archived Harbour Buyer').getByRole('checkbox');
+    await selected.click();
+    await panel.getByRole('checkbox').click();
+    const restore = panel.getByRole('button', { name: 'Restore verified contacts', exact: true });
+    await restore.click();
+    await expect(panel.getByRole('alert')).toContainText('outcome is uncertain');
+    await expect(panel).toContainText('001000000000011AAA');
+    await expect(panel).toContainText('613830f6-c5ce-4469-a2ac-1aa4b89fc1c1');
+    await expect(restore).toBeDisabled();
+    await expect(selected).not.toBeChecked();
+    await expect(selected).toBeDisabled();
+    await expect(panel.getByRole('checkbox')).not.toBeChecked();
+    const requests = await page.evaluate(() => window.contactsFixture.requests);
+    expect(requests.filter((r) => r.name === 'xeroContactRestoreApply')).toHaveLength(1);
+    expect(requests.filter((r) => r.name === 'xeroPortalContactLifecyclePreview')).toHaveLength(0);
+    await page.getByRole('button', { name: 'Preview', exact: true }).click();
+    await expect(panel.getByRole('alert')).toHaveCount(0);
+    await expect(selected).toBeEnabled();
+    await expect(selected).not.toBeChecked();
+    await expect(restore).toBeDisabled();
+    // A new explicit selection still requires a new review and produces no automatic retry.
+    await selected.click();
+    await expect(restore).toBeDisabled();
+    expect(await page.evaluate(() => window.contactsFixture.requests.filter((r) => r.name === 'xeroContactRestoreApply').length)).toBe(1);
+    expect(errors).toEqual([]);
+  }
+});
+
+
+test('saved Chinese preference cannot change portal or manual controls and original counterparty text remains intact', async ({ page }, testInfo) => {
+  const mobile = testInfo.project.name.startsWith('mobile');
+  await page.setViewportSize(mobile ? { width: 390, height: 844 } : { width: 1600, height: 900 });
+  await page.goto('/e2e/fixtures/xero-contacts.html?userDataChinese=1');
+  await expect(page.getByRole('heading', { name: 'Xero Portal', exact: true })).toBeVisible();
+  await expect(page.locator('.workspace-tools[lang="en"]')).toBeVisible();
+  await expect(page.getByRole('button', { name: /^(繁體中文|English)$/ })).toHaveCount(0);
+  await page.getByRole('tab', { name: 'Contacts', exact: true }).click();
+  const row = page.locator(mobile ? '.xero-contacts-review__compact' : '.xero-contacts-review__wide')
+    .getByRole(mobile ? 'article' : 'row').filter({ hasText: 'Active Ocean Carrier' });
+  await expect(row).toContainText('Active Ocean Carrier 航運資料');
+  await expect(row).toContainText('使用者備註');
+  await expect(row).toContainText('Payments: 3');
+  await page.getByRole('button', { name: 'User manual', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Xero Portal User Guide', exact: true })).toBeVisible();
+  await expect(page.locator('section[aria-labelledby="xero-manual-title"]')).toHaveAttribute('lang', 'en');
+  await expect(page.getByRole('button', { name: /^(繁體中文|English)$/ })).toHaveCount(0);
+  await page.getByRole('button', { name: /^Clean up Xero contacts/ }).click();
+  await expect(page.getByRole('heading', { name: 'Follow these steps', exact: true })).toBeVisible();
+  expect(await page.evaluate(() => window.localStorage.getItem('fcos:xero-portal-language:v1'))).toBe('zh-Hant');
+  expect(await page.evaluate(() => window.contactsFixture.requests.filter(({ name }) => name.includes('Apply')))).toEqual([]);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
+  await page.screenshot({ path: testInfo.outputPath('english-only-manual.png'), fullPage: true });
 });

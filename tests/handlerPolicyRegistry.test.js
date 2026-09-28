@@ -54,7 +54,7 @@ test('browser cache invalidation uses server mutation metadata instead of handle
 });
 
 test('saved Xero previews are mutations protected by Finance management permission', () => {
-  for (const name of ['xeroPortalContactLifecyclePreview', 'xeroFinancialSyncPreview']) {
+  for (const name of ['xeroPortalContactLifecyclePreview', 'xeroFinancialSyncPreview', 'xeroContactRestoreApply']) {
     assert.equal(registeredHandlerBehavior(name).mutation, true);
     assert.equal(registeredHandlerBehavior(name).capability, 'xero_portal_manage');
     assert.equal(registeredHandlerBehavior(name).audit, 'required');

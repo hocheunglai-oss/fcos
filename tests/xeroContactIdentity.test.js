@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { PGlite } from '@electric-sql/pglite';
-import { contactIdentityDecision, contactIdentityFingerprint, loadContactIdentityDecisions, xeroContactIdentitySave } from '../api/_xeroContactIdentity.js';
+import { contactIdentityDecision, contactIdentityFingerprint, loadAllSalesforceIdentityAccounts, loadContactIdentityDecisions, xeroContactIdentitySave } from '../api/_xeroContactIdentity.js';
 import { buildContactLifecycleRows } from '../api/_xeroPortal.js';
 import { registeredHandlerBehavior } from '../api/_handlerPolicyRegistry.js';
 
@@ -12,6 +12,22 @@ const actor = { id: '00000000-0000-4000-8000-000000000003', email: 'finance@exam
 const contact = { contactId, name: 'Verified Port Agent', status: 'ACTIVE', contactNumber: '', accountNumber: '' };
 const saved = { tenant_id: tenant, contact_id: contactId, decision: 'verified_xero_only', fingerprint: contactIdentityFingerprint(tenant, contact), revision: 1 };
 const body = { tenantId: tenant, contactId, decision: 'verified_xero_only', expectedRevision: 0, expectedFingerprint: saved.fingerprint, reviewed: true, evidenceNote: 'Confirmed with supplier invoice and remittance.', evidenceReference: 'invoice:TEST-2026-01' };
+
+test('global Account identity evidence includes inactive aliases and rejects incomplete active status', async () => {
+  const records = [
+    { Id: '001000000000001AAA', Name: 'Active supplier', Company_Code__c: 'HKACTIVE', Inactive_Suspended__c: false, RecordType: { DeveloperName: 'Supplier' } },
+    { Id: '001000000000002AAA', Name: 'Historical alias', Company_Code__c: 'HKOLD', Inactive_Suspended__c: true, 'RecordType.DeveloperName': 'Buyer' },
+  ];
+  const evidence = await loadAllSalesforceIdentityAccounts({ query: async (soql) => {
+    assert.doesNotMatch(soql, /WHERE/i);
+    return { records, totalSize: 2 };
+  } });
+  assert.deepEqual(evidence.map((row) => [row.inactiveSuspended, row.recordType]), [[false, 'Supplier'], [true, 'Buyer']]);
+  for (const result of [null, { error: 'denied' }, { records, totalSize: 3 }, { records, totalSize: 2, done: false }, { records: [records[0], records[0]], totalSize: 2 },
+    { records: [{ ...records[0], Inactive_Suspended__c: undefined }], totalSize: 1 }, { records: [{ ...records[0], Id: 'invalid' }], totalSize: 1 }]) {
+    await assert.rejects(loadAllSalesforceIdentityAccounts({ query: async () => result }), { code: 'XERO_CONTACT_IDENTITY_SOURCE_INCOMPLETE' });
+  }
+});
 
 test('verified Xero-only contacts remain kept; changed identities require review even when unused', () => {
   const options = { tenantId: tenant, identityDecisions: new Map([[contactId, saved]]) };
