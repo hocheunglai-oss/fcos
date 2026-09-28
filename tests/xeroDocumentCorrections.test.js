@@ -227,6 +227,29 @@ test('explicit correction preview saves complete evidence without any provider P
   assert.equal(saved[1].source.invoiceDate, null, 'Bill projection must use the linked buyer invoice date');
 });
 
+test('a newly introduced special preservation receipt stops narrowed apply before any provider reads or intent', async () => {
+  for (const key of ['groupedPreservation', 'issuedSupplierPreservation']) {
+    const f = fixture(); const preview = await f.preview(); const reads = f.calls.length;
+    f.stored.documentMappings[1].retained_differences[key] = null;
+    await assert.rejects(f.apply(preview, [preview.items[1].id]), error => /Preservation evidence changed/.test(error.message));
+    assert.equal(f.calls.length, reads); assert.equal(f.claims.length, 0);
+  }
+});
+
+test('ordinary apply narrows global number lookups to the selection while preserving full current-date and historical mapped identities', async () => {
+  const f = fixture();
+  const extra = { ...structuredClone(f.salesforce.buyers[0]), Id: 'a01000000000003AAA', Name: 'UNSELECTED-SALE', STEM__c: 'stem-extra',
+    STEM__r: { ...structuredClone(f.salesforce.buyers[0].STEM__r), Vessel__r: { Name: 'OTHER VESSEL' } } };
+  f.salesforce.buyers.push(extra);
+  const preview = await f.preview(); const from = f.calls.length;
+  const result = await f.apply(preview, [preview.items.find(item => item.salesforceId === supplierId).id]);
+  assert.equal(result.items[0].outcome, 'applied');
+  const reads = f.calls.slice(from).filter(call => call.method === 'GET' && call.path.startsWith('/Invoices?'));
+  assert.ok(reads.some(call => new URL(call.path, 'https://fixture.invalid').searchParams.get('where')?.startsWith('Date>=')));
+  assert.ok(!reads.some(call => new URL(call.path, 'https://fixture.invalid').searchParams.get('InvoiceNumbers')?.includes(extra.Name)));
+  assert.equal(f.calls.filter(call => call.method === 'POST').length, 1);
+});
+
 function pageDependencies(response) {
   const calls = [];
   const unexpectedProvider = async () => assert.fail('Saved preview paging must not read or write a provider');

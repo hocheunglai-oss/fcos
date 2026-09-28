@@ -25,7 +25,7 @@ function assertNumberSyntax(numbers) {
 
 // All source records remain available for link resolution, shared-contact proofs
 // and ownership checks. Only confirmed legacy *output rows* are omitted.
-export function buildDocumentCorrectionScope(salesforce, stored, cutoff = '2026-01-01') {
+export function buildDocumentCorrectionScope(salesforce, stored, cutoff = '2026-01-01', correctionSelection = null) {
   if (!['buyers', 'suppliers', 'lines', 'extras'].every((key) => Array.isArray(salesforce?.[key]))
     || !Array.isArray(stored?.documentMappings) || !/^\d{4}-\d{2}-\d{2}$/.test(cutoff) || dateOnly(cutoff) !== cutoff) throw correctionScopeError();
   const entries = [];
@@ -42,7 +42,34 @@ export function buildDocumentCorrectionScope(salesforce, stored, cutoff = '2026-
     throw error;
   }
   const targets = entries.filter((entry) => entry.projection.scope === 'current' && !entry.projection.blockers.length);
+  let numberTargets = targets;
   const invoiceIds = []; const invoiceNumbers = [];
+  if (correctionSelection !== null) {
+    if (!Array.isArray(correctionSelection) || !correctionSelection.length || correctionSelection.length > 25) throw correctionScopeError();
+    const sourceKeys = new Set(); const selectedIds = new Set(); const selectedTargets = [];
+    for (const selected of correctionSelection) {
+      if (!selected || typeof selected !== 'object' || Array.isArray(selected)
+        || !['Invoice__c', 'Supplier_Invoice__c'].includes(selected.salesforceObject)
+        || !literal(selected.salesforceId) || selected.salesforceId !== selected.salesforceId.trim()
+        || /[\u0000-\u001f\u007f]/u.test(selected.salesforceId)
+        || typeof selected.xeroInvoiceId !== 'string' || !UUID.test(selected.xeroInvoiceId)
+        || /^0{8}-0{4}-0{4}-0{4}-0{12}$/.test(selected.xeroInvoiceId)) throw correctionScopeError();
+      const key = `${selected.salesforceObject}:${sf(selected.salesforceId)}`;
+      const targetId = selected.xeroInvoiceId.toLowerCase();
+      if (sourceKeys.has(key) || selectedIds.has(targetId)) throw correctionScopeError();
+      sourceKeys.add(key); selectedIds.add(targetId);
+      const matches = entries.filter((entry) => entry.object === selected.salesforceObject && sf(entry.id) === sf(selected.salesforceId));
+      if (matches.length !== 1 || matches[0].projection.scope !== 'current' || matches[0].projection.blockers.length) {
+        const error = correctionScopeError('A selected correction no longer has complete, current source evidence. Create a fresh preview before applying it.');
+        error.details = { scopeReason: 'DOCUMENT_CORRECTION_SELECTION_SOURCE_CHANGED' };
+        throw error;
+      }
+      selectedTargets.push(matches[0]); invoiceIds.push(targetId);
+    }
+    // Global source and mapped-target evidence stays intact for ownership,
+    // Contact and grouped-preservation proofs. Only number lookups narrow.
+    numberTargets = selectedTargets;
+  }
   for (const entry of targets) {
     const mappings = stored.documentMappings.filter((mapping) => mapping.salesforce_object === entry.object && sf(mapping.salesforce_id) === sf(entry.id));
     for (const mapping of mappings) {
@@ -51,12 +78,12 @@ export function buildDocumentCorrectionScope(salesforce, stored, cutoff = '2026-
     }
     // Sales numbers require a global duplicate check even with an exact mapping.
     // Mapped bills use their exact target IDs; shared derived bill numbers are valid.
-    if (entry.object === 'Invoice__c' || !mappings.length) {
+    if (numberTargets.includes(entry) && (entry.object === 'Invoice__c' || !mappings.length)) {
       invoiceNumbers.push(...[entry.originalNumber, entry.projection.fields.InvoiceNumber].filter(literal));
     }
   }
   assertNumberSyntax(invoiceNumbers);
-  return { scope, invoiceIds: unique(invoiceIds), invoiceNumbers: unique(invoiceNumbers), readCurrentDates: targets.length > 0 };
+  return { scope, invoiceIds: unique(invoiceIds), invoiceNumbers: unique(invoiceNumbers), readCurrentDates: numberTargets.length > 0 };
 }
 
 function batches(values, pathFor) {

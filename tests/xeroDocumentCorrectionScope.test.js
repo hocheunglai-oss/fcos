@@ -48,6 +48,115 @@ test('exact mappings hydrate cross-date identities; sales still require global n
   assert.deepEqual(plan.invoiceIds, [uuid(1), uuid(2)]); assert.deepEqual(plan.invoiceNumbers, ['SALE-buyer-one']);
 });
 
+test('selected Apply lookups preserve global source and mapped identity scope while narrowing only number lookups', () => {
+  const sf = snapshot(); sf.buyers.push(buyer('buyer-two'), buyer('legacy', '2025-12-31'), buyer('unknown', null));
+  const mappings = stored(); mappings.documentMappings = [
+    { salesforce_object: 'Invoice__c', salesforce_id: 'buyer-one', xero_document_id: uuid(2) },
+    { salesforce_object: 'Invoice__c', salesforce_id: 'buyer-two', xero_document_id: uuid(3) },
+    { salesforce_object: 'Supplier_Invoice__c', salesforce_id: 'supplier-one', xero_document_id: uuid(4) },
+  ];
+  const inputs = structuredClone({ sf, mappings });
+  const preview = buildDocumentCorrectionScope(sf, mappings);
+  assert.deepEqual(preview, buildDocumentCorrectionScope(sf, mappings, '2026-01-01', null));
+  assert.deepEqual(preview.invoiceIds, [uuid(2), uuid(3), uuid(4)]);
+  assert.deepEqual(preview.invoiceNumbers, ['SALE-buyer-one', 'SALE-buyer-two']);
+  const selected = buildDocumentCorrectionScope(sf, mappings, '2026-01-01', [
+    { salesforceObject: 'Invoice__c', salesforceId: 'buyer-one', xeroInvoiceId: uuid(1) },
+  ]);
+  assert.deepEqual(selected.scope, preview.scope);
+  assert.deepEqual(selected.scope, { cutoff: '2026-01-01', totalSourceCount: 5, excludedLegacyCount: 1 });
+  assert.equal(selected.readCurrentDates, true);
+  assert.deepEqual(selected.invoiceIds, [uuid(1), uuid(2), uuid(3), uuid(4)], 'Saved target, changed mapping and all unselected mappings remain in evidence');
+  assert.deepEqual(selected.invoiceNumbers, ['SALE-buyer-one'], 'Unselected source names do not consume cross-date queries');
+  assert.deepEqual({ sf, mappings }, inputs, 'All source and control records remain available and unchanged');
+});
+
+test('selected collection keeps every current-date candidate, historical exact target and global inactive sales collision', async () => {
+  const sf = snapshot(); sf.buyers.push(buyer('buyer-two'));
+  const mappings = stored(); mappings.documentMappings = [
+    { salesforce_object: 'Invoice__c', salesforce_id: 'buyer-one', xero_document_id: uuid(2) },
+    { salesforce_object: 'Invoice__c', salesforce_id: 'buyer-two', xero_document_id: uuid(8) },
+    { salesforce_object: 'Supplier_Invoice__c', salesforce_id: 'supplier-one', xero_document_id: uuid(9) },
+  ];
+  const plan = buildDocumentCorrectionScope(sf, mappings, '2026-01-01', [
+    { salesforceObject: 'Invoice__c', salesforceId: 'buyer-one', xeroInvoiceId: uuid(1) },
+  ]);
+  const inventory = [target(1, 'OLD-SAVED-TARGET', '2023-01-01'), target(2, 'CHANGED-MAPPING-TARGET', '2024-01-01'),
+    { ...target(3, 'SALE-buyer-one', '2020-01-01'), Status: 'VOIDED' },
+    { ...target(4, 'SALE-buyer-one', '2021-01-01'), Status: 'DELETED' },
+    target(5, 'SALE-buyer-two', '2026-01-01'), target(6, 'OLD-ERP-NUMBER', '2026-06-01', 'ACCPAY'),
+    target(7, 'CURRENT-COMPETITOR', '2026-07-01'), target(8, 'SALE-buyer-two', '2020-01-01'),
+    target(9, ' OLD-ERP-NUMBER ', '2020-01-01', 'ACCPAY')];
+  const paths = [];
+  const result = await collectDocumentCorrectionInvoices({}, plan, { loadPages: async (_connection, path) => {
+    paths.push(path); const params = new URL(path, 'https://fixture.invalid').searchParams;
+    return inventory.filter((row) => params.has('IDs') ? params.get('IDs').split(',').includes(row.InvoiceID)
+      : params.has('InvoiceNumbers') ? params.get('InvoiceNumbers').split(',').includes(row.InvoiceNumber) : row.Date >= '2026-01-01');
+  } });
+  assert.deepEqual(result.invoices.map((row) => row.InvoiceID).sort(), [1, 2, 3, 4, 5, 6, 7, 8, 9].map(uuid),
+    'Unselected historical mapped records remain available, including normalized bill-number collision evidence');
+  assert.equal(result.queryCount, 3);
+  assert.equal(new URL(paths[0], 'https://fixture.invalid').searchParams.get('where'), 'Date>=DateTime(2026,01,01)',
+    'The current-date inventory is not restricted to selected IDs, Contacts or source names');
+  assert.equal(new URL(paths[1], 'https://fixture.invalid').searchParams.get('IDs'), [uuid(1), uuid(2), uuid(8), uuid(9)].join(','));
+  assert.equal(new URL(paths[2], 'https://fixture.invalid').searchParams.get('InvoiceNumbers'), 'SALE-buyer-one');
+});
+
+test('selected mapped bills retain exact identities despite shared derived numbers; unmapped bills query original and proposed names', () => {
+  const sf = snapshot(); sf.suppliers.push(supplier('supplier-two'));
+  sf.extras.push({ Id: 'extra-two', Supplier_Invoice__c: 'supplier-two', Buyer_Invoice__c: 'buyer-one' });
+  const mappings = stored(); mappings.documentMappings = sf.suppliers.map((record, index) => ({
+    salesforce_object: 'Supplier_Invoice__c', salesforce_id: record.Id, xero_document_id: uuid(index + 1),
+  }));
+  const selection = sf.suppliers.map((record, index) => ({ salesforceObject: 'Supplier_Invoice__c', salesforceId: record.Id, xeroInvoiceId: uuid(index + 1) }));
+  const mapped = buildDocumentCorrectionScope(sf, mappings, '2026-01-01', selection);
+  assert.deepEqual(mapped.invoiceIds, [uuid(1), uuid(2)]); assert.deepEqual(mapped.invoiceNumbers, []);
+  assert.equal(mapped.readCurrentDates, true);
+  const unmapped = buildDocumentCorrectionScope(sf, stored(), '2026-01-01', selection.slice(0, 1));
+  assert.deepEqual(unmapped.invoiceIds, [uuid(1)]);
+  assert.deepEqual(unmapped.invoiceNumbers, ['BILL-1- Vessel, A', 'ORIGINAL-supplier-one']);
+});
+
+test('invalid, incomplete, unknown or repeated selected identities fail before any provider collection', () => {
+  const selection = { salesforceObject: 'Invoice__c', salesforceId: 'buyer-one', xeroInvoiceId: uuid(1) };
+  const invalid = [false, {}, [], [null], [[]], [{ ...selection, salesforceObject: 'Credit_Note__c' }],
+    [{ ...selection, salesforceId: '' }], [{ ...selection, salesforceId: ' buyer-one' }],
+    [{ ...selection, salesforceId: 'buyer-one\n' }], [{ ...selection, salesforceId: 'missing' }],
+    [{ ...selection, xeroInvoiceId: 'invalid' }], [{ ...selection, xeroInvoiceId: '00000000-0000-0000-0000-000000000000' }],
+    [selection, { ...selection, xeroInvoiceId: uuid(2) }],
+    [selection, { salesforceObject: 'Supplier_Invoice__c', salesforceId: 'supplier-one', xeroInvoiceId: uuid(1) }],
+    Array.from({ length: 26 }, (_, index) => ({ ...selection, xeroInvoiceId: uuid(index + 1) })),
+  ];
+  for (const key of Object.keys(selection)) {
+    const missing = { ...selection }; delete missing[key]; invalid.push([missing]);
+  }
+  for (const value of invalid) assert.throws(() => buildDocumentCorrectionScope(snapshot(), stored(), '2026-01-01', value), held, JSON.stringify(value));
+  const duplicate = snapshot(); duplicate.buyers.push(structuredClone(duplicate.buyers[0]));
+  assert.throws(() => buildDocumentCorrectionScope(duplicate, stored(), '2026-01-01', [selection]), held);
+  const aliases = snapshot(); aliases.buyers[0].Id = 'a01000000000001AAA';
+  const aliasSelection = { ...selection, salesforceId: 'a01000000000001' };
+  assert.throws(() => buildDocumentCorrectionScope(aliases, stored(), '2026-01-01', [aliasSelection,
+    { ...aliasSelection, salesforceId: 'a01000000000001AAA', xeroInvoiceId: uuid(2) }]), held);
+});
+
+test('selected missing, legacy or conflicting source projections hold before provider work without hiding global capacity', () => {
+  const selection = [{ salesforceObject: 'Supplier_Invoice__c', salesforceId: 'supplier-one', xeroInvoiceId: uuid(1) }];
+  for (const mutate of [
+    (sf) => { sf.buyers[0].Delivery_Date__c = null; },
+    (sf) => { sf.buyers[0].Delivery_Date__c = '2025-12-31'; },
+    (sf) => { delete sf.suppliers[0].Invoice_Due_Date__c; },
+    (sf) => { sf.buyers.push(buyer('conflict', '2026-02-01')); sf.lines.push({ Supplier_Invoice__c: 'supplier-one', Buyer_Invoice__c: 'conflict' }); },
+    (sf) => { sf.buyers = []; },
+  ]) {
+    const sf = snapshot(); mutate(sf);
+    assert.throws(() => buildDocumentCorrectionScope(sf, stored(), '2026-01-01', selection),
+      (error) => error.code === held.code && error.details.scopeReason === 'DOCUMENT_CORRECTION_SELECTION_SOURCE_CHANGED');
+  }
+  const sf = snapshot(); sf.buyers.push(...Array.from({ length: 2999 }, (_, index) => buyer(`missing-${index}`, null)));
+  assert.throws(() => buildDocumentCorrectionScope(sf, stored(), '2026-01-01', selection),
+    (error) => error.code === held.code && error.details.scopeReason === 'PREVIEW_ITEM_BOUND', 'Selection cannot evade the complete global source bound');
+});
+
 test('twelve thousand confirmed legacy sources do not consume current preview capacity; unknown dates do', () => {
   const sf = snapshot();
   sf.buyers.push(...Array.from({ length: 12000 }, (_, index) => ({ ...buyer(`legacy-${index}`, '2025-01-01'), STEM__c: `legacy-stem-${index}` })));

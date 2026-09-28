@@ -19,6 +19,8 @@ const sameSf = (a, b) => Boolean(a && b && a.slice(0, 15) === b.slice(0, 15));
 const fail = (message, code = 'XERO_DOCUMENT_CORRECTION_INVALID', status = 409) => Object.assign(new Error(message), { code, status });
 const money = (a, b) => Number.isFinite(Number(a)) && Number.isFinite(Number(b)) && Math.abs(Number(a) - Number(b)) < 0.005;
 const cleanText = (value) => String(value || '').trim().replace(/\s+/g, ' ').toUpperCase();
+const needsCompleteHistoricalIdentity = mapping => ['groupedPreservation', 'issuedSupplierPreservation']
+  .some(key => mapping?.retained_differences && Object.hasOwn(mapping.retained_differences, key));
 const actorFor = (context) => {
   const actor = { id: context?.profile?.id, email: String(context?.profile?.email || '').trim().toLowerCase() };
   if (!uuid(actor.id) || !actor.email) throw fail('An authenticated Finance session is required.', 'XERO_DOCUMENT_CORRECTION_ACTOR_REQUIRED', 403);
@@ -110,7 +112,7 @@ export function buildDocumentCorrectionItems({ salesforce, xero, stored }) {
   return items;
 }
 
-async function currentEvidence(dependencies, rate) {
+async function currentEvidence(dependencies, rate, correctionSelection = null) {
   const { env = process.env, fetchImpl = fetch, client = xeroContactSyncServiceClient(env), getConnection = getFreshXeroConnection,
     loadSalesforce = loadSalesforceFinancialSnapshot, loadControls = loadStoredFinancialControls, accountingFetch = xeroAccountingFetch, loadPages = loadAllXeroPages } = dependencies;
   let callCount = 0; let allowanceAuthority = null;
@@ -129,7 +131,11 @@ async function currentEvidence(dependencies, rate) {
   if (!uuid(connection.tenantId) || !['accounting.invoices', 'accounting.transactions'].some((x) => scopes.includes(x))) throw fail('The connected Xero organisation or invoice scope is unavailable.');
   allowanceAuthority = resolveCorrectionReserveAuthority(env, actorFor(dependencies.accessContext), connection.tenantId);
   const [salesforce, stored] = await Promise.all([loadSalesforce(XERO_FINANCIAL_CUTOFF), loadControls(client)]);
-  const plan = buildDocumentCorrectionScope(salesforce, stored, XERO_FINANCIAL_CUTOFF);
+  if (correctionSelection && stored.documentMappings.some(mapping => needsCompleteHistoricalIdentity(mapping)
+    && correctionSelection.some(item => item.salesforceObject === mapping.salesforce_object && sameSf(item.salesforceId, mapping.salesforce_id)))) {
+    throw fail('Preservation evidence changed after preview and requires a complete historical identity check. Create a fresh preview.');
+  }
+  const plan = buildDocumentCorrectionScope(salesforce, stored, XERO_FINANCIAL_CUTOFF, correctionSelection);
   // Let every already-started read finish before persisting a failure's final
   // allowance snapshot. A rejected parallel read cannot leave unobserved calls.
   const reads = await Promise.allSettled([
@@ -143,7 +149,8 @@ async function currentEvidence(dependencies, rate) {
   const invoices = collected.invoices;
   const organisation = organisations.Organisations?.find((org) => org.OrganisationID === connection.tenantId);
   if (!organisation) throw fail('Xero organisation identity could not be verified.');
-  const xero = { tenantId: connection.tenantId, cutoffDate: XERO_FINANCIAL_CUTOFF, rawInvoices: invoices, documents: invoices.filter((r) => ['DRAFT', 'SUBMITTED', 'AUTHORISED', 'PAID'].includes(r.Status)).map(normalizeXeroInvoice),
+  const xero = { tenantId: connection.tenantId, cutoffDate: XERO_FINANCIAL_CUTOFF, documentIdentityScopeComplete: correctionSelection === null,
+    rawInvoices: invoices, documents: invoices.filter((r) => ['DRAFT', 'SUBMITTED', 'AUTHORISED', 'PAID'].includes(r.Status)).map(normalizeXeroInvoice),
     inactiveDocuments: invoices.filter((r) => !['DRAFT', 'SUBMITTED', 'AUTHORISED', 'PAID'].includes(r.Status)).map(normalizeXeroInvoice), contactsComplete: true,
     contacts: contacts.map((c) => ({ id: c.ContactID, name: c.Name, status: c.ContactStatus, accountNumber: c.AccountNumber || '', contactNumber: c.ContactNumber || '' })),
     organisation: { periodLockDate: organisation.PeriodLockDate ? isoDate(organisation.PeriodLockDate) : null,
@@ -299,7 +306,12 @@ export async function xeroFinancialDocumentCorrectionApply(body = {}, dependenci
   const allowanceAuthority = resolveCorrectionReserveAuthority(env, actor, connection.tenantId);
   const allowanceReceipt = allowanceAuthority || preview.summary?.allowanceAuthority
     ? await verifyCorrectionCanary(client, { authority: allowanceAuthority, preview, selected, actor }) : null;
-  const rate = {}; const current = await currentEvidence({ ...dependencies, client, getConnection: async () => connection }, rate);
+  // Special preservation receipts depend on the complete historical identity
+  // closure; retain their full scan. Ordinary corrections need only selected
+  // number checks, while all mapped IDs and current-date records remain complete.
+  const correctionSelection = selected.some(item => needsCompleteHistoricalIdentity(item.mapping)) ? null
+    : selected.map(item => ({ salesforceObject: item.source.salesforceObject, salesforceId: item.salesforceId, xeroInvoiceId: item.xeroInvoiceId }));
+  const rate = {}; const current = await currentEvidence({ ...dependencies, client, getConnection: async () => connection }, rate, correctionSelection);
   if (current.connection.tenantId !== preview.tenant_id) throw fail('The reviewed Xero organisation changed.');
   const outcomes = [];
   for (const saved of selected) {

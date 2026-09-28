@@ -55,6 +55,16 @@ function savedItem(row) {
   return { ...toSyncItemRow(row, uuid(80), 0, now), selected: true, status: 'selected' };
 }
 
+test('narrowed historical invoice identity scope cannot validate an existing grouped preservation receipt', () => {
+  const f = fixture(); f.accept();
+  assert.equal(f.build().acceptedLegacy, true);
+  f.xero.documentIdentityScopeComplete = false;
+  const held = f.build();
+  assert.ok(['blocked', 'protected'].includes(held.status)); assert.notEqual(held.acceptedLegacy, true);
+  assert.notEqual(held.groupedPreservation?.eligible, true);
+  assert.equal(f.xero.contactsComplete, true, 'Contact completeness is independent of historical invoice scope');
+});
+
 function fakeStore(f, row, { response, rpcError, allowMappingWrites = false, mappingError = null, itemError = null } = {}) {
   const run = { id: uuid(80), revision: 3, status: 'processing', mode: 'preview', control_totals: {
     postingMode: row.postingMode, workflowSnapshot: { reconciliationVersion: XERO_RECONCILIATION_VERSION } }, created_at: now };
