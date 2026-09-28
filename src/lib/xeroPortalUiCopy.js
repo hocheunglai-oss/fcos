@@ -222,7 +222,7 @@ due|Due|到期日
 noActiveMatch|No active match|沒有有效配對`,
   ["differenceCount", (count) => `${count} Salesforce difference(s)`, (count) => `${count} 項 Salesforce 差異`],
   ...copyRows`paymentsTitle|Exact payment allocations|精確付款分配
-paymentsDescription|Available only after the matching Xero invoice or bill is authorised. Remittances, deposits, charges, write-offs and ambiguous allocations remain exceptions.|只在相符的 Xero 發票或帳單獲授權後可用。匯款、按金、費用、撇帳及不明確分配仍列為例外。
+paymentsDescription|Payments need a linked, authorised Xero invoice. Verified remittance headers are summaries; adjustments and unclear allocations need review.|付款須連結已核准的 Xero 發票。已核實匯款主紀錄為摘要；調整及不明確分配須檢閱。
 previewPayments|Preview payments|預覽付款`,
   ["paymentSummary", (total, eligible) => `${total} classified · ${eligible} exact allocations eligible.`, (total, eligible) => `已分類 ${total} 項 · ${eligible} 項精確付款合資格。`],
   ...copyRows`financeReviewedPayments|Finance reviewed payments|財務部已覆核付款

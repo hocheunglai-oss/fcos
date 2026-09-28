@@ -14,6 +14,8 @@ import { requireExternalActionGate } from './_externalActionGates.js';
 import { paymentCurrency, paymentDocumentIdentityBlockers, paymentAssociationBlockers, selectXeroPaymentMatch, selectXeroReferenceRetentionMatch } from './_xeroPaymentIdentity.js';
 import { resolveXeroPaymentAssociation, xeroPaymentEvidenceHold, xeroPaymentSameId } from './_xeroPaymentAssociation.js';
 import { resolveRemittanceBankEvidence } from './_xeroPaymentBankEvidence.js';
+import { paymentKindReview } from './_xeroPaymentKind.js';
+import { enrichRemittanceSummaries, currentRemittanceSummary } from './_xeroRemittanceSummary.js';
 import { buyerPaymentDocumentBlockers, enrichBuyerPaymentDocumentEvidence } from './_xeroBuyerPaymentEvidence.js';
 import { persistReviewedPaymentReferenceLinks } from './_xeroPaymentReferenceLink.js';
 import { loadPaymentPostingClaims, paymentClaimEvidenceIds, postReviewedPaymentBatch, resolvePaymentPostingClaim, reviewPaymentPostingClaim } from './_xeroPaymentPosting.js';
@@ -31,7 +33,7 @@ import {
 } from './_xeroContactSync.js';
 
 export const XERO_FINANCIAL_CUTOFF = '2026-01-01';
-export const XERO_RECONCILIATION_VERSION = 13;
+export const XERO_RECONCILIATION_VERSION = 14;
 const MAX_BATCH_SIZE = 25;
 const DEFAULT_CALLS_PER_MINUTE = 45;
 const DEFAULT_DAILY_LIMIT = 1000;
@@ -71,6 +73,7 @@ export const XERO_FINANCIAL_ACTION_LABELS = Object.freeze({
   blocked: 'Finance exception',
   payment_link: 'Link existing exact payment',
   payment_apply: 'Apply exact payment',
+  remittance_summary: 'Verified allocation summary',
 });
 
 export function xeroFinancialRateSnapshot(headers, previous = {}, options = {}) {
@@ -1011,6 +1014,23 @@ function classifyPayment(payment, context) {
     if (existing.source_fingerprint !== paymentSourceFingerprint(payment) && (!legacyFingerprint || !documentMapping?.retained_differences?.accountId)) blockers.push('The Salesforce payment changed or its saved Account evidence is incomplete. Run the document check and review this payment again.');
     return paymentRow(payment, blockers.length ? 'blocked' : 'payment_link', blockers.length ? 'blocked' : legacyFingerprint ? 'eligible' : 'protected', uniqueStrings(blockers), documentMapping, xeroPayment, null, currentDocument);
   }
+  const kindReview = paymentKindReview(payment);
+  if (kindReview) {
+    const summary = currentRemittanceSummary(payment);
+    const claim = [...(context.paymentPostingClaims || new Map()).entries()]
+      .some(([id]) => String(id).slice(0, 15) === String(payment.Id).slice(0, 15));
+    if (summary && !claim) {
+      const row = paymentRow(payment, 'remittance_summary', 'informational', [], null, null);
+      return { ...row, paymentKind: kindReview.kind, remittanceSummary: summary,
+        reviewFingerprint: hashJson({ review: row.reviewFingerprint, remittanceSummary: summary }) };
+    }
+    if (claim) {
+      kindReview.blockers.push('This header or adjustment has a stored posting claim. Resolve its original payment outcome before reclassification.');
+      kindReview.blockerCodes.push('payment_posting_claim_pending');
+    }
+    return { ...paymentRow(payment, 'blocked', 'blocked', kindReview.blockers, null, null),
+      paymentKind: kindReview.kind, blockerCodes: kindReview.blockerCodes };
+  }
   const type = String(payment.RecordType?.DeveloperName || '');
   let documentMapping = null;
   const blockers = unsupportedPaymentBlockers(payment);
@@ -1238,9 +1258,13 @@ export async function loadSalesforcePayments(cutoff, safetyContext = null, query
       FROM Payment__c
      WHERE (Date__c >= ${cutoff} OR (Date__c = null AND CreatedDate >= ${cutoff}T00:00:00Z))
      ORDER BY Date__c, Id`, { clean: true, limit: 100000 });
-  if (result.error || Number(result.totalSize || 0) > (result.records || []).length) throw financialError('Salesforce payment retrieval is incomplete.', 502, 'XERO_FINANCIAL_SALESFORCE_INCOMPLETE');
+  if (result.error || !Array.isArray(result.records) || !Number.isSafeInteger(result.totalSize)
+    || result.totalSize !== result.records.length || result.done === false || result.nextRecordsUrl) {
+    throw financialError('Salesforce payment retrieval is incomplete.', 502, 'XERO_FINANCIAL_SALESFORCE_INCOMPLETE');
+  }
   const withCurrency = (payment) => ({ ...payment, _currency: financialSourceCurrency(payment, [], safetyContext, 'Payment__c') });
-  const payments = await enrichBuyerPaymentDocumentEvidence((result.records || []).map(withCurrency), {
+  const classifiedHeaders = await enrichRemittanceSummaries(result.records.map(withCurrency), { querySalesforce, fields, withCurrency });
+  const payments = await enrichBuyerPaymentDocumentEvidence(classifiedHeaders, {
     querySalesforce,
     currencyFields: safetySelectFields(safetyContext, 'Invoice__c', ['CurrencyIsoCode', 'Is_Credit_Note__c', 'Credit_Note__c', 'CreditNote__c']),
     currencyForRecord: (record) => financialSourceCurrency(record, [], safetyContext, 'Invoice__c'),
@@ -2090,7 +2114,7 @@ function financialControlTotals(rows) {
 }
 
 function summarizeClassifications(rows) {
-  const summary = { total: rows.length, eligible: 0, protected: 0, blocked: 0, link: 0, safeUpdate: 0, createDraft: 0, paymentApply: 0, paymentLink: 0 };
+  const summary = { total: rows.length, eligible: 0, protected: 0, blocked: 0, link: 0, safeUpdate: 0, createDraft: 0, paymentApply: 0, paymentLink: 0, remittanceSummary: 0 };
   for (const row of rows) {
     if (row.status === 'eligible') summary.eligible += 1;
     if (row.action === 'protected_legacy') summary.protected += 1;
@@ -2100,6 +2124,7 @@ function summarizeClassifications(rows) {
     if (row.action === 'create_draft') summary.createDraft += 1;
     if (row.action === 'payment_apply') summary.paymentApply += 1;
     if (row.action === 'payment_link') summary.paymentLink += 1;
+    if (row.action === 'remittance_summary' && row.status === 'informational') summary.remittanceSummary += 1;
   }
   return summary;
 }

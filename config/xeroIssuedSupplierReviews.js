@@ -1,9 +1,11 @@
 // Immutable server-side review registry for the first issued-supplier policy.
 // These hashes bind every literal fact and provider/file identity in each of
-// the 22 privately reviewed trustee records. No invoice or customer data is
+// the privately reviewed trustee records. No invoice or customer data is
 // published here. Review: 27 September 2026; preserve-only choice: 28 September.
 // New documentary reviews require an independently reviewed registry update;
 // an uploaded JSON assertion is never its own verification authority.
+// Additional privately retained native-paper review: 28 September 2026;
+// packet SHA256 2b9c17d61c8b84dee4bee7fa6ea682cf5b13ab9bb105758ac36c6f7791673a1f.
 export const APPROVED_ISSUED_SUPPLIER_REVIEW_HASHES = Object.freeze([
   '14871308d4d64436c04d1bd4c318c2ab6dd1bd78bd396abdab7985ca27bd8cbb',
   '6742d625db0b4f44f22d55bcf02837fce8c9157de314886a2976e4d08087928b',
@@ -27,4 +29,5 @@ export const APPROVED_ISSUED_SUPPLIER_REVIEW_HASHES = Object.freeze([
   '5ebefd08344604dd36f4dfdde7dc90500f06fba41ebd5c56aa7cf57f58366e47',
   '2d3d2437ca13974db762517df48874b7f96696227d77d1ba2e48161851e54b49',
   '621153948d10a90efb373ced50e05ff73c2db202c1c1f48fc4c82cf78b747b15',
+  'aa615c6d8ea46f49c05c176bbb5a3a6cbb201e19185bdea927685c4149a4fa1d',
 ]);

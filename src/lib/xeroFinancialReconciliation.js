@@ -1,4 +1,4 @@
-import { reconciliationBucket } from './financialWorkflowUi.js';
+import { reconciliationBucket, isRemittanceSummary } from './financialWorkflowUi.js';
 export const XERO_FINANCIAL_CUTOFF = '2026-01-01';
 
 export function summarizeXeroFinancialReconciliation({ documents, payments } = {}) {
@@ -15,7 +15,9 @@ export function summarizeXeroFinancialReconciliation({ documents, payments } = {
   const waiting = documentSummary.waiting + paymentSummary.waiting;
   const exceptions = documentSummary.exceptions + paymentSummary.exceptions;
   const checked = documentsChecked && paymentsChecked;
-  const completion = checked ? (total ? Math.round((reconciled / total) * 100) : 100) : null;
+  const summaries = paymentSummary.summaries;
+  const transactionTotal = total - summaries;
+  const completion = checked ? (transactionTotal ? Math.round((reconciled / transactionTotal) * 100) : 100) : null;
   const status = !documentsChecked && !paymentsChecked
     ? 'not_checked'
     : !checked
@@ -31,6 +33,8 @@ export function summarizeXeroFinancialReconciliation({ documents, payments } = {
     checked,
     completion,
     total,
+    summaries,
+    transactionTotal,
     reconciled,
     pending,
     waiting,
@@ -42,14 +46,15 @@ export function summarizeXeroFinancialReconciliation({ documents, payments } = {
 
 export function xeroFinancialReconciliationRank(row, kind = 'document') {
   const classification = kind === 'payment' ? classifyPaymentRow(row) : classifyDocumentRow(row);
-  return { exception: 0, pending: 1, waiting: 2, reconciled: 3 }[classification] ?? 4;
+  return { exception: 0, pending: 1, waiting: 2, reconciled: 3, summary: 4 }[classification] ?? 4;
 }
 
 function summarizeRows(rows, classifier) {
-  const summary = { total: rows.length, reconciled: 0, pending: 0, waiting: 0, exceptions: 0 };
+  const summary = { total: rows.length, reconciled: 0, pending: 0, waiting: 0, exceptions: 0, summaries: 0 };
   for (const row of rows) {
     const classification = classifier(row);
     if (classification === 'waiting') { summary.pending += 1; summary.waiting += 1; }
+    else if (classification === 'summary') summary.summaries += 1;
     else summary[classification === 'exception' ? 'exceptions' : classification] += 1;
   }
   return summary;
@@ -69,6 +74,7 @@ function classifyDocumentRow(row = {}) {
 }
 
 function classifyPaymentRow(row = {}) {
+  if (isRemittanceSummary(row)) return 'summary';
   if (reconciliationBucket(row, 'payment') === 'waiting') return 'waiting';
   const blockers = Array.isArray(row.blockers) ? row.blockers : [];
   if (['blocked', 'failed'].includes(row.status) || blockers.length > 0) return 'exception';

@@ -78,6 +78,7 @@ function harness(f = issuedSupplierWorkflowFixture()) {
       if (name === 'start_xero_financial_sync_run_v1') {
         if (controls.barrier) return { data: null, error: { code: '40001' } };
         Object.assign(saved, { status: 'processing', revision: saved.revision + 1 });
+        controls.afterStart?.(items);
         return { data: copy(saved), error: null };
       }
       if (name === 'finish_xero_financial_sync_run_v1') {
@@ -125,6 +126,134 @@ function harness(f = issuedSupplierWorkflowFixture()) {
     preview: () => preview({ packet: f.packet }, dependencies),
     body: (result) => ({ runId: result.run.id, revision: result.run.revision, selectedItemIds: result.rows.map((row) => row.id), reviewed: true }) };
 }
+
+function petroleumSevenHarness() {
+  const f = issuedPetroleumFixture();
+  const rawInvoices = [f.raw];
+  for (let n = 2; n <= 7; n += 1) {
+    const other = issuedPetroleumFixture();
+    const sourceId = `a0600000000000${n}`, stemId = `a0H00000000000${n}`, childId = `a0500000000000${n}`;
+    const documentId = `06900000000000${n}`, versionId = `06800000000000${n}`;
+    const targetId = `00000000-0000-4000-8000-00000000003${n}`;
+    Object.assign(other.supplier, { Id: sourceId, Name: `PET2600${n}`, STEM__c: stemId });
+    Object.assign(other.supplier.STEM__r, { KeyStem__c: `HK262600${n}T`, Name: `HK262600${n}T - VESSEL ${n}`,
+      Vessel__c: `a0V00000000000${n}`, Vessel__r: { Name: `VESSEL ${n}` } });
+    Object.assign(other.child, { Id: childId, Supplier_Invoice__c: sourceId, STEM__c: stemId });
+    Object.assign(other.raw, { InvoiceID: targetId, InvoiceNumber: `7971${n}P-VESSEL ${n}` });
+    other.raw.LineItems[0].LineItemID = `00000000-0000-4000-8000-00000000004${n}`;
+    // Interleave unselected holds to detect accidental positional result matching.
+    if ([2, 5].includes(n)) other.raw.LineItems[0].Tracking = [{ Name: 'Job', Option: 'EXISTING' }];
+    Object.assign(other.fileEvidence, { parentId: sourceId, documentId, versionId });
+    Object.assign(other.fileEvidence.link, { id: `06A00000000000${n}`, parentId: sourceId, documentId });
+    Object.assign(other.fileEvidence.version, { id: versionId, documentId, latestPublishedVersionId: versionId });
+    Object.assign(other.fileEvidence.review, { sourceNumber: `PET2600${n}`, printedNumber: `PET-26-00${n}`, vessel: `VESSEL ${n}` });
+    f.salesforce.suppliers.push(other.supplier); f.salesforce.lines.push(other.child);
+    rawInvoices.push(other.raw); f.xero.documents.push(normalizeXeroInvoice(other.raw));
+    f.files.set(sourceId, other.fileEvidence);
+    f.packet.records.push({ sourceId, xeroDocumentId: targetId, documentId, versionId,
+      sha256: other.fileEvidence.sha256, review: other.fileEvidence.review });
+  }
+  const h = harness(f), scopes = [], reads = [], requestScopes = [];
+  const complete = records => ({ records: copy(records), totalSize: records.length, done: true });
+  const query = async (soql, options) => {
+    reads.push({ kind: 'salesforce', soql, options });
+    if (soql.includes('FROM Organization')) return complete([{ Id: f.fileEvidence.orgId, IsSandbox: false }]);
+    if (soql.includes('FROM Supplier_Invoice__c')) return complete(f.salesforce.suppliers);
+    if (soql.includes('FROM STEM_Line_Item__c')) {
+      const selected = /Supplier_Invoice__c IN \(([^)]+)\)/.exec(soql)?.[1] || '';
+      return complete(f.salesforce.lines.filter(row => selected.includes(`'${row.Supplier_Invoice__c}'`)));
+    }
+    if (soql.includes('FROM STEM_Extra_Cost__c')) return complete([]);
+    assert.match(soql, /FROM Product2/); return complete([f.product]);
+  };
+  h.dependencies.collectPetroleumScope = async input => {
+    requestScopes.push(copy(input.records));
+    const scope = await collectPetroleumPreservationScope(input, { query, queryAll: query,
+      accountingFetch: async (_connection, path, options) => {
+        reads.push({ kind: 'xero', path, method: options.method });
+        assert.equal(options.method, 'GET'); assert.equal(options.body, undefined);
+        if (path.startsWith('/Invoices?')) return { Invoices: copy(rawInvoices) };
+        if (path.startsWith('/CreditNotes?')) return { CreditNotes: [] };
+        if (path === '/Accounts') return { Accounts: f.scope.accountTax.accounts };
+        assert.equal(path, '/TaxRates'); return { TaxRates: f.scope.accountTax.taxRates };
+      } });
+    scopes.push(scope); return scope;
+  };
+  return { ...h, scopes, reads, requestScopes, rawInvoices };
+}
+
+test('real singleton collector retains seven-row evidence coverage while linking only five eligible selected rows', async () => {
+  const h = petroleumSevenHarness(); const before = copy({ salesforce: h.f.salesforce, xero: h.f.xero });
+  const review = await h.preview();
+  const eligible = review.rows.filter(row => row.status === 'eligible'); const blocked = review.rows.filter(row => row.status === 'blocked');
+  assert.equal(eligible.length, 5); assert.equal(blocked.length, 2);
+  assert(blocked.every(row => row.blockers.some(reason => /LINE_UNSUPPORTED/.test(reason))));
+  const body = { ...h.body(review), selectedItemIds: eligible.map(row => row.id).reverse() };
+  const result = await run(body, h.dependencies);
+  assert.equal(result.run.status, 'completed'); assert.equal(result.financialWrites, 0); assert.equal(result.outcomes.length, 5);
+  assert.equal(h.scopes.length, 2); assert.deepEqual(h.requestScopes[1], h.requestScopes[0]);
+  assert.equal(h.scopes[0].sourceFacts.size, 7); assert.equal(h.scopes[1].sourceFacts.size, 7);
+  assert.equal(h.scopes[0].coverage.contentFingerprint, h.scopes[1].coverage.contentFingerprint);
+  assert.deepEqual(h.scopes[0].coverage.queryFingerprints, h.scopes[1].coverage.queryFingerprints);
+  assert.equal(h.tables.xero_financial_document_mappings.length, 5);
+  for (const row of eligible) {
+    const item = h.tables.xero_financial_sync_items.find(item => item.id === row.id);
+    const mapping = h.tables.xero_financial_document_mappings.find(mapping => mapping.salesforce_id === row.sourceId);
+    assert.equal(mapping.xero_document_id, row.xeroDocumentId);
+    const proof = mapping.retained_differences.issuedSupplierPreservation;
+    assert.equal(proof.evidence.accounting.identityOwnershipPolicy, undefined, 'singleton batch scope must be exercised');
+    assert.equal(proof.fingerprint, item.source_payload.issuedSupplierPreservation.fingerprint);
+    assert.deepEqual(proof.reviewedXero, item.xero_payload);
+  }
+  for (const row of blocked) {
+    const item = h.tables.xero_financial_sync_items.find(item => item.id === row.id);
+    assert.equal(item.selected, false); assert.equal(item.status, 'blocked'); assert.equal(item.applied_at ?? null, null);
+    assert.equal(item.mutation_attempts, 0);
+  }
+  assert.deepEqual({ salesforce: h.f.salesforce, xero: h.f.xero }, before);
+  assert.equal(h.calls.filter(call => call.name === 'link_xero_issued_petroleum_document_v1').length, 5);
+  h.calls.length = 0;
+  const replay = await run(body, h.dependencies);
+  assert.equal(replay.outcomes.length, 5); assert(replay.outcomes.every(row => row.alreadyLinked));
+  assert.equal(h.calls.some(call => call.type === 'provider' || call.type === 'rpc'), false);
+});
+
+test('original full preview rows cannot be removed, duplicated, retargeted or changed when a subset is selected', async t => {
+  for (const [name, mutate] of [
+    ['missing unselected row', h => { h.tables.xero_financial_sync_items.splice(1, 1); }],
+    ['duplicate item identity', h => { h.tables.xero_financial_sync_items[1].id = h.tables.xero_financial_sync_items[0].id; }],
+    ['changed unselected source identity', h => { h.tables.xero_financial_sync_items[1].source_id = 'a06000000000009'; }],
+    ['changed unselected target identity', h => { h.tables.xero_financial_sync_items[1].xero_document_id = randomUUID(); }],
+    ['duplicate request', h => { h.tables.xero_financial_sync_items[1].source_payload.issuedSupplierRequest = copy(h.tables.xero_financial_sync_items[0].source_payload.issuedSupplierRequest); }],
+    ['changed unselected review', h => { h.tables.xero_financial_sync_items[1].source_payload.issuedSupplierRequest.sha256 = '0'.repeat(64); }],
+    ['changed row ordering', h => { h.tables.xero_financial_sync_items[1].row_index = 0; }],
+  ]) await t.test(name, async () => {
+    const h = petroleumSevenHarness(); const review = await h.preview();
+    const body = { ...h.body(review), selectedItemIds: review.rows.filter(row => row.status === 'eligible').map(row => row.id) };
+    mutate(h); h.calls.length = 0;
+    await assert.rejects(run(body, h.dependencies));
+    assert.equal(h.calls.some(call => call.type === 'provider' || call.type === 'rpc'), false);
+    assert.equal(h.tables.xero_financial_document_mappings.length, 0);
+  });
+});
+
+test('subset revalidation detects scope races and last-selected provider drift before the first link', async t => {
+  for (const [name, mutate] of [
+    ['scope row removed after start', h => { h.controls.afterStart = () => h.tables.xero_financial_sync_items.splice(1, 1); }],
+    ['scope target changed after start', h => { h.controls.afterStart = items => { items[1].xero_document_id = randomUUID(); }; }],
+    ['last selected target changed', h => { h.rawInvoices[6].DueDate = '2026-03-19'; Object.assign(h.f.xero.documents[6], normalizeXeroInvoice(h.rawInvoices[6])); }],
+    ['selected current target missing', h => { h.f.xero.documents.pop(); }],
+    ['unselected current target missing', h => { h.f.xero.documents.splice(1, 1); }],
+  ]) await t.test(name, async () => {
+    const h = petroleumSevenHarness(); const review = await h.preview();
+    const body = { ...h.body(review), selectedItemIds: review.rows.filter(row => row.status === 'eligible').map(row => row.id) };
+    mutate(h); h.calls.length = 0;
+    await assert.rejects(run(body, h.dependencies));
+    assert.equal(h.calls.some(call => call.name === 'link_xero_issued_petroleum_document_v1'), false);
+    assert.equal(h.tables.xero_financial_document_mappings.length, 0);
+    assert.equal(h.tables.xero_financial_sync_runs[0].status, 'failed');
+  });
+});
 
 test('actual preview keeps ordinary readiness false and performs no source or Xero mutation', async () => {
   const h = harness(); const before = copy({ salesforce: h.f.salesforce, xero: h.f.xero });
@@ -238,7 +367,7 @@ test('real historical collector preserves an eligible selection when a different
   assert.deepEqual(result.outcomes.map(row => row.status), ['linked']);
   assert.equal(result.financialWrites, 0);
   assert.equal(collected.length, 2, 'Preview and Run each perform real fresh historical collection');
-  assert.equal(collected[0].sourceFacts.size, 2); assert.equal(collected[1].sourceFacts.size, 1);
+  assert.equal(collected[0].sourceFacts.size, 2); assert.equal(collected[1].sourceFacts.size, 2);
   assert.equal(h.tables.xero_financial_document_mappings.length, 1);
   const receipt = h.tables.xero_financial_document_mappings[0].retained_differences.issuedSupplierPreservation;
   assert.equal(receipt.evidence.accounting.identityOwnershipPolicy, 'document_specific_inactive_source_owners_v1');
@@ -364,7 +493,7 @@ test('provider, file, source, target and stored proof drift abort before any lin
     if (mode === 'proof') h.tables.xero_financial_sync_items[0].source_payload.issuedSupplierReviewFingerprint = '0'.repeat(64);
     await assert.rejects(run(h.body(result), h.dependencies), undefined, mode);
     assert.equal(h.calls.some((call) => call.name === 'link_xero_issued_supplier_document_v1'), false, mode);
-    assert.equal(h.tables.xero_financial_sync_runs[0].status, 'failed', mode);
+    assert.equal(h.tables.xero_financial_sync_runs[0].status, mode === 'proof' ? 'ready_for_review' : 'failed', mode);
   }
 });
 

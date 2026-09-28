@@ -50,6 +50,23 @@ async function storedRows(client, runId) {
   return result.data;
 }
 
+const documentIdentity = (sourceId, targetId) => `${sourceId.slice(0, 15)}:${targetId.toLowerCase()}`;
+function savedRequests(run, rows, descriptor, policy) {
+  if (run.control_totals?.workflowSnapshot?.expectedItemCount !== rows.length
+    || new Set(rows.map((row) => row.id)).size !== rows.length
+    || rows.some((row, index) => !uuid(row.id) || row.row_index !== index)
+    || run.source_fingerprint !== hash(rows.map((row) => row.source_payload))
+    || run.xero_fingerprint !== hash(rows.map((row) => row.xero_payload))) throw fail('The original preservation review scope changed.');
+  const requests = descriptor.validate({ policyVersion: policy, records: rows.map((row) => row.source_payload?.issuedSupplierRequest) });
+  if (rows.some((row, index) => row.source_object !== 'Supplier_Invoice__c'
+    || row.source_payload?.issuedSupplierPreservation?.policyVersion !== policy
+    || !sameId(row.source_id, requests[index].sourceId) || !sameId(row.source_payload.salesforceId, row.source_id)
+    || !uuid(row.xero_document_id) || !uuid(row.xero_payload?.id)
+    || row.xero_document_id.toLowerCase() !== requests[index].xeroDocumentId.toLowerCase()
+    || row.xero_payload.id.toLowerCase() !== row.xero_document_id.toLowerCase())) throw fail('The original preservation document identities changed.');
+  return requests;
+}
+
 async function currentEvidence(records, dependencies, rate, policy) {
   const descriptor = POLICIES[policy];
   const { env = process.env, fetchImpl = fetch, client = xeroContactSyncServiceClient(env),
@@ -189,6 +206,7 @@ export async function xeroFinancialDocumentPreservationRun(body = {}, dependenci
   const resumable = run.status === 'authorised' && run.reviewed_by === actor.id && run.reviewed_by_email === actor.email
     && rows.filter((r) => r.selected).length === ids.length && selected.every((r) => r.selected && r.status === 'selected');
   if ((!resumable && (run.status !== 'ready_for_review' || rows.some((r) => r.selected))) || run.revision !== body.revision) throw fail('This review has already started or changed. Inspect its saved outcome before trying again.');
+  savedRequests(run, rows, descriptor, policy);
   const approved = resumable ? { data: run } : await client.rpc('authorise_xero_financial_sync_run_v1', { p_run_id: run.id, p_expected_revision: run.revision,
     p_selected_item_ids: ids, p_actor_id: actor.id, p_actor_email: actor.email });
   if (approved.error || !approved.data) throw fail('The preservation selection changed before it could be recorded.');
@@ -200,18 +218,32 @@ export async function xeroFinancialDocumentPreservationRun(body = {}, dependenci
     p_classification_summary: { total: ids.length, linked: outcomes.length, financialWrites: 0 }, p_rate_limit_snapshot: rate,
     p_error_code: error?.code || null, p_error_message: error?.message || null });
   try {
-    rows = (await storedRows(client, run.id)).filter((r) => r.selected);
+    const fullScope = await storedRows(client, run.id);
+    const requests = savedRequests(run, fullScope, descriptor, policy);
+    rows = fullScope.filter((r) => r.selected);
     if (rows.length !== ids.length || rows.some((r) => !ids.includes(r.id) || r.status !== 'selected')) throw fail('The selected preservation scope changed.');
-    const requests = descriptor.validate({ policyVersion: policy, records: rows.map((r) => r.source_payload.issuedSupplierRequest) });
+    // The proof includes collection coverage for the original preview cohort.
+    // Selection changes the link set, never the evidence collection scope.
+    const expected = new Map(requests.map((request) => [documentIdentity(request.sourceId, request.xeroDocumentId), hash(request)]));
     const current = await currentEvidence(requests, { ...dependencies, client }, rate, policy);
     if (current.tenantId !== run.control_totals.workflowSnapshot.tenantId) throw fail('The reviewed Xero organisation changed.');
-    // Recheck the entire selected cohort before any local link is committed.
-    for (const [index, row] of rows.entries()) {
-      const latest = current.rows[index];
-      if (latest.reviewed.status !== 'eligible' || latest.reviewFingerprint !== row.source_payload.issuedSupplierReviewFingerprint) throw fail(`${row.source_document_number}: the issued evidence or accounting review changed. Create a fresh preservation preview.`);
+    const currentByIdentity = new Map();
+    for (const latest of current.rows) {
+      const sourceId = latest.reviewed?.salesforceId; const targetId = latest.reviewed?.xero?.id;
+      if (!sameId(sourceId, latest.request?.sourceId) || !uuid(targetId)
+        || targetId.toLowerCase() !== latest.request?.xeroDocumentId?.toLowerCase()) throw fail('The current preservation document identities changed.');
+      const key = documentIdentity(sourceId, targetId);
+      if (currentByIdentity.has(key) || expected.get(key) !== hash(latest.request)) throw fail('The current preservation review scope changed.');
+      currentByIdentity.set(key, latest);
     }
-    for (const [index, row] of rows.entries()) {
-      const { reviewed, proof, reviewFingerprint } = current.rows[index];
+    if (currentByIdentity.size !== expected.size) throw fail('The current preservation review scope is incomplete.');
+    // Recheck the entire selected cohort before any local link is committed.
+    for (const row of rows) {
+      const latest = currentByIdentity.get(documentIdentity(row.source_id, row.xero_document_id));
+      if (!latest || latest.reviewed.status !== 'eligible' || latest.reviewFingerprint !== row.source_payload.issuedSupplierReviewFingerprint) throw fail(`${row.source_document_number}: the issued evidence or accounting review changed. Create a fresh preservation preview.`);
+    }
+    for (const row of rows) {
+      const { reviewed, proof, reviewFingerprint } = currentByIdentity.get(documentIdentity(row.source_id, row.xero_document_id));
       const summary = reviewed.issuedSupplierPreservation;
       localCommitPending = true;
       const result = await client.rpc(descriptor.rpc, { p_run_id: run.id,
