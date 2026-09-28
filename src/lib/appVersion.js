@@ -3,6 +3,7 @@ import { APP_VERSION } from './appVersionMeta.js';
 export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
+  { version: '2.0.259', releasedAt: '2026-09-28', title: 'Verify Group remittance banks', changes: ['Use complete Group payment evidence while preserving buyer identities, invoice checks and audit history. Keep large Finance reviews responsive.'] },
   { version: '2.0.258', releasedAt: '2026-09-28', title: 'Clarify payment exceptions', changes: ['Separate verified remittance summaries from payments and preserve partial bill selections.'] },
   { version: '2.0.257', releasedAt: '2026-09-28', title: 'Verify distinct supplier deliveries', changes: ['Keep unrelated historical invoices from blocking verified bill links.'] },
   { version: '2.0.256', releasedAt: '2026-09-28', title: 'Verify supplier bill amounts', changes: ['Handle exact trustee fee rounding and preserve verified bill details.'] },

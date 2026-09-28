@@ -146,7 +146,7 @@ function completeQuery(result, matches) {
 }
 
 /** Structural enrichment before bank fallback; query adapter owns pagination. */
-export async function enrichRemittanceSummaries(payments, { querySalesforce, fields, withCurrency } = {}) {
+export async function enrichRemittanceSummaries(payments, { querySalesforce, fields, withCurrency, inventory } = {}) {
   if (!Array.isArray(payments)) throw new TypeError('A raw visible payment array is required.');
   const headers = payments.filter(row => TYPES.has(row?.RecordType?.DeveloperName));
   if (!headers.length) return [...payments];
@@ -160,6 +160,20 @@ export async function enrichRemittanceSummaries(payments, { querySalesforce, fie
     || payments.length > MAX_ROWS || keys.some(key => !key) || new Set(keys).size !== keys.length) return fail('Complete canonical remittance source queries are unavailable.');
   const parents = new Map(); const families = new Map(); const allChildIds = new Set();
   try {
+    if (inventory !== undefined) {
+      if (!inventory?.complete || !Array.isArray(inventory.parents) || !Array.isArray(inventory.siblings)) throw new Error('incomplete');
+      for (const parent of inventory.parents) {
+        const key = id(parent?.Id);
+        if (!key || parents.has(key)) throw new Error('duplicate parent');
+        parents.set(key, parent);
+      }
+      for (const child of inventory.siblings) {
+        const key = id(child?.Id); const parentId = id(child?.Remittance__c);
+        if (!key || !parents.has(parentId) || allChildIds.has(key) || parents.has(key)) throw new Error('duplicate child');
+        allChildIds.add(key); families.set(parentId, [...(families.get(parentId) || []), child]);
+      }
+      if (keys.some(key => !parents.has(key))) throw new Error('missing parent');
+    } else {
     for (let start = 0; start < headers.length; start += 50) {
       const batch = headers.slice(start, start + 50); const batchIds = new Set(batch.map(row => id(row.Id)));
       const scope = batch.map(row => `'${row.Id}'`).join(',');
@@ -181,6 +195,7 @@ export async function enrichRemittanceSummaries(payments, { querySalesforce, fie
       }
     }
     if (parents.size !== headers.length || [...parents.keys()].some(key => allChildIds.has(key))) throw new Error('nested parent');
+    }
   } catch { return fail('The complete all-years remittance parent and allocation retrieval failed or was incomplete.'); }
   return payments.map(row => {
     if (!TYPES.has(row?.RecordType?.DeveloperName)) return row;
