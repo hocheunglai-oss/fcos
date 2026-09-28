@@ -138,6 +138,14 @@ export function buildDocumentFieldProjection({ record = {}, direction, buyers = 
     if (!refCode || !literal(refCode.slice(4))) fail('DOCUMENT_FIELD_REFCODE_MISSING', 'The STEM RefCode must contain a nonempty suffix after its first four characters.');
     else if (vessel) fields.InvoiceNumber = `${refCode.slice(4)}- ${vessel}`;
   }
+  // Conflicting dates cannot select an update date, but fully verified linked
+  // buyers can still prove that the whole bill predates the correction scope.
+  if (!fields.Date && side === 'supplier' && evidence.resolution === 'linked_buyers' && realDate(cutoff)
+    && blockerCodes.includes('DOCUMENT_FIELD_DELIVERY_DATE_CONFLICT')
+    && blockerCodes.every((code) => ['DOCUMENT_FIELD_DELIVERY_DATE_CONFLICT', 'DOCUMENT_FIELD_INVOICE_DATE_CONFLICT'].includes(code))
+    && resolved.length > 0 && resolved.every((buyer) => realDate(buyer.Delivery_Date__c) && buyer.Delivery_Date__c < cutoff)) {
+    return finish('legacy');
+  }
   if (!fields.Date || !realDate(cutoff)) return finish('unavailable');
   return finish(fields.Date < cutoff ? 'legacy' : 'current');
 }
