@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { fcosSalesforceEnvironment } from '../config/fcosConnections.js';
-import { ISSUED_SUPPLIER_POLICY, ISSUED_PETROLEUM_POLICY, isIssuedPreservationPolicy } from '../config/xeroIssuedPreservationPolicies.js';
+import { ISSUED_SUPPLIER_POLICY, ISSUED_PETROLEUM_POLICY, ISSUED_PETROLEUM_V2_POLICY, isIssuedPreservationPolicy } from '../config/xeroIssuedPreservationPolicies.js';
 import { getFreshXeroConnection, xeroContactSyncServiceClient } from './_xeroContactSync.js';
 import { requireExternalActionGate } from './_externalActionGates.js';
 import { buildFinancialClassifications, loadSalesforceFinancialSnapshot, loadXeroFinancialSnapshot,
@@ -13,6 +13,7 @@ import { collectIssuedSupplierFiles, collectIssuedSupplierVessels, validateIssue
 import { evaluatePetroleumFinancialDocument } from './_xeroIssuedPetroleumPreservationAdapter.js';
 import { collectPetroleumPreservationScope } from './_xeroIssuedPetroleumScope.js';
 import { collectIssuedPetroleumFiles, validateIssuedPetroleumPacket } from './_xeroIssuedPetroleumFiles.js';
+import { collectIssuedPetroleumV2Files, validateIssuedPetroleumV2Packet } from './_xeroIssuedPetroleumV2Files.js';
 import { persistFinancialPreview, preparePreviewPersistence, previewEvidenceHash as hash } from './_xeroPreviewPersistence.js';
 
 const POLICIES = Object.freeze({
@@ -22,6 +23,9 @@ const POLICIES = Object.freeze({
   [ISSUED_PETROLEUM_POLICY]: { validate: validateIssuedPetroleumPacket, files: collectIssuedPetroleumFiles,
     evaluate: evaluatePetroleumFinancialDocument, rpc: 'link_xero_issued_petroleum_document_v1',
     event: 'issued_petroleum_document_preservation_linked' },
+  [ISSUED_PETROLEUM_V2_POLICY]: { validate: validateIssuedPetroleumV2Packet, files: collectIssuedPetroleumV2Files,
+    evaluate: (source, target, context, file) => evaluatePetroleumFinancialDocument(source, target, context, file, { policyVersion: ISSUED_PETROLEUM_V2_POLICY }),
+    rpc: 'link_xero_issued_petroleum_document_v2', event: 'issued_petroleum_document_preservation_linked' },
 });
 const fail = (message, code = 'XERO_ISSUED_PRESERVATION_INVALID', status = 409) => Object.assign(new Error(message), { code, status });
 const uuid = (value) => /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(value || '');
@@ -102,7 +106,7 @@ async function currentEvidence(records, dependencies, rate, policy) {
   }
   const context = buildGroupedPreservationContext(salesforce, xero, stored, built.sources);
   context.documents = [...xero.documents, ...(xero.inactiveDocuments || [])];
-  if (policy === ISSUED_PETROLEUM_POLICY) context.petroleum = await collectPetroleumScope({ records, connection,
+  if ([ISSUED_PETROLEUM_POLICY, ISSUED_PETROLEUM_V2_POLICY].includes(policy)) context.petroleum = await collectPetroleumScope({ records, connection,
     salesforce, xero, sources: built.sources, stored }, { env, fetchImpl, onResponse });
   const stemIds = [...new Set(built.sources.filter((s) => records.some((r) => sameId(r.sourceId, s.salesforceId))).map((s) => s.stemId))];
   const disputes = stemIds.length ? await client.from('dispute_beta_cases').select('stem_id,workflow_status').in('stem_id', stemIds) : { data: [] };

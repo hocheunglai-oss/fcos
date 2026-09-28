@@ -6,6 +6,7 @@ import { issuedSupplierWorkflowFixture } from './xeroIssuedSupplierPreservationF
 import { issuedPetroleumFixture, issuedPetroleumOwnerFixture } from './xeroIssuedPetroleumPreservationFixtures.js';
 import { collectPetroleumPreservationScope } from '../api/_xeroIssuedPetroleumScope.js';
 import { normalizeXeroInvoice } from '../api/_xeroFinancialSync.js';
+import { issuedPetroleumV2Fixture } from './xeroIssuedPetroleumV2Fixtures.js';
 
 const actor = { id: '00000000-0000-4000-8000-000000000099', email: 'finance@example.com' };
 const copy = (value) => structuredClone(value);
@@ -33,8 +34,9 @@ function cohortFixture() {
 }
 
 function harness(f = issuedSupplierWorkflowFixture()) {
-  const petroleum = f.packet.policyVersion === 'issued_petroleum_preserve_v1';
-  const linkRpc = petroleum ? 'link_xero_issued_petroleum_document_v1' : 'link_xero_issued_supplier_document_v1';
+  const v2 = f.packet.policyVersion === 'issued_petroleum_preserve_v2';
+  const petroleum = v2 || f.packet.policyVersion === 'issued_petroleum_preserve_v1';
+  const linkRpc = v2 ? 'link_xero_issued_petroleum_document_v2' : petroleum ? 'link_xero_issued_petroleum_document_v1' : 'link_xero_issued_supplier_document_v1';
   const eventType = petroleum ? 'issued_petroleum_document_preservation_linked' : 'issued_supplier_document_preservation_linked';
   const calls = [], tables = { xero_financial_sync_runs: [], xero_financial_sync_items: [], dispute_beta_cases: [],
     xero_financial_document_mappings: [], xero_financial_audit_events: [] };
@@ -305,6 +307,44 @@ test('petroleum scope drift and absent current mapping approval abort before the
     await assert.rejects(run(h.body(result), h.dependencies), /changed/);
     assert.equal(h.tables.xero_financial_document_mappings.length, 0);
     assert.equal(h.calls.some((call) => call.name === 'link_xero_issued_petroleum_document_v1'), false);
+  }
+});
+
+test('v2 links only the reviewed immutable attachment facts and retains every original Xero field', async () => {
+  const h = harness(issuedPetroleumV2Fixture());
+  const before = copy({ salesforce: h.f.salesforce, xero: h.f.xero });
+  const result = await h.preview();
+  assert.equal(result.rows[0].status, 'eligible', JSON.stringify(result.rows[0].blockers));
+  assert.equal(h.tables.xero_financial_sync_runs[0].control_totals.preservationPolicy, 'issued_petroleum_preserve_v2');
+  const response = await run(h.body(result), h.dependencies);
+  assert.equal(response.financialWrites, 0);
+  assert.equal(response.outcomes[0].status, 'linked');
+  assert.equal(h.calls.filter((call) => call.name === 'link_xero_issued_petroleum_document_v2').length, 1);
+  const proof = h.tables.xero_financial_document_mappings[0].retained_differences.issuedSupplierPreservation;
+  const file = proof.evidence.accounting.issuedFile;
+  assert.equal(proof.policyVersion, 'issued_petroleum_preserve_v2');
+  assert.equal(file.review.invoiceDate, null); assert.equal(file.review.dueDate, null);
+  assert.equal(file.review.lines[0].unit, 'MTS');
+  assert.deepEqual(file.attachmentManifest.entries, h.f.packet.records[0].attachments);
+  assert.deepEqual(proof.reviewedXero, h.f.candidate);
+  assert.deepEqual({ salesforce: h.f.salesforce, xero: h.f.xero }, before);
+  h.calls.length = 0;
+  assert.equal((await run(h.body(result), h.dependencies)).outcomes[0].alreadyLinked, true);
+  assert.equal(h.calls.some((call) => call.type === 'provider' || call.type === 'rpc'), false);
+});
+
+test('v2 supporting attachment changes abort the entire selected link before accounting or mapping writes', async () => {
+  for (const mutate of [
+    (f) => { f.fileEvidence.attachmentManifest.entries[1].sha256 = '0'.repeat(64); },
+    (f) => { f.fileEvidence.attachmentManifest.entries[1].role = 'credit_note'; },
+    (f) => { f.fileEvidence.attachmentManifest.entries.pop(); },
+    (f) => { f.fileEvidence.review.invoiceDate = f.supplier.Invoice_Date__c; },
+  ]) {
+    const h = harness(issuedPetroleumV2Fixture()); const result = await h.preview();
+    assert.equal(result.rows[0].status, 'eligible'); mutate(h.f); h.calls.length = 0;
+    await assert.rejects(run(h.body(result), h.dependencies));
+    assert.equal(h.calls.some((call) => call.name === 'link_xero_issued_petroleum_document_v2'), false);
+    assert.equal(h.tables.xero_financial_document_mappings.length, 0);
   }
 });
 

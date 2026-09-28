@@ -7,11 +7,17 @@ import pg from 'pg';
 import { PGlite } from '@electric-sql/pglite';
 import { evaluateIssuedPetroleumPreservation } from '../api/_xeroIssuedPetroleumPreservation.js';
 import { fcosSalesforceEnvironment } from '../config/fcosConnections.js';
+import { issuedPetroleumV2Fixture } from './xeroIssuedPetroleumV2Fixtures.js';
+import { validateIssuedPetroleumAttachmentManifest } from '../api/_xeroIssuedPetroleumPaper.js';
 import { issuedPetroleumFixture, issuedPetroleumOwnerFixture } from './xeroIssuedPetroleumPreservationFixtures.js';
 import { derivePetroleumOwnership, bindPetroleumOwnership, petroleumOwnershipFingerprint } from '../api/_xeroIssuedPetroleumOwnership.js';
 
 const originalMigration = new URL('../supabase/migrations/20260927185526_xero_issued_petroleum_preservation_link.sql', import.meta.url);
 const migration = new URL('../supabase/migrations/20260927213024_xero_petroleum_inactive_source_ownership.sql', import.meta.url);
+const attachmentMigration = new URL('../supabase/migrations/20260928033217_xero_issued_petroleum_attachment_preservation_v2.sql', import.meta.url);
+const v2Policy = 'issued_petroleum_preserve_v2';
+const v2Rpc = 'public.link_xero_issued_petroleum_document_v2(uuid,integer,uuid,timestamptz,uuid,jsonb,uuid,text)';
+const v2Sql = 'select public.link_xero_issued_petroleum_document_v2($1,$2,$3,$4,$5,$6::jsonb,$7,$8) as result';
 const rpc = 'public.link_xero_issued_petroleum_document_v1(uuid,integer,uuid,timestamptz,uuid,jsonb,uuid,text)';
 const sql = 'select public.link_xero_issued_petroleum_document_v1($1,$2,$3,$4,$5,$6::jsonb,$7,$8) as result';
 const stable = (value) => JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item)
@@ -30,7 +36,7 @@ async function applyPetroleumMigrations(db, ownership = true) {
   if (ownership) await db.exec(await readFile(migration, 'utf8'));
 }
 
-async function fixture(t, { migrate = true, ownership = true, database = null, evaluator = evaluateDatabaseFixture, configure = () => {} } = {}) {
+async function fixture(t, { migrate = true, ownership = true, attachmentPolicy = false, database = null, evaluator = evaluateDatabaseFixture, configure = () => {} } = {}) {
   const db = database || new PGlite();
   if (!database) {
     t.after(() => db.close());
@@ -41,6 +47,7 @@ async function fixture(t, { migrate = true, ownership = true, database = null, e
     await db.exec((await readFile(new URL(`../supabase/migrations/${file}`, import.meta.url), 'utf8')).replace(/^create extension if not exists pgcrypto;$/m, ''));
   }
   if (migrate) await applyPetroleumMigrations(db, ownership);
+  if (migrate && attachmentPolicy) await db.exec(await readFile(attachmentMigration, 'utf8'));
   const tenant = randomUUID(); const actor = { id: randomUUID(), email: ' FINANCE@example.test ' };
   const ids = { source: 'a01000000000001', account: '001000000000001', product: '01t000000000001', contact: randomUUID(), target: randomUUID(), productMapping: randomUUID() };
   const line = { description: 'Fuel', quantity: '1', unitAmount: '10.01', lineAmount: '10.01', accountCode: '51100',
@@ -95,6 +102,7 @@ async function fixture(t, { migrate = true, ownership = true, database = null, e
     quantity: '3', unit: 'MT', unitAmount: '10.01', lineAmountCents: '3003', sourceFactsFingerprint: hash('authoritative raw delivery and child') };
   input.accountTax = { account: { AccountID: randomUUID(), Code: '51100', Name: 'Cost of marine fuel', Type: 'DIRECTCOSTS', Status: 'ACTIVE' },
     tax: { TaxType: 'NONE', Status: 'ACTIVE', DisplayTaxRate: 0, EffectiveRate: 0, CanApplyToExpenses: true } };
+  if (attachmentPolicy) configureAttachments(input);
   configure(input);
   const evaluated = evaluator(input);
   assert.equal(evaluated.eligible, true, JSON.stringify(evaluated.blockers));
@@ -114,7 +122,7 @@ async function fixture(t, { migrate = true, ownership = true, database = null, e
     values ($1,'supplier',$2,'Fuel','51100','NONE',$3,$4,$5)`, [ids.productMapping, sf18(ids.product), actor.id, actor.email.trim().toLowerCase(), iso]);
   await db.query(`insert into public.xero_financial_sync_runs
     (id,idempotency_key,mode,status,revision,reviewed_by,reviewed_by_email,reviewed_at,control_totals)
-    values ($1,$2,'preview','processing',3,$3,$4,$5,'{"preservationPolicy":"issued_petroleum_preserve_v1"}')`, [runId, runId, actor.id, actor.email.trim().toLowerCase(), iso]);
+    values ($1,$2,'preview','processing',3,$3,$4,$5,$6)`, [runId, runId, actor.id, actor.email.trim().toLowerCase(), iso, JSON.stringify({ preservationPolicy: evaluated.policyVersion })]);
   await db.query(`insert into public.xero_financial_sync_items
     (id,run_id,row_index,row_key,source_object,source_id,source_type,source_document_number,currency,source_total,proposed_action,
       status,selected,source_payload,xero_payload,xero_document_id,xero_document_status,idempotency_key,updated_at,differences)
@@ -125,12 +133,13 @@ async function fixture(t, { migrate = true, ownership = true, database = null, e
     p_expected_item_updated_at: iso, p_tenant_id: tenant, p_review: review, p_actor_id: actor.id, p_actor_email: actor.email, ...overrides });
   const values = (overrides) => { const p = params(overrides); return [p.p_run_id, p.p_expected_run_revision, p.p_item_id,
     p.p_expected_item_updated_at, p.p_tenant_id, JSON.stringify(p.p_review), p.p_actor_id, p.p_actor_email]; };
-  const link = async (overrides) => (await db.query(sql, values(overrides))).rows[0].result;
+  const linkSql = attachmentPolicy ? v2Sql : sql;
+  const link = async (overrides) => (await db.query(linkSql, values(overrides))).rows[0].result;
   const snapshot = async () => (await db.query(`select
     (select jsonb_agg(to_jsonb(m) order by id) from public.xero_financial_document_mappings m) as mappings,
     (select jsonb_agg(to_jsonb(i) order by id) from public.xero_financial_sync_items i) as items,
     (select jsonb_agg(to_jsonb(a) order by id) from public.xero_financial_audit_events a) as audits`)).rows[0];
-  return { db, ids, actor, source, input, review, runId, itemId, tenant, params, values, link, snapshot };
+  return { db, ids, actor, source, input, review, runId, itemId, tenant, params, values, link, linkSql, snapshot };
 }
 
 async function ordinaryMapping(f, sourceId = f.ids.source, targetId = f.ids.target, type = 'ACCPAY') {
@@ -723,7 +732,7 @@ async function postgresFixture(t, options = {}) {
   };
   const primary = await connect();
   const f = await fixture(t, { ...options, database: { query: (...args) => primary.query(...args), exec: (text) => primary.query(text) } });
-  const call = (client, overrides) => client.query(sql, f.values(overrides)).then((result) => result.rows[0].result);
+  const call = (client, overrides) => client.query(f.linkSql, f.values(overrides)).then((result) => result.rows[0].result);
   const waitForLock = async (client) => {
     for (let attempt = 0; attempt < 120; attempt += 1) {
       const row = (await admin.query('select wait_event_type from pg_stat_activity where pid=$1', [client.processID])).rows[0];
@@ -916,4 +925,241 @@ test('PostgreSQL inactive-owner proof validates independently and retains transa
     assert.equal((await settled).error?.code, '40001');
     const saved = await f.snapshot(); assert.equal(saved.mappings, null); assert.equal(saved.audits, null);
   });
+});
+
+
+function configureAttachments(input) {
+  input.policyVersion = v2Policy;
+  const file = input.fileEvidence;
+  file.review.invoiceDate = null; file.review.dueDate = null; file.review.lines[0].unit = 'MTS';
+  file.attachmentManifest = { complete: true, selectedDocumentId: file.documentId, selectedVersionId: file.versionId,
+    entries: [{ linkId: file.link.id, documentId: file.documentId, versionId: file.versionId,
+      sha256: file.sha256, checksum: file.checksum, contentSize: file.contentSize, fileType: 'PDF', fileExtension: 'pdf',
+      role: 'issued_invoice', reviewRecordHash: file.review.reviewRecordHash },
+    { linkId: '06A000000000002', documentId: '069000000000002', versionId: '068000000000002',
+      sha256: hash('reviewed delivery receipt bytes'), checksum: '1'.repeat(32), contentSize: 5678,
+      fileType: 'PDF', fileExtension: 'pdf', role: 'delivery_receipt', reviewRecordHash: hash('reviewed delivery receipt') }] };
+}
+
+const invalidManifestChanges = [
+  ['missing manifest', f => { delete f.attachmentManifest; }],
+  ['null manifest', f => { f.attachmentManifest = null; }],
+  ['array manifest', f => { f.attachmentManifest = []; }],
+  ['incomplete manifest', f => { f.attachmentManifest.complete = false; }],
+  ['claimed completion string', f => { f.attachmentManifest.complete = 'true'; }],
+  ['extra authority', f => { f.attachmentManifest.approved = true; }],
+  ['wrong selected document', f => { f.attachmentManifest.selectedDocumentId = '069000000000099'; }],
+  ['wrong selected version', f => { f.attachmentManifest.selectedVersionId = '068000000000099'; }],
+  ['malformed selected checksum', f => { f.attachmentManifest.selectedDocumentId += 'ZZZ'; }],
+  ['missing entries', f => { delete f.attachmentManifest.entries; }],
+  ['null entries', f => { f.attachmentManifest.entries = null; }],
+  ['empty entries', f => { f.attachmentManifest.entries = []; }],
+  ['null entry', f => { f.attachmentManifest.entries[1] = null; }],
+  ['extra entry field', f => { f.attachmentManifest.entries[1].isSafe = true; }],
+  ['missing review hash', f => { delete f.attachmentManifest.entries[1].reviewRecordHash; }],
+  ['bad review hash', f => { f.attachmentManifest.entries[1].reviewRecordHash = 'X'.repeat(64); }],
+  ['bad SHA256', f => { f.attachmentManifest.entries[1].sha256 = 'A'.repeat(64); }],
+  ['bad MD5', f => { f.attachmentManifest.entries[1].checksum = 'x'.repeat(32); }],
+  ['numeric SHA256', f => { f.attachmentManifest.entries[1].sha256 = 123; }],
+  ['string size', f => { f.attachmentManifest.entries[1].contentSize = '5678'; }],
+  ['fractional size', f => { f.attachmentManifest.entries[1].contentSize = 5678.5; }],
+  ['too small', f => { f.attachmentManifest.entries[1].contentSize = 4; }],
+  ['too large', f => { f.attachmentManifest.entries[1].contentSize = 5000001; }],
+  ['wrong native type', f => { f.attachmentManifest.entries[1].fileType = 'WORD_X'; }],
+  ['wrong native extension', f => { f.attachmentManifest.entries[1].fileExtension = 'PDF'; }],
+  ['unreviewed role', f => { f.attachmentManifest.entries[1].role = 'unknown'; }],
+  ['credit role', f => { f.attachmentManifest.entries[1].role = 'credit_note'; }],
+  ['second invoice role', f => { f.attachmentManifest.entries[1].role = 'issued_invoice'; }],
+  ['no invoice role', f => { f.attachmentManifest.entries[0].role = 'terms'; }],
+  ['wrong selected link', f => { f.attachmentManifest.entries[0].linkId = '06A000000000000'; }],
+  ['changed selected bytes', f => { f.attachmentManifest.entries[0].sha256 = hash('changed native bytes'); }],
+  ['changed selected checksum', f => { f.attachmentManifest.entries[0].checksum = '2'.repeat(32); }],
+  ['changed selected size', f => { f.attachmentManifest.entries[0].contentSize += 1; }],
+  ['changed selected review', f => { f.attachmentManifest.entries[0].reviewRecordHash = hash('another review'); }],
+  ['wrong link prefix', f => { f.attachmentManifest.entries[1].linkId = '001000000000002'; }],
+  ['wrong document prefix', f => { f.attachmentManifest.entries[1].documentId = '001000000000002'; }],
+  ['wrong version prefix', f => { f.attachmentManifest.entries[1].versionId = '001000000000002'; }],
+  ['invalid entry checksum', f => { f.attachmentManifest.entries[1].linkId += 'ZZZ'; }],
+  ['duplicate canonical link', f => { f.attachmentManifest.entries[1].linkId = sf18(f.link.id); }],
+  ['duplicate canonical document', f => { f.attachmentManifest.entries[1].documentId = sf18(f.documentId); }],
+  ['duplicate canonical version', f => { f.attachmentManifest.entries[1].versionId = sf18(f.versionId); }],
+  ['unsorted links', f => { f.attachmentManifest.entries.reverse(); }],
+  ['false duplicate bytes', f => { f.attachmentManifest.entries[1].role = 'duplicate_selected_invoice'; }],
+  ['duplicate SHA alone', f => { Object.assign(f.attachmentManifest.entries[1], { role: 'duplicate_selected_invoice', sha256: f.sha256 }); }],
+  ['21 attachments', f => { f.attachmentManifest.entries = Array.from({ length: 21 }, (_, i) => {
+    const suffix = String(i + 1).padStart(12, '0');
+    return { ...f.attachmentManifest.entries[i ? 1 : 0], linkId: `06A${suffix}`, documentId: `069${suffix}`, versionId: `068${suffix}` };
+  }); }],
+];
+
+test('v2 adds separate service-only invoker functions and leaves existing v1 function and acceptance byte-equivalent', async (t) => {
+  const f = await fixture(t); const first = await f.link(); const before = await f.snapshot();
+  const definition = async () => (await f.db.query('select pg_get_functiondef($1::regprocedure) as definition', [rpc])).rows[0].definition;
+  const original = await definition();
+  await f.db.exec(await readFile(attachmentMigration, 'utf8'));
+  assert.equal(await definition(), original); assert.deepEqual(await f.snapshot(), before);
+  assert.deepEqual(await f.link(), { ...first, alreadyLinked: true }); assert.deepEqual(await f.snapshot(), before);
+  for (const name of [v2Rpc, 'public.xero_issued_petroleum_attachment_manifest_v2(jsonb,jsonb)']) {
+    const grants = (await f.db.query(`select prosecdef,has_function_privilege('anon',oid,'EXECUTE') as anon,
+      has_function_privilege('authenticated',oid,'EXECUTE') as authenticated,has_function_privilege('service_role',oid,'EXECUTE') as service
+      from pg_proc where oid=$1::regprocedure`, [name])).rows[0];
+    assert.deepEqual(grants, { prosecdef: false, anon: false, authenticated: false, service: true });
+  }
+  await unchangedOnReject(f, () => f.db.query(v2Sql, f.values()), { code: '22023' });
+});
+
+test('v2 SQL preserves explicit null paper dates, source dates, full target and complete attachments with zero financial writes', async (t) => {
+  const f = await fixture(t, { attachmentPolicy: true, configure: configureInactiveOwners });
+  for (const role of ['anon', 'authenticated']) {
+    await f.db.exec(`set role ${role}`); await assert.rejects(f.link(), { code: '42501' }); await f.db.exec('reset role');
+  }
+  await f.db.exec('set role service_role');
+  await unchangedOnReject(f, () => f.db.query(sql, f.values()), { code: '22023' });
+  const first = await f.link(); const saved = await f.snapshot();
+  assert.equal(first.status, 'linked'); assert.equal(saved.items[0].mutation_attempts, 0);
+  assert.deepEqual(saved.items[0].source_payload, f.source); assert.deepEqual(saved.items[0].xero_payload, f.input.xero);
+  assert.deepEqual(saved.mappings[0].retained_differences.issuedSupplierPreservation.evidence, f.review.evidence);
+  assert.equal(saved.mappings[0].retained_differences.issuedSupplierPreservation.policyVersion, v2Policy);
+  assert.equal(saved.mappings[0].retained_differences.issuedSupplierPreservation.evidence.accounting.issuedFile.review.invoiceDate, null);
+  assert.equal(saved.mappings[0].retained_differences.issuedSupplierPreservation.evidence.accounting.source.invoiceDate, '2026-01-03');
+  assert.equal(saved.mappings[0].retained_differences.issuedSupplierPreservation.evidence.accounting.xero.date, '2026-01-02');
+  assert.deepEqual(saved.audits[0].record_counts, { linked: 1, applied: 0, financialWrites: 0 });
+  assert.equal(saved.audits[0].actor_id, f.actor.id); assert.equal(saved.audits[0].actor_email, 'finance@example.test');
+  assert.equal(saved.audits[0].event_type, 'issued_petroleum_document_preservation_linked');
+  assert.deepEqual(await f.link(), { ...first, alreadyLinked: true }); assert.deepEqual(await f.snapshot(), saved);
+  await unchangedOnReject(f, () => f.link({ p_actor_id: randomUUID() }));
+  await unchangedOnReject(f, () => f.db.query("update public.xero_financial_document_mappings set retained_differences='{}'"));
+  await unchangedOnReject(f, () => f.db.query('delete from public.xero_financial_document_mappings'));
+});
+
+for (const [index, unit] of ['MT', 'MTS', 'METRIC TON', 'METRIC TONS', 'METRIC TONNE', 'METRIC TONNES'].entries()) {
+  test(`v2 SQL accepts literal ${unit} with only matching or explicitly null paper dates`, async (t) => {
+    const f = await fixture(t, { attachmentPolicy: true, configure: input => {
+      const review = input.fileEvidence.review; review.lines[0].unit = unit;
+      if (index % 2) review.invoiceDate = input.source.invoiceDate;
+      if (index % 3) review.dueDate = input.source.dueDate;
+    } });
+    assert.equal((await f.link()).status, 'linked');
+    assert.deepEqual((await f.snapshot()).items[0].xero_payload, f.input.xero);
+  });
+}
+
+test('v2 SQL retains twenty reviewed attachments, all supported roles and valid 15/18 IDs without truncation', async (t) => {
+  const f = await fixture(t, { attachmentPolicy: true, configure: input => {
+    const file = input.fileEvidence; const entries = file.attachmentManifest.entries;
+    file.attachmentManifest.entries = Array.from({ length: 20 }, (_, index) => {
+      const suffix = String(index + 1).padStart(12, '0');
+      const entry = { ...entries[index ? 1 : 0], linkId: `06A${suffix}`, documentId: `069${suffix}`, versionId: `068${suffix}` };
+      if (index) entry.role = ['delivery_receipt', 'order_confirmation', 'terms', 'duplicate_selected_invoice'][index % 4];
+      if (entry.role === 'duplicate_selected_invoice') Object.assign(entry, { sha256: file.sha256, checksum: file.checksum, contentSize: file.contentSize });
+      if (index % 2) for (const key of ['linkId', 'documentId', 'versionId']) entry[key] = sf18(entry[key]);
+      return entry;
+    });
+    file.attachmentManifest.selectedDocumentId = sf18(file.documentId);
+    file.attachmentManifest.selectedVersionId = sf18(file.versionId);
+  } });
+  assert.ok(Buffer.byteLength(f.review.accountingCanonical, 'utf8') < 100000);
+  assert.ok(Buffer.byteLength(f.review.evidenceCanonical, 'utf8') < 100000);
+  await f.db.exec('set role service_role'); assert.equal((await f.link()).status, 'linked');
+  const saved = (await f.snapshot()).mappings[0].retained_differences.issuedSupplierPreservation.evidence.accounting.issuedFile;
+  assert.equal(saved.attachmentManifest.entries.length, 20);
+  assert.deepEqual(saved, f.review.evidence.accounting.issuedFile);
+});
+
+test('v2 manifest SQL mirrors the JS contract and rejects rehashed structural, identity and selected byte contradictions', async (t) => {
+  const f = await fixture(t, { attachmentPolicy: true });
+  await f.db.exec('set role service_role');
+  const check = async file => (await f.db.query('select public.xero_issued_petroleum_attachment_manifest_v2($1::jsonb,$2::jsonb) as valid',
+    [JSON.stringify(file.attachmentManifest ?? null), JSON.stringify(file)])).rows[0].valid;
+  assert.equal(await check(f.input.fileEvidence), true);
+  for (const [label, change] of invalidManifestChanges) {
+    await t.test(label, async () => {
+      const file = structuredClone(f.input.fileEvidence); change(file);
+      assert.equal(validateIssuedPetroleumAttachmentManifest(file.attachmentManifest, file), false);
+      assert.equal(await check(file), false);
+      await rejectedOwnershipMutation(f, a => change(a.issuedFile));
+    });
+  }
+  const positive = structuredClone(f.input.fileEvidence);
+  for (const entry of positive.attachmentManifest.entries) for (const key of ['linkId', 'documentId', 'versionId']) entry[key] = sf18(entry[key]);
+  Object.assign(positive.attachmentManifest.entries[1], { role: 'duplicate_selected_invoice', sha256: positive.sha256,
+    checksum: positive.checksum, contentSize: positive.contentSize });
+  assert.equal(validateIssuedPetroleumAttachmentManifest(positive.attachmentManifest, positive), true);
+  assert.equal(await check(positive), true);
+  assert.equal((await f.link()).status, 'linked');
+});
+
+test('v2 rehashed absent/conflicting paper dates and unsupported units fail without changing other financial gates', async (t) => {
+  const f = await fixture(t, { attachmentPolicy: true, configure: configureInactiveOwners });
+  const mutations = [
+    ...['invoiceDate', 'dueDate'].flatMap(key => [
+      [key + ' absent', a => { delete a.issuedFile.review[key]; }],
+      [key + ' empty', a => { a.issuedFile.review[key] = ''; }],
+      [key + ' conflict', a => { a.issuedFile.review[key] = '2026-12-31'; }],
+      [key + ' object', a => { a.issuedFile.review[key] = {}; }],
+    ]),
+    ...['TN', 'TON', 'TONS', 'mts', 'M/T', 'MT ', null].map(unit => ['unit ' + unit, a => { a.issuedFile.review.lines[0].unit = unit; }]),
+    ['changed source date', a => { a.source.invoiceDate = '2026-12-31'; }],
+    ['changed delivery bridge', a => { a.deliveryIdentity.deliveryDate = '2026-12-31'; }],
+    ['changed Xero date', a => { a.xero.date = '2026-12-31'; }],
+    ['changed total', a => { a.source.totalCents = '3004'; }],
+    ['changed Contact', a => { a.xero.contactId = randomUUID(); }],
+    ['changed owner union', a => { a.identityOwnership.owners[1].inactiveSuspended = false; }],
+    ['unproven source number', a => { a.issuedFile.review.printedNumber = 'DIFFERENT'; }],
+  ];
+  for (const [label, change] of mutations) {
+    await t.test(label, () => rejectedOwnershipMutation(f, change));
+  }
+  await unchangedOnReject(f, () => f.link({ p_actor_id: randomUUID() }));
+  await unchangedOnReject(f, () => f.link({ p_expected_run_revision: 2 }));
+  await unchangedOnReject(f, () => f.link({ p_review: { ...f.review, policyVersion: 'unknown' } }), { code: '22023' });
+  await f.db.exec('begin');
+  try {
+    await f.db.query('update public.xero_financial_product_mappings set approved_at=null');
+    await assert.rejects(f.link(), { code: '40001' });
+  } finally { await f.db.exec('rollback'); }
+  assert.equal((await f.link()).status, 'linked');
+});
+
+test('actual v2 normal builder and adapter proof persists through SQL without rewriting literal dates or target fields', async (t) => {
+  const f = await fixture(t, { attachmentPolicy: true }); const real = issuedPetroleumV2Fixture(); const evaluated = real.build();
+  assert.equal(evaluated.eligible, true, JSON.stringify(evaluated.blockers));
+  const review = { ...f.review, policyVersion: evaluated.policyVersion, fingerprint: evaluated.fingerprint,
+    evidenceFingerprint: evaluated.evidenceFingerprint, evidence: evaluated.evidence,
+    accountingCanonical: stable({ policyVersion: evaluated.policyVersion, accounting: evaluated.evidence.accounting }),
+    evidenceCanonical: stable(evaluated.evidence) };
+  const source = { ...real.source, issuedSupplierReviewFingerprint: review.reviewFingerprint,
+    issuedSupplierPreservation: { policyVersion: review.policyVersion, eligible: true, accepted: false, requiresExplicitReview: true,
+      fingerprint: review.fingerprint, evidenceFingerprint: review.evidenceFingerprint } };
+  const mapping = real.stored.productMappings[0];
+  await f.db.query('update public.xero_contact_sync_connections set tenant_id=$1', [real.ids.tenant]);
+  await f.db.query(`update public.xero_financial_product_mappings set id=$1,salesforce_product_id=$2,
+    salesforce_product_name=$3,approved_by=$4,approved_by_email=$5,approved_at=$6`,
+  [mapping.id, mapping.salesforce_product_id, mapping.salesforce_product_name, mapping.approved_by, mapping.approved_by_email, mapping.approved_at]);
+  await f.db.query(`update public.xero_financial_sync_items set source_id=$1,source_document_number=$2,source_total=$3,
+    source_payload=$4,xero_payload=$5,xero_document_id=$6`, [real.source.salesforceId, real.source.documentNumber, real.source.total,
+    JSON.stringify(source), JSON.stringify(real.candidate), real.candidate.id]);
+  await f.db.exec('set role service_role');
+  assert.equal((await f.link({ p_tenant_id: real.ids.tenant, p_review: review })).status, 'linked');
+  const saved = await f.snapshot();
+  assert.deepEqual(saved.items[0].xero_payload, real.candidate);
+  assert.deepEqual(saved.items[0].source_payload, source);
+  assert.deepEqual(saved.mappings[0].retained_differences.issuedSupplierPreservation.evidence, evaluated.evidence);
+  assert.deepEqual(saved.audits[0].record_counts, { linked: 1, applied: 0, financialWrites: 0 });
+});
+
+test('PostgreSQL v2 preserves locking, immutable replay and rehashed attachment rejection under service_role', {
+  skip: !concurrencyUrl && 'Set FCOS_ISSUED_PETROLEUM_TEST_DATABASE_URL to a disposable local Supabase-compatible PostgreSQL endpoint', timeout: 60000,
+}, async (t) => {
+  const f = await postgresFixture(t, { attachmentPolicy: true, configure: configureInactiveOwners });
+  const second = await f.connect();
+  await f.primary.query('set role service_role'); await second.query('set role service_role');
+  await rejectedOwnershipMutation(f, a => { a.issuedFile.attachmentManifest.entries[1].role = 'credit_note'; });
+  await f.primary.query('begin'); const first = await f.call(f.primary);
+  const pending = f.call(second).then(value => ({ value }), error => ({ error }));
+  await f.waitForLock(second); await f.primary.query('commit');
+  assert.deepEqual((await pending).value, { ...first, alreadyLinked: true });
+  const saved = await f.snapshot(); assert.equal(saved.mappings.length, 1); assert.equal(saved.audits.length, 1);
+  assert.equal(saved.items[0].mutation_attempts, 0);
+  await unchangedOnReject(f, () => f.call(f.primary, { p_actor_id: randomUUID() }));
 });

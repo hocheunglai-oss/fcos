@@ -5,6 +5,7 @@ import { PGlite } from '@electric-sql/pglite';
 import { xeroFinancialDocumentPreservationPreview as preview, xeroFinancialDocumentPreservationRun as run } from '../api/_xeroIssuedSupplierWorkflow.js';
 import { issuedSupplierWorkflowFixture } from './xeroIssuedSupplierPreservationFixtures.js';
 import { issuedPetroleumFixture, issuedPetroleumOwnerFixture } from './xeroIssuedPetroleumPreservationFixtures.js';
+import { issuedPetroleumV2Fixture } from './xeroIssuedPetroleumV2Fixtures.js';
 
 const actor = { id: '00000000-0000-4000-8000-000000000099', email: 'finance@example.com' };
 const clone = value => structuredClone(value);
@@ -14,6 +15,7 @@ const migrations = [
   '20260923222821_xero_grouped_preservation_link.sql', '20260927154515_xero_financial_preview_persistence.sql',
   '20260927175805_xero_issued_supplier_preservation_link.sql', '20260927185526_xero_issued_petroleum_preservation_link.sql',
   '20260927213024_xero_petroleum_inactive_source_ownership.sql',
+  '20260928033217_xero_issued_petroleum_attachment_preservation_v2.sql',
 ];
 const rpcParameters = {
   persist_xero_financial_preview_v1: ['p_run', 'p_items', 'p_review_identity'],
@@ -22,6 +24,7 @@ const rpcParameters = {
   finish_xero_financial_sync_run_v1: ['p_run_id', 'p_status', 'p_expected_revision', 'p_classification_summary', 'p_rate_limit_snapshot', 'p_error_code', 'p_error_message'],
   link_xero_issued_supplier_document_v1: ['p_run_id', 'p_expected_run_revision', 'p_item_id', 'p_expected_item_updated_at', 'p_tenant_id', 'p_review', 'p_actor_id', 'p_actor_email'],
   link_xero_issued_petroleum_document_v1: ['p_run_id', 'p_expected_run_revision', 'p_item_id', 'p_expected_item_updated_at', 'p_tenant_id', 'p_review', 'p_actor_id', 'p_actor_email'],
+  link_xero_issued_petroleum_document_v2: ['p_run_id', 'p_expected_run_revision', 'p_item_id', 'p_expected_item_updated_at', 'p_tenant_id', 'p_review', 'p_actor_id', 'p_actor_email'],
 };
 const jsonParameters = new Set(['p_run', 'p_items', 'p_review', 'p_classification_summary', 'p_rate_limit_snapshot']);
 
@@ -104,6 +107,7 @@ for (const [label, makeFixture, linkRpc] of [
   ['trustee', issuedSupplierWorkflowFixture, 'link_xero_issued_supplier_document_v1'],
   ['petroleum singleton', issuedPetroleumFixture, 'link_xero_issued_petroleum_document_v1'],
   ['petroleum inactive owners', issuedPetroleumOwnerFixture, 'link_xero_issued_petroleum_document_v1'],
+  ['petroleum full attachment review', issuedPetroleumV2Fixture, 'link_xero_issued_petroleum_document_v2'],
 ]) test(`${label} real Preview → persistence SQL → Run → link SQL preserves original bills`, async t => {
   const h = await harness(t, makeFixture()); const before = clone({ salesforce: h.f.salesforce, xero: h.f.xero });
   const reviewed = await h.preview().catch(error => assert.fail(`${error.code}: ${JSON.stringify(h.errors)}`));

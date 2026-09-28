@@ -1,6 +1,7 @@
 import { hkStrippedClKeyNameMatchKey, normalizeName } from './_xeroContactSync.js';
 import { issuedSupplierSfId as sf, issuedSupplierCents as cents, issuedSupplierHash as hash } from './_xeroIssuedSupplierPreservation.js';
-import { evaluateIssuedPetroleumPreservation, ISSUED_PETROLEUM_PRESERVATION_POLICY as POLICY, issuedPetroleumVessel, issuedPetroleumDecimal } from './_xeroIssuedPetroleumPreservation.js';
+import { evaluateIssuedPetroleumPreservation, ISSUED_PETROLEUM_PRESERVATION_POLICY as POLICY,
+  ISSUED_PETROLEUM_PRESERVATION_V2_POLICY as V2_POLICY, issuedPetroleumVessel, issuedPetroleumDecimal } from './_xeroIssuedPetroleumPreservation.js';
 import { petroleumScopeFingerprint, petroleumScopeForSource } from './_xeroIssuedPetroleumScope.js';
 import { derivePetroleumOwnership, bindPetroleumOwnership, petroleumDistinctStemSuppliers } from './_xeroIssuedPetroleumOwnership.js';
 
@@ -15,7 +16,7 @@ const numberKey = (value) => typeof value === 'string' && /^[A-Za-z0-9-]+$/.test
 const hkClaims = (value) => typeof value === 'string' ? value.match(/\bHK\d+[A-Z]\b/gi) || [] : [];
 const date = (value) => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
   && Number.isFinite(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
-const reject = (code, message) => ({ eligible: false, policyVersion: POLICY, accepted: false, requiresExplicitReview: true,
+const rejection = (code, message, policyVersion) => ({ eligible: false, policyVersion, accepted: false, requiresExplicitReview: true,
   fingerprint: null, evidenceFingerprint: null, evidence: null, blockers: [{ code, path: 'context.petroleum', message }] });
 const currencyCode = (value) => typeof value === 'string' && /^[A-Z]{3}$/.test(value) ? value : null;
 const unique = (rows, key) => new Set(rows.map(key)).size === rows.length;
@@ -42,7 +43,9 @@ function distinctImpreciseSourceClaim(row, parent, source, numbers, currency) {
     && selected.delivery !== historical.delivery);
 }
 
-export function evaluatePetroleumFinancialDocument(source, candidate, context, fileEvidence) {
+export function evaluatePetroleumFinancialDocument(source, candidate, context, fileEvidence, { policyVersion = POLICY } = {}) {
+  const reject = (code, message) => rejection(code, message, policyVersion === V2_POLICY ? V2_POLICY : POLICY);
+  if (![POLICY, V2_POLICY].includes(policyVersion)) return reject('POLICY_UNSUPPORTED', 'The trusted workflow must select a supported documentary policy.');
   let scope = context?.petroleum;
   if (!source || !candidate || context?.complete !== true || !(context.accountsById instanceof Map) || !(context.members instanceof Map)
     || typeof context.matchesFor !== 'function' || !Array.isArray(context.stored?.productMappings) || !Array.isArray(context.stored?.documentMappings)
@@ -152,7 +155,7 @@ export function evaluatePetroleumFinancialDocument(source, candidate, context, f
   // financial headers must independently prove zero paid/credited and full due.
   const claims = (key) => Object.hasOwn(rawTarget, key) ? rawTarget[key] : [];
   const usedProduct = sf(product.Id);
-  return evaluateIssuedPetroleumPreservation({ tenantId: context.tenantId, organisation: context.organisation,
+  return evaluateIssuedPetroleumPreservation({ ...(policyVersion === V2_POLICY ? { policyVersion } : {}), tenantId: context.tenantId, organisation: context.organisation,
     cutoffDate: context.cutoffDate, fileEvidence, deliveryIdentity, accountTax: { account: accounts[0], tax: taxes[0] },
     source: { ...source, complete: source.groupedAccounting?.policy === 'fcos_notax_accounting_v1', total: parent.Invoice_Amount__c,
       signedTotal: parent.Invoice_Amount__c, subtotal: parent.Invoice_Amount__c, totalTax: 0, lineAmountTypes: 'NoTax', isDiscounted: false, lines: [sourceLine] },

@@ -1,12 +1,32 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import { issuedPetroleumV2Fixture } from './xeroIssuedPetroleumV2Fixtures.js';
 import { PRESERVATION_PACKET_MAX_BYTES, parsePreservationPacket, preservationOutcomes, preservationSelection, validatePreservationPacket } from '../src/lib/xeroIssuedSupplierPreservationUi.js';
 
 const record = { sourceId: 'source', xeroDocumentId: 'xero', documentId: 'document', versionId: 'version', sha256: 'hash',
   review: { reviewer: 'Codex root Astra', sourceNumber: 'SUP-1', currency: 'USD', total: 100, lines: [{ description: 'Fuel', amount: 100 }] } };
 const row = { id: 'one', status: 'eligible', fingerprint: 'verified', blockers: [] };
 const preview = { run: { id: 'run', revision: 1, status: 'ready_for_review' }, rows: [row, { ...row, id: 'two', status: 'blocked', blockers: ['Mismatch'] }] };
+
+test('v2 packets keep literal null paper dates and complete attachment facts for server review', () => {
+  const { packet } = issuedPetroleumV2Fixture();
+  assert.deepEqual(parsePreservationPacket(JSON.stringify(packet)), packet);
+  assert.equal(packet.records[0].review.invoiceDate, null);
+  assert.equal(packet.records[0].review.dueDate, null);
+  for (const mutate of [
+    (data) => { data.policyVersion = 'issued_petroleum_preserve_v1'; },
+    (data) => { delete data.records[0].attachments; },
+    (data) => { data.records[0].attachments = []; },
+    (data) => { data.records[0].attachments = Array(21).fill(data.records[0].attachments[0]); },
+    (data) => { delete data.records[0].attachments[0].reviewRecordHash; },
+    (data) => { data.records[0].attachments[0].downloadToken = 'not-allowed'; },
+    (data) => { data.records[0].attachments[0].role = { untrusted: true }; },
+  ]) {
+    const changed = structuredClone(packet); mutate(changed);
+    assert.equal(validatePreservationPacket(changed), false);
+  }
+});
 
 test('evidence packets exclude PDFs, credentials, unsupported nested values and oversized batches', () => {
   assert.equal(validatePreservationPacket({ records: [record] }), true);

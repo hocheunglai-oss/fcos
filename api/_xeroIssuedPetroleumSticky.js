@@ -1,6 +1,7 @@
 import { ISSUED_PETROLEUM_POLICY } from '../config/xeroIssuedPreservationPolicies.js';
 import { issuedSupplierSfId as sf, issuedSupplierCents as cents, issuedSupplierHash as hash } from './_xeroIssuedSupplierPreservation.js';
-import { issuedPetroleumDecimal as decimal } from './_xeroIssuedPetroleumPreservation.js';
+import { issuedPetroleumDecimal as decimal, ISSUED_PETROLEUM_PRESERVATION_V2_POLICY } from './_xeroIssuedPetroleumPreservation.js';
+import { issuedPetroleumPaperUnit, validateIssuedPetroleumAttachmentManifest } from './_xeroIssuedPetroleumPaper.js';
 import { currentPetroleumOwnershipMatches } from './_xeroIssuedPetroleumOwnership.js';
 
 const MISSING_FILE = 'Supplier invoice has no verified issued source file.';
@@ -23,8 +24,10 @@ export function currentIssuedPetroleumMatches(source, context, proof) {
     const accepted = accounting?.source;
     const delivery = accounting?.deliveryIdentity;
     const current = context?.issuedPetroleumCurrent;
-    if (!source || proof?.policyVersion !== ISSUED_PETROLEUM_POLICY || evidence?.policyVersion !== ISSUED_PETROLEUM_POLICY
-      || proof.fingerprint !== hash({ policyVersion: ISSUED_PETROLEUM_POLICY, accounting })
+    const policyVersion = proof?.policyVersion;
+    const v2 = policyVersion === ISSUED_PETROLEUM_PRESERVATION_V2_POLICY;
+    if (!source || ![ISSUED_PETROLEUM_POLICY, ISSUED_PETROLEUM_PRESERVATION_V2_POLICY].includes(policyVersion) || evidence?.policyVersion !== policyVersion
+      || proof.fingerprint !== hash({ policyVersion, accounting })
       || proof.evidenceFingerprint !== hash(evidence) || !accepted || !delivery || context?.complete !== true
       || !(context.accountsById instanceof Map) || !(context.members instanceof Map) || typeof context.matchesFor !== 'function'
       || !current || !['suppliers', 'lines', 'extras', 'products'].every((key) => Array.isArray(current[key]))
@@ -39,6 +42,17 @@ export function currentIssuedPetroleumMatches(source, context, proof) {
       || !Array.isArray(accepted.lines) || accepted.lines.length !== 1 || !Array.isArray(source.lines) || source.lines.length !== 1
       || source.groupedAccounting?.policy !== 'fcos_notax_accounting_v1' || !Array.isArray(source.groupedAccounting.lines)
       || source.groupedAccounting.lines.length !== 1) return false;
+
+    const file = accounting.issuedFile;
+    if (v2) {
+      const review = file?.review;
+      if (!validateIssuedPetroleumAttachmentManifest(file?.attachmentManifest, file)
+        || !sameSf(file.parentId, accepted.salesforceId) || !sameSf(file.link?.parentId, accepted.salesforceId)
+        || review?.sourceNumber !== accepted.documentNumber
+        || (review.invoiceDate !== null && review.invoiceDate !== accepted.invoiceDate)
+        || (review.dueDate !== null && review.dueDate !== accepted.dueDate)
+        || !Array.isArray(review.lines) || review.lines.length !== 1 || issuedPetroleumPaperUnit(review.lines[0]?.unit) !== 'MT') return false;
+    } else if (file && Object.hasOwn(file, 'attachmentManifest')) return false;
 
     const parents = current.suppliers.filter((row) => sameSf(row?.Id, source.salesforceId));
     const children = current.lines.filter((row) => sameSf(row?.Supplier_Invoice__c, source.salesforceId));

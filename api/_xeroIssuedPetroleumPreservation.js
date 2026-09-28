@@ -1,9 +1,11 @@
 import { fcosSalesforceEnvironment } from '../config/fcosConnections.js';
 import { validatePetroleumOwnership } from './_xeroIssuedPetroleumOwnership.js';
+import { issuedPetroleumPaperUnit, validateIssuedPetroleumAttachmentManifest } from './_xeroIssuedPetroleumPaper.js';
 import { issuedSupplierSfId, issuedSupplierCents, issuedSupplierHash, issuedSupplierCanonical,
   issuedSupplierAccountingFingerprint } from './_xeroIssuedSupplierPreservation.js';
 
 export const ISSUED_PETROLEUM_PRESERVATION_POLICY = 'issued_petroleum_preserve_v1';
+export const ISSUED_PETROLEUM_PRESERVATION_V2_POLICY = 'issued_petroleum_preserve_v2';
 export const issuedPetroleumAccountingFingerprint = issuedSupplierAccountingFingerprint;
 const HASH = /^[a-f0-9]{64}$/;
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
@@ -31,10 +33,13 @@ const freeze = (value) => {
 // The collector must re-fetch bytes and independently verify checksum/SHA256 and
 // complete current linkage. Matching labels or client "verified" flags do not do so.
 export function evaluateIssuedPetroleumPreservation(input = {}) {
+  const requestedPolicy = plain(input) && Object.hasOwn(input, 'policyVersion') ? input.policyVersion : ISSUED_PETROLEUM_PRESERVATION_POLICY;
+  const policyVersion = requestedPolicy === ISSUED_PETROLEUM_PRESERVATION_V2_POLICY ? requestedPolicy : ISSUED_PETROLEUM_PRESERVATION_POLICY;
+  const v2 = policyVersion === ISSUED_PETROLEUM_PRESERVATION_V2_POLICY;
   const blockers = [];
   const fail = (code, path, message) => { if (blockers.length < 64) blockers.push({ code, path, message }); };
   const require = (ok, code, path, message) => { if (!ok) fail(code, path, message); return Boolean(ok); };
-  const rejected = () => freeze({ eligible: false, policyVersion: ISSUED_PETROLEUM_PRESERVATION_POLICY, accepted: false,
+  const rejected = () => freeze({ eligible: false, policyVersion, accepted: false,
     requiresExplicitReview: true, fingerprint: null, evidenceFingerprint: null, evidence: null, blockers });
   let root;
   try {
@@ -42,6 +47,7 @@ export function evaluateIssuedPetroleumPreservation(input = {}) {
     if (!json || Buffer.byteLength(json) > 200_000 || !plain(input)) throw new Error('invalid');
     root = JSON.parse(json);
   } catch { fail('EVIDENCE_BOUND', 'input', 'Complete bounded JSON evidence is required.'); return rejected(); }
+  require(requestedPolicy === policyVersion, 'POLICY_UNSUPPORTED', 'policyVersion', 'An explicit supported documentary policy is required.');
   const source = plain(root.source) ? root.source : {};
   const xero = plain(root.xero) ? root.xero : {};
   const identity = plain(root.identity) ? root.identity : {};
@@ -130,7 +136,11 @@ export function evaluateIssuedPetroleumPreservation(input = {}) {
   equal(legalWords(review.buyerName), legalWords('FRATELLI COSULICH BUNKERS (HK) LTD'), 'file.review.buyerName', 'BUYER_MISMATCH');
   equal(counterparts.basis, 'independently_reviewed_literal_pair', 'file.review.counterparties.basis');
   require(review.taxEvidence === 'no_tax_line_or_increment_observed' || review.taxEvidence === 'explicit_zero_tax', 'TAX_EVIDENCE_INVALID', 'file.review.taxEvidence', 'Literal paper tax evidence is required.');
-  equal(review.invoiceDate, sourceDate, 'file.review.invoiceDate'); equal(review.dueDate, source.dueDate, 'file.review.dueDate');
+  // Absence is a literal fact under v2, never a substituted source/delivery date.
+  // Present dates must still agree; source dates and the Xero delivery bridge
+  // remain mandatory independent identity evidence under both policies.
+  if (!v2 || review.invoiceDate !== null) equal(review.invoiceDate, sourceDate, 'file.review.invoiceDate');
+  if (!v2 || review.dueDate !== null) equal(review.dueDate, source.dueDate, 'file.review.dueDate');
   string(review.reviewer, 'file.review.reviewer', false, 200); hash(review.reviewRecordHash, 'file.review.reviewRecordHash');
   require(typeof review.reviewedAt === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(review.reviewedAt) && Number.isFinite(Date.parse(review.reviewedAt)), 'REVIEW_INVALID', 'file.review.reviewedAt', 'A dated factual review is required.');
   const documentId = id(file.documentId, 'file.documentId', true); const versionId = id(file.versionId, 'file.versionId', true);
@@ -144,6 +154,8 @@ export function evaluateIssuedPetroleumPreservation(input = {}) {
   require(typeof file.checksum === 'string' && /^[a-f0-9]{32}$/.test(file.checksum), 'CHECKSUM_INVALID', 'file.checksum', 'The revalidated Salesforce checksum is required.');
   equal(version.checksum, file.checksum, 'file.version.checksum'); equal(version.contentSize, file.contentSize, 'file.version.contentSize');
   require(Number.isSafeInteger(file.contentSize) && file.contentSize > 0 && file.contentSize <= 8_388_608 && file.contentType === 'application/pdf', 'FILE_INVALID', 'file', 'A bounded captured native PDF is required.');
+  require(v2 ? validateIssuedPetroleumAttachmentManifest(file.attachmentManifest, file) : !Object.hasOwn(file, 'attachmentManifest'),
+    'ATTACHMENT_MANIFEST_INVALID', 'file.attachmentManifest', 'A complete current reviewed attachment manifest is required only under the v2 policy.');
   const header = (row, path) => {
     const total = cents(row.total, `${path}.total`, true); const subtotal = cents(row.subtotal, `${path}.subtotal`, true);
     equal(subtotal, total, `${path}.subtotal`, 'HEADER_TOTAL_MISMATCH'); equal(cents(row.totalTax, `${path}.totalTax`), 0n, `${path}.totalTax`, 'TAX_UNSUPPORTED');
@@ -185,7 +197,7 @@ export function evaluateIssuedPetroleumPreservation(input = {}) {
   const paperLine = paperLines[0] || {};
   equal(issuedPetroleumDecimal(paperLine.quantity)?.text, sourceLines[0]?.quantity, 'file.review.lines.quantity', 'QUANTITY_MISMATCH');
   equal(issuedPetroleumDecimal(paperLine.unitPrice)?.text, sourceLines[0]?.unitAmount, 'file.review.lines.unitPrice', 'PRICE_MISMATCH');
-  equal(paperLine.unit, 'MT', 'file.review.lines.unit', 'UNIT_UNSUPPORTED');
+  equal(v2 ? issuedPetroleumPaperUnit(paperLine.unit) : paperLine.unit, 'MT', 'file.review.lines.unit', 'UNIT_UNSUPPORTED');
   equal(id(paperLine.sourceProductId, 'file.review.lines.sourceProductId', true), sourceLines[0]?.productId, 'file.review.lines.sourceProductId');
   equal(paperLine.sourceProductName, delivery.productName, 'file.review.lines.sourceProductName', 'PRODUCT_UNSUPPORTED');
   string(paperLine.productEvidence, 'file.review.lines.productEvidence');
@@ -260,11 +272,11 @@ export function evaluateIssuedPetroleumPreservation(input = {}) {
   'SETTLEMENT_UNSUPPORTED', 'xero.settlementEvidence', 'Complete explicit settlement-collection observations are required.');
   require(plain(xero.unowned), 'EVIDENCE_INCOMPLETE', 'xero.unowned', 'Complete retained Xero metadata is required.');
   require(Array.isArray(xero.rawLineItems) && xero.rawLineItems.length === 1, 'EVIDENCE_INCOMPLETE', 'xero.rawLineItems', 'The complete original Xero line must be retained.');
-  require(Buffer.byteLength(issuedSupplierCanonical({ policyVersion: ISSUED_PETROLEUM_PRESERVATION_POLICY, accounting })) <= 100_000,
+  require(Buffer.byteLength(issuedSupplierCanonical({ policyVersion, accounting })) <= 100_000,
     'EVIDENCE_BOUND', 'accounting', 'The complete immutable proof exceeds the bounded transaction size.');
   if (blockers.length) return rejected();
-  const evidence = { policyVersion: ISSUED_PETROLEUM_PRESERVATION_POLICY, accounting,
+  const evidence = { policyVersion, accounting,
     observations: { status: 'AUTHORISED', amountDueCents: due.toString(), amountPaidCents: '0', amountCreditedCents: '0', ownership: { kind: 'unlinked' } } };
-  return freeze({ eligible: true, policyVersion: ISSUED_PETROLEUM_PRESERVATION_POLICY, requiresExplicitReview: true,
+  return freeze({ eligible: true, policyVersion, requiresExplicitReview: true,
     fingerprint: issuedSupplierAccountingFingerprint(evidence), evidenceFingerprint: issuedSupplierHash(evidence), evidence, accepted: false, blockers: [] });
 }
