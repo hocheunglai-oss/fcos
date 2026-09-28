@@ -1,3 +1,4 @@
+import { xeroFinancialDocumentCorrectionPreview, xeroFinancialDocumentCorrectionPage, xeroFinancialDocumentCorrectionApply, xeroFinancialDocumentCorrectionVerify } from './_xeroDocumentCorrections.js';
 import {
   invalidateContactNameCacheAfterRestore,
   xeroPortalConnectStart,
@@ -54,6 +55,10 @@ export const XERO_HANDLER_MODULE_ACCESS = Object.freeze(Object.fromEntries([
   'xeroFinancialSyncApply',
   'xeroFinancialSyncRun',
   'xeroFinancialPaymentApply',
+  'xeroFinancialDocumentCorrectionPreview',
+  'xeroFinancialDocumentCorrectionPage',
+  'xeroFinancialDocumentCorrectionApply',
+  'xeroFinancialDocumentCorrectionVerify',
   'xeroFinancialDocumentPreservationPreview',
   'xeroFinancialDocumentPreservationRun',
 ].map((name) => [name, ['xero_portal']])));
@@ -101,6 +106,10 @@ export function createXeroHandlers({ requireActiveUser, resolveRecoveredSystemEr
     xeroFinancialSyncApply: wrap(xeroFinancialSyncApply),
     xeroFinancialSyncRun: wrap(xeroFinancialSyncRun),
     xeroFinancialPaymentApply: wrap(xeroFinancialPaymentApply),
+    xeroFinancialDocumentCorrectionPreview: wrap(xeroFinancialDocumentCorrectionPreview),
+    xeroFinancialDocumentCorrectionPage: wrap(xeroFinancialDocumentCorrectionPage),
+    xeroFinancialDocumentCorrectionApply: wrap(xeroFinancialDocumentCorrectionApply),
+    xeroFinancialDocumentCorrectionVerify: wrap(xeroFinancialDocumentCorrectionVerify),
     xeroFinancialDocumentPreservationPreview: wrap(xeroFinancialDocumentPreservationPreview),
     xeroFinancialDocumentPreservationRun: wrap(xeroFinancialDocumentPreservationRun),
   };

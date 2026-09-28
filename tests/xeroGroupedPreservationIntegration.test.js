@@ -5,6 +5,8 @@ import { buildFinancialClassifications, buildXeroAccountingPayload, changedXeroR
   normalizeXeroInvoice, toSyncItemRow, xeroFinancialSyncLatest, xeroFinancialSyncRun, xeroReviewFingerprint, XERO_RECONCILIATION_VERSION } from '../api/_xeroFinancialSync.js';
 import { completeGroupedAccountSnapshot } from '../api/_xeroGroupedPreservationAdapter.js';
 import { groupedPreservationCanonical } from '../api/_xeroGroupedPreservation.js';
+import { projectAccountingPayload } from '../api/_xeroDocumentFieldPolicy.js';
+import { documentCorrectionHash } from '../api/_xeroDocumentCorrectionPersistence.js';
 
 const uuid = (suffix) => `00000000-0000-4000-8000-${String(suffix).padStart(12, '0')}`;
 const sha = (value) => createHash('sha256').update(groupedPreservationCanonical(value)).digest('hex');
@@ -302,6 +304,64 @@ test('accepted grouped links survive own mapping insertion and later PAID status
   const paid = f.build(); assert.equal(paid.acceptedLegacy, true); assert.equal(paid.proposedPayload, null);
   assert.equal(paid.groupedPreservation.fingerprint, initial.groupedPreservation.fingerprint);
   assert.notEqual(paid.groupedPreservation.evidenceFingerprint, accepted.groupedPreservation.evidenceFingerprint);
+});
+
+test('accepted grouped proofs remain verifiable when correction scope is unavailable or legacy', () => {
+  for (const scope of ['unavailable', 'legacy']) {
+    const f = fixture(); const accepted = f.accept();
+    f.salesforce.documentFieldPolicyVersion = 'document_field_correction_v1';
+    if (scope === 'legacy') f.salesforce.buyers.push({ Id: 'a06000000000001', Name: 'BUYER-INV-1', STEM__c: f.supplier.STEM__c,
+      Proforma__c: false, Deprecated__c: false, Delivery_Date__c: '2025-12-31', Invoice_Date__c: '2026-01-03',
+      Invoice_Due_Date__c: '2026-02-03', Amount__c: 1, CurrencyIsoCode: 'USD', STEM__r: {} });
+    const current = () => buildFinancialClassifications(f.salesforce, f.xero, f.stored).rows.find((row) => row.salesforceId === f.supplier.Id);
+    let row = current();
+    assert.equal(row.documentFieldProjection.scope, scope); assert.ok(row.documentFieldProjection.blockers.length);
+    assert.equal(row.sourceFingerprint, accepted.sourceFingerprint); assert.equal(row.acceptedLegacy, true);
+    assert.equal(row.groupedPreservation.accepted, true); assert.equal(row.proposedPayload, null);
+    f.children[0].Unit_Buy_At__c = 10.02;
+    row = current();
+    assert.equal(row.sourceFingerprint, accepted.sourceFingerprint);
+    assert.notEqual(row.status, 'eligible'); assert.notEqual(row.acceptedLegacy, true); assert.equal(row.proposedPayload, null);
+  }
+});
+
+test('missing correction fields do not authorize a new grouped link or accept a corrupted existing proof', () => {
+  const f = fixture(); f.salesforce.documentFieldPolicyVersion = 'document_field_correction_v1';
+  let row = f.build(); assert.equal(row.status, 'blocked'); assert.equal(row.proposedPayload, null);
+  delete f.salesforce.documentFieldPolicyVersion; f.accept(); f.salesforce.documentFieldPolicyVersion = 'document_field_correction_v1';
+  f.stored.documentMappings[0].retained_differences.groupedPreservation.evidence = { corrupted: true };
+  row = f.build(); assert.notEqual(row.status, 'eligible'); assert.notEqual(row.acceptedLegacy, true); assert.equal(row.proposedPayload, null);
+});
+
+test('a corrected grouped bill rechecks its original number in the complete identity scope', () => {
+  const f = fixture(); f.accept();
+  f.salesforce.documentFieldPolicyVersion = 'document_field_correction_v1';
+  Object.assign(f.supplier.STEM__r, { RefCode__c: 'HK2600100T', Vessel__r: { Name: 'VESSEL ONE' } });
+  f.salesforce.buyers.push({ Id: 'a06000000000001', Name: 'BUYER-INV-1', STEM__c: f.supplier.STEM__c,
+    Proforma__c: false, Deprecated__c: false, Delivery_Date__c: '2026-01-03', Invoice_Date__c: '2026-01-05',
+    Invoice_Due_Date__c: '2026-02-03', Amount__c: 1, CurrencyIsoCode: 'USD', STEM__r: {} });
+  const current = () => buildFinancialClassifications(f.salesforce, f.xero, f.stored).rows.find((row) => row.salesforceId === f.supplier.Id);
+  const source = current(); assert.equal(source.acceptedLegacy, true); assert.deepEqual(source.documentFieldProjection.blockers, []);
+  const before = structuredClone(f.rawXero); const after = projectAccountingPayload(before, source.documentFieldProjection);
+  assert.notEqual(after.InvoiceNumber, before.InvoiceNumber);
+  const mapping = f.stored.documentMappings[0];
+  const evidence = { policyVersion: 'document_field_correction_v1', before, expectedAfter: after, mappingSnapshot: structuredClone(mapping),
+    source: { object: source.salesforceObject, id: source.salesforceId, accountId: source.accountId,
+      sourceFingerprint: source.sourceFingerprint, financialFingerprint: source.financialFingerprint,
+      fieldSourceFingerprint: source.documentFieldSourceFingerprint, projectionFingerprint: source.documentFieldProjection.fingerprint } };
+  const claim = { id: uuid(102), mapping_id: mapping.id, xero_invoice_id: f.rawXero.InvoiceID, evidence,
+    evidence_hash: documentCorrectionHash(evidence), created_at: now };
+  const eventEvidence = { basis: 'exact_provider_readback', observed: structuredClone(after) };
+  f.stored.documentCorrectionClaims = [claim];
+  f.stored.documentCorrectionEvents = [{ claim_id: claim.id, sequence: 1, status: 'confirmed', evidence: eventEvidence,
+    evidence_hash: documentCorrectionHash(eventEvidence) }];
+  f.xero.documents = [normalizeXeroInvoice(after)];
+  let row = current();
+  assert.equal(row.documentFieldCorrection?.claimId, claim.id); assert.equal(row.status, 'protected');
+  assert.equal(row.acceptedLegacy, true); assert.equal(row.proposedPayload, null);
+  assert.equal(f.xero.documents[0].invoiceNumber, after.InvoiceNumber, 'restoring the proof scope must not mutate current provider evidence');
+  f.stored.documentMappings[0].retained_differences.groupedPreservation.evidence = { corrupted: true };
+  row = current(); assert.equal(row.documentFieldCorrection, undefined); assert.notEqual(row.acceptedLegacy, true); assert.equal(row.proposedPayload, null);
 });
 
 test('accepted ownership accepts exactly the same canonical SF alias without treating it as a second owner', () => {

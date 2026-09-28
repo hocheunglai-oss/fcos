@@ -1,0 +1,319 @@
+import { randomUUID } from 'node:crypto';
+import { xeroRequestGate } from './_xeroRateLimit.js';
+import { requireExternalActionGate } from './_externalActionGates.js';
+import { getFreshXeroConnection, splitScopes, xeroAccountingFetch, xeroContactSyncServiceClient } from './_xeroContactSync.js';
+import { previewEvidenceHash as hash } from './_xeroPreviewPersistence.js';
+import { allFinancialRows, assertXeroFinancialDailyReserve, buildFinancialClassifications, loadAllXeroPages,
+  loadSalesforceFinancialSnapshot, loadStoredFinancialControls, normalizeXeroInvoice, xeroFinancialRateSnapshot, XERO_FINANCIAL_CUTOFF } from './_xeroFinancialSync.js';
+import { buildDocumentFieldCorrectionPayload, evaluateDocumentFieldCorrection, verifyDocumentFieldCorrectionReadback } from './_xeroDocumentFieldPolicy.js';
+import { claimDocumentCorrection, finishDocumentCorrection } from './_xeroDocumentCorrectionPersistence.js';
+
+const POLICY = 'document_field_correction_v1';
+const TABLE = 'xero_document_field_correction_previews';
+const PAGE_SIZE = 100;
+const uuid = (value) => /^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i.test(value || '');
+const sameSf = (a, b) => Boolean(a && b && a.slice(0, 15) === b.slice(0, 15));
+const fail = (message, code = 'XERO_DOCUMENT_CORRECTION_INVALID', status = 409) => Object.assign(new Error(message), { code, status });
+const money = (a, b) => Number.isFinite(Number(a)) && Number.isFinite(Number(b)) && Math.abs(Number(a) - Number(b)) < 0.005;
+const cleanText = (value) => String(value || '').trim().replace(/\s+/g, ' ').toUpperCase();
+const actorFor = (context) => {
+  const actor = { id: context?.profile?.id, email: String(context?.profile?.email || '').trim().toLowerCase() };
+  if (!uuid(actor.id) || !actor.email) throw fail('An authenticated Finance session is required.', 'XERO_DOCUMENT_CORRECTION_ACTOR_REQUIRED', 403);
+  return actor;
+};
+const isoDate = (value) => {
+  if (typeof value !== 'string') return value;
+  const ms = value.match(/^\/Date\((-?\d+)(?:[+-]\d+)?\)\/$/);
+  return ms ? new Date(Number(ms[1])).toISOString().slice(0, 10) : value.slice(0, 10);
+};
+export function canonicalCorrectionInvoice(invoice) {
+  for (const [field, alias] of [['Date', 'DateString'], ['DueDate', 'DueDateString']]) {
+    if (invoice[alias] !== undefined && isoDate(invoice[alias]) !== isoDate(invoice[field])) throw fail('Xero returned conflicting accounting date fields.', 'XERO_DOCUMENT_CORRECTION_UNCERTAIN');
+  }
+  const { UpdatedDateUTC: _updated, UpdatedDateUTCString: _updatedString, DateString: _dateString, DueDateString: _dueString, ...value } = structuredClone(invoice);
+  value.Date = isoDate(value.Date); value.DueDate = isoDate(value.DueDate);
+  return value;
+}
+function financialBuckets(lines, xero = false) {
+  const result = {};
+  for (const line of lines || []) {
+    const key = `${xero ? line.AccountCode : line.accountCode}:${xero ? line.TaxType : line.taxType}`;
+    const value = xero ? line.LineAmount : Number(line.quantity) * Number(line.unitAmount);
+    if (!Number.isFinite(Number(value)) || !key.split(':').every(Boolean)) return null;
+    if (xero && (Number(line.TaxAmount || 0) !== 0 || Number(line.DiscountRate || line.DiscountAmount || 0) !== 0)) return null;
+    result[key] = (result[key] || 0) + Math.round(Number(value) * 100);
+  }
+  return result;
+}
+function vesselMatches(source, target) {
+  const vessel = cleanText(source.vesselName);
+  if (!vessel) return false;
+  return source.xeroType === 'ACCREC' ? cleanText(target.Reference) === vessel
+    : cleanText(target.InvoiceNumber).endsWith(`-${vessel}`) || cleanText(target.InvoiceNumber).endsWith(`- ${vessel}`);
+}
+const publicItem = (item) => ({ ...Object.fromEntries(['id', 'salesforceId', 'documentNumber', 'kind', 'stemKey', 'vesselName', 'xeroInvoiceId', 'outcome', 'reason', 'changes', 'projectionFingerprint'].map((key) => [key, item[key]])), sourceEvidence: item.projection?.evidence || null,
+  linkOnly: item.outcome === 'eligible' && item.changes.length === 0 && !item.mapping && Boolean(item.before) });
+function summary(items) {
+  return { eligible: items.filter((x) => x.outcome === 'eligible').length, alreadyCompliant: items.filter((x) => x.outcome === 'already_compliant').length,
+    legacyPreserved: items.filter((x) => x.outcome === 'legacy_preserved').length, blocked: items.filter((x) => x.outcome === 'blocked').length,
+    applied: items.filter((x) => x.outcome === 'applied').length, uncertain: items.filter((x) => x.outcome === 'uncertain').length };
+}
+
+// Complete source and target inventories establish one-to-one ownership. The old
+// ERP number itself is never treated as a Salesforce supplier invoice number.
+export function buildDocumentCorrectionItems({ salesforce, xero, stored }) {
+  const { sources, rows: classifications } = buildFinancialClassifications(salesforce, xero, stored);
+  const raw = xero.rawInvoices || [];
+  const items = sources.filter((source) => source.xeroCollection === 'Invoices').map((source) => {
+    const projection = source.documentFieldProjection;
+    const item = { id: randomUUID(), salesforceId: source.salesforceId, documentNumber: source.documentNumber, kind: source.documentKind,
+      stemKey: source.stemKey, vesselName: source.vesselName, xeroInvoiceId: null, outcome: 'blocked', reason: '', changes: [],
+      projectionFingerprint: projection?.fingerprint, source, projection, mapping: null, before: null };
+    if (projection?.scope === 'legacy') return { ...item, outcome: 'legacy_preserved', reason: 'Buyer invoice delivery is before 1 January 2026.' };
+    if (!projection || projection.scope !== 'current' || projection.blockers.length) return { ...item, reason: projection?.blockers.join(' ') || 'Buyer invoice delivery evidence is unavailable.' };
+    if (source.blockers.length) return { ...item, reason: source.blockers.join(' ') };
+    const mappings = stored.documentMappings.filter((m) => m.salesforce_object === source.salesforceObject && sameSf(m.salesforce_id, source.salesforceId));
+    if (mappings.length > 1) return { ...item, reason: 'More than one saved mapping identifies this Salesforce document.' };
+    const mapping = mappings[0]; item.mapping = mapping || null;
+    const compatible = (target) => target.Type === source.xeroType && target.Contact?.ContactID === source.contactId
+      && target.CurrencyCode === source.currency && money(target.Total, source.total) && ['DRAFT', 'SUBMITTED', 'AUTHORISED', 'PAID'].includes(target.Status);
+    const candidates = mapping ? raw.filter((r) => r.InvoiceID === mapping.xero_document_id)
+      : raw.filter((r) => compatible(r) && (r.InvoiceNumber === source.documentNumber || r.InvoiceNumber === projection.fields.InvoiceNumber
+        || (isoDate(r.Date) === projection.fields.Date && vesselMatches(source, r))));
+    if (candidates.length !== 1 || !compatible(candidates[0])) return { ...item, reason: candidates.length ? 'The exact source and Xero identity is ambiguous or conflicts.' : 'No verified existing Xero transaction. Use ordinary sync for a new record.' };
+    const target = candidates[0]; item.xeroInvoiceId = target.InvoiceID;
+    const classified = classifications.find((row) => row.salesforceId === source.salesforceId && row.salesforceObject === source.salesforceObject);
+    if (mapping?.retained_differences?.issuedSupplierPreservation && classified?.status === 'blocked') return { ...item, reason: classified.blockers.join(' ') };
+    if (mapping?.retained_differences?.groupedPreservation && !classified?.acceptedLegacy) return { ...item, reason: 'The existing grouped preservation receipt could not be verified.' };
+    const owner = stored.documentMappings.find((m) => m.xero_document_id === target.InvoiceID
+      && (m.salesforce_object !== source.salesforceObject || !sameSf(m.salesforce_id, source.salesforceId)));
+    if (owner) return { ...item, reason: 'This Xero transaction is already linked to a different Salesforce document.' };
+    if (source.sharedContactAccounts.length > 1 && (!mapping || !sameSf(mapping.retained_differences?.accountId, source.accountId))) return { ...item, reason: 'The shared Contact requires a verified Salesforce Account identity.' };
+    if (mapping && (mapping.xero_contact_id !== target.Contact.ContactID || (mapping.retained_differences?.accountId && !sameSf(mapping.retained_differences.accountId, source.accountId)))) return { ...item, reason: 'The saved Contact or Salesforce Account identity changed.' };
+    if (mapping?.protected_legacy && (mapping.source_fingerprint !== source.sourceFingerprint || mapping.financial_fingerprint !== source.financialFingerprint)) return { ...item, reason: 'Preserved source evidence changed; review the financial evidence before correction.' };
+    const sourceBuckets = financialBuckets(source.lines); const targetBuckets = financialBuckets(target.LineItems, true);
+    if (!sourceBuckets || !targetBuckets || hash(sourceBuckets) !== hash(targetBuckets)) return { ...item, reason: 'Account, tax or complete accounting-line totals differ; this is not a date/reference-only correction.' };
+    if (source.xeroType === 'ACCREC' && raw.some((r) => r.Type === 'ACCREC' && r.InvoiceNumber === projection.fields.InvoiceNumber && r.InvoiceID !== target.InvoiceID)) return { ...item, reason: 'Another Xero sales invoice already uses the proposed invoice number.' };
+    item.before = canonicalCorrectionInvoice(target);
+    const eligibility = evaluateDocumentFieldCorrection({ projection, rawXeroInvoice: item.before, direction: source.xeroType === 'ACCREC' ? 'buyer' : 'supplier', organisation: xero.organisation });
+    item.changes = (eligibility.differences || []).map((d) => ({ field: d.field, before: d.current, after: d.expected }));
+    item.outcome = eligibility.eligible ? (item.changes.length || !mapping ? 'eligible' : 'already_compliant') : 'blocked';
+    item.reason = eligibility.blockers.join(' ') || (item.changes.length ? 'Verified identity and accounting totals; only the displayed fields will change.' : mapping ? 'Already follows the confirmed mapping.' : 'Already follows the mapping; verify and link without changing Xero.');
+    return item;
+  });
+  const targetCounts = new Map();
+  for (const item of items) if (item.xeroInvoiceId) targetCounts.set(item.xeroInvoiceId, (targetCounts.get(item.xeroInvoiceId) || 0) + 1);
+  for (const item of items) if (targetCounts.get(item.xeroInvoiceId) > 1) { item.outcome = 'blocked'; item.reason = 'More than one Salesforce document claims this Xero transaction.'; }
+  return items;
+}
+
+async function currentEvidence(dependencies, rate) {
+  const { env = process.env, fetchImpl = fetch, client = xeroContactSyncServiceClient(env), getConnection = getFreshXeroConnection,
+    loadSalesforce = loadSalesforceFinancialSnapshot, loadControls = loadStoredFinancialControls, accountingFetch = xeroAccountingFetch, loadPages = loadAllXeroPages } = dependencies;
+  const connection = await getConnection(client, { env, fetchImpl });
+  const scopes = splitScopes(connection.scope || '');
+  if (!uuid(connection.tenantId) || !['accounting.invoices', 'accounting.transactions'].some((x) => scopes.includes(x))) throw fail('The connected Xero organisation or invoice scope is unavailable.');
+  const onResponse = ({ headers }) => { Object.assign(rate, xeroFinancialRateSnapshot(headers, rate)); assertXeroFinancialDailyReserve(rate, env); };
+  const requestGate = (tenant, operation, limits) => xeroRequestGate(fetchImpl)(tenant, () => { assertXeroFinancialDailyReserve(rate, env); return operation(); }, limits);
+  const options = { env, fetchImpl, onResponse, callsPerMinute: 45, requestGate };
+  const [salesforce, stored, invoices, contacts, organisations] = await Promise.all([
+    loadSalesforce(XERO_FINANCIAL_CUTOFF), loadControls(client), loadPages(connection, '/Invoices', 'Invoices', options),
+    loadPages(connection, '/Contacts', 'Contacts', options), accountingFetch(connection, '/Organisations', { method: 'GET', ...options }),
+  ]);
+  const organisation = organisations.Organisations?.find((org) => org.OrganisationID === connection.tenantId);
+  if (!organisation) throw fail('Xero organisation identity could not be verified.');
+  const xero = { tenantId: connection.tenantId, rawInvoices: invoices, documents: invoices.filter((r) => ['DRAFT', 'SUBMITTED', 'AUTHORISED', 'PAID'].includes(r.Status)).map(normalizeXeroInvoice),
+    inactiveDocuments: invoices.filter((r) => !['DRAFT', 'SUBMITTED', 'AUTHORISED', 'PAID'].includes(r.Status)).map(normalizeXeroInvoice), contactsComplete: true,
+    contacts: contacts.map((c) => ({ id: c.ContactID, name: c.Name, status: c.ContactStatus, accountNumber: c.AccountNumber || '', contactNumber: c.ContactNumber || '' })),
+    organisation: { periodLockDate: organisation.PeriodLockDate ? isoDate(organisation.PeriodLockDate) : null,
+      endOfYearLockDate: organisation.EndOfYearLockDate ? isoDate(organisation.EndOfYearLockDate) : null, baseCurrency: organisation.BaseCurrency } };
+  return { connection, salesforce, stored, xero, items: buildDocumentCorrectionItems({ salesforce, stored, xero }), onResponse, requestGate };
+}
+
+export async function xeroFinancialDocumentCorrectionPreview(_body = {}, dependencies = {}) {
+  const { env = process.env, client = xeroContactSyncServiceClient(env), accessContext } = dependencies;
+  const actor = actorFor(accessContext); const rate = {};
+  const evidence = await currentEvidence({ ...dependencies, client }, rate);
+  const preview = { id: randomUUID(), tenant_id: evidence.connection.tenantId, policy: POLICY, created_by: actor.id,
+    created_at: new Date().toISOString(), items: evidence.items, summary: summary(evidence.items) };
+  const { error } = await client.from(TABLE).insert(preview);
+  if (error) throw fail('The complete correction preview could not be saved.', 'XERO_DOCUMENT_CORRECTION_STORAGE_FAILED', 503);
+  return { policy: POLICY, previewId: preview.id, createdAt: preview.created_at, items: preview.items.slice(0, PAGE_SIZE).map(publicItem),
+    totalCount: preview.items.length, nextOffset: preview.items.length > PAGE_SIZE ? PAGE_SIZE : null, summary: preview.summary, rateLimit: rate };
+}
+
+export async function xeroFinancialDocumentCorrectionPage(body = {}, dependencies = {}) {
+  const { env = process.env, client = xeroContactSyncServiceClient(env), accessContext } = dependencies;
+  actorFor(accessContext);
+  if (!uuid(body.previewId) || !Number.isSafeInteger(body.offset) || body.offset < 0 || body.offset % PAGE_SIZE) throw fail('Select a valid saved correction preview page.');
+  const { data, error } = await client.rpc('read_xero_document_field_correction_page_v1', { p_preview_id: body.previewId, p_offset: body.offset });
+  if (error || data?.id !== body.previewId || data?.policy !== POLICY || !Array.isArray(data.items)
+    || !Number.isSafeInteger(data.totalCount) || data.totalCount < 0 || (body.offset > 0 && body.offset >= data.totalCount) || data.items.length !== Math.min(PAGE_SIZE, data.totalCount - body.offset)
+    || data.nextOffset !== (body.offset + data.items.length < data.totalCount ? body.offset + PAGE_SIZE : null)) throw fail('The complete saved correction page could not be verified.');
+  return { policy: POLICY, previewId: data.id, createdAt: data.created_at, summary: data.summary, totalCount: data.totalCount,
+    nextOffset: data.nextOffset, items: data.items.map(publicItem) };
+}
+
+function journalEvidence(item, before, _actor, preview) {
+  const fields = item.projection.fields; const expectedAfter = structuredClone(before);
+  const header = { Date: fields.Date, DueDate: fields.DueDate, InvoiceNumber: fields.InvoiceNumber,
+    ...(item.source.xeroType === 'ACCREC' ? { Reference: fields.Reference } : {}) };
+  Object.assign(expectedAfter, header);
+  const lineDescriptions = {};
+  for (const line of expectedAfter.LineItems) { line.Description = fields.Description; lineDescriptions[line.LineItemID] = fields.Description; }
+  return { policyVersion: POLICY, source: { object: item.source.salesforceObject, id: item.salesforceId, accountId: item.source.accountId,
+    stemId: item.source.stemId, documentNumber: item.source.documentNumber, documentKind: item.source.documentKind,
+    xeroType: item.source.xeroType, contactId: item.source.contactId, currency: item.source.currency, total: item.source.total, sourceFingerprint: item.source.sourceFingerprint, financialFingerprint: item.source.financialFingerprint,
+    deliveryDate: fields.Date, fieldSourceFingerprint: item.source.documentFieldSourceFingerprint, projectionFingerprint: item.projectionFingerprint, buyerInvoiceEvidence: item.projection.evidence },
+  before, expectedAfter, projection: { header, lineDescriptions }, mappingSnapshot: item.mapping,
+  authority: { basis: 'explicit_user_requested_2026_field_correction', scopeHash: hash({ previewId: preview.id, itemId: item.id, actorId: preview.created_by }), reviewedAt: preview.created_at } };
+}
+
+async function verifyClaim(claim, saved, context) {
+  const { client, actor, accountingFetch, connection, options, finish, events = [] } = context;
+  const latest = events.filter((event) => event.claim_id === claim.id).sort((a, b) => Number(b.sequence) - Number(a.sequence))[0];
+  if (claim.evidence_hash !== hash(claim.evidence) || claim.evidence.source.object !== saved.source.salesforceObject
+    || !sameSf(claim.evidence.source.id, saved.salesforceId) || claim.xero_invoice_id !== saved.xeroInvoiceId
+    || claim.evidence.source.projectionFingerprint !== saved.projectionFingerprint) throw fail('The original correction intent could not be verified.');
+  if (latest?.status === 'confirmed' && latest.evidence_hash === hash(latest.evidence)
+    && hash(latest.evidence.observed) === hash(claim.evidence.expectedAfter)) return { ...publicItem(saved), outcome: 'applied', reason: 'This correction was already confirmed; no update was resent.' };
+  if (latest?.status === 'rejected') return { ...publicItem(saved), outcome: 'blocked', reason: 'Xero rejected the earlier correction. Create a fresh preview.' };
+  const result = await accountingFetch(connection, `/Invoices/${claim.xero_invoice_id}`, { ...options, method: 'GET' });
+  if (result.Invoices?.length !== 1 || result.Invoices[0].InvoiceID !== claim.xero_invoice_id) throw fail('The exact correction readback is unavailable.');
+  const observed = canonicalCorrectionInvoice(result.Invoices[0]);
+  if (hash(observed) !== hash(claim.evidence.expectedAfter)) return { ...publicItem(saved), outcome: 'uncertain', reason: 'Readback does not yet confirm the exact approved correction. No update was resent; the barrier remains.' };
+  await finish(client, { claimId: claim.id, status: 'confirmed', evidence: { observed, basis: 'exact_provider_readback' }, actor });
+  return { ...publicItem(saved), outcome: 'applied', reason: 'Recovered through exact readback; no update was resent.' };
+}
+
+export async function xeroFinancialDocumentCorrectionVerify(body = {}, dependencies = {}) {
+  const { env = process.env, fetchImpl = fetch, client = xeroContactSyncServiceClient(env), accessContext,
+    getConnection = getFreshXeroConnection, accountingFetch = xeroAccountingFetch, finish = finishDocumentCorrection } = dependencies;
+  const actor = actorFor(accessContext);
+  if (!uuid(body.previewId) || !Array.isArray(body.itemIds) || !body.itemIds.length || body.itemIds.length > 25
+    || body.itemIds.some((id) => !uuid(id)) || new Set(body.itemIds).size !== body.itemIds.length) throw fail('Select the original correction items to verify.');
+  const { data: preview, error } = await client.from(TABLE).select('*').eq('id', body.previewId).maybeSingle();
+  if (error || !preview || preview.policy !== POLICY) throw fail('The original correction preview is unavailable.');
+  const connection = await getConnection(client, { env, fetchImpl });
+  if (connection.tenantId !== preview.tenant_id) throw fail('The reviewed Xero organisation changed.');
+  const [claims, events] = await Promise.all([allFinancialRows(client, 'xero_document_field_correction_claims', (q) => q.eq('tenant_id', preview.tenant_id)),
+    allFinancialRows(client, 'xero_document_field_correction_events')]);
+  const rate = {};
+  const options = { env, fetchImpl, callsPerMinute: 45, retryOnRateLimit: false,
+    requestGate: (tenant, operation, limits) => xeroRequestGate(fetchImpl)(tenant, () => { assertXeroFinancialDailyReserve(rate, env); return operation(); }, limits),
+    onResponse: ({ headers }) => { Object.assign(rate, xeroFinancialRateSnapshot(headers, rate)); assertXeroFinancialDailyReserve(rate, env); } };
+  const items = [];
+  for (const id of body.itemIds) {
+    const saved = preview.items.find((item) => item.id === id);
+    if (!saved) throw fail('The selected item is outside the original correction preview.');
+    const claim = claims.data.find((row) => row.idempotency_key === `${POLICY}:${preview.id}:${id}` && row.xero_invoice_id === saved.xeroInvoiceId);
+    if (!claim) { items.push({ ...publicItem(saved), outcome: 'blocked', reason: 'No previous intent exists; verification never sends a new update.' }); continue; }
+    try { items.push(await verifyClaim(claim, saved, { client, actor, accountingFetch, connection, options, finish, events: events.data })); }
+    catch (err) { items.push({ ...publicItem(saved), outcome: 'uncertain', reason: err.message }); if (Number(err.status) === 429) break; }
+  }
+  for (const id of body.itemIds) if (!items.some((item) => item.id === id)) {
+    const saved = preview.items.find((item) => item.id === id);
+    if (!saved) throw fail('The selected item is outside the original correction preview.');
+    items.push({ ...publicItem(saved), outcome: 'uncertain', reason: 'Verification stopped at the Xero reserve; no update was resent.' });
+  }
+  return { policy: POLICY, previewId: preview.id, items, summary: summary(items), rateLimit: rate };
+}
+
+export async function xeroFinancialDocumentCorrectionApply(body = {}, dependencies = {}) {
+  const { env = process.env, fetchImpl = fetch, client = xeroContactSyncServiceClient(env), accessContext,
+    accountingFetch = xeroAccountingFetch, claim = claimDocumentCorrection, finish = finishDocumentCorrection } = dependencies;
+  requireExternalActionGate('xero_financial_sync', env);
+  const actor = actorFor(accessContext);
+  if (!uuid(body.previewId) || !Array.isArray(body.itemIds) || !body.itemIds.length || body.itemIds.length > 25
+    || body.itemIds.some((id) => !uuid(id)) || new Set(body.itemIds).size !== body.itemIds.length) throw fail('Select between 1 and 25 distinct reviewed corrections.');
+  const { data: preview, error } = await client.from(TABLE).select('*').eq('id', body.previewId).maybeSingle();
+  if (error || !preview || preview.policy !== POLICY) throw fail('The saved correction preview is unavailable.');
+  const selected = body.itemIds.map((id) => preview.items.find((item) => item.id === id));
+  if (selected.some((item) => !item || item.outcome !== 'eligible')) throw fail('Only eligible items from this exact preview can be applied.');
+  const rate = {}; const current = await currentEvidence({ ...dependencies, client }, rate);
+  if (current.connection.tenantId !== preview.tenant_id) throw fail('The reviewed Xero organisation changed.');
+  const outcomes = [];
+  for (const saved of selected) {
+    let claimed = null; let attempted = false;
+    const idempotencyKey = `${POLICY}:${preview.id}:${saved.id}`;
+    const previousClaim = current.stored.documentCorrectionClaims?.find((row) => row.idempotency_key === idempotencyKey && row.tenant_id === preview.tenant_id);
+    try {
+      if (previousClaim) {
+        claimed = previousClaim;
+        outcomes.push(await verifyClaim(previousClaim, saved, { client, actor, accountingFetch, connection: current.connection,
+          options: { env, fetchImpl, onResponse: current.onResponse, callsPerMinute: 45, retryOnRateLimit: false, requestGate: current.requestGate }, finish,
+          events: current.stored.documentCorrectionEvents || [] }));
+        if (outcomes.at(-1).outcome === 'uncertain') break;
+        continue;
+      }
+      const freshSalesforce = await (dependencies.loadSalesforce || loadSalesforceFinancialSnapshot)(XERO_FINANCIAL_CUTOFF);
+      const freshItems = buildDocumentCorrectionItems({ salesforce: freshSalesforce, xero: current.xero, stored: current.stored });
+      const fresh = freshItems.find((item) => item.source.salesforceObject === saved.source.salesforceObject && sameSf(item.salesforceId, saved.salesforceId));
+      if (!fresh || fresh.xeroInvoiceId !== saved.xeroInvoiceId || fresh.projectionFingerprint !== saved.projectionFingerprint
+        || fresh.source.sourceFingerprint !== saved.source.sourceFingerprint || fresh.source.documentFieldSourceFingerprint !== saved.source.documentFieldSourceFingerprint || (!previousClaim && hash(fresh.mapping) !== hash(saved.mapping))) throw fail('Source, mapping or proposed fields changed. Create a fresh preview.');
+      const options = { env, fetchImpl, onResponse: current.onResponse, callsPerMinute: 45, retryOnRateLimit: false, requestGate: current.requestGate };
+      const read = await accountingFetch(current.connection, `/Invoices/${saved.xeroInvoiceId}`, { ...options, method: 'GET' });
+      if (read.Invoices?.length !== 1 || read.Invoices[0].InvoiceID !== saved.xeroInvoiceId) throw fail('The exact current Xero transaction was not returned.');
+      const before = canonicalCorrectionInvoice(read.Invoices[0]);
+      const evidence = journalEvidence(saved, saved.before, actor, preview);
+      // Persist the original reviewed intent. A replay reads it back; it cannot
+      // send another provider mutation, including after an uncertain timeout.
+      if (hash(before) !== hash(saved.before) && hash(before) !== hash(evidence.expectedAfter)) throw fail('Xero changed after preview. Create a fresh preview.');
+      if (fresh.outcome !== 'eligible' && fresh.outcome !== 'already_compliant') throw fail(fresh.reason);
+      if (rate.dayRemaining != null) {
+        const limit = Math.max(1, Number(env.XERO_DAILY_LIMIT || 1000));
+        const reserve = Math.ceil(limit * Math.min(0.9, Math.max(0.2, Number(env.XERO_DAILY_RESERVE_RATIO || 0.2))));
+        if (Number(rate.dayRemaining) <= reserve + 3) throw fail('Insufficient Xero allowance to write and verify this correction while preserving the reserve.', 'XERO_FINANCIAL_DAILY_RESERVE', 429);
+      }
+      claimed = await claim(client, { tenantId: preview.tenant_id, xeroInvoiceId: saved.xeroInvoiceId, mappingId: saved.mapping?.id || null,
+        idempotencyKey, evidence, actor });
+      const lockedRead = await accountingFetch(current.connection, `/Invoices/${saved.xeroInvoiceId}`, { ...options, method: 'GET' });
+      if (lockedRead.Invoices?.length !== 1 || lockedRead.Invoices[0].InvoiceID !== saved.xeroInvoiceId) throw fail('The protected transaction readback was incomplete.', 'XERO_DOCUMENT_CORRECTION_UNCERTAIN');
+      const lockedBefore = canonicalCorrectionInvoice(lockedRead.Invoices[0]);
+      if (hash(lockedBefore) !== hash(before)) throw fail('The Xero transaction changed while the correction was being claimed.', 'XERO_DOCUMENT_CORRECTION_UNCERTAIN');
+      if (claimed.alreadyClaimed || hash(before) === hash(evidence.expectedAfter)) {
+        if (hash(before) !== hash(evidence.expectedAfter)) throw fail('The earlier request has an unconfirmed outcome; readback did not confirm completion.', 'XERO_DOCUMENT_CORRECTION_UNCERTAIN');
+      } else {
+        const payload = buildDocumentFieldCorrectionPayload({ projection: saved.projection, rawXeroInvoice: before,
+          direction: saved.source.xeroType === 'ACCREC' ? 'buyer' : 'supplier', organisation: current.xero.organisation });
+        assertXeroFinancialDailyReserve(rate, env);
+        attempted = true;
+        const response = await accountingFetch(current.connection, `/Invoices/${saved.xeroInvoiceId}`, {
+          ...options, method: 'POST', body: { Invoices: [payload] }, idempotencyKey: claimed.id,
+        });
+        const rejected = response.Invoices?.length === 1 && response.Invoices[0].InvoiceID === saved.xeroInvoiceId
+          && response.Invoices[0].Type === before.Type && response.Invoices[0].Contact?.ContactID === before.Contact.ContactID
+          && response.Invoices[0].CurrencyCode === before.CurrencyCode && response.Invoices[0].HasErrors === true
+          && Array.isArray(response.Invoices[0].ValidationErrors) && response.Invoices[0].ValidationErrors.length > 0
+          && response.Invoices[0].ValidationErrors.every((error) => typeof error.Message === 'string' && error.Message.trim());
+        if (rejected) {
+          const rejectedRead = await accountingFetch(current.connection, `/Invoices/${saved.xeroInvoiceId}`, { ...options, method: 'GET' });
+          const observed = rejectedRead.Invoices?.length === 1 ? canonicalCorrectionInvoice(rejectedRead.Invoices[0]) : null;
+          if (!observed || hash(observed) !== hash(before)) throw fail('Provider rejection did not have an unchanged exact readback.', 'XERO_DOCUMENT_CORRECTION_UNCERTAIN');
+          const reason = response.Invoices[0].ValidationErrors.map((error) => error.Message).join(' ').slice(0, 2000);
+          await finish(client, { claimId: claimed.id, status: 'rejected', evidence: { observed, basis: 'definitive_provider_rejection', reason }, actor });
+          outcomes.push({ ...publicItem(saved), outcome: 'blocked', reason });
+          continue;
+        }
+        if (!Array.isArray(response.Invoices) || response.Invoices.length !== 1 || response.Invoices[0].InvoiceID !== saved.xeroInvoiceId
+          || response.Invoices[0].HasErrors || response.Invoices[0].ValidationErrors?.length) throw fail('Xero did not confirm the exact requested correction.', 'XERO_DOCUMENT_CORRECTION_UNCERTAIN');
+      }
+      const result = await accountingFetch(current.connection, `/Invoices/${saved.xeroInvoiceId}`, { ...options, method: 'GET' });
+      if (result.Invoices?.length !== 1 || result.Invoices[0].InvoiceID !== saved.xeroInvoiceId) throw fail('Correction readback was incomplete.', 'XERO_DOCUMENT_CORRECTION_UNCERTAIN');
+      const after = canonicalCorrectionInvoice(result.Invoices[0]);
+      const verified = verifyDocumentFieldCorrectionReadback({ before: saved.before, after, projection: saved.projection,
+        direction: saved.source.xeroType === 'ACCREC' ? 'buyer' : 'supplier' });
+      if (!verified.ok || hash(after) !== hash(evidence.expectedAfter)) throw fail('The correction readback changed unapproved fields or did not match the requested values.', 'XERO_DOCUMENT_CORRECTION_UNCERTAIN');
+      await finish(client, { claimId: claimed.id, status: 'confirmed', evidence: { observed: after, basis: 'exact_provider_readback' }, actor });
+      outcomes.push({ ...publicItem(saved), outcome: 'applied', reason: 'Exact Xero readback verified; financial details and payments preserved.' });
+    } catch (err) {
+      if (claimed) {
+        await finish(client, { claimId: claimed.id, status: 'uncertain', evidence: { observed: null, basis: 'unconfirmed_provider_outcome', reason: err.message }, actor }).catch(() => {});
+      }
+      outcomes.push({ ...publicItem(saved), outcome: claimed || attempted ? 'uncertain' : 'blocked', reason: err.message });
+      if (claimed || attempted || Number(err.status) === 429) break;
+    }
+  }
+  for (const item of selected) if (!outcomes.some((row) => row.id === item.id)) outcomes.push({ ...publicItem(item), outcome: 'blocked', reason: 'Batch stopped before this record; no update attempted.' });
+  return { policy: POLICY, previewId: preview.id, items: outcomes, summary: summary(outcomes), rateLimit: rate };
+}

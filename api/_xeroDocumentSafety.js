@@ -96,7 +96,7 @@ export function documentPostingBlockers(source, organisation = {}, current = nul
     if (source.readiness?.ready !== true && !readinessBlockers.length) blockers.push('Issued source readiness evidence is missing.');
   }
   const lockDate = [organisation.periodLockDate, organisation.endOfYearLockDate].filter(Boolean).sort().at(-1);
-  if (authorised && lockDate && source.invoiceDate && source.invoiceDate <= lockDate) {
+  if (authorised && lockDate && (source.documentFieldProjection?.fields?.Date || source.invoiceDate) && (source.documentFieldProjection?.fields?.Date || source.invoiceDate) <= lockDate) {
     blockers.push('The proposed accounting date falls in a locked Xero period.');
   }
   return blockers;
@@ -204,7 +204,7 @@ export function documentConfirmationErrors(row, response) {
   for (const [field, actual, expected] of [
     ['accounting status', response.Status, payload.Status], ['transaction type', response.Type, source.xeroType],
     ['Contact', response.Contact?.ContactID, source.contactId], ['currency', response.CurrencyCode, source.currency],
-    ['document number', response[keys.number], source.documentNumber],
+    ['document number', response[keys.number], payload[keys.number] || source.documentNumber],
   ]) if (typeof actual !== 'string' || !actual || !expected || actual !== expected) errors.push(`Xero did not confirm the reviewed ${field}.`);
   if (typeof response.Total !== 'number' || !Number.isFinite(response.Total) || !Number.isFinite(source.total) || !moneyEqual(response.Total, source.total)) errors.push('Xero did not confirm the reviewed document total.');
   if (response.HasErrors === true || (response.ValidationErrors !== undefined && !Array.isArray(response.ValidationErrors))) errors.push('Xero reported an unconfirmed transaction result.');

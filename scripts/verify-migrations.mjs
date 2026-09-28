@@ -29,6 +29,7 @@ const migrationSources = await Promise.all(names.map(async (name) => ({
   sql: await readFile(new URL(name, migrationDirectory), 'utf8'),
 })));
 const releaseMigrationNames = new Set([
+  '20260928053229_xero_document_field_correction_journal.sql',
   '20260928033217_xero_issued_petroleum_attachment_preservation_v2.sql',
   '20260927213024_xero_petroleum_inactive_source_ownership.sql',
   '20260927185526_xero_issued_petroleum_preservation_link.sql',
@@ -80,6 +81,13 @@ async function assertRows(sql, expected, label, values = []) {
 }
 
 async function verifyRuntimeObjects(label) {
+  const correctionTables = ['xero_document_field_correction_previews', 'xero_document_field_correction_claims', 'xero_document_field_correction_events'];
+  await assertRows(`select count(*)::int from pg_class c join pg_namespace n on n.oid=c.relnamespace
+    where n.nspname='public' and c.relname=any($1::text[]) and c.relrowsecurity`, 3, `${label} correction journal RLS`, [correctionTables]);
+  await assertRows(`select count(*)::int from unnest($1::text[]) t cross join unnest(array['anon','authenticated']) r
+    cross join unnest(array['SELECT','INSERT','UPDATE','DELETE']) p where has_table_privilege(r,'public.'||t,p)`, 0, `${label} correction browser access denied`, [correctionTables]);
+  await assertRows(`select count(*)::int from unnest($1::text[]) t cross join unnest(array['UPDATE','DELETE','TRUNCATE']) p
+    where has_table_privilege('service_role','public.'||t,p)`, 0, `${label} correction journal append-only`, [correctionTables]);
   const identityTables = ['xero_contact_identity_decisions', 'xero_contact_identity_audit'];
   await assertRows(`select count(*)::int from pg_class c join pg_namespace n on n.oid=c.relnamespace
     where n.nspname='public' and c.relname=any($1::text[]) and c.relrowsecurity`, 2, `${label} contact identity RLS`, [identityTables]);
@@ -120,6 +128,7 @@ async function verifyRuntimeObjects(label) {
     [['xero_financial_payment_mappings_canonical_sf_uidx', 'xero_financial_payment_mappings_canonical_xero_uidx']],
   );
   const releaseFunctions = [
+    'claim_xero_document_field_correction_v1', 'finish_xero_document_field_correction_v1', 'read_xero_document_field_correction_page_v1',
     'link_xero_issued_petroleum_document_v1',
     'link_xero_issued_petroleum_document_v2', 'xero_issued_petroleum_attachment_manifest_v2',
     'link_xero_issued_supplier_document_v1',

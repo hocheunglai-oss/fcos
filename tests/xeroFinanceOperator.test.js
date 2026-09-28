@@ -295,3 +295,188 @@ test('malformed successful mutation responses are uncertain and cannot report co
   await assert.rejects(runXeroFinanceOperator(args(file, 'run', runId),
     { fetchImpl: responses({ xeroFinancialSyncLatest: { preview: authorised }, xeroFinancialSyncRun: {} }).fetchImpl }), { code: 'MUTATION_RESULT_UNKNOWN' });
 });
+
+const correctionItemTwo = '3016048a-5419-4fc9-896d-cdaf2ecfc18e';
+const correctionItemThree = '88a7595a-f512-45c5-8c15-1908b6db4d0c';
+const correctionHandlers = {
+  'corrections-preview': 'xeroFinancialDocumentCorrectionPreview',
+  'corrections-apply': 'xeroFinancialDocumentCorrectionApply',
+  'corrections-verify': 'xeroFinancialDocumentCorrectionVerify',
+};
+const correctionRow = (id, outcome = 'eligible') => ({ id, salesforceId: 'a01000000000001AAA',
+  documentNumber: `INV-${id.slice(0, 8)}`, kind: 'buyer_invoice', stemKey: 'STEM-ONE', vesselName: 'HUAYUE',
+  xeroInvoiceId: tenantId, outcome, reason: 'Verified accounting totals; only the displayed fields differ.',
+  changes: [{ field: 'Reference', before: 'OLD REFERENCE', after: 'HUAYUE' }], projectionFingerprint: fingerprint });
+const correctionResult = (items = [correctionRow(documentId), correctionRow(correctionItemTwo)]) => ({
+  policy: 'document_field_correction_v1', previewId: runId, createdAt: '2026-09-28T01:00:00Z', items,
+  totalCount: items.length, nextOffset: null,
+  summary: { eligible: items.filter((row) => row.outcome === 'eligible').length,
+    alreadyCompliant: items.filter((row) => row.outcome === 'already_compliant').length,
+    legacyPreserved: items.filter((row) => row.outcome === 'legacy_preserved').length,
+    blocked: items.filter((row) => row.outcome === 'blocked').length,
+    applied: items.filter((row) => row.outcome === 'applied').length,
+    uncertain: items.filter((row) => row.outcome === 'uncertain').length },
+  rateLimit: { dayRemaining: 4998, observedAt: '2026-09-28T01:00:00Z' },
+});
+
+test('correction operator preview is explicit, does not select or apply rows and hides row details unless requested', async (t) => {
+  const file = await sessionFile(t);
+  const fixture = responses({ xeroFinancialDocumentCorrectionPreview: correctionResult() });
+  const result = await runXeroFinanceOperator(args(file, 'corrections-preview'), { fetchImpl: fixture.fetchImpl });
+  assert.equal(result.command, 'corrections-preview'); assert.equal(result.previewId, runId);
+  assert.equal(result.summary.eligible, 2); assert.equal(Object.hasOwn(result, 'rows'), false);
+  assert.deepEqual(fixture.calls.map((call) => call.name), ['authContext', 'xeroFinancialDocumentCorrectionPreview']);
+  assert.deepEqual(JSON.parse(fixture.calls.at(-1).init.body), {});
+  const detailed = await runXeroFinanceOperator(args(file, 'corrections-preview', '--show-rows'), { fetchImpl: fixture.fetchImpl });
+  assert.deepEqual(detailed.rows.map((row) => row.id), [documentId, correctionItemTwo]);
+  assert.equal(detailed.rows[0].changes[0].after, 'HUAYUE');
+  assert.equal(fixture.calls.some((call) => ['xeroFinancialDocumentCorrectionApply', 'xeroFinancialDocumentCorrectionVerify', 'xeroFinancialSyncRun'].includes(call.name)), false);
+});
+
+test('correction apply and verify send only the exact original preview and explicit selected UUIDs, without ordinary sync or implicit preview', async (t) => {
+  const file = await sessionFile(t);
+  for (const command of ['corrections-apply', 'corrections-verify']) {
+    const handler = correctionHandlers[command];
+    const rows = [correctionRow(correctionItemTwo, 'applied'), correctionRow(documentId, 'uncertain')];
+    const fixture = responses({ [handler]: correctionResult(rows) });
+    const result = await runXeroFinanceOperator(args(file, command, runId, documentId, correctionItemTwo), { fetchImpl: fixture.fetchImpl });
+    assert.equal(result.command, command); assert.equal(result.previewId, runId);
+    assert.deepEqual(result.rows.map((row) => row.id), [correctionItemTwo, documentId], 'A complete uniquely identified reordered response is valid');
+    assert.deepEqual(fixture.calls.map((call) => call.name), ['authContext', handler]);
+    assert.deepEqual(JSON.parse(fixture.calls.at(-1).init.body), { previewId: runId, itemIds: [documentId, correctionItemTwo] });
+    assert.equal(fixture.calls.at(-1).init.redirect, 'error');
+    assert.equal(fixture.calls.some((call) => ['xeroFinancialSyncLatest', 'xeroFinancialSyncApply', 'xeroFinancialSyncRun', 'xeroFinancialDocumentCorrectionPreview'].includes(call.name)), false);
+  }
+});
+
+test('correction command arguments require one preview and 1–25 distinct exact UUIDs; selection is never inferred', () => {
+  const file = '/tmp/unused-correction-session';
+  assert.equal(parseOperatorArgs(args(file, 'corrections-preview')).command, 'corrections-preview');
+  assert.throws(() => parseOperatorArgs(args(file, 'corrections-preview', runId)), { code: 'ARGUMENT_INVALID' });
+  const twentyFive = Array.from({ length: 25 }, (_, index) => `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`);
+  for (const command of ['corrections-apply', 'corrections-verify']) {
+    const parsed = parseOperatorArgs(args(file, command, runId, ...twentyFive));
+    assert.deepEqual(parsed.ids, [runId, ...twentyFive]);
+    for (const values of [[], [runId], ['invalid-preview', documentId], [runId, paymentId], [runId, documentId, documentId],
+      [runId, ...twentyFive, correctionItemTwo]]) {
+      assert.throws(() => parseOperatorArgs(args(file, command, ...values)), { code: 'ARGUMENT_INVALID' });
+    }
+    assert.throws(() => parseOperatorArgs(args(file, command, runId, documentId, '--mode', 'authorised')), { code: 'ARGUMENT_INVALID' });
+    assert.throws(() => parseOperatorArgs(args(file, command, runId, '--show-rows', '--row-id', documentId)), { code: 'ARGUMENT_INVALID' });
+  }
+});
+
+test('all correction commands retain the human operator permission check before correction handlers', async (t) => {
+  const file = await sessionFile(t);
+  for (const command of Object.keys(correctionHandlers)) {
+    const fixture = responses({ authContext: { ...auth, capabilities: { xero_portal_manage: false } } });
+    await assert.rejects(runXeroFinanceOperator(args(file, command, ...(command === 'corrections-preview' ? [] : [runId, documentId])),
+      { fetchImpl: fixture.fetchImpl }), { code: 'FINANCE_ACCESS_DENIED' });
+    assert.deepEqual(fixture.calls.map((call) => call.name), ['authContext']);
+  }
+});
+
+test('correction apply and verify reject incomplete, duplicated, foreign or malformed response identities without retrying', async (t) => {
+  const file = await sessionFile(t);
+  for (const command of ['corrections-apply', 'corrections-verify']) {
+    const handler = correctionHandlers[command];
+    const valid = correctionResult([correctionRow(documentId, 'applied'), correctionRow(correctionItemTwo, 'uncertain')]);
+    for (const data of [
+      {}, { ...valid, policy: 'unknown' }, { ...valid, previewId: correctionItemThree }, { ...valid, items: null },
+      { ...valid, items: valid.items.slice(0, 1) }, { ...valid, items: [valid.items[0], valid.items[0]] },
+      { ...valid, items: [valid.items[0], correctionRow(correctionItemThree, 'applied')] },
+      { ...valid, items: [valid.items[0], null] },
+    ]) {
+      const fixture = responses({ [handler]: data });
+      await assert.rejects(runXeroFinanceOperator(args(file, command, runId, documentId, correctionItemTwo), { fetchImpl: fixture.fetchImpl }), { code: 'MUTATION_RESULT_UNKNOWN' });
+      assert.equal(fixture.calls.filter((call) => call.name === handler).length, 1);
+      assert.equal(fixture.calls.some((call) => call.name === 'xeroFinancialDocumentCorrectionPreview'), false);
+    }
+  }
+});
+
+test('correction responses require complete supported outcomes and valid unique preview identities', async (t) => {
+  const file = await sessionFile(t);
+  for (const command of ['corrections-apply', 'corrections-verify']) {
+    const handler = correctionHandlers[command];
+    for (const item of [{ id: documentId }, correctionRow(documentId, 'processing'), correctionRow(documentId, 'eligible')]) {
+      const fixture = responses({ [handler]: correctionResult([item]) });
+      await assert.rejects(runXeroFinanceOperator(args(file, command, runId, documentId), { fetchImpl: fixture.fetchImpl }), { code: 'MUTATION_RESULT_UNKNOWN' });
+      assert.equal(fixture.calls.filter((call) => call.name === handler).length, 1);
+    }
+  }
+  for (const items of [[correctionRow('not-a-uuid')], [correctionRow(documentId), correctionRow(documentId)], [null]]) {
+    const fixture = responses({ xeroFinancialDocumentCorrectionPreview: { ...correctionResult([]), items } });
+    await assert.rejects(runXeroFinanceOperator(args(file, 'corrections-preview'), { fetchImpl: fixture.fetchImpl }), { code: 'MUTATION_RESULT_UNKNOWN' });
+    assert.equal(fixture.calls.filter((call) => call.name === 'xeroFinancialDocumentCorrectionPreview').length, 1);
+  }
+});
+
+test('correction network, transport and incomplete JSON failures make one attempt and never leak raw errors or credentials', async (t) => {
+  const file = await sessionFile(t);
+  for (const command of Object.keys(correctionHandlers)) {
+    const handler = correctionHandlers[command];
+    const commandArgs = args(file, command, ...(command === 'corrections-preview' ? [] : [runId, documentId]));
+    for (const failure of ['network', 'html', 'invalid-json']) {
+      const base = responses(); let attempts = 0;
+      const fetchImpl = async (url, init) => {
+        if (url.endsWith(`/${handler}`)) {
+          attempts += 1;
+          if (failure === 'network') throw new Error(`Private failed response ${token}`);
+          return new Response(failure === 'html' ? `<html>${token}</html>` : '{', {
+            headers: { 'content-type': failure === 'html' ? 'text/html' : 'application/json' },
+          });
+        }
+        return base.fetchImpl(url, init);
+      };
+      let stderr = '';
+      const code = await main(commandArgs, { fetchImpl, stdout: { write() {} }, stderr: { write(value) { stderr += value; } } });
+      assert.equal(code, 1); assert.equal(attempts, 1);
+      assert.match(stderr, /MUTATION_RESULT_UNKNOWN/);
+      assert.doesNotMatch(stderr, /signature|Private failed|Bearer|<html>/);
+      assert.deepEqual(base.calls.map((call) => call.name), ['authContext']);
+    }
+  }
+});
+
+test('correction output is credential-free and excludes any unexpected source payload or private provider fields', async (t) => {
+  const file = await sessionFile(t);
+  for (const command of Object.keys(correctionHandlers)) {
+    const handler = correctionHandlers[command];
+    const item = { ...correctionRow(documentId, command === 'corrections-preview' ? 'eligible' : 'applied'),
+      access_token: 'SECRET', rawPayload: { password: 'SECRET' }, before: { refresh_token: 'SECRET' } };
+    const data = { ...correctionResult([item]), summary: { eligible: 1, access_token: 'SECRET' },
+      rateLimit: { dayRemaining: 4998, refresh_token: 'SECRET' } };
+    const fixture = responses({ [handler]: data });
+    const result = await runXeroFinanceOperator(args(file, command, ...(command === 'corrections-preview' ? ['--show-rows'] : [runId, documentId])), { fetchImpl: fixture.fetchImpl });
+    assert.equal(result.rows[0].changes[0].after, 'HUAYUE');
+    assert.doesNotMatch(JSON.stringify(result), /SECRET|access_token|refresh_token|password|rawPayload/);
+  }
+});
+
+test('correction preview operator collects every saved page even without row output and never applies the collected inventory', async (t) => {
+  const file = await sessionFile(t);
+  for (const showRows of [false, true]) {
+    const first = { ...correctionResult([correctionRow(documentId)]), totalCount: 2, nextOffset: 1 };
+    const page = { ...correctionResult([correctionRow(correctionItemTwo)]), totalCount: 2, nextOffset: null };
+    const fixture = responses({ xeroFinancialDocumentCorrectionPreview: first, xeroFinancialDocumentCorrectionPage: page });
+    const result = await runXeroFinanceOperator(args(file, 'corrections-preview', ...(showRows ? ['--show-rows'] : [])), { fetchImpl: fixture.fetchImpl });
+    assert.deepEqual(fixture.calls.map((call) => call.name), ['authContext', 'xeroFinancialDocumentCorrectionPreview', 'xeroFinancialDocumentCorrectionPage']);
+    assert.deepEqual(JSON.parse(fixture.calls.at(-1).init.body), { previewId: runId, offset: 1 });
+    assert.equal(Object.hasOwn(result, 'rows'), showRows);
+    if (showRows) assert.deepEqual(result.rows.map((row) => row.id), [documentId, correctionItemTwo]);
+  }
+});
+
+test('correction preview operator rejects mismatched, duplicate, nonprogressing and incomplete saved pages', async (t) => {
+  const file = await sessionFile(t);
+  const first = { ...correctionResult([correctionRow(documentId)]), totalCount: 2, nextOffset: 1 };
+  const page = { ...correctionResult([correctionRow(correctionItemTwo)]), totalCount: 2, nextOffset: null };
+  for (const invalid of [{ ...page, previewId: correctionItemThree }, { ...page, policy: 'different' }, { ...page, totalCount: 3 },
+    { ...page, items: [correctionRow(documentId)] }, { ...page, items: [], nextOffset: null }, { ...page, nextOffset: 1 }]) {
+    const fixture = responses({ xeroFinancialDocumentCorrectionPreview: first, xeroFinancialDocumentCorrectionPage: invalid });
+    await assert.rejects(runXeroFinanceOperator(args(file, 'corrections-preview', '--show-rows'), { fetchImpl: fixture.fetchImpl }), { code: 'MUTATION_RESULT_UNKNOWN' });
+    assert.equal(fixture.calls.filter((call) => call.name === 'xeroFinancialDocumentCorrectionPreview').length, 1);
+    assert.equal(fixture.calls.some((call) => ['xeroFinancialDocumentCorrectionApply', 'xeroFinancialDocumentCorrectionVerify'].includes(call.name)), false);
+  }
+});

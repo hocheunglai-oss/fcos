@@ -7,9 +7,9 @@ import { canRestoreContactRow, confirmedContactRestore } from '../../src/lib/xer
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SALESFORCE_ID = /^[a-zA-Z0-9]{15}(?:[a-zA-Z0-9]{3})?$/;
 const IDENTITY_REASONS = new Set(['used-unmatched-xero-contact', 'unused-unmatched-xero-contact', 'nonzero-balance', 'verification-stale', 'verified-xero-only']);
-const ALLOWED_COMMANDS = new Set(['status', 'preview', 'run', 'apply', 'payments', 'mappings', 'contact-repair', 'contact-restore',
+const ALLOWED_COMMANDS = new Set(['corrections-preview', 'corrections-apply', 'corrections-verify', 'status', 'preview', 'run', 'apply', 'payments', 'mappings', 'contact-repair', 'contact-restore',
   'contacts-status', 'contacts-preview', 'contacts-verify', 'contacts-revoke']);
-const MUTATIONS = new Set(['xeroFinancialSyncPreview', 'xeroFinancialSyncApply', 'xeroFinancialSyncRun', 'xeroFinancialPaymentApply',
+const MUTATIONS = new Set(['xeroFinancialDocumentCorrectionPreview', 'xeroFinancialDocumentCorrectionApply', 'xeroFinancialDocumentCorrectionVerify', 'xeroFinancialSyncPreview', 'xeroFinancialSyncApply', 'xeroFinancialSyncRun', 'xeroFinancialPaymentApply',
   'xeroPortalContactLifecyclePreview', 'xeroContactIdentitySave', 'xeroContactRepairApply', 'xeroContactRestoreApply']);
 const PRODUCTION_ORIGIN = new URL(FCOS_CONNECTION_POLICY.attestation.endpoint).origin;
 const FCOS_AUTH_ISSUER = new URL(FCOS_CONNECTION_POLICY.integrations.fcunoIdentityFederation.oidcCallbackUrl).origin + '/auth/v1';
@@ -58,9 +58,9 @@ export function parseOperatorArgs(argv) {
   const ids = first === 'contacts' ? remaining.slice(1) : remaining;
   if (!ALLOWED_COMMANDS.has(command) || !options.sessionFile) throw operatorError('ARGUMENT_INVALID', 'A command and --session-file are required.');
   if (!['draft', 'authorised'].includes(options.mode) || (command !== 'preview' && seen.has('--mode'))) throw operatorError('ARGUMENT_INVALID', 'Posting mode is only valid for preview.');
-  if ((['status', 'preview', 'mappings', 'contacts-status', 'contacts-preview', 'contacts-verify', 'contacts-revoke'].includes(command) && ids.length)
+  if ((['corrections-preview', 'status', 'preview', 'mappings', 'contacts-status', 'contacts-preview', 'contacts-verify', 'contacts-revoke'].includes(command) && ids.length)
     || (command === 'run' && ids.length !== 1)
-    || (['apply', 'payments', 'contact-repair', 'contact-restore'].includes(command) && ids.length < 2)) {
+    || (['apply', 'payments', 'contact-repair', 'contact-restore', 'corrections-apply', 'corrections-verify'].includes(command) && ids.length < 2)) {
     throw operatorError('ARGUMENT_INVALID', 'Apply, payments, contact repair and restoration require a run ID and explicit row IDs; run takes one run ID.');
   }
   if (['contacts-verify', 'contacts-revoke'].includes(command) !== Boolean(options.inputFile)) {
@@ -72,11 +72,12 @@ export function parseOperatorArgs(argv) {
     throw operatorError('ARGUMENT_INVALID', '--row-id requires --show-rows and at most 25 distinct current row IDs.');
   }
   if (ids.length && !UUID.test(ids[0])) throw operatorError('ARGUMENT_INVALID', 'Run ID must be a UUID.');
-  if (command === 'apply' && ids.slice(1).some((id) => !UUID.test(id))) throw operatorError('ARGUMENT_INVALID', 'Document row IDs must be UUIDs.');
+  if (['apply', 'corrections-apply', 'corrections-verify'].includes(command) && ids.slice(1).some((id) => !UUID.test(id))) throw operatorError('ARGUMENT_INVALID', 'Document row IDs must be UUIDs.');
   if (command === 'payments' && ids.slice(1).some((id) => !SALESFORCE_ID.test(id))) throw operatorError('ARGUMENT_INVALID', 'Payment row IDs must be Salesforce IDs.');
   if (['contact-repair', 'contact-restore'].includes(command) && (ids.length > 26 || ids.slice(1).some((id) => !/^[a-zA-Z0-9_-]{1,100}$/.test(id)))) {
     throw operatorError('ARGUMENT_INVALID', 'Contact repair and restore require 1 to 25 explicit lifecycle row IDs.');
   }
+  if (['corrections-apply', 'corrections-verify'].includes(command) && ids.length > 26) throw operatorError('ARGUMENT_INVALID', 'At most 25 reviewed corrections may be selected.');
   if (new Set(ids.slice(1)).size !== ids.slice(1).length) throw operatorError('ARGUMENT_INVALID', 'Duplicate row IDs are not allowed.');
   return { ...options, command, ids, origin: resolveOperatorOrigin(options.origin, options.allowLocalhost) };
 }
@@ -138,6 +139,24 @@ function safeText(value) {
   const text = value.slice(0, 240);
   return /bearer\s+\S+|(?:access[_-]?token|refresh[_-]?token|client[_-]?secret|api[_-]?key|password)\s*[:=]|\beyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\./i.test(text)
     ? '[REDACTED]' : text;
+}
+
+function correctionRow(value) {
+  const row = Object.fromEntries(['id', 'salesforceId', 'documentNumber', 'kind', 'stemKey', 'vesselName', 'xeroInvoiceId', 'outcome', 'reason', 'projectionFingerprint'].map((key) => [key, safeText(value[key])]));
+  row.linkOnly = value.linkOnly === true;
+  row.changes = (value.changes || []).map((change) => ({ field: safeText(change.field), before: safeText(change.before), after: safeText(change.after) }));
+  const source = value.sourceEvidence;
+  if (source && typeof source === 'object') row.sourceEvidence = {
+    ...Object.fromEntries(['sourceId', 'originalName', 'stemId', 'resolution', 'vesselName', 'refCode', 'dueDate', 'dateSource', 'descriptionSource', 'dueDateSource'].map((key) => [key, safeText(source[key])])),
+    buyers: (Array.isArray(source.buyers) ? source.buyers : []).map((buyer) => Object.fromEntries(['id', 'name', 'deliveryDate', 'invoiceDate'].map((key) => [key, safeText(buyer[key])]))),
+  };
+  return row;
+}
+
+function correctionRate(value) {
+  return Object.fromEntries(['dayRemaining', 'minuteRemaining', 'appMinuteRemaining', 'retryAfterSeconds', 'dayResetAt', 'retryAt', 'observedAt', 'limitProblem'].map((key) => {
+    const item = value?.[key]; return [key, typeof item === 'number' && Number.isFinite(item) ? item : safeText(item)];
+  }));
 }
 
 function runSummary(run) {
@@ -289,6 +308,31 @@ export async function runXeroFinanceOperator(argv, { fetchImpl = fetch } = {}) {
   };
   const auth = await call('authContext');
   const actor = validateHuman(auth, subject);
+  if (args.command.startsWith('corrections-')) {
+    const name = { 'corrections-preview': 'xeroFinancialDocumentCorrectionPreview', 'corrections-apply': 'xeroFinancialDocumentCorrectionApply', 'corrections-verify': 'xeroFinancialDocumentCorrectionVerify' }[args.command];
+    const data = await call(name, args.command === 'corrections-preview' ? {} : { previewId: args.ids[0], itemIds: args.ids.slice(1) });
+    if (args.command === 'corrections-preview') {
+      if (!Number.isSafeInteger(data.totalCount) || data.totalCount < 0 || !Array.isArray(data.items)) throw uncertainMutation();
+      const items = [...data.items]; let next = data.nextOffset;
+      while (next !== null) {
+        if (!Number.isSafeInteger(next) || next !== items.length || next <= 0 || next >= data.totalCount) throw uncertainMutation();
+        const page = await call('xeroFinancialDocumentCorrectionPage', { previewId: data.previewId, offset: next });
+        if (page.previewId !== data.previewId || page.policy !== data.policy || page.totalCount !== data.totalCount
+          || !Array.isArray(page.items) || !page.items.length) throw uncertainMutation();
+        items.push(...page.items); next = page.nextOffset;
+      }
+      if (items.length !== data.totalCount) throw uncertainMutation();
+      data.items = items;
+    }
+    const allowedOutcomes = args.command === 'corrections-preview' ? ['eligible', 'already_compliant', 'legacy_preserved', 'blocked'] : ['applied', 'already_compliant', 'blocked', 'uncertain'];
+    if (data.policy !== 'document_field_correction_v1' || !UUID.test(data.previewId || '') || !Array.isArray(data.items)
+      || data.items.some((row) => !row || !UUID.test(row.id || '') || !allowedOutcomes.includes(row.outcome) || !Array.isArray(row.changes))
+      || new Set(data.items.map((row) => row.id)).size !== data.items.length
+      || (args.command !== 'corrections-preview' && (data.previewId !== args.ids[0] || data.items.length !== args.ids.length - 1
+        || new Set(data.items.map(row => row.id)).size !== data.items.length || data.items.some(row => !args.ids.slice(1).includes(row.id))))) throw uncertainMutation();
+    return { command: args.command, actor, previewId: data.previewId, summary: counts(data.summary), rateLimit: correctionRate(data.rateLimit),
+      ...(args.showRows || args.command !== 'corrections-preview' ? { rows: data.items.map(correctionRow), rowsTruncated: false } : {}) };
+  }
   if (args.command === 'status') {
     const [portal, latest] = await Promise.all([call('xeroPortalStatus'), call('xeroFinancialSyncLatest')]);
     return { command: 'status', actor, origin: args.origin, connected: portal.xero?.connected === true,
