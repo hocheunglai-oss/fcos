@@ -154,12 +154,35 @@ test('separate mapped bills may repeat the derived reference without losing thei
 
 test('pre-cutoff normal documents are preserved by buyer delivery date even when issue dates are current', () => {
   const f = fixture(); f.buyer.Delivery_Date__c = '2025-12-31';
+  const result = f.build();
+  assert.deepEqual(result.rows, [], 'known legacy deliveries are outside ordinary 2026 review');
+  assert.equal(result.sources.length, 2, 'complete historical sources remain available for identity and correction-scope evidence');
+  assert.ok(result.sources.every((source) => source.documentFieldProjection.scope === 'legacy'));
+});
+
+test('ordinary review keeps unknown delivery holds and pre-issued invoices delivered at the exact cutoff', () => {
+  const f = fixture();
+  f.buyer.Invoice_Date__c = '2025-12-10'; f.supplier.Invoice_Date__c = '2025-12-11';
+  f.buyer.Delivery_Date__c = '2026-01-01';
+  assert.equal(f.build().rows.length, 2, 'invoice issue year cannot exclude delivery in 2026');
+  f.buyer.Delivery_Date__c = null;
   const rows = f.build().rows;
-  assert.equal(rows.length, 2);
-  for (const row of rows) {
-    assert.equal(row.documentFieldProjection.scope, 'legacy'); assert.equal(row.action, 'protected_legacy');
-    assert.equal(row.status, 'protected'); assert.equal(row.proposedPayload, null); assert.equal(row.acceptedLegacy, false);
-  }
+  assert.equal(rows.length, 2, 'unknown dates cannot be treated as proven legacy');
+  assert.ok(rows.every((row) => row.status === 'blocked' && row.proposedPayload === null));
+});
+
+test('pre-cutoff sources remain in shared Contact ownership evidence for current rows', () => {
+  const f = fixture();
+  const old = copy(f.buyer);
+  Object.assign(old, { Id: 'a01000000000002', Name: 'OLDER-INVOICE', Delivery_Date__c: '2025-12-31' });
+  old.STEM__r.Account__c = '001000000000003';
+  old.STEM__r.Account__r = { Name: 'Buyer' };
+  f.salesforce.buyers.push(old);
+  const result = f.build();
+  assert.equal(result.sources.length, 3); assert.equal(result.rows.length, 2);
+  const current = result.rows.find((row) => row.salesforceId === f.buyer.Id);
+  assert.equal(current.sharedContactAccounts.length, 2);
+  assert.ok(current.sharedContactAccounts.some((account) => account.accountId === old.STEM__r.Account__c));
 });
 
 test('expanding normal invoice evidence does not bring pre-2026 credits into routine posting', () => {

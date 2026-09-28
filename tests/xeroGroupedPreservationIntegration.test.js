@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createHash } from 'node:crypto';
-import { buildFinancialClassifications, buildXeroAccountingPayload, changedXeroReviewItems, loadSalesforceFinancialSnapshot,
+import { buildFinancialClassifications, buildXeroAccountingPayload, changedXeroReviewItems, classifyXeroFinancialDocument, loadSalesforceFinancialSnapshot,
   normalizeXeroInvoice, toSyncItemRow, xeroFinancialSyncLatest, xeroFinancialSyncRun, xeroReviewFingerprint, XERO_RECONCILIATION_VERSION } from '../api/_xeroFinancialSync.js';
-import { completeGroupedAccountSnapshot } from '../api/_xeroGroupedPreservationAdapter.js';
+import { buildGroupedPreservationContext, completeGroupedAccountSnapshot } from '../api/_xeroGroupedPreservationAdapter.js';
 import { groupedPreservationCanonical } from '../api/_xeroGroupedPreservation.js';
 import { projectAccountingPayload } from '../api/_xeroDocumentFieldPolicy.js';
 import { documentCorrectionHash } from '../api/_xeroDocumentCorrectionPersistence.js';
@@ -313,15 +313,27 @@ test('accepted grouped proofs remain verifiable when correction scope is unavail
     if (scope === 'legacy') f.salesforce.buyers.push({ Id: 'a06000000000001', Name: 'BUYER-INV-1', STEM__c: f.supplier.STEM__c,
       Proforma__c: false, Deprecated__c: false, Delivery_Date__c: '2025-12-31', Invoice_Date__c: '2026-01-03',
       Invoice_Due_Date__c: '2026-02-03', Amount__c: 1, CurrencyIsoCode: 'USD', STEM__r: {} });
-    const current = () => buildFinancialClassifications(f.salesforce, f.xero, f.stored).rows.find((row) => row.salesforceId === f.supplier.Id);
+    const current = () => {
+      const classified = buildFinancialClassifications(f.salesforce, f.xero, f.stored);
+      const visible = classified.rows.find((row) => row.salesforceId === f.supplier.Id);
+      if (scope !== 'legacy') return visible;
+      assert.equal(visible, undefined, 'Known legacy deliveries stay outside ordinary review');
+      const source = classified.sources.find((row) => row.salesforceId === f.supplier.Id);
+      assert.ok(source, 'Complete legacy source evidence remains available');
+      return { ...source, ...classifyXeroFinancialDocument(source, f.xero.documents, {
+        storedMapping: f.stored.documentMappings[0], organisation: f.xero.organisation,
+        groupedContext: buildGroupedPreservationContext(f.salesforce, f.xero, f.stored, classified.sources),
+        correctionControls: f.stored,
+      }) };
+    };
     let row = current();
     assert.equal(row.documentFieldProjection.scope, scope); assert.ok(row.documentFieldProjection.blockers.length);
     assert.equal(row.sourceFingerprint, accepted.sourceFingerprint); assert.equal(row.acceptedLegacy, true);
-    assert.equal(row.groupedPreservation.accepted, true); assert.equal(row.proposedPayload, null);
+    assert.equal(row.groupedPreservation.accepted, true); assert.equal(row.proposedPayload ?? null, null);
     f.children[0].Unit_Buy_At__c = 10.02;
     row = current();
     assert.equal(row.sourceFingerprint, accepted.sourceFingerprint);
-    assert.notEqual(row.status, 'eligible'); assert.notEqual(row.acceptedLegacy, true); assert.equal(row.proposedPayload, null);
+    assert.notEqual(row.status, 'eligible'); assert.notEqual(row.acceptedLegacy, true); assert.equal(row.proposedPayload ?? null, null);
   }
 });
 

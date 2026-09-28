@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import XeroDailyAllowance from '@/components/xero/XeroDailyAllowance';
 import { latestXeroDailyAllowance } from '@/lib/xeroDailyAllowance';
-import { collectDocumentCorrectionPreview, documentCorrectionInitialSelection, documentCorrectionOutcomeLabel, documentCorrectionOutcomes,
+import { collectDocumentCorrectionPreview, documentCorrectionInitialSelection, documentCorrectionOutcomeLabel, documentCorrectionOutcomes, documentCorrectionPreviewError,
   documentCorrectionSelectable, documentCorrectionSelection, documentCorrectionValue,
   XERO_DOCUMENT_CORRECTION_BATCH_LIMIT } from '@/lib/xeroDocumentCorrectionsUi';
 import './XeroDocumentCorrections.css';
@@ -59,12 +59,12 @@ export default function XeroDocumentCorrections({ onClose, enabled, canPreview, 
       const result = await appClient.functions.invoke('xeroFinancialDocumentCorrectionPreview', {}, OPTIONS);
       if (current !== generation.current) return;
       captureAllowance(result.data);
-      if (result.data?.error) throw new Error(result.data.error);
+      if (result.data?.error) throw new Error(documentCorrectionPreviewError(result) || result.data.error);
       const complete = await collectDocumentCorrectionPreview(result.data, async (previewId, offset) => {
         const next = await appClient.functions.invoke('xeroFinancialDocumentCorrectionPage', { previewId, offset }, OPTIONS);
         if (current !== generation.current) throw new Error('Preview closed.');
         captureAllowance(next.data);
-        if (next.data?.error) throw new Error(next.data.error);
+        if (next.data?.error) throw new Error(documentCorrectionPreviewError(next) || next.data.error);
         return next.data;
       }, (received, total) => { if (current === generation.current) setPreviewProgress({ received, total }); });
       setPreview(complete);
@@ -144,10 +144,11 @@ export default function XeroDocumentCorrections({ onClose, enabled, canPreview, 
       {error && <p role="alert" className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</p>}
       {busy === 'preview' && <p role="status" className="text-sm">{previewProgress ? `Loading correction preview: ${previewProgress.received} of ${previewProgress.total} records.` : 'Checking document fields.'} No corrections are being applied.</p>}
       {preview && <>
+        <p className={MUTED}>{preview.scope.totalSourceCount} source records; {items.length} reviewable. {preview.scope.excludedLegacyCount} before {preview.scope.cutoff} preserved outside this table.</p>
         <div className="flex flex-wrap gap-2" aria-label="Correction preview summary">
           {[['eligible', 'Eligible', 'eligible'], ['alreadyCompliant', 'Already compliant', 'already_compliant'],
             ['legacyPreserved', 'Legacy preserved', 'legacy_preserved'], ['blocked', 'Blocked', 'blocked']].map(([key, label, outcome]) =>
-            <Badge key={key} variant="outline">{label}: {preview.summary?.[key] ?? items.filter((item) => item.outcome === outcome).length}</Badge>)}
+            <Badge key={key} variant="outline">{label}: {preview.summary?.[key] ?? (items.filter((item) => item.outcome === outcome).length + (key === 'legacyPreserved' ? preview.scope.excludedLegacyCount : 0))}</Badge>)}
         </div>
         <p className={`${MUTED} break-all`}>Preview {preview.previewId}{preview.createdAt ? ` · ${new Date(preview.createdAt).toLocaleString('en-HK')}` : ''}</p>
         {items.length > 0 && <div className="flex flex-wrap items-center justify-between gap-2">
@@ -241,12 +242,13 @@ function CorrectionSourceEvidence({ evidence }) {
           ['Vessel', evidence.vesselName], ['STEM reference code', evidence.refCode],
         ].map(([label, value]) => <div key={label}><dt className="inline font-semibold">{label}: </dt><dd className="inline">{documentCorrectionValue(value)}</dd></div>)}
       </dl>
-      {buyers.length > 0 ? <div><p className="font-semibold">Verified buyer invoice evidence</p><ul className="mt-1 space-y-2">{buyers.map((buyer, index) => <BuyerEvidence key={`${buyer.id}:${index}`} buyer={buyer} />)}</ul></div>
-        : <p>No verified buyer invoice evidence is available.</p>}
       {unresolvedIds.length > 0 && <p><span className="font-semibold">Linked buyer invoice IDs pending verification: </span>{unresolvedIds.join(', ')}</p>}
-      {fallback && <div><p className="font-semibold">Buyer invoices considered on this STEM</p>{fallback.length
-        ? <ul className="mt-1 space-y-2">{fallback.map((buyer, index) => <BuyerEvidence key={`${buyer.id}:${index}`} buyer={buyer} />)}</ul>
-        : <p className="mt-1">No buyer invoice candidates were found.</p>}</div>}
+      {[
+        ['Verified buyer invoice evidence', buyers, 'No verified buyer invoice evidence is available.'],
+        ['Buyer invoices considered on this STEM', fallback, 'No buyer invoice candidates were found.'],
+      ].map(([title, values, empty]) => values && <div key={title}><p className="font-semibold">{title}</p>{values.length
+        ? <ul className="mt-1 space-y-2">{values.map((buyer, index) => <BuyerEvidence key={`${buyer.id}:${index}`} buyer={buyer} />)}</ul>
+        : <p className="mt-1">{empty}</p>}</div>)}
     </div> : <p className={`mt-2 ${MUTED}`}>Source evidence is unavailable. Prepare a new preview.</p>}
   </details>;
 }

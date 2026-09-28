@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { collectDocumentCorrectionPreview, documentCorrectionInitialSelection, documentCorrectionOutcomes, documentCorrectionPreviewValid,
+import { collectDocumentCorrectionPreview, documentCorrectionInitialSelection, documentCorrectionOutcomes, documentCorrectionPreviewError, documentCorrectionPreviewValid,
   documentCorrectionSelectable, documentCorrectionSelection, documentCorrectionValue } from '../src/lib/xeroDocumentCorrectionsUi.js';
 
 const eligible = { id: 'one', outcome: 'eligible', projectionFingerprint: 'verified', changes: [{ field: 'Date', before: null, after: '2026-01-01' }] };
-const preview = { policy: 'document_field_correction_v1', previewId: 'preview-one', totalCount: 2, nextOffset: null, items: [eligible,
+const preview = { policy: 'document_field_correction_v1', previewId: 'preview-one', totalCount: 2, nextOffset: null,
+  scope: { cutoff: '2026-01-01', totalSourceCount: 2, excludedLegacyCount: 0 }, items: [eligible,
   { ...eligible, id: 'blocked', outcome: 'blocked', reason: 'Paid date update not supported.' }] };
 
 test('correction selection requires a verified eligible unique item from the current preview', () => {
@@ -24,7 +25,8 @@ test('correction selection requires a verified eligible unique item from the cur
 });
 
 test('default selection and apply batches never exceed 25 eligible items', () => {
-  const large = { ...preview, totalCount: 26, items: Array.from({ length: 26 }, (_, index) => ({ ...eligible, id: String(index) })) };
+  const large = { ...preview, totalCount: 26, scope: { ...preview.scope, totalSourceCount: 26 },
+    items: Array.from({ length: 26 }, (_, index) => ({ ...eligible, id: String(index) })) };
   const selected = documentCorrectionInitialSelection(large);
   assert.equal(selected.size, 25);
   assert.equal(documentCorrectionSelection(large, selected).length, 25);
@@ -42,7 +44,7 @@ test('a verified no-op link is selectable only with the explicit server link-onl
 });
 
 test('preview page collection requires the stable complete saved inventory before selection', async () => {
-  const first = { ...preview, totalCount: 3, nextOffset: 1, items: [eligible] };
+  const first = { ...preview, totalCount: 3, scope: { ...preview.scope, totalSourceCount: 3 }, nextOffset: 1, items: [eligible] };
   const second = { ...first, items: [{ ...eligible, id: 'two' }], nextOffset: 2 };
   const third = { ...first, items: [{ ...eligible, id: 'three' }], nextOffset: null };
   const calls = []; const progress = [];
@@ -59,6 +61,37 @@ test('preview page collection requires the stable complete saved inventory befor
     await assert.rejects(collectDocumentCorrectionPreview(first, async () => page), /Incomplete correction preview/);
   }
   await assert.rejects(collectDocumentCorrectionPreview({ ...preview, totalCount: undefined }, async () => third), /Incomplete correction preview/);
+});
+
+test('excluded legacy scope stays a bounded count and all saved pages require stable complete source counts', async () => {
+  const large = { ...preview, scope: { cutoff: '2026-01-01', totalSourceCount: 18002, excludedLegacyCount: 18000 },
+    summary: { eligible: 1, blocked: 1, legacyPreserved: 18000 } };
+  const complete = await collectDocumentCorrectionPreview(large, async () => assert.fail('No excluded legacy page should be requested'));
+  assert.equal(complete.items.length, 2);
+  assert.equal(complete.scope.totalSourceCount, 18002);
+  assert.equal(complete.summary.legacyPreserved, 18000);
+  assert.ok(JSON.stringify(complete).length < 1000);
+  const first = { ...large, items: [eligible], nextOffset: 1 };
+  for (const scope of [undefined, { ...large.scope, cutoff: '2025-01-01' }, { ...large.scope, totalSourceCount: 18003 },
+    { ...large.scope, excludedLegacyCount: -1 }, { ...large.scope, excludedLegacyCount: 18000.5 }]) {
+    assert.equal(documentCorrectionPreviewValid({ ...large, scope }), false);
+    assert.deepEqual(documentCorrectionSelection({ ...large, scope }, new Set(['one'])), []);
+    await assert.rejects(collectDocumentCorrectionPreview(first, async () => ({ ...large, scope, items: [preview.items[1]] })), /Incomplete correction preview/);
+  }
+  await assert.rejects(collectDocumentCorrectionPreview(first, async () => ({ ...large,
+    scope: { ...large.scope, totalSourceCount: 28002, excludedLegacyCount: 28000 }, items: [preview.items[1]] })), /Incomplete correction preview/);
+});
+
+test('known incomplete scans show only the curated code and safe public request reference', () => {
+  const code = 'XERO_DOCUMENT_CORRECTION_SCOPE_INCOMPLETE';
+  const result = { data: { code, error: 'SECRET upstream request', requestId: 'request-123', details: { raw: 'SECRET' } } };
+  assert.equal(documentCorrectionPreviewError(result), `${code}: Evidence scope incomplete. No corrections applied. Request reference: request-123`);
+  assert.match(documentCorrectionPreviewError({ data: { code }, meta: { requestId: 'header-reference' } }), /header-reference/);
+  const vercelReference = 'hnd1::zp2bc-1790577332496-c3f8507dfcb6';
+  assert.equal(documentCorrectionPreviewError({ data: { ...result.data, requestId: vercelReference } }),
+    `${code}: Evidence scope incomplete. No corrections applied. Request reference: ${vercelReference}`);
+  assert.doesNotMatch(documentCorrectionPreviewError({ data: { ...result.data, requestId: 'https://SECRET.invalid' } }), /SECRET|https:/);
+  assert.equal(documentCorrectionPreviewError({ data: { code: 'UNKNOWN', error: 'SECRET' } }), null);
 });
 
 test('only a unique supported apply result confirms each requested item; unknown or missing outcomes remain uncertain', () => {

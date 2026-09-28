@@ -310,6 +310,7 @@ const correctionRow = (id, outcome = 'eligible') => ({ id, salesforceId: 'a01000
 const correctionResult = (items = [correctionRow(documentId), correctionRow(correctionItemTwo)]) => ({
   policy: 'document_field_correction_v1', previewId: runId, createdAt: '2026-09-28T01:00:00Z', items,
   totalCount: items.length, nextOffset: null,
+  scope: { cutoff: '2026-01-01', totalSourceCount: items.length, excludedLegacyCount: 0 },
   summary: { eligible: items.filter((row) => row.outcome === 'eligible').length,
     alreadyCompliant: items.filter((row) => row.outcome === 'already_compliant').length,
     legacyPreserved: items.filter((row) => row.outcome === 'legacy_preserved').length,
@@ -446,6 +447,7 @@ test('correction output is credential-free and excludes any unexpected source pa
     const item = { ...correctionRow(documentId, command === 'corrections-preview' ? 'eligible' : 'applied'),
       access_token: 'SECRET', rawPayload: { password: 'SECRET' }, before: { refresh_token: 'SECRET' } };
     const data = { ...correctionResult([item]), summary: { eligible: 1, access_token: 'SECRET' },
+      scope: { cutoff: '2026-01-01', totalSourceCount: 1, excludedLegacyCount: 0, access_token: 'SECRET' },
       rateLimit: { dayRemaining: 4998, refresh_token: 'SECRET' } };
     const fixture = responses({ [handler]: data });
     const result = await runXeroFinanceOperator(args(file, command, ...(command === 'corrections-preview' ? ['--show-rows'] : [runId, documentId])), { fetchImpl: fixture.fetchImpl });
@@ -457,26 +459,43 @@ test('correction output is credential-free and excludes any unexpected source pa
 test('correction preview operator collects every saved page even without row output and never applies the collected inventory', async (t) => {
   const file = await sessionFile(t);
   for (const showRows of [false, true]) {
-    const first = { ...correctionResult([correctionRow(documentId)]), totalCount: 2, nextOffset: 1 };
-    const page = { ...correctionResult([correctionRow(correctionItemTwo)]), totalCount: 2, nextOffset: null };
+    const scope = { cutoff: '2026-01-01', totalSourceCount: 18002, excludedLegacyCount: 18000 };
+    const first = { ...correctionResult([correctionRow(documentId)]), scope, summary: { eligible: 2, legacyPreserved: 18000 }, totalCount: 2, nextOffset: 1 };
+    const page = { ...correctionResult([correctionRow(correctionItemTwo)]), scope, totalCount: 2, nextOffset: null };
     const fixture = responses({ xeroFinancialDocumentCorrectionPreview: first, xeroFinancialDocumentCorrectionPage: page });
     const result = await runXeroFinanceOperator(args(file, 'corrections-preview', ...(showRows ? ['--show-rows'] : [])), { fetchImpl: fixture.fetchImpl });
     assert.deepEqual(fixture.calls.map((call) => call.name), ['authContext', 'xeroFinancialDocumentCorrectionPreview', 'xeroFinancialDocumentCorrectionPage']);
     assert.deepEqual(JSON.parse(fixture.calls.at(-1).init.body), { previewId: runId, offset: 1 });
     assert.equal(Object.hasOwn(result, 'rows'), showRows);
+    assert.deepEqual(result.scope, scope);
+    assert.equal(result.summary.legacyPreserved, 18000);
     if (showRows) assert.deepEqual(result.rows.map((row) => row.id), [documentId, correctionItemTwo]);
   }
 });
 
 test('correction preview operator rejects mismatched, duplicate, nonprogressing and incomplete saved pages', async (t) => {
   const file = await sessionFile(t);
-  const first = { ...correctionResult([correctionRow(documentId)]), totalCount: 2, nextOffset: 1 };
-  const page = { ...correctionResult([correctionRow(correctionItemTwo)]), totalCount: 2, nextOffset: null };
+  const scope = { cutoff: '2026-01-01', totalSourceCount: 2, excludedLegacyCount: 0 };
+  const first = { ...correctionResult([correctionRow(documentId)]), scope, totalCount: 2, nextOffset: 1 };
+  const page = { ...correctionResult([correctionRow(correctionItemTwo)]), scope, totalCount: 2, nextOffset: null };
   for (const invalid of [{ ...page, previewId: correctionItemThree }, { ...page, policy: 'different' }, { ...page, totalCount: 3 },
-    { ...page, items: [correctionRow(documentId)] }, { ...page, items: [], nextOffset: null }, { ...page, nextOffset: 1 }]) {
+    { ...page, items: [correctionRow(documentId)] }, { ...page, items: [], nextOffset: null }, { ...page, nextOffset: 1 },
+    { ...page, scope: undefined }, { ...page, scope: { ...scope, cutoff: '2025-01-01' } },
+    { ...page, scope: { ...scope, totalSourceCount: 1002, excludedLegacyCount: 1000 } }]) {
     const fixture = responses({ xeroFinancialDocumentCorrectionPreview: first, xeroFinancialDocumentCorrectionPage: invalid });
     await assert.rejects(runXeroFinanceOperator(args(file, 'corrections-preview', '--show-rows'), { fetchImpl: fixture.fetchImpl }), { code: 'MUTATION_RESULT_UNKNOWN' });
     assert.equal(fixture.calls.filter((call) => call.name === 'xeroFinancialDocumentCorrectionPreview').length, 1);
     assert.equal(fixture.calls.some((call) => ['xeroFinancialDocumentCorrectionApply', 'xeroFinancialDocumentCorrectionVerify'].includes(call.name)), false);
+  }
+});
+
+test('correction operator rejects missing or contradictory initial source scope without implicit retry', async (t) => {
+  const file = await sessionFile(t);
+  for (const scope of [undefined, { cutoff: '2025-01-01', totalSourceCount: 2, excludedLegacyCount: 0 },
+    { cutoff: '2026-01-01', totalSourceCount: 2, excludedLegacyCount: 1 },
+    { cutoff: '2026-01-01', totalSourceCount: 1, excludedLegacyCount: -1 }]) {
+    const fixture = responses({ xeroFinancialDocumentCorrectionPreview: { ...correctionResult(), scope } });
+    await assert.rejects(runXeroFinanceOperator(args(file, 'corrections-preview'), { fetchImpl: fixture.fetchImpl }), { code: 'MUTATION_RESULT_UNKNOWN' });
+    assert.deepEqual(fixture.calls.map((call) => call.name), ['authContext', 'xeroFinancialDocumentCorrectionPreview']);
   }
 });

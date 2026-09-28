@@ -23,12 +23,17 @@ const row = (id, outcome = 'eligible') => ({ id, salesforceId: `salesforce-${id}
       proforma: false, deprecated: false, inactive: false, credit: false }, { id: 'salesforce-proforma', name: 'INV-PROFORMA',
       deliveryDate: '2026-01-27', invoiceDate: '2026-01-26', proforma: true, deprecated: false, inactive: false, credit: false }] } : {}) },
   projectionFingerprint: `verified-${id}` });
-const items = ['paged', 'paged-pending', 'paged-invalid'].includes(scenario) ? Array.from({ length: 101 }, (_, index) => row(`page-${index + 1}`))
+const sourceItems = ['paged', 'paged-pending', 'paged-invalid', 'paged-scope-invalid'].includes(scenario) ? Array.from({ length: 101 }, (_, index) => row(`page-${index + 1}`))
   : scenario === 'batch' ? Array.from({ length: 26 }, (_, index) => row(String(index + 1)))
+  : scenario === 'legacy-cohort' ? [row('one'), row('two'), row('paid-date', 'blocked'), row('matched', 'already_compliant'),
+    ...Array.from({ length: 12000 }, (_, index) => row(`legacy-${index}`, 'legacy_preserved'))]
   : [row('one'), row('two'), row('paid-date', 'blocked'), row('legacy', 'legacy_preserved'), row('matched', 'already_compliant')];
+const items = sourceItems.filter((item) => item.outcome !== 'legacy_preserved');
+const scope = { cutoff: '2026-01-01', totalSourceCount: sourceItems.length, excludedLegacyCount: sourceItems.length - items.length };
 const preview = { policy: 'document_field_correction_v1', previewId: 'correction-preview-one', createdAt: '2026-09-28T01:00:00.000Z', items,
-  totalCount: items.length, nextOffset: null,
-  summary: { eligible: items.filter((item) => item.outcome === 'eligible').length, alreadyCompliant: 1, legacyPreserved: 1, blocked: 1 },
+  totalCount: items.length, nextOffset: null, scope,
+  summary: { eligible: items.filter((item) => item.outcome === 'eligible').length, alreadyCompliant: 1,
+    legacyPreserved: scope.excludedLegacyCount, blocked: 1 },
   rateLimit: { dayRemaining: 4998, observedAt: '2026-09-28T01:00:00.000Z' } };
 const checkedAt = new Date().toISOString();
 const ordinary = { run: { id: 'ordinary-run', revision: 1, status: 'ready_for_review', createdAt: checkedAt, postingMode: 'draft' },
@@ -36,18 +41,23 @@ const ordinary = { run: { id: 'ordinary-run', revision: 1, status: 'ready_for_re
 const portalStatus = { externalActions: { xero_financial_sync: { enabled: scenario !== 'locked' } },
   xero: { connected: true, scopeFlags: { invoices: true, contacts: true, settingsRead: true, paymentsRead: true } } };
 let finishApply; let finishPage;
-window.documentCorrectionFixture = { requests, items, finishApply: () => finishApply?.(), finishPage: () => finishPage?.() };
+window.documentCorrectionFixture = { requests, items, previewBytes: JSON.stringify(preview).length,
+  finishApply: () => finishApply?.(), finishPage: () => finishPage?.() };
 appClient.functions.invoke = async (name, body) => {
   requests.push({ name, body: structuredClone(body) });
   if (name === 'xeroFinancialMappingsGet') return { data: { productMappings: [], bankMappings: [], accountOptions: [], taxOptions: [] } };
   if (name === 'xeroFinancialSyncLatest') return { data: { preview: structuredClone(ordinary) } };
   if (name === 'xeroFinancialSyncPreview') return { data: structuredClone(ordinary) };
-  if (name === 'xeroFinancialDocumentCorrectionPreview') return { data: structuredClone(items.length > 100
-    ? { ...preview, items: items.slice(0, 100), nextOffset: 100 } : preview) };
+  if (name === 'xeroFinancialDocumentCorrectionPreview') {
+    if (scenario === 'scope-error') return { data: { error: 'SECRET raw upstream request', code: 'XERO_DOCUMENT_CORRECTION_SCOPE_INCOMPLETE',
+      requestId: 'hnd1::zp2bc-1790577332496-c3f8507dfcb6', details: { rateLimit: { dayRemaining: 4200, observedAt: '2026-09-28T01:00:00.000Z' }, raw: 'SECRET' } } };
+    return { data: structuredClone(items.length > 100 ? { ...preview, items: items.slice(0, 100), nextOffset: 100 } : preview) };
+  }
   if (name === 'xeroFinancialDocumentCorrectionPage') {
     if (body.previewId !== preview.previewId || body.offset !== 100) throw new Error('Unexpected saved-preview page request.');
     if (scenario === 'paged-pending') await new Promise((resolve) => { finishPage = resolve; });
     return { data: structuredClone({ ...preview, previewId: scenario === 'paged-invalid' ? 'different-preview' : preview.previewId,
+      scope: scenario === 'paged-scope-invalid' ? { ...scope, totalSourceCount: scope.totalSourceCount + 1, excludedLegacyCount: 1 } : scope,
       items: items.slice(100), nextOffset: null }) };
   }
   if (name === 'xeroFinancialDocumentCorrectionApply') {

@@ -42,9 +42,11 @@ test.describe('offline document correction review', () => {
     const two = dialog.getByRole('row').filter({ hasText: 'INV-TWO' });
     await expect(one.getByRole('checkbox')).toBeChecked();
     await expect(one).toContainText('Reference differs');
-    for (const number of ['INV-PAID-DATE', 'INV-LEGACY', 'INV-MATCHED']) {
+    for (const number of ['INV-PAID-DATE', 'INV-MATCHED']) {
       await expect(dialog.getByRole('row').filter({ hasText: number }).getByRole('checkbox')).toBeDisabled();
     }
+    await expect(dialog.getByRole('row').filter({ hasText: 'INV-LEGACY' })).toHaveCount(0);
+    await expect(dialog).toContainText('5 source records; 4 reviewable. 1 before 2026-01-01 preserved outside this table.');
     await expect(dialog).toContainText('paid documents remain eligible');
     await one.locator('summary').first().click();
     await expect(one).toContainText('Before: (empty)');
@@ -191,5 +193,29 @@ test.describe('offline document correction review', () => {
     await expect(dialog.getByRole('row')).toHaveCount(0);
     await expect(dialog.getByRole('button', { name: 'Apply selected corrections', exact: true })).toBeDisabled();
     expect((await requests(page)).filter((request) => request.name === 'xeroFinancialDocumentCorrectionApply')).toHaveLength(0);
+  });
+
+  test('a large excluded legacy cohort renders only reviewable rows and preserves exact source counts', async ({ page }) => {
+    const dialog = await preview(page, 'legacy-cohort');
+    await expect(dialog).toContainText('12004 source records; 4 reviewable. 12000 before 2026-01-01 preserved outside this table.');
+    await expect(dialog).toContainText('Legacy preserved: 12000');
+    await expect(dialog.getByRole('row').filter({ has: page.getByRole('checkbox') })).toHaveCount(4);
+    expect(await page.evaluate(() => window.documentCorrectionFixture.items.length)).toBe(4);
+    expect(await page.evaluate(() => window.documentCorrectionFixture.previewBytes)).toBeLessThan(10000);
+    expect((await requests(page)).filter((request) => request.name === 'xeroFinancialDocumentCorrectionPage')).toHaveLength(0);
+  });
+
+  test('changed saved-page scope never enables selection and known incomplete scans expose only safe request evidence', async ({ page }) => {
+    let dialog = await openPanel(page, 'paged-scope-invalid');
+    await dialog.getByRole('button', { name: previewName, exact: true }).click();
+    await expect(dialog.getByRole('alert')).toContainText('Incomplete correction preview');
+    await expect(dialog.getByRole('checkbox')).toHaveCount(0);
+    await expect(dialog.getByRole('button', { name: 'Apply selected corrections', exact: true })).toBeDisabled();
+    dialog = await openPanel(page, 'scope-error');
+    await dialog.getByRole('button', { name: previewName, exact: true }).click();
+    await expect(dialog.getByRole('alert')).toContainText('XERO_DOCUMENT_CORRECTION_SCOPE_INCOMPLETE');
+    await expect(dialog.getByRole('alert')).toContainText('Request reference: hnd1::zp2bc-1790577332496-c3f8507dfcb6');
+    await expect(dialog.getByRole('alert')).not.toContainText('SECRET');
+    await expect(dialog.getByRole('button', { name: 'Apply selected corrections', exact: true })).toBeDisabled();
   });
 });

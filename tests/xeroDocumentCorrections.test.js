@@ -61,12 +61,22 @@ function fixture() {
     getConnection: async () => ({ tenantId, scope: 'accounting.invoices accounting.contacts accounting.settings.read' }),
     loadSalesforce: async (cutoff) => { assert.equal(cutoff, '2026-01-01'); return structuredClone(salesforce); },
     loadControls: async () => structuredClone(stored), loadPages: async (_connection, path) => {
-      calls.push({ path, method: 'GET' }); return structuredClone(path === '/Invoices' ? invoices : contacts);
+      calls.push({ path, method: 'GET' });
+      if (path === '/Contacts') return structuredClone(contacts);
+      const params = new URL(path, 'https://fixture.invalid').searchParams;
+      assert.equal(params.get('unitdp'), '4'); assert.equal(params.get('summaryOnly'), 'false');
+      assert.ok(params.has('where') || params.has('IDs') || params.has('InvoiceNumbers'), 'Every invoice inventory request must have a complete explicit scope');
+      const matches = invoices.filter((invoice) => params.has('IDs') ? params.get('IDs').split(',').includes(invoice.InvoiceID)
+        : params.has('InvoiceNumbers') ? params.get('InvoiceNumbers').split(',').includes(invoice.InvoiceNumber)
+          : invoice.Date >= '2026-01-01');
+      return structuredClone(matches);
     },
     accountingFetch: async (_connection, path, options = {}) => {
       calls.push({ path, method: options.method, body: structuredClone(options.body), idempotencyKey: options.idempotencyKey });
       if (path === '/Organisations') return { Organisations: [{ OrganisationID: tenantId, BaseCurrency: 'HKD' }] };
-      const invoice = invoices.find((value) => path === `/Invoices/${value.InvoiceID}`);
+      const targetUrl = new URL(path, 'https://fixture.invalid');
+      assert.equal(targetUrl.searchParams.get('unitdp'), '4');
+      const invoice = invoices.find((value) => targetUrl.pathname === `/Invoices/${value.InvoiceID}`);
       assert.ok(invoice, `Exact known provider target required: ${path}`);
       if (options.method === 'POST') {
         if (behavior.timeoutBeforeWrite) throw new Error('Provider timeout before confirmation');
@@ -110,6 +120,7 @@ test('explicit correction preview saves complete evidence without any provider P
   const f = fixture(); const result = await f.preview();
   assert.equal(result.policy, 'document_field_correction_v1'); assert.equal(result.summary.eligible, 2);
   assert.equal(result.totalCount, 2); assert.equal(result.nextOffset, null);
+  assert.deepEqual(result.scope, { cutoff: '2026-01-01', totalSourceCount: 2, excludedLegacyCount: 0 });
   assert.equal(f.calls.some((call) => call.method === 'POST'), false);
   assert.equal(f.claims.length, 0);
   assert.equal(f.tables.xero_document_field_correction_previews.length, 1);
@@ -159,7 +170,8 @@ test('a 205-record preview saves the full inventory and exposes every saved reco
   for (const page of pages) {
     assert.equal(page.policy, preview.policy); assert.equal(page.previewId, preview.previewId);
     assert.equal(page.createdAt, preview.createdAt); assert.equal(page.totalCount, 205); assert.deepEqual(page.summary, preview.summary);
-    assert.deepEqual(Object.keys(page).sort(), ['createdAt', 'items', 'nextOffset', 'policy', 'previewId', 'summary', 'totalCount']);
+    assert.deepEqual(page.scope, preview.scope);
+    assert.deepEqual(Object.keys(page).sort(), ['createdAt', 'items', 'nextOffset', 'policy', 'previewId', 'scope', 'summary', 'totalCount']);
   }
   for (const [index, item] of allItems.entries()) {
     for (const privateField of ['before', 'source', 'mapping', 'projection']) assert.equal(Object.hasOwn(item, privateField), false);
@@ -191,7 +203,8 @@ test('saved correction page identities and offsets are validated before the data
 });
 
 test('unknown previews, database errors, wrong policies and incomplete saved pages fail closed', async () => {
-  const good = { id: uuid(900), policy: 'document_field_correction_v1', created_at: '2026-09-28T00:00:00Z', summary: { blocked: 205 },
+  const good = { id: uuid(900), policy: 'document_field_correction_v1', created_at: '2026-09-28T00:00:00Z',
+    summary: { blocked: 205, legacyPreserved: 10, scope: { cutoff: '2026-01-01', totalSourceCount: 215, excludedLegacyCount: 10 } },
     totalCount: 205, nextOffset: 200, items: Array.from({ length: 100 }, (_, index) => ({ id: uuid(1000 + index), outcome: 'blocked' })) };
   const responses = [
     { data: null, error: null },
@@ -202,6 +215,9 @@ test('unknown previews, database errors, wrong policies and incomplete saved pag
       { totalCount: '205' }, { totalCount: 99 }, { totalCount: -1 }, { totalCount: 205.5 },
       { items: good.items.slice(0, 99) }, { items: [...good.items, { id: uuid(1200) }] },
       { nextOffset: null }, { nextOffset: 100 }, { nextOffset: 201 },
+      { summary: { ...good.summary, scope: null } },
+      { summary: { ...good.summary, scope: { ...good.summary.scope, excludedLegacyCount: 11 } } },
+      { summary: { ...good.summary, legacyPreserved: 11 } },
     ].map((change) => ({ data: { ...good, ...change }, error: null })),
   ];
   for (const response of responses) {
@@ -216,12 +232,92 @@ test('unknown previews, database errors, wrong policies and incomplete saved pag
 
 test('an empty saved preview remains a complete terminal page without requiring provider access or the write gate', async () => {
   const data = { id: uuid(900), policy: 'document_field_correction_v1', created_at: '2026-09-28T00:00:00Z',
-    summary: { eligible: 0, alreadyCompliant: 0, legacyPreserved: 0, blocked: 0, applied: 0, uncertain: 0 }, totalCount: 0, nextOffset: null, items: [] };
+    summary: { eligible: 0, alreadyCompliant: 0, legacyPreserved: 0, blocked: 0, applied: 0, uncertain: 0,
+      scope: { cutoff: '2026-01-01', totalSourceCount: 0, excludedLegacyCount: 0 } }, totalCount: 0, nextOffset: null, items: [] };
   const paging = pageDependencies({ data, error: null });
   const result = await xeroFinancialDocumentCorrectionPage({ previewId: data.id, offset: 0 }, paging.dependencies);
   assert.deepEqual(result, { policy: data.policy, previewId: data.id, createdAt: data.created_at, summary: data.summary,
-    totalCount: 0, nextOffset: null, items: [] });
+    scope: data.summary.scope, totalCount: 0, nextOffset: null, items: [] });
   assert.equal(paging.calls.length, 1);
+});
+
+test('a large legacy source cohort is counted explicitly while every current or unresolved source remains reviewable', async () => {
+  const f = fixture(); const original = structuredClone(f.salesforce.buyers[0]);
+  f.salesforce.buyers.push(...Array.from({ length: 12000 }, (_, index) => ({ ...structuredClone(original),
+    Id: `a01${String(100000 + index).padStart(12, '0')}AAA`, Name: `LEGACY-${index}`, STEM__c: `old-stem-${index}`,
+    Delivery_Date__c: '2025-01-01', Invoice_Date__c: '2025-02-01' })));
+  f.salesforce.buyers.push({ ...structuredClone(original), Id: 'a01000000999999AAA', Name: 'UNRESOLVED', Delivery_Date__c: null });
+  const result = await f.preview(); const saved = f.tables.xero_document_field_correction_previews[0];
+  assert.equal(result.totalCount, 3); assert.equal(result.items.length, 3); assert.equal(saved.items.length, 3);
+  assert.deepEqual(result.scope, { cutoff: '2026-01-01', totalSourceCount: 12003, excludedLegacyCount: 12000 });
+  assert.equal(result.summary.legacyPreserved, 12000); assert.equal(result.summary.eligible, 2); assert.equal(result.summary.blocked, 1);
+  assert.equal(result.items.find((item) => item.documentNumber === 'UNRESOLVED').outcome, 'blocked');
+  const held = saved.items.find((item) => item.documentNumber === 'UNRESOLVED');
+  assert.equal(Object.hasOwn(held, 'source'), false); assert.equal(Object.hasOwn(held, 'before'), false); assert.equal(Object.hasOwn(held, 'mapping'), false);
+  assert.ok(held.projection.evidence.buyers.length); assert.ok(saved.items.filter((item) => item.outcome === 'eligible').every((item) => item.source && item.before));
+  assert.ok(Buffer.byteLength(JSON.stringify(saved)) < 50000, 'Historical source rows must not reappear inside saved eligible evidence');
+  const audit = f.tables.xero_financial_audit_events.at(-1);
+  assert.equal(audit.run_id, null); assert.equal(audit.event_type, 'document_correction_preview'); assert.equal(audit.outcome, 'complete');
+  assert.equal(audit.record_counts.totalSourceCount, 12003); assert.equal(audit.record_counts.excludedLegacyCount, 12000);
+  assert.equal(f.calls.some((call) => call.path === '/Invoices' || call.method === 'POST'), false);
+});
+
+test('cross-date mapped targets and global inactive sales-number collisions remain in the scoped preview evidence', async () => {
+  const f = fixture(); f.invoices[1].Date = '2025-12-31';
+  const preview = await f.preview(); assert.equal(preview.items[1].outcome, 'eligible');
+  assert.ok(f.calls.some((call) => new URL(call.path, 'https://fixture.invalid').searchParams.get('IDs') === f.invoices[1].InvoiceID));
+  f.invoices.push({ ...structuredClone(f.invoices[0]), InvoiceID: uuid(999), InvoiceNumber: f.salesforce.buyers[0].Name,
+    Date: '2020-01-01', Status: 'DELETED' });
+  const blocked = await f.preview(); assert.equal(blocked.items[0].outcome, 'blocked'); assert.match(blocked.items[0].reason, /already uses/);
+  assert.equal(f.calls.some((call) => call.method === 'POST'), false);
+});
+
+test('an incomplete inventory returns a curated hold and durably records the last observed allowance without a preview or provider write', async () => {
+  const f = fixture(); const loadPages = f.dependencies.loadPages;
+  f.dependencies.loadPages = async (connection, path, collection, options) => {
+    if (collection === 'Invoices') {
+      options.onResponse({ headers: new Headers({ 'x-daylimit-remaining': '431', 'x-minlimit-remaining': '39' }) });
+      throw Object.assign(new Error('Private upstream details must never escape'), { code: 'XERO_FINANCIAL_XERO_INCOMPLETE', status: 502 });
+    }
+    return loadPages(connection, path, collection, options);
+  };
+  await assert.rejects(f.preview(), (error) => error.code === 'XERO_DOCUMENT_CORRECTION_SCOPE_INCOMPLETE' && error.status === 409
+    && error.details.rateLimit.dayRemaining === 431 && !error.message.includes('Private'));
+  assert.equal((f.tables.xero_document_field_correction_previews || []).length, 0);
+  const audit = f.tables.xero_financial_audit_events.at(-1);
+  assert.equal(audit.outcome, 'failed'); assert.equal(audit.run_id, null); assert.equal(audit.rate_limit_snapshot.dayRemaining, 431);
+  assert.equal(audit.record_counts.providerCalls, 1); assert.equal(audit.error_code, 'XERO_DOCUMENT_CORRECTION_SCOPE_INCOMPLETE');
+  assert.equal(f.calls.some((call) => call.method === 'POST'), false); assert.equal(f.claims.length, 0);
+});
+
+test('failure to persist an allowance observation prevents publishing a correction preview', async () => {
+  const f = fixture();
+  f.dependencies.recordAudit = async () => { throw Object.assign(new Error('Audit persistence unavailable'), { code: 'XERO_FINANCIAL_STORAGE_FAILED' }); };
+  await assert.rejects(f.preview(), (error) => error.code === 'XERO_FINANCIAL_STORAGE_FAILED' && error.details.allowanceAuditUnavailable === true);
+  assert.equal((f.tables.xero_document_field_correction_previews || []).length, 0); assert.equal(f.claims.length, 0);
+  assert.equal(f.calls.some((call) => call.method === 'POST'), false);
+});
+
+test('curated unsupported-number evidence holds keep their specific safe reason before any provider reads', async () => {
+  const f = fixture(); f.salesforce.buyers[0].Name = 'SALE-"UNSUPPORTED"';
+  await assert.rejects(f.preview(), (error) => error.code === 'XERO_DOCUMENT_CORRECTION_SCOPE_INCOMPLETE'
+    && error.message === 'A document number uses unsupported query syntax. Complete exact-number evidence is required; no corrections were applied.'
+    && error.details.scopeReason === 'DOCUMENT_CORRECTION_NUMBER_SYNTAX_UNSUPPORTED');
+  assert.equal(f.calls.length, 0); assert.equal((f.tables.xero_document_field_correction_previews || []).length, 0);
+  assert.equal(f.tables.xero_financial_audit_events.at(-1).outcome, 'failed');
+});
+
+test('four-decimal supplier unit prices are preserved through scoped preview, exact reads, POST and confirmed readback', async () => {
+  const f = fixture(); f.salesforce.suppliers[0].Invoice_Amount__c = 100.12;
+  Object.assign(f.salesforce.lines[0], { Cost_Per_Unit__c: 100.1234, Total_Cost__c: 100.12 });
+  Object.assign(f.invoices[1], { SubTotal: 100.12, Total: 100.12, AmountDue: 100.12 });
+  Object.assign(f.invoices[1].LineItems[0], { UnitAmount: 100.1234, LineAmount: 100.12 });
+  const preview = await f.preview(); assert.equal(preview.items[1].outcome, 'eligible', preview.items[1].reason);
+  const result = await f.apply(preview, [preview.items[1].id]); assert.equal(result.items[0].outcome, 'applied');
+  const post = f.calls.find((call) => call.method === 'POST'); assert.equal(post.body.Invoices[0].LineItems[0].UnitAmount, 100.1234);
+  assert.equal(f.invoices[1].LineItems[0].UnitAmount, 100.1234);
+  assert.ok(f.calls.filter((call) => call.path.startsWith('/Invoices')).every((call) => new URL(call.path, 'https://fixture.invalid').searchParams.get('unitdp') === '4'));
+  assert.equal(f.finishes.at(-1).status, 'confirmed');
 });
 
 test('buyer and aggregate bill corrections preserve complete foreign FX, settlement collections and raw accounting lines', async () => {
@@ -231,7 +327,7 @@ test('buyer and aggregate bill corrections preserve complete foreign FX, settlem
   assert.equal(f.finishes.filter((entry) => entry.status === 'confirmed').length, 2);
   const posts = f.calls.filter((call) => call.method === 'POST'); assert.equal(posts.length, 2);
   for (const [index, post] of posts.entries()) {
-    const payload = post.body.Invoices[0]; assert.equal(post.path, `/Invoices/${before[index].InvoiceID}`);
+    const payload = post.body.Invoices[0]; assert.equal(post.path, `/Invoices/${before[index].InvoiceID}?unitdp=4`);
     assert.equal(payload.InvoiceID, before[index].InvoiceID); assert.equal(Object.hasOwn(payload, 'Date'), false);
     for (const key of ['Total', 'SubTotal', 'TotalTax', 'AmountDue', 'AmountPaid', 'AmountCredited', 'Payments', 'CreditNotes', 'Prepayments', 'Overpayments', 'CurrencyCode', 'CurrencyRate', 'Status', 'Contact']) {
       assert.equal(Object.hasOwn(payload, key), false, `${key} must not enter a metadata-only write`);

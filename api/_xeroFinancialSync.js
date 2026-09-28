@@ -39,7 +39,7 @@ import {
 } from './_xeroContactSync.js';
 
 export const XERO_FINANCIAL_CUTOFF = '2026-01-01';
-export const XERO_RECONCILIATION_VERSION = 16;
+export const XERO_RECONCILIATION_VERSION = 17;
 const MAX_BATCH_SIZE = 25;
 const DEFAULT_CALLS_PER_MINUTE = 45;
 const DEFAULT_DAILY_LIMIT = 1000;
@@ -1546,7 +1546,11 @@ export function buildFinancialClassifications(salesforce, xero, stored, { postin
     (row) => ({ stored_link: 3, document_number: 2, stem_reference: 1, date_amount: 0 }[row.matchEvidence?.basis] || 0));
   blockRepeatedFinancialTargets(rows, (row) => row.documentNumber && `${row.xeroType}:${row.xeroType.startsWith('ACCPAY') ? row.contactId : ''}:${row.documentNumber}`,
     'More than one Salesforce document uses this invoice identity. Resolve the duplicate source documents before syncing.');
-  return { rows, sources: allSources, summary: summarizeClassifications(rows), controlTotals: financialControlTotals(rows) };
+  // Keep historical sources in every identity/proof check, but do not add known
+  // pre-cutoff deliveries to the ordinary 2026 review or its financial totals.
+  const scopedRows = salesforce.documentFieldPolicyVersion
+    ? rows.filter((row) => row.documentFieldProjection?.scope !== 'legacy') : rows;
+  return { rows: scopedRows, sources: allSources, summary: summarizeClassifications(scopedRows), controlTotals: financialControlTotals(scopedRows) };
 }
 
 export function blockRepeatedFinancialTargets(rows, targetKey, reason, priority = () => 0) {
@@ -2378,6 +2382,7 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+export { recordAudit as recordXeroFinancialAudit };
 async function recordAudit(client, { runId, eventType, outcome, actor, counts = {}, fingerprints = {}, rate = {}, errorCode = null }) {
   const { error } = await client.from('xero_financial_audit_events').insert({
     run_id: runId, event_type: eventType, outcome,

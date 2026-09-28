@@ -312,13 +312,17 @@ export async function runXeroFinanceOperator(argv, { fetchImpl = fetch } = {}) {
     const name = { 'corrections-preview': 'xeroFinancialDocumentCorrectionPreview', 'corrections-apply': 'xeroFinancialDocumentCorrectionApply', 'corrections-verify': 'xeroFinancialDocumentCorrectionVerify' }[args.command];
     const data = await call(name, args.command === 'corrections-preview' ? {} : { previewId: args.ids[0], itemIds: args.ids.slice(1) });
     if (args.command === 'corrections-preview') {
-      if (!Number.isSafeInteger(data.totalCount) || data.totalCount < 0 || !Array.isArray(data.items)) throw uncertainMutation();
+      const scopeKey = ({ scope, totalCount }) => scope?.cutoff === '2026-01-01'
+        && [totalCount, scope.totalSourceCount, scope.excludedLegacyCount].every((count) => Number.isSafeInteger(count) && count >= 0)
+        && scope.totalSourceCount === totalCount + scope.excludedLegacyCount
+        ? `${scope.cutoff}:${scope.totalSourceCount}:${scope.excludedLegacyCount}` : null;
+      if (!scopeKey(data) || !Array.isArray(data.items)) throw uncertainMutation();
       const items = [...data.items]; let next = data.nextOffset;
       while (next !== null) {
         if (!Number.isSafeInteger(next) || next !== items.length || next <= 0 || next >= data.totalCount) throw uncertainMutation();
         const page = await call('xeroFinancialDocumentCorrectionPage', { previewId: data.previewId, offset: next });
         if (page.previewId !== data.previewId || page.policy !== data.policy || page.totalCount !== data.totalCount
-          || !Array.isArray(page.items) || !page.items.length) throw uncertainMutation();
+          || scopeKey(page) !== scopeKey(data) || !Array.isArray(page.items) || !page.items.length) throw uncertainMutation();
         items.push(...page.items); next = page.nextOffset;
       }
       if (items.length !== data.totalCount) throw uncertainMutation();
@@ -331,6 +335,8 @@ export async function runXeroFinanceOperator(argv, { fetchImpl = fetch } = {}) {
       || (args.command !== 'corrections-preview' && (data.previewId !== args.ids[0] || data.items.length !== args.ids.length - 1
         || new Set(data.items.map(row => row.id)).size !== data.items.length || data.items.some(row => !args.ids.slice(1).includes(row.id))))) throw uncertainMutation();
     return { command: args.command, actor, previewId: data.previewId, summary: counts(data.summary), rateLimit: correctionRate(data.rateLimit),
+      ...(args.command === 'corrections-preview' ? { scope: { cutoff: data.scope.cutoff,
+        totalSourceCount: data.scope.totalSourceCount, excludedLegacyCount: data.scope.excludedLegacyCount } } : {}),
       ...(args.showRows || args.command !== 'corrections-preview' ? { rows: data.items.map(correctionRow), rowsTruncated: false } : {}) };
   }
   if (args.command === 'status') {

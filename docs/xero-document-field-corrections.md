@@ -16,9 +16,11 @@ Bills use directly linked product/charge buyer invoices. Without direct links, t
 
 ## Review and apply
 
-Open **Date and reference corrections** in Xero Portal. Preview retrieves the complete source and target populations, then pages through the immutable saved preview without repeating provider scans. It shows eligibility, source evidence, and each before/after value. Only a fully retrieved preview allows selection. Apply up to 25 explicitly selected eligible records; begin a rollout with a smaller sample and inspect the confirmed outcomes.
+Open **Date and reference corrections** in Xero Portal. Preview reads complete Salesforce evidence first, then retrieves the relevant Xero date scope plus exact historical identities and invoice numbers. This retains cross-year identity and duplicate-number checks without scanning unrelated Xero history. Confirmed pre-2026 deliveries are counted as preserved outside the correction table; missing or conflicting delivery evidence remains visible for review.
 
-The normal financial-action permission and enablement gate remain required. The correction records its durable intent before sending, then verifies the exact Xero readback. It preserves line IDs/order and financial values, Contact, currency/rate, accounts, taxes, payments, allocations, original mapping IDs and preservation receipts. An unmapped verified transaction receives a protected link only after successful readback.
+The immutable saved preview is paged without repeating provider scans. It shows eligibility, source evidence, and each before/after value. Only a fully retrieved preview allows selection. Apply up to 25 explicitly selected eligible records; begin a rollout with a smaller sample and inspect the confirmed outcomes.
+
+The normal financial-action permission and enablement gate remain required. The correction records its durable intent before sending, then verifies the exact Xero readback. Inventory, updates and readback request four-decimal unit amounts to preserve existing price precision. Corrections preserve line IDs/order and financial values, Contact, currency/rate, accounts, taxes, payments, allocations, original mapping IDs and preservation receipts. An unmapped verified transaction receives a protected link only after successful readback.
 
 Paid/partially paid documents can receive supported metadata changes. Required accounting-date changes on settled records and corrections inside locked periods are held as a whole. Payments are never removed to make a correction eligible.
 
