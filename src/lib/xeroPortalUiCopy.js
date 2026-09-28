@@ -176,7 +176,7 @@ preview|Build read-only preview|建立唯讀預覽
 reconnect|Reconnect Xero once to grant accounting.settings.read and the write-capable accounting.payments scope.|請重新授權 Xero，以授予 accounting.settings.read 及可寫入的 accounting.payments 授權範圍。
 reconciliationTitle|Salesforce → Xero reconciliation|Salesforce → Xero 對帳
 fixedScope|Fixed scope: from 1 Jan 2026|固定範圍：由 2026 年 1 月 1 日起
-reconciliationDescription|Compare all in-scope Salesforce invoices, bills, credit notes and payments with Xero. Records created since 1 Jan 2026 with missing dates, and unsupported or incomplete payments, remain exceptions.|一次檢查會把範圍內所有 Salesforce 買方發票、供應商帳單、貸項通知單及付款，與已連接的 Xero 機構比較。2026 年 1 月 1 日起建立但欠缺會計日期的紀錄，以及不支援或資料不完整的付款，均會保留為例外。
+reconciliationDescription|Compare scoped Salesforce invoices, bills, credits and payments with Xero. Missing dates or unsupported/incomplete payments remain exceptions.|比較範圍內 Salesforce 發票、帳單、貸項及付款與 Xero。2026 年起建立但無會計日期、不完整或不支援的付款，保留為例外。
 checkEverything|Check everything|檢查全部
 checkingEverything|Checking documents and payments…|正在檢查文件及付款…
 completion|Verified completion|已驗證完成度
@@ -185,19 +185,19 @@ correctInXero|Correct in Xero|Xero 資料正確
 awaitingSync|Awaiting sync|等候同步
 exceptions|Exceptions|例外
 setupTitle|Advanced mapping setup|進階對應設定
-setupDescription|Open only when an exception asks for a Product, tax, or bank mapping.|只在例外要求設定產品、稅務或銀行對應時才需要開啟。`,
+setupDescription|Use when an exception needs a product, tax or bank mapping.|只在例外要求設定產品、稅務或銀行對應時才需要開啟。`,
   ["reconciliationStatuses", copyRows`not_checked|Not checked|尚未檢查
 incomplete_check|Check incomplete|檢查未完成
 attention_required|Action required|需要處理
 sync_required|Ready for reviewed sync|可供覆核同步
 reconciled|100% reconciled|100% 已對帳`],
-  ["reconciliationDescriptions", copyRows`not_checked|Run Check everything to compare Salesforce and Xero.|按「檢查全部」建立完整 Salesforce 及 Xero 控制總數。
-incomplete_check|Completion requires successful document and payment checks.|文件及付款均成功核對後，才會顯示完成度。
-attention_required|Resolve the exceptions. Protected Xero history stays unchanged; differences remain visible for Finance review.|請先解決所有例外。受保護的 Xero 會計紀錄不會被覆寫；任何差異會保留供財務部處理。
-sync_required|Review and authorise pending actions, then run them. FCOS rechecks Xero automatically.|所有紀錄已分類。請覆核及授權待處理的文件及付款，執行後 FCOS 會自動重新檢查 Xero。
-reconciled|All records match or have accepted legacy differences. Retained differences remain visible; no blockers remain.|所有範圍內紀錄已配對或明確核准舊差異；保留的差異仍可查閱，沒有待處理阻礙。`],
+  ["reconciliationDescriptions", copyRows`not_checked|Run Check everything to compare Salesforce and Xero.|按「檢查全部」比較 Salesforce 與 Xero。
+incomplete_check|Completion requires document and payment checks.|文件及付款均成功核對後，才會顯示完成度。
+attention_required|Resolve exceptions; preserve Xero history and differences for Finance review.|先解決例外；保留 Xero 歷史及差異供財務部檢閱。
+sync_required|Review, approve and run pending actions. FCOS then rechecks Xero.|覆核、授權並執行待處理項目後，FCOS 會重新核對 Xero。
+reconciled|All transactions match or have accepted legacy differences; no blockers remain. Retained differences stay visible.|所有範圍內紀錄已配對或明確核准舊差異；保留的差異仍可查閱，沒有待處理阻礙。`],
   ["mappingTitle", 'Finance-approved Product mappings', '財務部核准的產品對應'],
-  ["mappingDescription", 'Default tax is NONE. Buyer sales and supplier costs are mapped independently. Legacy suggestions are never approved automatically.', '預設稅務類別為 NONE。買方銷售及供應商成本會分開對應；系統不會自動核准舊系統建議。'],
+  ["mappingDescription", 'Tax defaults to NONE; map buyer sales and supplier costs separately. Legacy suggestions require approval.', '稅務預設 NONE；買方銷售及供應商成本分開對應。舊建議須核准。'],
   ["savedMappings", (count) => `${count} saved mappings`, (count) => `已儲存 ${count} 個對應`],
   ["proposalSummary", (proposed, conflicts) => `${proposed} evidence-backed suggestions · ${conflicts} conflicts`, (proposed, conflicts) => `${proposed} 個有證據的建議 · ${conflicts} 個衝突`],
   ["mappingRange", (from, to, total) => `Mappings ${from}–${to} of ${total} · suggestions first`, (from, to, total) => `對應 ${from}–${to}／共 ${total} 個 · 建議優先`],
@@ -209,7 +209,7 @@ taxType|Tax type|稅務類別
 action|Action|操作
 noProducts|Build the first preview to load every Product used by 2026 financial documents.|建立首次預覽，以載入 2026 年財務文件使用的所有產品。
 bankTitle|Payment bank mappings|付款銀行對應
-bankDescription|Exact Salesforce Receivable/Payable payments remain blocked until Finance maps each source bank to one Xero bank account.|在財務部把每個 Salesforce 收款／付款銀行對應至一個 Xero 銀行帳戶前，精確付款仍會被封鎖。
+bankDescription|Finance must map each Salesforce source bank to one Xero bank account before exact Receivable/Payable allocations.|財務部須先將每個 Salesforce 收付款銀行對應至一個 Xero 銀行帳戶，才可精確分配。
 reviewTitle|Finance batch review|財務批次覆核`,
   ["runSummary", (id, status, selected, eligible) => `Run ${id} · ${status} · ${selected} selected of ${eligible} eligible.`, (id, status, selected, eligible) => `批次 ${id} · ${status} · 已選 ${selected}／${eligible} 個合資格項目。`],
   ["selectEligible", 'Select eligible', '選取合資格項目'],
@@ -229,7 +229,7 @@ previewPayments|Preview payments|預覽付款`,
 applyPayments|Apply exact payments|套用精確付款
 reviewPaymentReference|Review retained reference|檢閱保留的參考資料
 paymentReferenceTitle|Review retained Xero payment reference|檢閱保留的 Xero 付款參考資料
-paymentReferenceDescription|The Salesforce payment has no explicit reference. Confirm the exact invoice, bank, date, amount and currency before linking this existing Xero payment. This records an FCOS mapping only; it does not create or change a Xero payment.|Salesforce 付款沒有明確參考資料。連結現有 Xero 付款前，請核對確切發票、銀行、日期、金額及幣別。此操作只記錄 FCOS 對應，不會建立或更改 Xero 付款。
+paymentReferenceDescription|Salesforce has no payment reference. Verify invoice, bank, date, amount and currency, then link the existing Xero payment. Only the FCOS mapping changes.|Salesforce 缺少付款參考資料。核對發票、銀行、日期、金額及幣別後，只記錄現有 Xero 付款的 FCOS 連結；付款本身不變。
 sourceReference|Salesforce explicit reference|Salesforce 明確參考資料
 sourceFallbackReference|Salesforce payment name fallback|Salesforce 付款名稱備用值
 retainedXeroReference|Retained Xero reference|保留的 Xero 參考資料
