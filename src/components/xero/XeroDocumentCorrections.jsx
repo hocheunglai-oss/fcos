@@ -23,6 +23,7 @@ const DETAIL_LINK = 'cursor-pointer text-sm text-blue-700 underline';
 const SPINNER = <Loader2 aria-hidden="true" className="mr-2 h-4 w-4 animate-spin" />;
 
 export default function XeroDocumentCorrections({ onClose, enabled, canPreview, onAllowance }) {
+  const savedPreviewId = new URLSearchParams(window.location.search).get('correctionPreview');
   const [preview, setPreview] = useState(null);
   const [selected, setSelected] = useState(new Set());
   const [outcomes, setOutcomes] = useState(null);
@@ -56,10 +57,13 @@ export default function XeroDocumentCorrections({ onClose, enabled, canPreview, 
     setBusy('preview'); setError(''); setSelected(new Set()); setPreview(null); setOutcomes(null); setAttempted(false);
     setPreviewProgress(null); setTablePage(0); setSelectedOnly(false);
     try {
-      const result = await appClient.functions.invoke('xeroFinancialDocumentCorrectionPreview', {}, OPTIONS);
+      if (savedPreviewId !== null && !/^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i.test(savedPreviewId)) throw new Error('Invalid saved correction preview.');
+      const result = await appClient.functions.invoke(savedPreviewId === null ? 'xeroFinancialDocumentCorrectionPreview' : 'xeroFinancialDocumentCorrectionPage',
+        savedPreviewId === null ? {} : { previewId: savedPreviewId, offset: 0 }, OPTIONS);
       if (current !== generation.current) return;
       captureAllowance(result.data);
       if (result.data?.error) throw new Error(documentCorrectionPreviewError(result) || result.data.error);
+      if (savedPreviewId !== null && result.data?.previewId !== savedPreviewId) throw new Error('Invalid saved correction preview.');
       const complete = await collectDocumentCorrectionPreview(result.data, async (previewId, offset) => {
         const next = await appClient.functions.invoke('xeroFinancialDocumentCorrectionPage', { previewId, offset }, OPTIONS);
         if (current !== generation.current) throw new Error('Preview closed.');
@@ -135,14 +139,14 @@ export default function XeroDocumentCorrections({ onClose, enabled, canPreview, 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <Button type="button" variant="outline" onClick={previewCorrections} disabled={!canPreview || Boolean(busy)}>
           {busy === 'preview' && SPINNER}
-          {busy === 'preview' ? 'Preparing correction preview…' : 'Preview date and reference corrections'}
+          {busy === 'preview' ? 'Preparing correction preview…' : savedPreviewId !== null ? 'Load saved correction preview' : 'Preview date and reference corrections'}
         </Button>
         <p className="text-sm text-muted-foreground">Maximum {XERO_DOCUMENT_CORRECTION_BATCH_LIMIT} corrections per batch.</p>
       </div>
-      {!canPreview && <p role="status" className="text-sm text-amber-900">Connect Xero with invoice access to preview corrections.</p>}
-      {!enabled && <p role="status" className="text-sm text-amber-900">Financial actions are locked. Connected Xero can still be previewed.</p>}
+      {!canPreview && <p role="status" className="text-sm text-amber-900">Connect Xero with invoice access.</p>}
+      {!enabled && <p role="status" className="text-sm text-amber-900">Financial actions are locked; preview remains available.</p>}
       {error && <p role="alert" className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</p>}
-      {busy === 'preview' && <p role="status" className="text-sm">{previewProgress ? `Loading correction preview: ${previewProgress.received} of ${previewProgress.total} records.` : 'Checking document fields.'} No corrections are being applied.</p>}
+      {busy === 'preview' && <p role="status" className="text-sm">{previewProgress ? `Loading correction preview: ${previewProgress.received} of ${previewProgress.total} records.` : 'Checking fields.'} No corrections are being applied.</p>}
       {preview && <>
         <p className={MUTED}>{preview.scope.totalSourceCount} source records; {items.length} reviewable. {preview.scope.excludedLegacyCount} before {preview.scope.cutoff} preserved outside this table.</p>
         <div className="flex flex-wrap gap-2" aria-label="Correction preview summary">
@@ -179,7 +183,7 @@ export default function XeroDocumentCorrections({ onClose, enabled, canPreview, 
                 <TableCell data-label="STEM / vessel"><span className="block">{item.stemKey || 'STEM unavailable'}</span><span className={BLOCK_MUTED}>{item.vesselName || 'Vessel unavailable'}</span></TableCell>
                 <TableCell data-label="Reason / result"><span className="block font-medium">{documentCorrectionOutcomeLabel(outcome?.outcome || item.outcome)}</span>
                   <p className="mt-1 text-xs">{item.reason || 'Missing reason. Review before applying.'}</p>
-                  {item.outcome === 'eligible' && !selectable && <p className="mt-1 text-xs text-amber-900">Verification evidence is incomplete. Prepare a new preview.</p>}
+                  {item.outcome === 'eligible' && !selectable && <p className="mt-1 text-xs text-amber-900">Incomplete verification evidence. Prepare a new preview.</p>}
                   {outcome && <p className="mt-1 text-xs" role="status">{outcome.reason || outcome.error || outcome.message || (outcome.outcome === 'applied' ? 'Correction confirmed.' : 'Review this result.')}</p>}
                 </TableCell>
                 <TableCell data-label="Differences / source evidence">{item.changes?.length ? <details>
@@ -188,22 +192,22 @@ export default function XeroDocumentCorrections({ onClose, enabled, canPreview, 
                     <dt className="text-xs font-semibold">{FIELD_LABELS[change.field] || change.field}</dt>
                     {[['Before', change.before], ['After', change.after]].map(([label, value]) => <dd key={label} className="mt-1 text-xs"><span className="font-medium">{label}: </span>{documentCorrectionValue(value)}</dd>)}
                   </div>)}</dl>
-                </details> : <span className={MUTED}>{item.linkOnly === true ? 'Verify and link; existing Xero fields remain unchanged.' : 'No field changes proposed.'}</span>}
+                </details> : <span className={MUTED}>{item.linkOnly === true ? 'Verify and link; Xero fields unchanged.' : 'No field changes.'}</span>}
                   <CorrectionSourceEvidence evidence={item.sourceEvidence} />
                 </TableCell>
               </TableRow>;
             })}</TableBody>
           </Table>
-        </div> : <p className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">No documents in this preview.</p>}
-        <p className="text-sm">{selectedIds.length} selected. Xero rechecks each record before applying.</p>
+        </div> : <p className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">No documents.</p>}
+        <p className="text-sm">{selectedIds.length} selected. Xero rechecks records before applying.</p>
       </>}
       {attempted && <div role="status" className="rounded-md border p-3 text-sm">
-        {busy === 'apply' ? `Applying ${selectedIds.length} selected corrections…` : busy === 'verify' ? 'Verifying original results without resending corrections.' : <>
+        {busy === 'apply' ? `Applying ${selectedIds.length} selected corrections…` : busy === 'verify' ? 'Reading original results; no corrections resent.' : <>
           {outcomes && ['applied', 'already_compliant', 'legacy_preserved', 'blocked', 'failed', 'uncertain'].map((status) => {
             const count = outcomes.filter((item) => item.outcome === status).length;
             return count ? <span key={status} className="mr-3 inline-block">{documentCorrectionOutcomeLabel(status)}: {count}</span> : null;
           })}
-          <p className="mt-1">Review blocked, failed or uncertain results before a new preview. No automatic retry will occur.</p>
+          <p className="mt-1">Review blocked, failed or uncertain results. No automatic retry will occur.</p>
         </>}
       </div>}
       {attempted && uncertainIds.length > 0 && <div className="space-y-2">
@@ -211,7 +215,7 @@ export default function XeroDocumentCorrections({ onClose, enabled, canPreview, 
           {busy === 'verify' && SPINNER}
           {busy === 'verify' ? 'Verifying uncertain results…' : 'Verify uncertain results'}
         </Button>
-        <p className={MUTED}>Read back the original results without resending corrections. Available while writes are locked.</p>
+        <p className={MUTED}>Readback never resends corrections; available while writes are locked.</p>
       </div>}
       {allowance && <XeroDailyAllowance snapshot={allowance} />}
       <div className="flex flex-wrap justify-end gap-2">
@@ -242,14 +246,14 @@ function CorrectionSourceEvidence({ evidence }) {
           ['Vessel', evidence.vesselName], ['STEM reference code', evidence.refCode],
         ].map(([label, value]) => <div key={label}><dt className="inline font-semibold">{label}: </dt><dd className="inline">{documentCorrectionValue(value)}</dd></div>)}
       </dl>
-      {unresolvedIds.length > 0 && <p><span className="font-semibold">Linked buyer invoice IDs pending verification: </span>{unresolvedIds.join(', ')}</p>}
+      {unresolvedIds.length > 0 && <p><span className="font-semibold">Unverified linked buyer invoice IDs: </span>{unresolvedIds.join(', ')}</p>}
       {[
-        ['Verified buyer invoice evidence', buyers, 'No verified buyer invoice evidence is available.'],
-        ['Buyer invoices considered on this STEM', fallback, 'No buyer invoice candidates were found.'],
+        ['Verified buyer invoices', buyers, 'No verified buyer invoices.'],
+        ['Buyer invoices considered on this STEM', fallback, 'No buyer candidates found.'],
       ].map(([title, values, empty]) => values && <div key={title}><p className="font-semibold">{title}</p>{values.length
         ? <ul className="mt-1 space-y-2">{values.map((buyer, index) => <BuyerEvidence key={`${buyer.id}:${index}`} buyer={buyer} />)}</ul>
         : <p className="mt-1">{empty}</p>}</div>)}
-    </div> : <p className={`mt-2 ${MUTED}`}>Source evidence is unavailable. Prepare a new preview.</p>}
+    </div> : <p className={`mt-2 ${MUTED}`}>Source evidence unavailable. Prepare a new preview.</p>}
   </details>;
 }
 

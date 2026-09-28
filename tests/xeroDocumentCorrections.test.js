@@ -76,10 +76,18 @@ function fixture() {
       if (path === '/Organisations') return { Organisations: [{ OrganisationID: tenantId, BaseCurrency: 'HKD' }] };
       const targetUrl = new URL(path, 'https://fixture.invalid');
       assert.equal(targetUrl.searchParams.get('unitdp'), '4');
-      const invoice = invoices.find((value) => targetUrl.pathname === `/Invoices/${value.InvoiceID}`);
+      const reading = options.method === 'GET';
+      if (reading) {
+        assert.equal(targetUrl.pathname, '/Invoices', 'Exact reads must preserve the paginated preview representation');
+        assert.equal(targetUrl.searchParams.get('summaryOnly'), 'false');
+        assert.equal(targetUrl.searchParams.get('page'), '1');
+      }
+      const invoice = invoices.find((value) => reading ? targetUrl.searchParams.get('IDs') === value.InvoiceID
+        : targetUrl.pathname === `/Invoices/${value.InvoiceID}`);
       assert.ok(invoice, `Exact known provider target required: ${path}`);
       if (options.method === 'POST') {
         if (behavior.timeoutBeforeWrite) throw new Error('Provider timeout before confirmation');
+        if (behavior.definitiveRejection) return { Invoices: [{ ...structuredClone(invoice), HasErrors: true, ValidationErrors: [{ Message: 'Rejected without a change' }] }] };
         Object.assign(invoice, structuredClone(options.body.Invoices[0]));
         if (behavior.timeoutAfterWrite) throw new Error('Provider timeout after possible mutation');
         if (behavior.badResponse) return { Invoices: [{ ...structuredClone(invoice), InvoiceID: uuid(999) }] };
@@ -87,7 +95,7 @@ function fixture() {
         if (behavior.changeInvariant) invoice.CurrencyRate = 7.9;
         if (behavior.conflictingDateAlias) invoice.DateString = '2026-02-20T00:00:00Z';
       }
-      return { Invoices: [structuredClone(invoice)] };
+      return { Invoices: [structuredClone(invoice)], ...(reading ? { pagination: { page: 1, pageSize: 100, pageCount: 1, itemCount: 1 } } : {}) };
     },
     claim: async (_client, input) => {
       const existing = stored.documentCorrectionClaims.find((value) => value.idempotency_key === input.idempotencyKey);
@@ -114,6 +122,25 @@ function fixture() {
   const apply = (result, ids = result.items.filter((item) => item.outcome === 'eligible').map((item) => item.id)) =>
     xeroFinancialDocumentCorrectionApply({ previewId: result.previewId, itemIds: ids }, dependencies);
   return { ...store, salesforce, stored, invoices, xero, dependencies, calls, claims, finishes, behavior, preview, apply };
+}
+
+function exposeExpandedDetailEndpoint(f) {
+  const fetchCollection = f.dependencies.accountingFetch; const detailCalls = [];
+  f.dependencies.accountingFetch = async (connection, path, options) => {
+    const url = new URL(path, 'https://fixture.invalid');
+    if (options.method === 'GET' && url.pathname.startsWith('/Invoices/')) {
+      detailCalls.push(path);
+      const original = f.invoices.find((invoice) => url.pathname === `/Invoices/${invoice.InvoiceID}`);
+      assert.ok(original);
+      const expanded = structuredClone(original);
+      expanded.Contact.Addresses = [{ AddressType: 'STREET', City: 'Hong Kong' }];
+      expanded.Contact.ContactStatus = 'ACTIVE';
+      for (const payment of expanded.Payments) payment.Reference = 'Expanded detail-only settlement reference';
+      return { Invoices: [expanded] };
+    }
+    return fetchCollection(connection, path, options);
+  };
+  return detailCalls;
 }
 
 function reserveOverride(f) {
@@ -439,6 +466,76 @@ test('four-decimal supplier unit prices are preserved through scoped preview, ex
   assert.equal(f.finishes.at(-1).status, 'confirmed');
 });
 
+test('expanded detail endpoint fields never replace the immutable full collection evidence during apply or readback', async () => {
+  const f = fixture(); const detailCalls = exposeExpandedDetailEndpoint(f);
+  const preview = await f.preview(); const saved = structuredClone(f.tables.xero_document_field_correction_previews[0]);
+  const result = await f.apply(preview);
+  assert.deepEqual(result.items.map((item) => item.outcome), ['applied', 'applied']);
+  assert.deepEqual(detailCalls, []);
+  const exactReads = f.calls.filter((call) => call.method === 'GET' && new URL(call.path, 'https://fixture.invalid').searchParams.has('page'));
+  assert.deepEqual(exactReads.map((call) => call.path), saved.items.flatMap((item) => Array(3).fill(
+    `/Invoices?IDs=${item.xeroInvoiceId}&unitdp=4&summaryOnly=false&page=1`)));
+  assert.deepEqual(f.tables.xero_document_field_correction_previews[0], saved, 'Existing preview evidence is never rewritten or normalized to another shape');
+  for (const [index, claim] of f.claims.entries()) {
+    assert.deepEqual(claim.evidence.before, saved.items[index].before);
+    assert.deepEqual(f.finishes[index].evidence.observed, claim.evidence.expectedAfter);
+    assert.deepEqual(claim.evidence.before.Payments, saved.items[index].before.Payments);
+    assert.deepEqual(claim.evidence.before.Contact, saved.items[index].before.Contact);
+  }
+});
+
+test('definitive rejection uses an unchanged exact collection readback and preserves the original saved preview', async () => {
+  const f = fixture(); const detailCalls = exposeExpandedDetailEndpoint(f); f.behavior.definitiveRejection = true;
+  const preview = await f.preview(); const saved = structuredClone(f.tables.xero_document_field_correction_previews[0]);
+  const result = await f.apply(preview, [preview.items[0].id]);
+  assert.equal(result.items[0].outcome, 'blocked'); assert.equal(result.items[0].reason, 'Rejected without a change');
+  assert.deepEqual(detailCalls, []); assert.equal(f.claims.length, 1);
+  assert.deepEqual(f.finishes.map((finish) => finish.status), ['rejected']);
+  assert.deepEqual(f.finishes[0].evidence.observed, saved.items[0].before);
+  assert.deepEqual(f.tables.xero_document_field_correction_previews[0], saved);
+  assert.equal(f.calls.filter((call) => call.method === 'POST').length, 1);
+  assert.equal(f.calls.filter((call) => call.method === 'GET' && new URL(call.path, 'https://fixture.invalid').searchParams.has('page')).length, 3);
+});
+
+test('incomplete or wrong-ID collection reads retain exact target guards before, during and after a correction', async () => {
+  for (const stage of [1, 2, 3]) for (const invalid of ['empty', 'multiple', 'wrong-id']) {
+    const f = fixture(); const preview = await f.preview(); const fetchInvoice = f.dependencies.accountingFetch;
+    let exactReads = 0;
+    f.dependencies.accountingFetch = async (connection, path, options) => {
+      const response = await fetchInvoice(connection, path, options);
+      if (options.method !== 'GET' || !new URL(path, 'https://fixture.invalid').searchParams.has('page') || ++exactReads !== stage) return response;
+      return { Invoices: invalid === 'empty' ? [] : invalid === 'multiple' ? [response.Invoices[0], response.Invoices[0]]
+        : [{ ...response.Invoices[0], InvoiceID: uuid(999) }] };
+    };
+    const result = await f.apply(preview, [preview.items[0].id]);
+    assert.equal(result.items[0].outcome, stage === 1 ? 'blocked' : 'uncertain', `${stage}: ${invalid}`);
+    assert.equal(f.claims.length, stage === 1 ? 0 : 1);
+    assert.equal(f.calls.filter((call) => call.method === 'POST').length, stage === 3 ? 1 : 0);
+    assert.equal(f.finishes.some((finish) => finish.status === 'confirmed'), false);
+  }
+});
+
+test('truncated or contradictory exact collection pagination cannot establish or confirm a correction', async () => {
+  const malformed = [[], {}, { page: 1, pageSize: 100, pageCount: 1, itemCount: 2 },
+    { page: 1, pageSize: 1, pageCount: 2, itemCount: 2 }, { page: 2, pageSize: 100, pageCount: 1, itemCount: 1 },
+    { page: 1, pageSize: 0, pageCount: 1, itemCount: 1 }, { page: 1, pageSize: 100, pageCount: 0, itemCount: 0 },
+    { page: 1, pageSize: 100, pageCount: 1, itemCount: '1' }];
+  for (const stage of [1, 3]) for (const pagination of malformed) {
+    const f = fixture(); const preview = await f.preview(); const fetchInvoice = f.dependencies.accountingFetch;
+    let exactReads = 0;
+    f.dependencies.accountingFetch = async (connection, path, options) => {
+      const response = await fetchInvoice(connection, path, options);
+      if (options.method === 'GET' && new URL(path, 'https://fixture.invalid').searchParams.has('page') && ++exactReads === stage) response.pagination = pagination;
+      return response;
+    };
+    const result = await f.apply(preview, [preview.items[0].id]);
+    assert.equal(result.items[0].outcome, stage === 1 ? 'blocked' : 'uncertain');
+    assert.equal(f.claims.length, stage === 1 ? 0 : 1);
+    assert.equal(f.calls.filter((call) => call.method === 'POST').length, stage === 1 ? 0 : 1);
+    assert.equal(f.finishes.some((finish) => finish.status === 'confirmed'), false);
+  }
+});
+
 test('buyer and aggregate bill corrections preserve complete foreign FX, settlement collections and raw accounting lines', async () => {
   const f = fixture(); const before = structuredClone(f.invoices); const mappings = structuredClone(f.stored.documentMappings);
   const result = await f.apply(await f.preview());
@@ -545,7 +642,7 @@ test('later-clock replay binds the original authority and scope without a second
 });
 
 test('readback-only recovery confirms the original approved intent despite changed source and disabled write gate', async () => {
-  const f = fixture(); f.behavior.timeoutAfterWrite = true; const preview = await f.preview();
+  const f = fixture(); const detailCalls = exposeExpandedDetailEndpoint(f); f.behavior.timeoutAfterWrite = true; const preview = await f.preview();
   const first = await f.apply(preview, [preview.items[0].id]); assert.equal(first.items[0].outcome, 'uncertain');
   f.behavior.timeoutAfterWrite = false; f.salesforce.buyers[0].Delivery_Date__c = '2026-02-10';
   f.dependencies.env.FCOS_ENABLE_XERO_FINANCIAL_SYNC = 'false';
@@ -555,6 +652,10 @@ test('readback-only recovery confirms the original approved intent despite chang
   assert.equal(recovered.items[0].outcome, 'applied'); assert.match(recovered.items[0].reason, /Recovered through exact readback/);
   assert.equal(f.calls.filter((call) => call.method === 'POST').length, 1);
   assert.ok(f.calls.slice(callsBefore).every((call) => call.method === 'GET'));
+  assert.deepEqual(detailCalls, []);
+  assert.deepEqual(f.calls.slice(callsBefore).map((call) => call.path), [
+    `/Invoices?IDs=${preview.items[0].xeroInvoiceId}&unitdp=4&summaryOnly=false&page=1`,
+  ]);
   assert.equal(f.finishes.at(-1).status, 'confirmed'); assert.equal(f.claims.length, 1);
 });
 

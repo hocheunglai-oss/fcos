@@ -20,9 +20,13 @@ Open **Date and reference corrections** in Xero Portal. Preview reads complete S
 
 The immutable saved preview is paged without repeating provider scans. It shows eligibility, source evidence, and each before/after value. Only a fully retrieved preview allows selection. Apply up to 25 explicitly selected eligible records; begin a rollout with a smaller sample and inspect the confirmed outcomes.
 
+To reopen an interrupted review, use `/xero-portal?correctionPreview=PREVIEW_UUID`, open the correction panel and choose **Load saved correction preview**. This reads the complete stored preview without a new Xero scan. It never applies automatically; all current source, target and authority checks still run when selected corrections are submitted.
+
 Apply refreshes complete Salesforce and Contact evidence, all current-period Xero documents and all mapped cross-period identities. Ordinary corrections restrict additional document-number lookups to the selected sources, including global sales-number collision checks. Grouped and issued-supplier preservation receipts retain the complete historical lookup scope; a newly changed special receipt stops a narrowed operation before provider reads.
 
 The normal financial-action permission and enablement gate remain required. The correction records its durable intent before sending, then verifies the exact Xero readback. Inventory, updates and readback request four-decimal unit amounts to preserve existing price precision. Corrections preserve line IDs/order and financial values, Contact, currency/rate, accounts, taxes, payments, allocations, original mapping IDs and preservation receipts. An unmapped verified transaction receives a protected link only after successful readback.
+
+Exact transaction reads use the same complete paginated collection representation as the preview, filtered to one InvoiceID. Xero's single-resource endpoint expands Contact data and omits some settlement fields, which must not be mistaken for a transaction change. Every read still requires exactly the requested identity and unchanged accounting evidence; no missing fields are silently filled or discarded.
 
 Paid/partially paid documents can receive supported metadata changes. Required accounting-date changes on settled records and corrections inside locked periods are held as a whole. Payments are never removed to make a correction eligible.
 

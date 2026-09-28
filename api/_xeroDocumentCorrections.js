@@ -14,6 +14,10 @@ import { assertCorrectionAllowance, resolveCorrectionReserveAuthority, verifyCor
 const POLICY = 'document_field_correction_v1';
 const TABLE = 'xero_document_field_correction_previews';
 const PAGE_SIZE = 100;
+// Xero's detail endpoint expands Contact/settlement fields differently from the
+// paginated collection used by immutable previews. Compare the same complete
+// collection representation throughout the correction and its later recovery.
+const exactInvoiceReadPath = (id) => `/Invoices?IDs=${encodeURIComponent(id)}&unitdp=4&summaryOnly=false&page=1`;
 const uuid = (value) => /^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i.test(value || '');
 const sameSf = (a, b) => Boolean(a && b && a.slice(0, 15) === b.slice(0, 15));
 const fail = (message, code = 'XERO_DOCUMENT_CORRECTION_INVALID', status = 409) => Object.assign(new Error(message), { code, status });
@@ -38,6 +42,15 @@ export function canonicalCorrectionInvoice(invoice) {
   const { UpdatedDateUTC: _updated, UpdatedDateUTCString: _updatedString, DateString: _dateString, DueDateString: _dueString, ...value } = structuredClone(invoice);
   value.Date = isoDate(value.Date); value.DueDate = isoDate(value.DueDate);
   return value;
+}
+async function readExactCorrectionInvoice(accountingFetch, connection, id, options, message, code = 'XERO_DOCUMENT_CORRECTION_INVALID') {
+  const result = await accountingFetch(connection, exactInvoiceReadPath(id), { ...options, method: 'GET' });
+  const pagination = result?.pagination;
+  const completePage = pagination == null || (typeof pagination === 'object' && !Array.isArray(pagination)
+    && ['page', 'pageSize', 'pageCount', 'itemCount'].every((key) => Number.isSafeInteger(pagination[key]) && pagination[key] > 0)
+    && pagination.page === 1 && pagination.pageCount === 1 && pagination.itemCount === 1);
+  if (!completePage || !Array.isArray(result?.Invoices) || result.Invoices.length !== 1 || result.Invoices[0]?.InvoiceID !== id) throw fail(message, code);
+  return canonicalCorrectionInvoice(result.Invoices[0]);
 }
 function financialBuckets(lines, xero = false) {
   const result = {};
@@ -242,9 +255,7 @@ async function verifyClaim(claim, saved, context) {
   if (latest?.status === 'confirmed' && latest.evidence_hash === hash(latest.evidence)
     && hash(latest.evidence.observed) === hash(claim.evidence.expectedAfter)) return { ...publicItem(saved), outcome: 'applied', reason: 'This correction was already confirmed; no update was resent.' };
   if (latest?.status === 'rejected') return { ...publicItem(saved), outcome: 'blocked', reason: 'Xero rejected the earlier correction. Create a fresh preview.' };
-  const result = await accountingFetch(connection, `/Invoices/${claim.xero_invoice_id}?unitdp=4`, { ...options, method: 'GET' });
-  if (result.Invoices?.length !== 1 || result.Invoices[0].InvoiceID !== claim.xero_invoice_id) throw fail('The exact correction readback is unavailable.');
-  const observed = canonicalCorrectionInvoice(result.Invoices[0]);
+  const observed = await readExactCorrectionInvoice(accountingFetch, connection, claim.xero_invoice_id, options, 'The exact correction readback is unavailable.');
   if (hash(observed) !== hash(claim.evidence.expectedAfter)) return { ...publicItem(saved), outcome: 'uncertain', reason: 'Readback does not yet confirm the exact approved correction. No update was resent; the barrier remains.' };
   await finish(client, { claimId: claim.id, status: 'confirmed', evidence: { observed, basis: 'exact_provider_readback' }, actor });
   return { ...publicItem(saved), outcome: 'applied', reason: 'Recovered through exact readback; no update was resent.' };
@@ -333,9 +344,7 @@ export async function xeroFinancialDocumentCorrectionApply(body = {}, dependenci
       if (!fresh || fresh.xeroInvoiceId !== saved.xeroInvoiceId || fresh.projectionFingerprint !== saved.projectionFingerprint
         || fresh.source.sourceFingerprint !== saved.source.sourceFingerprint || fresh.source.documentFieldSourceFingerprint !== saved.source.documentFieldSourceFingerprint || (!previousClaim && hash(fresh.mapping) !== hash(saved.mapping))) throw fail('Source, mapping or proposed fields changed. Create a fresh preview.');
       const options = { env, fetchImpl, onResponse: current.onResponse, callsPerMinute: 45, retryOnRateLimit: false, requestGate: current.requestGate };
-      const read = await accountingFetch(current.connection, `/Invoices/${saved.xeroInvoiceId}?unitdp=4`, { ...options, method: 'GET' });
-      if (read.Invoices?.length !== 1 || read.Invoices[0].InvoiceID !== saved.xeroInvoiceId) throw fail('The exact current Xero transaction was not returned.');
-      const before = canonicalCorrectionInvoice(read.Invoices[0]);
+      const before = await readExactCorrectionInvoice(accountingFetch, current.connection, saved.xeroInvoiceId, options, 'The exact current Xero transaction was not returned.');
       const evidence = journalEvidence(saved, saved.before, actor, preview, allowanceReceipt);
       // Persist the original reviewed intent. A replay reads it back; it cannot
       // send another provider mutation, including after an uncertain timeout.
@@ -344,9 +353,8 @@ export async function xeroFinancialDocumentCorrectionApply(body = {}, dependenci
       assertCorrectionAllowance(rate, env, allowanceAuthority, { beforeRequest: true, requiredCalls: 3 });
       claimed = await claim(client, { tenantId: preview.tenant_id, xeroInvoiceId: saved.xeroInvoiceId, mappingId: saved.mapping?.id || null,
         idempotencyKey, evidence, actor });
-      const lockedRead = await accountingFetch(current.connection, `/Invoices/${saved.xeroInvoiceId}?unitdp=4`, { ...options, method: 'GET' });
-      if (lockedRead.Invoices?.length !== 1 || lockedRead.Invoices[0].InvoiceID !== saved.xeroInvoiceId) throw fail('The protected transaction readback was incomplete.', 'XERO_DOCUMENT_CORRECTION_UNCERTAIN');
-      const lockedBefore = canonicalCorrectionInvoice(lockedRead.Invoices[0]);
+      const lockedBefore = await readExactCorrectionInvoice(accountingFetch, current.connection, saved.xeroInvoiceId, options,
+        'The protected transaction readback was incomplete.', 'XERO_DOCUMENT_CORRECTION_UNCERTAIN');
       if (hash(lockedBefore) !== hash(before)) throw fail('The Xero transaction changed while the correction was being claimed.', 'XERO_DOCUMENT_CORRECTION_UNCERTAIN');
       if (claimed.alreadyClaimed || hash(before) === hash(evidence.expectedAfter)) {
         if (hash(before) !== hash(evidence.expectedAfter)) throw fail('The earlier request has an unconfirmed outcome; readback did not confirm completion.', 'XERO_DOCUMENT_CORRECTION_UNCERTAIN');
@@ -364,9 +372,9 @@ export async function xeroFinancialDocumentCorrectionApply(body = {}, dependenci
           && Array.isArray(response.Invoices[0].ValidationErrors) && response.Invoices[0].ValidationErrors.length > 0
           && response.Invoices[0].ValidationErrors.every((error) => typeof error.Message === 'string' && error.Message.trim());
         if (rejected) {
-          const rejectedRead = await accountingFetch(current.connection, `/Invoices/${saved.xeroInvoiceId}?unitdp=4`, { ...options, method: 'GET' });
-          const observed = rejectedRead.Invoices?.length === 1 ? canonicalCorrectionInvoice(rejectedRead.Invoices[0]) : null;
-          if (!observed || hash(observed) !== hash(before)) throw fail('Provider rejection did not have an unchanged exact readback.', 'XERO_DOCUMENT_CORRECTION_UNCERTAIN');
+          const observed = await readExactCorrectionInvoice(accountingFetch, current.connection, saved.xeroInvoiceId, options,
+            'Provider rejection did not have an unchanged exact readback.', 'XERO_DOCUMENT_CORRECTION_UNCERTAIN');
+          if (hash(observed) !== hash(before)) throw fail('Provider rejection did not have an unchanged exact readback.', 'XERO_DOCUMENT_CORRECTION_UNCERTAIN');
           const reason = response.Invoices[0].ValidationErrors.map((error) => error.Message).join(' ').slice(0, 2000);
           await finish(client, { claimId: claimed.id, status: 'rejected', evidence: { observed, basis: 'definitive_provider_rejection', reason }, actor });
           outcomes.push({ ...publicItem(saved), outcome: 'blocked', reason });
@@ -375,9 +383,8 @@ export async function xeroFinancialDocumentCorrectionApply(body = {}, dependenci
         if (!Array.isArray(response.Invoices) || response.Invoices.length !== 1 || response.Invoices[0].InvoiceID !== saved.xeroInvoiceId
           || response.Invoices[0].HasErrors || response.Invoices[0].ValidationErrors?.length) throw fail('Xero did not confirm the exact requested correction.', 'XERO_DOCUMENT_CORRECTION_UNCERTAIN');
       }
-      const result = await accountingFetch(current.connection, `/Invoices/${saved.xeroInvoiceId}?unitdp=4`, { ...options, method: 'GET' });
-      if (result.Invoices?.length !== 1 || result.Invoices[0].InvoiceID !== saved.xeroInvoiceId) throw fail('Correction readback was incomplete.', 'XERO_DOCUMENT_CORRECTION_UNCERTAIN');
-      const after = canonicalCorrectionInvoice(result.Invoices[0]);
+      const after = await readExactCorrectionInvoice(accountingFetch, current.connection, saved.xeroInvoiceId, options,
+        'Correction readback was incomplete.', 'XERO_DOCUMENT_CORRECTION_UNCERTAIN');
       const verified = verifyDocumentFieldCorrectionReadback({ before: saved.before, after, projection: saved.projection,
         direction: saved.source.xeroType === 'ACCREC' ? 'buyer' : 'supplier' });
       if (!verified.ok || hash(after) !== hash(evidence.expectedAfter)) throw fail('The correction readback changed unapproved fields or did not match the requested values.', 'XERO_DOCUMENT_CORRECTION_UNCERTAIN');

@@ -4,8 +4,11 @@ const fixture = '/e2e/fixtures/xero-document-corrections.html';
 const previewName = 'Preview date and reference corrections';
 const requests = (page) => page.evaluate(() => window.documentCorrectionFixture.requests);
 
-async function openPanel(page, scenario = '') {
-  await page.goto(`${fixture}${scenario ? `?scenario=${scenario}` : ''}`);
+async function openPanel(page, scenario = '', savedPreviewId) {
+  const params = new URLSearchParams();
+  if (scenario) params.set('scenario', scenario);
+  if (savedPreviewId !== undefined) params.set('correctionPreview', savedPreviewId);
+  await page.goto(`${fixture}?${params}`);
   await page.getByRole('button', { name: previewName, exact: true }).click();
   const dialog = page.getByRole('dialog');
   await expect(dialog.getByRole('heading', { name: 'Date and reference corrections' })).toBeVisible();
@@ -34,6 +37,48 @@ test.describe('offline document correction review', () => {
     expect((await requests(page)).filter((request) => request.name === 'xeroFinancialSyncPreview')).toHaveLength(0);
     await page.getByRole('button', { name: 'Check everything', exact: true }).click();
     await expect.poll(async () => (await requests(page)).filter((request) => request.name === 'xeroFinancialSyncPreview').length).toBe(1);
+  });
+
+  test('saved-preview links load every stored page only on explicit action and apply the reviewed original preview', async ({ page }) => {
+    const previewId = '00000000-0000-4000-8000-000000000265';
+    const dialog = await openPanel(page, 'saved-pending', previewId);
+    expect((await requests(page)).filter((request) => request.name.includes('Correction'))).toEqual([]);
+    await dialog.getByRole('button', { name: 'Load saved correction preview', exact: true }).click();
+    await expect(dialog).toContainText('Loading correction preview: 100 of 101 records.');
+    await expect(dialog.getByRole('button', { name: 'Apply selected corrections', exact: true })).toBeDisabled();
+    await expect(dialog.getByRole('row')).toHaveCount(0);
+    expect((await requests(page)).filter((request) => request.name.includes('Correction'))).toEqual([
+      { name: 'xeroFinancialDocumentCorrectionPage', body: { previewId, offset: 0 } },
+      { name: 'xeroFinancialDocumentCorrectionPage', body: { previewId, offset: 100 } },
+    ]);
+    await page.evaluate(() => window.documentCorrectionFixture.finishPage());
+    await expect(dialog).toContainText('101 records loaded');
+    await dialog.getByRole('row').filter({ has: page.getByRole('checkbox', { name: 'Select correction for INV-PAGE-1', exact: true }) }).locator('summary').first().click();
+    await expect(dialog).toContainText('After: OFFLINE FIXTURE VESSEL / STEM-ONE');
+    await dialog.getByRole('checkbox', { name: 'Select correction for INV-PAGE-2', exact: true }).uncheck();
+    expect((await requests(page)).filter((request) => request.name.includes('CorrectionApply'))).toHaveLength(0);
+    await dialog.getByRole('button', { name: 'Apply selected corrections', exact: true }).click();
+    await expect(dialog).toContainText('Applied: 24');
+    expect((await requests(page)).filter((request) => request.name === 'xeroFinancialDocumentCorrectionApply')).toEqual([
+      { name: 'xeroFinancialDocumentCorrectionApply', body: { previewId,
+        itemIds: Array.from({ length: 25 }, (_, index) => `page-${index + 1}`).filter((id) => id !== 'page-2') } },
+    ]);
+    expect((await requests(page)).filter((request) => request.name === 'xeroFinancialDocumentCorrectionPreview')).toHaveLength(0);
+  });
+
+  test('invalid, missing and inconsistent saved previews fail closed without a fresh provider scan', async ({ page }) => {
+    for (const [scenario, previewId] of [['saved-missing', '00000000-0000-4000-8000-000000000265'],
+      ['saved-invalid-first', '00000000-0000-4000-8000-000000000265'], ['saved-invalid-page', '00000000-0000-4000-8000-000000000265'],
+      ['saved-missing', 'not-a-uuid'], ['saved-missing', '']]) {
+      const dialog = await openPanel(page, scenario, previewId);
+      await dialog.getByRole('button', { name: 'Load saved correction preview', exact: true }).click();
+      await expect(dialog.getByRole('alert')).toBeVisible();
+      await expect(dialog.getByRole('row')).toHaveCount(0);
+      await expect(dialog.getByRole('button', { name: 'Apply selected corrections', exact: true })).toBeDisabled();
+      const calls = (await requests(page)).filter((request) => request.name.includes('Correction'));
+      expect(calls.every((request) => request.name === 'xeroFinancialDocumentCorrectionPage')).toBe(true);
+      if (!previewId || previewId === 'not-a-uuid') expect(calls).toHaveLength(0);
+    }
   });
 
   test('eligible corrections are selected, reasons always show, differences expand and apply submits only the reviewed selection', async ({ page }) => {
