@@ -133,12 +133,14 @@ test('saved preview serialization retains bounded metadata and old rows remain u
   const client = { from(table) {
     calls.push(table);
     const response = { data: table === 'xero_financial_sync_runs' ? [{ id: 'run', control_totals: { workflowSnapshot: { reconciliationVersion: XERO_RECONCILIATION_VERSION } } }] : [item, old], error: null };
-    const query = { select: () => query, eq: () => query, not: () => query, order: () => query, limit: async () => response, range: async () => response }; return query;
+    const query = { select: () => query, eq: () => query, not: () => query, order: () => query, limit: async () => response, range: async () => response,
+      maybeSingle: async () => ({ data: null, error: null }) }; return query;
   } };
   const result = await xeroFinancialSyncLatest({}, { client });
   assert.deepEqual(result.preview.rows[0].sourceFileDiscovery, discovery);
   assert.equal(result.preview.rows[1].sourceFileDiscovery, null);
-  assert.deepEqual(calls, ['xero_financial_sync_runs', 'xero_financial_sync_items']);
+  assert.deepEqual(calls, ['xero_financial_sync_runs', 'xero_contact_sync_connections', 'xero_financial_sync_items']);
+  assert.equal(result.allowanceAuditUnavailable, undefined);
   assert.equal(result.preview.rows[0].action, 'blocked'); assert.deepEqual(result.preview.rows[0].blockers, source.blockers);
 });
 

@@ -432,6 +432,7 @@ test('an incomplete inventory returns a curated hold and durably records the las
   assert.equal((f.tables.xero_document_field_correction_previews || []).length, 0);
   const audit = f.tables.xero_financial_audit_events.at(-1);
   assert.equal(audit.outcome, 'failed'); assert.equal(audit.run_id, null); assert.equal(audit.rate_limit_snapshot.dayRemaining, 431);
+  assert.equal(audit.fingerprints.tenantId, tenantId);
   assert.equal(audit.record_counts.providerCalls, 1); assert.equal(audit.error_code, 'XERO_DOCUMENT_CORRECTION_SCOPE_INCOMPLETE');
   assert.equal(f.calls.some((call) => call.method === 'POST'), false); assert.equal(f.claims.length, 0);
 });
@@ -442,6 +443,112 @@ test('failure to persist an allowance observation prevents publishing a correcti
   await assert.rejects(f.preview(), (error) => error.code === 'XERO_FINANCIAL_STORAGE_FAILED' && error.details.allowanceAuditUnavailable === true);
   assert.equal((f.tables.xero_document_field_correction_previews || []).length, 0); assert.equal(f.claims.length, 0);
   assert.equal(f.calls.some((call) => call.method === 'POST'), false);
+});
+
+test('confirmed correction apply persists the latest 60-to-30 allowance independently of its receipts', async () => {
+  const f = fixture(); const grant = reserveOverride(f); observedAllowance(f, 60);
+  const preview = await f.preview(); pinCanary(f, preview, grant);
+  const previewAudit = f.tables.xero_financial_audit_events.find((event) => event.event_type === 'document_correction_preview');
+  assert.equal(previewAudit.fingerprints.tenantId, tenantId); assert.equal(previewAudit.rate_limit_snapshot.dayRemaining, 60);
+  const calls = f.calls.length; f.behavior.dayRemaining = 30;
+  const result = await f.apply(preview);
+  assert.deepEqual(result.items.map((item) => item.outcome), ['applied', 'applied']);
+  const audit = f.tables.xero_financial_audit_events.at(-1);
+  assert.equal(audit.event_type, 'document_correction_apply'); assert.equal(audit.outcome, 'complete'); assert.equal(audit.run_id, null);
+  assert.deepEqual(audit.fingerprints, { tenantId, previewId: preview.previewId });
+  assert.deepEqual(audit.rate_limit_snapshot, result.rateLimit); assert.equal(audit.rate_limit_snapshot.dayRemaining, 30);
+  assert.equal(audit.record_counts.providerCalls, f.calls.length - calls); assert.equal(audit.record_counts.applied, 2);
+  assert.deepEqual(f.finishes.map((entry) => entry.status), ['confirmed', 'confirmed']);
+  assert.equal(result.allowanceAuditUnavailable, undefined);
+});
+
+test('readback recovery persists the latest 600-to-350 allowance without resending a correction', async () => {
+  const f = fixture(); observedAllowance(f, 600); const preview = await f.preview();
+  f.behavior.dayRemaining = 400; f.behavior.timeoutAfterWrite = true;
+  const first = await f.apply(preview); const posts = f.calls.filter((call) => call.method === 'POST').length;
+  f.behavior.dayRemaining = 350;
+  const result = await xeroFinancialDocumentCorrectionVerify({ previewId: preview.previewId, itemIds: [first.items[0].id] }, f.dependencies);
+  assert.equal(result.items[0].outcome, 'applied'); assert.equal(result.rateLimit.dayRemaining, 350);
+  const audit = f.tables.xero_financial_audit_events.at(-1);
+  assert.equal(audit.event_type, 'document_correction_verify'); assert.equal(audit.outcome, 'complete');
+  assert.deepEqual(audit.fingerprints, { tenantId, previewId: preview.previewId });
+  assert.deepEqual(audit.rate_limit_snapshot, result.rateLimit); assert.equal(audit.record_counts.providerCalls, 1);
+  assert.equal(f.calls.filter((call) => call.method === 'POST').length, posts);
+  const audits = f.tables.xero_financial_audit_events.length;
+  const replay = await xeroFinancialDocumentCorrectionVerify({ previewId: preview.previewId, itemIds: [first.items[0].id] }, f.dependencies);
+  assert.equal(replay.items[0].outcome, 'applied'); assert.deepEqual(replay.rateLimit, {});
+  assert.equal(f.tables.xero_financial_audit_events.length, audits, 'Saved receipts do not invent a fresh provider observation');
+});
+
+test('apply inventory failure and true 429 persist final observed quota before any correction intent', async () => {
+  for (const mode of ['incomplete', 'rate_limited']) {
+    const f = fixture(); observedAllowance(f, 600); const preview = await f.preview();
+    const remaining = mode === 'incomplete' ? 431 : 0;
+    if (mode === 'incomplete') {
+      f.behavior.dayRemaining = remaining; const loadPages = f.dependencies.loadPages;
+      f.dependencies.loadPages = async (connection, path, collection, options) => {
+        if (collection === 'Invoices') {
+          options.onResponse({ headers: new Headers({ 'x-daylimit-remaining': String(remaining) }), status: 200 });
+          throw Object.assign(new Error('Private upstream inventory details'), { code: 'XERO_FINANCIAL_XERO_INCOMPLETE', status: 502 });
+        }
+        return loadPages(connection, path, collection, options);
+      };
+    } else observedAllowance(f, 0, 429);
+    await assert.rejects(f.apply(preview), (error) => error.details.rateLimit.dayRemaining === remaining
+      && error.code === (mode === 'incomplete' ? 'XERO_DOCUMENT_CORRECTION_SCOPE_INCOMPLETE' : 'XERO_CONTACT_SYNC_RATE_LIMITED')
+      && !error.message.includes('Private'));
+    const audit = f.tables.xero_financial_audit_events.at(-1);
+    assert.equal(audit.event_type, 'document_correction_apply'); assert.equal(audit.outcome, 'failed');
+    assert.equal(audit.fingerprints.tenantId, tenantId); assert.equal(audit.rate_limit_snapshot.dayRemaining, remaining);
+    assert.equal(f.claims.length, 0); assert.equal(f.calls.filter((call) => call.method === 'POST').length, 0);
+  }
+});
+
+test('separate quota audit failure preserves confirmed, rejected and uncertain apply outcomes', async () => {
+  for (const mode of ['confirmed', 'rejected', 'uncertain']) {
+    const f = fixture(); observedAllowance(f, 600); const preview = await f.preview();
+    f.behavior.dayRemaining = 550;
+    if (mode === 'rejected') f.behavior.definitiveRejection = true;
+    if (mode === 'uncertain') f.behavior.timeoutAfterWrite = true;
+    f.dependencies.recordAudit = async () => { throw new Error('Private quota storage details'); };
+    const result = await f.apply(preview);
+    assert.deepEqual(result.items.map((item) => item.outcome), mode === 'confirmed' ? ['applied', 'applied']
+      : mode === 'rejected' ? ['blocked', 'blocked'] : ['uncertain', 'blocked']);
+    assert.deepEqual(f.finishes.map((entry) => entry.status), mode === 'uncertain' ? ['uncertain'] : [mode, mode]);
+    assert.equal(result.allowanceAuditUnavailable, true); assert.equal(result.rateLimit.dayRemaining, 550);
+    assert.equal(JSON.stringify(result).includes('Private quota storage'), false);
+  }
+});
+
+test('quota audit failure after recovered confirmation never finishes the correction twice', async () => {
+  const f = fixture(); observedAllowance(f, 600); const preview = await f.preview(); f.behavior.timeoutAfterWrite = true;
+  const first = await f.apply(preview); const finishes = f.finishes.length;
+  f.behavior.dayRemaining = 350; f.dependencies.recordAudit = async () => { throw new Error('Private quota storage details'); };
+  const result = await xeroFinancialDocumentCorrectionVerify({ previewId: preview.previewId, itemIds: [first.items[0].id] }, f.dependencies);
+  assert.equal(result.items[0].outcome, 'applied'); assert.equal(result.allowanceAuditUnavailable, true);
+  assert.equal(result.rateLimit.dayRemaining, 350); assert.equal(f.finishes.length, finishes + 1);
+  assert.equal(f.finishes.at(-1).status, 'confirmed'); assert.equal(JSON.stringify(result).includes('Private quota storage'), false);
+});
+
+test('readback verification preserves uncertain outcomes and persists a true 429 allowance', async () => {
+  const f = fixture(); observedAllowance(f, 600); const preview = await f.preview(); f.behavior.timeoutAfterWrite = true;
+  const first = await f.apply(preview); const posts = f.calls.filter((call) => call.method === 'POST').length;
+  observedAllowance(f, 0, 429);
+  const result = await xeroFinancialDocumentCorrectionVerify({ previewId: preview.previewId, itemIds: [first.items[0].id] }, f.dependencies);
+  assert.equal(result.items[0].outcome, 'uncertain'); assert.equal(result.rateLimit.dayRemaining, 0);
+  const audit = f.tables.xero_financial_audit_events.at(-1);
+  assert.equal(audit.event_type, 'document_correction_verify'); assert.equal(audit.fingerprints.tenantId, tenantId);
+  assert.equal(audit.rate_limit_snapshot.dayRemaining, 0); assert.equal(audit.record_counts.uncertain, 1);
+  assert.equal(f.calls.filter((call) => call.method === 'POST').length, posts);
+});
+
+test('prewrite failure retains its public rate and code when separate quota persistence fails', async () => {
+  const f = fixture(); observedAllowance(f, 600); const preview = await f.preview();
+  observedAllowance(f, 0, 429); f.dependencies.recordAudit = async () => { throw new Error('Private quota storage details'); };
+  await assert.rejects(f.apply(preview), (error) => error.code === 'XERO_CONTACT_SYNC_RATE_LIMITED'
+    && error.details.rateLimit.dayRemaining === 0 && error.details.allowanceAuditUnavailable === true
+    && !error.message.includes('Private quota storage'));
+  assert.equal(f.claims.length, 0); assert.equal(f.finishes.length, 0);
 });
 
 test('curated unsupported-number evidence holds keep their specific safe reason before any provider reads', async () => {

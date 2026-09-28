@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { confirmedDocumentCorrection } from './_xeroDocumentCorrectionOverlay.js';
+import { readSavedXeroAllowance } from './_xeroSavedAllowance.js';
 import { buildDocumentFieldProjection, projectAccountingPayload } from './_xeroDocumentFieldPolicy.js';
 import { fcosSalesforceEnvironment } from '../config/fcosConnections.js';
 import { ISSUED_PETROLEUM_POLICY, ISSUED_PETROLEUM_V2_POLICY, ISSUED_PRESERVATION_POLICIES, isIssuedPreservationPolicy } from '../config/xeroIssuedPreservationPolicies.js';
@@ -646,8 +647,9 @@ export async function xeroFinancialSyncLatest(_body = {}, { env = process.env, c
   const { data: runs, error } = await latestQuery.not('status', 'in', '(building,cancelled)').not('control_totals->workflowSnapshot', 'is', null).order('created_at', { ascending: false }).limit(1);
   if (error) throw storageError(error, 'xero_financial_sync_runs');
   const run = runs?.[0];
-  if (!run || run.control_totals?.workflowSnapshot?.reconciliationVersion !== XERO_RECONCILIATION_VERSION) return { preview: null, refreshRequired: Boolean(run) };
-  return { preview: await savedFinancialPreview(client, run) };
+  const allowance = await readSavedXeroAllowance(client);
+  if (!run || run.control_totals?.workflowSnapshot?.reconciliationVersion !== XERO_RECONCILIATION_VERSION) return { preview: null, refreshRequired: Boolean(run), ...allowance };
+  return { preview: await savedFinancialPreview(client, run), ...allowance };
 }
 
 export async function savedFinancialPreview(client, run) {

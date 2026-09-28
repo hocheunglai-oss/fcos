@@ -44,6 +44,8 @@ node scripts/xero-finance-operator.mjs corrections-verify PREVIEW_UUID ITEM_UUID
 
 Keep output and evidence private. Preview collects every saved page and rejects missing/duplicate rows. Apply and Verify require explicit IDs from that same preview. Inspect current saved quota state before starting a provider stage; honour actual retry deadlines and the 200-call reserve. Source changes require a fresh preview. Salesforce remains read-only.
 
+Preview, Apply and Verify retain their latest observed Xero allowance in a separate, organisation-bound audit event, including failures after provider reads. Restoring the ordinary financial review also returns the newest saved allowance for the connected organisation without calling Xero. The observation timestamp stays unchanged; a saved observation is not a fresh quota check or an inferred reset time. If allowance-audit storage fails, confirmed correction receipts and outcomes stay confirmed and the response flags `allowanceAuditUnavailable`; logging failure never resends a correction.
+
 ## Temporary allowance exception
 
 An explicit user instruction can authorise one complete preview and a small verified batch below the ordinary reserve. Configure `FCOS_XERO_DOCUMENT_CORRECTION_RESERVE_OVERRIDE` only on that deployment, as a JSON object with `authorityId`, the authenticated human `actorId`, the verified Xero `tenantId`, `policy: "document_field_correction_v1"`, UTC `issuedAt` and `expiresAt`, and `maxBatchSize: 2`. The grant must expire within four hours. Malformed, mismatched or expired configuration does not waive the normal reserve. Caller request parameters cannot grant an exception.
