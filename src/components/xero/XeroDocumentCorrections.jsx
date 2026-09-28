@@ -9,7 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import XeroDailyAllowance from '@/components/xero/XeroDailyAllowance';
 import { latestXeroDailyAllowance } from '@/lib/xeroDailyAllowance';
 import { collectDocumentCorrectionPreview, documentCorrectionInitialSelection, documentCorrectionOutcomeLabel, documentCorrectionOutcomes,
-  documentCorrectionPreviewValid, documentCorrectionSelectable, documentCorrectionSelection, documentCorrectionValue,
+  documentCorrectionSelectable, documentCorrectionSelection, documentCorrectionValue,
   XERO_DOCUMENT_CORRECTION_BATCH_LIMIT } from '@/lib/xeroDocumentCorrectionsUi';
 import './XeroDocumentCorrections.css';
 
@@ -17,6 +17,10 @@ const OPTIONS = { force: true, cache: false, invalidateCache: true };
 const FIELD_LABELS = { Date: 'Document date', DueDate: 'Due date', Reference: 'Reference', InvoiceNumber: 'Document number' };
 const KIND_LABELS = { buyer_invoice: 'Buyer invoice', supplier_invoice: 'Supplier bill', supplier_bill: 'Supplier bill',
   debit_note: 'Debit note', credit_note: 'Credit note' };
+const MUTED = 'text-xs text-muted-foreground';
+const BLOCK_MUTED = `block ${MUTED}`;
+const DETAIL_LINK = 'cursor-pointer text-sm text-blue-700 underline';
+const SPINNER = <Loader2 aria-hidden="true" className="mr-2 h-4 w-4 animate-spin" />;
 
 export default function XeroDocumentCorrections({ onClose, enabled, canPreview, onAllowance }) {
   const [preview, setPreview] = useState(null);
@@ -63,7 +67,6 @@ export default function XeroDocumentCorrections({ onClose, enabled, canPreview, 
         if (next.data?.error) throw new Error(next.data.error);
         return next.data;
       }, (received, total) => { if (current === generation.current) setPreviewProgress({ received, total }); });
-      if (!documentCorrectionPreviewValid(complete)) throw new Error('Incomplete preview. Prepare a new preview.');
       setPreview(complete);
       const initialSelection = documentCorrectionInitialSelection(complete);
       setSelected(initialSelection);
@@ -131,7 +134,7 @@ export default function XeroDocumentCorrections({ onClose, enabled, canPreview, 
       </DialogHeader>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <Button type="button" variant="outline" onClick={previewCorrections} disabled={!canPreview || Boolean(busy)}>
-          {busy === 'preview' && <Loader2 aria-hidden="true" className="mr-2 h-4 w-4 animate-spin" />}
+          {busy === 'preview' && SPINNER}
           {busy === 'preview' ? 'Preparing correction preview…' : 'Preview date and reference corrections'}
         </Button>
         <p className="text-sm text-muted-foreground">Maximum {XERO_DOCUMENT_CORRECTION_BATCH_LIMIT} corrections per batch.</p>
@@ -146,10 +149,10 @@ export default function XeroDocumentCorrections({ onClose, enabled, canPreview, 
             ['legacyPreserved', 'Legacy preserved', 'legacy_preserved'], ['blocked', 'Blocked', 'blocked']].map(([key, label, outcome]) =>
             <Badge key={key} variant="outline">{label}: {preview.summary?.[key] ?? items.filter((item) => item.outcome === outcome).length}</Badge>)}
         </div>
-        <p className="text-xs text-muted-foreground break-all">Preview {preview.previewId}{preview.createdAt ? ` · ${new Date(preview.createdAt).toLocaleString('en-HK')}` : ''}</p>
+        <p className={`${MUTED} break-all`}>Preview {preview.previewId}{preview.createdAt ? ` · ${new Date(preview.createdAt).toLocaleString('en-HK')}` : ''}</p>
         {items.length > 0 && <div className="flex flex-wrap items-center justify-between gap-2">
           <Button type="button" variant="outline" size="sm" disabled={Boolean(busy) || (!selectedOnly && !selected.size)} onClick={() => { setSelectedOnly((value) => !value); setTablePage(0); }}>{selectedOnly ? 'Show all corrections' : 'Show selected corrections'}</Button>
-          <div className="flex flex-wrap items-center gap-2"><p className="text-xs text-muted-foreground">{tableItems.length} {selectedOnly ? 'selected records' : 'records loaded'} · Page {tablePage + 1} of {tablePageCount}</p>
+          <div className="flex flex-wrap items-center gap-2"><p className={MUTED}>{tableItems.length} {selectedOnly ? 'selected records' : 'records loaded'} · Page {tablePage + 1} of {tablePageCount}</p>
             <Button type="button" variant="outline" size="sm" disabled={Boolean(busy) || tablePage === 0} onClick={() => setTablePage((page) => page - 1)}>Previous correction page</Button>
             <Button type="button" variant="outline" size="sm" disabled={Boolean(busy) || tablePage + 1 >= tablePageCount} onClick={() => setTablePage((page) => page + 1)}>Next correction page</Button></div>
         </div>}
@@ -170,22 +173,21 @@ export default function XeroDocumentCorrections({ onClose, enabled, canPreview, 
                     return next;
                   })} /></TableCell>
                 <TableCell data-label="Document"><span className="block font-medium">{item.documentNumber || item.salesforceId || item.id}</span>
-                  <span className="block text-xs text-muted-foreground">{KIND_LABELS[item.kind] || 'Document'} · Salesforce {item.salesforceId || 'unavailable'}</span>
-                  <span className="block text-xs text-muted-foreground">Xero {item.xeroInvoiceId || 'unavailable'}</span></TableCell>
-                <TableCell data-label="STEM / vessel"><span className="block">{item.stemKey || 'STEM unavailable'}</span><span className="block text-xs text-muted-foreground">{item.vesselName || 'Vessel unavailable'}</span></TableCell>
+                  <span className={BLOCK_MUTED}>{KIND_LABELS[item.kind] || 'Document'} · Salesforce {item.salesforceId || 'unavailable'}</span>
+                  <span className={BLOCK_MUTED}>Xero {item.xeroInvoiceId || 'unavailable'}</span></TableCell>
+                <TableCell data-label="STEM / vessel"><span className="block">{item.stemKey || 'STEM unavailable'}</span><span className={BLOCK_MUTED}>{item.vesselName || 'Vessel unavailable'}</span></TableCell>
                 <TableCell data-label="Reason / result"><span className="block font-medium">{documentCorrectionOutcomeLabel(outcome?.outcome || item.outcome)}</span>
                   <p className="mt-1 text-xs">{item.reason || 'Missing reason. Review before applying.'}</p>
                   {item.outcome === 'eligible' && !selectable && <p className="mt-1 text-xs text-amber-900">Verification evidence is incomplete. Prepare a new preview.</p>}
                   {outcome && <p className="mt-1 text-xs" role="status">{outcome.reason || outcome.error || outcome.message || (outcome.outcome === 'applied' ? 'Correction confirmed.' : 'Review this result.')}</p>}
                 </TableCell>
                 <TableCell data-label="Differences / source evidence">{item.changes?.length ? <details>
-                  <summary className="cursor-pointer text-sm text-blue-700 underline">View {item.changes.length} {item.changes.length === 1 ? 'difference' : 'differences'}</summary>
+                  <summary className={DETAIL_LINK}>View {item.changes.length} {item.changes.length === 1 ? 'difference' : 'differences'}</summary>
                   <dl className="mt-2 space-y-3">{item.changes.map((change, index) => <div key={`${change.field}:${index}`}>
                     <dt className="text-xs font-semibold">{FIELD_LABELS[change.field] || change.field}</dt>
-                    <dd className="mt-1 text-xs"><span className="font-medium">Before: </span>{documentCorrectionValue(change.before)}</dd>
-                    <dd className="mt-1 text-xs"><span className="font-medium">After: </span>{documentCorrectionValue(change.after)}</dd>
+                    {[['Before', change.before], ['After', change.after]].map(([label, value]) => <dd key={label} className="mt-1 text-xs"><span className="font-medium">{label}: </span>{documentCorrectionValue(value)}</dd>)}
                   </div>)}</dl>
-                </details> : <span className="text-xs text-muted-foreground">{item.linkOnly === true ? 'Verify and link; existing Xero fields remain unchanged.' : 'No field changes proposed.'}</span>}
+                </details> : <span className={MUTED}>{item.linkOnly === true ? 'Verify and link; existing Xero fields remain unchanged.' : 'No field changes proposed.'}</span>}
                   <CorrectionSourceEvidence evidence={item.sourceEvidence} />
                 </TableCell>
               </TableRow>;
@@ -205,16 +207,16 @@ export default function XeroDocumentCorrections({ onClose, enabled, canPreview, 
       </div>}
       {attempted && uncertainIds.length > 0 && <div className="space-y-2">
         <Button type="button" variant="outline" onClick={verifyUncertainResults} disabled={!canPreview || Boolean(busy)}>
-          {busy === 'verify' && <Loader2 aria-hidden="true" className="mr-2 h-4 w-4 animate-spin" />}
+          {busy === 'verify' && SPINNER}
           {busy === 'verify' ? 'Verifying uncertain results…' : 'Verify uncertain results'}
         </Button>
-        <p className="text-xs text-muted-foreground">Read back the original results without resending corrections. Available while writes are locked.</p>
+        <p className={MUTED}>Read back the original results without resending corrections. Available while writes are locked.</p>
       </div>}
       {allowance && <XeroDailyAllowance snapshot={allowance} />}
       <div className="flex flex-wrap justify-end gap-2">
         <Button type="button" variant="outline" onClick={onClose} disabled={Boolean(busy)}>Close</Button>
         <Button type="button" onClick={applyCorrections} disabled={!enabled || !canPreview || Boolean(busy) || attempted || !selectedIds.length}>
-          {busy === 'apply' && <Loader2 aria-hidden="true" className="mr-2 h-4 w-4 animate-spin" />}
+          {busy === 'apply' && SPINNER}
           {busy === 'apply' ? 'Applying corrections…' : 'Apply selected corrections'}
         </Button>
       </div>
@@ -230,14 +232,14 @@ function CorrectionSourceEvidence({ evidence }) {
   const buyerIds = new Set(buyers.map((buyer) => buyer.id));
   const unresolvedIds = [...new Set((evidence?.links || []).map((link) => link.buyerId).filter((id) => id && !buyerIds.has(id)))];
   return <details className="mt-3">
-    <summary className="cursor-pointer text-sm text-blue-700 underline">Source evidence</summary>
+    <summary className={DETAIL_LINK}>Source evidence</summary>
     {evidence ? <div className="mt-2 space-y-3 text-xs">
       <dl className="space-y-1">
-        <div><dt className="inline font-semibold">Date evidence: </dt><dd className="inline">{resolution}</dd></div>
-        <div><dt className="inline font-semibold">Original source number: </dt><dd className="inline">{documentCorrectionValue(evidence.originalName)}</dd></div>
-        <div><dt className="inline font-semibold">Source due date: </dt><dd className="inline">{documentCorrectionValue(evidence.dueDate)} ({evidence.direction === 'supplier' ? 'supplier invoice' : 'buyer invoice'})</dd></div>
-        <div><dt className="inline font-semibold">Vessel: </dt><dd className="inline">{documentCorrectionValue(evidence.vesselName)}</dd></div>
-        <div><dt className="inline font-semibold">STEM reference code: </dt><dd className="inline">{documentCorrectionValue(evidence.refCode)}</dd></div>
+        {[
+          ['Date evidence', resolution], ['Original source number', evidence.originalName],
+          ['Source due date', `${documentCorrectionValue(evidence.dueDate)} (${evidence.direction === 'supplier' ? 'supplier invoice' : 'buyer invoice'})`],
+          ['Vessel', evidence.vesselName], ['STEM reference code', evidence.refCode],
+        ].map(([label, value]) => <div key={label}><dt className="inline font-semibold">{label}: </dt><dd className="inline">{documentCorrectionValue(value)}</dd></div>)}
       </dl>
       {buyers.length > 0 ? <div><p className="font-semibold">Verified buyer invoice evidence</p><ul className="mt-1 space-y-2">{buyers.map((buyer, index) => <BuyerEvidence key={`${buyer.id}:${index}`} buyer={buyer} />)}</ul></div>
         : <p>No verified buyer invoice evidence is available.</p>}
@@ -245,7 +247,7 @@ function CorrectionSourceEvidence({ evidence }) {
       {fallback && <div><p className="font-semibold">Buyer invoices considered on this STEM</p>{fallback.length
         ? <ul className="mt-1 space-y-2">{fallback.map((buyer, index) => <BuyerEvidence key={`${buyer.id}:${index}`} buyer={buyer} />)}</ul>
         : <p className="mt-1">No buyer invoice candidates were found.</p>}</div>}
-    </div> : <p className="mt-2 text-xs text-muted-foreground">Source evidence is unavailable. Prepare a new preview.</p>}
+    </div> : <p className={`mt-2 ${MUTED}`}>Source evidence is unavailable. Prepare a new preview.</p>}
   </details>;
 }
 
@@ -255,9 +257,8 @@ function BuyerEvidence({ buyer }) {
       : buyer.inactive === true ? 'Inactive invoice' : buyer.credit === true ? 'Credit note' : 'Eligibility evidence incomplete';
   return <li className="rounded-md border p-2">
     <p className="font-medium">{documentCorrectionValue(buyer.name)}</p>
-    <p>Salesforce ID: {documentCorrectionValue(buyer.id)}</p>
-    <p>Buyer delivery date: {documentCorrectionValue(buyer.deliveryDate)}</p>
-    <p>Buyer invoice date: {documentCorrectionValue(buyer.invoiceDate)}</p>
+    {[['Salesforce ID', buyer.id], ['Buyer delivery date', buyer.deliveryDate], ['Buyer invoice date', buyer.invoiceDate]]
+      .map(([label, value]) => <p key={label}>{label}: {documentCorrectionValue(value)}</p>)}
     <p>{eligibility}</p>
   </li>;
 }
