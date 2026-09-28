@@ -1,14 +1,15 @@
 import { randomUUID } from 'node:crypto';
-import { xeroRequestGate } from './_xeroRateLimit.js';
+import { xeroRateLimitError, xeroRequestGate } from './_xeroRateLimit.js';
 import { requireExternalActionGate } from './_externalActionGates.js';
 import { getFreshXeroConnection, splitScopes, xeroAccountingFetch, xeroContactSyncServiceClient } from './_xeroContactSync.js';
 import { previewEvidenceHash as hash } from './_xeroPreviewPersistence.js';
-import { allFinancialRows, assertXeroFinancialDailyReserve, buildFinancialClassifications, loadAllXeroPages,
+import { allFinancialRows, buildFinancialClassifications, loadAllXeroPages,
   loadSalesforceFinancialSnapshot, loadStoredFinancialControls, normalizeXeroInvoice, recordXeroFinancialAudit, xeroFinancialRateSnapshot, XERO_FINANCIAL_CUTOFF } from './_xeroFinancialSync.js';
 import { buildDocumentFieldCorrectionPayload, evaluateDocumentFieldCorrection, verifyDocumentFieldCorrectionReadback } from './_xeroDocumentFieldPolicy.js';
 import { claimDocumentCorrection, finishDocumentCorrection } from './_xeroDocumentCorrectionPersistence.js';
 import { assertDocumentCorrectionPreviewBounds, buildDocumentCorrectionScope, collectDocumentCorrectionInvoices,
   compactDocumentCorrectionPreview, correctionScopeError } from './_xeroDocumentCorrectionScope.js';
+import { assertCorrectionAllowance, resolveCorrectionReserveAuthority, verifyCorrectionCanary } from './_xeroDocumentCorrectionReserve.js';
 
 const POLICY = 'document_field_correction_v1';
 const TABLE = 'xero_document_field_correction_previews';
@@ -112,14 +113,21 @@ export function buildDocumentCorrectionItems({ salesforce, xero, stored }) {
 async function currentEvidence(dependencies, rate) {
   const { env = process.env, fetchImpl = fetch, client = xeroContactSyncServiceClient(env), getConnection = getFreshXeroConnection,
     loadSalesforce = loadSalesforceFinancialSnapshot, loadControls = loadStoredFinancialControls, accountingFetch = xeroAccountingFetch, loadPages = loadAllXeroPages } = dependencies;
-  let callCount = 0;
-  const onResponse = ({ headers }) => { callCount += 1; Object.assign(rate, xeroFinancialRateSnapshot(headers, rate)); assertXeroFinancialDailyReserve(rate, env); };
-  const requestGate = (tenant, operation, limits) => xeroRequestGate(fetchImpl)(tenant, () => { assertXeroFinancialDailyReserve(rate, env); return operation(); }, limits);
-  const options = { env, fetchImpl, onResponse, callsPerMinute: 45, requestGate };
+  let callCount = 0; let allowanceAuthority = null;
+  const onResponse = ({ headers, status }) => {
+    callCount += 1; Object.assign(rate, xeroFinancialRateSnapshot(headers, rate));
+    if (status === 429) throw xeroRateLimitError(headers);
+    assertCorrectionAllowance(rate, env, allowanceAuthority);
+  };
+  const requestGate = (tenant, operation, limits) => xeroRequestGate(fetchImpl)(tenant, () => {
+    assertCorrectionAllowance(rate, env, allowanceAuthority, { beforeRequest: true }); return operation();
+  }, limits);
+  const options = { env, fetchImpl, onResponse, callsPerMinute: 45, retryOnRateLimit: false, requestGate };
   try {
   const connection = await getConnection(client, { env, fetchImpl });
   const scopes = splitScopes(connection.scope || '');
   if (!uuid(connection.tenantId) || !['accounting.invoices', 'accounting.transactions'].some((x) => scopes.includes(x))) throw fail('The connected Xero organisation or invoice scope is unavailable.');
+  allowanceAuthority = resolveCorrectionReserveAuthority(env, actorFor(dependencies.accessContext), connection.tenantId);
   const [salesforce, stored] = await Promise.all([loadSalesforce(XERO_FINANCIAL_CUTOFF), loadControls(client)]);
   const plan = buildDocumentCorrectionScope(salesforce, stored, XERO_FINANCIAL_CUTOFF);
   // Let every already-started read finish before persisting a failure's final
@@ -135,17 +143,18 @@ async function currentEvidence(dependencies, rate) {
   const invoices = collected.invoices;
   const organisation = organisations.Organisations?.find((org) => org.OrganisationID === connection.tenantId);
   if (!organisation) throw fail('Xero organisation identity could not be verified.');
-  const xero = { tenantId: connection.tenantId, rawInvoices: invoices, documents: invoices.filter((r) => ['DRAFT', 'SUBMITTED', 'AUTHORISED', 'PAID'].includes(r.Status)).map(normalizeXeroInvoice),
+  const xero = { tenantId: connection.tenantId, cutoffDate: XERO_FINANCIAL_CUTOFF, rawInvoices: invoices, documents: invoices.filter((r) => ['DRAFT', 'SUBMITTED', 'AUTHORISED', 'PAID'].includes(r.Status)).map(normalizeXeroInvoice),
     inactiveDocuments: invoices.filter((r) => !['DRAFT', 'SUBMITTED', 'AUTHORISED', 'PAID'].includes(r.Status)).map(normalizeXeroInvoice), contactsComplete: true,
     contacts: contacts.map((c) => ({ id: c.ContactID, name: c.Name, status: c.ContactStatus, accountNumber: c.AccountNumber || '', contactNumber: c.ContactNumber || '' })),
     organisation: { periodLockDate: organisation.PeriodLockDate ? isoDate(organisation.PeriodLockDate) : null,
       endOfYearLockDate: organisation.EndOfYearLockDate ? isoDate(organisation.EndOfYearLockDate) : null, baseCurrency: organisation.BaseCurrency } };
   const items = compactDocumentCorrectionPreview(buildDocumentCorrectionItems({ salesforce, stored, xero }), plan.scope);
-  return { connection, salesforce, stored, xero, items, scope: plan.scope, callCount, queryFingerprint: collected.queryFingerprint, onResponse, requestGate };
+  return { connection, salesforce, stored, xero, items, scope: plan.scope, callCount, queryFingerprint: collected.queryFingerprint, onResponse, requestGate, allowanceAuthority };
   } catch (error) {
     const failure = error.code === 'XERO_FINANCIAL_XERO_INCOMPLETE'
       ? correctionScopeError() : error;
     failure.details = { ...(error.details || {}), rateLimit: { ...rate }, callCount };
+    failure.correctionAllowanceAuthority = allowanceAuthority;
     throw failure;
   }
 }
@@ -158,12 +167,14 @@ export async function xeroFinancialDocumentCorrectionPreview(_body = {}, depende
     const evidence = await currentEvidence({ ...dependencies, client }, rate);
     const preview = { id: randomUUID(), tenant_id: evidence.connection.tenantId, policy: POLICY, created_by: actor.id,
       created_at: new Date().toISOString(), items: evidence.items, summary: { ...summary(evidence.items),
-        legacyPreserved: evidence.scope.excludedLegacyCount, scope: evidence.scope } };
+        legacyPreserved: evidence.scope.excludedLegacyCount, scope: evidence.scope,
+        ...(evidence.allowanceAuthority ? { allowanceAuthority: evidence.allowanceAuthority } : {}) } };
     assertDocumentCorrectionPreviewBounds(preview.items, preview.summary);
     // Durable allowance observations are separate from financial runs/approval.
     await audit(client, { runId: null, eventType: 'document_correction_preview', outcome: 'complete', actor,
       counts: { ...evidence.scope, totalCount: preview.items.length, providerCalls: evidence.callCount },
-      fingerprints: { previewId: preview.id, queryFingerprint: evidence.queryFingerprint }, rate });
+      fingerprints: { previewId: preview.id, queryFingerprint: evidence.queryFingerprint,
+        ...(evidence.allowanceAuthority ? { allowanceAuthority: evidence.allowanceAuthority } : {}) }, rate });
     const { error } = await client.from(TABLE).insert(preview);
     if (error) throw fail('The complete correction preview could not be saved.', 'XERO_DOCUMENT_CORRECTION_STORAGE_FAILED', 503);
     return { policy: POLICY, previewId: preview.id, createdAt: preview.created_at, items: preview.items.slice(0, PAGE_SIZE).map(publicItem),
@@ -174,7 +185,9 @@ export async function xeroFinancialDocumentCorrectionPreview(_body = {}, depende
       ? correctionScopeError() : error;
     failure.details = { ...(error.details || {}), rateLimit: { ...rate } };
     try { await audit(client, { runId: null, eventType: 'document_correction_preview', outcome: 'failed', actor,
-      counts: { providerCalls: error.details?.callCount || 0 }, fingerprints: {}, rate, errorCode: failure.code || 'XERO_DOCUMENT_CORRECTION_PREVIEW_FAILED' }); }
+      counts: { providerCalls: error.details?.callCount || 0 },
+      fingerprints: error.correctionAllowanceAuthority ? { allowanceAuthority: error.correctionAllowanceAuthority } : {},
+      rate, errorCode: failure.code || 'XERO_DOCUMENT_CORRECTION_PREVIEW_FAILED' }); }
     catch { failure.details.allowanceAuditUnavailable = true; }
     throw failure;
   }
@@ -196,7 +209,7 @@ export async function xeroFinancialDocumentCorrectionPage(body = {}, dependencie
     scope: data.summary.scope, nextOffset: data.nextOffset, items: data.items.map(publicItem) };
 }
 
-function journalEvidence(item, before, _actor, preview) {
+function journalEvidence(item, before, _actor, preview, allowanceAuthority = null) {
   const fields = item.projection.fields; const expectedAfter = structuredClone(before);
   const header = { Date: fields.Date, DueDate: fields.DueDate, InvoiceNumber: fields.InvoiceNumber,
     ...(item.source.xeroType === 'ACCREC' ? { Reference: fields.Reference } : {}) };
@@ -208,7 +221,9 @@ function journalEvidence(item, before, _actor, preview) {
     xeroType: item.source.xeroType, contactId: item.source.contactId, currency: item.source.currency, total: item.source.total, sourceFingerprint: item.source.sourceFingerprint, financialFingerprint: item.source.financialFingerprint,
     deliveryDate: fields.Date, fieldSourceFingerprint: item.source.documentFieldSourceFingerprint, projectionFingerprint: item.projectionFingerprint, buyerInvoiceEvidence: item.projection.evidence },
   before, expectedAfter, projection: { header, lineDescriptions }, mappingSnapshot: item.mapping,
-  authority: { basis: 'explicit_user_requested_2026_field_correction', scopeHash: hash({ previewId: preview.id, itemId: item.id, actorId: preview.created_by }), reviewedAt: preview.created_at } };
+  ...(allowanceAuthority ? { allowanceAuthority } : {}),
+  authority: { basis: 'explicit_user_requested_2026_field_correction', scopeHash: hash({ previewId: preview.id, itemId: item.id, actorId: preview.created_by,
+    ...(allowanceAuthority ? { allowanceAuthority } : {}) }), reviewedAt: preview.created_at } };
 }
 
 async function verifyClaim(claim, saved, context) {
@@ -238,12 +253,19 @@ export async function xeroFinancialDocumentCorrectionVerify(body = {}, dependenc
   if (error || !preview || preview.policy !== POLICY) throw fail('The original correction preview is unavailable.');
   const connection = await getConnection(client, { env, fetchImpl });
   if (connection.tenantId !== preview.tenant_id) throw fail('The reviewed Xero organisation changed.');
+  const configuredAllowance = resolveCorrectionReserveAuthority(env, actor, connection.tenantId);
+  const allowanceAuthority = configuredAllowance && hash(configuredAllowance) === hash(preview.summary?.allowanceAuthority)
+    ? configuredAllowance : null;
+  if (preview.summary?.allowanceAuthority) await verifyCorrectionCanary(client, {
+    authority: preview.summary.allowanceAuthority, preview,
+    selected: preview.items.filter((item) => body.itemIds.includes(item.id)), actor, readbackOnly: true,
+  });
   const [claims, events] = await Promise.all([allFinancialRows(client, 'xero_document_field_correction_claims', (q) => q.eq('tenant_id', preview.tenant_id)),
     allFinancialRows(client, 'xero_document_field_correction_events')]);
   const rate = {};
   const options = { env, fetchImpl, callsPerMinute: 45, retryOnRateLimit: false,
-    requestGate: (tenant, operation, limits) => xeroRequestGate(fetchImpl)(tenant, () => { assertXeroFinancialDailyReserve(rate, env); return operation(); }, limits),
-    onResponse: ({ headers }) => { Object.assign(rate, xeroFinancialRateSnapshot(headers, rate)); assertXeroFinancialDailyReserve(rate, env); } };
+    requestGate: (tenant, operation, limits) => xeroRequestGate(fetchImpl)(tenant, () => { assertCorrectionAllowance(rate, env, allowanceAuthority, { beforeRequest: true }); return operation(); }, limits),
+    onResponse: ({ headers, status }) => { Object.assign(rate, xeroFinancialRateSnapshot(headers, rate)); if (status === 429) throw xeroRateLimitError(headers); assertCorrectionAllowance(rate, env, allowanceAuthority); } };
   const items = [];
   for (const id of body.itemIds) {
     const saved = preview.items.find((item) => item.id === id);
@@ -272,7 +294,12 @@ export async function xeroFinancialDocumentCorrectionApply(body = {}, dependenci
   if (error || !preview || preview.policy !== POLICY) throw fail('The saved correction preview is unavailable.');
   const selected = body.itemIds.map((id) => preview.items.find((item) => item.id === id));
   if (selected.some((item) => !item || item.outcome !== 'eligible')) throw fail('Only eligible items from this exact preview can be applied.');
-  const rate = {}; const current = await currentEvidence({ ...dependencies, client }, rate);
+  const connection = await (dependencies.getConnection || getFreshXeroConnection)(client, { env, fetchImpl });
+  if (connection.tenantId !== preview.tenant_id) throw fail('The reviewed Xero organisation changed.');
+  const allowanceAuthority = resolveCorrectionReserveAuthority(env, actor, connection.tenantId);
+  const allowanceReceipt = allowanceAuthority || preview.summary?.allowanceAuthority
+    ? await verifyCorrectionCanary(client, { authority: allowanceAuthority, preview, selected, actor }) : null;
+  const rate = {}; const current = await currentEvidence({ ...dependencies, client, getConnection: async () => connection }, rate);
   if (current.connection.tenantId !== preview.tenant_id) throw fail('The reviewed Xero organisation changed.');
   const outcomes = [];
   for (const saved of selected) {
@@ -297,16 +324,12 @@ export async function xeroFinancialDocumentCorrectionApply(body = {}, dependenci
       const read = await accountingFetch(current.connection, `/Invoices/${saved.xeroInvoiceId}?unitdp=4`, { ...options, method: 'GET' });
       if (read.Invoices?.length !== 1 || read.Invoices[0].InvoiceID !== saved.xeroInvoiceId) throw fail('The exact current Xero transaction was not returned.');
       const before = canonicalCorrectionInvoice(read.Invoices[0]);
-      const evidence = journalEvidence(saved, saved.before, actor, preview);
+      const evidence = journalEvidence(saved, saved.before, actor, preview, allowanceReceipt);
       // Persist the original reviewed intent. A replay reads it back; it cannot
       // send another provider mutation, including after an uncertain timeout.
       if (hash(before) !== hash(saved.before) && hash(before) !== hash(evidence.expectedAfter)) throw fail('Xero changed after preview. Create a fresh preview.');
       if (fresh.outcome !== 'eligible' && fresh.outcome !== 'already_compliant') throw fail(fresh.reason);
-      if (rate.dayRemaining != null) {
-        const limit = Math.max(1, Number(env.XERO_DAILY_LIMIT || 1000));
-        const reserve = Math.ceil(limit * Math.min(0.9, Math.max(0.2, Number(env.XERO_DAILY_RESERVE_RATIO || 0.2))));
-        if (Number(rate.dayRemaining) <= reserve + 3) throw fail('Insufficient Xero allowance to write and verify this correction while preserving the reserve.', 'XERO_FINANCIAL_DAILY_RESERVE', 429);
-      }
+      assertCorrectionAllowance(rate, env, allowanceAuthority, { beforeRequest: true, requiredCalls: 3 });
       claimed = await claim(client, { tenantId: preview.tenant_id, xeroInvoiceId: saved.xeroInvoiceId, mappingId: saved.mapping?.id || null,
         idempotencyKey, evidence, actor });
       const lockedRead = await accountingFetch(current.connection, `/Invoices/${saved.xeroInvoiceId}?unitdp=4`, { ...options, method: 'GET' });
@@ -318,7 +341,7 @@ export async function xeroFinancialDocumentCorrectionApply(body = {}, dependenci
       } else {
         const payload = buildDocumentFieldCorrectionPayload({ projection: saved.projection, rawXeroInvoice: before,
           direction: saved.source.xeroType === 'ACCREC' ? 'buyer' : 'supplier', organisation: current.xero.organisation });
-        assertXeroFinancialDailyReserve(rate, env);
+        assertCorrectionAllowance(rate, env, allowanceAuthority, { beforeRequest: true });
         attempted = true;
         const response = await accountingFetch(current.connection, `/Invoices/${saved.xeroInvoiceId}?unitdp=4`, {
           ...options, method: 'POST', body: { Invoices: [payload] }, idempotencyKey: claimed.id,

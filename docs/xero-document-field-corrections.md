@@ -37,3 +37,11 @@ node scripts/xero-finance-operator.mjs corrections-verify PREVIEW_UUID ITEM_UUID
 ```
 
 Keep output and evidence private. Preview collects every saved page and rejects missing/duplicate rows. Apply and Verify require explicit IDs from that same preview. Inspect current saved quota state before starting a provider stage; honour actual retry deadlines and the 200-call reserve. Source changes require a fresh preview. Salesforce remains read-only.
+
+## Temporary allowance exception
+
+An explicit user instruction can authorise one complete preview and a small verified batch below the ordinary reserve. Configure `FCOS_XERO_DOCUMENT_CORRECTION_RESERVE_OVERRIDE` only on that deployment, as a JSON object with `authorityId`, the authenticated human `actorId`, the verified Xero `tenantId`, `policy: "document_field_correction_v1"`, UTC `issuedAt` and `expiresAt`, and `maxBatchSize: 2`. The grant must expire within four hours. Malformed, mismatched or expired configuration does not waive the normal reserve. Caller request parameters cannot grant an exception.
+
+Before applying, review the complete saved preview and append exactly one server-only `document_correction_allowance_canary` audit event for that authority and actor. Its fingerprints contain exactly `authorityId`, the canonical `grantHash`, `tenantId`, `previewId`, sorted `itemIds`, and sorted `xeroInvoiceIds`. Pin one or two eligible records; Apply must select that exact set. A duplicate pin, changed preview, different actor or different targets blocks the operation. The checked grant and pin are retained in each correction journal without modifying original preservation receipts or payment links.
+
+The exception never bypasses real provider rate limits, financial eligibility or normal action permissions. It requires enough observed allowance for the protected read, update and readback. Expiry stops new exception requests; Verify can still recover the original pinned records after expiry under the ordinary reserve, without resending an update.

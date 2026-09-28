@@ -11,7 +11,8 @@ export function storage({ failAt, race } = {}) {
     const filters = [];
     const query = {
       select() { return query; },
-      eq(key, value) { filters.push(row => row[key] === value); return query; },
+      eq(key, value) { filters.push(row => key.includes('->>')
+        ? row[key.split('->>')[0]]?.[key.split('->>')[1]] === value : row[key] === value); return query; },
       in(key, list) { filters.push(row => list.includes(row[key])); return query; },
       not(key, operator, value) {
         if (operator === 'in') filters.push(row => !value.slice(1, -1).split(',').includes(row[key]));

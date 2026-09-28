@@ -71,6 +71,19 @@ for(const type of ['ACCREC','ACCPAY']) for(const paid of [false,true]) test(`${t
   assert.equal((await h.rows('xero_document_field_correction_events')).length,1);
 });
 
+test('temporary allowance authority is bound into immutable evidence without altering financial or preservation facts',async t=>{
+  const h=await harness(t,{mapped:true,paid:true});
+  const mappings=await h.rows('xero_financial_document_mappings'),payments=await h.rows('xero_financial_payment_mappings');
+  h.evidence.allowanceAuthority={grant:{authorityId:randomUUID(),actorId:actor.id,tenantId:ids.tenant,maxBatchSize:2},pin:{id:randomUUID(),itemIds:[randomUUID()]}};
+  h.evidence.authority.scopeHash=hash(h.evidence.allowanceAuthority);
+  const claim=await h.claim();assert.deepEqual(claim.evidence.allowanceAuthority,h.evidence.allowanceAuthority);
+  assert.equal(claim.evidence_hash,hash(h.evidence));await h.finish(claim);
+  h.evidence.allowanceAuthority.grant.maxBatchSize=3;
+  await assert.rejects(h.claim(),/durable correction intent/);
+  assert.deepEqual(await h.rows('xero_financial_document_mappings'),mappings);
+  assert.deepEqual(await h.rows('xero_financial_payment_mappings'),payments);
+});
+
 test('unmapped exact confirmation atomically creates one real protected mapping, usable by payment FK',async t=>{
   const h=await harness(t),claim=await h.claim();assert.equal((await h.rows('xero_financial_document_mappings')).length,0);
   const receipt=await h.finish(claim),m=receipt.linkedMapping;assert.equal(m.protected_legacy,true);assert.equal(m.source_fingerprint,h.evidence.source.sourceFingerprint);

@@ -116,6 +116,102 @@ function fixture() {
   return { ...store, salesforce, stored, invoices, xero, dependencies, calls, claims, finishes, behavior, preview, apply };
 }
 
+function reserveOverride(f) {
+  const grant = { authorityId: uuid(800), actorId: actor.id, tenantId, policy: 'document_field_correction_v1',
+    issuedAt: new Date(Date.now() - 5000).toISOString(), expiresAt: new Date(Date.now() + 3600000).toISOString(), maxBatchSize: 2 };
+  f.dependencies.env.FCOS_XERO_DOCUMENT_CORRECTION_RESERVE_OVERRIDE = JSON.stringify(grant);
+  return grant;
+}
+
+function observedAllowance(f, remaining = 190, status = 200) {
+  for (const key of ['accountingFetch', 'loadPages']) {
+    const original = f.dependencies[key];
+    f.dependencies[key] = async (...args) => {
+      const options = args[key === 'loadPages' ? 3 : 2];
+      if (status === 429) options.onResponse({ status, headers: new Headers({ 'x-daylimit-remaining': String(remaining), 'x-rate-limit-problem': 'day', 'retry-after': '120' }) });
+      const result = await original(...args);
+      options.onResponse({ status, headers: new Headers({ 'x-daylimit-remaining': String(f.behavior.dayRemaining ?? remaining) }) });
+      return result;
+    };
+  }
+}
+
+function pinCanary(f, preview, grant) {
+  const selected = f.tables.xero_document_field_correction_previews.find((row) => row.id === preview.previewId).items.filter((item) => item.outcome === 'eligible');
+  f.tables.xero_financial_audit_events.push({ id: 801, event_type: 'document_correction_allowance_canary', actor_id: actor.id,
+    actor_email: actor.email, created_at: new Date().toISOString(), fingerprints: { authorityId: grant.authorityId,
+      grantHash: documentCorrectionHash(grant), tenantId, previewId: preview.previewId,
+      itemIds: selected.map((item) => item.id).sort(), xeroInvoiceIds: selected.map((item) => item.xeroInvoiceId).sort() } });
+  return selected;
+}
+
+test('ordinary corrections retain 200-call reserve; scoped grant permits a full preview and records its authority', async () => {
+  const ordinary = fixture(); observedAllowance(ordinary);
+  await assert.rejects(ordinary.preview(), (error) => error.code === 'XERO_FINANCIAL_DAILY_RESERVE');
+  const scoped = fixture(); const grant = reserveOverride(scoped); observedAllowance(scoped);
+  const preview = await scoped.preview();
+  assert.equal(preview.totalCount, 2); assert.equal(preview.rateLimit.dayRemaining, 190);
+  assert.deepEqual(preview.summary.allowanceAuthority, grant);
+  assert.deepEqual(scoped.tables.xero_financial_audit_events.at(-1).fingerprints.allowanceAuthority, grant);
+  assert.equal(scoped.claims.length, 0);
+});
+
+test('override apply requires exact saved two-target pin and preserves its authority in immutable intent and readback', async () => {
+  const f = fixture(); const grant = reserveOverride(f); observedAllowance(f);
+  const preview = await f.preview(); const reads = f.calls.length;
+  await assert.rejects(f.apply(preview), (error) => error.code === 'XERO_DOCUMENT_CORRECTION_CANARY_INVALID');
+  assert.equal(f.calls.length, reads, 'A missing pin fails before provider reads or writes');
+  pinCanary(f, preview, grant);
+  const originalMappings = structuredClone(f.stored.documentMappings);
+  const payments = structuredClone(f.invoices.map((invoice) => invoice.Payments));
+  const result = await f.apply(preview);
+  assert.deepEqual(result.items.map((item) => item.outcome), ['applied', 'applied']);
+  assert.equal(f.claims.length, 2);
+  for (const claim of f.claims) {
+    assert.deepEqual(claim.evidence.allowanceAuthority.grant, grant);
+    assert.equal(claim.evidence.allowanceAuthority.pin.id, 801);
+  }
+  assert.deepEqual(f.stored.documentMappings, originalMappings);
+  assert.deepEqual(f.invoices.map((invoice) => invoice.Payments), payments);
+  const posts = f.calls.filter((call) => call.method === 'POST').length;
+  assert.equal((await f.apply(preview)).items.every((item) => item.outcome === 'applied'), true);
+  assert.equal(f.calls.filter((call) => call.method === 'POST').length, posts, 'Replay only reads existing receipts');
+});
+
+test('a true provider 429 stops an override preview without saving partial rows or sending a correction', async () => {
+  const f = fixture(); reserveOverride(f); observedAllowance(f, 0, 429);
+  await assert.rejects(f.preview(), (error) => error.status === 429 && error.code === 'XERO_CONTACT_SYNC_RATE_LIMITED');
+  assert.equal((f.tables.xero_document_field_correction_previews || []).length, 0);
+  assert.equal(f.claims.length, 0); assert.equal(f.calls.filter((call) => call.method === 'POST').length, 0);
+  assert.equal(f.tables.xero_financial_audit_events.at(-1).rate_limit_snapshot.dayRemaining, 0);
+});
+
+test('one uncertain canary item recovers through pinned subset readback without resending either target', async () => {
+  const f = fixture(); const grant = reserveOverride(f); observedAllowance(f);
+  const preview = await f.preview(); pinCanary(f, preview, grant); f.behavior.timeoutAfterWrite = true;
+  const result = await f.apply(preview); assert.equal(result.items[0].outcome, 'uncertain');
+  assert.equal(result.items[1].outcome, 'blocked');
+  const posts = f.calls.filter((call) => call.method === 'POST').length;
+  const recovered = await xeroFinancialDocumentCorrectionVerify({ previewId: preview.previewId, itemIds: [result.items[0].id] }, f.dependencies);
+  assert.equal(recovered.items[0].outcome, 'applied');
+  assert.equal(f.calls.filter((call) => call.method === 'POST').length, posts);
+});
+
+test('expired canary readback recovers under the ordinary reserve without granting a new write exception', async (t) => {
+  const f = fixture(); const grant = reserveOverride(f); observedAllowance(f);
+  const preview = await f.preview(); pinCanary(f, preview, grant); f.behavior.timeoutAfterWrite = true;
+  const result = await f.apply(preview); const ids = [result.items[0].id];
+  const posts = f.calls.filter((call) => call.method === 'POST').length;
+  t.mock.method(Date, 'now', () => Date.parse(grant.expiresAt) + 1000);
+  const held = await xeroFinancialDocumentCorrectionVerify({ previewId: preview.previewId, itemIds: ids }, f.dependencies);
+  assert.equal(held.items[0].outcome, 'uncertain');
+  f.behavior.dayRemaining = 500;
+  const recovered = await xeroFinancialDocumentCorrectionVerify({ previewId: preview.previewId, itemIds: ids }, f.dependencies);
+  assert.equal(recovered.items[0].outcome, 'applied');
+  await assert.rejects(f.apply(preview), error => error.code === 'XERO_DOCUMENT_CORRECTION_CANARY_INVALID');
+  assert.equal(f.calls.filter((call) => call.method === 'POST').length, posts);
+});
+
 test('explicit correction preview saves complete evidence without any provider POST and publishes only review fields', async () => {
   const f = fixture(); const result = await f.preview();
   assert.equal(result.policy, 'document_field_correction_v1'); assert.equal(result.summary.eligible, 2);
