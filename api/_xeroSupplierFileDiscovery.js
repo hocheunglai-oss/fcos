@@ -24,7 +24,7 @@ export function supplierFileDiscoveryParents(suppliers, classifications) {
   return (suppliers || []).filter((supplier) => blockedIds.has(supplier.Id));
 }
 
-export async function discoverSupplierFileCandidates(suppliers, { querySalesforce, now = Date.now } = {}) {
+export async function discoverSupplierFileCandidates(suppliers, { querySalesforce, now = Date.now, timeoutMs = 30_000 } = {}) {
   const capturedAt = new Date(now()).toISOString();
   const output = new Map();
   const parents = new Map();
@@ -41,16 +41,21 @@ export async function discoverSupplierFileCandidates(suppliers, { querySalesforc
   // The hard SOQL limit permits at most 2000 links plus one overflow sentinel globally.
   let consumed = 0;
   let stopped = false;
+  // File discovery is observational. Its optional metadata must not hold the
+  // complete accounting preview open until the serverless request is killed.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.max(1, Math.min(30_000, timeoutMs)));
+  try {
   for (let offset = 0; offset < Math.min(500, ordered.length); offset += 100) {
     const batch = ordered.slice(offset, Math.min(offset + 100, 500));
-    if (stopped || consumed >= 2000) {
-      for (const parent of batch) for (const id of parents.get(parent)) output.set(id, diagnostic(id, capturedAt, 'not_checked', stopped ? 'LOOKUP_STOPPED' : 'LINK_LIMIT'));
+    if (stopped || controller.signal.aborted || consumed >= 2000) {
+      for (const parent of batch) for (const id of parents.get(parent)) output.set(id, diagnostic(id, capturedAt, 'not_checked', stopped || controller.signal.aborted ? 'LOOKUP_STOPPED' : 'LINK_LIMIT'));
       continue;
     }
     const remaining = 2000 - consumed;
     const query = `SELECT Id, LinkedEntityId, ContentDocumentId, ContentDocument.Id, ContentDocument.Title, ContentDocument.FileType, ContentDocument.FileExtension, ContentDocument.ContentSize, ContentDocument.LatestPublishedVersionId, ContentDocument.SystemModstamp FROM ContentDocumentLink WHERE LinkedEntityId IN (${batch.map((id) => `'${id}'`).join(',')}) ORDER BY LinkedEntityId, ContentDocumentId, Id LIMIT ${remaining + 1}`;
     let result;
-    try { [result] = await querySalesforce([{ soql: query, clean: true, limit: remaining + 1, softFail: true }]); } catch { result = null; }
+    try { [result] = await querySalesforce([{ soql: query, clean: true, limit: remaining + 1, softFail: true }], { signal: controller.signal }); } catch { result = null; }
     if (!result || !Array.isArray(result.records)) {
       stopped = true;
       for (const parent of batch) for (const id of parents.get(parent)) output.set(id, diagnostic(id, capturedAt, 'unavailable', 'LOOKUP_FAILED'));
@@ -81,6 +86,7 @@ export async function discoverSupplierFileCandidates(suppliers, { querySalesforc
       for (const id of parents.get(parent)) output.set(id, diagnostic(id, capturedAt, status, reason, candidates));
     }
   }
+  } finally { clearTimeout(timer); }
   return output;
 }
 

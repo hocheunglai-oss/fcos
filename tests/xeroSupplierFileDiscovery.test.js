@@ -31,6 +31,20 @@ test('complete empty differs from failed and incomplete lookup; no raw errors es
   assert.equal(failed.get(parent).status, 'unavailable'); assert.ok(!JSON.stringify([...failed]).includes('secret'));
 });
 
+test('the combined lookup deadline aborts a slow read and stops subsequent batches without granting evidence', async () => {
+  let calls = 0;
+  const suppliers = Array.from({ length: 101 }, (_, index) => ({ Id: id('a06', index + 1) }));
+  const result = await discoverSupplierFileCandidates(suppliers, { now, timeoutMs: 10,
+    querySalesforce: async (_queries, { signal }) => {
+      calls += 1;
+      await new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(new Error('deadline')), { once: true }));
+    } });
+  assert.equal(calls, 1);
+  assert.equal(result.get(id('a06', 1)).status, 'unavailable');
+  assert.equal(result.get(id('a06', 101)).reasonCode, 'LOOKUP_STOPPED');
+  assert.ok([...result.values()].every((value) => value.authoritative === false && value.contentVerified === false));
+});
+
 test('wrong parent, conflicting document join and malformed metadata cannot establish empty or full lookup', async () => {
   assert.equal((await run([row(id('a06', 9))])).get(parent).status, 'unavailable');
   const malformed = row(parent, 2); malformed.ContentDocument.Id = id('069', 8);

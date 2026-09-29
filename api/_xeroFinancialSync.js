@@ -11,6 +11,7 @@ import { currentIssuedSupplierRoundingMatches, ISSUED_SUPPLIER_PRESERVATION_POLI
 import { currentIssuedPetroleumMatches } from './_xeroIssuedPetroleumSticky.js';
 import { accountingDecimalCents, accountingProductCents, accountingUnitNumber, accountingCentsNumber, accountingCentsText } from './_xeroAccountingLineCents.js';
 import { persistFinancialPreview, preparePreviewPersistence, previewEvidenceHash } from './_xeroPreviewPersistence.js';
+import { createPreviewCheckpoint, savePreviewCheckpoint, loadPreviewCheckpoint, markPreviewCheckpointPublished } from './_xeroPreviewCheckpoint.js';
 import { accountingPayload, documentConfirmationErrors, documentPostingBlockers, documentReadiness, financialSourceCurrency, loadFinancialSafetyContext, matchDocumentResponses, matchedXeroLines, normalizePostingMode, reviewedPostingMode, safetySelectFields, unownedXeroMetadata } from './_xeroDocumentSafety.js';
 import { approvePetroleumMappings, PETROLEUM_PRODUCT_QUERY } from './_xeroPetroleumMappings.js';
 import { buildGroupedPreservationContext, completeGroupedAccountSnapshot, evaluateGroupedFinancialDocument, groupedInvoiceNumber,
@@ -435,10 +436,17 @@ export async function xeroFinancialSyncPreview(body = {}, dependencies = {}) {
     accountingFetch = xeroAccountingFetch,
     paymentPreview = previewPayments,
     reserveBudget = reserveXeroBudget, releaseBudget = releaseXeroBudget, withBudget = runWithXeroBudget,
+    loadCheckpoint = loadPreviewCheckpoint, createCheckpoint = createPreviewCheckpoint,
+    saveCheckpoint = savePreviewCheckpoint, publishCheckpoint = markPreviewCheckpointPublished,
   } = dependencies;
   const cutoff = XERO_FINANCIAL_CUTOFF;
   const postingMode = normalizePostingMode(body.postingMode);
   const linkFirst = body.linkFirst === true;
+  const stageStartedAt = Date.now();
+  const stage = (name, counts = {}) => (dependencies.onStage || ((entry) => console.info(JSON.stringify(entry))))({
+    event: 'fcos.xero.preview.stage', stage: name, elapsedMs: Date.now() - stageStartedAt, ...counts,
+  });
+  stage('source_start');
   if (linkFirst && body.recordExactMatches === true) throw financialError('Campaign checks require separate exact link approval.', 400, 'XERO_CAMPAIGN_APPROVAL_REQUIRED');
   const actor = actorFields(accessContext);
   const connection = await getConnection(client, { env, fetchImpl });
@@ -448,7 +456,7 @@ export async function xeroFinancialSyncPreview(body = {}, dependencies = {}) {
       includePayments: body.includePayments === true, recordExactMatches: body.recordExactMatches === true, linkFirst });
     if (!probe.changed) return { unchanged: true, checkedAt: new Date().toISOString(), rateLimit: probe.rateLimit };
   }
-  const snapshotStartedAt = new Date().toISOString();
+  let snapshotStartedAt = new Date().toISOString();
   const rate = {};
   const onResponse = ({ headers }) => { Object.assign(rate, xeroFinancialRateSnapshot(headers, rate)); assertXeroFinancialDailyReserve(rate, env); };
   const safetyContext = await loadSafetyContext();
@@ -459,6 +467,7 @@ export async function xeroFinancialSyncPreview(body = {}, dependencies = {}) {
     body.includePayments === true ? allFinancialRows(client, 'xero_financial_payment_mappings') : Promise.resolve({ data: [] }),
   ]);
   if (paymentMappings.error) throw storageError(paymentMappings.error, 'xero_financial_payment_mappings');
+  stage('source_complete', { buyers: salesforce.buyers.length, suppliers: salesforce.suppliers.length, payments: sourcePayments.length });
   const evidenceIds = xeroPaymentEvidenceIds(sourcePayments, stored.documentMappings, paymentMappings.data);
   if (body.includePayments === true) {
     const postingClaims = await loadPaymentPostingClaims(client, connection.tenantId,
@@ -477,6 +486,14 @@ export async function xeroFinancialSyncPreview(body = {}, dependencies = {}) {
     const priorCases = (await allFinancialRows(client, 'xero_reconciliation_cases', (query) => query.eq('campaign_id', body.campaignId))).data;
     verifiedContactAccounts = uniqueStrings(priorCases.filter((row) => row.evidence?.sourceObject === 'Account').flatMap((row) => row.evidence.sourceIds || [row.evidence.sourceId]));
   }
+  const checkpointScope = () => ({ actorId: actor.id, tenantId: connection.tenantId,
+    salesforceOrgId: fcosSalesforceEnvironment('production').orgId, reconciliationVersion: XERO_RECONCILIATION_VERSION,
+    inputOptions: { linkFirst: true, recordExactMatches: false, includePayments: body.includePayments === true,
+      cutoffDate: cutoff, postingMode, campaignId: body.campaignId || null },
+    inputEvidenceHash: previewEvidenceHash({ salesforce, sourcePayments, safetyContext, stored,
+      paymentMappings: paymentMappings.data, evidenceIds }),
+  });
+  let checkpoint = linkFirst ? await loadCheckpoint(client, checkpointScope()) : null;
   // The bounded full inventory has at most eleven pages per collection. Every
   // related historical payment ID and possible invoice dependency is budgeted
   // before dispatch; incomplete reads never produce a ready preview.
@@ -511,25 +528,44 @@ export async function xeroFinancialSyncPreview(body = {}, dependencies = {}) {
     return { xero, accountResponse, taxResponse, allMappings, payments };
   };
   let provider;
-  if (linkFirst) {
+  stage('inventory_start', { forecastCalls: callForecast.callsNeeded });
+  if (checkpoint) {
+    provider = checkpoint.payload.provider;
+    snapshotStartedAt = checkpoint.payload.snapshotStartedAt;
+    Object.assign(rate, checkpoint.payload.rate);
+    stage('inventory_resumed');
+  } else if (linkFirst) {
     const budget = await reserveBudget(connection, { ownerKey: `campaign-inventory:${body.campaignId || actor.id}`,
       operationCalls: callForecast.callsNeeded, verificationCalls: 0, ttlSeconds: 600 });
     try { provider = await withBudget(connection, { budgetId: budget.id, budgetPhase: 'operation' }, readProvider); }
     finally { await releaseBudget(connection, { budgetId: budget.id, reason: 'Inventory reads ended' }); }
   } else provider = await readProvider();
   const { xero, accountResponse, taxResponse, allMappings, payments } = provider;
-  const automaticMappingPolicy = await approvePetroleumMappings({
+  stage('inventory_complete', { documents: xero.documents.length, contacts: xero.contacts.length });
+  const automaticMappingPolicy = checkpoint?.payload.automaticMappingPolicy || await approvePetroleumMappings({
     products: salesforce.productRecords, extras: salesforce.extras, accounts: accountResponse.Accounts || [], taxRates: taxResponse.TaxRates || [],
     mappings: allMappings.data, client, actor,
   });
   stored.productMappings = (await allFinancialRows(client, 'xero_financial_product_mappings', (query) => query.eq('enabled', true))).data;
-  const classified = buildFinancialClassifications(salesforce, xero, stored, { postingMode, linkFirst });
+  if (linkFirst && !checkpoint) {
+    const scope = checkpointScope();
+    const pending = await createCheckpoint(client, scope);
+    checkpoint = await saveCheckpoint(client, { id: pending.id, revision: pending.revision, scope,
+      payload: { complete: true, provider, automaticMappingPolicy, snapshotStartedAt, callForecast, rate: { ...rate } } });
+    stage('inventory_captured');
+  }
+  stage('classification_start');
+  const classified = buildFinancialClassifications(salesforce, xero, stored, { postingMode, linkFirst,
+    onProgress: (rows) => stage('classification_progress', { rows }) });
+  stage('classification_complete', { rows: classified.rows.length });
   const supplierFileDiscovery = await discoverSupplierFileCandidates(supplierFileDiscoveryParents(salesforce.suppliers, classified.rows), { querySalesforce });
   for (const row of classified.rows) {
     if (row.salesforceObject === 'Supplier_Invoice__c') row.sourceFileDiscovery = supplierFileDiscovery.get(row.salesforceId) || null;
   }
+  stage('file_discovery_complete');
   const disputeStates = await loadDisputeReconciliationStates(client, classified.rows.map((row) => row.stemId));
   for (const row of classified.rows) row.dispute = disputeStates.get(row.stemId) || null;
+  stage('disputes_complete');
   const mappingProposals = deriveXeroProductMappingProposals(classified.rows);
   const runId = randomUUID();
   const now = new Date().toISOString();
@@ -556,11 +592,18 @@ export async function xeroFinancialSyncPreview(body = {}, dependencies = {}) {
   if (body.recordExactMatches !== true) {
     // Pure evidence checks may share a pristine complete snapshot. Exact-match
     // linking retains its separate write order and is never skipped by reuse.
+    const currentControls = await loadStoredFinancialControls(client);
+    if (linkFirst && previewEvidenceHash(currentControls) !== previewEvidenceHash(stored)) {
+      throw financialError('Finance mappings or ownership evidence changed during the check. Refresh the saved evidence before reviewing it.', 409, 'XERO_FINANCIAL_STALE_WRITE');
+    }
     runRow.control_totals.workflowSnapshot = {
       reconciliationVersion: XERO_RECONCILIATION_VERSION, linkFirst, payments, products: salesforce.products,
+      ...(checkpoint ? { campaignId: body.campaignId || null,
+        previewCheckpointInputEvidenceHash: checkpoint.input_evidence_hash,
+        previewCheckpointPayloadHash: checkpoint.payload_hash } : {}),
       ...(linkFirst ? { callForecast } : {}),
       mappingProposals, automaticMappingPolicy, checkedAt: now,
-      controlsFingerprint: hashJson(await loadStoredFinancialControls(client)), organisation: xero.organisation,
+      controlsFingerprint: hashJson(currentControls), organisation: xero.organisation,
       ...(linkFirst ? { inventory: { ...xero, observedSince: snapshotStartedAt, complete: true } } : {}),
       ...(linkFirst && salesforce.groupedAccountSnapshot?.complete && xero.contactsComplete ? {
         contactCases: buildCampaignContactCases({ tenantId: connection.tenantId,
@@ -576,7 +619,11 @@ export async function xeroFinancialSyncPreview(body = {}, dependencies = {}) {
       inputEvidenceHash: previewEvidenceHash({ salesforce, xero: xeroEvidence, safetyContext, stored,
         paymentMappings: paymentMappings.data, accounts: accountResponse.Accounts || [], taxRates: taxResponse.TaxRates || [] }),
     });
+    stage('persistence_start');
     const saved = await persistFinancialPreview(client, parameters);
+    stage('persistence_complete', { rows: itemRows.length });
+    if (checkpoint) await publishCheckpoint(client, { id: checkpoint.id, revision: checkpoint.revision,
+      scope: checkpointScope(), runId: saved.run.id });
     // Read saved IDs and states on reuse, including recovery of a committed
     // request whose response was lost and which Finance has since reviewed.
     const preview = saved.reused ? await savedFinancialPreview(client, saved.run) : {
@@ -1573,7 +1620,7 @@ export async function loadStoredFinancialControls(client) {
   };
 }
 
-export function buildFinancialClassifications(salesforce, xero, stored, { postingMode = 'draft', linkFirst = false } = {}) {
+export function buildFinancialClassifications(salesforce, xero, stored, { postingMode = 'draft', linkFirst = false, onProgress } = {}) {
   normalizePostingMode(postingMode);
   const sourceContext = { ...(salesforce.safetyContext || {}), postingMode, documentFieldSnapshot: salesforce.documentFieldPolicyVersion ? salesforce : null };
   const linesByBuyer = index([...salesforce.lines, ...salesforce.extras].filter((row) => row.Buyer_Invoice__c), (row) => row.Buyer_Invoice__c);
@@ -1628,6 +1675,7 @@ export function buildFinancialClassifications(salesforce, xero, stored, { postin
         deletedCandidates: candidatesFor(source, false),
       },
     ), storedByXero)));
+    if (rows.length % 250 === 0) onProgress?.(rows.length);
   }
   for (const source of supplierSources) {
     rows.push(mergeClassification(source, preventReusedXeroIdentity(source, classifyXeroFinancialDocument(
@@ -1643,6 +1691,7 @@ export function buildFinancialClassifications(salesforce, xero, stored, { postin
         deletedCandidates: candidatesFor(source, false),
       },
     ), storedByXero)));
+    if (rows.length % 250 === 0) onProgress?.(rows.length);
   }
   blockRepeatedFinancialTargets(rows, (row) => row.xero?.id && `${row.xeroType}:${row.xero.id}`, 'More than one Salesforce document matches this Xero transaction. Resolve the document identity before linking or syncing.',
     (row) => ({ stored_link: 3, document_number: 2, stem_reference: 1, date_amount: 0 }[row.matchEvidence?.basis] || 0));

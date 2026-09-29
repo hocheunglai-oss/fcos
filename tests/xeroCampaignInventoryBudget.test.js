@@ -7,6 +7,7 @@ function fixture() {
   const actorId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
   let active = false;
   const events = [];
+  let captured = null;
   const client = {
     from() {
       const query = { select: () => query, eq: () => query, order: () => query,
@@ -37,6 +38,19 @@ function fixture() {
     paymentPreview: async (_body, options) => { assert.equal(active, true, 'payment dependencies share the reservation');
       assert.deepEqual(options.xeroReadSnapshot.sourcePayments, []); events.push(['payments']); return { tenantId, rows: [] }; },
     querySalesforce: async () => { throw new Error('No documentary query is needed for an empty complete selection.'); },
+    loadCheckpoint: async (_client, scope) => {
+      if (captured) assert.equal(scope.inputEvidenceHash, captured.input_evidence_hash);
+      return captured;
+    },
+    createCheckpoint: async (_client, scope) => ({ id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', revision: 1, ...scope }),
+    saveCheckpoint: async (_client, { id, revision, scope, payload }) => {
+      events.push(['capture']);
+      captured = { id, revision: revision + 1, input_evidence_hash: scope.inputEvidenceHash,
+        payload_hash: 'a'.repeat(64), payload: structuredClone(payload) };
+      return captured;
+    },
+    publishCheckpoint: async () => { events.push(['checkpoint-publish']); },
+    onStage: () => {},
   };
   return { dependencies, events };
 }
@@ -66,4 +80,19 @@ test('link-first checks cannot bypass exact approval with automatic linking', as
   const { dependencies, events } = fixture();
   await assert.rejects(xeroFinancialSyncPreview({ linkFirst: true, recordExactMatches: true }, dependencies), /separate exact link approval/);
   assert.deepEqual(events, []);
+});
+
+test('a captured complete provider inventory resumes after failed publication without another quota reservation or provider call', async () => {
+  const { dependencies, events } = fixture();
+  const original = dependencies.client.rpc;
+  dependencies.client.rpc = async () => ({ error: { message: 'storage unavailable' }, status: 500 });
+  await assert.rejects(xeroFinancialSyncPreview({ linkFirst: true, includePayments: true }, dependencies), { code: 'XERO_FINANCIAL_STORAGE_FAILED' });
+  assert.equal(events.filter(([name]) => name === 'capture').length, 1);
+  dependencies.client.rpc = original;
+  const before = events.length;
+  const result = await xeroFinancialSyncPreview({ linkFirst: true, includePayments: true }, dependencies);
+  assert.equal(result.run.status, 'ready_for_review');
+  assert.deepEqual(events.slice(before).map(([name]) => name), ['persist', 'checkpoint-publish']);
+  assert.equal(events.findLast(([name]) => name === 'persist')[1].p_run.control_totals.workflowSnapshot.previewCheckpointPayloadHash, 'a'.repeat(64));
+  assert.equal(events.filter(([name]) => name === 'inventory').length, 1);
 });

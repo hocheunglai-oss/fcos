@@ -103,6 +103,20 @@ async function verifyRuntimeObjects(label) {
     0, `${label} campaign and shared quota browser denial`, [[...campaignTables,...sharedXeroTables]]);
   await assertRows(`select count(*)::int from unnest($1::text[]) t cross join unnest(array['INSERT','UPDATE','DELETE','TRUNCATE']) p
     where has_table_privilege('service_role','public.'||t,p)`,0,`${label} campaign mutations restricted to checked RPCs`,[campaignTables]);
+  await assertRows(`select count(*)::int from pg_class c join pg_namespace n on n.oid=c.relnamespace
+    where n.nspname='public' and c.relname='xero_financial_preview_checkpoints' and c.relrowsecurity and c.relforcerowsecurity`,
+    1, `${label} preview checkpoint forced RLS`);
+  await assertRows(`select count(*)::int from unnest(array['anon','authenticated']) r
+    cross join unnest(array['SELECT','INSERT','UPDATE','DELETE','TRUNCATE']) p
+    where has_table_privilege(r,'public.xero_financial_preview_checkpoints',p)`,
+    0, `${label} preview checkpoint browser denial`);
+  await assertRows(`select count(*)::int from unnest(array['INSERT','UPDATE','DELETE','TRUNCATE']) p
+    where has_table_privilege('service_role','public.xero_financial_preview_checkpoints',p)`,
+    0, `${label} preview checkpoint mutations require checked RPCs`);
+  await assertRows(`select count(*)::int from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+    cross join unnest(array['anon','authenticated']) r where n.nspname='public' and p.proname like 'xero_preview_checkpoint_%'
+      and has_function_privilege(r,p.oid,'EXECUTE')`,
+    0, `${label} preview checkpoint browser RPC denial`);
   const nomBTables = ['dashboard_nom_b_policies', 'dashboard_nom_b_observations', 'dashboard_nom_b_events'];
   await assertRows(`select count(*)::int from pg_class c join pg_namespace n on n.oid=c.relnamespace
     where n.nspname='public' and c.relname=any($1::text[]) and c.relrowsecurity`, 3, `${label} Nom B RLS`, [nomBTables]);

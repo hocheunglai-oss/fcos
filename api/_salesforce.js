@@ -252,12 +252,14 @@ export async function sfRequest(path, {
   retryOnExpiredSession = true,
   readOnly = false,
   telemetry = {},
+  signal,
 } = {}) {
   const normalizedMethod = String(method || 'GET').toUpperCase();
   if (!['GET', 'HEAD'].includes(normalizedMethod) && !readOnly) requireExternalActionGate('salesforce_write');
   let readAttempt = 0;
   let canRefreshSession = retryOnExpiredSession;
   for (;;) {
+    signal?.throwIfAborted();
     const startedAt = Date.now();
     const accessToken = await getAccessToken();
     const url = salesforceServiceUrl(path);
@@ -273,6 +275,7 @@ export async function sfRequest(path, {
           ...headers,
         },
         body: body ? JSON.stringify(body) : undefined,
+        signal,
       });
       limit = parseSforceLimitInfo(res.headers.get('sforce-limit-info'));
       if (res.status !== 204) data = await res.json().catch(() => ({}));
@@ -444,10 +447,11 @@ function compositeQueryError(response, fallback = 'Salesforce Composite query fa
   return error;
 }
 
-async function compositeRead(subrequests) {
+async function compositeRead(subrequests, { signal } = {}) {
   const data = await sfRequest('/composite', {
     method: 'POST',
     readOnly: true,
+    signal,
     body: {
       allOrNone: false,
       compositeRequest: subrequests,
@@ -460,7 +464,7 @@ async function compositeRead(subrequests) {
   return data?.compositeResponse || [];
 }
 
-export async function sfCompositeQueries(queries = []) {
+export async function sfCompositeQueries(queries = [], { signal } = {}) {
   const normalized = queries.map((query, index) => ({
     soql: typeof query === 'string' ? query : query.soql,
     clean: typeof query === 'object' && query.clean === true,
@@ -478,7 +482,7 @@ export async function sfCompositeQueries(queries = []) {
         method: 'GET',
         url: compositeQueryUrl(query.soql),
         referenceId: query.referenceId,
-      })));
+      })), { signal });
     } catch (error) {
       const strict = group.find((query) => !query.softFail);
       if (strict) throw error;
@@ -523,7 +527,7 @@ export async function sfCompositeQueries(queries = []) {
           method: 'GET',
           url: compositeNextUrl(page.nextRecordsUrl),
           referenceId: `page${page.resultIndex}_${offset}`,
-        })));
+        })), { signal });
       } catch (error) {
         const strict = pageGroup.find((page) => !page.query.softFail);
         if (strict) throw error;
