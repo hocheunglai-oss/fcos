@@ -33,3 +33,5 @@ Salesforce is read-only for this feature. It adds no upload workflow, accounting
 The Nom B panel is a separate lazy-loaded client chunk (20,862 bytes in the initial verified local build). The aggregate client JavaScript budget increases from 3,860,000 to 3,890,000 bytes to accommodate this feature; individual chunk, gzip, PDF/XLS and server budgets stay unchanged.
 
 Buyer Confirmation activity follows Salesforce `Deprecated__c`. `Replaced__c` indicates regeneration of the outgoing confirmation PDF and does not retire the confirmation or its linked Nom B evidence.
+
+Vu Huu Long and Pham Kim Thuy use the shared correspondence mailbox `bunker@cosulich.com.hk`, but their verified FCOS login mappings are `long@cosulich.com.hk` and `thuy@cosulich.com.hk`. Nom B assignment uses the explicit server-side mapping in `config/nomBTraderIdentities.js` and requires one active profile with the exact mapped login (profile display names may be abbreviated). The shared sending address grants no profile access.

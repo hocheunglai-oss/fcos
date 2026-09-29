@@ -5,6 +5,9 @@ import { loadDashboardNomB, saveDashboardNomBPolicy, loadDashboardNomBAudit } fr
 const anna = { id: '00000000-0000-4000-8000-000000000001', active: true, full_name: 'Anna Chan', email: 'anna@example.test', user_type: 'trader' };
 const bill = { id: '00000000-0000-4000-8000-000000000002', active: true, full_name: 'Bill Lee', email: 'bill@example.test', user_type: 'trader' };
 const admin = { id: '00000000-0000-4000-8000-000000000003', active: true, full_name: 'Admin', email: 'admin@example.test', user_type: 'administrator' };
+const long = { id: '00000000-0000-4000-8000-000000000010', active: true, full_name: 'Vu Huu Long', email: 'long@cosulich.com.hk', user_type: 'trader' };
+const thuy = { id: '00000000-0000-4000-8000-000000000011', active: true, full_name: 'TP', email: 'thuy@cosulich.com.hk', user_type: 'trader' };
+const sharedSender = 'bunker@cosulich.com.hk';
 const s1 = { Id: 'a0H000000000001AAA', Name: 'STEM ONE', Delivery_Date__c: '2026-09-01', Receivable_Balance__c: '200' };
 const s2 = { Id: 'a0H000000000002AAA', Name: 'STEM TWO', Expected_Delivery_Date__c: '2026-09-02', Receivable_Balance__c: '99.99' };
 const confirmation = (stem, user, index) => ({ Id: `a0300000000000${index}AAA`, STEM__c: stem.Id, Name: 'Buyer confirmation', Deprecated__c: false, Replaced__c: false, RecordType: { DeveloperName: 'Buyer' }, Buyer_Supplier_Trader__c: user.full_name, BT_ST_Email_Address__c: user.email });
@@ -12,7 +15,7 @@ const c1 = confirmation(s1, anna, 1); const c2 = confirmation(s2, bill, 2);
 const invoice = (stem, index) => ({ Id: `a0K00000000000${index}AAA`, STEM__c: stem.Id, Name: `${index}-INV-1`, Amount__c: '100', File__c: '/069000000000001AAA', Proforma__c: false, Deprecated__c: false });
 const fields = ['Id', 'Name', 'RefCode__c', 'Delivery_Date__c', 'Expected_Delivery_Date__c', 'Invoice_Status__c', 'Receivable_Balance__c', 'LastModifiedDate', 'Account__c', 'Port__c', 'Vessel__c', 'STEM__c', 'Amount__c', 'Deprecated__c', 'Replaced__c', 'Buyer_Supplier_Trader__c', 'BT_ST_Email_Address__c', 'File__c', 'PDF__c', 'RecordTypeId', 'Proforma__c', 'Invoice_Date__c'];
 function fixture(options = {}) {
-  const calls = []; const queries = []; const profiles = [anna, bill, admin, ...(options.extraProfiles || [])];
+  const calls = []; const queries = []; const profiles = options.profiles || [anna, bill, admin, ...(options.extraProfiles || [])];
   const data = { user_profiles: profiles, collaboration_roles: options.roles || [], dashboard_nom_b_policies: options.policies || [], dashboard_nom_b_events: [] };
   const client = {
     from(table) {
@@ -38,7 +41,7 @@ function fixture(options = {}) {
     query: async (soql, settings) => {
       queries.push({ soql, settings }); const object = soql.match(/FROM (\w+)/)?.[1];
       if (options.fail === object) throw new Error('provider unavailable');
-      const tables = { STEM__c: options.stems || [s1, s2], Nomination__c: options.confirmations || [c1, c2], Invoice__c: options.invoices || [invoice(s1, 1), invoice(s2, 2)], User: [], ContentDocumentLink: options.links || [] };
+      const tables = { STEM__c: options.stems || [s1, s2], Nomination__c: options.confirmations || [c1, c2], Invoice__c: options.invoices || [invoice(s1, 1), invoice(s2, 2)], User: options.salesforceUsers || [], ContentDocumentLink: options.links || [] };
       let records = tables[object] || [];
       const whereId = soql.match(/WHERE Id = '([^']+)'/); if (whereId) records = records.filter((row) => row.Id === whereId[1]);
       return { records, totalSize: records.length + (options.truncated === object ? 1 : 0) };
@@ -62,6 +65,68 @@ test('cross-user team, filter, audit and policy attempts fail before mutation', 
   await assert.rejects(saveDashboardNomBPolicy({ stemId: s1.Id, mode: 'waive', expectedRevision: 0 }, f.context, f.deps), { status: 403 });
   await assert.rejects(loadDashboardNomB({}, f.context, { ...f.deps, stemAccessCondition: undefined }), { code: 'NOM_B_SCOPE_UNAVAILABLE' });
   assert.equal(f.calls.length, 0);
+});
+test('shared Salesforce sender preserves individual personal lists, manager trader filters and owner audit access', async () => {
+  const thuyStem = { ...s2, Receivable_Balance__c: '200' };
+  const longConfirmation = { ...confirmation(s1, long, 1), BT_ST_Email_Address__c: sharedSender };
+  const thuyConfirmation = { ...confirmation(thuyStem, thuy, 2), Buyer_Supplier_Trader__c: 'Pham Kim Thuy', BT_ST_Email_Address__c: sharedSender };
+  const f = fixture({ profiles: [anna, bill, admin, long, thuy], stems: [s1, thuyStem], confirmations: [longConfirmation, thuyConfirmation],
+    salesforceUsers: [longConfirmation, thuyConfirmation].map((row) => ({ Name: row.Buyer_Supplier_Trader__c, Email: sharedSender, IsActive: true })) });
+  for (const [profile, ownStem, ownConfirmation, otherStem, otherProfile] of [
+    [long, s1, longConfirmation, thuyStem, thuy], [thuy, thuyStem, thuyConfirmation, s1, long],
+  ]) {
+    f.context.profile = profile;
+    const personal = await loadDashboardNomB({}, f.context, f.deps);
+    assert.equal(personal.counts.missing, 1);
+    assert.deepEqual(personal.rows.map((row) => row.stemId), [ownStem.Id]);
+    assert.deepEqual(personal.rows[0].confirmations.map((row) => row.id), [ownConfirmation.Id]);
+    assert.equal(personal.rows[0].confirmations[0].traderName, ownConfirmation.Buyer_Supplier_Trader__c);
+    assert.equal(personal.capabilities.canViewTeam, false);
+    const audit = await loadDashboardNomBAudit({ stemId: ownStem.Id }, f.context, f.deps);
+    assert.equal(audit.success, true);
+    await assert.rejects(loadDashboardNomBAudit({ stemId: otherStem.Id }, f.context, f.deps), { status: 403, code: 'NOM_B_FORBIDDEN' });
+    await assert.rejects(loadDashboardNomB({ scope: 'team' }, f.context, f.deps), { status: 403 });
+    await assert.rejects(loadDashboardNomB({ traderId: otherProfile.id }, f.context, f.deps), { status: 403 });
+    const observation = f.calls.find((call) => call.body.p_actor_user_id === profile.id);
+    assert.deepEqual(observation.body.p_observations.map((row) => row.stemId), [ownStem.Id]);
+  }
+  f.context.profile = anna;
+  assert.equal((await loadDashboardNomB({}, f.context, f.deps)).rows.length, 0);
+  f.context.profile = admin;
+  const team = await loadDashboardNomB({ scope: 'team' }, f.context, f.deps);
+  assert.equal(team.counts.missing, 2);
+  assert.deepEqual(team.rows.map((row) => row.stemId), [s1.Id, thuyStem.Id]);
+  for (const [profile, ownStem] of [[long, s1], [thuy, thuyStem]]) {
+    const filtered = await loadDashboardNomB({ scope: 'team', traderId: profile.id }, f.context, f.deps);
+    assert.equal(filtered.counts.missing, 1);
+    assert.deepEqual(filtered.rows.map((row) => row.stemId), [ownStem.Id]);
+    assert.deepEqual(filtered.rows[0].traders.map((trader) => trader.id), [profile.id]);
+  }
+});
+test('an unknown shared-sender name and a Supplier confirmation grant no individual visibility or audit access', async () => {
+  const claimant = { ...bill, full_name: 'Unknown Trader', email: sharedSender };
+  const unknown = { ...confirmation(s1, claimant, 1), BT_ST_Email_Address__c: sharedSender };
+  const supplier = { ...confirmation(s2, long, 2), BT_ST_Email_Address__c: sharedSender, RecordType: { DeveloperName: 'Supplier' } };
+  const f = fixture({ profiles: [admin, long, thuy, claimant], confirmations: [unknown, supplier],
+    salesforceUsers: [{ Name: claimant.full_name, Email: sharedSender, IsActive: true }] });
+  for (const profile of [long, thuy, claimant]) {
+    f.context.profile = profile;
+    const own = await loadDashboardNomB({}, f.context, f.deps);
+    assert.deepEqual(own.rows, []);
+    assert.equal(own.counts.missing, 0);
+    assert.equal(own.counts.unableToVerify, 0);
+    for (const stem of [s1, s2]) await assert.rejects(loadDashboardNomBAudit({ stemId: stem.Id }, f.context, f.deps), { status: 403, code: 'NOM_B_FORBIDDEN' });
+  }
+  assert.equal(f.calls.length, 0);
+  f.context.profile = admin;
+  const team = await loadDashboardNomB({ scope: 'team', view: 'unable_to_verify' }, f.context, f.deps);
+  assert.equal(team.counts.unableToVerify, 2);
+  assert.equal(team.rows.find((row) => row.stemId === s1.Id).traders[0].resolved, false);
+  assert.deepEqual(team.rows.find((row) => row.stemId === s2.Id).confirmations, []);
+  for (const profile of [long, thuy, claimant]) {
+    const filtered = await loadDashboardNomB({ scope: 'team', traderId: profile.id, view: 'unable_to_verify' }, f.context, f.deps);
+    assert.deepEqual(filtered.rows, []);
+  }
 });
 test('manager team lists, search, sorting, pagination and trader filter use full selection counts', async () => {
   const f = fixture({ profile: admin, policies: [{ stem_id: s2.Id, mode: 'require', reason_code: 'other', reason_text: 'Need original', revision: 1 }] });

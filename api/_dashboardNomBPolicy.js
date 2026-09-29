@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { isIssuedFinalBuyerInvoice } from './_buyerInvoiceApproval.js';
+import { NOM_B_TRADER_LOGIN_EMAILS, NOM_B_SHARED_SENDER_EMAILS } from '../config/nomBTraderIdentities.js';
 
 export const NOM_B_FROM = '2026-09-01';
 export const NOM_B_ID = /^[A-Za-z0-9]{15}(?:[A-Za-z0-9]{3})?$/;
@@ -32,8 +33,20 @@ export function activeNomBConfirmation(row) {
 export function resolveNomBTrader(confirmation, profiles, salesforceUsers = []) {
   const traderName = text(confirmation.Buyer_Supplier_Trader__c);
   const formulaEmail = email(confirmation.BT_ST_Email_Address__c);
+  const confirmedLogin = NOM_B_TRADER_LOGIN_EMAILS[name(traderName)];
+  if (typeof confirmedLogin === 'string') {
+    // This explicit trader-to-login mapping is authoritative; the outgoing
+    // correspondence mailbox cannot identify or impersonate a profile.
+    const mapped = profiles.filter((profile) => profile.active === true && email(profile.email) === confirmedLogin);
+    if (mapped.length === 1) {
+      return { id: mapped[0].id, name: traderName, email: mapped[0].email, resolved: true };
+    }
+    return { id: null, name: traderName, email: null, resolved: false,
+      reason: 'The configured trader login does not resolve to one active FCOS profile.' };
+  }
   const users = salesforceUsers.filter((user) => user.IsActive === true && name(user.Name) === name(traderName));
-  const emails = [...new Set([formulaEmail, ...users.map((user) => email(user.Email))].filter(Boolean))];
+  const emails = [...new Set([formulaEmail, ...users.map((user) => email(user.Email))]
+    .filter((value) => value && !NOM_B_SHARED_SENDER_EMAILS.includes(value)))];
   // Conflicting formula/User identities are not resolved by choosing the first match.
   const candidates = profiles.filter((profile) => profile.active === true && emails.includes(email(profile.email))
     && (name(profile.full_name) === name(traderName) || (users.length === 1 && email(users[0].Email) === email(profile.email))));
@@ -149,7 +162,7 @@ export function evaluateNomB({ stem, confirmations, links, profiles, salesforceU
   if (details.length && details.every((row) => row.status === 'filed')) { status = 'filed'; reason = 'All active Buyer Confirmations have a filed Nom B.'; }
   else if (policy.mode === 'waive') { status = 'waived'; waiverType = 'manual'; reason = ({ payment_received: 'Payment Received', management_exception: 'Management Exception', other: policy.reasonText })[policy.reasonCode]; }
   else if (!documentsComplete || !details.length || details.some((row) => !row.trader.resolved) || delivery.invalid) {
-    status = 'unable_to_verify'; reason = !documentsComplete ? 'Buyer Nomination files could not be completely read.' : !details.length ? 'No active Buyer Confirmation is available.' : delivery.invalid ? 'Delivery date is invalid.' : 'Buyer Trader assignment requires manager review.';
+    status = 'unable_to_verify'; reason = !documentsComplete ? 'Buyer Nomination files could not be completely read.' : !details.length ? 'No active Buyer Confirmation is available.' : delivery.invalid ? 'Delivery date is invalid.' : 'Buyer Trader could not be linked to an active FCOS login.';
   } else if (policy.mode === 'require') { reason = `Management requires Nom B: ${policy.reasonText}`; }
   else if (receivable.evidenceStatus !== 'verified') { status = 'unable_to_verify'; reason = receivable.reason; }
   else if (receivable.eligible) { status = 'waived'; waiverType = 'automatic'; reason = 'Receivable below USD 100'; }

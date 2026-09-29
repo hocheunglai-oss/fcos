@@ -9,6 +9,11 @@ const invoice = { Id: 'a0K000000000001AAA', STEM__c: stem.Id, Name: '27389T-INV-
 const currency = { singleCurrency: true, corporateCurrency: 'USD' };
 const date = '2026-09-29';
 const file = { LinkedEntityId: buyer.Id, ContentDocument: { Id: '069000000000002AAA', Title: `${stem.Name} - NOM B.pdf`, IsDeleted: false, LatestPublishedVersionId: '068000000000002AAA', ContentSize: 1234 } };
+const sharedSender = 'bunker@cosulich.com.hk';
+const sharedSenderProfiles = [
+  { id: '00000000-0000-4000-8000-000000000010', active: true, full_name: 'Vu Huu Long', email: 'long@cosulich.com.hk' },
+  { id: '00000000-0000-4000-8000-000000000011', active: true, full_name: 'Pham Kim Thuy', email: 'thuy@cosulich.com.hk' },
+];
 function evaluate(overrides = {}) { return evaluateNomB({ stem, confirmations: [buyer], links: [], profiles: [profile], salesforceUsers: [], invoices: [invoice], currencyEvidence: currency, rates: [], asOfDate: date, ...overrides }); }
 
 test('Nom B delivery scope uses actual date before expected, inclusive September boundary and distinct undated scope', () => {
@@ -32,6 +37,52 @@ test('trader assignment requires unique verified email and compatible trader ide
   assert.equal(resolveNomBTrader(buyer, [{ ...profile, active: false }]).resolved, false);
   assert.equal(resolveNomBTrader(buyer, [profile], [{ Name: buyer.Buyer_Supplier_Trader__c, Email: 'different@example.test', IsActive: true }]).resolved, false);
   assert.equal(resolveNomBTrader({ ...buyer, BT_ST_Email_Address__c: null }, [profile], [{ Name: buyer.Buyer_Supplier_Trader__c, Email: profile.email, IsActive: true }]).id, profile.id);
+});
+for (const mappedProfile of sharedSenderProfiles) {
+  test(`${mappedProfile.full_name} resolves a shared Salesforce sender to the verified individual FCOS login`, () => {
+    const confirmation = { ...buyer, Buyer_Supplier_Trader__c: mappedProfile.full_name, BT_ST_Email_Address__c: sharedSender };
+    const sharedMailboxProfile = { ...mappedProfile, id: '00000000-0000-4000-8000-000000000012', email: sharedSender };
+    for (const users of [[], [{ Name: mappedProfile.full_name, Email: sharedSender, IsActive: true }],
+      [{ Name: mappedProfile.full_name, Email: 'other@example.test', IsActive: true }]]) {
+      const resolved = resolveNomBTrader(confirmation, [...sharedSenderProfiles, sharedMailboxProfile], users);
+      assert.deepEqual(resolved, { id: mappedProfile.id, name: mappedProfile.full_name, email: mappedProfile.email, resolved: true });
+    }
+    const normalized = { ...confirmation, Buyer_Supplier_Trader__c: `  ${mappedProfile.full_name.toUpperCase().replaceAll(' ', '   ')}  ` };
+    assert.equal(resolveNomBTrader(normalized, [mappedProfile]).id, mappedProfile.id);
+    assert.deepEqual(resolveNomBTrader(confirmation, [{ ...mappedProfile, full_name: 'TP' }]),
+      { id: mappedProfile.id, name: mappedProfile.full_name, email: mappedProfile.email, resolved: true });
+    const result = evaluate({ confirmations: [confirmation], profiles: sharedSenderProfiles, invoices: [] });
+    assert.equal(result.status, 'missing');
+    assert.equal(result.confirmations[0].trader.id, mappedProfile.id);
+  });
+  test(`${mappedProfile.full_name} requires one active profile with the verified individual login email`, () => {
+    const confirmation = { ...buyer, Buyer_Supplier_Trader__c: mappedProfile.full_name, BT_ST_Email_Address__c: sharedSender };
+    const invalidDirectories = [
+      [],
+      [mappedProfile, { ...mappedProfile, id: '00000000-0000-4000-8000-000000000012', full_name: 'Duplicate login' }],
+      [{ ...mappedProfile, active: false }],
+      [{ ...mappedProfile, email: 'another@example.test' }],
+      [{ ...mappedProfile, email: sharedSender }],
+    ];
+    for (const profiles of invalidDirectories) {
+      const resolved = resolveNomBTrader(confirmation, profiles);
+      assert.equal(resolved.resolved, false);
+      assert.equal(resolved.id, null);
+      assert.equal(evaluate({ confirmations: [confirmation], profiles, invoices: [] }).status, 'unable_to_verify');
+    }
+  });
+}
+test('an unknown trader cannot claim the shared Salesforce sender through a mailbox profile', () => {
+  const confirmation = { ...buyer, Buyer_Supplier_Trader__c: 'Unknown Trader', BT_ST_Email_Address__c: sharedSender };
+  const claimant = { ...profile, full_name: 'Unknown Trader', email: sharedSender };
+  for (const users of [[], [{ Name: 'Unknown Trader', Email: sharedSender, IsActive: true }]]) {
+    const resolved = resolveNomBTrader(confirmation, [...sharedSenderProfiles, claimant], users);
+    assert.equal(resolved.resolved, false);
+    assert.equal(resolved.id, null);
+  }
+  const individual = { ...claimant, email: 'unknown@example.test' };
+  assert.equal(resolveNomBTrader(confirmation, [...sharedSenderProfiles, claimant, individual],
+    [{ Name: individual.full_name, Email: individual.email, IsActive: true }]).id, individual.id);
 });
 test('NOM B filing needs actual linked nondeleted published nonempty file with exact STEM filing name', () => {
   assert.equal(isNomBFile(file, buyer, stem), true);
