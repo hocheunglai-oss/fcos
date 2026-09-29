@@ -33,6 +33,7 @@ import { dashboardAccountRankings } from '../../src/lib/dashboardAccountRankings
 import { loadDashboardAccountInsight } from '../_dashboardAccountInsightService.js';
 import { generateDashboardAccountInsightExport } from '../_dashboardAccountInsightExport.js';
 import { loadDashboardAccountCreditDirectory, loadDashboardAccountCreditStatement } from '../_dashboardAccountCreditStatementService.js';
+import { loadDashboardNomB, saveDashboardNomBPolicy, loadDashboardNomBAudit } from '../_dashboardNomBService.js';
 import { isPaymentRemittance, paymentRecordTypeToken } from '../_paymentClassification.js';
 import { accountInsightStatementRequest, createAccountInsightReportHandlers } from '../_accountInsightReportScope.js';
 import { validateAccountInsightReportConfig, projectAccountInsightReport, MAX_REPORT_DETAIL_ROWS } from '../_accountInsightReport.js';
@@ -1364,6 +1365,9 @@ const HANDLER_MODULE_ACCESS = {
   financeSettingsGet: [],
   financeSettingsSave: [],
   dashboardSummary: ['dashboard'],
+  dashboardNomBRead: ['dashboard'],
+  dashboardNomBPolicySave: ['dashboard'],
+  dashboardNomBAuditRead: ['dashboard'],
   dashboardStemList: ['dashboard'],
   dashboardAnalytics: ['dashboard'],
   dashboardAccountInsight: ['dashboard'],
@@ -8816,6 +8820,13 @@ async function dashboardSummary(body = {}, req = null, accessContext = null) {
   const financeContext = await dashboardFinanceContext(body, req, accessContext);
   return cachedDecisionDashboard('summary', body, req, accessContext, 60, () => dashboardSummaryUncached(body, req, accessContext, financeContext), financeContext);
 }
+async function dashboardNomBOperation(operation, body, req, accessContext) {
+  const context = accessContext || (await requireActiveUser(req));
+  return operation(body, context, { stemAccessCondition: await interofficeStemAccessCondition(context) });
+}
+const dashboardNomBRead = (body, req, context) => dashboardNomBOperation(loadDashboardNomB, body, req, context);
+const dashboardNomBPolicySave = (body, req, context) => dashboardNomBOperation(saveDashboardNomBPolicy, body, req, context);
+const dashboardNomBAuditRead = (body, req, context) => dashboardNomBOperation(loadDashboardNomBAudit, body, req, context);
 
 async function dashboardStemList(body = {}, req = null, accessContext = null) {
   const financeContext = await dashboardFinanceContext(body, req, accessContext);
@@ -19328,6 +19339,9 @@ const handlers = {
   financeSettingsGet,
   financeSettingsSave,
   dashboardSummary,
+  dashboardNomBRead,
+  dashboardNomBPolicySave,
+  dashboardNomBAuditRead,
   dashboardStemList,
   dashboardAnalytics,
   dashboardAccountInsight,

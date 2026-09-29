@@ -244,6 +244,10 @@ const HANDLER_BEHAVIOR = Object.freeze({
   financeSettingsGet: readPolicy({cache: 'none', externalAction: false, capability: null}),
   financeSettingsSave: mutationPolicy({cache: 'none', externalAction: false, capability: 'financial_report_settings_manage'}),
   dashboardSummary: readPolicy({"cache":"server","externalAction":false,"capability":null}),
+  // Reading Nom B records automatic waiver transitions; the restricted CI principal must not invoke it.
+  dashboardNomBRead: mutationPolicy({ cache: 'none' }),
+  dashboardNomBPolicySave: mutationPolicy({ cache: 'none' }),
+  dashboardNomBAuditRead: readPolicy({ cache: 'none' }),
   dashboardStemList: readPolicy({"cache":"server","externalAction":false,"capability":null}),
   dashboardAnalytics: readPolicy({"cache":"server","externalAction":false,"capability":null}),
   dashboardAccountInsight: readPolicy({"cache":"server","externalAction":false,"capability":null}),
