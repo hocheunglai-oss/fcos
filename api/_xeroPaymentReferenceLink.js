@@ -8,7 +8,7 @@ const fingerprint = (value) => typeof value === 'string' && /^[0-9a-f]{64}$/.tes
 const object = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 const failure = (message, code = 'XERO_PAYMENT_REFERENCE_LINK_INVALID', status = 400) => Object.assign(new Error(message), { code, status });
 
-function reviewedRow(row) {
+export function reviewedPaymentReferenceRow(row) {
   if (!object(row) || !/^[A-Za-z0-9]{15}(?:[A-Za-z0-9]{3})?$/.test(row.salesforcePaymentId || '')
     || typeof row.salesforcePaymentName !== 'string' || !row.salesforcePaymentName.trim()
     || ![row.documentMappingId, row.xeroPaymentId, row.bankAccountId].every(uuid)
@@ -45,7 +45,7 @@ export async function persistReviewedPaymentReferenceLinks(client, { tenantId, r
     || !uuid(actor?.id) || typeof actor?.email !== 'string' || !actor.email.trim()) {
     throw failure('A verified tenant, Finance actor and one to 25 reviewed links are required.');
   }
-  const reviewed = rows.map(reviewedRow);
+  const reviewed = rows.map(reviewedPaymentReferenceRow);
   if (new Set(reviewed.map((row) => row.salesforcePaymentId.slice(0, 15))).size !== reviewed.length
     || new Set(reviewed.map((row) => row.xeroPaymentId)).size !== reviewed.length) {
     throw failure('Each Salesforce and Xero payment must appear exactly once in the reviewed batch.');

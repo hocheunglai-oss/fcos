@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { fixtureXeroConnection } from './helpers/xeroSharedControl.js';
 import { xeroContactRestoreApply, restoreXeroContactStatus, readXeroContactForRestoration } from '../api/_xeroContactRestore.js';
 import { buildContactRestoration } from '../api/_xeroContactRestorePolicy.js';
 
@@ -43,7 +44,7 @@ function fixture() {
     xero_contact_lifecycle_locks: [], xero_financial_audit_events: [] };
   const client = database(tables); const posts = []; const reads = []; let releases = 0; let callbacks = 0;
   const deps = { client, env: { FCOS_ENABLE_XERO_CONTACT_SYNC: 'true' }, accessContext: { profile: { id: randomUUID(), email: ' Finance@example.test ' } },
-    connectionReader: async () => ({ tenantId, scope: 'accounting.contacts' }), accountReader: async () => accounts,
+    connectionReader: async () => fixtureXeroConnection({ tenantId, scope: 'accounting.contacts' }), accountReader: async () => accounts,
     contactReader: async () => structuredClone(contacts), contactDetailReader: async (_connection, id) => { reads.push(id); return structuredClone(raw); },
     lockReader: async (_client, leaseId) => { tables.xero_contact_lifecycle_locks = [{ id: 'primary', run_id: leaseId, locked_until: new Date(Date.now() + 60000).toISOString() }];
       return { release: async () => { releases++; } }; },
@@ -78,7 +79,7 @@ test('same-ID restoration records intent before POST and independent readback be
 });
 
 test('same-ID business-only restore transport never sends a name, account number or accounting mutation', async () => {
-  const contactId = randomUUID(); const calls = []; const connection = { tenantId: randomUUID(), accessToken: 'synthetic' };
+  const contactId = randomUUID(); const calls = []; const connection = fixtureXeroConnection({ tenantId: randomUUID(), accessToken: 'synthetic' });
   const fetchImpl = async (url, init) => { calls.push({ url, ...init }); return new Response(JSON.stringify({ Contacts: [{ ContactID: contactId, Name: 'Fixture', ContactStatus: 'ACTIVE' }] }), { status: 200 }); };
   await restoreXeroContactStatus(connection, contactId, `restore-${'a'.repeat(48)}`, { env: {}, fetchImpl });
   await readXeroContactForRestoration(connection, contactId, { env: {}, fetchImpl });
@@ -100,8 +101,8 @@ test('actor, gate, exact selection, saved action, tenant and scope fail before C
     ['selection cap', (f) => { f.request.rowIds = Array.from({ length: 26 }, (_, i) => `row-${i}`); }],
     ['missing selection', (f) => { f.request.rowIds = ['missing']; }], ['wrong action', (f) => { f.row.action = 'rename'; }],
     ['changed target', (f) => { f.row.xero_contact_id = randomUUID(); }], ['missing marker', (f) => { delete f.row.raw_row.restoration; }],
-    ['tenant', (f) => { f.deps.connectionReader = async () => ({ tenantId: randomUUID(), scope: 'accounting.contacts' }); }],
-    ['scope', (f) => { f.deps.connectionReader = async () => ({ tenantId: f.tenantId, scope: 'accounting.contacts.read' }); }],
+    ['tenant', (f) => { f.deps.connectionReader = async () => fixtureXeroConnection({ tenantId: randomUUID(), scope: 'accounting.contacts' }); }],
+    ['scope', (f) => { f.deps.connectionReader = async () => fixtureXeroConnection({ tenantId: f.tenantId, scope: 'accounting.contacts.read' }); }],
   ]) await t.test(name, async () => {
     const f = fixture(); change(f); await assert.rejects(xeroContactRestoreApply(f.request, f.deps)); assert.equal(f.posts.length, 0);
   });
@@ -222,7 +223,7 @@ test('failed outcome journal after successful readback leaves durable intent and
 test('provider rejection retains sanitized HTTP diagnostics and unchanged independent readback without permitting resend', async () => {
   const f = fixture(); const correlationId = randomUUID(); const calls = [];
   f.deps.contactUpdater = restoreXeroContactStatus; f.deps.contactDetailReader = readXeroContactForRestoration;
-  f.deps.connectionReader = async () => ({ tenantId: f.tenantId, scope: 'accounting.contacts', accessToken: 'DO-NOT-RETAIN-ACCESS-TOKEN' });
+  f.deps.connectionReader = async () => fixtureXeroConnection({ tenantId: f.tenantId, scope: 'accounting.contacts', accessToken: 'DO-NOT-RETAIN-ACCESS-TOKEN' });
   f.deps.fetchImpl = async (url, init) => {
     calls.push({ url, method: init.method, body: init.body });
     if (init.method === 'POST') return new Response(JSON.stringify({ ErrorNumber: 10,

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { fixtureXeroConnection } from './helpers/xeroSharedControl.js';
 import { buildContactLifecycleRows, canApplyContactLifecycleRow, invalidateContactNameCacheAfterRestore, summarizeContactLifecycleRows } from '../api/_xeroPortal.js';
 import { listXeroContactsComplete, listXeroContactsForRename } from '../api/_xeroContactSync.js';
 
@@ -33,7 +34,7 @@ test('archived Contact marker fails closed for incomplete or merged identity evi
 
 test('complete Contact reader retains merged status evidence and supports lifecycle balances without a second scan', async () => {
   const raw = { ContactID: contactId, Name: account.name, ContactStatus: 'ARCHIVED', MergedToContactID: tenantId, Balances: { AccountsPayable: { Outstanding: 25 } } };
-  const connection = { accessToken: 'fixture-only', tenantId };
+  const connection = fixtureXeroConnection({ accessToken: 'fixture-only', tenantId });
   let calls = 0;
   const config = { env: { XERO_CONTACT_SYNC_DELAY_MS: '0' }, fetchImpl: async () => {
     calls += 1; return new Response(JSON.stringify({ Contacts: [raw], pagination: { pageCount: 1, itemCount: 1 } }), { status: 200 });
@@ -55,7 +56,7 @@ test('restoration invalidates only the matching tenant cache and reports storage
 
 test('malformed pagination cannot certify a complete Contact list', async () => {
   for (const pagination of [[], 'truncated', 1, false]) {
-    await assert.rejects(listXeroContactsComplete({ tenantId, accessToken: 'fixture-only' }, {
+    await assert.rejects(listXeroContactsComplete(fixtureXeroConnection({ tenantId, accessToken: 'fixture-only' }), {
       env: { XERO_CONTACT_SYNC_DELAY_MS: '0' }, fetchImpl: async () => new Response(JSON.stringify({ Contacts: [], pagination }), { status: 200 }),
     }), { code: 'XERO_CONTACT_LIST_INCOMPLETE' });
   }

@@ -26,7 +26,7 @@ export function xeroRateLimitSnapshot(headers, previous = {}, { now = Date.now()
     const value = headers?.get?.(name);
     if (value == null || !String(value).trim()) return null;
     const number = Number(value);
-    return Number.isFinite(number) && number >= 0 ? number : null;
+    return Number.isSafeInteger(number) && number >= 0 ? number : null;
   };
   const problem = String(headers?.get?.('x-rate-limit-problem') || '').trim().toLowerCase() || null;
   const delay = suppliedRetryAfterMs(headers, now);
@@ -71,6 +71,8 @@ export function xeroRateLimitError(headers, { now = Date.now(), attempt = 0, ret
   });
 }
 
+// Supplemental local pacing only. Durable _xeroSharedControl admission is required
+// inside each operation; this queue never grants quota or authorises a probe.
 // One queue per tenant within a server instance, shared by concurrent page scans.
 // Xero's Retry-After remains authoritative when other instances/apps use its allowance.
 export function createXeroRequestGate({ now = Date.now, wait = sleep } = {}) {
@@ -93,7 +95,7 @@ export function createXeroRequestGate({ now = Date.now, wait = sleep } = {}) {
         state.headers = response.headers;
         const daily = /day|daily/i.test(String(response.headers?.get?.('x-rate-limit-problem') || ''));
         state.unknownDailyReset = daily && suppliedRetryAfterMs(response.headers, now()) == null;
-        // Unknown reset: fail queued work, then permit a later probe; do not invent a 24-hour lockout.
+        // Unknown reset: fail queued work, then permit a later attempt at durable admission; do not invent a 24-hour lockout.
         const fallback = state.unknownDailyReset ? 60_000 : 0;
         state.retryAt = now() + Math.max(fallback, xeroRetryAfterMs(response.headers, { now: now() }));
       } else if (response.ok) {

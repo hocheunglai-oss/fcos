@@ -1,6 +1,5 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import {
-  XERO_API_BASE,
   XERO_CONTACT_BATCH_SIZE,
   XERO_CONTACT_SYNC_MATCH_FIELD_LABELS,
   XERO_CONTACT_SYNC_REASON_LABELS,
@@ -1417,16 +1416,11 @@ async function attachReceiptFile(client, connection, receipt, invoiceId, { fetch
   if (error) throw storageError(error, RECEIPT_BUCKET);
   const buffer = Buffer.from(await data.arrayBuffer());
   const fileName = encodeURIComponent(receipt.file_name || `receipt-${receipt.id}`);
-  const response = await fetchImpl(`${XERO_API_BASE}/api.xro/2.0/Invoices/${invoiceId}/Attachments/${fileName}`, {
+  await xeroAccountingFetch(connection, `/Invoices/${encodeURIComponent(invoiceId)}/Attachments/${fileName}`, {
     method: 'POST',
-    headers: {
-      Authorization: `Bearer ${connection.accessToken}`,
-      'xero-tenant-id': connection.tenantId,
-      'Content-Type': receipt.file_type || 'application/octet-stream',
-    },
-    body: new Uint8Array(buffer),
+    headers: { 'Content-Type': receipt.file_type || 'application/octet-stream' },
+    rawBody: new Uint8Array(buffer), fetchImpl,
   });
-  if (!response.ok) throw portalError(await formatXeroError(response), response.status || 502, 'XERO_PORTAL_ATTACHMENT_FAILED');
 }
 
 async function writeLifecycleRun(client, run) {
@@ -1979,16 +1973,6 @@ function numberValue(value) {
 
 function xeroContactDelayMs(env) {
   return Number(env.XERO_CONTACT_SYNC_DELAY_MS || '1100');
-}
-
-async function formatXeroError(response) {
-  const text = await response.text().catch(() => '');
-  try {
-    const parsed = JSON.parse(text);
-    return parsed.Message || parsed.message || parsed.error_description || parsed.error || text || `Xero request failed with status ${response.status}.`;
-  } catch {
-    return text || `Xero request failed with status ${response.status}.`;
-  }
 }
 
 function storageError(error, table) {

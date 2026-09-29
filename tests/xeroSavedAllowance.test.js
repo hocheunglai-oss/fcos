@@ -7,7 +7,7 @@ import { latestXeroDailyAllowance } from '../src/lib/xeroDailyAllowance.js';
 
 const tenant = '00000000-0000-4000-8000-000000000001';
 const time = '2026-09-28T08:44:00.000Z';
-function fixture({ rate = { observedAt: time, dayRemaining: 30, dayResetAt: null }, responseTenant = tenant, fail = false, connected = true } = {}) {
+function fixture({ rate = { observedAt: time, dayRemaining: 30, dayResetAt: null }, responseTenant = tenant, fail = false, connected = true, shared = null } = {}) {
   const calls = [];
   const client = createClient('https://fixture.invalid', 'fixture-key', { auth: { persistSession: false, autoRefreshToken: false }, global: {
     fetch: async (input, options) => {
@@ -18,6 +18,7 @@ function fixture({ rate = { observedAt: time, dayRemaining: 30, dayResetAt: null
         assert.equal(url.searchParams.get('id'), 'eq.primary');
         return Response.json(connected ? [{ tenant_id: tenant }] : []);
       }
+      if (url.pathname.endsWith('/xero_shared_tenant_control')) return Response.json(shared ? [shared] : []);
       if (url.pathname.endsWith('/xero_financial_audit_events')) {
         assert.equal(url.searchParams.get('fingerprints->>tenantId'), `eq.${tenant}`);
         assert.equal(url.searchParams.get('order'), 'rate_limit_snapshot->>observedAt.desc.nullslast');
@@ -37,7 +38,7 @@ test('restores newest tenant-bound saved allowance using observation-time orderi
   const result = await readSavedXeroAllowance(f.client, { now: Date.parse(time) });
   assert.equal(result.rateLimit.dayRemaining, 30);
   assert.equal(result.rateLimit.dayResetAt, null);
-  assert.equal(f.calls.length, 2);
+  assert.equal(f.calls.length, 3);
   assert.equal(latestXeroDailyAllowance({ dayRemaining: 60, observedAt: '2026-09-28T07:51:00.000Z' }, result).dayRemaining, 30);
 });
 
@@ -46,7 +47,7 @@ test('latest financial response exposes saved quota even without an ordinary pre
   const result = await xeroFinancialSyncLatest({}, { client: f.client });
   assert.equal(result.preview, null);
   assert.equal(result.rateLimit.dayRemaining, 30);
-  assert.equal(f.calls.length, 3);
+  assert.equal(f.calls.length, 4);
 });
 
 test('disconnected and no-audit cases do not invent allowance or reset time', async () => {
@@ -75,4 +76,13 @@ test('zero remaining and actual provider retry/reset deadlines are preserved lit
   const result = await readSavedXeroAllowance(fixture({ rate }).client, { now: Date.parse(time) });
   const { privatePayload: _private, ...expected } = rate;
   assert.deepEqual(result.rateLimit, expected);
+});
+
+
+test('shared persisted allowance takes precedence without treating reserved estimate as provider observation',async()=>{
+  const shared={tenant_id:tenant,allowance_known:true,available_calls:845,daily_hold:false,retry_at:null,revision:8,rate_snapshot:{observedAt:time,dayRemaining:850}};
+  const f=fixture({shared});const result=await readSavedXeroAllowance(f.client,{now:Date.parse(time)});
+  assert.equal(result.rateLimit.dayRemaining,850);assert.equal(result.sharedControl.availableCalls,845);assert.equal(result.sharedControl.reserve,200);assert.equal(f.calls.length,2);
+  const unknown=await readSavedXeroAllowance(fixture({shared:{...shared,allowance_known:false,available_calls:null,rate_snapshot:{}}}).client);
+  assert.equal(unknown.sharedControl.allowanceKnown,false);assert.equal(unknown.rateLimit,undefined);
 });

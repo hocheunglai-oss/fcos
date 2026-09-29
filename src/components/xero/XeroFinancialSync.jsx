@@ -26,6 +26,7 @@ import './XeroFinancialSync.css';
 
 const XeroIssuedSupplierPreservation = lazy(() => import('./XeroIssuedSupplierPreservation'));
 const XeroDocumentCorrections = lazy(() => import('./XeroDocumentCorrections'));
+const XeroReconciliationCampaign = lazy(() => import('./XeroReconciliationCampaign'));
 const DIRECTIONS = ['buyer', 'supplier'];
 const DEFAULT_BANKS = ['DBS', 'UBS'];
 const PAGE_SIZE = 100;
@@ -57,6 +58,7 @@ export default function XeroFinancialSync({ portalStatus }) {
   const [reviewOpen, setReviewOpen] = useState(false);
   const [preservationOpen, setPreservationOpen] = useState(false);
   const [correctionsOpen, setCorrectionsOpen] = useState(false);
+  const [campaignOpen, setCampaignOpen] = useState(false);
   const [reviewTarget, setReviewTarget] = useState(null);
   const [paymentReferenceTarget, setPaymentReferenceTarget] = useState(null);
   const [targetNeedsRecheck, setTargetNeedsRecheck] = useState(false);
@@ -127,7 +129,7 @@ export default function XeroFinancialSync({ portalStatus }) {
   useEffect(() => {
     const refresh = () => {
       const explicitLinkSelected = (preview?.rows || []).some((row) => selected.has(row.id) && row.action === 'protected_legacy');
-      if (document.visibilityState === 'visible' && !busy && !reviewOpen && !preservationOpen && !correctionsOpen && !paymentReferenceTarget && !fixMapping && !explicitLinkSelected && preview
+      if (document.visibilityState === 'visible' && !busy && !reviewOpen && !preservationOpen && !correctionsOpen && !campaignOpen && !paymentReferenceTarget && !fixMapping && !explicitLinkSelected && preview
         && !backgroundCheckStopped.current && Date.now() - lastCheckAttemptAt.current > 120000
         && !['authorised', 'processing', 'partial', 'failed'].includes(preview.run?.status)
         && Date.now() - new Date(preview.checkedAt || preview.run?.createdAt).getTime() > 120000) runPreview(true, true);
@@ -136,7 +138,7 @@ export default function XeroFinancialSync({ portalStatus }) {
     window.addEventListener('focus', refresh);
     document.addEventListener('visibilitychange', refresh);
     return () => { window.removeEventListener('focus', refresh); document.removeEventListener('visibilitychange', refresh); };
-  }, [preview, busy, reviewOpen, preservationOpen, correctionsOpen, paymentReferenceTarget, fixMapping, selected]);
+  }, [preview, busy, reviewOpen, preservationOpen, correctionsOpen, campaignOpen, paymentReferenceTarget, fixMapping, selected]);
 
   const products = useMemo(() => preview?.products || [], [preview]);
   const productMappingIndex = useMemo(() => new Map((mappings?.productMappings || []).map((mapping) => [`${mapping.direction}:${mapping.salesforceProductId}`, mapping])), [mappings]);
@@ -193,7 +195,7 @@ export default function XeroFinancialSync({ portalStatus }) {
   }
 
   async function runPreview(preserveSelection = false, checkChanges = false, keepReviewOpen = false) {
-    if (preservationOpen || requestBusy.current || correctionsOpen || (checkChanges && backgroundCheckStopped.current)) return false;
+    if (preservationOpen || requestBusy.current || correctionsOpen || campaignOpen || (checkChanges && backgroundCheckStopped.current)) return false;
     requestBusy.current = true;
     lastCheckAttemptAt.current = Date.now();
     previewGeneration.current += 1;
@@ -203,7 +205,7 @@ export default function XeroFinancialSync({ portalStatus }) {
     setPaymentsReviewed(false);
     try {
     const result = await appClient.functions.invoke('xeroFinancialSyncPreview', { cutoffDate: XERO_FINANCIAL_CUTOFF,
-      includePayments: true, recordExactMatches: true, postingMode,
+      includePayments: true, recordExactMatches: false, linkFirst: true, postingMode,
       ...(checkChanges && previewMatchesPostingMode(preview, postingMode) ? { refreshIfChangedRunId: preview?.run?.id } : {}) }, MUTATION_OPTIONS);
     captureDailyAllowance(result.data);
     if (result.data?.error) {
@@ -394,9 +396,9 @@ export default function XeroFinancialSync({ portalStatus }) {
               <option value="draft">{flow.draftMode}</option>
               <option value="authorised">{flow.authorisedMode}</option>
             </select>
-            <div className="flex flex-wrap justify-end gap-2"><Button type="button" variant="outline" onClick={() => { backgroundCheckStopped.current = true; setPreservationOpen(true); }} disabled={Boolean(busy) || correctionsOpen || !portalStatus?.xero?.connected}>Preserve verified bills</Button>
-              <Button type="button" variant="outline" onClick={() => { backgroundCheckStopped.current = true; setCorrectionsOpen(true); }} disabled={Boolean(busy) || preservationOpen || !portalStatus?.xero?.connected || !scopeFlags.invoices}>Preview date and reference corrections</Button>
-              <Button type="button" onClick={() => runPreview()} disabled={Boolean(busy) || preservationOpen || correctionsOpen || !portalStatus?.xero?.connected || !scopeFlags.invoices || !scopeFlags.contacts || !scopeFlags.settingsRead || !scopeFlags.paymentsRead}>
+            <div className="flex flex-wrap justify-end gap-2"><Button type="button" variant="outline" onClick={() => { backgroundCheckStopped.current = true; setCampaignOpen(true); }} disabled={Boolean(busy) || preservationOpen || correctionsOpen || campaignOpen}>2026 reconciliation campaign</Button><Button type="button" variant="outline" onClick={() => { backgroundCheckStopped.current = true; setPreservationOpen(true); }} disabled={Boolean(busy) || correctionsOpen || campaignOpen || !portalStatus?.xero?.connected}>Preserve verified bills</Button>
+              <Button type="button" variant="outline" onClick={() => { backgroundCheckStopped.current = true; setCorrectionsOpen(true); }} disabled={Boolean(busy) || preservationOpen || campaignOpen || !portalStatus?.xero?.connected || !scopeFlags.invoices}>Preview date and reference corrections</Button>
+              <Button type="button" onClick={() => runPreview()} disabled={Boolean(busy) || preservationOpen || correctionsOpen || campaignOpen || !portalStatus?.xero?.connected || !scopeFlags.invoices || !scopeFlags.contacts || !scopeFlags.settingsRead || !scopeFlags.paymentsRead}>
               {actionIcon(busy === 'preview', ShieldCheck)}
               {busy === 'preview' ? financialCopy.checkingEverything : financialCopy.checkEverything}
             </Button></div>
@@ -543,6 +545,7 @@ export default function XeroFinancialSync({ portalStatus }) {
           </div>
         </div>
       </details>
+      {campaignOpen && <Suspense fallback={<div role="status">Loading saved reconciliation campaign…</div>}><XeroReconciliationCampaign onClose={() => setCampaignOpen(false)} baselineRun={preview?.run || null} enabled={Boolean(financialGate?.enabled)} connected={Boolean(portalStatus?.xero?.connected)} onAllowance={captureDailyAllowance} /></Suspense>}
       {preservationOpen && <Suspense fallback={<div role="status">Loading bill preservation…</div>}><XeroIssuedSupplierPreservation onClose={() => setPreservationOpen(false)} enabled={financialGate?.enabled} onAllowance={captureDailyAllowance} /></Suspense>}
       {correctionsOpen && <Suspense fallback={<div role="status">Loading document corrections…</div>}><XeroDocumentCorrections onClose={() => setCorrectionsOpen(false)} enabled={financialGate?.enabled} canPreview={Boolean(portalStatus?.xero?.connected && scopeFlags.invoices)} onAllowance={captureDailyAllowance} /></Suspense>}
       <Dialog open={reviewOpen} onOpenChange={setReviewOpen}><DialogContent className="max-h-[85vh] max-w-3xl overflow-y-auto"><DialogHeader><DialogTitle>{reviewTarget ? (targetEligible ? flow.singleReview : flow.resolve) : !canReviewRun ? flow.resume : selectedLinksOnly ? flow.reviewLinks : flow.review}</DialogTitle><DialogDescription>{canReviewRun ? flow.reviewDescription : flow.resumeDescription}</DialogDescription></DialogHeader>

@@ -3,6 +3,7 @@ import test from 'node:test';
 import { randomUUID } from 'node:crypto';
 import { xeroContactRepairApply } from '../api/_xeroContactRepair.js';
 import { listXeroContactsForRename } from '../api/_xeroContactSync.js';
+import { fixtureXeroConnection } from './helpers/xeroSharedControl.js';
 
 function database(tables) {
   const writes = [];
@@ -38,7 +39,7 @@ function fixture() {
   const tables = { xero_contact_lifecycle_runs: [{ id: runId, state: 'previewed', xero: { tenantId } }], xero_contact_lifecycle_rows: [row], xero_financial_audit_events: [], xero_contact_lifecycle_locks: [] };
   const client = database(tables); const creates = []; const contacts = []; const allAccounts = [account]; let releases = 0;
   const deps = { client, env: { FCOS_ENABLE_XERO_CONTACT_SYNC: 'true' }, accessContext: { profile: { id: randomUUID(), email: 'finance@example.test' } },
-    connectionReader: async () => ({ tenantId, scope: 'accounting.contacts' }), accountReader: async () => [account], allAccountReader: async () => allAccounts,
+    connectionReader: async () => fixtureXeroConnection({ tenantId, scope: 'accounting.contacts' }), accountReader: async () => [account], allAccountReader: async () => allAccounts,
     contactReader: async () => structuredClone(contacts), lockReader: async (_client, leaseId) => {
       tables.xero_contact_lifecycle_locks = [{ id: 'primary', run_id: leaseId, locked_until: new Date(Date.now() + 60000).toISOString() }];
       return { release: async () => { releases++; } };
@@ -76,8 +77,8 @@ test('actor, explicit review, valid saved selection and cap fail before provider
 
 test('tenant drift, scope loss, incomplete contact list and lease expiry fail closed', async () => {
   const cases = [
-    { connectionReader: async () => ({ tenantId: randomUUID(), scope: 'accounting.contacts' }) },
-    { connectionReader: async () => ({ tenantId: null, scope: '' }) },
+    { connectionReader: async () => fixtureXeroConnection({ tenantId: randomUUID(), scope: 'accounting.contacts' }) },
+    { connectionReader: async () => fixtureXeroConnection({ tenantId: null, scope: '' }) },
     { contactReader: async () => [{ contactId: 'invalid', status: 'ACTIVE' }] },
   ];
   for (const change of cases) { const f = fixture(); await assert.rejects(xeroContactRepairApply(f.request, { ...f.deps, ...change })); assert.equal(f.creates.length, 0); assert.equal(f.releases(), 1); }
@@ -135,7 +136,7 @@ test('mismatched provider contact identity is uncertain and is never recorded as
 
 async function readContacts(pages) {
   let index = 0;
-  return listXeroContactsForRename({ accessToken: 'test-only', tenantId: randomUUID() }, { env: { XERO_CONTACT_SYNC_DELAY_MS: '0' }, fetchImpl: async () => new Response(JSON.stringify(pages[index++]), { status: 200 }) });
+  return listXeroContactsForRename(fixtureXeroConnection({ accessToken: 'test-only', tenantId: randomUUID() }), { env: { XERO_CONTACT_SYNC_DELAY_MS: '0' }, fetchImpl: async () => new Response(JSON.stringify(pages[index++]), { status: 200 }) });
 }
 const contactPage = (count = 100) => Array.from({ length: count }, () => ({ ContactID: randomUUID(), Name: 'Supplier', ContactStatus: 'ACTIVE' }));
 

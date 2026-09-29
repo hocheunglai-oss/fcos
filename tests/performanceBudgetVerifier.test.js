@@ -81,6 +81,27 @@ test('client and configured request thresholds are enforced from the budget file
   assert.match(requestReport.failures.join('\n'), /notification database snapshot requests/);
 });
 
+test('campaign stays lazy and measured inside the ordinary budget, with bounded feature size', async (t) => {
+  const root = await writeFixture({ ...defaultBudgets, onDemandReconciliationCampaign: { totalBytes: 100, totalGzipBytes: 100 } });
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const key = 'src/components/xero/XeroReconciliationCampaign.jsx';
+  const manifest = { 'index.html': { isEntry: true, file: 'assets/main.js', dynamicImports: [key] },
+    [key]: { isDynamicEntry: true, file: 'assets/campaign.js' } };
+  await mkdir(path.join(root, 'dist/.vite'));
+  await writeFile(path.join(root, 'dist/assets/campaign.js'), 'c'.repeat(80));
+  const saveManifest = () => writeFile(path.join(root, 'dist/.vite/manifest.json'), JSON.stringify(manifest));
+  await saveManifest();
+  const report = await verifyPerformanceBudgets({ root });
+  assert.deepEqual(report.failures, []);
+  assert.equal(report.clientAssets.onDemandReconciliationCampaign.bytes, 80);
+  assert.equal(report.clientAssets.ordinaryBytes, 'export const asset = true;'.length + 80);
+  manifest['index.html'].imports = [key]; await saveManifest();
+  assert.match((await verifyPerformanceBudgets({ root })).failures.join('\n'), /separate dynamic entry/);
+  delete manifest['index.html'].imports; await saveManifest();
+  await writeFile(path.join(root, 'dist/assets/campaign.js'), 'c'.repeat(101));
+  assert.match((await verifyPerformanceBudgets({ root })).failures.join('\n'), /campaign is 101 bytes/);
+});
+
 async function writePdfViewerFixture() {
   const root = await writeFixture({ ...defaultBudgets, onDemandPdfViewer: {
     rendererBytes: 300, workerBytes: 500, totalBytes: 800, totalGzipBytes: 300,

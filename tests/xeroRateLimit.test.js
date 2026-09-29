@@ -1,3 +1,4 @@
+import { fixtureXeroConnection } from './helpers/xeroSharedControl.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createXeroRequestGate, xeroRetryAfterMs, xeroRateLimitError, xeroRateLimitSnapshot } from '../api/_xeroRateLimit.js';
@@ -51,7 +52,7 @@ test('a daily limit stops queued calls without sleeping through the daily reset'
 test('read requests recover from 429 by default and preserve every paginated record', async () => {
   const calls = [];
   let limited = false;
-  const result = await loadAllXeroPages({ tenantId: 'paginated', accessToken: 'test' }, '/Invoices', 'Invoices', {
+  const result = await loadAllXeroPages(fixtureXeroConnection({ tenantId: 'paginated', accessToken: 'test' }), '/Invoices', 'Invoices', {
     env: {},
     fetchImpl: async (url) => {
       const page = Number(new URL(url).searchParams.get('page'));
@@ -70,7 +71,7 @@ test('complete maximum-size scoped preview needs only 45 paced reads without sca
   let now = 0;
   const requestGate = createXeroRequestGate({ now: () => now, wait: async (ms) => { now += ms; } });
   const requests = [];
-  const snapshot = await loadXeroFinancialSnapshot({ tenantId: 'complete', accessToken: 'test' }, '2026-01-01', {
+  const snapshot = await loadXeroFinancialSnapshot(fixtureXeroConnection({ tenantId: 'complete', accessToken: 'test' }), '2026-01-01', {
     includePayments: true, env: {}, requestGate,
     fetchImpl: async (value) => {
       const url = new URL(value);
@@ -100,7 +101,7 @@ test('scoped reconciliation hydrates historical invoice evidence without adding 
   const ordinary = (PaymentID, InvoiceID, date) => ({ PaymentID, PaymentType: 'ACCPAYPAYMENT', Date: date,
     Invoice: { InvoiceID, Type: 'ACCPAY', CurrencyCode: 'USD', Contact: { ContactID: contact } } });
   const calls = [];
-  const snapshot = await loadXeroFinancialSnapshot({ tenantId: 'historical', accessToken: 'test' }, '2026-01-01', {
+  const snapshot = await loadXeroFinancialSnapshot(fixtureXeroConnection({ tenantId: 'historical', accessToken: 'test' }), '2026-01-01', {
     env: {}, includePayments: true, invoiceIds: [unpaidOld, alreadyLoaded], paymentIds: [movedPayment],
     requestGate: async (_tenant, operation) => operation(),
     fetchImpl: async (value) => {
@@ -141,11 +142,11 @@ test('payment evidence IDs retain every ambiguous buyer candidate and exclude un
 
 test('missing targeted evidence remains absent and unexpected records fail closed', async () => {
   const options = { env: {}, invoices: [], payments: [], invoiceIds: ['missing'], paymentIds: ['deleted'], requestGate: async (_tenant, operation) => operation() };
-  const absent = await loadXeroPaymentEvidence({ tenantId: 'missing', accessToken: 'test' }, '2026-01-01', {
+  const absent = await loadXeroPaymentEvidence(fixtureXeroConnection({ tenantId: 'missing', accessToken: 'test' }), '2026-01-01', {
     ...options, fetchImpl: async (url) => url.includes('/Payments/') ? json({}, 404) : json({ Invoices: [] }),
   });
   assert.deepEqual(absent, { invoices: [], payments: [], paymentEvidenceHolds: [] });
-  await assert.rejects(loadXeroPaymentEvidence({ tenantId: 'mismatch', accessToken: 'test' }, '2026-01-01', {
+  await assert.rejects(loadXeroPaymentEvidence(fixtureXeroConnection({ tenantId: 'mismatch', accessToken: 'test' }), '2026-01-01', {
     ...options, paymentIds: [], fetchImpl: async () => json({ Invoices: [{ InvoiceID: 'unrequested' }] }),
   }), (error) => error.code === 'XERO_FINANCIAL_XERO_INCOMPLETE');
 });
@@ -153,7 +154,7 @@ test('missing targeted evidence remains absent and unexpected records fail close
 test('historical invoice batches keep UUID query strings within the provider limit and retain every record', async () => {
   const invoiceIds = Array.from({ length: 121 }, (_, index) => `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`);
   let calls = 0;
-  const result = await loadXeroPaymentEvidence({ tenantId: 'batch', accessToken: 'test' }, '2026-01-01', {
+  const result = await loadXeroPaymentEvidence(fixtureXeroConnection({ tenantId: 'batch', accessToken: 'test' }), '2026-01-01', {
     env: {}, invoices: [], payments: [], invoiceIds, requestGate: async (_tenant, operation) => operation(),
     fetchImpl: async (value) => {
       const url = new URL(value); calls += 1;
@@ -179,7 +180,7 @@ test('unknown daily reset has no invented retry timestamp and allows a bounded l
 });
 
 test('large scans fail explicitly without silently truncating the financial population', async () => {
-  await assert.rejects(loadAllXeroPages({ tenantId: 'oversized', accessToken: 'test' }, '/Invoices', 'Invoices', {
+  await assert.rejects(loadAllXeroPages(fixtureXeroConnection({ tenantId: 'oversized', accessToken: 'test' }), '/Invoices', 'Invoices', {
     env: {}, requestGate: async (_tenant, operation) => operation(),
     fetchImpl: async () => json({ Invoices: Array.from({ length: 1000 }, () => ({ InvoiceID: 'test' })) }),
   }), (error) => error.code === 'XERO_FINANCIAL_XERO_INCOMPLETE');
@@ -193,7 +194,7 @@ test('daily, long and exhausted rate limits return actionable errors without uns
     [{ 'Retry-After': '0' }, { method: 'POST', body: { Invoices: [] } }, 1],
   ]) {
     let calls = 0;
-    await assert.rejects(xeroAccountingFetch({ tenantId: 'test', accessToken: 'test' }, '/Invoices', {
+    await assert.rejects(xeroAccountingFetch(fixtureXeroConnection({ tenantId: 'test', accessToken: 'test' }), '/Invoices', {
       ...options, env: {}, fetchImpl: async () => { calls += 1; return json({}, 429, headers); },
     }), (error) => error.status === 429 && error.code === 'XERO_CONTACT_SYNC_RATE_LIMITED' && /retry/.test(error.message));
     assert.equal(calls, expectedCalls);
@@ -202,7 +203,7 @@ test('daily, long and exhausted rate limits return actionable errors without uns
 
 test('explicit write retries retain the same idempotency key and body', async () => {
   const requests = [];
-  await xeroAccountingFetch({ tenantId: 'test', accessToken: 'test' }, '/Invoices', {
+  await xeroAccountingFetch(fixtureXeroConnection({ tenantId: 'test', accessToken: 'test' }), '/Invoices', {
     method: 'POST', retryOnRateLimit: true, idempotencyKey: 'same-approved-batch', body: { Invoices: [{ InvoiceID: 'test' }] }, env: {},
     fetchImpl: async (_url, options) => { requests.push(options); return requests.length === 1 ? json({}, 429, { 'Retry-After': '0' }) : json({ Invoices: [] }); },
   });

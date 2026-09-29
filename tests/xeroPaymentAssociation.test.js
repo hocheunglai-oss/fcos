@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { fixtureXeroConnection } from './helpers/xeroSharedControl.js';
 import { resolveXeroPaymentAssociation, xeroPaymentEvidenceHold, xeroPaymentDate } from '../api/_xeroPaymentAssociation.js';
 import { loadXeroPaymentEvidence, loadXeroFinancialSnapshot, classifyXeroFinancialPayment } from '../api/_xeroFinancialSync.js';
 import { selectXeroPaymentMatch, selectXeroReferenceRetentionMatch } from '../api/_xeroPaymentIdentity.js';
@@ -80,7 +81,7 @@ test('historical hydration reads only verified ordinary invoice IDs and retains 
   const refundId = uuid(300), oldInvoice = uuid(301);
   const rows = [ordinary(oldInvoice), payment('AROVERPAYMENTPAYMENT', 'AROVERPAYMENT', 'Overpayment', 'OverpaymentID', refundId, 2, true)];
   const requests = [];
-  const snapshot = await loadXeroPaymentEvidence({ tenantId: uuid(999), accessToken: 'fixture' }, '2026-01-01', {
+  const snapshot = await loadXeroPaymentEvidence(fixtureXeroConnection({ tenantId: uuid(999), accessToken: 'fixture' }), '2026-01-01', {
     env: {}, invoices: [], payments: rows, invoiceIds: [refundId],
     requestGate: async (_tenant, operation) => operation(),
     fetchImpl: async input => {
@@ -105,7 +106,7 @@ test('a 441-row scoped page preserves 438 ordinary and three overpayment bodies 
   payments.push(...Array.from({ length: 3 }, (_, index) => payment('AROVERPAYMENTPAYMENT', 'AROVERPAYMENT',
     'Overpayment', 'OverpaymentID', uuid(30000 + index), 31000 + index, true)));
   const requests = [];
-  const snapshot = await loadXeroFinancialSnapshot({ tenantId: uuid(999), accessToken: 'fixture' }, '2026-01-01', {
+  const snapshot = await loadXeroFinancialSnapshot(fixtureXeroConnection({ tenantId: uuid(999), accessToken: 'fixture' }), '2026-01-01', {
     env: {}, includePayments: true, requestGate: async (_tenant, operation) => operation(),
     fetchImpl: async input => {
       const url = new URL(input); requests.push(url.pathname);

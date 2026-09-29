@@ -39,6 +39,8 @@ jobs:
         run: npx playwright test --config playwright.nom-b.config.js
       - name: Verify group-first People & Access without providers
         run: npx playwright test --config playwright.people-access.config.js
+      - name: Verify manual reconciliation approval and recovery without providers
+        run: npx playwright test --config playwright.xero-campaign.config.js
       - run: npm run verify:graph-only
       - run: npm run build
       - run: npm run verify:performance
@@ -80,6 +82,14 @@ jobs:
         run: node --test tests/dashboardNomBConcurrency.test.js
         env:
           FCOS_NOM_B_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+      - name: Verify shared Xero allowance and token concurrency
+        run: node --test tests/xeroSharedControlDatabase.test.js
+        env:
+          FCOS_SHARED_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+      - name: Verify exact reconciliation approvals and atomic outcomes
+        run: node --test tests/xeroReconciliationCampaignDatabase.test.js
+        env:
+          FCOS_CAMPAIGN_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
       - name: Stop temporary Supabase services
         if: ${{ always() && steps.start-supabase.outcome != 'skipped' && steps.start-supabase.outcome != '' }}
         run: supabase stop --no-backup

@@ -1,3 +1,4 @@
+import { xeroReconciliationCampaignCreate, xeroReconciliationCampaignRead, xeroReconciliationCampaignRefresh, xeroReconciliationCampaignPreview, xeroReconciliationCampaignApprove, xeroReconciliationCampaignRun, xeroReconciliationConnectionCheck } from './_xeroReconciliationCampaign.js';
 import { xeroFinancialDocumentCorrectionPreview, xeroFinancialDocumentCorrectionPage, xeroFinancialDocumentCorrectionApply, xeroFinancialDocumentCorrectionVerify } from './_xeroDocumentCorrections.js';
 import {
   invalidateContactNameCacheAfterRestore,
@@ -31,6 +32,13 @@ import { xeroContactRestoreApply } from './_xeroContactRestore.js';
 import { xeroFinancialDocumentPreservationPreview, xeroFinancialDocumentPreservationRun } from './_xeroIssuedSupplierWorkflow.js';
 
 export const XERO_HANDLER_MODULE_ACCESS = Object.freeze(Object.fromEntries([
+  'xeroReconciliationCampaignCreate',
+  'xeroReconciliationCampaignRead',
+  'xeroReconciliationCampaignRefresh',
+  'xeroReconciliationCampaignPreview',
+  'xeroReconciliationCampaignApprove',
+  'xeroReconciliationCampaignRun',
+  'xeroReconciliationConnectionCheck',
   'xeroPortalStatus',
   'xeroPortalConnectStart',
   'xeroPortalDisconnect',
@@ -82,6 +90,13 @@ export function createXeroHandlers({ requireActiveUser, resolveRecoveredSystemEr
     return result;
   };
   return {
+    xeroReconciliationCampaignCreate: wrap(xeroReconciliationCampaignCreate),
+    xeroReconciliationCampaignRead: wrap(xeroReconciliationCampaignRead),
+    xeroReconciliationCampaignRefresh: wrap(xeroReconciliationCampaignRefresh),
+    xeroReconciliationCampaignPreview: wrap(xeroReconciliationCampaignPreview),
+    xeroReconciliationCampaignApprove: wrap(xeroReconciliationCampaignApprove),
+    xeroReconciliationCampaignRun: wrap(xeroReconciliationCampaignRun),
+    xeroReconciliationConnectionCheck: wrap(xeroReconciliationConnectionCheck),
     xeroPortalStatus: wrap(xeroPortalStatus),
     xeroPortalConnectStart: wrap(xeroPortalConnectStart),
     xeroPortalDisconnect: wrap(xeroPortalDisconnect),

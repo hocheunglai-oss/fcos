@@ -29,6 +29,8 @@ const migrationSources = await Promise.all(names.map(async (name) => ({
   sql: await readFile(new URL(name, migrationDirectory), 'utf8'),
 })));
 const releaseMigrationNames = new Set([
+  '20260929170347_xero_shared_control.sql',
+  '20260929170953_xero_reconciliation_campaign.sql',
   '20260929141433_people_access_service_grants.sql',
   '20260929133157_people_access_groups.sql',
   '20260929035058_dashboard_nom_b_policies.sql',
@@ -92,6 +94,15 @@ async function verifyRuntimeObjects(label) {
   await assertRows(`select count(*)::int from unnest(array['permission_access_migration_snapshots','permission_access_catalog']) t cross join unnest(array['INSERT','UPDATE','DELETE']) p where has_table_privilege('service_role','public.'||t,p)`, 0, `${label} access migration evidence and catalog read-only`);
   await assertRows(`select count(*)::int from public.permission_access_migration_snapshots s join public.user_profiles u on u.id=s.user_id where u.active and ((public.fcos_effective_access(u.id)->'permissions') is distinct from s.permissions or (public.fcos_effective_access(u.id)->'capabilities') is distinct from s.capabilities)`, 0, `${label} migration exact grant preservation`);
 
+  const campaignTables = ['xero_reconciliation_campaigns','xero_reconciliation_cases','xero_reconciliation_batches','xero_reconciliation_events'];
+  const sharedXeroTables = ['xero_shared_tenant_control','xero_shared_budgets','xero_shared_probe_grants','xero_shared_requests','xero_token_refresh_leases'];
+  await assertRows(`select count(*)::int from pg_class c join pg_namespace n on n.oid=c.relnamespace
+    where n.nspname='public' and c.relname=any($1::text[]) and c.relrowsecurity`, 9, `${label} campaign and shared quota RLS`, [[...campaignTables,...sharedXeroTables]]);
+  await assertRows(`select count(*)::int from unnest($1::text[]) t cross join unnest(array['anon','authenticated']) r
+    cross join unnest(array['SELECT','INSERT','UPDATE','DELETE','TRUNCATE']) p where has_table_privilege(r,'public.'||t,p)`,
+    0, `${label} campaign and shared quota browser denial`, [[...campaignTables,...sharedXeroTables]]);
+  await assertRows(`select count(*)::int from unnest($1::text[]) t cross join unnest(array['INSERT','UPDATE','DELETE','TRUNCATE']) p
+    where has_table_privilege('service_role','public.'||t,p)`,0,`${label} campaign mutations restricted to checked RPCs`,[campaignTables]);
   const nomBTables = ['dashboard_nom_b_policies', 'dashboard_nom_b_observations', 'dashboard_nom_b_events'];
   await assertRows(`select count(*)::int from pg_class c join pg_namespace n on n.oid=c.relnamespace
     where n.nspname='public' and c.relname=any($1::text[]) and c.relrowsecurity`, 3, `${label} Nom B RLS`, [nomBTables]);

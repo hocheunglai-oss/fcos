@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { fixtureXeroConnection } from './helpers/xeroSharedControl.js';
 import {
   buildContactLifecycleRows,
   READABLE_USAGE_SOURCES,
@@ -12,7 +13,7 @@ import {
   xeroPortalStatus,
 } from '../api/_xeroPortal.js';
 
-const connection = { tenantId: 'tenant-a', accessToken: 'test-token' };
+const connection = fixtureXeroConnection({ tenantId: 'tenant-a', accessToken: 'test-token' });
 const env = { XERO_CONTACT_SYNC_DELAY_MS: '0', XERO_TRANSIENT_RETRY_LIMIT: '0' };
 const readableSources = READABLE_USAGE_SOURCES.filter((source) => !source.blocked);
 const invoices = readableSources.find((source) => source.source === 'invoices');

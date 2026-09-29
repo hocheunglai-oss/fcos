@@ -268,6 +268,7 @@ function cloneBranch(destination, branch, existsRemotely) {
   const cloneSourceBranch = MODE === 'publish' && !existsRemotely ? PUBLICATION.defaultBranch : branch;
   cloneArgs.push('--branch', cloneSourceBranch, '--single-branch');
   run('gh', cloneArgs, { env: ghEnvironment });
+  configurePushIdentity(destination);
   if (MODE === 'publish' && !existsRemotely) run('git', ['switch', '-c', branch], { cwd: destination });
 }
 

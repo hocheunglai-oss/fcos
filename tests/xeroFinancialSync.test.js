@@ -571,3 +571,29 @@ test('remittance proof changes source and review identity, and cannot use histor
   assert.equal(retained.status, 'blocked');
   assert.ok(retained.blockers.some((message) => /remittance/i.test(message)));
 });
+
+test('link-first defers cosmetic correction on ordinary, paid and locked records without permitting accounting writes', () => {
+  const projection = { scope: 'current', blockers: [], blockerCodes: [], fields: { Date: source.deliveryDate,
+    DueDate: source.dueDate, InvoiceNumber: source.documentNumber, Reference: 'VESSEL', Description: 'INVOICE 15/6/2026' } };
+  for (const status of ['DRAFT', 'AUTHORISED', 'PAID']) {
+    const result = classifyXeroFinancialDocument({ ...source, documentFieldProjection: projection }, [xero({ status })],
+      { linkFirst: true, organisation: { periodLockDate: '2026-12-31' } });
+    assert.equal(result.action, 'protected_legacy'); assert.deepEqual(result.blockers, []);
+    assert.equal(result.proposedPayload, null); assert.equal(result.reviewRequired, true);
+  }
+  const changed = classifyXeroFinancialDocument({ ...source, documentFieldProjection: projection }, [xero({ total: 1000.01 })], { linkFirst: true });
+  assert.equal(changed.status, 'blocked');
+  const accountingChanged = classifyXeroFinancialDocument({ ...source, documentFieldProjection: projection },
+    [xero({ lineItems: [{ Quantity: 1, UnitAmount: 1000, AccountCode: 'other', TaxType: 'NONE' }] })], { linkFirst: true });
+  assert.equal(accountingChanged.status, 'blocked');
+});
+
+test('link-first preserves cutoff evidence but does not require deferred vessel or due-date formatting', () => {
+  const document = { ...source, documentFieldProjection: { scope: 'current',
+    blockers: ['The exact STEM vessel name is missing.'], blockerCodes: ['DOCUMENT_FIELD_VESSEL_MISSING'], fields: { Date: source.deliveryDate } } };
+  assert.equal(classifyXeroFinancialDocument(document, [xero()], { linkFirst: true }).status, 'eligible');
+  assert.equal(classifyXeroFinancialDocument(document, [], { linkFirst: true }).status, 'blocked');
+  const unavailable = { ...document, documentFieldProjection: { ...document.documentFieldProjection, scope: 'unavailable',
+    blockers: ['Missing buyer delivery date'], blockerCodes: ['DOCUMENT_FIELD_DELIVERY_DATE_MISSING'] } };
+  assert.equal(classifyXeroFinancialDocument(unavailable, [xero()], { linkFirst: true }).status, 'blocked');
+});
