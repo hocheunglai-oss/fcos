@@ -23,8 +23,10 @@ test('group-first editor previews affected users, saves a revision, and fits des
   await page.screenshot({ path: 'test-results/people-access-desktop.png' });
   expect((await page.getByRole('button', { name: 'Review & save' }).boundingBox()).y).toBeLessThan(900);
   await page.setViewportSize({ width: 1366, height: 768 });
-  const footer = await page.getByRole('button', { name: 'Review & save' }).boundingBox();
-  expect(footer.y + footer.height).toBeLessThanOrEqual(768);
+  await expect.poll(async () => {
+    const footer = await page.getByRole('button', { name: 'Review & save' }).boundingBox();
+    return footer ? footer.y + footer.height : Infinity;
+  }, { message: 'Save controls must fit after the desktop resize event has settled.' }).toBeLessThanOrEqual(768);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   expect(errors).toEqual([]);
 });
