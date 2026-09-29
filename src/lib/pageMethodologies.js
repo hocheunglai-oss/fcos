@@ -155,6 +155,10 @@ export const MY_COMMITMENTS_METHODOLOGY = {
   description: 'How FCOS combines personal work and determines urgency.',
   sections: [
     {
+      title: 'Nom B Filing',
+      body: 'Open Nom B Filing to review your missing buyer nominations, waived requirements and cases that cannot yet be verified. This view uses delivery from 1 September 2026 independently of financial reporting filters. Existing trader delegation, automatic waivers and General Manager or Administrator policy controls still apply. Its counts are separate from the ordinary commitment urgency cards.',
+    },
+    {
       title: 'Included work',
       body: 'The page combines Projects & Tasks, Growth & Coaching, assigned Payment Collections, dispute approvals and accounting work, Hedge settlement decisions, Market evidence alerts, Xero accounting runs, Email Router warnings, and operational system errors. FCOS evaluates each source using your current server-side permissions; this is a personal action view, not a privacy boundary.',
     },

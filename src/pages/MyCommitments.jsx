@@ -1,5 +1,5 @@
 import { operationalHome, setOperationalHome } from '@/lib/operationalHome';
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   AlertCircle,
@@ -26,6 +26,10 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { MY_COMMITMENTS_METHODOLOGY } from "@/lib/pageMethodologyIndex";
+import { useAuth } from "@/lib/AuthContext";
+
+const MissingNomBPanel = lazy(() => import('@/components/dashboard/MissingNomBPanel'));
+const StemDetailModal = lazy(() => import('@/components/dashboard/StemDetailModal'));
 
 const SECTIONS = [
   { key: "needs_action", label: "Needs action", icon: CircleDot },
@@ -39,6 +43,7 @@ const SECTIONS = [
 
 const SOURCES = [
   { key: "all", label: "All", icon: UserRoundCheck },
+  { key: "nom_b", label: "Nom B Filing", icon: FileCheck2 },
   { key: "collaboration", label: "Projects & Tasks", icon: CircleDot },
   { key: "growth_coaching", label: "Growth & Coaching", icon: UserRoundCheck },
   { key: "fcos_improvements", label: "FCOS Improvements", icon: Lightbulb },
@@ -98,6 +103,9 @@ function sectionTone(key) {
 
 export default function MyCommitments() {
   const navigate = useNavigate();
+  const { user, hasModuleAccess } = useAuth();
+  const canViewNomB = user?.read_only_ci !== true && hasModuleAccess('dashboard');
+  const [selectedStemId, setSelectedStemId] = useState(null);
   const [home, setHome] = useState(operationalHome);
   const [homeError, setHomeError] = useState('');
   const { request: requestCommitments } = useNavigationAwareRequest("collaboration");
@@ -105,6 +113,7 @@ export default function MyCommitments() {
   const [data, setData] = useState({ commitments: [], counts: {} });
   const requestedSource = searchParams.get('source');
   const scope = SOURCES.some((item) => item.key === requestedSource) ? requestedSource : 'all';
+  const isNomBFiling = scope === 'nom_b';
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
@@ -131,8 +140,8 @@ export default function MyCommitments() {
   }, [requestCommitments]);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    if (!isNomBFiling) load();
+  }, [load, isNomBFiling]);
 
   const commitments = useMemo(
     () =>
@@ -144,16 +153,16 @@ export default function MyCommitments() {
   const visibleSources = useMemo(() => {
     const available = new Set(data.sources || (data.commitments || []).map((item) => item.source));
     return SOURCES
-      .filter((item) => item.key === "all" || available.has(item.key))
+      .filter((item) => item.key === 'nom_b' ? canViewNomB : item.key === "all" || available.has(item.key))
       .map((item) => ({
         id: item.key,
         label: item.label,
         icon: item.icon,
-        count: item.key === 'all'
+        count: item.key === 'nom_b' ? undefined : item.key === 'all'
           ? (data.commitments || []).length
           : (data.commitments || []).filter((commitment) => commitment.source === item.key).length,
       }));
-  }, [data.commitments, data.sources]);
+  }, [canViewNomB, data.commitments, data.sources]);
 
   const changeScope = (nextScope) => {
     const next = new URLSearchParams(searchParams);
@@ -169,7 +178,7 @@ export default function MyCommitments() {
         icon={UserRoundCheck}
         eyebrow="Daily Work"
         title="My Commitments"
-        description="Your operational work, approvals, development checkpoints, coaching actions, and sessions in one place."
+        description={isNomBFiling ? 'Review your missing Nom B filings, waivers, and STEMs that need verification.' : 'Your operational work, approvals, development checkpoints, coaching actions, and sessions in one place.'}
         actions={(
           <>
             <Button variant="outline" aria-pressed={home === '/my-commitments'} onClick={() => {
@@ -178,7 +187,7 @@ export default function MyCommitments() {
               else setHomeError('This browser could not save your home preference.');
             }}>{home === '/my-commitments' ? 'Home on this browser ✓' : 'Make this my home'}</Button>
             <PageMethodology {...MY_COMMITMENTS_METHODOLOGY} />
-            <Button
+            {!isNomBFiling && <Button
               type="button"
               variant="outline"
               onClick={() => load({ background: true })}
@@ -188,12 +197,12 @@ export default function MyCommitments() {
                 className={cn("mr-2 h-4 w-4", refreshing && "animate-spin")}
               />
               Refresh
-            </Button>
+            </Button>}
           </>
         )}
       />
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+      {!isNomBFiling && <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
         {SECTIONS.slice(0, 5).map(({ key, label, icon: Icon }) => (
           <div
             key={key}
@@ -208,10 +217,22 @@ export default function MyCommitments() {
             </div>
           </div>
         ))}
-      </div>
+      </div>}
 
       <WorkspaceViewBar views={visibleSources} value={scope} onValueChange={changeScope} />
 
+      {isNomBFiling ? canViewNomB ? (
+        <Suspense fallback={<StateBlock icon={RefreshCw} title="Loading Nom B Filing" description="Preparing your filing requirements." />}>
+          <MissingNomBPanel
+            defaultExpanded
+            title="Nom B Filing"
+            description="Your buyer nomination filing requirements · delivery from 1 September 2026"
+            onOpenStem={setSelectedStemId}
+          />
+        </Suspense>
+      ) : (
+        <StateBlock icon={AlertCircle} title="Nom B Filing is unavailable" description="Dashboard access is required to view Nom B filing requirements." />
+      ) : <>
       {data.unavailableSources?.length ? (
         <div className="flex gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
           <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
@@ -297,6 +318,10 @@ export default function MyCommitments() {
           description="There is nothing requiring your attention in the selected view."
         />
       )}
+      </>}
+      {selectedStemId && canViewNomB && <Suspense fallback={<StateBlock icon={RefreshCw} title="Loading STEM" />}>
+        <StemDetailModal stemId={selectedStemId} open onClose={() => setSelectedStemId(null)} />
+      </Suspense>}
     </div>
   );
 }

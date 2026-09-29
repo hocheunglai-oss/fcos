@@ -15,12 +15,10 @@ import PaymentDataReliabilityBadge from '@/components/common/PaymentDataReliabil
 import { DASHBOARD_METHODOLOGY } from '@/lib/pageMethodologyIndex';
 import { DASHBOARD_FILTER_STORAGE_KEY, dashboardFilterKey, dashboardFilterPayload, getRecentYears, normalizeDashboardFilters, presetDashboardPeriod } from '@/lib/dashboardFilters';
 import { useNavigationAwareRequest } from '@/hooks/useNavigationAwareRequest';
-import { useAuth } from '@/lib/AuthContext';
 
 const DashboardAnalytics = lazy(() => import('@/components/dashboard/DashboardAnalytics'));
 const AccountCreditDirectory = lazy(() => import('@/components/dashboard/AccountCreditDirectory'));
 const AccountInsightModal = lazy(() => import('@/components/dashboard/AccountInsightModal'));
-const MissingNomBPanel = lazy(() => import('@/components/dashboard/MissingNomBPanel'));
 const STEM_PAGE_SIZE = 50;
 const DEFAULT_STEM_SORT = Object.freeze({ field: 'createdDate', direction: 'desc' });
 const HONG_KONG_OFFSET_MS = 8 * 60 * 60 * 1000;
@@ -43,7 +41,6 @@ function normaliseOptions(data) { return Array.isArray(data?.options) ? data.opt
 function ErrorBlock({ message, onRetry }) { return <div className="mb-4 flex items-start justify-between gap-3 rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive"><span className="flex gap-2"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />{message}</span>{onRetry ? <Button type="button" size="sm" variant="outline" onClick={onRetry}>Retry</Button> : null}</div>; }
 
 export default function DashboardSettings() {
-  const { user } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -310,7 +307,6 @@ export default function DashboardSettings() {
   const refresh = () => { if (aiSearchActive) skipNextStemAutoLoadRef.current = true; setAiSearchActive(false); if (ebitEnabled) setSummary((value) => value ? { ...value, finance: null } : value); loadSummary({ force: true }); loadStems({ cursor: aiSearchActive ? null : navigation.cursor, history: aiSearchActive ? [] : navigation.history, sort: aiSearchActive ? DEFAULT_STEM_SORT : navigation.sort, force: true }); if ((tab === 'overview' && analyticsEnabled) || tab === 'accounts') loadAnalytics({ force: true }); };
 
   return <main ref={dashboardRootRef} className={`workspace-page workspace-dashboard mx-auto p-3 transition-[max-width] duration-200 sm:p-6 lg:p-8 ${stemTableWide && tab === 'stems' ? 'workspace-page-wide max-w-none' : 'max-w-[1600px]'}`}><PageHeader inlineMeta icon={Building2} title="Dashboard" meta={<span className="flex flex-wrap items-center gap-2">{summaryMeta ? <DataStatus meta={summaryMeta} label="Data" compact /> : <span>Loading current decision data</span>}<PaymentDataReliabilityBadge />{loading.summary && summary ? <span className="text-xs text-muted-foreground">Updating without clearing results…</span> : null}</span>} actions={<><PageMethodology {...DASHBOARD_METHODOLOGY} /><Button type="button" size="sm" variant="outline" onClick={refresh} disabled={loading.summary || loading.stems}><RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${loading.summary || loading.stems ? 'animate-spin' : ''}`} />Refresh</Button></>} />
-    {user?.read_only_ci !== true ? <Suspense fallback={<section aria-label="Loading Nom B requirements" className="mb-4 h-24 animate-pulse rounded-xl border border-border bg-muted/40" />}><MissingNomBPanel onOpenStem={setSelectedStemId} /></Suspense> : null}
     <DashboardFilterBar showPerspective={tab !== 'accounts'} filters={filters} years={years} portOptions={portOptions} loading={loading.summary || loading.stems} onChange={changeFilters} onReset={() => changeFilters(normalizeDashboardFilters({ ...presetDashboardPeriod('year_to_date'), datePreset: 'year_to_date' }))} onAiSearch={runAiSearch} />
     {errors.summary ? <ErrorBlock message={errors.summary} onRetry={loadSummary} /> : null}{errors.ai ? <ErrorBlock message={errors.ai} /> : null}<Tabs value={tab} onValueChange={(nextTab) => { setTab(nextTab); const next = new URLSearchParams(searchParams); if (nextTab === 'overview') next.delete('tab'); else next.set('tab', nextTab); setSearchParams(next, { replace: true }); }}><TabsList className="mb-4 w-full justify-start overflow-x-auto"><TabsTrigger value="overview">Overview</TabsTrigger><TabsTrigger value="stems">STEMs</TabsTrigger><TabsTrigger value="accounts">Accounts</TabsTrigger></TabsList>
       <TabsContent value="overview" className="space-y-4">{!summary && loading.summary ? <div className="dashboard-primary-kpis" role="status" aria-label="Loading Dashboard figures">{[1, 2, 3, 4].map((key) => <div key={key} className="h-32 animate-pulse rounded-xl border border-border bg-muted/40" />)}</div> : <DashboardKpis summary={dashboardKpiSummary} ebitEnabled={ebitEnabled} onEbitChange={changeEbit} financeLoading={ebitEnabled && loading.summary} financeError={ebitEnabled ? errors.summary : null} />}{analyticsEnabled ? <Suspense fallback={<div className="h-56 animate-pulse rounded-xl border border-border bg-card" />}><DashboardAnalytics data={analytics} loading={loading.analytics} error={errors.analytics} onLoad={loadAnalytics} counterpartyMode={filters.counterpartyMode} onAccountClick={(account) => openAccount(account, 'overview')} /></Suspense> : <section className="rounded-xl border border-border bg-card p-4"><h2 className="text-sm font-semibold">Analytics</h2><p className="mt-1 text-xs text-muted-foreground">Load trends and rankings only when you need a deeper view.</p><Button type="button" size="sm" variant="outline" className="mt-3" onClick={() => setAnalyticsEnabled(true)}>Load analytics</Button></section>}</TabsContent>

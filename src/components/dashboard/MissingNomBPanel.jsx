@@ -16,8 +16,8 @@ function MissingNomBRow({ row, canManage, onOpenStem, onPolicy }) {
     <div className="mt-3 flex flex-wrap items-center gap-2"><Button type="button" size="sm" variant="outline" onClick={() => onOpenStem?.(row.stemId)}>Open STEM</Button><Button type="button" size="sm" variant="outline" onClick={() => onPolicy(row)}>{canManage ? 'Manage Nom B' : 'View policy'}</Button></div>
   </li>;
 }
-export default function MissingNomBPanel({ onOpenStem }) {
-  const [expanded, setExpanded] = useState(false);
+export default function MissingNomBPanel({ onOpenStem, defaultExpanded = false, title = 'My Missing Nom B', description = 'Independent of financial filters · delivery from 1 September 2026' }) {
+  const [expanded, setExpanded] = useState(defaultExpanded);
   const [view, setView] = useState('missing');
   const [scope, setScope] = useState('mine');
   const [traderId, setTraderId] = useState('');
@@ -66,7 +66,7 @@ export default function MissingNomBPanel({ onOpenStem }) {
   const saved = () => { drafts.current.delete(selectedRow.stemId); setSelectedRow(null); setNotice('Nom B policy saved. Refreshing requirements…'); void load({ force: true }); };
   const visibleData = loadedKey.current === bodyKey ? data : null;
   return <section aria-label="Missing Nom B requirements" className="mb-4 min-w-0 rounded-xl border border-border bg-card p-3 sm:p-4">
-    <div className="flex flex-wrap items-center justify-between gap-3"><div className="min-w-0"><h2 className="text-sm font-semibold">My Missing Nom B</h2><p className="mt-1 text-xs text-muted-foreground">Independent of financial filters · delivery from 1 September 2026</p></div><div className="flex flex-wrap items-center gap-3"><span className="text-2xl font-semibold tabular-nums" aria-label={`My missing Nom B count: ${countLabel(personalCounts?.missing, personalCounts?.complete)}`}>{countLabel(personalCounts?.missing, personalCounts?.complete)}</span><Button type="button" size="sm" variant="outline" aria-expanded={expanded} aria-controls="missing-nom-b-list" onClick={() => setExpanded((value) => !value)}>{expanded ? 'Hide STEMs' : 'View STEMs'}</Button><Button type="button" size="sm" variant="ghost" aria-label="Refresh Nom B requirements" disabled={loading} onClick={() => void load({ force: true })}><RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /></Button></div></div>
+    <div className="flex flex-wrap items-center justify-between gap-3"><div className="min-w-0"><h2 className="text-sm font-semibold">{title}</h2><p className="mt-1 text-xs text-muted-foreground">{description}</p></div><div className="flex flex-wrap items-center gap-3"><span className="text-2xl font-semibold tabular-nums" aria-label={`My missing Nom B count: ${countLabel(personalCounts?.missing, personalCounts?.complete)}`}>{countLabel(personalCounts?.missing, personalCounts?.complete)}</span><Button type="button" size="sm" variant="outline" aria-expanded={expanded} aria-controls="missing-nom-b-list" onClick={() => setExpanded((value) => !value)}>{expanded ? 'Hide STEMs' : 'View STEMs'}</Button><Button type="button" size="sm" variant="ghost" aria-label="Refresh Nom B requirements" disabled={loading} onClick={() => void load({ force: true })}><RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /></Button></div></div>
     {personalCounts?.complete === false ? <p className="mt-2 text-xs text-amber-700 dark:text-amber-400">Count incomplete. Verified missing STEMs are shown as a minimum; review Unable to verify.</p> : null}
     {error ? <p role="alert" className="mt-3 text-sm text-destructive">{error}{data || personalCounts ? ' Last verified counts are shown; refresh to check the current status.' : ' Counts are unavailable until verification succeeds.'}</p> : null}
     {loading ? <p role="status" className="mt-2 text-xs text-muted-foreground">Checking Nom B requirements…</p> : null}{notice ? <p role="status" className="mt-2 text-xs">{notice}</p> : null}
