@@ -23,6 +23,8 @@ test('group cutover preserves grants, serializes changes, revokes live access an
   await db.query(`insert into user_profiles(id,email,full_name,user_type,active,use_type_defaults) values ($1,'admin@test','Admin','administrator',true,true),($2,'viewer@test','Viewer','viewer',true,true),($3,'custom@test','Custom','finance',true,false),($4,'override@test','Override','finance',true,true),($5,'inactive@test','Inactive','administrator',false,true)`,[admin,ordinary,custom,override,inactive]);
   await db.query("insert into user_module_permissions values ($1,'dashboard',false),($1,'xero_portal',true),($1,'financial_report_settings_manage',false),($2,'financial_report_settings_manage',false)",[custom,override]);
   for(const file of ['20260920154626_dashboard_finance_settings.sql','20260921061845_dashboard_bank_charges.sql']) await db.exec(await readFile(new URL('../supabase/migrations/'+file,import.meta.url),'utf8'));
+  // Match Production's inherited ALL grant instead of assuming empty defaults.
+  await db.exec('alter default privileges in schema public grant all on tables to service_role');
   const migrationSql = await readFile(migration,'utf8');
   await assert.rejects(db.exec(migrationSql), /explicit legacy module grants/);
   await db.exec('rollback');
@@ -31,7 +33,14 @@ test('group cutover preserves grants, serializes changes, revokes live access an
     await db.query('insert into user_type_module_permissions values ($1,$2,false) on conflict do nothing',[role,moduleId]);
   }
   await db.exec(migrationSql);
+  assert.equal((await db.query("select has_table_privilege('service_role','public.permission_access_events','TRUNCATE') allowed")).rows[0].allowed,true);
+  await db.exec(await readFile(new URL('../supabase/migrations/20260929141433_people_access_service_grants.sql',import.meta.url),'utf8'));
+  const expectedTablePrivileges={permission_groups:['SELECT','INSERT','UPDATE','DELETE'],user_permission_groups:['SELECT','INSERT','UPDATE','DELETE'],permission_access_events:['SELECT','INSERT'],permission_access_migration_snapshots:['SELECT'],permission_access_catalog:['SELECT']};
+  for(const [table,allowed] of Object.entries(expectedTablePrivileges)) for(const privilege of ['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER']) {
+    assert.equal((await db.query('select has_table_privilege($1,$2,$3) allowed',['service_role','public.'+table,privilege])).rows[0].allowed,allowed.includes(privilege),table+' '+privilege);
+  }
   await db.exec('set role service_role');
+  await assert.rejects(db.exec('truncate table permission_access_events'),/permission denied/);
   const access=async id => (await db.query('select fcos_effective_access($1) a',[id])).rows[0].a;
   const adminAccess=await access(admin); assert.equal(adminAccess.privileged_access,true);
   const regular=await access(ordinary); assert.equal(regular.permissions.report_archive,'read'); assert.equal(regular.permissions.dashboard,true); assert.deepEqual(regular.group_ids,['viewer']);
