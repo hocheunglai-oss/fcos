@@ -80,7 +80,7 @@ test('an unknown trader cannot claim the shared Salesforce sender through a mail
     assert.equal(resolved.resolved, false);
     assert.equal(resolved.id, null);
   }
-  const individual = { ...claimant, email: 'unknown@example.test' };
+  const individual = { ...claimant, id: '00000000-0000-4000-8000-000000000013', email: 'unknown@example.test' };
   assert.equal(resolveNomBTrader(confirmation, [...sharedSenderProfiles, claimant, individual],
     [{ Name: individual.full_name, Email: individual.email, IsActive: true }]).id, individual.id);
 });
