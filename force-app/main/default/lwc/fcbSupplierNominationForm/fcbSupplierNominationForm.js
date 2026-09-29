@@ -12,6 +12,7 @@ import getNominationSpecialTerms from "@salesforce/apex/NominationController.get
 import {updateRecord} from "lightning/uiRecordApi";
 import { fireEvent } from 'c/pubsub';
 import { ShowToastEvent } from "lightning/platformShowToastEvent";
+import { buildSupplierPaymentTerm, getIncludedSupplierLines, SUPPLIER_BALANCE_TERM_ERROR, SUPPLIER_PARTIAL_CIA_FORM_ERROR } from './supplierPaymentTerms';
  
 export default class FcbSupplierNominationForm extends LightningElement {
     stemId
@@ -21,6 +22,12 @@ export default class FcbSupplierNominationForm extends LightningElement {
     actionExecuted = true;
     @track inputs = [];
     @track specialTerms = {};
+    paymentTerms;
+    partialCiaPaymentInputId;
+    formLoadError;
+    operationError;
+    specialTermsReady = false;
+    formLoadSequence = 0;
 
     draggedId;
     hoverId;
@@ -37,67 +44,116 @@ export default class FcbSupplierNominationForm extends LightningElement {
     }
 
     @api
-    openModal(recordData, lastSavedContract) {
+    async openModal(recordData, lastSavedContract) {
+        const loadSequence = ++this.formLoadSequence;
         this.inputs = [];
         this.specialTerms = {};
+        this.stem = null;
+        this.paymentTerms = null;
+        this.partialCiaPaymentInputId = null;
+        this.formLoadError = null;
+        this.operationError = null;
+        this.specialTermsReady = false;
         this.isModalOpen = true;
         this.actionExecuted = false;
         this.nomination = recordData;
         this.fileName = this.nomination.STEM__r.Name + ' - NOM';
         this.stemId = recordData.STEM__c;
-        if(lastSavedContract){
-            this.inputs = JSON.parse(this.nomination.Last_Saved_Inputs__c.replace(/&quot;/g,'"'));
-            this.specialTerms = JSON.parse(this.nomination.Last_Saved_Remarks__c.replace(/&quot;/g,'"'));
-            this.actionExecuted = true;
-        } else{
-            getStemSupplierInfo({stemId: this.stemId, supplierId: this.nomination.Account__c, paymentTerm: this.nomination.Payment_Term__c}).then((stem) => {
-                this.stem = stem;
-                console.log(stem);
-                
-                if(this.stem.STEM_Line_Items__r?.every(stemLineItem => stemLineItem.Payment_Term__c === 'CIA' 
-                    && Boolean(stemLineItem.Intended_Payment_Date__c) === false) 
-                && this.stem.STEM_Extra_Costs__r?.every(stemExtraCost => stemExtraCost.Payment_Term__c === 'CIA' 
-                    && Boolean(stemExtraCost.Intended_Payment_Date__c) === false)){
-                        this.dispatchEvent(
-                            new ShowToastEvent({
-                                title: "Warning",
-                                message: "Intended Payment Date isn't set",
-                                variant: "warning"
-                            })
-                        );
-                        this.closeModal();
-                } else if(this.stem.STEM_Line_Items__r || this.stem.STEM_Extra_Costs__r){
-                    let lineItemsPaymentTerms = this.stem.STEM_Line_Items__r ? this.stem.STEM_Line_Items__r.map(stemLineItem => stemLineItem.Payment_Term__c) : [];
-                    let extraCostsPaymentTerms = this.stem.STEM_Extra_Costs__r ? this.stem.STEM_Extra_Costs__r.map(stemExtraCost => stemExtraCost.Payment_Term__c) : [];
-                    
-                    let paymentTerms = [...lineItemsPaymentTerms, ...extraCostsPaymentTerms];
-                    getSupplierPaymentTerms({paymentTerms: paymentTerms}).then(paymentTerms => {
-                        this.prefillInputs(paymentTerms);
-                    })
-                    let lineItemIds = [
-                        ...(this.stem.STEM_Line_Items__r ? this.stem.STEM_Line_Items__r.map(stemLineItem => stemLineItem.Id) : []),
-                        ...(this.stem.STEM_Extra_Costs__r ? this.stem.STEM_Extra_Costs__r.map(stemExtraCost => stemExtraCost.Id) : [])
-                    ];
-                    getNominationSpecialTerms({lineItemIds: lineItemIds, remarks: this.nomination.Remarks__c, enquiryId: this.nomination.Enquiry__c}).then(specialTerms => {
-                        console.log(specialTerms);
-                        
-                        let specialTermText = specialTerms.map(item => `${item.toUpperCase()}`).join('<br/>');
-                        console.log(specialTermText);
-                        
-                        this.specialTerms = {label: 'REMARKS', value: specialTermText ? specialTermText : 'NIL'};
-                    })
-                } else{
-                    this.dispatchEvent(
-                        new ShowToastEvent({
-                            title: "Warning",
-                            message: "All product line items and STEM extra costs are cancelled",
-                            variant: "warning"
-                        })
-                    );
-                    this.closeModal();
-                }
-            })    
-        } 
+        let loadStage = 'source';
+        try {
+            const stem = await getStemSupplierInfo({stemId: recordData.STEM__c, supplierId: recordData.Account__c, paymentTerm: recordData.Payment_Term__c});
+            if (loadSequence !== this.formLoadSequence) return;
+            const lineItems = getIncludedSupplierLines(stem.STEM_Line_Items__r, recordData.Account__c, recordData.Payment_Term__c);
+            const extraCosts = stem.STEM_Extra_Costs__r || [];
+            this.stem = { ...stem, STEM_Line_Items__r: lineItems.length ? lineItems : null, STEM_Extra_Costs__r: extraCosts.length ? extraCosts : null };
+            if (!lineItems.length && !extraCosts.length) {
+                this.dispatchEvent(new ShowToastEvent({ title: 'Warning', message: 'All product line items and STEM extra costs are cancelled', variant: 'warning' }));
+                this.closeModal();
+                return;
+            }
+            if (!lastSavedContract && !this.hasPartialCiaPayment && [...lineItems, ...extraCosts].every(line => line.Payment_Term__c === 'CIA' && !line.Intended_Payment_Date__c)) {
+                this.dispatchEvent(new ShowToastEvent({ title: 'Warning', message: "Intended Payment Date isn't set", variant: 'warning' }));
+                this.closeModal();
+                return;
+            }
+            if (!lastSavedContract || this.hasPartialCiaPayment) {
+                loadStage = 'payment';
+                const paymentTerms = await getSupplierPaymentTerms({ paymentTerms: [recordData.Payment_Term__c] });
+                if (loadSequence !== this.formLoadSequence) return;
+                this.paymentTerms = paymentTerms;
+                this.buildPaymentTerm();
+            }
+            if (lastSavedContract) {
+                loadStage = 'saved form';
+                this.inputs = JSON.parse(recordData.Last_Saved_Inputs__c.replace(/&quot;/g, '"')).map(input => ({ ...input, isPaymentLocked: false }));
+                this.specialTerms = JSON.parse(recordData.Last_Saved_Remarks__c.replace(/&quot;/g, '"'));
+                this.applyPartialCiaPayment();
+            } else {
+                loadStage = 'remarks';
+                const specialTerms = await getNominationSpecialTerms({ lineItemIds: [...lineItems, ...extraCosts].map(line => line.Id), remarks: recordData.Remarks__c, enquiryId: recordData.Enquiry__c });
+                if (loadSequence !== this.formLoadSequence) return;
+                const specialTermText = specialTerms.map(item => item.toUpperCase()).join('<br/>');
+                this.specialTerms = { label: 'REMARKS', value: specialTermText || 'NIL' };
+                this.prefillInputs(this.paymentTerms);
+            }
+            if (!this.specialTerms || typeof this.specialTerms !== 'object') throw new Error('Supplier nomination remarks could not be loaded. Reopen the nomination.');
+            this.specialTermsReady = true;
+        } catch (error) {
+            if (loadSequence !== this.formLoadSequence) return;
+            this.formLoadError = error?.message?.startsWith('Supplier partial CIA') || error?.message?.startsWith('Select a valid supplier') || error?.message?.startsWith('The supplier partial-CIA source')
+                ? error.message
+                : loadStage === 'payment' ? SUPPLIER_BALANCE_TERM_ERROR
+                : loadStage === 'remarks' ? 'Supplier nomination special terms could not be loaded. Reopen the nomination; refresh the page if the problem continues.'
+                : 'Supplier nomination form could not be loaded. Reopen the nomination; refresh the page if the problem continues.';
+        } finally {
+            if (loadSequence === this.formLoadSequence) this.actionExecuted = true;
+        }
+    }
+
+    get hasPartialCiaPayment() {
+        return Boolean(this.stem?.STEM_Line_Items__r?.some(line => line.Partial_CIA__c));
+    }
+
+    buildPaymentTerm() {
+        return buildSupplierPaymentTerm({ lineItems: this.stem?.STEM_Line_Items__r, supplierId: this.nomination.Account__c, paymentTermKey: this.nomination.Payment_Term__c, paymentTerms: this.paymentTerms });
+    }
+
+    isPaymentRow(input) {
+        const label = typeof input.label === 'object' ? input.label?.content : input.label;
+        return ['PAYMENT', 'PAYMENT TERM'].includes(String(label || '').trim().toUpperCase());
+    }
+
+    applyPartialCiaPayment() {
+        if (!this.hasPartialCiaPayment) return;
+        const value = this.buildPaymentTerm();
+        const previousInput = this.inputs.find(input => this.isPaymentRow(input));
+        const paymentInput = this.decorateRow({ ...previousInput, id: previousInput?.id || this.makeId(7), label: 'PAYMENT', value, labelColSpan: undefined, isHidden: false, isDisabled: false, isPaymentLocked: true });
+        this.partialCiaPaymentInputId = paymentInput.id;
+        this.inputs = previousInput
+            ? this.inputs.filter(input => input === previousInput || !this.isPaymentRow(input)).map(input => input === previousInput ? paymentInput : input)
+            : [...this.inputs, paymentInput];
+    }
+
+    get partialCiaPaymentValidationError() {
+        if (!this.hasPartialCiaPayment || !this.actionExecuted || this.formLoadError) return null;
+        try {
+            const expected = this.buildPaymentTerm();
+            const paymentInputs = this.inputs.filter(input => this.isPaymentRow(input));
+            if (paymentInputs.length !== 1 || paymentInputs[0].id !== this.partialCiaPaymentInputId
+                || paymentInputs[0].label !== 'PAYMENT' || paymentInputs[0].value !== expected
+                || paymentInputs[0].labelColSpan != null || paymentInputs[0].isHidden || paymentInputs[0].isDisabled) return SUPPLIER_PARTIAL_CIA_FORM_ERROR;
+        } catch (error) {
+            return error.message;
+        }
+        return null;
+    }
+
+    get formError() {
+        return this.formLoadError || this.partialCiaPaymentValidationError || this.operationError;
+    }
+
+    get isDocumentActionDisabled() {
+        return !this.actionExecuted || !this.specialTermsReady || Boolean(this.formLoadError || this.partialCiaPaymentValidationError);
     }
 
     prefillInputs(paymentTerms) {
@@ -203,22 +259,15 @@ export default class FcbSupplierNominationForm extends LightningElement {
                 this.inputs.push({ id: this.makeId(7), label: "--", isHidden: true})
             }
         }
-        let paymentTerm = this.stem.STEM_Line_Items__r ? paymentTerms.find(paymentTerm => paymentTerm.Name === this.stem.STEM_Line_Items__r.find(stemLineItem => stemLineItem.Original_Supplier__c === this.nomination.Account__c).Payment_Term__c)
-            : paymentTerms.find(paymentTerm => paymentTerm.Name === this.stem.STEM_Extra_Costs__r.find(stemExtraCost => stemExtraCost.Supplier__c === this.nomination.Account__c).Payment_Term__c);
-        
-        let paymentTermText;
-        if(this.stem.STEM_Line_Items__r && this.stem.STEM_Line_Items__r[0].Partial_CIA__c){
-            paymentTermText = 'USD ' + this.numberWithCommas(this.stem.STEM_Line_Items__r[0].Partial_Lumpsum_Buy_At__c.toFixed(2)) + ' CIA, BALANCE AMOUNT ' + (paymentTerm.Name.split(' ')[0] + ' ' + paymentTerm.Description__c).toLocaleUpperCase();
-        } else{
-            paymentTermText = paymentTerm.Name.split(' ')[0] + ' ' + paymentTerm.Description__c
-        }
-        this.inputs.push({ id: this.makeId(7), label: "PAYMENT", value: paymentTermText.toLocaleUpperCase()});
+        this.inputs.push({ id: this.makeId(7), label: "PAYMENT", value: this.buildPaymentTerm() });
+        this.applyPartialCiaPayment();
         this.inputs.push({ id: this.makeId(7), label: "AGENT", value: this.stem.Agent__c ? this.stem.Agent__c : 'TO BE ADVISED'});
         this.inputs = this.inputs.map(i => this.decorateRow(i));
         this.actionExecuted = true;
     }
 
     handleChangeLabel(event){
+        if (this.hasPartialCiaPayment && event.target.dataset.id === this.partialCiaPaymentInputId) return;
         try {
             this.inputs.find(input => input.id === event.target.dataset.id).label = event.detail.value;    
         } catch (error) {
@@ -227,6 +276,7 @@ export default class FcbSupplierNominationForm extends LightningElement {
     }
 
     handleChangeValue(event){
+        if (this.hasPartialCiaPayment && event.target.dataset.id === this.partialCiaPaymentInputId) return;
         try {
             this.inputs.find(input => input.id === event.target.dataset.id).value = event.detail.value;   
         } catch (error) {
@@ -247,6 +297,7 @@ export default class FcbSupplierNominationForm extends LightningElement {
     }
 
     removeInput(event){
+        if (this.hasPartialCiaPayment && event.target.dataset.id === this.partialCiaPaymentInputId) return;
         this.inputs = this.inputs.filter(input => {
             return input.id !== event.target.dataset.id;
         })
@@ -339,6 +390,9 @@ export default class FcbSupplierNominationForm extends LightningElement {
     }
 
     async handlePreviewPDF(event){
+        if (this.isDocumentActionDisabled) return;
+        const operationSequence = this.formLoadSequence;
+        this.operationError = null;
         this.actionExecuted = false;
 
         const fields = {
@@ -349,13 +403,14 @@ export default class FcbSupplierNominationForm extends LightningElement {
 
         try {
             await updateRecord({ fields });
+            if (operationSequence !== this.formLoadSequence) return;
             const vfUrl =
-                '/apex/NominationToSupplier?nominationId=' + this.nomination.Id;
+                '/apex/NominationToSupplier?nominationId=' + fields.Id;
 
             window.open(vfUrl, '_blank');
             this.actionExecuted = true;
         } catch (error) {
-            this.showError(error);
+            if (operationSequence === this.formLoadSequence) this.showError(error);
         }
     }
 
@@ -516,7 +571,10 @@ export default class FcbSupplierNominationForm extends LightningElement {
     // }
 
     async handleGeneratePDF() {
+        const operationSequence = this.formLoadSequence;
         try {
+            if (this.isDocumentActionDisabled) return;
+            this.operationError = null;
             this.actionExecuted = false;
             
             const fields = {
@@ -524,6 +582,8 @@ export default class FcbSupplierNominationForm extends LightningElement {
                 Saved_Inputs__c: JSON.stringify(this.inputs),
                 Saved_Remarks__c: JSON.stringify(this.specialTerms)
             };
+            const fileUrl = this.nomination.File__c;
+            const fileName = this.fileName;
 
             let additionalSubject;
             const refValue = this.inputs.find(input => input.subjectInput)?.value;
@@ -535,29 +595,32 @@ export default class FcbSupplierNominationForm extends LightningElement {
             }
 
             await updateRecord({ fields });
+            if (operationSequence !== this.formLoadSequence) return;
             await generateDocument({
-                nominationId: this.nomination.Id,
-                fileUrl: this.nomination.File__c,
-                fileName: this.fileName
+                nominationId: fields.Id,
+                fileUrl,
+                fileName
             });
 
             const generatedFields = {
-                Id: this.nomination.Id,
-                Last_Saved_Inputs__c: JSON.stringify(this.inputs),
-                Last_Saved_Remarks__c: JSON.stringify(this.specialTerms),
+                Id: fields.Id,
+                Last_Saved_Inputs__c: fields.Saved_Inputs__c,
+                Last_Saved_Remarks__c: fields.Saved_Remarks__c,
                 PDF__c: '🟢',
                 Additional_Subject__c: additionalSubject
             };
             await updateRecord({ fields: generatedFields });
+            if (operationSequence !== this.formLoadSequence) return;
             this.closeModal();
             fireEvent(this.pageRef, "refreshNominations", true);
         } catch (error) {
-            this.showError(error);
+            if (operationSequence === this.formLoadSequence) this.showError(error);
         }
     }
 
     showError(error) {
         const message = this.getErrorMessage(error);
+        this.operationError = message;
         this.actionExecuted = true;
         this.dispatchEvent(
             new ShowToastEvent({
@@ -622,6 +685,8 @@ export default class FcbSupplierNominationForm extends LightningElement {
     }
 
     closeModal() {
+        this.formLoadSequence++;
+        this.specialTermsReady = false;
         this.inputs = [];
         this.isModalOpen = false;
         this.actionExecuted = true;
