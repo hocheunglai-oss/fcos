@@ -4,22 +4,16 @@ import { appClient } from '@/api/appClient';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import MissingNomBPolicyDialog from './MissingNomBPolicyDialog';
-import MissingNomBAudit, { nomBError, nomBNumber, NomBReceivable } from './MissingNomBEvidence';
+import { nomBError, nomBNumber } from './MissingNomBEvidence';
 
 const VIEWS = [{ id: 'missing', label: 'Missing', count: 'missing' }, { id: 'waived', label: 'Waived', count: 'waived' }, { id: 'unable_to_verify', label: 'Unable to verify', count: 'unableToVerify' }];
 const countLabel = (value, complete = true) => value == null || !Number.isFinite(Number(value)) ? 'Unavailable' : `${complete === false ? '≥ ' : ''}${nomBNumber(value, 0)}`;
-const safeUrl = (value) => { try { const url = new URL(value); return url.protocol === 'https:' ? url.href : null; } catch { return null; } };
-function FilingLinks({ row }) {
-  return <div className="flex flex-wrap gap-2">{safeUrl(row.stemUrl) ? <a href={safeUrl(row.stemUrl)} target="_blank" rel="noopener noreferrer" className="text-xs font-medium text-primary underline underline-offset-2">Salesforce STEM</a> : null}{(row.confirmations || []).filter((item) => safeUrl(item.filingUrl)).map((item) => <a key={item.id} href={safeUrl(item.filingUrl)} target="_blank" rel="noopener noreferrer" className="text-xs font-medium text-primary underline underline-offset-2">{item.name || 'Nom B filing'}{item.traderName ? ` · ${item.traderName}` : ''}</a>)}</div>;
-}
 function MissingNomBRow({ row, canManage, onOpenStem, onPolicy }) {
-  const [expanded, setExpanded] = useState(false);
   return <li className="min-w-0 rounded-lg border border-border p-3 sm:p-4">
     <div className="flex flex-wrap items-start justify-between gap-3"><div className="min-w-0 flex-1"><h3 className="break-words text-sm font-semibold">{row.stemReference || row.stemId} · {row.vessel || 'Vessel unavailable'}</h3><p className="mt-1 break-words text-xs text-muted-foreground">{row.buyer || 'Buyer unavailable'} · {row.port || 'Port unavailable'}</p></div><div className="text-xs"><p className="font-medium">{row.undated ? 'Undated · follow up' : row.deliveryDate || 'Date unavailable'}</p>{row.deliveryDateSource ? <p className="mt-1 text-muted-foreground">{row.deliveryDateSource === 'actual' ? 'Actual delivery' : 'Expected delivery'}</p> : null}</div></div>
     <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs"><p className="min-w-0 break-words">Trader: {row.traders?.length ? row.traders.map((item) => item.name || item.email || item.id).join(', ') : 'Unresolved assignment'}</p><span className="rounded-md bg-muted px-2 py-1">{row.waiverType === 'automatic' ? 'Automatic waiver' : row.waiverType === 'manual' ? 'Management waiver' : row.status === 'missing' ? 'Missing Nom B' : 'Unable to verify'}</span></div>
     {row.reason ? <p className="mt-2 break-words text-xs text-muted-foreground">{row.reason}</p> : null}
-    <div className="mt-3 flex flex-wrap items-center gap-2"><Button type="button" size="sm" variant="outline" onClick={() => onOpenStem?.(row.stemId)}>Open STEM</Button><Button type="button" size="sm" variant="outline" onClick={() => onPolicy(row)}>{canManage ? 'Manage Nom B' : 'View policy & history'}</Button><Button type="button" size="sm" variant="ghost" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>{expanded ? 'Hide evidence' : 'Receivable & audit'}</Button><FilingLinks row={row} /></div>
-    {expanded ? <div className="mt-3"><NomBReceivable row={row} /><MissingNomBAudit stemId={row.stemId} /></div> : null}
+    <div className="mt-3 flex flex-wrap items-center gap-2"><Button type="button" size="sm" variant="outline" onClick={() => onOpenStem?.(row.stemId)}>Open STEM</Button><Button type="button" size="sm" variant="outline" onClick={() => onPolicy(row)}>{canManage ? 'Manage Nom B' : 'View policy'}</Button></div>
   </li>;
 }
 export default function MissingNomBPanel({ onOpenStem }) {

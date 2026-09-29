@@ -16,7 +16,7 @@ test.afterEach(async ({ page }) => { expect(page.fixtureErrors).toEqual([]); exp
 const panel = (page) => page.getByRole('region', { name: 'Missing Nom B requirements', exact: true });
 const openList = async (page, suffix = '') => { await page.goto(`${fixturePath}${suffix}`); await expect(page.getByLabel('My missing Nom B count: 26', { exact: true })).toBeVisible(); await page.getByRole('button', { name: 'View STEMs', exact: true }).click(); };
 
-test('personal list stays independent of financial filters and exposes read-only filing and evidence', async ({ page }) => {
+test('personal list stays independent of financial filters and keeps policy access without evidence or external links', async ({ page }) => {
   await openList(page);
   const section = panel(page);
   await expect(section.getByRole('heading', { name: /STEM-001.*Pacific Endeavour/ })).toBeVisible();
@@ -33,18 +33,15 @@ test('personal list stays independent of financial filters and exposes read-only
   await expect(page.getByLabel('Period', { exact: true })).toHaveValue('last_month');
   await expect.poll(() => page.evaluate(() => window.nomBFixture.requests.filter((request) => request.name === 'dashboardSummary').length)).toBeGreaterThan(0);
   expect(await page.evaluate(() => window.nomBFixture.requests.filter((request) => request.name === 'dashboardNomBRead').length)).toBe(before);
-  await section.getByRole('button', { name: 'View policy & history' }).first().click();
+  await section.getByRole('button', { name: 'View policy' }).first().click();
   const dialog = page.getByRole('dialog');
   await expect(dialog.getByText('Read-only.', { exact: false })).toBeVisible();
   await expect(dialog.getByRole('button', { name: 'Save policy' })).toHaveCount(0);
-  await expect(dialog.getByText('EUR 2,000.00', { exact: true })).toBeVisible();
-  await expect(dialog.getByText('USD 2,340.00', { exact: true })).toBeVisible();
-  await expect(dialog.getByText('1.170000 (exact: 117/100)', { exact: true })).toBeVisible();
-  await expect(dialog.getByText('Mira Manager', { exact: false })).toBeVisible();
-  await expect(dialog.getByText('Recheck payment evidence before filing.')).toBeVisible();
-  await expect(dialog.getByText('Status: missing → waived', { exact: true })).toBeVisible();
+  await expect(dialog.getByText('Original receivable', { exact: true })).toHaveCount(0);
+  expect(await page.evaluate(() => window.nomBFixture.requests.filter((request) => request.name === 'dashboardNomBAuditRead').length)).toBe(0);
   await dialog.getByRole('button', { name: 'Close', exact: true }).first().click();
-  await expect(section.getByRole('link', { name: 'Nom B draft · Ada Trader' }).first()).toHaveAttribute('href', 'https://salesforce.example.invalid/filing-1');
+  await expect(section.getByRole('button', { name: 'Receivable & audit' })).toHaveCount(0);
+  await expect(section.getByRole('link')).toHaveCount(0);
   await section.getByRole('button', { name: 'Open STEM', exact: true }).first().click();
   await expect.poll(() => page.evaluate(() => window.nomBFixture.requests.filter((request) => request.name === 'salesforceStemDetail').at(-1)?.body.stemId)).toBe('fixture-stem-1');
 });

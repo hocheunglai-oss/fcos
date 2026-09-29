@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { appClient } from '@/api/appClient';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import MissingNomBAudit, { nomBError, nomBText, NomBReceivable } from './MissingNomBEvidence';
+import { nomBError, nomBText } from './MissingNomBEvidence';
 
 export default function MissingNomBPolicyDialog({ row, canManage, initialDraft, onDraftChange, onClose, onSaved, onRefresh }) {
   const [mode, setMode] = useState(initialDraft?.mode || row.policy?.mode || 'automatic');
@@ -47,7 +47,6 @@ export default function MissingNomBPolicyDialog({ row, canManage, initialDraft, 
       {error ? <div role="alert" className="rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive"><p>{error}</p>{conflict ? <Button type="button" variant="outline" size="sm" className="mt-2" disabled={refreshing} onClick={refreshList}>{refreshing ? 'Refreshing…' : 'Refresh list'}</Button> : null}</div> : null}
       <DialogFooter className="gap-2"><Button type="button" variant="outline" disabled={saving} onClick={onClose}>Close</Button><Button type="submit" disabled={invalid || saving || conflict}>{saving ? 'Saving…' : 'Save policy'}</Button></DialogFooter>
     </form> : <p className="rounded-lg bg-muted p-3 text-sm text-muted-foreground">Read-only. A General Manager or administrator can change this policy.</p>}
-    <NomBReceivable row={row} /><MissingNomBAudit stemId={row.stemId} />
     {!canManage ? <DialogFooter><Button type="button" variant="outline" onClick={onClose}>Close</Button></DialogFooter> : null}
   </DialogContent></Dialog>;
 }

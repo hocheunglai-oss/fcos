@@ -8,7 +8,7 @@ A filed requirement needs a valid, non-deleted Nom B file linked to its Buyer Co
 
 The default policy waives filing when Salesforce's verified receivable balance, converted to USD and rounded to cents, is strictly below USD 100. An active, issued, non-proforma final buyer invoice is also required. USD 99.99 qualifies; USD 100.00 does not. Verified zero and negative balances qualify. Missing balances, currencies, rates or incomplete reads cannot create an automatic waiver.
 
-Currency conversion uses the Salesforce company accounting rate effective on the calculation date, through the corporate currency where required. There is no market-rate fallback. Expand the evidence to see the original receivable, USD equivalent, accounting rate, date and invoice evidence.
+Currency conversion uses the Salesforce company accounting rate effective on the calculation date, through the corporate currency where required. There is no market-rate fallback. Receivable evidence and audit history remain stored server-side; they are not displayed in the panel or policy dialog. The panel retains Open STEM and policy controls, without external Salesforce STEM or Buyer Confirmation links.
 
 Automatic waivers are labelled **Receivable below USD 100**. They do not mark a STEM paid or alter accounting records. Refresh recalculates eligibility; an increased balance or withdrawn invoice ends the automatic waiver. Unavailable evidence is shown as **Unable to verify**.
 
