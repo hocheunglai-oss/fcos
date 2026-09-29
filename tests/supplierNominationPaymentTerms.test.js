@@ -320,6 +320,99 @@ test('a document already generating finishes bookkeeping for its captured nomina
   assert.equal(component.isDocumentActionDisabled, false);
 });
 
+test('reopening the same nomination during generation blocks another preview or generate until original bookkeeping finishes', async () => {
+  const pendingDocument = deferred();
+  const pendingBookkeeping = deferred();
+  const documents = [];
+  const updates = [];
+  const { component, calls } = await loadForm({
+    generateDocument: async request => { documents.push(request); await pendingDocument.promise; },
+    updateRecord: async request => {
+      updates.push(request);
+      if (request.fields.Last_Saved_Inputs__c) await pendingBookkeeping.promise;
+    },
+  });
+  await component.openModal(nomination(), false);
+  const original = component.handleGeneratePDF();
+  await new Promise(resolve => setImmediate(resolve));
+  component.closeModal();
+  await component.openModal(nomination(), false);
+  assert.match(component.formError, /still running for this nomination/u);
+  assert.equal(component.isDocumentActionDisabled, true);
+  await component.handleGeneratePDF();
+  await component.handlePreviewPDF();
+  assert.equal(updates.length, 1);
+  assert.equal(documents.length, 1);
+  assert.equal(calls.previews.length, 0);
+  pendingDocument.resolve();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(updates.length, 2);
+  assert.equal(component.isDocumentActionDisabled, true);
+  await component.handleGeneratePDF();
+  assert.equal(updates.length, 2);
+  pendingBookkeeping.resolve();
+  await original;
+  assert.equal(component.nominationBusyMessage, null);
+  assert.equal(component.isModalOpen, true);
+  assert.equal(component.isDocumentActionDisabled, false);
+});
+
+test('same-nomination lock survives a pending preview save and releases after a failed save', async () => {
+  let rejectSave;
+  const pendingSave = new Promise((resolve, reject) => { rejectSave = reject; });
+  const updates = [];
+  const { component, calls } = await loadForm({ updateRecord: async request => { updates.push(request); await pendingSave; } });
+  await component.openModal(nomination(), false);
+  const original = component.handlePreviewPDF();
+  component.closeModal();
+  await component.openModal(nomination(), false);
+  await component.handlePreviewPDF();
+  await component.handleGeneratePDF();
+  assert.equal(updates.length, 1);
+  assert.equal(component.isDocumentActionDisabled, true);
+  rejectSave(new Error('SAVE FAILED'));
+  await original;
+  assert.equal(component.nominationBusyMessage, null);
+  assert.equal(component.isDocumentActionDisabled, false);
+  assert.equal(calls.previews.length, 0);
+});
+
+test('a nomination locked during generation does not block another nomination', async () => {
+  const pendingDocument = deferred();
+  const documents = [];
+  const { component, calls } = await loadForm({ generateDocument: async request => { documents.push(request); await pendingDocument.promise; } });
+  await component.openModal(nomination({ Id: 'original' }), false);
+  const original = component.handleGeneratePDF();
+  await new Promise(resolve => setImmediate(resolve));
+  component.closeModal();
+  await component.openModal(nomination({ Id: 'other' }), false);
+  assert.equal(component.isDocumentActionDisabled, false);
+  await component.handlePreviewPDF();
+  assert.equal(calls.previews.length, 1);
+  assert.equal(calls.updates[1].fields.Id, 'other');
+  assert.deepEqual(component.inFlightNominationIds, ['original']);
+  pendingDocument.resolve();
+  await original;
+  assert.deepEqual(component.inFlightNominationIds, []);
+});
+
+test('generation failures release the nomination lock at every awaited stage', async () => {
+  for (const failingStage of ['save', 'generate', 'bookkeeping']) {
+    const { component } = await loadForm({
+      updateRecord: async ({ fields }) => {
+        if ((failingStage === 'save' && fields.Saved_Inputs__c) || (failingStage === 'bookkeeping' && fields.Last_Saved_Inputs__c)) throw new Error('OPERATION FAILED');
+      },
+      generateDocument: async () => { if (failingStage === 'generate') throw new Error('OPERATION FAILED'); },
+    });
+    await component.openModal(nomination(), false);
+    await component.handleGeneratePDF();
+    assert.deepEqual(component.inFlightNominationIds, []);
+    assert.equal(component.formError, 'OPERATION FAILED');
+    assert.equal(component.actionExecuted, true);
+    assert.equal(component.isDocumentActionDisabled, false);
+  }
+});
+
 test('both buttons use the guard and only protected payment-row fields are read-only', async () => {
   const html = await readFile(new URL('../force-app/main/default/lwc/fcbSupplierNominationForm/fcbSupplierNominationForm.html', import.meta.url), 'utf8');
   assert.equal((html.match(/disabled=\{isDocumentActionDisabled\}/gu) || []).length, 2);

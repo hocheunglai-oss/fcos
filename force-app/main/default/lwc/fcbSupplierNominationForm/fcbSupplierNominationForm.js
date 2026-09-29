@@ -28,6 +28,7 @@ export default class FcbSupplierNominationForm extends LightningElement {
     operationError;
     specialTermsReady = false;
     formLoadSequence = 0;
+    inFlightNominationIds = [];
 
     draggedId;
     hoverId;
@@ -149,11 +150,27 @@ export default class FcbSupplierNominationForm extends LightningElement {
     }
 
     get formError() {
-        return this.formLoadError || this.partialCiaPaymentValidationError || this.operationError;
+        return this.formLoadError || this.partialCiaPaymentValidationError || this.nominationBusyMessage || this.operationError;
     }
 
     get isDocumentActionDisabled() {
-        return !this.actionExecuted || !this.specialTermsReady || Boolean(this.formLoadError || this.partialCiaPaymentValidationError);
+        return !this.actionExecuted || !this.specialTermsReady || Boolean(this.formLoadError || this.partialCiaPaymentValidationError || this.nominationBusyMessage);
+    }
+
+    get nominationBusyMessage() {
+        return this.inFlightNominationIds.includes(this.nomination?.Id)
+            ? 'A preview or generation is still running for this nomination. Wait for it to finish before previewing or generating again.'
+            : null;
+    }
+
+    startDocumentOperation() {
+        const nominationId = this.nomination.Id;
+        this.inFlightNominationIds = [...this.inFlightNominationIds, nominationId];
+        return nominationId;
+    }
+
+    finishDocumentOperation(nominationId) {
+        this.inFlightNominationIds = this.inFlightNominationIds.filter(id => id !== nominationId);
     }
 
     prefillInputs(paymentTerms) {
@@ -392,16 +409,16 @@ export default class FcbSupplierNominationForm extends LightningElement {
     async handlePreviewPDF(event){
         if (this.isDocumentActionDisabled) return;
         const operationSequence = this.formLoadSequence;
+        const lockedNominationId = this.startDocumentOperation();
         this.operationError = null;
         this.actionExecuted = false;
 
-        const fields = {
-            Id: this.nomination.Id,
-            Saved_Inputs__c: JSON.stringify(this.inputs),
-            Saved_Remarks__c: JSON.stringify(this.specialTerms)
-        };
-
         try {
+            const fields = {
+                Id: lockedNominationId,
+                Saved_Inputs__c: JSON.stringify(this.inputs),
+                Saved_Remarks__c: JSON.stringify(this.specialTerms)
+            };
             await updateRecord({ fields });
             if (operationSequence !== this.formLoadSequence) return;
             const vfUrl =
@@ -411,6 +428,8 @@ export default class FcbSupplierNominationForm extends LightningElement {
             this.actionExecuted = true;
         } catch (error) {
             if (operationSequence === this.formLoadSequence) this.showError(error);
+        } finally {
+            this.finishDocumentOperation(lockedNominationId);
         }
     }
 
@@ -572,8 +591,10 @@ export default class FcbSupplierNominationForm extends LightningElement {
 
     async handleGeneratePDF() {
         const operationSequence = this.formLoadSequence;
+        let lockedNominationId;
         try {
             if (this.isDocumentActionDisabled) return;
+            lockedNominationId = this.startDocumentOperation();
             this.operationError = null;
             this.actionExecuted = false;
             
@@ -615,6 +636,8 @@ export default class FcbSupplierNominationForm extends LightningElement {
             fireEvent(this.pageRef, "refreshNominations", true);
         } catch (error) {
             if (operationSequence === this.formLoadSequence) this.showError(error);
+        } finally {
+            if (lockedNominationId) this.finishDocumentOperation(lockedNominationId);
         }
     }
 
