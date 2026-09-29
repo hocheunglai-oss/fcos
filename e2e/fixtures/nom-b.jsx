@@ -2,6 +2,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
 import DashboardSettings from '@/pages/DashboardSettings';
+import MyCommitments from '@/pages/MyCommitments';
 import { appClient } from '@/api/appClient';
 import '@/styles/fonts.css';
 import '@/index.css';
@@ -30,7 +31,8 @@ appClient.functions.invoke = async (name, body = {}, options = {}) => {
   if (name === 'dashboardSummary') return { data: { complete: true, matchingCount: 0, accountCount: 0, disputedCount: 0, financials: [] } };
   if (name === 'dashboardStemList') return { data: { stems: [], matchingCount: 0 } };
   if (name === 'dashboardFilterOptions' || name === 'dashboardCounterpartyOptions') return { data: { options: [] } };
-  if (name === 'salesforceStemDetail') return { data: { stem: { Id: body.stemId, Name: 'Opened fixture STEM', Vessel_Name__c: 'Pacific Endeavour' } } };
+  if (name === 'workCommitmentsList') return { data: { commitments: [{ id: 'fixture-task', source: 'collaboration', urgency: 'needs_action', title: 'Synthetic commitment', link: '/projects-tasks', actionLabel: 'Open' }], counts: { needs_action: 1 }, sources: ['collaboration'] } };
+  if (name === 'salesforceStemDetail') return { data: { record: { Id: body.stemId, Name: 'Opened fixture STEM', Vessel_Name__c: 'Pacific Endeavour' }, lineItems: [], extraCosts: [] } };
   if (name === 'salesforceStemDocuments') return { data: { documents: [] } };
   if (name === 'dashboardNomBRead') {
     if (fixture.readFailure) return { data: { error: 'Salesforce verification unavailable.', code: 'NOM_B_SOURCE_UNAVAILABLE' } };
@@ -58,4 +60,5 @@ appClient.functions.invoke = async (name, body = {}, options = {}) => {
   if (name === 'dashboardNomBAuditRead') return { data: { success: true, rows: [{ id: 'audit-status', createdAt: '2026-09-29T09:00:00Z', actorName: 'System', eventType: 'status_changed', previousStatus: 'missing', status: 'waived', evidence: {} }, { id: 'audit-1', createdAt: '2026-09-28T10:30:00Z', actorName: 'Mira Manager', eventType: 'policy_updated', previousMode: 'waive', mode: 'require', reasonCode: 'management_exception', reasonText: 'Recheck payment evidence before filing.', evidence: { invoiceIssued: true, rateDate: '2026-09-18' } }], pagination: { page: 1, totalPages: 1 } } };
   return { data: { error: `Unexpected isolated fixture request: ${name}` } };
 };
-createRoot(document.getElementById('root')).render(<StrictMode><MemoryRouter><p className="p-3 text-xs">Synthetic Nom B fixture — no live provider data</p><DashboardSettings /></MemoryRouter></StrictMode>);
+const dashboard = params.get('screen') === 'dashboard';
+createRoot(document.getElementById('root')).render(<StrictMode><MemoryRouter initialEntries={[dashboard ? '/' : '/my-commitments?source=nom_b']}><p className="p-3 text-xs">Synthetic Nom B fixture — no live provider data</p>{dashboard ? <DashboardSettings /> : <MyCommitments />}</MemoryRouter></StrictMode>);

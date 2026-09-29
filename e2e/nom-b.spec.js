@@ -14,9 +14,15 @@ test.beforeEach(async ({ page, baseURL }) => {
 });
 test.afterEach(async ({ page }) => { expect(page.fixtureErrors).toEqual([]); expect(page.providerRequests).toEqual([]); });
 const panel = (page) => page.getByRole('region', { name: 'Missing Nom B requirements', exact: true });
-const openList = async (page, suffix = '') => { await page.goto(`${fixturePath}${suffix}`); await expect(page.getByLabel('My missing Nom B count: 26', { exact: true })).toBeVisible(); await page.getByRole('button', { name: 'View STEMs', exact: true }).click(); };
+const openList = async (page, suffix = '') => {
+  await page.goto(`${fixturePath}${suffix}`);
+  await expect(page.getByRole('heading', { name: 'My Commitments', exact: true })).toBeVisible();
+  await expect(page.getByRole('tab', { name: 'Nom B Filing', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByLabel('My missing Nom B count: 26', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Hide STEMs', exact: true })).toBeVisible();
+};
 
-test('personal list stays independent of financial filters and keeps policy access without evidence or external links', async ({ page }) => {
+test('personal filing opens expanded, stays separate from ordinary commitments and Dashboard, and keeps policy access without evidence or external links', async ({ page }) => {
   await openList(page);
   const section = panel(page);
   await expect(section.getByRole('heading', { name: /STEM-001.*Pacific Endeavour/ })).toBeVisible();
@@ -27,12 +33,17 @@ test('personal list stays independent of financial filters and keeps policy acce
   expect(await page.locator('body').evaluate((body) => body.scrollWidth <= window.innerWidth + 1)).toBe(true);
   await page.screenshot({ path: `test-results/nom-b-${test.info().project.name}.png` });
   const before = await page.evaluate(() => window.nomBFixture.requests.filter((request) => request.name === 'dashboardNomBRead').length);
-  const mobileFilters = page.getByRole('button', { name: /^Filters/ });
-  if (await mobileFilters.isVisible()) await mobileFilters.click();
-  await page.getByLabel('Period', { exact: true }).selectOption('last_month');
-  await expect(page.getByLabel('Period', { exact: true })).toHaveValue('last_month');
-  await expect.poll(() => page.evaluate(() => window.nomBFixture.requests.filter((request) => request.name === 'dashboardSummary').length)).toBeGreaterThan(0);
+  await expect(page.getByLabel('Period', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('Synthetic commitment', { exact: true })).toHaveCount(0);
+  expect(await page.evaluate(() => window.nomBFixture.requests.filter((request) => request.name === 'workCommitmentsList' || request.name === 'dashboardSummary').length)).toBe(0);
+  await page.getByRole('tab', { name: /^All/ }).click();
+  await expect(page.getByText('Synthetic commitment', { exact: true })).toBeVisible();
+  await expect(section).toHaveCount(0);
   expect(await page.evaluate(() => window.nomBFixture.requests.filter((request) => request.name === 'dashboardNomBRead').length)).toBe(before);
+  await page.getByRole('tab', { name: 'Nom B Filing', exact: true }).click();
+  await expect(section.getByRole('heading', { name: /STEM-001.*Pacific Endeavour/ })).toBeVisible();
+  await expect(section.getByRole('button', { name: 'Hide STEMs', exact: true })).toBeVisible();
+  await expect(page.getByText('Synthetic commitment', { exact: true })).toHaveCount(0);
   await section.getByRole('button', { name: 'View policy' }).first().click();
   const dialog = page.getByRole('dialog');
   await expect(dialog.getByText('Read-only.', { exact: false })).toBeVisible();
@@ -44,6 +55,12 @@ test('personal list stays independent of financial filters and keeps policy acce
   await expect(section.getByRole('link')).toHaveCount(0);
   await section.getByRole('button', { name: 'Open STEM', exact: true }).first().click();
   await expect.poll(() => page.evaluate(() => window.nomBFixture.requests.filter((request) => request.name === 'salesforceStemDetail').at(-1)?.body.stemId)).toBe('fixture-stem-1');
+  await expect(page.getByRole('dialog')).toContainText('Opened fixture STEM');
+  await page.goto(`${fixturePath}?screen=dashboard`);
+  await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => window.nomBFixture.requests.filter((request) => request.name === 'dashboardSummary').length)).toBeGreaterThan(0);
+  await expect(panel(page)).toHaveCount(0);
+  expect(await page.evaluate(() => window.nomBFixture.requests.filter((request) => request.name.startsWith('dashboardNomB')).length)).toBe(0);
 });
 
 test('status tabs, undated-only follow-up, search, sorting and paging use their own server payload', async ({ page }) => {
@@ -141,7 +158,8 @@ test('unknown counts never appear as zero; obsolete responses cannot replace the
   await expect(panel(page).getByRole('heading', { name: /STEM-001/ })).toHaveCount(0);
   await expect(panel(page).getByRole('tab', { name: /^Waived/ })).toHaveAttribute('data-state', 'active');
   await page.goto(`${fixturePath}?role=ci`);
-  await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'My Commitments', exact: true })).toBeVisible();
+  await expect(page.getByRole('tab', { name: 'Nom B Filing', exact: true })).toHaveCount(0);
   await expect(panel(page)).toHaveCount(0);
   expect(await page.evaluate(() => window.nomBFixture.requests.filter((request) => request.name.startsWith('dashboardNomB')).length)).toBe(0);
 });
