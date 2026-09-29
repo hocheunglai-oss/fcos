@@ -83,7 +83,7 @@ async function loadSources(context, deps, { stemId = null } = {}) {
   const scope = stemId ? `Id = ${quote(stemId)}` : `(Delivery_Date__c >= ${NOM_B_FROM} OR (Delivery_Date__c = null AND Expected_Delivery_Date__c >= ${NOM_B_FROM}) OR (Delivery_Date__c = null AND Expected_Delivery_Date__c = null)) AND (Invoice_Status__c = null OR Invoice_Status__c != 'Cancelled')`;
   const stems = await deps.all(`SELECT ${SCHEMA.STEM__c.join(',')},Account__r.Name,Port__r.Name,Vessel__r.Name${currencySelect(objects, 'STEM__c')} FROM STEM__c WHERE ${scope}${access}`);
   const profiles = await profileDirectory(context.client);
-  const confirmations = await queryRelated(deps, 'Nomination__c', `${SCHEMA.Nomination__c.join(',')},RecordType.DeveloperName`, 'STEM__c', stems.map((row) => row.Id), " AND Deprecated__c = false AND Replaced__c = false AND RecordType.DeveloperName = 'Buyer'");
+  const confirmations = await queryRelated(deps, 'Nomination__c', `${SCHEMA.Nomination__c.join(',')},RecordType.DeveloperName`, 'STEM__c', stems.map((row) => row.Id), " AND Deprecated__c = false AND RecordType.DeveloperName = 'Buyer'");
   const traderNames = [...new Set(confirmations.map((row) => text(row.Buyer_Supplier_Trader__c)).filter(Boolean))];
   const salesforceUsers = await queryRelated(deps, 'User', 'Id,Name,Email,IsActive', 'Name', traderNames, ' AND IsActive = true');
   return { stems, confirmations, profiles, salesforceUsers, objects };

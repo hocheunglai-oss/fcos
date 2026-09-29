@@ -24,7 +24,9 @@ export function nomBDelivery(stem) {
   return { date, source, undated: !source, invalid: Boolean(source && !date), inScope: !source || Boolean(date && date >= NOM_B_FROM) };
 }
 export function activeNomBConfirmation(row) {
-  return row?.IsDeleted !== true && row?.Deprecated__c === false && row?.Replaced__c === false
+  // Replaced__c marks a regenerated outgoing PDF, not an inactive confirmation.
+  // Salesforce retires confirmation records through Deprecated__c.
+  return row?.IsDeleted !== true && row?.Deprecated__c === false
     && row?.RecordType?.DeveloperName === 'Buyer';
 }
 export function resolveNomBTrader(confirmation, profiles, salesforceUsers = []) {

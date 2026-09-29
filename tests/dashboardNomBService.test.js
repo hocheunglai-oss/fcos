@@ -120,3 +120,17 @@ test('policy saves are server role checked, access scoped and revision checked',
   const validGm = fixture({ profile: gm, roles: [{ role: 'general_manager', active: true, user_id: gm.id }] });
   assert.equal((await saveDashboardNomBPolicy({ stemId: s1.Id, mode: 'waive', expectedRevision: 0 }, validGm.context, validGm.deps)).policy.mode, 'waive');
 });
+
+test('regenerated confirmation remains visible in personal and team views and permits owner audit', async () => {
+  const f = fixture({ confirmations: [{ ...c1, Replaced__c: true }] });
+  const personal = await loadDashboardNomB({}, f.context, f.deps);
+  assert.equal(personal.rows[0].confirmations[0].traderName, anna.full_name);
+  assert.equal(personal.counts.missing, 1);
+  const query = f.queries.find(({ soql }) => soql.includes('FROM Nomination__c')).soql;
+  assert.doesNotMatch(query.split('WHERE')[1], /Replaced__c/);
+  assert.match(query, /Deprecated__c = false/);
+  await loadDashboardNomBAudit({ stemId: s1.Id }, f.context, f.deps);
+  const team = await loadDashboardNomB({ scope: 'team', search: s1.Name }, { ...f.context, profile: admin }, f.deps);
+  assert.equal(team.rows[0].confirmations[0].traderName, anna.full_name);
+  assert.equal(team.rows[0].status, 'missing');
+});

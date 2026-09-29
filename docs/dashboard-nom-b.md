@@ -31,3 +31,5 @@ Run the policy, service, database and handler tests with `npm test`. The isolate
 Salesforce is read-only for this feature. It adds no upload workflow, accounting changes, email reminders or changes to Dashboard STEM XLS exports.
 
 The Nom B panel is a separate lazy-loaded client chunk (20,862 bytes in the initial verified local build). The aggregate client JavaScript budget increases from 3,860,000 to 3,890,000 bytes to accommodate this feature; individual chunk, gzip, PDF/XLS and server budgets stay unchanged.
+
+Buyer Confirmation activity follows Salesforce `Deprecated__c`. `Replaced__c` indicates regeneration of the outgoing confirmation PDF and does not retire the confirmation or its linked Nom B evidence.

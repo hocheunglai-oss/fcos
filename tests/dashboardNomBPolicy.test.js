@@ -22,7 +22,7 @@ test('Nom B delivery scope uses actual date before expected, inclusive September
 });
 test('only current Buyer Confirmations qualify', () => {
   assert.equal(activeNomBConfirmation(buyer), true);
-  for (const override of [{ Deprecated__c: true }, { Deprecated__c: undefined }, { Replaced__c: true }, { IsDeleted: true }, { RecordType: { DeveloperName: 'Supplier' } }]) assert.equal(activeNomBConfirmation({ ...buyer, ...override }), false);
+  for (const override of [{ Deprecated__c: true }, { Deprecated__c: undefined }, { IsDeleted: true }, { RecordType: { DeveloperName: 'Supplier' } }]) assert.equal(activeNomBConfirmation({ ...buyer, ...override }), false);
 });
 test('trader assignment requires unique verified email and compatible trader identity', () => {
   assert.equal(resolveNomBTrader(buyer, [profile]).id, profile.id);
@@ -99,4 +99,14 @@ test('management input defaults Payment Received and validates free text and rev
   assert.equal(validateNomBPolicy({ ...base, mode: 'waive' }).reasonCode, 'payment_received');
   assert.equal(validateNomBPolicy({ ...base, mode: 'automatic', reasonText: 'old' }).reasonText, '');
   for (const bad of [{ mode: 'require' }, { mode: 'waive', reasonCode: 'other', reasonText: ' ' }, { mode: 'waive', reasonText: 'a'.repeat(1001) }, { mode: 'waive', expectedRevision: -1 }, { mode: 'other' }]) assert.throws(() => validateNomBPolicy({ ...base, ...bad }));
+});
+
+test('regenerating an outgoing Buyer Confirmation preserves trader and Nom B requirement', () => {
+  const regenerated = { ...buyer, Replaced__c: true };
+  assert.equal(activeNomBConfirmation(regenerated), true);
+  const result = evaluate({ confirmations: [regenerated], invoices: [] });
+  assert.equal(result.status, 'missing');
+  assert.equal(result.confirmations[0].trader.id, profile.id);
+  assert.equal(evaluate({ confirmations: [regenerated], links: [file] }).status, 'filed');
+  assert.equal(activeNomBConfirmation({ ...regenerated, Deprecated__c: true }), false);
 });
