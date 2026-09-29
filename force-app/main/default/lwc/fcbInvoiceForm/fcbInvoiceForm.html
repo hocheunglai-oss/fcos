@@ -15,6 +15,11 @@
                     </button>
                 </header>
                 <div class="slds-modal__content slds-p-around_medium" id="modal-content-id-1">
+                    <template if:true={invoiceFormError}>
+                        <div class="slds-notify slds-notify_alert slds-alert_error slds-m-bottom_small" role="alert">
+                            <span>{invoiceFormError}</span>
+                        </div>
+                    </template>
                     <template if:true={readinessBannerVisible}>
                         <div class="slds-notify slds-notify_alert slds-alert_error slds-m-bottom_small" role="alert">
                             <span>{variableChargeReadinessReason}</span>
@@ -93,9 +98,10 @@
                             <template if:false={input.isDisabled}>
                                 <template if:false={input.isHidden}>
                                     <div class="slds-grid slds-gutters" key={input.id} draggable="true" ondragstart={handleDragStart} ondragover={handleDragOver} ondrop={handleDrop} data-id={input.id}>
-                                        <lightning-input class="slds-col slds-size_5-of-12" value={input.label} onchange={handleChangeInputLabel} data-id={input.id}></lightning-input>
-                                        <lightning-input class="slds-col slds-size_5-of-12" value={input.value} onchange={handleChangeInputValue} data-id={input.id}></lightning-input>
+                                        <lightning-input class="slds-col slds-size_5-of-12" value={input.label} read-only={input.isPaymentTermLocked} onchange={handleChangeInputLabel} data-id={input.id}></lightning-input>
+                                        <lightning-input class="slds-col slds-size_5-of-12" value={input.value} read-only={input.isPaymentTermLocked} onchange={handleChangeInputValue} data-id={input.id}></lightning-input>
                                         <lightning-button onclick={removeInput} data-id={input.id}
+                                            disabled={input.isPaymentTermLocked}
                                             variant="base" title="Remove Input" icon-name="utility:close"
                                             class="slds-col slds-size_1-of-12 slds-m-top_x-small slds-m-left_small"></lightning-button>
                                     </div>
