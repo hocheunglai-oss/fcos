@@ -29,6 +29,7 @@ const migrationSources = await Promise.all(names.map(async (name) => ({
   sql: await readFile(new URL(name, migrationDirectory), 'utf8'),
 })));
 const releaseMigrationNames = new Set([
+  '20260930004300_xero_preview_finalize_timeout.sql',
   '20260930004200_xero_preview_payments_reference.sql',
   '20260930004000_xero_preview_checkpoint_chunks.sql',
   '20260930004100_xero_financial_preview_staged.sql',
@@ -133,6 +134,20 @@ async function verifyRuntimeObjects(label) {
     cross join unnest(array['anon','authenticated']) r where n.nspname='public'
       and p.proname in ('begin_xero_financial_preview_v2','append_xero_financial_preview_v2','finalize_xero_financial_preview_v2')
       and has_function_privilege(r,p.oid,'EXECUTE')`, 0, `${label} staged preview browser RPC denial`);
+  await assertRows(`select count(*)::int from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+    where n.nspname='public' and p.oid='public.finalize_xero_financial_preview_v2(uuid,text)'::regprocedure
+      and p.prosecdef and p.proconfig @> array['search_path=""','TimeZone=UTC','statement_timeout=45s']
+      and has_function_privilege('service_role',p.oid,'EXECUTE')
+      and not has_function_privilege('anon',p.oid,'EXECUTE')
+      and not has_function_privilege('authenticated',p.oid,'EXECUTE')`,
+    1, `${label} complete preview finalization has a bounded RPC-local timeout and unchanged execution scope`);
+  await assertRows(`select count(*)::int from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+    where n.nspname='public' and p.proname=any(array['xero_campaign_create_v1','xero_campaign_refresh_v1'])
+      and p.prosecdef and p.proconfig @> array['search_path=""','statement_timeout=45s']
+      and has_function_privilege('service_role',p.oid,'EXECUTE')
+      and not has_function_privilege('anon',p.oid,'EXECUTE')
+      and not has_function_privilege('authenticated',p.oid,'EXECUTE')`,
+    2, `${label} complete campaign creation and refresh retain bounded RPC-local timeouts and execution scope`);
   const privatePaymentReaders = ['xero_preview_checkpoint_node_value_v2','xero_preview_payment_rows_v2'];
   await assertRows(`select count(*)::int from pg_proc p join pg_namespace n on n.oid=p.pronamespace
     where n.nspname='public' and p.proname=any($1::text[])`,

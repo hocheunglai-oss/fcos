@@ -59,7 +59,7 @@ jobs:
         env:
           FCOS_GROUPED_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
       - name: Verify concurrent financial preview persistence
-        run: node --test tests/xeroFinancialPreviewPersistence.test.js tests/xeroPreviewStagedDatabase.test.js tests/xeroPreviewPaymentsReferenceDatabase.test.js
+        run: node --test tests/xeroFinancialPreviewPersistence.test.js tests/xeroPreviewStagedDatabase.test.js tests/xeroPreviewPaymentsReferenceDatabase.test.js tests/xeroPreviewFinalizeTimeoutDatabase.test.js
         env:
           FCOS_PREVIEW_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
       - name: Verify captured reconciliation evidence and resume isolation
