@@ -37,8 +37,10 @@ async function backendRssSampler(pid, connectionUrl) {
   assert.ok(matches.length <= 1, 'The disposable database port must identify one container');
   if (matches.length) {
     const id = matches[0];
-    const executable = (await run('docker', ['exec', id, 'readlink', `/proc/${pid}/exe`])).stdout.trim();
-    assert.match(executable, /\/\.?postgres(?:-wrapped)?$/, 'The measured container process must be PostgreSQL');
+    const command = (await run('docker', ['exec', id, 'cat', `/proc/${pid}/comm`])).stdout.trim();
+    // Linux truncates comm to 15 bytes; the pinned Supabase image runs
+    // .postgres-wrapped. Its readable status does not require ptrace access.
+    assert.ok(['postgres', '.postgres-wrapp'].includes(command), 'The measured container process must be PostgreSQL');
     return async () => {
       const status = (await run('docker', ['exec', id, 'cat', `/proc/${pid}/status`])).stdout;
       const value = Number(status.match(/^VmRSS:\s+(\d+)\s+kB$/m)?.[1]);
