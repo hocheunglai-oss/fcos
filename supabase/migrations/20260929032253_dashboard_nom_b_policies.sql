@@ -43,7 +43,7 @@ create index dashboard_nom_b_events_stem_time_idx on public.dashboard_nom_b_even
 alter table public.dashboard_nom_b_policies enable row level security;
 alter table public.dashboard_nom_b_observations enable row level security;
 alter table public.dashboard_nom_b_events enable row level security;
-revoke all on public.dashboard_nom_b_policies,public.dashboard_nom_b_observations,public.dashboard_nom_b_events from public,anon,authenticated;
+revoke all on public.dashboard_nom_b_policies,public.dashboard_nom_b_observations,public.dashboard_nom_b_events from public,anon,authenticated,service_role;
 grant select,insert,update on public.dashboard_nom_b_policies,public.dashboard_nom_b_observations to service_role;
 grant select,insert on public.dashboard_nom_b_events to service_role;
 

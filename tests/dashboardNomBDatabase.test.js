@@ -12,7 +12,8 @@ test('Nom B policies enforce roles, revisions, reasons and immutable atomic hist
     create table public.user_profiles(id uuid primary key,active boolean,user_type text,email text,full_name text);
     create table public.collaboration_roles(user_id uuid,role text,active boolean);
     grant usage on schema public to service_role;
-    grant select on public.user_profiles,public.collaboration_roles to service_role;`);
+    grant select on public.user_profiles,public.collaboration_roles to service_role;
+    alter default privileges in schema public grant all on tables to service_role;`);
   await db.query("insert into user_profiles values ($1,true,'administrator','admin@example.test','Admin'),($2,true,'general_manager','gm@example.test','GM'),($3,true,'trader','trader@example.test','Trader'),($4,true,'general_manager','othergm@example.test','Other GM')", [admin, gm, trader, fakeGm]);
   await db.query("insert into collaboration_roles values($1,'general_manager',true)", [gm]);
   const directory = new URL('../supabase/migrations/', import.meta.url);
@@ -47,6 +48,7 @@ test('Nom B policies enforce roles, revisions, reasons and immutable atomic hist
   assert.equal(races.filter((result) => result.status === 'rejected').length, 1);
   await assert.rejects(db.exec('update dashboard_nom_b_events set reason_text=\'rewrite\''), /permission/i);
   await assert.rejects(db.exec('delete from dashboard_nom_b_events'), /permission/i);
+  await assert.rejects(db.exec('truncate dashboard_nom_b_events'), /permission/i);
   for (const role of ['anon', 'authenticated']) {
     await db.exec(`reset role;set role ${role}`);
     for (const table of ['dashboard_nom_b_policies', 'dashboard_nom_b_observations', 'dashboard_nom_b_events']) await assert.rejects(db.exec(`select * from ${table}`), /permission denied/i);
