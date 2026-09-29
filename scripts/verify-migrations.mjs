@@ -29,7 +29,7 @@ const migrationSources = await Promise.all(names.map(async (name) => ({
   sql: await readFile(new URL(name, migrationDirectory), 'utf8'),
 })));
 const releaseMigrationNames = new Set([
-  '20260929032253_dashboard_nom_b_policies.sql',
+  '20260929035058_dashboard_nom_b_policies.sql',
   '20260928053229_xero_document_field_correction_journal.sql',
   '20260928033217_xero_issued_petroleum_attachment_preservation_v2.sql',
   '20260927213024_xero_petroleum_inactive_source_ownership.sql',
