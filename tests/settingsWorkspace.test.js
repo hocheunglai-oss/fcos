@@ -134,7 +134,8 @@ test('workspace preferences and broker settings are revisioned and service-only'
   assert.match(rateHandler, /loadBrokerCommissionSettings\(client\)/);
   assert.doesNotMatch(rateHandler, /body\.provider/);
   assert.match(server, /capabilities: capabilityValues/);
-  assert.match(admin, /\!\['settings', 'admin'\]\.includes\(module\.id\)/);
+  // Groups now expose all page grants; privileged management still requires the separate organizational role.
+  assert.match(admin, /Administrator \/ General Manager-only controls also require the separate organizational role/);
   assert.doesNotMatch(admin, />Application Access</);
   assert.match(modules, /id: 'broker_settings_manage'/);
 });
@@ -182,7 +183,8 @@ test('Settings uses unified AI cards, compact access tables, and atomic email ro
   assert.match(settings, /emailSenderRouteSave/);
   assert.match(settings, /Save \{dirtySenderRoutes\.length\} assignment/);
   assert.doesNotMatch(settings, /Save route/);
-  assert.match(people, /Search name, email, or type/);
+  assert.match(people, /label="Search people"/);
+  assert.match(people, /Name, email or group/);
   assert.doesNotMatch(people, /adminAuditLogs|Audit Log/);
   assert.match(workspace, /grid-cols-\[212px_minmax\(0,1fr\)\]/);
   assert.match(dashboardAi, /Cached input/);
