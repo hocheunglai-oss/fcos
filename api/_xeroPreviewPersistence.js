@@ -7,6 +7,9 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const RUN_METADATA = ['id', 'idempotency_key', 'created_by', 'created_by_email', 'created_at', 'updated_at',
   'source_snapshot_at', 'xero_snapshot_at', 'rate_limit_snapshot'];
 const ITEM_METADATA = ['id', 'run_id', 'idempotency_key', 'created_at', 'updated_at'];
+const CHECKPOINT_REFERENCE_KEYS = ['checkpointId', 'revision', 'actorId', 'tenantId', 'salesforceOrgId',
+  'reconciliationVersion', 'inputOptions', 'inputEvidenceHash', 'payloadHash', 'storageHash', 'tokenVersion',
+  'capturedAt', 'storageVersion'].sort();
 
 // Match JSON persistence semantics, then sort object keys only. Array order and
 // every unlisted field remain material; timestamps in financial evidence stay.
@@ -35,14 +38,41 @@ export function previewReviewIdentity(run, items) {
   return previewEvidenceHash(normalized);
 }
 
+// Referenced payments always resolve to provider.payments in the exact inventory
+// capture. A caller cannot supply a path, row count, partial summary or substitute.
+export function validatePreviewPaymentStorage(snapshot, { includePayments, tenantId, actorId } = {}) {
+  const reference = snapshot?.paymentsReference;
+  const referenced = snapshot && Object.hasOwn(snapshot, 'paymentsReference');
+  if (!snapshot) throw failure('Complete payment storage evidence is required.');
+  if (!includePayments) {
+    if (referenced || snapshot.payments != null) throw failure('A documents-only check cannot contain payment evidence.');
+    return;
+  }
+  if (referenced) {
+    if (Object.hasOwn(snapshot, 'payments') || snapshot.linkFirst !== true || !snapshot.inventoryReference
+      || !reference || typeof reference !== 'object' || Array.isArray(reference)
+      || Object.keys(reference).sort().join(',') !== CHECKPOINT_REFERENCE_KEYS.join(',')
+      || previewEvidenceHash(reference) !== previewEvidenceHash(snapshot.inventoryReference)
+      || reference.storageVersion !== 2 || reference.tenantId !== tenantId
+      || (actorId !== undefined && reference.actorId !== actorId)
+      || !UUID.test(reference.checkpointId || '') || !UUID.test(reference.actorId || '')
+      || reference.inputOptions?.includePayments !== true
+      || reference.inputOptions?.linkFirst !== true || reference.inputOptions?.recordExactMatches !== false
+      || !/^[a-f0-9]{64}$/.test(reference.payloadHash || '')
+      || !/^[a-f0-9]{64}$/.test(reference.storageHash || '')) {
+      throw failure('Payment evidence must reference the exact complete inventory capture.');
+    }
+  } else if (!Array.isArray(snapshot.payments?.rows) || snapshot.payments.tenantId !== tenantId) {
+    throw failure('The payment and document checks must belong to the same Xero organisation.');
+  }
+}
+
 export function preparePreviewPersistence(run, items, { tenantId, includePayments, salesforceOrgId, inputEvidenceHash }) {
   if (!UUID.test(tenantId || '') || !salesforceOrgId || !/^[a-f0-9]{64}$/.test(inputEvidenceHash || '')) {
     throw failure('Complete provider identity and evidence are required before saving a financial check.');
   }
   const snapshot = run.control_totals?.workflowSnapshot;
-  if (!snapshot || (includePayments && snapshot.payments?.tenantId !== tenantId)) {
-    throw failure('The payment and document checks must belong to the same Xero organisation.');
-  }
+  validatePreviewPaymentStorage(snapshot, { includePayments, tenantId, actorId: run.created_by });
   const prepared = { ...run, control_totals: { ...run.control_totals, workflowSnapshot: {
     ...snapshot, persistenceVersion: snapshot.inventoryReference?.storageVersion === 2 ? XERO_PREVIEW_STAGED_VERSION : XERO_PREVIEW_PERSISTENCE_VERSION, complete: true,
     expectedItemCount: items.length, tenantId, salesforceOrgId, includePayments,
@@ -143,6 +173,7 @@ async function persistStagedPreview(client, parameters) {
   if (loaded.error || snapshot?.persistenceVersion !== XERO_PREVIEW_STAGED_VERSION || snapshot.complete !== true
     || snapshot.reviewIdentity !== parameters.p_review_identity || snapshot.expectedItemCount !== identities.length
     || previewEvidenceHash(snapshot.inventoryReference) !== previewEvidenceHash(parameters.p_run.control_totals.workflowSnapshot.inventoryReference)
+    || previewEvidenceHash(snapshot.paymentsReference || null) !== previewEvidenceHash(parameters.p_run.control_totals.workflowSnapshot.paymentsReference || null)
     || (!saved.reused && (run.status !== 'ready_for_review' || run.revision !== 1))) throw failure('The saved financial check could not be verified.');
   const bySource = new Map(identities.map(item => [item.row_key, item.id]));
   if (bySource.size !== identities.length || new Set(identities.map(item => item.id)).size !== identities.length

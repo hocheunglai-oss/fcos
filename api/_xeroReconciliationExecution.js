@@ -12,6 +12,7 @@ import { validatedGroupPaymentRow } from './_xeroGroupPaymentPersistence.js';
 import { paymentPostingKey } from './_xeroPaymentPosting.js';
 import { refreshCampaignInventory } from './_xeroReconciliationInventory.js';
 import { loadPublishedPreviewCheckpoint } from './_xeroPreviewCheckpoint.js';
+import { hydratePreviewPayments } from './_xeroPreviewPayments.js';
 import { buildCampaignContactCases, executeCampaignContactCase } from './_xeroReconciliationContacts.js';
 import { releaseXeroBudget, reserveXeroBudget, runWithXeroBudget, xeroSharedContext } from './_xeroSharedControl.js';
 
@@ -527,13 +528,15 @@ export async function executeCampaignBatch({ client, connection, campaign, batch
     throw failure('The claimed campaign, tenant or case evidence is invalid.');
   }
   const run = await one(client.from('xero_financial_sync_runs').select('*').eq('id', campaign.review_run_id || campaign.run_id), 'saved financial check');
-  const snapshot = run.control_totals?.workflowSnapshot;
+  let snapshot = run.control_totals?.workflowSnapshot;
+  let captured = null;
   let inventory = campaign.inventory || snapshot?.inventory;
   if (!inventory && snapshot?.inventoryReference) {
-    const captured = await loadPublishedPreviewCheckpoint(client, snapshot.inventoryReference,
+    captured = await loadPublishedPreviewCheckpoint(client, snapshot.inventoryReference,
       { runId: run.id, actorId: actor.id, tenantId: connection.tenantId });
     inventory = { ...captured.payload.provider.xero, observedSince: captured.payload.snapshotStartedAt, complete: true };
   }
+  snapshot = await hydratePreviewPayments(client, run, { actorId: actor.id, tenantId: connection.tenantId, captured });
   if (!snapshot?.complete || !snapshot.linkFirst || !inventory?.complete || inventory.tenantId !== connection.tenantId) {
     throw failure('A complete same-tenant link-first inventory is required.');
   }

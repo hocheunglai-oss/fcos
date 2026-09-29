@@ -29,6 +29,7 @@ const migrationSources = await Promise.all(names.map(async (name) => ({
   sql: await readFile(new URL(name, migrationDirectory), 'utf8'),
 })));
 const releaseMigrationNames = new Set([
+  '20260930004200_xero_preview_payments_reference.sql',
   '20260930004000_xero_preview_checkpoint_chunks.sql',
   '20260930004100_xero_financial_preview_staged.sql',
   '20260929170347_xero_shared_control.sql',
@@ -132,6 +133,18 @@ async function verifyRuntimeObjects(label) {
     cross join unnest(array['anon','authenticated']) r where n.nspname='public'
       and p.proname in ('begin_xero_financial_preview_v2','append_xero_financial_preview_v2','finalize_xero_financial_preview_v2')
       and has_function_privilege(r,p.oid,'EXECUTE')`, 0, `${label} staged preview browser RPC denial`);
+  const privatePaymentReaders = ['xero_preview_checkpoint_node_value_v2','xero_preview_payment_rows_v2'];
+  await assertRows(`select count(*)::int from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+    where n.nspname='public' and p.proname=any($1::text[])`,
+    privatePaymentReaders.length, `${label} bounded payment checkpoint readers exist`, [privatePaymentReaders]);
+  await assertRows(`select count(*)::int from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+    cross join unnest(array['anon','authenticated','service_role']) r where n.nspname='public'
+      and p.proname=any($1::text[]) and has_function_privilege(r,p.oid,'EXECUTE')`,
+    0, `${label} payment checkpoint readers remain private to checked RPCs`, [privatePaymentReaders]);
+  await assertRows(`select count(*)::int from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+    cross join lateral aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) acl
+    where n.nspname='public' and p.proname=any($1::text[]) and acl.grantee=0 and acl.privilege_type='EXECUTE'`,
+    0, `${label} payment checkpoint readers deny PUBLIC execution`, [privatePaymentReaders]);
   const nomBTables = ['dashboard_nom_b_policies', 'dashboard_nom_b_observations', 'dashboard_nom_b_events'];
   await assertRows(`select count(*)::int from pg_class c join pg_namespace n on n.oid=c.relnamespace
     where n.nspname='public' and c.relname=any($1::text[]) and c.relrowsecurity`, 3, `${label} Nom B RLS`, [nomBTables]);

@@ -11,6 +11,7 @@ import { currentIssuedSupplierRoundingMatches, ISSUED_SUPPLIER_PRESERVATION_POLI
 import { currentIssuedPetroleumMatches } from './_xeroIssuedPetroleumSticky.js';
 import { accountingDecimalCents, accountingProductCents, accountingUnitNumber, accountingCentsNumber, accountingCentsText } from './_xeroAccountingLineCents.js';
 import { persistFinancialPreview, preparePreviewPersistence, previewEvidenceHash } from './_xeroPreviewPersistence.js';
+import { compactPreviewPayments, hydratePreviewPayments } from './_xeroPreviewPayments.js';
 import { createPreviewCheckpoint, savePreviewCheckpoint, loadPreviewCheckpoint, markPreviewCheckpointPublished,
   loadPublishedPreviewCheckpoint, previewCheckpointReference } from './_xeroPreviewCheckpoint.js';
 import { accountingPayload, documentConfirmationErrors, documentPostingBlockers, documentReadiness, financialSourceCurrency, loadFinancialSafetyContext, matchDocumentResponses, matchedXeroLines, normalizePostingMode, reviewedPostingMode, safetySelectFields, unownedXeroMetadata } from './_xeroDocumentSafety.js';
@@ -638,6 +639,9 @@ export async function xeroFinancialSyncPreview(body = {}, dependencies = {}) {
       } : {}),
     };
     stage('contact_cases_complete', { cases: runRow.control_totals.workflowSnapshot.contactCases?.length || 0 });
+    if (linkFirst && checkpoint && body.includePayments === true) {
+      runRow.control_totals.workflowSnapshot = compactPreviewPayments(runRow.control_totals.workflowSnapshot, checkpoint);
+    }
     const { callCount: _callCount, ...xeroEvidence } = xero;
     const parameters = preparePreviewPersistence(runRow, itemRows, {
       tenantId: connection.tenantId, includePayments: body.includePayments === true,
@@ -817,7 +821,7 @@ export async function savedFinancialPreview(client, run) {
     items.push(...page.data);
     if (page.data.length < 500) break;
   }
-  const snapshot = run.control_totals?.workflowSnapshot || {};
+  const snapshot = await hydratePreviewPayments(client, run);
   const disputeStates = await loadDisputeReconciliationStates(client, items.map((item) => item.source_payload?.stemId));
   const { workflowSnapshot: _snapshot, postingMode: _mode, ...controlTotals } = run.control_totals || {};
   return { run: serializeRun(run), postingMode: reviewedPostingMode(run), controlTotals, rows: items.map((item) => ({

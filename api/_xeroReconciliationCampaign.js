@@ -3,6 +3,7 @@ import { allFinancialRows, XERO_RECONCILIATION_VERSION } from './_xeroFinancialS
 import { getFreshXeroConnection, xeroAccountingFetch, xeroContactSyncServiceClient } from './_xeroContactSync.js';
 import { authorizeXeroQuotaProbe } from './_xeroSharedControl.js';
 import { buildReconciliationCases, forecastReconciliationBatch, summariseReconciliationCases } from './_xeroReconciliationPolicy.js';
+import { hydratePreviewPayments } from './_xeroPreviewPayments.js';
 
 const CATEGORIES = new Set(['link_only', 'contact', 'draft']);
 const STATUSES = new Set(['ready', 'needs_decision', 'waiting_dependency', 'reconciled', 'legacy_excluded', 'future_activity']);
@@ -204,8 +205,10 @@ export async function xeroReconciliationCampaignCreate(body = {}, input = {}) {
     throw fail('A current complete link-first saved financial check is required. Run a new check with link-first enabled.', 409, 'XERO_CAMPAIGN_BASELINE_CHANGED');
   }
   const items = (await allFinancialRows(client, 'xero_financial_sync_items', (query) => query.eq('run_id', runId))).data;
+  const snapshot = await hydratePreviewPayments(client, run, { actorId: current.id, tenantId: tenant.id });
+  const hydratedRun = { ...run, control_totals: { ...run.control_totals, workflowSnapshot: snapshot } };
   let cases;
-  try { cases = buildReconciliationCases({ tenantId: tenant.id, run, items, ownerId: current.id,
+  try { cases = buildReconciliationCases({ tenantId: tenant.id, run: hydratedRun, items, ownerId: current.id,
     baselineAt: run.control_totals.workflowSnapshot.checkedAt || run.created_at }); }
   catch { throw fail('The saved financial check is incomplete or has conflicting identities.', 409, 'XERO_CAMPAIGN_BASELINE_INCOMPLETE'); }
   const campaign = await rpc(client, 'xero_campaign_create_v1', { p_actor: current.id, p_tenant: tenant.id,
@@ -268,7 +271,9 @@ export async function xeroReconciliationCampaignRefresh(body = {}, input = {}) {
   const runId = requireId(preview.run?.id, 'freshRunId');
   const run = await one(client.from('xero_financial_sync_runs').select('*').eq('id', runId), 'fresh financial check');
   const items = (await allFinancialRows(client, 'xero_financial_sync_items', (query) => query.eq('run_id', runId))).data;
-  const cases = buildReconciliationCases({ tenantId: tenant.id, run, items, ownerId: current.id,
+  const snapshot = await hydratePreviewPayments(client, run, { actorId: current.id, tenantId: tenant.id });
+  const cases = buildReconciliationCases({ tenantId: tenant.id,
+    run: { ...run, control_totals: { ...run.control_totals, workflowSnapshot: snapshot } }, items, ownerId: current.id,
     baselineAt: campaign.baseline_at });
   await rpc(client, 'xero_campaign_refresh_v1', { p_actor: current.id, p_campaign: campaign.id,
     p_revision: campaign.revision, p_run: runId, p_run_revision: run.revision, p_cases: cases });
