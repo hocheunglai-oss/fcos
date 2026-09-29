@@ -29,6 +29,7 @@ const migrationSources = await Promise.all(names.map(async (name) => ({
   sql: await readFile(new URL(name, migrationDirectory), 'utf8'),
 })));
 const releaseMigrationNames = new Set([
+  '20260929133157_people_access_groups.sql',
   '20260929035058_dashboard_nom_b_policies.sql',
   '20260928053229_xero_document_field_correction_journal.sql',
   '20260928033217_xero_issued_petroleum_attachment_preservation_v2.sql',
@@ -82,6 +83,12 @@ async function assertRows(sql, expected, label, values = []) {
 }
 
 async function verifyRuntimeObjects(label) {
+  const accessTables = ['permission_groups', 'user_permission_groups', 'permission_access_events', 'permission_access_migration_snapshots', 'permission_access_catalog'];
+  await assertRows(`select count(*)::int from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relname=any($1::text[]) and c.relrowsecurity`, accessTables.length, `${label} group access RLS`, [accessTables]);
+  await assertRows(`select count(*)::int from unnest($1::text[]) t cross join unnest(array['anon','authenticated']) r cross join unnest(array['SELECT','INSERT','UPDATE','DELETE','TRUNCATE']) p where has_table_privilege(r,'public.'||t,p)`, 0, `${label} group access is server-only`, [accessTables]);
+  await assertRows(`select count(*)::int from unnest(array['UPDATE','DELETE','TRUNCATE']) p where has_table_privilege('service_role','public.permission_access_events',p)`, 0, `${label} group audit append-only`);
+  await assertRows(`select count(*)::int from public.permission_access_migration_snapshots s join public.user_profiles u on u.id=s.user_id where u.active and ((public.fcos_effective_access(u.id)->'permissions') is distinct from s.permissions or (public.fcos_effective_access(u.id)->'capabilities') is distinct from s.capabilities)`, 0, `${label} migration exact grant preservation`);
+
   const nomBTables = ['dashboard_nom_b_policies', 'dashboard_nom_b_observations', 'dashboard_nom_b_events'];
   await assertRows(`select count(*)::int from pg_class c join pg_namespace n on n.oid=c.relnamespace
     where n.nspname='public' and c.relname=any($1::text[]) and c.relrowsecurity`, 3, `${label} Nom B RLS`, [nomBTables]);
@@ -137,6 +144,7 @@ async function verifyRuntimeObjects(label) {
     [['xero_financial_payment_mappings_canonical_sf_uidx', 'xero_financial_payment_mappings_canonical_xero_uidx']],
   );
   const releaseFunctions = [
+    'fcos_effective_access', 'fcos_has_access', 'fcos_assert_access_administrator', 'fcos_save_user_groups', 'fcos_save_permission_group', 'fcos_delete_permission_group', 'fcos_profile_access_revision', 'fcos_profile_access_change_lock', 'fcos_reject_legacy_permission_write',
     'save_dashboard_nom_b_policy', 'observe_dashboard_nom_b',
     'claim_xero_document_field_correction_v1', 'finish_xero_document_field_correction_v1', 'read_xero_document_field_correction_page_v1',
     'link_xero_issued_petroleum_document_v1',

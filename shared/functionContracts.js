@@ -7,6 +7,23 @@ const stringValue = (value) => typeof value === 'string' && value.trim().length 
 const stringArray = (value) => Array.isArray(value) && value.length > 0 && value.every(stringValue);
 
 const CONTRACTS = Object.freeze({
+  adminPermissionGroupSave(payload) {
+    const issues = [];
+    if (!stringValue(payload.label) || payload.label.trim().length > 100) issues.push('Enter a group name up to 100 characters.');
+    if (!Number.isSafeInteger(payload.expectedRevision) || payload.expectedRevision < 0) issues.push('A current group revision is required.');
+    if (!objectPayload(payload.permissions) || !objectPayload(payload.capabilities)) issues.push('Permissions and capabilities must be objects.');
+    return issues;
+  },
+  adminPermissionGroupDelete(payload) {
+    return stringValue(payload.id) && Number.isSafeInteger(payload.expectedRevision) && payload.expectedRevision > 0 ? [] : ['A group and current revision are required.'];
+  },
+  adminUserGroupsSave(payload) {
+    const issues = [];
+    if (!stringValue(payload.userId)) issues.push('A person is required.');
+    if (!Array.isArray(payload.groupIds) || payload.groupIds.length > 100 || payload.groupIds.some((id) => !stringValue(id))) issues.push('Select valid permission groups.');
+    if (!Number.isSafeInteger(payload.expectedRevision) || payload.expectedRevision < 1) issues.push('A current membership revision is required.');
+    return issues;
+  },
   financeSettingsSave(payload) {
     const issues = [];
     if (!['number', 'string'].includes(typeof payload.annualInterestRatePct)

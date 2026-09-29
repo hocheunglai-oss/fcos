@@ -37,6 +37,8 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: Verify Nom B desktop and mobile workflows without providers
         run: npx playwright test --config playwright.nom-b.config.js
+      - name: Verify group-first People & Access without providers
+        run: npx playwright test --config playwright.people-access.config.js
       - run: npm run verify:graph-only
       - run: npm run build
       - run: npm run verify:performance

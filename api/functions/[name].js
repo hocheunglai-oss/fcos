@@ -1,3 +1,4 @@
+import { loadEffectiveGroupAccess, readAllAccessRows, serializeGroupUser, accessOperationError } from '../_accessGroups.js';
 import { AUTO_AI_MODEL, AI_MODEL_SELECTIONS, AI_ROUTING_VERSION, isAllowedAiSelection, automaticRoutingFor, resolveAiModel } from '../_aiModelRouting.js';
 import { createStemWorkspaceActivity } from '../_stemWorkspaceActivity.js';
 import { createWorkflowMetricsReader, recordWorkflowMetric } from '../_workflowMetrics.js';
@@ -712,15 +713,6 @@ function normalizedPermissionForModule(moduleId, permissions = {}, fallback = un
   return raw === true;
 }
 
-function reportArchiveAccessFromRows(rows = [], fallback = false) {
-  const reportRow = rows.find((row) => row.module_id === REPORT_ARCHIVE_MODULE_ID);
-  const manageRow = rows.find((row) => row.module_id === REPORT_ARCHIVE_MANAGE_MODULE_ID);
-  const canViewArchive = reportRow ? reportRow.can_view === true : fallback === true;
-  if (!canViewArchive) return 'none';
-  if (!manageRow) return 'full';
-  return manageRow.can_view === true ? 'full' : 'read';
-}
-
 function appError(message, status = 500, code = null, details = undefined, expose = status < 500) {
   const error = new Error(message);
   error.status = status;
@@ -841,24 +833,11 @@ async function authContext(body, req, accessContext) {
     permissionValues = ADMIN_FULL_ACCESS;
     capabilityValues = ADMIN_FULL_CAPABILITIES;
   } else {
-    const permissionQuery = profile.use_type_defaults === false ? client.from('user_module_permissions').select('module_id,can_view').eq('user_id', profile.id) : client.from('user_type_module_permissions').select('module_id,can_view').eq('user_type_id', profile.user_type);
-    const { data: rows, error } = await permissionQuery;
-    if (error) throw error;
-
-    const fallback = profile.use_type_defaults === false ? {} : FALLBACK_TYPE_PERMISSIONS[profile.user_type] || {};
-    const rawPermissions = { ...fallback };
-    for (const row of rows || []) {
-      if (ADMIN_MODULE_IDS.has(row.module_id)) rawPermissions[row.module_id] = row.can_view === true;
-    }
-    rawPermissions[REPORT_ARCHIVE_MODULE_ID] = reportArchiveAccessFromRows(rows || [], fallback[REPORT_ARCHIVE_MODULE_ID]);
-    permissionValues = normalizePermissions(profile.user_type, rawPermissions);
-    const capabilityFallback = profile.use_type_defaults === false ? {} : FALLBACK_TYPE_CAPABILITIES[profile.user_type] || {};
-    capabilityValues = { ...capabilityFallback };
-    for (const row of rows || []) {
-      if (ADMIN_CAPABILITY_IDS.has(row.module_id)) capabilityValues[row.module_id] = row.can_view === true;
-    }
-    capabilityValues = normalizeCapabilities(profile.user_type, capabilityValues);
+    const effective = await loadEffectiveGroupAccess(client, profile);
+    permissionValues = effective.permissions;
+    capabilityValues = effective.capabilities;
   }
+  const effectiveAccess = readOnlyCi ? null : await loadEffectiveGroupAccess(client, profile);
 
   const moduleAccess = Object.fromEntries(ADMIN_APP_MODULES.map((module) => [module.id, permissionCanView(module.id, permissionValues[module.id])]));
   const applications = readOnlyCi ? [] : await listPortalApplicationsForUser({
@@ -880,6 +859,9 @@ async function authContext(body, req, accessContext) {
       active: profile.active === true,
       read_only_ci: readOnlyCi,
     },
+    permissionGroups: effectiveAccess?.groups || [],
+    accessRevision: effectiveAccess?.access_revision || null,
+    grantSources: effectiveAccess?.grant_sources || {},
     moduleAccess,
     moduleAccessLevels: {
       [REPORT_ARCHIVE_MODULE_ID]: reportArchiveAccessLevel(permissionValues[REPORT_ARCHIVE_MODULE_ID]),
@@ -1522,6 +1504,9 @@ const HANDLER_MODULE_ACCESS = {
   adminPortalAccessRetry: ['admin'],
   adminPortalApplicationsHealth: ['admin'],
   adminUserDelete: ['admin'],
+  adminPermissionGroupSave: ['admin'],
+  adminPermissionGroupDelete: ['admin'],
+  adminUserGroupsSave: ['admin'],
   adminUserTypeSave: ['admin'],
   adminUserTypeDelete: ['admin'],
   adminFcosUpdatesList: ['admin'],
@@ -1541,39 +1526,14 @@ const HANDLER_POLICY_REGISTRY = buildHandlerPolicyRegistry(HANDLER_MODULE_ACCESS
 async function userHasAnyModuleAccess(client, profile, moduleIds) {
   if (!moduleIds?.length) return true;
   if (isReadOnlyCiProfile(profile)) return Object.values(ciModuleAccess(moduleIds)).some(Boolean);
-  if (isAdministratorUserType(profile?.user_type)) return true;
-
-  const validModuleIds = moduleIds.filter((moduleId) => ADMIN_MODULE_IDS.has(moduleId));
-  if (!validModuleIds.length) return false;
-
-  if (profile?.use_type_defaults === false) {
-    const { data, error } = await client.from('user_module_permissions').select('module_id,can_view').eq('user_id', profile.id).in('module_id', validModuleIds);
-    if (error) throw error;
-    return (data || []).some((row) => row.can_view === true);
-  }
-
-  const { data, error } = await client.from('user_type_module_permissions').select('module_id,can_view').eq('user_type_id', profile.user_type).in('module_id', validModuleIds);
-  if (error) throw error;
-  if ((data || []).length) return (data || []).some((row) => row.can_view === true);
-
-  const fallback = FALLBACK_TYPE_PERMISSIONS[profile?.user_type] || {};
-  return validModuleIds.some((moduleId) => fallback[moduleId] === true);
+  const access = await loadEffectiveGroupAccess(client, profile);
+  return moduleIds.some((id) => ADMIN_MODULE_IDS.has(id) && permissionCanView(id, access.permissions?.[id]));
 }
 
 async function userHasCapability(client, profile, capabilityId) {
-  if (isReadOnlyCiProfile(profile)) return false;
-  if (!ADMIN_CAPABILITY_IDS.has(capabilityId)) return false;
-  if (isAdministratorUserType(profile?.user_type)) return true;
-
-  const { data: userPermission, error: userError } = await client.from('user_module_permissions').select('can_view').eq('user_id', profile?.id).eq('module_id', capabilityId).maybeSingle();
-  if (userError) throw userError;
-  if (userPermission) return userPermission.can_view === true;
-
-  const { data: typePermission, error: typeError } = await client.from('user_type_module_permissions').select('can_view').eq('user_type_id', profile?.user_type).eq('module_id', capabilityId).maybeSingle();
-  if (typeError) throw typeError;
-  if (typePermission) return typePermission.can_view === true;
-
-  return FALLBACK_TYPE_CAPABILITIES[profile?.user_type]?.[capabilityId] === true;
+  if (isReadOnlyCiProfile(profile) || !ADMIN_CAPABILITY_IDS.has(capabilityId)) return false;
+  const access = await loadEffectiveGroupAccess(client, profile);
+  return access.capabilities?.[capabilityId] === true;
 }
 
 async function requireCapability(client, profile, capabilityId, message) {
@@ -1583,18 +1543,8 @@ async function requireCapability(client, profile, capabilityId, message) {
 }
 
 async function reportArchiveAccessForUser(client, profile) {
-  if (isAdministratorUserType(profile?.user_type)) return 'full';
-  if (profile?.use_type_defaults === false) {
-    const { data, error } = await client.from('user_module_permissions').select('module_id,can_view').eq('user_id', profile.id).in('module_id', [REPORT_ARCHIVE_MODULE_ID, REPORT_ARCHIVE_MANAGE_MODULE_ID]);
-    if (error) throw error;
-    return reportArchiveAccessFromRows(data || []);
-  }
-
-  const { data, error } = await client.from('user_type_module_permissions').select('module_id,can_view').eq('user_type_id', profile?.user_type).in('module_id', [REPORT_ARCHIVE_MODULE_ID, REPORT_ARCHIVE_MANAGE_MODULE_ID]);
-  if (error) throw error;
-
-  const fallback = FALLBACK_TYPE_PERMISSIONS[profile?.user_type] || {};
-  return reportArchiveAccessFromRows(data || [], fallback[REPORT_ARCHIVE_MODULE_ID]);
+  const access = await loadEffectiveGroupAccess(client, profile);
+  return reportArchiveAccessLevel(access.permissions?.[REPORT_ARCHIVE_MODULE_ID]);
 }
 
 async function requireReportArchiveFullAccess(client, profile) {
@@ -2003,20 +1953,6 @@ async function assertAdministratorContinuity(client, { userId, nextActive = fals
   }
 }
 
-async function ensureReportArchiveManageModule(client) {
-  const { error } = await client.from('app_modules').upsert(
-    {
-      id: REPORT_ARCHIVE_MANAGE_MODULE_ID,
-      label: 'Reports Archive Management',
-      path: '/report-archive',
-      sort_order: 76,
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: 'id' },
-  );
-  if (error) throw error;
-}
-
 async function persistManagedUser(client, body, actor = null) {
   const payload = await sanitizeManagedUserPayload(client, body);
   const isUpdate = Boolean(payload.id);
@@ -2031,7 +1967,7 @@ async function persistManagedUser(client, body, actor = null) {
   if (authUser?.id) {
     const { data, error } = await client
       .from('user_profiles')
-      .select('id,email,full_name,user_type,active')
+      .select('id,email,full_name,user_type,active,use_type_defaults')
       .eq('id', authUser.id)
       .maybeSingle();
     if (error) throw error;
@@ -2102,41 +2038,15 @@ async function persistManagedUser(client, body, actor = null) {
       full_name: effectiveFullName,
       user_type: stagedUserType,
       active: effectiveActive,
-      use_type_defaults: payload.use_type_defaults,
+      use_type_defaults: managedProfile?.use_type_defaults ?? true,
       updated_at: nowIso,
     },
     { onConflict: 'id' },
   );
   if (profileError) throw profileError;
 
-  const { error: deletePermissionError } = await client.from('user_module_permissions').delete().eq('user_id', authUser.id);
-  if (deletePermissionError) throw deletePermissionError;
-
-  if (!payload.use_type_defaults) {
-    await ensureReportArchiveManageModule(client);
-    const permissionRows = ADMIN_APP_MODULES.map((module) => ({
-      user_id: authUser.id,
-      module_id: module.id,
-      can_view: permissionCanView(module.id, payload.permissions[module.id]),
-      updated_at: nowIso,
-    }));
-    permissionRows.push({
-      user_id: authUser.id,
-      module_id: REPORT_ARCHIVE_MANAGE_MODULE_ID,
-      can_view: reportArchiveAccessLevel(payload.permissions[REPORT_ARCHIVE_MODULE_ID]) === 'full',
-      updated_at: nowIso,
-    });
-    permissionRows.push(
-      ...ADMIN_CAPABILITIES.map((capability) => ({
-        user_id: authUser.id,
-        module_id: capability.id,
-        can_view: payload.capabilities[capability.id] === true,
-        updated_at: nowIso,
-      })),
-    );
-    const { error: insertPermissionError } = await client.from('user_module_permissions').insert(permissionRows);
-    if (insertPermissionError) throw insertPermissionError;
-  }
+  // Group memberships are changed only through the revision-checked group endpoint.
+  // Organizational role and FCUNO identity saves never overwrite access groups.
 
   let generalManagerTransfer = null;
   const authMetadataWarnings = [];
@@ -2172,17 +2082,18 @@ async function persistManagedUser(client, body, actor = null) {
     }
   }
 
+  const currentAccess = await loadEffectiveGroupAccess(client, { id: authUser.id });
   await writeAdminAudit(client, actor, isUpdate ? 'user_updated' : 'user_created', authUser.id, payload.email, {
     user_type: payload.user_type,
     active: payload.active,
     use_type_defaults: payload.use_type_defaults,
-    modules: Object.entries(payload.permissions)
+    modules: Object.entries(currentAccess.permissions)
       .filter(([moduleId, value]) => permissionCanView(moduleId, value))
       .map(([moduleId]) => moduleId),
     access_levels: {
-      [REPORT_ARCHIVE_MODULE_ID]: reportArchiveAccessLevel(payload.permissions[REPORT_ARCHIVE_MODULE_ID]),
+      [REPORT_ARCHIVE_MODULE_ID]: reportArchiveAccessLevel(currentAccess.permissions[REPORT_ARCHIVE_MODULE_ID]),
     },
-    capabilities: Object.entries(payload.capabilities)
+    capabilities: Object.entries(currentAccess.capabilities)
       .filter(([, allowed]) => allowed)
       .map(([id]) => id),
     identity_authority: identityManagedByFcuno ? 'fcuno' : 'fcos',
@@ -2195,8 +2106,8 @@ async function persistManagedUser(client, body, actor = null) {
     user_type: payload.user_type,
     active: effectiveActive,
     use_type_defaults: payload.use_type_defaults,
-    permissions: payload.permissions,
-    capabilities: payload.capabilities,
+    permissions: currentAccess.permissions,
+    capabilities: currentAccess.capabilities,
     generalManagerTransfer,
     authMetadataWarnings,
   };
@@ -2205,8 +2116,7 @@ async function persistManagedUser(client, body, actor = null) {
 async function adminUsersList(body, req) {
   const { client } = await requireAdministrator(req);
   const { userTypes, typePermissions, typeCapabilities } = await listAccessModel(client);
-  const { data: profiles, error: profileError } = await client.from('user_profiles').select('id,email,full_name,user_type,active,use_type_defaults,created_at,updated_at').order('created_at', { ascending: false });
-  if (profileError) throw profileError;
+  const profiles = await readAllAccessRows(client, 'user_profiles', 'id,email,full_name,user_type,active,use_type_defaults,access_revision,created_at,updated_at');
 
   const userIds = (profiles || []).map((profile) => profile.id);
   const identityManagedByFcuno = fcunoFederationConfig().federationEnabled;
@@ -2219,45 +2129,15 @@ async function adminUsersList(body, req) {
     if (identityError) throw identityError;
     linkedIdentityIds = new Set((identityRows || []).map((row) => row.auth_user_id).filter(Boolean));
   }
-  let permissionRows = [];
-  if (userIds.length) {
-    const { data, error } = await client.from('user_module_permissions').select('user_id,module_id,can_view').in('user_id', userIds);
-    if (error) throw error;
-    permissionRows = data || [];
-  }
-
-  const permissionsByUser = {};
-  const capabilitiesByUser = {};
-  const manageRowsByUser = {};
-  for (const row of permissionRows) {
-    if (row.module_id === REPORT_ARCHIVE_MANAGE_MODULE_ID) {
-      manageRowsByUser[row.user_id] = row.can_view === true;
-      continue;
-    }
-    if (ADMIN_CAPABILITY_IDS.has(row.module_id)) {
-      if (!capabilitiesByUser[row.user_id]) capabilitiesByUser[row.user_id] = {};
-      capabilitiesByUser[row.user_id][row.module_id] = row.can_view === true;
-      continue;
-    }
-    if (!ADMIN_MODULE_IDS.has(row.module_id)) continue;
-    if (!permissionsByUser[row.user_id]) permissionsByUser[row.user_id] = {};
-    permissionsByUser[row.user_id][row.module_id] = permissionValueFromRow(row);
-  }
-  for (const [userId, permissions] of Object.entries(permissionsByUser)) {
-    if (permissions[REPORT_ARCHIVE_MODULE_ID] === true) {
-      permissions[REPORT_ARCHIVE_MODULE_ID] = Object.prototype.hasOwnProperty.call(manageRowsByUser, userId) ? (manageRowsByUser[userId] ? 'full' : 'read') : 'full';
-    }
-  }
-
+  const [permissionGroups, memberships] = await Promise.all([
+    readAllAccessRows(client, 'permission_groups', '*'),
+    readAllAccessRows(client, 'user_permission_groups', 'user_id,group_id', 'user_id'),
+  ]);
+  for (const group of permissionGroups) group.member_count = memberships.filter((row) => row.group_id === group.id).length;
   const users = (profiles || []).map((profile) => ({
-    ...profile,
-    identity_source: identityManagedByFcuno
-      ? linkedIdentityIds.has(profile.id) ? 'fcuno' : 'pending_fcuno_link'
-      : 'fcos',
+    ...serializeGroupUser(profile, permissionGroups, memberships, [...ADMIN_MODULE_IDS, REPORT_ARCHIVE_MODULE_ID], [...ADMIN_CAPABILITY_IDS]),
+    identity_source: identityManagedByFcuno ? linkedIdentityIds.has(profile.id) ? 'fcuno' : 'pending_fcuno_link' : 'fcos',
     type_label: userTypes.find((type) => type.id === profile.user_type)?.label || profile.user_type,
-    use_type_defaults: isAdministratorUserType(profile.user_type) ? true : profile.use_type_defaults !== false,
-    permissions: isAdministratorUserType(profile.user_type) ? ADMIN_FULL_ACCESS : profile.use_type_defaults !== false ? normalizePermissions(profile.user_type, typePermissions[profile.user_type] || {}) : normalizePermissions(profile.user_type, permissionsByUser[profile.id] || {}),
-    capabilities: isAdministratorUserType(profile.user_type) ? ADMIN_FULL_CAPABILITIES : profile.use_type_defaults !== false ? normalizeCapabilities(profile.user_type, typeCapabilities[profile.user_type] || {}) : normalizeCapabilities(profile.user_type, capabilitiesByUser[profile.id] || {}),
   }));
   const generalManager = await loadActiveGeneralManager(client);
   const portal = await portalAdminModel({ client, profiles: profiles || [] });
@@ -2266,6 +2146,8 @@ async function adminUsersList(body, req) {
   }
   return {
     users,
+    permissionGroups,
+    accessModelVersion: 2,
     modules: ADMIN_APP_MODULES,
     capabilities: ADMIN_CAPABILITIES,
     userTypes,
@@ -2382,7 +2264,14 @@ async function universalAuditTrail(body, req) {
     .toLowerCase();
   const queryLimit = Math.max(100, Math.min(limit, 1000));
 
-  const [adminRows, collaborationRows, improvementRows, portalRows, collectionRows, reportRows, interestRows, disputeRows, internalEmailRows, fcosUpdateRows, growthRows, compensationRows, specialTermsRows, hedgeRows, emailSenderRows, emailRouterRows, workspacePreferenceRows, brokerSettingRows, shipAgentRows, connectionRows] = await Promise.all([
+  const [accessRows, adminRows, collaborationRows, improvementRows, portalRows, collectionRows, reportRows, interestRows, disputeRows, internalEmailRows, fcosUpdateRows, growthRows, compensationRows, specialTermsRows, hedgeRows, emailSenderRows, emailRouterRows, workspacePreferenceRows, brokerSettingRows, shipAgentRows, connectionRows] = await Promise.all([
+    safeAuditRows(client.from('permission_access_events').select('id,created_at,actor_email,action,target_id,previous_value,new_value').order('created_at', { ascending: false }).limit(queryLimit), (row) => ({
+      id: `permission-access:${row.id}`, source: 'People & Access', module: 'Admin',
+      action: normalizedAuditAction(row.action), createdAt: row.created_at,
+      actor: row.actor_email || 'System', target: row.target_id,
+      summary: compactAuditSummary([row.new_value?.group?.label || row.new_value?.label || row.previous_value?.label, normalizedAuditAction(row.action)]),
+      metadata: { previousValue: row.previous_value, newValue: row.new_value },
+    })),
     safeAuditRows(client.from('admin_audit_logs').select('id,created_at,actor_email,action,target_user_id,target_email,metadata').order('created_at', { ascending: false }).limit(queryLimit), (row) => ({
       id: `admin:${row.id}`,
       source: 'Admin Control',
@@ -2678,7 +2567,7 @@ async function universalAuditTrail(body, req) {
     }),
   ]);
 
-  let rows = [...adminRows, ...portalRows, ...collaborationRows, ...improvementRows, ...collectionRows, ...reportRows, ...interestRows, ...disputeRows, ...internalEmailRows, ...fcosUpdateRows, ...growthRows, ...compensationRows, ...specialTermsRows, ...hedgeRows, ...emailSenderRows, ...emailRouterRows, ...workspacePreferenceRows, ...brokerSettingRows, ...shipAgentRows, ...connectionRows].filter((row) => row.createdAt);
+  let rows = [...accessRows, ...adminRows, ...portalRows, ...collaborationRows, ...improvementRows, ...collectionRows, ...reportRows, ...interestRows, ...disputeRows, ...internalEmailRows, ...fcosUpdateRows, ...growthRows, ...compensationRows, ...specialTermsRows, ...hedgeRows, ...emailSenderRows, ...emailRouterRows, ...workspacePreferenceRows, ...brokerSettingRows, ...shipAgentRows, ...connectionRows].filter((row) => row.createdAt);
 
   if (sourceFilter && sourceFilter !== 'all') rows = rows.filter((row) => row.source === sourceFilter);
   if (keyword) {
@@ -2692,7 +2581,11 @@ async function universalAuditTrail(body, req) {
 
 async function adminUserSave(body, req) {
   const { client, profile } = await requireAdministrator(req);
+  if (['permissions', 'capabilities', 'use_type_defaults'].some((key) => Object.prototype.hasOwnProperty.call(body, key))) {
+    throw appError('Individual permission editing has been replaced by permission groups. Refresh People & Access.', 409, 'ACCESS_GROUPS_REQUIRED');
+  }
   const user = await persistManagedUser(client, body, profile);
+  Object.assign(user, await loadEffectiveGroupAccess(client, user));
   const entitlements = await reconcilePortalEntitlementsForProfile(client, user, profile, { forceRevision: true });
   const portalSyncErrors = [];
   for (const entitlement of entitlements.filter((row) => row.sync_status === 'pending' || row.sync_status === 'error')) {
@@ -2827,107 +2720,43 @@ async function adminPortalApplicationsHealth(body, req) {
 }
 
 async function adminUserTypeSave(body, req) {
-  const { client, profile } = await requireAdministrator(req);
-  const existingId = body.id ? String(body.id) : null;
-  let label = String(body.label || '').trim();
-  const id = slugifyUserTypeId(existingId || label);
-  if (!id) throw appError('User type name is required.', 400);
-  if (!label) throw appError('User type label is required.', 400);
-
-  const protectedType = {
-    administrator: {
-      label: 'Administrator',
-      description: 'Full system administration access.',
-      sortOrder: 10,
-    },
-    general_manager: {
-      label: 'General Manager',
-      description: 'Full administration access and the single reporting-hierarchy root.',
-      sortOrder: 5,
-    },
-  }[id];
-  if (protectedType) label = protectedType.label;
-
-  const { data: existing, error: existingError } = await client.from('user_types').select('id,is_system,sort_order').eq('id', id).maybeSingle();
-  if (existingError) throw existingError;
-
-  const sortOrder = protectedType?.sortOrder
-    ?? (Number.isFinite(Number(body.sort_order)) ? Number(body.sort_order) : (existing?.sort_order ?? 100));
-  const userType = {
-    id,
-    label,
-    description: protectedType?.description || String(body.description || '').trim(),
-    is_system: protectedType ? true : existing?.is_system === true,
-    sort_order: sortOrder,
-    updated_at: new Date().toISOString(),
-  };
-  const { error: typeError } = await client.from('user_types').upsert(userType, { onConflict: 'id' });
-  if (typeError) throw typeError;
-
-  const permissions = normalizeUserTypePermissions(id, body.permissions || {});
-  const capabilities = normalizeCapabilities(id, body.capabilities || {});
-  await ensureReportArchiveManageModule(client);
-  const { error: deletePermissionError } = await client.from('user_type_module_permissions').delete().eq('user_type_id', id);
-  if (deletePermissionError) throw deletePermissionError;
-  const { error: insertPermissionError } = await client.from('user_type_module_permissions').insert([
-    ...ADMIN_APP_MODULES.map((module) => ({
-      user_type_id: id,
-      module_id: module.id,
-      can_view: permissionCanView(module.id, permissions[module.id]),
-      updated_at: new Date().toISOString(),
-    })),
-    {
-      user_type_id: id,
-      module_id: REPORT_ARCHIVE_MANAGE_MODULE_ID,
-      can_view: reportArchiveAccessLevel(permissions[REPORT_ARCHIVE_MODULE_ID]) === 'full',
-      updated_at: new Date().toISOString(),
-    },
-    ...ADMIN_CAPABILITIES.map((capability) => ({
-      user_type_id: id,
-      module_id: capability.id,
-      can_view: capabilities[capability.id] === true,
-      updated_at: new Date().toISOString(),
-    })),
-  ]);
-  if (insertPermissionError) throw insertPermissionError;
-
-  await writeAdminAudit(client, profile, existing ? 'user_type_updated' : 'user_type_created', null, id, {
-    label,
-    modules: Object.entries(permissions)
-      .filter(([moduleId, value]) => permissionCanView(moduleId, value))
-      .map(([moduleId]) => moduleId),
-    access_levels: {
-      [REPORT_ARCHIVE_MODULE_ID]: reportArchiveAccessLevel(permissions[REPORT_ARCHIVE_MODULE_ID]),
-    },
-    capabilities: Object.entries(capabilities)
-      .filter(([, allowed]) => allowed)
-      .map(([capabilityId]) => capabilityId),
-  });
-
-  return { userType: { ...userType, permissions, capabilities } };
+  await requireAdministrator(req);
+  throw appError('Use Permission Groups to manage access. Organizational roles are separate.', 409, 'ACCESS_GROUPS_REQUIRED');
 }
-
 async function adminUserTypeDelete(body, req) {
+  await requireAdministrator(req);
+  throw appError('Organizational roles are preserved. Use Permission Groups to manage access.', 409, 'ACCESS_GROUPS_REQUIRED');
+}
+async function adminPermissionGroupSave(body, req) {
   const { client, profile } = await requireAdministrator(req);
-  const id = String(body.id || '').trim();
-  if (!id) throw appError('User type id is required.', 400);
-  if (isAdministratorUserType(id)) throw appError('Administrator and General Manager user types cannot be deleted.', 400);
-
-  const { data: userType, error: typeError } = await client.from('user_types').select('id,label,is_system').eq('id', id).maybeSingle();
-  if (typeError) throw typeError;
-  if (!userType) throw appError('User type not found.', 404);
-
-  const { count, error: assignedError } = await client.from('user_profiles').select('id', { count: 'exact', head: true }).eq('user_type', id);
-  if (assignedError) throw assignedError;
-  if (count > 0) throw appError('This user type is assigned to users. Reassign those users before deleting it.', 400);
-
-  const { error: deleteError } = await client.from('user_types').delete().eq('id', id);
-  if (deleteError) throw deleteError;
-
-  await writeAdminAudit(client, profile, 'user_type_deleted', null, id, {
-    label: userType.label,
+  if (!Number.isSafeInteger(body.expectedRevision) || body.expectedRevision < 0) throw appError('Refresh the access record before saving.', 400, 'ACCESS_REVISION_REQUIRED');
+  const id = body.id ? String(body.id) : slugifyUserTypeId(body.label);
+  const { data, error } = await client.rpc('fcos_save_permission_group', {
+    p_actor_id: profile.id, p_id: id, p_expected_revision: body.expectedRevision,
+    p_label: String(body.label || '').trim(), p_description: String(body.description || '').trim(),
+    p_sort_order: Number.isInteger(body.sort_order) ? body.sort_order : 100,
+    p_permissions: body.permissions || {}, p_capabilities: body.capabilities || {},
   });
+  if (error) throw accessOperationError(error);
+  return { group: data };
+}
+async function adminPermissionGroupDelete(body, req) {
+  const { client, profile } = await requireAdministrator(req);
+  if (!Number.isSafeInteger(body.expectedRevision) || body.expectedRevision < 0) throw appError('Refresh the access record before saving.', 400, 'ACCESS_REVISION_REQUIRED');
+  const id = String(body.id || '');
+  const { error } = await client.rpc('fcos_delete_permission_group', { p_actor_id: profile.id, p_id: id, p_expected_revision: body.expectedRevision });
+  if (error) throw accessOperationError(error);
   return { deleted: true, id };
+}
+async function adminUserGroupsSave(body, req) {
+  const { client, profile } = await requireAdministrator(req);
+  if (!Number.isSafeInteger(body.expectedRevision) || body.expectedRevision < 0) throw appError('Refresh the access record before saving.', 400, 'ACCESS_REVISION_REQUIRED');
+  if (!Array.isArray(body.groupIds) || body.groupIds.some((id) => typeof id !== 'string')) throw appError('Select valid permission groups.', 400);
+  const { data, error } = await client.rpc('fcos_save_user_groups', {
+    p_actor_id: profile.id, p_user_id: String(body.userId || ''), p_group_ids: body.groupIds, p_expected_revision: body.expectedRevision,
+  });
+  if (error) throw accessOperationError(error);
+  return { userId: data.user_id, accessRevision: data.access_revision, groupIds: data.group_ids, access: data };
 }
 
 function accountManagerStorageError(error) {
@@ -19491,6 +19320,9 @@ const handlers = {
   adminPortalAccessSave,
   adminPortalAccessRetry,
   adminPortalApplicationsHealth,
+  adminPermissionGroupSave,
+  adminPermissionGroupDelete,
+  adminUserGroupsSave,
   adminUserTypeSave,
   adminUserTypeDelete,
   adminFcosUpdatesList,

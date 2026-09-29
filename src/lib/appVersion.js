@@ -3,6 +3,7 @@ import { APP_VERSION } from './appVersionMeta.js';
 export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
+  { version: '2.0.274', releasedAt: '2026-09-29', title: 'Group-first People & Access', changes: ['Manage permission groups in a compact split view, assign multiple groups to each person, and inspect combined access with grant sources.', 'Preserve legacy individual access through groups, keep organizational roles separate, and audit revision-checked permission changes.'] },
   { version: '2.0.273', releasedAt: '2026-09-29', title: 'Nom B filing in My Commitments', changes: ['Moved personal Nom B filing from Dashboard to Personal → My Commitments → Nom B Filing, preserving trader assignments, waivers and manager controls.'] },
   { version: '2.0.260', releasedAt: '2026-09-28', title: 'English Xero Portal and clearer file status', changes: ['Use English throughout Xero Portal, including saved language preferences. Distinguish attached PDFs awaiting verification from missing or unchecked files; respect verified bill links.'] },
   { version: '2.0.259', releasedAt: '2026-09-28', title: 'Verify Group remittance banks', changes: ['Use complete Group payment evidence while preserving buyer identities, invoice checks and audit history. Keep large Finance reviews responsive.'] },

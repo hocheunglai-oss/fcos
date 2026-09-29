@@ -4,6 +4,9 @@ import { functionContractNames, validateFunctionRequest } from '../src/api/funct
 
 test('critical function contracts fail closed before invalid requests reach the server', () => {
   assert.deepEqual(functionContractNames().sort(), [
+    'adminPermissionGroupDelete',
+    'adminPermissionGroupSave',
+    'adminUserGroupsSave',
     'dashboardAccountCreditStatement',
     'dashboardCounterpartySearch',
     'financeSettingsSave',
@@ -46,4 +49,13 @@ test('personal Markets contracts require revisions and the current alert event',
   assert.equal(validateFunctionRequest('marketTraderWorkspaceSave', { action: 'visit', visitId: 'visit-1234' }).ok, false);
   assert.equal(validateFunctionRequest('marketTraderWorkspaceSave', { action: 'snooze', subscriptionId: 'alert1', hours: 8, expectedRevision: 1 }).ok, false);
   assert.equal(validateFunctionRequest('marketTraderWorkspaceSave', { action: 'snooze', subscriptionId: 'alert1', eventKey: 'current-event', hours: 8, expectedRevision: 1 }).ok, true);
+});
+
+
+test('group changes require current revisions while removing every membership is valid', () => {
+  assert.equal(validateFunctionRequest('adminUserGroupsSave', { userId: 'person', groupIds: [], expectedRevision: 1 }).ok, true);
+  assert.equal(validateFunctionRequest('adminUserGroupsSave', { userId: 'person', groupIds: ['group'] }).ok, false);
+  assert.equal(validateFunctionRequest('adminPermissionGroupSave', { label: 'Desk', permissions: {}, capabilities: {}, expectedRevision: 0 }).ok, true);
+  assert.equal(validateFunctionRequest('adminPermissionGroupSave', { label: 'Desk', permissions: { dashboard: true }, capabilities: {}, expectedRevision: '1' }).ok, false);
+  assert.equal(validateFunctionRequest('adminPermissionGroupDelete', { id: 'desk', expectedRevision: 1 }).ok, true);
 });

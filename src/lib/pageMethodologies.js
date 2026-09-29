@@ -660,8 +660,12 @@ export const SETTINGS_METHODOLOGIES = {
     description: 'How FCOS users, permissions, capabilities, and reporting lines are controlled.',
     sections: [
       {
-        title: 'Access precedence',
-        body: 'User-type defaults establish normal module and capability access. An individual override may narrow or extend it. Use the searchable compact tables to review users and templates; the full change history remains in the separate Audit Trail section.',
+        title: 'Permission groups',
+        body: 'Assign one or more permission groups to a person. Access granted by any assigned group is combined; an unchecked permission does not cancel another group’s grant. Where access has levels, the highest granted level applies. Effective Access shows which groups supply each permission. Organizational roles and privileged Administrator or General Manager designations remain separate.',
+      },
+      {
+        title: 'Safe changes',
+        body: 'Edit groups and memberships with explicit Save and Cancel controls. Review affected people before saving group-wide changes. Concurrent edits must be refreshed before retrying. Existing personal permissions are preserved in labelled legacy groups. A group with members must be reassigned before deletion; the full history remains in Audit Trail.',
       },
       {
         title: 'Reporting lines',
