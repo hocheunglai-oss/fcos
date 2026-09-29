@@ -29,13 +29,28 @@ function validateInventory(accounts, contacts, complete) {
   }
 }
 
-function familyState(family, allAccounts, contacts) {
+function createNumberOwnerResolver(allAccounts) {
+  const owners = new Map();
+  const empty = [];
+  return value => {
+    const accountId = sfId(text(value));
+    const companyKey = nameKey(value);
+    if (!accountId && !companyKey) return empty;
+    // Both identities are material: 15/18-character ID spellings can share an
+    // Account ID while naming different CL-key owners. Retain the original OR
+    // predicate and inventory order, including every foreign ownership collision.
+    const key = JSON.stringify([accountId, companyKey]);
+    if (!owners.has(key)) owners.set(key, allAccounts.filter(row => (sfId(text(value)) && sfId(row.id) === sfId(text(value)))
+      || (nameKey(value) && nameKey(row.companyCode) && nameKey(value) === nameKey(row.companyCode))));
+    return owners.get(key);
+  };
+}
+
+function familyState(family, allAccounts, contacts, numberOwners = createNumberOwnerResolver(allAccounts)) {
   const familyName = nameKey(family[0]?.name);
   const ids = new Set(family.map(row => sfId(row.id)));
   const keys = new Set(family.map(row => nameKey(row.companyCode)).filter(Boolean));
   const exact = contacts.filter(row => nameKey(row.name) === familyName);
-  const numberOwners = value => allAccounts.filter(row => (sfId(text(value)) && sfId(row.id) === sfId(text(value)))
-    || (nameKey(value) && nameKey(row.companyCode) && nameKey(value) === nameKey(row.companyCode)));
   const related = contacts.filter(row => nameKey(row.name) === familyName || keys.has(nameKey(row.name))
     || [row.accountNumber,row.contactNumber].some(value => numberOwners(value).some(owner => ids.has(sfId(owner.id)))));
   const foreignAccounts = allAccounts.filter(row => !ids.has(sfId(row.id)) && keys.has(nameKey(row.companyCode)));
@@ -88,11 +103,12 @@ export function buildCampaignContactCases({tenantId,accounts,contacts,complete,r
   if(!Array.isArray(includeVerifiedAccountIds)||includeVerifiedAccountIds.some(id=>!sfId(id)))throw error('Verified family refresh IDs are invalid.');
   const verified=new Set(includeVerifiedAccountIds.map(sfId));
   const required=new Set(requiredAccountIds.map(sfId));const families=new Map();
+  const numberOwners=createNumberOwnerResolver(accounts);
   for(const account of accounts) {const key=nameKey(account.name);families.set(key,[...(families.get(key)||[]),account]);}
   const results=[];
   for(const family of families.values()) {
     if(!family.some(account=>required.has(sfId(account.id))))continue;
-    const state=familyState(family,accounts,contacts);
+    const state=familyState(family,accounts,contacts,numberOwners);
     if(state.active.length===1 && !state.blockers.length && !family.some(row=>verified.has(sfId(row.id))))continue;
     results.push(makeCase({tenantId,family,state,ownerId,baselineAt}));
   }

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { PGlite } from '@electric-sql/pglite';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { buildCampaignContactCases, executeCampaignContactCase } from '../api/_xeroReconciliationContacts.js';
 import { fixtureXeroConnection, fixtureSharedControl } from './helpers/xeroSharedControl.js';
 import { xeroAccountingFetch } from '../api/_xeroContactSync.js';
@@ -58,6 +58,52 @@ test('incomplete, duplicate and invalid inventory cannot authorise a proposal; m
   assert.throws(()=>cases([account(),account()],[]),/duplicate-free/);
   assert.throws(()=>cases([account()], [contact(),contact()]),/duplicate-free/);
   const result=cases([account()],[],{requiredAccountIds:[id(99),id(99)]});assert.equal(result.length,1);assert.equal(result[0].status,'needs_decision');assert.equal(result[0].contactProposal,null);
+});
+
+test('repeated mixed Account ID and CL-key identifiers retain the complete original collision proof',()=>{
+  const contactId=n=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
+  const accounts=[account(3,{name:'THIRD LTD',companyCode:id(1).slice(0,15)}),account(1,{name:'FIRST LTD',companyCode:' hk shared '}),
+    account(2,{name:'SECOND LTD',companyCode:id(1)}),account(4,{name:'FOURTH LTD',companyCode:'HK SHARED'})];
+  const contacts=[contact({id:contactId(10),name:'FIRST LTD',accountNumber:id(1),contactNumber:id(1).slice(0,15)}),
+    contact({id:contactId(11),name:'SECOND LTD',accountNumber:` ${id(1)} `,contactNumber:' HK   SHARED '}),
+    contact({id:contactId(12),name:'THIRD LTD',status:'ARCHIVED',accountNumber:id(1).slice(0,15),contactNumber:` ${id(1)} `}),
+    contact({id:contactId(13),name:'UNRELATED LTD',accountNumber:'HK SHARED',contactNumber:' hk  shared '})];
+  const result=cases(accounts,contacts,{requiredAccountIds:accounts.map(row=>row.id)});
+  // Captured from the original uncached builder: every output field and exact
+  // financial review fingerprint must remain unchanged, including owner ordering.
+  assert.equal(createHash('sha256').update(JSON.stringify(result)).digest('hex'),'2da6244fef5325fb2e51cd173dc5cc5794f0b68cc4281d1c747a3f3cae19e288');
+  assert.deepEqual(result.map(row=>row.contactEvidence.foreignAccounts.map(item=>item.id)),[
+    [id(2),id(3),id(4)],[id(1),id(4)],[id(1),id(2)],[id(1)],
+  ]);
+  assert.deepEqual(result.map(row=>row.contactEvidence.contacts.map(item=>item.id)),[
+    [10,11,12,13].map(contactId),[10,11,12].map(contactId),[10,12].map(contactId),[11,13].map(contactId),
+  ]);
+  assert.deepEqual(cases(accounts.toReversed(),contacts.toReversed(),{requiredAccountIds:accounts.map(row=>row.id)}),result);
+});
+
+test('owner caches remain request-local when the complete inventory changes',()=>{
+  const contacts=[contact({accountNumber:'SHARED CODE'})];
+  const first=cases([account(1,{companyCode:'SHARED CODE'})],contacts);
+  assert.deepEqual(first,[]);
+  const second=cases([account(1),account(2,{name:'FOREIGN LTD',companyCode:'SHARED CODE'})],contacts);
+  assert.equal(second[0].status,'needs_decision');assert.deepEqual(second[0].contactEvidence.foreignAccounts.map(row=>row.id),[id(2)]);
+});
+
+test('snapshot-wide repeated identifiers scan owners once, and blanks never scan the Account inventory',()=>{
+  const accountCount=120,contactCount=240;
+  const accounts=Array.from({length:accountCount},(_,n)=>account(n+1,{name:`COMPANY ${n+1} LTD`,companyCode:n===0?'SHARED CODE':''}));
+  const contacts=Array.from({length:contactCount},(_,n)=>contact({id:`00000000-0000-4000-8001-${String(n+1).padStart(12,'0')}`,
+    name:`UNRELATED CONTACT ${n+1}`,accountNumber:' shared  code ',contactNumber:n%2?'':'   '}));
+  let scans=0,predicates=0;
+  Object.defineProperty(accounts,'filter',{value(predicate){scans++;return Array.prototype.filter.call(this,(...args)=>{predicates++;return predicate(...args);});}});
+  const result=cases(accounts,contacts,{requiredAccountIds:accounts.map(row=>row.id)});
+  assert.equal(result.length,accountCount);
+  assert.equal(result[0].status,'needs_decision');assert.equal(result.at(-1).status,'ready');
+  // One existing foreign-Account scan per family, plus one shared identifier
+  // owner scan. The original builder performs C*(2F-1)+F whole-inventory scans.
+  assert.equal(scans,accountCount+1);assert.equal(predicates,accountCount*(accountCount+1));
+  const originalScans=contactCount*(2*accountCount-1)+accountCount;
+  assert.ok(originalScans>scans*400,'Work reduction is deterministic, not a machine-dependent timing threshold');
 });
 
 function executorFixture({archived=false,failPost=false,sourceAccounts=[account()],contacts=null,postChange=null}={}) {

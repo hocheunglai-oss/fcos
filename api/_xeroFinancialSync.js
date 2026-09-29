@@ -610,6 +610,7 @@ export async function xeroFinancialSyncPreview(body = {}, dependencies = {}) {
     }
     return item;
   });
+  stage('document_rows_prepared', { rows: itemRows.length });
   if (body.recordExactMatches !== true) {
     // Pure evidence checks may share a pristine complete snapshot. Exact-match
     // linking retains its separate write order and is never skipped by reuse.
@@ -617,6 +618,7 @@ export async function xeroFinancialSyncPreview(body = {}, dependencies = {}) {
     if (linkFirst && previewEvidenceHash(currentControls) !== previewEvidenceHash(stored)) {
       throw financialError('Finance mappings or ownership evidence changed during the check. Refresh the saved evidence before reviewing it.', 409, 'XERO_FINANCIAL_STALE_WRITE');
     }
+    stage('controls_verified');
     runRow.control_totals.workflowSnapshot = {
       reconciliationVersion: XERO_RECONCILIATION_VERSION, linkFirst, payments, products: salesforce.products,
       ...(checkpoint ? { campaignId: body.campaignId || null,
@@ -635,6 +637,7 @@ export async function xeroFinancialSyncPreview(body = {}, dependencies = {}) {
           ownerId: actor.id, baselineAt: checkpoint?.payload.snapshotStartedAt || now, includeVerifiedAccountIds: verifiedContactAccounts }),
       } : {}),
     };
+    stage('contact_cases_complete', { cases: runRow.control_totals.workflowSnapshot.contactCases?.length || 0 });
     const { callCount: _callCount, ...xeroEvidence } = xero;
     const parameters = preparePreviewPersistence(runRow, itemRows, {
       tenantId: connection.tenantId, includePayments: body.includePayments === true,
