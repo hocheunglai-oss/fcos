@@ -29,6 +29,8 @@ const migrationSources = await Promise.all(names.map(async (name) => ({
   sql: await readFile(new URL(name, migrationDirectory), 'utf8'),
 })));
 const releaseMigrationNames = new Set([
+  '20260930004000_xero_preview_checkpoint_chunks.sql',
+  '20260930004100_xero_financial_preview_staged.sql',
   '20260929170347_xero_shared_control.sql',
   '20260929170953_xero_reconciliation_campaign.sql',
   '20260929141433_people_access_service_grants.sql',
@@ -117,6 +119,19 @@ async function verifyRuntimeObjects(label) {
     cross join unnest(array['anon','authenticated']) r where n.nspname='public' and p.proname like 'xero_preview_checkpoint_%'
       and has_function_privilege(r,p.oid,'EXECUTE')`,
     0, `${label} preview checkpoint browser RPC denial`);
+  const previewStageTables = ['xero_financial_preview_checkpoint_chunks','xero_financial_preview_builds','xero_financial_preview_build_items'];
+  await assertRows(`select count(*)::int from pg_class c join pg_namespace n on n.oid=c.relnamespace
+    where n.nspname='public' and c.relname=any($1::text[]) and c.relrowsecurity and c.relforcerowsecurity`,
+    previewStageTables.length, `${label} bounded preview forced RLS`, [previewStageTables]);
+  await assertRows(`select count(*)::int from unnest($1::text[]) t cross join unnest(array['anon','authenticated']) r
+    cross join unnest(array['SELECT','INSERT','UPDATE','DELETE','TRUNCATE']) p
+    where has_table_privilege(r,'public.'||t,p)`, 0, `${label} bounded preview browser denial`, [previewStageTables]);
+  await assertRows(`select count(*)::int from unnest($1::text[]) t cross join unnest(array['INSERT','UPDATE','DELETE','TRUNCATE']) p
+    where has_table_privilege('service_role','public.'||t,p)`, 0, `${label} bounded preview mutations require checked RPCs`, [previewStageTables]);
+  await assertRows(`select count(*)::int from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+    cross join unnest(array['anon','authenticated']) r where n.nspname='public'
+      and p.proname in ('begin_xero_financial_preview_v2','append_xero_financial_preview_v2','finalize_xero_financial_preview_v2')
+      and has_function_privilege(r,p.oid,'EXECUTE')`, 0, `${label} staged preview browser RPC denial`);
   const nomBTables = ['dashboard_nom_b_policies', 'dashboard_nom_b_observations', 'dashboard_nom_b_events'];
   await assertRows(`select count(*)::int from pg_class c join pg_namespace n on n.oid=c.relnamespace
     where n.nspname='public' and c.relname=any($1::text[]) and c.relrowsecurity`, 3, `${label} Nom B RLS`, [nomBTables]);

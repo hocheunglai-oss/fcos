@@ -2,7 +2,15 @@
 
 Evidence-only full checks (`recordExactMatches=false`) publish the run, every document row, requested payment snapshot and completion audit in one transaction. Identical complete evidence can reuse an untouched ready review, preserving its original IDs, snapshot times and provenance. Every check still performs its normal provider reads and classifications before persistence; this is storage reuse, not a provider cache.
 
-The ordinary Portal currently requests `recordExactMatches=true`. Its exact document/payment linking and claim-resolution order remains unchanged, with the separate building-to-ready publication guard. Do not describe this change as deduplicating those Portal checks. Automatic standing product-mapping policy writes also remain outside the snapshot transaction and keep their existing audits.
+The separate `recordExactMatches=true` path retains its existing document/payment linking and claim-resolution order, with the building-to-ready publication guard. Link-first checks require `recordExactMatches=false`; a saved check does not grant category approval. Automatic standing product-mapping policy writes retain their existing audits.
+
+## Bounded link-first capture and publication
+
+Complete provider evidence is partitioned into immutable JSON parts of at most 256 KiB. A closed descriptor manifest preserves object keys, array order and every value. The database validates each part's digest and credential-key restrictions, exact reference coverage, required source shape and tenant. The server reconstructs and verifies the full canonical evidence hash before use. Captured evidence expires after 15 minutes; a published capture remains readable only through its exact completed run and current scoped access.
+
+The financial preview keeps an exact capture reference rather than another inventory copy. Its document rows upload into service-only staging in bounded batches. Independent database hashes bind the initial run and each ordered row; final publication requires every expected row, inserts the complete run/items and audit atomically, and returns saved identities. Partial staging never appears as an approvable financial run. Identical request recovery preserves later approval/execution state; changed evidence fails closed. v2 does not reuse a different request UUID.
+
+Full payment evidence stays in the bounded run summary. Current bounds are 8 MiB per run, 256 KiB per document, 512 KiB per database batch and 100 MiB total staged evidence. Exceeding a bound is an explicit error; no evidence is silently dropped. These storage operations consume no Xero calls and confer no posting or linking authority.
 
 ## Identity and recovery
 

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
-import { persistFinancialPreview, preparePreviewPersistence, previewEvidenceHash, previewReviewIdentity } from '../api/_xeroPreviewPersistence.js';
+import { persistFinancialPreview, preparePreviewPersistence, previewEvidenceHash, previewReviewIdentity, previewItemBatches } from '../api/_xeroPreviewPersistence.js';
 
 function fixture() {
   const id = randomUUID(); const tenantId = randomUUID();
@@ -104,4 +104,52 @@ test('provider mismatch is rejected before persistence preparation', () => {
   const p = fixture();
   assert.throws(() => preparePreviewPersistence(p.p_run, p.p_items, { tenantId: randomUUID(), includePayments: true,
     salesforceOrgId: 'org', inputEvidenceHash: previewEvidenceHash('evidence') }), /same Xero organisation/);
+});
+
+function stagedFixture(count = 1) {
+  const p = fixture();
+  p.p_run.control_totals.workflowSnapshot.inventoryReference = { storageVersion: 2, checkpointId: randomUUID(), payloadHash: 'a'.repeat(64) };
+  p.p_items = Array.from({ length: count }, (_, index) => ({ ...structuredClone(p.p_items[0]), id: randomUUID(),
+    row_index: index, row_key: 'Invoice__c:invoice-' + index, source_payload: { description: 'a'.repeat(8000), sourceFingerprint: String(index) } }));
+  p.p_run.classification_summary.total = count;
+  return preparePreviewPersistence(p.p_run, p.p_items, { tenantId: p.p_run.control_totals.workflowSnapshot.tenantId,
+    includePayments: true, salesforceOrgId: 'test-org', inputEvidenceHash: previewEvidenceHash('complete inputs') });
+}
+
+test('staged publication sends every row in bounded batches and verifies saved identities', async () => {
+  const p = stagedFixture(210), calls = [], appended = [];
+  const run = { ...p.p_run, status: 'ready_for_review' };
+  const client = {
+    async rpc(name, args) {
+      calls.push({ name, args });
+      if (name.startsWith('begin_')) return { data: { runId: run.id, expectedItemCount: p.p_items.length } };
+      if (name.startsWith('append_')) { appended.push(...args.p_items); return { data: { runId: run.id } }; }
+      return { data: { run: { id: run.id }, reused: false, items: appended.map(item => ({ id: item.id, row_key: item.row_key })) } };
+    },
+    from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: run }) }) }) }),
+  };
+  const saved = await persistFinancialPreview(client, p);
+  assert.deepEqual(appended, p.p_items);
+  assert.equal(saved.identities.size, 210);
+  assert.ok(calls.filter(call => call.name.startsWith('append_')).length > 1);
+  assert.ok(calls.filter(call => call.name.startsWith('append_')).every(call => Buffer.byteLength(JSON.stringify(call.args.p_items)) <= 450 * 1024));
+  assert.equal(calls.at(-1).name, 'finalize_xero_financial_preview_v2');
+});
+
+test('staged failures cannot return partial success; uncertain append retries identical evidence', async () => {
+  const p = stagedFixture(), calls = [];
+  const client = { async rpc(name, args) {
+    calls.push({ name, args });
+    if (name.startsWith('begin_')) return { data: { runId: p.p_run.id, expectedItemCount: 1 } };
+    if (name.startsWith('append_') && calls.length === 2) return { error: { message: 'response lost' }, status: 504 };
+    return { error: { message: 'stale payload' }, status: 409 };
+  } };
+  await assert.rejects(persistFinancialPreview(client, p), { code: 'XERO_FINANCIAL_STORAGE_FAILED' });
+  assert.equal(calls.length, 3);
+  assert.equal(calls[1].args, calls[2].args);
+  assert.equal(calls.some(call => call.name.startsWith('finalize_')), false);
+});
+
+test('oversized evidence fails before writing instead of omitting rows', () => {
+  assert.throws(() => previewItemBatches([{ evidence: 'x'.repeat(256 * 1024) }]), /No rows were dropped/);
 });

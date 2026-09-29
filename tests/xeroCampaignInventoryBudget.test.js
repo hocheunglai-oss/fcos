@@ -8,17 +8,23 @@ function fixture() {
   let active = false;
   const events = [];
   let captured = null;
+  let savedRun = null;
   const client = {
     from() {
       const query = { select: () => query, eq: () => query, order: () => query,
+        maybeSingle: async () => ({ data: savedRun }),
         range: async () => ({ data: [], error: null }) };
       return query;
     },
     async rpc(name, parameters) {
       assert.equal(active, false, 'reservation ends before saving local preview');
-      assert.equal(name, 'persist_xero_financial_preview_v1');
-      events.push(['persist', parameters]);
-      return { data: { run: { ...parameters.p_run, status: 'ready_for_review' }, items: [], reused: false }, error: null };
+      if (name === 'begin_xero_financial_preview_v2') {
+        events.push(['persist', parameters]);
+        savedRun = { ...parameters.p_run, status: 'ready_for_review' };
+        return { data: { runId: savedRun.id, expectedItemCount: 0 } };
+      }
+      assert.equal(name, 'finalize_xero_financial_preview_v2');
+      return { data: { run: savedRun, items: [], reused: false }, error: null };
     },
   };
   const dependencies = {
@@ -46,6 +52,10 @@ function fixture() {
     saveCheckpoint: async (_client, { id, revision, scope, payload }) => {
       events.push(['capture']);
       captured = { id, revision: revision + 1, input_evidence_hash: scope.inputEvidenceHash,
+        actor_id: scope.actorId, tenant_id: scope.tenantId, salesforce_org_id: scope.salesforceOrgId,
+        reconciliation_version: scope.reconciliationVersion, input_options: scope.inputOptions,
+        state: 'captured', storage_version: 2, storage_hash: 'b'.repeat(64), token_version: 1,
+        captured_at: new Date().toISOString(),
         payload_hash: 'a'.repeat(64), payload: structuredClone(payload) };
       return captured;
     },
@@ -64,7 +74,9 @@ test('complete inventory and payment dependency reads share one budget before lo
   assert.equal(reservation.verificationCalls, 0);
   assert.ok(events.findIndex(([type]) => type === 'payments') < events.findIndex(([type]) => type === 'release'));
   const saved = events.find(([type]) => type === 'persist')[1].p_run.control_totals.workflowSnapshot;
-  assert.equal(saved.inventory.complete, true);
+  assert.equal(events.find(([type]) => type === 'persist')[1].p_run.id, 'cccccccc-cccc-4ccc-8ccc-cccccccccccc');
+  assert.equal(saved.inventoryReference.tenantId, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+  assert.equal(saved.inventory, undefined, 'inventory is stored once in its immutable capture');
   assert.deepEqual(saved.contactCases, []);
   assert.equal(saved.callForecast.callsNeeded, reservation.operationCalls);
 });

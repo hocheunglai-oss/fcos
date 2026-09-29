@@ -11,7 +11,8 @@ import { currentIssuedSupplierRoundingMatches, ISSUED_SUPPLIER_PRESERVATION_POLI
 import { currentIssuedPetroleumMatches } from './_xeroIssuedPetroleumSticky.js';
 import { accountingDecimalCents, accountingProductCents, accountingUnitNumber, accountingCentsNumber, accountingCentsText } from './_xeroAccountingLineCents.js';
 import { persistFinancialPreview, preparePreviewPersistence, previewEvidenceHash } from './_xeroPreviewPersistence.js';
-import { createPreviewCheckpoint, savePreviewCheckpoint, loadPreviewCheckpoint, markPreviewCheckpointPublished } from './_xeroPreviewCheckpoint.js';
+import { createPreviewCheckpoint, savePreviewCheckpoint, loadPreviewCheckpoint, markPreviewCheckpointPublished,
+  loadPublishedPreviewCheckpoint, previewCheckpointReference } from './_xeroPreviewCheckpoint.js';
 import { accountingPayload, documentConfirmationErrors, documentPostingBlockers, documentReadiness, financialSourceCurrency, loadFinancialSafetyContext, matchDocumentResponses, matchedXeroLines, normalizePostingMode, reviewedPostingMode, safetySelectFields, unownedXeroMetadata } from './_xeroDocumentSafety.js';
 import { approvePetroleumMappings, PETROLEUM_PRODUCT_QUERY } from './_xeroPetroleumMappings.js';
 import { buildGroupedPreservationContext, completeGroupedAccountSnapshot, evaluateGroupedFinancialDocument, groupedInvoiceNumber,
@@ -478,11 +479,22 @@ export async function xeroFinancialSyncPreview(body = {}, dependencies = {}) {
   let verifiedContactAccounts = [];
   if (body.campaignId) {
     if (!linkFirst || !isUuid(body.campaignId) || !actor.id) throw financialError('An exact link-first campaign is required.', 400, 'XERO_CAMPAIGN_INVALID');
-    const saved = await client.from('xero_reconciliation_campaigns').select('id,tenant_id,owner_id,inventory').eq('id', body.campaignId).maybeSingle();
+    const saved = await client.from('xero_reconciliation_campaigns').select('id,tenant_id,owner_id,inventory,run_id,review_run_id').eq('id', body.campaignId).maybeSingle();
     if (saved.error || !saved.data || saved.data.tenant_id !== connection.tenantId || saved.data.owner_id !== actor.id) {
       throw financialError('The campaign identity or operator changed.', 409, 'XERO_CAMPAIGN_TENANT_CHANGED');
     }
     cachedInventory = saved.data.inventory;
+    if (!cachedInventory) {
+      const runId = saved.data.review_run_id || saved.data.run_id;
+      const prior = await client.from('xero_financial_sync_runs').select('id,control_totals').eq('id', runId).maybeSingle();
+      if (prior.error || !prior.data) throw financialError('The saved campaign evidence could not be loaded.', 409, 'XERO_CAMPAIGN_BASELINE_INCOMPLETE');
+      const snapshot = prior.data.control_totals?.workflowSnapshot;
+      if (snapshot?.inventoryReference) {
+        const captured = await loadPublishedPreviewCheckpoint(client, snapshot.inventoryReference,
+          { runId, actorId: actor.id, tenantId: connection.tenantId });
+        cachedInventory = { ...captured.payload.provider.xero, observedSince: captured.payload.snapshotStartedAt, complete: true };
+      } else cachedInventory = snapshot?.inventory || null;
+    }
     const priorCases = (await allFinancialRows(client, 'xero_reconciliation_cases', (query) => query.eq('campaign_id', body.campaignId))).data;
     verifiedContactAccounts = uniqueStrings(priorCases.filter((row) => row.evidence?.sourceObject === 'Account').flatMap((row) => row.evidence.sourceIds || [row.evidence.sourceId]));
   }
@@ -567,7 +579,9 @@ export async function xeroFinancialSyncPreview(body = {}, dependencies = {}) {
   for (const row of classified.rows) row.dispute = disputeStates.get(row.stemId) || null;
   stage('disputes_complete');
   const mappingProposals = deriveXeroProductMappingProposals(classified.rows);
-  const runId = randomUUID();
+  // One immutable persistence intent per complete capture. A new HTTP request
+  // can recover its staged/publication result without inventing another run.
+  const runId = checkpoint?.id || randomUUID();
   const now = new Date().toISOString();
   const runRow = {
     id: runId,
@@ -588,7 +602,14 @@ export async function xeroFinancialSyncPreview(body = {}, dependencies = {}) {
     created_at: now,
     updated_at: now,
   };
-  const itemRows = classified.rows.map((row, rowIndex) => toSyncItemRow(row, runId, rowIndex, now));
+  const itemRows = classified.rows.map((row, rowIndex) => {
+    const item = toSyncItemRow(row, runId, rowIndex, now);
+    if (checkpoint) {
+      const digest = createHash('sha256').update(JSON.stringify([runId, row.salesforceObject, row.salesforceId])).digest('hex');
+      item.id = `${digest.slice(0, 8)}-${digest.slice(8, 12)}-8${digest.slice(13, 16)}-a${digest.slice(17, 20)}-${digest.slice(20, 32)}`;
+    }
+    return item;
+  });
   if (body.recordExactMatches !== true) {
     // Pure evidence checks may share a pristine complete snapshot. Exact-match
     // linking retains its separate write order and is never skipped by reuse.
@@ -599,17 +620,19 @@ export async function xeroFinancialSyncPreview(body = {}, dependencies = {}) {
     runRow.control_totals.workflowSnapshot = {
       reconciliationVersion: XERO_RECONCILIATION_VERSION, linkFirst, payments, products: salesforce.products,
       ...(checkpoint ? { campaignId: body.campaignId || null,
+        previewCheckpointId: checkpoint.id,
         previewCheckpointInputEvidenceHash: checkpoint.input_evidence_hash,
         previewCheckpointPayloadHash: checkpoint.payload_hash } : {}),
       ...(linkFirst ? { callForecast } : {}),
       mappingProposals, automaticMappingPolicy, checkedAt: now,
       controlsFingerprint: hashJson(currentControls), organisation: xero.organisation,
-      ...(linkFirst ? { inventory: { ...xero, observedSince: snapshotStartedAt, complete: true } } : {}),
+      ...(linkFirst && checkpoint ? { inventoryReference: previewCheckpointReference(checkpoint) }
+        : linkFirst ? { inventory: { ...xero, observedSince: snapshotStartedAt, complete: true } } : {}),
       ...(linkFirst && salesforce.groupedAccountSnapshot?.complete && xero.contactsComplete ? {
         contactCases: buildCampaignContactCases({ tenantId: connection.tenantId,
           accounts: salesforce.groupedAccountSnapshot.accounts, contacts: xero.contacts, complete: true,
           requiredAccountIds: uniqueStrings(classified.rows.filter((row) => row.documentFieldProjection?.scope !== 'legacy').map((row) => row.accountId)),
-          ownerId: actor.id, baselineAt: now, includeVerifiedAccountIds: verifiedContactAccounts }),
+          ownerId: actor.id, baselineAt: checkpoint?.payload.snapshotStartedAt || now, includeVerifiedAccountIds: verifiedContactAccounts }),
       } : {}),
     };
     const { callCount: _callCount, ...xeroEvidence } = xero;

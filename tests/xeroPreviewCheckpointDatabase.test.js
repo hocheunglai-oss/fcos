@@ -4,8 +4,28 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { PGlite } from '@electric-sql/pglite';
 import pg from 'pg';
-import { createPreviewCheckpoint, loadPreviewCheckpoint, markPreviewCheckpointPublished, savePreviewCheckpoint } from '../api/_xeroPreviewCheckpoint.js';
 import { previewEvidenceHash } from '../api/_xeroPreviewPersistence.js';
+
+// Retain regression coverage of the immutable v1 database protocol. The current
+// production client uses v2, covered by the separate bounded-chunk suite.
+async function legacyRpc(client, name, parameters) {
+  const result = await client.rpc(name, parameters);
+  if (result.error) throw Object.assign(new Error(result.error.message), {
+    code: result.error.message.match(/XERO_PREVIEW_CHECKPOINT_[A-Z_]+/)?.[0] || result.error.code,
+  });
+  return result.data;
+}
+const createPreviewCheckpoint = (client, scope, { id = randomUUID(), ttlSeconds = 900 } = {}) =>
+  legacyRpc(client, 'xero_preview_checkpoint_create_v1', { p_id: id, p_scope: scope, p_ttl_seconds: ttlSeconds });
+const loadPreviewCheckpoint = (client, scope, { id = null } = {}) =>
+  legacyRpc(client, 'xero_preview_checkpoint_load_v1', { p_scope: scope, p_id: id });
+const savePreviewCheckpoint = (client, { id, revision, scope, payload }) => {
+  const text = JSON.stringify(payload);
+  return legacyRpc(client, 'xero_preview_checkpoint_save_v1', { p_id: id, p_expected_revision: revision,
+    p_scope: scope, p_payload: text, p_payload_hash: createHash('sha256').update(text).digest('hex') });
+};
+const markPreviewCheckpointPublished = (client, { id, revision, scope, runId }) =>
+  legacyRpc(client, 'xero_preview_checkpoint_publish_v1', { p_id: id, p_expected_revision: revision, p_scope: scope, p_run_id: runId });
 
 const actor = '00000000-0000-4000-8000-000000000099';
 const otherActor = '00000000-0000-4000-8000-000000000098';
