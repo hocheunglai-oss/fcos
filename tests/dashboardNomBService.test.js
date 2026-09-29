@@ -9,8 +9,8 @@ const s1 = { Id: 'a0H000000000001AAA', Name: 'STEM ONE', Delivery_Date__c: '2026
 const s2 = { Id: 'a0H000000000002AAA', Name: 'STEM TWO', Expected_Delivery_Date__c: '2026-09-02', Receivable_Balance__c: '99.99' };
 const confirmation = (stem, user, index) => ({ Id: `a0300000000000${index}AAA`, STEM__c: stem.Id, Name: 'Buyer confirmation', Deprecated__c: false, Replaced__c: false, RecordType: { DeveloperName: 'Buyer' }, Buyer_Supplier_Trader__c: user.full_name, BT_ST_Email_Address__c: user.email });
 const c1 = confirmation(s1, anna, 1); const c2 = confirmation(s2, bill, 2);
-const invoice = (stem, index) => ({ Id: `a0K00000000000${index}AAA`, STEM__c: stem.Id, Name: `${index}-INV-1`, File__c: '/069000000000001AAA', Proforma__c: false, Deprecated__c: false });
-const fields = ['Id', 'Name', 'RefCode__c', 'Delivery_Date__c', 'Expected_Delivery_Date__c', 'Invoice_Status__c', 'Receivable_Balance__c', 'LastModifiedDate', 'Account__c', 'Port__c', 'Vessel__c', 'STEM__c', 'Deprecated__c', 'Replaced__c', 'Buyer_Supplier_Trader__c', 'BT_ST_Email_Address__c', 'File__c', 'PDF__c', 'RecordTypeId', 'Proforma__c', 'Invoice_Date__c'];
+const invoice = (stem, index) => ({ Id: `a0K00000000000${index}AAA`, STEM__c: stem.Id, Name: `${index}-INV-1`, Amount__c: '100', File__c: '/069000000000001AAA', Proforma__c: false, Deprecated__c: false });
+const fields = ['Id', 'Name', 'RefCode__c', 'Delivery_Date__c', 'Expected_Delivery_Date__c', 'Invoice_Status__c', 'Receivable_Balance__c', 'LastModifiedDate', 'Account__c', 'Port__c', 'Vessel__c', 'STEM__c', 'Amount__c', 'Deprecated__c', 'Replaced__c', 'Buyer_Supplier_Trader__c', 'BT_ST_Email_Address__c', 'File__c', 'PDF__c', 'RecordTypeId', 'Proforma__c', 'Invoice_Date__c'];
 function fixture(options = {}) {
   const calls = []; const queries = []; const profiles = [anna, bill, admin, ...(options.extraProfiles || [])];
   const data = { user_profiles: profiles, collaboration_roles: options.roles || [], dashboard_nom_b_policies: options.policies || [], dashboard_nom_b_events: [] };
@@ -31,7 +31,7 @@ function fixture(options = {}) {
     },
   };
   const deps = { stemAccessCondition: "Account__r.Office__c = 'Hong Kong'", instanceUrl: 'https://example.salesforce.com', now: () => new Date('2026-09-29T01:00:00Z'),
-    request: async () => ({ fields: fields.map((name) => ({ name })) }), currencyInfo: async () => {
+    request: async (path) => ({ fields: [...fields.map((name) => ({ name })), ...(path.includes('/Invoice__c/') ? options.creditFields || [] : [])] }), currencyInfo: async () => {
       if (options.currencyFails) throw new Error('currency lookup failed');
       return { singleCurrency: true, corporateCurrency: 'USD' };
     },
@@ -95,6 +95,19 @@ test('incomplete file/invoice reads are visible unknowns, and source truncation 
   const f = fixture({ truncated: 'STEM__c' }); await assert.rejects(loadDashboardNomB({}, f.context, f.deps), { code: 'NOM_B_SOURCE_INCOMPLETE' }); assert.equal(f.calls.length, 0);
   const currency = fixture({ currencyFails: true }); const response = await loadDashboardNomB({ view: 'unable_to_verify' }, currency.context, currency.deps);
   assert.equal(response.complete, false); assert.equal(response.counts.unableToVerify, 1);
+});
+test('collector requires invoice amount and reads only described Boolean credit indicators', async () => {
+  const source = { ...invoice(s2, 2), Is_Credit_Note__c: true };
+  const f = fixture({ profile: bill, stems: [s2], confirmations: [c2], invoices: [source],
+    creditFields: [{ name: 'Is_Credit_Note__c', type: 'boolean' }, { name: 'CreditNote__c', type: 'string' }] });
+  const result = await loadDashboardNomB({}, f.context, f.deps);
+  assert.equal(result.counts.waived, 0); assert.equal(result.counts.missing, 1);
+  const soql = f.queries.find((query) => query.soql.includes('FROM Invoice__c')).soql;
+  assert.match(soql, /Amount__c/); assert.match(soql, /Is_Credit_Note__c/); assert.doesNotMatch(soql, /CreditNote__c/);
+  const missingFlag = fixture({ profile: bill, stems: [s2], confirmations: [c2], creditFields: [{ name: 'Credit_Note__c', type: 'boolean' }] });
+  assert.equal((await loadDashboardNomB({ view: 'unable_to_verify' }, missingFlag.context, missingFlag.deps)).counts.unableToVerify, 1);
+  const missingAmount = fixture(); missingAmount.deps.request = async () => ({ fields: fields.filter((name) => name !== 'Amount__c').map((name) => ({ name })) });
+  await assert.rejects(loadDashboardNomB({}, missingAmount.context, missingAmount.deps), { code: 'NOM_B_SCHEMA_UNAVAILABLE' });
 });
 test('policy saves are server role checked, access scoped and revision checked', async () => {
   const f = fixture({ profile: admin }); const result = await saveDashboardNomBPolicy({ stemId: s1.Id, mode: 'waive', expectedRevision: 0 }, f.context, f.deps);

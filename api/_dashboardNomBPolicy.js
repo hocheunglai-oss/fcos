@@ -4,6 +4,7 @@ import { isIssuedFinalBuyerInvoice } from './_buyerInvoiceApproval.js';
 export const NOM_B_FROM = '2026-09-01';
 export const NOM_B_ID = /^[A-Za-z0-9]{15}(?:[A-Za-z0-9]{3})?$/;
 export const NOM_B_UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
+export const NOM_B_CREDIT_FIELDS = ['Is_Credit_Note__c', 'Credit_Note__c', 'CreditNote__c'];
 const text = (value) => String(value ?? '').trim();
 const email = (value) => text(value).toLowerCase();
 const name = (value) => text(value).replace(/\s+/g, ' ').toLowerCase();
@@ -68,17 +69,30 @@ function money(cents) {
   const negative = cents < 0n; const value = negative ? -cents : cents;
   return `${negative ? '-' : ''}${value / 100n}.${String(value % 100n).padStart(2, '0')}`;
 }
+function finalInvoiceKind(invoice) {
+  if (invoice.IsDeleted === true || invoice.Proforma__c !== false || invoice.Deprecated__c !== false || !isIssuedFinalBuyerInvoice(invoice)) return 'not_final';
+  if (/(?:^|[\s_-])(?:CREDIT[\s_-]*NOTE|CN)(?:$|[\s_-]|\d)/i.test(text(invoice.Name))) return 'credit';
+  const flagNames = [...new Set([...NOM_B_CREDIT_FIELDS.filter((field) => Object.hasOwn(invoice, field)), ...(invoice._nomBCreditFields || [])])];
+  if (flagNames.some((field) => invoice[field] === true)) return 'credit';
+  if (flagNames.some((field) => invoice[field] !== false)) return 'invalid';
+  const amount = decimal(invoice.Amount__c);
+  if (!amount) return 'invalid';
+  return amount.n < 0n ? 'credit' : 'final';
+}
 export function nomBReceivable(stem, invoices, currencyEvidence, rates, asOfDate, complete = true) {
   const original = stem.Receivable_Balance__c;
   const currency = stem.CurrencyIsoCode ?? (currencyEvidence?.singleCurrency === true ? currencyEvidence.corporateCurrency : null);
   const result = { amount: original == null ? null : String(original), currency: currency || null, usdEquivalent: null,
     rate: null, rateDate: null, rateSource: 'Salesforce company accounting rate', invoiceIds: [], invoiceEvidence: [], evidenceStatus: 'unavailable', eligible: false };
   if (!complete) return { ...result, reason: 'Receivable or invoice evidence could not be completely read.' };
-  const finals = invoices.filter((invoice) => invoice.STEM__c === stem.Id && invoice.IsDeleted !== true
-    && invoice.Proforma__c === false && invoice.Deprecated__c === false && isIssuedFinalBuyerInvoice(invoice));
+  const related = invoices.filter((invoice) => invoice.STEM__c === stem.Id);
+  const finals = related.filter((invoice) => finalInvoiceKind(invoice) === 'final');
   result.invoiceIds = finals.map((invoice) => invoice.Id).sort();
   result.invoiceEvidence = finals.map((invoice) => ({ id: invoice.Id, name: invoice.Name, file: invoice.File__c, invoiceDate: invoice.Invoice_Date__c || null,
-    proforma: invoice.Proforma__c, deprecated: invoice.Deprecated__c, lastModifiedAt: invoice.LastModifiedDate || null })).sort((a, b) => a.id.localeCompare(b.id));
+    amount: String(invoice.Amount__c), proforma: invoice.Proforma__c, deprecated: invoice.Deprecated__c,
+    creditIndicators: Object.fromEntries(NOM_B_CREDIT_FIELDS.filter((field) => Object.hasOwn(invoice, field)).map((field) => [field, invoice[field]])),
+    lastModifiedAt: invoice.LastModifiedDate || null })).sort((a, b) => a.id.localeCompare(b.id));
+  if (related.some((invoice) => finalInvoiceKind(invoice) === 'invalid')) return { ...result, reason: 'Issued buyer invoice amount or credit-note evidence is missing or invalid.' };
   if (!finals.length) return { ...result, evidenceStatus: 'verified', reason: 'No active issued final buyer invoice.' };
   if (!currencyEvidence || !/^[A-Z]{3}$/.test(currencyEvidence.corporateCurrency || '')) return { ...result, reason: 'Salesforce company currency evidence is unavailable.' };
   const amount = decimal(original);

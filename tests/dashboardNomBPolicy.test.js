@@ -5,7 +5,7 @@ import { activeNomBConfirmation, evaluateNomB, isNomBFile, nomBDelivery, nomBRec
 const stem = { Id: 'a0H000000000001AAA', Name: 'HK2627389T - VOYAGER - HONG KONG', Delivery_Date__c: '2026-09-01', Expected_Delivery_Date__c: '2026-08-31', Receivable_Balance__c: '99.99' };
 const buyer = { Id: 'a03000000000001AAA', Name: 'Confirmation', STEM__c: stem.Id, RecordType: { DeveloperName: 'Buyer' }, Deprecated__c: false, Replaced__c: false, Buyer_Supplier_Trader__c: 'Anne Chan', BT_ST_Email_Address__c: 'anne@example.test' };
 const profile = { id: '00000000-0000-4000-8000-000000000001', active: true, full_name: 'Anne Chan', email: 'anne@example.test' };
-const invoice = { Id: 'a0K000000000001AAA', STEM__c: stem.Id, Name: '27389T-INV-1', File__c: '/069000000000001AAA', Deprecated__c: false, Proforma__c: false };
+const invoice = { Id: 'a0K000000000001AAA', STEM__c: stem.Id, Name: '27389T-INV-1', Amount__c: '100', File__c: '/069000000000001AAA', Deprecated__c: false, Proforma__c: false };
 const currency = { singleCurrency: true, corporateCurrency: 'USD' };
 const date = '2026-09-29';
 const file = { LinkedEntityId: buyer.Id, ContentDocument: { Id: '069000000000002AAA', Title: `${stem.Name} - NOM B.pdf`, IsDeleted: false, LatestPublishedVersionId: '068000000000002AAA', ContentSize: 1234 } };
@@ -56,6 +56,23 @@ test('waiver requires issued nonproforma active final invoice; known absent invo
   for (const item of [{ ...invoice, File__c: null }, { ...invoice, Proforma__c: true }, { ...invoice, Deprecated__c: true }, { ...invoice, IsDeleted: true }, { ...invoice, Name: '27389T-CN-1' }, { ...invoice, STEM__c: 'other' }]) assert.equal(nomBReceivable(stem, [item], currency, [], date).eligible, false);
   assert.equal(evaluate({ invoices: [] }).status, 'missing');
   assert.equal(evaluate({ invoicesComplete: false }).status, 'unable_to_verify');
+});
+test('credit notes cannot substitute for final buyer invoices, while issued zero finals remain valid', () => {
+  for (const override of [{ Name: '26361-CREDIT NOTE', Amount__c: '-100' }, { Name: '26361-CREDIT NOTE', Amount__c: '100' },
+    { Name: '26361-CREDIT_NOTE' }, { Name: '26361-CN-1' }, { Name: 'CN12345' }, { Amount__c: '-0.01' },
+    { Is_Credit_Note__c: true }, { Credit_Note__c: true }, { CreditNote__c: true }]) {
+    const credit = { ...invoice, ...override };
+    assert.equal(nomBReceivable(stem, [credit], currency, [], date).eligible, false);
+    assert.equal(nomBReceivable(stem, [credit, { ...invoice, Id: 'a0K000000000002AAA' }], currency, [], date).eligible, true);
+  }
+  assert.equal(nomBReceivable(stem, [{ ...invoice, Amount__c: '0' }], currency, [], date).eligible, true);
+  for (const invalid of [null, undefined, '', 'NaN', true, 'Infinity']) {
+    const result = nomBReceivable(stem, [{ ...invoice, Amount__c: invalid }], currency, [], date);
+    assert.equal(result.eligible, false); assert.equal(result.evidenceStatus, 'unavailable');
+  }
+  for (const flag of [null, undefined, 'false', 0]) assert.equal(nomBReceivable(stem, [{ ...invoice, Is_Credit_Note__c: flag }], currency, [], date).evidenceStatus, 'unavailable');
+  assert.equal(nomBReceivable(stem, [{ ...invoice, _nomBCreditFields: ['Credit_Note__c'] }], currency, [], date).evidenceStatus, 'unavailable');
+  assert.equal(nomBReceivable(stem, [{ ...invoice, Credit_Note__c: false }], currency, [], date).eligible, true);
 });
 test('FX converts through corporate currency with exact ratio and effective rate evidence', () => {
   const rates = [{ IsoCode: 'EUR', ConversionRate: '0.8', StartDate: '2026-09-01' }, { IsoCode: 'USD', ConversionRate: '1.25', StartDate: '2026-09-05' }];

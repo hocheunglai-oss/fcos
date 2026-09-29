@@ -1,5 +1,5 @@
 import { sfQuery, sfRequest, sfUserCurrencyInfo, getInstanceUrl } from './_salesforce.js';
-import { evaluateNomB, resolveNomBTrader, activeNomBConfirmation, nomBPolicy, validateNomBPolicy, nomBError, nomBToday, NOM_B_FROM, NOM_B_ID, NOM_B_UUID } from './_dashboardNomBPolicy.js';
+import { evaluateNomB, resolveNomBTrader, activeNomBConfirmation, nomBPolicy, validateNomBPolicy, nomBError, nomBToday, NOM_B_FROM, NOM_B_ID, NOM_B_UUID, NOM_B_CREDIT_FIELDS } from './_dashboardNomBPolicy.js';
 
 const text = (value) => String(value ?? '').trim();
 const quote = (value) => `'${String(value).replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
@@ -8,7 +8,7 @@ const ids = (values) => values.map(quote).join(',');
 const SCHEMA = {
   STEM__c: ['Id', 'Name', 'RefCode__c', 'Delivery_Date__c', 'Expected_Delivery_Date__c', 'Invoice_Status__c', 'Receivable_Balance__c', 'LastModifiedDate', 'Account__c', 'Port__c', 'Vessel__c'],
   Nomination__c: ['Id', 'Name', 'STEM__c', 'Deprecated__c', 'Replaced__c', 'Buyer_Supplier_Trader__c', 'BT_ST_Email_Address__c', 'File__c', 'PDF__c', 'RecordTypeId'],
-  Invoice__c: ['Id', 'Name', 'STEM__c', 'Deprecated__c', 'Proforma__c', 'File__c', 'Invoice_Date__c', 'LastModifiedDate'],
+  Invoice__c: ['Id', 'Name', 'STEM__c', 'Amount__c', 'Deprecated__c', 'Proforma__c', 'File__c', 'Invoice_Date__c', 'LastModifiedDate'],
 };
 function actor(context) {
   if (!context?.profile?.active || !NOM_B_UUID.test(context.profile.id || '')) throw nomBError('An active FCOS profile is required.', 403, 'NOM_B_FORBIDDEN');
@@ -51,6 +51,8 @@ async function schema(deps) {
     const fields = new Set((description.fields || []).map((field) => field.name));
     if (required.some((field) => !fields.has(field))) throw nomBError(`Salesforce ${object} Nom B evidence fields are unavailable.`, 503, 'NOM_B_SCHEMA_UNAVAILABLE');
     objects[object] = fields;
+    if (object === 'Invoice__c') objects.invoiceCreditFields = (description.fields || [])
+      .filter((field) => field.type === 'boolean' && NOM_B_CREDIT_FIELDS.includes(field.name)).map((field) => field.name);
   }
   return objects;
 }
@@ -124,11 +126,11 @@ export async function loadDashboardNomB(body = {}, context, suppliedDeps = {}) {
   const confirmations = source.confirmations.filter((row) => stemIds.includes(row.STEM__c));
   const loaded = await Promise.allSettled([
     queryRelated(deps, 'ContentDocumentLink', 'Id,LinkedEntityId,ContentDocument.Id,ContentDocument.Title,ContentDocument.IsDeleted,ContentDocument.LatestPublishedVersionId,ContentDocument.ContentSize', 'LinkedEntityId', confirmations.map((row) => row.Id)),
-    queryRelated(deps, 'Invoice__c', `${SCHEMA.Invoice__c.join(',')}${currencySelect(source.objects, 'Invoice__c')}`, 'STEM__c', stemIds),
+    queryRelated(deps, 'Invoice__c', [...SCHEMA.Invoice__c, ...source.objects.invoiceCreditFields].join(',') + currencySelect(source.objects, 'Invoice__c'), 'STEM__c', stemIds),
     deps.currencyInfo(),
   ]);
   const links = loaded[0].status === 'fulfilled' ? loaded[0].value : [];
-  const invoices = loaded[1].status === 'fulfilled' ? loaded[1].value : [];
+  const invoices = loaded[1].status === 'fulfilled' ? loaded[1].value.map((invoice) => ({ ...invoice, _nomBCreditFields: source.objects.invoiceCreditFields })) : [];
   let currencyEvidence = loaded[2].status === 'fulfilled' ? loaded[2].value : null;
   if (currencyEvidence?.singleCurrency && (source.objects.STEM__c.has('CurrencyIsoCode') || source.objects.Invoice__c.has('CurrencyIsoCode'))) currencyEvidence = null;
   let rates = []; let ratesComplete = true;
