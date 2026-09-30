@@ -122,8 +122,12 @@ test('25 document links use scoped source/control reads and one second Xero read
 });
 
 function creditLinkFixture({ savedLines = [], currentLines = savedLines, rawExtras = {} } = {}) {
-  const creditRaw = { ...raw, CreditNoteID: 'credit-one', Type: 'ACCRECCREDIT', CreditNoteNumber: 'CN-1', RemainingCredit: 100 };
+  const creditRaw = { ...raw, CreditNoteID: 'credit-one', Type: 'ACCRECCREDIT', CreditNoteNumber: 'CN-1', RemainingCredit: 100,
+    Payments: [], Allocations: [] };
   delete creditRaw.InvoiceID;
+  delete creditRaw.AmountPaid;
+  delete creditRaw.AmountDue;
+  delete creditRaw.AmountCredited;
   Object.assign(creditRaw, rawExtras, { LineItems: currentLines });
   const creditXero = { ...xero, id: 'credit-one', type: 'ACCRECCREDIT', collection: 'CreditNotes', invoiceNumber: 'CN-1', lineItems: savedLines };
   const creditClassified = { ...classified, xero: creditXero, xeroType: 'ACCRECCREDIT', xeroCollection: 'CreditNotes', documentNumber: 'CN-1' };
@@ -143,12 +147,13 @@ function creditLinkFixture({ savedLines = [], currentLines = savedLines, rawExtr
   return { ...f, creditRaw, creditClassified };
 }
 
-test('credit link accepts inert endpoint defaults under original review and retains raw evidence for exact readback', async () => {
+test('credit link without invoice AmountPaid accepts inert endpoint defaults under original review and retains raw evidence for exact readback', async () => {
   const savedLines = [{ LineItemID: 'credit-line-one', Quantity: 1, UnitAmount: 100, LineAmount: 100 }];
   const currentLines = [{ ...savedLines[0], ValidationErrors: [], DiscountEnteredAsPercent: true }];
   const f = creditLinkFixture({ savedLines, currentLines });
   const [outcome] = await executeCampaignBatch(f.dependencies);
   assert.equal(outcome.status, 'reconciled');
+  assert.equal(Object.hasOwn(f.creditRaw, 'AmountPaid'), false);
   assert.equal(outcome.reviewCompatibility.reviewFingerprint, xeroReviewFingerprint(f.creditClassified));
   assert.notEqual(outcome.reviewCompatibility.currentReviewFingerprint, outcome.reviewCompatibility.reviewFingerprint);
   assert.equal(outcome.reviewCompatibility.removedFields.length, 2);
@@ -227,6 +232,48 @@ test('credit link verification and claim recovery read the exact single credit w
     assert.deepEqual(f.calls.filter((row) => row.type === 'provider').map((row) => [row.path, row.options.method]),
       [['/CreditNotes/credit-one?unitdp=4', 'GET']]);
     assert.equal(f.calls.filter((row) => row.type === 'release').length, 1);
+  }
+});
+
+test('credit links require complete explicit settlement arrays before admitting the second read', async () => {
+  for (const rawExtras of [{ Payments: undefined }, { Allocations: undefined }, { Payments: [null] },
+    { Allocations: [{ Amount: 10 }] }, { RemainingCredit: 99 }, { RemainingCredit: -1 },
+    { Total: '100.000000000001' }, { Payments: [{ PaymentID: 'refund-one', Amount: 10 }], RemainingCredit: 90 }]) {
+    const f = creditLinkFixture({ rawExtras });
+    const [outcome] = await executeCampaignBatch(f.dependencies);
+    assert.equal(outcome.status, 'needs_decision');
+    assert.match(outcome.reason, /settlement allocation evidence/);
+    assert.equal(outcome.mapping, undefined);
+    assert.equal(f.calls.filter((row) => row.type === 'provider').length, 0);
+  }
+});
+
+test('credit readback with unchanged IDs detects balanced allocation and unknown raw evidence changes', async () => {
+  const allocation = { AllocationID: 'allocation-one', Amount: 30, Date: '2026-09-30',
+    Invoice: { InvoiceID: 'allocated-invoice', Type: 'ACCREC', CurrencyCode: 'USD', Contact: { ContactID: 'contact-one' } } };
+  for (const change of [{ RemainingCredit: 60, Allocations: [{ ...allocation, Amount: 40 }] },
+    { Allocations: [{ ...allocation, Date: '2026-09-29' }] }, { UnknownProviderEvidence: { changed: true } }]) {
+    const f = creditLinkFixture({ rawExtras: { RemainingCredit: 70, Allocations: [allocation] } });
+    f.dependencies.accountingFetch = async () => ({ CreditNotes: [{ ...f.creditRaw, ...change }] });
+    const [outcome] = await executeCampaignBatch(f.dependencies);
+    assert.equal(outcome.status, 'needs_decision');
+    assert.equal(outcome.mapping, undefined);
+    assert.match(outcome.reason, /changed during verification/);
+  }
+});
+
+test('invoice link settlement requirements still reject missing AmountPaid and mismatched balance', async () => {
+  const missingPaid = { ...raw }; delete missingPaid.AmountPaid;
+  for (const target of [missingPaid, ...[{ AmountDue: 99 },
+    { AmountPaid: 20, AmountDue: 80, Payments: undefined }, { AmountCredited: 20, AmountDue: 80, CreditNotes: undefined }]
+    .map((change) => ({ ...raw, ...change }))]) {
+    const f = fixture();
+    f.dependencies.refreshInventory = async () => ({ ...inventory,
+      rawTargets: { invoices: [target], creditNotes: [] } });
+    const [outcome] = await executeCampaignBatch(f.dependencies);
+    assert.equal(outcome.status, 'needs_decision');
+    assert.equal(outcome.mapping, undefined);
+    assert.equal(f.calls.filter((row) => row.type === 'provider').length, 0);
   }
 });
 
@@ -386,7 +433,8 @@ function draftFixture(options = {}) {
     LineItems: payload.LineItems.map((line) => ({ ...line, LineItemID: 'line-one', TaxAmount: 0 })) };
   const collection = draftSource.xeroCollection;
   const numberField = options.credit ? 'CreditNoteNumber' : 'InvoiceNumber';
-  if (options.credit) { target.CreditNoteID = target.InvoiceID; delete target.InvoiceID; target.RemainingCredit = target.Total; }
+  if (options.credit) { target.CreditNoteID = target.InvoiceID; delete target.InvoiceID; target.RemainingCredit = target.Total;
+    target.Payments = []; target.Allocations = []; }
   const events = [];
   const tables = { xero_financial_sync_runs: [run], xero_financial_sync_items: [savedItem],
     xero_reconciliation_batches: [currentBatch], xero_reconciliation_campaigns: [campaign],

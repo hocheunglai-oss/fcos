@@ -19,6 +19,7 @@ import { releaseXeroBudget, reserveXeroBudget, runWithXeroBudget, xeroSharedCont
 import { campaignDocumentReadCalls } from './_xeroReconciliationPolicy.js';
 import { readCampaignDocumentLinkReadback } from './_xeroReconciliationLinkReadback.js';
 import { creditLinkReviewCompatibility } from './_xeroCreditLinkResponseCompatibility.js';
+import { creditSettlementProof } from './_xeroCreditSettlementProof.js';
 
 const MAX_CLAIM = 25;
 
@@ -62,6 +63,12 @@ function documentIdentity(raw, collection) {
 
 function allocationProof(raw, collection) {
   if (!raw || !['Invoices', 'CreditNotes'].includes(collection)) return null;
+  if (collection === 'CreditNotes') {
+    const settlement = creditSettlementProof(raw);
+    return settlement ? { id: documentIdentity(raw, collection), type: raw.Type, status: raw.Status,
+      contactId: raw.Contact?.ContactID, currency: raw.CurrencyCode, total: raw.Total,
+      amountDue: raw.RemainingCredit, ...settlement, raw: canonical(raw) } : null;
+  }
   if (!['Total', 'AmountPaid', collection === 'CreditNotes' ? 'RemainingCredit' : 'AmountDue']
     .every((field) => Object.hasOwn(raw, field))
     || collection === 'Invoices' && !Object.hasOwn(raw, 'AmountCredited')
