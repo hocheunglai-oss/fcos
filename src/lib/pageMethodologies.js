@@ -156,7 +156,7 @@ export const MY_COMMITMENTS_METHODOLOGY = {
   sections: [
     {
       title: 'Nom B Filing',
-      body: 'Open Nom B Filing to review your missing buyer nominations, waived requirements and cases that cannot yet be verified. This view uses delivery from 1 September 2026 independently of financial reporting filters. Existing trader delegation, automatic waivers and General Manager or Administrator policy controls still apply. Its counts are separate from the ordinary commitment urgency cards.',
+      body: 'On desktop, open Nom B Filing → Missing to see your active Buyer Confirmations without a filed Nom B across all dates, including uninvoiced STEMs. Drop one document into its row to file it; success requires the linked document and green Received status to be verified. Waived requirements, verification exceptions, team policy controls and the existing mobile view retain their delivery scope from 1 September 2026. Filing is independent of financial reporting filters, and reminder links open this workspace.',
     },
     {
       title: 'Included work',

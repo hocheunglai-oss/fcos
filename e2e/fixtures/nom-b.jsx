@@ -1,8 +1,7 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Navigate, Route, Routes } from 'react-router-dom';
 import DashboardSettings from '@/pages/DashboardSettings';
-import MissingNomB from '@/pages/MissingNomB';
 import MyCommitments from '@/pages/MyCommitments';
 import { appClient } from '@/api/appClient';
 import '@/styles/fonts.css';
@@ -10,6 +9,7 @@ import '@/index.css';
 
 const params = new URLSearchParams(window.location.search);
 const manager = params.get('role') === 'manager';
+const liveCheck = params.get('liveCheck') === '1';
 const makeRow = (index, extra = {}) => ({
   stemId: `fixture-stem-${index}`, stemReference: `STEM-${String(index).padStart(3, '0')}`, vessel: index === 1 ? 'Pacific Endeavour' : `Marine vessel ${index}`,
   buyer: 'Synthetic Marine Fuels Holdings Limited', port: 'Hong Kong', deliveryDate: '2026-09-18', deliveryDateSource: index % 2 ? 'actual' : 'expected', status: 'missing',
@@ -25,9 +25,16 @@ const rows = [
   makeRow(29, { undated: true, deliveryDate: null, deliveryDateSource: null }),
   makeRow(30, { traders: [], reason: 'Trader assignment could not be resolved.' }),
 ];
-window.nomBFixture = { user: { id: 'fixture-user', read_only_ci: params.get('role') === 'ci' }, requests: [], saves: [], rows, pending: [], deferView: null, readFailure: params.get('read') === 'fail', unknown: params.get('unknown') === '1', mutation: 'success', revision: 0 };
+const filingRow = (number, extra = {}) => ({ nominationId: `fixture-confirmation-${number}`, stemId: `fixture-stem-${number}`, stemName: `STEM-${String(number).padStart(3, '0')}`, buyerName: number === 1 ? 'Synthetic Marine Fuels Holdings Limited' : 'Eastern Marine Fuels', vesselName: number === 1 ? 'Pacific Endeavour' : `Fixture vessel ${number}`, imo: `900000${number}`, portName: 'Hong Kong', deliveryDate: number === 1 ? '2026-09-18' : null, expectedDeliveryDate: number === 1 ? null : '2026-10-05', confirmationReference: `BC-00${number}`, traderName: 'Ada Trader', receivedStatus: number === 2 ? '🟢' : '🟡', canUpload: number !== 2, ...extra });
+window.nomBFixture = { user: { id: 'fixture-user', read_only_ci: params.get('role') === 'ci' }, requests: [], saves: [], rows, pending: [], deferView: null, readFailure: params.get('read') === 'fail', unknown: params.get('unknown') === '1', mutation: 'success', revision: 0,
+  filingRows: [filingRow(1), filingRow(2), filingRow(3)], filedIds: new Set(), uploads: [], uploadResponses: [], deferUpload: false, releaseUpload: null, listError: false };
+window.missingNomBFixture = window.nomBFixture;
 appClient.functions.invoke = async (name, body = {}, options = {}) => {
   const fixture = window.nomBFixture;
+  if (liveCheck && (name === 'missingNomBList' || name === 'missingNomBUpload')) {
+    const response = await fetch(name === 'missingNomBList' ? '/nom-b-live-check/list' : '/nom-b-live-check/upload', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    return { data: await response.json() };
+  }
   fixture.requests.push({ name, body: structuredClone(body), force: Boolean(options.force) });
   if (name === 'dashboardSummary') return { data: { complete: true, matchingCount: 0, accountCount: 0, disputedCount: 0, financials: [] } };
   if (name === 'dashboardStemList') return { data: { stems: [], matchingCount: 0 } };
@@ -35,11 +42,27 @@ appClient.functions.invoke = async (name, body = {}, options = {}) => {
   if (name === 'workCommitmentsList') return { data: { commitments: [{ id: 'fixture-task', source: 'collaboration', urgency: 'needs_action', title: 'Synthetic commitment', link: '/projects-tasks', actionLabel: 'Open' }], counts: { needs_action: 1 }, sources: ['collaboration'] } };
   if (name === 'salesforceStemDetail') return { data: { record: { Id: body.stemId, Name: 'Opened fixture STEM', Vessel_Name__c: 'Pacific Endeavour' }, lineItems: [], extraCosts: [] } };
   if (name === 'salesforceStemDocuments') return { data: { documents: [] } };
-  if (name === 'missingNomBList') return { data: {
-    rows: [{ nominationId: 'fixture-confirmation-1', stemId: 'fixture-stem-1', stemName: 'STEM-001', buyerName: 'Synthetic Marine Fuels Holdings Limited', vesselName: 'Pacific Endeavour', imo: '9000001', portName: 'Hong Kong', deliveryDate: '2026-09-18', expectedDeliveryDate: null, confirmationReference: 'BC-001', traderName: 'Ada Trader', receivedStatus: '🟡', canUpload: true }],
-    nextCursor: null,
-    asOf: '2026-09-30T04:00:00Z',
-  } };
+  if (name === 'missingNomBList') {
+    if (fixture.listError) return { data: { error: 'Fixture list read failed.' } };
+    const search = String(body.search || '').toLowerCase();
+    if (search === 'none') return { data: { rows: [], nextCursor: null, asOf: '2026-09-30T04:00:00Z' } };
+    if (search === 'skip') return { data: { rows: body.cursor === 'skip-tail' ? [fixture.filingRows[2]] : [], nextCursor: body.cursor ? null : 'skip-tail', asOf: '2026-09-30T04:00:00Z' } };
+    const available = fixture.filingRows.filter((item) => !fixture.filedIds.has(item.nominationId) && (!search || [item.stemName, item.buyerName, item.vesselName, item.portName, item.confirmationReference].some((value) => value.toLowerCase().includes(search))));
+    if (search) return { data: { rows: available, nextCursor: null, asOf: '2026-09-30T04:00:00Z' } };
+    return { data: { rows: body.cursor === 'page-2' ? available.slice(2) : available.slice(0, 2), nextCursor: body.cursor || available.length <= 2 ? null : 'page-2', asOf: '2026-09-30T04:00:00Z' } };
+  }
+  if (name === 'missingNomBUpload') {
+    fixture.uploads.push(structuredClone(body));
+    if (fixture.deferUpload) await new Promise((resolve) => { fixture.releaseUpload = resolve; });
+    const outcome = fixture.uploadResponses.shift() || 'success';
+    if (outcome === 'uncertain') return { data: { error: 'Salesforce outcome is still being checked.', code: 'MISSING_NOM_B_UPLOAD_UNCERTAIN' }, meta: { cacheLayer: 'server' } };
+    if (outcome === 'rejected') return { data: { error: 'The file contents do not match the filename.', code: 'MISSING_NOM_B_CONTENT_TYPE' }, meta: { cacheLayer: 'server' } };
+    if (outcome === 'not_owner') return { data: { error: 'The confirmation is no longer assigned to this trader.', code: 'MISSING_NOM_B_NOT_OWNER' }, meta: { cacheLayer: 'server' } };
+    if (outcome === 'unverified') return { data: { nominationId: body.nominationId, receivedStatus: '🟢' }, meta: { cacheLayer: 'server' } };
+    if (outcome === 'network') throw new Error('Network connection was lost.');
+    fixture.filedIds.add(body.nominationId);
+    return { data: { verified: true, nominationId: body.nominationId, stemId: 'fixture-stem-1', contentDocumentId: 'fixture-document-1', contentVersionId: 'fixture-version-1', receivedStatus: '🟢' } };
+  }
   if (name === 'dashboardNomBRead') {
     if (fixture.readFailure) return { data: { error: 'Salesforce verification unavailable.', code: 'NOM_B_SOURCE_UNAVAILABLE' } };
     const getResponse = () => {
@@ -67,4 +90,4 @@ appClient.functions.invoke = async (name, body = {}, options = {}) => {
   return { data: { error: `Unexpected isolated fixture request: ${name}` } };
 };
 const dashboard = params.get('screen') === 'dashboard';
-createRoot(document.getElementById('root')).render(<StrictMode><MemoryRouter initialEntries={[dashboard ? '/' : '/my-commitments?source=nom_b']}><p className="p-3 text-xs">Synthetic Nom B fixture — no live provider data</p><Routes><Route path="/" element={<DashboardSettings />} /><Route path="/my-commitments" element={<MyCommitments />} /><Route path="/missing-nom-b" element={<MissingNomB />} /></Routes></MemoryRouter></StrictMode>);
+createRoot(document.getElementById('root')).render(<StrictMode><MemoryRouter initialEntries={[dashboard ? '/' : '/my-commitments?source=nom_b']}><p className="p-3 text-xs">{liveCheck ? 'Synthetic DEVEE verification fixture — guarded local DEVEE list and upload calls' : 'Synthetic Nom B fixture — no live provider data'}</p><Routes><Route path="/" element={<DashboardSettings />} /><Route path="/my-commitments" element={<MyCommitments />} /><Route path="/missing-nom-b" element={<Navigate to="/my-commitments?source=nom_b" replace />} /></Routes></MemoryRouter></StrictMode>);

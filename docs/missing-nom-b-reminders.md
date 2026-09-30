@@ -1,6 +1,6 @@
 # Missing Nom B: operator runbook
 
-The desktop page at `/missing-nom-b` shows the signed-in trader's actual missing Buyer Nom B files across **all dates**, including uninvoiced STEMs. Cancelled STEMs are excluded. The page and reminders use actual filing evidence; Dashboard delivery cutoffs, receivable waivers and management waiver policies do not filter this workflow.
+The desktop **My Commitments → Nom B Filing → Missing** table shows the signed-in trader's actual missing Buyer Nom B files across **all dates**, including uninvoiced STEMs. Drop one document into its confirmation row to file it; the same area supports accessible file selection. Cancelled STEMs are excluded. Filing and reminders use actual document evidence; Dashboard delivery cutoffs, receivable waivers and management waiver policies do not filter this workflow. There is no separate filing page or Dashboard button. The fixed email URL `/missing-nom-b` preserves sign-in return and redirects into this workspace.
 
 ## Activate prospectively
 

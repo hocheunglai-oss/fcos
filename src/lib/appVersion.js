@@ -3,7 +3,7 @@ import { APP_VERSION } from './appVersionMeta.js';
 export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
-  { version: '2.0.286', releasedAt: '2026-09-30', title: 'Upload from Nom B Filing', changes: ['Adds Upload missing Nom B to the desktop Nom B Filing workspace, opening the list across all dates where each assigned Buyer Confirmation has its upload action.'] },
+  { version: '2.0.286', releasedAt: '2026-09-30', title: 'Drop documents into Nom B Filing', changes: ['File missing Nom B directly in My Commitments → Nom B Filing → Missing by dropping a document into its Buyer Confirmation row, with verified filing and safe recovery of interrupted uploads.', 'Reminder links open the filing workspace, and the separate Missing Nom B page and Dashboard button are removed.'] },
   { version: '2.0.285', releasedAt: '2026-09-30', title: 'Summary sales invoices and credit links', changes: ['Use one summary line for new sales invoices, including every verified product and charge in the invoice total.', 'Verify existing credit balances using Xero credit-note evidence and distinguish verified links from held records.'] },
   {
     version: '2.0.284',

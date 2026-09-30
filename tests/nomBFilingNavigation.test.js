@@ -14,6 +14,7 @@ function hookHarness() {
     Fragment: 'Fragment', Suspense: 'Suspense',
     createElement: (type, props, ...children) => ({ type, props: { ...props, children } }),
     lazy: factory => factory.toString().includes('MissingNomBPanel') ? 'MissingNomBPanel' : 'StemDetailModal',
+    useSyncExternalStore: (_subscribe, _getSnapshot, getServerSnapshot) => getServerSnapshot(),
     useState(initial) {
       const index = cursor++;
       if (!states[index]) states[index] = { value: typeof initial === 'function' ? initial() : initial };
@@ -108,6 +109,7 @@ test('direct Nom B source mounts only the expanded filing panel and does not loa
   await page.flushEffects();
   assert.deepEqual(page.calls.requests, []);
   const panel = find(tree, 'MissingNomBPanel');
+  assert.equal(panel.props.documentFiling, true);
   assert.equal(panel.props.defaultExpanded, true);
   assert.equal(panel.props.title, 'Nom B Filing');
   assert.equal(find(tree, 'WorkspaceViewBar').props.value, 'nom_b');
@@ -175,6 +177,52 @@ test('ordinary commitment entry does not mount Nom B or request its evidence', a
   assert.deepEqual(page.calls.requests, ['workCommitmentsList']);
   const dashboard = await read('src/pages/DashboardSettings.jsx');
   assert.doesNotMatch(dashboard, /MissingNomBPanel|dashboardNomBRead/u);
+  assert.doesNotMatch(dashboard, /navigate\('\/missing-nom-b'\)|>Missing Nom B<\/Button>/u);
+});
+
+test('the reminder destination redirects into personal filing under Dashboard access instead of a separate page', async () => {
+  const source = await read('src/App.jsx');
+  assert.doesNotMatch(source, /import\('@\/pages\/MissingNomB'\)/u);
+  const parsed = ts.createSourceFile('src/App.jsx', source, ts.ScriptTarget.ES2022, true, ts.ScriptKind.JSX);
+  let reminderRoute;
+  const findRoute = node => {
+    if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(parsed) === 'Route') {
+      const path = node.attributes.properties.find(prop => ts.isJsxAttribute(prop) && prop.name.getText(parsed) === 'path');
+      if (path?.initializer?.text === '/missing-nom-b') reminderRoute = node;
+    }
+    ts.forEachChild(node, findRoute);
+  };
+  findRoute(parsed);
+  assert.ok(reminderRoute, 'Existing reminder links must remain resolvable.');
+  assert.match(reminderRoute.getText(parsed), /ModuleGate moduleId="dashboard"/u);
+  assert.match(reminderRoute.getText(parsed), /Navigate to="\/my-commitments\?source=nom_b" replace/u);
+});
+
+test('sign-in preserves the Nom B reminder destination through federated return', async () => {
+  const originalWindow = globalThis.window;
+  const originalDocument = globalThis.document;
+  const saved = new Map([['fcos:fcuno-return-to', '/missing-nom-b']]);
+  globalThis.window = { location: { origin: 'https://fcos.example.invalid' }, sessionStorage: {
+    getItem: key => saved.get(key) ?? null,
+    removeItem: key => saved.delete(key),
+  } };
+  globalThis.document = { title: '' };
+  try {
+    const hooks = hookHarness();
+    const login = await compile('src/pages/Login.jsx', hooks.react, {
+      useLocation: () => ({ search: '?federated=1', hash: '', state: null }),
+      useAuth: () => ({ isAuthenticated: true, authMode: 'supabase' }),
+      operationalHome: () => '/',
+    });
+    const result = hooks.render(login);
+    assert.equal(find(result, 'Navigate').props.to, '/missing-nom-b');
+    assert.equal(find(result, 'Navigate').props.replace, true);
+    await hooks.flushEffects();
+    assert.equal(saved.has('fcos:fcuno-return-to'), false);
+  } finally {
+    if (originalWindow === undefined) delete globalThis.window; else globalThis.window = originalWindow;
+    if (originalDocument === undefined) delete globalThis.document; else globalThis.document = originalDocument;
+  }
 });
 
 test('the existing panel remains collapsed by default and expanded at filing entry while preserving its read and policy controls', async () => {
@@ -192,5 +240,19 @@ test('the existing panel remains collapsed by default and expanded at filing ent
     assert.equal(requests[0].name, 'dashboardNomBRead');
     assert.equal(requests[0].body.scope, 'mine');
     assert.equal(requests[0].body.view, 'missing');
+  }
+});
+
+test('document filing is embedded only in the desktop personal Missing tab', async () => {
+  for (const desktop of [false, true]) {
+    const hooks = hookHarness();
+    const panel = await compile('src/components/dashboard/MissingNomBPanel.jsx', hooks.react, {
+      useSyncExternalStore: () => desktop,
+      appClient: { functions: { invoke: async () => ({ data: { counts: { missing: 0 }, rows: [] } }) } },
+      nomBError: response => response.data, nomBNumber: number => Number(number).toLocaleString(),
+    });
+    const tree = hooks.render(panel, { documentFiling: true, defaultExpanded: true, title: 'Nom B Filing' });
+    assert.equal(Boolean(find(tree, 'MissingNomBFilingTable')), desktop);
+    assert.equal(nodes(tree).some(node => node.type === 'span' && node.props?.['aria-label']?.startsWith('My missing Nom B count:')), !desktop);
   }
 });

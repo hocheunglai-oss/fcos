@@ -14,7 +14,6 @@ import WorkspaceErrorBoundary from '@/components/WorkspaceErrorBoundary';
 
 const StemWorkspace = lazy(() => import('@/pages/StemWorkspace'));
 const DashboardSettings = lazy(() => import('@/pages/DashboardSettings'));
-const MissingNomB = lazy(() => import('@/pages/MissingNomB'));
 const AccountInsight = lazy(() => import('@/pages/AccountInsight'));
 const StemPnlReport = lazy(() => import('@/pages/StemPnlReport'));
 const BrokerWorkspace = lazy(() => import('@/pages/BrokerWorkspace'));
@@ -110,7 +109,7 @@ const AuthenticatedApp = () => {
             <Route path="/email-router" element={<ModuleGate moduleId="email_router"><EmailRouter /></ModuleGate>} />
             <Route path="/" element={<ModuleGate moduleId="dashboard"><DashboardSettings /></ModuleGate>} />
             <Route path="/stems/:stemId" element={<ModuleGateAny moduleIds={['dashboard', 'review', 'disputes', 'buyer_invoices', 'incoming_payments', 'cashflow_forecast', 'pnl', 'brokers', 'hedge_desk']}><StemWorkspace /></ModuleGateAny>} />
-            <Route path="/missing-nom-b" element={<ModuleGate moduleId="dashboard"><MissingNomB /></ModuleGate>} />
+            <Route path="/missing-nom-b" element={<ModuleGate moduleId="dashboard"><Navigate to="/my-commitments?source=nom_b" replace /></ModuleGate>} />
             <Route path="/accounts/:accountId" element={<ModuleGate moduleId="dashboard"><AccountInsight /></ModuleGate>} />
             <Route path="/settings" element={<SettingsWorkspace />} />
             <Route path="/pnl" element={<ModuleGate moduleId="pnl"><StemPnlReport /></ModuleGate>} />
