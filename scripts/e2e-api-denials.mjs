@@ -9,6 +9,8 @@ export const CI_DENIAL_PROBES = Object.freeze([
   ['/api/functions/hedgePhysicalSalesforceApply', {}],
   ['/api/functions/workspacePreferencesSave', {}],
   ['/api/functions/financeSettingsSave', {}],
+  ['/api/functions/missingNomBList', {}],
+  ['/api/functions/missingNomBUpload', {}],
   ['/api/functions/marketBookContext', {}],
   ['/api/functions/marketTraderWorkspace', {}],
   ['/api/functions/marketTraderWorkspaceSave', {}],

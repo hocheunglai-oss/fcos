@@ -121,6 +121,7 @@ test('retry orchestration invokes once, refreshes confirmed results once and pre
   });
   await retryCampaignCredits(confirmed.ctx);
   assert.equal(requests, 1); assert.equal(confirmed.events.filter(([name]) => name === 'load').length, 1);
+  assert.equal(confirmed.events.find(([name]) => name === 'setNotice')[1], '0 credit links verified under the original approval; 2 remain held.');
   const uncertain = makeContext(async () => { requests += 1; throw new Error('Connection lost'); });
   await retryCampaignCredits(uncertain.ctx);
   assert.equal(requests, 2); assert.equal(uncertain.events.filter(([name]) => name === 'load').length, 0);

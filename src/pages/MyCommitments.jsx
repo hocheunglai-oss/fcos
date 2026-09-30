@@ -224,6 +224,7 @@ export default function MyCommitments() {
       {isNomBFiling ? canViewNomB ? (
         <Suspense fallback={<StateBlock icon={RefreshCw} title="Loading Nom B Filing" description="Preparing your filing requirements." />}>
           <MissingNomBPanel
+            documentFiling
             defaultExpanded
             title="Nom B Filing"
             description="Your buyer nomination filing requirements · delivery from 1 September 2026"

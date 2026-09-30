@@ -14,11 +14,16 @@ test.beforeEach(async ({ page, baseURL }) => {
 });
 test.afterEach(async ({ page }) => { expect(page.fixtureErrors).toEqual([]); expect(page.providerRequests).toEqual([]); });
 const panel = (page) => page.getByRole('region', { name: 'Missing Nom B requirements', exact: true });
-const openList = async (page, suffix = '') => {
+const openFiling = async (page, suffix = '') => {
   await page.goto(`${fixturePath}${suffix}`);
   await expect(page.getByRole('heading', { name: 'My Commitments', exact: true })).toBeVisible();
   await expect(page.getByRole('tab', { name: 'Nom B Filing', exact: true })).toHaveAttribute('aria-selected', 'true');
-  await expect(page.getByLabel('My missing Nom B count: 26', { exact: true })).toBeVisible();
+  if (test.info().project.name === 'desktop') await expect(page.getByLabel('Missing Nom B filing')).toBeVisible();
+};
+const openList = async (page, suffix = '') => {
+  await openFiling(page, suffix);
+  if (test.info().project.name === 'desktop') await panel(page).getByRole('button', { name: 'Show policy requirements' }).click();
+  await expect(page.getByLabel(test.info().project.name === 'desktop' ? 'Policy missing Nom B count since 1 September 2026: 26' : 'My missing Nom B count: 26', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Hide STEMs', exact: true })).toBeVisible();
 };
 
@@ -30,6 +35,8 @@ test('personal filing opens expanded, stays separate from ordinary commitments a
   await expect(section.getByText('Expected delivery', { exact: true }).first()).toBeVisible();
   await expect(section.getByRole('button', { name: 'Manage Nom B' })).toHaveCount(0);
   await expect(section.getByLabel('Requirements for')).toHaveCount(0);
+  await expect(section.getByRole('link', { name: 'Upload missing Nom B', includeHidden: true })).toHaveCount(0);
+  if (test.info().project.name === 'mobile') expect(await page.evaluate(() => window.nomBFixture.requests.filter((request) => request.name === 'missingNomBList').length)).toBe(0);
   expect(await page.locator('body').evaluate((body) => body.scrollWidth <= window.innerWidth + 1)).toBe(true);
   await page.screenshot({ path: `test-results/nom-b-${test.info().project.name}.png` });
   const before = await page.evaluate(() => window.nomBFixture.requests.filter((request) => request.name === 'dashboardNomBRead').length);
@@ -41,6 +48,7 @@ test('personal filing opens expanded, stays separate from ordinary commitments a
   await expect(section).toHaveCount(0);
   expect(await page.evaluate(() => window.nomBFixture.requests.filter((request) => request.name === 'dashboardNomBRead').length)).toBe(before);
   await page.getByRole('tab', { name: 'Nom B Filing', exact: true }).click();
+  if (test.info().project.name === 'desktop') await section.getByRole('button', { name: 'Show policy requirements' }).click();
   await expect(section.getByRole('heading', { name: /STEM-001.*Pacific Endeavour/ })).toBeVisible();
   await expect(section.getByRole('button', { name: 'Hide STEMs', exact: true })).toBeVisible();
   await expect(page.getByText('Synthetic commitment', { exact: true })).toHaveCount(0);
@@ -52,7 +60,7 @@ test('personal filing opens expanded, stays separate from ordinary commitments a
   expect(await page.evaluate(() => window.nomBFixture.requests.filter((request) => request.name === 'dashboardNomBAuditRead').length)).toBe(0);
   await dialog.getByRole('button', { name: 'Close', exact: true }).first().click();
   await expect(section.getByRole('button', { name: 'Receivable & audit' })).toHaveCount(0);
-  await expect(section.getByRole('link')).toHaveCount(0);
+  await expect(section.locator('a[href^="http"]')).toHaveCount(0);
   await section.getByRole('button', { name: 'Open STEM', exact: true }).first().click();
   await expect.poll(() => page.evaluate(() => window.nomBFixture.requests.filter((request) => request.name === 'salesforceStemDetail').at(-1)?.body.stemId)).toBe('fixture-stem-1');
   await expect(page.getByRole('dialog')).toContainText('Opened fixture STEM');
@@ -60,7 +68,36 @@ test('personal filing opens expanded, stays separate from ordinary commitments a
   await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
   await expect.poll(() => page.evaluate(() => window.nomBFixture.requests.filter((request) => request.name === 'dashboardSummary').length)).toBeGreaterThan(0);
   await expect(panel(page)).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /Missing Nom B/i })).toHaveCount(0);
   expect(await page.evaluate(() => window.nomBFixture.requests.filter((request) => request.name.startsWith('dashboardNomB')).length)).toBe(0);
+});
+
+test('desktop Nom B Filing embeds the cutoff-scoped document table and file control without an extra page', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop', 'The new upload entry is desktop-only.');
+  await openFiling(page);
+  const section = panel(page);
+  await expect(section.getByText('Delivery from 1 September 2026', { exact: true })).toBeVisible();
+  await expect(section.getByRole('link', { name: 'Upload missing Nom B' })).toHaveCount(0);
+  await expect(section.getByRole('region', { name: 'Missing Nom B confirmations' }).getByRole('row').filter({ hasText: 'STEM-001' })).toContainText('Synthetic Marine Fuels Holdings Limited');
+  await expect.poll(() => page.evaluate(() => window.nomBFixture.requests.filter((request) => request.name === 'missingNomBList').at(-1)?.body)).toEqual({ cursor: null, search: '' });
+  await expect(section.getByRole('row').filter({ hasText: 'STEM-001' }).getByRole('group', { name: 'Choose or drop Nom B for STEM-001' })).toBeVisible();
+  await expect(section.getByRole('button', { name: 'Upload Nom B' })).toHaveCount(0);
+  await expect(page.getByRole('dialog', { name: 'Upload Nom B' })).toHaveCount(0);
+  await expect(page.getByLabel(/owner|trader selection/i)).toHaveCount(0);
+  expect(await page.evaluate(() => window.nomBFixture.requests.filter((request) => request.name === 'missingNomBUpload').length)).toBe(0);
+});
+
+test('desktop returns from an undated policy view to cutoff-scoped document filing', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop', 'Desktop filing transition only.');
+  await openFiling(page);
+  const section = panel(page);
+  await section.getByRole('tab', { name: /^Waived/ }).click();
+  await section.getByLabel(/^Undated follow-up/).check();
+  await section.getByRole('tab', { name: /^Missing/ }).click();
+  await expect(page.getByLabel('Missing Nom B filing')).toBeVisible();
+  await expect(section.getByLabel(/^Undated follow-up/)).toHaveCount(0);
+  await expect(section.getByRole('region', { name: 'Missing Nom B confirmations' }).getByRole('row').filter({ hasText: 'STEM-001' })).toBeVisible();
+  await expect(section.getByText('Delivery from 1 September 2026', { exact: true })).toBeVisible();
 });
 
 test('status tabs, undated-only follow-up, search, sorting and paging use their own server payload', async ({ page }) => {
@@ -75,6 +112,7 @@ test('status tabs, undated-only follow-up, search, sorting and paging use their 
   await section.getByRole('tab', { name: /^Unable to verify/ }).click();
   await expect(section.getByText('Issued-invoice currency could not be verified.')).toBeVisible();
   await section.getByRole('tab', { name: /^Missing/ }).click();
+  if (test.info().project.name === 'desktop') await section.getByRole('button', { name: 'Show policy requirements' }).click();
   await section.getByLabel(/^Undated follow-up/).check();
   await expect(section.getByRole('heading', { name: /STEM-029/ })).toBeVisible();
   await expect(section.getByRole('heading', { name: /STEM-001/ })).toHaveCount(0);
@@ -108,12 +146,12 @@ test('management defaults Payment Received, validates reasons and uses server re
   await dialog.getByRole('button', { name: 'Save policy' }).click();
   await expect(dialog).toHaveCount(0);
   expect(await page.evaluate(() => window.nomBFixture.saves.at(-1))).toEqual({ stemId: 'fixture-stem-1', mode: 'waive', reasonCode: 'other', reasonText: 'Reviewed supporting payment evidence.', expectedRevision: 0 });
-  await expect(page.getByLabel('My missing Nom B count: 25', { exact: true })).toBeVisible();
+  await expect(page.getByLabel(test.info().project.name === 'desktop' ? 'Policy missing Nom B count since 1 September 2026: 25' : 'My missing Nom B count: 25', { exact: true })).toBeVisible();
   await section.getByLabel('Requirements for').selectOption('team');
   await section.getByLabel('Trader', { exact: true }).selectOption('unassigned');
   await expect(section.getByRole('heading', { name: /STEM-030/ })).toBeVisible();
   await expect(section.getByText('Trader: Unresolved assignment', { exact: true })).toBeVisible();
-  await expect(page.getByLabel('My missing Nom B count: 25', { exact: true })).toBeVisible();
+  await expect(page.getByLabel(test.info().project.name === 'desktop' ? 'Policy missing Nom B count since 1 September 2026: 25' : 'My missing Nom B count: 25', { exact: true })).toBeVisible();
 });
 
 test('conflicts and storage failure preserve draft; reopening uses refreshed revision and never resubmits automatically', async ({ page }) => {
@@ -143,11 +181,13 @@ test('conflicts and storage failure preserve draft; reopening uses refreshed rev
 
 test('unknown counts never appear as zero; obsolete responses cannot replace the selected status; restricted CI skips read', async ({ page }) => {
   await page.goto(`${fixturePath}?unknown=1`);
-  await expect(page.getByLabel('My missing Nom B count: Unavailable', { exact: true })).toBeVisible();
+  if (test.info().project.name === 'desktop') await panel(page).getByRole('button', { name: 'Show policy requirements' }).click();
+  await expect(page.getByLabel(test.info().project.name === 'desktop' ? 'Policy missing Nom B count since 1 September 2026: Unavailable' : 'My missing Nom B count: Unavailable', { exact: true })).toBeVisible();
   await expect(page.getByText('Count incomplete.', { exact: false })).toBeVisible();
   await page.goto(`${fixturePath}?read=fail`);
+  if (test.info().project.name === 'desktop') await panel(page).getByRole('button', { name: 'Show policy requirements' }).click();
   await expect(panel(page).getByRole('alert')).toContainText('Counts are unavailable');
-  await expect(page.getByLabel('My missing Nom B count: Unavailable', { exact: true })).toBeVisible();
+  await expect(page.getByLabel(test.info().project.name === 'desktop' ? 'Policy missing Nom B count since 1 September 2026: Unavailable' : 'My missing Nom B count: Unavailable', { exact: true })).toBeVisible();
   await openList(page);
   await page.evaluate(() => { window.nomBFixture.deferView = 'missing'; });
   await page.getByRole('button', { name: 'Refresh Nom B requirements' }).click();

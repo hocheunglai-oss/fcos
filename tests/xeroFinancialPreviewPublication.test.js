@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { financialPreviewChanges, xeroFinancialSyncLatest, xeroFinancialSyncPreview, XERO_RECONCILIATION_VERSION } from '../api/_xeroFinancialSync.js';
 import { fixture } from './xeroFinancialPreviewFixtures.js';
+import { SALES_INVOICE_SUMMARY_POLICY } from '../api/_xeroSalesInvoiceSummary.js';
 
 for (const failAt of ['items:2', 'payments', 'snapshot', 'audit', 'publish']) {
   test(`preview stays unpublished after ${failAt} failure`, async () => {
@@ -33,6 +34,18 @@ test('complete preview publishes once after items, payment snapshot and completi
   assert.equal(saved.run.id, result.run.id);
   assert.equal(saved.rows.length, 205);
   assert.deepEqual(saved.payments, f.paymentSnapshot);
+  assert.equal(f.tables.xero_financial_sync_runs[0].control_totals.workflowSnapshot.salesInvoiceSummaryPolicy, SALES_INVOICE_SUMMARY_POLICY);
+});
+
+test('a saved detailed-line preview requires reclassification without spending provider calls', async () => {
+  const f = fixture(); const id = randomUUID();
+  f.tables.xero_financial_sync_runs = [{ id, mode: 'preview', status: 'ready_for_review', source_snapshot_at: new Date().toISOString(),
+    control_totals: { workflowSnapshot: { reconciliationVersion: XERO_RECONCILIATION_VERSION, controlsFingerprint: 'saved' } } }];
+  const result = await financialPreviewChanges(id, { client: f.client, connection: {},
+    querySalesforce: async () => { throw new Error('Presentation change must not probe Salesforce'); },
+    accountingFetch: async () => { throw new Error('Presentation change must not probe Xero'); } });
+  assert.equal(result.changed, true);
+  assert.deepEqual(f.calls.map(call => call.table), ['xero_financial_sync_runs']);
 });
 
 test('documents-only preview preserves its return shape and publishes after the audit', async () => {

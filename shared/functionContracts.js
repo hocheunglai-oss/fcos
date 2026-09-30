@@ -50,6 +50,15 @@ const CONTRACTS = Object.freeze({
   },
   stemWorkspaceActivity: stemReadRequestIssues,
   salesforceStemDetail: stemReadRequestIssues,
+  missingNomBList(payload) {
+    const issues = [];
+    if (payload.cursor != null && typeof payload.cursor !== 'string') issues.push('cursor must be a string');
+    if (payload.search != null && typeof payload.search !== 'string') issues.push('search must be a string');
+    return issues;
+  },
+  missingNomBUpload(payload) {
+    return ['nominationId', 'operationId', 'filename', 'contentBase64'].filter((key) => !stringValue(payload[key])).map((key) => `${key} is required`);
+  },
   dashboardAccountCreditStatement(payload) {
     const issues = [];
     if (!['buyer', 'supplier', 'both'].includes(payload.side || 'buyer')) issues.push('side must be buyer, supplier, or both');

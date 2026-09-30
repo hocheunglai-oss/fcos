@@ -1,5 +1,6 @@
 import { xeroAccountingFetch } from './_xeroContactSync.js';
 import { runWithXeroBudget } from './_xeroSharedControl.js';
+import { creditSettlementProof } from './_xeroCreditSettlementProof.js';
 
 const MAX_TARGETS = 25;
 const MAX_CONCURRENT_READS = 2;
@@ -47,7 +48,7 @@ function validateResponse(response, collection, ids) {
       throw incomplete(`${collection} exact link readback returned unrelated or duplicate IDs.`);
     }
     const required = collection === 'Invoices'
-      ? ['Total', 'AmountPaid', 'AmountDue', 'AmountCredited'] : ['Total', 'AmountPaid', 'RemainingCredit'];
+      ? ['Total', 'AmountPaid', 'AmountDue', 'AmountCredited'] : ['Total', 'RemainingCredit'];
     if (required.some((field) => !Object.hasOwn(row, field)
         || typeof row[field] !== 'number' && (typeof row[field] !== 'string' || !row[field].trim())
         || typeof row[field] === 'number' && !Number.isFinite(row[field])) || !Array.isArray(row.LineItems)
@@ -56,7 +57,8 @@ function validateResponse(response, collection, ids) {
       || row.ValidationErrors !== undefined && (!Array.isArray(row.ValidationErrors) || row.ValidationErrors.length)
       || row.Payments !== undefined && !Array.isArray(row.Payments)
       || row.Allocations !== undefined && !Array.isArray(row.Allocations)
-      || collection === 'Invoices' && row.CreditNotes !== undefined && !Array.isArray(row.CreditNotes)) {
+      || collection === 'Invoices' && row.CreditNotes !== undefined && !Array.isArray(row.CreditNotes)
+      || collection === 'CreditNotes' && !creditSettlementProof(row)) {
       throw incomplete(`${collection} exact link readback settlement or line evidence is incomplete.`);
     }
     // Keep the provider row intact. Allocation validation and comparison belong

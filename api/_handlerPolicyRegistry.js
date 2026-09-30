@@ -17,6 +17,9 @@ function mutationPolicy(options = {}) {
 }
 
 const HANDLER_BEHAVIOR = Object.freeze({
+  missingNomBList: readPolicy({ cache: 'none' }),
+  missingNomBUpload: mutationPolicy({ cache: 'none', externalAction: true }),
+  missingNomBReminderCron: mutationPolicy({ cache: 'none', externalAction: true }),
   authContext: readPolicy({"cache":"none","externalAction":false,"capability":null}),
   portalApplicationsList: readPolicy({"cache":"none","externalAction":false,"capability":null}),
   portalApplicationLaunch: mutationPolicy({"cache":"none","externalAction":true,"capability":null}),

@@ -73,7 +73,8 @@ export async function retryCampaignCredits({ batch, ids, retryForecast, campaign
     if (!mounted.current || current !== generation.current) return;
     captureAllowance(data);
     if (!confirmedCreditRetry(batch, exact, data)) throw new Error('The exact retry outcomes could not be confirmed.');
-    confirmed = true; setOutcomes(data.outcomes); setNotice(`${data.outcomes.length} credit outcomes verified under the original approval.`);
+    const linked = data.outcomes.filter((row) => row.status === 'reconciled').length;
+    confirmed = true; setOutcomes(data.outcomes); setNotice(`${linked} credit links verified under the original approval; ${data.outcomes.length - linked} remain held.`);
     setUncertainIds((previous) => new Set([...previous].filter((id) => !exact.includes(id))));
   } catch (failure) {
     if (mounted.current && current === generation.current) {

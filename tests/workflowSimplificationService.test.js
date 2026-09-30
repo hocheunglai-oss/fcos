@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { allFinancialRows, buildFinancialClassifications, financialPreviewChanges, xeroFinancialSyncRun, XERO_RECONCILIATION_VERSION } from '../api/_xeroFinancialSync.js';
+import { SALES_INVOICE_SUMMARY_POLICY } from '../api/_xeroSalesInvoiceSummary.js';
 import { isFinalSettlement } from '../src/lib/disputeWorkflowPresentation.js';
 import { createDisputeSettlementEvidenceHandlers, loadDisputeSettlementEvidence } from '../api/_disputeSettlementEvidence.js';
 
@@ -181,7 +182,8 @@ test('saved mappings retrieve every page rather than silently stopping at 1000 r
 test('background check uses modified-since and detects source, lock and aged snapshots', async () => {
   const id = randomUUID(); const controls = { bankMappings: [], documentCorrectionClaims: [], documentCorrectionEvents: [], documentMappings: [], productMappings: [] };
   const run = { id, mode: 'preview', status: 'ready_for_review', source_snapshot_at: '2026-09-15T10:00:00Z', control_totals: { workflowSnapshot: {
-    reconciliationVersion: XERO_RECONCILIATION_VERSION, controlsFingerprint: createHash('sha256').update(JSON.stringify(controls)).digest('hex'), organisation: { periodLockDate: null, endOfYearLockDate: null, baseCurrency: null },
+    reconciliationVersion: XERO_RECONCILIATION_VERSION, salesInvoiceSummaryPolicy: SALES_INVOICE_SUMMARY_POLICY,
+    controlsFingerprint: createHash('sha256').update(JSON.stringify(controls)).digest('hex'), organisation: { periodLockDate: null, endOfYearLockDate: null, baseCurrency: null },
   } } };
   const calls = []; const deps = { client: database({ xero_financial_sync_runs: [run] }), connection: {}, now: Date.parse('2026-09-15T10:10:00Z'),
     querySalesforce: async () => Array.from({ length: 8 }, () => ({ records: [] })),
