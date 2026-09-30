@@ -166,6 +166,11 @@ export function authenticatedFunction({ handlerName, moduleId = null, mutation =
         const result = await execute(body, req, context);
         return sendJson(res, result);
       } catch (error) {
+        // Preserve the governed CI denial contract while the deployment guard
+        // rejects mutations before authentication can provision or bind a user.
+        if (error?.code === 'FCOS_DEPLOYMENT_READ_ONLY' && process.env.FCOS_ENABLE_READ_ONLY_CI === 'true') {
+          error.code = 'FCOS_CI_READ_ONLY';
+        }
         const status = Number(error?.status || error?.statusCode || 500);
         recordRequestFailure(error, status);
         if (shouldNotifySystemError(status)) {

@@ -6,6 +6,7 @@ import emailRouterSync from '../api/email-router-sync.js';
 import emailRouterWebhook from '../api/email-router-webhook.js';
 import fcunoIdentitySync from '../api/fcuno/identity-sync.js';
 import salesforceContactSync from '../api/salesforce/contact-sync.js';
+import workNotifications from '../api/work-notifications.js';
 import xeroCallback from '../api/xero/callback.js';
 
 function response() {
@@ -79,7 +80,9 @@ test('standalone mutation routes reject Preview and explicit read-only deploymen
         const res = response();
         await handler(req, res);
         assert.equal(res.statusCode, 403, `${name} must be rejected in ${JSON.stringify(env)}`);
-        assert.equal(JSON.parse(res.body).code, 'FCOS_DEPLOYMENT_READ_ONLY');
+        const expectedCode = handler === emailRouterBackgroundSync && env.FCOS_ENABLE_READ_ONLY_CI === 'true'
+          ? 'FCOS_CI_READ_ONLY' : 'FCOS_DEPLOYMENT_READ_ONLY';
+        assert.equal(JSON.parse(res.body).code, expectedCode);
         assert.equal(bodyReads(), 0, `${name} must not parse the request before rejecting it`);
       }
     });
@@ -92,5 +95,32 @@ test('Email Router webhook validation remains a non-mutating challenge in Previe
     await emailRouterWebhook({ method: 'GET', url: '/api/email-router-webhook?validationToken=challenge-token', headers: {} }, res);
     assert.equal(res.statusCode, 200);
     assert.equal(res.body, 'challenge-token');
+  });
+});
+
+test('authenticated mutation wrapper preserves CI denial before authentication, body parsing or services', async () => {
+  for (const [env, expectedCode] of [
+    [{ VERCEL_ENV: 'preview' }, 'FCOS_DEPLOYMENT_READ_ONLY'],
+    [{ VERCEL_ENV: 'preview', FCOS_ENABLE_READ_ONLY_CI: 'true' }, 'FCOS_CI_READ_ONLY'],
+    [{ VERCEL_ENV: 'production', FCOS_ENABLE_READ_ONLY_CI: 'true' }, 'FCOS_CI_READ_ONLY'],
+  ]) {
+    await withReadOnlyDeployment(env, async () => {
+      const { req, bodyReads } = unreadableMutationRequest({ url: '/api/work-notifications' });
+      const res = response();
+      // No bearer token or storage configuration: reaching authentication would
+      // return 401, so 403 proves the deployment guard ran first.
+      await workNotifications(req, res);
+      assert.equal(res.statusCode, 403);
+      assert.equal(JSON.parse(res.body).code, expectedCode);
+      assert.equal(bodyReads(), 0);
+    });
+  }
+  await withReadOnlyDeployment({ VERCEL_ENV: 'production' }, async () => {
+    const { req, bodyReads } = unreadableMutationRequest({ url: '/api/work-notifications' });
+    const res = response();
+    await workNotifications(req, res);
+    assert.equal(res.statusCode, 401);
+    assert.equal(JSON.parse(res.body).code, 'FCOS_SIGN_IN_REQUIRED');
+    assert.equal(bodyReads(), 0);
   });
 });
