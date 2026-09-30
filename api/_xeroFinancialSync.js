@@ -5,6 +5,7 @@ import { buildCampaignContactCases } from './_xeroReconciliationContacts.js';
 import { refreshCampaignInventory } from './_xeroReconciliationInventory.js';
 import { reserveXeroBudget, releaseXeroBudget, runWithXeroBudget } from './_xeroSharedControl.js';
 import { buildDocumentFieldProjection, projectAccountingPayload } from './_xeroDocumentFieldPolicy.js';
+import { salesInvoiceSummaryPayload, SALES_INVOICE_SUMMARY_POLICY } from './_xeroSalesInvoiceSummary.js';
 import { fcosSalesforceEnvironment } from '../config/fcosConnections.js';
 import { ISSUED_PETROLEUM_POLICY, ISSUED_PETROLEUM_V2_POLICY, ISSUED_PRESERVATION_POLICIES, isIssuedPreservationPolicy } from '../config/xeroIssuedPreservationPolicies.js';
 import { currentIssuedSupplierRoundingMatches, ISSUED_SUPPLIER_PRESERVATION_POLICY } from './_xeroIssuedSupplierPreservation.js';
@@ -341,7 +342,9 @@ export function buildXeroAccountingPayload(source, xeroDocumentId = null, curren
   if (Object.hasOwn(source || {}, 'issuedSupplierPreservation')) throw financialError('Issued supplier preservation never creates or updates Xero accounting.', 409, 'XERO_ISSUED_PRESERVATION_LINK_ONLY');
   if (source.groupedPreservation) throw financialError('Grouped preservation never creates or updates Xero accounting.', 409, 'XERO_GROUPED_PRESERVATION_LINK_ONLY');
   const payload = accountingPayload(source, xeroDocumentId, currentStatus, current);
-  return source.documentFieldProjection ? projectAccountingPayload(payload, source.documentFieldProjection) : payload;
+  const projected = source.documentFieldProjection ? projectAccountingPayload(payload, source.documentFieldProjection) : payload;
+  return !xeroDocumentId && source.documentKind === 'buyer_invoice' && source.documentFieldProjection?.scope === 'current'
+    ? salesInvoiceSummaryPayload(projected, source.total) : projected;
 }
 
 export async function xeroFinancialMappingsGet(_body = {}, {
@@ -503,7 +506,7 @@ export async function xeroFinancialSyncPreview(body = {}, dependencies = {}) {
     salesforceOrgId: fcosSalesforceEnvironment('production').orgId, reconciliationVersion: XERO_RECONCILIATION_VERSION,
     inputOptions: { linkFirst: true, recordExactMatches: false, includePayments: body.includePayments === true,
       cutoffDate: cutoff, postingMode, campaignId: body.campaignId || null },
-    inputEvidenceHash: previewEvidenceHash({ salesforce, sourcePayments, safetyContext, stored,
+    inputEvidenceHash: previewEvidenceHash({ salesInvoiceSummaryPolicy: SALES_INVOICE_SUMMARY_POLICY, salesforce, sourcePayments, safetyContext, stored,
       paymentMappings: paymentMappings.data, evidenceIds }),
   });
   let checkpoint = linkFirst ? await loadCheckpoint(client, checkpointScope()) : null;
@@ -621,7 +624,8 @@ export async function xeroFinancialSyncPreview(body = {}, dependencies = {}) {
     }
     stage('controls_verified');
     runRow.control_totals.workflowSnapshot = {
-      reconciliationVersion: XERO_RECONCILIATION_VERSION, linkFirst, payments, products: salesforce.products,
+      reconciliationVersion: XERO_RECONCILIATION_VERSION, salesInvoiceSummaryPolicy: SALES_INVOICE_SUMMARY_POLICY,
+      linkFirst, payments, products: salesforce.products,
       ...(checkpoint ? { campaignId: body.campaignId || null,
         previewCheckpointId: checkpoint.id,
         previewCheckpointInputEvidenceHash: checkpoint.input_evidence_hash,
@@ -685,6 +689,7 @@ export async function xeroFinancialSyncPreview(body = {}, dependencies = {}) {
   if (body.includePayments === true) {
     paymentSnapshot = await paymentPreview({ recordExactMatches: body.recordExactMatches === true }, { accessContext, env, fetchImpl, client, xeroReadSnapshot: xero.paymentReadSnapshot });
     runRow.control_totals = { ...runRow.control_totals, workflowSnapshot: { reconciliationVersion: XERO_RECONCILIATION_VERSION,
+      salesInvoiceSummaryPolicy: SALES_INVOICE_SUMMARY_POLICY,
       tenantId: connection.tenantId, includePayments: true, recordExactMatches: true,
       payments: paymentSnapshot, products: salesforce.products, mappingProposals, automaticMappingPolicy, checkedAt: now, controlsFingerprint: hashJson(await loadStoredFinancialControls(client)), organisation: xero.organisation } };
     const { error } = await client.from('xero_financial_sync_runs').update({ control_totals: runRow.control_totals }).eq('id', runId);
@@ -743,6 +748,7 @@ export async function financialPreviewChanges(runId, { client, connection, env =
     || (linkFirst !== undefined && snapshot?.linkFirst !== linkFirst)
     || (connection.tenantId && snapshot?.tenantId !== connection.tenantId)) return { changed: true };
   if (snapshot?.reconciliationVersion !== XERO_RECONCILIATION_VERSION || !snapshot?.controlsFingerprint || !Number.isFinite(since.getTime()) || now - since.getTime() > 21600000) return { changed: true };
+  if (snapshot.salesInvoiceSummaryPolicy !== SALES_INVOICE_SUMMARY_POLICY) return { changed: true };
   const controls = await loadStoredFinancialControls(client);
   if (hashJson(controls) !== snapshot.controlsFingerprint) return { changed: true };
   // Parent identity, delivery, Product and payment edits can change a child classification.
@@ -2248,11 +2254,18 @@ function mergeClassification(source, classification) {
   const writable = !blockers.length && classification.status === 'eligible' && ['create_draft', 'safe_update'].includes(classification.action);
   const readinessBlockers = source.readiness?.blockers || [];
   const blockerCodes = blockers.map((blocker) => readinessBlockers.includes(blocker) && /no (issued|verified issued) source file/.test(blocker) ? 'source_not_issued' : 'finance_exception');
-  return { ...source, ...classification, blockers, blockerCodes,
-    proposedPayload: writable ? buildXeroAccountingPayload(source,
+  let proposedPayload = null;
+  try {
+    proposedPayload = writable ? buildXeroAccountingPayload(source,
       classification.action === 'safe_update' ? classification.xero?.id : null,
       classification.action === 'safe_update' ? classification.xero?.status : null,
-      classification.action === 'safe_update' ? classification.xero : null) : null };
+      classification.action === 'safe_update' ? classification.xero : null) : null;
+  } catch (error) {
+    if (error.code !== 'XERO_SALES_SUMMARY_INVALID') throw error;
+    return { ...source, ...classification, action: 'blocked', status: 'blocked',
+      blockers: [...blockers, error.message], blockerCodes: [...blockerCodes, 'sales_summary_incompatible'], proposedPayload: null };
+  }
+  return { ...source, ...classification, blockers, blockerCodes, proposedPayload };
 }
 
 export async function loadAllXeroPages(connection, pathName, collection, { env, fetchImpl, onResponse, requestGate }) {

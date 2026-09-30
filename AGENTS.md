@@ -87,3 +87,11 @@ The repository owner authorized removing recurring release approvals on 16 Septe
 - Pipeline independent batch preparation with execution: while an approved batch is applying, use complete saved evidence to classify the next disjoint batch, resolve its dependencies, build a business-readable review, and estimate its call budget. Do not wait for the current batch to finish before starting this preparation.
 - Keep at most one prepared batch per independent action category ahead of execution. Reuse its saved work, then recheck changed records, exact evidence fingerprints, required dependencies and shared quota before approval or application. Keep Contact creation, draft creation and link-only approvals separate.
 - Preparation may run concurrently through bounded read-only work and local analysis; financial application remains serialized by the existing durable locks. Avoid duplicate provider reads and do not consume another batch's reserved verification capacity. A preparation agent must never grant an approval or start the next batch on its own.
+
+
+## Xero sales invoice presentation
+
+- Effective 30 September 2026, keep new eligible sales invoices in one summary line: quantity 1, the full invoice total including all verified products and charges, and INVOICE d/M/yyyy using Buyer Invoice Date.
+- Retain the approved common account and NONE tax; approved petroleum sales use 41100 Trading Sales / NONE. Mixed accounts or incompatible tax require a specific Finance exception, never silent reclassification.
+- Preserve source product, quantity and charge evidence, existing Xero invoice and bill details, accepted link fingerprints and financial controls. Supplier bill presentation is unchanged.
+- A presentation instruction is not approval to create drafts, send invoices, post payments or alter allocations. Refresh changed draft proposals and bind creation approval to their exact new evidence.
