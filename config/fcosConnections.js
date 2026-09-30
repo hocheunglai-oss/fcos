@@ -337,12 +337,7 @@ export function validateFcosConnectionPolicy(value = connectionPolicy) {
     throw new Error('Invalid provider order or IDs.');
   }
   for (const provider of value.providers) {
-    requireString(provider.provider, `${provider.id}.provider`);
-    requireString(provider.cli, `${provider.id}.cli`);
-    requireString(provider.executable, `${provider.id}.executable`);
-    requireString(provider.configPath, `${provider.id}.configPath`);
-    requireString(provider.profileName, `${provider.id}.profileName`);
-    requireString(provider.credentialStorage, `${provider.id}.credentialStorage`);
+    for (const field of ['provider', 'cli', 'executable', 'configPath', 'profileName', 'credentialStorage']) requireString(provider[field], `${provider.id}.${field}`);
     requirePositiveInteger(provider.rotationWarningDays, `${provider.id}.rotationWarningDays`);
     requirePositiveInteger(provider.expiryWarningDays, `${provider.id}.expiryWarningDays`);
     if (!Array.isArray(provider.identifiers) || !provider.identifiers.length) throw new Error(`${provider.id} identifiers are required.`);
@@ -356,13 +351,7 @@ export function validateFcosConnectionPolicy(value = connectionPolicy) {
       }
       const expectedSalesforceBrowserProfiles = { devee: 'Otto', qat: 'Otto', production: 'Vincent' };
       for (const environment of provider.environments) {
-        requireString(environment.key, `salesforce.${environment.key}.key`);
-        requireString(environment.label, `salesforce.${environment.key}.label`);
-        requireString(environment.alias, `salesforce.${environment.key}.alias`);
-        requireString(environment.username, `salesforce.${environment.key}.username`);
-        requireString(environment.instanceUrl, `salesforce.${environment.key}.instanceUrl`);
-        requireString(environment.orgId, `salesforce.${environment.key}.orgId`);
-        requireString(environment.browserProfile, `salesforce.${environment.key}.browserProfile`);
+        for (const field of ['key', 'label', 'alias', 'username', 'instanceUrl', 'orgId', 'browserProfile']) requireString(environment[field], `salesforce.${environment.key}.${field}`);
         if (!approvedBrowserProfiles.has(environment.browserProfile)) {
           throw new Error(`Salesforce ${environment.key} browserProfile is not approved.`);
         }

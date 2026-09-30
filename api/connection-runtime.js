@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { createClient } from '@supabase/supabase-js';
 import { fcosConnectionIdentifier } from '../config/fcosConnections.js';
 import { serverSupabaseConfig } from './_supabaseConfig.js';
@@ -25,7 +26,7 @@ export async function authorizeRuntimeProbe(req, { env = process.env, createClie
 }
 
 export function createRuntimeProbeHandler({ env = process.env, authorize = authorizeRuntimeProbe, probe = probeRuntimeConnections,
-  readReceipt = () => JSON.parse(readFileSync(new URL('../public/app-version.json', import.meta.url), 'utf8')), now = Date.now } = {}) {
+  readReceipt = () => JSON.parse(readFileSync(join(process.cwd(), 'public', 'app-version.json'), 'utf8')), now = Date.now } = {}) {
   const lastProbe = new Map();
   return async (req, res) => {
     res.setHeader('content-type', 'application/json'); res.setHeader('cache-control', 'no-store');
