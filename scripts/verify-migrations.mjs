@@ -29,6 +29,7 @@ const migrationSources = await Promise.all(names.map(async (name) => ({
   sql: await readFile(new URL(name, migrationDirectory), 'utf8'),
 })));
 const releaseMigrationNames = new Set([
+  '20260930080623_xero_document_preview_timeout.sql',
   '20260930043106_xero_campaign_approved_credit_retry.sql',
   '20260930025541_xero_campaign_inventory_write_performance.sql',
   '20260930044110_missing_nom_b_workflow.sql',
@@ -171,6 +172,13 @@ async function verifyRuntimeObjects(label) {
       and not has_function_privilege('anon',p.oid,'EXECUTE')
       and not has_function_privilege('authenticated',p.oid,'EXECUTE')`,
     2, `${label} complete campaign creation and refresh retain bounded RPC-local timeouts and execution scope`);
+  await assertRows(`select count(*)::int from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+    where n.nspname='public' and p.oid='public.persist_xero_financial_preview_v1(jsonb,jsonb,text)'::regprocedure
+      and not p.prosecdef and p.proconfig @> array['search_path=public, pg_temp','statement_timeout=45s']
+      and has_function_privilege('service_role',p.oid,'EXECUTE')
+      and not has_function_privilege('anon',p.oid,'EXECUTE')
+      and not has_function_privilege('authenticated',p.oid,'EXECUTE')`,
+    1, `${label} atomic document preview retains bounded timeout and server-only execution`);
   const privatePaymentReaders = ['xero_preview_checkpoint_node_value_v2','xero_preview_payment_rows_v2'];
   await assertRows(`select count(*)::int from pg_proc p join pg_namespace n on n.oid=p.pronamespace
     where n.nspname='public' and p.proname=any($1::text[])`,
