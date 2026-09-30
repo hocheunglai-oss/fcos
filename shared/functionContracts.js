@@ -7,6 +7,25 @@ const stringValue = (value) => typeof value === 'string' && value.trim().length 
 const stringArray = (value) => Array.isArray(value) && value.length > 0 && value.every(stringValue);
 
 const CONTRACTS = Object.freeze({
+  xeroPortalReceiptUploadPrepare(payload) {
+    const issues = [];
+    if (!objectPayload(payload.fields)) issues.push('Receipt fields are required.');
+    const file = payload.file;
+    if (!objectPayload(file) || !stringValue(file.fileName)
+      || !['image/jpeg', 'image/png', 'image/webp', 'application/pdf'].includes(file.fileType)
+      || !Number.isSafeInteger(file.size) || file.size <= 0 || file.size > 10 * 1024 * 1024
+      || !/^[a-f0-9]{64}$/.test(file.sha256 || '')) issues.push('A JPEG, PNG, WebP, or PDF receipt up to 10 MiB with its file hash is required.');
+    if (payload.autoSync != null && typeof payload.autoSync !== 'boolean') issues.push('autoSync must be a boolean.');
+    if (file && ['base64', 'data', 'content'].some((key) => file[key] != null)) issues.push('Upload receipt bytes directly to private storage.');
+    return issues;
+  },
+  xeroPortalReceiptCreate(payload) {
+    const issues = [];
+    if (!stringValue(payload.uploadTicket) || payload.uploadTicket.length > 4096) issues.push('Prepare a direct receipt upload first.');
+    if (!objectPayload(payload.fields)) issues.push('Receipt fields are required.');
+    if (Object.keys(payload).some((key) => !['uploadTicket', 'fields'].includes(key))) issues.push('Only the signed upload ticket and its original receipt fields may be submitted.');
+    return issues;
+  },
   adminPermissionGroupSave(payload) {
     const issues = [];
     if (!stringValue(payload.label) || payload.label.trim().length > 100) issues.push('Enter a group name up to 100 characters.');

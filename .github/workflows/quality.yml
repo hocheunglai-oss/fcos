@@ -55,7 +55,7 @@ jobs:
           # setup-cli forces GHCR; a blank override restores the pinned CLI's
           # built-in registry fallback when that registry throttles downloads.
           SUPABASE_INTERNAL_IMAGE_REGISTRY: ''
-      - run: FCOS_MIGRATION_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres FCOS_REQUIRE_LIVE_MIGRATION_CHECK=1 npm run verify:migrations
+      - run: FCOS_MIGRATION_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres FCOS_MIGRATION_DISPOSABLE_CLUSTER=1 FCOS_MIGRATION_DOCKER_CONTAINER=supabase_db_fcos FCOS_REQUIRE_LIVE_MIGRATION_CHECK=1 npm run verify:migrations
       - name: Verify Missing Nom B database concurrency and recovery
         run: |
           node --input-type=module <<'NODE'

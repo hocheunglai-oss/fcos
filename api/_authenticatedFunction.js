@@ -1,4 +1,5 @@
 import { loadEffectiveGroupAccess } from './_accessGroups.js';
+import { requireDeploymentMutationAllowed } from './_deploymentReadOnly.js';
 import { createClient } from '@supabase/supabase-js';
 import { serverSupabaseConfig } from './_supabaseConfig.js';
 import { enforceFcunoFederatedAccess } from './_fcunoIdentityFederation.js';
@@ -156,6 +157,7 @@ export function authenticatedFunction({ handlerName, moduleId = null, mutation =
         const requestMutation = typeof mutation === 'function' ? mutation(req) : mutation;
         res.setHeader('X-FCOS-Handler-Mutation', requestMutation ? '1' : '0');
         res.setHeader('X-FCOS-External-Action', '0');
+        requireDeploymentMutationAllowed(requestMutation);
         const context = await requireActiveUser(req);
         requireReadOnlyCiOperation(context.profile, resolvedHandlerName, {}, { mutation: requestMutation });
         await requireModuleAccess(context, moduleId);
@@ -164,6 +166,11 @@ export function authenticatedFunction({ handlerName, moduleId = null, mutation =
         const result = await execute(body, req, context);
         return sendJson(res, result);
       } catch (error) {
+        // Preserve the governed CI denial contract while the deployment guard
+        // rejects mutations before authentication can provision or bind a user.
+        if (error?.code === 'FCOS_DEPLOYMENT_READ_ONLY' && process.env.FCOS_ENABLE_READ_ONLY_CI === 'true') {
+          error.code = 'FCOS_CI_READ_ONLY';
+        }
         const status = Number(error?.status || error?.statusCode || 500);
         recordRequestFailure(error, status);
         if (shouldNotifySystemError(status)) {

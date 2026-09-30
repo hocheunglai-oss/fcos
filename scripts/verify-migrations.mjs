@@ -1,81 +1,29 @@
-import { readFile, readdir } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+import assert from 'node:assert/strict';
 import pg from 'pg';
+import { disposableDatabaseUrl, LOCAL_PLATFORM_FIXTURE_SQL, migrationSha256, planMigrationVerification, verifyLocalMigrationServer } from './lib/migration-verification.mjs';
+import { seedUpgradeFixture, verifyUpgradeFixture } from './fixtures/migration-upgrade.mjs';
 
 const migrationDirectory = new URL('../supabase/migrations/', import.meta.url);
-const names = (await readdir(migrationDirectory)).filter((name) => name.endsWith('.sql')).sort();
-const invalidNames = names.filter((name) => !/^\d{14}_[a-z0-9_]+\.sql$/.test(name));
-const timestamps = names.map((name) => name.slice(0, 14));
-const duplicates = timestamps.filter((value, index) => timestamps.indexOf(value) !== index);
-
-if (!names.length) throw new Error('No Supabase migrations were found.');
-if (invalidNames.length) throw new Error(`Invalid migration filenames: ${invalidNames.join(', ')}`);
-if (duplicates.length) throw new Error(`Duplicate migration timestamps: ${[...new Set(duplicates)].join(', ')}`);
-
+const names = (await readdir(migrationDirectory)).filter(name => name.endsWith('.sql')).sort();
+const migrationSources = await Promise.all(names.map(async name => ({ name, sql: await readFile(new URL(name, migrationDirectory), 'utf8') })));
+const recordedBaseline = JSON.parse(await readFile(new URL('../config/migration-verification-baseline.json', import.meta.url), 'utf8'));
+const plan = planMigrationVerification(migrationSources, recordedBaseline);
 const databaseUrl = String(process.env.FCOS_MIGRATION_DATABASE_URL || '').trim();
-const requireLive = process.env.FCOS_REQUIRE_LIVE_MIGRATION_CHECK === '1';
 if (!databaseUrl) {
-  if (requireLive) throw new Error('FCOS_MIGRATION_DATABASE_URL is required for the release migration gate.');
-  process.stdout.write(`Verified ${names.length} ordered Supabase migration files. Runtime database verification was not requested.\n`);
+  if (process.env.FCOS_REQUIRE_LIVE_MIGRATION_CHECK === '1') throw new Error('FCOS_MIGRATION_DATABASE_URL is required for the release migration gate.');
+  process.stdout.write(`Verified ${names.length} ordered migration files and ${plan.baseline.length} immutable baseline digests; ${plan.pending.length} pending. Runtime database verification was not requested.\n`);
   process.exit(0);
 }
-
-const parsedUrl = new URL(databaseUrl);
-if (!['127.0.0.1', 'localhost', '::1'].includes(parsedUrl.hostname)) {
-  throw new Error('Migration verification may run only against a disposable local Supabase database.');
-}
-
-const migrationSources = await Promise.all(names.map(async (name) => ({
-  name,
-  sql: await readFile(new URL(name, migrationDirectory), 'utf8'),
-})));
-const releaseMigrationNames = new Set([
-  '20260930080623_xero_document_preview_timeout.sql',
-  '20260930043106_xero_campaign_approved_credit_retry.sql',
-  '20260930025541_xero_campaign_inventory_write_performance.sql',
-  '20260930044110_missing_nom_b_workflow.sql',
-  '20260930004300_xero_preview_finalize_timeout.sql',
-  '20260930004200_xero_preview_payments_reference.sql',
-  '20260930004000_xero_preview_checkpoint_chunks.sql',
-  '20260930004100_xero_financial_preview_staged.sql',
-  '20260929170347_xero_shared_control.sql',
-  '20260929170953_xero_reconciliation_campaign.sql',
-  '20260929141433_people_access_service_grants.sql',
-  '20260929133157_people_access_groups.sql',
-  '20260929035058_dashboard_nom_b_policies.sql',
-  '20260928053229_xero_document_field_correction_journal.sql',
-  '20260928033217_xero_issued_petroleum_attachment_preservation_v2.sql',
-  '20260927213024_xero_petroleum_inactive_source_ownership.sql',
-  '20260927185526_xero_issued_petroleum_preservation_link.sql',
-  '20260927175805_xero_issued_supplier_preservation_link.sql',
-  '20260927154515_xero_financial_preview_persistence.sql',
-  '20260923222821_xero_grouped_preservation_link.sql',
-  '20260923213339_xero_payment_reference_link.sql',
-  '20260923210832_xero_financial_selection_scope.sql',
-  '20260923182327_xero_contact_identity_decisions.sql',
-  '20260921061845_dashboard_bank_charges.sql',
-  '20260920154626_dashboard_finance_settings.sql',
-  '20260920105042_market_trader_workspace.sql',
-  '20260916223258_app_workflow_reliability.sql',
-  '20260806090000_financial_report_settings_and_currency_thresholds.sql',
-  '20260806100000_dispute_external_closure_reconciliation.sql',
-  '20260807120000_email_router_forward_file_learning.sql',
-  '20260904160812_variable_charge_resolution_optional_reference.sql',
-  '20260905105308_account_insight_report_presets.sql',
-  '20260905111234_account_insight_report_preset_indexes.sql',
-  '20260906161240_restrict_browser_role_admin_grants.sql',
-  '20260908074607_fcbs_own_account_settlement.sql',
-]);
-const baseline = migrationSources.filter((migration) => !releaseMigrationNames.has(migration.name));
-const upgrade = migrationSources.filter((migration) => releaseMigrationNames.has(migration.name));
-if (upgrade.length !== releaseMigrationNames.size) {
-  throw new Error('The release migration fixture is incomplete. Update verify-migrations.mjs when release migrations change.');
-}
-const client = new pg.Client({ connectionString: databaseUrl });
-
-async function resetPublicSchema() {
-  await client.query('drop schema if exists emailrouter cascade; drop schema if exists public cascade; create schema public;');
-  await client.query('grant usage on schema public to postgres, anon, authenticated, service_role; grant create on schema public to postgres, service_role;');
-}
+const parsedUrl = disposableDatabaseUrl(databaseUrl);
+if (process.env.FCOS_MIGRATION_DISPOSABLE_CLUSTER !== '1') throw new Error('Set FCOS_MIGRATION_DISPOSABLE_CLUSTER=1 only for a disposable local PostgreSQL cluster; historical migrations include role settings.');
+const evidenceDirectory = new URL('../output/', import.meta.url);
+const evidencePath = new URL('migration-verification.json', evidenceDirectory);
+await rm(evidencePath, { force: true });
+const owner = new pg.Client({ connectionString: parsedUrl.toString() });
+let client;
 
 async function applyMigrations(migrations, label) {
   for (const migration of migrations) {
@@ -423,48 +371,70 @@ async function verifyRuntimeObjects(label) {
   );
 }
 
-await client.connect();
-try {
-  await resetPublicSchema();
-  await applyMigrations(migrationSources, 'Empty-database migration chain');
-  await verifyRuntimeObjects('Empty database');
-
-  await resetPublicSchema();
-  await applyMigrations(baseline, 'Upgrade baseline');
-  await client.query(`
-    update public.buyer_invoice_email_settings
-    set settings = jsonb_set(jsonb_set(settings - 'from', '{to}', '["finance-fixture@example.invalid"]'::jsonb, true), '{cc}', '[]'::jsonb, true),
-        updated_by_email = 'migration-fixture',
-        updated_at = created_at + interval '1 minute'
-    where id = 'default';
-    update public.incoming_payment_settings set fully_paid_threshold = 50 where id = 'default';
-    insert into public.hedge_invoices (legacy_source_id, invoice_number, counterparty, status, subtotal)
-    values ('release-upgrade-fixture', 'fixture-legacy-invoice', 'FCBS', 'Sent', 123.45);
-  `);
-  await applyMigrations(upgrade, 'Upgrade fixture');
-  await verifyRuntimeObjects('Upgrade fixture');
-  await assertRows(
-    `select count(*)::int from public.hedge_invoices where legacy_source_id='release-upgrade-fixture'
-     and settlement_basis='counterparty' and source_fingerprint is null and status='Sent' and subtotal=123.45`,
-    1, 'Upgrade fixture preserves legacy FCBS invoice basis and amount',
-  );
-  await assertRows(
-    `select count(*)::int from public.financial_report_settings where purpose_key = 'outstanding_invoice_reports' and configured and settings->'to' = '["finance-fixture@example.invalid"]'::jsonb and not settings ? 'from'`,
-    1,
-    'Upgrade fixture preserved approved report recipients without a sender override',
-  );
-  await assertRows(
-    `select count(*)::int from public.incoming_payment_settings where id = 'default' and legacy_fully_paid_threshold = 50`,
-    1,
-    'Upgrade fixture retained the old global threshold only as audit history',
-  );
-  await assertRows(
-    `select count(*)::int from public.payment_collection_currency_thresholds`,
-    0,
-    'Upgrade fixture did not copy the legacy threshold into every currency',
-  );
-} finally {
-  await client.end();
+async function runScenario(label, migrations, upgrade = false) {
+  const name = `fcos_migration_verify_${randomUUID().replaceAll('-', '')}`;
+  let created = false;
+  try {
+    await owner.query(`create database "${name}" template template0`);
+    created = true;
+    const url = new URL(parsedUrl); url.pathname = `/${name}`;
+    client = new pg.Client({ connectionString: url.toString() });
+    await client.connect();
+    await client.query("set statement_timeout='60s'; set lock_timeout='5s'");
+    await client.query(LOCAL_PLATFORM_FIXTURE_SQL);
+    await applyMigrations(migrations, label);
+    if (upgrade) {
+      const evidence = await seedUpgradeFixture(client);
+      await applyMigrations(plan.pending, 'Populated release upgrade');
+      await verifyUpgradeFixture(client, evidence);
+    }
+    await verifyRuntimeObjects(label);
+  } finally {
+    try { if (client) await client.end(); }
+    finally {
+      client = null;
+      if (created) await owner.query(`drop database "${name}" with (force)`);
+    }
+  }
 }
 
-process.stdout.write(`Verified ${names.length} migrations against empty and upgrade Supabase fixtures, including constraints, RPC security, grants, and RLS.\n`);
+await owner.connect();
+let originalSchemaSetting;
+let settingsCaptured = false;
+let localServerProof;
+try {
+  const identity = (await owner.query(`select host(inet_server_addr()) as address, current_database() as database,
+    current_setting('data_directory') as data_directory`)).rows[0];
+  localServerProof = verifyLocalMigrationServer({ address: identity.address, databaseUrl, cwd: fileURLToPath(new URL('../', import.meta.url)) });
+  assert.equal(identity.database, decodeURIComponent(parsedUrl.pathname.slice(1)), 'Database target did not match the requested local database.');
+  if (process.env.FCOS_MIGRATION_EXPECTED_DATA_DIRECTORY) assert.equal(identity.data_directory, process.env.FCOS_MIGRATION_EXPECTED_DATA_DIRECTORY);
+  const roles = (await owner.query("select rolname,rolconfig from pg_roles where rolname=any($1::text[])", [['postgres', 'anon', 'authenticated', 'service_role', 'authenticator']])).rows;
+  assert.equal(roles.length, 5, 'Disposable cluster must have the standard Supabase roles.');
+  originalSchemaSetting = roles.find(role => role.rolname === 'authenticator').rolconfig?.find(value => value.startsWith('pgrst.db_schemas='))?.slice('pgrst.db_schemas='.length);
+  settingsCaptured = true;
+  await runScenario('Empty database', plan.ordered);
+  await runScenario('Populated release upgrade', plan.baseline, true);
+} finally {
+  try {
+    if (settingsCaptured) {
+      if (originalSchemaSetting === undefined) await owner.query('alter role authenticator reset pgrst.db_schemas');
+      else await owner.query(`alter role authenticator set pgrst.db_schemas to ${pg.escapeLiteral(originalSchemaSetting)}`);
+    }
+  } finally { await owner.end(); }
+}
+await mkdir(evidenceDirectory, { recursive: true });
+await writeFile(evidencePath, `${JSON.stringify({
+  schemaVersion: 1,
+  verifiedAt: new Date().toISOString(),
+  baselineCommit: plan.baselineCommit,
+  baselineVersion: plan.baselineVersion,
+  migrationCount: names.length,
+  chainSha256: migrationSha256(JSON.stringify(plan.ordered.map(({ name, sql }) => ({ name, sha256: migrationSha256(sql) })))),
+  pending: plan.pending.map(({ name, sql }) => ({ name, sha256: migrationSha256(sql) })),
+  scenarios: ['empty-database', 'populated-release-upgrade'],
+  platformFixture: 'migration-contracts-only',
+  localServerProof,
+  temporaryDatabasesRemoved: true,
+  authenticatorSettingRestored: true,
+}, null, 2)}\n`);
+process.stdout.write(`Verified ${names.length} migrations on empty and populated upgrade fixtures from ${plan.baselineVersion} (${plan.baselineCommit}); ${plan.pending.length} pending applied chronologically. Temporary databases removed.\n`);
