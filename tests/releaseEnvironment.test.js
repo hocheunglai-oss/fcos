@@ -94,6 +94,7 @@ test('release gates scope credentials, enforce strict checks, and always clean p
     environment: validEnvironment,
     checkedOutCommit: () => releaseSha,
     verify: async () => proof,
+    parity: async options => { lifecycle.push('parity'); assert.deepEqual(options, { candidateUrl, expectedCommit: releaseSha }); },
     prepare: async options => { lifecycle.push('prepare'); assert.equal(options.dependencies.allowExisting, false); },
     cleanup: async () => { lifecycle.push('cleanup'); },
     run: (command, args, options) => {
@@ -101,7 +102,7 @@ test('release gates scope credentials, enforce strict checks, and always clean p
       return { status: args.includes('test:e2e') ? 1 : 0 };
     },
   }), /Read-only browser smoke tests/);
-  assert.deepEqual(lifecycle, ['prepare', 'cleanup']);
+  assert.deepEqual(lifecycle, ['parity', 'prepare', 'cleanup']);
   const browser = calls.at(-1);
   assert.equal(browser.env.FCOS_E2E_EXPECTED_COMMIT, releaseSha);
   assert.equal(browser.env.FCOS_E2E_BASE_URL, candidateUrl);
@@ -125,4 +126,13 @@ test('release fails before any command or state creation on mismatched checkout 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /FCOS_E2E_CANDIDATE_URL is required/);
   assert.doesNotMatch(result.stdout, /\[release gate\]/);
+});
+
+test('release rejects unresolved parity before tests or browser state creation', async () => {
+  const unexpected = () => assert.fail('must not execute');
+  await assert.rejects(() => verifyRelease({ environment: validEnvironment,
+    checkedOutCommit: () => releaseSha, verify: async () => proof,
+    parity: async () => { throw new Error('Preview parity blocked'); },
+    run: unexpected, prepare: unexpected, cleanup: unexpected,
+  }), /Preview parity blocked/);
 });

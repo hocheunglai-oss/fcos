@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { assertReleaseBrowserEnvironment, verifyReleasePreviewArtifact } from './lib/release-environment.mjs';
 import { preparePrivateE2eState, removePrivateE2eState } from './e2e-private-state.mjs';
+import { assertCollectedPreviewParity } from './collect-preview-parity.mjs';
 
 const checks = [
   ['Unit and integration tests', ['run', 'test']],
@@ -21,6 +22,7 @@ export async function verifyRelease({
   run = spawnSync,
   checkedOutCommit = () => execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
   verify = verifyReleasePreviewArtifact,
+  parity = assertCollectedPreviewParity,
   prepare = preparePrivateE2eState,
   cleanup = removePrivateE2eState,
 } = {}) {
@@ -29,6 +31,9 @@ export async function verifyRelease({
   const browser = assertReleaseBrowserEnvironment(environment);
   if (checkedOutCommit() !== browser.expectedCommit) throw new Error('Release checkout must match FCOS_E2E_EXPECTED_COMMIT.');
   const candidate = await verify(browser);
+  // This independently collects live configuration. A local pass/review JSON
+  // cannot waive missing runtime or normal-role evidence.
+  await parity({ candidateUrl: candidate.candidateUrl, expectedCommit: candidate.commit });
   const browserEnv = {
     ...environment,
     FCOS_REQUIRE_AUTH_E2E: '1',
