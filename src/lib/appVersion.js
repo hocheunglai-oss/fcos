@@ -3,6 +3,16 @@ import { APP_VERSION } from './appVersionMeta.js';
 export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
+  {
+    version: '2.0.284',
+    releasedAt: '2026-09-30',
+    title: 'Automatic missing Nom B reminders and filing',
+    changes: [
+      'Adds five-minute checks for new final buyer invoices with saved PDFs and sends the assigned buyer trader one Nom B reminder per STEM, with STEM and invoice details and a link to all their missing Nom B.',
+      'Adds a desktop list of the trader’s active missing Nom B across all dates, including uninvoiced STEMs, with direct upload to the Buyer Confirmation and verified green Received status.',
+      'Keeps reminders prospective, excludes proformas, credit notes, deprecated invoices and cancelled STEMs, and rechecks filing before delivery. Verifies interrupted uploads before retrying to prevent duplicate files.',
+    ],
+  },
   { version: '2.0.282', releasedAt: '2026-09-30', title: 'Verify held credit links', changes: ['Retry unchanged held credit links under their original approval with fresh source, financial and settlement checks.', 'Accept only verified harmless Xero response defaults, preserve original evidence and audit every retry outcome.'] },
   { version: '2.0.281', releasedAt: '2026-09-30', title: 'Faster approved reconciliation links', changes: ['Read only the required source families and dependencies, verify invoices together, and continue unchanged approved links in bounded batches with progress and Stop.', 'Preserve exact approval, ownership and settlement evidence; recover interrupted claims before continuing.'] },
   { version: '2.0.275', releasedAt: '2026-09-30', title: 'Controlled Salesforce–Xero reconciliation', changes: ['Review a fixed 2026 backlog with separate approvals for verified links, Contact identity and new drafts; preserve existing Xero accounting details.', 'Coordinate Xero allowance and token refresh across requests, forecast verification calls, and recover interrupted work through readback with an audit trail.'] },

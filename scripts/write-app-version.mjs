@@ -3,10 +3,14 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { APP_VERSION } from '../src/lib/appVersionMeta.js';
+import { APP_VERSION_HISTORY } from '../src/lib/appVersion.js';
+import { assertCurrentReleaseHistory } from './lib/app-version-history-guard.mjs';
 
 const outputUrl = new URL('../public/app-version.json', import.meta.url);
 const outputPath = fileURLToPath(outputUrl);
 const builtAt = new Date().toISOString();
+
+assertCurrentReleaseHistory(APP_VERSION, APP_VERSION_HISTORY);
 
 function readGitCommit() {
   try {
