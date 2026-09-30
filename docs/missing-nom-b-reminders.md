@@ -28,6 +28,8 @@ A reminder requires a non-deprecated, non-proforma final invoice created after a
 
 Potential final invoices are recorded durably before the PDF or amount is ready. `Blocked / PDF_PENDING` is retried without requiring another invoice modification, so delayed completion beyond the scan overlap is covered. The incremental `SystemModstamp` scan uses pagination and overlap; discoveries and cursor advancement commit together.
 
+Checkpoints retain PostgreSQL timestamp precision. Salesforce query lower bounds round up and upper bounds round down to its millisecond precision, while invoice eligibility compares the exact activation instant. Restarting a scan preserves its original boundary and page cursor.
+
 The STEM must have exactly one active Buyer Confirmation: `RecordType.DeveloperName = Buyer` and `Deprecated__c = false`. `Replaced__c` marks regenerated outgoing content and does not retire a confirmation. A received green indicator alone is insufficient. A valid Nom B is an actual linked, non-deleted, published, nonempty file with the STEM reference and canonical Nom B marker; outgoing `File__c`/`PDF__c` documents are excluded.
 
 Ownership follows the shared Production trader policy and one active FCOS profile. Non-overridden names with inactive or duplicate matching Salesforce User identities are blocked. The authoritative overrides in `config/nomBTraderIdentities.js` assign both Vu Huu Long and Pham Kim Thuy follow-ups to `long@cosulich.com.hk`. The shared `bunker@cosulich.com.hk` correspondence address grants no ownership. Buyer contacts and invoice creators are not recipients.

@@ -346,3 +346,67 @@ test('health reports bounded upload failure evidence without operation IDs or tr
  const result=await missingNomBStatus({client,env:{}});assert.deepEqual(result.recentUploadOutcomes,[{status:'Rejected',code:'COMPOSITE_ROLLED_BACK',at:activation}]);
  assert.equal(JSON.stringify(result).includes('secret-operation'),false);assert.equal(JSON.stringify(result).includes(profile.email),false);
 });
+
+test('prospective eligibility preserves the exact activation instant instead of truncating microseconds',()=>{
+ const preciseActivation='2026-09-30T06:30:51.023028+00:00';
+ for(const created of ['2026-09-30T06:30:51.022Z','2026-09-30T06:30:51.023Z','2026-09-30T14:30:51.023+0800','2026-09-30T06:30:51.023027Z']) {
+  assert.equal(isMissingNomBInvoiceCandidate({...invoice,CreatedDate:created},preciseActivation),false,created);
+  assert.equal(qualifiesMissingNomBInvoice({...invoice,CreatedDate:created},preciseActivation),false,created);
+ }
+ for(const created of ['2026-09-30T06:30:51.023028Z','2026-09-30T06:30:51.024Z','2026-09-30T14:30:51.024+08:00']) {
+  assert.equal(qualifiesMissingNomBInvoice({...invoice,CreatedDate:created},preciseActivation),true,created);
+ }
+ assert.equal(isMissingNomBInvoiceCandidate({...invoice,CreatedDate:'2026-02-30T06:30:51Z'},activation),false);
+ assert.equal(isMissingNomBInvoiceCandidate(invoice,'invalid activation'),false);
+});
+
+function scanPrecisionHarness(initial,query=async()=>[]) {
+ let state={...initial};const queries=[],checkpoints=[];let rejectCheckpoint=false;
+ const client=clientStub({rpc:async(key,args)=>{
+  if(key==='missing_nom_b_claim_scan')return {...state};
+  if(key==='missing_nom_b_claim_reminders')return [];
+  assert.equal(key,'missing_nom_b_checkpoint');
+  if(rejectCheckpoint)throw new Error('checkpoint outage');
+  checkpoints.push(args);
+  state={...state,cursor_at:args.p_cursor_at,cursor_id:args.p_cursor_id};return {...state};
+ }});
+ const gateway={verify:async()=>org,invoiceSelect:async()=>invoiceDescription.fields.map(f=>f.name).join(','),query:async(q)=>{queries.push(q);return query(q);}};
+ return {queries,checkpoints,get state(){return {...state};},failCheckpoint(value){rejectCheckpoint=value;},
+  run:(maxScanPages=5)=>runMissingNomBReminders({client,gateway,maxScanPages,env:{VERCEL_ENV:'production',FCOS_ENABLE_MISSING_NOM_B_REMINDERS:'true'},resolveSender:async()=>({emailAddress:'sender@example.invalid'}),sendMail:async()=>assert.fail('Scan-only regression must never send')})};
+}
+
+test('initial microsecond scan completes with the raw checkpoint while Salesforce bounds round inward',async()=>{
+ for(const [raw,lower,upper] of [
+  ['2026-09-30T06:30:51.023028+00:00','2026-09-30T06:30:51.024Z','2026-09-30T06:30:51.023Z'],
+  ['2026-09-30T06:30:51.023028+00','2026-09-30T06:30:51.024Z','2026-09-30T06:30:51.023Z'],
+  ['2026-09-30T14:30:51.023028+0800','2026-09-30T06:30:51.024Z','2026-09-30T06:30:51.023Z'],
+  ['2026-12-31T23:59:59.999999Z','2027-01-01T00:00:00.000Z','2026-12-31T23:59:59.999Z'],
+  ['2026-09-30T06:30:51.023000+00:00','2026-09-30T06:30:51.023Z','2026-09-30T06:30:51.023Z']
+ ]) {
+  const h=scanPrecisionHarness({activated_at:raw,cursor_at:raw,cursor_id:'',scan_until:raw});
+  assert.equal((await h.run()).scanned,0);assert.equal(h.checkpoints[0].p_cursor_at,raw);assert.equal(h.checkpoints[0].p_done,true);
+  assert.ok(h.queries[0].includes(`CreatedDate >= ${lower}`));assert.ok(h.queries[0].includes(`SystemModstamp >= ${lower}`));assert.ok(h.queries[0].includes(`SystemModstamp <= ${upper}`));
+  assert.equal(h.state.activated_at,raw);
+ }
+});
+
+test('full-page checkpoint and resumed Id tie-breaker retain the exact Salesforce boundary after an outage',async()=>{
+ const raw='2026-09-30T06:30:51.023028+00:00',stamp='2026-09-30T06:30:51.024+0000',until='2026-09-30T06:30:52.999999+00:00';
+ const page=Array.from({length:200},(_,i)=>({...invoice,Id:`a02${String(i).padStart(12,'0')}AAA`,CreatedDate:stamp,SystemModstamp:stamp}));
+ const last=page.at(-1);const next={...page[0],Id:'a02000000000200AAA'};
+ const h=scanPrecisionHarness({activated_at:raw,cursor_at:raw,cursor_id:'',scan_until:until},async(q)=>q.includes('Id >')?[next]:page);
+ h.failCheckpoint(true);await assert.rejects(h.run(1),/checkpoint outage/);assert.equal(h.state.cursor_at,raw);assert.equal(h.checkpoints.length,0);
+ h.failCheckpoint(false);assert.equal((await h.run(1)).discovered,200);
+ assert.equal(h.checkpoints[0].p_cursor_at,stamp);assert.equal(h.checkpoints[0].p_cursor_id,last.Id);assert.equal(h.checkpoints[0].p_done,false);
+ assert.equal((await h.run()).discovered,1);
+ assert.ok(h.queries.at(-1).includes(`(SystemModstamp > 2026-09-30T06:30:51.024Z OR (SystemModstamp = 2026-09-30T06:30:51.024Z AND Id > '${last.Id}'))`));
+ assert.equal(h.checkpoints[1].p_discoveries[0].invoiceId,next.Id);assert.equal(h.checkpoints[1].p_cursor_at,until);assert.equal(h.state.activated_at,raw);
+});
+
+test('worker invoice queries ceil the activation boundary and fractional cursors do not admit an earlier millisecond',async()=>{
+ const raw='2026-09-30T23:59:59.999001+00:00';const seen=[];
+ const gateway=createMissingNomBGateway({sfRequest:describedInvoice,query:async(q)=>{seen.push(q);return [];}});
+ await gateway.invoicesForStems([stemId],raw);assert.ok(seen[0].includes('CreatedDate >= 2026-10-01T00:00:00.000Z'));
+ const h=scanPrecisionHarness({activated_at:activation,cursor_at:raw,cursor_id:invoiceId,scan_until:'2026-10-01T00:00:00.000001Z'});
+ await h.run();assert.ok(h.queries[0].includes('SystemModstamp >= 2026-10-01T00:00:00.000Z'));assert.equal(h.queries[0].includes('Id >'),false);
+});

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import pg from 'pg';
+import { runMissingNomBReminders } from '../api/_missingNomB.js';
 const source = await readFile(new URL('../supabase/migrations/20260930044110_missing_nom_b_workflow.sql',import.meta.url),'utf8');
 const databaseUrl = process.env.FCOS_MISSING_NOM_B_TEST_DATABASE_URL;
 
@@ -115,6 +116,37 @@ test('disposable Postgres verifies claims, rollback, RLS, expiry and concurrent 
    const retry=await value(reserveSql,[org,op4,user,'stem-4','nom-4','hash','changed',randomUUID()]);assert.equal(retry.acquired,false);assert.equal(retry.status,'Posting');
    assert.equal(await value("select missing_nom_b_upload_transition($1,$2,$3,'Completed',$4) v",[org,op4,token4,JSON.stringify({verified:true})]),true);
    assert.equal((await value(reserveSql,[org,op4,user,'stem-4','nom-4','hash','f',randomUUID()])).result.verified,true);
+  });
+  await t.test('real service checkpoints the existing microsecond activation without rounding, resetting or sending',async()=>{
+   const precisionOrg='source-test-precision';const exact='2026-09-30T06:30:51.023028+00:00';
+   await db.query('insert into missing_nom_b_scan_state(source_org_id,activated_at,completed_through,cursor_at,cursor_id,scan_until) values($1,$2,$2,$2,\'\',$2)',[precisionOrg,exact]);
+   const original=await value('select to_jsonb(s) v from missing_nom_b_scan_state s where source_org_id=$1',[precisionOrg]);
+   // Reproduce the production rejection against the actual applied RPC, then let
+   // the service recover the same state. No replacement activation is inserted.
+   const brokenToken=randomUUID();await value('select missing_nom_b_claim_scan($1,$2) v',[precisionOrg,brokenToken]);
+   await assert.rejects(db.query('select missing_nom_b_checkpoint($1,$2,$3,$4,$5,true)',[precisionOrg,brokenToken,'[]',new Date(exact).toISOString(),'']),/MISSING_NOM_B_CURSOR_INVALID/);
+   await db.query("update missing_nom_b_scan_state set claim_until=now()-interval '1 second' where source_org_id=$1",[precisionOrg]);
+   const queries=[],checkpoints=[];
+   const client={rpc:async(key,args)=>{
+    let data;
+    if(key==='missing_nom_b_claim_scan')data=await value('select missing_nom_b_claim_scan($1,$2) v',[args.p_org,args.p_token]);
+    else if(key==='missing_nom_b_checkpoint'){
+     checkpoints.push(args);data=await value('select missing_nom_b_checkpoint($1,$2,$3,$4,$5,$6) v',[args.p_org,args.p_token,JSON.stringify(args.p_discoveries),args.p_cursor_at,args.p_cursor_id,args.p_done]);
+    } else {assert.equal(key,'missing_nom_b_claim_reminders');data=(await db.query('select * from missing_nom_b_claim_reminders($1,$2,$3)',[args.p_org,args.p_token,args.p_limit])).rows;}
+    return {data,error:null};
+   }};
+   await db.query('set role service_role');
+   let result;
+   try {
+    result=await runMissingNomBReminders({client,env:{VERCEL_ENV:'production',FCOS_ENABLE_MISSING_NOM_B_REMINDERS:'true'},resolveSender:async()=>({emailAddress:'sender@example.invalid'}),
+     gateway:{verify:async()=>precisionOrg,invoiceSelect:async()=>'Id',query:async(q)=>{queries.push(q);return [];}},sendMail:async()=>assert.fail('Empty scan must not send')});
+   } finally {await db.query('reset role');}
+   assert.equal(result.scanned,0);assert.equal(result.sent,0);assert.equal(checkpoints[0].p_cursor_at,original.scan_until);
+   assert.ok(queries[0].includes('CreatedDate >= 2026-09-30T06:30:51.024Z'));assert.ok(queries[0].includes('SystemModstamp <= 2026-09-30T06:30:51.023Z'));
+   const after=await value('select to_jsonb(s) v from missing_nom_b_scan_state s where source_org_id=$1',[precisionOrg]);
+   assert.equal(after.activated_at,original.activated_at);assert.equal(after.completed_through,original.scan_until);
+   assert.equal(after.cursor_at,null);assert.equal(after.scan_until,null);assert.equal(after.claim_token,null);assert.ok(after.last_success_at);
+   assert.equal(await value('select count(*)::int v from missing_nom_b_reminders where source_org_id=$1',[precisionOrg]),0);
   });
  } finally {await other.end();await db.end();}
 });
