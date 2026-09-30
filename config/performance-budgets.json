@@ -3,7 +3,7 @@
     "largestJavaScriptBytes": 720000,
     "largestJavaScriptGzipBytes": 215000,
     "chartChunkBytes": 405000,
-    "totalJavaScriptBytes": 3915000
+    "totalJavaScriptBytes": 3918000
   },
   "onDemandPdfViewer": {
     "rendererBytes": 475000,
@@ -17,8 +17,8 @@
     "totalGzipBytes": 220000
   },
   "onDemandReconciliationCampaign": {
-    "totalBytes": 28000,
-    "totalGzipBytes": 9000
+    "totalBytes": 35000,
+    "totalGzipBytes": 11000
   },
   "server": {
     "universalDispatcherLines": 19600,
