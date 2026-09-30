@@ -1,4 +1,8 @@
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { basename, join } from 'node:path';
+import { isIP } from 'node:net';
 
 export function migrationSha256(sql) { return createHash('sha256').update(sql).digest('hex'); }
 
@@ -31,6 +35,51 @@ export function disposableDatabaseUrl(databaseUrl) {
     throw new Error('Migration verification requires a loopback PostgreSQL URL without connection overrides.');
   }
   return url;
+}
+
+export function verifyLocalMigrationServer({ address, databaseUrl, cwd = process.cwd(), env = process.env, runDocker } = {}) {
+  const url = disposableDatabaseUrl(databaseUrl);
+  if (!isIP(address || '')) throw new Error('Migration database server address could not be verified.');
+  if (env.FCOS_MIGRATION_DISPOSABLE_CLUSTER !== '1') throw new Error('Migration verification requires an explicitly disposable local cluster.');
+  const target = env.FCOS_MIGRATION_DOCKER_CONTAINER;
+  if (!target && ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(address)) return { transport: 'loopback' };
+  if (!target) throw new Error('Migration verification requires a loopback server or an explicitly verified local Docker container.');
+  let project;
+  try {
+    project = readFileSync(join(cwd, 'supabase/config.toml'), 'utf8').match(/^\s*project_id\s*=\s*"([A-Za-z0-9_-]+)"\s*(?:#.*)?$/m)?.[1];
+    if (!project) throw new Error('Local Supabase project_id is missing or invalid.');
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    project = basename(cwd);
+  }
+  if (!/^[A-Za-z0-9_-]+$/.test(project) || target !== `supabase_db_${project}`) throw new Error('Migration Docker container does not match the local Supabase project.');
+  if (env.DOCKER_HOST && !env.DOCKER_HOST.startsWith('unix:///')) throw new Error('Migration verification refuses a remote Docker host.');
+  const dockerEnv = { ...env }; delete dockerEnv.DOCKER_HOST; delete dockerEnv.DOCKER_CONTEXT;
+  const run = runDocker || ((args, commandEnv) => execFileSync('docker', args, {
+    cwd, env: commandEnv, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000, maxBuffer: 65536,
+  }).trim());
+  let endpoint;
+  let container;
+  try {
+    endpoint = env.DOCKER_HOST && !env.DOCKER_CONTEXT ? env.DOCKER_HOST
+      : JSON.parse(run(['context', 'inspect', '--format', '{{json .Endpoints.docker.Host}}'], env));
+    if (typeof endpoint !== 'string' || !endpoint.startsWith('unix:///')) throw new Error('Remote Docker endpoint.');
+    // Force the verified local socket. Inspect only nonsecret identity/network
+    // fields; never request Docker's environment or complete inspect output.
+    const format = '{"name":{{json .Name}},"running":{{json .State.Running}},"project":{{json (index .Config.Labels "com.supabase.cli.project")}},"ports":{{json .NetworkSettings.Ports}},"networks":{{json .NetworkSettings.Networks}}}';
+    container = JSON.parse(run(['--host', endpoint, 'inspect', '--type', 'container', '--format', format, target], dockerEnv));
+  } catch { throw new Error('Local Docker target proof could not be verified; migration verification stopped.'); }
+  const port = url.port || '5432';
+  const requestedHost = url.hostname.replace(/^\[|\]$/g, '');
+  const bindings = container.ports?.['5432/tcp'];
+  const bindingMatches = Array.isArray(bindings) && bindings.some(binding => binding.HostPort === port
+    && (binding.HostIp === '0.0.0.0' || binding.HostIp === '::' || binding.HostIp === requestedHost
+      || (requestedHost === 'localhost' && ['127.0.0.1', '::1'].includes(binding.HostIp))));
+  const networkMatches = Object.values(container.networks || {}).some(network => network.IPAddress === address || network.GlobalIPv6Address === address);
+  if (container.name !== `/${target}` || container.running !== true || container.project !== project || !bindingMatches || !networkMatches) {
+    throw new Error('Database server address or published port does not match the pinned local Supabase Docker container.');
+  }
+  return { transport: 'local-docker', container: target, project };
 }
 
 // Only migration-facing platform contracts are bootstrapped. Real Supabase Auth,

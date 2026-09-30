@@ -50,11 +50,20 @@ function deploymentSourcePaths(cwd, included, directory = '') {
   return paths;
 }
 
+function provenanceFailure(message, statusChanges, contentChanges) {
+  const details = [...statusChanges.map(change => ({ ...change, kind: 'git-status' })), ...contentChanges];
+  const safe = details.filter(change => !isCredentialPath(change.path)).slice(0, 20);
+  // Never emit patches, file contents, credential paths, or a raw Git result.
+  return new Error(`${message} Path diagnostics: ${JSON.stringify(safe)}; ${details.length - safe.length} additional or redacted changes.`);
+}
+
 export function collectBuildProvenance({ cwd = process.cwd(), env = process.env, requireClean = env.FCOS_REQUIRE_CLEAN_BUILD === '1' || env.VERCEL === '1' } = {}) {
   let head = null;
   let paths;
   let gitDirty = null;
   let committedFiles;
+  const statusChanges = [];
+  const contentChanges = [];
   try { head = git(cwd, ['rev-parse', '--verify', 'HEAD']); } catch { /* Source archives have no Git metadata. */ }
   const supplied = ['VERCEL_GIT_COMMIT_SHA', 'FCOS_BUILD_COMMIT_SHA'].map(key => env[key]?.trim()).filter(Boolean);
   for (const sha of supplied) {
@@ -67,27 +76,27 @@ export function collectBuildProvenance({ cwd = process.cwd(), env = process.env,
 
   if (head) {
     if (realpathSync(git(cwd, ['rev-parse', '--show-toplevel'])) !== realpathSync(cwd)) throw new Error('Build provenance must run from the repository root.');
-    paths = [...git(cwd, ['ls-files', '-z', '--cached', '--others', '--exclude-standard']).split('\0').filter(Boolean), ...uploadedPaths];
     committedFiles = new Map(git(cwd, ['ls-tree', '-r', '-z', 'HEAD']).split('\0').filter(Boolean).map(entry => {
       const separator = entry.indexOf('\t');
       const [mode, type, oid] = entry.slice(0, separator).split(' ');
       return [entry.slice(separator + 1), { mode, type, oid }];
     }));
+    paths = [...git(cwd, ['ls-files', '-z', '--cached']).split('\0').filter(Boolean), ...committedFiles.keys(), ...uploadedPaths];
     // Inspect names only, never patches: a credential accidentally tracked by Git
     // must not be hashed, serialized, or printed in public build evidence.
-    const status = git(cwd, ['status', '--porcelain=v1', '-z', '--untracked-files=all']).split('\0').filter(Boolean);
-    const changed = [];
+    // A sanitized checkout can lack .gitignore after npm ci. Avoid enumerating
+    // every installed dependency; uploadedPaths independently finds extra inputs.
+    const status = git(cwd, ['status', '--porcelain=v1', '-z', '--untracked-files=normal']).split('\0').filter(Boolean);
     for (let index = 0; index < status.length; index += 1) {
       const entry = status[index];
-      changed.push(entry.slice(3));
-      if (/[RC]/.test(entry.slice(0, 2))) changed.push(status[++index]);
+      const paths = [entry.slice(3)];
+      if (/[RC]/.test(entry.slice(0, 2))) paths.push(status[++index]);
+      for (const path of paths) if (!GENERATED_PROVENANCE_FILES.has(path)) statusChanges.push({ path, status: entry.slice(0, 2) });
     }
-    gitDirty = changed.some(path => !GENERATED_PROVENANCE_FILES.has(path));
+    gitDirty = statusChanges.length > 0;
   } else {
     paths = uploadedPaths;
   }
-  if (requireClean && head && gitDirty !== false) throw new Error('Release build requires a verified clean Git checkout; commit source changes before building.');
-
   const hash = createHash('sha256');
   hash.update('fcos-vercel-source-v1\0');
   let sourceFileCount = 0;
@@ -97,7 +106,7 @@ export function collectBuildProvenance({ cwd = process.cwd(), env = process.env,
     const absolute = join(cwd, path);
     let info;
     try { info = lstatSync(absolute); } catch (error) {
-      if (error.code === 'ENOENT') { contentMatchesHead = false; continue; }
+      if (error.code === 'ENOENT') { contentMatchesHead = false; contentChanges.push({ path, kind: 'missing' }); continue; }
       throw error;
     }
     // Never follow a link to a credential or a file outside the reviewed source.
@@ -109,7 +118,10 @@ export function collectBuildProvenance({ cwd = process.cwd(), env = process.env,
       const committed = committedFiles.get(path);
       const blobOid = createHash('sha1').update(`blob ${content.length}\0`).update(content).digest('hex');
       if (!committed || committed.type !== 'blob' || committed.oid !== blobOid
-        || committed.mode !== (info.mode & 0o111 ? '100755' : '100644')) contentMatchesHead = false;
+        || committed.mode !== (info.mode & 0o111 ? '100755' : '100644')) {
+        contentMatchesHead = false;
+        contentChanges.push({ path, kind: committed ? 'modified' : 'untracked-source' });
+      }
     }
     // Git cleanliness covers the full source tree, including upload-excluded
     // files. The portable digest covers the exact non-secret deployment inputs.
@@ -123,12 +135,21 @@ export function collectBuildProvenance({ cwd = process.cwd(), env = process.env,
   // Check actual bytes against the committed blobs as well as Git status.
   // This catches changes hidden by assume-unchanged/skip-worktree index flags.
   if (head) gitDirty ||= !contentMatchesHead;
-  if (requireClean && head && gitDirty !== false) throw new Error('Release build requires a verified clean Git checkout; source content differs from HEAD.');
   const expectedDigest = String(env.FCOS_EXPECTED_SOURCE_SHA256 || '').trim().toLowerCase();
   if (expectedDigest && (!/^[0-9a-f]{64}$/.test(expectedDigest) || expectedDigest !== sourceDigest)) {
-    throw new Error('Build provenance source digest does not match the expected source attestation.');
+    throw provenanceFailure('Build provenance source digest does not match the expected source attestation.', statusChanges, contentChanges);
   }
   const sourceAttested = Boolean(expectedDigest && supplied.length);
+  const sanitizedMissing = new Set(contentChanges.filter(change => change.kind === 'missing'
+    && committedFiles?.get(change.path)?.type === 'blob' && !included(change.path)).map(change => change.path));
+  const knownGeneratedState = change => change.status === '??'
+    && ['node_modules/', '.vercel/'].includes(change.path) && !included(change.path);
+  const sanitizedCheckout = Boolean(head && env.VERCEL === '1' && sourceAttested && sanitizedMissing.size
+    && contentChanges.every(change => sanitizedMissing.has(change.path))
+    && statusChanges.every(change => (change.status === ' D' && sanitizedMissing.has(change.path)) || knownGeneratedState(change)));
+  if (requireClean && head && gitDirty !== false && !sanitizedCheckout) {
+    throw provenanceFailure('Release build requires a verified clean Git checkout; source content differs from HEAD.', statusChanges, contentChanges);
+  }
   if (requireClean && !head && !sourceAttested) throw new Error('Release build requires a clean Git checkout or a trusted source SHA256 attestation and full commit SHA.');
   return {
     schemaVersion: 1,
@@ -136,7 +157,8 @@ export function collectBuildProvenance({ cwd = process.cwd(), env = process.env,
     commitVerified: Boolean(head),
     gitDirty,
     sourceAttested,
-    releaseEligible: head ? gitDirty === false : sourceAttested,
+    sanitizedCheckout,
+    releaseEligible: head ? gitDirty === false || sanitizedCheckout : sourceAttested,
     sourceDigest,
     sourceDigestAlgorithm: 'sha256:fcos-vercel-source-v1',
     sourceFileCount,

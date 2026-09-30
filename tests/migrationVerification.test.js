@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
-import { disposableDatabaseUrl, migrationSha256, planMigrationVerification } from '../scripts/lib/migration-verification.mjs';
+import { disposableDatabaseUrl, migrationSha256, planMigrationVerification, verifyLocalMigrationServer } from '../scripts/lib/migration-verification.mjs';
 
 const first = { name: '20260930000000_baseline.sql', sql: 'select 1;' };
 const second = { name: '20260930100000_pending.sql', sql: 'select 2;' };
@@ -42,4 +42,41 @@ test('database gate accepts explicit loopback targets and rejects connection-str
     'https://postgres@localhost/postgres', 'postgresql://localhost/postgres',
     'postgresql://postgres@localhost/', 'not a URL',
   ]) assert.throws(() => disposableDatabaseUrl(url), /local|loopback/);
+});
+
+function dockerFixture(overrides = {}) {
+  const container = { name: '/supabase_db_fcos', running: true, project: 'fcos',
+    ports: { '5432/tcp': [{ HostIp: '0.0.0.0', HostPort: '54322' }] },
+    networks: { supabase_network_fcos: { IPAddress: '172.18.0.2', GlobalIPv6Address: '' } }, ...overrides };
+  const calls = [];
+  const args = { address: '172.18.0.2', databaseUrl: 'postgresql://postgres@127.0.0.1:54322/postgres', cwd: '/fixture/fcos',
+    env: { FCOS_MIGRATION_DISPOSABLE_CLUSTER: '1', FCOS_MIGRATION_DOCKER_CONTAINER: 'supabase_db_fcos' },
+    runDocker(command, env) { calls.push({ command, env }); return command[0] === 'context' ? '"unix:///var/run/docker.sock"' : JSON.stringify(container); } };
+  return { args, calls };
+}
+
+test('local Docker bridge address requires exact project, published port, address and a forced local socket', () => {
+  const { args, calls } = dockerFixture();
+  assert.deepEqual(verifyLocalMigrationServer(args), { transport: 'local-docker', container: 'supabase_db_fcos', project: 'fcos' });
+  assert.deepEqual(calls[1].command.slice(0, 5), ['--host', 'unix:///var/run/docker.sock', 'inspect', '--type', 'container']);
+  assert.doesNotMatch(calls[1].command.join(' '), /\.Config\.Env/);
+  assert.equal(calls[1].env.DOCKER_HOST, undefined); assert.equal(calls[1].env.DOCKER_CONTEXT, undefined);
+  assert.deepEqual(verifyLocalMigrationServer({ ...args, address: '127.0.0.1', env: { FCOS_MIGRATION_DISPOSABLE_CLUSTER: '1' } }), { transport: 'loopback' });
+});
+
+test('remote, unrelated or ambiguous Docker targets fail closed before any migration', () => {
+  const { args } = dockerFixture();
+  for (const container of [
+    { name: '/supabase_db_other' }, { running: false }, { project: 'other' },
+    { ports: { '5432/tcp': [{ HostIp: '127.0.0.1', HostPort: '6543' }] } },
+    { ports: { '5432/tcp': [{ HostIp: '192.168.1.20', HostPort: '54322' }] } },
+    { networks: { network: { IPAddress: '172.18.0.3' } } },
+  ]) assert.throws(() => verifyLocalMigrationServer(dockerFixture(container).args), /does not match/);
+  assert.throws(() => verifyLocalMigrationServer({ ...args, env: { FCOS_MIGRATION_DISPOSABLE_CLUSTER: '1' } }), /explicitly verified/);
+  assert.throws(() => verifyLocalMigrationServer({ ...args, env: { ...args.env, FCOS_MIGRATION_DISPOSABLE_CLUSTER: '0' } }), /explicitly disposable/);
+  assert.throws(() => verifyLocalMigrationServer({ ...args, env: { ...args.env, FCOS_MIGRATION_DOCKER_CONTAINER: 'supabase_db_other' } }), /does not match/);
+  assert.throws(() => verifyLocalMigrationServer({ ...args, cwd: '/fixture/FCOS' }), /does not match/);
+  assert.throws(() => verifyLocalMigrationServer({ ...args, address: null }), /address could not be verified/);
+  assert.throws(() => verifyLocalMigrationServer({ ...args, env: { ...args.env, DOCKER_HOST: 'tcp://remote.invalid:2375' } }), /remote Docker host/);
+  assert.throws(() => verifyLocalMigrationServer({ ...args, runDocker: () => '"ssh://remote.invalid"' }), /could not be verified/);
 });

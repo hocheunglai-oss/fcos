@@ -140,3 +140,73 @@ test('upload negation rules retain included files and Git-ignored deployable inp
   assert.notEqual(f.collect().sourceDigest, clean.sourceDigest);
   assert.throws(() => f.collect({ requireClean: true }), /source content differs from HEAD/);
 });
+
+test('attested Vercel hybrid checkout permits only missing upload-excluded tracked files', t => {
+  const f = fixture(t); const clean = f.collect();
+  const env = { VERCEL: '1', VERCEL_GIT_COMMIT_SHA: clean.commit, FCOS_EXPECTED_SOURCE_SHA256: clean.sourceDigest };
+  rmSync(join(f.cwd, '.gitignore'));
+  const receipt = f.collect({ env });
+  assert.equal(receipt.gitDirty, true); assert.equal(receipt.sanitizedCheckout, true);
+  assert.equal(receipt.sourceAttested, true); assert.equal(receipt.releaseEligible, true);
+  assert.equal(receipt.sourceDigest, clean.sourceDigest);
+  assert.throws(() => f.collect({ requireClean: true }), /clean Git checkout/);
+  assert.throws(() => f.collect({ env: { ...env, VERCEL: '0' }, requireClean: true }), /clean Git checkout/);
+  assert.throws(() => f.collect({ env: { VERCEL: '1', VERCEL_GIT_COMMIT_SHA: clean.commit } }), /clean Git checkout/);
+  assert.throws(() => f.collect({ env: { VERCEL: '1', FCOS_EXPECTED_SOURCE_SHA256: clean.sourceDigest } }), /clean Git checkout/);
+  assert.throws(() => f.collect({ env: { ...env, FCOS_EXPECTED_SOURCE_SHA256: '0'.repeat(64) } }), /source digest does not match/);
+  f.git('add', '-u');
+  assert.throws(() => f.collect({ env }), /clean Git checkout/);
+});
+
+test('attested hybrid checkouts reject changed excluded files and any uploaded extra file', t => {
+  const f = fixture(t); const clean = f.collect();
+  const env = { VERCEL: '1', VERCEL_GIT_COMMIT_SHA: clean.commit, FCOS_EXPECTED_SOURCE_SHA256: clean.sourceDigest };
+  f.git('update-index', '--assume-unchanged', '.gitignore');
+  writeFileSync(join(f.cwd, '.gitignore'), 'changed excluded input');
+  assert.throws(() => f.collect({ env }), /source content differs from HEAD/);
+  f.git('update-index', '--no-assume-unchanged', '.gitignore');
+  rmSync(join(f.cwd, '.gitignore'));
+  writeFileSync(join(f.cwd, 'extra.js'), 'unexpected uploaded source');
+  assert.throws(() => f.collect({ env }), /source digest does not match/);
+  // Even a supplied digest of the dirty content cannot bless an uploaded extra file.
+  const dirty = f.collect();
+  assert.throws(() => f.collect({ env: { ...env, FCOS_EXPECTED_SOURCE_SHA256: dirty.sourceDigest } }), /clean Git checkout/);
+});
+
+test('dirty failure diagnostics contain paths only and redact credential paths', t => {
+  const f = fixture(t);
+  writeFileSync(join(f.cwd, 'source.js'), 'source-content-must-not-be-logged');
+  writeFileSync(join(f.cwd, '.env.local'), 'SECRET=credential-content-must-not-be-logged');
+  f.git('add', '-f', '.env.local');
+  assert.throws(() => f.collect({ requireClean: true }), error => {
+    assert.match(error.message, /source\.js/);
+    assert.doesNotMatch(error.message, /\.env|source-content|credential-content|SECRET=/);
+    return true;
+  });
+});
+
+test('attested sanitized builds permit only the two known untracked build-state directories', t => {
+  const f = fixture(t);
+  writeFileSync(join(f.cwd, '.gitignore'), '.env*\nnode_modules/\n.vercel/\n');
+  writeFileSync(join(f.cwd, '.vercelignore'), 'tmp/\nreports/\n');
+  f.git('add', '.'); f.git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'build-state rules');
+  const clean = f.collect();
+  const env = { VERCEL: '1', VERCEL_GIT_COMMIT_SHA: clean.commit, FCOS_EXPECTED_SOURCE_SHA256: clean.sourceDigest };
+  rmSync(join(f.cwd, '.gitignore'));
+  mkdirSync(join(f.cwd, 'node_modules')); writeFileSync(join(f.cwd, 'node_modules/dependency.js'), 'installed dependency');
+  mkdirSync(join(f.cwd, '.vercel')); writeFileSync(join(f.cwd, '.vercel/project.json'), '{"fixture":true}');
+  assert.equal(f.collect({ env }).sanitizedCheckout, true);
+  assert.throws(() => f.collect({ requireClean: true }), /clean Git checkout/);
+  for (const directory of ['tmp', 'reports']) {
+    mkdirSync(join(f.cwd, directory)); writeFileSync(join(f.cwd, directory, 'unexpected.txt'), 'excluded but unapproved state');
+    assert.throws(() => f.collect({ env }), error => {
+      assert.match(error.message, /clean Git checkout/); assert.doesNotMatch(error.message, /\.vercel/); return true;
+    });
+    rmSync(join(f.cwd, directory), { recursive: true });
+  }
+  mkdirSync(join(f.cwd, 'api')); writeFileSync(join(f.cwd, 'api/unexpected.js'), 'uploaded extra API');
+  assert.throws(() => f.collect({ env }), /source digest does not match/);
+  rmSync(join(f.cwd, 'api'), { recursive: true });
+  writeFileSync(join(f.cwd, 'source.js'), 'tampered application source');
+  assert.throws(() => f.collect({ env }), /source digest does not match/);
+});

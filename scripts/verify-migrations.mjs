@@ -1,8 +1,9 @@
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import pg from 'pg';
-import { disposableDatabaseUrl, LOCAL_PLATFORM_FIXTURE_SQL, migrationSha256, planMigrationVerification } from './lib/migration-verification.mjs';
+import { disposableDatabaseUrl, LOCAL_PLATFORM_FIXTURE_SQL, migrationSha256, planMigrationVerification, verifyLocalMigrationServer } from './lib/migration-verification.mjs';
 import { seedUpgradeFixture, verifyUpgradeFixture } from './fixtures/migration-upgrade.mjs';
 
 const migrationDirectory = new URL('../supabase/migrations/', import.meta.url);
@@ -400,10 +401,11 @@ async function runScenario(label, migrations, upgrade = false) {
 await owner.connect();
 let originalSchemaSetting;
 let settingsCaptured = false;
+let localServerProof;
 try {
   const identity = (await owner.query(`select host(inet_server_addr()) as address, current_database() as database,
     current_setting('data_directory') as data_directory`)).rows[0];
-  assert.ok(['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(identity.address), 'Migration verification requires a loopback database server.');
+  localServerProof = verifyLocalMigrationServer({ address: identity.address, databaseUrl, cwd: fileURLToPath(new URL('../', import.meta.url)) });
   assert.equal(identity.database, decodeURIComponent(parsedUrl.pathname.slice(1)), 'Database target did not match the requested local database.');
   if (process.env.FCOS_MIGRATION_EXPECTED_DATA_DIRECTORY) assert.equal(identity.data_directory, process.env.FCOS_MIGRATION_EXPECTED_DATA_DIRECTORY);
   const roles = (await owner.query("select rolname,rolconfig from pg_roles where rolname=any($1::text[])", [['postgres', 'anon', 'authenticated', 'service_role', 'authenticator']])).rows;
@@ -431,6 +433,7 @@ await writeFile(evidencePath, `${JSON.stringify({
   pending: plan.pending.map(({ name, sql }) => ({ name, sha256: migrationSha256(sql) })),
   scenarios: ['empty-database', 'populated-release-upgrade'],
   platformFixture: 'migration-contracts-only',
+  localServerProof,
   temporaryDatabasesRemoved: true,
   authenticatorSettingRestored: true,
 }, null, 2)}\n`);
