@@ -1,7 +1,8 @@
+import { loadEffectiveGroupAccess } from './_accessGroups.js';
 import { createClient } from '@supabase/supabase-js';
 import { serverSupabaseConfig } from './_supabaseConfig.js';
 import { enforceFcunoFederatedAccess } from './_fcunoIdentityFederation.js';
-import { requireReadOnlyCiOperation } from './_readOnlyCiAccess.js';
+import { requireReadOnlyCiOperation, isReadOnlyCiProfile, ciModuleAccess } from './_readOnlyCiAccess.js';
 import { reportSystemError, shouldNotifySystemError } from './_systemErrorNotifications.js';
 import {
   logRequestTelemetry,
@@ -75,17 +76,13 @@ async function requireActiveUser(req) {
 }
 
 async function requireModuleAccess(context, moduleId) {
-  if (!moduleId || ['administrator', 'general_manager'].includes(context.profile.user_type)) return;
-  const table = context.profile.use_type_defaults === false
-    ? 'user_module_permissions'
-    : 'user_type_module_permissions';
-  let query = context.client.from(table).select('can_view').eq('module_id', moduleId);
-  query = context.profile.use_type_defaults === false
-    ? query.eq('user_id', context.profile.id)
-    : query.eq('user_type_id', context.profile.user_type);
-  const { data, error } = await query.maybeSingle();
-  if (error) throw error;
-  if (data?.can_view !== true) {
+  if (!moduleId) return;
+  if (isReadOnlyCiProfile(context.profile)) {
+    if (ciModuleAccess([moduleId])[moduleId] === true) return;
+    throw endpointError('The CI identity does not have access to this module.', 403, 'FCOS_MODULE_FORBIDDEN');
+  }
+  const access = await loadEffectiveGroupAccess(context.client, context.profile);
+  if (![true, 'read', 'full'].includes(access.permissions?.[moduleId])) {
     throw endpointError('You do not have access to this FCOS module.', 403, 'FCOS_MODULE_FORBIDDEN');
   }
 }

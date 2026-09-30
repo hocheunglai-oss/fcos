@@ -29,6 +29,33 @@ const migrationSources = await Promise.all(names.map(async (name) => ({
   sql: await readFile(new URL(name, migrationDirectory), 'utf8'),
 })));
 const releaseMigrationNames = new Set([
+  '20260930080623_xero_document_preview_timeout.sql',
+  '20260930043106_xero_campaign_approved_credit_retry.sql',
+  '20260930025541_xero_campaign_inventory_write_performance.sql',
+  '20260930044110_missing_nom_b_workflow.sql',
+  '20260930004300_xero_preview_finalize_timeout.sql',
+  '20260930004200_xero_preview_payments_reference.sql',
+  '20260930004000_xero_preview_checkpoint_chunks.sql',
+  '20260930004100_xero_financial_preview_staged.sql',
+  '20260929170347_xero_shared_control.sql',
+  '20260929170953_xero_reconciliation_campaign.sql',
+  '20260929141433_people_access_service_grants.sql',
+  '20260929133157_people_access_groups.sql',
+  '20260929035058_dashboard_nom_b_policies.sql',
+  '20260928053229_xero_document_field_correction_journal.sql',
+  '20260928033217_xero_issued_petroleum_attachment_preservation_v2.sql',
+  '20260927213024_xero_petroleum_inactive_source_ownership.sql',
+  '20260927185526_xero_issued_petroleum_preservation_link.sql',
+  '20260927175805_xero_issued_supplier_preservation_link.sql',
+  '20260927154515_xero_financial_preview_persistence.sql',
+  '20260923222821_xero_grouped_preservation_link.sql',
+  '20260923213339_xero_payment_reference_link.sql',
+  '20260923210832_xero_financial_selection_scope.sql',
+  '20260923182327_xero_contact_identity_decisions.sql',
+  '20260921061845_dashboard_bank_charges.sql',
+  '20260920154626_dashboard_finance_settings.sql',
+  '20260920105042_market_trader_workspace.sql',
+  '20260916223258_app_workflow_reliability.sql',
   '20260806090000_financial_report_settings_and_currency_thresholds.sql',
   '20260806100000_dispute_external_closure_reconciliation.sql',
   '20260807120000_email_router_forward_file_learning.sql',
@@ -67,7 +94,128 @@ async function assertRows(sql, expected, label, values = []) {
 }
 
 async function verifyRuntimeObjects(label) {
-  const releaseTables = ['account_insight_report_presets', 'account_insight_report_preset_events', 'hedge_fcbs_settlement_operations'];
+  await assertRows(`select count(*)::int from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+    where n.nspname='public' and p.proname like 'missing_nom_b_%'
+      and not p.prosecdef and has_function_privilege('service_role',p.oid,'EXECUTE')
+      and not has_function_privilege('anon',p.oid,'EXECUTE')
+      and not has_function_privilege('authenticated',p.oid,'EXECUTE')`, 7, `${label} Nom B RPCs are server-controlled`);
+  await assertRows(`select count(*)::int from public.missing_nom_b_scan_state`, 0, `${label} Nom B activation remains prospective`);
+  const accessTables = ['permission_groups', 'user_permission_groups', 'permission_access_events', 'permission_access_migration_snapshots', 'permission_access_catalog'];
+  await assertRows(`select count(*)::int from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relname=any($1::text[]) and c.relrowsecurity`, accessTables.length, `${label} group access RLS`, [accessTables]);
+  await assertRows(`select count(*)::int from unnest($1::text[]) t cross join unnest(array['anon','authenticated']) r cross join unnest(array['SELECT','INSERT','UPDATE','DELETE','TRUNCATE']) p where has_table_privilege(r,'public.'||t,p)`, 0, `${label} group access is server-only`, [accessTables]);
+  await assertRows(`select count(*)::int from unnest(array['UPDATE','DELETE','TRUNCATE']) p where has_table_privilege('service_role','public.permission_access_events',p)`, 0, `${label} group audit append-only`);
+  await assertRows(`select count(*)::int from unnest($1::text[]) t cross join unnest(array['TRUNCATE','REFERENCES','TRIGGER']) p where has_table_privilege('service_role','public.'||t,p)`, 0, `${label} access service grants exclude inherited ALL privileges`, [accessTables]);
+  await assertRows(`select count(*)::int from unnest(array['permission_access_migration_snapshots','permission_access_catalog']) t cross join unnest(array['INSERT','UPDATE','DELETE']) p where has_table_privilege('service_role','public.'||t,p)`, 0, `${label} access migration evidence and catalog read-only`);
+  await assertRows(`select count(*)::int from public.permission_access_migration_snapshots s join public.user_profiles u on u.id=s.user_id where u.active and ((public.fcos_effective_access(u.id)->'permissions') is distinct from s.permissions or (public.fcos_effective_access(u.id)->'capabilities') is distinct from s.capabilities)`, 0, `${label} migration exact grant preservation`);
+
+  const campaignTables = ['xero_reconciliation_campaigns','xero_reconciliation_cases','xero_reconciliation_batches','xero_reconciliation_events'];
+  await assertRows(`select count(*)::int from pg_proc p where
+    p.oid='public.xero_campaign_retry_claim_v1(uuid,uuid,uuid,integer,text,text[])'::regprocedure
+    and p.prosecdef and p.proconfig @> array['search_path=""','statement_timeout=15s']
+    and has_function_privilege('service_role',p.oid,'EXECUTE')
+    and not has_function_privilege('anon',p.oid,'EXECUTE')
+    and not has_function_privilege('authenticated',p.oid,'EXECUTE')`,
+    1, `${label} bounded original-approved credit retry is server-only`);
+  const sharedXeroTables = ['xero_shared_tenant_control','xero_shared_budgets','xero_shared_probe_grants','xero_shared_requests','xero_token_refresh_leases'];
+  await assertRows(`select count(*)::int from pg_proc p where
+    p.oid='public.xero_campaign_inventory_v1(uuid,uuid,uuid,jsonb)'::regprocedure
+    and p.prosecdef and p.proconfig @> array['search_path=""','statement_timeout=45s']
+    and has_function_privilege('service_role',p.oid,'EXECUTE')
+    and not has_function_privilege('anon',p.oid,'EXECUTE')
+    and not has_function_privilege('authenticated',p.oid,'EXECUTE')`,
+    1, `${label} complete inventory write has a bounded RPC-local timeout and unchanged execution scope`);
+  await assertRows(`select count(*)::int from pg_class c join pg_namespace n on n.oid=c.relnamespace
+    where n.nspname='public' and c.relname=any($1::text[]) and c.relrowsecurity`, 9, `${label} campaign and shared quota RLS`, [[...campaignTables,...sharedXeroTables]]);
+  await assertRows(`select count(*)::int from unnest($1::text[]) t cross join unnest(array['anon','authenticated']) r
+    cross join unnest(array['SELECT','INSERT','UPDATE','DELETE','TRUNCATE']) p where has_table_privilege(r,'public.'||t,p)`,
+    0, `${label} campaign and shared quota browser denial`, [[...campaignTables,...sharedXeroTables]]);
+  await assertRows(`select count(*)::int from unnest($1::text[]) t cross join unnest(array['INSERT','UPDATE','DELETE','TRUNCATE']) p
+    where has_table_privilege('service_role','public.'||t,p)`,0,`${label} campaign mutations restricted to checked RPCs`,[campaignTables]);
+  await assertRows(`select count(*)::int from pg_class c join pg_namespace n on n.oid=c.relnamespace
+    where n.nspname='public' and c.relname='xero_financial_preview_checkpoints' and c.relrowsecurity and c.relforcerowsecurity`,
+    1, `${label} preview checkpoint forced RLS`);
+  await assertRows(`select count(*)::int from unnest(array['anon','authenticated']) r
+    cross join unnest(array['SELECT','INSERT','UPDATE','DELETE','TRUNCATE']) p
+    where has_table_privilege(r,'public.xero_financial_preview_checkpoints',p)`,
+    0, `${label} preview checkpoint browser denial`);
+  await assertRows(`select count(*)::int from unnest(array['INSERT','UPDATE','DELETE','TRUNCATE']) p
+    where has_table_privilege('service_role','public.xero_financial_preview_checkpoints',p)`,
+    0, `${label} preview checkpoint mutations require checked RPCs`);
+  await assertRows(`select count(*)::int from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+    cross join unnest(array['anon','authenticated']) r where n.nspname='public' and p.proname like 'xero_preview_checkpoint_%'
+      and has_function_privilege(r,p.oid,'EXECUTE')`,
+    0, `${label} preview checkpoint browser RPC denial`);
+  const previewStageTables = ['xero_financial_preview_checkpoint_chunks','xero_financial_preview_builds','xero_financial_preview_build_items'];
+  await assertRows(`select count(*)::int from pg_class c join pg_namespace n on n.oid=c.relnamespace
+    where n.nspname='public' and c.relname=any($1::text[]) and c.relrowsecurity and c.relforcerowsecurity`,
+    previewStageTables.length, `${label} bounded preview forced RLS`, [previewStageTables]);
+  await assertRows(`select count(*)::int from unnest($1::text[]) t cross join unnest(array['anon','authenticated']) r
+    cross join unnest(array['SELECT','INSERT','UPDATE','DELETE','TRUNCATE']) p
+    where has_table_privilege(r,'public.'||t,p)`, 0, `${label} bounded preview browser denial`, [previewStageTables]);
+  await assertRows(`select count(*)::int from unnest($1::text[]) t cross join unnest(array['INSERT','UPDATE','DELETE','TRUNCATE']) p
+    where has_table_privilege('service_role','public.'||t,p)`, 0, `${label} bounded preview mutations require checked RPCs`, [previewStageTables]);
+  await assertRows(`select count(*)::int from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+    cross join unnest(array['anon','authenticated']) r where n.nspname='public'
+      and p.proname in ('begin_xero_financial_preview_v2','append_xero_financial_preview_v2','finalize_xero_financial_preview_v2')
+      and has_function_privilege(r,p.oid,'EXECUTE')`, 0, `${label} staged preview browser RPC denial`);
+  await assertRows(`select count(*)::int from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+    where n.nspname='public' and p.oid='public.finalize_xero_financial_preview_v2(uuid,text)'::regprocedure
+      and p.prosecdef and p.proconfig @> array['search_path=""','TimeZone=UTC','statement_timeout=45s']
+      and has_function_privilege('service_role',p.oid,'EXECUTE')
+      and not has_function_privilege('anon',p.oid,'EXECUTE')
+      and not has_function_privilege('authenticated',p.oid,'EXECUTE')`,
+    1, `${label} complete preview finalization has a bounded RPC-local timeout and unchanged execution scope`);
+  await assertRows(`select count(*)::int from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+    where n.nspname='public' and p.proname=any(array['xero_campaign_create_v1','xero_campaign_refresh_v1'])
+      and p.prosecdef and p.proconfig @> array['search_path=""','statement_timeout=45s']
+      and has_function_privilege('service_role',p.oid,'EXECUTE')
+      and not has_function_privilege('anon',p.oid,'EXECUTE')
+      and not has_function_privilege('authenticated',p.oid,'EXECUTE')`,
+    2, `${label} complete campaign creation and refresh retain bounded RPC-local timeouts and execution scope`);
+  await assertRows(`select count(*)::int from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+    where n.nspname='public' and p.oid='public.persist_xero_financial_preview_v1(jsonb,jsonb,text)'::regprocedure
+      and not p.prosecdef and p.proconfig @> array['search_path=public, pg_temp','statement_timeout=45s']
+      and has_function_privilege('service_role',p.oid,'EXECUTE')
+      and not has_function_privilege('anon',p.oid,'EXECUTE')
+      and not has_function_privilege('authenticated',p.oid,'EXECUTE')`,
+    1, `${label} atomic document preview retains bounded timeout and server-only execution`);
+  const privatePaymentReaders = ['xero_preview_checkpoint_node_value_v2','xero_preview_payment_rows_v2'];
+  await assertRows(`select count(*)::int from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+    where n.nspname='public' and p.proname=any($1::text[])`,
+    privatePaymentReaders.length, `${label} bounded payment checkpoint readers exist`, [privatePaymentReaders]);
+  await assertRows(`select count(*)::int from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+    cross join unnest(array['anon','authenticated','service_role']) r where n.nspname='public'
+      and p.proname=any($1::text[]) and has_function_privilege(r,p.oid,'EXECUTE')`,
+    0, `${label} payment checkpoint readers remain private to checked RPCs`, [privatePaymentReaders]);
+  await assertRows(`select count(*)::int from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+    cross join lateral aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) acl
+    where n.nspname='public' and p.proname=any($1::text[]) and acl.grantee=0 and acl.privilege_type='EXECUTE'`,
+    0, `${label} payment checkpoint readers deny PUBLIC execution`, [privatePaymentReaders]);
+  const nomBTables = ['dashboard_nom_b_policies', 'dashboard_nom_b_observations', 'dashboard_nom_b_events'];
+  await assertRows(`select count(*)::int from pg_class c join pg_namespace n on n.oid=c.relnamespace
+    where n.nspname='public' and c.relname=any($1::text[]) and c.relrowsecurity`, 3, `${label} Nom B RLS`, [nomBTables]);
+  await assertRows(`select count(*)::int from unnest($1::text[]) t cross join unnest(array['anon','authenticated']) r
+    cross join unnest(array['SELECT','INSERT','UPDATE','DELETE','TRUNCATE']) p where has_table_privilege(r,'public.'||t,p)`,
+  0, `${label} Nom B browser access denied`, [nomBTables]);
+  await assertRows(`select count(*)::int from unnest(array['UPDATE','DELETE','TRUNCATE']) p
+    where has_table_privilege('service_role','public.dashboard_nom_b_events',p)`, 0, `${label} Nom B append-only audit`);
+  const correctionTables = ['xero_document_field_correction_previews', 'xero_document_field_correction_claims', 'xero_document_field_correction_events'];
+  await assertRows(`select count(*)::int from pg_class c join pg_namespace n on n.oid=c.relnamespace
+    where n.nspname='public' and c.relname=any($1::text[]) and c.relrowsecurity`, 3, `${label} correction journal RLS`, [correctionTables]);
+  await assertRows(`select count(*)::int from unnest($1::text[]) t cross join unnest(array['anon','authenticated']) r
+    cross join unnest(array['SELECT','INSERT','UPDATE','DELETE']) p where has_table_privilege(r,'public.'||t,p)`, 0, `${label} correction browser access denied`, [correctionTables]);
+  await assertRows(`select count(*)::int from unnest($1::text[]) t cross join unnest(array['UPDATE','DELETE','TRUNCATE']) p
+    where has_table_privilege('service_role','public.'||t,p)`, 0, `${label} correction journal append-only`, [correctionTables]);
+  const identityTables = ['xero_contact_identity_decisions', 'xero_contact_identity_audit'];
+  await assertRows(`select count(*)::int from pg_class c join pg_namespace n on n.oid=c.relnamespace
+    where n.nspname='public' and c.relname=any($1::text[]) and c.relrowsecurity`, 2, `${label} contact identity RLS`, [identityTables]);
+  await assertRows(`select count(*)::int from unnest($1::text[]) t cross join unnest(array['anon','authenticated']) r
+    cross join unnest(array['SELECT','INSERT','UPDATE','DELETE']) p where has_table_privilege(r,'public.'||t,p)`, 0, `${label} contact identity browser access denied`, [identityTables]);
+  await assertRows(`select count(*)::int from unnest(array['anon','authenticated']) r where has_function_privilege(r,
+    'public.save_xero_contact_identity_v1(uuid,uuid,text,text,text,text,integer,uuid,text)','EXECUTE')`, 0, `${label} contact identity browser RPC denied`);
+  await assertRows(`select count(*)::int from unnest(array['UPDATE','DELETE','TRUNCATE']) p
+    where has_table_privilege('service_role','public.xero_contact_identity_audit',p)`, 0, `${label} contact identity audit immutable for service`);
+  const releaseTables = ['company_finance_settings', 'company_finance_setting_events', 'market_trader_workspaces', 'workflow_daily_metrics', 'collaboration_create_requests', 'account_insight_report_presets', 'account_insight_report_preset_events', 'hedge_fcbs_settlement_operations'];
   await assertRows(
     `select count(*)::int from pg_class c join pg_namespace n on n.oid = c.relnamespace
      where n.nspname = 'public' and c.relname = any($1::text[]) and c.relrowsecurity`,
@@ -84,12 +232,63 @@ async function verifyRuntimeObjects(label) {
      where has_table_privilege('service_role', 'public.' || t, p)`,
     releaseTables.length * 2, `${label} report presets and FCBS service-role access`, [releaseTables],
   );
+  await assertRows(
+    `select count(*)::int from information_schema.columns where table_schema='public'
+     and table_name='xero_financial_payment_mappings' and column_name='retained_reference'
+     and data_type='jsonb' and is_nullable='NO' and column_default='''{}''::jsonb'`,
+    1, `${label} retained payment evidence has a compatible empty default`,
+  );
+  await assertRows(
+    `select count(*)::int from pg_index i join pg_class c on c.oid=i.indexrelid
+     join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and i.indisunique and i.indisvalid
+     and c.relname=any($1::text[])`,
+    2, `${label} payment identities have unique canonical ownership`,
+    [['xero_financial_payment_mappings_canonical_sf_uidx', 'xero_financial_payment_mappings_canonical_xero_uidx']],
+  );
   const releaseFunctions = [
+    'fcos_effective_access', 'fcos_has_access', 'fcos_assert_access_administrator', 'fcos_save_user_groups', 'fcos_save_permission_group', 'fcos_delete_permission_group', 'fcos_profile_access_revision', 'fcos_profile_access_change_lock', 'fcos_reject_legacy_permission_write',
+    'save_dashboard_nom_b_policy', 'observe_dashboard_nom_b',
+    'claim_xero_document_field_correction_v1', 'finish_xero_document_field_correction_v1', 'read_xero_document_field_correction_page_v1',
+    'link_xero_issued_petroleum_document_v1',
+    'link_xero_issued_petroleum_document_v2', 'xero_issued_petroleum_attachment_manifest_v2',
+    'link_xero_issued_supplier_document_v1',
+    'link_xero_grouped_document_v1', 'xero_grouped_salesforce_id_v1', 'protect_xero_grouped_mapping_v1',
+    'link_xero_payment_references_v1',
+    'authorise_xero_financial_sync_run_v1',
+    'persist_xero_financial_preview_v1',
+    'save_company_finance_settings', 'save_company_finance_settings_v2', 'valid_company_bank_charges',
+    'save_market_trader_workspace',
     'save_account_insight_report_preset', 'resolve_variable_charge_post_invoice_change',
     'hedge_fcbs_settlement_month', 'hedge_fcbs_settlement_evidence',
     'validate_hedge_fcbs_document', 'protect_hedge_fcbs_issued', 'protect_hedge_fcbs_link_identity',
     'assert_hedge_fcbs_document', 'set_hedge_fcbs_settlement_status', 'save_hedge_fcbs_settlement',
   ];
+  await assertRows(
+    `select count(*)::int from pg_index i join pg_class c on c.oid=i.indexrelid
+     join pg_namespace n on n.oid=c.relnamespace where n.nspname='public'
+     and c.relname='xero_financial_preview_request_receipt_uidx' and i.indisunique and i.indisvalid`,
+    1, `${label} preview retry receipts preserve unique request identity`,
+  );
+  await assertRows(
+    `select count(*)::int from pg_index i join pg_class c on c.oid=i.indexrelid
+     join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and i.indisunique and i.indisvalid
+     and c.relname=any($1::text[])`,
+    4, `${label} canonical ownership and one active document batch are enforced`,
+    [['xero_financial_documents_canonical_sf_uidx', 'xero_financial_documents_canonical_xero_uidx',
+      'xero_financial_products_canonical_sf_uidx', 'xero_financial_one_processing_document_run_uidx']],
+  );
+  await assertRows(
+    `select count(*)::int from pg_trigger where tgrelid='public.xero_financial_document_mappings'::regclass
+     and tgname='protect_xero_grouped_mapping' and not tgisinternal and tgenabled='O'`,
+    1, `${label} accepted document proof remains protected`,
+  );
+  await assertRows(
+    `select count(*)::int from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+     where n.nspname='public' and p.proname='protect_xero_grouped_mapping_v1'
+       and position('issuedSupplierPreservation' in p.prosrc)>0
+       and position('groupedPreservation' in p.prosrc)>0`,
+    1, `${label} both document preservation policies remain immutable`,
+  );
   await assertRows(
     `select count(*)::int from pg_proc p join pg_namespace n on n.oid=p.pronamespace
      where n.nspname='public' and p.proname=any($1::text[]) and not p.prosecdef
@@ -141,6 +340,9 @@ async function verifyRuntimeObjects(label) {
     internalHelpers.length, `${label} service-role internal helper execution retained`, [internalHelpers],
   );
   const serviceOnlyTables = [
+    'missing_nom_b_scan_state',
+    'missing_nom_b_reminders',
+    'missing_nom_b_upload_operations',
     'financial_report_settings',
     'financial_report_setting_events',
     'payment_collection_currency_thresholds',

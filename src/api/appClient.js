@@ -226,7 +226,9 @@ async function requestFunction(name, payload, options, cacheKey, authContext, ca
 
   if (!responseIsJson) {
     return {
-      data: { error: 'The FCOS server API is unavailable. Start the full local FCOS runtime and try again.' },
+      data: { error: res.status === 504
+        ? 'The FCOS request timed out before it completed. Refresh the saved result before retrying.'
+        : 'The FCOS server API is unavailable. Start the full local FCOS runtime and try again.' },
       meta: {
         cached: false,
         cacheLayer: 'network',

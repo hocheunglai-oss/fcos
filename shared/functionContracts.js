@@ -7,7 +7,58 @@ const stringValue = (value) => typeof value === 'string' && value.trim().length 
 const stringArray = (value) => Array.isArray(value) && value.length > 0 && value.every(stringValue);
 
 const CONTRACTS = Object.freeze({
+  adminPermissionGroupSave(payload) {
+    const issues = [];
+    if (!stringValue(payload.label) || payload.label.trim().length > 100) issues.push('Enter a group name up to 100 characters.');
+    if (!Number.isSafeInteger(payload.expectedRevision) || payload.expectedRevision < 0) issues.push('A current group revision is required.');
+    if (!objectPayload(payload.permissions) || !objectPayload(payload.capabilities)) issues.push('Permissions and capabilities must be objects.');
+    return issues;
+  },
+  adminPermissionGroupDelete(payload) {
+    return stringValue(payload.id) && Number.isSafeInteger(payload.expectedRevision) && payload.expectedRevision > 0 ? [] : ['A group and current revision are required.'];
+  },
+  adminUserGroupsSave(payload) {
+    const issues = [];
+    if (!stringValue(payload.userId)) issues.push('A person is required.');
+    if (!Array.isArray(payload.groupIds) || payload.groupIds.length > 100 || payload.groupIds.some((id) => !stringValue(id))) issues.push('Select valid permission groups.');
+    if (!Number.isSafeInteger(payload.expectedRevision) || payload.expectedRevision < 1) issues.push('A current membership revision is required.');
+    return issues;
+  },
+  financeSettingsSave(payload) {
+    const issues = [];
+    if (!['number', 'string'].includes(typeof payload.annualInterestRatePct)
+      || !/^\d{1,3}(?:\.\d{1,2})?$/.test(String(payload.annualInterestRatePct).trim())
+      || Number(payload.annualInterestRatePct) > 100) issues.push('Enter a rate from 0 to 100 with at most two decimal places.');
+    if (!Number.isSafeInteger(payload.expectedRevision) || payload.expectedRevision < 1) issues.push('A current settings revision is required.');
+    return issues;
+  },
+  marketTraderWorkspace(payload) {
+    return payload.visitId == null || /^[a-zA-Z0-9_-]{8,80}$/.test(payload.visitId) ? [] : ['A valid visit identifier is required.'];
+  },
+  marketTraderWorkspaceSave(payload) {
+    const issues = [];
+    if (!['preferences', 'visit', 'acknowledge', 'snooze'].includes(payload.action)) issues.push('Choose a supported personal Markets action.');
+    if (!Number.isSafeInteger(payload.expectedRevision) || payload.expectedRevision < 0) issues.push('A workspace revision is required.');
+    if (payload.action === 'preferences' && !objectPayload(payload.preferences)) issues.push('Market preferences are required.');
+    if (payload.action === 'visit' && !/^[a-zA-Z0-9_-]{8,80}$/.test(payload.visitId || '')) issues.push('A valid visit identifier is required.');
+    if (['acknowledge', 'snooze'].includes(payload.action) && (!stringValue(payload.subscriptionId) || !stringValue(payload.eventKey))) issues.push('The current alert identifier is required.');
+    if (payload.action === 'snooze' && ![1, 8, 24].includes(payload.hours)) issues.push('Choose a supported snooze duration.');
+    return issues;
+  },
+  workspaceSearch(payload) {
+    return typeof payload.query === 'string' && payload.query.trim().length >= 2 && payload.query.length <= 80 ? [] : ['Enter between 2 and 80 characters.'];
+  },
+  stemWorkspaceActivity: stemReadRequestIssues,
   salesforceStemDetail: stemReadRequestIssues,
+  missingNomBList(payload) {
+    const issues = [];
+    if (payload.cursor != null && typeof payload.cursor !== 'string') issues.push('cursor must be a string');
+    if (payload.search != null && typeof payload.search !== 'string') issues.push('search must be a string');
+    return issues;
+  },
+  missingNomBUpload(payload) {
+    return ['nominationId', 'operationId', 'filename', 'contentBase64'].filter((key) => !stringValue(payload[key])).map((key) => `${key} is required`);
+  },
   dashboardAccountCreditStatement(payload) {
     const issues = [];
     if (!['buyer', 'supplier', 'both'].includes(payload.side || 'buyer')) issues.push('side must be buyer, supplier, or both');

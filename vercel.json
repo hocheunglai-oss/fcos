@@ -5,6 +5,10 @@
   "regions": ["sin1"],
   "crons": [
     {
+      "path": "/api/functions/missingNomBReminderCron",
+      "schedule": "*/5 * * * *"
+    },
+    {
       "path": "/api/functions/outstandingBuyerInvoicesEmailCron",
       "schedule": "0 0 * * 1-5"
     },

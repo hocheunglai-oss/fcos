@@ -56,3 +56,42 @@ Every DEVEE-deployed Salesforce metadata change must also be published byte-for-
 - When a downstream stage fails and `force-app/main/default/` has not changed, resume at that failed environment after rechecking upstream deployment reports, the DEVEE source hash, the shared mirror, org identity, and permissions. Do not rerun completed DEVEE or QAT stages.
 - Restart from DEVEE only when the authoritative Salesforce source tree changes. Script, documentation, FCOS frontend, Supabase, or deployment-orchestration changes do not invalidate an already successful Salesforce source hash.
 - Prefer a targeted configuration correction and focused tests for confirmed environment drift, then resume the pending environment. A targeted correction must still originate in DEVEE, update the shared draft PR byte-for-byte, and pass through QAT before Production.
+
+
+## Routine FCOS web releases
+
+The repository owner authorized removing recurring release approvals on 16 September 2026.
+
+- The `fcos-ci-readonly` environment must remain limited to the `main` branch, with no required reviewers or wait timer. Do not ask the user to approve this environment for each build or retry.
+- Retain all required branch checks, administrator enforcement, the protected default-branch harness, exact Git/Vercel candidate identity checks, restricted renewable test credentials, API denial tests, and non-secret release evidence. Never replace these checks with an approval or bypass.
+- Review the patch and dispatch the trusted read-only verification automatically as part of an authorized release. Deploy only after every required check passes and the exact candidate is verified.
+- After the one-time standing FCOS Preview callback is configured, reuse it for matching immutable deployment origins. Do not add and remove an individual callback for each matching build. Verify that the callback is limited to the pinned FCOS project/team and the federated login path.
+- New or broader security access changes remain subject to applicable tool confirmation rules. Salesforce promotion order, financial approvals, and customer-message authorization are unchanged.
+- This current policy supersedes recurring human-review instructions in historical release notes. It does not authorize weakening required checks or expanding test-account permissions.
+
+## Mobile-view development suspended
+
+- Effective 29 September 2026, suspend all mobile-view development until the user explicitly resumes it.
+- Focus new UI work on the desktop view. Do not initiate mobile-specific features, layout changes, redesigns, optimisations, or mobile-only bug fixes during this suspension.
+- Preserve the existing mobile implementation. Shared functionality may continue to evolve for authorised desktop or backend work; keep existing regression checks and do not intentionally break mobile behaviour.
+- Carry this policy into FCOS worktrees and delegated task instructions. Resume mobile-view development only on an explicit subsequent user instruction.
+
+## Performance reviews during long-running work
+
+- Treat the user's elapsed-time priority as an implementation requirement. Before scaling a repetitive workflow, measure one representative batch: elapsed time, provider calls, database requests, rows loaded, and verified outcomes.
+- Review the implementation proactively after the first batch, at phase boundaries, and roughly every 15 minutes of sustained repetitive work. Review sooner when throughput is materially below the estimate, the same failure repeats, or repeated scans, reads, manual steps, or retries dominate the work.
+- Normally spend 2–5 minutes on a focused review, then make the smallest safe improvement within the authorised scope without waiting for the user to request it. Use more time when a material financial or security risk requires it; avoid repeated planning and duplicate reviews.
+- Prefer complete saved evidence, fresh reads of changed records and required dependencies, bulk provider reads, bounded concurrency, efficient audited transactions, and automatic progression through already-approved unchanged batches. Do not re-read a whole backlog for each small batch unless a documented correctness dependency requires it.
+- Preserve exact identities, approval fingerprints, ownership, financial and settlement checks, quota reserves, cancellation, durable intent and uncertain-outcome readback. Performance improvements must not expand financial authority or silently mark unresolved records complete.
+- After an improvement, run one focused correctness and throughput check, record the before/after result, and resume the saved continuation point. Repeat completed checks only after relevant changes or failures; retain required migration and exact-commit release checks.
+- Pipeline independent batch preparation with execution: while an approved batch is applying, use complete saved evidence to classify the next disjoint batch, resolve its dependencies, build a business-readable review, and estimate its call budget. Do not wait for the current batch to finish before starting this preparation.
+- Keep at most one prepared batch per independent action category ahead of execution. Reuse its saved work, then recheck changed records, exact evidence fingerprints, required dependencies and shared quota before approval or application. Keep Contact creation, draft creation and link-only approvals separate.
+- Preparation may run concurrently through bounded read-only work and local analysis; financial application remains serialized by the existing durable locks. Avoid duplicate provider reads and do not consume another batch's reserved verification capacity. A preparation agent must never grant an approval or start the next batch on its own.
+
+
+## Xero sales invoice presentation
+
+- Effective 30 September 2026, keep new eligible sales invoices in one summary line: quantity 1, the full invoice total including all verified products and charges, and INVOICE d/M/yyyy using Buyer Invoice Date.
+- Retain the approved common account and NONE tax; approved petroleum sales use 41100 Trading Sales / NONE. Mixed accounts or incompatible tax require a specific Finance exception, never silent reclassification.
+- Preserve source product, quantity and charge evidence, existing Xero invoice and bill details, accepted link fingerprints and financial controls. Supplier bill presentation is unchanged.
+- A presentation instruction is not approval to create drafts, send invoices, post payments or alter allocations. Refresh changed draft proposals and bind creation approval to their exact new evidence.

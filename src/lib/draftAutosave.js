@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { clientSessionKey, clientSessionState } from './clientSessionState.js';
 
 const DRAFT_PREFIX = 'fcos:draft:';
@@ -90,6 +90,24 @@ export function useDraftAutosave(key, value, {
   const serialized = useMemo(() => safeStringify(value), [value]);
   const valueRef = useRef(value);
   const sessionRef = useRef(clientSessionState());
+  const pendingRef = useRef(null);
+
+  useLayoutEffect(() => {
+    const previous = pendingRef.current;
+    if (previous?.key !== key && previous?.enabled && previous?.dirty) {
+      writeDraft(previous.key, previous.value, previous.session);
+    }
+    pendingRef.current = { key, value, enabled, dirty, session: sessionRef.current };
+  }, [key, value, enabled, dirty]);
+
+  useEffect(() => {
+    const flush = () => {
+      const pending = pendingRef.current;
+      if (pending?.enabled && pending?.dirty) writeDraft(pending.key, pending.value, pending.session);
+    };
+    window.addEventListener('pagehide', flush);
+    return () => { flush(); window.removeEventListener('pagehide', flush); };
+  }, []);
 
   useEffect(() => {
     valueRef.current = value;

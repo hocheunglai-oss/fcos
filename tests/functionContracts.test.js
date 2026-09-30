@@ -4,12 +4,22 @@ import { functionContractNames, validateFunctionRequest } from '../src/api/funct
 
 test('critical function contracts fail closed before invalid requests reach the server', () => {
   assert.deepEqual(functionContractNames().sort(), [
+    'adminPermissionGroupDelete',
+    'adminPermissionGroupSave',
+    'adminUserGroupsSave',
     'dashboardAccountCreditStatement',
     'dashboardCounterpartySearch',
+    'financeSettingsSave',
+    'marketTraderWorkspace',
+    'marketTraderWorkspaceSave',
+    'missingNomBList',
+    'missingNomBUpload',
     'salesforceStemDetail',
+    'stemWorkspaceActivity',
     'systemErrorVerify',
     'workNotificationsRead',
     'workNotificationsState',
+    'workspaceSearch',
   ]);
   assert.equal(validateFunctionRequest('systemErrorVerify', {}).ok, false);
   assert.equal(validateFunctionRequest('workNotificationsState', { notificationIds: ['n1'], state: 'handled' }).ok, true);
@@ -17,6 +27,37 @@ test('critical function contracts fail closed before invalid requests reach the 
   assert.equal(validateFunctionRequest('dashboardAccountCreditStatement', { accountId: '001xx', side: 'net' }).ok, false);
 });
 
+test('company finance settings require a current revision and a bounded two-decimal rate', () => {
+  for (const annualInterestRatePct of [0, 5, '5.00', '100.00']) {
+    assert.equal(validateFunctionRequest('financeSettingsSave', { annualInterestRatePct, expectedRevision: 1 }).ok, true);
+  }
+  for (const annualInterestRatePct of [null, true, '', '1e1', -1, 100.01, '5.001']) {
+    assert.equal(validateFunctionRequest('financeSettingsSave', { annualInterestRatePct, expectedRevision: 1 }).ok, false);
+  }
+  for (const expectedRevision of [null, 0, -1, 1.5, '1']) {
+    assert.equal(validateFunctionRequest('financeSettingsSave', { annualInterestRatePct: 5, expectedRevision }).ok, false);
+  }
+});
+
 test('unregistered handlers retain compatibility while the registry expands by domain', () => {
   assert.deepEqual(validateFunctionRequest('legacyCompatibleHandler', { value: 1 }), { ok: true, registered: false, issues: [] });
+});
+
+
+test('personal Markets contracts require revisions and the current alert event', () => {
+  assert.equal(validateFunctionRequest('marketTraderWorkspace', {}).ok, true);
+  assert.equal(validateFunctionRequest('marketTraderWorkspaceSave', { action: 'preferences', preferences: {}, expectedRevision: 0 }).ok, true);
+  assert.equal(validateFunctionRequest('marketTraderWorkspaceSave', { action: 'visit', visitId: 'visit-1234', expectedRevision: 0 }).ok, true);
+  assert.equal(validateFunctionRequest('marketTraderWorkspaceSave', { action: 'visit', visitId: 'visit-1234' }).ok, false);
+  assert.equal(validateFunctionRequest('marketTraderWorkspaceSave', { action: 'snooze', subscriptionId: 'alert1', hours: 8, expectedRevision: 1 }).ok, false);
+  assert.equal(validateFunctionRequest('marketTraderWorkspaceSave', { action: 'snooze', subscriptionId: 'alert1', eventKey: 'current-event', hours: 8, expectedRevision: 1 }).ok, true);
+});
+
+
+test('group changes require current revisions while removing every membership is valid', () => {
+  assert.equal(validateFunctionRequest('adminUserGroupsSave', { userId: 'person', groupIds: [], expectedRevision: 1 }).ok, true);
+  assert.equal(validateFunctionRequest('adminUserGroupsSave', { userId: 'person', groupIds: ['group'] }).ok, false);
+  assert.equal(validateFunctionRequest('adminPermissionGroupSave', { label: 'Desk', permissions: {}, capabilities: {}, expectedRevision: 0 }).ok, true);
+  assert.equal(validateFunctionRequest('adminPermissionGroupSave', { label: 'Desk', permissions: { dashboard: true }, capabilities: {}, expectedRevision: '1' }).ok, false);
+  assert.equal(validateFunctionRequest('adminPermissionGroupDelete', { id: 'desk', expectedRevision: 1 }).ok, true);
 });

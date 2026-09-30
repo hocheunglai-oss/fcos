@@ -26,19 +26,24 @@ function counterpartyTarget(entry) {
 
 export default function WorkspaceCommandPalette({ open, onOpenChange, groups, onNavigate, onCustomizeNavigation, canSearchCounterparties = false }) {
   const [query, setQuery] = useState('');
+  const [records, setRecords] = useState([]);
   const [counterparties, setCounterparties] = useState([]);
   const [counterpartyLoading, setCounterpartyLoading] = useState(false);
   const [counterpartyError, setCounterpartyError] = useState('');
   const abortRef = useRef(null);
   const items = useMemo(() => groups.flatMap((group) => group.items.map((item) => ({ ...item, groupLabel: group.label }))), [groups]);
   useEffect(() => {
-    if (!open || !canSearchCounterparties || query.trim().length < 2) {
+    if (!open || query.trim().length < 2) {
       abortRef.current?.abort();
       setCounterparties([]);
+      setRecords([]);
       setCounterpartyLoading(false);
       setCounterpartyError('');
       return undefined;
     }
+    abortRef.current?.abort();
+    setCounterparties([]);
+    setRecords([]);
     const timer = window.setTimeout(async () => {
       abortRef.current?.abort();
       const controller = new AbortController();
@@ -46,7 +51,7 @@ export default function WorkspaceCommandPalette({ open, onOpenChange, groups, on
       setCounterpartyLoading(true);
       setCounterpartyError('');
       try {
-        const response = await appClient.functions.invoke('dashboardCounterpartySearch', { query: query.trim(), limit: 8 }, {
+        const response = await appClient.functions.invoke('workspaceSearch', { query: query.trim(), limit: 8 }, {
           cache: true,
           cacheTtlMs: 45_000,
           signal: controller.signal,
@@ -54,26 +59,31 @@ export default function WorkspaceCommandPalette({ open, onOpenChange, groups, on
         if (controller.signal.aborted) return;
         if (response.data?.error) {
           setCounterparties([]);
+          setRecords([]);
           setCounterpartyError(response.data.error);
         } else {
-          setCounterparties(Array.isArray(response.data?.results) ? response.data.results : []);
+          setCounterparties(Array.isArray(response.data?.counterparties) ? response.data.counterparties : []);
+          setRecords(Array.isArray(response.data?.results) ? response.data.results : []);
+          if (response.data?.unavailableSources?.length) setCounterpartyError(`Temporarily unavailable: ${response.data.unavailableSources.join(', ')}. Other results are shown.`);
         }
       } catch (error) {
         if (!controller.signal.aborted) {
           setCounterparties([]);
+          setRecords([]);
           setCounterpartyError(error?.message || 'Account search is temporarily unavailable.');
         }
       } finally {
         if (!controller.signal.aborted) setCounterpartyLoading(false);
       }
     }, 180);
-    return () => window.clearTimeout(timer);
+    return () => { window.clearTimeout(timer); abortRef.current?.abort(); };
   }, [canSearchCounterparties, open, query]);
   useEffect(() => () => abortRef.current?.abort(), []);
   useEffect(() => {
     if (!open) {
       setQuery('');
       setCounterparties([]);
+      setRecords([]);
       setCounterpartyError('');
     }
   }, [open]);
@@ -88,9 +98,14 @@ export default function WorkspaceCommandPalette({ open, onOpenChange, groups, on
         <DialogTitle className="sr-only">FCOS command palette</DialogTitle>
         <DialogDescription id="workspace-command-description" className="sr-only">Search accessible workspaces and FCOS actions.</DialogDescription>
         <Command className="bg-transparent">
-          <CommandInput autoFocus value={query} onValueChange={setQuery} placeholder={canSearchCounterparties ? 'Search workspaces, Accounts and GROUPs…' : 'Search workspaces and actions…'} />
+          <CommandInput autoFocus value={query} onValueChange={setQuery} placeholder="Search STEM, vessel, invoice, payment, Account or workspace…" />
           <CommandList className="max-h-[min(60vh,30rem)]">
-            <CommandEmpty>{counterpartyLoading ? 'Searching Accounts and GROUPs…' : 'No accessible command or counterparty found.'}</CommandEmpty>
+            <CommandEmpty>{counterpartyLoading ? 'Searching accessible records…' : 'No accessible command or counterparty found.'}</CommandEmpty>
+            {records.length > 0 && <CommandGroup heading="STEMs, invoices and payments">
+              {records.map((entry) => <CommandItem key={`${entry.kind}:${entry.id}`} value={`${query} ${entry.kind} ${entry.label} ${entry.detail}`} onSelect={() => choose(() => onNavigate(entry.link || `/stems/${encodeURIComponent(entry.stemId)}`))}>
+                <span className="min-w-0"><span className="block font-medium">{entry.label}</span><span className="block truncate text-xs text-muted-foreground">{entry.kind}{entry.detail ? ` · ${entry.detail}` : ''}</span></span>
+              </CommandItem>)}
+            </CommandGroup>}
             {counterparties.length ? (
               <CommandGroup heading="Accounts and GROUPs">
                 {counterparties.map((entry) => {

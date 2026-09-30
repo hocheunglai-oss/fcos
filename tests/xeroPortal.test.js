@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFile } from 'node:fs/promises';
+import { fixtureSharedControl } from './helpers/xeroSharedControl.js';
 import {
   buildContactLifecycleRows,
   signXeroOAuthState,
@@ -88,6 +89,8 @@ test('Xero Portal status refreshes a stale access token before reporting expiry'
   assert.equal(client.connection.access_token, 'new-access');
   assert.equal(client.connection.refresh_token, 'new-refresh');
   assert.notEqual(result.xero.expiresAt, '2026-08-27T00:00:00.000Z');
+  assert.equal(client.connection.token_version, 5);
+  assert.deepEqual(client.controlCalls, ['xero_refresh_claim', 'xero_refresh_finish']);
   assert.deepEqual(requests.map((url) => new URL(url).pathname), ['/connect/token']);
 });
 
@@ -176,10 +179,10 @@ test('native Xero Portal migration is service-role only and creates private rece
 
 test('connected Xero users can refresh missing scopes without deleting the stored connection first', async () => {
   const ui = await readFile(new URL('../src/pages/XeroPortal.jsx', import.meta.url), 'utf8');
-  const copy = await readFile(new URL('../src/lib/xeroPortalUiCopy.js', import.meta.url), 'utf8');
+  const { xeroPortalUiCopy } = await import('../src/lib/xeroPortalUiCopy.js');
   assert.match(ui, /needsFinancialReconnect/);
   assert.match(ui, /copy\.header\.reconnect/);
-  assert.match(copy, /reconnect: 'Reconnect scopes'/);
+  assert.equal(xeroPortalUiCopy('en').header.reconnect, 'Reconnect scopes');
   assert.match(ui, /onClick=\{connectXero\}/);
 });
 
@@ -195,10 +198,43 @@ function jsonResponse(body, status = 200) {
 function fakePortalStatusClient(initialConnection) {
   const state = {
     connection: { ...initialConnection },
+    refreshLease: null,
+    controlCalls: [],
   };
+  const control = fixtureSharedControl({
+    claimRefresh: async ({ tenantId, tokenVersion, leaseId }) => {
+      assert.equal(tenantId, state.connection.tenant_id);
+      assert.equal(tokenVersion, state.connection.token_version);
+      assert.equal(state.refreshLease, null);
+      assert.match(leaseId, /^[0-9a-f-]{36}$/);
+      state.refreshLease = { tenantId, tokenVersion, leaseId };
+      return { state: 'claimed' };
+    },
+    finishRefresh: async ({ tenantId, tokenVersion, leaseId, connection }) => {
+      assert.deepEqual({ tenantId, tokenVersion, leaseId }, state.refreshLease);
+      assert.equal(connection.tenantId, tenantId);
+      assert.equal(tokenVersion, state.connection.token_version);
+      state.connection = {
+        ...state.connection,
+        tenant_id: connection.tenantId, tenant_name: connection.tenantName,
+        access_token: connection.accessToken, refresh_token: connection.refreshToken,
+        expires_at: connection.expiresAt, scope: connection.scope, token_version: tokenVersion + 1,
+      };
+      state.refreshLease = null;
+      return { tokenVersion: state.connection.token_version };
+    },
+  });
   const client = {
+    controlCalls: state.controlCalls,
     get connection() {
       return state.connection;
+    },
+    async rpc(name, args) {
+      state.controlCalls.push(name);
+      const identity = { tenantId: args.p_tenant_id, tokenVersion: args.p_expected_version, leaseId: args.p_lease_id };
+      if (name === 'xero_refresh_claim') return { data: await control.claimRefresh(identity), error: null };
+      if (name === 'xero_refresh_finish') return { data: await control.finishRefresh({ ...identity, connection: args.p_connection }), error: null };
+      assert.fail(`Unexpected shared-control RPC: ${name}`);
     },
     from(table) {
       return new FakeQuery(table, state);

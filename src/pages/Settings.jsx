@@ -1,3 +1,4 @@
+import WorkflowMetrics from '@/components/settings/WorkflowMetrics';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Activity,
@@ -571,6 +572,7 @@ function SystemHealthPanel() {
       </div>
       <TabsContent value="overview" className="mt-0">
         <HealthOverviewPanel />
+        <WorkflowMetrics />
       </TabsContent>
       <TabsContent value="connections" className="mt-0">
         <Suspense fallback={<StateBlock icon={Loader2} title="Loading connection checklist" description="Preparing the API-first connection runbook." />}>
@@ -1276,9 +1278,9 @@ export default function SettingsPage({ section = 'my', methodologyAction = null 
           {isAdministrator && (
             <AiModelSettingsCard
               title="Dashboard AI Search"
-              description="Select the model that converts natural-language Dashboard requests into a validated FCOS search plan. Salesforce records are never sent to the model."
+              description="Choose automatic routing or a manual model. Salesforce records are never sent to the model."
               icon={Sparkles}
-              modelLabel="Interpretation model"
+              modelLabel="Dashboard AI selection"
               models={aiModels}
               selectedModelId={aiSettings?.modelId || ''}
               savedModelId={baseAiModelId || ''}
@@ -1295,6 +1297,7 @@ export default function SettingsPage({ section = 'my', methodologyAction = null 
               onSave={saveDashboardAiSettings}
               onRefresh={loadAiSettings}
               updatedAt={aiSettings?.updatedAt}
+              automaticRouting={aiSettings?.automaticRouting}
               privacyNote="Only the user’s search sentence is sent. FCOS validates the structured result and builds Salesforce filters server-side."
             />
           )}

@@ -70,13 +70,13 @@ function commonGitDirectory(repoRoot = REPO_ROOT) {
   return directory ? path.resolve(repoRoot, directory) : '';
 }
 
-export function githubConfigDirectory({ repoRoot = REPO_ROOT, commonDirectory = commonGitDirectory(repoRoot) } = {}) {
+export function githubConfigDirectory({ repoRoot = REPO_ROOT, commonDirectory = commonGitDirectory(repoRoot), configPath = target('github').configPath } = {}) {
   // Git local config is shared by linked worktrees. Keep its credential helper
   // pinned to the primary checkout's isolated GH store, rather than rewriting
   // the helper to whichever worktree most recently ran the verifier.
   return commonDirectory
-    ? path.join(path.dirname(commonDirectory), target('github').configPath)
-    : path.join(repoRoot, target('github').configPath);
+    ? path.join(path.dirname(commonDirectory), configPath)
+    : path.join(repoRoot, configPath);
 }
 
 function ensureStateDirectories() {

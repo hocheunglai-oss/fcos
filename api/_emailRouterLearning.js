@@ -1,5 +1,6 @@
+import { AUTO_AI_MODEL, AI_MODEL_SELECTIONS, isAllowedAiSelection, resolveAiModel, aiRequestOptions } from './_aiModelRouting.js';
 import { createHmac } from 'node:crypto';
-import { DASHBOARD_AI_MODELS, DEFAULT_DASHBOARD_AI_MODEL, dashboardAiUsageFromResponse, isAllowedDashboardAiModel } from './_dashboardAi.js';
+import { dashboardAiUsageFromResponse } from './_dashboardAi.js';
 import { fetchEmailRouterDetail } from './_emailRouterCore.js';
 
 export const EMAIL_ROUTER_CATEGORIES = Object.freeze([
@@ -260,11 +261,13 @@ async function learningSettings(client) {
   const requestedModel = values.get('advisor.model')?.modelId;
   return {
     enabled: values.get('advisor.learning_enabled')?.enabled !== false,
-    modelId: isAllowedDashboardAiModel(requestedModel) ? requestedModel : DEFAULT_DASHBOARD_AI_MODEL,
+    modelId: isAllowedAiSelection(requestedModel) ? requestedModel : AUTO_AI_MODEL,
   };
 }
 
 async function classifyMessage(client, action, message, modelId, dependencies) {
+  const routing = resolveAiModel({ task: 'email_classification', selection: modelId });
+  modelId = routing.modelId;
   const apiKey = String(dependencies.apiKey || process.env.OPENAI_API_KEY || '').trim();
   if (!apiKey) throw learningError('The protected OpenAI service is not configured.', 503, 'OPENAI_NOT_CONFIGURED');
   const response = await (dependencies.fetchImpl || fetch)('https://api.openai.com/v1/responses', {
@@ -273,8 +276,7 @@ async function classifyMessage(client, action, message, modelId, dependencies) {
     body: JSON.stringify({
       model: modelId,
       store: false,
-      max_output_tokens: 100,
-      ...(modelId.startsWith('gpt-5') ? { reasoning: { effort: 'low' } } : {}),
+      ...aiRequestOptions(routing, 100),
       input: [
         { role: 'system', content: [{ type: 'input_text', text: 'Classify this shared-mailbox message into exactly one allowed routing category. Do not quote or repeat the message.' }] },
         { role: 'user', content: [{ type: 'input_text', text: JSON.stringify({ subject: String(message?.subject || '').slice(0, 500), messageText: cleanMessageText(message), categories: EMAIL_ROUTER_CATEGORIES }) }] },
@@ -408,4 +410,4 @@ export async function listEmailRouterLearnedRoutes(client, mailboxId) {
   return [...aggregates.values()].sort((left, right) => right.count - left.count || String(right.latestAt).localeCompare(String(left.latestAt)));
 }
 
-export const EMAIL_ROUTER_ADVISOR_MODELS = DASHBOARD_AI_MODELS;
+export const EMAIL_ROUTER_ADVISOR_MODELS = AI_MODEL_SELECTIONS;
