@@ -4,7 +4,16 @@ export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
   { version: '2.0.285', releasedAt: '2026-09-30', title: 'Summary sales invoices and credit links', changes: ['Use one summary line for new sales invoices, including every verified product and charge in the invoice total.', 'Verify existing credit balances using Xero credit-note evidence and distinguish verified links from held records.'] },
-  { version: '2.0.284', releasedAt: '2026-09-30', title: 'Precise Nom B reminder checkpoints', changes: ['Preserve exact scan timestamps so pre-activation invoices do not trigger reminders and interrupted scans resume without omissions.'] },
+  {
+    version: '2.0.284',
+    releasedAt: '2026-09-30',
+    title: 'Automatic missing Nom B reminders and filing',
+    changes: [
+      'Adds five-minute checks for new final buyer invoices with saved PDFs and sends the assigned buyer trader one Nom B reminder per STEM, with STEM and invoice details and a link to all their missing Nom B.',
+      'Adds a desktop list of the trader’s active missing Nom B across all dates, including uninvoiced STEMs, with direct upload to the Buyer Confirmation and verified green Received status.',
+      'Keeps reminders prospective, excludes proformas, credit notes, deprecated invoices and cancelled STEMs, and rechecks filing before delivery. Verifies interrupted uploads before retrying to prevent duplicate files.',
+    ],
+  },
   { version: '2.0.283', releasedAt: '2026-09-30', title: 'Nom B reminders and filing', changes: ['Remind assigned traders about missing Nom B after a new final buyer invoice is issued.', 'View missing Nom B and file documents directly in FCOS with verified ownership and upload recovery.'] },
   { version: '2.0.282', releasedAt: '2026-09-30', title: 'Verify held credit links', changes: ['Retry unchanged held credit links under their original approval with fresh source, financial and settlement checks.', 'Accept only verified harmless Xero response defaults, preserve original evidence and audit every retry outcome.'] },
   { version: '2.0.281', releasedAt: '2026-09-30', title: 'Faster approved reconciliation links', changes: ['Read only the required source families and dependencies, verify invoices together, and continue unchanged approved links in bounded batches with progress and Stop.', 'Preserve exact approval, ownership and settlement evidence; recover interrupted claims before continuing.'] },
