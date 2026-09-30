@@ -20,3 +20,15 @@ test('Variable Charges tab counts agree with their filtered queues despite indep
   for (const status of ['needs_action', 'awaiting_delivery', 'post_invoice_changes']) assert.equal(counts[status], 1);
   assert.equal(rows[0].status, 'completed', 'count correction must preserve historical invoice closure');
 });
+
+test('closed paired cases disclose incomplete reviews without claiming an active waiting task', () => {
+  const row = { pairedWorkflowEnabled: true, status: 'completed', supplierRequirements: [{supplierId:'supplier-1', sides:{cost:{status:'pending',currentAssignee:{name:'Trader'},permissions:{}},buyerCharge:{status:'pending',permissions:{}}}}] };
+  const result=variableChargeInternals.plainLanguageWorkflow(row);
+  assert.equal(result.simplifiedQueue,'completed');
+  assert.equal(result.nextAction,'Closed; paired reviews incomplete');
+  assert.equal(result.isMyTask,false);
+  assert.equal(row.status,'completed');
+  row.supplierRequirements[0].sides.cost.permissions.canConfirm=true;
+  assert.equal(variableChargeInternals.plainLanguageWorkflow(row).simplifiedQueue,'my_tasks');
+  assert.match(variableChargeInternals.plainLanguageWorkflow(row).nextAction,/Confirm/);
+});
