@@ -29,6 +29,7 @@ const migrationSources = await Promise.all(names.map(async (name) => ({
   sql: await readFile(new URL(name, migrationDirectory), 'utf8'),
 })));
 const releaseMigrationNames = new Set([
+  '20260930025541_xero_campaign_inventory_write_performance.sql',
   '20260930004300_xero_preview_finalize_timeout.sql',
   '20260930004200_xero_preview_payments_reference.sql',
   '20260930004000_xero_preview_checkpoint_chunks.sql',
@@ -100,6 +101,13 @@ async function verifyRuntimeObjects(label) {
 
   const campaignTables = ['xero_reconciliation_campaigns','xero_reconciliation_cases','xero_reconciliation_batches','xero_reconciliation_events'];
   const sharedXeroTables = ['xero_shared_tenant_control','xero_shared_budgets','xero_shared_probe_grants','xero_shared_requests','xero_token_refresh_leases'];
+  await assertRows(`select count(*)::int from pg_proc p where
+    p.oid='public.xero_campaign_inventory_v1(uuid,uuid,uuid,jsonb)'::regprocedure
+    and p.prosecdef and p.proconfig @> array['search_path=""','statement_timeout=45s']
+    and has_function_privilege('service_role',p.oid,'EXECUTE')
+    and not has_function_privilege('anon',p.oid,'EXECUTE')
+    and not has_function_privilege('authenticated',p.oid,'EXECUTE')`,
+    1, `${label} complete inventory write has a bounded RPC-local timeout and unchanged execution scope`);
   await assertRows(`select count(*)::int from pg_class c join pg_namespace n on n.oid=c.relnamespace
     where n.nspname='public' and c.relname=any($1::text[]) and c.relrowsecurity`, 9, `${label} campaign and shared quota RLS`, [[...campaignTables,...sharedXeroTables]]);
   await assertRows(`select count(*)::int from unnest($1::text[]) t cross join unnest(array['anon','authenticated']) r

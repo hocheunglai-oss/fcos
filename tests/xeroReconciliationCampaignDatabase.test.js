@@ -166,6 +166,37 @@ async function saveRun(h, fixture) {
   }
 }
 
+test('complete inventory timeout remains RPC-local and preserves large evidence, authority and audit', async t => {
+  const h = await harness(t);
+  const { campaign, claim } = await h.started();
+  const signature = 'public.xero_campaign_inventory_v1(uuid,uuid,uuid,jsonb)';
+  const catalog = async () => (await h.db.query(`select oid,prosrc,proowner,prosecdef,proconfig,proacl
+    from pg_proc where oid=$1::regprocedure`, [signature])).rows[0];
+  const before = await catalog();
+  await h.db.exec('reset role');
+  await loadMigration(h.db, '20260930025541_xero_campaign_inventory_write_performance.sql');
+  await h.db.exec('set role service_role');
+  const after = await catalog();
+  assert.deepEqual(after, { ...before, proconfig: [...before.proconfig, 'statement_timeout=45s'] });
+  const inventory = { tenantId: tenant, complete: true, observedSince: '2026-09-30T03:00:00Z',
+    documents: Array.from({ length: 1864 }, (_, index) => ({ id: String(index), evidence: 'x'.repeat(7200) })),
+    contacts: Array.from({ length: 2378 }, (_, index) => ({ id: String(index) })), callCount: 1 };
+  assert.ok(JSON.stringify(inventory).length > 13_000_000);
+  await assert.rejects(h.rpc('inventory', [actor, campaign.id, randomUUID(), inventory]), /current claim/);
+  await assert.rejects(h.rpc('inventory', [actor, campaign.id, claim.batch.claim_id, { ...inventory, complete: false }]), /complete verified/);
+  const start = Date.now();
+  const saved = await h.rpc('inventory', [actor, campaign.id, claim.batch.claim_id, inventory]);
+  assert.equal(saved.complete, true);
+  assert.deepEqual((await h.db.query('select inventory from xero_reconciliation_campaigns where id=$1', [campaign.id])).rows[0].inventory, inventory);
+  const events = (await h.db.query(`select evidence, encode(sha256(convert_to($1::jsonb::text,'UTF8')),'hex') expected
+    from xero_reconciliation_events where campaign_id=$2 and event_type='inventory_refreshed'`, [JSON.stringify(inventory), campaign.id])).rows;
+  assert.equal(events.length, 1);
+  assert.equal(events[0].evidence.fingerprint, events[0].expected);
+  assert.equal((await h.db.query('select claim_id from xero_reconciliation_batches where id=$1', [claim.batch.id])).rows[0].claim_id, claim.batch.claim_id);
+  t.diagnostic(JSON.stringify({ bytes: JSON.stringify(inventory).length, milliseconds: Date.now() - start,
+    unchangedBodyAndAcl: true, providerCalls: 0, inventoryEvents: events.length }));
+});
+
 async function claimCategory(h, category) {
   const campaign=await h.create(), ids=h.cases.filter(row=>row.category===category).map(row=>row.id);
   const batch=await h.approve(await h.prepare(campaign,ids,category));
