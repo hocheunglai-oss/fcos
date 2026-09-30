@@ -29,6 +29,22 @@ function failure(code, message, status = 409) {
 }
 function validId(value) { if (!ID.test(txt(value))) throw failure('MISSING_NOM_B_ID_INVALID', 'A valid confirmation is required.', 400); return txt(value); }
 function validDate(value) { const n = Date.parse(value); if (!Number.isFinite(n)) throw failure('MISSING_NOM_B_DATE_INVALID', 'Invalid scan timestamp.', 500); return new Date(n).toISOString(); }
+// PostgreSQL retains microseconds; Salesforce datetime predicates have millisecond
+// boundaries. Keep the original instant for checkpoints and round query bounds inward.
+function preciseDate(value) {
+  const raw = txt(value);
+  const parts = raw.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}(?::?\d{2})?)$/);
+  const invalid = () => failure('MISSING_NOM_B_DATE_INVALID', 'Invalid scan timestamp.', 500);
+  if (!parts) throw invalid();
+  const zone = parts[3] === 'Z' ? 'Z' : `${parts[3].slice(0,3)}:${parts[3].replace(':','').slice(3) || '00'}`;
+  const local = Date.parse(`${parts[1]}.000Z`);
+  const seconds = Date.parse(`${parts[1]}.000${zone}`);
+  if (!Number.isFinite(seconds) || !Number.isFinite(local) || new Date(local).toISOString().slice(0,19) !== parts[1]) throw invalid();
+  const fraction = (parts[2] || '').padEnd(9,'0');
+  const milliseconds = seconds + Number(fraction.slice(0,3));
+  return { raw, exact: BigInt(seconds) * 1000000n + BigInt(fraction),
+    floor: new Date(milliseconds).toISOString(), ceil: new Date(milliseconds + (Number(fraction.slice(3)) > 0 ? 1 : 0)).toISOString() };
+}
 function enabled(env) { return env.VERCEL_ENV === 'production' && txt(env.FCOS_ENABLE_MISSING_NOM_B_REMINDERS).toLowerCase() === 'true' && isExternalActionEnabled('email_delivery', env); }
 
 async function rpc(client, key, args) {
@@ -162,7 +178,7 @@ export function createMissingNomBGateway(deps = {}) {
   }
   async function invoicesForStems(ids, activation) {
     const rows = [];
-    for (const group of groups(unique(ids))) rows.push(...await query(`SELECT ${await invoiceSelect()} FROM Invoice__c WHERE STEM__c IN (${group.map(validId).map(quote).join(',')}) AND CreatedDate >= ${validDate(activation)} ORDER BY CreatedDate,Id`));
+    for (const group of groups(unique(ids))) rows.push(...await query(`SELECT ${await invoiceSelect()} FROM Invoice__c WHERE STEM__c IN (${group.map(validId).map(quote).join(',')}) AND CreatedDate >= ${preciseDate(activation).ceil} ORDER BY CreatedDate,Id`));
     return verifyInvoicePdfs(rows);
   }
   return { query, request, verify, facts, byIds, readback, nominations, invoicesForStems, verifyInvoicePdfs, invoiceSelect };
@@ -202,8 +218,10 @@ export function isMissingNomBInvoiceCandidate(invoice, activatedAt) {
   // Initial invoice creation can precede PDF generation, which fills Amount__c.
   // Retain that prospective candidate; missing monetary evidence still blocks sending.
   if (invoice.Amount__c != null && txt(invoice.Amount__c) && !validNonnegativeInvoiceAmount(invoice.Amount__c)) return false;
+  let prospective;
+  try { prospective = preciseDate(invoice.CreatedDate).exact >= preciseDate(activatedAt).exact; } catch { return false; }
   return Boolean(ID.test(txt(invoice.Id)) && ID.test(txt(invoice.STEM__c)) &&
-    Number.isFinite(Date.parse(invoice.CreatedDate)) && Date.parse(invoice.CreatedDate) >= Date.parse(activatedAt) &&
+    prospective &&
     invoice.Proforma__c === false && invoice.Deprecated__c === false);
 }
 export function qualifiesMissingNomBInvoice(invoice, activatedAt) {
@@ -383,15 +401,17 @@ export async function runMissingNomBReminders({ client, env = process.env, ...de
   const stats = { enabled: true,status: 'ok',scanned: 0,discovered: 0,sent: 0,blocked: 0,suppressed: 0,uncertain: 0,failed: 0 };
   if (state) {
     for (let page = 0; page < (deps.maxScanPages || 5); page += 1) {
-      const at = validDate(state.cursor_at); const until = validDate(state.scan_until); const activation = validDate(state.activated_at);
-      const continuation = state.cursor_id ? `(SystemModstamp > ${at} OR (SystemModstamp = ${at} AND Id > ${quote(validId(state.cursor_id))}))` : `SystemModstamp >= ${at}`;
-      const invoices = await gateway.query(`SELECT ${await gateway.invoiceSelect()} FROM Invoice__c WHERE CreatedDate >= ${activation} AND SystemModstamp <= ${until} AND ${continuation} ORDER BY SystemModstamp,Id LIMIT 200`);
+      const at = preciseDate(state.cursor_at); const until = preciseDate(state.scan_until); const activation = preciseDate(state.activated_at);
+      // A fractional lower bound has no equal Salesforce timestamp; an exact
+      // millisecond page cursor must retain its Id tie-breaker on resume.
+      const continuation = state.cursor_id && at.floor === at.ceil ? `(SystemModstamp > ${at.floor} OR (SystemModstamp = ${at.floor} AND Id > ${quote(validId(state.cursor_id))}))` : `SystemModstamp >= ${at.ceil}`;
+      const invoices = await gateway.query(`SELECT ${await gateway.invoiceSelect()} FROM Invoice__c WHERE CreatedDate >= ${activation.ceil} AND SystemModstamp <= ${until.floor} AND ${continuation} ORDER BY SystemModstamp,Id LIMIT 200`);
       // Persist potential final invoices even before a PDF exists. The durable worker below
       // rechecks their linked file without relying on another invoice SystemModstamp change.
-      const discoveries = invoices.filter((i) => isMissingNomBInvoiceCandidate(i,activation)).map((i) => ({ stemId: i.STEM__c,invoiceId: i.Id,invoice: { Id: i.Id,Name: i.Name,Invoice_Date__c: i.Invoice_Date__c || null,CreatedDate: i.CreatedDate,SystemModstamp: i.SystemModstamp } }));
+      const discoveries = invoices.filter((i) => isMissingNomBInvoiceCandidate(i,activation.raw)).map((i) => ({ stemId: i.STEM__c,invoiceId: i.Id,invoice: { Id: i.Id,Name: i.Name,Invoice_Date__c: i.Invoice_Date__c || null,CreatedDate: i.CreatedDate,SystemModstamp: i.SystemModstamp } }));
       stats.scanned += invoices.length; stats.discovered += discoveries.length;
       const last = invoices.at(-1); const done = invoices.length < 200;
-      state = await rpc(client,'missing_nom_b_checkpoint',{ p_org: org,p_token: token,p_discoveries: discoveries,p_cursor_at: done ? until : validDate(last.SystemModstamp),p_cursor_id: done ? '' : last.Id,p_done: done });
+      state = await rpc(client,'missing_nom_b_checkpoint',{ p_org: org,p_token: token,p_discoveries: discoveries,p_cursor_at: done ? until.raw : preciseDate(last.SystemModstamp).raw,p_cursor_id: done ? '' : last.Id,p_done: done });
       if (done) break;
     }
   }
