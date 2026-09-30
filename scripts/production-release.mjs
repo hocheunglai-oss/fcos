@@ -6,7 +6,7 @@ import { FCOS_CONNECTION_POLICY, fcosConnectionIdentifier } from '../config/fcos
 import { collectParitySource, collectPreviewParity, collectRuntimeObservation } from './collect-preview-parity.mjs';
 import { createReleaseReadiness, releaseHash, releaseConfigurationRevision } from './lib/release-readiness.mjs';
 import { assertProductionProtection, githubReleaseReads, RELEASE_REPOSITORY, PRODUCTION_ENVIRONMENT, PRODUCTION_WORKFLOW } from './lib/release-evidence.mjs';
-import { assertVercelProductionAuthority, assertProductionRuntimeReadback, executeProductionRelease, githubReleaseOidc } from './lib/release-production.mjs';
+import { assertVercelProductionAuthority, assertProductionRuntimeReadback, executeProductionRelease, githubReleaseOidc, readVercelTokenMetadata } from './lib/release-production.mjs';
 import { canonicalFcosE2eCandidateUrl } from './verify-e2e-candidate.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -88,7 +88,7 @@ export async function runProductionRelease({ mode = 'dry-run', cwd = ROOT, expec
     if (team?.id !== teamId || team?.slug !== fcosConnectionIdentifier('vercel', 'Team')) throw new Error('Production Vercel team mismatch.');
     const projectDetails = project();
     vercelProof = assertVercelProductionAuthority({ user, team, project: projectDetails,
-      token: api('/v5/user/tokens/current').token, reviewedTokenId: pinnedToken, deploymentConfiguration,
+      token: await readVercelTokenMetadata({ cliRead: api, token: env.VERCEL_TOKEN }), reviewedTokenId: pinnedToken, deploymentConfiguration,
       hooks: projectDetails.link?.deployHooks });
     if (collectParitySource(cwd).hashes.application !== source.hashes.application || releaseConfigurationRevision(cwd) !== configurationRevision) throw new Error('Source or release configuration changed after human review.');
     return approved;

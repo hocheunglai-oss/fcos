@@ -128,3 +128,21 @@ export async function executeProductionRelease({ readiness, authority, journal, 
   await journal(complete);
   return complete;
 }
+
+// The CLI may not expose account-level token metadata under team scope. The
+// fallback repeats identity verification using the same approved credential.
+export async function readVercelTokenMetadata({ cliRead, token, fetchImpl = globalThis.fetch } = {}) {
+  try { const value = cliRead('/v5/user/tokens/current')?.token; if (value) return value; }
+  catch { /* Only fixed GETs below; never refresh or change credentials. */ }
+  if (!token) throw new Error('Vercel token metadata is unavailable.');
+  const read = async path => {
+    const response = await fetchImpl(`https://api.vercel.com${path}`, { method: 'GET',
+      headers: { authorization: `Bearer ${token}` }, redirect: 'error', signal: AbortSignal.timeout(15000) });
+    if (!response.ok || response.redirected) throw new Error('Vercel metadata fallback is unavailable.');
+    return response.json();
+  };
+  if ((await read('/v2/user'))?.user?.username !== fcosConnectionIdentifier('vercel', 'Account')) throw new Error('Vercel API credential account mismatch.');
+  const value = (await read('/v5/user/tokens/current'))?.token;
+  if (!value || typeof value.id !== 'string' || !Array.isArray(value.scopes)) throw new Error('Vercel token metadata is unavailable.');
+  return value;
+}

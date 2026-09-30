@@ -5,7 +5,7 @@ import test from 'node:test';
 import { generateKeyPairSync, sign } from 'node:crypto';
 import { createReleaseReadiness, assertReleaseReceiptBinding, releaseHash } from '../scripts/lib/release-readiness.mjs';
 import { assertTrustedArtifact, assertProductionProtection, RELEASE_REPOSITORY, PRODUCTION_ENVIRONMENT, PRODUCTION_WORKFLOW } from '../scripts/lib/release-evidence.mjs';
-import { githubReleaseOidc, productionDeployArguments, assertVercelProductionAuthority, assertProductionRuntimeReadback, executeProductionRelease } from '../scripts/lib/release-production.mjs';
+import { githubReleaseOidc, productionDeployArguments, assertVercelProductionAuthority, assertProductionRuntimeReadback, executeProductionRelease, readVercelTokenMetadata } from '../scripts/lib/release-production.mjs';
 import { PREVIEW_PARITY_POLICY } from '../scripts/lib/preview-parity.mjs';
 import { collectRuntimeObservation } from '../scripts/collect-preview-parity.mjs';
 import { runProductionRelease, productionReleaseArguments } from '../scripts/production-release.mjs';
@@ -253,4 +253,15 @@ test('parity consumes the sanitized CLI report contract and rejects cached or st
   for (const changed of [{ observationMode: 'cached' }, { freshness: 'stale' }, { observedAt: new Date(time - 900001).toISOString() },
     { cliVersionStatus: undefined, versionStatus: 'verified' }, { permissions: ['project.read'] }])
     assert.throws(() => assertParityConnectionReadAccess({ ...report, ...changed }, time));
+});
+
+test('Vercel metadata uses CLI first and independently verifies the same API credential on fallback', async () => {
+  const metadata={id:'reviewed-token',scopes:[{type:'team',teamId:fcosConnectionIdentifier('vercel','Team ID')}]};
+  let called=0;
+  assert.equal(await readVercelTokenMetadata({cliRead:()=>({token:metadata}),fetchImpl:()=>{called++;throw Error('unexpected');}}),metadata);
+  assert.equal(called,0);
+  const urls=[];const fetchImpl=async (url,opts)=>{urls.push(url);assert.equal(opts.method,'GET');assert.equal(opts.redirect,'error');return {ok:true,json:async()=>url.endsWith('/v2/user')?{user:{username:fcosConnectionIdentifier('vercel','Account')}}:{token:metadata}};};
+  assert.deepEqual(await readVercelTokenMetadata({cliRead:()=>{throw Error('unsupported');},token:'private-test-value',fetchImpl}),metadata);
+  assert.deepEqual(urls,['https://api.vercel.com/v2/user','https://api.vercel.com/v5/user/tokens/current']);
+  let reads=0;await assert.rejects(()=>readVercelTokenMetadata({cliRead:()=>{throw Error('unsupported');},token:'private-test-value',fetchImpl:async()=>{reads++;return {ok:true,json:async()=>({user:{username:'wrong'}})};}}),/account mismatch/);assert.equal(reads,1);
 });
