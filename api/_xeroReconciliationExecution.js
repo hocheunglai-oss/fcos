@@ -18,6 +18,7 @@ import { buildCampaignContactCases, executeCampaignContactCase } from './_xeroRe
 import { releaseXeroBudget, reserveXeroBudget, runWithXeroBudget, xeroSharedContext } from './_xeroSharedControl.js';
 import { campaignDocumentReadCalls } from './_xeroReconciliationPolicy.js';
 import { readCampaignDocumentLinkReadback } from './_xeroReconciliationLinkReadback.js';
+import { creditLinkReviewCompatibility } from './_xeroCreditLinkResponseCompatibility.js';
 
 const MAX_CLAIM = 25;
 
@@ -78,15 +79,43 @@ function allocationProof(raw, collection) {
     amountPaid: raw.AmountPaid ?? 0, amountCredited: String(credited), raw: canonical(raw) };
 }
 
-function savedReview(item) {
-  return xeroReviewFingerprint({ ...item.source_payload, action: item.proposed_action, status: item.status,
+function savedReviewRow(item) {
+  return { ...item.source_payload, action: item.proposed_action, status: item.status,
     blockers: item.blockers, warnings: item.warnings, differences: item.differences,
-    xero: item.xero_payload, proposedPayload: item.proposed_payload });
+    xero: item.xero_payload, proposedPayload: item.proposed_payload };
 }
 
-function documentOutcome(caseRow, item, fresh, refreshedInventory, stored) {
-  if (!item || !fresh || caseRow.category !== 'link_only' || caseRow.status !== 'ready') return hold(caseRow, 'The saved document identity or current classification is unavailable.');
+function savedReview(item) {
+  return xeroReviewFingerprint(savedReviewRow(item));
+}
+
+function approvedHeldCreditRetry(caseRow, item, batch) {
+  const authority = batch?.retry_authority;
+  return ['needs_decision', 'waiting_dependency'].includes(caseRow.status)
+    && batch?.category === 'link_only' && batch.status === 'running'
+    && item?.source_payload?.xeroCollection === 'CreditNotes' && item.xero_payload?.collection === 'CreditNotes'
+    && authority?.category === 'link_only' && authority.claimId === batch.claim_id
+    && /^[a-f0-9]{64}$/.test(batch.evidence_fingerprint || '') && authority.fingerprint === batch.evidence_fingerprint
+    && Boolean(batch.approved_by) && authority.approvedBy === batch.approved_by
+    && Boolean(batch.approved_at) && authority.approvedAt === batch.approved_at
+    && Array.isArray(batch.claim_case_ids) && batch.claim_case_ids.includes(caseRow.id)
+    && Array.isArray(authority.caseIds) && authority.caseIds.includes(caseRow.id)
+    && Array.isArray(authority.cases) && authority.cases.filter((row) => row?.id === caseRow.id).length === 1
+    && authority.cases.find((row) => row?.id === caseRow.id).fingerprint === caseRow.evidenceFingerprint;
+}
+
+function documentOutcome(caseRow, item, fresh, refreshedInventory, stored, batch) {
+  if (!item || !fresh || caseRow.category !== 'link_only'
+    || caseRow.status !== 'ready' && !approvedHeldCreditRetry(caseRow, item, batch)) return hold(caseRow, 'The saved document identity or current classification is unavailable.');
   const source = item.source_payload || {};
+  const collection = source.xeroCollection;
+  const raw = (collection === 'CreditNotes' ? refreshedInventory.rawTargets?.creditNotes : refreshedInventory.rawTargets?.invoices)
+    ?.find((row) => documentIdentity(row, collection)?.toLowerCase() === caseRow.targetId.toLowerCase());
+  const currentReviewFingerprint = xeroReviewFingerprint(fresh);
+  const originalReviewFingerprint = savedReview(item);
+  const reviewCompatibility = currentReviewFingerprint === originalReviewFingerprint
+    ? { reviewFingerprint: originalReviewFingerprint, currentReviewFingerprint, removedFields: [] }
+    : creditLinkReviewCompatibility({ category: caseRow.category, saved: savedReviewRow(item), current: fresh, rawTarget: raw });
   if (item.source_object !== caseRow.sourceObject || item.source_id !== caseRow.sourceId
     || !['link', 'protected_legacy'].includes(item.proposed_action)
     || item.xero_document_id !== caseRow.targetId || item.blockers?.length
@@ -96,7 +125,7 @@ function documentOutcome(caseRow, item, fresh, refreshedInventory, stored) {
     || fresh.xero?.id !== caseRow.targetId || fresh.xero?.contactId !== source.contactId
     || fresh.currency !== source.currency || !exactAmount(fresh.total, item.source_total)
     || fresh.blockers?.length || !['link', 'protected_legacy'].includes(fresh.action)
-    || xeroReviewFingerprint(fresh) !== savedReview(item)) {
+    || !reviewCompatibility) {
     return hold(caseRow, 'Source, mapping, target or approved review evidence changed. Review this exact document again.');
   }
   const special = Boolean(source.groupedPreservation || source.issuedSupplierPreservation);
@@ -107,9 +136,6 @@ function documentOutcome(caseRow, item, fresh, refreshedInventory, stored) {
       return hold(caseRow, 'Grouped or issued preservation requires its original accepted proof transaction.');
     }
   }
-  const collection = source.xeroCollection;
-  const raw = (collection === 'CreditNotes' ? refreshedInventory.rawTargets?.creditNotes : refreshedInventory.rawTargets?.invoices)
-    ?.find((row) => documentIdentity(row, collection)?.toLowerCase() === caseRow.targetId.toLowerCase());
   const proof = allocationProof(raw, collection);
   if (!proof || proof.contactId !== source.contactId || proof.currency !== source.currency
     || !exactAmount(proof.total, source.total)) {
@@ -117,7 +143,8 @@ function documentOutcome(caseRow, item, fresh, refreshedInventory, stored) {
   }
   return { caseId: caseRow.id, evidenceFingerprint: caseRow.evidenceFingerprint, status: 'pending_verification',
     proof, mapping: documentMappingRow(item, fresh.xero, true), collection, targetId: caseRow.targetId,
-    sourceFingerprint: fresh.sourceFingerprint, reviewFingerprint: xeroReviewFingerprint(fresh) };
+    sourceFingerprint: fresh.sourceFingerprint, reviewFingerprint: reviewCompatibility.reviewFingerprint,
+    ...(reviewCompatibility.removedFields.length ? { reviewCompatibility } : {}) };
 }
 
 function paymentOutcome(caseRow, saved, fresh, refreshed, stored, env) {
@@ -608,7 +635,7 @@ export async function executeCampaignBatch({ client, connection, campaign, batch
           ? paymentOutcome(caseRow, savedPayments.get(caseRow.sourceId), freshPayments.get(caseRow.sourceId), refreshed, stored, env)
         : caseRow.category === 'link_only' && caseRow.sourceObject !== 'Payment__c'
         ? documentOutcome(caseRow, bySource.get(`${caseRow.sourceObject}:${caseRow.sourceId}`),
-          freshBySource.get(`${caseRow.sourceObject}:${caseRow.sourceId}`), refreshed, stored)
+          freshBySource.get(`${caseRow.sourceObject}:${caseRow.sourceId}`), refreshed, stored, batch)
         : hold(caseRow, `${caseRow.category} requires its original verified operation receipt.`));
       const results = [];
       const pendingDocumentLinks = prepared.filter((row) => row.status === 'pending_verification');
@@ -715,7 +742,9 @@ export async function executeCampaignBatch({ client, connection, campaign, batch
         }
         results.push({ caseId: row.caseId, evidenceFingerprint: row.evidenceFingerprint,
           status: 'reconciled', verificationFingerprint: digest({ first: row.proof, second,
-            sourceFingerprint: row.sourceFingerprint, reviewFingerprint: row.reviewFingerprint }), mapping: row.mapping });
+            sourceFingerprint: row.sourceFingerprint, reviewFingerprint: row.reviewFingerprint,
+            ...(row.reviewCompatibility ? { reviewCompatibility: row.reviewCompatibility } : {}) }), mapping: row.mapping,
+          ...(row.reviewCompatibility ? { reviewCompatibility: row.reviewCompatibility } : {}) });
       }
       if (cases.some((row) => row.category === 'contact') && contactsAwaitingInventory) {
         refreshed = await refreshInventory({ connection, inventory: { ...refreshed, contacts: currentContacts },

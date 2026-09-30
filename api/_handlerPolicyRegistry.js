@@ -91,6 +91,7 @@ const HANDLER_BEHAVIOR = Object.freeze({
   xeroReconciliationCampaignPreview: mutationPolicy({"cache":"none","externalAction":false,"capability":"xero_portal_manage"}),
   xeroReconciliationCampaignApprove: mutationPolicy({"cache":"none","externalAction":false,"capability":"xero_portal_manage"}),
   xeroReconciliationCampaignRun: mutationPolicy({"cache":"none","externalAction":true,"capability":"xero_portal_manage"}),
+  xeroReconciliationCampaignRetry: mutationPolicy({"cache":"none","externalAction":true,"capability":"xero_portal_manage"}),
   xeroReconciliationConnectionCheck: mutationPolicy({"cache":"none","externalAction":true,"capability":"xero_portal_manage"}),
   xeroPortalStatus: readPolicy({"cache":"none","externalAction":false,"capability":null}),
   xeroPortalConnectStart: mutationPolicy({"cache":"none","externalAction":true,"capability":"xero_portal_manage"}),

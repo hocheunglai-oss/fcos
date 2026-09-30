@@ -9,6 +9,7 @@ const CATEGORIES = new Set(['link_only', 'contact', 'draft']);
 const STATUSES = new Set(['ready', 'needs_decision', 'waiting_dependency', 'reconciled', 'legacy_excluded', 'future_activity']);
 const ALL_CATEGORIES = new Set(['link_only', 'contact', 'draft', 'decision', 'correction_deferred', 'legacy_excluded', 'future_activity']);
 const RESERVE = 200;
+const HELD_STATUSES = new Set(['needs_decision', 'waiting_dependency']);
 
 function fail(message, status = 400, code = 'XERO_CAMPAIGN_REJECTED') {
   return Object.assign(new Error(message), { status, code, expose: true });
@@ -17,7 +18,7 @@ function fail(message, status = 400, code = 'XERO_CAMPAIGN_REJECTED') {
 function actor(context) {
   const id = context?.profile?.id;
   if (typeof id !== 'string' || !id) throw fail('A current FCOS user is required.', 401, 'XERO_CAMPAIGN_AUTH_REQUIRED');
-  return { id, email: context.profile.email || null };
+  return { id, email: context.profile.email || null, name: context.profile.full_name || context.profile.email || null };
 }
 
 function requireId(value, field) {
@@ -97,7 +98,7 @@ async function batchForecast(client, campaign, batch, rows, allowance) {
     : verifiedCount < Math.min(5, batch.case_ids.length) ? Math.min(5, batch.case_ids.length) - verifiedCount : 25;
   const approved = new Map((batch.evidence || []).map((row) => [row.id, row.fingerprint]));
   const candidates = rows.filter((row) => (batch.status === 'running' ? batch.claim_case_ids : batch.case_ids).includes(row.id)
-    && row.status === 'ready' && (!approved.size || approved.get(row.id) === row.evidence_fingerprint));
+    && (row.status === 'ready' || batch.status === 'running' && HELD_STATUSES.has(row.status)) && (!approved.size || approved.get(row.id) === row.evidence_fingerprint));
   // SQL may choose a representative mix. Credits require individual reads,
   // while invoices share one read; unknown collections stay conservative.
   const readWeight = (row) => {
@@ -117,10 +118,34 @@ async function batchForecast(client, campaign, batch, rows, allowance) {
       .reduce((sum, row) => sum + row.operation_remaining + row.verification_remaining, 0);
     if (!Number.isSafeInteger(ownReservation) || ownReservation < 0 || ownReservation > allowance.reservedCalls) throw fail('Claim reservation evidence changed.', 503, 'XERO_CAMPAIGN_STORAGE_FAILED');
   }
-  return { ...forecastReconciliationBatch({ category: batch.category, cases: pending.map(publicCase),
+  return { ...forecastReconciliationBatch({ category: batch.category, cases: pending.map((row) => ({ ...publicCase(row), status: 'ready' })),
     inventoryCalls: 40 + Math.ceil(pending.length / 50) + (batch.category === 'contact' ? pending.length * 10 : 0), otherActivityCalls: 2,
     remainingCalls: allowance.remaining === null ? null : Math.max(0, allowance.remaining - allowance.reservedCalls + ownReservation) }),
     ownReservation, claimCapacity: capacity, recovery: batch.status === 'running' };
+}
+
+function retryCases(batch, rows, ownerId) {
+  if (batch.category !== 'link_only' || batch.status !== 'completed' || !batch.approved_at
+    || batch.approved_by !== ownerId || !Array.isArray(batch.case_ids) || !Array.isArray(batch.evidence)
+    || batch.case_ids.length !== batch.evidence.length || new Set(batch.case_ids).size !== batch.case_ids.length) return [];
+  const approved = new Map(batch.evidence.map((item) => [item.id, item.fingerprint]));
+  const indexed = new Map(rows.map((row) => [row.id, row]));
+  if (approved.size !== batch.case_ids.length || batch.case_ids.some((id) => !indexed.has(id)
+    || approved.get(id) !== indexed.get(id).evidence_fingerprint)) return [];
+  return batch.case_ids.map((id) => indexed.get(id)).filter((row) => row.category === 'link_only'
+    && HELD_STATUSES.has(row.status) && ['ACCRECCREDIT', 'ACCPAYCREDIT'].includes(String(row.evidence?.sampleKey || '').split(':')[1])
+    && (!row.evidence?.xeroCollection || row.evidence.xeroCollection === 'CreditNotes')
+    && ['Invoice__c', 'Supplier_Invoice__c'].includes(row.evidence?.sourceObject));
+}
+
+function retryForecast(rows, allowance) {
+  return { ...forecastReconciliationBatch({ category: 'link_only',
+    // Forecast the fresh read and verification work without resetting saved holds.
+    cases: rows.map((row) => ({ ...publicCase(row), status: 'ready' })),
+    inventoryCalls: 40 + Math.ceil(rows.length / 50), otherActivityCalls: 2,
+    remainingCalls: allowance.remaining === null ? null : Math.max(0, allowance.remaining - allowance.reservedCalls) }),
+    ownReservation: 0, claimCapacity: rows.length, recovery: false,
+    reserveCalls: RESERVE, minuteLimit: 45, inFlightLimit: 2 };
 }
 
 function publicCampaign(row, verifiedBatchCount = 0) {
@@ -256,9 +281,29 @@ export async function xeroReconciliationCampaignRead(body = {}, input = {}) {
     inventoryCalls: 40 + Math.ceil(planningCases.length / 50) + (category === 'contact' ? planningCases.length * 10 : 0), otherActivityCalls: 2,
     remainingCalls: allowance.remaining === null ? null : Math.max(0, allowance.remaining - allowance.reservedCalls) }) : null;
   const pendingBatches = [];
+  const retryBatches = [];
+  const retryCandidates = [];
   const caseById = new Map(rows.map((row) => [row.id, row]));
-  for (const batch of (await allFinancialRows(client, 'xero_reconciliation_batches', (query) => query.eq('campaign_id', campaign.id))).data
-    .filter((batch) => ['approved', 'partial', 'running'].includes(batch.status))) {
+  for (const batch of (await allFinancialRows(client, 'xero_reconciliation_batches', (query) => query.eq('campaign_id', campaign.id))).data) {
+    const held = retryCases(batch, rows, current.id);
+    if (held.length) {
+      const authority = { batchId: batch.id, batchRevision: batch.revision, approvedFingerprint: batch.evidence_fingerprint };
+      const caseEvidence = held.map((row) => ({ ...publicCase(row), ...authority }));
+      retryCandidates.push(...caseEvidence);
+      const proposed = held.slice(0, 25);
+      let nextRunForecast = retryForecast(proposed, allowance);
+      while (proposed.length && nextRunForecast.canProceed === false) {
+        proposed.pop();
+        if (proposed.length) nextRunForecast = retryForecast(proposed, allowance);
+      }
+      const proposedIds = new Set(proposed.map((row) => row.id));
+      retryBatches.push({ id: batch.id, campaignId: campaign.id, category: batch.category, revision: batch.revision,
+        status: batch.status, evidence_fingerprint: batch.evidence_fingerprint, approved_by: batch.approved_by, approvedByName: current.name,
+        approved_at: batch.approved_at, verified_count: batch.verified_count, caseIds: proposed.map((row) => row.id),
+        caseEvidence: caseEvidence.filter((row) => proposedIds.has(row.id)), nextRunForecast,
+        totalHeldCount: held.length, maxCases: proposed.length, retryLimit: 25, requiresFreshVerification: true });
+    }
+    if (!['approved', 'partial', 'running'].includes(batch.status)) continue;
     pendingBatches.push({
         id: batch.id, category: batch.category, revision: batch.revision, status: batch.status,
         case_ids: batch.case_ids, claim_case_ids: batch.claim_case_ids, verified_count: batch.verified_count,
@@ -268,7 +313,7 @@ export async function xeroReconciliationCampaignRead(body = {}, input = {}) {
       });
   }
   return { campaign: publicCampaign(campaign, verified), counts, cases: pageRows.map(publicCase),
-    page: { total: visible.length, hasMore, nextCursor }, allowance, forecast, pendingBatches };
+    page: { total: visible.length, hasMore, nextCursor }, allowance, forecast, pendingBatches, retryBatches, retryCandidates };
 }
 
 export async function xeroReconciliationCampaignRefresh(body = {}, input = {}) {
@@ -366,43 +411,71 @@ export async function xeroReconciliationCampaignRun(body = {}, input = {}) {
   }
   const connection = await checkConnection(client, { env, fetchImpl });
   if (connection?.tenantId !== tenant.id) throw fail('The connected Xero organisation changed.', 409, 'XERO_CAMPAIGN_TENANT_CHANGED');
-  let currentBatch = batch;
-  const allOutcomes = [];
-  // Each request verifies one claim: five representative cases first, then up
-  // to 25. The exact category approval remains valid for unchanged cases.
-  while (allOutcomes.length === 0) {
-    const claim = await rpc(client, 'xero_campaign_claim_v1', { p_actor: current.id, p_batch: batchId, p_revision: currentBatch.revision });
-    if (!claim.batch || !Array.isArray(claim.cases) || !claim.batch.claim_id) throw fail('Batch claim result is uncertain. Read it back before another action.', 503, 'XERO_CAMPAIGN_CLAIM_UNKNOWN');
-    let outcomes;
-    try {
-      outcomes = await executeBatch({ client, connection, campaign, batch: { ...claim.batch, forecast }, cases: claim.cases,
-        recovering: claim.recovering === true,
-        actor: current, env, fetchImpl });
-    } catch (error) {
-      throw fail(`Batch execution outcome is uncertain: ${error?.message || 'execution stopped'}. Read the claimed batch before another action.`, 503, 'XERO_CAMPAIGN_EXECUTION_UNKNOWN');
-    }
-    if (!Array.isArray(outcomes)) throw fail('Batch execution returned no confirmed outcomes. Read back before another action.', 503, 'XERO_CAMPAIGN_EXECUTION_UNKNOWN');
-    const expectedCases = new Map(claim.cases.map((item) => [item.id, item]));
-    if (outcomes.length !== expectedCases.size || new Set(outcomes.map((item) => item.caseId)).size !== expectedCases.size
-      || outcomes.some((item) => !expectedCases.has(item.caseId) || item.evidenceFingerprint !== expectedCases.get(item.caseId).evidenceFingerprint
-        || !['reconciled', 'needs_decision', 'waiting_dependency'].includes(item.status)
-        || item.status === 'reconciled' && !/^[a-f0-9]{64}$/.test(item.verificationFingerprint || '')
-        || item.status === 'reconciled' && (batch.category === 'link_only' && expectedCases.get(item.caseId).sourceObject !== 'Payment__c'
-          ? !item.mapping : expectedCases.get(item.caseId).sourceObject === 'Payment__c'
-            ? !(item.paymentMapping || item.paymentReferenceRow || item.groupPaymentRow) : !item.receiptId))) {
-      throw fail('Batch outcomes lack exact case and verification evidence. Read back before another action.', 503, 'XERO_CAMPAIGN_EXECUTION_UNKNOWN');
-    }
-    currentBatch = await rpc(client, 'xero_campaign_finish_v1', { p_actor: current.id, p_batch: batchId,
-      p_claim: claim.batch.claim_id, p_outcomes: outcomes });
-    allOutcomes.push(...outcomes);
-    if (currentBatch.status !== 'partial' || claim.recovering === true) break;
+  const claim = await rpc(client, 'xero_campaign_claim_v1', { p_actor: current.id, p_batch: batchId, p_revision: batch.revision });
+  return finishClaim({ client, connection, campaign, batch, currentCases, forecast, claim, current, env, fetchImpl, executeBatch });
+}
+
+async function finishClaim({ client, connection, campaign, batch, currentCases, forecast, claim, current, env, fetchImpl, executeBatch }) {
+  if (!claim.batch || !Array.isArray(claim.cases) || !claim.batch.claim_id) throw fail('Batch claim result is uncertain. Read it back before another action.', 503, 'XERO_CAMPAIGN_CLAIM_UNKNOWN');
+  let outcomes;
+  try {
+    outcomes = await executeBatch({ client, connection, campaign, batch: { ...claim.batch, forecast }, cases: claim.cases,
+      recovering: claim.recovering === true,
+      actor: current, env, fetchImpl });
+  } catch (error) {
+    throw fail(`Batch execution outcome is uncertain: ${error?.message || 'execution stopped'}. Read the claimed batch before another action.`, 503, 'XERO_CAMPAIGN_EXECUTION_UNKNOWN');
   }
-  const updatedAllowance = await sharedAllowance(client, tenant.id);
-  const outcomeById = new Map(allOutcomes.map((row) => [row.caseId, row.status]));
+  if (!Array.isArray(outcomes)) throw fail('Batch execution returned no confirmed outcomes. Read back before another action.', 503, 'XERO_CAMPAIGN_EXECUTION_UNKNOWN');
+  const expectedCases = new Map(claim.cases.map((item) => [item.id, item]));
+  if (outcomes.length !== expectedCases.size || new Set(outcomes.map((item) => item.caseId)).size !== expectedCases.size
+    || outcomes.some((item) => !expectedCases.has(item.caseId) || item.evidenceFingerprint !== expectedCases.get(item.caseId).evidenceFingerprint
+      || !['reconciled', 'needs_decision', 'waiting_dependency'].includes(item.status)
+      || item.status === 'reconciled' && !/^[a-f0-9]{64}$/.test(item.verificationFingerprint || '')
+      || item.status === 'reconciled' && (batch.category === 'link_only' && expectedCases.get(item.caseId).sourceObject !== 'Payment__c'
+        ? !item.mapping : expectedCases.get(item.caseId).sourceObject === 'Payment__c'
+          ? !(item.paymentMapping || item.paymentReferenceRow || item.groupPaymentRow) : !item.receiptId))) {
+    throw fail('Batch outcomes lack exact case and verification evidence. Read back before another action.', 503, 'XERO_CAMPAIGN_EXECUTION_UNKNOWN');
+  }
+  const currentBatch = await rpc(client, 'xero_campaign_finish_v1', { p_actor: current.id, p_batch: batch.id,
+    p_claim: claim.batch.claim_id, p_outcomes: outcomes });
+  const updatedAllowance = await sharedAllowance(client, campaign.tenant_id);
+  const outcomeById = new Map(outcomes.map((row) => [row.caseId, row.status]));
   const nextRunForecast = currentBatch.status === 'partial' ? await batchForecast(client, campaign, currentBatch,
     currentCases.map((row) => ({ ...row, status: outcomeById.get(row.id) || row.status })), updatedAllowance) : null;
-  return { batch: currentBatch, outcomes: allOutcomes, forecast: nextRunForecast || forecast, nextRunForecast,
-    allowance: updatedAllowance };
+  return { batch: currentBatch, outcomes, forecast: nextRunForecast || forecast, nextRunForecast, allowance: updatedAllowance };
+}
+
+export async function xeroReconciliationCampaignRetry(body = {}, input = {}) {
+  const { client, accessContext, env, fetchImpl, checkConnection, executeBatch } = deps(input);
+  const current = actor(accessContext);
+  const allowedFields = new Set(['campaignId', 'batchId', 'caseIds', 'expectedRevision', 'expectedFingerprint']);
+  if (Object.keys(body).some((key) => !allowedFields.has(key)) || !Array.isArray(body.caseIds)
+    || body.caseIds.length < 1 || body.caseIds.length > 25 || new Set(body.caseIds).size !== body.caseIds.length
+    || body.caseIds.some((id) => typeof id !== 'string' || !id.trim())) throw fail('Choose 1–25 exact held credit cases from the original approval.');
+  const { tenant, campaign, cases: currentCases } = await loadCampaignAndCases(client, body, current);
+  const batchId = requireId(body.batchId, 'batchId');
+  const expected = revision(body.expectedRevision);
+  const batch = await one(client.from('xero_reconciliation_batches').select('*').eq('id', batchId).eq('campaign_id', campaign.id), 'batch');
+  if (!batch || batch.revision !== expected || batch.evidence_fingerprint !== body.expectedFingerprint) {
+    throw fail('Original approval changed. Read the campaign before retrying.', 409, 'XERO_CAMPAIGN_BATCH_CHANGED');
+  }
+  const eligible = new Map(retryCases(batch, currentCases, current.id).map((row) => [row.id, row]));
+  if (body.caseIds.some((id) => !eligible.has(id))) throw fail('Selected credits are no longer unchanged held cases in this approval. Read the campaign again.', 409, 'XERO_CAMPAIGN_CASE_CHANGED');
+  const selected = body.caseIds.map((id) => eligible.get(id));
+  const allowance = await sharedAllowance(client, tenant.id);
+  const observedAt = Date.parse(allowance.observedAt || '');
+  const now = Number(input.now ? input.now() : Date.now());
+  const forecast = retryForecast(selected, allowance);
+  if (!Number.isFinite(now) || !Number.isFinite(observedAt) || now - observedAt < 0 || now - observedAt > 15 * 60 * 1000
+    || allowance.holdReason || allowance.remaining === null || !Number.isSafeInteger(forecast.callsNeeded)
+    || allowance.remaining - allowance.reservedCalls - RESERVE < forecast.callsNeeded) {
+    throw fail(allowance.holdReason || 'Check the current Xero allowance above the 200-call reserve before retrying.', 429, 'XERO_CAMPAIGN_ALLOWANCE_HOLD');
+  }
+  const connection = await checkConnection(client, { env, fetchImpl });
+  if (connection?.tenantId !== tenant.id) throw fail('The connected Xero organisation changed.', 409, 'XERO_CAMPAIGN_TENANT_CHANGED');
+  const claim = await rpc(client, 'xero_campaign_retry_claim_v1', { p_actor: current.id, p_campaign: campaign.id,
+    p_batch: batch.id, p_revision: expected, p_fingerprint: batch.evidence_fingerprint, p_case_ids: body.caseIds });
+  return finishClaim({ client, connection, campaign, batch, currentCases, forecast, claim, current, env, fetchImpl, executeBatch });
 }
 
 export async function xeroReconciliationConnectionCheck(_body = {}, input = {}) {

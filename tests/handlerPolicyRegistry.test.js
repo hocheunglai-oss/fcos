@@ -62,6 +62,15 @@ test('saved Xero previews are mutations protected by Finance management permissi
   }
 });
 
+test('held credit retries use the same protected external-action policy as approved runs', () => {
+  const policy = registeredHandlerBehavior('xeroReconciliationCampaignRetry');
+  assert.equal(policy.mutation, true);
+  assert.equal(policy.externalAction, true);
+  assert.equal(policy.capability, 'xero_portal_manage');
+  assert.equal(policy.audit, 'required');
+  assert.equal(policy.cache, 'none');
+});
+
 test('Nom B observations and policies bypass caches and declare their audit writes', () => {
   for (const name of ['dashboardNomBRead', 'dashboardNomBPolicySave']) {
     assert.equal(registeredHandlerBehavior(name).mutation, true);

@@ -112,6 +112,7 @@ async function harness(t, { count = 1, payments = [], draft = false, contactCase
     returns boolean language sql stable as $$ select p_user = '${actor}'::uuid
       and p_module in ('xero_portal', 'xero_portal_manage') $$`);
   await loadMigration(db, campaignMigration);
+  await loadMigration(db, '20260930043106_xero_campaign_approved_credit_retry.sql');
   await db.query("insert into public.xero_contact_sync_connections(tenant_id,refresh_token) values($1,'test-only')", [tenant]);
   const fixture = fixtures(count, payments, { draft, contactCases, configureItems });
   await db.query(`insert into public.xero_financial_sync_runs(id,idempotency_key,mode,status,revision,created_at,control_totals)
@@ -134,6 +135,8 @@ async function harness(t, { count = 1, payments = [], draft = false, contactCase
     prepare: (campaign, ids = fixture.cases.map((row) => row.id), category = 'link_only') => rpc('prepare', [actor, campaign.id, campaign.revision, category, ids, { writeCalls: category==='link_only'?0:ids.length }]),
     approve: (batch, revision = batch.revision, fingerprint = batch.evidence_fingerprint) => rpc('approve', [actor, batch.id, revision, fingerprint]),
     claim: (batch, revision = batch.revision) => rpc('claim', [actor, batch.id, revision]),
+    retry: (batch, ids, overrides = {}) => rpc('retry_claim', [overrides.actor || actor, overrides.campaign || batch.campaign_id, batch.id,
+      overrides.revision ?? batch.revision, overrides.fingerprint ?? batch.evidence_fingerprint, ids]),
     finish: (claim, outcomes) => rpc('finish', [actor, claim.batch.id, claim.batch.claim_id, JSON.stringify(outcomes)]),
     outcomes: (claim) => claim.cases.map((row) => {
       const item = fixture.items.find((entry) => entry.source_id === row.sourceId);
@@ -916,5 +919,106 @@ test('reference and Group finish invoke their original proof transactions and re
     assert.ok((await h.rows('xero_financial_audit_events')).some(event=>event.event_type===(reference?'payment_reference_linked':'group_payment_linked')));
     const caseRow=(await h.rows('xero_reconciliation_cases')).find(row=>row.evidence.sourceObject==='Payment__c');
     assert.equal(caseRow.outcome.receiptId,saved.id);assert.equal(caseRow.outcome.originalReceipt.outcomes[0].status,'linked');
+  });
+});
+
+async function completedHeldCredits(t, count = 3, reconciled = 1) {
+  const h = await harness(t, { count, configureItems(items) {
+    for (const item of items) {
+      item.source_payload.xeroType = 'ACCRECCREDIT';
+      item.source_payload.xeroCollection = 'CreditNotes';
+      item.source_payload.documentKind = 'buyer_credit_note';
+    }
+  } });
+  const { campaign, approved } = await h.started();
+  let batch = (await h.rows('xero_reconciliation_batches'))[0];
+  let confirmed = 0;
+  do {
+    const claim = await h.claim(batch);
+    const outcomes = h.outcomes(claim).map((outcome) => confirmed++ < reconciled ? outcome
+      : { caseId: outcome.caseId, evidenceFingerprint: outcome.evidenceFingerprint, status: 'needs_decision', reason: 'Credit readback response defaults need review.' });
+    batch = await h.finish(claim, outcomes);
+  } while (batch.status === 'partial');
+  return { h, campaign, approved, batch, held: (await h.rows('xero_reconciliation_cases')).filter((row) => row.status === 'needs_decision') };
+}
+
+test('bounded retry claims original approved held credits without resetting outcomes, evidence or confirmed links', async t => {
+  const { h, batch, held } = await completedHeldCredits(t);
+  const beforeCases = await h.rows('xero_reconciliation_cases');
+  const beforeMappings = await h.rows('xero_financial_document_mappings');
+  const beforeEvents = await h.rows('xero_reconciliation_events');
+  const ids = held.map((row) => row.id);
+  const claim = await h.retry(batch, ids);
+  assert.equal(claim.recovering, false);
+  assert.equal(claim.batch.status, 'running');
+  assert.equal(claim.batch.revision, batch.revision + 1);
+  assert.equal(claim.batch.approved_by, batch.approved_by);
+  assert.equal(claim.batch.approved_at, batch.approved_at);
+  assert.equal(claim.batch.evidence_fingerprint, batch.evidence_fingerprint);
+  assert.deepEqual(claim.batch.evidence, batch.evidence);
+  assert.equal(claim.batch.verified_count, batch.verified_count);
+  assert.deepEqual(claim.batch.retry_authority, { category: 'link_only', claimId: claim.batch.claim_id,
+    caseIds: ids, fingerprint: batch.evidence_fingerprint,
+    cases: batch.evidence.filter((row) => ids.includes(row.id)), approvedBy: batch.approved_by, approvedAt: batch.approved_at });
+  assert.deepEqual(claim.cases.map((row) => row.id).sort(), [...ids].sort());
+  assert.ok(claim.cases.every((row) => row.status === 'needs_decision'));
+  assert.ok(claim.cases.every((row) => row.evidenceFingerprint === held.find((item) => item.id === row.id).evidence_fingerprint));
+  assert.deepEqual(await h.rows('xero_reconciliation_cases'), beforeCases);
+  assert.deepEqual(await h.rows('xero_financial_document_mappings'), beforeMappings);
+  const retryEvents = (await h.rows('xero_reconciliation_events')).filter((row) => row.event_type === 'batch_retry_claimed');
+  assert.equal(retryEvents.length, 1);
+  assert.deepEqual(retryEvents[0].evidence.previousOutcomes, held.map((row) => ({ caseId: row.id,
+    status: row.status, evidenceFingerprint: row.evidence_fingerprint, outcome: row.outcome })));
+  assert.equal((await h.rows('xero_reconciliation_events')).length, beforeEvents.length + 1);
+  await assert.rejects(h.retry(batch, ids), /original approval/);
+  assert.equal((await h.rows('xero_reconciliation_events')).length, beforeEvents.length + 1, 'no blind retry audit or duplicate claim');
+  const recovered = await h.claim(claim.batch);
+  assert.equal(recovered.recovering, true);
+  assert.deepEqual(recovered.batch.retry_authority, claim.batch.retry_authority);
+  assert.deepEqual(recovered.cases, claim.cases);
+  await h.finish(recovered, h.outcomes(recovered));
+  assert.equal((await h.rows('xero_reconciliation_batches'))[0].verified_count, 3);
+  assert.equal((await h.rows('xero_financial_document_mappings')).length, 3);
+  const confirmedBefore = beforeCases.find((row) => row.status === 'reconciled');
+  assert.deepEqual((await h.rows('xero_reconciliation_cases')).find((row) => row.id === confirmedBefore.id), confirmedBefore);
+  assert.ok((await h.rows('xero_financial_document_mappings')).some((row) => JSON.stringify(row) === JSON.stringify(beforeMappings[0])));
+  await assert.rejects(h.db.query('update xero_reconciliation_batches set retry_authority=null'), /permission denied/);
+  await assert.rejects(ownerQuery(h, "delete from xero_reconciliation_events where event_type='batch_retry_claimed'"), /append-only/);
+});
+
+test('retry rejects stale authority, foreign scope, mismatched full evidence, noncredits, confirmed cases and financial barriers atomically', async t => {
+  const { h, campaign, batch, held } = await completedHeldCredits(t);
+  const ids = held.map((row) => row.id);
+  const confirmed = (await h.rows('xero_reconciliation_cases')).find((row) => row.status === 'reconciled');
+  const beforeCases = await h.rows('xero_reconciliation_cases'), beforeBatches = await h.rows('xero_reconciliation_batches'), beforeEvents = await h.rows('xero_reconciliation_events');
+  const checks = [
+    ['empty', () => h.retry(batch, []), /unique exact/],
+    ['duplicate', () => h.retry(batch, [ids[0], ids[0]]), /unique exact/],
+    ['over bound', () => h.retry(batch, Array.from({ length: 26 }, (_, i) => `id-${i}`)), /unique exact/],
+    ['null ID', () => h.retry(batch, [null]), /unique exact/],
+    ['stale revision', () => h.retry(batch, ids, { revision: batch.revision - 1 }), /original approval/],
+    ['changed fingerprint', () => h.retry(batch, ids, { fingerprint: 'f'.repeat(64) }), /original approval/],
+    ['foreign campaign', () => h.retry(batch, ids, { campaign: randomUUID() }), /original approval/],
+    ['permission revoked', () => h.retry(batch, ids, { actor: randomUUID() }), /management access/],
+    ['confirmed case', () => h.retry(batch, [confirmed.id]), /confirmed cases cannot replay/],
+    ['unknown case', () => h.retry(batch, ['unknown-case']), /confirmed cases cannot replay/],
+    ['foreign owner', async () => { await ownerQuery(h, 'update xero_reconciliation_campaigns set owner_id=$1 where id=$2', [randomUUID(), campaign.id]); return h.retry(batch, ids); }, /original approval/],
+    ['missing immutable approval', async () => { await ownerQuery(h, 'update xero_reconciliation_batches set approved_at=approved_at+interval \'1 second\' where id=$1', [batch.id]); return h.retry(batch, ids); }, /immutable authority/],
+    ['changed confirmed case fingerprint', async () => { await ownerQuery(h, 'update xero_reconciliation_cases set evidence_fingerprint=$1 where id=$2', ['f'.repeat(64), confirmed.id]); return h.retry(batch, ids); }, /evidence.*authority/],
+    ['noncredit', async () => { await ownerQuery(h, "update xero_reconciliation_cases set evidence=jsonb_set(evidence,'{sampleKey}','\"Invoice__c:ACCREC:AUTHORISED\"') where id=$1", [ids[0]]); return h.retry(batch, ids); }, /confirmed cases cannot replay/],
+    ['other category', async () => { await ownerQuery(h, "update xero_reconciliation_batches set category='draft' where id=$1", [batch.id]); return h.retry(batch, ids); }, /original approval/],
+    ['uncertain payment', async () => { await h.db.query(`insert into xero_financial_sync_runs(idempotency_key,mode,status,control_totals)
+      values('retry-uncertain','payment_apply','completed',$1)`, [JSON.stringify({ paymentPosting: { state: 'uncertain' } })]); return h.retry(batch, ids); }, /unresolved financial/],
+    ['other running batch', async () => { await ownerQuery(h, `insert into xero_reconciliation_batches(campaign_id,category,case_ids,evidence_fingerprint,status,forecast,evidence)
+      values($1,'link_only',$2,$3,'running','{}','[]')`, [campaign.id, ids, batch.evidence_fingerprint]); return h.retry(batch, ids); }, /unresolved financial/],
+    ['tenant changed', async () => { await h.db.query('update xero_contact_sync_connections set tenant_id=$1', [randomUUID()]); return h.retry(batch, ids); }, /tenant changed/],
+  ];
+  for (const [label, invoke, pattern] of checks) await t.test(label, async () => {
+    await h.db.exec('begin');
+    try { await assert.rejects(invoke(), pattern); }
+    finally { await h.db.exec('rollback'); }
+    assert.deepEqual(await h.rows('xero_reconciliation_cases'), beforeCases);
+    assert.deepEqual(await h.rows('xero_reconciliation_batches'), beforeBatches);
+    assert.deepEqual(await h.rows('xero_reconciliation_events'), beforeEvents);
   });
 });

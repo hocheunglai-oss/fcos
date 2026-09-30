@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { xeroReconciliationCampaignApprove, xeroReconciliationCampaignCreate,
   xeroReconciliationCampaignPreview, xeroReconciliationCampaignRead,
-  xeroReconciliationCampaignRun, xeroReconciliationConnectionCheck } from '../api/_xeroReconciliationCampaign.js';
+  xeroReconciliationCampaignRun, xeroReconciliationCampaignRetry, xeroReconciliationConnectionCheck } from '../api/_xeroReconciliationCampaign.js';
 import { XERO_RECONCILIATION_VERSION } from '../api/_xeroFinancialSync.js';
 
 const tenantId = 'tenant-one';
@@ -65,10 +65,24 @@ function fakeClient() {
         batch.revision += 1; batch.status = 'approved';
         return { data: structuredClone(batch), error: null };
       }
+      if (name === 'xero_campaign_retry_claim_v1') {
+        const batch = tables.xero_reconciliation_batches[0];
+        batch.status = 'running'; batch.claim_id = 'retry-claim'; batch.claim_case_ids = parameters.p_case_ids;
+        batch.revision += 1;
+        batch.retry_authority = { category: 'link_only', claimId: batch.claim_id, caseIds: batch.claim_case_ids,
+          fingerprint: batch.evidence_fingerprint, approvedBy: batch.approved_by, approvedAt: batch.approved_at,
+          cases: batch.evidence.filter((row) => batch.claim_case_ids.includes(row.id)) };
+        const cases = tables.xero_reconciliation_cases.filter((row) => batch.claim_case_ids.includes(row.id))
+          .map((row) => ({ ...row.evidence, status: row.status, evidenceFingerprint: row.evidence_fingerprint }));
+        return { data: { batch: structuredClone(batch), cases, recovering: false }, error: null };
+      }
       if (name === 'xero_campaign_claim_v1') {
         const batch = tables.xero_reconciliation_batches[0];
-        batch.status = 'running'; batch.claim_id = 'claim-one';
-        return { data: { batch: structuredClone(batch), cases: structuredClone(tables.xero_reconciliation_cases), recovering: false }, error: null };
+        const recovering = batch.status === 'running';
+        batch.status = 'running'; batch.claim_id ||= 'claim-one'; batch.claim_case_ids ||= batch.case_ids;
+        const cases = tables.xero_reconciliation_cases.filter((row) => batch.claim_case_ids.includes(row.id))
+          .map((row) => batch.retry_authority ? { ...row.evidence, status: row.status, evidenceFingerprint: row.evidence_fingerprint } : row);
+        return { data: { batch: structuredClone(batch), cases: structuredClone(cases), recovering }, error: null };
       }
       if (name === 'xero_campaign_finish_v1') {
         const batch = tables.xero_reconciliation_batches[0];
@@ -237,4 +251,132 @@ test('running batch recovery accepts only its exact fingerprint with a prior kno
     expectedFingerprint: preview.evidenceFingerprint }, input);
   assert.equal(result.outcomes[0].status, 'needs_decision');
   assert.equal(f.calls.find((entry) => entry.name === 'xero_campaign_claim_v1').parameters.p_revision, 3);
+});
+
+async function heldRetrySeed(count = 15) {
+  const f = await seeded();
+  const template = f.tables.xero_reconciliation_cases[0];
+  f.tables.xero_reconciliation_cases = Array.from({ length: count }, (_, index) => ({ ...template,
+    id: `credit-${String(index).padStart(3, '0')}`, case_key: `credit-${index}`, status: 'needs_decision',
+    evidence: { ...template.evidence, id: `credit-${String(index).padStart(3, '0')}`, sourceObject: 'Invoice__c',
+      sourceId: `credit-source-${index}`, targetId: `credit-target-${index}`, documentNumber: `CN-${index}`,
+      sampleKey: 'Invoice__c:ACCRECCREDIT:AUTHORISED' },
+    outcome: { status: 'needs_decision', reason: 'Response defaults need review.' } }));
+  const ids = f.tables.xero_reconciliation_cases.map((row) => row.id);
+  f.tables.xero_reconciliation_batches.push({ id: 'completed-credits', campaign_id: 'campaign-one', category: 'link_only',
+    case_ids: ids, evidence_fingerprint: 'a'.repeat(64), revision: 56, status: 'completed',
+    approved_by: userId, approved_at: '2026-09-30T00:00:00Z', verified_count: 592,
+    forecast: { writeCalls: 0 }, evidence: ids.map((id) => ({ id, fingerprint: template.evidence_fingerprint })) });
+  const dependency = { ...f.dependency, now: () => Date.parse('2026-09-30T00:05:00Z'),
+    checkConnection: async () => ({ tenantId }) };
+  return { ...f, ids, dependency,
+    body: { campaignId: 'campaign-one', batchId: 'completed-credits', caseIds: ids.slice(0, 10), expectedRevision: 56, expectedFingerprint: 'a'.repeat(64) } };
+}
+
+test('read returns full eligible held credits and the largest bounded prefix fitting fresh shared allowance', async () => {
+  const f = await heldRetrySeed();
+  const originalRpc = f.client.rpc;
+  f.client.rpc = (name, parameters) => name === 'xero_shared_status'
+    ? Promise.resolve({ data: { allowanceKnown: true, availableCalls: 290, reservedCalls: 6,
+      rateLimit: { observedAt: '2026-09-30T00:00:00.000Z' } }, error: null }) : originalRpc(name, parameters);
+  const before = structuredClone(f.tables.xero_reconciliation_cases);
+  const result = await xeroReconciliationCampaignRead({ campaignId: 'campaign-one', limit: 5 }, f.dependency);
+  assert.equal(result.retryCandidates.length, 15);
+  assert.equal(result.retryBatches.length, 1);
+  const retry = result.retryBatches[0];
+  assert.equal(retry.totalHeldCount, 15);
+  assert.equal(retry.maxCases, 13);
+  assert.equal(retry.caseIds.length, 13);
+  assert.equal(retry.caseEvidence.length, 13);
+  assert.equal(retry.nextRunForecast.callsNeeded, 82);
+  assert.equal(retry.nextRunForecast.canProceed, true);
+  assert.equal(retry.nextRunForecast.writeCalls, 0);
+  assert.equal(retry.nextRunForecast.reserveCalls, 200);
+  assert.equal(retry.nextRunForecast.minuteLimit, 45);
+  assert.equal(retry.nextRunForecast.inFlightLimit, 2);
+  assert.equal(retry.caseEvidence[0].reason, 'Response defaults need review.');
+  assert.equal(retry.caseEvidence[0].approvedFingerprint, f.body.expectedFingerprint);
+  assert.equal(retry.approvedByName, accessContext.profile.email);
+  assert.deepEqual(f.tables.xero_reconciliation_cases, before);
+  assert.equal(f.calls.some((entry) => entry.name === 'xero_campaign_retry_claim_v1'), false);
+  f.tables.xero_reconciliation_cases[0].evidence_fingerprint = 'b'.repeat(64);
+  assert.equal((await xeroReconciliationCampaignRead({ campaignId: 'campaign-one' }, f.dependency)).retryBatches.length, 0,
+    'full original batch evidence must still match');
+});
+
+test('retry executes only explicitly selected exact held credits under original approval and fresh shared budget', async () => {
+  const f = await heldRetrySeed();
+  const before = structuredClone(f.tables.xero_reconciliation_cases);
+  const result = await xeroReconciliationCampaignRetry(f.body, { ...f.dependency,
+    executeBatch: async ({ cases, batch, recovering }) => {
+      assert.equal(recovering, false);
+      assert.equal(cases.length, 10);
+      assert.ok(cases.every((row) => row.status === 'needs_decision'));
+      assert.deepEqual(f.tables.xero_reconciliation_cases, before, 'retry never resets held cases');
+      assert.equal(batch.forecast.callsNeeded, 73);
+      assert.equal(batch.forecast.writeCalls, 0);
+      assert.equal(batch.retry_authority.claimId, batch.claim_id);
+      assert.equal(batch.retry_authority.fingerprint, f.body.expectedFingerprint);
+      return cases.map((row) => ({ caseId: row.id, evidenceFingerprint: row.evidenceFingerprint,
+        status: 'needs_decision', reason: 'Fresh source still requires review.' }));
+    } });
+  assert.equal(result.outcomes.length, 10);
+  assert.equal(f.calls.filter((entry) => entry.name === 'xero_campaign_retry_claim_v1').length, 1);
+  assert.equal(f.calls.filter((entry) => entry.name === 'xero_campaign_claim_v1').length, 0);
+  assert.equal(f.calls.filter((entry) => entry.name === 'xero_campaign_finish_v1').length, 1);
+  const claim = f.calls.find((entry) => entry.name === 'xero_campaign_retry_claim_v1').parameters;
+  assert.deepEqual(claim, { p_actor: userId, p_campaign: 'campaign-one', p_batch: 'completed-credits',
+    p_revision: 56, p_fingerprint: f.body.expectedFingerprint, p_case_ids: f.body.caseIds });
+});
+
+test('retry rejects invalid body, stale or changed approval, confirmed and foreign cases, insufficient and stale quota before claim', async t => {
+  for (const [label, alter, pattern] of [
+    ['duplicate IDs', f => { f.body.caseIds = [f.ids[0], f.ids[0]]; }, /exact held credit/],
+    ['over bound', f => { f.body.caseIds = Array.from({ length: 26 }, (_, i) => `id-${i}`); }, /exact held credit/],
+    ['extra approval field', f => { f.body.reviewed = true; }, /exact held credit/],
+    ['wrong revision', f => { f.body.expectedRevision -= 1; }, /approval changed/],
+    ['wrong fingerprint', f => { f.body.expectedFingerprint = 'wrong'; }, /approval changed/],
+    ['confirmed case', f => { f.tables.xero_reconciliation_cases[0].status = 'reconciled'; }, /unchanged held/],
+    ['noncredit', f => { f.tables.xero_reconciliation_cases[0].evidence.sampleKey = 'Invoice__c:ACCREC:AUTHORISED'; }, /unchanged held/],
+    ['foreign approval', f => { f.tables.xero_reconciliation_batches[0].approved_by = 'another-user'; }, /unchanged held/],
+    ['changed full batch case evidence', f => { f.tables.xero_reconciliation_cases.at(-1).evidence_fingerprint = 'f'.repeat(64); }, /unchanged held/],
+    ['stale quota', f => { f.dependency.now = () => Date.parse('2026-09-30T00:15:00.001Z'); }, /current Xero allowance/],
+    ['insufficient quota', f => { f.client.rpc = async name => { assert.equal(name, 'xero_shared_status'); return { data: { allowanceKnown: true, availableCalls: 272, reservedCalls: 0, rateLimit: { observedAt: '2026-09-30T00:00:00Z' } } }; }; }, /current Xero allowance/],
+    ['uncertain shared operation', f => { f.client.rpc = async name => { assert.equal(name, 'xero_shared_status'); return { data: { allowanceKnown: true, availableCalls: 900, reservedCalls: 0, unresolvedWrites: 1, rateLimit: { observedAt: '2026-09-30T00:00:00Z' } } }; }; }, /uncertain outcome/],
+  ]) await t.test(label, async () => {
+    const f = await heldRetrySeed(); alter(f);
+    let connectionChecks = 0;
+    const before = structuredClone(f.tables);
+    await assert.rejects(xeroReconciliationCampaignRetry(f.body, { ...f.dependency, checkConnection: async () => { connectionChecks += 1; return { tenantId }; },
+      executeBatch: async () => { throw new Error('Must not execute'); } }), pattern);
+    assert.equal(connectionChecks, 0);
+    assert.deepEqual(f.tables, before);
+    assert.equal(f.calls.some((entry) => entry.name === 'xero_campaign_retry_claim_v1'), false);
+  });
+});
+
+test('uncertain retry remains an exact running claim recovered through normal Run with a positive held-case forecast', async () => {
+  const f = await heldRetrySeed();
+  await assert.rejects(xeroReconciliationCampaignRetry(f.body, { ...f.dependency,
+    executeBatch: async () => { throw new Error('connection interrupted'); } }), /uncertain/);
+  assert.equal(f.tables.xero_reconciliation_batches[0].status, 'running');
+  assert.equal(f.calls.filter((entry) => entry.name === 'xero_campaign_finish_v1').length, 0);
+  await assert.rejects(xeroReconciliationCampaignRetry(f.body, f.dependency), /approval changed/);
+  const readback = await xeroReconciliationCampaignRead({ campaignId: f.body.campaignId }, f.dependency);
+  assert.equal(readback.retryBatches.length, 0);
+  assert.equal(readback.pendingBatches[0].nextRunForecast.callsNeeded, 73);
+  assert.equal(readback.pendingBatches[0].nextRunForecast.recovery, true);
+  assert.deepEqual(readback.pendingBatches[0].claim_case_ids, f.body.caseIds);
+  const recovered = await xeroReconciliationCampaignRun({ campaignId: f.body.campaignId, batchId: f.body.batchId,
+    expectedRevision: f.body.expectedRevision, expectedFingerprint: f.body.expectedFingerprint }, { ...f.dependency,
+    executeBatch: async ({ cases, batch, recovering }) => {
+      assert.equal(recovering, true);
+      assert.equal(batch.retry_authority.claimId, 'retry-claim');
+      assert.equal(batch.forecast.callsNeeded, 73);
+      return cases.map((row) => ({ caseId: row.id, evidenceFingerprint: row.evidenceFingerprint,
+        status: 'needs_decision', reason: 'Fresh readback held.' }));
+    } });
+  assert.equal(recovered.outcomes.length, 10);
+  assert.equal(f.calls.filter((entry) => entry.name === 'xero_campaign_retry_claim_v1').length, 1);
+  assert.equal(f.calls.filter((entry) => entry.name === 'xero_campaign_claim_v1').length, 1);
 });

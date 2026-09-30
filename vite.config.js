@@ -25,6 +25,8 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks(id) {
+          // Shared quota formatting must not pull the lazy credit retry back into the campaign.
+          if (id.endsWith('/src/lib/xeroCampaignQuota.js')) return 'xero-campaign-quota';
           if (!id.includes('node_modules')) return undefined;
           if (id.includes('/react/') || id.includes('/react-dom/') || id.includes('/react-router') || id.includes('/scheduler/')) return 'react-platform';
           if (id.includes('/@supabase/') || id.includes('/@tanstack/react-query/')) return 'data-platform';

@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronUp, Loader2, RefreshCw, ShieldCheck, X } from 'lucide-react';
 import { appClient } from '@/api/appClient';
 import { useAuth } from '@/lib/AuthContext';
@@ -12,6 +12,8 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 const REQUEST_OPTIONS = { force: true, cache: false };
 const MUTATION_OPTIONS = { ...REQUEST_OPTIONS, invalidateCache: true };
 const PAGE_SIZE = 50;
+const CreditRetry = lazy(() => import('./XeroCampaignCreditRetry'));
+const FieldDiff = lazy(() => import('./XeroCampaignCreditRetry').then((module) => ({ default: module.FieldDiff })));
 const timestamp = (value) => {
   const date = new Date(value);
   return Number.isFinite(date.valueOf()) ? date.toLocaleString('en-HK', { timeZone: 'Asia/Hong_Kong', dateStyle: 'medium', timeStyle: 'short' }) : 'Unknown time';
@@ -21,11 +23,7 @@ const number = (value) => value != null && value !== '' && Number.isFinite(Numbe
 function SummaryCount({ label, value }) {
   return <div className="min-w-0 rounded-lg border border-border bg-background px-3 py-2"><div className="text-[11px] text-muted-foreground">{label}</div><div className="text-lg font-semibold tabular-nums">{number(value)}</div></div>;
 }
-function FieldDiff({ row }) {
-  if (!row) return null;
-  const parts = Array.isArray(row.changes) ? row.changes : [row];
-  return <div className="rounded-md border border-border bg-muted/20 p-2 text-xs"><div className="font-medium">{row.caseTitle || row.caseId || row.title || 'Reviewed record'}</div>{parts.map((change, index) => <div key={`${change.field || index}:${index}`} className="mt-1 grid grid-cols-[minmax(100px,1fr)_minmax(0,1fr)_minmax(0,1fr)] gap-2"><span>{change.fieldLabel || change.field || 'Link / action'}</span><span className="break-words text-muted-foreground">Current: {String(change.before ?? '—')}</span><span className="break-words">Proposed: {String(change.after ?? '—')}</span></div>)}</div>;
-}
+
 
 export default function XeroReconciliationCampaign({ onClose, baselineRun, enabled, connected, onAllowance }) {
   const { user } = useAuth();
@@ -50,6 +48,8 @@ export default function XeroReconciliationCampaign({ onClose, baselineRun, enabl
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [runProgress, setRunProgress] = useState(null);
+  const [retryBatches, setRetryBatches] = useState([]);
+  const [retryCandidates, setRetryCandidates] = useState([]);
   const generation = useRef(0);
   const campaignIdRef = useRef(null);
   const mounted = useRef(true);
@@ -77,7 +77,7 @@ export default function XeroReconciliationCampaign({ onClose, baselineRun, enabl
   };
   const invoke = async (name, payload, options = REQUEST_OPTIONS) => {
     const response = await appClient.functions.invoke(name, payload, options);
-    if (response?.data?.error || response?.error) throw new Error(campaignError(response, `${name} failed.`));
+    if (response?.data?.error || response?.error) throw Object.assign(new Error(campaignError(response, `${name} failed.`)), { code: response?.data?.code || response?.error?.code });
     return response.data;
   };
   const load = useCallback(async ({ id = campaignIdRef.current, nextCursor = null, append = false, preserveInteraction = false } = {}) => {
@@ -92,6 +92,7 @@ export default function XeroReconciliationCampaign({ onClose, baselineRun, enabl
       setCampaign(data.campaign || null); campaignIdRef.current = data.campaign?.id || null; setCounts(data.counts || null);
       setCases((previous) => append ? [...previous, ...(data.cases || []).filter((row) => !previous.some((existing) => existing.id === row.id))] : data.cases || []);
       setPage(data.page || null); captureAllowance(data);
+      setRetryBatches(data.retryBatches || []); setRetryCandidates(data.retryCandidates || []);
       if (Array.isArray(data.pendingBatches)) setReview((previous) => {
         const pending = category === 'all' ? data.pendingBatches.find((batch) => batch.id === previous?.batch?.id) || data.pendingBatches[0] : data.pendingBatches.find((batch) => batch.category === category);
         if (pending) return savedApprovedReview(pending, previous);
@@ -110,6 +111,7 @@ export default function XeroReconciliationCampaign({ onClose, baselineRun, enabl
       const data = await invoke('xeroReconciliationCampaignRefresh', { campaignId: campaign.id, expectedRevision: campaign.revision }, MUTATION_OPTIONS);
       if (!mounted.current) return;
       setCampaign(data.campaign); setCounts(data.counts); setCases(data.cases || []); setPage(data.page); captureAllowance(data);
+      setRetryBatches(data.retryBatches || []); setRetryCandidates(data.retryCandidates || []);
       setCategory('all'); setStatus('all'); setRunProgress(null); setSelected(new Set()); setReview(null); setReviewOpen(false); setReviewed(false);
       setNotice('Current evidence refreshed. New activity is separate from the fixed baseline; changed approvals require a new review.');
     } catch (failure) { if (mounted.current) setError(failure.message || 'Current evidence could not be refreshed.'); }
@@ -170,7 +172,7 @@ export default function XeroReconciliationCampaign({ onClose, baselineRun, enabl
   };
   const run = async () => {
     if (!review?.approved || review.invalidated || !enabled || !connected || busy || requestBusy.current || activeRun.current || approvedQuotaHold) return;
-    const continuous = review.category === 'link_only' && !review.recoveryPending;
+    const continuous = review.category === 'link_only' && !review.recoveryPending && !review.retryRecovery;
     let state = continuous ? startApprovedLinkRun(campaign.id, review) : null;
     if (continuous && !state) return;
     const control = { identity: approvedLinkRunIdentity(campaign.id, review), stopRequested: false };
@@ -180,6 +182,7 @@ export default function XeroReconciliationCampaign({ onClose, baselineRun, enabl
     let currentAllowance = allowance;
     const campaignId = campaign.id;
     const ids = [...currentReview.caseIds];
+    let retryRecoveryConfirmed = false;
     setRunProgress(continuous ? { active: true, stopping: false, requests: 0, processed: 0, verified: Number(review.batch.verified_count || 0), total: ids.length } : null);
     try {
       do {
@@ -191,6 +194,7 @@ export default function XeroReconciliationCampaign({ onClose, baselineRun, enabl
         if (!mounted.current || activeRun.current !== control) return;
         // An in-flight response may finish its own atomic batch, but cannot replace a new campaign/approval.
         if (control.identity && approvedLinkRunIdentity(currentRunContext.current.campaignId, currentRunContext.current.review) !== control.identity) { setNotice('The campaign or exact approval changed. Read back the current batch before continuing.'); break; }
+        if (currentReview.retryRecovery && !(await import('@/lib/xeroCampaignCreditRetry')).confirmedCreditRecovery(currentReview, data)) throw new Error('The selected credit recovery outcomes could not be confirmed.');
         if (continuous) state = advanceApprovedLinkRun(state, data);
         const confirmed = !continuous || !state.review?.recoveryPending && !state.review?.invalidated;
         const returnedOutcomes = Array.isArray(data.outcomes) ? data.outcomes : [];
@@ -207,6 +211,7 @@ export default function XeroReconciliationCampaign({ onClose, baselineRun, enabl
         const outcomeById = new Map(returnedOutcomes.map((row) => [row.caseId, row]));
         if (confirmed) setCases((previous) => previous.map((row) => outcomeById.has(row.id) ? { ...row, status: outcomeById.get(row.id).status, reason: outcomeById.get(row.id).reason || row.reason } : row));
         const nextReview = continuous ? state.review : reviewAfterRun(currentReview, data);
+        if (currentReview.retryRecovery && !nextReview?.recoveryPending && !nextReview?.invalidated) retryRecoveryConfirmed = true;
         currentReview = nextReview;
         currentRunContext.current = { ...currentRunContext.current, review: nextReview, allowance: currentAllowance };
         setReview(nextReview); setReviewOpen(Boolean(nextReview));
@@ -238,10 +243,20 @@ export default function XeroReconciliationCampaign({ onClose, baselineRun, enabl
           && !state.review?.recoveryPending && !state.review?.invalidated && currentRunContext.current.campaignId === campaignId
           && (!state.review || approvedLinkRunIdentity(campaignId, currentRunContext.current.review) === control.identity);
         // One authoritative summary refresh after confirmed completion/stop; never per batch or to recover uncertainty.
-        if (confirmedEnd) await load({ id: campaignId, preserveInteraction: true });
+        if (confirmedEnd || retryRecoveryConfirmed) await load({ id: campaignId, preserveInteraction: true });
         else setBusy('');
       }
     }
+  };
+  const retryCredits = async (batch, ids, retryForecast) => {
+    if (!campaign?.id || busy || requestBusy.current || activeRun.current || review?.approved || !enabled || !connected) return;
+    requestBusy.current = true; setBusy('retry'); setError(''); setOutcomes(null);
+    const current = ++generation.current;
+    try {
+      const { retryCampaignCredits } = await import('@/lib/xeroCampaignCreditRetry');
+      await retryCampaignCredits({ batch, ids, retryForecast, campaign, user, allowance, current, generation, mounted, requestBusy,
+        invoke, captureAllowance, load, setError, setBusy, setOutcomes, setNotice, setUncertainIds, setReview, setReviewOpen });
+    } catch (failure) { requestBusy.current = false; if (mounted.current) { setBusy(''); setError(failure.message); } }
   };
   const stopRun = () => {
     if (!activeRun.current) return;
@@ -264,6 +279,7 @@ export default function XeroReconciliationCampaign({ onClose, baselineRun, enabl
       {page?.hasMore && <div className="mt-2 flex justify-center"><Button size="sm" variant="outline" disabled={Boolean(busy) || !page?.nextCursor} onClick={() => load({ nextCursor: page.nextCursor, append: true })}>Load next page</Button></div>}
       <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-3"><p className="text-xs text-muted-foreground">{selected.size} selected · {category === 'all' ? 'Choose one review category to select.' : REVIEW_CATEGORIES.has(category) ? 'Only owned, ready cases with evidence are selectable.' : 'This category requires a separate source decision.'}</p><div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" disabled={Boolean(busy) || Boolean(categoryApproved) || !REVIEW_CATEGORIES.has(category)} onClick={() => setSelected(new Set(cases.filter((row) => selectableCampaignCase(row, category, user?.id) && !uncertainIds.has(row.id)).slice(0, CAMPAIGN_APPROVAL_LIMIT).map((row) => row.id)))}>Select loaded ready</Button>{categoryApproved && <Button size="sm" variant="outline" onClick={() => setReviewOpen(true)}>Open approved batch</Button>}<Button size="sm" disabled={!canPrepare || !REVIEW_CATEGORIES.has(category)} onClick={previewBatch}>{busy === 'preview' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ShieldCheck className="mr-2 h-4 w-4" />}Preview exact batch</Button></div></div>
     </>}
+    {retryBatches.length > 0 && <Suspense fallback={<p className="mt-3 text-xs">Loading held credit review…</p>}><CreditRetry batches={retryBatches} candidates={retryCandidates} campaignId={campaign?.id} ownerId={user?.id} allowance={allowance} disabled={Boolean(busy) || Boolean(review?.approved) || !enabled || !connected} onRetry={retryCredits} /></Suspense>}
     {review?.invalidated && !reviewOpen && <p role="alert" className="mt-3 rounded-md bg-amber-50 p-2 text-xs text-amber-900">The saved batch no longer has a current approval. Refresh current evidence and review the changed cases before another run.</p>}
     {uncertainIds.size > 0 && <p role="alert" className="mt-3 rounded-md bg-amber-50 p-2 text-xs text-amber-900">{uncertainIds.size} approved case outcomes may be uncertain. Keep the pending batch for explicit readback recovery; saved-case refresh alone does not verify execution.</p>}
     {outcomes && <section className="mt-3 rounded-lg border border-border p-3"><h3 className="text-sm font-semibold">Verified batch outcomes</h3>{outcomes.length ? outcomes.map((row, index) => <p key={row.caseId || row.id || index} className="border-t border-border py-1 text-xs">{row.caseTitle || row.caseId || row.id || `Case ${index + 1}`} · <strong>{row.status || row.outcome || 'Unknown outcome'}</strong>{row.reason && ` · ${row.reason}`}</p>) : <p className="text-xs text-amber-800">The request returned no case outcomes. Read back the campaign before further action.</p>}</section>}
@@ -296,7 +312,7 @@ export default function XeroReconciliationCampaign({ onClose, baselineRun, enabl
           {review?.recoveryPending && <p role="alert" className="rounded-md bg-amber-50 p-2 text-amber-900">Outcome uncertain. Recover claimed batch reads back the existing claimed batch before any further action. No automatic retry occurs.</p>}
           {review?.invalidated && <p role="alert" className="text-red-700">The approval changed. Close this review and refresh current evidence before preparing a new approval.</p>}
           {approvedReviewRows(review).map((row) => <p key={row.id} className="rounded-md border border-border p-2">{row.title || row.documentNumber || row.id} · {row.accountName || 'Contact evidence unavailable'} · {row.sourceId || 'Source evidence unavailable'} → {row.targetId || 'Target evidence unavailable'}</p>)}
-          {review?.diffs?.length ? review.diffs.map((row, index) => <FieldDiff key={row.caseId || index} row={row} />) : <p className="rounded-md bg-muted/30 p-2">{(review?.category || category) === 'link_only' ? 'Link existing verified records; existing Xero document fields remain unchanged.' : 'No field differences were supplied. Exact evidence must be available before approval.'}</p>}
+          {review?.diffs?.length ? <Suspense fallback={<p>Loading reviewed differences…</p>}>{review.diffs.map((row, index) => <FieldDiff key={row.caseId || index} row={row} />)}</Suspense> : <p className="rounded-md bg-muted/30 p-2">{(review?.category || category) === 'link_only' ? 'Link existing verified records; existing Xero document fields remain unchanged.' : 'No field differences were supplied. Exact evidence must be available before approval.'}</p>}
           {!review?.approved && (review?.category || category) !== 'link_only' && !review?.diffs?.length && <p role="alert" className="text-red-700">Approval held: no reviewable changes were returned.</p>}
           {review?.approved && <p className="rounded-md bg-amber-50 p-2 text-amber-900">Approved for this exact fingerprint only. {review.category === 'link_only' ? 'Start once to continue the approved links; Stop takes effect between requests.' : 'Run is a separate action.'} Each request processes at most {nextRunLimit(review, campaign)} records. Verified cases: {number(review?.batch?.verified_count ?? review?.batch?.verifiedCount ?? 0)}.</p>}
         </div>

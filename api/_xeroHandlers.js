@@ -1,4 +1,4 @@
-import { xeroReconciliationCampaignCreate, xeroReconciliationCampaignRead, xeroReconciliationCampaignRefresh, xeroReconciliationCampaignPreview, xeroReconciliationCampaignApprove, xeroReconciliationCampaignRun, xeroReconciliationConnectionCheck } from './_xeroReconciliationCampaign.js';
+import { xeroReconciliationCampaignCreate, xeroReconciliationCampaignRead, xeroReconciliationCampaignRefresh, xeroReconciliationCampaignPreview, xeroReconciliationCampaignApprove, xeroReconciliationCampaignRun, xeroReconciliationCampaignRetry, xeroReconciliationConnectionCheck } from './_xeroReconciliationCampaign.js';
 import { xeroFinancialDocumentCorrectionPreview, xeroFinancialDocumentCorrectionPage, xeroFinancialDocumentCorrectionApply, xeroFinancialDocumentCorrectionVerify } from './_xeroDocumentCorrections.js';
 import {
   invalidateContactNameCacheAfterRestore,
@@ -38,6 +38,7 @@ export const XERO_HANDLER_MODULE_ACCESS = Object.freeze(Object.fromEntries([
   'xeroReconciliationCampaignPreview',
   'xeroReconciliationCampaignApprove',
   'xeroReconciliationCampaignRun',
+  'xeroReconciliationCampaignRetry',
   'xeroReconciliationConnectionCheck',
   'xeroPortalStatus',
   'xeroPortalConnectStart',
@@ -96,6 +97,7 @@ export function createXeroHandlers({ requireActiveUser, resolveRecoveredSystemEr
     xeroReconciliationCampaignPreview: wrap(xeroReconciliationCampaignPreview),
     xeroReconciliationCampaignApprove: wrap(xeroReconciliationCampaignApprove),
     xeroReconciliationCampaignRun: wrap(xeroReconciliationCampaignRun),
+    xeroReconciliationCampaignRetry: wrap(xeroReconciliationCampaignRetry),
     xeroReconciliationConnectionCheck: wrap(xeroReconciliationConnectionCheck),
     xeroPortalStatus: wrap(xeroPortalStatus),
     xeroPortalConnectStart: wrap(xeroPortalConnectStart),

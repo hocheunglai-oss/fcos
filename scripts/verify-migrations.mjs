@@ -29,6 +29,7 @@ const migrationSources = await Promise.all(names.map(async (name) => ({
   sql: await readFile(new URL(name, migrationDirectory), 'utf8'),
 })));
 const releaseMigrationNames = new Set([
+  '20260930043106_xero_campaign_approved_credit_retry.sql',
   '20260930025541_xero_campaign_inventory_write_performance.sql',
   '20260930004300_xero_preview_finalize_timeout.sql',
   '20260930004200_xero_preview_payments_reference.sql',
@@ -100,6 +101,13 @@ async function verifyRuntimeObjects(label) {
   await assertRows(`select count(*)::int from public.permission_access_migration_snapshots s join public.user_profiles u on u.id=s.user_id where u.active and ((public.fcos_effective_access(u.id)->'permissions') is distinct from s.permissions or (public.fcos_effective_access(u.id)->'capabilities') is distinct from s.capabilities)`, 0, `${label} migration exact grant preservation`);
 
   const campaignTables = ['xero_reconciliation_campaigns','xero_reconciliation_cases','xero_reconciliation_batches','xero_reconciliation_events'];
+  await assertRows(`select count(*)::int from pg_proc p where
+    p.oid='public.xero_campaign_retry_claim_v1(uuid,uuid,uuid,integer,text,text[])'::regprocedure
+    and p.prosecdef and p.proconfig @> array['search_path=""','statement_timeout=15s']
+    and has_function_privilege('service_role',p.oid,'EXECUTE')
+    and not has_function_privilege('anon',p.oid,'EXECUTE')
+    and not has_function_privilege('authenticated',p.oid,'EXECUTE')`,
+    1, `${label} bounded original-approved credit retry is server-only`);
   const sharedXeroTables = ['xero_shared_tenant_control','xero_shared_budgets','xero_shared_probe_grants','xero_shared_requests','xero_token_refresh_leases'];
   await assertRows(`select count(*)::int from pg_proc p where
     p.oid='public.xero_campaign_inventory_v1(uuid,uuid,uuid,jsonb)'::regprocedure

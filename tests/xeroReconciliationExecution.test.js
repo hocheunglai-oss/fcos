@@ -8,7 +8,7 @@ import { xeroAccountingFetch } from '../api/_xeroContactSync.js';
 import { fixtureSharedControl } from './helpers/xeroSharedControl.js';
 import { resolveGroupRemittanceBankEvidence } from '../api/_xeroGroupRemittanceBankEvidence.js';
 import { executeCampaignBatch } from '../api/_xeroReconciliationExecution.js';
-import { buildXeroAccountingPayload, toSyncItemRow } from '../api/_xeroFinancialSync.js';
+import { buildXeroAccountingPayload, toSyncItemRow, xeroReviewFingerprint } from '../api/_xeroFinancialSync.js';
 
 const tenantId = '11111111-1111-4111-8111-111111111111';
 const connection = { tenantId };
@@ -121,10 +121,11 @@ test('25 document links use scoped source/control reads and one second Xero read
   assert.equal(f.calls.find((row) => row.type === 'reserve').request.verificationCalls, 1);
 });
 
-function creditLinkFixture() {
+function creditLinkFixture({ savedLines = [], currentLines = savedLines, rawExtras = {} } = {}) {
   const creditRaw = { ...raw, CreditNoteID: 'credit-one', Type: 'ACCRECCREDIT', CreditNoteNumber: 'CN-1', RemainingCredit: 100 };
   delete creditRaw.InvoiceID;
-  const creditXero = { ...xero, id: 'credit-one', type: 'ACCRECCREDIT', collection: 'CreditNotes', invoiceNumber: 'CN-1' };
+  Object.assign(creditRaw, rawExtras, { LineItems: currentLines });
+  const creditXero = { ...xero, id: 'credit-one', type: 'ACCRECCREDIT', collection: 'CreditNotes', invoiceNumber: 'CN-1', lineItems: savedLines };
   const creditClassified = { ...classified, xero: creditXero, xeroType: 'ACCRECCREDIT', xeroCollection: 'CreditNotes', documentNumber: 'CN-1' };
   const f = fixture({ item: toSyncItemRow(creditClassified, run.id, 0, '2026-09-30T00:00:00Z') });
   f.dependencies.cases = [{ ...caseRow, targetId: 'credit-one' }];
@@ -134,13 +135,88 @@ function creditLinkFixture() {
     return { ...inventory, documents: [creditXero], rawTargets: { invoices: [], creditNotes: [creditRaw] },
       missingTargetIds: { invoices: [], creditNotes: [] } };
   };
-  f.dependencies.classify = () => ({ rows: [creditClassified] });
+  f.dependencies.classify = () => ({ rows: [{ ...creditClassified, xero: { ...creditXero, lineItems: currentLines } }] });
   f.dependencies.accountingFetch = async (_connection, path, options) => {
     f.calls.push({ type: 'provider', path, options });
     return { CreditNotes: [creditRaw] };
   };
-  return { ...f, creditRaw };
+  return { ...f, creditRaw, creditClassified };
 }
+
+test('credit link accepts inert endpoint defaults under original review and retains raw evidence for exact readback', async () => {
+  const savedLines = [{ LineItemID: 'credit-line-one', Quantity: 1, UnitAmount: 100, LineAmount: 100 }];
+  const currentLines = [{ ...savedLines[0], ValidationErrors: [], DiscountEnteredAsPercent: true }];
+  const f = creditLinkFixture({ savedLines, currentLines });
+  const [outcome] = await executeCampaignBatch(f.dependencies);
+  assert.equal(outcome.status, 'reconciled');
+  assert.equal(outcome.reviewCompatibility.reviewFingerprint, xeroReviewFingerprint(f.creditClassified));
+  assert.notEqual(outcome.reviewCompatibility.currentReviewFingerprint, outcome.reviewCompatibility.reviewFingerprint);
+  assert.equal(outcome.reviewCompatibility.removedFields.length, 2);
+  assert.deepEqual(f.calls.find((row) => row.type === 'inventory').request.p_inventory.rawTargets.creditNotes[0].LineItems, currentLines);
+  assert.deepEqual(f.creditRaw.LineItems, currentLines);
+  assert.deepEqual(savedLines, [{ LineItemID: 'credit-line-one', Quantity: 1, UnitAmount: 100, LineAmount: 100 }]);
+  assert.deepEqual(f.calls.filter((row) => row.type === 'provider').map((row) => row.options.method), ['GET']);
+});
+
+test('credit response compatibility holds raw discount/validation uncertainty and keeps final readback exact', async () => {
+  const savedLines = [{ LineItemID: 'credit-line-one', Quantity: 1, UnitAmount: 100, LineAmount: 100 }];
+  const currentLines = [{ ...savedLines[0], ValidationErrors: [], DiscountEnteredAsPercent: true }];
+  for (const rawExtras of [{ IsDiscounted: true }, { HasValidationErrors: true }, { ValidationErrors: {} }, { DiscountAmount: 0.00001 }]) {
+    const f = creditLinkFixture({ savedLines, currentLines, rawExtras });
+    const [outcome] = await executeCampaignBatch(f.dependencies);
+    assert.equal(outcome.status, 'needs_decision');
+    assert.equal(f.calls.filter((row) => row.type === 'provider').length, 0);
+  }
+  const f = creditLinkFixture({ savedLines, currentLines });
+  f.dependencies.accountingFetch = async () => ({ CreditNotes: [{ ...f.creditRaw,
+    LineItems: [{ ...currentLines[0], DiscountEnteredAsPercent: false }] }] });
+  const [outcome] = await executeCampaignBatch(f.dependencies);
+  assert.equal(outcome.status, 'needs_decision');
+  assert.match(outcome.reason, /changed during verification/);
+});
+
+test('held credit retry needs exact persisted original approval and current claim authority', async () => {
+  const savedLines = [{ LineItemID: 'credit-line-one', Quantity: 1, UnitAmount: 100, LineAmount: 100 }];
+  const currentLines = [{ ...savedLines[0], ValidationErrors: [], DiscountEnteredAsPercent: true }];
+  function retryFixture() {
+    const f = creditLinkFixture({ savedLines, currentLines });
+    const row = { ...f.dependencies.cases[0], status: 'needs_decision' };
+    f.dependencies.cases = [row];
+    f.dependencies.batch = { ...batch, status: 'running', claim_case_ids: [row.id], evidence_fingerprint: 'b'.repeat(64),
+      approved_by: 'original-approver', approved_at: '2026-09-30T00:25:00Z', retry_authority: {
+        category: 'link_only', claimId: batch.claim_id, caseIds: [row.id], fingerprint: 'b'.repeat(64),
+        cases: [{ id: row.id, fingerprint: row.evidenceFingerprint }],
+        approvedBy: 'original-approver', approvedAt: '2026-09-30T00:25:00Z' } };
+    return f;
+  }
+  for (const status of ['needs_decision', 'waiting_dependency']) {
+    const f = retryFixture(); f.dependencies.cases[0].status = status;
+    const [outcome] = await executeCampaignBatch(f.dependencies);
+    assert.equal(outcome.status, 'reconciled');
+    assert.equal(f.dependencies.cases[0].status, status);
+  }
+  for (const change of [
+    (f) => { delete f.dependencies.batch.retry_authority; },
+    (f) => { f.dependencies.batch.retry_authority.claimId = 'old-claim'; },
+    (f) => { f.dependencies.batch.retry_authority.fingerprint = 'c'.repeat(64); },
+    (f) => { f.dependencies.batch.retry_authority.cases[0].fingerprint = 'c'.repeat(64); },
+    (f) => { f.dependencies.batch.retry_authority.approvedBy = 'other-approver'; },
+    (f) => { f.dependencies.batch.retry_authority.approvedAt = 'changed'; },
+    (f) => { f.dependencies.batch.claim_case_ids = []; },
+    (f) => { f.dependencies.batch.retry_authority.caseIds = []; },
+    (f) => { f.dependencies.batch.status = 'completed'; },
+    (f) => { f.dependencies.batch.retry_authority.category = 'draft'; },
+  ]) {
+    const f = retryFixture(); change(f);
+    const [outcome] = await executeCampaignBatch(f.dependencies);
+    assert.equal(outcome.status, 'needs_decision');
+    assert.equal(f.calls.filter((row) => row.type === 'provider').length, 0);
+  }
+  const invoice = fixture(); invoice.dependencies.cases[0] = { ...caseRow, status: 'needs_decision' };
+  invoice.dependencies.batch = retryFixture().dependencies.batch;
+  const [outcome] = await executeCampaignBatch(invoice.dependencies);
+  assert.equal(outcome.status, 'needs_decision');
+});
 
 test('credit link verification and claim recovery read the exact single credit with zero writes', async () => {
   for (const recovering of [false, true]) {

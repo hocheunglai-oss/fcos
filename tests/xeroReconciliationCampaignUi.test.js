@@ -202,7 +202,7 @@ test('continuous link UI uses explicit start and Stop and refreshes the summary 
   assert.match(run, /activeRun\.current \|\|/); assert.match(run, /requestBusy\.current = true/);
   const requestLoop = run.slice(run.indexOf('      do {'), run.indexOf('    } catch (failure)'));
   assert.doesNotMatch(requestLoop, /await load\(/); assert.doesNotMatch(run, /setSelected\(new Set/);
-  assert.match(run, /if \(confirmedEnd\) await load\(\{ id: campaignId, preserveInteraction: true \}\)/);
+  assert.match(run, /if \(confirmedEnd \|\| retryRecoveryConfirmed\) await load\(\{ id: campaignId, preserveInteraction: true \}\)/);
   assert.match(source, /!append && !preserveInteraction/);
   assert.match(run, /advanceApprovedLinkRun\(state, data\)/);
   assert.match(source, /approvedReviewRows\(review\)\.map/);
