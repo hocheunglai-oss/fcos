@@ -2,6 +2,15 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Shared notification colors stay in CSS instead of repeated render strings. */
+.app-work-notification-badge-system { @apply bg-red-50 text-red-900 ring-red-700/10 dark:bg-red-950/50 dark:text-red-200 dark:ring-red-500/25; }
+.app-work-notification-badge-email { @apply bg-amber-50 text-amber-900 ring-amber-700/10 dark:bg-amber-950/50 dark:text-amber-200 dark:ring-amber-500/25; }
+.app-work-notification-badge-improvements { @apply bg-cyan-50 text-cyan-900 ring-cyan-700/10 dark:bg-cyan-950/50 dark:text-cyan-200 dark:ring-cyan-500/25; }
+.app-work-notification-badge-charges { @apply bg-violet-50 text-violet-900 ring-violet-700/10 dark:bg-violet-950/50 dark:text-violet-200 dark:ring-violet-500/25; }
+.app-work-notification-badge-markets { @apply bg-teal-50 text-teal-900 ring-teal-700/10 dark:bg-teal-950/50 dark:text-teal-200 dark:ring-teal-500/25; }
+.app-work-notification-badge-growth { @apply bg-emerald-50 text-emerald-800 ring-emerald-700/10 dark:bg-emerald-950/50 dark:text-emerald-200 dark:ring-emerald-500/25; }
+.app-work-notification-badge-default { @apply bg-blue-50 text-blue-800 ring-blue-700/10 dark:bg-blue-950/50 dark:text-blue-200 dark:ring-blue-500/25; }
+
 @layer base {
   :root {
     --background: 220 20% 97%;

@@ -23,6 +23,10 @@ function cancelledResponse(requestId = null) {
   };
 }
 
+function unavailableResponse(data, requestId = null, salesforceCalls = null) {
+  return { data, meta: { cached: false, cacheLayer: 'network', cacheStatus: 'UNAVAILABLE', cachedAt: null, requestId, salesforceCalls: Number.isFinite(salesforceCalls) ? salesforceCalls : null } };
+}
+
 const DEDICATED_FUNCTION_ENDPOINTS = Object.freeze({
   emailRouterBackgroundSync: '/api/email-router-background-sync',
   workNotificationsList: '/api/work-notifications',
@@ -193,17 +197,7 @@ async function requestFunction(name, payload, options, cacheKey, authContext, ca
   } catch (error) {
     if (!isCurrentClientSession(session)) return changedSessionResponse();
     if (error?.name === 'AbortError' || options.signal?.aborted) return cancelledResponse();
-    return {
-      data: { error: error?.message || 'Network request failed. Check your connection and try again.' },
-      meta: {
-        cached: false,
-        cacheLayer: 'network',
-        cacheStatus: 'UNAVAILABLE',
-        cachedAt: null,
-        requestId: null,
-        salesforceCalls: null,
-      },
-    };
+    return unavailableResponse({ error: error?.message || 'Network request failed. Check your connection and try again.' });
   }
   const responseContentType = res.headers?.get?.('content-type') || '';
   const responseIsJson = responseContentType.toLowerCase().includes('application/json');
@@ -227,10 +221,7 @@ async function requestFunction(name, payload, options, cacheKey, authContext, ca
       if (!isCurrentClientSession(session)) return changedSessionResponse();
       invalidateUncertainMutation();
       if (error?.name === 'AbortError' || options.signal?.aborted) return cancelledResponse(requestId);
-      return {
-        data: { error: 'The FCOS response could not be read. Refresh the saved result before retrying.', code: 'FCOS_RESPONSE_INVALID' },
-        meta: { cached: false, cacheLayer: 'network', cacheStatus: 'UNAVAILABLE', cachedAt: null, requestId, salesforceCalls: Number.isFinite(salesforceCalls) ? salesforceCalls : null },
-      };
+      return unavailableResponse({ error: 'The FCOS response could not be read. Refresh the saved result before retrying.', code: 'FCOS_RESPONSE_INVALID' }, requestId, salesforceCalls);
     }
   }
   if (!isCurrentClientSession(session)) return changedSessionResponse();
@@ -238,19 +229,9 @@ async function requestFunction(name, payload, options, cacheKey, authContext, ca
 
   if (!responseIsJson) {
     invalidateUncertainMutation();
-    return {
-      data: { error: res.status === 504
+    return unavailableResponse({ error: res.status === 504
         ? 'The FCOS request timed out before it completed. Refresh the saved result before retrying.'
-        : 'The FCOS server API is unavailable. Start the full local FCOS runtime and try again.' },
-      meta: {
-        cached: false,
-        cacheLayer: 'network',
-        cacheStatus: 'UNAVAILABLE',
-        cachedAt: null,
-        requestId,
-        salesforceCalls: Number.isFinite(salesforceCalls) ? salesforceCalls : null,
-      },
-    };
+        : 'The FCOS server API is unavailable. Start the full local FCOS runtime and try again.' }, requestId, salesforceCalls);
   }
 
   if (!res.ok) {

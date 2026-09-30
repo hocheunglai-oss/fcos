@@ -47,12 +47,10 @@ function sourceLabel(source) {
 }
 
 function sourceBadgeClass(source) {
-  if (source === "system_error" || source === "system") return "bg-red-50 text-red-900 ring-red-700/10 dark:bg-red-950/50 dark:text-red-200 dark:ring-red-500/25";
-  if (source === "email_router") return "bg-amber-50 text-amber-900 ring-amber-700/10 dark:bg-amber-950/50 dark:text-amber-200 dark:ring-amber-500/25";
-  if (source === "fcos_improvements") return "bg-cyan-50 text-cyan-900 ring-cyan-700/10 dark:bg-cyan-950/50 dark:text-cyan-200 dark:ring-cyan-500/25";
-  if (source === "variable_charges") return "bg-violet-50 text-violet-900 ring-violet-700/10 dark:bg-violet-950/50 dark:text-violet-200 dark:ring-violet-500/25";
-  if (source === "markets") return "bg-teal-50 text-teal-900 ring-teal-700/10 dark:bg-teal-950/50 dark:text-teal-200 dark:ring-teal-500/25";
-  return source === "growth_coaching" || source === "growth" || source === "coaching" ? "bg-emerald-50 text-emerald-800 ring-emerald-700/10 dark:bg-emerald-950/50 dark:text-emerald-200 dark:ring-emerald-500/25" : "bg-blue-50 text-blue-800 ring-blue-700/10 dark:bg-blue-950/50 dark:text-blue-200 dark:ring-blue-500/25";
+  const tone = ["system_error", "system"].includes(source) ? "system"
+    : ["growth_coaching", "growth", "coaching"].includes(source) ? "growth"
+    : { email_router: "email", fcos_improvements: "improvements", variable_charges: "charges", markets: "markets" }[source] || "default";
+  return `app-work-notification-badge-${tone}`;
 }
 
 export default function WorkNotifications() {
@@ -67,14 +65,12 @@ export default function WorkNotifications() {
   const [stateFilter, setStateFilter] = useState("active");
   const [sourceFilter, setSourceFilter] = useState("all");
   const mounted = useRef(false);
-  const loadSequence = useRef(0);
   const pendingLoad = useRef(null);
   const view = useRef(null);
-  const viewGeneration = useRef(0);
   const mutationInFlight = useRef(false);
   const latestLoad = useRef(null);
-  if (view.current !== `${stateFilter}:${sourceFilter}`) ++viewGeneration.current;
-  view.current = `${stateFilter}:${sourceFilter}`;
+  const viewKey = `${stateFilter}:${sourceFilter}`;
+  if (view.current?.key !== viewKey) view.current = { key: viewKey };
 
   const applyResponse = useCallback((data) => {
     setNotifications(Array.isArray(data?.notifications) ? data.notifications : []);
@@ -87,7 +83,6 @@ export default function WorkNotifications() {
       const requestedView = view.current;
       if (quiet && !forceRefresh && pendingLoad.current?.view === requestedView) return pendingLoad.current.promise;
       pendingLoad.current?.controller.abort();
-      const sequence = ++loadSequence.current;
       const controller = new AbortController();
       if (!quiet) setLoading(true);
       const request = { controller, view: requestedView, promise: null };
@@ -102,17 +97,16 @@ export default function WorkNotifications() {
           },
           { force: true, signal: controller.signal },
         );
-        if (!mounted.current || sequence !== loadSequence.current || requestedView !== view.current || response.data?.cancelled) return;
+        if (!mounted.current || pendingLoad.current !== request || requestedView !== view.current || response.data?.cancelled) return;
         if (response.data?.error) {
           setUnavailableSources(["Notifications"]);
         } else {
           applyResponse(response.data);
         }
       } catch (error) {
-        if (mounted.current && sequence === loadSequence.current && error?.name !== 'AbortError') setUnavailableSources(["Notifications"]);
+        if (mounted.current && pendingLoad.current === request && error?.name !== 'AbortError') setUnavailableSources(["Notifications"]);
       } finally {
-        if (pendingLoad.current === request) pendingLoad.current = null;
-        if (mounted.current && sequence === loadSequence.current) setLoading(false);
+        if (pendingLoad.current === request) { pendingLoad.current = null; if (mounted.current) setLoading(false); }
       } })();
       return request.promise;
     },
@@ -134,7 +128,6 @@ export default function WorkNotifications() {
 
     return () => {
       mounted.current = false;
-      ++loadSequence.current;
       pendingLoad.current?.controller.abort();
       pendingLoad.current = null;
       window.clearInterval(interval);
@@ -142,87 +135,48 @@ export default function WorkNotifications() {
     };
   }, [loadNotifications]);
 
-  const markRead = useCallback(
-    async (notificationIds) => {
-      if (mutationInFlight.current) return false;
-      mutationInFlight.current = true;
-      const requestedView = view.current;
-      const requestedGeneration = viewGeneration.current;
-      pendingLoad.current?.controller.abort();
-      ++loadSequence.current;
-      pendingLoad.current = null;
-      setUpdating(true);
-      try {
-        const response = await appClient.functions.invoke("workNotificationsRead", { ...(notificationIds ? { notificationIds } : {}), listState: stateFilter, source: sourceFilter, limit: NOTIFICATION_LIMIT }, { force: true });
-        if (mounted.current && requestedView === view.current && requestedGeneration === viewGeneration.current && !response.data?.error && !response.data?.cancelled) {
-          pendingLoad.current?.controller.abort();
-          ++loadSequence.current;
-          applyResponse(response.data);
-        } else if (mounted.current && !response.data?.error && !response.data?.cancelled) {
-          await latestLoad.current({ quiet: true, forceRefresh: true });
-        }
-        return mounted.current && !response.data?.error && !response.data?.cancelled;
-      } catch {
-        if (mounted.current) setUnavailableSources(["Notifications"]);
-        return false;
-      } finally {
-        mutationInFlight.current = false;
-        if (mounted.current) { setUpdating(false); setLoading(false); }
+  const mutateNotifications = useCallback(async (name, body) => {
+    if (mutationInFlight.current) return false;
+    mutationInFlight.current = true;
+    const requestedView = view.current;
+    pendingLoad.current?.controller.abort();
+    pendingLoad.current = null;
+    setUpdating(true);
+    try {
+      const response = await appClient.functions.invoke(name, {
+        ...body, listState: stateFilter, source: sourceFilter, limit: NOTIFICATION_LIMIT,
+      }, { force: true });
+      if (!mounted.current || response.data?.error || response.data?.cancelled) return false;
+      if (requestedView === view.current) {
+        pendingLoad.current?.controller.abort();
+        pendingLoad.current = null;
+        applyResponse(response.data);
+      } else {
+        await latestLoad.current({ quiet: true, forceRefresh: true });
       }
-    },
-    [applyResponse, sourceFilter, stateFilter],
-  );
+      return mounted.current;
+    } catch {
+      if (mounted.current) setUnavailableSources(["Notifications"]);
+      return false;
+    } finally {
+      mutationInFlight.current = false;
+      if (mounted.current) { setUpdating(false); setLoading(false); }
+    }
+  }, [applyResponse, sourceFilter, stateFilter]);
 
+  const markRead = (notificationIds) => mutateNotifications("workNotificationsRead", notificationIds ? { notificationIds } : {});
   const openNotification = async (notification) => {
     if (mutationInFlight.current) return;
     if (!notification.readAt && !(await markRead(notification.notificationIds || [notification.id]))) return;
     if (!mounted.current) return;
     setOpen(false);
-    if (typeof notification.link === "string" && notification.link) {
-      navigate(notification.link);
-    }
+    if (typeof notification.link === "string" && notification.link) navigate(notification.link);
   };
-
-  const updateNotification = useCallback(
-    async (notification, state) => {
-      if (mutationInFlight.current) return;
-      mutationInFlight.current = true;
-      const requestedView = view.current;
-      const requestedGeneration = viewGeneration.current;
-      pendingLoad.current?.controller.abort();
-      ++loadSequence.current;
-      pendingLoad.current = null;
-      setUpdating(true);
-      try {
-        const snoozedUntil = state === "snoozed" ? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() : undefined;
-        const response = await appClient.functions.invoke(
-          "workNotificationsState",
-          {
-            notificationIds: notification.notificationIds || [notification.id],
-            state,
-            snoozedUntil,
-            listState: stateFilter,
-            source: sourceFilter,
-            limit: NOTIFICATION_LIMIT,
-          },
-          { force: true },
-        );
-        if (mounted.current && requestedView === view.current && requestedGeneration === viewGeneration.current && !response.data?.error && !response.data?.cancelled) {
-          pendingLoad.current?.controller.abort();
-          ++loadSequence.current;
-          applyResponse(response.data);
-        } else if (mounted.current && !response.data?.error && !response.data?.cancelled) {
-          await latestLoad.current({ quiet: true, forceRefresh: true });
-        }
-      } catch {
-        if (mounted.current) setUnavailableSources(["Notifications"]);
-      } finally {
-        mutationInFlight.current = false;
-        if (mounted.current) { setUpdating(false); setLoading(false); }
-      }
-    },
-    [applyResponse, sourceFilter, stateFilter],
-  );
+  const updateNotification = (notification, state) => mutateNotifications("workNotificationsState", {
+    notificationIds: notification.notificationIds || [notification.id],
+    state,
+    snoozedUntil: state === "snoozed" ? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() : undefined,
+  });
 
   const verifySystemIncident = useCallback(async (notification) => {
     if (!notification?.incidentSignature || mutationInFlight.current) return;
@@ -353,11 +307,7 @@ export default function WorkNotifications() {
                         <ShieldCheck className="h-3.5 w-3.5" />
                       </Button>
                     )}
-                    {stateFilter === "handled" ? (
-                      <Button type="button" size="icon" variant="ghost" className="h-7 w-7" title="Return to active" disabled={updating} onClick={() => updateNotification(notification, "unhandled")}>
-                        <RotateCcw className="h-3.5 w-3.5" />
-                      </Button>
-                    ) : stateFilter === "snoozed" ? (
+                    {["handled", "snoozed"].includes(stateFilter) ? (
                       <Button type="button" size="icon" variant="ghost" className="h-7 w-7" title="Return to active" disabled={updating} onClick={() => updateNotification(notification, "unhandled")}>
                         <RotateCcw className="h-3.5 w-3.5" />
                       </Button>
