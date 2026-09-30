@@ -26,8 +26,10 @@ const rows = [
   makeRow(30, { traders: [], reason: 'Trader assignment could not be resolved.' }),
 ];
 const filingRow = (number, extra = {}) => ({ nominationId: `fixture-confirmation-${number}`, stemId: `fixture-stem-${number}`, stemName: `STEM-${String(number).padStart(3, '0')}`, buyerName: number === 1 ? 'Synthetic Marine Fuels Holdings Limited' : 'Eastern Marine Fuels', vesselName: number === 1 ? 'Pacific Endeavour' : `Fixture vessel ${number}`, imo: `900000${number}`, portName: 'Hong Kong', deliveryDate: number === 1 ? '2026-09-18' : null, expectedDeliveryDate: number === 1 ? null : '2026-10-05', confirmationReference: `BC-00${number}`, traderName: 'Ada Trader', receivedStatus: number === 2 ? '🟢' : '🟡', canUpload: number !== 2, ...extra });
+const validFilingDate = (value) => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(new Date(`${value}T00:00:00Z`).getTime()) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
+const inFilingScope = (item) => { const effective = item.deliveryDate || item.expectedDeliveryDate; return validFilingDate(effective) && effective >= '2026-09-01'; };
 window.nomBFixture = { user: { id: 'fixture-user', read_only_ci: params.get('role') === 'ci' }, requests: [], saves: [], rows, pending: [], deferView: null, readFailure: params.get('read') === 'fail', unknown: params.get('unknown') === '1', mutation: 'success', revision: 0,
-  filingRows: [filingRow(1), filingRow(2), filingRow(3)], filedIds: new Set(), uploads: [], uploadResponses: [], deferUpload: false, releaseUpload: null, listError: false };
+  filingRows: [filingRow(1), filingRow(2), filingRow(3), filingRow(4, { deliveryDate: '2026-08-31', expectedDeliveryDate: '2026-09-05' }), filingRow(5, { deliveryDate: '2026-09-01', expectedDeliveryDate: null }), filingRow(6, { deliveryDate: null, expectedDeliveryDate: '2026-08-31' }), filingRow(7, { deliveryDate: null, expectedDeliveryDate: '2026-09-01' }), filingRow(8, { deliveryDate: null, expectedDeliveryDate: null })], filedIds: new Set(), uploads: [], uploadResponses: [], deferUpload: false, releaseUpload: null, listError: false, cursorInvalidOnce: false };
 window.missingNomBFixture = window.nomBFixture;
 appClient.functions.invoke = async (name, body = {}, options = {}) => {
   const fixture = window.nomBFixture;
@@ -44,12 +46,13 @@ appClient.functions.invoke = async (name, body = {}, options = {}) => {
   if (name === 'salesforceStemDocuments') return { data: { documents: [] } };
   if (name === 'missingNomBList') {
     if (fixture.listError) return { data: { error: 'Fixture list read failed.' } };
+    if (fixture.cursorInvalidOnce && body.cursor) { fixture.cursorInvalidOnce = false; return { data: { error: 'Refresh the list to restart pagination.', code: 'MISSING_NOM_B_CURSOR_INVALID' } }; }
     const search = String(body.search || '').toLowerCase();
     if (search === 'none') return { data: { rows: [], nextCursor: null, asOf: '2026-09-30T04:00:00Z' } };
     if (search === 'skip') return { data: { rows: body.cursor === 'skip-tail' ? [fixture.filingRows[2]] : [], nextCursor: body.cursor ? null : 'skip-tail', asOf: '2026-09-30T04:00:00Z' } };
-    const available = fixture.filingRows.filter((item) => !fixture.filedIds.has(item.nominationId) && (!search || [item.stemName, item.buyerName, item.vesselName, item.portName, item.confirmationReference].some((value) => value.toLowerCase().includes(search))));
-    if (search) return { data: { rows: available, nextCursor: null, asOf: '2026-09-30T04:00:00Z' } };
-    return { data: { rows: body.cursor === 'page-2' ? available.slice(2) : available.slice(0, 2), nextCursor: body.cursor || available.length <= 2 ? null : 'page-2', asOf: '2026-09-30T04:00:00Z' } };
+    const available = fixture.filingRows.filter((item) => inFilingScope(item) && !fixture.filedIds.has(item.nominationId) && (!search || [item.stemName, item.buyerName, item.vesselName, item.portName, item.confirmationReference].some((value) => value.toLowerCase().includes(search))));
+    const offset = body.cursor && /^page-\d+$/.test(body.cursor) ? Number(body.cursor.slice(5)) : 0;
+    return { data: { rows: available.slice(offset, offset + 2), nextCursor: offset + 2 < available.length ? `page-${offset + 2}` : null, asOf: '2026-09-30T04:00:00Z' } };
   }
   if (name === 'missingNomBUpload') {
     fixture.uploads.push(structuredClone(body));
@@ -58,6 +61,8 @@ appClient.functions.invoke = async (name, body = {}, options = {}) => {
     if (outcome === 'uncertain') return { data: { error: 'Salesforce outcome is still being checked.', code: 'MISSING_NOM_B_UPLOAD_UNCERTAIN' }, meta: { cacheLayer: 'server' } };
     if (outcome === 'rejected') return { data: { error: 'The file contents do not match the filename.', code: 'MISSING_NOM_B_CONTENT_TYPE' }, meta: { cacheLayer: 'server' } };
     if (outcome === 'not_owner') return { data: { error: 'The confirmation is no longer assigned to this trader.', code: 'MISSING_NOM_B_NOT_OWNER' }, meta: { cacheLayer: 'server' } };
+    if (outcome === 'before_cutoff') return { data: { error: 'This delivery is before 1 September 2026.', code: 'MISSING_NOM_B_DELIVERY_BEFORE_CUTOFF' }, meta: { cacheLayer: 'server' } };
+    if (outcome === 'date_unverified') return { data: { error: 'The delivery date could not be verified.', code: 'MISSING_NOM_B_DELIVERY_UNVERIFIED' }, meta: { cacheLayer: 'server' } };
     if (outcome === 'unverified') return { data: { nominationId: body.nominationId, receivedStatus: '🟢' }, meta: { cacheLayer: 'server' } };
     if (outcome === 'network') throw new Error('Network connection was lost.');
     fixture.filedIds.add(body.nominationId);

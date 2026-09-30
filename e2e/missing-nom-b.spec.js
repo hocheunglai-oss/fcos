@@ -37,11 +37,11 @@ test.beforeEach(async ({ page, baseURL }) => {
 });
 test.afterEach(async ({ page }) => { expect(page.fixtureErrors).toEqual([]); expect(page.providerRequests).toEqual([]); });
 
-test('embedded table covers all dates, cursor pages, search, refresh and STEM detail', async ({ page }) => {
+test('embedded table applies the September cutoff, cursor pages, search, refresh and STEM detail', async ({ page }) => {
   await expect(row(page, 'STEM-001')).toContainText('Synthetic Marine Fuels Holdings Limited');
   await expect(row(page, 'STEM-001')).toContainText('BC-001');
   await expect(row(page, 'STEM-002')).toContainText('🟢 marker only');
-  await expect(page.getByText('All delivery dates', { exact: true })).toBeVisible();
+  await expect(page.getByText('Delivery from 1 September 2026', { exact: true })).toBeVisible();
   await page.screenshot({ path: 'test-results/missing-nom-b-embedded-desktop.png', fullPage: true });
   await page.getByRole('button', { name: 'Next', exact: true }).click();
   await expect(row(page, 'STEM-003')).toBeVisible();
@@ -66,6 +66,34 @@ test('embedded table covers all dates, cursor pages, search, refresh and STEM de
   await page.getByRole('textbox', { name: 'Search missing Nom B' }).fill('none');
   await expect(page.getByText('No matching confirmations')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Next', exact: true })).toHaveCount(0);
+});
+
+test('server fixture includes the September 1 boundary and excludes earlier, invalid or undated delivery', async ({ page }) => {
+  const search = page.getByRole('textbox', { name: 'Search missing Nom B' });
+  await search.fill('STEM-005');
+  await expect(row(page, 'STEM-005')).toBeVisible();
+  await expect(row(page, 'STEM-005')).toContainText('01 Sept 2026');
+  await search.fill('STEM-007');
+  await expect(row(page, 'STEM-007')).toBeVisible();
+  for (const excluded of ['STEM-004', 'STEM-006', 'STEM-008']) {
+    await search.fill(excluded);
+    await expect.poll(() => page.evaluate(() => window.missingNomBFixture.requests.filter((item) => item.name === 'missingNomBList').at(-1)?.body.search)).toBe(excluded);
+    await expect(page.getByText('No matching confirmations')).toBeVisible();
+  }
+  expect(await requestCount(page, 'missingNomBUpload')).toBe(0);
+});
+
+test('a stale cutoff-policy cursor restarts once at the first page with search retained', async ({ page }) => {
+  await page.getByRole('textbox', { name: 'Search missing Nom B' }).fill('STEM');
+  await expect.poll(() => page.evaluate(() => window.missingNomBFixture.requests.filter((item) => item.name === 'missingNomBList').at(-1)?.body.search)).toBe('STEM');
+  await expect(row(page, 'STEM-001')).toBeVisible();
+  await page.evaluate(() => { window.missingNomBFixture.cursorInvalidOnce = true; });
+  await page.getByRole('button', { name: 'Next', exact: true }).click();
+  await expect(page.getByText('The filing list changed. Restarting from the first page.')).toBeVisible();
+  await expect(row(page, 'STEM-001')).toBeVisible();
+  const requests = await page.evaluate(() => window.missingNomBFixture.requests.filter((item) => item.name === 'missingNomBList').map((item) => item.body));
+  expect(requests.at(-2)).toEqual({ cursor: 'page-2', search: 'STEM' });
+  expect(requests.at(-1)).toEqual({ cursor: null, search: 'STEM' });
 });
 
 test('drop rejects wrong type, oversize and multiple files; one valid drop sends once and removes only after fresh list', async ({ page }) => {
@@ -109,17 +137,31 @@ test('uncertain result survives reload and reuses the same operation only for id
 });
 
 test('unresolved upload remains recoverable when its row disappears from the visible list', async ({ page }) => {
-  await page.evaluate(() => { window.missingNomBFixture.uploadResponses = ['uncertain']; });
+  await page.evaluate(() => { window.missingNomBFixture.uploadResponses = ['uncertain', 'before_cutoff', 'success']; });
   await input(page, 'STEM-001').setInputFiles(nomBFile);
   await expect(row(page, 'STEM-001').getByRole('alert')).toContainText('could not be verified');
   const firstOperation = await page.evaluate(() => window.missingNomBFixture.uploads[0].operationId);
-  await page.evaluate(() => { window.missingNomBFixture.filingRows = window.missingNomBFixture.filingRows.filter((item) => item.stemName !== 'STEM-001'); });
+  await page.evaluate(() => { window.missingNomBFixture.filingRows[0].deliveryDate = '2026-08-31'; window.missingNomBFixture.filingRows[0].expectedDeliveryDate = '2026-09-05'; });
   await page.getByRole('button', { name: 'Refresh filing list' }).click();
   const recovery = filing(page).getByRole('group', { name: 'Retry the unfinished Nom B for STEM-001' });
   await expect(recovery).toBeVisible();
   await recovery.locator('input[type=file]').setInputFiles(nomBFile);
+  await expect(filing(page).getByText('earlier upload is still unresolved', { exact: false })).toBeVisible();
+  await expect(recovery).toBeVisible();
+  await recovery.locator('input[type=file]').setInputFiles(nomBFile);
   await expect(recovery).toHaveCount(0);
   expect(await page.evaluate(() => window.missingNomBFixture.uploads.at(-1).operationId)).toBe(firstOperation);
+});
+
+test('fresh cutoff and unverified-date rejections unlock correction without a filed claim', async ({ page }) => {
+  await page.evaluate(() => { window.missingNomBFixture.uploadResponses = ['before_cutoff', 'date_unverified']; });
+  await input(page, 'STEM-001').setInputFiles(nomBFile);
+  await expect(row(page, 'STEM-001').getByRole('alert')).toContainText('before 1 September 2026');
+  await expect(filing(page).getByText('is unresolved', { exact: false })).toHaveCount(0);
+  await input(page, 'STEM-001').setInputFiles(nomBFile);
+  await expect(row(page, 'STEM-001').getByRole('alert')).toContainText('could not be verified');
+  await expect(filing(page).getByText('is unresolved', { exact: false })).toHaveCount(0);
+  expect(await requestCount(page, 'missingNomBUpload')).toBe(2);
 });
 
 test('definite rejection allows correction; unverified green and later ownership rejection keep the same operation', async ({ page }) => {

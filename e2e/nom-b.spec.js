@@ -72,11 +72,11 @@ test('personal filing opens expanded, stays separate from ordinary commitments a
   expect(await page.evaluate(() => window.nomBFixture.requests.filter((request) => request.name.startsWith('dashboardNomB')).length)).toBe(0);
 });
 
-test('desktop Nom B Filing embeds the all-date document table and file control without an extra page', async ({ page }, testInfo) => {
+test('desktop Nom B Filing embeds the cutoff-scoped document table and file control without an extra page', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'desktop', 'The new upload entry is desktop-only.');
   await openFiling(page);
   const section = panel(page);
-  await expect(section.getByText('All delivery dates', { exact: true })).toBeVisible();
+  await expect(section.getByText('Delivery from 1 September 2026', { exact: true })).toBeVisible();
   await expect(section.getByRole('link', { name: 'Upload missing Nom B' })).toHaveCount(0);
   await expect(section.getByRole('region', { name: 'Missing Nom B confirmations' }).getByRole('row').filter({ hasText: 'STEM-001' })).toContainText('Synthetic Marine Fuels Holdings Limited');
   await expect.poll(() => page.evaluate(() => window.nomBFixture.requests.filter((request) => request.name === 'missingNomBList').at(-1)?.body)).toEqual({ cursor: null, search: '' });
@@ -87,7 +87,7 @@ test('desktop Nom B Filing embeds the all-date document table and file control w
   expect(await page.evaluate(() => window.nomBFixture.requests.filter((request) => request.name === 'missingNomBUpload').length)).toBe(0);
 });
 
-test('desktop returns from an undated policy view to all-date document filing', async ({ page }, testInfo) => {
+test('desktop returns from an undated policy view to cutoff-scoped document filing', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'desktop', 'Desktop filing transition only.');
   await openFiling(page);
   const section = panel(page);
@@ -97,7 +97,7 @@ test('desktop returns from an undated policy view to all-date document filing', 
   await expect(page.getByLabel('Missing Nom B filing')).toBeVisible();
   await expect(section.getByLabel(/^Undated follow-up/)).toHaveCount(0);
   await expect(section.getByRole('region', { name: 'Missing Nom B confirmations' }).getByRole('row').filter({ hasText: 'STEM-001' })).toBeVisible();
-  await expect(section.getByText('All delivery dates', { exact: true })).toBeVisible();
+  await expect(section.getByText('Delivery from 1 September 2026', { exact: true })).toBeVisible();
 });
 
 test('status tabs, undated-only follow-up, search, sorting and paging use their own server payload', async ({ page }) => {

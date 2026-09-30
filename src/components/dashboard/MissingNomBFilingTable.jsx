@@ -69,7 +69,14 @@ export default function MissingNomBFilingTable() {
     appClient.functions.invoke('missingNomBList', listPayload(pagination), { force: true, cache: false })
       .then((response) => {
         if (!active || sequence !== requestSequence.current) return;
-        if (response.data?.error) throw new Error(response.data.error);
+        if (response.data?.error) {
+          if (response.data.code === 'MISSING_NOM_B_CURSOR_INVALID' && pagination.page > 0) {
+            setNotice('The filing list changed. Restarting from the first page.');
+            dispatch({ type: 'refresh' });
+            return;
+          }
+          throw new Error(response.data.error);
+        }
         if (!Array.isArray(response.data?.rows)) throw new Error('The missing Nom B list returned an invalid response.');
         setRows(response.data.rows);
         setNextCursor(response.data.nextCursor || null);
@@ -82,6 +89,11 @@ export default function MissingNomBFilingTable() {
       })
       .catch((cause) => {
         if (!active || sequence !== requestSequence.current) return;
+        if ((cause?.code || cause?.data?.code || cause?.response?.data?.code) === 'MISSING_NOM_B_CURSOR_INVALID' && pagination.page > 0) {
+          setNotice('The filing list changed. Restarting from the first page.');
+          dispatch({ type: 'refresh' });
+          return;
+        }
         setError(cause?.message || 'The missing Nom B list is unavailable.');
         setLoading(false);
       });
@@ -175,7 +187,7 @@ export default function MissingNomBFilingTable() {
   const feedbackVisible = feedback && !loading && !error && rows.some((row) => row.nominationId === feedback.nominationId);
   const busy = uploadLock.current;
   return <div className="space-y-4" aria-label="Missing Nom B filing" onDragOver={(event) => { if (Array.from(event.dataTransfer?.types || []).includes('Files')) event.preventDefault(); }} onDrop={(event) => event.preventDefault()}>
-    <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-sm font-medium">Active Buyer Confirmations missing a filed Nom B</p><p className="text-xs text-muted-foreground">All delivery dates, including uninvoiced STEMs. A green Received marker alone does not clear a missing document.</p><p className="text-xs text-muted-foreground">Drop one PDF, JPG, PNG, DOC, or DOCX file onto its confirmation, or choose a file. Maximum 3 MiB.</p></div><Button type="button" variant="outline" size="sm" onClick={refresh} disabled={loading}><RefreshCw className={`mr-1 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />Refresh filing list</Button></div>
+    <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-sm font-medium">Active Buyer Confirmations missing a filed Nom B</p><p className="text-xs text-muted-foreground">Delivery from 1 September 2026, including uninvoiced STEMs. A green Received marker alone does not clear a missing document.</p><p className="text-xs text-muted-foreground">Drop one PDF, JPG, PNG, DOC, or DOCX file onto its confirmation, or choose a file. Maximum 3 MiB.</p></div><Button type="button" variant="outline" size="sm" onClick={refresh} disabled={loading}><RefreshCw className={`mr-1 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />Refresh filing list</Button></div>
     {pending && <div role="status" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">{cleanupProof ? `The result for ${display(pending.stemName)} is confirmed, but saved retry information needs to be cleared.` : `The Nom B upload for ${display(pending.stemName)} (${pending.filename}) is unresolved. Select the same file to check the result. Other uploads are paused.`}</div>}
     {cleanupProof && <Button type="button" variant="outline" size="sm" onClick={finishCleanup}>{cleanupProof.kind === 'verified' ? 'Finish confirmed upload' : 'Clear rejected upload'}</Button>}
     {pending && !pendingVisible && !cleanupProof && <div className="max-w-sm rounded-lg border border-amber-500/40 p-3"><p className="mb-2 text-sm font-medium">Resume upload for {display(pending.stemName)}</p><DropArea row={pending} recovery disabled={busy} onFiles={handleFiles} /></div>}

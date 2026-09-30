@@ -156,7 +156,7 @@ export const MY_COMMITMENTS_METHODOLOGY = {
   sections: [
     {
       title: 'Nom B Filing',
-      body: 'On desktop, open Nom B Filing → Missing to see your active Buyer Confirmations without a filed Nom B across all dates, including uninvoiced STEMs. Drop one document into its row to file it; success requires the linked document and green Received status to be verified. Waived requirements, verification exceptions, team policy controls and the existing mobile view retain their delivery scope from 1 September 2026. Filing is independent of financial reporting filters, and reminder links open this workspace.',
+      body: 'On desktop, open Nom B Filing → Missing to see your active Buyer Confirmations without a filed Nom B for delivery from 1 September 2026, including uninvoiced STEMs. Actual delivery date takes precedence; expected delivery is used only when actual delivery is absent. Earlier STEMs are excluded. Drop one document into its row to file it; success requires the linked document and green Received status to be verified. Undated STEMs remain in the separate policy follow-up, and verification exceptions, waivers, team controls and the existing mobile view retain their current behavior. Filing is independent of financial reporting filters, and reminder links open this workspace.',
     },
     {
       title: 'Included work',

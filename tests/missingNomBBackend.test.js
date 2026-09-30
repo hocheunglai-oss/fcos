@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { createMissingNomBGateway, resolveMissingNomBOwner, isNomBDocument, qualifiesMissingNomBInvoice, isMissingNomBInvoiceCandidate, isCancelledStem,
   missingNomBList, validateNomBUpload, missingNomBUpload, missingNomBEmail, runMissingNomBReminders, missingNomBStatus } from '../api/_missingNomB.js';
 import { fcosSalesforceEnvironment } from '../config/fcosConnections.js';
-import { resolveNomBTrader } from '../api/_dashboardNomBPolicy.js';
+import { resolveNomBTrader, NOM_B_FROM } from '../api/_dashboardNomBPolicy.js';
 import { NOM_B_MAX_BYTES } from '../shared/missingNomB.js';
 const org = fcosSalesforceEnvironment('production').orgId;
 const stemId = 'a00000000000001AAA';
@@ -16,7 +16,7 @@ const sfUser = { Id:'005000000000001AAA',Name:'Trader One',Email:profile.email,I
 const activation = '2026-09-30T01:00:00.000Z';
 const invoice = { Invoice_Date__c:'2026-09-30',Amount__c:'100.00',IsDeleted:false,Id:invoiceId,STEM__c:stemId,Name:'HK-I-1',CreatedDate:'2026-09-30T01:01:00.000Z',SystemModstamp:'2026-09-30T01:03:00.000Z',File__c:'https://example.invalid/file.pdf',Proforma__c:false,Deprecated__c:false,pdfSaved:true };
 const nomination = { IsDeleted:false,File__c:null,PDF__c:null,Id:nominationId,STEM__c:stemId,Name:'Confirmation 1',RefCode__c:'CONF-1',Buyer_Supplier_Trader__c:sfUser.Name,BT_ST_Email_Address__c:sfUser.Email,Received__c:'🔴',Deprecated__c:false,Replaced__c:true,RecordType:{ DeveloperName:'Buyer' },LastModifiedDate:'2026-09-30T01:00:00.000Z' };
-const fact = () => ({ stem:{ Id:stemId,Name:'HK123',RefCode__c:'HK123',IsDeleted:false,Account__r:{Name:'Buyer'},Vessel__r:{Name:'Vessel',IMO__c:'1234567'},Port__r:{Name:'Hong Kong'},Invoice_Status__c:'Invoiced',Status__c:'Active' },nomination:{...nomination},assignment:{status:'resolved',profile},documents:[],fingerprint:'fingerprint-1' });
+const fact = () => ({ stem:{ Id:stemId,Name:'HK123',RefCode__c:'HK123',IsDeleted:false,Delivery_Date__c:'2026-09-30',Expected_Delivery_Date__c:null,Account__r:{Name:'Buyer'},Vessel__r:{Name:'Vessel',IMO__c:'1234567'},Port__r:{Name:'Hong Kong'},Invoice_Status__c:'Invoiced',Status__c:'Active' },nomination:{...nomination},assignment:{status:'resolved',profile},documents:[],fingerprint:'fingerprint-1' });
 const upload = () => ({ nominationId,operationId:randomUUID(),filename:'document.pdf',contentBase64:Buffer.from('%PDF-1.7\nNOM B').toString('base64') });
 const verified = { stemId,nominationId,contentDocumentId:docId,contentVersionId:'068000000000001AAA',receivedStatus:'🟢',verified:true };
 const invoiceDescription = { fields: ['Id','Name','Invoice_Date__c','STEM__c','CreatedDate','SystemModstamp','Proforma__c','Deprecated__c','File__c','IsDeleted','Amount__c'].map((name) => ({name,type: ['Proforma__c','Deprecated__c','IsDeleted'].includes(name) ? 'boolean' : 'string'})) };
@@ -110,15 +110,104 @@ test('strict upload validation catches decoded sizes, base64 ambiguity, paths, u
  for(const item of cases) assert.throws(()=>validateNomBUpload({...upload(),...item}));
  const max=Buffer.alloc(NOM_B_MAX_BYTES);max.write('%PDF-');assert.equal(validateNomBUpload({...upload(),contentBase64:max.toString('base64')}).size,NOM_B_MAX_BYTES);
 });
-test('list returns only own missing rows across all dates, permits green-without-file, and paginates',async()=>{
- const own=fact();own.nomination.Received__c='🟢';own.stem.Delivery_Date__c='2001-01-01';
+test('list returns only own missing rows from September, permits green-without-file, and paginates',async()=>{
+ const own=fact();own.nomination.Received__c='🟢';own.stem.Delivery_Date__c=NOM_B_FROM;
  const other={...fact(),nomination:{...nomination,Id:'a01000000000002AAA'},assignment:{status:'resolved',profile:{...profile,id:randomUUID()}}};
  const client=clientStub();let calls=0;
  const gateway={verify:async()=>org,query:async(q)=>{assert.equal(q.includes('CreatedDate'),false);calls++;return calls===1 ? [{Id:nominationId,STEM__c:stemId},{Id:other.nomination.Id,STEM__c:stemId}] : [];},facts:async()=>[own,other]};
- const page=await missingNomBList({pageSize:1},context(client),{gateway});assert.equal(page.rows.length,1);assert.equal(page.rows[0].deliveryDate,'2001-01-01');assert.equal(page.rows[0].canUpload,true);assert.ok(page.nextCursor);
+ const page=await missingNomBList({pageSize:1},context(client),{gateway});assert.equal(page.rows.length,1);assert.equal(page.rows[0].deliveryDate,'2026-09-01');assert.equal(page.rows[0].canUpload,true);assert.ok(page.nextCursor);
  const next=await missingNomBList({cursor:page.nextCursor},context(client),{gateway});assert.equal(next.nextCursor,null);
  const wrong=Buffer.from(JSON.stringify({last:nominationId,user:randomUUID(),search:'x'})).toString('base64url');
  await assert.rejects(missingNomBList({cursor:wrong},context(client),{gateway}),{code:'MISSING_NOM_B_CURSOR_INVALID'});
+});
+test('list enforces effective delivery through every searched page and ignores caller date overrides',async()=>{
+ const source=Array.from({length:207},(_,i)=>{
+  const f=fact();f.stem={...f.stem,Id:`a00${String(i).padStart(12,'0')}AAA`,Name:`Match ${i}`,Delivery_Date__c:'2026-08-31'};
+  f.nomination={...f.nomination,Id:`a01${String(i).padStart(12,'0')}AAA`,STEM__c:f.stem.Id};return f;
+ });
+ // These gateway fixtures intentionally ignore the SOQL filter, proving the final facts check.
+ source[200].stem.Expected_Delivery_Date__c='2026-09-01'; // Actual August still wins.
+ source[201].stem.Delivery_Date__c='2026-09-01';
+ source[202].stem.Delivery_Date__c=null;source[202].stem.Expected_Delivery_Date__c='2026-09-01';
+ source[203].stem.Delivery_Date__c='invalid';source[203].stem.Expected_Delivery_Date__c='2026-09-01';
+ source[204].stem.Delivery_Date__c=null;
+ source[205].stem.Delivery_Date__c='2026-02-30';source[205].stem.Expected_Delivery_Date__c='2026-09-01';
+ source[206].stem.Delivery_Date__c='2026-09-30';source[206].stem.Name='Not searched';
+ let queries=0;
+ const gateway={verify:async()=>org,query:async(q)=>{
+  queries++;
+  assert.ok(q.includes("AND (STEM__r.Delivery_Date__c >= 2026-09-01 OR (STEM__r.Delivery_Date__c = null AND STEM__r.Expected_Delivery_Date__c >= 2026-09-01))"));
+  assert.equal(q.includes('CreatedDate'),false);assert.equal(q.includes('2001'),false);
+  const after=q.match(/ AND Id > '([^']+)'/)?.[1]||'';
+  return source.filter(f=>f.nomination.Id>after).slice(0,200).map(f=>({Id:f.nomination.Id,STEM__c:f.stem.Id}));
+ },facts:async(ids)=>source.filter(f=>ids.includes(f.stem.Id))};
+ const rows=[];let cursor=null;let pages=0;
+ do {
+  const page=await missingNomBList({cursor,search:'match',pageSize:1,from:'2001-01-01',deliveryFrom:'2001-01-01',allDates:true},context(clientStub()),{gateway});
+  rows.push(...page.rows);cursor=page.nextCursor;assert.ok(++pages<5);
+ } while(cursor);
+ assert.deepEqual(rows.map(r=>r.nominationId),[source[201].nomination.Id,source[202].nomination.Id]);
+ assert.equal(queries,4);assert.equal(pages,3);
+});
+test('list cursors bind the fixed delivery policy and reject all-date or changed-policy continuations',async()=>{
+ let queryCalls=0;const client=clientStub();
+ const gateway={verify:async()=>org,query:async()=>{queryCalls++;return [{Id:nominationId,STEM__c:stemId},{Id:'a01000000000002AAA',STEM__c:stemId}];},facts:async()=>[fact()]};
+ const first=await missingNomBList({pageSize:1,search:'HK123'},context(client),{gateway});
+ const cursor=JSON.parse(Buffer.from(first.nextCursor,'base64url').toString());assert.equal(cursor.from,NOM_B_FROM);assert.ok(cursor.policy);
+ const {policy:_policy,from:_from,...legacy}=cursor;
+ for(const modified of [legacy,{...cursor,policy:'all-dates'},{...cursor,from:'2001-01-01'}]) {
+  await assert.rejects(missingNomBList({search:'HK123',cursor:Buffer.from(JSON.stringify(modified)).toString('base64url')},context(client),{gateway}),{code:'MISSING_NOM_B_CURSOR_INVALID',status:400});
+ }
+ assert.equal(queryCalls,1);
+});
+test('new uploads reject pre-cutoff, unavailable and invalid actual dates without a Salesforce POST',async()=>{
+ for(const [actual,expected,code] of [
+  ['2026-08-31','2026-09-01','MISSING_NOM_B_DELIVERY_BEFORE_CUTOFF'],
+  [null,'2026-08-31','MISSING_NOM_B_DELIVERY_BEFORE_CUTOFF'],
+  [null,null,'MISSING_NOM_B_DELIVERY_UNVERIFIED'],
+  ['invalid','2026-09-01','MISSING_NOM_B_DELIVERY_UNVERIFIED'],
+  ['2026-02-30','2026-09-01','MISSING_NOM_B_DELIVERY_UNVERIFIED'],
+  [null,'invalid','MISSING_NOM_B_DELIVERY_UNVERIFIED'],
+ ]) {
+  const h=uploadHarness({facts:()=>{const f=fact();f.stem.Delivery_Date__c=actual;f.stem.Expected_Delivery_Date__c=expected;return[f];}});
+  await assert.rejects(missingNomBUpload(upload(),context(h.client),{gateway:h.gateway}),{code,status:409});
+  assert.equal(h.posts,0);assert.equal(h.status,'Rejected');
+ }
+});
+test('upload date-only drift on the fresh check blocks before Posting despite an unchanged fingerprint',async()=>{
+ for(const [delivery,code] of [['2026-08-31','MISSING_NOM_B_DELIVERY_BEFORE_CUTOFF'],[null,'MISSING_NOM_B_DELIVERY_UNVERIFIED']]) {
+  let reads=0;const h=uploadHarness({facts:()=>{const f=fact();f.stem.Delivery_Date__c=++reads===1?'2026-09-01':delivery;return[f];}});
+  await assert.rejects(missingNomBUpload(upload(),context(h.client),{gateway:h.gateway}),{code});
+  assert.equal(reads,2);assert.equal(h.posts,0);assert.equal(h.status,'Rejected');
+ }
+});
+test('new upload includes September 1 actual delivery and expected-date fallback',async()=>{
+ for(const actual of ['2026-09-01',null]) {
+  const h=uploadHarness({facts:({written})=>{const f=fact();f.stem.Delivery_Date__c=actual;f.stem.Expected_Delivery_Date__c='2026-09-01';f.documents=written?[{ContentDocumentId:docId}]:[];return[f];}});
+  assert.deepEqual(await missingNomBUpload(upload(),context(h.client),{gateway:h.gateway}),verified);assert.equal(h.posts,1);
+ }
+});
+test('Completed and uncertain exact-operation replays still resolve after delivery moves out of scope',async()=>{
+ for(const completed of [true,false]) for(const delivery of ['2026-08-31',null,'invalid']) {
+  let drift=false;
+  const h=uploadHarness({facts:({written})=>{const f=fact();if(drift)f.stem.Delivery_Date__c=delivery;f.documents=written?[{ContentDocumentId:docId}]:[];return[f];},
+   mutation:completed?undefined:(_opts,mark)=>{mark();throw new Error('lost response');}});
+  const body=upload();
+  if(completed)assert.deepEqual(await missingNomBUpload(body,context(h.client),{gateway:h.gateway}),verified);
+  else await assert.rejects(missingNomBUpload(body,context(h.client),{gateway:h.gateway}),{code:'MISSING_NOM_B_UPLOAD_UNCERTAIN'});
+  drift=true;
+  assert.deepEqual(await missingNomBUpload(body,context(h.client),{gateway:h.gateway}),verified);
+  assert.equal(h.posts,1);assert.equal(h.status,'Completed');
+ }
+});
+test('Posting operation readback remains available after date drift and never starts another POST',async()=>{
+ for(const result of [verified,null]) {
+  const h=uploadHarness({reserve:()=>({status:'Posting',acquired:false,claim_token:randomUUID()}),readback:()=>result,
+   facts:()=>{const f=fact();f.stem.Delivery_Date__c='2026-08-31';f.documents=[{ContentDocumentId:docId}];return[f];}});
+  if(result)assert.deepEqual(await missingNomBUpload(upload(),context(h.client),{gateway:h.gateway}),verified);
+  else await assert.rejects(missingNomBUpload(upload(),context(h.client),{gateway:h.gateway}),{code:'MISSING_NOM_B_UPLOAD_UNCERTAIN'});
+  assert.equal(h.posts,0);
+ }
 });
 test('successful atomic upload has verified readback and exact successful replay does not POST again',async()=>{
  const h=uploadHarness();const body=upload();const result=await missingNomBUpload(body,context(h.client),{gateway:h.gateway});assert.deepEqual(result,verified);assert.equal(h.status,'Completed');
@@ -149,19 +238,19 @@ test('concurrent Salesforce filing after POST is held instead of reporting succe
  await assert.rejects(missingNomBUpload(upload(),context(h.client),{gateway:h.gateway}),{code:'MISSING_NOM_B_UPLOAD_UNCERTAIN'});assert.equal(h.status,'Uncertain');
 });
 function reminderHarness({send,checkpointFail=false,freshFact,initialInvoice=invoice}={}) {
- const ledger=new Map();let scan={activated_at:activation,cursor_at:activation,cursor_id:'',scan_until:'2026-09-30T02:00:00.000Z'};let current=initialInvoice;let sent=0;let reads=0;let discoveryVisible=true;
+ const ledger=new Map();let scan={activated_at:activation,cursor_at:activation,cursor_id:'',scan_until:'2026-09-30T02:00:00.000Z'};let current=initialInvoice;let sent=0;let reads=0;let discoveryVisible=true;let begun=0;
  const client=clientStub({rpc:async(key,args)=>{
   if(key==='missing_nom_b_claim_scan')return {...scan};
   if(key==='missing_nom_b_checkpoint') {if(checkpointFail)throw new Error('db outage');for(const d of args.p_discoveries)if(!ledger.has(d.stemId))ledger.set(d.stemId,{id:randomUUID(),stem_id:d.stemId,invoice_id:d.invoiceId,status:'Pending',attempts:0});scan={...scan,cursor_at:args.p_cursor_at,cursor_id:args.p_cursor_id};return scan;}
   if(key==='missing_nom_b_claim_reminders')return [...ledger.values()].filter(r=>['Pending','Blocked'].includes(r.status)).map(r=>Object.assign(r,{status:'Processing',claim_token:args.p_token,attempts:r.attempts+1}));
   const row=[...ledger.values()].find(r=>r.id===args.p_id);
-  if(key==='missing_nom_b_begin_send'){row.status='Sending';return true;}
+  if(key==='missing_nom_b_begin_send'){begun++;row.status='Sending';return true;}
   if(key==='missing_nom_b_finish_reminder'){row.status=args.p_status;row.last_error_code=args.p_code;return true;}
   throw new Error(key);
  }});
  const gateway={verify:async()=>org,invoiceSelect:async()=>invoiceDescription.fields.map(f=>f.name).join(','),query:async()=>current && discoveryVisible ? [current] : [],verifyInvoicePdfs:async(rows)=>rows,invoicesForStems:async()=>current ? [current] : [],facts:async()=>{reads++;return freshFact ? freshFact(reads) : [fact()];}};
  const run=()=>runMissingNomBReminders({client,env:{VERCEL_ENV:'production',FCOS_ENABLE_MISSING_NOM_B_REMINDERS:'true'},gateway,resolveSender:async()=>({mailboxId:randomUUID(),emailAddress:'sender@cosulich.com.hk'}),sendMail:async(...args)=>{sent++;if(send)return send(...args);}});
- return {run,ledger,setInvoice:(v)=>{current=v;},hideFromScan:()=>{discoveryVisible=false;},restoreCheckpoint:()=>{checkpointFail=false;},get sent(){return sent;},get cursor(){return scan.cursor_at;}};
+ return {run,ledger,setInvoice:(v)=>{current=v;},hideFromScan:()=>{discoveryVisible=false;},restoreCheckpoint:()=>{checkpointFail=false;},get sent(){return sent;},get begun(){return begun;},get cursor(){return scan.cursor_at;}};
 }
 test('delayed saved PDF is picked up by modstamp and multiple invoices send only once per STEM',async()=>{
  const h=reminderHarness({initialInvoice:{...invoice,File__c:null}});assert.equal((await h.run()).sent,0);
@@ -175,6 +264,35 @@ test('final file/ownership/eligibility recheck suppresses or blocks mail before 
  for(const mode of ['file','owner','cancel','race']) {
   const h=reminderHarness({freshFact:(reads)=>{const f=fact();if(reads>1){if(mode==='race' && reads>2) f.documents=[{ContentDocumentId:docId}];if(mode==='file')f.documents=[{ContentDocumentId:docId}];if(mode==='owner')f.assignment={status:'AMBIGUOUS_CONFIRMATION'};if(mode==='cancel')f.stem.Status__c='Cancelled';}return[f];}});
   const result=await h.run();assert.equal(h.sent,0);assert.equal(result.blocked+result.suppressed,1);
+ }
+});
+test('reminder delivery policy runs at batch, pre-send and locked-send checks despite unchanged fingerprints',async()=>{
+ for(const phase of [1,2,3]) for(const [actual,expected,status,code] of [
+  ['2026-08-31','2026-09-01','Suppressed','DATE_OUT_OF_SCOPE'],
+  [null,'2026-08-31','Suppressed','DATE_OUT_OF_SCOPE'],
+  [null,null,'Blocked','DATE_UNVERIFIED'],
+  ['invalid','2026-09-01','Blocked','DATE_UNVERIFIED'],
+ ]) {
+  const h=reminderHarness({freshFact:(reads)=>{const f=fact();f.stem.Delivery_Date__c='2026-09-01';if(reads>=phase){f.stem.Delivery_Date__c=actual;f.stem.Expected_Delivery_Date__c=expected;}return[f];}});
+  const result=await h.run();const row=[...h.ledger.values()][0];
+  assert.equal(h.sent,0);assert.equal(result.sent,0);assert.equal(row.status,status);assert.equal(row.last_error_code,code);
+  assert.equal(h.begun,phase===3?1:0);assert.equal(result.failed,0);assert.equal(result.uncertain,0);
+ }
+});
+test('delivery exclusion precedes pending PDF and undated review can resume after a valid date is supplied',async()=>{
+ for(const [actual,status,code] of [['2026-08-31','Suppressed','DATE_OUT_OF_SCOPE'],[null,'Blocked','DATE_UNVERIFIED']]) {
+  let delivery=actual;
+  const h=reminderHarness({initialInvoice:{...invoice,Amount__c:null,File__c:null,pdfSaved:false},freshFact:()=>{const f=fact();f.stem.Delivery_Date__c=delivery;return[f];}});
+  await h.run();const row=[...h.ledger.values()][0];assert.equal(row.status,status);assert.equal(row.last_error_code,code);assert.equal(h.sent,0);
+  delivery='2026-09-01';h.hideFromScan();h.setInvoice({...invoice});
+  // A suppressed same-invoice reminder stays terminal; date-review Blocked rows are retryable.
+  assert.equal((await h.run()).sent,status==='Blocked'?1:0);
+ }
+});
+test('reminders include September 1 actual and expected delivery while preserving one successful send',async()=>{
+ for(const actual of ['2026-09-01',null]) {
+  const h=reminderHarness({freshFact:()=>{const f=fact();f.stem.Delivery_Date__c=actual;f.stem.Expected_Delivery_Date__c='2026-09-01';return[f];}});
+  assert.equal((await h.run()).sent,1);await h.run();assert.equal(h.sent,1);
  }
 });
 test('unknown mail failure holds Uncertain; proven rejection is retryable Failed',async()=>{

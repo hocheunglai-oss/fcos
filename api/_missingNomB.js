@@ -6,13 +6,14 @@ import { getApiVersion, sfRequest } from './_salesforce.js';
 import { isExternalActionEnabled, requireExternalActionGate } from './_externalActionGates.js';
 import { sendOperationalMail } from './_operationalMail.js';
 import { resolveGraphEmailSender } from './_graphEmail.js';
-import { activeNomBConfirmation, isNomBFile, resolveNomBTrader, NOM_B_CREDIT_FIELDS } from './_dashboardNomBPolicy.js';
+import { activeNomBConfirmation, isNomBFile, resolveNomBTrader, NOM_B_CREDIT_FIELDS, NOM_B_FROM, nomBDelivery } from './_dashboardNomBPolicy.js';
 import { isIssuedFinalBuyerInvoice } from './_buyerInvoiceApproval.js';
 import { isBuyerCreditNote } from './_buyerFinancialAmount.js';
 
 const ID = /^[a-zA-Z0-9]{15}(?:[a-zA-Z0-9]{3})?$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const PURPOSE = 'missing_nom_b_reminders';
+const LIST_POLICY = 'dated-delivery-v1';
 const LINK = 'https://fcos.fcuno.com/missing-nom-b';
 const NOM_FIELDS = 'Id,Name,IsDeleted,File__c,PDF__c,STEM__c,Account__r.Name,Buyer_Supplier_Trader__c,BT_ST_Email_Address__c,Received__c,Deprecated__c,Replaced__c,RecordType.DeveloperName,RefCode__c,LastModifiedDate';
 const STEM_FIELDS = 'Id,Name,IsDeleted,RefCode__c,Account__r.Name,Vessel__r.Name,Vessel__r.IMO__c,Port__r.Name,Delivery_Date__c,Expected_Delivery_Date__c,Invoice_Status__c,LastModifiedDate';
@@ -230,6 +231,18 @@ export function qualifiesMissingNomBInvoice(invoice, activatedAt) {
   return isIssuedFinalBuyerInvoice(invoice) && invoice.pdfSaved === true && Boolean(txt(invoice.File__c));
 }
 const stemReference = (stem) => txt(stem.RefCode__c) || txt(stem.Name).split(' - ')[0];
+function deliveryExclusion(stem) {
+  // Undated records belong to the existing policy follow-up, not regular filing.
+  // nomBDelivery also refuses to replace an invalid actual date with an expected date.
+  const { date } = nomBDelivery(stem);
+  if (!date) return { status: 'Blocked', code: 'DATE_UNVERIFIED', uploadCode: 'MISSING_NOM_B_DELIVERY_UNVERIFIED', message: 'A valid delivery or expected delivery date is required before filing Nom B.' };
+  if (date < NOM_B_FROM) return { status: 'Suppressed', code: 'DATE_OUT_OF_SCOPE', uploadCode: 'MISSING_NOM_B_DELIVERY_BEFORE_CUTOFF', message: `Nom B filing applies to delivery dates from ${NOM_B_FROM}.` };
+  return null;
+}
+function assertDeliveryEligible(stem) {
+  const excluded = deliveryExclusion(stem);
+  if (excluded) throw failure(excluded.uploadCode, excluded.message);
+}
 function rowOf(fact, user) {
   const n = fact.nomination; const s = fact.stem;
   return { nominationId: n.Id, stemId: s.Id, stemName: s.Name, stemReference: stemReference(s), buyerName: n.Account__r?.Name || s.Account__r?.Name || '',
@@ -249,7 +262,7 @@ export async function missingNomBList(body = {}, context, deps = {}) {
   if (body.cursor) {
     try {
       const cursor = JSON.parse(Buffer.from(String(body.cursor), 'base64url').toString('utf8'));
-      if (cursor.user !== user.id || cursor.search !== hash(search) || !ID.test(cursor.last)) throw new Error();
+      if (cursor.policy !== LIST_POLICY || cursor.from !== NOM_B_FROM || cursor.user !== user.id || cursor.search !== hash(search) || !ID.test(cursor.last)) throw new Error();
       last = cursor.last;
     } catch { throw failure('MISSING_NOM_B_CURSOR_INVALID', 'Refresh the list to restart pagination.', 400); }
   }
@@ -257,14 +270,14 @@ export async function missingNomBList(body = {}, context, deps = {}) {
   let more = false;
   // Bounded work per HTTP request, with a continuation even when the page contains no matching rows.
   for (let batch = 0; batch < 10 && rows.length < pageSize; batch += 1) {
-    const nominations = await gateway.query(`SELECT Id,STEM__c FROM Nomination__c WHERE Deprecated__c = false AND RecordType.DeveloperName = 'Buyer'${last ? ` AND Id > ${quote(last)}` : ''} ORDER BY Id LIMIT 200`);
+    const nominations = await gateway.query(`SELECT Id,STEM__c FROM Nomination__c WHERE Deprecated__c = false AND RecordType.DeveloperName = 'Buyer' AND (STEM__r.Delivery_Date__c >= ${NOM_B_FROM} OR (STEM__r.Delivery_Date__c = null AND STEM__r.Expected_Delivery_Date__c >= ${NOM_B_FROM}))${last ? ` AND Id > ${quote(last)}` : ''} ORDER BY Id LIMIT 200`);
     if (!nominations.length) { more = false; break; }
     const facts = await gateway.facts(unique(nominations.map((n) => n.STEM__c)), context.client);
     const byNomination = new Map(facts.filter((f) => f.nomination).map((f) => [f.nomination.Id, f]));
     for (let i = 0; i < nominations.length; i += 1) {
       last = nominations[i].Id;
       const f = byNomination.get(last);
-      if (f && !isCancelledStem(f.stem) && !f.documents.length && f.assignment.profile?.id === user.id) {
+      if (f && !deliveryExclusion(f.stem) && !isCancelledStem(f.stem) && !f.documents.length && f.assignment.profile?.id === user.id) {
         const row = rowOf(f, user);
         if (!search || [row.stemName,row.stemReference,row.buyerName,row.vesselName,row.imo,row.portName,row.confirmationReference].some((v) => String(v).toLowerCase().includes(search))) rows.push(row);
       }
@@ -273,7 +286,7 @@ export async function missingNomBList(body = {}, context, deps = {}) {
     }
     if (!more) break;
   }
-  return { rows, nextCursor: more ? Buffer.from(JSON.stringify({ last, user: user.id, search: hash(search) })).toString('base64url') : null, asOf: new Date().toISOString() };
+  return { rows, nextCursor: more ? Buffer.from(JSON.stringify({ policy: LIST_POLICY, from: NOM_B_FROM, last, user: user.id, search: hash(search) })).toString('base64url') : null, asOf: new Date().toISOString() };
 }
 
 export function validateNomBUpload(body) {
@@ -341,8 +354,12 @@ export async function missingNomBUpload(body, context, deps = {}) {
   }
   let posting = false;
   try {
+    // Only new writes are date-gated. Exact Completed/Posting/Uncertain operations
+    // above must remain recoverable even if the STEM delivery date later changes.
+    assertDeliveryEligible(fact.stem);
     const [fresh] = await gateway.facts([fact.stem.Id], context.client);
     assertOwned(fresh, file.nominationId, user);
+    assertDeliveryEligible(fresh.stem);
     if (fresh.fingerprint !== fact.fingerprint) throw failure('MISSING_NOM_B_SOURCE_CHANGED', 'The confirmation changed. Refresh before uploading.');
     if (fresh.documents.length) throw failure('MISSING_NOM_B_ALREADY_FILED', 'A Nom B file has already been filed for this confirmation.');
     const modifiedSince = new Date(validDate(fresh.nomination.LastModifiedDate)).toUTCString();
@@ -389,6 +406,13 @@ async function finishReminder(client, row, status, code = null) {
   const ok = await rpc(client,'missing_nom_b_finish_reminder',{ p_id: row.id,p_token: row.claim_token,p_status: status,p_code: code,p_delay_seconds: status === 'Failed' ? Math.min(86400,300 * 2 ** Math.min(row.attempts || 0,8)) : 300 });
   if (!ok) throw failure('MISSING_NOM_B_REMINDER_CLAIM_LOST', 'Reminder claim changed.', 503);
 }
+async function finishExcludedDelivery(client, row, fact, stats) {
+  const excluded = fact && deliveryExclusion(fact.stem);
+  if (!excluded) return false;
+  await finishReminder(client,row,excluded.status,excluded.code);
+  stats[excluded.status === 'Suppressed' ? 'suppressed' : 'blocked'] += 1;
+  return true;
+}
 
 export async function runMissingNomBReminders({ client, env = process.env, ...deps }) {
   if (!enabled(env)) return { enabled: false, status: 'disabled', scanned: 0, discovered: 0, sent: 0 };
@@ -430,12 +454,14 @@ export async function runMissingNomBReminders({ client, env = process.env, ...de
       if (!potential.length) {
         await finishReminder(client,row,'Suppressed','NO_LONGER_ELIGIBLE'); stats.suppressed += 1; continue;
       }
+      if (await finishExcludedDelivery(client,row,fact,stats)) continue;
       if (!potential.some((i) => qualifiesMissingNomBInvoice(i,activation))) { await finishReminder(client,row,'Blocked','PDF_PENDING'); stats.blocked += 1; continue; }
       if (!fact || isCancelledStem(fact.stem) || fact.documents.length) { await finishReminder(client,row,'Suppressed','NO_LONGER_ELIGIBLE'); stats.suppressed += 1; continue; }
       if (fact.assignment.status !== 'resolved') { await finishReminder(client,row,'Blocked',fact.assignment.status); stats.blocked += 1; continue; }
       const [[fresh], currentInvoices] = await Promise.all([gateway.facts([row.stem_id],client),gateway.invoicesForStems([row.stem_id],activation)]);
       const invoice = currentInvoices.find((i) => qualifiesMissingNomBInvoice(i,activation));
       if (!currentInvoices.some((i) => isMissingNomBInvoiceCandidate(i,activation))) { await finishReminder(client,row,'Suppressed','NO_LONGER_ELIGIBLE'); stats.suppressed += 1; continue; }
+      if (await finishExcludedDelivery(client,row,fresh,stats)) continue;
       if (!invoice) { await finishReminder(client,row,'Blocked','PDF_PENDING'); stats.blocked += 1; continue; }
       if (!fresh || isCancelledStem(fresh.stem) || fresh.documents.length) { await finishReminder(client,row,'Suppressed','NO_LONGER_ELIGIBLE'); stats.suppressed += 1; continue; }
       if (fresh.assignment.status !== 'resolved') { await finishReminder(client,row,'Blocked',fresh.assignment.status); stats.blocked += 1; continue; }
@@ -446,6 +472,7 @@ export async function runMissingNomBReminders({ client, env = process.env, ...de
       const [[lockedFact], lockedInvoices] = await Promise.all([gateway.facts([row.stem_id],client),gateway.invoicesForStems([row.stem_id],activation)]);
       const lockedInvoice = lockedInvoices.find((i) => qualifiesMissingNomBInvoice(i,activation));
       if (!lockedInvoices.some((i) => isMissingNomBInvoiceCandidate(i,activation))) { await finishReminder(client,row,'Suppressed','NO_LONGER_ELIGIBLE'); stats.suppressed += 1; continue; }
+      if (await finishExcludedDelivery(client,row,lockedFact,stats)) continue;
       if (!lockedInvoice) { await finishReminder(client,row,'Blocked','PDF_PENDING'); stats.blocked += 1; continue; }
       if (!lockedFact || isCancelledStem(lockedFact.stem) || lockedFact.documents.length) { await finishReminder(client,row,'Suppressed','NO_LONGER_ELIGIBLE'); stats.suppressed += 1; continue; }
       if (lockedInvoice.Id !== invoice.Id || lockedInvoice.SystemModstamp !== invoice.SystemModstamp || lockedInvoice.Name !== invoice.Name || lockedInvoice.CreatedDate !== invoice.CreatedDate || (lockedInvoice.Invoice_Date__c || null) !== (invoice.Invoice_Date__c || null)) { await finishReminder(client,row,'Blocked','INVOICE_CHANGED'); stats.blocked += 1; continue; }
