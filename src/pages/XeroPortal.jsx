@@ -29,6 +29,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { toast } from '@/components/ui/use-toast';
 import { appClient } from '@/api/appClient';
 import { emptyReceiptFields, parseReceiptText } from '@/lib/receiptExtraction';
+import { saveReceiptWithDirectUpload } from '@/lib/xeroReceiptUpload';
 import { xeroPortalUiCopy } from '@/lib/xeroPortalUiCopy';
 import { cn } from '@/lib/utils';
 import './XeroPortal.css';
@@ -82,6 +83,8 @@ export default function XeroPortal() {
   const [incrementalUsageRefresh, setIncrementalUsageRefresh] = useState(false);
   const [receiptDraft, setReceiptDraft] = useState(emptyReceiptFields);
   const [receiptFile, setReceiptFile] = useState(null);
+  const receiptUpload = useRef(null);
+  const receiptSaveInFlight = useRef(false);
   const [ocrBusy, setOcrBusy] = useState(false);
   const copy = xeroPortalUiCopy();
   const restoreCopy = xeroContactRestoreCopy('en');
@@ -333,26 +336,35 @@ export default function XeroPortal() {
   }
 
   async function saveReceipt({ sync = false } = {}) {
+    if (receiptSaveInFlight.current) return;
     if (!receiptFile) {
       toast({ title: copy.toasts.fileRequired, description: copy.toasts.fileRequiredDescription, variant: 'destructive' });
       return;
     }
+    receiptSaveInFlight.current = true;
     setBusy(sync ? 'receipt-sync-create' : 'receipt-create');
-    const filePayload = await fileToPayload(receiptFile);
-    const result = await appClient.functions.invoke('xeroPortalReceiptCreate', {
-      fields: receiptDraft,
-      file: filePayload,
-      autoSync: sync,
-    }, { force: true, invalidateCache: true });
-    setBusy('');
-    if (result.data?.error) {
-      toast({ title: sync ? copy.toasts.receiptSyncFailed : copy.toasts.receiptSaveFailed, description: result.data.error, variant: 'destructive' });
-      return;
+    try {
+      const result = await saveReceiptWithDirectUpload({
+        file: receiptFile, fields: receiptDraft, autoSync: sync, pending: receiptUpload,
+      }, { invoke: (...args) => appClient.functions.invoke(...args) });
+      if (!result.data?.receipt) throw new Error(result.data?.error || 'Receipt save could not be confirmed. Retry with the same details.');
+      setReceiptDraft(emptyReceiptFields());
+      setReceiptFile(null);
+      const synced = result.data.receipt.status === 'synced';
+      toast({
+        title: sync && synced ? copy.toasts.receiptSent : copy.toasts.receiptSaved,
+        description: result.data.error || (sync && !synced
+          ? 'Receipt saved. Check its status below and use Sync to Xero when ready.'
+          : sync ? copy.toasts.receiptSentDescription : copy.toasts.receiptSavedDescription),
+        ...(result.data.error ? { variant: 'destructive' } : {}),
+      });
+      await load({ force: true });
+    } catch (failure) {
+      toast({ title: sync ? copy.toasts.receiptSyncFailed : copy.toasts.receiptSaveFailed, description: failure.message, variant: 'destructive' });
+    } finally {
+      receiptSaveInFlight.current = false;
+      setBusy('');
     }
-    setReceiptDraft(emptyReceiptFields());
-    setReceiptFile(null);
-    toast({ title: sync ? copy.toasts.receiptSent : copy.toasts.receiptSaved, description: sync ? copy.toasts.receiptSentDescription : copy.toasts.receiptSavedDescription });
-    await load({ force: true });
   }
 
   async function syncReceipt(id) {
@@ -686,7 +698,7 @@ export default function XeroPortal() {
                       <span className="font-medium">{copy.receipts.chooseFile}</span>
                       <span className="min-w-0 truncate text-muted-foreground">{receiptFile?.name || copy.receipts.noFile}</span>
                     </span>
-                    <input type="file" accept="image/*,application/pdf" className="sr-only" onChange={(event) => setReceiptFile(event.target.files?.[0] || null)} />
+                    <input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" className="sr-only" onChange={(event) => setReceiptFile(event.target.files?.[0] || null)} />
                   </label>
                   <div className={PORTAL_TWO_COLUMNS_CLASS}>
                     <Button type="button" variant="outline" onClick={runOcr} disabled={!receiptFile || ocrBusy}>
@@ -711,11 +723,11 @@ export default function XeroPortal() {
                     <Textarea value={receiptDraft.note} onChange={(event) => setReceiptDraft((current) => ({ ...current, note: event.target.value }))} rows={6} />
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    <Button type="button" variant="outline" onClick={() => saveReceipt({ sync: false })} disabled={!receiptFile || busy === 'receipt-create'}>
+                    <Button type="button" variant="outline" onClick={() => saveReceipt({ sync: false })} disabled={!receiptFile || busy === 'receipt-create' || busy === 'receipt-sync-create'}>
                       <ActionIcon busy={busy === 'receipt-create'} icon={Upload} />
                       {copy.receipts.save}
                     </Button>
-                    <Button type="button" onClick={() => saveReceipt({ sync: true })} disabled={!receiptFile || !xero.connected || !scopeFlags.invoices || !scopeFlags.attachments || busy === 'receipt-sync-create'}>
+                    <Button type="button" onClick={() => saveReceipt({ sync: true })} disabled={!receiptFile || !xero.connected || !scopeFlags.invoices || !scopeFlags.attachments || busy === 'receipt-sync-create' || busy === 'receipt-create'}>
                       <ActionIcon busy={busy === 'receipt-sync-create'} icon={Send} />
                       {copy.receipts.createBill}
                     </Button>
@@ -1064,20 +1076,6 @@ function hostname(value, fallback = 'Not configured') {
 
 function shortId(value) {
   return String(value || '').slice(0, 8);
-}
-
-async function fileToPayload(file) {
-  const dataUrl = await new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ''));
-    reader.onerror = () => reject(reader.error || new Error('File read failed'));
-    reader.readAsDataURL(file);
-  });
-  return {
-    base64: dataUrl.replace(/^data:[^;]+;base64,/i, ''),
-    fileName: file.name,
-    fileType: file.type || 'application/octet-stream',
-  };
 }
 
 function downloadJson(value, filename) {

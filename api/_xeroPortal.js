@@ -1,4 +1,4 @@
-import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import {
   XERO_CONTACT_BATCH_SIZE,
   XERO_CONTACT_SYNC_MATCH_FIELD_LABELS,
@@ -27,6 +27,8 @@ import { buildContactRestoration } from './_xeroContactRestorePolicy.js';
 const AUTHORIZATION_BASE = 'https://login.xero.com';
 const RECEIPT_BUCKET = 'xero-portal-receipts';
 const MAX_RECEIPT_BYTES = 10 * 1024 * 1024;
+const RECEIPT_UPLOAD_TTL_MS = 2 * 60 * 60 * 1000;
+const RECEIPT_FILE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'application/pdf']);
 const DEFAULT_RECENT_STEM_DELIVERY_FROM = '2025-01-01';
 const DEFAULT_XERO_SCOPES = [
   'openid',
@@ -223,46 +225,59 @@ export async function xeroPortalReceiptsList(body = {}, { env = process.env } = 
   return { receipts: (data || []).map(serializeReceipt) };
 }
 
-export async function xeroPortalReceiptCreate(body = {}, { accessContext = null, env = process.env, fetchImpl = fetch } = {}) {
-  const client = xeroContactSyncServiceClient(env);
-  const file = decodeReceiptFile(body.file);
-  const fields = normalizeReceiptFields(body.fields || body);
+export async function xeroPortalReceiptUploadPrepare(body = {}, {
+  accessContext = null, env = process.env, client = xeroContactSyncServiceClient(env), now = Date.now(),
+} = {}) {
+  const ownerId = receiptUploadOwner(accessContext);
+  const file = receiptUploadFileMetadata(body.file);
+  const fields = receiptUploadFields(body.fields);
   const id = randomUUID();
-  const now = new Date().toISOString();
-  const fileName = sanitizeFileName(file.fileName || `receipt-${id}`);
-  const storagePath = `${new Date().toISOString().slice(0, 10)}/${id}-${fileName}`;
-  const upload = await client.storage.from(RECEIPT_BUCKET).upload(storagePath, file.buffer, {
-    contentType: file.fileType,
-    upsert: false,
-  });
-  if (upload.error) throw storageError(upload.error, RECEIPT_BUCKET);
-
-  const row = {
-    id,
-    created_by: accessContext?.profile?.id || null,
-    created_by_email: accessContext?.profile?.email || null,
-    merchant: fields.merchant || 'Unknown supplier',
-    receipt_date: fields.date || now.slice(0, 10),
-    total: numberOrNull(fields.total),
-    currency: fields.currency || 'HKD',
-    category: fields.category || 'General expense',
-    account_code: fields.accountCode || '429',
-    tax_type: fields.taxType || 'NONE',
-    note: fields.note || '',
-    ocr_text: fields.ocrText || '',
-    file_name: fileName,
-    file_type: file.fileType,
-    file_size_bytes: file.buffer.length,
-    storage_bucket: RECEIPT_BUCKET,
-    storage_path: storagePath,
-    status: 'draft',
-    auto_synced: body.autoSync === true,
-    created_at: now,
-    updated_at: now,
+  const ticket = {
+    version: 1, id, ownerId, file,
+    path: `direct/${ownerId}/${id}/${file.fileName}`,
+    fieldsHash: receiptFieldsHash(fields),
+    autoSync: body.autoSync === true,
+    issuedAt: now, expiresAt: now + RECEIPT_UPLOAD_TTL_MS,
   };
+  // Signing fails before issuing a usable Storage capability if the server key is unavailable.
+  const uploadTicket = signReceiptUploadTicket(ticket, env);
+  await assertPrivateReceiptBucket(client);
+  const { data, error } = await client.storage.from(RECEIPT_BUCKET).createSignedUploadUrl(ticket.path, { upsert: false });
+  if (error) throw storageError(error, RECEIPT_BUCKET);
+  if (!data?.signedUrl) throw portalError('Receipt upload is unavailable.', 503, 'XERO_PORTAL_RECEIPT_UPLOAD_UNAVAILABLE');
+  return { upload: { uploadTicket, signedUrl: data.signedUrl, expiresAt: ticket.expiresAt, fields } };
+}
+
+export async function xeroPortalReceiptCreate(body = {}, {
+  accessContext = null, env = process.env, fetchImpl = fetch,
+  client = xeroContactSyncServiceClient(env), now = Date.now(),
+} = {}) {
+  const ownerId = receiptUploadOwner(accessContext);
+  if (body.file || body.path || body.storagePath || body.bucket || body.id || body.autoSync != null) {
+    throw portalError('Upload the receipt directly before saving. Refresh this page and retry.', 400, 'XERO_PORTAL_RECEIPT_DIRECT_UPLOAD_REQUIRED');
+  }
+  const ticket = verifyReceiptUploadTicket(body.uploadTicket, ownerId, env);
+  const fields = receiptUploadFields(body.fields);
+  if (receiptFieldsHash(fields) !== ticket.fieldsHash) {
+    throw portalError('Receipt details changed after the upload was prepared.', 409, 'XERO_PORTAL_RECEIPT_UPLOAD_CHANGED');
+  }
+  const row = receiptUploadRow(ticket, fields, accessContext, now);
+  const existing = await findReceiptUpload(client, ticket.id);
+  // A replay is read-only, including after expiry. It never starts another Xero write.
+  if (existing) return receiptUploadReplay(existing, row);
+  if (now < ticket.issuedAt || now >= ticket.expiresAt) {
+    throw portalError('Receipt upload expired. Refresh receipts before starting a new upload.', 410, 'XERO_PORTAL_RECEIPT_UPLOAD_EXPIRED');
+  }
+  await assertPrivateReceiptBucket(client);
+  await verifyReceiptUploadObject(client, ticket);
   const { data, error } = await client.from('xero_portal_receipts').insert(row).select('*').single();
+  if (error?.code === '23505') {
+    const winner = await findReceiptUpload(client, ticket.id);
+    if (winner) return receiptUploadReplay(winner, row);
+  }
   if (error) throw storageError(error, 'xero_portal_receipts');
-  if (body.autoSync === true) return xeroPortalReceiptSync({ id }, { accessContext, env, fetchImpl });
+  // Only the successful insert follows the original, signed financial intent.
+  if (ticket.autoSync) return xeroPortalReceiptSync({ id: ticket.id }, { accessContext, env, fetchImpl });
   return { receipt: serializeReceipt(data) };
 }
 
@@ -1883,18 +1898,142 @@ function normalizeReceiptFields(input) {
   };
 }
 
-function decodeReceiptFile(file) {
-  const value = objectValue(file);
-  const base64 = nonBlank(value.base64 || value.data || value.content).replace(/^data:[^;]+;base64,/i, '');
-  if (!base64) throw portalError('Receipt file is required.', 400, 'XERO_PORTAL_RECEIPT_FILE_REQUIRED');
-  const buffer = Buffer.from(base64, 'base64');
-  if (!buffer.length) throw portalError('Receipt file could not be decoded.', 400, 'XERO_PORTAL_RECEIPT_FILE_INVALID');
-  if (buffer.length > MAX_RECEIPT_BYTES) throw portalError('Receipt file is larger than 10 MB.', 413, 'XERO_PORTAL_RECEIPT_FILE_TOO_LARGE');
+function receiptUploadOwner(accessContext) {
+  const ownerId = nonBlank(accessContext?.profile?.id);
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(ownerId)) {
+    throw portalError('A verified user is required to upload receipts.', 403, 'XERO_PORTAL_RECEIPT_UPLOAD_OWNER_REQUIRED');
+  }
+  return ownerId;
+}
+
+function receiptUploadFileMetadata(input) {
+  const value = objectValue(input);
+  const fileName = sanitizeFileName(value.fileName).replace(/^[.]+$/, 'receipt').replace(/[\x00-\x1f\x7f]/g, '-');
+  const fileType = nonBlank(value.fileType).toLowerCase();
+  const size = value.size;
+  if (!Number.isSafeInteger(size) || size <= 0) {
+    throw portalError('Select a non-empty receipt file.', 400, 'XERO_PORTAL_RECEIPT_FILE_INVALID');
+  }
+  if (size > MAX_RECEIPT_BYTES) throw portalError('Receipt file is larger than 10 MiB.', 413, 'XERO_PORTAL_RECEIPT_FILE_TOO_LARGE');
+  if (!RECEIPT_FILE_TYPES.has(fileType)) {
+    throw portalError('Choose a JPEG, PNG, WebP, or PDF receipt.', 415, 'XERO_PORTAL_RECEIPT_FILE_TYPE_INVALID');
+  }
+  if (!/^[a-f0-9]{64}$/.test(value.sha256 || '')) {
+    throw portalError('Receipt file verification is required.', 400, 'XERO_PORTAL_RECEIPT_FILE_HASH_REQUIRED');
+  }
+  return { fileName, fileType, size, sha256: value.sha256 };
+}
+
+function receiptUploadFields(input) {
+  const fields = normalizeReceiptFields(objectValue(input));
+  if (Object.values(fields).some((value) => typeof value === 'string' && value.length > 40000)) {
+    throw portalError('Receipt text is too long.', 400, 'XERO_PORTAL_RECEIPT_FIELDS_INVALID');
+  }
+  return fields;
+}
+
+function receiptFieldsHash(fields) {
+  return createHash('sha256').update(JSON.stringify(fields)).digest('hex');
+}
+
+function signReceiptUploadTicket(ticket, env) {
+  const encoded = base64UrlEncode(JSON.stringify(ticket));
+  const signature = createHmac('sha256', oauthStateSecret(env)).update(`fcos:receipt-upload:v1:${encoded}`).digest('base64url');
+  return `${encoded}.${signature}`;
+}
+
+function verifyReceiptUploadTicket(value, ownerId, env) {
+  const invalid = () => portalError('Receipt upload authorization is invalid.', 403, 'XERO_PORTAL_RECEIPT_UPLOAD_INVALID');
+  if (typeof value !== 'string' || value.length > 4096) throw invalid();
+  const [encoded, signature, extra] = value.split('.');
+  const expected = createHmac('sha256', oauthStateSecret(env)).update(`fcos:receipt-upload:v1:${encoded}`).digest('base64url');
+  if (!encoded || !signature || extra != null || !timingSafeStringEqual(signature, expected)) throw invalid();
+  let ticket;
+  try { ticket = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')); } catch { throw invalid(); }
+  if (ticket.version !== 1 || ticket.ownerId !== ownerId
+    || !/^[0-9a-f-]{36}$/i.test(ticket.id || '')
+    || !Number.isSafeInteger(ticket.issuedAt) || ticket.expiresAt !== ticket.issuedAt + RECEIPT_UPLOAD_TTL_MS
+    || ticket.path !== `direct/${ownerId}/${ticket.id}/${sanitizeFileName(ticket.file?.fileName)}`) throw invalid();
+  receiptUploadFileMetadata(ticket.file);
+  return ticket;
+}
+
+async function assertPrivateReceiptBucket(client) {
+  const { data, error } = await client.storage.getBucket(RECEIPT_BUCKET);
+  if (error) throw storageError(error, RECEIPT_BUCKET);
+  if (data?.public !== false || Number(data.file_size_limit) !== MAX_RECEIPT_BYTES) {
+    throw portalError('Private receipt storage configuration must be verified.', 503, 'XERO_PORTAL_RECEIPT_STORAGE_INVALID');
+  }
+}
+
+async function verifyReceiptUploadObject(client, ticket) {
+  const storage = client.storage.from(RECEIPT_BUCKET);
+  const { data: info, error: infoError } = await storage.info(ticket.path);
+  if (infoError || !info) throw portalError('Receipt upload has not completed. Retry saving this file.', 409, 'XERO_PORTAL_RECEIPT_UPLOAD_INCOMPLETE');
+  if (Number(info.size) !== ticket.file.size || info.contentType !== ticket.file.fileType) {
+    throw portalError('Uploaded receipt size or type does not match.', 409, 'XERO_PORTAL_RECEIPT_UPLOAD_MISMATCH');
+  }
+  const { data, error } = await storage.download(ticket.path);
+  if (error) throw storageError(error, RECEIPT_BUCKET);
+  if (!data || data.size !== ticket.file.size || data.size > MAX_RECEIPT_BYTES) {
+    throw portalError('Uploaded receipt size does not match.', 409, 'XERO_PORTAL_RECEIPT_UPLOAD_MISMATCH');
+  }
+  const bytes = Buffer.from(await data.arrayBuffer());
+  if (bytes.length !== ticket.file.size || receiptFileContentType(bytes) !== ticket.file.fileType
+    || createHash('sha256').update(bytes).digest('hex') !== ticket.file.sha256) {
+    throw portalError('Uploaded receipt content does not match the selected file.', 409, 'XERO_PORTAL_RECEIPT_UPLOAD_MISMATCH');
+  }
+}
+
+function receiptFileContentType(bytes) {
+  if (bytes.subarray(0, 5).toString('ascii') === '%PDF-') return 'application/pdf';
+  if (bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return 'image/png';
+  if (bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255) return 'image/jpeg';
+  if (bytes.subarray(0, 4).toString('ascii') === 'RIFF' && bytes.subarray(8, 12).toString('ascii') === 'WEBP') return 'image/webp';
+  return null;
+}
+
+function receiptUploadRow(ticket, fields, accessContext, now) {
   return {
-    buffer,
-    fileName: nonBlank(value.fileName || value.name) || 'receipt',
-    fileType: nonBlank(value.fileType || value.type) || 'application/octet-stream',
+    id: ticket.id,
+    created_by: ticket.ownerId,
+    created_by_email: accessContext?.profile?.email || null,
+    merchant: fields.merchant || 'Unknown supplier',
+    receipt_date: fields.date,
+    total: fields.total,
+    currency: fields.currency,
+    category: fields.category,
+    account_code: fields.accountCode,
+    tax_type: fields.taxType,
+    note: fields.note,
+    ocr_text: fields.ocrText,
+    file_name: ticket.file.fileName,
+    file_type: ticket.file.fileType,
+    file_size_bytes: ticket.file.size,
+    storage_bucket: RECEIPT_BUCKET,
+    storage_path: ticket.path,
+    status: 'draft',
+    auto_synced: ticket.autoSync,
+    created_at: new Date(now).toISOString(),
+    updated_at: new Date(now).toISOString(),
   };
+}
+
+async function findReceiptUpload(client, id) {
+  const { data, error } = await client.from('xero_portal_receipts').select('*').eq('id', id).maybeSingle();
+  if (error) throw storageError(error, 'xero_portal_receipts');
+  return data;
+}
+
+function receiptUploadReplay(existing, expected) {
+  const immutableKeys = ['created_by', 'merchant', 'receipt_date', 'currency', 'category', 'account_code', 'tax_type',
+    'note', 'ocr_text', 'file_name', 'file_type', 'storage_bucket', 'storage_path', 'auto_synced'];
+  if (immutableKeys.some((key) => existing[key] !== expected[key])
+    || Number(existing.file_size_bytes) !== expected.file_size_bytes
+    || (existing.total == null ? null : Number(existing.total).toFixed(2)) !== (expected.total == null ? null : Number(expected.total).toFixed(2))) {
+    throw portalError('Receipt upload was already used for different details.', 409, 'XERO_PORTAL_RECEIPT_UPLOAD_REPLAY_MISMATCH');
+  }
+  return { receipt: serializeReceipt(existing), replayed: true };
 }
 
 function sanitizeFileName(fileName) {

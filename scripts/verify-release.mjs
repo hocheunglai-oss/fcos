@@ -54,6 +54,7 @@ export async function verifyRelease({
     const env = isBrowser ? browserEnv : {
       ...checkEnv,
       ...(label === 'Migration integrity' ? { FCOS_REQUIRE_LIVE_MIGRATION_CHECK: '1' } : {}),
+      ...(label === 'Production build' ? { FCOS_REQUIRE_CLEAN_BUILD: '1' } : {}),
       ...(label === 'Performance budgets' ? { FCOS_REQUIRE_SERVER_BUNDLES: '1' } : {}),
     };
     if (isBrowser) await prepare({ env, dependencies: { allowExisting: false } });

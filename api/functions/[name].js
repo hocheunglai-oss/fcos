@@ -226,7 +226,8 @@ import { createMarketTraderWorkspace } from '../_marketTraderWorkspace.js';
 import { createFinanceSettingsHandlers, loadFinanceSettings } from '../_dashboardFinanceSettings.js';
 import { createDashboardFinanceLoader, financeToday, summarizeDashboardFinance, validateFinanceSnapshot } from '../_dashboardFinance.js';
 import { secondaryMopsFailureMessage } from '../_marketSourceHealth.js';
-import { ciModuleAccess, isReadOnlyCiProfile, requireReadOnlyCiOperation } from '../_readOnlyCiAccess.js';
+import { ciModuleAccess, isReadOnlyCiProfile, isReadOnlyMarketAction, requireReadOnlyCiOperation } from '../_readOnlyCiAccess.js';
+import { requireDeploymentMutationAllowed } from '../_deploymentReadOnly.js';
 import { analyzeMarketReportLibrary, loadMarketReportCatalogue } from '../_marketReportAnalysis.js';
 import {
   applyMasterContractPrice as applyMasterContractPriceService,
@@ -1667,6 +1668,7 @@ async function requireHandlerAccess(name, req) {
   if (policy.authentication === 'cron') return null;
   const context = await requireActiveUser(req);
   requireReadOnlyCiOperation(context.profile, name, {}, { mutation: policy.mutation && name !== 'hedgeMarkets' });
+  requireDeploymentMutationAllowed(policy.mutation && name !== 'hedgeMarkets');
   const allowed = await userHasAnyModuleAccess(context.client, context.profile, policy.modules);
   if (!allowed) throw appError('You do not have access to this module.', 403);
   if (policy.capability) {
@@ -18940,7 +18942,7 @@ async function emailRouterMaintenanceCron(_body = {}, req = null) {
   const directorySync = await client.rpc('sync_emailrouter_fcos_destinations', { p_actor: null });
   const mailbox = await currentEmailRouterMailbox(client);
   const outbox = await processEmailRouterOutbox({ client, mailbox, limit: 25 });
-  const learning = await processEmailRouterLearningJobs({ client, mailbox, limit: 10 }).catch((error) => ({ status: 'warning', code: error.code || 'EMAIL_ROUTER_LEARNING_FAILED' }));
+  const learning = await processEmailRouterLearningJobs({ client, mailbox, limit: 10, deadlineAt: maintenanceStartedAt.getTime() + 180_000 }).catch((error) => ({ status: 'warning', code: error.code || 'EMAIL_ROUTER_LEARNING_FAILED' }));
   const synchronization = {};
   for (const folder of ['inbox', 'sentitems', 'archive']) {
     synchronization[folder] = await syncEmailRouterFolderFromStoredCursor({ client, mailbox, folder, maxPages: 10 });
@@ -19424,6 +19426,7 @@ export default async function handler(req, res) {
         metricContext = accessContext;
         const body = await readBody(req);
         requireReadOnlyCiOperation(accessContext?.profile, name, body);
+        requireDeploymentMutationAllowed(handlerPolicy?.mutation && (name !== 'hedgeMarkets' || !isReadOnlyMarketAction(body)));
         const contract = validateFunctionRequest(name, body);
         if (!contract.ok) {
           throw appError(`Invalid ${name} request: ${contract.issues.join('; ')}.`, 400, 'FUNCTION_CONTRACT_INVALID', {

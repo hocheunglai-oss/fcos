@@ -1,4 +1,5 @@
 import { loadEffectiveGroupAccess } from './_accessGroups.js';
+import { requireDeploymentMutationAllowed } from './_deploymentReadOnly.js';
 import { createClient } from '@supabase/supabase-js';
 import { serverSupabaseConfig } from './_supabaseConfig.js';
 import { enforceFcunoFederatedAccess } from './_fcunoIdentityFederation.js';
@@ -158,6 +159,7 @@ export function authenticatedFunction({ handlerName, moduleId = null, mutation =
         res.setHeader('X-FCOS-External-Action', '0');
         const context = await requireActiveUser(req);
         requireReadOnlyCiOperation(context.profile, resolvedHandlerName, {}, { mutation: requestMutation });
+        requireDeploymentMutationAllowed(requestMutation);
         await requireModuleAccess(context, moduleId);
         const body = await readBody(req);
         requireReadOnlyCiOperation(context.profile, resolvedHandlerName, body, { mutation: requestMutation });

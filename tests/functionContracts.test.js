@@ -20,6 +20,8 @@ test('critical function contracts fail closed before invalid requests reach the 
     'workNotificationsRead',
     'workNotificationsState',
     'workspaceSearch',
+    'xeroPortalReceiptCreate',
+    'xeroPortalReceiptUploadPrepare',
   ]);
   assert.equal(validateFunctionRequest('systemErrorVerify', {}).ok, false);
   assert.equal(validateFunctionRequest('workNotificationsState', { notificationIds: ['n1'], state: 'handled' }).ok, true);

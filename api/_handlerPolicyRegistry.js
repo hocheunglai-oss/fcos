@@ -101,6 +101,7 @@ const HANDLER_BEHAVIOR = Object.freeze({
   xeroPortalDisconnect: mutationPolicy({"cache":"none","externalAction":false,"capability":"xero_portal_manage"}),
   xeroPortalReceiptsList: readPolicy({"cache":"none","externalAction":false,"capability":null}),
   xeroPortalReceiptCreate: mutationPolicy({"cache":"none","externalAction":true,"capability":"xero_portal_manage"}),
+  xeroPortalReceiptUploadPrepare: mutationPolicy({"cache":"none","externalAction":true,"capability":"xero_portal_manage"}),
   xeroPortalReceiptSync: mutationPolicy({"cache":"none","externalAction":true,"capability":"xero_portal_manage"}),
   xeroPortalReceiptFileUrl: readPolicy({"cache":"none","externalAction":false,"capability":null}),
   xeroPortalContactLifecycleStatus: readPolicy({"cache":"none","externalAction":false,"capability":null}),

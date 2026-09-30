@@ -1,3 +1,5 @@
+import { isDeploymentReadOnly } from './_deploymentReadOnly.js';
+
 const GATE_DEFINITIONS = Object.freeze({
   salesforce_write: {
     envName: 'FCOS_DISABLE_SALESFORCE_WRITE',
@@ -67,6 +69,7 @@ function enabledValue(value) {
 }
 
 function definitionEnabled(definition, env) {
+  if (isDeploymentReadOnly(env)) return false;
   return definition.defaultEnabled
     ? !enabledValue(env[definition.envName])
     : enabledValue(env[definition.envName]);
@@ -79,7 +82,7 @@ export function externalActionGates(env = process.env) {
     description: definition.description,
     enabled: definitionEnabled(definition, env),
     expectedState: definition.expectedState || (definition.defaultEnabled ? 'live' : 'uat_gated'),
-    control: definition.defaultEnabled ? 'emergency_kill_switch' : 'explicit_enablement',
+    control: isDeploymentReadOnly(env) ? 'deployment_read_only' : definition.defaultEnabled ? 'emergency_kill_switch' : 'explicit_enablement',
   }]));
 }
 
