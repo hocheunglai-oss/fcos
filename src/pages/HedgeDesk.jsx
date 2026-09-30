@@ -29,13 +29,15 @@ export default function HedgeDesk() {
   const { hasCapability } = useAuth();
   const data = useDeskData();
   const settings = useAppSettings();
-  const canAdmin = hasCapability('hedge_admin');
+  const canAdmin = data.deploymentReadOnly !== true && hasCapability('hedge_admin');
   const requestedTab = searchParams.get('tab');
   const [tab, setTab] = useState(() => requestedTab === 'administration' && canAdmin ? 'administration' : TABS.some((item) => item.id === requestedTab) ? requestedTab : 'overview');
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [quickCreateSignals] = useState({ physical: 0, hedges: 0 });
   const capabilities = data.capabilities || {};
   const readOnly = !Object.values(capabilities).some(Boolean);
+  const hasSnapshot = data.lastUpdated != null;
+  const showBook = hasSnapshot && !settings.loading && !settings.error;
   const visibleTabs = canAdmin ? [...TABS, { id: 'administration', label: 'Administration', icon: Settings2 }] : TABS;
 
   useEffect(() => {
@@ -64,7 +66,7 @@ export default function HedgeDesk() {
     return <OverviewView data={data} settings={settings} readOnly={readOnly} onNavigate={(path) => { if (path === '/markets') navigate('/markets'); else if (path === '/audit') navigate('/settings?section=audit'); else changeTab(path === '/hedges' ? 'hedges' : path === '/settlement' ? 'settlement' : 'overview'); }} />;
   }, [canAdmin, capabilities, data, navigate, quickCreateSignals, readOnly, settings, tab]);
 
-  if ((data.loading || settings.loading) && !data.physicals.length && !data.swaps.length) {
+  if ((data.loading || settings.loading) && !hasSnapshot) {
     return <div className="hedge-desk-root workspace-trading"><EmptyState title="Loading Hedge Desk" description="Preparing the native trading book and shared configuration." icon={RefreshCw} /></div>;
   }
 
@@ -77,8 +79,8 @@ export default function HedgeDesk() {
             <StatusBadge tone={readOnly ? 'neutral' : 'positive'}>{readOnly ? 'View only' : 'Live book'}</StatusBadge>
           </div>
           <div className="hedge-desk-commandbar__actions">
-            <Button icon={RefreshCw} onClick={() => data.reload({ silent: true })} disabled={data.refreshing}>{data.refreshing ? 'Refreshing...' : 'Refresh'}</Button>
-            <Button icon={Bot} variant="primary" onClick={() => setAssistantOpen(true)}>Trading Assistant</Button>
+            <Button icon={RefreshCw} onClick={() => data.reload({ silent: true }).catch(() => {})} disabled={data.refreshing}>{data.refreshing ? 'Refreshing...' : 'Refresh'}</Button>
+            <Button icon={Bot} variant="primary" onClick={() => setAssistantOpen(true)} disabled={!showBook}>Trading Assistant</Button>
           </div>
         </div>
         <nav className="hedge-desk-tabs app-navigation-caption-material" aria-label="Hedge Desk views">
@@ -89,9 +91,10 @@ export default function HedgeDesk() {
             </button>
           ))}
         </nav>
-        {(data.error || settings.error) && <InlineError error={data.error || settings.error} action={<Button onClick={() => { data.reload(); settings.reload(); }}>Retry</Button>} />}
-        <main className="hedge-desk-content">{content}</main>
-        <AssistantPanel open={assistantOpen} onClose={() => setAssistantOpen(false)} data={data} settings={settings} />
+        {(data.error || settings.error) && <InlineError error={data.error || settings.error} action={<Button onClick={() => { data.reload().catch(() => {}); settings.reload(); }}>Retry</Button>} />}
+        {showBook && data.error && <p role="status">Showing the last successfully loaded book from {data.lastUpdated.toLocaleString('en-GB', { timeZone: 'Asia/Hong_Kong' })}. Refresh did not complete.</p>}
+        <main className="hedge-desk-content">{showBook ? content : <EmptyState title={settings.loading ? 'Loading Hedge Desk settings' : 'Hedge Desk unavailable'} description="Positions and activity are available after the trading book and shared settings load successfully." icon={RefreshCw} />}</main>
+        {showBook && <AssistantPanel open={assistantOpen} onClose={() => setAssistantOpen(false)} data={data} settings={settings} />}
       </div>
     </ActionsProvider>
   );

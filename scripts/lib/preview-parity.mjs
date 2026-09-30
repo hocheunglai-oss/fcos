@@ -37,12 +37,12 @@ export function evaluatePreviewParity(observations, { expectedCommit, sourceHash
   if (!object(rules) || rules.schemaVersion !== 1 || !Number.isInteger(rules.policyVersion) || rules.policyVersion < 1
     || !Number.isInteger(rules.maxAgeSeconds) || rules.maxAgeSeconds < 1 || rules.maxAgeSeconds > 1800
     || !object(rules.applicationKeys) || !object(rules.intentionalDifferences)
-    || ['requiredSourceHashes', 'platformPrefixes', 'platformKeys', 'compiledFlags', 'runtimeFlags', 'externalActions', 'requiredAuth', 'requiredModules', 'workflowModules', 'normalRoles'].some(key => !Array.isArray(rules[key]))
+    || ['requiredSourceHashes', 'candidateSourceAttestationKeys', 'buildOnlyKeys', 'platformPrefixes', 'platformKeys', 'compiledFlags', 'runtimeFlags', 'externalActions', 'requiredAuth', 'requiredModules', 'workflowModules', 'normalRoles'].some(key => !Array.isArray(rules[key]))
     || ['match', 'switchMatch', 'opaqueMatch'].some(key => !Array.isArray(rules.applicationKeys[key])) || !object(rules.applicationKeys.credentials)) {
     fail('POLICY_SCHEMA', 'policy'); return finish();
   }
   if (rules.platformPrefixes.some(prefix => !policy.platformPrefixes.includes(prefix)) || rules.platformKeys.some(key => !policy.platformKeys.includes(key))
-    || rules.normalRoles.some(role => !policy.normalRoles.includes(role))) fail('POLICY_SCOPE_WEAKENED', 'policy');
+    || rules.normalRoles.some(role => !policy.normalRoles.includes(role)) || rules.buildOnlyKeys.some(key => !policy.buildOnlyKeys.includes(key))) fail('POLICY_SCOPE_WEAKENED', 'policy');
   if (!sha(expectedCommit) || observations.source?.candidateHead !== expectedCommit) fail('CANDIDATE_HEAD', 'source');
   for (const key of new Set(['application', 'policy', 'connections', 'ciIdentity', ...rules.requiredSourceHashes])) {
     if (!hash(sourceHashes?.[key]) || observations.source?.hashes?.[key] !== sourceHashes[key]) fail('SOURCE_HASH', 'source');
@@ -76,12 +76,16 @@ export function evaluatePreviewParity(observations, { expectedCommit, sourceHash
   const classes = new Map();
   for (const category of ['match', 'switchMatch', 'opaqueMatch']) for (const key of rules.applicationKeys[category]) classes.set(key, category);
   for (const key of Object.keys(rules.applicationKeys.credentials)) classes.set(key, 'credential');
+  for (const key of new Set([...policy.buildOnlyKeys, ...rules.buildOnlyKeys])) classes.set(key, 'buildOnly');
+  const attestations = new Set([...policy.candidateSourceAttestationKeys, ...rules.candidateSourceAttestationKeys]);
+  for (const key of attestations) classes.set(key, 'candidateSourceAttestation');
   for (const [key, exception] of Object.entries(rules.intentionalDifferences)) {
     if (!keyName(key) || !object(exception) || typeof exception.reason !== 'string' || !exception.reason.trim()
       || exception.candidate === undefined) fail('POLICY_EXCEPTION_INVALID', 'policy', key);
     classes.set(key, 'intentional');
   }
   for (const key of policy.applicationKeys.switchMatch) if (classes.get(key) !== 'switchMatch') fail('SWITCH_POLICY_WEAKENED', 'policy', key);
+  for (const key of attestations) if (classes.get(key) !== 'candidateSourceAttestation') fail('SOURCE_ATTESTATION_POLICY_WEAKENED', 'policy', key);
   const inventory = observations.switchInventory;
   if (!Array.isArray(inventory?.keys) || !Array.isArray(inventory?.sourceFiles) || !inventory.sourceFiles.length
     || inventory.sourceHash !== sourceHashes?.application) fail('SWITCH_INVENTORY_MISSING', 'source');
@@ -93,7 +97,7 @@ export function evaluatePreviewParity(observations, { expectedCommit, sourceHash
   const compiledFlags = [...new Set([...policy.compiledFlags, ...rules.compiledFlags])];
   const runtimeFlags = [...new Set([...policy.runtimeFlags, ...rules.runtimeFlags])];
   const required = new Set([...rules.applicationKeys.switchMatch, ...compiledFlags, ...runtimeFlags,
-    'VARIABLE_CHARGE_PAIRED_WORKFLOW_ENABLED', 'FCOS_ENABLE_READ_ONLY_CI', 'VERCEL_ENV']);
+    'VARIABLE_CHARGE_PAIRED_WORKFLOW_ENABLED', 'FCOS_ENABLE_READ_ONLY_CI', 'VERCEL_ENV', ...attestations]);
   const envKeys = name => observations[name]?.env?.keys || {};
   const union = new Set([...Object.keys(envKeys('production')), ...Object.keys(envKeys('candidate')), ...required]);
   const record = (name, key) => Object.hasOwn(envKeys(name), key) ? envKeys(name)[key] : absent;
@@ -119,6 +123,13 @@ export function evaluatePreviewParity(observations, { expectedCommit, sourceHash
       continue;
     }
     if (![a, b].every(value => value.state === 'absent' || known(value))) { fail('ENV_VALUE_UNKNOWN', 'environment', key); continue; }
+    if (category === 'candidateSourceAttestation') {
+      if (b.state === 'absent') fail('CANDIDATE_SOURCE_ATTESTATION_MISSING', 'candidate', key);
+      else if (!hash(b.value) || b.value !== sourceHashes?.application) fail('CANDIDATE_SOURCE_ATTESTATION_MISMATCH', 'candidate', key);
+      if (a.state !== 'absent' && !hash(a.value)) fail('PRODUCTION_SOURCE_ATTESTATION_INVALID', 'production', key);
+      continue;
+    }
+    if (category === 'buildOnly') continue;
     if (required.has(key) && (a.state === 'absent' || b.state === 'absent') && category !== 'intentional') fail('REQUIRED_ENV_MISSING', 'environment', key);
     if (category === 'intentional') {
       const exception = rules.intentionalDifferences[key];

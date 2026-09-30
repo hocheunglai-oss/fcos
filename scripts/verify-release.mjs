@@ -33,7 +33,7 @@ export async function verifyRelease({
   const candidate = await verify(browser);
   // This independently collects live configuration. A local pass/review JSON
   // cannot waive missing runtime or normal-role evidence.
-  await parity({ candidateUrl: candidate.candidateUrl, expectedCommit: candidate.commit });
+  await parity({ candidateUrl: candidate.candidateUrl, expectedCommit: candidate.commit, protectionBypass: browser.protectionBypass });
   const browserEnv = {
     ...environment,
     FCOS_REQUIRE_AUTH_E2E: '1',

@@ -94,7 +94,7 @@ test('release gates scope credentials, enforce strict checks, and always clean p
     environment: validEnvironment,
     checkedOutCommit: () => releaseSha,
     verify: async () => proof,
-    parity: async options => { lifecycle.push('parity'); assert.deepEqual(options, { candidateUrl, expectedCommit: releaseSha }); },
+    parity: async options => { lifecycle.push('parity'); assert.deepEqual(options, { candidateUrl, expectedCommit: releaseSha, protectionBypass: validEnvironment.FCOS_E2E_VERCEL_BYPASS }); },
     prepare: async options => { lifecycle.push('prepare'); assert.equal(options.dependencies.allowExisting, false); },
     cleanup: async () => { lifecycle.push('cleanup'); },
     run: (command, args, options) => {

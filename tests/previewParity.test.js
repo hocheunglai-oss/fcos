@@ -33,6 +33,7 @@ function fixture() {
     Object.assign(keys, { SUPABASE_SERVICE_ROLE_KEY: opaque(), SALESFORCE_JWT_PRIVATE_KEY: opaque(), XERO_CLIENT_SECRET: opaque(),
       XERO_REFRESH_TOKEN: opaque(), SALESFORCE_JWT_USERNAME: known('pinned-user'), SALESFORCE_JWT_CLIENT_ID: known('pinned-client'),
       XERO_CLIENT_ID: known('pinned-client'), XERO_TENANT_ID: known('pinned-tenant'), VERCEL_GIT_COMMIT_SHA: known(deployment.sha) });
+    if (candidate) keys.FCOS_EXPECTED_SOURCE_SHA256 = known(sourceHashes.application);
     const flags = list => Object.fromEntries(list.map(key => [key, known(keys[key].value === 'true')]));
     result[name] = { deployment, env: { ...binding, updatedAt: time(15), keys },
       compiled: { ...binding, flags: flags(policy.compiledFlags) },
@@ -175,4 +176,29 @@ test('null or false env records and env snapshots for another deployment cannot 
   }
   blocked(e => { delete e.candidate.env.deploymentId; }, 'EVIDENCE_BINDING');
   blocked(e => { e.production.env.sha = expectedCommit; }, 'EVIDENCE_BINDING');
+});
+
+test('candidate source attestation is required and exact while Production can attest its own source digest', () => {
+  blocked(e => { delete e.candidate.env.keys.FCOS_EXPECTED_SOURCE_SHA256; }, 'CANDIDATE_SOURCE_ATTESTATION_MISSING');
+  blocked(e => { e.candidate.env.keys.FCOS_EXPECTED_SOURCE_SHA256 = known('f'.repeat(64)); }, 'CANDIDATE_SOURCE_ATTESTATION_MISMATCH');
+  blocked(e => { e.candidate.env.keys.FCOS_EXPECTED_SOURCE_SHA256 = opaque(); }, 'ENV_VALUE_UNKNOWN');
+  for (const value of ['', 'F'.repeat(64), 'f'.repeat(40), 'not-a-digest']) {
+    blocked(e => { e.production.env.keys.FCOS_EXPECTED_SOURCE_SHA256 = known(value); }, 'PRODUCTION_SOURCE_ATTESTATION_INVALID');
+  }
+  const evidence = fixture(); evidence.production.env.keys.FCOS_EXPECTED_SOURCE_SHA256 = known('b'.repeat(64));
+  assert.equal(assertPreviewParity(evidence, options).pass, true);
+  const weakened = structuredClone(policy); weakened.candidateSourceAttestationKeys = [];
+  blocked(e => { delete e.candidate.env.keys.FCOS_EXPECTED_SOURCE_SHA256; }, 'CANDIDATE_SOURCE_ATTESTATION_MISSING', { ...options, policy: weakened });
+  weakened.intentionalDifferences.FCOS_EXPECTED_SOURCE_SHA256 = { candidate: 'false', reason: 'Claimed review cannot waive source binding.' };
+  blocked(e => { e.candidate.env.keys.FCOS_EXPECTED_SOURCE_SHA256 = known('false'); }, 'SOURCE_ATTESTATION_POLICY_WEAKENED', { ...options, policy: weakened });
+});
+
+test('exact build-only cache keys can differ without weakening VERCEL_ENV or other application settings', () => {
+  const evidence = fixture(); evidence.production.env.keys.TURBO_FORCE = known('false');
+  evidence.candidate.env.keys.TURBO_FORCE = known('true'); evidence.candidate.env.keys.NX_SKIP_NX_CACHE = known('true');
+  const result = assertPreviewParity(evidence, options);
+  assert.deepEqual(result.classifiedKeys.filter(({ category }) => category === 'buildOnly').map(({ key }) => key), ['NX_SKIP_NX_CACHE', 'TURBO_FORCE']);
+  assert.ok(result.classifiedKeys.some(({ key, category }) => key === 'VERCEL_ENV' && category === 'intentional'));
+  const unsafe = structuredClone(policy); unsafe.buildOnlyKeys.push('APP_URL');
+  blocked(() => {}, 'POLICY_SCOPE_WEAKENED', { ...options, policy: unsafe });
 });

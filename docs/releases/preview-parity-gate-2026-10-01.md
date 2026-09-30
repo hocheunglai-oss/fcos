@@ -11,3 +11,7 @@ The collector currently cannot attest executed server flags, provider authentica
 Normal-user inspection of the existing v2.0.289 Preview confirmed the paired supplier/buyer layout and loaded Xero reconciliation UI with financial sync locked. This evidence belongs to commit 05e87742137476bf5a92f9e8c0c68ebc53decef8 and must not be claimed for a later gate commit. Historical cases explicitly closed before paired approvals retain their closure; pending review counts must not silently reopen financial cases.
 
 Production promotion, credentials, live records and financial actions remain outside this development change. PR #72 retains its parity review hold until unresolved evidence is completed.
+
+Normal-user inspection also found that Hedge Desk snapshots were rejected by the Preview mutation guard because Production snapshots reconcile expiry. Preview snapshots now skip expiry using trusted deployment configuration, mask mutation capabilities, and retain authentication, module access and CI restrictions. Production expiry remains unchanged. Failed initial book or settings loads no longer display fabricated empty positions or zero balances; failed refreshes label the last valid book as stale.
+
+Email Router remains unavailable when its Preview provider configuration cannot be verified. The UI now reports mailbox unavailability and an unrecorded sync timestamp accurately. This change grants no sending, synchronization or credential authority.

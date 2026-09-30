@@ -15,6 +15,17 @@ const digest = value => createHash('sha256').update(value).digest('hex');
 const immutable = value => { try { return canonicalFcosE2eCandidateUrl(value) === value; } catch { return false; } };
 const unknown = () => ({ state: 'unknown' });
 
+export function discoverParitySwitches(source) {
+  const keys = new Set([...source.matchAll(/\b(?:FCOS_(?:ENABLE_|DISABLE_|ALLOW_NONPRODUCTION_)[A-Z0-9_]+|VITE_FCOS_ENABLE_[A-Z0-9_]+|VARIABLE_CHARGE_PAIRED_WORKFLOW_ENABLED)\b/g)].map(match => match[0]));
+  // Include generic future switches referenced directly through an environment
+  // object, rather than depending only on the current FCOS naming convention.
+  for (const match of source.matchAll(/(?:process\.env|import\.meta\.env|\benv|\benvironment)\??(?:\.([A-Z][A-Z0-9_]+)|\[['"]([A-Z][A-Z0-9_]+)['"]\])/g)) {
+    const key = match[1] || match[2];
+    if (/(?:ENABL|DISABL|READ_ONLY|FEATURE|WORKFLOW)/.test(key)) keys.add(key);
+  }
+  return [...keys].sort();
+}
+
 export function collectParitySource(cwd = ROOT) {
   const provenance = collectBuildProvenance({ cwd, env: {}, requireClean: true });
   const files = [], switches = new Set();
@@ -25,7 +36,7 @@ export function collectParitySource(cwd = ROOT) {
       else if (/\.(?:js|jsx|mjs|ts|tsx)$/.test(path)) {
         files.push(path);
         const source = readFileSync(join(cwd, path), 'utf8');
-        for (const match of source.matchAll(/\b(?:FCOS_(?:ENABLE_|DISABLE_|ALLOW_NONPRODUCTION_)[A-Z0-9_]+|VITE_FCOS_ENABLE_[A-Z0-9_]+|VARIABLE_CHARGE_PAIRED_WORKFLOW_ENABLED)\b/g)) switches.add(match[0]);
+        for (const key of discoverParitySwitches(source)) switches.add(key);
       }
     }
   }
@@ -50,18 +61,20 @@ export function parseParityEnvironment(source, deployedKeys) {
     else if (value.startsWith("'") && value.endsWith("'")) value = value.slice(1, -1);
     parsed[match[1]] = value;
   }
+  const deployed = new Set(deployedKeys);
   const credentials = new Set([...Object.keys(PREVIEW_PARITY_POLICY.applicationKeys.credentials), ...PREVIEW_PARITY_POLICY.applicationKeys.opaqueMatch]);
   return Object.fromEntries([...new Set([...Object.keys(parsed), ...deployedKeys])].map(key => {
     // Empty sensitive pulls are opaque. Presence never proves equality, or auth.
     const value = parsed[key];
-    const record = value === undefined ? { state: 'unknown', present: true }
+    const record = !deployed.has(key) ? { state: 'unknown', present: false }
+      : value === undefined ? { state: 'unknown', present: true }
       : credentials.has(key) || value === '' ? { state: 'unknown', present: true }
         : { state: 'known', value };
     return [key, record];
   }));
 }
 
-export async function collectPreviewParity({ candidateUrl, expectedCommit, cwd = ROOT } = {}) {
+export async function collectPreviewParity({ candidateUrl, expectedCommit, protectionBypass = process.env.FCOS_E2E_VERCEL_BYPASS, cwd = ROOT } = {}) {
   if (!immutable(candidateUrl) || !/^[0-9a-f]{40}$/.test(expectedCommit || '')) throw new Error('Parity requires an immutable FCOS Preview URL and exact commit.');
   const source = collectParitySource(cwd);
   if (source.candidateHead !== expectedCommit) throw new Error('Parity checkout does not match the candidate commit.');
@@ -72,7 +85,7 @@ export async function collectPreviewParity({ candidateUrl, expectedCommit, cwd =
   const env = { ...runtime.env, VERCEL_ORG_ID: teamId, VERCEL_PROJECT_ID: projectId };
   function cli(args) {
     try {
-      return execFileSync(runtime.command, args[0] === 'curl' ? args : [...args, ...runtime.injectedArgs],
+      return execFileSync(runtime.command, [...args, ...runtime.injectedArgs],
         { cwd, env, encoding: 'utf8', timeout: 45000, maxBuffer: 8 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
     } catch { throw new Error('Target-locked parity provider read failed; credential-bearing diagnostics suppressed.'); }
   }
@@ -84,6 +97,16 @@ export async function collectPreviewParity({ candidateUrl, expectedCommit, cwd =
   const productionId = project.targets?.production?.id;
   if (!productionId) throw new Error('Parity cannot resolve the current Production deployment independently.');
   const snapshots = {};
+  // Native `vercel curl` can create a protection-bypass credential implicitly.
+  // Fetch public assets through read-only HTTP instead, reusing only an existing
+  // explicitly supplied bypass for the independently verified exact Preview.
+  async function artifact(url, path, candidate) {
+    try {
+      const response = await fetch(`${url}${path}`, { redirect: 'error', signal: AbortSignal.timeout(20000),
+        headers: candidate && protectionBypass ? { 'x-vercel-protection-bypass': protectionBypass } : {} });
+      return response.ok ? await response.text() : '';
+    } catch { return ''; }
+  }
   const directory = mkdtempSync(join(tmpdir(), 'fcos-parity-private-'));
   try {
     for (const [name, ref] of [['production', productionId], ['candidate', new URL(candidateUrl).hostname]]) {
@@ -105,14 +128,16 @@ export async function collectPreviewParity({ candidateUrl, expectedCommit, cwd =
         const branchMeta = JSON.parse(cli(['env', 'ls', target, branch, '--format=json']));
         entries.push(...(branchMeta.envs || branchMeta.environmentVariables || []));
       }
-      const deployedKeys = Array.isArray(deployment.env) ? deployment.env.map(key => typeof key === 'string' ? key.split('=')[0] : key.key).filter(Boolean) : Object.keys(deployment.env || {});
+      if (!Array.isArray(deployment.env) || !deployment.env.length
+        || deployment.env.some(key => typeof key !== 'string' || !/^[A-Z][A-Z0-9_]*(?:=|$)/.test(key))) throw new Error('Parity immutable deployment environment inventory unavailable.');
+      const deployedKeys = deployment.env.map(key => key.split('=')[0]);
       const capturedAt = new Date().toISOString();
       const bound = { capturedAt, deploymentId: deployment.id, sha: deployment.meta?.githubCommitSha };
       const compiled = { ...bound, flags: Object.fromEntries(PREVIEW_PARITY_POLICY.compiledFlags.map(key => [key, unknown()])) };
-      const html = cli(['curl', '/', '--deployment', deployment.url, '--', '--silent', '--show-error', '--fail']);
+      const html = await artifact(url, '/', name === 'candidate');
       const asset = html.match(/src="(\/assets\/index-[^" ]+\.js)"/);
       if (asset) {
-        const bundle = cli(['curl', asset[1], '--deployment', deployment.url, '--', '--silent', '--show-error', '--fail']);
+        const bundle = await artifact(url, asset[1], name === 'candidate');
         for (const [key, label] of [['VITE_FCOS_ENABLE_FCUNO_OIDC', 'fcunoOidcEnabled'], ['VITE_FCOS_ENABLE_FCUNO_LEGACY_PASSWORD_LOGIN', 'legacyPasswordLoginEnabled']]) {
           const value = bundle.match(new RegExp(`${label}:(![01]|true|false)(?=[,}])`))?.[1];
           if (value) compiled.flags[key] = { state: 'known', value: ['!0', 'true'].includes(value) };

@@ -1,6 +1,8 @@
 import { isAllowedAiSelection } from './_aiModelRouting.js';
 import { createHash } from 'node:crypto';
 import { isReadOnlyCiProfile, requireReadOnlyCiOperation } from './_readOnlyCiAccess.js';
+import { isDeploymentReadOnly, requireDeploymentMutationAllowed } from './_deploymentReadOnly.js';
+import { isReadOnlyHedgeDeskAction } from './_hedgeDeskReadOnly.js';
 import { richTextPlainLength, sanitizeRichText } from './_richText.js';
 import {
   calcSwapFees,
@@ -671,7 +673,10 @@ async function loadMopsMonthVerifications(client, mops) {
 }
 
 export async function loadHedgeDeskSnapshot({ client, capabilities }) {
-  const expiryAutomation = await reconcilePaperHedgeExpiry(client);
+  const deploymentReadOnly = isDeploymentReadOnly();
+  const expiryAutomation = deploymentReadOnly
+    ? { status: 'not_run', reason: 'deployment_read_only' }
+    : await reconcilePaperHedgeExpiry(client);
   const entries = await Promise.all(SNAPSHOT_ENTITIES.map(async ([key, entity, limit]) => [
     key,
     await listRows(client, entity, configFor(entity), { limit }),
@@ -688,10 +693,15 @@ export async function loadHedgeDeskSnapshot({ client, capabilities }) {
     loadGovernedMarketValuation(client, { products: marketProducts.length ? marketProducts : undefined, contractMonths: marketContractMonths }),
   ]);
   const auditLogs = await recentEvents(client);
-  return { ...entityData, mopsMonthVerifications, brokerSettlements, marketValuation, auditLogs, capabilities, expiryAutomation };
+  const effectiveCapabilities = deploymentReadOnly
+    ? Object.fromEntries(Object.keys(capabilities || {}).map((key) => [key, false]))
+    : capabilities;
+  return { ...entityData, mopsMonthVerifications, brokerSettlements, marketValuation, auditLogs, capabilities: effectiveCapabilities, deploymentReadOnly, expiryAutomation };
 }
 
 export async function handleHedgeDeskEntity(body, profile, { client, capabilities }) {
+  requireReadOnlyCiOperation(profile, 'hedgeDeskEntity', body);
+  requireDeploymentMutationAllowed(!isReadOnlyHedgeDeskAction(body));
   const action = String(body?.action || 'list');
   if (action === 'snapshot') return loadHedgeDeskSnapshot({ client, capabilities });
   if (action === 'brokerSettlementUpdate') return saveBrokerSettlement(client, profile, capabilities, body);

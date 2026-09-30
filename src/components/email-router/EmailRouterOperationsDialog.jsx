@@ -10,7 +10,8 @@ function readSyncState() {
   try { return JSON.parse(window.localStorage.getItem(EMAIL_ROUTER_SYNC_STATE_KEY) || '{}'); } catch { return {}; }
 }
 function ageLabel(value, now = Date.now()) {
-  const elapsed = now - new Date(value || 0).getTime();
+  if (!value || !['string', 'number'].includes(typeof value)) return 'Not yet recorded';
+  const elapsed = now - new Date(value).getTime();
   if (!Number.isFinite(elapsed) || elapsed < 0) return 'Not yet recorded';
   const seconds = Math.round(elapsed / 1000);
   if (seconds < 60) return `${seconds}s ago`;
