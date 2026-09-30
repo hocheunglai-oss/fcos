@@ -2,6 +2,8 @@
 
 The `document_field_correction_v1` policy applies to normal sales invoices and supplier bills whose linked buyer invoice Delivery Date is on or after 1 January 2026. Both directions use that buyer date as the Xero accounting date. Earlier deliveries are preserved.
 
+New sales invoices use `sales_invoice_summary_v1`: one summary line, quantity 1, the complete invoice total and `INVOICE d/M/yyyy` using Buyer Invoice Date. All verified product and charge amounts remain in source evidence and are included in the total. The line retains their common approved account and NONE tax (41100 / NONE for the approved petroleum mappings). Mixed accounts, tax or unsupported attributes require Finance review rather than silently reclassifying amounts. Supplier bills, existing Xero lines, source identities and accepted evidence fingerprints remain unchanged. Revised draft proposals require a new exact review before creation.
+
 | Field | Sales invoice | Supplier bill |
 | --- | --- | --- |
 | Date | Buyer invoice Delivery Date | Buyer invoice Delivery Date |

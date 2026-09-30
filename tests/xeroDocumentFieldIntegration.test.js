@@ -78,14 +78,24 @@ test('future sales and bill creation applies every prescribed field while preser
   assert.equal(sale.proposedPayload.InvoiceNumber, f.buyer.Name); assert.equal(sale.proposedPayload.Reference, 'VESSEL ONE');
   assert.equal(bill.proposedPayload.InvoiceNumber, '25070T- VESSEL ONE'); assert.equal(bill.documentNumber, 'ORIGINAL-SUPPLIER-001');
   assert.equal(bill.proposedPayload.Reference, bill.reference);
-  assert.deepEqual(sale.proposedPayload.LineItems.map((line) => line.Description), ['INVOICE 28/1/2026', 'INVOICE 28/1/2026']);
+  assert.deepEqual(sale.proposedPayload.LineItems, [{ Description: 'INVOICE 28/1/2026', Quantity: 1,
+    UnitAmount: 120, AccountCode: '200', TaxType: 'NONE' }]);
   assert.deepEqual(bill.proposedPayload.LineItems.map((line) => line.Description), ['28/1/2026', '28/1/2026']);
-  for (const row of result.rows) {
+  for (const row of [bill]) {
     const { documentFieldProjection: _projection, ...legacySource } = row;
     const legacy = buildXeroAccountingPayload(legacySource);
     assert.deepEqual(row.proposedPayload.LineItems.map(({ Description: _description, ...financial }) => financial),
       legacy.LineItems.map(({ Description: _description, ...financial }) => financial));
   }
+});
+
+test('incompatible sales accounts hold only that invoice without changing its source or the supplier proposal', () => {
+  const f = fixture();
+  f.stored.productMappings.find((row) => row.direction === 'buyer' && row.salesforce_product_id === f.extra.Product2Id__c).xero_account_code = '201';
+  const result = f.build(); const [sale, bill] = result.rows;
+  assert.equal(sale.status, 'blocked'); assert.equal(sale.proposedPayload, null);
+  assert.match(sale.blockers.join(' '), /different accounts/);
+  assert.equal(sale.lines.length, 2); assert.equal(bill.status, 'eligible'); assert.equal(bill.proposedPayload.LineItems.length, 2);
 });
 
 test('new STEM observations and policy activation preserve original source and financial fingerprints', () => {

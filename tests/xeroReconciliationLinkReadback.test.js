@@ -13,8 +13,9 @@ const invoice = (id) => ({ InvoiceID: id, Type: 'ACCREC', Status: 'AUTHORISED',
   LineItems: [{ LineItemID: 'line-one', Quantity: '3.0000', UnitAmount: '33.3333', Description: 'Fuel' }],
   UpdatedDateUTC: '2026-09-30T00:00:00Z', UnknownProviderEvidence: { marker: 'preserve' } });
 const credit = (id) => ({ CreditNoteID: id, Type: 'ACCRECCREDIT', Status: 'AUTHORISED',
-  Contact: { ContactID: 'contact-one' }, CurrencyCode: 'USD', Total: '100', AmountPaid: '0',
-  RemainingCredit: '70', Allocations: [{ Amount: '30', Invoice: { InvoiceID: 'invoice-allocated' } }],
+  Contact: { ContactID: 'contact-one' }, CurrencyCode: 'USD', Total: '100', Payments: [],
+  RemainingCredit: '70', Allocations: [{ AllocationID: 'allocation-one', Date: '2026-09-01', Amount: '30',
+    Invoice: { InvoiceID: 'invoice-allocated', Type: 'ACCREC', CurrencyCode: 'USD', Contact: { ContactID: 'contact-one' } } }],
   LineItems: [{ Quantity: 1, UnitAmount: 100, Description: 'Credit' }] });
 const target = (targetId, collection = 'Invoices') => ({ targetId, collection });
 
@@ -77,6 +78,21 @@ test('mixed collections resolve unordered invoice IDs and use individual credit 
     '/CreditNotes/credit-b?unitdp=4', '/CreditNotes/credit-a?unitdp=4',
   ]);
   assert.ok(f.calls.every((row) => row.options.method === 'GET'));
+});
+
+test('CreditNotes readback preserves the actual schema and requires explicit balanced settlement arrays', async () => {
+  const raw = { ...credit('requested'), RemainingCredit: '100', Allocations: [] };
+  const f = fixture(() => ({ CreditNotes: [raw] }));
+  const result = await readCampaignDocumentLinkReadback({ ...f.args, targets: [target('requested', 'CreditNotes')] });
+  assert.strictEqual(result.rawTargets.creditNotes[0], raw);
+  assert.equal(Object.hasOwn(raw, 'AmountPaid'), false);
+  for (const change of [{ Payments: undefined }, { Allocations: undefined }, { Payments: [null] },
+    { RemainingCredit: '99.999999999999' }, { Total: -1 }, { RemainingCredit: 110 },
+    { Allocations: [{ Amount: 30, Invoice: { InvoiceID: 'one' } }], RemainingCredit: 70 }]) {
+    const invalid = fixture(() => ({ CreditNotes: [{ ...raw, ...change }] }));
+    await assert.rejects(readCampaignDocumentLinkReadback({ ...invalid.args, targets: [target('requested', 'CreditNotes')] }),
+      { code: 'XERO_CAMPAIGN_LINK_READBACK_INCOMPLETE' });
+  }
 });
 
 test('partial exact invoice response, empty credit response and 404 explicitly mark requested targets missing', async () => {
