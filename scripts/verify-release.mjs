@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { assertReleaseBrowserEnvironment, verifyReleasePreviewArtifact } from './lib/release-environment.mjs';
 import { preparePrivateE2eState, removePrivateE2eState } from './e2e-private-state.mjs';
 import { assertCollectedPreviewParity } from './collect-preview-parity.mjs';
+import { createReleaseReadiness } from './lib/release-readiness.mjs';
 
 const checks = [
   ['Unit and integration tests', ['run', 'test']],
@@ -23,6 +24,8 @@ export async function verifyRelease({
   checkedOutCommit = () => execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
   verify = verifyReleasePreviewArtifact,
   parity = assertCollectedPreviewParity,
+  readiness = createReleaseReadiness,
+  record = receipt => process.stdout.write(`${JSON.stringify(receipt, null, 2)}\n`),
   prepare = preparePrivateE2eState,
   cleanup = removePrivateE2eState,
 } = {}) {
@@ -33,9 +36,16 @@ export async function verifyRelease({
   const candidate = await verify(browser);
   // This independently collects live configuration. A local pass/review JSON
   // cannot waive missing runtime or normal-role evidence.
-  await parity({ candidateUrl: candidate.candidateUrl, expectedCommit: candidate.commit, protectionBypass: browser.protectionBypass });
+  const observations = await parity({ candidateUrl: candidate.candidateUrl, expectedCommit: candidate.commit, protectionBypass: browser.protectionBypass });
+  const receipt = readiness({ source: observations?.source, candidate: observations?.candidate, production: observations?.production, parity: observations,
+    evidence: observations?.trustedEvidence, quality: observations?.quality, lockHash: observations?.binding?.lockHash,
+    configurationRevision: observations?.binding?.configurationRevision });
+  if (receipt.ready !== true || receipt.blockers?.length) throw new Error('Release readiness is unresolved or belongs to inconsistent candidate evidence.');
+  const publicEnvironment = { ...environment };
+  for (const key of Object.keys(publicEnvironment)) if (key.startsWith('FCOS_RELEASE_') || key.startsWith('FCOS_NORMAL_ROLE_')
+    || key.startsWith('ACTIONS_ID_TOKEN_')) delete publicEnvironment[key];
   const browserEnv = {
-    ...environment,
+    ...publicEnvironment,
     FCOS_REQUIRE_AUTH_E2E: '1',
     FCOS_E2E_BASE_URL: candidate.candidateUrl,
     FCOS_E2E_CANDIDATE_URL: candidate.candidateUrl,
@@ -49,7 +59,7 @@ export async function verifyRelease({
   };
   // Tests/builds receive no renewable login or protection credential. GitHub's
   // read-only token is needed only by the candidate resolver/browser bootstrap.
-  const checkEnv = { ...environment };
+  const checkEnv = { ...publicEnvironment };
   for (const key of Object.keys(checkEnv)) {
     if (key.startsWith('FCOS_E2E_') || ['FCOS_AUTH_E2E_ENABLED', 'FCOS_REQUIRE_AUTH_E2E', 'FCOS_VERCEL_AUTOMATION_BYPASS_SECRET', 'GITHUB_TOKEN'].includes(key)) delete checkEnv[key];
   }
@@ -71,7 +81,9 @@ export async function verifyRelease({
     }
     if (result.status !== 0) throw new Error(`Release gate failed: ${label}.`);
   }
+  await record(receipt);
   process.stdout.write('\nRelease gate passed.\n');
+  return receipt;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

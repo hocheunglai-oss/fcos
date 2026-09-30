@@ -1,3 +1,4 @@
+import { createPortalRetryScheduler } from '../_portalRetryScheduler.js';
 import { loadEffectiveGroupAccess, readAllAccessRows, serializeGroupUser, accessOperationError } from '../_accessGroups.js';
 import { AUTO_AI_MODEL, AI_MODEL_SELECTIONS, AI_ROUTING_VERSION, isAllowedAiSelection, automaticRoutingFor, resolveAiModel } from '../_aiModelRouting.js';
 import { createStemWorkspaceActivity } from '../_stemWorkspaceActivity.js';
@@ -392,24 +393,10 @@ const ADMIN_APP_MODULES = [
   { id: 'admin', label: 'People & Access', path: '/settings?section=people', sortOrder: 100 },
 ];
 
-let portalOutboxScheduledAt = 0;
-
-function schedulePortalOutboxRetry(client) {
-  const now = Date.now();
-  if (now - portalOutboxScheduledAt < 60_000) return;
-  portalOutboxScheduledAt = now;
-  waitUntil(
-    processPortalOutbox({
-      client,
-      limit: 3,
-      requestId: activePortalRequestId(),
-    }).catch((error) => {
-      console.warn('[portal] Background retry deferred.', {
-        code: error.code || 'PORTAL_RETRY_FAILED',
-      });
-    }),
-  );
-}
+const schedulePortalOutboxRetry = createPortalRetryScheduler({
+  waitUntil, processPortalOutbox, requestId: activePortalRequestId,
+  onFailure: (error) => console.warn('[portal] Background retry deferred.', { code: error.code || 'PORTAL_RETRY_FAILED' }),
+});
 
 const ADMIN_MODULE_IDS = new Set(ADMIN_APP_MODULES.map((module) => module.id));
 const ADMIN_FULL_ACCESS = Object.fromEntries(ADMIN_APP_MODULES.map((module) => [module.id, true]));

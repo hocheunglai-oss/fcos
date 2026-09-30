@@ -17,6 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           # PR code must not receive a reusable GitHub credential through git.
           persist-credentials: false
       - uses: actions/setup-node@v4
@@ -29,6 +30,7 @@ jobs:
           # Read-only token required to fetch FCUNO's pinned contract. It is
           # intentionally neither a repository secret nor persisted by git.
           GITHUB_TOKEN: ${{ github.token }}
+      - run: npm run verify:controls
       - run: npm run verify:compatibility
       - run: npm test
       - run: npm run lint
@@ -120,6 +122,25 @@ jobs:
       - name: Stop temporary Supabase services
         if: ${{ always() && steps.start-supabase.outcome != 'skipped' && steps.start-supabase.outcome != '' }}
         run: supabase stop --no-backup
+
+      - name: Record exact tested source
+        env:
+          CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { execFileSync } from 'node:child_process';
+          import { createHash } from 'node:crypto';
+          import { readFileSync, writeFileSync } from 'node:fs';
+          const candidateSha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+          if (candidateSha !== process.env.CANDIDATE_SHA) throw new Error('Quality checkout does not match the candidate.');
+          const lockSha256 = createHash('sha256').update(readFileSync('package-lock.json')).digest('hex');
+          writeFileSync('fcos-quality-source.json', JSON.stringify({ schemaVersion: 1, candidateSha, lockSha256, capturedAt: new Date().toISOString() }) + '\n');
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fcos-quality-source-${{ github.event.pull_request.head.sha || github.sha }}
+          path: fcos-quality-source.json
+          retention-days: 7
 
   authenticated-browser:
     # This job deliberately has no checkout, repository secrets, protected

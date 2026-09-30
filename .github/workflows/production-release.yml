@@ -1,0 +1,101 @@
+name: FCOS human-approved Production release
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_commit:
+        description: Reviewed full candidate SHA
+        required: true
+        type: string
+      candidate_url:
+        description: Exact immutable READY Preview origin
+        required: true
+        type: string
+
+concurrency:
+  group: fcos-production-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+# Prepared only. The repository activation variable is absent/false by default.
+# No push trigger, automatic migration, credential rotation or Preview promotion.
+jobs:
+  protections:
+    if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && vars.FCOS_PRODUCTION_RELEASE_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      deployments: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: trusted
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.expected_commit }}
+          path: candidate
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci --ignore-scripts
+        working-directory: trusted
+      - name: Independently verify protections, reviewed identity and credential names
+        run: node trusted/scripts/production-release.mjs --preflight
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          FCOS_RELEASE_SOURCE_DIRECTORY: ${{ github.workspace }}/candidate
+          FCOS_E2E_EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          FCOS_E2E_CANDIDATE_URL: ${{ inputs.candidate_url }}
+
+  production:
+    needs: protections
+    if: ${{ needs.protections.result == 'success' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && vars.FCOS_PRODUCTION_RELEASE_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    environment: fcos-production-release
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+      deployments: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: trusted
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.expected_commit }}
+          path: candidate
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci --ignore-scripts
+        working-directory: trusted
+      - run: npm install --global vercel@54.20.1
+      - name: Recheck exact approval, stage Production build and verify domain readback
+        run: node trusted/scripts/production-release.mjs --execute
+        env:
+          GH_TOKEN: ${{ secrets.FCOS_RELEASE_GH_TOKEN }}
+          VERCEL_TOKEN: ${{ secrets.FCOS_RELEASE_VERCEL_TOKEN }}
+          FCOS_RELEASE_RUNTIME_TOKEN: ${{ secrets.FCOS_RELEASE_RUNTIME_TOKEN }}
+          FCOS_RELEASE_PREVIEW_RUNTIME_TOKEN: ${{ secrets.FCOS_RELEASE_PREVIEW_RUNTIME_TOKEN }}
+          FCOS_E2E_VERCEL_BYPASS: ${{ secrets.FCOS_E2E_VERCEL_BYPASS }}
+          FCOS_RELEASE_SOURCE_DIRECTORY: ${{ github.workspace }}/candidate
+          FCOS_E2E_EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          FCOS_E2E_CANDIDATE_URL: ${{ inputs.candidate_url }}
+      - name: Preserve sanitized operation intent, exact deployment and rollback reference
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: fcos-production-release-${{ github.run_id }}
+          path: ${{ runner.temp }}/fcos-production-release-${{ github.run_id }}.jsonl
+          if-no-files-found: warn
+          retention-days: 30

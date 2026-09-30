@@ -3,6 +3,7 @@ import { APP_VERSION } from './appVersionMeta.js';
 export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
+  { version: '2.0.291', releasedAt: '2026-10-01', title: 'Connection and release controls', changes: ['Separate tooling access from app connectivity and Production approval.', 'Prevent background portal retries in Preview.'] },
   { version: '2.0.290', releasedAt: '2026-10-01', title: 'Reliable Preview views and charge queues', changes: ['Correct charge queue counts; preserve closures and approvals.', 'Keep Preview book reads safe and show load failures.', 'Correct mailbox status and sync age.'] },
   { version: '2.0.289', releasedAt: '2026-10-01', title: 'Consistent charge reviews and desktop refreshes', changes: ['Keep buyer charge changes within the exact reviewed supplier.', 'Restore Markets alerts for authorized users and preserve notification filters and action ordering.', 'Retain the latest Hedge Desk snapshot during overlapping refreshes, handle unreadable responses safely and bound local cache memory.'] },
   { version: '2.0.288', releasedAt: '2026-09-30', title: 'Reliable receipt uploads and learning recovery', changes: ['Upload receipts directly to private storage with verified content and safe retries.', 'Recover interrupted Email Router learning without allowing stale workers to overwrite completed results.', 'Block changes in deployment previews and verify release source and populated database upgrades before deployment.'] },

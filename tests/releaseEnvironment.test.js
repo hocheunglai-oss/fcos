@@ -91,10 +91,11 @@ test('release gates scope credentials, enforce strict checks, and always clean p
   const calls = [];
   const lifecycle = [];
   await assert.rejects(() => verifyRelease({
-    environment: validEnvironment,
+    environment: { ...validEnvironment, FCOS_RELEASE_RUNTIME_TOKEN: 'private-runtime', FCOS_NORMAL_ROLE_STORAGE_STATE_BASE64: 'private-normal-state', ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'private-actions' },
     checkedOutCommit: () => releaseSha,
     verify: async () => proof,
     parity: async options => { lifecycle.push('parity'); assert.deepEqual(options, { candidateUrl, expectedCommit: releaseSha, protectionBypass: validEnvironment.FCOS_E2E_VERCEL_BYPASS }); },
+    readiness: () => ({ ready: true, blockers: [] }),
     prepare: async options => { lifecycle.push('prepare'); assert.equal(options.dependencies.allowExisting, false); },
     cleanup: async () => { lifecycle.push('cleanup'); },
     run: (command, args, options) => {
@@ -112,6 +113,7 @@ test('release gates scope credentials, enforce strict checks, and always clean p
   for (const call of calls.slice(0, -1)) {
     for (const key of ['FCOS_E2E_PASSWORD', 'FCOS_E2E_VERCEL_BYPASS', 'GITHUB_TOKEN']) assert.equal(call.env[key], undefined);
   }
+  for (const call of calls) for (const key of ['FCOS_RELEASE_RUNTIME_TOKEN', 'FCOS_NORMAL_ROLE_STORAGE_STATE_BASE64', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN']) assert.equal(call.env[key], undefined);
   assert.equal(calls.find(call => call.args.includes('verify:migrations')).env.FCOS_REQUIRE_LIVE_MIGRATION_CHECK, '1');
   assert.equal(calls.find(call => call.args.includes('build')).env.FCOS_REQUIRE_CLEAN_BUILD, '1');
   assert.equal(calls.find(call => call.args.includes('verify:performance')).env.FCOS_REQUIRE_SERVER_BUNDLES, '1');
@@ -135,4 +137,12 @@ test('release rejects unresolved parity before tests or browser state creation',
     parity: async () => { throw new Error('Preview parity blocked'); },
     run: unexpected, prepare: unexpected, cleanup: unexpected,
   }), /Preview parity blocked/);
+});
+
+test('release rejects mixed or missing trusted readiness before tests and browser state', async () => {
+  const unexpected = () => assert.fail('must not execute');
+  await assert.rejects(() => verifyRelease({ environment: validEnvironment, checkedOutCommit: () => releaseSha,
+    verify: async () => proof, parity: async () => ({ pass: true, raw: { pass: true } }),
+    run: unexpected, prepare: unexpected, cleanup: unexpected,
+  }), /readiness is unresolved/);
 });
