@@ -166,6 +166,8 @@ test('production dry-run is inert and staged commands never promote Preview or c
   const plan = await runProductionRelease();
   assert.equal(plan.mutations, 0); assert.equal(plan.productionAuthorized, false);
   const args = productionDeployArguments({ sha, sourceDigest: digest, operationId: 'fcos-release-99' });
+  assert.ok(args.includes(`FCOS_BUILD_COMMIT_SHA=${sha}`)); assert.ok(args.includes(`FCOS_EXPECTED_SOURCE_SHA256=${digest}`));
+  assert.equal(args[args.indexOf('--env')+1], `FCOS_BUILD_COMMIT_SHA=${sha}`);
   assert.ok(args.includes('--prod')); assert.ok(args.includes('--skip-domain')); assert.ok(!args.includes('--prebuilt'));
   assert.throws(() => productionReleaseArguments(['--execute', '--dry-run']));
   assert.throws(() => productionReleaseArguments(['--token', 'private-marker']));

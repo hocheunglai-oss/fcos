@@ -25,12 +25,19 @@ export function supabaseDiagnosticCredentialMode(key, now = Date.now()) {
 
 export function runtimeDeploymentBinding(env, receipt) {
   const deploymentId = clean(env.VERCEL_DEPLOYMENT_ID);
-  const sha = clean(env.VERCEL_GIT_COMMIT_SHA);
+  const sha = clean(env.VERCEL_GIT_COMMIT_SHA || env.FCOS_BUILD_COMMIT_SHA);
+  const suppliedShas = [env.VERCEL_GIT_COMMIT_SHA, env.FCOS_BUILD_COMMIT_SHA].map(clean).filter(Boolean);
+  const provenance = receipt?.provenance;
+  const cleanSource = provenance?.gitDirty === false
+    || (provenance?.gitDirty === null && provenance?.sourceAttested === true);
+  const validProvenance = provenance?.schemaVersion === 1
+    && provenance?.sourceDigestAlgorithm === 'sha256:fcos-vercel-source-v1'
+    && provenance?.releaseEligible === true && cleanSource;
   const sourceDigest = receipt?.provenance?.sourceDigest;
-  if (!/^dpl_[A-Za-z0-9]+$/.test(deploymentId) || !/^[0-9a-f]{40}$/.test(sha)
-    || receipt?.deploymentId !== deploymentId || receipt?.commit !== sha || receipt?.gitDirty !== false
+  if (new Set(suppliedShas).size > 1 || !/^dpl_[A-Za-z0-9]+$/.test(deploymentId) || !/^[0-9a-f]{40}$/.test(sha)
+    || receipt?.deploymentId !== deploymentId || receipt?.commit !== sha || receipt?.gitDirty !== provenance?.gitDirty
     || !/^[0-9a-f]{64}$/.test(sourceDigest || '') || receipt?.provenance?.commit !== sha
-    || receipt?.provenance?.gitDirty !== false) {
+    || !validProvenance) {
     throw Object.assign(new Error('Runtime deployment binding is unavailable.'), { status: 503, code: 'RUNTIME_BINDING_UNAVAILABLE' });
   }
   return { deploymentId, sha, sourceDigest };

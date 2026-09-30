@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { cpSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { collectBuildProvenance, deploymentSourceFilter } from '../scripts/lib/build-provenance.mjs';
+import { collectBuildProvenance, deploymentSourceFilter, writeBuildReceipts } from '../scripts/lib/build-provenance.mjs';
 
 function fixture(t) {
   const cwd = mkdtempSync(join(tmpdir(), 'fcos-provenance-'));
@@ -209,4 +209,36 @@ test('attested sanitized builds permit only the two known untracked build-state 
   rmSync(join(f.cwd, 'api'), { recursive: true });
   writeFileSync(join(f.cwd, 'source.js'), 'tampered application source');
   assert.throws(() => f.collect({ env }), /source digest does not match/);
+});
+
+test('private JSON receipt is non-circular; neighboring executable code remains governed', t => {
+  const f=fixture(t);mkdirSync(join(f.cwd,'api'));
+  writeFileSync(join(f.cwd,'api/_runtime-build-receipt.json'),'{}\n');f.git('add','.');
+  f.git('-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-qm','private receipt');
+  const before=f.collect({requireClean:true});
+  writeFileSync(join(f.cwd,'api/_runtime-build-receipt.json'),JSON.stringify(before));
+  assert.deepEqual(f.collect({requireClean:true}),before);
+  writeFileSync(join(f.cwd,'api/_runtime-build-receipt.js'),'export default {}');
+  assert.throws(()=>f.collect({requireClean:true}),/clean Git checkout/);
+});
+
+test('generated receipt file and parent symlinks cannot overwrite hashed source', t => {
+  for (const parent of [false,true]) {
+    const f=fixture(t), before=f.collect(), source=readFileSync(join(f.cwd,'source.js'),'utf8');
+    rmSync(join(f.cwd,'public'),{recursive:true});
+    if (parent) symlinkSync(f.cwd,join(f.cwd,'public'));
+    else {mkdirSync(join(f.cwd,'public'));symlinkSync(join(f.cwd,'source.js'),join(f.cwd,'public/app-version.json'));}
+    assert.throws(()=>f.collect(),/symlinks/);
+    assert.throws(()=>writeBuildReceipts({cwd:f.cwd,receipt:{provenance:before},env:{}}),/symlinks/);
+    assert.equal(readFileSync(join(f.cwd,'source.js'),'utf8'),source);
+  }
+});
+test('receipt emission checks actual source before and after writing identical private and public data', t => {
+  const f=fixture(t); mkdirSync(join(f.cwd,'api')); writeFileSync(join(f.cwd,'api/_runtime-build-receipt.json'),'{}');
+  f.git('add','.'); f.git('-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-qm','receipt path');
+  const provenance=f.collect();
+  writeBuildReceipts({cwd:f.cwd,receipt:{provenance},env:{}});
+  assert.equal(readFileSync(join(f.cwd,'public/app-version.json'),'utf8'),readFileSync(join(f.cwd,'api/_runtime-build-receipt.json'),'utf8'));
+  writeFileSync(join(f.cwd,'source.js'),'changed after collection');
+  assert.throws(()=>writeBuildReceipts({cwd:f.cwd,receipt:{provenance},env:{}}),/Source changed/);
 });

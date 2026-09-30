@@ -37,7 +37,7 @@ const connectionPolicy = {
     {
       id: 'api_fallback',
       label: 'Fall back to the approved API or connector',
-      detail: 'If CLI access is unavailable, unsupported or mismatched, independently verify the API target and permissions.',
+      detail: 'If CLI access fails, independently verify API target and permissions.',
     },
     {
       id: 'browser_fallback',
@@ -137,7 +137,7 @@ const connectionPolicy = {
       keychainService: 'com.fcos.connections.vercel',
       rotationWarningDays: 90,
       expiryWarningDays: 30,
-      persistence: 'Dedicated Keychain token; local files contain target pins and safe metadata.',
+      persistence: 'Keychain token; local files contain safe target metadata.',
       nonBrowserRoute: 'Verify account, team, project and operation permissions.',
     },
     {
@@ -208,7 +208,7 @@ const connectionPolicy = {
       credentialStorage: 'protected_host_store',
       rotationWarningDays: 90,
       expiryWarningDays: 30,
-      persistence: 'Protected host sessions; verify org ID, username, sandbox flag and query capability. DEVEE owns source; the mirror uses isolated GitHub authorization.',
+      persistence: 'Verify protected org sessions, username, sandbox and query access. DEVEE owns source; the mirror uses isolated GitHub authorization.',
       nonBrowserRoute: 'Verify each org. Promote verified DEVEE source through the byte-equivalent shared mirror, QAT, then Production.',
       publication: {
         requiredAccount: 'vincelessxai',

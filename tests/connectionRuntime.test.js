@@ -10,7 +10,7 @@ const env = { VERCEL_ENV:'preview', VERCEL_DEPLOYMENT_ID:'dpl_fixture', VERCEL_G
   SUPABASE_URL:`https://${fcosConnectionIdentifier('supabase','Project ref')}.supabase.co`, SUPABASE_SECRET_KEY:'sb_secret_private-service-key',
   SALESFORCE_INSTANCE_URL:fcosSalesforceEnvironment('production').instanceUrl, SALESFORCE_ACCESS_TOKEN:'private-sf-token',
   XERO_TENANT_ID:tenant, VARIABLE_CHARGE_PAIRED_WORKFLOW_ENABLED:'true' };
-const receipt = { deploymentId:env.VERCEL_DEPLOYMENT_ID, commit:sha, gitDirty:false, provenance:{ commit:sha, sourceDigest:digest, gitDirty:false } };
+const receipt = { deploymentId:env.VERCEL_DEPLOYMENT_ID, commit:sha, gitDirty:false, provenance:{ schemaVersion:1, sourceDigestAlgorithm:'sha256:fcos-vercel-source-v1', releaseEligible:true, commit:sha, sourceDigest:digest, gitDirty:false } };
 const time = Date.parse('2026-10-01T00:00:00.000Z');
 function clientFixture(profile = { id:'admin', email:'admin@example.test', active:true, user_type:'administrator' }, connection = {}) {
   const calls = [];
@@ -105,4 +105,13 @@ test('probe throttles repeated requests without persistence or logging', async (
   const req={method:'POST',headers:{},body:{action:'probe'}}, first=response(), next=response();
   await handler(req,first); await handler(req,next);
   assert.equal(first.statusCode,200); assert.equal(next.statusCode,429); assert.equal(probes,1);
+});
+
+test('runtime accepts only explicitly attested source archives and rejects malformed provenance', () => {
+  assert.throws(()=>runtimeDeploymentBinding({...env,FCOS_BUILD_COMMIT_SHA:'f'.repeat(40)},receipt), /binding/);
+  const archive = {...receipt, gitDirty:null, provenance:{...receipt.provenance, gitDirty:null, sourceAttested:true}};
+  assert.deepEqual(runtimeDeploymentBinding({...env, VERCEL_GIT_COMMIT_SHA:'', FCOS_BUILD_COMMIT_SHA:sha},archive), {deploymentId:'dpl_fixture',sha,sourceDigest:digest});
+  for (const change of [{sourceAttested:false}, {releaseEligible:false}, {schemaVersion:2}, {sourceDigestAlgorithm:'unknown'}, {gitDirty:true}]) {
+    assert.throws(()=>runtimeDeploymentBinding(env,{...archive,provenance:{...archive.provenance,...change}}), /binding/);
+  }
 });

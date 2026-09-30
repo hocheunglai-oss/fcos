@@ -71,7 +71,7 @@ export function productionDeployArguments({ sha, sourceDigest, operationId } = {
   if (!SHA.test(sha || '') || !HASH.test(sourceDigest || '') || !/^fcos-release-[1-9][0-9]*$/.test(operationId || '')) throw new Error('Invalid exact Production deployment identity.');
   return ['deploy', '--prod', '--skip-domain', '--yes', '--no-wait', '--meta', `githubCommitSha=${sha}`,
     '--meta', `fcosReleaseOperation=${operationId}`, '--build-env', `FCOS_BUILD_COMMIT_SHA=${sha}`,
-    '--build-env', `FCOS_EXPECTED_SOURCE_SHA256=${sourceDigest}`];
+    '--build-env', `FCOS_EXPECTED_SOURCE_SHA256=${sourceDigest}`, '--env', `FCOS_BUILD_COMMIT_SHA=${sha}`];
 }
 
 /** Small durable state machine. Adapters enforce live protection/target checks.
