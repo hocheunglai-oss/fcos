@@ -30,6 +30,10 @@ test('personal filing opens expanded, stays separate from ordinary commitments a
   await expect(section.getByText('Expected delivery', { exact: true }).first()).toBeVisible();
   await expect(section.getByRole('button', { name: 'Manage Nom B' })).toHaveCount(0);
   await expect(section.getByLabel('Requirements for')).toHaveCount(0);
+  const uploadEntry = section.getByRole('link', { name: 'Upload missing Nom B', includeHidden: true });
+  await expect(uploadEntry).toHaveAttribute('href', '/missing-nom-b');
+  if (test.info().project.name === 'desktop') await expect(uploadEntry).toBeVisible();
+  else await expect(uploadEntry).toBeHidden();
   expect(await page.locator('body').evaluate((body) => body.scrollWidth <= window.innerWidth + 1)).toBe(true);
   await page.screenshot({ path: `test-results/nom-b-${test.info().project.name}.png` });
   const before = await page.evaluate(() => window.nomBFixture.requests.filter((request) => request.name === 'dashboardNomBRead').length);
@@ -52,7 +56,7 @@ test('personal filing opens expanded, stays separate from ordinary commitments a
   expect(await page.evaluate(() => window.nomBFixture.requests.filter((request) => request.name === 'dashboardNomBAuditRead').length)).toBe(0);
   await dialog.getByRole('button', { name: 'Close', exact: true }).first().click();
   await expect(section.getByRole('button', { name: 'Receivable & audit' })).toHaveCount(0);
-  await expect(section.getByRole('link')).toHaveCount(0);
+  await expect(section.locator('a[href^="http"]')).toHaveCount(0);
   await section.getByRole('button', { name: 'Open STEM', exact: true }).first().click();
   await expect.poll(() => page.evaluate(() => window.nomBFixture.requests.filter((request) => request.name === 'salesforceStemDetail').at(-1)?.body.stemId)).toBe('fixture-stem-1');
   await expect(page.getByRole('dialog')).toContainText('Opened fixture STEM');
@@ -61,6 +65,23 @@ test('personal filing opens expanded, stays separate from ordinary commitments a
   await expect.poll(() => page.evaluate(() => window.nomBFixture.requests.filter((request) => request.name === 'dashboardSummary').length)).toBeGreaterThan(0);
   await expect(panel(page)).toHaveCount(0);
   expect(await page.evaluate(() => window.nomBFixture.requests.filter((request) => request.name.startsWith('dashboardNomB')).length)).toBe(0);
+});
+
+test('desktop Nom B Filing opens the all-date upload list and owned confirmation dialog', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop', 'The new upload entry is desktop-only.');
+  await openList(page);
+  const section = panel(page);
+  await expect(section.getByText('The filing page shows missing Nom B across all dates. Choose Upload Nom B beside a Buyer Confirmation.')).toBeVisible();
+  await section.getByRole('link', { name: 'Upload missing Nom B' }).click();
+  await expect(page.getByRole('heading', { name: 'Missing Nom B', exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Missing Nom B confirmations' }).getByRole('row').filter({ hasText: 'STEM-001' })).toContainText('Synthetic Marine Fuels Holdings Limited');
+  await expect.poll(() => page.evaluate(() => window.nomBFixture.requests.filter((request) => request.name === 'missingNomBList').at(-1)?.body)).toEqual({ cursor: null, search: '' });
+  await page.getByRole('row').filter({ hasText: 'STEM-001' }).getByRole('button', { name: 'Upload Nom B' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Upload Nom B' });
+  await expect(dialog).toContainText('BC-001');
+  await expect(dialog.getByLabel('Nom B document')).toBeVisible();
+  await expect(page.getByLabel(/owner|trader selection/i)).toHaveCount(0);
+  expect(await page.evaluate(() => window.nomBFixture.requests.filter((request) => request.name === 'missingNomBUpload').length)).toBe(0);
 });
 
 test('status tabs, undated-only follow-up, search, sorting and paging use their own server payload', async ({ page }) => {

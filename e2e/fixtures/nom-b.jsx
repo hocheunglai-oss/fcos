@@ -1,7 +1,8 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import DashboardSettings from '@/pages/DashboardSettings';
+import MissingNomB from '@/pages/MissingNomB';
 import MyCommitments from '@/pages/MyCommitments';
 import { appClient } from '@/api/appClient';
 import '@/styles/fonts.css';
@@ -34,6 +35,11 @@ appClient.functions.invoke = async (name, body = {}, options = {}) => {
   if (name === 'workCommitmentsList') return { data: { commitments: [{ id: 'fixture-task', source: 'collaboration', urgency: 'needs_action', title: 'Synthetic commitment', link: '/projects-tasks', actionLabel: 'Open' }], counts: { needs_action: 1 }, sources: ['collaboration'] } };
   if (name === 'salesforceStemDetail') return { data: { record: { Id: body.stemId, Name: 'Opened fixture STEM', Vessel_Name__c: 'Pacific Endeavour' }, lineItems: [], extraCosts: [] } };
   if (name === 'salesforceStemDocuments') return { data: { documents: [] } };
+  if (name === 'missingNomBList') return { data: {
+    rows: [{ nominationId: 'fixture-confirmation-1', stemId: 'fixture-stem-1', stemName: 'STEM-001', buyerName: 'Synthetic Marine Fuels Holdings Limited', vesselName: 'Pacific Endeavour', imo: '9000001', portName: 'Hong Kong', deliveryDate: '2026-09-18', expectedDeliveryDate: null, confirmationReference: 'BC-001', traderName: 'Ada Trader', receivedStatus: '🟡', canUpload: true }],
+    nextCursor: null,
+    asOf: '2026-09-30T04:00:00Z',
+  } };
   if (name === 'dashboardNomBRead') {
     if (fixture.readFailure) return { data: { error: 'Salesforce verification unavailable.', code: 'NOM_B_SOURCE_UNAVAILABLE' } };
     const getResponse = () => {
@@ -61,4 +67,4 @@ appClient.functions.invoke = async (name, body = {}, options = {}) => {
   return { data: { error: `Unexpected isolated fixture request: ${name}` } };
 };
 const dashboard = params.get('screen') === 'dashboard';
-createRoot(document.getElementById('root')).render(<StrictMode><MemoryRouter initialEntries={[dashboard ? '/' : '/my-commitments?source=nom_b']}><p className="p-3 text-xs">Synthetic Nom B fixture — no live provider data</p>{dashboard ? <DashboardSettings /> : <MyCommitments />}</MemoryRouter></StrictMode>);
+createRoot(document.getElementById('root')).render(<StrictMode><MemoryRouter initialEntries={[dashboard ? '/' : '/my-commitments?source=nom_b']}><p className="p-3 text-xs">Synthetic Nom B fixture — no live provider data</p><Routes><Route path="/" element={<DashboardSettings />} /><Route path="/my-commitments" element={<MyCommitments />} /><Route path="/missing-nom-b" element={<MissingNomB />} /></Routes></MemoryRouter></StrictMode>);
