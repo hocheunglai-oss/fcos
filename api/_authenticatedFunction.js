@@ -157,9 +157,9 @@ export function authenticatedFunction({ handlerName, moduleId = null, mutation =
         const requestMutation = typeof mutation === 'function' ? mutation(req) : mutation;
         res.setHeader('X-FCOS-Handler-Mutation', requestMutation ? '1' : '0');
         res.setHeader('X-FCOS-External-Action', '0');
+        requireDeploymentMutationAllowed(requestMutation);
         const context = await requireActiveUser(req);
         requireReadOnlyCiOperation(context.profile, resolvedHandlerName, {}, { mutation: requestMutation });
-        requireDeploymentMutationAllowed(requestMutation);
         await requireModuleAccess(context, moduleId);
         const body = await readBody(req);
         requireReadOnlyCiOperation(context.profile, resolvedHandlerName, body, { mutation: requestMutation });
