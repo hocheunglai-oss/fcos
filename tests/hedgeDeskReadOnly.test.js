@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { isReadOnlyHedgeDeskAction } from '../api/_hedgeDeskReadOnly.js';
-import { handleHedgeDeskEntity } from '../api/_hedgeDeskService.js';
+import { handleHedgeDeskEntity, handleHedgeMarkets } from '../api/_hedgeDeskService.js';
 import { prepareManualMopsVerification } from '../api/_hedgeMops.js';
 import { FCOS_READ_ONLY_CI } from '../config/fcosCiIdentity.js';
 import { tradingDaysInMonth } from '../src/hedge/lib/domain.js';
@@ -177,4 +177,22 @@ test('mixed dispatch defers only the body classification and retains normal auth
   assert.match(source, /userHasAnyModuleAccess\(context\.client, context\.profile, policy\.modules\)/);
   assert.match(source, /name === 'hedgeDeskEntity' \? !isReadOnlyHedgeDeskAction\(body\)/);
   assert.match(source, /requireDeploymentMutationAllowed\(deploymentMutation\);[\s\S]*?const data = await fn\(body, req, accessContext\)/);
+});
+
+test('normal-user Markets snapshots skip expiry in Preview and retain Production expiry', async () => {
+  for (const VERCEL_ENV of ['preview', 'production']) await withDeployment({ VERCEL_ENV }, async () => {
+    const { client, writes } = fixture({ allowExpiry: VERCEL_ENV === 'production' });
+    const result = await handleHedgeMarkets({ action: 'snapshot', readOnly: false }, profile, { client, capabilities });
+    assert.equal(writes.length, VERCEL_ENV === 'preview' ? 0 : 1);
+    assert.equal(result.capabilities.hedge_admin, VERCEL_ENV === 'production');
+    if (VERCEL_ENV === 'preview') assert.equal(result.expiryAutomation.reason, 'deployment_read_only');
+  });
+});
+
+test('Markets service independently denies Preview writes before database access', async () => {
+  await withDeployment({ VERCEL_ENV: 'preview' }, async () => {
+    const { client, reads } = fixture();
+    await assert.rejects(handleHedgeMarkets({ action: 'verify_month' }, profile, { client, capabilities }), { status: 403, code: 'FCOS_DEPLOYMENT_READ_ONLY' });
+    assert.deepEqual(reads, []);
+  });
 });

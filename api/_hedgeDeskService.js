@@ -1,6 +1,6 @@
 import { isAllowedAiSelection } from './_aiModelRouting.js';
 import { createHash } from 'node:crypto';
-import { isReadOnlyCiProfile, requireReadOnlyCiOperation } from './_readOnlyCiAccess.js';
+import { isReadOnlyCiProfile, isReadOnlyMarketAction, requireReadOnlyCiOperation } from './_readOnlyCiAccess.js';
 import { isDeploymentReadOnly, requireDeploymentMutationAllowed } from './_deploymentReadOnly.js';
 import { isReadOnlyHedgeDeskAction } from './_hedgeDeskReadOnly.js';
 import { richTextPlainLength, sanitizeRichText } from './_richText.js';
@@ -827,9 +827,13 @@ export async function handleHedgeDeskEntity(body, profile, { client, capabilitie
 
 export async function handleHedgeMarkets(body, profile, { client, capabilities }) {
   requireReadOnlyCiOperation(profile, 'hedgeMarkets', body);
+  requireDeploymentMutationAllowed(!isReadOnlyMarketAction(body));
+  const deploymentReadOnly = isDeploymentReadOnly();
   const action = String(body?.action || 'snapshot');
   if (action === 'snapshot') {
-    const expiryAutomation = isReadOnlyCiProfile(profile)
+    const expiryAutomation = deploymentReadOnly
+      ? { status: 'not_run', reason: 'deployment_read_only' }
+      : isReadOnlyCiProfile(profile)
       ? { status: 'not_run', reason: 'read_only_identity' }
       : await reconcilePaperHedgeExpiry(client);
     const [mops, settingsResult, marketIntelligence] = await Promise.all([
@@ -850,8 +854,8 @@ export async function handleHedgeMarkets(body, profile, { client, capabilities }
         forwardSpreadsRevision: Number(settings.fwd_spreads?.revision || 0),
       },
       capabilities: {
-        hedge_book_manage: capabilities?.hedge_book_manage === true,
-        hedge_admin: capabilities?.hedge_admin === true,
+        hedge_book_manage: !deploymentReadOnly && capabilities?.hedge_book_manage === true,
+        hedge_admin: !deploymentReadOnly && capabilities?.hedge_admin === true,
       },
       marketIntelligence,
       expiryAutomation,

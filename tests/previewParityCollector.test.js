@@ -25,3 +25,7 @@ test('current settings absent from immutable deployment inventory cannot attest 
   assert.deepEqual(result.VARIABLE_CHARGE_PAIRED_WORKFLOW_ENABLED, { state: 'unknown', present: false });
   assert.deepEqual(result.XERO_CLIENT_SECRET, { state: 'unknown', present: false });
 });
+
+test('switch inventory includes declared envName gates and spaced optional bracket references', () => {
+  assert.deepEqual(discoverParitySwitches("envName: 'NEW_WORKFLOW_ENABLED'; process.env [ 'OTHER_FEATURE_ENABLED' ]; environment?.['NEW_FEATURE_ENABLED'];"), ['NEW_FEATURE_ENABLED', 'NEW_WORKFLOW_ENABLED', 'OTHER_FEATURE_ENABLED']);
+});

@@ -19,10 +19,11 @@ export function discoverParitySwitches(source) {
   const keys = new Set([...source.matchAll(/\b(?:FCOS_(?:ENABLE_|DISABLE_|ALLOW_NONPRODUCTION_)[A-Z0-9_]+|VITE_FCOS_ENABLE_[A-Z0-9_]+|VARIABLE_CHARGE_PAIRED_WORKFLOW_ENABLED)\b/g)].map(match => match[0]));
   // Include generic future switches referenced directly through an environment
   // object, rather than depending only on the current FCOS naming convention.
-  for (const match of source.matchAll(/(?:process\.env|import\.meta\.env|\benv|\benvironment)\??(?:\.([A-Z][A-Z0-9_]+)|\[['"]([A-Z][A-Z0-9_]+)['"]\])/g)) {
+  for (const match of source.matchAll(/(?:process\.env|import\.meta\.env|\benv|\benvironment)\s*(?:\??\.\s*([A-Z][A-Z0-9_]+)|(?:\?\.)?\s*\[\s*['"]([A-Z][A-Z0-9_]+)['"]\s*\])/g)) {
     const key = match[1] || match[2];
     if (/(?:ENABL|DISABL|READ_ONLY|FEATURE|WORKFLOW)/.test(key)) keys.add(key);
   }
+  for (const match of source.matchAll(/\benvName\s*:\s*['"]([A-Z][A-Z0-9_]+)['"]/g)) keys.add(match[1]);
   return [...keys].sort();
 }
 
