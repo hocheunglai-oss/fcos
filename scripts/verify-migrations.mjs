@@ -31,6 +31,7 @@ const migrationSources = await Promise.all(names.map(async (name) => ({
 const releaseMigrationNames = new Set([
   '20260930043106_xero_campaign_approved_credit_retry.sql',
   '20260930025541_xero_campaign_inventory_write_performance.sql',
+  '20260930044110_missing_nom_b_workflow.sql',
   '20260930004300_xero_preview_finalize_timeout.sql',
   '20260930004200_xero_preview_payments_reference.sql',
   '20260930004000_xero_preview_checkpoint_chunks.sql',
@@ -92,6 +93,12 @@ async function assertRows(sql, expected, label, values = []) {
 }
 
 async function verifyRuntimeObjects(label) {
+  await assertRows(`select count(*)::int from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+    where n.nspname='public' and p.proname like 'missing_nom_b_%'
+      and not p.prosecdef and has_function_privilege('service_role',p.oid,'EXECUTE')
+      and not has_function_privilege('anon',p.oid,'EXECUTE')
+      and not has_function_privilege('authenticated',p.oid,'EXECUTE')`, 7, `${label} Nom B RPCs are server-controlled`);
+  await assertRows(`select count(*)::int from public.missing_nom_b_scan_state`, 0, `${label} Nom B activation remains prospective`);
   const accessTables = ['permission_groups', 'user_permission_groups', 'permission_access_events', 'permission_access_migration_snapshots', 'permission_access_catalog'];
   await assertRows(`select count(*)::int from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relname=any($1::text[]) and c.relrowsecurity`, accessTables.length, `${label} group access RLS`, [accessTables]);
   await assertRows(`select count(*)::int from unnest($1::text[]) t cross join unnest(array['anon','authenticated']) r cross join unnest(array['SELECT','INSERT','UPDATE','DELETE','TRUNCATE']) p where has_table_privilege(r,'public.'||t,p)`, 0, `${label} group access is server-only`, [accessTables]);

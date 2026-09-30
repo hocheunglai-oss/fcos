@@ -37,6 +37,8 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: Verify Nom B desktop and mobile workflows without providers
         run: npx playwright test --config playwright.nom-b.config.js
+      - name: Verify trader Nom B filing and interrupted upload recovery
+        run: npx playwright test --config playwright.missing-nom-b.config.js
       - name: Verify group-first People & Access without providers
         run: npx playwright test --config playwright.people-access.config.js
       - name: Verify manual reconciliation approval and recovery without providers
@@ -54,6 +56,25 @@ jobs:
           # built-in registry fallback when that registry throttles downloads.
           SUPABASE_INTERNAL_IMAGE_REGISTRY: ''
       - run: FCOS_MIGRATION_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres FCOS_REQUIRE_LIVE_MIGRATION_CHECK=1 npm run verify:migrations
+      - name: Verify Missing Nom B database concurrency and recovery
+        run: |
+          node --input-type=module <<'NODE'
+          import pg from 'pg';
+          const url = new URL('postgresql://postgres:postgres@127.0.0.1:54322/postgres');
+          if (url.hostname !== '127.0.0.1' || url.port !== '54322' || url.pathname !== '/postgres') throw new Error('Unexpected database target');
+          const admin = new pg.Client({ connectionString: url.href });
+          await admin.connect();
+          try {
+            const { rows: [identity] } = await admin.query('select current_database() as database, current_user as role');
+            if (identity.database !== 'postgres' || identity.role !== 'postgres') throw new Error('Unexpected database identity');
+            const { rows } = await admin.query("select 1 from pg_database where datname = 'missing_nom_b_test'");
+            if (rows.length) throw new Error('Disposable Missing Nom B database already exists');
+            await admin.query('create database missing_nom_b_test');
+          } finally {
+            await admin.end();
+          }
+          NODE
+          FCOS_MISSING_NOM_B_TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54322/missing_nom_b_test node --test tests/missingNomBMigration.test.js
       - name: Verify concurrent grouped invoice preservation
         run: node --test tests/xeroGroupedPreservationDatabase.test.js
         env:

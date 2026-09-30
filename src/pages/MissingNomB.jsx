@@ -87,7 +87,7 @@ export default function MissingNomB() {
     }
     if (pending) {
       const matchingRow = pending.nominationId === row.nominationId ? row : pending;
-      setDraft({ row: matchingRow, file: null, open: true, phase: 'select', message: `An earlier upload for ${display(pending.stemName)} is unresolved. Select the same file, ${pending.filename}, to retry its saved operation.` });
+      setDraft({ row: matchingRow, file: null, open: true, phase: 'select', message: `An earlier upload for ${display(pending.stemName)} is unresolved. Select the same file, ${pending.filename}, to check its result.` });
       return;
     }
     attemptRef.current = null;
@@ -96,7 +96,7 @@ export default function MissingNomB() {
 
   const resumePending = () => {
     if (!pending) return;
-    setDraft({ row: pending, file: null, open: true, phase: 'select', message: `Select the same file, ${pending.filename}, to retry the saved operation.` });
+    setDraft({ row: pending, file: null, open: true, phase: 'select', message: `Select the same file, ${pending.filename}, to check the earlier upload.` });
   };
 
   const closeUpload = () => {
@@ -168,14 +168,14 @@ export default function MissingNomB() {
         setDraft((current) => current ? {
           ...current,
           phase: 'uncertain',
-          message: `${response.data?.error || 'The server did not confirm the filed document and Received status.'} ${priorAttemptNote} Retry this same file and operation for a definitive result, or refresh the list to inspect the queue.`,
+          message: `${response.data?.error || 'The server did not confirm the filed document and Received status.'} ${priorAttemptNote} Retry the same file to verify the result, or refresh the list to inspect the queue.`,
         } : null);
       }
     } catch (cause) {
       setDraft((current) => current ? {
         ...current,
         phase: 'uncertain',
-        message: `${cause?.message || 'The upload result could not be verified.'} The result may be uncertain. Retry this same file and operation for a definitive result, or refresh the list to inspect the queue.`,
+        message: `${cause?.message || 'The upload result could not be verified.'} The result may be uncertain. Retry the same file to verify it, or refresh the list to inspect the queue.`,
       } : null);
     } finally {
       setBusy(false);
@@ -197,7 +197,7 @@ export default function MissingNomB() {
         actions={<><Button asChild variant="outline"><Link to="/">Dashboard</Link></Button><Button type="button" variant="outline" onClick={refresh} disabled={loading} className="gap-2"><RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />Refresh</Button></>}
       />
 
-      {pending && <div role="status" className="flex items-center justify-between gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm"><span>Unverified Nom B upload for {display(pending.stemName)} ({pending.filename}). The operation ID is saved in this browser session.</span><Button type="button" variant="outline" size="sm" onClick={resumePending}>Resume upload</Button></div>}
+      {pending && <div role="status" className="flex items-center justify-between gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm"><span>The Nom B upload for {display(pending.stemName)} ({pending.filename}) has not been confirmed. Select the same file to check its result.</span><Button type="button" variant="outline" size="sm" onClick={resumePending}>Resume upload</Button></div>}
       <div className="relative max-w-lg">
         <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
         <Input aria-label="Search missing Nom B" placeholder="Search STEM, buyer, vessel, port or confirmation" value={searchInput} onChange={(event) => setSearchInput(event.target.value)} className="pl-9" />
@@ -205,7 +205,9 @@ export default function MissingNomB() {
       {notice && <div role="status" className="rounded-lg border border-emerald-500/25 bg-emerald-500/10 p-3 text-sm text-foreground">{notice}</div>}
       {error && <StateBlock icon={AlertTriangle} title="Missing Nom B list unavailable" description={error} action={<Button type="button" variant="outline" onClick={refresh}>Try again</Button>} />}
       {loading && !error && <StateBlock icon={Loader2} title="Loading missing Nom B" description="Checking active buyer confirmations and their filed documents." />}
-      {!loading && !error && !rows.length && <StateBlock icon={CheckCircle2} title={pagination.search ? 'No matching confirmations' : 'No missing Nom B documents'} description={pagination.search ? 'Try a different search or clear the search field.' : 'No active buyer confirmations currently need a Nom B document.'} />}
+      {!loading && !error && !rows.length && (nextCursor || pagination.page > 0
+        ? <StateBlock icon={Search} title="No confirmations on this page" description={nextCursor ? 'More results may be available. Continue to the next page.' : 'Go back or refresh the list to check current confirmations.'} />
+        : <StateBlock icon={CheckCircle2} title={pagination.search ? 'No matching confirmations' : 'No missing Nom B documents'} description={pagination.search ? 'Try a different search or clear the search field.' : 'No active buyer confirmations currently need a Nom B document.'} />)}
       {!loading && !error && rows.length > 0 && (
         <TableShell title="Buyer confirmations needing Nom B" meta={`${rows.length} on this page · All dates, including uninvoiced STEMs`} bodyClassName="p-0">
           <Table scrollLabel="Missing Nom B confirmations" className="text-xs">
@@ -241,8 +243,8 @@ export default function MissingNomB() {
             <div className="space-y-1.5"><Label htmlFor="nom-b-file">Nom B document</Label><Input id="nom-b-file" type="file" accept={NOM_B_ACCEPT} onChange={(event) => chooseFile(event.target.files?.[0] || null)} disabled={busy || isUncertain} /><p className="text-xs text-muted-foreground">PDF, JPG, PNG, DOC or DOCX · maximum 3 MiB.</p></div>
             {selectedFile && <p className="text-xs text-muted-foreground">Selected: {selectedFile.name} ({(selectedFile.size / 1024).toFixed(0)} KiB)</p>}
             {draft?.message && <div role="alert" className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm">{draft.message}</div>}
-            {pending && <p className="text-xs text-muted-foreground">The saved operation ID is reused only when the selected file has the same name, size, and SHA-256 fingerprint. File bytes are never stored in browser storage.</p>}
-            {isUncertain && <p className="text-xs text-muted-foreground">File selection is locked until this result is resolved.</p>}
+            {pending && <p className="text-xs text-muted-foreground">Select the same file to verify the earlier upload before starting another.</p>}
+            {isUncertain && <p className="text-xs text-muted-foreground">Retry this file or refresh the list to check the unresolved result.</p>}
           </div>
           <div className="flex justify-end gap-2"><Button type="button" variant="outline" onClick={closeUpload} disabled={busy}>Close</Button>{isUncertain && <Button type="button" variant="outline" onClick={refresh} disabled={loading}><RefreshCw className="mr-2 h-4 w-4" />Refresh list</Button>}<Button type="button" onClick={upload} disabled={busy || !selectedFile || (!isUncertain && Boolean(validateNomBFile(selectedFile)))}>{busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileUp className="mr-2 h-4 w-4" />}{pending || isUncertain ? 'Retry same upload' : 'Upload to Salesforce'}</Button></div>
         </DialogContent>

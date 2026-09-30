@@ -1,22 +1,25 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { fcosSalesforceEnvironment } from '../config/fcosConnections.js';
+import { NOM_B_TRADER_LOGIN_EMAILS } from '../config/nomBTraderIdentities.js';
 import { NOM_B_EXTENSIONS, NOM_B_MAX_BYTES } from '../shared/missingNomB.js';
 import { getApiVersion, sfRequest } from './_salesforce.js';
 import { isExternalActionEnabled, requireExternalActionGate } from './_externalActionGates.js';
 import { sendOperationalMail } from './_operationalMail.js';
 import { resolveGraphEmailSender } from './_graphEmail.js';
+import { activeNomBConfirmation, isNomBFile, resolveNomBTrader, NOM_B_CREDIT_FIELDS } from './_dashboardNomBPolicy.js';
+import { isIssuedFinalBuyerInvoice } from './_buyerInvoiceApproval.js';
+import { isBuyerCreditNote } from './_buyerFinancialAmount.js';
 
 const ID = /^[a-zA-Z0-9]{15}(?:[a-zA-Z0-9]{3})?$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const PURPOSE = 'missing_nom_b_reminders';
 const LINK = 'https://fcos.fcuno.com/missing-nom-b';
-const NOM_FIELDS = 'Id,Name,STEM__c,Account__r.Name,Buyer_Supplier_Trader__c,BT_ST_Email_Address__c,Received__c,Deprecated__c,Replaced__c,RecordType.DeveloperName,RefCode__c,LastModifiedDate';
-const STEM_FIELDS = 'Id,Name,Account__r.Name,Vessel__r.Name,Vessel__r.IMO__c,Port__r.Name,Delivery_Date__c,Expected_Delivery_Date__c,Invoice_Status__c,Status__c,LastModifiedDate';
-const INVOICE_FIELDS = 'Id,Name,STEM__c,CreatedDate,SystemModstamp,Proforma__c,Deprecated__c,File__c';
+const NOM_FIELDS = 'Id,Name,IsDeleted,File__c,PDF__c,STEM__c,Account__r.Name,Buyer_Supplier_Trader__c,BT_ST_Email_Address__c,Received__c,Deprecated__c,Replaced__c,RecordType.DeveloperName,RefCode__c,LastModifiedDate';
+const STEM_FIELDS = 'Id,Name,IsDeleted,RefCode__c,Account__r.Name,Vessel__r.Name,Vessel__r.IMO__c,Port__r.Name,Delivery_Date__c,Expected_Delivery_Date__c,Invoice_Status__c,LastModifiedDate';
+const INVOICE_FIELDS = ['Id','Name','Invoice_Date__c','STEM__c','CreatedDate','SystemModstamp','Proforma__c','Deprecated__c','File__c'];
 const READ_ONLY_TYPES = new Set(['viewer','interoffice']);
 const txt = (value) => String(value ?? '').trim();
 const email = (value) => txt(value).toLowerCase();
-const name = (value) => txt(value).normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 const quote = (value) => `'${String(value).replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
 const unique = (values) => [...new Set(values.filter(Boolean))];
 const hash = (value, algorithm = 'sha256') => createHash(algorithm).update(typeof value === 'string' || Buffer.isBuffer(value) ? value : JSON.stringify(value)).digest('hex');
@@ -83,6 +86,19 @@ export function createMissingNomBGateway(deps = {}) {
     }
     return expected.orgId;
   }
+  let invoiceSchemaPromise;
+  async function invoiceSchema() {
+    if (!invoiceSchemaPromise) invoiceSchemaPromise = (async () => {
+      const description = await request('/sobjects/Invoice__c/describe/', { readOnly: true });
+      const fields = new Map((description?.fields || []).map((field) => [field.name,field]));
+      if (INVOICE_FIELDS.some((field) => !fields.has(field))) throw failure('MISSING_NOM_B_INVOICE_SCHEMA_UNAVAILABLE','Salesforce invoice eligibility fields are unavailable.',503);
+      const creditFields = NOM_B_CREDIT_FIELDS.filter((field) => fields.get(field)?.type === 'boolean');
+      const selected = [...INVOICE_FIELDS,...['IsDeleted','Amount__c'].filter((field) => fields.has(field)),...creditFields];
+      return { select: selected.join(','),creditFields,amountAvailable: fields.has('Amount__c') };
+    })();
+    return invoiceSchemaPromise;
+  }
+  async function invoiceSelect() { return (await invoiceSchema()).select; }
   async function nominations(stemIds) {
     const rows = [];
     for (const ids of groups(unique(stemIds))) rows.push(...await query(`SELECT ${NOM_FIELDS} FROM Nomination__c WHERE STEM__c IN (${ids.map(validId).map(quote).join(',')}) AND Deprecated__c = false AND RecordType.DeveloperName = 'Buyer'`));
@@ -95,7 +111,7 @@ export function createMissingNomBGateway(deps = {}) {
   }
   async function links(ids) {
     const rows = [];
-    for (const group of groups(unique(ids))) rows.push(...await query(`SELECT LinkedEntityId,ContentDocumentId,ContentDocument.Title,ContentDocument.FileExtension,ContentDocument.LatestPublishedVersionId FROM ContentDocumentLink WHERE LinkedEntityId IN (${group.map(validId).map(quote).join(',')})`));
+    for (const group of groups(unique(ids))) rows.push(...await query(`SELECT LinkedEntityId,ContentDocumentId,ContentDocument.Id,ContentDocument.IsDeleted,ContentDocument.ContentSize,ContentDocument.Title,ContentDocument.FileExtension,ContentDocument.LatestPublishedVersionId FROM ContentDocumentLink WHERE LinkedEntityId IN (${group.map(validId).map(quote).join(',')})`));
     return rows;
   }
   async function users(traders) {
@@ -108,12 +124,12 @@ export function createMissingNomBGateway(deps = {}) {
     const [stems, noms, directory] = await Promise.all([byIds('STEM__c', STEM_FIELDS, stemIds), nominations(stemIds), profiles(client)]);
     const [files, sfUsers] = await Promise.all([links(noms.map((n) => n.Id)), users(noms.map((n) => n.Buyer_Supplier_Trader__c))]);
     return stems.map((stem) => {
-      const active = noms.filter((n) => n.STEM__c === stem.Id && n.Deprecated__c === false && n.RecordType?.DeveloperName === 'Buyer');
+      const active = noms.filter((n) => n.STEM__c === stem.Id && activeNomBConfirmation(n));
       const nomination = active.length === 1 ? active[0] : null;
       const assignment = nomination ? resolveMissingNomBOwner(nomination, directory, sfUsers) : { status: active.length ? 'AMBIGUOUS_CONFIRMATION' : 'MISSING_CONFIRMATION' };
-      const documents = nomination ? files.filter((f) => f.LinkedEntityId === nomination.Id && isNomBDocument(f)) : [];
+      const documents = nomination ? files.filter((f) => isNomBDocument(f,nomination,stem)) : [];
       const fingerprint = hash({ stemId: stem.Id, stemName: stem.Name, nominationId: nomination?.Id, modified: nomination?.LastModifiedDate,
-        replaced: nomination?.Replaced__c, trader: nomination?.Buyer_Supplier_Trader__c, formula: nomination?.BT_ST_Email_Address__c, owner: assignment.profile?.id });
+        replaced: nomination?.Replaced__c, generatedFile: nomination?.File__c,generatedPdf: nomination?.PDF__c,stemReference: stem.RefCode__c,trader: nomination?.Buyer_Supplier_Trader__c, formula: nomination?.BT_ST_Email_Address__c, owner: assignment.profile?.id });
       return { stem, nomination, assignment, documents, fingerprint };
     });
   }
@@ -130,60 +146,75 @@ export function createMissingNomBGateway(deps = {}) {
     const version = matches[0];
     const link = documents.find((d) => d.ContentDocumentId === version.ContentDocumentId);
     const [nomination] = await byIds('Nomination__c', NOM_FIELDS, [nominationId]);
+    if (!nomination?.STEM__c || !activeNomBConfirmation(nomination)) return null;
+    const [stem] = await byIds('STEM__c',STEM_FIELDS,[nomination.STEM__c]);
+    if (!stem || !isNomBDocument(link,nomination,stem)) return null;
     if (link?.ContentDocument?.LatestPublishedVersionId !== version.Id || version.Title !== expected.title || link?.ContentDocument?.Title !== expected.title || version.Checksum?.toLowerCase() !== expected.md5 || Number(version.ContentSize) !== expected.size || nomination?.Received__c !== '🟢') return null;
     return { stemId: nomination.STEM__c, nominationId, contentDocumentId: version.ContentDocumentId, contentVersionId: version.Id, receivedStatus: nomination.Received__c, verified: true };
   }
   async function verifyInvoicePdfs(invoices) {
-    const files = await links(invoices.map((i) => i.Id));
+    const [files,schema] = await Promise.all([links(invoices.map((i) => i.Id)),invoiceSchema()]);
     return invoices.map((invoice) => {
       const documentId = txt(invoice.File__c).match(/(?:^|\/)(069[a-zA-Z0-9]{12}(?:[a-zA-Z0-9]{3})?)(?:$|[?#])/i)?.[1];
       const file = files.find((f) => f.LinkedEntityId === invoice.Id && f.ContentDocumentId === documentId);
-      return { ...invoice,pdfSaved: Boolean(file && txt(file.ContentDocument?.FileExtension).toLowerCase() === 'pdf' && ID.test(txt(file.ContentDocument?.LatestPublishedVersionId))) };
+      return { ...invoice,_nomBCreditFields: schema.creditFields,_nomBAmountAvailable: schema.amountAvailable,pdfSaved: Boolean(file && file.ContentDocument?.Id === documentId && file.ContentDocument?.IsDeleted === false && Number(file.ContentDocument?.ContentSize) > 0 && txt(file.ContentDocument?.FileExtension).toLowerCase() === 'pdf' && ID.test(txt(file.ContentDocument?.LatestPublishedVersionId))) };
     });
   }
   async function invoicesForStems(ids, activation) {
     const rows = [];
-    for (const group of groups(unique(ids))) rows.push(...await query(`SELECT ${INVOICE_FIELDS} FROM Invoice__c WHERE STEM__c IN (${group.map(validId).map(quote).join(',')}) AND CreatedDate >= ${validDate(activation)} ORDER BY CreatedDate,Id`));
+    for (const group of groups(unique(ids))) rows.push(...await query(`SELECT ${await invoiceSelect()} FROM Invoice__c WHERE STEM__c IN (${group.map(validId).map(quote).join(',')}) AND CreatedDate >= ${validDate(activation)} ORDER BY CreatedDate,Id`));
     return verifyInvoicePdfs(rows);
   }
-  return { query, request, verify, facts, byIds, readback, nominations, invoicesForStems, verifyInvoicePdfs };
+  return { query, request, verify, facts, byIds, readback, nominations, invoicesForStems, verifyInvoicePdfs, invoiceSelect };
 }
 
-export function resolveMissingNomBOwner(nomination, directory, sfUsers) {
-  const trader = name(nomination.Buyer_Supplier_Trader__c);
-  if (!trader) return { status: 'MISSING_TRADER' };
-  const users = sfUsers.filter((u) => name(u.Name) === trader);
-  if (users.length !== 1) return { status: users.length ? 'AMBIGUOUS_SALESFORCE_USER' : 'UNRESOLVED_SALESFORCE_USER' };
-  const user = users[0];
-  if (user.IsActive !== true) return { status: 'INACTIVE_SALESFORCE_USER' };
-  const formula = email(nomination.BT_ST_Email_Address__c);
-  const sfEmail = email(user.Email);
-  if (formula && sfEmail && formula !== sfEmail) return { status: 'TRADER_EMAIL_CONFLICT' };
-  const targetEmail = sfEmail || formula;
-  let matches = targetEmail ? directory.filter((p) => email(p.email) === targetEmail) : [];
-  if (matches.length > 1) return { status: 'AMBIGUOUS_FCOS_PROFILE' };
-  if (!matches.length && targetEmail) return { status: 'UNREGISTERED_TRADER' };
-  if (!matches.length) matches = directory.filter((p) => name(p.full_name) === trader);
-  if (matches.length !== 1) return { status: matches.length ? 'AMBIGUOUS_FCOS_PROFILE' : 'UNREGISTERED_TRADER' };
-  const profile = matches[0];
-  if (!profile.active) return { status: 'INACTIVE_FCOS_PROFILE' };
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email(profile.email))) return { status: 'TRADER_EMAIL_MISSING' };
-  return { status: 'resolved', profile };
+export function resolveMissingNomBOwner(nomination, directory, sfUsers = []) {
+  const normalizedName = (value) => txt(value).replace(/\s+/g,' ').toLowerCase();
+  const traderName = normalizedName(nomination.Buyer_Supplier_Trader__c);
+  const hasConfirmedOverride = Object.hasOwn(NOM_B_TRADER_LOGIN_EMAILS,traderName) && typeof NOM_B_TRADER_LOGIN_EMAILS[traderName] === 'string';
+  if (!hasConfirmedOverride) {
+    // A formula email must not resurrect an explicitly inactive or ambiguous User identity.
+    const matches = sfUsers.filter((user) => normalizedName(user.Name) === traderName);
+    if (matches.length > 1 || (matches.length === 1 && matches[0].IsActive !== true)) return { status: 'UNRESOLVED_TRADER' };
+  }
+  // Share Production's confirmed trader-login overrides and correspondence-mailbox exclusion.
+  const trader = resolveNomBTrader(nomination,directory,sfUsers);
+  if (!trader.resolved) return { status: 'UNRESOLVED_TRADER' };
+  const matches = directory.filter((profile) => profile.active === true && profile.id === trader.id && email(profile.email) === email(trader.email));
+  if (matches.length !== 1) return { status: 'UNRESOLVED_TRADER' };
+  return { status: 'resolved',profile: matches[0] };
 }
-export function isNomBDocument(link) {
-  return Boolean(ID.test(txt(link?.ContentDocumentId)) && /(?:^|[^a-z0-9])NOM\s+B(?:$|[^a-z0-9])/i.test(txt(link?.ContentDocument?.Title)));
+export function isNomBDocument(link, confirmation, stem) {
+  return Boolean(confirmation && stem && isNomBFile(link,confirmation,stem));
 }
 export function isCancelledStem(stem) {
-  return /cancelled|canceled/i.test(txt(stem?.Invoice_Status__c)) || /cancelled|canceled/i.test(txt(stem?.Status__c)) || stem?.Cancelled__c === true;
+  return stem?.IsDeleted === true || /cancelled|canceled/i.test(txt(stem?.Invoice_Status__c)) || /cancelled|canceled/i.test(txt(stem?.Status__c)) || stem?.Cancelled__c === true;
+}
+function validNonnegativeInvoiceAmount(value) {
+  const amount = txt(value);
+  return /^-?\d+(?:\.\d+)?$/.test(amount) && !(amount.startsWith('-') && /[1-9]/.test(amount));
+}
+export function isMissingNomBInvoiceCandidate(invoice, activatedAt) {
+  if (!invoice || invoice.IsDeleted === true || isBuyerCreditNote(invoice)
+    || /(?:^|[\s_-])(?:CREDIT[\s_-]*NOTE|CN)(?:$|[\s_-]|\d)/i.test(txt(invoice.Name))) return false;
+  const creditFields = unique([...NOM_B_CREDIT_FIELDS.filter((field) => Object.hasOwn(invoice,field)),...(invoice._nomBCreditFields || [])]);
+  if (creditFields.some((field) => invoice[field] !== false)) return false;
+  // Initial invoice creation can precede PDF generation, which fills Amount__c.
+  // Retain that prospective candidate; missing monetary evidence still blocks sending.
+  if (invoice.Amount__c != null && txt(invoice.Amount__c) && !validNonnegativeInvoiceAmount(invoice.Amount__c)) return false;
+  return Boolean(ID.test(txt(invoice.Id)) && ID.test(txt(invoice.STEM__c)) &&
+    Number.isFinite(Date.parse(invoice.CreatedDate)) && Date.parse(invoice.CreatedDate) >= Date.parse(activatedAt) &&
+    invoice.Proforma__c === false && invoice.Deprecated__c === false);
 }
 export function qualifiesMissingNomBInvoice(invoice, activatedAt) {
-  return Boolean(ID.test(txt(invoice?.Id)) && ID.test(txt(invoice?.STEM__c)) &&
-    Number.isFinite(Date.parse(invoice.CreatedDate)) && Date.parse(invoice.CreatedDate) >= Date.parse(activatedAt) &&
-    invoice.Proforma__c === false && invoice.Deprecated__c === false && invoice.pdfSaved === true && txt(invoice.File__c) && !/-CN-/i.test(txt(invoice.Name)));
+  if (!isMissingNomBInvoiceCandidate(invoice,activatedAt)) return false;
+  if ((invoice._nomBAmountAvailable === true || Object.hasOwn(invoice,'Amount__c')) && !validNonnegativeInvoiceAmount(invoice.Amount__c)) return false;
+  return isIssuedFinalBuyerInvoice(invoice) && invoice.pdfSaved === true && Boolean(txt(invoice.File__c));
 }
+const stemReference = (stem) => txt(stem.RefCode__c) || txt(stem.Name).split(' - ')[0];
 function rowOf(fact, user) {
   const n = fact.nomination; const s = fact.stem;
-  return { nominationId: n.Id, stemId: s.Id, stemName: s.Name, buyerName: n.Account__r?.Name || s.Account__r?.Name || '',
+  return { nominationId: n.Id, stemId: s.Id, stemName: s.Name, stemReference: stemReference(s), buyerName: n.Account__r?.Name || s.Account__r?.Name || '',
     vesselName: s.Vessel__r?.Name || '', imo: s.Vessel__r?.IMO__c || '', portName: s.Port__r?.Name || '',
     deliveryDate: s.Delivery_Date__c || null, expectedDeliveryDate: s.Expected_Delivery_Date__c || null,
     confirmationReference: n.RefCode__c || n.Name || '', traderName: fact.assignment.profile.full_name || n.Buyer_Supplier_Trader__c,
@@ -217,7 +248,7 @@ export async function missingNomBList(body = {}, context, deps = {}) {
       const f = byNomination.get(last);
       if (f && !isCancelledStem(f.stem) && !f.documents.length && f.assignment.profile?.id === user.id) {
         const row = rowOf(f, user);
-        if (!search || [row.stemName,row.buyerName,row.vesselName,row.imo,row.portName,row.confirmationReference].some((v) => String(v).toLowerCase().includes(search))) rows.push(row);
+        if (!search || [row.stemName,row.stemReference,row.buyerName,row.vesselName,row.imo,row.portName,row.confirmationReference].some((v) => String(v).toLowerCase().includes(search))) rows.push(row);
       }
       more = i < nominations.length - 1 || nominations.length === 200;
       if (rows.length >= pageSize) break;
@@ -271,7 +302,7 @@ export async function missingNomBUpload(body, context, deps = {}) {
   const requestHash = hash({ userId: user.id, nominationId: file.nominationId, filename: file.filename, sha256: file.sha256 });
   const token = randomUUID();
   const reservation = await rpc(context.client, 'missing_nom_b_reserve_upload', { p_org: org,p_operation: file.operationId,p_user: user.id,p_stem: fact.stem.Id,p_nomination: file.nominationId,p_hash: requestHash,p_fingerprint: fact.fingerprint,p_token: token });
-  const title = `${fact.stem.Name} - NOM B`;
+  const title = `${stemReference(fact.stem)} - NOM B`;
   const marker = `FCOS_MISSING_NOM_B:${file.operationId}:${requestHash}`;
   const expected = { title, md5: file.md5, size: file.size };
   if (reservation.status === 'Completed') return reservation.result;
@@ -329,8 +360,9 @@ export async function missingNomBUpload(body, context, deps = {}) {
 
 export function missingNomBEmail(fact, invoice) {
   const row = rowOf(fact, fact.assignment.profile);
-  const subject = `Action required: missing Nom B — ${row.stemName}`;
-  const text = `Dear ${row.traderName},\n\nPlease file the missing Nom B as soon as possible.\n\nSTEM: ${row.stemName}\nBuyer: ${row.buyerName}\nVessel: ${row.vesselName}\nIMO: ${row.imo}\nPort: ${row.portName}\nDelivery date: ${row.deliveryDate || 'Not recorded'}\nExpected delivery: ${row.expectedDeliveryDate || 'Not recorded'}\nBuyer Confirmation: ${row.confirmationReference}\nTriggering invoice: ${invoice.Name}\nInvoice created: ${invoice.CreatedDate}\n\nOpen FCOS and sign in to file your Nom B:\n${LINK}`;
+  const subject = `Action required: missing Nom B — ${row.stemReference}`;
+  const invoiceDate = invoice.Invoice_Date__c ? `Invoice date: ${invoice.Invoice_Date__c}` : `Invoice created: ${invoice.CreatedDate}`;
+  const text = `Dear ${row.traderName},\n\nPlease file the missing Nom B as soon as possible.\n\nSTEM: ${row.stemReference}\nBuyer: ${row.buyerName}\nVessel: ${row.vesselName}\nIMO: ${row.imo}\nPort: ${row.portName}\nDelivery date: ${row.deliveryDate || 'Not recorded'}\nExpected delivery: ${row.expectedDeliveryDate || 'Not recorded'}\nBuyer Confirmation: ${row.confirmationReference}\nTriggering invoice: ${invoice.Name}\n${invoiceDate}\n\nView and file all my missing Nom B\n${LINK}\nSign in to FCOS to view your assigned confirmations.`;
   return { to: email(fact.assignment.profile.email), subject, text };
 }
 const DEFINITELY_UNSENT_CODES = new Set(['GRAPH_EMAIL_CONFIG_MISSING','EMAIL_DELIVERY_DISABLED','EMAIL_PURPOSE_DISABLED','EMAIL_SENDER_NOT_ASSIGNED','EMAIL_PURPOSE_INVALID','MICROSOFT_GRAPH_MAIL_CONFIG_MISSING','VERCEL_OIDC_TOKEN_MISSING','MICROSOFT_GRAPH_TOKEN_FAILED','MICROSOFT_GRAPH_TOKEN_MISSING']);
@@ -353,9 +385,10 @@ export async function runMissingNomBReminders({ client, env = process.env, ...de
     for (let page = 0; page < (deps.maxScanPages || 5); page += 1) {
       const at = validDate(state.cursor_at); const until = validDate(state.scan_until); const activation = validDate(state.activated_at);
       const continuation = state.cursor_id ? `(SystemModstamp > ${at} OR (SystemModstamp = ${at} AND Id > ${quote(validId(state.cursor_id))}))` : `SystemModstamp >= ${at}`;
-      const invoices = await gateway.query(`SELECT ${INVOICE_FIELDS} FROM Invoice__c WHERE CreatedDate >= ${activation} AND SystemModstamp <= ${until} AND ${continuation} ORDER BY SystemModstamp,Id LIMIT 200`);
-      const verifiedInvoices = await gateway.verifyInvoicePdfs(invoices.filter((i) => txt(i.File__c)));
-      const discoveries = verifiedInvoices.filter((i) => qualifiesMissingNomBInvoice(i,activation)).map((i) => ({ stemId: i.STEM__c,invoiceId: i.Id,invoice: { Id: i.Id,Name: i.Name,CreatedDate: i.CreatedDate,SystemModstamp: i.SystemModstamp } }));
+      const invoices = await gateway.query(`SELECT ${await gateway.invoiceSelect()} FROM Invoice__c WHERE CreatedDate >= ${activation} AND SystemModstamp <= ${until} AND ${continuation} ORDER BY SystemModstamp,Id LIMIT 200`);
+      // Persist potential final invoices even before a PDF exists. The durable worker below
+      // rechecks their linked file without relying on another invoice SystemModstamp change.
+      const discoveries = invoices.filter((i) => isMissingNomBInvoiceCandidate(i,activation)).map((i) => ({ stemId: i.STEM__c,invoiceId: i.Id,invoice: { Id: i.Id,Name: i.Name,Invoice_Date__c: i.Invoice_Date__c || null,CreatedDate: i.CreatedDate,SystemModstamp: i.SystemModstamp } }));
       stats.scanned += invoices.length; stats.discovered += discoveries.length;
       const last = invoices.at(-1); const done = invoices.length < 200;
       state = await rpc(client,'missing_nom_b_checkpoint',{ p_org: org,p_token: token,p_discoveries: discoveries,p_cursor_at: done ? until : validDate(last.SystemModstamp),p_cursor_id: done ? '' : last.Id,p_done: done });
@@ -373,22 +406,29 @@ export async function runMissingNomBReminders({ client, env = process.env, ...de
     let sending = false;
     try {
       const fact = batchFacts.get(row.stem_id);
-      if (!invoices.some((i) => i.STEM__c === row.stem_id && qualifiesMissingNomBInvoice(i,activation)) || !fact || isCancelledStem(fact.stem) || fact.documents.length) {
+      const potential = invoices.filter((i) => i.STEM__c === row.stem_id && isMissingNomBInvoiceCandidate(i,activation));
+      if (!potential.length) {
         await finishReminder(client,row,'Suppressed','NO_LONGER_ELIGIBLE'); stats.suppressed += 1; continue;
       }
+      if (!potential.some((i) => qualifiesMissingNomBInvoice(i,activation))) { await finishReminder(client,row,'Blocked','PDF_PENDING'); stats.blocked += 1; continue; }
+      if (!fact || isCancelledStem(fact.stem) || fact.documents.length) { await finishReminder(client,row,'Suppressed','NO_LONGER_ELIGIBLE'); stats.suppressed += 1; continue; }
       if (fact.assignment.status !== 'resolved') { await finishReminder(client,row,'Blocked',fact.assignment.status); stats.blocked += 1; continue; }
       const [[fresh], currentInvoices] = await Promise.all([gateway.facts([row.stem_id],client),gateway.invoicesForStems([row.stem_id],activation)]);
       const invoice = currentInvoices.find((i) => qualifiesMissingNomBInvoice(i,activation));
-      if (!fresh || isCancelledStem(fresh.stem) || fresh.documents.length || !qualifiesMissingNomBInvoice(invoice,activation)) { await finishReminder(client,row,'Suppressed','NO_LONGER_ELIGIBLE'); stats.suppressed += 1; continue; }
+      if (!currentInvoices.some((i) => isMissingNomBInvoiceCandidate(i,activation))) { await finishReminder(client,row,'Suppressed','NO_LONGER_ELIGIBLE'); stats.suppressed += 1; continue; }
+      if (!invoice) { await finishReminder(client,row,'Blocked','PDF_PENDING'); stats.blocked += 1; continue; }
+      if (!fresh || isCancelledStem(fresh.stem) || fresh.documents.length) { await finishReminder(client,row,'Suppressed','NO_LONGER_ELIGIBLE'); stats.suppressed += 1; continue; }
       if (fresh.assignment.status !== 'resolved') { await finishReminder(client,row,'Blocked',fresh.assignment.status); stats.blocked += 1; continue; }
-      const started = await rpc(client,'missing_nom_b_begin_send',{ p_id: row.id,p_token: row.claim_token,p_nomination: fresh.nomination.Id,p_user: fresh.assignment.profile.id,p_email: email(fresh.assignment.profile.email),p_fingerprint: fresh.fingerprint,p_invoice: { Id: invoice.Id,Name: invoice.Name,CreatedDate: invoice.CreatedDate,SystemModstamp: invoice.SystemModstamp } });
+      const started = await rpc(client,'missing_nom_b_begin_send',{ p_id: row.id,p_token: row.claim_token,p_nomination: fresh.nomination.Id,p_user: fresh.assignment.profile.id,p_email: email(fresh.assignment.profile.email),p_fingerprint: fresh.fingerprint,p_invoice: { Id: invoice.Id,Name: invoice.Name,Invoice_Date__c: invoice.Invoice_Date__c || null,CreatedDate: invoice.CreatedDate,SystemModstamp: invoice.SystemModstamp } });
       if (!started) { await finishReminder(client,row,'Blocked','UPLOAD_OR_CLAIM_IN_FLIGHT'); stats.blocked += 1; continue; }
       // Sending holds the shared STEM lock against FCOS uploads. Re-read after acquiring it:
       // an upload could have completed between the previous Salesforce read and begin_send.
       const [[lockedFact], lockedInvoices] = await Promise.all([gateway.facts([row.stem_id],client),gateway.invoicesForStems([row.stem_id],activation)]);
       const lockedInvoice = lockedInvoices.find((i) => qualifiesMissingNomBInvoice(i,activation));
-      if (!lockedFact || isCancelledStem(lockedFact.stem) || lockedFact.documents.length || !lockedInvoice) { await finishReminder(client,row,'Suppressed','NO_LONGER_ELIGIBLE'); stats.suppressed += 1; continue; }
-      if (lockedInvoice.Id !== invoice.Id || lockedInvoice.SystemModstamp !== invoice.SystemModstamp || lockedInvoice.Name !== invoice.Name || lockedInvoice.CreatedDate !== invoice.CreatedDate) { await finishReminder(client,row,'Blocked','INVOICE_CHANGED'); stats.blocked += 1; continue; }
+      if (!lockedInvoices.some((i) => isMissingNomBInvoiceCandidate(i,activation))) { await finishReminder(client,row,'Suppressed','NO_LONGER_ELIGIBLE'); stats.suppressed += 1; continue; }
+      if (!lockedInvoice) { await finishReminder(client,row,'Blocked','PDF_PENDING'); stats.blocked += 1; continue; }
+      if (!lockedFact || isCancelledStem(lockedFact.stem) || lockedFact.documents.length) { await finishReminder(client,row,'Suppressed','NO_LONGER_ELIGIBLE'); stats.suppressed += 1; continue; }
+      if (lockedInvoice.Id !== invoice.Id || lockedInvoice.SystemModstamp !== invoice.SystemModstamp || lockedInvoice.Name !== invoice.Name || lockedInvoice.CreatedDate !== invoice.CreatedDate || (lockedInvoice.Invoice_Date__c || null) !== (invoice.Invoice_Date__c || null)) { await finishReminder(client,row,'Blocked','INVOICE_CHANGED'); stats.blocked += 1; continue; }
       if (lockedFact.assignment.status !== 'resolved' || lockedFact.fingerprint !== fresh.fingerprint || lockedFact.assignment.profile?.id !== fresh.assignment.profile.id) { await finishReminder(client,row,'Blocked','ASSIGNMENT_CHANGED'); stats.blocked += 1; continue; }
       sending = true;
       await (deps.sendMail || sendOperationalMail)(missingNomBEmail(lockedFact,lockedInvoice), { client,env,purposeKey: PURPOSE,mailboxSnapshot: { id: sender.mailboxId,emailAddress: sender.emailAddress } });
@@ -417,9 +457,18 @@ export async function missingNomBStatus({ client, env = process.env, now = new D
   const uploads = await client.from('missing_nom_b_upload_operations').select('operation_id',{ count:'exact',head:true }).eq('source_org_id',org).in('status',['Posting','Uncertain']);
   if (uploads.error) throw uploads.error;
   counts.uncertainUploads = uploads.count || 0;
+  const stalled = await client.from('missing_nom_b_reminders').select('id',{ count:'exact',head:true })
+    .eq('source_org_id',org).eq('status','Sending').lt('claim_until',new Date(now).toISOString());
+  if (stalled.error) throw stalled.error;
+  counts.stalledDeliveries = stalled.count || 0;
+  const outcomes = await client.from('missing_nom_b_reminders').select('status,last_error_code,updated_at')
+    .eq('source_org_id',org).in('status',['Blocked','Failed','Uncertain'])
+    .order('updated_at',{ ascending:false }).limit(10);
+  if (outcomes.error) throw outcomes.error;
   const state = stateResult.data;
   const scanLagSeconds = state?.completed_through ? Math.max(0, Math.floor((new Date(now).getTime()-Date.parse(state.completed_through))/1000)) : null;
   const active = enabled(env);
-  const healthStatus = counts.uncertain || counts.uncertainUploads || counts.failed || counts.blocked || (active && (!state || scanLagSeconds > 900)) ? 'warning' : 'healthy';
-  return { status: active ? 'enabled' : 'disabled',healthStatus,enabled: active,activatedAt: state?.activated_at || null,lastScanAt: state?.last_success_at || null,scanLagSeconds,...counts };
+  const healthStatus = counts.uncertain || counts.uncertainUploads || counts.stalledDeliveries || counts.failed || counts.blocked || (active && (!state || scanLagSeconds > 900)) ? 'warning' : active ? 'online' : 'disabled';
+  return { status: active ? 'enabled' : 'disabled',healthStatus,enabled: active,activatedAt: state?.activated_at || null,lastScanAt: state?.last_success_at || null,scanLagSeconds,...counts,
+    recentOutcomes: (outcomes.data || []).map((row) => ({status:row.status,code:row.last_error_code,at:row.updated_at})) };
 }
