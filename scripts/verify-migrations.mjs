@@ -325,6 +325,9 @@ async function verifyRuntimeObjects(label) {
     internalHelpers.length, `${label} service-role internal helper execution retained`, [internalHelpers],
   );
   const serviceOnlyTables = [
+    'missing_nom_b_scan_state',
+    'missing_nom_b_reminders',
+    'missing_nom_b_upload_operations',
     'financial_report_settings',
     'financial_report_setting_events',
     'payment_collection_currency_thresholds',

@@ -12,6 +12,8 @@ test('critical function contracts fail closed before invalid requests reach the 
     'financeSettingsSave',
     'marketTraderWorkspace',
     'marketTraderWorkspaceSave',
+    'missingNomBList',
+    'missingNomBUpload',
     'salesforceStemDetail',
     'stemWorkspaceActivity',
     'systemErrorVerify',

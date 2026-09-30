@@ -303,6 +303,7 @@ import {
 } from '../_emailRouterHandlers.js';
 import { createEmailRouterServiceClient, currentEmailRouterMailbox, emailRouterGraphFetch, maintainEmailRouterSubscriptions, processEmailRouterOutbox, recordEmailRouterAlert, resolveEmailRouterAlert, syncEmailRouterFolderFromStoredCursor } from '../_emailRouterCore.js';
 import { processEmailRouterLearningJobs } from '../_emailRouterLearning.js';
+import { missingNomBList as missingNomBListService, missingNomBUpload as missingNomBUploadService, runMissingNomBReminders, missingNomBStatus } from '../_missingNomB.js';
 import { createXeroHandlers, XERO_HANDLER_MODULE_ACCESS } from '../_xeroHandlers.js';
 import {
   importCashflowBankStatement as importCashflowBankStatementService,
@@ -1147,9 +1148,12 @@ async function listAccessModel(client) {
   return { userTypes, typePermissions, typeCapabilities };
 }
 
-const AUTH_EXEMPT_HANDLERS = new Set(['outstandingBuyerInvoicesEmailCron', 'paymentCollectionsReconcileCron', 'portalEntitlementSyncCron', 'collaborationDailyCron', 'growthCoachingDailyCron', 'hedgeDeskMaintenanceCron', 'marketReportDriveSyncCron', 'masterContractReconcileCron', 'emailRouterMaintenanceCron']);
+const AUTH_EXEMPT_HANDLERS = new Set(['outstandingBuyerInvoicesEmailCron', 'paymentCollectionsReconcileCron', 'portalEntitlementSyncCron', 'collaborationDailyCron', 'growthCoachingDailyCron', 'hedgeDeskMaintenanceCron', 'marketReportDriveSyncCron', 'masterContractReconcileCron', 'emailRouterMaintenanceCron', 'missingNomBReminderCron']);
 
 const HANDLER_MODULE_ACCESS = {
+  missingNomBList: ['dashboard'],
+  missingNomBUpload: ['dashboard'],
+  missingNomBReminderCron: [],
   authContext: [],
   portalApplicationsList: [],
   portalApplicationLaunch: [],
@@ -6937,6 +6941,7 @@ async function systemHealth(body = {}, req = null, accessContext) {
     cachedHealthCheck('fcos-updates-mail', 5 * 60, force, fcosUpdatesMailHealthRow),
     cachedHealthCheck('hedge-desk', 60, force, hedgeDeskHealthRow),
     cachedHealthCheck('email-router', 60, force, emailRouterHealthRow),
+    cachedHealthCheck('missing-nom-b', 60, force, missingNomBHealthRow),
     cachedHealthCheck('outlook-calendar', 5 * 60, force, outlookCalendarHealthRow),
     ]),
     connectionAttestationHealthRow(),
@@ -18968,8 +18973,44 @@ async function emailRouterMaintenanceCron(_body = {}, req = null) {
   };
 }
 
+async function missingNomBList(body = {}, req = null, accessContext = null) {
+  return missingNomBListService(body, accessContext || await requireActiveUser(req));
+}
+
+async function missingNomBUpload(body = {}, req = null, accessContext = null) {
+  return missingNomBUploadService(body, accessContext || await requireActiveUser(req));
+}
+
+async function missingNomBReminderCron(_body = {}, req = null) {
+  requireCronAuthorization(req);
+  const client = safeSupabaseAdminClient();
+  if (!client) throw appError('FCOS database access is unavailable for Nom B reminders.', 503);
+  return runMissingNomBReminders({ client, env: process.env });
+}
+
+async function missingNomBHealthRow() {
+  const client = safeSupabaseAdminClient();
+  const result = client ? await timedCheck(() => missingNomBStatus({ client, env: process.env })) : null;
+  return healthRow({
+    id: 'missing-nom-b',
+    name: 'Missing Nom B',
+    category: 'Operations',
+    purpose: 'Buyer-trader filing reminders, invoice scan progress, and verified Nom B uploads.',
+    scope: 'server',
+    provider: 'Salesforce / Microsoft Graph',
+    endpoint: '/missing-nom-b',
+    authType: 'FCOS session and protected cron',
+    configured: Boolean(client),
+    configuredEnv: configuredEnv(['FCOS_ENABLE_MISSING_NOM_B_REMINDERS']),
+    notes: ['Checks final buyer invoice PDFs every five minutes after activation.', 'Uncertain delivery and upload outcomes require verification before another write.'],
+  }, result);
+}
+
 const xeroHandlers = createXeroHandlers({ requireActiveUser, resolveRecoveredSystemErrorHandler });
 const handlers = {
+  missingNomBList,
+  missingNomBUpload,
+  missingNomBReminderCron,
   authContext,
   portalApplicationsList,
   portalApplicationLaunch,

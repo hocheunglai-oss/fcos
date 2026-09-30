@@ -17,6 +17,12 @@ const GATE_DEFINITIONS = Object.freeze({
     label: 'Email delivery',
     description: 'Manual and scheduled server email delivery.',
   },
+  missing_nom_b_reminders: {
+    envName: 'FCOS_ENABLE_MISSING_NOM_B_REMINDERS',
+    defaultEnabled: false,
+    label: 'Missing Nom B reminders',
+    description: 'One automatic buyer-trader filing reminder per STEM after a final buyer invoice PDF is saved.',
+  },
   outlook_calendar: {
     envName: 'FCOS_ENABLE_OUTLOOK_CALENDAR',
     defaultEnabled: false,

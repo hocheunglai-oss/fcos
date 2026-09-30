@@ -1,6 +1,16 @@
 import { createHash } from 'node:crypto';
 
 const HANDLER_CONTEXT = {
+  missingNomBReminderCron: {
+    title: 'Missing Nom B reminders need attention',
+    message: 'The Nom B reminder check could not be completed. Review System Health for scan, assignment, or delivery failures.',
+    link: '/settings?section=health',
+  },
+  missingNomBUpload: {
+    title: 'Nom B filing needs verification',
+    message: 'The Nom B upload could not be confirmed. Return to Missing Nom B to verify the same filing operation before retrying.',
+    link: '/missing-nom-b',
+  },
   dashboardSummary: {
     title: 'Dashboard figures could not be refreshed',
     message: 'Dashboard figures could not be loaded from Salesforce. Open Dashboard and retry the refresh.',
