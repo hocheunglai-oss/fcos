@@ -114,6 +114,7 @@ import {
 } from '../_graphEmail.js';
 import { growthCalendarHealth } from '../_growthOutlook.js';
 import { workNotificationsList as workNotificationsListService, workNotificationsRead as workNotificationsReadService, workNotificationsState as workNotificationsStateService } from '../_workNotifications.js';
+import { workNotificationAccessContext } from '../_workNotificationAccess.js';
 import { reportSystemError, resolveRecoveredSystemErrorHandler, resolveSystemErrorIncident, shouldNotifySystemError, validSystemErrorSignature } from '../_systemErrorNotifications.js';
 import { workCommitmentsList as workCommitmentsListService } from '../_workCommitments.js';
 import { FUNCTION_CONTRACT_VERSION, validateFunctionRequest } from '../../shared/functionContracts.js';
@@ -966,8 +967,7 @@ function requireAdministratorContext(accessContext) {
 
 async function workNotificationsAccessContext(req, accessContext) {
   const context = accessContext || (await requireActiveUser(req));
-  const markets = await userHasAnyModuleAccess(context.client, context.profile, ['markets']);
-  return { ...context, capabilities: { ...(context.capabilities || {}), markets } };
+  return workNotificationAccessContext(context);
 }
 
 async function workNotificationsList(body = {}, req = null, accessContext = null) {

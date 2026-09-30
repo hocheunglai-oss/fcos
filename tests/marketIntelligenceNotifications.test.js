@@ -30,6 +30,5 @@ test('work notifications expose Markets alerts without email delivery', () => {
   assert.doesNotMatch(service, /sendMail|sendEmail|mail\.send/i);
   assert.match(component, /markets: "Markets"/);
   assert.match(component, /SelectItem value="markets">Markets/);
-  assert.match(handlers, /userHasAnyModuleAccess\(context\.client, context\.profile, \['markets'\]\)/);
-  assert.match(handlers, /capabilities: \{ \.\.\.\(context\.capabilities \|\| \{\}\), markets \}/);
+  assert.match(handlers, /return workNotificationAccessContext\(context\)/);
 });

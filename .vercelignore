@@ -4,6 +4,7 @@
 .sf/
 .sfdx/
 .vercel/
+.codex/
 node_modules/
 dist/
 output/

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowRight, Bell, BellRing, Check, CheckCheck, Clock3, Loader2, RotateCcw, ShieldCheck, TriangleAlert } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { appClient } from "@/api/appClient";
@@ -66,6 +66,15 @@ export default function WorkNotifications() {
   const [unavailableSources, setUnavailableSources] = useState([]);
   const [stateFilter, setStateFilter] = useState("active");
   const [sourceFilter, setSourceFilter] = useState("all");
+  const mounted = useRef(false);
+  const loadSequence = useRef(0);
+  const pendingLoad = useRef(null);
+  const view = useRef(null);
+  const viewGeneration = useRef(0);
+  const mutationInFlight = useRef(false);
+  const latestLoad = useRef(null);
+  if (view.current !== `${stateFilter}:${sourceFilter}`) ++viewGeneration.current;
+  view.current = `${stateFilter}:${sourceFilter}`;
 
   const applyResponse = useCallback((data) => {
     setNotifications(Array.isArray(data?.notifications) ? data.notifications : []);
@@ -74,10 +83,16 @@ export default function WorkNotifications() {
   }, []);
 
   const loadNotifications = useCallback(
-    async ({ quiet = false } = {}) => {
+    async ({ quiet = false, forceRefresh = false } = {}) => {
+      const requestedView = view.current;
+      if (quiet && !forceRefresh && pendingLoad.current?.view === requestedView) return pendingLoad.current.promise;
+      pendingLoad.current?.controller.abort();
+      const sequence = ++loadSequence.current;
+      const controller = new AbortController();
       if (!quiet) setLoading(true);
-
-      try {
+      const request = { controller, view: requestedView, promise: null };
+      pendingLoad.current = request;
+      request.promise = (async () => { try {
         const response = await appClient.functions.invoke(
           "workNotificationsList",
           {
@@ -85,22 +100,28 @@ export default function WorkNotifications() {
             state: stateFilter,
             source: sourceFilter,
           },
-          { force: true },
+          { force: true, signal: controller.signal },
         );
-
+        if (!mounted.current || sequence !== loadSequence.current || requestedView !== view.current || response.data?.cancelled) return;
         if (response.data?.error) {
           setUnavailableSources(["Notifications"]);
         } else {
           applyResponse(response.data);
         }
+      } catch (error) {
+        if (mounted.current && sequence === loadSequence.current && error?.name !== 'AbortError') setUnavailableSources(["Notifications"]);
       } finally {
-        if (!quiet) setLoading(false);
-      }
+        if (pendingLoad.current === request) pendingLoad.current = null;
+        if (mounted.current && sequence === loadSequence.current) setLoading(false);
+      } })();
+      return request.promise;
     },
     [applyResponse, sourceFilter, stateFilter],
   );
+  latestLoad.current = loadNotifications;
 
   useEffect(() => {
+    mounted.current = true;
     loadNotifications({ quiet: true });
 
     const interval = window.setInterval(() => {
@@ -112,6 +133,10 @@ export default function WorkNotifications() {
     window.addEventListener("fcos:work-notifications-changed", handleChanged);
 
     return () => {
+      mounted.current = false;
+      ++loadSequence.current;
+      pendingLoad.current?.controller.abort();
+      pendingLoad.current = null;
       window.clearInterval(interval);
       window.removeEventListener("fcos:work-notifications-changed", handleChanged);
     };
@@ -119,19 +144,39 @@ export default function WorkNotifications() {
 
   const markRead = useCallback(
     async (notificationIds) => {
+      if (mutationInFlight.current) return false;
+      mutationInFlight.current = true;
+      const requestedView = view.current;
+      const requestedGeneration = viewGeneration.current;
+      pendingLoad.current?.controller.abort();
+      ++loadSequence.current;
+      pendingLoad.current = null;
       setUpdating(true);
       try {
-        const response = await appClient.functions.invoke("workNotificationsRead", notificationIds ? { notificationIds } : {}, { force: true });
-        if (!response.data?.error) applyResponse(response.data);
+        const response = await appClient.functions.invoke("workNotificationsRead", { ...(notificationIds ? { notificationIds } : {}), listState: stateFilter, source: sourceFilter, limit: NOTIFICATION_LIMIT }, { force: true });
+        if (mounted.current && requestedView === view.current && requestedGeneration === viewGeneration.current && !response.data?.error && !response.data?.cancelled) {
+          pendingLoad.current?.controller.abort();
+          ++loadSequence.current;
+          applyResponse(response.data);
+        } else if (mounted.current && !response.data?.error && !response.data?.cancelled) {
+          await latestLoad.current({ quiet: true, forceRefresh: true });
+        }
+        return mounted.current && !response.data?.error && !response.data?.cancelled;
+      } catch {
+        if (mounted.current) setUnavailableSources(["Notifications"]);
+        return false;
       } finally {
-        setUpdating(false);
+        mutationInFlight.current = false;
+        if (mounted.current) { setUpdating(false); setLoading(false); }
       }
     },
-    [applyResponse],
+    [applyResponse, sourceFilter, stateFilter],
   );
 
   const openNotification = async (notification) => {
-    if (!notification.readAt) await markRead(notification.notificationIds || [notification.id]);
+    if (mutationInFlight.current) return;
+    if (!notification.readAt && !(await markRead(notification.notificationIds || [notification.id]))) return;
+    if (!mounted.current) return;
     setOpen(false);
     if (typeof notification.link === "string" && notification.link) {
       navigate(notification.link);
@@ -140,6 +185,13 @@ export default function WorkNotifications() {
 
   const updateNotification = useCallback(
     async (notification, state) => {
+      if (mutationInFlight.current) return;
+      mutationInFlight.current = true;
+      const requestedView = view.current;
+      const requestedGeneration = viewGeneration.current;
+      pendingLoad.current?.controller.abort();
+      ++loadSequence.current;
+      pendingLoad.current = null;
       setUpdating(true);
       try {
         const snoozedUntil = state === "snoozed" ? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() : undefined;
@@ -155,16 +207,26 @@ export default function WorkNotifications() {
           },
           { force: true },
         );
-        if (!response.data?.error) applyResponse(response.data);
+        if (mounted.current && requestedView === view.current && requestedGeneration === viewGeneration.current && !response.data?.error && !response.data?.cancelled) {
+          pendingLoad.current?.controller.abort();
+          ++loadSequence.current;
+          applyResponse(response.data);
+        } else if (mounted.current && !response.data?.error && !response.data?.cancelled) {
+          await latestLoad.current({ quiet: true, forceRefresh: true });
+        }
+      } catch {
+        if (mounted.current) setUnavailableSources(["Notifications"]);
       } finally {
-        setUpdating(false);
+        mutationInFlight.current = false;
+        if (mounted.current) { setUpdating(false); setLoading(false); }
       }
     },
     [applyResponse, sourceFilter, stateFilter],
   );
 
   const verifySystemIncident = useCallback(async (notification) => {
-    if (!notification?.incidentSignature) return;
+    if (!notification?.incidentSignature || mutationInFlight.current) return;
+    mutationInFlight.current = true;
     setUpdating(true);
     setVerificationMessage('');
     try {
@@ -176,7 +238,8 @@ export default function WorkNotifications() {
     } catch {
       setVerificationMessage('This incident could not be verified. Its unresolved status has been retained.');
     } finally {
-      setUpdating(false);
+      mutationInFlight.current = false;
+      if (mounted.current) setUpdating(false);
     }
   }, [loadNotifications]);
 
@@ -261,7 +324,7 @@ export default function WorkNotifications() {
             <div className="divide-y divide-border">
               {visibleNotifications.map((notification) => (
                 <div key={notification.groupKey || notification.id} className={cn("flex items-start gap-1 px-2 py-1.5 transition-colors hover:bg-muted/60", !notification.readAt && "bg-blue-50/70 dark:bg-blue-950/35")}>
-                  <button type="button" className="flex min-w-0 flex-1 items-start gap-3 px-2 py-1.5 text-left" onClick={() => openNotification(notification)}>
+                  <button type="button" disabled={updating} className="flex min-w-0 flex-1 items-start gap-3 px-2 py-1.5 text-left" onClick={() => openNotification(notification)}>
                     <span className={cn("mt-1.5 h-2 w-2 shrink-0 rounded-full", notification.readAt ? "bg-muted-foreground/40" : "bg-blue-600")} />
                     <span className="min-w-0 flex-1">
                       <span className="mb-1 flex flex-wrap items-center gap-2">

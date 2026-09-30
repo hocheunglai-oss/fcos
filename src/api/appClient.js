@@ -16,6 +16,13 @@ function changedSessionResponse() {
   return { data: { error: 'Your account changed. Refresh this view.', cancelled: true }, meta: { cancelled: true, cacheStatus: 'CANCELLED' } };
 }
 
+function cancelledResponse(requestId = null) {
+  return {
+    data: { cancelled: true },
+    meta: { cached: false, cacheLayer: 'network', cacheStatus: 'CANCELLED', cachedAt: null, requestId, salesforceCalls: null, cancelled: true },
+  };
+}
+
 const DEDICATED_FUNCTION_ENDPOINTS = Object.freeze({
   emailRouterBackgroundSync: '/api/email-router-background-sync',
   workNotificationsList: '/api/work-notifications',
@@ -184,20 +191,8 @@ async function requestFunction(name, payload, options, cacheKey, authContext, ca
       signal: options.signal,
     });
   } catch (error) {
-    if (error?.name === 'AbortError') {
-      return {
-        data: { cancelled: true },
-        meta: {
-          cached: false,
-          cacheLayer: 'network',
-          cacheStatus: 'CANCELLED',
-          cachedAt: null,
-          requestId: null,
-          salesforceCalls: null,
-          cancelled: true,
-        },
-      };
-    }
+    if (!isCurrentClientSession(session)) return changedSessionResponse();
+    if (error?.name === 'AbortError' || options.signal?.aborted) return cancelledResponse();
     return {
       data: { error: error?.message || 'Network request failed. Check your connection and try again.' },
       meta: {
@@ -212,8 +207,6 @@ async function requestFunction(name, payload, options, cacheKey, authContext, ca
   }
   const responseContentType = res.headers?.get?.('content-type') || '';
   const responseIsJson = responseContentType.toLowerCase().includes('application/json');
-  const data = responseIsJson ? await res.json().catch(() => ({})) : {};
-  if (!isCurrentClientSession(session)) return changedSessionResponse();
   const responseHeader = (name) => res.headers?.get?.(name) || null;
   const serverCacheStatus = responseHeader('x-fcos-cache') || 'BYPASS';
   const serverFetchedAt = responseHeader('x-fcos-data-fetched-at') || now();
@@ -223,8 +216,28 @@ async function requestFunction(name, payload, options, cacheKey, authContext, ca
   const salesforceBacked = responseHeader('x-fcos-salesforce-backed') === '1';
   const salesforceFetchedAt = responseHeader('x-fcos-salesforce-fetched-at');
   const mutationHeader = responseHeader('x-fcos-handler-mutation');
+  const invalidateUncertainMutation = () => {
+    if (options.invalidateCache === true || (options.invalidateCache !== false && (mutationHeader === '1' || (!cacheKey && mutationHeader !== '0')))) invalidateFunctionCache();
+  };
+  let data = {};
+  if (responseIsJson) {
+    try {
+      data = await res.json();
+    } catch (error) {
+      if (!isCurrentClientSession(session)) return changedSessionResponse();
+      invalidateUncertainMutation();
+      if (error?.name === 'AbortError' || options.signal?.aborted) return cancelledResponse(requestId);
+      return {
+        data: { error: 'The FCOS response could not be read. Refresh the saved result before retrying.', code: 'FCOS_RESPONSE_INVALID' },
+        meta: { cached: false, cacheLayer: 'network', cacheStatus: 'UNAVAILABLE', cachedAt: null, requestId, salesforceCalls: Number.isFinite(salesforceCalls) ? salesforceCalls : null },
+      };
+    }
+  }
+  if (!isCurrentClientSession(session)) return changedSessionResponse();
+  if (options.signal?.aborted) { invalidateUncertainMutation(); return cancelledResponse(requestId); }
 
   if (!responseIsJson) {
+    invalidateUncertainMutation();
     return {
       data: { error: res.status === 504
         ? 'The FCOS request timed out before it completed. Refresh the saved result before retrying.'
@@ -247,7 +260,7 @@ async function requestFunction(name, payload, options, cacheKey, authContext, ca
     return {
       data: {
         ...data,
-        error: data.error || data.message || `Request failed: ${res.status}`,
+        error: data?.error || data?.message || `Request failed: ${res.status}`,
       },
       meta: {
         cached: false,
@@ -274,7 +287,7 @@ async function requestFunction(name, payload, options, cacheKey, authContext, ca
   if (responseMeta.salesforceBacked && responseMeta.salesforceFetchedAt) {
     publishSalesforceFreshness({ fetchedAt: responseMeta.salesforceFetchedAt, handler: name });
   }
-  if (cacheKey && cacheGeneration === functionCacheGeneration) {
+  if (cacheKey && !data?.error && !data?.cancelled && cacheGeneration === functionCacheGeneration) {
     functionResponseCache.set(cacheKey, {
       name,
       data: cloneJson(data),
@@ -352,6 +365,7 @@ async function invoke(name, payload = {}, options = {}) {
     const backgroundRequest = startFunctionRequest(name, payload, { ...options, force: false }, cacheKey, authContext);
     backgroundRequest.then((result) => {
       if (!isCurrentClientSession(session)) return;
+      if (result.data?.cancelled || result.meta?.cancelled) return;
       if (result.data?.error) {
         const fallback = browserCacheResponse(cached, 'STALE_ERROR', false);
         fallback.meta.refreshError = result.data.error;

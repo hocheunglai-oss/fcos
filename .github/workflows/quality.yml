@@ -35,6 +35,8 @@ jobs:
       - run: npm run typecheck
       - name: Install isolated Dashboard test browser
         run: npx playwright install --with-deps chromium
+      - name: Verify desktop notification and Hedge Desk refresh races
+        run: npx playwright test --config playwright.desktop-debug.config.js
       - name: Verify Nom B desktop and mobile workflows without providers
         run: npx playwright test --config playwright.nom-b.config.js
       - name: Verify trader Nom B filing and interrupted upload recovery

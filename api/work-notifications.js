@@ -1,4 +1,5 @@
 import { authenticatedFunction } from './_authenticatedFunction.js';
+import { workNotificationAccessContext } from './_workNotificationAccess.js';
 import {
   workNotificationsList,
   workNotificationsRead,
@@ -28,6 +29,6 @@ export default authenticatedFunction({
         code: 'FCOS_NOTIFICATION_OPERATION_UNKNOWN',
       });
     }
-    return operation.execute(body, context);
+    return operation.execute(body, await workNotificationAccessContext(context));
   },
 });

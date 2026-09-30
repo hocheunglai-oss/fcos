@@ -29,6 +29,7 @@ dist-ssr
 
 .vite
 .vercel
+.codex/
 
 # Generated local migration, verification, and report artifacts
 output/

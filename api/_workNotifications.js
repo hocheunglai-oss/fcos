@@ -587,7 +587,7 @@ export async function workNotificationsRead(body = {}, accessContext) {
   };
 
   await Promise.all([updateTable('collaboration_notifications', collaborationIds), updateTable('growth_notifications', growthIds), updateTable('fcos_improvement_notifications', improvementIds), markEmailRouterRead(), markSystemErrorsRead(), markShipAgentRead(), markSpecialTermsRead(), markMarketIntelligenceRead()]);
-  return workNotificationsList({ limit: body.limit }, accessContext);
+  return workNotificationsList({ limit: body.limit, state: body.listState, source: body.source, type: body.type }, accessContext);
 }
 
 export async function workNotificationsState(body = {}, accessContext) {
