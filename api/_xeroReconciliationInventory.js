@@ -82,6 +82,12 @@ function validateBaseline(connection, inventory) {
   return documents;
 }
 
+// Xero supports IDs on Invoices, but CreditNotes requires the single-ID route.
+export function campaignDocumentReadPath(collection, id) {
+  return collection === 'CreditNotes' ? `/CreditNotes/${encodeURIComponent(id)}?unitdp=4`
+    : `/${collection}?IDs=${encodeURIComponent(id)}&summaryOnly=false&unitdp=4`;
+}
+
 /** Refresh changed records and exact selected targets without a whole-org rescan. */
 export async function refreshCampaignInventory({ connection, inventory, env = process.env, fetchImpl,
   accountingFetch = xeroAccountingFetch, onResponse = () => {}, selectedInvoiceIds = [], selectedCreditNoteIds = [] } = {}) {
@@ -129,10 +135,19 @@ export async function refreshCampaignInventory({ connection, inventory, env = pr
 
   const exact = async (collection, field, ids) => {
     const found = new Map();
-    for (let offset = 0; offset < ids.length; offset += 50) {
-      const group = ids.slice(offset, offset + 50);
+    const groupSize = collection === 'CreditNotes' ? 1 : 50;
+    for (let offset = 0; offset < ids.length; offset += groupSize) {
+      const group = ids.slice(offset, offset + groupSize);
       const suffix = collection === 'Payments' ? '' : '&summaryOnly=false&unitdp=4';
-      const response = await read(`/${collection}?IDs=${encodeURIComponent(group.join(','))}${suffix}`);
+      let response;
+      try {
+        response = await read(collection === 'CreditNotes' ? campaignDocumentReadPath(collection, group[0])
+          : `/${collection}?IDs=${encodeURIComponent(group.join(','))}${suffix}`);
+      } catch (error) {
+        // A missing single credit is explicit target evidence, not a failed delta.
+        if (collection !== 'CreditNotes' || error?.status !== 404) throw error;
+        continue;
+      }
       if (!Array.isArray(response?.[collection])) throw incomplete(`${collection} exact target response is incomplete.`);
       for (const row of response[collection]) {
         const id = identifier(row, field, collection);

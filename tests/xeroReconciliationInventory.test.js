@@ -22,7 +22,7 @@ function fixture(overrides = {}) {
     paths.push({ path, options });
     if (overrides[path]) return overrides[path];
     if (path.startsWith('/Invoices?IDs=')) return { Invoices: [invoice('invoice-one', 'VOIDED', 100)] };
-    if (path.startsWith('/CreditNotes?IDs=')) return { CreditNotes: [] };
+    if (path.startsWith('/CreditNotes/')) return { CreditNotes: [] };
     if (path.startsWith('/Invoices?')) return { Invoices: [invoice('invoice-one', 'VOIDED', 100)] };
     if (path.startsWith('/CreditNotes?')) return { CreditNotes: [] };
     if (path.startsWith('/Contacts?')) return { Contacts: [{ ContactID: 'contact-one', Name: 'Buyer Updated', ContactStatus: 'ACTIVE' }] };
@@ -45,7 +45,8 @@ test('bounded sequential delta merges changed active/inactive evidence and exact
   assert.equal(result.paymentReadSnapshot.payments[0].Amount, 35);
   assert.equal(result.organisation.periodLockDate, '2026-08-31');
   assert.ok(f.paths.slice(0, 4).every((row) => row.options.headers['If-Modified-Since']));
-  assert.ok(f.paths.every((row) => row.path.includes('?page=') || row.path.includes('?IDs=') || row.path === '/Organisations'));
+  assert.ok(f.paths.every((row) => row.path.includes('?page=') || row.path.includes('?IDs=')
+    || row.path === '/CreditNotes/credit-one?unitdp=4' || row.path === '/Organisations'));
   assert.ok(f.paths.every((row) => row.options.method === 'GET'));
   assert.ok(Date.parse(result.observedSince) >= Date.parse(inventory.observedSince));
 });
@@ -76,4 +77,47 @@ test('malformed page and organisation lock response cannot become a complete inv
   await assert.rejects(refreshCampaignInventory({ connection, inventory, accountingFetch: broken.accountingFetch }), /malformed/);
   const locks = fixture({ '/Organisations': { Organisations: [] } });
   await assert.rejects(refreshCampaignInventory({ connection, inventory, accountingFetch: locks.accountingFetch }), /period locks/);
+});
+
+test('all 25 credit targets are read sequentially by exact ID and charged individually', async () => {
+  const ids = Array.from({ length: 25 }, (_, i) => `credit-${i}`);
+  const f = fixture(Object.fromEntries(ids.map((id) => [`/CreditNotes/${id}?unitdp=4`, { CreditNotes: [credit(id)] }])));
+  const result = await refreshCampaignInventory({ connection, inventory, accountingFetch: f.accountingFetch,
+    selectedCreditNoteIds: ids });
+  assert.deepEqual(result.rawTargets.creditNotes.map((row) => row.CreditNoteID).sort(), [...ids].sort());
+  assert.deepEqual(result.missingTargetIds.creditNotes, []);
+  assert.equal(result.callCount, 30);
+  assert.deepEqual(f.paths.filter((row) => row.path.startsWith('/CreditNotes/')).map((row) => row.path),
+    ids.map((id) => `/CreditNotes/${id}?unitdp=4`));
+  assert.ok(f.paths.every((row) => row.options.method === 'GET'));
+  assert.equal(f.paths.some((row) => row.path.startsWith('/CreditNotes?IDs=')), false);
+});
+
+test('exact credit reads reject extraneous, duplicate, absent-ID and malformed response records', async () => {
+  for (const response of [{ CreditNotes: [credit('other')] },
+    { CreditNotes: [credit('credit-one'), credit('credit-one')] },
+    { CreditNotes: [credit('credit-one'), credit('other')] },
+    { CreditNotes: [{}] }, { CreditNotes: null }, {}]) {
+    const f = fixture({ '/CreditNotes/credit-one?unitdp=4': response });
+    await assert.rejects(refreshCampaignInventory({ connection, inventory, accountingFetch: f.accountingFetch,
+      selectedCreditNoteIds: ['credit-one'] }), { code: 'XERO_CAMPAIGN_INVENTORY_INCOMPLETE' });
+  }
+});
+
+test('404 credits are explicitly missing without hiding later targets or other provider failures', async () => {
+  const f = fixture({ '/CreditNotes/credit-two?unitdp=4': { CreditNotes: [credit('credit-two')] } });
+  const fetch = async (...args) => {
+    if (args[1] === '/CreditNotes/credit-one?unitdp=4') throw Object.assign(new Error('not found'), { status: 404 });
+    return f.accountingFetch(...args);
+  };
+  const result = await refreshCampaignInventory({ connection, inventory, accountingFetch: fetch,
+    selectedCreditNoteIds: ['credit-one', 'credit-two'] });
+  assert.equal(result.callCount, 7);
+  assert.deepEqual(result.missingTargetIds.creditNotes, ['credit-one']);
+  assert.deepEqual(result.rawTargets.creditNotes.map((row) => row.CreditNoteID), ['credit-two']);
+  await assert.rejects(refreshCampaignInventory({ connection, inventory,
+    accountingFetch: async (...args) => {
+      if (args[1].startsWith('/CreditNotes/')) throw Object.assign(new Error('provider unavailable'), { status: 503 });
+      return f.accountingFetch(...args);
+    }, selectedCreditNoteIds: ['credit-one'] }), /provider unavailable/);
 });

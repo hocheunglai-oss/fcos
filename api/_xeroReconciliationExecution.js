@@ -10,7 +10,7 @@ import { xeroPaymentDate } from './_xeroPaymentAssociation.js';
 import { reviewedPaymentReferenceRow } from './_xeroPaymentReferenceLink.js';
 import { validatedGroupPaymentRow } from './_xeroGroupPaymentPersistence.js';
 import { paymentPostingKey } from './_xeroPaymentPosting.js';
-import { refreshCampaignInventory } from './_xeroReconciliationInventory.js';
+import { campaignDocumentReadPath, refreshCampaignInventory } from './_xeroReconciliationInventory.js';
 import { loadPublishedPreviewCheckpoint } from './_xeroPreviewCheckpoint.js';
 import { hydratePreviewPayments } from './_xeroPreviewPayments.js';
 import { buildCampaignContactCases, executeCampaignContactCase } from './_xeroReconciliationContacts.js';
@@ -425,7 +425,7 @@ async function executeDraft({ client, connection, campaign, batch, caseRow, item
     draftDetail(item, candidates[0]);
     targetId = documentIdentity(candidates[0], collection);
   }
-  const readback = await read(`/${collection}?IDs=${encodeURIComponent(targetId)}&summaryOnly=false&unitdp=4`);
+  const readback = await read(campaignDocumentReadPath(collection, targetId));
   const details = readback?.[collection];
   if (!Array.isArray(details) || details.length !== 1 || documentIdentity(details[0], collection) !== targetId) throw failure('Exact draft readback is incomplete.');
   const verifiedDocument = details[0]; const proof = draftDetail(item, verifiedDocument);
@@ -661,7 +661,7 @@ export async function executeCampaignBatch({ client, connection, campaign, batch
           continue;
         }
         if (row.status !== 'pending_verification') { results.push(row); continue; }
-        const path = `/${row.collection}?IDs=${encodeURIComponent(row.targetId)}&summaryOnly=false&unitdp=4`;
+        const path = campaignDocumentReadPath(row.collection, row.targetId);
         let response;
         try {
           response = await withBudget(connection, { budgetId: budget.id, budgetPhase: 'verification' },

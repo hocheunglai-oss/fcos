@@ -82,6 +82,57 @@ test('verified document link returns exact mapping proof with zero Xero writes',
   assert.equal(f.calls.filter((row) => row.type === 'release').length, 1);
 });
 
+function creditLinkFixture() {
+  const creditRaw = { ...raw, CreditNoteID: 'credit-one', Type: 'ACCRECCREDIT', CreditNoteNumber: 'CN-1', RemainingCredit: 100 };
+  delete creditRaw.InvoiceID;
+  const creditXero = { ...xero, id: 'credit-one', type: 'ACCRECCREDIT', collection: 'CreditNotes', invoiceNumber: 'CN-1' };
+  const creditClassified = { ...classified, xero: creditXero, xeroType: 'ACCRECCREDIT', xeroCollection: 'CreditNotes', documentNumber: 'CN-1' };
+  const f = fixture({ item: toSyncItemRow(creditClassified, run.id, 0, '2026-09-30T00:00:00Z') });
+  f.dependencies.cases = [{ ...caseRow, targetId: 'credit-one' }];
+  f.dependencies.refreshInventory = async (args) => {
+    assert.deepEqual(args.selectedCreditNoteIds, ['credit-one']);
+    assert.deepEqual(args.selectedInvoiceIds, []);
+    return { ...inventory, documents: [creditXero], rawTargets: { invoices: [], creditNotes: [creditRaw] },
+      missingTargetIds: { invoices: [], creditNotes: [] } };
+  };
+  f.dependencies.classify = () => ({ rows: [creditClassified] });
+  f.dependencies.accountingFetch = async (_connection, path, options) => {
+    f.calls.push({ type: 'provider', path, options });
+    return { CreditNotes: [creditRaw] };
+  };
+  return { ...f, creditRaw };
+}
+
+test('credit link verification and claim recovery read the exact single credit with zero writes', async () => {
+  for (const recovering of [false, true]) {
+    const f = creditLinkFixture();
+    const [outcome] = await executeCampaignBatch({ ...f.dependencies, recovering });
+    assert.equal(outcome.status, 'reconciled');
+    assert.equal(outcome.mapping.xero_document_id, 'credit-one');
+    assert.deepEqual(f.calls.filter((row) => row.type === 'provider').map((row) => [row.path, row.options.method]),
+      [['/CreditNotes/credit-one?unitdp=4', 'GET']]);
+    assert.equal(f.calls.filter((row) => row.type === 'release').length, 1);
+  }
+});
+
+test('credit verification refuses wrong, duplicate, missing and malformed targets', async () => {
+  for (const response of [{ CreditNotes: [{ ...creditLinkFixture().creditRaw, CreditNoteID: 'other' }] },
+    { CreditNotes: [creditLinkFixture().creditRaw, creditLinkFixture().creditRaw] },
+    { CreditNotes: [] }, { CreditNotes: null }, {}]) {
+    const f = creditLinkFixture();
+    f.dependencies.accountingFetch = async () => response;
+    const [outcome] = await executeCampaignBatch(f.dependencies);
+    assert.equal(outcome.status, 'needs_decision');
+    assert.equal(outcome.mapping, undefined);
+    assert.match(outcome.reason, /not uniquely present/);
+  }
+  const missing = creditLinkFixture();
+  missing.dependencies.accountingFetch = async () => { throw Object.assign(new Error('not found'), { status: 404 }); };
+  const [outcome] = await executeCampaignBatch(missing.dependencies);
+  assert.equal(outcome.status, 'needs_decision');
+  assert.match(outcome.reason, /disappeared/);
+});
+
 test('changed source fingerprint is held independently without a verification call', async () => {
   const f = fixture({ fresh: { sourceFingerprint: 'source-v2' } });
   const outcomes = await executeCampaignBatch(f.dependencies);
@@ -203,6 +254,7 @@ function draftFixture(options = {}) {
   const draftSource = { ...source, xero: undefined, action: 'create_draft', status: 'eligible',
     ...(options.supplier ? { salesforceObject: 'Supplier_Invoice__c', salesforceId: 'supplier-one', documentKind: 'supplier',
       xeroType: 'ACCPAY', contactId: '77777777-7777-4777-8777-777777777777', documentNumber: 'HK2626001T-VESSEL' } : {}),
+    ...(options.credit ? { xeroType: 'ACCRECCREDIT', xeroCollection: 'CreditNotes', documentNumber: 'CN-1' } : {}),
     invoiceDate: '2026-09-01', dueDate: '2026-09-30', reference: 'STEM-1',
     lines: [{ description: 'Fuel', quantity: 1, unitAmount: 100, accountCode: '200', taxType: 'NONE' }] };
   const payload = buildXeroAccountingPayload(draftSource);
@@ -215,6 +267,9 @@ function draftFixture(options = {}) {
     forecast: { ...batch.forecast, writeCalls: 1, verificationCalls: 2 } };
   const target = { ...raw, ...payload, InvoiceID: '33333333-3333-4333-8333-333333333333',
     LineItems: payload.LineItems.map((line) => ({ ...line, LineItemID: 'line-one', TaxAmount: 0 })) };
+  const collection = draftSource.xeroCollection;
+  const numberField = options.credit ? 'CreditNoteNumber' : 'InvoiceNumber';
+  if (options.credit) { target.CreditNoteID = target.InvoiceID; delete target.InvoiceID; target.RemainingCredit = target.Total; }
   const events = [];
   const tables = { xero_financial_sync_runs: [run], xero_financial_sync_items: [savedItem],
     xero_reconciliation_batches: [currentBatch], xero_reconciliation_campaigns: [campaign],
@@ -262,17 +317,17 @@ function draftFixture(options = {}) {
         const intent=events.filter(row=>row.event_type==='campaign_document_intent').at(-1).fingerprints;
         assert.equal(request.requestId,intent.postRequestId);
         tables.xero_shared_requests.push({id:request.requestId,tenant_id:tenantId,budget_id:intent.postBudgetId,token_version:1,
-          resource_key:'Invoices',method:'POST',phase:'operation',state:options.unknownPost?'unknown':'complete',outcome_unknown:Boolean(options.unknownPost),
+          resource_key:collection,method:'POST',phase:'operation',state:options.unknownPost?'unknown':'complete',outcome_unknown:Boolean(options.unknownPost),
           deadline_at:new Date(Date.now()-1000).toISOString()});
-        assert.equal(events.filter((row) => row.event_type === 'campaign_document_intent').at(-1).fingerprints.proposedPayload.InvoiceNumber,
-          request.body.Invoices[0].InvoiceNumber);
+        assert.equal(events.filter((row) => row.event_type === 'campaign_document_intent').at(-1).fingerprints.proposedPayload[numberField],
+          request.body[collection][0][numberField]);
         if (options.unknownPost) throw new Error('Network response lost');
         request.onResponse?.({status:200,requestId:request.requestId,budgetId:intent.postBudgetId});
-        return { Invoices: [{ ...target, ...(options.postDrift || {}) }] };
+        return { [collection]: [{ ...target, ...(options.postDrift || {}) }] };
       }
       request.onResponse?.({status:200,requestId:randomUUID(),budgetId:'budget-one'});
-      if (path.includes('?where=')) return { Invoices: targetExists || options.existingTarget ? [target] : [] };
-      return { Invoices: [{ ...target, ...(options.readbackDrift || {}) }] };
+      if (path.includes('?where=')) return { [collection]: targetExists || options.existingTarget ? [target] : [] };
+      return { [collection]: [{ ...target, ...(options.readbackDrift || {}) }] };
     },
   };
   return { ...f, draftCase, target, events, tables, get posts() { return posts; } };
@@ -344,6 +399,29 @@ test('lost draft POST response is resolved by readback and recovery never posts 
   assert.equal(recovered.targetId, first.targetId);
   assert.equal(f.posts, 1);
   assert.equal(f.events.filter((row) => row.event_type === 'campaign_document_intent').length, 1);
+});
+
+test('uncertain credit draft recovers by exact credit ID without repeating its POST', async () => {
+  const f = draftFixture({ credit: true, unknownPost: true });
+  const original = f.dependencies.accountingFetch;
+  const path = `/CreditNotes/${f.target.CreditNoteID}?unitdp=4`;
+  let firstRead = true;
+  f.dependencies.accountingFetch = async (...args) => {
+    const response = await original(...args);
+    if (args[1] === path && firstRead) { firstRead = false; return { CreditNotes: [] }; }
+    return response;
+  };
+  await assert.rejects(executeCampaignBatch(f.dependencies), /Exact draft readback is incomplete/);
+  assert.equal(f.posts, 1);
+  assert.equal(f.calls.filter((row) => row.type === 'release').length, 0);
+  const [recovered] = await executeCampaignBatch({ ...f.dependencies, recovering: true });
+  assert.equal(recovered.status, 'reconciled');
+  assert.equal(recovered.targetId, f.target.CreditNoteID);
+  assert.equal(f.posts, 1);
+  assert.equal(f.events.filter((row) => row.event_type === 'campaign_document_intent').length, 1);
+  assert.equal(f.calls.filter((row) => row.type === 'provider' && row.path === path).length, 2);
+  assert.equal(f.calls.some((row) => row.type === 'provider' && row.path.startsWith('/CreditNotes?IDs=')), false);
+  assert.equal(f.calls.filter((row) => row.type === 'release').length, 1);
 });
 
 test('recovering draft without an original journal never creates a new document', async () => {
