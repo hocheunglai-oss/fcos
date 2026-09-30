@@ -2266,7 +2266,10 @@ function findExtra(live, id, lastModifiedDate) {
   return row;
 }
 
-async function salesforceChargeWrites(body, live) {
+async function salesforceChargeWrites(body, live, { supplierId = null, wholeCase = false } = {}) {
+  if ((!supplierId && wholeCase !== true) || (supplierId && wholeCase === true)) {
+    throw httpError('Buyer-charge writes require an exact supplier or an explicit legacy whole-case scope.', 400, 'BUYER_WRITE_SCOPE_REQUIRED');
+  }
   const updates = Array.isArray(body?.extraCostUpdates) ? body.extraCostUpdates : [];
   const additions = Array.isArray(body?.extraCostAdds) ? body.extraCostAdds : [];
   const cancellations = Array.isArray(body?.cancellations) ? body.cancellations : [];
@@ -2279,6 +2282,9 @@ async function salesforceChargeWrites(body, live) {
   for (const update of updates) {
     const id = text(update?.extraCostId || update?.id, 18);
     const current = findExtra(live, id, text(update?.expectedLastModifiedDate || update?.lastModifiedDate, 80));
+    if (supplierId && current.Supplier__c !== supplierId) {
+      throw httpError('Buyer-charge changes must use this exact supplier\'s current charge rows.', 403, 'SUPPLIER_SCOPE_MISMATCH');
+    }
     const currentMode = current.Lumpsum_Cost__c != null || current.Lumpsum_Price__c != null ? 'fixed' : 'per_unit';
     const requestedMode = (update.pricingType || update.pricingMode) === 'per_unit' ? 'per_unit' : 'fixed';
     if (requestedMode !== currentMode) {
@@ -2631,7 +2637,7 @@ export async function saveAndConfirmVariableCharges(body, context) {
   try {
     if (reservation?.status !== 'salesforce_written') {
       salesforceWriteAttempted = true;
-      await salesforceChargeWrites(body, liveBefore);
+      await salesforceChargeWrites(body, liveBefore, { wholeCase: true });
       const liveAfterWrite = await liveCaseForStem(stemId, context);
       postWriteFingerprint = liveAfterWrite.fingerprint;
       await completeOperation(context.client, operationId, 'salesforce_written', {
@@ -2979,6 +2985,12 @@ async function validateBuyerSide(body, supplierRows, files, { hongKongDelivery =
     text(row?.extraCostId || row?.id, 18),
     row,
   ]));
+  const supplierExtraCostIds = new Set(supplierRows.filter((row) => row.Supplier__c).map((row) => row.Id));
+  for (const id of extraCostUpdates.keys()) {
+    if (!supplierExtraCostIds.has(id)) {
+      throw httpError('Buyer-charge changes must use this exact supplier\'s current charge rows.', 403, 'SUPPLIER_SCOPE_MISMATCH');
+    }
+  }
   const fileIds = new Set(files.map((row) => row.id));
   for (const row of supplierRows) {
     const review = byId.get(row.Id);
@@ -3271,7 +3283,7 @@ export async function confirmVariableChargeSides(body, context) {
       } else if (sides[0] === 'cost') {
         await salesforceSupplierChargeWrites(costReview.body, liveBefore, supplierId, context);
       } else {
-        await salesforceChargeWrites(buyerReview.body, liveBefore);
+        await salesforceChargeWrites(buyerReview.body, liveBefore, { supplierId });
       }
       const refreshed = await liveCaseForStem(stemId, context);
       for (const side of sides) await assertBasicCallingApprovalReady(refreshed, supplierId, context, side);
