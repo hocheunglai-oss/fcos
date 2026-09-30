@@ -88,6 +88,27 @@ async function seeded() {
   return { ...f, dependency };
 }
 
+test('pending approval returns complete business evidence and reserves the most expensive credit mix', async () => {
+  const f = await seeded();
+  const template = f.tables.xero_reconciliation_cases[0];
+  f.tables.xero_reconciliation_cases = Array.from({ length: 60 }, (_, index) => ({ ...template,
+    id: `case-${String(index).padStart(3, '0')}`, case_key: `case-${index}`,
+    evidence: { ...template.evidence, sourceObject: 'Invoice__c', sourceId: `source-${index}`,
+      targetId: `target-${index}`, documentNumber: `BUSINESS-${index}`,
+      sampleKey: `Invoice__c:${index >= 56 ? 'ACCRECCREDIT' : 'ACCREC'}:AUTHORISED` } }));
+  const ids = f.tables.xero_reconciliation_cases.map((row) => row.id);
+  f.tables.xero_reconciliation_batches.push({ id: 'approved-many', campaign_id: 'campaign-one',
+    category: 'link_only', case_ids: ids, evidence_fingerprint: 'exact-approved-evidence',
+    status: 'partial', revision: 3, verified_count: 5, forecast: {},
+    evidence: ids.map((id) => ({ id, fingerprint: template.evidence_fingerprint })) });
+  const result = await xeroReconciliationCampaignRead({ campaignId: 'campaign-one', limit: 5 }, f.dependency);
+  assert.equal(result.cases.length, 5);
+  assert.equal(result.pendingBatches[0].caseEvidence.length, 60);
+  assert.equal(result.pendingBatches[0].caseEvidence.at(-1).documentNumber, 'BUSINESS-59');
+  assert.equal(result.pendingBatches[0].nextRunForecast.verificationCalls, 5,
+    'four individually read credits plus one invoice group, even when credits sort beyond the first page');
+});
+
 test('create binds a complete saved preview and read returns public paginated cases without provider access', async () => {
   const f = await seeded();
   const result = await xeroReconciliationCampaignRead({ category: 'link_only', status: 'ready', limit: 1 }, f.dependency);

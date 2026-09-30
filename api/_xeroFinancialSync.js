@@ -1394,14 +1394,12 @@ function unsupportedPaymentBlockers(payment) {
   return blockers;
 }
 
-export async function loadSalesforceFinancialSnapshot(cutoff, querySalesforce = sfCompositeQueries, safetyContext = null) {
-  safetyContext ||= await loadFinancialSafetyContext();
+function financialSnapshotQueries(safetyContext) {
   const selected = (object, fields, prefix = '') => safetySelectFields(safetyContext, object, fields, prefix);
-  const quotedCutoff = cutoff;
-  const queries = [
+  return [
     PETROLEUM_PRODUCT_QUERY,
-    BUYER_INVOICE_QUERY.replace('LastModifiedDate', `LastModifiedDate, Proforma__c, Deprecated__c, File__c${selected('Invoice__c', ['CurrencyIsoCode', 'Buyer_Charge_Snapshot__c', 'Delivery_Date__c'])}${selected('STEM__c', ['CurrencyIsoCode', 'Payment_Term__c'], 'STEM__r.')}`).replaceAll('{cutoff}', quotedCutoff),
-    SUPPLIER_INVOICE_QUERY.replace('LastModifiedDate', `LastModifiedDate${selected('Supplier_Invoice__c', ['CurrencyIsoCode', 'Invoice_File__c', 'Invoice_Upload_Date__c', 'File__c', 'Status__c', 'Invoice_Status__c'])}`).replaceAll('{cutoff}', quotedCutoff),
+    BUYER_INVOICE_QUERY.replace('LastModifiedDate', `LastModifiedDate, Proforma__c, Deprecated__c, File__c${selected('Invoice__c', ['CurrencyIsoCode', 'Buyer_Charge_Snapshot__c', 'Delivery_Date__c'])}${selected('STEM__c', ['CurrencyIsoCode', 'Payment_Term__c'], 'STEM__r.')}`),
+    SUPPLIER_INVOICE_QUERY.replace('LastModifiedDate', `LastModifiedDate${selected('Supplier_Invoice__c', ['CurrencyIsoCode', 'Invoice_File__c', 'Invoice_Upload_Date__c', 'File__c', 'Status__c', 'Invoice_Status__c'])}`),
     `SELECT Id, Name, Buyer_Invoice__c, Supplier_Invoice__c, Product__c, Product__r.Name,
             Quantity_Delivered_Per_BDN__c, Quantity__c, Unit_of_Measure__c,
             Price_Per_Unit__c, Cost_Per_Unit__c, Total_Price__c, Total_Cost__c, LastModifiedDate${selected('STEM_Line_Item__c', ['CurrencyIsoCode', 'Quantity_Max__c', 'Unit_Sell_At__c', 'Unit_Buy_At__c', 'Cancelled__c', 'STEM__c', 'Original_Supplier__c'])}
@@ -1417,7 +1415,15 @@ export async function loadSalesforceFinancialSnapshot(cutoff, querySalesforce = 
         AND (Buyer_Invoice__c != null OR Supplier_Invoice__c != null)`,
     'SELECT Id, Name, Company_Code__c, Inactive_Suspended__c, RecordType.DeveloperName FROM Account ORDER BY Id',
   ];
-  const results = await querySalesforce(queries.map((soql) => ({ soql, clean: true, limit: 100000 })));
+}
+
+export async function loadSalesforceFinancialSnapshot(cutoff, querySalesforce = sfCompositeQueries, safetyContext = null) {
+  safetyContext ||= await loadFinancialSafetyContext();
+  const results = await querySalesforce(financialSnapshotQueries(safetyContext).map((soql) => ({ soql, clean: true, limit: 100000 })));
+  return hydrateSalesforceFinancialSnapshot(cutoff, results, querySalesforce, safetyContext);
+}
+
+async function hydrateSalesforceFinancialSnapshot(cutoff, results, querySalesforce, safetyContext) {
   const [productResult, buyerResult, supplierResult, lineResult, extraResult, accountResult] = results;
   const allResults = [productResult, buyerResult, supplierResult, lineResult, extraResult, accountResult];
   const failedIndex = allResults.findIndex((result) => !Array.isArray(result?.records) || result?.error || !Number.isSafeInteger(result.totalSize) || result.totalSize !== result.records.length || result.done === false || Boolean(result.nextRecordsUrl));
@@ -1428,7 +1434,7 @@ export async function loadSalesforceFinancialSnapshot(cutoff, querySalesforce = 
   const documents = new Map();
   for (const batch of chunks(fileIds, 200)) {
     const [result] = await querySalesforce([{ soql: `SELECT Id, LatestPublishedVersionId FROM ContentDocument WHERE Id IN (${batch.map((id) => `'${id}'`).join(',')})`, clean: true, limit: 100000 }]);
-    if (result?.error || !Array.isArray(result?.records) || Number(result.totalSize || 0) > result.records.length) throw financialError('Issued source document verification was incomplete.', 502, 'XERO_FINANCIAL_SALESFORCE_INCOMPLETE');
+    if (result?.error || !Array.isArray(result?.records) || !Number.isSafeInteger(result.totalSize) || result.totalSize !== result.records.length || result.done === false || result.nextRecordsUrl) throw financialError('Issued source document verification was incomplete.', 502, 'XERO_FINANCIAL_SALESFORCE_INCOMPLETE');
     for (const row of result.records) documents.set(row.Id, row);
   }
   for (const row of buyerResult.records || []) if (row.Buyer_Charge_Snapshot__c) row._buyerInvoiceDocument = documents.get(String(row.File__c || '').split('/').at(-1)) || null;
@@ -1459,6 +1465,133 @@ export async function loadSalesforceFinancialSnapshot(cutoff, querySalesforce = 
       extras: (extraResult.records || []).map(financialRecordFingerprint),
     },
   };
+}
+
+const financialSfId = (value) => typeof value === 'string' && /^[a-zA-Z0-9]{15}(?:[a-zA-Z0-9]{3})?$/.test(value) ? value.slice(0, 15) : null;
+const soqlLiteral = (value) => `'${String(value).replaceAll('\\', '\\\\').replaceAll("'", "\\'")}'`;
+const financialResult = (records) => ({ records, totalSize: records.length });
+
+function documentLinkScope(documentLinks, xeroSnapshot, cutoff) {
+  if (!Array.isArray(documentLinks) || !documentLinks.length || documentLinks.length > MAX_BATCH_SIZE
+    || documentLinks.some((row) => row?.category !== 'link_only' || !['Invoice__c', 'Supplier_Invoice__c'].includes(row.sourceObject)
+      || !financialSfId(row.sourceId) || !isUuid(row.targetId))
+    || new Set(documentLinks.map((row) => `${row.sourceObject}:${financialSfId(row.sourceId)}`)).size !== documentLinks.length) {
+    throw financialError('Scoped financial reads require 1–25 distinct exact document link-only cases.', 409, 'XERO_FINANCIAL_LINK_SCOPE_INVALID');
+  }
+  if (xeroSnapshot?.complete !== true || xeroSnapshot.contactsComplete !== true
+    || xeroSnapshot.documentIdentityScopeComplete === false || xeroSnapshot.cutoffDate !== cutoff
+    || !Array.isArray(xeroSnapshot.contacts) || !Array.isArray(xeroSnapshot.documents) || !Array.isArray(xeroSnapshot.inactiveDocuments)) {
+    throw financialError('Scoped financial reads require complete current Xero document and Contact identity evidence.', 502, 'XERO_FINANCIAL_LINK_SCOPE_INCOMPLETE');
+  }
+  return documentLinks.map(({ sourceObject, sourceId, targetId }) => ({ sourceObject, sourceId, targetId }));
+}
+
+function restrictFinancialQuery(query, predicate) {
+  const order = query.match(/\s+ORDER BY[\s\S]*$/i)?.[0] || '';
+  const base = order ? query.slice(0, -order.length) : query;
+  return `${base}${/\bWHERE\b/i.test(base) ? ' AND' : ' WHERE'} (${predicate})${order}`;
+}
+
+function financialIdPredicates(field, ids) {
+  return chunks(uniqueStrings(ids), 200).map((batch) => `${field} IN (${batch.map(soqlLiteral).join(',')})`);
+}
+
+function mergeFinancialRecords(...lists) {
+  const rows = new Map();
+  for (const row of lists.flat()) {
+    const id = financialSfId(row?.Id);
+    if (!id) throw financialError('A scoped financial dependency has no exact Salesforce identity.', 502, 'XERO_FINANCIAL_SALESFORCE_INCOMPLETE');
+    if (rows.has(id) && hashJson(rows.get(id)) !== hashJson(row)) {
+      throw financialError('A Salesforce dependency changed during the scoped financial read.', 409, 'XERO_FINANCIAL_LINK_SCOPE_CHANGED');
+    }
+    rows.set(id, row);
+  }
+  return [...rows.values()].sort((left, right) => String(left.Invoice_Date__c || '').localeCompare(String(right.Invoice_Date__c || '')) || left.Id.localeCompare(right.Id));
+}
+
+// Only the selected documents can leave this snapshot as executable rows. All
+// family and collision sources remain in the classifier's identity checks.
+export async function loadSalesforceDocumentLinkSnapshot(cutoff, documentLinks, {
+  querySalesforce = sfCompositeQueries, safetyContext = null, xeroSnapshot,
+} = {}) {
+  const scope = documentLinkScope(documentLinks, xeroSnapshot, cutoff);
+  safetyContext ||= await loadFinancialSafetyContext();
+  const [productQuery, buyerQuery, supplierQuery, lineQuery, extraQuery, accountQuery] = financialSnapshotQueries(safetyContext);
+  let queryCount = 0; let returnedRows = 0;
+  const read = async (queries) => {
+    if (!queries.length) return [];
+    queryCount += queries.length;
+    const results = await querySalesforce(queries.map((soql) => ({ soql, clean: true, limit: 100000 })));
+    if (!Array.isArray(results) || results.length !== queries.length || results.some((result) => result?.error
+      || !Array.isArray(result?.records) || !Number.isSafeInteger(result.totalSize) || result.totalSize !== result.records.length
+      || result.records.length > 100000 || result.done === false || result.nextRecordsUrl
+      || new Set(result.records.map((row) => financialSfId(row?.Id))).size !== result.records.length
+      || result.records.some((row) => !financialSfId(row?.Id)))) {
+      throw financialError('A scoped Salesforce dependency query is incomplete.', 502, 'XERO_FINANCIAL_SALESFORCE_INCOMPLETE');
+    }
+    returnedRows += results.reduce((count, result) => count + result.records.length, 0);
+    return results;
+  };
+  const readWhere = async (query, predicates) => (await read(predicates.map((predicate) => restrictFinancialQuery(query, predicate)))).flatMap((result) => result.records);
+  const initialObjects = ['Invoice__c', 'Supplier_Invoice__c'].filter((object) => scope.some((row) => row.sourceObject === object));
+  const initialQueries = initialObjects.map((object) => restrictFinancialQuery(object === 'Invoice__c' ? buyerQuery : supplierQuery,
+    financialIdPredicates('Id', scope.filter((row) => row.sourceObject === object).map((row) => row.sourceId))[0]));
+  const [accountsResult, ...selectedResults] = await read([accountQuery, ...initialQueries]);
+  const accounts = completeGroupedAccountSnapshot(accountsResult);
+  if (!accounts.complete) throw financialError('Complete global Salesforce Account identity evidence is unavailable.', 502, 'XERO_FINANCIAL_SALESFORCE_INCOMPLETE');
+  const selected = scope.map((row) => selectedResults[initialObjects.indexOf(row.sourceObject)].records.filter((record) => financialSfId(record.Id) === financialSfId(row.sourceId)));
+  if (selected.some((records) => records.length !== 1)) {
+    throw financialError('An exact selected Salesforce document is missing or no longer in the supported source scope.', 409, 'XERO_FINANCIAL_LINK_SOURCE_MISSING');
+  }
+  const selectedParents = selected.map((records) => records[0]);
+  const contactIndex = buildXeroContactIndex(xeroSnapshot.contacts);
+  const relevantContacts = new Set(selectedParents.flatMap((row, index) => resolveContact(contactIndex,
+    scope[index].sourceObject === 'Invoice__c' ? row.STEM__r?.Account__r?.Name : row.Supplier__r?.Name,
+    scope[index].sourceObject === 'Invoice__c' ? row.STEM__r?.Account__r?.Company_Code__c : row.Supplier__r?.Company_Code__c)).map((row) => row.id));
+  const familyIds = accounts.accounts.filter((account) => resolveContact(contactIndex, account.name, account.companyCode).some((contact) => relevantContacts.has(contact.id))).map((row) => row.id);
+  for (let i = 0; i < scope.length; i += 1) familyIds.push(scope[i].sourceObject === 'Invoice__c' ? selectedParents[i].STEM__r?.Account__c : selectedParents[i].Supplier__c);
+  const validFamilyIds = uniqueStrings(familyIds).filter(financialSfId);
+  let buyers = mergeFinancialRecords(selectedParents.filter((_row, i) => scope[i].sourceObject === 'Invoice__c'),
+    await readWhere(buyerQuery, financialIdPredicates('STEM__r.Account__c', validFamilyIds)));
+  const suppliers = mergeFinancialRecords(selectedParents.filter((_row, i) => scope[i].sourceObject === 'Supplier_Invoice__c'),
+    await readWhere(supplierQuery, financialIdPredicates('Supplier__c', validFamilyIds)));
+  // Buyer invoice numbers are global. LIKE deliberately over-collects whitespace
+  // variants; only the existing classifier decides whether they actually clash.
+  const numberCandidates = uniqueStrings([...buyers.map((row) => row.Name), ...xeroSnapshot.documents.filter((row) => row.type.startsWith('ACCREC')
+    && (relevantContacts.has(row.contactId) || scope.some((item) => item.targetId === row.id))).map((row) => exactDocumentNumber(row))]);
+  const numberKeys = new Set(numberCandidates.map((number) => groupedInvoiceNumber(number)).filter(Boolean));
+  const numberPredicates = [...numberKeys].map((number) =>
+    `Name LIKE ${soqlLiteral(`%${number.split(/\s+/).map((word) => word.replaceAll('%', '\\%').replaceAll('_', '\\_')).join('%')}%`)}`);
+  buyers = mergeFinancialRecords(buyers, (await readWhere(buyerQuery, chunks(numberPredicates, 40).map((batch) => batch.join(' OR '))))
+    .filter((row) => numberKeys.has(groupedInvoiceNumber(row.Name))));
+  const childPredicates = [...financialIdPredicates('Buyer_Invoice__c', buyers.map((row) => row.Id)), ...financialIdPredicates('Supplier_Invoice__c', suppliers.map((row) => row.Id))];
+  let lines = mergeFinancialRecords(await readWhere(lineQuery, childPredicates));
+  let extras = mergeFinancialRecords(await readWhere(extraQuery, childPredicates));
+  // Supplier dates require all linked buyers or every active buyer on their
+  // STEM. This query never guesses from the supplier or delivery header.
+  const dependencyPredicates = [...financialIdPredicates('Id', [...lines, ...extras].filter((row) => suppliers.some((parent) => parent.Id === row.Supplier_Invoice__c)).map((row) => row.Buyer_Invoice__c).filter(Boolean)),
+    ...financialIdPredicates('STEM__c', suppliers.map((row) => row.STEM__c).filter(Boolean))];
+  const dependencyBuyers = mergeFinancialRecords(await readWhere(buyerQuery, dependencyPredicates));
+  const newBuyers = dependencyBuyers.filter((row) => !buyers.some((existing) => financialSfId(existing.Id) === financialSfId(row.Id)));
+  buyers = mergeFinancialRecords(buyers, dependencyBuyers);
+  if (newBuyers.length) {
+    const predicates = financialIdPredicates('Buyer_Invoice__c', newBuyers.map((row) => row.Id));
+    lines = mergeFinancialRecords(lines, await readWhere(lineQuery, predicates));
+    extras = mergeFinancialRecords(extras, await readWhere(extraQuery, predicates));
+  }
+  const productIds = uniqueStrings([...lines, ...extras].map((row) => row.Product__c || row.Product2Id__c).filter(Boolean));
+  const products = mergeFinancialRecords(await readWhere(productQuery, financialIdPredicates('Id', productIds)));
+  const documentQuery = async (requests) => {
+    queryCount += requests.length;
+    const results = await querySalesforce(requests);
+    returnedRows += (results || []).reduce((count, result) => count + (result?.records?.length || 0), 0);
+    return results;
+  };
+  const snapshot = await hydrateSalesforceFinancialSnapshot(cutoff, [products, buyers, suppliers, lines, extras].map(financialResult).concat(accountsResult), documentQuery, safetyContext);
+  snapshot.documentLinkScope = { cases: scope, complete: true };
+  snapshot.scopedReadCounts = { queryCount, returnedRows, accounts: accounts.accounts.length,
+    buyers: buyers.length, suppliers: suppliers.length, lines: lines.length, extras: extras.length, products: products.length };
+  return snapshot;
 }
 
 export async function loadSalesforcePayments(cutoff, safetyContext = null, querySalesforce = sfQuery,
@@ -1650,8 +1783,78 @@ export async function loadStoredFinancialControls(client) {
   };
 }
 
+async function scopedFinancialControlRows(client, table, field, values, { prefix = false, insensitive = false, enabled = false } = {}) {
+  const rows = new Map();
+  for (const batch of chunks(uniqueStrings(values), 100)) {
+    const operator = prefix ? 'like' : insensitive ? 'ilike' : 'eq';
+    const expression = batch.map((value) => `${field}.${operator}.${value}${prefix ? '%' : ''}`).join(',');
+    const batchIds = new Set();
+    for (let offset = 0; ; offset += 500) {
+      let query = client.from(table).select('*').or(expression);
+      if (enabled) query = query.eq('enabled', true);
+      const result = await query.order('id').range(offset, offset + 499);
+      if (result?.error) throw storageError(result.error, table);
+      if (!Array.isArray(result?.data) || result.data.some((row) => !row?.id || batchIds.has(row.id))
+        || new Set(result.data.map((row) => row.id)).size !== result.data.length) {
+        throw financialError('Scoped financial control evidence is incomplete.', 502, 'XERO_FINANCIAL_LINK_SCOPE_INCOMPLETE');
+      }
+      for (const row of result.data) {
+        if (rows.has(row.id) && hashJson(rows.get(row.id)) !== hashJson(row)) {
+          throw financialError('A financial control changed during the scoped read.', 409, 'XERO_FINANCIAL_LINK_SCOPE_CHANGED');
+        }
+        batchIds.add(row.id); rows.set(row.id, row);
+      }
+      if (result.data.length < 500) break;
+    }
+  }
+  return [...rows.values()].sort((left, right) => left.id.localeCompare(right.id));
+}
+
+export async function loadStoredDocumentLinkControls(client, { salesforce, xeroSnapshot, documentLinks } = {}) {
+  const scope = documentLinkScope(documentLinks, xeroSnapshot, salesforce?.cutoffDate);
+  if (salesforce?.documentLinkScope?.complete !== true || hashJson(salesforce.documentLinkScope.cases) !== hashJson(scope)) {
+    throw financialError('Scoped financial controls require the same complete selected source snapshot.', 409, 'XERO_FINANCIAL_LINK_SCOPE_INVALID');
+  }
+  const sourceIds = [...salesforce.buyers, ...salesforce.suppliers].map((row) => financialSfId(row.Id));
+  const productIds = uniqueStrings([...salesforce.lines, ...salesforce.extras].map((row) => financialSfId(row.Product__c || row.Product2Id__c)).filter(Boolean));
+  const [productMappings, sourceMappings] = await Promise.all([
+    scopedFinancialControlRows(client, 'xero_financial_product_mappings', 'salesforce_product_id', productIds, { prefix: true, enabled: true }),
+    scopedFinancialControlRows(client, 'xero_financial_document_mappings', 'salesforce_id', sourceIds, { prefix: true }),
+  ]);
+  const contactIndex = buildXeroContactIndex(xeroSnapshot.contacts);
+  const mappingByKey = new Map(productMappings.map((row) => [`${row.direction}:${row.salesforce_product_id}`, row]));
+  const sourceContext = { ...(salesforce.safetyContext || {}), postingMode: 'draft', documentFieldSnapshot: salesforce };
+  const sources = [['buyer', salesforce.buyers], ['supplier', salesforce.suppliers]].flatMap(([direction, parents]) => parents.map((record) =>
+    buildSalesforceDocument(record, direction, [...salesforce.lines, ...salesforce.extras].filter((row) =>
+      (direction === 'buyer' ? row.Buyer_Invoice__c : row.Supplier_Invoice__c) === record.Id), mappingByKey, contactIndex, sourceContext)));
+  // Include every potential target and every alias of its owner, regardless of
+  // whether that owner's source or Contact belongs to the selected family.
+  const targetIds = uniqueStrings([...scope.map((row) => row.targetId), ...sourceMappings.map((row) => row.xero_document_id),
+    ...[...xeroSnapshot.documents, ...xeroSnapshot.inactiveDocuments].filter((target) => sources.some((source) => source.xeroType === target.type
+      && (source.contactId === target.contactId || groupedInvoiceNumber(source.documentNumber) === groupedInvoiceNumber(exactDocumentNumber(target)))))
+      .map((row) => row.id)]);
+  if (targetIds.some((id) => !isUuid(id))) throw financialError('A financial target control has no exact Xero identity.', 502, 'XERO_FINANCIAL_LINK_SCOPE_INCOMPLETE');
+  const [targetMappings, claims] = await Promise.all([
+    scopedFinancialControlRows(client, 'xero_financial_document_mappings', 'xero_document_id', targetIds, { insensitive: true }),
+    scopedFinancialControlRows(client, 'xero_document_field_correction_claims', 'xero_invoice_id', targetIds),
+  ]);
+  const events = await scopedFinancialControlRows(client, 'xero_document_field_correction_events', 'claim_id', claims.map((row) => row.id));
+  const documentMappings = new Map(sourceMappings.map((row) => [row.id, row]));
+  for (const row of targetMappings) {
+    if (documentMappings.has(row.id) && hashJson(documentMappings.get(row.id)) !== hashJson(row)) {
+      throw financialError('A document owner changed during the scoped read.', 409, 'XERO_FINANCIAL_LINK_SCOPE_CHANGED');
+    }
+    documentMappings.set(row.id, row);
+  }
+  return { productMappings, documentMappings: [...documentMappings.values()].sort((left, right) => left.id.localeCompare(right.id)),
+    bankMappings: [], documentCorrectionClaims: claims, documentCorrectionEvents: events };
+}
+
 export function buildFinancialClassifications(salesforce, xero, stored, { postingMode = 'draft', linkFirst = false, onProgress } = {}) {
   normalizePostingMode(postingMode);
+  if (salesforce.documentLinkScope && (!linkFirst || salesforce.documentLinkScope.complete !== true)) {
+    throw financialError('A scoped source snapshot supports verified document links only.', 409, 'XERO_FINANCIAL_LINK_SCOPE_INVALID');
+  }
   const sourceContext = { ...(salesforce.safetyContext || {}), postingMode, documentFieldSnapshot: salesforce.documentFieldPolicyVersion ? salesforce : null };
   const linesByBuyer = index([...salesforce.lines, ...salesforce.extras].filter((row) => row.Buyer_Invoice__c), (row) => row.Buyer_Invoice__c);
   const linesBySupplier = index([...salesforce.lines, ...salesforce.extras].filter((row) => row.Supplier_Invoice__c), (row) => row.Supplier_Invoice__c);
@@ -1729,8 +1932,10 @@ export function buildFinancialClassifications(salesforce, xero, stored, { postin
     'More than one Salesforce document uses this invoice identity. Resolve the duplicate source documents before syncing.');
   // Keep historical sources in every identity/proof check, but do not add known
   // pre-cutoff deliveries to the ordinary 2026 review or its financial totals.
-  const scopedRows = salesforce.documentFieldPolicyVersion
+  let scopedRows = salesforce.documentFieldPolicyVersion
     ? rows.filter((row) => row.documentFieldProjection?.scope !== 'legacy') : rows;
+  if (salesforce.documentLinkScope) scopedRows = scopedRows.filter((row) => salesforce.documentLinkScope.cases.some((item) =>
+    item.sourceObject === row.salesforceObject && financialSfId(item.sourceId) === financialSfId(row.salesforceId)));
   return { rows: scopedRows, sources: allSources, summary: summarizeClassifications(scopedRows), controlTotals: financialControlTotals(scopedRows) };
 }
 

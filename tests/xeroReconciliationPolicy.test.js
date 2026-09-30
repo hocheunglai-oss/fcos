@@ -140,6 +140,25 @@ test('forecasts expose separate conservative read, write, verification and reser
   assert.equal(forecastReconciliationBatch({ category: 'draft', cases: drafts }).recoveryCalls, 1);
 });
 
+test('bounded known document claims forecast bulk invoice reads and individual credits; unknown or larger scope stays conservative', () => {
+  const cases = Array.from({ length: 25 }, (_, index) => ({ category: 'link_only', status: 'ready',
+    sourceObject: 'Invoice__c', targetId: `target-${index}`, sampleKey: 'Invoice__c:ACCREC:ordinary' }));
+  const invoiceOnly = forecastReconciliationBatch({ category: 'link_only', cases, inventoryCalls: 41, remainingCalls: 245 });
+  assert.equal(invoiceOnly.readCalls, 42);
+  assert.equal(invoiceOnly.verificationCalls, 1);
+  assert.equal(invoiceOnly.recoveryCalls, 1);
+  assert.equal(invoiceOnly.linkVerificationMode, 'bulk_exact_documents_v1');
+  assert.equal(invoiceOnly.canProceed, true);
+  const mixed = forecastReconciliationBatch({ category: 'link_only', cases: cases.map((row, index) =>
+    index === 0 ? { ...row, sampleKey: 'Invoice__c:ACCRECCREDIT:ordinary' } : row) });
+  assert.equal(mixed.verificationCalls, 2);
+  const unknown = forecastReconciliationBatch({ category: 'link_only', cases: cases.map((row, index) =>
+    index === 0 ? { ...row, sampleKey: null } : row) });
+  assert.equal(unknown.verificationCalls, 25); assert.equal(unknown.linkVerificationMode, undefined);
+  const larger = forecastReconciliationBatch({ category: 'link_only', cases: [...cases, { ...cases[0], targetId: 'extra' }] });
+  assert.equal(larger.verificationCalls, 26); assert.equal(larger.linkVerificationMode, undefined);
+});
+
 test('one Contact-family case owns dependencies without becoming duplicate document ownership', () => {
   const saved = structuredClone(run); const documents = structuredClone(items);
   documents[0].source_payload.accountId = '001000000000001';

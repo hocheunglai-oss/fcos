@@ -75,3 +75,12 @@ The repository owner authorized removing recurring release approvals on 16 Septe
 - Focus new UI work on the desktop view. Do not initiate mobile-specific features, layout changes, redesigns, optimisations, or mobile-only bug fixes during this suspension.
 - Preserve the existing mobile implementation. Shared functionality may continue to evolve for authorised desktop or backend work; keep existing regression checks and do not intentionally break mobile behaviour.
 - Carry this policy into FCOS worktrees and delegated task instructions. Resume mobile-view development only on an explicit subsequent user instruction.
+
+## Performance reviews during long-running work
+
+- Treat the user's elapsed-time priority as an implementation requirement. Before scaling a repetitive workflow, measure one representative batch: elapsed time, provider calls, database requests, rows loaded, and verified outcomes.
+- Review the implementation proactively after the first batch, at phase boundaries, and roughly every 15 minutes of sustained repetitive work. Review sooner when throughput is materially below the estimate, the same failure repeats, or repeated scans, reads, manual steps, or retries dominate the work.
+- Normally spend 2–5 minutes on a focused review, then make the smallest safe improvement within the authorised scope without waiting for the user to request it. Use more time when a material financial or security risk requires it; avoid repeated planning and duplicate reviews.
+- Prefer complete saved evidence, fresh reads of changed records and required dependencies, bulk provider reads, bounded concurrency, efficient audited transactions, and automatic progression through already-approved unchanged batches. Do not re-read a whole backlog for each small batch unless a documented correctness dependency requires it.
+- Preserve exact identities, approval fingerprints, ownership, financial and settlement checks, quota reserves, cancellation, durable intent and uncertain-outcome readback. Performance improvements must not expand financial authority or silently mark unresolved records complete.
+- After an improvement, run one focused correctness and throughput check, record the before/after result, and resume the saved continuation point. Repeat completed checks only after relevant changes or failures; retain required migration and exact-commit release checks.

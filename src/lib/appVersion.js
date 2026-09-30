@@ -3,6 +3,7 @@ import { APP_VERSION } from './appVersionMeta.js';
 export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
+  { version: '2.0.281', releasedAt: '2026-09-30', title: 'Faster approved reconciliation links', changes: ['Read only the required source families and dependencies, verify invoices together, and continue unchanged approved links in bounded batches with progress and Stop.', 'Preserve exact approval, ownership and settlement evidence; recover interrupted claims before continuing.'] },
   { version: '2.0.275', releasedAt: '2026-09-30', title: 'Controlled Salesforce–Xero reconciliation', changes: ['Review a fixed 2026 backlog with separate approvals for verified links, Contact identity and new drafts; preserve existing Xero accounting details.', 'Coordinate Xero allowance and token refresh across requests, forecast verification calls, and recover interrupted work through readback with an audit trail.'] },
   { version: '2.0.274', releasedAt: '2026-09-29', title: 'Group-first People & Access', changes: ['Manage permission groups in a compact split view, assign multiple groups to each person, and inspect combined access with grant sources.', 'Preserve legacy individual access through groups, keep organizational roles separate, and audit revision-checked permission changes.'] },
   { version: '2.0.273', releasedAt: '2026-09-29', title: 'Nom B filing in My Commitments', changes: ['Moved personal Nom B filing from Dashboard to Personal → My Commitments → Nom B Filing, preserving trader assignments, waivers and manager controls.'] },

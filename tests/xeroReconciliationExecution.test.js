@@ -42,9 +42,10 @@ function fixture(options = {}) {
   const calls = [];
   const client = {
     from(table) {
-      let rows = table === 'xero_financial_sync_runs' ? [options.run || run] : table === 'xero_financial_sync_items' ? [options.item || item] : [];
+      let rows = table === 'xero_financial_sync_runs' ? [options.run || run] : table === 'xero_financial_sync_items' ? options.items || [options.item || item] : [];
       const chain = {
         select() { return chain; }, eq(key, value) { rows = rows.filter((row) => row[key] === value); return chain; },
+        in(key, values) { rows = rows.filter((row) => values.includes(row[key])); return chain; },
         order(key) { rows = [...rows].sort((a, b) => String(a[key]).localeCompare(String(b[key]))); return chain; },
         async maybeSingle() { return { data: rows[0] || null, error: null }; },
         async range(start, end) { return { data: rows.slice(start, end + 1), error: null }; },
@@ -82,6 +83,44 @@ test('verified document link returns exact mapping proof with zero Xero writes',
   assert.equal(f.calls.filter((row) => row.type === 'release').length, 1);
 });
 
+test('25 document links use scoped source/control reads and one second Xero read, retaining independent holds', async () => {
+  const sources = Array.from({ length: 25 }, (_, index) => ({ ...classified, salesforceId: `invoice-${index}`,
+    xero: { ...xero, id: `xero-${index}` } }));
+  const savedItems = sources.map((row, index) => toSyncItemRow(row, run.id, index, '2026-09-30T00:00:00Z'));
+  const targets = sources.map((row) => ({ ...raw, InvoiceID: row.xero.id }));
+  const cases = sources.map((row) => ({ ...caseRow, id: `${tenantId}:Invoice__c:${row.salesforceId}`,
+    sourceId: row.salesforceId, targetId: row.xero.id }));
+  const f = fixture({ items: [...savedItems, { ...item, source_id: 'unrelated-source' }] });
+  let sourceReads = 0; let controlReads = 0;
+  f.dependencies.loadSalesforce = async () => assert.fail('The document-only claim must not load the entire source backlog');
+  f.dependencies.loadControls = async () => assert.fail('The document-only claim must not load every stored control');
+  f.dependencies.loadLinkSalesforce = async (_cutoff, selected, context) => {
+    sourceReads += 1; assert.deepEqual(selected, cases); assert.equal(context.xeroSnapshot.complete, true);
+    return { groupedAccountSnapshot: { complete: true, accounts: [] } };
+  };
+  f.dependencies.loadLinkControls = async (_client, context) => {
+    controlReads += 1; assert.deepEqual(context.documentLinks, cases); return { documentMappings: [] };
+  };
+  f.dependencies.refreshInventory = async () => ({ ...inventory,
+    rawTargets: { invoices: targets, creditNotes: [] } });
+  f.dependencies.classify = () => ({ rows: sources.map((row, index) => index === 12
+    ? { ...row, sourceFingerprint: 'changed-after-approval' } : row) });
+  f.dependencies.accountingFetch = async (_connection, path, options) => {
+    f.calls.push({ type: 'provider', path, options });
+    const ids = new URL(path, 'https://fixture.invalid').searchParams.get('IDs').split(',');
+    return { Invoices: targets.filter((row) => ids.includes(row.InvoiceID)) };
+  };
+  const outcomes = await executeCampaignBatch({ ...f.dependencies, cases, batch: { ...batch,
+    forecast: { ...batch.forecast, linkVerificationMode: 'bulk_exact_documents_v1', verificationCalls: 1 } } });
+  assert.equal(sourceReads, 1); assert.equal(controlReads, 1);
+  assert.equal(outcomes.filter((row) => row.status === 'reconciled').length, 24);
+  assert.equal(outcomes[12].status, 'needs_decision');
+  const reads = f.calls.filter((row) => row.type === 'provider');
+  assert.equal(reads.length, 1); assert.equal(reads[0].options.method, 'GET');
+  assert.equal(new URL(reads[0].path, 'https://fixture.invalid').searchParams.get('IDs').split(',').length, 24);
+  assert.equal(f.calls.find((row) => row.type === 'reserve').request.verificationCalls, 1);
+});
+
 function creditLinkFixture() {
   const creditRaw = { ...raw, CreditNoteID: 'credit-one', Type: 'ACCRECCREDIT', CreditNoteNumber: 'CN-1', RemainingCredit: 100 };
   delete creditRaw.InvoiceID;
@@ -115,22 +154,24 @@ test('credit link verification and claim recovery read the exact single credit w
   }
 });
 
-test('credit verification refuses wrong, duplicate, missing and malformed targets', async () => {
+test('credit verification rejects malformed batch evidence and holds missing targets', async () => {
   for (const response of [{ CreditNotes: [{ ...creditLinkFixture().creditRaw, CreditNoteID: 'other' }] },
     { CreditNotes: [creditLinkFixture().creditRaw, creditLinkFixture().creditRaw] },
-    { CreditNotes: [] }, { CreditNotes: null }, {}]) {
+    { CreditNotes: null }, {}]) {
     const f = creditLinkFixture();
     f.dependencies.accountingFetch = async () => response;
-    const [outcome] = await executeCampaignBatch(f.dependencies);
+    await assert.rejects(executeCampaignBatch(f.dependencies), { code: 'XERO_CAMPAIGN_LINK_READBACK_INCOMPLETE' });
+    assert.equal(f.calls.filter((row) => row.type === 'release').length, 1);
+  }
+  for (const response of [async () => ({ CreditNotes: [] }),
+    async () => { throw Object.assign(new Error('not found'), { status: 404 }); }]) {
+    const missing = creditLinkFixture();
+    missing.dependencies.accountingFetch = response;
+    const [outcome] = await executeCampaignBatch(missing.dependencies);
     assert.equal(outcome.status, 'needs_decision');
     assert.equal(outcome.mapping, undefined);
     assert.match(outcome.reason, /not uniquely present/);
   }
-  const missing = creditLinkFixture();
-  missing.dependencies.accountingFetch = async () => { throw Object.assign(new Error('not found'), { status: 404 }); };
-  const [outcome] = await executeCampaignBatch(missing.dependencies);
-  assert.equal(outcome.status, 'needs_decision');
-  assert.match(outcome.reason, /disappeared/);
 });
 
 test('changed source fingerprint is held independently without a verification call', async () => {

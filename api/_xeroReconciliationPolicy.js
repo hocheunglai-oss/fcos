@@ -206,19 +206,41 @@ function calls(value, name) {
 }
 
 /** Conservative planning estimate; execution must still recheck live allowance and evidence. */
+/** Exact document reads are batched for invoices and individual for credits. */
+export function campaignDocumentReadCalls(cases) {
+  // Only a single executable claim can share one exact-target request. Larger
+  // approval previews retain the conservative per-record planning estimate.
+  if (!Array.isArray(cases) || !cases.length || cases.length > 25) return null;
+  const invoices = new Set(); const credits = new Set();
+  for (const item of cases) {
+    if (item.category !== 'link_only' || !['Invoice__c', 'Supplier_Invoice__c'].includes(item.sourceObject)
+      || typeof item.targetId !== 'string' || !item.targetId.trim()) return null;
+    const sample = String(item.sampleKey || '').split(':');
+    const type = sample[0] === item.sourceObject ? sample[1] : null;
+    const collection = item.xeroCollection || (['ACCREC', 'ACCPAY'].includes(type) ? 'Invoices'
+      : ['ACCRECCREDIT', 'ACCPAYCREDIT'].includes(type) ? 'CreditNotes' : null);
+    if (collection === 'Invoices') invoices.add(item.targetId.toLowerCase());
+    else if (collection === 'CreditNotes') credits.add(item.targetId.toLowerCase());
+    else return null;
+  }
+  return Math.ceil(invoices.size / 50) + credits.size;
+}
+
 export function forecastReconciliationBatch({ category, cases = [], inventoryCalls = 0,
   otherActivityCalls = 0, recoveryCalls = null, remainingCalls = null, reserveCalls = 200 } = {}) {
   if (!CATEGORIES.includes(category) || !Array.isArray(cases) || cases.some((item) => item.category !== category)) throw new TypeError('One known category is required');
   const pending = cases.filter((item) => item.status === 'ready');
-  const readCalls = calls(inventoryCalls, 'inventoryCalls') + pending.length;
+  const documentReads = category === 'link_only' ? campaignDocumentReadCalls(pending) : null;
+  const readCalls = calls(inventoryCalls, 'inventoryCalls') + (documentReads ?? pending.length);
   const writeCalls = ['contact', 'draft'].includes(category) ? pending.length : 0;
-  const verificationCalls = pending.reduce((sum, item) => sum + (['contact', 'draft'].includes(category) || item.sourceObject === 'Payment__c' ? 2 : 1), 0);
-  const recovery = calls(recoveryCalls ?? Math.max(1, pending.length), 'recoveryCalls');
+  const verificationCalls = documentReads ?? pending.reduce((sum, item) => sum + (['contact', 'draft'].includes(category) || item.sourceObject === 'Payment__c' ? 2 : 1), 0);
+  const recovery = calls(recoveryCalls ?? Math.max(1, documentReads ?? pending.length), 'recoveryCalls');
   const other = calls(otherActivityCalls, 'otherActivityCalls');
   const reserve = calls(reserveCalls, 'reserveCalls');
   const callsNeeded = readCalls + writeCalls + verificationCalls + recovery + other;
   if (remainingCalls !== null) calls(remainingCalls, 'remainingCalls');
   return { readCalls, writeCalls, verificationCalls, recoveryCalls: recovery,
+    ...(documentReads !== null ? { linkVerificationMode: 'bulk_exact_documents_v1' } : {}),
     otherActivityCalls: other, callsNeeded,
     canProceed: remainingCalls === null ? null : remainingCalls - reserve >= callsNeeded,
     reason: remainingCalls === null ? 'Live remaining allowance is required before execution.'

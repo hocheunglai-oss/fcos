@@ -86,6 +86,7 @@ function publicCase(row) {
     dependencies: Array.isArray(item.dependencies) ? item.dependencies : [],
     ownerId: item.ownerId || null, ownerName: item.ownerName || null,
     sourceObject: item.sourceObject || null, sourceId: item.sourceId || null, targetId: item.targetId || null,
+    sampleKey: item.sampleKey || null, xeroCollection: item.xeroCollection || null,
     currency: item.currency || null, total: item.total ?? null,
     evidenceFingerprint: row.evidence_fingerprint };
 }
@@ -97,9 +98,17 @@ async function batchForecast(client, campaign, batch, rows, allowance) {
   const approved = new Map((batch.evidence || []).map((row) => [row.id, row.fingerprint]));
   const candidates = rows.filter((row) => (batch.status === 'running' ? batch.claim_case_ids : batch.case_ids).includes(row.id)
     && row.status === 'ready' && (!approved.size || approved.get(row.id) === row.evidence_fingerprint));
-  // Reserve for the most expensive eligible verification mix; SQL selects a
-  // representative first five and may therefore choose payments before invoices.
-  const pending = candidates.sort((a,b) => Number(b.evidence?.sourceObject === 'Payment__c') - Number(a.evidence?.sourceObject === 'Payment__c') || a.id.localeCompare(b.id)).slice(0, capacity);
+  // SQL may choose a representative mix. Credits require individual reads,
+  // while invoices share one read; unknown collections stay conservative.
+  const readWeight = (row) => {
+    const evidence = row.evidence || {};
+    if (evidence.sourceObject === 'Payment__c') return 3;
+    const type = String(evidence.sampleKey || '').split(':')[1];
+    const collection = evidence.xeroCollection || (['ACCREC', 'ACCPAY'].includes(type) ? 'Invoices'
+      : ['ACCRECCREDIT', 'ACCPAYCREDIT'].includes(type) ? 'CreditNotes' : null);
+    return collection === 'Invoices' ? 0 : collection === 'CreditNotes' ? 1 : 2;
+  };
+  const pending = candidates.sort((a,b) => readWeight(b) - readWeight(a) || a.id.localeCompare(b.id)).slice(0, capacity);
   let ownReservation = 0;
   if (batch.status === 'running') {
     const key = `campaign:${campaign.id}:${batch.id}:${batch.claim_id}`;
@@ -247,12 +256,14 @@ export async function xeroReconciliationCampaignRead(body = {}, input = {}) {
     inventoryCalls: 40 + Math.ceil(planningCases.length / 50) + (category === 'contact' ? planningCases.length * 10 : 0), otherActivityCalls: 2,
     remainingCalls: allowance.remaining === null ? null : Math.max(0, allowance.remaining - allowance.reservedCalls) }) : null;
   const pendingBatches = [];
+  const caseById = new Map(rows.map((row) => [row.id, row]));
   for (const batch of (await allFinancialRows(client, 'xero_reconciliation_batches', (query) => query.eq('campaign_id', campaign.id))).data
     .filter((batch) => ['approved', 'partial', 'running'].includes(batch.status))) {
     pendingBatches.push({
         id: batch.id, category: batch.category, revision: batch.revision, status: batch.status,
         case_ids: batch.case_ids, claim_case_ids: batch.claim_case_ids, verified_count: batch.verified_count,
         evidence_fingerprint: batch.evidence_fingerprint, forecast: batch.forecast, approvalForecast: batch.forecast,
+        caseEvidence: (batch.case_ids || []).map((id) => caseById.get(id)).filter(Boolean).map(publicCase),
         nextRunForecast: await batchForecast(client, campaign, batch, rows, allowance),
       });
   }

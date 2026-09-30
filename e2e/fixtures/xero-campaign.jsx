@@ -12,7 +12,7 @@ const seed = [
   { ...link(63), id: 'decision-1', category: 'decision', status: 'needs_decision', evidenceFingerprint: null, reason: 'Accounting treatment requires operator decision.' },
   { ...link(64), id: 'decision-2', category: 'decision', status: 'needs_decision', evidenceFingerprint: null, reason: 'Missing issued source evidence.' },
 ];
-window.campaignFixture = { campaign: params.has('empty') ? null : { id: 'campaign-1', runId: 'finance-run-1', revision: 2, baselineAt: '2026-09-29T13:00:00Z', ownerId: 'operator-1', ownerName: 'Current operator', verifiedBatchCount: 0 }, cases: seed, requests: [], conflict: false, closed: false, quotaReady: !params.has('noquota'), batch: null, failRun: params.has('uncertain'), runs: [], refreshed: false };
+window.campaignFixture = { campaign: params.has('empty') ? null : { id: 'campaign-1', runId: 'finance-run-1', revision: 2, baselineAt: '2026-09-29T13:00:00Z', ownerId: 'operator-1', ownerName: 'Current operator', verifiedBatchCount: 0 }, cases: seed, requests: [], conflict: false, closed: false, quotaReady: !params.has('noquota'), batch: null, failRun: params.has('uncertain'), runs: [], refreshed: false, pauseRuns: params.has('controlled'), releaseRun: null };
 const allowance = { remaining: 894, reserve: 200, observedAt: '2026-09-29T12:37:54Z' };
 const forecast = { readCalls: 12, writeCalls: 10, verificationCalls: 10, recoveryCalls: 5, otherActivityCalls: 10, callsNeeded: 47, canProceed: true };
 const batchForecast = (cases, size = cases.length) => ({ ...forecast, callsNeeded: 10 + size * 2, canProceed: true });
@@ -41,7 +41,7 @@ appClient.functions.invoke = async (name, body = {}) => {
     if (fixture.conflict) return { data: { error: 'Campaign revision changed.' } };
     const approvalForecast = batchForecast(body.caseIds);
     const nextRunForecast = batchForecast(body.caseIds, Math.min(5, body.caseIds.length));
-    fixture.batch = { id: 'batch-1', revision: 1, category: body.category, case_ids: body.caseIds, evidence_fingerprint: 'exact-batch-fingerprint', status: 'preview', verified_count: 0, forecast: approvalForecast, approvalForecast, nextRunForecast };
+    fixture.batch = { id: 'batch-1', campaign_id: fixture.campaign.id, revision: 1, category: body.category, case_ids: body.caseIds, caseEvidence: structuredClone(body.caseIds.map((id) => fixture.cases.find((row) => row.id === id))), evidence_fingerprint: 'exact-batch-fingerprint', status: 'preview', verified_count: 0, forecast: approvalForecast, approvalForecast, nextRunForecast };
     return { data: { batch: structuredClone(fixture.batch), evidenceFingerprint: fixture.batch.evidence_fingerprint, diffs: body.category === 'link_only' ? [] : body.caseIds.map((caseId) => ({ caseId, field: 'Contact', before: 'Unlinked', after: 'Verified contact' })), approvalForecast, nextRunForecast: fixture.quotaReady ? nextRunForecast : { ...nextRunForecast, canProceed: false, reason: 'Allowance unverified' }, forecast: fixture.quotaReady ? nextRunForecast : { ...nextRunForecast, canProceed: false, reason: 'Allowance unverified' }, allowance: fixture.quotaReady ? allowance : null } };
   }
   if (name === 'xeroReconciliationCampaignApprove') {
@@ -53,11 +53,13 @@ appClient.functions.invoke = async (name, body = {}) => {
     const batch = fixture.batch;
     if (body.expectedFingerprint !== batch.evidence_fingerprint) return { data: { error: 'Batch evidence changed.' } };
     const recovering = batch.status === 'running';
+    if (body.campaignId !== batch.campaign_id || body.batchId !== batch.id || body.expectedRevision !== batch.revision && !(recovering && body.expectedRevision <= batch.revision)) return { data: { error: 'Exact batch revision changed.' } };
     const remaining = batch.case_ids.filter((id) => fixture.cases.find((row) => row.id === id)?.status === 'ready');
     const ids = recovering ? batch.claim_case_ids : remaining.slice(0, batch.verified_count < Math.min(5, batch.case_ids.length) ? Math.min(5, batch.case_ids.length) - batch.verified_count : 25);
     if (!recovering) { batch.status = 'running'; batch.claim_case_ids = ids; batch.revision++; }
     fixture.runs.push({ ids: [...ids], recovering });
     if (fixture.failRun) { fixture.failRun = false; throw new Error('Synthetic response lost after claim.'); }
+    if (fixture.pauseRuns) await new Promise((resolve) => { fixture.releaseRun = () => { fixture.releaseRun = null; resolve(); }; });
     batch.verified_count += ids.length; batch.revision++; batch.claim_case_ids = null;
     batch.status = batch.verified_count === batch.case_ids.length ? 'completed' : 'partial';
     batch.nextRunForecast = batchForecast(batch.case_ids, Math.min(25, batch.case_ids.length - batch.verified_count));

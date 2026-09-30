@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { accountingDecimalCents } from './_xeroAccountingLineCents.js';
 import { splitScopes, xeroAccountingFetch } from './_xeroContactSync.js';
 import { buildFinancialClassifications, documentMappingRow, loadSalesforceFinancialSnapshot,
+  loadSalesforceDocumentLinkSnapshot, loadStoredDocumentLinkControls,
   loadSalesforcePayments, loadStoredFinancialControls, previewPayments, xeroReviewFingerprint,
   allFinancialRows, buildXeroAccountingPayload, normalizeXeroCreditNote, normalizeXeroInvoice, XERO_FINANCIAL_CUTOFF } from './_xeroFinancialSync.js';
 import { requireExternalActionGate } from './_externalActionGates.js';
@@ -15,6 +16,8 @@ import { loadPublishedPreviewCheckpoint } from './_xeroPreviewCheckpoint.js';
 import { hydratePreviewPayments } from './_xeroPreviewPayments.js';
 import { buildCampaignContactCases, executeCampaignContactCase } from './_xeroReconciliationContacts.js';
 import { releaseXeroBudget, reserveXeroBudget, runWithXeroBudget, xeroSharedContext } from './_xeroSharedControl.js';
+import { campaignDocumentReadCalls } from './_xeroReconciliationPolicy.js';
+import { readCampaignDocumentLinkReadback } from './_xeroReconciliationLinkReadback.js';
 
 const MAX_CLAIM = 25;
 
@@ -496,7 +499,7 @@ async function claimBudget({ client, connection, campaign, batch, callBudget, re
   return reserveBudget(connection, { budgetId: randomUUID(), ownerKey, ...callBudget, ttlSeconds: 600 });
 }
 
-function budgetFrom(batch, cases) {
+function budgetFrom(batch, cases, items) {
   const forecast = batch.forecast || {};
   const operationCalls = Number(forecast.readCalls || 0) + Number(forecast.recoveryCalls || 0)
     + Number(forecast.otherActivityCalls || 0) + Number(forecast.writeCalls || 0);
@@ -504,8 +507,12 @@ function budgetFrom(batch, cases) {
   const draftCount = cases.filter((row) => row.category === 'draft').length;
   const contactCount = cases.filter((row) => row.category === 'contact').length;
   const paymentCount = cases.filter((row) => row.category === 'link_only' && row.sourceObject === 'Payment__c').length;
+  const documentReads = forecast.linkVerificationMode === 'bulk_exact_documents_v1'
+    ? campaignDocumentReadCalls(cases.map((row) => ({ ...row,
+      xeroCollection: items.get(`${row.sourceObject}:${row.sourceId}`)?.source_payload?.xeroCollection }))) : null;
+  const requiredVerification = documentReads ?? cases.length + contactCount + paymentCount + draftCount;
   if (!Number.isSafeInteger(operationCalls) || !Number.isSafeInteger(verificationCalls)
-    || operationCalls < 1 || verificationCalls < cases.length + contactCount + paymentCount + draftCount
+    || operationCalls < 1 || verificationCalls < requiredVerification
     || operationCalls + verificationCalls > 10_000) {
     throw failure('The approved Xero call budget is incomplete.');
   }
@@ -516,6 +523,9 @@ function budgetFrom(batch, cases) {
 export async function executeCampaignBatch({ client, connection, campaign, batch, cases, actor, env = process.env, fetchImpl,
   recovering = false, accountingFetch = xeroAccountingFetch,
   loadSalesforce = loadSalesforceFinancialSnapshot, loadControls = loadStoredFinancialControls,
+  loadLinkSalesforce = loadSalesforce === loadSalesforceFinancialSnapshot ? loadSalesforceDocumentLinkSnapshot : null,
+  loadLinkControls = loadControls === loadStoredFinancialControls ? loadStoredDocumentLinkControls : null,
+  readLinkTargets = readCampaignDocumentLinkReadback,
   refreshInventory = refreshCampaignInventory, classify = buildFinancialClassifications,
   executeContact = executeCampaignContactCase, loadPayments = loadSalesforcePayments,
   classifyPayments = previewPayments,
@@ -527,6 +537,8 @@ export async function executeCampaignBatch({ client, connection, campaign, batch
     || cases.some((row) => row.category !== batch.category || !/^[a-f0-9]{64}$/.test(row.evidenceFingerprint || ''))) {
     throw failure('The claimed campaign, tenant or case evidence is invalid.');
   }
+  const documentLinksOnly = batch.category === 'link_only'
+    && cases.every((row) => ['Invoice__c', 'Supplier_Invoice__c'].includes(row.sourceObject));
   const run = await one(client.from('xero_financial_sync_runs').select('*').eq('id', campaign.review_run_id || campaign.run_id), 'saved financial check');
   let snapshot = run.control_totals?.workflowSnapshot;
   let captured = null;
@@ -536,33 +548,44 @@ export async function executeCampaignBatch({ client, connection, campaign, batch
       { runId: run.id, actorId: actor.id, tenantId: connection.tenantId });
     inventory = { ...captured.payload.provider.xero, observedSince: captured.payload.snapshotStartedAt, complete: true };
   }
-  snapshot = await hydratePreviewPayments(client, run, { actorId: actor.id, tenantId: connection.tenantId, captured });
+  if (!documentLinksOnly) snapshot = await hydratePreviewPayments(client, run, { actorId: actor.id, tenantId: connection.tenantId, captured });
   if (!snapshot?.complete || !snapshot.linkFirst || !inventory?.complete || inventory.tenantId !== connection.tenantId) {
     throw failure('A complete same-tenant link-first inventory is required.');
   }
-  const items = (await allFinancialRows(client, 'xero_financial_sync_items', (query) => query.eq('run_id', run.id))).data;
+  const items = (await allFinancialRows(client, 'xero_financial_sync_items', (query) => {
+    const runItems = query.eq('run_id', run.id);
+    return documentLinksOnly ? runItems.in('source_id', cases.map((row) => row.sourceId)) : runItems;
+  })).data;
   const bySource = new Map(items.map((item) => [`${item.source_object}:${item.source_id}`, item]));
+  if (bySource.size !== items.length) throw failure('Saved source document identities repeat.');
   const targetCases = cases.filter((row) => row.category === 'link_only' && row.sourceObject !== 'Payment__c');
   let selectedInvoiceIds = targetCases.filter((row) => bySource.get(`${row.sourceObject}:${row.sourceId}`)?.source_payload?.xeroCollection === 'Invoices')
     .map((row) => row.targetId);
   const selectedCreditNoteIds = targetCases.filter((row) => bySource.get(`${row.sourceObject}:${row.sourceId}`)?.source_payload?.xeroCollection === 'CreditNotes')
     .map((row) => row.targetId);
-  const callBudget = budgetFrom(batch, cases);
+  const callBudget = budgetFrom(batch, cases, bySource);
   const budget = await claimBudget({ client, connection, campaign, batch, callBudget, recovering, reserveBudget, releaseBudget });
   if (!budget?.id) throw failure('The shared Xero call reservation was not confirmed.');
   let unresolvedWrite = false;
   try {
     return await withBudget(connection, { budgetId: budget.id, budgetPhase: 'operation' }, async () => {
-      const [salesforce, stored] = await Promise.all([loadSalesforce(XERO_FINANCIAL_CUTOFF), loadControls(client)]);
-      if (salesforce?.groupedAccountSnapshot?.complete !== true) throw failure('Current Salesforce Account evidence is incomplete.');
+      let salesforce; let stored;
+      const scopedDocumentRead = documentLinksOnly && loadLinkSalesforce && loadLinkControls;
+      if (!scopedDocumentRead) [salesforce, stored] = await Promise.all([
+        loadSalesforce(XERO_FINANCIAL_CUTOFF), loadControls(client)]);
       const paymentCases = cases.filter((row) => row.category === 'link_only' && row.sourceObject === 'Payment__c');
       const savedPayments = new Map((snapshot.payments?.rows || []).map((row) => [row.salesforcePaymentId, row]));
       selectedInvoiceIds = [...new Set([...selectedInvoiceIds, ...paymentCases.map((row) =>
-        stored.documentMappings.find((mapping) => mapping.id === savedPayments.get(row.sourceId)?.documentMappingId)?.xero_document_id)
+        stored?.documentMappings.find((mapping) => mapping.id === savedPayments.get(row.sourceId)?.documentMappingId)?.xero_document_id)
         .filter(Boolean)])];
       let refreshed = await refreshInventory({ connection, inventory, env, fetchImpl, accountingFetch,
         selectedInvoiceIds, selectedCreditNoteIds });
       if (!refreshed?.complete || refreshed.tenantId !== connection.tenantId) throw failure('Fresh Xero inventory is incomplete.');
+      if (scopedDocumentRead) {
+        salesforce = await loadLinkSalesforce(XERO_FINANCIAL_CUTOFF, cases, { xeroSnapshot: refreshed });
+        stored = await loadLinkControls(client, { salesforce, xeroSnapshot: refreshed, documentLinks: cases });
+      }
+      if (salesforce?.groupedAccountSnapshot?.complete !== true) throw failure('Current Salesforce Account evidence is incomplete.');
       const saved = await persistInventory({ p_actor: actor.id, p_campaign: campaign.id,
         p_claim: batch.claim_id, p_inventory: refreshed });
       if (saved?.error || !saved?.data) throw failure('Fresh inventory could not be saved under the claim.');
@@ -588,6 +611,11 @@ export async function executeCampaignBatch({ client, connection, campaign, batch
           freshBySource.get(`${caseRow.sourceObject}:${caseRow.sourceId}`), refreshed, stored)
         : hold(caseRow, `${caseRow.category} requires its original verified operation receipt.`));
       const results = [];
+      const pendingDocumentLinks = prepared.filter((row) => row.status === 'pending_verification');
+      const bulkReadback = documentLinksOnly && pendingDocumentLinks.length
+        ? await readLinkTargets({ connection, targets: pendingDocumentLinks.map((row) => ({
+          collection: row.collection, targetId: row.targetId })), budgetId: budget.id,
+        env, fetchImpl, accountingFetch, withBudget }) : null;
       let currentContacts = refreshed.contacts;
       let contactsAwaitingInventory = false;
       for (const row of prepared) {
@@ -661,9 +689,13 @@ export async function executeCampaignBatch({ client, connection, campaign, batch
           continue;
         }
         if (row.status !== 'pending_verification') { results.push(row); continue; }
-        const path = campaignDocumentReadPath(row.collection, row.targetId);
         let response;
-        try {
+        if (bulkReadback) {
+          const key = row.collection === 'CreditNotes' ? 'creditNotes' : 'invoices';
+          response = { [row.collection]: bulkReadback.rawTargets[key].filter((raw) =>
+            documentIdentity(raw, row.collection)?.toLowerCase() === row.targetId.toLowerCase()) };
+        } else try {
+          const path = campaignDocumentReadPath(row.collection, row.targetId);
           response = await withBudget(connection, { budgetId: budget.id, budgetPhase: 'verification' },
             () => accountingFetch(connection, path, { method: 'GET', env, fetchImpl }));
         } catch (error) {
