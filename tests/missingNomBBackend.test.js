@@ -339,3 +339,10 @@ test('filing title and reminder reference use the stable STEM code when its disp
  assert.equal(missingNomBEmail(f,invoice).subject,'Action required: missing Nom B — HK123');
  assert.ok(missingNomBEmail(f,invoice).text.includes('STEM: HK123'));
 });
+
+
+test('health reports bounded upload failure evidence without operation IDs or trader data',async()=>{
+ const client=clientStub({tableResult:(table,{count})=>count?{count:0,error:null}:{data:table==='missing_nom_b_scan_state'?null:table==='missing_nom_b_upload_operations'?[{status:'Rejected',last_error_code:'COMPOSITE_ROLLED_BACK',updated_at:activation,operation_id:'secret-operation',email:profile.email}]:[],error:null}});
+ const result=await missingNomBStatus({client,env:{}});assert.deepEqual(result.recentUploadOutcomes,[{status:'Rejected',code:'COMPOSITE_ROLLED_BACK',at:activation}]);
+ assert.equal(JSON.stringify(result).includes('secret-operation'),false);assert.equal(JSON.stringify(result).includes(profile.email),false);
+});

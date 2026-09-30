@@ -465,10 +465,15 @@ export async function missingNomBStatus({ client, env = process.env, now = new D
     .eq('source_org_id',org).in('status',['Blocked','Failed','Uncertain'])
     .order('updated_at',{ ascending:false }).limit(10);
   if (outcomes.error) throw outcomes.error;
+  const uploadOutcomes = await client.from('missing_nom_b_upload_operations').select('status,last_error_code,updated_at')
+    .eq('source_org_id',org).in('status',['Rejected','Posting','Uncertain'])
+    .order('updated_at',{ ascending:false }).limit(10);
+  if (uploadOutcomes.error) throw uploadOutcomes.error;
   const state = stateResult.data;
   const scanLagSeconds = state?.completed_through ? Math.max(0, Math.floor((new Date(now).getTime()-Date.parse(state.completed_through))/1000)) : null;
   const active = enabled(env);
   const healthStatus = counts.uncertain || counts.uncertainUploads || counts.stalledDeliveries || counts.failed || counts.blocked || (active && (!state || scanLagSeconds > 900)) ? 'warning' : active ? 'online' : 'disabled';
   return { status: active ? 'enabled' : 'disabled',healthStatus,enabled: active,activatedAt: state?.activated_at || null,lastScanAt: state?.last_success_at || null,scanLagSeconds,...counts,
-    recentOutcomes: (outcomes.data || []).map((row) => ({status:row.status,code:row.last_error_code,at:row.updated_at})) };
+    recentOutcomes: (outcomes.data || []).map((row) => ({status:row.status,code:row.last_error_code,at:row.updated_at})),
+    recentUploadOutcomes: (uploadOutcomes.data || []).map((row) => ({status:row.status,code:row.last_error_code,at:row.updated_at})) };
 }
