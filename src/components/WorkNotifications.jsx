@@ -187,15 +187,16 @@ export default function WorkNotifications() {
       const response = await appClient.functions.invoke("systemErrorVerify", {
         incidentSignature: notification.incidentSignature,
       }, { force: true });
+      if (!mounted.current || response.data?.cancelled) return;
       setVerificationMessage(response.data?.error || response.data?.message || "Recovery verified for this incident.");
-      if (!response.data?.error) await loadNotifications({ quiet: true });
+      if (!response.data?.error) await latestLoad.current({ quiet: true, forceRefresh: true });
     } catch {
-      setVerificationMessage('This incident could not be verified. Its unresolved status has been retained.');
+      if (mounted.current) setVerificationMessage('This incident could not be verified. Its unresolved status has been retained.');
     } finally {
       mutationInFlight.current = false;
       if (mounted.current) setUpdating(false);
     }
-  }, [loadNotifications]);
+  }, []);
 
   const unavailableLabel = unavailableSources.map(sourceLabel).join(", ");
   const hasUnavailableSources = unavailableSources.length > 0;
@@ -210,15 +211,15 @@ export default function WorkNotifications() {
       }}
     >
       <PopoverTrigger asChild>
-        <Button type="button" variant="ghost" size="icon" className="relative h-8 w-8 shrink-0 text-muted-foreground hover:bg-accent hover:text-foreground" aria-label={unreadCount ? `${unreadCount} unread work notifications` : "Work notifications"} title={hasUnavailableSources ? "Some work notifications are temporarily unavailable" : "Work notifications"}>
+        <Button type="button" variant="ghost" size="icon" className="app-work-notification-trigger" aria-label={unreadCount ? `${unreadCount} unread work notifications` : "Work notifications"} title={hasUnavailableSources ? "Some work notifications are temporarily unavailable" : "Work notifications"}>
           {unreadCount ? <BellRing className="h-4 w-4" /> : <Bell className="h-4 w-4" />}
-          {unreadCount > 0 && <span className="absolute -right-0.5 -top-0.5 flex min-h-4 min-w-4 items-center justify-center rounded-full bg-blue-600 px-1 text-[9px] font-bold text-white">{unreadCount > 99 ? "99+" : unreadCount}</span>}
+          {unreadCount > 0 && <span className="app-work-notification-count">{unreadCount > 99 ? "99+" : unreadCount}</span>}
           {hasUnavailableSources && <span className="absolute bottom-0 right-0 h-2 w-2 rounded-full border border-background bg-amber-500" />}
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" className="glass-floating w-[calc(100vw-24px)] max-w-[400px] overflow-hidden p-0">
         {verificationMessage && <p role="status" className="border-b p-3 text-xs text-muted-foreground">{verificationMessage}</p>}
-        <div className="app-navigation-caption-material flex min-w-0 items-center justify-between gap-3 border-b border-border px-4 py-3">
+        <div className="app-navigation-caption-material app-work-notification-caption">
           <div className="min-w-0">
             <div className="text-sm font-semibold">Notifications</div>
             <div className="text-xs text-muted-foreground">{unreadCount.toLocaleString()} unread</div>
@@ -262,7 +263,7 @@ export default function WorkNotifications() {
         </div>
 
         {hasUnavailableSources && (
-          <div className="flex gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-950 dark:border-amber-700/60 dark:bg-amber-950/45 dark:text-amber-100">
+          <div className="app-work-notification-warning">
             <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             <span>{unavailableLabel} notifications are temporarily unavailable.</span>
           </div>
@@ -277,12 +278,12 @@ export default function WorkNotifications() {
           ) : visibleNotifications.length ? (
             <div className="divide-y divide-border">
               {visibleNotifications.map((notification) => (
-                <div key={notification.groupKey || notification.id} className={cn("flex items-start gap-1 px-2 py-1.5 transition-colors hover:bg-muted/60", !notification.readAt && "bg-blue-50/70 dark:bg-blue-950/35")}>
-                  <button type="button" disabled={updating} className="flex min-w-0 flex-1 items-start gap-3 px-2 py-1.5 text-left" onClick={() => openNotification(notification)}>
+                <div key={notification.groupKey || notification.id} className={cn("app-work-notification-row", !notification.readAt && "bg-blue-50/70 dark:bg-blue-950/35")}>
+                  <button type="button" disabled={updating} className="app-work-notification-open" onClick={() => openNotification(notification)}>
                     <span className={cn("mt-1.5 h-2 w-2 shrink-0 rounded-full", notification.readAt ? "bg-muted-foreground/40" : "bg-blue-600")} />
                     <span className="min-w-0 flex-1">
                       <span className="mb-1 flex flex-wrap items-center gap-2">
-                        <span className={cn("rounded px-1.5 py-0.5 text-[10px] font-medium ring-1 ring-inset", sourceBadgeClass(notification.source))}>{sourceLabel(notification.source)}</span>
+                        <span className={cn("app-work-notification-badge", sourceBadgeClass(notification.source))}>{sourceLabel(notification.source)}</span>
                         {notification.occurrenceCount > 1 && <span className="rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-800" aria-label={`${notification.occurrenceCount} occurrences`}>{notification.occurrenceCount}×</span>}
                         <span className="text-[11px] text-muted-foreground">{formatNotificationTime(notification.createdAt)}</span>
                       </span>

@@ -2,7 +2,14 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Shared notification colors stay in CSS instead of repeated render strings. */
+/* Notification styles stay in CSS instead of repeated render strings. */
+.app-work-notification-trigger { @apply relative h-8 w-8 shrink-0 text-muted-foreground hover:bg-accent hover:text-foreground; }
+.app-work-notification-count { @apply absolute -right-0.5 -top-0.5 flex min-h-4 min-w-4 items-center justify-center rounded-full bg-blue-600 px-1 text-[9px] font-bold text-white; }
+.app-work-notification-caption { @apply flex min-w-0 items-center justify-between gap-3 border-b border-border px-4 py-3; }
+.app-work-notification-warning { @apply flex gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-950 dark:border-amber-700/60 dark:bg-amber-950/45 dark:text-amber-100; }
+.app-work-notification-row { @apply flex items-start gap-1 px-2 py-1.5 transition-colors hover:bg-muted/60; }
+.app-work-notification-open { @apply flex min-w-0 flex-1 items-start gap-3 px-2 py-1.5 text-left; }
+.app-work-notification-badge { @apply rounded px-1.5 py-0.5 text-[10px] font-medium ring-1 ring-inset; }
 .app-work-notification-badge-system { @apply bg-red-50 text-red-900 ring-red-700/10 dark:bg-red-950/50 dark:text-red-200 dark:ring-red-500/25; }
 .app-work-notification-badge-email { @apply bg-amber-50 text-amber-900 ring-amber-700/10 dark:bg-amber-950/50 dark:text-amber-200 dark:ring-amber-500/25; }
 .app-work-notification-badge-improvements { @apply bg-cyan-50 text-cyan-900 ring-cyan-700/10 dark:bg-cyan-950/50 dark:text-cyan-200 dark:ring-cyan-500/25; }

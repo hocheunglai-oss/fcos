@@ -87,3 +87,23 @@ test('Hedge Desk latest refresh wins, stale background responses and cancellatio
   await page.getByRole('button', { name: 'Unmount fixture' }).click();
   await page.evaluate((index) => window.desktopDebug.background(index, { data: { physicals: [{ id: 'unmounted' }] } }), fresh);
 });
+
+test('incident verification refreshes the latest notification filters', async ({ page }) => {
+  await resolve(page, await last(page, 'workNotificationsList'), list('initial'));
+  await page.getByRole('button', { name: '1 unread work notifications' }).click();
+  await resolve(page, await last(page, 'workNotificationsList'), list('initial'));
+  await page.getByRole('combobox', { name: 'Filter notification source' }).click();
+  await page.getByRole('option', { name: 'System errors', exact: true }).click();
+  await resolve(page, await last(page, 'workNotificationsList'), list('incident', { source: 'system_error', incidentSignature: 'fixture-incident', verificationAvailable: true }));
+  await page.getByTitle('Verify this exact incident is fixed').click();
+  const verify = await last(page, 'systemErrorVerify');
+  await page.getByRole('button', { name: 'Handled', exact: true }).click();
+  await page.getByRole('combobox', { name: 'Filter notification source' }).click();
+  await page.getByRole('option', { name: 'Markets', exact: true }).click();
+  await resolve(page, await last(page, 'workNotificationsList'), list('current-market-handled', { handledAt: new Date().toISOString() }));
+  await resolve(page, verify, { message: 'Verified fixture incident.' });
+  const refresh = await last(page, 'workNotificationsList');
+  expect(await page.evaluate((index) => window.desktopDebug.requests[index].body, refresh)).toEqual({ limit: 40, state: 'handled', source: 'markets' });
+  await resolve(page, refresh, list('latest-market-handled', { handledAt: new Date().toISOString() }));
+  await expect(page.getByText('latest-market-handled', { exact: true })).toBeVisible();
+});

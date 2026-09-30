@@ -16,15 +16,16 @@ function changedSessionResponse() {
   return { data: { error: 'Your account changed. Refresh this view.', cancelled: true }, meta: { cancelled: true, cacheStatus: 'CANCELLED' } };
 }
 
+function networkMeta(cacheStatus, requestId = null, salesforceCalls = null) {
+  return { cached: false, cacheLayer: 'network', cacheStatus, cachedAt: null, requestId, salesforceCalls: Number.isFinite(salesforceCalls) ? salesforceCalls : null };
+}
+
 function cancelledResponse(requestId = null) {
-  return {
-    data: { cancelled: true },
-    meta: { cached: false, cacheLayer: 'network', cacheStatus: 'CANCELLED', cachedAt: null, requestId, salesforceCalls: null, cancelled: true },
-  };
+  return { data: { cancelled: true }, meta: { ...networkMeta('CANCELLED', requestId), cancelled: true } };
 }
 
 function unavailableResponse(data, requestId = null, salesforceCalls = null) {
-  return { data, meta: { cached: false, cacheLayer: 'network', cacheStatus: 'UNAVAILABLE', cachedAt: null, requestId, salesforceCalls: Number.isFinite(salesforceCalls) ? salesforceCalls : null } };
+  return { data, meta: networkMeta('UNAVAILABLE', requestId, salesforceCalls) };
 }
 
 const DEDICATED_FUNCTION_ENDPOINTS = Object.freeze({
@@ -186,6 +187,11 @@ async function requestFunction(name, payload, options, cacheKey, authContext, ca
   if (DEDICATED_FUNCTION_ENDPOINTS[name]) headers['x-fcos-function-name'] = name;
   if (options.force) headers['x-fcos-cache-bypass'] = '1';
   if (authContext.accessToken) headers.authorization = `Bearer ${authContext.accessToken}`;
+  let mutationHeader = null;
+  const invalidateAfterRequest = () => {
+    if (options.invalidateCache === true || (options.invalidateCache !== false && (mutationHeader === '1' || (!cacheKey && mutationHeader !== '0')))) invalidateFunctionCache();
+    else if (options.invalidateNames?.length || options.invalidateTags?.length) invalidateFunctionCache({ names: options.invalidateNames, tags: options.invalidateTags });
+  };
   let res;
   try {
     res = await fetch(functionEndpoint(name), {
@@ -196,6 +202,7 @@ async function requestFunction(name, payload, options, cacheKey, authContext, ca
     });
   } catch (error) {
     if (!isCurrentClientSession(session)) return changedSessionResponse();
+    invalidateAfterRequest();
     if (error?.name === 'AbortError' || options.signal?.aborted) return cancelledResponse();
     return unavailableResponse({ error: error?.message || 'Network request failed. Check your connection and try again.' });
   }
@@ -209,32 +216,30 @@ async function requestFunction(name, payload, options, cacheKey, authContext, ca
   const salesforceCalls = salesforceCallsHeader == null ? null : Number(salesforceCallsHeader);
   const salesforceBacked = responseHeader('x-fcos-salesforce-backed') === '1';
   const salesforceFetchedAt = responseHeader('x-fcos-salesforce-fetched-at');
-  const mutationHeader = responseHeader('x-fcos-handler-mutation');
-  const invalidateUncertainMutation = () => {
-    if (options.invalidateCache === true || (options.invalidateCache !== false && (mutationHeader === '1' || (!cacheKey && mutationHeader !== '0')))) invalidateFunctionCache();
-  };
+  mutationHeader = responseHeader('x-fcos-handler-mutation');
   let data = {};
   if (responseIsJson) {
     try {
       data = await res.json();
     } catch (error) {
       if (!isCurrentClientSession(session)) return changedSessionResponse();
-      invalidateUncertainMutation();
+      invalidateAfterRequest();
       if (error?.name === 'AbortError' || options.signal?.aborted) return cancelledResponse(requestId);
       return unavailableResponse({ error: 'The FCOS response could not be read. Refresh the saved result before retrying.', code: 'FCOS_RESPONSE_INVALID' }, requestId, salesforceCalls);
     }
   }
   if (!isCurrentClientSession(session)) return changedSessionResponse();
-  if (options.signal?.aborted) { invalidateUncertainMutation(); return cancelledResponse(requestId); }
+  if (options.signal?.aborted) { invalidateAfterRequest(); return cancelledResponse(requestId); }
 
   if (!responseIsJson) {
-    invalidateUncertainMutation();
+    invalidateAfterRequest();
     return unavailableResponse({ error: res.status === 504
         ? 'The FCOS request timed out before it completed. Refresh the saved result before retrying.'
         : 'The FCOS server API is unavailable. Start the full local FCOS runtime and try again.' }, requestId, salesforceCalls);
   }
 
   if (!res.ok) {
+    invalidateAfterRequest();
     if (res.status >= 500) {
       window.dispatchEvent(new CustomEvent('fcos:work-notifications-changed'));
     }
@@ -280,12 +285,7 @@ async function requestFunction(name, payload, options, cacheKey, authContext, ca
     trimFunctionCache();
   }
 
-  const shouldInvalidateCache = options.invalidateCache === true
-    || (options.invalidateCache !== false && (mutationHeader === '1' || (!cacheKey && mutationHeader !== '0')));
-  if (shouldInvalidateCache) invalidateFunctionCache();
-  else if (options.invalidateNames?.length || options.invalidateTags?.length) {
-    invalidateFunctionCache({ names: options.invalidateNames, tags: options.invalidateTags });
-  }
+  invalidateAfterRequest();
 
   return {
     data,

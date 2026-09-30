@@ -78,3 +78,29 @@ test('unreadable or cancelled mutation outcomes invalidate earlier read snapshot
     assert.equal(reads, 2);
   }
 });
+
+test('lost save responses invalidate snapshots even when fetch itself fails or aborts', async () => {
+  const previousWindow = globalThis.window, previousEvent = globalThis.CustomEvent;
+  globalThis.window = { dispatchEvent: () => {} };
+  globalThis.CustomEvent = class {};
+  try {
+  for (const error of [new TypeError('Failed to fetch'), Object.assign(new Error('aborted fetch'), { name: 'AbortError' }), null]) {
+    for (const options of [{ invalidateCache: true }, {}, { invalidateCache: false, invalidateNames: ['snapshot'] }]) {
+      appClient.functions.clearCache();
+      let saved = 'old', reads = 0;
+      globalThis.fetch = async (url) => {
+        if (url.endsWith('/snapshot')) { reads += 1; return response(async () => ({ saved })); }
+        saved = 'new';
+        if (!error) { const result = response(async () => ({ error: 'Save response lost' })); result.ok = false; result.status = 500; result.headers.set('x-fcos-handler-mutation', '1'); return result; }
+        throw error;
+      };
+      await appClient.functions.invoke('snapshot', {}, { cache: true });
+      const result = await appClient.functions.invoke('save', {}, options);
+      if (error) assert.equal(result.meta.cacheStatus, error.name === 'AbortError' ? 'CANCELLED' : 'UNAVAILABLE');
+      else assert.equal(result.data.error, 'Save response lost');
+      assert.equal((await appClient.functions.invoke('snapshot', {}, { cache: true })).data.saved, 'new');
+      assert.equal(reads, 2);
+    }
+  }
+  } finally { globalThis.window = previousWindow; globalThis.CustomEvent = previousEvent; }
+});

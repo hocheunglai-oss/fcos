@@ -21,7 +21,7 @@ export default defineConfig({
     target: 'es2022',
     // Use the existing ES2022 target for equivalent smaller output, without unsafe transforms.
     minify: 'terser',
-    terserOptions: { ecma: 2022, compress: { passes: 3 }, format: { ascii_only: false, wrap_func_args: false } },
+    terserOptions: { ecma: 2022, compress: { passes: 3 } },
     rollupOptions: {
       output: {
         manualChunks(id) {
