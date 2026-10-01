@@ -3,20 +3,28 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { cpSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { delimiter, join } from 'node:path';
+import { join } from 'node:path';
 import { collectBuildProvenance, deploymentSourceFilter, writeBuildReceipts } from '../scripts/lib/build-provenance.mjs';
 
-// Archive fixtures must not discover a Git checkout above the runner's temp
-// directory after their own .git is removed. Keep production provenance strict.
-const inheritedGitCeilings = process.env.GIT_CEILING_DIRECTORIES;
-process.env.GIT_CEILING_DIRECTORIES = [realpathSync(tmpdir()), inheritedGitCeilings].filter(Boolean).join(delimiter);
+// Isolate both fixture Git commands and the collector's inherited subprocess
+// environment. One canonical parent also avoids TMPDIR changing between tests.
+const fixtureRoot = realpathSync(mkdtempSync(join(tmpdir(), 'fcos-provenance-suite-')));
+const gitEnvironmentNames = [...execFileSync('git', ['rev-parse', '--local-env-vars'], {
+  encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+}).trim().split('\n'), 'GIT_CEILING_DIRECTORIES'];
+const inheritedGitEnvironment = new Map(gitEnvironmentNames.map(name => [name, process.env[name]]));
+for (const name of gitEnvironmentNames) delete process.env[name];
+process.env.GIT_CEILING_DIRECTORIES = fixtureRoot;
 after(() => {
-  if (inheritedGitCeilings === undefined) delete process.env.GIT_CEILING_DIRECTORIES;
-  else process.env.GIT_CEILING_DIRECTORIES = inheritedGitCeilings;
+  for (const [name, value] of inheritedGitEnvironment) {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
+  rmSync(fixtureRoot, { recursive: true, force: true });
 });
 
 function fixture(t) {
-  const cwd = mkdtempSync(join(tmpdir(), 'fcos-provenance-'));
+  const cwd = mkdtempSync(join(fixtureRoot, 'checkout-'));
   t.after(() => rmSync(cwd, { recursive: true, force: true }));
   const git = (...args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
   git('init', '-q');
@@ -84,6 +92,33 @@ test('source archives report unknown Git state and cannot produce release receip
   assert.throws(() => f.collect({ env: { VERCEL_GIT_COMMIT_SHA: 'a'.repeat(40), FCOS_BUILD_COMMIT_SHA: 'b'.repeat(40) } }), /disagree/);
 });
 
+test('archive fixtures cannot discover an ancestor checkout', t => {
+  const ancestorGit = (...args) => execFileSync('git', args, {
+    cwd: fixtureRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim();
+  ancestorGit('init', '-q');
+  writeFileSync(join(fixtureRoot, 'ancestor.txt'), 'ancestor repository fixture\n');
+  ancestorGit('add', 'ancestor.txt');
+  ancestorGit('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'ancestor');
+  t.after(() => {
+    rmSync(join(fixtureRoot, '.git'), { recursive: true, force: true });
+    rmSync(join(fixtureRoot, 'ancestor.txt'), { force: true });
+  });
+  const f = fixture(t);
+  rmSync(join(f.cwd, '.git'), { recursive: true });
+  const unboundedEnv = { ...process.env };
+  delete unboundedEnv.GIT_CEILING_DIRECTORIES;
+  assert.equal(execFileSync('git', ['rev-parse', '--show-toplevel'], {
+    cwd: f.cwd, env: unboundedEnv, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim(), fixtureRoot);
+  assert.throws(() => f.git('rev-parse', 'HEAD'));
+  const receipt = f.collect();
+  assert.equal(receipt.commitVerified, false);
+  assert.equal(receipt.gitDirty, null);
+  assert.equal(receipt.releaseEligible, false);
+  assert.throws(() => f.collect({ requireClean: true }), /clean Git checkout/);
+});
+
 test('trusted archive attestation requires exact digest and full supplied SHA', t => {
   const f = fixture(t); const clean = f.collect(); rmSync(join(f.cwd, '.git'), { recursive: true });
   const env = { VERCEL: '1', VERCEL_GIT_COMMIT_SHA: clean.commit, FCOS_EXPECTED_SOURCE_SHA256: clean.sourceDigest };
@@ -118,7 +153,7 @@ test('Vercel archive and clean Git source share a digest after default and custo
   writeFileSync(join(f.cwd, '.vercelignore'), 'tests/\nforce-app/\n.github/\n*.docx\n');
   f.git('add', '.'); f.git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'upload rules');
   const clean = f.collect({ requireClean: true });
-  const archive = mkdtempSync(join(tmpdir(), 'fcos-source-archive-'));
+  const archive = mkdtempSync(join(fixtureRoot, 'archive-'));
   t.after(() => rmSync(archive, { recursive: true, force: true }));
   const included = deploymentSourceFilter(f.cwd);
   cpSync(f.cwd, archive, { recursive: true, filter: source => source === f.cwd || included(source.slice(f.cwd.length + 1)) });
