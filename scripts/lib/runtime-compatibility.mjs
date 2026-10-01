@@ -4,10 +4,10 @@ const sha = value => /^[0-9a-f]{40}$/.test(value || '');
 const digest = value => createHash('sha256').update(value).digest('hex');
 const additions = new Set(['api/connection-runtime.js', 'api/_connectionRuntime.js', 'api/_runtime-build-receipt.json', 'tests/connectionRuntime.test.js']);
 const modified = new Set(['config/fcosConnections.js', 'scripts/write-app-version.mjs', 'scripts/lib/build-provenance.mjs', 'eslint.config.js']);
-const guardFiles = new Set(['api/_hedgeDeskService.js', 'api/_xeroPortal.js', 'api/functions/[name].js']);
+const guardFiles = new Set(['api/_hedgeDeskService.js', 'api/_xeroPortal.js', 'api/functions/[name].js', 'api/_xeroContactSync.js']);
 const guardHelper = 'api/_hedgeDeskReadOnly.js';
 const expectedGuardHelper = "// Snapshot reads skip expiry using trusted server deployment configuration.\nconst READ_ACTIONS = new Set(['list', 'filter', 'get', 'snapshot']);\n\nexport function isReadOnlyHedgeDeskAction(body = {}) {\n  return READ_ACTIONS.has(String(body?.action || 'list'));\n}\n";
-const guardTests = new Set(['tests/runtimeReadOnlySnapshots.test.js', 'tests/xeroPortal.test.js']);
+const guardTests = new Set(['tests/runtimeReadOnlySnapshots.test.js', 'tests/xeroPortal.test.js', 'tests/xeroSharedControl.test.js']);
 const controls = new Set(['AGENTS.md', '.codex/config.toml', '.codex/setup.mjs', '.codex/control-validation.mjs', '.codex/control-policy.json', '.codex/README.md', '.codex/environments/environment.toml', '.codex/environments/environment-2.toml']);
 
 // The only permitted business-source change is this exact reviewed transformation.
@@ -28,6 +28,12 @@ function expectedReadOnlyGuard(path, original) {
       'export async function handleHedgeDeskEntity(body, profile, { client, capabilities }) {\n  requireDeploymentMutationAllowed(!isReadOnlyHedgeDeskAction(body));');
     return replaceOnce(result, '    const expiryAutomation = isReadOnlyCiProfile(profile)',
       "    const expiryAutomation = isDeploymentReadOnly()\n      ? { status: 'not_run', reason: 'deployment_read_only' }\n      : isReadOnlyCiProfile(profile)");
+  }
+  if (path === 'api/_xeroContactSync.js') {
+    let result = replaceOnce(original, "import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';\n",
+      "import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';\nimport { requireDeploymentMutationAllowed } from './_deploymentReadOnly.js';\n");
+    const validAccess = "  if (stored?.accessToken && stored?.tenantId && Date.parse(stored.expiresAt || '') > Date.now() + 90_000) return stored;";
+    return replaceOnce(result, validAccess, `${validAccess}\n  requireDeploymentMutationAllowed(true, env);`);
   }
   if (path === 'api/functions/[name].js') {
     let result = replaceOnce(original,

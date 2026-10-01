@@ -59,9 +59,13 @@ function guardFixture() {
   input.baseTree.find(row => row.path === 'api/functions/[name].js').sha = '5'.repeat(40);
   input.candidateTree.find(row => row.path === 'api/functions/[name].js').sha = '6'.repeat(40);
   input.candidateTree.push(row('api/_hedgeDeskReadOnly.js', '7'.repeat(40)));
+  const contactOriginal = "import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';\n  if (stored?.accessToken && stored?.tenantId && Date.parse(stored.expiresAt || '') > Date.now() + 90_000) return stored;";
+  const contactAfter = contactOriginal.replace("from 'node:crypto';\n", "from 'node:crypto';\nimport { requireDeploymentMutationAllowed } from './_deploymentReadOnly.js';\n") + '\n  requireDeploymentMutationAllowed(true, env);';
+  input.baseTree.push(row('api/_xeroContactSync.js', '8'.repeat(40)));
+  input.candidateTree.push(row('api/_xeroContactSync.js', '9'.repeat(40)));
   input.baseTree.push(row('api/_hedgeDeskService.js', '1'.repeat(40)), row('api/_xeroPortal.js', '2'.repeat(40)));
   input.candidateTree.push(row('api/_hedgeDeskService.js', '3'.repeat(40)), row('api/_xeroPortal.js', '4'.repeat(40)));
-  const blobs = { ['1'.repeat(40)]: hedgeOriginal, ['2'.repeat(40)]: xeroOriginal, ['3'.repeat(40)]: hedgeAfter, ['4'.repeat(40)]: xeroAfter, ['5'.repeat(40)]: wrapperOriginal, ['6'.repeat(40)]: wrapperAfter, ['7'.repeat(40)]: "// Snapshot reads skip expiry using trusted server deployment configuration.\nconst READ_ACTIONS = new Set(['list', 'filter', 'get', 'snapshot']);\n\nexport function isReadOnlyHedgeDeskAction(body = {}) {\n  return READ_ACTIONS.has(String(body?.action || 'list'));\n}\n" };
+  const blobs = { ['8'.repeat(40)]: contactOriginal, ['9'.repeat(40)]: contactAfter, ['1'.repeat(40)]: hedgeOriginal, ['2'.repeat(40)]: xeroOriginal, ['3'.repeat(40)]: hedgeAfter, ['4'.repeat(40)]: xeroAfter, ['5'.repeat(40)]: wrapperOriginal, ['6'.repeat(40)]: wrapperAfter, ['7'.repeat(40)]: "// Snapshot reads skip expiry using trusted server deployment configuration.\nconst READ_ACTIONS = new Set(['list', 'filter', 'get', 'snapshot']);\n\nexport function isReadOnlyHedgeDeskAction(body = {}) {\n  return READ_ACTIONS.has(String(body?.action || 'list'));\n}\n" };
   const originalRead = input.readBlob;
   input.readBlob = sha => blobs[sha] ?? originalRead(sha);
   return { input, blobs };
@@ -70,9 +74,9 @@ function guardFixture() {
 test('only the complete exact read-only guard transformations are allowed in financial modules', () => {
   const { input } = guardFixture();
   const proof = runtimeCompatibilityScope(input);
-  assert.deepEqual(proof.readOnlyGuards, ['api/_hedgeDeskService.js', 'api/_xeroPortal.js', 'api/functions/[name].js']);
+  assert.deepEqual(proof.readOnlyGuards, ['api/_hedgeDeskService.js', 'api/_xeroContactSync.js', 'api/_xeroPortal.js', 'api/functions/[name].js']);
   assert.match(proof.reviewedException, /ordinary Production logic is preserved/);
-  for (const target of ['3'.repeat(40), '4'.repeat(40), '6'.repeat(40)]) {
+  for (const target of ['3'.repeat(40), '4'.repeat(40), '6'.repeat(40), '9'.repeat(40)]) {
     const { input, blobs } = guardFixture();
     blobs[target] += '\n// additional financial edit';
     assert.throws(() => runtimeCompatibilityScope(input), /protected financial scope/);

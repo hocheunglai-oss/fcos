@@ -1,0 +1,54 @@
+name: FCOS exact first-rollout normal-role verification
+on:
+  workflow_dispatch:
+    inputs:
+      expected_commit:
+        required: true
+        type: string
+      candidate_url:
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  compatibility-normal-role:
+    if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && github.ref_protected && vars.FCOS_COMPATIBILITY_NORMAL_ROLE_ENABLED == 'true' }}
+    environment: fcos-normal-role-verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+      deployments: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci --ignore-scripts
+      - run: npx playwright install --with-deps chromium
+      - name: Verify preserved real v288 data and read workflows for the exact compatibility candidate
+        run: node scripts/runtime-compatibility-normal-role.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REF_PROTECTED: ${{ github.ref_protected }}
+          FCOS_COMPATIBILITY_NORMAL_ROLE_ENABLED: ${{ vars.FCOS_COMPATIBILITY_NORMAL_ROLE_ENABLED }}
+          FCOS_NORMAL_ROLE_APPROVED_EMAIL: ${{ vars.FCOS_NORMAL_ROLE_APPROVED_EMAIL }}
+          FCOS_NORMAL_ROLE_STORAGE_STATE_BASE64: ${{ secrets.FCOS_NORMAL_ROLE_STORAGE_STATE_BASE64 }}
+          FCOS_RELEASE_PREVIEW_RUNTIME_TOKEN: ${{ secrets.FCOS_RELEASE_PREVIEW_RUNTIME_TOKEN }}
+          FCOS_E2E_VERCEL_BYPASS: ${{ secrets.FCOS_E2E_VERCEL_BYPASS }}
+          FCOS_E2E_EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          FCOS_E2E_CANDIDATE_URL: ${{ inputs.candidate_url }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fcos-compatibility-normal-role-evidence-${{ inputs.expected_commit }}
+          path: ${{ runner.temp }}/fcos-normal-role-evidence.json
+          if-no-files-found: error
+          retention-days: 7
+      - name: Remove non-secret intermediate evidence
+        if: ${{ always() }}
+        run: rm -f "$RUNNER_TEMP/fcos-normal-role-evidence.json"

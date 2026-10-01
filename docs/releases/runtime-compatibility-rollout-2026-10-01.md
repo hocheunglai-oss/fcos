@@ -8,7 +8,7 @@ observation or promote an existing Preview build with Preview configuration.
 
 ## Prepared compatibility candidate
 
-Current candidate `cacd58bfba3bfae41c33b91ae386c4b7d0fb7b60` starts from the exact live commit through the original diagnostic commit `33d97ea74439e27128fd148df78a1e6be6a2f844`.
+Current candidate `f3d4cadfbaad7c25c83205350bb9be572493f47c` starts from the exact live commit through the original diagnostic commit `33d97ea74439e27128fd148df78a1e6be6a2f844`.
 It adds the authenticated read-only endpoint, source-bound server build receipt,
 pure diagnostic catalogue exports and the parser support needed to validate the
 new JSON import. The existing canonical connection policy remains verbatim.
@@ -16,7 +16,7 @@ Canonical Codex controls are carried into the isolated worktree.
 
 `scripts/verify-runtime-compatibility.mjs <checkout> <production-sha> <candidate-sha>`
 compares immutable Git trees and rejects any UI, mobile, cron, dependency,
-database-schema, Salesforce-metadata or external-action-gate changes. Financial modules are permitted only the exact reviewed read-only transformations: snapshots skip implicit hedge expiry and Xero status skips token refresh in read-only deployments. Hedge Desk request classification permits only list/filter/get/snapshot; writes and unknown actions remain denied at dispatch and service boundaries. Any additional edit in those modules fails scope verification. It rejects deletion, executable changes, symlinks and incomplete endpoint
+database-schema, Salesforce-metadata or external-action-gate changes. Financial modules are permitted only the exact reviewed read-only transformations: snapshots skip implicit hedge expiry and Xero status and accounting mappings skip token refresh in read-only deployments. Hedge Desk request classification permits only list/filter/get/snapshot; writes and unknown actions remain denied at dispatch and service boundaries. Any additional edit in those modules fails scope verification. It rejects deletion, executable changes, symlinks and incomplete endpoint
 dependencies. Its scope receipt always has `productionAuthorized: false`.
 
 The compatibility branch retains product version 2.0.288: it is a diagnostic
@@ -32,7 +32,7 @@ Target Vercel project is `hocheunglai-6535s-projects/fcos`. Current live
 authorization and verified readback. Existing deployment hooks are empty.
 Production remains the exact deployment identified above.
 
-Reviewed standard release and normal-role workflows/scripts were installed through PR76 on protected `main` (`cce446b9c749d61e7606d769dff82e93ac7a806c`) after all required checks passed. Strict required checks, administrator enforcement and the restricted CI identity remain enforced. The separate first-rollout compatibility workflows remain under review; their trusted-main import closure must be complete before installation.
+Reviewed standard release and normal-role workflows/scripts were installed through PR76 on protected `main` (`cce446b9c749d61e7606d769dff82e93ac7a806c`) after all required checks passed. Strict required checks, administrator enforcement and the restricted CI identity remain enforced. The separate first-rollout compatibility workflows are published disabled in draft PR77. The twelve-file dependency closure resolves against exact merged protected main without API, UI or connection-CLI imports. Fifty-three control tests and zero-warning targeted lint pass; protected required checks remain pending.
 The dedicated release/normal-role environments have been created with pinned reviewer,
 `prevent_self_review: false`, `can_admins_bypass: false` and protected-branch
 restriction, following the canonical single-operator policy. Their activation
@@ -45,7 +45,7 @@ Production environment run still requires the operator's explicit approval.
 The dedicated credential names are `FCOS_RELEASE_GH_TOKEN`,
 `FCOS_RELEASE_VERCEL_TOKEN`, `FCOS_RELEASE_RUNTIME_TOKEN` and
 `FCOS_RELEASE_PREVIEW_RUNTIME_TOKEN`. Normal verification also requires the
-approved existing non-CI identity email and exact-Preview ephemeral state under
+approved existing non-CI identity email (`vincent@cosulich.com.hk`) and exact-Preview ephemeral state under
 `FCOS_NORMAL_ROLE_STORAGE_STATE_BASE64`. None is currently provisioned locally or
 in the new protected environments. Provision only through supported secure
 provider interfaces; never paste values into chat, evidence or logs, extract
@@ -95,13 +95,13 @@ and [Supabase server-side user verification](https://supabase.com/docs/reference
 
 Real normal-user verification found that the original diagnostic-only candidate
 could reconcile paper hedge expiry from snapshot reads, refresh Xero credentials
-from status reads, and deny every Hedge Desk Preview read at dispatch. No real
+from status and accounting-mapping reads, and deny every Hedge Desk Preview read at dispatch. No real
 normal-user verification was run through those unsafe paths.
 
-The final guarded candidate is `cacd58bfba3bfae41c33b91ae386c4b7d0fb7b60`, source digest
-`f4c7f23e4c254230a97a4b3384e51e527ae648491235adb6a358548b85b528e8`.
-The immutable scope verifier requires all three exact API transformations and the
-exact four-action helper. Thirty-seven focused tests prove Preview no-write reads,
+The final guarded candidate is `f3d4cadfbaad7c25c83205350bb9be572493f47c`, source digest
+`532e1469430ccc381f539b0b1bea053a17a2d3d53f295b275159c5a4f6762c66`.
+The immutable scope verifier requires all four exact API transformations and the
+exact four-action helper. Fifty focused tests prove Preview no-write reads,
 unknown/write denial, preserved module authorization, and unchanged Production
 expiry/refresh behavior. Strict server build, server performance, compatibility,
 Graph-only source, lint and typecheck checks passed on the exact clean commit.
@@ -112,3 +112,7 @@ source digest changed only for that Preview branch. Production has not changed.
 Earlier diagnostic-only Preview passes describe commit33d and cannot establish
 readiness for this newer candidate. Collect fresh archives and real normal-user
 coverage for the new immutable Preview before any Production action.
+
+## Final guarded Preview
+
+Final commit `f3d4cadfbaad7c25c83205350bb9be572493f47c` has READY Preview `https://fcos-cn4sn8xgr-hocheunglai-6535s-projects.vercel.app`, deployment `dpl_5jJgDLZfg27LMty9wEjVCvaBPSmL`. Its exact clean attested receipt was freshly verified. Protected authenticated run `36832067227` passed; quality run `36831751038` is pending. These checks do not replace real normal-user or encrypted-credential prerequisites. The user completed private token/access steps; fresh protected-environment and repository name-only readback still found no release credentials saved as of 07:44 UTC. Secret values were never read.

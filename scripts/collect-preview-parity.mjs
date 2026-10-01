@@ -6,7 +6,6 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { collectBuildProvenance } from './lib/build-provenance.mjs';
 import { evaluatePreviewParity, PREVIEW_PARITY_POLICY } from './lib/preview-parity.mjs';
-import { verifyProvider, providerRuntime } from './fcos-connections.mjs';
 import { fcosConnectionIdentifier } from '../config/fcosConnections.js';
 import { canonicalFcosE2eCandidateUrl } from './verify-e2e-candidate.mjs';
 import { releaseHash, releaseConfigurationRevision } from './lib/release-readiness.mjs';
@@ -121,8 +120,10 @@ export function assertParityConnectionReadAccess(report, now = Date.now()) {
 
 export async function collectPreviewParity({ candidateUrl, expectedCommit, protectionBypass = process.env.FCOS_E2E_VERCEL_BYPASS,
   productionRuntimeToken = process.env.FCOS_RELEASE_RUNTIME_TOKEN, candidateRuntimeToken = process.env.FCOS_RELEASE_PREVIEW_RUNTIME_TOKEN, cwd = ROOT,
-  connections = { verifyProvider, providerRuntime } } = {}) {
+  connections } = {}) {
   if (!immutable(candidateUrl) || !/^[0-9a-f]{40}$/.test(expectedCommit || '')) throw new Error('Parity requires an immutable FCOS Preview URL and exact commit.');
+  if (typeof connections?.verifyProvider !== 'function' || typeof connections?.providerRuntime !== 'function')
+    throw new Error('Parity requires an explicitly supplied verified read-only provider adapter.');
   const source = collectParitySource(cwd);
   if (source.candidateHead !== expectedCommit) throw new Error('Parity checkout does not match the candidate commit.');
   const verified = await connections.verifyProvider('vercel', { persist: false, prepare: false });
@@ -234,7 +235,7 @@ export async function collectPreviewParity({ candidateUrl, expectedCommit, prote
     expectedRuntimeAuth: Object.fromEntries(PREVIEW_PARITY_POLICY.requiredAuth.map(provider => [provider, snapshots.production.runtime.auth?.[provider] || { state: 'unknown' }])),
     expectedRuntimeFlags: snapshots.production.runtime.flags,
     expectedRuntimeSafety: snapshots.production.runtime.safety,
-    trustedEvidence: trusted.records.map(({ checks, ...record }) => record), quality: trusted.quality };
+    trustedEvidence: trusted.records.map(({ checks: _checks, ...record }) => record), quality: trusted.quality };
 }
 
 export async function assertCollectedPreviewParity(options) {

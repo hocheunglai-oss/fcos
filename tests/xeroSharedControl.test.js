@@ -72,6 +72,20 @@ test('valid access survives absent renewal config; expired connection uses one c
   assert.equal(result.tokenVersion,2);assert.equal(calls,1);assert.equal(finished[0].tokenVersion,1);assert.equal(result.tenantId,connection.tenantId);
 });
 
+test('read-only deployments use existing access but never claim or refresh expired credentials', async () => {
+  for (const deployment of [{ VERCEL_ENV: 'preview' }, { VERCEL_ENV: 'production', FCOS_ENABLE_READ_ONLY_CI: 'true' }]) {
+    let claims = 0, requests = 0, finished = 0;
+    const control = fixtureSharedControl({ claimRefresh: async () => { claims++; return { state: 'claimed' }; }, finishRefresh: async () => { finished++; return { tokenVersion: 2 }; } });
+    const options = { env: { ...env, ...deployment }, sharedControl: control, fetchImpl: async () => { requests++; throw new Error('Refresh must never be requested'); } };
+    const fresh = await getFreshXeroConnection(storedClient({ ...storedRow, expires_at: new Date(Date.now() + 3600_000).toISOString() }), options);
+    assert.equal(fresh.accessToken, storedRow.access_token);
+    for (const expires_at of [storedRow.expires_at, null, 'invalid']) {
+      await assert.rejects(getFreshXeroConnection(storedClient({ ...storedRow, expires_at }), options), { code: 'FCOS_DEPLOYMENT_READ_ONLY' });
+    }
+    assert.deepEqual({ claims, requests, finished }, { claims: 0, requests: 0, finished: 0 });
+  }
+});
+
 test('busy or uncertain renewal never reuses refresh token; revocation differs from configuration failure',async()=>{
   for(const state of ['busy','uncertain','revoked']) {
     const control=fixtureSharedControl({claimRefresh:async()=>({state})});
