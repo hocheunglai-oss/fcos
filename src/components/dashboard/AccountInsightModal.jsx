@@ -496,7 +496,7 @@ export default function AccountInsightModal({ account, open, onClose, selectedYe
                     </div>
                   </Section>
                   <div className={presentationClass19}>
-                    <details className={presentationClass20}>
+                    <details className="rounded-[var(--radius-panel)] border border-border bg-card p-4 shadow-[var(--shadow-panel)] sm:p-5">
                       <summary className={presentationClass21}>Relationship <span className={presentationClass22}>Salesforce identity and FCOS ownership context</span></summary>
                       <div className="mt-4">
                       <dl className="grid grid-cols-2 gap-x-5 gap-y-3 text-sm">
