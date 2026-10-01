@@ -28,8 +28,13 @@ export function runtimeDeploymentBinding(env, receipt) {
   const sha = clean(env.VERCEL_GIT_COMMIT_SHA || env.FCOS_BUILD_COMMIT_SHA);
   const suppliedShas = [env.VERCEL_GIT_COMMIT_SHA, env.FCOS_BUILD_COMMIT_SHA].map(clean).filter(Boolean);
   const provenance = receipt?.provenance;
+  // The producer permits missing upload-excluded controls only after verifying
+  // immutable HEAD bytes and the supplied exact source digest. Ordinary dirty
+  // checkouts cannot inherit this attested sanitized state.
   const cleanSource = provenance?.gitDirty === false
-    || (provenance?.gitDirty === null && provenance?.sourceAttested === true);
+    || (provenance?.gitDirty === null && provenance?.sourceAttested === true)
+    || (provenance?.gitDirty === true && provenance?.sanitizedCheckout === true
+      && provenance?.sourceAttested === true && provenance?.commitVerified === true);
   const validProvenance = provenance?.schemaVersion === 1
     && provenance?.sourceDigestAlgorithm === 'sha256:fcos-vercel-source-v1'
     && provenance?.releaseEligible === true && cleanSource;

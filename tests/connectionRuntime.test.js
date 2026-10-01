@@ -115,3 +115,39 @@ test('runtime accepts only explicitly attested source archives and rejects malfo
     assert.throws(()=>runtimeDeploymentBinding(env,{...archive,provenance:{...archive.provenance,...change}}), /binding/);
   }
 });
+
+
+test('runtime accepts the producer-attested sanitized Git checkout while keeping all exact binding checks', () => {
+  const sanitized = { ...receipt, gitDirty: true, provenance: { ...receipt.provenance,
+    gitDirty: true, sanitizedCheckout: true, sourceAttested: true, commitVerified: true } };
+  assert.deepEqual(runtimeDeploymentBinding(env, sanitized), { deploymentId: 'dpl_fixture', sha, sourceDigest: digest });
+  const rejected = [];
+  for (const key of ['sanitizedCheckout', 'sourceAttested', 'commitVerified', 'releaseEligible']) {
+    for (const value of [undefined, false, 'true', 1]) rejected.push({ ...sanitized,
+      provenance: { ...sanitized.provenance, [key]: value } });
+  }
+  rejected.push(
+    { ...receipt, gitDirty: true, provenance: { ...receipt.provenance, gitDirty: true } },
+    { ...sanitized, gitDirty: false },
+    { ...sanitized, deploymentId: 'dpl_other' },
+    { ...sanitized, commit: 'c'.repeat(40) },
+    { ...sanitized, provenance: { ...sanitized.provenance, commit: 'c'.repeat(40) } },
+    { ...sanitized, provenance: { ...sanitized.provenance, sourceDigest: 'not-a-digest' } },
+    { ...sanitized, provenance: { ...sanitized.provenance, sourceDigestAlgorithm: 'unknown' } },
+    { ...sanitized, provenance: { ...sanitized.provenance, schemaVersion: 2 } },
+  );
+  for (const gitDirty of [undefined, 'true', 1]) rejected.push({ ...sanitized, gitDirty,
+    provenance: { ...sanitized.provenance, gitDirty } });
+  for (const forged of rejected) assert.throws(() => runtimeDeploymentBinding(env, forged), /binding/);
+  assert.throws(() => runtimeDeploymentBinding({ ...env, FCOS_BUILD_COMMIT_SHA: 'c'.repeat(40) }, sanitized), /binding/);
+});
+
+test('unverified dirty receipts cannot reach any runtime provider or database probe', async () => {
+  for (const missing of ['sanitizedCheckout', 'sourceAttested', 'commitVerified', 'releaseEligible']) {
+    const forged = { ...receipt, gitDirty: true, provenance: { ...receipt.provenance, gitDirty: true,
+      sanitizedCheckout: true, sourceAttested: true, commitVerified: true, [missing]: false } };
+    await assert.rejects(() => probeRuntimeConnections({ env, receipt: forged,
+      client: { from: () => assert.fail('no database access before verified source') },
+      fetchImpl: () => assert.fail('no provider request before verified source') }), /binding/);
+  }
+});
