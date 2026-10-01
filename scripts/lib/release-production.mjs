@@ -86,7 +86,7 @@ export async function executeProductionRelease({ readiness, authority, journal, 
   const previous = await currentProduction();
   if (previous.id !== readiness.previousProduction.deploymentId || previous.sha !== readiness.previousProduction.sha) throw new Error('Production changed after readiness collection.');
   const context = { schemaVersion: 1, operationId, candidate: readiness.candidate, previousProduction: previous,
-    authorization: { runId: approved.runId, reviewerId: approved.reviewerId, environmentId: approved.environmentId },
+    authorization: { approvalMode: approved.approvalMode || 'unverified', runId: approved.runId, reviewerId: approved.reviewerId, environmentId: approved.environmentId },
     rollback: { command: ['vercel', 'rollback', previous.id], requiresHumanAuthorization: true } };
   await journal({ ...context, phase: 'deploy_requested', capturedAt: new Date(now()).toISOString() }, { first: true });
   let staged;

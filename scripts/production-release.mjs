@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { FCOS_CONNECTION_POLICY, fcosConnectionIdentifier } from '../config/fcosConnections.js';
 import { collectParitySource, collectPreviewParity, collectRuntimeObservation } from './collect-preview-parity.mjs';
 import { createReleaseReadiness, releaseHash, releaseConfigurationRevision } from './lib/release-readiness.mjs';
-import { assertProductionProtection, githubReleaseReads, RELEASE_REPOSITORY, PRODUCTION_ENVIRONMENT, PRODUCTION_WORKFLOW } from './lib/release-evidence.mjs';
+import { assertProductionProtection, assertReleaseGitHubAccount, assertReleaseWorkflowIdentity, githubReleaseReads, RELEASE_REPOSITORY, PRODUCTION_ENVIRONMENT } from './lib/release-evidence.mjs';
 import { assertVercelProductionAuthority, assertProductionRuntimeReadback, executeProductionRelease, githubReleaseOidc, readVercelTokenMetadata } from './lib/release-production.mjs';
 import { canonicalFcosE2eCandidateUrl } from './verify-e2e-candidate.mjs';
 
@@ -29,7 +29,7 @@ function command(binary, args, { cwd, env, binaryOutput = false, timeout = 30000
 
 export async function runProductionRelease({ mode = 'dry-run', cwd = ROOT, expectedCommit, candidateUrl, env = process.env } = {}) {
   if (mode === 'dry-run') return { schemaVersion: 1, mode, productionAuthorized: false, operations: [
-    'Verify protected default workflow, dedicated environment, independent human approval and signed Actions identity.',
+    'Verify protected default workflow, dedicated environment, configured human approval and signed Actions identity.',
     'Recollect exact-commit Preview parity, quality source and trusted workflow artifacts.',
     'Build source with Production settings using deploy --prod --skip-domain.',
     'Verify READY, source digest, runtime provider targets and read-only health.',
@@ -42,12 +42,11 @@ export async function runProductionRelease({ mode = 'dry-run', cwd = ROOT, expec
   const claims = await githubReleaseOidc({ env });
   const ghEnv = { PATH: env.PATH, HOME: env.HOME, GH_HOST: 'github.com', GH_TOKEN: env.GH_TOKEN || env.GITHUB_TOKEN, GH_REPO: RELEASE_REPOSITORY };
   const reads = githubReleaseReads({ command: 'gh', env: ghEnv }, { cwd });
+  assertReleaseGitHubAccount(reads);
   const repository = reads.json(`repos/${RELEASE_REPOSITORY}`);
   const branch = reads.json(`repos/${RELEASE_REPOSITORY}/branches/${encodeURIComponent(repository.default_branch)}`);
   const protection = reads.json(`repos/${RELEASE_REPOSITORY}/branches/${encodeURIComponent(repository.default_branch)}/protection`);
-  if (claims.repository !== RELEASE_REPOSITORY || claims.repository_id !== String(repository.id)
-    || claims.workflow_ref !== `${RELEASE_REPOSITORY}/${PRODUCTION_WORKFLOW}@refs/heads/${repository.default_branch}`
-    || claims.workflow_sha !== branch.commit?.sha || claims.sha !== branch.commit?.sha || claims.ref !== `refs/heads/${repository.default_branch}`) throw new Error('Release operations must execute from the current protected default-branch workflow.');
+  assertReleaseWorkflowIdentity(claims, repository, branch);
   const context = () => ({ repository, branch, protection,
     environment: reads.json(`repos/${RELEASE_REPOSITORY}/environments/${PRODUCTION_ENVIRONMENT}`),
     variables: reads.json(`repos/${RELEASE_REPOSITORY}/environments/${PRODUCTION_ENVIRONMENT}/variables?per_page=100`),
@@ -59,7 +58,6 @@ export async function runProductionRelease({ mode = 'dry-run', cwd = ROOT, expec
       configurationRevision, workflowSha: branch.commit.sha, environment: PRODUCTION_ENVIRONMENT, protectionsVerified: true,
       productionAuthorized: false, mutations: 0 };
   }
-  if (reads.json('user').login !== fcosConnectionIdentifier('github', 'Required account')) throw new Error('Dedicated release GitHub token must belong to the required account.');
   const vercelEnv = { PATH: env.PATH, HOME: env.HOME, CI: '1', NO_COLOR: '1', VERCEL_TOKEN: env.VERCEL_TOKEN,
     VERCEL_ORG_ID: teamId, VERCEL_PROJECT_ID: projectId };
   if (!vercelEnv.VERCEL_TOKEN) throw new Error('Dedicated Production Vercel credential is unavailable.');

@@ -4,8 +4,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { generateKeyPairSync, sign } from 'node:crypto';
 import { createReleaseReadiness, assertReleaseReceiptBinding, releaseHash } from '../scripts/lib/release-readiness.mjs';
-import { assertTrustedArtifact, assertProductionProtection, RELEASE_REPOSITORY, PRODUCTION_ENVIRONMENT, PRODUCTION_WORKFLOW } from '../scripts/lib/release-evidence.mjs';
+import { assertTrustedArtifact, assertProductionProtection, assertReleaseGitHubAccount, assertReleaseWorkflowIdentity, RELEASE_REPOSITORY, PRODUCTION_ENVIRONMENT, PRODUCTION_WORKFLOW } from '../scripts/lib/release-evidence.mjs';
 import { githubReleaseOidc, productionDeployArguments, assertVercelProductionAuthority, assertProductionRuntimeReadback, executeProductionRelease, readVercelTokenMetadata } from '../scripts/lib/release-production.mjs';
+import { FCOS_RELEASE_APPROVAL_POLICY } from '../config/fcosConnections.js';
 import { PREVIEW_PARITY_POLICY } from '../scripts/lib/preview-parity.mjs';
 import { collectRuntimeObservation } from '../scripts/collect-preview-parity.mjs';
 import { runProductionRelease, productionReleaseArguments } from '../scripts/production-release.mjs';
@@ -59,7 +60,7 @@ test('readiness binds one exact candidate, source, lock, configuration, deployme
 function protectedInputs() {
   const repository = { id: 77, full_name: RELEASE_REPOSITORY, default_branch: 'main' };
   const branch = { name: 'main', protected: true, commit: { sha: harness } };
-  const protection = { enforce_admins: { enabled: true }, required_pull_request_reviews: { required_approving_review_count: 1, dismiss_stale_reviews: true } };
+  const protection = { required_status_checks: { strict:true, checks:FCOS_RELEASE_APPROVAL_POLICY.requiredChecks.map(context=>({context,app_id:FCOS_RELEASE_APPROVAL_POLICY.statusCheckAppId})) }, enforce_admins: { enabled: true }, required_pull_request_reviews: { required_approving_review_count: 1, dismiss_stale_reviews: true } };
   const environment = { id: 90, name: PRODUCTION_ENVIRONMENT, can_admins_bypass: false,
     deployment_branch_policy: { protected_branches: true, custom_branch_policies: false },
     protection_rules: [{ type: 'required_reviewers', prevent_self_review: true, reviewers: [{ type: 'User', reviewer: { id: 2 } }] }] };
@@ -73,7 +74,7 @@ function protectedInputs() {
     repository_id: '77', sub: `repo:${RELEASE_REPOSITORY}:environment:${PRODUCTION_ENVIRONMENT}`,
     workflow_ref: `${RELEASE_REPOSITORY}/${PRODUCTION_WORKFLOW}@refs/heads/main`, workflow_sha: harness,
     sha: harness, ref: 'refs/heads/main', run_id: '99', run_attempt: '1', event_name: 'workflow_dispatch', exp: now / 1000 + 300 };
-  return { repository, branch, protection, environment, variables, secrets, run, approvals, oidcClaims,
+  return { approvalPolicy:{...FCOS_RELEASE_APPROVAL_POLICY,mode:'two_person'}, repository, branch, protection, environment, variables, secrets, run, approvals, oidcClaims,
     expectedCommit: sha, sourceDigest: digest, configurationRevision, now };
 }
 
@@ -266,4 +267,44 @@ test('Vercel metadata uses CLI first and independently verifies the same API cre
   assert.deepEqual(await readVercelTokenMetadata({cliRead:()=>{throw Error('unsupported');},token:'private-test-value',fetchImpl}),metadata);
   assert.deepEqual(urls,['https://api.vercel.com/v2/user','https://api.vercel.com/v5/user/tokens/current']);
   let reads=0;await assert.rejects(()=>readVercelTokenMetadata({cliRead:()=>{throw Error('unsupported');},token:'private-test-value',fetchImpl:async()=>{reads++;return {ok:true,json:async()=>({user:{username:'wrong'}})};}}),/account mismatch/);assert.equal(reads,1);
+});
+
+function soloInputs() {
+  const inputs=protectedInputs();inputs.approvalPolicy={...FCOS_RELEASE_APPROVAL_POLICY,mode:'single_operator'};
+  delete inputs.protection.required_pull_request_reviews;
+  inputs.environment.protection_rules[0].prevent_self_review=false;
+  const operator={id:1,login:'hocheunglai-oss'};
+  inputs.environment.protection_rules[0].reviewers=[{type:'User',reviewer:operator}];
+  inputs.run.actor=operator;inputs.run.triggering_actor=operator;inputs.approvals[0].user=operator;
+  return inputs;
+}
+test('single operator may explicitly approve own exact run; all other safeguards remain mandatory',()=>{
+  assert.equal(assertProductionProtection(soloInputs()).approvalMode,'single_operator');
+  for (const alter of [
+    x=>{x.approvals=[];}, x=>{x.approvals[0].user.login='wrong-account';},
+    x=>{x.run.triggering_actor={id:2,login:'wrong-account'};},x=>{x.run.actor={...x.run.actor,id:2};},
+    x=>{x.environment.protection_rules[0].prevent_self_review=true;},
+    x=>{x.environment.protection_rules[0].reviewers[0].reviewer.login='wrong-account';},
+    x=>{x.environment.protection_rules[0].reviewers.push({type:'Team',reviewer:{id:7}});},
+    x=>{x.environment.can_admins_bypass=true;},x=>{x.protection.enforce_admins.enabled=false;},
+    x=>{x.protection.required_status_checks.strict=false;},x=>{x.protection.required_status_checks.checks.pop();},
+    x=>{x.protection.required_status_checks.checks[0].app_id=1;},
+    x=>{x.approvalPolicy.mode='unknown';}, x=>{x.approvalPolicy.mode='two_person';},
+    x=>{x.variables.variables[1].value='f'.repeat(40);},
+    x=>{x.approvals.push(structuredClone(x.approvals[0]));},
+    x=>{x.approvals[0].state='rejected';},x=>{x.oidcClaims.run_id='100';},
+  ]) {const copy=structuredClone(soloInputs());alter(copy);assert.throws(()=>assertProductionProtection(copy));}
+});
+
+test('wrong release token account is rejected before private repository or environment reads',()=>{
+  const paths=[];
+  assert.throws(()=>assertReleaseGitHubAccount({json:path=>{paths.push(path);return {id:1,login:'wrong-account'};}}));
+  assert.deepEqual(paths,['user']);
+  assert.equal(assertReleaseGitHubAccount({json:path=>{assert.equal(path,'user');return {id:1,login:'hocheunglai-oss'};}}).id,1);
+});
+test('preflight and execution require the exact Production environment OIDC subject',()=>{
+  const x=protectedInputs();assert.equal(assertReleaseWorkflowIdentity(x.oidcClaims,x.repository,x.branch),true);
+  for(const change of [{sub:`repo:${RELEASE_REPOSITORY}:ref:refs/heads/main`},{sub:`repo:${RELEASE_REPOSITORY}:environment:wrong`},{workflow_sha:sha},{repository_id:'78'}]){
+    assert.throws(()=>assertReleaseWorkflowIdentity({...x.oidcClaims,...change},x.repository,x.branch));
+  }
 });
