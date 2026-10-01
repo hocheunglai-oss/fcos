@@ -1,5 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
+import { isReadOnlyHedgeDeskAction } from '../api/_hedgeDeskReadOnly.js';
+import { requireDeploymentMutationAllowed } from '../api/_deploymentReadOnly.js';
+import { isReadOnlyMarketAction } from '../api/_readOnlyCiAccess.js';
 import { handleHedgeDeskEntity, handleHedgeMarkets } from '../api/_hedgeDeskService.js';
 import { prepareManualMopsVerification } from '../api/_hedgeMops.js';
 import { tradingDaysInMonth } from '../src/hedge/lib/domain.js';
@@ -128,4 +133,47 @@ test('normal Markets snapshots suppress expiry only on read-only deployments', a
       else assert.deepEqual(result.expiryAutomation, { status: 'not_run', reason: 'deployment_read_only' });
     });
   }
+});
+
+test('Preview service rejects mutations and unknown actions before touching storage', async () => {
+  await withDeployment({ VERCEL_ENV: 'preview' }, async () => {
+    for (const action of ['create', 'update', 'delete', 'brokerSettlementUpdate', 'future_action']) {
+      const { client, reads, writes } = fixture();
+      await assert.rejects(handleHedgeDeskEntity({ action, entity: 'AppConfig' }, profile, { client, capabilities }), { code: 'FCOS_DEPLOYMENT_READ_ONLY' });
+      assert.deepEqual(reads, []);
+      assert.deepEqual(writes, []);
+    }
+    for (const body of [{ action: 'list', entity: 'AppConfig' }, { action: 'filter', entity: 'AppConfig', params: { key: 'rates' } }, { action: 'get', entity: 'AppConfig', id: 'rates-1' }]) {
+      const { client, writes } = fixture();
+      await handleHedgeDeskEntity(body, profile, { client, capabilities });
+      assert.deepEqual(writes, []);
+    }
+  });
+});
+
+test('actual authenticated dispatcher exempts only classified reads and retains all module checks', async () => {
+  const source = readFileSync(new URL('../api/functions/[name].js', import.meta.url), 'utf8');
+  const access = source.match(/async function requireHandlerAccess\(name, req\) {[\s\S]*?\n}/)?.[0];
+  const dispatch = source.match(/requireDeploymentMutationAllowed\(handlerPolicy\?\.mutation && \([\s\S]*?\n        \)\);/)?.[0];
+  assert.ok(access && dispatch, 'Read the actual dispatcher and authorization boundary');
+  await withDeployment({ VERCEL_ENV: 'preview' }, async () => {
+    let allowed = true;
+    const context = { profile, client: {} };
+    const sandbox = { handlerPolicyFor: (_registry, name) => ({ authentication: 'user', mutation: true, modules: [name] }), HANDLER_POLICY_REGISTRY: {},
+      requireActiveUser: async () => context, requireReadOnlyCiOperation: () => {}, requireDeploymentMutationAllowed,
+      userHasAnyModuleAccess: async () => allowed, appError: (message, status) => Object.assign(new Error(message), { status }) };
+    const authorize = vm.runInNewContext(`(${access})`, sandbox);
+    assert.equal(await authorize('hedgeDeskEntity', {}), context);
+    allowed = false;
+    await assert.rejects(authorize('hedgeDeskEntity', {}), { status: 403 });
+    for (const name of ['hedgeDeskEntity', 'hedgeMarkets', 'otherMutation']) {
+      for (const action of ['snapshot', 'list', 'filter', 'get', 'create', 'delete', 'brokerSettlementUpdate', 'future_action']) {
+        const body = { action };
+        const read = name === 'hedgeDeskEntity' ? isReadOnlyHedgeDeskAction(body) : name === 'hedgeMarkets' && isReadOnlyMarketAction(body);
+        const run = () => vm.runInNewContext(dispatch, { name, body, handlerPolicy: { mutation: true }, requireDeploymentMutationAllowed, isReadOnlyMarketAction, isReadOnlyHedgeDeskAction });
+        if (read) assert.doesNotThrow(run);
+        else assert.throws(run, { code: 'FCOS_DEPLOYMENT_READ_ONLY' });
+      }
+    }
+  });
 });

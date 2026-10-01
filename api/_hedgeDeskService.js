@@ -1,7 +1,8 @@
 import { isAllowedAiSelection } from './_aiModelRouting.js';
 import { createHash } from 'node:crypto';
 import { isReadOnlyCiProfile, requireReadOnlyCiOperation } from './_readOnlyCiAccess.js';
-import { isDeploymentReadOnly } from './_deploymentReadOnly.js';
+import { isDeploymentReadOnly, requireDeploymentMutationAllowed } from './_deploymentReadOnly.js';
+import { isReadOnlyHedgeDeskAction } from './_hedgeDeskReadOnly.js';
 import { richTextPlainLength, sanitizeRichText } from './_richText.js';
 import {
   calcSwapFees,
@@ -695,6 +696,7 @@ export async function loadHedgeDeskSnapshot({ client, capabilities }) {
 }
 
 export async function handleHedgeDeskEntity(body, profile, { client, capabilities }) {
+  requireDeploymentMutationAllowed(!isReadOnlyHedgeDeskAction(body));
   const action = String(body?.action || 'list');
   if (action === 'snapshot') return loadHedgeDeskSnapshot({ client, capabilities });
   if (action === 'brokerSettlementUpdate') return saveBrokerSettlement(client, profile, capabilities, body);
