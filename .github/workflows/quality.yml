@@ -18,6 +18,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          # Verify immutable retained Production and compatibility Git objects.
+          fetch-depth: 0
           # PR code must not receive a reusable GitHub credential through git.
           persist-credentials: false
       - uses: actions/setup-node@v4
