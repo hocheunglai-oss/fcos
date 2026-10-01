@@ -98,7 +98,7 @@ test('saved evidence report is SELECT only and safe-projects credentials, raw er
   assert.match(report.rows[0].xeroUrl, /^https:\/\/go\.xero\.com\//);
   assert.doesNotMatch(JSON.stringify(report), /NEVER_EXPOSE|refreshToken|bankAccount/);
   assert.ok(f.calls.every(row => row.selected && row.selected !== '*'));
-  assert.equal(f.calls.length, 7);
+  assert.equal(f.calls.length, 9);
   assert.equal(report.health.stale, false);
 });
 
@@ -308,7 +308,7 @@ test('representative saved report stays bounded with no provider calls', async t
   const f = fixture({ items: Array.from({ length: 750 }, (_, i) => item({ row_index: i })) });
   const started = performance.now(); const report = await xeroIntegrityReport({}, { client: f.client, now: NOW });
   const elapsed = Math.round((performance.now() - started) * 100) / 100;
-  assert.equal(report.metrics.checked, 750); assert.equal(f.calls.length, 9);
+  assert.equal(report.metrics.checked, 750); assert.equal(f.calls.length, 11);
   t.diagnostic(JSON.stringify({ elapsedMs: elapsed, databaseSelects: f.calls.length, readRpcs: 0, rowsProcessed: 750, providerCalls: 0 }));
 });
 
@@ -335,4 +335,17 @@ test('missing Contact is not hidden as a generic block and recent run status nev
   const report = await xeroIntegrityReport({}, { client: f.client, now: NOW });
   assert.equal(report.rows.find(row => row.kind === 'contact').status, 'missing');
   assert.equal(report.health.recentRuns[0].readbackVerified, false); assert.equal(report.health.lastSuccessfulSyncAt, null);
+});
+
+
+test('run lookup bounds JSON inspection to recent indexed candidates and fails closed beyond the window', async () => {
+  const f = fixture();
+  f.data.xero_financial_sync_runs.unshift(...Array.from({ length: 20 }, (_, i) => ({ id: `foreign-${i}`, mode: 'preview', status: 'ready_for_review', created_at: `2026-10-01T00:00:${String(i).padStart(2, '0')}Z`, control_totals: { workflowSnapshot: { ...f.snapshot, tenantId: TARGET } } })));
+  const report = await xeroIntegrityReport({}, { client: f.client, now: NOW });
+  assert.equal(report.metrics.checked, null);
+  assert.equal(report.coverage[0].available, false);
+  assert.match(report.notices.join(' '), /latest 20 saved preview candidates/);
+  const lookups = f.calls.filter(call => call.table === 'xero_financial_sync_runs');
+  assert.equal(lookups.length, 4);
+  assert.equal(lookups.filter(call => call.selected === 'id,mode,status,created_at').length, 2);
 });

@@ -8,4 +8,6 @@ The page shows integrity counts, currency-separated comparisons, paginated searc
 
 The reporting endpoint retains the existing Xero Portal module and Finance management authorization. It projects only allowlisted business fields; credentials, raw journal payloads and bank secrets are excluded. Existing financial gates, fingerprints, durable locks, audit records and correction preservation rules remain authoritative in the Codex workflow.
 
+Run lookup first reads the latest 20 candidate IDs through the existing timestamp index, then checks the saved tenant/org binding only within that window. This avoids scanning every large historical snapshot. The reporting page identifies this limit and never treats an unavailable older capture as a complete check.
+
 No Salesforce metadata changes, live database migrations or financial writes are needed for this UI change. Production promotion remains subject to the existing exact-candidate release checks.

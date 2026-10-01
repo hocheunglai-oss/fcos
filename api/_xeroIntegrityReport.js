@@ -7,6 +7,7 @@ import { previewEvidenceHash } from './_xeroPreviewPersistence.js';
 // check, financial approval, or source-universe census.
 const ROW_CAP = 3000;
 const HISTORY_CAP = 500;
+const RUN_LOOKUP_CAP = 20;
 const READ_PAGE = 250;
 const STALE_MS = 24 * 60 * 60 * 1000;
 const STATUSES = ['matched', 'missing', 'mismatched', 'blocked', 'uncertain', 'unverified'];
@@ -207,6 +208,21 @@ async function savedRead(query, label, errors) {
   }
 }
 
+// Select candidate IDs through the timestamp index before inspecting large JSON
+// snapshots. Filtering every historical workflowSnapshot can exhaust PostgREST's
+// statement timeout. The candidate window is explicit; it is not global coverage.
+async function boundedRunRead(client, { mode = null, columns, limit }, tenantId, label, errors) {
+  let candidates = client.from('xero_financial_sync_runs').select('id,mode,status,created_at');
+  if (mode) candidates = candidates.eq('mode', mode).not('status', 'in', '(building,cancelled)');
+  const recent = await savedRead(candidates.order('created_at', { ascending: false }).limit(RUN_LOOKUP_CAP), label, errors);
+  if (recent.error || !recent.data?.length) return recent;
+  return savedRead(client.from('xero_financial_sync_runs').select(columns)
+    .in('id', recent.data.map(row => row.id))
+    .eq('control_totals->workflowSnapshot->>tenantId', tenantId)
+    .eq('control_totals->workflowSnapshot->>salesforceOrgId', fcosSalesforceEnvironment('production').orgId)
+    .order('created_at', { ascending: false }).order('id').limit(limit), label, errors);
+}
+
 async function boundedRows(factory, cap, label, errors) {
   const rows = []; let total = null;
   while (rows.length < cap) {
@@ -274,21 +290,16 @@ export async function xeroIntegrityReport(body = {}, { client, accessContext, no
   if (!UUID.test(tenantId || '')) notices.push('The approved saved Xero organisation is unavailable. No records can be safely attributed to this organisation.');
   else {
     const [runResult, contactsResult, claimsResult, quotaResult, recentResult] = await Promise.all([
-      savedRead(client.from('xero_financial_sync_runs').select('id,mode,status,cutoff_date,source_snapshot_at,xero_snapshot_at,control_totals,classification_summary,error_code,created_by,created_at,completed_at')
-        .eq('mode', 'preview').eq('control_totals->workflowSnapshot->>tenantId', tenantId)
-        .eq('control_totals->workflowSnapshot->>salesforceOrgId', fcosSalesforceEnvironment('production').orgId)
-        .not('status', 'in', '(building,cancelled)').order('created_at', { ascending: false }).order('id').limit(1), 'document check', errors),
+      boundedRunRead(client, { mode: 'preview', columns: 'id,mode,status,cutoff_date,source_snapshot_at,xero_snapshot_at,control_totals,classification_summary,error_code,created_by,created_at,completed_at', limit: 1 }, tenantId, 'document check', errors),
       savedRead(client.from('xero_contact_lifecycle_runs').select('id,state,xero,row_count,created_at,applied_at')
         .eq('xero->>tenantId', tenantId).order('created_at', { ascending: false }).limit(1), 'Contact identity check', errors),
       boundedRows(() => client.from('xero_document_field_correction_claims').select('id,tenant_id,xero_invoice_id,idempotency_key,evidence,evidence_hash,created_at', { count: 'exact' })
         .eq('tenant_id', tenantId).order('created_at', { ascending: false }).order('id'), HISTORY_CAP, 'correction claims', errors),
       savedRead(client.from('xero_shared_tenant_control').select('tenant_id,allowance_known,available_calls,observed_at,retry_at,daily_hold')
         .eq('tenant_id', tenantId).maybeSingle(), 'quota', errors),
-      savedRead(client.from('xero_financial_sync_runs').select('id,mode,status,created_at,completed_at,classification_summary,error_code')
-        .eq('control_totals->workflowSnapshot->>tenantId', tenantId)
-        .eq('control_totals->workflowSnapshot->>salesforceOrgId', fcosSalesforceEnvironment('production').orgId)
-        .order('created_at', { ascending: false }).limit(10), 'recent run metadata', errors),
+      boundedRunRead(client, { columns: 'id,mode,status,created_at,completed_at,classification_summary,error_code', limit: 10 }, tenantId, 'recent run metadata', errors),
     ]);
+    notices.push(`Document lookup checks the latest ${RUN_LOOKUP_CAP} saved preview candidates; recent-run metadata checks the latest ${RUN_LOOKUP_CAP} runs. Older or unbound evidence is not included.`);
     recentRuns = (recentResult.data || []).map(row => ({ id: row.id, mode: text(row.mode), status: text(row.status),
       createdAt: instant(row.created_at), completedAt: instant(row.completed_at),
       counts: Object.fromEntries(['total', 'linked', 'updated', 'created', 'applied', 'failed', 'blocked', 'eligible'].filter(key =>
