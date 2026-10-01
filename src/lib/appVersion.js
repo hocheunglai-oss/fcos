@@ -3,6 +3,7 @@ import { APP_VERSION } from './appVersionMeta.js';
 export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
+  { version: '2.0.292', releasedAt: '2026-10-01', title: 'Clearer work, filing and recovery', changes: ['Show recorded blockers and disclose unavailable or capped work sources in My Commitments.', 'Protect the September 2026 Nom B filing policy, highlight missing STEM details, and provide actionable System Health recovery guidance.', 'Show the running release and last synchronized release in FCOS Updates.'] },
   { version: '2.0.291', releasedAt: '2026-10-01', title: 'Connection and release controls', changes: ['Separate tooling access from app connectivity and Production approval.', 'Prevent background portal retries in Preview.'] },
   { version: '2.0.290', releasedAt: '2026-10-01', title: 'Reliable Preview views and charge queues', changes: ['Correct charge queue counts; preserve closures and approvals.', 'Keep Preview book reads safe and show load failures.', 'Correct mailbox status and sync age.'] },
   { version: '2.0.289', releasedAt: '2026-10-01', title: 'Consistent charge reviews and desktop refreshes', changes: ['Keep buyer charge changes within the exact reviewed supplier.', 'Restore Markets alerts for authorized users and preserve notification filters and action ordering.', 'Retain the latest Hedge Desk snapshot during overlapping refreshes, handle unreadable responses safely and bound local cache memory.'] },

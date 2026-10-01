@@ -1,3 +1,19 @@
+const presentationClass0 = 'text-sm font-semibold text-foreground';
+const presentationClass1 = 'rounded-md border border-border bg-card p-2.5';
+const presentationClass2 = 'text-[11px] font-semibold text-foreground';
+const presentationClass3 = 'mt-1 text-[10px] text-muted-foreground';
+const presentationClass4 = 'mt-1 text-xs capitalize';
+const presentationClass5 = 'flex items-center gap-1.5 text-[11px] font-semibold text-foreground';
+const presentationClass6 = 'h-3.5 w-3.5';
+const presentationClass7 = 'mr-1 h-3 w-3';
+const presentationClass8 = 'text-[11px] leading-relaxed text-muted-foreground';
+const presentationClass9 = 'font-semibold text-foreground';
+const presentationClass10 = 'flex items-start gap-2.5';
+const presentationClass11 = 'mt-0.5 h-4 w-4 shrink-0 text-blue-700';
+const presentationClass12 = 'text-xs font-semibold text-blue-950';
+const presentationClass13 = 'mt-1 text-[11px] text-blue-900';
+const presentationClass14 = 'font-semibold';
+
 import { useCallback, useEffect, useState } from 'react';
 import {
   AlertTriangle,
@@ -107,7 +123,7 @@ function ProviderCard({ target, report }) {
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <div className="flex flex-wrap items-center gap-2">
-            <h3 className="text-sm font-semibold text-foreground">{target.provider}</h3>
+            <h3 className={presentationClass0}>{target.provider}</h3>
             <Badge variant="outline" className="font-mono text-[10px]">{target.cli}</Badge>
             <Badge variant="outline" className={target.fullyIsolated ? 'border-blue-200 bg-blue-50 text-blue-700' : 'border-violet-200 bg-violet-50 text-violet-700'}>
               {target.fullyIsolated ? 'Isolated authorization' : 'Isolated target pin'}
@@ -127,36 +143,36 @@ function ProviderCard({ target, report }) {
       </div>
 
       <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-        <div className="rounded-md border border-border bg-card p-2.5">
-          <div className="text-[11px] font-semibold text-foreground">CLI version</div>
+        <div className={presentationClass1}>
+          <div className={presentationClass2}>CLI version</div>
           <div className="mt-1 font-mono text-xs">{report?.cliVersion || 'Unavailable'}</div>
-          <div className="mt-1 text-[10px] text-muted-foreground">Policy: {policyVersionLabel(target.cliVersion)}</div>
+          <div className={presentationClass3}>Policy: {policyVersionLabel(target.cliVersion)}</div>
         </div>
-        <div className="rounded-md border border-border bg-card p-2.5">
-          <div className="text-[11px] font-semibold text-foreground">Identity and target</div>
-          <div className="mt-1 text-xs capitalize">{report?.identityStatus?.replaceAll('_', ' ') || 'Unavailable'} · pin {report?.targetPin || 'unavailable'}</div>
-          <div className="mt-1 text-[10px] text-muted-foreground">Probe {report?.latencyMs != null ? `${report.latencyMs} ms` : 'not available'}</div>
+        <div className={presentationClass1}>
+          <div className={presentationClass2}>Identity and target</div>
+          <div className={presentationClass4}>{report?.identityStatus?.replaceAll('_', ' ') || 'Unavailable'} · pin {report?.targetPin || 'unavailable'}</div>
+          <div className={presentationClass3}>Probe {report?.latencyMs != null ? `${report.latencyMs} ms` : 'not available'}</div>
         </div>
-        <div className="rounded-md border border-border bg-card p-2.5">
-          <div className="flex items-center gap-1.5 text-[11px] font-semibold text-foreground"><KeyRound className="h-3.5 w-3.5" />Credential lifecycle</div>
-          <div className="mt-1 text-xs capitalize">{report?.credentialLifecycle?.replaceAll('_', ' ') || 'Unknown'}</div>
-          <div className="mt-1 text-[10px] text-muted-foreground">{report?.credentialAgeDays != null ? `${report.credentialAgeDays} days since authorization record` : 'Authorization age unavailable'}</div>
+        <div className={presentationClass1}>
+          <div className={presentationClass5}><KeyRound className={presentationClass6} />Credential lifecycle</div>
+          <div className={presentationClass4}>{report?.credentialLifecycle?.replaceAll('_', ' ') || 'Unknown'}</div>
+          <div className={presentationClass3}>{report?.credentialAgeDays != null ? `${report.credentialAgeDays} days since authorization record` : 'Authorization age unavailable'}</div>
         </div>
-        <div className="rounded-md border border-border bg-card p-2.5">
-          <div className="flex items-center gap-1.5 text-[11px] font-semibold text-foreground"><HardDrive className="h-3.5 w-3.5" />Credential storage</div>
-          <div className="mt-1 text-xs capitalize">{target.credentialStorage.replaceAll('_', ' ')}</div>
-          <div className="mt-1 text-[10px] text-muted-foreground">Rotation warning after {target.rotationWarningDays} days</div>
+        <div className={presentationClass1}>
+          <div className={presentationClass5}><HardDrive className={presentationClass6} />Credential storage</div>
+          <div className={presentationClass4}>{target.credentialStorage.replaceAll('_', ' ')}</div>
+          <div className={presentationClass3}>Rotation warning after {target.rotationWarningDays} days</div>
         </div>
       </div>
 
       <div className="mt-3 rounded-md border border-border bg-card p-2.5">
-        <div className="text-[11px] font-semibold text-foreground">Required permission probes</div>
+        <div className={presentationClass2}>Required permission probes</div>
         <div className="mt-2 flex flex-wrap gap-1.5">
           {target.requiredPermissions.map((permission) => {
             const passed = report?.permissions.includes(permission);
             return (
               <Badge key={permission} variant="outline" className={passed ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-red-200 bg-red-50 text-red-700'}>
-                {passed ? <CheckCircle2 className="mr-1 h-3 w-3" /> : <XCircle className="mr-1 h-3 w-3" />}{permission}
+                {passed ? <CheckCircle2 className={presentationClass7} /> : <XCircle className={presentationClass7} />}{permission}
               </Badge>
             );
           })}
@@ -170,8 +186,8 @@ function ProviderCard({ target, report }) {
       ) : null}
 
       <div className="mt-3 grid gap-2 sm:grid-cols-2">
-        <div className="text-[11px] leading-relaxed text-muted-foreground"><span className="font-semibold text-foreground">Persistence:</span> {target.persistence}</div>
-        <div className="text-[11px] leading-relaxed text-muted-foreground"><span className="font-semibold text-foreground">Fail-closed route:</span> {target.nonBrowserRoute}</div>
+        <div className={presentationClass8}><span className={presentationClass9}>Persistence:</span> {target.persistence}</div>
+        <div className={presentationClass8}><span className={presentationClass9}>Fail-closed route:</span> {target.nonBrowserRoute}</div>
       </div>
     </article>
   );
@@ -213,7 +229,7 @@ export default function ConnectionChecklist() {
         <div className="flex min-w-0 items-start gap-3">
           <div className="mt-0.5 rounded-lg bg-muted p-2 text-muted-foreground"><ShieldCheck className="h-4 w-4" /></div>
           <div>
-            <h2 className="text-sm font-semibold text-foreground">Connection Checklist</h2>
+            <h2 className={presentationClass0}>Connection Checklist</h2>
             <p className="mt-1 max-w-4xl text-xs leading-relaxed text-muted-foreground">
               Published verification of tooling identities, targets, observed permissions and credential lifecycle. Tooling access does not establish application connectivity or financial authority. Diagnostics do not publish automatically.
             </p>
@@ -222,23 +238,23 @@ export default function ConnectionChecklist() {
         <div className="flex shrink-0 flex-wrap items-center gap-2">
           <Badge variant="outline" className={`gap-1 ${meta.className}`}><StateIcon className="h-3 w-3" />{state.verifiedCount}/{CONNECTION_TARGETS.length} {meta.label}</Badge>
           <Button type="button" size="sm" variant="outline" className="gap-1.5" onClick={() => loadAttestation({ force: true })} disabled={loading}>
-            {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />} Refresh
+            {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className={presentationClass6} />} Refresh
           </Button>
         </div>
       </div>
 
       <div className="mt-4 grid gap-3 rounded-lg border border-blue-200 bg-blue-50/70 p-3 lg:grid-cols-3">
-        <div className="flex items-start gap-2.5">
-          <HardDrive className="mt-0.5 h-4 w-4 shrink-0 text-blue-700" />
-          <div><div className="text-xs font-semibold text-blue-950">Policy {CONNECTION_POLICY_VERSION} · {CONNECTION_PROFILE_NAME}</div><p className="mt-1 text-[11px] text-blue-900">Ignored machine state stays in <code>{CONNECTION_LOCAL_STATE_DIRECTORY}/</code>.</p></div>
+        <div className={presentationClass10}>
+          <HardDrive className={presentationClass11} />
+          <div><div className={presentationClass12}>Policy {CONNECTION_POLICY_VERSION} · {CONNECTION_PROFILE_NAME}</div><p className={presentationClass13}>Ignored machine state stays in <code>{CONNECTION_LOCAL_STATE_DIRECTORY}/</code>.</p></div>
         </div>
-        <div className="flex items-start gap-2.5">
-          <KeyRound className="mt-0.5 h-4 w-4 shrink-0 text-blue-700" />
-          <div><div className="text-xs font-semibold text-blue-950">Signed attestation</div><p className="mt-1 text-[11px] text-blue-900">Key <code>{CONNECTION_ATTESTATION_POLICY.keyId}</code> · revision {attestation?.revision || '—'}</p></div>
+        <div className={presentationClass10}>
+          <KeyRound className={presentationClass11} />
+          <div><div className={presentationClass12}>Signed attestation</div><p className={presentationClass13}>Key <code>{CONNECTION_ATTESTATION_POLICY.keyId}</code> · revision {attestation?.revision || '—'}</p></div>
         </div>
-        <div className="flex items-start gap-2.5">
-          <Clock3 className="mt-0.5 h-4 w-4 shrink-0 text-blue-700" />
-          <div><div className="text-xs font-semibold text-blue-950">Last verified {ageLabel(state.ageSeconds)}</div><p className="mt-1 text-[11px] text-blue-900">{formatDate(attestation?.verifiedAt)} · {attestation?.durationMs != null ? `${attestation.durationMs} ms total` : 'duration unavailable'}</p></div>
+        <div className={presentationClass10}>
+          <Clock3 className={presentationClass11} />
+          <div><div className={presentationClass12}>Last verified {ageLabel(state.ageSeconds)}</div><p className={presentationClass13}>{formatDate(attestation?.verifiedAt)} · {attestation?.durationMs != null ? `${attestation.durationMs} ms total` : 'duration unavailable'}</p></div>
         </div>
       </div>
 
@@ -256,13 +272,13 @@ export default function ConnectionChecklist() {
 
       <div className="mt-4 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900">
         <LockKeyhole className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-        <span><span className="font-semibold">Connection order:</span> verified CLI first, approved API or connector second, and Chrome as the final fallback. Verify the browser inventory and profile before opening tabs. Use <span className="font-semibold">{APPROVED_CONNECTION_BROWSER_PROFILE}</span> for FCOS, Salesforce DEVEE, and Salesforce QAT; <span className="font-semibold">{SALESFORCE_BROWSER_PROFILES.production || 'Vincent'}</span> only for Salesforce Production authentication; or <span className="font-semibold">{SHARED_SALESFORCE_BROWSER_PROFILE}</span> only for the shared Salesforce GitHub repository. Then return to <code>{CONNECTION_DOCTOR_COMMAND}</code>.</span>
+        <span><span className={presentationClass14}>Connection order:</span> verified CLI first, approved API or connector second, and Chrome as the final fallback. Verify the browser inventory and profile before opening tabs. Use <span className={presentationClass14}>{APPROVED_CONNECTION_BROWSER_PROFILE}</span> for FCOS, Salesforce DEVEE, and Salesforce QAT; <span className={presentationClass14}>{SALESFORCE_BROWSER_PROFILES.production || 'Vincent'}</span> only for Salesforce Production authentication; or <span className={presentationClass14}>{SHARED_SALESFORCE_BROWSER_PROFILE}</span> only for the shared Salesforce GitHub repository. Then return to <code>{CONNECTION_DOCTOR_COMMAND}</code>.</span>
       </div>
 
       {error && <div role="alert" className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
       {!loading && !attestation && !error ? (
         <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-700">
-          No signed verification has been published. Run <code className="font-semibold">{CONNECTION_DOCTOR_COMMAND}</code> for diagnostics on the approved FCOS workstation. Publishing an attestation requires a separate explicit action.
+          No signed verification has been published. Run <code className={presentationClass14}>{CONNECTION_DOCTOR_COMMAND}</code> for diagnostics on the approved FCOS workstation. Publishing an attestation requires a separate explicit action.
         </div>
       ) : null}
 

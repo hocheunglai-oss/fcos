@@ -175,7 +175,7 @@ export async function workCommitmentsList(_body = {}, accessContext) {
     client
       .from("collaboration_items")
       .select(
-        "id,item_key,item_type,title,status,priority,due_date,owner_user_id,owner_name,assignee_user_id,assignee_name,project_id,archived_at,updated_at",
+        "id,item_key,item_type,title,status,blocked_reason,priority,due_date,owner_user_id,owner_name,assignee_user_id,assignee_name,project_id,archived_at,updated_at",
       )
       .or(`owner_user_id.eq.${profile.id},assignee_user_id.eq.${profile.id}`)
       .is("archived_at", null)
@@ -369,7 +369,7 @@ export async function workCommitmentsList(_body = {}, accessContext) {
             : `Owned by you · ${item.assignee_name ? `Assigned to ${item.assignee_name}` : "Unassigned"}`,
           status: item.status,
           owner: item.assignee_name || item.owner_name || null,
-          blocker: item.status === "Blocked" ? "Open the work item to review its dependency or blocker." : null,
+          blocker: item.status === "Blocked" ? String(item.blocked_reason || '').trim() || "Open the work item to review its dependency or blocker." : null,
           priority: item.priority,
           dueAt: item.due_date,
           urgency:
@@ -651,6 +651,7 @@ export async function workCommitmentsList(_body = {}, accessContext) {
           ? `Assigned to you · ${ticket.status}`
           : `${ticket.status} · ${ticket.assignee_name ? `Assigned to ${ticket.assignee_name}` : 'Unassigned'}`,
       status: ticket.status,
+      owner: ticket.assignee_name || null,
       priority: ticket.priority,
       dueAt: null,
       urgency: isGeneralManager && pending.length ? 'needs_action' : ticket.assignee_user_id === profile.id ? 'needs_action' : 'waiting',
@@ -697,6 +698,29 @@ export async function workCommitmentsList(_body = {}, accessContext) {
   }
 
   commitments.sort(sortCommitments);
+  const unavailableSources = [...new Set([
+    ...(notificationsResult.unavailableSources || []),
+    ...[
+      ['Projects & Tasks', itemsResult],
+      ['Growth & Coaching', goalsResult], ['Growth & Coaching', relationshipsResult],
+      ['Growth & Coaching', versionsResult], ['Growth & Coaching', checkpointsResult],
+      ['Growth & Coaching', sessionsResult], ['Growth & Coaching', actionsResult],
+      ['Growth & Coaching', confirmationsResult],
+      ['Payment Collections', collectionsResult], ['Supplier Charges', variableChargeCasesResult],
+      ['Disputes', disputesResult], ['Hedge Desk', hedgeClosesResult],
+      ['Xero', xeroRunsResult], ['FCOS Improvements', improvementTicketsResult],
+      ['FCOS Improvements', improvementProposalsResult], ['Approval roles', generalManagerRoleResult],
+    ].filter(([, result]) => unavailableTable(result?.error)).map(([label]) => label),
+  ])];
+  const sourcesAtLimit = [...new Set([
+    ['Projects & Tasks', itemsResult, 250], ['Growth & Coaching', goalsResult, 250],
+    ['Growth & Coaching', relationshipsResult, 100], ['Growth & Coaching', sessionsResult, 100],
+    ['Growth & Coaching', actionsResult, 200], ['Payment Collections', collectionsResult, 250],
+    ['Supplier Charges', variableChargeCasesResult, 250], ['Disputes', disputesResult, 250],
+    ['Hedge Desk', hedgeClosesResult, 100], ['Xero', xeroRunsResult, 25],
+    ['FCOS Improvements', improvementTicketsResult, 250], ['FCOS Improvements', improvementProposalsResult, 250],
+  ].filter(([, result, limit]) => Array.isArray(result?.data) && result.data.length >= limit).map(([label]) => label)
+    .concat((notificationsResult.notifications?.length || 0) >= 100 ? ['Notifications'] : []))];
   const counts = commitments.reduce((result, item) => {
     result[item.urgency] = (result[item.urgency] || 0) + 1;
     return result;
@@ -706,7 +730,8 @@ export async function workCommitmentsList(_body = {}, accessContext) {
     commitments,
     counts,
     sources: [...new Set(commitments.map((item) => item.source))],
-    unavailableSources: notificationsResult.unavailableSources || [],
+    unavailableSources,
+    sourcesAtLimit,
     today,
     generatedAt: new Date().toISOString(),
   };

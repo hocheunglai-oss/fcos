@@ -307,7 +307,7 @@ import {
 } from '../_emailRouterHandlers.js';
 import { createEmailRouterServiceClient, currentEmailRouterMailbox, emailRouterGraphFetch, maintainEmailRouterSubscriptions, processEmailRouterOutbox, recordEmailRouterAlert, resolveEmailRouterAlert, syncEmailRouterFolderFromStoredCursor } from '../_emailRouterCore.js';
 import { processEmailRouterLearningJobs } from '../_emailRouterLearning.js';
-import { missingNomBList as missingNomBListService, missingNomBUpload as missingNomBUploadService, runMissingNomBReminders, missingNomBStatus } from '../_missingNomB.js';
+import { createMissingNomBHandlers } from '../_missingNomBHandlers.js';
 import { createXeroHandlers, XERO_HANDLER_MODULE_ACCESS } from '../_xeroHandlers.js';
 import {
   importCashflowBankStatement as importCashflowBankStatementService,
@@ -18965,38 +18965,9 @@ async function emailRouterMaintenanceCron(_body = {}, req = null) {
   };
 }
 
-async function missingNomBList(body = {}, req = null, accessContext = null) {
-  return missingNomBListService(body, accessContext || await requireActiveUser(req));
-}
-
-async function missingNomBUpload(body = {}, req = null, accessContext = null) {
-  return missingNomBUploadService(body, accessContext || await requireActiveUser(req));
-}
-
-async function missingNomBReminderCron(_body = {}, req = null) {
-  requireCronAuthorization(req);
-  const client = safeSupabaseAdminClient();
-  if (!client) throw appError('FCOS database access is unavailable for Nom B reminders.', 503);
-  return runMissingNomBReminders({ client, env: process.env });
-}
-
-async function missingNomBHealthRow() {
-  const client = safeSupabaseAdminClient();
-  const result = client ? await timedCheck(() => missingNomBStatus({ client, env: process.env })) : null;
-  return healthRow({
-    id: 'missing-nom-b',
-    name: 'Missing Nom B',
-    category: 'Operations',
-    purpose: 'Buyer-trader filing reminders, invoice scan progress, and verified Nom B uploads.',
-    scope: 'server',
-    provider: 'Salesforce / Microsoft Graph',
-    endpoint: '/missing-nom-b',
-    authType: 'FCOS session and protected cron',
-    configured: Boolean(client),
-    configuredEnv: configuredEnv(['FCOS_ENABLE_MISSING_NOM_B_REMINDERS']),
-    notes: ['Checks final buyer invoice PDFs every five minutes after activation.', 'Uncertain delivery and upload outcomes require verification before another write.'],
-  }, result);
-}
+const { missingNomBList, missingNomBUpload, missingNomBReminderCron, missingNomBHealthRow } = createMissingNomBHandlers({
+  requireActiveUser, requireCronAuthorization, safeSupabaseAdminClient, appError, timedCheck, healthRow, configuredEnv, env: process.env,
+});
 
 const xeroHandlers = createXeroHandlers({ requireActiveUser, resolveRecoveredSystemErrorHandler });
 const handlers = {

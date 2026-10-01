@@ -38,7 +38,7 @@ const SECTIONS = [
   { key: "coming_week", label: "Coming seven days", icon: CalendarClock },
   { key: "waiting", label: "Waiting for others", icon: UserRoundCheck },
   { key: "later", label: "Later", icon: CheckCircle2 },
-  { key: "no_due_date", label: "No due date", icon: CheckCircle2 },
+  { key: "no_due_date", label: "No recorded deadline", icon: CheckCircle2 },
 ];
 
 const SOURCES = [
@@ -58,7 +58,7 @@ const SOURCES = [
 ];
 
 function formatDue(value) {
-  if (!value) return "No due date";
+  if (!value) return "No recorded deadline";
   const date = new Date(
     String(value).length === 10 ? `${value}T00:00:00+08:00` : value,
   );
@@ -237,9 +237,13 @@ export default function MyCommitments() {
       {data.unavailableSources?.length ? (
         <div className="flex gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
           <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
-          <span>{data.unavailableSources.join(", ")} could not be checked. Other commitments remain current.</span>
+          <span>{data.unavailableSources.join(", ")} could not be checked. Available commitments are shown; missing sources may contain additional work.</span>
         </div>
       ) : null}
+
+      {data.sourcesAtLimit?.length ? <div className="hidden rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950 lg:block">
+        {data.sourcesAtLimit.join(', ')} reached the retrieval limit. Counts cover the loaded work; open the source workspace to review the full list.
+      </div> : null}
 
       {loading ? (
         <StateBlock

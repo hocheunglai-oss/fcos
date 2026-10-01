@@ -1,3 +1,17 @@
+const presentationClass0 = 'gap-2';
+const presentationClass1 = 'w-3.5 h-3.5';
+const presentationClass2 = 'text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3';
+const presentationClass3 = 'grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6';
+const presentationClass4 = 'sticky top-0 z-10 bg-card py-2.5 px-3 text-left font-semibold uppercase tracking-wide text-muted-foreground';
+const presentationClass5 = 'sticky top-0 z-10 bg-card py-2.5 px-3 text-right font-semibold uppercase tracking-wide text-muted-foreground';
+const presentationClass6 = 'py-2.5 px-3 whitespace-nowrap';
+const presentationClass7 = 'py-2.5 px-3 whitespace-nowrap text-muted-foreground';
+const presentationClass8 = 'py-2.5 px-3 text-right tabular-nums text-foreground whitespace-nowrap';
+const presentationClass9 = 'space-y-1.5';
+const presentationClass10 = 'text-xs font-semibold uppercase text-muted-foreground';
+const presentationClass11 = 'h-10 w-full rounded-md border border-input bg-background px-3 text-sm';
+const presentationClass12 = 'space-y-1.5 sm:col-span-2';
+
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { format } from 'date-fns';
 import { AlertTriangle, CheckCircle2, ClipboardCheck, Download, History, Loader2, RefreshCw, Save, Search, UserCog, X } from 'lucide-react';
@@ -260,11 +274,11 @@ export default function ReviewQueue() {
           <>
             <PageMethodology {...EXCEPTION_REVIEW_METHODOLOGY} />
             <DataStatus meta={responseMeta} state={loading ? 'refreshing' : undefined} label="Salesforce" />
-            <Button variant="outline" onClick={exportCsv} disabled={loading || !reviewRows.length} className="gap-2">
-              <Download className="w-3.5 h-3.5" /> Export CSV
+            <Button variant="outline" onClick={exportCsv} disabled={loading || !reviewRows.length} className={presentationClass0}>
+              <Download className={presentationClass1} /> Export CSV
             </Button>
-            <Button variant="outline" onClick={() => load(selectedYears, selectedMonths, { force: true })} disabled={loading} className="gap-2">
-              {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+            <Button variant="outline" onClick={() => load(selectedYears, selectedMonths, { force: true })} disabled={loading} className={presentationClass0}>
+              {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className={presentationClass1} />}
               Refresh
             </Button>
           </>
@@ -274,7 +288,7 @@ export default function ReviewQueue() {
       <div className="bg-card rounded-xl border border-border p-5 mb-6">
         <div className="grid gap-4 xl:grid-cols-[1fr_1.3fr]">
           <div>
-            <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">Period</h2>
+            <h2 className={presentationClass2}>Period</h2>
             <Label className="text-xs font-medium text-muted-foreground mb-2 block">Year</Label>
             <div className="flex gap-2 flex-wrap mb-4">
               {YEARS.map(yr => (
@@ -315,7 +329,7 @@ export default function ReviewQueue() {
           </div>
 
           <div>
-            <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">Exception Type</h2>
+            <h2 className={presentationClass2}>Exception Type</h2>
             <div className="flex flex-wrap gap-2">
               {REVIEW_FILTERS.map(filter => (
                 <Button
@@ -359,11 +373,11 @@ export default function ReviewQueue() {
       )}
 
       {loading && !data ? (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        <div className={presentationClass3}>
           {[...Array(4)].map((_, index) => <div key={index} className="bg-card rounded-xl border border-border p-5 h-28 animate-pulse" />)}
         </div>
       ) : (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        <div className={presentationClass3}>
           <StatCard label="Open Exceptions" value={reviewRows.length.toLocaleString()} sub={`${classifiedRows.length.toLocaleString()} STEMs scanned`} icon={ClipboardCheck} color="blue" />
           <StatCard label="Urgent Exceptions" value={highPriorityCount.toLocaleString()} sub="Potential delay, missing invoice, or negative profit" icon={AlertTriangle} color="red" />
           <StatCard label="Potential Delays" value={potentialDelayCount.toLocaleString()} sub="Active line product and Schedule end or Created date 3+ days past" icon={RefreshCw} color="amber" />
@@ -403,24 +417,24 @@ export default function ReviewQueue() {
             <table className="w-full text-xs">
               <thead>
                 <tr className="border-b border-border">
-                  <th className="sticky top-0 z-10 bg-card py-2.5 px-3 text-left font-semibold uppercase tracking-wide text-muted-foreground">Priority</th>
-                  <th className="sticky top-0 z-10 bg-card py-2.5 px-3 text-left font-semibold uppercase tracking-wide text-muted-foreground">Exception Reason</th>
-                  <th className="sticky top-0 z-10 bg-card py-2.5 px-3 text-left font-semibold uppercase tracking-wide text-muted-foreground">Name</th>
-                  <th className="sticky top-0 z-10 bg-card py-2.5 px-3 text-left font-semibold uppercase tracking-wide text-muted-foreground">Buyer Name</th>
-                  <th className="sticky top-0 z-10 bg-card py-2.5 px-3 text-left font-semibold uppercase tracking-wide text-muted-foreground">Delivery / Schedule</th>
-                  <th className="sticky top-0 z-10 bg-card py-2.5 px-3 text-left font-semibold uppercase tracking-wide text-muted-foreground">Workflow</th>
-                  <th className="sticky top-0 z-10 bg-card py-2.5 px-3 text-left font-semibold uppercase tracking-wide text-muted-foreground">Owner</th>
-                  <th className="sticky top-0 z-10 bg-card py-2.5 px-3 text-left font-semibold uppercase tracking-wide text-muted-foreground">Due</th>
-                  <th className="sticky top-0 z-10 bg-card py-2.5 px-3 text-right font-semibold uppercase tracking-wide text-muted-foreground">Buyer Invoice</th>
-                  <th className="sticky top-0 z-10 bg-card py-2.5 px-3 text-right font-semibold uppercase tracking-wide text-muted-foreground">Supplier Invoice</th>
-                  <th className="sticky top-0 z-10 bg-card py-2.5 px-3 text-right font-semibold uppercase tracking-wide text-muted-foreground">Gross Profit</th>
-                  <th className="sticky top-0 z-10 bg-card py-2.5 px-3 text-right font-semibold uppercase tracking-wide text-muted-foreground">Action</th>
+                  <th className={presentationClass4}>Priority</th>
+                  <th className={presentationClass4}>Exception Reason</th>
+                  <th className={presentationClass4}>Name</th>
+                  <th className={presentationClass4}>Buyer Name</th>
+                  <th className={presentationClass4}>Delivery / Schedule</th>
+                  <th className={presentationClass4}>Workflow</th>
+                  <th className={presentationClass4}>Owner</th>
+                  <th className={presentationClass4}>Due</th>
+                  <th className={presentationClass5}>Buyer Invoice</th>
+                  <th className={presentationClass5}>Supplier Invoice</th>
+                  <th className={presentationClass5}>Gross Profit</th>
+                  <th className={presentationClass5}>Action</th>
                 </tr>
               </thead>
               <tbody>
                 {reviewRows.map(row => (
                   <tr key={row.Id} className="border-b border-border/50 hover:bg-muted/30 transition-colors">
-                    <td className="py-2.5 px-3 whitespace-nowrap">
+                    <td className={presentationClass6}>
                       <span className={cn(
                         'inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-semibold uppercase',
                         row.reviewSeverity === 'high' ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-700'
@@ -437,19 +451,19 @@ export default function ReviewQueue() {
                       <StemDetailLink stemId={row.Id} onOpen={setSelectedStemId}>{row.Name || '-'}</StemDetailLink>
                     </td>
                     <td className="py-2.5 px-3 text-muted-foreground whitespace-nowrap">{row.Buyer_Name__c || row.Buyer__c || '-'}</td>
-                    <td className="py-2.5 px-3 whitespace-nowrap">
+                    <td className={presentationClass6}>
                       {row.Delivery_Date__c
                         ? <span className="text-foreground">{fmtDate(row.Delivery_Date__c)}</span>
                         : <span className="text-[11px] font-medium text-amber-700">{row._Exception_Schedule?.displayLabel || 'Schedule unavailable'}</span>}
                     </td>
-                    <td className="py-2.5 px-3 whitespace-nowrap">
+                    <td className={presentationClass6}>
                       <div className="font-medium text-foreground">{row.exceptionWorkflow?.status || 'Open'}</div>
                       <div className="text-[11px] text-muted-foreground">{row.exceptionWorkflow?.department || 'Unassigned'} · {row.exceptionWorkflow?.priority || 'High'}</div>
                     </td>
-                    <td className="py-2.5 px-3 whitespace-nowrap text-muted-foreground">{row.exceptionWorkflow?.ownerName || 'Unassigned'}</td>
-                    <td className="py-2.5 px-3 whitespace-nowrap text-muted-foreground">{fmtDate(row.exceptionWorkflow?.dueDate)}</td>
-                    <td className="py-2.5 px-3 text-right tabular-nums text-foreground whitespace-nowrap">{fmtMoney(row[BUYER_FIELD])}</td>
-                    <td className="py-2.5 px-3 text-right tabular-nums text-foreground whitespace-nowrap">{fmtMoney(row[SUPPLIER_FIELD])}</td>
+                    <td className={presentationClass7}>{row.exceptionWorkflow?.ownerName || 'Unassigned'}</td>
+                    <td className={presentationClass7}>{fmtDate(row.exceptionWorkflow?.dueDate)}</td>
+                    <td className={presentationClass8}>{fmtMoney(row[BUYER_FIELD])}</td>
+                    <td className={presentationClass8}>{fmtMoney(row[SUPPLIER_FIELD])}</td>
                     <td className={cn(
                       'py-2.5 px-3 text-right tabular-nums font-semibold whitespace-nowrap',
                       row.grossProfit == null ? 'text-muted-foreground' : row.grossProfit >= 0 ? 'text-emerald-600' : 'text-red-600'
@@ -461,7 +475,7 @@ export default function ReviewQueue() {
                         type="button"
                         size="sm"
                         variant="outline"
-                        className="gap-2"
+                        className={presentationClass0}
                         onClick={() => openWorkflow(row)}
                       >
                         <UserCog className="h-3.5 w-3.5" /> Manage
@@ -493,42 +507,42 @@ export default function ReviewQueue() {
           <div className="max-h-[calc(92vh-150px)] overflow-auto px-5 py-4">
             {workflowError && <div className="mb-4 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">{workflowError}</div>}
             <div className="grid gap-4 sm:grid-cols-2">
-              <label className="space-y-1.5">
-                <span className="text-xs font-semibold uppercase text-muted-foreground">Status</span>
-                <select value={workflowForm.status} onChange={(event) => setWorkflowForm((prev) => ({ ...prev, status: event.target.value }))} className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm">
+              <label className={presentationClass9}>
+                <span className={presentationClass10}>Status</span>
+                <select value={workflowForm.status} onChange={(event) => setWorkflowForm((prev) => ({ ...prev, status: event.target.value }))} className={presentationClass11}>
                   {WORKFLOW_STATUSES.map((value) => <option key={value}>{value}</option>)}
                 </select>
               </label>
-              <label className="space-y-1.5">
-                <span className="text-xs font-semibold uppercase text-muted-foreground">Priority</span>
-                <select value={workflowForm.priority} onChange={(event) => setWorkflowForm((prev) => ({ ...prev, priority: event.target.value }))} className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm">
+              <label className={presentationClass9}>
+                <span className={presentationClass10}>Priority</span>
+                <select value={workflowForm.priority} onChange={(event) => setWorkflowForm((prev) => ({ ...prev, priority: event.target.value }))} className={presentationClass11}>
                   {WORKFLOW_PRIORITIES.map((value) => <option key={value}>{value}</option>)}
                 </select>
               </label>
-              <label className="space-y-1.5">
-                <span className="text-xs font-semibold uppercase text-muted-foreground">Department</span>
-                <select value={workflowForm.department} onChange={(event) => setWorkflowForm((prev) => ({ ...prev, department: event.target.value }))} className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm">
+              <label className={presentationClass9}>
+                <span className={presentationClass10}>Department</span>
+                <select value={workflowForm.department} onChange={(event) => setWorkflowForm((prev) => ({ ...prev, department: event.target.value }))} className={presentationClass11}>
                   {WORKFLOW_DEPARTMENTS.map((value) => <option key={value}>{value}</option>)}
                 </select>
               </label>
-              <label className="space-y-1.5">
-                <span className="text-xs font-semibold uppercase text-muted-foreground">Owner</span>
-                <select value={workflowForm.ownerUserId} onChange={(event) => setWorkflowForm((prev) => ({ ...prev, ownerUserId: event.target.value }))} className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm">
+              <label className={presentationClass9}>
+                <span className={presentationClass10}>Owner</span>
+                <select value={workflowForm.ownerUserId} onChange={(event) => setWorkflowForm((prev) => ({ ...prev, ownerUserId: event.target.value }))} className={presentationClass11}>
                   <option value="">Unassigned</option>
                   {ownerOptions.map((owner) => <option key={owner.id} value={owner.id}>{owner.name} · {owner.userType}</option>)}
                 </select>
               </label>
-              <label className="space-y-1.5 sm:col-span-2">
-                <span className="text-xs font-semibold uppercase text-muted-foreground">Due Date</span>
+              <label className={presentationClass12}>
+                <span className={presentationClass10}>Due Date</span>
                 <Input type="date" value={workflowForm.dueDate} onChange={(event) => setWorkflowForm((prev) => ({ ...prev, dueDate: event.target.value }))} />
               </label>
-              <label className="space-y-1.5 sm:col-span-2">
-                <span className="text-xs font-semibold uppercase text-muted-foreground">Handoff Note</span>
+              <label className={presentationClass12}>
+                <span className={presentationClass10}>Handoff Note</span>
                 <Textarea rows={3} value={workflowForm.latestNote} onChange={(event) => setWorkflowForm((prev) => ({ ...prev, latestNote: event.target.value }))} placeholder="What was checked, and what should happen next?" />
               </label>
               {(workflowForm.status === 'Resolved' || workflowForm.status === 'Dismissed') && (
-                <label className="space-y-1.5 sm:col-span-2">
-                  <span className="text-xs font-semibold uppercase text-muted-foreground">Resolution Note</span>
+                <label className={presentationClass12}>
+                  <span className={presentationClass10}>Resolution Note</span>
                   <Textarea required rows={3} value={workflowForm.resolutionNote} onChange={(event) => setWorkflowForm((prev) => ({ ...prev, resolutionNote: event.target.value }))} placeholder="Explain the final outcome." />
                 </label>
               )}
@@ -551,7 +565,7 @@ export default function ReviewQueue() {
           </div>
           <DialogFooter className="border-t border-border px-5 py-4">
             <Button variant="outline" onClick={() => setSelectedWorkflowRow(null)} disabled={workflowSaving}>Cancel</Button>
-            <Button onClick={saveWorkflow} disabled={workflowSaving || ((workflowForm.status === 'Resolved' || workflowForm.status === 'Dismissed') && !workflowForm.resolutionNote.trim())} className="gap-2">
+            <Button onClick={saveWorkflow} disabled={workflowSaving || ((workflowForm.status === 'Resolved' || workflowForm.status === 'Dismissed') && !workflowForm.resolutionNote.trim())} className={presentationClass0}>
               {workflowSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Save Update
             </Button>
           </DialogFooter>

@@ -1,3 +1,5 @@
+import { summarizeWorkflowMetrics } from './_workflowMetricsSummary.js';
+
 export function workflowRequestOutcome(status, data = {}) {
   if (['uncertain', 'partial', 'processing'].includes(data?.status || data?.run?.status)) return 'uncertain';
   if (status === 409) return 'conflict';
@@ -33,6 +35,7 @@ export function createWorkflowMetricsReader({ requireActiveUser, requireAdminist
       aggregate[row.outcome] += Number(row.request_count);
       grouped.set(row.handler, aggregate);
     }
-    return { since, truncated: data?.length > 5000, rows: [...grouped.values()].map((row) => ({ ...row, averageMs: Math.round(row.durationMs / row.requests) })).sort((a, b) => b.requests - a.requests) };
+    const rows = [...grouped.values()].map((row) => ({ ...row, averageMs: row.requests ? Math.round(row.durationMs / row.requests) : null })).sort((a, b) => b.requests - a.requests);
+    return { since, truncated: data?.length > 5000, summary: summarizeWorkflowMetrics(rows), rows };
   };
 }

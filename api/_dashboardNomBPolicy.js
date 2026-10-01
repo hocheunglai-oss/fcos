@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto';
 import { isIssuedFinalBuyerInvoice } from './_buyerInvoiceApproval.js';
 import { NOM_B_TRADER_LOGIN_EMAILS, NOM_B_SHARED_SENDER_EMAILS } from '../config/nomBTraderIdentities.js';
+import { NOM_B_POLICY } from '../shared/businessPolicies.js';
 
-export const NOM_B_FROM = '2026-09-01';
+export const NOM_B_FROM = NOM_B_POLICY.deliveryFrom;
 export const NOM_B_ID = /^[A-Za-z0-9]{15}(?:[A-Za-z0-9]{3})?$/;
 export const NOM_B_UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 export const NOM_B_CREDIT_FIELDS = ['Is_Credit_Note__c', 'Credit_Note__c', 'CreditNote__c'];
@@ -19,7 +20,7 @@ export function nomBToday(now = new Date()) {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Hong_Kong', year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
 }
 export function nomBDelivery(stem) {
-  const actual = text(stem.Delivery_Date__c); const expected = text(stem.Expected_Delivery_Date__c);
+  const actual = text(stem[NOM_B_POLICY.deliveryFields[0]]); const expected = text(stem[NOM_B_POLICY.deliveryFields[1]]);
   const source = actual ? 'actual' : expected ? 'expected' : null;
   const date = nomBDate(actual || expected);
   return { date, source, undated: !source, invalid: Boolean(source && !date), inScope: !source || Boolean(date && date >= NOM_B_FROM) };

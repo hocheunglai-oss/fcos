@@ -32,6 +32,7 @@ test('version writing rejects missing or unusable current release copy', () => {
   assert.equal(assertCurrentReleaseHistory(APP_VERSION, [valid]), valid);
   assert.throws(() => assertCurrentReleaseHistory(APP_VERSION, []), /exactly one release-history entry/);
   assert.throws(() => assertCurrentReleaseHistory(APP_VERSION, [valid, valid]), /exactly one release-history entry/);
+  assert.throws(() => assertCurrentReleaseHistory(APP_VERSION, [{ ...valid, version: 'future-candidate' }, valid]), /first release-history entry/);
   for (const invalid of [
     { ...valid, releasedAt: '2026-09-31' },
     { ...valid, title: '   ' },
