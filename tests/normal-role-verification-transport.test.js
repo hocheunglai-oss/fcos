@@ -153,3 +153,14 @@ test('both verifiers use the shared transport and both reviewed control digests 
     assert.match(source, /'scripts\/lib\/normal-role-verification-transport\.mjs'/);
   }
 });
+
+
+test('native repeated Set-Cookie fields survive fulfillment without parsing or protection leakage', async () => {
+  const cookie = 'offline-first=fixture; Secure; HttpOnly\noffline-second=; Max-Age=0';
+  const responseHeaders = { 'set-cookie': cookie, 'X-Vercel-Protection-Bypass': bypass, 'X-Vercel-Set-Bypass-Cookie': 'true' };
+  const f = fixture({ responseHeaders });
+  assert.equal(await run(f), 0);
+  assert.deepEqual(f.calls.map(call => call.kind), ['fetch', 'fulfill']);
+  assert.deepEqual(f.calls[1].options.headers, { 'set-cookie': cookie });
+  assert.equal(responseHeaders['X-Vercel-Protection-Bypass'], bypass);
+});

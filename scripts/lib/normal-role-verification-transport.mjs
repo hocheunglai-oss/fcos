@@ -8,6 +8,13 @@ export function stripNormalRoleProtectionHeaders(headers) {
   return Object.fromEntries(clean.entries());
 }
 
+// Preserve Playwright's native repeated Set-Cookie representation for fulfill.
+// WHATWG Headers rejects its newline-separated values. Cookie values remain
+// opaque; only the two protection control names are removed.
+export function stripNormalRoleResponseProtectionHeaders(headers) {
+  return Object.fromEntries(Object.entries(headers).filter(([name]) => !protectionHeaders.includes(name.toLowerCase())));
+}
+
 /** The caller supplies its existing read policy; transport grants no authority.
  * Playwright continue() header overrides survive redirects. Keep the bypass
  * exclusively in a no-redirect Preview fetch, then fulfill the browser request
@@ -40,7 +47,7 @@ export function createNormalRoleVerificationRoute({ origin, protectionBypass, re
       const status = response.status();
       if (response.url() !== url || !Number.isInteger(status) || status < 200 || status > 599
         || status >= 300 && status < 400) throw new Error('Unexpected verification response.');
-      await route.fulfill({ response, headers: stripNormalRoleProtectionHeaders(response.headers()) });
+      await route.fulfill({ response, headers: stripNormalRoleResponseProtectionHeaders(response.headers()) });
     } catch {
       // Request errors can include private headers. A failed transport blocks
       // complete coverage and reports no private error or response metadata.
