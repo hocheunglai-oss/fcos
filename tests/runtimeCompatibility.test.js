@@ -41,3 +41,43 @@ test('existing connection policy must remain verbatim; malformed identities and 
   assert.throws(() => runtimeCompatibilityScope({ ...fixture(), baseCommit: 'main' }), /identities/);
   const input = fixture(); input.candidateTree.push(row('../secrets')); assert.throws(() => runtimeCompatibilityScope(input), /regular immutable/);
 });
+
+function guardFixture() {
+  const input = fixture();
+  const hedgeOriginal = "import { isReadOnlyCiProfile, requireReadOnlyCiOperation } from './_readOnlyCiAccess.js';\nexport async function loadHedgeDeskSnapshot({ client, capabilities }) {\n  const expiryAutomation = await reconcilePaperHedgeExpiry(client);\n}\nexport async function handleHedgeDeskEntity(body, profile, { client, capabilities }) {\n}\n    const expiryAutomation = isReadOnlyCiProfile(profile)";
+  const xeroOriginal = "import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';\n  if (shouldRefresh && (stored?.refreshToken || env.XERO_REFRESH_TOKEN)) {";
+  const hedgeAfter = hedgeOriginal.replace("from './_readOnlyCiAccess.js';\n", "from './_readOnlyCiAccess.js';\nimport { isDeploymentReadOnly, requireDeploymentMutationAllowed } from './_deploymentReadOnly.js';\nimport { isReadOnlyHedgeDeskAction } from './_hedgeDeskReadOnly.js';\n")
+    .replace('  const expiryAutomation = await reconcilePaperHedgeExpiry(client);', "  const expiryAutomation = isDeploymentReadOnly()\n    ? { status: 'not_run', reason: 'deployment_read_only' }\n    : await reconcilePaperHedgeExpiry(client);")
+    .replace('export async function handleHedgeDeskEntity(body, profile, { client, capabilities }) {', 'export async function handleHedgeDeskEntity(body, profile, { client, capabilities }) {\n  requireDeploymentMutationAllowed(!isReadOnlyHedgeDeskAction(body));')
+    .replace('    const expiryAutomation = isReadOnlyCiProfile(profile)', "    const expiryAutomation = isDeploymentReadOnly()\n      ? { status: 'not_run', reason: 'deployment_read_only' }\n      : isReadOnlyCiProfile(profile)");
+  const xeroAfter = xeroOriginal.replace("from 'node:crypto';\n", "from 'node:crypto';\nimport { isDeploymentReadOnly } from './_deploymentReadOnly.js';\n")
+    .replace('if (shouldRefresh', 'if (!isDeploymentReadOnly(env) && shouldRefresh');
+  const wrapperOriginal = "import { ciModuleAccess, isReadOnlyCiProfile, isReadOnlyMarketAction, requireReadOnlyCiOperation } from '../_readOnlyCiAccess.js';\n  requireDeploymentMutationAllowed(policy.mutation && name !== 'hedgeMarkets');\n        requireDeploymentMutationAllowed(handlerPolicy?.mutation && (name !== 'hedgeMarkets' || !isReadOnlyMarketAction(body)));";
+  const wrapperAfter = wrapperOriginal.replace("from '../_readOnlyCiAccess.js';\n", "from '../_readOnlyCiAccess.js';\nimport { isReadOnlyHedgeDeskAction } from '../_hedgeDeskReadOnly.js';\n")
+    .replace("  requireDeploymentMutationAllowed(policy.mutation && name !== 'hedgeMarkets');", "  // Mixed handlers classify the authenticated request body at dispatch.\n  requireDeploymentMutationAllowed(policy.mutation && !['hedgeMarkets', 'hedgeDeskEntity'].includes(name));")
+    .replace("        requireDeploymentMutationAllowed(handlerPolicy?.mutation && (name !== 'hedgeMarkets' || !isReadOnlyMarketAction(body)));", "        requireDeploymentMutationAllowed(handlerPolicy?.mutation && (\n          name === 'hedgeMarkets' ? !isReadOnlyMarketAction(body)\n            : name === 'hedgeDeskEntity' ? !isReadOnlyHedgeDeskAction(body)\n              : true\n        ));");
+  input.baseTree.find(row => row.path === 'api/functions/[name].js').sha = '5'.repeat(40);
+  input.candidateTree.find(row => row.path === 'api/functions/[name].js').sha = '6'.repeat(40);
+  input.candidateTree.push(row('api/_hedgeDeskReadOnly.js', '7'.repeat(40)));
+  input.baseTree.push(row('api/_hedgeDeskService.js', '1'.repeat(40)), row('api/_xeroPortal.js', '2'.repeat(40)));
+  input.candidateTree.push(row('api/_hedgeDeskService.js', '3'.repeat(40)), row('api/_xeroPortal.js', '4'.repeat(40)));
+  const blobs = { ['1'.repeat(40)]: hedgeOriginal, ['2'.repeat(40)]: xeroOriginal, ['3'.repeat(40)]: hedgeAfter, ['4'.repeat(40)]: xeroAfter, ['5'.repeat(40)]: wrapperOriginal, ['6'.repeat(40)]: wrapperAfter, ['7'.repeat(40)]: "// Snapshot reads skip expiry using trusted server deployment configuration.\nconst READ_ACTIONS = new Set(['list', 'filter', 'get', 'snapshot']);\n\nexport function isReadOnlyHedgeDeskAction(body = {}) {\n  return READ_ACTIONS.has(String(body?.action || 'list'));\n}\n" };
+  const originalRead = input.readBlob;
+  input.readBlob = sha => blobs[sha] ?? originalRead(sha);
+  return { input, blobs };
+}
+
+test('only the complete exact read-only guard transformations are allowed in financial modules', () => {
+  const { input } = guardFixture();
+  const proof = runtimeCompatibilityScope(input);
+  assert.deepEqual(proof.readOnlyGuards, ['api/_hedgeDeskService.js', 'api/_xeroPortal.js', 'api/functions/[name].js']);
+  assert.match(proof.reviewedException, /ordinary Production logic is preserved/);
+  for (const target of ['3'.repeat(40), '4'.repeat(40), '6'.repeat(40)]) {
+    const { input, blobs } = guardFixture();
+    blobs[target] += '\n// additional financial edit';
+    assert.throws(() => runtimeCompatibilityScope(input), /protected financial scope/);
+  }
+  const missing = guardFixture().input;
+  missing.candidateTree.find(row => row.path === 'api/_xeroPortal.js').sha = '2'.repeat(40);
+  assert.throws(() => runtimeCompatibilityScope(missing), /Complete read-only/);
+});
