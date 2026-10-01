@@ -1,0 +1,35 @@
+/* Static portal presentation; state, conditional and shared control classes stay in JSX. */
+.xp-restore-target { @apply mt-1 break-words text-xs text-muted-foreground [overflow-wrap:anywhere]; }
+.xp-header { @apply flex flex-col gap-3 border-b border-border pb-4 lg:flex-row lg:items-start lg:justify-between; }
+.xp-error { @apply rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700; }
+.xp-contact-kpis { @apply grid gap-3 md:grid-cols-2 xl:grid-cols-6; }
+.xp-contact-tools { @apply mt-4 grid gap-3 lg:grid-cols-[1.5fr_1fr]; }
+.xp-usage-tools { @apply grid gap-2 sm:grid-cols-2 xl:grid-cols-4; }
+.xp-call-estimate { @apply rounded-lg border border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground; }
+.xp-last-run { @apply mt-4 rounded-lg border border-dashed border-border bg-background/60 px-3 py-2 text-sm text-muted-foreground; }
+.xp-search-icon { @apply pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground; }
+.xp-review-actions { @apply mt-3 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between; }
+.xp-repair-actions { @apply mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-border p-3; }
+.xp-restore-panel { @apply mt-3 min-w-0 space-y-2 rounded-lg border border-border p-3; }
+.xp-wrap { @apply break-words [overflow-wrap:anywhere]; }
+.xp-contact-card { @apply min-w-0 rounded-lg border border-border bg-background p-3; }
+.xp-selection-label { @apply flex items-center gap-2 text-sm font-medium; }
+.xp-contact-reason { @apply mt-3 min-w-0 break-words [overflow-wrap:anywhere]; }
+.xp-reason-label { @apply text-xs font-semibold uppercase tracking-wide text-muted-foreground; }
+.xp-contact-details { @apply mt-3 grid min-w-0 gap-3 border-t border-border pt-3 sm:grid-cols-2; }
+.xp-detail { @apply min-w-0 break-words [overflow-wrap:anywhere]; }
+.xp-receipt-layout { @apply grid gap-4 xl:grid-cols-[480px_1fr]; }
+.xp-upload { @apply mt-1 flex min-h-9 cursor-pointer items-center gap-2 rounded-[var(--radius-control)] border border-input bg-background px-3 py-1.5 text-sm shadow-sm; }
+.xp-bill-link { @apply inline-flex items-center gap-1 text-sm text-blue-700 hover:underline; }
+.xp-connection-row { @apply grid grid-cols-[110px_1fr] gap-2 text-xs; }
+.xp-kpi-label { @apply text-xs font-semibold uppercase tracking-normal opacity-70; }
+.xp-cache-card { @apply rounded-lg border border-border bg-background/70 px-3 py-2; }
+.xp-legend-card { @apply rounded-lg border border-border bg-background/70 px-3 py-2 text-xs; }
+.xp-usage-years { @apply mt-0.5 flex flex-wrap gap-x-2 text-xs text-muted-foreground; }
+.xp-actions { @apply flex flex-wrap items-center gap-2; }
+.xp-description { @apply mt-1 max-w-4xl text-sm text-muted-foreground; }
+.xp-card { @apply rounded-lg border border-border bg-card p-4; }
+.xp-section-header { @apply flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between; }
+.xp-review-label { @apply flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm; }
+.xp-outcome { @apply break-words text-xs text-muted-foreground [overflow-wrap:anywhere]; }
+.xp-cache-grid { @apply mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-4; }

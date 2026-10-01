@@ -1,0 +1,13 @@
+.hidden {
+    display: none;
+}
+
+.pricing-section {
+    background: #adadad59;
+    border-radius: 3px;
+}
+
+.slds-modal__container {
+    max-width: 100%;
+    min-width: 90%;
+}

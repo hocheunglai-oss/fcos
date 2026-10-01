@@ -96,6 +96,7 @@ test('shared transient surfaces use native glass, corners, and safe overlays', a
     tooltip,
     toast,
     textarea,
+    styles,
   ] = await Promise.all([
     read('../src/components/ui/alert-dialog.jsx'),
     read('../src/components/ui/drawer.jsx'),
@@ -107,6 +108,7 @@ test('shared transient surfaces use native glass, corners, and safe overlays', a
     read('../src/components/ui/tooltip.jsx'),
     read('../src/components/ui/toast.jsx'),
     read('../src/components/ui/textarea.jsx'),
+    read('../src/index.css'),
   ]);
 
   assert.doesNotMatch(alertDialog, /bg-black\/80/);
@@ -122,6 +124,8 @@ test('shared transient surfaces use native glass, corners, and safe overlays', a
 
   assert.match(tooltip, /--radius-control/);
   assert.match(tooltip, /--shadow-panel/);
-  assert.match(toast, /glass-floating[\s\S]*--radius-panel[\s\S]*--shadow-window/);
+  assert.match(toast, /app-notification-popup/);
+  const toastStyles = styles.match(/\.app-notification-popup\s*\{([^}]+)\}/)?.[1] || '';
+  assert.match(toastStyles, /glass-floating[\s\S]*--radius-panel[\s\S]*--shadow-window/);
   assert.match(textarea, /glass-control[\s\S]*--radius-control/);
 });

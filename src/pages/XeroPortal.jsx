@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   AlertTriangle,
@@ -9,7 +9,6 @@ import {
   ExternalLink,
   FileJson,
   FileText,
-  Languages,
   Loader2,
   PlugZap,
   RefreshCw,
@@ -30,20 +29,34 @@ import { Textarea } from '@/components/ui/textarea';
 import { toast } from '@/components/ui/use-toast';
 import { appClient } from '@/api/appClient';
 import { emptyReceiptFields, parseReceiptText } from '@/lib/receiptExtraction';
-import {
-  XERO_PORTAL_LANGUAGE_STORAGE_KEY,
-  XERO_PORTAL_UI_LANGUAGES,
-  normalizeXeroPortalLanguage,
-  xeroPortalUiCopy,
-} from '@/lib/xeroPortalUiCopy';
+import { saveReceiptWithDirectUpload } from '@/lib/xeroReceiptUpload';
+import { xeroPortalUiCopy } from '@/lib/xeroPortalUiCopy';
 import { cn } from '@/lib/utils';
+import './XeroPortal.css';
+import { canRestoreContactRow, confirmedContactRestore } from '@/lib/xeroContactRestoreResult';
+import { xeroContactRestoreCopy } from '@/lib/xeroContactRestoreCopy';
 
+const PORTAL_ACTIONS_CLASS = 'xp-actions';
+const PORTAL_DESCRIPTION_CLASS = 'xp-description';
+const PORTAL_SPINNER_CLASS = 'mr-2 h-4 w-4 animate-spin';
+const PORTAL_CARD_CLASS = 'xp-card border bg-card border-border';
+const PORTAL_SECTION_HEADER_CLASS = 'xp-section-header';
+const PORTAL_REVIEW_LABEL_CLASS = 'xp-review-label';
+const PORTAL_EMPHASIS_CLASS = 'font-semibold text-foreground';
+const PORTAL_MUTED_CLASS = 'text-sm text-muted-foreground';
+const PORTAL_LABEL_CLASS = 'flex items-center gap-2 text-sm';
+const PORTAL_OUTCOME_CLASS = 'xp-outcome';
+const PORTAL_FIELD_LABEL_CLASS = 'text-xs font-semibold text-muted-foreground';
+const PORTAL_TWO_COLUMNS_CLASS = 'grid gap-2 sm:grid-cols-2';
+const PORTAL_DETAIL_CLASS = 'mt-1 text-xs text-muted-foreground';
+const PORTAL_CACHE_GRID_CLASS = 'xp-cache-grid';
 const ACTION_FILTERS = ['archive', 'rename', 'exception', 'keep'];
 const STATUS_FILTERS = ['eligible', 'blocked', 'kept', 'not-selected', 'updated', 'archived', 'failed'];
 
 const RECEIPT_CURRENCIES = ['HKD', 'USD', 'SGD', 'CNY', 'EUR', 'GBP', 'AUD', 'NZD', 'CAD', 'JPY'];
 const XeroFinancialSync = lazy(() => import('@/components/xero/XeroFinancialSync'));
 const XeroPortalManual = lazy(() => import('@/components/xero/XeroPortalManual'));
+const XeroContactResolution = lazy(() => import('@/components/xero/XeroContactResolution'));
 
 export default function XeroPortal() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -57,20 +70,24 @@ export default function XeroPortal() {
   const [error, setError] = useState('');
   const [filters, setFilters] = useState({ action: 'all', status: 'all', reason: 'all', search: '', unmatchedOnly: false });
   const [selectedRows, setSelectedRows] = useState(new Set());
+  const [repairSelected, setRepairSelected] = useState(new Set());
+  const [repairReviewed, setRepairReviewed] = useState(false);
+  const [restoreSelected, setRestoreSelected] = useState(new Set());
+  const [restoreReviewed, setRestoreReviewed] = useState(false);
+  const [restoreResult, setRestoreResult] = useState(null);
+  const [restoreVerificationRequired, setRestoreVerificationRequired] = useState(false);
+  const restoreInFlight = useRef(false);
+  const [identityRow, setIdentityRow] = useState(null);
   const [reviewed, setReviewed] = useState(false);
   const [forceUsageRefresh, setForceUsageRefresh] = useState(false);
   const [incrementalUsageRefresh, setIncrementalUsageRefresh] = useState(false);
   const [receiptDraft, setReceiptDraft] = useState(emptyReceiptFields);
   const [receiptFile, setReceiptFile] = useState(null);
+  const receiptUpload = useRef(null);
+  const receiptSaveInFlight = useRef(false);
   const [ocrBusy, setOcrBusy] = useState(false);
-  const [language, setLanguage] = useState(() => normalizeXeroPortalLanguage(
-    typeof window === 'undefined' ? 'en' : window.localStorage.getItem(XERO_PORTAL_LANGUAGE_STORAGE_KEY),
-  ));
-  const copy = xeroPortalUiCopy(language);
-
-  useEffect(() => {
-    window.localStorage.setItem(XERO_PORTAL_LANGUAGE_STORAGE_KEY, language);
-  }, [language]);
+  const copy = xeroPortalUiCopy();
+  const restoreCopy = xeroContactRestoreCopy('en');
 
   const load = useCallback(async ({ force = false } = {}) => {
     setLoading(true);
@@ -90,6 +107,10 @@ export default function XeroPortal() {
       setRun(lifecycleResult.data.run || null);
       setAutoRun(autoResult.data.run || null);
       setSelectedRows(new Set((lifecycleResult.data.run?.rows || []).filter(canApplyRow).map((row) => row.id)));
+      setRepairSelected(new Set());
+      setRepairReviewed(false);
+      setRestoreSelected(new Set());
+      setRestoreReviewed(false);
     }
     setLoading(false);
   }, []);
@@ -97,7 +118,7 @@ export default function XeroPortal() {
   useEffect(() => {
     const xero = searchParams.get('xero');
     const message = searchParams.get('message');
-    const callbackCopy = xeroPortalUiCopy(window.localStorage.getItem(XERO_PORTAL_LANGUAGE_STORAGE_KEY));
+    const callbackCopy = xeroPortalUiCopy();
     if (xero === 'connected') toast({ title: callbackCopy.toasts.connected, description: callbackCopy.toasts.connectedDescription });
     if (xero === 'error') toast({ title: callbackCopy.toasts.connectionFailed, description: message || callbackCopy.toasts.connectionFailedDescription, variant: 'destructive' });
     if (xero) {
@@ -115,6 +136,7 @@ export default function XeroPortal() {
   const scopeFlags = xero.scopeFlags || {};
   const needsFinancialReconnect = xero.connected && (!scopeFlags.paymentsWrite || !scopeFlags.settingsRead);
   const actionGate = status?.externalActions?.xero_contact_sync;
+  const restoreWritesAllowed = actionGate?.enabled === true;
   const reasonLabels = status?.reasonLabels || {};
   const statusLabels = status?.statusLabels || {};
   const matchFieldLabels = status?.matchFieldLabels || {};
@@ -154,7 +176,11 @@ export default function XeroPortal() {
   }, [filters, run]);
 
   const selectedEligibleCount = filteredRows.filter((row) => canApplyRow(row) && selectedRows.has(row.id)).length;
+  const repairCount = (run?.rows || []).filter((row) => canRepairRow(row) && repairSelected.has(row.id)).length;
+  const restoreRows = (run?.rows || []).filter((row) => canRestoreContactRow(row) && restoreSelected.has(row.id));
+  const restoreCount = restoreRows.length;
   const totalSelectedCount = [...selectedRows].length;
+  const visibleContactRows = filteredRows.slice(0, 1000);
 
   async function connectXero() {
     setBusy('connect');
@@ -178,21 +204,95 @@ export default function XeroPortal() {
     }
   }
 
-  async function previewLifecycle() {
+  async function previewLifecycle({ clearSelection = false, preserveRestoreResult = false } = {}) {
     setBusy('preview');
+    setRestoreSelected(new Set());
+    setRestoreReviewed(false);
     setReviewed(false);
+    setRepairReviewed(false);
+    setRepairSelected(new Set());
     const result = await appClient.functions.invoke('xeroPortalContactLifecyclePreview', {
       forceUsageRefresh,
       incrementalUsageRefresh,
     }, { force: true, invalidateCache: true });
     setBusy('');
-    if (result.data?.error) {
-      toast({ title: copy.toasts.previewFailed, description: result.data.error, variant: 'destructive' });
+    if (result.data?.error || !result.data?.run?.id || !Array.isArray(result.data.run.rows)) {
+      toast({ title: copy.toasts.previewFailed, description: result.data?.error || restoreCopy.refreshFailed, variant: 'destructive' });
       return;
     }
     setRun(result.data.run);
-    setSelectedRows(new Set((result.data.run?.rows || []).filter(canApplyRow).map((row) => row.id)));
+    setRestoreVerificationRequired(false);
+    if (!preserveRestoreResult) setRestoreResult(null);
+    setSelectedRows(clearSelection ? new Set() : new Set((result.data.run?.rows || []).filter(canApplyRow).map((row) => row.id)));
     await load({ force: true });
+    if (clearSelection) setSelectedRows(new Set());
+  }
+
+  async function saveIdentityAndRefresh() {
+    setIdentityRow(null);
+    await previewLifecycle({ clearSelection: true });
+  }
+
+  async function applyContactRepair() {
+    const rowIds = (run?.rows || []).filter((row) => canRepairRow(row) && repairSelected.has(row.id)).map((row) => row.id);
+    if (!run?.id || !repairReviewed || !rowIds.length || rowIds.length > 25) return;
+    setBusy('repair');
+    let result;
+    let confirmedContactRepair;
+    try {
+      ({ confirmedContactRepair } = await import('@/lib/xeroContactResolutionResult'));
+      result = await appClient.functions.invoke('xeroContactRepairApply', { runId: run.id, rowIds, reviewed: true }, { force: true, invalidateCache: true });
+    } catch { result = null; }
+    setBusy('');
+    if (result?.data?.error && result.meta?.cacheLayer !== 'network') {
+      toast({ title: copy.contacts.repair.failed, description: result.data.error, variant: 'destructive' }); return;
+    }
+    if (!confirmedContactRepair?.(result?.data, run.id, rowIds)) {
+      setRepairReviewed(false);
+      setRepairSelected(new Set());
+      toast({ title: copy.contacts.repair.uncertain, description: copy.contacts.repair.uncertainDetail, variant: 'destructive' });
+      return;
+    }
+    const summary = result.data.summary;
+    toast({ title: summary.uncertain ? copy.contacts.repair.uncertain : copy.contacts.repair.completed,
+      description: copy.contacts.repair.outcome(summary), variant: summary.uncertain || summary.blocked ? 'destructive' : undefined });
+    await previewLifecycle({ clearSelection: true });
+  }
+
+  async function applyContactRestore() {
+    if (restoreInFlight.current || busy || !restoreWritesAllowed || restoreVerificationRequired
+      || !run?.id || !restoreReviewed || !restoreCount || restoreCount > 25) return;
+    const expectedRunId = run.id;
+    const expectedRows = [...restoreRows];
+    restoreInFlight.current = true;
+    setBusy('restore');
+    setRestoreReviewed(false);
+    setRestoreSelected(new Set());
+    let result;
+    try {
+      result = await appClient.functions.invoke('xeroContactRestoreApply', {
+        runId: expectedRunId, rowIds: expectedRows.map((row) => row.id), reviewed: true,
+      }, { force: true, invalidateCache: true });
+    } catch { result = null; }
+    const confirmed = confirmedContactRestore(result?.data, expectedRunId, expectedRows);
+    const uncertain = !confirmed || result.data.summary.uncertain > 0;
+    setRestoreVerificationRequired(true);
+    setRestoreResult(confirmed ? result.data : { uncertain: true, attemptedRows: expectedRows.map((row) => ({
+      rowId: row.id, salesforceAccountId: row.salesforceAccountId, xeroContactId: row.restoration.targetContactId,
+    })) });
+    if (uncertain) {
+      toast({ title: restoreCopy.verify, description: restoreCopy.uncertain, variant: 'destructive' });
+    } else {
+      toast({ title: restoreCopy.completed, description: restoreCopy.outcome(result.data.summary),
+        variant: result.data.summary.blocked ? 'destructive' : undefined });
+      try { await previewLifecycle({ clearSelection: true, preserveRestoreResult: true }); }
+      catch {
+        setRestoreVerificationRequired(true);
+        toast({ title: restoreCopy.verify, description: restoreCopy.refreshFailed, variant: 'destructive' });
+      }
+    }
+    setBusy('');
+    restoreInFlight.current = false;
   }
 
   async function applyLifecycle() {
@@ -210,7 +310,7 @@ export default function XeroPortal() {
     setRun(result.data.run);
     setSelectedRows(new Set());
     setReviewed(false);
-    toast({ title: copy.toasts.changesApplied, description: summarizeApply(result.data.run?.summary || {}, language) });
+    toast({ title: copy.toasts.changesApplied, description: summarizeApply(result.data.run?.summary || {}) });
     await load({ force: true });
   }
 
@@ -236,26 +336,35 @@ export default function XeroPortal() {
   }
 
   async function saveReceipt({ sync = false } = {}) {
+    if (receiptSaveInFlight.current) return;
     if (!receiptFile) {
       toast({ title: copy.toasts.fileRequired, description: copy.toasts.fileRequiredDescription, variant: 'destructive' });
       return;
     }
+    receiptSaveInFlight.current = true;
     setBusy(sync ? 'receipt-sync-create' : 'receipt-create');
-    const filePayload = await fileToPayload(receiptFile);
-    const result = await appClient.functions.invoke('xeroPortalReceiptCreate', {
-      fields: receiptDraft,
-      file: filePayload,
-      autoSync: sync,
-    }, { force: true, invalidateCache: true });
-    setBusy('');
-    if (result.data?.error) {
-      toast({ title: sync ? copy.toasts.receiptSyncFailed : copy.toasts.receiptSaveFailed, description: result.data.error, variant: 'destructive' });
-      return;
+    try {
+      const result = await saveReceiptWithDirectUpload({
+        file: receiptFile, fields: receiptDraft, autoSync: sync, pending: receiptUpload,
+      }, { invoke: (...args) => appClient.functions.invoke(...args) });
+      if (!result.data?.receipt) throw new Error(result.data?.error || 'Receipt save could not be confirmed. Retry with the same details.');
+      setReceiptDraft(emptyReceiptFields());
+      setReceiptFile(null);
+      const synced = result.data.receipt.status === 'synced';
+      toast({
+        title: sync && synced ? copy.toasts.receiptSent : copy.toasts.receiptSaved,
+        description: result.data.error || (sync && !synced
+          ? 'Receipt saved. Check its status below and use Sync to Xero when ready.'
+          : sync ? copy.toasts.receiptSentDescription : copy.toasts.receiptSavedDescription),
+        ...(result.data.error ? { variant: 'destructive' } : {}),
+      });
+      await load({ force: true });
+    } catch (failure) {
+      toast({ title: sync ? copy.toasts.receiptSyncFailed : copy.toasts.receiptSaveFailed, description: failure.message, variant: 'destructive' });
+    } finally {
+      receiptSaveInFlight.current = false;
+      setBusy('');
     }
-    setReceiptDraft(emptyReceiptFields());
-    setReceiptFile(null);
-    toast({ title: sync ? copy.toasts.receiptSent : copy.toasts.receiptSaved, description: sync ? copy.toasts.receiptSentDescription : copy.toasts.receiptSavedDescription });
-    await load({ force: true });
   }
 
   async function syncReceipt(id) {
@@ -268,6 +377,7 @@ export default function XeroPortal() {
   }
 
   function toggleRow(rowId, checked) {
+    setReviewed(false);
     setSelectedRows((current) => {
       const next = new Set(current);
       if (checked) next.add(rowId);
@@ -276,147 +386,188 @@ export default function XeroPortal() {
     });
   }
 
+  function toggleRepair(rowId, checked) {
+    setRepairReviewed(false);
+    setRepairSelected((current) => {
+      const next = new Set(current);
+      if (checked) next.add(rowId);
+      else next.delete(rowId);
+      return next;
+    });
+  }
+
+  function toggleRestore(rowId, checked) {
+    if (busy || restoreVerificationRequired || !restoreWritesAllowed) return;
+    setRestoreReviewed(false);
+    setRestoreSelected((current) => {
+      const next = new Set(current);
+      if (checked) next.add(rowId);
+      else next.delete(rowId);
+      return next;
+    });
+  }
+
+  function contactRowSelection(row) {
+    const restoration = canRestoreContactRow(row);
+    const repair = !restoration && canRepairRow(row);
+    return <Checkbox aria-label={`${restoration ? restoreCopy.select : copy.common.use} ${row.xeroContactName || row.salesforceName || row.id}`}
+      checked={restoration ? restoreSelected.has(row.id) : repair ? repairSelected.has(row.id) : selectedRows.has(row.id)}
+      onCheckedChange={(checked) => restoration ? toggleRestore(row.id, checked === true) : repair ? toggleRepair(row.id, checked === true) : toggleRow(row.id, checked === true)}
+      disabled={Boolean(busy) || (restoration ? !restoreWritesAllowed || restoreVerificationRequired : !canApplyRow(row) && !repair)} />;
+  }
+
+  function contactIdentityAction(row) {
+    if (canRestoreContactRow(row)) return <p className="xp-restore-target">{restoreCopy.title}: {row.restoration.targetContactId}</p>;
+    return canReviewContactIdentity(row) ? <Button type="button" size="sm" variant="link" className="h-auto min-h-8 p-0" disabled={Boolean(busy)} onClick={() => setIdentityRow(row)}>{copy.contacts.identity.review}</Button> : null;
+  }
+
   function selectVisibleEligible() {
     setSelectedRows(new Set(filteredRows.filter(canApplyRow).map((row) => row.id)));
   }
 
+  function receiptField(key, labelKey = key, type = 'text') {
+    return <Field key={key} label={copy.receipts[labelKey]} type={type} value={receiptDraft[key]} onChange={(value) => setReceiptDraft((current) => ({ ...current, [key]: value }))} />;
+  }
+
+  // Share one presentation between desktop and mobile; selection and evidence stay identical.
+  const contactPresentations = visibleContactRows.map((row) => ({
+    row, selection: contactRowSelection(row),
+    action: <ActionBadge action={row.action} copy={copy} wrap />,
+    status: <StatusBadgeText status={row.status} copy={copy} wrap />,
+    details: [
+      [copy.contacts.xeroContact, <XeroContactIdentity row={row} copy={copy} />],
+      [copy.contacts.salesforceSource, <SalesforceContactIdentity row={row} copy={copy} />],
+      [copy.contacts.match, row.matchField ? (copy.matchFields[row.matchField] || matchFieldLabels[row.matchField] || row.matchField) : copy.common.none],
+      [copy.contacts.usage, <ContactUsage usage={row.usage} copy={copy} />],
+    ],
+    reason: <><ContactReason row={row} copy={copy} reasonLabels={reasonLabels} />{contactIdentityAction(row)}</>,
+  }));
+
   if (loading && !status) {
-    return <div className="workspace-tools p-4 lg:p-6"><StateBlock icon={Loader2} title={copy.header.loadingTitle} description={copy.header.loadingDescription} /></div>;
+    return <div className="workspace-tools p-4 lg:p-6" lang="en"><StateBlock icon={Loader2} title={copy.header.loadingTitle} description={copy.header.loadingDescription} /></div>;
   }
 
   return (
-    <div className="workspace-tools min-h-full bg-background p-4 text-foreground lg:p-6" lang={language === 'zh-Hant' ? 'zh-Hant-HK' : 'en'}>
-      <div className="mx-auto flex max-w-[1800px] flex-col gap-4">
-        <header className="flex flex-col gap-3 border-b border-border pb-4 lg:flex-row lg:items-start lg:justify-between">
+    <div className={cn('workspace-tools min-h-full bg-background p-4 text-foreground lg:p-6', (tab === 'accounting' || tab === 'contacts') && 'workspace-page-wide')} lang="en">
+      <div className={cn('mx-auto flex w-full min-w-0 flex-col gap-4', tab !== 'accounting' && tab !== 'contacts' && 'max-w-[1800px]')}>
+        <header className="xp-header">
           <div>
-            <div className="flex flex-wrap items-center gap-2">
+            <div className={PORTAL_ACTIONS_CLASS}>
               <h1 className="text-2xl font-semibold tracking-normal">{copy.header.title}</h1>
               <StatusBadge ok={xero.connected} trueLabel={copy.header.connected} falseLabel={copy.header.disconnected} />
-              <StatusBadge ok={actionGate?.enabled} trueLabel={copy.header.writesEnabled} falseLabel={copy.header.writesGated} tone={actionGate?.enabled ? 'emerald' : 'amber'} />
+              <StatusBadge ok={status?.externalActions?.xero_financial_sync?.enabled} trueLabel="Financial sync enabled" falseLabel="Financial sync disabled" tone={status?.externalActions?.xero_financial_sync?.enabled ? 'emerald' : 'amber'} />
             </div>
-            <p className="mt-1 max-w-4xl text-sm text-muted-foreground">{copy.header.subtitle}</p>
+            <p className={PORTAL_DESCRIPTION_CLASS}>{copy.header.subtitle}</p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <div aria-label={copy.languageLabel} className="inline-flex rounded-lg border border-border bg-muted/30 p-1">
-              <Languages className="mx-2 my-auto h-4 w-4 text-muted-foreground" />
-              {XERO_PORTAL_UI_LANGUAGES.map((option) => (
-                <Button key={option.id} type="button" size="sm" variant={language === option.id ? 'default' : 'ghost'} className="h-8" aria-pressed={language === option.id} onClick={() => setLanguage(option.id)}>
-                  {option.label}
-                </Button>
-              ))}
-            </div>
             <Button type="button" variant="outline" onClick={() => setTab('manual')}>
               <BookOpen className="mr-2 h-4 w-4" />
               {copy.header.manual}
             </Button>
             <Button type="button" variant="outline" onClick={() => load({ force: true })} disabled={Boolean(busy)}>
-              {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+              <ActionIcon busy={loading} icon={RefreshCw} />
               {copy.header.refresh}
             </Button>
             {xero.connected ? (
               <>
                 {needsFinancialReconnect ? (
                   <Button type="button" onClick={connectXero} disabled={busy === 'connect'}>
-                    {busy === 'connect' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <PlugZap className="mr-2 h-4 w-4" />}
+                    <ActionIcon busy={busy === 'connect'} icon={PlugZap} />
                     {copy.header.reconnect}
                   </Button>
                 ) : null}
                 <Button type="button" variant="outline" onClick={disconnectXero} disabled={busy === 'disconnect'}>
-                  {busy === 'disconnect' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <XCircle className="mr-2 h-4 w-4" />}
+                  <ActionIcon busy={busy === 'disconnect'} icon={XCircle} />
                   {copy.header.disconnect}
                 </Button>
               </>
             ) : (
               <Button type="button" onClick={connectXero} disabled={busy === 'connect' || !xero.configured}>
-                {busy === 'connect' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <PlugZap className="mr-2 h-4 w-4" />}
+                <ActionIcon busy={busy === 'connect'} icon={PlugZap} />
                 {copy.header.connect}
               </Button>
             )}
           </div>
         </header>
 
-        {error ? <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div> : null}
+        {error ? <div role="alert" className="xp-error">{error}</div> : null}
 
-        <section className="grid gap-3 lg:grid-cols-4">
-          <ConnectionPanel unavailable={copy.common.unavailable} title={copy.panels.tenant} rows={[
+        <details className="rounded-lg border border-border p-3"><summary className="cursor-pointer text-sm">Connection and system details</summary><section className="mt-3 grid gap-3 lg:grid-cols-4">
+          {[[copy.panels.tenant, [
             [copy.panels.organisation, xero.tenantName || copy.panels.notConnected],
             [copy.panels.tenantId, xero.tenantId || copy.common.unavailable],
-            [copy.panels.tokenExpires, formatDateTime(xero.expiresAt, language)],
+            [copy.panels.tokenExpires, formatDateTime(xero.expiresAt)],
             [copy.panels.redirectUri, xero.redirectUri || copy.common.notConfigured],
-          ]} />
-          <ConnectionPanel unavailable={copy.common.unavailable} title={copy.panels.scopes} rows={[
+          ]],
+            [copy.panels.scopes, [
             [copy.panels.contacts, scopeFlags.contacts ? copy.common.available : copy.common.missing],
             [copy.panels.invoices, scopeFlags.invoices ? copy.common.available : copy.common.missing],
             [copy.panels.attachments, scopeFlags.attachments ? copy.common.available : copy.common.missing],
             [copy.panels.payments, scopeFlags.paymentsWrite ? copy.common.readWrite : scopeFlags.paymentsRead ? copy.common.readOnly : copy.common.missing],
             [copy.panels.accountingSettings, scopeFlags.settingsRead ? copy.common.available : copy.common.missing],
-          ]} />
-          <ConnectionPanel unavailable={copy.common.unavailable} title={copy.panels.salesforce} rows={[
+          ]],
+            [copy.panels.salesforce, [
             [copy.panels.auth, status?.salesforce?.authMode || copy.common.unknown],
             [copy.panels.instance, hostname(status?.salesforce?.instanceUrl, copy.common.notConfigured)],
             [copy.panels.clKey, copy.panels.hkOnly],
             [copy.panels.deliveryFrom, status?.salesforce?.recentStemDeliveryFrom || '2025-01-01'],
-          ]} />
-          <ConnectionPanel unavailable={copy.common.unavailable} title={copy.panels.automation} rows={[
+          ]],
+            [copy.panels.automation, [
             [copy.panels.run, autoRun?.id ? shortId(autoRun.id) : copy.panels.noRun],
             [copy.panels.event, autoRun?.eventId || copy.common.unavailable],
             [copy.panels.created, String(autoRun?.summary?.created || 0)],
             [copy.panels.skippedFailed, `${autoRun?.summary?.skipped || 0} / ${autoRun?.summary?.failed || 0}`],
-          ]} />
-        </section>
+          ]]].map(([title, rows]) => <ConnectionPanel key={title} title={title} rows={rows} unavailable={copy.common.unavailable} />)}
+        </section></details>
 
         <Tabs value={tab} onValueChange={setTab} className="w-full">
           <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1">
-            <TabsTrigger value="accounting">{copy.tabs.accounting}</TabsTrigger>
-            <TabsTrigger value="contacts">{copy.tabs.contacts}</TabsTrigger>
-            <TabsTrigger value="receipts">{copy.tabs.receipts}</TabsTrigger>
-            <TabsTrigger value="automation">{copy.tabs.automation}</TabsTrigger>
+            {['accounting', 'contacts', 'receipts', 'automation'].map((key) => <TabsTrigger key={key} value={key}>{copy.tabs[key]}</TabsTrigger>)}
             <TabsTrigger value="manual">{copy.tabs.manual}</TabsTrigger>
           </TabsList>
 
           <TabsContent value="contacts" className="space-y-4">
-            <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
-              <Kpi label={copy.contacts.kpis.active} value={hasLifecycleRun ? summary.nonArchivedXeroContacts : null} emptyLabel={copy.contacts.previewRequired} />
-              <Kpi label={copy.contacts.kpis.archived} value={hasLifecycleRun ? summary.archivedXeroContacts : null} emptyLabel={copy.contacts.previewRequired} />
-              <Kpi label={copy.contacts.kpis.unmatched} value={hasLifecycleRun ? summary.unmatchedNonArchivedXeroContacts : null} tone="amber" emptyLabel={copy.contacts.previewRequired} />
-              <Kpi label={copy.contacts.kpis.rename} value={hasLifecycleRun ? summary.renameEligible : null} tone="sky" emptyLabel={copy.contacts.previewRequired} />
-              <Kpi label={copy.contacts.kpis.archive} value={hasLifecycleRun ? summary.archiveEligible : null} tone="rose" emptyLabel={copy.contacts.previewRequired} />
-              <Kpi label={copy.contacts.kpis.exceptions} value={hasLifecycleRun ? summary.exception : null} tone="slate" emptyLabel={copy.contacts.previewRequired} />
+            <section className="xp-contact-kpis">
+              {[
+                ['active', 'nonArchivedXeroContacts'], ['archived', 'archivedXeroContacts'],
+                ['unmatched', 'unmatchedNonArchivedXeroContacts', 'amber'], ['rename', 'renameEligible', 'sky'],
+                ['archive', 'archiveEligible', 'rose'], ['exceptions', 'exception', 'slate'],
+              ].map(([label, field, tone]) => <Kpi key={label} label={copy.contacts.kpis[label]} value={hasLifecycleRun ? summary[field] : null} tone={tone} emptyLabel={copy.contacts.previewRequired} />)}
             </section>
 
-            <section className="rounded-lg border border-border bg-card p-4">
-              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <section className={PORTAL_CARD_CLASS}>
+              <div className={PORTAL_SECTION_HEADER_CLASS}>
                 <div>
                   <h2 className="text-base font-semibold">{copy.contacts.title}</h2>
-                  <p className="mt-1 max-w-4xl text-sm text-muted-foreground">{copy.contacts.description}</p>
+                  <p className={PORTAL_DESCRIPTION_CLASS}>{copy.contacts.description}</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <Button type="button" variant="outline" onClick={() => setFilters((current) => ({ ...current, unmatchedOnly: !current.unmatchedOnly }))}>
                     <ShieldCheck className="mr-2 h-4 w-4" />
                     {filters.unmatchedOnly ? copy.contacts.showAll : copy.contacts.showUnmatched}
                   </Button>
-                  <Button type="button" onClick={previewLifecycle} disabled={busy === 'preview' || !xero.connected || !scopeFlags.contacts}>
-                    {busy === 'preview' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+                  <Button type="button" onClick={() => previewLifecycle()} disabled={Boolean(busy) || !xero.connected || !scopeFlags.contacts}>
+                    <ActionIcon busy={busy === 'preview'} icon={RefreshCw} />
                     {copy.contacts.preview}
                   </Button>
                 </div>
               </div>
 
-              <div className="mt-4 grid gap-3 lg:grid-cols-[1.5fr_1fr]">
-                <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-                  <label className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm">
+              <div className="xp-contact-tools">
+                <div className="xp-usage-tools">
+                  <label className={PORTAL_REVIEW_LABEL_CLASS}>
                     <Checkbox checked={forceUsageRefresh} onCheckedChange={(checked) => setForceUsageRefresh(checked === true)} />
                     {copy.contacts.fullUsage}
                   </label>
-                  <label className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm">
+                  <label className={PORTAL_REVIEW_LABEL_CLASS}>
                     <Checkbox checked={incrementalUsageRefresh} onCheckedChange={(checked) => setIncrementalUsageRefresh(checked === true)} disabled={forceUsageRefresh} />
                     {copy.contacts.incrementalUsage}
                   </label>
                   <AuditButton disabled={!run} onClick={() => downloadJson(run, `xero-contact-lifecycle-${run?.id || 'run'}.json`)} icon={FileJson}>{copy.contacts.jsonAudit}</AuditButton>
                   <AuditButton disabled={!run} onClick={() => downloadCsv(run?.rows || [], `xero-contact-lifecycle-${run?.id || 'run'}.csv`)} icon={Download}>{copy.contacts.csvAudit}</AuditButton>
                 </div>
-                <div className="rounded-lg border border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-                  <div className="font-semibold text-foreground">{copy.contacts.callEstimate}</div>
+                <div className="xp-call-estimate">
+                  <div className={PORTAL_EMPHASIS_CLASS}>{copy.contacts.callEstimate}</div>
                   <div className="mt-1 grid grid-cols-3 gap-2">
                     <span>{copy.contacts.preview}: {hasLifecycleRun ? (run?.xeroCallEstimate?.previewActualCalls ?? 0) : copy.common.pending}</span>
                     <span>{copy.contacts.verify}: {hasLifecycleRun ? (run?.xeroCallEstimate?.applyVerifyCalls ?? 0) : copy.common.pending}</span>
@@ -425,20 +576,20 @@ export default function XeroPortal() {
                 </div>
               </div>
 
-              <div className="mt-4 rounded-lg border border-dashed border-border bg-background/60 px-3 py-2 text-sm text-muted-foreground">
+              <div className="xp-last-run">
                 {hasLifecycleRun
-                  ? copy.contacts.lastRun(shortId(run.id), formatDateTime(run.createdAt, language), Number(run.rowCount || run.rows?.length || 0).toLocaleString(copy.locale))
+                  ? copy.contacts.lastRun(shortId(run.id), formatDateTime(run.createdAt), Number(run.rowCount || run.rows?.length || 0).toLocaleString(copy.locale))
                   : copy.contacts.noRun}
               </div>
 
-              <UsageCache sources={status?.usageCache?.sources || run?.usageCache?.sources || []} copy={copy} language={language} />
+              <UsageCache sources={status?.usageCache?.sources || run?.usageCache?.sources || []} copy={copy} />
               <StatusLegend labels={statusLabels} copy={copy} />
             </section>
 
-            <section className="rounded-lg border border-border bg-card p-4">
+            <section className="xero-contacts-review xp-card border bg-card border-border">
               <div className="grid gap-2 md:grid-cols-5">
                 <div className="relative md:col-span-2">
-                  <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+                  <Search className="xp-search-icon" />
                   <Input value={filters.search} onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))} placeholder={copy.contacts.search} className="pl-9" />
                 </div>
                 <NativeSelect value={filters.action} onChange={(action) => setFilters((current) => ({ ...current, action }))} options={actionOptions} />
@@ -446,64 +597,63 @@ export default function XeroPortal() {
                 <NativeSelect value={filters.reason} onChange={(reason) => setFilters((current) => ({ ...current, reason }))} options={reasonOptions} />
               </div>
 
-              <div className="mt-3 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                <div className="text-sm text-muted-foreground">
+              <div className="xp-review-actions">
+                <div className={PORTAL_MUTED_CLASS}>
                   {copy.contacts.showing(filteredRows.length.toLocaleString(copy.locale), totalSelectedCount.toLocaleString(copy.locale), selectedEligibleCount.toLocaleString(copy.locale))}
                 </div>
-                <div className="flex flex-wrap items-center gap-2">
+                <div className={PORTAL_ACTIONS_CLASS}>
                   <Button type="button" variant="outline" onClick={selectVisibleEligible} disabled={!filteredRows.some(canApplyRow)}>{copy.contacts.selectVisible}</Button>
                   <Button type="button" variant="outline" onClick={() => setSelectedRows(new Set())}>{copy.common.clear}</Button>
-                  <label className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm">
+                  <label className={PORTAL_REVIEW_LABEL_CLASS}>
                     <Checkbox checked={reviewed} onCheckedChange={(checked) => setReviewed(checked === true)} />
                     {copy.contacts.reviewed}
                   </label>
-                  <Button type="button" onClick={applyLifecycle} disabled={!run?.id || !reviewed || !selectedEligibleCount || busy === 'apply'}>
-                    {busy === 'apply' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Archive className="mr-2 h-4 w-4" />}
+                  <Button type="button" onClick={applyLifecycle} disabled={!run?.id || !reviewed || !selectedEligibleCount || Boolean(busy)}>
+                    <ActionIcon busy={busy === 'apply'} icon={Archive} />
                     {copy.contacts.applySelected}
                   </Button>
                 </div>
               </div>
 
-              <div className="mt-4">
-                <Table scrollLabel={copy.contacts.tableLabel}>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="w-10">{copy.common.use}</TableHead>
-                      <TableHead>{copy.common.action}</TableHead>
-                      <TableHead>{copy.common.status}</TableHead>
-                      <TableHead>{copy.contacts.xeroContact}</TableHead>
-                      <TableHead>{copy.contacts.salesforceSource}</TableHead>
-                      <TableHead>{copy.contacts.match}</TableHead>
-                      <TableHead>{copy.contacts.usage}</TableHead>
-                      <TableHead>{copy.common.reason}</TableHead>
-                    </TableRow>
-                  </TableHeader>
+              <div className="xp-repair-actions">
+                <span className={PORTAL_MUTED_CLASS}>{copy.contacts.repair.selected(repairCount)}</span>
+                <label className={PORTAL_LABEL_CLASS}><Checkbox checked={repairReviewed} onCheckedChange={(checked) => setRepairReviewed(checked === true)} />{copy.contacts.repair.reviewed}</label>
+                <Button type="button" variant="outline" onClick={applyContactRepair} disabled={!repairReviewed || !repairCount || repairCount > 25 || Boolean(busy)}>{copy.contacts.repair.createSelected}</Button>
+                {repairCount > 25 && <span role="alert" className="text-sm text-amber-800">{copy.contacts.repair.limit}</span>}
+              </div>
+
+              {(run?.rows || []).some(canRestoreContactRow) || restoreResult ? <section className="xp-restore-panel" aria-label={restoreCopy.title}>
+                <h3 className="text-sm font-semibold">{restoreCopy.title}</h3>
+                <p className={PORTAL_MUTED_CLASS}>{restoreCopy.description}</p>
+                <div className={PORTAL_ACTIONS_CLASS}>
+                  <span className={PORTAL_MUTED_CLASS}>{restoreCopy.selected(restoreCount)}</span>
+                  <Button type="button" variant="outline" disabled={Boolean(busy) || !restoreCount} onClick={() => { setRestoreSelected(new Set()); setRestoreReviewed(false); }}>{restoreCopy.clear}</Button>
+                  <label className={PORTAL_LABEL_CLASS}><Checkbox checked={restoreReviewed} disabled={Boolean(busy) || !restoreWritesAllowed || restoreVerificationRequired || !restoreCount} onCheckedChange={(checked) => setRestoreReviewed(checked === true)} />{restoreCopy.reviewed}</label>
+                  <Button type="button" variant="outline" onClick={applyContactRestore} disabled={!run?.id || !restoreWritesAllowed || restoreVerificationRequired || !restoreReviewed || !restoreCount || restoreCount > 25 || Boolean(busy)}>
+                    {busy === 'restore' && <Loader2 className={PORTAL_SPINNER_CLASS} />}{restoreCopy.title}
+                  </Button>
+                </div>
+                {!restoreWritesAllowed && <p className={PORTAL_MUTED_CLASS}>{restoreCopy.readOnly}</p>}
+                {restoreCount > 25 && <p role="alert" className="text-sm text-amber-800">{restoreCopy.limit}</p>}
+                {restoreVerificationRequired && <p role="alert" className="text-sm text-amber-800">{restoreCopy.uncertain}</p>}
+                {restoreResult?.summary && <p role="status" className="text-sm">{restoreCopy.outcome(restoreResult.summary)}</p>}
+                {restoreResult?.attemptedRows?.map((attempt) => <p key={attempt.rowId} className={PORTAL_OUTCOME_CLASS}>{attempt.salesforceAccountId} → {attempt.xeroContactId}</p>)}
+                {restoreResult?.outcomes?.map((outcome) => <p key={outcome.rowId} className={PORTAL_OUTCOME_CLASS}>{outcome.salesforceAccountId} → {outcome.xeroContactId}: {outcome.status}{outcome.message ? ` · ${outcome.message}` : ''}</p>)}
+              </section> : null}
+
+              <div className="xero-contacts-review__wide mt-4">
+                <Table scrollLabel={copy.contacts.tableLabel} className="min-w-0 table-fixed">
+                  <colgroup>
+                    <col style={{ width: '4%' }} /><col style={{ width: '10%' }} /><col style={{ width: '9%' }} />
+                    <col style={{ width: '16%' }} /><col style={{ width: '16%' }} /><col style={{ width: '10%' }} />
+                    <col style={{ width: '11%' }} /><col style={{ width: '24%' }} />
+                  </colgroup>
+                  <TableHeader><TableRow>{[copy.common.use, copy.common.action, copy.common.status, copy.contacts.xeroContact, copy.contacts.salesforceSource, copy.contacts.match, copy.contacts.usage, copy.common.reason].map((label, index) => <TableHead key={index} className={index === 0 ? 'w-10' : undefined}>{label}</TableHead>)}</TableRow></TableHeader>
                   <TableBody>
-                    {filteredRows.length ? filteredRows.slice(0, 1000).map((row) => (
+                    {contactPresentations.length ? contactPresentations.map(({ row, selection, action, status: rowStatus, details, reason }) => (
                       <TableRow key={row.id}>
-                        <TableCell>
-                          <Checkbox checked={selectedRows.has(row.id)} onCheckedChange={(checked) => toggleRow(row.id, checked === true)} disabled={!canApplyRow(row)} />
-                        </TableCell>
-                        <TableCell><ActionBadge action={row.action} copy={copy} /></TableCell>
-                        <TableCell><StatusBadgeText status={row.status} copy={copy} /></TableCell>
-                        <TableCell className="min-w-[260px]">
-                          <div className="font-medium">{row.xeroContactName || copy.contacts.noXeroMatch}</div>
-                          <div className="mt-1 text-xs text-muted-foreground">
-                            {row.xeroContactNumber || copy.contacts.noContactNumber} · {row.xeroAccountNumber || copy.contacts.noAccountNumber} · {row.xeroContactStatus || copy.contacts.noStatus}
-                          </div>
-                        </TableCell>
-                        <TableCell className="min-w-[260px]">
-                          <div className="font-medium">{row.salesforceName || copy.contacts.noSalesforceMatch}</div>
-                          <div className="mt-1 text-xs text-muted-foreground">
-                            {row.salesforceCompanyCode || copy.common.noClKey} · {copy.recordTypes[row.salesforceRecordType] || row.salesforceRecordType || copy.common.noType}
-                          </div>
-                        </TableCell>
-                        <TableCell>{row.matchField ? (copy.matchFields[row.matchField] || matchFieldLabels[row.matchField] || row.matchField) : copy.common.none}</TableCell>
-                        <TableCell>{usageText(row.usage, copy)}</TableCell>
-                        <TableCell className="max-w-[320px]">
-                          <div className="font-medium">{copy.reasons[row.reason] || reasonLabels[row.reason] || row.reason || copy.common.noIssue}</div>
-                          {row.message ? <div className="mt-1 text-xs text-muted-foreground">{row.message}</div> : null}
-                        </TableCell>
+                        <TableCell>{selection}</TableCell><TableCell>{action}</TableCell><TableCell>{rowStatus}</TableCell>
+                        {[...details.map(([, content]) => content), reason].map((content, index) => <TableCell key={index} className="xp-wrap">{content}</TableCell>)}
                       </TableRow>
                     )) : (
                       <TableRow><TableCell colSpan={8}><StateBlock icon={CheckCircle2} title={hasLifecycleRun ? copy.contacts.noRowsTitle : copy.contacts.noPreviewTitle} description={hasLifecycleRun ? copy.contacts.noRowsDescription : copy.contacts.noPreviewDescription} /></TableCell></TableRow>
@@ -511,92 +661,99 @@ export default function XeroPortal() {
                   </TableBody>
                 </Table>
               </div>
+              <div className="xero-contacts-review__compact mt-4 space-y-3">
+                {contactPresentations.length ? contactPresentations.map(({ row, selection, action, status: rowStatus, details, reason }) => (
+                  <article key={row.id} className="xp-contact-card" aria-label={`${copy.contacts.xeroContact}: ${row.xeroContactName || copy.contacts.noXeroMatch}`}>
+                    <div className={PORTAL_ACTIONS_CLASS}>
+                      <label className="xp-selection-label">{selection}{copy.common.use}</label>{action}{rowStatus}
+                    </div>
+                    <div className="xp-contact-reason">
+                      <div className="xp-reason-label">{copy.common.reason}</div>{reason}
+                    </div>
+                    <dl className="xp-contact-details">
+                      {details.map(([label, content]) => <div key={label} className="xp-detail"><dt className={PORTAL_FIELD_LABEL_CLASS}>{label}</dt><dd className="mt-1">{content}</dd></div>)}
+                    </dl>
+                  </article>
+                )) : <StateBlock icon={CheckCircle2} title={hasLifecycleRun ? copy.contacts.noRowsTitle : copy.contacts.noPreviewTitle} description={hasLifecycleRun ? copy.contacts.noRowsDescription : copy.contacts.noPreviewDescription} />}
+              </div>
             </section>
+            {identityRow && <Suspense fallback={null}><XeroContactResolution row={identityRow} tenantId={run?.xero?.tenantId} language="en" onClose={() => setIdentityRow(null)} onSaved={saveIdentityAndRefresh} /></Suspense>}
           </TabsContent>
 
           <TabsContent value="accounting" className="space-y-4">
             <Suspense fallback={<StateBlock icon={Loader2} title={copy.financial.loadingTitle} description={copy.financial.loadingDescription} />}>
-              <XeroFinancialSync portalStatus={status} language={language} />
+              <XeroFinancialSync portalStatus={status} language="en" />
             </Suspense>
           </TabsContent>
 
           <TabsContent value="receipts" className="space-y-4">
-            <section className="grid gap-4 xl:grid-cols-[480px_1fr]">
-              <div className="rounded-lg border border-border bg-card p-4">
+            <section className="xp-receipt-layout">
+              <div className={PORTAL_CARD_CLASS}>
                 <h2 className="text-base font-semibold">{copy.receipts.title}</h2>
                 <div className="mt-4 space-y-3">
                   <label className="block">
-                    <span className="text-xs font-semibold text-muted-foreground">{copy.receipts.file}</span>
-                    <span className="mt-1 flex min-h-9 cursor-pointer items-center gap-2 rounded-[var(--radius-control)] border border-input bg-background px-3 py-1.5 text-sm shadow-sm">
+                    <span className={PORTAL_FIELD_LABEL_CLASS}>{copy.receipts.file}</span>
+                    <span className="xp-upload">
                       <Upload className="h-4 w-4 text-muted-foreground" />
                       <span className="font-medium">{copy.receipts.chooseFile}</span>
                       <span className="min-w-0 truncate text-muted-foreground">{receiptFile?.name || copy.receipts.noFile}</span>
                     </span>
-                    <input type="file" accept="image/*,application/pdf" className="sr-only" onChange={(event) => setReceiptFile(event.target.files?.[0] || null)} />
+                    <input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" className="sr-only" onChange={(event) => setReceiptFile(event.target.files?.[0] || null)} />
                   </label>
-                  <div className="grid gap-2 sm:grid-cols-2">
+                  <div className={PORTAL_TWO_COLUMNS_CLASS}>
                     <Button type="button" variant="outline" onClick={runOcr} disabled={!receiptFile || ocrBusy}>
-                      {ocrBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileText className="mr-2 h-4 w-4" />}
+                      <ActionIcon busy={ocrBusy} icon={FileText} />
                       {copy.receipts.ocr}
                     </Button>
                     <Button type="button" variant="outline" onClick={() => setReceiptDraft(emptyReceiptFields())}>{copy.receipts.reset}</Button>
                   </div>
-                  <Field label={copy.receipts.merchant} value={receiptDraft.merchant} onChange={(merchant) => setReceiptDraft((current) => ({ ...current, merchant }))} />
-                  <div className="grid gap-2 sm:grid-cols-2">
-                    <Field label={copy.receipts.date} type="date" value={receiptDraft.date} onChange={(date) => setReceiptDraft((current) => ({ ...current, date }))} />
-                    <Field label={copy.receipts.total} type="number" value={receiptDraft.total} onChange={(total) => setReceiptDraft((current) => ({ ...current, total }))} />
+                  {receiptField('merchant')}
+                  <div className={PORTAL_TWO_COLUMNS_CLASS}>
+                    {receiptField('date', 'date', 'date')}
+                    {receiptField('total', 'total', 'number')}
                   </div>
                   <div className="grid gap-2 sm:grid-cols-3">
                     <NativeSelect label={copy.receipts.currency} value={receiptDraft.currency} onChange={(currency) => setReceiptDraft((current) => ({ ...current, currency }))} options={RECEIPT_CURRENCIES.map((code) => [code, code])} />
-                    <Field label={copy.receipts.account} value={receiptDraft.accountCode} onChange={(accountCode) => setReceiptDraft((current) => ({ ...current, accountCode }))} />
-                    <Field label={copy.receipts.tax} value={receiptDraft.taxType} onChange={(taxType) => setReceiptDraft((current) => ({ ...current, taxType }))} />
+                    {receiptField('accountCode', 'account')}
+                    {receiptField('taxType', 'tax')}
                   </div>
-                  <Field label={copy.receipts.category} value={receiptDraft.category} onChange={(category) => setReceiptDraft((current) => ({ ...current, category }))} />
+                  {receiptField('category')}
                   <div>
-                    <label className="text-xs font-semibold text-muted-foreground">{copy.receipts.notes}</label>
+                    <label className={PORTAL_FIELD_LABEL_CLASS}>{copy.receipts.notes}</label>
                     <Textarea value={receiptDraft.note} onChange={(event) => setReceiptDraft((current) => ({ ...current, note: event.target.value }))} rows={6} />
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    <Button type="button" variant="outline" onClick={() => saveReceipt({ sync: false })} disabled={!receiptFile || busy === 'receipt-create'}>
-                      {busy === 'receipt-create' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
+                    <Button type="button" variant="outline" onClick={() => saveReceipt({ sync: false })} disabled={!receiptFile || busy === 'receipt-create' || busy === 'receipt-sync-create'}>
+                      <ActionIcon busy={busy === 'receipt-create'} icon={Upload} />
                       {copy.receipts.save}
                     </Button>
-                    <Button type="button" onClick={() => saveReceipt({ sync: true })} disabled={!receiptFile || !xero.connected || !scopeFlags.invoices || !scopeFlags.attachments || busy === 'receipt-sync-create'}>
-                      {busy === 'receipt-sync-create' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
+                    <Button type="button" onClick={() => saveReceipt({ sync: true })} disabled={!receiptFile || !xero.connected || !scopeFlags.invoices || !scopeFlags.attachments || busy === 'receipt-sync-create' || busy === 'receipt-create'}>
+                      <ActionIcon busy={busy === 'receipt-sync-create'} icon={Send} />
                       {copy.receipts.createBill}
                     </Button>
                   </div>
                 </div>
               </div>
 
-              <div className="rounded-lg border border-border bg-card p-4">
+              <div className={PORTAL_CARD_CLASS}>
                 <h2 className="text-base font-semibold">{copy.receipts.auditTitle}</h2>
                 <div className="mt-4">
                   <Table scrollLabel={copy.receipts.auditLabel}>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>{copy.receipts.receipt}</TableHead>
-                        <TableHead>{copy.receipts.total}</TableHead>
-                        <TableHead>{copy.receipts.status}</TableHead>
-                        <TableHead>{copy.receipts.xero}</TableHead>
-                        <TableHead>{copy.receipts.updated}</TableHead>
-                        <TableHead>{copy.receipts.action}</TableHead>
-                      </TableRow>
-                    </TableHeader>
+                    <TableHeader><TableRow>{[copy.receipts.receipt, copy.receipts.total, copy.receipts.status, copy.receipts.xero, copy.receipts.updated, copy.receipts.action].map((label, index) => <TableHead key={index}>{label}</TableHead>)}</TableRow></TableHeader>
                     <TableBody>
                       {receipts.map((receipt) => (
                         <TableRow key={receipt.id}>
                           <TableCell>
                             <div className="font-medium">{receipt.merchant}</div>
-                            <div className="mt-1 text-xs text-muted-foreground">{receipt.fileName} · {receipt.date}</div>
+                            <div className={PORTAL_DETAIL_CLASS}>{receipt.fileName} · {receipt.date}</div>
                           </TableCell>
                           <TableCell>{receipt.currency} {formatNumber(receipt.total)}</TableCell>
                           <TableCell><ReceiptStatusBadge status={receipt.status} copy={copy} /></TableCell>
                           <TableCell>
-                            {receipt.xeroInvoiceUrl ? <a className="inline-flex items-center gap-1 text-sm text-blue-700 hover:underline" href={receipt.xeroInvoiceUrl} target="_blank" rel="noreferrer">{copy.receipts.draftBill} <ExternalLink className="h-3 w-3" /></a> : copy.receipts.notSynced}
+                            {receipt.xeroInvoiceUrl ? <a className="xp-bill-link" href={receipt.xeroInvoiceUrl} target="_blank" rel="noreferrer">{copy.receipts.draftBill} <ExternalLink className="h-3 w-3" /></a> : copy.receipts.notSynced}
                             {receipt.error ? <div className="mt-1 max-w-[260px] text-xs text-red-700">{receipt.error}</div> : null}
                           </TableCell>
-                          <TableCell>{formatDateTime(receipt.updatedAt, language)}</TableCell>
+                          <TableCell>{formatDateTime(receipt.updatedAt)}</TableCell>
                           <TableCell>
                             <Button type="button" size="sm" variant="outline" onClick={() => syncReceipt(receipt.id)} disabled={receipt.status === 'synced' || !xero.connected || !scopeFlags.invoices || !scopeFlags.attachments || busy === `receipt-sync-${receipt.id}`}>
                               {busy === `receipt-sync-${receipt.id}` ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Send className="mr-2 h-3.5 w-3.5" />}
@@ -614,11 +771,11 @@ export default function XeroPortal() {
           </TabsContent>
 
           <TabsContent value="automation" className="space-y-4">
-            <section className="rounded-lg border border-border bg-card p-4">
-              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <section className={PORTAL_CARD_CLASS}>
+              <div className={PORTAL_SECTION_HEADER_CLASS}>
                 <div>
                   <h2 className="text-base font-semibold">{copy.automation.title}</h2>
-                  <p className="mt-1 max-w-4xl text-sm text-muted-foreground">{copy.automation.description}</p>
+                  <p className={PORTAL_DESCRIPTION_CLASS}>{copy.automation.description}</p>
                 </div>
                 <div className="flex gap-2">
                   <AuditButton disabled={!autoRun} onClick={() => downloadJson(autoRun, `xero-contact-auto-create-${autoRun?.id || 'run'}.json`)} icon={FileJson}>{copy.contacts.jsonAudit}</AuditButton>
@@ -626,29 +783,21 @@ export default function XeroPortal() {
                 </div>
               </div>
               <div className="mt-4 grid gap-3 sm:grid-cols-4">
-                <Kpi label={copy.automation.pending} value={autoRun?.summary?.pending || 0} tone="sky" />
-                <Kpi label={copy.automation.created} value={autoRun?.summary?.created || 0} tone="emerald" />
-                <Kpi label={copy.automation.alreadyExists} value={autoRun?.summary?.alreadyExists || autoRun?.summary?.['already-exists'] || 0} />
-                <Kpi label={copy.automation.failed} value={autoRun?.summary?.failed || 0} tone="rose" />
+                {[
+                  ['pending', autoRun?.summary?.pending || 0, 'sky'], ['created', autoRun?.summary?.created || 0, 'emerald'],
+                  ['alreadyExists', autoRun?.summary?.alreadyExists || autoRun?.summary?.['already-exists'] || 0], ['failed', autoRun?.summary?.failed || 0, 'rose'],
+                ].map(([key, value, tone]) => <Kpi key={key} label={copy.automation[key]} value={value} tone={tone} />)}
               </div>
               <div className="mt-4">
                 <Table scrollLabel={copy.automation.tableLabel}>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>{copy.common.status}</TableHead>
-                      <TableHead>{copy.automation.salesforceAccount}</TableHead>
-                      <TableHead>{copy.automation.xeroContact}</TableHead>
-                      <TableHead>{copy.automation.match}</TableHead>
-                      <TableHead>{copy.automation.reason}</TableHead>
-                    </TableRow>
-                  </TableHeader>
+                  <TableHeader><TableRow>{[copy.common.status, copy.automation.salesforceAccount, copy.automation.xeroContact, copy.automation.match, copy.automation.reason].map((label, index) => <TableHead key={index}>{label}</TableHead>)}</TableRow></TableHeader>
                   <TableBody>
                     {(autoRun?.rows || []).map((row) => (
                       <TableRow key={row.id}>
                         <TableCell><StatusBadgeText status={row.status} copy={copy} /></TableCell>
                         <TableCell>
                           <div className="font-medium">{row.salesforceName || copy.automation.noAccount}</div>
-                          <div className="mt-1 text-xs text-muted-foreground">{row.salesforceCompanyCode || copy.common.noClKey} · {copy.recordTypes[row.salesforceRecordType] || row.salesforceRecordType || copy.common.noType}</div>
+                          <div className={PORTAL_DETAIL_CLASS}>{row.salesforceCompanyCode || copy.common.noClKey} · {copy.recordTypes[row.salesforceRecordType] || row.salesforceRecordType || copy.common.noType}</div>
                         </TableCell>
                         <TableCell>{row.xeroContactName || row.xeroContactId || copy.automation.noXeroContact}</TableCell>
                         <TableCell>{row.matchField ? (copy.matchFields[row.matchField] || matchFieldLabels[row.matchField] || row.matchField) : copy.common.none}</TableCell>
@@ -664,7 +813,7 @@ export default function XeroPortal() {
 
           <TabsContent value="manual" className="space-y-4">
             <Suspense fallback={<StateBlock icon={Loader2} title={copy.manual.loadingTitle} description={copy.manual.loadingDescription} />}>
-              <XeroPortalManual language={language} onLanguageChange={setLanguage} />
+              <XeroPortalManual />
             </Suspense>
           </TabsContent>
         </Tabs>
@@ -675,11 +824,11 @@ export default function XeroPortal() {
 
 function ConnectionPanel({ title, rows, unavailable }) {
   return (
-    <section className="rounded-lg border border-border bg-card p-4">
+    <section className={PORTAL_CARD_CLASS}>
       <h2 className="text-sm font-semibold">{title}</h2>
       <dl className="mt-3 space-y-2">
         {rows.map(([label, value]) => (
-          <div key={label} className="grid grid-cols-[110px_1fr] gap-2 text-xs">
+          <div key={label} className="xp-connection-row">
             <dt className="text-muted-foreground">{label}</dt>
             <dd className="truncate font-medium" title={String(value || '')}>{value || unavailable}</dd>
           </div>
@@ -702,26 +851,26 @@ function Kpi({ label, value, tone = 'neutral', emptyLabel = '' }) {
   const hasValue = value !== null && value !== undefined && Number.isFinite(number);
   return (
     <div className={cn('rounded-lg border px-4 py-3', tones[tone] || tones.neutral)}>
-      <div className="text-xs font-semibold uppercase tracking-normal opacity-70">{label}</div>
+      <div className="xp-kpi-label">{label}</div>
       <div className={cn('mt-1 font-semibold', hasValue ? 'text-2xl' : 'text-sm')}>{hasValue ? number.toLocaleString() : emptyLabel}</div>
     </div>
   );
 }
 
-function UsageCache({ sources, copy, language }) {
+function UsageCache({ sources, copy }) {
   if (!sources?.length) return null;
   return (
-    <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+    <div className={PORTAL_CACHE_GRID_CLASS}>
       {sources.map((source) => (
-        <div key={source.source} className="rounded-lg border border-border bg-background/70 px-3 py-2">
+        <div key={source.source} className="xp-cache-card">
           <div className="flex items-center justify-between gap-2">
             <span className="truncate text-xs font-semibold">{source.label}</span>
             <StatusBadgeText status={source.status} copy={copy} />
           </div>
-          <div className="mt-1 text-xs text-muted-foreground">
-            {source.recordsScanned?.toLocaleString?.(copy.locale) || 0} {language === 'zh-Hant' ? '筆紀錄' : 'records'} · {source.contactCount?.toLocaleString?.(copy.locale) || 0} {language === 'zh-Hant' ? '個聯絡人' : 'contacts'}
+          <div className={PORTAL_DETAIL_CLASS}>
+            {source.recordsScanned?.toLocaleString?.(copy.locale) || 0} records · {source.contactCount?.toLocaleString?.(copy.locale) || 0} contacts
           </div>
-          <div className="mt-1 text-[11px] text-muted-foreground">{formatDateTime(source.scannedAt, language)}</div>
+          <div className="mt-1 text-[11px] text-muted-foreground">{formatDateTime(source.scannedAt)}</div>
         </div>
       ))}
     </div>
@@ -730,10 +879,10 @@ function UsageCache({ sources, copy, language }) {
 
 function StatusLegend({ labels, copy }) {
   return (
-    <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+    <div className={PORTAL_CACHE_GRID_CLASS}>
       {Object.entries(labels || {}).map(([status, description]) => (
-        <div key={status} className="rounded-lg border border-border bg-background/70 px-3 py-2 text-xs">
-          <div className="font-semibold text-foreground">{copy.statuses[status] || status.replaceAll('-', ' ')}</div>
+        <div key={status} className="xp-legend-card">
+          <div className={PORTAL_EMPHASIS_CLASS}>{copy.statuses[status] || status.replaceAll('-', ' ')}</div>
           <div className="mt-1 text-muted-foreground">{copy.statusDescriptions[status] || description}</div>
         </div>
       ))}
@@ -744,7 +893,7 @@ function StatusLegend({ labels, copy }) {
 function Field({ label, value, onChange, type = 'text' }) {
   return (
     <label className="block">
-      <span className="text-xs font-semibold text-muted-foreground">{label}</span>
+      <span className={PORTAL_FIELD_LABEL_CLASS}>{label}</span>
       <Input type={type} value={value || ''} onChange={(event) => onChange(event.target.value)} />
     </label>
   );
@@ -753,7 +902,7 @@ function Field({ label, value, onChange, type = 'text' }) {
 function NativeSelect({ label, value, onChange, options }) {
   return (
     <label className="block">
-      {label ? <span className="text-xs font-semibold text-muted-foreground">{label}</span> : null}
+      {label ? <span className={PORTAL_FIELD_LABEL_CLASS}>{label}</span> : null}
       <select
         value={value}
         onChange={(event) => onChange(event.target.value)}
@@ -783,7 +932,7 @@ function StatusBadge({ ok, trueLabel, falseLabel, tone = ok ? 'emerald' : 'rose'
   return <Badge variant="outline" className={className}>{ok ? trueLabel : falseLabel}</Badge>;
 }
 
-function StatusBadgeText({ status, copy }) {
+function StatusBadgeText({ status, copy, wrap = false }) {
   const value = String(status || 'unknown');
   const tone = {
     eligible: 'border-sky-200 bg-sky-50 text-sky-700',
@@ -800,7 +949,7 @@ function StatusBadgeText({ status, copy }) {
     'already-exists': 'border-slate-200 bg-slate-50 text-slate-700',
     'not-selected': 'border-slate-200 bg-slate-50 text-slate-700',
   }[value] || 'border-slate-200 bg-slate-50 text-slate-700';
-  return <Badge variant="outline" className={cn('whitespace-nowrap', tone)}>{copy?.statuses?.[value] || value.replaceAll('-', ' ')}</Badge>;
+  return <Badge variant="outline" className={cn(wrap ? 'min-w-0 max-w-full whitespace-normal [overflow-wrap:anywhere]' : 'whitespace-nowrap', tone)}>{copy?.statuses?.[value] || value.replaceAll('-', ' ')}</Badge>;
 }
 
 function ReceiptStatusBadge({ status, copy }) {
@@ -817,7 +966,7 @@ function ReceiptStatusBadge({ status, copy }) {
   );
 }
 
-function ActionBadge({ action, copy }) {
+function ActionBadge({ action, copy, wrap = false }) {
   const icon = {
     archive: Archive,
     rename: RefreshCw,
@@ -826,34 +975,82 @@ function ActionBadge({ action, copy }) {
   }[action] || ShieldCheck;
   const Icon = icon;
   return (
-    <Badge variant="outline" className="whitespace-nowrap">
-      <Icon className="mr-1 h-3 w-3" />
+    <Badge variant="outline" className={wrap ? 'min-w-0 max-w-full whitespace-normal px-1.5 [overflow-wrap:anywhere]' : 'whitespace-nowrap'}>
+      <Icon className="mr-1 h-3 w-3 shrink-0" />
       {copy?.actions?.[action] || String(action || copy?.common?.unknown || 'unknown')}
     </Badge>
   );
+}
+
+function XeroContactIdentity({ row, copy }) {
+  return <>
+    <div className="font-medium">{row.xeroContactName || copy.contacts.noXeroMatch}</div>
+    <div className={PORTAL_DETAIL_CLASS}>
+      {row.xeroContactNumber || copy.contacts.noContactNumber} · {row.xeroAccountNumber || copy.contacts.noAccountNumber} · {row.xeroContactStatus || copy.contacts.noStatus}
+    </div>
+  </>;
+}
+
+function SalesforceContactIdentity({ row, copy }) {
+  return <>
+    <div className="font-medium">{row.salesforceName || copy.contacts.noSalesforceMatch}</div>
+    <div className={PORTAL_DETAIL_CLASS}>
+      {row.salesforceCompanyCode || copy.common.noClKey} · {copy.recordTypes[row.salesforceRecordType] || row.salesforceRecordType || copy.common.noType}
+    </div>
+  </>;
+}
+
+function ContactReason({ row, copy, reasonLabels }) {
+  return <>
+    <div className="font-medium">{copy.reasons[row.reason] || reasonLabels[row.reason] || row.reason || copy.common.noIssue}</div>
+    {row.message ? <div className={PORTAL_DETAIL_CLASS}>{row.message}</div> : null}
+  </>;
 }
 
 function canApplyRow(row) {
   return row?.status === 'eligible' && (row.action === 'rename' || row.action === 'archive') && row.xeroContactId;
 }
 
-function usageText(usage = [], copy) {
-  if (!usage.length) return copy.contacts.noReadableUsage;
-  return usage.map((item) => `${copy.usageSources[item.source] || item.label || item.source}: ${item.records || 0}`).join('; ');
+const CONTACT_IDENTITY_REASONS = new Set(['used-unmatched-xero-contact', 'unused-unmatched-xero-contact', 'nonzero-balance', 'verification-stale', 'verified-xero-only']);
+
+function canReviewContactIdentity(row) {
+  return Boolean(row?.xeroContactId && !row.salesforceAccountId && row.identityFingerprint
+    && CONTACT_IDENTITY_REASONS.has(row.reason) && String(row.xeroContactStatus || '').toUpperCase() === 'ACTIVE');
 }
 
-function summarizeApply(summary, language) {
-  return language === 'zh-Hant'
-    ? `已重新命名 ${summary.updated || 0} 個、已封存 ${summary.archived || 0} 個、失敗 ${summary.failed || 0} 個。`
-    : `${summary.updated || 0} renamed, ${summary.archived || 0} archived, ${summary.failed || 0} failed.`;
+function canRepairRow(row) {
+  return row?.reason === 'missing-xero-contact' && row.action === 'exception' && row.status === 'blocked'
+    && Boolean(row.salesforceAccountId) && !row.xeroContactId;
 }
 
-function formatDateTime(value, language = 'en') {
-  const unavailable = language === 'zh-Hant' ? '不可用' : 'Not available';
-  if (!value) return unavailable;
+function ContactUsage({ usage = [], copy }) {
+  if (!usage?.length) return copy.contacts.noReadableUsage;
+  const formatCount = (value) => Number(value || 0).toLocaleString(copy.locale);
+  return <ul className="space-y-2">
+    {usage.map((item, index) => {
+      const scanned = Array.isArray(item.yearCounts) && typeof item.undatedRecords === 'number';
+      return <li key={`${item.source || item.label || 'usage'}-${index}`}>
+        <div className="font-medium">{copy.contacts.usageSourceTotal(copy.usageSources[item.source] || item.label || item.source, formatCount(item.records))}</div>
+        {scanned ? (
+          <div className="xp-usage-years">
+            {item.yearCounts.map(({ year, records }) => <span key={year}>{year}: {formatCount(records)}</span>)}
+            {item.undatedRecords > 0 ? <span>{copy.contacts.yearUnavailable(formatCount(item.undatedRecords))}</span> : null}
+          </div>
+        ) : <div className="mt-0.5 text-xs text-muted-foreground">{copy.contacts.yearBreakdownPending}</div>}
+      </li>;
+    })}
+  </ul>;
+}
+
+function summarizeApply(summary) {
+  return `${summary.updated || 0} renamed, ${summary.archived || 0} archived, ${summary.failed || 0} failed.`;
+}
+
+function formatDateTime(value) {
+  if (!value) return 'Not available';
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return unavailable;
-  return new Intl.DateTimeFormat(language === 'zh-Hant' ? 'zh-HK' : 'en-GB', {
+  if (Number.isNaN(date.getTime())) return 'Not available';
+  return new Intl.DateTimeFormat('en-GB', {
     day: '2-digit',
     month: 'short',
     year: 'numeric',
@@ -879,20 +1076,6 @@ function hostname(value, fallback = 'Not configured') {
 
 function shortId(value) {
   return String(value || '').slice(0, 8);
-}
-
-async function fileToPayload(file) {
-  const dataUrl = await new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ''));
-    reader.onerror = () => reject(reader.error || new Error('File read failed'));
-    reader.readAsDataURL(file);
-  });
-  return {
-    base64: dataUrl.replace(/^data:[^;]+;base64,/i, ''),
-    fileName: file.name,
-    fileType: file.type || 'application/octet-stream',
-  };
 }
 
 function downloadJson(value, filename) {
@@ -939,4 +1122,9 @@ function downloadBlob(blob, filename) {
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
+}
+
+function ActionIcon({ busy, icon: Icon }) {
+  const Glyph = busy ? Loader2 : Icon;
+  return <Glyph className={cn('mr-2 h-4 w-4', busy && 'animate-spin')} />;
 }

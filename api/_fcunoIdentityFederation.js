@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
+import { requireDeploymentMutationAllowed } from './_deploymentReadOnly.js';
 import { denyCiWithoutFederation, readOnlyCiProfile, validateCiFederation } from './_readOnlyCiAccess.js';
 
 const PROVIDER = 'fcuno';
@@ -379,6 +380,7 @@ export async function enforceFcunoFederatedAccess({ client, authUser, profile = 
   }
   const readOnlyCi = validateCiFederation({ authUser, profile, link, issuer: config.issuer, subject, env });
   if (!link.auth_user_id) {
+    requireDeploymentMutationAllowed(true, env);
     const { data: claimed, error } = await client.from('fcos_external_identity_links')
       .update({ auth_user_id: authUser.id, updated_at: new Date().toISOString() })
       .eq('id', link.id).is('auth_user_id', null).select().maybeSingle();
@@ -393,7 +395,10 @@ export async function enforceFcunoFederatedAccess({ client, authUser, profile = 
   if (link.revoked_before && (!issuedAt || issuedAt <= Date.parse(link.revoked_before))) {
     throw fcunoFederationError('This FCOS session was revoked. Sign in again.', 401, 'FCUNO_IDENTITY_SESSION_REVOKED');
   }
-  if (!profile) await provisionZeroPermissionProfile(client, authUser, link);
+  if (!profile) {
+    requireDeploymentMutationAllowed(true, env);
+    await provisionZeroPermissionProfile(client, authUser, link);
+  }
   const { data: resolvedProfile, error: profileError } = await client.from('user_profiles')
     .select('id,email,full_name,user_type,active,use_type_defaults').eq('id', authUser.id).maybeSingle();
   if (profileError) throw profileError;

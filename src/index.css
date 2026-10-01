@@ -2,6 +2,22 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Notification styles stay in CSS instead of repeated render strings. */
+.app-work-notification-trigger { @apply relative h-8 w-8 shrink-0 text-muted-foreground hover:bg-accent hover:text-foreground; }
+.app-work-notification-count { @apply absolute -right-0.5 -top-0.5 flex min-h-4 min-w-4 items-center justify-center rounded-full bg-blue-600 px-1 text-[9px] font-bold text-white; }
+.app-work-notification-caption { @apply flex min-w-0 items-center justify-between gap-3 border-b border-border px-4 py-3; }
+.app-work-notification-warning { @apply flex gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-950 dark:border-amber-700/60 dark:bg-amber-950/45 dark:text-amber-100; }
+.app-work-notification-row { @apply flex items-start gap-1 px-2 py-1.5 transition-colors hover:bg-muted/60; }
+.app-work-notification-open { @apply flex min-w-0 flex-1 items-start gap-3 px-2 py-1.5 text-left; }
+.app-work-notification-badge { @apply rounded px-1.5 py-0.5 text-[10px] font-medium ring-1 ring-inset; }
+.app-work-notification-badge-system { @apply bg-red-50 text-red-900 ring-red-700/10 dark:bg-red-950/50 dark:text-red-200 dark:ring-red-500/25; }
+.app-work-notification-badge-email { @apply bg-amber-50 text-amber-900 ring-amber-700/10 dark:bg-amber-950/50 dark:text-amber-200 dark:ring-amber-500/25; }
+.app-work-notification-badge-improvements { @apply bg-cyan-50 text-cyan-900 ring-cyan-700/10 dark:bg-cyan-950/50 dark:text-cyan-200 dark:ring-cyan-500/25; }
+.app-work-notification-badge-charges { @apply bg-violet-50 text-violet-900 ring-violet-700/10 dark:bg-violet-950/50 dark:text-violet-200 dark:ring-violet-500/25; }
+.app-work-notification-badge-markets { @apply bg-teal-50 text-teal-900 ring-teal-700/10 dark:bg-teal-950/50 dark:text-teal-200 dark:ring-teal-500/25; }
+.app-work-notification-badge-growth { @apply bg-emerald-50 text-emerald-800 ring-emerald-700/10 dark:bg-emerald-950/50 dark:text-emerald-200 dark:ring-emerald-500/25; }
+.app-work-notification-badge-default { @apply bg-blue-50 text-blue-800 ring-blue-700/10 dark:bg-blue-950/50 dark:text-blue-200 dark:ring-blue-500/25; }
+
 @layer base {
   :root {
     --background: 220 20% 97%;
@@ -749,6 +765,24 @@
   -webkit-backdrop-filter: none;
 }
 
+/* Finance review follows its available workspace width, including the sidebar. */
+.finance-batch-review { container-type: inline-size; }
+.finance-batch-review__wide { display: none; }
+.finance-batch-review__compact { display: block; }
+@container (min-width: 1100px) {
+  .finance-batch-review__wide { display: block; }
+  .finance-batch-review__compact { display: none; }
+}
+
+/* Contact review keeps Reason in view when the available workspace is narrow. */
+.xero-contacts-review { container-type: inline-size; }
+.xero-contacts-review__wide { display: none; }
+.xero-contacts-review__compact { display: block; }
+@container (min-width: 1100px) {
+  .xero-contacts-review__wide { display: block; }
+  .xero-contacts-review__compact { display: none; }
+}
+
 /* Collaboration, tools, and administration workspaces */
 .workspace-collaboration,
 .workspace-tools,
@@ -855,5 +889,50 @@
 
   .account-insight-window {
     border-radius: var(--radius-window) var(--radius-window) 0 0;
+  }
+}
+
+/* Popups and their retained history share the workspace glass treatment. */
+@layer components {
+  .app-notification-popups {
+    @apply pointer-events-none fixed right-0 z-[1000] flex w-full flex-col gap-2 overflow-y-auto p-4 sm:max-w-[420px];
+    bottom: calc(4.5rem + env(safe-area-inset-bottom));
+    max-height: calc(100dvh - 6rem);
+  }
+  .app-notification-popups:empty, .app-notification-popups[hidden] { display: none; }
+  .app-notification-popup {
+    @apply glass-floating pointer-events-auto relative flex w-full shrink-0 items-center justify-between space-x-4 overflow-hidden rounded-[var(--radius-panel)] border bg-background p-4 pr-9 text-foreground shadow-[var(--shadow-window)];
+  }
+  .app-notification-popup.destructive { @apply border-red-300 bg-red-50 text-red-950 dark:border-red-700 dark:bg-red-950 dark:text-red-100; }
+  .notification-history-panel {
+    @apply flex max-w-sm flex-col overflow-hidden;
+    width: calc(100vw - 24px) !important;
+    padding: 0 !important;
+    max-height: calc(100dvh - 24px);
+  }
+  .notification-history-header { @apply flex items-start justify-between gap-3 border-b border-border px-4 py-3; }
+  .notification-history-scroll { @apply min-h-0 overflow-y-auto overscroll-contain p-3; max-height: min(60dvh,26rem); }
+  .notification-history-footer { @apply border-t border-border px-4 py-2 text-[11px] text-muted-foreground; }
+  .notification-entry { @apply rounded-lg border border-border bg-card/70 p-3; overflow-wrap: anywhere; }
+  .notification-entry[data-error] { @apply border-red-200 bg-red-50/80 dark:border-red-800/70 dark:bg-red-950/35; }
+  .notification-entry-title { @apply whitespace-pre-wrap text-sm font-semibold leading-5 text-foreground; }
+  .notification-entry-description { @apply mt-1 whitespace-pre-wrap text-xs leading-5 text-muted-foreground; }
+  .notification-entry time { @apply mt-1.5 block text-[11px] text-muted-foreground; }
+  .notification-error { @apply ml-2 inline-flex items-center gap-1 rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-800 dark:bg-red-900/70 dark:text-red-100; }
+}
+
+@layer components {
+  .notification-bolt { @apply relative flex h-6 w-6 items-center justify-center rounded-full bg-amber-500 text-white shadow-sm; }
+  .notification-count { @apply absolute -right-2 -top-2 flex min-h-4 min-w-4 items-center justify-center rounded-full bg-blue-600 px-1 text-[9px] font-bold leading-none text-white ring-2 ring-background; }
+  .notification-empty { @apply flex min-h-40 flex-col items-center justify-center px-4 py-8 text-center; }
+  .notification-popup-close { @apply pointer-events-auto absolute right-2 top-2 z-10 rounded-md p-1 text-foreground/70 opacity-100 transition-colors hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring ; }
+  .destructive .notification-popup-close { @apply text-red-800 hover:text-red-950 focus:ring-red-500 dark:text-red-100 dark:hover:text-white; }
+}
+
+@layer components {
+  .app-notification-history-trigger {
+    @apply fixed z-40 h-9 w-9 shrink-0 p-0;
+    bottom: calc(1rem + env(safe-area-inset-bottom, 0px));
+    right: calc(1rem + env(safe-area-inset-right, 0px));
   }
 }
