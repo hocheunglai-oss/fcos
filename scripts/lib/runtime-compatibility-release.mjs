@@ -53,6 +53,7 @@ export function runtimeCompatibilityControlRevision(trustedCwd, candidateCwd) {
     '.github/workflows/normal-role-release.yml', 'scripts/normal-role-release.mjs', 'playwright.config.js',
     '.github/workflows/runtime-compatibility-normal-role.yml', 'scripts/runtime-compatibility-normal-role.mjs', 'scripts/verify-e2e-candidate.mjs',
     'scripts/lib/runtime-compatibility-observation.mjs', 'scripts/lib/normal-role-read-requests.mjs',
+    'scripts/lib/normal-role-verification-transport.mjs',
     'package.json', 'package-lock.json', 'AGENTS.md', '.codex/config.toml', '.codex/setup.mjs',
     '.codex/control-validation.mjs', '.codex/control-policy.json', '.codex/README.md'];
   const candidate = ['config/fcosConnections.js', 'config/fcosCiIdentity.js', 'vercel.json', 'package.json', 'package-lock.json',

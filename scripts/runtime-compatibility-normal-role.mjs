@@ -5,6 +5,7 @@ import { chromium } from '@playwright/test';
 import { FCOS_READ_ONLY_CI } from '../config/fcosCiIdentity.js';
 import { fcosConnectionIdentifier } from '../config/fcosConnections.js';
 import { normalRoleReadRequest } from './lib/normal-role-read-requests.mjs';
+import { createNormalRoleVerificationRoute } from './lib/normal-role-verification-transport.mjs';
 import { verifyCompatibilityObservationSources } from './lib/runtime-compatibility-observation.mjs';
 import { canonicalFcosE2eCandidateUrl, resolveFcosE2eCandidate } from './verify-e2e-candidate.mjs';
 import { collectRuntimeObservation } from './collect-preview-parity.mjs';
@@ -119,19 +120,8 @@ export async function verifyRuntimeCompatibilityNormalRole({ env = process.env, 
     browser = await chromium.launch({ headless: true });
     context = await browser.newContext({ storageState: state, viewport: { width: 1440, height: 1000 }, serviceWorkers: 'block' });
     let blockedMutations = 0;
-    await context.route('**/*', async route => {
-      const request = route.request();
-      let body;
-      try { body = request.postDataJSON(); } catch { /* Invalid bodies have no read authority. */ }
-      if (!compatibilityNormalRequestAllowed({ url: request.url(), method: request.method(), body }, url)) {
-        if (!['GET', 'HEAD'].includes(request.method())) blockedMutations += 1;
-        await route.abort(); return;
-      }
-      const headers = { ...request.headers() };
-      delete headers['x-vercel-protection-bypass'];
-      if (new URL(request.url()).origin === url && env.FCOS_E2E_VERCEL_BYPASS) headers['x-vercel-protection-bypass'] = env.FCOS_E2E_VERCEL_BYPASS;
-      await route.continue({ headers });
-    });
+    await context.route('**/*', createNormalRoleVerificationRoute({ origin: url, protectionBypass: env.FCOS_E2E_VERCEL_BYPASS,
+      requestAllowed: compatibilityNormalRequestAllowed, onBlockedMutation: () => { blockedMutations += 1; } }));
     for (const spec of COMPATIBILITY_NORMAL_MODULES) {
       if (identity.moduleAccess[spec.module] !== true) continue;
       const page = await context.newPage(), responses = [], failures = [];

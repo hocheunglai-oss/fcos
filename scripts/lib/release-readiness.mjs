@@ -19,7 +19,7 @@ export function releaseConfigurationRevision(cwd) {
     'vercel.json', 'package.json', 'package-lock.json', 'AGENTS.md', '.codex/config.toml', '.codex/setup.mjs',
     '.codex/control-validation.mjs', '.codex/control-policy.json', '.codex/README.md',
     '.github/workflows/quality.yml', '.github/workflows/authenticated-release.yml', '.github/workflows/production-release.yml',
-    '.github/workflows/normal-role-release.yml', 'scripts/normal-role-release.mjs'];
+    '.github/workflows/normal-role-release.yml', 'scripts/normal-role-release.mjs', 'scripts/lib/normal-role-verification-transport.mjs'];
   const digest = createHash('sha256').update('fcos-release-configuration-v1\0');
   for (const file of files) {
     digest.update(`${file}\0`);
