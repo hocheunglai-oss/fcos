@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { assertDocumentCorrectionPreviewBounds, buildDocumentCorrectionScope, collectDocumentCorrectionInvoices,
   compactDocumentCorrectionPreview, loadDocumentCorrectionInvoicePages } from '../api/_xeroDocumentCorrectionScope.js';
+import { buildDocumentFieldProjection } from '../api/_xeroDocumentFieldPolicy.js';
+import { buildDocumentCorrectionItems } from '../api/_xeroDocumentCorrections.js';
 
 const uuid = (value) => `00000000-0000-4000-8000-${String(value).padStart(12, '0')}`;
 const buyer = (id = 'buyer-one', date = '2026-01-01') => ({ Id: id, Name: `SALE-${id}`, STEM__c: 'stem-one',
@@ -36,6 +38,37 @@ test('a conflicting historical linked buyer cannot disappear from a current bill
   const plan = buildDocumentCorrectionScope(sf, stored());
   assert.deepEqual(plan.scope, { cutoff: '2026-01-01', totalSourceCount: 3, excludedLegacyCount: 1 });
   assert.deepEqual(plan.invoiceNumbers, ['SALE-buyer-one'], 'Conflicting bill remains visible but never supplies a write candidate query');
+});
+
+test('a bill with verified conflicting pre-cutoff linked deliveries is preserved and omitted without rewriting mapping evidence', () => {
+  const sf = snapshot(); sf.documentFieldPolicyVersion = 'document_field_correction_v1';
+  sf.buyers = [buyer('buyer-one', '2025-04-22'), buyer('buyer-two', '2025-04-23')];
+  sf.buyers[0].Invoice_Date__c = '2025-04-22'; sf.buyers[1].Invoice_Date__c = '2025-04-23';
+  sf.lines = [{ Id: 'line-two', Supplier_Invoice__c: 'supplier-one', Buyer_Invoice__c: 'buyer-two' }];
+  const mapping = { id: uuid(100), salesforce_object: 'Supplier_Invoice__c', salesforce_id: 'supplier-one',
+    xero_document_id: uuid(2), protected_legacy: true, retained_differences: { untouchedReceipt: { fingerprint: 'original' } } };
+  const controls = { documentMappings: [mapping], productMappings: [] };
+  const xero = { rawInvoices: [target(2, 'UNCHANGED-BILL', '2025-04-24', 'ACCPAY')], documents: [], inactiveDocuments: [], contacts: [] };
+  const before = structuredClone({ sf, controls, xero });
+  const plan = buildDocumentCorrectionScope(sf, controls);
+  assert.deepEqual(plan.scope, { cutoff: '2026-01-01', totalSourceCount: 3, excludedLegacyCount: 3 });
+  assert.equal(plan.readCurrentDates, false); assert.deepEqual(plan.invoiceIds, []); assert.deepEqual(plan.invoiceNumbers, []);
+  const items = buildDocumentCorrectionItems({ salesforce: sf, stored: controls, xero });
+  const bill = items.find((item) => item.salesforceId === 'supplier-one');
+  assert.equal(bill.outcome, 'legacy_preserved'); assert.equal(bill.projection.fields.Date, null);
+  assert.deepEqual(bill.projection.blockerCodes, ['DOCUMENT_FIELD_DELIVERY_DATE_CONFLICT', 'DOCUMENT_FIELD_INVOICE_DATE_CONFLICT']);
+  assert.deepEqual(compactDocumentCorrectionPreview(items, plan.scope), []);
+  assert.deepEqual({ sf, controls, xero }, before, 'Legacy scope never changes a transaction, source, mapping or historical receipt');
+  for (const dates of [['2025-12-31', '2026-01-01'], ['2026-04-22', '2026-04-23'], ['2025-04-22', null]]) {
+    const changed = structuredClone(sf); changed.buyers.forEach((record, index) => { record.Delivery_Date__c = dates[index]; });
+    const projection = buildDocumentFieldProjection({ record: changed.suppliers[0], direction: 'supplier', ...changed });
+    assert.equal(projection.scope, 'unavailable');
+    const changedPlan = buildDocumentCorrectionScope(changed, controls);
+    const changedItems = buildDocumentCorrectionItems({ salesforce: changed, stored: controls, xero });
+    const visible = compactDocumentCorrectionPreview(changedItems, changedPlan.scope);
+    const heldBill = visible.find((item) => item.salesforceId === 'supplier-one');
+    assert.equal(heldBill.outcome, 'blocked'); assert.equal(heldBill.projection.fields.Date, null);
+  }
 });
 
 test('exact mappings hydrate cross-date identities; sales still require global numbers and mapped bills do not require unique references', () => {

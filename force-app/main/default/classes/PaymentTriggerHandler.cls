@@ -13,11 +13,9 @@ public class PaymentTriggerHandler {
         if(!stemIds.isEmpty()){
             List<STEM__c> stems = [SELECT Id, Payment_Term__c, Delivery_Date__c, Invoice_Due_Date__c 
                 FROM STEM__c 
-                WHERE Id IN: stemIds AND Partial_CIA__c = TRUE AND Delivery_Date__c != null];
+                WHERE Id IN: stemIds AND Partial_CIA__c = TRUE AND Delivery_Date__c != null AND Payment_Term__c != 'CIA'];
             for(STEM__c stem: stems){
-                stem.Invoice_Due_Date__c = stem.Payment_Term__c == 'CIA' 
-                    ? stem.Delivery_Date__c
-                    : stem.Delivery_Date__c.addDays(Integer.valueOf(stem.Payment_Term__c) - 1);
+                stem.Invoice_Due_Date__c = stem.Delivery_Date__c.addDays(Integer.valueOf(stem.Payment_Term__c) - 1);
             }
             ContextManager.avoidStemRecursion = true;
             update stems;

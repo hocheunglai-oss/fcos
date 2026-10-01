@@ -560,6 +560,93 @@ test('curated unsupported-number evidence holds keep their specific safe reason 
   assert.equal(f.tables.xero_financial_audit_events.at(-1).outcome, 'failed');
 });
 
+function accountingBucketCorrection({ header = 596.30,
+  sourceLines = [{ Quantity__c: 1192.59, Cost_Per_Unit__c: 0.5, Total_Cost__c: 596.295 }],
+  targetLines = [{ Quantity: 1, UnitAmount: 596.30, LineAmount: 596.30 }], configure = () => {} } = {}) {
+  const f = fixture(); const sourceTemplate = f.salesforce.lines[0]; const targetTemplate = f.invoices[1].LineItems[0];
+  f.salesforce.suppliers[0].Invoice_Amount__c = header;
+  f.salesforce.lines = sourceLines.map((line, index) => ({ ...sourceTemplate, Id: `a02000000000${String(index + 1).padStart(3, '0')}AAA`, ...line }));
+  Object.assign(f.invoices[1], { SubTotal: header, Total: header, AmountDue: header });
+  f.invoices[1].LineItems = targetLines.map((line, index) => ({ ...targetTemplate, LineItemID: `bucket-line-${index}`, ...line }));
+  configure(f);
+  const before = structuredClone(f.invoices[1]);
+  const item = buildDocumentCorrectionItems({ salesforce: f.salesforce, xero: f.xero(), stored: f.stored })
+    .find((row) => row.salesforceId === supplierId);
+  assert.deepEqual(f.invoices[1], before, 'Bucket review must never change provider accounting values');
+  return item;
+}
+
+test('decimal correction buckets accept a 596.295 source line matching the rounded 596.30 Xero line', () => {
+  const item = accountingBucketCorrection();
+  assert.deepEqual(item.source.blockers, []);
+  assert.deepEqual(item.projection.blockers, []);
+  assert.equal(item.source.lines[0].quantity, 1192.59);
+  assert.equal(item.source.lines[0].unitAmount, 0.5);
+  assert.equal(item.outcome, 'eligible', item.reason);
+  assert.ok(item.changes.every((change) => !/Amount|Quantity|Tax|Account/.test(change.field)));
+});
+
+test('decimal correction buckets retain a true one-cent line difference even when document headers match', () => {
+  const item = accountingBucketCorrection({ targetLines: [{ Quantity: 1, UnitAmount: 596.29, LineAmount: 596.29 }] });
+  assert.deepEqual(item.source.blockers, []);
+  assert.equal(item.outcome, 'blocked');
+  assert.match(item.reason, /accounting-line totals differ/);
+  assert.deepEqual(item.changes, []);
+});
+
+test('decimal correction buckets sum separately rounded source lines against an aggregate Xero line', () => {
+  const item = accountingBucketCorrection({ header: 1192.60,
+    sourceLines: Array.from({ length: 2 }, () => ({ Quantity__c: 1192.59, Cost_Per_Unit__c: 0.5, Total_Cost__c: 596.295 })),
+    targetLines: [{ Quantity: 1, UnitAmount: 1192.60, LineAmount: 1192.60 }] });
+  assert.equal(item.outcome, 'eligible', item.reason);
+  const tiny = accountingBucketCorrection({ header: 0.02,
+    sourceLines: Array.from({ length: 2 }, () => ({ Quantity__c: 1, Cost_Per_Unit__c: 0.005, Total_Cost__c: 0.005 })),
+    targetLines: [{ Quantity: 1, UnitAmount: 0.02, LineAmount: 0.02 }] });
+  assert.equal(tiny.outcome, 'eligible', tiny.reason);
+});
+
+test('decimal correction buckets preserve signed ordinary adjustments and hold a changed sign', () => {
+  const input = { header: 10.01,
+    sourceLines: [{ Quantity__c: 1, Cost_Per_Unit__c: -1.005, Total_Cost__c: -1.005 },
+      { Quantity__c: 1, Cost_Per_Unit__c: 11.015, Total_Cost__c: 11.015 }],
+    targetLines: [{ Quantity: 1, UnitAmount: -1.01, LineAmount: -1.01 },
+      { Quantity: 1, UnitAmount: 11.02, LineAmount: 11.02 }] };
+  assert.equal(accountingBucketCorrection(input).outcome, 'eligible');
+  const changed = accountingBucketCorrection({ ...input, targetLines: [{ Quantity: 1, UnitAmount: 1.01, LineAmount: 1.01 }, input.targetLines[1]] });
+  assert.equal(changed.outcome, 'blocked');
+  assert.match(changed.reason, /accounting-line totals differ/);
+});
+
+for (const [label, value] of [['null', null], ['missing', undefined], ['boolean', true], ['NaN', NaN], ['infinite', Infinity],
+  ['text', 'invalid'], ['excess precision', '596.3000000000001'], ['out of bounds', '1000000000000']]) {
+  test(`decimal correction buckets fail closed for ${label} Xero line amounts`, () => {
+    const item = accountingBucketCorrection({ targetLines: [{ Quantity: 1, UnitAmount: 596.30, LineAmount: value }] });
+    assert.deepEqual(item.source.blockers, []);
+    assert.equal(item.outcome, 'blocked');
+    assert.match(item.reason, /accounting-line totals differ/);
+    assert.deepEqual(item.changes, []);
+  });
+}
+
+test('decimal correction buckets fail closed when an aggregate exceeds the shared cent bounds', () => {
+  const item = accountingBucketCorrection({ targetLines: Array.from({ length: 2 }, () => ({ Quantity: 1, UnitAmount: 500000000000, LineAmount: 500000000000 })) });
+  assert.equal(item.outcome, 'blocked');
+  assert.match(item.reason, /accounting-line totals differ/);
+});
+
+for (const [label, change] of [
+  ['account difference', (line) => { line.AccountCode = '301'; }],
+  ['tax difference', (line) => { line.TaxType = 'INPUT'; }],
+  ['tax amount', (line) => { line.TaxAmount = 0.01; }],
+  ['discount', (line) => { line.DiscountRate = 1; }],
+  ['missing account', (line) => { delete line.AccountCode; }],
+  ['missing tax type', (line) => { delete line.TaxType; }],
+]) test(`decimal correction buckets preserve the hold for ${label}`, () => {
+  const item = accountingBucketCorrection({ configure(f) { change(f.invoices[1].LineItems[0]); } });
+  assert.equal(item.outcome, 'blocked');
+  assert.match(item.reason, /accounting-line totals differ/);
+});
+
 test('four-decimal supplier unit prices are preserved through scoped preview, exact reads, POST and confirmed readback', async () => {
   const f = fixture(); f.salesforce.suppliers[0].Invoice_Amount__c = 100.12;
   Object.assign(f.salesforce.lines[0], { Cost_Per_Unit__c: 100.1234, Total_Cost__c: 100.12 });

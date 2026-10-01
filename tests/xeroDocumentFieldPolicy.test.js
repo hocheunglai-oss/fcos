@@ -99,6 +99,51 @@ test('multiple linked buyers require agreement on both delivery and invoice date
   assert.equal(issue.scope, 'current'); assert.ok(issue.blockerCodes.includes('DOCUMENT_FIELD_INVOICE_DATE_CONFLICT'));
 });
 
+test('conflicting verified linked deliveries wholly before cutoff are legacy without choosing an update date', () => {
+  const buyers = [buyer({ Delivery_Date__c: '2025-04-22', Invoice_Date__c: '2025-04-22' }),
+    buyer({ Id: 'buyer-2', Delivery_Date__c: '2025-04-23', Invoice_Date__c: '2025-04-23' })];
+  const lines = buyers.map((row, index) => ({ Id: `line-${index}`, Supplier_Invoice__c: 'supplier-1', Buyer_Invoice__c: row.Id }));
+  const extras = [{ Id: 'repeated-buyer-link', Supplier_Invoice__c: 'supplier-1', Buyer_Invoice__c: 'buyer-1' }];
+  const projection = supplier({ buyers, lines, extras });
+  assert.equal(projection.scope, 'legacy'); assert.equal(projection.fields.Date, null); assert.equal(projection.fields.Description, null);
+  assert.deepEqual(projection.blockerCodes, ['DOCUMENT_FIELD_DELIVERY_DATE_CONFLICT', 'DOCUMENT_FIELD_INVOICE_DATE_CONFLICT']);
+  assert.equal(projection.evidence.buyers.length, 2, 'Repeated child links retain exactly resolved buyer identities');
+  assert.equal(projection.evidence.links.length, 3); assert.equal(projection.evidence.resolution, 'linked_buyers');
+  assert.equal(projection.fingerprint, supplier({ buyers: [...buyers].reverse(), lines: [...lines].reverse(), extras }).fingerprint);
+  const input = correction({ direction: 'supplier', projection, rawXeroInvoice: raw({ Type: 'ACCPAY' }) });
+  assert.equal(evaluateDocumentFieldCorrection(input).eligible, false);
+  assert.throws(() => buildDocumentFieldCorrectionPayload(input), { code: 'XERO_DOCUMENT_FIELD_CORRECTION_HELD' });
+  assert.deepEqual(projectAccountingPayload(input.rawXeroInvoice, projection), input.rawXeroInvoice);
+  const sameIssueDate = supplier({ buyers: buyers.map((row) => ({ ...row, Invoice_Date__c: '2025-04-24' })), lines });
+  assert.equal(sameIssueDate.scope, 'legacy'); assert.equal(sameIssueDate.fields.Date, null);
+  assert.deepEqual(sameIssueDate.blockerCodes, ['DOCUMENT_FIELD_DELIVERY_DATE_CONFLICT']);
+});
+
+test('legacy conflict exclusion requires complete active same-STEM buyer evidence and exclusively pre-cutoff dates', () => {
+  const buyers = [buyer({ Delivery_Date__c: '2025-04-22' }), buyer({ Id: 'buyer-2', Delivery_Date__c: '2025-04-23' })];
+  const lines = buyers.map((row) => ({ Supplier_Invoice__c: 'supplier-1', Buyer_Invoice__c: row.Id }));
+  const cases = [
+    { buyers: [buyers[0], { ...buyers[1], Delivery_Date__c: '2026-01-01' }] },
+    { buyers: buyers.map((row, index) => ({ ...row, Delivery_Date__c: `2026-04-${22 + index}` })) },
+    ...[null, undefined, '', '2025-02-30'].map((date) => ({ buyers: [buyers[0], { ...buyers[1], Delivery_Date__c: date }] })),
+    { buyers: [buyers[0]] }, { buyers: [...buyers, structuredClone(buyers[1])] },
+    ...[{ STEM__c: 'other-stem' }, { Proforma__c: true }, { Deprecated__c: true }, { IsDeleted: true }, { Amount__c: -125 },
+      { Proforma__c: undefined }, { Invoice_Date__c: null }].map((changes) => ({ buyers: [buyers[0], { ...buyers[1], ...changes }] })),
+    { extras: null }, { record: bill({ Id: '' }) }, { record: bill({ Name: '' }) }, { record: bill({ Invoice_Due_Date__c: null }) },
+    { record: bill({ STEM__r: {} }) }, { cutoff: '2026-02-30' },
+  ];
+  for (const changes of cases) {
+    const projection = supplier({ buyers, lines, ...changes });
+    assert.equal(projection.scope, 'unavailable', JSON.stringify(changes));
+    assert.equal(projection.fields.Date, null);
+    assert.equal(evaluateDocumentFieldCorrection(correction({ direction: 'supplier', projection, rawXeroInvoice: raw({ Type: 'ACCPAY' }) })).eligible, false);
+  }
+  const atCutoff = supplier({ buyers: buyers.map((row) => ({ ...row, Delivery_Date__c: '2026-01-01' })), lines });
+  assert.equal(atCutoff.scope, 'current'); assert.deepEqual(atCutoff.blockers, []);
+  const ambiguousFallback = supplier({ buyers });
+  assert.equal(ambiguousFallback.scope, 'unavailable'); assert.equal(ambiguousFallback.evidence.resolution, 'unique_stem_buyer');
+});
+
 test('literal source casing and spacing are preserved; shared bill reference is not globally unique', () => {
   const record = bill({ STEM__r: { RefCode__c: 'aBcd00xY', Vessel__r: { Name: '  Vessel Mixed  ' } } });
   const first = supplier({ record }); const second = supplier({ record: { ...record, Id: 'supplier-2', Name: 'Different source name' } });

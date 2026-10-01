@@ -3,6 +3,7 @@ import { xeroRateLimitError, xeroRequestGate } from './_xeroRateLimit.js';
 import { requireExternalActionGate } from './_externalActionGates.js';
 import { getFreshXeroConnection, splitScopes, xeroAccountingFetch, xeroContactSyncServiceClient } from './_xeroContactSync.js';
 import { previewEvidenceHash as hash } from './_xeroPreviewPersistence.js';
+import { accountingCentsNumber, accountingDecimalCents, accountingProductCents } from './_xeroAccountingLineCents.js';
 import { allFinancialRows, buildFinancialClassifications, loadAllXeroPages,
   loadSalesforceFinancialSnapshot, loadStoredFinancialControls, normalizeXeroInvoice, recordXeroFinancialAudit, xeroFinancialRateSnapshot, XERO_FINANCIAL_CUTOFF } from './_xeroFinancialSync.js';
 import { buildDocumentFieldCorrectionPayload, evaluateDocumentFieldCorrection, verifyDocumentFieldCorrectionReadback } from './_xeroDocumentFieldPolicy.js';
@@ -53,15 +54,24 @@ async function readExactCorrectionInvoice(accountingFetch, connection, id, optio
   return canonicalCorrectionInvoice(result.Invoices[0]);
 }
 function financialBuckets(lines, xero = false) {
+  if (!Array.isArray(lines) || !lines.length) return null;
   const result = {};
-  for (const line of lines || []) {
-    const key = `${xero ? line.AccountCode : line.accountCode}:${xero ? line.TaxType : line.taxType}`;
-    const value = xero ? line.LineAmount : Number(line.quantity) * Number(line.unitAmount);
-    if (!Number.isFinite(Number(value)) || !key.split(':').every(Boolean)) return null;
+  for (const line of lines) {
+    if (!line || typeof line !== 'object') return null;
+    const accountCode = xero ? line.AccountCode : line.accountCode;
+    const taxType = xero ? line.TaxType : line.taxType;
+    if (![accountCode, taxType].every((value) => typeof value === 'string' && value.length > 0)) return null;
+    const key = `${accountCode}:${taxType}`;
+    // Use the same per-line decimal cents as source reconciliation. Binary
+    // products can turn an equivalent half-cent line into a one-cent mismatch.
+    const cents = xero ? accountingDecimalCents(line.LineAmount) : accountingProductCents(line.quantity, line.unitAmount);
+    if (cents === null) return null;
     if (xero && (Number(line.TaxAmount || 0) !== 0 || Number(line.DiscountRate || line.DiscountAmount || 0) !== 0)) return null;
-    result[key] = (result[key] || 0) + Math.round(Number(value) * 100);
+    const total = (result[key] || 0n) + cents;
+    if (accountingCentsNumber(total) === null) return null;
+    result[key] = total;
   }
-  return result;
+  return Object.fromEntries(Object.entries(result).map(([key, cents]) => [key, String(cents)]));
 }
 function vesselMatches(source, target) {
   const vessel = cleanText(source.vesselName);
