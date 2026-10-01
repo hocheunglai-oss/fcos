@@ -1,0 +1,114 @@
+name: FCOS protected exact first runtime rollout
+run-name: Review FCOS runtime compatibility ${{ inputs.expected_commit }}
+on:
+  workflow_dispatch:
+    inputs:
+      expected_commit:
+        description: Separately reviewed exact runtime compatibility candidate SHA
+        required: true
+        type: string
+      candidate_url:
+        description: Exact immutable READY Preview origin for this candidate
+        required: true
+        type: string
+      operation:
+        description: Preflight by default; exact approved staging or protected quality capture are separate runs
+        required: true
+        default: preflight
+        type: choice
+        options:
+          - preflight
+          - collect-quality
+          - execute
+      upstream_quality_run_id:
+        description: Original exact candidate quality run for collect-quality only
+        required: false
+        type: string
+concurrency:
+  group: fcos-production-release
+  cancel-in-progress: false
+permissions:
+  contents: read
+# Activation stays false until exact controls, credentials and evidence are
+# separately approved. Scope proof never grants authority. Only this pinned
+# base/candidate pair may use the independently proved previous-endpoint absence.
+jobs:
+  preflight:
+    if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && vars.FCOS_RUNTIME_COMPATIBILITY_RELEASE_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    environment: fcos-runtime-compatibility-release
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+      deployments: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: trusted
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.expected_commit }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci --ignore-scripts
+        working-directory: trusted
+      - run: npm install --global vercel@54.20.1
+      - name: Collect sanitized exact first-rollout preflight after pinned human approval
+        run: node trusted/scripts/runtime-compatibility-release.mjs --preflight
+        env:
+          GH_TOKEN: ${{ secrets.FCOS_RELEASE_GH_TOKEN }}
+          VERCEL_TOKEN: ${{ secrets.FCOS_RELEASE_VERCEL_TOKEN }}
+          FCOS_RELEASE_RUNTIME_TOKEN: ${{ secrets.FCOS_RELEASE_RUNTIME_TOKEN }}
+          FCOS_RELEASE_PREVIEW_RUNTIME_TOKEN: ${{ secrets.FCOS_RELEASE_PREVIEW_RUNTIME_TOKEN }}
+          FCOS_E2E_VERCEL_BYPASS: ${{ secrets.FCOS_E2E_VERCEL_BYPASS }}
+          FCOS_RELEASE_SOURCE_DIRECTORY: ${{ github.workspace }}/candidate
+          FCOS_E2E_EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          FCOS_E2E_CANDIDATE_URL: ${{ inputs.candidate_url }}
+        if: ${{ inputs.operation == 'preflight' }}
+      - name: Produce protected archive-backed proof of original exact-source quality checks
+        if: ${{ inputs.operation == 'collect-quality' }}
+        run: node trusted/scripts/runtime-compatibility-release.mjs --collect-quality
+        env:
+          GH_TOKEN: ${{ secrets.FCOS_RELEASE_GH_TOKEN }}
+          FCOS_RELEASE_SOURCE_DIRECTORY: ${{ github.workspace }}/candidate
+          FCOS_E2E_EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          FCOS_E2E_CANDIDATE_URL: ${{ inputs.candidate_url }}
+          FCOS_COMPATIBILITY_QUALITY_RUN_ID: ${{ inputs.upstream_quality_run_id }}
+      - name: Stage exact Production build and verify before assigning domains
+        if: ${{ inputs.operation == 'execute' }}
+        run: node trusted/scripts/runtime-compatibility-release.mjs --execute
+        env:
+          GH_TOKEN: ${{ secrets.FCOS_RELEASE_GH_TOKEN }}
+          VERCEL_TOKEN: ${{ secrets.FCOS_RELEASE_VERCEL_TOKEN }}
+          FCOS_RELEASE_RUNTIME_TOKEN: ${{ secrets.FCOS_RELEASE_RUNTIME_TOKEN }}
+          FCOS_RELEASE_PREVIEW_RUNTIME_TOKEN: ${{ secrets.FCOS_RELEASE_PREVIEW_RUNTIME_TOKEN }}
+          FCOS_E2E_VERCEL_BYPASS: ${{ secrets.FCOS_E2E_VERCEL_BYPASS }}
+          FCOS_RELEASE_SOURCE_DIRECTORY: ${{ github.workspace }}/candidate
+          FCOS_E2E_EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          FCOS_E2E_CANDIDATE_URL: ${{ inputs.candidate_url }}
+      - uses: actions/upload-artifact@v4
+        if: ${{ inputs.operation == 'collect-quality' && success() }}
+        with:
+          name: fcos-compatibility-quality-source-${{ inputs.expected_commit }}
+          path: ${{ runner.temp }}/fcos-quality-source.json
+          if-no-files-found: error
+          retention-days: 7
+      - name: Preserve sanitized preflight and durable operation journal
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: fcos-runtime-compatibility-preflight-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/fcos-runtime-compatibility-${{ github.run_id }}.json
+            ${{ runner.temp }}/fcos-runtime-compatibility-${{ github.run_id }}.jsonl
+          if-no-files-found: warn
+          retention-days: 30
