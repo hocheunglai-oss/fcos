@@ -1,9 +1,15 @@
 import test from 'node:test';
+import { nomBDataIssues } from '../src/lib/missingNomB.js';
 import assert from 'node:assert/strict';
 import { clearPendingUpload, createUploadAttempt, displayNomBDate, fingerprintNomBFile, initialPagination, isDefiniteNoWrite, isProvenNoWriteForOperation, isVerifiedUpload, listPayload, paginationReducer, persistPendingUpload, recoverPendingUpload, validateNomBFile } from '../src/lib/missingNomB.js';
 
 const file = (name, size) => ({ name, size });
 const fingerprint = 'a'.repeat(64);
+
+test('missing source details are explicit without changing filing eligibility', () => {
+  assert.deepEqual(nomBDataIssues({ buyerName: 'Buyer', vesselName: 'Vessel', portName: 'Port', imo: '1234567' }), []);
+  assert.deepEqual(nomBDataIssues({ buyerName: ' ', vesselName: 'Vessel', portName: 'Port', imo: null }), ['Buyer details unavailable', 'IMO unavailable']);
+});
 const storage = () => {
   const values = new Map();
   return {

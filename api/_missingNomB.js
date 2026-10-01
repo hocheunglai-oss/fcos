@@ -2,6 +2,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { fcosSalesforceEnvironment } from '../config/fcosConnections.js';
 import { NOM_B_TRADER_LOGIN_EMAILS } from '../config/nomBTraderIdentities.js';
 import { NOM_B_EXTENSIONS, NOM_B_MAX_BYTES } from '../shared/missingNomB.js';
+import { NOM_B_POLICY } from '../shared/businessPolicies.js';
+import { missingNomBRecoveryActions } from './_missingNomBRecovery.js';
 import { getApiVersion, sfRequest } from './_salesforce.js';
 import { isExternalActionEnabled, requireExternalActionGate } from './_externalActionGates.js';
 import { sendOperationalMail } from './_operationalMail.js';
@@ -13,7 +15,7 @@ import { isBuyerCreditNote } from './_buyerFinancialAmount.js';
 const ID = /^[a-zA-Z0-9]{15}(?:[a-zA-Z0-9]{3})?$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const PURPOSE = 'missing_nom_b_reminders';
-const LIST_POLICY = 'dated-delivery-v1';
+const LIST_POLICY = NOM_B_POLICY.cursorRevision;
 const LINK = 'https://fcos.fcuno.com/missing-nom-b';
 const NOM_FIELDS = 'Id,Name,IsDeleted,File__c,PDF__c,STEM__c,Account__r.Name,Buyer_Supplier_Trader__c,BT_ST_Email_Address__c,Received__c,Deprecated__c,Replaced__c,RecordType.DeveloperName,RefCode__c,LastModifiedDate';
 const STEM_FIELDS = 'Id,Name,IsDeleted,RefCode__c,Account__r.Name,Vessel__r.Name,Vessel__r.IMO__c,Port__r.Name,Delivery_Date__c,Expected_Delivery_Date__c,Invoice_Status__c,LastModifiedDate';
@@ -517,10 +519,14 @@ export async function missingNomBStatus({ client, env = process.env, now = new D
     .order('updated_at',{ ascending:false }).limit(10);
   if (uploadOutcomes.error) throw uploadOutcomes.error;
   const state = stateResult.data;
-  const scanLagSeconds = state?.completed_through ? Math.max(0, Math.floor((new Date(now).getTime()-Date.parse(state.completed_through))/1000)) : null;
+  const completedThrough = state?.completed_through ? Date.parse(state.completed_through) : NaN;
+  const nowMs = new Date(now).getTime();
+  const scanLagSeconds = Number.isFinite(completedThrough) && Number.isFinite(nowMs) ? Math.max(0, Math.floor((nowMs-completedThrough)/1000)) : null;
   const active = enabled(env);
-  const healthStatus = counts.uncertain || counts.uncertainUploads || counts.stalledDeliveries || counts.failed || counts.blocked || (active && (!state || scanLagSeconds > 900)) ? 'warning' : active ? 'online' : 'disabled';
+  const healthStatus = counts.uncertain || counts.uncertainUploads || counts.stalledDeliveries || counts.failed || counts.blocked || (active && scanLagSeconds == null) || (active && scanLagSeconds > NOM_B_POLICY.scanLagWarningSeconds) ? 'warning' : active ? 'online' : 'disabled';
+  const recoveryActions = missingNomBRecoveryActions({ enabled: active, scanLagSeconds, scanLagWarningSeconds: NOM_B_POLICY.scanLagWarningSeconds, ...counts });
   return { status: active ? 'enabled' : 'disabled',healthStatus,enabled: active,activatedAt: state?.activated_at || null,lastScanAt: state?.last_success_at || null,scanLagSeconds,...counts,
+    recoveryActions,
     recentOutcomes: (outcomes.data || []).map((row) => ({status:row.status,code:row.last_error_code,at:row.updated_at})),
     recentUploadOutcomes: (uploadOutcomes.data || []).map((row) => ({status:row.status,code:row.last_error_code,at:row.updated_at})) };
 }

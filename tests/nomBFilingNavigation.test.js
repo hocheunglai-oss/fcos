@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import ts from 'typescript';
+import { NOM_B_FROM_LABEL } from '../shared/missingNomB.js';
 
 const read = path => readFile(new URL(`../${path}`, import.meta.url), 'utf8');
 
@@ -60,7 +61,7 @@ async function compile(path, react, mocks) {
     const clause = statement.importClause;
     return [clause?.name?.text, ...(clause?.namedBindings && ts.isNamedImports(clause.namedBindings) ? clause.namedBindings.elements.map(item => item.name.text) : [])].filter(Boolean);
   });
-  const bindings = Object.fromEntries(importedNames.map(name => [name, mocks[name] ?? react[name] ?? name]));
+  const bindings = Object.fromEntries(importedNames.map(name => [name, mocks[name] ?? react[name] ?? (name === 'NOM_B_FROM_LABEL' ? NOM_B_FROM_LABEL : name)]));
   const withoutImports = source.replace(/^import[\s\S]*?;\r?\n/gmu, '');
   const compiled = ts.transpileModule(withoutImports, { compilerOptions: { jsx: ts.JsxEmit.React, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
   const exports = {};
@@ -252,6 +253,7 @@ test('document filing is embedded only in the desktop personal Missing tab', asy
       nomBError: response => response.data, nomBNumber: number => Number(number).toLocaleString(),
     });
     const tree = hooks.render(panel, { documentFiling: true, defaultExpanded: true, title: 'Nom B Filing' });
+    assert.equal(nodes(tree).some(node => node.type === 'p' && node.props.children.join('').startsWith('File missing Nom B on your active Buyer Confirmations with delivery from 1 September 2026')), desktop);
     assert.equal(Boolean(find(tree, 'MissingNomBFilingTable')), desktop);
     assert.equal(nodes(tree).some(node => node.type === 'span' && node.props?.['aria-label']?.startsWith('My missing Nom B count:')), !desktop);
   }

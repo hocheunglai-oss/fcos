@@ -8,6 +8,7 @@ export function assertCurrentReleaseHistory(version, history) {
   const matches = Array.isArray(history) ? history.filter((entry) => entry?.version === version) : [];
   if (matches.length !== 1) throw new Error(`Current app version ${version} needs exactly one release-history entry.`);
   const [entry] = matches;
+  if (history[0] !== entry) throw new Error(`Current app version ${version} must be the first release-history entry.`);
   if (!validDate(entry.releasedAt)
     || typeof entry.title !== 'string'
     || !entry.title.trim()

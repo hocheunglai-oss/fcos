@@ -21,6 +21,7 @@ import {
   X,
 } from 'lucide-react';
 import { appClient } from '@/api/appClient';
+import { APP_VERSION } from '@/lib/appVersionMeta';
 import { cn } from '@/lib/utils';
 import StateBlock from '@/components/common/StateBlock';
 import { Badge } from '@/components/ui/badge';
@@ -619,9 +620,13 @@ export default function FcosUpdatesPanel() {
   return (
     <div className="min-h-[calc(100vh-322px)]">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-2.5">
-          <p className="text-xs text-muted-foreground">
+          <div><p className="text-xs text-muted-foreground">
             Release history from {formatDate(model.settings?.backfillStart)} onward
-          </p>
+          </p><p className="mt-1 hidden text-xs text-muted-foreground lg:block">
+            Running FCOS v{APP_VERSION} · Queue last checked {model.settings?.lastSyncedVersion ? `v${model.settings.lastSyncedVersion}` : 'Not checked'}
+            {model.settings?.lastSyncedAt ? ` · ${formatDate(model.settings.lastSyncedAt, true)}` : ''}
+            {model.settings?.lastSyncedVersion !== APP_VERSION ? ' · Check releases to refresh this queue.' : ''}
+          </p></div>
           <div className="flex flex-wrap items-center gap-2">
             <Badge variant="outline" className={canControl
               ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
