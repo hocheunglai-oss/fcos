@@ -10,6 +10,9 @@ export function managementWorkSummary(snapshot) {
   if (!Array.isArray(snapshot?.commitments) || !snapshot.counts || !Number.isFinite(Date.parse(snapshot.generatedAt))) {
     throw new Error('A verified personal work summary was not returned.');
   }
+  for (const count of [snapshot.counts.overdue ?? 0, snapshot.counts.needs_action ?? 0]) {
+    if (!Number.isInteger(count) || count < 0) throw new Error('A verified personal work summary was not returned.');
+  }
   return {
     overdue: snapshot.counts.overdue || 0,
     needsAction: snapshot.counts.needs_action || 0,

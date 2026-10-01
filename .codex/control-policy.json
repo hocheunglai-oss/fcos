@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "revision": 1,
+  "nodeMajor": 24,
+  "files": {
+    ".codex/config.toml": "69313ff59c184619cdd5bb6ec589fb94e23268df363908e9c6f063c5cb81735f",
+    ".codex/setup.mjs": "b70610746072fb1566b536e61875d272c20ee183ae61c299cec5d0e8ffff6198",
+    ".codex/control-validation.mjs": "10ee550f146920a7d6fcb4353c20f023d20136b8ce031830c6af82b6b99ff814"
+  }
+}

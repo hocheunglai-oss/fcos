@@ -19,7 +19,7 @@ test('management counts remain personal, loaded and timestamped with source limi
 });
 
 test('unverified responses cannot appear as a clear zero-count overview', () => {
-  for (const invalid of [null, {}, { commitments: [], counts: {} }, { commitments: [], counts: {}, generatedAt: 'invalid' }]) {
+  for (const invalid of [null, {}, { commitments: [], counts: {} }, { commitments: [], counts: {}, generatedAt: 'invalid' }, { commitments: [], counts: { overdue: '2' }, generatedAt: '2026-10-01T01:00:00Z' }, { commitments: [], counts: { needs_action: -1 }, generatedAt: '2026-10-01T01:00:00Z' }]) {
     assert.throws(() => managementWorkSummary(invalid), /verified personal work summary/);
   }
 });

@@ -46,7 +46,12 @@
     "connections:auth": "node scripts/fcos-connections.mjs auth",
     "connections:keychain": "node scripts/fcos-connections.mjs keychain",
     "connections:cli": "node scripts/fcos-connections.mjs run",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "verify:preview-parity": "node scripts/collect-preview-parity.mjs",
+    "verify:controls": "node scripts/verify-codex-controls.mjs",
+    "release:readiness": "node scripts/release-readiness.mjs",
+    "release:production": "node scripts/production-release.mjs",
+    "verify:normal-role": "node scripts/normal-role-release.mjs"
   },
   "dependencies": {
     "@fontsource-variable/ibm-plex-sans": "5.3.0",

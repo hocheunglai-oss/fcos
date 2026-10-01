@@ -1254,7 +1254,8 @@ function plainLanguageWorkflow(caseRow) {
       ? caseRow.assignedBuyerTrader?.name || 'Needs assignment'
       : status === 'ready_for_invoice' ? 'Invoice team' : 'Completed';
   let nextAction = 'Waiting';
-  if (postInvoice) nextAction = 'Invoice already issued—action required';
+  if (simplifiedQueue === 'completed') nextAction = supplierStep || buyerStep ? 'Closed; paired reviews incomplete' : 'Completed';
+  else if (postInvoice) nextAction = 'Invoice already issued—action required';
   else if (awaiting) nextAction = caseRow.actionableOn ? `Available from ${caseRow.actionableOn}` : 'Add the required schedule information';
   else if (myCost && myBuyerCharge && myCost.supplierId === myBuyerCharge.supplierId) nextAction = `Confirm both sides for ${myCost.supplierName}`;
   else if (myCost) nextAction = `Confirm ${myCost.supplierName} costs`;
@@ -1488,8 +1489,10 @@ function viewCounts(cases) {
     needs_action: 0, awaiting_delivery: 0, post_invoice_changes: 0,
   };
   for (const row of cases) {
-    if (Object.prototype.hasOwnProperty.call(counts, row.status)) counts[row.status] += 1;
-    if (row.simplifiedQueue !== row.status && Object.prototype.hasOwnProperty.call(counts, row.simplifiedQueue)) counts[row.simplifiedQueue] += 1;
+    // Simple tabs filter by queue, not invoice status: a closed invoice can
+    // still have an assigned charge review in My Tasks.
+    if (SIMPLE_QUEUE_NAMES.has(row.simplifiedQueue) && row.simplifiedQueue !== 'all_cases') counts[row.simplifiedQueue] += 1;
+    if (!SIMPLE_QUEUE_NAMES.has(row.status) && Object.prototype.hasOwnProperty.call(counts, row.status)) counts[row.status] += 1;
   }
   return counts;
 }
@@ -3705,6 +3708,7 @@ export const variableChargeInternals = {
   nextHongKongBusinessDay,
   variableChargeActionability,
   plainLanguageWorkflow,
+  viewCounts,
   supplierLiveFingerprint,
   supplierInputForPort,
   requiredAgentCurrency,

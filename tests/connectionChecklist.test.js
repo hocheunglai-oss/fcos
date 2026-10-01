@@ -58,14 +58,14 @@ function attestation(overrides = {}) {
   };
 }
 
-test('one schema-validated policy owns the approved targets and API-first order', () => {
+test('one schema-validated policy owns the approved targets and CLI-first order', () => {
   assert.equal(validateFcosConnectionPolicy(FCOS_CONNECTION_POLICY), true);
   assert.deepEqual(CONNECTION_CHECKLIST_SEQUENCE.map(({ id }) => id), [
-    'api_first',
-    'cli_fallback',
+    'cli_first',
+    'api_fallback',
     'browser_fallback',
   ]);
-  assert.equal(CONNECTION_POLICY_VERSION, 11);
+  assert.equal(CONNECTION_POLICY_VERSION, 12);
   assert.equal(APPROVED_CONNECTION_BROWSER_PROFILE, 'Otto');
   assert.equal(CONNECTION_PROFILE_NAME, 'fcos-production');
   assert.equal(CONNECTION_LOCAL_STATE_DIRECTORY, '.fcos-cli');

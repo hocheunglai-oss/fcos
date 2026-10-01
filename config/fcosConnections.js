@@ -1,6 +1,17 @@
+const runtimeConnections = [
+    { id: 'supabase', provider: 'Supabase', target: { providerId: 'supabase', identifierLabel: 'Project ref' }, environmentKeys: ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'SUPABASE_SECRET_KEY', 'VITE_SUPABASE_URL', 'VITE_SUPABASE_ANON_KEY'], apiOrigins: [] },
+    { id: 'salesforce', provider: 'Salesforce', target: { providerId: 'salesforce', environmentKey: 'production' }, environmentKeys: ['SALESFORCE_INSTANCE_URL', 'SALESFORCE_JWT_CLIENT_ID', 'SALESFORCE_JWT_USERNAME', 'SALESFORCE_JWT_PRIVATE_KEY', 'SALESFORCE_CLIENT_ID', 'SALESFORCE_CLIENT_SECRET', 'SALESFORCE_REFRESH_TOKEN', 'SALESFORCE_ACCESS_TOKEN'], apiOrigins: [] },
+    { id: 'xero', provider: 'Xero', target: { configuredIdentityKeys: ['XERO_TENANT_ID', 'XERO_TENANT_NAME'], storedIdentitySource: 'Approved durable Xero connection' }, environmentKeys: ['XERO_TENANT_ID', 'XERO_TENANT_NAME', 'XERO_CLIENT_ID', 'XERO_CLIENT_SECRET', 'XERO_REFRESH_TOKEN'], apiOrigins: ['https://api.xero.com', 'https://identity.xero.com'] },
+    { id: 'drive', provider: 'Google Drive market reports', target: { integrationKey: 'googleDriveMarketReports' }, environmentKeys: ['GOOGLE_DRIVE_CLIENT_ID', 'GOOGLE_DRIVE_CLIENT_SECRET', 'GOOGLE_DRIVE_MARKET_REFRESH_TOKEN'], apiOrigins: ['https://www.googleapis.com', 'https://oauth2.googleapis.com'] },
+    { id: 'identity', provider: 'FCUNO identity federation', target: { integrationKey: 'fcunoIdentityFederation' }, environmentKeys: ['FCUNO_IDENTITY_ISSUER', 'FCUNO_IDENTITY_SYNC_AUDIENCE', 'FCUNO_IDENTITY_JWKS_URI', 'FCUNO_IDENTITY_JWT_ALGORITHMS'], apiOrigins: ['https://fcuno.com'] },
+    { id: 'microsoft', provider: 'Microsoft Graph mail', target: { configuredIdentityKeys: ['FCOS_MICROSOFT_TENANT_ID', 'FCOS_MICROSOFT_CLIENT_ID'], storedIdentitySource: 'Approved durable Graph mailbox configuration' }, environmentKeys: ['FCOS_MICROSOFT_TENANT_ID', 'FCOS_MICROSOFT_CLIENT_ID'], apiOrigins: ['https://graph.microsoft.com', 'https://login.microsoftonline.com'] },
+    { id: 'microsoft-growth', provider: 'Microsoft Graph growth mailbox', target: { configuredIdentityKeys: ['MICROSOFT_TENANT_ID', 'MICROSOFT_CLIENT_ID'] }, environmentKeys: ['MICROSOFT_TENANT_ID', 'MICROSOFT_CLIENT_ID', 'MICROSOFT_CLIENT_SECRET'], apiOrigins: ['https://graph.microsoft.com', 'https://login.microsoftonline.com'] },
+    { id: 'openai', provider: 'OpenAI', target: { configuredIdentityKeys: [], identityVerification: 'Independent provider account and project verification required' }, environmentKeys: ['OPENAI_API_KEY'], apiOrigins: ['https://api.openai.com'] },
+  ];
+
 const connectionPolicy = {
   schemaVersion: 1,
-  policyVersion: 11,
+  policyVersion: 12,
   profile: 'fcos-production',
   browserProfile: 'Otto',
   localStateDirectory: '.fcos-cli',
@@ -19,19 +30,19 @@ const connectionPolicy = {
   },
   sequence: [
     {
-      id: 'api_first',
-      label: 'Use the approved API or connector',
-      detail: 'Prefer a purpose-built API or connector after verifying its exact account, organization, project, repository, environment, scope, and target permissions.',
+      id: 'cli_first',
+      label: 'Use the verified CLI first',
+      detail: 'Verify CLI account, organization, project, repository, environment, version and operation permissions before use.',
     },
     {
-      id: 'cli_fallback',
-      label: 'Fall back to the verified CLI',
-      detail: 'When no approved API or connector can complete the operation, use the repo-pinned CLI only after its version, identity, target pin, and required permissions pass.',
+      id: 'api_fallback',
+      label: 'Fall back to the approved API or connector',
+      detail: 'If CLI access fails, independently verify API target and permissions.',
     },
     {
       id: 'browser_fallback',
       label: 'Use Chrome only as the final fallback',
-      detail: 'Chrome remains locked unless both the approved API/connector and verified CLI cannot complete the operation. Use only the environment-pinned profile, then return to API or CLI verification.',
+      detail: 'Use the pinned Chrome profile only after CLI and API routes fail; return to CLI or API verification.',
     },
   ],
   integrations: {
@@ -80,7 +91,8 @@ const connectionPolicy = {
         { label: 'Browser fallback profile', value: 'Otto' },
       ],
       cliVersion: { minimum: '2.96.0', maximumExclusive: '3.0.0' },
-      requiredPermissions: ['repository.read', 'repository.push', 'workflow.update', 'git.push.authentication'],
+      requiredPermissions: ['repository.read'],
+      writePermissions: ['repository.push', 'workflow.update', 'git.push.authentication'],
       availabilityCommand: 'gh --version',
       identityCommand: 'npm run connections:verify -- github',
       authCommand: 'npm run connections:auth -- github',
@@ -93,8 +105,8 @@ const connectionPolicy = {
       credentialStorage: 'provider_secure_store',
       rotationWarningDays: 180,
       expiryWarningDays: 30,
-      persistence: 'GitHub OAuth and plain Git HTTPS pushes both resolve through the ignored repo-local GH_CONFIG_DIR. A repository-local credential helper resets inherited helpers without changing machine-wide Git configuration.',
-      nonBrowserRoute: 'Fail closed on any other GitHub identity. Use the approved GitHub connector/API only when it can preserve the same repository boundary.',
+      persistence: 'OAuth and HTTPS pushes use isolated GH_CONFIG_DIR and a repository-local credential helper.',
+      nonBrowserRoute: 'Reject other identities; API fallback must preserve the repository pin.',
     },
     {
       id: 'vercel',
@@ -110,7 +122,8 @@ const connectionPolicy = {
         { label: 'Target', value: 'hocheunglai-6535s-projects/fcos' },
       ],
       cliVersion: { exact: '54.20.1' },
-      requiredPermissions: ['project.read', 'deployment.read', 'deployment.create'],
+      requiredPermissions: ['project.read', 'deployment.read'],
+      writePermissions: ['deployment.create', 'configuration.write'],
       availabilityCommand: 'vercel --version',
       identityCommand: 'npm run connections:verify -- vercel',
       authCommand: 'npm run connections:auth -- vercel',
@@ -124,8 +137,8 @@ const connectionPolicy = {
       keychainService: 'com.fcos.connections.vercel',
       rotationWarningDays: 90,
       expiryWarningDays: 30,
-      persistence: 'The Vercel token is retrieved from a dedicated macOS Keychain item; only target pins and non-secret metadata remain in ignored local files.',
-      nonBrowserRoute: 'Use the scoped Vercel CLI or API only after the exact account, team ID, project ID, and deployment access probes pass.',
+      persistence: 'Keychain token; local files contain safe target metadata.',
+      nonBrowserRoute: 'Verify account, team, project and operation permissions.',
     },
     {
       id: 'supabase',
@@ -137,7 +150,8 @@ const connectionPolicy = {
         { label: 'Project ref', value: 'pjforfvchygdyqfcgpmw' },
       ],
       cliVersion: { exact: '2.113.0' },
-      requiredPermissions: ['project.read', 'project.link'],
+      requiredPermissions: ['project.read'],
+      writePermissions: ['project.link', 'database.write'],
       availabilityCommand: 'npx --no-install supabase --version',
       identityCommand: 'npm run connections:verify -- supabase',
       authCommand: 'npm run connections:auth -- supabase',
@@ -151,8 +165,8 @@ const connectionPolicy = {
       keychainService: 'com.fcos.connections.supabase',
       rotationWarningDays: 90,
       expiryWarningDays: 14,
-      persistence: 'The Supabase personal access token is retrieved from a dedicated macOS Keychain item; the pinned CLI and exact project link remain repo-local.',
-      nonBrowserRoute: 'Use the approved Supabase connector/API only after the exact project ref and project visibility probe pass.',
+      persistence: 'Dedicated Keychain token; pinned CLI and project link remain repo-local.',
+      nonBrowserRoute: 'Verify the project ref and visibility before API fallback.',
     },
     {
       id: 'salesforce',
@@ -180,6 +194,7 @@ const connectionPolicy = {
         { label: 'Promotion order', value: 'DEVEE → GitHub → QAT → Production' },
       ],
       cliVersion: { minimum: '2.145.6', maximumExclusive: '3.0.0' },
+      writePermissions: ['shared.repository.push', 'metadata.deploy', 'data.write'],
       requiredPermissions: ['production.organization.read', 'production.data.query', 'devee.organization.read', 'devee.data.query', 'qat.organization.read', 'qat.data.query', 'shared.repository.read', 'shared.repository.push', 'shared.metadata.current'],
       availabilityCommand: 'sf version --json',
       identityCommand: 'npm run connections:verify -- salesforce',
@@ -193,8 +208,8 @@ const connectionPolicy = {
       credentialStorage: 'protected_host_store',
       rotationWarningDays: 90,
       expiryWarningDays: 30,
-      persistence: 'Salesforce CLI retains protected host sessions for DEVEE, QAT, and Production. FCOS pins DEVEE as the development/source target and revalidates every exact org ID, username, environment type, and query capability before use. The shared Salesforce mirror uses a separate ignored GitHub CLI profile.',
-      nonBrowserRoute: 'Use Salesforce CLI only after DEVEE, QAT, and Production match their exact identities. Deploy and verify in DEVEE, publish the byte-equivalent DEVEE source to the shared repository, then promote the same source to QAT and Production in order.',
+      persistence: 'Verify protected org sessions, username, sandbox and query access. DEVEE owns source; the mirror uses isolated GitHub authorization.',
+      nonBrowserRoute: 'Verify each org. Promote verified DEVEE source through the byte-equivalent shared mirror, QAT, then Production.',
       publication: {
         requiredAccount: 'vincelessxai',
         requiredAccountId: 304336732,
@@ -231,22 +246,22 @@ function requirePositiveInteger(value, path) {
 }
 
 export function validateFcosConnectionPolicy(value = connectionPolicy) {
-  if (!value || typeof value !== 'object') throw new Error('Connection policy must be an object.');
+  if (!value || typeof value !== 'object') throw new Error('Invalid connection policy.');
   requirePositiveInteger(value.schemaVersion, 'schemaVersion');
   requirePositiveInteger(value.policyVersion, 'policyVersion');
   requireString(value.profile, 'profile');
   requireString(value.browserProfile, 'browserProfile');
-  const expectedSequence = ['api_first', 'cli_fallback', 'browser_fallback'];
+  const expectedSequence = ['cli_first', 'api_fallback', 'browser_fallback'];
   if (!Array.isArray(value.sequence)
       || value.sequence.map(({ id }) => id).join(',') !== expectedSequence.join(',')) {
-    throw new Error('Connection policy order must remain API/connector, CLI, then Chrome.');
+    throw new Error('Order must be CLI, API, Chrome.');
   }
   for (const [index, step] of value.sequence.entries()) {
     requireString(step.label, `sequence.${index}.label`);
     requireString(step.detail, `sequence.${index}.detail`);
   }
   const approvedBrowserProfiles = new Set(['Otto', 'Vincent', 'vincexai']);
-  if (!approvedBrowserProfiles.has(value.browserProfile)) throw new Error('Connection policy browserProfile is not approved.');
+  if (!approvedBrowserProfiles.has(value.browserProfile)) throw new Error('Unapproved browserProfile.');
   requireString(value.localStateDirectory, 'localStateDirectory');
   requireString(value.keychainHelper, 'keychainHelper');
   requireString(value.attestation?.endpoint, 'attestation.endpoint');
@@ -300,34 +315,29 @@ export function validateFcosConnectionPolicy(value = connectionPolicy) {
   if (secondaryMopsCsv.folderId !== value.integrations.googleDriveMarketReports.rootFolderId
       || secondaryMopsCsv.mimeType !== 'text/csv'
       || secondaryMopsCsv.startDate !== '2025-01-01') {
-    throw new Error('The secondary MOPS CSV must remain pinned to the approved market-report root and 2025 cutover.');
+    throw new Error('Invalid MOPS root or cutover.');
   }
   if (!Array.isArray(value.integrations?.googleDriveMarketReports?.folders)
       || value.integrations.googleDriveMarketReports.folders.length !== 2) {
-    throw new Error('Google Drive market reports require exactly two source folders.');
+    throw new Error('Drive requires two source folders.');
   }
   const expectedMarketDocumentTypes = ['bunkerwire', 'european_marketscan'];
   for (const [index, folder] of value.integrations.googleDriveMarketReports.folders.entries()) {
     if (folder.documentType !== expectedMarketDocumentTypes[index]) {
-      throw new Error('Google Drive market-report source folders are not in the approved order.');
+      throw new Error('Invalid Drive folder order.');
     }
     requireString(folder.folderId, `integrations.googleDriveMarketReports.folders.${index}.folderId`);
     requireString(folder.label, `integrations.googleDriveMarketReports.folders.${index}.label`);
   }
   const expectedProviders = ['github', 'vercel', 'supabase', 'salesforce'];
   if (!Array.isArray(value.providers) || value.providers.length !== expectedProviders.length) {
-    throw new Error('Connection policy must define exactly four providers.');
+    throw new Error('Exactly four providers required.');
   }
   if (value.providers.map(({ id }) => id).join(',') !== expectedProviders.join(',')) {
-    throw new Error('Connection policy provider order or identifiers are invalid.');
+    throw new Error('Invalid provider order or IDs.');
   }
   for (const provider of value.providers) {
-    requireString(provider.provider, `${provider.id}.provider`);
-    requireString(provider.cli, `${provider.id}.cli`);
-    requireString(provider.executable, `${provider.id}.executable`);
-    requireString(provider.configPath, `${provider.id}.configPath`);
-    requireString(provider.profileName, `${provider.id}.profileName`);
-    requireString(provider.credentialStorage, `${provider.id}.credentialStorage`);
+    for (const field of ['provider', 'cli', 'executable', 'configPath', 'profileName', 'credentialStorage']) requireString(provider[field], `${provider.id}.${field}`);
     requirePositiveInteger(provider.rotationWarningDays, `${provider.id}.rotationWarningDays`);
     requirePositiveInteger(provider.expiryWarningDays, `${provider.id}.expiryWarningDays`);
     if (!Array.isArray(provider.identifiers) || !provider.identifiers.length) throw new Error(`${provider.id} identifiers are required.`);
@@ -335,19 +345,13 @@ export function validateFcosConnectionPolicy(value = connectionPolicy) {
     if (!provider.cliVersion?.exact && !provider.cliVersion?.minimum) throw new Error(`${provider.id} CLI version policy is required.`);
     if (provider.credentialStorage === 'macos_keychain') requireString(provider.keychainService, `${provider.id}.keychainService`);
     if (provider.id === 'salesforce') {
-      if (!Array.isArray(provider.environments) || provider.environments.length !== 3) throw new Error('Salesforce requires Devee, QAT, and Production targets.');
+      if (!Array.isArray(provider.environments) || provider.environments.length !== 3) throw new Error('Salesforce requires DEVEE, QAT, Production.');
       if (provider.environments.map(({ key }) => key).join(',') !== 'devee,qat,production') {
-        throw new Error('Salesforce environment order must be Devee, QAT, then Production.');
+        throw new Error('Salesforce order: DEVEE, QAT, Production.');
       }
       const expectedSalesforceBrowserProfiles = { devee: 'Otto', qat: 'Otto', production: 'Vincent' };
       for (const environment of provider.environments) {
-        requireString(environment.key, `salesforce.${environment.key}.key`);
-        requireString(environment.label, `salesforce.${environment.key}.label`);
-        requireString(environment.alias, `salesforce.${environment.key}.alias`);
-        requireString(environment.username, `salesforce.${environment.key}.username`);
-        requireString(environment.instanceUrl, `salesforce.${environment.key}.instanceUrl`);
-        requireString(environment.orgId, `salesforce.${environment.key}.orgId`);
-        requireString(environment.browserProfile, `salesforce.${environment.key}.browserProfile`);
+        for (const field of ['key', 'label', 'alias', 'username', 'instanceUrl', 'orgId', 'browserProfile']) requireString(environment[field], `salesforce.${environment.key}.${field}`);
         if (!approvedBrowserProfiles.has(environment.browserProfile)) {
           throw new Error(`Salesforce ${environment.key} browserProfile is not approved.`);
         }
@@ -358,7 +362,7 @@ export function validateFcosConnectionPolicy(value = connectionPolicy) {
       }
       requireString(provider.publication?.requiredAccount, 'salesforce.publication.requiredAccount');
       if (!Number.isSafeInteger(provider.publication?.requiredAccountId) || provider.publication.requiredAccountId <= 0) {
-        throw new Error('salesforce.publication.requiredAccountId must be a positive integer.');
+        throw new Error('Invalid publication account ID.');
       }
       requireString(provider.publication?.repository, 'salesforce.publication.repository');
       requireString(provider.publication?.defaultBranch, 'salesforce.publication.defaultBranch');
@@ -370,10 +374,10 @@ export function validateFcosConnectionPolicy(value = connectionPolicy) {
       requireString(provider.publication?.configPath, 'salesforce.publication.configPath');
       requireString(provider.publication?.browserProfile, 'salesforce.publication.browserProfile');
       if (!approvedBrowserProfiles.has(provider.publication.browserProfile)) {
-        throw new Error('Salesforce publication browserProfile is not approved.');
+        throw new Error('Unapproved publication browserProfile.');
       }
       if (provider.publication.browserProfile !== 'vincexai') {
-        throw new Error('Salesforce publication browserProfile must remain vincexai.');
+        throw new Error('Publication profile must be vincexai.');
       }
       requireString(provider.publication?.sourceEnvironmentKey, 'salesforce.publication.sourceEnvironmentKey');
       requireString(provider.publication?.sourceStatePath, 'salesforce.publication.sourceStatePath');
@@ -414,3 +418,49 @@ export function fcosSalesforceEnvironment(environmentKey) {
 }
 
 export default FCOS_CONNECTION_POLICY;
+
+// This inventory reports only presence of known keys. It never attests authentication,
+// deployed configuration, an account ID derived from a secret, or write authority.
+export function validateFcosRuntimeConnectionCatalogue(value = runtimeConnections) {
+  if (!Array.isArray(value) || value.length !== 8) throw new Error('Runtime connection catalogue must retain all configured integrations.');
+  if (value.map(({ id }) => id).join(',') !== 'supabase,salesforce,xero,drive,identity,microsoft,microsoft-growth,openai') throw new Error('Runtime connection catalogue identifiers are invalid.');
+  for (const runtime of value) {
+    requireString(runtime.provider, `runtime.${runtime.id}.provider`);
+    if (!runtime.target || typeof runtime.target !== 'object') throw new Error('Runtime connection target is required.');
+    if (!Array.isArray(runtime.environmentKeys) || runtime.environmentKeys.some((key) => !/^[A-Z][A-Z0-9_]+$/.test(key))) throw new Error('Runtime environment key names are invalid.');
+    if (!Array.isArray(runtime.apiOrigins) || runtime.apiOrigins.some((origin) => { try { return new URL(origin).origin !== origin || !origin.startsWith('https://'); } catch { return true; } })) throw new Error('Runtime API origins must use exact HTTPS origins.');
+  }
+  return true;
+}
+
+export function fcosRuntimeConnectionCatalogue(environment = {}) {
+  validateFcosRuntimeConnectionCatalogue();
+  return runtimeConnections.map((entry) => {
+    const { target } = entry;
+    let identityPins;
+    if (target.providerId === 'salesforce') {
+      const org = fcosSalesforceEnvironment(target.environmentKey);
+      identityPins = { orgId: org.orgId, username: org.username, instanceUrl: org.instanceUrl, isSandbox: org.isSandbox };
+    } else if (target.providerId) identityPins = { projectRef: fcosConnectionIdentifier(target.providerId, target.identifierLabel) };
+    else if (target.integrationKey === 'googleDriveMarketReports') {
+      const drive = FCOS_CONNECTION_POLICY.integrations.googleDriveMarketReports;
+      identityPins = { accountEmail: drive.accountEmail, rootFolderId: drive.rootFolderId, browserProfile: drive.browserProfile };
+    } else if (target.integrationKey === 'fcunoIdentityFederation') {
+      const federation = FCOS_CONNECTION_POLICY.integrations.fcunoIdentityFederation;
+      identityPins = { issuer: federation.issuer, audience: federation.syncAudience, jwksEndpoint: federation.syncJwksEndpoint };
+    } else identityPins = { status: 'requires_independent_verification', configuredIdentityKeys: [...(target.configuredIdentityKeys || [])] };
+    return { id: entry.id, provider: entry.provider, connectionKind: 'application_runtime', identityPins,
+      configuredEnv: Object.fromEntries(entry.environmentKeys.map((key) => [key, typeof environment[key] === 'string' && Boolean(environment[key].trim())])),
+      apiOrigins: [...entry.apiOrigins], authenticationStatus: 'unknown', writePermission: 'unknown', humanAuthorization: 'not_granted' };
+  });
+}
+
+// Release mode is reviewed source, never a CLI flag or environment override.
+export const FCOS_RELEASE_APPROVAL_POLICY = /* @__PURE__ */ Object.freeze({
+  schemaVersion: 1,
+  mode: 'single_operator',
+  operatorProvider: 'github',
+  operatorIdentifier: 'Required account',
+  requiredChecks: /* @__PURE__ */ Object.freeze(['code-and-database', 'dependency-review', 'authenticated-browser']),
+  statusCheckAppId: 15368,
+});

@@ -114,3 +114,12 @@ Final hosted build, performance budgets, quality CI and trusted authenticated
 Preview evidence are still required. OpenAI key creation and trader automation
 remain deferred by the user's latest instruction. Production promotion requires
 exact approval after those checks.
+
+## Integration with the newer connection-controls candidate
+
+The final version is 2.0.292. It preserves the complete newer candidate
+fa3a735567912437d1ac76abaafd36f8e66df493, including release controls and
+truthful Preview reads. Version history retains 2.0.290 and 2.0.291 and gives
+these operational improvements a distinct 2.0.292 entry. Only version files
+conflicted. New exact-source proofs are required after integration; earlier
+checks remain historical evidence. Production authority is unchanged.
