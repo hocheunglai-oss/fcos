@@ -68,7 +68,24 @@ and evidence accurate; planning or fixtures alone do not complete a package.
 - Remaining usage last reported 22 percent. Recheck before another substantial
   phase; suspend safely if below the user's 20 percent reserve.
 
-## Non-AI implementation checkpoint
+## Current Dashboard amendment
+
+The user removed the desktop Dashboard's Work and reconciliation section. Its
+component, helper, isolated fixture and dedicated check are removed. Dashboard
+returns to the preserved KPI, analytics and STEM views. This also removes the
+Dashboard change from the unreleased 2.0.292 history entry.
+
+The remaining changes are My Commitments blockers/owners/completeness notices,
+Nom B source-detail hints and shared filing policy, API modularity, System Health
+recovery guidance, administrator-only workflow metrics, and FCOS Updates release
+synchronization details. Nom B keeps its September 2026 cutoff, row drop areas,
+and My Commitments filing location. OpenAI automation remains deferred.
+
+The earlier candidate 8cae5b6b3281eecc7ee579a6dc8312fe596d359b passed hosted
+quality and authenticated Preview checks. Its proof remains historical; the
+Dashboard removal requires new exact-candidate checks and Preview evidence.
+
+## Non-AI implementation checkpoint (historical)
 
 - Shared Nom B cutoff, file limits, accepted formats, displayed cutoff and cursor
   revision now use one immutable policy. Values retain the existing behavior.
