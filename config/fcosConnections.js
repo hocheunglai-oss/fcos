@@ -414,3 +414,13 @@ export function fcosSalesforceEnvironment(environmentKey) {
 }
 
 export default FCOS_CONNECTION_POLICY;
+
+// Release mode is reviewed source, never a CLI flag or environment override.
+export const FCOS_RELEASE_APPROVAL_POLICY = /* @__PURE__ */ Object.freeze({
+  schemaVersion: 1,
+  mode: 'single_operator',
+  operatorProvider: 'github',
+  operatorIdentifier: 'Required account',
+  requiredChecks: /* @__PURE__ */ Object.freeze(['code-and-database', 'dependency-review', 'authenticated-browser']),
+  statusCheckAppId: 15368,
+});
