@@ -43,6 +43,8 @@ jobs:
         run: npx playwright test --config playwright.nom-b.config.js
       - name: Verify trader Nom B filing and interrupted upload recovery
         run: npx playwright test --config playwright.missing-nom-b.config.js
+      - name: Verify read-only Xero integrity reporting without providers
+        run: npx playwright test --config playwright.xero-integrity.config.js
       - name: Verify group-first People & Access without providers
         run: npx playwright test --config playwright.people-access.config.js
       - name: Verify manual reconciliation approval and recovery without providers

@@ -102,6 +102,22 @@ test('campaign stays lazy and measured inside the ordinary budget, with bounded 
   assert.match((await verifyPerformanceBudgets({ root })).failures.join('\n'), /campaign is 101 bytes/);
 });
 
+test('retired portal execution UI is absent and cannot be reintroduced as a lazy entry', async (t) => {
+  const root = await writeFixture({ ...defaultBudgets, onDemandReconciliationCampaign: { retiredFromPortal: true, totalBytes: 100, totalGzipBytes: 100 } });
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(path.join(root, 'dist/.vite'));
+  const key = 'src/components/xero/XeroReconciliationCampaign.jsx';
+  const manifest = { 'index.html': { isEntry: true, file: 'assets/main.js' } };
+  const saveManifest = () => writeFile(path.join(root, 'dist/.vite/manifest.json'), JSON.stringify(manifest));
+  await saveManifest();
+  assert.deepEqual((await verifyPerformanceBudgets({ root })).failures, []);
+  manifest['index.html'].dynamicImports = [key];
+  manifest[key] = { isDynamicEntry: true, file: 'assets/campaign.js' };
+  await writeFile(path.join(root, 'dist/assets/campaign.js'), 'c'.repeat(80));
+  await saveManifest();
+  assert.match((await verifyPerformanceBudgets({ root })).failures.join('\n'), /Retired Xero execution UI/);
+});
+
 async function writePdfViewerFixture() {
   const root = await writeFixture({ ...defaultBudgets, onDemandPdfViewer: {
     rendererBytes: 300, workerBytes: 500, totalBytes: 800, totalGzipBytes: 300,

@@ -3,6 +3,7 @@ import { APP_VERSION } from './appVersionMeta.js';
 export { APP_VERSION };
 
 export const APP_VERSION_HISTORY = [
+  { version: '2.0.293', releasedAt: '2026-10-01', title: 'Read-only Salesforce–Xero integrity reporting', changes: ['Replace Xero Portal operation controls with saved integrity statistics, discrepancies, correction history and sync health.', 'Keep reviews, approvals, corrections and sync execution in the Codex FCOS project; reporting does not start provider actions.'] },
   { version: '2.0.292', releasedAt: '2026-10-01', title: 'Clearer work, filing and recovery', changes: ['Show recorded blockers and disclose unavailable or capped work sources in My Commitments.', 'Protect the September 2026 Nom B filing policy, highlight missing STEM details, and provide actionable System Health recovery guidance.', 'Show the running release and last synchronized release in FCOS Updates.'] },
   { version: '2.0.291', releasedAt: '2026-10-01', title: 'Connection and release controls', changes: ['Separate tooling access from app connectivity and Production approval.', 'Prevent background portal retries in Preview.'] },
   { version: '2.0.290', releasedAt: '2026-10-01', title: 'Reliable Preview views and charge queues', changes: ['Correct charge queue counts; preserve closures and approvals.', 'Keep Preview book reads safe and show load failures.', 'Correct mailbox status and sync age.'] },
