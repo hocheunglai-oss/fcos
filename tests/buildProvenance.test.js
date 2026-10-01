@@ -1,10 +1,19 @@
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { collectBuildProvenance, deploymentSourceFilter, writeBuildReceipts } from '../scripts/lib/build-provenance.mjs';
+
+// Archive fixtures must not discover a Git checkout above the runner's temp
+// directory after their own .git is removed. Keep production provenance strict.
+const inheritedGitCeilings = process.env.GIT_CEILING_DIRECTORIES;
+process.env.GIT_CEILING_DIRECTORIES = [realpathSync(tmpdir()), inheritedGitCeilings].filter(Boolean).join(delimiter);
+after(() => {
+  if (inheritedGitCeilings === undefined) delete process.env.GIT_CEILING_DIRECTORIES;
+  else process.env.GIT_CEILING_DIRECTORIES = inheritedGitCeilings;
+});
 
 function fixture(t) {
   const cwd = mkdtempSync(join(tmpdir(), 'fcos-provenance-'));
@@ -67,6 +76,7 @@ test('deleted, staged, renamed files and executable mode affect provenance', t =
 
 test('source archives report unknown Git state and cannot produce release receipts', t => {
   const f = fixture(t); rmSync(join(f.cwd, '.git'), { recursive: true });
+  assert.throws(() => f.git('rev-parse', 'HEAD'));
   const receipt = f.collect({ env: { VERCEL_GIT_COMMIT_SHA: 'a'.repeat(40) } });
   assert.equal(receipt.commitVerified, false); assert.equal(receipt.gitDirty, null);
   assert.equal(receipt.releaseEligible, false);
