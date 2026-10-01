@@ -8,12 +8,15 @@ import { releaseHash } from '../scripts/lib/release-readiness.mjs';
 import { collectPreviewParity } from '../scripts/collect-preview-parity.mjs';
 import { normalRoleReadRequest } from '../scripts/lib/normal-role-read-requests.mjs';
 
-test('control installation preserves every existing quality byte apart from the reviewed checkout pin and source receipt', () => {
+test('control installation preserves every existing quality byte apart from the reviewed checkout configuration and source receipt', () => {
   const source = readFileSync(new URL('../.github/workflows/quality.yml', import.meta.url), 'utf8');
   const workflow = load(source), steps = workflow.jobs['code-and-database'].steps;
   const checkout = steps.find(step => step.uses === 'actions/checkout@v4');
   assert.equal(checkout.with.ref, '${{ github.event.pull_request.head.sha || github.sha }}');
   assert.equal(checkout.with['persist-credentials'], false);
+  assert.equal(checkout.with['fetch-depth'], 0);
+  const history = '          # Verify immutable retained Production and compatibility Git objects.\n          fetch-depth: 0\n';
+  assert.equal(source.split(history).length, 2);
   const recordIndex = steps.findIndex(step => step.name === 'Record exact tested source');
   assert.equal(recordIndex, steps.length - 2);
   assert.equal(steps[recordIndex].if, undefined);
@@ -26,6 +29,7 @@ test('control installation preserves every existing quality byte apart from the 
   const start = source.indexOf('      - name: Record exact tested source');
   const end = source.indexOf('\n  authenticated-browser:', start);
   const restored = (source.slice(0, start).replace(/\n+$/, '\n') + '\n' + source.slice(end + 1))
+    .replace(history, '')
     .replace(/^          ref: \$\{\{ github\.event\.pull_request\.head\.sha \|\| github\.sha \}\}\n/m, '');
   assert.equal(releaseHash(restored), 'cf40aa3a2515b2f48990a2f1031944aa6d1a5d8a04eec7232e9bc6c9e013c5dc');
 });
