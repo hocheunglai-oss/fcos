@@ -68,3 +68,10 @@ The repository owner authorized removing recurring release approvals on 16 Septe
 - After the one-time standing FCOS Preview callback is configured, reuse it for matching immutable deployment origins. Do not add and remove an individual callback for each matching build. Verify that the callback is limited to the pinned FCOS project/team and the federated login path.
 - New or broader security access changes remain subject to applicable tool confirmation rules. Salesforce promotion order, financial approvals, and customer-message authorization are unchanged.
 - This current policy supersedes recurring human-review instructions in historical release notes. It does not authorize weakening required checks or expanding test-account permissions.
+
+## Mobile-view development suspended
+
+- Effective 29 September 2026, suspend all mobile-view development until the user explicitly resumes it.
+- Focus new UI work on the desktop view. Do not initiate mobile-specific features, layout changes, redesigns, optimisations, or mobile-only bug fixes during this suspension.
+- Preserve the existing mobile implementation. Shared functionality may continue to evolve for authorised desktop or backend work; keep existing regression checks and do not intentionally break mobile behaviour.
+- Carry this policy into FCOS worktrees and delegated task instructions. Resume mobile-view development only on an explicit subsequent user instruction.

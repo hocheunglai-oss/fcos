@@ -7,7 +7,8 @@ public class DepositCalculationService {
                                              Quantity_Max__c
                                              FROM STEM_Line_Item__c
                                              WHERE (Original_Supplier__c IN: supplierIds OR Original_Supplier__c IN: oldSupplierIds)
-                                             AND STEM__c IN: stemIds AND Payment_Term__c = 'Deposit' AND Supplier_Issued__c = false]){
+                                             AND STEM__c IN: stemIds AND Payment_Term__c = 'Deposit' AND Supplier_Issued__c = false
+                                             AND Cancelled__c = false]){
         	if(amountMap.get(stemLineItem.STEM__c + '_' + stemLineItem.Original_Supplier__c) == null){
                 amountMap.put(stemLineItem.STEM__c + '_' + stemLineItem.Original_Supplier__c, 0);
                 maximumAmountMap.put(stemLineItem.STEM__c + '_' + stemLineItem.Original_Supplier__c, 0);
@@ -28,8 +29,9 @@ public class DepositCalculationService {
                                                Quantity_Delivered_Per_BDN__c, Is_Quantity_Range__c, Nundination_Type__c
                                                FROM STEM_Extra_Cost__c
                                                WHERE (Supplier__c IN: supplierIds OR Supplier__c IN: oldSupplierIds)
-                                               AND STEM__c IN: stemIds AND Payment_Term__c = 'Deposit' AND Supplier_Issued__c = false]){
-        	if(amountMap.get(stemExtraCost.STEM__c + '_' + stemExtraCost.Supplier__c) == null){
+                                               AND STEM__c IN: stemIds AND Payment_Term__c = 'Deposit' AND Supplier_Issued__c = false
+                                               AND Cancelled__c = false]){
+            if(amountMap.get(stemExtraCost.STEM__c + '_' + stemExtraCost.Supplier__c) == null){
                 amountMap.put(stemExtraCost.STEM__c + '_' + stemExtraCost.Supplier__c, 0);
                 maximumAmountMap.put(stemExtraCost.STEM__c + '_' + stemExtraCost.Supplier__c, 0);
             }

@@ -147,10 +147,24 @@ public class ReconfirmProcessing {
 
         if (!lineItemUpdates.isEmpty()) update lineItemUpdates;
         if (!extraCostUpdates.isEmpty()) update extraCostUpdates;
-        if (!intendedPaymentItems.isEmpty()) sendReconfirmNotification(intendedPaymentItems.values());
-        if (!completedItems.isEmpty()) completeTasks(completedItems.values());
-        if (!cancelledItems.isEmpty()) cancelTasks(cancelledItems.values());
+        new CiaTaskAutomation().apply(
+            intendedPaymentItems.values(), completedItems.values(), cancelledItems.values());
         return getReconfirmInfo(new List<String>{ String.valueOf(enquiryId) });
+    }
+
+    // The caller must successfully update the exact, current CIA source rows
+    // before entering this private automation boundary. Tasks are assigned to
+    // supplier traders or the Accounts queue; an authorized source editor need
+    // not be allowed to edit those other users' tasks directly. The existing
+    // task methods inherit this context only on this server-constructed path.
+    // Direct Aura calls retain their normal sharing checks.
+    private without sharing class CiaTaskAutomation {
+        public void apply(List<ReconfirmItem> intended, List<ReconfirmItem> completed,
+                          List<ReconfirmItem> cancelled) {
+            if (!intended.isEmpty()) sendReconfirmNotification(intended);
+            if (!completed.isEmpty()) completeTasks(completed);
+            if (!cancelled.isEmpty()) cancelTasks(cancelled);
+        }
     }
 
     private static void validateCiaChange(Id expectedEnquiryId, CiaChangeInput change, Id actualEnquiryId,

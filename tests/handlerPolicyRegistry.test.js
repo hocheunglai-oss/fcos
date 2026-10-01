@@ -61,3 +61,14 @@ test('saved Xero previews are mutations protected by Finance management permissi
     assert.equal(registeredHandlerBehavior(name).cache, 'none');
   }
 });
+
+test('Nom B observations and policies bypass caches and declare their audit writes', () => {
+  for (const name of ['dashboardNomBRead', 'dashboardNomBPolicySave']) {
+    assert.equal(registeredHandlerBehavior(name).mutation, true);
+    assert.equal(registeredHandlerBehavior(name).audit, 'required');
+    assert.equal(registeredHandlerBehavior(name).cache, 'none');
+    assert.equal(registeredHandlerBehavior(name).externalAction, false);
+  }
+  assert.equal(registeredHandlerBehavior('dashboardNomBAuditRead').mutation, false);
+  assert.equal(registeredHandlerBehavior('dashboardNomBAuditRead').cache, 'none');
+});
