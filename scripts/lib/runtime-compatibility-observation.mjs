@@ -8,7 +8,7 @@ import { fcosConnectionIdentifier } from '../../config/fcosConnections.js';
 // The original complete source and each dependency declaration are verified
 // against immutable Git; the local reviewed declaration bytes must also match.
 export const OBSERVATION_BASE_SHA = 'f3472492ff4d0b0c70248a3c8e5c0012981a94b3';
-export const OBSERVATION_CANDIDATE_SHA = 'f3d4cadfbaad7c25c83205350bb9be572493f47c';
+export const OBSERVATION_CANDIDATE_SHA = 'ff8859b287009e20462c5c0cceff89ae12f13010';
 export const OBSERVATION_DECLARATIONS = Object.freeze([
   {
     "file": "api/_deploymentReadOnly.js",
@@ -68,7 +68,7 @@ export const OBSERVATION_DECLARATIONS = Object.freeze([
   },
   {
     "file": "api/_connectionRuntime.js",
-    "ref": "f3d4cadfbaad7c25c83205350bb9be572493f47c",
+    "ref": "ff8859b287009e20462c5c0cceff89ae12f13010",
     "sourceSha256": "e52aa950fb59083a7735c9b7893619920c6dbd0026decaae101a865ad969b226",
     "declarationSha256": "b1270d34e475304ad7969653398d575a5db1ce8c825ef513e8f1d1cd2b049a4b",
     "ranges": [

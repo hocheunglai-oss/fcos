@@ -18,12 +18,12 @@ export const COMPATIBILITY_EXCEPTION = 'previous-runtime-endpoint-absent-v1';
 // This is one reviewed first-rollout proposal, never a general baseline bypass.
 // A different source or Production deployment needs a separately reviewed contract.
 export const FIRST_RUNTIME_ROLLOUT = Object.freeze({
-  candidateSha: 'f3d4cadfbaad7c25c83205350bb9be572493f47c',
+  candidateSha: 'ff8859b287009e20462c5c0cceff89ae12f13010',
   previousSha: 'f3472492ff4d0b0c70248a3c8e5c0012981a94b3',
   previousDeploymentId: 'dpl_KmyVbNkg7okjW4PPjR8ZJXRz19AL',
   previousUrl: 'https://fcos-3nt36gqot-hocheunglai-6535s-projects.vercel.app',
 });
-export const COMPATIBILITY_READ_ONLY_GUARDS = Object.freeze(['api/_hedgeDeskService.js', 'api/_xeroPortal.js', 'api/functions/[name].js', 'api/_xeroContactSync.js']);
+export const COMPATIBILITY_READ_ONLY_GUARDS = Object.freeze(['api/_hedgeDeskService.js', 'api/_xeroPortal.js', 'api/functions/[name].js', 'api/_xeroContactSync.js', 'api/_emailRouterCore.js']);
 const sha = value => /^[0-9a-f]{40}$/.test(value || '');
 const hash = value => /^[0-9a-f]{64}$/.test(value || '');
 const positive = value => Number.isSafeInteger(value) && value > 0;
@@ -140,7 +140,7 @@ export function runtimeCompatibilityRequirements() {
     requirement('deployments', 'before_staging_and_domains', ['exact unchanged previous Production ID/SHA/immutable URL', 'distinct READY Git-linked candidate Preview', 'candidate artifact source digest and clean build receipt']),
     requirement('quality', 'before_staging_and_domains', ['only the exact pinned base/candidate pair with byte-identical original quality workflows', 'every original named upstream job succeeded on the exact tested source tree and remains fresh by actual completion time', 'protected compatibility archive binds source, lock, harness and upstream job proof; reread original metadata and archive']),
     requirement('restricted_ui', 'before_staging_and_domains', ['fresh successful protected-main restricted browser artifact', 'exact candidate URL/SHA and trusted harness SHA', 'existing authenticated regressions, including preserved mobile behavior']),
-    requirement('normal_ui', 'before_staging_and_domains', ['separate approved active real identity', 'exact deployment/source-bound artifact and archive digest', 'independent immutable exact four-file guard and four-read-action helper proof before credentials; verified read-only snapshots suppress expiry, status suppresses refresh, and mappings uses only a valid stored Xero session without token renewal', ...PREVIEW_PARITY_POLICY.requiredModules.map(name => `${name}: real data loaded and authorized read verified${PREVIEW_PARITY_POLICY.workflowModules.includes(name) ? ', read workflow verified' : ''}`)]),
+    requirement('normal_ui', 'before_staging_and_domains', ['separate approved active real identity', 'exact deployment/source-bound artifact and archive digest', 'independent immutable exact five-file guard and four-read-action helper proof before credentials; verified read-only snapshots suppress expiry, status suppresses refresh, mappings uses only a valid stored Xero session without token renewal, and Email Router list/detail suppress metadata persistence', ...PREVIEW_PARITY_POLICY.requiredModules.map(name => `${name}: real data loaded and authorized read verified${PREVIEW_PARITY_POLICY.workflowModules.includes(name) ? ', read workflow verified' : ''}`)]),
     requirement('environment', 'before_staging_and_domains', ['complete immutable deployed environment key inventory and freshness', 'all discovered switches classified by reviewed protected-main policy', 'exact approved non-secret parity and intentional differences', 'opaque values remain unknown until independent safe proof']),
     requirement('compiled_flags', 'before_staging_and_domains', PREVIEW_PARITY_POLICY.compiledFlags.map(key => `${key}: executed assets, approved settings and preserved baseline agree`)),
     requirement('runtime', 'before_staging_and_domains', ['candidate Preview read-only and every external action disabled', ...PREVIEW_PARITY_POLICY.runtimeFlags.map(key => `${key}: known effective value with reviewed baseline proof`), ...PREVIEW_PARITY_POLICY.requiredAuth.map(name => `${name}: independently authenticated existing session and pinned target; no refresh`)]),
@@ -292,7 +292,7 @@ export function createRuntimeCompatibilityPreflight({ binding, scope, protection
     && scope.candidateCommit === binding.sha && scope.candidateTreeHash === binding.candidateTreeHash;
   if (!checks.source) fail('EXACT_ADDITIVE_SCOPE_REQUIRED', 'source', 'Recompute the exact candidate/base scope and clean source, lock and control hashes from immutable Git objects.');
   checks.readOnlySourceGuards = compatibilityReadOnlyGuardsVerified(scope);
-  if (!checks.readOnlySourceGuards) fail('EXACT_READ_ONLY_GUARD_SCOPE_REQUIRED', 'source', 'Independently prove all three exact reviewed guard transformations and the exact read-action helper from immutable Git before credentials or staging.');
+  if (!checks.readOnlySourceGuards) fail('EXACT_READ_ONLY_GUARD_SCOPE_REQUIRED', 'source', 'Independently prove all five exact reviewed guard transformations, including suppression of Email Router metadata persistence, and the exact read-action helper from immutable Git before credentials or staging.');
   checks.protection = positive(protection?.runId) && positive(protection.environmentId) && positive(protection.reviewerId)
     && protection.approvalMode === 'single_operator' && protection.harnessSha === binding?.harnessSha;
   if (!checks.protection) fail('COMPATIBILITY_ENVIRONMENT_APPROVAL_REQUIRED', 'protection', 'Install the reviewed workflow on protected main; separately approve exact environment setup, reviewed pins and dedicated credentials, then approve the first exact run.');

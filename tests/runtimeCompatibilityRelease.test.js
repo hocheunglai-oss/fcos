@@ -186,6 +186,7 @@ test('contract makes only the exact previous endpoint absence a proposed excepti
   }
   assert.ok(requirements.find(row => row.id === 'staged_production').mustProve.some(value => value.includes('--prod --skip-domain')));
   assert.ok(requirements.find(row => row.id === 'domain_readback').mustProve.some(value => value.includes('without retry')));
+  assert.ok(requirements.find(row => row.id === 'normal_ui').mustProve.some(value => value.includes('five-file guard') && value.includes('Email Router list/detail suppress metadata persistence')));
   assert.match(runtimeCompatibilityControlRevision(root, root), /^[0-9a-f]{64}$/);
 });
 
@@ -225,8 +226,14 @@ test('immutable baseline digest and pure-helper provenance match the exact retai
   assert.equal(proof.observationKind, 'independent_provider_probe_and_verified_deployment_configuration');
   const scope = verifyRuntimeCompatibility({ cwd: root, baseCommit: FIRST_RUNTIME_ROLLOUT.previousSha, candidateCommit: FIRST_RUNTIME_ROLLOUT.candidateSha });
   assert.equal(compatibilityReadOnlyGuardsVerified(scope), true);
+  assert.equal(COMPATIBILITY_READ_ONLY_GUARDS.length, 5);
+  assert.ok(COMPATIBILITY_READ_ONLY_GUARDS.includes('api/_emailRouterCore.js'));
   for (const alter of [x => { x.readOnlyGuards.pop(); }, x => { x.readOnlyGuards.push(x.readOnlyGuards[0]); },
-    x => { x.changes = x.changes.filter(row => row.path !== 'api/_hedgeDeskReadOnly.js'); }, x => { x.candidateCommit = '33d97ea74439e27128fd148df78a1e6be6a2f844'; },
+    x => { x.changes = x.changes.filter(row => row.path !== 'api/_hedgeDeskReadOnly.js'); },
+    x => { x.readOnlyGuards = x.readOnlyGuards.filter(path => path !== 'api/_emailRouterCore.js'); },
+    x => { x.changes = x.changes.filter(row => row.path !== 'api/_emailRouterCore.js'); },
+    x => { x.candidateCommit = 'f3d4cadfbaad7c25c83205350bb9be572493f47c'; },
+    x => { x.candidateCommit = '33d97ea74439e27128fd148df78a1e6be6a2f844'; },
   ]) { const copy = structuredClone(scope); alter(copy); assert.equal(compatibilityReadOnlyGuardsVerified(copy), false); }
 });
 
