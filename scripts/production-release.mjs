@@ -37,7 +37,7 @@ export async function runProductionRelease({ mode = 'dry-run', cwd = ROOT, expec
   ], blockers: ['PRODUCTION_ACTIVATION_REQUIRES_SEPARATE_REVIEW'], mutations: 0 };
   if (!['preflight', 'execute'].includes(mode) || !/^[0-9a-f]{40}$/.test(expectedCommit || '')) throw new Error('An exact reviewed candidate SHA is required.');
   canonicalFcosE2eCandidateUrl(candidateUrl);
-  const source = collectParitySource(cwd), lockHash = releaseHash(readFileSync(join(cwd, 'package-lock.json'))), configurationRevision = releaseConfigurationRevision(cwd);
+  const source = collectParitySource(cwd), lockHash = releaseHash(readFileSync(join(cwd, 'package-lock.json'))), configurationRevision = releaseConfigurationRevision(cwd, ROOT);
   if (source.candidateHead !== expectedCommit) throw new Error('Reviewed release checkout differs from the requested exact candidate.');
   const claims = await githubReleaseOidc({ env });
   const ghEnv = { PATH: env.PATH, HOME: env.HOME, GH_HOST: 'github.com', GH_TOKEN: env.GH_TOKEN || env.GITHUB_TOKEN, GH_REPO: RELEASE_REPOSITORY };
@@ -88,7 +88,7 @@ export async function runProductionRelease({ mode = 'dry-run', cwd = ROOT, expec
     vercelProof = assertVercelProductionAuthority({ user, team, project: projectDetails,
       token: await readVercelTokenMetadata({ cliRead: api, token: env.VERCEL_TOKEN }), reviewedTokenId: pinnedToken, deploymentConfiguration,
       hooks: projectDetails.link?.deployHooks });
-    if (collectParitySource(cwd).hashes.application !== source.hashes.application || releaseConfigurationRevision(cwd) !== configurationRevision) throw new Error('Source or release configuration changed after human review.');
+    if (collectParitySource(cwd).hashes.application !== source.hashes.application || releaseConfigurationRevision(cwd, ROOT) !== configurationRevision) throw new Error('Source or release configuration changed after human review.');
     return approved;
   };
   await authority();

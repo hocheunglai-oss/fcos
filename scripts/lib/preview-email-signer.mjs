@@ -88,7 +88,9 @@ function validatedSignedEnvelope(value, now) {
     || typeof value.url !== 'string' || !exactInstant(value.expiresAt)) throw safeError();
   const [encodedPayload, encodedSignature, ...extra] = value.token.split('.');
   if (extra.length || !encodedPayload || !encodedSignature || !/^[A-Za-z0-9_-]+$/.test(encodedPayload)
-    || !/^[A-Za-z0-9_-]+$/.test(encodedSignature)) throw safeError();
+    || !/^[A-Za-z0-9_-]+$/.test(encodedSignature)
+    || Buffer.from(encodedPayload, 'base64url').toString('base64url') !== encodedPayload
+    || Buffer.from(encodedSignature, 'base64url').toString('base64url') !== encodedSignature) throw safeError();
   let payload;
   try { payload = JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf8')); } catch { throw safeError(); }
   if (!exactKeys(payload, ['mailboxId', 'messageId', 'attachmentId', 'expiresAt'])

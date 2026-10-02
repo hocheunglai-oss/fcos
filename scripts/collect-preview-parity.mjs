@@ -1,3 +1,4 @@
+import { LEGACY_EMAIL_BASELINE_CONTRACT_HASH, legacyEmailCandidate, collectLegacyEmailBaselineEvidence } from './lib/legacy-email-baseline-proof.mjs';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, readdirSync } from 'node:fs';
@@ -44,7 +45,8 @@ export function collectParitySource(cwd = ROOT) {
   }
   for (const directory of ['api', 'src', 'config']) visit(directory);
   const hashes = { application: provenance.sourceDigest,
-    policy: digest(readFileSync(join(cwd, 'config/preview-parity-policy.json'))),
+    policy: digest(readFileSync(join(ROOT, 'config/preview-parity-policy.json'))),
+    legacyEmailProof: LEGACY_EMAIL_BASELINE_CONTRACT_HASH,
     connections: digest(readFileSync(join(cwd, 'config/fcosConnections.js'))),
     ciIdentity: digest(readFileSync(join(cwd, 'config/fcosCiIdentity.js'))) };
   return { candidateHead: provenance.commit, hashes,
@@ -53,7 +55,7 @@ export function collectParitySource(cwd = ROOT) {
 
 // Values remain private and in memory. The caller must serialize only the
 // evaluator's name-only result, never these internal observations.
-export function parseParityEnvironment(source, deployedKeys) {
+export function parseParityEnvironment(source, deployedKeys, { hashOpaqueValues = false } = {}) {
   const parsed = {};
   for (const line of source.split('\n')) {
     const match = line.match(/^([A-Z][A-Z0-9_]*)=(.*)$/);
@@ -70,6 +72,7 @@ export function parseParityEnvironment(source, deployedKeys) {
     const value = parsed[key];
     const record = !deployed.has(key) ? { state: 'unknown', present: false }
       : value === undefined ? { state: 'unknown', present: true }
+      : hashOpaqueValues && PREVIEW_PARITY_POLICY.applicationKeys.opaqueMatch.includes(key) && value !== '' ? { state: 'known', sha256: digest(value) }
       : credentials.has(key) || value === '' ? { state: 'unknown', present: true }
         : { state: 'known', value };
     return [key, record];
@@ -200,7 +203,7 @@ export async function collectPreviewParity({ candidateUrl, expectedCommit, prote
       snapshots[name] = {
         deployment: { id: deployment.id, url, sha: bound.sha, state: deployment.readyState, target, createdAt: deployment.createdAt, teamId, projectId },
         env: { ...bound, updatedAt: entries.length ? Math.max(...entries.map(entry => Number(entry.updatedAt || entry.createdAt || 0))) : null,
-          keys: parseParityEnvironment(readFileSync(file, 'utf8'), deployedKeys) }, compiled,
+          keys: parseParityEnvironment(readFileSync(file, 'utf8'), deployedKeys, { hashOpaqueValues: true }) }, compiled,
         // CLI deployment metadata cannot establish executed runtime flags,
         // normal-user rendering or provider authentication. Leave those unknown.
         runtime: { ...bound, flags: Object.fromEntries(PREVIEW_PARITY_POLICY.runtimeFlags.map(key => [key, unknown()])), safety: {}, auth: {} },
@@ -213,15 +216,23 @@ export async function collectPreviewParity({ candidateUrl, expectedCommit, prote
   const observations = { schemaVersion: 1, provider: { provider: 'vercel', account: fcosConnectionIdentifier('vercel', 'Account'), teamId, projectId,
     repository: fcosConnectionIdentifier('github', 'Repository') }, source, switchInventory: source.switchInventory, ...snapshots,
     coverage: { capturedAt: new Date().toISOString(), deploymentId: snapshots.candidate.deployment.id, sha: snapshots.candidate.deployment.sha, checks: [] } };
-  const lockHash = releaseHash(readFileSync(join(cwd, 'package-lock.json'))), configurationRevision = releaseConfigurationRevision(cwd);
+  const lockHash = releaseHash(readFileSync(join(cwd, 'package-lock.json'))), configurationRevision = releaseConfigurationRevision(cwd, ROOT);
   const binding = { sha: expectedCommit, sourceDigest: source.hashes.application, lockHash, configurationRevision,
     deploymentId: snapshots.candidate.deployment.id, candidateUrl };
   let trusted = { records: [], blockers: [{ code: 'TRUSTED_COLLECTOR_UNAVAILABLE', scope: 'coverage' }], quality: null };
   try {
     const github = await connections.verifyProvider('github', { persist: false, prepare: false });
     if (github.identityVerified !== true || github.targetPin !== 'verified' || !github.permissions?.includes('repository.read')) throw new Error('unverified');
-    trusted = await collectTrustedReleaseEvidence({ reads: githubReleaseReads(connections.providerRuntime('github', { prepare: false }), { cwd }), binding });
+    const reads = githubReleaseReads(connections.providerRuntime('github', { prepare: false }), { cwd });
+    trusted = await collectTrustedReleaseEvidence({ reads, binding });
     const coverage = trusted.records.find(record => record.kind === 'normal_role');
+    if (legacyEmailCandidate(expectedCommit)) {
+      try { observations.legacyEmailBaseline = await collectLegacyEmailBaselineEvidence({ api, reads, binding,
+        production: snapshots.production.deployment, candidate: snapshots.candidate.deployment, normal: coverage,
+        readVersion: async deployment => JSON.parse(await artifact(deployment.url, '/app-version.json', true)) });
+        observations.legacyEmailNormal = coverage;
+      } catch { trusted.blockers.push({ code: 'LEGACY_EMAIL_PROOF_UNAVAILABLE', scope: 'email_baseline' }); }
+    }
     if (coverage) observations.coverage = { capturedAt: coverage.capturedAt, deploymentId: coverage.deploymentId, sha: coverage.sha, checks: coverage.checks };
   } catch { /* Fail closed on unavailable independent transport or protections. */ }
   const result = evaluatePreviewParity(observations, { expectedCommit, sourceHashes: source.hashes });
@@ -235,7 +246,7 @@ export async function collectPreviewParity({ candidateUrl, expectedCommit, prote
     expectedRuntimeAuth: Object.fromEntries(PREVIEW_PARITY_POLICY.requiredAuth.map(provider => [provider, snapshots.production.runtime.auth?.[provider] || { state: 'unknown' }])),
     expectedRuntimeFlags: snapshots.production.runtime.flags,
     expectedRuntimeSafety: snapshots.production.runtime.safety,
-    trustedEvidence: trusted.records.map(({ checks, ...record }) => record), quality: trusted.quality };
+    trustedEvidence: trusted.records.map(({ checks, emailSigner: _emailSigner, ...record }) => record), quality: trusted.quality };
 }
 
 export async function assertCollectedPreviewParity(options) {

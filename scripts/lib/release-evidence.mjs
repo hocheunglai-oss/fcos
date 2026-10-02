@@ -1,3 +1,4 @@
+import { previewEmailSignerEvidenceVerified } from './preview-email-signer.mjs';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -67,9 +68,11 @@ export function assertTrustedArtifact({ repository, branch, protection, run, art
   if (kind === 'normal_role' && (payload.schemaVersion !== 1 || payload.deploymentId !== binding.deploymentId
     || payload.sourceDigest !== binding.sourceDigest || !fresh(payload.capturedAt, now) || !Array.isArray(payload.checks)
     || payload.checks.some(row => Object.keys(row || {}).some(key => !['module', 'role', 'result', 'kind', 'evidenceId'].includes(key))))) throw new Error('Normal-role coverage must bind the exact deployment and source digest.');
+  if (kind === 'normal_role' && payload.emailSigner !== undefined) previewEmailSignerEvidenceVerified(payload.emailSigner,
+    { deployment: { id: binding.deploymentId, sha: binding.sha }, sourceDigest: binding.sourceDigest, now });
   return { ...binding, kind, runId: run.id, artifactId: artifact.id, archiveDigest: releaseHash(archive), harnessSha: trusted.sha,
     capturedAt: kind === 'normal_role' ? payload.capturedAt : run.updated_at,
-    ...(kind === 'normal_role' ? { checks: payload.checks } : {}) };
+    ...(kind === 'normal_role' ? { checks: payload.checks, ...(payload.emailSigner !== undefined ? { emailSigner: payload.emailSigner } : {}) } : {}) };
 }
 
 // Adapter receives a verified, target-locked CLI runtime. Requests are fixed GETs;
@@ -87,7 +90,7 @@ export function githubReleaseReads(runtime, { cwd = process.cwd(), execute = exe
 
 export function readEvidenceArchive(archive, filename, { execute = execFileSync } = {}) {
   if (!Buffer.isBuffer(archive) || archive.length < 1 || archive.length > 2 * 1024 * 1024
-    || !['fcos-ci-evidence.json', 'fcos-normal-role-evidence.json', 'fcos-quality-source.json'].includes(filename)) throw new Error('Evidence archive is unavailable or exceeds the size limit.');
+    || !['fcos-ci-evidence.json', 'fcos-normal-role-evidence.json', 'fcos-quality-source.json', 'fcos-preview-email-build.json', 'fcos-preview-email-intent.json'].includes(filename)) throw new Error('Evidence archive is unavailable or exceeds the size limit.');
   const directory = mkdtempSync(join(tmpdir(), 'fcos-release-evidence-'));
   try {
     const path = join(directory, 'evidence.zip');

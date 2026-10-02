@@ -14,16 +14,22 @@ const safeCode = value => /^[A-Z][A-Z0-9_]{0,95}$/.test(value || '') ? value : '
 const fields = (value, allowed) => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).every(key => allowed.includes(key));
 
 // Hash the reviewed controls, not environment values, credentials or reports.
-export function releaseConfigurationRevision(cwd) {
+export function releaseConfigurationRevision(cwd, trustedCwd = cwd) {
   const files = ['config/fcosConnections.js', 'config/fcosCiIdentity.js', 'config/preview-parity-policy.json',
     'vercel.json', 'package.json', 'package-lock.json', 'AGENTS.md', '.codex/config.toml', '.codex/setup.mjs',
     '.codex/control-validation.mjs', '.codex/control-policy.json', '.codex/README.md',
     '.github/workflows/quality.yml', '.github/workflows/authenticated-release.yml', '.github/workflows/production-release.yml',
-    '.github/workflows/normal-role-release.yml', 'scripts/normal-role-release.mjs', 'scripts/lib/normal-role-verification-transport.mjs'];
-  const digest = createHash('sha256').update('fcos-release-configuration-v1\0');
+    '.github/workflows/normal-role-release.yml', 'scripts/normal-role-release.mjs', 'scripts/lib/normal-role-verification-transport.mjs', 'scripts/lib/normal-role-read-requests.mjs',
+    'scripts/lib/preview-email-signer.mjs', 'scripts/lib/legacy-email-baseline-proof.mjs', 'config/legacy-email-baseline-proof.json',
+    'scripts/lib/preview-email-build.mjs', 'scripts/preview-email-proof-build.mjs', '.github/workflows/preview-email-proof-build.yml',
+    'scripts/lib/preview-parity.mjs', 'scripts/collect-preview-parity.mjs', 'scripts/lib/release-evidence.mjs'];
+  const trustedFiles = new Set(files.filter(file => file.startsWith('scripts/') || file.startsWith('.github/')
+    || ['config/preview-parity-policy.json', 'config/legacy-email-baseline-proof.json'].includes(file)));
+  const digest = createHash('sha256').update('fcos-release-configuration-v2\0');
   for (const file of files) {
     digest.update(`${file}\0`);
-    if (existsSync(join(cwd, file))) digest.update(readFileSync(join(cwd, file)));
+    const root = trustedFiles.has(file) ? trustedCwd : cwd;
+    if (existsSync(join(root, file))) digest.update(readFileSync(join(root, file)));
     else digest.update('absent');
     digest.update('\0');
   }
@@ -37,7 +43,7 @@ export function releaseConfigurationRevision(cwd) {
 export function createReleaseReadiness({ source, candidate, production, parity, evidence = [], quality, configurationRevision, lockHash, now = Date.now() } = {}) {
   const blockers = [];
   const fail = (code, scope) => blockers.push({ code: safeCode(code), scope: /^[a-zA-Z0-9_.-]{1,160}$/.test(scope || '') ? scope : 'release' });
-  if (!fields(source, ['candidateHead', 'hashes', 'switchInventory']) || !fields(source?.hashes, ['application', 'policy', 'connections', 'ciIdentity'])) fail('SOURCE_SCHEMA', 'source');
+  if (!fields(source, ['candidateHead', 'hashes', 'switchInventory']) || !fields(source?.hashes, ['application', 'policy', 'connections', 'ciIdentity', 'legacyEmailProof'])) fail('SOURCE_SCHEMA', 'source');
   if (!sha(source?.candidateHead) || !hash(source?.hashes?.application) || !hash(lockHash) || !hash(configurationRevision)) fail('SOURCE_IDENTITY', 'source');
   const bound = record => record && record.sha === source?.candidateHead && record.sourceDigest === source?.hashes?.application
     && record.lockHash === lockHash && record.configurationRevision === configurationRevision;
@@ -47,7 +53,7 @@ export function createReleaseReadiness({ source, candidate, production, parity, 
   if (!production || !id(production.id) || !immutable(production.url) || !sha(production.sha) || production.state !== 'READY' || production.target !== 'production') fail('PRODUCTION_IDENTITY', 'production');
   if (!fresh(parity?.capturedAt, now) || !bound(parity?.binding) || parity.binding?.deploymentId !== candidate?.id
     || parity.binding?.url !== candidate?.url) fail('PARITY_BINDING', 'parity');
-  if (!fields(parity, ['schemaVersion', 'policyVersion', 'pass', 'blockers', 'classifiedKeys', 'unknowns', 'limitations', 'capturedAt', 'binding',
+  if (!fields(parity, ['schemaVersion', 'policyVersion', 'pass', 'blockers', 'classifiedKeys', 'unknowns', 'acceptedHistoricalUnknowns', 'limitations', 'capturedAt', 'binding',
     'source', 'candidate', 'production', 'expectedRuntimeAuth', 'expectedRuntimeFlags', 'expectedRuntimeSafety', 'trustedEvidence', 'quality'])
     || parity.source && parity.source.candidateHead !== source?.candidateHead || parity.candidate && (parity.candidate.sha !== source?.candidateHead
       || parity.candidate.id !== candidate?.id || parity.candidate.sourceDigest !== source?.hashes?.application)

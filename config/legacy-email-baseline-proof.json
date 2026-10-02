@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "id": "retained-production-email-proof-v1",
+  "baseline": {
+    "deploymentId": "dpl_KmyVbNkg7okjW4PPjR8ZJXRz19AL",
+    "sha": "f3472492ff4d0b0c70248a3c8e5c0012981a94b3",
+    "url": "https://fcos-3nt36gqot-hocheunglai-6535s-projects.vercel.app",
+    "records": {
+      "FCOS_MICROSOFT_TENANT_ID": { "id": "Xmi9NrwB63KKrppz", "createdAt": 1785646108744, "updatedAt": 1785646108744 },
+      "FCOS_MICROSOFT_CLIENT_ID": { "id": "GsmjfvH2tHXrSDod", "createdAt": 1785646108744, "updatedAt": 1785646108744 },
+      "FCOS_EMAIL_ROUTER_ATTACHMENT_SECRET": { "id": "A2bvwxE5lOKNYFUQ", "createdAt": 1785700911984, "updatedAt": 1785700911984 }
+    }
+  },
+  "preview": {
+    "tenantId": "70011d0d-19b4-4a61-8195-ab1fd987c20f",
+    "clientId": "e822cd4d-5db5-4801-81e6-2e308aff6e33",
+    "mailboxRegistryId": "e7a386ee-3d81-43be-b330-537205ef57ec",
+    "attachmentOperationId": "14af5f99-6065-413b-b957-bdf23b2b1fed",
+    "candidates": [
+      {
+        "sha": "ff8859b287009e20462c5c0cceff89ae12f13010",
+        "branch": "codex/runtime-compatibility-20261001",
+        "sourceDigest": "76fe8828c374094fe61db2606f342131968d8869b912284f1d73522635e80743",
+        "lockHash": "9b3d6eb4824ea8688022b9ba249041e25c44b8cebc5443d59c55d8a2da5da378",
+        "attachmentRecordId": "hdPcGClYbOKrG2Zu",
+        "tenantRecordId": "GsZss28qbxJZ2tap",
+        "clientRecordId": "gh6UmPz8ZCqFbnLI"
+      },
+      {
+        "sha": "ee28300d25470fa9ca9a6dda37b3752287f20f19",
+        "branch": "codex/xero-integrity-20261001",
+        "sourceDigest": "14f815c1b06bed9b5bd6c744e2e6f8cf09ac56fd518c486a9e04cc4051dd677a",
+        "lockHash": "0f35c1e123ab566f5d065d187bc0b8a7d1e05f7968ec31a03cd67ac0070aa0ef",
+        "attachmentRecordId": "DN700NCE05ij4nJk",
+        "tenantRecordId": "S1eqoY0omGDYAxTS",
+        "clientRecordId": "HM2hGzDXkOLFPk2k"
+      }
+    ]
+  },
+  "historicalKeys": ["FCOS_MICROSOFT_TENANT_ID", "FCOS_MICROSOFT_CLIENT_ID", "FCOS_EMAIL_ROUTER_ATTACHMENT_SECRET"],
+  "limitation": "The retained Production values and historical setting selection are unverified. This one-baseline exception accepts only a documented historical proof limitation; record continuity does not establish historical values, equality, or old deployment selection. Controlled Preview creation, fresh signer and actual normal-user reads remain mandatory."
+}
