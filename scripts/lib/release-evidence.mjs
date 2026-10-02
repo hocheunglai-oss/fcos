@@ -102,6 +102,34 @@ export function readEvidenceArchive(archive, filename, { execute = execFileSync 
   finally { rmSync(directory, { recursive: true, force: true }); }
 }
 
+// A protected workflow path does not establish that its credential environment
+// required a human review. Collect that boundary independently for each archive.
+export function assertVerificationEnvironmentReview({ environment, approvals, run, kind } = {}) {
+  const name = kind === 'restricted_browser' ? 'fcos-ci-readonly' : kind === 'normal_role' ? 'fcos-normal-role-verification' : null;
+  const rules = environment?.protection_rules?.filter(row => row.type === 'required_reviewers') || [];
+  const rule = rules.length === 1 ? rules[0] : null;
+  const reviewer = rule?.reviewers?.length === 1 ? rule.reviewers[0] : null;
+  const operator = fcosConnectionIdentifier('github', 'Required account');
+  if (!name || FCOS_RELEASE_APPROVAL_POLICY.mode !== 'single_operator' || environment?.name !== name || !positive(environment.id)
+    || environment.can_admins_bypass !== false || environment.deployment_branch_policy?.protected_branches !== true
+    || environment.deployment_branch_policy?.custom_branch_policies !== false || rule?.prevent_self_review !== false
+    || reviewer?.type !== 'User' || reviewer.reviewer?.login !== operator || !positive(reviewer.reviewer.id)
+    || run?.run_attempt !== 1 || run.actor?.login !== operator || run.actor?.id !== reviewer.reviewer.id
+    || run.triggering_actor?.login !== operator || run.triggering_actor?.id !== reviewer.reviewer.id)
+    throw new Error('Verification archive requires its pinned non-bypassable human-review environment and a fresh first-attempt run.');
+  const matching = (Array.isArray(approvals) ? approvals : []).filter(row => row.environments?.some(env => env.id === environment.id && env.name === name));
+  if (matching.length !== 1 || matching[0].state !== 'approved' || matching[0].user?.login !== operator
+    || matching[0].user?.id !== reviewer.reviewer.id) throw new Error('Verification archive is missing the exact human environment approval.');
+  return true;
+}
+
+export function collectVerificationEnvironmentReview({ reads, run, kind }) {
+  const name = kind === 'restricted_browser' ? 'fcos-ci-readonly' : kind === 'normal_role' ? 'fcos-normal-role-verification' : null;
+  if (!name || !positive(run?.id)) throw new Error('Exact verification workflow identity required.');
+  return assertVerificationEnvironmentReview({ environment: reads.json(`repos/${RELEASE_REPOSITORY}/environments/${name}`),
+    approvals: reads.json(`repos/${RELEASE_REPOSITORY}/actions/runs/${run.id}/approvals`), run, kind });
+}
+
 export async function collectTrustedReleaseEvidence({ reads, binding, now = Date.now(), unpack = readEvidenceArchive } = {}) {
   const records = [], blockers = [];
   const repository = reads.json(`repos/${RELEASE_REPOSITORY}`);
@@ -119,6 +147,7 @@ export async function collectTrustedReleaseEvidence({ reads, binding, now = Date
         const artifacts = reads.json(`repos/${RELEASE_REPOSITORY}/actions/runs/${run.id}/artifacts?per_page=100`).artifacts || [];
         const artifact = artifacts.find(row => row.name === `${prefix}-${binding.sha}` && row.expired === false);
         if (!artifact) continue;
+        collectVerificationEnvironmentReview({ reads, run, kind });
         const archive = reads.archive(`repos/${RELEASE_REPOSITORY}/actions/artifacts/${artifact.id}/zip`);
         const payload = unpack(archive, kind === 'normal_role' ? 'fcos-normal-role-evidence.json' : 'fcos-ci-evidence.json');
         record = assertTrustedArtifact({ repository, branch, protection, run, artifact, archive, payload, kind, binding, now });

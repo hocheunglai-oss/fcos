@@ -36,6 +36,14 @@ retained, and compatibility promotion recollects proof at its existing approval
 boundaries. Protected harness controls and candidate application configuration
 are hashed separately into the reviewed release configuration revision.
 
+Restricted-browser and normal-user archives also require fresh provider reads
+of their exact credential environment and recorded human approval. Each must
+have the pinned owner as its sole required reviewer, administrator bypass
+disabled, and protected branches only. Collection accepts a fresh first-attempt
+owner-dispatched run; a rerun needs a new dispatch and review because historical
+approval records do not independently bind the latest attempt. An unprotected
+environment or a local approval flag cannot establish this evidence.
+
 The new Preview-build workflow is disabled by default. Installing this verifier
 requires owner review of its exact commit under `CI_BOOTSTRAP_REVIEW.md`.
 Installation does not enable the workflow, grant Microsoft access, replace

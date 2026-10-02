@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { FCOS_RELEASE_APPROVAL_POLICY, fcosConnectionIdentifier } from '../../config/fcosConnections.js';
 import { PREVIEW_PARITY_POLICY } from './preview-parity.mjs';
-import { assertProtectedDefault, RELEASE_REPOSITORY, readEvidenceArchive } from './release-evidence.mjs';
+import { assertProtectedDefault, RELEASE_REPOSITORY, readEvidenceArchive, collectVerificationEnvironmentReview } from './release-evidence.mjs';
 import { releaseHash, RELEASE_MAX_AGE_MS, assertReleaseReceiptBinding } from './release-readiness.mjs';
 import { executeProductionRelease } from './release-production.mjs';
 import { deploymentSourceFilter, GENERATED_PROVENANCE_FILES } from './build-provenance.mjs';
@@ -199,6 +199,7 @@ export async function collectCompatibilityNormalEvidence({ reads, binding, now =
     const artifacts = reads.json(`repos/${RELEASE_REPOSITORY}/actions/runs/${run.id}/artifacts?per_page=100`).artifacts || [];
     const artifact = artifacts.find(row => row.name === `fcos-compatibility-normal-role-evidence-${binding.sha}` && row.expired === false);
     if (!artifact) continue;
+    collectVerificationEnvironmentReview({ reads, run, kind: 'normal_role' });
     const archive = reads.archive(`repos/${RELEASE_REPOSITORY}/actions/artifacts/${artifact.id}/zip`);
     return assertCompatibilityNormalArtifact({ repository, branch, protection, run, artifact, archive,
       payload: unpack(archive, 'fcos-normal-role-evidence.json'), binding, now });
