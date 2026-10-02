@@ -93,4 +93,5 @@ export default [
       }],
     },
   },
+  { files: ["api/connection-runtime.js"], languageOptions: { parserOptions: { ecmaVersion: 2025 } } },
 ];

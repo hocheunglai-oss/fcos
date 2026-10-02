@@ -1,4 +1,5 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { requireDeploymentMutationAllowed } from './_deploymentReadOnly.js';
 import { createClient } from '@supabase/supabase-js';
 import { requireExternalActionGate } from './_externalActionGates.js';
 import { serverSupabaseConfig } from './_supabaseConfig.js';
@@ -628,6 +629,7 @@ export async function getFreshXeroConnection(client, { env = process.env, fetchI
   const stored = await readStoredXeroConnection(client, { sharedControl: control });
   // Existing valid access does not depend on renewal configuration being present.
   if (stored?.accessToken && stored?.tenantId && Date.parse(stored.expiresAt || '') > Date.now() + 90_000) return stored;
+  requireDeploymentMutationAllowed(true, env);
   if (!stored?.tenantId || !stored?.tokenVersion) throw xeroControlError('XERO_CONNECTION_REQUIRED');
   const config = xeroConfig(env, stored);
   if (!config.configured) throw xeroControlError('XERO_CONNECTION_RENEWAL_UNAVAILABLE');

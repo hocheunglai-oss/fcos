@@ -227,6 +227,7 @@ import { createFinanceSettingsHandlers, loadFinanceSettings } from '../_dashboar
 import { createDashboardFinanceLoader, financeToday, summarizeDashboardFinance, validateFinanceSnapshot } from '../_dashboardFinance.js';
 import { secondaryMopsFailureMessage } from '../_marketSourceHealth.js';
 import { ciModuleAccess, isReadOnlyCiProfile, isReadOnlyMarketAction, requireReadOnlyCiOperation } from '../_readOnlyCiAccess.js';
+import { isReadOnlyHedgeDeskAction } from '../_hedgeDeskReadOnly.js';
 import { requireDeploymentMutationAllowed } from '../_deploymentReadOnly.js';
 import { analyzeMarketReportLibrary, loadMarketReportCatalogue } from '../_marketReportAnalysis.js';
 import {
@@ -1668,7 +1669,8 @@ async function requireHandlerAccess(name, req) {
   if (policy.authentication === 'cron') return null;
   const context = await requireActiveUser(req);
   requireReadOnlyCiOperation(context.profile, name, {}, { mutation: policy.mutation && name !== 'hedgeMarkets' });
-  requireDeploymentMutationAllowed(policy.mutation && name !== 'hedgeMarkets');
+  // Mixed handlers classify the authenticated request body at dispatch.
+  requireDeploymentMutationAllowed(policy.mutation && !['hedgeMarkets', 'hedgeDeskEntity'].includes(name));
   const allowed = await userHasAnyModuleAccess(context.client, context.profile, policy.modules);
   if (!allowed) throw appError('You do not have access to this module.', 403);
   if (policy.capability) {
@@ -19426,7 +19428,11 @@ export default async function handler(req, res) {
         metricContext = accessContext;
         const body = await readBody(req);
         requireReadOnlyCiOperation(accessContext?.profile, name, body);
-        requireDeploymentMutationAllowed(handlerPolicy?.mutation && (name !== 'hedgeMarkets' || !isReadOnlyMarketAction(body)));
+        requireDeploymentMutationAllowed(handlerPolicy?.mutation && (
+          name === 'hedgeMarkets' ? !isReadOnlyMarketAction(body)
+            : name === 'hedgeDeskEntity' ? !isReadOnlyHedgeDeskAction(body)
+              : true
+        ));
         const contract = validateFunctionRequest(name, body);
         if (!contract.ok) {
           throw appError(`Invalid ${name} request: ${contract.issues.join('; ')}.`, 400, 'FUNCTION_CONTRACT_INVALID', {

@@ -1,12 +1,58 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { closeSync, constants, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
+import { dirname, join, relative } from 'node:path';
 import ignore from 'ignore';
 
 // The generated receipt cannot contribute to its own digest. Release-history
 // source remains included: changing the human-readable release is a source change.
-export const GENERATED_PROVENANCE_FILES = new Set(['public/app-version.json']);
+export const GENERATED_PROVENANCE_FILES = new Set(['public/app-version.json', 'api/_runtime-build-receipt.json']);
+// Generated data is excluded from hashing, but never from path integrity checks.
+export function validateGeneratedReceiptPaths(cwd) {
+  for (const path of GENERATED_PROVENANCE_FILES) {
+    const parts = path.split('/');
+    for (let index = 1; index <= parts.length; index += 1) {
+      let info;
+      try { info = lstatSync(join(cwd, ...parts.slice(0, index))); }
+      catch (error) { if (error.code === 'ENOENT') break; throw error; }
+      if (info.isSymbolicLink() || (index === parts.length ? !info.isFile() : !info.isDirectory())) {
+        throw new Error('Generated receipt paths must use regular files and directories; symlinks are unsupported.');
+      }
+    }
+  }
+}
+
+export function writeBuildReceipts({ cwd, receipt, env = process.env }) {
+  const expected = receipt.provenance;
+  const assertUnchanged = () => {
+    const actual = collectBuildProvenance({ cwd, env });
+    for (const key of ['commit', 'sourceDigest', 'gitDirty', 'releaseEligible']) {
+      if (actual[key] !== expected[key]) throw new Error('Source changed during receipt generation.');
+    }
+  };
+  validateGeneratedReceiptPaths(cwd);
+  assertUnchanged();
+  const serialized = `${JSON.stringify(receipt, null, 2)}\n`;
+  const written = [];
+  try {
+    for (const path of GENERATED_PROVENANCE_FILES) {
+      const absolute = join(cwd, path);
+      mkdirSync(dirname(absolute), { recursive: true });
+      validateGeneratedReceiptPaths(cwd);
+      const fd = openSync(absolute, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW, 0o600);
+      try { writeFileSync(fd, serialized); } finally { closeSync(fd); }
+      written.push(absolute);
+    }
+    validateGeneratedReceiptPaths(cwd);
+    assertUnchanged();
+  } catch (error) {
+    // A failed generation must not leave apparently eligible receipt data.
+    validateGeneratedReceiptPaths(cwd);
+    for (const path of written) unlinkSync(path);
+    throw error;
+  }
+}
+
 // Vercel CLI source-upload defaults. Keep in sync with the pinned CLI when it
 // changes: https://vercel.com/docs/builds/build-features#ignored-files-and-folders
 const VERCEL_DEFAULT_IGNORES = ['.hg', '.git', '.gitmodules', '.svn', '.cache', '.next', '.now', '.vercel',
@@ -58,6 +104,7 @@ function provenanceFailure(message, statusChanges, contentChanges) {
 }
 
 export function collectBuildProvenance({ cwd = process.cwd(), env = process.env, requireClean = env.FCOS_REQUIRE_CLEAN_BUILD === '1' || env.VERCEL === '1' } = {}) {
+  validateGeneratedReceiptPaths(cwd);
   let head = null;
   let paths;
   let gitDirty = null;
