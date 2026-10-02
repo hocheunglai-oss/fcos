@@ -11,6 +11,7 @@ import { canonicalFcosE2eCandidateUrl, resolveFcosE2eCandidate } from './verify-
 import { collectRuntimeObservation } from './collect-preview-parity.mjs';
 import { FIRST_RUNTIME_ROLLOUT, compatibilityNormalCoverageVerified, compatibilityReadOnlyGuardsVerified, compatibilityRuntimePreviewVerified } from './lib/runtime-compatibility-release.mjs';
 import { verifyRuntimeCompatibility } from './verify-runtime-compatibility.mjs';
+import { collectPreviewEmailSignerEvidence, previewEmailSignerEnabled } from './lib/preview-email-signer.mjs';
 
 // Frozen v288 read paths for the exact reviewed read-only first rollout only.
 // Never import the evolving v293 module catalogue or use this as a fallback.
@@ -174,6 +175,10 @@ export async function verifyRuntimeCompatibilityNormalRole({ env = process.env, 
   if (!response.ok || response.redirected) throw compatibilityNormalDiagnosticError('AUTH_RESPONSE', 'AUTH_RESPONSE_INVALID', { status: authStatus });
   const auth = await normalRoleDiagnosticStage('IDENTITY', () => response.json(), 'IDENTITY_INVALID');
   const identity = await normalRoleDiagnosticStage('IDENTITY', () => assertCompatibilityNormalIdentity(auth, { approvedEmail: env.FCOS_NORMAL_ROLE_APPROVED_EMAIL }), 'IDENTITY_INVALID');
+  const emailSigner = previewEmailSignerEnabled(verified.commit)
+    ? await normalRoleDiagnosticStage('RUNTIME_OBSERVATION', () => collectPreviewEmailSignerEvidence({ origin: url, deploymentId: version.deploymentId,
+      sha: verified.commit, sourceDigest: version.provenance.sourceDigest, bearerToken: token, protectionBypass: env.FCOS_E2E_VERCEL_BYPASS, fetchImpl }))
+    : undefined;
   let browser, context;
   const checks = [];
   const moduleReasons = new Map();
@@ -261,7 +266,8 @@ export async function verifyRuntimeCompatibilityNormalRole({ env = process.env, 
     await normalRoleDiagnosticStage('BROWSER_SETUP', () => browser?.close(), 'BROWSER_UNAVAILABLE');
   }
   const evidence = { schemaVersion: 1, baseSha: FIRST_RUNTIME_ROLLOUT.previousSha, candidateSha: verified.commit, candidateUrl: url, deploymentId: version.deploymentId,
-    sourceDigest: version.provenance.sourceDigest, harnessSha: env.GITHUB_SHA, capturedAt: new Date().toISOString(), checks };
+    sourceDigest: version.provenance.sourceDigest, harnessSha: env.GITHUB_SHA, capturedAt: new Date().toISOString(), checks,
+    ...(emailSigner ? { emailSigner } : {}) };
   if (!compatibilityNormalCoverageVerified({ checks }) || checks.length !== COMPATIBILITY_NORMAL_MODULES.length) throw compatibilityNormalDiagnosticError('COVERAGE', 'COVERAGE_INCOMPLETE', { moduleReasons });
   if (!env.RUNNER_TEMP) throw compatibilityNormalDiagnosticError('EVIDENCE', 'EVIDENCE_WRITE_FAILED', { moduleReasons });
   await normalRoleDiagnosticStage('EVIDENCE', () => writeFileSync(join(env.RUNNER_TEMP, 'fcos-normal-role-evidence.json'), `${JSON.stringify(evidence)}\n`, { mode: 0o600, flag: 'wx' }), 'EVIDENCE_WRITE_FAILED');

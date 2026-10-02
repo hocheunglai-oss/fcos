@@ -8,6 +8,7 @@ import { normalRoleReadRequest } from './lib/normal-role-read-requests.mjs';
 import { createNormalRoleVerificationRoute } from './lib/normal-role-verification-transport.mjs';
 import { canonicalFcosE2eCandidateUrl, resolveFcosE2eCandidate } from './verify-e2e-candidate.mjs';
 import { collectRuntimeObservation } from './collect-preview-parity.mjs';
+import { collectPreviewEmailSignerEvidence, previewEmailSignerEnabled } from './lib/preview-email-signer.mjs';
 
 // Every pass needs a successful module data response and a rendered business
 // surface. Headings alone, an invented zero, and denied/unavailable data fail.
@@ -181,6 +182,10 @@ export async function verifyNormalRoleRelease({ env = process.env, fetchImpl = g
       ...(env.FCOS_E2E_VERCEL_BYPASS ? { 'x-vercel-protection-bypass': env.FCOS_E2E_VERCEL_BYPASS } : {}) } });
   if (!response.ok || response.redirected) throw new Error('The approved normal-role session could not be independently authenticated.');
   const identity = assertNormalRoleIdentity(await response.json(), { approvedEmail: env.FCOS_NORMAL_ROLE_APPROVED_EMAIL });
+  const emailSigner = previewEmailSignerEnabled(verified.commit)
+    ? await collectPreviewEmailSignerEvidence({ origin: url, deploymentId: version.deploymentId, sha: verified.commit,
+      sourceDigest: version.provenance.sourceDigest, bearerToken: token, protectionBypass: env.FCOS_E2E_VERCEL_BYPASS, fetchImpl })
+    : undefined;
   let browser, context;
   const checks = [];
   try {
@@ -263,7 +268,8 @@ export async function verifyNormalRoleRelease({ env = process.env, fetchImpl = g
     if (blockedMutations) throw new Error('The application attempted a non-read request during normal-role verification. It was blocked; no complete coverage can be published.');
   } finally { if (context) await context.close(); if (browser) await browser.close(); }
   const evidence = { schemaVersion: 1, candidateSha: verified.commit, candidateUrl: url, deploymentId: version.deploymentId,
-    sourceDigest: version.provenance.sourceDigest, harnessSha: env.GITHUB_SHA, capturedAt: new Date().toISOString(), checks };
+    sourceDigest: version.provenance.sourceDigest, harnessSha: env.GITHUB_SHA, capturedAt: new Date().toISOString(), checks,
+    ...(emailSigner ? { emailSigner } : {}) };
   if (!env.RUNNER_TEMP) throw new Error('A private runner evidence directory is required.');
   writeFileSync(join(env.RUNNER_TEMP, 'fcos-normal-role-evidence.json'), `${JSON.stringify(evidence)}\n`, { mode: 0o600, flag: 'wx' });
   if (checks.length !== NORMAL_ROLE_MODULES.length) throw new Error(`Normal-role coverage remains incomplete (${checks.length}/${NORMAL_ROLE_MODULES.length}). Missing or unavailable workflows stay blocked.`);
