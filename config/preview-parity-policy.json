@@ -6,7 +6,8 @@
     "application",
     "policy",
     "connections",
-    "ciIdentity"
+    "ciIdentity",
+    "legacyEmailProof"
   ],
   "candidateSourceAttestationKeys": [
     "FCOS_EXPECTED_SOURCE_SHA256"
@@ -273,5 +274,6 @@
     "The evaluator does not authenticate its collector or evidence transport; the release entrypoint must collect observations through independently verified provider access.",
     "Credential values are never declared equal from presence metadata. Credential validation requires independently authenticated provider target and mode evidence; this gate never authorizes copying Production credentials.",
     "Normal-role coverage verifies the recorded read-only workflows only. It does not authorize financial actions or prove every application behavior."
-  ]
+  ],
+  "legacyEmailBaselineProof": "retained-production-email-proof-v1"
 }

@@ -1,3 +1,4 @@
+import { LEGACY_EMAIL_BASELINE_CONTRACT_HASH, collectLegacyEmailBaselineEvidence } from './lib/legacy-email-baseline-proof.mjs';
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, appendFileSync, lstatSync, existsSync, mkdirSync, mkdtempSync, rmSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -104,6 +105,7 @@ function sourceInventory(cwd, sourceDigest) {
   for (const directory of ['api', 'src', 'config']) visit(directory);
   return { candidateHead: FIRST_RUNTIME_ROLLOUT.candidateSha, hashes: { application: sourceDigest,
     policy: releaseHash(readFileSync(new URL('../config/preview-parity-policy.json', import.meta.url))),
+    legacyEmailProof: LEGACY_EMAIL_BASELINE_CONTRACT_HASH,
     connections: releaseHash(readFileSync(join(cwd, 'config/fcosConnections.js'))), ciIdentity: releaseHash(readFileSync(join(cwd, 'config/fcosCiIdentity.js'))) },
     switchInventory: { keys: [...switches].sort(), sourceFiles: files.sort(), sourceHash: sourceDigest } };
 }
@@ -259,22 +261,27 @@ export async function runRuntimeCompatibilityRelease({ mode = 'dry-run', trusted
     try { input.quality = await collectCompatibilityQualityEvidence({ reads, cwd: candidateCwd, binding: evidenceBinding }); }
     catch { block('EXACT_COMPATIBILITY_QUALITY_EVIDENCE_UNAVAILABLE', 'quality'); }
     const sourceRecord = sourceInventory(candidateCwd, source.sourceDigest);
-    const evaluateCollected = (snapshots, evidence, quality) => {
+    const evaluateCollected = async (snapshots, evidence, quality) => {
       const normal = evidence.find(row => row.kind === 'normal_role');
       const observations = { schemaVersion: 1, provider: { provider: 'vercel', account: fcosConnectionIdentifier('vercel', 'Account'), teamId, projectId, repository: RELEASE_REPOSITORY },
         source: sourceRecord, switchInventory: sourceRecord.switchInventory, ...snapshots,
         coverage: { capturedAt: normal?.capturedAt, deploymentId: input.candidate.id, sha: expectedCommit, checks: normal?.checks || [] } };
+      try { observations.legacyEmailBaseline = await collectLegacyEmailBaselineEvidence({ api, reads, binding: evidenceBinding,
+        production: snapshots.production.deployment, candidate: snapshots.candidate.deployment, normal,
+        readVersion: async deployment => JSON.parse(await artifact(deployment.url, '/app-version.json', env.FCOS_E2E_VERCEL_BYPASS)) });
+        observations.legacyEmailNormal = normal;
+      } catch { /* Missing or stale exact proof remains an unknown, never inferred equal. */ }
       const result = evaluatePreviewParity(observations, { expectedCommit, sourceHashes: sourceRecord.hashes });
       const parity = { ...result, capturedAt: new Date().toISOString(), binding: { ...evidenceBinding, url: candidateUrl }, source: sourceRecord,
         candidate: { ...snapshots.candidate.deployment, sourceDigest: source.sourceDigest, lockHash: input.binding.lockHash, configurationRevision: input.binding.configurationRevision },
         production: snapshots.production.deployment, expectedRuntimeAuth: snapshots.production.runtime.auth,
         expectedRuntimeFlags: snapshots.production.runtime.flags, expectedRuntimeSafety: snapshots.production.runtime.safety,
-        trustedEvidence: evidence.map(({ checks: _checks, ...record }) => record), quality };
+        trustedEvidence: evidence.map(({ checks: _checks, emailSigner: _emailSigner, ...record }) => record), quality };
       const readiness = createReleaseReadiness({ source: sourceRecord, candidate: parity.candidate, production: parity.production, parity,
         evidence: parity.trustedEvidence, quality, configurationRevision: input.binding.configurationRevision, lockHash: input.binding.lockHash });
       return { parity, readiness };
     };
-    Object.assign(input, evaluateCollected(snapshots, input.trustedEvidence, input.quality));
+    Object.assign(input, await evaluateCollected(snapshots, input.trustedEvidence, input.quality));
     input.collectionBlockers.push(...input.parity.blockers.map(({ code, scope }) => ({ code, scope })));
     const preflight = createRuntimeCompatibilityPreflight(input);
     if (mode !== 'execute' || !preflight.ready) return preflight;
@@ -295,7 +302,7 @@ export async function runRuntimeCompatibilityRelease({ mode = 'dry-run', trusted
           compiled: snapshot.compiled.flags, flags: snapshot.runtime.flags, auth: snapshot.runtime.auth, safety: snapshot.runtime.safety });
         if (releaseHash(JSON.stringify(stable(refreshedSnapshots[name]))) !== releaseHash(JSON.stringify(stable(snapshots[name])))) throw new Error('Effective configuration, compiled flags or existing provider session changed.');
       }
-      const current = { ...input, ...evaluateCollected(refreshedSnapshots, evidence, quality), runtime: refreshedSnapshots.candidate.runtime,
+      const current = { ...input, ...await evaluateCollected(refreshedSnapshots, evidence, quality), runtime: refreshedSnapshots.candidate.runtime,
         trustedEvidence: evidence, quality, endpointAbsence: await collectEndpointAbsence() };
       if (!createRuntimeCompatibilityPreflight(current).ready) throw new Error('Fresh complete compatibility parity and evidence required at approval boundary.');
     };

@@ -29,3 +29,16 @@ test('current settings absent from immutable deployment inventory cannot attest 
 test('switch inventory includes declared envName gates and spaced optional bracket references', () => {
   assert.deepEqual(discoverParitySwitches("envName: 'NEW_WORKFLOW_ENABLED'; process.env [ 'OTHER_FEATURE_ENABLED' ]; environment?.['NEW_FEATURE_ENABLED'];"), ['NEW_FEATURE_ENABLED', 'NEW_WORKFLOW_ENABLED', 'OTHER_FEATURE_ENABLED']);
 });
+
+// This private collector mode establishes equality only from actual nonempty
+// values. The final collector never serializes these hash-bearing observations.
+test('opaque equality requires actual pulled values and never infers equality from an empty sensitive pull', () => {
+  const source = 'CRON_SECRET="actual-private-test-value"\nFCOS_EMAIL_ROUTER_ATTACHMENT_SECRET=""\nSUPABASE_SERVICE_ROLE_KEY="actual-private-provider-value"\n';
+  const keys = ['CRON_SECRET', 'FCOS_EMAIL_ROUTER_ATTACHMENT_SECRET', 'SUPABASE_SERVICE_ROLE_KEY'];
+  const parsed = parseParityEnvironment(source, keys, { hashOpaqueValues: true });
+  assert.equal(parsed.CRON_SECRET.state, 'known');
+  assert.match(parsed.CRON_SECRET.sha256, /^[0-9a-f]{64}$/);
+  for (const key of keys.slice(1)) assert.deepEqual(parsed[key], { state: 'unknown', present: true });
+  assert.ok(!JSON.stringify(parsed).includes('actual-private-'));
+  assert.deepEqual(parseParityEnvironment(source, keys).CRON_SECRET, { state: 'unknown', present: true });
+});

@@ -1,3 +1,4 @@
+import { previewEmailSignerEvidenceVerified } from './preview-email-signer.mjs';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -67,9 +68,11 @@ export function assertTrustedArtifact({ repository, branch, protection, run, art
   if (kind === 'normal_role' && (payload.schemaVersion !== 1 || payload.deploymentId !== binding.deploymentId
     || payload.sourceDigest !== binding.sourceDigest || !fresh(payload.capturedAt, now) || !Array.isArray(payload.checks)
     || payload.checks.some(row => Object.keys(row || {}).some(key => !['module', 'role', 'result', 'kind', 'evidenceId'].includes(key))))) throw new Error('Normal-role coverage must bind the exact deployment and source digest.');
+  if (kind === 'normal_role' && payload.emailSigner !== undefined) previewEmailSignerEvidenceVerified(payload.emailSigner,
+    { deployment: { id: binding.deploymentId, sha: binding.sha }, sourceDigest: binding.sourceDigest, now });
   return { ...binding, kind, runId: run.id, artifactId: artifact.id, archiveDigest: releaseHash(archive), harnessSha: trusted.sha,
     capturedAt: kind === 'normal_role' ? payload.capturedAt : run.updated_at,
-    ...(kind === 'normal_role' ? { checks: payload.checks } : {}) };
+    ...(kind === 'normal_role' ? { checks: payload.checks, ...(payload.emailSigner !== undefined ? { emailSigner: payload.emailSigner } : {}) } : {}) };
 }
 
 // Adapter receives a verified, target-locked CLI runtime. Requests are fixed GETs;
@@ -87,7 +90,7 @@ export function githubReleaseReads(runtime, { cwd = process.cwd(), execute = exe
 
 export function readEvidenceArchive(archive, filename, { execute = execFileSync } = {}) {
   if (!Buffer.isBuffer(archive) || archive.length < 1 || archive.length > 2 * 1024 * 1024
-    || !['fcos-ci-evidence.json', 'fcos-normal-role-evidence.json', 'fcos-quality-source.json'].includes(filename)) throw new Error('Evidence archive is unavailable or exceeds the size limit.');
+    || !['fcos-ci-evidence.json', 'fcos-normal-role-evidence.json', 'fcos-quality-source.json', 'fcos-preview-email-build.json', 'fcos-preview-email-intent.json'].includes(filename)) throw new Error('Evidence archive is unavailable or exceeds the size limit.');
   const directory = mkdtempSync(join(tmpdir(), 'fcos-release-evidence-'));
   try {
     const path = join(directory, 'evidence.zip');
@@ -97,6 +100,34 @@ export function readEvidenceArchive(archive, filename, { execute = execFileSync 
     return JSON.parse(execute('unzip', ['-p', path, filename], { encoding: 'utf8', timeout: 5000, maxBuffer: 262144, stdio: ['ignore', 'pipe', 'pipe'] }));
   } catch { throw new Error('Evidence archive content validation failed.'); }
   finally { rmSync(directory, { recursive: true, force: true }); }
+}
+
+// A protected workflow path does not establish that its credential environment
+// required a human review. Collect that boundary independently for each archive.
+export function assertVerificationEnvironmentReview({ environment, approvals, run, kind } = {}) {
+  const name = kind === 'restricted_browser' ? 'fcos-ci-readonly' : kind === 'normal_role' ? 'fcos-normal-role-verification' : null;
+  const rules = environment?.protection_rules?.filter(row => row.type === 'required_reviewers') || [];
+  const rule = rules.length === 1 ? rules[0] : null;
+  const reviewer = rule?.reviewers?.length === 1 ? rule.reviewers[0] : null;
+  const operator = fcosConnectionIdentifier('github', 'Required account');
+  if (!name || FCOS_RELEASE_APPROVAL_POLICY.mode !== 'single_operator' || environment?.name !== name || !positive(environment.id)
+    || environment.can_admins_bypass !== false || environment.deployment_branch_policy?.protected_branches !== true
+    || environment.deployment_branch_policy?.custom_branch_policies !== false || rule?.prevent_self_review !== false
+    || reviewer?.type !== 'User' || reviewer.reviewer?.login !== operator || !positive(reviewer.reviewer.id)
+    || run?.run_attempt !== 1 || run.actor?.login !== operator || run.actor?.id !== reviewer.reviewer.id
+    || run.triggering_actor?.login !== operator || run.triggering_actor?.id !== reviewer.reviewer.id)
+    throw new Error('Verification archive requires its pinned non-bypassable human-review environment and a fresh first-attempt run.');
+  const matching = (Array.isArray(approvals) ? approvals : []).filter(row => row.environments?.some(env => env.id === environment.id && env.name === name));
+  if (matching.length !== 1 || matching[0].state !== 'approved' || matching[0].user?.login !== operator
+    || matching[0].user?.id !== reviewer.reviewer.id) throw new Error('Verification archive is missing the exact human environment approval.');
+  return true;
+}
+
+export function collectVerificationEnvironmentReview({ reads, run, kind }) {
+  const name = kind === 'restricted_browser' ? 'fcos-ci-readonly' : kind === 'normal_role' ? 'fcos-normal-role-verification' : null;
+  if (!name || !positive(run?.id)) throw new Error('Exact verification workflow identity required.');
+  return assertVerificationEnvironmentReview({ environment: reads.json(`repos/${RELEASE_REPOSITORY}/environments/${name}`),
+    approvals: reads.json(`repos/${RELEASE_REPOSITORY}/actions/runs/${run.id}/approvals`), run, kind });
 }
 
 export async function collectTrustedReleaseEvidence({ reads, binding, now = Date.now(), unpack = readEvidenceArchive } = {}) {
@@ -116,6 +147,7 @@ export async function collectTrustedReleaseEvidence({ reads, binding, now = Date
         const artifacts = reads.json(`repos/${RELEASE_REPOSITORY}/actions/runs/${run.id}/artifacts?per_page=100`).artifacts || [];
         const artifact = artifacts.find(row => row.name === `${prefix}-${binding.sha}` && row.expired === false);
         if (!artifact) continue;
+        collectVerificationEnvironmentReview({ reads, run, kind });
         const archive = reads.archive(`repos/${RELEASE_REPOSITORY}/actions/artifacts/${artifact.id}/zip`);
         const payload = unpack(archive, kind === 'normal_role' ? 'fcos-normal-role-evidence.json' : 'fcos-ci-evidence.json');
         record = assertTrustedArtifact({ repository, branch, protection, run, artifact, archive, payload, kind, binding, now });

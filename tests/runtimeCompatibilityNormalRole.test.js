@@ -18,6 +18,8 @@ test('compatibility catalogue freezes all required old real-data paths without i
   const source = readFileSync(new URL('../scripts/runtime-compatibility-normal-role.mjs', import.meta.url), 'utf8');
   assert.doesNotMatch(source, /from ['"]\.\/normal-role-release\.mjs|xeroIntegrityReport/);
   assert.match(source, /baseSha: FIRST_RUNTIME_ROLLOUT.previousSha/);
+  assert.match(source, /collectPreviewEmailSignerEvidence/);
+  assert.match(source, /emailSigner/);
 });
 
 test('separate compatibility normal transport refuses writes, refresh, unknown APIs and foreign origins', () => {

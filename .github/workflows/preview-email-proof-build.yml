@@ -1,0 +1,106 @@
+name: FCOS protected Preview email proof build
+run-name: Review FCOS Preview email source ${{ inputs.expected_commit }}
+on:
+  workflow_dispatch:
+    inputs:
+      expected_commit:
+        description: Exact candidate in the reviewed single-baseline email contract
+        required: true
+        type: string
+      operation:
+        description: Create once, or recover a previous uncertain operation by GET readback only
+        default: create
+        required: true
+        type: choice
+        options:
+          - create
+          - readback
+      original_run_id:
+        description: Original approved creation run, required only for readback
+        required: false
+        type: string
+concurrency:
+  group: fcos-production-release
+  cancel-in-progress: false
+permissions:
+  contents: read
+# This is inactive until an exact separate owner authorization sets its new
+# enable variable and reviewed pins. Existing Production activation stays false.
+# Credentials execute only current protected-main code, never candidate scripts.
+jobs:
+  proof:
+    if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && vars.FCOS_PREVIEW_EMAIL_BUILD_ENABLED == 'true' && vars.FCOS_RUNTIME_COMPATIBILITY_RELEASE_ENABLED == 'false' }}
+    runs-on: ubuntu-latest
+    environment: fcos-runtime-compatibility-release
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      actions: read
+      deployments: read
+      id-token: write
+    env:
+      FCOS_E2E_EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+      FCOS_RELEASE_SOURCE_DIRECTORY: ${{ github.workspace }}/candidate
+      FCOS_PREVIEW_EMAIL_ORIGINAL_RUN_ID: ${{ inputs.original_run_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: trusted
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.expected_commit }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci --ignore-scripts
+        working-directory: trusted
+      - run: npm install --global vercel@54.20.1
+      - name: Prepare reviewed metadata and exact Preview-only request
+        if: ${{ inputs.operation == 'create' }}
+        run: node trusted/scripts/preview-email-proof-build.mjs --prepare
+        env:
+          GH_TOKEN: ${{ secrets.FCOS_RELEASE_GH_TOKEN }}
+          VERCEL_TOKEN: ${{ secrets.FCOS_RELEASE_VERCEL_TOKEN }}
+      - name: Persist immutable intent before any deployment request
+        if: ${{ inputs.operation == 'create' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: fcos-preview-email-intent-${{ github.run_id }}
+          path: ${{ runner.temp }}/fcos-preview-email-intent.json
+          if-no-files-found: error
+          retention-days: 7
+      - name: Verify trusted intent archive and submit exactly one Preview request
+        if: ${{ inputs.operation == 'create' }}
+        run: node trusted/scripts/preview-email-proof-build.mjs --create
+        env:
+          GH_TOKEN: ${{ secrets.FCOS_RELEASE_GH_TOKEN }}
+          VERCEL_TOKEN: ${{ secrets.FCOS_RELEASE_VERCEL_TOKEN }}
+          FCOS_E2E_VERCEL_BYPASS: ${{ secrets.FCOS_E2E_VERCEL_BYPASS }}
+      - name: Recover original operation without creating any deployment
+        if: ${{ inputs.operation == 'readback' }}
+        run: node trusted/scripts/preview-email-proof-build.mjs --readback
+        env:
+          GH_TOKEN: ${{ secrets.FCOS_RELEASE_GH_TOKEN }}
+          VERCEL_TOKEN: ${{ secrets.FCOS_RELEASE_VERCEL_TOKEN }}
+          FCOS_E2E_VERCEL_BYPASS: ${{ secrets.FCOS_E2E_VERCEL_BYPASS }}
+      - name: Preserve exact non-secret source-bound receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: fcos-preview-email-build-${{ inputs.expected_commit }}
+          path: ${{ runner.temp }}/fcos-preview-email-build.json
+          if-no-files-found: error
+          retention-days: 7
+      - name: Preserve redacted interruption evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: fcos-preview-email-journal-${{ github.run_id }}
+          path: ${{ runner.temp }}/fcos-preview-email-journal-${{ github.run_id }}.jsonl
+          if-no-files-found: ignore
+          retention-days: 30

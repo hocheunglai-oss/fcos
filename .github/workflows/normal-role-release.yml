@@ -23,6 +23,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # Immutable signer proof needs both reviewed candidate Git objects.
+          fetch-depth: 0
           # Execute only the reviewed protected-default harness.
           persist-credentials: false
       - uses: actions/setup-node@v4

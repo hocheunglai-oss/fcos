@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { LEGACY_EMAIL_BASELINE_CONTRACT, legacyEmailUnknownAllowed } from './legacy-email-baseline-proof.mjs';
 import { fcosConnectionIdentifier, fcosSalesforceEnvironment } from '../../config/fcosConnections.js';
 import { canonicalFcosE2eCandidateUrl } from '../verify-e2e-candidate.mjs';
 
@@ -29,10 +30,10 @@ const immutableUrl = value => { try { return canonicalFcosE2eCandidateUrl(value)
  * Never persist raw observations; the result and thrown error contain names only.
  */
 export function evaluatePreviewParity(observations, { expectedCommit, sourceHashes, policy: rules = policy, now = Date.now() } = {}) {
-  const blockers = [], classifiedKeys = [], unknowns = [];
+  const blockers = [], classifiedKeys = [], unknowns = [], acceptedHistoricalUnknowns = [];
   const fail = (code, scope, key) => blockers.push({ code, scope, ...(keyName(key) ? { key } : {}), message: `${code}: ${scope}${keyName(key) ? ` (${key})` : ''}.` });
-  const finish = () => ({ schemaVersion: 1, policyVersion: rules?.policyVersion, pass: blockers.length === 0, blockers, classifiedKeys, unknowns,
-    limitations: [...(Array.isArray(rules?.limitations) ? rules.limitations : [])] });
+  const finish = () => ({ schemaVersion: 1, policyVersion: rules?.policyVersion, pass: blockers.length === 0, blockers, classifiedKeys, unknowns, acceptedHistoricalUnknowns,
+    limitations: [...(Array.isArray(rules?.limitations) ? rules.limitations : []), ...(acceptedHistoricalUnknowns.length ? [LEGACY_EMAIL_BASELINE_CONTRACT.limitation] : [])] });
   if (!object(observations) || observations.schemaVersion !== 1) { fail('OBSERVATION_SCHEMA', 'observations'); return finish(); }
   if (!object(rules) || rules.schemaVersion !== 1 || !Number.isInteger(rules.policyVersion) || rules.policyVersion < 1
     || !Number.isInteger(rules.maxAgeSeconds) || rules.maxAgeSeconds < 1 || rules.maxAgeSeconds > 1800
@@ -41,10 +42,11 @@ export function evaluatePreviewParity(observations, { expectedCommit, sourceHash
     || ['match', 'switchMatch', 'opaqueMatch'].some(key => !Array.isArray(rules.applicationKeys[key])) || !object(rules.applicationKeys.credentials)) {
     fail('POLICY_SCHEMA', 'policy'); return finish();
   }
+  if (rules.legacyEmailBaselineProof !== policy.legacyEmailBaselineProof || rules.legacyEmailBaselineProof !== LEGACY_EMAIL_BASELINE_CONTRACT.id) fail('POLICY_SCOPE_WEAKENED', 'policy');
   if (rules.platformPrefixes.some(prefix => !policy.platformPrefixes.includes(prefix)) || rules.platformKeys.some(key => !policy.platformKeys.includes(key))
     || rules.normalRoles.some(role => !policy.normalRoles.includes(role)) || rules.buildOnlyKeys.some(key => !policy.buildOnlyKeys.includes(key))) fail('POLICY_SCOPE_WEAKENED', 'policy');
   if (!sha(expectedCommit) || observations.source?.candidateHead !== expectedCommit) fail('CANDIDATE_HEAD', 'source');
-  for (const key of new Set(['application', 'policy', 'connections', 'ciIdentity', ...rules.requiredSourceHashes])) {
+  for (const key of new Set(['application', 'policy', 'connections', 'ciIdentity', ...policy.requiredSourceHashes, ...rules.requiredSourceHashes])) {
     if (!hash(sourceHashes?.[key]) || observations.source?.hashes?.[key] !== sourceHashes[key]) fail('SOURCE_HASH', 'source');
   }
   const pins = { provider: 'vercel', account: fcosConnectionIdentifier('vercel', 'Account'), teamId: fcosConnectionIdentifier('vercel', 'Team ID'),
@@ -120,6 +122,12 @@ export function evaluatePreviewParity(observations, { expectedCommit, sourceHash
         if (value.state !== 'absent' && (auth?.state !== 'authenticated' || typeof auth.target !== 'string' || !auth.target
           || typeof auth.mode !== 'string' || !auth.mode)) fail('CREDENTIAL_AUTH_UNKNOWN', name, key);
       }
+      continue;
+    }
+    if (legacyEmailUnknownAllowed(key, observations, now)) {
+      acceptedHistoricalUnknowns.push({ scope: 'production', key, exception: LEGACY_EMAIL_BASELINE_CONTRACT.id });
+      unknowns.push({ scope: 'production', key });
+      if (b.state === 'unknown') unknowns.push({ scope: 'candidate', key });
       continue;
     }
     if (![a, b].every(value => value.state === 'absent' || known(value))) { fail('ENV_VALUE_UNKNOWN', 'environment', key); continue; }

@@ -1,10 +1,11 @@
+import { previewEmailSignerEvidenceVerified } from './preview-email-signer.mjs';
 import { readFileSync, lstatSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { FCOS_RELEASE_APPROVAL_POLICY, fcosConnectionIdentifier } from '../../config/fcosConnections.js';
 import { PREVIEW_PARITY_POLICY } from './preview-parity.mjs';
-import { assertProtectedDefault, RELEASE_REPOSITORY, readEvidenceArchive } from './release-evidence.mjs';
+import { assertProtectedDefault, RELEASE_REPOSITORY, readEvidenceArchive, collectVerificationEnvironmentReview } from './release-evidence.mjs';
 import { releaseHash, RELEASE_MAX_AGE_MS, assertReleaseReceiptBinding } from './release-readiness.mjs';
 import { executeProductionRelease } from './release-production.mjs';
 import { deploymentSourceFilter, GENERATED_PROVENANCE_FILES } from './build-provenance.mjs';
@@ -53,7 +54,9 @@ export function runtimeCompatibilityControlRevision(trustedCwd, candidateCwd) {
     '.github/workflows/normal-role-release.yml', 'scripts/normal-role-release.mjs', 'playwright.config.js',
     '.github/workflows/runtime-compatibility-normal-role.yml', 'scripts/runtime-compatibility-normal-role.mjs', 'scripts/verify-e2e-candidate.mjs',
     'scripts/lib/runtime-compatibility-observation.mjs', 'scripts/lib/normal-role-read-requests.mjs',
-    'scripts/lib/normal-role-verification-transport.mjs',
+    'scripts/lib/normal-role-verification-transport.mjs', 'scripts/lib/preview-email-signer.mjs',
+    'scripts/lib/legacy-email-baseline-proof.mjs', 'config/legacy-email-baseline-proof.json',
+    'scripts/lib/preview-email-build.mjs', 'scripts/preview-email-proof-build.mjs', '.github/workflows/preview-email-proof-build.yml',
     'package.json', 'package-lock.json', 'AGENTS.md', '.codex/config.toml', '.codex/setup.mjs',
     '.codex/control-validation.mjs', '.codex/control-policy.json', '.codex/README.md'];
   const candidate = ['config/fcosConnections.js', 'config/fcosCiIdentity.js', 'vercel.json', 'package.json', 'package-lock.json',
@@ -178,8 +181,11 @@ export function assertCompatibilityNormalArtifact({ repository, branch, protecti
     || payload.candidateUrl !== binding.candidateUrl || payload.deploymentId !== binding.deploymentId || payload.sourceDigest !== binding.sourceDigest
     || payload.harnessSha !== trusted.sha || !fresh(payload.capturedAt, now) || !compatibilityNormalCoverageVerified(payload)
     || payload.checks.some(row => Object.keys(row || {}).some(key => !['module', 'role', 'result', 'kind', 'evidenceId'].includes(key)))) throw new Error('Dedicated compatibility normal-role workflow, archive, exact source or real-data coverage proof failed.');
+  if (payload.emailSigner !== undefined) previewEmailSignerEvidenceVerified(payload.emailSigner,
+    { deployment: { id: binding.deploymentId, sha: binding.sha }, sourceDigest: binding.sourceDigest, now });
   return { ...binding, kind: 'normal_role', runId: run.id, artifactId: artifact.id, archiveDigest: releaseHash(archive),
-    harnessSha: trusted.sha, capturedAt: payload.capturedAt, checks: payload.checks };
+    harnessSha: trusted.sha, capturedAt: payload.capturedAt, checks: payload.checks,
+    ...(payload.emailSigner !== undefined ? { emailSigner: payload.emailSigner } : {}) };
 }
 
 export async function collectCompatibilityNormalEvidence({ reads, binding, now = Date.now(), unpack = readEvidenceArchive }) {
@@ -193,6 +199,7 @@ export async function collectCompatibilityNormalEvidence({ reads, binding, now =
     const artifacts = reads.json(`repos/${RELEASE_REPOSITORY}/actions/runs/${run.id}/artifacts?per_page=100`).artifacts || [];
     const artifact = artifacts.find(row => row.name === `fcos-compatibility-normal-role-evidence-${binding.sha}` && row.expired === false);
     if (!artifact) continue;
+    collectVerificationEnvironmentReview({ reads, run, kind: 'normal_role' });
     const archive = reads.archive(`repos/${RELEASE_REPOSITORY}/actions/artifacts/${artifact.id}/zip`);
     return assertCompatibilityNormalArtifact({ repository, branch, protection, run, artifact, archive,
       payload: unpack(archive, 'fcos-normal-role-evidence.json'), binding, now });
@@ -273,7 +280,8 @@ export function assertCompatibilityEvidenceReadback(original, refreshed, now = D
     const before = original?.evidence?.filter(row => row.kind === kind), after = refreshed?.evidence?.filter(row => row.kind === kind);
     if (before?.length !== 1 || after?.length !== 1 || !fresh(before[0].capturedAt, now) || !fresh(after[0].capturedAt, now)
       || releaseHash(JSON.stringify(bound(before[0]))) !== releaseHash(JSON.stringify(bound(after[0])))
-      || kind === 'normal_role' && !compatibilityNormalCoverageVerified(after[0])) throw new Error('UI archive binding, completion freshness or real coverage changed.');
+      || kind === 'normal_role' && (!compatibilityNormalCoverageVerified(after[0])
+        || JSON.stringify(before[0].emailSigner) !== JSON.stringify(after[0].emailSigner))) throw new Error('UI archive binding, completion freshness or real coverage changed.');
   }
   return true;
 }

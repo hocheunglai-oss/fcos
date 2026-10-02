@@ -1,3 +1,5 @@
+import { PREVIEW_EMAIL_SIGNER_BODY } from './preview-email-signer.mjs';
+
 // Harness authority is independent of application dispatch metadata. Only the
 // reviewed reads needed by module verification and its navigation may pass.
 // New handlers fail closed until this protected harness is reviewed again.
@@ -81,6 +83,8 @@ function hedgeReadRequest(body) {
 
 export function normalRoleReadRequest(name, body = {}) {
   if (!plainObject(body) || !readBody(body)) return false;
+  if (name === 'emailRouterAttachmentUrl') return Object.keys(body).length === 2
+    && Object.entries(PREVIEW_EMAIL_SIGNER_BODY).every(([key, value]) => body[key] === value);
   if (name === 'hedgeDeskEntity') return hedgeReadRequest(body);
   if (name === 'hedgeMarkets') return body.action === 'snapshot' && Object.keys(body).every(key => key === 'action');
   return READ_HANDLERS.has(name);

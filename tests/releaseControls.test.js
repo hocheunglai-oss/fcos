@@ -1,6 +1,7 @@
 import { assertParityConnectionReadAccess } from '../scripts/collect-preview-parity.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
 import { generateKeyPairSync, sign } from 'node:crypto';
 import { createReleaseReadiness, assertReleaseReceiptBinding, releaseHash } from '../scripts/lib/release-readiness.mjs';
 import { assertTrustedArtifact, assertProductionProtection, assertReleaseGitHubAccount, assertReleaseWorkflowIdentity, RELEASE_REPOSITORY, PRODUCTION_ENVIRONMENT, PRODUCTION_WORKFLOW } from '../scripts/lib/release-evidence.mjs';
@@ -235,6 +236,12 @@ test('normal-role transport denies refresh, financial mutation, arbitrary foreig
     { url: 'https://pjforfvchygdyqfcgpmw.supabase.co/rest/v1/rpc/unknown', method: 'GET' },
     { url: `https://${fcosConnectionIdentifier('supabase', 'Project ref')}.supabase.co/auth/v1/token?grant_type=refresh_token`, method: 'POST', body: {} },
   ]) assert.equal(normalRoleRequestAllowed(request, url), false);
+});
+test('normal-role verifier includes signer evidence only through the bounded helper', () => {
+  const source = readFileSync(new URL('../scripts/normal-role-release.mjs', import.meta.url), 'utf8');
+  assert.match(source, /collectPreviewEmailSignerEvidence/);
+  assert.match(source, /previewEmailSignerEnabled\(verified\.commit\)/);
+  assert.match(source, /emailSigner/);
 });
 test('normal-role coverage cannot reuse CI, inactive/local assumed roles or shell-only data', () => {
   const auth = { user: { id: '12345678-1234-1234-1234-123456789abc', email: 'approved@example.test', user_type: 'finance', read_only_ci: false, active: true }, moduleAccess: { review: true } };
