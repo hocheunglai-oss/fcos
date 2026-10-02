@@ -67,11 +67,15 @@ const marketReadActions = new Set([
   'intelligence_valuation', 'intelligence_alert_rules_get',
 ]);
 
+export function isReadOnlyMarketAction(body = {}) {
+  return marketReadActions.has(String(body?.action || 'snapshot'));
+}
+
 export function requireReadOnlyCiOperation(profile, name, body = {}, { mutation = false } = {}) {
   if (!isReadOnlyCiProfile(profile)) return;
   if (mutation) throw reject();
   if (readHandlers.has(name)) return;
-  if (name === 'hedgeMarkets' && marketReadActions.has(String(body?.action || 'snapshot'))) return;
+  if (name === 'hedgeMarkets' && isReadOnlyMarketAction(body)) return;
   throw reject();
 }
 

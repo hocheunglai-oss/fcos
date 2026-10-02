@@ -1,3 +1,4 @@
+import { fixtureXeroConnection } from './helpers/xeroSharedControl.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFile } from 'node:fs/promises';
@@ -218,7 +219,7 @@ test('Salesforce contact sync skips Xero calls when no loaded account is eligibl
 });
 
 test('Xero read requests retry transient gateway failures without retrying writes', async () => {
-  const connection = { accessToken: 'access', tenantId: 'tenant' };
+  const connection = fixtureXeroConnection({ accessToken: 'access', tenantId: 'tenant' });
   let readCalls = 0;
   const readResult = await xeroAccountingFetch(connection, '/Contacts?page=1', {
     method: 'GET',
@@ -244,7 +245,7 @@ test('Xero read requests retry transient gateway failures without retrying write
         return jsonResponse({}, 504);
       },
     }),
-    (error) => error.status === 504 && error.code === 'XERO_CONTACT_SYNC_XERO_REQUEST_FAILED',
+    (error) => error.code === 'XERO_WRITE_OUTCOME_UNKNOWN' && error.details.outcomeUnknown === true,
   );
   assert.equal(writeCalls, 1);
 });

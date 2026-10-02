@@ -1,3 +1,4 @@
+import { configuredAiSelection, resolveAiModel, aiRequestOptions } from './_aiModelRouting.js';
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { marketIntelligenceTradingInternals } from './_marketIntelligenceTrading.js';
 
@@ -253,6 +254,7 @@ function validImageBuffer(buffer, mimeType) {
 }
 
 async function extractMorningImage(buffer, mimeType, { apiKey, model, fetchImpl, safetyIdentifier }) {
+  const routing = resolveAiModel({ task: 'market_image', selection: model });
   if (!apiKey) throw intradayError('Morning image extraction is not configured.', 503, 'MARKET_INTRADAY_OPENAI_KEY_MISSING');
   const schema = {
     type: 'object', additionalProperties: false, required: ['marketDateText', 'observations', 'ignoredRows', 'warnings'], properties: {
@@ -271,7 +273,7 @@ async function extractMorningImage(buffer, mimeType, { apiKey, model, fetchImpl,
       headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
       signal: AbortSignal.timeout(45_000),
       body: JSON.stringify({
-        model, store: false, max_output_tokens: 2500, reasoning: { effort: 'low' }, safety_identifier: safetyIdentifier,
+        model: routing.modelId, store: false, ...aiRequestOptions(routing, 2500), safety_identifier: safetyIdentifier,
         input: [{ role: 'system', content: [{ type: 'input_text', text: 'Extract the market table exactly. Do not infer missing prices, changes, units, dates, or contracts. Ignore every 180 CST row and report it in ignoredRows. Use hsfo380 for 380 CST, vlsfo for M0.5/0.5%, lsmgo for GO 10ppm, brent for Brent, and ice_gasoil for ICE Gasoil. A Last Crude/Gasoil Close row is last_close; Current and swaps-indication rows are current_indication. Return strings at displayed precision. Brent and SGO use USD/BBL; all other configured products use USD/MT.' }] }, { role: 'user', content: [{ type: 'input_image', image_url: `data:${mimeType};base64,${buffer.toString('base64')}` }, { type: 'input_text', text: 'Extract this reviewed morning paper indication.' }] }],
         text: { format: { type: 'json_schema', name: 'market_intraday_image_preview', strict: true, schema } },
       }),
@@ -282,7 +284,7 @@ async function extractMorningImage(buffer, mimeType, { apiKey, model, fetchImpl,
   if (!response.ok) throw intradayError('Morning image extraction is temporarily unavailable.', 503, 'MARKET_INTRADAY_VISION_FAILED');
   const payload = await response.json();
   const output = payload.output_text || payload.output?.flatMap((row) => row.content || []).find((row) => row.type === 'output_text')?.text;
-  try { return JSON.parse(output || '{}'); } catch { throw intradayError('The image extraction response could not be reviewed.', 502, 'MARKET_INTRADAY_VISION_INVALID'); }
+  try { return { ...JSON.parse(output || '{}'), routing }; } catch { throw intradayError('The image extraction response could not be reviewed.', 502, 'MARKET_INTRADAY_VISION_INVALID'); }
 }
 
 export async function previewMarketIntradaySnapshot(profile, body = {}, dependencies = {}) {
@@ -303,7 +305,7 @@ export async function previewMarketIntradaySnapshot(profile, body = {}, dependen
     if (!buffer.length || buffer.length > MAX_IMAGE_BYTES || !validImageBuffer(buffer, mimeType)) throw intradayError('Choose a valid PNG, JPEG or WebP image no larger than 5 MB.', 400, 'MARKET_INTRADAY_IMAGE_INVALID');
     const extracted = await extractMorningImage(buffer, mimeType, {
       apiKey: String(dependencies.apiKey || process.env.OPENAI_API_KEY || '').trim(),
-      model: String(dependencies.model || process.env.OPENAI_MARKET_INTRADAY_MODEL || 'gpt-5-mini'),
+      model: configuredAiSelection(dependencies.model || process.env.OPENAI_MARKET_INTRADAY_MODEL),
       fetchImpl: dependencies.fetchImpl || fetch,
       safetyIdentifier: hash(String(profile?.id || profile?.email || 'market-user')),
     });
@@ -318,7 +320,7 @@ export async function previewMarketIntradaySnapshot(profile, body = {}, dependen
     const extractedRows = normalizedExtractedRows.map(({ row }) => row);
     warnings.push(...new Set(normalizedExtractedRows.map(({ correction }) => correction).filter(Boolean)));
     const observations = dateCandidate.value ? uniqueRows(extractedRows.map((row, index) => normalizeObservation({ ...row, contractMonth: row.contractMonthText, price: row.priceText, reportedChange: row.reportedChangeText, decimalPrecision: decimalPrecision(row.priceText) }, sourceType, dateCandidate.value, index + 1))) : extractedRows;
-    preview = { sourceType, marketDate: dateCandidate.value, observations, ignoredRows: [...(extracted.ignoredRows || []), ...ignored180.map(() => ({ label: '180 CST', reason: '180 CST is outside the configured FCOS intraday market set.' }))], warnings, requiresReview: true };
+    preview = { sourceType, marketDate: dateCandidate.value, observations, ignoredRows: [...(extracted.ignoredRows || []), ...ignored180.map(() => ({ label: '180 CST', reason: '180 CST is outside the configured FCOS intraday market set.' }))], warnings, requiresReview: true, routing: extracted.routing };
     sourceHash = hash(buffer);
   }
   const token = signPreview({ sourceType, sourceHash, actorId: profile.id, receivedAt }, previewSecret(dependencies.env));

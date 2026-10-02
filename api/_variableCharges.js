@@ -1,3 +1,4 @@
+import { routineReviewNote } from '../shared/routineReviewNote.js';
 import { createHash } from 'node:crypto';
 import { requireExternalActionGate } from './_externalActionGates.js';
 import { getApiVersion, getInstanceUrl, sfCompositeQueries, sfQuery, sfRequest } from './_salesforce.js';
@@ -158,6 +159,7 @@ function configuredAgentCurrency(account) {
 }
 
 function requiredAgentCurrency(live, supplierId) {
+  if (!isHongKongStem(live?.stem)) return null;
   const account = (live?.accounts || []).find((row) => row.Id === supplierId);
   if (account?.Is_Agent__c !== true) return null;
   const currency = configuredAgentCurrency(account);
@@ -957,14 +959,15 @@ function agencyFeeAccountDefault(account, settings) {
 }
 
 function serializeLiveRow(row, kind, settings = { usdHkdRate: null, revision: null }, options = {}) {
+  const hongKongDelivery = options.hongKongDelivery === true;
   const supplierId = kind === 'line_item' ? row.Original_Supplier__c : row.Supplier__c;
   const productId = kind === 'line_item' ? row.Product__c : row.Product2Id__c;
   const sourceProductName = kind === 'line_item' ? row.Product__r?.Name : row.Product2Id__r?.Name;
-  const productName = displayChargeProductName(sourceProductName);
+  const productName = hongKongDelivery ? displayChargeProductName(sourceProductName) : sourceProductName;
   const productKey = canonicalChargeProduct(sourceProductName);
   const supplierAccount = options.accountsById?.get(supplierId);
-  const agentCurrency = configuredAgentCurrency(supplierAccount);
-  const basicCallingBundleSupport = kind === 'extra_cost'
+  const agentCurrency = hongKongDelivery ? configuredAgentCurrency(supplierAccount) : null;
+  const basicCallingBundleSupport = hongKongDelivery && kind === 'extra_cost'
     && isBasicCallingBundleSupportRow(row, options.basicCallingSupplierIds);
   const accountAgencyFee = basicCallingBundleSupport && productKey === AGENCY_FEE
     ? agencyFeeAccountDefault(options.accountsById?.get(supplierId), settings)
@@ -993,7 +996,7 @@ function serializeLiveRow(row, kind, settings = { usdHkdRate: null, revision: nu
     : null;
   const supplierTotalDual = supplierDualCurrency({ usdAmount: supplierTotalUsd, inputCurrency: supplierInputCurrency, inputAmount: nativeSupplierTotal, savedRate: supplierRateSnapshot, currentRate: settings.usdHkdRate });
   const managedBasicCallingBundle = kind === 'extra_cost' && isManagedBasicCallingRow(row);
-  const portClearance = kind === 'extra_cost' && isPortClearanceRow(row)
+  const portClearance = hongKongDelivery && kind === 'extra_cost' && isPortClearanceRow(row)
     ? {
       ...calculatePortClearance({
         applicationCount: row.Quantity__c,
@@ -1004,7 +1007,7 @@ function serializeLiveRow(row, kind, settings = { usdHkdRate: null, revision: nu
       fxSettingsRevision: row.Supplier_Cost_FX_Settings_Revision__c ?? null,
     }
     : null;
-  const anchorageBuyerDefaultUsd = kind === 'extra_cost' && productKey === ANCHORAGE_DUES
+  const anchorageBuyerDefaultUsd = hongKongDelivery && kind === 'extra_cost' && productKey === ANCHORAGE_DUES
     ? finiteAmount(row.Anchorage_Buyer_Default_USD__c)
     : null;
   const anchorageCurrentBuyerUsd = kind === 'extra_cost' && productKey === ANCHORAGE_DUES
@@ -1061,21 +1064,27 @@ function serializeLiveRow(row, kind, settings = { usdHkdRate: null, revision: nu
     buyerDefault,
     portClearance,
     supplierCurrency: {
-      inputCurrency: supplierInputCurrency || 'USD',
-      inputAmount: supplierInputValue,
-      requiredInputCurrency: agentCurrency,
+      inputCurrency: hongKongDelivery ? supplierInputCurrency || 'USD' : 'USD',
+      inputAmount: hongKongDelivery ? supplierInputValue : supplierRateUsd,
+      requiredInputCurrency: hongKongDelivery ? agentCurrency : 'USD',
       lockedToAgentCurrency: Boolean(agentCurrency),
       normalizedFromStoredUsd: normalizeAgentCurrency,
-      usdHkdRate: supplierRateDual.rate,
-      fxSettingsRevision: accountAgencyFee?.fxSettingsRevision
+      usdHkdRate: hongKongDelivery ? supplierRateDual.rate : null,
+      fxSettingsRevision: !hongKongDelivery ? null : accountAgencyFee?.fxSettingsRevision
         ?? (kind === 'extra_cost' ? row.Supplier_Cost_FX_Settings_Revision__c ?? null : null),
-      rateBasis: accountAgencyFee
+      rateBasis: !hongKongDelivery ? 'USD'
+        : accountAgencyFee
         ? 'Account agreed fee · current company rate'
         : normalizeAgentCurrency ? 'Agent agreed currency · current company rate' : supplierRateDual.basis,
-      unitOrFixed: supplierRateDual,
-      total: supplierTotalDual,
+      unitOrFixed: hongKongDelivery ? supplierRateDual : { complete: finiteAmount(supplierRateUsd) != null, usdAmount: supplierRateUsd, hkdAmount: null, rate: null, basis: 'USD' },
+      total: hongKongDelivery ? supplierTotalDual : { complete: finiteAmount(supplierTotalUsd) != null, usdAmount: supplierTotalUsd, hkdAmount: null, rate: null, basis: 'USD' },
+      recordedEvidence: {
+        inputCurrency: recordedInputCurrency,
+        inputAmount: recordedInputValue,
+        usdHkdRate: recordedRateSnapshot,
+      },
     },
-    anchorage: kind === 'extra_cost' && isAnchorageDuesRow(row) ? {
+    anchorage: hongKongDelivery && kind === 'extra_cost' && isAnchorageDuesRow(row) ? {
       arrival: row.Anchorage_Arrival__c || null,
       departure: row.Anchorage_Departure__c || null,
       location: row.Anchorage_Location__c || ANCHORAGE_LOCATION_ELSEWHERE,
@@ -1088,7 +1097,7 @@ function serializeLiveRow(row, kind, settings = { usdHkdRate: null, revision: nu
       buyerRateUsd: row.Anchorage_Buyer_Rate_USD__c ?? null,
       buyerCalculationVersion: row.Anchorage_Buyer_Calc_Version__c || null,
     } : null,
-    lightDues: kind === 'extra_cost' && isLightDuesRow(row) ? {
+    lightDues: hongKongDelivery && kind === 'extra_cost' && isLightDuesRow(row) ? {
       entryDate: row.Light_Dues_Entry_Date__c || null,
       category: row.Light_Dues_Category__c || LIGHT_DUES_CATEGORY_ALL_OTHER,
       nrtSnapshot: row.Light_Dues_NRT_Snapshot__c ?? null,
@@ -1245,7 +1254,8 @@ function plainLanguageWorkflow(caseRow) {
       ? caseRow.assignedBuyerTrader?.name || 'Needs assignment'
       : status === 'ready_for_invoice' ? 'Invoice team' : 'Completed';
   let nextAction = 'Waiting';
-  if (postInvoice) nextAction = 'Invoice already issued—action required';
+  if (simplifiedQueue === 'completed') nextAction = supplierStep || buyerStep ? 'Closed; paired reviews incomplete' : 'Completed';
+  else if (postInvoice) nextAction = 'Invoice already issued—action required';
   else if (awaiting) nextAction = caseRow.actionableOn ? `Available from ${caseRow.actionableOn}` : 'Add the required schedule information';
   else if (myCost && myBuyerCharge && myCost.supplierId === myBuyerCharge.supplierId) nextAction = `Confirm both sides for ${myCost.supplierName}`;
   else if (myCost) nextAction = `Confirm ${myCost.supplierName} costs`;
@@ -1479,8 +1489,10 @@ function viewCounts(cases) {
     needs_action: 0, awaiting_delivery: 0, post_invoice_changes: 0,
   };
   for (const row of cases) {
-    if (Object.prototype.hasOwnProperty.call(counts, row.status)) counts[row.status] += 1;
-    if (row.simplifiedQueue !== row.status && Object.prototype.hasOwnProperty.call(counts, row.simplifiedQueue)) counts[row.simplifiedQueue] += 1;
+    // Simple tabs filter by queue, not invoice status: a closed invoice can
+    // still have an assigned charge review in My Tasks.
+    if (SIMPLE_QUEUE_NAMES.has(row.simplifiedQueue) && row.simplifiedQueue !== 'all_cases') counts[row.simplifiedQueue] += 1;
+    if (!SIMPLE_QUEUE_NAMES.has(row.status) && Object.prototype.hasOwnProperty.call(counts, row.status)) counts[row.status] += 1;
   }
   return counts;
 }
@@ -1806,10 +1818,13 @@ export async function getVariableChargeDetail(body, context) {
     serializeCases(context.client, [live], context.profile),
     linkedSalesforceFiles(live),
     variableChargeOptions({}, context),
-    variableChargeSettings(context.client),
+    isHongKongStem(live.stem)
+      ? variableChargeSettings(context.client)
+      : Promise.resolve({ usdHkdRate: null, revision: null, updatedAt: null }),
   ]);
   const bundleSupplierIds = basicCallingSupplierIds(live);
   const serializeOptions = {
+    hongKongDelivery: isHongKongStem(live.stem),
     basicCallingSupplierIds: bundleSupplierIds,
     accountsById: new Map((live.accounts || []).map((row) => [row.Id, row])),
   };
@@ -2135,7 +2150,7 @@ function reviewEvidence(review) {
 
 function normalizeSupplierReviewPayload(body, supplierRows) {
   if (!Array.isArray(body?.rowOutcomes)) return body;
-  const supplierReviewNote = text(body?.supplierReviewNote, 1000);
+  const supplierReviewNote = text(body?.supplierReviewNote, 1000) || routineReviewNote(body, 'cost', supplierRows.map((row) => row.Id));
   if (!supplierReviewNote) {
     throw httpError('Add one supplier reference or note before confirming the costs.', 400, 'SUPPLIER_REVIEW_NOTE_REQUIRED');
   }
@@ -2254,7 +2269,10 @@ function findExtra(live, id, lastModifiedDate) {
   return row;
 }
 
-async function salesforceChargeWrites(body, live) {
+async function salesforceChargeWrites(body, live, { supplierId = null, wholeCase = false } = {}) {
+  if ((!supplierId && wholeCase !== true) || (supplierId && wholeCase === true)) {
+    throw httpError('Buyer-charge writes require an exact supplier or an explicit legacy whole-case scope.', 400, 'BUYER_WRITE_SCOPE_REQUIRED');
+  }
   const updates = Array.isArray(body?.extraCostUpdates) ? body.extraCostUpdates : [];
   const additions = Array.isArray(body?.extraCostAdds) ? body.extraCostAdds : [];
   const cancellations = Array.isArray(body?.cancellations) ? body.cancellations : [];
@@ -2267,6 +2285,9 @@ async function salesforceChargeWrites(body, live) {
   for (const update of updates) {
     const id = text(update?.extraCostId || update?.id, 18);
     const current = findExtra(live, id, text(update?.expectedLastModifiedDate || update?.lastModifiedDate, 80));
+    if (supplierId && current.Supplier__c !== supplierId) {
+      throw httpError('Buyer-charge changes must use this exact supplier\'s current charge rows.', 403, 'SUPPLIER_SCOPE_MISMATCH');
+    }
     const currentMode = current.Lumpsum_Cost__c != null || current.Lumpsum_Price__c != null ? 'fixed' : 'per_unit';
     const requestedMode = (update.pricingType || update.pricingMode) === 'per_unit' ? 'per_unit' : 'fixed';
     if (requestedMode !== currentMode) {
@@ -2312,6 +2333,25 @@ function supplierInputEvidence(input, settings, label, requiredCurrency = null) 
       Supplier_Cost_Input_Value__c: nativeAmount,
       Supplier_Cost_USD_HKD_Rate__c: settings.usdHkdRate,
       Supplier_Cost_FX_Settings_Revision__c: settings.revision,
+    },
+  };
+}
+
+function supplierInputForPort(input, { hongKongDelivery, settings, requiredCurrency = null }, label) {
+  if (hongKongDelivery) return supplierInputEvidence(input, settings, label, requiredCurrency);
+  for (const value of [input?.inputCurrency, input?.supplierInputCurrency]) {
+    if (value != null && text(value, 255) && text(value, 255).toUpperCase() !== 'USD') {
+      throw httpError('Variable charges outside Hong Kong must be entered in USD.', 400, 'NON_HONG_KONG_CURRENCY_UNSUPPORTED');
+    }
+  }
+  const amount = numeric(input?.supplierCost ?? input?.cost ?? input?.fixedAmount ?? input?.unitPrice, label);
+  return {
+    usdAmount: amount,
+    fields: {
+      Supplier_Cost_Input_Currency__c: 'USD',
+      Supplier_Cost_Input_Value__c: amount,
+      Supplier_Cost_USD_HKD_Rate__c: null,
+      Supplier_Cost_FX_Settings_Revision__c: null,
     },
   };
 }
@@ -2413,6 +2453,9 @@ async function salesforceSupplierChargeWrites(body, live, supplierId, context, {
     const mode = (update.pricingType || update.pricingMode) === 'per_unit' ? 'per_unit' : 'fixed';
     const supplierEditRequested = ['supplierCost', 'cost', 'fixedAmount', 'unitPrice', 'inputCurrency', 'supplierInputCurrency', 'description', 'quantity', 'unitOfMeasure']
       .some((field) => Object.prototype.hasOwnProperty.call(update, field));
+    const buyerEditRequested = includeBuyerFields
+      && (mode === 'fixed' ? ['buyerPrice', 'price', 'fixedBuyerAmount'] : ['buyerPrice', 'price', 'buyerUnitPrice'])
+        .some((field) => Object.prototype.hasOwnProperty.call(update, field));
     if (includeBuyerFields && !supplierEditRequested) {
       requests.push({
         method: 'PATCH',
@@ -2426,20 +2469,18 @@ async function salesforceSupplierChargeWrites(body, live, supplierId, context, {
       continue;
     }
     const bodyPatch = { Description__c: text(update.description, 32_000) || null };
-    const supplierInput = hongKongDelivery || agentCurrency
-      ? supplierInputEvidence(update, settings, mode === 'fixed' ? 'Fixed supplier cost' : 'Supplier unit cost', agentCurrency)
-      : null;
+    const supplierInput = supplierInputForPort(update, { hongKongDelivery, settings, requiredCurrency: agentCurrency }, mode === 'fixed' ? 'Fixed supplier cost' : 'Supplier unit cost');
     if (supplierInput) Object.assign(bodyPatch, supplierInput.fields);
     if (mode === 'fixed') {
       bodyPatch.Lumpsum_Cost__c = supplierInput?.usdAmount ?? numeric(update.supplierCost ?? update.cost ?? update.fixedAmount, 'Fixed supplier cost');
       bodyPatch.Unit_Cost__c = null;
-      if (includeBuyerFields) bodyPatch.Lumpsum_Price__c = numeric(update.buyerPrice ?? update.price ?? update.fixedBuyerAmount, 'Fixed buyer price');
+      if (buyerEditRequested) bodyPatch.Lumpsum_Price__c = numeric(update.buyerPrice ?? update.price ?? update.fixedBuyerAmount, 'Fixed buyer price');
     } else {
       bodyPatch.Quantity__c = numeric(update.quantity, 'Quantity', { positive: true, nullable: false });
       bodyPatch.Unit_of_Measure__c = text(update.unitOfMeasure || current.Unit_of_Measure__c, 40) || '1.';
       bodyPatch.Unit_Cost__c = supplierInput?.usdAmount ?? numeric(update.supplierCost ?? update.cost ?? update.unitPrice, 'Supplier unit cost');
       bodyPatch.Lumpsum_Cost__c = null;
-      if (includeBuyerFields) bodyPatch.Unit_Price__c = numeric(update.buyerPrice ?? update.price ?? update.buyerUnitPrice, 'Buyer unit price');
+      if (buyerEditRequested) bodyPatch.Unit_Price__c = numeric(update.buyerPrice ?? update.price ?? update.buyerUnitPrice, 'Buyer unit price');
     }
     requests.push({ method: 'PATCH', url: `/services/data/${apiVersion}/sobjects/STEM_Extra_Cost__c/${id}`, referenceId: `supplierUpdate${reference++}`, httpHeaders: lastModifiedHeaders(current.LastModifiedDate), body: bodyPatch });
   }
@@ -2461,9 +2502,7 @@ async function salesforceSupplierChargeWrites(body, live, supplierId, context, {
     if (!paymentTerm) throw httpError('The supplier payment term is unavailable or ambiguous and cannot be guessed.', 409, 'PAYMENT_TERM_UNAVAILABLE');
     const mode = (addition.pricingType || addition.pricingMode) === 'per_unit' ? 'per_unit' : 'fixed';
     const create = { STEM__c: live.stem.Id, Supplier__c: supplierId, Product2Id__c: productId, RecordTypeId: recordTypes[0].Id, Payment_Term__c: paymentTerm, Cancelled__c: false, Description__c: text(addition.description, 32_000) || 'STEM Charge' };
-    const supplierInput = hongKongDelivery || agentCurrency
-      ? supplierInputEvidence(addition, settings, mode === 'fixed' ? 'Fixed supplier cost' : 'Supplier unit cost', agentCurrency)
-      : null;
+    const supplierInput = supplierInputForPort(addition, { hongKongDelivery, settings, requiredCurrency: agentCurrency }, mode === 'fixed' ? 'Fixed supplier cost' : 'Supplier unit cost');
     if (supplierInput) Object.assign(create, supplierInput.fields);
     if (mode === 'fixed') {
       create.Lumpsum_Cost__c = supplierInput?.usdAmount ?? numeric(addition.supplierCost ?? addition.cost ?? addition.fixedAmount, 'Fixed supplier cost');
@@ -2601,7 +2640,7 @@ export async function saveAndConfirmVariableCharges(body, context) {
   try {
     if (reservation?.status !== 'salesforce_written') {
       salesforceWriteAttempted = true;
-      await salesforceChargeWrites(body, liveBefore);
+      await salesforceChargeWrites(body, liveBefore, { wholeCase: true });
       const liveAfterWrite = await liveCaseForStem(stemId, context);
       postWriteFingerprint = liveAfterWrite.fingerprint;
       await completeOperation(context.client, operationId, 'salesforce_written', {
@@ -2844,7 +2883,7 @@ async function validateCostSide(body, supplierRows) {
 
 function normalizeBuyerSide(body, supplierRows) {
   if (!Array.isArray(body?.rowChargeDecisions)) return body;
-  const note = text(body?.buyerReviewNote || body?.note, 1000);
+  const note = text(body?.buyerReviewNote || body?.note, 1000) || routineReviewNote(body, 'buyer_charge', supplierRows.map((row) => row.Id));
   if (!note) throw httpError('Add a buyer-charge note before confirmation.', 400, 'BUYER_NOTE_REQUIRED');
   const decisions = new Map(body.rowChargeDecisions.map((row) => [
     text(row?.sourceId || row?.id, 64),
@@ -2949,6 +2988,12 @@ async function validateBuyerSide(body, supplierRows, files, { hongKongDelivery =
     text(row?.extraCostId || row?.id, 18),
     row,
   ]));
+  const supplierExtraCostIds = new Set(supplierRows.filter((row) => row.Supplier__c).map((row) => row.Id));
+  for (const id of extraCostUpdates.keys()) {
+    if (!supplierExtraCostIds.has(id)) {
+      throw httpError('Buyer-charge changes must use this exact supplier\'s current charge rows.', 403, 'SUPPLIER_SCOPE_MISMATCH');
+    }
+  }
   const fileIds = new Set(files.map((row) => row.id));
   for (const row of supplierRows) {
     const review = byId.get(row.Id);
@@ -3032,7 +3077,7 @@ async function assertLightDuesApprovalReady(live, supplierId, context, side) {
 }
 
 async function assertAgentCostCurrencyReady(live, supplierId, context, side) {
-  if (side !== 'cost') return;
+  if (side !== 'cost' || !isHongKongStem(live.stem)) return;
   const account = (live.accounts || []).find((row) => row.Id === supplierId);
   if (account?.Is_Agent__c !== true) return;
   const requiredCurrency = requiredAgentCurrency(live, supplierId);
@@ -3241,7 +3286,7 @@ export async function confirmVariableChargeSides(body, context) {
       } else if (sides[0] === 'cost') {
         await salesforceSupplierChargeWrites(costReview.body, liveBefore, supplierId, context);
       } else {
-        await salesforceChargeWrites(buyerReview.body, liveBefore);
+        await salesforceChargeWrites(buyerReview.body, liveBefore, { supplierId });
       }
       const refreshed = await liveCaseForStem(stemId, context);
       for (const side of sides) await assertBasicCallingApprovalReady(refreshed, supplierId, context, side);
@@ -3663,7 +3708,11 @@ export const variableChargeInternals = {
   nextHongKongBusinessDay,
   variableChargeActionability,
   plainLanguageWorkflow,
+  viewCounts,
   supplierLiveFingerprint,
+  supplierInputForPort,
+  requiredAgentCurrency,
+  assertAgentCostCurrencyReady,
   sha256,
   serializeLiveRow,
   supplierDualCurrencySummary,

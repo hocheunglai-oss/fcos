@@ -35,6 +35,37 @@ function folderCountFromSource(source) {
   return match ? countMatches(match[1], /['"][^'"]+['"]/g) : null;
 }
 
+function collectStaticImportClosure(manifest, entryKey) {
+  const closure = new Set();
+  const missing = new Set();
+  const pending = [entryKey];
+  while (pending.length) {
+    const key = pending.pop();
+    if (closure.has(key)) continue;
+    const entry = manifest[key];
+    if (!entry) {
+      missing.add(key);
+      continue;
+    }
+    closure.add(key);
+    for (const importedKey of entry.imports || []) pending.push(importedKey);
+  }
+  return { closure, missing };
+}
+
+function isStaticallyReachable(manifest, roots, targets) {
+  const visited = new Set();
+  const pending = [...roots];
+  while (pending.length) {
+    const key = pending.pop();
+    if (visited.has(key)) continue;
+    visited.add(key);
+    if (targets.has(key)) return true;
+    for (const importedKey of manifest[key]?.imports || []) pending.push(importedKey);
+  }
+  return false;
+}
+
 export async function verifyPerformanceBudgets({
   root = process.cwd(),
   requireServerArtifacts = process.env.FCOS_REQUIRE_SERVER_BUNDLES === '1',
@@ -44,6 +75,7 @@ export async function verifyPerformanceBudgets({
   const warnings = [];
   const sourceAssurances = [];
   const serverArtifacts = { available: true, unavailable: [] };
+  const clientAssets = { ordinaryBytes: 0, onDemandPdfViewer: null, onDemandXlsWriter: null };
   const assertBudget = (condition, message) => {
     if (!condition) failures.push(message);
   };
@@ -57,14 +89,138 @@ export async function verifyPerformanceBudgets({
   if (await exists(assetDirectory)) {
     const files = await readdir(assetDirectory);
     const javascript = [];
-    for (const filename of files.filter((name) => name.endsWith('.js'))) {
+    for (const filename of files.filter((name) => /\.(?:js|mjs)$/.test(name))) {
       const content = await readFile(path.join(assetDirectory, filename));
       javascript.push({ filename, bytes: content.length, gzipBytes: gzipSync(content).length });
     }
-    const largest = javascript.toSorted((left, right) => right.bytes - left.bytes)[0];
-    const largestGzip = javascript.toSorted((left, right) => right.gzipBytes - left.gzipBytes)[0];
-    const chart = javascript.find((item) => item.filename.startsWith('generateCategoricalChart-'));
-    const total = javascript.reduce((sum, item) => sum + item.bytes, 0);
+    let ordinaryJavascript = javascript;
+    // The document renderer is optional, but its cost is never unmeasured.
+    // Only the manifest-proven dynamic entry and its own worker qualify for
+    // this separate budget. Every other JS/MJS asset retains the app budget.
+    if (budgets.onDemandPdfViewer) {
+      try {
+        const manifest = JSON.parse(await readFile(path.join(root, 'dist/.vite/manifest.json'), 'utf8'));
+        const entryKey = 'src/components/special-terms/SpecialTermPdfPages.jsx';
+        const entry = manifest[entryKey];
+        const renderer = javascript.find((item) => `assets/${item.filename}` === entry?.file);
+        // Vite records the worker's real path when an isolated worktree shares
+        // node_modules through a symlink. Match the pinned package suffix so
+        // the same immutable worker is measured in both checkout layouts.
+        const workerManifestEntry = Object.entries(manifest).find(([key, item]) => {
+          const source = String(item?.src || key).replaceAll('\\', '/');
+          return source.endsWith('/node_modules/pdfjs-dist/build/pdf.worker.min.mjs')
+            || source === 'node_modules/pdfjs-dist/build/pdf.worker.min.mjs';
+        })?.[1];
+        const workerFile = workerManifestEntry?.file;
+        const worker = javascript.find((item) => `assets/${item.filename}` === workerFile && entry?.assets?.includes(workerFile));
+        const isDynamic = entry?.isDynamicEntry === true && !entry.isEntry
+          && Object.values(manifest).some((item) => item.dynamicImports?.includes(entryKey))
+          && !Object.values(manifest).some((item) => item.imports?.includes(entryKey));
+        assertBudget(Boolean(renderer && worker && isDynamic), 'PDF viewer must be a separate dynamic entry with its own worker and no static importer.');
+        if (renderer && worker && isDynamic) {
+          const limit = budgets.onDemandPdfViewer;
+          const bytes = renderer.bytes + worker.bytes;
+          const gzipBytes = renderer.gzipBytes + worker.gzipBytes;
+          assertBudget(renderer.bytes <= limit.rendererBytes, `PDF renderer is ${renderer.bytes} bytes (budget ${limit.rendererBytes}).`);
+          assertBudget(worker.bytes <= limit.workerBytes, `PDF worker is ${worker.bytes} bytes (budget ${limit.workerBytes}).`);
+          assertBudget(bytes <= limit.totalBytes, `On-demand PDF viewer is ${bytes} bytes (budget ${limit.totalBytes}).`);
+          assertBudget(gzipBytes <= limit.totalGzipBytes, `Compressed on-demand PDF viewer is ${gzipBytes} bytes (budget ${limit.totalGzipBytes}).`);
+          clientAssets.onDemandPdfViewer = { bytes, gzipBytes, renderer: renderer.filename, worker: worker.filename };
+          ordinaryJavascript = javascript.filter((item) => item !== renderer && item !== worker);
+        }
+      } catch {
+        assertBudget(false, 'PDF viewer budgeting requires a valid Vite manifest.');
+      }
+    }
+    // The binary XLS writer is loaded only when a dashboard export is requested.
+    // Exclude its complete static import closure from the ordinary app budget only
+    // when the Vite manifest proves that every emitted asset is isolated and lazy.
+    if (budgets.onDemandXlsWriter) {
+      try {
+        const manifest = JSON.parse(await readFile(path.join(root, 'dist/.vite/manifest.json'), 'utf8'));
+        const entryKey = 'src/lib/dashboardStemWorkbook.js';
+        const entry = manifest[entryKey];
+        const { closure, missing } = collectStaticImportClosure(manifest, entryKey);
+        const dynamicImporters = Object.entries(manifest)
+          .filter(([, item]) => item.dynamicImports?.includes(entryKey))
+          .map(([key]) => key);
+        const eagerRoots = Object.entries(manifest)
+          .filter(([, item]) => item.isEntry === true)
+          .map(([key]) => key);
+        const staticImportersOutsideClosure = Object.entries(manifest)
+          .filter(([key, item]) => !closure.has(key) && item.imports?.some((importedKey) => closure.has(importedKey)))
+          .map(([key]) => key);
+        const dynamicOnly = entry?.isDynamicEntry === true
+          && entry.isEntry !== true
+          && dynamicImporters.length > 0
+          && !isStaticallyReachable(manifest, eagerRoots, closure);
+        const manifestComplete = missing.size === 0;
+        const closureIsExclusive = staticImportersOutsideClosure.length === 0;
+        const assets = [...closure].map((key) => {
+          const file = manifest[key]?.file;
+          return javascript.find((item) => `assets/${item.filename}` === file);
+        });
+        const emittedAssetsComplete = assets.length > 0 && assets.every(Boolean);
+
+        assertBudget(dynamicOnly, 'XLS writer must be a separate dynamic entry with no eager reachability.');
+        assertBudget(manifestComplete, `XLS writer manifest closure is incomplete${missing.size ? `; missing ${[...missing].join(', ')}` : ''}.`);
+        assertBudget(closureIsExclusive, `XLS writer assets must not be statically shared outside its on-demand closure${staticImportersOutsideClosure.length ? `; imported by ${staticImportersOutsideClosure.join(', ')}` : ''}.`);
+        assertBudget(emittedAssetsComplete, 'XLS writer budgeting requires every manifest-referenced JavaScript asset to exist.');
+
+        if (dynamicOnly && manifestComplete && closureIsExclusive && emittedAssetsComplete) {
+          const uniqueAssets = [...new Map(assets.map((asset) => [asset.filename, asset])).values()];
+          const limit = budgets.onDemandXlsWriter;
+          const largest = uniqueAssets.toSorted((left, right) => right.bytes - left.bytes)[0];
+          const bytes = uniqueAssets.reduce((sum, asset) => sum + asset.bytes, 0);
+          const gzipBytes = uniqueAssets.reduce((sum, asset) => sum + asset.gzipBytes, 0);
+          assertBudget(largest.bytes <= limit.largestAssetBytes, `Largest on-demand XLS writer asset ${largest.filename} is ${largest.bytes} bytes (budget ${limit.largestAssetBytes}).`);
+          assertBudget(bytes <= limit.totalBytes, `On-demand XLS writer is ${bytes} bytes (budget ${limit.totalBytes}).`);
+          assertBudget(gzipBytes <= limit.totalGzipBytes, `Compressed on-demand XLS writer is ${gzipBytes} bytes (budget ${limit.totalGzipBytes}).`);
+          clientAssets.onDemandXlsWriter = {
+            bytes,
+            gzipBytes,
+            largestBytes: largest.bytes,
+            largestAsset: largest.filename,
+            assets: uniqueAssets.map((asset) => asset.filename),
+          };
+          const excluded = new Set(uniqueAssets);
+          ordinaryJavascript = ordinaryJavascript.filter((item) => !excluded.has(item));
+        }
+      } catch {
+        assertBudget(false, 'XLS writer budgeting requires a valid Vite manifest.');
+      }
+    }
+    // Execution UI is retired from the read-only portal. Legacy consumers retain
+    // the lazy-entry size policy; the application must exclude a retired entry.
+    if (budgets.onDemandReconciliationCampaign) {
+      try {
+        const manifest = JSON.parse(await readFile(path.join(root, 'dist/.vite/manifest.json'), 'utf8'));
+        const entryKey = 'src/components/xero/XeroReconciliationCampaign.jsx';
+        const entry = manifest[entryKey];
+        const asset = javascript.find(item => `assets/${item.filename}` === entry?.file);
+        const lazy = entry?.isDynamicEntry === true && !entry.isEntry
+          && Object.values(manifest).some(item => item.dynamicImports?.includes(entryKey))
+          && !Object.values(manifest).some(item => item.imports?.includes(entryKey));
+        const retired = budgets.onDemandReconciliationCampaign.retiredFromPortal === true;
+        if (retired) {
+          const referenced = Object.values(manifest).some(item => item.imports?.includes(entryKey) || item.dynamicImports?.includes(entryKey));
+          assertBudget(!entry && !referenced && !javascript.some(item => item.filename.startsWith('XeroReconciliationCampaign-')), 'Retired Xero execution UI must not be included in the application bundle.');
+        } else {
+          assertBudget(Boolean(asset && lazy), 'Reconciliation campaign must remain a separate dynamic entry without a static importer.');
+        }
+        if (!retired && asset && lazy) {
+          const limit = budgets.onDemandReconciliationCampaign;
+          assertBudget(asset.bytes <= limit.totalBytes, `On-demand reconciliation campaign is ${asset.bytes} bytes (budget ${limit.totalBytes}).`);
+          assertBudget(asset.gzipBytes <= limit.totalGzipBytes, `Compressed reconciliation campaign is ${asset.gzipBytes} bytes (budget ${limit.totalGzipBytes}).`);
+          clientAssets.onDemandReconciliationCampaign = asset;
+        }
+      } catch { assertBudget(false, 'Reconciliation campaign budgeting requires a valid Vite manifest.'); }
+    }
+    const largest = ordinaryJavascript.toSorted((left, right) => right.bytes - left.bytes)[0];
+    const largestGzip = ordinaryJavascript.toSorted((left, right) => right.gzipBytes - left.gzipBytes)[0];
+    const chart = ordinaryJavascript.find((item) => item.filename.startsWith('generateCategoricalChart-'));
+    const total = ordinaryJavascript.reduce((sum, item) => sum + item.bytes, 0);
+    clientAssets.ordinaryBytes = total;
     assertBudget(largest?.bytes <= budgets.client.largestJavaScriptBytes, `Largest client chunk ${largest?.filename} is ${largest?.bytes} bytes (budget ${budgets.client.largestJavaScriptBytes}).`);
     assertBudget(largestGzip?.gzipBytes <= budgets.client.largestJavaScriptGzipBytes, `Largest compressed client chunk ${largestGzip?.filename} is ${largestGzip?.gzipBytes} bytes (budget ${budgets.client.largestJavaScriptGzipBytes}).`);
     assertBudget(!chart || chart.bytes <= budgets.client.chartChunkBytes, `Chart chunk ${chart?.filename} is ${chart?.bytes} bytes (budget ${budgets.client.chartChunkBytes}).`);
@@ -130,5 +286,5 @@ export async function verifyPerformanceBudgets({
     else warnings.push(message);
   }
 
-  return { budgets, failures, warnings, sourceAssurances, dispatcherLines, serverArtifacts };
+  return { budgets, failures, warnings, sourceAssurances, dispatcherLines, serverArtifacts, clientAssets };
 }

@@ -1,0 +1,450 @@
+<template>
+  <div style="overflow:scroll;">
+    <table class="slds-table slds-table_cell-buffer slds-table_bordered">
+      <thead>
+        <tr>
+          <th style="width: 10vw;">Product Extra</th>
+          <th>Quantity</th>
+          <th>Quantity<br>(Max)</th>
+          <th>Unit<br>(Buy At)</th>
+          <th>Unit<br>(Sell At)</th>
+          <th style="width: 6vw;">UOM</th>
+          <th>Fixed</th>
+          <th>Min<br>(Buy At)</th>
+          <th>Min<br>(Sell At)</th>
+          <th>Lumpsum<br>(Buy At)</th>
+          <th>Lumpsum<br>(Sell At)</th>
+          <th>Unit Margin</th>
+          <th>Total Margin</th>
+          <th>Total</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <!--Type-->
+          <td>
+            {quoteLineItem.ProductName}
+          </td>
+          <!--Quantity-->
+          <td>
+            {quoteLineItem.Quantity}
+          </td>
+          <!--Quantity (Max)-->
+          <td>
+            {quoteLineItem.Quantity_Range_Maximum__c}
+          </td>
+          <!--Unit Cost (Buy At)-->
+          <td>
+            US$ {quoteLineItem.Supplier_Unit_Price__c}
+          </td>
+          <!--Unit Price (Sell At)-->
+          <td>
+            US$ {quoteLineItem.UnitPrice}
+          </td>
+          <!--Unit of Measure-->
+          <td>
+            {quoteLineItem.Unit_of_Measure__c}
+          </td>
+          <!--Fixed-->
+          <td style="text-align: center;">
+            <input type="checkbox" disabled/>
+          </td>
+          <!--Minimum (Buy At)-->
+          <td>
+
+          </td>
+          <!--Minimum (Sell At)-->
+          <td>
+
+          </td>
+          <!--Lumpsum Cost (Buy At)-->
+          <td>
+
+          </td>
+          <!--Lumpsum Price (Sell At)-->
+          <td>
+
+          </td>
+          <!--Unit Margin-->
+          <td>
+            US$ {productUnitMargin.outputValue}
+          </td>
+          <!--Total Margin-->
+          <td>
+            US$ {productTotalMargin.outputValue}
+          </td>
+          <!--Total Cost-->
+          <td class="total-col">
+            <span>US$ {productTotalCost.outputValue}</span>
+          </td>
+          <td></td>
+        </tr>
+        <template if:true={transportationExtraCostBuy}>
+          <tr>
+            <!--Type-->
+            <td>
+              {transportationExtraCostBuy.productName}
+            </td>
+            <!--Quantity-->
+            <td>
+              <input type="number" name="quantity" placeholder="Quantity" min="1" step="1" class={transportationExtraCostBuy.quantity.className}
+                     disabled value={transportationExtraCostBuy.quantity.value} onchange={handleTransportationExtraCostBuyChange}/>
+            </td>
+            <!--Quantity (Max)-->
+            <td>
+              <input type="number" name="quantityMaximum" placeholder="Max" min="1" step="1" class={transportationExtraCostBuy.quantityMaximum.className}
+                    disabled value={transportationExtraCostBuy.quantityMaximum.value} onchange={handleTransportationExtraCostBuyChange}/>
+            </td>
+            <!--Unit Cost (Buy At)-->
+            <td>
+              <input type="number" name="unitCost" placeholder="Unit Cost (Buy At)" class="slds-input" min="1" step="0.01"
+                    disabled value={transportationExtraCostBuy.unitCost} onchange={handleTransportationExtraCostBuyChange}/>
+            </td>
+            <!--Unit Price (Sell At)-->
+            <td>
+              <input type="number" name="unitPrice" placeholder="Unit Price (Sell At)" class={transportationExtraCostBuy.unitPrice.className} min="1" step="0.01"
+                     disabled value={transportationExtraCostBuy.unitPrice.value} onchange={handleTransportationExtraCostBuyChange} />
+            </td>
+            <!--Unit of Measure-->
+            <td>
+              {transportationExtraCostBuy.unitOfMeasure}
+            </td>
+            <!--Fixed-->
+            <td style="text-align: center;">
+              <input type="checkbox" name="fixedCost" checked={transportationExtraCostBuy.fixedCost} onchange={handleTransportationExtraCostBuyChange} disabled/>
+            </td>
+            <!--Minimum (Buy At)-->
+            <td>
+              <input type="number" name="minimumBuyAt" placeholder="Minimum (Buy At)" class={transportationExtraCostBuy.minimumBuyAt.className} min="1" step="0.01"
+                    disabled value={transportationExtraCostBuy.minimumBuyAt.value} onchange={handleTransportationExtraCostBuyChange} />
+            </td>
+            <!--Minimum (Sell At)-->
+            <td>
+              <input type="number" name="minimumSellAt" placeholder="Minimum (Sell At)" class={transportationExtraCostBuy.minimumSellAt.className} min="1" step="0.01"
+                     disabled value={transportationExtraCostBuy.minimumSellAt.value} onchange={handleTransportationExtraCostBuyChange} />
+            </td>
+            <!--Lumpsum Cost (Buy At)-->
+            <td>
+              <input type="number" name="lumpsumCostBuyAt" value={transportationExtraCostBuy.lumpsumCostBuyAt.value} onchange={handleTransportationExtraCostBuyChange}
+               placeholder="Lumpsum Cost (Buy At)" class={transportationExtraCostBuy.lumpsumCostBuyAt.className} disabled min="1" step="0.01" />
+            </td>
+            <!--Lumpsum Cost (Sell At)-->
+            <td>
+              <input type="number" name="lumpsumCostSellAt" onchange={handleTransportationExtraCostBuyChange}
+                     placeholder="Lumpsum Price (Sell At)"
+                     value={transportationExtraCostBuy.lumpsumCostSellAt.value}
+                     disabled
+                     class={transportationExtraCostBuy.lumpsumCostSellAt.className} min="1" step="0.01" />
+            </td>
+            <!--Unit Margin-->
+            <td>
+              US$ {transportationExtraCostBuy.unitMargin.outputValue}
+            </td>
+            <!--Total Margin (calculated)-->
+            <td>
+              US$ {transportationExtraCostBuy.totalMargin.outputValue}
+            </td>
+            <!--Total Cost (calculated)-->
+            <td class="total-col">
+              <span>US$ {transportationExtraCostBuy.totalCost.outputValue}</span>
+            </td>
+            <td></td>
+          </tr>
+        </template>
+        <template if:true={transportationExtraCostSell}>
+          <tr>
+            <!--Type-->
+            <td>
+              {transportationExtraCostSell.productName}
+            </td>
+            <!--Quantity-->
+            <td>
+              <input type="number" name="quantity" placeholder="Quantity" min="1" step="1" class={transportationExtraCostSell.quantity.className}
+                     disabled={transportationExtraCostSell.fixedCost} value={transportationExtraCostSell.quantity.value} onchange={handleTransportationExtraCostSellChange}/>
+            </td>
+            <!--Quantity (Max)-->
+            <td>
+              <input type="number" name="quantityMaximum" placeholder="Max" min="1" step="1" class={transportationExtraCostSell.quantityMaximum.className}
+                     disabled={transportationExtraCostSell.isQuantityRangeDisabled} value={transportationExtraCostSell.quantityMaximum.value} onchange={handleTransportationExtraCostSellChange}/>
+            </td>
+            <!--Unit Cost (Buy At)-->
+            <td>
+              <input type="number" name="unitCost" placeholder="Unit Cost (Buy At)" class="slds-input" min="1" step="0.01"
+                     disabled value={transportationExtraCostSell.unitCost} onchange={handleTransportationExtraCostSellChange}/>
+            </td>
+            <!--Unit Price (Sell At)-->
+            <td>
+              <input type="number" name="unitPrice" placeholder="Unit Price (Sell At)" class={transportationExtraCostSell.unitPrice.className} min="1" step="0.01"
+                     disabled={transportationExtraCostSell.fixedCost} value={transportationExtraCostSell.unitPrice.value} onchange={handleTransportationExtraCostSellChange} />
+            </td>
+            <!--Unit of Measure-->
+            <td>
+              {transportationExtraCostSell.unitOfMeasure}
+            </td>
+            <!--Fixed-->
+            <td style="text-align: center;">
+              <input type="checkbox" name="fixedCost" checked={transportationExtraCostSell.fixedCost} onchange={handleTransportationExtraCostSellChange} disabled={transportationExtraCostSell.disableFixed}/>
+            </td>
+            <!--Minimum (Buy At)-->
+            <td>
+              <input type="number" name="minimumBuyAt" placeholder="Minimum (Buy At)" class={transportationExtraCostSell.minimumBuyAt.className} min="1" step="0.01"
+                     disabled value={transportationExtraCostSell.minimumBuyAt.value} onchange={handleTransportationExtraCostSellChange} />
+            </td>
+            <!--Minimum (Sell At)-->
+            <td>
+              <input type="number" name="minimumSellAt" placeholder="Minimum (Sell At)" class={transportationExtraCostSell.minimumSellAt.className} min="1" step="0.01"
+                     disabled={transportationExtraCostSell.fixedCost} value={transportationExtraCostSell.minimumSellAt.value} onchange={handleTransportationExtraCostSellChange} />
+            </td>
+            <!--Lumpsum Cost (Buy At)-->
+            <td>
+              <input type="number" name="lumpsumCostBuyAt" value={transportationExtraCostSell.lumpsumCostBuyAt.value} onchange={handleTransportationExtraCostSellChange}
+               placeholder="Lumpsum Cost (Buy At)" class={transportationExtraCostSell.lumpsumCostBuyAt.className} disabled min="1" step="0.01" />
+            </td>
+            <!--Lumpsum Cost (Sell At)-->
+            <td>
+              <input type="number" name="lumpsumCostSellAt" onchange={handleTransportationExtraCostSellChange}
+                     placeholder="Lumpsum Price (Sell At)"
+                     value={transportationExtraCostSell.lumpsumCostSellAt.value}
+                     disabled={transportationExtraCostSell.isFixedCostDisabled}
+                     class={transportationExtraCostSell.lumpsumCostSellAt.className} min="1" step="0.01" />
+            </td>
+            <!--Unit Margin-->
+            <td>
+              US$ {transportationExtraCostSell.unitMargin.outputValue}
+            </td>
+            <!--Total Margin (calculated)-->
+            <td>
+              US$ {transportationExtraCostSell.totalMargin.outputValue}
+            </td>
+            <!--Total Cost (calculated)-->
+            <td class="total-col">
+              <span>US$ {transportationExtraCostSell.totalCost.outputValue}</span>
+            </td>
+            <td></td>
+          </tr>
+        </template>
+        <template for:each={extraCosts} for:item="extraCost" for:index="index">
+          <tr key={extraCost.uniqueIndex} row={extraCost.uniqueIndex}>
+            <!--Type-->
+            <td>
+              <template if:true={extraCost.id}>
+                {extraCost.product2Name}
+              </template>
+              <template if:false={extraCost.id}>
+                <lightning-combobox
+                        data-id={extraCost.uniqueIndex}
+                        name="product2Id"
+                        variant="label-hidden"
+                        value={extraCost.product2Id}
+                        options={extraCostProducts}
+                        onchange={handleChange}>
+                </lightning-combobox>
+              </template>
+            </td>
+            <!--Quantity-->
+            <td>
+              <input type="number" name="quantity" placeholder="Quantity" min="1" step="1" class={extraCost.quantity.className}
+                     disabled={extraCost.fixedCost} value={extraCost.quantity.value} data-id={extraCost.uniqueIndex} onchange={handleChange} />
+            </td>
+            <!--Quantity (Max)-->
+            <td>
+              <input type="number" name="quantityMaximum" placeholder="Max" min="1" step="1" class={extraCost.quantityMaximum.className}
+                     disabled={extraCost.isQuantityRangeDisabled} value={extraCost.quantityMaximum.value} data-id={extraCost.uniqueIndex} onchange={handleChange} />
+            </td>
+            <!--Unit Cost (Buy At)-->
+            <td>
+              <input type="number" name="unitCost" placeholder="Unit Cost (Buy At)" class="slds-input" min="1" step="0.01"
+                     disabled={extraCost.fixedCost} value={extraCost.unitCost} data-id={extraCost.uniqueIndex} onchange={handleChange} />
+            </td>
+            <!--Unit Price (Sell At)-->
+            <td>
+              <input type="number" name="unitPrice" placeholder="Unit Price (Sell At)" class={extraCost.unitPrice.className} min="1" step="0.01"
+                     disabled={extraCost.fixedCost} value={extraCost.unitPrice.value} data-id={extraCost.uniqueIndex} onchange={handleChange} />
+            </td>
+            <!--Unit of Measure-->
+            <td>
+              <template if:true={unitOfMeasureOptions}>
+                <lightning-combobox
+                        data-id={extraCost.uniqueIndex}
+                        name="unitOfMeasure"
+                        value={extraCost.unitOfMeasure}
+                        variant="label-hidden"
+                        options={unitOfMeasureOptions}
+                        onchange={handleChange} ></lightning-combobox>
+              </template>
+            </td>
+            <!--Fixed-->
+            <td style="text-align: center;">
+              <input type="checkbox" name="fixedCost" data-id={extraCost.uniqueIndex} checked={extraCost.fixedCost} onchange={handleChange} disabled={extraCost.disableFixed}/>
+            </td>
+            <!--Minimum (Buy At)-->
+            <td>
+              <input type="number" name="minimumBuyAt" placeholder="Minimum (Buy At)" class={extraCost.minimumBuyAt.className} min="1" step="0.01"
+                     disabled={extraCost.fixedCost} value={extraCost.minimumBuyAt.value} data-id={extraCost.uniqueIndex} onchange={handleChange} />
+            </td>
+            <!--Minimum (Sell At)-->
+            <td>
+              <input type="number" name="minimumSellAt" placeholder="Minimum (Sell At)" class={extraCost.minimumSellAt.className} min="1" step="0.01"
+                     disabled={extraCost.fixedCost} value={extraCost.minimumSellAt.value} data-id={extraCost.uniqueIndex} onchange={handleChange} />
+            </td>
+            <!--Lumpsum Cost (Buy At)-->
+            <td>
+              <input type="number" name="lumpsumCostBuyAt" data-id={extraCost.uniqueIndex} value={extraCost.lumpsumCostBuyAt.value}
+                      disabled={extraCost.isFixedCostDisabled} onchange={handleChange} placeholder="Lumpsum Cost (Buy At)" class={extraCost.lumpsumCostBuyAt.className} min="1" step="0.01" />
+            </td>
+            <!--Lumpsum Cost (Sell At)-->
+            <td>
+              <input type="number" name="lumpsumCostSellAt" value={extraCost.lumpsumCostSellAt.value} data-id={extraCost.uniqueIndex}
+                      disabled={extraCost.isFixedCostDisabled} onchange={handleChange} placeholder="Lumpsum Price (Sell At)" class={extraCost.lumpsumCostSellAt.className} min="1" step="0.01" />
+            </td>
+            <!--Unit Margin (calculated)-->
+            <td>
+              US$ {extraCost.unitMargin.outputValue}
+            </td>
+            <!--Total Margin (calculated)-->
+            <td>
+              US$ {extraCost.totalMargin.outputValue}
+            </td>
+            <!--Total Cost (calculated)-->
+            <td class="total-col">
+              <span>US$ {extraCost.totalCost.outputValue}</span>
+            </td>
+            <td><lightning-button onclick={removeExtraCostLine} data-id={extraCost.uniqueIndex} variant="base" title="Remove extra cost" icon-name="utility:close" class="slds-m-left_x-small"></lightning-button></td>
+          </tr>
+        </template>
+        <tr>
+          <td colspan="12"></td>
+          <td>Total</td>
+          <td class="total-col"><span>US$ {total.outputValue}</span></td>
+        </tr>
+        <tr>
+          <td colspan="14">
+            <lightning-button-icon size="x-small" icon-name="utility:add" variant="brand" alternative-text="Add Cost"
+                                   onclick={addNewTableLine}>
+            </lightning-button-icon>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+    <table class="slds-table slds-table_cell-buffer slds-table_bordered">
+      <thead>
+        <tr>
+          <th style="width: 10vw;">STEM Extra</th>
+          <th>Quantity</th>
+          <th>Quantity<br>(Max)</th>
+          <th>Unit<br>(Buy At)</th>
+          <th>Unit<br>(Sell At)</th>
+          <th style="width: 6vw;">UOM</th>
+          <th>Fixed</th>
+          <th>Min<br>(Buy At)</th>
+          <th>Min<br>(Sell At)</th>
+          <th>Lumpsum<br>(Buy At)</th>
+          <th>Lumpsum<br>(Sell At)</th>
+          <th>Unit Margin</th>
+          <th>Total Margin</th>
+          <th>Total</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        <template for:each={stemCharges} for:item="stemCharge" for:index="index">
+          <tr key={stemCharge.uniqueIndex} row={stemCharge.uniqueIndex}>
+            <!--Type-->
+            <td>
+              <template if:true={stemCharge.id}>
+                {stemCharge.product2Name}
+              </template>
+              <template if:false={stemCharge.id}>
+              <lightning-combobox
+                      data-id={stemCharge.uniqueIndex}
+                      name="product2Id"
+                      variant="label-hidden"
+                      value={stemCharge.product2Id}
+                      options={extraCostProducts}
+                      onchange={handleChange}>
+              </lightning-combobox>
+              </template>
+            </td>
+            <!--Quantity-->
+            <td>
+              <input type="number" name="quantity" placeholder="Quantity" min="1" step="1" class={stemCharge.quantity.className}
+                     disabled={stemCharge.fixedCost} value={stemCharge.quantity.value} data-id={stemCharge.uniqueIndex} onchange={handleChange} />
+            </td>
+            <!--Quantity (Max)-->
+            <td>
+              <input type="number" name="quantityMaximum" placeholder="Max" min="1" step="1" class={stemCharge.quantityMaximum.className}
+                     disabled={stemCharge.isQuantityRangeDisabled} value={stemCharge.quantityMaximum.value} data-id={stemCharge.uniqueIndex} onchange={handleChange} />
+            </td>
+            <!--Unit Cost (Buy At)-->
+            <td>
+              <input type="number" name="unitCost" placeholder="Unit Cost (Buy At)" class="slds-input" min="1" step="0.01"
+                     disabled={stemCharge.fixedCost} value={stemCharge.unitCost} data-id={stemCharge.uniqueIndex} onchange={handleChange} />
+            </td>
+            <!--Unit Price (Sell At)-->
+            <td>
+              <input type="number" name="unitPrice" placeholder="Unit Price (Sell At)" class={stemCharge.unitPrice.className} min="1" step="0.01"
+                     disabled={stemCharge.fixedCost} value={stemCharge.unitPrice.value} data-id={stemCharge.uniqueIndex} onchange={handleChange} />
+            </td>
+            <!--Unit of Measure-->
+            <td>
+              <template if:true={unitOfMeasureOptions}>
+                <lightning-combobox
+                        data-id={stemCharge.uniqueIndex}
+                        name="unitOfMeasure"
+                        value={stemCharge.unitOfMeasure}
+                        variant="label-hidden"
+                        options={unitOfMeasureOptions}
+                        onchange={handleChange} ></lightning-combobox>
+              </template>
+            </td>
+            <!--Fixed-->
+            <td style="text-align: center;">
+              <input type="checkbox" name="fixedCost" data-id={stemCharge.uniqueIndex} checked={stemCharge.fixedCost} onchange={handleChange} disabled={stemCharge.disableFixed}/>
+            </td>
+            <!--Minimum (Buy At)-->
+            <td>
+              <input type="number" name="minimumBuyAt" placeholder="Minimum (Buy At)" class={stemCharge.minimumBuyAt.className} min="1" step="0.01"
+                     disabled={stemCharge.fixedCost} value={stemCharge.minimumBuyAt.value} data-id={stemCharge.uniqueIndex} onchange={handleChange} />
+            </td>
+            <!--Minimum (Sell At)-->
+            <td>
+              <input type="number" name="minimumSellAt" placeholder="Minimum (Sell At)" class={stemCharge.minimumSellAt.className} min="1" step="0.01"
+                     disabled={stemCharge.fixedCost} value={stemCharge.minimumSellAt.value} data-id={stemCharge.uniqueIndex} onchange={handleChange} />
+            </td>
+            <!--Lumpsum Cost (Buy At)-->
+            <td>
+              <input type="number" name="lumpsumCostBuyAt" data-id={stemCharge.uniqueIndex} value={stemCharge.lumpsumCostBuyAt.value}
+                      disabled={stemCharge.isFixedCostDisabled} onchange={handleChange} placeholder="Lumpsum Cost (Buy At)" class={stemCharge.lumpsumCostBuyAt.className} min="1" step="0.01" />
+            </td>
+            <!--Lumpsum Cost (Sell At)-->
+            <td>
+              <input type="number" name="lumpsumCostSellAt" value={stemCharge.lumpsumCostSellAt.value} data-id={stemCharge.uniqueIndex}
+                      disabled={stemCharge.isFixedCostDisabled} onchange={handleChange} placeholder="Lumpsum Price (Sell At)" class={stemCharge.lumpsumCostSellAt.className} min="1" step="0.01" />
+            </td>
+            <!--Unit Margin (calculated)-->
+            <td>
+              US$ {stemCharge.unitMargin.outputValue}
+            </td>
+            <!--Total Margin (calculated)-->
+            <td>
+              US$ {stemCharge.totalMargin.outputValue}
+            </td>
+            <!--Total Cost (calculated)-->
+            <td class="total-col">
+              <span>US$ {stemCharge.totalCost.outputValue}</span>
+            </td>
+            <td><lightning-button onclick={removeExtraCostLine} data-id={stemCharge.uniqueIndex} variant="base" title="Remove extra cost" icon-name="utility:close" class="slds-m-left_x-small"></lightning-button></td>
+          </tr>  
+        </template>   
+        <tr>
+          <td colspan="8">
+            <lightning-button-icon size="x-small" icon-name="utility:add" variant="brand" alternative-text="Add Cost"
+              onclick={addNewStemCharge}>
+            </lightning-button-icon>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</template>

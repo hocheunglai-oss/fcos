@@ -4,6 +4,8 @@ import { authConfigurationError, isLocalAdminAllowed, isSupabaseConfigured, supa
 import { appClient } from '@/api/appClient';
 import { clientSessionState, isCurrentClientSession, setClientSessionOwner } from './clientSessionState.js';
 
+import { subscribeAccessRefresh } from './accessRefresh.js';
+
 const AuthContext = createContext();
 
 const LOCAL_ADMIN_USER = {
@@ -80,6 +82,9 @@ async function loadSupabaseUser() {
   return {
     user: data.user,
     access: data.moduleAccess || {},
+    permissionGroups: data.permissionGroups || [],
+    accessRevision: data.accessRevision ?? null,
+    grantSources: data.grantSources || {},
     accessLevels: data.moduleAccessLevels || {},
     applications: data.applications || [],
     capabilities: data.capabilities || {},
@@ -91,6 +96,7 @@ async function loadSupabaseUser() {
 
 export const AuthProvider = ({ children }) => {
   const authRequest = useRef(0);
+  const accessSnapshot = useRef(null);
   const loggingOut = useRef(false);
   const [user, setUser] = useState(null);
   const [moduleAccess, setModuleAccess] = useState({});
@@ -103,6 +109,7 @@ export const AuthProvider = ({ children }) => {
   const [isLoadingPublicSettings] = useState(false);
   const [authError, setAuthError] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
+  const [groupAccess, setGroupAccess] = useState({ permissionGroups: [], accessRevision: null, grantSources: {} });
   const authMode = isSupabaseConfigured ? 'supabase' : isLocalAdminAllowed ? 'local' : 'unavailable';
 
   const applyLocalAdmin = useCallback(() => {
@@ -135,6 +142,10 @@ export const AuthProvider = ({ children }) => {
       if (request !== authRequest.current || !isCurrentClientSession(session)) return { user: null, stale: true };
       setClientSessionOwner(result.user?.id);
       if (result.user) window.sessionStorage.removeItem(FCUNO_FORCE_REAUTH_KEY);
+      const nextAccessSnapshot = JSON.stringify([result.user?.id, result.user?.user_type, result.access, result.accessLevels, result.capabilities]);
+      if (accessSnapshot.current !== nextAccessSnapshot) appClient.functions.clearCache();
+      accessSnapshot.current = nextAccessSnapshot;
+      setGroupAccess({ permissionGroups: result.permissionGroups || [], accessRevision: result.accessRevision ?? null, grantSources: result.grantSources || {} });
       setUser(result.user);
       setModuleAccess(result.access || {});
       setModuleAccessLevels(result.accessLevels || {});
@@ -201,6 +212,18 @@ export const AuthProvider = ({ children }) => {
     });
     return () => data?.subscription?.unsubscribe();
   }, [checkUserAuth]);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured || !user?.id) return undefined;
+    let pending = false;
+    return subscribeAccessRefresh(async () => {
+      if (pending || loggingOut.current) return;
+      pending = true;
+      try {
+        await checkUserAuth({ showLoader: false });
+      } finally { pending = false; }
+    });
+  }, [user?.id, checkUserAuth]);
 
   const login = async (email, password) => {
     if (!isSupabaseConfigured) {
@@ -350,6 +373,9 @@ export const AuthProvider = ({ children }) => {
     applications,
     capabilities,
     bootstrapPreferences,
+    permissionGroups: user ? groupAccess.permissionGroups : [],
+    accessRevision: user ? groupAccess.accessRevision : null,
+    grantSources: user ? groupAccess.grantSources : {},
     isAuthenticated,
     isLoadingAuth,
     isLoadingPublicSettings,

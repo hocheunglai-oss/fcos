@@ -1,8 +1,6 @@
+import { AUTO_AI_MODEL, AI_MODEL_SELECTIONS, isAllowedAiSelection, automaticRoutingFor, resolveAiModel, aiRequestOptions } from './_aiModelRouting.js';
 import {
-  DASHBOARD_AI_MODELS,
-  DEFAULT_DASHBOARD_AI_MODEL,
   dashboardAiUsageFromResponse,
-  isAllowedDashboardAiModel,
 } from './_dashboardAi.js';
 
 function assistantError(message, statusCode = 400, code = null) {
@@ -34,7 +32,7 @@ async function modelSetting(client) {
   const { data, error } = await client.from('hedge_settings').select('value').eq('key', 'assistant_model').maybeSingle();
   if (error) throw assistantError(`Trading Assistant model setting could not be loaded: ${error.message}`, 502);
   const requested = typeof data?.value === 'string' ? data.value : data?.value?.modelId;
-  return isAllowedDashboardAiModel(requested) ? requested : DEFAULT_DASHBOARD_AI_MODEL;
+  return isAllowedAiSelection(requested) ? requested : AUTO_AI_MODEL;
 }
 
 export async function runHedgeAssistant(client, profile, body = {}, dependencies = {}) {
@@ -42,7 +40,8 @@ export async function runHedgeAssistant(client, profile, body = {}, dependencies
   if (!messages.length) throw assistantError('Enter a question for the Trading Assistant.', 400);
   const apiKey = String(dependencies.apiKey || process.env.OPENAI_API_KEY || '').trim();
   if (!apiKey) throw assistantError('The protected OpenAI service is not configured.', 503, 'OPENAI_NOT_CONFIGURED');
-  const model = await modelSetting(client);
+  const routing = resolveAiModel({ task: 'hedge_analysis', selection: await modelSetting(client) });
+  const model = routing.modelId;
   const context = {
     physicalTrades: compactRows(body.physicals, ['product', 'qty_min', 'qty_max', 'sell_price', 'buy_price', 'sell_pricing_month', 'buy_pricing_month', 'delivery_date_from', 'counterparty', 'vessel_name', 'trade_date', 'is_closed'], 30),
     paperHedges: compactRows(body.swaps, ['product', 'direction', 'swap_month', 'quantity', 'unit', 'price', 'venue', 'broker', 'trade_type', 'is_expired', 'trade_date', 'live_mtm'], 50),
@@ -61,9 +60,10 @@ export async function runHedgeAssistant(client, profile, body = {}, dependencies
         { role: 'developer', content: `Current compact Hedge Desk summary:\n${JSON.stringify(context)}` },
         ...messages,
       ],
-      max_output_tokens: 900,
+      store: false,
+      ...aiRequestOptions(routing, 900),
     }),
-    signal: AbortSignal.timeout(30_000),
+    signal: AbortSignal.timeout(90_000),
   }).catch(() => null);
   if (!response?.ok) {
     const status = response?.status === 429 ? 503 : response?.status || 503;
@@ -84,7 +84,7 @@ export async function runHedgeAssistant(client, profile, body = {}, dependencies
   }).then(({ error }) => {
     if (error) console.warn('[hedge-assistant] Usage event could not be recorded.', { code: error.code || 'HEDGE_AI_USAGE_FAILED' });
   });
-  return { ok: true, reply, model, usage };
+  return { ok: true, reply, model, routing, usage };
 }
 
 export async function hedgeAssistantSettings(client) {
@@ -104,7 +104,8 @@ export async function hedgeAssistantSettings(client) {
   }
   return {
     modelId,
-    models: DASHBOARD_AI_MODELS,
+    models: AI_MODEL_SELECTIONS,
+    automaticRouting: automaticRoutingFor('hedge_analysis'),
     apiConfigured: Boolean(String(process.env.OPENAI_API_KEY || '').trim()),
     usage: Object.fromEntries(totals),
   };

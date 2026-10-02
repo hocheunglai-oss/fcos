@@ -17,7 +17,7 @@
     "local:services:stop": "node scripts/local-services.mjs stop",
     "test": "node --test tests/*.test.js",
     "test:e2e": "playwright test",
-    "build": "node scripts/verify-fcuno-build-environment.mjs && node scripts/write-app-version.mjs && vite build",
+    "build": "node scripts/write-methodology-assets.mjs && node scripts/verify-fcuno-build-environment.mjs && node scripts/write-app-version.mjs && vite build",
     "lint": "eslint . --quiet",
     "lint:fix": "eslint . --fix",
     "migrate:hedge-desk": "node scripts/migrate-hedge-desk.mjs",
@@ -46,7 +46,12 @@
     "connections:auth": "node scripts/fcos-connections.mjs auth",
     "connections:keychain": "node scripts/fcos-connections.mjs keychain",
     "connections:cli": "node scripts/fcos-connections.mjs run",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "verify:preview-parity": "node scripts/collect-preview-parity.mjs",
+    "verify:controls": "node scripts/verify-codex-controls.mjs",
+    "release:readiness": "node scripts/release-readiness.mjs",
+    "release:production": "node scripts/production-release.mjs",
+    "verify:normal-role": "node scripts/normal-role-release.mjs"
   },
   "dependencies": {
     "@fontsource-variable/ibm-plex-sans": "5.3.0",
@@ -87,7 +92,6 @@
     "clsx": "^2.1.1",
     "cmdk": "^1.0.0",
     "date-fns": "^3.6.0",
-    "docx": "^9.7.1",
     "embla-carousel-react": "^8.5.2",
     "htmlparser2": "^12.0.0",
     "input-otp": "^1.4.2",
@@ -96,6 +100,7 @@
     "lucide-react": "^0.475.0",
     "next-themes": "^0.4.4",
     "pdf-parse": "1.1.1",
+    "pdfjs-dist": "6.3.289",
     "react": "^18.2.0",
     "react-day-picker": "^8.10.1",
     "react-dom": "^18.2.0",
@@ -110,11 +115,13 @@
     "tailwindcss-animate": "^1.0.7",
     "tesseract.js": "^7.0.0",
     "vaul": "^1.1.2",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "zod": "^3.24.2"
   },
   "overrides": {
     "quill": "2.0.2",
-    "brace-expansion": "1.1.18"
+    "brace-expansion": "1.1.21",
+    "js-yaml": "4.3.2"
   },
   "devDependencies": {
     "@electric-sql/pglite": "0.5.8",
@@ -131,6 +138,7 @@
     "eslint-plugin-react-refresh": "^0.4.18",
     "eslint-plugin-unused-imports": "^4.3.0",
     "globals": "^15.14.0",
+    "ignore": "5.3.2",
     "pg": "^8.22.0",
     "postcss": "^8.5.3",
     "supabase": "2.113.0",

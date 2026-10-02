@@ -1,3 +1,11 @@
+import { createPortalRetryScheduler } from '../_portalRetryScheduler.js';
+import { loadEffectiveGroupAccess, readAllAccessRows, serializeGroupUser, accessOperationError } from '../_accessGroups.js';
+import { AUTO_AI_MODEL, AI_MODEL_SELECTIONS, AI_ROUTING_VERSION, isAllowedAiSelection, automaticRoutingFor, resolveAiModel } from '../_aiModelRouting.js';
+import { createStemWorkspaceActivity } from '../_stemWorkspaceActivity.js';
+import { createWorkflowMetricsReader, recordWorkflowMetric } from '../_workflowMetrics.js';
+import { createWorkspaceSearch } from '../_workspaceSearch.js';
+import { createSystemIncidentVerifier } from '../_systemIncidentRecovery.js';
+import { createDisputeSettlementEvidenceHandlers } from '../_disputeSettlementEvidence.js';
 import { chunkIds, cleanRecord, getApiVersion, getInstanceUrl, salesforceAuthMode, salesforceConfiguredAuthModes, sendJson, sfCompositeQueries, sfDownload, sfQuery, sfRequest } from '../_salesforce.js';
 import { assertStemReadRequest } from '../../shared/salesforceReadRequest.js';
 import { authorizeSalesforceDocument, headerBearerToken } from '../_salesforceDocumentAccess.js';
@@ -27,6 +35,7 @@ import { dashboardAccountRankings } from '../../src/lib/dashboardAccountRankings
 import { loadDashboardAccountInsight } from '../_dashboardAccountInsightService.js';
 import { generateDashboardAccountInsightExport } from '../_dashboardAccountInsightExport.js';
 import { loadDashboardAccountCreditDirectory, loadDashboardAccountCreditStatement } from '../_dashboardAccountCreditStatementService.js';
+import { loadDashboardNomB, saveDashboardNomBPolicy, loadDashboardNomBAudit } from '../_dashboardNomBService.js';
 import { isPaymentRemittance, paymentRecordTypeToken } from '../_paymentClassification.js';
 import { accountInsightStatementRequest, createAccountInsightReportHandlers } from '../_accountInsightReportScope.js';
 import { validateAccountInsightReportConfig, projectAccountInsightReport, MAX_REPORT_DETAIL_ROWS } from '../_accountInsightReport.js';
@@ -50,7 +59,7 @@ import { createHash } from 'node:crypto';
 import { externalActionGates, isExternalActionEnabled, requireExternalActionGate } from '../_externalActionGates.js';
 import { EXCEPTION_REVIEW_DATE_BASIS, EXCEPTION_SCHEDULE_FIELDS, buildExceptionReviewScheduleWhere, exceptionScheduleSchemaIssues, normalizeExceptionSchedule } from '../../src/lib/exceptionReviewSchedule.js';
 import { DISPUTE_BUYER_CLOSE_REASONS as DISPUTE_BETA_BUYER_CLOSE_REASONS, DISPUTE_SUPPLIER_CLOSE_REASONS as DISPUTE_BETA_SUPPLIER_CLOSE_REASONS } from '../../src/lib/disputeWorkflowOptions.js';
-import { disputeNotRequiredEligibility } from '../_disputeAccounting.js';
+import { zeroBalanceClosureEligibility, disputeAgreementSummary, disputeNotRequiredEligibility } from '../_disputeAccounting.js';
 import { hasRecordedFcosClosureWriteback, isSalesforceDisputeClosed, projectExternalDisputeClosure } from '../_disputeWorkflowStatus.js';
 import { allocateSupplierDispute, normalizeSupplierInvoiceExposure, resolveSupplierSettlementSchema, supplierInstructionRows, validSupplierSettlementPayment } from '../_disputeSupplierSettlement.js';
 import { currentRequestTelemetry, logRequestTelemetry, recordRequestFailure, recordSupabaseRequest, requestIdFrom, runWithRequestTelemetry, salesforceLimitFromBody, telemetryResponseHeaders } from '../_requestTelemetry.js';
@@ -84,7 +93,7 @@ import {
   collaborationTemplateSave as collaborationTemplateSaveService,
   collaborationUpdate as collaborationUpdateService,
 } from '../_collaborationService.js';
-import { DASHBOARD_AI_MODELS, DEFAULT_DASHBOARD_AI_MODEL, compileDashboardAiWhere, dashboardAiModel, interpretDashboardAiSearch, isAllowedDashboardAiModel, normalizeDashboardAiPrompt } from '../_dashboardAi.js';
+import { DASHBOARD_AI_MODELS, compileDashboardAiWhere, dashboardAiModel, interpretDashboardAiSearch, isAllowedDashboardAiModel, normalizeDashboardAiPrompt } from '../_dashboardAi.js';
 import { operationalMailConfig, operationalMailDeliveryAvailable, sendOperationalMail } from '../_operationalMail.js';
 import { loadFinancialReportSettings, saveFinancialReportSettings } from '../_financialReportSettings.js';
 import {
@@ -106,6 +115,7 @@ import {
 } from '../_graphEmail.js';
 import { growthCalendarHealth } from '../_growthOutlook.js';
 import { workNotificationsList as workNotificationsListService, workNotificationsRead as workNotificationsReadService, workNotificationsState as workNotificationsStateService } from '../_workNotifications.js';
+import { workNotificationAccessContext } from '../_workNotificationAccess.js';
 import { reportSystemError, resolveRecoveredSystemErrorHandler, resolveSystemErrorIncident, shouldNotifySystemError, validSystemErrorSignature } from '../_systemErrorNotifications.js';
 import { workCommitmentsList as workCommitmentsListService } from '../_workCommitments.js';
 import { FUNCTION_CONTRACT_VERSION, validateFunctionRequest } from '../../shared/functionContracts.js';
@@ -213,7 +223,14 @@ import {
   saveMarketIntelligenceAlertRules,
 } from '../_marketIntelligenceTrading.js';
 import { loadMarketPulseSnapshot } from '../_marketPulse.js';
-import { ciModuleAccess, isReadOnlyCiProfile, requireReadOnlyCiOperation } from '../_readOnlyCiAccess.js';
+import { createMarketBookContext } from '../_marketBookContext.js';
+import { createMarketTraderWorkspace } from '../_marketTraderWorkspace.js';
+import { createFinanceSettingsHandlers, loadFinanceSettings } from '../_dashboardFinanceSettings.js';
+import { createDashboardFinanceLoader, financeToday, summarizeDashboardFinance, validateFinanceSnapshot } from '../_dashboardFinance.js';
+import { secondaryMopsFailureMessage } from '../_marketSourceHealth.js';
+import { ciModuleAccess, isReadOnlyCiProfile, isReadOnlyMarketAction, requireReadOnlyCiOperation } from '../_readOnlyCiAccess.js';
+import { requireDeploymentMutationAllowed } from '../_deploymentReadOnly.js';
+import { isReadOnlyHedgeDeskAction } from '../_hedgeDeskReadOnly.js';
 import { analyzeMarketReportLibrary, loadMarketReportCatalogue } from '../_marketReportAnalysis.js';
 import {
   applyMasterContractPrice as applyMasterContractPriceService,
@@ -290,6 +307,7 @@ import {
 } from '../_emailRouterHandlers.js';
 import { createEmailRouterServiceClient, currentEmailRouterMailbox, emailRouterGraphFetch, maintainEmailRouterSubscriptions, processEmailRouterOutbox, recordEmailRouterAlert, resolveEmailRouterAlert, syncEmailRouterFolderFromStoredCursor } from '../_emailRouterCore.js';
 import { processEmailRouterLearningJobs } from '../_emailRouterLearning.js';
+import { createMissingNomBHandlers } from '../_missingNomBHandlers.js';
 import { createXeroHandlers, XERO_HANDLER_MODULE_ACCESS } from '../_xeroHandlers.js';
 import {
   importCashflowBankStatement as importCashflowBankStatementService,
@@ -375,24 +393,10 @@ const ADMIN_APP_MODULES = [
   { id: 'admin', label: 'People & Access', path: '/settings?section=people', sortOrder: 100 },
 ];
 
-let portalOutboxScheduledAt = 0;
-
-function schedulePortalOutboxRetry(client) {
-  const now = Date.now();
-  if (now - portalOutboxScheduledAt < 60_000) return;
-  portalOutboxScheduledAt = now;
-  waitUntil(
-    processPortalOutbox({
-      client,
-      limit: 3,
-      requestId: activePortalRequestId(),
-    }).catch((error) => {
-      console.warn('[portal] Background retry deferred.', {
-        code: error.code || 'PORTAL_RETRY_FAILED',
-      });
-    }),
-  );
-}
+const schedulePortalOutboxRetry = createPortalRetryScheduler({
+  waitUntil, processPortalOutbox, requestId: activePortalRequestId,
+  onFailure: (error) => console.warn('[portal] Background retry deferred.', { code: error.code || 'PORTAL_RETRY_FAILED' }),
+});
 
 const ADMIN_MODULE_IDS = new Set(ADMIN_APP_MODULES.map((module) => module.id));
 const ADMIN_FULL_ACCESS = Object.fromEntries(ADMIN_APP_MODULES.map((module) => [module.id, true]));
@@ -700,15 +704,6 @@ function normalizedPermissionForModule(moduleId, permissions = {}, fallback = un
   return raw === true;
 }
 
-function reportArchiveAccessFromRows(rows = [], fallback = false) {
-  const reportRow = rows.find((row) => row.module_id === REPORT_ARCHIVE_MODULE_ID);
-  const manageRow = rows.find((row) => row.module_id === REPORT_ARCHIVE_MANAGE_MODULE_ID);
-  const canViewArchive = reportRow ? reportRow.can_view === true : fallback === true;
-  if (!canViewArchive) return 'none';
-  if (!manageRow) return 'full';
-  return manageRow.can_view === true ? 'full' : 'read';
-}
-
 function appError(message, status = 500, code = null, details = undefined, expose = status < 500) {
   const error = new Error(message);
   error.status = status;
@@ -829,24 +824,11 @@ async function authContext(body, req, accessContext) {
     permissionValues = ADMIN_FULL_ACCESS;
     capabilityValues = ADMIN_FULL_CAPABILITIES;
   } else {
-    const permissionQuery = profile.use_type_defaults === false ? client.from('user_module_permissions').select('module_id,can_view').eq('user_id', profile.id) : client.from('user_type_module_permissions').select('module_id,can_view').eq('user_type_id', profile.user_type);
-    const { data: rows, error } = await permissionQuery;
-    if (error) throw error;
-
-    const fallback = profile.use_type_defaults === false ? {} : FALLBACK_TYPE_PERMISSIONS[profile.user_type] || {};
-    const rawPermissions = { ...fallback };
-    for (const row of rows || []) {
-      if (ADMIN_MODULE_IDS.has(row.module_id)) rawPermissions[row.module_id] = row.can_view === true;
-    }
-    rawPermissions[REPORT_ARCHIVE_MODULE_ID] = reportArchiveAccessFromRows(rows || [], fallback[REPORT_ARCHIVE_MODULE_ID]);
-    permissionValues = normalizePermissions(profile.user_type, rawPermissions);
-    const capabilityFallback = profile.use_type_defaults === false ? {} : FALLBACK_TYPE_CAPABILITIES[profile.user_type] || {};
-    capabilityValues = { ...capabilityFallback };
-    for (const row of rows || []) {
-      if (ADMIN_CAPABILITY_IDS.has(row.module_id)) capabilityValues[row.module_id] = row.can_view === true;
-    }
-    capabilityValues = normalizeCapabilities(profile.user_type, capabilityValues);
+    const effective = await loadEffectiveGroupAccess(client, profile);
+    permissionValues = effective.permissions;
+    capabilityValues = effective.capabilities;
   }
+  const effectiveAccess = readOnlyCi ? null : await loadEffectiveGroupAccess(client, profile);
 
   const moduleAccess = Object.fromEntries(ADMIN_APP_MODULES.map((module) => [module.id, permissionCanView(module.id, permissionValues[module.id])]));
   const applications = readOnlyCi ? [] : await listPortalApplicationsForUser({
@@ -868,6 +850,9 @@ async function authContext(body, req, accessContext) {
       active: profile.active === true,
       read_only_ci: readOnlyCi,
     },
+    permissionGroups: effectiveAccess?.groups || [],
+    accessRevision: effectiveAccess?.access_revision || null,
+    grantSources: effectiveAccess?.grant_sources || {},
     moduleAccess,
     moduleAccessLevels: {
       [REPORT_ARCHIVE_MODULE_ID]: reportArchiveAccessLevel(permissionValues[REPORT_ARCHIVE_MODULE_ID]),
@@ -970,8 +955,7 @@ function requireAdministratorContext(accessContext) {
 
 async function workNotificationsAccessContext(req, accessContext) {
   const context = accessContext || (await requireActiveUser(req));
-  const markets = await userHasAnyModuleAccess(context.client, context.profile, ['markets']);
-  return { ...context, capabilities: { ...(context.capabilities || {}), markets } };
+  return workNotificationAccessContext(context);
 }
 
 async function workNotificationsList(body = {}, req = null, accessContext = null) {
@@ -986,101 +970,7 @@ async function workNotificationsState(body = {}, req = null, accessContext = nul
   return workNotificationsStateService(body, await workNotificationsAccessContext(req, accessContext));
 }
 
-async function verifyFinancialReportIncident(client, purposeKey) {
-  await loadFinancialReportSettings(client, purposeKey, { required: true });
-  await resolveGraphEmailSender(client, purposeKey);
-}
-
-async function systemErrorVerify(body = {}, req = null, accessContext = null) {
-  const context = accessContext || (await requireActiveUser(req));
-  const incidentSignature = String(body.incidentSignature || body.incident_signature || '').trim().toLowerCase();
-  if (!validSystemErrorSignature(incidentSignature)) throw appError('A valid system incident is required.', 400);
-  const { data: incident, error } = await context.client
-    .from('system_error_events')
-    .select('id,dedupe_key,handler')
-    .eq('dedupe_key', incidentSignature)
-    .maybeSingle();
-  if (error) throw error;
-  if (!incident) throw appError('This system incident is no longer available.', 404);
-
-  switch (incident.handler) {
-    case 'outstandingBuyerInvoicesEmailReport':
-    case 'outstandingBuyerInvoicesEmailCron':
-      await verifyFinancialReportIncident(context.client, 'outstanding_invoice_reports');
-      break;
-    case 'incomingPaymentEmailReport':
-      await verifyFinancialReportIncident(context.client, 'incoming_payment_reports');
-      break;
-    case 'buyerInvoicePaymentReminderSend':
-      await resolveGraphEmailSender(context.client, 'payment_reminders');
-      await salesforceObjectFields({ objectName: 'stem__c' });
-      break;
-    case 'disputeWorkflowList': {
-      const stemFields = await salesforceObjectFields({ objectName: 'stem__c' });
-      await interofficeStemAccessCondition(context, stemFields.fields || []);
-      break;
-    }
-    case 'workNotificationsList': {
-      const { error: stateError } = await context.client
-        .from('system_error_notification_states')
-        .select('event_id', { count: 'exact', head: true });
-      if (stateError) throw stateError;
-      break;
-    }
-    case 'specialTermsWorkspace':
-      await listSpecialTerms({ force: true });
-      break;
-    case 'hedgeDeskSalesforceMapping':
-      await getHedgeSalesforceMapping(context.client);
-      break;
-    case 'hedgeMarkets':
-      await hedgeMarkets({ action: 'snapshot' }, req, context);
-      break;
-    case 'emailRouterMaintenanceCron': {
-      const serviceClient = createEmailRouterServiceClient();
-      const mailbox = await currentEmailRouterMailbox(serviceClient);
-      const expectedFolders = ['inbox', 'sentitems', 'archive'];
-      const freshnessCutoff = new Date(Date.now() - 15 * 60_000).toISOString();
-      const [{ data: subscriptions, error: subscriptionsError }, { data: deltaStates, error: deltaStateError }] = await Promise.all([
-        serviceClient
-          .schema('emailrouter')
-          .from('mailbox_subscriptions')
-          .select('resource_key')
-          .eq('mailbox_id', mailbox.id)
-          .eq('state', 'active')
-          .gt('expires_at', new Date().toISOString())
-          .in('resource_key', expectedFolders),
-        serviceClient
-          .schema('emailrouter')
-          .from('mailbox_delta_state')
-          .select('folder_key')
-          .eq('mailbox_id', mailbox.id)
-          .eq('sync_state', 'ready')
-          .gte('last_synced_at', freshnessCutoff)
-          .in('folder_key', expectedFolders),
-      ]);
-      if (subscriptionsError) throw subscriptionsError;
-      if (deltaStateError) throw deltaStateError;
-      const activeFolders = new Set((subscriptions || []).map((row) => row.resource_key));
-      const synchronizedFolders = new Set((deltaStates || []).map((row) => row.folder_key));
-      if (expectedFolders.some((folder) => !activeFolders.has(folder))) {
-        throw appError('Email Router does not have an active future-dated subscription for every managed folder.', 503, 'EMAIL_ROUTER_SUBSCRIPTION_UNAVAILABLE');
-      }
-      if (expectedFolders.some((folder) => !synchronizedFolders.has(folder))) {
-        throw appError('Email Router has not synchronized every managed folder recently.', 503, 'EMAIL_ROUTER_SYNCHRONIZATION_STALE');
-      }
-      break;
-    }
-    case 'salesforceQuery':
-      if (handlers.salesforceQuery) throw appError('The legacy Salesforce query endpoint is still registered.', 503, 'LEGACY_SALESFORCE_QUERY_ACTIVE');
-      break;
-    default:
-      throw appError('This incident requires review in its affected workspace and cannot be verified automatically.', 400);
-  }
-
-  const resolved = await resolveSystemErrorIncident(context.client, incidentSignature);
-  return { verified: true, resolved: resolved.resolved || 0, incidentSignature };
-}
+const systemErrorVerify = createSystemIncidentVerifier({ requireActiveUser, requireAdministratorContext, appError, validSystemErrorSignature, loadFinancialReportSettings, resolveGraphEmailSender, salesforceObjectFields, disputeWorkflowList: disputeBetaList, listSpecialTerms, getHedgeSalesforceMapping, hedgeMarkets, createEmailRouterServiceClient, currentEmailRouterMailbox, resolveSystemErrorIncident, isLegacyQueryRegistered: () => Boolean(handlers.salesforceQuery) });
 
 async function workCommitmentsList(body = {}, req = null, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
@@ -1247,9 +1137,12 @@ async function listAccessModel(client) {
   return { userTypes, typePermissions, typeCapabilities };
 }
 
-const AUTH_EXEMPT_HANDLERS = new Set(['outstandingBuyerInvoicesEmailCron', 'paymentCollectionsReconcileCron', 'portalEntitlementSyncCron', 'collaborationDailyCron', 'growthCoachingDailyCron', 'hedgeDeskMaintenanceCron', 'marketReportDriveSyncCron', 'masterContractReconcileCron', 'emailRouterMaintenanceCron']);
+const AUTH_EXEMPT_HANDLERS = new Set(['outstandingBuyerInvoicesEmailCron', 'paymentCollectionsReconcileCron', 'portalEntitlementSyncCron', 'collaborationDailyCron', 'growthCoachingDailyCron', 'hedgeDeskMaintenanceCron', 'marketReportDriveSyncCron', 'masterContractReconcileCron', 'emailRouterMaintenanceCron', 'missingNomBReminderCron']);
 
 const HANDLER_MODULE_ACCESS = {
+  missingNomBList: ['dashboard'],
+  missingNomBUpload: ['dashboard'],
+  missingNomBReminderCron: [],
   authContext: [],
   portalApplicationsList: [],
   portalApplicationLaunch: [],
@@ -1321,6 +1214,9 @@ const HANDLER_MODULE_ACCESS = {
   hedgeDeskEntity: ['hedge_desk'],
   hedgeMarkets: ['markets'],
   marketPulseSnapshot: ['markets'],
+  marketBookContext: ['markets'],
+  marketTraderWorkspace: ['markets'],
+  marketTraderWorkspaceSave: ['markets'],
   marketIntelligenceBrief: ['markets'],
   marketIntelligenceCurve: ['markets'],
   marketReportCatalogue: ['markets'],
@@ -1441,7 +1337,12 @@ const HANDLER_MODULE_ACCESS = {
   growthCoachingDailyCron: [],
   salesforceDashboard: ['dashboard'],
   salesforceDashboardFiltered: ['dashboard', 'review'],
+  financeSettingsGet: [],
+  financeSettingsSave: [],
   dashboardSummary: ['dashboard'],
+  dashboardNomBRead: ['dashboard'],
+  dashboardNomBPolicySave: ['dashboard'],
+  dashboardNomBAuditRead: ['dashboard'],
   dashboardStemList: ['dashboard'],
   dashboardAnalytics: ['dashboard'],
   dashboardAccountInsight: ['dashboard'],
@@ -1452,10 +1353,13 @@ const HANDLER_MODULE_ACCESS = {
   dashboardAccountCreditDirectory: ['dashboard'],
   dashboardAccountCreditStatement: ['dashboard'],
   dashboardCreditForecastSettingsSave: ['dashboard'],
+  workflowMetricsRead: [],
+  workspaceSearch: [],
   dashboardCounterpartySearch: ['dashboard'],
   dashboardAccountExposureBatch: ['dashboard'],
   dashboardAccountInsightExport: ['dashboard'],
   salesforceTopBuyers: ['dashboard'],
+  stemWorkspaceActivity: ['dashboard', 'review', 'disputes', 'buyer_invoices', 'incoming_payments', 'cashflow_forecast', 'pnl', 'brokers', 'hedge_desk'],
   salesforceStemDetail: ['dashboard', 'review', 'disputes', 'buyer_invoices', 'incoming_payments', 'cashflow_forecast', 'pnl', 'brokers', 'hedge_desk'],
   salesforceStemDocuments: ['dashboard', 'review', 'disputes', 'buyer_invoices', 'incoming_payments', 'cashflow_forecast', 'pnl', 'brokers', 'hedge_desk'],
   salesforceDocumentDownload: ['dashboard', 'review', 'disputes', 'buyer_invoices', 'incoming_payments', 'cashflow_forecast', 'pnl', 'brokers', 'hedge_desk'],
@@ -1480,6 +1384,7 @@ const HANDLER_MODULE_ACCESS = {
   disputeWorkflowSubmitApproval: ['disputes'],
   disputeWorkflowApprove: ['disputes'],
   disputeWorkflowReject: ['disputes'],
+  disputeWorkflowSettlementEvidence: ['disputes'],
   disputeWorkflowAccountingUpdate: ['disputes'],
   disputeWorkflowSupplierInstructionUpdate: ['disputes'],
   disputeWorkflowSupplierOffsetOptions: ['disputes'],
@@ -1592,6 +1497,9 @@ const HANDLER_MODULE_ACCESS = {
   adminPortalAccessRetry: ['admin'],
   adminPortalApplicationsHealth: ['admin'],
   adminUserDelete: ['admin'],
+  adminPermissionGroupSave: ['admin'],
+  adminPermissionGroupDelete: ['admin'],
+  adminUserGroupsSave: ['admin'],
   adminUserTypeSave: ['admin'],
   adminUserTypeDelete: ['admin'],
   adminFcosUpdatesList: ['admin'],
@@ -1611,39 +1519,14 @@ const HANDLER_POLICY_REGISTRY = buildHandlerPolicyRegistry(HANDLER_MODULE_ACCESS
 async function userHasAnyModuleAccess(client, profile, moduleIds) {
   if (!moduleIds?.length) return true;
   if (isReadOnlyCiProfile(profile)) return Object.values(ciModuleAccess(moduleIds)).some(Boolean);
-  if (isAdministratorUserType(profile?.user_type)) return true;
-
-  const validModuleIds = moduleIds.filter((moduleId) => ADMIN_MODULE_IDS.has(moduleId));
-  if (!validModuleIds.length) return false;
-
-  if (profile?.use_type_defaults === false) {
-    const { data, error } = await client.from('user_module_permissions').select('module_id,can_view').eq('user_id', profile.id).in('module_id', validModuleIds);
-    if (error) throw error;
-    return (data || []).some((row) => row.can_view === true);
-  }
-
-  const { data, error } = await client.from('user_type_module_permissions').select('module_id,can_view').eq('user_type_id', profile.user_type).in('module_id', validModuleIds);
-  if (error) throw error;
-  if ((data || []).length) return (data || []).some((row) => row.can_view === true);
-
-  const fallback = FALLBACK_TYPE_PERMISSIONS[profile?.user_type] || {};
-  return validModuleIds.some((moduleId) => fallback[moduleId] === true);
+  const access = await loadEffectiveGroupAccess(client, profile);
+  return moduleIds.some((id) => ADMIN_MODULE_IDS.has(id) && permissionCanView(id, access.permissions?.[id]));
 }
 
 async function userHasCapability(client, profile, capabilityId) {
-  if (isReadOnlyCiProfile(profile)) return false;
-  if (!ADMIN_CAPABILITY_IDS.has(capabilityId)) return false;
-  if (isAdministratorUserType(profile?.user_type)) return true;
-
-  const { data: userPermission, error: userError } = await client.from('user_module_permissions').select('can_view').eq('user_id', profile?.id).eq('module_id', capabilityId).maybeSingle();
-  if (userError) throw userError;
-  if (userPermission) return userPermission.can_view === true;
-
-  const { data: typePermission, error: typeError } = await client.from('user_type_module_permissions').select('can_view').eq('user_type_id', profile?.user_type).eq('module_id', capabilityId).maybeSingle();
-  if (typeError) throw typeError;
-  if (typePermission) return typePermission.can_view === true;
-
-  return FALLBACK_TYPE_CAPABILITIES[profile?.user_type]?.[capabilityId] === true;
+  if (isReadOnlyCiProfile(profile) || !ADMIN_CAPABILITY_IDS.has(capabilityId)) return false;
+  const access = await loadEffectiveGroupAccess(client, profile);
+  return access.capabilities?.[capabilityId] === true;
 }
 
 async function requireCapability(client, profile, capabilityId, message) {
@@ -1653,18 +1536,8 @@ async function requireCapability(client, profile, capabilityId, message) {
 }
 
 async function reportArchiveAccessForUser(client, profile) {
-  if (isAdministratorUserType(profile?.user_type)) return 'full';
-  if (profile?.use_type_defaults === false) {
-    const { data, error } = await client.from('user_module_permissions').select('module_id,can_view').eq('user_id', profile.id).in('module_id', [REPORT_ARCHIVE_MODULE_ID, REPORT_ARCHIVE_MANAGE_MODULE_ID]);
-    if (error) throw error;
-    return reportArchiveAccessFromRows(data || []);
-  }
-
-  const { data, error } = await client.from('user_type_module_permissions').select('module_id,can_view').eq('user_type_id', profile?.user_type).in('module_id', [REPORT_ARCHIVE_MODULE_ID, REPORT_ARCHIVE_MANAGE_MODULE_ID]);
-  if (error) throw error;
-
-  const fallback = FALLBACK_TYPE_PERMISSIONS[profile?.user_type] || {};
-  return reportArchiveAccessFromRows(data || [], fallback[REPORT_ARCHIVE_MODULE_ID]);
+  const access = await loadEffectiveGroupAccess(client, profile);
+  return reportArchiveAccessLevel(access.permissions?.[REPORT_ARCHIVE_MODULE_ID]);
 }
 
 async function requireReportArchiveFullAccess(client, profile) {
@@ -1783,6 +1656,9 @@ async function requireHandlerAccess(name, req) {
   if (policy.authentication === 'cron') return null;
   const context = await requireActiveUser(req);
   requireReadOnlyCiOperation(context.profile, name, {}, { mutation: policy.mutation && name !== 'hedgeMarkets' });
+  // Mixed handlers classify the authenticated request body at dispatch.
+  // Hedge Desk also rejects write actions inside its service boundary.
+  requireDeploymentMutationAllowed(policy.mutation && !['hedgeMarkets', 'hedgeDeskEntity'].includes(name));
   const allowed = await userHasAnyModuleAccess(context.client, context.profile, policy.modules);
   if (!allowed) throw appError('You do not have access to this module.', 403);
   if (policy.capability) {
@@ -2073,20 +1949,6 @@ async function assertAdministratorContinuity(client, { userId, nextActive = fals
   }
 }
 
-async function ensureReportArchiveManageModule(client) {
-  const { error } = await client.from('app_modules').upsert(
-    {
-      id: REPORT_ARCHIVE_MANAGE_MODULE_ID,
-      label: 'Reports Archive Management',
-      path: '/report-archive',
-      sort_order: 76,
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: 'id' },
-  );
-  if (error) throw error;
-}
-
 async function persistManagedUser(client, body, actor = null) {
   const payload = await sanitizeManagedUserPayload(client, body);
   const isUpdate = Boolean(payload.id);
@@ -2101,7 +1963,7 @@ async function persistManagedUser(client, body, actor = null) {
   if (authUser?.id) {
     const { data, error } = await client
       .from('user_profiles')
-      .select('id,email,full_name,user_type,active')
+      .select('id,email,full_name,user_type,active,use_type_defaults')
       .eq('id', authUser.id)
       .maybeSingle();
     if (error) throw error;
@@ -2172,41 +2034,15 @@ async function persistManagedUser(client, body, actor = null) {
       full_name: effectiveFullName,
       user_type: stagedUserType,
       active: effectiveActive,
-      use_type_defaults: payload.use_type_defaults,
+      use_type_defaults: managedProfile?.use_type_defaults ?? true,
       updated_at: nowIso,
     },
     { onConflict: 'id' },
   );
   if (profileError) throw profileError;
 
-  const { error: deletePermissionError } = await client.from('user_module_permissions').delete().eq('user_id', authUser.id);
-  if (deletePermissionError) throw deletePermissionError;
-
-  if (!payload.use_type_defaults) {
-    await ensureReportArchiveManageModule(client);
-    const permissionRows = ADMIN_APP_MODULES.map((module) => ({
-      user_id: authUser.id,
-      module_id: module.id,
-      can_view: permissionCanView(module.id, payload.permissions[module.id]),
-      updated_at: nowIso,
-    }));
-    permissionRows.push({
-      user_id: authUser.id,
-      module_id: REPORT_ARCHIVE_MANAGE_MODULE_ID,
-      can_view: reportArchiveAccessLevel(payload.permissions[REPORT_ARCHIVE_MODULE_ID]) === 'full',
-      updated_at: nowIso,
-    });
-    permissionRows.push(
-      ...ADMIN_CAPABILITIES.map((capability) => ({
-        user_id: authUser.id,
-        module_id: capability.id,
-        can_view: payload.capabilities[capability.id] === true,
-        updated_at: nowIso,
-      })),
-    );
-    const { error: insertPermissionError } = await client.from('user_module_permissions').insert(permissionRows);
-    if (insertPermissionError) throw insertPermissionError;
-  }
+  // Group memberships are changed only through the revision-checked group endpoint.
+  // Organizational role and FCUNO identity saves never overwrite access groups.
 
   let generalManagerTransfer = null;
   const authMetadataWarnings = [];
@@ -2242,17 +2078,18 @@ async function persistManagedUser(client, body, actor = null) {
     }
   }
 
+  const currentAccess = await loadEffectiveGroupAccess(client, { id: authUser.id });
   await writeAdminAudit(client, actor, isUpdate ? 'user_updated' : 'user_created', authUser.id, payload.email, {
     user_type: payload.user_type,
     active: payload.active,
     use_type_defaults: payload.use_type_defaults,
-    modules: Object.entries(payload.permissions)
+    modules: Object.entries(currentAccess.permissions)
       .filter(([moduleId, value]) => permissionCanView(moduleId, value))
       .map(([moduleId]) => moduleId),
     access_levels: {
-      [REPORT_ARCHIVE_MODULE_ID]: reportArchiveAccessLevel(payload.permissions[REPORT_ARCHIVE_MODULE_ID]),
+      [REPORT_ARCHIVE_MODULE_ID]: reportArchiveAccessLevel(currentAccess.permissions[REPORT_ARCHIVE_MODULE_ID]),
     },
-    capabilities: Object.entries(payload.capabilities)
+    capabilities: Object.entries(currentAccess.capabilities)
       .filter(([, allowed]) => allowed)
       .map(([id]) => id),
     identity_authority: identityManagedByFcuno ? 'fcuno' : 'fcos',
@@ -2265,8 +2102,8 @@ async function persistManagedUser(client, body, actor = null) {
     user_type: payload.user_type,
     active: effectiveActive,
     use_type_defaults: payload.use_type_defaults,
-    permissions: payload.permissions,
-    capabilities: payload.capabilities,
+    permissions: currentAccess.permissions,
+    capabilities: currentAccess.capabilities,
     generalManagerTransfer,
     authMetadataWarnings,
   };
@@ -2275,8 +2112,7 @@ async function persistManagedUser(client, body, actor = null) {
 async function adminUsersList(body, req) {
   const { client } = await requireAdministrator(req);
   const { userTypes, typePermissions, typeCapabilities } = await listAccessModel(client);
-  const { data: profiles, error: profileError } = await client.from('user_profiles').select('id,email,full_name,user_type,active,use_type_defaults,created_at,updated_at').order('created_at', { ascending: false });
-  if (profileError) throw profileError;
+  const profiles = await readAllAccessRows(client, 'user_profiles', 'id,email,full_name,user_type,active,use_type_defaults,access_revision,created_at,updated_at');
 
   const userIds = (profiles || []).map((profile) => profile.id);
   const identityManagedByFcuno = fcunoFederationConfig().federationEnabled;
@@ -2289,45 +2125,15 @@ async function adminUsersList(body, req) {
     if (identityError) throw identityError;
     linkedIdentityIds = new Set((identityRows || []).map((row) => row.auth_user_id).filter(Boolean));
   }
-  let permissionRows = [];
-  if (userIds.length) {
-    const { data, error } = await client.from('user_module_permissions').select('user_id,module_id,can_view').in('user_id', userIds);
-    if (error) throw error;
-    permissionRows = data || [];
-  }
-
-  const permissionsByUser = {};
-  const capabilitiesByUser = {};
-  const manageRowsByUser = {};
-  for (const row of permissionRows) {
-    if (row.module_id === REPORT_ARCHIVE_MANAGE_MODULE_ID) {
-      manageRowsByUser[row.user_id] = row.can_view === true;
-      continue;
-    }
-    if (ADMIN_CAPABILITY_IDS.has(row.module_id)) {
-      if (!capabilitiesByUser[row.user_id]) capabilitiesByUser[row.user_id] = {};
-      capabilitiesByUser[row.user_id][row.module_id] = row.can_view === true;
-      continue;
-    }
-    if (!ADMIN_MODULE_IDS.has(row.module_id)) continue;
-    if (!permissionsByUser[row.user_id]) permissionsByUser[row.user_id] = {};
-    permissionsByUser[row.user_id][row.module_id] = permissionValueFromRow(row);
-  }
-  for (const [userId, permissions] of Object.entries(permissionsByUser)) {
-    if (permissions[REPORT_ARCHIVE_MODULE_ID] === true) {
-      permissions[REPORT_ARCHIVE_MODULE_ID] = Object.prototype.hasOwnProperty.call(manageRowsByUser, userId) ? (manageRowsByUser[userId] ? 'full' : 'read') : 'full';
-    }
-  }
-
+  const [permissionGroups, memberships] = await Promise.all([
+    readAllAccessRows(client, 'permission_groups', '*'),
+    readAllAccessRows(client, 'user_permission_groups', 'user_id,group_id', 'user_id'),
+  ]);
+  for (const group of permissionGroups) group.member_count = memberships.filter((row) => row.group_id === group.id).length;
   const users = (profiles || []).map((profile) => ({
-    ...profile,
-    identity_source: identityManagedByFcuno
-      ? linkedIdentityIds.has(profile.id) ? 'fcuno' : 'pending_fcuno_link'
-      : 'fcos',
+    ...serializeGroupUser(profile, permissionGroups, memberships, [...ADMIN_MODULE_IDS, REPORT_ARCHIVE_MODULE_ID], [...ADMIN_CAPABILITY_IDS]),
+    identity_source: identityManagedByFcuno ? linkedIdentityIds.has(profile.id) ? 'fcuno' : 'pending_fcuno_link' : 'fcos',
     type_label: userTypes.find((type) => type.id === profile.user_type)?.label || profile.user_type,
-    use_type_defaults: isAdministratorUserType(profile.user_type) ? true : profile.use_type_defaults !== false,
-    permissions: isAdministratorUserType(profile.user_type) ? ADMIN_FULL_ACCESS : profile.use_type_defaults !== false ? normalizePermissions(profile.user_type, typePermissions[profile.user_type] || {}) : normalizePermissions(profile.user_type, permissionsByUser[profile.id] || {}),
-    capabilities: isAdministratorUserType(profile.user_type) ? ADMIN_FULL_CAPABILITIES : profile.use_type_defaults !== false ? normalizeCapabilities(profile.user_type, typeCapabilities[profile.user_type] || {}) : normalizeCapabilities(profile.user_type, capabilitiesByUser[profile.id] || {}),
   }));
   const generalManager = await loadActiveGeneralManager(client);
   const portal = await portalAdminModel({ client, profiles: profiles || [] });
@@ -2336,6 +2142,8 @@ async function adminUsersList(body, req) {
   }
   return {
     users,
+    permissionGroups,
+    accessModelVersion: 2,
     modules: ADMIN_APP_MODULES,
     capabilities: ADMIN_CAPABILITIES,
     userTypes,
@@ -2452,7 +2260,14 @@ async function universalAuditTrail(body, req) {
     .toLowerCase();
   const queryLimit = Math.max(100, Math.min(limit, 1000));
 
-  const [adminRows, collaborationRows, improvementRows, portalRows, collectionRows, reportRows, interestRows, disputeRows, internalEmailRows, fcosUpdateRows, growthRows, compensationRows, specialTermsRows, hedgeRows, emailSenderRows, emailRouterRows, workspacePreferenceRows, brokerSettingRows, shipAgentRows, connectionRows] = await Promise.all([
+  const [accessRows, adminRows, collaborationRows, improvementRows, portalRows, collectionRows, reportRows, interestRows, disputeRows, internalEmailRows, fcosUpdateRows, growthRows, compensationRows, specialTermsRows, hedgeRows, emailSenderRows, emailRouterRows, workspacePreferenceRows, brokerSettingRows, shipAgentRows, connectionRows] = await Promise.all([
+    safeAuditRows(client.from('permission_access_events').select('id,created_at,actor_email,action,target_id,previous_value,new_value').order('created_at', { ascending: false }).limit(queryLimit), (row) => ({
+      id: `permission-access:${row.id}`, source: 'People & Access', module: 'Admin',
+      action: normalizedAuditAction(row.action), createdAt: row.created_at,
+      actor: row.actor_email || 'System', target: row.target_id,
+      summary: compactAuditSummary([row.new_value?.group?.label || row.new_value?.label || row.previous_value?.label, normalizedAuditAction(row.action)]),
+      metadata: { previousValue: row.previous_value, newValue: row.new_value },
+    })),
     safeAuditRows(client.from('admin_audit_logs').select('id,created_at,actor_email,action,target_user_id,target_email,metadata').order('created_at', { ascending: false }).limit(queryLimit), (row) => ({
       id: `admin:${row.id}`,
       source: 'Admin Control',
@@ -2748,7 +2563,7 @@ async function universalAuditTrail(body, req) {
     }),
   ]);
 
-  let rows = [...adminRows, ...portalRows, ...collaborationRows, ...improvementRows, ...collectionRows, ...reportRows, ...interestRows, ...disputeRows, ...internalEmailRows, ...fcosUpdateRows, ...growthRows, ...compensationRows, ...specialTermsRows, ...hedgeRows, ...emailSenderRows, ...emailRouterRows, ...workspacePreferenceRows, ...brokerSettingRows, ...shipAgentRows, ...connectionRows].filter((row) => row.createdAt);
+  let rows = [...accessRows, ...adminRows, ...portalRows, ...collaborationRows, ...improvementRows, ...collectionRows, ...reportRows, ...interestRows, ...disputeRows, ...internalEmailRows, ...fcosUpdateRows, ...growthRows, ...compensationRows, ...specialTermsRows, ...hedgeRows, ...emailSenderRows, ...emailRouterRows, ...workspacePreferenceRows, ...brokerSettingRows, ...shipAgentRows, ...connectionRows].filter((row) => row.createdAt);
 
   if (sourceFilter && sourceFilter !== 'all') rows = rows.filter((row) => row.source === sourceFilter);
   if (keyword) {
@@ -2762,7 +2577,11 @@ async function universalAuditTrail(body, req) {
 
 async function adminUserSave(body, req) {
   const { client, profile } = await requireAdministrator(req);
+  if (['permissions', 'capabilities', 'use_type_defaults'].some((key) => Object.prototype.hasOwnProperty.call(body, key))) {
+    throw appError('Individual permission editing has been replaced by permission groups. Refresh People & Access.', 409, 'ACCESS_GROUPS_REQUIRED');
+  }
   const user = await persistManagedUser(client, body, profile);
+  Object.assign(user, await loadEffectiveGroupAccess(client, user));
   const entitlements = await reconcilePortalEntitlementsForProfile(client, user, profile, { forceRevision: true });
   const portalSyncErrors = [];
   for (const entitlement of entitlements.filter((row) => row.sync_status === 'pending' || row.sync_status === 'error')) {
@@ -2897,107 +2716,43 @@ async function adminPortalApplicationsHealth(body, req) {
 }
 
 async function adminUserTypeSave(body, req) {
-  const { client, profile } = await requireAdministrator(req);
-  const existingId = body.id ? String(body.id) : null;
-  let label = String(body.label || '').trim();
-  const id = slugifyUserTypeId(existingId || label);
-  if (!id) throw appError('User type name is required.', 400);
-  if (!label) throw appError('User type label is required.', 400);
-
-  const protectedType = {
-    administrator: {
-      label: 'Administrator',
-      description: 'Full system administration access.',
-      sortOrder: 10,
-    },
-    general_manager: {
-      label: 'General Manager',
-      description: 'Full administration access and the single reporting-hierarchy root.',
-      sortOrder: 5,
-    },
-  }[id];
-  if (protectedType) label = protectedType.label;
-
-  const { data: existing, error: existingError } = await client.from('user_types').select('id,is_system,sort_order').eq('id', id).maybeSingle();
-  if (existingError) throw existingError;
-
-  const sortOrder = protectedType?.sortOrder
-    ?? (Number.isFinite(Number(body.sort_order)) ? Number(body.sort_order) : (existing?.sort_order ?? 100));
-  const userType = {
-    id,
-    label,
-    description: protectedType?.description || String(body.description || '').trim(),
-    is_system: protectedType ? true : existing?.is_system === true,
-    sort_order: sortOrder,
-    updated_at: new Date().toISOString(),
-  };
-  const { error: typeError } = await client.from('user_types').upsert(userType, { onConflict: 'id' });
-  if (typeError) throw typeError;
-
-  const permissions = normalizeUserTypePermissions(id, body.permissions || {});
-  const capabilities = normalizeCapabilities(id, body.capabilities || {});
-  await ensureReportArchiveManageModule(client);
-  const { error: deletePermissionError } = await client.from('user_type_module_permissions').delete().eq('user_type_id', id);
-  if (deletePermissionError) throw deletePermissionError;
-  const { error: insertPermissionError } = await client.from('user_type_module_permissions').insert([
-    ...ADMIN_APP_MODULES.map((module) => ({
-      user_type_id: id,
-      module_id: module.id,
-      can_view: permissionCanView(module.id, permissions[module.id]),
-      updated_at: new Date().toISOString(),
-    })),
-    {
-      user_type_id: id,
-      module_id: REPORT_ARCHIVE_MANAGE_MODULE_ID,
-      can_view: reportArchiveAccessLevel(permissions[REPORT_ARCHIVE_MODULE_ID]) === 'full',
-      updated_at: new Date().toISOString(),
-    },
-    ...ADMIN_CAPABILITIES.map((capability) => ({
-      user_type_id: id,
-      module_id: capability.id,
-      can_view: capabilities[capability.id] === true,
-      updated_at: new Date().toISOString(),
-    })),
-  ]);
-  if (insertPermissionError) throw insertPermissionError;
-
-  await writeAdminAudit(client, profile, existing ? 'user_type_updated' : 'user_type_created', null, id, {
-    label,
-    modules: Object.entries(permissions)
-      .filter(([moduleId, value]) => permissionCanView(moduleId, value))
-      .map(([moduleId]) => moduleId),
-    access_levels: {
-      [REPORT_ARCHIVE_MODULE_ID]: reportArchiveAccessLevel(permissions[REPORT_ARCHIVE_MODULE_ID]),
-    },
-    capabilities: Object.entries(capabilities)
-      .filter(([, allowed]) => allowed)
-      .map(([capabilityId]) => capabilityId),
-  });
-
-  return { userType: { ...userType, permissions, capabilities } };
+  await requireAdministrator(req);
+  throw appError('Use Permission Groups to manage access. Organizational roles are separate.', 409, 'ACCESS_GROUPS_REQUIRED');
 }
-
 async function adminUserTypeDelete(body, req) {
+  await requireAdministrator(req);
+  throw appError('Organizational roles are preserved. Use Permission Groups to manage access.', 409, 'ACCESS_GROUPS_REQUIRED');
+}
+async function adminPermissionGroupSave(body, req) {
   const { client, profile } = await requireAdministrator(req);
-  const id = String(body.id || '').trim();
-  if (!id) throw appError('User type id is required.', 400);
-  if (isAdministratorUserType(id)) throw appError('Administrator and General Manager user types cannot be deleted.', 400);
-
-  const { data: userType, error: typeError } = await client.from('user_types').select('id,label,is_system').eq('id', id).maybeSingle();
-  if (typeError) throw typeError;
-  if (!userType) throw appError('User type not found.', 404);
-
-  const { count, error: assignedError } = await client.from('user_profiles').select('id', { count: 'exact', head: true }).eq('user_type', id);
-  if (assignedError) throw assignedError;
-  if (count > 0) throw appError('This user type is assigned to users. Reassign those users before deleting it.', 400);
-
-  const { error: deleteError } = await client.from('user_types').delete().eq('id', id);
-  if (deleteError) throw deleteError;
-
-  await writeAdminAudit(client, profile, 'user_type_deleted', null, id, {
-    label: userType.label,
+  if (!Number.isSafeInteger(body.expectedRevision) || body.expectedRevision < 0) throw appError('Refresh the access record before saving.', 400, 'ACCESS_REVISION_REQUIRED');
+  const id = body.id ? String(body.id) : slugifyUserTypeId(body.label);
+  const { data, error } = await client.rpc('fcos_save_permission_group', {
+    p_actor_id: profile.id, p_id: id, p_expected_revision: body.expectedRevision,
+    p_label: String(body.label || '').trim(), p_description: String(body.description || '').trim(),
+    p_sort_order: Number.isInteger(body.sort_order) ? body.sort_order : 100,
+    p_permissions: body.permissions || {}, p_capabilities: body.capabilities || {},
   });
+  if (error) throw accessOperationError(error);
+  return { group: data };
+}
+async function adminPermissionGroupDelete(body, req) {
+  const { client, profile } = await requireAdministrator(req);
+  if (!Number.isSafeInteger(body.expectedRevision) || body.expectedRevision < 0) throw appError('Refresh the access record before saving.', 400, 'ACCESS_REVISION_REQUIRED');
+  const id = String(body.id || '');
+  const { error } = await client.rpc('fcos_delete_permission_group', { p_actor_id: profile.id, p_id: id, p_expected_revision: body.expectedRevision });
+  if (error) throw accessOperationError(error);
   return { deleted: true, id };
+}
+async function adminUserGroupsSave(body, req) {
+  const { client, profile } = await requireAdministrator(req);
+  if (!Number.isSafeInteger(body.expectedRevision) || body.expectedRevision < 0) throw appError('Refresh the access record before saving.', 400, 'ACCESS_REVISION_REQUIRED');
+  if (!Array.isArray(body.groupIds) || body.groupIds.some((id) => typeof id !== 'string')) throw appError('Select valid permission groups.', 400);
+  const { data, error } = await client.rpc('fcos_save_user_groups', {
+    p_actor_id: profile.id, p_user_id: String(body.userId || ''), p_group_ids: body.groupIds, p_expected_revision: body.expectedRevision,
+  });
+  if (error) throw accessOperationError(error);
+  return { userId: data.user_id, accessRevision: data.access_revision, groupIds: data.group_ids, access: data };
 }
 
 function accountManagerStorageError(error) {
@@ -5315,10 +5070,11 @@ async function salesforceObjectFields(body) {
 const DASHBOARD_AI_SETTINGS_ID = 'default';
 
 function serializeDashboardAiSettings(row = null, storageAvailable = true) {
-  const configuredModel = isAllowedDashboardAiModel(row?.model_id) ? row.model_id : DEFAULT_DASHBOARD_AI_MODEL;
+  const configuredModel = isAllowedAiSelection(row?.model_id) ? row.model_id : AUTO_AI_MODEL;
   return {
     modelId: configuredModel,
-    model: dashboardAiModel(configuredModel),
+    model: configuredModel === AUTO_AI_MODEL ? AI_MODEL_SELECTIONS[0] : dashboardAiModel(configuredModel),
+    automaticRouting: automaticRoutingFor('dashboard_search'),
     revision: Math.max(1, Number(row?.revision || 1)),
     updatedAt: row?.updated_at || null,
     updatedByEmail: row?.updated_by_email || null,
@@ -5427,7 +5183,7 @@ async function dashboardAiSettingsGet(body, req, accessContext = null) {
   const [settings, usage] = await Promise.all([loadDashboardAiSettings(context.client), loadDashboardAiUsage(context.client)]);
   return {
     settings,
-    models: DASHBOARD_AI_MODELS,
+    models: AI_MODEL_SELECTIONS,
     usage,
     capabilities: {
       canManageSettings: isAdministratorUserType(context.profile.user_type),
@@ -5438,7 +5194,7 @@ async function dashboardAiSettingsGet(body, req, accessContext = null) {
 async function dashboardAiSettingsSave(body, req) {
   const { client, profile } = await requireAdministrator(req);
   const modelId = String(body.modelId || body.model_id || '').trim();
-  if (!isAllowedDashboardAiModel(modelId)) {
+  if (!isAllowedAiSelection(modelId)) {
     throw appError('Select an allowed Dashboard AI model.', 400);
   }
   const expectedRevision = Number(body.expectedRevision ?? body.expected_revision);
@@ -5481,7 +5237,7 @@ async function dashboardAiSettingsSave(body, req) {
   await expireRuntimeCacheTags(['dashboard:ai-interpretation']);
   return {
     settings: serializeDashboardAiSettings(data, true),
-    models: DASHBOARD_AI_MODELS,
+    models: AI_MODEL_SELECTIONS,
     usage: await loadDashboardAiUsage(client),
     capabilities: { canManageSettings: true },
   };
@@ -5521,14 +5277,18 @@ async function dashboardAiSearch(body, req, accessContext = null) {
   const settings = await loadDashboardAiSettings(context.client);
   if (!settings.apiConfigured) throw appError('Dashboard AI Search is not configured in Vercel.', 503);
   const force = requestForcesRefresh(body, req);
+  const routing = resolveAiModel({ task: 'dashboard_search', selection: settings.modelId, prompt, clarification });
   const safetyIdentifier = `fcos-dashboard-${createHash('sha256').update(String(context.profile.id)).digest('hex').slice(0, 32)}`;
   const interpretationResult = await getOrLoadRuntimeCache({
     namespace: 'dashboard-ai-interpretation',
-    version: '1',
+    version: AI_ROUTING_VERSION,
     accessScope: salesforceCacheAccessScope(context),
-    apiVersion: settings.modelId,
+    apiVersion: routing.modelId,
     payload: {
       modelId: settings.modelId,
+      revision: settings.revision,
+      selectedPeriodLabel,
+      today: dateOnly(new Date()),
       prompt,
       clarification,
     },
@@ -5543,7 +5303,7 @@ async function dashboardAiSearch(body, req, accessContext = null) {
         selectedPeriodLabel,
         today: dateOnly(new Date()),
         safetyIdentifier,
-        signal: AbortSignal.timeout(15_000),
+        signal: AbortSignal.timeout(60_000),
         onUsage: (usage) => recordDashboardAiUsage(context.client, context.profile, usage),
       }),
   });
@@ -5558,8 +5318,9 @@ async function dashboardAiSearch(body, req, accessContext = null) {
       label: interpretation.dateScope.mode === 'selected_period' ? selectedPeriodLabel : interpretation.dateScope.label,
     },
     clarification: interpretation.clarification,
-    model: settings.model,
-    modelId: settings.modelId,
+    model: dashboardAiModel(routing.modelId),
+    modelId: routing.modelId,
+    routing,
     interpretationCache: interpretationResult.cache.status,
   };
   if (interpretation.status === 'needs_clarification') {
@@ -5596,7 +5357,7 @@ async function dashboardAiSearch(body, req, accessContext = null) {
   // AI results intentionally use the same paginated, access-filtered scope as
   // the dashboard APIs.  The old 3,000-record dashboard path is not safe for
   // AI because it can turn a complete natural-language result into a subset.
-  const aiScope = await loadDecisionDashboardScope({ force }, req, context, { additionalWhere: where });
+  const aiScope = await loadDecisionDashboardScope({ ...body.filterSpec, force }, req, context, { additionalWhere: where });
   const dashboard = {
     ...decisionDashboardSummary(aiScope.rows, aiScope.completeness),
     recentStems: publicDecisionDashboardRows(aiScope.rows),
@@ -7172,6 +6933,7 @@ async function systemHealth(body = {}, req = null, accessContext) {
     cachedHealthCheck('fcos-updates-mail', 5 * 60, force, fcosUpdatesMailHealthRow),
     cachedHealthCheck('hedge-desk', 60, force, hedgeDeskHealthRow),
     cachedHealthCheck('email-router', 60, force, emailRouterHealthRow),
+    cachedHealthCheck('missing-nom-b', 60, force, missingNomBHealthRow),
     cachedHealthCheck('outlook-calendar', 5 * 60, force, outlookCalendarHealthRow),
     ]),
     connectionAttestationHealthRow(),
@@ -8300,6 +8062,10 @@ async function loadDecisionDashboardScope(body = {}, req = null, accessContext =
     if (!portField) throw appError('Country filtering is unavailable because Salesforce Port metadata could not be validated.', 503, 'DASHBOARD_SCHEMA');
     conditions.push(`Port__r.Country__c IN (${decisionDashboardValues(filters.countryCodes)})`);
   }
+  if (filters.excludedCountryCodes.length) {
+    if (!portField) throw appError('Country exclusion is unavailable because Salesforce Port metadata could not be validated.', 503, 'DASHBOARD_SCHEMA');
+    conditions.push(`(Port__c = null OR Port__r.Country__c = null OR Port__r.Country__c NOT IN (${decisionDashboardValues(filters.excludedCountryCodes)}))`);
+  }
   if (!filters.includeCancelled && stemFields.has('Status__c')) {
     const statusField = (stemDescribe.fields || []).find((field) => field.name === 'Status__c');
     const cancelledStatuses = (statusField?.picklistValues || []).map((item) => item.value).filter((value) => /cancel/i.test(String(value || '')));
@@ -8706,20 +8472,28 @@ async function decisionDashboardInternalAccountIdentity(body = {}, req = null, a
   return cached.value;
 }
 
-async function dashboardSummaryUncached(body = {}, req = null, accessContext = null) {
+const enrichDashboardFinance = createDashboardFinanceLoader({
+  queryAll: decisionDashboardQueryAll,
+  describeObject: (objectName) => salesforceObjectFields({ objectName }),
+});
+
+async function dashboardSummaryUncached(body = {}, req = null, accessContext = null, financeContext = null) {
   const scope = await loadDecisionDashboardScope(body, req, accessContext);
+  const financeRows = financeContext ? await enrichDashboardFinance(scope.rows, financeContext.settings, financeContext.asOfDate) : null;
   return {
     ...decisionDashboardSummary(scope.rows.filter((row) => row.buyer != null), scope.completeness),
     ...decisionDashboardOverviewMetrics(scope, body),
+    ...(financeContext ? { finance: summarizeDashboardFinance(financeRows, financeContext.settings, financeContext.asOfDate, scope.completeness) } : {}),
     filters: scope.filters,
     timing: scope.timing,
     dataWarnings: scope.dataWarnings,
   };
 }
 
-async function dashboardStemListUncached(body = {}, req = null, accessContext = null) {
+async function dashboardStemListUncached(body = {}, req = null, accessContext = null, financeContext = null) {
   const scope = await loadDecisionDashboardScope(body, req, accessContext, { pageOnly: true });
-  return { ...scope.completeness, filters: scope.filters, stems: publicDecisionDashboardRows(scope.rows), pageSize: Math.min(Math.max(Number(body.pageSize) || 50, 1), 200), nextCursor: scope.nextCursor, sort: scope.sort, timing: scope.timing, dataWarnings: scope.dataWarnings };
+  const rows = financeContext ? await enrichDashboardFinance(scope.rows, financeContext.settings, financeContext.asOfDate) : scope.rows;
+  return { ...scope.completeness, ...(financeContext ? { finance: summarizeDashboardFinance(rows, financeContext.settings, financeContext.asOfDate) } : {}), filters: scope.filters, stems: publicDecisionDashboardRows(rows), pageSize: Math.min(Math.max(Number(body.pageSize) || 50, 1), 200), nextCursor: scope.nextCursor, sort: scope.sort, timing: scope.timing, dataWarnings: scope.dataWarnings };
 }
 
 async function dashboardAnalyticsUncached(body = {}, req = null, accessContext = null) {
@@ -8837,8 +8611,8 @@ async function dashboardAnalyticsUncached(body = {}, req = null, accessContext =
   };
 }
 
-async function cachedDecisionDashboard(handler, body, req, accessContext, ttlSeconds, loader) {
-  const cachePayload = { ...body };
+async function cachedDecisionDashboard(handler, body, req, accessContext, ttlSeconds, loader, financeContext = null) {
+  const cachePayload = { ...body, ...(financeContext ? { financeVersion: 5, financeSnapshot: { revision: financeContext.settings.revision, asOfDate: financeContext.asOfDate } } : {}) };
   delete cachePayload.force;
   delete cachePayload.forceRefresh;
   delete cachePayload.refresh;
@@ -8850,7 +8624,7 @@ async function cachedDecisionDashboard(handler, body, req, accessContext, ttlSec
         : `decision-dashboard-v9-${handler}`,
     ttlSeconds,
     payload: cachePayload,
-    tags: ['salesforce:dashboard', 'salesforce:stem', `salesforce:dashboard:${handler}`],
+    tags: ['salesforce:dashboard', 'salesforce:stem', `salesforce:dashboard:${handler}`, ...(financeContext ? ['salesforce:payment', 'salesforce:buyer-invoices', 'salesforce:supplier-invoices', 'dashboard:finance-settings'] : [])],
     body,
     req,
     accessContext,
@@ -8859,12 +8633,30 @@ async function cachedDecisionDashboard(handler, body, req, accessContext, ttlSec
   return cached.value;
 }
 
-async function dashboardSummary(body = {}, req = null, accessContext = null) {
-  return cachedDecisionDashboard('summary', body, req, accessContext, 60, () => dashboardSummaryUncached(body, req, accessContext));
+async function dashboardFinanceContext(body, req, accessContext) {
+  if (body.includeFinanceCosts !== true) return null;
+  const { client } = accessContext || await requireActiveUser(req);
+  const settings = await loadFinanceSettings(client);
+  const asOfDate = financeToday();
+  validateFinanceSnapshot(body.financeSnapshot, settings, asOfDate);
+  return { settings, asOfDate };
 }
 
+async function dashboardSummary(body = {}, req = null, accessContext = null) {
+  const financeContext = await dashboardFinanceContext(body, req, accessContext);
+  return cachedDecisionDashboard('summary', body, req, accessContext, 60, () => dashboardSummaryUncached(body, req, accessContext, financeContext), financeContext);
+}
+async function dashboardNomBOperation(operation, body, req, accessContext) {
+  const context = accessContext || (await requireActiveUser(req));
+  return operation(body, context, { stemAccessCondition: await interofficeStemAccessCondition(context) });
+}
+const dashboardNomBRead = (body, req, context) => dashboardNomBOperation(loadDashboardNomB, body, req, context);
+const dashboardNomBPolicySave = (body, req, context) => dashboardNomBOperation(saveDashboardNomBPolicy, body, req, context);
+const dashboardNomBAuditRead = (body, req, context) => dashboardNomBOperation(loadDashboardNomBAudit, body, req, context);
+
 async function dashboardStemList(body = {}, req = null, accessContext = null) {
-  return cachedDecisionDashboard('stems', body, req, accessContext, 30, () => dashboardStemListUncached(body, req, accessContext));
+  const financeContext = await dashboardFinanceContext(body, req, accessContext);
+  return cachedDecisionDashboard('stems', body, req, accessContext, 30, () => dashboardStemListUncached(body, req, accessContext, financeContext), financeContext);
 }
 
 async function dashboardAnalytics(body = {}, req = null, accessContext = null) {
@@ -9700,6 +9492,7 @@ async function dashboardAccountCreditDirectory(body = {}, req = null, accessCont
   const financialFilters = {
     portIds: Array.isArray(body.filters?.portIds) ? body.filters.portIds : [],
     countryCodes: Array.isArray(body.filters?.countryCodes) ? body.filters.countryCodes : [],
+    excludedCountryCodes: Array.isArray(body.filters?.excludedCountryCodes) ? body.filters.excludedCountryCodes : [],
   };
   const cached = await cachedSalesforceValue({
     namespace: 'dashboard-unified-account-directory-financials-v1',
@@ -9821,6 +9614,10 @@ async function dashboardCreditForecastSettingsSave(body = {}, req = null, access
     },
   };
 }
+
+const workflowMetricsRead = createWorkflowMetricsReader({ requireActiveUser, requireAdministratorContext });
+const stemWorkspaceActivity = createStemWorkspaceActivity({ requireActiveUser, resolveStemId, userHasAnyModuleAccess });
+const workspaceSearch = createWorkspaceSearch({ requireActiveUser, userHasAnyModuleAccess, salesforceObjectFields, interofficeStemAccessCondition, queryRows, loadDashboardCounterpartySearch });
 
 async function dashboardCounterpartySearch(body = {}, req = null, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
@@ -14300,7 +14097,9 @@ async function loadBuyerInvoicePaymentReminderContext(body = {}, accessContext =
     {
       daysAhead: body.daysAhead ?? settings.daysAhead,
       anchorStemId: stemId,
-      requestedStemIds: body.requestedStemIds || body.invoiceStemIds,
+      // Review and send must fingerprint the same complete buyer/group scope.
+      // The outbound selection is validated separately after the live comparison.
+      requestedStemIds: [],
     },
     null,
     accessContext,
@@ -14449,7 +14248,7 @@ async function buyerInvoicePaymentReminderSend(body, req, accessContext = null) 
     stemIds: [...selectedStemIds],
   });
   const { settings, settingsRevision: liveSettingsRevision, report, selected, candidates, sender } = await loadBuyerInvoicePaymentReminderContext(
-    { ...body, requestedStemIds: null },
+    { stemId: anchorStemId, daysAhead: body.daysAhead },
     activeAccess,
   );
   const liveRouting = preparePaymentReminderRouting(report, settings, selected, candidates);
@@ -14963,7 +14762,7 @@ async function salesforceDisputeStems(body, req = null, accessContext = null) {
           SELECT Id, STEM__c, Product__r.Name, Supplier_Name__c,
                  ${originalSupplierLookup.valid ? `Original_Supplier__c, ${originalSupplierRelationship}.Name, ${originalSupplierRelationship}.Inactive_Suspended__c,` : ''}
                  Payment_Term__c, Quantity__c, Quantity_Delivered_Per_BDN__c,
-                 Quantity_Max__c, Quantity_in_MT__c, Is_Quantity_Range__c,
+                 Quantity_Max__c, Quantity_in_MT__c, Is_Quantity_Range__c, Unit_of_Measure__c,
                  Price_Per_Unit__c, Cost_Per_Unit__c, Unit_Sell_At__c, Unit_Buy_At__c, Unit_Cost__c,
                  Total_Price__c, Total_Cost__c, Supplier_Invoice__c, Cancelled__c,
                  Offer_Line_Item__r.UnitPrice, Offer_Line_Item__r.Supplier_Unit_Price__c
@@ -16706,6 +16505,19 @@ async function disputeBetaSubmitApproval(body = {}, req, accessContext = null) {
   };
 }
 
+async function finishDisputeClosure(result, body, req, context) {
+  if (body.closeAfter !== true) return result;
+  try {
+    const closed = await disputeBetaClose({ caseId: result.case.id,
+      zeroBalanceOnly: body.zeroBalanceOnly === true,
+      note: body.closureNote || disputeAgreementSummary(result.actions, result.case.latestNote) || 'Settlement verified and completed by Finance.' }, req, context);
+    return { ...result, ...closed };
+  } catch (error) {
+    // Settlement/approval has already succeeded. Keep its proof and offer closure-only retry.
+    return { ...result, closurePending: true, closureWarning: `Saved successfully. Closure still needs attention: ${error.message}` };
+  }
+}
+
 async function disputeBetaApprove(body = {}, req, accessContext = null) {
   const { client, profile } = accessContext || (await requireActiveUser(req));
   await requireCapability(client, profile, 'disputes_approve', 'Dispute approval permission is required.', 403);
@@ -16720,6 +16532,11 @@ async function disputeBetaApprove(body = {}, req, accessContext = null) {
   assertSupplierDisputeAmounts(actions);
   assertSupplierAllocationsCurrent(actions, partyRows, instructionRows, currentStem);
   await assertRequiredDisputeDocuments(client, actions || []);
+  if (body.closeAfter === true) {
+    await requireCapability(client, profile, 'disputes_account', 'Accounting permission is required to approve and close.');
+    const eligibility = zeroBalanceClosureEligibility(actions, partyRows, currentStem, instructionRows);
+    if (!eligibility.eligible) throw appError(eligibility.reasons.join(' '), 409);
+  }
   const salesforceStatus = 'Approved - Pending Accounting';
   const { error: pendingError } = await client
     .from('dispute_beta_cases')
@@ -16749,6 +16566,17 @@ async function disputeBetaApprove(body = {}, req, accessContext = null) {
   }
   const accountingState = await loadDisputeWorkflowActions(client, caseRow.id);
   const documents = await loadDisputeWorkflowDocuments(client, caseRow.id);
+  if (body.closeAfter === true) {
+    let result = { case: serializeDisputeBetaCase(updatedCase), actions: accountingState.actions };
+    try {
+      for (const action of actions) {
+        result = await disputeWorkflowAccountingUpdate({ actionId: action.id, accountingStatus: 'Not Required' }, req, accessContext || { client, profile });
+      }
+    } catch (error) {
+      return { ...result, closurePending: true, closureWarning: `Approved. Finance completion still needs attention: ${error.message}` };
+    }
+    return finishDisputeClosure(result, { ...body, zeroBalanceOnly: true }, req, accessContext || { client, profile });
+  }
   return {
     case: serializeDisputeBetaCase(updatedCase),
     parties: partyRows.map(serializeDisputeWorkflowParty),
@@ -17113,6 +16941,7 @@ async function disputeWorkflowSupplierOffsetOptions(body = {}, req, accessContex
 async function disputeWorkflowSupplierInstructionUpdate(body = {}, req, accessContext = null) {
   const { client, profile } = accessContext || (await requireActiveUser(req));
   await requireCapability(client, profile, 'disputes_account', 'Dispute accounting permission is required for supplier instructions.');
+  body = await verifiedSettlementInput(body, req, accessContext || { client, profile });
   const instructionId = String(body.instructionId || '').trim();
   if (!instructionId) throw appError('instructionId is required.', 400);
   const { data: originalInstruction, error: lookupError } = await client.from('dispute_workflow_supplier_instructions').select(DISPUTE_SUPPLIER_INSTRUCTION_SELECT).eq('id', instructionId).maybeSingle();
@@ -17219,6 +17048,7 @@ async function disputeWorkflowSupplierInstructionUpdate(body = {}, req, accessCo
     event_type: eventType,
     event_note: eventNote,
     event_metadata: {
+      settlementEvidence: body.verifiedEvidence || null,
       supplierInstructionId: instruction.id,
       recoveryMethod,
       targetSupplierInvoiceId: targetInvoice?.supplierInvoiceId || null,
@@ -17257,13 +17087,13 @@ async function disputeWorkflowSupplierInstructionUpdate(body = {}, req, accessCo
   let updatedCase = await getDisputeBetaCase(client, caseRow.id);
   updatedCase = await persistDisputeAccountingStatus(client, updatedCase, currentStem, profile, updatedCase.workflow_status);
   const refreshed = await loadDisputeWorkflowActions(client, caseRow.id);
-  return {
+  return finishDisputeClosure({
     case: serializeDisputeBetaCase(updatedCase),
     parties: workflow.partyRows.map(serializeDisputeWorkflowParty),
     actions: refreshed.actions,
     supplierInstructions: refreshed.supplierInstructions,
     documents: documents.map(serializeDisputeWorkflowDocument),
-  };
+  }, body, req, accessContext || { client, profile });
 }
 
 async function disputeWorkflowSupplierAmountAmend(body = {}, req, accessContext = null) {
@@ -17388,9 +17218,15 @@ async function disputeWorkflowSupplierAmountAmend(body = {}, req, accessContext 
   };
 }
 
+const { disputeWorkflowSettlementEvidence, verifiedSettlementInput } = createDisputeSettlementEvidenceHandlers({
+  requireActiveUser, requireCapability, getDisputeBetaCase, requireInterofficeStemAccess,
+  loadCurrentDisputeStem, loadDisputeWorkflowActions, assertValidDisputeParties, appError,
+});
+
 async function disputeWorkflowAccountingUpdate(body = {}, req, accessContext = null) {
   const { client, profile } = accessContext || (await requireActiveUser(req));
   await requireCapability(client, profile, 'disputes_account', 'Dispute accounting permission is required for accounting updates.');
+  body = await verifiedSettlementInput(body, req, accessContext || { client, profile });
   const actionId = String(body.actionId || '').trim();
   if (!actionId) throw appError('actionId is required.', 400);
   const { data: action, error: actionLookupError } = await client.from('dispute_beta_actions').select(DISPUTE_BETA_ACTION_SELECT).eq('id', actionId).maybeSingle();
@@ -17487,6 +17323,7 @@ async function disputeWorkflowAccountingUpdate(body = {}, req, accessContext = n
       instructionDate,
       settlementReference,
       settlementDate,
+      settlementEvidence: body.verifiedEvidence || null,
       notRequiredReasonWaived,
       verifiedBalance: notRequiredReasonWaived ? notRequiredEligibility.balance : null,
       verifiedBalanceType: notRequiredReasonWaived ? notRequiredEligibility.balanceType : null,
@@ -17502,13 +17339,13 @@ async function disputeWorkflowAccountingUpdate(body = {}, req, accessContext = n
     ? await recordExternalDisputeClosure(client, statusCase, currentStem, profile, workflowStatus)
     : await recordDisputeWorkflowSalesforceWriteback(client, statusCase, profile, workflowStatus);
   const partyMap = disputePartyRowMap(partyRows);
-  return {
+  return finishDisputeClosure({
     case: serializeDisputeBetaCase(salesforceCase),
     parties: partyRows.map(serializeDisputeWorkflowParty),
     action: serializeDisputeBetaAction(updatedAction, partyMap),
     actions: (actions || []).map((item) => serializeDisputeBetaAction(item, partyMap)),
     documents: documents.map(serializeDisputeWorkflowDocument),
-  };
+  }, body, req, accessContext || { client, profile });
 }
 
 async function disputeBetaMarkExecuted(body = {}, req, accessContext = null) {
@@ -17661,6 +17498,10 @@ async function disputeBetaClose(body = {}, req, accessContext = null) {
   }
   if (caseRow.approval_status !== 'Approved') throw appError('Only approved Dispute Workflow cases can be closed.', 400);
   if (caseRow.workflow_status !== 'Settled - Ready to Close') throw appError('Complete accounting settlement for every action before closing.', 400);
+  if (body.zeroBalanceOnly === true) {
+    const eligibility = zeroBalanceClosureEligibility(actionRows, partyRows, currentStem, instructionRows);
+    if (!eligibility.eligible) throw appError(eligibility.reasons.join(' '), 409);
+  }
   const finalNote = String(body.note || '').trim();
   if (!finalNote) throw appError('Final closure note is required.', 400);
   const actions = validateStoredDisputeActions(actionRows, partyRows, registry);
@@ -17711,10 +17552,10 @@ async function salesforceStemDetailUncached(body, req = null, accessContext = nu
 
   const [recordRaw, lineItems, extraCosts, buyerBrokers, buyerInvoices] = await Promise.all([
     sfRequest(`/sobjects/stem__c/${actualStemId}`).then(cleanRecord),
-    queryRows(`SELECT Id, Name, STEM__c, Product__c, Product__r.Name, Product__r.Family, Supplier_Name__c, BDN_Company__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_Max__c, Quantity_in_MT__c, Is_Quantity_Range__c, Price_Per_Unit__c, Cost_Per_Unit__c, Unit_Sell_At__c, Unit_Buy_At__c, Unit_Cost__c, Subtotal_Sell_At__c, Subtotal_Buy_At__c, Total_Price__c, Total_Cost__c, Supplier_Invoice__c, Payment_Term__c, BDN_Number__c, Cancelled__c, Buyers_Broker__c, Buyer_Broker__c, Buyers_Brokers_Commission_Per_Unit__c, Buyers_Brokers_Commission_Lumpsum__c, Commission_Cost__c, Supplier_Broker__c, Suppliers_Brokers_Commission_Per_Unit__c, Suppliers_Brokers_Commission_Lumpsum__c, Offer_Line_Item__r.UnitPrice, Offer_Line_Item__r.Supplier_Unit_Price__c FROM STEM_Line_Item__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`, { softFail: true }),
-    queryRows(`SELECT Id, Name, Description__c, Product2Id__c, Product2Id__r.Name, Product2Id__r.Family, Supplier_Name__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_in_MT__c, Quantity_Range_Max__c, Is_Quantity_Range__c, Unit_Price__c, Unit_Cost__c, Line_Total__c, Line_Total_Buy__c, Supplier_Invoice__c, Supplier_Issued__c, Payment_Term__c, Cancelled__c FROM STEM_Extra_Cost__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`, { softFail: true }),
-    queryRows(`SELECT Id, STEM__c, Buyer_Broker__c, Refcode_Index__c, Exported__c, Commission_Lumpsum__c, STEM_Line_Item__r.Id FROM STEM_Buyer_Broker__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`, { softFail: true }),
-    queryRows(`SELECT Id, Name, STEM__c, Proforma__c, Deprecated__c, Amount__c FROM Invoice__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`, { softFail: true }),
+    queryRows(`SELECT Id, Name, STEM__c, Product__c, Product__r.Name, Product__r.Family, Supplier_Name__c, BDN_Company__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_Max__c, Quantity_in_MT__c, Is_Quantity_Range__c, Price_Per_Unit__c, Cost_Per_Unit__c, Unit_Sell_At__c, Unit_Buy_At__c, Unit_Cost__c, Subtotal_Sell_At__c, Subtotal_Buy_At__c, Total_Price__c, Total_Cost__c, Supplier_Invoice__c, Payment_Term__c, BDN_Number__c, Cancelled__c, Buyers_Broker__c, Buyer_Broker__c, Buyers_Brokers_Commission_Per_Unit__c, Buyers_Brokers_Commission_Lumpsum__c, Commission_Cost__c, Supplier_Broker__c, Suppliers_Brokers_Commission_Per_Unit__c, Suppliers_Brokers_Commission_Lumpsum__c, Offer_Line_Item__r.UnitPrice, Offer_Line_Item__r.Supplier_Unit_Price__c FROM STEM_Line_Item__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`, { softFail: false }),
+    queryRows(`SELECT Id, Name, Description__c, Product2Id__c, Product2Id__r.Name, Product2Id__r.Family, Supplier_Name__c, Quantity__c, Quantity_Delivered_Per_BDN__c, Quantity_in_MT__c, Quantity_Range_Max__c, Is_Quantity_Range__c, Unit_Price__c, Unit_Cost__c, Line_Total__c, Line_Total_Buy__c, Supplier_Invoice__c, Supplier_Issued__c, Payment_Term__c, Cancelled__c FROM STEM_Extra_Cost__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`, { softFail: false }),
+    queryRows(`SELECT Id, STEM__c, Buyer_Broker__c, Refcode_Index__c, Exported__c FROM STEM_Buyer_Broker__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`, { softFail: false }),
+    queryRows(`SELECT Id, Name, STEM__c, Proforma__c, Deprecated__c, Amount__c FROM Invoice__c WHERE STEM__c = '${actualStemId}' ORDER BY CreatedDate ASC`, { softFail: false }),
   ]);
   const supplierInvoiceIds = [...new Set([...lineItems.map((item) => item.Supplier_Invoice__c), ...extraCosts.map((item) => item.Supplier_Invoice__c)].filter(isSalesforceId))];
   const supplierInvoiceNameMap = await namesByIds('Supplier_Invoice__c', supplierInvoiceIds);
@@ -18445,6 +18286,10 @@ async function marketIntelligenceBrief(body = {}, req = null, accessContext = nu
   return loadMarketIntelligenceBrief(context.client, body);
 }
 
+const marketBookContext = createMarketBookContext({ requireActiveUser, userHasAnyModuleAccess });
+const { marketTraderWorkspace, marketTraderWorkspaceSave } = createMarketTraderWorkspace({ requireActiveUser, userHasAnyModuleAccess });
+const { financeSettingsGet, financeSettingsSave } = createFinanceSettingsHandlers({ requireActiveUser, userHasAnyModuleAccess, userHasCapability, expireCache: expireRuntimeCacheTags });
+
 async function marketPulseSnapshot(body = {}, req = null, accessContext = null) {
   const context = accessContext || (await requireActiveUser(req));
   const [snapshot, capabilities] = await Promise.all([
@@ -18649,10 +18494,14 @@ async function marketReportDriveSyncCron(_body = {}, req = null) {
   const client = supabaseAdminClient();
   const accessToken = await googleDriveMarketAccessToken();
   const result = await runMarketReportDriveSync(client, { accessToken });
-  if (result.status === 'failed') {
-    throw appError('Scheduled Google Drive market-report synchronization did not complete.', 502, result.errorCode || 'MARKET_DRIVE_SYNC_FAILED', undefined, true);
-  }
+  await expireRuntimeCacheTags(['market:pulse']);
   if (result.importedCount > 0) await expireRuntimeCacheTags(['markets', 'hedge:markets', 'market:intelligence']);
+  if (result.status === 'failed') {
+    const message = String(result.errorCode || '').startsWith('MARKET_SECONDARY_')
+      ? secondaryMopsFailureMessage(result.errorCode)
+      : 'Scheduled Google Drive market-report synchronization did not complete.';
+    throw appError(message, 502, result.errorCode || 'MARKET_DRIVE_SYNC_FAILED', undefined, true);
+  }
   await resolveRecoveredSystemErrorHandler(client, 'marketReportDriveSyncCron', { resolvedThrough: new Date() }).catch(() => {});
   return result;
 }
@@ -18724,9 +18573,8 @@ async function specialTermsDocumentExport(body = {}, req, res, accessContext = n
   const context = accessContext || (await requireActiveUser(req));
   const format = String(body.format || 'pdf').trim().toLowerCase();
   const source = String(body.source || 'live').trim().toLowerCase();
-  if (!['pdf', 'docx'].includes(format)) throw appError('Choose PDF or Word document format.', 400, 'SPECIAL_TERMS_DOCUMENT_FORMAT_INVALID');
+  if (format !== 'pdf') throw appError('Special Terms are available as PDF only.', 400, 'SPECIAL_TERMS_DOCUMENT_FORMAT_INVALID');
   if (!['live', 'draft'].includes(source)) throw appError('Choose a live document or saved draft preview.', 400, 'SPECIAL_TERMS_DOCUMENT_SOURCE_INVALID');
-  if (source === 'draft' && format !== 'pdf') throw appError('Saved drafts may be downloaded as watermarked PDF only.', 409, 'SPECIAL_TERMS_DOCUMENT_DRAFT_FORMAT_RESTRICTED');
   const term = await getSpecialTermDocumentForExport(body.termId, {
     source,
     revisionId: body.revisionId,
@@ -19084,7 +18932,7 @@ async function emailRouterMaintenanceCron(_body = {}, req = null) {
   const directorySync = await client.rpc('sync_emailrouter_fcos_destinations', { p_actor: null });
   const mailbox = await currentEmailRouterMailbox(client);
   const outbox = await processEmailRouterOutbox({ client, mailbox, limit: 25 });
-  const learning = await processEmailRouterLearningJobs({ client, mailbox, limit: 10 }).catch((error) => ({ status: 'warning', code: error.code || 'EMAIL_ROUTER_LEARNING_FAILED' }));
+  const learning = await processEmailRouterLearningJobs({ client, mailbox, limit: 10, deadlineAt: maintenanceStartedAt.getTime() + 180_000 }).catch((error) => ({ status: 'warning', code: error.code || 'EMAIL_ROUTER_LEARNING_FAILED' }));
   const synchronization = {};
   for (const folder of ['inbox', 'sentitems', 'archive']) {
     synchronization[folder] = await syncEmailRouterFolderFromStoredCursor({ client, mailbox, folder, maxPages: 10 });
@@ -19117,8 +18965,15 @@ async function emailRouterMaintenanceCron(_body = {}, req = null) {
   };
 }
 
+const { missingNomBList, missingNomBUpload, missingNomBReminderCron, missingNomBHealthRow } = createMissingNomBHandlers({
+  requireActiveUser, requireCronAuthorization, safeSupabaseAdminClient, appError, timedCheck, healthRow, configuredEnv, env: process.env,
+});
+
 const xeroHandlers = createXeroHandlers({ requireActiveUser, resolveRecoveredSystemErrorHandler });
 const handlers = {
+  missingNomBList,
+  missingNomBUpload,
+  missingNomBReminderCron,
   authContext,
   portalApplicationsList,
   portalApplicationLaunch,
@@ -19190,6 +19045,9 @@ const handlers = {
   hedgeDeskEntity,
   hedgeMarkets,
   marketPulseSnapshot,
+  marketBookContext,
+  marketTraderWorkspace,
+  marketTraderWorkspaceSave,
   marketIntelligenceBrief,
   marketIntelligenceCurve,
   marketReportCatalogue,
@@ -19311,7 +19169,12 @@ const handlers = {
   salesforceFullSchema,
   salesforceDashboard,
   salesforceDashboardFiltered: salesforceDashboardFilteredCompatibility,
+  financeSettingsGet,
+  financeSettingsSave,
   dashboardSummary,
+  dashboardNomBRead,
+  dashboardNomBPolicySave,
+  dashboardNomBAuditRead,
   dashboardStemList,
   dashboardAnalytics,
   dashboardAccountInsight,
@@ -19322,6 +19185,9 @@ const handlers = {
   dashboardAccountCreditDirectory,
   dashboardAccountCreditStatement,
   dashboardCreditForecastSettingsSave,
+  workflowMetricsRead,
+  stemWorkspaceActivity,
+  workspaceSearch,
   dashboardCounterpartySearch,
   dashboardAccountExposureBatch,
   dashboardAiSearch,
@@ -19413,6 +19279,7 @@ const handlers = {
   disputeWorkflowSubmitApproval: disputeBetaSubmitApproval,
   disputeWorkflowApprove: disputeBetaApprove,
   disputeWorkflowReject: disputeBetaReject,
+  disputeWorkflowSettlementEvidence,
   disputeWorkflowAccountingUpdate,
   disputeWorkflowSupplierInstructionUpdate,
   disputeWorkflowSupplierOffsetOptions,
@@ -19457,6 +19324,9 @@ const handlers = {
   adminPortalAccessSave,
   adminPortalAccessRetry,
   adminPortalApplicationsHealth,
+  adminPermissionGroupSave,
+  adminPermissionGroupDelete,
+  adminUserGroupsSave,
   adminUserTypeSave,
   adminUserTypeDelete,
   adminFcosUpdatesList,
@@ -19486,6 +19356,9 @@ export default async function handler(req, res) {
       requestId,
     },
     async () => {
+      let metricContext = null;
+      let metricResult = null;
+      const metricStartedAt = Date.now();
       try {
         const handlerPolicy = handlerPolicyFor(HANDLER_POLICY_REGISTRY, name);
         if (handlerPolicy && typeof res?.setHeader === 'function') {
@@ -19511,8 +19384,15 @@ export default async function handler(req, res) {
         const fn = handlers[name];
         if (!fn) return sendJson(res, { error: `Unknown function: ${name}` }, 404);
         const accessContext = await requireHandlerAccess(name, req);
+        metricContext = accessContext;
         const body = await readBody(req);
         requireReadOnlyCiOperation(accessContext?.profile, name, body);
+        const deploymentMutation = handlerPolicy?.mutation && (
+          name === 'hedgeMarkets' ? !isReadOnlyMarketAction(body)
+            : name === 'hedgeDeskEntity' ? !isReadOnlyHedgeDeskAction(body)
+              : true
+        );
+        requireDeploymentMutationAllowed(deploymentMutation);
         const contract = validateFunctionRequest(name, body);
         if (!contract.ok) {
           throw appError(`Invalid ${name} request: ${contract.issues.join('; ')}.`, 400, 'FUNCTION_CONTRACT_INVALID', {
@@ -19520,6 +19400,7 @@ export default async function handler(req, res) {
           });
         }
         const data = await fn(body, req, accessContext);
+        metricResult = data;
         return sendJson(res, data);
       } catch (error) {
         const status = error.status || error.statusCode || 500;
@@ -19542,6 +19423,11 @@ export default async function handler(req, res) {
         return sendJson(res, publicApiErrorPayload(error, status, requestId), status);
       } finally {
         logRequestTelemetry(res.statusCode || 500);
+        if (process.env.VERCEL_ENV === 'production' && metricContext?.profile?.read_only_ci !== true
+          && metricContext?.profile?.id && handlerPolicyFor(HANDLER_POLICY_REGISTRY, name)?.mutation) {
+          waitUntil(recordWorkflowMetric(safeSupabaseAdminClient(), { handler: name, status: res.statusCode || 500,
+            data: metricResult, durationMs: Date.now() - metricStartedAt }).catch(() => {}));
+        }
       }
     },
   );

@@ -13,6 +13,7 @@ export function accountInsightStatementRequest(body, side = null) {
     filters: body.dashboardScope?.mode === 'account_wide' ? {} : {
       portIds: body.dashboardScope?.portIds || body.dashboardScope?.filters?.portIds || [],
       countryCodes: body.dashboardScope?.countryCodes || body.dashboardScope?.filters?.countryCodes || [],
+      excludedCountryCodes: body.dashboardScope?.excludedCountryCodes || body.dashboardScope?.filters?.excludedCountryCodes || [],
     },
     disputeOnly: body.dashboardScope?.mode !== 'account_wide' && body.dashboardScope?.disputeOnly === true,
   };

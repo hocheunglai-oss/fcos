@@ -24,7 +24,17 @@ const q = (value) => text(value).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 const values = (rows) => rows.map((row) => `'${q(row)}'`).join(',');
 const currency = (value) => text(value).toUpperCase() || 'USD';
 const interoffice = (context) => context?.profile?.user_type === 'interoffice';
-const stemChildScope = (scope) => text(scope).replace(/\b(Expected_Delivery_Date__c|Delivery_Date__c|Port__c)\b/g, 'STEM__r.$1');
+const stemChildScope = (scope) => text(scope)
+  .replace(/\bPort__r\.Country__c\b/g, 'STEM__r.Port__r.Country__c')
+  .replace(/\b(Expected_Delivery_Date__c|Delivery_Date__c|Port__c)\b/g, 'STEM__r.$1');
+
+function countries(valuesToNormalize, label) {
+  const result = [...new Set((Array.isArray(valuesToNormalize) ? valuesToNormalize : []).map((value) => text(value).toUpperCase()).filter(Boolean))];
+  if (result.length > 200 || result.some((value) => value.length > 100 || /[\u0000-\u001f\u007f]/.test(value))) {
+    throw error(`${label} must contain valid Salesforce country values.`, 400, 'UNIFIED_COUNTERPARTY_COUNTRY_INVALID');
+  }
+  return result;
+}
 
 async function all(soql) { const result = await sfQuery(soql, { clean: true, limit: Number.MAX_SAFE_INTEGER }); return result.records || []; }
 async function describe(name, force) {
@@ -234,13 +244,23 @@ async function requestedIdentities(requested, { accessContext, force = false, sc
   return projectIdentities(selected, accountMap, lineLookup, extraLookup, { scopeWhereValue });
 }
 
-function normalizedFilters(input = {}) { const filters = input && typeof input === 'object' ? input : {}; return { portIds: ids(filters.portIds, 'Port'), countryCodes: [...new Set((Array.isArray(filters.countryCodes) ? filters.countryCodes : []).map((value) => text(value).toUpperCase()).filter(Boolean))] }; }
+function normalizedFilters(input = {}) {
+  const filters = input && typeof input === 'object' ? input : {};
+  const countryCodes = countries(filters.countryCodes, 'Country filters');
+  const excludedCountryCodes = countries(filters.excludedCountryCodes, 'Country exclusions');
+  if (countryCodes.some((country) => excludedCountryCodes.includes(country))) throw error('Country filters and exclusions cannot overlap.', 400, 'UNIFIED_COUNTERPARTY_COUNTRY_CONFLICT');
+  return { portIds: ids(filters.portIds, 'Port'), countryCodes, excludedCountryCodes };
+}
 async function scopeWhere(filters, stemFields, force, dateWindows = []) {
   const conditions = [];
   if (filters.portIds.length) conditions.push(`Port__c IN (${values(filters.portIds)})`);
   if (filters.countryCodes.length) {
     const ports = await all(`SELECT Id FROM Port__c WHERE Country__c IN (${values(filters.countryCodes)})`);
     conditions.push(ports.length ? `Port__c IN (${values(ports.map((row) => row.Id))})` : 'Id = null');
+  }
+  if (filters.excludedCountryCodes.length) {
+    if (!stemFields.has('Port__c')) throw error('Salesforce Port is unavailable for country exclusion filtering.', 503, 'UNIFIED_COUNTERPARTY_SCHEMA');
+    conditions.push(`(Port__c = null OR Port__r.Country__c = null OR Port__r.Country__c NOT IN (${values(filters.excludedCountryCodes)}))`);
   }
   const windows = Array.isArray(dateWindows) ? dateWindows : [];
   if (windows.length) {
@@ -429,3 +449,9 @@ export async function loadDashboardAccountExposureBatch({ body = {}, accessConte
   });
   return { ...cached.value, meta: { ...cached.value.meta, cache: cached.cache?.status || null } };
 }
+
+export const dashboardUnifiedCounterpartyServiceInternals = {
+  normalizedFilters,
+  scopeWhere,
+  stemChildScope,
+};

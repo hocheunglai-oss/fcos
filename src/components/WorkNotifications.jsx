@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowRight, Bell, BellRing, Check, CheckCheck, Clock3, Loader2, RotateCcw, ShieldCheck, TriangleAlert } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { appClient } from "@/api/appClient";
@@ -47,15 +47,14 @@ function sourceLabel(source) {
 }
 
 function sourceBadgeClass(source) {
-  if (source === "system_error" || source === "system") return "bg-red-50 text-red-900 ring-red-700/10 dark:bg-red-950/50 dark:text-red-200 dark:ring-red-500/25";
-  if (source === "email_router") return "bg-amber-50 text-amber-900 ring-amber-700/10 dark:bg-amber-950/50 dark:text-amber-200 dark:ring-amber-500/25";
-  if (source === "fcos_improvements") return "bg-cyan-50 text-cyan-900 ring-cyan-700/10 dark:bg-cyan-950/50 dark:text-cyan-200 dark:ring-cyan-500/25";
-  if (source === "variable_charges") return "bg-violet-50 text-violet-900 ring-violet-700/10 dark:bg-violet-950/50 dark:text-violet-200 dark:ring-violet-500/25";
-  if (source === "markets") return "bg-teal-50 text-teal-900 ring-teal-700/10 dark:bg-teal-950/50 dark:text-teal-200 dark:ring-teal-500/25";
-  return source === "growth_coaching" || source === "growth" || source === "coaching" ? "bg-emerald-50 text-emerald-800 ring-emerald-700/10 dark:bg-emerald-950/50 dark:text-emerald-200 dark:ring-emerald-500/25" : "bg-blue-50 text-blue-800 ring-blue-700/10 dark:bg-blue-950/50 dark:text-blue-200 dark:ring-blue-500/25";
+  const tone = ["system_error", "system"].includes(source) ? "system"
+    : ["growth_coaching", "growth", "coaching"].includes(source) ? "growth"
+    : { email_router: "email", fcos_improvements: "improvements", variable_charges: "charges", markets: "markets" }[source] || "default";
+  return `app-work-notification-badge-${tone}`;
 }
 
 export default function WorkNotifications() {
+  const [verificationMessage, setVerificationMessage] = useState('');
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -65,6 +64,13 @@ export default function WorkNotifications() {
   const [unavailableSources, setUnavailableSources] = useState([]);
   const [stateFilter, setStateFilter] = useState("active");
   const [sourceFilter, setSourceFilter] = useState("all");
+  const mounted = useRef(false);
+  const pendingLoad = useRef(null);
+  const view = useRef(null);
+  const mutationInFlight = useRef(false);
+  const latestLoad = useRef(null);
+  const viewKey = `${stateFilter}:${sourceFilter}`;
+  if (view.current?.key !== viewKey) view.current = { key: viewKey };
 
   const applyResponse = useCallback((data) => {
     setNotifications(Array.isArray(data?.notifications) ? data.notifications : []);
@@ -73,10 +79,15 @@ export default function WorkNotifications() {
   }, []);
 
   const loadNotifications = useCallback(
-    async ({ quiet = false } = {}) => {
+    async ({ quiet = false, forceRefresh = false } = {}) => {
+      const requestedView = view.current;
+      if (quiet && !forceRefresh && pendingLoad.current?.view === requestedView) return pendingLoad.current.promise;
+      pendingLoad.current?.controller.abort();
+      const controller = new AbortController();
       if (!quiet) setLoading(true);
-
-      try {
+      const request = { controller, view: requestedView, promise: null };
+      pendingLoad.current = request;
+      request.promise = (async () => { try {
         const response = await appClient.functions.invoke(
           "workNotificationsList",
           {
@@ -84,22 +95,27 @@ export default function WorkNotifications() {
             state: stateFilter,
             source: sourceFilter,
           },
-          { force: true },
+          { force: true, signal: controller.signal },
         );
-
+        if (!mounted.current || pendingLoad.current !== request || requestedView !== view.current || response.data?.cancelled) return;
         if (response.data?.error) {
           setUnavailableSources(["Notifications"]);
         } else {
           applyResponse(response.data);
         }
+      } catch (error) {
+        if (mounted.current && pendingLoad.current === request && error?.name !== 'AbortError') setUnavailableSources(["Notifications"]);
       } finally {
-        if (!quiet) setLoading(false);
-      }
+        if (pendingLoad.current === request) { pendingLoad.current = null; if (mounted.current) setLoading(false); }
+      } })();
+      return request.promise;
     },
     [applyResponse, sourceFilter, stateFilter],
   );
+  latestLoad.current = loadNotifications;
 
   useEffect(() => {
+    mounted.current = true;
     loadNotifications({ quiet: true });
 
     const interval = window.setInterval(() => {
@@ -111,69 +127,76 @@ export default function WorkNotifications() {
     window.addEventListener("fcos:work-notifications-changed", handleChanged);
 
     return () => {
+      mounted.current = false;
+      pendingLoad.current?.controller.abort();
+      pendingLoad.current = null;
       window.clearInterval(interval);
       window.removeEventListener("fcos:work-notifications-changed", handleChanged);
     };
   }, [loadNotifications]);
 
-  const markRead = useCallback(
-    async (notificationIds) => {
-      setUpdating(true);
-      try {
-        const response = await appClient.functions.invoke("workNotificationsRead", notificationIds ? { notificationIds } : {}, { force: true });
-        if (!response.data?.error) applyResponse(response.data);
-      } finally {
-        setUpdating(false);
+  const mutateNotifications = useCallback(async (name, body) => {
+    if (mutationInFlight.current) return false;
+    mutationInFlight.current = true;
+    const requestedView = view.current;
+    pendingLoad.current?.controller.abort();
+    pendingLoad.current = null;
+    setUpdating(true);
+    try {
+      const response = await appClient.functions.invoke(name, {
+        ...body, listState: stateFilter, source: sourceFilter, limit: NOTIFICATION_LIMIT,
+      }, { force: true });
+      if (!mounted.current || response.data?.error || response.data?.cancelled) return false;
+      if (requestedView === view.current) {
+        pendingLoad.current?.controller.abort();
+        pendingLoad.current = null;
+        applyResponse(response.data);
+      } else {
+        await latestLoad.current({ quiet: true, forceRefresh: true });
       }
-    },
-    [applyResponse],
-  );
-
-  const openNotification = async (notification) => {
-    if (!notification.readAt) await markRead(notification.notificationIds || [notification.id]);
-    setOpen(false);
-    if (typeof notification.link === "string" && notification.link) {
-      navigate(notification.link);
+      return mounted.current;
+    } catch {
+      if (mounted.current) setUnavailableSources(["Notifications"]);
+      return false;
+    } finally {
+      mutationInFlight.current = false;
+      if (mounted.current) { setUpdating(false); setLoading(false); }
     }
-  };
+  }, [applyResponse, sourceFilter, stateFilter]);
 
-  const updateNotification = useCallback(
-    async (notification, state) => {
-      setUpdating(true);
-      try {
-        const snoozedUntil = state === "snoozed" ? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() : undefined;
-        const response = await appClient.functions.invoke(
-          "workNotificationsState",
-          {
-            notificationIds: notification.notificationIds || [notification.id],
-            state,
-            snoozedUntil,
-            listState: stateFilter,
-            source: sourceFilter,
-            limit: NOTIFICATION_LIMIT,
-          },
-          { force: true },
-        );
-        if (!response.data?.error) applyResponse(response.data);
-      } finally {
-        setUpdating(false);
-      }
-    },
-    [applyResponse, sourceFilter, stateFilter],
-  );
+  const markRead = (notificationIds) => mutateNotifications("workNotificationsRead", notificationIds ? { notificationIds } : {});
+  const openNotification = async (notification) => {
+    if (mutationInFlight.current) return;
+    if (!notification.readAt && !(await markRead(notification.notificationIds || [notification.id]))) return;
+    if (!mounted.current) return;
+    setOpen(false);
+    if (typeof notification.link === "string" && notification.link) navigate(notification.link);
+  };
+  const updateNotification = (notification, state) => mutateNotifications("workNotificationsState", {
+    notificationIds: notification.notificationIds || [notification.id],
+    state,
+    snoozedUntil: state === "snoozed" ? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() : undefined,
+  });
 
   const verifySystemIncident = useCallback(async (notification) => {
-    if (!notification?.incidentSignature) return;
+    if (!notification?.incidentSignature || mutationInFlight.current) return;
+    mutationInFlight.current = true;
     setUpdating(true);
+    setVerificationMessage('');
     try {
       const response = await appClient.functions.invoke("systemErrorVerify", {
         incidentSignature: notification.incidentSignature,
       }, { force: true });
-      if (!response.data?.error) await loadNotifications({ quiet: true });
+      if (!mounted.current || response.data?.cancelled) return;
+      setVerificationMessage(response.data?.error || response.data?.message || "Recovery verified for this incident.");
+      if (!response.data?.error) await latestLoad.current({ quiet: true, forceRefresh: true });
+    } catch {
+      if (mounted.current) setVerificationMessage('This incident could not be verified. Its unresolved status has been retained.');
     } finally {
-      setUpdating(false);
+      mutationInFlight.current = false;
+      if (mounted.current) setUpdating(false);
     }
-  }, [loadNotifications]);
+  }, []);
 
   const unavailableLabel = unavailableSources.map(sourceLabel).join(", ");
   const hasUnavailableSources = unavailableSources.length > 0;
@@ -188,14 +211,15 @@ export default function WorkNotifications() {
       }}
     >
       <PopoverTrigger asChild>
-        <Button type="button" variant="ghost" size="icon" className="relative h-8 w-8 shrink-0 text-muted-foreground hover:bg-accent hover:text-foreground" aria-label={unreadCount ? `${unreadCount} unread work notifications` : "Work notifications"} title={hasUnavailableSources ? "Some work notifications are temporarily unavailable" : "Work notifications"}>
+        <Button type="button" variant="ghost" size="icon" className="app-work-notification-trigger" aria-label={unreadCount ? `${unreadCount} unread work notifications` : "Work notifications"} title={hasUnavailableSources ? "Some work notifications are temporarily unavailable" : "Work notifications"}>
           {unreadCount ? <BellRing className="h-4 w-4" /> : <Bell className="h-4 w-4" />}
-          {unreadCount > 0 && <span className="absolute -right-0.5 -top-0.5 flex min-h-4 min-w-4 items-center justify-center rounded-full bg-blue-600 px-1 text-[9px] font-bold text-white">{unreadCount > 99 ? "99+" : unreadCount}</span>}
+          {unreadCount > 0 && <span className="app-work-notification-count">{unreadCount > 99 ? "99+" : unreadCount}</span>}
           {hasUnavailableSources && <span className="absolute bottom-0 right-0 h-2 w-2 rounded-full border border-background bg-amber-500" />}
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" className="glass-floating w-[calc(100vw-24px)] max-w-[400px] overflow-hidden p-0">
-        <div className="app-navigation-caption-material flex min-w-0 items-center justify-between gap-3 border-b border-border px-4 py-3">
+        {verificationMessage && <p role="status" className="border-b p-3 text-xs text-muted-foreground">{verificationMessage}</p>}
+        <div className="app-navigation-caption-material app-work-notification-caption">
           <div className="min-w-0">
             <div className="text-sm font-semibold">Notifications</div>
             <div className="text-xs text-muted-foreground">{unreadCount.toLocaleString()} unread</div>
@@ -239,7 +263,7 @@ export default function WorkNotifications() {
         </div>
 
         {hasUnavailableSources && (
-          <div className="flex gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-950 dark:border-amber-700/60 dark:bg-amber-950/45 dark:text-amber-100">
+          <div className="app-work-notification-warning">
             <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             <span>{unavailableLabel} notifications are temporarily unavailable.</span>
           </div>
@@ -254,12 +278,12 @@ export default function WorkNotifications() {
           ) : visibleNotifications.length ? (
             <div className="divide-y divide-border">
               {visibleNotifications.map((notification) => (
-                <div key={notification.groupKey || notification.id} className={cn("flex items-start gap-1 px-2 py-1.5 transition-colors hover:bg-muted/60", !notification.readAt && "bg-blue-50/70 dark:bg-blue-950/35")}>
-                  <button type="button" className="flex min-w-0 flex-1 items-start gap-3 px-2 py-1.5 text-left" onClick={() => openNotification(notification)}>
+                <div key={notification.groupKey || notification.id} className={cn("app-work-notification-row", !notification.readAt && "bg-blue-50/70 dark:bg-blue-950/35")}>
+                  <button type="button" disabled={updating} className="app-work-notification-open" onClick={() => openNotification(notification)}>
                     <span className={cn("mt-1.5 h-2 w-2 shrink-0 rounded-full", notification.readAt ? "bg-muted-foreground/40" : "bg-blue-600")} />
                     <span className="min-w-0 flex-1">
                       <span className="mb-1 flex flex-wrap items-center gap-2">
-                        <span className={cn("rounded px-1.5 py-0.5 text-[10px] font-medium ring-1 ring-inset", sourceBadgeClass(notification.source))}>{sourceLabel(notification.source)}</span>
+                        <span className={cn("app-work-notification-badge", sourceBadgeClass(notification.source))}>{sourceLabel(notification.source)}</span>
                         {notification.occurrenceCount > 1 && <span className="rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-800" aria-label={`${notification.occurrenceCount} occurrences`}>{notification.occurrenceCount}×</span>}
                         <span className="text-[11px] text-muted-foreground">{formatNotificationTime(notification.createdAt)}</span>
                       </span>
@@ -271,7 +295,7 @@ export default function WorkNotifications() {
                         </span>
                       )}
                       {notification.outcome && (
-                        <span className="mt-1 block text-[11px] text-muted-foreground">Save outcome: {notification.outcome}</span>
+                        <span className="mt-1 block text-[11px] text-muted-foreground">Outcome: {notification.outcome}</span>
                       )}
                       {notification.actionLabel && (
                         <span className="mt-1 block text-[11px] font-semibold text-blue-700">{notification.actionLabel}</span>
@@ -284,11 +308,7 @@ export default function WorkNotifications() {
                         <ShieldCheck className="h-3.5 w-3.5" />
                       </Button>
                     )}
-                    {stateFilter === "handled" ? (
-                      <Button type="button" size="icon" variant="ghost" className="h-7 w-7" title="Return to active" disabled={updating} onClick={() => updateNotification(notification, "unhandled")}>
-                        <RotateCcw className="h-3.5 w-3.5" />
-                      </Button>
-                    ) : stateFilter === "snoozed" ? (
+                    {["handled", "snoozed"].includes(stateFilter) ? (
                       <Button type="button" size="icon" variant="ghost" className="h-7 w-7" title="Return to active" disabled={updating} onClick={() => updateNotification(notification, "unhandled")}>
                         <RotateCcw className="h-3.5 w-3.5" />
                       </Button>
