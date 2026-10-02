@@ -6,9 +6,10 @@ import { fileURLToPath } from 'node:url';
 import { fcosConnectionIdentifier } from '../config/fcosConnections.js';
 import { collectBuildProvenance } from './lib/build-provenance.mjs';
 import { githubReleaseReads, assertReleaseGitHubAccount, RELEASE_REPOSITORY } from './lib/release-evidence.mjs';
-import { githubReleaseOidc, assertVercelProductionAuthority, readVercelTokenMetadata } from './lib/release-production.mjs';
+import { githubReleaseOidc } from './lib/release-production.mjs';
+import { collectPreviewVercelAuthority } from './lib/preview-vercel-authority.mjs';
 import { releaseHash } from './lib/release-readiness.mjs';
-import { previewEmailBuildCandidate, previewEmailBuildControlRevision, assertPreviewEmailBuildProtection,
+import { previewEmailBuildCandidate, createPreviewEmailBuildRequest, previewEmailBuildControlRevision, assertPreviewEmailBuildProtection,
   collectPreviewEmailEnvironmentRecords, createPreviewEmailBuildIntent, collectTrustedPreviewEmailIntent,
   runControlledPreviewEmailBuild, readPreviewEmailBuildVersion, PREVIEW_EMAIL_BUILD_ENVIRONMENT,
   PREVIEW_EMAIL_INTENT_FILENAME, PREVIEW_EMAIL_BUILD_FILENAME, PREVIEW_EMAIL_CONTRACT_SHA256 } from './lib/preview-email-build.mjs';
@@ -39,6 +40,63 @@ async function completeEnvironmentNames(reads, endpoint, field) {
   throw new Error('Protected environment paging exceeded its bounded scan.');
 }
 
+/** The pinned CLI's --scope requires denied account reads, and its API client
+ * retries POSTs. This Preview-only fallback uses fixed resource paths and one
+ * fetch per operation; the durable state machine alone decides when to create. */
+export function createPreviewEmailVercelApi({ token, fetchImpl = globalThis.fetch } = {}) {
+  if (typeof token !== 'string' || !token) throw new Error('The existing protected Preview credential is required.');
+  const digits = /^[1-9][0-9]*$/;
+  const positive = value => digits.test(value || '') && Number.isSafeInteger(Number(value));
+  const allowedGet = path => {
+    if (path === `/v9/projects/${projectId}` || /^\/v13\/deployments\/dpl_[A-Za-z0-9]+$/.test(path)) return true;
+    const url = new URL(path, 'https://api.vercel.com');
+    const keys = [...url.searchParams.keys()];
+    if (new Set(keys).size !== keys.length) return false;
+    if (url.pathname === `/v9/projects/${projectId}/env`) return url.searchParams.get('decrypt') === 'false'
+      && keys.every(key => ['decrypt', 'until'].includes(key))
+      && (!url.searchParams.has('until') || positive(url.searchParams.get('until')));
+    return url.pathname === '/v6/deployments' && url.searchParams.get('projectId') === projectId
+      && url.searchParams.get('limit') === '100' && positive(url.searchParams.get('since'))
+      && keys.every(key => ['projectId', 'limit', 'since', 'until'].includes(key))
+      && (!url.searchParams.has('until') || positive(url.searchParams.get('until')));
+  };
+  const request = async (path, method, body) => {
+    try {
+      if (typeof path !== 'string' || !path.startsWith('/') || path.startsWith('//') || path.includes('#')
+        || method === 'GET' && !allowedGet(path) || method === 'POST' && path !== '/v13/deployments') throw new Error('path');
+      const url = new URL(path, 'https://api.vercel.com');
+      if (url.origin !== 'https://api.vercel.com') throw new Error('origin');
+      url.searchParams.set('teamId', teamId);
+      const response = await fetchImpl(url.href, { method, headers: { authorization: `Bearer ${token}`,
+        ...(method === 'POST' ? { 'content-type': 'application/json' } : {}) },
+        ...(body === undefined ? {} : { body }), redirect: 'error', cache: 'no-store', signal: AbortSignal.timeout(30000) });
+      if (response.redirected !== false || response.url && response.url !== url.href
+        || !(response.status === 200 || method === 'POST' && response.status === 201)
+        || !response.headers.get('content-type')?.toLowerCase().includes('application/json')) throw new Error('response');
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error('body');
+      const chunks = []; let length = 0;
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          length += value.byteLength;
+          if (length > 8 * 1024 * 1024) throw new Error('size');
+          chunks.push(value);
+        }
+      } finally { await reader.cancel(); }
+      return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    } catch { throw new Error('Pinned Preview resource request failed; private diagnostics suppressed. Read back any uncertain creation.'); }
+  };
+  return { get: path => request(path, 'GET'), create: body => {
+    const operationId = body?.meta?.fcosPreviewEmailBuildOperation;
+    const runId = Number(/^fcos-preview-email-([1-9][0-9]*)-/.exec(operationId || '')?.[1]);
+    const expected = createPreviewEmailBuildRequest({ candidateSha: body?.gitSource?.sha, runId, operationId });
+    if (JSON.stringify(body) !== JSON.stringify(expected)) throw new Error('Preview POST must match the exact reviewed Git-source request without overrides.');
+    return request('/v13/deployments', 'POST', JSON.stringify(expected));
+  } };
+}
+
 export async function runPreviewEmailProofBuild({ mode = 'dry-run', candidateSha, candidateCwd = ROOT,
   recoveryRunId, trustedCwd = ROOT, env = process.env } = {}) {
   if (mode === 'dry-run') return { schemaVersion: 1, kind: 'fcos_preview_email_build_plan', enabledByDefault: false,
@@ -57,13 +115,11 @@ export async function runPreviewEmailProofBuild({ mode = 'dry-run', candidateSha
     || source.sourceDigest !== candidate.sourceDigest || lockHash !== candidate.lockHash) throw new Error('Clean exact source and dependency pins failed.');
   const reads = githubReleaseReads({ command: 'gh', env: { PATH: env.PATH, HOME: env.HOME, GH_HOST: 'github.com',
     GH_REPO: RELEASE_REPOSITORY, GH_TOKEN: env.GH_TOKEN } }, { cwd: trustedCwd });
-  const runtime = { PATH: env.PATH, HOME: env.HOME, CI: '1', NO_COLOR: '1', VERCEL_TOKEN: env.VERCEL_TOKEN,
-    VERCEL_ORG_ID: teamId, VERCEL_PROJECT_ID: projectId };
-  const cli = (args, input) => command('vercel', [...args, '--scope', fcosConnectionIdentifier('vercel', 'Team'),
-    '--cwd', trustedCwd, '--no-color'], { cwd: trustedCwd, env: runtime, ...(input === undefined ? {} : { input }) });
-  if (cli(['--version']).trim().replace(/^Vercel CLI /i, '') !== '54.20.1') throw new Error('The reviewed provider CLI version is required.');
-  const scopedPath = path => `${path}${path.includes('?') ? '&' : '?'}teamId=${teamId}`;
-  const api = path => JSON.parse(cli(['api', scopedPath(path), '--method', 'GET', '--raw']));
+  if (command('vercel', ['--version'], { cwd: trustedCwd, env: { PATH: env.PATH, HOME: env.HOME, CI: '1', NO_COLOR: '1',
+    VERCEL_TELEMETRY_DISABLED: '1', VERCEL_NO_UPDATE_NOTIFICATION: '1' } }).trim().replace(/^Vercel CLI /i, '') !== '54.20.1') {
+    throw new Error('The reviewed provider CLI version is required.');
+  }
+  const provider = createPreviewEmailVercelApi({ token: env.VERCEL_TOKEN }), api = provider.get;
   let signed, approved;
   async function authority(intent) {
     assertReleaseGitHubAccount(reads);
@@ -82,12 +138,10 @@ export async function runPreviewEmailProofBuild({ mode = 'dry-run', candidateSha
     if (collectBuildProvenance({ cwd: candidateCwd, env: {}, requireClean: true }).sourceDigest !== source.sourceDigest
       || collectBuildProvenance({ cwd: trustedCwd, env: {}, requireClean: true }).commit !== harness.commit
       || previewEmailBuildControlRevision(trustedCwd) !== controlRevision) throw new Error('Reviewed source or controls changed during execution.');
-    const project = api(`/v9/projects/${projectId}`);
-    assertVercelProductionAuthority({ user: api('/v2/user').user, team: api(`/v2/teams/${teamId}`), project,
-      token: await readVercelTokenMetadata({ cliRead: api, token: env.VERCEL_TOKEN }), reviewedTokenId: approved.reviewedTokenId,
-      deploymentConfiguration: JSON.parse(readFileSync(join(candidateCwd, 'vercel.json'))), hooks: project.link?.deployHooks });
+    const { project } = await collectPreviewVercelAuthority({ token: env.VERCEL_TOKEN, reviewedTokenId: approved.reviewedTokenId,
+      readProject: api, deploymentConfiguration: JSON.parse(readFileSync(join(candidateCwd, 'vercel.json'))) });
     if (project.link.productionBranch !== repository.default_branch || project.targets?.production?.id !== baseline.deploymentId) throw new Error('The retained Production target changed.');
-    const previous = api(`/v13/deployments/${baseline.deploymentId}`);
+    const previous = await api(`/v13/deployments/${baseline.deploymentId}`);
     if (previous.projectId !== projectId || previous.ownerId !== teamId && previous.teamId !== teamId
       || previous.target !== 'production' || previous.readyState !== 'READY' || previous.meta?.githubCommitSha !== baseline.sha
       || `https://${previous.url}` !== baseline.url) throw new Error('The exact retained Production readback failed.');
@@ -122,7 +176,7 @@ export async function runPreviewEmailProofBuild({ mode = 'dry-run', candidateSha
   const discover = async () => {
     const matches = [], ids = new Set(), cursors = new Set(); let until;
     for (let page = 0; page < 100; page++) {
-      const data = api(`/v6/deployments?projectId=${projectId}&limit=100&since=${Date.parse(intent.intentAt)}${until === undefined ? '' : `&until=${until}`}`);
+      const data = await api(`/v6/deployments?projectId=${projectId}&limit=100&since=${Date.parse(intent.intentAt)}${until === undefined ? '' : `&until=${until}`}`);
       if (!Array.isArray(data.deployments) || data.deployments.length > 100 || !data.pagination
         || !Number.isSafeInteger(data.pagination.count) || data.pagination.count !== data.deployments.length) throw new Error('Operation recovery pagination is incomplete.');
       for (const row of data.deployments) {
@@ -145,12 +199,12 @@ export async function runPreviewEmailProofBuild({ mode = 'dry-run', candidateSha
     for (let attempt = 0; attempt < 100; attempt++) {
       if (['READY', 'ERROR', 'CANCELED'].includes(raw.readyState)) return raw;
       await new Promise(done => setTimeout(done, 10000));
-      raw = api(`/v13/deployments/${raw.id}`);
+      raw = await api(`/v13/deployments/${raw.id}`);
     }
     throw new Error('Preview is still pending; recover the original intent by readback only.');
   };
   const receipt = await runControlledPreviewEmailBuild({ intent, mode, authority, journal, discover, waitReady,
-    create: async request => JSON.parse(cli(['api', scopedPath('/v13/deployments'), '--method', 'POST', '--input', '-', '--raw'], JSON.stringify(request))),
+    create: request => provider.create(request),
     collectRecords: () => collectPreviewEmailEnvironmentRecords({ api }),
     readVersion: deployment => readPreviewEmailBuildVersion(deployment, { bypass: env.FCOS_E2E_VERCEL_BYPASS }) });
   writeFileSync(join(directory, PREVIEW_EMAIL_BUILD_FILENAME), `${JSON.stringify(receipt)}\n`, { mode: 0o600, flag: 'wx', flush: true });
