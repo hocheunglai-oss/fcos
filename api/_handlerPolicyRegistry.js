@@ -89,6 +89,7 @@ const HANDLER_BEHAVIOR = Object.freeze({
   emailRouterSubscription: mutationPolicy({"cache":"none","externalAction":true,"capability":null}),
   emailRouterMaintenanceCron: mutationPolicy({"cache":"none","externalAction":true,"capability":null}),
   xeroReconciliationCampaignCreate: mutationPolicy({"cache":"none","externalAction":false,"capability":"xero_portal_manage"}),
+  xeroIntegrityReport: readPolicy({ cache: 'none', externalAction: false, capability: 'xero_portal_manage' }),
   xeroReconciliationCampaignRead: readPolicy({"cache":"none","externalAction":false,"capability":"xero_portal_manage"}),
   xeroReconciliationCampaignRefresh: mutationPolicy({"cache":"none","externalAction":true,"capability":"xero_portal_manage"}),
   xeroReconciliationCampaignPreview: mutationPolicy({"cache":"none","externalAction":false,"capability":"xero_portal_manage"}),

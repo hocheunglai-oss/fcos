@@ -31,8 +31,10 @@ import { xeroContactIdentitySave } from './_xeroContactIdentity.js';
 import { xeroContactRepairApply } from './_xeroContactRepair.js';
 import { xeroContactRestoreApply } from './_xeroContactRestore.js';
 import { xeroFinancialDocumentPreservationPreview, xeroFinancialDocumentPreservationRun } from './_xeroIssuedSupplierWorkflow.js';
+import { xeroIntegrityReport } from './_xeroIntegrityReport.js';
 
 export const XERO_HANDLER_MODULE_ACCESS = Object.freeze(Object.fromEntries([
+  'xeroIntegrityReport',
   'xeroReconciliationCampaignCreate',
   'xeroReconciliationCampaignRead',
   'xeroReconciliationCampaignRefresh',
@@ -93,6 +95,7 @@ export function createXeroHandlers({ requireActiveUser, resolveRecoveredSystemEr
     return result;
   };
   return {
+    xeroIntegrityReport: wrap(xeroIntegrityReport),
     xeroReconciliationCampaignCreate: wrap(xeroReconciliationCampaignCreate),
     xeroReconciliationCampaignRead: wrap(xeroReconciliationCampaignRead),
     xeroReconciliationCampaignRefresh: wrap(xeroReconciliationCampaignRefresh),

@@ -94,6 +94,26 @@ test('Xero Portal status refreshes a stale access token before reporting expiry'
   assert.deepEqual(requests.map((url) => new URL(url).pathname), ['/connect/token']);
 });
 
+test('read-only Xero status never refreshes stale or missing expiry, even when explicitly requested', async () => {
+  for (const deployment of [{ VERCEL_ENV: 'preview' }, { VERCEL_ENV: 'production', FCOS_ENABLE_READ_ONLY_CI: 'true' }]) {
+    for (const expires_at of ['2026-08-27T00:00:00.000Z', null]) {
+      for (const forceRefresh of [false, true]) {
+        const initial = { tenant_id: 'tenant-1', tenant_name: 'FCOS Test', access_token: 'old-access', refresh_token: 'old-refresh', expires_at, token_version: 4 };
+        const client = fakePortalStatusClient(initial);
+        const result = await xeroPortalStatus({ forceRefresh }, {
+          client,
+          env: { ...deployment, XERO_CLIENT_ID: 'client', XERO_CLIENT_SECRET: 'secret', FCOS_PUBLIC_URL: 'https://fcos.fcuno.com', XERO_REFRESH_TOKEN: 'configured-refresh' },
+          fetchImpl: async () => assert.fail('Read-only status must not use token refresh network'),
+        });
+        assert.equal(result.xero.connected, true);
+        assert.equal(result.xero.expiresAt, expires_at);
+        assert.deepEqual(client.connection, initial);
+        assert.deepEqual(client.controlCalls, []);
+      }
+    }
+  }
+});
+
 test('contact lifecycle keeps matched Salesforce contacts and ignores ContactNumber matching', () => {
   const rows = buildContactLifecycleRows([sfAccount], [
     xeroContact({ contactId: 'matched-by-name', name: 'BUNKER EXPRESS CO LTD' }),
@@ -177,13 +197,11 @@ test('native Xero Portal migration is service-role only and creates private rece
   assert.match(sql, /'xero_portal_manage'/);
 });
 
-test('connected Xero users can refresh missing scopes without deleting the stored connection first', async () => {
+test('Xero Portal exposes saved reporting only and no connection or financial actions', async () => {
   const ui = await readFile(new URL('../src/pages/XeroPortal.jsx', import.meta.url), 'utf8');
-  const { xeroPortalUiCopy } = await import('../src/lib/xeroPortalUiCopy.js');
-  assert.match(ui, /needsFinancialReconnect/);
-  assert.match(ui, /copy\.header\.reconnect/);
-  assert.equal(xeroPortalUiCopy('en').header.reconnect, 'Reconnect scopes');
-  assert.match(ui, /onClick=\{connectXero\}/);
+  assert.match(ui, /xeroIntegrityReport/);
+  assert.doesNotMatch(ui, /xeroPortalConnectStart|xeroPortalDisconnect|xeroPortalReceiptCreate|xeroFinancialSyncPreview|xeroFinancialSyncApply|xeroFinancialPaymentApply/);
+  assert.doesNotMatch(ui, /import.*XeroFinancialSync|import.*XeroContactResolution/);
 });
 
 function jsonResponse(body, status = 200) {

@@ -190,8 +190,8 @@ export async function verifyPerformanceBudgets({
         assertBudget(false, 'XLS writer budgeting requires a valid Vite manifest.');
       }
     }
-    // The manual campaign remains inside the total app budget and also has its
-    // own small cap. Opening Finance must never load this entry eagerly.
+    // Execution UI is retired from the read-only portal. Legacy consumers retain
+    // the lazy-entry size policy; the application must exclude a retired entry.
     if (budgets.onDemandReconciliationCampaign) {
       try {
         const manifest = JSON.parse(await readFile(path.join(root, 'dist/.vite/manifest.json'), 'utf8'));
@@ -201,8 +201,14 @@ export async function verifyPerformanceBudgets({
         const lazy = entry?.isDynamicEntry === true && !entry.isEntry
           && Object.values(manifest).some(item => item.dynamicImports?.includes(entryKey))
           && !Object.values(manifest).some(item => item.imports?.includes(entryKey));
-        assertBudget(Boolean(asset && lazy), 'Reconciliation campaign must remain a separate dynamic entry without a static importer.');
-        if (asset && lazy) {
+        const retired = budgets.onDemandReconciliationCampaign.retiredFromPortal === true;
+        if (retired) {
+          const referenced = Object.values(manifest).some(item => item.imports?.includes(entryKey) || item.dynamicImports?.includes(entryKey));
+          assertBudget(!entry && !referenced && !javascript.some(item => item.filename.startsWith('XeroReconciliationCampaign-')), 'Retired Xero execution UI must not be included in the application bundle.');
+        } else {
+          assertBudget(Boolean(asset && lazy), 'Reconciliation campaign must remain a separate dynamic entry without a static importer.');
+        }
+        if (!retired && asset && lazy) {
           const limit = budgets.onDemandReconciliationCampaign;
           assertBudget(asset.bytes <= limit.totalBytes, `On-demand reconciliation campaign is ${asset.bytes} bytes (budget ${limit.totalBytes}).`);
           assertBudget(asset.gzipBytes <= limit.totalGzipBytes, `Compressed reconciliation campaign is ${asset.gzipBytes} bytes (budget ${limit.totalGzipBytes}).`);

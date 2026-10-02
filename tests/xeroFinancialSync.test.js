@@ -464,7 +464,8 @@ test('financial handlers and Finance review UI are registered without a schedule
   assert.match(ui, /summarizeXeroFinancialReconciliation/);
   assert.match(ui, /cutoffDate: XERO_FINANCIAL_CUTOFF/g);
   assert.doesNotMatch(ui, /setCutoffDate/);
-  assert.match(portal, /useState\('accounting'\)/);
+  assert.match(portal, /xeroIntegrityReport/);
+  assert.doesNotMatch(portal, /<XeroFinancialSync/);
   assert.match(financialService, /Date__c = null AND CreatedDate >= \$\{cutoff\}T00:00:00Z/);
   assert.doesNotMatch(financialService, /RecordType\.DeveloperName IN \('Receivable','Payable'\)/);
   assert.doesNotMatch(financialService, /AND Is_Deposit__c = false/);

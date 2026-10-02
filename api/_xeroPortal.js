@@ -1,4 +1,5 @@
 import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { isDeploymentReadOnly } from './_deploymentReadOnly.js';
 import {
   XERO_CONTACT_BATCH_SIZE,
   XERO_CONTACT_SYNC_MATCH_FIELD_LABELS,
@@ -743,7 +744,7 @@ async function readXeroPublicStatus(client, { env, fetchImpl, refresh = false })
   let refreshError = null;
   const expiresAtMs = Date.parse(stored?.expiresAt || '');
   const shouldRefresh = refresh || !Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now() + 90_000;
-  if (shouldRefresh && (stored?.refreshToken || env.XERO_REFRESH_TOKEN)) {
+  if (!isDeploymentReadOnly(env) && shouldRefresh && (stored?.refreshToken || env.XERO_REFRESH_TOKEN)) {
     try {
       connection = await getFreshXeroConnection(client, { env, fetchImpl });
     } catch (error) {
