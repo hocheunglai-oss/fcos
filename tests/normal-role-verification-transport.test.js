@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
-import { createNormalRoleVerificationRoute, stripNormalRoleProtectionHeaders } from '../scripts/lib/normal-role-verification-transport.mjs';
+import { createNormalRoleVerificationRoute, NORMAL_ROLE_TRANSPORT_BLOCKED_REASONS, stripNormalRoleProtectionHeaders } from '../scripts/lib/normal-role-verification-transport.mjs';
 import { compatibilityNormalRequestAllowed } from '../scripts/runtime-compatibility-normal-role.mjs';
 import { normalRoleRequestAllowed } from '../scripts/normal-role-release.mjs';
 import { fcosConnectionIdentifier } from '../config/fcosConnections.js';
@@ -39,6 +39,13 @@ async function run(f, requestAllowed = compatibilityNormalRequestAllowed, secret
   await createNormalRoleVerificationRoute({ origin, protectionBypass: secret, requestAllowed,
     onBlockedMutation: () => { blocked += 1; } })(f.route);
   return blocked;
+}
+
+async function blockedReasons(f, requestAllowed = compatibilityNormalRequestAllowed, secret = bypass) {
+  const reasons = [];
+  await createNormalRoleVerificationRoute({ origin, protectionBypass: secret, requestAllowed,
+    onBlockedMutation: reason => reasons.push(reason) })(f.route);
+  return reasons;
 }
 
 test('both protection headers are stripped case-insensitively without modifying ordinary headers', () => {
@@ -140,6 +147,22 @@ test('credential URL parameters and userinfo are refused without fetching or exp
   const f = fixture({ fetchError: `private failure ${bypass} ${incoming.authorization}` });
   assert.equal(await run(f), 1);
   assert.deepEqual(f.calls.map(call => call.kind), ['fetch', 'abort']);
+});
+
+test('transport denial diagnostics are fixed enums and never include request or error contents', async () => {
+  const secret = 'private-transport-error-token';
+  const cases = [
+    [fixture({ url: `${origin}/api/functions/hedgeDeskEntity`, body: { action: 'create', secret } }), 'REQUEST_POLICY_DENIED'],
+    [fixture({ url: `${origin}/?x-vercel-protection-bypass=${secret}`, method: 'GET', body: undefined }), 'UNSAFE_REQUEST'],
+    [fixture({ url: `${origin}/`, method: 'GET', body: undefined, status: 302 }), 'NO_REDIRECT_RESPONSE'],
+    [fixture({ fetchError: `connection failure ${secret}` }), 'TRANSPORT_FAILURE'],
+  ];
+  for (const [f, expected] of cases) {
+    const reasons = await blockedReasons(f);
+    assert.deepEqual(reasons, [expected]);
+    assert.ok(NORMAL_ROLE_TRANSPORT_BLOCKED_REASONS.includes(reasons[0]));
+    assert.doesNotMatch(JSON.stringify(reasons), new RegExp(secret));
+  }
 });
 
 test('both verifiers use the shared transport and both reviewed control digests include it', () => {
