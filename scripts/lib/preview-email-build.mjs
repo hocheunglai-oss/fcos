@@ -182,7 +182,7 @@ export function assertPreviewEmailBuildReceipt({ receipt, binding, records, now 
   return true;
 }
 
-function assertEnvironmentReview({ environment, run, approvals, trusted, completed, now }) {
+function assertEnvironmentReview({ environment, run, jobs, approvals, trusted, candidateSha, completed, now }) {
   const rules = environment?.protection_rules?.filter(row => row.type === 'required_reviewers') || [];
   const rule = rules.length === 1 ? rules[0] : null, reviewer = rule?.reviewers?.length === 1 ? rule.reviewers[0] : null;
   if (FCOS_RELEASE_APPROVAL_POLICY.mode !== 'single_operator' || environment?.name !== PREVIEW_EMAIL_BUILD_ENVIRONMENT || !positive(environment.id)
@@ -192,19 +192,35 @@ function assertEnvironmentReview({ environment, run, approvals, trusted, complet
   if (run?.repository?.full_name !== RELEASE_REPOSITORY || run.head_repository?.full_name !== RELEASE_REPOSITORY
     || run.head_branch !== trusted.branch || run.head_sha !== trusted.sha || run.event !== 'workflow_dispatch' || run.run_attempt !== 1
     || ![PREVIEW_EMAIL_BUILD_WORKFLOW, `${PREVIEW_EMAIL_BUILD_WORKFLOW}@${trusted.branch}`].includes(run.path)
-    || !positive(run.id) || !fresh(run.run_started_at, now) || run.actor?.login !== operator || run.triggering_actor?.login !== operator
+    || !positive(run.id) || !Number.isFinite(Date.parse(run.run_started_at)) || Date.parse(run.run_started_at) > now + 30000
+    || run.actor?.login !== operator || run.triggering_actor?.login !== operator
     || run.actor?.id !== reviewer.reviewer.id || run.triggering_actor?.id !== reviewer.reviewer.id
     || (completed === 'intent' ? !['in_progress', 'completed'].includes(run.status)
       : completed ? run.status !== 'completed' || run.conclusion !== 'success' : run.status !== 'in_progress')) failure('The exact first protected workflow run is required.');
   const reviews = (Array.isArray(approvals) ? approvals : []).filter(row => row.environments?.some(env => env.id === environment.id && env.name === environment.name));
   if (reviews.length !== 1 || reviews[0].state !== 'approved' || reviews[0].user?.login !== operator || reviews[0].user?.id !== reviewer.reviewer.id) failure('One exact human environment approval is required.');
+  // Environment approval can leave a workflow queued for hours. Only the exact
+  // first-attempt, environment-gated proof job start establishes execution age.
+  // An archive upload or a workflow updated_at cannot rejuvenate that job.
+  const job = Array.isArray(jobs) && jobs.length === 1 ? jobs[0] : null;
+  const jobCompleted = job?.status === 'completed';
+  if (!positive(job?.id) || job.run_id !== run.id || job.run_attempt !== 1 || job.name !== 'proof'
+    || job.workflow_name !== `Review FCOS Preview email source ${candidateSha}`
+    || job.head_sha !== trusted.sha || job.head_branch !== trusted.branch || !fresh(job.started_at, now)
+    || Date.parse(job.started_at) < Date.parse(run.run_started_at)
+    || (completed === 'intent' ? !['in_progress', 'completed'].includes(job.status)
+      : completed ? !jobCompleted || job.conclusion !== 'success' : job.status !== 'in_progress')
+    || jobCompleted && (!Number.isFinite(Date.parse(job.completed_at)) || Date.parse(job.completed_at) < Date.parse(job.started_at)
+      || Date.parse(job.completed_at) > now + 30000
+      || !['success', 'failure', 'cancelled', 'timed_out', 'action_required', 'neutral', 'skipped', 'stale', 'startup_failure'].includes(job.conclusion))
+    || !jobCompleted && (job.conclusion !== null || job.completed_at !== null)) failure('The exact fresh first-attempt approved proof job is required.');
   return { reviewerId: reviewer.reviewer.id, runId: run.id, environmentId: environment.id };
 }
 
-export function assertPreviewEmailBuildProtection({ repository, branch, protection, environment, variables, secrets, run, approvals, oidcClaims, candidateSha, harnessSha, controlRevision, now = Date.now() } = {}) {
+export function assertPreviewEmailBuildProtection({ repository, branch, protection, environment, variables, secrets, run, jobs, approvals, oidcClaims, candidateSha, harnessSha, controlRevision, now = Date.now() } = {}) {
   const trusted = assertProtectedDefault(repository, branch, protection);
   previewEmailBuildCandidate(candidateSha);
-  const approved = assertEnvironmentReview({ environment, run, approvals, trusted, completed: false, now });
+  const approved = assertEnvironmentReview({ environment, run, jobs, approvals, trusted, candidateSha, completed: false, now });
   const pins = { [PREVIEW_EMAIL_BUILD_ENABLE]: 'true', FCOS_RUNTIME_COMPATIBILITY_RELEASE_ENABLED: 'false',
     FCOS_PREVIEW_EMAIL_BUILD_REVIEWED_SHA: candidateSha, FCOS_PREVIEW_EMAIL_BUILD_REVIEWED_HARNESS_SHA: harnessSha,
     FCOS_PREVIEW_EMAIL_BUILD_REVIEWED_CONTRACT_SHA256: PREVIEW_EMAIL_CONTRACT_SHA256,
@@ -270,6 +286,10 @@ async function paginatedGithub(reads, endpoint, field) {
   }
   failure('GitHub metadata scan exceeded its bounded pagination.');
 }
+export async function collectPreviewEmailBuildJobs({ reads, runId } = {}) {
+  if (!positive(runId)) failure('Exact first-attempt Preview proof job identity is required.');
+  return paginatedGithub(reads, `repos/${RELEASE_REPOSITORY}/actions/runs/${runId}/attempts/1/jobs`, 'jobs');
+}
 async function protectedSource(reads) {
   const user = await reads.json('user');
   if (user?.login !== operator || !positive(user.id)) failure('Pinned human GitHub collector identity is required.');
@@ -279,9 +299,10 @@ async function protectedSource(reads) {
   const trusted = assertProtectedDefault(repository, branch, protection);
   return { repository, branch, protection, trusted };
 }
-async function verifiedArchive({ reads, source, run, filename, name, now, completed, unpack }) {
+async function verifiedArchive({ reads, source, run, candidateSha, filename, name, now, completed, unpack }) {
   assertEnvironmentReview({ environment: await reads.json(`repos/${RELEASE_REPOSITORY}/environments/${PREVIEW_EMAIL_BUILD_ENVIRONMENT}`),
-    run, approvals: await reads.json(`repos/${RELEASE_REPOSITORY}/actions/runs/${run.id}/approvals`), trusted: source.trusted, completed, now });
+    run, jobs: await collectPreviewEmailBuildJobs({ reads, runId: run.id }),
+    approvals: await reads.json(`repos/${RELEASE_REPOSITORY}/actions/runs/${run.id}/approvals`), trusted: source.trusted, candidateSha, completed, now });
   const artifacts = await paginatedGithub(reads, `repos/${RELEASE_REPOSITORY}/actions/runs/${run.id}/artifacts`, 'artifacts');
   const matches = artifacts.filter(row => row.name === name && row.expired === false);
   const artifact = matches.length === 1 ? matches[0] : null;
@@ -295,7 +316,8 @@ export async function collectTrustedPreviewEmailIntent({ reads, runId, candidate
   if (!positive(runId)) failure('Original approved Preview build run is required.');
   const source = await protectedSource(reads);
   const run = await reads.json(`repos/${RELEASE_REPOSITORY}/actions/runs/${runId}`);
-  const result = await verifiedArchive({ reads, source, run, filename: PREVIEW_EMAIL_INTENT_FILENAME,
+  if (run?.id !== runId) failure('Original approved Preview intent must use its exact provider run.');
+  const result = await verifiedArchive({ reads, source, run, candidateSha, filename: PREVIEW_EMAIL_INTENT_FILENAME,
     name: `fcos-preview-email-intent-${runId}`, now, completed, unpack });
   const intent = result.payload;
   assertIntent(intent, now);
@@ -314,7 +336,7 @@ export async function collectTrustedPreviewEmailBuild({ reads, api, binding, rec
   for (const run of runs) {
     if (run.head_sha !== source.trusted.sha || !fresh(run.updated_at, now)) continue;
     try {
-      const result = await verifiedArchive({ reads, source, run, filename: PREVIEW_EMAIL_BUILD_FILENAME,
+      const result = await verifiedArchive({ reads, source, run, candidateSha: binding.sha, filename: PREVIEW_EMAIL_BUILD_FILENAME,
         name: `fcos-preview-email-build-${binding.sha}`, now, completed: true, unpack });
       const receipt = result.payload;
       assertPreviewEmailBuildReceipt({ receipt, binding, records: liveRecords, now });

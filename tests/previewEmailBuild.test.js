@@ -1,11 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { createHash } from 'node:crypto';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { FCOS_RELEASE_APPROVAL_POLICY, fcosConnectionIdentifier } from '../config/fcosConnections.js';
 import { createPreviewEmailBuildRequest, createPreviewEmailBuildIntent, assertPreviewEmailBuildReceipt,
-  previewEmailBuildControlRevision, runControlledPreviewEmailBuild, collectPreviewEmailEnvironmentRecords, collectTrustedPreviewEmailBuild } from '../scripts/lib/preview-email-build.mjs';
-import { runPreviewEmailProofBuild, previewEmailBuildArguments } from '../scripts/preview-email-proof-build.mjs';
+  previewEmailBuildControlRevision, runControlledPreviewEmailBuild, collectPreviewEmailEnvironmentRecords, collectTrustedPreviewEmailBuild,
+  collectTrustedPreviewEmailIntent, collectPreviewEmailBuildJobs, assertPreviewEmailBuildProtection,
+  PREVIEW_EMAIL_CONTRACT_SHA256 } from '../scripts/lib/preview-email-build.mjs';
+import { runPreviewEmailProofBuild, previewEmailBuildArguments, createPreviewEmailBuildDiagnostics } from '../scripts/preview-email-proof-build.mjs';
 import { LEGACY_EMAIL_BASELINE_CONTRACT as contract } from '../scripts/lib/legacy-email-baseline-proof.mjs';
 
 const now = Date.parse('2026-10-02T08:00:00.000Z');
@@ -78,6 +82,34 @@ test('readback-only recovery cannot POST even when no matching deployment exists
   assert.equal(value.creates(), 0);
 });
 
+test('shared diagnostic journal retains one durable execution claim before the actual creation or readback state machine', async () => {
+  for (const mode of ['create', 'readback']) {
+    const directory = mkdtempSync(join(tmpdir(), 'fcos-preview-build-claim-'));
+    try {
+      const value = fixture(); value.options.mode = mode;
+      if (mode === 'readback') value.options.discover = async () => value.raw;
+      const diagnosticsFor = currentMode => createPreviewEmailBuildDiagnostics({ mode: currentMode, runId: 99, directory,
+        trustedCwd: process.cwd(), candidateCwd: process.cwd(), now: () => now });
+      const prepare = diagnosticsFor('prepare'); await prepare.stage('runner_context', () => {}); prepare.close();
+      const execute = async currentMode => {
+        const diagnostics = diagnosticsFor(currentMode);
+        try {
+          await diagnostics.stage('execution_claim', () => diagnostics.claimExecution());
+          return await diagnostics.stage('controlled_build', () => runControlledPreviewEmailBuild({ ...value.options,
+            mode: currentMode, journal: diagnostics.journal }));
+        } finally { diagnostics.close(); }
+      };
+      assert.equal((await execute(mode)).deployment.id, value.raw.id);
+      await assert.rejects(() => execute(mode), /execution_claim/);
+      await assert.rejects(() => execute(mode === 'create' ? 'readback' : 'create'), /execution_claim/);
+      assert.equal(value.creates(), mode === 'create' ? 1 : 0);
+      const rows = readFileSync(join(directory, 'fcos-preview-email-journal-99.jsonl'), 'utf8').trim().split('\n').map(row => JSON.parse(row));
+      assert.equal(rows.filter(row => row.phase === 'create_requested').length, mode === 'create' ? 1 : 0);
+      assert.equal(rows.filter(row => row.phase === 'controlled_build' && row.status === 'started').length, 1);
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  }
+});
+
 test('READY readback requires exact target, repository, operation and actual source receipt', async () => {
   for (const change of [
     value => { value.raw.target = 'production'; }, value => { value.raw.meta.githubCommitSha = 'c'.repeat(40); },
@@ -140,6 +172,9 @@ async function trustedFixture() {
   const run = { id: 99, repository, head_repository: repository, head_branch: 'main', head_sha: harnessSha,
     path: '.github/workflows/preview-email-proof-build.yml', event: 'workflow_dispatch', run_attempt: 1,
     status: 'completed', conclusion: 'success', updated_at: iso(now), run_started_at: iso(now - 2000), actor: reviewer, triggering_actor: reviewer };
+  const jobs = [{ id: 9, run_id: run.id, run_attempt: 1, name: 'proof',
+    workflow_name: `Review FCOS Preview email source ${pin.sha}`, head_sha: harnessSha, head_branch: 'main',
+    status: 'completed', conclusion: 'success', started_at: iso(now - 2000), completed_at: iso(now - 500) }];
   const protection = { enforce_admins: { enabled: true }, required_status_checks: { strict: true,
     checks: FCOS_RELEASE_APPROVAL_POLICY.requiredChecks.map(context => ({ context, app_id: FCOS_RELEASE_APPROVAL_POLICY.statusCheckAppId })) } };
   const environment = { id: 5, name: 'fcos-runtime-compatibility-release', can_admins_bypass: false,
@@ -166,6 +201,7 @@ async function trustedFixture() {
       if (path.includes('/actions/workflows/')) return { total_count: 1, workflow_runs: [run] };
       if (path === `${prefix}/environments/fcos-runtime-compatibility-release`) return environment;
       if (path === `${prefix}/actions/runs/99/approvals`) return approvals;
+      if (path.includes('/actions/runs/99/attempts/1/jobs?')) return { total_count: jobs.length, jobs };
       if (path.includes('/actions/runs/99/artifacts?')) return { total_count: 2, artifacts: [artifact, intentArtifact] };
       if (path === `${prefix}/actions/runs/99`) return run;
       throw new Error('unexpected fixed repository read');
@@ -175,8 +211,74 @@ async function trustedFixture() {
   const options = { reads, api: async () => value.raw, binding: { ...receipt.candidate, harnessSha,
     deploymentId: receipt.deployment.id, candidateUrl: receipt.deployment.url }, records: value.environment, now,
     unpack: buffer => JSON.parse(buffer.toString()), readVersion: async () => value.version };
-  return { options, run, artifact, approvals, environment, protection, archive };
+  return { options, run, jobs, repository, reviewer, artifact, approvals, environment, protection, archive };
 }
+
+async function liveProtectionFixture() {
+  const value = await trustedFixture();
+  value.run.status = 'in_progress'; value.run.conclusion = null;
+  value.jobs[0].status = 'in_progress'; value.jobs[0].conclusion = null; value.jobs[0].completed_at = null;
+  const controlRevision = previewEmailBuildControlRevision(process.cwd());
+  const pins = { FCOS_PREVIEW_EMAIL_BUILD_ENABLED: 'true', FCOS_RUNTIME_COMPATIBILITY_RELEASE_ENABLED: 'false',
+    FCOS_PREVIEW_EMAIL_BUILD_REVIEWED_SHA: pin.sha, FCOS_PREVIEW_EMAIL_BUILD_REVIEWED_HARNESS_SHA: harnessSha,
+    FCOS_PREVIEW_EMAIL_BUILD_REVIEWED_CONTRACT_SHA256: PREVIEW_EMAIL_CONTRACT_SHA256,
+    FCOS_PREVIEW_EMAIL_BUILD_REVIEWED_CONTROL_SHA256: controlRevision, FCOS_RELEASE_VERCEL_TOKEN_ID: 'fixture-token-id' };
+  value.protectionInputs = { repository: value.repository, branch: { name: 'main', protected: true, commit: { sha: harnessSha } },
+    protection: value.protection, environment: value.environment, run: value.run, jobs: value.jobs, approvals: value.approvals,
+    variables: { variables: Object.entries(pins).map(([name, value]) => ({ name, value })) },
+    secrets: { secrets: ['FCOS_RELEASE_GH_TOKEN', 'FCOS_RELEASE_VERCEL_TOKEN'].map(name => ({ name })) },
+    oidcClaims: { iss: 'https://token.actions.githubusercontent.com', aud: 'fcos-production-release',
+      repository: value.repository.full_name, repository_id: String(value.repository.id),
+      sub: `repo:${value.repository.full_name}:environment:${value.environment.name}`,
+      workflow_ref: `${value.repository.full_name}/.github/workflows/preview-email-proof-build.yml@refs/heads/main`,
+      workflow_sha: harnessSha, sha: harnessSha, ref: 'refs/heads/main', run_id: String(value.run.id), run_attempt: '1',
+      event_name: 'workflow_dispatch', exp: now / 1000 + 300 }, candidateSha: pin.sha, harnessSha, controlRevision, now };
+  return value;
+}
+
+test('approved live Preview freshness starts at its exact first proof job after a long approval wait', async () => {
+  const value = await liveProtectionFixture();
+  value.run.run_started_at = iso(now - 93 * 60 * 1000);
+  assert.equal(assertPreviewEmailBuildProtection(value.protectionInputs).runId, 99);
+  for (const change of [
+    item => { item.jobs[0].started_at = iso(now - 1800001); },
+    item => { item.jobs[0].started_at = iso(now + 30001); },
+    item => { item.jobs[0].started_at = iso(now - 3000); },
+    item => { item.jobs[0].run_id = 98; }, item => { item.jobs[0].run_attempt = 2; },
+    item => { item.jobs[0].name = 'other'; }, item => { item.jobs[0].workflow_name = `Review FCOS Preview email source ${'c'.repeat(40)}`; },
+    item => { item.jobs[0].head_sha = 'c'.repeat(40); }, item => { item.jobs[0].head_branch = 'other'; },
+    item => { item.jobs[0].status = 'queued'; }, item => { item.jobs[0].conclusion = 'failure'; },
+    item => { item.jobs.push({ ...item.jobs[0], id: 10 }); }, item => { item.jobs.length = 0; },
+    item => { item.run.run_attempt = 2; }, item => { item.approvals.length = 0; },
+    item => { item.protectionInputs.oidcClaims.run_attempt = '2'; },
+  ]) {
+    const changed = await liveProtectionFixture(); change(changed);
+    assert.throws(() => assertPreviewEmailBuildProtection(changed.protectionInputs));
+  }
+});
+
+test('completed archives use the same actual job clock and preserve failed original-intent readback', async () => {
+  const value = await trustedFixture(); value.run.run_started_at = iso(now - 93 * 60 * 1000);
+  assert.equal((await collectTrustedPreviewEmailBuild(value.options)).trust.runId, 99);
+  value.run.conclusion = 'failure'; value.jobs[0].conclusion = 'failure';
+  assert.equal((await collectTrustedPreviewEmailIntent({ reads: value.options.reads, runId: 99, candidateSha: pin.sha,
+    now, completed: 'intent', unpack: value.options.unpack })).runId, 99);
+  await assert.rejects(() => collectTrustedPreviewEmailBuild(value.options));
+  value.jobs[0].started_at = iso(now - 1800001);
+  // Fresh run.updated_at and artifact metadata cannot renew a stale proof job.
+  await assert.rejects(() => collectTrustedPreviewEmailIntent({ reads: value.options.reads, runId: 99, candidateSha: pin.sha,
+    now, completed: 'intent', unpack: value.options.unpack }));
+});
+
+test('first-attempt job collection rejects partial and duplicate provider pages without rerun fallback', async () => {
+  const value = await trustedFixture(), paths = [];
+  assert.deepEqual(await collectPreviewEmailBuildJobs({ reads: { json: async path => { paths.push(path); return { total_count: 1, jobs: value.jobs }; } }, runId: 99 }), value.jobs);
+  assert.deepEqual(paths, ['repos/hocheunglai-oss/fcos/actions/runs/99/attempts/1/jobs?per_page=100&page=1']);
+  for (const response of [{ total_count: 2, jobs: [] }, { total_count: 1, jobs: [value.jobs[0], value.jobs[0]] },
+    { total_count: 2, jobs: [value.jobs[0], value.jobs[0]] }, { total_count: 1, jobs: [{ ...value.jobs[0], id: undefined }] }]) {
+    await assert.rejects(() => collectPreviewEmailBuildJobs({ reads: { json: async () => response }, runId: 99 }));
+  }
+});
 
 test('trusted collector independently verifies protected source, human review, both archive digests and READY/source readback', async () => {
   const value = await trustedFixture();
