@@ -4,7 +4,8 @@ import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { COMPATIBILITY_NORMAL_MODULES, compatibilityNormalRequestAllowed, assertCompatibilityNormalIdentity,
-  compatibilityNormalDataLoaded, verifyRuntimeCompatibilityNormalRole, compatibilityLegacyXeroReadRequest } from '../scripts/runtime-compatibility-normal-role.mjs';
+  compatibilityNormalDataLoaded, verifyRuntimeCompatibilityNormalRole, compatibilityLegacyXeroReadRequest,
+  compatibilityNormalDiagnosticError, compatibilityNormalDiagnosticLine } from '../scripts/runtime-compatibility-normal-role.mjs';
 import { FIRST_RUNTIME_ROLLOUT, compatibilityReadOnlyGuardsVerified } from '../scripts/lib/runtime-compatibility-release.mjs';
 import { verifyRuntimeCompatibility } from '../scripts/verify-runtime-compatibility.mjs';
 import { fcosConnectionIdentifier } from '../config/fcosConnections.js';
@@ -119,4 +120,59 @@ test('disabled or unprotected normal workflow and every different candidate fail
   assert.match(workflow, /deployments: read/);
   assert.match(workflow, /fetch-depth: 0/);
   assert.doesNotMatch(workflow, /(?:contents|actions|deployments): write|working-directory: candidate/);
+});
+
+test('normal-role diagnostics contain only fixed stages, reasons, module-handler pairs, and safe status codes', () => {
+  const secret = 'private-token-and-url-value';
+  const modules = new Map([['dashboard', 'MISSING_DATA'], ['settings', 'SETTINGS_FIELD_MISSING'], ['review', secret]]);
+  const line = compatibilityNormalDiagnosticLine({ normalRoleDiagnostic: {
+    stage: 'AUTH_RESPONSE', reason: 'AUTH_RESPONSE_INVALID', module: 'dashboard', handler: 'dashboardStemList', status: 403,
+    moduleReasons: modules, blockedRequest: 'NO_REDIRECT_RESPONSE', error: secret, url: `https://private.example/${secret}`,
+    body: { secret }, headers: { authorization: secret }, storage: secret,
+  } });
+  const diagnostic = JSON.parse(line);
+  assert.deepEqual(Object.keys(diagnostic), ['type', 'stage', 'reason', 'module', 'handler', 'status', 'modules', 'blockedRequest']);
+  assert.equal(diagnostic.type, 'fcos_normal_role_verification_diagnostic');
+  assert.equal(diagnostic.stage, 'AUTH_RESPONSE');
+  assert.equal(diagnostic.reason, 'AUTH_RESPONSE_INVALID');
+  assert.equal(diagnostic.status, 403);
+  assert.equal(diagnostic.modules.length, COMPATIBILITY_NORMAL_MODULES.length);
+  assert.deepEqual(diagnostic.modules.find(row => row.module === 'dashboard'), { module: 'dashboard', handler: 'dashboardStemList', reason: 'MISSING_DATA' });
+  assert.deepEqual(diagnostic.modules.find(row => row.module === 'review'), { module: 'review', handler: 'salesforceDashboardFiltered', reason: 'NOT_REACHED' });
+  assert.doesNotMatch(line, new RegExp(secret));
+  assert.doesNotMatch(line, /private\.example|authorization|storage|body/i);
+  const fallback = JSON.parse(compatibilityNormalDiagnosticLine({ normalRoleDiagnostic: { stage: secret, reason: secret, module: 'unknown', handler: secret, status: 999 } }));
+  assert.deepEqual(fallback, { type: 'fcos_normal_role_verification_diagnostic', stage: 'CONFIGURATION', reason: 'STAGE_FAILED' });
+  const rebuilt = JSON.parse(compatibilityNormalDiagnosticLine({ normalRoleDiagnostic: {
+    stage: 'COVERAGE', reason: 'COVERAGE_INCOMPLETE', moduleReasons: { get: () => { throw new Error(secret); } },
+    modules: [{ module: 'dashboard', handler: 'dashboardStemList', reason: 'MISSING_DATA', private: secret },
+      { module: secret, handler: secret, reason: 'PASS', private: secret }],
+  } }));
+  assert.equal(rebuilt.modules.length, COMPATIBILITY_NORMAL_MODULES.length);
+  assert.deepEqual(rebuilt.modules.find(row => row.module === 'dashboard'), { module: 'dashboard', handler: 'dashboardStemList', reason: 'MISSING_DATA' });
+  assert.doesNotMatch(JSON.stringify(rebuilt), new RegExp(secret));
+});
+
+test('initial protected-harness failures identify a constant stage without invoking fetch or emitting private values', async () => {
+  const secret = 'private-normal-role-secret';
+  await assert.rejects(() => verifyRuntimeCompatibilityNormalRole({ env: { FCOS_COMPATIBILITY_NORMAL_ROLE_ENABLED: secret },
+    fetchImpl: () => assert.fail('disabled verification must not fetch') }), error => {
+    const diagnostic = JSON.parse(compatibilityNormalDiagnosticLine(error));
+    assert.deepEqual(diagnostic, { type: 'fcos_normal_role_verification_diagnostic', stage: 'CONFIGURATION', reason: 'CONFIGURATION_INVALID' });
+    assert.doesNotMatch(JSON.stringify(diagnostic), new RegExp(secret));
+    return true;
+  });
+});
+
+test('diagnostic error lifecycle retains the rebuilt safe module catalogue through final emission', () => {
+  const error = compatibilityNormalDiagnosticError('COVERAGE', 'COVERAGE_INCOMPLETE', { moduleReasons: new Map([
+    ['dashboard', 'MISSING_DATA'], ['settings', 'SETTINGS_FIELD_MISSING'], ['review', 'WORKFLOW_MISSING'],
+  ]) });
+  const diagnostic = JSON.parse(compatibilityNormalDiagnosticLine(error));
+  assert.equal(diagnostic.stage, 'COVERAGE');
+  assert.equal(diagnostic.reason, 'COVERAGE_INCOMPLETE');
+  assert.equal(diagnostic.modules.length, COMPATIBILITY_NORMAL_MODULES.length);
+  assert.deepEqual(diagnostic.modules.find(row => row.module === 'dashboard'), { module: 'dashboard', handler: 'dashboardStemList', reason: 'MISSING_DATA' });
+  assert.deepEqual(diagnostic.modules.find(row => row.module === 'review'), { module: 'review', handler: 'salesforceDashboardFiltered', reason: 'WORKFLOW_MISSING' });
+  assert.deepEqual(diagnostic.modules.find(row => row.module === 'markets'), { module: 'markets', handler: 'hedgeMarkets', reason: 'NOT_REACHED' });
 });

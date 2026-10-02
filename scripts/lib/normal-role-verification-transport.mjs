@@ -1,6 +1,12 @@
 import { canonicalFcosE2eCandidateUrl } from '../verify-e2e-candidate.mjs';
 
 const protectionHeaders = ['x-vercel-protection-bypass', 'x-vercel-set-bypass-cookie'];
+export const NORMAL_ROLE_TRANSPORT_BLOCKED_REASONS = Object.freeze([
+  'REQUEST_POLICY_DENIED',
+  'UNSAFE_REQUEST',
+  'NO_REDIRECT_RESPONSE',
+  'TRANSPORT_FAILURE',
+]);
 
 export function stripNormalRoleProtectionHeaders(headers) {
   const clean = new Headers(headers);
@@ -28,30 +34,35 @@ export function createNormalRoleVerificationRoute({ origin, protectionBypass, re
     throw new Error('Normal-role verification transport configuration is invalid.');
   }
   return async route => {
+    const blocked = reason => onBlockedMutation(NORMAL_ROLE_TRANSPORT_BLOCKED_REASONS.includes(reason) ? reason : 'TRANSPORT_FAILURE');
     try {
       const request = route.request(), url = request.url(), method = request.method();
       let body;
-      try { body = request.postDataJSON(); } catch { /* Invalid bodies have no read authority. */ }
+      try { body = request.postDataJSON(); } catch { body = undefined; /* BODY_JSON_UNAVAILABLE has no read authority. */ }
       if (!requestAllowed({ url, method, body }, preview)) {
-        if (!['GET', 'HEAD'].includes(method)) onBlockedMutation();
+        if (!['GET', 'HEAD'].includes(method)) blocked('REQUEST_POLICY_DENIED');
         await route.abort(); return;
       }
       const target = new URL(url);
       if (target.protocol !== 'https:' || target.username || target.password
         || [...target.searchParams.keys()].some(name => protectionHeaders.includes(name.toLowerCase()))) {
-        throw new Error('Unsafe verification request.');
+        blocked('UNSAFE_REQUEST');
+        await route.abort().catch(() => {}); return;
       }
       const headers = stripNormalRoleProtectionHeaders(request.headers());
       if (target.origin === preview && protectionBypass) headers['x-vercel-protection-bypass'] = protectionBypass;
       const response = await route.fetch({ headers, maxRedirects: 0, timeout: 20000 });
       const status = response.status();
       if (response.url() !== url || !Number.isInteger(status) || status < 200 || status > 599
-        || status >= 300 && status < 400) throw new Error('Unexpected verification response.');
+        || status >= 300 && status < 400) {
+        blocked('NO_REDIRECT_RESPONSE');
+        await route.abort().catch(() => {}); return;
+      }
       await route.fulfill({ response, headers: stripNormalRoleResponseProtectionHeaders(response.headers()) });
     } catch {
       // Request errors can include private headers. A failed transport blocks
       // complete coverage and reports no private error or response metadata.
-      onBlockedMutation();
+      blocked('TRANSPORT_FAILURE');
       await route.abort().catch(() => {});
     }
   };
