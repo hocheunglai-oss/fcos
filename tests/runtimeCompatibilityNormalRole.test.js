@@ -69,14 +69,16 @@ test('FCOS API GET and HEAD never fall through to POST classifiers when bodies a
   }
 });
 
-test('independent final four-guard source proof allows safe real reads and rejects the original unsafe candidate', async () => {
+test('independent final five-guard source proof allows safe real reads and rejects the original unsafe candidate', async () => {
   const env = { FCOS_COMPATIBILITY_NORMAL_ROLE_ENABLED: 'true', GITHUB_ACTIONS: 'true', GITHUB_REF_PROTECTED: 'true', GITHUB_REPOSITORY: fcosConnectionIdentifier('github', 'Repository'),
     GITHUB_SHA: 'a'.repeat(40), FCOS_E2E_EXPECTED_COMMIT: FIRST_RUNTIME_ROLLOUT.candidateSha, FCOS_E2E_CANDIDATE_URL: url };
   const cwd = fileURLToPath(new URL('..', import.meta.url));
   const scope = verifyRuntimeCompatibility({ cwd, baseCommit: FIRST_RUNTIME_ROLLOUT.previousSha, candidateCommit: FIRST_RUNTIME_ROLLOUT.candidateSha });
   assert.equal(compatibilityReadOnlyGuardsVerified(scope), true);
+  assert.equal(scope.readOnlyGuards.length, 5);
+  assert.ok(Object.values(scope.preservation).every(Boolean));
   await assert.rejects(() => verifyRuntimeCompatibilityNormalRole({ env: { ...env, FCOS_E2E_EXPECTED_COMMIT: '33d97ea74439e27128fd148df78a1e6be6a2f844' }, fetchImpl: () => assert.fail('no unsafe legacy session use') }));
-  for (const file of ['api/_hedgeDeskService.js', 'api/_xeroPortal.js', 'api/functions/[name].js', 'api/_xeroContactSync.js']) {
+  for (const file of ['api/_hedgeDeskService.js', 'api/_xeroPortal.js', 'api/functions/[name].js', 'api/_xeroContactSync.js', 'api/_emailRouterCore.js']) {
     const get = ref => execFileSync('git', ['show', `${ref}:${file}`], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
     assert.notEqual(get(FIRST_RUNTIME_ROLLOUT.previousSha), get(FIRST_RUNTIME_ROLLOUT.candidateSha));
     if (file.includes('hedge')) { assert.match(get(FIRST_RUNTIME_ROLLOUT.candidateSha), /expiryAutomation = isDeploymentReadOnly\(\)/); assert.match(get(FIRST_RUNTIME_ROLLOUT.candidateSha), /requireDeploymentMutationAllowed\(!isReadOnlyHedgeDeskAction\(body\)\)/); }
@@ -86,12 +88,32 @@ test('independent final four-guard source proof allows safe real reads and rejec
       const valid = candidate.indexOf('return stored;', read), guard = candidate.indexOf('requireDeploymentMutationAllowed(true, env);', read);
       assert.ok(valid < guard && guard < candidate.indexOf('const config = xeroConfig', read) && guard < candidate.indexOf('control.claimRefresh', read));
     }
+    else if (file.includes('emailRouter')) {
+      const candidate = get(FIRST_RUNTIME_ROLLOUT.candidateSha);
+      assert.match(candidate, /if \(!isDeploymentReadOnly\(dependencies\.env \|\| process\.env\)\) await syncEmailRouterMetadata/);
+      const guard = candidate.indexOf('if (indexed && !isDeploymentReadOnly(dependencies.env || process.env)) {');
+      assert.ok(guard >= 0 && guard < candidate.indexOf('const metadataJob = synchronizeEmailRouterAttachmentMetadata'));
+    }
     else if (file.includes('xero')) assert.match(get(FIRST_RUNTIME_ROLLOUT.candidateSha), /if \(!isDeploymentReadOnly\(env\) && shouldRefresh/);
     else assert.match(get(FIRST_RUNTIME_ROLLOUT.candidateSha), /name === 'hedgeDeskEntity' \? !isReadOnlyHedgeDeskAction\(body\)/);
   }
   const source = readFileSync(new URL('../scripts/runtime-compatibility-normal-role.mjs', import.meta.url), 'utf8');
   assert.ok(source.indexOf('compatibilityReadOnlyGuardsVerified(scope)') < source.indexOf('FCOS_NORMAL_ROLE_STORAGE_STATE_BASE64, url'));
   assert.match(source, /compatibilityRuntimePreviewVerified\(runtime/);
+});
+
+test('the old immutable four-guard candidate fails source completeness and normal verification before credential access', async () => {
+  const oldCandidate = 'f3d4cadfbaad7c25c83205350bb9be572493f47c';
+  const cwd = fileURLToPath(new URL('..', import.meta.url));
+  assert.throws(() => verifyRuntimeCompatibility({ cwd, baseCommit: FIRST_RUNTIME_ROLLOUT.previousSha, candidateCommit: oldCandidate }), /Complete read-only/);
+  assert.deepEqual(execFileSync('git', ['diff', '--name-only', oldCandidate, FIRST_RUNTIME_ROLLOUT.candidateSha], { cwd, encoding: 'utf8' }).trim().split('\n'),
+    ['api/_emailRouterCore.js', 'tests/emailRouterReadOnly.test.js']);
+  const env = { FCOS_COMPATIBILITY_NORMAL_ROLE_ENABLED: 'true', GITHUB_ACTIONS: 'true', GITHUB_REF_PROTECTED: 'true', GITHUB_REPOSITORY: fcosConnectionIdentifier('github', 'Repository'),
+    GITHUB_SHA: 'a'.repeat(40), FCOS_E2E_EXPECTED_COMMIT: oldCandidate,
+    get FCOS_NORMAL_ROLE_STORAGE_STATE_BASE64() { assert.fail('old source must never read credentials'); },
+  };
+  await assert.rejects(() => verifyRuntimeCompatibilityNormalRole({ env, fetchImpl: () => assert.fail('old source must never use network') }),
+    error => error.normalRoleDiagnostic?.stage === 'CONFIGURATION' && error.normalRoleDiagnostic?.reason === 'CONFIGURATION_INVALID');
 });
 
 test('active real identity and loaded business data are mandatory; inactive/CI/headings/null settings do not qualify', () => {

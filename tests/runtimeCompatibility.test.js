@@ -65,23 +65,60 @@ function guardFixture() {
   input.candidateTree.push(row('api/_xeroContactSync.js', '9'.repeat(40)));
   input.baseTree.push(row('api/_hedgeDeskService.js', '1'.repeat(40)), row('api/_xeroPortal.js', '2'.repeat(40)));
   input.candidateTree.push(row('api/_hedgeDeskService.js', '3'.repeat(40)), row('api/_xeroPortal.js', '4'.repeat(40)));
-  const blobs = { ['8'.repeat(40)]: contactOriginal, ['9'.repeat(40)]: contactAfter, ['1'.repeat(40)]: hedgeOriginal, ['2'.repeat(40)]: xeroOriginal, ['3'.repeat(40)]: hedgeAfter, ['4'.repeat(40)]: xeroAfter, ['5'.repeat(40)]: wrapperOriginal, ['6'.repeat(40)]: wrapperAfter, ['7'.repeat(40)]: "// Snapshot reads skip expiry using trusted server deployment configuration.\nconst READ_ACTIONS = new Set(['list', 'filter', 'get', 'snapshot']);\n\nexport function isReadOnlyHedgeDeskAction(body = {}) {\n  return READ_ACTIONS.has(String(body?.action || 'list'));\n}\n" };
+  const emailOriginal = "import { requireReadOnlyCiOperation } from './_readOnlyCiAccess.js';\n  await syncEmailRouterMetadata({ client, mailbox, folder, messages });\n  if (indexed) {\n    const metadataJob = synchronizeEmailRouterAttachmentMetadata(client, indexed, attachments).catch(() => null);\n  }\n";
+  const emailAfter = emailOriginal.replace("from './_readOnlyCiAccess.js';\n", "from './_readOnlyCiAccess.js';\nimport { isDeploymentReadOnly } from './_deploymentReadOnly.js';\n")
+    .replace('  await syncEmailRouterMetadata({ client, mailbox, folder, messages });', '  if (!isDeploymentReadOnly(dependencies.env || process.env)) await syncEmailRouterMetadata({ client, mailbox, folder, messages });')
+    .replace('  if (indexed) {', '  if (indexed && !isDeploymentReadOnly(dependencies.env || process.env)) {');
+  input.baseTree.push(row('api/_emailRouterCore.js', '0'.repeat(40)));
+  input.candidateTree.push(row('api/_emailRouterCore.js', 'f'.repeat(40)), row('tests/emailRouterReadOnly.test.js', 'c'.repeat(40)));
+  const blobs = { ['0'.repeat(40)]: emailOriginal, ['f'.repeat(40)]: emailAfter, ['8'.repeat(40)]: contactOriginal, ['9'.repeat(40)]: contactAfter, ['1'.repeat(40)]: hedgeOriginal, ['2'.repeat(40)]: xeroOriginal, ['3'.repeat(40)]: hedgeAfter, ['4'.repeat(40)]: xeroAfter, ['5'.repeat(40)]: wrapperOriginal, ['6'.repeat(40)]: wrapperAfter, ['7'.repeat(40)]: "// Snapshot reads skip expiry using trusted server deployment configuration.\nconst READ_ACTIONS = new Set(['list', 'filter', 'get', 'snapshot']);\n\nexport function isReadOnlyHedgeDeskAction(body = {}) {\n  return READ_ACTIONS.has(String(body?.action || 'list'));\n}\n" };
   const originalRead = input.readBlob;
   input.readBlob = sha => blobs[sha] ?? originalRead(sha);
   return { input, blobs };
 }
 
-test('only the complete exact read-only guard transformations are allowed in financial modules', () => {
+test('only the complete five exact read-only guard transformations are allowed in protected modules', () => {
   const { input } = guardFixture();
   const proof = runtimeCompatibilityScope(input);
-  assert.deepEqual(proof.readOnlyGuards, ['api/_hedgeDeskService.js', 'api/_xeroContactSync.js', 'api/_xeroPortal.js', 'api/functions/[name].js']);
+  assert.deepEqual(proof.readOnlyGuards, ['api/_emailRouterCore.js', 'api/_hedgeDeskService.js', 'api/_xeroContactSync.js', 'api/_xeroPortal.js', 'api/functions/[name].js']);
   assert.match(proof.reviewedException, /ordinary Production logic is preserved/);
-  for (const target of ['3'.repeat(40), '4'.repeat(40), '6'.repeat(40), '9'.repeat(40)]) {
+  for (const target of ['3'.repeat(40), '4'.repeat(40), '6'.repeat(40), '9'.repeat(40), 'f'.repeat(40)]) {
     const { input, blobs } = guardFixture();
-    blobs[target] += '\n// additional financial edit';
-    assert.throws(() => runtimeCompatibilityScope(input), /protected financial scope/);
+    blobs[target] += '\n// additional business edit';
+    assert.throws(() => runtimeCompatibilityScope(input), /protected application scope/);
   }
   const missing = guardFixture().input;
   missing.candidateTree.find(row => row.path === 'api/_xeroPortal.js').sha = '2'.repeat(40);
   assert.throws(() => runtimeCompatibilityScope(missing), /Complete read-only/);
+});
+
+test('each of the five guards is mandatory once read-only guard scope is present', () => {
+  for (const path of runtimeCompatibilityScope(guardFixture().input).readOnlyGuards) {
+    const { input } = guardFixture();
+    input.candidateTree.find(row => row.path === path).sha = input.baseTree.find(row => row.path === path).sha;
+    assert.throws(() => runtimeCompatibilityScope(input), /Complete read-only/, path);
+  }
+});
+
+test('Email Router guard proof rejects either missing persistence guard, changed environment authority and extra business edits', () => {
+  for (const alter of [
+    text => text.replace('if (!isDeploymentReadOnly(dependencies.env || process.env)) await syncEmailRouterMetadata', 'await syncEmailRouterMetadata'),
+    text => text.replace('indexed && !isDeploymentReadOnly(dependencies.env || process.env)', 'indexed'),
+    text => text.replaceAll('dependencies.env || process.env', 'body.env'),
+    text => text.replace('synchronizeEmailRouterAttachmentMetadata(client, indexed, attachments)', 'synchronizeEmailRouterAttachmentMetadata(client, indexed, [])'),
+  ]) {
+    const { input, blobs } = guardFixture();
+    blobs['f'.repeat(40)] = alter(blobs['f'.repeat(40)]);
+    assert.throws(() => runtimeCompatibilityScope(input), /protected application scope/);
+  }
+});
+
+test('the Email Router regression file is allowed only as the reviewed new test addition', () => {
+  assert.ok(runtimeCompatibilityScope(guardFixture().input).changes.some(row => row.path === 'tests/emailRouterReadOnly.test.js' && row.before === null));
+  const extra = guardFixture().input;
+  extra.candidateTree.push(row('tests/emailRouterOtherReadOnly.test.js', 'c'.repeat(40)));
+  assert.throws(() => runtimeCompatibilityScope(extra), /protected application scope/);
+  const existing = guardFixture().input;
+  existing.baseTree.push(row('tests/emailRouterReadOnly.test.js', 'a'.repeat(40)));
+  assert.throws(() => runtimeCompatibilityScope(existing), /protected application scope/);
 });

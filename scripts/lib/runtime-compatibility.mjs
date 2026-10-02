@@ -4,14 +4,15 @@ const sha = value => /^[0-9a-f]{40}$/.test(value || '');
 const digest = value => createHash('sha256').update(value).digest('hex');
 const additions = new Set(['api/connection-runtime.js', 'api/_connectionRuntime.js', 'api/_runtime-build-receipt.json', 'tests/connectionRuntime.test.js']);
 const modified = new Set(['config/fcosConnections.js', 'scripts/write-app-version.mjs', 'scripts/lib/build-provenance.mjs', 'eslint.config.js']);
-const guardFiles = new Set(['api/_hedgeDeskService.js', 'api/_xeroPortal.js', 'api/functions/[name].js', 'api/_xeroContactSync.js']);
+const guardFiles = new Set(['api/_hedgeDeskService.js', 'api/_xeroPortal.js', 'api/functions/[name].js', 'api/_xeroContactSync.js', 'api/_emailRouterCore.js']);
 const guardHelper = 'api/_hedgeDeskReadOnly.js';
 const expectedGuardHelper = "// Snapshot reads skip expiry using trusted server deployment configuration.\nconst READ_ACTIONS = new Set(['list', 'filter', 'get', 'snapshot']);\n\nexport function isReadOnlyHedgeDeskAction(body = {}) {\n  return READ_ACTIONS.has(String(body?.action || 'list'));\n}\n";
 const guardTests = new Set(['tests/runtimeReadOnlySnapshots.test.js', 'tests/xeroPortal.test.js', 'tests/xeroSharedControl.test.js']);
+const emailGuardTest = 'tests/emailRouterReadOnly.test.js';
 const controls = new Set(['AGENTS.md', '.codex/config.toml', '.codex/setup.mjs', '.codex/control-validation.mjs', '.codex/control-policy.json', '.codex/README.md', '.codex/environments/environment.toml', '.codex/environments/environment-2.toml']);
 
 // The only permitted business-source change is this exact reviewed transformation.
-// Any extra edit in either financial module still fails closed.
+// Any extra edit in the protected application modules still fails closed.
 function expectedReadOnlyGuard(path, original) {
   const replaceOnce = (text, before, after) => {
     if (text.split(before).length !== 2) throw new Error('Read-only compatibility guard baseline differs.');
@@ -45,6 +46,15 @@ function expectedReadOnlyGuard(path, original) {
       "        requireDeploymentMutationAllowed(handlerPolicy?.mutation && (name !== 'hedgeMarkets' || !isReadOnlyMarketAction(body)));",
       "        requireDeploymentMutationAllowed(handlerPolicy?.mutation && (\n          name === 'hedgeMarkets' ? !isReadOnlyMarketAction(body)\n            : name === 'hedgeDeskEntity' ? !isReadOnlyHedgeDeskAction(body)\n              : true\n        ));");
   }
+  if (path === 'api/_emailRouterCore.js') {
+    let result = replaceOnce(original,
+      "import { requireReadOnlyCiOperation } from './_readOnlyCiAccess.js';\n",
+      "import { requireReadOnlyCiOperation } from './_readOnlyCiAccess.js';\nimport { isDeploymentReadOnly } from './_deploymentReadOnly.js';\n");
+    result = replaceOnce(result, '  await syncEmailRouterMetadata({ client, mailbox, folder, messages });',
+      '  if (!isDeploymentReadOnly(dependencies.env || process.env)) await syncEmailRouterMetadata({ client, mailbox, folder, messages });');
+    return replaceOnce(result, '  if (indexed) {',
+      '  if (indexed && !isDeploymentReadOnly(dependencies.env || process.env)) {');
+  }
   let result = replaceOnce(original, "import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';\n",
     "import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';\nimport { isDeploymentReadOnly } from './_deploymentReadOnly.js';\n");
   return replaceOnce(result, '  if (shouldRefresh && (stored?.refreshToken || env.XERO_REFRESH_TOKEN)) {',
@@ -71,7 +81,7 @@ export function runtimeCompatibilityScope({ baseCommit, candidateCommit, baseTre
     const before = base.get(path), after = candidate.get(path);
     if (before?.sha === after?.sha && before?.mode === after?.mode) continue;
     if (!after || after.mode !== '100644' || before && before.mode !== after.mode) throw new Error('Compatibility rollout cannot delete files or change executable modes.');
-    if (!controls.has(path) && !guardTests.has(path) && !(path === guardHelper && !before) && !(guardFiles.has(path) && before) && !(additions.has(path) && !before) && !(modified.has(path) && before)) throw new Error(`Compatibility rollout changes protected application scope: ${path}.`);
+    if (!controls.has(path) && !guardTests.has(path) && !(path === emailGuardTest && !before) && !(path === guardHelper && !before) && !(guardFiles.has(path) && before) && !(additions.has(path) && !before) && !(modified.has(path) && before)) throw new Error(`Compatibility rollout changes protected application scope: ${path}.`);
     changes.push({ path, before: before?.sha || null, after: after.sha });
   }
   const guards = changes.filter(row => guardFiles.has(row.path));
@@ -79,7 +89,7 @@ export function runtimeCompatibilityScope({ baseCommit, candidateCommit, baseTre
   if (guards.length && (!candidate.has(guardHelper) || base.has(guardHelper) || readBlob(candidate.get(guardHelper).sha) !== expectedGuardHelper)) throw new Error('Exact reviewed read-action helper required.');
   if (!guards.length && candidate.has(guardHelper) !== base.has(guardHelper)) throw new Error('Read-action helper requires complete reviewed guards.');
   for (const guard of guards) {
-    if (readBlob(guard.after) !== expectedReadOnlyGuard(guard.path, readBlob(guard.before))) throw new Error('Read-only compatibility guard changes protected financial scope.');
+    if (readBlob(guard.after) !== expectedReadOnlyGuard(guard.path, readBlob(guard.before))) throw new Error('Read-only compatibility guard changes protected application scope.');
   }
   for (const path of additions) if (base.has(path) || !candidate.has(path)) throw new Error('Compatibility rollout must add the complete diagnostic endpoint.');
   for (const path of modified) if (!changes.some(row => row.path === path)) throw new Error('Compatibility diagnostic dependencies are incomplete.');
@@ -92,7 +102,7 @@ export function runtimeCompatibilityScope({ baseCommit, candidateCommit, baseTre
     preservation: { existingUi: true, mobile: true, databaseSchema: true, salesforceMetadata: true, financialLogic: true,
       cronSchedules: true, externalActionGates: true, dependencies: true, existingConnectionPolicy: true },
     readOnlyGuards: guards.map(({ path }) => path),
-    reviewedException: guards.length ? 'Suppress implicit expiry and token refresh only in deployment read-only mode; ordinary Production logic is preserved.' : null,
+    reviewedException: guards.length ? 'Suppress implicit expiry, token refresh and Email Router metadata persistence only in deployment read-only mode; ordinary Production logic is preserved.' : null,
     scopeVerified: true, productionAuthorized: false,
     limitation: 'Scope proof does not waive missing runtime, provider, quality, protected workflow or human approval evidence.' };
 }

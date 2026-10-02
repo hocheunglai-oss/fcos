@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
 import { fcosConnectionIdentifier } from '../config/fcosConnections.js';
 import { OBSERVATION_BASE_SHA, OBSERVATION_CANDIDATE_SHA, OBSERVATION_DECLARATIONS,
   assertObservationDeclarationBytes, verifyCompatibilityObservationSources,
@@ -18,6 +19,19 @@ test('pure observation proof binds immutable full sources, dependency declaratio
   assert.equal(Object.hasOwn(proof, 'authenticated'), false); assert.equal(Object.hasOwn(proof, 'runtime'), false);
   assert.ok(OBSERVATION_DECLARATIONS.every(row => Object.isFrozen(row) && Object.isFrozen(row.ranges)));
   assert.throws(() => verifyCompatibilityObservationSources({ cwd: '/missing', baseSha: OBSERVATION_BASE_SHA, candidateSha: '33d97ea74439e27128fd148df78a1e6be6a2f844' }), /Exact immutable/);
+  assert.throws(() => verifyCompatibilityObservationSources({ cwd: '/missing', baseSha: OBSERVATION_BASE_SHA, candidateSha: 'f3d4cadfbaad7c25c83205350bb9be572493f47c' }), /Exact immutable/);
+});
+
+test('the email-safe candidate retains every prior interpreter hash, legacy Xero binding and pure declaration byte', () => {
+  assert.equal(OBSERVATION_CANDIDATE_SHA, 'ff8859b287009e20462c5c0cceff89ae12f13010');
+  const prior = execFileSync('git', ['show', '4b421c736541058d62fc4541aa8bff041567b009:scripts/lib/runtime-compatibility-observation.mjs'], { cwd, encoding: 'utf8' });
+  assert.deepEqual(source.match(/"(?:sourceSha256|declarationSha256)": "[0-9a-f]{64}"/g), prior.match(/"(?:sourceSha256|declarationSha256)": "[0-9a-f]{64}"/g));
+  const unchangedStart = 'export const LEGACY_XERO_READ_BINDING';
+  assert.equal(source.slice(source.indexOf(unchangedStart)), prior.slice(prior.indexOf(unchangedStart)));
+  for (const record of OBSERVATION_DECLARATIONS) {
+    const get = ref => execFileSync('git', ['show', `${ref}:${record.file}`], { cwd, encoding: 'utf8' });
+    assert.equal(get(OBSERVATION_CANDIDATE_SHA), get('f3d4cadfbaad7c25c83205350bb9be572493f47c'), record.file);
+  }
 });
 
 test('changed pure dependency nodes, interpretations or boundaries cannot inherit the immutable declaration proof', () => {
