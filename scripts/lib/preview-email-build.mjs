@@ -39,6 +39,7 @@ export function previewEmailBuildCandidate(candidateSha) {
 
 export const PREVIEW_EMAIL_BUILD_CONTROL_FILES = Object.freeze([
   PREVIEW_EMAIL_BUILD_WORKFLOW, 'scripts/preview-email-proof-build.mjs', 'scripts/lib/preview-email-build.mjs',
+  'scripts/lib/preview-vercel-authority.mjs',
   'scripts/lib/release-evidence.mjs', 'scripts/lib/release-production.mjs', 'scripts/lib/release-readiness.mjs',
   'scripts/lib/preview-parity.mjs', 'scripts/lib/build-provenance.mjs', 'config/legacy-email-baseline-proof.json',
   'scripts/lib/legacy-email-baseline-proof.mjs', 'scripts/lib/preview-email-signer.mjs', 'scripts/verify-e2e-candidate.mjs',
