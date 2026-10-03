@@ -24,8 +24,53 @@ const UUID = value => typeof value === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-4[a
 const positive = value => Number.isSafeInteger(value) && value > 0;
 const digest = value => createHash('sha256').update(value).digest('hex');
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-const fail = () => { throw new Error('Enrollment operation failed; private diagnostics suppressed. Inspect the durable safe state before any recovery.'); };
+const safeFailures = new WeakMap();
+const failureDetails = error => safeFailures.get(error) ?? { category: 'operation_failed_output_suppressed' };
+const fail = details => {
+  const error = new Error('Enrollment operation failed; private diagnostics suppressed. Inspect the durable safe state before any recovery.');
+  if (details) safeFailures.set(error, details);
+  throw error;
+};
 const metadata = rows => rows.map(({ name, created_at, updated_at }) => ({ name, created_at, updated_at })).sort((a, b) => a.name.localeCompare(b.name));
+
+// Fixed HTTPS is necessary for exact-ID metadata: CLI 54.20.1 universal api
+// injects currentTeam into this account-level route, unlike its tokens command.
+// Neither callers nor approvals can select another host, route or credential.
+async function fixedProviderJson(path, method, token, body, fetchImpl = fetch) {
+  const url = `https://api.vercel.com${path}`;
+  let category = 'transport_failed_output_suppressed', httpStatus;
+  try {
+    const response = await fetchImpl(url, { method, headers: { authorization: `Bearer ${token}`, ...(body ? { 'content-type': 'application/json' } : {}) },
+      ...(body ? { body: JSON.stringify(body) } : {}), redirect: 'error', cache: 'no-store', signal: AbortSignal.timeout(15000) });
+    if (Number.isSafeInteger(response.status) && response.status >= 100 && response.status <= 599) httpStatus = response.status;
+    category = 'http_response_rejected';
+    if (response.redirected !== false || response.url !== url || ![200, ...(method === 'POST' ? [201] : [])].includes(response.status)
+      || !response.headers.get('content-type')?.includes('application/json')) fail({ category, ...(httpStatus === undefined ? {} : { httpStatus }) });
+    category = 'body_read_failed_output_suppressed';
+    const reader = response.body?.getReader(); if (!reader) fail({ category, httpStatus });
+    const chunks = []; let size = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read(); if (done) break;
+        size += value.byteLength;
+        if (size > 1024 * 1024) fail({ category: 'response_size_rejected', httpStatus });
+        chunks.push(value);
+      }
+    } finally { try { await reader.cancel(); } catch { /* Never inspect a stream cleanup exception. */ } }
+    category = 'response_json_rejected';
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  } catch (error) {
+    fail(safeFailures.get(error) ?? { category, ...(httpStatus === undefined ? {} : { httpStatus }) });
+  }
+}
+export async function readEnrollmentTokenMetadata({ tokenId, token, fetchImpl = fetch }) {
+  if (typeof tokenId !== 'string' || tokenId === 'current' || !/^[A-Za-z0-9_-]{1,200}$/.test(tokenId)
+    || typeof token !== 'string' || !token || /\s/.test(token) || token.length > 4096) fail({ category: 'metadata_input_rejected' });
+  const result = await fixedProviderJson(`/v5/user/tokens/${tokenId}`, 'GET', token, undefined, fetchImpl);
+  if (!result?.token || typeof result.token !== 'object' || Array.isArray(result.token) || result.token.id !== tokenId)
+    fail({ category: 'metadata_shape_rejected', httpStatus: 200 });
+  return result.token;
+}
 
 export function enrollmentPlan() {
   return { schemaVersion: 1, enabledByDefault: false, target: TARGET, actions: ['enroll', 'attest'], providerCalls: 0,
@@ -75,33 +120,47 @@ function approvalData(a, action, scriptSha256, now) {
 export async function runEnrollmentOperation({ action = 'plan', approval, scriptSha256, io, now = () => Date.now(),
   attestationPublicKey = FCOS_CONNECTION_POLICY.attestation.publicKeySpkiBase64 } = {}) {
   if (action === 'plan') return enrollmentPlan();
-  let state, claimed = false;
+  let state, claimed = false, stage = 'approval_validation';
   try {
     const a = approvalData(approval, action, scriptSha256, now());
     // No provider or Keychain call occurs until the exact local approval passes.
+    stage = 'provider_preflight';
     const checked = await io.preflight(a);
     approvalData(a, action, scriptSha256, now());
     const account = `${FCOS_CONNECTION_POLICY.keychainAccount}:${a.enrollmentId}`;
     if (action === 'enroll') {
+      stage = 'existing_credentials_preflight';
       if (!same(metadata(checked.secrets), metadata(a.secretMetadata)) || checked.tokenId !== a.previousReviewedTokenId) fail();
+      // Prove this exact read adapter works before requesting a one-time bearer.
+      // Existing metadata is a capability check, not runtime bearer authority.
+      stage = 'reviewed_metadata_preflight';
+      if ((await io.tokenMetadata(a.previousReviewedTokenId))?.id !== a.previousReviewedTokenId) fail();
+      approvalData(a, action, scriptSha256, now());
+      stage = 'issuance_claim';
       state = { schemaVersion: 1, enrollmentId: a.enrollmentId, nonce: a.nonce, phase: 'issuance_requested',
         requestedAt: now(), expiresAt: a.expiresAt, sourceSha: a.harnessSha, productionAuthorized: false };
       await io.claim(a, state); claimed = true; // Exclusive, durable, before the ONE non-retryable POST.
+      stage = 'issuance_response';
       const issuance = await io.issue(a);
+      stage = 'issued_metadata_read';
       const fresh = await io.tokenMetadata(issuance?.token?.id);
+      stage = 'private_enrollment_validation';
       const capsule = createPrivateEnrollment({ issuance, metadata: fresh, enrollmentId: a.enrollmentId, requestedExpiresAt: a.expiresAt, now: now() });
       state.tokenId = capsule.enrollment.tokenId;
+      stage = 'private_enrollment_write';
       state.phase = 'private_enrollment_write_requested'; await io.save(a, state);
       const privateText = JSON.stringify(capsule);
       await io.keychainSet(account, privateText);
       if (await io.keychainGet(account) !== privateText) fail();
       for (const [name, value] of [[TOKEN, issuance.bearerToken], [ENROLLED_AUTHORITY_SECRET, privateText]]) {
+        stage = name === TOKEN ? 'bearer_write' : 'companion_write';
         state.phase = name === TOKEN ? 'bearer_write_requested' : 'companion_write_requested'; await io.save(a, state);
         if (now() >= a.expiresAt) fail();
         await io.secretSet(name, value);
       }
       // Partial writes cannot reach pins or activation. Neither success nor
       // failure changes a deployment/diagnostic/authority enable flag.
+      stage = 'paired_secret_readback';
       const after = await io.secretMetadata();
       for (const name of [TOKEN, ENROLLED_AUTHORITY_SECRET, 'FCOS_RELEASE_GH_TOKEN']) {
         const rows = after.filter(row => row.name === name);
@@ -110,6 +169,7 @@ export async function runEnrollmentOperation({ action = 'plan', approval, script
       }
       const untouched = rows => metadata(rows.filter(row => ![TOKEN, ENROLLED_AUTHORITY_SECRET].includes(row.name)));
       if (!same(untouched(after), untouched(checked.secrets))) fail();
+      stage = 'disabled_pin_write';
       await io.assertDisabled();
       await io.variableSet(TOKEN_ID, state.tokenId);
       await io.variableSet(ENROLLMENT_ID, a.enrollmentId);
@@ -117,6 +177,7 @@ export async function runEnrollmentOperation({ action = 'plan', approval, script
       state.phase = 'enrolled_disabled'; await io.save(a, state);
       return { enrolled: true, enrollmentId: a.enrollmentId, activationPerformed: false, productionAuthorized: false };
     }
+    stage = 'attestation_preflight';
     state = await io.readEnrollment(a);
     if (state?.phase !== 'enrolled_disabled' || state.enrollmentId !== a.enrollmentId || state.expiresAt !== a.expiresAt
       || !same(metadata(checked.secrets), state.secretMetadata)
@@ -127,7 +188,9 @@ export async function runEnrollmentOperation({ action = 'plan', approval, script
     // latency therefore cannot rejuvenate an old metadata observation.
     const privateKey = await io.signingKey(), key = createPrivateKey(privateKey);
     if (key.asymmetricKeyType !== 'ed25519' || createPublicKey(key).export({ type: 'spki', format: 'der' }).toString('base64') !== attestationPublicKey) fail();
+    stage = 'attestation_metadata_read';
     const fresh = await io.tokenMetadata(state.tokenId), observedAt = now();
+    stage = 'receipt_publication';
     if (typeof privateEnrollment !== 'string' || Buffer.byteLength(privateEnrollment) > 4096) fail();
     const parsed = JSON.parse(privateEnrollment);
     if (parsed?.enrollment?.enrollmentId !== a.enrollmentId || parsed.enrollment.tokenId !== state.tokenId || parsed.enrollment.expiresAt !== a.expiresAt) fail();
@@ -139,14 +202,17 @@ export async function runEnrollmentOperation({ action = 'plan', approval, script
     if (now() >= envelope.receipt.expiresAt) fail();
     return { attested: true, runId: a.runId, runAttempt: 1, operation: a.operation,
       observedAt, expiresAt: envelope.receipt.expiresAt, activationPerformed: false, productionAuthorized: false };
-  } catch {
+  } catch (error) {
+    const details = { ...failureDetails(error), stage };
     // Never access exception.message, cause, stdout or arbitrary getters.
     // In particular, an uncertain issuance is NEVER repeated or auto-revoked.
     if (action === 'enroll' && state && claimed) {
       state.phase = 'quarantined_reconciliation_required';
+      state.failureStage = details.stage; state.failureCategory = details.category;
+      if (details.httpStatus !== undefined) state.httpStatus = details.httpStatus;
       try { await io.save(approval, state); } catch { /* The original exclusive intent remains the recovery boundary. */ }
     }
-    fail();
+    fail(details);
   }
 }
 
@@ -201,20 +267,11 @@ function liveAdapters(a, layout) {
   let vc, operatorId;
   const assertOwner = () => { const user = github('user'); if (user.login !== OWNER || !positive(user.id) || operatorId && user.id !== operatorId) fail(); return user; };
   const provider = async (path, method = 'GET', body) => {
-    const exactMetadata = /^\/v5\/user\/tokens\/[A-Za-z0-9_-]{1,200}$/.test(path);
     const allowed = [`/v9/projects/${TARGET.projectId}?teamId=${TARGET.teamId}`, '/v2/user',
       `/v13/deployments/${JSON.parse(readFileSync(join(ROOT, 'config/legacy-email-baseline-proof.json'))).baseline.deploymentId}?teamId=${TARGET.teamId}`];
-    if (!vc || !(method === 'GET' && (exactMetadata || allowed.includes(path)) || method === 'POST' && path === `/v3/user/tokens?teamId=${TARGET.teamId}`)) fail();
+    if (!vc || !(method === 'GET' && allowed.includes(path) || method === 'POST' && path === `/v3/user/tokens?teamId=${TARGET.teamId}`)) fail();
     if (method === 'GET') return JSON.parse(buffered(vc.command, ['api', path, '--method', 'GET', ...vc.injectedArgs], { env: vc.env }));
-    const url = `https://api.vercel.com${path}`;
-    const response = await fetch(url, { method, headers: { authorization: `Bearer ${vc.env.VERCEL_TOKEN}`, ...(body ? { 'content-type': 'application/json' } : {}) },
-      ...(body ? { body: JSON.stringify(body) } : {}), redirect: 'error', cache: 'no-store', signal: AbortSignal.timeout(15000) });
-    if (response.redirected !== false || response.url !== url || ![200, ...(method === 'POST' ? [201] : [])].includes(response.status)
-      || !response.headers.get('content-type')?.includes('application/json')) fail();
-    const reader = response.body?.getReader(); if (!reader) fail(); const chunks = []; let size = 0;
-    try { for (;;) { const { done, value } = await reader.read(); if (done) break; size += value.byteLength; if (size > 1024 * 1024) fail(); chunks.push(value); } }
-    finally { await reader.cancel(); }
-    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    return fixedProviderJson(path, method, vc.env.VERCEL_TOKEN, body);
   };
   const assertDisabled = () => {
     for (const rows of [variables(), collection(`${base}/actions/variables`, 'variables')]) {
@@ -294,7 +351,7 @@ function liveAdapters(a, layout) {
     // CLI 54.20.1 tokens add cannot set an exact expiry. One fixed REST POST is
     // used instead; all output remains buffered and is never logged or retried.
     issue: approval => provider(`/v3/user/tokens?teamId=${TARGET.teamId}`, 'POST', { name: `fcos-preview-enrollment-${approval.enrollmentId}`, projectId: TARGET.projectId, expiresAt: approval.expiresAt }),
-    tokenMetadata: async id => { if (!/^[A-Za-z0-9_-]{1,200}$/.test(id || '')) fail(); const result = await provider(`/v5/user/tokens/${id}`); return result.token; },
+    tokenMetadata: id => readEnrollmentTokenMetadata({ tokenId: id, token: vc.env.VERCEL_TOKEN }),
     keychainSet: (account, value) => buffered(keychain, ['set-stdin', account, ENROLLMENT_KEYCHAIN_SERVICE], { input: value }),
     keychainGet: account => buffered(keychain, ['get', account, ENROLLMENT_KEYCHAIN_SERVICE]),
     signingKey: () => buffered(keychain, ['get', FCOS_CONNECTION_POLICY.keychainAccount, FCOS_CONNECTION_POLICY.attestation.privateKeyService]),
@@ -321,9 +378,9 @@ export async function enrollmentMain(args = process.argv.slice(2)) {
     approvalData(approval, args[1], scriptSha256, Date.now());
     if (approval.nonce !== args[2]) fail();
     return await runEnrollmentOperation({ action: args[1], approval, scriptSha256, io: liveAdapters(approval, layout) });
-  } catch { fail(); }
+  } catch (error) { fail(failureDetails(error)); }
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try { console.log(JSON.stringify(await enrollmentMain())); }
-  catch { console.error('Enrollment operation failed; private diagnostics suppressed. Reconcile the durable intent before any recovery.'); process.exitCode = 1; }
+  catch (error) { console.error(JSON.stringify({ message: 'Enrollment operation failed; private diagnostics suppressed. Reconcile the durable intent before any recovery.', ...failureDetails(error) })); process.exitCode = 1; }
 }

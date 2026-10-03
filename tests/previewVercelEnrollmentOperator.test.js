@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
-import { runEnrollmentOperation, enrollmentPlan } from '../scripts/preview-vercel-enrollment.mjs';
+import { runEnrollmentOperation, enrollmentPlan, readEnrollmentTokenMetadata } from '../scripts/preview-vercel-enrollment.mjs';
 import { ENROLLMENT_FIXED_TARGET as target, ENROLLED_AUTHORITY_SECRET, verifyEnrollmentReceipt } from '../scripts/lib/preview-vercel-enrollment.mjs';
 import { PREVIEW_EMAIL_CONTRACT_SHA256 } from '../scripts/lib/preview-email-build.mjs';
 const now = Date.parse('2026-10-03T04:00:00Z'), scriptSha256 = 'a'.repeat(64);
@@ -24,7 +24,7 @@ function fixture() {
   claim:async(a,state)=>{calls.push('claim');if(durable)throw new Error('exists');durable=structuredClone(state);},
   save:async(a,state)=>{calls.push('save:'+state.phase);durable=structuredClone(state);},
   issue:async()=>{calls.push('POST');return {bearerToken:token,token:{id:tokenId}};},
-  tokenMetadata:async()=>{calls.push('GET:metadata');return structuredClone(freshMetadata);},
+  tokenMetadata:async id=>{calls.push(id==='old-reviewed-id'?'GET:reviewed-metadata':'GET:metadata');return {...structuredClone(freshMetadata),id};},
   keychainSet:async(account,value)=>{calls.push('private-store');keychain=value;},keychainGet:async()=>{calls.push('private-read');return keychain;},
   secretSet:async(name,value)=>{calls.push('secret:'+name);values[name]=value;let row=secrets.find(x=>x.name===name);if(!row){row={name,created_at:new Date(now).toISOString()};secrets.push(row);}row.updated_at=new Date(now).toISOString();},
   secretMetadata:async()=>structuredClone(secrets),assertDisabled:async()=>{calls.push('assert-disabled');},
@@ -67,7 +67,7 @@ test('actual five-secret baseline enrolls while preserving all unrelated metadat
  const f=fixture();assert.equal(f.approval.secretMetadata.length,5);const result=await f.execute();assert.equal(result.enrolled,true);assert.equal(f.durable.phase,'enrolled_disabled');
  assert.equal(f.durable.secretMetadata.length,6);
  for(const before of baseSecrets.filter(row=>row.name!=='FCOS_RELEASE_VERCEL_TOKEN'))assert.deepEqual(f.durable.secretMetadata.find(row=>row.name===before.name),before);
- assert.equal(f.calls.filter(x=>x==='POST').length,1);assert.ok(f.calls.indexOf('claim')<f.calls.indexOf('POST'));
+ assert.equal(f.calls.filter(x=>x==='POST').length,1);assert.ok(f.calls.indexOf('GET:reviewed-metadata')<f.calls.indexOf('claim'));assert.ok(f.calls.indexOf('claim')<f.calls.indexOf('POST'));
  assert.equal(f.values.FCOS_RELEASE_VERCEL_TOKEN,token);assert.equal(f.values[ENROLLED_AUTHORITY_SECRET],f.capsule);
  const evidence=JSON.stringify({state:f.durable,result});assert.ok(!evidence.includes(token));assert.ok(!evidence.includes(JSON.parse(f.capsule).binding));
  assert.deepEqual(Object.keys(f.vars),['FCOS_RELEASE_VERCEL_TOKEN_ID','FCOS_PREVIEW_VERCEL_ENROLLMENT_ID']);
@@ -110,7 +110,84 @@ test('hostile thrown provider exception is never inspected or serialized after i
 for(const [label,mutate] of [
  ['full-account token',m=>delete m.projectId],['other project',m=>m.projectId='other'],['wide lifetime',m=>m.expiresAt=now+86400001],
  ['wrong issued ID',m=>m.id='unrelated'],['revoked token',m=>m.revokedAt=now],['extra team scope',m=>m.scopes.push({...m.scopes[0],teamId:'other'})]
-])test(label+' refuses all secret writes',async()=>{const f=fixture();f.io.tokenMetadata=async()=>{const m=structuredClone(freshMetadata);mutate(m);return m;};await assert.rejects(f.execute());assert.deepEqual(f.values,{});assert.equal(f.durable.phase,'quarantined_reconciliation_required');});
+])test(label+' refuses all secret writes',async()=>{const f=fixture(),read=f.io.tokenMetadata;f.io.tokenMetadata=async id=>{if(id==='old-reviewed-id')return read(id);const m=structuredClone(freshMetadata);mutate(m);return m;};await assert.rejects(f.execute());assert.deepEqual(f.values,{});assert.equal(f.durable.phase,'quarantined_reconciliation_required');assert.equal(f.durable.failureStage,'private_enrollment_validation');});
+function metadataResponse(id=tokenId, overrides={}) {
+ return {status:200,redirected:false,url:`https://api.vercel.com/v5/user/tokens/${id}`,
+  headers:new Headers({'content-type':'application/json'}),body:new Response(JSON.stringify({token:{...freshMetadata,id}})).body,...overrides};
+}
+test('exact-ID metadata uses one bounded query-free HTTPS GET and the supplied management bearer',async()=>{
+ const requests=[],management='TEST_MANAGEMENT_CREDENTIAL';
+ const result=await readEnrollmentTokenMetadata({tokenId,token:management,fetchImpl:async(url,options)=>{
+  requests.push({url,options});return metadataResponse();
+ }});
+ assert.equal(result.id,tokenId);assert.equal(requests.length,1);
+ const {url,options}=requests[0];assert.equal(url,`https://api.vercel.com/v5/user/tokens/${tokenId}`);
+ assert.equal(new URL(url).search,'');assert.equal(options.method,'GET');assert.equal(options.headers.authorization,`Bearer ${management}`);
+ assert.equal(options.redirect,'error');assert.equal(options.cache,'no-store');assert.ok(options.signal instanceof AbortSignal);
+ assert.equal(options.body,undefined);
+});
+test('enrollment uses the same metadata adapter and management credential before and after its single POST',async()=>{
+ const f=fixture(),management='FIXTURE_CAPTURED_MANAGEMENT';const requests=[];
+ f.io.tokenMetadata=id=>readEnrollmentTokenMetadata({tokenId:id,token:management,fetchImpl:async(url,options)=>{
+  requests.push({url,authorization:options.headers.authorization});f.calls.push(`https-metadata:${id}`);return metadataResponse(id);
+ }});
+ assert.equal((await f.execute()).enrolled,true);
+ assert.deepEqual(requests.map(row=>row.url),['old-reviewed-id',tokenId].map(id=>`https://api.vercel.com/v5/user/tokens/${id}`));
+ assert.ok(requests.every(row=>row.authorization===`Bearer ${management}`));
+ assert.ok(f.calls.indexOf('https-metadata:old-reviewed-id')<f.calls.indexOf('claim'));
+ assert.ok(f.calls.indexOf('POST')<f.calls.indexOf(`https-metadata:${tokenId}`));
+});
+test('an actual metadata adapter rejection during preflight makes no claim, POST or private write',async()=>{
+ const f=fixture();let gets=0;
+ f.io.tokenMetadata=id=>readEnrollmentTokenMetadata({tokenId:id,token:'fixture-management',fetchImpl:async()=>{gets++;return metadataResponse(id,{status:404});}});
+ await assert.rejects(f.execute());assert.equal(gets,1);assert.deepEqual(f.calls,['preflight']);assert.equal(f.durable,undefined);assert.deepEqual(f.values,{});assert.deepEqual(f.vars,{});
+});
+for(const id of ['current','../other','id?teamId=other','https://other.invalid','',null])
+ test(`metadata reader refuses non-exact ID ${String(id)} before fetch`,async()=>{
+  let calls=0;await assert.rejects(readEnrollmentTokenMetadata({tokenId:id,token:'fixture',fetchImpl:async()=>{calls++;}}));assert.equal(calls,0);
+ });
+for(const [label,read] of [
+ ['unavailable route',async()=>{throw Error(token);}],
+ ['wrong returned ID',async()=>({id:'unrelated'})],
+ ['missing envelope',async()=>undefined]
+])test(`reviewed metadata preflight ${label} prevents intent, issuance and every write`,async()=>{
+ const f=fixture();f.io.tokenMetadata=read;await assert.rejects(f.execute(),error=>!error.message.includes(token));
+ assert.deepEqual(f.calls,['preflight']);assert.equal(f.durable,undefined);assert.deepEqual(f.values,{});assert.deepEqual(f.vars,{});
+});
+test('expiry reached during metadata capability preflight prevents issuance',async()=>{
+ const f=fixture(),read=f.io.tokenMetadata;f.io.tokenMetadata=async id=>{const result=await read(id);f.clock(f.approval.expiresAt);return result;};
+ await assert.rejects(f.execute());assert.deepEqual(f.calls,['preflight','GET:reviewed-metadata']);assert.equal(f.durable,undefined);
+});
+const metadataFailures=[
+ ['HTTP rejection',()=>metadataResponse(tokenId,{status:404}), 'http_response_rejected',404],
+ ['redirect',()=>metadataResponse(tokenId,{redirected:true}), 'http_response_rejected',200],
+ ['different URL',()=>metadataResponse(tokenId,{url:'https://other.invalid/'}), 'http_response_rejected',200],
+ ['wrong content type',()=>metadataResponse(tokenId,{headers:new Headers({'content-type':'text/plain'})}), 'http_response_rejected',200],
+ ['missing body',()=>metadataResponse(tokenId,{body:null}), 'body_read_failed_output_suppressed',200],
+ ['oversized body',()=>metadataResponse(tokenId,{body:new Response('x'.repeat(1024*1024+1)).body}), 'response_size_rejected',200],
+ ['malformed JSON',()=>metadataResponse(tokenId,{body:new Response('private invalid JSON '+token).body}), 'response_json_rejected',200],
+ ['wrong token ID',()=>metadataResponse(tokenId,{body:new Response(JSON.stringify({token:{...freshMetadata,id:'other'}})).body}), 'metadata_shape_rejected',200],
+ ['missing token object',()=>metadataResponse(tokenId,{body:new Response('{}').body}), 'metadata_shape_rejected',200],
+ ['transport exception',()=>{throw Error(token);}, 'transport_failed_output_suppressed',undefined],
+];
+for(const [label,response,category,status] of metadataFailures)test(`${label} records only fixed safe evidence and quarantines without repeating issuance`,async()=>{
+ const f=fixture(),read=f.io.tokenMetadata;let gets=0;
+ f.io.tokenMetadata=id=>id==='old-reviewed-id'?read(id):readEnrollmentTokenMetadata({tokenId:id,token:'fixture-management',fetchImpl:async()=>{gets++;return response();}});
+ await assert.rejects(f.execute(),error=>!error.message.includes(token));
+ assert.equal(f.durable.phase,'quarantined_reconciliation_required');assert.equal(f.durable.failureStage,'issued_metadata_read');
+ assert.equal(f.durable.failureCategory,category);assert.equal(f.durable.httpStatus,status);assert.equal(f.durable.tokenId,undefined);
+ assert.equal(gets,1);assert.equal(f.calls.filter(x=>x==='POST').length,1);assert.deepEqual(f.values,{});assert.deepEqual(f.vars,{});
+ assert.ok(!JSON.stringify(f.durable).includes(token));assert.ok(!f.calls.includes('private-store'));
+ const original=structuredClone(f.durable);await assert.rejects(f.execute());assert.deepEqual(f.durable,original);assert.equal(gets,1);assert.equal(f.calls.filter(x=>x==='POST').length,1);
+});
+test('a hostile metadata transport exception is neither inspected nor serialized',async()=>{
+ const f=fixture(),read=f.io.tokenMetadata;let inspected=0;
+ f.io.tokenMetadata=id=>id==='old-reviewed-id'?read(id):readEnrollmentTokenMetadata({tokenId:id,token:'fixture-management',fetchImpl:async()=>{
+  throw new Proxy({}, {get(){inspected++;throw Error(token);},ownKeys(){inspected++;throw Error(token);}});
+ }});
+ await assert.rejects(f.execute());assert.equal(inspected,0);assert.equal(f.durable.failureStage,'issued_metadata_read');
+ assert.equal(f.durable.failureCategory,'transport_failed_output_suppressed');assert.ok(!JSON.stringify(f.durable).includes(token));
+});
 async function attestationFixture() {
  const f=fixture();await f.execute();f.calls.length=0;Object.assign(f.approval,{action:'attest',nonce:'33333333-3333-4333-8333-333333333333',attestorNewPurposeAuthorized:true,runId:9,operation:'verify-authority'});
  Object.assign(f.checked,{tokenId,enrollmentId});return f;
