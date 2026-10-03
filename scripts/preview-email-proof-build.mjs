@@ -7,7 +7,7 @@ import { fcosConnectionIdentifier } from '../config/fcosConnections.js';
 import { collectBuildProvenance } from './lib/build-provenance.mjs';
 import { githubReleaseReads, assertReleaseGitHubAccount, RELEASE_REPOSITORY } from './lib/release-evidence.mjs';
 import { githubReleaseOidc } from './lib/release-production.mjs';
-import { collectPreviewVercelAuthority } from './lib/preview-vercel-authority.mjs';
+import { collectPreviewVercelAuthority, PREVIEW_AUTHORITY_SUBSTAGES, PREVIEW_AUTHORITY_FAILURES } from './lib/preview-vercel-authority.mjs';
 import { releaseHash } from './lib/release-readiness.mjs';
 import { previewEmailBuildCandidate, createPreviewEmailBuildRequest, previewEmailBuildControlRevision, assertPreviewEmailBuildProtection,
   collectPreviewEmailEnvironmentRecords, createPreviewEmailBuildIntent, collectTrustedPreviewEmailIntent, collectPreviewEmailBuildJobs,
@@ -30,6 +30,7 @@ const DIAGNOSTIC_PHASES = new Set(['runner_context', 'candidate_contract', 'cand
   'retained_production', 'environment_records', 'intent_write', 'recovery_context', 'trusted_intent', 'execution_claim',
   'controlled_build', 'receipt_write']);
 const diagnosticFailure = phase => new Error(`FCOS protected Preview ${phase} failed; private diagnostics suppressed.`);
+const authoritySubstages = new Set(PREVIEW_AUTHORITY_SUBSTAGES), authorityFailures = new Set(PREVIEW_AUTHORITY_FAILURES);
 
 /** This journal exists before credential or source preflight. Exceptions are
  * never inspected: each row contains only a fixed phase/status/code and time.
@@ -68,6 +69,30 @@ export function createPreviewEmailBuildDiagnostics({ mode, runId, directory, tru
           try { append(row('failed')); } catch { /* The original safe stage still identifies this failure. */ }
           throw diagnosticFailure(phase);
         }
+      },
+      authority(row) {
+        try {
+          if (!row || typeof row !== 'object' || Array.isArray(row)) throw new Error('row');
+          const prototype = Object.getPrototypeOf(row);
+          if (prototype !== Object.prototype && prototype !== null) throw new Error('prototype');
+          const descriptors = Object.getOwnPropertyDescriptors(row), keys = Reflect.ownKeys(descriptors);
+          const allowed = ['substage', 'status', 'failureCategory', 'httpStatus', 'reviewedTokenIdMatches'];
+          if (keys.some(key => typeof key !== 'string' || !allowed.includes(key) || !Object.hasOwn(descriptors[key], 'value'))
+            || !Object.hasOwn(descriptors, 'substage') || !Object.hasOwn(descriptors, 'status')) throw new Error('fields');
+          const values = Object.fromEntries(keys.map(key => [key, descriptors[key].value]));
+          if (!authoritySubstages.has(values.substage) || !['passed', 'failed'].includes(values.status)
+            || (values.status === 'failed' ? !authorityFailures.has(values.failureCategory) : Object.hasOwn(values, 'failureCategory'))
+            || Object.hasOwn(values, 'httpStatus') && (!['current_metadata', 'project_list', 'user_denial', 'team_denial'].includes(values.substage)
+              || !Number.isInteger(values.httpStatus) || values.httpStatus < 200 || values.httpStatus > 599)
+            || Object.hasOwn(values, 'reviewedTokenIdMatches') && (values.substage !== 'current_metadata'
+              || typeof values.reviewedTokenIdMatches !== 'boolean')) throw new Error('values');
+          append({ schemaVersion: 1, kind: 'fcos_preview_email_authority_diagnostic', mode,
+            substage: values.substage, status: values.status,
+            ...(Object.hasOwn(values, 'failureCategory') ? { failureCategory: values.failureCategory } : {}),
+            ...(Object.hasOwn(values, 'httpStatus') ? { httpStatus: values.httpStatus } : {}),
+            ...(Object.hasOwn(values, 'reviewedTokenIdMatches') ? { reviewedTokenIdMatches: values.reviewedTokenIdMatches } : {}),
+            capturedAt: new Date(now()).toISOString() });
+        } catch { throw diagnosticFailure('authority_journal'); }
       },
       claimExecution() {
         let claim;
@@ -233,7 +258,7 @@ export async function runPreviewEmailProofBuild({ mode = 'dry-run', candidateSha
           || previewEmailBuildControlRevision(trustedCwd) !== controlRevision) throw new Error('Reviewed source or controls changed during execution.');
       });
       const { project } = await stage('vercel_authority', () => collectPreviewVercelAuthority({ token: env.VERCEL_TOKEN, reviewedTokenId: approved.reviewedTokenId,
-        readProject: api, deploymentConfiguration: JSON.parse(readFileSync(join(candidateCwd, 'vercel.json'))) }));
+        readProject: api, deploymentConfiguration: JSON.parse(readFileSync(join(candidateCwd, 'vercel.json'))), onDiagnostic: diagnostics.authority }));
       await stage('retained_production', async () => {
         if (project.link.productionBranch !== repository.default_branch || project.targets?.production?.id !== baseline.deploymentId) throw new Error('The retained Production target changed.');
         const previous = await api(`/v13/deployments/${baseline.deploymentId}`);

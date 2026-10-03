@@ -185,6 +185,122 @@ test('redirected, malformed, oversized, non-JSON and unavailable responses fail 
   });
 });
 
+test('authority diagnostics distinguish denied metadata, invalid responses and transport without exposing private content', async () => {
+  for (const status of [401, 403]) {
+    let calls = 0;
+    const rows = [], value = collector(fixture(), { onDiagnostic: row => rows.push(row),
+      fetchImpl: async () => { calls++; return response({ error: { message: privateMarker } }, status); } });
+    await assert.rejects(() => collectPreviewVercelAuthority(value.options), /current token metadata is unavailable/);
+    assert.deepEqual(rows, [{ substage: 'current_metadata', status: 'failed', failureCategory: 'http_status_rejected', httpStatus: status }]);
+    assert.equal(calls, 1); assert.equal(value.projectReads.length, 0);
+  }
+  const exception = {};
+  for (const field of ['message', 'stack', 'code', 'cause']) Object.defineProperty(exception, field, { get() { assert.fail('Private exception properties must never be read.'); } });
+  for (const [fetchImpl, expected] of [
+    [async () => new Response(privateMarker, { headers: { 'content-type': 'application/json' } }),
+      { failureCategory: 'response_invalid', httpStatus: 200 }],
+    [async () => { throw exception; }, { failureCategory: 'transport_failure' }],
+  ]) {
+    const rows = []; let calls = 0;
+    const value = collector(fixture(), { onDiagnostic: row => rows.push(row), fetchImpl: (...args) => { calls++; return fetchImpl(...args); } });
+    await assert.rejects(() => collectPreviewVercelAuthority(value.options), /GET failed/);
+    assert.deepEqual(rows, [{ substage: 'current_metadata', status: 'failed', ...expected }]);
+    assert.equal(calls, 1); assert.equal(value.projectReads.length, 0);
+    assert.ok(!JSON.stringify(rows).includes(privateMarker));
+    assert.equal(Object.hasOwn(rows[0], 'reviewedTokenIdMatches'), false);
+  }
+});
+
+test('authority diagnostics separate token mismatch from lifetime rejection and omit unavailable token binding', async () => {
+  for (const [change, expected] of [
+    [value => { value.token.id = privateMarker; }, { failureCategory: 'token_id_mismatch', reviewedTokenIdMatches: false }],
+    [value => { value.token.expiresAt = value.token.createdAt + 86400001; }, { failureCategory: 'token_metadata_policy_rejected', reviewedTokenIdMatches: true }],
+    [value => { value.token.expiresAt = now; }, { failureCategory: 'token_metadata_policy_rejected', reviewedTokenIdMatches: true }],
+    [value => { delete value.token.id; }, { failureCategory: 'token_metadata_policy_rejected' }],
+    [value => { value.token.id = `https://${privateMarker}`; }, { failureCategory: 'token_metadata_policy_rejected' }],
+  ]) {
+    const inputs = fixture(); change(inputs); const rows = [], value = collector(inputs, { onDiagnostic: row => rows.push(row) });
+    await assert.rejects(() => collectPreviewVercelAuthority(value.options), /current metadata/);
+    assert.deepEqual(rows, [{ substage: 'current_metadata', status: 'failed', httpStatus: 200, ...expected }]);
+    assert.equal(value.requests.length, 1); assert.equal(value.projectReads.length, 0);
+    assert.ok(!JSON.stringify(rows).includes(privateMarker));
+  }
+});
+
+test('authority diagnostics identify later scope, denial, project and configuration failures without changing read order', async () => {
+  for (const [change, expected, requests, projectReads] of [
+    [value => { value.projects.pagination.next = 1; }, { substage: 'project_list', failureCategory: 'project_list_policy_rejected', httpStatus: 200 }, 2, 0],
+    [value => { value.userStatus = 200; }, { substage: 'user_denial', failureCategory: 'denial_unverified', httpStatus: 200 }, 3, 0],
+    [value => { value.teamStatus = 404; }, { substage: 'team_denial', failureCategory: 'denial_unverified', httpStatus: 404 }, 4, 0],
+    [value => { value.project.id = 'prj_other'; value.projects.projects = [{ ...fixture().project }]; },
+      { substage: 'exact_project', failureCategory: 'project_identity_rejected' }, 4, 1],
+    [value => { value.project.autoAssignCustomDomains = true; }, { substage: 'configuration', failureCategory: 'configuration_rejected' }, 4, 1],
+  ]) {
+    const inputs = fixture(); change(inputs); const rows = [], value = collector(inputs, { onDiagnostic: row => rows.push(row) });
+    await assert.rejects(() => collectPreviewVercelAuthority(value.options));
+    assert.deepEqual(rows.at(-1), { ...expected, status: 'failed' });
+    assert.equal(value.requests.length, requests); assert.equal(value.projectReads.length, projectReads);
+    assert.ok(!JSON.stringify(rows).includes(privateMarker));
+    assert.equal(Object.hasOwn(rows.at(-1), 'reviewedTokenIdMatches'), false);
+  }
+  const inputs = fixture(); inputs.token.expiresAt = now + 1;
+  const rows = []; let clockReads = 0;
+  const value = collector(inputs, { now: () => clockReads++ ? now + 1 : now, onDiagnostic: row => rows.push(row) });
+  await assert.rejects(() => collectPreviewVercelAuthority(value.options), /current metadata/);
+  assert.deepEqual(rows.at(-1), { substage: 'current_metadata', failureCategory: 'token_metadata_policy_rejected', status: 'failed', reviewedTokenIdMatches: true });
+  assert.equal(value.requests.length, 4); assert.equal(clockReads, 2);
+});
+
+test('successful authority diagnostics contain only observed statuses, fixed substages and reviewed binding', async () => {
+  const inputs = fixture(); inputs.token.privateValue = privateMarker; inputs.projects.privateValue = privateMarker; inputs.project.privateValue = privateMarker;
+  const rows = [], value = collector(inputs, { onDiagnostic: row => rows.push(row) });
+  const result = await collectPreviewVercelAuthority(value.options);
+  assert.deepEqual(rows, [
+    { substage: 'current_metadata', status: 'passed', httpStatus: 200, reviewedTokenIdMatches: true },
+    { substage: 'project_list', status: 'passed', httpStatus: 200 },
+    { substage: 'user_denial', status: 'passed', httpStatus: 403 },
+    { substage: 'team_denial', status: 'passed', httpStatus: 403 },
+    { substage: 'exact_project', status: 'passed' }, { substage: 'configuration', status: 'passed' },
+  ]);
+  assert.deepEqual(value.requests.map(row => new URL(row.url).pathname + new URL(row.url).search), paths);
+  assert.equal(result.authority.productionAuthorized, false);
+  assert.ok(!JSON.stringify(rows).includes(privateMarker));
+  assert.ok(!JSON.stringify(rows).includes(reviewedTokenId));
+});
+
+test('diagnostic callback failures are redacted and halt each substage without retries or fallback', async () => {
+  const exception = { privateValue: privateMarker };
+  for (const field of ['message', 'stack', 'code', 'cause']) Object.defineProperty(exception, field, { get() { assert.fail('Callback exceptions must never be inspected.'); } });
+  for (const [substage, expectedRequests, expectedProjectReads] of [
+    ['current_metadata', 1, 0], ['project_list', 2, 0], ['user_denial', 3, 0], ['team_denial', 4, 0],
+    ['exact_project', 4, 1], ['configuration', 4, 1],
+  ]) {
+    const value = collector(fixture(), { onDiagnostic: async row => { if (row.substage === substage) throw exception; } });
+    await assert.rejects(() => collectPreviewVercelAuthority(value.options), error =>
+      /diagnostic recording failed/.test(error.message) && !error.message.includes(privateMarker));
+    assert.equal(value.requests.length, expectedRequests); assert.equal(value.projectReads.length, expectedProjectReads);
+  }
+  const value = collector(fixture(), { onDiagnostic: privateMarker });
+  await assert.rejects(() => collectPreviewVercelAuthority(value.options), /valid callback/);
+  assert.equal(value.requests.length, 0); assert.equal(value.projectReads.length, 0);
+  let calls = 0;
+  const denied = collector(fixture(), { onDiagnostic: async () => { throw exception; },
+    fetchImpl: async () => { calls++; return response({ error: { message: privateMarker } }, 403); } });
+  await assert.rejects(() => collectPreviewVercelAuthority(denied.options), /diagnostic recording failed/);
+  assert.equal(calls, 1); assert.equal(denied.projectReads.length, 0);
+});
+
+test('failed exact project readers retain rejection compatibility while diagnostics never inspect their exceptions', async () => {
+  const exception = { privateValue: privateMarker };
+  for (const field of ['message', 'stack', 'code', 'cause']) Object.defineProperty(exception, field, { get() { assert.fail('Project reader exceptions must never be inspected.'); } });
+  const rows = []; let projectCalls = 0;
+  const value = collector(fixture(), { onDiagnostic: row => rows.push(row), readProject: async () => { projectCalls++; throw exception; } });
+  await assert.rejects(() => collectPreviewVercelAuthority(value.options), error => error === exception);
+  assert.deepEqual(rows.at(-1), { substage: 'exact_project', status: 'failed', failureCategory: 'project_read_failed' });
+  assert.equal(value.requests.length, 4); assert.equal(projectCalls, 1);
+  assert.ok(!JSON.stringify(rows).includes(privateMarker));
+});
+
 test('Preview project-resource adapter retains exact project/team pins using the same token for bounded GETs', async () => {
   const requests = [], api = createPreviewEmailVercelApi({ token: privateMarker, fetchImpl: async (url, request) => {
     requests.push({ url, request }); return response({ fixture: true });
@@ -280,6 +396,7 @@ test('new Preview helper participates in local and remote control revision and b
   const builder = readFileSync(new URL('../scripts/preview-email-proof-build.mjs', import.meta.url), 'utf8');
   assert.match(builder, /collectPreviewVercelAuthority\(\{ token: env\.VERCEL_TOKEN, reviewedTokenId: approved\.reviewedTokenId,/);
   assert.match(builder, /readProject: api/);
+  assert.match(builder, /onDiagnostic: diagnostics\.authority/);
   assert.doesNotMatch(builder, /assertVercelProductionAuthority|readVercelTokenMetadata/);
   assert.doesNotMatch(builder, /'--scope'|cli\(\['api'/);
   assert.match(builder, /create: request => provider\.create\(request\)/);
