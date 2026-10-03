@@ -155,7 +155,7 @@ test('private state refuses symlinks, hardlinks and non-private permissions with
  }finally{fs.rmSync(directory,{recursive:true,force:true});}
 });
 
-test('actual Swift stdin reader accumulates split pipe chunks and rejects empty or oversized streams before Keychain',async()=>{
+test('actual Swift stdin reader accumulates split pipe chunks and rejects empty or oversized streams before Keychain',async t=>{
  const fs=await import('node:fs'),{tmpdir}=await import('node:os'),{join}=await import('node:path'),{spawn,spawnSync}=await import('node:child_process');
  const directory=fs.mkdtempSync(join(tmpdir(),'fcos-enrollment-stdin-'));
  try{
@@ -165,7 +165,9 @@ test('actual Swift stdin reader accumulates split pipe chunks and rejects empty 
   // Keychain symbol in the executable. These are public fixture bytes only.
   const harness=join(directory,'reader.swift'),binary=join(directory,'reader');
   fs.writeFileSync(harness,`import Foundation\nenum MigrationError: Error {case unreadableSource;case emptySecret}\n${body}\ndo {print(try standardInputSecret().count)} catch {print("rejected")}\n`);
-  const compiled=spawnSync('/usr/bin/swiftc',[harness,'-o',binary],{encoding:'utf8',timeout:30000});assert.equal(compiled.status,0,compiled.stderr);
+  const compiled=spawnSync('swiftc',[harness,'-o',binary],{encoding:'utf8',timeout:30000});
+  if(compiled.error?.code==='ENOENT' && process.platform!=='darwin'){t.skip('The macOS Keychain helper reader requires Swift; swiftc is unavailable on this platform.');return;}
+  assert.equal(compiled.status,0,compiled.error?.message || compiled.stderr);
   for(const [input,expected] of [['','rejected'],[' '.repeat(64),'rejected'],['x'.repeat(65537),'rejected'],['x'.repeat(65536),'65536']]){
    const result=spawnSync(binary,[],{input,encoding:'utf8',timeout:5000});assert.equal(result.status,0);assert.equal(result.stdout.trim(),expected);
   }
