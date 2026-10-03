@@ -27,7 +27,10 @@ function fixture(t) {
   const cwd = mkdtempSync(join(fixtureRoot, 'checkout-'));
   t.after(() => rmSync(cwd, { recursive: true, force: true }));
   const git = (...args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
-  git('init', '-q');
+  // Pin initialization independently of an existing ancestor repository.
+  git('init', '-q', cwd);
+  assert.equal(git('rev-parse', '--absolute-git-dir'), join(cwd, '.git'));
+  assert.equal(git('rev-parse', '--show-toplevel'), cwd);
   writeFileSync(join(cwd, 'source.js'), 'export const answer = 42;\n');
   writeFileSync(join(cwd, '.gitignore'), '.env*\n');
   mkdirSync(join(cwd, 'public'));
@@ -96,7 +99,9 @@ test('archive fixtures cannot discover an ancestor checkout', t => {
   const ancestorGit = (...args) => execFileSync('git', args, {
     cwd: fixtureRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
   }).trim();
-  ancestorGit('init', '-q');
+  ancestorGit('init', '-q', fixtureRoot);
+  assert.equal(ancestorGit('rev-parse', '--absolute-git-dir'), join(fixtureRoot, '.git'));
+  assert.equal(ancestorGit('rev-parse', '--show-toplevel'), fixtureRoot);
   writeFileSync(join(fixtureRoot, 'ancestor.txt'), 'ancestor repository fixture\n');
   ancestorGit('add', 'ancestor.txt');
   ancestorGit('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'ancestor');
