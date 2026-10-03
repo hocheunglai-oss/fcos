@@ -129,6 +129,7 @@ export async function runEnrollmentOperation({ action = 'plan', approval, script
     approvalData(a, action, scriptSha256, now());
     const account = `${FCOS_CONNECTION_POLICY.keychainAccount}:${a.enrollmentId}`;
     if (action === 'enroll') {
+      const assertUnexpired = () => { if (now() >= a.expiresAt) fail(); };
       stage = 'existing_credentials_preflight';
       if (!same(metadata(checked.secrets), metadata(a.secretMetadata)) || checked.tokenId !== a.previousReviewedTokenId) fail();
       // Prove this exact read adapter works before requesting a one-time bearer.
@@ -140,6 +141,8 @@ export async function runEnrollmentOperation({ action = 'plan', approval, script
       state = { schemaVersion: 1, enrollmentId: a.enrollmentId, nonce: a.nonce, phase: 'issuance_requested',
         requestedAt: now(), expiresAt: a.expiresAt, sourceSha: a.harnessSha, productionAuthorized: false };
       await io.claim(a, state); claimed = true; // Exclusive, durable, before the ONE non-retryable POST.
+      stage = 'issuance_approval_recheck';
+      approvalData(a, action, scriptSha256, now());
       stage = 'issuance_response';
       const issuance = await io.issue(a);
       stage = 'issued_metadata_read';
@@ -149,19 +152,24 @@ export async function runEnrollmentOperation({ action = 'plan', approval, script
       state.tokenId = capsule.enrollment.tokenId;
       stage = 'private_enrollment_write';
       state.phase = 'private_enrollment_write_requested'; await io.save(a, state);
+      assertUnexpired();
       const privateText = JSON.stringify(capsule);
       await io.keychainSet(account, privateText);
+      assertUnexpired();
       if (await io.keychainGet(account) !== privateText) fail();
+      assertUnexpired();
       for (const [name, value] of [[TOKEN, issuance.bearerToken], [ENROLLED_AUTHORITY_SECRET, privateText]]) {
         stage = name === TOKEN ? 'bearer_write' : 'companion_write';
         state.phase = name === TOKEN ? 'bearer_write_requested' : 'companion_write_requested'; await io.save(a, state);
-        if (now() >= a.expiresAt) fail();
+        assertUnexpired();
         await io.secretSet(name, value);
+        assertUnexpired();
       }
       // Partial writes cannot reach pins or activation. Neither success nor
       // failure changes a deployment/diagnostic/authority enable flag.
       stage = 'paired_secret_readback';
       const after = await io.secretMetadata();
+      assertUnexpired();
       for (const name of [TOKEN, ENROLLED_AUTHORITY_SECRET, 'FCOS_RELEASE_GH_TOKEN']) {
         const rows = after.filter(row => row.name === name);
         if (rows.length !== 1 || !Number.isFinite(Date.parse(rows[0].created_at)) || !Number.isFinite(Date.parse(rows[0].updated_at))) fail();
@@ -170,11 +178,16 @@ export async function runEnrollmentOperation({ action = 'plan', approval, script
       const untouched = rows => metadata(rows.filter(row => ![TOKEN, ENROLLED_AUTHORITY_SECRET].includes(row.name)));
       if (!same(untouched(after), untouched(checked.secrets))) fail();
       stage = 'disabled_pin_write';
+      assertUnexpired();
       await io.assertDisabled();
+      assertUnexpired();
       await io.variableSet(TOKEN_ID, state.tokenId);
+      assertUnexpired();
       await io.variableSet(ENROLLMENT_ID, a.enrollmentId);
+      assertUnexpired();
       state.secretMetadata = metadata(after);
       state.phase = 'enrolled_disabled'; await io.save(a, state);
+      assertUnexpired();
       return { enrolled: true, enrollmentId: a.enrollmentId, activationPerformed: false, productionAuthorized: false };
     }
     stage = 'attestation_preflight';
