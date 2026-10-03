@@ -7,12 +7,13 @@ import { fcosConnectionIdentifier } from '../config/fcosConnections.js';
 import { collectBuildProvenance } from './lib/build-provenance.mjs';
 import { githubReleaseReads, assertReleaseGitHubAccount, RELEASE_REPOSITORY } from './lib/release-evidence.mjs';
 import { githubReleaseOidc } from './lib/release-production.mjs';
-import { collectPreviewVercelAuthority, PREVIEW_AUTHORITY_SUBSTAGES, PREVIEW_AUTHORITY_FAILURES } from './lib/preview-vercel-authority.mjs';
+import { collectPreviewVercelAuthority, probePreviewVercelAuthority, PREVIEW_AUTHORITY_SUBSTAGES, PREVIEW_AUTHORITY_FAILURES } from './lib/preview-vercel-authority.mjs';
 import { releaseHash } from './lib/release-readiness.mjs';
 import { previewEmailBuildCandidate, createPreviewEmailBuildRequest, previewEmailBuildControlRevision, assertPreviewEmailBuildProtection,
   collectPreviewEmailEnvironmentRecords, createPreviewEmailBuildIntent, collectTrustedPreviewEmailIntent, collectPreviewEmailBuildJobs,
   runControlledPreviewEmailBuild, readPreviewEmailBuildVersion, PREVIEW_EMAIL_BUILD_ENVIRONMENT,
-  PREVIEW_EMAIL_INTENT_FILENAME, PREVIEW_EMAIL_BUILD_FILENAME, PREVIEW_EMAIL_CONTRACT_SHA256 } from './lib/preview-email-build.mjs';
+  PREVIEW_EMAIL_INTENT_FILENAME, PREVIEW_EMAIL_BUILD_FILENAME, PREVIEW_EMAIL_CONTRACT_SHA256,
+  PREVIEW_EMAIL_AUTHORITY_DIAGNOSTIC_FILENAME } from './lib/preview-email-build.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const baseline = JSON.parse(readFileSync(new URL('../config/legacy-email-baseline-proof.json', import.meta.url))).baseline;
@@ -28,7 +29,7 @@ const DIAGNOSTIC_PHASES = new Set(['runner_context', 'candidate_contract', 'cand
   'protected_repository', 'environment_variables', 'environment_protection', 'environment_secrets', 'workflow_run',
   'environment_approval', 'workflow_job', 'protection_review', 'candidate_branch', 'source_recheck', 'vercel_authority',
   'retained_production', 'environment_records', 'intent_write', 'recovery_context', 'trusted_intent', 'execution_claim',
-  'controlled_build', 'receipt_write']);
+  'controlled_build', 'receipt_write', 'authority_probe', 'authority_probe_write']);
 const diagnosticFailure = phase => new Error(`FCOS protected Preview ${phase} failed; private diagnostics suppressed.`);
 const authoritySubstages = new Set(PREVIEW_AUTHORITY_SUBSTAGES), authorityFailures = new Set(PREVIEW_AUTHORITY_FAILURES);
 
@@ -39,7 +40,7 @@ const authoritySubstages = new Set(PREVIEW_AUTHORITY_SUBSTAGES), authorityFailur
 export function createPreviewEmailBuildDiagnostics({ mode, runId, directory, trustedCwd, candidateCwd, now = () => Date.now() } = {}) {
   let fd;
   try {
-    if (!['prepare', 'create', 'readback'].includes(mode) || !/^[1-9][0-9]*$/.test(String(runId || ''))
+    if (!['prepare', 'create', 'readback', 'diagnose-authority'].includes(mode) || !/^[1-9][0-9]*$/.test(String(runId || ''))
       || !Number.isSafeInteger(Number(runId)) || typeof directory !== 'string' || !directory) throw new Error('context');
     directory = resolve(directory);
     if (directory === '/' || directory === resolve(trustedCwd) || directory === resolve(candidateCwd)
@@ -120,7 +121,7 @@ export function createPreviewEmailBuildDiagnostics({ mode, runId, directory, tru
   }
 }
 export function previewEmailBuildArguments(args, env = process.env) {
-  if (args.length > 1 || args.some(value => !['--dry-run', '--prepare', '--create', '--readback'].includes(value))) throw new Error('Use one protected Preview proof mode.');
+  if (args.length > 1 || args.some(value => !['--dry-run', '--prepare', '--create', '--readback', '--diagnose-authority'].includes(value))) throw new Error('Use one protected Preview proof mode.');
   return { mode: args[0]?.slice(2) || 'dry-run', candidateSha: env.FCOS_E2E_EXPECTED_COMMIT,
     candidateCwd: resolve(env.FCOS_RELEASE_SOURCE_DIRECTORY || ROOT), recoveryRunId: Number(env.FCOS_PREVIEW_EMAIL_ORIGINAL_RUN_ID) };
 }
@@ -245,7 +246,8 @@ export async function runPreviewEmailProofBuild({ mode = 'dry-run', candidateSha
       const jobs = await stage('workflow_job', () => collectPreviewEmailBuildJobs({ reads, runId: Number(signed.run_id) }));
       approved = await stage('protection_review', () => {
         const result = assertPreviewEmailBuildProtection({ repository, branch, protection, environment, variables, secrets,
-          run, jobs, approvals, oidcClaims: signed, candidateSha, harnessSha: harness.commit, controlRevision });
+          run, jobs, approvals, oidcClaims: signed, candidateSha, harnessSha: harness.commit, controlRevision,
+          mode: mode === 'diagnose-authority' ? mode : 'build' });
         if (result.runId !== Number(env.GITHUB_RUN_ID)) throw new Error('This runner journal must bind the exact approved workflow run.');
         return result;
       });
@@ -257,6 +259,16 @@ export async function runPreviewEmailProofBuild({ mode = 'dry-run', candidateSha
           || collectBuildProvenance({ cwd: trustedCwd, env: {}, requireClean: true }).commit !== harness.commit
           || previewEmailBuildControlRevision(trustedCwd) !== controlRevision) throw new Error('Reviewed source or controls changed during execution.');
       });
+      // The diagnostic gate requires both deployment gates off. This terminal
+      // branch precedes environment reads, intent creation and every deploy path.
+      if (mode === 'diagnose-authority') {
+        const probe = await stage('authority_probe', () => probePreviewVercelAuthority({
+          token: env.VERCEL_TOKEN, reviewedTokenId: approved.reviewedTokenId }));
+        await stage('authority_probe_write', () => writeFileSync(join(resolve(env.RUNNER_TEMP), PREVIEW_EMAIL_AUTHORITY_DIAGNOSTIC_FILENAME),
+          `${JSON.stringify({ ...probe, runId: approved.runId, candidateSha, harnessSha: harness.commit, controlRevision })}\n`,
+          { mode: 0o600, flag: 'wx', flush: true }));
+        return { diagnosticCompleted: true, mutations: 0, previewAuthorized: false, productionAuthorized: false };
+      }
       const { project } = await stage('vercel_authority', () => collectPreviewVercelAuthority({ token: env.VERCEL_TOKEN, reviewedTokenId: approved.reviewedTokenId,
         readProject: api, deploymentConfiguration: JSON.parse(readFileSync(join(candidateCwd, 'vercel.json'))), onDiagnostic: diagnostics.authority }));
       await stage('retained_production', async () => {
@@ -278,7 +290,8 @@ export async function runPreviewEmailProofBuild({ mode = 'dry-run', candidateSha
       }
       return approved;
     };
-    await authority();
+    const initialAuthority = await authority();
+    if (mode === 'diagnose-authority') return initialAuthority;
     const directory = resolve(env.RUNNER_TEMP);
     if (mode === 'prepare') {
       const records = await stage('environment_records', () => collectPreviewEmailEnvironmentRecords({ api }));

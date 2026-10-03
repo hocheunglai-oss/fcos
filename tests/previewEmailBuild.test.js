@@ -293,3 +293,37 @@ test('trusted collector independently verifies protected source, human review, b
     item => { item.options.readVersion = async () => ({ pass: true, reviewed: true }); },
   ]) { const changed = await trustedFixture(); change(changed); await assert.rejects(() => collectTrustedPreviewEmailBuild(changed.options)); }
 });
+
+
+test('read-only diagnostic requires fresh environment gates with exact existing review and source bindings', async () => {
+  const diagnosticFixture = async () => {
+    const { protectionInputs } = await liveProtectionFixture();
+    const pins = { FCOS_PREVIEW_EMAIL_BUILD_ENABLED: 'false', FCOS_RUNTIME_COMPATIBILITY_RELEASE_ENABLED: 'false',
+      FCOS_PREVIEW_EMAIL_AUTHORITY_DIAGNOSTIC_ENABLED: 'true' };
+    protectionInputs.mode = 'diagnose-authority';
+    protectionInputs.variables.variables = protectionInputs.variables.variables.filter(row => !Object.hasOwn(pins, row.name));
+    protectionInputs.variables.variables.push(...Object.entries(pins).map(([name, value]) => ({ name, value })));
+    return protectionInputs;
+  };
+  assert.equal(assertPreviewEmailBuildProtection(await diagnosticFixture()).runId, 99);
+  for (const gate of ['FCOS_PREVIEW_EMAIL_BUILD_ENABLED', 'FCOS_RUNTIME_COMPATIBILITY_RELEASE_ENABLED', 'FCOS_PREVIEW_EMAIL_AUTHORITY_DIAGNOSTIC_ENABLED']) {
+    for (const change of ['missing', 'changed', 'duplicate']) {
+      const value = await diagnosticFixture(), rows = value.variables.variables, row = rows.find(item => item.name === gate);
+      if (change === 'missing') value.variables.variables = rows.filter(item => item.name !== gate);
+      if (change === 'changed') row.value = row.value === 'true' ? 'false' : 'true';
+      if (change === 'duplicate') rows.push({ ...row });
+      assert.throws(() => assertPreviewEmailBuildProtection(value));
+    }
+  }
+  for (const change of [
+    value => { value.mode = 'other'; },
+    value => { value.approvals.length = 0; }, value => { value.environment.can_admins_bypass = true; },
+    value => { value.oidcClaims.workflow_sha = 'c'.repeat(40); }, value => { value.oidcClaims.exp = now / 1000; },
+    value => { value.harnessSha = 'c'.repeat(40); }, value => { value.controlRevision = 'c'.repeat(64); },
+    value => { value.candidateSha = 'c'.repeat(40); }, value => { value.run.run_attempt = 2; },
+    value => { value.jobs[0].started_at = iso(now - 1800001); },
+  ]) { const value = await diagnosticFixture(); change(value); assert.throws(() => assertPreviewEmailBuildProtection(value)); }
+  // The diagnostic's gates cannot be used as create/readback authorization.
+  const value = await diagnosticFixture(); delete value.mode;
+  assert.throws(() => assertPreviewEmailBuildProtection(value));
+});
