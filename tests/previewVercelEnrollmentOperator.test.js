@@ -165,7 +165,9 @@ test('actual Swift stdin reader accumulates split pipe chunks and rejects empty 
   // Keychain symbol in the executable. These are public fixture bytes only.
   const harness=join(directory,'reader.swift'),binary=join(directory,'reader');
   fs.writeFileSync(harness,`import Foundation\nenum MigrationError: Error {case unreadableSource;case emptySecret}\n${body}\ndo {print(try standardInputSecret().count)} catch {print("rejected")}\n`);
-  const compiled=spawnSync('swiftc',[harness,'-o',binary],{encoding:'utf8',timeout:30000});
+  // Cold Linux compilation exceeded 30s under the full parallel CI suite.
+  // Keep a bounded wait; compiler errors and timeouts must still fail this test.
+  const compiled=spawnSync('swiftc',[harness,'-o',binary],{encoding:'utf8',timeout:90_000});
   if(compiled.error?.code==='ENOENT' && process.platform!=='darwin'){t.skip('The macOS Keychain helper reader requires Swift; swiftc is unavailable on this platform.');return;}
   assert.equal(compiled.status,0,compiled.error?.message || compiled.stderr);
   for(const [input,expected] of [['','rejected'],[' '.repeat(64),'rejected'],['x'.repeat(65537),'rejected'],['x'.repeat(65536),'65536']]){
