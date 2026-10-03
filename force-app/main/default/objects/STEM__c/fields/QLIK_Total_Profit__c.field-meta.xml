@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>QLIK_Total_Profit__c</fullName>
+    <formula>QLIK_STEM_Line_Item_Total_Price__c + QLIK_Costs_Total_Price__c - QLIK_STEM_Line_Item_Total_Cost__c - QLIK_Costs_Total_Cost__c - QLIK_Buyer_Broker_Total_Commission__c - QLIK_Supplier_Broker_Total_Commission__c - QLIK_Multiple_Broker_Total_Commission__c</formula>
+    <formulaTreatBlanksAs>BlankAsZero</formulaTreatBlanksAs>
+    <label>QLIK Total Profit</label>
+    <precision>18</precision>
+    <required>false</required>
+    <scale>2</scale>
+    <trackTrending>false</trackTrending>
+    <type>Currency</type>
+</CustomField>

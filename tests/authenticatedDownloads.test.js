@@ -113,7 +113,9 @@ test('only inert image formats and PDFs qualify for preview, and all three UI su
   }
 
   const preview = await readFile(new URL('../src/components/common/AuthenticatedDocumentPreview.jsx', import.meta.url), 'utf8');
-  assert.match(preview, /requestRef\.current\?\.abort\(\)/);
+  assert.match(preview, /controller\.abort\(\)/);
+  assert.match(preview, /open && <AuthenticatedDocumentPreview/);
+  assert.match(preview, /onClick=\{\(\) => downloadBlob\(blob, fileName\)\}/);
   assert.match(preview, /signal: controller\.signal/);
   assert.match(preview, /aria-label="Close document preview"/);
 });

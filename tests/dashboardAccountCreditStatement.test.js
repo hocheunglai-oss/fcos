@@ -23,7 +23,16 @@ import { dashboardAccountCreditStatementServiceInternals } from '../api/_dashboa
 const accountId = '001000000000001AAA';
 const groupId = '001000000000002AAA';
 const otherAccountId = '001000000000003AAA';
-const { compareStatementStems, supplierCreditCashflowSelectFields } = dashboardAccountCreditStatementServiceInternals;
+const { compareStatementStems, directoryFilters, stemMatchesDirectoryScope, supplierCreditCashflowSelectFields } = dashboardAccountCreditStatementServiceInternals;
+
+test('Account credit country exclusions retain unknown countries and reject conflicts', () => {
+  const filters = directoryFilters({ excludedCountryCodes: ['korea'] });
+  assert.deepEqual(filters.excludedCountryCodes, ['KOREA']);
+  assert.equal(stemMatchesDirectoryScope({ Port__r: { Country__c: 'KOREA' } }, filters), false);
+  assert.equal(stemMatchesDirectoryScope({ Port__r: { Country__c: 'SINGAPORE' } }, filters), true);
+  assert.equal(stemMatchesDirectoryScope({ Port__c: null }, filters), true);
+  assert.throws(() => directoryFilters({ countryCodes: ['KOREA'], excludedCountryCodes: ['korea'] }), /invalid/);
+});
 
 test('credit category formulas preserve Salesforce individual, group, and special constraints', () => {
   const individual = accountCreditBalances({ category: 'Individual', individualLimit: 100, usedCustomer: 30 });

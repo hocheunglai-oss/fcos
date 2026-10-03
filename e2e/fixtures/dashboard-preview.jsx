@@ -13,6 +13,7 @@ import DashboardAnalytics from '../../src/components/dashboard/DashboardAnalytic
 import DashboardFilterBar from '../../src/components/dashboard/DashboardFilterBar';
 import DashboardKpis from '../../src/components/dashboard/DashboardKpis';
 import DashboardStemTable from '../../src/components/dashboard/DashboardStemTable';
+import FinanceSettings from '../../src/components/settings/FinanceSettings';
 import { Button } from '../../src/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../src/components/ui/tabs';
 import { WorkspaceChromeProvider } from '../../src/components/workspace/WorkspaceChrome';
@@ -54,6 +55,25 @@ const monthlyRows = monthlyValues.map(([currentGrossProfit, currentVolume, curre
   priorProductVolumes: priorVolume == null ? [] : [{ family: index % 2 ? 'HSFO' : 'VLSFO', quantity: priorVolume }],
 }));
 
+const financeScenario = new URLSearchParams(window.location.search).get('finance') || 'partial';
+const financeByScenario = {
+  partial: {
+    complete: false,
+    byCurrency: [{ currency: 'USD', financeCost: null, bankCharge: null, ebit: null, complete: false, missingEvidenceCount: 112, stemCount: 128, verifiedStemCount: 16, verifiedGrossProfit: 488_350, verifiedFinanceCost: 12_000, verifiedBankCharge: 375, verifiedEbit: 475_975, excludedGrossProfit: 1_645_000, accruingStemCount: 4 }],
+    warnings: ['112 STEMs have incomplete payment evidence.'],
+  },
+  none: {
+    complete: false,
+    byCurrency: [{ currency: 'USD', financeCost: null, bankCharge: null, ebit: null, complete: false, missingEvidenceCount: 128, stemCount: 128, verifiedStemCount: 0, verifiedGrossProfit: null, verifiedFinanceCost: null, verifiedBankCharge: null, verifiedEbit: null, excludedGrossProfit: 2_133_350, accruingStemCount: 4 }],
+    warnings: ['No STEM has complete finance evidence.'],
+  },
+  complete: {
+    complete: true,
+    byCurrency: [{ currency: 'USD', financeCost: 241_000, bankCharge: 3_100, ebit: 1_889_250, complete: true, missingEvidenceCount: 0, stemCount: 128, verifiedStemCount: 128, verifiedGrossProfit: 2_133_350, verifiedFinanceCost: 241_000, verifiedBankCharge: 3_100, verifiedEbit: 1_889_250, excludedGrossProfit: 0, accruingStemCount: 4 }],
+    warnings: [],
+  },
+};
+
 const dashboardSummary = {
   complete: true,
   generatedAt: '2026-09-05T00:00:00.000Z',
@@ -63,6 +83,14 @@ const dashboardSummary = {
   accountCount: 18,
   disputedCount: 3,
   priorPeriod: { stemCount: 116 },
+  finance: {
+    annualInterestRatePct: 5,
+    bankChargesUsd: { UBS: 10, DBS: 15 },
+    revision: 1,
+    asOfDate: '2026-09-05',
+    dayCountBasis: 'ACT/365',
+    ...(financeByScenario[financeScenario] || financeByScenario.partial),
+  },
 };
 
 const accountNames = [
@@ -88,7 +116,21 @@ const directoryExposures = [
   { entityKey: 'account:fixture-1', buyer: { complete: true, byCurrency: [{ currency: 'USD', exposure: 1_920_000, openStemCount: 6 }] }, supplier: { complete: true, byCurrency: [{ currency: 'USD', exposure: 860_000, openStemCount: 4 }] }, net: { complete: true, byCurrency: [{ currency: 'USD', amount: 1_060_000 }] } },
 ];
 
-appClient.functions.invoke = async (name) => {
+appClient.functions.invoke = async (name, payload = {}, options = {}) => {
+  if (name === 'financeSettingsGet') return { data: { settings: fixtureFinanceSettings, permissions: { canManageSettings: true } }, meta: FIXTURE_META };
+  if (name === 'financeSettingsSave') {
+    if (payload.expectedRevision !== fixtureFinanceSettings.revision) return { data: { error: 'Finance settings changed after they were opened.', code: 'FINANCE_SETTINGS_REVISION_CONFLICT' }, meta: FIXTURE_META };
+    fixtureFinanceSettings = { ...fixtureFinanceSettings, annualInterestRatePct: payload.annualInterestRatePct, bankChargesUsd: payload.bankChargesUsd, revision: fixtureFinanceSettings.revision + 1, updatedAt: '2026-09-05T09:00:00.000Z' };
+    return { data: { settings: fixtureFinanceSettings, permissions: { canManageSettings: true } }, meta: FIXTURE_META };
+  }
+  if (name === 'dashboardStemList') {
+    window.__fixtureDashboardStemRequests.push(payload);
+    await fixtureDelay(Number(window.__fixtureExportDelayMs || 0), options.signal);
+    const offset = payload.cursor ? Number(payload.cursor) : 0;
+    const rows = exportRows.slice(offset, offset + Number(payload.pageSize || 200));
+    const nextOffset = offset + rows.length;
+    return { data: { stems: rows, matchingCount: exportRows.length, nextCursor: nextOffset < exportRows.length ? String(nextOffset) : null, finance: exportFinance }, meta: FIXTURE_META };
+  }
   const dataByFunction = {
     dashboardCounterpartySearch: { results: FIXTURE_COUNTERPARTIES },
     dashboardAccountCreditDirectory: { accounts: directoryAccounts, nextCursor: null, meta: { redacted: true, cache: 'fixture', returnedCount: directoryAccounts.length, direction: 'both' } },
@@ -108,6 +150,47 @@ const stemRows = [
   { id: 'fixture-stem-3', name: 'SYN-2026-003', deliveryDate: '2026-07-29', deliveryDateSource: 'delivery', vessel: 'MV Data Boundary', account: { id: 'fixture-account-2', name: accountNames[1] }, supplierAccounts: [{ id: 'fixture-supplier-3', name: 'Fixture East Asia Bunker Operations Corporation' }], supplierProductRows: [{ sourceType: 'extra_cost', sourceId: 'fixture-cost-1', supplierAccount: { id: 'fixture-supplier-3', name: 'Fixture East Asia Bunker Operations Corporation' }, itemName: 'Canal surcharge', quantityLabel: 'USD 12,000' }], port: 'Busan / KR', turnover: 3_900_000, grossProfit: 265_400, currency: 'USD', disputeStatus: '—' },
 ];
 
+const exportRows = Array.from({ length: 201 }, (_, index) => {
+  const source = stemRows[index % stemRows.length];
+  const financeCost = 10 + index / 100;
+  const bankCharge = index % 2 ? 15 : 10;
+  return {
+    ...source,
+    id: `fixture-export-stem-${String(index + 1).padStart(3, '0')}`,
+    name: `SYN-EXPORT-${String(index + 1).padStart(3, '0')}`,
+    finance: { complete: true, financeCost, bankCharge, bankChargeUsd: bankCharge, bankChargeComplete: true, ebit: Number(source.grossProfit || 0) - financeCost - bankCharge, status: 'Complete' },
+  };
+});
+
+const exportFinance = {
+  annualInterestRatePct: 5,
+  bankChargesUsd: { UBS: 10, DBS: 15 },
+  revision: 1,
+  asOfDate: '2026-09-05',
+  dayCountBasis: 'ACT/365',
+  complete: true,
+  warnings: [],
+};
+
+let fixtureFinanceSettings = { annualInterestRatePct: 5, bankChargesUsd: { UBS: 10, DBS: 15 }, revision: 1, updatedAt: '2026-09-05T08:00:00.000Z', updatedByEmail: 'finance.fixture@example.com' };
+window.__fixtureDashboardStemRequests = [];
+window.__fixtureFinanceEvents = [];
+window.__fixtureExportDelayMs = 0;
+window.addEventListener('fcos:finance-settings-updated', (event) => window.__fixtureFinanceEvents.push(event.detail));
+
+function fixtureDelay(ms, signal) {
+  if (!ms) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(resolve, ms);
+    signal?.addEventListener('abort', () => {
+      window.clearTimeout(timer);
+      const error = new Error('Fixture request cancelled.');
+      error.name = 'AbortError';
+      reject(error);
+    }, { once: true });
+  });
+}
+
 const initialFilters = {
   datePreset: 'custom',
   selectedYears: [currentYear],
@@ -117,6 +200,7 @@ const initialFilters = {
   counterparty: null,
   company: '', companyId: '', group: '', groupId: '', groupAccountIds: [],
   port: '', portId: '', country: '', countryCode: '',
+  koreaDeskMode: 'all',
 };
 
 function FixtureDashboard() {
@@ -124,6 +208,8 @@ function FixtureDashboard() {
   const [wide, setWide] = useState(false);
   const [search, setSearch] = useState('');
   const [tab, setTab] = useState('overview');
+  const [ebitEnabled, setEbitEnabled] = useState(false);
+  const [aiSearchActive, setAiSearchActive] = useState(false);
   const dashboardRootRef = useRef(null);
   useEffect(() => {
     const root = dashboardRootRef.current;
@@ -142,11 +228,12 @@ function FixtureDashboard() {
     <aside className="app-workspace-sidebar app-navigation-material relative flex shrink-0 flex-col items-center border-r border-border py-3" style={{ width: '86px', minWidth: '86px', maxWidth: '86px' }} aria-label="Fixture navigation"><div className="flex h-10 w-10 items-center justify-center rounded-lg border border-white/80 bg-white/75 text-xs font-bold shadow-sm">FC</div><div className="mt-6 flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-primary-foreground"><LayoutDashboard className="h-4 w-4" /></div></aside>
     <main id="fcos-main-content" tabIndex={-1} className="app-workspace-main" style={{ height: '100vh', display: 'flex', minWidth: 0, flex: '1 1 auto', flexDirection: 'column', overflow: 'hidden' }}><div style={{ position: 'relative', minHeight: 0, flex: '1 1 auto' }}><button type="button" className="absolute right-3 top-3 z-40 flex h-9 w-9 items-center justify-center rounded-full border border-border bg-card text-muted-foreground shadow-sm" aria-label="Synthetic draggable market pulse placeholder" title="Synthetic draggable market pulse placeholder"><Activity className="h-4 w-4" /></button><div className="app-workspace-scroll" style={{ height: '100%', minHeight: 0, overflow: 'auto' }}><main ref={dashboardRootRef} className={`workspace-page workspace-dashboard mx-auto w-full p-3 sm:p-6 lg:p-8 ${wide ? 'max-w-none' : 'max-w-[1600px]'}`}>
       <PageHeader icon={LayoutDashboard} title="Dashboard" inlineMeta meta={headerMeta} actions={headerActions} />
-      <DashboardFilterBar showPerspective={tab !== 'accounts'} filters={filters} years={[currentYear, currentYear - 1, currentYear - 2]} portOptions={[{ id: 'fixture-singapore', name: 'Singapore', kind: 'port' }, { value: 'SG', countryCode: 'SG', label: 'Singapore', kind: 'country' }]} loading={false} onChange={setFilters} onReset={() => setFilters(initialFilters)} onAiSearch={() => {}} />
-      <Tabs value={tab} onValueChange={setTab}><TabsList className="mb-4 w-full justify-start overflow-x-auto"><TabsTrigger value="overview">Overview</TabsTrigger><TabsTrigger value="stems">STEMs</TabsTrigger><TabsTrigger value="accounts">Accounts</TabsTrigger></TabsList>
-        <TabsContent value="overview" className="space-y-4"><DashboardKpis summary={dashboardSummary} /><DashboardAnalytics data={analyticsData} loading={false} error="" onLoad={() => {}} counterpartyMode={filters.counterpartyMode} onAccountClick={() => {}} /></TabsContent>
-        <TabsContent value="stems"><DashboardStemTable result={{ rows: stemRows, page: 1, pageSize: 25, matchingCount: stemRows.length, sort: {} }} loading={false} search={search} wide={wide} onWideChange={setWide} onSearch={setSearch} onPrevious={() => {}} onNext={() => {}} onSortChange={() => {}} onStemClick={() => {}} onAccountClick={() => {}} /></TabsContent>
+      {tab !== 'finance' ? <DashboardFilterBar showPerspective={tab !== 'accounts'} filters={filters} years={[currentYear, currentYear - 1, currentYear - 2]} portOptions={[{ id: 'fixture-singapore', name: 'Singapore', kind: 'port' }, { value: 'SG', countryCode: 'SG', label: 'Singapore', kind: 'country' }, { value: 'KOREA', countryCode: 'KOREA', label: 'KOREA', kind: 'country' }]} loading={false} onChange={setFilters} onReset={() => setFilters(initialFilters)} onAiSearch={() => setAiSearchActive(true)} /> : null}
+      <Tabs value={tab} onValueChange={setTab}><TabsList className="mb-4 w-full justify-start overflow-x-auto"><TabsTrigger value="overview">Overview</TabsTrigger><TabsTrigger value="stems">STEMs</TabsTrigger><TabsTrigger value="accounts">Accounts</TabsTrigger><TabsTrigger value="finance">Finance settings</TabsTrigger></TabsList>
+        <TabsContent value="overview" className="space-y-4"><DashboardKpis summary={dashboardSummary} ebitEnabled={ebitEnabled} onEbitChange={setEbitEnabled} /><DashboardAnalytics data={analyticsData} loading={false} error="" onLoad={() => {}} counterpartyMode={filters.counterpartyMode} onAccountClick={() => {}} /></TabsContent>
+        <TabsContent value="stems"><DashboardStemTable result={{ rows: stemRows, page: 1, pageSize: 25, matchingCount: stemRows.length, sort: {} }} loading={false} search={search} wide={wide} onWideChange={setWide} onSearch={setSearch} onPrevious={() => {}} onNext={() => {}} onSortChange={() => {}} onStemClick={() => {}} onAccountClick={() => {}} exportFilterPayload={{ dateWindows: [{ startDate: '2026-01-01', endDate: '2026-12-31' }], disputeOnly: filters.disputeOnly, filters: { accountIds: [], supplierIds: [], portIds: filters.portId ? [filters.portId] : [], countryCodes: filters.koreaDeskMode === 'include' ? ['KOREA'] : filters.countryCode ? [filters.countryCode] : [], excludedCountryCodes: filters.koreaDeskMode === 'exclude' ? ['KOREA'] : [] } }} includeFinanceCosts={ebitEnabled} aiSearchActive={aiSearchActive} onClearAiSearch={() => setAiSearchActive(false)} /></TabsContent>
         <TabsContent value="accounts"><AccountCreditDirectory counterparty={null} dateWindows={[{ startDate: '2026-01-01', endDate: '2026-12-31' }]} disputeOnly={false} filters={{ portIds: [], countryCodes: [] }} onOpen={() => {}} /></TabsContent>
+        <TabsContent value="finance"><FinanceSettings /></TabsContent>
       </Tabs>
     </main></div></div></main>
   </div></WorkspaceChromeProvider>;

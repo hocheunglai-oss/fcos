@@ -134,12 +134,13 @@ test('workspace preferences and broker settings are revisioned and service-only'
   assert.match(rateHandler, /loadBrokerCommissionSettings\(client\)/);
   assert.doesNotMatch(rateHandler, /body\.provider/);
   assert.match(server, /capabilities: capabilityValues/);
-  assert.match(admin, /\!\['settings', 'admin'\]\.includes\(module\.id\)/);
+  // Groups now expose all page grants; privileged management still requires the separate organizational role.
+  assert.match(admin, /Administrator \/ General Manager-only controls also require the separate organizational role/);
   assert.doesNotMatch(admin, />Application Access</);
   assert.match(modules, /id: 'broker_settings_manage'/);
 });
 
-test('System Health includes a lazy, signed, secret-safe API-first Connection Checklist', async () => {
+test('System Health includes a lazy, signed, secret-safe CLI-first Connection Checklist', async () => {
   const [settings, checklist, policy, sharedPolicy, methodology] = await Promise.all([
     read('../src/pages/Settings.jsx'),
     read('../src/components/settings/ConnectionChecklist.jsx'),
@@ -152,7 +153,7 @@ test('System Health includes a lazy, signed, secret-safe API-first Connection Ch
   assert.match(settings, /<TabsTrigger value="connections">Connection Checklist<\/TabsTrigger>/);
   assert.match(settings, /containsStructuredValues/);
   assert.match(settings, /flattenHealthDetails\(entry, `\$\{prefix\} \$\{index \+ 1\}`\.trim\(\), rows\)/);
-  assert.match(checklist, /Live, machine-signed verification/);
+  assert.match(checklist, /Published verification of tooling identities/);
   assert.match(checklist, /appClient\.functions\.invoke\('systemHealth'/);
   assert.doesNotMatch(checklist, /<Input|<Textarea/);
   assert.doesNotMatch(checklist, /localStorage|browser_authentication_completed/);
@@ -163,7 +164,7 @@ test('System Health includes a lazy, signed, secret-safe API-first Connection Ch
   assert.match(checklist, /Salesforce DEVEE, and Salesforce QAT/);
   assert.match(checklist, /only for Salesforce Production authentication/);
   assert.match(sharedPolicy, /publicKeySpkiBase64/);
-  assert.match(methodology, /always uses a verified purpose-built API or connector first/);
+  assert.match(methodology, /always uses a target-locked and version-approved CLI first/);
   assert.match(methodology, /Vincent for Salesforce Production/);
 });
 
@@ -182,7 +183,8 @@ test('Settings uses unified AI cards, compact access tables, and atomic email ro
   assert.match(settings, /emailSenderRouteSave/);
   assert.match(settings, /Save \{dirtySenderRoutes\.length\} assignment/);
   assert.doesNotMatch(settings, /Save route/);
-  assert.match(people, /Search name, email, or type/);
+  assert.match(people, /label="Search people"/);
+  assert.match(people, /Name, email or group/);
   assert.doesNotMatch(people, /adminAuditLogs|Audit Log/);
   assert.match(workspace, /grid-cols-\[212px_minmax\(0,1fr\)\]/);
   assert.match(dashboardAi, /Cached input/);

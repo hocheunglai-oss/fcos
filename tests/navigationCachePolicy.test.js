@@ -59,7 +59,7 @@ test('the shared client isolates users, deduplicates requests, bounds memory, an
   assert.match(client, /x-fcos-cache-bypass/);
   assert.match(client, /decision === 'stale'/);
   assert.match(client, /onBackgroundUpdate/);
-  assert.match(client, /const mutationHeader = responseHeader\('x-fcos-handler-mutation'\)/);
+  assert.match(client, /mutationHeader = responseHeader\('x-fcos-handler-mutation'\)/);
   assert.match(client, /mutationHeader === '1'/);
   assert.doesNotMatch(client, /isMutationHandler\(name\)/);
 });
