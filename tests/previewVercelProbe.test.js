@@ -127,7 +127,8 @@ test('invalid reviewed IDs or credentials fail before any diagnostic request', a
 // Execute the real runner after mocked *upstream* identity/source providers.
 // Every Vercel read remains real runner code through a recording fake network;
 // any environment/deployment request, intent write, or execution claim fails.
-async function runnerScenario(root, temporaryDirectory) {
+async function runnerScenario(root, temporaryDirectory, variant = 'legacy') {
+  const enrolled = variant !== 'legacy';
   const assert = (await import('node:assert/strict')).default;
   const { mock } = await import('node:test');
   const fs = await import('node:fs');
@@ -168,7 +169,7 @@ async function runnerScenario(root, temporaryDirectory) {
       checks: FCOS_RELEASE_APPROVAL_POLICY.requiredChecks.map(context => ({ context, app_id: FCOS_RELEASE_APPROVAL_POLICY.statusCheckAppId })) } };
     if (path === `${prefix}/environments/${environment.name}`) return environment;
     if (path.includes('/variables?')) return { total_count: variables.length, variables };
-    if (path.includes('/secrets?')) return { total_count: 2, secrets: [{ name: 'FCOS_RELEASE_GH_TOKEN' }, { name: 'FCOS_RELEASE_VERCEL_TOKEN' }] };
+    if (path.includes('/secrets?')) { const secrets = [{ name: 'FCOS_RELEASE_GH_TOKEN' }, { name: 'FCOS_RELEASE_VERCEL_TOKEN' }, ...(enrolled ? [{ name: 'FCOS_RELEASE_VERCEL_ENROLLMENT' }] : [])]; return { total_count: secrets.length, secrets }; }
     if (path.endsWith('/actions/runs/99')) return run;
     if (path.endsWith('/actions/runs/99/approvals')) return [{ state: 'approved', user: reviewer, environments: [environment] }];
     if (path.includes('/attempts/1/jobs?')) return { total_count: 1, jobs };
@@ -180,6 +181,12 @@ async function runnerScenario(root, temporaryDirectory) {
   mock.module(moduleUrl('scripts/lib/release-readiness.mjs'), { namedExports: { ...readiness, releaseHash: () => candidate.lockHash } });
   mock.module(moduleUrl('scripts/lib/build-provenance.mjs'), { namedExports: { ...provenance,
     collectBuildProvenance: ({ cwd }) => ({ releaseEligible: true, commit: cwd === root ? harnessSha : candidate.sha, sourceDigest: candidate.sourceDigest }) } });
+  const enrollment = await import(moduleUrl('scripts/lib/preview-vercel-enrollment.mjs'));
+  const privateKey = `-----BEGIN PRIVATE KEY-----\n${Buffer.from('302e020100300506032b6570042204209d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60','hex').toString('base64')}\n-----END PRIVATE KEY-----`;
+  const publicKey = Buffer.from('302a300506032b6570032100d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a','hex').toString('base64');
+  if (enrolled) mock.module(moduleUrl('scripts/lib/preview-vercel-enrollment.mjs'), { namedExports: { ...enrollment,
+    collectEnrolledPreviewAuthority: options => enrollment.collectEnrolledPreviewAuthority({ ...options, publicKeySpkiBase64: publicKey }),
+    verifyEnrollmentReceipt: options => enrollment.verifyEnrollmentReceipt({ ...options, publicKeySpkiBase64: publicKey }) } });
   const build = await import(moduleUrl('scripts/lib/preview-email-build.mjs'));
   const controlRevision = build.previewEmailBuildControlRevision(root);
   const gates = { FCOS_PREVIEW_EMAIL_BUILD_ENABLED: 'false', FCOS_RUNTIME_COMPATIBILITY_RELEASE_ENABLED: 'false',
@@ -187,6 +194,16 @@ async function runnerScenario(root, temporaryDirectory) {
   variables = Object.entries({ ...gates, FCOS_PREVIEW_EMAIL_BUILD_REVIEWED_SHA: candidate.sha,
     FCOS_PREVIEW_EMAIL_BUILD_REVIEWED_HARNESS_SHA: harnessSha, FCOS_PREVIEW_EMAIL_BUILD_REVIEWED_CONTRACT_SHA256: build.PREVIEW_EMAIL_CONTRACT_SHA256,
     FCOS_PREVIEW_EMAIL_BUILD_REVIEWED_CONTROL_SHA256: controlRevision, FCOS_RELEASE_VERCEL_TOKEN_ID: 'reviewed-fixture-id' }).map(([name, value]) => ({ name, value }));
+  let privateEnrollment;
+  if (enrolled) {
+    const enrollmentId = '11111111-1111-4111-8111-111111111111';
+    const metadata = { id: 'reviewed-fixture-id', type: 'token', prefix: 'vcp_', projectId, createdAt: now - 1000, expiresAt: now + 3600000, scopes: [{ type: 'team', teamId }] };
+    privateEnrollment = enrollment.createPrivateEnrollment({ issuance: { token: { id: metadata.id }, bearerToken: 'vcp_PRIVATE' }, metadata, enrollmentId, requestedExpiresAt: metadata.expiresAt, now });
+    const envelope = enrollment.signEnrollmentReceipt({ privateEnrollment, metadata, privateKey, now, context: enrollment.enrolledAuthorityContext({
+      repositoryId: repository.id, environmentId: environment.id, runId: run.id, harnessSha, controlRevision, contractSha256: build.PREVIEW_EMAIL_CONTRACT_SHA256, candidateSha: candidate.sha, operation: 'verify-authority' }) });
+    variables.push(...Object.entries({ FCOS_PREVIEW_VERCEL_AUTHORITY_MODE: 'issuance-bound-v1', FCOS_PREVIEW_VERCEL_ISSUANCE_AUTHORITY_ENABLED: 'true',
+      FCOS_PREVIEW_VERCEL_ENROLLMENT_ID: enrollmentId, FCOS_PREVIEW_VERCEL_AUTHORITY_RECEIPT: JSON.stringify(envelope) }).map(([name, value]) => ({ name, value })));
+  }
   const bin = join(temporaryDirectory, 'bin'), runnerTemp = join(temporaryDirectory, 'runner');
   fs.mkdirSync(bin); fs.mkdirSync(runnerTemp);
   fs.writeFileSync(join(bin, 'vercel'), '#!/bin/sh\necho 54.20.1\n', { mode: 0o700 });
@@ -196,26 +213,48 @@ async function runnerScenario(root, temporaryDirectory) {
     assert.equal(request.method, 'GET'); assert.equal(request.body, undefined);
     assert.equal(new URL(url).origin, 'https://api.vercel.com');
     const path = new URL(url).pathname + new URL(url).search;
-    const project = { id: projectId, name: 'fcos', accountId: teamId, link: { type: 'github', org: 'hocheunglai-oss', repo: 'fcos' } };
+    const project = { id: projectId, name: 'fcos', accountId: teamId, autoAssignCustomDomains: false, targets: { production: { id: contract.baseline.deploymentId } }, link: { type: 'github', org: 'hocheunglai-oss', repo: 'fcos', productionBranch: 'main', deployHooks: [] } };
     let body, status = 200;
     if (path === '/v5/user/tokens/current') { status = 404; body = { error: { code: 'not_found', message: 'PRIVATE' } }; }
     else if (path === '/v5/user/tokens/reviewed-fixture-id') body = { token: { id: 'reviewed-fixture-id', createdAt: now - 1000,
       expiresAt: now + 3600000, scopes: [{ type: 'team', teamId }], projectId } };
-    else if (path === '/v9/projects?limit=100') body = { projects: [project], pagination: { count: 1, next: null } };
-    else if (path === '/v2/user' || path === `/v2/teams/${teamId}`) { status = 403; body = { error: { code: 'forbidden' } }; }
+    else if (path === '/v9/projects?limit=100') body = variant === 'partial-list' ? [project] : { projects: [project], pagination: { count: 1, next: null, ...(enrolled ? { prev: now } : {}) } };
+    else if (path === '/v2/user' || path === `/v2/teams/${teamId}`) { status = enrolled && path === '/v2/user' ? 404 : 403; body = { error: { code: status === 404 ? 'not_found' : 'forbidden' } }; }
     else if (path === `/v9/projects/${projectId}?teamId=${teamId}`) body = project;
+    else if (enrolled && path === `/v13/deployments/${contract.baseline.deploymentId}?teamId=${teamId}`) {
+      body = { id: contract.baseline.deploymentId, projectId, ownerId: teamId, target: 'production', readyState: 'READY', meta: { githubCommitSha: contract.baseline.sha }, url: contract.baseline.url.replace('https://', '') };
+      if (variant === 'changed-production') body.meta.githubCommitSha = 'f'.repeat(40);
+      if (variant === 'expired-after-production') mock.method(Date, 'now', () => now + 11 * 60_000);
+    }
     else assert.fail(`Diagnostic reached unexpected provider path: ${path}`);
     return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
   };
   const { runPreviewEmailProofBuild } = await import(moduleUrl('scripts/preview-email-proof-build.mjs'));
-  const options = { mode: 'diagnose-authority', candidateSha: candidate.sha, candidateCwd: join(root, 'candidate-fixture'), trustedCwd: root,
-    env: { GH_TOKEN: 'PRIVATE', VERCEL_TOKEN: 'PRIVATE', PATH: `${bin}:${process.env.PATH}`, HOME: temporaryDirectory,
+  const options = { mode: enrolled ? 'verify-authority' : 'diagnose-authority', candidateSha: candidate.sha, candidateCwd: join(root, 'candidate-fixture'), trustedCwd: root,
+    env: { GH_TOKEN: 'PRIVATE', VERCEL_TOKEN: enrolled ? 'vcp_PRIVATE' : 'PRIVATE', FCOS_RELEASE_VERCEL_ENROLLMENT: enrolled ? JSON.stringify(privateEnrollment) : undefined, PATH: `${bin}:${process.env.PATH}`, HOME: temporaryDirectory,
       RUNNER_TEMP: runnerTemp, GITHUB_RUN_ID: '99' } };
   // The candidate lock is read before providers. Point that one read at the
   // exact lock in a temporary candidate directory; no repository file changes.
   const candidateDirectory = join(temporaryDirectory, 'candidate'); fs.mkdirSync(candidateDirectory);
   fs.copyFileSync(join(root, 'package-lock.json'), join(candidateDirectory, 'package-lock.json'));
   options.candidateCwd = candidateDirectory;
+  fs.writeFileSync(join(candidateDirectory, 'vercel.json'), JSON.stringify({ git: { deploymentEnabled: false } }));
+  if (enrolled) {
+    if (variant === 'valid') assert.deepEqual(await runPreviewEmailProofBuild(options), { authorityVerified: true, retainedProductionVerified: true, mutations: 0, previewAuthorized: false, productionAuthorized: false });
+    else await assert.rejects(() => runPreviewEmailProofBuild(options));
+    assert.equal(requests.length, 5);
+    assert.ok(!fs.readdirSync(runnerTemp).some(name => /intent|execution|build\.json/.test(name)));
+    const journal = fs.readFileSync(join(runnerTemp, 'fcos-preview-email-journal-99.jsonl'), 'utf8');
+    assert.doesNotMatch(journal, /intent_write|environment_records|controlled_build|execution_claim/);
+    if (variant !== 'expired-after-production') {
+      const report = JSON.parse(fs.readFileSync(join(runnerTemp, 'fcos-preview-enrolled-authority.json')));
+      assert.equal(report.authorityVerified, variant === 'valid');
+      assert.equal(report.retainedProductionVerified, variant !== 'changed-production');
+      assert.equal(report.previewAuthorized, false); assert.ok(!JSON.stringify(report).includes('PRIVATE'));
+    }
+    assert.ok(!githubPaths.some(path => path.includes('/actions/variables?')));
+    console.log('protected-enrolled-runner-passed'); return;
+  }
   const result = await runPreviewEmailProofBuild(options);
   assert.deepEqual(result, { diagnosticCompleted: true, mutations: 0, previewAuthorized: false, productionAuthorized: false });
   assert.equal(requests.length, 6);
@@ -254,7 +293,7 @@ test('protected diagnostic runner terminates before environment reads, intent, c
 test('workflow keeps diagnostic separate from all build and readback steps and preserves only its own artifact', () => {
   const workflow = readFileSync(new URL('../.github/workflows/preview-email-proof-build.yml', import.meta.url), 'utf8');
   const jobs = workflow.split('  proof:')[1], condition = jobs.split('\n').find(line => line.trim().startsWith('if:'));
-  assert.match(condition, /inputs.operation == 'diagnose-authority' && vars.FCOS_PREVIEW_EMAIL_BUILD_ENABLED == 'false' && vars.FCOS_PREVIEW_EMAIL_AUTHORITY_DIAGNOSTIC_ENABLED == 'true'/);
+  assert.match(condition, /inputs.operation == 'diagnose-authority' \|\| inputs.operation == 'verify-authority'/);
   assert.match(condition, /vars.FCOS_RUNTIME_COMPATIBILITY_RELEASE_ENABLED == 'false'/);
   const steps = workflow.split('      - name:').slice(1);
   for (const step of steps.filter(value => /--prepare|--create|immutable intent|--readback/.test(value))) {
@@ -264,4 +303,14 @@ test('workflow keeps diagnostic separate from all build and readback steps and p
   assert.match(probe, /if: \$\{\{ inputs.operation == 'diagnose-authority' \}\}/);
   assert.doesNotMatch(probe, /FCOS_E2E_VERCEL_BYPASS/);
   assert.match(steps.find(value => value.includes('Preserve exact non-secret')), /inputs.operation != 'diagnose-authority'/);
+});
+
+for (const variant of ['valid', 'partial-list', 'changed-production', 'expired-after-production']) test(`enrolled runner ${variant} checks Production and terminates without intent, claim or deployment`, () => {
+  const directory = mkdtempSync(join(tmpdir(), 'fcos-enrolled-runner-'));
+  try {
+    const script = join(directory, 'runner.mjs');
+    writeFileSync(script, `await (${runnerScenario.toString()})(${JSON.stringify(process.cwd())}, ${JSON.stringify(directory)}, ${JSON.stringify(variant)});`);
+    const result = spawnSync(process.execPath, ['--experimental-test-module-mocks', script], { cwd: process.cwd(), encoding: 'utf8', timeout: 30000, env: { PATH: process.env.PATH } });
+    assert.equal(result.status, 0, result.stderr); assert.match(result.stdout, /protected-enrolled-runner-passed/);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
 });

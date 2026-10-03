@@ -399,7 +399,7 @@ test('new Preview helper participates in local and remote control revision and b
   assert.match(builder, /onDiagnostic: diagnostics\.authority/);
   assert.doesNotMatch(builder, /assertVercelProductionAuthority|readVercelTokenMetadata/);
   assert.doesNotMatch(builder, /'--scope'|cli\(\['api'/);
-  assert.match(builder, /create: request => provider\.create\(request\)/);
+  assert.match(builder, /create: request => \{ recheckEnrolled\(\); return provider\.create\(request\); \}/);
   const controls = readFileSync(new URL('../scripts/lib/preview-email-build.mjs', import.meta.url), 'utf8');
   assert.match(controls, /for \(const file of PREVIEW_EMAIL_BUILD_CONTROL_FILES\)/);
 });

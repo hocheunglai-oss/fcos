@@ -16,6 +16,7 @@ on:
           - create
           - readback
           - diagnose-authority
+          - verify-authority
       original_run_id:
         description: Original approved creation run, required only for readback
         required: false
@@ -33,7 +34,7 @@ permissions:
 # no additional GitHub Variables permission is required for the terminal probe.
 jobs:
   proof:
-    if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && vars.FCOS_RUNTIME_COMPATIBILITY_RELEASE_ENABLED == 'false' && ((inputs.operation != 'diagnose-authority' && vars.FCOS_PREVIEW_EMAIL_BUILD_ENABLED == 'true') || (inputs.operation == 'diagnose-authority' && vars.FCOS_PREVIEW_EMAIL_BUILD_ENABLED == 'false' && vars.FCOS_PREVIEW_EMAIL_AUTHORITY_DIAGNOSTIC_ENABLED == 'true')) }}
+    if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && vars.FCOS_RUNTIME_COMPATIBILITY_RELEASE_ENABLED == 'false' && ((inputs.operation != 'diagnose-authority' && inputs.operation != 'verify-authority' && vars.FCOS_PREVIEW_EMAIL_BUILD_ENABLED == 'true') || ((inputs.operation == 'diagnose-authority' || inputs.operation == 'verify-authority') && vars.FCOS_PREVIEW_EMAIL_BUILD_ENABLED == 'false' && vars.FCOS_PREVIEW_EMAIL_AUTHORITY_DIAGNOSTIC_ENABLED == 'true')) }}
     runs-on: ubuntu-latest
     environment: fcos-runtime-compatibility-release
     timeout-minutes: 25
@@ -79,12 +80,28 @@ jobs:
           path: ${{ runner.temp }}/fcos-preview-vercel-authority-probe.json
           if-no-files-found: error
           retention-days: 7
+      - name: Verify enrolled authority without creating a Preview
+        if: ${{ inputs.operation == 'verify-authority' }}
+        run: node trusted/scripts/preview-email-proof-build.mjs --verify-authority
+        env:
+          GH_TOKEN: ${{ secrets.FCOS_RELEASE_GH_TOKEN }}
+          VERCEL_TOKEN: ${{ secrets.FCOS_RELEASE_VERCEL_TOKEN }}
+          FCOS_RELEASE_VERCEL_ENROLLMENT: ${{ secrets.FCOS_RELEASE_VERCEL_ENROLLMENT }}
+      - name: Preserve only sanitized enrolled authority verification
+        if: ${{ always() && inputs.operation == 'verify-authority' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: fcos-preview-enrolled-authority-${{ github.run_id }}
+          path: ${{ runner.temp }}/fcos-preview-enrolled-authority.json
+          if-no-files-found: error
+          retention-days: 7
       - name: Prepare reviewed metadata and exact Preview-only request
         if: ${{ inputs.operation == 'create' }}
         run: node trusted/scripts/preview-email-proof-build.mjs --prepare
         env:
           GH_TOKEN: ${{ secrets.FCOS_RELEASE_GH_TOKEN }}
           VERCEL_TOKEN: ${{ secrets.FCOS_RELEASE_VERCEL_TOKEN }}
+          FCOS_RELEASE_VERCEL_ENROLLMENT: ${{ secrets.FCOS_RELEASE_VERCEL_ENROLLMENT }}
       - name: Persist immutable intent before any deployment request
         if: ${{ inputs.operation == 'create' }}
         uses: actions/upload-artifact@v4
@@ -99,6 +116,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.FCOS_RELEASE_GH_TOKEN }}
           VERCEL_TOKEN: ${{ secrets.FCOS_RELEASE_VERCEL_TOKEN }}
+          FCOS_RELEASE_VERCEL_ENROLLMENT: ${{ secrets.FCOS_RELEASE_VERCEL_ENROLLMENT }}
           FCOS_E2E_VERCEL_BYPASS: ${{ secrets.FCOS_E2E_VERCEL_BYPASS }}
       - name: Recover original operation without creating any deployment
         if: ${{ inputs.operation == 'readback' }}
@@ -106,9 +124,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.FCOS_RELEASE_GH_TOKEN }}
           VERCEL_TOKEN: ${{ secrets.FCOS_RELEASE_VERCEL_TOKEN }}
+          FCOS_RELEASE_VERCEL_ENROLLMENT: ${{ secrets.FCOS_RELEASE_VERCEL_ENROLLMENT }}
           FCOS_E2E_VERCEL_BYPASS: ${{ secrets.FCOS_E2E_VERCEL_BYPASS }}
       - name: Preserve exact non-secret source-bound receipt
-        if: ${{ inputs.operation != 'diagnose-authority' }}
+        if: ${{ inputs.operation != 'diagnose-authority' && inputs.operation != 'verify-authority' }}
         uses: actions/upload-artifact@v4
         with:
           name: fcos-preview-email-build-${{ inputs.expected_commit }}

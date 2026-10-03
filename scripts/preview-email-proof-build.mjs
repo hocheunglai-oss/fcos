@@ -1,3 +1,4 @@
+import { ENROLLED_AUTHORITY_MODE, ENROLLED_AUTHORITY_SECRET, ENROLLED_AUTHORITY_FILENAME, collectEnrolledPreviewAuthority, enrolledAuthorityContext, verifyEnrollmentReceipt } from './lib/preview-vercel-enrollment.mjs';
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, appendFileSync, lstatSync, openSync, closeSync, fstatSync, constants } from 'node:fs';
 import { randomUUID } from 'node:crypto';
@@ -29,7 +30,7 @@ const DIAGNOSTIC_PHASES = new Set(['runner_context', 'candidate_contract', 'cand
   'protected_repository', 'environment_variables', 'environment_protection', 'environment_secrets', 'workflow_run',
   'environment_approval', 'workflow_job', 'protection_review', 'candidate_branch', 'source_recheck', 'vercel_authority',
   'retained_production', 'environment_records', 'intent_write', 'recovery_context', 'trusted_intent', 'execution_claim',
-  'controlled_build', 'receipt_write', 'authority_probe', 'authority_probe_write']);
+  'controlled_build', 'receipt_write', 'authority_probe', 'authority_probe_write', 'enrolled_authority', 'enrolled_authority_write']);
 const diagnosticFailure = phase => new Error(`FCOS protected Preview ${phase} failed; private diagnostics suppressed.`);
 const authoritySubstages = new Set(PREVIEW_AUTHORITY_SUBSTAGES), authorityFailures = new Set(PREVIEW_AUTHORITY_FAILURES);
 
@@ -40,7 +41,7 @@ const authoritySubstages = new Set(PREVIEW_AUTHORITY_SUBSTAGES), authorityFailur
 export function createPreviewEmailBuildDiagnostics({ mode, runId, directory, trustedCwd, candidateCwd, now = () => Date.now() } = {}) {
   let fd;
   try {
-    if (!['prepare', 'create', 'readback', 'diagnose-authority'].includes(mode) || !/^[1-9][0-9]*$/.test(String(runId || ''))
+    if (!['prepare', 'create', 'readback', 'diagnose-authority', 'verify-authority'].includes(mode) || !/^[1-9][0-9]*$/.test(String(runId || ''))
       || !Number.isSafeInteger(Number(runId)) || typeof directory !== 'string' || !directory) throw new Error('context');
     directory = resolve(directory);
     if (directory === '/' || directory === resolve(trustedCwd) || directory === resolve(candidateCwd)
@@ -121,7 +122,7 @@ export function createPreviewEmailBuildDiagnostics({ mode, runId, directory, tru
   }
 }
 export function previewEmailBuildArguments(args, env = process.env) {
-  if (args.length > 1 || args.some(value => !['--dry-run', '--prepare', '--create', '--readback', '--diagnose-authority'].includes(value))) throw new Error('Use one protected Preview proof mode.');
+  if (args.length > 1 || args.some(value => !['--dry-run', '--prepare', '--create', '--readback', '--diagnose-authority', '--verify-authority'].includes(value))) throw new Error('Use one protected Preview proof mode.');
   return { mode: args[0]?.slice(2) || 'dry-run', candidateSha: env.FCOS_E2E_EXPECTED_COMMIT,
     candidateCwd: resolve(env.FCOS_RELEASE_SOURCE_DIRECTORY || ROOT), recoveryRunId: Number(env.FCOS_PREVIEW_EMAIL_ORIGINAL_RUN_ID) };
 }
@@ -228,7 +229,8 @@ export async function runPreviewEmailProofBuild({ mode = 'dry-run', candidateSha
       }
     });
     const provider = createPreviewEmailVercelApi({ token: env.VERCEL_TOKEN }), api = provider.get;
-    let signed, approved;
+    let signed, approved, enrolledBinding;
+    const recheckEnrolled = () => { if (enrolledBinding) verifyEnrollmentReceipt(enrolledBinding); };
     const authority = async intent => {
       await stage('github_identity', () => assertReleaseGitHubAccount(reads));
       signed = await stage('actions_oidc', () => githubReleaseOidc({ env }));
@@ -247,7 +249,7 @@ export async function runPreviewEmailProofBuild({ mode = 'dry-run', candidateSha
       approved = await stage('protection_review', () => {
         const result = assertPreviewEmailBuildProtection({ repository, branch, protection, environment, variables, secrets,
           run, jobs, approvals, oidcClaims: signed, candidateSha, harnessSha: harness.commit, controlRevision,
-          mode: mode === 'diagnose-authority' ? mode : 'build' });
+          mode: ['diagnose-authority', 'verify-authority'].includes(mode) ? mode : 'build' });
         if (result.runId !== Number(env.GITHUB_RUN_ID)) throw new Error('This runner journal must bind the exact approved workflow run.');
         return result;
       });
@@ -269,15 +271,42 @@ export async function runPreviewEmailProofBuild({ mode = 'dry-run', candidateSha
           { mode: 0o600, flag: 'wx', flush: true }));
         return { diagnosticCompleted: true, mutations: 0, previewAuthorized: false, productionAuthorized: false };
       }
-      const { project } = await stage('vercel_authority', () => collectPreviewVercelAuthority({ token: env.VERCEL_TOKEN, reviewedTokenId: approved.reviewedTokenId,
-        readProject: api, deploymentConfiguration: JSON.parse(readFileSync(join(candidateCwd, 'vercel.json'))), onDiagnostic: diagnostics.authority }));
-      await stage('retained_production', async () => {
+      const configuration = JSON.parse(readFileSync(join(candidateCwd, 'vercel.json')));
+      let project, enrolledReport;
+      if (approved.authorityMode === ENROLLED_AUTHORITY_MODE) {
+        enrolledBinding = {
+          envelope: approved.authorityEnvelope, privateEnrollment: env[ENROLLED_AUTHORITY_SECRET], token: env.VERCEL_TOKEN,
+          reviewedTokenId: approved.reviewedTokenId, enrollmentId: approved.enrollmentId,
+          context: enrolledAuthorityContext({ repositoryId: repository.id, environmentId: approved.environmentId, runId: approved.runId,
+            harnessSha: harness.commit, controlRevision, contractSha256: PREVIEW_EMAIL_CONTRACT_SHA256, candidateSha,
+            operation: mode === 'prepare' ? 'create' : mode }) };
+        const result = await stage('enrolled_authority', () => collectEnrolledPreviewAuthority({ ...enrolledBinding,
+          deploymentConfiguration: configuration, verifyOnly: mode === 'verify-authority' }));
+        project = result.project;
+        if (mode === 'verify-authority') enrolledReport = result.report;
+      } else {
+        ({ project } = await stage('vercel_authority', () => collectPreviewVercelAuthority({ token: env.VERCEL_TOKEN, reviewedTokenId: approved.reviewedTokenId,
+          readProject: api, deploymentConfiguration: configuration, onDiagnostic: diagnostics.authority })));
+      }
+      const saveVerification = retainedProductionVerified => stage('enrolled_authority_write', () => writeFileSync(join(resolve(env.RUNNER_TEMP), ENROLLED_AUTHORITY_FILENAME),
+        `${JSON.stringify({ ...enrolledReport, retainedProductionVerified, authorityVerified: retainedProductionVerified && enrolledReport.authorityVerified,
+          runId: approved.runId, candidateSha, harnessSha: harness.commit, controlRevision })}\n`, { mode: 0o600, flag: 'wx', flush: true }));
+      try { await stage('retained_production', async () => {
         if (project.link.productionBranch !== repository.default_branch || project.targets?.production?.id !== baseline.deploymentId) throw new Error('The retained Production target changed.');
         const previous = await api(`/v13/deployments/${baseline.deploymentId}`);
         if (previous.projectId !== projectId || previous.ownerId !== teamId && previous.teamId !== teamId
           || previous.target !== 'production' || previous.readyState !== 'READY' || previous.meta?.githubCommitSha !== baseline.sha
           || `https://${previous.url}` !== baseline.url) throw new Error('The exact retained Production readback failed.');
-      });
+      }); } catch {
+        if (enrolledReport) await saveVerification(false);
+        throw new Error('Retained Production verification failed; private evidence suppressed.');
+      }
+      recheckEnrolled();
+      if (enrolledReport) {
+        await saveVerification(true);
+        if (!enrolledReport.authorityVerified) throw new Error('Enrolled scope verification failed; inspect only the sanitized report.');
+        return { authorityVerified: true, retainedProductionVerified: true, mutations: 0, previewAuthorized: false, productionAuthorized: false };
+      }
       if (intent) {
         await stage('recovery_context', () => {
           if (intent.harnessSha !== harness.commit || intent.controlRevision !== controlRevision || intent.candidate.sha !== candidateSha
@@ -288,10 +317,11 @@ export async function runPreviewEmailProofBuild({ mode = 'dry-run', candidateSha
           if (JSON.stringify(current.records) !== JSON.stringify(intent.environmentRecords.records)) throw new Error('Project environment records changed after intent capture.');
         });
       }
+      recheckEnrolled();
       return approved;
     };
     const initialAuthority = await authority();
-    if (mode === 'diagnose-authority') return initialAuthority;
+    if (['diagnose-authority', 'verify-authority'].includes(mode)) return initialAuthority;
     const directory = resolve(env.RUNNER_TEMP);
     if (mode === 'prepare') {
       const records = await stage('environment_records', () => collectPreviewEmailEnvironmentRecords({ api }));
@@ -344,7 +374,7 @@ export async function runPreviewEmailProofBuild({ mode = 'dry-run', candidateSha
       throw new Error('Preview is still pending; recover the original intent by readback only.');
     };
     const receipt = await stage('controlled_build', () => runControlledPreviewEmailBuild({ intent, mode, authority, journal, discover, waitReady,
-      create: request => provider.create(request),
+      create: request => { recheckEnrolled(); return provider.create(request); },
       collectRecords: () => collectPreviewEmailEnvironmentRecords({ api }),
       readVersion: deployment => readPreviewEmailBuildVersion(deployment, { bypass: env.FCOS_E2E_VERCEL_BYPASS }) }));
     await stage('receipt_write', () => writeFileSync(join(directory, PREVIEW_EMAIL_BUILD_FILENAME), `${JSON.stringify(receipt)}\n`, { mode: 0o600, flag: 'wx', flush: true }));

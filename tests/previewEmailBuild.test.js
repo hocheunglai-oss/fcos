@@ -327,3 +327,26 @@ test('read-only diagnostic requires fresh environment gates with exact existing 
   const value = await diagnosticFixture(); delete value.mode;
   assert.throws(() => assertPreviewEmailBuildProtection(value));
 });
+
+
+test('issuance authority is default off and verify-only requires exact enable, enrollment and companion controls', async () => {
+  const legacy = (await liveProtectionFixture()).protectionInputs;
+  assert.equal(assertPreviewEmailBuildProtection(legacy).authorityMode, 'legacy-current-v1');
+  assert.throws(() => assertPreviewEmailBuildProtection({ ...legacy, mode: 'verify-authority' }));
+  const value = (await liveProtectionFixture()).protectionInputs;
+  value.mode = 'verify-authority';
+  value.variables.variables.find(row => row.name === 'FCOS_PREVIEW_EMAIL_BUILD_ENABLED').value = 'false';
+  value.variables.variables.push(...Object.entries({ FCOS_PREVIEW_EMAIL_AUTHORITY_DIAGNOSTIC_ENABLED: 'true',
+    FCOS_PREVIEW_VERCEL_AUTHORITY_MODE: 'issuance-bound-v1', FCOS_PREVIEW_VERCEL_ISSUANCE_AUTHORITY_ENABLED: 'true',
+    FCOS_PREVIEW_VERCEL_ENROLLMENT_ID: '11111111-1111-4111-8111-111111111111', FCOS_PREVIEW_VERCEL_AUTHORITY_RECEIPT: '{}' }).map(([name, value]) => ({ name, value })));
+  value.secrets.secrets.push({ name: 'FCOS_RELEASE_VERCEL_ENROLLMENT' });
+  assert.equal(assertPreviewEmailBuildProtection(value).authorityMode, 'issuance-bound-v1');
+  for (const name of ['FCOS_PREVIEW_EMAIL_BUILD_ENABLED', 'FCOS_RUNTIME_COMPATIBILITY_RELEASE_ENABLED', 'FCOS_PREVIEW_EMAIL_AUTHORITY_DIAGNOSTIC_ENABLED',
+    'FCOS_PREVIEW_VERCEL_AUTHORITY_MODE', 'FCOS_PREVIEW_VERCEL_ISSUANCE_AUTHORITY_ENABLED', 'FCOS_PREVIEW_VERCEL_ENROLLMENT_ID', 'FCOS_PREVIEW_VERCEL_AUTHORITY_RECEIPT']) {
+    const changed = structuredClone(value); changed.variables.variables = changed.variables.variables.filter(row => row.name !== name);
+    assert.throws(() => assertPreviewEmailBuildProtection(changed));
+  }
+  const missing = structuredClone(value); missing.secrets.secrets.pop(); assert.throws(() => assertPreviewEmailBuildProtection(missing));
+  const duplicate = structuredClone(value); duplicate.variables.variables.push({ name: 'FCOS_PREVIEW_VERCEL_AUTHORITY_MODE', value: 'legacy-current-v1' });
+  assert.throws(() => assertPreviewEmailBuildProtection(duplicate));
+});
