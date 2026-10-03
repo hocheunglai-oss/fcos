@@ -90,7 +90,7 @@ export function assertVercelPreviewAuthority({ token, reviewedTokenId, projects,
     tokenExpiresAt: Number(token.expiresAt), productionAuthorized: false };
 }
 
-async function read(path, { token, fetchImpl, diagnose, substage }) {
+async function read(path, { token, fetchImpl, diagnose, substage, captureErrorCategory = false }) {
   let httpStatus, failureCategory = 'transport_failure';
   try {
     const url = `https://api.vercel.com${path}`;
@@ -100,7 +100,7 @@ async function read(path, { token, fetchImpl, diagnose, substage }) {
     if (response.redirected !== false || response.url && response.url !== url
       || !Number.isInteger(response.status) || response.status < 200 || response.status > 599) throw new Error('response');
     httpStatus = response.status;
-    if (response.status !== 200) {
+    if (response.status !== 200 && !captureErrorCategory) {
       await response.body?.cancel();
       return { status: response.status };
     }
@@ -117,7 +117,12 @@ async function read(path, { token, fetchImpl, diagnose, substage }) {
         chunks.push(value);
       }
     } finally { await reader.cancel(); }
-    return { status: 200, body: JSON.parse(Buffer.concat(chunks).toString('utf8')) };
+    const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    if (response.status === 200) return { status: 200, body };
+    // Only fixed public error codes may cross the diagnostic boundary.
+    const code = body?.error?.code;
+    return { status: response.status, errorCategory: ['not_found', 'token_not_found', 'forbidden',
+      'unauthorized', 'invalid_token', 'invalid_scope', 'bad_request', 'rate_limited'].includes(code) ? code : 'other' };
   } catch {
     await diagnose({ substage, status: 'failed', failureCategory, ...(httpStatus === undefined ? {} : { httpStatus }) });
     throw new Error('Pinned Preview Vercel authority GET failed; private diagnostics suppressed.');
@@ -207,4 +212,58 @@ export async function collectPreviewVercelAuthority({ token, reviewedTokenId, de
   await diagnose({ substage: 'exact_project', status: 'passed' });
   await diagnose({ substage: 'configuration', status: 'passed' });
   return { project, authority };
+}
+
+/** A bounded investigation, never deployment authority. Exact-ID metadata can
+ * describe another token owned by the caller: only /current can bind the bearer.
+ * Continue independent reads after metadata failure solely to distinguish an
+ * unavailable self resource from an unusable credential. No arbitrary URLs,
+ * retries, credential fragments or provider bodies escape this function. */
+export async function probePreviewVercelAuthority({ token, reviewedTokenId, fetchImpl = globalThis.fetch,
+  now = () => Date.now() } = {}) {
+  if (typeof token !== 'string' || !token || !tokenId(reviewedTokenId) || reviewedTokenId === 'current'
+    || typeof fetchImpl !== 'function' || typeof now !== 'function' || !timestamp(now())) {
+    throw new Error('The protected authority diagnostic requires valid pinned inputs.');
+  }
+  const checks = {};
+  const inspect = async (name, path, summarize) => {
+    let failure;
+    let result;
+    try {
+      result = await read(path, { token, fetchImpl, substage: name, captureErrorCategory: true,
+        diagnose: row => { failure = row; } });
+    } catch {
+      checks[name] = { failureCategory: failure?.failureCategory || 'response_invalid',
+        ...(failure?.httpStatus === undefined ? {} : { httpStatus: failure.httpStatus }) };
+      return;
+    }
+    checks[name] = { httpStatus: result.status,
+      ...(result.status === 200 ? summarize(result.body) : { errorCategory: result.errorCategory }) };
+  };
+  const metadataSummary = body => {
+    const metadata = body?.token;
+    let metadataPolicyMatches = false;
+    try { assertToken(metadata, reviewedTokenId, now()); metadataPolicyMatches = true; } catch { /* Boolean only. */ }
+    return { ...tokenBinding(metadata, reviewedTokenId), metadataPolicyMatches,
+      tokenProjectMatches: metadata?.projectId === projectId };
+  };
+  await inspect('current_metadata', '/v5/user/tokens/current', metadataSummary);
+  await inspect('reviewed_metadata', `/v5/user/tokens/${reviewedTokenId}`, metadataSummary);
+  await inspect('project_list', '/v9/projects?limit=100', body => {
+    let completePinnedProjectOnly = false;
+    try { assertProjectList(body); completePinnedProjectOnly = true; } catch { /* Boolean only. */ }
+    return { completePinnedProjectOnly };
+  });
+  await inspect('user_resource', '/v2/user', () => ({}));
+  await inspect('team_resource', `/v2/teams/${teamId}`, () => ({}));
+  await inspect('exact_project', `/v9/projects/${projectId}?teamId=${teamId}`, project => ({
+    pinnedProjectIdentityMatches: project?.id === projectId && project.name === fcosConnectionIdentifier('vercel', 'Project')
+      && project.accountId === teamId && project.link?.type === 'github' && project.link.org === owner && project.link.repo === repository,
+  }));
+  const current = checks.current_metadata;
+  return { schemaVersion: 1, kind: 'fcos_preview_vercel_authority_probe', readOnly: true,
+    previewAuthorized: false, productionAuthorized: false,
+    credentialShape: { personalTokenPrefixRecognized: token.startsWith('vcp_'), credentialWhitespacePresent: /\s/.test(token) },
+    bearerBinding: current.httpStatus === 200 && typeof current.reviewedTokenIdMatches === 'boolean'
+      ? current.reviewedTokenIdMatches ? 'matched' : 'mismatch' : 'unproven', checks };
 }

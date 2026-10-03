@@ -9,6 +9,8 @@ import { canonicalFcosE2eCandidateUrl } from '../verify-e2e-candidate.mjs';
 export const PREVIEW_EMAIL_BUILD_WORKFLOW = '.github/workflows/preview-email-proof-build.yml';
 export const PREVIEW_EMAIL_BUILD_ENVIRONMENT = 'fcos-runtime-compatibility-release';
 export const PREVIEW_EMAIL_BUILD_ENABLE = 'FCOS_PREVIEW_EMAIL_BUILD_ENABLED';
+export const PREVIEW_EMAIL_AUTHORITY_DIAGNOSTIC_ENABLE = 'FCOS_PREVIEW_EMAIL_AUTHORITY_DIAGNOSTIC_ENABLED';
+export const PREVIEW_EMAIL_AUTHORITY_DIAGNOSTIC_FILENAME = 'fcos-preview-vercel-authority-probe.json';
 export const PREVIEW_EMAIL_INTENT_FILENAME = 'fcos-preview-email-intent.json';
 export const PREVIEW_EMAIL_BUILD_FILENAME = 'fcos-preview-email-build.json';
 const contractBytes = readFileSync(new URL('../../config/legacy-email-baseline-proof.json', import.meta.url));
@@ -217,11 +219,14 @@ function assertEnvironmentReview({ environment, run, jobs, approvals, trusted, c
   return { reviewerId: reviewer.reviewer.id, runId: run.id, environmentId: environment.id };
 }
 
-export function assertPreviewEmailBuildProtection({ repository, branch, protection, environment, variables, secrets, run, jobs, approvals, oidcClaims, candidateSha, harnessSha, controlRevision, now = Date.now() } = {}) {
+export function assertPreviewEmailBuildProtection({ repository, branch, protection, environment, variables, secrets, run, jobs, approvals, oidcClaims, candidateSha, harnessSha, controlRevision, mode = 'build', now = Date.now() } = {}) {
+  if (!['build', 'diagnose-authority'].includes(mode)) failure('Unknown protected Preview operation.');
   const trusted = assertProtectedDefault(repository, branch, protection);
   previewEmailBuildCandidate(candidateSha);
   const approved = assertEnvironmentReview({ environment, run, jobs, approvals, trusted, candidateSha, completed: false, now });
-  const pins = { [PREVIEW_EMAIL_BUILD_ENABLE]: 'true', FCOS_RUNTIME_COMPATIBILITY_RELEASE_ENABLED: 'false',
+  const pins = { [PREVIEW_EMAIL_BUILD_ENABLE]: mode === 'diagnose-authority' ? 'false' : 'true',
+    ...(mode === 'diagnose-authority' ? { [PREVIEW_EMAIL_AUTHORITY_DIAGNOSTIC_ENABLE]: 'true' } : {}),
+    FCOS_RUNTIME_COMPATIBILITY_RELEASE_ENABLED: 'false',
     FCOS_PREVIEW_EMAIL_BUILD_REVIEWED_SHA: candidateSha, FCOS_PREVIEW_EMAIL_BUILD_REVIEWED_HARNESS_SHA: harnessSha,
     FCOS_PREVIEW_EMAIL_BUILD_REVIEWED_CONTRACT_SHA256: PREVIEW_EMAIL_CONTRACT_SHA256,
     FCOS_PREVIEW_EMAIL_BUILD_REVIEWED_CONTROL_SHA256: controlRevision };
