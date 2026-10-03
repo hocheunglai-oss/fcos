@@ -1,9 +1,9 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { cpSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { accessSync, constants, cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { collectBuildProvenance, deploymentSourceFilter, writeBuildReceipts } from '../scripts/lib/build-provenance.mjs';
 
 // Isolate both fixture Git commands and the collector's inherited subprocess
@@ -12,6 +12,7 @@ const fixtureRoot = realpathSync(mkdtempSync(join(tmpdir(), 'fcos-provenance-sui
 const gitEnvironmentNames = [...execFileSync('git', ['rev-parse', '--local-env-vars'], {
   encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
 }).trim().split('\n'), 'GIT_CEILING_DIRECTORIES'];
+const inheritedGitKeyNames = Object.keys(process.env).filter(name => /^GIT_[A-Z0-9_]+$/.test(name)).sort();
 const inheritedGitEnvironment = new Map(gitEnvironmentNames.map(name => [name, process.env[name]]));
 for (const name of gitEnvironmentNames) delete process.env[name];
 process.env.GIT_CEILING_DIRECTORIES = fixtureRoot;
@@ -27,7 +28,10 @@ function fixture(t) {
   const cwd = mkdtempSync(join(fixtureRoot, 'checkout-'));
   t.after(() => rmSync(cwd, { recursive: true, force: true }));
   const git = (...args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
-  git('init', '-q');
+  // Pin initialization independently of an existing ancestor repository.
+  git('init', '-q', cwd);
+  assert.equal(git('rev-parse', '--absolute-git-dir'), join(cwd, '.git'));
+  assert.equal(git('rev-parse', '--show-toplevel'), cwd);
   writeFileSync(join(cwd, 'source.js'), 'export const answer = 42;\n');
   writeFileSync(join(cwd, '.gitignore'), '.env*\n');
   mkdirSync(join(cwd, 'public'));
@@ -96,7 +100,9 @@ test('archive fixtures cannot discover an ancestor checkout', t => {
   const ancestorGit = (...args) => execFileSync('git', args, {
     cwd: fixtureRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
   }).trim();
-  ancestorGit('init', '-q');
+  ancestorGit('init', '-q', fixtureRoot);
+  assert.equal(ancestorGit('rev-parse', '--absolute-git-dir'), join(fixtureRoot, '.git'));
+  assert.equal(ancestorGit('rev-parse', '--show-toplevel'), fixtureRoot);
   writeFileSync(join(fixtureRoot, 'ancestor.txt'), 'ancestor repository fixture\n');
   ancestorGit('add', 'ancestor.txt');
   ancestorGit('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'ancestor');
@@ -106,12 +112,59 @@ test('archive fixtures cannot discover an ancestor checkout', t => {
   });
   const f = fixture(t);
   rmSync(join(f.cwd, '.git'), { recursive: true });
+  const metadataPresence = () => ({
+    ancestorGit: existsSync(join(fixtureRoot, '.git')), ancestorConfig: existsSync(join(fixtureRoot, '.git', 'config')),
+    childGit: existsSync(join(f.cwd, '.git')), childConfig: existsSync(join(f.cwd, '.git', 'config')),
+  });
+  const immediatelyAfterRemoval = metadataPresence();
   const unboundedEnv = { ...process.env };
   delete unboundedEnv.GIT_CEILING_DIRECTORIES;
   const unboundedGit = (...args) => execFileSync('git', args, {
     cwd: f.cwd, env: unboundedEnv, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
   }).trim();
-  assert.equal(unboundedGit('rev-parse', '--absolute-git-dir'), join(fixtureRoot, '.git'));
+  const beforeUnboundedLookup = metadataPresence();
+  const discoveredGitDir = unboundedGit('rev-parse', '--absolute-git-dir');
+  const afterUnboundedLookup = metadataPresence();
+  if (discoveredGitDir !== join(fixtureRoot, '.git')) {
+    // Failure-only local diagnostics. Never emit inherited/config values or errors.
+    const probe = (args, env = unboundedEnv, cwd = f.cwd) => {
+      try { return { ok: true, value: execFileSync('git', args, { cwd, env, encoding: 'utf8',
+        timeout: 1000, maxBuffer: 1024, stdio: ['ignore', 'pipe', 'ignore'] }).trim() }; }
+      catch { return { ok: false, value: '' }; }
+    };
+    const pathClass = value => value === join(fixtureRoot, '.git') ? 'ancestor_git'
+      : value === join(f.cwd, '.git') ? 'removed_child_git' : value === fixtureRoot ? 'ancestor_root'
+        : value === f.cwd ? 'child_root' : 'other';
+    const executable = (process.env.PATH || '').split(delimiter).map(dir => join(dir, 'git')).find(path => {
+      try { accessSync(path, constants.X_OK); return true; } catch { return false; }
+    });
+    const executableIdentity = ['/usr/bin/git', '/usr/local/bin/git', '/opt/homebrew/bin/git'].includes(executable)
+      ? executable : executable?.includes('/node_modules/.bin/') ? 'npm_local_bin' : 'other';
+    const originClass = origin => origin === 'file:' + join(fixtureRoot, '.git', 'config') ? 'ancestor_config'
+      : origin === 'file:' + join(f.cwd, '.git', 'config') ? 'removed_child_config'
+        : origin === 'command line:' ? 'command_line' : origin.startsWith('file:') ? 'other_file' : 'other';
+    const configIdentity = ['local', 'global', 'system'].map(scope => ({ scope,
+      keys: ['core.worktree', 'core.bare', 'init.templateDir'].map(key => {
+        const result = probe(['config', '--' + scope, '--show-origin', '--get', key]);
+        return { key, present: result.ok, origin: result.ok ? originClass(result.value.split('\t')[0]) : 'unavailable' };
+      }) }));
+    const ancestorHead = probe(['rev-parse', '--verify', 'HEAD'], unboundedEnv, fixtureRoot);
+    const discoveredHead = probe(['rev-parse', '--verify', 'HEAD']);
+    const common = probe(['rev-parse', '--path-format=absolute', '--git-common-dir']);
+    const top = probe(['rev-parse', '--show-toplevel']);
+    const version = probe(['--version']);
+    console.error(JSON.stringify({ schemaVersion: 1, kind: 'fcos_ancestor_fixture_diagnostic',
+      node: process.version, platform: process.platform, architecture: process.arch, executableIdentity,
+      gitVersion: version.ok ? version.value.match(/^git version ([0-9]+\.[0-9]+\.[0-9]+)/)?.[1] || 'unrecognized' : 'unavailable',
+      inheritedGitKeyNames, activeGitKeyNames: Object.keys(process.env).filter(name => /^GIT_[A-Z0-9_]+$/.test(name)).sort(),
+      npmLifecyclePresent: Object.hasOwn(process.env, 'npm_lifecycle_event'),
+      immediatelyAfterRemoval, beforeUnboundedLookup, afterUnboundedLookup, configIdentity,
+      discoveredGitDirClass: pathClass(discoveredGitDir), commonGitDirClass: common.ok ? pathClass(common.value) : 'unavailable',
+      topLevelClass: top.ok ? pathClass(top.value) : 'unavailable',
+      discoveredHeadMatchesAncestor: ancestorHead.ok && discoveredHead.ok && ancestorHead.value === discoveredHead.value,
+      boundedHeadRejected: !probe(['rev-parse', '--verify', 'HEAD'], process.env).ok }));
+  }
+  assert.equal(discoveredGitDir, join(fixtureRoot, '.git'));
   // A configured worktree can be the child even when discovery found the
   // ancestor repository. Assert repository identity independently of that setting.
   ancestorGit('config', 'core.worktree', f.cwd);
