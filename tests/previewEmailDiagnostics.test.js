@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, linkSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, symlinkSync, linkSync, writeFileSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
@@ -45,6 +45,69 @@ test('arbitrary secret-bearing exceptions, invalid phases and operation rows are
     })));
   } finally { diagnostics.close(); }
 }));
+
+test('authority writer records only its distinct fixed schema, observed status and optional boolean binding', async () => temporary(async directory => {
+  const diagnostics = fixture(directory);
+  try {
+    const inputs = [
+      { substage: 'current_metadata', status: 'failed', failureCategory: 'http_status_rejected', httpStatus: 403 },
+      { substage: 'current_metadata', status: 'failed', failureCategory: 'token_id_mismatch', httpStatus: 200, reviewedTokenIdMatches: false },
+      { substage: 'configuration', status: 'passed' },
+    ];
+    for (const row of inputs) diagnostics.authority(row);
+    const serialized = readFileSync(file(directory), 'utf8');
+    assert.deepEqual(serialized.trim().split('\n').map(row => JSON.parse(row)), inputs.map(row => ({
+      schemaVersion: 1, kind: 'fcos_preview_email_authority_diagnostic', mode: 'prepare', ...row,
+      capturedAt: new Date(now()).toISOString(),
+    })));
+    assert.ok(!serialized.includes(privateMarker));
+    assert.throws(() => readFileSync(join(directory, `fcos-preview-email-execution-${runId}.lock`)));
+  } finally { diagnostics.close(); }
+}));
+
+test('authority writer rejects unknown fields, invalid values, symbols and getters before reading row values', async () => temporary(async directory => {
+  const diagnostics = fixture(directory), valid = { substage: 'current_metadata', status: 'passed', httpStatus: 200, reviewedTokenIdMatches: true };
+  let getterReads = 0;
+  try {
+    const hostile = key => Object.defineProperty({ ...valid }, key, { enumerable: true, get() { getterReads++; throw new Error(privateMarker); } });
+    const symbolRow = { ...valid, [Symbol(privateMarker)]: privateMarker };
+    const rows = [
+      { ...valid, token: privateMarker }, { ...valid, url: privateMarker }, { ...valid, error: { message: privateMarker } },
+      { ...valid, kind: privateMarker }, { ...valid, capturedAt: privateMarker },
+      { ...valid, substage: privateMarker }, { ...valid, status: privateMarker },
+      { ...valid, failureCategory: 'token_id_mismatch' },
+      { substage: 'current_metadata', status: 'failed' },
+      { substage: 'current_metadata', status: 'failed', failureCategory: privateMarker },
+      { ...valid, httpStatus: privateMarker }, { ...valid, httpStatus: 199 }, { ...valid, httpStatus: 600 },
+      { ...valid, httpStatus: NaN }, { ...valid, reviewedTokenIdMatches: privateMarker },
+      { substage: 'configuration', status: 'passed', httpStatus: 200 },
+      { substage: 'project_list', status: 'passed', reviewedTokenIdMatches: true },
+      Object.create(valid), Object.assign(Object.create({ privateValue: privateMarker }), valid),
+      symbolRow, hostile('substage'), hostile('httpStatus'), hostile('privateValue'),
+      new Proxy({}, { ownKeys() { throw new Error(privateMarker); } }),
+    ];
+    for (const row of rows) assert.throws(() => diagnostics.authority(row), error =>
+      /authority_journal/.test(error.message) && !error.message.includes(privateMarker));
+    assert.equal(getterReads, 0);
+    assert.equal(readFileSync(file(directory), 'utf8'), '');
+  } finally { diagnostics.close(); }
+}));
+
+test('authority writes retain private file, size and hardlink checks', async () => {
+  for (const change of [
+    directory => chmodSync(file(directory), 0o644),
+    directory => writeFileSync(file(directory), 'x'.repeat(256 * 1024 + 1), { mode: 0o600 }),
+    directory => linkSync(file(directory), join(directory, 'hardlink')),
+  ]) await temporary(async directory => {
+    const diagnostics = fixture(directory);
+    try {
+      change(directory);
+      const before = readFileSync(file(directory), 'utf8');
+      assert.throws(() => diagnostics.authority({ substage: 'configuration', status: 'passed' }), /authority_journal/);
+      assert.equal(readFileSync(file(directory), 'utf8'), before);
+    } finally { diagnostics.close(); }
+  });
+});
 
 test('CLI output remains redacted when pre-intent source input contains secrets', async () => temporary(async directory => {
   const result = spawnSync(process.execPath, ['scripts/preview-email-proof-build.mjs', '--prepare'], { cwd: root, encoding: 'utf8',
