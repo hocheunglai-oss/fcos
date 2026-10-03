@@ -108,9 +108,15 @@ test('archive fixtures cannot discover an ancestor checkout', t => {
   rmSync(join(f.cwd, '.git'), { recursive: true });
   const unboundedEnv = { ...process.env };
   delete unboundedEnv.GIT_CEILING_DIRECTORIES;
-  assert.equal(execFileSync('git', ['rev-parse', '--show-toplevel'], {
+  const unboundedGit = (...args) => execFileSync('git', args, {
     cwd: f.cwd, env: unboundedEnv, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
-  }).trim(), fixtureRoot);
+  }).trim();
+  assert.equal(unboundedGit('rev-parse', '--absolute-git-dir'), join(fixtureRoot, '.git'));
+  // A configured worktree can be the child even when discovery found the
+  // ancestor repository. Assert repository identity independently of that setting.
+  ancestorGit('config', 'core.worktree', f.cwd);
+  assert.equal(unboundedGit('rev-parse', '--show-toplevel'), f.cwd);
+  assert.equal(unboundedGit('rev-parse', '--absolute-git-dir'), join(fixtureRoot, '.git'));
   assert.throws(() => f.git('rev-parse', 'HEAD'));
   const receipt = f.collect();
   assert.equal(receipt.commitVerified, false);

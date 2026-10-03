@@ -1,3 +1,4 @@
+import { ENROLLED_AUTHORITY_MODE, ENROLLED_AUTHORITY_MODE_VARIABLE, ENROLLED_AUTHORITY_ENABLE, ENROLLED_AUTHORITY_RECEIPT, ENROLLED_AUTHORITY_SECRET } from './preview-vercel-enrollment.mjs';
 import { readFileSync, lstatSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
@@ -9,6 +10,8 @@ import { canonicalFcosE2eCandidateUrl } from '../verify-e2e-candidate.mjs';
 export const PREVIEW_EMAIL_BUILD_WORKFLOW = '.github/workflows/preview-email-proof-build.yml';
 export const PREVIEW_EMAIL_BUILD_ENVIRONMENT = 'fcos-runtime-compatibility-release';
 export const PREVIEW_EMAIL_BUILD_ENABLE = 'FCOS_PREVIEW_EMAIL_BUILD_ENABLED';
+export const PREVIEW_EMAIL_AUTHORITY_DIAGNOSTIC_ENABLE = 'FCOS_PREVIEW_EMAIL_AUTHORITY_DIAGNOSTIC_ENABLED';
+export const PREVIEW_EMAIL_AUTHORITY_DIAGNOSTIC_FILENAME = 'fcos-preview-vercel-authority-probe.json';
 export const PREVIEW_EMAIL_INTENT_FILENAME = 'fcos-preview-email-intent.json';
 export const PREVIEW_EMAIL_BUILD_FILENAME = 'fcos-preview-email-build.json';
 const contractBytes = readFileSync(new URL('../../config/legacy-email-baseline-proof.json', import.meta.url));
@@ -39,7 +42,7 @@ export function previewEmailBuildCandidate(candidateSha) {
 
 export const PREVIEW_EMAIL_BUILD_CONTROL_FILES = Object.freeze([
   PREVIEW_EMAIL_BUILD_WORKFLOW, 'scripts/preview-email-proof-build.mjs', 'scripts/lib/preview-email-build.mjs',
-  'scripts/lib/preview-vercel-authority.mjs',
+  'scripts/lib/preview-vercel-authority.mjs', 'scripts/lib/preview-vercel-enrollment.mjs', 'scripts/preview-vercel-enrollment.mjs', 'scripts/fcos-keychain-migrate.swift',
   'scripts/lib/release-evidence.mjs', 'scripts/lib/release-production.mjs', 'scripts/lib/release-readiness.mjs',
   'scripts/lib/preview-parity.mjs', 'scripts/lib/build-provenance.mjs', 'config/legacy-email-baseline-proof.json',
   'scripts/lib/legacy-email-baseline-proof.mjs', 'scripts/lib/preview-email-signer.mjs', 'scripts/verify-e2e-candidate.mjs',
@@ -217,11 +220,15 @@ function assertEnvironmentReview({ environment, run, jobs, approvals, trusted, c
   return { reviewerId: reviewer.reviewer.id, runId: run.id, environmentId: environment.id };
 }
 
-export function assertPreviewEmailBuildProtection({ repository, branch, protection, environment, variables, secrets, run, jobs, approvals, oidcClaims, candidateSha, harnessSha, controlRevision, now = Date.now() } = {}) {
+export function assertPreviewEmailBuildProtection({ repository, branch, protection, environment, variables, secrets, run, jobs, approvals, oidcClaims, candidateSha, harnessSha, controlRevision, mode = 'build', now = Date.now() } = {}) {
+  if (!['build', 'diagnose-authority', 'verify-authority'].includes(mode)) failure('Unknown protected Preview operation.');
   const trusted = assertProtectedDefault(repository, branch, protection);
   previewEmailBuildCandidate(candidateSha);
   const approved = assertEnvironmentReview({ environment, run, jobs, approvals, trusted, candidateSha, completed: false, now });
-  const pins = { [PREVIEW_EMAIL_BUILD_ENABLE]: 'true', FCOS_RUNTIME_COMPATIBILITY_RELEASE_ENABLED: 'false',
+  const readOnlyAuthority = ['diagnose-authority', 'verify-authority'].includes(mode);
+  const pins = { [PREVIEW_EMAIL_BUILD_ENABLE]: readOnlyAuthority ? 'false' : 'true',
+    ...(readOnlyAuthority ? { [PREVIEW_EMAIL_AUTHORITY_DIAGNOSTIC_ENABLE]: 'true' } : {}),
+    FCOS_RUNTIME_COMPATIBILITY_RELEASE_ENABLED: 'false',
     FCOS_PREVIEW_EMAIL_BUILD_REVIEWED_SHA: candidateSha, FCOS_PREVIEW_EMAIL_BUILD_REVIEWED_HARNESS_SHA: harnessSha,
     FCOS_PREVIEW_EMAIL_BUILD_REVIEWED_CONTRACT_SHA256: PREVIEW_EMAIL_CONTRACT_SHA256,
     FCOS_PREVIEW_EMAIL_BUILD_REVIEWED_CONTROL_SHA256: controlRevision };
@@ -241,7 +248,21 @@ export function assertPreviewEmailBuildProtection({ repository, branch, protecti
     || oidcClaims.workflow_sha !== trusted.sha || oidcClaims.sha !== trusted.sha || oidcClaims.ref !== `refs/heads/${trusted.branch}`
     || oidcClaims.run_id !== String(run.id) || oidcClaims.run_attempt !== '1' || oidcClaims.event_name !== 'workflow_dispatch'
     || !Number.isFinite(oidcClaims.exp) || oidcClaims.exp * 1000 <= now) failure('Signed Actions identity does not authorize this exact Preview workflow.');
-  return { ...approved, harnessSha: trusted.sha, reviewedTokenId: tokenIds[0].value };
+  const oneVariable = name => { const rows = variables?.variables?.filter(row => row.name === name) || [];
+    if (rows.length > 1) failure('Duplicate enrolled authority controls.'); return rows[0]?.value; };
+  const selected = oneVariable(ENROLLED_AUTHORITY_MODE_VARIABLE);
+  if (selected !== undefined && !['legacy-current-v1', ENROLLED_AUTHORITY_MODE].includes(selected)) failure('Unknown Preview authority mode.');
+  const authorityMode = selected || 'legacy-current-v1';
+  let enrollmentId, authorityEnvelope;
+  if (mode === 'verify-authority' && authorityMode !== ENROLLED_AUTHORITY_MODE) failure('Read-only enrollment verification requires its explicit authority mode.');
+  if (authorityMode === ENROLLED_AUTHORITY_MODE && mode !== 'diagnose-authority') {
+    enrollmentId = oneVariable('FCOS_PREVIEW_VERCEL_ENROLLMENT_ID');
+    authorityEnvelope = oneVariable(ENROLLED_AUTHORITY_RECEIPT);
+    if (oneVariable(ENROLLED_AUTHORITY_ENABLE) !== 'true' || !new RegExp(`^${uuid}$`).test(enrollmentId || '')
+      || typeof authorityEnvelope !== 'string' || authorityEnvelope.length > 16384
+      || secrets?.secrets?.filter(row => row.name === ENROLLED_AUTHORITY_SECRET).length !== 1) failure('Approved enrolled credential and signed run receipt are unavailable.');
+  }
+  return { ...approved, harnessSha: trusted.sha, reviewedTokenId: tokenIds[0].value, authorityMode, enrollmentId, authorityEnvelope };
 }
 
 export function previewEmailBuildDeployment(raw, intent, { ready = true } = {}) {

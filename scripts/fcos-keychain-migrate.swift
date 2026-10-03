@@ -14,7 +14,7 @@ enum MigrationError: Error, CustomStringConvertible {
     var description: String {
         switch self {
         case .usage:
-            return "Usage: fcos-keychain <set account service source-file raw|json-token|prompt-set account service|get account service|exists account service>"
+            return "Usage: fcos-keychain <set account service source-file raw|json-token|set-stdin account service|prompt-set account service|get account service|exists account service>"
         case .unreadableSource:
             return "The credential source could not be read."
         case .invalidJSON:
@@ -48,6 +48,19 @@ func secretData(sourcePath: String, format: String) throws -> Data {
     let trimmed = secret.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { throw MigrationError.emptySecret }
     return Data(trimmed.utf8)
+}
+
+func standardInputSecret() throws -> Data {
+    var source = Data()
+    while true {
+        let chunk = FileHandle.standardInput.readData(ofLength: min(8192, 65537 - source.count))
+        if chunk.isEmpty { break }
+        source.append(chunk)
+        guard source.count <= 65536 else { throw MigrationError.unreadableSource }
+    }
+    let secret = String(decoding: source, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !secret.isEmpty else { throw MigrationError.emptySecret }
+    return Data(secret.utf8)
 }
 
 func save(account: String, service: String, value: Data) throws {
@@ -98,6 +111,11 @@ do {
     let arguments = CommandLine.arguments
     guard arguments.count >= 4 else { throw MigrationError.usage }
     switch arguments[1] {
+    case "set-stdin":
+        guard arguments.count == 4 else { throw MigrationError.usage }
+        // Read the complete bounded stream before any Keychain mutation.
+        try save(account: arguments[2], service: arguments[3], value: standardInputSecret())
+        print("Credential stored in the dedicated macOS Keychain item.")
     case "set":
         guard arguments.count == 6 else { throw MigrationError.usage }
         let value = try secretData(sourcePath: arguments[4], format: arguments[5])

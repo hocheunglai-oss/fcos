@@ -8,13 +8,15 @@ on:
         required: true
         type: string
       operation:
-        description: Create once, or recover a previous uncertain operation by GET readback only
+        description: Diagnose credential reads only, create once, or recover by GET readback only
         default: create
         required: true
         type: choice
         options:
           - create
           - readback
+          - diagnose-authority
+          - verify-authority
       original_run_id:
         description: Original approved creation run, required only for readback
         required: false
@@ -27,9 +29,12 @@ permissions:
 # This is inactive until an exact separate owner authorization sets its new
 # enable variable and reviewed pins. Existing Production activation stays false.
 # Credentials execute only current protected-main code, never candidate scripts.
+# Repository variables govern admission here before human review. The runner
+# freshly verifies environment build/release=false and diagnostic=true afterward;
+# no additional GitHub Variables permission is required for the terminal probe.
 jobs:
   proof:
-    if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && vars.FCOS_PREVIEW_EMAIL_BUILD_ENABLED == 'true' && vars.FCOS_RUNTIME_COMPATIBILITY_RELEASE_ENABLED == 'false' }}
+    if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && vars.FCOS_RUNTIME_COMPATIBILITY_RELEASE_ENABLED == 'false' && ((inputs.operation != 'diagnose-authority' && inputs.operation != 'verify-authority' && vars.FCOS_PREVIEW_EMAIL_BUILD_ENABLED == 'true') || ((inputs.operation == 'diagnose-authority' || inputs.operation == 'verify-authority') && vars.FCOS_PREVIEW_EMAIL_BUILD_ENABLED == 'false' && vars.FCOS_PREVIEW_EMAIL_AUTHORITY_DIAGNOSTIC_ENABLED == 'true')) }}
     runs-on: ubuntu-latest
     environment: fcos-runtime-compatibility-release
     timeout-minutes: 25
@@ -61,12 +66,42 @@ jobs:
       - run: npm ci --ignore-scripts
         working-directory: trusted
       - run: npm install --global vercel@54.20.1
+      - name: Diagnose the existing credential with bounded read-only requests
+        if: ${{ inputs.operation == 'diagnose-authority' }}
+        run: node trusted/scripts/preview-email-proof-build.mjs --diagnose-authority
+        env:
+          GH_TOKEN: ${{ secrets.FCOS_RELEASE_GH_TOKEN }}
+          VERCEL_TOKEN: ${{ secrets.FCOS_RELEASE_VERCEL_TOKEN }}
+      - name: Preserve redacted credential diagnostic without authorizing deployment
+        if: ${{ inputs.operation == 'diagnose-authority' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: fcos-preview-vercel-authority-probe-${{ github.run_id }}
+          path: ${{ runner.temp }}/fcos-preview-vercel-authority-probe.json
+          if-no-files-found: error
+          retention-days: 7
+      - name: Verify enrolled authority without creating a Preview
+        if: ${{ inputs.operation == 'verify-authority' }}
+        run: node trusted/scripts/preview-email-proof-build.mjs --verify-authority
+        env:
+          GH_TOKEN: ${{ secrets.FCOS_RELEASE_GH_TOKEN }}
+          VERCEL_TOKEN: ${{ secrets.FCOS_RELEASE_VERCEL_TOKEN }}
+          FCOS_RELEASE_VERCEL_ENROLLMENT: ${{ secrets.FCOS_RELEASE_VERCEL_ENROLLMENT }}
+      - name: Preserve only sanitized enrolled authority verification
+        if: ${{ always() && inputs.operation == 'verify-authority' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: fcos-preview-enrolled-authority-${{ github.run_id }}
+          path: ${{ runner.temp }}/fcos-preview-enrolled-authority.json
+          if-no-files-found: error
+          retention-days: 7
       - name: Prepare reviewed metadata and exact Preview-only request
         if: ${{ inputs.operation == 'create' }}
         run: node trusted/scripts/preview-email-proof-build.mjs --prepare
         env:
           GH_TOKEN: ${{ secrets.FCOS_RELEASE_GH_TOKEN }}
           VERCEL_TOKEN: ${{ secrets.FCOS_RELEASE_VERCEL_TOKEN }}
+          FCOS_RELEASE_VERCEL_ENROLLMENT: ${{ secrets.FCOS_RELEASE_VERCEL_ENROLLMENT }}
       - name: Persist immutable intent before any deployment request
         if: ${{ inputs.operation == 'create' }}
         uses: actions/upload-artifact@v4
@@ -81,6 +116,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.FCOS_RELEASE_GH_TOKEN }}
           VERCEL_TOKEN: ${{ secrets.FCOS_RELEASE_VERCEL_TOKEN }}
+          FCOS_RELEASE_VERCEL_ENROLLMENT: ${{ secrets.FCOS_RELEASE_VERCEL_ENROLLMENT }}
           FCOS_E2E_VERCEL_BYPASS: ${{ secrets.FCOS_E2E_VERCEL_BYPASS }}
       - name: Recover original operation without creating any deployment
         if: ${{ inputs.operation == 'readback' }}
@@ -88,8 +124,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.FCOS_RELEASE_GH_TOKEN }}
           VERCEL_TOKEN: ${{ secrets.FCOS_RELEASE_VERCEL_TOKEN }}
+          FCOS_RELEASE_VERCEL_ENROLLMENT: ${{ secrets.FCOS_RELEASE_VERCEL_ENROLLMENT }}
           FCOS_E2E_VERCEL_BYPASS: ${{ secrets.FCOS_E2E_VERCEL_BYPASS }}
       - name: Preserve exact non-secret source-bound receipt
+        if: ${{ inputs.operation != 'diagnose-authority' && inputs.operation != 'verify-authority' }}
         uses: actions/upload-artifact@v4
         with:
           name: fcos-preview-email-build-${{ inputs.expected_commit }}

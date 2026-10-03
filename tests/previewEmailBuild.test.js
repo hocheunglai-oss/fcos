@@ -293,3 +293,60 @@ test('trusted collector independently verifies protected source, human review, b
     item => { item.options.readVersion = async () => ({ pass: true, reviewed: true }); },
   ]) { const changed = await trustedFixture(); change(changed); await assert.rejects(() => collectTrustedPreviewEmailBuild(changed.options)); }
 });
+
+
+test('read-only diagnostic requires fresh environment gates with exact existing review and source bindings', async () => {
+  const diagnosticFixture = async () => {
+    const { protectionInputs } = await liveProtectionFixture();
+    const pins = { FCOS_PREVIEW_EMAIL_BUILD_ENABLED: 'false', FCOS_RUNTIME_COMPATIBILITY_RELEASE_ENABLED: 'false',
+      FCOS_PREVIEW_EMAIL_AUTHORITY_DIAGNOSTIC_ENABLED: 'true' };
+    protectionInputs.mode = 'diagnose-authority';
+    protectionInputs.variables.variables = protectionInputs.variables.variables.filter(row => !Object.hasOwn(pins, row.name));
+    protectionInputs.variables.variables.push(...Object.entries(pins).map(([name, value]) => ({ name, value })));
+    return protectionInputs;
+  };
+  assert.equal(assertPreviewEmailBuildProtection(await diagnosticFixture()).runId, 99);
+  for (const gate of ['FCOS_PREVIEW_EMAIL_BUILD_ENABLED', 'FCOS_RUNTIME_COMPATIBILITY_RELEASE_ENABLED', 'FCOS_PREVIEW_EMAIL_AUTHORITY_DIAGNOSTIC_ENABLED']) {
+    for (const change of ['missing', 'changed', 'duplicate']) {
+      const value = await diagnosticFixture(), rows = value.variables.variables, row = rows.find(item => item.name === gate);
+      if (change === 'missing') value.variables.variables = rows.filter(item => item.name !== gate);
+      if (change === 'changed') row.value = row.value === 'true' ? 'false' : 'true';
+      if (change === 'duplicate') rows.push({ ...row });
+      assert.throws(() => assertPreviewEmailBuildProtection(value));
+    }
+  }
+  for (const change of [
+    value => { value.mode = 'other'; },
+    value => { value.approvals.length = 0; }, value => { value.environment.can_admins_bypass = true; },
+    value => { value.oidcClaims.workflow_sha = 'c'.repeat(40); }, value => { value.oidcClaims.exp = now / 1000; },
+    value => { value.harnessSha = 'c'.repeat(40); }, value => { value.controlRevision = 'c'.repeat(64); },
+    value => { value.candidateSha = 'c'.repeat(40); }, value => { value.run.run_attempt = 2; },
+    value => { value.jobs[0].started_at = iso(now - 1800001); },
+  ]) { const value = await diagnosticFixture(); change(value); assert.throws(() => assertPreviewEmailBuildProtection(value)); }
+  // The diagnostic's gates cannot be used as create/readback authorization.
+  const value = await diagnosticFixture(); delete value.mode;
+  assert.throws(() => assertPreviewEmailBuildProtection(value));
+});
+
+
+test('issuance authority is default off and verify-only requires exact enable, enrollment and companion controls', async () => {
+  const legacy = (await liveProtectionFixture()).protectionInputs;
+  assert.equal(assertPreviewEmailBuildProtection(legacy).authorityMode, 'legacy-current-v1');
+  assert.throws(() => assertPreviewEmailBuildProtection({ ...legacy, mode: 'verify-authority' }));
+  const value = (await liveProtectionFixture()).protectionInputs;
+  value.mode = 'verify-authority';
+  value.variables.variables.find(row => row.name === 'FCOS_PREVIEW_EMAIL_BUILD_ENABLED').value = 'false';
+  value.variables.variables.push(...Object.entries({ FCOS_PREVIEW_EMAIL_AUTHORITY_DIAGNOSTIC_ENABLED: 'true',
+    FCOS_PREVIEW_VERCEL_AUTHORITY_MODE: 'issuance-bound-v1', FCOS_PREVIEW_VERCEL_ISSUANCE_AUTHORITY_ENABLED: 'true',
+    FCOS_PREVIEW_VERCEL_ENROLLMENT_ID: '11111111-1111-4111-8111-111111111111', FCOS_PREVIEW_VERCEL_AUTHORITY_RECEIPT: '{}' }).map(([name, value]) => ({ name, value })));
+  value.secrets.secrets.push({ name: 'FCOS_RELEASE_VERCEL_ENROLLMENT' });
+  assert.equal(assertPreviewEmailBuildProtection(value).authorityMode, 'issuance-bound-v1');
+  for (const name of ['FCOS_PREVIEW_EMAIL_BUILD_ENABLED', 'FCOS_RUNTIME_COMPATIBILITY_RELEASE_ENABLED', 'FCOS_PREVIEW_EMAIL_AUTHORITY_DIAGNOSTIC_ENABLED',
+    'FCOS_PREVIEW_VERCEL_AUTHORITY_MODE', 'FCOS_PREVIEW_VERCEL_ISSUANCE_AUTHORITY_ENABLED', 'FCOS_PREVIEW_VERCEL_ENROLLMENT_ID', 'FCOS_PREVIEW_VERCEL_AUTHORITY_RECEIPT']) {
+    const changed = structuredClone(value); changed.variables.variables = changed.variables.variables.filter(row => row.name !== name);
+    assert.throws(() => assertPreviewEmailBuildProtection(changed));
+  }
+  const missing = structuredClone(value); missing.secrets.secrets.pop(); assert.throws(() => assertPreviewEmailBuildProtection(missing));
+  const duplicate = structuredClone(value); duplicate.variables.variables.push({ name: 'FCOS_PREVIEW_VERCEL_AUTHORITY_MODE', value: 'legacy-current-v1' });
+  assert.throws(() => assertPreviewEmailBuildProtection(duplicate));
+});
