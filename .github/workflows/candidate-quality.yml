@@ -33,7 +33,7 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@v4
         with:
-          ref: 6dbb83215cc5b9964dbe32a13f852e3a62e7bcc2
+          ref: f4576a8c918acef686f084c505b1715de11deeb8
           path: candidate
           fetch-depth: 0
           persist-credentials: false
@@ -60,7 +60,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 6dbb83215cc5b9964dbe32a13f852e3a62e7bcc2
+          ref: f4576a8c918acef686f084c505b1715de11deeb8
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@v4
@@ -191,7 +191,7 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@v4
         with:
-          ref: 6dbb83215cc5b9964dbe32a13f852e3a62e7bcc2
+          ref: f4576a8c918acef686f084c505b1715de11deeb8
           path: candidate
           fetch-depth: 0
           persist-credentials: false
@@ -210,7 +210,7 @@ jobs:
       - name: Publish trusted exact-source artifact
         uses: actions/upload-artifact@v4
         with:
-          name: fcos-trusted-quality-source-6dbb83215cc5b9964dbe32a13f852e3a62e7bcc2-${{ github.run_id }}
+          name: fcos-trusted-quality-source-f4576a8c918acef686f084c505b1715de11deeb8-${{ github.run_id }}
           path: ${{ runner.temp }}/fcos-quality-source.json
           if-no-files-found: error
           overwrite: false

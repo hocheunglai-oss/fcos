@@ -23,7 +23,7 @@ export function releaseConfigurationRevision(cwd, trustedCwd = cwd) {
     'scripts/lib/preview-email-signer.mjs', 'scripts/lib/legacy-email-baseline-proof.mjs', 'config/legacy-email-baseline-proof.json',
     'scripts/lib/preview-email-build.mjs', 'scripts/preview-email-proof-build.mjs', '.github/workflows/preview-email-proof-build.yml',
     'scripts/lib/preview-parity.mjs', 'scripts/collect-preview-parity.mjs', 'scripts/lib/release-evidence.mjs',
-    '.github/workflows/candidate-quality.yml', '.github/quality-candidates/6dbb83215cc5b9964dbe32a13f852e3a62e7bcc2.json',
+    '.github/workflows/candidate-quality.yml', '.github/quality-candidates/f4576a8c918acef686f084c505b1715de11deeb8.json',
     'scripts/candidate-quality-receipt.mjs', 'scripts/lib/candidate-quality.mjs', 'scripts/lib/build-provenance.mjs',
     'scripts/lib/release-readiness.mjs', 'scripts/verify-e2e-candidate.mjs'];
   const trustedFiles = new Set(files.filter(file => file.startsWith('scripts/') || file.startsWith('.github/')

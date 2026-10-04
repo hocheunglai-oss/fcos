@@ -103,7 +103,7 @@ this proposal does not authorize that variable, dispatch, credential use, a
 Preview build, or Production. Keep the existing `quality.yml` byte-for-byte.
 
 The owner-reviewed manifest under `.github/quality-candidates/` admits only
-`6dbb83215cc5b9964dbe32a13f852e3a62e7bcc2`, its frozen branch, portable source
+`f4576a8c918acef686f084c505b1715de11deeb8`, its frozen branch, portable source
 digest, dependency lock and original quality workflow blob/hash. No application
 API, UI, migration, package or mobile change belongs in this bootstrap.
 
@@ -135,3 +135,9 @@ old PR runs. Its workflow, admission and implementation join the release,
 Preview and runtime compatibility control hash closures. Exact installation and later activation/dispatch
 require their separate owner review. Hosted behavior and live provider acceptance
 remain unverified until that newly installed, approved route actually runs.
+
+The successor admission replaces the earlier frozen source; it does not add an
+alternate candidate route. Historical evidence for the earlier source retains
+its original binding and cannot satisfy the successor's final quality proof.
+The historical October 1 cents migration already exists in the live database;
+candidate tests use disposable databases only and never replay live migrations.

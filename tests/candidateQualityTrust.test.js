@@ -270,3 +270,17 @@ test('source and publication jobs independently recompute immutable source and r
     assert.throws(() => candidateQualitySource({ candidateCwd, trustedCwd, harnessSha }));
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
+
+test('superseded source admission and receipt cannot satisfy successor quality', () => {
+  const earlier = { ...CANDIDATE_QUALITY_ADMISSION,
+    candidateSha: '6dbb83215cc5b9964dbe32a13f852e3a62e7bcc2',
+    branch: 'codex/full-release-integration-20261003',
+    sourceDigest: 'e34b07eec45fd3c1bb4203c52a052ae77eea13945367ec88c3b9cf6991b5d4a9' };
+  assert.throws(() => assertCandidateQualityAdmission(earlier));
+  const value = fixture();
+  value.payload.candidateSha = earlier.candidateSha;
+  value.binding.sha = earlier.candidateSha;
+  value.payload.sourceDigest = earlier.sourceDigest;
+  value.binding.sourceDigest = earlier.sourceDigest;
+  assert.throws(() => assertCandidateQualityArtifact(value));
+});
