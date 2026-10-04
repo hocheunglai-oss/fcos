@@ -7,7 +7,10 @@ export const PREVIEW_EMAIL_SIGNER_BODY = Object.freeze({
   attachmentId: 'fcos-verification-attachment',
 });
 
-export const PREVIEW_EMAIL_SIGNER_MAILBOX_REGISTRY_ID = 'e7a386ee-3d81-43be-b330-537205ef57ec';
+// Attachment tokens bind emailrouter.mailbox_connections.id, not the linked
+// email_sender_mailboxes.id. This is the verified active connection for the
+// approved FCOS Email Router mailbox.
+export const PREVIEW_EMAIL_SIGNER_MAILBOX_REGISTRY_ID = 'c8e5bd75-d4d4-4fa2-b76b-34467c065307';
 
 const SIGNER_EVIDENCE_KIND = 'fcos_preview_email_signer';
 const SIGNER_EVIDENCE_PROBE = 'synthetic_attachment_link_v1';
