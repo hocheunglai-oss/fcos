@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { emailRouterAttachmentUrlHandler } from '../api/_emailRouterHandlers.js';
+import { createEmailRouterAttachmentToken, verifyEmailRouterAttachmentToken } from '../api/_emailRouterCore.js';
 import { collectPreviewEmailSignerEvidence, PREVIEW_EMAIL_SIGNER_BODY, PREVIEW_EMAIL_SIGNER_MAILBOX_REGISTRY_ID,
   previewEmailSignerEnabled, previewEmailSignerEvidenceVerified, previewEmailSignerSourceHashes, previewEmailSignerSourceProof } from '../scripts/lib/preview-email-signer.mjs';
 
@@ -120,4 +122,60 @@ test('provider error content is never preserved in diagnostics or evidence', asy
     assert.equal(error.message, 'Preview Email Router signer evidence is unavailable.');
     return true;
   });
+});
+
+// These independent registry values mirror the verified FCOS relationship:
+// the sender row and active router connection are different records.
+const senderRegistryId = 'e7a386ee-3d81-43be-b330-537205ef57ec';
+const connectionRegistryId = 'c8e5bd75-d4d4-4fa2-b76b-34467c065307';
+const signingFixtureEnv = { FCOS_EMAIL_ROUTER_ATTACHMENT_SECRET: 'offline-signer-contract-fixture-only' };
+
+function distinctRegistryClient() {
+  const reads = [];
+  const query = (schema, table) => {
+    const filters = {};
+    const chain = {
+      select: () => chain,
+      eq: (field, value) => { filters[field] = value; return chain; },
+      maybeSingle: async () => {
+        reads.push({ schema, table, filters });
+        if (schema === 'public' && table === 'email_sender_routes') {
+          assert.deepEqual(filters, { purpose_key: 'email_router_mailbox' });
+          return { data: { mailbox_id: senderRegistryId, email_sender_purposes: { enabled: true },
+            email_sender_mailboxes: { id: senderRegistryId, email_address: 'bunker@example.test', active: true } }, error: null };
+        }
+        assert.equal(schema, 'emailrouter');
+        assert.equal(table, 'mailbox_connections');
+        assert.deepEqual(filters, { sender_mailbox_id: senderRegistryId, state: 'active' });
+        return { data: { id: connectionRegistryId, sender_mailbox_id: senderRegistryId, state: 'active' }, error: null };
+      },
+    };
+    return chain;
+  };
+  return { reads, from: table => query('public', table), schema: schema => ({ from: table => query(schema, table) }) };
+}
+
+test('real attachment handler and verifier agree on the active connection ID, distinct from its sender', async () => {
+  const client = distinctRegistryClient();
+  const envelope = await emailRouterAttachmentUrlHandler({}, PREVIEW_EMAIL_SIGNER_BODY, {
+    client, env: signingFixtureEnv, profile: { id: '11111111-1111-4111-8111-111111111111', active: true },
+  });
+  const payload = verifyEmailRouterAttachmentToken(envelope.token, signingFixtureEnv);
+  assert.equal(payload.mailboxId, connectionRegistryId);
+  assert.notEqual(payload.mailboxId, senderRegistryId);
+  assert.equal(client.reads.length, 2);
+  const evidence = await collect({ responseValue: response(envelope), nowValue: Date.now() });
+  assert.equal(evidence.mailboxRegistryId, connectionRegistryId);
+  assert.equal(evidence.noAttachmentFetch, true);
+  assert.doesNotMatch(JSON.stringify(evidence), /offline-signer-contract-fixture-only/);
+  assert.equal(Object.hasOwn(evidence, 'token'), false);
+  assert.equal(Object.hasOwn(evidence, 'url'), false);
+});
+
+test('a correctly signed sender-row token cannot substitute for the active router connection', async () => {
+  const expiresAt = Date.now() + 5 * 60_000;
+  const token = createEmailRouterAttachmentToken({ mailboxId: senderRegistryId, ...PREVIEW_EMAIL_SIGNER_BODY, expiresAt }, signingFixtureEnv);
+  const envelope = { token, url: `/api/email-router-attachment?token=${encodeURIComponent(token)}`, expiresAt: new Date(expiresAt).toISOString() };
+  assert.equal(verifyEmailRouterAttachmentToken(token, signingFixtureEnv).mailboxId, senderRegistryId);
+  await assert.rejects(() => collect({ responseValue: response(envelope), nowValue: Date.now() }));
 });
