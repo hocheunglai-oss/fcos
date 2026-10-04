@@ -13,6 +13,7 @@ import {
   xeroFinancialRateSnapshot,
 } from '../api/_xeroFinancialSync.js';
 import { summarizeXeroFinancialReconciliation } from '../src/lib/xeroFinancialReconciliation.js';
+import { enrichOrdinaryRemittanceFamilies } from '../api/_xeroOrdinaryRemittanceCash.js';
 import { resolveRemittanceBankEvidence } from '../api/_xeroPaymentBankEvidence.js';
 import { buildBuyerPaymentDocumentEvidence } from '../api/_xeroBuyerPaymentEvidence.js';
 
@@ -505,16 +506,17 @@ test('new exact payments require current same-currency bank and org evidence and
 });
 
 test('remittance proof changes source and review identity, and cannot use historical fingerprint fallback', () => {
-  const sfId = (number) => `a01${String(number).padStart(12, '0')}`;
+  const sfId = (number) => `${number === 100 ? '001' : number === 200 ? 'a0H' : 'a0S'}${String(number).padStart(12, '0')}`;
   const remittanceId = sfId(1);
-  const common = { CurrencyIsoCode: 'USD', Account__c: sfId(100), Date__c: '2026-09-01',
+  const common = { IsDeleted: false, CreatedDate: '2026-09-01T00:00:00Z', LastModifiedDate: '2026-09-01T00:00:01Z', CurrencyIsoCode: 'USD', Account__c: sfId(100), Date__c: '2026-09-01',
     Is_Deposit__c: false, Is_Volume_Discount__c: false, Commission_Invoice__c: null, Supplier_Invoice__c: null };
   const parent = { ...common, Id: remittanceId, RecordType: { DeveloperName: 'Receivable_Remittance' },
-    Bank__c: 'UBS', Amount__c: 100 };
+    Bank__c: 'UBS', Amount__c: 100, Remittance__c: null, STEM__c: null };
   const payment = { ...common, Id: sfId(2), Name: 'PAY-2', RecordType: { DeveloperName: 'Receivable' },
     Remittance__c: remittanceId, Bank__c: null, Amount__c: 50, STEM__c: sfId(200) };
   const sibling = { ...payment, Id: sfId(3), Name: 'PAY-3' };
-  const derive = (parentRow, children) => resolveRemittanceBankEvidence(payment, {
+  const derive = (parentRow, children) => resolveRemittanceBankEvidence(
+    enrichOrdinaryRemittanceFamilies([payment], { parents: [parentRow], siblings: children, complete: true })[0], {
     parent: parentRow, siblings: children, complete: true,
   }).payment;
   const map = { id: 'document-map', xero_document_id: 'xero-invoice', xero_document_type: 'ACCREC',
@@ -526,7 +528,7 @@ test('remittance proof changes source and review identity, and cannot use histor
     bankByName: new Map([['UBS', { xero_bank_account_id: 'bank' }]]), xeroPayments: [],
     currentDocumentById: new Map([['xero-invoice', { id: 'xero-invoice', type: 'ACCREC',
       status: 'AUTHORISED', contactId: 'contact', currency: 'USD', amountDue: 100 }]]),
-    bankAccounts: new Map([['bank', { CurrencyCode: 'USD' }]]), organisation: { baseCurrency: 'USD' } };
+    bankAccounts: new Map([['bank', { CurrencyCode: 'USD' }]]), organisation: { baseCurrency: 'USD' }, paymentPostingClaims: new Map() };
   const firstPayment = derive(parent, [payment, sibling]);
   const first = classifyXeroFinancialPayment(firstPayment, context);
   assert.equal(first.status, 'eligible');

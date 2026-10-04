@@ -1,3 +1,4 @@
+import { assertOrdinaryRemittancePostingRow } from './_xeroOrdinaryRemittanceCash.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { claimReviewedGroupPayment, finishReviewedGroupPayment, groupBankProofMatches, hasGroupBankSourceEvidence } from './_xeroGroupPaymentPersistence.js';
 import { confirmedPaymentValues, matchPaymentResponses, paymentConfirmationErrors } from './_xeroPaymentIdentity.js';
@@ -128,6 +129,7 @@ export async function resolvePaymentPostingClaim(client, claim, payment, actor) 
 }
 
 export async function postReviewedPaymentBatch(rows, { client, connection, actor, accountingFetch, options = {} }) {
+  rows.forEach(assertOrdinaryRemittancePostingRow);
   if (!uuid(connection.tenantId)) throw failure('A verified Xero tenant is required.', 'XERO_PAYMENT_TENANT_INVALID');
   const claims = []; const outcomes = [];
   // Complete every intent and audit before the provider write; any storage error prevents this whole batch.

@@ -13,8 +13,8 @@ const completeResult = (result, matches) => result && !result.error && result.do
 
 // One deleted-inclusive family inventory serves both informational headers and
 // bank-source checks. It never removes a problematic sibling from the evidence.
-export async function loadRemittanceInventory(payments, { queryAll, fields, withCurrency } = {}) {
-  const parentIds = unique(payments.flatMap(row => headers.has(row.RecordType?.DeveloperName) ? [sfId(row.Id)]
+export async function loadRemittanceInventory(payments, { queryAll, fields, withCurrency, parentIds: requestedParentIds } = {}) {
+  const parentIds = requestedParentIds || unique(payments.flatMap(row => headers.has(row.RecordType?.DeveloperName) ? [sfId(row.Id)]
     : row.RecordType?.DeveloperName === 'Receivable' && blank(row.Bank__c) && Number(row.Amount__c) > 0 ? [sfId(row.Remittance__c)] : []));
   const result = { complete: true, parentIds, parents: [], siblings: [] };
   if (!parentIds.length) return result;
@@ -44,6 +44,21 @@ export async function loadRemittanceInventory(payments, { queryAll, fields, with
     if (seenParents.size !== parentIds.length || [...seenChildren].some(id => seenParents.has(id))) throw new Error('nested family');
     return result;
   } catch { return { complete: false, parentIds, parents: [], siblings: [] }; }
+}
+
+// Additional ordinary parents cannot invalidate the established Group/bank
+// inventory. Reuse every already complete family; read only missing parent IDs.
+export async function loadOrdinaryRemittanceInventory(payments, inventory, options = {}) {
+  if (!inventory?.complete) return { complete: false, parents: [], siblings: [] };
+  const known = new Set(inventory.parentIds);
+  const missing = unique(payments.filter(row => ['Receivable', 'Payable'].includes(row.RecordType?.DeveloperName))
+    .map(row => scopedId(row.Remittance__c, 'a0S'))).filter(id => !known.has(id));
+  if (!missing.length) return inventory;
+  const extra = await loadRemittanceInventory(payments, { ...options, parentIds: missing });
+  if (!extra.complete) return { complete: false, parents: [], siblings: [] };
+  const parents = [...inventory.parents, ...extra.parents]; const siblings = [...inventory.siblings, ...extra.siblings];
+  if (new Set(siblings.map(row => sfId(row.Id))).size !== siblings.length) return { complete: false, parents: [], siblings: [] };
+  return { complete: true, parentIds: [...inventory.parentIds, ...extra.parentIds], parents, siblings };
 }
 
 // Source-only proof collection. Current local mapping/claim/bank controls are

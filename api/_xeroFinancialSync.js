@@ -23,7 +23,8 @@ import { groupedPreservationCanonical } from './_xeroGroupedPreservation.js';
 import { requireExternalActionGate } from './_externalActionGates.js';
 import { paymentCurrency, paymentDocumentIdentityBlockers, paymentAssociationBlockers, selectXeroPaymentMatch, selectXeroReferenceRetentionMatch } from './_xeroPaymentIdentity.js';
 import { resolveXeroPaymentAssociation, xeroPaymentEvidenceHold, xeroPaymentSameId } from './_xeroPaymentAssociation.js';
-import { loadRemittanceInventory, enrichGroupRemittanceBankSources } from './_xeroRemittanceInventory.js';
+import { loadRemittanceInventory, loadOrdinaryRemittanceInventory, enrichGroupRemittanceBankSources } from './_xeroRemittanceInventory.js';
+import { enrichOrdinaryRemittanceFamilies, guardNewOrdinaryRemittancePayment } from './_xeroOrdinaryRemittanceCash.js';
 import { resolveRemittanceBankEvidence } from './_xeroPaymentBankEvidence.js';
 import { paymentKindReview } from './_xeroPaymentKind.js';
 import { enrichRemittanceSummaries, currentRemittanceSummary } from './_xeroRemittanceSummary.js';
@@ -1113,7 +1114,7 @@ export async function previewPayments(body, { accessContext, env, fetchImpl, cli
     allFinancialRows(client, 'xero_financial_bank_mappings', (query) => query.eq('enabled', true)),
   ]);
   for (const result of [documentMappings, paymentMappings, bankMappings]) if (result.error) throw storageError(result.error, 'xero_financial_payment_preview');
-  const paymentPostingClaims = await loadPaymentPostingClaims(client, connection.tenantId, uniqueStrings(payments.flatMap(payment => [payment.Id, payment._groupBankEvidence?.parentId]).filter(Boolean)));
+  const paymentPostingClaims = await loadPaymentPostingClaims(client, connection.tenantId, uniqueStrings(payments.flatMap(payment => [payment.Id, payment._groupBankEvidence?.parentId, payment._ordinaryRemittanceFamily?.parent?.Id]).filter(Boolean)));
   const evidenceIds = xeroPaymentEvidenceIds(payments, documentMappings.data, paymentMappings.data);
   evidenceIds.paymentIds = uniqueStrings([...evidenceIds.paymentIds, ...paymentClaimEvidenceIds(paymentPostingClaims)]);
   const rate = {};
@@ -1204,7 +1205,8 @@ export function classifyXeroFinancialPayment(rawPayment, context) {
     ...(group ? { bankSourceEvidence: group.bankSourceEvidence, bankMapping: group.bankMappingSnapshot, documentMapping: group.documentMappingSnapshot, blockers: row.blockers } : {}),
     ...(group?.groupBankSourceRevalidation ? { groupBankSourceRevalidation: group.groupBankSourceRevalidation } : {}) });
   const actual = context.xeroPayments.find((item) => item.PaymentID === row.xeroPaymentId);
-  return reviewPaymentPostingClaim(row, context.paymentPostingClaims instanceof Map ? context.paymentPostingClaims.get(payment.Id) : null, actual);
+  const reviewed = reviewPaymentPostingClaim(row, context.paymentPostingClaims instanceof Map ? context.paymentPostingClaims.get(payment.Id) : null, actual);
+  return guardNewOrdinaryRemittancePayment(reviewed, payment, context);
 }
 
 function classifyPayment(payment, context) {
@@ -1636,7 +1638,8 @@ export async function loadSalesforcePayments(cutoff, safetyContext = null, query
     const id = String(sibling.Remittance__c).slice(0, 15);
     siblingsByParent.set(id, [...(siblingsByParent.get(id) || []), sibling]);
   }
-  return payments.map(payment => {
+  const ordinaryInventory = await loadOrdinaryRemittanceInventory(rawPayments, inventory, { queryAll, fields, withCurrency });
+  return enrichOrdinaryRemittanceFamilies(payments, ordinaryInventory).map(payment => {
     if (payment.RecordType?.DeveloperName !== 'Receivable' || normalizeName(payment.Bank__c) || Number(payment.Amount__c) <= 0
       || payment._groupBankEvidence || payment._groupBankEvidenceBlocker) return payment;
     const key = String(payment.Remittance__c).slice(0, 15);

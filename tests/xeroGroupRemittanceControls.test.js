@@ -202,7 +202,7 @@ for (const [name, mutate] of [
 ]) test(`Group bank proof does not waive ${name}`, () => { const f = fixture(); mutate(f); assertHeld(f); });
 
 test('non-Group ordinary Receivable and bankless hold retain legacy classification without new control flags', () => {
-  const f = fixture(); delete f.payment._groupBankEvidence; f.payment.Bank__c = 'UBS'; delete f.context.groupPaymentControlsComplete;
+  const f = fixture(); delete f.payment._groupBankEvidence; f.payment.Bank__c = 'UBS'; f.payment.Remittance__c = null; delete f.context.groupPaymentControlsComplete;
   const row = f.classify(); assert.equal(row.action, 'payment_apply', row.blockers.join('; ')); assert.equal(row.bankSourceEvidence, undefined);
   assert.equal(row.bankEvidence, undefined); assert.equal(row.bankMappingSnapshot, undefined);
   f.payment.Bank__c = null; assertHeld(f);

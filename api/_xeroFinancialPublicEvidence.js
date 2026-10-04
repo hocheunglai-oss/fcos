@@ -17,6 +17,7 @@ function publicPaymentRow(row) {
   if (!object(row)) return row;
   const { bankSourceEvidence: _bankSource, buyerDocumentEvidence: _buyerDocuments,
     groupBankSourceRevalidation: _groupRevalidation,
+    ordinaryRemittanceCashEvidence: _ordinaryCash, ordinaryRemittanceReviewBase: _ordinaryReview,
     retainedReferenceEvidence: _retainedReference, documentMappingSnapshot: _documentMapping,
     bankMappingSnapshot: _bankMapping, ...result } = row;
   if (Object.hasOwn(row, 'bankEvidence')) result.bankEvidence = metadata(row.bankEvidence, BANK_FIELDS);
