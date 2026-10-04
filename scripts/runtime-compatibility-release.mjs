@@ -276,7 +276,7 @@ export async function runRuntimeCompatibilityRelease({ mode = 'dry-run', trusted
         candidate: { ...snapshots.candidate.deployment, sourceDigest: source.sourceDigest, lockHash: input.binding.lockHash, configurationRevision: input.binding.configurationRevision },
         production: snapshots.production.deployment, expectedRuntimeAuth: snapshots.production.runtime.auth,
         expectedRuntimeFlags: snapshots.production.runtime.flags, expectedRuntimeSafety: snapshots.production.runtime.safety,
-        trustedEvidence: evidence.map(({ checks: _checks, emailSigner: _emailSigner, ...record }) => record), quality };
+        trustedEvidence: evidence.map(({ checks: _checks, emailSigner: _emailSigner, browserIsolation: _browserIsolation, ...record }) => record), quality };
       const readiness = createReleaseReadiness({ source: sourceRecord, candidate: parity.candidate, production: parity.production, parity,
         evidence: parity.trustedEvidence, quality, configurationRevision: input.binding.configurationRevision, lockHash: input.binding.lockHash });
       return { parity, readiness };

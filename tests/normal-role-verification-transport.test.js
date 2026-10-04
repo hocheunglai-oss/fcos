@@ -13,12 +13,12 @@ const incoming = { 'X-Vercel-Protection-Bypass': 'incoming-foreign-bypass', 'X-V
   authorization: 'Bearer offline-existing-user-fixture', 'content-type': 'application/json' };
 
 function fixture({ url = `${origin}/api/functions/authContext`, method = 'POST', body = {}, status = 200,
-  responseUrl = url, requestHeaders = incoming, responseHeaders = { 'content-type': 'application/json' }, fetchError } = {}) {
+  responseUrl = url, requestHeaders = incoming, responseHeaders = { 'content-type': 'application/json' }, fetchError, resourceType = 'fetch' } = {}) {
   const calls = [], forwarded = [];
   const response = { status: () => status, url: () => responseUrl, headers: () => responseHeaders };
   const route = {
-    request: () => ({ url: () => url, method: () => method, headers: () => requestHeaders,
-      postDataJSON: () => { if (body === undefined) throw new Error('No JSON body'); return body; } }),
+    request: () => ({ resourceType: () => resourceType, url: () => url, method: () => method, headers: () => requestHeaders,
+      postDataJSON: () => { if (body === undefined || ['GET', 'HEAD'].includes(method)) throw new Error('No JSON body'); return body; } }),
     fetch: async options => {
       calls.push({ kind: 'fetch', url, options });
       // Emulate the dangerous default: following a redirect forwards the
@@ -186,4 +186,62 @@ test('native repeated Set-Cookie fields survive fulfillment without parsing or p
   assert.deepEqual(f.calls.map(call => call.kind), ['fetch', 'fulfill']);
   assert.deepEqual(f.calls[1].options.headers, { 'set-cookie': cookie });
   assert.equal(responseHeaders['X-Vercel-Protection-Bypass'], bypass);
+});
+
+
+test('dedicated notifications forwards only literal non-secret selector and bounded read payload', async () => {
+  const body = { limit: 40, state: 'active', source: 'all' };
+  const headers = { ...incoming, 'x-fcos-function-name': 'workNotificationsList' };
+  const allowed = fixture({ url: `${origin}/api/work-notifications`, body, requestHeaders: headers });
+  let observed;
+  const policy = (request, preview) => { observed = request; return compatibilityNormalRequestAllowed(request, preview); };
+  assert.equal(await run(allowed, policy), 0);
+  assert.deepEqual(allowed.calls.map(row => row.kind), ['fetch', 'fulfill']);
+  assert.equal(observed.functionName, 'workNotificationsList');
+  assert.equal(observed.headers, undefined);
+  assert.doesNotMatch(JSON.stringify(observed), /Bearer|bypass/);
+  for (const selector of [undefined, 'workNotificationsRead', 'workNotificationsState', 'workNotificationsList,workNotificationsState',
+    'workNotificationsList ', ' workNotificationsList', 'WORKNOTIFICATIONSLIST', 'x'.repeat(100)]) {
+    const f = fixture({ url: `${origin}/api/work-notifications`, body, requestHeaders: { ...incoming, ...(selector === undefined ? {} : { 'x-fcos-function-name': selector }) } });
+    assert.deepEqual(await blockedReasons(f), ['REQUEST_POLICY_DENIED']);
+    assert.deepEqual(f.calls.map(row => row.kind), ['abort']);
+  }
+  for (const changed of [{ body: { ...body, action: 'list' } }, { body: { ...body, sync: false } }, { body: { ...body, limit: 101 } },
+    { body: { ...body, limit: 40.5 } }, { body: { ...body, source: { all: true } } }, { body: { ...body, state: 'all' } },
+    { body: [] }, { body: undefined }, { requestHeaders: { ...headers, 'content-type': 'text/plain' } },
+    { requestHeaders: { ...headers, 'X-FCOS-Function-Name': 'workNotificationsState' } }, { url: `${origin}/api/work-notifications?selector=list` },
+    { url: `${origin}/api/work-notifications/` }, { url: 'https://foreign.example/api/work-notifications' }, { method: 'PUT' }]) {
+    const f = fixture({ url: `${origin}/api/work-notifications`, body, requestHeaders: headers, ...changed });
+    assert.equal(await run(f), 1);
+    assert.deepEqual(f.calls.map(row => row.kind), ['abort']);
+  }
+  assert.equal(await run(fixture({ url: `${origin}/api/work-notifications`, body, requestHeaders: headers }), normalRoleRequestAllowed), 1);
+});
+
+test('only exact optional script is excluded before fetch; escaped writes remain fatal with fixed categories', async () => {
+  const { compatibilityTelemetryScriptExcluded } = await import('../scripts/lib/compatibility-browser-isolation.mjs');
+  const excluded = [], denied = [];
+  const route = createNormalRoleVerificationRoute({ origin, protectionBypass: bypass, requestAllowed: compatibilityNormalRequestAllowed,
+    deniedReadsFatal: true, excludeRequest: compatibilityTelemetryScriptExcluded, onExcludedRequest: category => excluded.push(category),
+    onBlockedMutation: (reason, detail) => denied.push({ reason, ...detail }) });
+  const asset = fixture({ url: `${origin}/_vercel/speed-insights/script.js`, method: 'GET', body: undefined, resourceType: 'script' });
+  await route(asset.route);
+  assert.deepEqual(asset.calls.map(row => row.kind), ['abort']);
+  assert.deepEqual(excluded, ['SPEED_INSIGHTS_SCRIPT']);
+  assert.equal(denied.length, 0);
+  const requests = [
+    [fixture({ url: `${origin}/api/email-router-background-sync`, body: {} }), 'BACKGROUND_SYNC'],
+    [fixture({ url: `${origin}/api/functions/workspacePreferencesSave`, body: {} }), 'PREFERENCE_INITIALIZATION'],
+    [fixture({ url: `${origin}/_vercel/speed-insights/vitals`, body: {} }), 'TELEMETRY'],
+    [fixture({ url: `${supabase}/auth/v1/token?grant_type=refresh_token`, body: {} }), 'AUTH_REFRESH'],
+    [fixture({ url: `${origin}/api/work-notifications`, body: {} }), 'DEDICATED_NOTIFICATIONS'],
+    [fixture({ url: 'https://foreign.example/secret-query?secret=private', method: 'GET', body: undefined }), 'UNKNOWN'],
+  ];
+  for (const [f, category] of requests) {
+    await route(f.route);
+    assert.equal(denied.at(-1).category, category);
+    assert.equal(denied.at(-1).reason, 'REQUEST_POLICY_DENIED');
+    assert.deepEqual(f.calls.map(row => row.kind), ['abort']);
+  }
+  assert.doesNotMatch(JSON.stringify(denied), /secret|private|authorization|url/);
 });

@@ -208,7 +208,8 @@ test('source and publication jobs independently recompute immutable source and r
     git(['remote', 'set-url', 'origin', `https://github.com/${RELEASE_REPOSITORY}.git`], trustedCwd);
     const implementation = [CANDIDATE_QUALITY_WORKFLOW, CANDIDATE_QUALITY_MANIFEST, 'scripts/candidate-quality-receipt.mjs',
       'scripts/lib/candidate-quality.mjs', 'scripts/lib/release-evidence.mjs', 'scripts/lib/release-readiness.mjs',
-      'scripts/lib/preview-email-build.mjs', 'scripts/lib/runtime-compatibility-release.mjs'];
+      'scripts/lib/preview-email-build.mjs', 'scripts/lib/runtime-compatibility-release.mjs',
+      'scripts/lib/compatibility-browser-isolation.mjs', 'tests/compatibility-browser-isolation.chromium.mjs'];
     for (const file of implementation) {
       mkdirSync(join(trustedCwd, file, '..'), { recursive: true });
       writeFileSync(join(trustedCwd, file), readFileSync(join(root, file)));
@@ -224,6 +225,21 @@ test('source and publication jobs independently recompute immutable source and r
     const revisions = () => [releaseConfigurationRevision(candidateCwd, trustedCwd),
       previewEmailBuildControlRevision(trustedCwd), runtimeCompatibilityControlRevision(trustedCwd, candidateCwd)];
     const original = revisions();
+    // These new controls must come from the current trusted source; the pinned
+    // historical fixture base predates them. Missing or foreign bytes fail
+    // completeness/source trust rather than weakening the real verifier.
+    for (const [file, affected] of [['scripts/lib/compatibility-browser-isolation.mjs', [0, 2]],
+      ['tests/compatibility-browser-isolation.chromium.mjs', [2]]]) {
+      const path = join(trustedCwd, file), bytes = readFileSync(path);
+      rmSync(path);
+      assert.throws(() => runtimeCompatibilityControlRevision(trustedCwd, candidateCwd), error => error.code === 'ENOENT');
+      writeFileSync(path, Buffer.concat([bytes, Buffer.from('\n// foreign fixture control bytes\n')]));
+      const changed = revisions();
+      for (const index of affected) assert.notEqual(changed[index], original[index], `Unbound fixture control ${file}`);
+      assert.throws(() => candidateQualitySource({ candidateCwd, trustedCwd, harnessSha }));
+      writeFileSync(path, bytes);
+    }
+    assert.deepEqual(revisions(), original);
     for (const file of closure) {
       const path = join(trustedCwd, file), bytes = readFileSync(path);
       writeFileSync(path, Buffer.concat([bytes, Buffer.from('\n# changed trusted dependency\n')]));

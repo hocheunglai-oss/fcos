@@ -31,6 +31,8 @@ jobs:
           node-version: 24
       - run: npm ci --ignore-scripts
       - run: npx playwright install --with-deps chromium
+      - name: Verify credential-free browser isolation with mocked routes
+        run: node --test tests/compatibility-browser-isolation.chromium.mjs
       - name: Verify preserved real v288 data and read workflows for the exact compatibility candidate
         run: node scripts/runtime-compatibility-normal-role.mjs
         env:

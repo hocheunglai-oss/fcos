@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { COMPATIBILITY_NORMAL_MODULES, compatibilityNormalRequestAllowed, assertCompatibilityNormalIdentity,
   compatibilityNormalDataLoaded, verifyRuntimeCompatibilityNormalRole, compatibilityLegacyXeroReadRequest,
-  compatibilityNormalDiagnosticError, compatibilityNormalDiagnosticLine } from '../scripts/runtime-compatibility-normal-role.mjs';
+  compatibilityNormalDiagnosticError, compatibilityNormalDiagnosticLine, compatibilityNormalModuleTerminalReason, createCompatibilityNormalResponseSettlement } from '../scripts/runtime-compatibility-normal-role.mjs';
 import { FIRST_RUNTIME_ROLLOUT, compatibilityReadOnlyGuardsVerified } from '../scripts/lib/runtime-compatibility-release.mjs';
 import { verifyRuntimeCompatibility } from '../scripts/verify-runtime-compatibility.mjs';
 import { fcosConnectionIdentifier } from '../config/fcosConnections.js';
@@ -199,4 +199,81 @@ test('diagnostic error lifecycle retains the rebuilt safe module catalogue throu
   assert.deepEqual(diagnostic.modules.find(row => row.module === 'dashboard'), { module: 'dashboard', handler: 'dashboardStemList', reason: 'MISSING_DATA' });
   assert.deepEqual(diagnostic.modules.find(row => row.module === 'review'), { module: 'review', handler: 'salesforceDashboardFiltered', reason: 'WORKFLOW_MISSING' });
   assert.deepEqual(diagnostic.modules.find(row => row.module === 'markets'), { module: 'markets', handler: 'hedgeMarkets', reason: 'NOT_REACHED' });
+});
+
+
+test('new denied-request diagnostics keep only bounded fixed categories without URLs, bodies or selectors', () => {
+  const secret = 'private-request-selector-and-token';
+  const diagnostic = JSON.parse(compatibilityNormalDiagnosticLine({ normalRoleDiagnostic: { stage: 'MODULES', reason: 'BLOCKED_REQUEST', deniedRequests: [
+    { category: 'BACKGROUND_SYNC', method: 'POST', resourceType: 'fetch', count: 2, url: secret, body: secret, functionName: secret, headers: secret },
+    { category: 'AUTH_REFRESH', method: 'POST', resourceType: 'xhr', count: 1 },
+    { category: secret, method: 'POST', resourceType: 'fetch', count: 1 },
+    { category: 'UNKNOWN', method: secret, resourceType: 'fetch', count: 1 },
+    { category: 'UNKNOWN', method: 'GET', resourceType: 'script', count: 1001 },
+  ] } }));
+  assert.deepEqual(diagnostic.deniedRequests, [{ category: 'BACKGROUND_SYNC', method: 'POST', resourceType: 'fetch', count: 2 },
+    { category: 'AUTH_REFRESH', method: 'POST', resourceType: 'xhr', count: 1 }]);
+  assert.doesNotMatch(JSON.stringify(diagnostic), /private|selector|token|url|body|headers/);
+});
+
+
+test('late page errors, escaped mutations and failed cleanup withdraw previously successful module coverage', () => {
+  assert.equal(compatibilityNormalModuleTerminalReason(), null);
+  const failures = [];
+  assert.equal(compatibilityNormalModuleTerminalReason({ failures }), null);
+  failures.push('PAGE_ERROR');
+  assert.equal(compatibilityNormalModuleTerminalReason({ failures }), 'PAGE_ERROR');
+  assert.equal(compatibilityNormalModuleTerminalReason({ reason: 'MISSING_ROWS', failures }), 'PAGE_ERROR');
+  assert.equal(compatibilityNormalModuleTerminalReason({ blocked: true }), 'BLOCKED_REQUEST');
+  assert.equal(compatibilityNormalModuleTerminalReason({ closeFailed: true }), 'UNAVAILABLE_SURFACE');
+  assert.equal(compatibilityNormalModuleTerminalReason({ reason: 'MISSING_ROWS' }), 'MISSING_ROWS');
+});
+
+
+test('credential-free Chromium isolation is mandatory after install and before the live credential-bearing verifier', () => {
+  const workflow = readFileSync(new URL('../.github/workflows/runtime-compatibility-normal-role.yml', import.meta.url), 'utf8');
+  const install = workflow.indexOf('npx playwright install --with-deps chromium');
+  const integration = workflow.indexOf('node --test tests/compatibility-browser-isolation.chromium.mjs');
+  const live = workflow.indexOf('run: node scripts/runtime-compatibility-normal-role.mjs');
+  assert.ok(install < integration && integration < live);
+  const step = workflow.slice(workflow.lastIndexOf('      - name:', integration), workflow.indexOf('      - name:', integration));
+  assert.doesNotMatch(step, /env:|secrets\.|continue-on-error|if:/);
+  const unit = readFileSync(new URL('./compatibility-browser-isolation.test.js', import.meta.url), 'utf8');
+  assert.doesNotMatch(unit, /chromium\.launch|before\(async/);
+});
+
+
+test('deferred relevant JSON rejection after page closure withdraws an earlier real-data pass', async () => {
+  const tracker = createCompatibilityNormalResponseSettlement({ timeoutMs: 1000 }), failures = [];
+  let rejectJson, closed = false;
+  const json = new Promise((_, reject) => { rejectJson = reject; });
+  tracker.track(json.catch(() => { failures.push('MISSING_DATA'); }));
+  assert.equal(compatibilityNormalModuleTerminalReason({ failures }), null, 'earlier data/UI was tentatively successful');
+  closed = true;
+  setImmediate(() => { assert.equal(closed, true); rejectJson(new Error('private deferred response content')); });
+  await tracker.settle();
+  assert.equal(compatibilityNormalModuleTerminalReason({ failures }), 'MISSING_DATA');
+});
+
+test('hung or rejected relevant JSON observers fail the short settlement deadline with safe fixed reason', async () => {
+  const hung = createCompatibilityNormalResponseSettlement({ timeoutMs: 20 });
+  hung.track(new Promise(() => {}));
+  await assert.rejects(() => hung.settle(), error => error.message === 'MISSING_DATA');
+  const rejected = createCompatibilityNormalResponseSettlement({ timeoutMs: 1000 });
+  rejected.track(Promise.reject(new Error('private malformed response')));
+  await assert.rejects(() => rejected.settle(), error => error.message === 'MISSING_DATA');
+});
+
+
+test('deferred fulfilled but invalid review-workflow JSON withdraws tentative workflow coverage after settlement', async () => {
+  const tracker = createCompatibilityNormalResponseSettlement({ timeoutMs: 1000 });
+  let resolveJson, reviewWorkflowLoaded = true;
+  const json = new Promise(resolve => { resolveJson = resolve; });
+  tracker.track(json.then(data => { reviewWorkflowLoaded = !data.error && data.byStemId !== null
+    && typeof data.byStemId === 'object' && !Array.isArray(data.byStemId) && Array.isArray(data.ownerOptions); }));
+  assert.equal(compatibilityNormalModuleTerminalReason({ workflowRequired: true, workflowLoaded: reviewWorkflowLoaded }), null);
+  setImmediate(() => resolveJson({ byStemId: null, ownerOptions: [] }));
+  await tracker.settle();
+  assert.equal(compatibilityNormalModuleTerminalReason({ workflowRequired: true, workflowLoaded: reviewWorkflowLoaded }), 'WORKFLOW_MISSING');
+  assert.equal(compatibilityNormalModuleTerminalReason({ failures: ['MISSING_DATA'], workflowRequired: true, workflowLoaded: false }), 'MISSING_DATA');
 });

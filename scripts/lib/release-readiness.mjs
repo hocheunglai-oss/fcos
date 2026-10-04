@@ -19,7 +19,7 @@ export function releaseConfigurationRevision(cwd, trustedCwd = cwd) {
     'vercel.json', 'package.json', 'package-lock.json', 'AGENTS.md', '.codex/config.toml', '.codex/setup.mjs',
     '.codex/control-validation.mjs', '.codex/control-policy.json', '.codex/README.md',
     '.github/workflows/quality.yml', '.github/workflows/authenticated-release.yml', '.github/workflows/production-release.yml',
-    '.github/workflows/normal-role-release.yml', 'scripts/normal-role-release.mjs', 'scripts/lib/normal-role-verification-transport.mjs', 'scripts/lib/normal-role-read-requests.mjs',
+    '.github/workflows/normal-role-release.yml', 'scripts/normal-role-release.mjs', 'scripts/lib/normal-role-verification-transport.mjs', 'scripts/lib/compatibility-browser-isolation.mjs', 'scripts/lib/normal-role-read-requests.mjs',
     'scripts/lib/preview-email-signer.mjs', 'scripts/lib/legacy-email-baseline-proof.mjs', 'config/legacy-email-baseline-proof.json',
     'scripts/lib/preview-email-build.mjs', 'scripts/preview-email-proof-build.mjs', '.github/workflows/preview-email-proof-build.yml',
     'scripts/lib/preview-parity.mjs', 'scripts/collect-preview-parity.mjs', 'scripts/lib/release-evidence.mjs',
