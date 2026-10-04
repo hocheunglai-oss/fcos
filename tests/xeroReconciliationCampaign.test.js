@@ -136,6 +136,38 @@ test('create binds a complete saved preview and read returns public paginated ca
   assert.ok(f.calls.some((call) => call.name === 'xero_campaign_create_v1'));
 });
 
+test('reconciled campaign reads replace stale review reasons without changing saved evidence', async () => {
+  const f = await seeded();
+  const template = f.tables.xero_reconciliation_cases[0];
+  const variants = [
+    ['link_only', 'Invoice__c', 'Existing Xero document verified and linked.'],
+    ['draft', 'Invoice__c', 'Draft created and verified in Xero.'],
+    ['contact', 'Account', 'Contact identity verified in Xero.'],
+    ['link_only', 'Payment__c', 'Existing payment and invoice allocation verified and linked.'],
+  ];
+  f.tables.xero_reconciliation_cases = variants.map(([category, sourceObject], index) => ({
+    ...template, id: `completed-${index}`, category, status: 'reconciled', outcome: { status: 'reconciled' },
+    evidence: { ...template.evidence, sourceObject, reason: 'Exact review and approval required.',
+      reasons: ['Exact review and approval required.', 'Document link pending.'] },
+  }));
+  f.tables.xero_reconciliation_cases.push({ ...template, id: 'waiting', status: 'waiting_dependency',
+    evidence: { ...template.evidence, reason: 'Bank evidence missing.', reasons: ['Bank evidence missing.'] } },
+  { ...template, id: 'held', status: 'needs_decision', outcome: { reason: 'Settlement changed.' } },
+  { ...template, id: 'explicit-completed', status: 'reconciled', outcome: { reason: 'Verified exact receipt.' } });
+  const before = structuredClone(f.tables.xero_reconciliation_cases);
+  const result = await xeroReconciliationCampaignRead({ campaignId: 'campaign-one', limit: 25 }, f.dependency);
+  for (const [index, [, , expected]] of variants.entries()) {
+    const row = result.cases.find((entry) => entry.id === `completed-${index}`);
+    assert.equal(row.reason, expected);
+    assert.deepEqual(row.reasons, [expected]);
+    assert.equal(row.evidenceFingerprint, template.evidence_fingerprint);
+  }
+  assert.equal(result.cases.find((row) => row.id === 'waiting').reason, 'Bank evidence missing.');
+  assert.equal(result.cases.find((row) => row.id === 'held').reason, 'Settlement changed.');
+  assert.deepEqual(result.cases.find((row) => row.id === 'explicit-completed').reasons, ['Verified exact receipt.']);
+  assert.deepEqual(f.tables.xero_reconciliation_cases, before);
+});
+
 test('incomplete saved baseline is rejected before campaign mutation', async () => {
   const f = fakeClient();
   f.tables.xero_financial_sync_runs[0].control_totals.workflowSnapshot.complete = false;

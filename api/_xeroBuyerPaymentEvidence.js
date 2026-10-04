@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { issuedSupplierCanonical } from './_xeroIssuedSupplierPreservation.js';
 import { isBuyerCreditNote } from './_buyerFinancialAmount.js';
 import { paymentCurrency } from './_xeroPaymentIdentity.js';
 
@@ -132,7 +133,7 @@ export function buyerPaymentDocumentBlockers(payment, mapping) {
   try {
     rebuilt = buildBuyerPaymentDocumentEvidence(proof.stemId, proof.documents.map(rawFromSnapshot), { complete: proof.complete });
   } catch { return ['Current buyer invoice inventory evidence is invalid. Refresh payment review.']; }
-  if (JSON.stringify(rebuilt) !== JSON.stringify(proof) || proof.stemId !== payment.STEM__c || proof.complete !== true) {
+  if (issuedSupplierCanonical(rebuilt) !== issuedSupplierCanonical(proof) || proof.stemId !== payment.STEM__c || proof.complete !== true) {
     return ['Current buyer invoice inventory evidence is incomplete or changed. Refresh payment review.'];
   }
   if (proof.blockers.length) return proof.blockers;

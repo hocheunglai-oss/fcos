@@ -6,6 +6,8 @@ import { resolveGroupRemittanceBankEvidence } from '../api/_xeroGroupRemittanceB
 import { buildBuyerPaymentDocumentEvidence } from '../api/_xeroBuyerPaymentEvidence.js';
 import { loadRemittanceInventory, enrichGroupRemittanceBankSources } from '../api/_xeroRemittanceInventory.js';
 import { reconciliationBucket } from '../src/lib/financialWorkflowUi.js';
+import { paymentPostingKey } from '../api/_xeroPaymentPosting.js';
+import { publicPaymentSnapshot } from '../api/_xeroFinancialPublicEvidence.js';
 
 const uuid = n => `${String(n).padStart(8, '0')}-1111-4111-8111-111111111111`;
 const key = (prefix, n) => `${prefix}${String(n).padStart(12, '0')}`;
@@ -55,17 +57,18 @@ function fixture() {
 }
 const assertHeld = f => { const row = f.classify(); assert.equal(row.status, 'blocked', row.blockers.join('; '));
   assert.equal(row.action, 'blocked'); assert.equal(row.proposedPayment, null); assert.equal(reconciliationBucket(row, 'payment'), 'attention'); return row; };
-function exactAccepted(f, { claim = true } = {}) {
+function exactAccepted(f, { claim = true, state = 'group_linked' } = {}) {
+  if (state === 'group_linked') f.context.xeroPayments = [f.actual];
+  const initial = f.classify(); assert.equal(initial.action, state === 'confirmed' ? 'payment_apply' : 'payment_link', initial.blockers.join('; '));
   f.context.xeroPayments = [f.actual];
-  const initial = f.classify(); assert.equal(initial.action, 'payment_link', initial.blockers.join('; '));
-  const saved = { salesforce_payment_id: f.payment.Id, salesforce_payment_name: f.payment.Name, document_mapping_id: ids.mapping,
+  const saved = { id: uuid(9), salesforce_payment_id: f.payment.Id, salesforce_payment_name: f.payment.Name, document_mapping_id: ids.mapping,
     xero_payment_id: ids.payment, xero_bank_account_id: ids.bank, source_fingerprint: initial.sourceFingerprint,
-    amount: 50, currency: 'USD', payment_date: f.payment.Date__c, status: 'linked', exception_reason: null,
+    amount: 50, currency: 'USD', payment_date: f.payment.Date__c, status: state === 'confirmed' ? 'applied' : 'linked', exception_reason: null,
     bank_source_evidence: clone(initial.bankSourceEvidence), retained_reference: {} };
   f.context.existingBySalesforce.set(f.payment.Id, saved); f.context.paymentMappings.push(saved);
-  const reviewed = Object.fromEntries(['salesforcePaymentId', 'salesforcePaymentName', 'documentMappingId', 'xeroPaymentId', 'bankAccountId',
-    'amount', 'currency', 'paymentDate', 'sourceFingerprint', 'bankSourceEvidence', 'documentMappingSnapshot', 'bankMappingSnapshot'].map(name => [name, clone(initial[name])]));
-  const posting = { id: ids.claim, status: 'completed', control_totals: { paymentPosting: { state: 'group_linked', tenantId: ids.tenant,
+  const reviewed = clone(initial);
+  const posting = { id: ids.claim, mode: 'payment_apply', idempotency_key: paymentPostingKey(ids.tenant, f.payment.Id),
+    source_fingerprint: initial.sourceFingerprint, status: 'completed', control_totals: { paymentPosting: { state, tenantId: ids.tenant,
     paymentId: f.payment.Id, reviewed, confirmedPaymentId: ids.payment, observedPaymentIds: [ids.payment] } } };
   if (claim) f.context.paymentPostingClaims.set(f.payment.Id, posting);
   return { initial, saved, posting };
@@ -257,4 +260,164 @@ test('real collector retains distinct same-name debtor Accounts and blocks curre
   const collected = await collect(f);
   assert.equal(collected.rows[0]._groupBankEvidence, undefined);
   assert.match(collected.rows[0]._groupBankEvidenceBlocker, /direct member/);
+});
+
+
+function advanceAccountMetadata(f, date = '2026-01-03T00:00:00.000+0000') {
+  for (const account of f.accounts) account.LastModifiedDate = date;
+  f.rebuild();
+}
+function rebuildChangedSource(f) {
+  const result = resolveGroupRemittanceBankEvidence(f.payment, { parent: f.parent, siblings: f.siblings,
+    visiblePayments: [f.parent, ...f.siblings], accounts: f.accounts, buyerDocumentInventories: f.inventories, complete: true });
+  if (result.eligible) f.payment._groupBankEvidence = result.evidence;
+  else { delete f.payment._groupBankEvidence; f.payment._groupBankEvidenceBlocker = result.blocker; }
+}
+
+for (const state of ['confirmed', 'group_linked']) test(`completed ${state} payment permits only independently validated Account timestamp revalidation`, () => {
+  const f = fixture(); const { saved, posting } = exactAccepted(f, { state });
+  if (state === 'confirmed') { f.document.status = 'PAID'; f.document.amountDue = 0; }
+  const receiptBefore = clone({ saved, posting }); advanceAccountMetadata(f);
+  const sourceBefore = clone(f.payment); const row = f.classify();
+  assert.equal(row.action, 'payment_link', row.blockers.join('; ')); assert.equal(row.status, 'protected');
+  assert.equal(row.proposedPayment, null); assert.equal(row.paymentPostingClaimId, ids.claim);
+  assert.equal(row.sourceFingerprint, saved.source_fingerprint); assert.deepEqual(row.bankSourceEvidence, saved.bank_source_evidence);
+  assert.deepEqual({ saved, posting }, receiptBefore); assert.deepEqual(f.payment, sourceBefore);
+  const evidence = row.groupBankSourceRevalidation;
+  assert.equal(evidence.policyVersion, 'completed_group_account_timestamp_revalidation_v1');
+  assert.equal(evidence.claimId, ids.claim); assert.equal(evidence.mappingId, saved.id);
+  assert.equal(evidence.retainedProofFingerprint, saved.bank_source_evidence.fingerprint);
+  assert.equal(evidence.currentProofFingerprint, f.payment._groupBankEvidence.fingerprint);
+  assert.equal(evidence.retainedSourceFingerprint, saved.source_fingerprint);
+  assert.equal(evidence.changedAccounts.length, 3); assert.deepEqual(evidence.currentBankSourceEvidence, f.payment._groupBankEvidence);
+});
+
+test('separate complete current Account evidence changes the review hash while keeping completed source identity stable', () => {
+  const f = fixture(); const { saved } = exactAccepted(f, { state: 'confirmed' }); advanceAccountMetadata(f);
+  const first = f.classify(); advanceAccountMetadata(f, '2026-01-04T00:00:00.000+0000'); const second = f.classify();
+  assert.equal(first.status, 'protected'); assert.equal(second.status, 'protected');
+  assert.equal(first.sourceFingerprint, second.sourceFingerprint); assert.equal(second.sourceFingerprint, saved.source_fingerprint);
+  assert.notEqual(first.groupBankSourceRevalidation.currentProofFingerprint, second.groupBankSourceRevalidation.currentProofFingerprint);
+  assert.notEqual(first.reviewFingerprint, second.reviewFingerprint);
+});
+
+test('complete current revalidation stays private while public review/source identities and link protection remain visible', () => {
+  const f = fixture(); exactAccepted(f); advanceAccountMetadata(f); const row = f.classify();
+  const projected = publicPaymentSnapshot({ rows: [row] }).rows[0];
+  assert.equal(projected.groupBankSourceRevalidation, undefined); assert.equal(projected.bankSourceEvidence, undefined);
+  assert.equal(projected.sourceFingerprint, row.sourceFingerprint); assert.equal(projected.reviewFingerprint, row.reviewFingerprint);
+  assert.equal(projected.action, 'payment_link'); assert.equal(projected.status, 'protected'); assert.equal(projected.proposedPayment, null);
+  assert.ok(row.groupBankSourceRevalidation.currentBankSourceEvidence.source.accounts.length);
+});
+
+for (const [name, mutate] of [
+  ['legal name/suffix', f => { f.accounts[1].Name = 'FRATELLI COSULICH UNIPESSOAL LDA'; }],
+  ['company code', f => { f.accounts[1].Company_Code__c = 'HK DIFFERENT'; }],
+  ['debtor ParentId', f => { f.accounts[1].ParentId = key('001', 999); }],
+  ['Group ParentId', f => { f.accounts[0].ParentId = key('001', 999); }],
+  ['Account identity', f => { f.accounts[2].Id = key('001', 999); }],
+  ['Account type', f => { f.accounts[1].RecordType.DeveloperName = 'Buyer'; }],
+  ['inactive flag', f => { f.accounts[1].Inactive_Suspended__c = true; }],
+  ['deleted flag', f => { f.accounts[1].IsDeleted = true; }],
+  ['allocation ID', f => { f.siblings[1].Id = key('a0S', 999); }],
+  ['allocation amounts', f => { f.payment.Amount__c = 51; f.siblings[1].Amount__c = 49; }],
+  ['source bank', f => { f.parent.Bank__c = 'DBS'; }],
+  ['parent reference', f => { f.parent.Reference__c = 'CHANGED'; }],
+  ['allocation reference', f => { f.payment.Reference__c = 'CHANGED'; }],
+  ['payment timestamp', f => { f.payment.LastModifiedDate = '2026-01-04T00:00:00Z'; }],
+  ['parent/child payment date', f => { for (const item of [f.parent, ...f.siblings]) item.Date__c = '2026-01-03'; }],
+  ['source currency', f => { f.payment.CurrencyIsoCode = 'HKD'; f.payment._currency.currency = 'HKD'; }],
+  ['invoice amount', f => { f.inventories[0].records[0].Amount__c = 51; }],
+  ['invoice name', f => { f.inventories[0].records[0].Name = 'NEW-INV-1'; }],
+  ['invoice due date', f => { f.inventories[0].records[0].Invoice_Due_Date__c = '2026-01-03'; }],
+  ['invoice owner', f => { f.inventories[0].records[0].STEM__r.Account__c = f.siblings[1].Account__c; }],
+  ['invoice status flag', f => { f.inventories[0].records[0].Deprecated__c = true; }],
+  ['incomplete invoice inventory', f => { f.inventories[0].complete = false; }],
+]) test(`completed metadata exception rejects actual ${name} change`, () => {
+  const f = fixture(); exactAccepted(f); advanceAccountMetadata(f); mutate(f); rebuildChangedSource(f);
+  assertHeld(f); assert.equal(f.payment.Bank__c, null);
+});
+
+for (const value of [null, '', 'bad', '2026-02-30T00:00:00Z', '2026-01-03', '2026-01-03T24:00:00Z', '2025-12-31T00:00:00Z']) {
+  test(`completed metadata exception rejects stale or invalid current timestamp ${String(value)}`, () => {
+    const f = fixture(); exactAccepted(f); f.accounts[0].LastModifiedDate = value; f.rebuild(); assertHeld(f);
+  });
+}
+for (const value of [null, 'bad', '2026-02-30T00:00:00Z']) {
+  test(`completed metadata exception rejects invalid retained timestamp ${String(value)}`, () => {
+    const f = fixture(); f.accounts[0].LastModifiedDate = value; f.rebuild(); exactAccepted(f); advanceAccountMetadata(f); assertHeld(f);
+  });
+}
+
+for (const [name, mutate] of [
+  ['missing claim', f => { f.context.paymentPostingClaims.clear(); }],
+  ['processing claim', (_f, _saved, claim) => { claim.status = 'processing'; }],
+  ['failed claim', (_f, _saved, claim) => { claim.status = 'failed'; }],
+  ['pending state', (_f, _saved, claim) => { claim.control_totals.paymentPosting.state = 'intent'; }],
+  ['uncertain state', (_f, _saved, claim) => { claim.control_totals.paymentPosting.state = 'uncertain'; }],
+  ['reference-linked state', (_f, _saved, claim) => { claim.control_totals.paymentPosting.state = 'reference_linked'; }],
+  ['wrong tenant', (_f, _saved, claim) => { claim.control_totals.paymentPosting.tenantId = uuid(99); }],
+  ['wrong claim source identity', (_f, _saved, claim) => { claim.control_totals.paymentPosting.paymentId = key('a0S', 999); }],
+  ['wrong durable barrier', (_f, _saved, claim) => { claim.idempotency_key = 'other'; }],
+  ['wrong mode', (_f, _saved, claim) => { claim.mode = 'preview'; }],
+  ['changed claim source fingerprint', (_f, _saved, claim) => { claim.source_fingerprint = 'b'.repeat(64); }],
+  ['changed reviewed source fingerprint', (_f, _saved, claim) => { claim.control_totals.paymentPosting.reviewed.sourceFingerprint = 'b'.repeat(64); }],
+  ['changed confirmed target', (_f, _saved, claim) => { claim.control_totals.paymentPosting.confirmedPaymentId = uuid(99); }],
+  ['extra observed target', (_f, _saved, claim) => { claim.control_totals.paymentPosting.observedPaymentIds.push(uuid(99)); }],
+  ['changed retained claim proof', (_f, _saved, claim) => { claim.control_totals.paymentPosting.reviewed.bankSourceEvidence = null; }],
+  ['tampered duplicate claim bank proof', (_f, _saved, claim) => { claim.control_totals.paymentPosting.reviewed.bankEvidence = null; }],
+  ['wrong reviewed target', (_f, _saved, claim) => { claim.control_totals.paymentPosting.reviewed.xeroPaymentId = uuid(99); }],
+  ['changed mapping amount', (_f, saved) => { saved.amount = 49; }],
+  ['changed mapping name', (_f, saved) => { saved.salesforce_payment_name = 'Changed allocation'; }],
+  ['unresolved mapping', (_f, saved) => { saved.status = 'exception'; }],
+  ['mapping exception', (_f, saved) => { saved.exception_reason = 'unresolved'; }],
+  ['missing mapping from controls', f => { f.context.paymentMappings = []; }],
+  ['duplicate mappings', (f, saved) => { f.context.paymentMappings.push(clone(saved)); }],
+  ['incomplete current controls', f => { f.context.groupPaymentControlsComplete = false; }],
+  ['changed current bank revision', f => { f.bank.revision = 2; }],
+  ['changed current document ownership', f => { f.mapping.retained_differences.accountId = f.siblings[1].Account__c; }],
+]) test(`completed metadata exception keeps holds for ${name}`, () => {
+  const f = fixture(); const { saved, posting } = exactAccepted(f); advanceAccountMetadata(f); mutate(f, saved, posting); assertHeld(f);
+});
+
+test('tampered current and retained proof hashes cannot enter completed timestamp revalidation', () => {
+  for (const target of ['current', 'retained']) {
+    const f = fixture(); const { saved } = exactAccepted(f); advanceAccountMetadata(f);
+    if (target === 'current') { const proof = clone(f.payment._groupBankEvidence); proof.membershipFingerprint = 'b'.repeat(64); f.payment._groupBankEvidence = proof; }
+    else saved.bank_source_evidence.fingerprint = 'b'.repeat(64);
+    assertHeld(f);
+  }
+});
+
+for (const [name, mutate] of [
+  ['payment missing', f => { f.context.xeroPayments = []; }],
+  ['payment amount', f => { f.actual.Amount = 49; }],
+  ['bank settlement amount', f => { f.actual.BankAmount = 49; }],
+  ['payment bank', f => { f.actual.Account.AccountID = uuid(99); }],
+  ['payment invoice', f => { f.actual.Invoice.InvoiceID = uuid(99); }],
+  ['payment date', f => { f.actual.Date = '2026-01-03'; }],
+  ['payment reference', f => { f.actual.Reference = 'CHANGED'; }],
+  ['payment status', f => { f.actual.Status = 'DELETED'; }],
+  ['payment currency', f => { f.actual.Invoice.CurrencyCode = 'HKD'; }],
+  ['payment FX', f => { f.actual.CurrencyRate = 1.1; }],
+  ['current invoice contact', f => { f.document.contactId = uuid(99); }],
+  ['current invoice voided', f => { f.document.status = 'VOIDED'; }],
+  ['current invoice currency', f => { f.document.currency = 'HKD'; }],
+  ['archived current bank', f => { f.bankAccount.Status = 'ARCHIVED'; }],
+  ['duplicate target ownership', f => { f.context.paymentMappings.push({ salesforce_payment_id: key('a0S', 99), xero_payment_id: ids.payment }); }],
+]) test(`completed timestamp revalidation does not waive exact current ${name}`, () => {
+  const f = fixture(); exactAccepted(f, { state: 'confirmed' }); advanceAccountMetadata(f); mutate(f); assertHeld(f);
+});
+
+test('new candidate binds full current source proof without inheriting a completed timestamp exception', () => {
+  const f = fixture(); const first = f.classify(); advanceAccountMetadata(f); const second = f.classify();
+  assert.equal(second.action, 'payment_apply'); assert.equal(second.status, 'eligible');
+  assert.ok(second.proposedPayment); assert.equal(second.groupBankSourceRevalidation, undefined);
+  assert.deepEqual(second.bankSourceEvidence, f.payment._groupBankEvidence); assert.notEqual(second.sourceFingerprint, first.sourceFingerprint);
+});
+
+test('caller-supplied revalidation cannot authorize new or unchanged links', () => {
+  const f = fixture(); f.payment._groupBankSourceRevalidation = { currentProofFingerprint: 'FORGED' };
+  assert.equal(f.classify().groupBankSourceRevalidation, undefined); exactAccepted(f);
+  assert.equal(f.classify().groupBankSourceRevalidation, undefined);
 });

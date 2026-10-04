@@ -1201,7 +1201,8 @@ export function classifyXeroFinancialPayment(rawPayment, context) {
   // binds the complete current source inventory, including unlinked invoices.
   row.reviewFingerprint = hashJson({ review: row.reviewFingerprint, tenantId: context.tenantId || null,
     ...(payment.RecordType?.DeveloperName === 'Receivable' ? { buyerDocuments: payment._buyerDocumentEvidence ?? null } : {}),
-    ...(group ? { bankSourceEvidence: group.bankSourceEvidence, bankMapping: group.bankMappingSnapshot, documentMapping: group.documentMappingSnapshot, blockers: row.blockers } : {}) });
+    ...(group ? { bankSourceEvidence: group.bankSourceEvidence, bankMapping: group.bankMappingSnapshot, documentMapping: group.documentMappingSnapshot, blockers: row.blockers } : {}),
+    ...(group?.groupBankSourceRevalidation ? { groupBankSourceRevalidation: group.groupBankSourceRevalidation } : {}) });
   const actual = context.xeroPayments.find((item) => item.PaymentID === row.xeroPaymentId);
   return reviewPaymentPostingClaim(row, context.paymentPostingClaims instanceof Map ? context.paymentPostingClaims.get(payment.Id) : null, actual);
 }
