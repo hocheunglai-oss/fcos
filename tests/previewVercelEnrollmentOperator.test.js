@@ -96,6 +96,64 @@ test('uncertain issuance has one POST and cannot be retried or overwrite its ori
  assert.equal(f.durable.phase,'quarantined_reconciliation_required');const original=structuredClone(f.durable);
  await assert.rejects(f.execute());assert.equal(f.calls.filter(x=>x==='POST').length,1);assert.deepEqual(f.durable,original);
 });
+const enrollmentExpiryBoundaries = [
+ ['durable claim','claim',null,'issuance_approval_recheck',0,0,0],
+ ['private state write','save','private_enrollment_write_requested','private_enrollment_write',1,0,0],
+ ['private Keychain write','keychainSet',null,'private_enrollment_write',1,0,0],
+ ['private Keychain readback','keychainGet',null,'private_enrollment_write',1,0,0],
+ ['bearer intent write','save','bearer_write_requested','bearer_write',1,0,0],
+ ['bearer secret write','secretSet','FCOS_RELEASE_VERCEL_TOKEN','bearer_write',1,1,0],
+ ['companion intent write','save','companion_write_requested','companion_write',1,1,0],
+ ['companion secret write','secretSet',ENROLLED_AUTHORITY_SECRET,'companion_write',1,2,0],
+ ['paired-secret readback','secretMetadata',null,'paired_secret_readback',1,2,0],
+ ['disabled-gate read','assertDisabled',null,'disabled_pin_write',1,2,0],
+ ['token pin write','variableSet','FCOS_RELEASE_VERCEL_TOKEN_ID','disabled_pin_write',1,2,1],
+ ['enrollment pin write','variableSet','FCOS_PREVIEW_VERCEL_ENROLLMENT_ID','disabled_pin_write',1,2,2],
+ ['final state write','save','enrolled_disabled','disabled_pin_write',1,2,2],
+];
+for (const [label,adapter,match,stage,posts,secretWrites,pinWrites] of enrollmentExpiryBoundaries)
+ test(`expiry at enrollment ${label} finishes the atomic write and quarantines before the next mutation`,async()=>{
+  const f=fixture(),original=f.io[adapter];
+  f.io[adapter]=async(...args)=>{
+   const result=await original(...args);
+   const boundary=adapter==='save'?args[1].phase:args[0];
+   if(match===null||boundary===match)f.clock(f.approval.expiresAt);
+   return result;
+  };
+  await assert.rejects(f.execute());
+  assert.equal(f.durable.phase,'quarantined_reconciliation_required');assert.equal(f.durable.failureStage,stage);
+  assert.equal(f.calls.filter(x=>x==='POST').length,posts);assert.equal(Object.keys(f.values).length,secretWrites);
+  assert.equal(Object.keys(f.vars).length,pinWrites);assert.ok(!f.calls.includes('GET:metadata')||posts===1);
+  const originalState=structuredClone(f.durable);await assert.rejects(f.execute());
+  assert.deepEqual(f.durable,originalState);assert.equal(f.calls.filter(x=>x==='POST').length,posts);
+  const evidence=JSON.stringify({state:f.durable,vars:f.vars});assert.ok(!evidence.includes(token));
+  if(f.capsule)assert.ok(!evidence.includes(JSON.parse(f.capsule).binding));
+ });
+test('approval ages out during durable claim even while the token lease remains future',async()=>{
+ const f=fixture(),claim=f.io.claim;f.approval.expiresAt=now+7200000;f.approval.leaseDeadline=f.approval.expiresAt;
+ f.io.claim=async(...args)=>{await claim(...args);f.clock(now+3600001);};
+ await assert.rejects(f.execute());assert.equal(f.durable.phase,'quarantined_reconciliation_required');
+ assert.equal(f.durable.failureStage,'issuance_approval_recheck');assert.ok(!f.calls.includes('POST'));
+ assert.deepEqual(f.values,{});assert.deepEqual(f.vars,{});
+});
+test('uncertain quarantine journaling after expiry retains the durable intent and never retries or rolls back',async()=>{
+ const f=fixture(),read=f.io.secretMetadata,save=f.io.save;
+ f.io.secretMetadata=async()=>{const rows=await read();f.clock(f.approval.expiresAt);return rows;};
+ f.io.save=async(a,state)=>{if(state.phase==='quarantined_reconciliation_required')throw Error(token);await save(a,state);};
+ await assert.rejects(f.execute(),error=>!error.message.includes(token));
+ assert.equal(f.durable.phase,'companion_write_requested');assert.equal(f.calls.filter(x=>x==='POST').length,1);
+ assert.equal(Object.keys(f.values).length,2);assert.deepEqual(f.vars,{});
+ const originalState=structuredClone(f.durable);await assert.rejects(f.execute());assert.deepEqual(f.durable,originalState);
+ assert.equal(f.calls.filter(x=>x==='POST').length,1);assert.ok(!JSON.stringify(f.durable).includes(token));
+});
+test('uncertain final state journaling quarantines completed writes without returning enrollment success',async()=>{
+ const f=fixture(),save=f.io.save;
+ f.io.save=async(a,state)=>{await save(a,state);if(state.phase==='enrolled_disabled'){f.clock(f.approval.expiresAt);throw Error(token);}};
+ await assert.rejects(f.execute(),error=>!error.message.includes(token));
+ assert.equal(f.durable.phase,'quarantined_reconciliation_required');assert.equal(f.calls.filter(x=>x==='POST').length,1);
+ assert.equal(Object.keys(f.values).length,2);assert.equal(Object.keys(f.vars).length,2);
+ assert.ok(!JSON.stringify(f.durable).includes(token));
+});
 test('paired-secret partial failure remains quarantined with no reviewed pin or enable writes',async()=>{
  const f=fixture(),set=f.io.secretSet;f.io.secretSet=async(name,value)=>{if(name===ENROLLED_AUTHORITY_SECRET)throw Error(token);await set(name,value);};
  await assert.rejects(f.execute());assert.equal(f.durable.phase,'quarantined_reconciliation_required');assert.deepEqual(f.vars,{});
@@ -199,6 +257,14 @@ test('positive helper attestation signs with actual fixture Ed25519 and exact ru
  assert.ok(f.calls.indexOf('signing-key')<f.calls.indexOf('GET:metadata'));
  assert.equal(f.calls.filter(x=>x==='POST').length,0);assert.equal(f.calls.filter(x=>x.startsWith('secret:')).length,0);
 });
+for(const [label,adapter] of [['nonce claim','claimAttestation'],['private enrollment read','keychainGet'],['signing key read','signingKey'],['metadata observation','tokenMetadata'],['receipt publication','variableSet']])
+ test(`expiry at attestation ${label} still refuses success without issuance or credential writes`,async()=>{
+  const f=await attestationFixture(),original=f.io[adapter];
+  f.io[adapter]=async(...args)=>{const result=await original(...args);f.clock(f.approval.expiresAt);return result;};
+  await assert.rejects(f.execute('attest'));assert.equal(f.calls.filter(x=>x==='attestation-claim').length,1);
+  assert.ok(!f.calls.includes('POST'));assert.ok(!f.calls.some(x=>x.startsWith('secret:')));
+  assert.equal(f.vars.FCOS_PREVIEW_VERCEL_AUTHORITY_RECEIPT!==undefined,adapter==='variableSet');
+ });
 test('existing signing key with wrong public pin cannot issue receipt',async()=>{
  const f=await attestationFixture();await assert.rejects(runEnrollmentOperation({action:'attest',approval:f.approval,scriptSha256,io:f.io,now:()=>now}));
  assert.equal(f.vars.FCOS_PREVIEW_VERCEL_AUTHORITY_RECEIPT,undefined);
