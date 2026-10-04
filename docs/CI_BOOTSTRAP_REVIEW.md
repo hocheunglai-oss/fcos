@@ -94,3 +94,44 @@ protection changes, environment approval, candidate dispatch and application
 release remain separate owner-controlled actions.
 
 The bootstrap disables automatic Vercel Git deployments from main in vercel.json. This prevents its older application baseline from replacing the retained live Production fixes during CI installation. Preview branches remain enabled; Production uses explicit verified deployment.
+
+## Frozen candidate quality proposal — 4 October 2026
+
+The separate `candidate-quality.yml` workflow is disabled unless the repository
+variable `FCOS_TRUSTED_CANDIDATE_QUALITY_ENABLED` is exactly `true`. Installing
+this proposal does not authorize that variable, dispatch, credential use, a
+Preview build, or Production. Keep the existing `quality.yml` byte-for-byte.
+
+The owner-reviewed manifest under `.github/quality-candidates/` admits only
+`6dbb83215cc5b9964dbe32a13f852e3a62e7bcc2`, its frozen branch, portable source
+digest, dependency lock and original quality workflow blob/hash. No application
+API, UI, migration, package or mobile change belongs in this bootstrap.
+
+Three separate hosted runners enforce the boundary. The source runner executes
+only protected-main code and verifies a fresh clean candidate checkout as data.
+The candidate runner executes the complete reviewed local-only test plan,
+including existing mobile regressions and disposable database checks, without
+protected environments, repository secrets or reusable credentials. It has no
+receipt publication step. Only the existing pinned-contract check receives its
+ephemeral read GitHub token. No candidate cache or output is consumed by the
+trusted runners. The fresh receipt runner independently recomputes the exact
+source and configuration and reads GitHub's complete first-attempt job/step
+results. It uses no candidate imports or candidate-authored pass reports.
+
+Receipt publication rejects an existing same-name artifact and cannot overwrite
+one. The collector requires a successful current protected-main owner-dispatched
+run, all three unique mandatory jobs, every mandatory successful test step,
+current admission/workflow bytes, exact source/lock/configuration, a unique
+unexpired archive and its provider digest. Its freshness begins at the original
+provider-recorded test completion; publishing or collecting cannot refresh it.
+Full administrator enforcement and strict required checks remain independently
+validated by the existing release collector. The new jobs need only ephemeral
+contents/actions read permissions and check current main's protected flag; they
+do not acquire Administration, Variables, provider or environment credentials.
+
+The original PR-quality workflow-equality path is unchanged. The new route is an
+additional narrowly admitted default-branch harness, not retrospective trust for
+old PR runs. Its workflow, admission and implementation join the release,
+Preview and runtime compatibility control hash closures. Exact installation and later activation/dispatch
+require their separate owner review. Hosted behavior and live provider acceptance
+remain unverified until that newly installed, approved route actually runs.

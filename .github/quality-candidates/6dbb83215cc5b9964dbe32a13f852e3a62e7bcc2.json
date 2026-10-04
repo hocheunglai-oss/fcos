@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "candidateSha": "6dbb83215cc5b9964dbe32a13f852e3a62e7bcc2",
+  "branch": "codex/full-release-integration-20261003",
+  "sourceDigest": "e34b07eec45fd3c1bb4203c52a052ae77eea13945367ec88c3b9cf6991b5d4a9",
+  "lockSha256": "0f35c1e123ab566f5d065d187bc0b8a7d1e05f7968ec31a03cd67ac0070aa0ef",
+  "qualityWorkflowSha256": "565689681a5dc0311f652434dd8dbff69a9509fb439ab409b37b6dc398e90054",
+  "qualityWorkflowBlob": "81cb9b243975bb343f2a8e16c4cc0c49a8a72af6"
+}

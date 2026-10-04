@@ -47,6 +47,8 @@ export const PREVIEW_EMAIL_BUILD_CONTROL_FILES = Object.freeze([
   'scripts/lib/preview-parity.mjs', 'scripts/lib/build-provenance.mjs', 'config/legacy-email-baseline-proof.json',
   'scripts/lib/legacy-email-baseline-proof.mjs', 'scripts/lib/preview-email-signer.mjs', 'scripts/verify-e2e-candidate.mjs',
   'config/preview-parity-policy.json', 'config/fcosConnections.js', 'config/fcosCiIdentity.js', 'package.json', 'package-lock.json',
+  '.github/workflows/candidate-quality.yml', '.github/quality-candidates/6dbb83215cc5b9964dbe32a13f852e3a62e7bcc2.json',
+  'scripts/candidate-quality-receipt.mjs', 'scripts/lib/candidate-quality.mjs',
 ]);
 export function previewEmailBuildControlRevision(cwd) {
   return digest(`fcos-preview-email-build-controls-v1\0${JSON.stringify(PREVIEW_EMAIL_BUILD_CONTROL_FILES.map(file => {

@@ -57,6 +57,8 @@ export function runtimeCompatibilityControlRevision(trustedCwd, candidateCwd) {
     'scripts/lib/normal-role-verification-transport.mjs', 'scripts/lib/preview-email-signer.mjs',
     'scripts/lib/legacy-email-baseline-proof.mjs', 'config/legacy-email-baseline-proof.json',
     'scripts/lib/preview-email-build.mjs', 'scripts/preview-email-proof-build.mjs', '.github/workflows/preview-email-proof-build.yml',
+    '.github/workflows/candidate-quality.yml', '.github/quality-candidates/6dbb83215cc5b9964dbe32a13f852e3a62e7bcc2.json',
+    'scripts/candidate-quality-receipt.mjs', 'scripts/lib/candidate-quality.mjs',
     'package.json', 'package-lock.json', 'AGENTS.md', '.codex/config.toml', '.codex/setup.mjs',
     '.codex/control-validation.mjs', '.codex/control-policy.json', '.codex/README.md'];
   const candidate = ['config/fcosConnections.js', 'config/fcosCiIdentity.js', 'vercel.json', 'package.json', 'package-lock.json',
