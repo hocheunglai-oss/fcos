@@ -89,3 +89,12 @@ export function normalRoleReadRequest(name, body = {}) {
   if (name === 'hedgeMarkets') return body.action === 'snapshot' && Object.keys(body).every(key => key === 'action');
   return READ_HANDLERS.has(name);
 }
+
+// The dedicated endpoint multiplexes list and mutation selectors. Its normal
+// navigation read uses only these bounded, literal data filters.
+export function compatibilityWorkNotificationsListRead(body) {
+  return plainObject(body) && readBody(body) && Object.keys(body).length === 3
+    && Object.keys(body).every(key => ['limit', 'state', 'source'].includes(key))
+    && Number.isSafeInteger(body.limit) && body.limit >= 10 && body.limit <= 100
+    && body.state === 'active' && body.source === 'all';
+}

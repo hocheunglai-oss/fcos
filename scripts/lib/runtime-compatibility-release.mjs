@@ -1,3 +1,4 @@
+import { compatibilityBrowserIsolationVerified } from './compatibility-browser-isolation.mjs';
 import { previewEmailSignerEvidenceVerified } from './preview-email-signer.mjs';
 import { readFileSync, lstatSync } from 'node:fs';
 import { createHash } from 'node:crypto';
@@ -54,7 +55,7 @@ export function runtimeCompatibilityControlRevision(trustedCwd, candidateCwd) {
     '.github/workflows/normal-role-release.yml', 'scripts/normal-role-release.mjs', 'playwright.config.js',
     '.github/workflows/runtime-compatibility-normal-role.yml', 'scripts/runtime-compatibility-normal-role.mjs', 'scripts/verify-e2e-candidate.mjs',
     'scripts/lib/runtime-compatibility-observation.mjs', 'scripts/lib/normal-role-read-requests.mjs',
-    'scripts/lib/normal-role-verification-transport.mjs', 'scripts/lib/preview-email-signer.mjs',
+    'scripts/lib/normal-role-verification-transport.mjs', 'scripts/lib/compatibility-browser-isolation.mjs', 'tests/compatibility-browser-isolation.chromium.mjs', 'scripts/lib/preview-email-signer.mjs',
     'scripts/lib/legacy-email-baseline-proof.mjs', 'config/legacy-email-baseline-proof.json',
     'scripts/lib/preview-email-build.mjs', 'scripts/preview-email-proof-build.mjs', '.github/workflows/preview-email-proof-build.yml',
     '.github/workflows/candidate-quality.yml', '.github/quality-candidates/f4576a8c918acef686f084c505b1715de11deeb8.json',
@@ -182,11 +183,12 @@ export function assertCompatibilityNormalArtifact({ repository, branch, protecti
     || payload.candidateSha !== FIRST_RUNTIME_ROLLOUT.candidateSha || binding?.sha !== FIRST_RUNTIME_ROLLOUT.candidateSha
     || payload.candidateUrl !== binding.candidateUrl || payload.deploymentId !== binding.deploymentId || payload.sourceDigest !== binding.sourceDigest
     || payload.harnessSha !== trusted.sha || !fresh(payload.capturedAt, now) || !compatibilityNormalCoverageVerified(payload)
+    || !compatibilityBrowserIsolationVerified(payload.browserIsolation, { ...binding, harnessSha: trusted.sha }, PREVIEW_PARITY_POLICY.requiredModules)
     || payload.checks.some(row => Object.keys(row || {}).some(key => !['module', 'role', 'result', 'kind', 'evidenceId'].includes(key)))) throw new Error('Dedicated compatibility normal-role workflow, archive, exact source or real-data coverage proof failed.');
   if (payload.emailSigner !== undefined) previewEmailSignerEvidenceVerified(payload.emailSigner,
     { deployment: { id: binding.deploymentId, sha: binding.sha }, sourceDigest: binding.sourceDigest, now });
   return { ...binding, kind: 'normal_role', runId: run.id, artifactId: artifact.id, archiveDigest: releaseHash(archive),
-    harnessSha: trusted.sha, capturedAt: payload.capturedAt, checks: payload.checks,
+    harnessSha: trusted.sha, capturedAt: payload.capturedAt, checks: payload.checks, browserIsolation: payload.browserIsolation,
     ...(payload.emailSigner !== undefined ? { emailSigner: payload.emailSigner } : {}) };
 }
 
@@ -283,6 +285,9 @@ export function assertCompatibilityEvidenceReadback(original, refreshed, now = D
     if (before?.length !== 1 || after?.length !== 1 || !fresh(before[0].capturedAt, now) || !fresh(after[0].capturedAt, now)
       || releaseHash(JSON.stringify(bound(before[0]))) !== releaseHash(JSON.stringify(bound(after[0])))
       || kind === 'normal_role' && (!compatibilityNormalCoverageVerified(after[0])
+        || !compatibilityBrowserIsolationVerified(before[0].browserIsolation, before[0], PREVIEW_PARITY_POLICY.requiredModules)
+        || !compatibilityBrowserIsolationVerified(after[0].browserIsolation, after[0], PREVIEW_PARITY_POLICY.requiredModules)
+        || JSON.stringify(before[0].browserIsolation) !== JSON.stringify(after[0].browserIsolation)
         || JSON.stringify(before[0].emailSigner) !== JSON.stringify(after[0].emailSigner))) throw new Error('UI archive binding, completion freshness or real coverage changed.');
   }
   return true;
@@ -323,7 +328,8 @@ export function createRuntimeCompatibilityPreflight({ binding, scope, protection
   if (!checks.quality) fail('EXACT_QUALITY_ARTIFACT_REQUIRED', 'quality', 'Collect fresh protected exact-source quality evidence with verified archive digest and exact dependency lock binding.');
   for (const kind of ['restricted_browser', 'normal_role']) {
     const matching = trustedEvidence.filter(row => row.kind === kind && bound(row) && row.harnessSha === binding?.harnessSha);
-    checks[kind] = matching.length === 1 && (kind !== 'normal_role' || compatibilityNormalCoverageVerified(matching[0]));
+    checks[kind] = matching.length === 1 && (kind !== 'normal_role' || compatibilityNormalCoverageVerified(matching[0])
+      && compatibilityBrowserIsolationVerified(matching[0].browserIsolation, { ...binding, deploymentId: candidate.id }, PREVIEW_PARITY_POLICY.requiredModules));
     if (!checks[kind]) fail(kind === 'normal_role' ? 'REAL_NORMAL_UI_COVERAGE_REQUIRED' : 'TRUSTED_RESTRICTED_UI_REQUIRED', kind,
       kind === 'normal_role' ? 'Collect exact-bound protected normal-role evidence for real module data and authorized read workflows; headings alone do not qualify.' : 'Collect fresh successful protected restricted browser evidence for the exact candidate and harness.');
   }

@@ -94,10 +94,20 @@ test('standard Production OIDC, wrong repository and mutable branch identities c
   ]) assert.throws(() => assertRuntimeCompatibilityWorkflowIdentity({ ...oidcClaims, ...changed }, repository, branch));
 });
 
+function browserIsolationFixture(deploymentId = 'dpl_candidate') {
+  return { schemaVersion: 1, kind: 'fcos_compatibility_browser_isolation', candidateUrl: url, candidateSha: binding.sha, harnessSha, deploymentId, sourceDigest: digest,
+    guardian: { path: '/app-version.json', contentType: 'application/json', provenanceVerified: true, closed: true },
+    backgroundSync: { excludedFeature: 'automatic_mailbox_sync', lockName: 'fcos:email-router-background-sync', mode: 'exclusive', sameContext: true, webLocks: true, broadcastChannel: true,
+      acquiredBeforeNavigation: true, modules: PREVIEW_PARITY_POLICY.requiredModules.map(module => ({ module, before: true, after: true })), finalHeld: true, released: true },
+    workspacePreferences: { handler: 'workspacePreferencesGet', initialized: true, responseVerified: true },
+    telemetry: { excludedFeature: 'speed_insights', path: '/_vercel/speed-insights/script.js', method: 'GET', resourceType: 'script', noQuery: true, policy: 'abort_before_execution', abortedRequests: 15 },
+    blockedRequests: 0, contextClosed: true };
+}
+
 function preflightInputs() {
   const candidate = { id: 'dpl_candidate', sha: binding.sha, url, target: 'preview', state: 'READY', sourceDigest: digest };
   const evidence = kind => ({ ...binding, deploymentId: candidate.id, kind, runId: 3, artifactId: 4,
-    archiveDigest: digest, capturedAt, ...(kind === 'normal_role' ? { checks: PREVIEW_PARITY_POLICY.requiredModules.map(module => ({ module, role: 'finance',
+    archiveDigest: digest, capturedAt, ...(kind === 'normal_role' ? { browserIsolation: browserIsolationFixture(candidate.id), checks: PREVIEW_PARITY_POLICY.requiredModules.map(module => ({ module, role: 'finance',
       result: 'pass', kind: PREVIEW_PARITY_POLICY.workflowModules.includes(module) ? 'workflow_read' : 'read', evidenceId: `${module}-actual-data-read` })) } : {}) });
   const input = { binding: structuredClone(binding), scope: { schemaVersion: 1, receiptKind: 'fcos_runtime_compatibility_scope', scopeVerified: true, productionAuthorized: false, baseCommit: FIRST_RUNTIME_ROLLOUT.previousSha,
     candidateCommit: binding.sha, candidateTreeHash: binding.candidateTreeHash, readOnlyGuards: [...COMPATIBILITY_READ_ONLY_GUARDS],
@@ -112,7 +122,7 @@ function preflightInputs() {
     endpointAbsence: { deploymentId: FIRST_RUNTIME_ROLLOUT.previousDeploymentId, sha: FIRST_RUNTIME_ROLLOUT.previousSha, url: FIRST_RUNTIME_ROLLOUT.previousUrl,
       sourceAbsent: true, httpStatus: 404, capturedAt }, now };
   const source = { candidateHead: binding.sha, hashes: { application: digest, policy: digest, connections: digest, ciIdentity: digest }, switchInventory: { keys: [], sourceFiles: [], sourceHash: digest } };
-  const cleanRecord = row => Object.fromEntries(Object.entries(row).filter(([key]) => !['candidateTreeHash', 'checks'].includes(key)));
+  const cleanRecord = row => Object.fromEntries(Object.entries(row).filter(([key]) => !['candidateTreeHash', 'checks', 'browserIsolation'].includes(key)));
   const approvedCandidate = { ...candidate, lockHash: binding.lockHash, configurationRevision: binding.configurationRevision };
   input.parity = { schemaVersion: 1, policyVersion: 1, pass: true, blockers: [], classifiedKeys: [], unknowns: [], limitations: [], capturedAt,
     binding: { sha: binding.sha, sourceDigest: digest, lockHash: binding.lockHash, configurationRevision: binding.configurationRevision,
@@ -352,13 +362,16 @@ test('compatibility normal archive has its own origin and rejects standard-path,
   const artifact = { id: 9, name: `fcos-compatibility-normal-role-evidence-${binding.sha}`, expired: false,
     workflow_run: { id: 8, head_sha: harnessSha }, digest: `sha256:${releaseHash(archive)}` };
   const payload = { schemaVersion: 1, baseSha: FIRST_RUNTIME_ROLLOUT.previousSha, candidateSha: binding.sha, candidateUrl: url, deploymentId: candidate.id,
-    sourceDigest: digest, harnessSha, capturedAt, checks: preflightInputs().trustedEvidence[1].checks };
+    sourceDigest: digest, harnessSha, capturedAt, checks: preflightInputs().trustedEvidence[1].checks, browserIsolation: browserIsolationFixture(candidate.id) };
   const data = { repository: inputs.repository, branch: inputs.branch, protection: inputs.protection, run, artifact, archive, payload,
     binding: { ...binding, deploymentId: candidate.id }, now };
   assert.equal(assertCompatibilityNormalArtifact(data).kind, 'normal_role');
   for (const altered of [{ run: { ...run, path: '.github/workflows/normal-role-release.yml' } }, { artifact: { ...artifact, digest: `sha256:${'f'.repeat(64)}` } },
     { payload: { ...payload, baseSha: 'f'.repeat(40) } }, { payload: { ...payload, sourceDigest: 'f'.repeat(64) } },
-    { payload: { ...payload, harnessSha: binding.sha } }, { payload: { ...payload, checks: [] } }, { archive: Buffer.from('tampered') }]) assert.throws(() => assertCompatibilityNormalArtifact({ ...data, ...altered }));
+    { payload: { ...payload, harnessSha: binding.sha } }, { payload: { ...payload, checks: [] } },
+    { payload: { ...payload, browserIsolation: undefined } },
+    { payload: { ...payload, browserIsolation: { ...payload.browserIsolation, harnessSha: binding.sha } } },
+    { payload: { ...payload, browserIsolation: { ...payload.browserIsolation, blockedRequests: 1 } } }, { archive: Buffer.from('tampered') }]) assert.throws(() => assertCompatibilityNormalArtifact({ ...data, ...altered }));
 });
 
 function qualityArchiveFixture() {
@@ -406,4 +419,22 @@ test('all evidence archives retain actual completion timestamps and exact bindin
   const source = readFileSync(new URL('../scripts/runtime-compatibility-release.mjs', import.meta.url), 'utf8');
   assert.match(source, /refreshPrerequisites = async/); assert.match(source, /refreshedSnapshots = await collectSnapshots/);
   assert.match(source, /compiledFlags\(origin/); assert.match(source, /assertCompatibilityEvidenceReadback/);
+});
+
+
+test('compatibility isolation cannot disappear or change at preflight or consequential readback; generic readiness stays unchanged', () => {
+  const input = preflightInputs();
+  assert.equal(createRuntimeCompatibilityPreflight(input).checks.normal_role, true);
+  const without = structuredClone(input); delete without.trustedEvidence[1].browserIsolation;
+  assert.equal(createRuntimeCompatibilityPreflight(without).checks.normal_role, false);
+  const original = { quality: input.quality, evidence: input.trustedEvidence };
+  assert.equal(assertCompatibilityEvidenceReadback(original, structuredClone(original), now), true);
+  for (const alter of [p => { delete p.evidence[1].browserIsolation; }, p => { p.evidence[1].browserIsolation.backgroundSync.modules[0].after = false; },
+    p => { p.evidence[1].browserIsolation.telemetry.abortedRequests += 1; }, p => { p.evidence[1].browserIsolation.workspacePreferences.initialized = false; }]) {
+    const changed = structuredClone(original); alter(changed);
+    assert.throws(() => assertCompatibilityEvidenceReadback(original, changed, now));
+  }
+  const collector = readFileSync(new URL('../scripts/runtime-compatibility-release.mjs', import.meta.url), 'utf8');
+  assert.match(collector, /checks: _checks, emailSigner: _emailSigner, browserIsolation: _browserIsolation, \.\.\.record/);
+  assert.equal(input.readiness.ready, true);
 });
