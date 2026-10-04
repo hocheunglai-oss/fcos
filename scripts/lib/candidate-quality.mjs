@@ -5,7 +5,7 @@ import { fcosConnectionIdentifier } from '../../config/fcosConnections.js';
 import { collectBuildProvenance } from './build-provenance.mjs';
 import { releaseConfigurationRevision, releaseHash, RELEASE_MAX_AGE_MS } from './release-readiness.mjs';
 
-export const CANDIDATE_QUALITY_SHA = '6dbb83215cc5b9964dbe32a13f852e3a62e7bcc2';
+export const CANDIDATE_QUALITY_SHA = 'f4576a8c918acef686f084c505b1715de11deeb8';
 export const CANDIDATE_QUALITY_MANIFEST = `.github/quality-candidates/${CANDIDATE_QUALITY_SHA}.json`;
 export const CANDIDATE_QUALITY_WORKFLOW = '.github/workflows/candidate-quality.yml';
 export const CANDIDATE_QUALITY_ENABLE = 'FCOS_TRUSTED_CANDIDATE_QUALITY_ENABLED';
@@ -43,7 +43,7 @@ export const CANDIDATE_QUALITY_TEST_STEPS = Object.freeze([
 export function assertCandidateQualityAdmission(value = CANDIDATE_QUALITY_ADMISSION) {
   if (!exact(value, ['schemaVersion', 'candidateSha', 'branch', 'sourceDigest', 'lockSha256', 'qualityWorkflowSha256', 'qualityWorkflowBlob'])
     || value.schemaVersion !== 1 || value.candidateSha !== CANDIDATE_QUALITY_SHA
-    || value.branch !== 'codex/full-release-integration-20261003' || !hash(value.sourceDigest) || !hash(value.lockSha256)
+    || value.branch !== 'codex/full-release-successor-20261004' || !hash(value.sourceDigest) || !hash(value.lockSha256)
     || !hash(value.qualityWorkflowSha256) || !sha(value.qualityWorkflowBlob)) fail();
   return value;
 }
