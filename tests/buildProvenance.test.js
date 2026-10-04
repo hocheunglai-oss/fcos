@@ -1,7 +1,7 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { accessSync, constants, cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { accessSync, constants, cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { collectBuildProvenance, deploymentSourceFilter, writeBuildReceipts } from '../scripts/lib/build-provenance.mjs';
@@ -111,7 +111,11 @@ test('archive fixtures cannot discover an ancestor checkout', t => {
     rmSync(join(fixtureRoot, 'ancestor.txt'), { force: true });
   });
   const f = fixture(t);
-  rmSync(join(f.cwd, '.git'), { recursive: true });
+  // Move generated metadata outside the archive's discovery ancestry atomically.
+  // Recursive deletion must not leave a discoverable child repository behind.
+  const removedMetadata = mkdtempSync(join(fixtureRoot, 'removed-child-git-'));
+  renameSync(join(f.cwd, '.git'), join(removedMetadata, '.git'));
+  assert.equal(existsSync(join(f.cwd, '.git')), false);
   const metadataPresence = () => ({
     ancestorGit: existsSync(join(fixtureRoot, '.git')), ancestorConfig: existsSync(join(fixtureRoot, '.git', 'config')),
     childGit: existsSync(join(f.cwd, '.git')), childConfig: existsSync(join(f.cwd, '.git', 'config')),
