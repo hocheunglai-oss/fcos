@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FCOS_RELEASE_APPROVAL_POLICY, fcosConnectionIdentifier } from '../../config/fcosConnections.js';
 import { releaseHash, RELEASE_MAX_AGE_MS } from './release-readiness.mjs';
+import { CANDIDATE_QUALITY_SHA, collectCandidateQuality } from './candidate-quality.mjs';
 
 export const RELEASE_REPOSITORY = fcosConnectionIdentifier('github', 'Repository');
 export const PRODUCTION_ENVIRONMENT = 'fcos-production-release';
@@ -179,6 +180,11 @@ export async function collectTrustedReleaseEvidence({ reads, binding, now = Date
       quality = { ...binding, runId: run.id, artifactId: artifact.id, archiveDigest: releaseHash(archive), result: 'success', capturedAt: payload.capturedAt };
     }
   } catch { /* Missing exact-head proof is a blocker, never a local override. */ }
+  if (!quality && binding?.sha === CANDIDATE_QUALITY_SHA) {
+    try {
+      quality = await collectCandidateQuality({ reads, repository, branch, binding, unpack, now });
+    } catch { /* The additional protected-main harness route also fails closed. */ }
+  }
   return { records, blockers, quality };
 }
 

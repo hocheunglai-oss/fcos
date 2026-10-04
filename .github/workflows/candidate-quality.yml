@@ -1,0 +1,217 @@
+name: FCOS trusted candidate quality
+run-name: Review exact FCOS candidate quality ${{ inputs.expected_commit }}
+on:
+  workflow_dispatch:
+    inputs:
+      expected_commit:
+        description: Exact source admitted by the protected-main manifest
+        required: true
+        type: string
+concurrency:
+  group: fcos-trusted-candidate-quality
+  cancel-in-progress: false
+permissions:
+  contents: read
+# Default off. Installation is not activation or Production authority.
+# Candidate code runs on a separate runner with no protected environment,
+# reusable credential, repository secret, or trusted artifact publication step.
+jobs:
+  source-verification:
+    name: source-verification
+    if: ${{ github.ref == 'refs/heads/main' && vars.FCOS_TRUSTED_CANDIDATE_QUALITY_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: trusted
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: 6dbb83215cc5b9964dbe32a13f852e3a62e7bcc2
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci --ignore-scripts
+        working-directory: trusted
+      - name: Verify admitted source
+        run: node trusted/scripts/candidate-quality-receipt.mjs --source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FCOS_CANDIDATE_QUALITY_ENABLED: ${{ vars.FCOS_TRUSTED_CANDIDATE_QUALITY_ENABLED }}
+          FCOS_CANDIDATE_QUALITY_EXPECTED_SHA: ${{ inputs.expected_commit }}
+          FCOS_CANDIDATE_QUALITY_SOURCE_DIRECTORY: ${{ github.workspace }}/candidate
+
+  candidate-tests:
+    name: candidate-tests
+    needs: source-verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 6dbb83215cc5b9964dbe32a13f852e3a62e7bcc2
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install locked candidate dependencies
+        run: npm ci
+      - name: Verify pinned FCUNO contract
+        run: npm run verify:fcuno-contract
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Verify development controls
+        run: npm run verify:controls
+      - name: Verify compatibility
+        run: npm run verify:compatibility
+      - name: Run unit tests
+        run: npm test
+      - name: Lint candidate
+        run: npm run lint
+      - name: Typecheck candidate
+        run: npm run typecheck
+      - name: Install isolated browsers
+        run: npx playwright install --with-deps chromium
+      - name: Verify desktop notification and Hedge Desk refresh races
+        run: npx playwright test --config playwright.desktop-debug.config.js
+      - name: Verify Nom B desktop and mobile workflows without providers
+        run: npx playwright test --config playwright.nom-b.config.js
+      - name: Verify trader Nom B filing and interrupted upload recovery
+        run: npx playwright test --config playwright.missing-nom-b.config.js
+      - name: Verify read-only Xero integrity reporting without providers
+        run: npx playwright test --config playwright.xero-integrity.config.js
+      - name: Verify group-first People & Access without providers
+        run: npx playwright test --config playwright.people-access.config.js
+      - name: Verify manual reconciliation approval and recovery without providers
+        run: npx playwright test --config playwright.xero-campaign.config.js
+      - name: Verify Graph-only source
+        run: npm run verify:graph-only
+      - name: Build candidate
+        run: npm run build
+      - name: Verify performance budgets
+        run: npm run verify:performance
+      - name: Install pinned Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: 2.113.0
+      - name: Start temporary Supabase services
+        id: start-supabase
+        run: supabase start -x studio,imgproxy,edge-runtime,logflare,vector,supavisor
+        env:
+          SUPABASE_INTERNAL_IMAGE_REGISTRY: ''
+      - name: Verify complete migrations
+        run: FCOS_MIGRATION_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres FCOS_MIGRATION_DISPOSABLE_CLUSTER=1 FCOS_MIGRATION_DOCKER_CONTAINER=supabase_db_fcos FCOS_REQUIRE_LIVE_MIGRATION_CHECK=1 npm run verify:migrations
+      - name: Verify Missing Nom B database concurrency and recovery
+        run: |
+          node --input-type=module <<'NODE'
+          import pg from 'pg';
+          const url = new URL('postgresql://postgres:postgres@127.0.0.1:54322/postgres');
+          if (url.hostname !== '127.0.0.1' || url.port !== '54322' || url.pathname !== '/postgres') throw new Error('Unexpected database target');
+          const admin = new pg.Client({ connectionString: url.href });
+          await admin.connect();
+          try {
+            const { rows: [identity] } = await admin.query('select current_database() as database, current_user as role');
+            if (identity.database !== 'postgres' || identity.role !== 'postgres') throw new Error('Unexpected database identity');
+            const { rows } = await admin.query("select 1 from pg_database where datname = 'missing_nom_b_test'");
+            if (rows.length) throw new Error('Disposable Missing Nom B database already exists');
+            await admin.query('create database missing_nom_b_test');
+          } finally { await admin.end(); }
+          NODE
+          FCOS_MISSING_NOM_B_TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54322/missing_nom_b_test node --test tests/missingNomBMigration.test.js
+      - name: Verify concurrent grouped invoice preservation
+        run: node --test tests/xeroGroupedPreservationDatabase.test.js
+        env:
+          FCOS_GROUPED_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+      - name: Verify concurrent financial preview persistence
+        run: node --test tests/xeroFinancialPreviewPersistence.test.js tests/xeroPreviewStagedDatabase.test.js tests/xeroPreviewPaymentsReferenceDatabase.test.js tests/xeroPreviewFinalizeTimeoutDatabase.test.js
+        env:
+          FCOS_PREVIEW_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+      - name: Verify captured reconciliation evidence and resume isolation
+        run: node --test tests/xeroPreviewCheckpointDatabase.test.js tests/xeroPreviewCheckpointChunksDatabase.test.js
+        env:
+          FCOS_CHECKPOINT_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+      - name: Verify concurrent issued supplier preservation
+        run: node --test tests/xeroIssuedSupplierPreservationDatabase.test.js tests/xeroIssuedSupplierRoundingDatabase.test.js
+        env:
+          FCOS_ISSUED_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+      - name: Verify concurrent issued petroleum preservation
+        run: node --test tests/xeroIssuedPetroleumPreservationDatabase.test.js
+        env:
+          FCOS_ISSUED_PETROLEUM_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+      - name: Verify concurrent document field corrections
+        run: node --test tests/xeroDocumentCorrectionDatabase.test.js
+        env:
+          FCOS_CORRECTION_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+      - name: Verify concurrent Group remittance payment evidence
+        run: node --test tests/xeroGroupPaymentPersistence.test.js
+        env:
+          FCOS_GROUP_PAYMENT_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+      - name: Verify concurrent Nom B management and audit transitions
+        run: node --test tests/dashboardNomBConcurrency.test.js
+        env:
+          FCOS_NOM_B_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+      - name: Verify shared Xero allowance and token concurrency
+        run: node --test tests/xeroSharedControlDatabase.test.js
+        env:
+          FCOS_SHARED_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+      - name: Verify exact reconciliation approvals and atomic outcomes
+        run: node --test tests/xeroReconciliationCampaignDatabase.test.js
+        env:
+          FCOS_CAMPAIGN_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+      - name: Stop temporary Supabase services
+        if: ${{ always() && steps.start-supabase.outcome != 'skipped' && steps.start-supabase.outcome != '' }}
+        run: supabase stop --no-backup
+
+  trusted-receipt:
+    name: trusted-receipt
+    needs: [source-verification, candidate-tests]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: trusted
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: 6dbb83215cc5b9964dbe32a13f852e3a62e7bcc2
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci --ignore-scripts
+        working-directory: trusted
+      - name: Verify source and prepare trusted receipt
+        run: node trusted/scripts/candidate-quality-receipt.mjs --publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FCOS_CANDIDATE_QUALITY_ENABLED: ${{ vars.FCOS_TRUSTED_CANDIDATE_QUALITY_ENABLED }}
+          FCOS_CANDIDATE_QUALITY_EXPECTED_SHA: ${{ inputs.expected_commit }}
+          FCOS_CANDIDATE_QUALITY_SOURCE_DIRECTORY: ${{ github.workspace }}/candidate
+      - name: Publish trusted exact-source artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fcos-trusted-quality-source-6dbb83215cc5b9964dbe32a13f852e3a62e7bcc2-${{ github.run_id }}
+          path: ${{ runner.temp }}/fcos-quality-source.json
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 7
