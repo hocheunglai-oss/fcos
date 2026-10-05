@@ -4,6 +4,7 @@ import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { appClient } from '@/api/appClient';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import BuyerPaymentAnalysis from '@/components/dashboard/BuyerPaymentAnalysis';
 import DashboardFilterBar from '@/components/dashboard/DashboardFilterBar';
 import DashboardKpis from '@/components/dashboard/DashboardKpis';
 import DashboardStemTable from '@/components/dashboard/DashboardStemTable';
@@ -59,6 +60,7 @@ export default function DashboardSettings() {
   const [stemSearch, setStemSearch] = useState('');
   const [stemTableWide, setStemTableWide] = useState(false);
   const [aiSearchActive, setAiSearchActive] = useState(false);
+  const [paymentAnalysis, setPaymentAnalysis] = useState(null);
   const [ebitEnabled, setEbitEnabled] = useState(false);
   const aborts = useRef({});
   const summaryAttemptRef = useRef(null);
@@ -203,7 +205,29 @@ export default function DashboardSettings() {
       if (analyticsAttemptRef.current === attempt) setLoading((value) => ({ ...value, analytics: false }));
     }
   }, [filterKey, filterPayload, invoke]);
-  const runAiSearch = useCallback(async (prompt) => { setErrors((value) => ({ ...value, ai: null })); try { const request = await invoke('ai', 'dashboardAiSearch', { prompt, selectedYears: filters.selectedYears, selectedMonths: filters.selectedMonths, filterSpec: filterPayload }); const aiSearch = request.result?.data?.aiSearch; if (aiSearch?.status !== 'ready') { setErrors((value) => ({ ...value, ai: aiSearch?.clarification?.question || 'AI search needs a more specific request.' })); return; } const rows = request.result.data.recentStems || request.result.data.stems || []; setAiSearchActive(true); setStemSearch(''); setStems({ stems: rows, matchingCount: aiSearch.matchedCount, page: 1, pageSize: rows.length, nextCursor: null, aiSearch }); setNavigation((value) => ({ ...value, cursor: null, history: [] })); setTab('stems'); } catch (error) { if (error.name !== 'AbortError') setErrors((value) => ({ ...value, ai: error.message || 'AI search is unavailable.' })); } }, [filterPayload, filters.selectedMonths, filters.selectedYears, invoke]);
+  const runAiSearch = useCallback(async (prompt) => {
+    setErrors((value) => ({ ...value, ai: null }));
+    try {
+      const request = await invoke('ai', 'dashboardAiSearch', { prompt, selectedYears: filters.selectedYears, selectedMonths: filters.selectedMonths, filterSpec: filterPayload });
+      if (!request.result) return;
+      const aiSearch = request.result.data?.aiSearch;
+      if (aiSearch?.status !== 'ready') {
+        setErrors((value) => ({ ...value, ai: aiSearch?.clarification?.question || 'AI search needs a more specific request.' }));
+        return;
+      }
+      aborts.current.stems?.abort();
+      setLoading((value) => ({ ...value, stems: false }));
+      setAiSearchActive(true);
+      setStemSearch('');
+      setPaymentAnalysis(request.result.data.paymentAnalysis ? { ...request.result.data.paymentAnalysis, periodLabel: aiSearch.dateScope?.label } : null);
+      const rows = request.result.data.recentStems || request.result.data.stems || [];
+      setStems({ stems: rows, matchingCount: aiSearch.matchedCount, page: 1, pageSize: rows.length, nextCursor: null, aiSearch });
+      setNavigation((value) => ({ ...value, cursor: null, history: [] }));
+      setTab('stems');
+    } catch (error) {
+      if (error.name !== 'AbortError') setErrors((value) => ({ ...value, ai: error.message || 'AI search is unavailable.' }));
+    }
+  }, [filterPayload, filters.selectedMonths, filters.selectedYears, invoke]);
 
   useEffect(() => { const timer = window.setTimeout(() => loadSummary(), 220); return () => window.clearTimeout(timer); }, [filterKey, loadSummary]);
   useEffect(() => { if (aiSearchActive) return undefined; if (skipNextStemAutoLoadRef.current) { skipNextStemAutoLoadRef.current = false; return undefined; } const timer = window.setTimeout(() => loadStems({ cursor: null, history: [], sort: DEFAULT_STEM_SORT }), 220); return () => window.clearTimeout(timer); }, [aiSearchActive, filterKey, loadStems]);
@@ -310,7 +334,7 @@ export default function DashboardSettings() {
     <DashboardFilterBar showPerspective={tab !== 'accounts'} filters={filters} years={years} portOptions={portOptions} loading={loading.summary || loading.stems} onChange={changeFilters} onReset={() => changeFilters(normalizeDashboardFilters({ ...presetDashboardPeriod('year_to_date'), datePreset: 'year_to_date' }))} onAiSearch={runAiSearch} />
     {errors.summary ? <ErrorBlock message={errors.summary} onRetry={loadSummary} /> : null}{errors.ai ? <ErrorBlock message={errors.ai} /> : null}<Tabs value={tab} onValueChange={(nextTab) => { setTab(nextTab); const next = new URLSearchParams(searchParams); if (nextTab === 'overview') next.delete('tab'); else next.set('tab', nextTab); setSearchParams(next, { replace: true }); }}><TabsList className="mb-4 w-full justify-start overflow-x-auto"><TabsTrigger value="overview">Overview</TabsTrigger><TabsTrigger value="stems">STEMs</TabsTrigger><TabsTrigger value="accounts">Accounts</TabsTrigger></TabsList>
       <TabsContent value="overview" className="space-y-4">{!summary && loading.summary ? <div className="dashboard-primary-kpis" role="status" aria-label="Loading Dashboard figures">{[1, 2, 3, 4].map((key) => <div key={key} className="h-32 animate-pulse rounded-xl border border-border bg-muted/40" />)}</div> : <DashboardKpis summary={dashboardKpiSummary} ebitEnabled={ebitEnabled} onEbitChange={changeEbit} financeLoading={ebitEnabled && loading.summary} financeError={ebitEnabled ? errors.summary : null} />}{analyticsEnabled ? <Suspense fallback={<div className="h-56 animate-pulse rounded-xl border border-border bg-card" />}><DashboardAnalytics data={analytics} loading={loading.analytics} error={errors.analytics} onLoad={loadAnalytics} counterpartyMode={filters.counterpartyMode} onAccountClick={(account) => openAccount(account, 'overview')} /></Suspense> : <section className="rounded-xl border border-border bg-card p-4"><h2 className="text-sm font-semibold">Analytics</h2><p className="mt-1 text-xs text-muted-foreground">Load trends and rankings only when you need a deeper view.</p><Button type="button" size="sm" variant="outline" className="mt-3" onClick={() => setAnalyticsEnabled(true)}>Load analytics</Button></section>}</TabsContent>
-      <TabsContent value="stems" className="space-y-4">{errors.stems ? <ErrorBlock message={errors.stems} onRetry={() => loadStems({ cursor: navigation.cursor, history: navigation.history, sort: navigation.sort })} /> : null}<DashboardStemTable result={stems} loading={loading.stems} search={stemSearch} wide={stemTableWide} onWideChange={setStemTableWide} exportFilterPayload={filterPayload} exportScopeLabels={exportScopeLabels} includeFinanceCosts={ebitEnabled} aiSearchActive={aiSearchActive} onClearAiSearch={() => submitStemSearch('')} onSearch={submitStemSearch} onPrevious={() => loadStems({ cursor: navigation.history.at(-1) ?? null, history: navigation.history.slice(0, -1), sort: navigation.sort })} onNext={() => loadStems({ cursor: stems?.nextCursor ?? stems?.pagination?.nextCursor, history: [...navigation.history, navigation.cursor], sort: navigation.sort })} onSortChange={(sort) => { if (aiSearchActive) skipNextStemAutoLoadRef.current = true; setAiSearchActive(false); loadStems({ cursor: null, history: [], sort }); }} onStemClick={(row) => setSelectedStemId(row.Id ?? row.id)} onAccountClick={(account) => openAccount(account, 'overview')} /></TabsContent>
+      <TabsContent value="stems" className="space-y-4">{errors.stems ? <ErrorBlock message={errors.stems} onRetry={() => loadStems({ cursor: navigation.cursor, history: navigation.history, sort: navigation.sort })} /> : null}{aiSearchActive && paymentAnalysis ? <BuyerPaymentAnalysis result={paymentAnalysis} periodLabel={paymentAnalysis.periodLabel} onAccountClick={(account) => openAccount(account, 'payments')} /> : <DashboardStemTable result={stems} loading={loading.stems} search={stemSearch} wide={stemTableWide} onWideChange={setStemTableWide} exportFilterPayload={filterPayload} exportScopeLabels={exportScopeLabels} includeFinanceCosts={ebitEnabled} aiSearchActive={aiSearchActive} onClearAiSearch={() => submitStemSearch('')} onSearch={submitStemSearch} onPrevious={() => loadStems({ cursor: navigation.history.at(-1) ?? null, history: navigation.history.slice(0, -1), sort: navigation.sort })} onNext={() => loadStems({ cursor: stems?.nextCursor ?? stems?.pagination?.nextCursor, history: [...navigation.history, navigation.cursor], sort: navigation.sort })} onSortChange={(sort) => { if (aiSearchActive) skipNextStemAutoLoadRef.current = true; setAiSearchActive(false); loadStems({ cursor: null, history: [], sort }); }} onStemClick={(row) => setSelectedStemId(row.Id ?? row.id)} onAccountClick={(account) => openAccount(account, 'overview')} />}</TabsContent>
       <TabsContent value="accounts" className="space-y-5"><Suspense fallback={<div className="h-48 animate-pulse rounded-xl border border-border bg-card" />}><AccountCreditDirectory counterparty={filterPayload.counterparty} dateWindows={filterPayload.dateWindows} disputeOnly={filterPayload.disputeOnly} filters={filterPayload.filters} onOpen={openAccount} /></Suspense></TabsContent></Tabs>
     <StemDetailModal stemId={selectedStemId} open={Boolean(selectedStemId)} onClose={() => setSelectedStemId(null)} />
     {insightQuery.account ? <Suspense fallback={null}><AccountInsightModal account={insightQuery.account} open onClose={closeAccountInsight} selectedYears={insightQuery.years.length ? insightQuery.years : filters.selectedYears} selectedMonths={insightQuery.months.length ? insightQuery.months : filters.selectedMonths} dashboardScope={insightDashboardScope} initialPeriodMode={insightQuery.period} onViewChange={updateAccountInsightView} /></Suspense> : null}</main>;
