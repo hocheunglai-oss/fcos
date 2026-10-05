@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import PageHeader from '@/components/common/PageHeader';
 import PageMethodology from '@/components/common/PageMethodology';
-import { EMAIL_ROUTER_METHODOLOGY } from '@/lib/pageMethodologies';
+import { EMAIL_ROUTER_METHODOLOGY } from '@/lib/pageMethodologyIndex';
 import { cn } from '@/lib/utils';
 import { actionLabel, emailRouter, isLikelyUncertain, newOperationId, normaliseActionResult, normaliseDetailResponse, normaliseListResponse } from '@/lib/emailRouter';
 import { supabase } from '@/lib/supabaseClient';
@@ -39,8 +39,9 @@ function recordEmailRouterTiming(operation, startedAt, server = null) {
   recordEmailRouterClientMetric({ operation, durationMs: detail.durationMs, outcome: 'success' });
 }
 
-function ResultNotice({ result, compact = false }) {
-  if (!result) return <div className={cn('flex items-center border border-border bg-background/60 text-muted-foreground', compact ? 'min-h-9 px-3 py-2 text-xs' : 'min-h-12 px-4 py-3 text-sm')} role="status" aria-live="polite"><Mail className="mr-2 h-4 w-4 shrink-0" />{compact ? <><span className="sm:hidden">Ready</span><span className="hidden sm:inline">Ready for mail actions</span></> : 'Ready for mail actions'}</div>;
+function ResultNotice({ result, compact = false, unavailable = false }) {
+  const idleLabel = unavailable ? 'Mailbox unavailable' : 'No mail action yet';
+  if (!result) return <div className={cn('flex items-center border border-border bg-background/60 text-muted-foreground', compact ? 'min-h-9 px-3 py-2 text-xs' : 'min-h-12 px-4 py-3 text-sm')} role="status" aria-live="polite"><Mail className="mr-2 h-4 w-4 shrink-0" />{compact ? <><span className="sm:hidden">{unavailable ? 'Unavailable' : 'Ready'}</span><span className="hidden sm:inline">{idleLabel}</span></> : idleLabel}</div>;
   const tracking = result.tracking === true;
   const filingReview = result.filingNeedsReview === true;
   const pending = !filingReview && (tracking || result.status === 'submitted');
@@ -570,7 +571,7 @@ export default function EmailRouterWorkspace({ settingsOpen = false, onSettingsO
   return <div className="email-router-workspace">
     <PageHeader
       title="Email Router"
-      status={<div className="flex flex-wrap items-center gap-2"><ResultNotice result={actionResult} compact /><EmailRouterFreshness onOpenOperations={() => setOperationsOpen(true)} />{actionResult?.filingRetryAllowed && <Button size="sm" variant="outline" onClick={retryFiling} disabled={submitting}>Retry filing only</Button>}</div>}
+      status={<div className="flex flex-wrap items-center gap-2"><ResultNotice result={actionResult} compact unavailable={Boolean(listError)} /><EmailRouterFreshness onOpenOperations={() => setOperationsOpen(true)} />{actionResult?.filingRetryAllowed && <Button size="sm" variant="outline" onClick={retryFiling} disabled={submitting}>Retry filing only</Button>}</div>}
       actions={<>{isAdministrator && <Button size="sm" variant="outline" onClick={() => onSettingsOpenChange(true)}><Settings2 /><span className="sm:hidden">Setup</span><span className="hidden sm:inline">Routing Setup</span></Button>}<Button size="sm" variant="outline" onClick={() => setLeaveOpen(true)}><CalendarOff /><span className="sm:hidden">Leave</span><span className="hidden sm:inline">Routing Leave</span></Button><Button size="icon" variant="outline" aria-label="Email Router operations" title="Email Router operations" onClick={() => setOperationsOpen(true)}><Activity /></Button><Button size="icon" variant="outline" aria-label="Keyboard shortcuts" title="Keyboard shortcuts" onClick={() => setShortcutsOpen(true)}><Keyboard /></Button><PageMethodology {...EMAIL_ROUTER_METHODOLOGY} /><Button variant="outline" size="icon" className="h-9 w-9" onClick={() => loadList({ cursor: currentCursor, history: cursorStack, force: true })} disabled={loading || loadingMore} aria-label="Refresh mailbox" title="Refresh mailbox">{loading || loadingMore ? <Loader2 className="animate-spin" /> : <RefreshCw />}</Button></>}
       compact
       className="mb-3"

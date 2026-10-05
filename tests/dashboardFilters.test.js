@@ -41,6 +41,7 @@ test('date presets produce a bounded custom date window', () => {
 test('dashboard defaults and resets to year to date', async () => {
   const filters = normalizeDashboardFilters({});
   assert.equal(filters.datePreset, 'year_to_date');
+  assert.equal(filters.koreaDeskMode, 'all');
   assert.deepEqual(filters.selectedMonths, Array.from({ length: new Date().getMonth() + 1 }, (_, index) => index + 1));
   const [page, bar] = await Promise.all([
     readFile(new URL('../src/pages/DashboardSettings.jsx', import.meta.url), 'utf8'),
@@ -53,6 +54,30 @@ test('dashboard defaults and resets to year to date', async () => {
   assert.match(bar, /dashboardCounterpartySearch/);
   assert.match(bar, /data-testid="dashboard-unified-counterparty-search"/);
   assert.match(bar, /label="Port or COUNTRY"/);
+  assert.match(bar, /aria-label="Korea Desk filter"/);
+  assert.match(bar, />Korea Desk<\/button>/);
+  assert.match(bar, />Exclude Korea Desk<\/button>/);
+  assert.match(bar, /filters\.koreaDeskMode === mode \? 'all' : mode/);
+  assert.match(bar, /countryCode: option\?\.countryCode \|\| optionValue\(option\), port: '', portId: '', koreaDeskMode: 'all'/);
+});
+
+test('Korea Desk modes produce mutually exclusive country filters and clear manual locations', () => {
+  const included = normalizeDashboardFilters({
+    selectedYears: [2026], selectedMonths: [8], koreaDeskMode: 'include',
+    port: 'Busan', portId: 'a0P123456789012AAA', country: 'Korea', countryCode: 'KOREA',
+  });
+  assert.equal(included.portId, '');
+  assert.equal(included.countryCode, '');
+  assert.deepEqual(dashboardFilterPayload(included).filters.countryCodes, ['KOREA']);
+  assert.deepEqual(dashboardFilterPayload(included).filters.excludedCountryCodes, []);
+
+  const excluded = dashboardFilterPayload({ selectedYears: [2026], selectedMonths: [8], koreaDeskMode: 'exclude' });
+  assert.deepEqual(excluded.filters.countryCodes, []);
+  assert.deepEqual(excluded.filters.excludedCountryCodes, ['KOREA']);
+
+  const invalidMode = normalizeDashboardFilters({ koreaDeskMode: 'somewhere_else', countryCode: 'SINGAPORE' });
+  assert.equal(invalidMode.koreaDeskMode, 'all');
+  assert.equal(invalidMode.countryCode, 'SINGAPORE');
 });
 
 test('unified counterparty selection retains the selected identity and sends only its canonical type and ID', () => {

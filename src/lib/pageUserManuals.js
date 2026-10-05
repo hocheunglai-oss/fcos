@@ -14,7 +14,7 @@ export const DISPUTE_WORKFLOW_USER_MANUAL = Object.freeze({
         'Select the exact buyer or supplier side and confirm the Account shown for the STEM.',
         'Choose the action that reflects the agreed commercial treatment.',
         'Enter the currency, amount, explanation, and any invoice allocation requested by the form.',
-        'Attach supporting evidence when the action requires it, then save the draft.',
+        'Complete one card per selected Account and role. Attach required evidence, then Submit for approval; Save Draft is optional.',
       ],
     },
     {
@@ -24,7 +24,7 @@ export const DISPUTE_WORKFLOW_USER_MANUAL = Object.freeze({
         'Resolve every validation message shown on the case.',
         'Review the action, party, amount, currency, and supporting documents.',
         'Submit the instruction for approval.',
-        'The reviewer approves it or returns it with a clear revision reason.',
+        'The reviewer approves the agreement or returns it with a revision reason. Approve and close is available only for verified zero balances with no remaining obligations.',
       ],
     },
     {
@@ -32,9 +32,9 @@ export const DISPUTE_WORKFLOW_USER_MANUAL = Object.freeze({
       summary: 'Record the final accounting treatment and evidence after approval.',
       steps: [
         'Open an approved case waiting for Accounting.',
-        'Record the accounting status and the final document or payment references.',
+        'Use verified Salesforce or Xero evidence when suggested, or enter the final document or payment reference. Reuse the agreement summary; extra notes are optional.',
         'Confirm any balance-payment instruction and settlement amount.',
-        'Save the accounting result so the case can advance to closure.',
+        'For the last required settlement, Record settlement and close completes both steps. If closure fails, the settlement stays saved and closure can be retried.',
       ],
     },
     {
@@ -215,19 +215,22 @@ export const SPECIAL_TERMS_USER_MANUAL = Object.freeze({
       summary: 'Keep the wording and its document rules together.',
       steps: [
         'Open the term and review the current Salesforce revision.',
-        'Edit Terms Text, clauses, remarks, PDF behavior, and any required change reason.',
+        'Edit Terms Text, Confirmation, Nomination, and Matching Rules in the same editor.',
         'Use N/A only when the selected field genuinely does not apply.',
-        'Save the complete revision and resolve any validation or relink issue shown.',
+        'Use Save Draft to keep unfinished work without submitting it or changing live wording. A change reason is optional for a draft.',
+        'Resolve highlighted matching-rule issues. Each rule needs at least one Account, Port, Product, or Country condition.',
+        'Save before leaving or refreshing; FCOS warns when edits would be lost.',
       ],
     },
     {
       title: 'Review and publish',
       summary: 'Approve only the exact wording and document output you reviewed.',
       steps: [
-        'Open Review & publish for a complete draft.',
+        'Open the complete draft and check all sections and matching rules.',
         'Check the clause text, target documents, and available previews.',
         'Resolve every blocking validation message.',
-        'Approve and publish the revision in one action.',
+        'Enter a change reason (at least 3 characters), or explicitly select N/A.',
+        'Choose Submit for approval. The active General Manager or an Administrator can choose Approve & publish directly.',
       ],
       note: 'A live or draft document preview is shown only when the Terms Text contains a clause for that document.',
     },
@@ -245,7 +248,7 @@ export const SPECIAL_TERMS_USER_MANUAL = Object.freeze({
       title: 'Export, inspect history, or delete',
       summary: 'Use the available evidence and remove only safe drafts.',
       steps: [
-        'Download PDF or Word output when a review copy is needed.',
+        'Select Preview PDF to inspect the generated live PDF or a watermarked saved draft. Use Download PDF inside the preview window to save the displayed copy.',
         'Open Salesforce or revision history to verify the authoritative record.',
         'Delete only an eligible Draft or Legacy record with no protected published use.',
         'Refresh after external changes before continuing work.',

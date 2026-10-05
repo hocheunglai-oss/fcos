@@ -5,7 +5,7 @@ import BrokerRegister from '@/pages/BrokerRegister';
 import BrokerCommissionConfiguration from '@/components/brokers/BrokerCommissionConfiguration';
 import { Button } from '@/components/ui/button';
 import PageMethodology from '@/components/common/PageMethodology';
-import { BROKER_METHODOLOGIES } from '@/lib/pageMethodologies';
+import { BROKER_METHODOLOGIES } from '@/lib/pageMethodologyIndex';
 
 export default function BrokerWorkspace() {
   const { hasModuleAccess, hasCapability } = useAuth();

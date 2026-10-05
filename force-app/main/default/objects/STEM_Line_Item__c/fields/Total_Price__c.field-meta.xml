@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Total_Price__c</fullName>
+    <formula>IF(OR(ISBLANK(Quantity_Delivered_Per_BDN__c), Quantity_Delivered_Per_BDN__c = 0), Quantity__c  * Unit_Sell_At__c, Quantity_Delivered_Per_BDN__c  * Unit_Sell_At__c)</formula>
+    <formulaTreatBlanksAs>BlankAsZero</formulaTreatBlanksAs>
+    <label>Total Price</label>
+    <precision>18</precision>
+    <required>false</required>
+    <scale>2</scale>
+    <trackTrending>false</trackTrending>
+    <type>Currency</type>
+</CustomField>

@@ -138,6 +138,39 @@ function federationClient(link, profile) {
   };
 }
 
+function trackedFederationClient(link, profile) {
+  const writes = [];
+  return {
+    writes,
+    from(table) {
+      if (table === 'fcos_external_identity_links') {
+        const query = {
+          select() { return query; },
+          eq() { return query; },
+          is() { return query; },
+          maybeSingle: async () => ({ data: link, error: null }),
+          update() { writes.push('identity_link_claim'); return query; },
+        };
+        return query;
+      }
+      if (table === 'user_profiles') {
+        const query = {
+          select() { return query; },
+          eq() { return query; },
+          maybeSingle: async () => ({ data: profile, error: null }),
+          upsert(row) {
+            writes.push('profile_provision');
+            profile = { ...row };
+            return { error: null };
+          },
+        };
+        return query;
+      }
+      throw new Error(`Unexpected table ${table}`);
+    },
+  };
+}
+
 function syncClient() {
   const state = { transaction: null, link: null, audit: [] };
   return {
@@ -317,6 +350,67 @@ test('FCUNO revocation timestamp rejects an otherwise active session issued befo
     }),
     (error) => error.code === 'FCUNO_IDENTITY_SESSION_REVOKED' && error.status === 401,
   );
+});
+
+test('Preview and explicit read-only deployments block FCUNO binding and profile provisioning before writes', async () => {
+  const authUser = {
+    id: '24b02cff-beb0-444c-a80c-d539a70b5840',
+    email: 'user@fcuno.example',
+    identities: [{ provider: 'custom:fcuno', provider_id: 'fcuno-user-1' }],
+  };
+  const linked = {
+    id: 'a8c3cbfd-5662-40b4-9a51-bbbd5170e357',
+    auth_user_id: authUser.id,
+    source_active: true,
+    use_fcos: true,
+    email: authUser.email,
+    full_name: 'FCUNO User',
+  };
+  const profile = { id: authUser.id, email: authUser.email, active: true };
+  for (const env of [
+    { FCOS_ENABLE_FCUNO_FEDERATION: 'true', FCUNO_IDENTITY_ISSUER: issuer, VERCEL_ENV: 'preview' },
+    { FCOS_ENABLE_FCUNO_FEDERATION: 'true', FCUNO_IDENTITY_ISSUER: issuer, FCOS_ENABLE_READ_ONLY_CI: 'true' },
+  ]) {
+    const unboundClient = trackedFederationClient({ ...linked, auth_user_id: null }, profile);
+    await assert.rejects(
+      enforceFcunoFederatedAccess({ client: unboundClient, authUser, profile, env }),
+      (error) => error.status === 403 && error.code === 'FCOS_DEPLOYMENT_READ_ONLY',
+    );
+    assert.deepEqual(unboundClient.writes, []);
+
+    const missingProfileClient = trackedFederationClient(linked, null);
+    await assert.rejects(
+      enforceFcunoFederatedAccess({ client: missingProfileClient, authUser, profile: null, env }),
+      (error) => error.status === 403 && error.code === 'FCOS_DEPLOYMENT_READ_ONLY',
+    );
+    assert.deepEqual(missingProfileClient.writes, []);
+
+    const boundClient = trackedFederationClient(linked, profile);
+    const resolved = await enforceFcunoFederatedAccess({ client: boundClient, authUser, profile, env });
+    assert.equal(resolved, profile);
+    assert.deepEqual(boundClient.writes, []);
+  }
+
+  const productionClient = trackedFederationClient({ ...linked, auth_user_id: null }, profile);
+  const productionResolved = await enforceFcunoFederatedAccess({
+    client: productionClient,
+    authUser,
+    profile,
+    env: { FCOS_ENABLE_FCUNO_FEDERATION: 'true', FCUNO_IDENTITY_ISSUER: issuer, VERCEL_ENV: 'production' },
+  });
+  assert.equal(productionResolved, profile);
+  assert.deepEqual(productionClient.writes, ['identity_link_claim']);
+
+  const provisionClient = trackedFederationClient(linked, null);
+  const provisioned = await enforceFcunoFederatedAccess({
+    client: provisionClient,
+    authUser,
+    profile: null,
+    env: { FCOS_ENABLE_FCUNO_FEDERATION: 'true', FCUNO_IDENTITY_ISSUER: issuer, VERCEL_ENV: 'production' },
+  });
+  assert.equal(provisioned.id, authUser.id);
+  assert.equal(provisioned.active, false);
+  assert.deepEqual(provisionClient.writes, ['profile_provision']);
 });
 
 test('FCOS uses the custom FCUNO OIDC provider behind public migration flags and enforces federation at server boundaries', async () => {

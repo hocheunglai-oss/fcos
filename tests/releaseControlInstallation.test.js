@@ -8,7 +8,7 @@ import { releaseHash } from '../scripts/lib/release-readiness.mjs';
 import { collectPreviewParity } from '../scripts/collect-preview-parity.mjs';
 import { normalRoleReadRequest } from '../scripts/lib/normal-role-read-requests.mjs';
 
-test('control installation preserves every existing quality byte apart from the reviewed checkout configuration and source receipt', () => {
+test('control installation preserves the exact reviewed application quality baseline apart from checkout configuration and source receipt', () => {
   const source = readFileSync(new URL('../.github/workflows/quality.yml', import.meta.url), 'utf8');
   const workflow = load(source), steps = workflow.jobs['code-and-database'].steps;
   const checkout = steps.find(step => step.uses === 'actions/checkout@v4');
@@ -31,7 +31,10 @@ test('control installation preserves every existing quality byte apart from the 
   const restored = (source.slice(0, start).replace(/\n+$/, '\n') + '\n' + source.slice(end + 1))
     .replace(history, '')
     .replace(/^          ref: \$\{\{ github\.event\.pull_request\.head\.sha \|\| github\.sha \}\}\n/m, '');
-  assert.equal(releaseHash(restored), 'cf40aa3a2515b2f48990a2f1031944aa6d1a5d8a04eec7232e9bc6c9e013c5dc');
+  // Full application quality checks from ee28300d25470fa9ca9a6dda37b3752287f20f19,
+  // plus installed-main 5fca332007c441f47edcdbfc75d925b07cbb6164 missing-artifact
+  // and human-review controls. Keep strict byte validation for this reviewed union.
+  assert.equal(releaseHash(restored), '6b8e4b505c702569bafb3cb074c865b74e74897090df9479ef3b880934495ebc');
 });
 
 test('both installed workflows remain manual, disabled by default and behind their exact protected environments', () => {

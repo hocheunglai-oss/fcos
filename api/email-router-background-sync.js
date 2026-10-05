@@ -4,7 +4,7 @@ import { emailRouterBackgroundSyncHandler } from './_emailRouterBackgroundSync.j
 export default authenticatedFunction({
   handlerName: 'emailRouterBackgroundSync',
   moduleId: 'email_router',
-  mutation: false,
+  mutation: true,
   execute(body, req, context) {
     return emailRouterBackgroundSyncHandler(req, body, {
       client: context.client,

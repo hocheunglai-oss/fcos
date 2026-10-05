@@ -52,3 +52,32 @@ test('browser cache invalidation uses server mutation metadata instead of handle
   assert.match(source, /options\.invalidateCache !== false/);
   assert.doesNotMatch(source, /isMutationHandler/);
 });
+
+test('saved Xero previews are mutations protected by Finance management permission', () => {
+  for (const name of ['xeroPortalContactLifecyclePreview', 'xeroFinancialSyncPreview', 'xeroContactRestoreApply']) {
+    assert.equal(registeredHandlerBehavior(name).mutation, true);
+    assert.equal(registeredHandlerBehavior(name).capability, 'xero_portal_manage');
+    assert.equal(registeredHandlerBehavior(name).audit, 'required');
+    assert.equal(registeredHandlerBehavior(name).cache, 'none');
+  }
+});
+
+test('held credit retries use the same protected external-action policy as approved runs', () => {
+  const policy = registeredHandlerBehavior('xeroReconciliationCampaignRetry');
+  assert.equal(policy.mutation, true);
+  assert.equal(policy.externalAction, true);
+  assert.equal(policy.capability, 'xero_portal_manage');
+  assert.equal(policy.audit, 'required');
+  assert.equal(policy.cache, 'none');
+});
+
+test('Nom B observations and policies bypass caches and declare their audit writes', () => {
+  for (const name of ['dashboardNomBRead', 'dashboardNomBPolicySave']) {
+    assert.equal(registeredHandlerBehavior(name).mutation, true);
+    assert.equal(registeredHandlerBehavior(name).audit, 'required');
+    assert.equal(registeredHandlerBehavior(name).cache, 'none');
+    assert.equal(registeredHandlerBehavior(name).externalAction, false);
+  }
+  assert.equal(registeredHandlerBehavior('dashboardNomBAuditRead').mutation, false);
+  assert.equal(registeredHandlerBehavior('dashboardNomBAuditRead').cache, 'none');
+});

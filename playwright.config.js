@@ -41,13 +41,13 @@ export default defineConfig({
     }] : []),
     {
       name: 'desktop-chrome',
-      testIgnore: /auth\.setup\.js/,
+      testIgnore: /(?:auth\.setup\.js|nom-b\.spec\.js|desktop-debug\.spec\.js)/,
       dependencies: process.env.FCOS_E2E_EMAIL && process.env.FCOS_E2E_PASSWORD ? ['auth-setup'] : [],
       use: { ...devices['Desktop Chrome'] },
     },
     {
       name: 'mobile-chrome',
-      testIgnore: /auth\.setup\.js/,
+      testIgnore: /(?:auth\.setup\.js|nom-b\.spec\.js|desktop-debug\.spec\.js)/,
       dependencies: process.env.FCOS_E2E_EMAIL && process.env.FCOS_E2E_PASSWORD ? ['auth-setup'] : [],
       use: { ...devices['Pixel 7'] },
     },

@@ -1,4 +1,5 @@
 import { assertParityConnectionReadAccess } from '../scripts/collect-preview-parity.mjs';
+import { sanitizeConnectionProviderReport } from '../src/lib/connectionChecklist.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
@@ -312,5 +313,20 @@ test('preflight and execution require the exact Production environment OIDC subj
   const x=protectedInputs();assert.equal(assertReleaseWorkflowIdentity(x.oidcClaims,x.repository,x.branch),true);
   for(const change of [{sub:`repo:${RELEASE_REPOSITORY}:ref:refs/heads/main`},{sub:`repo:${RELEASE_REPOSITORY}:environment:wrong`},{workflow_sha:sha},{repository_id:'78'}]){
     assert.throws(()=>assertReleaseWorkflowIdentity({...x.oidcClaims,...change},x.repository,x.branch));
+  }
+});
+
+// The full application candidate supplies sanitized CLI connection reports.
+// Keep this alongside the trusted release adapter regression above.
+test('sanitized CLI connection reports preserve the strict parity read-access contract', () => {
+  const time = Date.now();
+  const raw = { identityVerified: true, identityStatus: 'verified', targetPin: 'verified',
+    cliVersion: '54.20.1', cliVersionStatus: 'approved', observationMode: 'live', freshness: 'current',
+    observedAt: new Date(time).toISOString(), permissions: ['project.read', 'deployment.read'] };
+  const sanitized = value => sanitizeConnectionProviderReport(value, 'vercel');
+  assert.equal(assertParityConnectionReadAccess(sanitized(raw), time), true);
+  for (const changed of [{ observationMode: 'cached' }, { freshness: 'stale' },
+    { cliVersionStatus: 'warning' }, { permissions: ['project.read', 'unapproved.permission'] }]) {
+    assert.throws(() => assertParityConnectionReadAccess(sanitized({ ...raw, ...changed }), time));
   }
 });

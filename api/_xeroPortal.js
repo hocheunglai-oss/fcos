@@ -1,12 +1,13 @@
-import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { isDeploymentReadOnly } from './_deploymentReadOnly.js';
 import {
-  XERO_API_BASE,
   XERO_CONTACT_BATCH_SIZE,
   XERO_CONTACT_SYNC_MATCH_FIELD_LABELS,
   XERO_CONTACT_SYNC_REASON_LABELS,
   buildContactRenameRows,
   getFreshXeroConnection,
   hkStrippedClKeyNameMatchKey,
+  listXeroContactsComplete,
   normalizeName,
   readStoredXeroConnection,
   requestXeroToken,
@@ -19,10 +20,16 @@ import {
 } from './_xeroContactSync.js';
 import { getInstanceUrl, salesforceAuthMode, sfCompositeQueries, sfQuery } from './_salesforce.js';
 import { externalActionGates, requireExternalActionGate } from './_externalActionGates.js';
+import { xeroRateLimitSnapshot } from './_xeroRateLimit.js';
+import { addUsageYear, hasUsageYearBreakdown, usageYearFields } from './_xeroUsageYears.js';
+import { contactIdentityDecision, contactIdentityFingerprint, contactMatchesSalesforceIdentity, loadAllSalesforceIdentityAccounts, loadContactIdentityDecisions } from './_xeroContactIdentity.js';
+import { buildContactRestoration } from './_xeroContactRestorePolicy.js';
 
 const AUTHORIZATION_BASE = 'https://login.xero.com';
 const RECEIPT_BUCKET = 'xero-portal-receipts';
 const MAX_RECEIPT_BYTES = 10 * 1024 * 1024;
+const RECEIPT_UPLOAD_TTL_MS = 2 * 60 * 60 * 1000;
+const RECEIPT_FILE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'application/pdf']);
 const DEFAULT_RECENT_STEM_DELIVERY_FROM = '2025-01-01';
 const DEFAULT_XERO_SCOPES = [
   'openid',
@@ -48,6 +55,8 @@ export const CONTACT_LIFECYCLE_REASON_LABELS = {
   'usage-scan-incomplete': 'Readable Xero usage scan is incomplete',
   'stale-preview': 'Xero contact changed after preview',
   'not-selected': 'Eligible row was not selected for apply',
+  'verified-xero-only': 'Verified Xero-only counterparty; Salesforce Account is not required',
+  'verification-stale': 'Counterparty or Salesforce identity changed after verification; review it again',
 };
 
 export const CONTACT_LIFECYCLE_STATUS_LABELS = {
@@ -60,12 +69,14 @@ export const CONTACT_LIFECYCLE_STATUS_LABELS = {
   failed: 'The row was selected but Xero or validation rejected the mutation.',
 };
 
-const READABLE_USAGE_SOURCES = [
-  { source: 'invoices', label: 'Invoices, bills, and credit notes', pathName: '/Invoices', collection: 'Invoices' },
-  { source: 'bank-transactions', label: 'Bank transactions', pathName: '/BankTransactions', collection: 'BankTransactions' },
-  { source: 'payments', label: 'Payments', pathName: '/Payments', collection: 'Payments' },
-  { source: 'overpayments', label: 'Overpayments', pathName: '/Overpayments', collection: 'Overpayments' },
-  { source: 'prepayments', label: 'Prepayments', pathName: '/Prepayments', collection: 'Prepayments' },
+export const XERO_CONTACT_USAGE_POLICY_VERSION = 2;
+export const READABLE_USAGE_SOURCES = [
+  { source: 'invoices', label: 'Invoices and bills', pathName: '/Invoices', collection: 'Invoices', recordId: 'InvoiceID' },
+  { source: 'credit-notes', label: 'Credit notes', pathName: '/CreditNotes', collection: 'CreditNotes', recordId: 'CreditNoteID' },
+  { source: 'bank-transactions', label: 'Bank transactions', pathName: '/BankTransactions', collection: 'BankTransactions', recordId: 'BankTransactionID' },
+  { source: 'payments', label: 'Payments', pathName: '/Payments', collection: 'Payments', recordId: 'PaymentID' },
+  { source: 'overpayments', label: 'Overpayments', pathName: '/Overpayments', collection: 'Overpayments', recordId: 'OverpaymentID' },
+  { source: 'prepayments', label: 'Prepayments', pathName: '/Prepayments', collection: 'Prepayments', recordId: 'PrepaymentID' },
   { source: 'expense-claims', label: 'Expense claims', pathName: '/ExpenseClaims', collection: 'Invoices', blocked: true },
   { source: 'receipts', label: 'Receipts', pathName: '/Receipts', collection: 'Invoices', blocked: true },
 ];
@@ -215,46 +226,59 @@ export async function xeroPortalReceiptsList(body = {}, { env = process.env } = 
   return { receipts: (data || []).map(serializeReceipt) };
 }
 
-export async function xeroPortalReceiptCreate(body = {}, { accessContext = null, env = process.env, fetchImpl = fetch } = {}) {
-  const client = xeroContactSyncServiceClient(env);
-  const file = decodeReceiptFile(body.file);
-  const fields = normalizeReceiptFields(body.fields || body);
+export async function xeroPortalReceiptUploadPrepare(body = {}, {
+  accessContext = null, env = process.env, client = xeroContactSyncServiceClient(env), now = Date.now(),
+} = {}) {
+  const ownerId = receiptUploadOwner(accessContext);
+  const file = receiptUploadFileMetadata(body.file);
+  const fields = receiptUploadFields(body.fields);
   const id = randomUUID();
-  const now = new Date().toISOString();
-  const fileName = sanitizeFileName(file.fileName || `receipt-${id}`);
-  const storagePath = `${new Date().toISOString().slice(0, 10)}/${id}-${fileName}`;
-  const upload = await client.storage.from(RECEIPT_BUCKET).upload(storagePath, file.buffer, {
-    contentType: file.fileType,
-    upsert: false,
-  });
-  if (upload.error) throw storageError(upload.error, RECEIPT_BUCKET);
-
-  const row = {
-    id,
-    created_by: accessContext?.profile?.id || null,
-    created_by_email: accessContext?.profile?.email || null,
-    merchant: fields.merchant || 'Unknown supplier',
-    receipt_date: fields.date || now.slice(0, 10),
-    total: numberOrNull(fields.total),
-    currency: fields.currency || 'HKD',
-    category: fields.category || 'General expense',
-    account_code: fields.accountCode || '429',
-    tax_type: fields.taxType || 'NONE',
-    note: fields.note || '',
-    ocr_text: fields.ocrText || '',
-    file_name: fileName,
-    file_type: file.fileType,
-    file_size_bytes: file.buffer.length,
-    storage_bucket: RECEIPT_BUCKET,
-    storage_path: storagePath,
-    status: 'draft',
-    auto_synced: body.autoSync === true,
-    created_at: now,
-    updated_at: now,
+  const ticket = {
+    version: 1, id, ownerId, file,
+    path: `direct/${ownerId}/${id}/${file.fileName}`,
+    fieldsHash: receiptFieldsHash(fields),
+    autoSync: body.autoSync === true,
+    issuedAt: now, expiresAt: now + RECEIPT_UPLOAD_TTL_MS,
   };
+  // Signing fails before issuing a usable Storage capability if the server key is unavailable.
+  const uploadTicket = signReceiptUploadTicket(ticket, env);
+  await assertPrivateReceiptBucket(client);
+  const { data, error } = await client.storage.from(RECEIPT_BUCKET).createSignedUploadUrl(ticket.path, { upsert: false });
+  if (error) throw storageError(error, RECEIPT_BUCKET);
+  if (!data?.signedUrl) throw portalError('Receipt upload is unavailable.', 503, 'XERO_PORTAL_RECEIPT_UPLOAD_UNAVAILABLE');
+  return { upload: { uploadTicket, signedUrl: data.signedUrl, expiresAt: ticket.expiresAt, fields } };
+}
+
+export async function xeroPortalReceiptCreate(body = {}, {
+  accessContext = null, env = process.env, fetchImpl = fetch,
+  client = xeroContactSyncServiceClient(env), now = Date.now(),
+} = {}) {
+  const ownerId = receiptUploadOwner(accessContext);
+  if (body.file || body.path || body.storagePath || body.bucket || body.id || body.autoSync != null) {
+    throw portalError('Upload the receipt directly before saving. Refresh this page and retry.', 400, 'XERO_PORTAL_RECEIPT_DIRECT_UPLOAD_REQUIRED');
+  }
+  const ticket = verifyReceiptUploadTicket(body.uploadTicket, ownerId, env);
+  const fields = receiptUploadFields(body.fields);
+  if (receiptFieldsHash(fields) !== ticket.fieldsHash) {
+    throw portalError('Receipt details changed after the upload was prepared.', 409, 'XERO_PORTAL_RECEIPT_UPLOAD_CHANGED');
+  }
+  const row = receiptUploadRow(ticket, fields, accessContext, now);
+  const existing = await findReceiptUpload(client, ticket.id);
+  // A replay is read-only, including after expiry. It never starts another Xero write.
+  if (existing) return receiptUploadReplay(existing, row);
+  if (now < ticket.issuedAt || now >= ticket.expiresAt) {
+    throw portalError('Receipt upload expired. Refresh receipts before starting a new upload.', 410, 'XERO_PORTAL_RECEIPT_UPLOAD_EXPIRED');
+  }
+  await assertPrivateReceiptBucket(client);
+  await verifyReceiptUploadObject(client, ticket);
   const { data, error } = await client.from('xero_portal_receipts').insert(row).select('*').single();
+  if (error?.code === '23505') {
+    const winner = await findReceiptUpload(client, ticket.id);
+    if (winner) return receiptUploadReplay(winner, row);
+  }
   if (error) throw storageError(error, 'xero_portal_receipts');
-  if (body.autoSync === true) return xeroPortalReceiptSync({ id }, { accessContext, env, fetchImpl });
+  // Only the successful insert follows the original, signed financial intent.
+  if (ticket.autoSync) return xeroPortalReceiptSync({ id: ticket.id }, { accessContext, env, fetchImpl });
   return { receipt: serializeReceipt(data) };
 }
 
@@ -329,16 +353,16 @@ export async function xeroPortalContactLifecycleRun(body = {}, { env = process.e
   return { run: await loadLifecycleRun(client, body.runId) };
 }
 
-export async function xeroPortalContactLifecyclePreview(body = {}, { accessContext = null, env = process.env, fetchImpl = fetch } = {}) {
+export async function xeroPortalContactLifecyclePreview(body = {}, { accessContext = null, env = process.env, fetchImpl = fetch, connectionReader = getFreshXeroConnection, accountExporter = exportSalesforceAccountsForLifecycle, identityAccountReader = loadAllSalesforceIdentityAccounts } = {}) {
   const client = xeroContactSyncServiceClient(env);
   const runId = randomUUID();
   const lock = await acquireLifecycleLock(client, runId, accessContext?.profile, env);
   try {
     const startedAt = new Date().toISOString();
-    const connection = await getFreshXeroConnection(client, { env, fetchImpl });
+    const connection = await connectionReader(client, { env, fetchImpl });
     assertXeroScopes(connection, ['accounting.contacts'], 'Contact lifecycle preview');
-    const [salesforce, contactsResult, usageResult] = await Promise.all([
-      exportSalesforceAccountsForLifecycle(env),
+    const [salesforce, contactsResult, usageResult, identityDecisions, identityAccounts] = await Promise.all([
+      accountExporter(env),
       listXeroContactsForLifecycle(connection, { env, fetchImpl }),
       resolveUsageCacheForPreview(client, connection, {
         env,
@@ -346,12 +370,28 @@ export async function xeroPortalContactLifecyclePreview(body = {}, { accessConte
         forceUsageRefresh: body.forceUsageRefresh === true,
         incrementalUsageRefresh: body.incrementalUsageRefresh === true,
       }),
+      loadContactIdentityDecisions(client, connection.tenantId),
+      identityAccountReader(),
     ]);
     let rows = buildContactLifecycleRows(salesforce.accounts, contactsResult.contacts, usageResult.usageByContactId, {
       usageCoverageComplete: usageResult.coverageComplete,
+      tenantId: connection.tenantId,
+      identityDecisions,
+      identityAccounts,
+      identityAccountsComplete: true,
+      contactsComplete: contactsResult.complete === true,
     });
-    rows = rows.map((row) => ({ ...row, selected: row.status === 'eligible' }));
-    const summary = summarizeContactLifecycleRows(rows, contactsResult.contacts, salesforce.totalRecords);
+    const contactsById = new Map(contactsResult.contacts.map((contact) => [contact.contactId, contact]));
+    rows = rows.map((row) => ({ ...row, selected: row.status === 'eligible',
+      ...(contactsById.has(row.xeroContactId) ? {
+        identityFingerprint: contactIdentityFingerprint(connection.tenantId, contactsById.get(row.xeroContactId)),
+        identityDecision: identityDecisions.get(row.xeroContactId) || null,
+      } : {}),
+    }));
+    const summary = {
+      ...summarizeContactLifecycleRows(rows, contactsResult.contacts, salesforce.totalRecords),
+      usagePolicyVersion: XERO_CONTACT_USAGE_POLICY_VERSION,
+    };
     const run = {
       id: runId,
       state: 'previewed',
@@ -386,7 +426,7 @@ export async function xeroPortalContactLifecyclePreview(body = {}, { accessConte
   }
 }
 
-export async function xeroPortalContactLifecycleApply(body = {}, { accessContext = null, env = process.env, fetchImpl = fetch } = {}) {
+export async function xeroPortalContactLifecycleApply(body = {}, { accessContext = null, env = process.env, fetchImpl = fetch, client = null } = {}) {
   requireExternalActionGate('xero_contact_sync', env);
   if (body.reviewed !== true) {
     throw portalError('Confirm that the selected Xero contact changes have been reviewed before applying.', 400, 'XERO_PORTAL_REVIEW_REQUIRED');
@@ -394,7 +434,7 @@ export async function xeroPortalContactLifecycleApply(body = {}, { accessContext
   const selectedIds = new Set((Array.isArray(body.rowIds) ? body.rowIds : []).map((value) => String(value || '').trim()).filter(Boolean));
   if (!selectedIds.size) throw portalError('Select at least one eligible contact row to apply.', 400, 'XERO_PORTAL_SELECTION_REQUIRED');
 
-  const client = xeroContactSyncServiceClient(env);
+  client ??= xeroContactSyncServiceClient(env);
   const run = await loadLifecycleRun(client, body.runId);
   if (!run) throw portalError('Contact lifecycle run was not found.', 404, 'XERO_PORTAL_RUN_NOT_FOUND');
   if (run.state !== 'previewed' && run.state !== 'applied') {
@@ -405,10 +445,18 @@ export async function xeroPortalContactLifecycleApply(body = {}, { accessContext
   try {
     const connection = await getFreshXeroConnection(client, { env, fetchImpl });
     assertXeroScopes(connection, ['accounting.contacts'], 'Contact lifecycle apply');
+    if (connection.tenantId !== run.xero?.tenantId) throw portalError('The Xero organization changed. Run a fresh preview.', 409, 'XERO_PORTAL_TENANT_CHANGED');
     const selectedCandidates = run.rows.filter((row) => selectedIds.has(row.id) && canApplyContactLifecycleRow(row));
     const invalidSelections = [...selectedIds].filter((id) => !selectedCandidates.some((row) => row.id === id));
     if (invalidSelections.length) {
       throw portalError('One or more selected rows are no longer eligible. Run a fresh preview.', 409, 'XERO_PORTAL_INVALID_SELECTION', { invalidSelections });
+    }
+    const archiveUsage = await verifyContactLifecycleArchiveUsage(client, connection, run, selectedCandidates, { env, fetchImpl });
+    if (selectedCandidates.some((row) => row.action === 'archive')) {
+      const decisions = await loadContactIdentityDecisions(client, connection.tenantId);
+      if (selectedCandidates.some((row) => row.action === 'archive' && decisions.get(row.xeroContactId)?.decision === 'verified_xero_only')) {
+        throw portalError('A selected contact has an identity verification. Run a fresh preview before archiving.', 409, 'XERO_PORTAL_IDENTITY_CHANGED');
+      }
     }
     const fresh = await getXeroContactsByIds(connection, selectedCandidates.map((row) => row.xeroContactId), { env, fetchImpl });
     const verification = verifySelectedLifecycleRows(selectedCandidates, fresh.contacts);
@@ -458,7 +506,10 @@ export async function xeroPortalContactLifecycleApply(body = {}, { accessContext
         validationErrors: outcome?.errors || ['Xero contact update failed.'],
       };
     });
-    const summary = summarizeContactLifecycleRows(updatedRows, [], run.salesforce?.totalRecords || 0);
+    const summary = {
+      ...summarizeContactLifecycleRows(updatedRows, [], run.salesforce?.totalRecords || 0),
+      ...(run.summary?.usagePolicyVersion ? { usagePolicyVersion: run.summary.usagePolicyVersion } : {}),
+    };
     const updatedRun = {
       ...run,
       state: 'applied',
@@ -466,9 +517,10 @@ export async function xeroPortalContactLifecycleApply(body = {}, { accessContext
       updatedAt: appliedAt,
       xero: {
         ...run.xero,
-        applyVerifyCalls: fresh.xeroCalls,
+        applyVerifyCalls: fresh.xeroCalls + (archiveUsage?.xeroCalls || 0),
         applyMutationCalls: Math.ceil(verifiedUpdates.length / XERO_CONTACT_BATCH_SIZE),
       },
+      usageCache: archiveUsage?.summary || run.usageCache,
       summary,
       rows: updatedRows,
     };
@@ -549,6 +601,18 @@ export function buildContactLifecycleRows(salesforceAccounts, xeroContacts, usag
       continue;
     }
 
+    let identity = contactIdentityDecision(options.tenantId, contact, options.identityDecisions?.get(contact.contactId));
+    if (identity === 'verified' && contactMatchesSalesforceIdentity(contact, options.identityAccounts || salesforceAccounts)) identity = 'stale';
+    if (identity) {
+      const verified = identity === 'verified';
+      rows.push(xeroContactRow(contact, {
+        action: verified ? 'keep' : 'exception', status: verified ? 'kept' : 'blocked',
+        reason: verified ? 'verified-xero-only' : 'verification-stale',
+        message: CONTACT_LIFECYCLE_REASON_LABELS[verified ? 'verified-xero-only' : 'verification-stale'], usage,
+      }));
+      continue;
+    }
+
     if (usage.length > 0) {
       rows.push(xeroContactRow(contact, {
         action: 'exception',
@@ -593,17 +657,26 @@ export function buildContactLifecycleRows(salesforceAccounts, xeroContacts, usag
 
   for (const row of renameRows) {
     if (row.xeroContactId) continue;
+    const restoration = row.reason === 'archived-only-match' ? buildContactRestoration(
+      salesforceAccounts.find((account) => account.id === row.salesforceAccountId), options.identityAccounts, xeroContacts,
+      { tenantId: options.tenantId, accountsComplete: options.identityAccountsComplete === true, contactsComplete: options.contactsComplete === true },
+    ) : null;
+    const archivedContact = restoration?.targetContactId ? xeroContacts.find((contact) => contact.contactId === restoration.targetContactId) : null;
     rows.push({
       id: `sf-${row.salesforceAccountId}`,
       action: 'exception',
       status: 'blocked',
       reason: row.reason,
-      message: row.message,
+      message: restoration?.eligible ? 'The existing archived Contact has a verified identity match. Review restoration of this same Contact ID; bills and payments remain unchanged.'
+        : restoration?.blockers?.length ? `${row.message} ${restoration.blockers.join(' ')}` : row.message,
       salesforceAccountId: row.salesforceAccountId,
       salesforceName: row.salesforceName,
       salesforceCompanyCode: row.salesforceCompanyCode,
       salesforceRecordType: row.salesforceRecordType,
       proposedName: row.proposedName,
+      ...(restoration ? { restoration } : {}),
+      ...(archivedContact ? { xeroContactId: archivedContact.contactId, xeroContactName: archivedContact.name,
+        xeroContactNumber: archivedContact.contactNumber, xeroAccountNumber: archivedContact.accountNumber, xeroContactStatus: archivedContact.status } : {}),
       usage: [],
     });
   }
@@ -620,6 +693,7 @@ export function summarizeContactLifecycleRows(rows, xeroContacts = [], totalSale
     archivedXeroContacts: xeroContacts.filter(isArchived).length,
     unmatchedNonArchivedXeroContacts: 0,
     renameEligible: 0,
+    restoreEligible: 0,
     archiveEligible: 0,
     keep: 0,
     exception: 0,
@@ -638,6 +712,7 @@ export function summarizeContactLifecycleRows(rows, xeroContacts = [], totalSale
     summary.statusCounts[row.status] = (summary.statusCounts[row.status] || 0) + 1;
     if (row.reason) summary.reasonCounts[row.reason] = (summary.reasonCounts[row.reason] || 0) + 1;
     if (row.action === 'rename' && row.status === 'eligible') summary.renameEligible += 1;
+    if (row.restoration?.eligible === true) summary.restoreEligible += 1;
     if (row.action === 'archive' && row.status === 'eligible') summary.archiveEligible += 1;
     if (row.xeroContactId && !row.salesforceAccountId && isNonArchivedLifecycleRow(row)) {
       summary.unmatchedNonArchivedXeroContacts += 1;
@@ -669,7 +744,7 @@ async function readXeroPublicStatus(client, { env, fetchImpl, refresh = false })
   let refreshError = null;
   const expiresAtMs = Date.parse(stored?.expiresAt || '');
   const shouldRefresh = refresh || !Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now() + 90_000;
-  if (shouldRefresh && (stored?.refreshToken || env.XERO_REFRESH_TOKEN)) {
+  if (!isDeploymentReadOnly(env) && shouldRefresh && (stored?.refreshToken || env.XERO_REFRESH_TOKEN)) {
     try {
       connection = await getFreshXeroConnection(client, { env, fetchImpl });
     } catch (error) {
@@ -752,7 +827,7 @@ function scopeAllows(scopes, required) {
   return false;
 }
 
-async function exportSalesforceAccountsForLifecycle(env = process.env) {
+export async function exportSalesforceAccountsForLifecycle(env = process.env, { query = sfQuery, compositeQueries = sfCompositeQueries } = {}) {
   const accountQuery =
     'SELECT Id, Name, Company_Code__c, Inactive_Suspended__c, RecordType.DeveloperName ' +
     'FROM Account ' +
@@ -761,8 +836,8 @@ async function exportSalesforceAccountsForLifecycle(env = process.env) {
     "AND RecordType.DeveloperName IN ('Buyer','Supplier','Buyer_Supplier','Broker')";
   const referenceQueries = recentStemAccountReferenceQueries(env);
   const [accountResult, referenceResults] = await Promise.all([
-    sfQuery(accountQuery, { clean: true, limit: 100000 }),
-    sfCompositeQueries(referenceQueries.map((query) => ({ soql: query.query, clean: true, limit: 100000 }))),
+    query(accountQuery, { clean: true, limit: 100000 }),
+    compositeQueries(referenceQueries.map((query) => ({ soql: query.query, clean: true, limit: 100000 }))),
   ]);
   const recentStemAccountIds = new Set();
   const sources = referenceQueries.map((query, index) => {
@@ -858,26 +933,7 @@ function toSalesforceAccountForRename(row) {
 }
 
 async function listXeroContactsForLifecycle(connection, { env = process.env, fetchImpl = fetch } = {}) {
-  const contacts = [];
-  let xeroCalls = 0;
-  let page = 1;
-  while (true) {
-    const params = new URLSearchParams({ includeArchived: 'true', page: String(page), pageSize: '100' });
-    xeroCalls += 1;
-    const response = await xeroAccountingFetch(connection, `/Contacts?${params}`, {
-      method: 'GET',
-      retryOnRateLimit: true,
-      env,
-      fetchImpl,
-    });
-    const pageContacts = Array.isArray(response.Contacts) ? response.Contacts : [];
-    contacts.push(...pageContacts.filter((contact) => contact.ContactID).map(toLifecycleContact));
-    const pageCount = Number(response.pagination?.pageCount || 0);
-    if ((pageCount && page >= pageCount) || pageContacts.length < 100) break;
-    page += 1;
-    await sleep(xeroContactDelayMs(env));
-  }
-  return { contacts, xeroCalls };
+  return listXeroContactsComplete(connection, { env, fetchImpl, contactMapper: toLifecycleContact });
 }
 
 async function getXeroContactsByIds(connection, contactIds, { env = process.env, fetchImpl = fetch } = {}) {
@@ -899,90 +955,187 @@ async function getXeroContactsByIds(connection, contactIds, { env = process.env,
   return { contacts, xeroCalls };
 }
 
-async function resolveUsageCacheForPreview(client, connection, { env = process.env, fetchImpl = fetch, forceUsageRefresh = false, incrementalUsageRefresh = false } = {}) {
-  const existing = await loadUsageCacheRows(client);
+// An old, unscoped aggregate may already have lost historical usage. Never
+// promote it to a trusted cache: only a full scan can populate this namespace.
+export function xeroContactUsageCacheKey(tenantId, source) {
+  if (!nonBlank(tenantId)) throw portalError('Xero tenant is required for usage evidence.', 409, 'XERO_PORTAL_USAGE_TENANT_REQUIRED');
+  return `usage-v${XERO_CONTACT_USAGE_POLICY_VERSION}:${encodeURIComponent(nonBlank(tenantId))}:${source}`;
+}
+
+function currentUsageCacheRows(rows, tenantId) {
+  if (!nonBlank(tenantId)) return [];
+  return READABLE_USAGE_SOURCES.flatMap((source) => {
+    const row = rows.find((candidate) => candidate.source === xeroContactUsageCacheKey(tenantId, source.source));
+    return row ? [{ ...row, source: source.source, label: source.label }] : [];
+  });
+}
+
+function completeUsageCacheRow(row) {
+  return row?.status === 'complete' && Array.isArray(row.contact_usage)
+    && Number.isFinite(Date.parse(row.scanned_at));
+}
+
+function completeUsageCoverage(rows) {
+  return READABLE_USAGE_SOURCES.filter((source) => !source.blocked)
+    .every((source) => completeUsageCacheRow(rows.find((row) => row.source === source.source)));
+}
+
+export async function resolveUsageCacheForPreview(client, connection, { env = process.env, fetchImpl = fetch, forceUsageRefresh = false, incrementalUsageRefresh = false, callsPerMinute = 45 } = {}) {
+  const tenantId = nonBlank(connection.tenantId);
+  xeroContactUsageCacheKey(tenantId, 'invoices');
+  const existing = currentUsageCacheRows(await loadUsageCacheRows(client), tenantId);
   const existingBySource = new Map(existing.map((row) => [row.source, row]));
   const scanned = [];
+  const rateState = { snapshot: {} };
   let xeroCalls = 0;
 
   for (const source of READABLE_USAGE_SOURCES) {
     const cached = existingBySource.get(source.source);
     if (source.blocked) {
-      const blocked = cached || usageCacheRowFromResult({
+      const blocked = usageCacheRowFromResult({
         source: source.source,
         label: source.label,
         status: 'blocked',
-        recordsScanned: 0,
-        recordsWithContact: 0,
-        xeroCalls: 0,
-        contacts: new Map(),
         error: 'Current Xero OAuth/API access cannot read this endpoint.',
       });
-      if (!cached) await saveUsageScanResult(client, blocked);
       scanned.push(blocked);
       continue;
     }
 
-    if (cached && !forceUsageRefresh && !incrementalUsageRefresh) {
+    // Older aggregates prove usage, but cannot tell the transaction years.
+    // Rebuild once; do not infer years from the cache's last-seen timestamp.
+    const reusable = completeUsageCacheRow(cached) && cached.contact_usage.every(hasUsageYearBreakdown);
+    if (reusable && !forceUsageRefresh && !incrementalUsageRefresh) {
       scanned.push(cached);
       continue;
     }
 
-    const ifModifiedSince = cached && incrementalUsageRefresh && !forceUsageRefresh ? cached.scanned_at : null;
-    const result = await scanXeroContactUsageSource(connection, source, ifModifiedSince, { env, fetchImpl });
-    xeroCalls += result.xeroCalls;
-    const cacheRow = usageCacheRowFromResult(result);
-    await saveUsageScanResult(client, cacheRow);
+    const ifModifiedSince = reusable && incrementalUsageRefresh && !forceUsageRefresh ? cached.scanned_at : null;
+    let result = await scanXeroContactUsageSource(connection, source, ifModifiedSince, {
+      env, fetchImpl, rateState, callsPerMinute, stopOnFirstRecord: Boolean(ifModifiedSince),
+    });
+    let sourceCalls = result.xeroCalls;
+    let cacheRow;
+    if (ifModifiedSince && result.status === 'complete' && result.recordsScanned === 0) {
+      // A no-change probe advances only the watermark, never the aggregates.
+      cacheRow = { ...cached, scanned_at: result.scanned_at, updated_at: new Date().toISOString(), error_message: null };
+    } else {
+      if (ifModifiedSince && result.status === 'complete') {
+        // Aggregate-only evidence cannot safely apply edits, voids, deletions or
+        // contact reassignments. Rebuild exactly once after detecting a change.
+        result = await scanXeroContactUsageSource(connection, source, null, { env, fetchImpl, rateState, callsPerMinute });
+        sourceCalls += result.xeroCalls;
+      }
+      cacheRow = usageCacheRowFromResult(result);
+      if (result.status !== 'complete' && cached) {
+        // Retain protective evidence, but mark it untrusted for absence checks.
+        // The next attempt must rebuild in full, not resume incrementally.
+        cacheRow = {
+          ...cacheRow,
+          contact_usage: cached.contact_usage,
+          records_scanned: cached.records_scanned,
+          records_with_contact: cached.records_with_contact,
+          scanned_at: cached.scanned_at,
+        };
+      }
+    }
+    cacheRow.xero_calls = sourceCalls;
+    xeroCalls += sourceCalls;
+    await saveUsageScanResult(client, { ...cacheRow, source: xeroContactUsageCacheKey(tenantId, source.source) });
     scanned.push(cacheRow);
   }
 
-  const readableRows = scanned.filter((row) => !READABLE_USAGE_SOURCES.find((source) => source.source === row.source)?.blocked);
-  const coverageComplete = readableRows.length >= READABLE_USAGE_SOURCES.filter((source) => !source.blocked).length
-    && readableRows.every((row) => row.status === 'complete');
+  const coverageComplete = completeUsageCoverage(scanned);
   return {
     usageByContactId: usageMapFromCacheRows(scanned),
     xeroCalls,
     coverageComplete,
-    summary: usageCacheSummary(scanned, xeroCalls, coverageComplete),
+    summary: usageCacheSummary(scanned, xeroCalls, coverageComplete, tenantId),
   };
 }
 
-async function scanXeroContactUsageSource(connection, source, ifModifiedSince = null, { env = process.env, fetchImpl = fetch } = {}) {
-  if (source.blocked) {
-    return {
-      source: source.source,
-      label: source.label,
-      status: 'blocked',
-      recordsScanned: 0,
-      recordsWithContact: 0,
-      xeroCalls: 0,
-      contacts: new Map(),
-      error: 'Current Xero OAuth/API access cannot read this endpoint.',
-    };
+function assertUsageDailyReserve(rate, env) {
+  if (rate?.dayRemaining == null) return;
+  const configuredLimit = Number(env.XERO_DAILY_LIMIT || 1000);
+  const configuredRatio = Number(env.XERO_DAILY_RESERVE_RATIO || 0.2);
+  const limit = Number.isFinite(configuredLimit) ? Math.max(1, configuredLimit) : 1000;
+  const ratio = Number.isFinite(configuredRatio) ? Math.min(0.9, Math.max(0.2, configuredRatio)) : 0.2;
+  const reserve = Math.ceil(limit * ratio);
+  if (Number(rate.dayRemaining) <= reserve) {
+    throw portalError('Xero daily allowance reserve reached. Complete usage evidence is required before archiving.', 429, 'XERO_PORTAL_USAGE_DAILY_RESERVE', { rateLimit: rate, reserve });
   }
+}
 
+export async function scanXeroContactUsageSource(connection, source, ifModifiedSince = null, {
+  env = process.env, fetchImpl = fetch, stopOnFirstRecord = false, rateState = { snapshot: {} }, callsPerMinute = 45,
+} = {}) {
+  // Use request start, not completion: edits made while pages are read must be
+  // visible to the next incremental probe. Usage has no financial date cutoff.
+  const scannedAt = new Date().toISOString();
   const contacts = new Map();
+  const seenRecordIds = new Set();
+  const expectedPagination = {};
   let recordsScanned = 0;
   let recordsWithContact = 0;
   let xeroCalls = 0;
   let page = 1;
+  const result = (status, error = null) => ({
+    source: source.source, label: source.label, status, recordsScanned,
+    recordsWithContact, xeroCalls, contacts, scanned_at: scannedAt, error,
+  });
+  if (source.blocked) return result('blocked', 'Current Xero OAuth/API access cannot read this endpoint.');
 
   try {
     while (true) {
-      const params = new URLSearchParams({ page: String(page), pageSize: '100' });
-      xeroCalls += 1;
+      assertUsageDailyReserve(rateState.snapshot, env);
+      const params = new URLSearchParams({ page: String(page), pageSize: '1000' });
+      if (source.source === 'invoices') params.set('summaryOnly', 'true');
       const response = await xeroAccountingFetch(connection, `${source.pathName}?${params}`, {
         method: 'GET',
         retryOnRateLimit: true,
         headers: ifModifiedSince ? { 'If-Modified-Since': ifModifiedSince } : {},
         env,
         fetchImpl,
+        callsPerMinute,
+        onResponse: ({ headers }) => {
+          xeroCalls += 1;
+          rateState.snapshot = xeroRateLimitSnapshot(headers, rateState.snapshot);
+        },
       });
-      const records = response[source.collection] || [];
+      const records = response[source.collection];
+      if (!Array.isArray(records)) throw new Error(`Xero ${source.label} response did not contain a complete record collection.`);
+      const pagination = response.pagination;
+      if (pagination != null && (typeof pagination !== 'object' || Array.isArray(pagination))) {
+        throw new Error(`Xero ${source.label} returned invalid pagination metadata.`);
+      }
+      for (const field of ['itemCount', 'pageCount', 'pageSize']) {
+        if (!pagination || !Object.hasOwn(pagination, field)) continue;
+        const value = pagination[field];
+        if (!Number.isSafeInteger(value) || value < 0 || (field === 'pageSize' && value === 0)
+          || (field === 'pageCount' && value === 0 && recordsScanned + records.length > 0)) {
+          throw new Error(`Xero ${source.label} returned invalid pagination metadata.`);
+        }
+        if (Object.hasOwn(expectedPagination, field) && expectedPagination[field] !== value) {
+          throw new Error(`Xero ${source.label} pagination changed during the scan. Retry a full scan.`);
+        }
+        expectedPagination[field] = value;
+      }
       recordsScanned += records.length;
       for (const record of records) {
+        const recordId = nonBlank(record?.[source.recordId]);
+        if (!recordId) throw new Error(`Xero ${source.label} returned a record without its required identifier.`);
+        if (seenRecordIds.has(recordId)) throw new Error(`Xero ${source.label} returned duplicate records during pagination. Retry a full scan.`);
+        seenRecordIds.add(recordId);
         const ids = contactIdsFromUsageRecord(record);
-        if (!ids.length) continue;
+        if (!ids.length) {
+          // Xero bank transfers legitimately have no contact. Every other
+          // readable transaction must supply contact evidence; a document ID
+          // alone (including a payment's linked invoice ID) cannot prove disuse.
+          const isBankTransfer = source.source === 'bank-transactions'
+            && ['SPEND-TRANSFER', 'RECEIVE-TRANSFER'].includes(nonBlank(record.Type).toUpperCase());
+          if (isBankTransfer) continue;
+          throw new Error(`Xero ${source.label} returned a transaction without readable contact evidence. Archive coverage is incomplete.`);
+        }
         recordsWithContact += 1;
         for (const contactId of ids) {
           const existing = contacts.get(contactId);
@@ -990,35 +1143,26 @@ async function scanXeroContactUsageSource(connection, source, ifModifiedSince = 
             source: source.source,
             label: source.label,
             records: (existing?.records || 0) + 1,
-            lastSeenAt: new Date().toISOString(),
+            ...addUsageYear(existing, record),
+            lastSeenAt: scannedAt,
           });
         }
       }
-      const pageCount = Number(response.pagination?.pageCount || 0);
-      if ((pageCount && page >= pageCount) || records.length < 100) break;
+      const pageCount = expectedPagination.pageCount || 0;
+      const effectivePageSize = expectedPagination.pageSize || 0;
+      if (stopOnFirstRecord && records.length > 0) break;
+      if (records.length === 0 && pageCount && page < pageCount) throw new Error(`Xero ${source.label} pagination ended before the last page.`);
+      if ((pageCount && page >= pageCount) || records.length === 0
+        || (!pageCount && effectivePageSize > 0 && records.length < effectivePageSize)) {
+        if (expectedPagination.itemCount != null && recordsScanned !== expectedPagination.itemCount) throw new Error(`Xero ${source.label} pagination did not return every record.`);
+        break;
+      }
       page += 1;
       await sleep(xeroContactDelayMs(env));
     }
-    return {
-      source: source.source,
-      label: source.label,
-      status: 'complete',
-      recordsScanned,
-      recordsWithContact,
-      xeroCalls,
-      contacts,
-    };
+    return result('complete');
   } catch (error) {
-    return {
-      source: source.source,
-      label: source.label,
-      status: error?.status === 401 || error?.status === 403 ? 'blocked' : 'failed',
-      recordsScanned,
-      recordsWithContact,
-      xeroCalls,
-      contacts,
-      error: error?.message || 'Xero usage scan failed.',
-    };
+    return result(error?.status === 401 || error?.status === 403 ? 'blocked' : 'failed', error?.message || 'Xero usage scan failed.');
   }
 }
 
@@ -1027,18 +1171,19 @@ function usageCacheRowFromResult(result) {
     source: result.source,
     label: result.label,
     status: result.status,
-    records_scanned: result.recordsScanned || result.records_scanned || 0,
-    records_with_contact: result.recordsWithContact || result.records_with_contact || 0,
-    xero_calls: result.xeroCalls || result.xero_calls || 0,
+    records_scanned: result.recordsScanned ?? result.records_scanned ?? 0,
+    records_with_contact: result.recordsWithContact ?? result.records_with_contact ?? 0,
+    xero_calls: result.xeroCalls ?? result.xero_calls ?? 0,
     contact_usage: Array.isArray(result.contact_usage) ? result.contact_usage : [...(result.contacts || new Map()).entries()].map(([contactId, evidence]) => ({
       contactId,
       source: evidence.source || result.source,
       label: evidence.label || result.label,
       records: evidence.records || 0,
-      lastSeenAt: evidence.lastSeenAt || new Date().toISOString(),
+      ...usageYearFields(evidence),
+      lastSeenAt: evidence.lastSeenAt || result.scanned_at || null,
     })),
     error_message: result.error || result.error_message || null,
-    scanned_at: result.scanned_at || new Date().toISOString(),
+    scanned_at: result.scanned_at || null,
     updated_at: new Date().toISOString(),
   };
 }
@@ -1053,21 +1198,25 @@ async function loadUsageCacheRows(client) {
 }
 
 async function loadUsageCacheSummary(client) {
-  const rows = await loadUsageCacheRows(client).catch((error) => {
-    if (error?.status === 503) return [];
-    throw error;
-  });
-  return usageCacheSummary(rows, 0, rows.filter((row) => !READABLE_USAGE_SOURCES.find((source) => source.source === row.source)?.blocked).every((row) => row.status === 'complete'));
+  const [rows, connection] = await Promise.all([
+    loadUsageCacheRows(client).catch((error) => {
+      if (error?.status === 503) return [];
+      throw error;
+    }),
+    readStoredXeroConnection(client),
+  ]);
+  const currentRows = currentUsageCacheRows(rows, connection?.tenantId);
+  return usageCacheSummary(currentRows, 0, completeUsageCoverage(currentRows), connection?.tenantId);
 }
 
-function usageCacheSummary(rows, xeroCalls, coverageComplete) {
+function usageCacheSummary(rows, xeroCalls, coverageComplete, tenantId) {
   const bySource = Object.fromEntries(READABLE_USAGE_SOURCES.map((source) => {
     const row = rows.find((candidate) => candidate.source === source.source);
     return [source.source, {
       source: source.source,
       label: source.label,
       blockedByDesign: source.blocked === true,
-      status: row?.status || (source.blocked ? 'blocked' : 'missing'),
+      status: row?.status === 'complete' && !completeUsageCacheRow(row) ? 'failed' : row?.status || (source.blocked ? 'blocked' : 'missing'),
       recordsScanned: Number(row?.records_scanned || 0),
       recordsWithContact: Number(row?.records_with_contact || 0),
       contactCount: Array.isArray(row?.contact_usage) ? row.contact_usage.length : 0,
@@ -1076,6 +1225,8 @@ function usageCacheSummary(rows, xeroCalls, coverageComplete) {
     }];
   }));
   return {
+    policyVersion: XERO_CONTACT_USAGE_POLICY_VERSION,
+    tenantId: tenantId || null,
     bySource,
     sources: Object.values(bySource),
     xeroCalls,
@@ -1097,9 +1248,10 @@ function usageMapFromCacheRows(rows) {
       const contactId = nonBlank(item.contactId || item.contact_id);
       if (!contactId) continue;
       const evidence = {
-        source: nonBlank(item.source || row.source),
-        label: nonBlank(item.label || row.label),
+        source: row.source,
+        label: row.label,
         records: Number(item.records || 0),
+        ...usageYearFields(item),
         lastSeenAt: item.lastSeenAt || item.last_seen_at || row.scanned_at || null,
       };
       const list = usageByContactId.get(contactId) || [];
@@ -1108,6 +1260,31 @@ function usageMapFromCacheRows(rows) {
     }
   }
   return usageByContactId;
+}
+
+function currentUsageSummary(summary, tenantId) {
+  return summary?.policyVersion === XERO_CONTACT_USAGE_POLICY_VERSION
+    && summary.tenantId === tenantId && summary.coverageComplete === true
+    && READABLE_USAGE_SOURCES.filter((source) => !source.blocked)
+      .every((source) => summary.bySource?.[source.source]?.status === 'complete'
+        && Number.isFinite(Date.parse(summary.bySource[source.source].scannedAt)));
+}
+
+export async function verifyContactLifecycleArchiveUsage(client, connection, run, selectedRows, { env = process.env, fetchImpl = fetch, callsPerMinute = 45 } = {}) {
+  const archives = selectedRows.filter((row) => row.action === 'archive');
+  if (!archives.length) return null;
+  if (run.summary?.usagePolicyVersion !== XERO_CONTACT_USAGE_POLICY_VERSION
+    || run.xero?.tenantId !== connection.tenantId || !currentUsageSummary(run.usageCache, connection.tenantId)) {
+    throw portalError('This preview does not have complete current usage evidence for this Xero tenant. Run a fresh preview before archiving.', 409, 'XERO_PORTAL_ARCHIVE_USAGE_UNTRUSTED');
+  }
+  const usage = await resolveUsageCacheForPreview(client, connection, { env, fetchImpl, incrementalUsageRefresh: true, callsPerMinute });
+  if (!currentUsageSummary(usage.summary, connection.tenantId)) {
+    throw portalError('Xero usage could not be fully verified. Run a fresh preview before archiving.', 409, 'XERO_PORTAL_ARCHIVE_USAGE_INCOMPLETE');
+  }
+  if (archives.some((row) => usageEvidenceFor(row.xeroContactId, usage.usageByContactId).length > 0)) {
+    throw portalError('A selected contact has Xero usage. Run a fresh preview before archiving.', 409, 'XERO_PORTAL_ARCHIVE_CONTACT_USED');
+  }
+  return usage;
 }
 
 function verifySelectedLifecycleRows(rows, freshContacts) {
@@ -1127,6 +1304,10 @@ function verifySelectedLifecycleRows(rows, freshContacts) {
     }
     if (normalizeName(contact.name) !== normalizeName(row.xeroContactName)) {
       failedRows.push(staleRow(row, 'Xero contact name changed after preview. Run a fresh preview.', checkedAt));
+      continue;
+    }
+    if (row.action === 'archive' && hasNonzeroBalance(contact)) {
+      failedRows.push(staleRow(row, 'Xero contact has a nonzero balance now. Run a fresh preview.', checkedAt));
       continue;
     }
     updates.push({
@@ -1251,16 +1432,11 @@ async function attachReceiptFile(client, connection, receipt, invoiceId, { fetch
   if (error) throw storageError(error, RECEIPT_BUCKET);
   const buffer = Buffer.from(await data.arrayBuffer());
   const fileName = encodeURIComponent(receipt.file_name || `receipt-${receipt.id}`);
-  const response = await fetchImpl(`${XERO_API_BASE}/api.xro/2.0/Invoices/${invoiceId}/Attachments/${fileName}`, {
+  await xeroAccountingFetch(connection, `/Invoices/${encodeURIComponent(invoiceId)}/Attachments/${fileName}`, {
     method: 'POST',
-    headers: {
-      Authorization: `Bearer ${connection.accessToken}`,
-      'xero-tenant-id': connection.tenantId,
-      'Content-Type': receipt.file_type || 'application/octet-stream',
-    },
-    body: new Uint8Array(buffer),
+    headers: { 'Content-Type': receipt.file_type || 'application/octet-stream' },
+    rawBody: new Uint8Array(buffer), fetchImpl,
   });
-  if (!response.ok) throw portalError(await formatXeroError(response), response.status || 502, 'XERO_PORTAL_ATTACHMENT_FAILED');
 }
 
 async function writeLifecycleRun(client, run) {
@@ -1354,7 +1530,7 @@ async function latestAutoCreateRunSummary(client) {
   } : null;
 }
 
-async function acquireLifecycleLock(client, runId, profile = null, env = process.env) {
+export async function acquireLifecycleLock(client, runId, profile = null, env = process.env) {
   const now = new Date();
   const lockedUntil = new Date(now.getTime() + Number(env.XERO_CONTACT_LIFECYCLE_LOCK_SECONDS || '900') * 1000).toISOString();
   const owner = nonBlank(profile?.email || profile?.id) || 'fcos';
@@ -1604,6 +1780,7 @@ function toLifecycleContact(contact) {
     contactNumber: nonBlank(contact.ContactNumber),
     accountNumber: nonBlank(contact.AccountNumber),
     status: nonBlank(contact.ContactStatus),
+    mergedToContactId: nonBlank(contact.MergedToContactID),
     isCustomer: contact.IsCustomer === true,
     isSupplier: contact.IsSupplier === true,
     accountsReceivableOutstanding: numberValue(contact.Balances?.AccountsReceivable?.Outstanding ?? contact.AccountsReceivable?.Outstanding),
@@ -1613,13 +1790,19 @@ function toLifecycleContact(contact) {
 }
 
 function contactIdsFromUsageRecord(record) {
-  return [
+  return [...new Set([
     record.Contact?.ContactID,
     record.Invoice?.Contact?.ContactID,
+    record.CreditNote?.Contact?.ContactID,
     record.BankTransaction?.Contact?.ContactID,
     record.Overpayment?.Contact?.ContactID,
     record.Prepayment?.Contact?.ContactID,
-  ].map((id) => nonBlank(id)).filter(Boolean);
+  ].map((id) => nonBlank(id)).filter(Boolean))];
+}
+
+export async function invalidateContactNameCacheAfterRestore({ client, connection }) {
+  const result = await client.from('xero_contact_name_cache').delete().eq('id', 'primary').eq('tenant_id', connection.tenantId);
+  if (result.error) throw storageError(result.error, 'xero_contact_name_cache');
 }
 
 async function updateContactNameCacheFromLifecycle(client, connection, rows) {
@@ -1716,18 +1899,142 @@ function normalizeReceiptFields(input) {
   };
 }
 
-function decodeReceiptFile(file) {
-  const value = objectValue(file);
-  const base64 = nonBlank(value.base64 || value.data || value.content).replace(/^data:[^;]+;base64,/i, '');
-  if (!base64) throw portalError('Receipt file is required.', 400, 'XERO_PORTAL_RECEIPT_FILE_REQUIRED');
-  const buffer = Buffer.from(base64, 'base64');
-  if (!buffer.length) throw portalError('Receipt file could not be decoded.', 400, 'XERO_PORTAL_RECEIPT_FILE_INVALID');
-  if (buffer.length > MAX_RECEIPT_BYTES) throw portalError('Receipt file is larger than 10 MB.', 413, 'XERO_PORTAL_RECEIPT_FILE_TOO_LARGE');
+function receiptUploadOwner(accessContext) {
+  const ownerId = nonBlank(accessContext?.profile?.id);
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(ownerId)) {
+    throw portalError('A verified user is required to upload receipts.', 403, 'XERO_PORTAL_RECEIPT_UPLOAD_OWNER_REQUIRED');
+  }
+  return ownerId;
+}
+
+function receiptUploadFileMetadata(input) {
+  const value = objectValue(input);
+  const fileName = sanitizeFileName(value.fileName).replace(/^[.]+$/, 'receipt').replace(/[\x00-\x1f\x7f]/g, '-');
+  const fileType = nonBlank(value.fileType).toLowerCase();
+  const size = value.size;
+  if (!Number.isSafeInteger(size) || size <= 0) {
+    throw portalError('Select a non-empty receipt file.', 400, 'XERO_PORTAL_RECEIPT_FILE_INVALID');
+  }
+  if (size > MAX_RECEIPT_BYTES) throw portalError('Receipt file is larger than 10 MiB.', 413, 'XERO_PORTAL_RECEIPT_FILE_TOO_LARGE');
+  if (!RECEIPT_FILE_TYPES.has(fileType)) {
+    throw portalError('Choose a JPEG, PNG, WebP, or PDF receipt.', 415, 'XERO_PORTAL_RECEIPT_FILE_TYPE_INVALID');
+  }
+  if (!/^[a-f0-9]{64}$/.test(value.sha256 || '')) {
+    throw portalError('Receipt file verification is required.', 400, 'XERO_PORTAL_RECEIPT_FILE_HASH_REQUIRED');
+  }
+  return { fileName, fileType, size, sha256: value.sha256 };
+}
+
+function receiptUploadFields(input) {
+  const fields = normalizeReceiptFields(objectValue(input));
+  if (Object.values(fields).some((value) => typeof value === 'string' && value.length > 40000)) {
+    throw portalError('Receipt text is too long.', 400, 'XERO_PORTAL_RECEIPT_FIELDS_INVALID');
+  }
+  return fields;
+}
+
+function receiptFieldsHash(fields) {
+  return createHash('sha256').update(JSON.stringify(fields)).digest('hex');
+}
+
+function signReceiptUploadTicket(ticket, env) {
+  const encoded = base64UrlEncode(JSON.stringify(ticket));
+  const signature = createHmac('sha256', oauthStateSecret(env)).update(`fcos:receipt-upload:v1:${encoded}`).digest('base64url');
+  return `${encoded}.${signature}`;
+}
+
+function verifyReceiptUploadTicket(value, ownerId, env) {
+  const invalid = () => portalError('Receipt upload authorization is invalid.', 403, 'XERO_PORTAL_RECEIPT_UPLOAD_INVALID');
+  if (typeof value !== 'string' || value.length > 4096) throw invalid();
+  const [encoded, signature, extra] = value.split('.');
+  const expected = createHmac('sha256', oauthStateSecret(env)).update(`fcos:receipt-upload:v1:${encoded}`).digest('base64url');
+  if (!encoded || !signature || extra != null || !timingSafeStringEqual(signature, expected)) throw invalid();
+  let ticket;
+  try { ticket = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')); } catch { throw invalid(); }
+  if (ticket.version !== 1 || ticket.ownerId !== ownerId
+    || !/^[0-9a-f-]{36}$/i.test(ticket.id || '')
+    || !Number.isSafeInteger(ticket.issuedAt) || ticket.expiresAt !== ticket.issuedAt + RECEIPT_UPLOAD_TTL_MS
+    || ticket.path !== `direct/${ownerId}/${ticket.id}/${sanitizeFileName(ticket.file?.fileName)}`) throw invalid();
+  receiptUploadFileMetadata(ticket.file);
+  return ticket;
+}
+
+async function assertPrivateReceiptBucket(client) {
+  const { data, error } = await client.storage.getBucket(RECEIPT_BUCKET);
+  if (error) throw storageError(error, RECEIPT_BUCKET);
+  if (data?.public !== false || Number(data.file_size_limit) !== MAX_RECEIPT_BYTES) {
+    throw portalError('Private receipt storage configuration must be verified.', 503, 'XERO_PORTAL_RECEIPT_STORAGE_INVALID');
+  }
+}
+
+async function verifyReceiptUploadObject(client, ticket) {
+  const storage = client.storage.from(RECEIPT_BUCKET);
+  const { data: info, error: infoError } = await storage.info(ticket.path);
+  if (infoError || !info) throw portalError('Receipt upload has not completed. Retry saving this file.', 409, 'XERO_PORTAL_RECEIPT_UPLOAD_INCOMPLETE');
+  if (Number(info.size) !== ticket.file.size || info.contentType !== ticket.file.fileType) {
+    throw portalError('Uploaded receipt size or type does not match.', 409, 'XERO_PORTAL_RECEIPT_UPLOAD_MISMATCH');
+  }
+  const { data, error } = await storage.download(ticket.path);
+  if (error) throw storageError(error, RECEIPT_BUCKET);
+  if (!data || data.size !== ticket.file.size || data.size > MAX_RECEIPT_BYTES) {
+    throw portalError('Uploaded receipt size does not match.', 409, 'XERO_PORTAL_RECEIPT_UPLOAD_MISMATCH');
+  }
+  const bytes = Buffer.from(await data.arrayBuffer());
+  if (bytes.length !== ticket.file.size || receiptFileContentType(bytes) !== ticket.file.fileType
+    || createHash('sha256').update(bytes).digest('hex') !== ticket.file.sha256) {
+    throw portalError('Uploaded receipt content does not match the selected file.', 409, 'XERO_PORTAL_RECEIPT_UPLOAD_MISMATCH');
+  }
+}
+
+function receiptFileContentType(bytes) {
+  if (bytes.subarray(0, 5).toString('ascii') === '%PDF-') return 'application/pdf';
+  if (bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return 'image/png';
+  if (bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255) return 'image/jpeg';
+  if (bytes.subarray(0, 4).toString('ascii') === 'RIFF' && bytes.subarray(8, 12).toString('ascii') === 'WEBP') return 'image/webp';
+  return null;
+}
+
+function receiptUploadRow(ticket, fields, accessContext, now) {
   return {
-    buffer,
-    fileName: nonBlank(value.fileName || value.name) || 'receipt',
-    fileType: nonBlank(value.fileType || value.type) || 'application/octet-stream',
+    id: ticket.id,
+    created_by: ticket.ownerId,
+    created_by_email: accessContext?.profile?.email || null,
+    merchant: fields.merchant || 'Unknown supplier',
+    receipt_date: fields.date,
+    total: fields.total,
+    currency: fields.currency,
+    category: fields.category,
+    account_code: fields.accountCode,
+    tax_type: fields.taxType,
+    note: fields.note,
+    ocr_text: fields.ocrText,
+    file_name: ticket.file.fileName,
+    file_type: ticket.file.fileType,
+    file_size_bytes: ticket.file.size,
+    storage_bucket: RECEIPT_BUCKET,
+    storage_path: ticket.path,
+    status: 'draft',
+    auto_synced: ticket.autoSync,
+    created_at: new Date(now).toISOString(),
+    updated_at: new Date(now).toISOString(),
   };
+}
+
+async function findReceiptUpload(client, id) {
+  const { data, error } = await client.from('xero_portal_receipts').select('*').eq('id', id).maybeSingle();
+  if (error) throw storageError(error, 'xero_portal_receipts');
+  return data;
+}
+
+function receiptUploadReplay(existing, expected) {
+  const immutableKeys = ['created_by', 'merchant', 'receipt_date', 'currency', 'category', 'account_code', 'tax_type',
+    'note', 'ocr_text', 'file_name', 'file_type', 'storage_bucket', 'storage_path', 'auto_synced'];
+  if (immutableKeys.some((key) => existing[key] !== expected[key])
+    || Number(existing.file_size_bytes) !== expected.file_size_bytes
+    || (existing.total == null ? null : Number(existing.total).toFixed(2)) !== (expected.total == null ? null : Number(expected.total).toFixed(2))) {
+    throw portalError('Receipt upload was already used for different details.', 409, 'XERO_PORTAL_RECEIPT_UPLOAD_REPLAY_MISMATCH');
+  }
+  return { receipt: serializeReceipt(existing), replayed: true };
 }
 
 function sanitizeFileName(fileName) {
@@ -1806,16 +2113,6 @@ function numberValue(value) {
 
 function xeroContactDelayMs(env) {
   return Number(env.XERO_CONTACT_SYNC_DELAY_MS || '1100');
-}
-
-async function formatXeroError(response) {
-  const text = await response.text().catch(() => '');
-  try {
-    const parsed = JSON.parse(text);
-    return parsed.Message || parsed.message || parsed.error_description || parsed.error || text || `Xero request failed with status ${response.status}.`;
-  } catch {
-    return text || `Xero request failed with status ${response.status}.`;
-  }
 }
 
 function storageError(error, table) {

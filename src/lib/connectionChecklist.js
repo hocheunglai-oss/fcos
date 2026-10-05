@@ -14,7 +14,7 @@ export const CONNECTION_ATTESTATION_POLICY = FCOS_CONNECTION_POLICY.attestation;
 export const CONNECTION_INTEGRATIONS = FCOS_CONNECTION_POLICY.integrations;
 
 const PROVIDER_IDS = new Set(CONNECTION_TARGETS.map(({ id }) => id));
-const IDENTITY_STATES = new Set(['verified', 'mismatch', 'authentication_blocked', 'unavailable', 'error']);
+const IDENTITY_STATES = new Set(['cached', 'unknown', 'verified', 'mismatch', 'authentication_blocked', 'unavailable', 'error']);
 const PIN_STATES = new Set(['verified', 'missing', 'mismatch', 'pending']);
 const VERSION_STATES = new Set(['approved', 'warning', 'incompatible', 'unavailable']);
 const PERMISSION_STATES = new Set(['verified', 'missing', 'unavailable', 'error']);
@@ -30,6 +30,12 @@ const WARNING_CODES = new Set([
   'shared_metadata_out_of_date',
   'target_pin_missing',
   'salesforce_auth_not_isolated',
+  'cached_not_live_verified',
+  'evidence_expired',
+  'evidence_missing',
+  'write_permission_unknown',
+  'browser_profile_unverified',
+  'credential_revoked',
 ]);
 
 function finiteInteger(value, fallback = null) {
@@ -49,15 +55,27 @@ export function sanitizeConnectionProviderReport(value, providerId) {
   const provider = CONNECTION_TARGETS.find(({ id }) => id === providerId);
   if (!provider || !value || typeof value !== 'object') return null;
   const permissions = Array.isArray(value.permissions)
-    ? value.permissions.filter((permission) => provider.requiredPermissions.includes(permission))
+    ? value.permissions.filter((permission) => [...provider.requiredPermissions, ...(provider.writePermissions || [])].includes(permission))
     : [];
   const warningCodes = Array.isArray(value.warningCodes)
     ? [...new Set(value.warningCodes.filter((code) => WARNING_CODES.has(code)))]
     : [];
+  const observedAt = isoTimestamp(value.observedAt);
   return {
     provider: providerId,
+    connectionKind: 'tooling',
+    observationMode: value.observationMode === 'cached' ? 'cached' : value.observationMode === 'live' ? 'live' : 'unknown',
+    observedAt,
+    freshness: ['current', 'stale', 'expired', 'unknown'].includes(value.freshness) ? value.freshness : 'unknown',
+    target: Object.fromEntries(provider.identifiers.map(({ label, value: identity }) => [label, identity])),
+    capabilities: {
+      read: permissions.filter((permission) => /\.read$|\.query$/.test(permission)),
+      write: permissions.filter((permission) => (provider.writePermissions || []).includes(permission)),
+      writePermission: permissions.some((permission) => (provider.writePermissions || []).includes(permission)) ? 'observed' : 'unknown',
+      humanAuthorization: 'not_granted',
+    },
     cliAvailable: value.cliAvailable === true,
-    cliVersion: safeString(value.cliVersion, 40) || null,
+    cliVersion: /^\d+\.\d+\.\d+$/.test(safeString(value.cliVersion, 40)) ? value.cliVersion.trim() : null,
     cliVersionStatus: VERSION_STATES.has(value.cliVersionStatus) ? value.cliVersionStatus : 'unavailable',
     identityStatus: IDENTITY_STATES.has(value.identityStatus) ? value.identityStatus : 'error',
     identityVerified: value.identityVerified === true,
@@ -119,9 +137,10 @@ export function connectionAttestationState(value, now = new Date()) {
   )).length;
   const warningCount = Object.values(attestation.providers).reduce((count, provider) => count + provider.warningCodes.length, 0);
   let status = 'verified';
-  if (nowMs > expiresMs || ageSeconds > CONNECTION_ATTESTATION_POLICY.staleSeconds) status = 'expired';
+  if (verifiedMs > nowMs + CONNECTION_ATTESTATION_POLICY.maxClockSkewSeconds * 1000 || expiresMs <= verifiedMs) status = 'failed';
+  else if (nowMs > expiresMs || ageSeconds > CONNECTION_ATTESTATION_POLICY.staleSeconds) status = 'expired';
+  else if (verifiedCount !== CONNECTION_TARGETS.length) status = 'failed';
   else if (ageSeconds > CONNECTION_ATTESTATION_POLICY.freshnessSeconds || warningCount) status = 'warning';
-  if (verifiedCount !== CONNECTION_TARGETS.length) status = 'failed';
   return { status, ageSeconds, verifiedCount, warningCount };
 }
 
@@ -134,4 +153,15 @@ export function canonicalConnectionAttestation(value) {
 export function connectionProviderById(providerId) {
   if (!PROVIDER_IDS.has(providerId)) throw new Error(`Unknown connection provider: ${providerId || '(missing)'}`);
   return CONNECTION_TARGETS.find(({ id }) => id === providerId);
+}
+
+export function connectionEvidenceFreshness(value, now = new Date()) {
+  const timestamp = isoTimestamp(value?.observedAt || value?.lastVerifiedAt);
+  const nowMs = now instanceof Date ? now.getTime() : Date.parse(now);
+  if (!timestamp || !Number.isFinite(nowMs)) return 'unknown';
+  const age = nowMs - Date.parse(timestamp);
+  if (age < -CONNECTION_ATTESTATION_POLICY.maxClockSkewSeconds * 1000) return 'unknown';
+  if (age > CONNECTION_ATTESTATION_POLICY.staleSeconds * 1000) return 'expired';
+  if (age > CONNECTION_ATTESTATION_POLICY.freshnessSeconds * 1000) return 'stale';
+  return 'current';
 }
