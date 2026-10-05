@@ -12,6 +12,7 @@ import { canonicalFcosE2eCandidateUrl, resolveFcosE2eCandidate } from './verify-
 import { collectRuntimeObservation } from './collect-preview-parity.mjs';
 import { FIRST_RUNTIME_ROLLOUT, compatibilityNormalCoverageVerified, compatibilityReadOnlyGuardsVerified, compatibilityRuntimePreviewVerified } from './lib/runtime-compatibility-release.mjs';
 import { verifyRuntimeCompatibility } from './verify-runtime-compatibility.mjs';
+import { EXACT_COMPATIBILITY_SUCCESSOR, verifyRuntimeCompatibilitySuccessorSource } from './verify-runtime-compatibility-successor.mjs';
 import { collectPreviewEmailSignerEvidence, previewEmailSignerEnabled } from './lib/preview-email-signer.mjs';
 
 // Frozen v288 read paths for the exact reviewed read-only first rollout only.
@@ -42,7 +43,7 @@ const normalRoleDiagnosticStages = new Set([
   'WORKSPACE_PREFERENCES', 'BROWSER_ISOLATION', 'STORAGE_STATE', 'AUTH_FETCH', 'AUTH_RESPONSE', 'IDENTITY', 'BROWSER_SETUP', 'MODULES', 'COVERAGE', 'EVIDENCE',
 ]);
 const normalRoleDiagnosticReasons = new Set([
-  'CONFIGURATION_INVALID', 'STAGE_FAILED', 'READ_ONLY_GUARD_MISSING', 'VERSION_INVALID', 'RUNTIME_SAFETY_FAILED',
+  'CONFIGURATION_INVALID', 'STAGE_FAILED', 'READ_ONLY_GUARD_MISSING', 'SUCCESSOR_ADMISSION_DEFERRED', 'VERSION_INVALID', 'RUNTIME_SAFETY_FAILED',
   'STORAGE_INVALID', 'AUTH_RESPONSE_INVALID', 'IDENTITY_INVALID', 'BROWSER_UNAVAILABLE', 'ACCESS_MISSING',
   'MISSING_HEADING', 'MISSING_DATA', 'PAGE_ERROR', 'BLOCKED_REQUEST', 'LOGIN_REDIRECT', 'UNAVAILABLE_SURFACE',
   'DATA_NO_RESPONSE', 'DATA_NON_2XX', 'DATA_JSON_FAILURE', 'DATA_SHAPE_REJECTED', 'DATA_DEADLINE',
@@ -289,6 +290,10 @@ function compatibilityNormalStorage(source, origin) {
 }
 
 export async function verifyRuntimeCompatibilityNormalRole({ env = process.env, fetchImpl = globalThis.fetch } = {}) {
+  if (env.FCOS_E2E_EXPECTED_COMMIT === EXACT_COMPATIBILITY_SUCCESSOR) {
+    await normalRoleDiagnosticStage('SOURCE_SCOPE', () => verifyRuntimeCompatibilitySuccessorSource({ cwd: fileURLToPath(new URL('..', import.meta.url)), candidateCommit: EXACT_COMPATIBILITY_SUCCESSOR }));
+    throw compatibilityNormalDiagnosticError('SOURCE_SCOPE', 'SUCCESSOR_ADMISSION_DEFERRED');
+  }
   if (env.FCOS_COMPATIBILITY_NORMAL_ROLE_ENABLED !== 'true' || env.GITHUB_ACTIONS !== 'true' || env.GITHUB_REF_PROTECTED !== 'true' || env.GITHUB_REPOSITORY !== fcosConnectionIdentifier('github', 'Repository') || env.FCOS_E2E_EXPECTED_COMMIT !== FIRST_RUNTIME_ROLLOUT.candidateSha || !/^[0-9a-f]{40}$/.test(env.GITHUB_SHA || '')) throw compatibilityNormalDiagnosticError('CONFIGURATION', 'CONFIGURATION_INVALID');
   const scope = await normalRoleDiagnosticStage('SOURCE_SCOPE', () => verifyRuntimeCompatibility({ cwd: fileURLToPath(new URL('..', import.meta.url)),
     baseCommit: FIRST_RUNTIME_ROLLOUT.previousSha, candidateCommit: FIRST_RUNTIME_ROLLOUT.candidateSha }));

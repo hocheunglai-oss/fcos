@@ -1,0 +1,42 @@
+{
+  "reviewedAt": "2026-10-05T03:15:47.477722+00:00",
+  "reviewer": "root",
+  "status": "accepted_for_exact_proposal_scope_review_only",
+  "base": "f4576a8c918acef686f084c505b1715de11deeb8",
+  "scopeFiles": [
+    "api/_deploymentReadOnly.js",
+    "api/_portal.js",
+    "api/functions/[name].js",
+    "src/lib/AuthContext.jsx",
+    "src/pages/PaymentCollections.jsx",
+    "tests/paymentCollectionsDeploymentCapability.test.js"
+  ],
+  "patches": [
+    {
+      "baseSha": "f4576a8c918acef686f084c505b1715de11deeb8",
+      "patch": "proposal-f457.patch",
+      "patchSha256": "27b671abf3983467a049af97223b45f277dbe6fc378540e2caf66ef0c5074bb3"
+    },
+    {
+      "baseSha": "ff8859b287009e20462c5c0cceff89ae12f13010",
+      "patch": "proposal-ff8859.patch",
+      "patchSha256": "ce5c6ec4581288eb074a002ad7ff85c0b52d48da9fbcc1ebed48b39bc1a00f93"
+    }
+  ],
+  "focusedTestsRetained": 35,
+  "sourceHashesMatch": true,
+  "childReadComponentsAndDependenciesPreserved": true,
+  "uiPreservationClaimMustChange": true,
+  "historicalFrozenBindingsPreserved": true,
+  "proposalNotAdmitted": true,
+  "noLiveProofClaim": true,
+  "limitations": [
+    "Provider-free tests execute authContext/AuthProvider/PaymentCollections with dependency and child rendering stubs.",
+    "Collection/incoming read pages are byte-identical; no live provider read or browser success is claimed.",
+    "ff8859 patch has dry applicability proof only; focused executable proof is for f457 proposal sources.",
+    "This receipt is not an admitted release candidate or an approval to replace frozen release bindings."
+  ],
+  "independentReviewPath": "/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/readonly-collections-proposal/independent-application-review.json",
+  "independentReviewSha256": "935671186dd4cd2a483f45393468239acd7de49fea367b61592fb8755f586b4b",
+  "admissionApproved": false
+}

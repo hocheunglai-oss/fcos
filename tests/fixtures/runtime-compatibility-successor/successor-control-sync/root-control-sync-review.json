@@ -1,0 +1,28 @@
+{
+  "reviewedAt": "2026-10-05T03:47:50.689668+00:00",
+  "status": "root_accepted_exact_canonical_control_sync_only",
+  "reviewIndexSha256": "47cdb80a24624011f95b906dcc29a8d3aac98cf2e3eded23ae970445b3aab049",
+  "actualParentsTreesOnlyAgentsChangesMatched": true,
+  "allEightImmutableControlsMatchCurrentCanonical": true,
+  "exactAgentsStandingAuthorizationDiffInspected": true,
+  "applicationChangesAndFocusedProofsRetained": true,
+  "records": [
+    {
+      "kind": "compatibility",
+      "appOnlyParent": "0e6b77cee1b76b7ebaa213b7ac13a3ba019a841a",
+      "cleanSourceSha": "04ee3425aac7a49089eda781eb3c976aea1f6785",
+      "tree": "4c8258c4f677878532b5d52e1f9b52fb4a767d18",
+      "clean": true
+    },
+    {
+      "kind": "final",
+      "appOnlyParent": "8255ddbb67c183bebf8fda462b2ea985d8567b9c",
+      "cleanSourceSha": "2f4bca02e94105681dedf674985e052169602492",
+      "tree": "4d69a644baa78d23698be71187789f9ceed61e33",
+      "clean": true
+    }
+  ],
+  "installedAdmission": false,
+  "liveProof": false,
+  "independentReviewPending": true
+}

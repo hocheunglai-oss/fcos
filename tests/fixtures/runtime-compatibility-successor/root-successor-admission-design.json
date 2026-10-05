@@ -1,0 +1,24 @@
+{
+  "preparedAt": "2026-10-05T03:27:30.237669+00:00",
+  "status": "approved_exact_scope_admission_design_not_installed",
+  "actualApprovalAnswer": "Approve scoped correction",
+  "originalCompatibility": "ff8859b287009e20462c5c0cceff89ae12f13010",
+  "originalFinal": "f4576a8c918acef686f084c505b1715de11deeb8",
+  "compatibilityPatchSha256": "ce5c6ec4581288eb074a002ad7ff85c0b52d48da9fbcc1ebed48b39bc1a00f93",
+  "finalPatchSha256": "27b671abf3983467a049af97223b45f277dbe6fc378540e2caf66ef0c5074bb3",
+  "design": [
+    "Recompute historical f347-to-ff8859 scope with unchanged original exact-transform validator from immutable Git objects.",
+    "Separately validate new compatibility successor exact parent, six-file path set, modes, before/after blobs and approved patch, preserving every unrelated original file.",
+    "Independently verify original deployment-read-only guards still preserved underneath the newly exact approved dispatch transformation; no scope boolean or same-runtime authority substitution.",
+    "Expose honest existingUi:false and narrow reviewed deployment mutation capability/auth/portal exception; keep unchanged schema, Salesforce, financial logic, dependencies and denied-mutation policy.",
+    "Bind any trusted admission/control revision to actual new source/tree/lock/configuration/harness; original pin accepts only original historical source and must not be silently generalized.",
+    "Prepare final candidate proof separately. Compatibility rollout with actual stronger gates and fresh observed successor Production baseline precedes combined final signer/admission/baseline installation.",
+    "Every changed candidate requires exact hosted source/database/dependency/archive, READY Preview, fresh runtime and protected browser/normal-role all15 proof. Original successful evidence remains historical only."
+  ],
+  "nextPrivateFlow": "Only after admitted exact successor and normally installed current harness closure: new actual human readiness, personal sign-in, latest four BEFORE metadata, reviewed45-minute provision and30-minute dispatch, new actual parent/root-independent review, one durable POST, genuine protected review.",
+  "productionAuthorized": false,
+  "newCredentialsAuthorized": false,
+  "providerWrites": 0,
+  "cleanupDeadlineUtc": "2026-10-05T08:20:00Z",
+  "mandatoryRevocationStartsUtc": "2026-10-05T06:50:00Z"
+}

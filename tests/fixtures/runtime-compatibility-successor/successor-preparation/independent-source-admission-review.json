@@ -1,0 +1,236 @@
+{
+  "schemaVersion": 1,
+  "reviewKind": "independent_material_application_successor_source_review",
+  "reviewedAt": "2026-10-05T03:45:59.660312+00:00",
+  "disposition": "ACCEPTABLE_LOCAL_SOURCE_SCOPE_PROPOSAL",
+  "materialBlockers": [],
+  "openFindings": [],
+  "scope": "Two immutable six-file application successors and output-only two-stage source/admission proposal; no admission, deployment or Production authority.",
+  "reviewer": {
+    "agent": "/root/pr97_harness_material_review",
+    "modelRouting": "GPT-6.1 Sol Extra High material-risk review"
+  },
+  "exactArtifactsSha256": {
+    "successor-source-proof.json": "df74c4f1ca46836c67be49a90e69db9b1e5f224ca3d5afdd21536b76fd93985f",
+    "successor-admission-contract-proposal.json": "611431fb3de854ed1f6dd0c56294fd01d7c4f2edbd74e5e796185a912b73cebf",
+    "verify-approved-application-successors.mjs": "33010cc4480727329c023dc2c524c3fa2e6f02d5a0d8a61e81f89714989cd4c6",
+    "original-compatibility-scope.json": "4df0df8f7321a29387b64100fb60019631ed9b4728e813cdca547963b71e8304",
+    "root-source-admission-review.json": "4b79343056f0ebbbc4eb764f4ded853032c73e3e6aacf6279ce97d2f1f57f016",
+    "compatibility-focused-tests.json": "d0e271d39a73e16c0ad44ecfaeee4bba875dfd3f58380669f2559cc7bc7bb1eb",
+    "compatibility-lint-proof.json": "71ab73a8d3c1ae4498a4d77360d4205e74d850a743515be53b8ce81ecff80d12",
+    "compatibility-focused-tests.txt": "04a3afaa962a23ee7195bcf8abb506ae2f3dc3704e531bc59437eda5245245c4"
+  },
+  "retainedProposalEvidenceSha256": {
+    "proposal-ff8859.patch": "ce5c6ec4581288eb074a002ad7ff85c0b52d48da9fbcc1ebed48b39bc1a00f93",
+    "proposal-f457.patch": "27b671abf3983467a049af97223b45f277dbe6fc378540e2caf66ef0c5074bb3",
+    "proof.json": "7ab2e5ca4e1c21c56939c32aa79872364430b1a87e019c7715f59e15276f7d77",
+    "root-successor-admission-design.json": "c8427525bc54b6797223f7fe06f4db1b7c1e872f00f1d3ab65d20322436d8a0b",
+    "independent-application-review.json": "935671186dd4cd2a483f45393468239acd7de49fea367b61592fb8755f586b4b"
+  },
+  "immutableBindings": [
+    {
+      "kind": "compatibility",
+      "original": "ff8859b287009e20462c5c0cceff89ae12f13010",
+      "successor": "0e6b77cee1b76b7ebaa213b7ac13a3ba019a841a",
+      "tree": "c87e47d0d91d1eabd1d88d0fbf7e0af0650552fe",
+      "patchSha256": "ce5c6ec4581288eb074a002ad7ff85c0b52d48da9fbcc1ebed48b39bc1a00f93",
+      "packageLockSha256": "9b3d6eb4824ea8688022b9ba249041e25c44b8cebc5443d59c55d8a2da5da378",
+      "sourceFiles": [
+        {
+          "file": "api/_deploymentReadOnly.js",
+          "beforeBlob": "a49babd8f90dfc157b52cf368cdeb2e0591b6f8a",
+          "afterBlob": "1e8021208ad84d9e3e0a8d6de93c5e8737ae5062",
+          "beforeSha256": "672a6ac5bafc9cb138ae1d1985ec70f0e7bfc2763a3880009ff8a5016625ba6b",
+          "afterSha256": "7e3064a4fec4a19c5d2ed365e6d07069e9391e61acaa43ac7df6e9273673cd3d",
+          "mode": "100644"
+        },
+        {
+          "file": "api/_portal.js",
+          "beforeBlob": "f087c393895f42b6ac883595572559ab38c5a265",
+          "afterBlob": "e6d720fb1e0ca39665443d24d76489a3639160d6",
+          "beforeSha256": "cf745463b4e36e87a41c472c864f36d8fb8b9feb7d28775b43521b057e71785c",
+          "afterSha256": "8d1617d4c9478f8480ec6c9a4e35c13aaf0546d05fbbc15b30bdb95ba386a45b",
+          "mode": "100644"
+        },
+        {
+          "file": "api/functions/[name].js",
+          "beforeBlob": "717edccb02711140af52552d9be4c3059ff2aee1",
+          "afterBlob": "92007e46dd15d467ee2a85029ca49ce70c473f72",
+          "beforeSha256": "0682b3c11d30a79a676dbb4b0c42a84477895adcc6f1066db4550322234b9229",
+          "afterSha256": "7a1f36d3ed917bac8e0fe0d78775f10912eb962764af7e19c581d985a403511d",
+          "mode": "100644"
+        },
+        {
+          "file": "src/lib/AuthContext.jsx",
+          "beforeBlob": "4b866f98e51bbd27620f8ed48ab3f768f5299d78",
+          "afterBlob": "42d6e6d7c7264f3bf30f4cdbdbdf49ba5ecd09bf",
+          "beforeSha256": "4a88c824989a072c8ccbbd96747f2e872ee52c3080261502830527775ec9076b",
+          "afterSha256": "476bf33402d8c3b314ec4ed56f3c2e5ab74a8f8d2f4a242252c0a29dbc0c0b4a",
+          "mode": "100644"
+        },
+        {
+          "file": "src/pages/PaymentCollections.jsx",
+          "beforeBlob": "f226d7b9302dcc89df3e924de6a565ee8bd1d07c",
+          "afterBlob": "107a9bcb358235b71083dd2eb5abf53e00da23a5",
+          "beforeSha256": "140a573a6e9c07d9781e822b700c75aa90acee7d68821b0ddf5711ddacf349dc",
+          "afterSha256": "d4636dae6ec66d68b2e83e5a009c4d18da3aff8acabe8d07bd0667d6991edff6",
+          "mode": "100644"
+        },
+        {
+          "file": "tests/paymentCollectionsDeploymentCapability.test.js",
+          "beforeBlob": null,
+          "afterBlob": "50066ca22eeb4f4fe019b4f86d1ce261c0779db9",
+          "beforeSha256": null,
+          "afterSha256": "000ca377f4fef978f387a8430471f8bc81f11c46285d5deca7891fbb8a718e6b",
+          "mode": "100644"
+        }
+      ],
+      "preservation": {
+        "existingUi": false,
+        "databaseSchema": true,
+        "salesforceMetadata": true,
+        "financialLogic": true,
+        "dependencies": true,
+        "existingReleaseControls": true,
+        "existingDenialPolicies": true,
+        "unrelatedProductionSource": true
+      }
+    },
+    {
+      "kind": "final",
+      "original": "f4576a8c918acef686f084c505b1715de11deeb8",
+      "successor": "8255ddbb67c183bebf8fda462b2ea985d8567b9c",
+      "tree": "264172caf90258b4a6a23d6eb4f76534ddbd6a33",
+      "patchSha256": "27b671abf3983467a049af97223b45f277dbe6fc378540e2caf66ef0c5074bb3",
+      "packageLockSha256": "0f35c1e123ab566f5d065d187bc0b8a7d1e05f7968ec31a03cd67ac0070aa0ef",
+      "sourceFiles": [
+        {
+          "file": "api/_deploymentReadOnly.js",
+          "beforeBlob": "a49babd8f90dfc157b52cf368cdeb2e0591b6f8a",
+          "afterBlob": "1e8021208ad84d9e3e0a8d6de93c5e8737ae5062",
+          "beforeSha256": "672a6ac5bafc9cb138ae1d1985ec70f0e7bfc2763a3880009ff8a5016625ba6b",
+          "afterSha256": "7e3064a4fec4a19c5d2ed365e6d07069e9391e61acaa43ac7df6e9273673cd3d",
+          "mode": "100644"
+        },
+        {
+          "file": "api/_portal.js",
+          "beforeBlob": "f087c393895f42b6ac883595572559ab38c5a265",
+          "afterBlob": "e6d720fb1e0ca39665443d24d76489a3639160d6",
+          "beforeSha256": "cf745463b4e36e87a41c472c864f36d8fb8b9feb7d28775b43521b057e71785c",
+          "afterSha256": "8d1617d4c9478f8480ec6c9a4e35c13aaf0546d05fbbc15b30bdb95ba386a45b",
+          "mode": "100644"
+        },
+        {
+          "file": "api/functions/[name].js",
+          "beforeBlob": "4530c2f4636782d1a3687f93290e7fd3b7a6cafc",
+          "afterBlob": "ecd6602148886307baef439be4b0c1221769a4f2",
+          "beforeSha256": "1bbde4f4074ff055faf2e072ab529861ce666e69cfbcbc11e039aa9d636ff994",
+          "afterSha256": "1035590a07ad8b06a2072f3b6acaef6d66d6e35d27c9199b00dc20a161f99eca",
+          "mode": "100644"
+        },
+        {
+          "file": "src/lib/AuthContext.jsx",
+          "beforeBlob": "4b866f98e51bbd27620f8ed48ab3f768f5299d78",
+          "afterBlob": "42d6e6d7c7264f3bf30f4cdbdbdf49ba5ecd09bf",
+          "beforeSha256": "4a88c824989a072c8ccbbd96747f2e872ee52c3080261502830527775ec9076b",
+          "afterSha256": "476bf33402d8c3b314ec4ed56f3c2e5ab74a8f8d2f4a242252c0a29dbc0c0b4a",
+          "mode": "100644"
+        },
+        {
+          "file": "src/pages/PaymentCollections.jsx",
+          "beforeBlob": "f226d7b9302dcc89df3e924de6a565ee8bd1d07c",
+          "afterBlob": "107a9bcb358235b71083dd2eb5abf53e00da23a5",
+          "beforeSha256": "140a573a6e9c07d9781e822b700c75aa90acee7d68821b0ddf5711ddacf349dc",
+          "afterSha256": "d4636dae6ec66d68b2e83e5a009c4d18da3aff8acabe8d07bd0667d6991edff6",
+          "mode": "100644"
+        },
+        {
+          "file": "tests/paymentCollectionsDeploymentCapability.test.js",
+          "beforeBlob": null,
+          "afterBlob": "50066ca22eeb4f4fe019b4f86d1ce261c0779db9",
+          "beforeSha256": null,
+          "afterSha256": "000ca377f4fef978f387a8430471f8bc81f11c46285d5deca7891fbb8a718e6b",
+          "mode": "100644"
+        }
+      ],
+      "preservation": {
+        "existingUi": false,
+        "databaseSchema": true,
+        "salesforceMetadata": true,
+        "financialLogic": true,
+        "dependencies": true,
+        "existingReleaseControls": true,
+        "existingDenialPolicies": true,
+        "unrelatedProductionSource": true
+      }
+    }
+  ],
+  "independentChecks": [
+    "Read immutable Git parents, trees, modes and all source blobs; both successors have exactly the approved six changed paths and all unrelated tree entries unchanged.",
+    "Independently parsed unified patches and reconstructed expected after bytes in memory, matching every immutable successor blob and current six working source files; no verifier or tests rerun.",
+    "Reconstructed api/functions/[name].js independently from each original using exactly four once-only replacements. Authenticated capability import/declaration/scheduler/return changes are the only altered dispatch source bytes.",
+    "Compared all other original read-only guard files byte-for-byte on each base and successor; no mutation classification, reconciliation exemption or denial policy weakened.",
+    "Verified unchanged historical runtime-compatibility validator blob 0166ae392a4fb3287dd47a6d82342110bc06fa12 at a00c257, SHA256 ebc1f32f20f063e766e416d4e3a7e1f61c457fecaa3535f37b2cb4c1173b6d97. Final original/successor contain identical validator; compatibility original/successor contain no bundled validator.",
+    "Inspected verifier and retained original scope: historical f347-to-ff8859 scope is separate from approved six-file successor scope. Original existingUi:true is not applied to successors; both honestly declare existingUi:false.",
+    "Checked exact approved patch hashes against parent-provided human scope authorization and canonical design record. Mutable output-only contract never installs or replaces trusted source admission or hard pins.",
+    "Checked final retained focused proof source hashes and package lock against immutable final successor; compatibility focused proof records exact base/successor and unchanged lock."
+  ],
+  "safetyAssessment": {
+    "serverCapability": "Existing deployment read-only guard derives a strict server Boolean without administrator/body bypass; unknown or stale client capability remains fail-closed.",
+    "collectionReads": "Actual BuyerInvoices/IncomingPayments components and props remain byte-preserved; mutation effect/actions gate capability, once per current mounted user identity.",
+    "portal": "Read-only list uses stored reads and unavailable external launch without entitlement repair or retry scheduling; outbox guard precedes database access. Ordinary writable branches preserved.",
+    "financialAndSchemaScope": "No altered financial calculation, schema, Salesforce metadata, dependencies, mobile source or credential authority; exact unrelated bytes preserved."
+  },
+  "retainedVerification": {
+    "compatibility": {
+      "passed": 33,
+      "exitCode": 0,
+      "nodeVersion": "v24.18.0",
+      "packageLockSha256": "9b3d6eb4824ea8688022b9ba249041e25c44b8cebc5443d59c55d8a2da5da378",
+      "providerCalls": 0,
+      "rerunByReviewer": false,
+      "limitation": "Actual transpiled source uses custom React hook and child stubs; local focused evidence is not live browser, provider or release proof."
+    },
+    "final": {
+      "passed": 35,
+      "exitCode": 0,
+      "packageLockSha256": "0f35c1e123ab566f5d065d187bc0b8a7d1e05f7968ec31a03cd67ac0070aa0ef",
+      "reusedAfterExactRelevantSourceComparison": true,
+      "rerunByReviewer": false
+    },
+    "all15MandatoryLiveModulesVerified": false
+  },
+  "controlState": {
+    "sourceProofHistoricalWorktreesDirtyOnlyAgents": true,
+    "agentsExcludedFromBothReviewedCommits": true,
+    "duringReviewSeparateControlStageAdvancedWorktrees": true,
+    "currentSeparateHeadsObserved": {
+      "compatibility": "04ee3425aac7a49089eda781eb3c976aea1f6785",
+      "final": "2f4bca02e94105681dedf674985e052169602492"
+    },
+    "newControlStageReviewedHere": false,
+    "note": "The reviewed immutable application-only commits remain exactly bound. The original dirty-AGENTS proof is historical. A concurrent root-owned control-only successor is outside this review and must have its own source/tree/cleanliness proof."
+  },
+  "limitations": [
+    "Local source acceptance does not certify live read-only execution or unchanged Production behavior from provider observations.",
+    "Original app-only successors are not deployable under their historical dirty-control proof. No new canonical control commit, successor admission implementation or live candidate artifact is accepted here.",
+    "Historical frozen pins and original transform validator remain unchanged; existing pins do not admit new application trees.",
+    "New exact hosted source/dependency/database/archive, READY Preview, runtime, protected browser and all15 normal-role module evidence remain required; changed candidate cannot borrow historical live proof.",
+    "Compatibility rollout and fresh observed successor Production baseline remain prerequisites to combined final admission/signing/baseline installation."
+  ],
+  "actionsByReviewer": {
+    "providerCalls": 0,
+    "browserOperations": 0,
+    "testsRerun": 0,
+    "sourceEdits": 0,
+    "commits": 0,
+    "pushes": 0,
+    "reviewOutputOnly": true
+  },
+  "authority": {
+    "productionAuthorized": false,
+    "providerMutationAuthorizedByThisReview": false,
+    "installedAdmission": false,
+    "deploymentReadyClaim": false
+  }
+}

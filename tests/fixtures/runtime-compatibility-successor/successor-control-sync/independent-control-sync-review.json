@@ -1,0 +1,232 @@
+{
+  "schemaVersion": 1,
+  "reviewKind": "independent_material_canonical_control_sync_review",
+  "reviewedAt": "2026-10-05T03:49:51.948300+00:00",
+  "disposition": "ACCEPTABLE_SEPARATE_CANONICAL_CONTROL_SYNC",
+  "materialBlockers": [],
+  "openFindings": [],
+  "scope": "Separate local AGENTS-only synchronization on the two previously reviewed application successors. This accepts the exact control manifest and immutable sources for further guarded preparation, not source admission or deployment.",
+  "reviewer": {
+    "agent": "/root/pr97_harness_material_review",
+    "modelRouting": "GPT-6.1 Sol Extra High material-risk review"
+  },
+  "artifactsSha256": {
+    "control-review-index.json": "47cdb80a24624011f95b906dcc29a8d3aac98cf2e3eded23ae970445b3aab049",
+    "control-sync-manifest.json": "5932b45a712fe1e5f6e4cb242ec2022e341ba6bc4cb847a30cd9629a1122420d",
+    "canonical-agents-control-sync.patch": "5e3473b1f628e5419cd05f8b167ee30322aba7c5ea7847bdfb160cc120b6d43b",
+    "third-stage-control-proof.json": "78f42aa3ab5a597224beda1e1c2dcfa7be15bd706377e8fb57171729c5abca34",
+    "verify-canonical-control-successors.mjs": "f5df1d5237301e80899e91d7f23a0a84c421b65acdb93064f13b1db0a3a78679",
+    "root-control-sync-review.json": "f803046a46911cd7855fb25bdd02e43179724d06030644cc03ccbacbaf7bbb6a"
+  },
+  "historicalApplicationArtifactsSha256": {
+    "successor-source-proof.json": "df74c4f1ca46836c67be49a90e69db9b1e5f224ca3d5afdd21536b76fd93985f",
+    "verify-approved-application-successors.mjs": "33010cc4480727329c023dc2c524c3fa2e6f02d5a0d8a61e81f89714989cd4c6",
+    "successor-admission-contract-proposal.json": "611431fb3de854ed1f6dd0c56294fd01d7c4f2edbd74e5e796185a912b73cebf",
+    "independent-source-admission-review.json": "732180649feec5a3c018f223b0d42f07fc7e7f6c824ef87cccc99d285906a46b"
+  },
+  "canonicalControlSetSha256": "7b4a53c672a9bbe082b56d37f3c2cf6e474434ace86e5aa2611e6be86db71332",
+  "immutableSources": [
+    {
+      "kind": "compatibility",
+      "parent": "0e6b77cee1b76b7ebaa213b7ac13a3ba019a841a",
+      "sha": "04ee3425aac7a49089eda781eb3c976aea1f6785",
+      "tree": "4c8258c4f677878532b5d52e1f9b52fb4a767d18",
+      "changes": [
+        "AGENTS.md"
+      ],
+      "controls": [
+        {
+          "file": "AGENTS.md",
+          "beforeSha256": "9ad80f095567857c0bd858c220302fea58685663a749bfaa29325c81b8594191",
+          "afterSha256": "94a6dd93fc26a1c27aa3118e57b11906f542361e5ce322e1f2524bf16c7503cd",
+          "beforeBlob": "d9b213fcaf7d7497ebbb888dbab8c5a1c2ef55c0",
+          "afterBlob": "f44beb8d62f5d891479add75f4f477481ec7c985",
+          "canonicalSha256": "94a6dd93fc26a1c27aa3118e57b11906f542361e5ce322e1f2524bf16c7503cd"
+        },
+        {
+          "file": ".codex/config.toml",
+          "beforeSha256": "69313ff59c184619cdd5bb6ec589fb94e23268df363908e9c6f063c5cb81735f",
+          "afterSha256": "69313ff59c184619cdd5bb6ec589fb94e23268df363908e9c6f063c5cb81735f",
+          "beforeBlob": "daa6873338de88826d2270f5616ab5d753c3bed8",
+          "afterBlob": "daa6873338de88826d2270f5616ab5d753c3bed8",
+          "canonicalSha256": "69313ff59c184619cdd5bb6ec589fb94e23268df363908e9c6f063c5cb81735f"
+        },
+        {
+          "file": ".codex/setup.mjs",
+          "beforeSha256": "b70610746072fb1566b536e61875d272c20ee183ae61c299cec5d0e8ffff6198",
+          "afterSha256": "b70610746072fb1566b536e61875d272c20ee183ae61c299cec5d0e8ffff6198",
+          "beforeBlob": "0f82bf9620cf6a625b4276acbf12eb6c76056233",
+          "afterBlob": "0f82bf9620cf6a625b4276acbf12eb6c76056233",
+          "canonicalSha256": "b70610746072fb1566b536e61875d272c20ee183ae61c299cec5d0e8ffff6198"
+        },
+        {
+          "file": ".codex/control-validation.mjs",
+          "beforeSha256": "10ee550f146920a7d6fcb4353c20f023d20136b8ce031830c6af82b6b99ff814",
+          "afterSha256": "10ee550f146920a7d6fcb4353c20f023d20136b8ce031830c6af82b6b99ff814",
+          "beforeBlob": "49bc7f45c16ed19290306f39951e7c8bb0933670",
+          "afterBlob": "49bc7f45c16ed19290306f39951e7c8bb0933670",
+          "canonicalSha256": "10ee550f146920a7d6fcb4353c20f023d20136b8ce031830c6af82b6b99ff814"
+        },
+        {
+          "file": ".codex/control-policy.json",
+          "beforeSha256": "bce6429e9cb7c395fb0edb9a2fdd07160e90c073469b0205b0001e51cfa52617",
+          "afterSha256": "bce6429e9cb7c395fb0edb9a2fdd07160e90c073469b0205b0001e51cfa52617",
+          "beforeBlob": "a8a1a136419e390ca29116b1aa79c809a7f7e352",
+          "afterBlob": "a8a1a136419e390ca29116b1aa79c809a7f7e352",
+          "canonicalSha256": "bce6429e9cb7c395fb0edb9a2fdd07160e90c073469b0205b0001e51cfa52617"
+        },
+        {
+          "file": ".codex/README.md",
+          "beforeSha256": "3837e5b1985e6c1fca3938fc23bcbbb166c8b455ec12392d3e3f7d9854fedfa2",
+          "afterSha256": "3837e5b1985e6c1fca3938fc23bcbbb166c8b455ec12392d3e3f7d9854fedfa2",
+          "beforeBlob": "611ece4701eeaad5d2d19aa3541a7569f6a70c59",
+          "afterBlob": "611ece4701eeaad5d2d19aa3541a7569f6a70c59",
+          "canonicalSha256": "3837e5b1985e6c1fca3938fc23bcbbb166c8b455ec12392d3e3f7d9854fedfa2"
+        },
+        {
+          "file": ".codex/environments/environment-2.toml",
+          "beforeSha256": "47b46dd529e329cc51e3cce11e3042f041f470226e480bdc6b6634d49e67e19f",
+          "afterSha256": "47b46dd529e329cc51e3cce11e3042f041f470226e480bdc6b6634d49e67e19f",
+          "beforeBlob": "66911c0bc08be390bf65d3f013bc0519c5909ce4",
+          "afterBlob": "66911c0bc08be390bf65d3f013bc0519c5909ce4",
+          "canonicalSha256": "47b46dd529e329cc51e3cce11e3042f041f470226e480bdc6b6634d49e67e19f"
+        },
+        {
+          "file": ".codex/environments/environment.toml",
+          "beforeSha256": "47b46dd529e329cc51e3cce11e3042f041f470226e480bdc6b6634d49e67e19f",
+          "afterSha256": "47b46dd529e329cc51e3cce11e3042f041f470226e480bdc6b6634d49e67e19f",
+          "beforeBlob": "66911c0bc08be390bf65d3f013bc0519c5909ce4",
+          "afterBlob": "66911c0bc08be390bf65d3f013bc0519c5909ce4",
+          "canonicalSha256": "47b46dd529e329cc51e3cce11e3042f041f470226e480bdc6b6634d49e67e19f"
+        }
+      ],
+      "packageLockSha256": "9b3d6eb4824ea8688022b9ba249041e25c44b8cebc5443d59c55d8a2da5da378",
+      "workingTreeClean": true,
+      "allApplicationAndUnrelatedTreeEntriesPreserved": true,
+      "exactControlPatchReconstructed": true,
+      "existingUi": false
+    },
+    {
+      "kind": "final",
+      "parent": "8255ddbb67c183bebf8fda462b2ea985d8567b9c",
+      "sha": "2f4bca02e94105681dedf674985e052169602492",
+      "tree": "4d69a644baa78d23698be71187789f9ceed61e33",
+      "changes": [
+        "AGENTS.md"
+      ],
+      "controls": [
+        {
+          "file": "AGENTS.md",
+          "beforeSha256": "9ad80f095567857c0bd858c220302fea58685663a749bfaa29325c81b8594191",
+          "afterSha256": "94a6dd93fc26a1c27aa3118e57b11906f542361e5ce322e1f2524bf16c7503cd",
+          "beforeBlob": "d9b213fcaf7d7497ebbb888dbab8c5a1c2ef55c0",
+          "afterBlob": "f44beb8d62f5d891479add75f4f477481ec7c985",
+          "canonicalSha256": "94a6dd93fc26a1c27aa3118e57b11906f542361e5ce322e1f2524bf16c7503cd"
+        },
+        {
+          "file": ".codex/config.toml",
+          "beforeSha256": "69313ff59c184619cdd5bb6ec589fb94e23268df363908e9c6f063c5cb81735f",
+          "afterSha256": "69313ff59c184619cdd5bb6ec589fb94e23268df363908e9c6f063c5cb81735f",
+          "beforeBlob": "daa6873338de88826d2270f5616ab5d753c3bed8",
+          "afterBlob": "daa6873338de88826d2270f5616ab5d753c3bed8",
+          "canonicalSha256": "69313ff59c184619cdd5bb6ec589fb94e23268df363908e9c6f063c5cb81735f"
+        },
+        {
+          "file": ".codex/setup.mjs",
+          "beforeSha256": "b70610746072fb1566b536e61875d272c20ee183ae61c299cec5d0e8ffff6198",
+          "afterSha256": "b70610746072fb1566b536e61875d272c20ee183ae61c299cec5d0e8ffff6198",
+          "beforeBlob": "0f82bf9620cf6a625b4276acbf12eb6c76056233",
+          "afterBlob": "0f82bf9620cf6a625b4276acbf12eb6c76056233",
+          "canonicalSha256": "b70610746072fb1566b536e61875d272c20ee183ae61c299cec5d0e8ffff6198"
+        },
+        {
+          "file": ".codex/control-validation.mjs",
+          "beforeSha256": "10ee550f146920a7d6fcb4353c20f023d20136b8ce031830c6af82b6b99ff814",
+          "afterSha256": "10ee550f146920a7d6fcb4353c20f023d20136b8ce031830c6af82b6b99ff814",
+          "beforeBlob": "49bc7f45c16ed19290306f39951e7c8bb0933670",
+          "afterBlob": "49bc7f45c16ed19290306f39951e7c8bb0933670",
+          "canonicalSha256": "10ee550f146920a7d6fcb4353c20f023d20136b8ce031830c6af82b6b99ff814"
+        },
+        {
+          "file": ".codex/control-policy.json",
+          "beforeSha256": "bce6429e9cb7c395fb0edb9a2fdd07160e90c073469b0205b0001e51cfa52617",
+          "afterSha256": "bce6429e9cb7c395fb0edb9a2fdd07160e90c073469b0205b0001e51cfa52617",
+          "beforeBlob": "a8a1a136419e390ca29116b1aa79c809a7f7e352",
+          "afterBlob": "a8a1a136419e390ca29116b1aa79c809a7f7e352",
+          "canonicalSha256": "bce6429e9cb7c395fb0edb9a2fdd07160e90c073469b0205b0001e51cfa52617"
+        },
+        {
+          "file": ".codex/README.md",
+          "beforeSha256": "3837e5b1985e6c1fca3938fc23bcbbb166c8b455ec12392d3e3f7d9854fedfa2",
+          "afterSha256": "3837e5b1985e6c1fca3938fc23bcbbb166c8b455ec12392d3e3f7d9854fedfa2",
+          "beforeBlob": "611ece4701eeaad5d2d19aa3541a7569f6a70c59",
+          "afterBlob": "611ece4701eeaad5d2d19aa3541a7569f6a70c59",
+          "canonicalSha256": "3837e5b1985e6c1fca3938fc23bcbbb166c8b455ec12392d3e3f7d9854fedfa2"
+        },
+        {
+          "file": ".codex/environments/environment-2.toml",
+          "beforeSha256": "47b46dd529e329cc51e3cce11e3042f041f470226e480bdc6b6634d49e67e19f",
+          "afterSha256": "47b46dd529e329cc51e3cce11e3042f041f470226e480bdc6b6634d49e67e19f",
+          "beforeBlob": "66911c0bc08be390bf65d3f013bc0519c5909ce4",
+          "afterBlob": "66911c0bc08be390bf65d3f013bc0519c5909ce4",
+          "canonicalSha256": "47b46dd529e329cc51e3cce11e3042f041f470226e480bdc6b6634d49e67e19f"
+        },
+        {
+          "file": ".codex/environments/environment.toml",
+          "beforeSha256": "47b46dd529e329cc51e3cce11e3042f041f470226e480bdc6b6634d49e67e19f",
+          "afterSha256": "47b46dd529e329cc51e3cce11e3042f041f470226e480bdc6b6634d49e67e19f",
+          "beforeBlob": "66911c0bc08be390bf65d3f013bc0519c5909ce4",
+          "afterBlob": "66911c0bc08be390bf65d3f013bc0519c5909ce4",
+          "canonicalSha256": "47b46dd529e329cc51e3cce11e3042f041f470226e480bdc6b6634d49e67e19f"
+        }
+      ],
+      "packageLockSha256": "0f35c1e123ab566f5d065d187bc0b8a7d1e05f7968ec31a03cd67ac0070aa0ef",
+      "workingTreeClean": true,
+      "allApplicationAndUnrelatedTreeEntriesPreserved": true,
+      "exactControlPatchReconstructed": true,
+      "existingUi": false
+    }
+  ],
+  "assessment": [
+    "Both exact commits have one parent equal to their app-only successor and only AGENTS.md changes. The AGENTS mode stays regular 100644; independent unified-patch reconstruction matches both immutable after blobs.",
+    "All eight controls match the current canonical repository and manifest hashes. Every seven .codex control byte is unchanged between each parent and successor. The complete manifest digest was independently recomputed.",
+    "AGENTS adds the current user-authorized standing FCOS and scoped Supabase permissions while preserving exact target checks, financial fingerprints, durable locks, release gates, platform approval boundaries and private human credential/review requirements. It does not alter machine-wide settings or application/runtime authority.",
+    "Full immutable trees, six reviewed application blobs, package locks, guard code, frozen validators, original pins, workflows and every unrelated tree entry are byte-preserved.",
+    "Historical app-only source proof/verifier/contract remain exact, with historical dirty-control status preserved. A separate third-stage proof binds clean current heads/trees and controls, retaining honest existingUi:false.",
+    "Current worktree HEADs and clean Git statuses match both exact control successors. Existing setup controls-only checks returned zero pending files; retained without rerun."
+  ],
+  "retainedVerification": {
+    "compatibilityFocusedPassed": 33,
+    "finalFocusedPassed": 35,
+    "relevantApplicationSourceAndLocksUnchanged": true,
+    "behaviorRerunByReviewer": false,
+    "setupControlsOnly": {
+      "bothExitCodes": 0,
+      "bothPendingFiles": 0,
+      "rerunByReviewer": false
+    }
+  },
+  "limits": [
+    "Control source synchronization changes the candidate commit/tree and therefore requires new exact candidate configuration, source digest, hosted quality/archive/dependency/database/READY Preview and live protected browser/normal-role evidence.",
+    "All15 mandatory live module evidence remains unproved. Local clean Git source and focused tests do not establish release readiness.",
+    "A separately reviewed trusted successor admission implementation remains required; original frozen hard pins do not accept these new trees.",
+    "Compatibility rollout and newly observed successor Production baseline must precede combined final admission/signing/baseline installation."
+  ],
+  "actionsByReviewer": {
+    "providerCalls": 0,
+    "browserOperations": 0,
+    "privateCredentialOperations": 0,
+    "testsRerun": 0,
+    "setupChecksRerun": 0,
+    "sourceEdits": 0,
+    "commits": 0,
+    "pushes": 0,
+    "reviewOutputOnly": true
+  },
+  "authority": {
+    "installedAdmission": false,
+    "productionAuthorized": false,
+    "providerMutationAuthorizedByThisReview": false,
+    "deploymentReadyClaim": false
+  }
+}

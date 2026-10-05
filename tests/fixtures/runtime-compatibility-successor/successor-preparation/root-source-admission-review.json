@@ -1,0 +1,17 @@
+{
+  "reviewedAt": "2026-10-05T03:38:32.600353+00:00",
+  "status": "root_accepted_exact_local_successors_and_output_only_two_stage_proof",
+  "sourceProofSha256": "df74c4f1ca46836c67be49a90e69db9b1e5f224ca3d5afdd21536b76fd93985f",
+  "contractProposalSha256": "611431fb3de854ed1f6dd0c56294fd01d7c4f2edbd74e5e796185a912b73cebf",
+  "verifierSourceInspected": true,
+  "actualImmutableParentsTreesSixFileSourceHashesMatched": true,
+  "actualHumanScopeApprovalVerified": true,
+  "originalTransformValidatorRetained": true,
+  "guardDispatchExactFourHunksPreserved": true,
+  "existingUiFalseHonest": true,
+  "canonicalControlsDirtyAndUninstalledAdmissionAcknowledged": true,
+  "focusedCompatibility33Final35Retained": true,
+  "installedOrDeployed": false,
+  "independentReviewPending": true,
+  "remainingGate": "Review canonical controls synchronization and implement new exact trusted admission without changing historical scope; all live release gates remain."
+}
