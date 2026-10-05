@@ -245,3 +245,19 @@ test('only exact optional script is excluded before fetch; escaped writes remain
   }
   assert.doesNotMatch(JSON.stringify(denied), /secret|private|authorization|url/);
 });
+
+
+test('Review, master detail and mutating collection reconciliation use fixed private-free request categories', async () => {
+  for (const [handler, category] of [['salesforceDashboardFiltered', 'REVIEW_READ'], ['masterContractDetail', 'MASTER_CONTRACT_DETAIL_READ'], ['paymentCollectionsReconcile', 'PAYMENT_COLLECTIONS_RECONCILE']]) {
+    const f = fixture({ url: `${origin}/api/functions/${handler}?private-token=secret`, body: { mode: 'exception_review', force: false, private: 'secret' } });
+    const denied = [];
+    await createNormalRoleVerificationRoute({ origin, requestAllowed: compatibilityNormalRequestAllowed,
+      onBlockedMutation: (reason, diagnostic) => denied.push({ reason, ...diagnostic }) })(f.route);
+    assert.deepEqual(denied, [{ reason: 'REQUEST_POLICY_DENIED', category, method: 'POST', resourceType: 'fetch' }]);
+    assert.deepEqual(f.calls.map(row => row.kind), ['abort']);
+    assert.doesNotMatch(JSON.stringify(denied), /secret|token|private|force|url|body/i);
+  }
+  const reconcile = fixture({ url: `${origin}/api/functions/paymentCollectionsReconcile`, body: { force: false } });
+  assert.equal(await run(reconcile, compatibilityNormalRequestAllowed), 1);
+  assert.deepEqual(reconcile.calls.map(row => row.kind), ['abort']);
+});

@@ -33,7 +33,7 @@ export const COMPATIBILITY_NORMAL_MODULES = Object.freeze([
   { module: 'hedge_desk', path: '/hedge-desk', handler: 'hedgeDeskEntity', fields: ['physicals'], title: /Hedge Desk|Position control/i },
   { module: 'xero_portal', path: '/xero-portal', handler: 'xeroPortalReceiptsList', fields: ['receipts', 'rows'], title: /Xero/i },
   { module: 'email_router', path: '/email-router', handler: 'emailRouterList', fields: ['messages', 'items'], title: /Email Router/i },
-  { module: 'settings', path: '/settings?section=finance', handler: 'financeSettingsGet', fields: [], title: /Finance settings|Settings/i },
+  { module: 'settings', path: '/settings?section=finance', handler: 'financeSettingsGet', fields: [], title: /^Finance$/i },
 ]);
 
 const normalRoleDiagnosticStages = new Set([
@@ -45,6 +45,7 @@ const normalRoleDiagnosticReasons = new Set([
   'CONFIGURATION_INVALID', 'STAGE_FAILED', 'READ_ONLY_GUARD_MISSING', 'VERSION_INVALID', 'RUNTIME_SAFETY_FAILED',
   'STORAGE_INVALID', 'AUTH_RESPONSE_INVALID', 'IDENTITY_INVALID', 'BROWSER_UNAVAILABLE', 'ACCESS_MISSING',
   'MISSING_HEADING', 'MISSING_DATA', 'PAGE_ERROR', 'BLOCKED_REQUEST', 'LOGIN_REDIRECT', 'UNAVAILABLE_SURFACE',
+  'DATA_NO_RESPONSE', 'DATA_NON_2XX', 'DATA_JSON_FAILURE', 'DATA_SHAPE_REJECTED', 'DATA_DEADLINE',
   'MISSING_ROWS', 'EMPTY_STATE_MISSING', 'SETTINGS_FIELD_MISSING', 'WORKFLOW_MISSING', 'COVERAGE_INCOMPLETE',
   'EVIDENCE_WRITE_FAILED', 'PREFERENCES_NOT_INITIALIZED', 'ISOLATION_FAILED', 'PASS', 'NOT_REACHED',
 ]);
@@ -144,6 +145,46 @@ export function compatibilityNormalDataLoaded(spec, payload) {
   return { loaded: false, rows: null };
 }
 
+// Public diagnostics retain an outcome enum, never response content or errors.
+export async function compatibilityNormalReadResponse(spec, response) {
+  if (!response.ok()) return { loaded: false, rows: null, reason: 'DATA_NON_2XX' };
+  let payload;
+  try { payload = await response.json(); } catch { return { loaded: false, rows: null, reason: 'DATA_JSON_FAILURE' }; }
+  const result = compatibilityNormalDataLoaded(spec, payload);
+  return result.loaded ? result : { ...result, reason: 'DATA_SHAPE_REJECTED' };
+}
+
+// The runtime and ordering tests share the actual response observer. Every
+// failed relevant response remains sticky even when a later response succeeds.
+export function createCompatibilityNormalResponseObserver(spec, responseSettlement, responses, failures) {
+  const state = { workflowLoaded: false, responseSeen: false, pending: 0 };
+  const observe = response => {
+    let pathname;
+    try { pathname = new URL(response.url()).pathname; } catch { failures.push('UNAVAILABLE_SURFACE'); return; }
+    const workflow = spec.module === 'review' && pathname === '/api/functions/exceptionReviewWorkflowList';
+    if (!workflow && pathname !== `/api/functions/${spec.handler}`) return;
+    if (!workflow) state.responseSeen = true;
+    state.pending += 1;
+    responseSettlement.track((async () => {
+      try {
+        if (workflow) {
+          if (!response.ok()) { failures.push('DATA_NON_2XX'); return; }
+          const data = await response.json();
+          state.workflowLoaded = Boolean(data && !data.error && data.byStemId !== null
+            && typeof data.byStemId === 'object' && !Array.isArray(data.byStemId) && Array.isArray(data.ownerOptions));
+          if (!state.workflowLoaded) failures.push('DATA_SHAPE_REJECTED');
+        } else {
+          const loaded = await compatibilityNormalReadResponse(spec, response);
+          responses.push(loaded);
+          if (loaded.reason) failures.push(loaded.reason);
+        }
+      } catch { failures.push('DATA_JSON_FAILURE'); }
+      finally { state.pending -= 1; }
+    })());
+  };
+  return { state, observe };
+}
+
 // EventEmitter does not await async response callbacks. Seal and drain only
 // relevant data observers after page close, before accepting final coverage.
 export function createCompatibilityNormalResponseSettlement({ timeoutMs = 5000 } = {}) {
@@ -176,9 +217,62 @@ export function compatibilityNormalModuleTerminalReason({ reason, failures = [],
   if (blocked) return 'BLOCKED_REQUEST';
   if (closeFailed) return 'UNAVAILABLE_SURFACE';
   if (failures.includes('PAGE_ERROR')) return 'PAGE_ERROR';
-  if (failures.includes('MISSING_DATA')) return 'MISSING_DATA';
+  for (const dataReason of ['DATA_NON_2XX', 'DATA_JSON_FAILURE', 'DATA_SHAPE_REJECTED', 'DATA_DEADLINE', 'DATA_NO_RESPONSE', 'MISSING_DATA']) {
+    if (failures.includes(dataReason)) return dataReason;
+  }
   if (workflowRequired && workflowLoaded !== true) return 'WORKFLOW_MISSING';
   return normalRoleDiagnosticReasons.has(reason) ? reason : failures.length ? 'MISSING_DATA' : null;
+}
+
+// Navigate the frozen business UI to the surface backed by each mandatory
+// handler. Controls here select views only; mutation buttons are never used.
+export async function compatibilityNormalOpenSurface(spec, page) {
+  if (spec.module === 'dashboard') await page.getByRole('tab', { name: 'STEMs', exact: true }).click();
+  else if (spec.module === 'xero_portal') await page.getByRole('tab', { name: 'Receipts', exact: true }).click();
+  else if (spec.module === 'markets') {
+    const tools = page.getByRole('button', { name: 'Market tools', exact: true });
+    if (!await tools.isVisible()) throw new Error('ACCESS_MISSING');
+    await tools.click();
+  }
+}
+
+async function compatibilityNormalSurfaceReasonOnce(spec, page, loaded, body) {
+  if (spec.module === 'settings') return await page.getByLabel('Annual financing rate (%)', { exact: true }).isVisible() ? null : 'SETTINGS_FIELD_MISSING';
+  if (spec.module === 'markets') {
+    const section = page.locator('details:visible').filter({ has: page.locator('summary').filter({ hasText: /^Settlement MOPS control$/ }) });
+    if (!await section.locator('summary').isVisible()) return 'ACCESS_MISSING';
+    if (await section.getAttribute('open') === null) await section.locator('summary').click();
+    if (loaded.rows === 0) return await section.getByText('No data', { exact: true }).isVisible() ? null : 'EMPTY_STATE_MISSING';
+    return await section.locator('table.app-table--mops tbody tr:visible').count()
+      && await section.locator('small:visible').filter({ hasText: /^Saved price record$/ }).count() ? null : 'MISSING_ROWS';
+  }
+  if (spec.module === 'xero_portal') {
+    const audit = page.getByRole('region', { name: 'Receipt audit', exact: true });
+    if (!await audit.isVisible()) return 'UNAVAILABLE_SURFACE';
+    if (loaded.rows === 0) return await audit.getByText('No receipts stored', { exact: true }).isVisible() ? null : 'EMPTY_STATE_MISSING';
+    return await audit.locator('table tbody tr:visible').count() && !await audit.getByText('No receipts stored', { exact: true }).count() ? null : 'MISSING_ROWS';
+  }
+  if (spec.module === 'email_router') {
+    if (loaded.rows === 0) return await page.getByText('Inbox is clear', { exact: true }).isVisible()
+      && await page.getByText('No messages match this mailbox and search.', { exact: true }).isVisible() ? null : 'EMPTY_STATE_MISSING';
+    return await page.locator('button:visible:has(time:visible)').count() ? null : 'MISSING_ROWS';
+  }
+  if (loaded.rows === 0) body = await page.locator('body').innerText();
+  if (loaded.rows === 0) return /No (?:records|rows|items|invoices|payments|receipts|messages|contracts|terms|trades|positions|data|STEMs|matching|Dispute Workflow)/i.test(body) ? null : 'EMPTY_STATE_MISSING';
+  return await page.locator('table tbody tr:visible').count() ? null : 'MISSING_ROWS';
+}
+
+// A successful network response precedes React's paint. Wait a short bounded
+// interval for its actual visible business surface, retaining the fixed failure.
+export async function compatibilityNormalSurfaceReason(spec, page, loaded, body, { timeoutMs = 5000 } = {}) {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 5000) throw new Error('UNAVAILABLE_SURFACE');
+  const deadline = Date.now() + timeoutMs;
+  let reason;
+  do {
+    reason = await compatibilityNormalSurfaceReasonOnce(spec, page, loaded, body);
+    if (!reason || Date.now() >= deadline) return reason;
+    await page.waitForTimeout(Math.min(50, Math.max(1, deadline - Date.now())));
+  } while (true);
 }
 
 function compatibilityNormalStorage(source, origin) {
@@ -263,48 +357,32 @@ export async function verifyRuntimeCompatibilityNormalRole({ env = process.env, 
       const responses = [], failures = [];
       const responseSettlement = createCompatibilityNormalResponseSettlement();
       let responseObserver;
-      let reviewWorkflowLoaded = false;
+      const observed = createCompatibilityNormalResponseObserver(spec, responseSettlement, responses, failures);
       const mutationStart = blockedMutations;
       const blockReason = () => blockedMutations !== mutationStart ? 'BLOCKED_REQUEST' : null;
       const failModule = reason => { if (!moduleReason) moduleReason = reason; };
       try {
         page = await context.newPage();
         page.on('pageerror', () => failures.push('PAGE_ERROR'));
-        responseObserver = res => {
-          let pathname;
-          try { pathname = new URL(res.url()).pathname; } catch { failures.push('UNAVAILABLE_SURFACE'); return; }
-          const workflowResponse = spec.module === 'review' && pathname === '/api/functions/exceptionReviewWorkflowList';
-          if (!workflowResponse && pathname !== `/api/functions/${spec.handler}`) return;
-          responseSettlement.track((async () => {
-            try {
-              const data = await res.json();
-              if (!res.ok()) { failures.push('MISSING_DATA'); return; }
-              if (workflowResponse) reviewWorkflowLoaded = !data.error && data.byStemId !== null
-                && typeof data.byStemId === 'object' && !Array.isArray(data.byStemId) && Array.isArray(data.ownerOptions);
-              else responses.push(compatibilityNormalDataLoaded(spec, data));
-            } catch { failures.push('MISSING_DATA'); }
-          })());
-        };
+        responseObserver = observed.observe;
         page.on('response', responseObserver);
         await page.goto(`${url}${spec.path}`, { waitUntil: 'domcontentloaded', timeout: 45000 });
         navigationLoaded = true;
         await page.getByRole('heading', { name: spec.title }).first().waitFor({ timeout: 30000 });
         headingLoaded = true;
+        await compatibilityNormalOpenSurface(spec, page);
         const deadline = Date.now() + 30000;
-        while (!responses.some(item => item.loaded) && Date.now() < deadline) await page.waitForTimeout(250);
+        while (!responses.some(item => item.loaded) && !failures.length && !blockReason() && Date.now() < deadline) await page.waitForTimeout(250);
         const loaded = responses.find(item => item.loaded);
         if (blockReason()) { failModule(blockReason()); continue; }
         if (failures.length) { failModule(failures[0]); continue; }
-        if (!loaded) { failModule('MISSING_DATA'); continue; }
+        if (!loaded) { failModule(!observed.state.responseSeen ? 'DATA_NO_RESPONSE' : observed.state.pending ? 'DATA_DEADLINE' : 'DATA_SHAPE_REJECTED'); continue; }
         if (/\/login(?:\?|$)/.test(page.url())) { failModule('LOGIN_REDIRECT'); continue; }
         const body = await page.locator('body').innerText();
         if (/Access denied/i.test(body)) { failModule('ACCESS_MISSING'); continue; }
         if (/Something went wrong|temporarily unavailable|could not (?:load|read|verify)|Unavailable/i.test(body)) { failModule('UNAVAILABLE_SURFACE'); continue; }
-        if (spec.module === 'settings') {
-          if (!await page.getByLabel(/Annual interest rate/i).count()) { failModule('SETTINGS_FIELD_MISSING'); continue; }
-        } else if (loaded.rows === 0) {
-          if (!/No (?:records|rows|items|invoices|payments|receipts|messages|contracts|terms|trades|positions|data|STEMs|matching|Dispute Workflow)/i.test(body)) { failModule('EMPTY_STATE_MISSING'); continue; }
-        } else if (!await page.locator('table tbody tr').count()) { failModule('MISSING_ROWS'); continue; }
+        const surfaceReason = await compatibilityNormalSurfaceReason(spec, page, loaded, body);
+        if (surfaceReason) { failModule(surfaceReason); continue; }
         if (spec.workflow) {
           if (spec.module === 'review') {
             // Exercise read-only queue scope and confirm workflow state remains
@@ -312,20 +390,20 @@ export async function verifyRuntimeCompatibilityNormalRole({ env = process.env, 
             await page.getByRole('button', { name: 'All', exact: true }).click();
             if (blockReason()) { failModule(blockReason()); continue; }
             if (!await page.locator('table tbody tr').count() && !/No .*found|No .*match/i.test(await page.locator('body').innerText())) { failModule('WORKFLOW_MISSING'); continue; }
-            if (!reviewWorkflowLoaded || !responses.some(item => item.loaded)) { failModule('WORKFLOW_MISSING'); continue; }
+            if (!observed.state.workflowLoaded || !responses.some(item => item.loaded)) { failModule('WORKFLOW_MISSING'); continue; }
           } else if (!/Workflow|Next owner/i.test(body) || loaded.rows === 0) { failModule('WORKFLOW_MISSING'); continue; }
         }
         checks.push({ module: spec.module, role: identity.role, result: 'pass', kind: spec.workflow ? 'workflow_read' : 'read',
           evidenceId: `compatibility-normal-role:${env.GITHUB_RUN_ID}:${spec.module}` });
         checkAdded = true;
-      } catch { failModule(blockReason() || (navigationLoaded ? (headingLoaded ? 'UNAVAILABLE_SURFACE' : 'MISSING_HEADING') : 'UNAVAILABLE_SURFACE')); }
+      } catch (error) { failModule(blockReason() || (error?.message === 'ACCESS_MISSING' ? 'ACCESS_MISSING' : undefined) || (navigationLoaded ? (headingLoaded ? 'UNAVAILABLE_SURFACE' : 'MISSING_HEADING') : 'UNAVAILABLE_SURFACE')); }
       finally {
         let closeFailed = false;
         try { if (page) await page.close(); } catch { closeFailed = true; }
         if (page && responseObserver) page.off('response', responseObserver);
-        try { await responseSettlement.settle(); } catch { failures.push('MISSING_DATA'); }
+        try { await responseSettlement.settle(); } catch { failures.push(observed.state.pending ? 'DATA_DEADLINE' : 'DATA_JSON_FAILURE'); }
         moduleReason = compatibilityNormalModuleTerminalReason({ reason: moduleReason, failures, blocked: Boolean(blockReason()), closeFailed,
-          workflowRequired: spec.module === 'review', workflowLoaded: reviewWorkflowLoaded });
+          workflowRequired: spec.module === 'review', workflowLoaded: observed.state.workflowLoaded });
         if (checkAdded && moduleReason) checks.pop();
         await normalRoleDiagnosticStage('BROWSER_ISOLATION', () => isolation.assertHeld(spec.module, 'after'), 'ISOLATION_FAILED');
         moduleReasons.set(spec.module, moduleReason || 'PASS');
@@ -343,6 +421,7 @@ export async function verifyRuntimeCompatibilityNormalRole({ env = process.env, 
     try { await browser?.close(); } catch { cleanupError ||= compatibilityNormalDiagnosticError('BROWSER_SETUP', 'BROWSER_UNAVAILABLE'); }
     if (cleanupError) throw cleanupError;
   }
+  if (blockedMutations) throw compatibilityNormalDiagnosticError('MODULES', 'BLOCKED_REQUEST', { moduleReasons, blockedRequest: lastBlockedRequest, deniedRequests });
   browserIsolation = isolation.evidence({ workspacePreferences, telemetryAbortedRequests, blockedRequests: blockedMutations, contextClosed });
   if (!compatibilityBrowserIsolationVerified(browserIsolation, { candidateUrl: url, sha: verified.commit, deploymentId: version.deploymentId,
     sourceDigest: version.provenance.sourceDigest, harnessSha: env.GITHUB_SHA }, COMPATIBILITY_NORMAL_MODULES.map(spec => spec.module))) {

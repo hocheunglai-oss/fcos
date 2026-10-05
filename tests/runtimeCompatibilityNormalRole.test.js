@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { COMPATIBILITY_NORMAL_MODULES, compatibilityNormalRequestAllowed, assertCompatibilityNormalIdentity,
   compatibilityNormalDataLoaded, verifyRuntimeCompatibilityNormalRole, compatibilityLegacyXeroReadRequest,
-  compatibilityNormalDiagnosticError, compatibilityNormalDiagnosticLine, compatibilityNormalModuleTerminalReason, createCompatibilityNormalResponseSettlement } from '../scripts/runtime-compatibility-normal-role.mjs';
+  compatibilityNormalDiagnosticError, compatibilityNormalDiagnosticLine, compatibilityNormalModuleTerminalReason, createCompatibilityNormalResponseSettlement, compatibilityNormalReadResponse, createCompatibilityNormalResponseObserver } from '../scripts/runtime-compatibility-normal-role.mjs';
 import { FIRST_RUNTIME_ROLLOUT, compatibilityReadOnlyGuardsVerified } from '../scripts/lib/runtime-compatibility-release.mjs';
 import { verifyRuntimeCompatibility } from '../scripts/verify-runtime-compatibility.mjs';
 import { fcosConnectionIdentifier } from '../config/fcosConnections.js';
@@ -276,4 +276,81 @@ test('deferred fulfilled but invalid review-workflow JSON withdraws tentative wo
   await tracker.settle();
   assert.equal(compatibilityNormalModuleTerminalReason({ workflowRequired: true, workflowLoaded: reviewWorkflowLoaded }), 'WORKFLOW_MISSING');
   assert.equal(compatibilityNormalModuleTerminalReason({ failures: ['MISSING_DATA'], workflowRequired: true, workflowLoaded: false }), 'MISSING_DATA');
+});
+
+
+test('reviewed Exception Review and master detail shapes pass while aliases, extra controls and reconcile never do', () => {
+  const review = { mode: 'exception_review', trendYear: 2026, dateBasis: 'exception_schedule', dateWindows: [{ startDate: '2026-10-01', endDate: '2026-10-31' }] };
+  const master = { contractId: '12345678-1234-4234-8234-123456789abc', includeLive: true, force: false };
+  const allowed = (name, body) => compatibilityNormalRequestAllowed({ url: `${url}/api/functions/${name}`, method: 'POST', body }, url);
+  assert.equal(allowed('salesforceDashboardFiltered', review), true);
+  assert.equal(allowed('masterContractDetail', master), true);
+  assert.equal(allowed('masterContractDetail', { ...master, includeLive: false }), true);
+  for (const body of [
+    { ...review, Mode: 'exception_review' }, { ...review, mode: 'apply' }, { ...review, action: 'list' },
+    { ...review, trendYear: '2026' }, { ...review, dateBasis: 'dashboard' }, { ...review, dateWindows: [] },
+    { ...review, dateWindows: Array(37).fill(review.dateWindows[0]) },
+    { ...review, dateWindows: [{ startDate: '2026-02-30', endDate: '2026-10-31' }] },
+    { ...review, dateWindows: [{ startDate: '2026-10-31', endDate: '2026-10-01' }] },
+    { ...review, dateWindows: [{ startDate: '2020-01-01', endDate: '2026-10-31' }] },
+    { ...review, dateWindows: [{ ...review.dateWindows[0], mode: 'exception_review' }] },
+    { ...review, dateWindows: [{ ...review.dateWindows[0], force_refresh: false }] },
+  ]) assert.equal(allowed('salesforceDashboardFiltered', body), false);
+  assert.equal(allowed('dashboardStemList', review), false, 'selector exemption cannot cross handlers');
+  for (const body of [{ ...master, force: true }, { ...master, force: undefined }, { ...master, contractId: 'bad' },
+    { ...master, contractId: '12345678-1234-1234-1234-123456789abc' }, { ...master, includeLive: 'true' },
+    { ...master, mode: 'list' }, { ...master, options: { refresh: false } }, { ...master, force_update: false },
+    { contractId: master.contractId, includeLive: true, Force: false }]) assert.equal(allowed('masterContractDetail', body), false);
+  for (const body of [{ force: false }, { force: true }, {}]) assert.equal(allowed('paymentCollectionsReconcile', body), false);
+});
+
+const moduleSpec = module => COMPATIBILITY_NORMAL_MODULES.find(row => row.module === module);
+
+test('module response diagnostics distinguish HTTP, JSON, shape, absent and pending outcomes without leaking private data', async () => {
+  const secret = 'private-email-address-subject-id-url-token';
+  const spec = moduleSpec('email_router');
+  const outcomes = [
+    await compatibilityNormalReadResponse(spec, { ok: () => false, json: () => assert.fail('non-2xx does not need a private body') }),
+    await compatibilityNormalReadResponse(spec, { ok: () => true, json: async () => { throw new Error(secret); } }),
+    await compatibilityNormalReadResponse(spec, { ok: () => true, json: async () => ({ error: secret, messages: [] }) }),
+  ];
+  assert.deepEqual(outcomes.map(row => row.reason), ['DATA_NON_2XX', 'DATA_JSON_FAILURE', 'DATA_SHAPE_REJECTED']);
+  assert.deepEqual(await compatibilityNormalReadResponse(spec, { ok: () => true, json: async () => ({ messages: [{ id: secret, subject: secret }] }) }), { loaded: true, rows: 1 });
+  for (const reason of [...outcomes.map(row => row.reason), 'DATA_NO_RESPONSE', 'DATA_DEADLINE']) {
+    const line = compatibilityNormalDiagnosticLine(compatibilityNormalDiagnosticError('MODULES', reason, { module: spec.module, handler: spec.handler, body: secret, error: secret }));
+    assert.equal(JSON.parse(line).reason, reason);
+    assert.doesNotMatch(line, new RegExp(secret));
+    assert.equal(compatibilityNormalModuleTerminalReason({ failures: [reason] }), reason);
+    assert.equal(compatibilityNormalModuleTerminalReason({ failures: [reason], blocked: true }), 'BLOCKED_REQUEST');
+  }
+  const source = readFileSync(new URL('../scripts/runtime-compatibility-normal-role.mjs', import.meta.url), 'utf8');
+  assert.ok(source.lastIndexOf('if (blockedMutations) throw') > source.indexOf('await context?.close()'), 'late mutation denial after cleanup stays fatal');
+  assert.match(source, /checks.length !== COMPATIBILITY_NORMAL_MODULES.length/);
+});
+
+
+test('actual workflow response observer keeps invalid then valid and valid then late invalid completions fatal', async () => {
+  const spec = moduleSpec('review');
+  const valid = { byStemId: {}, ownerOptions: [] };
+  for (const invalid of [null, { byStemId: null, ownerOptions: [] }, { byStemId: {}, ownerOptions: 'bad' }, { ...valid, error: 'private-workflow-subject-token' }]) {
+    for (const invalidFirst of [true, false]) {
+      const failures = [], responses = [], settlement = createCompatibilityNormalResponseSettlement({ timeoutMs: 1000 });
+      const observer = createCompatibilityNormalResponseObserver(spec, settlement, responses, failures);
+      let finishFirst, finishLast;
+      const first = new Promise(resolve => { finishFirst = resolve; });
+      const last = new Promise(resolve => { finishLast = resolve; });
+      const response = json => ({ url: () => 'https://offline.invalid/api/functions/exceptionReviewWorkflowList', ok: () => true, json: () => json });
+      observer.observe(response(first)); observer.observe(response(last));
+      finishFirst(invalidFirst ? invalid : valid);
+      await new Promise(resolve => setImmediate(resolve));
+      if (!invalidFirst) assert.equal(observer.state.workflowLoaded, true, 'earlier pass is tentative');
+      // Mirror page-close settlement: the last JSON resolves after cleanup starts.
+      setImmediate(() => finishLast(invalidFirst ? valid : invalid));
+      await settlement.settle();
+      assert.ok(failures.includes('DATA_SHAPE_REJECTED'));
+      assert.equal(compatibilityNormalModuleTerminalReason({ failures, workflowRequired: true, workflowLoaded: observer.state.workflowLoaded }), 'DATA_SHAPE_REJECTED');
+      const diagnostic = compatibilityNormalDiagnosticLine(compatibilityNormalDiagnosticError('MODULES', 'DATA_SHAPE_REJECTED', { module: spec.module, handler: spec.handler }));
+      assert.doesNotMatch(diagnostic, /private-workflow/);
+    }
+  }
 });

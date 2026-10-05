@@ -81,8 +81,32 @@ function hedgeReadRequest(body) {
   return true;
 }
 
+// Frozen Exception Review navigation sends this selector, not a mutation mode.
+// Its exemption is exact and top-level; recursively inspected filters remain closed.
+function exceptionReviewReadRequest(body) {
+  if (Object.keys(body).length !== 4 || !Object.keys(body).every(key => ['mode', 'trendYear', 'dateBasis', 'dateWindows'].includes(key))
+    || body.mode !== 'exception_review' || body.dateBasis !== 'exception_schedule'
+    || !Number.isSafeInteger(body.trendYear) || body.trendYear < 2000 || body.trendYear > 2100
+    || !Array.isArray(body.dateWindows) || body.dateWindows.length < 1 || body.dateWindows.length > 36) return false;
+  const date = value => typeof value === 'string' && /^(?:20[0-9]{2}|2100)-[0-9]{2}-[0-9]{2}$/.test(value)
+    && Number.isFinite(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
+  return body.dateWindows.every(window => plainObject(window) && Object.keys(window).length === 2
+    && Object.keys(window).every(key => ['startDate', 'endDate'].includes(key))
+    && date(window.startDate) && date(window.endDate) && window.startDate <= window.endDate
+    && Date.parse(window.endDate) - Date.parse(window.startDate) <= 366 * 86400000);
+}
+
+function masterContractDetailReadRequest(body) {
+  return Object.keys(body).length === 3 && Object.keys(body).every(key => ['contractId', 'includeLive', 'force'].includes(key))
+    && typeof body.contractId === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(body.contractId)
+    && typeof body.includeLive === 'boolean' && body.force === false;
+}
+
 export function normalRoleReadRequest(name, body = {}) {
-  if (!plainObject(body) || !readBody(body)) return false;
+  if (!plainObject(body)) return false;
+  if (name === 'salesforceDashboardFiltered' && body.mode === 'exception_review') return exceptionReviewReadRequest(body);
+  if (name === 'masterContractDetail') return masterContractDetailReadRequest(body);
+  if (!readBody(body)) return false;
   if (name === 'emailRouterAttachmentUrl') return Object.keys(body).length === 2
     && Object.entries(PREVIEW_EMAIL_SIGNER_BODY).every(([key, value]) => body[key] === value);
   if (name === 'hedgeDeskEntity') return hedgeReadRequest(body);

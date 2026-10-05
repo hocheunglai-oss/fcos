@@ -28,7 +28,7 @@ export function stripNormalRoleResponseProtectionHeaders(headers) {
  * receive clean headers, protecting their own existing authentication headers.
  */
 export const NORMAL_ROLE_REQUEST_CATEGORIES = Object.freeze([
-  'DEDICATED_NOTIFICATIONS', 'BACKGROUND_SYNC', 'PREFERENCE_INITIALIZATION', 'TELEMETRY', 'AUTH_REFRESH', 'UNKNOWN',
+  'DEDICATED_NOTIFICATIONS', 'BACKGROUND_SYNC', 'PREFERENCE_INITIALIZATION', 'TELEMETRY', 'AUTH_REFRESH', 'REVIEW_READ', 'MASTER_CONTRACT_DETAIL_READ', 'PAYMENT_COLLECTIONS_RECONCILE', 'UNKNOWN',
 ]);
 const resourceTypes = new Set(['document', 'stylesheet', 'image', 'media', 'font', 'script', 'texttrack', 'xhr', 'fetch', 'eventsource', 'websocket', 'manifest', 'other']);
 export function normalRoleRequestDiagnostic({ url, method, resourceType }, origin) {
@@ -36,7 +36,10 @@ export function normalRoleRequestDiagnostic({ url, method, resourceType }, origi
   try { target = new URL(url); } catch { /* Unknown remains a fixed category. */ }
   let category = 'UNKNOWN';
   if (target?.origin === origin) {
-    if (target.pathname === '/api/work-notifications') category = 'DEDICATED_NOTIFICATIONS';
+    if (target.pathname === '/api/functions/salesforceDashboardFiltered') category = 'REVIEW_READ';
+    else if (target.pathname === '/api/functions/masterContractDetail') category = 'MASTER_CONTRACT_DETAIL_READ';
+    else if (target.pathname === '/api/functions/paymentCollectionsReconcile') category = 'PAYMENT_COLLECTIONS_RECONCILE';
+    else if (target.pathname === '/api/work-notifications') category = 'DEDICATED_NOTIFICATIONS';
     else if (target.pathname === '/api/email-router-background-sync' || target.pathname === '/api/functions/emailRouterBackgroundSync') category = 'BACKGROUND_SYNC';
     else if (target.pathname === '/api/functions/workspacePreferencesSave') category = 'PREFERENCE_INITIALIZATION';
     else if (target.pathname.startsWith('/_vercel/speed-insights/')) category = 'TELEMETRY';
