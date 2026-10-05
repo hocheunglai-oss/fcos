@@ -60,3 +60,105 @@ test('changed account membership withdraws the analysis despite unchanged STEM I
   } }), /scope changed/);
   await assert.rejects(loadDashboardBuyerPaymentAnalysis({ ...options, expectedAccounts: {} }), /trusted dashboard/);
 });
+
+function syntheticScope(count) {
+  const scopedStemIds = Array.from({ length: count }, (_, index) => `a0H${String(index + 1).padStart(12, '0')}AAA`);
+  return { scopedStemIds, expectedAccounts: Object.fromEntries(scopedStemIds.map((id, index) => [id.slice(0, 15), `001${String(index + 1).padStart(12, '0')}AAA`])) };
+}
+function queryScope(soql) {
+  return [...soql.match(/WHERE (?:Id|STEM__c) IN \(([^)]+)\)/)[1].matchAll(/'([A-Za-z0-9]+)'/g)].map((match) => match[1]);
+}
+function objectName(soql) { return soql.match(/ FROM ([A-Za-z_]+)/)[1]; }
+
+for (const count of [200, 5000]) {
+  test(`${count} STEMs are split by encoded size without dropping scope or removing access guards`, async () => {
+    const scope = syntheticScope(count);
+    const seen = { STEM__c: [], Invoice__c: [], Payment__c: [] };
+    let calls = 0;
+    const result = await loadDashboardBuyerPaymentAnalysis({ ...options, ...scope, stemAccessWhere: "Id != null AND Account__r.Name != '香港 & special buyer'", query: async (soql) => {
+      calls++;
+      assert.ok(Buffer.byteLength(`/query/?q=${encodeURIComponent(soql)}`) <= 12288);
+      assert.ok(soql.includes("Account__r.Name != '香港 & special buyer'"));
+      assert.ok(soql.includes('Account__r.Inactive_Suspended__c = false'));
+      const object = objectName(soql);
+      if (object !== 'STEM__c') assert.ok(soql.includes('STEM__c IN (SELECT Id FROM STEM__c'));
+      const ids = queryScope(soql);
+      assert.ok(ids.length <= 200);
+      for (const id of ids) assert.ok(soql.includes(`(Id = '${id}' AND Account__c = '${scope.expectedAccounts[id.slice(0, 15)]}')`));
+      seen[object].push(...ids);
+      const records = object === 'STEM__c' ? ids.map((Id) => ({ Id, Account__c: scope.expectedAccounts[Id.slice(0, 15)] })) : [];
+      return { records, totalSize: records.length };
+    } });
+    for (const ids of Object.values(seen)) assert.deepEqual(ids, scope.scopedStemIds);
+    assert.equal(result.complete, true);
+    assert.equal(result.timing.queryCount, calls);
+    assert.ok(calls > 3 * Math.ceil(count / 200));
+  });
+}
+
+test('query sizing includes long object metadata and counts independently sized batches', async () => {
+  const scope = syntheticScope(200);
+  const references = Array.from({ length: 100 }, (_, index) => ({ name: `Supplier_Invoice_Link_${index}__c`, type: 'reference', referenceTo: ['Supplier_Invoice__c'] }));
+  const calls = { STEM__c: 0, Invoice__c: 0, Payment__c: 0 };
+  const result = await loadDashboardBuyerPaymentAnalysis({ ...options, ...scope, describe: async (object) => ({ fields: [...schemas[object].map((name) => ({ name })), ...(object === 'Payment__c' ? references : [])] }), query: async (soql) => {
+    assert.ok(Buffer.byteLength(`/query/?q=${encodeURIComponent(soql)}`) <= 12288);
+    const object = objectName(soql); calls[object]++;
+    const records = object === 'STEM__c' ? queryScope(soql).map((Id) => ({ Id, Account__c: scope.expectedAccounts[Id.slice(0, 15)] })) : [];
+    return { records, totalSize: records.length };
+  } });
+  assert.ok(calls.Payment__c > calls.STEM__c);
+  assert.equal(result.timing.queryCount, Object.values(calls).reduce((a, b) => a + b, 0));
+});
+
+test('an oversized access guard or singleton fails before any evidence or currency query', async () => {
+  let metadata = 0; let reads = 0;
+  await assert.rejects(loadDashboardBuyerPaymentAnalysis({ ...options, stemAccessWhere: 'X'.repeat(13000), describe: async () => { metadata++; }, query: async () => { reads++; } }), { code: 'DASHBOARD_PAYMENT_ANALYSIS_SCOPE_TOO_LARGE' });
+  assert.equal(metadata, 0); assert.equal(reads, 0);
+  await assert.rejects(loadDashboardBuyerPaymentAnalysis({ ...options, describe: async (object) => ({ fields: [
+    ...schemas[object].filter((name) => name !== 'CurrencyIsoCode').map((name) => ({ name })),
+    ...(object === 'Payment__c' ? [{ name: 'Supplier_' + 'X'.repeat(13000) + '__c', type: 'reference', referenceTo: ['Supplier_Invoice__c'] }] : []),
+  ] }), query: async () => { reads++; }, readOrganization: async () => { reads++; } }), { code: 'DASHBOARD_PAYMENT_ANALYSIS_SCOPE_TOO_LARGE' });
+  assert.equal(reads, 0);
+});
+
+test('provider failures cannot expose SOQL, record IDs or provider details through the public API', async () => {
+  const { publicApiErrorPayload } = await import('../api/_publicApiError.js');
+  const single = async (object) => ({ fields: schemas[object].filter((name) => name !== 'CurrencyIsoCode').map((name) => ({ name })) });
+  const { fcosSalesforceEnvironment } = await import('../config/fcosConnections.js');
+  const target = fcosSalesforceEnvironment('production');
+  for (const status of [400, 414, 503]) {
+    const providerError = Object.assign(new Error(`GET /query/?q=SELECT Id '${stemId}' SECRET_PRIVATE_DETAIL failed`), { status, expose: true });
+    const reject = async () => { throw providerError; };
+    const organizationQuery = async () => ({ records: [{ Id: target.orgId, IsSandbox: false }] });
+    for (const provider of [
+      { query: reject },
+      { describe: reject, query: reject },
+      { describe: single, query: organizationQuery, readOrganization: reject },
+    ]) {
+      await assert.rejects(loadDashboardBuyerPaymentAnalysis({ ...options, ...provider }), (error) => {
+        assert.equal(error.status, 503);
+        assert.equal(error.code, 'DASHBOARD_PAYMENT_ANALYSIS_READ_FAILED');
+        const payload = JSON.stringify(publicApiErrorPayload(error, error.status, 'test-request'));
+        assert.doesNotMatch(payload, /SELECT|query\/|a00000000000001|SECRET_PRIVATE_DETAIL/);
+        assert.equal(error.cause, undefined);
+        return true;
+      });
+    }
+  }
+});
+
+test('malformed and oversized evidence cannot return a partial analysis', async () => {
+  for (const result of [null, undefined, {}, { records: null }, { records: [], totalSize: 1 }]) {
+    await assert.rejects(loadDashboardBuyerPaymentAnalysis({ ...options, query: async () => result }), { code: 'DASHBOARD_PAYMENT_ANALYSIS_INCOMPLETE' });
+  }
+  const scope = syntheticScope(200);
+  let invoiceBatches = 0;
+  await assert.rejects(loadDashboardBuyerPaymentAnalysis({ ...options, ...scope, query: async (soql) => {
+    const object = objectName(soql);
+    let records = [];
+    if (object === 'STEM__c') records = queryScope(soql).map((Id) => ({ Id, Account__c: scope.expectedAccounts[Id.slice(0, 15)] }));
+    if (object === 'Invoice__c') { invoiceBatches++; records = Array.from({ length: 11000 }, () => ({ STEM__c: queryScope(soql)[0] })); }
+    return { records, totalSize: records.length };
+  } }), /complete invoice and payment evidence/);
+  assert.equal(invoiceBatches, 2);
+});
