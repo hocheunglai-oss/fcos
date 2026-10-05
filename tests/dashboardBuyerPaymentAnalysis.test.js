@@ -237,3 +237,12 @@ test('ranks qualifying buyers first without mutating source rows or source order
   assert.equal(result.buyers[1].sampleStatus, 'insufficient');
   assert.equal(JSON.stringify(dataset), original);
 });
+
+test('accepts Salesforce REST basic-offset audit timestamps without shifting Hong Kong calendar days', () => {
+  const stem = { Id: 'a00000000000001AAA', Account__c: '001000000000001AAA', Account__r: { Name: 'Buyer' }, Delivery_Date__c: '2026-09-01', CurrencyIsoCode: 'USD', Total_Invoice_Amount__c: 100, QLIK_Receivable_Balance__c: 0 };
+  const invoice = { Id: 'a01000000000001AAA', STEM__c: stem.Id, Name: 'INV', CreatedDate: '2026-09-01T16:30:00.000+0000', Invoice_Due_Date__c: '2026-09-09', Amount__c: 100, CurrencyIsoCode: 'USD', Proforma__c: false, Deprecated__c: false };
+  const payment = { Id: 'a02000000000001AAA', STEM__c: stem.Id, Account__c: stem.Account__c, Amount__c: 100, Date__c: '2026-09-08', CurrencyIsoCode: 'USD', RecordType: { DeveloperName: 'Receivable' }, Is_Deposit__c: false, Is_Volume_Discount__c: false, Commission_Invoice__c: null };
+  const result = buildDashboardBuyerPaymentAnalysis({ stems: [stem], invoices: [invoice], payments: [payment], today: '2026-10-05' });
+  assert.equal(result.buyers[0].medianCreationLeadDays, 7);
+  assert.equal(result.buyers[0].earlyPaidCount, 1);
+});

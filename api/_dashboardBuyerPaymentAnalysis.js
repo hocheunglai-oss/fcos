@@ -18,7 +18,7 @@ function calendarDate(value) {
 
 function hongKongCreationDate(value) {
   // CreatedDate is an audit timestamp, never an invoice accounting date.
-  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(value)) return null;
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:?\d{2})$/.test(value)) return null;
   if (!calendarDate(value.slice(0, 10))) return null;
   const clock = value.slice(11, 19).split(':').map(Number);
   if (clock[0] > 23 || clock[1] > 59 || clock[2] > 59) return null;
