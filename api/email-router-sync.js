@@ -1,5 +1,6 @@
 import { timingSafeEqual } from 'node:crypto';
 import { createEmailRouterServiceClient, currentEmailRouterMailbox, syncEmailRouterFolderFromStoredCursor } from './_emailRouterCore.js';
+import { requireDeploymentMutationAllowed } from './_deploymentReadOnly.js';
 
 const CONTRACT_VERSION = 'emailrouter-fcos-operational-migration/v1';
 const ALLOWED_FOLDERS = new Set(['inbox', 'sentitems', 'archive']);
@@ -44,10 +45,11 @@ function validateRequest(value) {
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return json(res, 405, { error: 'Method not allowed.' });
-  if (!authorized(req, String(process.env.FCOS_EMAIL_ROUTER_SYNC_SECRET || '').trim())) {
-    return json(res, 401, { error: 'Synchronization authorization failed.' });
-  }
   try {
+    requireDeploymentMutationAllowed(true);
+    if (!authorized(req, String(process.env.FCOS_EMAIL_ROUTER_SYNC_SECRET || '').trim())) {
+      return json(res, 401, { error: 'Synchronization authorization failed.' });
+    }
     const request = validateRequest(await requestBody(req));
     const client = createEmailRouterServiceClient();
     const mailbox = await currentEmailRouterMailbox(client);

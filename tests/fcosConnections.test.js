@@ -5,6 +5,7 @@ import path from 'node:path';
 import { readFile } from 'node:fs/promises';
 import {
   canonicalGitRemote,
+  probeToolingAccount,
   githubConfigDirectory,
   githubCredentialHelperValue,
   mergeSafeConnectionStatus,
@@ -17,13 +18,16 @@ import {
 const connectionProviderIds = ['github', 'vercel', 'supabase', 'salesforce'];
 
 function connectionReport(provider, marker = provider) {
-  return { provider, marker };
+  return { provider, cliVersion: marker === 'old' ? '1.0.0' : '2.0.0', identityStatus: 'verified', identityVerified: true, cliVersionStatus: 'approved', targetPin: 'verified', permissionStatus: 'verified', permissions: [] };
 }
 
 test('connection runner resolves GitHub remotes without accepting other hosts', () => {
   assert.equal(canonicalGitRemote('https://github.com/hocheunglai-oss/fcos.git'), 'hocheunglai-oss/fcos');
   assert.equal(canonicalGitRemote('git@github.com:hocheunglai-oss/fcos.git'), 'hocheunglai-oss/fcos');
   assert.equal(canonicalGitRemote('https://example.com/hocheunglai-oss/fcos.git'), '');
+  assert.equal(canonicalGitRemote('http://github.com/hocheunglai-oss/fcos.git'), '');
+  assert.equal(canonicalGitRemote('https://credential@github.com/hocheunglai-oss/fcos.git'), '');
+  assert.equal(canonicalGitRemote('https://github.com:443/hocheunglai-oss/fcos.git'), 'hocheunglai-oss/fcos');
 });
 
 test('connection runtimes select pinned executables and repo-local provider configuration', () => {
@@ -127,8 +131,8 @@ test('provider-specific checks merge into the safe status without erasing other 
   );
 
   assert.deepEqual(Object.keys(value.providers).sort(), [...connectionProviderIds].sort());
-  assert.equal(value.providers.salesforce.marker, 'new');
-  assert.equal(value.providers.github.marker, 'old');
+  assert.equal(value.providers.salesforce.cliVersion, '2.0.0');
+  assert.equal(value.providers.github.cliVersion, '1.0.0');
   assert.deepEqual(value.publication, current.publication);
 });
 
@@ -145,7 +149,7 @@ test('complete connection checks replace stale providers and publication evidenc
   const value = mergeSafeConnectionStatus(current, reports, publication, '2026-08-30T01:00:00.000Z');
 
   assert.deepEqual(Object.keys(value.providers).sort(), [...connectionProviderIds].sort());
-  assert.ok(Object.values(value.providers).every(({ marker }) => marker === 'new'));
+  assert.ok(Object.values(value.providers).every(({ cliVersion }) => cliVersion === '2.0.0'));
   assert.deepEqual(value.publication, publication);
 });
 
@@ -155,4 +159,35 @@ test('full-stack development uses the verified Vercel runner', async () => {
     packageJson.scripts['dev:full'],
     'node scripts/dev-server.mjs -- node scripts/fcos-connections.mjs run vercel -- dev',
   );
+});
+
+
+test('provider runtimes strip inherited target, debug and unrelated credential overrides', () => {
+  const previous = { ...process.env };
+  try {
+    Object.assign(process.env, { OPENAI_API_KEY: 'test-private-value', GH_DEBUG: 'api', VERCEL_PROJECT_ID: 'wrong', VERCEL_ORG_ID: 'wrong', SF_ACCESS_TOKEN: 'test-private-value', SF_STATE_FOLDER: '/tmp/wrong' });
+    for (const provider of connectionProviderIds) {
+      const runtime = providerRuntime(provider, { requireCredential: false, prepare: false });
+      assert.equal(runtime.env.OPENAI_API_KEY, undefined);
+      assert.equal(runtime.env.GH_DEBUG, undefined);
+      assert.equal(runtime.env.SF_ACCESS_TOKEN, undefined);
+      assert.equal(runtime.env.SF_STATE_FOLDER, undefined);
+      if (provider === 'vercel') {
+        assert.equal(runtime.env.VERCEL_PROJECT_ID, undefined);
+        assert.equal(runtime.env.VERCEL_ORG_ID, undefined);
+      }
+    }
+  } finally {
+    for (const name of Object.keys(process.env)) if (!(name in previous)) delete process.env[name];
+    Object.assign(process.env, previous);
+  }
+});
+
+test('account discovery is a target-free first step and fails closed on wrong identities', async () => {
+  for (const provider of ['github','vercel']) {
+    const calls=[];
+    assert.deepEqual(await probeToolingAccount(provider, async (id,args)=>{calls.push({id,args});return {ok:true,stdout:'wrong-account'};}), {verified:false,status:'mismatch'});
+    assert.equal(calls.length,1);
+    assert.deepEqual(calls[0].args,provider==='github'?['api','user','--jq','.login']:['whoami']);
+  }
 });

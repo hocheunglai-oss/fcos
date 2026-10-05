@@ -17,10 +17,14 @@ async function requestEntities(payload, options = { cache: false }) {
     ...options,
     invalidateCache: options.invalidateCache ?? mutates,
     onBackgroundUpdate: backgroundUpdate
-      ? (result) => backgroundUpdate(result.data?.data)
+      ? (result) => {
+        if (!result.data?.error && !result.data?.cancelled && !result.meta?.cancelled && result.data?.data != null) backgroundUpdate(result.data.data);
+      }
       : undefined,
   });
+  if (response.data?.cancelled || response.meta?.cancelled) throw Object.assign(new Error('The Hedge Desk request was cancelled.'), { name: 'AbortError' });
   if (response.data?.error) throw new Error(response.data.error);
+  if (response.data?.data == null) throw new Error('The Hedge Desk response could not be read. Refresh the saved result before retrying.');
   return response.data?.data;
 }
 

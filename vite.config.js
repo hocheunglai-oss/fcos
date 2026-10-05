@@ -17,13 +17,16 @@ export default defineConfig({
     react(),
   ],
   build: {
+    manifest: true,
     target: 'es2022',
-    // Preserve release size budgets as independently developed features converge.
+    // Use the existing ES2022 target for equivalent smaller output, without unsafe transforms.
     minify: 'terser',
-    terserOptions: { compress: { passes: 2 } },
+    terserOptions: { ecma: 2022, compress: { passes: 3 } },
     rollupOptions: {
       output: {
         manualChunks(id) {
+          // Shared quota formatting must not pull the lazy credit retry back into the campaign.
+          if (id.endsWith('/src/lib/xeroCampaignQuota.js')) return 'xero-campaign-quota';
           if (!id.includes('node_modules')) return undefined;
           if (id.includes('/react/') || id.includes('/react-dom/') || id.includes('/react-router') || id.includes('/scheduler/')) return 'react-platform';
           if (id.includes('/@supabase/') || id.includes('/@tanstack/react-query/')) return 'data-platform';

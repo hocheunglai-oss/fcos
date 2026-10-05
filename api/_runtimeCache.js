@@ -7,6 +7,8 @@ import {
 } from './_requestTelemetry.js';
 
 export const RUNTIME_CACHE_MAX_BYTES = Math.floor(1.8 * 1024 * 1024);
+export const LOCAL_RUNTIME_CACHE_MAX_ENTRIES = 64;
+export const LOCAL_RUNTIME_CACHE_MAX_BYTES = 16 * 1024 * 1024;
 
 const localEntries = new Map();
 const inFlightLoads = new Map();
@@ -80,21 +82,44 @@ export function runtimeCacheJsonSize(value) {
   return Buffer.byteLength(JSON.stringify(value), 'utf8');
 }
 
-export function createMemoryRuntimeCacheAdapter(entries = new Map()) {
+export function createMemoryRuntimeCacheAdapter(entries = new Map(), { maxEntries = LOCAL_RUNTIME_CACHE_MAX_ENTRIES, maxBytes = LOCAL_RUNTIME_CACHE_MAX_BYTES } = {}) {
+  if (!Number.isSafeInteger(maxEntries) || maxEntries < 1 || !Number.isSafeInteger(maxBytes) || maxBytes < 1) throw new TypeError('Local cache bounds must be positive integers');
+  // This fallback can outlive thousands of distinct queries in a warm process.
+  // Bound retained values as well as key count; eviction only causes a reload.
+  const sizes = new Map([...entries].map(([key, value]) => [key, runtimeCacheJsonSize(value)]));
+  let bytes = [...sizes.values()].reduce((total, size) => total + size, 0);
+  const remove = (key) => {
+    bytes -= sizes.get(key) || 0;
+    sizes.delete(key);
+    entries.delete(key);
+  };
+  const trim = () => {
+    while (entries.size > maxEntries || bytes > maxBytes) remove(entries.keys().next().value);
+  };
+  trim();
   return {
     async get(key) {
-      return entries.get(key) ?? null;
+      const entry = entries.get(key);
+      if (entry !== undefined) { entries.delete(key); entries.set(key, entry); }
+      return entry ?? null;
     },
     async set(key, value) {
+      const size = runtimeCacheJsonSize(value);
+      remove(key);
+      if (size > maxBytes) return;
       entries.set(key, value);
+      sizes.set(key, size);
+      bytes += size;
+      trim();
     },
     async delete(key) {
-      entries.delete(key);
+      remove(key);
     },
+    clear() { entries.clear(); sizes.clear(); bytes = 0; },
     async expireTags(tags) {
       const tagSet = new Set(normalizeRuntimeCacheTags(tags));
       for (const [key, entry] of entries) {
-        if (entry?.tags?.some((tag) => tagSet.has(tag))) entries.delete(key);
+        if (entry?.tags?.some((tag) => tagSet.has(tag))) remove(key);
       }
     },
   };
@@ -341,7 +366,7 @@ export async function expireRuntimeCacheTags(tags, { cacheAdapter } = {}) {
 }
 
 export function resetRuntimeCacheForTests() {
-  localEntries.clear();
+  localAdapter.clear();
   inFlightLoads.clear();
   latestLoadTokens.clear();
   vercelAdapterPromise = null;

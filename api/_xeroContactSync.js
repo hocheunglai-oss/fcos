@@ -1,10 +1,13 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { requireDeploymentMutationAllowed } from './_deploymentReadOnly.js';
 import { createClient } from '@supabase/supabase-js';
 import { requireExternalActionGate } from './_externalActionGates.js';
 import { serverSupabaseConfig } from './_supabaseConfig.js';
 import { sfQuery } from './_salesforce.js';
 import { recordSupabaseRequest } from './_requestTelemetry.js';
 import { fcosSalesforceEnvironment } from '../config/fcosConnections.js';
+import { xeroRateLimitError, xeroRequestGate, xeroRetryAfterMs } from './_xeroRateLimit.js';
+import { bindXeroSharedControl, createXeroSharedControl, xeroSharedContext, xeroControlError } from './_xeroSharedControl.js';
 
 const SALESFORCE_PRODUCTION_ORG_ID = fcosSalesforceEnvironment('production').orgId;
 const MAX_JSON_BODY_BYTES = 256 * 1024;
@@ -621,76 +624,78 @@ async function xeroAuditStatus(client, env) {
   };
 }
 
-export async function getFreshXeroConnection(client, { env, fetchImpl }) {
-  const stored = await readStoredXeroConnection(client);
+export async function getFreshXeroConnection(client, { env = process.env, fetchImpl = fetch, sharedControl } = {}) {
+  const control = sharedControl || createXeroSharedControl(client);
+  const stored = await readStoredXeroConnection(client, { sharedControl: control });
+  // Existing valid access does not depend on renewal configuration being present.
+  if (stored?.accessToken && stored?.tenantId && Date.parse(stored.expiresAt || '') > Date.now() + 90_000) return stored;
+  requireDeploymentMutationAllowed(true, env);
+  if (!stored?.tenantId || !stored?.tokenVersion) throw xeroControlError('XERO_CONNECTION_REQUIRED');
   const config = xeroConfig(env, stored);
-  if (!config.configured) {
-    throw xeroContactSyncError(`Missing Xero configuration: ${config.missing.join(', ')}`, 503, 'XERO_CONTACT_SYNC_XERO_CONFIG_MISSING', true);
+  if (!config.configured) throw xeroControlError('XERO_CONNECTION_RENEWAL_UNAVAILABLE');
+  const leaseId = randomUUID();
+  const identity = { tenantId: stored.tenantId, tokenVersion: stored.tokenVersion, leaseId };
+  const claim = await control.claimRefresh(identity);
+  if (claim.state === 'changed') {
+    const latest = await readStoredXeroConnection(client, { sharedControl: control });
+    if (latest?.accessToken && Date.parse(latest.expiresAt || '') > Date.now() + 90_000) return latest;
+    throw xeroControlError('XERO_CONNECTION_CHANGED');
   }
-  if (stored?.accessToken && stored?.tenantId && Date.parse(stored.expiresAt || '') > Date.now() + 90_000) {
-    return stored;
+  if (claim.state !== 'claimed') throw xeroControlError(claim.state === 'revoked' ? 'XERO_CONNECTION_REVOKED' : claim.state === 'uncertain' ? 'XERO_RENEWAL_OUTCOME_UNKNOWN' : 'XERO_RENEWAL_IN_PROGRESS', { outcomeUnknown: claim.state === 'uncertain' });
+  let token;
+  try {
+    token = await requestXeroToken(config, new URLSearchParams({ grant_type: 'refresh_token', refresh_token: config.refreshToken }), fetchImpl);
+  } catch (error) {
+    const state = error?.code === 'XERO_CONNECTION_REVOKED' ? 'revoked' : error?.safeRenewalRetry === true ? 'superseded' : 'uncertain';
+    const recorded = await control.failRefresh({ ...identity, state }).catch(() => null);
+    if (recorded === false) {
+      const latest = await readStoredXeroConnection(client, { sharedControl: control });
+      if (latest?.tokenVersion !== stored.tokenVersion && latest?.accessToken && Date.parse(latest.expiresAt || '') > Date.now() + 90_000) return latest;
+    }
+    if (state === 'uncertain') throw xeroControlError('XERO_RENEWAL_OUTCOME_UNKNOWN', { outcomeUnknown: true });
+    throw error;
   }
-
-  const token = await requestXeroToken(config, new URLSearchParams({
-    grant_type: 'refresh_token',
-    refresh_token: config.refreshToken,
-  }), fetchImpl);
-  const tenant = await resolveXeroTenant({
-    accessToken: token.access_token,
-    stored,
-    env,
-    fetchImpl,
-  });
+  const expiresAtMs = Date.now() + Number(token?.expires_in) * 1000;
+  if (!token?.access_token || !token?.refresh_token || !Number.isFinite(Number(token.expires_in)) || Number(token.expires_in) <= 0
+    || !Number.isFinite(new Date(expiresAtMs).getTime())) {
+    await control.failRefresh({ ...identity, state: 'uncertain' }).catch(() => {});
+    throw xeroControlError('XERO_RENEWAL_OUTCOME_UNKNOWN', { outcomeUnknown: true });
+  }
   const refreshed = {
-    tenantId: tenant.tenantId,
-    tenantName: tenant.tenantName,
-    accessToken: token.access_token,
-    refreshToken: token.refresh_token || config.refreshToken,
-    expiresAt: new Date(Date.now() + Number(token.expires_in || 1800) * 1000).toISOString(),
-    scope: token.scope || stored?.scope || env.XERO_SCOPES || '',
+    tenantId: stored.tenantId, tenantName: stored.tenantName,
+    accessToken: token.access_token, refreshToken: token.refresh_token,
+    expiresAt: new Date(expiresAtMs).toISOString(),
+    scope: token.scope || stored.scope || '',
   };
-  await writeStoredXeroConnection(client, refreshed);
-  return refreshed;
+  try {
+    const saved = await control.finishRefresh({ ...identity, connection: refreshed });
+    refreshed.tokenVersion = saved.tokenVersion;
+  } catch (error) {
+    await control.failRefresh({ ...identity, state: 'uncertain' }).catch(() => {});
+    if (error?.code === 'XERO_CONNECTION_CHANGED') throw error;
+    throw xeroControlError('XERO_RENEWAL_OUTCOME_UNKNOWN', { outcomeUnknown: true });
+  }
+  return bindXeroSharedControl(refreshed, control);
 }
 
-export async function readStoredXeroConnection(client) {
-  const { data, error } = await client
-    .from('xero_contact_sync_connections')
-    .select('*')
-    .eq('id', 'primary')
-    .maybeSingle();
+export async function readStoredXeroConnection(client, { sharedControl } = {}) {
+  const { data, error } = await client.from('xero_contact_sync_connections').select('*').eq('id', 'primary').maybeSingle();
   if (error) throw error;
   if (!data) return null;
-  return {
-    tenantId: data.tenant_id || '',
-    tenantName: data.tenant_name || '',
-    accessToken: data.access_token || '',
-    refreshToken: data.refresh_token || '',
-    expiresAt: data.expires_at || '',
-    scope: data.scope || '',
-  };
+  return bindXeroSharedControl({
+    tenantId: data.tenant_id || '', tenantName: data.tenant_name || '',
+    accessToken: data.access_token || '', refreshToken: data.refresh_token || '',
+    expiresAt: data.expires_at || '', scope: data.scope || '', tokenVersion: Number(data.token_version),
+  }, sharedControl || createXeroSharedControl(client));
 }
 
-export async function writeStoredXeroConnection(client, connection) {
-  const now = new Date().toISOString();
-  const { data: previous, error: previousError } = await client
-    .from('xero_contact_sync_connections')
-    .select('token_version')
-    .eq('id', 'primary')
-    .maybeSingle();
-  if (previousError) throw previousError;
-  const { error } = await client.from('xero_contact_sync_connections').upsert({
-    id: 'primary',
-    tenant_id: connection.tenantId,
-    tenant_name: connection.tenantName,
-    access_token: connection.accessToken,
-    refresh_token: connection.refreshToken,
-    expires_at: connection.expiresAt,
-    scope: connection.scope,
-    token_version: Number(previous?.token_version || 0) + 1,
-    updated_at: now,
-  }, { onConflict: 'id' });
+export async function writeStoredXeroConnection(client, connection, { sharedControl } = {}) {
+  const { data: previous, error } = await client.from('xero_contact_sync_connections').select('token_version').eq('id', 'primary').maybeSingle();
   if (error) throw error;
+  const control = sharedControl || createXeroSharedControl(client);
+  const result = await control.reconnect({ tokenVersion: Number(previous?.token_version || 0), connection });
+  connection.tokenVersion = result.tokenVersion;
+  bindXeroSharedControl(connection, control);
 }
 
 export function xeroConfig(env, stored = null) {
@@ -714,8 +719,15 @@ export async function requestXeroToken(config, body, fetchImpl) {
       Accept: 'application/json',
     },
     body,
+    signal: AbortSignal.timeout(60_000),
   });
-  if (!response.ok) throw xeroContactSyncError(await formatXeroError(response), response.status || 502, 'XERO_CONTACT_SYNC_TOKEN_FAILED');
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    const revoked = payload?.error === 'invalid_grant';
+    const failure = xeroControlError(revoked ? 'XERO_CONNECTION_REVOKED' : 'XERO_CONNECTION_RENEWAL_UNAVAILABLE');
+    failure.safeRenewalRetry = response.status >= 400 && response.status < 500 && response.status !== 429;
+    throw failure;
+  }
   return response.json();
 }
 
@@ -735,24 +747,44 @@ export async function resolveXeroTenant({ accessToken, stored, env, fetchImpl })
 }
 
 export async function listXeroContactsForRename(connection, { env, fetchImpl }) {
+  return (await listXeroContactsComplete(connection, { env, fetchImpl })).contacts;
+}
+
+export async function listXeroContactsComplete(connection, { env, fetchImpl, contactMapper = toXeroContactForRename }) {
   const contacts = [];
-  let page = 1;
-  while (true) {
+  const seen = new Set();
+  let expectedCount = null; let expectedPages = null;
+  const incomplete = () => xeroContactSyncError('The complete Xero contact list could not be verified. Refresh before changing contacts.', 502, 'XERO_CONTACT_LIST_INCOMPLETE');
+  for (let page = 1; page <= 1000; page += 1) {
     const params = new URLSearchParams({ includeArchived: 'true', page: String(page), pageSize: '100' });
     const response = await xeroAccountingFetch(connection, `/Contacts?${params}`, {
-      method: 'GET',
-      retryOnRateLimit: true,
-      env,
-      fetchImpl,
+      method: 'GET', retryOnRateLimit: true, env, fetchImpl,
     });
-    const pageContacts = Array.isArray(response.Contacts) ? response.Contacts : [];
-    contacts.push(...pageContacts.filter((contact) => contact.ContactID).map(toXeroContactForRename));
-    const pageCount = Number(response.pagination?.pageCount || 0);
-    if ((pageCount && page >= pageCount) || pageContacts.length < 100) break;
-    page += 1;
+    if (!Array.isArray(response.Contacts) || response.Contacts.length > 100) throw incomplete();
+    const pageContacts = response.Contacts;
+    const pagination = response.pagination;
+    if (pagination != null && (typeof pagination !== 'object' || Array.isArray(pagination))) throw incomplete();
+    for (const [field, previous] of [['itemCount', expectedCount], ['pageCount', expectedPages]]) {
+      if (pagination?.[field] === undefined) { if (previous !== null) throw incomplete(); continue; }
+      const value = pagination[field];
+      if (!Number.isInteger(value) || value < 0 || (previous !== null && previous !== value)) throw incomplete();
+      if (field === 'itemCount') expectedCount = value; else expectedPages = value;
+    }
+    if ((expectedPages === 0 && pageContacts.length > 0) || expectedPages > 1000 || (pagination?.page !== undefined && pagination.page !== page)
+      || (pagination?.pageSize !== undefined && pagination.pageSize !== 100)) throw incomplete();
+    for (const contact of pageContacts) {
+      if (!trimValue(contact.ContactID) || !trimValue(contact.Name) || !trimValue(contact.ContactStatus) || seen.has(contact.ContactID)) throw incomplete();
+      seen.add(contact.ContactID); contacts.push(contactMapper(contact));
+    }
+    const lastPage = expectedPages !== null ? page >= expectedPages : pageContacts.length < 100;
+    if (!lastPage && pageContacts.length !== 100) throw incomplete();
+    if (lastPage) {
+      if (expectedCount !== null && expectedCount !== contacts.length) throw incomplete();
+      return { contacts, xeroCalls: page, complete: true };
+    }
     await sleep(xeroContactSyncDelayMs(env));
   }
-  return contacts;
+  throw incomplete();
 }
 
 export async function createXeroContactsBatch(connection, contacts, runId, { env = process.env, fetchImpl = fetch } = {}) {
@@ -797,64 +829,79 @@ export async function createXeroContactsBatch(connection, contacts, runId, { env
   return outcomes;
 }
 
-export async function xeroAccountingFetch(connection, pathName, { method, body, idempotencyKey, retryOnRateLimit = false, env, fetchImpl, headers: extraHeaders = {}, onResponse = null }) {
-  const headers = {
-    Authorization: `Bearer ${connection.accessToken}`,
-    'xero-tenant-id': connection.tenantId,
-    Accept: 'application/json',
-    'Content-Type': 'application/json',
-    ...extraHeaders,
-    ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
-  };
+export async function xeroAccountingFetch(connection, pathName, options = {}) {
+  const { method, body, rawBody, idempotencyKey, retryOnRateLimit, env = process.env, fetchImpl = fetch, headers: extraHeaders = {}, onResponse = null, callsPerMinute = 0, wait = sleep, requestGate = xeroRequestGate(fetchImpl) } = options;
+  const context = xeroSharedContext(connection, options);
+  const control = context.sharedControl;
   const requestMethod = String(method || 'GET').toUpperCase();
-  const transientRetryLimit = requestMethod === 'GET' ? xeroTransientRetryLimit(env) : 0;
+  // Do not let optional headers or path traversal change the scoped provider identity.
+  if (!/^\/[A-Za-z]+(?:[/?][^#]*)?$/.test(pathName) || pathName.includes('..') || Object.keys(extraHeaders).some(key => /^(authorization|xero-tenant-id|host)$/i.test(key))) throw xeroControlError('XERO_REQUEST_SCOPE_INVALID');
+  const resourceKey = pathName.match(/^\/([A-Za-z]+)/)[1];
+  if (context.probeId && pathName !== '/Organisations') throw xeroControlError('XERO_PROBE_AUTHORITY_INVALID');
+  if (rawBody !== undefined && body !== undefined) throw xeroControlError('XERO_REQUEST_BODY_INVALID');
+  const requestBody = rawBody !== undefined ? rawBody : body ? JSON.stringify(body) : undefined;
+  const contentType = rawBody !== undefined ? Object.entries(extraHeaders).find(([key]) => key.toLowerCase() === 'content-type')?.[1] || 'application/octet-stream' : 'application/json';
+  const headers = { ...extraHeaders, Authorization: `Bearer ${connection.accessToken}`, 'xero-tenant-id': connection.tenantId, Accept: 'application/json', 'Content-Type': contentType, ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}) };
+  const retryRateLimit = !context.probeId && (retryOnRateLimit ?? requestMethod === 'GET');
+  const intervalMs = callsPerMinute > 0 ? Math.ceil(60_000 / Math.min(45, callsPerMinute)) : 0;
+  let rateWaitMs = 0;
+  const transientRetryLimit = requestMethod === 'GET' && !context.probeId ? xeroTransientRetryLimit(env) : 0;
   let transientRetries = 0;
   for (let attempt = 0; attempt < 4; attempt += 1) {
-    let response;
+    let response, receipt, payload, bodyError;
+    let budgetId = context.budgetId || null;
+    // Compatibility for approved legacy write callers: capacity is reserved for
+    // the write and its later readback. This is not evidence of verification.
+    if (requestMethod !== 'GET' && !budgetId) {
+      const budget = await control.reserve({ tenantId: connection.tenantId, ownerKey: `legacy:${resourceKey}:${randomUUID()}`, operationCalls: 1, verificationCalls: 1, ttlSeconds: 600 });
+      budgetId = budget.id;
+    }
     try {
-      response = await fetchImpl(`${XERO_API_BASE}/api.xro/2.0${pathName}`, {
-        method: requestMethod,
-        headers,
-        body: body ? JSON.stringify(body) : undefined,
-      });
+      response = await requestGate(connection.tenantId, async () => {
+        // Other server instances share the same two request slots. Queue a
+        // bounded local wait for capacity; no Xero request is sent until the
+        // durable controller admits it. Provider retry and daily holds still
+        // fail immediately with their original deadline.
+        let capacityWait = 0;
+        for (;;) {
+          try {
+            receipt = await control.admit({ tenantId: connection.tenantId, tokenVersion: connection.tokenVersion, ...(context.requestId ? { requestId: context.requestId } : {}), method: requestMethod, resourceKey, budgetId, budgetPhase: context.budgetPhase || 'operation', probeId: context.probeId || null });
+            break;
+          } catch (error) {
+            if (!['XERO_INFLIGHT_LIMIT', 'XERO_MINUTE_LIMIT'].includes(error.code)
+              || capacityWait >= Math.min(60_000, xeroMaxRetryAfterMs(env))) throw error;
+            await wait(1000); capacityWait += 1000;
+          }
+        }
+        if (!receipt?.requestId) throw xeroControlError('XERO_ADMISSION_INVALID');
+        return fetchImpl(`${XERO_API_BASE}/api.xro/2.0${pathName}`, { method: requestMethod, headers, body: requestBody, signal: AbortSignal.timeout(60_000) });
+      }, { intervalMs, maxWaitMs: xeroMaxRetryAfterMs(env) });
     } catch (error) {
-      if (transientRetries < transientRetryLimit && attempt < 3) {
-        await sleep(xeroTransientRetryDelayMs(env, transientRetries));
-        transientRetries += 1;
-        continue;
-      }
-      throw xeroContactSyncError(
-        error?.message || 'Xero could not be reached.',
-        502,
-        'XERO_CONTACT_SYNC_XERO_REQUEST_FAILED',
-      );
+      if (!receipt) throw error; // Admission/lease failures never trigger a provider retry.
+      try { await control.observe({ tenantId: connection.tenantId, requestId: receipt.requestId, outcomeUnknown: requestMethod !== 'GET' }); }
+      catch { throw xeroControlError('XERO_OBSERVATION_FAILED', { outcomeUnknown: requestMethod !== 'GET', requestId: receipt.requestId, budgetId }); }
+      if (transientRetries < transientRetryLimit && attempt < 3) { await wait(xeroTransientRetryDelayMs(env, transientRetries++)); continue; }
+      if (requestMethod !== 'GET') throw xeroControlError('XERO_WRITE_OUTCOME_UNKNOWN', { outcomeUnknown: true, requestId: receipt.requestId, budgetId });
+      throw xeroContactSyncError('Xero could not be reached.', 502, 'XERO_CONTACT_SYNC_XERO_REQUEST_FAILED');
     }
+    try { payload = response.ok ? await response.json() : await formatXeroError(response); } catch { bodyError = true; }
+    const outcomeUnknown = requestMethod !== 'GET' && (response.status >= 500 || (response.ok && bodyError));
+    try { await control.observe({ tenantId: connection.tenantId, requestId: receipt.requestId, status: response.status, headers: response.headers, outcomeUnknown }); }
+    catch { throw xeroControlError('XERO_OBSERVATION_FAILED', { outcomeUnknown: requestMethod !== 'GET', requestId: receipt.requestId, budgetId }); }
     if (typeof onResponse === 'function') {
-      onResponse({
-        status: response.status,
-        headers: response.headers,
-        pathName,
-        method: requestMethod,
-      });
+      try { await onResponse({ status: response.status, headers: response.headers, pathName, method: requestMethod, requestId: receipt.requestId, budgetId }); }
+      catch { throw xeroControlError('XERO_RESPONSE_HANDLER_FAILED', { outcomeUnknown: requestMethod !== 'GET', requestId: receipt.requestId, budgetId }); }
     }
-    if (response.status === 429 && retryOnRateLimit && attempt < 3) {
-      const delay = retryDelayMs(response.headers?.get?.('Retry-After'), attempt);
-      if (isDailyRateLimit(response) || delay > xeroMaxRetryAfterMs(env)) {
-        throw xeroContactSyncError(await formatXeroError(response), response.status, 'XERO_CONTACT_SYNC_RATE_LIMITED');
-      }
-      await sleep(delay);
-      continue;
+    if (outcomeUnknown) throw xeroControlError('XERO_WRITE_OUTCOME_UNKNOWN', { outcomeUnknown: true, requestId: receipt.requestId, budgetId });
+    if (response.status === 429) {
+      const delay = xeroRetryAfterMs(response.headers, { attempt });
+      if (!retryRateLimit || attempt >= 3 || isDailyRateLimit(response) || rateWaitMs + delay > xeroMaxRetryAfterMs(env)) throw xeroRateLimitError(response.headers, { attempt });
+      rateWaitMs += delay; await wait(delay); continue;
     }
-    if ([502, 503, 504].includes(response.status) && transientRetries < transientRetryLimit && attempt < 3) {
-      await response.text().catch(() => '');
-      await sleep(xeroTransientRetryDelayMs(env, transientRetries));
-      transientRetries += 1;
-      continue;
-    }
-    if (!response.ok) {
-      throw xeroContactSyncError(await formatXeroError(response), response.status || 502, 'XERO_CONTACT_SYNC_XERO_REQUEST_FAILED');
-    }
-    return response.json();
+    if ([502, 503, 504].includes(response.status) && transientRetries < transientRetryLimit && attempt < 3) { await wait(xeroTransientRetryDelayMs(env, transientRetries++)); continue; }
+    if (!response.ok) throw xeroContactSyncError(typeof payload === 'string' ? payload : 'Xero request was rejected.', response.status || 502, 'XERO_CONTACT_SYNC_XERO_REQUEST_FAILED');
+    if (bodyError) throw xeroContactSyncError('Xero returned an unreadable response.', 502, 'XERO_CONTACT_SYNC_XERO_REQUEST_FAILED');
+    return payload;
   }
   throw xeroContactSyncError('Xero rate limit retry was exhausted.', 429, 'XERO_CONTACT_SYNC_RATE_LIMIT_RETRY_EXHAUSTED');
 }
@@ -1083,6 +1130,7 @@ function toXeroContactForRename(contact) {
     contactNumber: trimValue(contact.ContactNumber),
     accountNumber: trimValue(contact.AccountNumber),
     status: trimValue(contact.ContactStatus),
+    mergedToContactId: trimValue(contact.MergedToContactID),
   };
 }
 
@@ -1203,12 +1251,6 @@ function isFresh(updatedAt, freshMs) {
   return Number.isFinite(updatedMs) && Date.now() - updatedMs <= freshMs;
 }
 
-function retryDelayMs(value, attempt) {
-  const seconds = Number(value);
-  if (Number.isFinite(seconds) && seconds > 0) return seconds * 1000;
-  return Math.min(2 ** attempt * 1000, 8000);
-}
-
 function isDailyRateLimit(response) {
   return /daily|day/i.test(String(response.headers?.get?.('x-rate-limit-problem') || ''));
 }
@@ -1218,7 +1260,8 @@ function xeroContactSyncDelayMs(env) {
 }
 
 function xeroMaxRetryAfterMs(env) {
-  return Number(env.XERO_MAX_RETRY_AFTER_MS || '60000');
+  const value = Number(env.XERO_MAX_RETRY_AFTER_MS ?? '60000');
+  return Number.isFinite(value) ? Math.max(0, Math.min(value, 60_000)) : 60_000;
 }
 
 function xeroTransientRetryLimit(env) {

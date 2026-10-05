@@ -1,5 +1,6 @@
 import { waitUntil } from '@vercel/functions';
 import { emailRouterWebhookHandler } from './_emailRouterHandlers.js';
+import { requireDeploymentMutationAllowed } from './_deploymentReadOnly.js';
 
 async function body(req) {
   if (req.body && typeof req.body === 'object') return req.body;
@@ -23,6 +24,7 @@ export default async function handler(req, res) {
     return res.end();
   }
   try {
+    requireDeploymentMutationAllowed(true);
     const result = await emailRouterWebhookHandler(req, await body(req), { defer: waitUntil });
     res.statusCode = 202;
     res.setHeader('content-type', 'application/json; charset=utf-8');
@@ -30,6 +32,9 @@ export default async function handler(req, res) {
   } catch (error) {
     res.statusCode = error.status || error.statusCode || 500;
     res.setHeader('content-type', 'application/json; charset=utf-8');
-    return res.end(JSON.stringify({ error: error.message || 'Webhook request failed.' }));
+    return res.end(JSON.stringify({
+      error: error.message || 'Webhook request failed.',
+      code: String(error.code || 'EMAIL_ROUTER_WEBHOOK_FAILED').replace(/[^A-Z0-9_]/gi, '_').toUpperCase(),
+    }));
   }
 }

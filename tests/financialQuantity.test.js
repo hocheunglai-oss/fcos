@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
+  financialQuantityLabel,
   financialQuantityValue,
   nativeFinancialQuantity,
 } from '../api/_financialQuantity.js';
@@ -48,6 +49,35 @@ test('missing UOM warns but does not infer a converted quantity', () => {
   const result = nativeFinancialQuantity({ Quantity__c: 12, Quantity_in_MT__c: 999 });
   assert.equal(result.quantity, 12);
   assert.match(result.warning, /no unit conversion was inferred/i);
+});
+
+test('dispute queue retrieves the Salesforce line UOM used by its quantity labels', async () => {
+  const server = await readFile(new URL('../api/functions/[name].js', import.meta.url), 'utf8');
+  const disputeHandler = server.slice(server.indexOf('async function salesforceDisputeStems('));
+  const select = disputeHandler.match(/SELECT Id, STEM__c, Product__r\.Name,[\s\S]*?FROM STEM_Line_Item__c/)?.[0];
+  assert.ok(select, 'the dispute queue fuel-line query must be found');
+  // Project only fields actually requested by the queue, as Salesforce does.
+  // A fixture containing an unrequested UOM would conceal this regression.
+  const selectedFields = new Set(select.match(/\b[A-Za-z_]+__c\b/g));
+  const cases = [
+    { unit: 'MT', delivered: true, expected: '25.3 MT' },
+    { unit: 'CBM', delivered: true, expected: '25.3 CBM' },
+    { unit: 'L', delivered: true, expected: '25.3 L' },
+    { unit: 'MT', delivered: false, expected: '15-30 MT' },
+    { unit: null, delivered: true, expected: '25.3 UOM not set' },
+  ];
+  for (const { unit, delivered, expected } of cases) {
+    const source = {
+      Unit_of_Measure__c: unit,
+      Quantity__c: 15,
+      Quantity_Max__c: 30,
+      Is_Quantity_Range__c: true,
+      Quantity_Delivered_Per_BDN__c: 25.3,
+      Quantity_in_MT__c: 999,
+    };
+    const projected = Object.fromEntries(Object.entries(source).filter(([field]) => selectedFields.has(field)));
+    assert.equal(financialQuantityLabel(projected, delivered), expected);
+  }
 });
 
 test('Broker Commissions keeps native Salesforce UOM in quantities and per-unit labels', async () => {

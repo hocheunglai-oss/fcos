@@ -9,6 +9,20 @@ await mkdir(outputDir, { recursive: true });
 const generatedAt = new Date('2026-08-13T04:00:00.000Z');
 const fixtures = [
   {
+    key: 'china',
+    term: {
+      name: 'China',
+      termsText: '1. Layout verification sample only. This is not an approved contractual document.\n\n2. The headings are centred and the numbered clause text remains justified.',
+    },
+  },
+  {
+    key: 'wrapped-title',
+    term: {
+      name: 'China Delivery Requirements for Mainland Ports and Offshore Anchorage Operations',
+      termsText: '1. Layout verification sample for a heading that wraps across lines.',
+    },
+  },
+  {
     key: 'structured-short',
     term: {
       name: 'Quality Claim and Measurement Requirements',
@@ -60,15 +74,11 @@ const fixtures = [
 ];
 
 for (const fixture of fixtures) {
-  for (const format of ['pdf', 'docx']) {
-    if (fixture.source === 'draft' && format === 'docx') continue;
-    const generated = await generateSpecialTermsDocument(fixture.term, {
-      format,
-      source: fixture.source || 'live',
-      generatedAt,
-    });
-    await writeFile(resolve(outputDir, `${fixture.key}.${format}`), generated.buffer);
-  }
+  const generated = await generateSpecialTermsDocument(fixture.term, {
+    source: fixture.source || 'live',
+    generatedAt,
+  });
+  await writeFile(resolve(outputDir, `${fixture.key}.pdf`), generated.buffer);
 }
 
 process.stdout.write(`${outputDir}\n`);

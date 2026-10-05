@@ -4,9 +4,11 @@
 .sf/
 .sfdx/
 .vercel/
+.codex/
 node_modules/
 dist/
 output/
+outputs/
 reports/
 tmp/
 playwright-report/

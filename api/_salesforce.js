@@ -1,4 +1,7 @@
 import { createSign } from 'node:crypto';
+import { fcosSalesforceEnvironment } from '../config/fcosConnections.js';
+import { parseSalesforceCurrencyEvidence, salesforceUserInfoEnvelope } from './_salesforceCurrency.js';
+import { salesforceReadRetryDelay } from './_salesforceReadRetry.js';
 import { requireExternalActionGate } from './_externalActionGates.js';
 import {
   markRuntimeCacheUnsafe,
@@ -249,69 +252,79 @@ export async function sfRequest(path, {
   retryOnExpiredSession = true,
   readOnly = false,
   telemetry = {},
+  signal,
 } = {}) {
   const normalizedMethod = String(method || 'GET').toUpperCase();
   if (!['GET', 'HEAD'].includes(normalizedMethod) && !readOnly) requireExternalActionGate('salesforce_write');
-  const startedAt = Date.now();
-  const accessToken = await getAccessToken();
-  const url = salesforceServiceUrl(path);
-  let res;
-  let data = {};
-  let limit = null;
-  try {
-    res = await fetch(url, {
-      method: normalizedMethod,
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        ...(body ? { 'content-type': 'application/json' } : {}),
-        ...headers,
-      },
-      body: body ? JSON.stringify(body) : undefined,
-    });
-    limit = parseSforceLimitInfo(res.headers.get('sforce-limit-info'));
-    if (res.status !== 204) data = await res.json().catch(() => ({}));
-  } finally {
-    const responseRows = telemetry.composite === true
-      ? (data?.compositeResponse || []).reduce(
-          (sum, response) => sum + (Array.isArray(response?.body?.records) ? response.body.records.length : 0),
-          0,
-        )
-      : (Array.isArray(data?.records) ? data.records.length : 0);
-    recordSalesforceCall({
-      durationMs: Date.now() - startedAt,
-      rows: responseRows,
-      logicalQueries: telemetry.logicalQueries ?? (/^\/query\/\?q=/i.test(path) ? 1 : 0),
-      composite: telemetry.composite === true,
-      limit,
-    });
-  }
+  let readAttempt = 0;
+  let canRefreshSession = retryOnExpiredSession;
+  for (;;) {
+    signal?.throwIfAborted();
+    const startedAt = Date.now();
+    const accessToken = await getAccessToken();
+    const url = salesforceServiceUrl(path);
+    let res;
+    let data = {};
+    let limit = null;
+    try {
+      res = await fetch(url, {
+        method: normalizedMethod,
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          ...(body ? { 'content-type': 'application/json' } : {}),
+          ...headers,
+        },
+        body: body ? JSON.stringify(body) : undefined,
+        signal,
+      });
+      limit = parseSforceLimitInfo(res.headers.get('sforce-limit-info'));
+      if (res.status !== 204) data = await res.json().catch(() => ({}));
+    } finally {
+      const responseRows = telemetry.composite === true
+        ? (data?.compositeResponse || []).reduce(
+            (sum, response) => sum + (Array.isArray(response?.body?.records) ? response.body.records.length : 0),
+            0,
+          )
+        : (Array.isArray(data?.records) ? data.records.length : 0);
+      recordSalesforceCall({
+        durationMs: Date.now() - startedAt,
+        rows: responseRows,
+        logicalQueries: telemetry.logicalQueries ?? (/^\/query\/\?q=/i.test(path) ? 1 : 0),
+        composite: telemetry.composite === true,
+        limit,
+      });
+    }
 
-  if (res.status === 204) {
-    if (!['GET', 'HEAD'].includes(normalizedMethod) && !readOnly) await expireSalesforceWriteCaches();
-    return null;
-  }
-  const errorCode = data.errorCode || data[0]?.errorCode;
-  if (retryOnExpiredSession && errorCode === 'INVALID_SESSION_ID') {
-    cachedToken = null;
-    cachedTokenExpiresAt = 0;
-    return sfRequest(path, {
-      method: normalizedMethod,
-      body,
-      headers,
-      retryOnExpiredSession: false,
-      readOnly,
-      telemetry,
+    if (res.status === 204) {
+      if (!['GET', 'HEAD'].includes(normalizedMethod) && !readOnly) await expireSalesforceWriteCaches();
+      return null;
+    }
+    const errorCode = data.errorCode || data[0]?.errorCode;
+    if (canRefreshSession && errorCode === 'INVALID_SESSION_ID') {
+      cachedToken = null;
+      cachedTokenExpiresAt = 0;
+      canRefreshSession = false;
+      continue;
+    }
+    const retryDelay = salesforceReadRetryDelay({
+      method: normalizedMethod, status: res.status, attempt: readAttempt,
+      retryAfter: res.headers.get('retry-after'),
     });
+    if (retryDelay !== null) {
+      readAttempt += 1;
+      await new Promise((resolve) => setTimeout(resolve, retryDelay));
+      continue;
+    }
+    if (!res.ok || data.errorCode || (Array.isArray(data) && data[0]?.errorCode)) {
+      const error = new Error(data.message || data[0]?.message || `Salesforce request failed (HTTP ${res.status}). Please retry shortly.`);
+      error.status = res.status;
+      error.code = errorCode || `SALESFORCE_HTTP_${res.status}`;
+      throw error;
+    }
+    if (path === '/limits') recordSalesforceLimit(salesforceLimitFromBody(data));
+    if (!['GET', 'HEAD'].includes(normalizedMethod) && !readOnly) await expireSalesforceWriteCaches();
+    return data;
   }
-  if (!res.ok || data.errorCode || (Array.isArray(data) && data[0]?.errorCode)) {
-    const error = new Error(data.message || data[0]?.message || `${normalizedMethod} ${path} failed`);
-    error.status = res.status;
-    error.code = errorCode || null;
-    throw error;
-  }
-  if (path === '/limits') recordSalesforceLimit(salesforceLimitFromBody(data));
-  if (!['GET', 'HEAD'].includes(normalizedMethod) && !readOnly) await expireSalesforceWriteCaches();
-  return data;
 }
 
 export async function sfDownload(path, { retryOnExpiredSession = true } = {}) {
@@ -345,6 +358,36 @@ export async function sfDownload(path, { retryOnExpiredSession = true } = {}) {
       durationMs: Date.now() - startedAt,
       limit,
     });
+  }
+}
+
+// SOAP getUserInfo is read-only and supplies currency evidence in single-currency orgs
+// where REST describes have no CurrencyIsoCode field.
+export async function sfUserCurrencyInfo() {
+  const expectedInstance = fcosSalesforceEnvironment('production').instanceUrl;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const accessToken = await getAccessToken({ forceRefresh: attempt > 0 });
+    if (getInstanceUrl().replace(/\/$/, '') !== expectedInstance) {
+      throw Object.assign(new Error('Salesforce currency lookup requires the configured Production organization.'), { code: 'SALESFORCE_ORG_MISMATCH' });
+    }
+    const startedAt = Date.now();
+    let limit = null;
+    try {
+      const response = await fetch(`${expectedInstance}/services/Soap/u/${getApiVersion().replace(/^v/, '')}`, {
+        method: 'POST',
+        headers: { 'content-type': 'text/xml; charset=UTF-8', SOAPAction: 'getUserInfo' },
+        body: salesforceUserInfoEnvelope(accessToken),
+        redirect: 'error',
+        signal: AbortSignal.timeout(30000),
+      });
+      limit = parseSforceLimitInfo(response.headers.get('sforce-limit-info'));
+      const xml = await response.text();
+      if (attempt === 0 && /INVALID_SESSION_ID/.test(xml)) continue;
+      if (!response.ok) throw Object.assign(new Error('Salesforce company currency lookup failed.'), { code: 'SALESFORCE_CURRENCY_LOOKUP_FAILED', status: response.status });
+      return parseSalesforceCurrencyEvidence(xml);
+    } finally {
+      recordSalesforceCall({ durationMs: Date.now() - startedAt, limit });
+    }
   }
 }
 
@@ -404,10 +447,11 @@ function compositeQueryError(response, fallback = 'Salesforce Composite query fa
   return error;
 }
 
-async function compositeRead(subrequests) {
+async function compositeRead(subrequests, { signal } = {}) {
   const data = await sfRequest('/composite', {
     method: 'POST',
     readOnly: true,
+    signal,
     body: {
       allOrNone: false,
       compositeRequest: subrequests,
@@ -420,7 +464,7 @@ async function compositeRead(subrequests) {
   return data?.compositeResponse || [];
 }
 
-export async function sfCompositeQueries(queries = []) {
+export async function sfCompositeQueries(queries = [], { signal } = {}) {
   const normalized = queries.map((query, index) => ({
     soql: typeof query === 'string' ? query : query.soql,
     clean: typeof query === 'object' && query.clean === true,
@@ -438,7 +482,7 @@ export async function sfCompositeQueries(queries = []) {
         method: 'GET',
         url: compositeQueryUrl(query.soql),
         referenceId: query.referenceId,
-      })));
+      })), { signal });
     } catch (error) {
       const strict = group.find((query) => !query.softFail);
       if (strict) throw error;
@@ -483,7 +527,7 @@ export async function sfCompositeQueries(queries = []) {
           method: 'GET',
           url: compositeNextUrl(page.nextRecordsUrl),
           referenceId: `page${page.resultIndex}_${offset}`,
-        })));
+        })), { signal });
       } catch (error) {
         const strict = pageGroup.find((page) => !page.query.softFail);
         if (strict) throw error;
