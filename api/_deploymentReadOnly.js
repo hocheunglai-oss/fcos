@@ -4,6 +4,11 @@ export function isDeploymentReadOnly(env = process.env) {
     || String(env.FCOS_ENABLE_READ_ONLY_CI || '').trim().toLowerCase() === 'true';
 }
 
+/** Deployment permission is separate from a user's financial or module permissions. */
+export function deploymentCapabilities(env = process.env, { readOnlyProfile = false } = {}) {
+  return { mutationsAllowed: !isDeploymentReadOnly(env) && readOnlyProfile !== true };
+}
+
 export function requireDeploymentMutationAllowed(mutation, env = process.env) {
   if (!mutation || !isDeploymentReadOnly(env)) return;
   throw Object.assign(new Error('This verification environment permits read-only operations.'), {

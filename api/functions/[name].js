@@ -228,7 +228,7 @@ import { createDashboardFinanceLoader, financeToday, summarizeDashboardFinance, 
 import { secondaryMopsFailureMessage } from '../_marketSourceHealth.js';
 import { ciModuleAccess, isReadOnlyCiProfile, isReadOnlyMarketAction, requireReadOnlyCiOperation } from '../_readOnlyCiAccess.js';
 import { isReadOnlyHedgeDeskAction } from '../_hedgeDeskReadOnly.js';
-import { requireDeploymentMutationAllowed } from '../_deploymentReadOnly.js';
+import { deploymentCapabilities, requireDeploymentMutationAllowed } from '../_deploymentReadOnly.js';
 import { analyzeMarketReportLibrary, loadMarketReportCatalogue } from '../_marketReportAnalysis.js';
 import {
   applyMasterContractPrice as applyMasterContractPriceService,
@@ -825,6 +825,7 @@ async function loadAuthBootstrapPreferences(client, userId) {
 async function authContext(body, req, accessContext) {
   const { client, authUser, profile } = accessContext || (await requireActiveUser(req));
   const readOnlyCi = isReadOnlyCiProfile(profile);
+  const deployment = deploymentCapabilities(process.env, { readOnlyProfile: readOnlyCi });
   const preferencesPromise = loadAuthBootstrapPreferences(client, profile.id);
   let permissionValues;
   let capabilityValues;
@@ -849,7 +850,7 @@ async function authContext(body, req, accessContext) {
     moduleAccess,
   });
   const bootstrapPreferences = await preferencesPromise;
-  if (!readOnlyCi) schedulePortalOutboxRetry(client);
+  if (deployment.mutationsAllowed) schedulePortalOutboxRetry(client);
 
   return {
     user: {
@@ -870,6 +871,7 @@ async function authContext(body, req, accessContext) {
       [REPORT_ARCHIVE_MODULE_ID]: reportArchiveAccessLevel(permissionValues[REPORT_ARCHIVE_MODULE_ID]),
     },
     capabilities: capabilityValues,
+    deploymentCapabilities: deployment,
     applications,
     navigationPreferences: bootstrapPreferences?.navigationPreferences || null,
     workspacePreferences: bootstrapPreferences?.workspacePreferences || null,

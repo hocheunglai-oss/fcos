@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Banknote, CheckCircle2, ClipboardCheck, ListChecks, Loader2, RefreshCw, Scale, ShieldCheck } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { appClient } from '@/api/appClient';
@@ -80,7 +80,7 @@ function currencyMoney(currency, value) {
 }
 
 export default function PaymentCollections() {
-  const { hasModuleAccess, user } = useAuth();
+  const { hasModuleAccess, user, deploymentCapabilities, deploymentMutationAllowed } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const availableTabs = useMemo(() => TABS.filter((tab) => (
     (!tab.privileged || ['finance', 'general_manager', 'administrator'].includes(user?.user_type))
@@ -101,6 +101,7 @@ export default function PaymentCollections() {
   const [overrideSaving, setOverrideSaving] = useState(false);
   const [overrideError, setOverrideError] = useState('');
   const [collectionDataRefreshToken, setCollectionDataRefreshToken] = useState(0);
+  const autoReconciledUser = useRef(null);
 
   useEffect(() => {
     if (requestedTabValue !== 'ship-agent-charges') return;
@@ -129,7 +130,8 @@ export default function PaymentCollections() {
     setSearchParams(next, { replace: true });
   };
 
-  const reconcile = async ({ force = false } = {}) => {
+  const reconcile = useCallback(async ({ force = false } = {}) => {
+    if (!deploymentMutationAllowed) return;
     setReconciling(true);
     setReconciliationError('');
     const response = await appClient.functions.invoke('paymentCollectionsReconcile', { force }, { force });
@@ -141,13 +143,16 @@ export default function PaymentCollections() {
       appClient.functions.clearCache();
     }
     setReconciling(false);
-  };
+  }, [deploymentMutationAllowed]);
 
   useEffect(() => {
-    reconcile();
-  }, []);
+    if (!deploymentMutationAllowed || !user?.id || autoReconciledUser.current === user.id) return;
+    autoReconciledUser.current = user.id;
+    void reconcile();
+  }, [deploymentMutationAllowed, reconcile, user?.id]);
 
   const openReminderOverride = (entry) => {
+    if (!deploymentMutationAllowed) return;
     setOverrideEntry(entry);
     setOverrideReason('');
     setOverrideError('');
@@ -161,6 +166,7 @@ export default function PaymentCollections() {
   };
 
   const saveReminderOverride = async () => {
+    if (!deploymentMutationAllowed) return;
     const issue = postingIssue(overrideEntry);
     const reason = overrideReason.trim();
     if (!issue?.issueKey) {
@@ -230,6 +236,13 @@ export default function PaymentCollections() {
             Automatic reconciliation is unavailable: {reconciliationError}
           </div>
         )}
+        {!deploymentMutationAllowed && (
+          <div className="mt-2 rounded-md border border-border bg-muted/50 px-3 py-2 text-xs text-muted-foreground" role="status">
+            {deploymentCapabilities?.mutationsAllowed === false
+              ? 'This environment is read-only. Collection and incoming payment data remain available; automatic reconciliation and reminder-control changes are disabled.'
+              : 'Changes are unavailable while access is being verified. You can still view collection and incoming payment data.'}
+          </div>
+        )}
       </div>
 
       {activeTab === 'collections' && <BuyerInvoices embedded defaultQueueView="needs-action" reconciliationItems={reconciliation?.items || []} dataRefreshToken={collectionDataRefreshToken} />}
@@ -243,7 +256,7 @@ export default function PaymentCollections() {
               <h1 className="text-xl font-semibold text-foreground">Reconciliation Exceptions</h1>
               <p className="mt-1 text-sm text-muted-foreground">Cases where Salesforce balances, payment advice, incoming payments, and FCOS closure state need attention.</p>
             </div>
-            <Button variant="outline" onClick={() => reconcile({ force: true })} disabled={reconciling} className="gap-2">
+            <Button variant="outline" onClick={() => reconcile({ force: true })} disabled={!deploymentMutationAllowed || reconciling} className="gap-2">
               <RefreshCw className={`h-4 w-4 ${reconciling ? 'animate-spin' : ''}`} /> Refresh Salesforce
             </Button>
           </div>
@@ -306,7 +319,7 @@ export default function PaymentCollections() {
                               {overrideActive && entry.item.postingReminderOverrideReason && (
                                 <div className="text-xs text-muted-foreground">{entry.item.postingReminderOverrideReason}</div>
                               )}
-                              {reconciliation.capabilities?.canOverridePostingReminder && (
+                              {deploymentMutationAllowed && reconciliation.capabilities?.canOverridePostingReminder && (
                                 <Button type="button" size="sm" variant="outline" className="gap-2" onClick={() => openReminderOverride(entry)}>
                                   <ShieldCheck className="h-3.5 w-3.5" />
                                   {overrideActive ? 'Restore reminder pause' : 'Allow reminder'}
@@ -354,7 +367,7 @@ export default function PaymentCollections() {
           {overrideError && <div className="text-sm text-destructive">{overrideError}</div>}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={closeReminderOverride} disabled={overrideSaving}>Cancel</Button>
-            <Button type="button" onClick={saveReminderOverride} disabled={overrideSaving || overrideReason.trim().length < 5} className="gap-2">
+            <Button type="button" onClick={saveReminderOverride} disabled={!deploymentMutationAllowed || overrideSaving || overrideReason.trim().length < 5} className="gap-2">
               {overrideSaving && <Loader2 className="h-4 w-4 animate-spin" />}
               Save control
             </Button>
