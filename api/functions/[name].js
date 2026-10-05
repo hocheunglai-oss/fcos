@@ -92,6 +92,7 @@ import {
   collaborationTemplateSave as collaborationTemplateSaveService,
   collaborationUpdate as collaborationUpdateService,
 } from '../_collaborationService.js';
+import { loadDashboardBuyerPaymentAnalysis } from '../_dashboardBuyerPaymentAnalysisService.js';
 import { DASHBOARD_AI_MODELS, compileDashboardAiWhere, dashboardAiModel, interpretDashboardAiSearch, isAllowedDashboardAiModel, normalizeDashboardAiPrompt } from '../_dashboardAi.js';
 import { operationalMailConfig, operationalMailDeliveryAvailable, sendOperationalMail } from '../_operationalMail.js';
 import { loadFinancialReportSettings, saveFinancialReportSettings } from '../_financialReportSettings.js';
@@ -5280,9 +5281,10 @@ async function dashboardAiSearch(body, req, accessContext = null) {
   const clarification = String(body.clarification || '')
     .trim()
     .slice(0, 200);
-  const currentYear = new Date().getFullYear();
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Hong_Kong', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  const currentYear = Number(today.slice(0, 4));
   const selectedYears = Array.isArray(body.selectedYears) && body.selectedYears.length ? body.selectedYears : [currentYear];
-  const selectedMonths = Array.isArray(body.selectedMonths) && body.selectedMonths.length ? body.selectedMonths : [new Date().getMonth() + 1];
+  const selectedMonths = Array.isArray(body.selectedMonths) && body.selectedMonths.length ? body.selectedMonths : [Number(today.slice(5, 7))];
   const selectedPeriodLabel = dashboardAiSelectedPeriodLabel(selectedYears, selectedMonths);
   const settings = await loadDashboardAiSettings(context.client);
   if (!settings.apiConfigured) throw appError('Dashboard AI Search is not configured in Vercel.', 503);
@@ -5291,14 +5293,14 @@ async function dashboardAiSearch(body, req, accessContext = null) {
   const safetyIdentifier = `fcos-dashboard-${createHash('sha256').update(String(context.profile.id)).digest('hex').slice(0, 32)}`;
   const interpretationResult = await getOrLoadRuntimeCache({
     namespace: 'dashboard-ai-interpretation',
-    version: AI_ROUTING_VERSION,
+    version: `${AI_ROUTING_VERSION}:buyer-payment-v1`,
     accessScope: salesforceCacheAccessScope(context),
     apiVersion: routing.modelId,
     payload: {
       modelId: settings.modelId,
       revision: settings.revision,
       selectedPeriodLabel,
-      today: dateOnly(new Date()),
+      today,
       prompt,
       clarification,
     },
@@ -5311,7 +5313,7 @@ async function dashboardAiSearch(body, req, accessContext = null) {
         clarification,
         modelId: settings.modelId,
         selectedPeriodLabel,
-        today: dateOnly(new Date()),
+        today,
         safetyIdentifier,
         signal: AbortSignal.timeout(60_000),
         onUsage: (usage) => recordDashboardAiUsage(context.client, context.profile, usage),
@@ -5320,6 +5322,7 @@ async function dashboardAiSearch(body, req, accessContext = null) {
   const interpretation = interpretationResult.value;
   const baseAiSearch = {
     status: interpretation.status,
+    analysis: interpretation.analysis,
     interpretation: interpretation.interpretation,
     chips: interpretation.chips,
     includeCancelled: interpretation.includeCancelled,
@@ -5367,7 +5370,25 @@ async function dashboardAiSearch(body, req, accessContext = null) {
   // AI results intentionally use the same paginated, access-filtered scope as
   // the dashboard APIs.  The old 3,000-record dashboard path is not safe for
   // AI because it can turn a complete natural-language result into a subset.
-  const aiScope = await loadDecisionDashboardScope({ ...body.filterSpec, force }, req, context, { additionalWhere: where });
+  const aiScope = await loadDecisionDashboardScope({
+    ...(body.filterSpec || {}),
+    dateWindows: [],
+    filters: { ...(body.filterSpec?.filters || {}), includeCancelled: interpretation.includeCancelled },
+    force,
+  }, req, context, { additionalWhere: where });
+  if (interpretation.analysis === 'buyer_payment_timing') {
+    const paymentAnalysis = await loadDashboardBuyerPaymentAnalysis({
+      scopedStemIds: aiScope.rows.filter((row) => row.account?.id).map((row) => row.id),
+      expectedAccounts: Object.fromEntries(aiScope.rows.filter((row) => row.account?.id).map((row) => [row.id.slice(0, 15), row.account.id])),
+      stemAccessWhere: await interofficeStemAccessCondition(context, (stem.fields || []).map((field) => field.name)) || 'Id != null',
+      complete: aiScope.completeness.complete === true,
+      today,
+      describe: (objectName) => salesforceObjectFields({ objectName, forceRefresh: force }),
+      query: (soql, limit) => sfQuery(soql, { clean: true, limit, softFail: false }),
+      readOrganization: () => sfRequest('/connect/organization', { readOnly: true }),
+    });
+    return { paymentAnalysis, aiSearch: { ...baseAiSearch, status: 'ready', matchedCount: paymentAnalysis.buyers.length, loadedCount: paymentAnalysis.buyers.length, truncated: false, resultLimit: null } };
+  }
   const dashboard = {
     ...decisionDashboardSummary(aiScope.rows, aiScope.completeness),
     recentStems: publicDecisionDashboardRows(aiScope.rows),
