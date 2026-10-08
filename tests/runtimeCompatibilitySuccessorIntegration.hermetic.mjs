@@ -2,13 +2,12 @@ import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { SourceTextModule, SyntheticModule, createContext } from 'node:vm';
 
-import { SOURCE_ROOT, FIXTURE_ROOT, hash, manifestBytes, manifest, pack,
+import { SOURCE_ROOT, hash, manifestBytes, manifest, pack,
   validatePublicManifest, assertBoundSource, copyBoundSource, cleanGitEnvironment } from './helpers/runtimeCompatibilitySuccessorPortable.mjs';
 
 const temporary = fs.mkdtempSync(join(tmpdir(), 'fcos-v2-negative-'));
