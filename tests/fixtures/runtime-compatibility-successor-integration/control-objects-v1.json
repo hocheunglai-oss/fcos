@@ -1,0 +1,146 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Exactly three missing public frozen04ee control blobs for disposable offline test repositories; no live admission authority",
+  "candidateSha": "04ee3425aac7a49089eda781eb3c976aea1f6785",
+  "candidateTree": "4c8258c4f677878532b5d52e1f9b52fb4a767d18",
+  "original272PackSha256": "edb0c7a0d0ac7f45dba5fcfc8f6d98cbbf9667f01713a5d7f7764dc7e7380628",
+  "pack": {
+    "path": "control-objects-v1.pack",
+    "nonThin": true,
+    "count": 3,
+    "byteLength": 2695,
+    "sha256": "9300bcc6590327bb339b19546b83e29f4a290badae9a20d32ec9e8ed49e99a03"
+  },
+  "objects": [
+    {
+      "path": "config/fcosCiIdentity.js",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "fc168571a476d21ef3b7ac927b6948a0feb188ea",
+      "byteLength": 570,
+      "sha256": "598a051e4a8734e03c191a23da456a02c19eadff2e32328d6a5fd08ea736f89f"
+    },
+    {
+      "path": "vercel.json",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "c292c95e06d3e17c09e489393f72839bb51c3323",
+      "byteLength": 1190,
+      "sha256": "60a23e9e177f559e2d69eedb017d31388618c8f513d79d3aa8f616d770df046e"
+    },
+    {
+      "path": "package.json",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "11102eb7dd8907c05a366586f28353a9fdce3e60",
+      "byteLength": 6175,
+      "sha256": "2b68aa6c3c0d38516fcaedfdc0bd501a356a91cfcc8b55f0a0b541095a4b7eb8"
+    }
+  ],
+  "mandatoryCandidateControls": [
+    {
+      "path": "config/fcosConnections.js",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "63337bf9e13934a3a357828f23498fc6f6f4dec6",
+      "byteLength": 30929,
+      "sha256": "d33303154b447978cd66eb3e8725e5ddbd3e0df75cf2104271e560ccf381fd2e"
+    },
+    {
+      "path": "config/fcosCiIdentity.js",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "fc168571a476d21ef3b7ac927b6948a0feb188ea",
+      "byteLength": 570,
+      "sha256": "598a051e4a8734e03c191a23da456a02c19eadff2e32328d6a5fd08ea736f89f"
+    },
+    {
+      "path": "vercel.json",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "c292c95e06d3e17c09e489393f72839bb51c3323",
+      "byteLength": 1190,
+      "sha256": "60a23e9e177f559e2d69eedb017d31388618c8f513d79d3aa8f616d770df046e"
+    },
+    {
+      "path": "package.json",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "11102eb7dd8907c05a366586f28353a9fdce3e60",
+      "byteLength": 6175,
+      "sha256": "2b68aa6c3c0d38516fcaedfdc0bd501a356a91cfcc8b55f0a0b541095a4b7eb8"
+    },
+    {
+      "path": "package-lock.json",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "d5726892e3d6463a1d3c796084377f780f2605c7",
+      "byteLength": 354713,
+      "sha256": "9b3d6eb4824ea8688022b9ba249041e25c44b8cebc5443d59c55d8a2da5da378"
+    },
+    {
+      "path": "AGENTS.md",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "f44beb8d62f5d891479add75f4f477481ec7c985",
+      "byteLength": 19458,
+      "sha256": "94a6dd93fc26a1c27aa3118e57b11906f542361e5ce322e1f2524bf16c7503cd"
+    },
+    {
+      "path": ".codex/config.toml",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "daa6873338de88826d2270f5616ab5d753c3bed8",
+      "byteLength": 3539,
+      "sha256": "69313ff59c184619cdd5bb6ec589fb94e23268df363908e9c6f063c5cb81735f"
+    },
+    {
+      "path": ".codex/setup.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "0f82bf9620cf6a625b4276acbf12eb6c76056233",
+      "byteLength": 6110,
+      "sha256": "b70610746072fb1566b536e61875d272c20ee183ae61c299cec5d0e8ffff6198"
+    },
+    {
+      "path": ".codex/control-validation.mjs",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "49bc7f45c16ed19290306f39951e7c8bb0933670",
+      "byteLength": 2123,
+      "sha256": "10ee550f146920a7d6fcb4353c20f023d20136b8ce031830c6af82b6b99ff814"
+    },
+    {
+      "path": ".codex/control-policy.json",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "a8a1a136419e390ca29116b1aa79c809a7f7e352",
+      "byteLength": 369,
+      "sha256": "bce6429e9cb7c395fb0edb9a2fdd07160e90c073469b0205b0001e51cfa52617"
+    },
+    {
+      "path": ".codex/README.md",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "611ece4701eeaad5d2d19aa3541a7569f6a70c59",
+      "byteLength": 3335,
+      "sha256": "3837e5b1985e6c1fca3938fc23bcbbb166c8b455ec12392d3e3f7d9854fedfa2"
+    },
+    {
+      "path": ".codex/environments/environment.toml",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "66911c0bc08be390bf65d3f013bc0519c5909ce4",
+      "byteLength": 629,
+      "sha256": "47b46dd529e329cc51e3cce11e3042f041f470226e480bdc6b6634d49e67e19f"
+    },
+    {
+      "path": ".codex/environments/environment-2.toml",
+      "mode": "100644",
+      "type": "blob",
+      "oid": "66911c0bc08be390bf65d3f013bc0519c5909ce4",
+      "byteLength": 629,
+      "sha256": "47b46dd529e329cc51e3cce11e3042f041f470226e480bdc6b6634d49e67e19f"
+    }
+  ]
+}

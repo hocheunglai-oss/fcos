@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import test, { after } from 'node:test';
-import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { join, dirname } from 'node:path';
+import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { FCOS_RELEASE_APPROVAL_POLICY, fcosConnectionIdentifier, fcosSalesforceEnvironment } from '../config/fcosConnections.js';
@@ -25,6 +25,7 @@ import { legacyEmailCandidate, assertLegacyEmailBaselineProof, LEGACY_EMAIL_BASE
 import { PREVIEW_PARITY_POLICY as parityPolicy, evaluatePreviewParity } from '../scripts/lib/preview-parity.mjs';
 import { compatibilityOperationScopeVerified, assertCompatibilityNormalArtifact, createRuntimeCompatibilityPreflight,
   executeRuntimeCompatibilityRelease } from '../scripts/lib/runtime-compatibility-release.mjs';
+import { copyBoundSource, installPortableObjects, controlManifest, controlManifestBytes, validateControlManifest, controlPack } from './helpers/runtimeCompatibilitySuccessorPortable.mjs';
 import { SUCCESSOR_ATTEST_PURPOSE, SUCCESSOR_ATTEST_CANONICAL_HELPER_SHA256, successorAttestationPlan,
   bindSuccessorAttestationAdmission, runSuccessorAttestationAdmission } from '../scripts/lib/preview-vercel-successor-attestation.mjs';
 
@@ -32,27 +33,24 @@ const cwd = fileURLToPath(new URL('..', import.meta.url));
 const now = Date.parse('2026-10-09T02:00:00.000Z'), iso = value => new Date(value).toISOString();
 const digest = value => createHash('sha256').update(value).digest('hex');
 const repository = { id: 7, full_name: fcosConnectionIdentifier('github', 'Repository'), default_branch: 'main' };
-const sourceProof = verifyRuntimeCompatibilitySuccessorSource({ cwd, candidateCommit: policy.candidateSha });
 // A small clean offline Git fixture contains the exact actual allowlisted
 // harness bytes. It has no operational credentials and is never published.
 const trustedCwd = mkdtempSync(join(tmpdir(), 'fcos-04ee-clean-harness-'));
 after(() => rmSync(trustedCwd, { recursive: true, force: true }));
 for (const file of SUCCESSOR_LIVE_HARNESS_FILES) {
-  const target = join(trustedCwd, file); mkdirSync(dirname(target), { recursive: true }); writeFileSync(target, readFileSync(join(cwd, file)));
+  copyBoundSource(trustedCwd, file);
 }
 const git = args => execFileSync('git', ['-c', 'init.templateDir=', '-c', 'commit.gpgsign=false', ...args], { cwd: trustedCwd,
   env: { PATH: process.env.PATH, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0',
     GIT_AUTHOR_NAME: 'Offline fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid', GIT_COMMITTER_NAME: 'Offline fixture', GIT_COMMITTER_EMAIL: 'fixture@example.invalid' },
   stdio: ['ignore', 'pipe', 'pipe'] });
 git(['init', '--quiet']); git(['remote', 'add', 'origin', `https://github.com/${repository.full_name}.git`]);
-// Only this ephemeral repository receives an alternate object store. It reads
-// the same immutable local candidate objects as the source verifier, without
-// modifying replacement refs or metadata in the shared FCOS repository.
-const commonGit = execFileSync('git', ['--no-replace-objects', 'rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd,
-  env: { PATH: process.env.PATH, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' }, encoding: 'utf8' }).trim();
-writeFileSync(join(trustedCwd, '.git/objects/info/alternates'), `${join(commonGit, 'objects')}\n`);
+// Import exact offline public objects into this fresh repository. No shared
+// FCOS object store, alternates, remote fetch or hosted history is required.
+installPortableObjects(trustedCwd);
+const sourceProof = verifyRuntimeCompatibilitySuccessorSource({ cwd: trustedCwd, candidateCommit: policy.candidateSha });
 git(['add', '--all']); git(['commit', '--quiet', '-m', 'Exact public control-byte fixture']);
-const controls = successorLiveControlBinding({ trustedCwd, sourceCwd: cwd });
+const controls = successorLiveControlBinding({ trustedCwd, sourceCwd: trustedCwd });
 const harnessSha = controls.harnessSha, operationId = 'fcos-preview-email-99-12345678-1234-4123-8123-123456789abc';
 const record = value => { const body = Buffer.from(`${JSON.stringify(value)}\n`); return { body, value, sha256: digest(body) }; };
 function fixture(runId = 99) {
@@ -97,9 +95,26 @@ function replaceContext(value, alter) {
   value.rows.root = value.reviews[0]; value.rows.independent = value.reviews[1];
 }
 
+test('portable exact source uses immutable272 plus exactly3 frozen control blobs and rejects supplement tampering', () => {
+  assert.equal(controlManifest.objects.length, 3); assert.equal(controlManifest.mandatoryCandidateControls.length, 13);
+  assert.equal(controls.controlFiles.candidate.length, 13);
+  assert.deepEqual(controls.controlFiles.candidate.map(([file, sha]) => [file, sha]),
+    controlManifest.mandatoryCandidateControls.map(row => [row.path, row.sha256]));
+  assert.throws(() => validateControlManifest(Buffer.concat([controlManifestBytes, Buffer.from(' ')])), /manifest differs/);
+  for (const bytes of [controlPack.subarray(0, controlPack.length - 12), Buffer.from(controlPack)]) {
+    if (bytes.length === controlPack.length) bytes[bytes.length - 1] ^= 1;
+    const directory = mkdtempSync(join(tmpdir(), 'fcos-invalid-control-pack-'));
+    try {
+      execFileSync('git', ['-c', 'init.templateDir=', 'init', '--quiet', '--bare', directory]);
+      assert.throws(() => execFileSync('git', ['--no-replace-objects', '--git-dir', directory, 'index-pack', '--stdin'],
+        { input: bytes, stdio: ['pipe', 'pipe', 'pipe'] }));
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  }
+});
+
 test('real GitHub seconds timestamps bind genuine original intent/job and cannot be renewed or cross-run mixed', async () => {
   const value = fixture(); value.run.run_started_at = '2026-10-09T01:59:50Z';
-  const admission = await collectSuccessorLiveAdmission({ ...value, sourceCwd: cwd, trustedCwd, now });
+  const admission = await collectSuccessorLiveAdmission({ ...value, sourceCwd: trustedCwd, trustedCwd, now });
   assert.equal(admission.dispatchedAt, value.run.run_started_at);
   const records = successorRecords(admission), intent = createPreviewEmailBuildIntent({ candidateSha: policy.candidateSha,
     harnessSha, controlRevision: controls.previewControlRevision, runId: 99, operationId, records, admission, now });
@@ -143,7 +158,7 @@ test('real GitHub seconds timestamps bind genuine original intent/job and cannot
   assert.equal(binding.jobStartedAt, job.started_at); assert.equal(binding.dispatchedAt, value.run.run_started_at);
   assert.equal(binding.issuanceEnvelopeSha256, digest(issuance));
   assert.throws(() => assertTrustedPreviewEmailIntentRecord(structuredClone(original), { admission, now }));
-  const other = fixture(100), otherAdmission = await collectSuccessorLiveAdmission({ ...other, sourceCwd: cwd, trustedCwd, now });
+  const other = fixture(100), otherAdmission = await collectSuccessorLiveAdmission({ ...other, sourceCwd: trustedCwd, trustedCwd, now });
   assert.throws(() => assertTrustedPreviewEmailIntentRecord(original, { admission: otherAdmission, now }));
   await assert.rejects(() => collectTrustedPreviewEmailIntent({ ...args, admission: otherAdmission }));
   assert.throws(() => coordinationBindingFromOriginal({ admission: otherAdmission, original, issuanceEnvelope: issuance, now }));
@@ -154,12 +169,12 @@ test('real GitHub seconds timestamps bind genuine original intent/job and cannot
   assert.throws(() => successorLiveSelection(admission, policy.candidateSha, now + 1800001));
   for (const timestamp of ['2026-10-09T01:29:59Z', '2026-10-09T02:00:01Z', '2026-02-30T01:59:50Z']) {
     const changed = fixture(); changed.run.run_started_at = timestamp;
-    await assert.rejects(() => collectSuccessorLiveAdmission({ ...changed, sourceCwd: cwd, trustedCwd, now }));
+    await assert.rejects(() => collectSuccessorLiveAdmission({ ...changed, sourceCwd: trustedCwd, trustedCwd, now }));
   }
 });
 
 test('genuine exact admission reaches fixed attest preflight but cannot grant private/publication access', async () => {
-  const value = fixture(), admission = await collectSuccessorLiveAdmission({ ...value, sourceCwd: cwd, trustedCwd, now });
+  const value = fixture(), admission = await collectSuccessorLiveAdmission({ ...value, sourceCwd: trustedCwd, trustedCwd, now });
   const nonce = '11111111-1111-4111-8111-111111111111', scriptSha256 = 'e'.repeat(64);
   const approval = { schemaVersion: 1, action: 'attest', purpose: SUCCESSOR_ATTEST_PURPOSE, authorized: true,
     authorizedBy: fcosConnectionIdentifier('github', 'Required account'), authorizationEvidence: 'OFFLINE PERSONAL APPROVAL FIXTURE',
@@ -239,7 +254,7 @@ for (const [name, change] of [
 
 test('positive offline protected-tree admission yields only an opaque data contract and exact Preview request', async () => {
   const value = fixture();
-  const admission = await collectSuccessorLiveAdmission({ reads: value.reads, binding: value.binding, sourceCwd: cwd, trustedCwd, now });
+  const admission = await collectSuccessorLiveAdmission({ reads: value.reads, binding: value.binding, sourceCwd: trustedCwd, trustedCwd, now });
   assert.equal(successorLiveSelection(admission, policy.candidateSha, now), admission);
   assert.throws(() => successorLiveSelection(structuredClone(admission), policy.candidateSha, now));
   assert.throws(() => successorLiveSelection(admission, policy.deferredFinalSha, now));
@@ -263,7 +278,7 @@ test('selection retains each original review age instead of renewing it at colle
     replaceContext(value, context => { context.provisionedAt = iso(now - 2000000); });
     value.reviews = value.reviews.map(review => record({ ...review.value, reviewedAt: iso(now - (review.value.role === role ? 1799000 : 30000)) }));
     value.rows.root = value.reviews[0]; value.rows.independent = value.reviews[1];
-    const admission = await collectSuccessorLiveAdmission({ reads: value.reads, binding: value.binding, sourceCwd: cwd, trustedCwd, now });
+    const admission = await collectSuccessorLiveAdmission({ reads: value.reads, binding: value.binding, sourceCwd: trustedCwd, trustedCwd, now });
     assert.equal(admission.reviewedAt[role], iso(now - 1799000));
     assert.equal(Object.isFrozen(admission.reviewedAt), true);
     assert.equal(successorLiveSelection(admission, policy.candidateSha, now + 1000), admission);
@@ -282,21 +297,21 @@ test('actual API Git blob, current harness, dispatch and account checks reject s
     v => { const read = v.reads.json; v.reads.json = endpoint => { const result = read(endpoint); return endpoint.includes('/contents/') ? { ...result, sha: 'f'.repeat(40) } : result; }; },
     v => { const read = v.reads.json; v.reads.json = endpoint => { if (endpoint.includes('/contents/')) throw Error('missing'); return read(endpoint); }; }]) {
     const value = fixture(); change(value);
-    await assert.rejects(() => collectSuccessorLiveAdmission({ reads: value.reads, binding: value.binding, sourceCwd: cwd, trustedCwd, now }));
+    await assert.rejects(() => collectSuccessorLiveAdmission({ reads: value.reads, binding: value.binding, sourceCwd: trustedCwd, trustedCwd, now }));
   }
 });
 
 test('caller control hashes and dirty actual harness bytes cannot substitute computed clean provenance', async () => {
   const value = fixture(); value.binding.configurationRevision = 'f'.repeat(64);
-  await assert.rejects(() => collectSuccessorLiveAdmission({ reads: value.reads, binding: value.binding, sourceCwd: cwd, trustedCwd, now }),
+  await assert.rejects(() => collectSuccessorLiveAdmission({ reads: value.reads, binding: value.binding, sourceCwd: trustedCwd, trustedCwd, now }),
     { code: 'EXACT_SUCCESSOR_ACTUAL_CONTROL_BINDING_REQUIRED' });
   assert.equal(value.calls.length, 0);
   const file = join(trustedCwd, 'scripts/lib/runtime-compatibility-successor-adapter.mjs'), original = readFileSync(file);
   try {
     writeFileSync(file, Buffer.concat([original, Buffer.from('\n// Unreviewed control change.\n')]));
-    assert.throws(() => successorLiveControlBinding({ trustedCwd, sourceCwd: cwd }));
+    assert.throws(() => successorLiveControlBinding({ trustedCwd, sourceCwd: trustedCwd }));
     const changed = fixture();
-    await assert.rejects(() => collectSuccessorLiveAdmission({ reads: changed.reads, binding: changed.binding, sourceCwd: cwd, trustedCwd, now }));
+    await assert.rejects(() => collectSuccessorLiveAdmission({ reads: changed.reads, binding: changed.binding, sourceCwd: trustedCwd, trustedCwd, now }));
     assert.equal(changed.calls.length, 0);
   } finally { writeFileSync(file, original); }
 });
@@ -316,20 +331,20 @@ test('replacement commits cannot substitute physical controls for raw pinned har
     const substituted = collectBuildProvenance({ cwd: trustedCwd, env: {}, requireClean: true });
     assert.equal(substituted.gitDirty, false); assert.equal(substituted.commit, alteredCommit);
     assert.equal(git(['--no-replace-objects', 'show', `${alteredCommit}:AGENTS.md`]).equals(original), false);
-    assert.throws(() => successorLiveControlBinding({ trustedCwd, sourceCwd: cwd }), { code: 'EXACT_SUCCESSOR_COMMITTED_CONTROL_BYTES_REQUIRED' });
+    assert.throws(() => successorLiveControlBinding({ trustedCwd, sourceCwd: trustedCwd }), { code: 'EXACT_SUCCESSOR_COMMITTED_CONTROL_BYTES_REQUIRED' });
     git(['replace', '-d', alteredCommit]); alteredCommit = null;
     git(['update-ref', 'HEAD', harnessSha]); git(['replace', harnessSha, replacementCommit]);
     // A replacement with identical allowlisted bytes must also fail: it could
     // otherwise falsify clean provenance for files outside this allowlist.
     assert.equal(collectBuildProvenance({ cwd: trustedCwd, env: {}, requireClean: true }).gitDirty, false);
-    assert.throws(() => successorLiveControlBinding({ trustedCwd, sourceCwd: cwd }), { code: 'EXACT_SUCCESSOR_REPLACEMENT_REFS_FORBIDDEN' });
+    assert.throws(() => successorLiveControlBinding({ trustedCwd, sourceCwd: trustedCwd }), { code: 'EXACT_SUCCESSOR_REPLACEMENT_REFS_FORBIDDEN' });
   } finally {
     for (const commit of [alteredCommit, harnessSha].filter(Boolean)) {
       if (git(['for-each-ref', '--format=%(refname)', `refs/replace/${commit}`]).length) git(['replace', '-d', commit]);
     }
     git(['update-ref', 'HEAD', harnessSha]); git(['read-tree', harnessSha]); writeFileSync(file, original);
   }
-  assert.equal(successorLiveControlBinding({ trustedCwd, sourceCwd: cwd }).harnessSha, harnessSha);
+  assert.equal(successorLiveControlBinding({ trustedCwd, sourceCwd: trustedCwd }).harnessSha, harnessSha);
 });
 
 test('ambient Git repository selection and configuration overrides fail closed', { concurrency: false }, () => {
@@ -340,7 +355,7 @@ test('ambient Git repository selection and configuration overrides fail closed',
     const original = Object.fromEntries(Object.keys(overrides).map(key => [key, process.env[key]]));
     try {
       Object.assign(process.env, overrides);
-      assert.throws(() => successorLiveControlBinding({ trustedCwd, sourceCwd: cwd }), { code: 'EXACT_SUCCESSOR_AMBIENT_GIT_OVERRIDE_FORBIDDEN' });
+      assert.throws(() => successorLiveControlBinding({ trustedCwd, sourceCwd: trustedCwd }), { code: 'EXACT_SUCCESSOR_AMBIENT_GIT_OVERRIDE_FORBIDDEN' });
     } finally {
       for (const [key, value] of Object.entries(original)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
     }
@@ -348,8 +363,8 @@ test('ambient Git repository selection and configuration overrides fail closed',
 });
 
 test('trusted and source roots must be actual Git repository roots', () => {
-  assert.throws(() => successorLiveControlBinding({ trustedCwd: join(trustedCwd, 'config'), sourceCwd: cwd }), { code: 'EXACT_SUCCESSOR_REPOSITORY_ROOT_HEAD_REQUIRED' });
-  assert.throws(() => successorLiveControlBinding({ trustedCwd, sourceCwd: join(cwd, 'config') }), { code: 'EXACT_SUCCESSOR_REPOSITORY_ROOT_HEAD_REQUIRED' });
+  assert.throws(() => successorLiveControlBinding({ trustedCwd: join(trustedCwd, 'config'), sourceCwd: trustedCwd }), { code: 'EXACT_SUCCESSOR_REPOSITORY_ROOT_HEAD_REQUIRED' });
+  assert.throws(() => successorLiveControlBinding({ trustedCwd, sourceCwd: join(trustedCwd, 'config') }), { code: 'EXACT_SUCCESSOR_REPOSITORY_ROOT_HEAD_REQUIRED' });
 });
 
 test('historical defaults remain unchanged and successor build/signer require genuine operation-local admission', () => {
@@ -376,7 +391,7 @@ function successorRecords(admission) {
 }
 
 test('accepted partial build integration binds material domains and still invokes zero execution callbacks', async () => {
-  const value = fixture(), admission = await collectSuccessorLiveAdmission({ reads: value.reads, binding: value.binding, sourceCwd: cwd, trustedCwd, now });
+  const value = fixture(), admission = await collectSuccessorLiveAdmission({ reads: value.reads, binding: value.binding, sourceCwd: trustedCwd, trustedCwd, now });
   const records = successorRecords(admission);
   assert.equal(previewEmailBuildCandidate(policy.candidateSha, { admission, now }).sha, policy.candidateSha);
   assert.equal(previewEmailBuildContract(policy.candidateSha, { admission, now }).contractSha256, admission.contractSha256);
@@ -405,7 +420,7 @@ test('accepted partial build integration binds material domains and still invoke
 });
 
 test('accepted partial signer integration authenticates raw three-file source and preserves the signed-envelope conjunction', async () => {
-  const value = fixture(), admission = await collectSuccessorLiveAdmission({ reads: value.reads, binding: value.binding, sourceCwd: cwd, trustedCwd, now });
+  const value = fixture(), admission = await collectSuccessorLiveAdmission({ reads: value.reads, binding: value.binding, sourceCwd: trustedCwd, trustedCwd, now });
   assert.equal(previewEmailSignerEnabled(policy.candidateSha, { admission, now }), true);
   const sourceHashes = previewEmailSignerSourceHashes(policy.candidateSha, { admission, now });
   assert.deepEqual(previewEmailSignerSourceProof({ commit: policy.candidateSha, cwd: trustedCwd, admission, now }), sourceHashes);
@@ -447,7 +462,7 @@ test('accepted partial signer integration authenticates raw three-file source an
 // Admission is minted through the real protected-material collector above, and
 // baseline/build/signer/isolation validators below are the actual installed code.
 async function conjunctionFixture() {
-  const value = fixture(), admission = await collectSuccessorLiveAdmission({ reads: value.reads, binding: value.binding, sourceCwd: cwd, trustedCwd, now });
+  const value = fixture(), admission = await collectSuccessorLiveAdmission({ reads: value.reads, binding: value.binding, sourceCwd: trustedCwd, trustedCwd, now });
   const records = successorRecords(admission), url = 'https://fcos-fixture04-hocheunglai-6535s-projects.vercel.app';
   const candidate = { id: 'dpl_Fixture04ee', url, sha: policy.candidateSha, target: 'preview', state: 'READY', createdAt: now + 500,
     teamId: records.teamId, projectId: records.projectId, operationId };

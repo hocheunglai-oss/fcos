@@ -39,3 +39,23 @@ these portable tests do not repeat those suites or upgrade their readiness.
 The pins intentionally fail before test bodies when relevant source changes.
 A future source change needs an explicit reviewed binding update and affected
 verification rather than silently running tests against historical copies.
+
+## Current consumer binding revision
+
+CI repair adds `fixture-manifest-v3.json` and `source-bindings-v2.json`, pinned
+to the actual public implementation bytes at `e29f52b418e76ce615bda3c8fde34dc61c551bc4`.
+The original manifests, source bindings and272-object V2 pack remain unchanged.
+The new binding authenticates all80 used source/control/review paths. Current
+consumer assertions distinguish source preparation from opaque admission and
+retain exact protected refusal codes; denied environment reads return no value.
+
+`control-objects-v1.pack` is a separately pinned non-thin three-blob supplement
+for frozen04ee `config/fcosCiIdentity.js`, `vercel.json` and `package.json`. Live
+unit fixtures start with an empty disposable object store, authenticate all272
+original objects, then exactly three additional blobs and all13 raw candidate
+controls. One separately bound current public signer file has exactly the raw
+frozen04ee blob OID and body hash; importing its existing bytes yields276 objects.
+They never use the host's object alternates or fetch candidate history.
+These offline repositories and fixture review data confer no protected or live
+authority. No production implementation, control, workflow or dependency changes
+are part of this CI repair.
