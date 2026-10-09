@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "id": "exact-04ee-runtime-compatibility-live-v1",
+  "candidateSha": "04ee3425aac7a49089eda781eb3c976aea1f6785",
+  "branch": "codex/readonly-collections-compatibility-successor-20261005",
+  "candidateGitTree": "4c8258c4f677878532b5d52e1f9b52fb4a767d18",
+  "candidateTreeHash": "1a3b7416c376b57c3bd67ac60eb5bb79cf6ae33375aa3bb0cac4fa7d8c2ca0e9",
+  "sourceDigest": "b4d9709f53e031e19920d1630c1730a2aa9f349fe8bb035de3c05b4627a8f52e",
+  "lockHash": "9b3d6eb4824ea8688022b9ba249041e25c44b8cebc5443d59c55d8a2da5da378",
+  "sourceManifestSha256": "867ebce63c4b34d0a73bbcbe0749a620f912e8a13c6484da269fda3850a9f432",
+  "existingUi": false,
+  "historicalCandidateSha": "ff8859b287009e20462c5c0cceff89ae12f13010",
+  "deferredFinalSha": "2f4bca02e94105681dedf674985e052169602492",
+  "materials": {
+    "context": ".github/compatibility-admission/04ee-live-context.json",
+    "root": ".github/compatibility-admission/04ee-root-review.json",
+    "independent": ".github/compatibility-admission/04ee-independent-review.json"
+  },
+  "maxAgeSeconds": {
+    "provisioning": 2700,
+    "dispatch": 1800,
+    "artifact": 1800,
+    "previewAuthority": 600
+  },
+  "limitation": "This exact contract supplies source and collector admission only. Accepted review material must exist in the actual protected harness tree and all existing live authority, evidence and financial gates remain required. Successor provider writes require a separately verified shared coordinator and durable operation state."
+}
