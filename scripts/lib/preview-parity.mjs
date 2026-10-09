@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs';
-import { LEGACY_EMAIL_BASELINE_CONTRACT, legacyEmailUnknownAllowed } from './legacy-email-baseline-proof.mjs';
+import { LEGACY_EMAIL_BASELINE_CONTRACT, legacyEmailUnknownAllowed, assertLegacyEmailBaselineProof } from './legacy-email-baseline-proof.mjs';
 import { fcosConnectionIdentifier, fcosSalesforceEnvironment } from '../../config/fcosConnections.js';
 import { canonicalFcosE2eCandidateUrl } from '../verify-e2e-candidate.mjs';
+import { SUCCESSOR_LIVE_CONTRACT, successorLiveSelection } from './runtime-compatibility-successor-live.mjs';
 
 const policy = JSON.parse(readFileSync(new URL('../../config/preview-parity-policy.json', import.meta.url), 'utf8'));
 const freeze = value => { if (object(value) || Array.isArray(value)) { Object.values(value).forEach(freeze); Object.freeze(value); } return value; };
@@ -29,12 +30,36 @@ const immutableUrl = value => { try { return canonicalFcosE2eCandidateUrl(value)
  * auth records require state authenticated, target and mode from an independent probe.
  * Never persist raw observations; the result and thrown error contain names only.
  */
-export function evaluatePreviewParity(observations, { expectedCommit, sourceHashes, policy: rules = policy, now = Date.now() } = {}) {
+export function evaluatePreviewParity(observations, { expectedCommit, sourceHashes, policy: rules = policy, admission, now = Date.now() } = {}) {
   const blockers = [], classifiedKeys = [], unknowns = [], acceptedHistoricalUnknowns = [];
   const fail = (code, scope, key) => blockers.push({ code, scope, ...(keyName(key) ? { key } : {}), message: `${code}: ${scope}${keyName(key) ? ` (${key})` : ''}.` });
   const finish = () => ({ schemaVersion: 1, policyVersion: rules?.policyVersion, pass: blockers.length === 0, blockers, classifiedKeys, unknowns, acceptedHistoricalUnknowns,
     limitations: [...(Array.isArray(rules?.limitations) ? rules.limitations : []), ...(acceptedHistoricalUnknowns.length ? [LEGACY_EMAIL_BASELINE_CONTRACT.limitation] : [])] });
   if (!object(observations) || observations.schemaVersion !== 1) { fail('OBSERVATION_SCHEMA', 'observations'); return finish(); }
+  // Exact04ee always needs the independently collected baseline/build/signer/
+  // normal/isolation conjunction, even when no historical unknown is requested.
+  if (expectedCommit === SUCCESSOR_LIVE_CONTRACT.candidateSha) {
+    try {
+      const selected = successorLiveSelection(admission, expectedCommit, now);
+      if (observations.source?.hashes?.application !== selected.candidate.sourceDigest
+        || sourceHashes?.application !== selected.candidate.sourceDigest
+        || observations.candidate?.deployment?.sha !== selected.candidate.sha) {
+        fail('EXACT_SUCCESSOR_APPLICATION_SOURCE_REQUIRED', 'source');
+      }
+      assertLegacyEmailBaselineProof({ proof: observations.legacyEmailBaseline,
+        production: observations.production?.deployment, candidate: observations.candidate?.deployment,
+        sourceDigest: observations.source?.hashes?.application, normal: observations.legacyEmailNormal, admission, now });
+      const normal = observations.legacyEmailNormal, coverage = observations.coverage;
+      // The evaluator cannot accept a second caller-created pass list in place
+      // of the same archive-authenticated normal record checked above.
+      if (!object(coverage) || Object.keys(coverage).length !== 4
+        || !['capturedAt', 'deploymentId', 'sha', 'checks'].every(key => Object.hasOwn(coverage, key))
+        || coverage.capturedAt !== normal.capturedAt || coverage.deploymentId !== normal.deploymentId || coverage.sha !== normal.sha
+        || JSON.stringify(coverage.checks) !== JSON.stringify(normal.checks)) fail('EXACT_SUCCESSOR_NORMAL_COVERAGE_BINDING_REQUIRED', 'coverage');
+    } catch {
+      fail('EXACT_SUCCESSOR_BASELINE_CONJUNCTION_REQUIRED', 'email_baseline');
+    }
+  }
   if (!object(rules) || rules.schemaVersion !== 1 || !Number.isInteger(rules.policyVersion) || rules.policyVersion < 1
     || !Number.isInteger(rules.maxAgeSeconds) || rules.maxAgeSeconds < 1 || rules.maxAgeSeconds > 1800
     || !object(rules.applicationKeys) || !object(rules.intentionalDifferences)
@@ -124,7 +149,7 @@ export function evaluatePreviewParity(observations, { expectedCommit, sourceHash
       }
       continue;
     }
-    if (legacyEmailUnknownAllowed(key, observations, now)) {
+    if (legacyEmailUnknownAllowed(key, observations, now, admission)) {
       acceptedHistoricalUnknowns.push({ scope: 'production', key, exception: LEGACY_EMAIL_BASELINE_CONTRACT.id });
       unknowns.push({ scope: 'production', key });
       if (b.state === 'unknown') unknowns.push({ scope: 'candidate', key });

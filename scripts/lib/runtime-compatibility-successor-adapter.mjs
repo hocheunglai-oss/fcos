@@ -1,12 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { fcosConnectionIdentifier } from '../../config/fcosConnections.js';
 import { SUCCESSOR_LIVE_CONTRACT, successorLiveSelection, rejectSuccessorUncoordinatedMutation } from './runtime-compatibility-successor-live.mjs';
+import { compatibilityBrowserIsolationVerified } from './compatibility-browser-isolation.mjs';
 
 const parity = JSON.parse(readFileSync(new URL('../../config/preview-parity-policy.json', import.meta.url)));
 if (parity.requiredModules.length !== 15) throw new Error('All fifteen compatibility modules remain mandatory.');
 
-/** Uninstalled, data-only adapter. Existing executable builders, signer,
- * parity, normal-role and release routes do not import this module. */
+/** Operation-local data adapter. Provider writes remain unavailable until the
+ * canonical shared-coordinator bridge is independently installed and reviewed. */
 export function successorLiveCollectionContract({ admission, now = Date.now() } = {}) {
   const selected = successorLiveSelection(admission, SUCCESSOR_LIVE_CONTRACT.candidateSha, now);
   return {
@@ -20,6 +21,23 @@ export function successorLiveCollectionContract({ admission, now = Date.now() } 
     previewAuthorized: false, productionAuthorized: false, credentialAuthority: false, mutations: 0,
     blockers: ['EXACT_SUCCESSOR_SIGNER_PARITY_INTEGRATION_REQUIRES_INDEPENDENT_REVIEW', 'EXACT_SUCCESSOR_SHARED_COORDINATOR_REQUIRED'],
   };
+}
+
+export function successorLiveNormalCoverageVerified({ admission, normal, candidate, now = Date.now() } = {}) {
+  const selected = successorLiveSelection(admission, SUCCESSOR_LIVE_CONTRACT.candidateSha, now);
+  const capturedAt = Date.parse(normal?.capturedAt), createdAt = typeof candidate?.createdAt === 'number' ? candidate.createdAt : Date.parse(candidate?.createdAt);
+  return normal?.kind === 'normal_role' && normal.sha === selected.candidate.sha && normal.harnessSha === selected.harnessSha
+    && normal.sourceDigest === selected.candidate.sourceDigest && normal.lockHash === selected.candidate.lockHash
+    && normal.configurationRevision === selected.context.configurationRevision
+    && normal.deploymentId === candidate?.id && normal.candidateUrl === candidate?.url
+    && Number.isFinite(capturedAt) && Number.isFinite(createdAt) && capturedAt >= createdAt && capturedAt <= now && now - capturedAt <= 1800000
+    && Array.isArray(normal.checks) && normal.checks.length === parity.requiredModules.length
+    && normal.checks.every(row => row && typeof row === 'object' && !Array.isArray(row) && Object.keys(row).length === 5
+      && ['module', 'role', 'result', 'kind', 'evidenceId'].every(key => Object.hasOwn(row, key)))
+    && parity.requiredModules.every(module => normal.checks.filter(row => row.module === module && row.result === 'pass'
+      && parity.normalRoles.includes(row.role) && (parity.workflowModules.includes(module) ? row.kind === 'workflow_read' : ['read', 'workflow_read'].includes(row.kind))
+      && typeof row.evidenceId === 'string' && row.evidenceId.trim()).length === 1)
+    && compatibilityBrowserIsolationVerified(normal.browserIsolation, normal, parity.requiredModules);
 }
 
 export function successorLivePreviewRequest({ admission, operationId, now = Date.now() } = {}) {

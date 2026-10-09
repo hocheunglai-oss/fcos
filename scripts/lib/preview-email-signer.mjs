@@ -1,6 +1,9 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { canonicalFcosE2eCandidateUrl } from '../verify-e2e-candidate.mjs';
+import { SUCCESSOR_LIVE_CONTRACT, successorLiveSelection, successorLiveBinding,
+  successorLiveSignerSourceHashes, successorLiveSignerSourceProof } from './runtime-compatibility-successor-live.mjs';
 
 export const PREVIEW_EMAIL_SIGNER_BODY = Object.freeze({
   messageId: 'fcos-verification-message',
@@ -61,7 +64,11 @@ const exactKeys = (value, keys) => plainObject(value) && Object.keys(value).leng
   && keys.every(key => Object.prototype.hasOwnProperty.call(value, key));
 const digest = value => createHash('sha256').update(value).digest('hex');
 
-function reviewedCandidate(commit) {
+function reviewedCandidate(commit, { admission, now = Date.now() } = {}) {
+  if (commit === SUCCESSOR_LIVE_CONTRACT.candidateSha) {
+    const selected = successorLiveSelection(admission, commit, now);
+    return selected.signerSource;
+  }
   if (typeof commit !== 'string' || !Object.prototype.hasOwnProperty.call(REVIEWED_CANDIDATES, commit)) throw safeError();
   return REVIEWED_CANDIDATES[commit];
 }
@@ -108,15 +115,18 @@ function validatedSignedEnvelope(value, now) {
     || value.url !== `/api/email-router-attachment?token=${encodeURIComponent(value.token)}`) throw safeError();
 }
 
-export function previewEmailSignerEnabled(commit) {
+export function previewEmailSignerEnabled(commit, { admission, now = Date.now() } = {}) {
+  if (commit === SUCCESSOR_LIVE_CONTRACT.candidateSha) { successorLiveSelection(admission, commit, now); return true; }
   return typeof commit === 'string' && Object.prototype.hasOwnProperty.call(REVIEWED_CANDIDATES, commit);
 }
 
-export function previewEmailSignerSourceHashes(commit) {
+export function previewEmailSignerSourceHashes(commit, { admission, now = Date.now() } = {}) {
+  if (commit === SUCCESSOR_LIVE_CONTRACT.candidateSha) return successorLiveSignerSourceHashes(admission, now);
   return { ...reviewedCandidate(commit).sourceHashes };
 }
 
-export function previewEmailSignerSourceProof({ commit, cwd = sourceRoot } = {}) {
+export function previewEmailSignerSourceProof({ commit, cwd = sourceRoot, admission, now = Date.now() } = {}) {
+  if (commit === SUCCESSOR_LIVE_CONTRACT.candidateSha) return successorLiveSignerSourceProof({ admission, cwd, now });
   const reviewed = reviewedCandidate(commit);
   const resolvedCommit = String(git(cwd, ['rev-parse', '--verify', `${commit}^{commit}`])).trim();
   if (resolvedCommit !== commit) throw safeError();
@@ -129,29 +139,34 @@ export function previewEmailSignerSourceProof({ commit, cwd = sourceRoot } = {})
   return { ...reviewed.sourceHashes };
 }
 
-export function previewEmailSignerEvidenceVerified(evidence, { deployment, sourceDigest, now = Date.now() } = {}) {
+export function previewEmailSignerEvidenceVerified(evidence, { deployment, sourceDigest, admission, now = Date.now() } = {}) {
   try {
+    if (evidence?.sha === SUCCESSOR_LIVE_CONTRACT.candidateSha) successorLiveBinding(admission, { sha: evidence.sha, sourceDigest }, now);
     const capturedAt = Date.parse(evidence?.capturedAt);
     const expectedNow = Number(now);
     if (!Number.isFinite(expectedNow) || !Number.isFinite(capturedAt) || capturedAt > expectedNow || expectedNow - capturedAt > SIGNER_EVIDENCE_MAX_AGE_MS
       || !exactKeys(evidence, ['schemaVersion', 'kind', 'probe', 'capturedAt', 'deploymentId', 'sha', 'sourceDigest', 'mailboxRegistryId', 'result', 'noAttachmentFetch', 'sourceHashes'])
       || evidence.schemaVersion !== 1 || evidence.kind !== SIGNER_EVIDENCE_KIND || evidence.probe !== SIGNER_EVIDENCE_PROBE
       || !exactInstant(evidence.capturedAt) || typeof deployment?.id !== 'string' || evidence.deploymentId !== deployment.id
-      || typeof deployment?.sha !== 'string' || evidence.sha !== deployment.sha || !previewEmailSignerEnabled(evidence.sha)
+      || typeof deployment?.sha !== 'string' || evidence.sha !== deployment.sha || !previewEmailSignerEnabled(evidence.sha, { admission, now })
       || typeof sourceDigest !== 'string' || !/^[0-9a-f]{64}$/.test(sourceDigest) || evidence.sourceDigest !== sourceDigest
       || evidence.mailboxRegistryId !== PREVIEW_EMAIL_SIGNER_MAILBOX_REGISTRY_ID || evidence.result !== 'pass'
-      || evidence.noAttachmentFetch !== true || !exactSourceHashes(evidence.sourceHashes, previewEmailSignerSourceHashes(evidence.sha))) throw safeError();
+      || evidence.noAttachmentFetch !== true || !exactSourceHashes(evidence.sourceHashes, previewEmailSignerSourceHashes(evidence.sha, { admission, now }))) throw safeError();
     return true;
   } catch { throw safeError(); }
 }
 
 export async function collectPreviewEmailSignerEvidence({ origin, deploymentId, sha, sourceDigest, bearerToken,
-  protectionBypass, fetchImpl = globalThis.fetch, cwd = sourceRoot, now = Date.now } = {}) {
+  protectionBypass, fetchImpl = globalThis.fetch, cwd = sourceRoot, admission, now = Date.now } = {}) {
   try {
     const targetOrigin = exactOrigin(origin);
+    if (sha === SUCCESSOR_LIVE_CONTRACT.candidateSha) {
+      successorLiveBinding(admission, { sha, sourceDigest }, Number(now()));
+      if (canonicalFcosE2eCandidateUrl(targetOrigin) !== targetOrigin) throw safeError();
+    }
     if (typeof deploymentId !== 'string' || !deploymentId || typeof sourceDigest !== 'string' || !/^[0-9a-f]{64}$/.test(sourceDigest)
       || typeof bearerToken !== 'string' || !bearerToken || typeof fetchImpl !== 'function') throw safeError();
-    const sourceHashes = previewEmailSignerSourceProof({ commit: sha, cwd });
+    const sourceHashes = previewEmailSignerSourceProof({ commit: sha, cwd, admission, now: Number(now()) });
     const endpoint = `${targetOrigin}/api/functions/emailRouterAttachmentUrl`;
     const response = await fetchImpl(endpoint, { method: 'POST', body: JSON.stringify(PREVIEW_EMAIL_SIGNER_BODY), redirect: 'error', signal: AbortSignal.timeout(20_000),
       headers: { authorization: `Bearer ${bearerToken}`, 'content-type': 'application/json',
@@ -161,7 +176,7 @@ export async function collectPreviewEmailSignerEvidence({ origin, deploymentId, 
     const evidence = { schemaVersion: 1, kind: SIGNER_EVIDENCE_KIND, probe: SIGNER_EVIDENCE_PROBE,
       capturedAt: new Date(Number(now())).toISOString(), deploymentId, sha, sourceDigest,
       mailboxRegistryId: PREVIEW_EMAIL_SIGNER_MAILBOX_REGISTRY_ID, result: 'pass', noAttachmentFetch: true, sourceHashes };
-    previewEmailSignerEvidenceVerified(evidence, { deployment: { id: deploymentId, sha }, sourceDigest, now: Number(now()) });
+    previewEmailSignerEvidenceVerified(evidence, { deployment: { id: deploymentId, sha }, sourceDigest, admission, now: Number(now()) });
     return evidence;
   } catch { throw safeError(); }
 }

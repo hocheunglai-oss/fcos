@@ -7,7 +7,8 @@ import { fcosConnectionIdentifier } from '../../config/fcosConnections.js';
 import { assertProtectedDefault, assertReleaseGitHubAccount, RELEASE_REPOSITORY } from './release-evidence.mjs';
 import { verifyRuntimeCompatibilitySuccessorSource } from '../verify-runtime-compatibility-successor.mjs';
 import { collectBuildProvenance } from './build-provenance.mjs';
-import { PREVIEW_EMAIL_BUILD_CONTROL_FILES } from './preview-email-build.mjs';
+import { PREVIEW_EMAIL_BUILD_CONTROL_FILES } from './preview-email-build-controls.mjs';
+import { githubProviderFresh } from './github-provider-timestamp.mjs';
 
 const digest = value => createHash('sha256').update(value).digest('hex');
 const freeze = value => { if (value && typeof value === 'object') { Object.values(value).forEach(freeze); Object.freeze(value); } return value; };
@@ -63,6 +64,9 @@ const candidateControlFiles = Object.freeze([
 // not let ambient Git selection/configuration change the repository it sees.
 // Presentation-only variables cannot select Git objects or configuration.
 const presentationGitEnvironment = new Set(['GIT_PAGER', 'GIT_EDITOR', 'GIT_SEQUENCE_EDITOR', 'GIT_TERMINAL_PROMPT']);
+function assertGitEnvironment() {
+  if (Object.keys(process.env).some(key => key.startsWith('GIT_') && !presentationGitEnvironment.has(key))) fail('EXACT_SUCCESSOR_AMBIENT_GIT_OVERRIDE_FORBIDDEN');
+}
 function isolatedGit(cwd) {
   return (args, input) => execFileSync('git', ['--no-replace-objects', ...args], { cwd, timeout: 30000,
     maxBuffer: 16 * 1024 * 1024, stdio: ['pipe', 'pipe', 'pipe'], input,
@@ -99,7 +103,7 @@ function rawHarnessFiles(git, commit) {
 }
 
 export function successorLiveControlBinding({ trustedCwd, sourceCwd } = {}) {
-  if (Object.keys(process.env).some(key => key.startsWith('GIT_') && !presentationGitEnvironment.has(key))) fail('EXACT_SUCCESSOR_AMBIENT_GIT_OVERRIDE_FORBIDDEN');
+  assertGitEnvironment();
   const trustedGit = isolatedGit(trustedCwd), git = isolatedGit(sourceCwd);
   const identity = repositoryIdentity(trustedGit, trustedCwd), sourceIdentity = repositoryIdentity(git, sourceCwd);
   const expectedRemotes = [ `https://github.com/${RELEASE_REPOSITORY}.git`, `https://github.com/${RELEASE_REPOSITORY}`, `git@github.com:${RELEASE_REPOSITORY}.git` ];
@@ -205,8 +209,10 @@ export function assertSuccessorLiveMaterials({ context, reviews, binding, now = 
 
 export async function collectSuccessorLiveAdmission({ reads, binding, sourceCwd, trustedCwd, now = Date.now() } = {}) {
   // A caller's sourceVerified flag or serialized pass file cannot mint selection.
-  assertSuccessorLiveSource(verifyRuntimeCompatibilitySuccessorSource({ cwd: sourceCwd, candidateCommit: policy.candidateSha }));
+  const sourceReceipt = verifyRuntimeCompatibilitySuccessorSource({ cwd: sourceCwd, candidateCommit: policy.candidateSha });
+  assertSuccessorLiveSource(sourceReceipt);
   const controls = successorLiveControlBinding({ trustedCwd, sourceCwd });
+  const signerSource = readSignerSources(sourceCwd);
   if (['harnessSha', 'previewControlRevision', 'configurationRevision'].some(key => binding?.[key] !== controls[key])) fail('EXACT_SUCCESSOR_ACTUAL_CONTROL_BINDING_REQUIRED');
   assertReleaseGitHubAccount(reads);
   const repository = await reads.json(`repos/${RELEASE_REPOSITORY}`);
@@ -218,7 +224,7 @@ export async function collectSuccessorLiveAdmission({ reads, binding, sourceCwd,
   const run = await reads.json(`repos/${RELEASE_REPOSITORY}/actions/runs/${binding.runId}`);
   if (run?.id !== binding.runId || run.repository?.full_name !== RELEASE_REPOSITORY || run.head_repository?.full_name !== RELEASE_REPOSITORY
     || run.head_sha !== trusted.sha || run.head_branch !== trusted.branch || run.event !== 'workflow_dispatch' || run.run_attempt !== 1
-    || !['in_progress', 'completed'].includes(run.status) || !fresh(run.run_started_at, policy.maxAgeSeconds.dispatch, now)
+    || !['in_progress', 'completed'].includes(run.status) || !githubProviderFresh(run.run_started_at, policy.maxAgeSeconds.dispatch * 1000, now)
     || !['.github/workflows/preview-email-proof-build.yml', '.github/workflows/runtime-compatibility-normal-role.yml', '.github/workflows/runtime-compatibility-release.yml']
       .some(path => [path, `${path}@${trusted.branch}`].includes(run.path))) fail('EXACT_SUCCESSOR_DISPATCH_REQUIRED');
   const rows = {};
@@ -228,8 +234,8 @@ export async function collectSuccessorLiveAdmission({ reads, binding, sourceCwd,
   const context = rows.context.value;
   const contractSha256 = digest(`fcos-exact-04ee-live-material-v1\0${SUCCESSOR_LIVE_CONTRACT_SHA256}\0${rows.context.sha256}\0${rows.root.sha256}\0${rows.independent.sha256}`);
   const admission = freeze({ schemaVersion: 1, kind: 'fcos_exact_04ee_collector_admission', harnessSha: trusted.sha,
-    contractSha256, capturedAt: new Date(now).toISOString(), dispatchedAt: run.run_started_at, runId: run.id,
-    workflow: run.path.split('@')[0], context,
+    contractSha256, capturedAt: new Date(now).toISOString(), dispatchedAt: run.run_started_at, runId: run.id, runAttempt: run.run_attempt,
+    workflow: run.path.split('@')[0], context, sourceReceipt, signerSource, controlFiles: controls.controlFiles,
     reviewedAt: { root: rows.root.value.reviewedAt, independent: rows.independent.value.reviewedAt },
     materialHashes: Object.fromEntries(Object.entries(rows).map(([key, value]) => [key, value.sha256])),
     candidate: { sha: policy.candidateSha, branch: policy.branch, sourceDigest: policy.sourceDigest, lockHash: policy.lockHash, ...context.records },
@@ -238,11 +244,21 @@ export async function collectSuccessorLiveAdmission({ reads, binding, sourceCwd,
   return admission;
 }
 
+/** Compute the operation binding from actual clean/raw controls before reading
+ * protected material. This convenience cannot accept caller-selected hashes. */
+export function collectSuccessorLiveOperationAdmission({ reads, sourceCwd, trustedCwd, runId, now = Date.now() } = {}) {
+  const controls = successorLiveControlBinding({ trustedCwd, sourceCwd });
+  return collectSuccessorLiveAdmission({ reads, sourceCwd, trustedCwd, now,
+    binding: { sha: policy.candidateSha, sourceDigest: policy.sourceDigest, lockHash: policy.lockHash,
+      candidateTreeHash: policy.candidateTreeHash, harnessSha: controls.harnessSha,
+      previewControlRevision: controls.previewControlRevision, configurationRevision: controls.configurationRevision, runId } });
+}
+
 // Revalidate the ages without accepting a cloned or caller-created selection.
 export function successorLiveSelection(admission, candidateSha = policy.candidateSha, now = Date.now()) {
-  if (!verified.has(admission) || candidateSha !== policy.candidateSha || !fresh(admission.capturedAt, policy.maxAgeSeconds.artifact, now)
+  if (!verified.has(admission) || candidateSha !== policy.candidateSha || admission.runAttempt !== 1 || !fresh(admission.capturedAt, policy.maxAgeSeconds.artifact, now)
     || !fresh(admission.context.provisionedAt, policy.maxAgeSeconds.provisioning, now)
-    || !fresh(admission.dispatchedAt, policy.maxAgeSeconds.dispatch, now)
+    || !githubProviderFresh(admission.dispatchedAt, policy.maxAgeSeconds.dispatch * 1000, now)
     || !['root', 'independent'].every(role => fresh(admission.reviewedAt[role], policy.maxAgeSeconds.artifact, now))) fail('EXACT_SUCCESSOR_TRUSTED_SELECTION_REQUIRED');
   return admission;
 }
@@ -251,6 +267,69 @@ export function successorEmailContract(admission, now = Date.now()) {
   const selected = successorLiveSelection(admission, policy.candidateSha, now);
   return { contract: { ...historical, preview: { ...historical.preview, attachmentOperationId: selected.context.attachmentOperationId,
     candidates: [selected.candidate] } }, contractSha256: selected.contractSha256 };
+}
+
+// This operation-local view carries no execution authority. Historical
+// consumers retain their own default contract when the candidate is different.
+export function successorLiveBinding(admission, binding, now = Date.now()) {
+  const selected = successorLiveSelection(admission, binding?.sha, now);
+  for (const [key, expected] of Object.entries({ sha: policy.candidateSha, sourceDigest: policy.sourceDigest,
+    lockHash: policy.lockHash, harnessSha: selected.harnessSha, candidateTreeHash: policy.candidateTreeHash,
+    configurationRevision: selected.context.configurationRevision, previewControlRevision: selected.context.previewControlRevision })) {
+    if (binding?.[key] !== undefined && binding[key] !== expected) fail('EXACT_SUCCESSOR_ACTUAL_CONTROL_BINDING_REQUIRED');
+  }
+  return selected;
+}
+
+export function successorLiveSourceReceipt(admission, now = Date.now()) {
+  const selected = successorLiveSelection(admission, policy.candidateSha, now);
+  assertSuccessorLiveSource(selected.sourceReceipt);
+  return selected.sourceReceipt;
+}
+
+export async function successorLiveRemoteControls({ reads, admission, now = Date.now() } = {}) {
+  const selected = successorLiveSelection(admission, policy.candidateSha, now);
+  for (const [file, expected] of selected.controlFiles.trusted) {
+    const raw = await reads.json(`repos/${RELEASE_REPOSITORY}/contents/${file}?ref=${selected.harnessSha}`);
+    if (raw?.type !== 'file' || raw.path !== file || raw.encoding !== 'base64' || typeof raw.content !== 'string' || !sha(raw.sha)) fail('EXACT_SUCCESSOR_REMOTE_CONTROLS_REQUIRED');
+    const body = Buffer.from(raw.content, 'base64');
+    if (body.length > 16 * 1024 * 1024 || digest(body) !== expected
+      || createHash('sha1').update(`blob ${body.length}\0`).update(body).digest('hex') !== raw.sha) fail('EXACT_SUCCESSOR_REMOTE_CONTROLS_REQUIRED');
+  }
+  successorLiveSelection(selected, policy.candidateSha, now);
+  return selected.context.previewControlRevision;
+}
+
+function readSignerSources(cwd) {
+  assertGitEnvironment();
+  const git = isolatedGit(cwd), identity = repositoryIdentity(git, cwd);
+  const remote = git(['remote', 'get-url', 'origin']).toString('utf8').trim();
+  if (![ `https://github.com/${RELEASE_REPOSITORY}.git`, `https://github.com/${RELEASE_REPOSITORY}`, `git@github.com:${RELEASE_REPOSITORY}.git` ].includes(remote)
+    || git(['rev-parse', '--verify', `${policy.candidateSha}^{commit}`]).toString('utf8').trim() !== policy.candidateSha
+    || git(['rev-parse', `${policy.candidateSha}^{tree}`]).toString('utf8').trim() !== policy.candidateGitTree
+    || git(['for-each-ref', '--format=%(refname)', 'refs/replace/']).length) fail('EXACT_SUCCESSOR_SIGNER_RAW_SOURCE_REQUIRED');
+  const sourceHashes = {}, blobIds = {};
+  for (const file of ['api/_emailRouterHandlers.js', 'api/_emailRouterCore.js', 'api/functions/[name].js']) {
+    const oid = git(['rev-parse', '--verify', `${policy.candidateSha}:${file}`]).toString('utf8').trim();
+    if (!sha(oid)) fail('EXACT_SUCCESSOR_SIGNER_RAW_SOURCE_REQUIRED');
+    const body = git(['cat-file', 'blob', oid]);
+    if (createHash('sha1').update(`blob ${body.length}\0`).update(body).digest('hex') !== oid) fail('EXACT_SUCCESSOR_SIGNER_RAW_SOURCE_REQUIRED');
+    sourceHashes[file] = digest(body);
+    blobIds[file] = oid;
+  }
+  const finalIdentity = repositoryIdentity(git, cwd);
+  if (finalIdentity.root !== identity.root || finalIdentity.head !== identity.head) fail('EXACT_SUCCESSOR_REPOSITORY_IDENTITY_CHANGED');
+  return { sourceHashes, blobIds };
+}
+
+export function successorLiveSignerSourceHashes(admission, now = Date.now()) {
+  return { ...successorLiveSelection(admission, policy.candidateSha, now).signerSource.sourceHashes };
+}
+
+export function successorLiveSignerSourceProof({ admission, cwd, now = Date.now() } = {}) {
+  const selected = successorLiveSelection(admission, policy.candidateSha, now), actual = readSignerSources(cwd);
+  if (JSON.stringify(actual) !== JSON.stringify(selected.signerSource)) fail('EXACT_SUCCESSOR_SIGNER_RAW_SOURCE_REQUIRED');
+  return { ...actual.sourceHashes };
 }
 
 export function successorLivePlan() {

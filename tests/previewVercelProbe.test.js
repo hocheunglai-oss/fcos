@@ -149,10 +149,11 @@ async function runnerScenario(root, temporaryDirectory, variant = 'legacy') {
     deployment_branch_policy: { protected_branches: true, custom_branch_policies: false },
     protection_rules: [{ type: 'required_reviewers', prevent_self_review: false, reviewers: [{ type: 'User', reviewer }] }] };
   const run = { id: 99, repository, head_repository: repository, head_branch: 'main', head_sha: harnessSha,
+    name: 'FCOS protected Preview email proof build', display_title: `Review FCOS Preview email source ${candidate.sha}`,
     path: '.github/workflows/preview-email-proof-build.yml', event: 'workflow_dispatch', run_attempt: 1,
     status: 'in_progress', conclusion: null, run_started_at: new Date(now - 1000).toISOString(), actor: reviewer, triggering_actor: reviewer };
   const jobs = [{ id: 9, run_id: 99, run_attempt: 1, name: 'proof', head_sha: harnessSha, head_branch: 'main',
-    workflow_name: `Review FCOS Preview email source ${candidate.sha}`, status: 'in_progress', conclusion: null,
+    workflow_name: 'FCOS protected Preview email proof build', status: 'in_progress', conclusion: null,
     started_at: new Date(now - 1000).toISOString(), completed_at: null }];
   const claims = { iss: 'https://token.actions.githubusercontent.com', aud: 'fcos-production-release',
     repository: repository.full_name, repository_id: '2', sub: `repo:${repository.full_name}:environment:${environment.name}`,
