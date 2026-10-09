@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fcosConnectionIdentifier } from '../config/fcosConnections.js';
 import { collectBuildProvenance } from './lib/build-provenance.mjs';
+import { EXACT_COMPATIBILITY_SUCCESSOR, compatibilitySuccessorPreparationPlan, collectCompatibilitySuccessorPreparation, rejectCompatibilitySuccessorAdmission } from './verify-runtime-compatibility-successor.mjs';
 import { githubReleaseReads, assertReleaseGitHubAccount, RELEASE_REPOSITORY } from './lib/release-evidence.mjs';
 import { githubReleaseOidc } from './lib/release-production.mjs';
 import { collectPreviewVercelAuthority, probePreviewVercelAuthority, PREVIEW_AUTHORITY_SUBSTAGES, PREVIEW_AUTHORITY_FAILURES } from './lib/preview-vercel-authority.mjs';
@@ -198,6 +199,11 @@ export function createPreviewEmailVercelApi({ token, fetchImpl = globalThis.fetc
 
 export async function runPreviewEmailProofBuild({ mode = 'dry-run', candidateSha, candidateCwd = ROOT,
   recoveryRunId, trustedCwd = ROOT, env = process.env } = {}) {
+  if (candidateSha === EXACT_COMPATIBILITY_SUCCESSOR) {
+    if (mode === 'dry-run') return compatibilitySuccessorPreparationPlan();
+    collectCompatibilitySuccessorPreparation({ candidateCwd, trustedCwd });
+    rejectCompatibilitySuccessorAdmission();
+  }
   if (mode === 'dry-run') return { schemaVersion: 1, kind: 'fcos_preview_email_build_plan', enabledByDefault: false,
     productionAuthorized: false, mutations: 0, contractSha256: PREVIEW_EMAIL_CONTRACT_SHA256,
     workflow: '.github/workflows/preview-email-proof-build.yml', environment: PREVIEW_EMAIL_BUILD_ENVIRONMENT,

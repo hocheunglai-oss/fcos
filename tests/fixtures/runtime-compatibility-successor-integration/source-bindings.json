@@ -1,0 +1,155 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Exact actual integrated trusted source for new portable focused unit tests; source-only and no live admission proof",
+  "base": "404bc442a8a1d8a9c872f49678595fd8c374660d",
+  "aggregateProposalPatchSha256": "abd7120c4a2c69f71a50f4602d32282c07d4d3a0d759ef814cd8eabbd92c4b9e",
+  "publicManifestSha256": "91e8ba3fdacb7cd03a2bed574248920a2d6416aa043c4e5daafd7a5f5ac53257",
+  "publicPackSha256": "edb0c7a0d0ac7f45dba5fcfc8f6d98cbbf9667f01713a5d7f7764dc7e7380628",
+  "sources": [
+    {
+      "path": "config/fcosConnections.js",
+      "byteLength": 25771,
+      "sha256": "dc3afb39699837151f16243f592a84c3dd293670a5174a11d2dac7144e3eede9"
+    },
+    {
+      "path": "config/legacy-email-baseline-proof.json",
+      "byteLength": 2348,
+      "sha256": "7f76e2a25f33841f8237f6b7db070d4fed8ac9b9b290777fa9e3cf6a341c79c1"
+    },
+    {
+      "path": "config/preview-parity-policy.json",
+      "byteLength": 8064,
+      "sha256": "fe95da075bca9aa9ae0757a838cbd79752f6db95892c9544dfde1fe6f911c586"
+    },
+    {
+      "path": "config/runtime-compatibility-successor-source.json",
+      "byteLength": 9528,
+      "sha256": "867ebce63c4b34d0a73bbcbe0749a620f912e8a13c6484da269fda3850a9f432"
+    },
+    {
+      "path": "package-lock.json",
+      "byteLength": 353310,
+      "sha256": "a197464ea4d46446aeeab368a722a8f0e632e11b1a61fd834c39cfc7ebb4155c"
+    },
+    {
+      "path": "scripts/lib/build-provenance.mjs",
+      "byteLength": 11806,
+      "sha256": "e09e63875b79f7324e27424119d47612606a7a985bcf9056b3fa3a307320bd16"
+    },
+    {
+      "path": "scripts/lib/preview-email-build.mjs",
+      "byteLength": 34518,
+      "sha256": "4dd4732ee29bdcb1509fed4cf6d3edbd994ffbba3204263842841087e5f87102"
+    },
+    {
+      "path": "scripts/lib/preview-email-signer.mjs",
+      "byteLength": 9780,
+      "sha256": "55b85b525424c3ffad4ed8730c6869bb136d45679b21643028c1b323d8e04d29"
+    },
+    {
+      "path": "scripts/lib/release-readiness.mjs",
+      "byteLength": 9758,
+      "sha256": "c2154b6850c6d81ef2107692ee33042f313161082b509854a2dafb47a64a681a"
+    },
+    {
+      "path": "scripts/lib/runtime-compatibility-observation.mjs",
+      "byteLength": 16298,
+      "sha256": "4ab88ed4c94afb171b588928cf9e5f0b55746cde0373102d70eb4984eb9ed8a9"
+    },
+    {
+      "path": "scripts/lib/runtime-compatibility-release.mjs",
+      "byteLength": 44966,
+      "sha256": "5b8f44df08f3d5d4e97efea5528720ccaf17be81b542313e48135a92798d3e9d"
+    },
+    {
+      "path": "scripts/lib/runtime-compatibility-successor.mjs",
+      "byteLength": 14613,
+      "sha256": "f457df04f59a6f5808b9f9c63a968d9c5ee787da3c9670124df9be4728800aad"
+    },
+    {
+      "path": "scripts/lib/runtime-compatibility.mjs",
+      "byteLength": 10615,
+      "sha256": "ebc1f32f20f063e766e416d4e3a7e1f61c457fecaa3535f37b2cb4c1173b6d97"
+    },
+    {
+      "path": "scripts/preview-email-proof-build.mjs",
+      "byteLength": 30423,
+      "sha256": "a3abae57a03c8a12e316012cfd3e55f57caaf96aa058d9477236ae42ca29936d"
+    },
+    {
+      "path": "scripts/runtime-compatibility-normal-role.mjs",
+      "byteLength": 35240,
+      "sha256": "478823b2f83b19f00044236c0086b0d7c772292568626d7a9a80abbdc17ee1ba"
+    },
+    {
+      "path": "scripts/runtime-compatibility-release.mjs",
+      "byteLength": 37157,
+      "sha256": "8a55efab7ca3bbeee9b005be2fe1720d20df52c47baf63a5298c588cba7caed0"
+    },
+    {
+      "path": "scripts/verify-runtime-compatibility-successor.mjs",
+      "byteLength": 11519,
+      "sha256": "f3ece87e194dad5d135e5a82f89cf0f11736c3c0088fd528fdecdb5acf52d5c4"
+    },
+    {
+      "path": "tests/fixtures/runtime-compatibility-successor/fixture-manifest.json",
+      "byteLength": 67781,
+      "sha256": "8d26d2512a91352a5f47ae05ff7045f07a1d5ff50dde34dbfff5714d6837cc09"
+    },
+    {
+      "path": "tests/fixtures/runtime-compatibility-successor/independent-application-review.json",
+      "byteLength": 25069,
+      "sha256": "935671186dd4cd2a483f45393468239acd7de49fea367b61592fb8755f586b4b"
+    },
+    {
+      "path": "tests/fixtures/runtime-compatibility-successor/objects.pack",
+      "byteLength": 489133,
+      "sha256": "ea9cd50f5e6874c15739f288a57ce17103ffa20302b6d218790334f809949f11"
+    },
+    {
+      "path": "tests/fixtures/runtime-compatibility-successor/proposal-ff8859.patch",
+      "byteLength": 36682,
+      "sha256": "ce5c6ec4581288eb074a002ad7ff85c0b52d48da9fbcc1ebed48b39bc1a00f93"
+    },
+    {
+      "path": "tests/fixtures/runtime-compatibility-successor/root-application-review.json",
+      "byteLength": 1902,
+      "sha256": "707dd2c7f5c0f87adb37943133508661ba6bbd04a85669093176a9554e54f7d0"
+    },
+    {
+      "path": "tests/fixtures/runtime-compatibility-successor/root-successor-admission-design.json",
+      "byteLength": 2370,
+      "sha256": "c8427525bc54b6797223f7fe06f4db1b7c1e872f00f1d3ab65d20322436d8a0b"
+    },
+    {
+      "path": "tests/fixtures/runtime-compatibility-successor/successor-control-sync/canonical-agents-control-sync.patch",
+      "byteLength": 4041,
+      "sha256": "5e3473b1f628e5419cd05f8b167ee30322aba7c5ea7847bdfb160cc120b6d43b"
+    },
+    {
+      "path": "tests/fixtures/runtime-compatibility-successor/successor-control-sync/independent-control-sync-review.json",
+      "byteLength": 13635,
+      "sha256": "773e716409b790f9a272ec99549da5dc2d3147862a1ba39259bb8507d5a61fd8"
+    },
+    {
+      "path": "tests/fixtures/runtime-compatibility-successor/successor-control-sync/root-control-sync-review.json",
+      "byteLength": 1046,
+      "sha256": "f803046a46911cd7855fb25bdd02e43179724d06030644cc03ccbacbaf7bbb6a"
+    },
+    {
+      "path": "tests/fixtures/runtime-compatibility-successor/successor-preparation/independent-source-admission-review.json",
+      "byteLength": 13592,
+      "sha256": "732180649feec5a3c018f223b0d42f07fc7e7f6c824ef87cccc99d285906a46b"
+    },
+    {
+      "path": "tests/fixtures/runtime-compatibility-successor/successor-preparation/root-source-admission-review.json",
+      "byteLength": 955,
+      "sha256": "4b79343056f0ebbbc4eb764f4ded853032c73e3e6aacf6279ce97d2f1f57f016"
+    },
+    {
+      "path": "tests/runtimeCompatibilitySuccessor.test.js",
+      "byteLength": 22235,
+      "sha256": "c7a69503d605a672c76e2474818551a2bec65098c444d6e76b7acce7c96feadd"
+    }
+  ]
+}

@@ -1,0 +1,645 @@
+{
+  "schemaVersion": 1,
+  "reviewedAt": "2026-10-05T03:15:14.818172+00:00",
+  "reviewer": "independent-application-material-review",
+  "disposition": "ACCEPTABLE_FOR_PROPOSAL_SCOPE_REVIEW",
+  "blockingFindings": [],
+  "approvedForReleaseOrDeployment": false,
+  "candidateAdmissionGranted": false,
+  "scope": {
+    "worktree": "/Users/vincex/.codex/worktrees/readonly-collections-proposal-20261005/FCOS",
+    "baseSha": "f4576a8c918acef686f084c505b1715de11deeb8",
+    "controlledBaseSha": "ff8859b287009e20462c5c0cceff89ae12f13010",
+    "changedFiles": [
+      "api/_deploymentReadOnly.js",
+      "api/_portal.js",
+      "api/functions/[name].js",
+      "src/lib/AuthContext.jsx",
+      "src/pages/PaymentCollections.jsx",
+      "tests/paymentCollectionsDeploymentCapability.test.js"
+    ],
+    "AGENTSControlSyncExcluded": true,
+    "onlyArtifactWritten": "independent-application-review.json",
+    "harnessReviewIndependent": true
+  },
+  "binding": {
+    "proofSha256": "7ab2e5ca4e1c21c56939c32aa79872364430b1a87e019c7715f59e15276f7d77",
+    "scopeSha256": "c3a4a3c5889598e2ab8ab220625d7f25758b4391b729280f2bf0b826139f20f8",
+    "summarySha256": "29df71ccf96fd2ee43f01112c45a1b1f2b6056d6992d857a457a4fdf89ee5f7e",
+    "releaseScopeProposalSha256": "903d2c1393557b79d7cd41173d784439142e42efb64f71ce56489fca0d1f96d1",
+    "rootAuthBootstrapRiskSha256": "243f5d41792dd27de1da957840842c27e722249069638a7fd5ddec52c69b3417",
+    "worktreeFiles": {
+      "api/_deploymentReadOnly.js": "7e3064a4fec4a19c5d2ed365e6d07069e9391e61acaa43ac7df6e9273673cd3d",
+      "api/_portal.js": "8d1617d4c9478f8480ec6c9a4e35c13aaf0546d05fbbc15b30bdb95ba386a45b",
+      "api/functions/[name].js": "1035590a07ad8b06a2072f3b6acaef6d66d6e35d27c9199b00dc20a161f99eca",
+      "src/lib/AuthContext.jsx": "476bf33402d8c3b314ec4ed56f3c2e5ab74a8f8d2f4a242252c0a29dbc0c0b4a",
+      "src/pages/PaymentCollections.jsx": "d4636dae6ec66d68b2e83e5a009c4d18da3aff8acabe8d07bd0667d6991edff6",
+      "tests/paymentCollectionsDeploymentCapability.test.js": "000ca377f4fef978f387a8430471f8bc81f11c46285d5deca7891fbb8a718e6b"
+    },
+    "packageLockSha256": "0f35c1e123ab566f5d065d187bc0b8a7d1e05f7968ec31a03cd67ac0070aa0ef",
+    "installedLockSha256": "039fd0f3717c09e927f11fbb4e7dc40e0dbe0e082c70533e2f8e906c10208866",
+    "patches": [
+      {
+        "baseSha": "f4576a8c918acef686f084c505b1715de11deeb8",
+        "patch": "proposal-f457.patch",
+        "patchSha256": "27b671abf3983467a049af97223b45f277dbe6fc378540e2caf66ef0c5074bb3",
+        "reconstructedInMemory": true,
+        "hunkContextAndBeforeHashesMatch": true,
+        "afterHashesMatchRetainedProof": true,
+        "serverTransformsExactlyFourReviewedReplacements": true,
+        "sixFilePatchOnly": true,
+        "sources": [
+          {
+            "file": "api/_deploymentReadOnly.js",
+            "baseSha256": "672a6ac5bafc9cb138ae1d1985ec70f0e7bfc2763a3880009ff8a5016625ba6b",
+            "proposalSha256": "7e3064a4fec4a19c5d2ed365e6d07069e9391e61acaa43ac7df6e9273673cd3d",
+            "status": "modified"
+          },
+          {
+            "file": "api/_portal.js",
+            "baseSha256": "cf745463b4e36e87a41c472c864f36d8fb8b9feb7d28775b43521b057e71785c",
+            "proposalSha256": "8d1617d4c9478f8480ec6c9a4e35c13aaf0546d05fbbc15b30bdb95ba386a45b",
+            "status": "modified"
+          },
+          {
+            "file": "api/functions/[name].js",
+            "baseSha256": "1bbde4f4074ff055faf2e072ab529861ce666e69cfbcbc11e039aa9d636ff994",
+            "proposalSha256": "1035590a07ad8b06a2072f3b6acaef6d66d6e35d27c9199b00dc20a161f99eca",
+            "status": "modified"
+          },
+          {
+            "file": "src/lib/AuthContext.jsx",
+            "baseSha256": "4a88c824989a072c8ccbbd96747f2e872ee52c3080261502830527775ec9076b",
+            "proposalSha256": "476bf33402d8c3b314ec4ed56f3c2e5ab74a8f8d2f4a242252c0a29dbc0c0b4a",
+            "status": "modified"
+          },
+          {
+            "file": "src/pages/PaymentCollections.jsx",
+            "baseSha256": "140a573a6e9c07d9781e822b700c75aa90acee7d68821b0ddf5711ddacf349dc",
+            "proposalSha256": "d4636dae6ec66d68b2e83e5a009c4d18da3aff8acabe8d07bd0667d6991edff6",
+            "status": "modified"
+          },
+          {
+            "file": "tests/paymentCollectionsDeploymentCapability.test.js",
+            "baseSha256": null,
+            "proposalSha256": "000ca377f4fef978f387a8430471f8bc81f11c46285d5deca7891fbb8a718e6b",
+            "status": "added"
+          }
+        ],
+        "hunks": {
+          "api/_deploymentReadOnly.js": [
+            {
+              "oldStart": 4,
+              "oldLines": 6,
+              "newLines": 11
+            }
+          ],
+          "api/_portal.js": [
+            {
+              "oldStart": 1,
+              "oldLines": 5,
+              "newLines": 6
+            },
+            {
+              "oldStart": 398,
+              "oldLines": 7,
+              "newLines": 10
+            },
+            {
+              "oldStart": 435,
+              "oldLines": 6,
+              "newLines": 7
+            },
+            {
+              "oldStart": 447,
+              "oldLines": 8,
+              "newLines": 8
+            },
+            {
+              "oldStart": 1114,
+              "oldLines": 6,
+              "newLines": 7
+            }
+          ],
+          "api/functions/[name].js": [
+            {
+              "oldStart": 229,
+              "oldLines": 7,
+              "newLines": 7
+            },
+            {
+              "oldStart": 813,
+              "oldLines": 6,
+              "newLines": 7
+            },
+            {
+              "oldStart": 837,
+              "oldLines": 7,
+              "newLines": 7
+            },
+            {
+              "oldStart": 858,
+              "oldLines": 6,
+              "newLines": 7
+            }
+          ],
+          "src/lib/AuthContext.jsx": [
+            {
+              "oldStart": 88,
+              "oldLines": 6,
+              "newLines": 9
+            },
+            {
+              "oldStart": 110,
+              "oldLines": 6,
+              "newLines": 7
+            },
+            {
+              "oldStart": 120,
+              "oldLines": 6,
+              "newLines": 7
+            },
+            {
+              "oldStart": 131,
+              "oldLines": 6,
+              "newLines": 7
+            },
+            {
+              "oldStart": 142,
+              "oldLines": 7,
+              "newLines": 7
+            },
+            {
+              "oldStart": 151,
+              "oldLines": 6,
+              "newLines": 7
+            },
+            {
+              "oldStart": 168,
+              "oldLines": 6,
+              "newLines": 7
+            },
+            {
+              "oldStart": 192,
+              "oldLines": 6,
+              "newLines": 7
+            },
+            {
+              "oldStart": 309,
+              "oldLines": 6,
+              "newLines": 7
+            },
+            {
+              "oldStart": 372,
+              "oldLines": 6,
+              "newLines": 8
+            }
+          ],
+          "src/pages/PaymentCollections.jsx": [
+            {
+              "oldStart": 1,
+              "oldLines": 4,
+              "newLines": 4
+            },
+            {
+              "oldStart": 80,
+              "oldLines": 7,
+              "newLines": 7
+            },
+            {
+              "oldStart": 101,
+              "oldLines": 6,
+              "newLines": 7
+            },
+            {
+              "oldStart": 129,
+              "oldLines": 7,
+              "newLines": 8
+            },
+            {
+              "oldStart": 141,
+              "oldLines": 13,
+              "newLines": 16
+            },
+            {
+              "oldStart": 161,
+              "oldLines": 6,
+              "newLines": 7
+            },
+            {
+              "oldStart": 230,
+              "oldLines": 6,
+              "newLines": 13
+            },
+            {
+              "oldStart": 243,
+              "oldLines": 7,
+              "newLines": 7
+            },
+            {
+              "oldStart": 306,
+              "oldLines": 7,
+              "newLines": 7
+            },
+            {
+              "oldStart": 354,
+              "oldLines": 7,
+              "newLines": 7
+            }
+          ],
+          "tests/paymentCollectionsDeploymentCapability.test.js": [
+            {
+              "oldStart": 0,
+              "oldLines": 0,
+              "newLines": 329
+            }
+          ]
+        }
+      },
+      {
+        "baseSha": "ff8859b287009e20462c5c0cceff89ae12f13010",
+        "patch": "proposal-ff8859.patch",
+        "patchSha256": "ce5c6ec4581288eb074a002ad7ff85c0b52d48da9fbcc1ebed48b39bc1a00f93",
+        "reconstructedInMemory": true,
+        "hunkContextAndBeforeHashesMatch": true,
+        "afterHashesMatchRetainedProof": true,
+        "serverTransformsExactlyFourReviewedReplacements": true,
+        "sixFilePatchOnly": true,
+        "sources": [
+          {
+            "file": "api/_deploymentReadOnly.js",
+            "baseSha256": "672a6ac5bafc9cb138ae1d1985ec70f0e7bfc2763a3880009ff8a5016625ba6b",
+            "proposalSha256": "7e3064a4fec4a19c5d2ed365e6d07069e9391e61acaa43ac7df6e9273673cd3d",
+            "status": "modified"
+          },
+          {
+            "file": "api/_portal.js",
+            "baseSha256": "cf745463b4e36e87a41c472c864f36d8fb8b9feb7d28775b43521b057e71785c",
+            "proposalSha256": "8d1617d4c9478f8480ec6c9a4e35c13aaf0546d05fbbc15b30bdb95ba386a45b",
+            "status": "modified"
+          },
+          {
+            "file": "api/functions/[name].js",
+            "baseSha256": "0682b3c11d30a79a676dbb4b0c42a84477895adcc6f1066db4550322234b9229",
+            "proposalSha256": "7a1f36d3ed917bac8e0fe0d78775f10912eb962764af7e19c581d985a403511d",
+            "status": "modified"
+          },
+          {
+            "file": "src/lib/AuthContext.jsx",
+            "baseSha256": "4a88c824989a072c8ccbbd96747f2e872ee52c3080261502830527775ec9076b",
+            "proposalSha256": "476bf33402d8c3b314ec4ed56f3c2e5ab74a8f8d2f4a242252c0a29dbc0c0b4a",
+            "status": "modified"
+          },
+          {
+            "file": "src/pages/PaymentCollections.jsx",
+            "baseSha256": "140a573a6e9c07d9781e822b700c75aa90acee7d68821b0ddf5711ddacf349dc",
+            "proposalSha256": "d4636dae6ec66d68b2e83e5a009c4d18da3aff8acabe8d07bd0667d6991edff6",
+            "status": "modified"
+          },
+          {
+            "file": "tests/paymentCollectionsDeploymentCapability.test.js",
+            "baseSha256": null,
+            "proposalSha256": "000ca377f4fef978f387a8430471f8bc81f11c46285d5deca7891fbb8a718e6b",
+            "status": "added"
+          }
+        ],
+        "hunks": {
+          "api/_deploymentReadOnly.js": [
+            {
+              "oldStart": 4,
+              "oldLines": 6,
+              "newLines": 11
+            }
+          ],
+          "api/_portal.js": [
+            {
+              "oldStart": 1,
+              "oldLines": 5,
+              "newLines": 6
+            },
+            {
+              "oldStart": 398,
+              "oldLines": 7,
+              "newLines": 10
+            },
+            {
+              "oldStart": 435,
+              "oldLines": 6,
+              "newLines": 7
+            },
+            {
+              "oldStart": 447,
+              "oldLines": 8,
+              "newLines": 8
+            },
+            {
+              "oldStart": 1114,
+              "oldLines": 6,
+              "newLines": 7
+            }
+          ],
+          "api/functions/[name].js": [
+            {
+              "oldStart": 228,
+              "oldLines": 7,
+              "newLines": 7
+            },
+            {
+              "oldStart": 825,
+              "oldLines": 6,
+              "newLines": 7
+            },
+            {
+              "oldStart": 849,
+              "oldLines": 7,
+              "newLines": 7
+            },
+            {
+              "oldStart": 870,
+              "oldLines": 6,
+              "newLines": 7
+            }
+          ],
+          "src/lib/AuthContext.jsx": [
+            {
+              "oldStart": 88,
+              "oldLines": 6,
+              "newLines": 9
+            },
+            {
+              "oldStart": 110,
+              "oldLines": 6,
+              "newLines": 7
+            },
+            {
+              "oldStart": 120,
+              "oldLines": 6,
+              "newLines": 7
+            },
+            {
+              "oldStart": 131,
+              "oldLines": 6,
+              "newLines": 7
+            },
+            {
+              "oldStart": 142,
+              "oldLines": 7,
+              "newLines": 7
+            },
+            {
+              "oldStart": 151,
+              "oldLines": 6,
+              "newLines": 7
+            },
+            {
+              "oldStart": 168,
+              "oldLines": 6,
+              "newLines": 7
+            },
+            {
+              "oldStart": 192,
+              "oldLines": 6,
+              "newLines": 7
+            },
+            {
+              "oldStart": 309,
+              "oldLines": 6,
+              "newLines": 7
+            },
+            {
+              "oldStart": 372,
+              "oldLines": 6,
+              "newLines": 8
+            }
+          ],
+          "src/pages/PaymentCollections.jsx": [
+            {
+              "oldStart": 1,
+              "oldLines": 4,
+              "newLines": 4
+            },
+            {
+              "oldStart": 80,
+              "oldLines": 7,
+              "newLines": 7
+            },
+            {
+              "oldStart": 101,
+              "oldLines": 6,
+              "newLines": 7
+            },
+            {
+              "oldStart": 129,
+              "oldLines": 7,
+              "newLines": 8
+            },
+            {
+              "oldStart": 141,
+              "oldLines": 13,
+              "newLines": 16
+            },
+            {
+              "oldStart": 161,
+              "oldLines": 6,
+              "newLines": 7
+            },
+            {
+              "oldStart": 230,
+              "oldLines": 6,
+              "newLines": 13
+            },
+            {
+              "oldStart": 243,
+              "oldLines": 7,
+              "newLines": 7
+            },
+            {
+              "oldStart": 306,
+              "oldLines": 7,
+              "newLines": 7
+            },
+            {
+              "oldStart": 354,
+              "oldLines": 7,
+              "newLines": 7
+            }
+          ],
+          "tests/paymentCollectionsDeploymentCapability.test.js": [
+            {
+              "oldStart": 0,
+              "oldLines": 0,
+              "newLines": 329
+            }
+          ]
+        }
+      }
+    ],
+    "unchangedOwnedDependenciesAndControls": {
+      "src/pages/BuyerInvoices.jsx": {
+        "baseSha256": "7c14a33564f78f34801c43111ad3873bf16bfb96ddb5128ac1eeb7920c02d3b1",
+        "worktreeSha256": "7c14a33564f78f34801c43111ad3873bf16bfb96ddb5128ac1eeb7920c02d3b1",
+        "unchanged": true
+      },
+      "src/pages/IncomingPayments.jsx": {
+        "baseSha256": "cb0e7609e1834da178ff6c2d8547a123aaa0c7e8d4017b7341d33e75b19666fc",
+        "worktreeSha256": "cb0e7609e1834da178ff6c2d8547a123aaa0c7e8d4017b7341d33e75b19666fc",
+        "unchanged": true
+      },
+      "api/_fcunoIdentityFederation.js": {
+        "baseSha256": "961abbe772891d29cd5067a73e2e7a4f22aa5544d3029516a148061359c36202",
+        "worktreeSha256": "961abbe772891d29cd5067a73e2e7a4f22aa5544d3029516a148061359c36202",
+        "unchanged": true
+      },
+      "api/_handlerPolicyRegistry.js": {
+        "baseSha256": "dc72a883b5bc7a8456359e874c1fbf65421bea244a9fc01d5ab14abe6872f24d",
+        "worktreeSha256": "dc72a883b5bc7a8456359e874c1fbf65421bea244a9fc01d5ab14abe6872f24d",
+        "unchanged": true
+      },
+      "api/_readOnlyCiAccess.js": {
+        "baseSha256": "d1015ef0caa22237898c33a71645f8e0aff6fafa81fdcf9bc8c12ab6d0acc3d7",
+        "worktreeSha256": "d1015ef0caa22237898c33a71645f8e0aff6fafa81fdcf9bc8c12ab6d0acc3d7",
+        "unchanged": true
+      },
+      "scripts/lib/runtime-compatibility.mjs": {
+        "baseSha256": "ebc1f32f20f063e766e416d4e3a7e1f61c457fecaa3535f37b2cb4c1173b6d97",
+        "worktreeSha256": "ebc1f32f20f063e766e416d4e3a7e1f61c457fecaa3535f37b2cb4c1173b6d97",
+        "unchanged": true
+      },
+      "scripts/lib/runtime-compatibility-release.mjs": {
+        "baseSha256": "c81868d60346d58f18fc30a389c6e4d807fbe9a960af01367348948b0fc81f58",
+        "worktreeSha256": "c81868d60346d58f18fc30a389c6e4d807fbe9a960af01367348948b0fc81f58",
+        "unchanged": true
+      }
+    },
+    "identityRepairSourceIdenticalInBothFrozenBases": true
+  },
+  "retainedChecks": {
+    "rerun": false,
+    "sourceAndLockHashesMatch": true,
+    "tests": {
+      "command": [
+        "/Users/vincex/.local/node-lts/node-v24.18.0-darwin-arm64/bin/node",
+        "--test",
+        "tests/paymentCollectionsDeploymentCapability.test.js",
+        "tests/deploymentReadOnly.test.js",
+        "tests/authSessionLifecycle.test.js",
+        "tests/paymentCollections.test.js",
+        "tests/fcunoIdentityFederation.test.js",
+        "tests/portalFederation.test.js",
+        "tests/portalRetryScheduler.test.js"
+      ],
+      "cwd": "/Users/vincex/.codex/worktrees/readonly-collections-proposal-20261005/FCOS",
+      "startedAt": "2026-10-05T03:09:39.503Z",
+      "completedAt": "2026-10-05T03:09:39.781Z",
+      "elapsedMs": 277,
+      "exitCode": 0,
+      "output": "focused-tests.txt",
+      "expectedTests": 35
+    },
+    "lint": {
+      "command": [
+        "/Users/vincex/.local/node-lts/node-v24.18.0-darwin-arm64/bin/node",
+        "node_modules/eslint/bin/eslint.js",
+        "api/_deploymentReadOnly.js",
+        "api/_portal.js",
+        "api/functions/[name].js",
+        "src/lib/AuthContext.jsx",
+        "src/pages/PaymentCollections.jsx",
+        "tests/paymentCollectionsDeploymentCapability.test.js",
+        "--quiet"
+      ],
+      "cwd": "/Users/vincex/.codex/worktrees/readonly-collections-proposal-20261005/FCOS",
+      "startedAt": "2026-10-05T03:09:39.781Z",
+      "completedAt": "2026-10-05T03:09:40.221Z",
+      "elapsedMs": 440,
+      "exitCode": 0,
+      "output": "focused-eslint.txt"
+    },
+    "diffCheck": {
+      "command": [
+        "git",
+        "diff",
+        "--check"
+      ],
+      "cwd": "/Users/vincex/.codex/worktrees/readonly-collections-proposal-20261005/FCOS",
+      "startedAt": "2026-10-05T03:09:40.221Z",
+      "completedAt": "2026-10-05T03:09:40.236Z",
+      "elapsedMs": 15,
+      "exitCode": 0,
+      "output": "diff-check.txt"
+    },
+    "applicability": [
+      {
+        "baseSha": "f4576a8c918acef686f084c505b1715de11deeb8",
+        "result": {
+          "command": [
+            "git",
+            "apply",
+            "--check",
+            "/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/readonly-collections-proposal/proposal-f457.patch"
+          ],
+          "cwd": "/private/tmp/fcos-readonly-proposal-applicability-QFAGon/f4576a8c918acef686f084c505b1715de11deeb8/before",
+          "startedAt": "2026-10-05T03:09:40.329Z",
+          "completedAt": "2026-10-05T03:09:40.336Z",
+          "elapsedMs": 7,
+          "exitCode": 0,
+          "output": "git apply --check passed against exact frozen source blobs.\n"
+        }
+      },
+      {
+        "baseSha": "ff8859b287009e20462c5c0cceff89ae12f13010",
+        "result": {
+          "command": [
+            "git",
+            "apply",
+            "--check",
+            "/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/readonly-collections-proposal/proposal-ff8859.patch"
+          ],
+          "cwd": "/private/tmp/fcos-readonly-proposal-applicability-QFAGon/ff8859b287009e20462c5c0cceff89ae12f13010/before",
+          "startedAt": "2026-10-05T03:09:40.426Z",
+          "completedAt": "2026-10-05T03:09:40.434Z",
+          "elapsedMs": 7,
+          "exitCode": 0,
+          "output": "git apply --check passed against exact frozen source blobs.\n"
+        }
+      }
+    ],
+    "runtime": {
+      "nodeVersion": "v24.18.0",
+      "nodeExecutable": "/Users/vincex/.local/node-lts/node-v24.18.0-darwin-arm64/bin/node",
+      "npmVersion": "11.16.0",
+      "platform": "darwin",
+      "architecture": "arm64"
+    },
+    "outputHashes": {
+      "focused-tests.txt": "0c1438d0fc02e4214151c7debeb6673fbf18463d527d72ebf04863bc4c87fef8",
+      "focused-eslint.txt": "44d53d282926cc3e656d69a411e87ce9b9ddc8e4251ec52029fb62bd55e037b5",
+      "diff-check.txt": "241cd250617fc1e8af90e0e44baf598a72cc63bc3fb5f2b4972064f29f61ef3b"
+    },
+    "focusedTestPassCount": 35,
+    "ff8859ExecutableProof": false
+  },
+  "verifiedConclusions": [
+    "Server deployment capability is Boolean and derived solely from the existing trusted deployment restriction plus independently recognized read-only CI profile. No request-body or administrator override was added.",
+    "AuthProvider accepts only Boolean mutationsAllowed, treats absent or malformed declaration as closed, invalidates while refreshing and on session replacement/auth failure/logout/local fallback, and retains request-generation/session rejection of stale auth results.",
+    "Payment Collections automatic effect requires the explicit writable declaration and a user ID; its ref prevents duplicate automatic attempts for the same current identity during capability refresh and tab rerenders. Manual reconciliation and its own reminder actions check the same advisory gate.",
+    "Writable Production retains the existing automatic reconciliation and forced manual reconciliation call shapes. Existing server handler mutation classifications, module/financial/external action gates remain authoritative.",
+    "BuyerInvoices and IncomingPayments remain mounted with identical props/source. No successful reconciliation result is fabricated when capability is closed.",
+    "Read-only portal listing uses existing catalog and saved entitlements without calling the repair path; external launch is visibly unavailable. Internal authorized navigation remains available.",
+    "processPortalOutbox rejects read-only deployment at its first statement before any database access. Auth bootstrap skips scheduling when the trusted mutation declaration is false.",
+    "The f457 scheduler already guarded read-only scheduling; ff8859 legacy scheduler remains byte-preserved while its auth call is now gated. Both bases retain identical existing identity binding/profile provisioning guards.",
+    "Both exact patches reconstruct from their frozen blobs in memory with matching context, before/after hashes, and exactly six files. api/functions/[name].js changes consist of exactly four reviewed replacements in each baseline; no f457-only server changes were transplanted into ff8859.",
+    "Existing source scope/pins remain unchanged. The proposal correctly states that preservation.existingUi must be false for successors editing AuthContext/PaymentCollections, and that a new reviewed scope and immutable successor identities are required."
+  ],
+  "limitationsAndFollowup": [
+    "The retained tests execute actual transpiled auth/component code with custom hooks and stubbed child renderers. This is useful bounded logic evidence for proposal review, not proof of React scheduling, real child provider reads, browser rendering or live normal-role coverage.",
+    "Per-user automatic suppression is scoped to the current identity in one mounted component; remounts or switching A-to-B-to-A can schedule a fresh attempt. This matches an automatic mount/current-identity trigger rather than a durable once-ever financial authorization.",
+    "An already-started mutation is not cancelled by a later client capability invalidation. Existing server deployment/role/financial guards remain the enforcement boundary; this patch grants no new financial authority.",
+    "The ff8859 patch has retained dry applicability plus independently reviewed byte transformation only. It still requires executable source-bound checks for its actual successor before admission/deployment.",
+    "Variable Charges and other existing child-page manual controls remain outside this narrow proposal. No broad claim of universal read-only UI suppression is made.",
+    "No actual database-change or no-change conclusion is inferred from source inspection. No provider, browser, credential, release or Production operation was performed by this review.",
+    "Fresh final candidate quality/Preview/runtime/authenticated browser/provider/release proof remains required. The separate harness MR-01/MR-02 findings are not resolved or admitted by this application review.",
+    "Usage check reported 63 percent remaining; no usage suspension required."
+  ],
+  "nextStep": "Root review may use this exact-hash proposal for a concrete source-scope admission decision. Preserve current original pins and artifacts; prepare separately identified successors only after applicable admission, then collect fresh exact-source evidence."
+}

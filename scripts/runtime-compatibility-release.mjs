@@ -14,6 +14,7 @@ import { githubReleaseOidc, assertVercelProductionAuthority, assertProductionRun
 import { releaseHash, createReleaseReadiness } from './lib/release-readiness.mjs';
 import { evaluatePreviewParity, PREVIEW_PARITY_POLICY } from './lib/preview-parity.mjs';
 import { verifyRuntimeCompatibility } from './verify-runtime-compatibility.mjs';
+import { EXACT_COMPATIBILITY_SUCCESSOR, compatibilitySuccessorPreparationPlan, collectCompatibilitySuccessorPreparation, rejectCompatibilitySuccessorAdmission } from './verify-runtime-compatibility-successor.mjs';
 import { canonicalFcosE2eCandidateUrl } from './verify-e2e-candidate.mjs';
 import { FIRST_RUNTIME_ROLLOUT, COMPATIBILITY_ENVIRONMENT, assertRuntimeCompatibilityWorkflowIdentity,
   assertRuntimeCompatibilityProtection, createRuntimeCompatibilityPreflight, runtimeCompatibilityControlRevision,
@@ -112,6 +113,13 @@ function sourceInventory(cwd, sourceDigest) {
 
 export async function runRuntimeCompatibilityRelease({ mode = 'dry-run', trustedCwd = ROOT, candidateCwd = ROOT,
   expectedCommit, candidateUrl, env = process.env } = {}) {
+  if (expectedCommit === EXACT_COMPATIBILITY_SUCCESSOR) {
+    if (mode === 'dry-run') return compatibilitySuccessorPreparationPlan();
+    if (!['preflight', 'execute', 'collect-quality'].includes(mode) || canonicalFcosE2eCandidateUrl(candidateUrl) !== candidateUrl) throw new Error('Exact successor source preparation requires a protected mode and immutable candidate origin.');
+    const preparation = collectCompatibilitySuccessorPreparation({ candidateCwd, trustedCwd });
+    if (mode === 'preflight') return preparation;
+    rejectCompatibilitySuccessorAdmission();
+  }
   if (mode === 'dry-run') return createRuntimeCompatibilityPreflight();
   if (!['preflight', 'execute', 'collect-quality'].includes(mode) || expectedCommit !== FIRST_RUNTIME_ROLLOUT.candidateSha
     || canonicalFcosE2eCandidateUrl(candidateUrl) !== candidateUrl) throw new Error('Protected mode requires the exact first-rollout candidate and immutable Preview.');

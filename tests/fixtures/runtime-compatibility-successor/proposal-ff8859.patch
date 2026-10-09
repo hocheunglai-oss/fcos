@@ -1,0 +1,633 @@
+diff --git a/api/_deploymentReadOnly.js b/api/_deploymentReadOnly.js
+index a49babd..1e80212 100644
+--- a/api/_deploymentReadOnly.js
++++ b/api/_deploymentReadOnly.js
+@@ -4,6 +4,11 @@ export function isDeploymentReadOnly(env = process.env) {
+     || String(env.FCOS_ENABLE_READ_ONLY_CI || '').trim().toLowerCase() === 'true';
+ }
+ 
++/** Deployment permission is separate from a user's financial or module permissions. */
++export function deploymentCapabilities(env = process.env, { readOnlyProfile = false } = {}) {
++  return { mutationsAllowed: !isDeploymentReadOnly(env) && readOnlyProfile !== true };
++}
++
+ export function requireDeploymentMutationAllowed(mutation, env = process.env) {
+   if (!mutation || !isDeploymentReadOnly(env)) return;
+   throw Object.assign(new Error('This verification environment permits read-only operations.'), {
+diff --git a/api/_portal.js b/api/_portal.js
+index f087c39..e6d720f 100644
+--- a/api/_portal.js
++++ b/api/_portal.js
+@@ -1,5 +1,6 @@
+ import { importPKCS8, SignJWT } from 'jose';
+ import { randomUUID } from 'node:crypto';
++import { isDeploymentReadOnly, requireDeploymentMutationAllowed } from './_deploymentReadOnly.js';
+ 
+ const ASSERTION_ALGORITHM = 'ES256';
+ const ASSERTION_LIFETIME_SECONDS = 60;
+@@ -398,7 +399,10 @@ export async function listPortalApplicationsForUser({
+   env = process.env,
+ }) {
+   const catalog = await loadPortalCatalog(client);
+-  const reconciled = await reconcilePortalEntitlementsForProfile(client, profile, null, { catalog });
++  const readOnly = isDeploymentReadOnly(env);
++  const reconciled = readOnly
++    ? await loadUserEntitlements(client, profile.id)
++    : await reconcilePortalEntitlementsForProfile(client, profile, null, { catalog });
+   const entitlementMap = new Map(reconciled.map((row) => [row.application_id, row]));
+   const hasFcosAccess = ['administrator', 'general_manager'].includes(profile.user_type)
+     || Object.values(moduleAccess || {}).some((allowed) => allowed === true || allowed === 'read' || allowed === 'full');
+@@ -435,6 +439,7 @@ export async function listPortalApplicationsForUser({
+     const statusBlockingReason = application.status === 'active'
+       ? null
+       : (application.status_message || 'Application unavailable.');
++    const deploymentBlockingReason = readOnly ? 'Application launch is unavailable in this read-only environment.' : null;
+     return [{
+       id: application.id,
+       name: application.name,
+@@ -447,8 +452,8 @@ export async function listPortalApplicationsForUser({
+       roleLabel: roleLabel(application, entitlement.effective_role_id),
+       accessSource: entitlement.effective_source,
+       status: application.status,
+-      available: !configurationIssue && !syncBlockingReason && !statusBlockingReason,
+-      blockingReason: configurationIssue || syncBlockingReason || statusBlockingReason,
++      available: !deploymentBlockingReason && !configurationIssue && !syncBlockingReason && !statusBlockingReason,
++      blockingReason: deploymentBlockingReason || configurationIssue || syncBlockingReason || statusBlockingReason,
+       syncStatus: entitlement.sync_status,
+       revision: entitlement.revision,
+     }];
+@@ -1114,6 +1119,7 @@ export async function processPortalOutbox({
+   env = process.env,
+   fetchImpl = fetch,
+ }) {
++  requireDeploymentMutationAllowed(true, env);
+   const boundedLimit = Math.max(1, Math.min(Number(limit) || 20, 50));
+   const now = new Date().toISOString();
+   const staleLockBefore = new Date(Date.now() - OUTBOX_STALE_LOCK_MS).toISOString();
+diff --git a/api/functions/[name].js b/api/functions/[name].js
+index 717edcc..92007e4 100644
+--- a/api/functions/[name].js
++++ b/api/functions/[name].js
+@@ -228,7 +228,7 @@ import { createDashboardFinanceLoader, financeToday, summarizeDashboardFinance,
+ import { secondaryMopsFailureMessage } from '../_marketSourceHealth.js';
+ import { ciModuleAccess, isReadOnlyCiProfile, isReadOnlyMarketAction, requireReadOnlyCiOperation } from '../_readOnlyCiAccess.js';
+ import { isReadOnlyHedgeDeskAction } from '../_hedgeDeskReadOnly.js';
+-import { requireDeploymentMutationAllowed } from '../_deploymentReadOnly.js';
++import { deploymentCapabilities, requireDeploymentMutationAllowed } from '../_deploymentReadOnly.js';
+ import { analyzeMarketReportLibrary, loadMarketReportCatalogue } from '../_marketReportAnalysis.js';
+ import {
+   applyMasterContractPrice as applyMasterContractPriceService,
+@@ -825,6 +825,7 @@ async function loadAuthBootstrapPreferences(client, userId) {
+ async function authContext(body, req, accessContext) {
+   const { client, authUser, profile } = accessContext || (await requireActiveUser(req));
+   const readOnlyCi = isReadOnlyCiProfile(profile);
++  const deployment = deploymentCapabilities(process.env, { readOnlyProfile: readOnlyCi });
+   const preferencesPromise = loadAuthBootstrapPreferences(client, profile.id);
+   let permissionValues;
+   let capabilityValues;
+@@ -849,7 +850,7 @@ async function authContext(body, req, accessContext) {
+     moduleAccess,
+   });
+   const bootstrapPreferences = await preferencesPromise;
+-  if (!readOnlyCi) schedulePortalOutboxRetry(client);
++  if (deployment.mutationsAllowed) schedulePortalOutboxRetry(client);
+ 
+   return {
+     user: {
+@@ -870,6 +871,7 @@ async function authContext(body, req, accessContext) {
+       [REPORT_ARCHIVE_MODULE_ID]: reportArchiveAccessLevel(permissionValues[REPORT_ARCHIVE_MODULE_ID]),
+     },
+     capabilities: capabilityValues,
++    deploymentCapabilities: deployment,
+     applications,
+     navigationPreferences: bootstrapPreferences?.navigationPreferences || null,
+     workspacePreferences: bootstrapPreferences?.workspacePreferences || null,
+diff --git a/src/lib/AuthContext.jsx b/src/lib/AuthContext.jsx
+index 4b866f9..42d6e6d 100644
+--- a/src/lib/AuthContext.jsx
++++ b/src/lib/AuthContext.jsx
+@@ -88,6 +88,9 @@ async function loadSupabaseUser() {
+     accessLevels: data.moduleAccessLevels || {},
+     applications: data.applications || [],
+     capabilities: data.capabilities || {},
++    deploymentCapabilities: typeof data.deploymentCapabilities?.mutationsAllowed === 'boolean'
++      ? { mutationsAllowed: data.deploymentCapabilities.mutationsAllowed }
++      : null,
+     navigationPreferences: data.navigationPreferences || null,
+     workspacePreferences: data.workspacePreferences || null,
+     error: null,
+@@ -110,6 +113,7 @@ export const AuthProvider = ({ children }) => {
+   const [authError, setAuthError] = useState(null);
+   const [authChecked, setAuthChecked] = useState(false);
+   const [groupAccess, setGroupAccess] = useState({ permissionGroups: [], accessRevision: null, grantSources: {} });
++  const [deploymentCapabilities, setDeploymentCapabilities] = useState(null);
+   const authMode = isSupabaseConfigured ? 'supabase' : isLocalAdminAllowed ? 'local' : 'unavailable';
+ 
+   const applyLocalAdmin = useCallback(() => {
+@@ -120,6 +124,7 @@ export const AuthProvider = ({ children }) => {
+     setModuleAccessLevels(fullAccessLevels());
+     setApplications(LOCAL_APPLICATIONS);
+     setCapabilities(FULL_CAPABILITIES);
++    setDeploymentCapabilities(null);
+     setBootstrapPreferences(null);
+     setIsAuthenticated(true);
+     setAuthError(null);
+@@ -131,6 +136,7 @@ export const AuthProvider = ({ children }) => {
+     if (loggingOut.current) return { user: null, stale: true };
+     const request = ++authRequest.current;
+     const session = clientSessionState();
++    setDeploymentCapabilities(null);
+     if (showLoader) setIsLoadingAuth(true);
+     setAuthError(null);
+     try {
+@@ -142,7 +148,7 @@ export const AuthProvider = ({ children }) => {
+       if (request !== authRequest.current || !isCurrentClientSession(session)) return { user: null, stale: true };
+       setClientSessionOwner(result.user?.id);
+       if (result.user) window.sessionStorage.removeItem(FCUNO_FORCE_REAUTH_KEY);
+-      const nextAccessSnapshot = JSON.stringify([result.user?.id, result.user?.user_type, result.access, result.accessLevels, result.capabilities]);
++      const nextAccessSnapshot = JSON.stringify([result.user?.id, result.user?.user_type, result.access, result.accessLevels, result.capabilities, result.deploymentCapabilities]);
+       if (accessSnapshot.current !== nextAccessSnapshot) appClient.functions.clearCache();
+       accessSnapshot.current = nextAccessSnapshot;
+       setGroupAccess({ permissionGroups: result.permissionGroups || [], accessRevision: result.accessRevision ?? null, grantSources: result.grantSources || {} });
+@@ -151,6 +157,7 @@ export const AuthProvider = ({ children }) => {
+       setModuleAccessLevels(result.accessLevels || {});
+       setApplications(result.applications || []);
+       setCapabilities(result.capabilities || {});
++      setDeploymentCapabilities(result.deploymentCapabilities || null);
+       setBootstrapPreferences({
+         navigation: result.navigationPreferences || null,
+         workspace: result.workspacePreferences || null,
+@@ -168,6 +175,7 @@ export const AuthProvider = ({ children }) => {
+       setModuleAccessLevels({});
+       setApplications([]);
+       setCapabilities({});
++      setDeploymentCapabilities(null);
+       setBootstrapPreferences(null);
+       setAuthError(nextError);
+       setIsAuthenticated(false);
+@@ -192,6 +200,7 @@ export const AuthProvider = ({ children }) => {
+       if (event === 'SIGNED_OUT' || clientSessionState().ownerId !== session?.user?.id) {
+         setClientSessionOwner(null);
+         setUser(null);
++        setDeploymentCapabilities(null);
+         setIsAuthenticated(false);
+         setIsLoadingAuth(event !== 'SIGNED_OUT');
+       }
+@@ -309,6 +318,7 @@ export const AuthProvider = ({ children }) => {
+     setAuthChecked(false);
+     setClientSessionOwner(null);
+     setUser(null);
++    setDeploymentCapabilities(null);
+     setIsAuthenticated(false);
+     setAuthError({ type: 'auth_required' });
+     appClient.functions.clearCache();
+@@ -372,6 +382,8 @@ export const AuthProvider = ({ children }) => {
+     moduleAccessLevels,
+     applications,
+     capabilities,
++    deploymentCapabilities,
++    deploymentMutationAllowed: Boolean(user) && deploymentCapabilities?.mutationsAllowed === true,
+     bootstrapPreferences,
+     permissionGroups: user ? groupAccess.permissionGroups : [],
+     accessRevision: user ? groupAccess.accessRevision : null,
+diff --git a/src/pages/PaymentCollections.jsx b/src/pages/PaymentCollections.jsx
+index f226d7b..107a9bc 100644
+--- a/src/pages/PaymentCollections.jsx
++++ b/src/pages/PaymentCollections.jsx
+@@ -1,4 +1,4 @@
+-import { useEffect, useMemo, useState } from 'react';
++import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+ import { AlertTriangle, Banknote, CheckCircle2, ClipboardCheck, ListChecks, Loader2, RefreshCw, Scale, ShieldCheck } from 'lucide-react';
+ import { useSearchParams } from 'react-router-dom';
+ import { appClient } from '@/api/appClient';
+@@ -80,7 +80,7 @@ function currencyMoney(currency, value) {
+ }
+ 
+ export default function PaymentCollections() {
+-  const { hasModuleAccess, user } = useAuth();
++  const { hasModuleAccess, user, deploymentCapabilities, deploymentMutationAllowed } = useAuth();
+   const [searchParams, setSearchParams] = useSearchParams();
+   const availableTabs = useMemo(() => TABS.filter((tab) => (
+     (!tab.privileged || ['finance', 'general_manager', 'administrator'].includes(user?.user_type))
+@@ -101,6 +101,7 @@ export default function PaymentCollections() {
+   const [overrideSaving, setOverrideSaving] = useState(false);
+   const [overrideError, setOverrideError] = useState('');
+   const [collectionDataRefreshToken, setCollectionDataRefreshToken] = useState(0);
++  const autoReconciledUser = useRef(null);
+ 
+   useEffect(() => {
+     if (requestedTabValue !== 'ship-agent-charges') return;
+@@ -129,7 +130,8 @@ export default function PaymentCollections() {
+     setSearchParams(next, { replace: true });
+   };
+ 
+-  const reconcile = async ({ force = false } = {}) => {
++  const reconcile = useCallback(async ({ force = false } = {}) => {
++    if (!deploymentMutationAllowed) return;
+     setReconciling(true);
+     setReconciliationError('');
+     const response = await appClient.functions.invoke('paymentCollectionsReconcile', { force }, { force });
+@@ -141,13 +143,16 @@ export default function PaymentCollections() {
+       appClient.functions.clearCache();
+     }
+     setReconciling(false);
+-  };
++  }, [deploymentMutationAllowed]);
+ 
+   useEffect(() => {
+-    reconcile();
+-  }, []);
++    if (!deploymentMutationAllowed || !user?.id || autoReconciledUser.current === user.id) return;
++    autoReconciledUser.current = user.id;
++    void reconcile();
++  }, [deploymentMutationAllowed, reconcile, user?.id]);
+ 
+   const openReminderOverride = (entry) => {
++    if (!deploymentMutationAllowed) return;
+     setOverrideEntry(entry);
+     setOverrideReason('');
+     setOverrideError('');
+@@ -161,6 +166,7 @@ export default function PaymentCollections() {
+   };
+ 
+   const saveReminderOverride = async () => {
++    if (!deploymentMutationAllowed) return;
+     const issue = postingIssue(overrideEntry);
+     const reason = overrideReason.trim();
+     if (!issue?.issueKey) {
+@@ -230,6 +236,13 @@ export default function PaymentCollections() {
+             Automatic reconciliation is unavailable: {reconciliationError}
+           </div>
+         )}
++        {!deploymentMutationAllowed && (
++          <div className="mt-2 rounded-md border border-border bg-muted/50 px-3 py-2 text-xs text-muted-foreground" role="status">
++            {deploymentCapabilities?.mutationsAllowed === false
++              ? 'This environment is read-only. Collection and incoming payment data remain available; automatic reconciliation and reminder-control changes are disabled.'
++              : 'Changes are unavailable while access is being verified. You can still view collection and incoming payment data.'}
++          </div>
++        )}
+       </div>
+ 
+       {activeTab === 'collections' && <BuyerInvoices embedded defaultQueueView="needs-action" reconciliationItems={reconciliation?.items || []} dataRefreshToken={collectionDataRefreshToken} />}
+@@ -243,7 +256,7 @@ export default function PaymentCollections() {
+               <h1 className="text-xl font-semibold text-foreground">Reconciliation Exceptions</h1>
+               <p className="mt-1 text-sm text-muted-foreground">Cases where Salesforce balances, payment advice, incoming payments, and FCOS closure state need attention.</p>
+             </div>
+-            <Button variant="outline" onClick={() => reconcile({ force: true })} disabled={reconciling} className="gap-2">
++            <Button variant="outline" onClick={() => reconcile({ force: true })} disabled={!deploymentMutationAllowed || reconciling} className="gap-2">
+               <RefreshCw className={`h-4 w-4 ${reconciling ? 'animate-spin' : ''}`} /> Refresh Salesforce
+             </Button>
+           </div>
+@@ -306,7 +319,7 @@ export default function PaymentCollections() {
+                               {overrideActive && entry.item.postingReminderOverrideReason && (
+                                 <div className="text-xs text-muted-foreground">{entry.item.postingReminderOverrideReason}</div>
+                               )}
+-                              {reconciliation.capabilities?.canOverridePostingReminder && (
++                              {deploymentMutationAllowed && reconciliation.capabilities?.canOverridePostingReminder && (
+                                 <Button type="button" size="sm" variant="outline" className="gap-2" onClick={() => openReminderOverride(entry)}>
+                                   <ShieldCheck className="h-3.5 w-3.5" />
+                                   {overrideActive ? 'Restore reminder pause' : 'Allow reminder'}
+@@ -354,7 +367,7 @@ export default function PaymentCollections() {
+           {overrideError && <div className="text-sm text-destructive">{overrideError}</div>}
+           <DialogFooter>
+             <Button type="button" variant="outline" onClick={closeReminderOverride} disabled={overrideSaving}>Cancel</Button>
+-            <Button type="button" onClick={saveReminderOverride} disabled={overrideSaving || overrideReason.trim().length < 5} className="gap-2">
++            <Button type="button" onClick={saveReminderOverride} disabled={!deploymentMutationAllowed || overrideSaving || overrideReason.trim().length < 5} className="gap-2">
+               {overrideSaving && <Loader2 className="h-4 w-4 animate-spin" />}
+               Save control
+             </Button>
+diff --git a/tests/paymentCollectionsDeploymentCapability.test.js b/tests/paymentCollectionsDeploymentCapability.test.js
+new file mode 100644
+index 0000000..50066ca
+--- /dev/null
++++ b/tests/paymentCollectionsDeploymentCapability.test.js
+@@ -0,0 +1,329 @@
++import assert from 'node:assert/strict';
++import test from 'node:test';
++import { readFile } from 'node:fs/promises';
++import ts from 'typescript';
++import { deploymentCapabilities, requireDeploymentMutationAllowed } from '../api/_deploymentReadOnly.js';
++import { listPortalApplicationsForUser, processPortalOutbox } from '../api/_portal.js';
++import { clientSessionState, setClientSessionOwner } from '../src/lib/clientSessionState.js';
++
++const source = async (relative) => readFile(new URL(relative, import.meta.url), 'utf8');
++const withoutImports = (value) => value.replace(/^import[\s\S]*?;\n/gm, '');
++async function execute(value) {
++  const compiled = ts.transpileModule(value, {
++    compilerOptions: { jsx: ts.JsxEmit.React, module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
++  }).outputText;
++  return import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`);
++}
++
++function reactHarness() {
++  const states = [], refs = [], callbacks = [], effects = [];
++  let stateIndex, refIndex, callbackIndex, effectIndex;
++  const same = (a, b) => a && b && a.length === b.length && a.every((value, index) => Object.is(value, b[index]));
++  return {
++    render(fn) { stateIndex = refIndex = callbackIndex = effectIndex = 0; return fn(); },
++    runEffect(index) { effects[index].fn(); },
++    async flush() {
++      for (const effect of effects) {
++        if (!effect?.pending) continue;
++        effect.pending = false;
++        effect.fn();
++      }
++      await new Promise((resolve) => setImmediate(resolve));
++    },
++    react: {
++      createContext: () => ({ Provider: 'provider' }),
++      createElement: (type, props, ...children) => ({ type, props: { ...props, children } }),
++      Fragment: 'fragment',
++      useContext: () => null,
++      useMemo: (fn) => fn(),
++      useRef: (initial) => { const index = refIndex++; return refs[index] ||= { current: initial }; },
++      useState: (initial) => {
++        const index = stateIndex++;
++        if (!(index in states)) states[index] = typeof initial === 'function' ? initial() : initial;
++        return [states[index], (value) => { states[index] = typeof value === 'function' ? value(states[index]) : value; }];
++      },
++      useCallback: (fn, deps) => {
++        const index = callbackIndex++;
++        if (!same(callbacks[index]?.deps, deps)) callbacks[index] = { fn, deps };
++        return callbacks[index].fn;
++      },
++      useEffect: (fn, deps) => {
++        const index = effectIndex++;
++        const pending = !same(effects[index]?.deps, deps);
++        effects[index] = { fn, deps, pending };
++      },
++    },
++  };
++}
++
++function nodes(tree) {
++  if (!tree || typeof tree !== 'object') return [];
++  if (Array.isArray(tree)) return tree.flatMap(nodes);
++  return [tree, ...nodes(tree.props?.children)];
++}
++
++test('server declares the same deployment restriction it enforces, including the read-only CI profile', async () => {
++  for (const env of [{ VERCEL_ENV: 'preview' }, { VERCEL_ENV: 'production', FCOS_ENABLE_READ_ONLY_CI: 'true' }]) {
++    assert.deepEqual(deploymentCapabilities(env), { mutationsAllowed: false });
++    assert.throws(() => requireDeploymentMutationAllowed(true, env), { code: 'FCOS_DEPLOYMENT_READ_ONLY' });
++  }
++  assert.deepEqual(deploymentCapabilities({ VERCEL_ENV: 'production' }), { mutationsAllowed: true });
++  assert.deepEqual(deploymentCapabilities({ VERCEL_ENV: 'production' }, { readOnlyProfile: true }), { mutationsAllowed: false });
++
++  // Execute the actual authenticated response builder with provider-free dependencies.
++  const server = ts.createSourceFile('server.js', await source('../api/functions/[name].js'), ts.ScriptTarget.ES2022, true);
++  const authFunction = server.statements.find((statement) => ts.isFunctionDeclaration(statement) && statement.name?.text === 'authContext');
++  assert.ok(authFunction);
++  const declaration = authFunction.getText(server).replace('async function authContext', 'export async function authContext');
++  let scheduled = 0;
++  globalThis.__deploymentResponseHarness = {
++    isReadOnlyCiProfile: (profile) => profile.user_type === 'ci_read_only',
++    loadAuthBootstrapPreferences: async () => null,
++    ADMIN_APP_MODULES: [{ id: 'buyer_invoices' }], ADMIN_CAPABILITY_IDS: ['financial_report_settings_manage'],
++    ciModuleAccess: () => ({ buyer_invoices: true }), isAdministratorUserType: (type) => type === 'administrator',
++    ADMIN_FULL_ACCESS: { buyer_invoices: true }, ADMIN_FULL_CAPABILITIES: { financial_report_settings_manage: true },
++    loadEffectiveGroupAccess: async () => ({ permissions: { buyer_invoices: true }, capabilities: {} }),
++    permissionCanView: (_id, value) => value === true, listPortalApplicationsForUser: async () => [],
++    schedulePortalOutboxRetry() { scheduled += 1; }, REPORT_ARCHIVE_MODULE_ID: 'report_archive', reportArchiveAccessLevel: () => 'none',
++  };
++  const { authContext } = await execute(`
++    import { deploymentCapabilities } from ${JSON.stringify(new URL('../api/_deploymentReadOnly.js', import.meta.url).href)};
++    const { isReadOnlyCiProfile, loadAuthBootstrapPreferences, ADMIN_APP_MODULES, ADMIN_CAPABILITY_IDS,
++      ciModuleAccess, isAdministratorUserType, ADMIN_FULL_ACCESS, ADMIN_FULL_CAPABILITIES,
++      loadEffectiveGroupAccess, permissionCanView, listPortalApplicationsForUser, schedulePortalOutboxRetry,
++      REPORT_ARCHIVE_MODULE_ID, reportArchiveAccessLevel } = globalThis.__deploymentResponseHarness;
++    ${declaration}
++  `);
++  const oldEnv = { VERCEL_ENV: process.env.VERCEL_ENV, FCOS_ENABLE_READ_ONLY_CI: process.env.FCOS_ENABLE_READ_ONLY_CI };
++  try {
++    delete process.env.FCOS_ENABLE_READ_ONLY_CI;
++    for (const [environment, userType, expected] of [['preview', 'administrator', false], ['production', 'ci_read_only', false], ['production', 'administrator', true]]) {
++      process.env.VERCEL_ENV = environment;
++      const result = await authContext({}, null, { client: {}, authUser: {}, profile: { id: 'fixture', active: true, user_type: userType } });
++      assert.deepEqual(result.deploymentCapabilities, { mutationsAllowed: expected });
++      assert.equal(result.moduleAccess.buyer_invoices, true, 'deployment restrictions preserve authorized reads');
++    }
++    assert.equal(scheduled, 1, 'only writable Production schedules implicit portal work');
++  } finally {
++    for (const [key, value] of Object.entries(oldEnv)) {
++      if (value === undefined) delete process.env[key]; else process.env[key] = value;
++    }
++    delete globalThis.__deploymentResponseHarness;
++  }
++});
++
++test('AuthProvider fails closed for missing or malformed declarations and clears capability after auth failure or logout', async () => {
++  const harness = reactHarness();
++  let response = { data: { user: { id: 'fixture', user_type: 'administrator' } } };
++  let failure = false;
++  let pause = false, finishRequest, authEvent;
++  const supabase = { auth: {
++    getSession: async () => ({ data: { session: { user: { id: 'fixture' } } } }),
++    signOut: async () => {},
++    onAuthStateChange: (callback) => { authEvent = callback; return { data: { subscription: { unsubscribe() {} } } }; },
++  } };
++  globalThis.__deploymentAuthHarness = {
++    react: harness.react, supabase,
++    appClient: { functions: { clearCache() {}, invoke: async () => {
++      if (failure) throw new Error('Unavailable');
++      if (pause) return new Promise((resolve) => { finishRequest = resolve; });
++      return response;
++    } } },
++  };
++  const oldWindow = globalThis.window;
++  globalThis.window = { sessionStorage: { removeItem() {}, setItem() {} }, setTimeout };
++  const authSource = withoutImports(await source('../src/lib/AuthContext.jsx')).replaceAll('import.meta.env.', 'testEnv.');
++  const { AuthProvider } = await execute(`
++    const { react: React, supabase, appClient } = globalThis.__deploymentAuthHarness;
++    const { createContext, useCallback, useContext, useEffect, useRef, useState } = React;
++    const FULL_ACCESS = {}, FULL_CAPABILITIES = {}, isAdministratorUserType = (type) => type === 'administrator';
++    const isSupabaseConfigured = true, isLocalAdminAllowed = false, authConfigurationError = 'blocked', testEnv = {};
++    const subscribeAccessRefresh = () => () => {};
++    import { clientSessionState, isCurrentClientSession, setClientSessionOwner } from ${JSON.stringify(new URL('../src/lib/clientSessionState.js', import.meta.url).href)};
++    ${authSource}
++  `);
++  const render = () => harness.render(() => AuthProvider({ children: null })).props.value;
++  try {
++    setClientSessionOwner(null);
++    let auth = render();
++    assert.equal(auth.deploymentMutationAllowed, false);
++    for (const declaration of [undefined, {}, { mutationsAllowed: 'true' }, { mutationsAllowed: 1 }, { mutationsAllowed: false }, { mutationsAllowed: true }]) {
++      response = { data: { user: { id: 'fixture', user_type: 'administrator' }, deploymentCapabilities: declaration } };
++      await auth.checkUserAuth();
++      auth = render();
++      assert.equal(auth.deploymentMutationAllowed, declaration?.mutationsAllowed === true);
++      assert.equal(auth.hasCapability('financial_report_settings_manage'), true, 'administrator permissions do not override deployment capability');
++    }
++    pause = true;
++    const pendingRefresh = auth.checkUserAuth({ showLoader: false });
++    await new Promise((resolve) => setImmediate(resolve));
++    auth = render();
++    assert.equal(auth.deploymentMutationAllowed, false, 'a pending server refresh invalidates the prior true declaration');
++    finishRequest(response);
++    await pendingRefresh;
++    pause = false;
++    auth = render();
++    assert.equal(auth.deploymentMutationAllowed, true);
++    harness.runEffect(1);
++    pause = true;
++    authEvent('SIGNED_IN', { user: { id: 'replacement' } });
++    auth = render();
++    assert.equal(auth.deploymentMutationAllowed, false, 'session replacement clears the old user declaration immediately');
++    await new Promise((resolve) => setTimeout(resolve, 5));
++    finishRequest({ data: { user: { id: 'replacement' }, deploymentCapabilities: { mutationsAllowed: false } } });
++    await new Promise((resolve) => setImmediate(resolve));
++    pause = false;
++    auth = render();
++    assert.equal(auth.deploymentMutationAllowed, false);
++    response = { data: { user: { id: 'replacement' }, deploymentCapabilities: { mutationsAllowed: true } } };
++    failure = true;
++    await auth.checkUserAuth();
++    auth = render();
++    assert.equal(auth.deploymentMutationAllowed, false);
++    assert.equal(auth.deploymentCapabilities, null);
++    failure = false;
++    await auth.checkUserAuth();
++    auth = render();
++    assert.equal(auth.deploymentMutationAllowed, true);
++    await auth.logout();
++    auth = render();
++    assert.equal(auth.deploymentMutationAllowed, false);
++    assert.equal(clientSessionState().ownerId, null);
++  } finally {
++    setClientSessionOwner(null);
++    globalThis.window = oldWindow;
++    delete globalThis.__deploymentAuthHarness;
++  }
++});
++
++function portalClient() {
++  const reads = [], writes = [];
++  const entitlement = { id: 'entitlement', user_id: 'fixture', application_id: 'external', explicit_active: true,
++    explicit_role_id: 'operator', effective_active: true, effective_role_id: 'operator', effective_source: 'explicit', revision: 4, sync_status: 'synced' };
++  const tables = {
++    portal_applications: [
++      { id: 'fcos', name: 'FCOS', application_kind: 'internal', status: 'active', launch_path: '/' },
++      { id: 'external', name: 'Existing app', application_kind: 'external', status: 'active', protocol: 'portal', administrator_default_role: 'owner', target_base_url: 'https://fixture.example' },
++    ],
++    portal_application_roles: [{ application_id: 'external', id: 'operator', label: 'Operator' }],
++    portal_user_app_entitlements: [entitlement],
++    portal_entitlement_outbox: [],
++  };
++  return {
++    reads, writes, entitlement,
++    from(table) {
++      let operation = 'read', payload, single = false;
++      const query = {
++        select() { return query; }, order() { return query; }, eq() { return query; }, in() { return query; }, lt() { return query; }, lte() { return query; }, limit() { return query; },
++        update(value) { operation = 'update'; payload = value; return query; },
++        insert(value) { operation = 'insert'; payload = value; return query; },
++        upsert(value) { operation = 'upsert'; payload = value; return query; },
++        maybeSingle() { single = true; return query; }, single() { single = true; return query; },
++        then(resolve, reject) {
++          if (operation === 'read') reads.push(table); else writes.push({ table, operation, payload });
++          const data = operation === 'read' ? structuredClone(tables[table] || []) : [{ ...entitlement, ...payload }];
++          return Promise.resolve({ data: single ? data[0] || null : data, error: null }).then(resolve, reject);
++        },
++      };
++      return query;
++    },
++  };
++}
++
++test('read-only portal listing returns existing data without entitlement repairs, and outbox fails before database access', async () => {
++  for (const env of [{ VERCEL_ENV: 'preview' }, { VERCEL_ENV: 'production', FCOS_ENABLE_READ_ONLY_CI: 'true' }]) {
++    const client = portalClient(), before = structuredClone(client.entitlement);
++    const applications = await listPortalApplicationsForUser({ client, profile: { id: 'fixture', active: true, user_type: 'administrator' }, moduleAccess: { buyer_invoices: true }, env });
++    assert.deepEqual(client.writes, []);
++    assert.deepEqual(client.reads.sort(), ['portal_applications', 'portal_application_roles', 'portal_user_app_entitlements'].sort());
++    assert.deepEqual(client.entitlement, before);
++    assert.equal(applications.find((app) => app.id === 'fcos').available, true, 'internal navigation remains available');
++    const existing = applications.find((app) => app.id === 'external');
++    assert.equal(existing.roleId, 'operator', 'listing does not invent a repaired role');
++    assert.equal(existing.revision, 4);
++    assert.equal(existing.available, false);
++    assert.match(existing.blockingReason, /read-only/);
++    const outboxClient = portalClient();
++    await assert.rejects(processPortalOutbox({ client: outboxClient, env }), { status: 403, code: 'FCOS_DEPLOYMENT_READ_ONLY' });
++    assert.deepEqual(outboxClient.reads, []);
++    assert.deepEqual(outboxClient.writes, []);
++  }
++  const production = portalClient();
++  const applications = await listPortalApplicationsForUser({ client: production, profile: { id: 'fixture', active: true, user_type: 'administrator' }, env: { VERCEL_ENV: 'production' } });
++  assert.equal(applications.find((app) => app.id === 'external').roleId, 'owner');
++  assert.deepEqual(production.writes.map(({ table, operation }) => [table, operation]), [
++    ['portal_user_app_entitlements', 'update'], ['portal_entitlement_outbox', 'upsert'],
++  ], 'writable Production retains reconciliation and queued synchronization');
++  const outboxClient = portalClient();
++  const result = await processPortalOutbox({ client: outboxClient, env: { VERCEL_ENV: 'production' } });
++  assert.ok(result);
++  assert.deepEqual(outboxClient.writes.map(({ table, operation }) => [table, operation]), [['portal_entitlement_outbox', 'update']], 'writable Production retains stale-lock recovery');
++});
++
++test('Payment Collections issues no reconciliation mutation until declared writable, while collection and incoming pages stay mounted', async () => {
++  const harness = reactHarness(), calls = [];
++  let tab = 'collections';
++  const auth = { hasModuleAccess: () => true, user: { id: 'fixture', user_type: 'administrator' }, deploymentCapabilities: null, deploymentMutationAllowed: false };
++  const result = { summary: { checked: 1 }, exceptions: [], items: [], capabilities: { canOverridePostingReminder: true } };
++  globalThis.__deploymentCollectionsHarness = {
++    react: harness.react, auth, useSearchParams: () => [new URLSearchParams({ tab }), () => {}],
++    appClient: { functions: { clearCache() {}, invoke: async (...args) => { calls.push(args); return { data: result, meta: {} }; } } },
++  };
++  const componentSource = withoutImports(await source('../src/pages/PaymentCollections.jsx'));
++  const components = ['AlertTriangle', 'Banknote', 'CheckCircle2', 'ClipboardCheck', 'ListChecks', 'Loader2', 'RefreshCw', 'Scale', 'ShieldCheck', 'BuyerInvoices', 'IncomingPayments', 'Badge', 'Button', 'Dialog', 'DialogContent', 'DialogDescription', 'DialogFooter', 'DialogHeader', 'DialogTitle', 'Label', 'Textarea', 'StateBlock', 'TableShell', 'PageMethodology', 'PageUserManual', 'DataStatus', 'SalesforceSyncBadge', 'StemDetailLink', 'WorkspaceViewBar', 'StemDetailModal', 'VariableCharges', 'LegacyPaymentDataAudit', 'PaymentDataReliabilityBadge'];
++  const { default: PaymentCollections } = await execute(`
++    const { react: React, auth, useSearchParams, appClient } = globalThis.__deploymentCollectionsHarness;
++    const { useCallback, useEffect, useMemo, useRef, useState } = React;
++    const useAuth = () => auth, PAYMENT_COLLECTIONS_METHODOLOGIES = { collections: {} }, VARIABLE_CHARGES_USER_MANUAL = {};
++    ${components.map((name) => `const ${name} = ${JSON.stringify(name)};`).join('\n')}
++    ${componentSource}
++  `);
++  const render = () => harness.render(() => PaymentCollections());
++  try {
++    for (const capability of [null, { mutationsAllowed: false }]) {
++      auth.deploymentCapabilities = capability;
++      auth.deploymentMutationAllowed = false;
++      let tree = render();
++      await harness.flush();
++      assert.equal(calls.length, 0);
++      assert.ok(nodes(tree).some((node) => node.type === 'BuyerInvoices'));
++      tab = 'incoming';
++      tree = render();
++      assert.ok(nodes(tree).some((node) => node.type === 'IncomingPayments'));
++      tab = 'reconciliation';
++      tree = render();
++      const refresh = nodes(tree).find((node) => node.type === 'Button' && node.props.children.includes(' Refresh Salesforce'));
++      assert.ok(refresh);
++      assert.equal(refresh.props.disabled, true);
++      await refresh.props.onClick();
++      const saveControl = nodes(tree).find((node) => node.type === 'Button' && node.props.children.includes('Save control'));
++      assert.ok(saveControl);
++      await saveControl.props.onClick();
++      assert.equal(calls.length, 0, 'disabled handlers also fail closed if called directly');
++      tab = 'collections';
++    }
++    auth.deploymentCapabilities = { mutationsAllowed: true };
++    auth.deploymentMutationAllowed = true;
++    render();
++    await harness.flush();
++    assert.deepEqual(calls, [['paymentCollectionsReconcile', { force: false }, { force: false }]], 'writable Production retains automatic reconciliation');
++    tab = 'reconciliation';
++    let tree = render();
++    const refresh = nodes(tree).find((node) => node.type === 'Button' && node.props.children.includes(' Refresh Salesforce'));
++    assert.equal(refresh.props.disabled, false);
++    await refresh.props.onClick();
++    assert.deepEqual(calls[1], ['paymentCollectionsReconcile', { force: true }, { force: true }]);
++    auth.deploymentCapabilities = { mutationsAllowed: false };
++    auth.deploymentMutationAllowed = false;
++    tree = render();
++    await harness.flush();
++    assert.equal(calls.length, 2, 'losing capability never starts another automatic mutation');
++    auth.deploymentCapabilities = { mutationsAllowed: true };
++    auth.deploymentMutationAllowed = true;
++    render();
++    await harness.flush();
++    assert.equal(calls.length, 2, 'an auth refresh does not repeat automatic reconciliation for the same user');
++  } finally {
++    delete globalThis.__deploymentCollectionsHarness;
++  }
++});
