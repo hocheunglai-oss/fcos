@@ -1,6 +1,8 @@
+import { RELEASE_COORDINATION_CONTROL_FILES } from './release-coordination-controls.mjs';
 // Declaration-only leaf: the live admission collector and its build consumers
 // share this closure without importing each other during ESM initialization.
 export const PREVIEW_EMAIL_BUILD_CONTROL_FILES = Object.freeze([
+  ...RELEASE_COORDINATION_CONTROL_FILES,
   '.github/workflows/preview-email-proof-build.yml', 'scripts/preview-email-proof-build.mjs', 'scripts/lib/preview-email-build.mjs',
   'scripts/lib/preview-vercel-authority.mjs', 'scripts/lib/preview-vercel-enrollment.mjs', 'scripts/preview-vercel-enrollment.mjs', 'scripts/fcos-keychain-migrate.swift',
   'scripts/lib/release-evidence.mjs', 'scripts/lib/release-workflow.mjs', '.github/workflows/routine-release.yml', 'scripts/lib/release-production.mjs', 'scripts/lib/release-readiness.mjs',

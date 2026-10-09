@@ -54,7 +54,9 @@ async function modules({ objectOverride, localReadOverride, provenanceOverride, 
     'scripts/lib/runtime-compatibility-observation.mjs', 'config/fcosConnections.js', 'scripts/runtime-compatibility-release.mjs',
     'scripts/runtime-compatibility-normal-role.mjs', 'scripts/preview-email-proof-build.mjs', ...currentFiles.filter(x => x.endsWith('.mjs') || x.endsWith('.js')),
     'scripts/lib/runtime-compatibility-successor-live.mjs', 'scripts/lib/runtime-compatibility-successor-adapter.mjs',
-    'scripts/lib/preview-email-build-controls.mjs', 'scripts/lib/github-provider-timestamp.mjs']);
+    'scripts/lib/preview-email-build-controls.mjs', 'scripts/lib/github-provider-timestamp.mjs',
+    'scripts/lib/release-coordination-controls.mjs', 'scripts/lib/release-coordination.mjs',
+    'scripts/lib/release-coordination-trust.mjs', 'scripts/lib/release-coordination-transport.mjs']);
   const synthetic = (id, values) => {
     if (!cache.has(id)) cache.set(id, new SyntheticModule(Object.keys(values), function () { for (const [name, value] of Object.entries(values)) this.setExport(name, value); }, { context, identifier: id }));
     return cache.get(id);

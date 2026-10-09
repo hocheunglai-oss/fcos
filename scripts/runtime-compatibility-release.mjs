@@ -1,3 +1,5 @@
+import { retainReleaseCoordinationReadiness } from './lib/release-coordination.mjs';
+import { collectHostedReleaseCoordination, consumeReleaseCoordination } from './lib/release-coordination-transport.mjs';
 import { LEGACY_EMAIL_BASELINE_CONTRACT_HASH, collectLegacyEmailBaselineEvidence } from './lib/legacy-email-baseline-proof.mjs';
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, appendFileSync, lstatSync, existsSync, mkdirSync, mkdtempSync, rmSync, readdirSync } from 'node:fs';
@@ -116,8 +118,7 @@ export async function runRuntimeCompatibilityRelease({ mode = 'dry-run', trusted
   expectedCommit, candidateUrl, env = process.env } = {}) {
   const successor = expectedCommit === SUCCESSOR_LIVE_CONTRACT.candidateSha;
   if (successor && mode === 'dry-run') return successorLivePlan();
-  // Production has no accepted canonical-coordinator bridge. No mode, receipt
-  // or supplied lease flag can reach a provider writer for exact04ee.
+  // First-cutover activation still requires actual protected backend proofs.
   if (successor && mode === 'execute') rejectSuccessorUncoordinatedMutation();
   if (mode === 'dry-run') return createRuntimeCompatibilityPreflight();
   if (!['preflight', 'execute', 'collect-quality'].includes(mode) || ![FIRST_RUNTIME_ROLLOUT.candidateSha, SUCCESSOR_LIVE_CONTRACT.candidateSha].includes(expectedCommit)
@@ -298,8 +299,12 @@ export async function runRuntimeCompatibilityRelease({ mode = 'dry-run', trusted
     };
     Object.assign(input, await evaluateCollected(snapshots, input.trustedEvidence, input.quality));
     input.collectionBlockers.push(...input.parity.blockers.map(({ code, scope }) => ({ code, scope })));
-    const preflight = createRuntimeCompatibilityPreflight(input);
-    if (mode !== 'execute' || !preflight.ready) return preflight;
+    let preflight = createRuntimeCompatibilityPreflight(input);
+    if (mode !== 'execute' || preflight.blockers.some(row => row.scope !== 'coordinator')) return preflight;
+    const coordination = await collectHostedReleaseCoordination({ route: 'compatibility', readiness: input.readiness });
+    input.coordination = coordination;
+    preflight = createRuntimeCompatibilityPreflight(input);
+    if (!preflight.ready) return preflight;
     refreshPrerequisites = async () => {
       // Re-read every archive and original job completion. Actual UI completion
       // timestamps are retained; a fresh upload or this read cannot renew them.
@@ -317,7 +322,9 @@ export async function runRuntimeCompatibilityRelease({ mode = 'dry-run', trusted
           compiled: snapshot.compiled.flags, flags: snapshot.runtime.flags, auth: snapshot.runtime.auth, safety: snapshot.runtime.safety });
         if (releaseHash(JSON.stringify(stable(refreshedSnapshots[name]))) !== releaseHash(JSON.stringify(stable(snapshots[name])))) throw new Error('Effective configuration, compiled flags or existing provider session changed.');
       }
-      const current = { ...input, ...await evaluateCollected(refreshedSnapshots, evidence, quality), runtime: refreshedSnapshots.candidate.runtime,
+      const recollected = await evaluateCollected(refreshedSnapshots, evidence, quality);
+      const current = { ...input, ...recollected, readiness: retainReleaseCoordinationReadiness(input.readiness, recollected.readiness),
+        runtime: refreshedSnapshots.candidate.runtime,
         trustedEvidence: evidence, quality, endpointAbsence: await collectEndpointAbsence() };
       if (!createRuntimeCompatibilityPreflight(current).ready) throw new Error('Fresh complete compatibility parity and evidence required at approval boundary.');
     };
@@ -345,6 +352,7 @@ export async function runRuntimeCompatibilityRelease({ mode = 'dry-run', trusted
       assertProductionRuntimeReadback(runtimeObservation, input.parity);
     };
     return executeRuntimeCompatibilityRelease({ preflight, readiness: input.readiness, authority, currentProduction, probe,
+      coordination: phase => consumeReleaseCoordination(coordination, input.readiness, phase),
       journal: async (entry, { first = false } = {}) => { const data = `${JSON.stringify(entry)}\n`; if (first) writeFileSync(journalPath, data, { mode: 0o600, flag: 'wx', flush: true }); else appendFileSync(journalPath, data, { mode: 0o600, flush: true }); },
       deploy: async args => verifyDeployment(new URL(canonicalFcosE2eCandidateUrl(cli(args).trim())).hostname),
       discover: async operationId => { try { const matches = (api(`/v6/deployments?projectId=${projectId}&limit=20`).deployments || []).filter(row => row.meta?.fcosReleaseOperation === operationId && row.meta?.githubCommitSha === expectedCommit);

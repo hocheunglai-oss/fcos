@@ -1,3 +1,4 @@
+import { collectHostedReleaseCoordination, consumeReleaseCoordination } from './lib/release-coordination-transport.mjs';
 import { execFileSync } from 'node:child_process';
 import { appendFileSync, mkdirSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -101,6 +102,7 @@ export async function runProductionRelease({ mode = 'dry-run', cwd = ROOT, expec
   const readiness = createReleaseReadiness({ source, candidate: parity.candidate, production: parity.production, parity, evidence: parity.trustedEvidence,
     quality: parity.quality, lockHash, configurationRevision });
   if (!readiness.ready) throw new Error(`Release remains blocked (${readiness.blockers.length} independently collected blockers).`);
+  const coordination = await collectHostedReleaseCoordination({ route: 'production', readiness });
   const directory = resolve(env.RUNNER_TEMP || '');
   if (!env.RUNNER_TEMP || directory === cwd || directory === '/') throw new Error('A private runner journal directory is required.');
   const journalPath = join(directory, `fcos-production-release-${claims.run_id}.jsonl`);
@@ -133,6 +135,7 @@ export async function runProductionRelease({ mode = 'dry-run', cwd = ROOT, expec
   mkdirSync(join(cwd, '.vercel'), { recursive: true, mode: 0o700 });
   writeFileSync(join(cwd, '.vercel/project.json'), `${JSON.stringify({ projectId, orgId: teamId, projectName: fcosConnectionIdentifier('vercel', 'Project') })}\n`, { mode: 0o600, flag: 'wx' });
   return executeProductionRelease({ readiness, authority, journal, currentProduction, probe,
+    coordination: phase => consumeReleaseCoordination(coordination, readiness, phase),
     deploy: async args => { const output = cli(args).trim(); const url = canonicalFcosE2eCandidateUrl(output); return verifyDeployment(new URL(url).hostname); },
     discover: async operationId => {
       const list = api(`/v6/deployments?projectId=${projectId}&limit=20`).deployments || [];

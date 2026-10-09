@@ -85,7 +85,9 @@ jobs:
           FCOS_COMPATIBILITY_QUALITY_RUN_ID: ${{ inputs.upstream_quality_run_id }}
       - name: Stage exact Production build and verify before assigning domains
         if: ${{ inputs.operation == 'execute' }}
-        run: node trusted/scripts/runtime-compatibility-release.mjs --execute
+        uses: ./trusted/.github/actions/release-executor
+        with:
+          route: compatibility
         env:
           GH_TOKEN: ${{ secrets.FCOS_RELEASE_GH_TOKEN }}
           VERCEL_TOKEN: ${{ secrets.FCOS_RELEASE_VERCEL_TOKEN }}

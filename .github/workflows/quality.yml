@@ -35,7 +35,7 @@ jobs:
       - run: npm run verify:compatibility
       - run: npm test
       - name: Verify isolated Python coordination ledger
-        run: python3 -m unittest tests.preview_email_coordination_ledger_test
+        run: python3 -B -m unittest tests.preview_email_coordination_ledger_test tests.release_coordination_ledger_test
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run verify:graph-only

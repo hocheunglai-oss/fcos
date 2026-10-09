@@ -72,3 +72,13 @@ commit fields identify the preparation base; the individual source hashes bind
 the exact new working bytes. All frozen source objects, packed carriers, fixture
 manifests, first-rollout observations and runtime assertions remain unchanged.
 This update is an offline current-source test binding, not live admission.
+
+The default-disabled coordinated executor adds `source-bindings-v5.json`. It binds
+current native action, coordinator, ledger, workflow and revision3 connector approval
+controls. The helper authenticates the unchanged v2/v3/v4 chain first. Historical
+objects, source manifests, first-rollout refusals and final2f4 ordering are retained.
+
+`fixture-manifest-v4.json` updates only the current checkout member bindings and
+base metadata; original object inventory, observation bindings, packed bytes and
+non-checkout members remain identical. The helper authenticates the old v3 manifest
+hash separately and verifies the v4-to-v3 history before consuming current source.

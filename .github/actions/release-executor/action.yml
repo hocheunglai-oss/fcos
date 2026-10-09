@@ -1,0 +1,9 @@
+name: FCOS protected coordinated executor
+description: Run the protected-main executor with native Actions artifact identity
+inputs:
+  route:
+    required: true
+    description: Exact protected executor route
+runs:
+  using: node24
+  main: ../../../scripts/release-action.mjs

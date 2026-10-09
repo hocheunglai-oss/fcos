@@ -78,9 +78,10 @@ export function productionDeployArguments({ sha, sourceDigest, operationId } = {
  * A durable intent is written before each external operation. Uncertain outcomes
  * may only be read back; neither deployment nor promotion is blindly retried.
  */
-export async function executeProductionRelease({ readiness, authority, journal, deploy, discover, waitReady, probe, promote, currentProduction, now = () => Date.now() } = {}) {
+export async function executeProductionRelease({ readiness, authority, coordination, journal, deploy, discover, waitReady, probe, promote, currentProduction, now = () => Date.now() } = {}) {
   if (readiness?.ready !== true || readiness.productionAuthorized !== false || readiness.blockers?.length
     || !SHA.test(readiness.candidate?.sha || '') || !HASH.test(readiness.candidate?.sourceDigest || '')) throw new Error('A fresh independently collected unblocked readiness report is required.');
+  if (typeof coordination !== 'function') throw new Error('Collected canonical release coordination is required.');
   const approved = await authority();
   const operationId = `fcos-release-${approved.runId}`;
   const previous = await currentProduction();
@@ -89,6 +90,9 @@ export async function executeProductionRelease({ readiness, authority, journal, 
     authorization: { approvalMode: approved.approvalMode || 'unverified', runId: approved.runId, reviewerId: approved.reviewerId, environmentId: approved.environmentId },
     rollback: { command: ['vercel', 'rollback', previous.id], requiresHumanAuthorization: true } };
   await journal({ ...context, phase: 'deploy_requested', capturedAt: new Date(now()).toISOString() }, { first: true });
+  const lease = await coordination('stage');
+  await journal({ ...context, coordination: lease, phase: 'coordination_consumed', capturedAt: new Date(now()).toISOString() });
+  if (!Number.isSafeInteger(lease?.expiresAt) || lease.expiresAt <= now()) throw new Error('Coordination expired before stage submission.');
   let staged;
   try { staged = await deploy(productionDeployArguments({ sha: readiness.candidate.sha, sourceDigest: readiness.candidate.sourceDigest, operationId })); }
   catch {
@@ -112,6 +116,8 @@ export async function executeProductionRelease({ readiness, authority, journal, 
   const beforePromotion = await currentProduction();
   if (beforePromotion.id !== previous.id) throw new Error('Production changed before domain assignment.');
   await journal({ ...context, stagedProduction: staged, phase: 'promotion_requested', capturedAt: new Date(now()).toISOString() });
+  const promotionLease = await coordination('promote');
+  if (!Number.isSafeInteger(promotionLease?.expiresAt) || promotionLease.expiresAt <= now()) throw new Error('Coordination expired before promotion submission.');
   let uncertain = false;
   try { await promote(staged); } catch { uncertain = true; }
   const live = await currentProduction();
