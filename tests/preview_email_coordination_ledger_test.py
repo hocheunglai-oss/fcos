@@ -17,10 +17,18 @@ class PermanentConsumptionTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix='fcos-coordination-ledger-')
         self.directory = Path(self.temp.name).resolve()
         self.workflow = self.directory / 'workflow-state.json'
-        self.guard = ledger.load_guard(ledger.HELPER)
-        # Read only the accepted public helper reference; all coordination state
-        # and claims below are isolated temporary fixtures, never canonical writes.
-        helper = json.loads(ledger.regular(ledger.WORKFLOW))['unifiedCoordinator']['writeLeaseHelper']
+        fixtures = ROOT / 'tests/fixtures/preview-email-coordination-ledger'
+        self.helper = fixtures / 'coordinator_guard.py'
+        self.guard = ledger.load_guard(self.helper)
+        # Keep the real helper and review hash checks, with public offline bytes.
+        # Every workflow, lease and consumption write stays in the temp directory.
+        helper = {'path': str(self.helper), 'sha256': ledger.HELPER_SHA256,
+            'localCoordinationGuardAccepted': True, 'independentReviewPending': False,
+            'providerAuthority': False,
+            'rootAcceptance': {'path': str(fixtures / 'root-acceptance.json'),
+                'sha256': 'e498d78f785362f36853be46a925416359c2f06e71422d61feaca89d194150b4'},
+            'independentRevisionReview': {'path': str(fixtures / 'independent-review.json'),
+                'sha256': '03c5a3bb8dc7e98896e4493edef9992573cfd8663d38cc3e1001fd71c59372d9'}}
         self.state = {'unifiedCoordinator': {'status': 'active', 'epoch': 'production-reconciliation-20261005',
             'writeLeasePath': str(self.directory / 'live-provider-write-lease.json'), 'writeLeaseHelper': helper,
             'objectives': {'production': {'ownerThreadId': ledger.OWNER, 'retired': False, 'status': 'active'}}}}
@@ -35,7 +43,7 @@ class PermanentConsumptionTests(unittest.TestCase):
 
     def consume(self, binding=None):
         return ledger.claim_and_consume(json.dumps(binding or self.binding, separators=(',', ':')),
-            self.workflow, self.directory, ledger.HELPER, fixture=True)
+            self.workflow, self.directory, self.helper, fixture=True)
 
     def test_permanent_exclusive_record_and_canonical_lease_are_fsynced_before_return(self):
         import os
@@ -122,6 +130,32 @@ class PermanentConsumptionTests(unittest.TestCase):
                 self.consume()
             self.assertFalse((self.directory / 'live-provider-write-lease.json').exists())
             helper[key] = before
+
+    def test_tampered_offline_helper_and_reviews_fail_before_claim(self):
+        original_helper = self.helper
+        helper_metadata = self.state['unifiedCoordinator']['writeLeaseHelper']
+        cases = [('helper', original_helper),
+            ('rootAcceptance', Path(helper_metadata['rootAcceptance']['path'])),
+            ('independentRevisionReview', Path(helper_metadata['independentRevisionReview']['path']))]
+        for key, source in cases:
+            with self.subTest(fixture=key):
+                changed = self.directory / (key + '.fixture')
+                changed.write_bytes(source.read_bytes() + b'\n')
+                if key == 'helper':
+                    self.helper = changed
+                    helper_metadata['path'] = str(changed)
+                else:
+                    helper_metadata[key]['path'] = str(changed)
+                self.save()
+                with self.assertRaisesRegex(ValueError, 'changed'):
+                    self.consume()
+                self.assertFalse((self.directory / 'live-provider-write-lease.json').exists())
+                self.assertFalse((self.directory / 'preview-coordination-consumption').exists())
+                self.helper = original_helper
+                helper_metadata['path'] = str(original_helper)
+                if key != 'helper':
+                    helper_metadata[key]['path'] = str(source)
+                self.save()
 
     def test_fixture_entry_cannot_target_actual_canonical_directory(self):
         with self.assertRaisesRegex(ValueError, 'temporary'):

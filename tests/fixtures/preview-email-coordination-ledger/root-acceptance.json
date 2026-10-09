@@ -1,0 +1,25 @@
+{
+  "kind": "root_exact745e_operational_and_cancelled_preview_recovery_acceptance_v5",
+  "manifest": {
+    "path": "/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/installed404bc-source-preparation-20261005/publication-preparation/operational-publication-closure-20261006/cancelled-recovery-v5/closure-inputs.json",
+    "sha256": "95345191ce572f0ea9e14ddc1d726d49e5ebaa4c15733881bbe364f0d8df24d5"
+  },
+  "index": {
+    "path": "/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/installed404bc-source-preparation-20261005/publication-preparation/operational-publication-closure-20261006/cancelled-recovery-v5/frozen-member-index.json",
+    "sha256": "10a851f20a322a36a009ab93440a03b5eeeabdfdc75e414def707d9dc5ddb8fd"
+  },
+  "independentReview": {
+    "path": "/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/installed404bc-source-preparation-20261005/publication-preparation/operational-publication-closure-20261006/independent-review/review-cancelled-recovery-v5-03c5a3bb8dc7e98896e4493edef9992573cfd8663d38cc3e1001fd71c59372d9.json",
+    "sha256": "03c5a3bb8dc7e98896e4493edef9992573cfd8663d38cc3e1001fd71c59372d9"
+  },
+  "decision": "accepted_exact_affected_closure",
+  "actualInputAndMemberHashesCompared": true,
+  "transportTests": 12,
+  "coordinationGuardTests": 10,
+  "priorPassingEvidenceReusedOnlyForUnchangedRelevantBytes": true,
+  "allOriginalFailuresAndAffectedRepairsPreserved": true,
+  "actualRootInspectedTransportAndCoordinationDelta": true,
+  "providerOperationsPerformedByThisAcceptance": 0,
+  "executionAuthorityGranted": false,
+  "productionOrPrivateOrFinancialAuthorityGranted": false
+}
