@@ -8,7 +8,7 @@ import { releaseHash } from '../scripts/lib/release-readiness.mjs';
 import { collectPreviewParity } from '../scripts/collect-preview-parity.mjs';
 import { normalRoleReadRequest } from '../scripts/lib/normal-role-read-requests.mjs';
 
-test('control installation preserves every existing quality byte apart from the reviewed checkout configuration and source receipt', () => {
+test('control installation preserves every existing quality byte apart from reviewed checkout, Python verification and source receipt', () => {
   const source = readFileSync(new URL('../.github/workflows/quality.yml', import.meta.url), 'utf8');
   const workflow = load(source), steps = workflow.jobs['code-and-database'].steps;
   const checkout = steps.find(step => step.uses === 'actions/checkout@v4');
@@ -16,6 +16,15 @@ test('control installation preserves every existing quality byte apart from the 
   assert.equal(checkout.with['persist-credentials'], false);
   assert.equal(checkout.with['fetch-depth'], 0);
   const history = '          # Verify immutable retained Production and compatibility Git objects.\n          fetch-depth: 0\n';
+  const pythonBlock = '      - name: Verify isolated Python coordination ledger\n        run: python3 -m unittest tests.preview_email_coordination_ledger_test\n';
+  assert.equal(source.split(pythonBlock).length, 2);
+  const pythonIndex = steps.findIndex(step => step.name === 'Verify isolated Python coordination ledger');
+  assert.equal(pythonIndex, steps.findIndex(step => step.run === 'npm test') + 1);
+  assert.deepEqual(steps[pythonIndex], {
+    name: 'Verify isolated Python coordination ledger',
+    run: 'python3 -m unittest tests.preview_email_coordination_ledger_test',
+  });
+
   assert.equal(source.split(history).length, 2);
   const recordIndex = steps.findIndex(step => step.name === 'Record exact tested source');
   assert.equal(recordIndex, steps.length - 2);
@@ -30,6 +39,7 @@ test('control installation preserves every existing quality byte apart from the 
   const end = source.indexOf('\n  authenticated-browser:', start);
   const restored = (source.slice(0, start).replace(/\n+$/, '\n') + '\n' + source.slice(end + 1))
     .replace(history, '')
+    .replace(pythonBlock, '')
     .replace(/^          ref: \$\{\{ github\.event\.pull_request\.head\.sha \|\| github\.sha \}\}\n/m, '');
   assert.equal(releaseHash(restored), 'cf40aa3a2515b2f48990a2f1031944aa6d1a5d8a04eec7232e9bc6c9e013c5dc');
 });

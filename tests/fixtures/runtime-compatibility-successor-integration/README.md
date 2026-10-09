@@ -59,3 +59,8 @@ They never use the host's object alternates or fetch candidate history.
 These offline repositories and fixture review data confer no protected or live
 authority. No production implementation, control, workflow or dependency changes
 are part of this CI repair.
+
+The Python ledger CI step adds `source-bindings-v3.json` for the reviewed
+quality workflow bytes. The v2 bindings and historical manifests remain
+unchanged; the portable helper verifies the retained v2 hash before loading v3.
+This fixture update grants no installation or provider authority.

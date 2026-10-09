@@ -9,7 +9,7 @@ export const SOURCE_ROOT = fileURLToPath(new URL('../../', import.meta.url));
 export const FIXTURE_ROOT = join(SOURCE_ROOT, 'tests/fixtures/runtime-compatibility-successor-integration');
 export const MANIFEST_HASH = '7335cb2d1482974c9dda3ee5552bcfc07befc5422329f0c0b2bc246635c4a71a';
 export const PACK_HASH = 'edb0c7a0d0ac7f45dba5fcfc8f6d98cbbf9667f01713a5d7f7764dc7e7380628';
-const BINDINGS_HASH = 'e83c88a3b42d2252c3462f9ed4ce7d5a3c7d6b0d6bf6d8879ec1502d5054e126';
+const BINDINGS_HASH = 'f380529fc56450a521ac2d83dc0d8b4de55b05a40f7f1e7835c47db7662fb3cb';
 export const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 
 function regularFile(root, path) {
@@ -25,9 +25,12 @@ function regularFile(root, path) {
 const historicalManifestBytes = regularFile(FIXTURE_ROOT, 'fixture-manifest-v2.json');
 assert.equal(hash(historicalManifestBytes), '91e8ba3fdacb7cd03a2bed574248920a2d6416aa043c4e5daafd7a5f5ac53257', 'Historical public manifest differs.');
 const historicalManifest = JSON.parse(historicalManifestBytes);
-const bindingBytes = regularFile(FIXTURE_ROOT, 'source-bindings-v2.json');
+const previousBindingBytes = regularFile(FIXTURE_ROOT, 'source-bindings-v2.json');
+assert.equal(hash(previousBindingBytes), 'e83c88a3b42d2252c3462f9ed4ce7d5a3c7d6b0d6bf6d8879ec1502d5054e126', 'Previous source bindings differ.');
+const bindingBytes = regularFile(FIXTURE_ROOT, 'source-bindings-v3.json');
 assert.equal(hash(bindingBytes), BINDINGS_HASH, 'Reviewed source bindings differ.');
 export const sourceBindings = JSON.parse(bindingBytes);
+assert.equal(sourceBindings.previousSourceBindingsSha256, hash(previousBindingBytes), 'Previous source binding history differs.');
 const rows = new Map(sourceBindings.sources.map(row => [row.path, row]));
 assert.equal(rows.size, sourceBindings.sources.length, 'Duplicate source binding.');
 export function assertBoundSource(path, bytes) {
