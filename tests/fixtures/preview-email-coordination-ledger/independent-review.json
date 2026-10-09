@@ -1,0 +1,206 @@
+{
+  "kind": "independent_exact745e_coherent_https_and_cancelled_recovery_material_review_v5",
+  "reviewedAtUtc": "2026-10-05T19:52:43.651837+00:00",
+  "model": "gpt-6.1-sol",
+  "reasoningEffort": "xhigh",
+  "decision": "ACCEPT_AFFECTED_V5_MATERIAL_CLOSURE",
+  "materialOpenFindings": 0,
+  "sourcePackageAccepted": true,
+  "scope": "One coherent affected review of the raw HTTPS configure transport, previously accepted durable runner diagnostic change, versioned cancellation coordinator guard, final frozen bindings and retained proofs. No broad unchanged dependency certification.",
+  "subject": {
+    "commit": "745e20cf7059c5e01472e9b64b43e7f253e34a19",
+    "tree": "5b06f53bd001c79c6386afb3abce217533ef3c38",
+    "parent": "404bc442a8a1d8a9c872f49678595fd8c374660d",
+    "sourceDigest": "8075ee4a70cdaaf2cc44688293fb6d30705eeb0a01839dfd2a5b23c2d0fb9dad",
+    "sourceFileCount": 1545,
+    "scopePaths": 26,
+    "lockSha256": "a197464ea4d46446aeeab368a722a8f0e632e11b1a61fd834c39cfc7ebb4155c",
+    "runtime": "v24.18.0",
+    "branch": "codex/compatibility-successor-source-gate-20261005"
+  },
+  "frozenManifest": {
+    "path": "/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/installed404bc-source-preparation-20261005/publication-preparation/operational-publication-closure-20261006/cancelled-recovery-v5/closure-inputs.json",
+    "sha256": "95345191ce572f0ea9e14ddc1d726d49e5ebaa4c15733881bbe364f0d8df24d5"
+  },
+  "frozenIndex": {
+    "path": "/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/installed404bc-source-preparation-20261005/publication-preparation/operational-publication-closure-20261006/cancelled-recovery-v5/frozen-member-index.json",
+    "sha256": "10a851f20a322a36a009ab93440a03b5eeeabdfdc75e414def707d9dc5ddb8fd"
+  },
+  "changedOnlyReport": {
+    "path": "/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/installed404bc-source-preparation-20261005/publication-preparation/operational-publication-closure-20261006/cancelled-recovery-v5/changed-only-report.json",
+    "sha256": "5a223a3796c680be51dd58e904a2793a8e90d26af559d59e1165552139ea8bda"
+  },
+  "affectedMembers": {
+    "native": {
+      "path": "/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/installed404bc-source-preparation-20261005/publication-preparation/operational-publication-closure-20261006/cancelled-recovery-v5/native.mjs",
+      "sha256": "1d4b53ba6b44ce6978dfadc3ae0ca2e9e1d83afee1c9b9b40e3b9adccb22cf24",
+      "mode": 420
+    },
+    "runner": {
+      "path": "/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/installed404bc-source-preparation-20261005/publication-preparation/operational-publication-closure-20261006/cancelled-recovery-v5/run-stage.mjs",
+      "sha256": "791bf32a30afb84068ec5db2e485b3070136d5b84314ad52d0ae0ca0b7b32b1e",
+      "mode": 420
+    },
+    "coordinatorHelper": {
+      "path": "/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/schedule-consolidation-20261004/production-reconciliation-coordinator-20261005/public-preview-cancellation-v4/coordinator_guard.py",
+      "sha256": "2bb8591f79b76b92f917ae7fcc1720d73757b613771812e9e220db015bdd1a18",
+      "mode": 420
+    }
+  },
+  "priorReviewsRetained": {
+    "v2": {
+      "path": "/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/installed404bc-source-preparation-20261005/publication-preparation/operational-publication-closure-20261006/independent-review/review-runtime-bound-v2-54d30710ab7eccb2a375e8173595bba774996235a5706889e1c22ea29e201d97.json",
+      "sha256": "54d30710ab7eccb2a375e8173595bba774996235a5706889e1c22ea29e201d97"
+    },
+    "v3": {
+      "path": "/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/installed404bc-source-preparation-20261005/publication-preparation/operational-publication-closure-20261006/independent-review/review-single-submit-v3-74e7a27805010228be6b34ab2d38ebca77aeddbb86bf58caaa4f84bccff22164.json",
+      "sha256": "74e7a27805010228be6b34ab2d38ebca77aeddbb86bf58caaa4f84bccff22164"
+    },
+    "cancellationPolicy": {
+      "path": "/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/installed404bc-source-preparation-20261005/publication-preparation/operational-publication-closure-20261006/independent-review/coordinator-cancellation-advisory-65395f303fe04d471842cfecd2c94a6230c65252f620330446aded2c57af74e1.json",
+      "sha256": "65395f303fe04d471842cfecd2c94a6230c65252f620330446aded2c57af74e1",
+      "mode": 384
+    }
+  },
+  "resolvedFinding": {
+    "id": "OP-SINGLE-SUBMIT-001",
+    "status": "CLOSED_FOR_EXACT_V5_HTTPS_BYTES",
+    "previousSeverity": "medium",
+    "closure": "Configure constructs one node:https.request and executes one end() with validated JSON. The path contains no fetch/SDK, recursion, retry or redirect follow. agent:false avoids pooled-request replay policy. Exact HTTPS origin/project/team/POST/body remain fixed; token is used only in Authorization. The total45000ms deadline destroys unsettled transport; response headers and body are bounded16384/65536 bytes. Timeout, request/stream errors, abort, close/incomplete and oversized response remain unknown/consumed.",
+    "parserAndRunnerPreserved": "Complete responses use the same projected status/requestId/errorCode and exactly-one-id success/mixed-failure/ambiguous-result rules accepted in v3. Runner awaits outcome and durably persists safe diagnostics before assertions/readback. Original returned id still needs exact GET ownership and final full boundary."
+  },
+  "cancellationGuardAssessment": {
+    "helper": {
+      "path": "/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/schedule-consolidation-20261004/production-reconciliation-coordinator-20261005/public-preview-cancellation-v4/coordinator_guard.py",
+      "sha256": "2bb8591f79b76b92f917ae7fcc1720d73757b613771812e9e220db015bdd1a18",
+      "mode": 420
+    },
+    "diff": {
+      "path": "/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/schedule-consolidation-20261004/production-reconciliation-coordinator-20261005/public-preview-cancellation-v4/guard.diff",
+      "sha256": "125ea13026173474d012370945709063d6cad51a4961d9fe2f72d7614f3731f5",
+      "mode": 420
+    },
+    "outcome": "verified_cancelled_public_preview_create_no_change_asof",
+    "accepted": true,
+    "boundedSubject": "Only configure POST public plain VITE_FCOS_ENABLE_FCUNO_OIDC=true, Preview-only, exact745e source and codex/compatibility-successor-source-gate-20261005 branch; exact lease identity/operation/leaseId and original hashed intent/before boundary must agree.",
+    "requiredProofs": "Authenticated original intent, original before boundary, exact actual after readback, root-observed local process termination and complete identity-bound ISO audit; full actor/repository/main/branch/controls/Vercel/project/shared/custom/settings/Production before-after preservation, zero guards/target rows, unchanged foreign digest, fresh<=600000ms nonfuture after timestamp and audit window covering original request through readback.",
+    "semantics": "Original submission remains unknown; original intent remains consumed GET-only; successClaim/noSubmissionClaim/lateEffectImpossibleClaim must be false and absenceAsOfReadbackOnly true. The outcome verifies current observed absence and cancellation of local action, not no submission or permanent absence.",
+    "authorityBoundary": "Helper authenticates local record/file hash bindings; root independently authenticates actual provider provenance and genuine process/audit evidence. The helper grants no human/provider/financial/private/Production authority. The exact current lease and reviewed root resolution must still match under the existing mutex before immutable history and lease removal.",
+    "preservation": "Original7dd coordinator helper remains byte-identical. Existing verified_complete/verified_no_provider_submission paths, owner checks, exclusive claims, persistent lease and history semantics are unchanged. No automatic expiry, steal or broad uncertainty exception is introduced.",
+    "excludedScopes": "Financial/reconciliation, other public keys, private/encrypted settings, Production target, other source/branch, deployment and business operations cannot use this new cancellation scope."
+  },
+  "reviewerVerification": [
+    "Assigned manifest95345191/index10a851f2/report5a223a37 hashes match. All15 indexed delivery members and32 manifest inputs match exact hashes/modes/declared lengths where provided; pinned Node binary hash reverified.",
+    "V5 native/runner/bootstrap/lease/template are byte-identical to frozen v4; V5 points at the new2bb coordinator helper and retains other original pins. The inert copied template is not a valid v5 acceptance and grants no action authority.",
+    "Read the full affected native code/diff and new coordinator validator/resolve integration/diff. Guard changes are addition of narrow cancellation validation and dispatch from resolve; original claimed lease and root material proof checks remain in force.",
+    "Retained transport and cancellation proofs match assigned hashes and their exact native/runner/helper/test/runtime/lock/output bindings. Reviewed meaningful test bodies without executing them.",
+    "Original helper hash7dd47a8a remains intact; previous v2/v3 material decisions and cancellation policy advisory remain immutable."
+  ],
+  "retainedAffectedEvidence": {
+    "httpsTransport": {
+      "proof": {
+        "path": "/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/installed404bc-source-preparation-20261005/publication-preparation/operational-publication-closure-20261006/single-submit-v4/focused-https.result.json",
+        "sha256": "4a35f9c7ff9b8a093cbde46f3c71233eeeeb141815c9393e022fc8d514b7511d",
+        "mode": 420
+      },
+      "test": {
+        "path": "/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/installed404bc-source-preparation-20261005/publication-preparation/operational-publication-closure-20261006/single-submit-v4/https-single-submit.test.mjs",
+        "sha256": "0ce024579fff9c41c7cdb4ebf12bf07746dab440301e62237660d4825427a055"
+      },
+      "tap": {
+        "path": "/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/installed404bc-source-preparation-20261005/publication-preparation/operational-publication-closure-20261006/single-submit-v4/focused-https.tap",
+        "sha256": "4ad894f5cdfa21ddc809991a49cd47326c4e958089f2e5804da0fc1d7328c303"
+      },
+      "cases": 12,
+      "passed": 12,
+      "failed": 0,
+      "elapsedSeconds": 0.12073516706004739,
+      "scope": "Captured production native with mocked selected node:https.request;421 exactly1 request/end and0fetch, complete success,64KiB limit boundary, request/stream errors, aborted/close/incomplete, redirect/no-follow, total45s timeout and safe malformed-body outcomes. Synthetic auth; no network/Keychain."
+    },
+    "cancellationFinalScope": {
+      "proof": {
+        "path": "/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/schedule-consolidation-20261004/production-reconciliation-coordinator-20261005/public-preview-cancellation-v4/final-scope-result.json",
+        "sha256": "6dae90d9cd10d0acd6a18e6df4e324bd0372150a0e4a5a407269fde3bb8865a5",
+        "mode": 384
+      },
+      "test": {
+        "path": "/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/schedule-consolidation-20261004/production-reconciliation-coordinator-20261005/public-preview-cancellation-v4/cancellation_tests.py",
+        "sha256": "5ced50d893e1d21adaa8dfc6f05fa0f88de0667c329f0daac4ce895993007f3b"
+      },
+      "stderr": {
+        "path": "/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/schedule-consolidation-20261004/production-reconciliation-coordinator-20261005/public-preview-cancellation-v4/final-scope.stderr",
+        "sha256": "5182ca6df00b3738987fc4d24b8a103ec757f687427862598b24761dbaabe2c0"
+      },
+      "cases": 10,
+      "passed": 10,
+      "failed": 0,
+      "elapsedSeconds": 0.050629082950763404,
+      "scope": "Exact narrowed original source/branch/key/value prerequisites; successful as-of validation and rejection of financial/private/Production/foreign drift/live process/partial audit/stale readback/replay-success semantics/other public key/tampered reference. Unit fixtures only; no actual lease actions."
+    },
+    "priorFixturePreconditionFailure": {
+      "proof": {
+        "path": "/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/schedule-consolidation-20261004/production-reconciliation-coordinator-20261005/public-preview-cancellation-v4/initial-test-precondition-failure.json",
+        "sha256": "9b0ab888f3b515a224942317c14f748726700a70ab97a8a067d43f9b47411064",
+        "mode": 384
+      },
+      "reportedPass": 8,
+      "reportedError": 1,
+      "validBehavioralEvidence": false,
+      "reason": "macOS TemporaryDirectory aliased path hit unchanged symlink rejection. Task-owned fixture real path corrected; affected fixtures rerun."
+    },
+    "priorBroaderScopeResult": {
+      "proof": {
+        "path": "/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/schedule-consolidation-20261004/production-reconciliation-coordinator-20261005/public-preview-cancellation-v4/focused-result.json",
+        "sha256": "4107d4fd2f67fd47036caf00a1403e008cb26eeabe9f2a7d0ac85c4e650c931b",
+        "mode": 384
+      },
+      "cases": 9,
+      "passed": 9,
+      "retainedAsHistoricalOnly": true,
+      "reuseForCurrentScopeClaim": false,
+      "reason": "Final restriction changed all valid fixture prerequisites; final9affected plus1newcase were required and retained."
+    },
+    "earlierProofs": "V3 eleven cases only support unchanged validation/parser/diagnostic semantics. Earlier20+1 and52/46/36/34+3 support unchanged exact source/runtime/CLI reads/Git/GH components only. No broad aggregate or real provider-readiness claim.",
+    "testsRunByReviewer": 0,
+    "unaffectedSuitesRerunByReviewer": 0,
+    "priorFailuresErased": false
+  },
+  "actualNextConditions": [
+    "Before resolving the original held lease, root must obtain and materially review fresh genuine exact after readback, full preservation, terminal-process and identity-bound complete audit proofs for the original consumed intent, then bind them immutably to the precise lease resolution. This review has not resolved that lease or independently attested current provider state.",
+    "Cancellation records absence only at its recorded readback boundary. Submission count/cause remains unknown, original intent cannot replay, and no owned guard or successful configure is inferred. Any later unowned/duplicate effect must stop future stages under existing guard ownership rules.",
+    "Any future operation needs independently applicable original direct-human scope plus a fresh exact keyed action acceptance, captured final source/runtime/helper pins, fresh full provider boundaries and exclusive lease. The helper/source review cannot manufacture that authority.",
+    "Only exact10 public plain candidate-branch Preview safeguards, normal exactSHA push and at most one draft PR remain the publication scope. Protected human review, private readiness/credential replacement, financial actions, Salesforce promotion and Production release remain ungranted."
+  ],
+  "authority": {
+    "newExecutionAuthority": false,
+    "newProviderAuthority": false,
+    "actualOriginalWriteResolved": false,
+    "leaseResolutionPerformed": false,
+    "originalReplayAuthority": false,
+    "newHumanReadiness": false,
+    "protectedReviewerImpersonation": false,
+    "privateReadiness": false,
+    "financialAuthority": false,
+    "productionAuthority": false,
+    "automaticExecution": false
+  },
+  "actionsPerformed": {
+    "readOnlySource": true,
+    "ownImmutableReviewOutputOnly": true,
+    "tests": 0,
+    "providerOperations": 0,
+    "credentialActions": 0,
+    "liveLeaseActions": 0,
+    "sharedStateActions": 0,
+    "candidateEdits": 0,
+    "commits": 0,
+    "browserActions": 0,
+    "nestedAgents": 0
+  },
+  "limitations": [
+    "Synthetic tests prove bounded code/primitive selection and contract handling, not TLS/provider success or genuine audit provenance.",
+    "Local hashes/owned state and standard pinned runtime/external CLI trust remain; no same-host-user adversary or fexecve-style certification is claimed.",
+    "Fresh actual original cancellation resolution and any new action authority remain root responsibilities; no failure cause or remote-branch prerequisite has been inferred."
+  ],
+  "nextStep": "Root may prepare the fresh actual exact cancellation resolution under the accepted narrow guard, review it and resolve only the original held local lease. Then proceed solely through independently valid new action acceptance and existing actual stage boundaries."
+}

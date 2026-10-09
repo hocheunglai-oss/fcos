@@ -170,10 +170,11 @@ async function trustedFixture() {
   const repository = { id: 2, full_name: 'hocheunglai-oss/fcos', default_branch: 'main' };
   const reviewer = { id: 4, login: 'hocheunglai-oss' };
   const run = { id: 99, repository, head_repository: repository, head_branch: 'main', head_sha: harnessSha,
+    name: 'FCOS protected Preview email proof build', display_title: `Review FCOS Preview email source ${pin.sha}`,
     path: '.github/workflows/preview-email-proof-build.yml', event: 'workflow_dispatch', run_attempt: 1,
     status: 'completed', conclusion: 'success', updated_at: iso(now), run_started_at: iso(now - 2000), actor: reviewer, triggering_actor: reviewer };
   const jobs = [{ id: 9, run_id: run.id, run_attempt: 1, name: 'proof',
-    workflow_name: `Review FCOS Preview email source ${pin.sha}`, head_sha: harnessSha, head_branch: 'main',
+    workflow_name: 'FCOS protected Preview email proof build', head_sha: harnessSha, head_branch: 'main',
     status: 'completed', conclusion: 'success', started_at: iso(now - 2000), completed_at: iso(now - 500) }];
   const protection = { enforce_admins: { enabled: true }, required_status_checks: { strict: true,
     checks: FCOS_RELEASE_APPROVAL_POLICY.requiredChecks.map(context => ({ context, app_id: FCOS_RELEASE_APPROVAL_POLICY.statusCheckAppId })) } };

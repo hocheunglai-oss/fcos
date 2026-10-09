@@ -12,6 +12,9 @@ import { executeProductionRelease } from './release-production.mjs';
 import { deploymentSourceFilter, GENERATED_PROVENANCE_FILES } from './build-provenance.mjs';
 import { canonicalFcosE2eCandidateUrl } from '../verify-e2e-candidate.mjs';
 import { verifyCompatibilityObservationSources } from './runtime-compatibility-observation.mjs';
+import { SUCCESSOR_LIVE_CONTRACT, successorLiveBinding, successorLiveSourceReceipt,
+  successorLiveControlBinding, rejectSuccessorUncoordinatedMutation } from './runtime-compatibility-successor-live.mjs';
+import { successorLiveNormalCoverageVerified } from './runtime-compatibility-successor-adapter.mjs';
 
 export const COMPATIBILITY_ENVIRONMENT = 'fcos-runtime-compatibility-release';
 export const COMPATIBILITY_WORKFLOW = '.github/workflows/runtime-compatibility-release.yml';
@@ -45,7 +48,14 @@ export function compatibilityReadOnlyGuardsVerified(scope) {
         && (path === 'api/_hedgeDeskReadOnly.js' ? row.before === null : sha(row.before))).length === 1);
 }
 
-export function runtimeCompatibilityControlRevision(trustedCwd, candidateCwd) {
+export function runtimeCompatibilityControlRevision(trustedCwd, candidateCwd, { admission, now = Date.now() } = {}) {
+  if (admission) {
+    const selected = successorLiveBinding(admission, { sha: SUCCESSOR_LIVE_CONTRACT.candidateSha }, now);
+    const actual = successorLiveControlBinding({ trustedCwd, sourceCwd: candidateCwd });
+    if (actual.harnessSha !== selected.harnessSha || actual.configurationRevision !== selected.context.configurationRevision
+      || actual.previewControlRevision !== selected.context.previewControlRevision) throw new Error('Exact successor controls changed.');
+    return actual.configurationRevision;
+  }
   const trusted = ['scripts/runtime-compatibility-release.mjs', 'scripts/lib/runtime-compatibility-release.mjs',
     'scripts/lib/runtime-compatibility.mjs', 'scripts/verify-runtime-compatibility.mjs',
     'scripts/lib/release-evidence.mjs', 'scripts/lib/release-production.mjs', 'scripts/lib/release-readiness.mjs',
@@ -87,7 +97,8 @@ export function assertRuntimeCompatibilityWorkflowIdentity(claims, repository, b
 }
 
 export function assertRuntimeCompatibilityProtection({ repository, branch, protection, environment, variables, secrets,
-  run, approvals, oidcClaims, binding, now = Date.now() } = {}) {
+  run, approvals, oidcClaims, binding, admission, now = Date.now() } = {}) {
+  const candidateSha = compatibilitySelectedCandidate(binding, admission, now);
   if (FCOS_RELEASE_APPROVAL_POLICY.mode !== 'single_operator') throw new Error('This first-rollout contract requires the reviewed single-operator policy.');
   const trusted = assertProtectedDefault(repository, branch, protection);
   assertRuntimeCompatibilityWorkflowIdentity(oidcClaims, repository, branch);
@@ -100,7 +111,7 @@ export function assertRuntimeCompatibilityProtection({ repository, branch, prote
     || reviewer.reviewer.login !== operator || environment.deployment_branch_policy?.protected_branches !== true
     || environment.deployment_branch_policy?.custom_branch_policies !== false) throw new Error('Compatibility requires a non-bypassable pinned human reviewer and protected branches.');
   const pins = {
-    [COMPATIBILITY_ENABLE_VARIABLE]: 'true', FCOS_COMPATIBILITY_REVIEWED_SHA: FIRST_RUNTIME_ROLLOUT.candidateSha,
+    [COMPATIBILITY_ENABLE_VARIABLE]: 'true', FCOS_COMPATIBILITY_REVIEWED_SHA: candidateSha,
     FCOS_COMPATIBILITY_REVIEWED_HARNESS_SHA: binding?.harnessSha,
     FCOS_COMPATIBILITY_REVIEWED_SOURCE_SHA256: binding?.sourceDigest, FCOS_COMPATIBILITY_REVIEWED_LOCK_SHA256: binding?.lockHash,
     FCOS_COMPATIBILITY_REVIEWED_CONTROL_SHA256: binding?.configurationRevision,
@@ -109,7 +120,7 @@ export function assertRuntimeCompatibilityProtection({ repository, branch, prote
     FCOS_COMPATIBILITY_PREVIOUS_SHA: FIRST_RUNTIME_ROLLOUT.previousSha, FCOS_COMPATIBILITY_PREVIOUS_URL: FIRST_RUNTIME_ROLLOUT.previousUrl,
     FCOS_COMPATIBILITY_REVIEWED_EXCEPTION: COMPATIBILITY_EXCEPTION,
   };
-  if (binding?.sha !== FIRST_RUNTIME_ROLLOUT.candidateSha || binding?.harnessSha !== trusted.sha
+  if (binding?.sha !== candidateSha || binding?.harnessSha !== trusted.sha
     || ![binding.sourceDigest, binding.lockHash, binding.configurationRevision, binding.candidateTreeHash].every(hash)
     || Object.entries(pins).some(([name, value]) => variables?.variables?.filter(row => row.name === name).length !== 1
       || variables.variables.find(row => row.name === name).value !== value)
@@ -132,6 +143,10 @@ export function assertRuntimeCompatibilityProtection({ repository, branch, prote
   if (approval?.state !== 'approved' || approval.user?.id !== reviewer.reviewer.id || approval.user?.login !== operator) throw new Error('One unambiguous pinned human environment approval is required for this exact compatibility run.');
   if (oidcClaims.run_id !== String(run.id) || oidcClaims.run_attempt !== '1' || oidcClaims.event_name !== 'workflow_dispatch'
     || !Number.isFinite(oidcClaims.exp) || oidcClaims.exp * 1000 <= now) throw new Error('Signed Actions identity does not match this approved first compatibility run.');
+  if (candidateSha === SUCCESSOR_LIVE_CONTRACT.candidateSha) {
+    const selected = successorLiveBinding(admission, binding, now);
+    if (selected.runId !== run.id || selected.workflow !== COMPATIBILITY_WORKFLOW) throw new Error('Exact successor approval must match its original compatibility dispatch.');
+  }
   return { runId: run.id, environmentId: environment.id, reviewerId: approval.user.id, approvalMode: 'single_operator', harnessSha: trusted.sha };
 }
 
@@ -171,28 +186,61 @@ export function compatibilityNormalCoverageVerified(record) {
     && typeof row.evidenceId === 'string' && row.evidenceId.trim()));
 }
 
-export function assertCompatibilityNormalArtifact({ repository, branch, protection, run, artifact, archive, payload, binding, now = Date.now() }) {
+function compatibilitySelectedCandidate(binding, admission, now) {
+  if (binding?.sha === SUCCESSOR_LIVE_CONTRACT.candidateSha) {
+    const selected = successorLiveBinding(admission, binding, now);
+    if (binding.sourceDigest !== selected.candidate.sourceDigest || binding.lockHash !== selected.candidate.lockHash
+      || binding.configurationRevision !== selected.context.configurationRevision) throw new Error('Exact successor source, lock and configuration binding required.');
+    return selected.candidate.sha;
+  }
+  return FIRST_RUNTIME_ROLLOUT.candidateSha;
+}
+
+// The original immutable guard interpreter remains exclusive to ff8859. The
+// successor uses its genuine recomputed three-stage receipt and original stage.
+export function compatibilityOperationScopeVerified(scope, { binding, admission, now = Date.now() } = {}) {
+  if (binding?.sha !== SUCCESSOR_LIVE_CONTRACT.candidateSha) return compatibilityReadOnlyGuardsVerified(scope);
+  try {
+    const selected = successorLiveBinding(admission, binding, now);
+    if (binding.harnessSha !== selected.harnessSha || binding.sourceDigest !== selected.candidate.sourceDigest
+      || binding.lockHash !== selected.candidate.lockHash || binding.configurationRevision !== selected.context.configurationRevision
+      || binding.candidateTreeHash !== SUCCESSOR_LIVE_CONTRACT.candidateTreeHash) return false;
+    const receipt = successorLiveSourceReceipt(admission, now);
+    return scope === receipt && compatibilityReadOnlyGuardsVerified(receipt.scope.stages[0]);
+  } catch { return false; }
+}
+
+export function assertCompatibilityNormalArtifact({ repository, branch, protection, run, artifact, archive, payload, binding, candidate, admission, now = Date.now() }) {
+  const candidateSha = compatibilitySelectedCandidate(binding, admission, now);
   const trusted = assertProtectedDefault(repository, branch, protection);
   const path = '.github/workflows/runtime-compatibility-normal-role.yml';
   if (run?.repository?.full_name !== RELEASE_REPOSITORY || run.head_repository?.full_name !== RELEASE_REPOSITORY
     || run.head_branch !== trusted.branch || run.head_sha !== trusted.sha || ![path, `${path}@${trusted.branch}`].includes(run.path)
     || run.event !== 'workflow_dispatch' || run.conclusion !== 'success' || run.status !== 'completed' || !positive(run.id) || !fresh(run.updated_at, now)
-    || artifact?.name !== `fcos-compatibility-normal-role-evidence-${FIRST_RUNTIME_ROLLOUT.candidateSha}` || artifact.expired !== false
+    || artifact?.name !== `fcos-compatibility-normal-role-evidence-${candidateSha}` || artifact.expired !== false
     || !positive(artifact.id) || artifact.workflow_run?.id !== run.id || artifact.workflow_run.head_sha !== trusted.sha
     || artifact.digest !== `sha256:${releaseHash(archive)}` || payload?.schemaVersion !== 1 || payload.baseSha !== FIRST_RUNTIME_ROLLOUT.previousSha
-    || payload.candidateSha !== FIRST_RUNTIME_ROLLOUT.candidateSha || binding?.sha !== FIRST_RUNTIME_ROLLOUT.candidateSha
+    || payload.candidateSha !== candidateSha || binding?.sha !== candidateSha
     || payload.candidateUrl !== binding.candidateUrl || payload.deploymentId !== binding.deploymentId || payload.sourceDigest !== binding.sourceDigest
     || payload.harnessSha !== trusted.sha || !fresh(payload.capturedAt, now) || !compatibilityNormalCoverageVerified(payload)
     || !compatibilityBrowserIsolationVerified(payload.browserIsolation, { ...binding, harnessSha: trusted.sha }, PREVIEW_PARITY_POLICY.requiredModules)
     || payload.checks.some(row => Object.keys(row || {}).some(key => !['module', 'role', 'result', 'kind', 'evidenceId'].includes(key)))) throw new Error('Dedicated compatibility normal-role workflow, archive, exact source or real-data coverage proof failed.');
   if (payload.emailSigner !== undefined) previewEmailSignerEvidenceVerified(payload.emailSigner,
-    { deployment: { id: binding.deploymentId, sha: binding.sha }, sourceDigest: binding.sourceDigest, now });
-  return { ...binding, kind: 'normal_role', runId: run.id, artifactId: artifact.id, archiveDigest: releaseHash(archive),
+    { deployment: { id: binding.deploymentId, sha: binding.sha }, sourceDigest: binding.sourceDigest, admission, now });
+  const record = { ...binding, kind: 'normal_role', runId: run.id, artifactId: artifact.id, archiveDigest: releaseHash(archive),
     harnessSha: trusted.sha, capturedAt: payload.capturedAt, checks: payload.checks, browserIsolation: payload.browserIsolation,
     ...(payload.emailSigner !== undefined ? { emailSigner: payload.emailSigner } : {}) };
+  if (candidateSha === SUCCESSOR_LIVE_CONTRACT.candidateSha && (!payload.emailSigner
+    || payload.lockHash !== binding.lockHash || payload.configurationRevision !== binding.configurationRevision
+    || candidate?.id !== binding.deploymentId || candidate?.url !== binding.candidateUrl || candidate?.sha !== binding.sha
+    || !successorLiveNormalCoverageVerified({ admission, normal: record, candidate, now }))) {
+    throw new Error('Exact successor archive requires the same complete normal/signer/source/configuration proof.');
+  }
+  return record;
 }
 
-export async function collectCompatibilityNormalEvidence({ reads, binding, now = Date.now(), unpack = readEvidenceArchive }) {
+export async function collectCompatibilityNormalEvidence({ reads, binding, candidate, admission, now = Date.now(), unpack = readEvidenceArchive }) {
+  compatibilitySelectedCandidate(binding, admission, now);
   const repository = reads.json(`repos/${RELEASE_REPOSITORY}`);
   const branch = reads.json(`repos/${RELEASE_REPOSITORY}/branches/${encodeURIComponent(repository.default_branch)}`);
   const protection = reads.json(`repos/${RELEASE_REPOSITORY}/branches/${encodeURIComponent(repository.default_branch)}/protection`);
@@ -206,7 +254,7 @@ export async function collectCompatibilityNormalEvidence({ reads, binding, now =
     collectVerificationEnvironmentReview({ reads, run, kind: 'normal_role' });
     const archive = reads.archive(`repos/${RELEASE_REPOSITORY}/actions/artifacts/${artifact.id}/zip`);
     return assertCompatibilityNormalArtifact({ repository, branch, protection, run, artifact, archive,
-      payload: unpack(archive, 'fcos-normal-role-evidence.json'), binding, now });
+      payload: unpack(archive, 'fcos-normal-role-evidence.json'), binding, candidate, admission, now });
   }
   throw new Error('Fresh dedicated real normal-role compatibility evidence is unavailable.');
 }
@@ -215,9 +263,9 @@ export async function collectCompatibilityNormalEvidence({ reads, binding, now =
 // merge ref. This one-pair collector proves the actual tested tree from its
 // trusted checkout log and preserves every original named job. Neither run
 // head_sha alone nor a newly uploaded artifact can rejuvenate stale job results.
-export function compatibilityUpstreamQuality({ reads, cwd, runId, binding, now = Date.now() }) {
-  if (!positive(runId) || binding?.sha !== FIRST_RUNTIME_ROLLOUT.candidateSha) throw new Error('Exact compatibility quality run required.');
-  const git = args => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+export function compatibilityUpstreamQuality({ reads, cwd, runId, binding, admission, now = Date.now() }) {
+  if (!positive(runId) || binding?.sha !== compatibilitySelectedCandidate(binding, admission, now)) throw new Error('Exact compatibility quality run required.');
+  const git = args => compatibilityGit(cwd, args, { admission, now }).toString('utf8').trim();
   if (git(['rev-parse', `${FIRST_RUNTIME_ROLLOUT.previousSha}:.github/workflows/quality.yml`])
     !== git(['rev-parse', `${binding.sha}:.github/workflows/quality.yml`])) throw new Error('Original quality workflow differs from the reviewed baseline.');
   const run = reads.json(`repos/${RELEASE_REPOSITORY}/actions/runs/${runId}`);
@@ -246,7 +294,8 @@ export function compatibilityUpstreamQuality({ reads, cwd, runId, binding, now =
     jobsDigest: releaseHash(JSON.stringify(summary)), completedAt: summary.map(job => job.completedAt).sort()[0] };
 }
 
-export async function collectCompatibilityQualityEvidence({ reads, cwd, binding, now = Date.now(), unpack = readEvidenceArchive }) {
+export async function collectCompatibilityQualityEvidence({ reads, cwd, binding, admission, now = Date.now(), unpack = readEvidenceArchive }) {
+  compatibilitySelectedCandidate(binding, admission, now);
   const repository = reads.json(`repos/${RELEASE_REPOSITORY}`), branch = reads.json(`repos/${RELEASE_REPOSITORY}/branches/${encodeURIComponent(repository.default_branch)}`);
   const protection = reads.json(`repos/${RELEASE_REPOSITORY}/branches/${encodeURIComponent(repository.default_branch)}/protection`);
   const trusted = assertProtectedDefault(repository, branch, protection);
@@ -264,7 +313,7 @@ export async function collectCompatibilityQualityEvidence({ reads, cwd, binding,
       || artifact.digest !== `sha256:${releaseHash(archive)}` || payload.schemaVersion !== 1 || payload.baseSha !== FIRST_RUNTIME_ROLLOUT.previousSha
       || payload.candidateSha !== binding.sha || payload.sourceDigest !== binding.sourceDigest || payload.lockSha256 !== binding.lockHash
       || payload.harnessSha !== trusted.sha || !fresh(payload.capturedAt, now)) throw new Error('Dedicated protected compatibility quality artifact provenance failed.');
-    const upstream = compatibilityUpstreamQuality({ reads, cwd, runId: payload.upstreamRunId, binding, now });
+    const upstream = compatibilityUpstreamQuality({ reads, cwd, runId: payload.upstreamRunId, binding, admission, now });
     if (Object.entries(upstream).some(([key, value]) => payload[key] !== value)) throw new Error('Original quality results changed or the archived exact-source proof was forged.');
     return { ...binding, result: 'success', runId: run.id, artifactId: artifact.id, archiveDigest: releaseHash(archive), capturedAt: upstream.completedAt };
   }
@@ -297,16 +346,18 @@ export function assertCompatibilityEvidenceReadback(original, refreshed, now = D
  * Execution always recollects live authority; no receipt file is accepted.
  */
 export function createRuntimeCompatibilityPreflight({ binding, scope, protection, provider, candidate, previous, trustedEvidence = [], quality,
-  runtime, endpointAbsence, parity, readiness, collectionBlockers = [], now = Date.now() } = {}) {
+  runtime, endpointAbsence, parity, readiness, admission, collectionBlockers = [], now = Date.now() } = {}) {
   const blockers = [];
   const fail = (code, scope, resolution) => blockers.push({ code, scope, resolution });
   const checks = {};
-  checks.source = binding?.sha === FIRST_RUNTIME_ROLLOUT.candidateSha && sha(binding.harnessSha)
+  const successor = binding?.sha === SUCCESSOR_LIVE_CONTRACT.candidateSha;
+  const scopeVerified = compatibilityOperationScopeVerified(scope, { binding, admission, now });
+  checks.source = successor ? scopeVerified : binding?.sha === FIRST_RUNTIME_ROLLOUT.candidateSha && sha(binding.harnessSha)
     && [binding.sourceDigest, binding.lockHash, binding.configurationRevision, binding.candidateTreeHash].every(hash)
     && scope?.scopeVerified === true && scope.productionAuthorized === false && scope.baseCommit === FIRST_RUNTIME_ROLLOUT.previousSha
     && scope.candidateCommit === binding.sha && scope.candidateTreeHash === binding.candidateTreeHash;
   if (!checks.source) fail('EXACT_ADDITIVE_SCOPE_REQUIRED', 'source', 'Recompute the exact candidate/base scope and clean source, lock and control hashes from immutable Git objects.');
-  checks.readOnlySourceGuards = compatibilityReadOnlyGuardsVerified(scope);
+  checks.readOnlySourceGuards = scopeVerified;
   if (!checks.readOnlySourceGuards) fail('EXACT_READ_ONLY_GUARD_SCOPE_REQUIRED', 'source', 'Independently prove all five exact reviewed guard transformations, including suppression of Email Router metadata persistence, and the exact read-action helper from immutable Git before credentials or staging.');
   checks.protection = positive(protection?.runId) && positive(protection.environmentId) && positive(protection.reviewerId)
     && protection.approvalMode === 'single_operator' && protection.harnessSha === binding?.harnessSha;
@@ -330,6 +381,12 @@ export function createRuntimeCompatibilityPreflight({ binding, scope, protection
     const matching = trustedEvidence.filter(row => row.kind === kind && bound(row) && row.harnessSha === binding?.harnessSha);
     checks[kind] = matching.length === 1 && (kind !== 'normal_role' || compatibilityNormalCoverageVerified(matching[0])
       && compatibilityBrowserIsolationVerified(matching[0].browserIsolation, { ...binding, deploymentId: candidate.id }, PREVIEW_PARITY_POLICY.requiredModules));
+    if (successor && kind === 'normal_role' && checks[kind]) {
+      try {
+        checks[kind] = successorLiveNormalCoverageVerified({ admission, normal: matching[0], candidate, now })
+          && previewEmailSignerEvidenceVerified(matching[0].emailSigner, { deployment: candidate, sourceDigest: binding.sourceDigest, admission, now });
+      } catch { checks[kind] = false; }
+    }
     if (!checks[kind]) fail(kind === 'normal_role' ? 'REAL_NORMAL_UI_COVERAGE_REQUIRED' : 'TRUSTED_RESTRICTED_UI_REQUIRED', kind,
       kind === 'normal_role' ? 'Collect exact-bound protected normal-role evidence for real module data and authorized read workflows; headings alone do not qualify.' : 'Collect fresh successful protected restricted browser evidence for the exact candidate and harness.');
   }
@@ -351,6 +408,10 @@ export function createRuntimeCompatibilityPreflight({ binding, scope, protection
       && readiness.previousProduction.sha === FIRST_RUNTIME_ROLLOUT.previousSha && readiness.previousProduction.url === FIRST_RUNTIME_ROLLOUT.previousUrl;
   } catch { checks.releaseReadiness = false; }
   if (!checks.releaseReadiness) fail('INDEPENDENT_RELEASE_READINESS_REQUIRED', 'readiness', 'Satisfy the unchanged standard source, quality, trusted browser, parity, freshness and exact-candidate readiness validator.');
+  if (successor) {
+    checks.sharedCoordinator = false;
+    fail('EXACT_SUCCESSOR_SHARED_COORDINATOR_REQUIRED', 'coordinator', 'Bridge the canonical shared lease and durable intent before enabling any exact successor provider write.');
+  }
   for (const blocker of collectionBlockers) if (/^[A-Z][A-Z0-9_]{0,95}$/.test(blocker?.code || '') && /^[a-zA-Z0-9_.-]{1,160}$/.test(blocker?.scope || '')) {
     fail(blocker.code, blocker.scope, 'Recollect this prerequisite through the pinned read-only provider after the exact reviewed setup is available.');
   }
@@ -359,7 +420,7 @@ export function createRuntimeCompatibilityPreflight({ binding, scope, protection
   return { schemaVersion: 1, receiptKind: 'fcos_runtime_compatibility_preflight', capturedAt: new Date(now).toISOString(), binding: safeBinding,
     previousProduction: FIRST_RUNTIME_ROLLOUT, checks, requirements: runtimeCompatibilityRequirements(), blockers,
     proposedException: { code: COMPATIBILITY_EXCEPTION, endpointAbsenceObserved: checks.previousEndpointAbsent, environmentPinAndApprovalObserved: checks.protection,
-      appliesOnlyTo: 'previous_runtime_endpoint', permittedCandidateSha: FIRST_RUNTIME_ROLLOUT.candidateSha,
+      appliesOnlyTo: 'previous_runtime_endpoint', permittedCandidateSha: successor ? SUCCESSOR_LIVE_CONTRACT.candidateSha : FIRST_RUNTIME_ROLLOUT.candidateSha,
       permittedPreviousDeploymentId: FIRST_RUNTIME_ROLLOUT.previousDeploymentId, runtimeValuesFabricated: false },
     candidate: readiness?.candidate ? Object.fromEntries(['sha', 'sourceDigest', 'lockHash', 'configurationRevision', 'deploymentId', 'url'].map(key => [key, readiness.candidate[key]])) : null,
     ready: blockers.length === 0 && Object.values(checks).every(value => value === true), productionAuthorized: false, mutations: 0, executorImplemented: true,
@@ -369,11 +430,20 @@ export function createRuntimeCompatibilityPreflight({ binding, scope, protection
 // Compute the old deployment digest from immutable Git blobs, using the same
 // unchanged source-upload rules. Neither a local baseline checkout nor arbitrary
 // code from the candidate is executed in the credential-bearing harness.
-export function immutableCompatibilityBaseline({ cwd, trustedCwd }) {
-  const git = (args, options = {}) => execFileSync('git', args, { cwd, maxBuffer: 64 * 1024 * 1024, stdio: ['pipe', 'pipe', 'pipe'], ...options });
-  const base = FIRST_RUNTIME_ROLLOUT.previousSha, candidate = FIRST_RUNTIME_ROLLOUT.candidateSha;
+function compatibilityGit(cwd, args, { admission, now = Date.now(), ...options } = {}) {
+  if (!admission) return execFileSync('git', args, { cwd, maxBuffer: 64 * 1024 * 1024, stdio: ['pipe', 'pipe', 'pipe'], ...options });
+  successorLiveSourceReceipt(admission, now);
+  if (Object.keys(process.env).some(key => key.startsWith('GIT_') && !['GIT_PAGER', 'GIT_EDITOR', 'GIT_SEQUENCE_EDITOR', 'GIT_TERMINAL_PROMPT'].includes(key))) throw new Error('Ambient Git override forbidden.');
+  return execFileSync('git', ['--no-replace-objects', ...args], { cwd, timeout: 30000, maxBuffer: 64 * 1024 * 1024,
+    stdio: ['pipe', 'pipe', 'pipe'], ...options,
+    env: { PATH: process.env.PATH, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_NO_REPLACE_OBJECTS: '1', GIT_TERMINAL_PROMPT: '0' } });
+}
+
+export function immutableCompatibilityBaseline({ cwd, trustedCwd, admission, now = Date.now() }) {
+  const git = (args, options = {}) => compatibilityGit(cwd, args, { admission, now, ...options });
+  const base = FIRST_RUNTIME_ROLLOUT.previousSha, candidate = admission ? successorLiveSourceReceipt(admission, now).candidateSha : FIRST_RUNTIME_ROLLOUT.candidateSha;
   const blob = (ref, file) => git(['rev-parse', `${ref}:${file}`]).toString('utf8').trim();
-  const pure = verifyCompatibilityObservationSources({ cwd, baseSha: base, candidateSha: candidate });
+  const pure = admission ? successorLiveSourceReceipt(admission, now).observationSources : verifyCompatibilityObservationSources({ cwd, baseSha: base, candidateSha: candidate });
   if (releaseHash(readFileSync(join(trustedCwd, 'scripts/lib/runtime-compatibility-observation.mjs'))) !== pure.helperRevision
     || blob(base, '.vercelignore') !== blob(candidate, '.vercelignore')) throw new Error('Reviewed pure collector or unchanged baseline source-upload rules required.');
   const included = deploymentSourceFilter(cwd), digest = createHash('sha256').update('fcos-vercel-source-v1\0');
@@ -399,6 +469,7 @@ export function immutableCompatibilityBaseline({ cwd, trustedCwd }) {
 }
 
 export async function executeRuntimeCompatibilityRelease({ preflight, readiness, authority, ...adapters } = {}) {
+  if (preflight?.binding?.sha === SUCCESSOR_LIVE_CONTRACT.candidateSha) rejectSuccessorUncoordinatedMutation();
   if (preflight?.schemaVersion !== 1 || preflight.receiptKind !== 'fcos_runtime_compatibility_preflight'
     || preflight.ready !== true || preflight.productionAuthorized !== false || preflight.blockers?.length
     || !fresh(preflight.capturedAt, Date.now())

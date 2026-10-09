@@ -2,12 +2,12 @@ import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { join, dirname } from 'node:path';
+import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { SourceTextModule, SyntheticModule, createContext } from 'node:vm';
 
-import { SOURCE_ROOT, hash, manifestBytes, manifest, pack,
+import { SOURCE_ROOT, sourceBindings, hash, manifestBytes, manifest, pack,
   validatePublicManifest, assertBoundSource, copyBoundSource, cleanGitEnvironment } from './helpers/runtimeCompatibilitySuccessorPortable.mjs';
 
 const temporary = fs.mkdtempSync(join(tmpdir(), 'fcos-v2-negative-'));
@@ -19,7 +19,7 @@ const nativeGit = (directory, args, input) => execFileSync('git', ['--no-replace
 const rawGit = (args, input) => nativeGit(store, args, input);
 const init = directory => execFileSync('git', ['-c', 'init.templateDir=', 'init', '--bare', '--quiet', directory], { env: cleanEnv, stdio: ['ignore', 'pipe', 'pipe'] });
 after(() => fs.rmSync(temporary, { recursive: true, force: true }));
-for (const row of manifest.members.filter(row => row.path.startsWith('checkout/'))) copyBoundSource(root, row.path.slice('checkout/'.length));
+for (const row of sourceBindings.sources) copyBoundSource(root, row.path);
 init(store); rawGit(['index-pack', '--stdin'], pack);
 assert.equal(rawGit(['cat-file', '--batch-all-objects', '--batch-check=%(objectname)']).toString().trim().split('\n').length, 272);
 for (const row of manifest.objects) {
@@ -29,9 +29,6 @@ for (const row of manifest.objects) {
 fs.mkdirSync(join(root, 'candidate'), { recursive: true });
 fs.writeFileSync(join(root, 'candidate/package-lock.json'), rawGit(['show', `${exact}:package-lock.json`]));
 const currentFiles = ['scripts/lib/runtime-compatibility-release.mjs', 'scripts/lib/preview-email-build.mjs', 'scripts/lib/preview-email-signer.mjs', 'scripts/lib/release-readiness.mjs', 'config/fcosConnections.js', 'config/legacy-email-baseline-proof.json'];
-for (const file of currentFiles) {
-  const target = join(root, 'current', file); fs.mkdirSync(dirname(target), { recursive: true }); copyBoundSource(root, file, `current/${file}`);
-}
 const policy = JSON.parse(fs.readFileSync(join(SOURCE_ROOT, 'config/preview-parity-policy.json')));
 fs.mkdirSync(join(root, 'scripts/nested'), { recursive: true });
 const sourceRows = ref => rawGit(['ls-tree', '-rz', '--full-tree', ref]).toString().split('\0').filter(Boolean).map(line => {
@@ -55,7 +52,9 @@ async function modules({ objectOverride, localReadOverride, provenanceOverride, 
   const cache = new Map();
   const real = new Set(['scripts/verify-runtime-compatibility-successor.mjs', 'scripts/lib/runtime-compatibility-successor.mjs', 'scripts/lib/runtime-compatibility.mjs',
     'scripts/lib/runtime-compatibility-observation.mjs', 'config/fcosConnections.js', 'scripts/runtime-compatibility-release.mjs',
-    'scripts/runtime-compatibility-normal-role.mjs', 'scripts/preview-email-proof-build.mjs', ...currentFiles.filter(x => x.endsWith('.mjs') || x.endsWith('.js')).map(x => `current/${x}`)]);
+    'scripts/runtime-compatibility-normal-role.mjs', 'scripts/preview-email-proof-build.mjs', ...currentFiles.filter(x => x.endsWith('.mjs') || x.endsWith('.js')),
+    'scripts/lib/runtime-compatibility-successor-live.mjs', 'scripts/lib/runtime-compatibility-successor-adapter.mjs',
+    'scripts/lib/preview-email-build-controls.mjs', 'scripts/lib/github-provider-timestamp.mjs']);
   const synthetic = (id, values) => {
     if (!cache.has(id)) cache.set(id, new SyntheticModule(Object.keys(values), function () { for (const [name, value] of Object.entries(values)) this.setExport(name, value); }, { context, identifier: id }));
     return cache.get(id);
@@ -91,7 +90,9 @@ async function modules({ objectOverride, localReadOverride, provenanceOverride, 
     if (cache.has(id)) return cache.get(id);
     const source = fs.readFileSync(filename, 'utf8');
     const mod = new SourceTextModule(source, { context, identifier: id, initializeImportMeta(meta) { meta.url = id; }, importModuleDynamically: trip('provider') }); cache.set(id, mod);
-    await mod.link(async (specifier, referring) => {
+    return mod;
+  }
+  const linker = async (specifier, referring) => {
       if (specifier === 'node:child_process') return synthetic('offline-child', child);
       if (specifier === 'node:fs') {
         const values = { ...fs }; const rawRead = fs.readFileSync;
@@ -102,17 +103,26 @@ async function modules({ objectOverride, localReadOverride, provenanceOverride, 
       if (specifier.startsWith('node:')) return synthetic(specifier, { ...await import(specifier) });
       const dependency = specifier.startsWith('.') ? fileURLToPath(new URL(specifier, referring.identifier)).slice(root.length + 1) : specifier;
       if (real.has(dependency)) return load(dependency);
-      const referringText = fs.readFileSync(fileURLToPath(referring.identifier), 'utf8'), names = [];
-      for (const match of referringText.matchAll(/import\s+(?:\{([\s\S]*?)\}|([A-Za-z_$][\w$]*))\s+from\s+['"]([^'"]+)['"]/g)) {
-        if (match[3] !== specifier) continue;
+      const names = [];
+      for (const file of real) for (const match of fs.readFileSync(join(root, file), 'utf8').matchAll(/import\s+(?:\{([\s\S]*?)\}|([A-Za-z_$][\w$]*))\s+from\s+['"]([^'"]+)['"]/g)) {
+        const imported = match[3].startsWith('.') ? fileURLToPath(new URL(match[3], pathToFileURL(join(root, file)))).slice(root.length + 1) : match[3];
+        if (imported !== dependency) continue;
         if (match[2]) names.push('default'); else for (const entry of match[1].split(',')) names.push(entry.trim().split(/\s+as\s+/)[0]);
       }
       return synthetic(`stub:${dependency}`, Object.fromEntries(names.filter(Boolean).map(name => [name, stub(name)])));
-    }); return mod;
-  }
-  const api = async file => { const mod = await load(file); if (mod.status !== 'evaluated') await mod.evaluate(); return mod.namespace; };
+    };
+  const api = async file => {
+    const mod = await load(file);
+    if (mod.status === 'unlinked') await mod.link(linker);
+    if (mod.status !== 'evaluated') await mod.evaluate();
+    return mod.namespace;
+  };
   const zeroAuthority = () => { for (const kind of ['provider', 'fetch', 'browser', 'credential', 'write']) assert.equal(counts[kind], 0, `${kind} authority reached`); };
-  return { api, counts, env, zeroAuthority };
+  const deniedCredentialReadsExactly = expected => {
+    assert.equal(counts.credential, expected, 'Only the expected denied environment reads may occur.');
+    for (const kind of ['provider', 'fetch', 'browser', 'write']) assert.equal(counts[kind], 0, `${kind} authority reached`);
+  };
+  return { api, counts, env, zeroAuthority, deniedCredentialReadsExactly };
 }
 
 test('H01 actual observation declaration bytes reject body replacement and duplicate boundary', async () => {
@@ -173,30 +183,33 @@ test('H10 forged approval/source receipt/environment flags cannot activate new a
   const forgedEnv = { FCOS_RUNTIME_COMPATIBILITY_RELEASE_ENABLED: 'true', FCOS_PREVIEW_EMAIL_BUILD_ENABLED: 'true', FCOS_COMPATIBILITY_NORMAL_ROLE_ENABLED: 'true', FCOS_SUCCESSOR_ADMISSION_INSTALLED: 'true', GITHUB_ACTIONS: 'true', GITHUB_REF_PROTECTED: 'true', GITHUB_REPOSITORY: 'hocheunglai-oss/fcos', GITHUB_SHA: 'a'.repeat(40) };
   const h = await modules({ forgedEnv }), adapter = await h.api('scripts/verify-runtime-compatibility-successor.mjs');
   const forged = { ...adapter.compatibilitySuccessorPreparationPlan(), sourceVerified: true, ready: true, approved: true, installedAdmission: true, previewAuthorized: true, productionAuthorized: true };
-  const release = await h.api('scripts/runtime-compatibility-release.mjs'), preview = await h.api('scripts/preview-email-proof-build.mjs');
+  const release = await h.api('scripts/runtime-compatibility-release.mjs'), preview = await h.api('scripts/lib/preview-email-build.mjs');
   // Each caller has its own provider dependency surface. Keep the normal caller
   // in a separate VM so the synthetic module export set cannot hide its imports.
   const normalHarness = await modules({ forgedEnv });
   const normal = await normalHarness.api('scripts/runtime-compatibility-normal-role.mjs');
   const common = { trustedCwd: root, candidateCwd: join(root, 'candidate'), env: h.env, receipt: forged, preflight: forged, readiness: forged, sourceVerified: true, approved: true, installedAdmission: true };
-  await assert.rejects(release.runRuntimeCompatibilityRelease({ ...common, mode: 'execute', expectedCommit: exact, candidateUrl: origin }), /does not install/);
-  await assert.rejects(preview.runPreviewEmailProofBuild({ ...common, mode: 'create', candidateSha: exact }), /does not install/);
-  await assert.rejects(normal.verifyRuntimeCompatibilityNormalRole({ ...common, env: normalHarness.env, signerEvidence: forged, normalEvidence: forged }), error => error.normalRoleDiagnostic?.reason === 'SUCCESSOR_ADMISSION_DEFERRED'); h.zeroAuthority(); normalHarness.zeroAuthority();
+  await assert.rejects(release.runRuntimeCompatibilityRelease({ ...common, mode: 'execute', expectedCommit: exact, candidateUrl: origin }), { code: 'EXACT_SUCCESSOR_SHARED_COORDINATOR_REQUIRED' });
+  assert.throws(() => preview.createPreviewEmailBuildRequest({ candidateSha: exact, runId: 99,
+    operationId: 'fcos-preview-email-99-12345678-1234-4123-8123-123456789abc', admission: forged }),
+  { code: 'EXACT_SUCCESSOR_TRUSTED_SELECTION_REQUIRED' });
+  await assert.rejects(normal.verifyRuntimeCompatibilityNormalRole({ ...common, env: normalHarness.env, signerEvidence: forged, normalEvidence: forged }), error => error.normalRoleDiagnostic?.stage === 'SOURCE_SCOPE' && error.normalRoleDiagnostic?.reason === 'STAGE_FAILED');
+  h.zeroAuthority(); normalHarness.deniedCredentialReadsExactly(1);
 });
-test('H11 actual unchanged old readiness normal Preview signer and executor reject source-preparation receipts', async () => {
+test('H11 actual current readiness normal Preview signer and executor reject source-preparation receipts', async () => {
   const h = await modules(), adapter = await h.api('scripts/verify-runtime-compatibility-successor.mjs');
   const source = { ...adapter.compatibilitySuccessorPreparationPlan(), sourceVerified: true, ready: true, approved: true, installedAdmission: true, capturedAt: new Date().toISOString(), blockers: [], productionAuthorized: false };
-  const readiness = await h.api('current/scripts/lib/release-readiness.mjs'), compatibility = await h.api('current/scripts/lib/runtime-compatibility-release.mjs'), preview = await h.api('current/scripts/lib/preview-email-build.mjs'), signer = await h.api('current/scripts/lib/preview-email-signer.mjs');
+  const readiness = await h.api('scripts/lib/release-readiness.mjs'), compatibility = await h.api('scripts/lib/runtime-compatibility-release.mjs'), preview = await h.api('scripts/lib/preview-email-build.mjs'), signer = await h.api('scripts/lib/preview-email-signer.mjs');
   assert.throws(() => readiness.assertReleaseReceiptBinding(source, { sha: exact }), /stale, blocked/);
   assert.throws(() => readiness.assertReleaseReceiptBinding({ ...source, receiptKind: 'fcos_release_readiness' }, { sha: exact }), /stale, blocked/);
   assert.equal(compatibility.compatibilityReadOnlyGuardsVerified(source), false);
   assert.equal(compatibility.compatibilityNormalCoverageVerified(source), false);
   assert.throws(() => preview.assertPreviewEmailBuildReceipt({ receipt: source, binding: { sha: exact } }), /invalid or stale/);
-  assert.throws(() => preview.previewEmailBuildCandidate(exact), /exact reviewed Preview/);
-  assert.equal(signer.previewEmailSignerEnabled(exact), false);
+  assert.throws(() => preview.previewEmailBuildCandidate(exact), { code: 'EXACT_SUCCESSOR_TRUSTED_SELECTION_REQUIRED' });
+  assert.throws(() => signer.previewEmailSignerEnabled(exact), { code: 'EXACT_SUCCESSOR_TRUSTED_SELECTION_REQUIRED' });
   assert.throws(() => signer.previewEmailSignerEvidenceVerified({ ...source, kind: 'fcos_preview_email_signer_evidence' }, { deployment: { id: 'dpl_fixture', sha: exact }, sourceDigest: '0'.repeat(64) }));
   await assert.rejects(compatibility.executeRuntimeCompatibilityRelease({ preflight: source, readiness: source, authority: () => { throw Error('unexpected authority'); } }), /prerequisites/);
-  await assert.rejects(compatibility.executeRuntimeCompatibilityRelease({ preflight: { ...source, receiptKind: 'fcos_runtime_compatibility_preflight', binding: { sha: exact }, checks: { source: true }, proposedException: { appliesOnlyTo: 'previous_runtime_endpoint', endpointAbsenceObserved: true, environmentPinAndApprovalObserved: true } }, readiness: source }), /prerequisites/);
+  await assert.rejects(compatibility.executeRuntimeCompatibilityRelease({ preflight: { ...source, receiptKind: 'fcos_runtime_compatibility_preflight', binding: { sha: exact }, checks: { source: true }, proposedException: { appliesOnlyTo: 'previous_runtime_endpoint', endpointAbsenceObserved: true, environmentPinAndApprovalObserved: true } }, readiness: source }), { code: 'EXACT_SUCCESSOR_SHARED_COORDINATOR_REQUIRED' });
   h.zeroAuthority();
 });
 test('H12 native Git fixture consumption rejects corrupted pack trailer and truncated pack', () => {
@@ -227,31 +240,45 @@ test('I02 portable source adapter rejects shallow and nested subdirectory roots'
     assert.throws(() => adapter.verifyRuntimeCompatibilitySuccessorSource({ cwd, candidateCommit: exact }), /canonical repository root/);
   } h.zeroAuthority();
 });
-test('I03 actual adapter release and Preview plans remain explicitly unready after portable integration', async () => {
+test('I03 source preparation stays separate from the actual current unready admission plans', async () => {
   const h = await modules(), adapter = await h.api('scripts/verify-runtime-compatibility-successor.mjs');
   const release = await h.api('scripts/runtime-compatibility-release.mjs'), preview = await h.api('scripts/preview-email-proof-build.mjs');
-  const plans = [adapter.compatibilitySuccessorPreparationPlan(),
-    await release.runRuntimeCompatibilityRelease({ expectedCommit: exact, env: h.env }),
-    await preview.runPreviewEmailProofBuild({ candidateSha: exact, env: h.env })];
-  for (const plan of plans) {
-    for (const field of ['ready', 'existingUi', 'sourceVerified', 'installedAdmission', 'liveProof', 'previewAuthorized', 'productionAuthorized', 'credentialAuthority']) assert.equal(plan[field], false);
-    assert.equal(plan.mutations, 0); assert.equal(plan.blockers.length, 4);
+  const source = adapter.compatibilitySuccessorPreparationPlan();
+  for (const field of ['ready', 'existingUi', 'sourceVerified', 'installedAdmission', 'liveProof', 'previewAuthorized', 'productionAuthorized', 'credentialAuthority']) assert.equal(source[field], false);
+  assert.equal(source.mutations, 0); assert.equal(source.blockers.length, 4);
+  for (const plan of [await release.runRuntimeCompatibilityRelease({ expectedCommit: exact, env: h.env }),
+    await preview.runPreviewEmailProofBuild({ candidateSha: exact, env: h.env })]) {
+    for (const field of ['ready', 'existingUi', 'previewAuthorized', 'productionAuthorized', 'credentialAuthority']) assert.equal(plan[field], false);
+    assert.equal(plan.sourceVerificationSeparate, true); assert.equal(plan.collectorImplemented, true); assert.equal(plan.mutations, 0);
+    assert.deepEqual(Array.from(plan.blockers), ['EXACT_SUCCESSOR_PROTECTED_MATERIALS_UNOBSERVED', 'EXACT_SUCCESSOR_LIVE_EVIDENCE_UNOBSERVED', 'EXACT_SUCCESSOR_SHARED_COORDINATOR_REQUIRED']);
   } h.zeroAuthority();
 });
-test('I04 actual release preflight provides source-only proof while all non-dry execution paths stop', async () => {
-  const h = await modules(), release = await h.api('scripts/runtime-compatibility-release.mjs'), preview = await h.api('scripts/preview-email-proof-build.mjs');
+test('I04 actual source preparation cannot qualify protected preflight or any non-dry write caller', async () => {
+  const h = await modules(), adapter = await h.api('scripts/verify-runtime-compatibility-successor.mjs');
+  const release = await h.api('scripts/runtime-compatibility-release.mjs'), preview = await h.api('scripts/lib/preview-email-build.mjs');
   const common = { trustedCwd: root, candidateCwd: join(root, 'candidate'), env: h.env };
-  const receipt = await release.runRuntimeCompatibilityRelease({ ...common, mode: 'preflight', expectedCommit: exact, candidateUrl: origin });
-  assert.equal(receipt.sourceVerified, true); assert.equal(receipt.sourcePreparationOnly, true); assert.equal(receipt.ready, false);
-  for (const field of ['installedAdmission', 'liveProof', 'previewAuthorized', 'productionAuthorized', 'credentialAuthority']) assert.equal(receipt[field], false);
-  for (const mode of ['execute', 'collect-quality']) await assert.rejects(release.runRuntimeCompatibilityRelease({ ...common, mode, expectedCommit: exact, candidateUrl: origin }), /does not install/);
-  for (const mode of ['prepare', 'create', 'readback', 'diagnose-authority', 'verify-authority']) await assert.rejects(preview.runPreviewEmailProofBuild({ ...common, mode, candidateSha: exact }), /does not install/);
-  h.zeroAuthority();
+  const source = adapter.collectCompatibilitySuccessorPreparation(common);
+  assert.equal(source.sourceVerified, true); assert.equal(source.sourcePreparationOnly, true); assert.equal(source.ready, false);
+  for (const field of ['installedAdmission', 'liveProof', 'previewAuthorized', 'productionAuthorized', 'credentialAuthority']) assert.equal(source[field], false);
+  for (const mode of ['preflight', 'collect-quality']) {
+    const blocked = await release.runRuntimeCompatibilityRelease({ ...common, mode, expectedCommit: exact, candidateUrl: origin });
+    assert.equal(blocked.ready, false); assert.equal(blocked.productionAuthorized, false);
+    assert.ok(blocked.blockers.some(row => row.code === 'CLEAN_EXACT_SOURCE_COLLECTION_FAILED'));
+  }
+  await assert.rejects(release.runRuntimeCompatibilityRelease({ ...common, mode: 'execute', expectedCommit: exact, candidateUrl: origin }), { code: 'EXACT_SUCCESSOR_SHARED_COORDINATOR_REQUIRED' });
+  for (const mode of ['create', 'readback']) await assert.rejects(preview.runControlledPreviewEmailBuild({ mode,
+    intent: { ...source, candidate: { sha: exact }, approved: true, installedAdmission: true }, admission: source,
+    authority: () => assert.fail('Source preparation cannot reach write authority'),
+    create: () => assert.fail('Source preparation cannot reach a Preview POST') }),
+  { code: 'EXACT_SUCCESSOR_TRUSTED_SELECTION_REQUIRED' });
+  // The proxy denied these two prerequisite token reads; no value was returned,
+  // and no provider/browser/write adapter may run after this refusal.
+  h.deniedCredentialReadsExactly(2);
 });
-test('I05 actual normal caller preserves 15 module gates and defers before private or browser authority', async () => {
+test('I05 actual normal caller preserves15 module gates and requires configuration before private or browser authority', async () => {
   const h = await modules(), normal = await h.api('scripts/runtime-compatibility-normal-role.mjs');
   assert.equal(normal.COMPATIBILITY_NORMAL_MODULES.length, 15);
-  await assert.rejects(normal.verifyRuntimeCompatibilityNormalRole({ env: h.env }), error => error.normalRoleDiagnostic?.reason === 'SUCCESSOR_ADMISSION_DEFERRED');
+  await assert.rejects(normal.verifyRuntimeCompatibilityNormalRole({ env: h.env }), error => error.normalRoleDiagnostic?.stage === 'CONFIGURATION' && error.normalRoleDiagnostic?.reason === 'CONFIGURATION_INVALID');
   h.zeroAuthority();
 });
 test('I06 actual portable preparation rejects wrong candidate and unready synthetic provenance metadata', async () => {
@@ -268,7 +295,10 @@ test('I06 actual portable preparation rejects wrong candidate and unready synthe
 });
 test('I07 portable actual callers retain unchanged historical dry-run and source-selection branches', async () => {
   const h = await modules(), release = await h.api('scripts/runtime-compatibility-release.mjs'), preview = await h.api('scripts/preview-email-proof-build.mjs');
-  assert.equal((await release.runRuntimeCompatibilityRelease({ expectedCommit: old })).historicalDryRun, true);
+  const historical = await release.runRuntimeCompatibilityRelease({ expectedCommit: old });
+  assert.equal(historical.receiptKind, 'fcos_runtime_compatibility_preflight');
+  assert.equal(historical.proposedException.permittedCandidateSha, old);
+  assert.equal(historical.ready, false); assert.equal(historical.productionAuthorized, false); assert.equal(historical.mutations, 0);
   assert.equal((await preview.runPreviewEmailProofBuild({ candidateSha: old })).kind, 'fcos_preview_email_build_plan');
   h.zeroAuthority();
   const normalHarness = await modules({ forgedEnv: { FCOS_E2E_EXPECTED_COMMIT: old,

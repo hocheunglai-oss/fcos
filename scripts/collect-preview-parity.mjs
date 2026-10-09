@@ -11,6 +11,8 @@ import { fcosConnectionIdentifier } from '../config/fcosConnections.js';
 import { canonicalFcosE2eCandidateUrl } from './verify-e2e-candidate.mjs';
 import { releaseHash, releaseConfigurationRevision } from './lib/release-readiness.mjs';
 import { collectTrustedReleaseEvidence, githubReleaseReads } from './lib/release-evidence.mjs';
+import { SUCCESSOR_LIVE_CONTRACT, collectSuccessorLiveOperationAdmission, successorLiveBinding } from './lib/runtime-compatibility-successor-live.mjs';
+import { collectCompatibilityNormalEvidence, collectCompatibilityQualityEvidence } from './lib/runtime-compatibility-release.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const digest = value => createHash('sha256').update(value).digest('hex');
@@ -123,12 +125,22 @@ export function assertParityConnectionReadAccess(report, now = Date.now()) {
 
 export async function collectPreviewParity({ candidateUrl, expectedCommit, protectionBypass = process.env.FCOS_E2E_VERCEL_BYPASS,
   productionRuntimeToken = process.env.FCOS_RELEASE_RUNTIME_TOKEN, candidateRuntimeToken = process.env.FCOS_RELEASE_PREVIEW_RUNTIME_TOKEN, cwd = ROOT,
-  connections } = {}) {
+  connections, admission, trustedCwd = ROOT, runId = Number(process.env.GITHUB_RUN_ID) } = {}) {
   if (!immutable(candidateUrl) || !/^[0-9a-f]{40}$/.test(expectedCommit || '')) throw new Error('Parity requires an immutable FCOS Preview URL and exact commit.');
   if (typeof connections?.verifyProvider !== 'function' || typeof connections?.providerRuntime !== 'function')
     throw new Error('Parity requires an explicitly supplied verified read-only provider adapter.');
   const source = collectParitySource(cwd);
   if (source.candidateHead !== expectedCommit) throw new Error('Parity checkout does not match the candidate commit.');
+  const successor = expectedCommit === SUCCESSOR_LIVE_CONTRACT.candidateSha;
+  let successorReads;
+  if (successor) {
+    const github = await connections.verifyProvider('github', { persist: false, prepare: false });
+    if (github.identityVerified !== true || github.targetPin !== 'verified' || !github.permissions?.includes('repository.read')) throw new Error('Verified GitHub read identity required.');
+    successorReads = githubReleaseReads(connections.providerRuntime('github', { prepare: false }), { cwd: trustedCwd });
+    admission ||= await collectSuccessorLiveOperationAdmission({ reads: successorReads, sourceCwd: cwd, trustedCwd, runId });
+    successorLiveBinding(admission, { sha: expectedCommit, sourceDigest: source.hashes.application,
+      lockHash: releaseHash(readFileSync(join(cwd, 'package-lock.json'))) });
+  }
   const verified = await connections.verifyProvider('vercel', { persist: false, prepare: false });
   assertParityConnectionReadAccess(verified);
   const runtime = connections.providerRuntime('vercel', { prepare: false });
@@ -216,26 +228,37 @@ export async function collectPreviewParity({ candidateUrl, expectedCommit, prote
   const observations = { schemaVersion: 1, provider: { provider: 'vercel', account: fcosConnectionIdentifier('vercel', 'Account'), teamId, projectId,
     repository: fcosConnectionIdentifier('github', 'Repository') }, source, switchInventory: source.switchInventory, ...snapshots,
     coverage: { capturedAt: new Date().toISOString(), deploymentId: snapshots.candidate.deployment.id, sha: snapshots.candidate.deployment.sha, checks: [] } };
-  const lockHash = releaseHash(readFileSync(join(cwd, 'package-lock.json'))), configurationRevision = releaseConfigurationRevision(cwd, ROOT);
+  const lockHash = releaseHash(readFileSync(join(cwd, 'package-lock.json'))), configurationRevision = successor
+    ? successorLiveBinding(admission, { sha: expectedCommit, sourceDigest: source.hashes.application, lockHash }).context.configurationRevision
+    : releaseConfigurationRevision(cwd, ROOT);
   const binding = { sha: expectedCommit, sourceDigest: source.hashes.application, lockHash, configurationRevision,
     deploymentId: snapshots.candidate.deployment.id, candidateUrl };
   let trusted = { records: [], blockers: [{ code: 'TRUSTED_COLLECTOR_UNAVAILABLE', scope: 'coverage' }], quality: null };
   try {
-    const github = await connections.verifyProvider('github', { persist: false, prepare: false });
-    if (github.identityVerified !== true || github.targetPin !== 'verified' || !github.permissions?.includes('repository.read')) throw new Error('unverified');
-    const reads = githubReleaseReads(connections.providerRuntime('github', { prepare: false }), { cwd });
+    let reads = successorReads;
+    if (!reads) {
+      const github = await connections.verifyProvider('github', { persist: false, prepare: false });
+      if (github.identityVerified !== true || github.targetPin !== 'verified' || !github.permissions?.includes('repository.read')) throw new Error('unverified');
+      reads = githubReleaseReads(connections.providerRuntime('github', { prepare: false }), { cwd });
+    }
     trusted = await collectTrustedReleaseEvidence({ reads, binding });
+    if (successor) {
+      trusted.records = trusted.records.filter(record => record.kind !== 'normal_role');
+      trusted.blockers = trusted.blockers.filter(record => record.scope !== 'normal_role');
+      trusted.records.push(await collectCompatibilityNormalEvidence({ reads, binding, candidate: snapshots.candidate.deployment, admission }));
+      trusted.quality = await collectCompatibilityQualityEvidence({ reads, cwd, binding, admission });
+    }
     const coverage = trusted.records.find(record => record.kind === 'normal_role');
-    if (legacyEmailCandidate(expectedCommit)) {
+    if (legacyEmailCandidate(expectedCommit, { admission })) {
       try { observations.legacyEmailBaseline = await collectLegacyEmailBaselineEvidence({ api, reads, binding,
         production: snapshots.production.deployment, candidate: snapshots.candidate.deployment, normal: coverage,
-        readVersion: async deployment => JSON.parse(await artifact(deployment.url, '/app-version.json', true)) });
+        readVersion: async deployment => JSON.parse(await artifact(deployment.url, '/app-version.json', true)), admission });
         observations.legacyEmailNormal = coverage;
       } catch { trusted.blockers.push({ code: 'LEGACY_EMAIL_PROOF_UNAVAILABLE', scope: 'email_baseline' }); }
     }
     if (coverage) observations.coverage = { capturedAt: coverage.capturedAt, deploymentId: coverage.deploymentId, sha: coverage.sha, checks: coverage.checks };
   } catch { /* Fail closed on unavailable independent transport or protections. */ }
-  const result = evaluatePreviewParity(observations, { expectedCommit, sourceHashes: source.hashes });
+  const result = evaluatePreviewParity(observations, { expectedCommit, sourceHashes: source.hashes, admission });
   result.blockers.push(...trusted.blockers);
   result.pass = result.blockers.length === 0;
   // Emit only exact-bound public identities and names-only blockers; never raw
@@ -246,7 +269,7 @@ export async function collectPreviewParity({ candidateUrl, expectedCommit, prote
     expectedRuntimeAuth: Object.fromEntries(PREVIEW_PARITY_POLICY.requiredAuth.map(provider => [provider, snapshots.production.runtime.auth?.[provider] || { state: 'unknown' }])),
     expectedRuntimeFlags: snapshots.production.runtime.flags,
     expectedRuntimeSafety: snapshots.production.runtime.safety,
-    trustedEvidence: trusted.records.map(({ checks, emailSigner: _emailSigner, ...record }) => record), quality: trusted.quality };
+    trustedEvidence: trusted.records.map(({ checks: _checks, emailSigner: _emailSigner, ...record }) => record), quality: trusted.quality };
 }
 
 export async function assertCollectedPreviewParity(options) {

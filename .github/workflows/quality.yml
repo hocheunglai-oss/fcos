@@ -34,6 +34,8 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
       - run: npm run verify:compatibility
       - run: npm test
+      - name: Verify isolated Python coordination ledger
+        run: python3 -m unittest tests.preview_email_coordination_ledger_test
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run verify:graph-only

@@ -29,6 +29,28 @@ test('early prepare failure preserves only allowlisted stage diagnostics before 
   assert.throws(() => readFileSync(join(directory, `fcos-preview-email-execution-${runId}.lock`)));
 }));
 
+test('exact successor entrypoint reaches the genuine admission collector and rejects ambient Git substitution before provider access', async () => temporary(async directory => {
+  // The actual collector rejects inherited Git selection before its first
+  // GitHub read. This uses no injected collector or provider adapter.
+  const previous = process.env.GIT_DIR;
+  process.env.GIT_DIR = join(directory, 'forged-repository');
+  try {
+    await assert.rejects(() => runPreviewEmailProofBuild({ mode: 'prepare',
+      candidateSha: '04ee3425aac7a49089eda781eb3c976aea1f6785', trustedCwd: root, candidateCwd: root,
+      env: { RUNNER_TEMP: directory, GITHUB_RUN_ID: String(runId), GH_TOKEN: privateMarker, VERCEL_TOKEN: privateMarker } }),
+    /successor_admission failed/);
+    const serialized = readFileSync(file(directory), 'utf8');
+    assert.deepEqual(serialized.trim().split('\n').map(row => { const value = JSON.parse(row); return [value.phase, value.status]; }),
+      [['runner_context', 'started'], ['runner_context', 'passed'], ['successor_admission', 'started'], ['successor_admission', 'failed']]);
+    assert.ok(!serialized.includes(privateMarker));
+    for (const name of ['fcos-preview-email-intent.json', `fcos-preview-email-execution-${runId}.lock`]) {
+      assert.throws(() => readFileSync(join(directory, name)));
+    }
+  } finally {
+    if (previous === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = previous;
+  }
+}));
+
 test('arbitrary secret-bearing exceptions, invalid phases and operation rows are never inspected or serialized', async () => temporary(async directory => {
   const diagnostics = fixture(directory);
   try {

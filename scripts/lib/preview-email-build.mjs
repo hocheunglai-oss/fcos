@@ -6,6 +6,11 @@ import { FCOS_RELEASE_APPROVAL_POLICY, fcosConnectionIdentifier } from '../../co
 import { assertProtectedDefault, RELEASE_REPOSITORY, readEvidenceArchive } from './release-evidence.mjs';
 import { RELEASE_MAX_AGE_MS } from './release-readiness.mjs';
 import { canonicalFcosE2eCandidateUrl } from '../verify-e2e-candidate.mjs';
+import { PREVIEW_EMAIL_BUILD_CONTROL_FILES } from './preview-email-build-controls.mjs';
+import { githubProviderFresh, githubProviderTimestamp } from './github-provider-timestamp.mjs';
+import { SUCCESSOR_LIVE_CONTRACT, successorLiveSelection, successorEmailContract, successorLiveBinding,
+  successorLiveControlBinding, successorLiveRemoteControls, rejectSuccessorUncoordinatedMutation } from './runtime-compatibility-successor-live.mjs';
+export { PREVIEW_EMAIL_BUILD_CONTROL_FILES } from './preview-email-build-controls.mjs';
 
 export const PREVIEW_EMAIL_BUILD_WORKFLOW = '.github/workflows/preview-email-proof-build.yml';
 export const PREVIEW_EMAIL_BUILD_ENVIRONMENT = 'fcos-runtime-compatibility-release';
@@ -25,6 +30,8 @@ const fresh = (value, now) => Number.isFinite(Date.parse(value)) && Date.parse(v
 const exact = (value, keys) => value && typeof value === 'object' && !Array.isArray(value)
   && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
 const equal = (left, right) => JSON.stringify(left) === JSON.stringify(right);
+const trustedIntentRecords = new WeakSet();
+const freezeRecord = value => { if (value && typeof value === 'object') { Object.values(value).forEach(freezeRecord); Object.freeze(value); } return value; };
 const projectId = fcosConnectionIdentifier('vercel', 'Project ID');
 const teamId = fcosConnectionIdentifier('vercel', 'Team ID');
 const operator = fcosConnectionIdentifier('github', 'Required account');
@@ -33,30 +40,37 @@ const operation = value => new RegExp(`^fcos-preview-email-[1-9][0-9]*-${uuid}$`
 const failure = message => { throw new Error(message); };
 const immutable = value => { try { return canonicalFcosE2eCandidateUrl(value) === value; } catch { return false; } };
 
-export function previewEmailBuildCandidate(candidateSha) {
+export function previewEmailBuildContract(candidateSha, { admission, now = Date.now() } = {}) {
+  return candidateSha === SUCCESSOR_LIVE_CONTRACT.candidateSha ? successorEmailContract(admission, now)
+    : { contract, contractSha256: PREVIEW_EMAIL_CONTRACT_SHA256 };
+}
+
+export function previewEmailBuildCandidate(candidateSha, { admission, now = Date.now() } = {}) {
+  if (candidateSha === SUCCESSOR_LIVE_CONTRACT.candidateSha) return structuredClone(successorLiveSelection(admission, candidateSha, now).candidate);
   const rows = contract.preview?.candidates?.filter(row => row.sha === candidateSha) || [];
   if (contract.schemaVersion !== 1 || rows.length !== 1 || !sha(candidateSha)
     || !hash(rows[0].sourceDigest) || !hash(rows[0].lockHash)) failure('An exact reviewed Preview email candidate is required.');
   return structuredClone(rows[0]);
 }
 
-export const PREVIEW_EMAIL_BUILD_CONTROL_FILES = Object.freeze([
-  PREVIEW_EMAIL_BUILD_WORKFLOW, 'scripts/preview-email-proof-build.mjs', 'scripts/lib/preview-email-build.mjs',
-  'scripts/lib/preview-vercel-authority.mjs', 'scripts/lib/preview-vercel-enrollment.mjs', 'scripts/preview-vercel-enrollment.mjs', 'scripts/fcos-keychain-migrate.swift',
-  'scripts/lib/release-evidence.mjs', 'scripts/lib/release-production.mjs', 'scripts/lib/release-readiness.mjs',
-  'scripts/lib/preview-parity.mjs', 'scripts/lib/build-provenance.mjs', 'config/legacy-email-baseline-proof.json',
-  'scripts/lib/legacy-email-baseline-proof.mjs', 'scripts/lib/preview-email-signer.mjs', 'scripts/verify-e2e-candidate.mjs',
-  'config/preview-parity-policy.json', 'config/fcosConnections.js', 'config/fcosCiIdentity.js', 'package.json', 'package-lock.json',
-  '.github/workflows/candidate-quality.yml', '.github/quality-candidates/f4576a8c918acef686f084c505b1715de11deeb8.json',
-  'scripts/candidate-quality-receipt.mjs', 'scripts/lib/candidate-quality.mjs',
-]);
-export function previewEmailBuildControlRevision(cwd) {
+export function previewEmailBuildControlRevision(cwd, { admission, sourceCwd, now = Date.now() } = {}) {
+  if (admission !== undefined) {
+    const selected = successorLiveSelection(admission, SUCCESSOR_LIVE_CONTRACT.candidateSha, now);
+    const controls = successorLiveControlBinding({ trustedCwd: cwd, sourceCwd });
+    successorLiveBinding(selected, { sha: selected.candidate.sha, ...controls }, now);
+    return controls.previewControlRevision;
+  }
   return digest(`fcos-preview-email-build-controls-v1\0${JSON.stringify(PREVIEW_EMAIL_BUILD_CONTROL_FILES.map(file => {
     if (!lstatSync(join(cwd, file)).isFile()) failure('Preview build controls must be regular reviewed files.');
     return [file, digest(readFileSync(join(cwd, file)))];
   }))}`);
 }
-async function remoteControlRevision(reads, harnessSha) {
+async function remoteControlRevision(reads, harnessSha, { admission, now = Date.now() } = {}) {
+  if (admission !== undefined) {
+    const selected = successorLiveSelection(admission, SUCCESSOR_LIVE_CONTRACT.candidateSha, now);
+    if (selected.harnessSha !== harnessSha) failure('Successor controls must use their actual protected harness.');
+    return successorLiveRemoteControls({ reads, admission: selected, now });
+  }
   const rows = [];
   for (const file of PREVIEW_EMAIL_BUILD_CONTROL_FILES) {
     const value = await reads.json(`repos/${RELEASE_REPOSITORY}/contents/${file}?ref=${harnessSha}`);
@@ -70,8 +84,8 @@ async function remoteControlRevision(reads, harnessSha) {
 
 /** No target, clone, files, environment or build settings are accepted. Vercel's
  * Git-source POST defaults to Preview and uses only its project configuration. */
-export function createPreviewEmailBuildRequest({ candidateSha, runId, operationId } = {}) {
-  const candidate = previewEmailBuildCandidate(candidateSha);
+export function createPreviewEmailBuildRequest({ candidateSha, runId, operationId, admission, now = Date.now() } = {}) {
+  const candidate = previewEmailBuildCandidate(candidateSha, { admission, now });
   if (!positive(runId) || !operation(operationId) || !operationId.startsWith(`fcos-preview-email-${runId}-`)) failure('Preview operation identity is invalid.');
   const [org, repo] = RELEASE_REPOSITORY.split('/');
   return { name: fcosConnectionIdentifier('vercel', 'Project'), project: projectId,
@@ -96,7 +110,8 @@ function assertRecordSnapshot(snapshot, now) {
   }
   return snapshot;
 }
-function assertSelectedRecords(snapshot, candidate, createdAt, now) {
+function assertSelectedRecords(snapshot, candidate, createdAt, now, admission) {
+  const { contract: selectedContract } = previewEmailBuildContract(candidate.sha, { admission, now });
   assertRecordSnapshot(snapshot, now);
   const keys = { FCOS_MICROSOFT_TENANT_ID: candidate.tenantRecordId, FCOS_MICROSOFT_CLIENT_ID: candidate.clientRecordId,
     FCOS_EMAIL_ROUTER_ATTACHMENT_SECRET: candidate.attachmentRecordId };
@@ -105,7 +120,7 @@ function assertSelectedRecords(snapshot, candidate, createdAt, now) {
     const row = rows.length === 1 ? rows[0] : null;
     if (!row || row.id !== id || row.target.length !== 1 || row.target[0] !== 'preview' || row.updatedAt > createdAt
       || row.type !== (key === 'FCOS_EMAIL_ROUTER_ATTACHMENT_SECRET' ? 'sensitive' : 'plain')) failure('Exact branch-specific Preview record selection is unverified.');
-    if (key === 'FCOS_EMAIL_ROUTER_ATTACHMENT_SECRET' && row.comment !== `Dedicated read-only Preview signing key ${contract.preview.attachmentOperationId}; no Production credential copied`) failure('Independent Preview signing record provenance is unverified.');
+    if (key === 'FCOS_EMAIL_ROUTER_ATTACHMENT_SECRET' && row.comment !== `Dedicated read-only Preview signing key ${selectedContract.preview.attachmentOperationId}; no Production credential copied`) failure('Independent Preview signing record provenance is unverified.');
   }
   for (const [key, pin] of Object.entries(contract.baseline.records)) {
     const rows = snapshot.records.filter(row => row.key === key && row.target.includes('production'));
@@ -143,36 +158,53 @@ export async function collectPreviewEmailEnvironmentRecords({ api, now = Date.no
   failure('Environment pagination did not complete within the bounded scan.');
 }
 
-function assertIntent(intent, now) {
+function assertIntent(intent, now, admission, purpose = 'original_operation') {
+  const { contractSha256 } = previewEmailBuildContract(intent?.candidate?.sha, { admission, now });
   if (!exact(intent, ['schemaVersion', 'kind', 'candidate', 'harnessSha', 'contractSha256', 'controlRevision', 'operationId', 'runId', 'request', 'requestSha256', 'intentAt', 'environmentRecords'])
     || intent.schemaVersion !== 1 || intent.kind !== 'fcos_preview_email_intent' || !sha(intent.harnessSha)
-    || intent.contractSha256 !== PREVIEW_EMAIL_CONTRACT_SHA256 || !hash(intent.controlRevision) || !positive(intent.runId)
+    || intent.contractSha256 !== contractSha256 || !hash(intent.controlRevision) || !positive(intent.runId)
     || !fresh(intent.intentAt, now)) failure('Trusted durable Preview intent is invalid or stale.');
-  const selected = previewEmailBuildCandidate(intent.candidate?.sha);
+  const selected = previewEmailBuildCandidate(intent.candidate?.sha, { admission, now });
+  if (selected.sha === SUCCESSOR_LIVE_CONTRACT.candidateSha) {
+    const live = successorLiveBinding(admission,
+      { ...intent.candidate, harnessSha: intent.harnessSha, previewControlRevision: intent.controlRevision }, now);
+    // Downstream receipt validation is data-only and still requires genuine
+    // archived build/signer/normal proof. Every original intent/execution path
+    // instead binds this same original first Preview run and dispatch.
+    if (purpose !== 'downstream_receipt' && (live.runId !== intent.runId || live.runAttempt !== 1
+      || live.workflow !== PREVIEW_EMAIL_BUILD_WORKFLOW || Date.parse(intent.intentAt) < Date.parse(live.dispatchedAt))) {
+      failure('Successor intent must use its own original first Preview admission.');
+    }
+  }
   if (!exact(intent.candidate, ['sha', 'branch', 'sourceDigest', 'lockHash'])
     || !equal(intent.candidate, { sha: selected.sha, branch: selected.branch, sourceDigest: selected.sourceDigest, lockHash: selected.lockHash })
-    || !equal(intent.request, createPreviewEmailBuildRequest({ candidateSha: selected.sha, runId: intent.runId, operationId: intent.operationId }))
+    || !equal(intent.request, createPreviewEmailBuildRequest({ candidateSha: selected.sha, runId: intent.runId, operationId: intent.operationId, admission, now }))
     || intent.requestSha256 !== digest(JSON.stringify(intent.request))) failure('Preview request has an override or differs from the immutable contract.');
-  assertSelectedRecords(intent.environmentRecords, selected, Date.parse(intent.intentAt), now);
+  assertSelectedRecords(intent.environmentRecords, selected, Date.parse(intent.intentAt), now, admission);
   return selected;
 }
-export function createPreviewEmailBuildIntent({ candidateSha, harnessSha, controlRevision, runId, operationId, records, now = Date.now() } = {}) {
-  const selected = previewEmailBuildCandidate(candidateSha);
-  const request = createPreviewEmailBuildRequest({ candidateSha, runId, operationId });
+export function createPreviewEmailBuildIntent({ candidateSha, harnessSha, controlRevision, runId, operationId, records, admission, now = Date.now() } = {}) {
+  const selected = previewEmailBuildCandidate(candidateSha, { admission, now });
+  const { contractSha256 } = previewEmailBuildContract(candidateSha, { admission, now });
+  if (candidateSha === SUCCESSOR_LIVE_CONTRACT.candidateSha) {
+    const live = successorLiveSelection(admission, candidateSha, now);
+    if (live.workflow !== PREVIEW_EMAIL_BUILD_WORKFLOW || live.runId !== runId) failure('Initial successor intent requires its actual first Preview dispatch.');
+  }
+  const request = createPreviewEmailBuildRequest({ candidateSha, runId, operationId, admission, now });
   const intent = { schemaVersion: 1, kind: 'fcos_preview_email_intent',
     candidate: { sha: selected.sha, branch: selected.branch, sourceDigest: selected.sourceDigest, lockHash: selected.lockHash },
-    harnessSha, contractSha256: PREVIEW_EMAIL_CONTRACT_SHA256, controlRevision, operationId, runId,
+    harnessSha, contractSha256, controlRevision, operationId, runId,
     request, requestSha256: digest(JSON.stringify(request)), intentAt: new Date(now).toISOString(), environmentRecords: records };
-  assertIntent(intent, now); return intent;
+  assertIntent(intent, now, admission); return intent;
 }
 
-export function assertPreviewEmailBuildReceipt({ receipt, binding, records, now = Date.now() } = {}) {
+export function assertPreviewEmailBuildReceipt({ receipt, binding, records, admission, now = Date.now() } = {}) {
   if (!exact(receipt, ['schemaVersion', 'kind', 'candidate', 'harnessSha', 'contractSha256', 'controlRevision', 'operationId', 'runId', 'request', 'requestSha256', 'intentAt', 'capturedAt', 'deployment', 'environmentRecords'])
     || receipt.kind !== 'fcos_preview_email_build' || !fresh(receipt.capturedAt, now)
     || Date.parse(receipt.capturedAt) < Date.parse(receipt.intentAt)) failure('Preview build receipt is invalid or stale.');
   const { capturedAt: _capturedAt, deployment, ...intent } = receipt;
   intent.kind = 'fcos_preview_email_intent';
-  const selected = assertIntent(intent, now);
+  const selected = assertIntent(intent, now, admission, 'downstream_receipt');
   if (!exact(deployment, ['id', 'url', 'sha', 'target', 'state', 'createdAt', 'projectId', 'teamId', 'operationId'])
     || !/^dpl_[A-Za-z0-9]+$/.test(deployment.id || '')
     || !immutable(deployment.url)
@@ -182,7 +214,7 @@ export function assertPreviewEmailBuildReceipt({ receipt, binding, records, now 
     || deployment.createdAt > Date.parse(receipt.capturedAt) || deployment.id === contract.baseline.deploymentId
     || binding?.sha !== selected.sha || binding.sourceDigest !== selected.sourceDigest || binding.lockHash !== selected.lockHash
     || binding.harnessSha !== receipt.harnessSha || binding.deploymentId !== deployment.id || binding.candidateUrl !== deployment.url) failure('Preview build receipt does not bind the exact deployment and reviewed source.');
-  assertSelectedRecords(records, selected, deployment.createdAt, now);
+  assertSelectedRecords(records, selected, deployment.createdAt, now, admission);
   if (!equal(receipt.environmentRecords.records, records.records)) failure('Preview or Production configuration changed since the durable intent.');
   return true;
 }
@@ -197,7 +229,8 @@ function assertEnvironmentReview({ environment, run, jobs, approvals, trusted, c
   if (run?.repository?.full_name !== RELEASE_REPOSITORY || run.head_repository?.full_name !== RELEASE_REPOSITORY
     || run.head_branch !== trusted.branch || run.head_sha !== trusted.sha || run.event !== 'workflow_dispatch' || run.run_attempt !== 1
     || ![PREVIEW_EMAIL_BUILD_WORKFLOW, `${PREVIEW_EMAIL_BUILD_WORKFLOW}@${trusted.branch}`].includes(run.path)
-    || !positive(run.id) || !Number.isFinite(Date.parse(run.run_started_at)) || Date.parse(run.run_started_at) > now + 30000
+    || !positive(run.id) || !githubProviderTimestamp(run.run_started_at) || Date.parse(run.run_started_at) > now + 30000
+    || run.name !== 'FCOS protected Preview email proof build' || run.display_title !== `Review FCOS Preview email source ${candidateSha}`
     || run.actor?.login !== operator || run.triggering_actor?.login !== operator
     || run.actor?.id !== reviewer.reviewer.id || run.triggering_actor?.id !== reviewer.reviewer.id
     || (completed === 'intent' ? !['in_progress', 'completed'].includes(run.status)
@@ -210,29 +243,34 @@ function assertEnvironmentReview({ environment, run, jobs, approvals, trusted, c
   const job = Array.isArray(jobs) && jobs.length === 1 ? jobs[0] : null;
   const jobCompleted = job?.status === 'completed';
   if (!positive(job?.id) || job.run_id !== run.id || job.run_attempt !== 1 || job.name !== 'proof'
-    || job.workflow_name !== `Review FCOS Preview email source ${candidateSha}`
-    || job.head_sha !== trusted.sha || job.head_branch !== trusted.branch || !fresh(job.started_at, now)
+    || job.workflow_name !== 'FCOS protected Preview email proof build'
+    || job.head_sha !== trusted.sha || job.head_branch !== trusted.branch || !githubProviderFresh(job.started_at, RELEASE_MAX_AGE_MS, now)
     || Date.parse(job.started_at) < Date.parse(run.run_started_at)
     || (completed === 'intent' ? !['in_progress', 'completed'].includes(job.status)
       : completed ? !jobCompleted || job.conclusion !== 'success' : job.status !== 'in_progress')
-    || jobCompleted && (!Number.isFinite(Date.parse(job.completed_at)) || Date.parse(job.completed_at) < Date.parse(job.started_at)
+    || jobCompleted && (!githubProviderTimestamp(job.completed_at) || Date.parse(job.completed_at) < Date.parse(job.started_at)
       || Date.parse(job.completed_at) > now + 30000
       || !['success', 'failure', 'cancelled', 'timed_out', 'action_required', 'neutral', 'skipped', 'stale', 'startup_failure'].includes(job.conclusion))
     || !jobCompleted && (job.conclusion !== null || job.completed_at !== null)) failure('The exact fresh first-attempt approved proof job is required.');
   return { reviewerId: reviewer.reviewer.id, runId: run.id, environmentId: environment.id };
 }
 
-export function assertPreviewEmailBuildProtection({ repository, branch, protection, environment, variables, secrets, run, jobs, approvals, oidcClaims, candidateSha, harnessSha, controlRevision, mode = 'build', now = Date.now() } = {}) {
+export function assertPreviewEmailBuildProtection({ repository, branch, protection, environment, variables, secrets, run, jobs, approvals, oidcClaims, candidateSha, harnessSha, controlRevision, admission, mode = 'build', now = Date.now() } = {}) {
   if (!['build', 'diagnose-authority', 'verify-authority'].includes(mode)) failure('Unknown protected Preview operation.');
   const trusted = assertProtectedDefault(repository, branch, protection);
-  previewEmailBuildCandidate(candidateSha);
+  previewEmailBuildCandidate(candidateSha, { admission, now });
+  const { contractSha256 } = previewEmailBuildContract(candidateSha, { admission, now });
+  if (candidateSha === SUCCESSOR_LIVE_CONTRACT.candidateSha) {
+    const selected = successorLiveBinding(admission, { sha: candidateSha, harnessSha, previewControlRevision: controlRevision }, now);
+    if (selected.runId !== run?.id || selected.workflow !== PREVIEW_EMAIL_BUILD_WORKFLOW) failure('Protected successor review must use this admission dispatch.');
+  }
   const approved = assertEnvironmentReview({ environment, run, jobs, approvals, trusted, candidateSha, completed: false, now });
   const readOnlyAuthority = ['diagnose-authority', 'verify-authority'].includes(mode);
   const pins = { [PREVIEW_EMAIL_BUILD_ENABLE]: readOnlyAuthority ? 'false' : 'true',
     ...(readOnlyAuthority ? { [PREVIEW_EMAIL_AUTHORITY_DIAGNOSTIC_ENABLE]: 'true' } : {}),
     FCOS_RUNTIME_COMPATIBILITY_RELEASE_ENABLED: 'false',
     FCOS_PREVIEW_EMAIL_BUILD_REVIEWED_SHA: candidateSha, FCOS_PREVIEW_EMAIL_BUILD_REVIEWED_HARNESS_SHA: harnessSha,
-    FCOS_PREVIEW_EMAIL_BUILD_REVIEWED_CONTRACT_SHA256: PREVIEW_EMAIL_CONTRACT_SHA256,
+    FCOS_PREVIEW_EMAIL_BUILD_REVIEWED_CONTRACT_SHA256: contractSha256,
     FCOS_PREVIEW_EMAIL_BUILD_REVIEWED_CONTROL_SHA256: controlRevision };
   for (const [name, value] of Object.entries(pins)) {
     const rows = variables?.variables?.filter(row => row.name === name) || [];
@@ -255,6 +293,7 @@ export function assertPreviewEmailBuildProtection({ repository, branch, protecti
   const selected = oneVariable(ENROLLED_AUTHORITY_MODE_VARIABLE);
   if (selected !== undefined && !['legacy-current-v1', ENROLLED_AUTHORITY_MODE].includes(selected)) failure('Unknown Preview authority mode.');
   const authorityMode = selected || 'legacy-current-v1';
+  if (candidateSha === SUCCESSOR_LIVE_CONTRACT.candidateSha && authorityMode !== ENROLLED_AUTHORITY_MODE) failure('Exact successor Preview requires signed issuance-bound authority.');
   let enrollmentId, authorityEnvelope;
   if (mode === 'verify-authority' && authorityMode !== ENROLLED_AUTHORITY_MODE) failure('Read-only enrollment verification requires its explicit authority mode.');
   if (authorityMode === ENROLLED_AUTHORITY_MODE && mode !== 'diagnose-authority') {
@@ -323,8 +362,9 @@ async function protectedSource(reads) {
   return { repository, branch, protection, trusted };
 }
 async function verifiedArchive({ reads, source, run, candidateSha, filename, name, now, completed, unpack }) {
+  const jobs = await collectPreviewEmailBuildJobs({ reads, runId: run.id });
   assertEnvironmentReview({ environment: await reads.json(`repos/${RELEASE_REPOSITORY}/environments/${PREVIEW_EMAIL_BUILD_ENVIRONMENT}`),
-    run, jobs: await collectPreviewEmailBuildJobs({ reads, runId: run.id }),
+    run, jobs,
     approvals: await reads.json(`repos/${RELEASE_REPOSITORY}/actions/runs/${run.id}/approvals`), trusted: source.trusted, candidateSha, completed, now });
   const artifacts = await paginatedGithub(reads, `repos/${RELEASE_REPOSITORY}/actions/runs/${run.id}/artifacts`, 'artifacts');
   const matches = artifacts.filter(row => row.name === name && row.expired === false);
@@ -332,10 +372,11 @@ async function verifiedArchive({ reads, source, run, candidateSha, filename, nam
   if (!artifact || artifact.workflow_run?.id !== run.id || artifact.workflow_run?.head_sha !== source.trusted.sha) failure('The exact protected workflow archive is unavailable.');
   const archive = await reads.archive(`repos/${RELEASE_REPOSITORY}/actions/artifacts/${artifact.id}/zip`);
   if (!Buffer.isBuffer(archive) || artifact.digest !== `sha256:${digest(archive)}`) failure('Protected archive digest verification failed.');
-  return { payload: unpack(archive, filename), artifact, archiveDigest: digest(archive) };
+  return { payload: unpack(archive, filename), artifact, archiveDigest: digest(archive), job: jobs[0] };
 }
 
-export async function collectTrustedPreviewEmailIntent({ reads, runId, candidateSha, now = Date.now(), unpack = readEvidenceArchive, completed = false } = {}) {
+export async function collectTrustedPreviewEmailIntent({ reads, runId, candidateSha, admission, now = Date.now(), unpack = readEvidenceArchive, completed = false, withTrust = false } = {}) {
+  if (candidateSha === SUCCESSOR_LIVE_CONTRACT.candidateSha) previewEmailBuildCandidate(candidateSha, { admission, now });
   if (!positive(runId)) failure('Original approved Preview build run is required.');
   const source = await protectedSource(reads);
   const run = await reads.json(`repos/${RELEASE_REPOSITORY}/actions/runs/${runId}`);
@@ -343,32 +384,52 @@ export async function collectTrustedPreviewEmailIntent({ reads, runId, candidate
   const result = await verifiedArchive({ reads, source, run, candidateSha, filename: PREVIEW_EMAIL_INTENT_FILENAME,
     name: `fcos-preview-email-intent-${runId}`, now, completed, unpack });
   const intent = result.payload;
-  assertIntent(intent, now);
+  assertIntent(intent, now, admission, completed === 'intent' && !withTrust ? 'downstream_receipt' : 'original_operation');
   if (intent.runId !== runId || intent.candidate.sha !== candidateSha || intent.harnessSha !== source.trusted.sha
-    || intent.controlRevision !== await remoteControlRevision(reads, source.trusted.sha)) failure('Durable intent is not bound to the current protected controls.');
-  return intent;
+    || intent.controlRevision !== await remoteControlRevision(reads, source.trusted.sha, { admission, now })) failure('Durable intent is not bound to the current protected controls.');
+  if (!withTrust) return intent;
+  if (candidateSha !== SUCCESSOR_LIVE_CONTRACT.candidateSha) failure('Coordination trust records are exclusive to exact successor operations.');
+  const record = freezeRecord({ intent, trust: { repositoryId: source.repository.id, runId, runAttempt: 1, jobId: result.job.id,
+    jobStartedAt: result.job.started_at, artifactId: result.artifact.id, archiveDigest: result.archiveDigest,
+    harnessSha: source.trusted.sha, workflow: run.path.split('@')[0], dispatchedAt: run.run_started_at } });
+  trustedIntentRecords.add(record);
+  return record;
 }
 
-export async function collectTrustedPreviewEmailBuild({ reads, api, binding, records, now = Date.now(), unpack = readEvidenceArchive,
+export function assertTrustedPreviewEmailIntentRecord(record, { admission, now = Date.now() } = {}) {
+  if (!trustedIntentRecords.has(record)) failure('Original intent must come from the actual protected archive collector.');
+  assertIntent(record.intent, now, admission);
+  const selected = successorLiveSelection(admission, SUCCESSOR_LIVE_CONTRACT.candidateSha, now);
+  if (selected.runId !== record.trust.runId || selected.runId !== record.intent.runId || record.trust.runAttempt !== 1
+    || selected.runAttempt !== record.trust.runAttempt || selected.workflow !== PREVIEW_EMAIL_BUILD_WORKFLOW
+    || record.trust.workflow !== selected.workflow || record.trust.dispatchedAt !== selected.dispatchedAt
+    || record.trust.harnessSha !== selected.harnessSha || Date.parse(record.trust.jobStartedAt) < Date.parse(selected.dispatchedAt)
+    || Date.parse(record.intent.intentAt) < Date.parse(record.trust.jobStartedAt)
+    || !githubProviderFresh(record.trust.jobStartedAt, RELEASE_MAX_AGE_MS, now)) failure('Original proof run/job/dispatch changed or expired; archive capture cannot renew it.');
+  return record;
+}
+
+export async function collectTrustedPreviewEmailBuild({ reads, api, binding, records, admission, now = Date.now(), unpack = readEvidenceArchive,
   readVersion = readPreviewEmailBuildVersion } = {}) {
+  if (binding?.sha === SUCCESSOR_LIVE_CONTRACT.candidateSha) successorLiveBinding(admission, binding, now);
   const source = await protectedSource(reads);
   if (binding?.harnessSha !== source.trusted.sha) failure('Preview evidence must use the current protected main harness.');
   const runs = await paginatedGithub(reads, `repos/${RELEASE_REPOSITORY}/actions/workflows/preview-email-proof-build.yml/runs?event=workflow_dispatch&status=success`, 'workflow_runs');
   const liveRecords = records || await collectPreviewEmailEnvironmentRecords({ api, now });
-  const expectedControl = await remoteControlRevision(reads, source.trusted.sha);
+  const expectedControl = await remoteControlRevision(reads, source.trusted.sha, { admission, now });
   for (const run of runs) {
     if (run.head_sha !== source.trusted.sha || !fresh(run.updated_at, now)) continue;
     try {
       const result = await verifiedArchive({ reads, source, run, candidateSha: binding.sha, filename: PREVIEW_EMAIL_BUILD_FILENAME,
         name: `fcos-preview-email-build-${binding.sha}`, now, completed: true, unpack });
       const receipt = result.payload;
-      assertPreviewEmailBuildReceipt({ receipt, binding, records: liveRecords, now });
+      assertPreviewEmailBuildReceipt({ receipt, binding, records: liveRecords, admission, now });
       if (receipt.controlRevision !== expectedControl) failure('Preview archive controls differ from protected main.');
       const raw = await api(`/v13/deployments/${receipt.deployment.id}`);
       const deployment = previewEmailBuildDeployment(raw, receipt);
       if (!equal(deployment, receipt.deployment)) failure('Immutable provider readback changed after archive capture.');
       assertVersion(await readVersion(deployment), receipt, deployment);
-      const intent = await collectTrustedPreviewEmailIntent({ reads, runId: receipt.runId, candidateSha: binding.sha, now, unpack, completed: 'intent' });
+      const intent = await collectTrustedPreviewEmailIntent({ reads, runId: receipt.runId, candidateSha: binding.sha, admission, now, unpack, completed: 'intent' });
       const { capturedAt: _capturedAt, deployment: _deployment, ...intentFields } = receipt; intentFields.kind = 'fcos_preview_email_intent';
       if (!equal(intentFields, intent)) failure('Build receipt differs from its durable approved intent.');
       return { receipt, trust: { runId: run.id, artifactId: result.artifact.id, harnessSha: source.trusted.sha,
@@ -381,8 +442,11 @@ export async function collectTrustedPreviewEmailBuild({ reads, api, binding, rec
 /** Only the first protected workflow invocation may POST once. Recovery runs
  * use readback and can never call create, even when no deployment is found. */
 export async function runControlledPreviewEmailBuild({ intent, mode, authority, journal, create, discover, waitReady,
-  collectRecords, readVersion, now = () => Date.now() } = {}) {
-  assertIntent(intent, now());
+  collectRecords, readVersion, admission, now = () => Date.now() } = {}) {
+  assertIntent(intent, now(), admission);
+  // No callback or caller-supplied lease claim can cross this boundary. Root
+  // must install an independently reviewed canonical shared-coordinator bridge.
+  if (intent.candidate.sha === SUCCESSOR_LIVE_CONTRACT.candidateSha) rejectSuccessorUncoordinatedMutation();
   if (!['create', 'readback'].includes(mode)) failure('Use a controlled first creation or readback-only recovery.');
   await authority(intent);
   let raw = await discover(intent);
@@ -403,7 +467,7 @@ export async function runControlledPreviewEmailBuild({ intent, mode, authority, 
   assertVersion(await readVersion(deployment), intent, deployment);
   const receipt = { ...intent, kind: 'fcos_preview_email_build', capturedAt: new Date(now()).toISOString(), deployment };
   assertPreviewEmailBuildReceipt({ receipt, binding: { ...intent.candidate, harnessSha: intent.harnessSha,
-    deploymentId: deployment.id, candidateUrl: deployment.url }, records, now: now() });
+    deploymentId: deployment.id, candidateUrl: deployment.url }, records, admission, now: now() });
   await journal({ phase: 'complete', operationId: intent.operationId, deploymentId: deployment.id, capturedAt: receipt.capturedAt });
   return receipt;
 }

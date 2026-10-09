@@ -6,12 +6,13 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fcosConnectionIdentifier } from '../config/fcosConnections.js';
 import { collectBuildProvenance } from './lib/build-provenance.mjs';
-import { EXACT_COMPATIBILITY_SUCCESSOR, compatibilitySuccessorPreparationPlan, collectCompatibilitySuccessorPreparation, rejectCompatibilitySuccessorAdmission } from './verify-runtime-compatibility-successor.mjs';
+import { SUCCESSOR_LIVE_CONTRACT, collectSuccessorLiveOperationAdmission, successorLiveBinding, successorLivePlan } from './lib/runtime-compatibility-successor-live.mjs';
 import { githubReleaseReads, assertReleaseGitHubAccount, RELEASE_REPOSITORY } from './lib/release-evidence.mjs';
 import { githubReleaseOidc } from './lib/release-production.mjs';
+import { collectHostedPreviewCoordinationClaim } from './lib/preview-email-coordination-collector.mjs';
 import { collectPreviewVercelAuthority, probePreviewVercelAuthority, PREVIEW_AUTHORITY_SUBSTAGES, PREVIEW_AUTHORITY_FAILURES } from './lib/preview-vercel-authority.mjs';
 import { releaseHash } from './lib/release-readiness.mjs';
-import { previewEmailBuildCandidate, createPreviewEmailBuildRequest, previewEmailBuildControlRevision, assertPreviewEmailBuildProtection,
+import { previewEmailBuildCandidate, previewEmailBuildContract, createPreviewEmailBuildRequest, previewEmailBuildControlRevision, assertPreviewEmailBuildProtection,
   collectPreviewEmailEnvironmentRecords, createPreviewEmailBuildIntent, collectTrustedPreviewEmailIntent, collectPreviewEmailBuildJobs,
   runControlledPreviewEmailBuild, readPreviewEmailBuildVersion, PREVIEW_EMAIL_BUILD_ENVIRONMENT,
   PREVIEW_EMAIL_INTENT_FILENAME, PREVIEW_EMAIL_BUILD_FILENAME, PREVIEW_EMAIL_CONTRACT_SHA256,
@@ -26,12 +27,12 @@ const command = (binary, args, options = {}) => {
   catch { throw new Error('Pinned Preview proof command failed; private diagnostics suppressed.'); }
 };
 
-const DIAGNOSTIC_PHASES = new Set(['runner_context', 'candidate_contract', 'candidate_provenance', 'harness_provenance',
+const DIAGNOSTIC_PHASES = new Set(['runner_context', 'successor_admission', 'candidate_contract', 'candidate_provenance', 'harness_provenance',
   'dependency_lock', 'control_revision', 'source_pins', 'provider_cli_version', 'github_identity', 'actions_oidc',
   'protected_repository', 'environment_variables', 'environment_protection', 'environment_secrets', 'workflow_run',
   'environment_approval', 'workflow_job', 'protection_review', 'candidate_branch', 'source_recheck', 'vercel_authority',
   'retained_production', 'environment_records', 'intent_write', 'recovery_context', 'trusted_intent', 'execution_claim',
-  'controlled_build', 'receipt_write', 'authority_probe', 'authority_probe_write', 'enrolled_authority', 'enrolled_authority_write']);
+  'controlled_build', 'receipt_write', 'authority_probe', 'authority_probe_write', 'enrolled_authority', 'enrolled_authority_write', 'coordination_claim']);
 const diagnosticFailure = phase => new Error(`FCOS protected Preview ${phase} failed; private diagnostics suppressed.`);
 const authoritySubstages = new Set(PREVIEW_AUTHORITY_SUBSTAGES), authorityFailures = new Set(PREVIEW_AUTHORITY_FAILURES);
 
@@ -42,7 +43,7 @@ const authoritySubstages = new Set(PREVIEW_AUTHORITY_SUBSTAGES), authorityFailur
 export function createPreviewEmailBuildDiagnostics({ mode, runId, directory, trustedCwd, candidateCwd, now = () => Date.now() } = {}) {
   let fd;
   try {
-    if (!['prepare', 'create', 'readback', 'diagnose-authority', 'verify-authority'].includes(mode) || !/^[1-9][0-9]*$/.test(String(runId || ''))
+    if (!['prepare', 'create', 'readback', 'diagnose-authority', 'verify-authority', 'coordinate'].includes(mode) || !/^[1-9][0-9]*$/.test(String(runId || ''))
       || !Number.isSafeInteger(Number(runId)) || typeof directory !== 'string' || !directory) throw new Error('context');
     directory = resolve(directory);
     if (directory === '/' || directory === resolve(trustedCwd) || directory === resolve(candidateCwd)
@@ -123,7 +124,7 @@ export function createPreviewEmailBuildDiagnostics({ mode, runId, directory, tru
   }
 }
 export function previewEmailBuildArguments(args, env = process.env) {
-  if (args.length > 1 || args.some(value => !['--dry-run', '--prepare', '--create', '--readback', '--diagnose-authority', '--verify-authority'].includes(value))) throw new Error('Use one protected Preview proof mode.');
+  if (args.length > 1 || args.some(value => !['--dry-run', '--prepare', '--create', '--readback', '--diagnose-authority', '--verify-authority', '--coordinate'].includes(value))) throw new Error('Use one protected Preview proof mode.');
   return { mode: args[0]?.slice(2) || 'dry-run', candidateSha: env.FCOS_E2E_EXPECTED_COMMIT,
     candidateCwd: resolve(env.FCOS_RELEASE_SOURCE_DIRECTORY || ROOT), recoveryRunId: Number(env.FCOS_PREVIEW_EMAIL_ORIGINAL_RUN_ID) };
 }
@@ -199,11 +200,8 @@ export function createPreviewEmailVercelApi({ token, fetchImpl = globalThis.fetc
 
 export async function runPreviewEmailProofBuild({ mode = 'dry-run', candidateSha, candidateCwd = ROOT,
   recoveryRunId, trustedCwd = ROOT, env = process.env } = {}) {
-  if (candidateSha === EXACT_COMPATIBILITY_SUCCESSOR) {
-    if (mode === 'dry-run') return compatibilitySuccessorPreparationPlan();
-    collectCompatibilitySuccessorPreparation({ candidateCwd, trustedCwd });
-    rejectCompatibilitySuccessorAdmission();
-  }
+  const successor = candidateSha === SUCCESSOR_LIVE_CONTRACT.candidateSha;
+  if (successor && mode === 'dry-run') return successorLivePlan();
   if (mode === 'dry-run') return { schemaVersion: 1, kind: 'fcos_preview_email_build_plan', enabledByDefault: false,
     productionAuthorized: false, mutations: 0, contractSha256: PREVIEW_EMAIL_CONTRACT_SHA256,
     workflow: '.github/workflows/preview-email-proof-build.yml', environment: PREVIEW_EMAIL_BUILD_ENVIRONMENT,
@@ -214,20 +212,30 @@ export async function runPreviewEmailProofBuild({ mode = 'dry-run', candidateSha
     directory: env.RUNNER_TEMP, trustedCwd, candidateCwd });
   const stage = diagnostics.stage;
   try {
+    if (mode === 'coordinate') {
+      if (!successor) throw diagnosticFailure('coordination_claim');
+      // Fixed production constructor; injected runner/test options cannot mint a
+      // capability. Immutable source-only guard fails before authenticated I/O.
+      return await stage('coordination_claim', () => collectHostedPreviewCoordinationClaim());
+    }
     await stage('runner_context', () => {
       if (!env.GH_TOKEN || !env.VERCEL_TOKEN) throw new Error('Dedicated protected runner and existing credentials are required.');
     });
-    const candidate = await stage('candidate_contract', () => previewEmailBuildCandidate(candidateSha));
+    let admission;
+    const reads = githubReleaseReads({ command: 'gh', env: { PATH: env.PATH, HOME: env.HOME, GH_HOST: 'github.com',
+      GH_REPO: RELEASE_REPOSITORY, GH_TOKEN: env.GH_TOKEN } }, { cwd: trustedCwd });
+    if (successor) admission = await stage('successor_admission', () => collectSuccessorLiveOperationAdmission({ reads,
+      sourceCwd: candidateCwd, trustedCwd, runId: Number(env.GITHUB_RUN_ID) }));
+    const candidate = await stage('candidate_contract', () => previewEmailBuildCandidate(candidateSha, { admission }));
+    const selectedContract = previewEmailBuildContract(candidateSha, { admission });
     const source = await stage('candidate_provenance', () => collectBuildProvenance({ cwd: candidateCwd, env: {}, requireClean: true }));
     const harness = await stage('harness_provenance', () => collectBuildProvenance({ cwd: trustedCwd, env: {}, requireClean: true }));
     const lockHash = await stage('dependency_lock', () => releaseHash(readFileSync(join(candidateCwd, 'package-lock.json'))));
-    const controlRevision = await stage('control_revision', () => previewEmailBuildControlRevision(trustedCwd));
+    const controlRevision = await stage('control_revision', () => previewEmailBuildControlRevision(trustedCwd, { admission, sourceCwd: candidateCwd }));
     await stage('source_pins', () => {
       if (!source.releaseEligible || !harness.releaseEligible || source.commit !== candidate.sha
         || source.sourceDigest !== candidate.sourceDigest || lockHash !== candidate.lockHash) throw new Error('Clean exact source and dependency pins failed.');
     });
-    const reads = githubReleaseReads({ command: 'gh', env: { PATH: env.PATH, HOME: env.HOME, GH_HOST: 'github.com',
-      GH_REPO: RELEASE_REPOSITORY, GH_TOKEN: env.GH_TOKEN } }, { cwd: trustedCwd });
     await stage('provider_cli_version', () => {
       if (command('vercel', ['--version'], { cwd: trustedCwd, env: { PATH: env.PATH, HOME: env.HOME, CI: '1', NO_COLOR: '1',
         VERCEL_TELEMETRY_DISABLED: '1', VERCEL_NO_UPDATE_NOTIFICATION: '1' } }).trim().replace(/^Vercel CLI /i, '') !== '54.20.1') {
@@ -255,7 +263,7 @@ export async function runPreviewEmailProofBuild({ mode = 'dry-run', candidateSha
       approved = await stage('protection_review', () => {
         const result = assertPreviewEmailBuildProtection({ repository, branch, protection, environment, variables, secrets,
           run, jobs, approvals, oidcClaims: signed, candidateSha, harnessSha: harness.commit, controlRevision,
-          mode: ['diagnose-authority', 'verify-authority'].includes(mode) ? mode : 'build' });
+          admission, mode: ['diagnose-authority', 'verify-authority'].includes(mode) ? mode : 'build' });
         if (result.runId !== Number(env.GITHUB_RUN_ID)) throw new Error('This runner journal must bind the exact approved workflow run.');
         return result;
       });
@@ -263,9 +271,11 @@ export async function runPreviewEmailProofBuild({ mode = 'dry-run', candidateSha
         if (reads.json(`repos/${RELEASE_REPOSITORY}/git/ref/heads/${encodeURIComponent(candidate.branch)}`).object?.sha !== candidateSha) throw new Error('The reviewed candidate branch changed.');
       });
       await stage('source_recheck', () => {
+        if (successor) successorLiveBinding(admission, { sha: candidateSha, harnessSha: harness.commit,
+          sourceDigest: source.sourceDigest, lockHash, previewControlRevision: controlRevision });
         if (collectBuildProvenance({ cwd: candidateCwd, env: {}, requireClean: true }).sourceDigest !== source.sourceDigest
           || collectBuildProvenance({ cwd: trustedCwd, env: {}, requireClean: true }).commit !== harness.commit
-          || previewEmailBuildControlRevision(trustedCwd) !== controlRevision) throw new Error('Reviewed source or controls changed during execution.');
+          || previewEmailBuildControlRevision(trustedCwd, { admission, sourceCwd: candidateCwd }) !== controlRevision) throw new Error('Reviewed source or controls changed during execution.');
       });
       // The diagnostic gate requires both deployment gates off. This terminal
       // branch precedes environment reads, intent creation and every deploy path.
@@ -284,7 +294,7 @@ export async function runPreviewEmailProofBuild({ mode = 'dry-run', candidateSha
           envelope: approved.authorityEnvelope, privateEnrollment: env[ENROLLED_AUTHORITY_SECRET], token: env.VERCEL_TOKEN,
           reviewedTokenId: approved.reviewedTokenId, enrollmentId: approved.enrollmentId,
           context: enrolledAuthorityContext({ repositoryId: repository.id, environmentId: approved.environmentId, runId: approved.runId,
-            harnessSha: harness.commit, controlRevision, contractSha256: PREVIEW_EMAIL_CONTRACT_SHA256, candidateSha,
+            harnessSha: harness.commit, controlRevision, contractSha256: selectedContract.contractSha256, candidateSha,
             operation: mode === 'prepare' ? 'create' : mode }) };
         const result = await stage('enrolled_authority', () => collectEnrolledPreviewAuthority({ ...enrolledBinding,
           deploymentConfiguration: configuration, verifyOnly: mode === 'verify-authority' }));
@@ -334,7 +344,7 @@ export async function runPreviewEmailProofBuild({ mode = 'dry-run', candidateSha
       await stage('intent_write', () => {
         const intent = createPreviewEmailBuildIntent({ candidateSha, harnessSha: harness.commit, controlRevision,
           runId: approved.runId, operationId: `fcos-preview-email-${approved.runId}-${randomUUID()}`,
-          records });
+          records, admission });
         writeFileSync(join(directory, PREVIEW_EMAIL_INTENT_FILENAME), `${JSON.stringify(intent)}\n`, { mode: 0o600, flag: 'wx', flush: true });
       });
       return { durableIntentPrepared: true, runId: approved.runId, candidateSha, mutations: 0, productionAuthorized: false };
@@ -344,7 +354,7 @@ export async function runPreviewEmailProofBuild({ mode = 'dry-run', candidateSha
       if (!Number.isSafeInteger(originalRunId) || originalRunId <= 0 || mode === 'readback' && originalRunId === approved.runId) throw new Error('Readback needs a distinct original approved first-run intent.');
     });
     const intent = await stage('trusted_intent', () => collectTrustedPreviewEmailIntent({ reads, runId: originalRunId, candidateSha,
-      completed: mode === 'readback' ? 'intent' : false }));
+      completed: mode === 'readback' ? 'intent' : false, admission }));
     // A repeated invocation in the same first attempt cannot resubmit a POST.
     // Recovery uses a separately reviewed run and only the original remote intent.
     await stage('execution_claim', () => diagnostics.claimExecution());
@@ -379,7 +389,7 @@ export async function runPreviewEmailProofBuild({ mode = 'dry-run', candidateSha
       }
       throw new Error('Preview is still pending; recover the original intent by readback only.');
     };
-    const receipt = await stage('controlled_build', () => runControlledPreviewEmailBuild({ intent, mode, authority, journal, discover, waitReady,
+    const receipt = await stage('controlled_build', () => runControlledPreviewEmailBuild({ intent, mode, authority, journal, discover, waitReady, admission,
       create: request => { recheckEnrolled(); return provider.create(request); },
       collectRecords: () => collectPreviewEmailEnvironmentRecords({ api }),
       readVersion: deployment => readPreviewEmailBuildVersion(deployment, { bypass: env.FCOS_E2E_VERCEL_BYPASS }) }));

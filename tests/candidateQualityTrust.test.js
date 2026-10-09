@@ -16,6 +16,7 @@ import { releaseHash, releaseConfigurationRevision } from '../scripts/lib/releas
 import { PREVIEW_EMAIL_BUILD_CONTROL_FILES, previewEmailBuildControlRevision } from '../scripts/lib/preview-email-build.mjs';
 import { runtimeCompatibilityControlRevision, FIRST_RUNTIME_ROLLOUT } from '../scripts/lib/runtime-compatibility-release.mjs';
 import { FCOS_RELEASE_APPROVAL_POLICY } from '../config/fcosConnections.js';
+import { SUCCESSOR_LIVE_HARNESS_FILES } from '../scripts/lib/runtime-compatibility-successor-live.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const workflowBytes = readFileSync(join(root, CANDIDATE_QUALITY_WORKFLOW));
@@ -206,10 +207,10 @@ test('source and publication jobs independently recompute immutable source and r
     git(['clone', '--shared', '--no-checkout', root, trustedCwd]);
     git(['checkout', '--detach', '3174ebdc1ef09f95bcdc24acad65df817b29ef6b'], trustedCwd);
     git(['remote', 'set-url', 'origin', `https://github.com/${RELEASE_REPOSITORY}.git`], trustedCwd);
-    const implementation = [CANDIDATE_QUALITY_WORKFLOW, CANDIDATE_QUALITY_MANIFEST, 'scripts/candidate-quality-receipt.mjs',
+    const implementation = [...new Set([...SUCCESSOR_LIVE_HARNESS_FILES, CANDIDATE_QUALITY_WORKFLOW, CANDIDATE_QUALITY_MANIFEST, 'scripts/candidate-quality-receipt.mjs',
       'scripts/lib/candidate-quality.mjs', 'scripts/lib/release-evidence.mjs', 'scripts/lib/release-readiness.mjs',
       'scripts/lib/preview-email-build.mjs', 'scripts/lib/runtime-compatibility-release.mjs',
-      'scripts/lib/compatibility-browser-isolation.mjs', 'tests/compatibility-browser-isolation.chromium.mjs'];
+      'scripts/lib/compatibility-browser-isolation.mjs', 'tests/compatibility-browser-isolation.chromium.mjs'])];
     for (const file of implementation) {
       mkdirSync(join(trustedCwd, file, '..'), { recursive: true });
       writeFileSync(join(trustedCwd, file), readFileSync(join(root, file)));
@@ -229,10 +230,13 @@ test('source and publication jobs independently recompute immutable source and r
     // historical fixture base predates them. Missing or foreign bytes fail
     // completeness/source trust rather than weakening the real verifier.
     for (const [file, affected] of [['scripts/lib/compatibility-browser-isolation.mjs', [0, 2]],
-      ['tests/compatibility-browser-isolation.chromium.mjs', [2]]]) {
+      ['tests/compatibility-browser-isolation.chromium.mjs', [2]],
+      ['scripts/lib/preview-email-build-controls.mjs', [1]]]) {
       const path = join(trustedCwd, file), bytes = readFileSync(path);
       rmSync(path);
-      assert.throws(() => runtimeCompatibilityControlRevision(trustedCwd, candidateCwd), error => error.code === 'ENOENT');
+      assert.throws(() => file === 'scripts/lib/preview-email-build-controls.mjs'
+        ? previewEmailBuildControlRevision(trustedCwd) : runtimeCompatibilityControlRevision(trustedCwd, candidateCwd),
+      error => error.code === 'ENOENT');
       writeFileSync(path, Buffer.concat([bytes, Buffer.from('\n// foreign fixture control bytes\n')]));
       const changed = revisions();
       for (const index of affected) assert.notEqual(changed[index], original[index], `Unbound fixture control ${file}`);
