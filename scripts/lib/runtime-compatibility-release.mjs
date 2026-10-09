@@ -58,7 +58,7 @@ export function runtimeCompatibilityControlRevision(trustedCwd, candidateCwd, { 
   }
   const trusted = ['scripts/runtime-compatibility-release.mjs', 'scripts/lib/runtime-compatibility-release.mjs',
     'scripts/lib/runtime-compatibility.mjs', 'scripts/verify-runtime-compatibility.mjs',
-    'scripts/lib/release-evidence.mjs', 'scripts/lib/release-production.mjs', 'scripts/lib/release-readiness.mjs',
+    'scripts/lib/release-evidence.mjs', 'scripts/lib/release-workflow.mjs', '.github/workflows/routine-release.yml', 'scripts/lib/release-production.mjs', 'scripts/lib/release-readiness.mjs',
     'scripts/lib/preview-parity.mjs', 'scripts/collect-preview-parity.mjs', 'scripts/lib/build-provenance.mjs',
     'config/fcosConnections.js', 'config/fcosCiIdentity.js', 'config/preview-parity-policy.json',
     COMPATIBILITY_WORKFLOW, '.github/workflows/quality.yml', '.github/workflows/authenticated-release.yml',

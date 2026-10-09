@@ -81,9 +81,12 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       actions: read
+      contents: read
     steps:
       - name: Require trusted authenticated-candidate evidence artifact
         uses: actions/github-script@v7
+        env:
+          FCOS_ROUTINE_RELEASE_ENABLED: ${{ vars.FCOS_ROUTINE_RELEASE_ENABLED }}
         with:
           script: |
             const sha = context.payload.pull_request.head.sha;
@@ -104,10 +107,8 @@ jobs:
               }));
             } catch (error) {
               if (error.status === 404) {
-                core.setFailed('The trusted authenticated-release workflow must be reviewed and installed on the default branch.');
-                return;
-              }
-              throw error;
+                data = { workflow_runs: [] };
+              } else throw error;
             }
             let evidence = null;
             for (const run of data.workflow_runs) {
@@ -126,10 +127,103 @@ jobs:
               ));
               if (evidence) break;
             }
+            // Both trusted workflows must be reviewed and installed on the default branch.
+            if (!evidence && process.env.FCOS_ROUTINE_RELEASE_ENABLED === 'true') {
+              // No checkout or candidate execution: fixed read-only provider requests and
+              // bounded archive decoding establish the additional protected-main route.
+              const { createHash } = require('node:crypto');
+              const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+              const { execFileSync } = require('node:child_process');
+              const now = Date.now(), owner = context.repo.owner, repo = context.repo.repo;
+              const positive = value => Number.isSafeInteger(value) && value > 0;
+              const time = value => typeof value === 'string' ? Date.parse(value) : NaN;
+              const fresh = value => Number.isFinite(time(value)) && time(value) <= now + 30000 && now - time(value) <= 1800000;
+              const digest = value => createHash('sha256').update(value).digest('hex');
+              const requireProof = value => { if (!value) throw new Error('Coordinated verification proof is incomplete.'); };
+              try {
+                const { data: repository } = await github.rest.repos.get({ owner, repo });
+                const { data: branch } = await github.rest.repos.getBranch({ owner, repo, branch: defaultBranch });
+                requireProof(repository.full_name === `${owner}/${repo}` && repository.id === context.payload.repository.id
+                  && repository.default_branch === defaultBranch && repository.owner?.login === owner && positive(repository.owner.id)
+                  && branch.name === defaultBranch && branch.protected === true && /^[a-f0-9]{40}$/.test(branch.commit?.sha || ''));
+                const { data: routine } = await github.rest.actions.listWorkflowRuns({ owner, repo, workflow_id: 'routine-release.yml',
+                  event: 'workflow_dispatch', status: 'success', per_page: 100 });
+                for (const run of routine.workflow_runs || []) {
+                  if (run.repository?.full_name !== repository.full_name || run.repository.id !== repository.id
+                    || run.head_repository?.full_name !== repository.full_name || run.head_repository.id !== repository.id
+                    || !['.github/workflows/routine-release.yml', `.github/workflows/routine-release.yml@${defaultBranch}`].includes(run.path)
+                    || run.head_branch !== defaultBranch || run.head_sha !== branch.commit.sha || run.event !== 'workflow_dispatch'
+                    || run.status !== 'completed' || run.conclusion !== 'success' || run.run_attempt !== 1 || !positive(run.id)
+                    || run.actor?.login !== owner || run.actor.id !== repository.owner.id || run.triggering_actor?.login !== owner
+                    || run.triggering_actor.id !== repository.owner.id || !fresh(run.run_started_at) || !fresh(run.updated_at)) continue;
+                  try {
+                    const { data: jobList } = await github.rest.actions.listJobsForWorkflowRunAttempt({ owner, repo, run_id: run.id, attempt_number: 1, per_page: 100 });
+                    requireProof(jobList.total_count === 3 && Array.isArray(jobList.jobs) && jobList.jobs.length === 3
+                      && new Set(jobList.jobs.map(job => job.id)).size === 3);
+                    const jobs = {};
+                    for (const name of ['require-default-branch-dispatch', 'authenticated-candidate', 'normal-role']) {
+                      const matches = jobList.jobs.filter(job => job.name === name), job = matches[0];
+                      requireProof(matches.length === 1 && positive(job?.id) && job.run_id === run.id && job.run_attempt === 1
+                        && job.head_sha === run.head_sha && job.status === 'completed' && job.conclusion === 'success'
+                        && Number.isFinite(time(job.started_at)) && time(job.started_at) >= time(run.run_started_at)
+                        && fresh(job.completed_at) && time(job.completed_at) >= time(job.started_at));
+                      jobs[name] = job;
+                    }
+                    const { data: approvals } = await github.rest.actions.getReviewsForRun({ owner, repo, run_id: run.id });
+                    requireProof(Array.isArray(approvals));
+                    const { data: artifacts } = await github.rest.actions.listWorkflowRunArtifacts({ owner, repo, run_id: run.id, per_page: 100 });
+                    requireProof(Array.isArray(artifacts.artifacts) && artifacts.total_count === artifacts.artifacts.length && artifacts.total_count <= 100
+                      && new Set(artifacts.artifacts.map(row => row.id)).size === artifacts.artifacts.length);
+                    let candidateUrl;
+                    for (const [jobName, environmentName, prefix, filename] of [
+                      ['authenticated-candidate', 'fcos-ci-readonly', 'fcos-ci-evidence', 'fcos-ci-evidence.json'],
+                      ['normal-role', 'fcos-normal-role-verification', 'fcos-normal-role-evidence', 'fcos-normal-role-evidence.json'],
+                    ]) {
+                      const job = jobs[jobName];
+                      requireProof(time(job.started_at) >= time(jobs['require-default-branch-dispatch'].completed_at));
+                      const { data: environment } = await github.rest.repos.getEnvironment({ owner, repo, environment_name: environmentName });
+                      const rules = environment.protection_rules?.filter(rule => rule.type === 'required_reviewers') || [], rule = rules[0];
+                      requireProof(environment.name === environmentName && positive(environment.id) && environment.can_admins_bypass === false
+                        && environment.deployment_branch_policy?.protected_branches === true && environment.deployment_branch_policy?.custom_branch_policies === false
+                        && rules.length === 1 && rule.prevent_self_review === false && rule.reviewers?.length === 1
+                        && rule.reviewers[0].type === 'User' && rule.reviewers[0].reviewer?.login === owner && rule.reviewers[0].reviewer.id === repository.owner.id);
+                      const reviews = approvals.filter(row => row.environments?.some(env => env.id === environment.id && env.name === environmentName));
+                      requireProof(reviews.length === 1 && reviews[0].state === 'approved' && reviews[0].user?.login === owner && reviews[0].user.id === repository.owner.id);
+                      const matches = artifacts.artifacts.filter(row => row.name === `${prefix}-${sha}`), artifact = matches[0];
+                      requireProof(matches.length === 1 && positive(artifact?.id) && artifact.expired === false && artifact.workflow_run?.id === run.id
+                        && artifact.workflow_run?.head_sha === run.head_sha && fresh(artifact.created_at)
+                        && time(artifact.created_at) >= time(job.started_at) && time(artifact.created_at) <= time(job.completed_at));
+                      const { data: archiveData } = await github.rest.actions.downloadArtifact({ owner, repo, artifact_id: artifact.id, archive_format: 'zip' });
+                      const archive = Buffer.from(archiveData);
+                      requireProof(archive.length > 0 && archive.length <= 2097152 && artifact.digest === `sha256:${digest(archive)}`);
+                      const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'fcos-quality-evidence-'));
+                      let payload;
+                      try {
+                        const file = path.join(directory, 'evidence.zip'); fs.writeFileSync(file, archive, { mode: 0o600, flag: 'wx' });
+                        const entries = execFileSync('unzip', ['-Z1', file], { encoding: 'utf8', timeout: 5000, maxBuffer: 65536, stdio: ['ignore', 'pipe', 'pipe'] }).trim().split('\n');
+                        requireProof(entries.length === 1 && entries[0] === filename);
+                        payload = JSON.parse(execFileSync('unzip', ['-p', file, filename], { encoding: 'utf8', timeout: 5000, maxBuffer: 262144, stdio: ['ignore', 'pipe', 'pipe'] }));
+                      } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+                      requireProof(payload.candidateSha === sha && payload.harnessSha === run.head_sha
+                        && /^https:\/\/fcos-[a-z0-9]{9}-hocheunglai-6535s-projects\.vercel\.app$/.test(payload.candidateUrl || ''));
+                      if (candidateUrl === undefined) candidateUrl = payload.candidateUrl;
+                      else requireProof(payload.candidateUrl === candidateUrl);
+                      if (jobName === 'normal-role') requireProof(payload.schemaVersion === 1 && /^dpl_[A-Za-z0-9]+$/.test(payload.deploymentId || '')
+                        && /^[a-f0-9]{64}$/.test(payload.sourceDigest || '') && Array.isArray(payload.checks) && fresh(payload.capturedAt)
+                        && time(payload.capturedAt) >= time(job.started_at) && time(payload.capturedAt) <= time(artifact.created_at));
+                    }
+                    const { data: current } = await github.rest.repos.getBranch({ owner, repo, branch: defaultBranch });
+                    requireProof(current.name === defaultBranch && current.protected === true && current.commit?.sha === branch.commit.sha);
+                    evidence = { coordinatedRunId: run.id };
+                    break;
+                  } catch { /* A malformed or stale run cannot substitute for complete proof. */ }
+                }
+              } catch { /* Missing protected metadata remains a failed required check. */ }
+            }
             if (!evidence) {
               core.setFailed(
                 `No successful, non-expired trusted authenticated-candidate evidence artifact exists for ${sha}. `
-                + 'A reviewer must dispatch authenticated-release from the default branch with this exact SHA and immutable candidate URL.',
+                + 'A reviewer must dispatch authenticated-release or enabled routine-release from the protected default branch for this exact SHA and immutable candidate URL.',
               );
             }
 

@@ -1,3 +1,4 @@
+import { ROUTINE_RELEASE_ENABLE, routineReleasePath, assertRoutineReleaseJobs, assertRoutineArtifactTime, assertReusableQualityJobs } from './release-workflow.mjs';
 import { previewEmailSignerEvidenceVerified } from './preview-email-signer.mjs';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
@@ -54,14 +55,18 @@ export function assertReleaseWorkflowIdentity(claims, repository, branch) {
   return true;
 }
 
-export function assertTrustedArtifact({ repository, branch, protection, run, artifact, archive, payload, kind, binding, now = Date.now() }) {
+export function assertTrustedArtifact({ repository, branch, protection, run, artifact, archive, payload, kind, binding, jobs, now = Date.now() }) {
   const trusted = assertProtectedDefault(repository, branch, protection);
   const workflow = kind === 'normal_role' ? '.github/workflows/normal-role-release.yml' : '.github/workflows/authenticated-release.yml';
+  const coordinated = routineReleasePath(run?.path, trusted.branch);
+  const selected = coordinated ? assertRoutineReleaseJobs({ run, jobs, branch, repository, now }) : null;
+  const capturedAt = coordinated ? assertRoutineArtifactTime({ artifact, job: selected[kind === 'normal_role' ? 'normal-role' : 'authenticated-candidate'],
+    capturedAt: kind === 'normal_role' ? payload?.capturedAt : undefined, now }) : run?.updated_at;
   const prefix = kind === 'normal_role' ? 'fcos-normal-role-evidence' : 'fcos-ci-evidence';
   if (!['normal_role', 'restricted_browser'].includes(kind) || run?.repository?.full_name !== RELEASE_REPOSITORY
     || run?.head_repository?.full_name !== RELEASE_REPOSITORY || run?.head_branch !== trusted.branch || run?.head_sha !== trusted.sha
-    || ![workflow, `${workflow}@${trusted.branch}`].includes(run?.path) || run?.event !== 'workflow_dispatch'
-    || run?.conclusion !== 'success' || run?.status !== 'completed' || !positive(run.id) || !fresh(run.updated_at, now)
+    || !coordinated && ![workflow, `${workflow}@${trusted.branch}`].includes(run?.path) || run?.event !== 'workflow_dispatch'
+    || !coordinated && (run?.conclusion !== 'success' || run?.status !== 'completed') || !positive(run.id) || !fresh(run.updated_at, now)
     || artifact?.name !== `${prefix}-${binding.sha}` || artifact.expired !== false || !positive(artifact.id)
     || artifact.workflow_run?.id !== run.id || artifact.workflow_run?.head_sha !== trusted.sha
     || artifact.digest !== `sha256:${releaseHash(archive)}` || payload?.candidateSha !== binding.sha
@@ -72,7 +77,7 @@ export function assertTrustedArtifact({ repository, branch, protection, run, art
   if (kind === 'normal_role' && payload.emailSigner !== undefined) previewEmailSignerEvidenceVerified(payload.emailSigner,
     { deployment: { id: binding.deploymentId, sha: binding.sha }, sourceDigest: binding.sourceDigest, now });
   return { ...binding, kind, runId: run.id, artifactId: artifact.id, archiveDigest: releaseHash(archive), harnessSha: trusted.sha,
-    capturedAt: kind === 'normal_role' ? payload.capturedAt : run.updated_at,
+    capturedAt: kind === 'normal_role' ? payload.capturedAt : capturedAt,
     ...(kind === 'normal_role' ? { checks: payload.checks, ...(payload.emailSigner !== undefined ? { emailSigner: payload.emailSigner } : {}) } : {}) };
 }
 
@@ -137,47 +142,96 @@ export async function collectTrustedReleaseEvidence({ reads, binding, now = Date
   const branch = reads.json(`repos/${RELEASE_REPOSITORY}/branches/${encodeURIComponent(repository.default_branch)}`);
   const protection = reads.json(`repos/${RELEASE_REPOSITORY}/branches/${encodeURIComponent(repository.default_branch)}/protection`);
   assertProtectedDefault(repository, branch, protection);
+  let routineRuns;
+  const routineCache = new Map(), approvalCache = new Map();
+  const coordinatedRecords = new Set();
+  const completedRoutineRuns = () => {
+    if (routineRuns !== undefined) return routineRuns;
+    routineRuns = [];
+    try {
+      const enabled = reads.json(`repos/${RELEASE_REPOSITORY}/actions/variables/${ROUTINE_RELEASE_ENABLE}`);
+      if (enabled.name !== ROUTINE_RELEASE_ENABLE || enabled.value !== 'true') return routineRuns;
+      routineRuns = (reads.json(`repos/${RELEASE_REPOSITORY}/actions/workflows/routine-release.yml/runs?event=workflow_dispatch&status=success&per_page=100`).workflow_runs || [])
+        .filter(run => run.status === 'completed' && run.conclusion === 'success' && run.head_sha === branch.commit.sha && fresh(run.updated_at, now));
+    } catch { /* A disabled or unavailable optional route grants no evidence. */ }
+    return routineRuns;
+  };
   for (const kind of ['restricted_browser', 'normal_role']) {
     try {
       const workflow = kind === 'normal_role' ? 'normal-role-release.yml' : 'authenticated-release.yml';
       const prefix = kind === 'normal_role' ? 'fcos-normal-role-evidence' : 'fcos-ci-evidence';
-      const runs = reads.json(`repos/${RELEASE_REPOSITORY}/actions/workflows/${workflow}/runs?event=workflow_dispatch&status=success&per_page=100`).workflow_runs || [];
+      const runs = [...(reads.json(`repos/${RELEASE_REPOSITORY}/actions/workflows/${workflow}/runs?event=workflow_dispatch&status=success&per_page=100`).workflow_runs || []), ...completedRoutineRuns()];
       let record;
       for (const run of runs) {
         if (run.head_sha !== branch.commit.sha || !fresh(run.updated_at, now)) continue;
-        const artifacts = reads.json(`repos/${RELEASE_REPOSITORY}/actions/runs/${run.id}/artifacts?per_page=100`).artifacts || [];
-        const artifact = artifacts.find(row => row.name === `${prefix}-${binding.sha}` && row.expired === false);
+        let selected;
+        if (!selected && routineReleasePath(run.path, branch.name)) {
+          selected = routineCache.get(run.id);
+          if (!selected) {
+            const jobs = reads.json(`repos/${RELEASE_REPOSITORY}/actions/runs/${run.id}/attempts/1/jobs?per_page=100`);
+            assertRoutineReleaseJobs({ run, jobs, branch, repository, now });
+            const list = reads.json(`repos/${RELEASE_REPOSITORY}/actions/runs/${run.id}/artifacts?per_page=100`);
+            if (!Array.isArray(list.artifacts) || list.total_count !== list.artifacts.length || list.total_count > 100
+              || new Set(list.artifacts.map(row => row.id)).size !== list.artifacts.length) throw new Error('Incomplete coordinated artifacts');
+            selected = { jobs, artifacts: list.artifacts }; routineCache.set(run.id, selected);
+          }
+        }
+        const artifacts = selected?.artifacts || reads.json(`repos/${RELEASE_REPOSITORY}/actions/runs/${run.id}/artifacts?per_page=100`).artifacts || [];
+        const matches = artifacts.filter(row => row.name === `${prefix}-${binding.sha}` && row.expired === false);
+        if (matches.length > 1) throw new Error('Ambiguous verification artifacts');
+        const artifact = matches[0];
         if (!artifact) continue;
-        collectVerificationEnvironmentReview({ reads, run, kind });
+        if (!approvalCache.has(run.id)) approvalCache.set(run.id, reads.json(`repos/${RELEASE_REPOSITORY}/actions/runs/${run.id}/approvals`));
+        const name = kind === 'restricted_browser' ? 'fcos-ci-readonly' : 'fcos-normal-role-verification';
+        assertVerificationEnvironmentReview({ environment: reads.json(`repos/${RELEASE_REPOSITORY}/environments/${name}`),
+          approvals: approvalCache.get(run.id), run, kind });
         const archive = reads.archive(`repos/${RELEASE_REPOSITORY}/actions/artifacts/${artifact.id}/zip`);
         const payload = unpack(archive, kind === 'normal_role' ? 'fcos-normal-role-evidence.json' : 'fcos-ci-evidence.json');
-        record = assertTrustedArtifact({ repository, branch, protection, run, artifact, archive, payload, kind, binding, now });
+        record = assertTrustedArtifact({ repository, branch, protection, run, artifact, archive, payload, kind, binding, jobs: selected?.jobs, now });
+        if (selected) coordinatedRecords.add(record);
         break;
       }
       if (!record) throw new Error('missing');
       records.push(record);
     } catch { blockers.push({ code: 'TRUSTED_EVIDENCE_UNAVAILABLE', scope: kind }); }
   }
+  if (coordinatedRecords.size) {
+    try {
+      if (new Set([...coordinatedRecords].map(record => record.runId)).size !== 1) throw new Error('Coordinated artifacts must share one verification run');
+      const current = reads.json(`repos/${RELEASE_REPOSITORY}/branches/${encodeURIComponent(repository.default_branch)}`);
+      const enabled = reads.json(`repos/${RELEASE_REPOSITORY}/actions/variables/${ROUTINE_RELEASE_ENABLE}`);
+      if (current.name !== branch.name || current.protected !== true || current.commit?.sha !== branch.commit.sha
+        || enabled.name !== ROUTINE_RELEASE_ENABLE || enabled.value !== 'true') throw new Error('Coordinated authority changed');
+    } catch {
+      for (let index = records.length - 1; index >= 0; index--) if (coordinatedRecords.has(records[index])) records.splice(index, 1);
+      blockers.push({ code: 'COORDINATED_RELEASE_EVIDENCE_UNAVAILABLE', scope: 'routine_release' });
+    }
+  }
   let quality = null;
   try {
-    const runs = reads.json(`repos/${RELEASE_REPOSITORY}/actions/workflows/quality.yml/runs?status=success&per_page=100`).workflow_runs || [];
-    const run = runs.find(row => row.repository?.full_name === RELEASE_REPOSITORY && row.head_repository?.full_name === RELEASE_REPOSITORY
+    const runs = reads.json(`repos/${RELEASE_REPOSITORY}/actions/workflows/quality.yml/runs?per_page=100`).workflow_runs || [];
+    const eligibleRuns = runs.filter(row => row.repository?.full_name === RELEASE_REPOSITORY && row.head_repository?.full_name === RELEASE_REPOSITORY
       && (row.head_sha === binding.sha || row.event === 'pull_request' && row.pull_requests?.some(pr => pr.head?.sha === binding.sha))
-      && row.conclusion === 'success' && row.status === 'completed'
+      && (row.conclusion === 'success' || row.conclusion === 'failure' && row.event === 'pull_request' && row.run_attempt === 1) && row.status === 'completed'
       && ['.github/workflows/quality.yml', `.github/workflows/quality.yml@${branch.name}`].includes(row.path) && fresh(row.updated_at, now));
-    if (run) {
-      const content = ref => reads.json(`repos/${RELEASE_REPOSITORY}/contents/.github/workflows/quality.yml?ref=${ref}`);
-      const deployed = content(branch.commit.sha), candidate = content(binding.sha);
-      if (deployed.encoding !== 'base64' || candidate.encoding !== 'base64'
-        || releaseHash(Buffer.from(deployed.content, 'base64')) !== releaseHash(Buffer.from(candidate.content, 'base64'))) throw new Error('Untrusted quality workflow');
-      const artifacts = reads.json(`repos/${RELEASE_REPOSITORY}/actions/runs/${run.id}/artifacts?per_page=100`).artifacts || [];
-      const artifact = artifacts.find(row => row.name === `fcos-quality-source-${binding.sha}` && row.expired === false);
-      if (!artifact || artifact.workflow_run?.id !== run.id || artifact.workflow_run?.head_sha !== run.head_sha) throw new Error('Quality source artifact missing');
-      const archive = reads.archive(`repos/${RELEASE_REPOSITORY}/actions/artifacts/${artifact.id}/zip`);
-      const payload = unpack(archive, 'fcos-quality-source.json');
-      if (artifact.digest !== `sha256:${releaseHash(archive)}` || payload.schemaVersion !== 1
-        || payload.candidateSha !== binding.sha || payload.lockSha256 !== binding.lockHash || !fresh(payload.capturedAt, now)) throw new Error('Quality source artifact binding');
-      quality = { ...binding, runId: run.id, artifactId: artifact.id, archiveDigest: releaseHash(archive), result: 'success', capturedAt: payload.capturedAt };
+    for (const run of eligibleRuns) {
+      try {
+        const content = ref => reads.json(`repos/${RELEASE_REPOSITORY}/contents/.github/workflows/quality.yml?ref=${ref}`);
+        const deployed = content(branch.commit.sha), candidate = content(binding.sha);
+        if (deployed.encoding !== 'base64' || candidate.encoding !== 'base64'
+          || releaseHash(Buffer.from(deployed.content, 'base64')) !== releaseHash(Buffer.from(candidate.content, 'base64'))) throw new Error('Untrusted quality workflow');
+        const artifacts = reads.json(`repos/${RELEASE_REPOSITORY}/actions/runs/${run.id}/artifacts?per_page=100`).artifacts || [];
+        const artifact = artifacts.find(row => row.name === `fcos-quality-source-${binding.sha}` && row.expired === false);
+        if (!artifact || artifact.workflow_run?.id !== run.id || artifact.workflow_run?.head_sha !== run.head_sha) throw new Error('Quality source artifact missing');
+        const archive = reads.archive(`repos/${RELEASE_REPOSITORY}/actions/artifacts/${artifact.id}/zip`);
+        const payload = unpack(archive, 'fcos-quality-source.json');
+        if (artifact.digest !== `sha256:${releaseHash(archive)}` || payload.schemaVersion !== 1
+          || payload.candidateSha !== binding.sha || payload.lockSha256 !== binding.lockHash || !fresh(payload.capturedAt, now)) throw new Error('Quality source artifact binding');
+        if (run.conclusion !== 'success') assertReusableQualityJobs({ run, repository,
+          jobs: reads.json(`repos/${RELEASE_REPOSITORY}/actions/runs/${run.id}/attempts/1/jobs?per_page=100`), artifact, payload, now });
+        quality = { ...binding, runId: run.id, artifactId: artifact.id, archiveDigest: releaseHash(archive), result: 'success', capturedAt: payload.capturedAt };
+        break;
+      } catch { /* Preserve valid earlier proof when a later run lacks a completed test job. */ }
     }
   } catch { /* Missing exact-head proof is a blocker, never a local override. */ }
   if (!quality && binding?.sha === CANDIDATE_QUALITY_SHA) {

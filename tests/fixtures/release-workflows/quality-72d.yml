@@ -1,0 +1,149 @@
+name: FCOS quality
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: fcos-quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  code-and-database:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          # Verify immutable retained Production and compatibility Git objects.
+          fetch-depth: 0
+          # PR code must not receive a reusable GitHub credential through git.
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run verify:fcuno-contract
+        env:
+          # Read-only token required to fetch FCUNO's pinned contract. It is
+          # intentionally neither a repository secret nor persisted by git.
+          GITHUB_TOKEN: ${{ github.token }}
+      - run: npm run verify:compatibility
+      - run: npm test
+      - name: Verify isolated Python coordination ledger
+        run: python3 -m unittest tests.preview_email_coordination_ledger_test
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run verify:graph-only
+      - run: npm run build
+      - run: npm run verify:performance
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.113.0
+      - id: start-supabase
+        run: supabase start -x studio,imgproxy,edge-runtime,logflare,vector,supavisor
+      - run: FCOS_MIGRATION_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres FCOS_REQUIRE_LIVE_MIGRATION_CHECK=1 npm run verify:migrations
+      - name: Stop temporary Supabase services
+        if: ${{ always() && steps.start-supabase.outcome != 'skipped' && steps.start-supabase.outcome != '' }}
+        run: supabase stop --no-backup
+
+
+      - name: Record exact tested source
+        env:
+          CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { execFileSync } from 'node:child_process';
+          import { createHash } from 'node:crypto';
+          import { readFileSync, writeFileSync } from 'node:fs';
+          const candidateSha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+          if (candidateSha !== process.env.CANDIDATE_SHA) throw new Error('Quality checkout does not match the candidate.');
+          const lockSha256 = createHash('sha256').update(readFileSync('package-lock.json')).digest('hex');
+          writeFileSync('fcos-quality-source.json', JSON.stringify({ schemaVersion: 1, candidateSha, lockSha256, capturedAt: new Date().toISOString() }) + '\n');
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fcos-quality-source-${{ github.event.pull_request.head.sha || github.sha }}
+          path: fcos-quality-source.json
+          if-no-files-found: error
+          retention-days: 7
+
+  authenticated-browser:
+    # This job deliberately has no checkout, repository secrets, protected
+    # environment, or renewable identity. A PR candidate is untrusted code.
+    # The protected default-branch harness publishes a non-secret evidence
+    # artifact instead. A check-run name alone is forgeable by another workflow.
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    steps:
+      - name: Require trusted authenticated-candidate evidence artifact
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const sha = context.payload.pull_request.head.sha;
+            const defaultBranch = context.payload.repository.default_branch;
+            const trustedWorkflowPaths = new Set([
+              '.github/workflows/authenticated-release.yml',
+              `.github/workflows/authenticated-release.yml@${defaultBranch}`,
+            ]);
+            let data;
+            try {
+              ({ data } = await github.rest.actions.listWorkflowRuns({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: 'authenticated-release.yml',
+                event: 'workflow_dispatch',
+                status: 'success',
+                per_page: 100,
+              }));
+            } catch (error) {
+              if (error.status === 404) {
+                core.setFailed('The trusted authenticated-release workflow must be reviewed and installed on the default branch.');
+                return;
+              }
+              throw error;
+            }
+            let evidence = null;
+            for (const run of data.workflow_runs) {
+              if (run.conclusion !== 'success'
+                || run.event !== 'workflow_dispatch'
+                || !trustedWorkflowPaths.has(run.path)
+                || run.head_branch !== defaultBranch) continue;
+              const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: run.id,
+                per_page: 100,
+              });
+              evidence = artifacts.find((artifact) => (
+                artifact.name === `fcos-ci-evidence-${sha}` && artifact.expired !== true
+              ));
+              if (evidence) break;
+            }
+            if (!evidence) {
+              core.setFailed(
+                `No successful, non-expired trusted authenticated-candidate evidence artifact exists for ${sha}. `
+                + 'A reviewer must dispatch authenticated-release from the default branch with this exact SHA and immutable candidate URL.',
+              );
+            }
+
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+          # FCOS is a Vite SPA and does not enable React Router Server Components/actions.
+          allow-ghsas: GHSA-qwww-vcr4-c8h2

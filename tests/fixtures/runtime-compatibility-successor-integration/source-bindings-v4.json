@@ -1,0 +1,429 @@
+{
+  "schemaVersion": 4,
+  "purpose": "Exact actual current allowlisted source for portable successor and live-admission unit fixtures; no protected/source installation or provider authority",
+  "sourceCommit": "72d0907abebc575a790281a06441f0452be615c6",
+  "sourceTree": "8afaaa5e54f86153a8ae195f2e499e9e42cc19a8",
+  "historicalSourceBindingsSha256": "4e33b8b42a002cc46fde0fce41679417f25c58474cf474ca78af753c9b88e379",
+  "historicalPublicManifestSha256": "91e8ba3fdacb7cd03a2bed574248920a2d6416aa043c4e5daafd7a5f5ac53257",
+  "publicManifestSha256": "7335cb2d1482974c9dda3ee5552bcfc07befc5422329f0c0b2bc246635c4a71a",
+  "publicPackSha256": "edb0c7a0d0ac7f45dba5fcfc8f6d98cbbf9667f01713a5d7f7764dc7e7380628",
+  "sources": [
+    {
+      "path": ".codex/README.md",
+      "byteLength": 3335,
+      "sha256": "3837e5b1985e6c1fca3938fc23bcbbb166c8b455ec12392d3e3f7d9854fedfa2"
+    },
+    {
+      "path": ".codex/config.toml",
+      "byteLength": 3622,
+      "sha256": "af4edee8bbd03555d0fb40c4fc6b5901b66ace4ac184b25ae2e0c78b74ee9c5b"
+    },
+    {
+      "path": ".codex/control-policy.json",
+      "byteLength": 369,
+      "sha256": "95477d0dcbcc2d2328201585ddfe0a8a7391db0caa9664387b8e42935296f6b2"
+    },
+    {
+      "path": ".codex/control-validation.mjs",
+      "byteLength": 2123,
+      "sha256": "10ee550f146920a7d6fcb4353c20f023d20136b8ce031830c6af82b6b99ff814"
+    },
+    {
+      "path": ".codex/environments/environment-2.toml",
+      "byteLength": 629,
+      "sha256": "47b46dd529e329cc51e3cce11e3042f041f470226e480bdc6b6634d49e67e19f"
+    },
+    {
+      "path": ".codex/environments/environment.toml",
+      "byteLength": 629,
+      "sha256": "47b46dd529e329cc51e3cce11e3042f041f470226e480bdc6b6634d49e67e19f"
+    },
+    {
+      "path": ".codex/setup.mjs",
+      "byteLength": 6110,
+      "sha256": "b70610746072fb1566b536e61875d272c20ee183ae61c299cec5d0e8ffff6198"
+    },
+    {
+      "path": ".github/quality-candidates/f4576a8c918acef686f084c505b1715de11deeb8.json",
+      "byteLength": 474,
+      "sha256": "e1c48a5ed4a65f1bfa86cc37dd3ccec195f1fb4ed8002a3cb38f6e71fc73fd74"
+    },
+    {
+      "path": ".github/workflows/authenticated-release.yml",
+      "byteLength": 4997,
+      "sha256": "2d4fa7a983bc88d98c702852f0708f79bf9a39c8df3f4d0200e3caad073d2a31"
+    },
+    {
+      "path": ".github/workflows/candidate-quality.yml",
+      "byteLength": 10353,
+      "sha256": "1ce543d4d1c28a575c03a1db8bdedff0d488f88b46c54c5c718a9fd2b481b105"
+    },
+    {
+      "path": ".github/workflows/normal-role-release.yml",
+      "byteLength": 2212,
+      "sha256": "e261a23e28137bb230ced75c99a4a0fd084acff541c6e8fed4369cd479f24628"
+    },
+    {
+      "path": ".github/workflows/preview-email-proof-build.yml",
+      "byteLength": 7418,
+      "sha256": "9d1f2803dd43897c1228cc7f57dd21f2afd5069b32d082b7221d1d8b44554b1f"
+    },
+    {
+      "path": ".github/workflows/quality.yml",
+      "byteLength": 15966,
+      "sha256": "62769864aab99740187d5d6c27b10df39e48b62b4abb6612312bfaef0c85e6e2"
+    },
+    {
+      "path": ".github/workflows/routine-release.yml",
+      "byteLength": 8255,
+      "sha256": "82beee5ab3c7e0cf4092efa4ddc12b760799d29ac953ab95898d3c797fb79f33"
+    },
+    {
+      "path": ".github/workflows/runtime-compatibility-normal-role.yml",
+      "byteLength": 2407,
+      "sha256": "4241ac4c626186a6333e6c92e0635b54487b7778ca2e75982521c9bdc88989d0"
+    },
+    {
+      "path": ".github/workflows/runtime-compatibility-release.yml",
+      "byteLength": 5174,
+      "sha256": "0622354940923d2613ed64029b7536a70e3bbe9e3e1399d4c508a3520dd46783"
+    },
+    {
+      "path": "AGENTS.md",
+      "byteLength": 19458,
+      "sha256": "94a6dd93fc26a1c27aa3118e57b11906f542361e5ce322e1f2524bf16c7503cd"
+    },
+    {
+      "path": "api/_emailRouterHandlers.js",
+      "byteLength": 19071,
+      "sha256": "4d3e301b18fba542e9cb8adc982a7653f0f338c704501780df9b146698a644ee"
+    },
+    {
+      "path": "config/fcosCiIdentity.js",
+      "byteLength": 570,
+      "sha256": "598a051e4a8734e03c191a23da456a02c19eadff2e32328d6a5fd08ea736f89f"
+    },
+    {
+      "path": "config/fcosConnections.js",
+      "byteLength": 25771,
+      "sha256": "dc3afb39699837151f16243f592a84c3dd293670a5174a11d2dac7144e3eede9"
+    },
+    {
+      "path": "config/legacy-email-baseline-proof.json",
+      "byteLength": 2348,
+      "sha256": "7f76e2a25f33841f8237f6b7db070d4fed8ac9b9b290777fa9e3cf6a341c79c1"
+    },
+    {
+      "path": "config/preview-parity-policy.json",
+      "byteLength": 8064,
+      "sha256": "fe95da075bca9aa9ae0757a838cbd79752f6db95892c9544dfde1fe6f911c586"
+    },
+    {
+      "path": "config/runtime-compatibility-successor-live.json",
+      "byteLength": 1505,
+      "sha256": "aecc93e6152c23b0bee23834f045cc2a6ae8a9fd9057c205080c6ade7614a5c0"
+    },
+    {
+      "path": "config/runtime-compatibility-successor-source.json",
+      "byteLength": 9528,
+      "sha256": "867ebce63c4b34d0a73bbcbe0749a620f912e8a13c6484da269fda3850a9f432"
+    },
+    {
+      "path": "docs/preview-email-coordination.md",
+      "byteLength": 4269,
+      "sha256": "d4488dc8316a6137b29b278400e968275d54a0e79e20ce3d9e654e8993fcf00d"
+    },
+    {
+      "path": "package-lock.json",
+      "byteLength": 433624,
+      "sha256": "13506d3330b7e82f8280fc04438738c5fe6c776d640eb4d381c3d099a266a71d"
+    },
+    {
+      "path": "package.json",
+      "byteLength": 6067,
+      "sha256": "6d3aac5ae6e7285c46d0b5afaf6d3d3857787a1186909bf746687a78ee2e60f4"
+    },
+    {
+      "path": "playwright.config.js",
+      "byteLength": 2065,
+      "sha256": "61d124964ad02e366d35f9d63e84e9f68283253b11470a6d632d05285af3767b"
+    },
+    {
+      "path": "scripts/candidate-quality-receipt.mjs",
+      "byteLength": 5773,
+      "sha256": "6894b4aaa7b466096441935297942c168d913b31963f333bba5fd9a9a86a07f7"
+    },
+    {
+      "path": "scripts/collect-preview-parity.mjs",
+      "byteLength": 21970,
+      "sha256": "d2921172f7ca536a0137f1bb6a2b5ad14dddc1a1a12e8d967dda61a36c828237"
+    },
+    {
+      "path": "scripts/fcos-keychain-migrate.swift",
+      "byteLength": 5787,
+      "sha256": "4c39b451c5f321000edb49af9433dda9a8cd751520d3a8c4b8deb439f2ee9833"
+    },
+    {
+      "path": "scripts/lib/build-provenance.mjs",
+      "byteLength": 11806,
+      "sha256": "e09e63875b79f7324e27424119d47612606a7a985bcf9056b3fa3a307320bd16"
+    },
+    {
+      "path": "scripts/lib/candidate-quality.mjs",
+      "byteLength": 17618,
+      "sha256": "49562f4ffc162e0a6e6b35cdb4728680922ed8966f2352be82661e7f6804307c"
+    },
+    {
+      "path": "scripts/lib/compatibility-browser-isolation.mjs",
+      "byteLength": 11418,
+      "sha256": "6394fa9d0f8f2c85f29ba28c4917b12e15a7a99f5f8e19f17e54ff361d2f5807"
+    },
+    {
+      "path": "scripts/lib/github-provider-timestamp.mjs",
+      "byteLength": 644,
+      "sha256": "2bc7b5bef78e497b2051504367fc0d3912e043af7d14ac6d433ae6c5ec51d16e"
+    },
+    {
+      "path": "scripts/lib/legacy-email-baseline-proof.mjs",
+      "byteLength": 9537,
+      "sha256": "ae62fd7305a447860470d7db76f6d204735363f442488514344a99a1682be068"
+    },
+    {
+      "path": "scripts/lib/normal-role-read-requests.mjs",
+      "byteLength": 8810,
+      "sha256": "e583bc4069be5a67243d90c74290551d3e1e11752b7feb9a1a07c83795a666e8"
+    },
+    {
+      "path": "scripts/lib/normal-role-verification-transport.mjs",
+      "byteLength": 6886,
+      "sha256": "e2e9e1f4bd8ac926cafef5b43f84e385b7f804580f3a51922b0d0aca21bb3f9e"
+    },
+    {
+      "path": "scripts/lib/preview-email-build-controls.mjs",
+      "byteLength": 1964,
+      "sha256": "daa632f0f820309c6b02ebe351e21c8ae21db09685f8f7b0a253f4f85fec5d08"
+    },
+    {
+      "path": "scripts/lib/preview-email-build.mjs",
+      "byteLength": 40270,
+      "sha256": "4fce875df4b02357ac3984b6785346f4771a79340d16676df83f15a36f64a35f"
+    },
+    {
+      "path": "scripts/lib/preview-email-coordination-archive.mjs",
+      "byteLength": 4007,
+      "sha256": "f0b03fa83f7abf93d9f3b824d2858a8e7813a33d3796188d6869721718980d76"
+    },
+    {
+      "path": "scripts/lib/preview-email-coordination-collector.mjs",
+      "byteLength": 18057,
+      "sha256": "0e66d4920cf9bf6188f52e385f9ca36440a22722ca2b219f6a888a8c8283ea8b"
+    },
+    {
+      "path": "scripts/lib/preview-email-coordination-ledger.py",
+      "byteLength": 6428,
+      "sha256": "58d5f645dc5aae0964fe7c29d84aae1417a86399e16627a58149b59cea450ff1"
+    },
+    {
+      "path": "scripts/lib/preview-email-coordination.mjs",
+      "byteLength": 11942,
+      "sha256": "38c006da1b613c387ef7912709c31e6ff6f476e1273a8b3d96f9544920b1c203"
+    },
+    {
+      "path": "scripts/lib/preview-email-signer.mjs",
+      "byteLength": 11184,
+      "sha256": "6d1031765aedce2a654fc5d3968f2c1d59cb2e078896daef268cf3135e1b24a9"
+    },
+    {
+      "path": "scripts/lib/preview-parity.mjs",
+      "byteLength": 18597,
+      "sha256": "3385431a2e2f8ffa8c4de95f7bb611214166fad2f0c41b2c04ef65d917da09e5"
+    },
+    {
+      "path": "scripts/lib/preview-vercel-authority.mjs",
+      "byteLength": 16491,
+      "sha256": "1b005c04c78e385541d4b4040941f3795b48ead0adf24c658b84d0928f80867e"
+    },
+    {
+      "path": "scripts/lib/preview-vercel-enrollment.mjs",
+      "byteLength": 16469,
+      "sha256": "f9b6f62f95bf20029d6cf4d0113c490483e6fe6590b5c625938239d3e119a8bd"
+    },
+    {
+      "path": "scripts/lib/preview-vercel-successor-attestation.mjs",
+      "byteLength": 6985,
+      "sha256": "21cbc5e386189d738018ca1e7016bbbc1415ecd8e3013d197fa87f11ea894f1c"
+    },
+    {
+      "path": "scripts/lib/release-evidence.mjs",
+      "byteLength": 24880,
+      "sha256": "3a5a9e92032e33b5d87949fda299a916791f308ea7cfc81e49c9d20dfc6ce5fe"
+    },
+    {
+      "path": "scripts/lib/release-production.mjs",
+      "byteLength": 12679,
+      "sha256": "62f11c738d945c8b93eb3cfc71a2148792a4b53b0b263df6d7d269f38bad2874"
+    },
+    {
+      "path": "scripts/lib/release-readiness.mjs",
+      "byteLength": 9839,
+      "sha256": "1803a777b548214b01ba82143427f933bce74f58c46331b2c6c815f226e7e012"
+    },
+    {
+      "path": "scripts/lib/release-workflow.mjs",
+      "byteLength": 5596,
+      "sha256": "0319a14d9795d3451c0a407b4d765dfcd41d8d3a6140cc2296901d5af6375e43"
+    },
+    {
+      "path": "scripts/lib/runtime-compatibility-observation.mjs",
+      "byteLength": 16298,
+      "sha256": "4ab88ed4c94afb171b588928cf9e5f0b55746cde0373102d70eb4984eb9ed8a9"
+    },
+    {
+      "path": "scripts/lib/runtime-compatibility-release.mjs",
+      "byteLength": 50522,
+      "sha256": "f200e83153e956d897f937349d7f56fd2cba4b0a00895bcbeca536c1e04c16da"
+    },
+    {
+      "path": "scripts/lib/runtime-compatibility-successor-adapter.mjs",
+      "byteLength": 4774,
+      "sha256": "57fcee02930891c37cd58d15e1b552e492bda5da956af839ca6180f9f36ffd26"
+    },
+    {
+      "path": "scripts/lib/runtime-compatibility-successor-live.mjs",
+      "byteLength": 27597,
+      "sha256": "e2e37efb365053cf452613fef5077b5eb4444b3e301a91f67c9703b2c1db8629"
+    },
+    {
+      "path": "scripts/lib/runtime-compatibility-successor.mjs",
+      "byteLength": 14613,
+      "sha256": "f457df04f59a6f5808b9f9c63a968d9c5ee787da3c9670124df9be4728800aad"
+    },
+    {
+      "path": "scripts/lib/runtime-compatibility.mjs",
+      "byteLength": 10615,
+      "sha256": "ebc1f32f20f063e766e416d4e3a7e1f61c457fecaa3535f37b2cb4c1173b6d97"
+    },
+    {
+      "path": "scripts/normal-role-release.mjs",
+      "byteLength": 23806,
+      "sha256": "68b45555d3175ce21dff5278d2565ea950342330e43163efdb43480a3c3dc014"
+    },
+    {
+      "path": "scripts/preview-email-coordinator-local.mjs",
+      "byteLength": 11924,
+      "sha256": "60907625997171828f77b18e86e3fb1f14b8d191e239a096aeaded90323810e7"
+    },
+    {
+      "path": "scripts/preview-email-proof-build.mjs",
+      "byteLength": 31486,
+      "sha256": "7262597c42ffddf0329e45b5eb8598e8fed8c288b9571a6c6561a4e36a549d6e"
+    },
+    {
+      "path": "scripts/preview-vercel-enrollment.mjs",
+      "byteLength": 30898,
+      "sha256": "b20786a5aa400474c206265f757a3e1293dde6bb3d2c226b0c8243eb30b26de3"
+    },
+    {
+      "path": "scripts/preview-vercel-successor-attest.mjs",
+      "byteLength": 6819,
+      "sha256": "9a999a686ce9caeb3772605521a538c01e1339b72b376f3e44ae08f723db333d"
+    },
+    {
+      "path": "scripts/runtime-compatibility-normal-role.mjs",
+      "byteLength": 36957,
+      "sha256": "05e18017bd71bf294b819634678fc4b1570e626e6ddeeef6e7362335ee154015"
+    },
+    {
+      "path": "scripts/runtime-compatibility-release.mjs",
+      "byteLength": 38141,
+      "sha256": "dda48dc8bd9744d143d8cbe1215587098e5832599bc44015dc6bc59ee85ad3ce"
+    },
+    {
+      "path": "scripts/verify-e2e-candidate.mjs",
+      "byteLength": 10319,
+      "sha256": "f99491ce111f19bcc763684df9f5cea6add79e1798e1bb5f34c239b29c6177d6"
+    },
+    {
+      "path": "scripts/verify-runtime-compatibility-successor.mjs",
+      "byteLength": 11519,
+      "sha256": "f3ece87e194dad5d135e5a82f89cf0f11736c3c0088fd528fdecdb5acf52d5c4"
+    },
+    {
+      "path": "scripts/verify-runtime-compatibility.mjs",
+      "byteLength": 1927,
+      "sha256": "a181ba8a005422609c607bb5cdbb3c7e08d38317e4a34e0021b1d5df06c28eb4"
+    },
+    {
+      "path": "tests/compatibility-browser-isolation.chromium.mjs",
+      "byteLength": 8934,
+      "sha256": "06330a240f04f4dee9526f9a9f0bc2d781f6471819a34c24c0e636dceb9354b3"
+    },
+    {
+      "path": "tests/fixtures/runtime-compatibility-successor/fixture-manifest.json",
+      "byteLength": 67781,
+      "sha256": "8d26d2512a91352a5f47ae05ff7045f07a1d5ff50dde34dbfff5714d6837cc09"
+    },
+    {
+      "path": "tests/fixtures/runtime-compatibility-successor/independent-application-review.json",
+      "byteLength": 25069,
+      "sha256": "935671186dd4cd2a483f45393468239acd7de49fea367b61592fb8755f586b4b"
+    },
+    {
+      "path": "tests/fixtures/runtime-compatibility-successor/objects.pack",
+      "byteLength": 489133,
+      "sha256": "ea9cd50f5e6874c15739f288a57ce17103ffa20302b6d218790334f809949f11"
+    },
+    {
+      "path": "tests/fixtures/runtime-compatibility-successor/proposal-ff8859.patch",
+      "byteLength": 36682,
+      "sha256": "ce5c6ec4581288eb074a002ad7ff85c0b52d48da9fbcc1ebed48b39bc1a00f93"
+    },
+    {
+      "path": "tests/fixtures/runtime-compatibility-successor/root-application-review.json",
+      "byteLength": 1902,
+      "sha256": "707dd2c7f5c0f87adb37943133508661ba6bbd04a85669093176a9554e54f7d0"
+    },
+    {
+      "path": "tests/fixtures/runtime-compatibility-successor/root-successor-admission-design.json",
+      "byteLength": 2370,
+      "sha256": "c8427525bc54b6797223f7fe06f4db1b7c1e872f00f1d3ab65d20322436d8a0b"
+    },
+    {
+      "path": "tests/fixtures/runtime-compatibility-successor/successor-control-sync/canonical-agents-control-sync.patch",
+      "byteLength": 4041,
+      "sha256": "5e3473b1f628e5419cd05f8b167ee30322aba7c5ea7847bdfb160cc120b6d43b"
+    },
+    {
+      "path": "tests/fixtures/runtime-compatibility-successor/successor-control-sync/independent-control-sync-review.json",
+      "byteLength": 13635,
+      "sha256": "773e716409b790f9a272ec99549da5dc2d3147862a1ba39259bb8507d5a61fd8"
+    },
+    {
+      "path": "tests/fixtures/runtime-compatibility-successor/successor-control-sync/root-control-sync-review.json",
+      "byteLength": 1046,
+      "sha256": "f803046a46911cd7855fb25bdd02e43179724d06030644cc03ccbacbaf7bbb6a"
+    },
+    {
+      "path": "tests/fixtures/runtime-compatibility-successor/successor-preparation/independent-source-admission-review.json",
+      "byteLength": 13592,
+      "sha256": "732180649feec5a3c018f223b0d42f07fc7e7f6c824ef87cccc99d285906a46b"
+    },
+    {
+      "path": "tests/fixtures/runtime-compatibility-successor/successor-preparation/root-source-admission-review.json",
+      "byteLength": 955,
+      "sha256": "4b79343056f0ebbbc4eb764f4ded853032c73e3e6aacf6279ce97d2f1f57f016"
+    },
+    {
+      "path": "tests/runtimeCompatibilitySuccessor.test.js",
+      "byteLength": 22235,
+      "sha256": "c7a69503d605a672c76e2474818551a2bec65098c444d6e76b7acce7c96feadd"
+    },
+    {
+      "path": "vercel.json",
+      "byteLength": 1613,
+      "sha256": "735659fbf010d4d1aed7ed6d22f8e62b47a329bfb582333c7a2faaec6eba5807"
+    }
+  ],
+  "previousSourceBindingsSha256": "f380529fc56450a521ac2d83dc0d8b4de55b05a40f7f1e7835c47db7662fb3cb",
+  "sourceCommitMeaning": "Base commit only; sources below bind the exact reviewed working source, including the coordinated release patch and canonical control carryover."
+}
