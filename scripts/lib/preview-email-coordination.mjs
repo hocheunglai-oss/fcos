@@ -5,19 +5,14 @@ import { SUCCESSOR_LIVE_CONTRACT, successorLiveSelection } from './runtime-compa
 import { assertTrustedPreviewEmailIntentRecord } from './preview-email-build.mjs';
 import { githubProviderFresh } from './github-provider-timestamp.mjs';
 
-// Human implementation-purpose authority4e2cd1fb... permits this design only.
-// Actual key access/signing/publication/claim upload and Preview remain disabled.
+// Source implementation is not action authority. Fixed collectors separately
+// admit the exact original action, observed backend proof and real signed grant.
 export const PREVIEW_COORDINATION_DOMAIN = 'FCOS-EXACT-04EE-COORDINATION-GRANT-V1\0';
 export const PREVIEW_COORDINATION_VARIABLE = 'FCOS_PREVIEW_EMAIL_COORDINATION_GRANT';
 export const PREVIEW_COORDINATION_FILENAME = 'fcos-preview-email-coordination-claim.json';
 export const PREVIEW_COORDINATION_TARGET = ENROLLMENT_FIXED_TARGET;
 export const PREVIEW_COORDINATION_CANONICAL = Object.freeze({ helperSha256: '2bb8591f79b76b92f917ae7fcc1720d73757b613771812e9e220db015bdd1a18',
   epoch: 'production-reconciliation-20261005', objective: 'production', ownerThreadId: '01a0f08b-7fcb-7870-9edc-343e16052b62' });
-const LIVE_PROTECTED_ACTIONS_INSTALLED = false;
-export function requirePreviewCoordinationProtectedActions() {
-  if (!LIVE_PROTECTED_ACTIONS_INSTALLED) throw Object.assign(new Error('Preview coordination protected actions are not installed; source-only authority grants no private reads/signing/publication/upload or Preview.'),
-    { code: 'PREVIEW_COORDINATION_PROTECTED_ACTIONS_NOT_INSTALLED' });
-}
 export const coordinationHash = value => createHash('sha256').update(value).digest('hex');
 export const coordinationSame = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const positive = value => Number.isSafeInteger(value) && value > 0;
@@ -108,13 +103,17 @@ export function validateCoordinationLease(raw, binding) {
 }
 /** Pure grant construction/verification are deliberately unbranded. Fixture
  * keys and clocks can validate data, never enter the production capability set. */
-export function coordinationGrantData({ binding, lease, consumptionSha256, issuedAt, expiresAt }) {
+export function coordinationGrantData({ binding, lease, consumptionSha256, actionSha256, backendReviewSha256, backendClosureSha256,
+  authorizedAt, privateReadinessAt, issuedAt, expiresAt }) {
   const b = validateCoordinationBinding(binding, issuedAt);
-  if (!hash(consumptionSha256) || !positive(issuedAt) || !positive(expiresAt) || expiresAt <= issuedAt
-    || expiresAt > Math.min(issuedAt + 600000, coordinationDeadline(b)) || issuedAt < Math.max(b.issuanceObservedAt, Date.parse(b.intentAt))) coordinationFailure();
+  if (![consumptionSha256, actionSha256, backendReviewSha256, backendClosureSha256].every(hash)
+    || ![authorizedAt, privateReadinessAt, issuedAt, expiresAt].every(positive) || privateReadinessAt > authorizedAt || authorizedAt > issuedAt
+    || expiresAt <= issuedAt || expiresAt > Math.min(issuedAt + 600000, coordinationDeadline(b), authorizedAt + 600000, privateReadinessAt + 2700000)
+    || issuedAt < Math.max(b.issuanceObservedAt, Date.parse(b.intentAt))) coordinationFailure();
   return { schemaVersion: 1, kind: 'fcos_exact_04ee_coordination_grant', keyId: FCOS_CONNECTION_POLICY.attestation.keyId,
     target: ENROLLMENT_FIXED_TARGET, binding: b, helperSha256: PREVIEW_COORDINATION_CANONICAL.helperSha256,
-    lease: validateCoordinationLease(lease, b), consumptionSha256, issuedAt, expiresAt,
+    lease: validateCoordinationLease(lease, b), consumptionSha256, actionSha256, backendReviewSha256, backendClosureSha256,
+    authorizedAt, privateReadinessAt, issuedAt, expiresAt,
     coordinationOnly: true, productionAuthorized: false };
 }
 export function coordinationGrantMessage(grant) { return Buffer.from(`${PREVIEW_COORDINATION_DOMAIN}${JSON.stringify(grant)}`); }
@@ -122,7 +121,7 @@ export function verifyCoordinationGrantData({ envelope, expected, now = Date.now
   try {
     const parsed = normalizeCoordinationEnvelope(envelope), wrapped = ordered(parsed.value, ['grant', 'signature']);
     const g = ordered(wrapped.grant, ['schemaVersion', 'kind', 'keyId', 'target', 'binding', 'helperSha256', 'lease', 'consumptionSha256',
-      'issuedAt', 'expiresAt', 'coordinationOnly', 'productionAuthorized']);
+      'actionSha256', 'backendReviewSha256', 'backendClosureSha256', 'authorizedAt', 'privateReadinessAt', 'issuedAt', 'expiresAt', 'coordinationOnly', 'productionAuthorized']);
     const canonical = coordinationGrantData(g);
     if (!coordinationSame(g, canonical) || !coordinationSame(g.binding, validateCoordinationBinding(expected, now))
       || g.issuedAt > now || g.expiresAt <= now) coordinationFailure();

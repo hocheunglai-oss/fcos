@@ -1,0 +1,92 @@
+{
+  "schemaVersion": 1,
+  "kind": "fcos_exact_04ee_closed_backend_review",
+  "accepted": true,
+  "grantsActivation": false,
+  "privateSigningAuthority": false,
+  "productionDeploymentAuthority": false,
+  "acceptanceText": "{\n  \"kind\": \"root_accepted_actual_pr105_artifact_backend_proof_v1\",\n  \"accepted\": true,\n  \"at\": \"2026-10-10T12:36:56.389075+00:00\",\n  \"binding\": {\n    \"repository\": \"hocheunglai-oss/fcos\",\n    \"harnessSha\": \"335ee8537391a64b69d480871447f4808c3443a3\",\n    \"runId\": 38052161466,\n    \"jobId\": 114213305619\n  },\n  \"actionPublication\": {\n    \"path\": \"/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/schedule-consolidation-20261004/production-reconciliation-coordinator-20261005/rapid-release-optimization-20261010/source-root-termination-repair-20261010/backend-proof/proof-action/actual-action-readback.json\",\n    \"sha256\": \"fafdef1b0ef3b932fbef32b3b9f06dc732d9c84128405df053c5e413abe075b0\"\n  },\n  \"terminalBoundary\": {\n    \"path\": \"/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/schedule-consolidation-20261004/production-reconciliation-coordinator-20261005/rapid-release-optimization-20261010/source-root-termination-repair-20261010/backend-proof/terminal-artifact-boundary.json\",\n    \"sha256\": \"f5ee1dd4ea39c08a043b8c7227125457d811df4bac10e8fc734e1251785810dd\"\n  },\n  \"archives\": {\n    \"fcos-coordination-proof-concurrent-38052161466\": {\n      \"metadata\": {\n        \"id\": 11670745040,\n        \"node_id\": \"MDg6QXJ0aWZhY3QxMTY3MDc0NTA0MA==\",\n        \"name\": \"fcos-coordination-proof-concurrent-38052161466\",\n        \"size_in_bytes\": 410,\n        \"url\": \"https://api.github.com/repos/hocheunglai-oss/fcos/actions/artifacts/11670745040\",\n        \"archive_download_url\": \"https://api.github.com/repos/hocheunglai-oss/fcos/actions/artifacts/11670745040/zip\",\n        \"expired\": false,\n        \"digest\": \"sha256:b4490e73e3f46f9af93b5284b48bb176120cb151c39c435d502373d078e2e138\",\n        \"created_at\": \"2026-10-10T12:34:58Z\",\n        \"updated_at\": \"2026-10-10T12:34:58Z\",\n        \"expires_at\": \"2026-11-09T12:34:58Z\",\n        \"workflow_run\": {\n          \"id\": 38052161466,\n          \"repository_id\": 1278654816,\n          \"head_repository_id\": 1278654816,\n          \"head_branch\": \"main\",\n          \"head_sha\": \"335ee8537391a64b69d480871447f4808c3443a3\"\n        }\n      },\n      \"archive\": {\n        \"path\": \"/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/schedule-consolidation-20261004/production-reconciliation-coordinator-20261005/rapid-release-optimization-20261010/source-root-termination-repair-20261010/backend-proof/actual-artifact-11670745040.zip\",\n        \"sha256\": \"b4490e73e3f46f9af93b5284b48bb176120cb151c39c435d502373d078e2e138\"\n      },\n      \"payload\": {\n        \"path\": \"/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/schedule-consolidation-20261004/production-reconciliation-coordinator-20261005/rapid-release-optimization-20261010/source-root-termination-repair-20261010/backend-proof/actual-artifact-11670745040.json\",\n        \"sha256\": \"fc135f4d86c3c04e29f9db73bb576f54161131756d2b8f5c0d94b459fcb49f40\"\n      }\n    },\n    \"fcos-coordination-proof-result-38052161466\": {\n      \"metadata\": {\n        \"id\": 11670710077,\n        \"node_id\": \"MDg6QXJ0aWZhY3QxMTY3MDcxMDA3Nw==\",\n        \"name\": \"fcos-coordination-proof-result-38052161466\",\n        \"size_in_bytes\": 1095,\n        \"url\": \"https://api.github.com/repos/hocheunglai-oss/fcos/actions/artifacts/11670710077\",\n        \"archive_download_url\": \"https://api.github.com/repos/hocheunglai-oss/fcos/actions/artifacts/11670710077/zip\",\n        \"expired\": false,\n        \"digest\": \"sha256:2ca58c267a5d74feb698329b5ededc101014524e01d8b9dab0fad4ea10a16443\",\n        \"created_at\": \"2026-10-10T12:35:06Z\",\n        \"updated_at\": \"2026-10-10T12:35:06Z\",\n        \"expires_at\": \"2026-11-09T12:35:06Z\",\n        \"workflow_run\": {\n          \"id\": 38052161466,\n          \"repository_id\": 1278654816,\n          \"head_repository_id\": 1278654816,\n          \"head_branch\": \"main\",\n          \"head_sha\": \"335ee8537391a64b69d480871447f4808c3443a3\"\n        }\n      },\n      \"archive\": {\n        \"path\": \"/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/schedule-consolidation-20261004/production-reconciliation-coordinator-20261005/rapid-release-optimization-20261010/source-root-termination-repair-20261010/backend-proof/actual-artifact-11670710077.zip\",\n        \"sha256\": \"2ca58c267a5d74feb698329b5ededc101014524e01d8b9dab0fad4ea10a16443\"\n      },\n      \"payload\": {\n        \"path\": \"/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/schedule-consolidation-20261004/production-reconciliation-coordinator-20261005/rapid-release-optimization-20261010/source-root-termination-repair-20261010/backend-proof/actual-artifact-11670710077.json\",\n        \"sha256\": \"daa8ddc84aa8f1e5a0cf04044e375ba51aa9e61a72ec927ea61f931c9e9ff024\"\n      }\n    },\n    \"fcos-coordination-proof-crash-38052161466\": {\n      \"metadata\": {\n        \"id\": 11670465501,\n        \"node_id\": \"MDg6QXJ0aWZhY3QxMTY3MDQ2NTUwMQ==\",\n        \"name\": \"fcos-coordination-proof-crash-38052161466\",\n        \"size_in_bytes\": 410,\n        \"url\": \"https://api.github.com/repos/hocheunglai-oss/fcos/actions/artifacts/11670465501\",\n        \"archive_download_url\": \"https://api.github.com/repos/hocheunglai-oss/fcos/actions/artifacts/11670465501/zip\",\n        \"expired\": false,\n        \"digest\": \"sha256:25c12b7831db31503e7dc8bac2dd3e09aaf32fb5d57c112aa6fe4006800efa4c\",\n        \"created_at\": \"2026-10-10T12:35:02Z\",\n        \"updated_at\": \"2026-10-10T12:35:02Z\",\n        \"expires_at\": \"2026-11-09T12:35:02Z\",\n        \"workflow_run\": {\n          \"id\": 38052161466,\n          \"repository_id\": 1278654816,\n          \"head_repository_id\": 1278654816,\n          \"head_branch\": \"main\",\n          \"head_sha\": \"335ee8537391a64b69d480871447f4808c3443a3\"\n        }\n      },\n      \"archive\": {\n        \"path\": \"/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/schedule-consolidation-20261004/production-reconciliation-coordinator-20261005/rapid-release-optimization-20261010/source-root-termination-repair-20261010/backend-proof/actual-artifact-11670465501.zip\",\n        \"sha256\": \"25c12b7831db31503e7dc8bac2dd3e09aaf32fb5d57c112aa6fe4006800efa4c\"\n      },\n      \"payload\": {\n        \"path\": \"/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/schedule-consolidation-20261004/production-reconciliation-coordinator-20261005/rapid-release-optimization-20261010/source-root-termination-repair-20261010/backend-proof/actual-artifact-11670465501.json\",\n        \"sha256\": \"cd8796e9e03311eb0da12792026d919d5e6c3f848f16aed6108641201837fc13\"\n      }\n    }\n  },\n  \"actualReport\": {\n    \"schemaVersion\": 1,\n    \"kind\": \"fcos_actual_artifact_coordination_backend_proof\",\n    \"binding\": {\n      \"repository\": \"hocheunglai-oss/fcos\",\n      \"harnessSha\": \"335ee8537391a64b69d480871447f4808c3443a3\",\n      \"runId\": 38052161466,\n      \"jobId\": 114213305619\n    },\n    \"rootAction\": {\n      \"kind\": \"root_admitted_artifact_coordination_proof\",\n      \"binding\": {\n        \"repository\": \"hocheunglai-oss/fcos\",\n        \"harnessSha\": \"335ee8537391a64b69d480871447f4808c3443a3\",\n        \"runId\": 38052161466,\n        \"jobId\": 114213305619\n      },\n      \"authorizedBy\": \"hocheunglai-oss\",\n      \"actionAuthorizationSha256\": \"0fa32fa704719024ce457211c0610b586bc4ca1b9a8cd35f159676bce20a7a66\",\n      \"authorizedAt\": 1791635691554,\n      \"lease\": {\n        \"epoch\": \"production-reconciliation-20261005\",\n        \"objective\": \"production\",\n        \"ownerThreadId\": \"01a0f08b-7fcb-7870-9edc-343e16052b62\",\n        \"operationId\": \"fcos-release-coordination-proof-38052161466\",\n        \"bindingSha256\": \"38ad91957044dfab49f17192d277482cefae2422f0269a2d21ae54e8ebdeab1d\",\n        \"leaseId\": \"a031603c-e939-47a3-8cf4-328abdbf1700\",\n        \"coordinationOnly\": true,\n        \"providerAuthorityGranted\": false,\n        \"uncertainOutcomeRequiresReadback\": true\n      }\n    },\n    \"capturedAt\": \"2026-10-10T12:35:06.122Z\",\n    \"concurrency\": \"one-winner-one-refusal\",\n    \"duplicate\": \"refused\",\n    \"uncertainChildOutcome\": \"GET-only-recovered\",\n    \"immutableReadback\": true,\n    \"artifacts\": [\n      {\n        \"id\": 11670745040,\n        \"digest\": \"b4490e73e3f46f9af93b5284b48bb176120cb151c39c435d502373d078e2e138\",\n        \"marker\": \"first\",\n        \"createdAt\": \"2026-10-10T12:34:58Z\"\n      },\n      {\n        \"id\": 11670465501,\n        \"digest\": \"25c12b7831db31503e7dc8bac2dd3e09aaf32fb5d57c112aa6fe4006800efa4c\",\n        \"marker\": \"crash\",\n        \"createdAt\": \"2026-10-10T12:35:02Z\"\n      }\n    ],\n    \"grantsActivation\": false,\n    \"deploymentAuthority\": false,\n    \"requiresRootTerminalReadbackAndLeaseResolution\": true,\n    \"limitation\": \"Artifact backend observations only; no automatic activation, Vercel operation, key access or canonical lease mutation.\"\n  },\n  \"originalDeadline\": \"2026-10-10T12:59:49+00:00\",\n  \"actualPersonalReviewVerified\": true,\n  \"concurrencyOneWinnerOneRefusal\": true,\n  \"duplicateRefused\": true,\n  \"crashGetOnlyRecovered\": true,\n  \"immutableReadbackVerified\": true,\n  \"archiveDigestsMatchedActualProviderMetadata\": true,\n  \"canonicalLeaseResolutionStillRequired\": true,\n  \"backendActivationAuthority\": false,\n  \"privateSigningAuthority\": false,\n  \"productionDeploymentAuthority\": false,\n  \"financialAuthority\": false,\n  \"objectiveComplete\": false\n}\n",
+  "closureText": "{\n  \"kind\": \"root_reviewed_actual_pr105_artifact_backend_proof_operation_closure_v1\",\n  \"at\": \"2026-10-10T12:40:56.020875+00:00\",\n  \"accepted\": true,\n  \"binding\": {\n    \"repository\": \"hocheunglai-oss/fcos\",\n    \"harnessSha\": \"335ee8537391a64b69d480871447f4808c3443a3\",\n    \"runId\": 38052161466,\n    \"jobId\": 114213305619\n  },\n  \"actualBackendAcceptance\": {\n    \"path\": \"/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/schedule-consolidation-20261004/production-reconciliation-coordinator-20261005/rapid-release-optimization-20261010/source-root-termination-repair-20261010/backend-proof/root-actual-backend-proof-acceptance.json\",\n    \"sha256\": \"98cdee83ece7c4a70d77c8f8f54a1161c6251fddebfa24ea0d645be1cdedb417\"\n  },\n  \"actualTerminalBoundary\": {\n    \"path\": \"/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/schedule-consolidation-20261004/production-reconciliation-coordinator-20261005/rapid-release-optimization-20261010/source-root-termination-repair-20261010/backend-proof/terminal-artifact-boundary.json\",\n    \"sha256\": \"f5ee1dd4ea39c08a043b8c7227125457d811df4bac10e8fc734e1251785810dd\"\n  },\n  \"originalActionPublication\": {\n    \"path\": \"/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/schedule-consolidation-20261004/production-reconciliation-coordinator-20261005/rapid-release-optimization-20261010/source-root-termination-repair-20261010/backend-proof/proof-action/actual-action-readback.json\",\n    \"sha256\": \"fafdef1b0ef3b932fbef32b3b9f06dc732d9c84128405df053c5e413abe075b0\"\n  },\n  \"lease\": {\n    \"epoch\": \"production-reconciliation-20261005\",\n    \"objective\": \"production\",\n    \"ownerThreadId\": \"01a0f08b-7fcb-7870-9edc-343e16052b62\",\n    \"operationId\": \"fcos-release-coordination-proof-38052161466\",\n    \"bindingSha256\": \"38ad91957044dfab49f17192d277482cefae2422f0269a2d21ae54e8ebdeab1d\",\n    \"leaseId\": \"a031603c-e939-47a3-8cf4-328abdbf1700\",\n    \"coordinationOnly\": true,\n    \"providerAuthorityGranted\": false,\n    \"uncertainOutcomeRequiresReadback\": true\n  },\n  \"materialAcceptance\": {\n    \"originalRunAndJobTerminalSuccess\": true,\n    \"archiveDigestsAndPayloadBindingsVerified\": true,\n    \"oneWinnerOneRefusal\": true,\n    \"duplicateRefused\": true,\n    \"uncertainChildGetOnlyRecovered\": true,\n    \"immutableReadbackVerified\": true,\n    \"noPreviewOrProviderDeploymentOccurred\": true,\n    \"originalDeadlineUnchanged\": true\n  },\n  \"operationConsumed\": true,\n  \"replayPermitted\": false,\n  \"backendProofPrerequisiteComplete\": true,\n  \"previewActivationAuthority\": false,\n  \"privateSigningAuthority\": false,\n  \"productionDeploymentAuthority\": false,\n  \"financialAuthority\": false,\n  \"objectiveComplete\": false\n}\n",
+  "sources": [
+    {
+      "path": ".github/workflows/release-coordination-proof.yml",
+      "sha256": "c4298afc1cd628e804c9a9692a00929b58414ddde5a4ed8595f1fa1167bab5c3",
+      "mode": "100644"
+    },
+    {
+      "path": "scripts/release-coordination-proof.mjs",
+      "sha256": "48891f960496f3e18a73d8fde644896042f78578b0ff98211468216f6546472a",
+      "mode": "100644"
+    },
+    {
+      "path": "scripts/lib/release-coordination-proof-worker.mjs",
+      "sha256": "3d8e0550791440a53a0ce8da92a0cc940a0e42b353c3cb99cbdb5145b0b64145",
+      "mode": "100644"
+    },
+    {
+      "path": "scripts/release-coordinator-local.mjs",
+      "sha256": "69f75e60d4f6893c1af4c0fdd2bbdbaeb710d86b20f772a3b76fc550c2e682e9",
+      "mode": "100644"
+    },
+    {
+      "path": "scripts/lib/release-coordination.mjs",
+      "sha256": "cbb3bb53a46e265498658187490f91678b81a8d945207197dfd63a87328990e5",
+      "mode": "100644"
+    },
+    {
+      "path": "scripts/lib/release-coordination-trust.mjs",
+      "sha256": "9de8220a1023d051964c98b02b024c2bb956fcb2c47b7bfa3460ff8e847b54b0",
+      "mode": "100644"
+    },
+    {
+      "path": "scripts/lib/release-coordination-controls.mjs",
+      "sha256": "f922f84df8fd2bdc7ef839a5010eec45fe04e0dc18e6d59343fa68ceba2e1855",
+      "mode": "100644"
+    },
+    {
+      "path": "scripts/lib/release-evidence.mjs",
+      "sha256": "3a5a9e92032e33b5d87949fda299a916791f308ea7cfc81e49c9d20dfc6ce5fe",
+      "mode": "100644"
+    },
+    {
+      "path": "scripts/lib/release-production.mjs",
+      "sha256": "62525ead072463dab4f4f3d1e17ba442693b090094fea13eb6adfefcfae51078",
+      "mode": "100644"
+    },
+    {
+      "path": "scripts/lib/release-readiness.mjs",
+      "sha256": "6e3628555f40f5ab888883cbb979f5b251b1f0cb9fe8c3bb105fb798e191eb1f",
+      "mode": "100644"
+    },
+    {
+      "path": "scripts/lib/preview-email-coordination.mjs",
+      "sha256": "38c006da1b613c387ef7912709c31e6ff6f476e1273a8b3d96f9544920b1c203",
+      "mode": "100644"
+    },
+    {
+      "path": "scripts/lib/preview-email-coordination-archive.mjs",
+      "sha256": "f0b03fa83f7abf93d9f3b824d2858a8e7813a33d3796188d6869721718980d76",
+      "mode": "100644"
+    },
+    {
+      "path": "config/fcosConnections.js",
+      "sha256": "dc3afb39699837151f16243f592a84c3dd293670a5174a11d2dac7144e3eede9",
+      "mode": "100644"
+    },
+    {
+      "path": "config/fcosCiIdentity.js",
+      "sha256": "598a051e4a8734e03c191a23da456a02c19eadff2e32328d6a5fd08ea736f89f",
+      "mode": "100644"
+    },
+    {
+      "path": "package.json",
+      "sha256": "6d3aac5ae6e7285c46d0b5afaf6d3d3857787a1186909bf746687a78ee2e60f4",
+      "mode": "100644"
+    },
+    {
+      "path": "package-lock.json",
+      "sha256": "13506d3330b7e82f8280fc04438738c5fe6c776d640eb4d381c3d099a266a71d",
+      "mode": "100644"
+    }
+  ]
+}

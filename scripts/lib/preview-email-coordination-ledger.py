@@ -1,7 +1,7 @@
 """Permanent operation consumption. No provider or signing authority.
 
-Production invocation is deliberately disabled under implementation-only human
-authority. Fixture calls are restricted to OS temporary directories. The exact
+The fixed entrypoint requires the reviewed local issuer action admission.
+Fixture calls are restricted to OS temporary directories. The exact
 unchanged canonical WriteLease owns serialization; this module never resolves it.
 """
 import hashlib
@@ -11,10 +11,10 @@ import os
 from pathlib import Path
 import re
 import sys
+import subprocess
 import tempfile
 import time
 
-PROTECTED_ACTIONS_INSTALLED = False
 BASE = Path('/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/schedule-consolidation-20261004/production-reconciliation-coordinator-20261005')
 HELPER = BASE / 'public-preview-cancellation-v4/coordinator_guard.py'
 HELPER_SHA256 = '2bb8591f79b76b92f917ae7fcc1720d73757b613771812e9e220db015bdd1a18'
@@ -44,14 +44,140 @@ def load_guard(helper):
     exec(compile(raw, str(helper), 'exec'), module.__dict__)
     return module
 
-def claim_and_consume(binding_text, workflow, directory, helper, fixture=False):
+def private_json(path):
+    raw = regular(path)
+    info = Path(path).stat()
+    if info.st_uid != os.getuid() or info.st_mode & 0o777 != 0o600 or len(raw) > 65536:
+        raise ValueError('private root admission required')
+    return json.loads(raw)
+
+def assert_remote_source(root, action, remote):
+    """Pure comparison. Actual entry gets remote data from fixed authenticated GitHub GETs."""
+    sha = action['binding']['harnessSha']
+    user, repository, branch, protection, tree = [remote[k] for k in ['user', 'repository', 'branch', 'protection', 'tree']]
+    if (user.get('login') != 'hocheunglai-oss' or not isinstance(user.get('id'), int) or user['id'] < 1
+            or repository.get('full_name') != 'hocheunglai-oss/fcos' or repository.get('default_branch') != 'main'
+            or repository.get('permissions', {}).get('admin') is not True or branch.get('name') != 'main'
+            or branch.get('protected') is not True or branch.get('commit', {}).get('sha') != sha
+            or protection.get('enforce_admins', {}).get('enabled') is not True
+            or protection.get('required_status_checks', {}).get('strict') is not True
+            or tree.get('sha') != branch.get('commit', {}).get('commit', {}).get('tree', {}).get('sha')
+            or tree.get('truncated') is not False or not isinstance(tree.get('tree'), list)):
+        raise ValueError('actual protected main source required')
+    selected = [row for row in tree['tree'] if row.get('type') != 'tree' and
+        (row.get('path', '').startswith(('scripts/', 'config/', '.github/', '.codex/'))
+         or row.get('path') in ['AGENTS.md', 'package.json', 'package-lock.json'])]
+    if len({row['path'] for row in selected}) != len(selected) or not {
+            'scripts/lib/preview-email-coordination-ledger.py', 'scripts/preview-email-coordinator-local.mjs', 'package-lock.json'} <= {row['path'] for row in selected}:
+        raise ValueError('complete source closure required')
+    for row in selected:
+        relative = row['path']
+        if relative.startswith('/') or any(part in ['', '.', '..'] for part in relative.split('/')) or row.get('mode') not in ['100644', '100755'] or row.get('type') != 'blob':
+            raise ValueError('regular protected source required')
+        path = root / relative
+        raw = regular(path)
+        if (hashlib.sha1(('blob ' + str(len(raw)) + '\0').encode() + raw).hexdigest() != row.get('sha')
+                or ('100755' if path.stat().st_mode & 0o111 else '100644') != row['mode']):
+            raise ValueError('local source differs from actual protected main')
+    if hashlib.sha256(regular(root / 'scripts/preview-email-coordinator-local.mjs')).hexdigest() != action.get('scriptSha256'):
+        raise ValueError('issuer differs from exact action review')
+
+def authenticated_issuer(nonce):
+    # Independent bootstrap: no sibling JavaScript is loaded until its entire
+    # control closure matches the actual authenticated protected-main Git tree.
+    primary = Path('/Users/vincex/Documents/FCOS')
+    directory = primary / '.fcos-cli/preview-email-coordination'
+    info = directory.lstat()
+    if directory.is_symlink() or info.st_uid != os.getuid() or info.st_mode & 0o777 != 0o700:
+        raise ValueError('private admission directory required')
+    action = private_json(directory / ('approval-' + nonce + '.json'))
+    now = int(time.time() * 1000)
+    if (action.get('kind') != 'root_admitted_preview_coordination_action' or action.get('action') != 'issue-preview-coordination'
+            or action.get('nonce') != nonce or action.get('purpose') != 'FCOS-EXACT-04EE-COORDINATION-GRANT-V1\0'
+            or action.get('authorizedBy') != 'hocheunglai-oss' or action.get('canonicalHelperSha256') != HELPER_SHA256
+            or not isinstance(action.get('authorizedAt'), int) or not 0 <= now - action['authorizedAt'] < 600000
+            or not isinstance(action.get('privateReadinessAt'), int) or not 0 <= now - action['privateReadinessAt'] < 2700000
+            or not re.fullmatch(r'[a-f0-9]{40}', action.get('binding', {}).get('harnessSha', ''))):
+        raise ValueError('original root action required')
+    # Private action authority is not inferred from source approval or a public DTO.
+    evidence = action.get('privateActionEvidence', {})
+    authority = private_json(evidence.get('path', ''))
+    if (hashlib.sha256(regular(evidence['path'])).hexdigest() != evidence.get('sha256')
+            or evidence.get('sha256') != action.get('actionAuthorizationEvidenceSha256')
+            or authority.get('authorizedAt') != action.get('authorizedAt')
+            or authority.get('kind') != 'direct_human_preview_coordination_private_action_authority'
+            or authority.get('authorizedBy') != 'hocheunglai-oss'
+            or authority.get('purpose') != action.get('purpose')
+            or authority.get('sourceCommit') != action['binding']['harnessSha']
+            or authority.get('scriptSha256') != action.get('scriptSha256')
+            or authority.get('bindingSha256') != hashlib.sha256(json.dumps(action['binding'], separators=(',', ':'), ensure_ascii=False).encode()).hexdigest()
+            or authority.get('privateReadinessAt') != action.get('privateReadinessAt')
+            or any(authority.get(key) is not True for key in ['privateKeyAccessAuthorized', 'actualSigningAuthorized', 'protectedPublicationAuthorized', 'hostedClaimAuthorized', 'previewExecutionAuthorized'])
+            or authority.get('productionAuthorized') is not False):
+        raise ValueError('direct exact private action evidence required')
+    reviews = []
+    for role in ['root', 'independent']:
+        reference = action[role + 'Review']
+        raw = regular(reference['path'])
+        review = private_json(reference['path'])
+        if (hashlib.sha256(raw).hexdigest() != reference.get('sha256') or review.get('kind') != 'preview_coordination_action_material_review'
+                or review.get('role') != role or review.get('accepted') is not True or review.get('sourceCommit') != action['binding']['harnessSha']
+                or review.get('scriptSha256') != action.get('scriptSha256')
+                or review.get('bindingSha256') != authority.get('bindingSha256')
+                or review.get('backendReviewSha256') != action.get('backendReviewSha256')):
+            raise ValueError('exact independent source reviews required')
+        reviews.append(review)
+    if not reviews[0].get('reviewerId') or reviews[0]['reviewerId'] == reviews[1].get('reviewerId'):
+        raise ValueError('distinct material reviewers required')
+    env = {'PATH': '/usr/bin:/bin', 'HOME': '/Users/vincex', 'GH_HOST': 'github.com',
+           'GH_REPO': 'hocheunglai-oss/fcos', 'GH_CONFIG_DIR': str(primary / '.fcos-cli/github')}
+    def get(endpoint):
+        result = subprocess.run(['/Users/vincex/.local/gh/current/bin/gh', 'api', '--method', 'GET', endpoint],
+            env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30, check=True)
+        if len(result.stdout) > 16 * 1024 * 1024:
+            raise ValueError('bounded source response required')
+        return json.loads(result.stdout)
+    base = 'repos/hocheunglai-oss/fcos'
+    user = get('user')
+    if user.get('login') != 'hocheunglai-oss':
+        raise ValueError('pinned account required')
+    repository = get(base)
+    if repository.get('full_name') != 'hocheunglai-oss/fcos' or repository.get('default_branch') != 'main':
+        raise ValueError('pinned repository required')
+    branch = get(base + '/branches/main')
+    tree_sha = branch.get('commit', {}).get('commit', {}).get('tree', {}).get('sha', '')
+    if not re.fullmatch(r'[a-f0-9]{40}', tree_sha):
+        raise ValueError('actual source tree required')
+    root = Path(__file__).resolve().parents[2]
+    assert_remote_source(root, action, {'user': user, 'repository': repository, 'branch': branch,
+        'protection': get(base + '/branches/main/protection'), 'tree': get(base + '/git/trees/' + tree_sha + '?recursive=1')})
+    return root
+
+def claim_and_consume(binding_text, workflow, directory, helper, fixture=False, nonce=None):
     directory, workflow, helper = Path(directory), Path(workflow), Path(helper)
     if fixture:
         temporary = Path(tempfile.gettempdir()).resolve()
         if directory.resolve() == temporary or temporary not in directory.resolve().parents or temporary not in workflow.resolve().parents:
             raise ValueError('fixtures must be temporary')
-    elif not PROTECTED_ACTIONS_INSTALLED or (directory, workflow, helper) != (BASE, WORKFLOW, HELPER):
+    elif (directory, workflow, helper) != (BASE, WORKFLOW, HELPER):
         raise ValueError('protected actions not installed')
+    actual = None
+    if not fixture:
+        if not isinstance(nonce, str) or not re.fullmatch(r'[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}', nonce):
+            raise ValueError('exact root action admission required')
+        root = authenticated_issuer(nonce)
+        # No caller binding, transport, path, inherited Node options or approval booleans.
+        result = subprocess.run(['/Users/vincex/.local/node-lts/current/bin/node',
+            str(root / 'scripts/preview-email-coordinator-local.mjs'), '--validate-ledger-admission', nonce],
+            cwd=root, env={'PATH': '/usr/bin:/bin', 'HOME': '/Users/vincex'},
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120, check=True)
+        if len(result.stdout) > 65536:
+            raise ValueError('admission size')
+        admission = json.loads(result.stdout)
+        if admission.get('kind') != 'fcos_actual_preview_ledger_admission' or admission.get('nonce') != nonce:
+            raise ValueError('actual admission required')
+        actual = admission['actual']
+        binding_text = json.dumps(actual['binding'], separators=(',', ':'), ensure_ascii=False)
     if not isinstance(binding_text, str) or len(binding_text.encode()) > 32768:
         raise ValueError('binding size')
     binding = json.loads(binding_text)
@@ -96,16 +222,13 @@ def claim_and_consume(binding_text, workflow, directory, helper, fixture=False):
               'possibleSigningOrPublication': True, 'replayForbidden': True, 'providerAuthorityGranted': False}
     guard.create_json(path, record)  # O_EXCL, file fsync and directory fsync.
     raw = guard.read_regular(path)
-    return {'lease': lease, 'consumptionSha256': hashlib.sha256(raw).hexdigest(), 'operationId': operation}
+    return {'lease': lease, 'consumptionSha256': hashlib.sha256(raw).hexdigest(), 'operationId': operation, **({'actual': actual} if actual else {})}
 
 def main():
-    # No argument/flag/environment variable can install live authority.
-    if not PROTECTED_ACTIONS_INSTALLED or sys.argv[1:] != ['--claim']:
-        raise ValueError('protected actions not installed')
-    raw = sys.stdin.buffer.read(32769)
-    if len(raw) > 32768:
-        raise ValueError('binding size')
-    print(json.dumps(claim_and_consume(raw.decode(), WORKFLOW, BASE, HELPER), separators=(',', ':')))
+    # This entrypoint claims coordination only. It cannot sign, publish or write providers.
+    if len(sys.argv) != 3 or sys.argv[1] != '--claim-approved':
+        raise ValueError('exact root action admission required')
+    print(json.dumps(claim_and_consume(None, WORKFLOW, BASE, HELPER, nonce=sys.argv[2]), separators=(',', ':')))
 
 if __name__ == '__main__':
     try:

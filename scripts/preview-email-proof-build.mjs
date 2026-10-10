@@ -144,7 +144,7 @@ async function completeEnvironmentNames(reads, endpoint, field) {
 /** The pinned CLI's --scope requires denied account reads, and its API client
  * retries POSTs. This Preview-only fallback uses fixed resource paths and one
  * fetch per operation; the durable state machine alone decides when to create. */
-export function createPreviewEmailVercelApi({ token, fetchImpl = globalThis.fetch } = {}) {
+export function createPreviewEmailVercelApi({ token, fetchImpl = globalThis.fetch, admission } = {}) {
   if (typeof token !== 'string' || !token) throw new Error('The existing protected Preview credential is required.');
   const digits = /^[1-9][0-9]*$/;
   const positive = value => digits.test(value || '') && Number.isSafeInteger(Number(value));
@@ -192,7 +192,7 @@ export function createPreviewEmailVercelApi({ token, fetchImpl = globalThis.fetc
   return { get: path => request(path, 'GET'), create: body => {
     const operationId = body?.meta?.fcosPreviewEmailBuildOperation;
     const runId = Number(/^fcos-preview-email-([1-9][0-9]*)-/.exec(operationId || '')?.[1]);
-    const expected = createPreviewEmailBuildRequest({ candidateSha: body?.gitSource?.sha, runId, operationId });
+    const expected = createPreviewEmailBuildRequest({ candidateSha: body?.gitSource?.sha, runId, operationId, admission });
     if (JSON.stringify(body) !== JSON.stringify(expected)) throw new Error('Preview POST must match the exact reviewed Git-source request without overrides.');
     return request('/v13/deployments', 'POST', JSON.stringify(expected));
   } };
@@ -212,12 +212,15 @@ export async function runPreviewEmailProofBuild({ mode = 'dry-run', candidateSha
     directory: env.RUNNER_TEMP, trustedCwd, candidateCwd });
   const stage = diagnostics.stage;
   try {
-    if (mode === 'coordinate') {
-      if (!successor) throw diagnosticFailure('coordination_claim');
-      // Fixed production constructor; injected runner/test options cannot mint a
-      // capability. Immutable source-only guard fails before authenticated I/O.
-      return await stage('coordination_claim', () => collectHostedPreviewCoordinationClaim());
-    }
+    // A standalone claim cannot carry an opaque capability into another Node
+    // process. The native create mode owns both claim and one raw Preview POST.
+    if (mode === 'coordinate') return await stage('coordination_claim', () => { throw diagnosticFailure('coordination_claim'); });
+    if (successor && mode === 'create') await stage('runner_context', () => {
+      if (env !== process.env || resolve(trustedCwd) !== resolve(ROOT) || process.env.GITHUB_ACTIONS !== 'true'
+        || process.env.GITHUB_REPOSITORY !== RELEASE_REPOSITORY || process.env.GITHUB_RUN_ATTEMPT !== '1'
+        || process.env.GITHUB_JOB !== 'proof' || resolve(ROOT) !== join(resolve(env.GITHUB_WORKSPACE || '/'), 'trusted')
+        || resolve(candidateCwd) !== join(resolve(env.GITHUB_WORKSPACE || '/'), 'candidate')) throw diagnosticFailure('runner_context');
+    });
     await stage('runner_context', () => {
       if (!env.GH_TOKEN || !env.VERCEL_TOKEN) throw new Error('Dedicated protected runner and existing credentials are required.');
     });
@@ -242,7 +245,7 @@ export async function runPreviewEmailProofBuild({ mode = 'dry-run', candidateSha
         throw new Error('The reviewed provider CLI version is required.');
       }
     });
-    const provider = createPreviewEmailVercelApi({ token: env.VERCEL_TOKEN }), api = provider.get;
+    const provider = createPreviewEmailVercelApi({ token: env.VERCEL_TOKEN, admission }), api = provider.get;
     let signed, approved, enrolledBinding;
     const recheckEnrolled = () => { if (enrolledBinding) verifyEnrollmentReceipt(enrolledBinding); };
     const authority = async intent => {
@@ -389,7 +392,9 @@ export async function runPreviewEmailProofBuild({ mode = 'dry-run', candidateSha
       }
       throw new Error('Preview is still pending; recover the original intent by readback only.');
     };
-    const receipt = await stage('controlled_build', () => runControlledPreviewEmailBuild({ intent, mode, authority, journal, discover, waitReady, admission,
+    const coordination = successor && mode === 'create'
+      ? await stage('coordination_claim', () => collectHostedPreviewCoordinationClaim()) : undefined;
+    const receipt = await stage('controlled_build', () => runControlledPreviewEmailBuild({ intent, mode, authority, journal, discover, waitReady, admission, coordination,
       create: request => { recheckEnrolled(); return provider.create(request); },
       collectRecords: () => collectPreviewEmailEnvironmentRecords({ api }),
       readVersion: deployment => readPreviewEmailBuildVersion(deployment, { bypass: env.FCOS_E2E_VERCEL_BYPASS }) }));

@@ -4,8 +4,8 @@ import { generateKeyPairSync, sign } from 'node:crypto';
 import { SUCCESSOR_LIVE_CONTRACT as candidate } from '../scripts/lib/runtime-compatibility-successor-live.mjs';
 import { PREVIEW_COORDINATION_CANONICAL, coordinationHash, coordinationLeaseBinding,
   coordinationGrantData, coordinationGrantMessage, verifyCoordinationGrantData,
-  normalizeCoordinationEnvelope, validateCoordinationBinding, coordinationBindingFromOriginal,
-  requirePreviewCoordinationProtectedActions } from '../scripts/lib/preview-email-coordination.mjs';
+  normalizeCoordinationEnvelope, validateCoordinationBinding, coordinationBindingFromOriginal } from '../scripts/lib/preview-email-coordination.mjs';
+import { consumeHostedPreviewCoordinationClaim } from '../scripts/lib/preview-email-coordination-collector.mjs';
 
 // Ephemeral keys exercise only the pure data codec. They cannot produce any
 // production collector, canonical lease, private signing or hosted claim.
@@ -36,6 +36,8 @@ function lease(b) {
 }
 function grant(b = binding(), options = {}) {
   return coordinationGrantData({ binding: b, lease: lease(b), consumptionSha256: '6'.repeat(64),
+    actionSha256: '7'.repeat(64), backendReviewSha256: '8'.repeat(64), backendClosureSha256: '9'.repeat(64),
+    authorizedAt: now - 3000, privateReadinessAt: now - 4000,
     issuedAt: now, expiresAt: now + 100000, ...options });
 }
 function envelope(g = grant(), domain) {
@@ -124,9 +126,8 @@ test('45-minute provisioning, original 30-minute evidence and 600-second authori
   const text = envelope(); assert.throws(() => verify(text, binding(), now + 100000));
   assert.throws(() => verify(text, binding(), now - 1));
 });
-test('source-only guard cannot be lifted with a valid data signature or fabricated approval flags', () => {
+test('opaque capability guard cannot be lifted with a valid data signature or fabricated approval flags', async () => {
   for (const value of [undefined, true, { protectedActionsInstalled: true }, verify(envelope())]) {
-    assert.throws(() => requirePreviewCoordinationProtectedActions(value),
-      error => error.code === 'PREVIEW_COORDINATION_PROTECTED_ACTIONS_NOT_INSTALLED');
+    await assert.rejects(() => consumeHostedPreviewCoordinationClaim(value, {}));
   }
 });

@@ -160,8 +160,42 @@ class PermanentConsumptionTests(unittest.TestCase):
     def test_fixture_entry_cannot_target_actual_canonical_directory(self):
         with self.assertRaisesRegex(ValueError, 'temporary'):
             ledger.claim_and_consume(json.dumps(self.binding), ledger.WORKFLOW, ledger.BASE, ledger.HELPER, fixture=True)
-        with self.assertRaisesRegex(ValueError, 'not installed'):
+        with self.assertRaisesRegex(ValueError, 'exact root action'):
             ledger.claim_and_consume(json.dumps(self.binding), ledger.WORKFLOW, ledger.BASE, ledger.HELPER)
+
+class BootstrapSourceTests(unittest.TestCase):
+    def test_relocated_or_replaced_validator_cannot_substitute_for_actual_protected_source(self):
+        with tempfile.TemporaryDirectory(prefix='fcos-bootstrap-source-') as directory:
+            root = Path(directory).resolve()
+            rows = []
+            for relative, raw in [('scripts/lib/preview-email-coordination-ledger.py', b'unchanged ledger'),
+                                  ('scripts/preview-email-coordinator-local.mjs', b'reviewed real validator'), ('package-lock.json', b'locked'), ('scripts/lib/preview-email-coordination-action.mjs', b'fixed action verifier'), ('scripts/lib/preview-email-coordination-collector.mjs', b'fixed collector')]:
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(raw)
+                rows.append({'path': relative, 'mode': '100644', 'type': 'blob',
+                    'sha': hashlib.sha1(('blob ' + str(len(raw)) + '\0').encode() + raw).hexdigest()})
+            sha, tree = 'a' * 40, 'b' * 40
+            action = {'binding': {'harnessSha': sha}, 'scriptSha256': hashlib.sha256(b'reviewed real validator').hexdigest()}
+            remote = {'user': {'login': 'hocheunglai-oss', 'id': 1},
+                'repository': {'full_name': 'hocheunglai-oss/fcos', 'default_branch': 'main', 'permissions': {'admin': True}},
+                'branch': {'name': 'main', 'protected': True, 'commit': {'sha': sha, 'commit': {'tree': {'sha': tree}}}},
+                'protection': {'enforce_admins': {'enabled': True}, 'required_status_checks': {'strict': True}},
+                'tree': {'sha': tree, 'truncated': False, 'tree': rows}}
+            ledger.assert_remote_source(root, action, remote)
+            (root / 'scripts/preview-email-coordinator-local.mjs').write_text('fabricated admitted stdout')
+            with self.assertRaisesRegex(ValueError, 'differs'):
+                ledger.assert_remote_source(root, action, remote)
+            (root / 'scripts/preview-email-coordinator-local.mjs').write_bytes(b'reviewed real validator')
+            (root / 'scripts/lib/preview-email-coordination-action.mjs').chmod(0o755)
+            with self.assertRaisesRegex(ValueError, 'differs'):
+                ledger.assert_remote_source(root, action, remote)
+            (root / 'scripts/lib/preview-email-coordination-action.mjs').chmod(0o644)
+            for target, key, value in [(remote['user'], 'login', 'foreign'), (remote['branch']['commit'], 'sha', 'c' * 40),
+                                       (remote['tree'], 'truncated', True), (remote['tree'], 'sha', 'c' * 40)]:
+                old = target[key]; target[key] = value
+                with self.assertRaises(ValueError): ledger.assert_remote_source(root, action, remote)
+                target[key] = old
 
 if __name__ == '__main__':
     unittest.main()

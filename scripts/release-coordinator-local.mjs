@@ -92,7 +92,7 @@ export async function releaseCoordinatorMain(args = process.argv.slice(2)) {
     automaticLeaseRelease: false, mutations: 0, privateReads: 0, providerAuthorityGranted: false };
   need(args.length === 2 && ['--issue-approved', '--validate-ledger-admission'].includes(args[0]) && uuid(args[1]) && process.platform === 'darwin');
   const a = actionAdmission(args[1]);
-  const actual = collectLocalReleaseCoordination(a.binding.runId, a.binding.route);
+  const actual = await collectLocalReleaseCoordination(a.binding.runId, a.binding.route);
   need(coordinationEqual(actual.binding, a.binding));
   // The fixed Python entry independently invokes this read-only admission before it can claim.
   if (args[0] === '--validate-ledger-admission') return { kind: 'fcos_actual_release_ledger_admission', nonce: args[1], actual };
@@ -108,7 +108,7 @@ export async function releaseCoordinatorMain(args = process.argv.slice(2)) {
     const privateKey = createPrivateKey(command(binary, ['get', FCOS_CONNECTION_POLICY.keychainAccount, FCOS_CONNECTION_POLICY.attestation.privateKeyService]));
     need(privateKey.asymmetricKeyType === 'ed25519' && createPublicKey(privateKey).export({ type: 'spki', format: 'der' }).toString('base64') === FCOS_CONNECTION_POLICY.attestation.publicKeySpkiBase64);
     assertReleaseCoordinatorApproval(a, args[1], coordinationDigest(readFileSync(ownPath)));
-    const refreshed = collectLocalReleaseCoordination(a.binding.runId, a.binding.route); need(coordinationEqual(actual, refreshed));
+    const refreshed = await collectLocalReleaseCoordination(a.binding.runId, a.binding.route); need(coordinationEqual(actual, refreshed));
     const grant = releaseCoordinationGrantData({ schemaVersion: 1, kind: 'fcos_production_coordination_grant', keyId: FCOS_CONNECTION_POLICY.attestation.keyId,
       repository: fcosConnectionIdentifier('github', 'Repository'), teamId: fcosConnectionIdentifier('vercel', 'Team ID'), projectId: fcosConnectionIdentifier('vercel', 'Project ID'),
       binding: actual.binding, intentArtifactId: actual.intentArtifactId, intentArchiveSha256: actual.intentArchiveSha256, lease: consumed.lease,

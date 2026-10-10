@@ -110,12 +110,9 @@ jobs:
           path: ${{ runner.temp }}/fcos-preview-email-intent.json
           if-no-files-found: error
           retention-days: 7
-      # Implementation-only authority leaves the fixed constructor disabled.
-      # No caller variable/flag installs signing, upload or Preview authority.
-      - name: Require exact04ee canonical coordination before any Preview submission
-        if: ${{ inputs.operation == 'create' && inputs.expected_commit == '04ee3425aac7a49089eda781eb3c976aea1f6785' }}
-        run: node trusted/scripts/preview-email-proof-build.mjs --coordinate
-      - name: Verify trusted intent archive and submit exactly one Preview request
+      # Exact04ee consumes its signed coordination grant and creates once in
+      # this same native process. No serialized status can transfer capability.
+      - name: Admit exact coordination, verify original intent and submit one Preview request
         if: ${{ inputs.operation == 'create' }}
         run: node trusted/scripts/preview-email-proof-build.mjs --create
         env:
