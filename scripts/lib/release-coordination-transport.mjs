@@ -10,6 +10,8 @@ import { decodePreviewCoordinationArchive } from './preview-email-coordination-a
 import { RELEASE_COORDINATION_ROUTES, RELEASE_COORDINATION_FILE, releaseCoordinationArtifact, releaseCoordinationVariable,
   validateReleaseCoordinationBinding, releaseCoordinationDeadline, releaseCoordinationEvidenceDeadline, verifyReleaseCoordinationGrant, coordinationDigest, coordinationEqual, releaseCoordinationFailure } from './release-coordination.mjs';
 import { releaseCoordinationRows, assertReleaseCoordinationTrust, assertReleaseCoordinationIntent } from './release-coordination-trust.mjs';
+import { SUCCESSOR_LIVE_CONTRACT, successorLiveBinding, successorLiveControlBinding } from './runtime-compatibility-successor-live.mjs';
+import { collectCoordinationBackendProof } from './preview-email-coordination-action.mjs';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url)), base = `repos/${RELEASE_REPOSITORY}`;
 const capabilities = new WeakMap();
@@ -63,6 +65,12 @@ function hosted(routeName) {
 async function recheck(context, readiness) {
   const { binding: b, reads, text } = context; need(hosted(b.route) === b.runId);
   assertReleaseReceiptBinding(readiness, b.candidate);
+  if (b.candidate.sha === SUCCESSOR_LIVE_CONTRACT.candidateSha) {
+    const controls = successorLiveControlBinding({ trustedCwd: ROOT, sourceCwd: join(resolve(process.env.GITHUB_WORKSPACE || '/'), 'candidate') });
+    successorLiveBinding(context.admission, { sha: b.candidate.sha, ...controls });
+    need(context.backendProof?.observed === true && context.backendProof.reviewSha256 === b.backendReviewSha256
+      && context.backendProof.closureSha256 === b.backendClosureSha256);
+  }
   need(coordinationEqual(readiness.candidate, b.candidate) && coordinationEqual(readiness.previousProduction, b.previousProduction)
     && coordinationDigest(readiness) === b.readinessSha256 && releaseCoordinationEvidenceDeadline(readiness) === b.evidenceExpiresAt);
   const actual = collectReleaseCoordinationPublic(reads, b.runId, b.route), trusted = assertReleaseCoordinationTrust({ ...actual, binding: b });
@@ -83,16 +91,21 @@ async function recheck(context, readiness) {
   return trusted;
 }
 /** Fixed protected constructor. No caller transport, key, clock or accepted flag. */
-export async function collectHostedReleaseCoordination({ route, readiness }) {
+export async function collectHostedReleaseCoordination({ route, readiness, admission }) {
   need(!started); started = true;
   const runId = hosted(route), reads = fixedReads(true); assertReleaseGitHubAccount(reads);
   assertReleaseReceiptBinding(readiness, readiness?.candidate);
   const actual = collectReleaseCoordinationPublic(reads, runId, route), jobs = releaseCoordinationRows(actual.jobs, 'jobs'); need(jobs.length === 1);
-  const binding = validateReleaseCoordinationBinding({ schemaVersion: 1, route, repositoryId: actual.repository.id, environmentId: actual.environment.id,
+  const successor = readiness.candidate.sha === SUCCESSOR_LIVE_CONTRACT.candidateSha;
+  if (successor) successorLiveBinding(admission, { sha: readiness.candidate.sha, harnessSha: actual.branch.commit.sha,
+    configurationRevision: readiness.candidate.configurationRevision, sourceDigest: readiness.candidate.sourceDigest, lockHash: readiness.candidate.lockHash });
+  const backendProof = successor ? await collectCoordinationBackendProof(reads, actual.branch.commit.sha) : undefined;
+  const binding = validateReleaseCoordinationBinding({ schemaVersion: successor ? 2 : 1, route, repositoryId: actual.repository.id, environmentId: actual.environment.id,
     runId, runAttempt: 1, jobId: jobs[0].id, harnessSha: actual.branch.commit.sha, operationId: `fcos-release-${runId}`,
     dispatchedAt: Date.parse(actual.run.run_started_at), jobStartedAt: Date.parse(jobs[0].started_at), intentAt: Date.now(), readinessAt: Date.parse(readiness.capturedAt),
-    evidenceExpiresAt: releaseCoordinationEvidenceDeadline(readiness), candidate: readiness.candidate, previousProduction: readiness.previousProduction, readinessSha256: coordinationDigest(readiness) });
-  const context = { binding, reads }; await recheck(context, readiness);
+    evidenceExpiresAt: releaseCoordinationEvidenceDeadline(readiness), candidate: readiness.candidate, previousProduction: readiness.previousProduction, readinessSha256: coordinationDigest(readiness),
+    ...(successor ? { backendReviewSha256: backendProof.reviewSha256, backendClosureSha256: backendProof.closureSha256 } : {}) });
+  const context = { binding, reads, admission, backendProof }; await recheck(context, readiness);
   const intent = await upload(reads, binding, 'intent', { kind: 'fcos_production_coordination_intent', binding });
   context.intent = intent;
   // The root coordinator can prepare/issue while the same approved protected job waits.
@@ -122,6 +135,15 @@ export function releaseCoordinationVerified(capability, readiness) {
   const c = capabilities.get(capability);
   try { return !!c && validateReleaseCoordinationBinding(c.binding) && coordinationDigest(readiness) === c.binding.readinessSha256; } catch { return false; }
 }
+export function successorReleaseCoordinationVerified(capability, readiness, admission) {
+  const c = capabilities.get(capability);
+  try {
+    return releaseCoordinationVerified(capability, readiness) && c.binding.schemaVersion === 2
+      && c.binding.route === 'compatibility' && c.admission === admission && c.backendProof?.observed === true
+      && c.backendProof.reviewSha256 === c.binding.backendReviewSha256 && c.backendProof.closureSha256 === c.binding.backendClosureSha256
+      && !!successorLiveBinding(admission, { sha: c.binding.candidate.sha, harnessSha: c.binding.harnessSha });
+  } catch { return false; }
+}
 export async function consumeReleaseCoordination(capability, readiness, phase) {
   const c = capabilities.get(capability); need(c && releaseCoordinationVerified(capability, readiness));
   need(phase === 'stage' && c.phase === 'claimed' || phase === 'promote' && c.phase === 'staged');
@@ -130,7 +152,7 @@ export async function consumeReleaseCoordination(capability, readiness, phase) {
   return { ...capability, coordinationOnly: true, providerAuthorityGranted: false };
 }
 /** Local collector is read-only; the issuer adds source/action admission before calling it. */
-export function collectLocalReleaseCoordination(runId, route) {
+export async function collectLocalReleaseCoordination(runId, route) {
   need(process.platform === 'darwin' && Number.isSafeInteger(runId) && runId > 0 && RELEASE_COORDINATION_ROUTES[route]);
   const reads = fixedReads(false); assertReleaseGitHubAccount(reads);
   const actual = collectReleaseCoordinationPublic(reads, runId, route);
@@ -143,5 +165,9 @@ export function collectLocalReleaseCoordination(runId, route) {
   const original = readReleaseCoordinationArtifact(reads, b, 'intent'), trusted = assertReleaseCoordinationTrust({ ...actual, binding: b });
   need(original.artifactId === named[0].id && original.archiveSha256 === coordinationDigest(archive)
     && trusted.variable(releaseCoordinationVariable(b)) === undefined && !rows.some(r => r.name === releaseCoordinationArtifact(b, 'consumed')));
+  if (b.candidate.sha === SUCCESSOR_LIVE_CONTRACT.candidateSha) {
+    const backendProof = await collectCoordinationBackendProof(reads, b.harnessSha);
+    need(backendProof.reviewSha256 === b.backendReviewSha256 && backendProof.closureSha256 === b.backendClosureSha256);
+  }
   return { binding: b, intentArtifactId: original.artifactId, intentArchiveSha256: original.archiveSha256, reviewerId: trusted.reviewerId };
 }

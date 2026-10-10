@@ -7,5 +7,6 @@ export const RELEASE_COORDINATION_CONTROL_FILES = Object.freeze([
   'scripts/lib/release-coordination.mjs', 'scripts/lib/release-coordination-trust.mjs',
   'scripts/lib/release-coordination-transport.mjs', 'scripts/lib/release-coordination-ledger.py',
   'scripts/lib/preview-email-coordination.mjs', 'scripts/lib/preview-email-coordination-archive.mjs',
+  'scripts/lib/preview-email-coordination-action.mjs', 'scripts/lib/coordination-backend-result-archive.mjs', 'scripts/lib/release-coordination-proof-worker.mjs',
   'scripts/fcos-keychain-migrate.swift',
 ]);

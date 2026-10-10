@@ -1,4 +1,4 @@
-import { releaseCoordinationVerified } from './release-coordination-transport.mjs';
+import { successorReleaseCoordinationVerified, consumeReleaseCoordination } from './release-coordination-transport.mjs';
 import { compatibilityBrowserIsolationVerified } from './compatibility-browser-isolation.mjs';
 import { previewEmailSignerEvidenceVerified } from './preview-email-signer.mjs';
 import { readFileSync, lstatSync } from 'node:fs';
@@ -410,7 +410,7 @@ export function createRuntimeCompatibilityPreflight({ binding, scope, protection
   } catch { checks.releaseReadiness = false; }
   if (!checks.releaseReadiness) fail('INDEPENDENT_RELEASE_READINESS_REQUIRED', 'readiness', 'Satisfy the unchanged standard source, quality, trusted browser, parity, freshness and exact-candidate readiness validator.');
   if (successor) {
-    checks.sharedCoordinator = releaseCoordinationVerified(coordination, readiness) === true;
+    checks.sharedCoordinator = successorReleaseCoordinationVerified(coordination, readiness, admission) === true;
     if (!checks.sharedCoordinator) fail('EXACT_SUCCESSOR_SHARED_COORDINATOR_REQUIRED', 'coordinator', 'Collect the exact signed canonical lease grant and permanent hosted consumption for this protected run.');
   }
   for (const blocker of collectionBlockers) if (/^[A-Z][A-Z0-9_]{0,95}$/.test(blocker?.code || '') && /^[a-zA-Z0-9_.-]{1,160}$/.test(blocker?.scope || '')) {
@@ -469,13 +469,13 @@ export function immutableCompatibilityBaseline({ cwd, trustedCwd, admission, now
     observationKind: 'independent_provider_probe_and_verified_deployment_configuration' };
 }
 
-export async function executeRuntimeCompatibilityRelease({ preflight, readiness, authority, ...adapters } = {}) {
+export async function executeRuntimeCompatibilityRelease({ preflight, readiness, authority, coordinationCapability, admission, ...adapters } = {}) {
   const successor = preflight?.binding?.sha === SUCCESSOR_LIVE_CONTRACT.candidateSha;
-  if (successor) rejectSuccessorUncoordinatedMutation();
+  if (successor && !successorReleaseCoordinationVerified(coordinationCapability, readiness, admission)) rejectSuccessorUncoordinatedMutation();
   if (preflight?.schemaVersion !== 1 || preflight.receiptKind !== 'fcos_runtime_compatibility_preflight'
     || preflight.ready !== true || preflight.productionAuthorized !== false || preflight.blockers?.length
     || !fresh(preflight.capturedAt, Date.now())
-    || preflight.binding?.sha !== FIRST_RUNTIME_ROLLOUT.candidateSha || preflight.proposedException?.appliesOnlyTo !== 'previous_runtime_endpoint'
+    || preflight.binding?.sha !== (successor ? SUCCESSOR_LIVE_CONTRACT.candidateSha : FIRST_RUNTIME_ROLLOUT.candidateSha) || preflight.proposedException?.appliesOnlyTo !== 'previous_runtime_endpoint'
     || preflight.proposedException.endpointAbsenceObserved !== true || preflight.proposedException.environmentPinAndApprovalObserved !== true
     || !Object.values(preflight.checks || {}).length || Object.values(preflight.checks).some(value => value !== true)) throw new Error('Complete independently collected first-rollout prerequisites are required before any mutation.');
   assertReleaseReceiptBinding(readiness, { sha: preflight.binding.sha, sourceDigest: preflight.binding.sourceDigest,
@@ -486,11 +486,13 @@ export async function executeRuntimeCompatibilityRelease({ preflight, readiness,
   // Use the unchanged durable staging state machine. Adapters re-read the exact
   // compatibility environment approval, token metadata, configuration and source.
   const checkedAuthority = async () => {
+    if (successor && !successorReleaseCoordinationVerified(coordinationCapability, readiness, admission)) rejectSuccessorUncoordinatedMutation();
     if (!fresh(preflight.capturedAt, Date.now())) throw new Error('First-rollout preflight expired at approval boundary.');
     assertReleaseReceiptBinding(readiness, { sha: preflight.binding.sha, sourceDigest: preflight.binding.sourceDigest,
       lockHash: preflight.binding.lockHash, configurationRevision: preflight.binding.configurationRevision,
       deploymentId: preflight.candidate.deploymentId, url: preflight.candidate.url });
     return authority();
   };
-  return executeProductionRelease({ readiness, authority: checkedAuthority, ...adapters });
+  return executeProductionRelease({ readiness, authority: checkedAuthority, ...adapters,
+    ...(successor ? { coordination: phase => consumeReleaseCoordination(coordinationCapability, readiness, phase) } : {}) });
 }

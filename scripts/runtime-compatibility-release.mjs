@@ -17,7 +17,7 @@ import { releaseHash, createReleaseReadiness } from './lib/release-readiness.mjs
 import { evaluatePreviewParity, PREVIEW_PARITY_POLICY } from './lib/preview-parity.mjs';
 import { verifyRuntimeCompatibility } from './verify-runtime-compatibility.mjs';
 import { SUCCESSOR_LIVE_CONTRACT, collectSuccessorLiveOperationAdmission, successorLiveSourceReceipt, successorLiveBinding,
-  successorLivePlan, rejectSuccessorUncoordinatedMutation } from './lib/runtime-compatibility-successor-live.mjs';
+  successorLivePlan } from './lib/runtime-compatibility-successor-live.mjs';
 import { canonicalFcosE2eCandidateUrl } from './verify-e2e-candidate.mjs';
 import { FIRST_RUNTIME_ROLLOUT, COMPATIBILITY_ENVIRONMENT, assertRuntimeCompatibilityWorkflowIdentity,
   assertRuntimeCompatibilityProtection, createRuntimeCompatibilityPreflight, runtimeCompatibilityControlRevision,
@@ -118,8 +118,8 @@ export async function runRuntimeCompatibilityRelease({ mode = 'dry-run', trusted
   expectedCommit, candidateUrl, env = process.env } = {}) {
   const successor = expectedCommit === SUCCESSOR_LIVE_CONTRACT.candidateSha;
   if (successor && mode === 'dry-run') return successorLivePlan();
-  // First-cutover activation still requires actual protected backend proofs.
-  if (successor && mode === 'execute') rejectSuccessorUncoordinatedMutation();
+  // Exact source and all first-cutover prerequisites are collected before the
+  // separately admitted, proof-bound shared capability can permit execution.
   if (mode === 'dry-run') return createRuntimeCompatibilityPreflight();
   if (!['preflight', 'execute', 'collect-quality'].includes(mode) || ![FIRST_RUNTIME_ROLLOUT.candidateSha, SUCCESSOR_LIVE_CONTRACT.candidateSha].includes(expectedCommit)
     || canonicalFcosE2eCandidateUrl(candidateUrl) !== candidateUrl) throw new Error('Protected mode requires the exact first-rollout candidate and immutable Preview.');
@@ -301,7 +301,7 @@ export async function runRuntimeCompatibilityRelease({ mode = 'dry-run', trusted
     input.collectionBlockers.push(...input.parity.blockers.map(({ code, scope }) => ({ code, scope })));
     let preflight = createRuntimeCompatibilityPreflight(input);
     if (mode !== 'execute' || preflight.blockers.some(row => row.scope !== 'coordinator')) return preflight;
-    const coordination = await collectHostedReleaseCoordination({ route: 'compatibility', readiness: input.readiness });
+    const coordination = await collectHostedReleaseCoordination({ route: 'compatibility', readiness: input.readiness, admission });
     input.coordination = coordination;
     preflight = createRuntimeCompatibilityPreflight(input);
     if (!preflight.ready) return preflight;
@@ -352,6 +352,7 @@ export async function runRuntimeCompatibilityRelease({ mode = 'dry-run', trusted
       assertProductionRuntimeReadback(runtimeObservation, input.parity);
     };
     return executeRuntimeCompatibilityRelease({ preflight, readiness: input.readiness, authority, currentProduction, probe,
+      coordinationCapability: coordination, admission,
       coordination: phase => consumeReleaseCoordination(coordination, input.readiness, phase),
       journal: async (entry, { first = false } = {}) => { const data = `${JSON.stringify(entry)}\n`; if (first) writeFileSync(journalPath, data, { mode: 0o600, flag: 'wx', flush: true }); else appendFileSync(journalPath, data, { mode: 0o600, flush: true }); },
       deploy: async args => verifyDeployment(new URL(canonicalFcosE2eCandidateUrl(cli(args).trim())).hostname),

@@ -57,20 +57,20 @@ test('fixture callbacks, clocks, SDK IDs and signed data cannot mint production 
   for (const supplied of [true, {}, forbidden, { reads: forbidden, unpack: forbidden, now: () => 1, publicKeySpkiBase64: 'fixture', artifactId: 1 }]) {
     await assert.rejects(() => collectHostedPreviewCoordinationStatus(supplied));
     await assert.rejects(() => collectHostedPreviewCoordinationClaim(supplied));
-    assert.throws(() => consumeHostedPreviewCoordinationClaim(supplied));
+    await assert.rejects(() => consumeHostedPreviewCoordinationClaim(supplied));
   }
-  await assert.rejects(() => collectHostedPreviewCoordinationClaim(), error => error.code === 'PREVIEW_COORDINATION_PROTECTED_ACTIONS_NOT_INSTALLED');
+  await assert.rejects(() => collectHostedPreviewCoordinationClaim());
   assert.equal(accesses, 0);
 });
 test('new local coordinator remains a zero-call plan and rejects nonfixed approval surfaces', async () => {
   const plan = await previewCoordinationMain(['--plan']);
-  assert.equal(plan.protectedActionsInstalled, false); assert.equal(plan.privateReads, 0); assert.equal(plan.leaseClaims, 0);
+  assert.equal(plan.requiresExactPrivateActionAndProtectedSource, true); assert.equal(plan.privateReads, 0); assert.equal(plan.leaseClaims, 0);
   for (const args of [['--enroll'], ['--issue-approved', 'bad'], ['--enable'], ['--issue-approved', 'x', '--force']]) {
     await assert.rejects(() => previewCoordinationMain(args));
   }
   assert.throws(() => assertPreviewCoordinationApproval({ approval: { authorized: true, purpose: plan.purpose } }));
 });
-test('source-wired exact04ee coordination fails at its disabled gate before credentials/collectors and preserves a safe journal', async () => {
+test('standalone exact04ee coordination refuses to serialize a capability and preserves a safe journal', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'fcos-coordination-entry-'));
   try {
     await assert.rejects(() => runPreviewEmailProofBuild({ mode: 'coordinate', candidateSha: '04ee3425aac7a49089eda781eb3c976aea1f6785',

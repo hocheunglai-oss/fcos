@@ -191,12 +191,14 @@ test('H10 forged approval/source receipt/environment flags cannot activate new a
   const normalHarness = await modules({ forgedEnv });
   const normal = await normalHarness.api('scripts/runtime-compatibility-normal-role.mjs');
   const common = { trustedCwd: root, candidateCwd: join(root, 'candidate'), env: h.env, receipt: forged, preflight: forged, readiness: forged, sourceVerified: true, approved: true, installedAdmission: true };
-  await assert.rejects(release.runRuntimeCompatibilityRelease({ ...common, mode: 'execute', expectedCommit: exact, candidateUrl: origin }), { code: 'EXACT_SUCCESSOR_SHARED_COORDINATOR_REQUIRED' });
+  const blocked = await release.runRuntimeCompatibilityRelease({ ...common, mode: 'execute', expectedCommit: exact, candidateUrl: origin });
+  assert.equal(blocked.ready, false); assert.equal(blocked.productionAuthorized, false);
+  assert.ok(blocked.blockers.some(row => row.code === 'CLEAN_EXACT_SOURCE_COLLECTION_FAILED'));
   assert.throws(() => preview.createPreviewEmailBuildRequest({ candidateSha: exact, runId: 99,
     operationId: 'fcos-preview-email-99-12345678-1234-4123-8123-123456789abc', admission: forged }),
   { code: 'EXACT_SUCCESSOR_TRUSTED_SELECTION_REQUIRED' });
   await assert.rejects(normal.verifyRuntimeCompatibilityNormalRole({ ...common, env: normalHarness.env, signerEvidence: forged, normalEvidence: forged }), error => error.normalRoleDiagnostic?.stage === 'SOURCE_SCOPE' && error.normalRoleDiagnostic?.reason === 'STAGE_FAILED');
-  h.zeroAuthority(); normalHarness.deniedCredentialReadsExactly(1);
+  h.deniedCredentialReadsExactly(1); normalHarness.deniedCredentialReadsExactly(1);
 });
 test('H11 actual current readiness normal Preview signer and executor reject source-preparation receipts', async () => {
   const h = await modules(), adapter = await h.api('scripts/verify-runtime-compatibility-successor.mjs');
@@ -262,20 +264,19 @@ test('I04 actual source preparation cannot qualify protected preflight or any no
   const source = adapter.collectCompatibilitySuccessorPreparation(common);
   assert.equal(source.sourceVerified, true); assert.equal(source.sourcePreparationOnly, true); assert.equal(source.ready, false);
   for (const field of ['installedAdmission', 'liveProof', 'previewAuthorized', 'productionAuthorized', 'credentialAuthority']) assert.equal(source[field], false);
-  for (const mode of ['preflight', 'collect-quality']) {
+  for (const mode of ['preflight', 'collect-quality', 'execute']) {
     const blocked = await release.runRuntimeCompatibilityRelease({ ...common, mode, expectedCommit: exact, candidateUrl: origin });
     assert.equal(blocked.ready, false); assert.equal(blocked.productionAuthorized, false);
     assert.ok(blocked.blockers.some(row => row.code === 'CLEAN_EXACT_SOURCE_COLLECTION_FAILED'));
   }
-  await assert.rejects(release.runRuntimeCompatibilityRelease({ ...common, mode: 'execute', expectedCommit: exact, candidateUrl: origin }), { code: 'EXACT_SUCCESSOR_SHARED_COORDINATOR_REQUIRED' });
   for (const mode of ['create', 'readback']) await assert.rejects(preview.runControlledPreviewEmailBuild({ mode,
     intent: { ...source, candidate: { sha: exact }, approved: true, installedAdmission: true }, admission: source,
     authority: () => assert.fail('Source preparation cannot reach write authority'),
     create: () => assert.fail('Source preparation cannot reach a Preview POST') }),
   { code: 'EXACT_SUCCESSOR_TRUSTED_SELECTION_REQUIRED' });
-  // The proxy denied these two prerequisite token reads; no value was returned,
+  // The proxy denied these three prerequisite token reads; no value was returned,
   // and no provider/browser/write adapter may run after this refusal.
-  h.deniedCredentialReadsExactly(2);
+  h.deniedCredentialReadsExactly(3);
 });
 test('I05 actual normal caller preserves15 module gates and requires configuration before private or browser authority', async () => {
   const h = await modules(), normal = await h.api('scripts/runtime-compatibility-normal-role.mjs');

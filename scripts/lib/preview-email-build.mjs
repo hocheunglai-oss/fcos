@@ -9,7 +9,7 @@ import { canonicalFcosE2eCandidateUrl } from '../verify-e2e-candidate.mjs';
 import { PREVIEW_EMAIL_BUILD_CONTROL_FILES } from './preview-email-build-controls.mjs';
 import { githubProviderFresh, githubProviderTimestamp } from './github-provider-timestamp.mjs';
 import { SUCCESSOR_LIVE_CONTRACT, successorLiveSelection, successorEmailContract, successorLiveBinding,
-  successorLiveControlBinding, successorLiveRemoteControls, rejectSuccessorUncoordinatedMutation } from './runtime-compatibility-successor-live.mjs';
+  successorLiveControlBinding, successorLiveRemoteControls } from './runtime-compatibility-successor-live.mjs';
 export { PREVIEW_EMAIL_BUILD_CONTROL_FILES } from './preview-email-build-controls.mjs';
 
 export const PREVIEW_EMAIL_BUILD_WORKFLOW = '.github/workflows/preview-email-proof-build.yml';
@@ -442,16 +442,20 @@ export async function collectTrustedPreviewEmailBuild({ reads, api, binding, rec
 /** Only the first protected workflow invocation may POST once. Recovery runs
  * use readback and can never call create, even when no deployment is found. */
 export async function runControlledPreviewEmailBuild({ intent, mode, authority, journal, create, discover, waitReady,
-  collectRecords, readVersion, admission, now = () => Date.now() } = {}) {
+  collectRecords, readVersion, admission, coordination, now = () => Date.now() } = {}) {
   assertIntent(intent, now(), admission);
-  // No callback or caller-supplied lease claim can cross this boundary. Root
-  // must install an independently reviewed canonical shared-coordinator bridge.
-  if (intent.candidate.sha === SUCCESSOR_LIVE_CONTRACT.candidateSha) rejectSuccessorUncoordinatedMutation();
   if (!['create', 'readback'].includes(mode)) failure('Use a controlled first creation or readback-only recovery.');
+  const successor = intent.candidate.sha === SUCCESSOR_LIVE_CONTRACT.candidateSha;
+  // Dynamic import avoids the data-codec/collector cycle. Only the fixed native
+  // collector's private WeakMap can admit this original operation. A DTO,
+  // signature fixture, callback or cloned claim cannot enter the write path.
+  const coordinator = successor && mode === 'create' ? await import('./preview-email-coordination-collector.mjs') : null;
+  if (coordinator) coordinator.assertHostedPreviewCoordinationClaim(coordination, intent);
   await authority(intent);
   let raw = await discover(intent);
   if (!raw && mode === 'create') {
     await journal({ phase: 'create_requested', operationId: intent.operationId, capturedAt: new Date(now()).toISOString() });
+    if (coordinator) await coordinator.consumeHostedPreviewCoordinationClaim(coordination, intent);
     try { raw = await create(intent.request); }
     catch { raw = await discover(intent); }
   }

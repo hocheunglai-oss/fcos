@@ -1,0 +1,529 @@
+{
+  "at": "2026-10-10T12:36:49.304679+00:00",
+  "actor": {
+    "login": "hocheunglai-oss",
+    "id": 265701760
+  },
+  "repositoryId": 1278654816,
+  "run": {
+    "id": 38052161466,
+    "name": "FCOS protected artifact coordination proof",
+    "node_id": "WFR_kwLOTDa5YM8AAAAI3BXnug",
+    "head_branch": "main",
+    "head_sha": "335ee8537391a64b69d480871447f4808c3443a3",
+    "path": ".github/workflows/release-coordination-proof.yml",
+    "display_title": "FCOS protected artifact coordination proof",
+    "run_number": 5,
+    "event": "workflow_dispatch",
+    "status": "completed",
+    "conclusion": "success",
+    "workflow_id": 380275209,
+    "check_suite_id": 103102978329,
+    "check_suite_node_id": "CS_kwDOTDa5YM8AAAAYAWqZGQ",
+    "url": "https://api.github.com/repos/hocheunglai-oss/fcos/actions/runs/38052161466",
+    "html_url": "https://github.com/hocheunglai-oss/fcos/actions/runs/38052161466",
+    "pull_requests": [],
+    "created_at": "2026-10-10T12:29:49Z",
+    "updated_at": "2026-10-10T12:35:09Z",
+    "actor": {
+      "login": "hocheunglai-oss",
+      "id": 265701760,
+      "node_id": "U_kgDOD9ZJgA",
+      "avatar_url": "https://avatars.githubusercontent.com/u/265701760?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/hocheunglai-oss",
+      "html_url": "https://github.com/hocheunglai-oss",
+      "followers_url": "https://api.github.com/users/hocheunglai-oss/followers",
+      "following_url": "https://api.github.com/users/hocheunglai-oss/following{/other_user}",
+      "gists_url": "https://api.github.com/users/hocheunglai-oss/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/hocheunglai-oss/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/hocheunglai-oss/subscriptions",
+      "organizations_url": "https://api.github.com/users/hocheunglai-oss/orgs",
+      "repos_url": "https://api.github.com/users/hocheunglai-oss/repos",
+      "events_url": "https://api.github.com/users/hocheunglai-oss/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/hocheunglai-oss/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "run_attempt": 1,
+    "referenced_workflows": [],
+    "run_started_at": "2026-10-10T12:29:49Z",
+    "triggering_actor": {
+      "login": "hocheunglai-oss",
+      "id": 265701760,
+      "node_id": "U_kgDOD9ZJgA",
+      "avatar_url": "https://avatars.githubusercontent.com/u/265701760?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/hocheunglai-oss",
+      "html_url": "https://github.com/hocheunglai-oss",
+      "followers_url": "https://api.github.com/users/hocheunglai-oss/followers",
+      "following_url": "https://api.github.com/users/hocheunglai-oss/following{/other_user}",
+      "gists_url": "https://api.github.com/users/hocheunglai-oss/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/hocheunglai-oss/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/hocheunglai-oss/subscriptions",
+      "organizations_url": "https://api.github.com/users/hocheunglai-oss/orgs",
+      "repos_url": "https://api.github.com/users/hocheunglai-oss/repos",
+      "events_url": "https://api.github.com/users/hocheunglai-oss/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/hocheunglai-oss/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "jobs_url": "https://api.github.com/repos/hocheunglai-oss/fcos/actions/runs/38052161466/jobs",
+    "logs_url": "https://api.github.com/repos/hocheunglai-oss/fcos/actions/runs/38052161466/logs",
+    "check_suite_url": "https://api.github.com/repos/hocheunglai-oss/fcos/check-suites/103102978329",
+    "artifacts_url": "https://api.github.com/repos/hocheunglai-oss/fcos/actions/runs/38052161466/artifacts",
+    "cancel_url": "https://api.github.com/repos/hocheunglai-oss/fcos/actions/runs/38052161466/cancel",
+    "rerun_url": "https://api.github.com/repos/hocheunglai-oss/fcos/actions/runs/38052161466/rerun",
+    "previous_attempt_url": null,
+    "workflow_url": "https://api.github.com/repos/hocheunglai-oss/fcos/actions/workflows/380275209",
+    "head_commit": {
+      "id": "335ee8537391a64b69d480871447f4808c3443a3",
+      "tree_id": "bc5cec69da39bec63ea4d29da05b38466f510ea1",
+      "message": "Merge pull request #105 from hocheunglai-oss/codex/source-root-termination-20261010\n\nFix source authentication stall for URL-derived checkout roots",
+      "timestamp": "2026-10-10T12:24:18Z",
+      "author": {
+        "name": "hocheunglai-oss",
+        "email": "hocheunglai@gmail.com"
+      },
+      "committer": {
+        "name": "GitHub",
+        "email": "noreply@github.com"
+      }
+    },
+    "repository": {
+      "id": 1278654816,
+      "node_id": "R_kgDOTDa5YA",
+      "name": "fcos",
+      "full_name": "hocheunglai-oss/fcos",
+      "private": false,
+      "owner": {
+        "login": "hocheunglai-oss",
+        "id": 265701760,
+        "node_id": "U_kgDOD9ZJgA",
+        "avatar_url": "https://avatars.githubusercontent.com/u/265701760?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/hocheunglai-oss",
+        "html_url": "https://github.com/hocheunglai-oss",
+        "followers_url": "https://api.github.com/users/hocheunglai-oss/followers",
+        "following_url": "https://api.github.com/users/hocheunglai-oss/following{/other_user}",
+        "gists_url": "https://api.github.com/users/hocheunglai-oss/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/hocheunglai-oss/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/hocheunglai-oss/subscriptions",
+        "organizations_url": "https://api.github.com/users/hocheunglai-oss/orgs",
+        "repos_url": "https://api.github.com/users/hocheunglai-oss/repos",
+        "events_url": "https://api.github.com/users/hocheunglai-oss/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/hocheunglai-oss/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "html_url": "https://github.com/hocheunglai-oss/fcos",
+      "description": null,
+      "fork": false,
+      "url": "https://api.github.com/repos/hocheunglai-oss/fcos",
+      "forks_url": "https://api.github.com/repos/hocheunglai-oss/fcos/forks",
+      "keys_url": "https://api.github.com/repos/hocheunglai-oss/fcos/keys{/key_id}",
+      "collaborators_url": "https://api.github.com/repos/hocheunglai-oss/fcos/collaborators{/collaborator}",
+      "teams_url": "https://api.github.com/repos/hocheunglai-oss/fcos/teams",
+      "hooks_url": "https://api.github.com/repos/hocheunglai-oss/fcos/hooks",
+      "issue_events_url": "https://api.github.com/repos/hocheunglai-oss/fcos/issues/events{/number}",
+      "events_url": "https://api.github.com/repos/hocheunglai-oss/fcos/events",
+      "assignees_url": "https://api.github.com/repos/hocheunglai-oss/fcos/assignees{/user}",
+      "branches_url": "https://api.github.com/repos/hocheunglai-oss/fcos/branches{/branch}",
+      "tags_url": "https://api.github.com/repos/hocheunglai-oss/fcos/tags",
+      "blobs_url": "https://api.github.com/repos/hocheunglai-oss/fcos/git/blobs{/sha}",
+      "git_tags_url": "https://api.github.com/repos/hocheunglai-oss/fcos/git/tags{/sha}",
+      "git_refs_url": "https://api.github.com/repos/hocheunglai-oss/fcos/git/refs{/sha}",
+      "trees_url": "https://api.github.com/repos/hocheunglai-oss/fcos/git/trees{/sha}",
+      "statuses_url": "https://api.github.com/repos/hocheunglai-oss/fcos/statuses/{sha}",
+      "languages_url": "https://api.github.com/repos/hocheunglai-oss/fcos/languages",
+      "stargazers_url": "https://api.github.com/repos/hocheunglai-oss/fcos/stargazers",
+      "contributors_url": "https://api.github.com/repos/hocheunglai-oss/fcos/contributors",
+      "subscribers_url": "https://api.github.com/repos/hocheunglai-oss/fcos/subscribers",
+      "subscription_url": "https://api.github.com/repos/hocheunglai-oss/fcos/subscription",
+      "commits_url": "https://api.github.com/repos/hocheunglai-oss/fcos/commits{/sha}",
+      "git_commits_url": "https://api.github.com/repos/hocheunglai-oss/fcos/git/commits{/sha}",
+      "comments_url": "https://api.github.com/repos/hocheunglai-oss/fcos/comments{/number}",
+      "issue_comment_url": "https://api.github.com/repos/hocheunglai-oss/fcos/issues/comments{/number}",
+      "contents_url": "https://api.github.com/repos/hocheunglai-oss/fcos/contents/{+path}",
+      "compare_url": "https://api.github.com/repos/hocheunglai-oss/fcos/compare/{base}...{head}",
+      "merges_url": "https://api.github.com/repos/hocheunglai-oss/fcos/merges",
+      "archive_url": "https://api.github.com/repos/hocheunglai-oss/fcos/{archive_format}{/ref}",
+      "downloads_url": "https://api.github.com/repos/hocheunglai-oss/fcos/downloads",
+      "issues_url": "https://api.github.com/repos/hocheunglai-oss/fcos/issues{/number}",
+      "pulls_url": "https://api.github.com/repos/hocheunglai-oss/fcos/pulls{/number}",
+      "milestones_url": "https://api.github.com/repos/hocheunglai-oss/fcos/milestones{/number}",
+      "notifications_url": "https://api.github.com/repos/hocheunglai-oss/fcos/notifications{?since,all,participating}",
+      "labels_url": "https://api.github.com/repos/hocheunglai-oss/fcos/labels{/name}",
+      "releases_url": "https://api.github.com/repos/hocheunglai-oss/fcos/releases{/id}",
+      "deployments_url": "https://api.github.com/repos/hocheunglai-oss/fcos/deployments"
+    },
+    "head_repository": {
+      "id": 1278654816,
+      "node_id": "R_kgDOTDa5YA",
+      "name": "fcos",
+      "full_name": "hocheunglai-oss/fcos",
+      "private": false,
+      "owner": {
+        "login": "hocheunglai-oss",
+        "id": 265701760,
+        "node_id": "U_kgDOD9ZJgA",
+        "avatar_url": "https://avatars.githubusercontent.com/u/265701760?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/hocheunglai-oss",
+        "html_url": "https://github.com/hocheunglai-oss",
+        "followers_url": "https://api.github.com/users/hocheunglai-oss/followers",
+        "following_url": "https://api.github.com/users/hocheunglai-oss/following{/other_user}",
+        "gists_url": "https://api.github.com/users/hocheunglai-oss/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/hocheunglai-oss/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/hocheunglai-oss/subscriptions",
+        "organizations_url": "https://api.github.com/users/hocheunglai-oss/orgs",
+        "repos_url": "https://api.github.com/users/hocheunglai-oss/repos",
+        "events_url": "https://api.github.com/users/hocheunglai-oss/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/hocheunglai-oss/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "html_url": "https://github.com/hocheunglai-oss/fcos",
+      "description": null,
+      "fork": false,
+      "url": "https://api.github.com/repos/hocheunglai-oss/fcos",
+      "forks_url": "https://api.github.com/repos/hocheunglai-oss/fcos/forks",
+      "keys_url": "https://api.github.com/repos/hocheunglai-oss/fcos/keys{/key_id}",
+      "collaborators_url": "https://api.github.com/repos/hocheunglai-oss/fcos/collaborators{/collaborator}",
+      "teams_url": "https://api.github.com/repos/hocheunglai-oss/fcos/teams",
+      "hooks_url": "https://api.github.com/repos/hocheunglai-oss/fcos/hooks",
+      "issue_events_url": "https://api.github.com/repos/hocheunglai-oss/fcos/issues/events{/number}",
+      "events_url": "https://api.github.com/repos/hocheunglai-oss/fcos/events",
+      "assignees_url": "https://api.github.com/repos/hocheunglai-oss/fcos/assignees{/user}",
+      "branches_url": "https://api.github.com/repos/hocheunglai-oss/fcos/branches{/branch}",
+      "tags_url": "https://api.github.com/repos/hocheunglai-oss/fcos/tags",
+      "blobs_url": "https://api.github.com/repos/hocheunglai-oss/fcos/git/blobs{/sha}",
+      "git_tags_url": "https://api.github.com/repos/hocheunglai-oss/fcos/git/tags{/sha}",
+      "git_refs_url": "https://api.github.com/repos/hocheunglai-oss/fcos/git/refs{/sha}",
+      "trees_url": "https://api.github.com/repos/hocheunglai-oss/fcos/git/trees{/sha}",
+      "statuses_url": "https://api.github.com/repos/hocheunglai-oss/fcos/statuses/{sha}",
+      "languages_url": "https://api.github.com/repos/hocheunglai-oss/fcos/languages",
+      "stargazers_url": "https://api.github.com/repos/hocheunglai-oss/fcos/stargazers",
+      "contributors_url": "https://api.github.com/repos/hocheunglai-oss/fcos/contributors",
+      "subscribers_url": "https://api.github.com/repos/hocheunglai-oss/fcos/subscribers",
+      "subscription_url": "https://api.github.com/repos/hocheunglai-oss/fcos/subscription",
+      "commits_url": "https://api.github.com/repos/hocheunglai-oss/fcos/commits{/sha}",
+      "git_commits_url": "https://api.github.com/repos/hocheunglai-oss/fcos/git/commits{/sha}",
+      "comments_url": "https://api.github.com/repos/hocheunglai-oss/fcos/comments{/number}",
+      "issue_comment_url": "https://api.github.com/repos/hocheunglai-oss/fcos/issues/comments{/number}",
+      "contents_url": "https://api.github.com/repos/hocheunglai-oss/fcos/contents/{+path}",
+      "compare_url": "https://api.github.com/repos/hocheunglai-oss/fcos/compare/{base}...{head}",
+      "merges_url": "https://api.github.com/repos/hocheunglai-oss/fcos/merges",
+      "archive_url": "https://api.github.com/repos/hocheunglai-oss/fcos/{archive_format}{/ref}",
+      "downloads_url": "https://api.github.com/repos/hocheunglai-oss/fcos/downloads",
+      "issues_url": "https://api.github.com/repos/hocheunglai-oss/fcos/issues{/number}",
+      "pulls_url": "https://api.github.com/repos/hocheunglai-oss/fcos/pulls{/number}",
+      "milestones_url": "https://api.github.com/repos/hocheunglai-oss/fcos/milestones{/number}",
+      "notifications_url": "https://api.github.com/repos/hocheunglai-oss/fcos/notifications{?since,all,participating}",
+      "labels_url": "https://api.github.com/repos/hocheunglai-oss/fcos/labels{/name}",
+      "releases_url": "https://api.github.com/repos/hocheunglai-oss/fcos/releases{/id}",
+      "deployments_url": "https://api.github.com/repos/hocheunglai-oss/fcos/deployments"
+    }
+  },
+  "jobs": {
+    "total_count": 1,
+    "jobs": [
+      {
+        "id": 114213305619,
+        "run_id": 38052161466,
+        "workflow_name": "FCOS protected artifact coordination proof",
+        "head_branch": "main",
+        "run_url": "https://api.github.com/repos/hocheunglai-oss/fcos/actions/runs/38052161466",
+        "run_attempt": 1,
+        "node_id": "CR_kwDOTDa5YM8AAAAal6S9Ew",
+        "head_sha": "335ee8537391a64b69d480871447f4808c3443a3",
+        "url": "https://api.github.com/repos/hocheunglai-oss/fcos/actions/jobs/114213305619",
+        "html_url": "https://github.com/hocheunglai-oss/fcos/actions/runs/38052161466/job/114213305619",
+        "status": "completed",
+        "conclusion": "success",
+        "created_at": "2026-10-10T12:29:50Z",
+        "started_at": "2026-10-10T12:32:12Z",
+        "completed_at": "2026-10-10T12:35:08Z",
+        "name": "proof",
+        "steps": [
+          {
+            "name": "Set up job",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 1,
+            "started_at": "2026-10-10T12:32:12Z",
+            "completed_at": "2026-10-10T12:32:14Z"
+          },
+          {
+            "name": "Run actions/checkout@v4",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 2,
+            "started_at": "2026-10-10T12:32:14Z",
+            "completed_at": "2026-10-10T12:32:16Z"
+          },
+          {
+            "name": "Run actions/setup-node@v4",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 3,
+            "started_at": "2026-10-10T12:32:16Z",
+            "completed_at": "2026-10-10T12:32:17Z"
+          },
+          {
+            "name": "Run npm ci --ignore-scripts",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 4,
+            "started_at": "2026-10-10T12:32:17Z",
+            "completed_at": "2026-10-10T12:32:30Z"
+          },
+          {
+            "name": "Run ./trusted/.github/actions/release-executor",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 5,
+            "started_at": "2026-10-10T12:32:30Z",
+            "completed_at": "2026-10-10T12:35:06Z"
+          },
+          {
+            "name": "Retain sanitized actual backend observations",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 6,
+            "started_at": "2026-10-10T12:35:06Z",
+            "completed_at": "2026-10-10T12:35:06Z"
+          },
+          {
+            "name": "Post Run actions/setup-node@v4",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 11,
+            "started_at": "2026-10-10T12:35:06Z",
+            "completed_at": "2026-10-10T12:35:06Z"
+          },
+          {
+            "name": "Post Run actions/checkout@v4",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 12,
+            "started_at": "2026-10-10T12:35:06Z",
+            "completed_at": "2026-10-10T12:35:07Z"
+          },
+          {
+            "name": "Complete job",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 13,
+            "started_at": "2026-10-10T12:35:07Z",
+            "completed_at": "2026-10-10T12:35:07Z"
+          }
+        ],
+        "check_run_url": "https://api.github.com/repos/hocheunglai-oss/fcos/check-runs/114213305619",
+        "labels": [
+          "ubuntu-latest"
+        ],
+        "runner_id": 1000005856,
+        "runner_name": "GitHub Actions 1000005856",
+        "runner_group_id": 0,
+        "runner_group_name": "GitHub Actions"
+      }
+    ]
+  },
+  "artifacts": {
+    "total_count": 3,
+    "artifacts": [
+      {
+        "id": 11670745040,
+        "node_id": "MDg6QXJ0aWZhY3QxMTY3MDc0NTA0MA==",
+        "name": "fcos-coordination-proof-concurrent-38052161466",
+        "size_in_bytes": 410,
+        "url": "https://api.github.com/repos/hocheunglai-oss/fcos/actions/artifacts/11670745040",
+        "archive_download_url": "https://api.github.com/repos/hocheunglai-oss/fcos/actions/artifacts/11670745040/zip",
+        "expired": false,
+        "digest": "sha256:b4490e73e3f46f9af93b5284b48bb176120cb151c39c435d502373d078e2e138",
+        "created_at": "2026-10-10T12:34:58Z",
+        "updated_at": "2026-10-10T12:34:58Z",
+        "expires_at": "2026-11-09T12:34:58Z",
+        "workflow_run": {
+          "id": 38052161466,
+          "repository_id": 1278654816,
+          "head_repository_id": 1278654816,
+          "head_branch": "main",
+          "head_sha": "335ee8537391a64b69d480871447f4808c3443a3"
+        }
+      },
+      {
+        "id": 11670710077,
+        "node_id": "MDg6QXJ0aWZhY3QxMTY3MDcxMDA3Nw==",
+        "name": "fcos-coordination-proof-result-38052161466",
+        "size_in_bytes": 1095,
+        "url": "https://api.github.com/repos/hocheunglai-oss/fcos/actions/artifacts/11670710077",
+        "archive_download_url": "https://api.github.com/repos/hocheunglai-oss/fcos/actions/artifacts/11670710077/zip",
+        "expired": false,
+        "digest": "sha256:2ca58c267a5d74feb698329b5ededc101014524e01d8b9dab0fad4ea10a16443",
+        "created_at": "2026-10-10T12:35:06Z",
+        "updated_at": "2026-10-10T12:35:06Z",
+        "expires_at": "2026-11-09T12:35:06Z",
+        "workflow_run": {
+          "id": 38052161466,
+          "repository_id": 1278654816,
+          "head_repository_id": 1278654816,
+          "head_branch": "main",
+          "head_sha": "335ee8537391a64b69d480871447f4808c3443a3"
+        }
+      },
+      {
+        "id": 11670465501,
+        "node_id": "MDg6QXJ0aWZhY3QxMTY3MDQ2NTUwMQ==",
+        "name": "fcos-coordination-proof-crash-38052161466",
+        "size_in_bytes": 410,
+        "url": "https://api.github.com/repos/hocheunglai-oss/fcos/actions/artifacts/11670465501",
+        "archive_download_url": "https://api.github.com/repos/hocheunglai-oss/fcos/actions/artifacts/11670465501/zip",
+        "expired": false,
+        "digest": "sha256:25c12b7831db31503e7dc8bac2dd3e09aaf32fb5d57c112aa6fe4006800efa4c",
+        "created_at": "2026-10-10T12:35:02Z",
+        "updated_at": "2026-10-10T12:35:02Z",
+        "expires_at": "2026-11-09T12:35:02Z",
+        "workflow_run": {
+          "id": 38052161466,
+          "repository_id": 1278654816,
+          "head_repository_id": 1278654816,
+          "head_branch": "main",
+          "head_sha": "335ee8537391a64b69d480871447f4808c3443a3"
+        }
+      }
+    ]
+  },
+  "main": {
+    "name": "main",
+    "commit": {
+      "sha": "335ee8537391a64b69d480871447f4808c3443a3",
+      "node_id": "C_kwDOTDa5YNoAKDMzNWVlODUzNzM5MWE2NGI2OWQ0ODA4NzE0NDdmNDgwOGMzNDQzYTM",
+      "commit": {
+        "author": {
+          "name": "hocheunglai-oss",
+          "email": "hocheunglai@gmail.com",
+          "date": "2026-10-10T12:24:18Z"
+        },
+        "committer": {
+          "name": "GitHub",
+          "email": "noreply@github.com",
+          "date": "2026-10-10T12:24:18Z"
+        },
+        "message": "Merge pull request #105 from hocheunglai-oss/codex/source-root-termination-20261010\n\nFix source authentication stall for URL-derived checkout roots",
+        "tree": {
+          "sha": "bc5cec69da39bec63ea4d29da05b38466f510ea1",
+          "url": "https://api.github.com/repos/hocheunglai-oss/fcos/git/trees/bc5cec69da39bec63ea4d29da05b38466f510ea1"
+        },
+        "url": "https://api.github.com/repos/hocheunglai-oss/fcos/git/commits/335ee8537391a64b69d480871447f4808c3443a3",
+        "comment_count": 0,
+        "verification": {
+          "verified": true,
+          "reason": "valid",
+          "signature": "-----BEGIN PGP SIGNATURE-----\n\nwsFcBAABCAAQBQJqyi5yCRC1aQ7uu5UhlAAADdsQAECxfNNV4xd/OLyxgKSkl9vv\nPQewAm7h2Q74P2UY5UOHN4whtzBi3DWK05DouUijIyhUVrPmgPeqJyNsUHGV9Qcn\nnF8emO/MLqh3tn8VPE2PjhoGrNEqHXcts1NX3/zHFqsdHOsK9i8ErQTAy0aqn7NY\nG5ZGJU70K8xlpyMBx5Bg0t8vHEY3Ed48I26LkOtC4Ah297eobQCVHgnnTmxY11iV\nFX/reMX7JVUYQY7OuExMtRBBVDjo84b3YGP9tsyDtP08xx4akKNBaEku0Xo540XT\njRt0SV8I1uY+tn0xovZ0h5G5pbhjxDMsImcGJEhWgzwqOlHjBASg7ql/Uql3G7xO\nXbehNlcL+VbobEHrVqOjPow21HNQKSu1fMvF01nsPZUxgnXxZUiwx4Bjt93xOk+Q\nDrUckgME2u6AGdg2EHf6TG9q3jUDHCelR9ysalwgtG33ta9euHvzcNkdntEvYw7n\nBpFxHtDFNbVRsDaYNhRgQ4ztnKnNXleqeVy3E8FSfaM2E6aqWgWLO5R7KKwg0ba/\n38wavi+NvA4+2rgI/M/aIdSAwB9t9/Ztwa+DC4adJFuGZ06JDdxhAyMz3ZjLmFNX\nwdX2fa1/t3uGICsD24eZbhaXTWM9bdIClmlGkQVWq8NohW9b/yDqlgokxoThcR2Y\nlMSUL2m1CVobWGIYbHq5\n=O+gA\n-----END PGP SIGNATURE-----\n",
+          "payload": "tree bc5cec69da39bec63ea4d29da05b38466f510ea1\nparent c9c11e30a175b0cad3a1dd892f0902efd4c05505\nparent 22b06f1328eb1f994651c8fad52efb747220d7a7\nauthor hocheunglai-oss <hocheunglai@gmail.com> 1791635058 +0800\ncommitter GitHub <noreply@github.com> 1791635058 +0800\n\nMerge pull request #105 from hocheunglai-oss/codex/source-root-termination-20261010\n\nFix source authentication stall for URL-derived checkout roots",
+          "verified_at": "2026-10-10T12:24:19Z"
+        }
+      },
+      "url": "https://api.github.com/repos/hocheunglai-oss/fcos/commits/335ee8537391a64b69d480871447f4808c3443a3",
+      "html_url": "https://github.com/hocheunglai-oss/fcos/commit/335ee8537391a64b69d480871447f4808c3443a3",
+      "comments_url": "https://api.github.com/repos/hocheunglai-oss/fcos/commits/335ee8537391a64b69d480871447f4808c3443a3/comments",
+      "author": {
+        "login": "hocheunglai-oss",
+        "id": 265701760,
+        "node_id": "U_kgDOD9ZJgA",
+        "avatar_url": "https://avatars.githubusercontent.com/u/265701760?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/hocheunglai-oss",
+        "html_url": "https://github.com/hocheunglai-oss",
+        "followers_url": "https://api.github.com/users/hocheunglai-oss/followers",
+        "following_url": "https://api.github.com/users/hocheunglai-oss/following{/other_user}",
+        "gists_url": "https://api.github.com/users/hocheunglai-oss/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/hocheunglai-oss/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/hocheunglai-oss/subscriptions",
+        "organizations_url": "https://api.github.com/users/hocheunglai-oss/orgs",
+        "repos_url": "https://api.github.com/users/hocheunglai-oss/repos",
+        "events_url": "https://api.github.com/users/hocheunglai-oss/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/hocheunglai-oss/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "committer": {
+        "login": "web-flow",
+        "id": 19864447,
+        "node_id": "MDQ6VXNlcjE5ODY0NDQ3",
+        "avatar_url": "https://avatars.githubusercontent.com/u/19864447?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/web-flow",
+        "html_url": "https://github.com/web-flow",
+        "followers_url": "https://api.github.com/users/web-flow/followers",
+        "following_url": "https://api.github.com/users/web-flow/following{/other_user}",
+        "gists_url": "https://api.github.com/users/web-flow/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/web-flow/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/web-flow/subscriptions",
+        "organizations_url": "https://api.github.com/users/web-flow/orgs",
+        "repos_url": "https://api.github.com/users/web-flow/repos",
+        "events_url": "https://api.github.com/users/web-flow/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/web-flow/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "parents": [
+        {
+          "sha": "c9c11e30a175b0cad3a1dd892f0902efd4c05505",
+          "url": "https://api.github.com/repos/hocheunglai-oss/fcos/commits/c9c11e30a175b0cad3a1dd892f0902efd4c05505",
+          "html_url": "https://github.com/hocheunglai-oss/fcos/commit/c9c11e30a175b0cad3a1dd892f0902efd4c05505"
+        },
+        {
+          "sha": "22b06f1328eb1f994651c8fad52efb747220d7a7",
+          "url": "https://api.github.com/repos/hocheunglai-oss/fcos/commits/22b06f1328eb1f994651c8fad52efb747220d7a7",
+          "html_url": "https://github.com/hocheunglai-oss/fcos/commit/22b06f1328eb1f994651c8fad52efb747220d7a7"
+        }
+      ]
+    },
+    "_links": {
+      "self": "https://api.github.com/repos/hocheunglai-oss/fcos/branches/main",
+      "html": "https://github.com/hocheunglai-oss/fcos/tree/main"
+    },
+    "protected": true,
+    "protection": {
+      "enabled": true,
+      "required_status_checks": {
+        "enforcement_level": "everyone",
+        "contexts": [
+          "code-and-database",
+          "dependency-review",
+          "authenticated-browser"
+        ],
+        "checks": [
+          {
+            "context": "code-and-database",
+            "app_id": 15368
+          },
+          {
+            "context": "dependency-review",
+            "app_id": 15368
+          },
+          {
+            "context": "authenticated-browser",
+            "app_id": 15368
+          }
+        ]
+      }
+    },
+    "protection_url": "https://api.github.com/repos/hocheunglai-oss/fcos/branches/main/protection"
+  },
+  "variable": {
+    "name": "FCOS_RELEASE_COORDINATION_PROOF_ACTION",
+    "value": "{\"kind\":\"root_admitted_artifact_coordination_proof\",\"binding\":{\"repository\":\"hocheunglai-oss/fcos\",\"harnessSha\":\"335ee8537391a64b69d480871447f4808c3443a3\",\"runId\":38052161466,\"jobId\":114213305619},\"authorizedBy\":\"hocheunglai-oss\",\"actionAuthorizationSha256\":\"0fa32fa704719024ce457211c0610b586bc4ca1b9a8cd35f159676bce20a7a66\",\"authorizedAt\":1791635691554,\"lease\":{\"epoch\":\"production-reconciliation-20261005\",\"objective\":\"production\",\"ownerThreadId\":\"01a0f08b-7fcb-7870-9edc-343e16052b62\",\"operationId\":\"fcos-release-coordination-proof-38052161466\",\"bindingSha256\":\"38ad91957044dfab49f17192d277482cefae2422f0269a2d21ae54e8ebdeab1d\",\"leaseId\":\"a031603c-e939-47a3-8cf4-328abdbf1700\",\"coordinationOnly\":true,\"providerAuthorityGranted\":false,\"uncertainOutcomeRequiresReadback\":true}}",
+    "created_at": "2026-10-10T12:34:52Z",
+    "updated_at": "2026-10-10T12:34:52Z"
+  }
+}

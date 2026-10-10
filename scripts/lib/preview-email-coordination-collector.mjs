@@ -9,15 +9,18 @@ import { githubReleaseReads, assertReleaseGitHubAccount, RELEASE_REPOSITORY } fr
 import { githubReleaseOidc } from './release-production.mjs';
 import { SUCCESSOR_LIVE_CONTRACT, collectSuccessorLiveOperationAdmission, successorLiveRemoteControls,
   successorLiveControlBinding, successorLiveBinding } from './runtime-compatibility-successor-live.mjs';
+import { rejectSuccessorUncoordinatedMutation } from './runtime-compatibility-successor-live.mjs';
 import { collectPreviewEmailBuildJobs, collectTrustedPreviewEmailIntent, assertPreviewEmailBuildProtection,
   assertTrustedPreviewEmailIntentRecord, collectPreviewEmailEnvironmentRecords } from './preview-email-build.mjs';
 import { ENROLLED_AUTHORITY_SECRET, ENROLLED_AUTHORITY_RECEIPT, collectEnrolledPreviewAuthority,
   ENROLLED_AUTHORITY_MODE, enrolledAuthorityContext, verifyEnrollmentReceipt } from './preview-vercel-enrollment.mjs';
 import { PREVIEW_COORDINATION_TARGET as target, PREVIEW_COORDINATION_VARIABLE, PREVIEW_COORDINATION_FILENAME,
-  requirePreviewCoordinationProtectedActions, coordinationHash, coordinationSame, coordinationFailure,
+  coordinationDeadline, coordinationHash, coordinationSame, coordinationFailure,
   normalizeCoordinationEnvelope, coordinationBindingFromOriginal, verifyCoordinationGrantData, coordinationClaimName } from './preview-email-coordination.mjs';
+import { PREVIEW_COORDINATION_ACTION_VARIABLE, assertPreviewCoordinationAction, collectCoordinationBackendProof,
+  assertPreviewCoordinationPublicationCurrent } from './preview-email-coordination-action.mjs';
 
-const ROOT = fileURLToPath(new URL('../..', import.meta.url));
+const ROOT = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 const base = `repos/${RELEASE_REPOSITORY}`, environmentPath = `${base}/environments/${target.environment}`;
 const originalContexts = new WeakSet(), claimContexts = new WeakMap(), consumed = new WeakSet();
 let uploadAttempted = false;
@@ -27,6 +30,7 @@ const nativeFetch = globalThis.fetch.bind(globalThis);
 const fixedGh = hosted => githubReleaseReads({ command: hosted ? '/usr/bin/gh' : '/Users/vincex/.local/gh/current/bin/gh',
   env: { PATH: '/usr/bin:/bin', HOME: process.env.HOME, GH_HOST: 'github.com', GH_REPO: RELEASE_REPOSITORY,
     ...(hosted ? { GH_TOKEN: process.env.GH_TOKEN } : { GH_CONFIG_DIR: '/Users/vincex/Documents/FCOS/.fcos-cli/github' }) } }, { cwd: ROOT });
+let localReads;
 async function all(reads, path, field) {
   const rows = [], ids = new Set(); let total;
   for (let page = 1; page <= 100; page++) {
@@ -49,6 +53,7 @@ function actualHostedIdentity() {
   const env = process.env, runId = Number(env.GITHUB_RUN_ID), workspace = resolve(env.GITHUB_WORKSPACE || '/');
   if (env.GITHUB_ACTIONS !== 'true' || env.GITHUB_REPOSITORY !== RELEASE_REPOSITORY || !positive(runId)
     || env.GITHUB_RUN_ATTEMPT !== '1' || env.GITHUB_JOB !== 'proof' || env.FCOS_E2E_EXPECTED_COMMIT !== SUCCESSOR_LIVE_CONTRACT.candidateSha
+    || env.NODE_OPTIONS || env.NODE_PATH || process.execArgv.length
     || realpathSync(ROOT) !== join(workspace, 'trusted') || realpathSync(env.FCOS_RELEASE_SOURCE_DIRECTORY || '/') !== join(workspace, 'candidate')
     || !env.GH_TOKEN || !env.VERCEL_TOKEN || !env[ENROLLED_AUTHORITY_SECRET]) coordinationFailure();
   return { runId, sourceCwd: join(workspace, 'candidate') };
@@ -85,7 +90,7 @@ async function actualOriginal(reads, runId, sourceCwd) {
 // before calling this fixed constructor. No caller transport/decoder/clock.
 export async function collectLocalPreviewCoordinationEvidence(runId) {
   if (arguments.length !== 1 || !positive(runId) || process.platform !== 'darwin') coordinationFailure();
-  const reads = fixedGh(false); assertReleaseGitHubAccount(reads);
+  const reads = localReads ||= fixedGh(false); assertReleaseGitHubAccount(reads);
   const actual = await actualOriginal(reads, runId, ROOT);
   const variables = await all(reads, `${environmentPath}/variables`, 'variables');
   const issuanceEnvelope = variable(variables, ENROLLED_AUTHORITY_RECEIPT);
@@ -106,7 +111,11 @@ export async function collectLocalPreviewCoordinationEvidence(runId) {
   if (secrets.secrets.length !== names.length || secrets.secrets.some(row => !names.includes(row.name))) coordinationFailure();
   const secretMetadata = secrets.secrets.map(({ name, created_at, updated_at }) => ({ name, created_at, updated_at }))
     .sort((a, b) => a.name.localeCompare(b.name));
-  return { ...actual, issuanceEnvelope, secretMetadata };
+  const binding = coordinationBindingFromOriginal({ ...actual, issuanceEnvelope, now: Date.now() });
+  const backendProof = await collectCoordinationBackendProof(reads, actual.admission.harnessSha);
+  const actionText = variable(variables, PREVIEW_COORDINATION_ACTION_VARIABLE);
+  const action = assertPreviewCoordinationAction(actionText, binding, backendProof.reviewSha256);
+  return { ...actual, issuanceEnvelope, secretMetadata, binding, backendProof, actionText, action };
 }
 async function actualHostedContext() {
   const identity = actualHostedIdentity(), reads = fixedGh(true); assertReleaseGitHubAccount(reads);
@@ -139,10 +148,28 @@ async function actualHostedContext() {
   const records = await collectPreviewEmailEnvironmentRecords({ api: fixedVercelGet, now: Date.now() });
   if (!coordinationSame(records.records, original.intent.environmentRecords.records)) coordinationFailure();
   const binding = coordinationBindingFromOriginal({ admission, original, issuanceEnvelope: issuance.envelope, now: Date.now() });
-  const envelopeText = variable(variables, PREVIEW_COORDINATION_VARIABLE);
+  const backendProof = await collectCoordinationBackendProof(reads, admission.harnessSha);
+  let actionText, envelopeText;
+  // The original approved job waits for the separately admitted issuer, using
+  // only original clocks. A new process/attempt cannot repeat consumption.
+  let current = variables;
+  while (Date.now() < coordinationDeadline(binding)) {
+    actionText = current.variables.find(row => row.name === PREVIEW_COORDINATION_ACTION_VARIABLE)?.value;
+    envelopeText = current.variables.find(row => row.name === PREVIEW_COORDINATION_VARIABLE)?.value;
+    if (typeof actionText === 'string' && typeof envelopeText === 'string') break;
+    await new Promise(done => setTimeout(done, Math.min(10000, coordinationDeadline(binding) - Date.now())));
+    current = await all(reads, `${environmentPath}/variables`, 'variables');
+  }
+  const action = assertPreviewCoordinationAction(actionText, binding, backendProof.reviewSha256);
   const verifiedGrant = verifyCoordinationGrantData({ envelope: envelopeText, expected: binding, publicKeySpkiBase64: pinnedKey, now: Date.now() });
-  const context = { reads, admission, original, binding, issuance, envelopeText, verifiedGrant, identity, oidcClaims };
+  assertGrantAction(verifiedGrant.grant, action, backendProof);
+  const context = { reads, admission, original, binding, issuance, envelopeText, verifiedGrant, identity, oidcClaims, action, actionText, backendProof };
   originalContexts.add(context); return context;
+}
+function assertGrantAction(grant, action, proof) {
+  if (grant.actionSha256 !== action.sha256 || grant.backendReviewSha256 !== proof.reviewSha256
+    || grant.backendClosureSha256 !== proof.closureSha256 || grant.authorizedAt !== action.value.authorizedAt
+    || grant.privateReadinessAt !== action.value.privateReadinessAt) coordinationFailure();
 }
 function recheck(context) {
   if (!originalContexts.has(context) || actualHostedIdentity().runId !== context.binding.runId || context.oidcClaims.exp * 1000 <= Date.now()) coordinationFailure();
@@ -151,7 +178,9 @@ function recheck(context) {
   verifyEnrollmentReceipt({ ...context.issuance, publicKeySpkiBase64: pinnedKey, now: Date.now() });
   const binding = coordinationBindingFromOriginal({ admission: context.admission, original: context.original, issuanceEnvelope: context.issuance.envelope, now: Date.now() });
   if (!coordinationSame(binding, context.binding)) coordinationFailure();
-  return verifyCoordinationGrantData({ envelope: context.envelopeText, expected: binding, publicKeySpkiBase64: pinnedKey, now: Date.now() });
+  const action = assertPreviewCoordinationAction(context.actionText, binding, context.backendProof.reviewSha256);
+  const grant = verifyCoordinationGrantData({ envelope: context.envelopeText, expected: binding, publicKeySpkiBase64: pinnedKey, now: Date.now() });
+  assertGrantAction(grant.grant, action, context.backendProof); return grant;
 }
 export async function collectHostedPreviewCoordinationStatus() {
   if (arguments.length) coordinationFailure();
@@ -160,15 +189,15 @@ export async function collectHostedPreviewCoordinationStatus() {
   return { schemaVersion: 1, kind: 'fcos_preview_coordination_read_only_status', grantSha256: context.verifiedGrant.envelopeSha256,
     leaseId: context.verifiedGrant.grant.lease.leaseId, expiresAt: context.verifiedGrant.grant.expiresAt,
     originalRunId: context.binding.runId, alreadyConsumed: prior.artifacts.some(row => row.name === coordinationClaimName(context.binding)),
-    protectedActionsInstalled: false, previewAuthorized: false, productionAuthorized: false, mutations: 0 };
+    exactActionAdmitted: true, backendClosureSha256: context.backendProof.closureSha256,
+    previewAuthorized: false, productionAuthorized: false, mutations: 0 };
 }
 
-/** Future guarded production path: fixed account/transport/decoder/wall-clock,
+/** Guarded production path: fixed account/transport/decoder/wall-clock,
  * original runtime identity, real key and one SDK invocation. SDK service calls
  * can retry internally; no HTTP-count or backend-exclusivity proof is inferred. */
 export async function collectHostedPreviewCoordinationClaim() {
   if (arguments.length) coordinationFailure();
-  requirePreviewCoordinationProtectedActions();
   if (uploadAttempted) coordinationFailure(); uploadAttempted = true;
   const context = await actualHostedContext(), name = coordinationClaimName(context.binding);
   const prior = await all(context.reads, `${base}/actions/runs/${context.binding.runId}/artifacts`, 'artifacts');
@@ -176,6 +205,9 @@ export async function collectHostedPreviewCoordinationClaim() {
   const current = await collectTrustedPreviewEmailIntent({ reads: context.reads, runId: context.binding.runId,
     candidateSha: SUCCESSOR_LIVE_CONTRACT.candidateSha, admission: context.admission, now: Date.now(), withTrust: true });
   if (!coordinationSame(current, context.original)) coordinationFailure(); recheck(context);
+  const fresh = await all(context.reads, `${environmentPath}/variables`, 'variables');
+  if (variable(fresh, PREVIEW_COORDINATION_ACTION_VARIABLE) !== context.actionText
+    || variable(fresh, PREVIEW_COORDINATION_VARIABLE) !== context.envelopeText) coordinationFailure();
   const payload = { schemaVersion: 1, kind: 'fcos_exact_04ee_immutable_consumption', binding: context.binding,
     grantSha256: context.verifiedGrant.envelopeSha256, leaseId: context.verifiedGrant.grant.lease.leaseId,
     consumptionSha256: context.verifiedGrant.grant.consumptionSha256, possibleSubmission: true, replayForbidden: true };
@@ -199,8 +231,20 @@ export async function collectHostedPreviewCoordinationClaim() {
     archiveSha256: coordinationHash(archive), grantSha256: payload.grantSha256, providerAuthorityGranted: false });
   claimContexts.set(claim, context); return claim;
 }
-export function consumeHostedPreviewCoordinationClaim(claim) {
-  if (arguments.length !== 1 || !claimContexts.has(claim) || consumed.has(claim)) coordinationFailure();
-  requirePreviewCoordinationProtectedActions(); recheck(claimContexts.get(claim)); consumed.add(claim);
+export function assertHostedPreviewCoordinationClaim(claim, intent) {
+  const context = claimContexts.get(claim);
+  if (!context || consumed.has(claim) || !coordinationSame(context.original.intent, intent)) rejectSuccessorUncoordinatedMutation();
+  recheck(context); return true;
+}
+export async function consumeHostedPreviewCoordinationClaim(claim, intent) {
+  if (arguments.length !== 2 || !claimContexts.has(claim) || consumed.has(claim)) coordinationFailure();
+  // Enter a one-way checking state before the first await. Concurrent checks,
+  // revocation, transport uncertainty and expiry can never retry the claim.
+  assertHostedPreviewCoordinationClaim(claim, intent); consumed.add(claim);
+  const context = claimContexts.get(claim);
+  const action = await context.reads.json(`${environmentPath}/variables/${PREVIEW_COORDINATION_ACTION_VARIABLE}`);
+  const grant = await context.reads.json(`${environmentPath}/variables/${PREVIEW_COORDINATION_VARIABLE}`);
+  assertPreviewCoordinationPublicationCurrent({ action, grant }, context);
+  recheck(context); // Last fixed GETs cannot renew original source/action clocks.
   return { coordinationClaimConsumed: true, providerAuthorityGranted: false };
 }
