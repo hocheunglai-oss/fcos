@@ -16,7 +16,7 @@ import { previewEmailBuildCandidate, previewEmailBuildContract, createPreviewEma
   collectPreviewEmailEnvironmentRecords, createPreviewEmailBuildIntent, collectTrustedPreviewEmailIntent, collectPreviewEmailBuildJobs,
   runControlledPreviewEmailBuild, readPreviewEmailBuildVersion, PREVIEW_EMAIL_BUILD_ENVIRONMENT,
   PREVIEW_EMAIL_INTENT_FILENAME, PREVIEW_EMAIL_BUILD_FILENAME, PREVIEW_EMAIL_CONTRACT_SHA256,
-  PREVIEW_EMAIL_AUTHORITY_DIAGNOSTIC_FILENAME } from './lib/preview-email-build.mjs';
+  PREVIEW_EMAIL_AUTHORITY_DIAGNOSTIC_FILENAME, waitForPreviewEmailAttestation } from './lib/preview-email-build.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const baseline = JSON.parse(readFileSync(new URL('../config/legacy-email-baseline-proof.json', import.meta.url))).baseline;
@@ -30,7 +30,7 @@ const command = (binary, args, options = {}) => {
 const DIAGNOSTIC_PHASES = new Set(['runner_context', 'successor_admission', 'candidate_contract', 'candidate_provenance', 'harness_provenance',
   'dependency_lock', 'control_revision', 'source_pins', 'provider_cli_version', 'github_identity', 'actions_oidc',
   'protected_repository', 'environment_variables', 'environment_protection', 'environment_secrets', 'workflow_run',
-  'environment_approval', 'workflow_job', 'protection_review', 'candidate_branch', 'source_recheck', 'vercel_authority',
+  'environment_approval', 'workflow_job', 'protection_review', 'receipt_handoff', 'candidate_branch', 'source_recheck', 'vercel_authority',
   'retained_production', 'environment_records', 'intent_write', 'recovery_context', 'trusted_intent', 'execution_claim',
   'controlled_build', 'receipt_write', 'authority_probe', 'authority_probe_write', 'enrolled_authority', 'enrolled_authority_write', 'coordination_claim']);
 const diagnosticFailure = phase => new Error(`FCOS protected Preview ${phase} failed; private diagnostics suppressed.`);
@@ -251,18 +251,35 @@ export async function runPreviewEmailProofBuild({ mode = 'dry-run', candidateSha
     const authority = async intent => {
       await stage('github_identity', () => assertReleaseGitHubAccount(reads));
       signed = await stage('actions_oidc', () => githubReleaseOidc({ env }));
-      const { repository, branch, protection } = await stage('protected_repository', () => {
+      let { repository, branch, protection } = await stage('protected_repository', () => {
         const repository = reads.json(`repos/${RELEASE_REPOSITORY}`);
         const branch = reads.json(`repos/${RELEASE_REPOSITORY}/branches/${encodeURIComponent(repository.default_branch)}`);
         const protection = reads.json(`repos/${RELEASE_REPOSITORY}/branches/${encodeURIComponent(repository.default_branch)}/protection`);
         return { repository, branch, protection };
       });
-      const variables = await stage('environment_variables', () => completeEnvironmentNames(reads, `repos/${RELEASE_REPOSITORY}/environments/${PREVIEW_EMAIL_BUILD_ENVIRONMENT}/variables`, 'variables'));
-      const environment = await stage('environment_protection', () => reads.json(`repos/${RELEASE_REPOSITORY}/environments/${PREVIEW_EMAIL_BUILD_ENVIRONMENT}`));
-      const secrets = await stage('environment_secrets', () => completeEnvironmentNames(reads, `repos/${RELEASE_REPOSITORY}/environments/${PREVIEW_EMAIL_BUILD_ENVIRONMENT}/secrets`, 'secrets'));
-      const run = await stage('workflow_run', () => reads.json(`repos/${RELEASE_REPOSITORY}/actions/runs/${signed.run_id}`));
-      const approvals = await stage('environment_approval', () => reads.json(`repos/${RELEASE_REPOSITORY}/actions/runs/${signed.run_id}/approvals`));
-      const jobs = await stage('workflow_job', () => collectPreviewEmailBuildJobs({ reads, runId: Number(signed.run_id) }));
+      let variables = await stage('environment_variables', () => completeEnvironmentNames(reads, `repos/${RELEASE_REPOSITORY}/environments/${PREVIEW_EMAIL_BUILD_ENVIRONMENT}/variables`, 'variables'));
+      let environment = await stage('environment_protection', () => reads.json(`repos/${RELEASE_REPOSITORY}/environments/${PREVIEW_EMAIL_BUILD_ENVIRONMENT}`));
+      let secrets = await stage('environment_secrets', () => completeEnvironmentNames(reads, `repos/${RELEASE_REPOSITORY}/environments/${PREVIEW_EMAIL_BUILD_ENVIRONMENT}/secrets`, 'secrets'));
+      let run = await stage('workflow_run', () => reads.json(`repos/${RELEASE_REPOSITORY}/actions/runs/${signed.run_id}`));
+      let approvals = await stage('environment_approval', () => reads.json(`repos/${RELEASE_REPOSITORY}/actions/runs/${signed.run_id}/approvals`));
+      let jobs = await stage('workflow_job', () => collectPreviewEmailBuildJobs({ reads, runId: Number(signed.run_id) }));
+      if (successor && mode !== 'diagnose-authority') {
+        variables = await stage('receipt_handoff', () => waitForPreviewEmailAttestation({
+          protection: { repository, branch, protection, environment, variables, secrets, run, jobs, approvals, oidcClaims: signed,
+            candidateSha, harnessSha: harness.commit, controlRevision, admission, mode: mode === 'verify-authority' ? mode : 'build' },
+          readVariables: () => completeEnvironmentNames(reads, `repos/${RELEASE_REPOSITORY}/environments/${PREVIEW_EMAIL_BUILD_ENVIRONMENT}/variables`, 'variables'),
+          privateEnrollment: env[ENROLLED_AUTHORITY_SECRET], token: env.VERCEL_TOKEN, operation: mode === 'prepare' ? 'create' : mode }));
+        // Recheck actual protected state after external signing/consent latency.
+        repository = reads.json(`repos/${RELEASE_REPOSITORY}`);
+        branch = reads.json(`repos/${RELEASE_REPOSITORY}/branches/${encodeURIComponent(repository.default_branch)}`);
+        protection = reads.json(`repos/${RELEASE_REPOSITORY}/branches/${encodeURIComponent(repository.default_branch)}/protection`);
+        environment = reads.json(`repos/${RELEASE_REPOSITORY}/environments/${PREVIEW_EMAIL_BUILD_ENVIRONMENT}`);
+        secrets = completeEnvironmentNames(reads, `repos/${RELEASE_REPOSITORY}/environments/${PREVIEW_EMAIL_BUILD_ENVIRONMENT}/secrets`, 'secrets');
+        run = reads.json(`repos/${RELEASE_REPOSITORY}/actions/runs/${signed.run_id}`);
+        approvals = reads.json(`repos/${RELEASE_REPOSITORY}/actions/runs/${signed.run_id}/approvals`);
+        jobs = await collectPreviewEmailBuildJobs({ reads, runId: Number(signed.run_id) });
+        variables = completeEnvironmentNames(reads, `repos/${RELEASE_REPOSITORY}/environments/${PREVIEW_EMAIL_BUILD_ENVIRONMENT}/variables`, 'variables');
+      }
       approved = await stage('protection_review', () => {
         const result = assertPreviewEmailBuildProtection({ repository, branch, protection, environment, variables, secrets,
           run, jobs, approvals, oidcClaims: signed, candidateSha, harnessSha: harness.commit, controlRevision,
