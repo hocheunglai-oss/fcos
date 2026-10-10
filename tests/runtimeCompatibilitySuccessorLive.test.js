@@ -183,8 +183,17 @@ test('genuine exact admission reaches fixed attest preflight but cannot grant pr
     harnessSha: admission.harnessSha, controlRevision: admission.context.previewControlRevision, configurationRevision: admission.context.configurationRevision,
     contractSha256: admission.contractSha256, enrollmentId: '22222222-2222-4222-8222-222222222222', tokenId: 'OFFLINE_EXISTING_TOKEN',
     expiresAt: now + 3600000, leaseDeadline: now + 3600000, runId: 99, runAttempt: 1, operation: 'create',
-    secretMetadata: ['FCOS_RELEASE_GH_TOKEN', 'FCOS_RELEASE_VERCEL_TOKEN', 'FCOS_RELEASE_VERCEL_ENROLLMENT'].map(name => ({ name,
-      created_at: iso(now - 60000), updated_at: iso(now - 10000) })) };
+    secretMetadata: ['FCOS_RELEASE_GH_TOKEN', 'FCOS_RELEASE_VERCEL_TOKEN', 'FCOS_RELEASE_VERCEL_ENROLLMENT',
+      'FCOS_E2E_VERCEL_BYPASS', 'FCOS_RELEASE_PREVIEW_RUNTIME_TOKEN', 'FCOS_RELEASE_RUNTIME_TOKEN'].map(name => ({ name,
+      created_at: iso(now - 60000), updated_at: iso(now - 10000) })),
+    privateReadinessAt: now - 2000, enrollmentStateSha256: '1'.repeat(64),
+    privateActionEvidence: { path: '/Users/vincex/Documents/FCOS/.fcos-cli/OFFLINE-authority.json', sha256: '2'.repeat(64) },
+    rootReview: { path: '/Users/vincex/Documents/FCOS/.fcos-cli/OFFLINE-root.json', sha256: '3'.repeat(64) },
+    independentReview: { path: '/Users/vincex/Documents/FCOS/.fcos-cli/OFFLINE-independent.json', sha256: '4'.repeat(64) },
+    authorityBasis: { kind: 'existing_direct_human_authorization', localReviewGrantsAuthority: false,
+      citations: [{ path: '/Users/vincex/Documents/FCOS/.fcos-cli/OFFLINE-citation.json', sha256: '5'.repeat(64) }] },
+    jobId: 100, jobStartedAt: iso(now - 10000), dispatchedAt: iso(now - 15000),
+    operationId: `fcos-preview-vercel-attestation-99-${nonce}` };
   const input = { approval, nonce, scriptSha256, admission, now };
   assert.equal(bindSuccessorAttestationAdmission(input), admission);
   for (const changed of [structuredClone(admission), undefined]) assert.throws(() => bindSuccessorAttestationAdmission({ ...input, admission: changed }));
