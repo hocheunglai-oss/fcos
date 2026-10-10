@@ -11,7 +11,7 @@ import { RELEASE_COORDINATION_DOMAIN, RELEASE_COORDINATION_ROUTES, releaseCoordi
   releaseCoordinationGrantData, releaseCoordinationMessage, verifyReleaseCoordinationGrant, coordinationDigest, coordinationEqual,
   validateReleaseCoordinationBinding, releaseCoordinationFailure } from './lib/release-coordination.mjs';
 
-const ROOT = fileURLToPath(new URL('..', import.meta.url)), ownPath = fileURLToPath(import.meta.url);
+const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url))), ownPath = fileURLToPath(import.meta.url);
 const PRIMARY = '/Users/vincex/Documents/FCOS', approvals = `${PRIMARY}/.fcos-cli/release-coordination`;
 const gh = '/Users/vincex/.local/gh/current/bin/gh';
 const environment = { PATH: '/usr/bin:/bin', HOME: process.env.HOME, GH_HOST: 'github.com', GH_REPO: fcosConnectionIdentifier('github', 'Repository'), GH_CONFIG_DIR: `${PRIMARY}/.fcos-cli/github` };
@@ -58,9 +58,10 @@ function actionAdmission(nonce) {
  * in two Git batches. This is a source check, not an action admission. */
 export function assertReleaseCoordinatorSource(cwd, commit) {
   need(/^[a-f0-9]{40}$/.test(commit));
+  const root = resolve(cwd);
   const gitEnv = { PATH: '/usr/bin:/bin', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_NO_REPLACE_OBJECTS: '1' };
-  const git = (args, input) => execFileSync('/usr/bin/git', ['--no-replace-objects', ...args], { cwd, env: gitEnv, input, timeout: 30000, maxBuffer: 64 * 1024 * 1024, stdio: ['pipe', 'pipe', 'pipe'] });
-  need(realpathSync(cwd) === git(['rev-parse', '--show-toplevel']).toString().trim()
+  const git = (args, input) => execFileSync('/usr/bin/git', ['--no-replace-objects', ...args], { cwd: root, env: gitEnv, input, timeout: 30000, maxBuffer: 64 * 1024 * 1024, stdio: ['pipe', 'pipe', 'pipe'] });
+  need(realpathSync(root) === git(['rev-parse', '--show-toplevel']).toString().trim()
     && git(['rev-parse', 'HEAD']).toString().trim() === commit && !git(['for-each-ref', '--format=%(refname)', 'refs/replace/']).length
     && !git(['status', '--porcelain', '--untracked-files=no']).length);
   const paths = ['scripts', 'config', '.github', '.codex', 'AGENTS.md', 'package.json', 'package-lock.json'];
@@ -76,8 +77,11 @@ export function assertReleaseCoordinatorSource(cwd, commit) {
     need(end >= offset && oid === row.oid && type === 'blob' && Number.isSafeInteger(size) && size >= 0 && end + 1 + size < objects.length && objects[end + 1 + size] === 10);
     const body = objects.subarray(end + 1, end + 1 + size); offset = end + 2 + size;
     need(createHash('sha1').update(`blob ${size}\0`).update(body).digest('hex') === oid);
-    const path = join(cwd, row.path), info = lstatSync(path);
-    for (let parent = path; parent !== cwd; parent = resolve(parent, '..')) need(!lstatSync(parent).isSymbolicLink());
+    const path = join(root, row.path), info = lstatSync(path);
+    for (let parent = path; parent !== root;) {
+      need(!lstatSync(parent).isSymbolicLink());
+      const next = resolve(parent, '..'); need(next !== parent); parent = next;
+    }
     need(info.isFile() && info.nlink === 1 && (info.mode & 0o111 ? '100755' : '100644') === row.mode && body.equals(readFileSync(path)));
   }
   need(offset === objects.length); return rows.map(row => row.path);
