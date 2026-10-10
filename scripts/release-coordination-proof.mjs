@@ -1,5 +1,4 @@
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+import { fork } from 'node:child_process';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -12,6 +11,7 @@ import { PREVIEW_COORDINATION_CANONICAL } from './lib/preview-email-coordination
 import { decodePreviewCoordinationArchive } from './lib/preview-email-coordination-archive.mjs';
 import { coordinationDigest, coordinationEqual, RELEASE_COORDINATION_FILE } from './lib/release-coordination.mjs';
 import { releaseCoordinationRows } from './lib/release-coordination-trust.mjs';
+import { guardProofWorkerParent, proofPhase, superviseCoordinationProofWorker } from './lib/release-coordination-proof-worker.mjs';
 const ROOT = fileURLToPath(new URL('..', import.meta.url)), ownPath = fileURLToPath(import.meta.url);
 const environmentName = 'fcos-production-release', workflow = '.github/workflows/release-coordination-proof.yml';
 const need = value => { if (!value) throw new Error('Protected artifact coordination proof unavailable. No deployment or lease action authorized.'); };
@@ -19,15 +19,20 @@ export const releaseCoordinationProofPlan = () => ({ kind: 'fcos_artifact_coordi
   requiresRootHeldCanonicalLeaseAndExactAction: true, requiresPersonalEnvironmentReview: true, grantsActivation: false, mutations: 0 });
 
 /** Exercises only the supplied archive backend. Its result never grants activation. */
-export async function exerciseArtifactCoordination({ upload, read, crash }) {
+export async function exerciseArtifactCoordination({ upload, read, crash, phase = () => {} }) {
+  phase('concurrency-started');
   const results = await Promise.allSettled([upload('concurrent', 'first'), upload('concurrent', 'second')]);
+  phase('concurrency-settled');
   const success = results.flatMap((row, index) => row.status === 'fulfilled' ? [{ result: row.value, marker: index ? 'second' : 'first' }] : []);
   need(success.length === 1 && results.filter(row => row.status === 'rejected').length === 1);
   const original = await read('concurrent');
   need(original.id === success[0].result.id && original.digest === success[0].result.digest && original.marker === success[0].marker);
+  phase('duplicate-refusal-started');
   let rejected = false; try { await upload('concurrent', 'duplicate'); } catch { rejected = true; } need(rejected);
   need(coordinationEqual(await read('concurrent'), original));
+  phase('crash-started');
   need(await crash() === 86); // Child exited after remote completion, before returning an ID to its parent.
+  phase('crash-settled'); phase('crash-recovery-started');
   const recovered = await read('crash'); need(recovered.marker === 'crash');
   rejected = false; try { await upload('crash', 'retry'); } catch { rejected = true; } need(rejected);
   need(coordinationEqual(await read('crash'), recovered) && coordinationEqual(await read('concurrent'), original));
@@ -99,7 +104,7 @@ async function actualContext({ allowWait = true } = {}) {
   need(Number.isFinite(deadline) && deadline > Date.now());
   need(deadline > Date.now()); return { binding, action, reads, base, deadline };
 }
-function backend(context) {
+function backend(context, phase) {
   const { binding, reads, base, deadline } = context, name = phase => `fcos-coordination-proof-${phase}-${binding.runId}`;
   const payload = marker => ({ kind: 'fcos_artifact_backend_exclusivity_probe', binding, marker });
   const read = async phase => {
@@ -110,6 +115,7 @@ function backend(context) {
     const value = decodePreviewCoordinationArchive(archive); need(coordinationEqual(value, payload(value.marker)));
     return { id: row.id, digest: coordinationDigest(archive), marker: value.marker, createdAt: row.created_at };
   };
+  const readback = async name => { phase('readback-started'); const result = await read(name); phase('readback-complete'); return result; };
   const upload = async (phase, marker) => {
     need(deadline > Date.now()); const directory = mkdtempSync(join(tmpdir(), 'fcos-backend-proof-'));
     try {
@@ -117,28 +123,56 @@ function backend(context) {
       return await new DefaultArtifactClient().uploadArtifact(name(phase), [path], directory, { retentionDays: 30, compressionLevel: 0 });
     } finally { rmSync(directory, { recursive: true, force: true }); }
   };
-  return { read, upload };
+  return { read: readback, upload: async (name, marker) => {
+    phase('upload-started'); const result = await upload(name, marker); phase('upload-complete'); return result;
+  } };
 }
-export async function runReleaseCoordinationProof({ crashChild = false } = {}) {
-  const context = await actualContext(), api = backend(context), stdout = process.stdout.write, stderr = process.stderr.write;
-  try {
-    process.stdout.write = () => true; process.stderr.write = () => true;
-    if (crashChild) { await api.upload('crash', 'crash'); process.exit(86); }
-    const result = await exerciseArtifactCoordination({ ...api, crash: async () => {
-      try { await promisify(execFile)(process.execPath, [ownPath, '--crash-after-upload'], { cwd: ROOT, env: process.env, timeout: 120000, maxBuffer: 65536 }); return 0; }
-      catch (error) { return error.code; }
-    } });
-    const after = await actualContext(); need(coordinationEqual(after.binding, context.binding) && coordinationEqual(after.action, context.action));
-    const report = { schemaVersion: 1, kind: 'fcos_actual_artifact_coordination_backend_proof', binding: context.binding,
-      rootAction: context.action, capturedAt: new Date().toISOString(), ...result, requiresRootTerminalReadbackAndLeaseResolution: true,
-      limitation: 'Artifact backend observations only; no automatic activation, Vercel operation, key access or canonical lease mutation.' };
-    need(process.env.RUNNER_TEMP && resolve(process.env.RUNNER_TEMP) !== '/');
-    writeFileSync(join(process.env.RUNNER_TEMP, `fcos-coordination-proof-${context.binding.runId}.json`), JSON.stringify(report), { mode: 0o600, flag: 'wx', flush: true });
-    return report;
-  } finally { process.stdout.write = stdout; process.stderr.write = stderr; }
+async function executeProofWorker({ mode, admission }) {
+  need(['proof', 'crash'].includes(mode) && Number.isSafeInteger(admission?.deadline) && admission.deadline > Date.now());
+  const connected = guardProofWorkerParent(mode === 'proof');
+  const phase = value => { connected(); proofPhase(value, () => {}); if (mode === 'proof') process.send({ type: 'phase', phase: value }); };
+  phase('worker-admission-started');
+  const context = await actualContext({ allowWait: false });
+  need(coordinationEqual(context.binding, admission.binding) && coordinationEqual(context.action, admission.action)
+    && context.deadline === admission.deadline && context.deadline > Date.now());
+  connected();
+  phase('worker-admission-complete');
+  const api = backend(context, phase);
+  if (mode === 'crash') { await api.upload('crash', 'crash'); process.exit(86); }
+  const result = await exerciseArtifactCoordination({ ...api, phase, crash: () => new Promise((resolve, reject) => {
+    // Inherit the supervised process group and original deadline. No independent retry or renewed timer.
+    const child = fork(ownPath, ['--proof-worker'], { cwd: ROOT, env: process.env, execArgv: [], stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
+    child.once('error', reject); child.once('close', code => resolve(code));
+    child.send({ mode: 'crash', admission }, error => { if (error) { child.kill('SIGKILL'); reject(new Error('Artifact crash child unavailable.')); } });
+  }) });
+  phase('terminal-context-started');
+  const after = await actualContext({ allowWait: false });
+  need(coordinationEqual(after.binding, context.binding) && coordinationEqual(after.action, context.action)
+    && after.deadline === context.deadline && context.deadline > Date.now());
+  phase('terminal-context-complete');
+  return { schemaVersion: 1, kind: 'fcos_actual_artifact_coordination_backend_proof', binding: context.binding,
+    rootAction: context.action, capturedAt: new Date().toISOString(), ...result, requiresRootTerminalReadbackAndLeaseResolution: true,
+    limitation: 'Artifact backend observations only; no automatic activation, Vercel operation, key access or canonical lease mutation.' };
+}
+export async function runReleaseCoordinationProof() {
+  proofPhase('admission-started');
+  const context = await actualContext(); proofPhase('admission-complete');
+  const admission = { binding: context.binding, action: context.action, deadline: context.deadline };
+  const report = await superviseCoordinationProofWorker({ workerPath: ownPath, admission, cwd: ROOT, deadline: context.deadline });
+  need(coordinationEqual(report.binding, context.binding) && coordinationEqual(report.rootAction, context.action)
+    && report.kind === 'fcos_actual_artifact_coordination_backend_proof' && report.grantsActivation === false
+    && report.deploymentAuthority === false && context.deadline > Date.now());
+  need(process.env.RUNNER_TEMP && resolve(process.env.RUNNER_TEMP) !== '/');
+  writeFileSync(join(process.env.RUNNER_TEMP, `fcos-coordination-proof-${context.binding.runId}.json`), JSON.stringify(report), { mode: 0o600, flag: 'wx', flush: true });
+  proofPhase('report-written'); return report;
 }
 if (process.argv[1] && resolve(process.argv[1]) === ownPath) {
-  if (process.argv.length === 3 && process.argv[2] === '--crash-after-upload') runReleaseCoordinationProof({ crashChild: true }).catch(() => { process.exitCode = 1; });
+  if (process.argv.length === 3 && process.argv[2] === '--proof-worker' && typeof process.send === 'function') {
+    process.once('message', input => executeProofWorker(input).then(result => {
+      need(process.connected);
+      process.send({ type: 'result', result }, error => process.exit(error ? 1 : 0));
+    }).catch(() => process.exit(1)));
+  }
   else if (process.argv.length === 2 || process.argv.length === 3 && process.argv[2] === '--plan') console.log(JSON.stringify(releaseCoordinationProofPlan()));
   else process.exitCode = 1;
 }
