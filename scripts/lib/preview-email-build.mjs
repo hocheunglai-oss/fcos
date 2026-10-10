@@ -1,4 +1,5 @@
-import { ENROLLED_AUTHORITY_MODE, ENROLLED_AUTHORITY_MODE_VARIABLE, ENROLLED_AUTHORITY_ENABLE, ENROLLED_AUTHORITY_RECEIPT, ENROLLED_AUTHORITY_SECRET } from './preview-vercel-enrollment.mjs';
+import { ENROLLED_AUTHORITY_MODE, ENROLLED_AUTHORITY_MODE_VARIABLE, ENROLLED_AUTHORITY_ENABLE, ENROLLED_AUTHORITY_RECEIPT, ENROLLED_AUTHORITY_SECRET,
+  verifyEnrollmentReceipt, enrolledAuthorityContext } from './preview-vercel-enrollment.mjs';
 import { readFileSync, lstatSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
@@ -255,7 +256,7 @@ function assertEnvironmentReview({ environment, run, jobs, approvals, trusted, c
   return { reviewerId: reviewer.reviewer.id, runId: run.id, environmentId: environment.id };
 }
 
-export function assertPreviewEmailBuildProtection({ repository, branch, protection, environment, variables, secrets, run, jobs, approvals, oidcClaims, candidateSha, harnessSha, controlRevision, admission, mode = 'build', now = Date.now() } = {}) {
+function previewEmailProtectionData({ repository, branch, protection, environment, variables, secrets, run, jobs, approvals, oidcClaims, candidateSha, harnessSha, controlRevision, admission, mode = 'build', now = Date.now() } = {}, receiptRequired = true) {
   if (!['build', 'diagnose-authority', 'verify-authority'].includes(mode)) failure('Unknown protected Preview operation.');
   const trusted = assertProtectedDefault(repository, branch, protection);
   previewEmailBuildCandidate(candidateSha, { admission, now });
@@ -300,10 +301,54 @@ export function assertPreviewEmailBuildProtection({ repository, branch, protecti
     enrollmentId = oneVariable('FCOS_PREVIEW_VERCEL_ENROLLMENT_ID');
     authorityEnvelope = oneVariable(ENROLLED_AUTHORITY_RECEIPT);
     if (oneVariable(ENROLLED_AUTHORITY_ENABLE) !== 'true' || !new RegExp(`^${uuid}$`).test(enrollmentId || '')
-      || typeof authorityEnvelope !== 'string' || authorityEnvelope.length > 16384
+      || (receiptRequired ? typeof authorityEnvelope !== 'string' : authorityEnvelope !== undefined && typeof authorityEnvelope !== 'string')
+      || typeof authorityEnvelope === 'string' && authorityEnvelope.length > 16384
       || secrets?.secrets?.filter(row => row.name === ENROLLED_AUTHORITY_SECRET).length !== 1) failure('Approved enrolled credential and signed run receipt are unavailable.');
   }
   return { ...approved, harnessSha: trusted.sha, reviewedTokenId: tokenIds[0].value, authorityMode, enrollmentId, authorityEnvelope };
+}
+
+export function assertPreviewEmailBuildProtection(options) {
+  return previewEmailProtectionData(options, true);
+}
+
+/** Wait data only: full existing protection and genuine original admission are
+ * mandatory before the first polling callback. This cannot grant a write claim.
+ * The native caller re-reads full protected state before using the returned row.
+ * No receipt, old-run receipt or renewed timestamps can authorize a Preview. */
+export async function waitForPreviewEmailAttestation(options = {}) {
+  const { protection, operation, now = () => Date.now() } = options;
+  const startedAt = now(), { admission, candidateSha } = protection || {};
+  const selected = successorLiveSelection(admission, candidateSha, startedAt);
+  if (candidateSha !== SUCCESSOR_LIVE_CONTRACT.candidateSha || !['create', 'readback', 'verify-authority'].includes(operation)) failure('Exact original receipt handoff required.');
+  const reviewed = previewEmailProtectionData({ ...protection, now: startedAt }, false);
+  if (reviewed.authorityMode !== ENROLLED_AUTHORITY_MODE) failure('Existing issuance-bound credential required.');
+  const { readVariables, privateEnrollment, token, sleep = ms => new Promise(done => setTimeout(done, ms)) } = options;
+  const context = enrolledAuthorityContext({ repositoryId: protection.repository.id, environmentId: reviewed.environmentId,
+    runId: reviewed.runId, harnessSha: protection.harnessSha, controlRevision: protection.controlRevision,
+    contractSha256: selected.contractSha256, candidateSha, operation });
+  const deadline = Math.min(startedAt + 600000, protection.oidcClaims.exp * 1000,
+    Date.parse(selected.context.provisionedAt) + 2700000,
+    ...[selected.dispatchedAt, protection.jobs[0].started_at, ...Object.values(selected.reviewedAt)].map(time => Date.parse(time) + 1800000));
+  let variables = protection.variables;
+  while (now() < deadline) {
+    successorLiveSelection(admission, candidateSha, now());
+    const current = previewEmailProtectionData({ ...protection, variables, now: now() }, false);
+    const raw = current.authorityEnvelope;
+    if (typeof raw === 'string') {
+      let envelope; try { envelope = JSON.parse(raw); } catch { failure('Run receipt handoff unavailable; private diagnostics suppressed.'); }
+      if (equal(envelope?.receipt?.context, context)) {
+        verifyEnrollmentReceipt({ envelope: raw, privateEnrollment, token, reviewedTokenId: reviewed.reviewedTokenId,
+          enrollmentId: reviewed.enrollmentId, context, now: now() });
+        if (now() >= deadline) failure('Original receipt handoff expired.');
+        return variables;
+      }
+    }
+    await sleep(Math.min(10000, deadline - now()));
+    if (now() >= deadline) break;
+    variables = await readVariables();
+  }
+  failure('Original receipt handoff expired; no Preview authority granted.');
 }
 
 export function previewEmailBuildDeployment(raw, intent, { ready = true } = {}) {
