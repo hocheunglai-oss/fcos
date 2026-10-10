@@ -198,6 +198,7 @@ function stateMachine(overrides = {}) {
   const previous = { id: 'dpl_previous', sha: 'f'.repeat(40), target: 'production' }, staged = { id: 'dpl_new', sha, target: 'production', state: 'READY', operationId: 'fcos-release-99' };
   let live = previous, approvals = 0;
   const options = { readiness, authority: async () => { approvals += 1; return { runId: 99, reviewerId: 2, environmentId: 90 }; },
+    coordination: async () => ({ leaseId: 'fixture-lease', expiresAt: now + 1800000, providerAuthorityGranted: false }),
     journal: async entry => events.push(entry.phase), currentProduction: async () => live,
     deploy: async args => { events.push('deploy'); assert.ok(args.includes('--skip-domain')); return staged; }, discover: async () => null,
     waitReady: async value => value, probe: async () => { events.push('probe'); }, promote: async () => { events.push('promote'); live = staged; }, now: () => now, ...overrides };
@@ -206,7 +207,7 @@ function stateMachine(overrides = {}) {
 test('durable deployment intent and staged readback precede approval recheck and domain assignment', async () => {
   const fixture = stateMachine(); const result = await executeProductionRelease(fixture.options);
   assert.equal(result.phase, 'complete'); assert.equal(fixture.approvals(), 2);
-  assert.deepEqual(fixture.events, ['deploy_requested', 'deploy', 'staged_build', 'staged_ready', 'probe', 'promotion_requested', 'promote', 'probe', 'complete']);
+  assert.deepEqual(fixture.events, ['deploy_requested', 'coordination_consumed', 'deploy', 'staged_build', 'staged_ready', 'probe', 'promotion_requested', 'promote', 'probe', 'complete']);
   assert.equal(result.rollback.requiresHumanAuthorization, true);
   assert.deepEqual(result.rollback.command, ['vercel', 'rollback', 'dpl_previous']);
 });
@@ -214,7 +215,7 @@ test('uncertain deploy is read back without retry and failed staging never assig
   let deployments = 0;
   const uncertain = stateMachine({ deploy: async () => { deployments += 1; throw new Error('timeout'); } });
   await assert.rejects(() => executeProductionRelease(uncertain.options), /outcome is uncertain/);
-  assert.equal(deployments, 1); assert.deepEqual(uncertain.events, ['deploy_requested', 'deploy_outcome_uncertain']);
+  assert.equal(deployments, 1); assert.deepEqual(uncertain.events, ['deploy_requested', 'coordination_consumed', 'deploy_outcome_uncertain']);
   const failed = stateMachine({ probe: async () => { throw new Error('readback'); } });
   await assert.rejects(() => executeProductionRelease(failed.options), /No domain assignment/);
   assert.ok(!failed.events.includes('promote')); assert.ok(failed.events.includes('staged_readback_failed'));
@@ -313,4 +314,31 @@ test('preflight and execution require the exact Production environment OIDC subj
   for(const change of [{sub:`repo:${RELEASE_REPOSITORY}:ref:refs/heads/main`},{sub:`repo:${RELEASE_REPOSITORY}:environment:wrong`},{workflow_sha:sha},{repository_id:'78'}]){
     assert.throws(()=>assertReleaseWorkflowIdentity({...x.oidcClaims,...change},x.repository,x.branch));
   }
+});
+
+
+test('canonical lease must be consumed before stage and rechecked before promote; refusal never writes the provider', async () => {
+  const absent = stateMachine({ coordination: undefined });
+  await assert.rejects(() => executeProductionRelease(absent.options), /canonical release coordination/);
+  assert.deepEqual(absent.events, []);
+  for (const refuse of ['stage', 'promote']) {
+    const phases = [], fixture = stateMachine({ coordination: async phase => {
+      phases.push(phase); if (phase === refuse) throw new Error('coordination refused');
+      return { leaseId: 'fixture-lease', expiresAt: now + 1800000, providerAuthorityGranted: false };
+    } });
+    await assert.rejects(() => executeProductionRelease(fixture.options), /coordination refused/);
+    assert.deepEqual(phases, refuse === 'stage' ? ['stage'] : ['stage', 'promote']);
+    assert.equal(fixture.events.includes('deploy'), refuse === 'promote');
+    assert.equal(fixture.events.includes('promote'), false);
+    assert.equal(fixture.events.includes('complete'), false);
+  }
+});
+
+
+test('expiry during durable local journaling still prevents the provider submission', async () => {
+  let clock = now;
+  const fixture = stateMachine({ now: () => clock, coordination: async () => ({ expiresAt: now + 1 }),
+    journal: async row => { if (row.phase === 'coordination_consumed') clock = now + 2; } });
+  await assert.rejects(() => executeProductionRelease(fixture.options), /expired before stage/);
+  assert.equal(fixture.events.includes('deploy'), false);
 });

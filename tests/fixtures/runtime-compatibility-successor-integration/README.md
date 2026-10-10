@@ -64,3 +64,21 @@ The Python ledger CI step adds `source-bindings-v3.json` for the reviewed
 quality workflow bytes. The v2 bindings and historical manifests remain
 unchanged; the portable helper verifies the retained v2 hash before loading v3.
 This fixture update grants no installation or provider authority.
+
+The coordinated routine-release change adds `source-bindings-v4.json` for the
+actual current release helpers, workflow and canonical project control carryover.
+The helper verifies the untouched v2 and v3 history before reading v4. The base
+commit fields identify the preparation base; the individual source hashes bind
+the exact new working bytes. All frozen source objects, packed carriers, fixture
+manifests, first-rollout observations and runtime assertions remain unchanged.
+This update is an offline current-source test binding, not live admission.
+
+The default-disabled coordinated executor adds `source-bindings-v5.json`. It binds
+current native action, coordinator, ledger, workflow and revision3 connector approval
+controls. The helper authenticates the unchanged v2/v3/v4 chain first. Historical
+objects, source manifests, first-rollout refusals and final2f4 ordering are retained.
+
+`fixture-manifest-v4.json` updates only the current checkout member bindings and
+base metadata; original object inventory, observation bindings, packed bytes and
+non-checkout members remain identical. The helper authenticates the old v3 manifest
+hash separately and verifies the v4-to-v3 history before consuming current source.

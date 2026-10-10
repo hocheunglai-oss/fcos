@@ -1,3 +1,4 @@
+import { releaseCoordinationVerified } from './release-coordination-transport.mjs';
 import { compatibilityBrowserIsolationVerified } from './compatibility-browser-isolation.mjs';
 import { previewEmailSignerEvidenceVerified } from './preview-email-signer.mjs';
 import { readFileSync, lstatSync } from 'node:fs';
@@ -58,7 +59,7 @@ export function runtimeCompatibilityControlRevision(trustedCwd, candidateCwd, { 
   }
   const trusted = ['scripts/runtime-compatibility-release.mjs', 'scripts/lib/runtime-compatibility-release.mjs',
     'scripts/lib/runtime-compatibility.mjs', 'scripts/verify-runtime-compatibility.mjs',
-    'scripts/lib/release-evidence.mjs', 'scripts/lib/release-production.mjs', 'scripts/lib/release-readiness.mjs',
+    'scripts/lib/release-evidence.mjs', 'scripts/lib/release-workflow.mjs', '.github/workflows/routine-release.yml', 'scripts/lib/release-production.mjs', 'scripts/lib/release-readiness.mjs',
     'scripts/lib/preview-parity.mjs', 'scripts/collect-preview-parity.mjs', 'scripts/lib/build-provenance.mjs',
     'config/fcosConnections.js', 'config/fcosCiIdentity.js', 'config/preview-parity-policy.json',
     COMPATIBILITY_WORKFLOW, '.github/workflows/quality.yml', '.github/workflows/authenticated-release.yml',
@@ -346,7 +347,7 @@ export function assertCompatibilityEvidenceReadback(original, refreshed, now = D
  * Execution always recollects live authority; no receipt file is accepted.
  */
 export function createRuntimeCompatibilityPreflight({ binding, scope, protection, provider, candidate, previous, trustedEvidence = [], quality,
-  runtime, endpointAbsence, parity, readiness, admission, collectionBlockers = [], now = Date.now() } = {}) {
+  runtime, endpointAbsence, parity, readiness, admission, coordination, collectionBlockers = [], now = Date.now() } = {}) {
   const blockers = [];
   const fail = (code, scope, resolution) => blockers.push({ code, scope, resolution });
   const checks = {};
@@ -409,8 +410,8 @@ export function createRuntimeCompatibilityPreflight({ binding, scope, protection
   } catch { checks.releaseReadiness = false; }
   if (!checks.releaseReadiness) fail('INDEPENDENT_RELEASE_READINESS_REQUIRED', 'readiness', 'Satisfy the unchanged standard source, quality, trusted browser, parity, freshness and exact-candidate readiness validator.');
   if (successor) {
-    checks.sharedCoordinator = false;
-    fail('EXACT_SUCCESSOR_SHARED_COORDINATOR_REQUIRED', 'coordinator', 'Bridge the canonical shared lease and durable intent before enabling any exact successor provider write.');
+    checks.sharedCoordinator = releaseCoordinationVerified(coordination, readiness) === true;
+    if (!checks.sharedCoordinator) fail('EXACT_SUCCESSOR_SHARED_COORDINATOR_REQUIRED', 'coordinator', 'Collect the exact signed canonical lease grant and permanent hosted consumption for this protected run.');
   }
   for (const blocker of collectionBlockers) if (/^[A-Z][A-Z0-9_]{0,95}$/.test(blocker?.code || '') && /^[a-zA-Z0-9_.-]{1,160}$/.test(blocker?.scope || '')) {
     fail(blocker.code, blocker.scope, 'Recollect this prerequisite through the pinned read-only provider after the exact reviewed setup is available.');
@@ -469,7 +470,8 @@ export function immutableCompatibilityBaseline({ cwd, trustedCwd, admission, now
 }
 
 export async function executeRuntimeCompatibilityRelease({ preflight, readiness, authority, ...adapters } = {}) {
-  if (preflight?.binding?.sha === SUCCESSOR_LIVE_CONTRACT.candidateSha) rejectSuccessorUncoordinatedMutation();
+  const successor = preflight?.binding?.sha === SUCCESSOR_LIVE_CONTRACT.candidateSha;
+  if (successor) rejectSuccessorUncoordinatedMutation();
   if (preflight?.schemaVersion !== 1 || preflight.receiptKind !== 'fcos_runtime_compatibility_preflight'
     || preflight.ready !== true || preflight.productionAuthorized !== false || preflight.blockers?.length
     || !fresh(preflight.capturedAt, Date.now())

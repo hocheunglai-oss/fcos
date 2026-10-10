@@ -13,8 +13,11 @@ test('release credential reads and deployment execute only behind the protected 
   assert.match(job.if,/github\.event\.repository\.default_branch/);
   assert.match(job.if,/FCOS_PRODUCTION_RELEASE_ENABLED == 'true'/);
   const preflight=job.steps.findIndex(step=>step.run?.endsWith('--preflight'));
-  const execute=job.steps.findIndex(step=>step.run?.endsWith('--execute'));
+  const execute=job.steps.findIndex(step=>step.uses === './trusted/.github/actions/release-executor' && step.with?.route === 'production');
   assert.ok(preflight>=0 && execute>preflight);
+  const action=load(readFileSync(new URL('../.github/actions/release-executor/action.yml',import.meta.url),'utf8'));
+  assert.equal(action.runs.using,'node24');
+  assert.equal(action.runs.main,'../../../scripts/release-action.mjs');
   assert.equal(job.steps[preflight].env.GH_TOKEN,'${{ secrets.FCOS_RELEASE_GH_TOKEN }}');
   assert.equal(job.steps[execute].env.GH_TOKEN,'${{ secrets.FCOS_RELEASE_GH_TOKEN }}');
   assert.equal(job.steps[preflight].env.VERCEL_TOKEN,undefined);

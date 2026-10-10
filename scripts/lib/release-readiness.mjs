@@ -1,3 +1,4 @@
+import { RELEASE_COORDINATION_CONTROL_FILES } from './release-coordination-controls.mjs';
 import { createHash } from 'node:crypto';
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -15,10 +16,11 @@ const fields = (value, allowed) => value && typeof value === 'object' && !Array.
 
 // Hash the reviewed controls, not environment values, credentials or reports.
 export function releaseConfigurationRevision(cwd, trustedCwd = cwd) {
-  const files = ['config/fcosConnections.js', 'config/fcosCiIdentity.js', 'config/preview-parity-policy.json',
+  const files = [...RELEASE_COORDINATION_CONTROL_FILES, 'config/fcosConnections.js', 'config/fcosCiIdentity.js', 'config/preview-parity-policy.json',
     'vercel.json', 'package.json', 'package-lock.json', 'AGENTS.md', '.codex/config.toml', '.codex/setup.mjs',
     '.codex/control-validation.mjs', '.codex/control-policy.json', '.codex/README.md',
     '.github/workflows/quality.yml', '.github/workflows/authenticated-release.yml', '.github/workflows/production-release.yml',
+    '.github/workflows/routine-release.yml', 'scripts/lib/release-workflow.mjs',
     '.github/workflows/normal-role-release.yml', 'scripts/normal-role-release.mjs', 'scripts/lib/normal-role-verification-transport.mjs', 'scripts/lib/compatibility-browser-isolation.mjs', 'scripts/lib/normal-role-read-requests.mjs',
     'scripts/lib/preview-email-signer.mjs', 'scripts/lib/legacy-email-baseline-proof.mjs', 'config/legacy-email-baseline-proof.json',
     'scripts/lib/preview-email-build.mjs', 'scripts/preview-email-proof-build.mjs', '.github/workflows/preview-email-proof-build.yml',
@@ -92,7 +94,8 @@ export function createReleaseReadiness({ source, candidate, production, parity, 
       sha: sha(production?.sha) ? production.sha : null, url: immutable(production?.url) ? production.url : null },
     quality: Number.isSafeInteger(quality?.runId) ? { runId: quality.runId,
       artifactId: Number.isSafeInteger(quality.artifactId) ? quality.artifactId : null,
-      archiveDigest: hash(quality.archiveDigest) ? quality.archiveDigest : null, result: quality.result === 'success' ? 'success' : 'unknown' } : null,
+      archiveDigest: hash(quality.archiveDigest) ? quality.archiveDigest : null, result: quality.result === 'success' ? 'success' : 'unknown',
+      capturedAt: fresh(quality.capturedAt, now) ? quality.capturedAt : null } : null,
     trustedEvidence: accepted, blockers, ready: blockers.length === 0,
     productionAuthorized: false,
     limitation: 'Readiness is fresh consistency evidence. It cannot authorize Production, replace human approval, or prove unobserved workflows.',

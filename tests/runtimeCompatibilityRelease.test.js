@@ -276,6 +276,7 @@ function stagedFixture(overrides = {}) {
   const previous = input.previous, staged = { id: 'dpl_staged', sha: binding.sha, target: 'production', state: 'READY', operationId: 'fcos-release-99' };
   let live = previous, approvals = 0;
   const options = { preflight, readiness: input.readiness, authority: async () => { approvals++; return { runId: 99, reviewerId: 1, environmentId: 90, approvalMode: 'single_operator' }; },
+    coordination: async () => ({ leaseId: 'fixture-lease', expiresAt: now + 1800000, providerAuthorityGranted: false }),
     journal: async row => events.push(row.phase), currentProduction: async () => live,
     deploy: async args => { events.push('deploy'); assert.ok(args.includes('--prod')); assert.ok(args.includes('--skip-domain')); return staged; },
     discover: async () => null, waitReady: async value => value, probe: async () => events.push('probe'),
@@ -286,7 +287,7 @@ function stagedFixture(overrides = {}) {
 test('compatibility staging journals durable intent and probes before refreshed approval and domain assignment', async () => {
   const fixture = stagedFixture(), result = await executeRuntimeCompatibilityRelease(fixture.options);
   assert.equal(result.phase, 'complete'); assert.equal(fixture.approvals(), 2);
-  assert.deepEqual(fixture.events, ['deploy_requested', 'deploy', 'staged_build', 'staged_ready', 'probe', 'promotion_requested', 'promote', 'probe', 'complete']);
+  assert.deepEqual(fixture.events, ['deploy_requested', 'coordination_consumed', 'deploy', 'staged_build', 'staged_ready', 'probe', 'promotion_requested', 'promote', 'probe', 'complete']);
   assert.equal(result.rollback.requiresHumanAuthorization, true);
 });
 
@@ -307,7 +308,7 @@ test('missing credentials/evidence, wrong authority and changed previous Product
   let calls = 0;
   const uncertain = stagedFixture({ deploy: async () => { calls++; throw Error('timeout'); } });
   await assert.rejects(() => executeRuntimeCompatibilityRelease(uncertain.options), /uncertain/); assert.equal(calls, 1);
-  assert.deepEqual(uncertain.events, ['deploy_requested', 'deploy_outcome_uncertain']);
+  assert.deepEqual(uncertain.events, ['deploy_requested', 'coordination_consumed', 'deploy_outcome_uncertain']);
   const failedProbe = stagedFixture({ probe: async () => { throw Error('provider auth unknown'); } });
   await assert.rejects(() => executeRuntimeCompatibilityRelease(failedProbe.options), /No domain assignment/); assert.ok(!failedProbe.events.includes('promote'));
 });

@@ -60,7 +60,9 @@ jobs:
           FCOS_E2E_EXPECTED_COMMIT: ${{ inputs.expected_commit }}
           FCOS_E2E_CANDIDATE_URL: ${{ inputs.candidate_url }}
       - name: Recheck exact approval, stage Production build and verify domain readback
-        run: node trusted/scripts/production-release.mjs --execute
+        uses: ./trusted/.github/actions/release-executor
+        with:
+          route: production
         env:
           GH_TOKEN: ${{ secrets.FCOS_RELEASE_GH_TOKEN }}
           VERCEL_TOKEN: ${{ secrets.FCOS_RELEASE_VERCEL_TOKEN }}
