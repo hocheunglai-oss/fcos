@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import { load } from 'js-yaml';
-import { exerciseArtifactCoordination, releaseCoordinationProofPlan, runReleaseCoordinationProof, waitForProofAction } from '../scripts/release-coordination-proof.mjs';
+import { assertCoordinationProofReport, exerciseArtifactCoordination, releaseCoordinationProofPlan, runReleaseCoordinationProof, waitForProofAction } from '../scripts/release-coordination-proof.mjs';
 function backend() {
   const records = new Map(); let id = 0;
   const upload = async (name, marker) => {
@@ -44,4 +44,28 @@ test('initial action wait permits root job-bound admission without renewing the 
   await assert.rejects(() => waitForProofAction({ runId: 9, deadline: 15000, now: () => clock, pause: async ms => { clock += ms; }, read: () => undefined }));
   assert.equal(clock, 15000);
   await assert.rejects(() => waitForProofAction({ runId: 9, deadline: 16000, now: () => clock, read: () => { clock = 16001; return JSON.stringify({ binding: { runId: 9 } }); } }));
+});
+
+test('parent rejects completed reports with mismatched identity, action or original deadline', () => {
+  const env = { GITHUB_REPOSITORY: 'hocheunglai-oss/fcos', GITHUB_RUN_ID: '9', GITHUB_SHA: 'a'.repeat(40) };
+  const binding = { repository: 'hocheunglai-oss/fcos', harnessSha: env.GITHUB_SHA, runId: 9, jobId: 10 };
+  const action = { binding, fixture: true }, deadline = Date.now() + 10000;
+  const completed = { admission: { binding, action, deadline }, originalDeadline: deadline,
+    report: { kind: 'fcos_actual_artifact_coordination_backend_proof', binding, rootAction: action,
+      grantsActivation: false, deploymentAuthority: false } };
+  assert.equal(assertCoordinationProofReport(completed, env), completed.report);
+  for (const change of [
+    row => { row.admission.binding.repository = 'other/repository'; },
+    row => { row.admission.binding.runId++; },
+    row => { row.admission.binding.harnessSha = 'b'.repeat(40); },
+    row => { row.admission.binding.jobId = 0; },
+    row => { row.report.rootAction.fixture = false; },
+    row => { row.report.binding.jobId++; },
+    row => { row.report.grantsActivation = true; },
+    row => { row.originalDeadline++; },
+    row => { row.originalDeadline = row.admission.deadline = Date.now() - 1; },
+  ]) {
+    const copy = JSON.parse(JSON.stringify(completed)); change(copy);
+    assert.throws(() => assertCoordinationProofReport(copy, env));
+  }
 });

@@ -48,14 +48,28 @@ export async function waitForProofAction({ read, runId, deadline, now = Date.now
   }
   need(false);
 }
-async function actualContext({ allowWait = true } = {}) {
+async function actualContext({ allowWait = true, deadline: inheritedDeadline = Number.MAX_SAFE_INTEGER, onClock = () => {} } = {}) {
   const env = process.env, runId = Number(env.GITHUB_RUN_ID);
   need(env.GITHUB_ACTIONS === 'true' && env.GITHUB_RUN_ATTEMPT === '1' && env.GITHUB_JOB === 'proof'
     && env.GITHUB_REPOSITORY === RELEASE_REPOSITORY && Number.isSafeInteger(runId) && runId > 0
+    && /^[a-f0-9]{40}$/.test(env.GITHUB_SHA || '')
     && resolve(ROOT) === join(resolve(env.GITHUB_WORKSPACE || '/'), 'trusted'));
   const reads = githubReleaseReads({ command: '/usr/bin/gh', env: { PATH: '/usr/bin:/bin', HOME: env.HOME, GH_HOST: 'github.com', GH_REPO: RELEASE_REPOSITORY, GH_TOKEN: env.GH_TOKEN } }, { cwd: ROOT });
   const operator = assertReleaseGitHubAccount(reads), base = `repos/${RELEASE_REPOSITORY}`;
-  const repository = reads.json(base), branch = reads.json(`${base}/branches/${repository.default_branch}`);
+  const repository = reads.json(base);
+  const run = reads.json(`${base}/actions/runs/${runId}`), jobs = releaseCoordinationRows(reads.json(`${base}/actions/runs/${runId}/attempts/1/jobs?per_page=100`), 'jobs');
+  // Authenticate clock identity early. It only shortens supervision; full admission still follows.
+  need(repository.full_name === RELEASE_REPOSITORY && run.id === runId && run.run_attempt === 1
+    && run.repository?.id === repository.id && run.head_repository?.id === repository.id
+    && run.head_sha === env.GITHUB_SHA
+    && run.status === 'in_progress' && run.conclusion === null && run.event === 'workflow_dispatch'
+    && [run.actor, run.triggering_actor].every(row => row?.id === operator.id && row.login === operator.login)
+    && jobs.length === 1 && jobs[0].name === 'proof' && jobs[0].run_id === runId && jobs[0].run_attempt === 1
+    && Number.isSafeInteger(jobs[0].id) && jobs[0].id > 0 && jobs[0].head_sha === run.head_sha
+    && jobs[0].status === 'in_progress' && jobs[0].conclusion === null);
+  const originalDeadline = Math.min(inheritedDeadline, Math.min(Date.parse(run.run_started_at), Date.parse(jobs[0].started_at)) + 1800000);
+  need(Number.isSafeInteger(originalDeadline)); onClock(originalDeadline); need(originalDeadline > Date.now());
+  const branch = reads.json(`${base}/branches/${repository.default_branch}`);
   const trusted = assertProtectedDefault(repository, branch, reads.json(`${base}/branches/${repository.default_branch}/protection`));
   const environment = reads.json(`${base}/environments/${environmentName}`), rules = environment.protection_rules?.filter(row => row.type === 'required_reviewers');
   need(environment.can_admins_bypass === false && environment.deployment_branch_policy?.protected_branches === true
@@ -64,7 +78,6 @@ async function actualContext({ allowWait = true } = {}) {
   const rows = releaseCoordinationRows(reads.json(`${base}/environments/${environmentName}/variables?per_page=100`), 'variables');
   const variable = name => rows.find(row => row.name === name)?.value;
   need(variable('FCOS_RELEASE_COORDINATION_PROOF_ENABLED') === 'true' && variable('FCOS_RELEASE_COORDINATION_PROOF_HARNESS_SHA') === trusted.sha);
-  const run = reads.json(`${base}/actions/runs/${runId}`), jobs = releaseCoordinationRows(reads.json(`${base}/actions/runs/${runId}/attempts/1/jobs?per_page=100`), 'jobs');
   need(run.id === runId && run.run_attempt === 1 && run.status === 'in_progress' && run.conclusion === null && run.event === 'workflow_dispatch'
     && run.head_sha === trusted.sha && run.head_branch === trusted.branch && [workflow, `${workflow}@${trusted.branch}`].includes(run.path)
     && run.repository?.id === repository.id && run.head_repository?.id === repository.id
@@ -73,8 +86,7 @@ async function actualContext({ allowWait = true } = {}) {
     && jobs[0].head_sha === trusted.sha && jobs[0].status === 'in_progress' && jobs[0].conclusion === null);
   const approvals = reads.json(`${base}/actions/runs/${runId}/approvals`).filter(row => row.environments?.some(e => e.id === environment.id && e.name === environmentName));
   need(approvals.length === 1 && approvals[0].state === 'approved' && approvals[0].user?.id === operator.id);
-  const originalDeadline = Math.min(Date.parse(run.run_started_at), Date.parse(jobs[0].started_at)) + 1800000;
-  need(Number.isFinite(originalDeadline) && originalDeadline > Date.now());
+  need(originalDeadline > Date.now());
   assertReleaseCoordinatorSource(ROOT, trusted.sha);
   const claims = await githubReleaseOidc({ env });
   need(claims.repository_id === String(repository.id) && claims.repository === RELEASE_REPOSITORY && claims.run_id === String(runId)
@@ -90,7 +102,7 @@ async function actualContext({ allowWait = true } = {}) {
       return value('FCOS_RELEASE_COORDINATION_PROOF_ACTION');
     } });
     // Fresh source/main/job/approval/OIDC and the unchanged original run clock.
-    return actualContext({ allowWait: false });
+    return actualContext({ allowWait: false, deadline: originalDeadline, onClock });
   }
   const binding = { repository: RELEASE_REPOSITORY, harnessSha: trusted.sha, runId, jobId: jobs[0].id };
   need(action?.kind === 'root_admitted_artifact_coordination_proof' && coordinationEqual(action.binding, binding)
@@ -100,9 +112,9 @@ async function actualContext({ allowWait = true } = {}) {
     && action.lease.operationId === `fcos-release-coordination-proof-${runId}` && /^[a-f0-9-]{36}$/.test(action.lease.leaseId || '')
     && action.lease.bindingSha256 === coordinationDigest(binding) && action.lease.coordinationOnly === true
     && action.lease.providerAuthorityGranted === false && action.lease.uncertainOutcomeRequiresReadback === true);
-  const deadline = Math.min(Date.parse(run.run_started_at), Date.parse(jobs[0].started_at), action.authorizedAt) + 1800000;
-  need(Number.isFinite(deadline) && deadline > Date.now());
-  need(deadline > Date.now()); return { binding, action, reads, base, deadline };
+  const deadline = Math.min(originalDeadline, action.authorizedAt + 1800000);
+  need(Number.isSafeInteger(deadline)); onClock(deadline); need(deadline > Date.now());
+  return { binding, action, reads, base, deadline };
 }
 function backend(context, phase) {
   const { binding, reads, base, deadline } = context, name = phase => `fcos-coordination-proof-${phase}-${binding.runId}`;
@@ -128,13 +140,20 @@ function backend(context, phase) {
   } };
 }
 async function executeProofWorker({ mode, admission }) {
-  need(['proof', 'crash'].includes(mode) && Number.isSafeInteger(admission?.deadline) && admission.deadline > Date.now());
+  need(mode === 'proof' && admission === undefined || mode === 'crash'
+    && Number.isSafeInteger(admission?.deadline) && admission.deadline > Date.now());
   const connected = guardProofWorkerParent(mode === 'proof');
   const phase = value => { connected(); proofPhase(value, () => {}); if (mode === 'proof') process.send({ type: 'phase', phase: value }); };
+  const onClock = deadline => { connected(); if (mode === 'proof') process.send({ type: 'clock', deadline }); };
   phase('worker-admission-started');
-  const context = await actualContext({ allowWait: false });
-  need(coordinationEqual(context.binding, admission.binding) && coordinationEqual(context.action, admission.action)
-    && context.deadline === admission.deadline && context.deadline > Date.now());
+  const context = await actualContext({ allowWait: mode === 'proof', deadline: admission?.deadline, onClock });
+  if (mode === 'crash') need(coordinationEqual(context.binding, admission.binding) && coordinationEqual(context.action, admission.action)
+    && context.deadline === admission.deadline);
+  else {
+    admission = { binding: context.binding, action: context.action, deadline: context.deadline };
+    connected(); process.send({ type: 'admitted', admission, startedAt: Date.now() });
+  }
+  need(context.deadline > Date.now());
   connected();
   phase('worker-admission-complete');
   const api = backend(context, phase);
@@ -146,7 +165,7 @@ async function executeProofWorker({ mode, admission }) {
     child.send({ mode: 'crash', admission }, error => { if (error) { child.kill('SIGKILL'); reject(new Error('Artifact crash child unavailable.')); } });
   }) });
   phase('terminal-context-started');
-  const after = await actualContext({ allowWait: false });
+  const after = await actualContext({ allowWait: false, deadline: context.deadline, onClock });
   need(coordinationEqual(after.binding, context.binding) && coordinationEqual(after.action, context.action)
     && after.deadline === context.deadline && context.deadline > Date.now());
   phase('terminal-context-complete');
@@ -154,16 +173,30 @@ async function executeProofWorker({ mode, admission }) {
     rootAction: context.action, capturedAt: new Date().toISOString(), ...result, requiresRootTerminalReadbackAndLeaseResolution: true,
     limitation: 'Artifact backend observations only; no automatic activation, Vercel operation, key access or canonical lease mutation.' };
 }
-export async function runReleaseCoordinationProof() {
-  proofPhase('admission-started');
-  const context = await actualContext(); proofPhase('admission-complete');
-  const admission = { binding: context.binding, action: context.action, deadline: context.deadline };
-  const report = await superviseCoordinationProofWorker({ workerPath: ownPath, admission, cwd: ROOT, deadline: context.deadline });
-  need(coordinationEqual(report.binding, context.binding) && coordinationEqual(report.rootAction, context.action)
+/** A completed worker result is data until its exact parent environment and original clock match. */
+export function assertCoordinationProofReport({ report, admission, originalDeadline }, env = process.env) {
+  need(env.GITHUB_REPOSITORY === RELEASE_REPOSITORY && Number.isSafeInteger(Number(env.GITHUB_RUN_ID)) && Number(env.GITHUB_RUN_ID) > 0
+    && /^[a-f0-9]{40}$/.test(env.GITHUB_SHA || '')
+    && admission?.binding?.repository === RELEASE_REPOSITORY && admission.binding.runId === Number(env.GITHUB_RUN_ID)
+    && admission.binding.harnessSha === env.GITHUB_SHA && Number.isSafeInteger(admission.binding.jobId) && admission.binding.jobId > 0
+    && coordinationEqual(admission.action?.binding, admission.binding)
+    && coordinationEqual(report?.binding, admission.binding) && coordinationEqual(report.rootAction, admission.action)
     && report.kind === 'fcos_actual_artifact_coordination_backend_proof' && report.grantsActivation === false
-    && report.deploymentAuthority === false && context.deadline > Date.now());
+    && report.deploymentAuthority === false && Number.isSafeInteger(originalDeadline)
+    && originalDeadline === admission.deadline && originalDeadline > Date.now());
+  return report;
+}
+export async function runReleaseCoordinationProof() {
+  const env = process.env, runId = Number(env.GITHUB_RUN_ID);
+  need(env.GITHUB_ACTIONS === 'true' && env.GITHUB_RUN_ATTEMPT === '1' && env.GITHUB_JOB === 'proof'
+    && env.GITHUB_REPOSITORY === RELEASE_REPOSITORY && Number.isSafeInteger(runId) && runId > 0
+    && /^[a-f0-9]{40}$/.test(env.GITHUB_SHA || '')
+    && resolve(ROOT) === join(resolve(env.GITHUB_WORKSPACE || '/'), 'trusted'));
+  proofPhase('admission-started');
+  const completed = await superviseCoordinationProofWorker({ workerPath: ownPath, cwd: ROOT });
+  const report = assertCoordinationProofReport(completed, env);
   need(process.env.RUNNER_TEMP && resolve(process.env.RUNNER_TEMP) !== '/');
-  writeFileSync(join(process.env.RUNNER_TEMP, `fcos-coordination-proof-${context.binding.runId}.json`), JSON.stringify(report), { mode: 0o600, flag: 'wx', flush: true });
+  writeFileSync(join(process.env.RUNNER_TEMP, `fcos-coordination-proof-${runId}.json`), JSON.stringify(report), { mode: 0o600, flag: 'wx', flush: true });
   proofPhase('report-written'); return report;
 }
 if (process.argv[1] && resolve(process.argv[1]) === ownPath) {
