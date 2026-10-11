@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "kind": "fcos_exact_04ee_live_context",
+  "contractSha256": "aecc93e6152c23b0bee23834f045cc2a6ae8a9fd9057c205080c6ade7614a5c0",
+  "candidateSha": "04ee3425aac7a49089eda781eb3c976aea1f6785",
+  "branch": "codex/readonly-collections-compatibility-successor-20261005",
+  "sourceDigest": "b4d9709f53e031e19920d1630c1730a2aa9f349fe8bb035de3c05b4627a8f52e",
+  "lockHash": "9b3d6eb4824ea8688022b9ba249041e25c44b8cebc5443d59c55d8a2da5da378",
+  "candidateGitTree": "4c8258c4f677878532b5d52e1f9b52fb4a767d18",
+  "candidateTreeHash": "1a3b7416c376b57c3bd67ac60eb5bb79cf6ae33375aa3bb0cac4fa7d8c2ca0e9",
+  "previewControlRevision": "dc7fafa4af7868a161b4fa57ba993bea8592f5098a0e0614c5a89d0f217855e3",
+  "configurationRevision": "8f8fa0e3aa79c4b00dc24c7dd6823fb06a6a8a62ebd7fae9481f0510946265a6",
+  "provisionedAt": "2026-10-11T03:02:40.497Z",
+  "attachmentOperationId": "83ea40a1-da58-4fd8-834d-90ab0efa084e",
+  "records": {
+    "tenantRecordId": "2a34leKg5qSxz3M7",
+    "clientRecordId": "o0Onq8SQ89Y2eU8Q",
+    "attachmentRecordId": "8DsZaSZcmhbhsuHv"
+  },
+  "operation": {
+    "id": "4eeb17c7-1ef6-48e5-854a-cf9df2cb7dcd",
+    "phase": "prepared"
+  }
+}
