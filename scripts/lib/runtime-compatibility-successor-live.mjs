@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { fcosConnectionIdentifier } from '../../config/fcosConnections.js';
+import { FCOS_RELEASE_APPROVAL_POLICY, fcosConnectionIdentifier } from '../../config/fcosConnections.js';
 import { assertProtectedDefault, assertReleaseGitHubAccount, RELEASE_REPOSITORY } from './release-evidence.mjs';
 import { verifyRuntimeCompatibilitySuccessorSource } from '../verify-runtime-compatibility-successor.mjs';
 import { collectBuildProvenance } from './build-provenance.mjs';
@@ -23,6 +23,9 @@ const policy = SUCCESSOR_LIVE_CONTRACT;
 const activeRoot = fileURLToPath(new URL('../..', import.meta.url));
 const historical = JSON.parse(readFileSync(new URL('../../config/legacy-email-baseline-proof.json', import.meta.url)));
 const verified = new WeakSet();
+const verificationOnly = new WeakSet();
+export const SUCCESSOR_VERIFY_PURPOSE = 'existing-preview-vercel-authority-verification-exact04ee-v1';
+export const successorVerificationRunTitle = candidateSha => `Verify FCOS enrolled Preview authority for source ${candidateSha}`;
 const sha = value => /^[0-9a-f]{40}$/.test(value || '');
 const hash = value => /^[0-9a-f]{64}$/.test(value || '');
 const id = value => /^[A-Za-z0-9_-]{1,200}$/.test(value || '');
@@ -30,6 +33,8 @@ const exact = (value, keys) => value && typeof value === 'object' && !Array.isAr
   && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
 const fresh = (value, seconds, now) => typeof value === 'string' && Number.isFinite(Date.parse(value)) && new Date(Date.parse(value)).toISOString() === value
   && Date.parse(value) <= now && now - Date.parse(value) <= seconds * 1000;
+const historicalTimestamp = (value, now) => typeof value === 'string' && Number.isFinite(Date.parse(value))
+  && new Date(Date.parse(value)).toISOString() === value && Date.parse(value) <= now;
 const fail = code => { throw Object.assign(new Error('Exact successor live admission failed; no action authority is granted.'), { code }); };
 
 export const SUCCESSOR_LIVE_CONTROL_FILES = Object.freeze([
@@ -169,7 +174,7 @@ function material(raw, file) {
 /** Pure material check. It does not turn caller-supplied review booleans into
  * authority. Only collectSuccessorLiveAdmission can mint the opaque selection,
  * after reading these exact bytes from the actual protected harness Git tree. */
-export function assertSuccessorLiveMaterials({ context, reviews, binding, now = Date.now() } = {}) {
+function assertSuccessorMaterials({ context, reviews, binding, now = Date.now() } = {}, historicalOnly = false) {
   const value = context?.value;
   const intact = record => Buffer.isBuffer(record?.body) && digest(record.body) === record.sha256
     && JSON.stringify(JSON.parse(record.body.toString('utf8'))) === JSON.stringify(record.value);
@@ -183,7 +188,7 @@ export function assertSuccessorLiveMaterials({ context, reviews, binding, now = 
     || binding.lockHash !== policy.lockHash || binding.candidateTreeHash !== policy.candidateTreeHash
     || !hash(binding.previewControlRevision) || !hash(binding.configurationRevision)
     || value.previewControlRevision !== binding.previewControlRevision || value.configurationRevision !== binding.configurationRevision
-    || !fresh(value.provisionedAt, policy.maxAgeSeconds.provisioning, now)
+    || !(historicalOnly ? historicalTimestamp(value.provisionedAt, now) : fresh(value.provisionedAt, policy.maxAgeSeconds.provisioning, now))
     || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(value.attachmentOperationId || '')
     || !exact(value.records, ['tenantRecordId', 'clientRecordId', 'attachmentRecordId'])
     || !Object.values(value.records).every(id) || new Set(Object.values(value.records)).size !== 3
@@ -199,12 +204,91 @@ export function assertSuccessorLiveMaterials({ context, reviews, binding, now = 
       || !exact(review, ['schemaVersion', 'kind', 'role', 'reviewer', 'disposition', 'contextSha256', 'candidateSha', 'sourceDigest', 'lockHash', 'previewControlRevision', 'configurationRevision', 'reviewedAt'])
       || review.schemaVersion !== 1 || review.kind !== 'fcos_exact_04ee_live_material_review' || review.disposition !== 'accepted'
       || typeof review.reviewer !== 'string' || !/^\/[a-z0-9_/.-]{1,200}$/.test(review.reviewer) || reviewers.has(review.reviewer)
-      || review.contextSha256 !== context.sha256 || !fresh(review.reviewedAt, policy.maxAgeSeconds.artifact, now)
+      || review.contextSha256 !== context.sha256
+      || !(historicalOnly ? historicalTimestamp(review.reviewedAt, now) : fresh(review.reviewedAt, policy.maxAgeSeconds.artifact, now))
       || Date.parse(review.reviewedAt) < Date.parse(value.provisionedAt)
       || ['candidateSha', 'sourceDigest', 'lockHash', 'previewControlRevision', 'configurationRevision'].some(key => review[key] !== value[key])) fail('EXACT_SUCCESSOR_TWO_MATERIAL_REVIEWS_REQUIRED');
     reviewers.add(review.reviewer);
   }
   return true;
+}
+
+export function assertSuccessorLiveMaterials(options) {
+  return assertSuccessorMaterials(options);
+}
+
+/** Explicit verification-only operation. Historical provisioning is preserved,
+ * never renewed or admitted for execution. This disjoint identity cannot pass
+ * successorLiveSelection or any existing deployment/intent consumer. */
+export async function collectSuccessorVerificationAdmission({ reads, sourceCwd, trustedCwd, runId, now = Date.now() } = {}) {
+  const sourceReceipt = verifyRuntimeCompatibilitySuccessorSource({ cwd: sourceCwd, candidateCommit: policy.candidateSha });
+  assertSuccessorLiveSource(sourceReceipt);
+  const controls = successorLiveControlBinding({ trustedCwd, sourceCwd });
+  assertReleaseGitHubAccount(reads);
+  const base = `repos/${RELEASE_REPOSITORY}`;
+  const repository = await reads.json(base);
+  const branch = await reads.json(`${base}/branches/${encodeURIComponent(repository.default_branch)}`);
+  const trusted = assertProtectedDefault(repository, branch, await reads.json(`${base}/branches/${encodeURIComponent(repository.default_branch)}/protection`));
+  if (controls.harnessSha !== trusted.sha) fail('EXACT_SUCCESSOR_CURRENT_HARNESS_REQUIRED');
+  if (!Number.isSafeInteger(runId) || runId < 1) fail('EXACT_SUCCESSOR_DISPATCH_REQUIRED');
+  const workflow = '.github/workflows/preview-email-proof-build.yml';
+  const run = await reads.json(`${base}/actions/runs/${runId}`);
+  const environment = await reads.json(`${base}/environments/fcos-runtime-compatibility-release`);
+  const approvals = await reads.json(`${base}/actions/runs/${runId}/approvals`);
+  const jobs = await reads.json(`${base}/actions/runs/${runId}/attempts/1/jobs?per_page=100&page=1`);
+  const rules = environment?.protection_rules?.filter(row => row.type === 'required_reviewers');
+  const rule = rules?.length === 1 ? rules[0] : null, reviewer = rule?.reviewers?.length === 1 ? rule.reviewers[0] : null;
+  const operator = fcosConnectionIdentifier('github', 'Required account');
+  const reviews = (Array.isArray(approvals) ? approvals : []).filter(row => row.environments?.some(e => e.id === environment.id && e.name === environment.name));
+  const job = jobs?.total_count === 1 && jobs.jobs?.length === 1 ? jobs.jobs[0] : null;
+  if (FCOS_RELEASE_APPROVAL_POLICY.mode !== 'single_operator' || !Number.isSafeInteger(repository.id) || repository.id < 1
+    || run?.id !== runId || run.repository?.full_name !== RELEASE_REPOSITORY || run.head_repository?.full_name !== RELEASE_REPOSITORY
+    || run.head_sha !== trusted.sha || run.head_branch !== trusted.branch || run.event !== 'workflow_dispatch' || run.run_attempt !== 1
+    || run.status !== 'in_progress' || ![workflow, `${workflow}@${trusted.branch}`].includes(run.path)
+    || run.name !== 'FCOS protected Preview email proof build' || run.display_title !== successorVerificationRunTitle(policy.candidateSha)
+    || !githubProviderFresh(run.run_started_at, policy.maxAgeSeconds.dispatch * 1000, now)
+    || environment?.name !== 'fcos-runtime-compatibility-release' || !Number.isSafeInteger(environment.id) || environment.id < 1
+    || environment.can_admins_bypass !== false || rule?.prevent_self_review !== false || reviewer?.type !== 'User'
+    || reviewer.reviewer?.login !== operator || !Number.isSafeInteger(reviewer.reviewer.id) || reviewer.reviewer.id < 1
+    || environment.deployment_branch_policy?.protected_branches !== true || environment.deployment_branch_policy?.custom_branch_policies !== false
+    || run.actor?.login !== operator || run.triggering_actor?.login !== operator
+    || run.actor?.id !== reviewer.reviewer.id || run.triggering_actor?.id !== reviewer.reviewer.id
+    || reviews.length !== 1 || reviews[0].state !== 'approved' || reviews[0].user?.login !== operator || reviews[0].user?.id !== reviewer.reviewer.id
+    || !Number.isSafeInteger(job?.id) || job.id < 1 || job.run_id !== runId || job.run_attempt !== 1 || job.name !== 'proof'
+    || job.workflow_name !== run.name || job.head_sha !== trusted.sha || job.head_branch !== trusted.branch
+    || job.status !== 'in_progress' || job.conclusion !== null || job.completed_at !== null
+    || !githubProviderFresh(job.started_at, policy.maxAgeSeconds.dispatch * 1000, now)
+    || Date.parse(job.started_at) < Date.parse(run.run_started_at)) fail('EXACT_SUCCESSOR_VERIFICATION_REVIEW_REQUIRED');
+  const rows = {};
+  for (const [role, file] of Object.entries(policy.materials)) rows[role] = material(await reads.json(`${base}/contents/${file}?ref=${trusted.sha}`), file);
+  const context = rows.context.value;
+  // Historical revisions must be mutually bound, not relabelled as current.
+  assertSuccessorMaterials({ context: rows.context, reviews: [rows.root, rows.independent], now,
+    binding: { sha: policy.candidateSha, sourceDigest: policy.sourceDigest, lockHash: policy.lockHash, candidateTreeHash: policy.candidateTreeHash,
+      harnessSha: trusted.sha, previewControlRevision: context.previewControlRevision, configurationRevision: context.configurationRevision } }, true);
+  const materialHashes = Object.fromEntries(Object.entries(rows).map(([key, value]) => [key, value.sha256]));
+  const operation = { purpose: SUCCESSOR_VERIFY_PURPOSE, operation: 'verify-authority', harnessSha: trusted.sha,
+    runId, runAttempt: 1, workflow, dispatchedAt: run.run_started_at, jobId: job.id, jobStartedAt: job.started_at,
+    repositoryId: repository.id, environmentId: environment.id, reviewerId: reviewer.reviewer.id,
+    previewControlRevision: controls.previewControlRevision, configurationRevision: controls.configurationRevision, materialHashes };
+  const admission = freeze({ schemaVersion: 1, kind: 'fcos_exact_04ee_verification_only_admission', ...operation,
+    contractSha256: digest(`fcos-exact-04ee-verification-only-v1\0${SUCCESSOR_LIVE_CONTRACT_SHA256}\0${JSON.stringify(operation)}`),
+    capturedAt: new Date(now).toISOString(), historicalContext: context,
+    historicalReviewedAt: { root: rows.root.value.reviewedAt, independent: rows.independent.value.reviewedAt },
+    sourceReceipt, controlFiles: controls.controlFiles,
+    candidate: { sha: policy.candidateSha, branch: policy.branch, sourceDigest: policy.sourceDigest, lockHash: policy.lockHash, ...context.records },
+    previewAuthorized: false, productionAuthorized: false, credentialAuthority: false, mutations: 0 });
+  verificationOnly.add(admission);
+  return admission;
+}
+
+export function successorVerificationSelection(admission, candidateSha = policy.candidateSha, now = Date.now()) {
+  if (!verificationOnly.has(admission) || candidateSha !== policy.candidateSha || admission.operation !== 'verify-authority'
+    || admission.purpose !== SUCCESSOR_VERIFY_PURPOSE || admission.runAttempt !== 1
+    || !fresh(admission.capturedAt, policy.maxAgeSeconds.artifact, now)
+    || !githubProviderFresh(admission.dispatchedAt, policy.maxAgeSeconds.dispatch * 1000, now)
+    || !githubProviderFresh(admission.jobStartedAt, policy.maxAgeSeconds.dispatch * 1000, now)) fail('EXACT_SUCCESSOR_VERIFICATION_SELECTION_REQUIRED');
+  return admission;
 }
 
 export async function collectSuccessorLiveAdmission({ reads, binding, sourceCwd, trustedCwd, now = Date.now() } = {}) {

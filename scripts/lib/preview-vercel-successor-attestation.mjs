@@ -1,5 +1,6 @@
 import { fcosConnectionIdentifier } from '../../config/fcosConnections.js';
-import { SUCCESSOR_LIVE_CONTRACT, successorLiveSelection, collectSuccessorLiveOperationAdmission } from './runtime-compatibility-successor-live.mjs';
+import { SUCCESSOR_LIVE_CONTRACT, successorLiveSelection, collectSuccessorLiveOperationAdmission,
+  successorVerificationSelection, collectSuccessorVerificationAdmission, successorVerificationRunTitle } from './runtime-compatibility-successor-live.mjs';
 import { ENROLLMENT_FIXED_TARGET, assertEnrollmentMetadata, ENROLLMENT_KEYCHAIN_SERVICE, ENROLLED_AUTHORITY_MODE,
   ENROLLED_AUTHORITY_RECEIPT, signEnrollmentReceipt, enrolledAuthorityContext } from './preview-vercel-enrollment.mjs';
 import { createHash, createPrivateKey, createPublicKey } from 'node:crypto';
@@ -155,11 +156,14 @@ export function assertSuccessorAttestationPinnedKey(raw) {
 
 export function bindSuccessorAttestationAdmission({ approval, nonce, scriptSha256, admission, now = Date.now() } = {}) {
   const value = assertSuccessorAttestationApproval({ approval, nonce, scriptSha256, now });
-  const selected = successorLiveSelection(admission, policy.candidateSha, now);
+  const verificationOnly = value.operation === 'verify-authority';
+  const selected = verificationOnly ? successorVerificationSelection(admission, policy.candidateSha, now)
+    : successorLiveSelection(admission, policy.candidateSha, now);
   if (selected.workflow !== ENROLLMENT_FIXED_TARGET.workflow || selected.runId !== value.runId
     || selected.harnessSha !== value.harnessSha || selected.contractSha256 !== value.contractSha256
-    || selected.context.previewControlRevision !== value.controlRevision
-    || selected.context.configurationRevision !== value.configurationRevision) fail();
+    || (verificationOnly ? selected.previewControlRevision : selected.context.previewControlRevision) !== value.controlRevision
+    || (verificationOnly ? selected.configurationRevision : selected.context.configurationRevision) !== value.configurationRevision
+    || verificationOnly && (selected.jobId !== value.jobId || selected.jobStartedAt !== value.jobStartedAt || selected.dispatchedAt !== value.dispatchedAt)) fail();
   return selected;
 }
 
@@ -248,6 +252,16 @@ function variable(rows, name) {
   if (matches.length > 1 || matches.length === 1 && typeof matches[0].value !== 'string') fail();
   return matches[0]?.value;
 }
+export function assertSuccessorAttestationRepositoryVariables(rows, operation) {
+  for (const name of ['FCOS_RUNTIME_COMPATIBILITY_RELEASE_ENABLED', 'FCOS_PREVIEW_EMAIL_BUILD_ENABLED',
+    'FCOS_PREVIEW_EMAIL_AUTHORITY_DIAGNOSTIC_ENABLED', 'FCOS_PREVIEW_VERCEL_ISSUANCE_AUTHORITY_ENABLED']) {
+    const value = variable(rows, name);
+    if (operation === 'verify-authority' && name !== 'FCOS_PREVIEW_VERCEL_ISSUANCE_AUTHORITY_ENABLED') {
+      if (value !== (name === 'FCOS_PREVIEW_EMAIL_AUTHORITY_DIAGNOSTIC_ENABLED' ? 'true' : 'false')) fail();
+    } else if (![undefined, 'false'].includes(value)) fail();
+  }
+  return true;
+}
 async function publicPreflight(reads, a) {
   const user = await reads.json('user');
   if (user?.login !== fcosConnectionIdentifier('github', 'Required account') || !positive(user.id)) fail();
@@ -271,10 +285,7 @@ async function publicPreflight(reads, a) {
     FCOS_RELEASE_VERCEL_TOKEN_ID: a.tokenId, FCOS_PREVIEW_VERCEL_ENROLLMENT_ID: a.enrollmentId };
   for (const [name, expected] of Object.entries(pins)) if (variable(variables, name) !== expected) fail();
   const repositoryVariables = collection(await reads.json(`${BASE}/actions/variables?per_page=100`), 'variables');
-  for (const name of ['FCOS_RUNTIME_COMPATIBILITY_RELEASE_ENABLED', 'FCOS_PREVIEW_EMAIL_BUILD_ENABLED',
-    'FCOS_PREVIEW_EMAIL_AUTHORITY_DIAGNOSTIC_ENABLED', 'FCOS_PREVIEW_VERCEL_ISSUANCE_AUTHORITY_ENABLED']) {
-    if (![undefined, 'false'].includes(variable(repositoryVariables, name))) fail();
-  }
+  assertSuccessorAttestationRepositoryVariables(repositoryVariables, a.operation);
   const metadata = successorAttestationSecretMetadata(secrets.map(({ name, created_at, updated_at }) => ({ name, created_at, updated_at })));
   if (!same(metadata, successorAttestationSecretMetadata(a.secretMetadata))) fail();
   const run = await reads.json(`${BASE}/actions/runs/${a.runId}`);
@@ -282,7 +293,7 @@ async function publicPreflight(reads, a) {
     || run.head_sha !== a.harnessSha || run.head_branch !== 'main' || run.run_attempt !== 1 || run.event !== 'workflow_dispatch'
     || ![ENROLLMENT_FIXED_TARGET.workflow, `${ENROLLMENT_FIXED_TARGET.workflow}@main`].includes(run.path) || run.status !== 'in_progress'
     || run.actor?.id !== user.id || run.triggering_actor?.id !== user.id || run.actor?.login !== user.login || run.triggering_actor?.login !== user.login
-    || run.display_title !== `Review FCOS Preview email source ${a.candidateSha}`) fail();
+    || run.display_title !== (a.operation === 'verify-authority' ? successorVerificationRunTitle(a.candidateSha) : `Review FCOS Preview email source ${a.candidateSha}`)) fail();
   const approvals = await reads.json(`${BASE}/actions/runs/${a.runId}/approvals`);
   const jobs = await collectPreviewEmailBuildJobs({ reads, runId: a.runId });
   assertSuccessorAttestationProtectedReview(a, { user, environment, run, approvals, jobs });
@@ -325,7 +336,7 @@ function assertOriginalCurrent(original, current) {
 async function collectActual(nonce) {
   const action = actionAdmission(nonce), a = action.approval;
   const reads = githubReleaseReads({ command: GH, env: ENV }, { cwd: ROOT });
-  const admission = await collectSuccessorLiveOperationAdmission({ reads, sourceCwd: ROOT, trustedCwd: ROOT, runId: a.runId });
+  const admission = await (a.operation === 'verify-authority' ? collectSuccessorVerificationAdmission : collectSuccessorLiveOperationAdmission)({ reads, sourceCwd: ROOT, trustedCwd: ROOT, runId: a.runId });
   bindSuccessorAttestationAdmission({ approval: a, nonce, scriptSha256: a.scriptSha256, admission });
   const checked = await publicPreflight(reads, a);
   if (admission.dispatchedAt !== a.dispatchedAt) fail();
@@ -428,9 +439,10 @@ async function executeFixed(original) {
       candidateSha: a.candidateSha, operation: a.operation });
     const envelope = signEnrollmentReceipt({ privateEnrollment: capsule, metadata, context, privateKey, now: observedAt,
       expiresAt: Math.min(observedAt + 600000, a.expiresAt, a.leaseDeadline, a.privateReadinessAt + 2700000,
-        Date.parse(original.admission.context.provisionedAt) + 2700000,
+        ...(a.operation === 'verify-authority' ? [Date.parse(original.admission.capturedAt) + 1800000]
+          : [Date.parse(original.admission.context.provisionedAt) + 2700000]),
         ...[original.admission.dispatchedAt, a.jobStartedAt,
-          ...Object.values(original.admission.reviewedAt)].map(time => Date.parse(time) + 1800000)) });
+          ...(a.operation === 'verify-authority' ? [] : Object.values(original.admission.reviewedAt))].map(time => Date.parse(time) + 1800000)) });
     const text = JSON.stringify(envelope);
     assertOriginalCurrent(original, await collectActual(nonce)); assertClaimCurrent(identity, original);
     await retainedProduction(readerToken);

@@ -9,7 +9,8 @@ import { SUCCESSOR_ATTEST_PURPOSE, SUCCESSOR_ATTEST_CANONICAL_HELPER_SHA256,
   successorAttestationPlan, assertSuccessorAttestationApproval, runSuccessorAttestationAdmission,
   requireSuccessorAttestationPublicationAdmission, successorAttestationSecretMetadata, successorAttestationActionBinding,
   assertSuccessorAttestationPrivateAction, assertSuccessorAttestationEnrollment, assertSuccessorAttestationPinnedKey,
-  assertSuccessorAttestationProtectedReview, readSuccessorEnrollmentTokenMetadata } from '../scripts/lib/preview-vercel-successor-attestation.mjs';
+  assertSuccessorAttestationProtectedReview, readSuccessorEnrollmentTokenMetadata,
+  assertSuccessorAttestationRepositoryVariables } from '../scripts/lib/preview-vercel-successor-attestation.mjs';
 import { successorAttestationMain } from '../scripts/preview-vercel-successor-attest.mjs';
 import { PREVIEW_EMAIL_BUILD_CONTROL_FILES } from '../scripts/lib/preview-email-build-controls.mjs';
 import { previewCoordinationSecretMetadata } from '../scripts/lib/preview-email-coordination-collector.mjs';
@@ -50,6 +51,18 @@ test('default plan and all unsupported CLI actions perform no authenticated or p
 });
 test('exact pure approval accepts only the existing issuance purpose before I/O', () => {
   assert.equal(assertSuccessorAttestationApproval({ approval: approval(), nonce, scriptSha256, now }).action, 'attest');
+});
+test('verify-only repository diagnostic must match workflow admission while release/build stay disabled; create gates remain unchanged', () => {
+  const names = ['FCOS_RUNTIME_COMPATIBILITY_RELEASE_ENABLED', 'FCOS_PREVIEW_EMAIL_BUILD_ENABLED', 'FCOS_PREVIEW_EMAIL_AUTHORITY_DIAGNOSTIC_ENABLED'];
+  const rows = names.map(name => ({ name, value: name === names[2] ? 'true' : 'false' }));
+  assert.equal(assertSuccessorAttestationRepositoryVariables(rows, 'verify-authority'), true);
+  assert.throws(() => assertSuccessorAttestationRepositoryVariables(rows, 'create'));
+  for (const name of names) {
+    assert.throws(() => assertSuccessorAttestationRepositoryVariables(rows.filter(row => row.name !== name), 'verify-authority'));
+    assert.throws(() => assertSuccessorAttestationRepositoryVariables(rows.map(row => row.name === name ? { ...row, value: row.value === 'true' ? 'false' : 'true' } : row), 'verify-authority'));
+  }
+  assert.equal(assertSuccessorAttestationRepositoryVariables([], 'create'), true);
+  assert.equal(assertSuccessorAttestationRepositoryVariables(names.map(name => ({ name, value: 'false' })), 'create'), true);
 });
 for (const [name, mutate] of [
   ['not authorized', a => { a.authorized = false; }], ['owner', a => { a.authorizedBy = 'other'; }],

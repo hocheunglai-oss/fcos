@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fcosConnectionIdentifier } from '../config/fcosConnections.js';
 import { collectBuildProvenance } from './lib/build-provenance.mjs';
-import { SUCCESSOR_LIVE_CONTRACT, collectSuccessorLiveOperationAdmission, successorLiveBinding, successorLivePlan } from './lib/runtime-compatibility-successor-live.mjs';
+import { SUCCESSOR_LIVE_CONTRACT, collectSuccessorLiveOperationAdmission, collectSuccessorVerificationAdmission, successorLiveBinding, successorLivePlan } from './lib/runtime-compatibility-successor-live.mjs';
 import { githubReleaseReads, assertReleaseGitHubAccount, RELEASE_REPOSITORY } from './lib/release-evidence.mjs';
 import { githubReleaseOidc } from './lib/release-production.mjs';
 import { collectHostedPreviewCoordinationClaim } from './lib/preview-email-coordination-collector.mjs';
@@ -16,7 +16,8 @@ import { previewEmailBuildCandidate, previewEmailBuildContract, createPreviewEma
   collectPreviewEmailEnvironmentRecords, createPreviewEmailBuildIntent, collectTrustedPreviewEmailIntent, collectPreviewEmailBuildJobs,
   runControlledPreviewEmailBuild, readPreviewEmailBuildVersion, PREVIEW_EMAIL_BUILD_ENVIRONMENT,
   PREVIEW_EMAIL_INTENT_FILENAME, PREVIEW_EMAIL_BUILD_FILENAME, PREVIEW_EMAIL_CONTRACT_SHA256,
-  PREVIEW_EMAIL_AUTHORITY_DIAGNOSTIC_FILENAME, waitForPreviewEmailAttestation } from './lib/preview-email-build.mjs';
+  PREVIEW_EMAIL_AUTHORITY_DIAGNOSTIC_FILENAME, waitForPreviewEmailAttestation,
+  previewEmailVerificationContext, previewEmailVerificationControlRevision } from './lib/preview-email-build.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const baseline = JSON.parse(readFileSync(new URL('../config/legacy-email-baseline-proof.json', import.meta.url))).baseline;
@@ -201,6 +202,7 @@ export function createPreviewEmailVercelApi({ token, fetchImpl = globalThis.fetc
 export async function runPreviewEmailProofBuild({ mode = 'dry-run', candidateSha, candidateCwd = ROOT,
   recoveryRunId, trustedCwd = ROOT, env = process.env } = {}) {
   const successor = candidateSha === SUCCESSOR_LIVE_CONTRACT.candidateSha;
+  const verificationOnly = successor && mode === 'verify-authority';
   if (successor && mode === 'dry-run') return successorLivePlan();
   if (mode === 'dry-run') return { schemaVersion: 1, kind: 'fcos_preview_email_build_plan', enabledByDefault: false,
     productionAuthorized: false, mutations: 0, contractSha256: PREVIEW_EMAIL_CONTRACT_SHA256,
@@ -227,14 +229,16 @@ export async function runPreviewEmailProofBuild({ mode = 'dry-run', candidateSha
     let admission;
     const reads = githubReleaseReads({ command: 'gh', env: { PATH: env.PATH, HOME: env.HOME, GH_HOST: 'github.com',
       GH_REPO: RELEASE_REPOSITORY, GH_TOKEN: env.GH_TOKEN } }, { cwd: trustedCwd });
-    if (successor) admission = await stage('successor_admission', () => collectSuccessorLiveOperationAdmission({ reads,
+    if (successor) admission = await stage('successor_admission', () => (verificationOnly ? collectSuccessorVerificationAdmission : collectSuccessorLiveOperationAdmission)({ reads,
       sourceCwd: candidateCwd, trustedCwd, runId: Number(env.GITHUB_RUN_ID) }));
-    const candidate = await stage('candidate_contract', () => previewEmailBuildCandidate(candidateSha, { admission }));
-    const selectedContract = previewEmailBuildContract(candidateSha, { admission });
+    const candidate = await stage('candidate_contract', () => verificationOnly ? previewEmailVerificationContext(candidateSha, { admission }).candidate
+      : previewEmailBuildCandidate(candidateSha, { admission }));
+    const selectedContract = verificationOnly ? previewEmailVerificationContext(candidateSha, { admission }) : previewEmailBuildContract(candidateSha, { admission });
     const source = await stage('candidate_provenance', () => collectBuildProvenance({ cwd: candidateCwd, env: {}, requireClean: true }));
     const harness = await stage('harness_provenance', () => collectBuildProvenance({ cwd: trustedCwd, env: {}, requireClean: true }));
     const lockHash = await stage('dependency_lock', () => releaseHash(readFileSync(join(candidateCwd, 'package-lock.json'))));
-    const controlRevision = await stage('control_revision', () => previewEmailBuildControlRevision(trustedCwd, { admission, sourceCwd: candidateCwd }));
+    const control = verificationOnly ? previewEmailVerificationControlRevision : previewEmailBuildControlRevision;
+    const controlRevision = await stage('control_revision', () => control(trustedCwd, { admission, sourceCwd: candidateCwd }));
     await stage('source_pins', () => {
       if (!source.releaseEligible || !harness.releaseEligible || source.commit !== candidate.sha
         || source.sourceDigest !== candidate.sourceDigest || lockHash !== candidate.lockHash) throw new Error('Clean exact source and dependency pins failed.');
@@ -291,11 +295,11 @@ export async function runPreviewEmailProofBuild({ mode = 'dry-run', candidateSha
         if (reads.json(`repos/${RELEASE_REPOSITORY}/git/ref/heads/${encodeURIComponent(candidate.branch)}`).object?.sha !== candidateSha) throw new Error('The reviewed candidate branch changed.');
       });
       await stage('source_recheck', () => {
-        if (successor) successorLiveBinding(admission, { sha: candidateSha, harnessSha: harness.commit,
+        if (successor && !verificationOnly) successorLiveBinding(admission, { sha: candidateSha, harnessSha: harness.commit,
           sourceDigest: source.sourceDigest, lockHash, previewControlRevision: controlRevision });
         if (collectBuildProvenance({ cwd: candidateCwd, env: {}, requireClean: true }).sourceDigest !== source.sourceDigest
           || collectBuildProvenance({ cwd: trustedCwd, env: {}, requireClean: true }).commit !== harness.commit
-          || previewEmailBuildControlRevision(trustedCwd, { admission, sourceCwd: candidateCwd }) !== controlRevision) throw new Error('Reviewed source or controls changed during execution.');
+          || control(trustedCwd, { admission, sourceCwd: candidateCwd }) !== controlRevision) throw new Error('Reviewed source or controls changed during execution.');
       });
       // The diagnostic gate requires both deployment gates off. This terminal
       // branch precedes environment reads, intent creation and every deploy path.
