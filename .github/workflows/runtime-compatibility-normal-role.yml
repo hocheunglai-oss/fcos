@@ -20,6 +20,7 @@ jobs:
       contents: read
       actions: read
       deployments: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -30,6 +31,12 @@ jobs:
         with:
           node-version: 24
       - run: npm ci --ignore-scripts
+      - name: Persist immutable exact04ee runtime materials
+        if: ${{ inputs.expected_commit == '04ee3425aac7a49089eda781eb3c976aea1f6785' && (vars.FCOS_RUNTIME_COMPATIBILITY_MATERIAL_TRANSPORT != '' || vars.FCOS_RUNTIME_COMPATIBILITY_MATERIALS != '') }}
+        run: node scripts/runtime-compatibility-materials.mjs
+        env:
+          GH_TOKEN: ${{ secrets.FCOS_RELEASE_GH_TOKEN }}
+          FCOS_E2E_EXPECTED_COMMIT: ${{ inputs.expected_commit }}
       - run: npx playwright install --with-deps chromium
       - name: Verify credential-free browser isolation with mocked routes
         run: node --test tests/compatibility-browser-isolation.chromium.mjs
@@ -37,6 +44,7 @@ jobs:
         run: node scripts/runtime-compatibility-normal-role.mjs
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ inputs.expected_commit == '04ee3425aac7a49089eda781eb3c976aea1f6785' && secrets.FCOS_RELEASE_GH_TOKEN || '' }}
           GITHUB_REF_PROTECTED: ${{ github.ref_protected }}
           FCOS_COMPATIBILITY_NORMAL_ROLE_ENABLED: ${{ vars.FCOS_COMPATIBILITY_NORMAL_ROLE_ENABLED }}
           FCOS_NORMAL_ROLE_APPROVED_EMAIL: ${{ vars.FCOS_NORMAL_ROLE_APPROVED_EMAIL }}

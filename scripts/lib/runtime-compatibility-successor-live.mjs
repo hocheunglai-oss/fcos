@@ -9,6 +9,7 @@ import { verifyRuntimeCompatibilitySuccessorSource } from '../verify-runtime-com
 import { collectBuildProvenance } from './build-provenance.mjs';
 import { PREVIEW_EMAIL_BUILD_CONTROL_FILES } from './preview-email-build-controls.mjs';
 import { githubProviderFresh } from './github-provider-timestamp.mjs';
+import { collectRuntimeSuccessorMaterials } from './runtime-compatibility-material-transport.mjs';
 
 const digest = value => createHash('sha256').update(value).digest('hex');
 const freeze = value => { if (value && typeof value === 'object') { Object.values(value).forEach(freeze); Object.freeze(value); } return value; };
@@ -184,7 +185,8 @@ function material(raw, file) {
 
 /** Pure material check. It does not turn caller-supplied review booleans into
  * authority. Only collectSuccessorLiveAdmission can mint the opaque selection,
- * after reading these exact bytes from the actual protected harness Git tree. */
+ * after reading exact bytes from the protected harness Git tree or independently
+ * authenticating this run's immutable protected data-producer artifact. */
 function assertSuccessorMaterials({ context, reviews, binding, now = Date.now() } = {}, historicalOnly = false) {
   const value = context?.value;
   const intact = record => Buffer.isBuffer(record?.body) && digest(record.body) === record.sha256
@@ -323,17 +325,25 @@ export async function collectSuccessorLiveAdmission({ reads, binding, sourceCwd,
     || !['in_progress', 'completed'].includes(run.status) || !githubProviderFresh(run.run_started_at, policy.maxAgeSeconds.dispatch * 1000, now)
     || !['.github/workflows/preview-email-proof-build.yml', '.github/workflows/runtime-compatibility-normal-role.yml', '.github/workflows/runtime-compatibility-release.yml']
       .some(path => [path, `${path}@${trusted.branch}`].includes(run.path))) fail('EXACT_SUCCESSOR_DISPATCH_REQUIRED');
-  const rows = {};
-  for (const [role, file] of Object.entries(policy.materials)) rows[role] = material(
+  const runtime = await collectRuntimeSuccessorMaterials({ reads, expected: binding, run, now });
+  const rows = runtime?.rows || {};
+  if (!runtime) for (const [role, file] of Object.entries(policy.materials)) rows[role] = material(
     await reads.json(`repos/${RELEASE_REPOSITORY}/contents/${file}?ref=${trusted.sha}`), file);
   assertSuccessorLiveMaterials({ context: rows.context, reviews: [rows.root, rows.independent], binding, now });
   const context = rows.context.value;
-  const contractSha256 = digest(`fcos-exact-04ee-live-material-v1\0${SUCCESSOR_LIVE_CONTRACT_SHA256}\0${rows.context.sha256}\0${rows.root.sha256}\0${rows.independent.sha256}`);
+  const materialBinding = `${SUCCESSOR_LIVE_CONTRACT_SHA256}\0${rows.context.sha256}\0${rows.root.sha256}\0${rows.independent.sha256}`;
+  // The material contract persists across independently admitted workflow runs
+  // so downstream consumers can verify the original immutable Preview receipt.
+  // Current run/attempt/transport provenance is authenticated separately above;
+  // native approval also binds runId, harness, controls and this exact hash.
+  const contractSha256 = runtime ? digest(`fcos-exact-04ee-run-material-v1\0${materialBinding}`)
+    : digest(`fcos-exact-04ee-live-material-v1\0${materialBinding}`);
   const admission = freeze({ schemaVersion: 1, kind: 'fcos_exact_04ee_collector_admission', harnessSha: trusted.sha,
     contractSha256, capturedAt: new Date(now).toISOString(), dispatchedAt: run.run_started_at, runId: run.id, runAttempt: run.run_attempt,
     workflow: run.path.split('@')[0], context, sourceReceipt, signerSource, controlFiles: controls.controlFiles,
     reviewedAt: { root: rows.root.value.reviewedAt, independent: rows.independent.value.reviewedAt },
     materialHashes: Object.fromEntries(Object.entries(rows).map(([key, value]) => [key, value.sha256])),
+    ...(runtime ? { materialTransport: runtime.transport } : {}),
     candidate: { sha: policy.candidateSha, branch: policy.branch, sourceDigest: policy.sourceDigest, lockHash: policy.lockHash, ...context.records },
     previewAuthorized: false, productionAuthorized: false, credentialAuthority: false, mutations: 0 });
   verified.add(admission);

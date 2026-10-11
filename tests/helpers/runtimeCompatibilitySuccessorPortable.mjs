@@ -7,9 +7,9 @@ import { fileURLToPath } from 'node:url';
 
 export const SOURCE_ROOT = fileURLToPath(new URL('../../', import.meta.url));
 export const FIXTURE_ROOT = join(SOURCE_ROOT, 'tests/fixtures/runtime-compatibility-successor-integration');
-export const MANIFEST_HASH = 'ef7cf4031d799e023d643f1f6666597d43e87cc6b52dfb7bc83440f25358cb44';
+export const MANIFEST_HASH = '18b36ccca6f50b55be34e7cf3f10bc50f3e946414e25721a9b029b75f53f9a46';
 export const PACK_HASH = 'edb0c7a0d0ac7f45dba5fcfc8f6d98cbbf9667f01713a5d7f7764dc7e7380628';
-const BINDINGS_HASH = '870c463095272ee2c56084df142944875deda791b83c64543bd92ebda5bd5fb1';
+const BINDINGS_HASH = '821e29ac950fa6f42ecd6ad0f6b2de63cc4c301b585ca7878a4e9bd154a4c0c8';
 export const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 
 function regularFile(root, path) {
@@ -65,10 +65,13 @@ assert.equal(JSON.parse(thirteenthBindingBytes).previousSourceBindingsSha256, ha
 const fourteenthBindingBytes = regularFile(FIXTURE_ROOT, 'source-bindings-v14.json');
 assert.equal(hash(fourteenthBindingBytes), 'd36210e9a0f33fdee76fc8fea7b2ae740b5a576e83b9b553d74ad0b6a8d3640d');
 assert.equal(JSON.parse(fourteenthBindingBytes).previousSourceBindingsSha256, hash(thirteenthBindingBytes));
-const bindingBytes = regularFile(FIXTURE_ROOT, 'source-bindings-v15.json');
+const fifteenthBindingBytes = regularFile(FIXTURE_ROOT, 'source-bindings-v15.json');
+assert.equal(hash(fifteenthBindingBytes), '870c463095272ee2c56084df142944875deda791b83c64543bd92ebda5bd5fb1');
+assert.equal(JSON.parse(fifteenthBindingBytes).previousSourceBindingsSha256, hash(fourteenthBindingBytes));
+const bindingBytes = regularFile(FIXTURE_ROOT, 'source-bindings-v16.json');
 assert.equal(hash(bindingBytes), BINDINGS_HASH, 'Reviewed source bindings differ.');
 export const sourceBindings = JSON.parse(bindingBytes);
-assert.equal(sourceBindings.previousSourceBindingsSha256, hash(fourteenthBindingBytes), 'Previous source binding history differs.');
+assert.equal(sourceBindings.previousSourceBindingsSha256, hash(fifteenthBindingBytes), 'Previous source binding history differs.');
 const rows = new Map(sourceBindings.sources.map(row => [row.path, row]));
 assert.equal(rows.size, sourceBindings.sources.length, 'Duplicate source binding.');
 export function assertBoundSource(path, bytes) {
@@ -83,7 +86,7 @@ export function validateSourceBindings() {
 export function validatePublicManifest(bytes) {
   assert.equal(hash(bytes), MANIFEST_HASH, 'Immutable public manifest differs.');
   const manifest = JSON.parse(bytes);
-  assert.equal(manifest.previousManifestSha256, hash(ninthManifestBytes), 'Public manifest history differs.');
+  assert.equal(manifest.previousManifestSha256, hash(tenthManifestBytes), 'Public manifest history differs.');
   assert.deepEqual(manifest.objects, historicalManifest.objects, 'Immutable packed objects differ.');
   assert.deepEqual(manifest.observationBindings, historicalManifest.observationBindings, 'Immutable observation bindings differ.');
   assert.deepEqual(manifest.pack, historicalManifest.pack, 'Immutable public pack differs.');
@@ -118,7 +121,10 @@ assert.equal(JSON.parse(eighthManifestBytes).previousManifestSha256, hash(sevent
 const ninthManifestBytes = regularFile(FIXTURE_ROOT, 'fixture-manifest-v9.json');
 assert.equal(hash(ninthManifestBytes), 'abe42cbf7030eed188c7af89063be413d2937015a285237c82e07371097a0f3c');
 assert.equal(JSON.parse(ninthManifestBytes).previousManifestSha256, hash(eighthManifestBytes));
-export const manifestBytes = regularFile(FIXTURE_ROOT, 'fixture-manifest-v10.json');
+const tenthManifestBytes = regularFile(FIXTURE_ROOT, 'fixture-manifest-v10.json');
+assert.equal(hash(tenthManifestBytes), 'ef7cf4031d799e023d643f1f6666597d43e87cc6b52dfb7bc83440f25358cb44');
+assert.equal(JSON.parse(tenthManifestBytes).previousManifestSha256, hash(ninthManifestBytes));
+export const manifestBytes = regularFile(FIXTURE_ROOT, 'fixture-manifest-v11.json');
 export const manifest = validatePublicManifest(manifestBytes);
 export const pack = regularFile(FIXTURE_ROOT, 'objects-v2.pack');
 assert.equal(pack.length, 552150); assert.equal(hash(pack), PACK_HASH);
@@ -155,22 +161,29 @@ assert.equal(controlPack.length, controlManifest.pack.byteLength); assert.equal(
 // public carriers are consumed by native Git with no alternates or fetch.
 export function installPortableObjects(cwd) {
   assert.equal(fs.existsSync(join(cwd, '.git/objects/info/alternates')), false);
-  const git = (args, input) => execFileSync('git', ['--no-replace-objects', ...args], { cwd, input, env: cleanGitEnvironment(), stdio: ['pipe', 'pipe', 'pipe'] });
+  const git = (args, input) => execFileSync('git', ['--no-replace-objects', ...args], { cwd, input, env: cleanGitEnvironment(), maxBuffer: 32 * 1024 * 1024, stdio: ['pipe', 'pipe', 'pipe'] });
   assert.equal(git(['cat-file', '--batch-all-objects', '--batch-check=%(objectname)']).length, 0, 'Empty fixture object store required.');
   git(['index-pack', '--stdin'], pack);
   const count = () => git(['cat-file', '--batch-all-objects', '--batch-check=%(objectname)']).toString().trim().split('\n').length;
+  const verifyObjects = rows => {
+    // Every object is immutable and keyed by the authenticated exact OID. One
+    // batch retains each original type/length/body-hash check without spawning
+    // two Git processes per object. No current-source boundary is cached.
+    const bytes = git(['cat-file', '--batch'], Buffer.from(`${rows.map(row => row.oid).join('\n')}\n`)); let offset = 0;
+    for (const row of rows) {
+      const end = bytes.indexOf(10, offset); assert.ok(end > offset);
+      assert.equal(bytes.subarray(offset, end).toString(), `${row.oid} ${row.type} ${row.byteLength}`);
+      const body = bytes.subarray(end + 1, end + 1 + row.byteLength); assert.equal(body.length, row.byteLength);
+      assert.equal(hash(body), row.sha256);
+      assert.equal(createHash('sha1').update(`${row.type} ${body.length}\0`).update(body).digest('hex'), row.oid);
+      offset = end + 1 + row.byteLength; assert.equal(bytes[offset++], 10);
+    }
+    assert.equal(offset, bytes.length, 'Exact batch object membership required.');
+  };
   assert.equal(count(), 272);
-  for (const row of manifest.objects) {
-    assert.equal(git(['cat-file', '-t', row.oid]).toString().trim(), row.type);
-    const bytes = git(['cat-file', row.type, row.oid]);
-    assert.equal(bytes.length, row.byteLength); assert.equal(hash(bytes), row.sha256);
-  }
+  verifyObjects(manifest.objects);
   git(['index-pack', '--stdin'], controlPack); assert.equal(count(), 275);
-  for (const row of controlManifest.objects) {
-    assert.equal(row.type, 'blob'); assert.equal(git(['cat-file', '-t', row.oid]).toString().trim(), 'blob');
-    const bytes = git(['cat-file', 'blob', row.oid]);
-    assert.equal(bytes.length, row.byteLength); assert.equal(hash(bytes), row.sha256);
-  }
+  assert.ok(controlManifest.objects.every(row => row.type === 'blob')); verifyObjects(controlManifest.objects);
   for (const row of controlManifest.mandatoryCandidateControls) {
     const tree = git(['ls-tree', controlManifest.candidateSha, '--', row.path]).toString().trim();
     assert.equal(tree, `${row.mode} blob ${row.oid}\t${row.path}`);

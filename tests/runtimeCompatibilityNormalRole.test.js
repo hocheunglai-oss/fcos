@@ -11,6 +11,16 @@ import { verifyRuntimeCompatibility } from '../scripts/verify-runtime-compatibil
 import { fcosConnectionIdentifier } from '../config/fcosConnections.js';
 const url = 'https://fcos-abcdefghi-hocheunglai-6535s-projects.vercel.app';
 
+test('exact04ee refuses absent dedicated provenance token before source reads or private browser data', async () => {
+  let calls = 0;
+  const env = { FCOS_COMPATIBILITY_NORMAL_ROLE_ENABLED: 'true', GITHUB_ACTIONS: 'true', GITHUB_REF_PROTECTED: 'true',
+    GITHUB_REPOSITORY: fcosConnectionIdentifier('github', 'Repository'), GITHUB_SHA: 'a'.repeat(40),
+    FCOS_E2E_EXPECTED_COMMIT: '04ee3425aac7a49089eda781eb3c976aea1f6785', GITHUB_TOKEN: 'OFFLINE_BOT_NOT_OPERATOR' };
+  await assert.rejects(() => verifyRuntimeCompatibilityNormalRole({ env, fetchImpl: () => { calls++; assert.fail('No provider or private reads.'); } }),
+    error => error.normalRoleDiagnostic?.stage === 'SOURCE_SCOPE' && error.normalRoleDiagnostic?.reason === 'READ_ONLY_GUARD_MISSING');
+  assert.equal(calls, 0);
+});
+
 test('compatibility catalogue freezes all required old real-data paths without importing the evolving full release verifier', () => {
   assert.equal(COMPATIBILITY_NORMAL_MODULES.length, 15);
   assert.equal(COMPATIBILITY_NORMAL_MODULES.find(row => row.module === 'xero_portal').handler, 'xeroPortalReceiptsList');
