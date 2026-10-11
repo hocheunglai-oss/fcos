@@ -33,6 +33,8 @@ import { compatibilityOperationScopeVerified, assertCompatibilityNormalArtifact,
 import { copyBoundSource, installPortableObjects, controlManifest, controlManifestBytes, validateControlManifest, controlPack } from './helpers/runtimeCompatibilitySuccessorPortable.mjs';
 import { SUCCESSOR_ATTEST_PURPOSE, SUCCESSOR_ATTEST_CANONICAL_HELPER_SHA256, successorAttestationPlan,
   bindSuccessorAttestationAdmission, runSuccessorAttestationAdmission } from '../scripts/lib/preview-vercel-successor-attestation.mjs';
+import { materialTransportFixture } from './helpers/runtimeMaterialTransport.mjs';
+import { collectRuntimeSuccessorMaterials } from '../scripts/lib/runtime-compatibility-material-transport.mjs';
 
 const actualVerification = JSON.parse(readFileSync(new URL('./fixtures/preview-verification-actual-github.json', import.meta.url)));
 const cwd = fileURLToPath(new URL('..', import.meta.url));
@@ -86,6 +88,8 @@ function fixture(runId = 99) {
     if (endpoint.endsWith('/branches/main')) return branch;
     if (endpoint.endsWith('/branches/main/protection')) return protection;
     if (endpoint.endsWith(`/actions/runs/${runId}`)) return run;
+    if (endpoint.endsWith('/variables?per_page=100&page=1')) return { total_count: 0, variables: [] };
+    if (endpoint.endsWith('/artifacts?per_page=100&page=1')) return { total_count: 0, artifacts: [] };
     for (const [role, file] of Object.entries(policy.materials)) if (endpoint === `repos/${repository.full_name}/contents/${file}?ref=${harnessSha}`) {
       const body = rows[role].body;
       return { type: 'file', path: file, encoding: 'base64', content: body.toString('base64'),
@@ -100,6 +104,61 @@ function replaceContext(value, alter) {
   value.reviews = value.reviews.map(review => record({ ...review.value, contextSha256: value.context.sha256 }));
   value.rows.root = value.reviews[0]; value.rows.independent = value.reviews[1];
 }
+
+test('runtime material admits all downstream workflows with exact hashes and native contract binding while static compatibility stays intact', async () => {
+  const staticValue = fixture(), legacy = await collectSuccessorLiveAdmission({ ...staticValue, sourceCwd: trustedCwd, trustedCwd, now });
+  assert.equal(legacy.materialTransport, undefined);
+  const before = JSON.stringify(staticValue.rows);
+  let original, receipt, records;
+  for (const name of ['preview-email-proof-build.yml', 'runtime-compatibility-normal-role.yml', 'runtime-compatibility-release.yml']) {
+    const value = fixture(name === 'preview-email-proof-build.yml' ? 99 : name === 'runtime-compatibility-normal-role.yml' ? 101 : 102);
+    const transport = materialTransportFixture({ expected: value.binding, rows: value.rows, workflow: `.github/workflows/${name}`, now });
+    const admission = await collectSuccessorLiveAdmission({ binding: value.binding, reads: transport.reads, sourceCwd: trustedCwd, trustedCwd, now });
+    assert.equal(successorLiveSelection(admission, policy.candidateSha, now), admission);
+    assert.deepEqual(admission.materialHashes, legacy.materialHashes);
+    assert.notEqual(admission.contractSha256, legacy.contractSha256);
+    assert.equal(admission.materialTransport.binding.workflow, `.github/workflows/${name}`);
+    assert.equal(admission.materialTransport.binding.configurationRevision, controls.configurationRevision);
+    assert.equal(admission.context.provisionedAt, value.context.value.provisionedAt);
+    assert.equal(admission.reviewedAt.root, value.reviews[0].value.reviewedAt);
+    assert.equal(transport.calls.some(path => path.includes('/contents/')), false);
+    assert.equal(admission.previewAuthorized, false); assert.equal(admission.productionAuthorized, false);
+    assert.throws(() => successorLiveSelection(structuredClone(admission), policy.candidateSha, now));
+    if (!original) {
+      original = admission; records = successorRecords(admission);
+      const intent = createPreviewEmailBuildIntent({ candidateSha: policy.candidateSha, harnessSha, controlRevision: controls.previewControlRevision,
+        runId: 99, operationId, records, admission, now });
+      receipt = { ...intent, kind: 'fcos_preview_email_build', capturedAt: iso(now + 1000), deployment: { id: 'dpl_Runtime04ee',
+        url: 'https://fcos-runtime04-hocheunglai-6535s-projects.vercel.app', sha: policy.candidateSha, target: 'preview', state: 'READY', createdAt: now + 500,
+        projectId: records.projectId, teamId: records.teamId, operationId } };
+    } else {
+      assert.equal(admission.contractSha256, original.contractSha256);
+      assert.notDeepEqual(admission.materialTransport.binding, original.materialTransport.binding);
+      assert.throws(() => createPreviewEmailBuildIntent({ candidateSha: policy.candidateSha, harnessSha, controlRevision: controls.previewControlRevision,
+        runId: 99, operationId, records, admission, now }));
+    }
+    assert.equal(assertPreviewEmailBuildReceipt({ receipt, binding: { ...value.binding, deploymentId: receipt.deployment.id, candidateUrl: receipt.deployment.url },
+      records, admission, now: now + 1000 }), true);
+  }
+  assert.equal(JSON.stringify(staticValue.rows), before);
+});
+
+test('runtime producer capture cannot renew original provisioning or material clocks, IDs or control/source binding', async () => {
+  for (const workflow of ['preview-email-proof-build.yml', 'runtime-compatibility-normal-role.yml', 'runtime-compatibility-release.yml']) {
+    for (const change of [v => { replaceContext(v, context => { context.provisionedAt = iso(now - 2700001); }); },
+      v => { v.rows.root = record({ ...v.rows.root.value, reviewedAt: iso(now - 1800001) }); },
+      v => { v.rows.independent = record({ ...v.rows.independent.value, reviewedAt: iso(now - 1800001) }); },
+      v => { replaceContext(v, context => { context.previewControlRevision = '0'.repeat(64); }); },
+      v => { replaceContext(v, context => { context.records.attachmentRecordId = context.records.tenantRecordId; }); },
+      v => { v.rows.independent = record({ ...v.rows.independent.value, reviewer: v.rows.root.value.reviewer }); }]) {
+      const value = fixture(); change(value);
+      const transport = materialTransportFixture({ expected: value.binding, rows: value.rows, workflow: `.github/workflows/${workflow}`, now });
+      const material = await collectRuntimeSuccessorMaterials({ reads: transport.reads, expected: value.binding, run: transport.run, now });
+      assert.throws(() => assertSuccessorLiveMaterials({ context: material.rows.context, reviews: [material.rows.root, material.rows.independent], binding: value.binding, now }));
+      assert.equal(transport.calls.some(path => path.includes('/contents/')), false);
+    }
+  }
+});
 
 function verificationFixture(runId = 99) {
   const value = fixture(runId), operator = fcosConnectionIdentifier('github', 'Required account');
@@ -548,7 +607,13 @@ test('positive offline protected-tree admission yields only an opaque data contr
   assert.throws(() => successorLivePreviewRequest({ admission, operationId: operationId.replace('-99-', '-100-'), now }));
   assert.throws(() => executeSuccessorLiveAdapter({ admission, leaseHeld: true, consumed: false }), { code: 'EXACT_SUCCESSOR_SHARED_COORDINATOR_REQUIRED' });
   assert.equal(admission.previewAuthorized, false); assert.equal(admission.productionAuthorized, false); assert.equal(admission.credentialAuthority, false);
-  assert.equal(value.calls.length, 8);
+  // Genuine runtime absence is checked before using static material.
+  assert.equal(value.calls.length, 11);
+  assert.deepEqual(value.calls.slice(5, 8), [
+    'repos/hocheunglai-oss/fcos/environments/fcos-runtime-compatibility-release/variables?per_page=100&page=1',
+    'repos/hocheunglai-oss/fcos/actions/variables?per_page=100&page=1',
+    'repos/hocheunglai-oss/fcos/actions/runs/99/artifacts?per_page=100&page=1',
+  ]);
 });
 
 test('selection retains each original review age instead of renewing it at collection', async () => {

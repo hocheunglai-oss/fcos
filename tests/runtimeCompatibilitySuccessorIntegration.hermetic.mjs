@@ -54,6 +54,7 @@ async function modules({ objectOverride, localReadOverride, provenanceOverride, 
     'scripts/lib/runtime-compatibility-observation.mjs', 'config/fcosConnections.js', 'scripts/runtime-compatibility-release.mjs',
     'scripts/runtime-compatibility-normal-role.mjs', 'scripts/preview-email-proof-build.mjs', ...currentFiles.filter(x => x.endsWith('.mjs') || x.endsWith('.js')),
     'scripts/lib/runtime-compatibility-successor-live.mjs', 'scripts/lib/runtime-compatibility-successor-adapter.mjs',
+    'scripts/lib/runtime-compatibility-material-transport.mjs',
     'scripts/lib/preview-email-build-controls.mjs', 'scripts/lib/github-provider-timestamp.mjs',
     'scripts/lib/release-coordination-controls.mjs', 'scripts/lib/release-coordination.mjs',
     'scripts/lib/release-coordination-trust.mjs', 'scripts/lib/release-coordination-transport.mjs']);

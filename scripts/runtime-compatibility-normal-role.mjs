@@ -296,9 +296,12 @@ export async function verifyRuntimeCompatibilityNormalRole({ env = process.env, 
   if (env.FCOS_COMPATIBILITY_NORMAL_ROLE_ENABLED !== 'true' || env.GITHUB_ACTIONS !== 'true' || env.GITHUB_REF_PROTECTED !== 'true' || env.GITHUB_REPOSITORY !== fcosConnectionIdentifier('github', 'Repository') || ![FIRST_RUNTIME_ROLLOUT.candidateSha, SUCCESSOR_LIVE_CONTRACT.candidateSha].includes(env.FCOS_E2E_EXPECTED_COMMIT) || !/^[0-9a-f]{40}$/.test(env.GITHUB_SHA || '')) throw compatibilityNormalDiagnosticError('CONFIGURATION', 'CONFIGURATION_INVALID');
   let admission, operationBinding;
   if (successor) {
-    admission = await normalRoleDiagnosticStage('SOURCE_SCOPE', () => collectSuccessorLiveOperationAdmission({ sourceCwd: root, trustedCwd: root,
+    admission = await normalRoleDiagnosticStage('SOURCE_SCOPE', () => {
+      if (!env.GH_TOKEN) throw compatibilityNormalDiagnosticError('SOURCE_SCOPE', 'READ_ONLY_GUARD_MISSING');
+      return collectSuccessorLiveOperationAdmission({ sourceCwd: root, trustedCwd: root,
       runId: Number(env.GITHUB_RUN_ID), reads: githubReleaseReads({ command: 'gh', env: { PATH: env.PATH, HOME: env.HOME,
-        GH_HOST: 'github.com', GH_REPO: RELEASE_REPOSITORY, GH_TOKEN: env.GITHUB_TOKEN } }, { cwd: root }) }));
+        GH_HOST: 'github.com', GH_REPO: RELEASE_REPOSITORY, GH_TOKEN: env.GH_TOKEN } }, { cwd: root }) });
+    });
     if (admission.harnessSha !== env.GITHUB_SHA || admission.workflow !== '.github/workflows/runtime-compatibility-normal-role.yml') throw compatibilityNormalDiagnosticError('SOURCE_SCOPE', 'READ_ONLY_GUARD_MISSING');
     operationBinding = { sha: admission.candidate.sha, harnessSha: admission.harnessSha, sourceDigest: admission.candidate.sourceDigest,
       lockHash: admission.candidate.lockHash, configurationRevision: admission.context.configurationRevision, candidateTreeHash: SUCCESSOR_LIVE_CONTRACT.candidateTreeHash };
