@@ -31,7 +31,7 @@ const command = (binary, args, options = {}) => {
 const DIAGNOSTIC_PHASES = new Set(['runner_context', 'successor_admission', 'candidate_contract', 'candidate_provenance', 'harness_provenance',
   'dependency_lock', 'control_revision', 'source_pins', 'provider_cli_version', 'github_identity', 'actions_oidc',
   'protected_repository', 'environment_variables', 'environment_protection', 'environment_secrets', 'workflow_run',
-  'environment_approval', 'workflow_job', 'protection_review', 'receipt_handoff', 'candidate_branch', 'source_recheck', 'vercel_authority',
+  'environment_approval', 'workflow_job', 'workflow_identity', 'protection_review', 'receipt_handoff', 'candidate_branch', 'source_recheck', 'vercel_authority',
   'retained_production', 'environment_records', 'intent_write', 'recovery_context', 'trusted_intent', 'execution_claim',
   'controlled_build', 'receipt_write', 'authority_probe', 'authority_probe_write', 'enrolled_authority', 'enrolled_authority_write', 'coordination_claim']);
 const diagnosticFailure = phase => new Error(`FCOS protected Preview ${phase} failed; private diagnostics suppressed.`);
@@ -279,12 +279,12 @@ export async function runPreviewEmailProofBuild({ mode = 'dry-run', candidateSha
         branch = reads.json(`repos/${RELEASE_REPOSITORY}/branches/${encodeURIComponent(repository.default_branch)}`);
         protection = reads.json(`repos/${RELEASE_REPOSITORY}/branches/${encodeURIComponent(repository.default_branch)}/protection`);
         environment = reads.json(`repos/${RELEASE_REPOSITORY}/environments/${PREVIEW_EMAIL_BUILD_ENVIRONMENT}`);
-        secrets = completeEnvironmentNames(reads, `repos/${RELEASE_REPOSITORY}/environments/${PREVIEW_EMAIL_BUILD_ENVIRONMENT}/secrets`, 'secrets');
+        secrets = await completeEnvironmentNames(reads, `repos/${RELEASE_REPOSITORY}/environments/${PREVIEW_EMAIL_BUILD_ENVIRONMENT}/secrets`, 'secrets');
         run = reads.json(`repos/${RELEASE_REPOSITORY}/actions/runs/${signed.run_id}`);
         approvals = reads.json(`repos/${RELEASE_REPOSITORY}/actions/runs/${signed.run_id}/approvals`);
         jobs = await collectPreviewEmailBuildJobs({ reads, runId: Number(signed.run_id) });
         if (verificationOnly) workflow = reads.json(`repos/${RELEASE_REPOSITORY}/actions/workflows/preview-email-proof-build.yml`);
-        variables = completeEnvironmentNames(reads, `repos/${RELEASE_REPOSITORY}/environments/${PREVIEW_EMAIL_BUILD_ENVIRONMENT}/variables`, 'variables');
+        variables = await completeEnvironmentNames(reads, `repos/${RELEASE_REPOSITORY}/environments/${PREVIEW_EMAIL_BUILD_ENVIRONMENT}/variables`, 'variables');
       }
       approved = await stage('protection_review', () => {
         const result = assertPreviewEmailBuildProtection({ repository, branch, protection, environment, variables, secrets,
