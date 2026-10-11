@@ -130,6 +130,7 @@ test('invalid reviewed IDs or credentials fail before any diagnostic request', a
 async function runnerScenario(root, temporaryDirectory, variant = 'legacy') {
   const enrolled = variant !== 'legacy';
   const exactSuccessor = variant.startsWith('exact-');
+  const refreshing = variant.startsWith('exact-refresh-');
   const assert = (await import('node:assert/strict')).default;
   const { mock } = await import('node:test');
   const fs = await import('node:fs');
@@ -144,6 +145,11 @@ async function runnerScenario(root, temporaryDirectory, variant = 'legacy') {
     sourceDigest: policy.sourceDigest, lockHash: policy.lockHash } : contract.preview.candidates[0];
   const harnessSha = 'a'.repeat(40), teamId = fcosConnectionIdentifier('vercel', 'Team ID');
   const projectId = fcosConnectionIdentifier('vercel', 'Project ID'), now = Date.now();
+  let clock = now;
+  if (refreshing) {
+    mock.method(Date, 'now', () => clock);
+    mock.method(globalThis, 'setTimeout', (done, ms) => { clock += ms; queueMicrotask(done); });
+  }
   const reviewer = { id: 4, login: 'hocheunglai-oss' }, repository = { id: 2, full_name: 'hocheunglai-oss/fcos', default_branch: 'main' };
   const environment = { id: 5, name: 'fcos-runtime-compatibility-release', can_admins_bypass: false,
     deployment_branch_policy: { protected_branches: true, custom_branch_policies: false },
@@ -156,6 +162,7 @@ async function runnerScenario(root, temporaryDirectory, variant = 'legacy') {
     workflow_name: 'FCOS protected Preview email proof build', status: 'in_progress', conclusion: null,
     started_at: new Date(now - 1000).toISOString(), completed_at: null }];
   const workflow = { id: 123, path: run.path, name: 'FCOS protected Preview email proof build', state: 'active' };
+  if (variant === 'exact-refresh-run-deadline') run.run_started_at = jobs[0].started_at = new Date(now - 1520000).toISOString();
   const controls = { harnessSha, previewControlRevision: 'b'.repeat(64), configurationRevision: 'c'.repeat(64) };
   const admission = { ...controls, candidate, runId: run.id, runAttempt: 1, workflow: run.path,
     contractSha256: 'd'.repeat(64), repositoryId: repository.id, environmentId: environment.id,
@@ -196,7 +203,7 @@ async function runnerScenario(root, temporaryDirectory, variant = 'legacy') {
     repository: repository.full_name, repository_id: '2', sub: `repo:${repository.full_name}:environment:${environment.name}`,
     workflow_ref: `${repository.full_name}/.github/workflows/preview-email-proof-build.yml@refs/heads/main`,
     workflow_sha: harnessSha, sha: harnessSha, ref: 'refs/heads/main', run_id: '99', run_attempt: '1', event_name: 'workflow_dispatch', exp: now / 1000 + 300 };
-  let variables, variableReads = 0, secretReads = 0; const githubPaths = [];
+  let variables, variableReads = 0, secretReads = 0, oidcReads = 0; const githubPaths = [];
   const prefix = `repos/${repository.full_name}`;
   const reads = { json: path => {
     githubPaths.push(path);
@@ -208,7 +215,8 @@ async function runnerScenario(root, temporaryDirectory, variant = 'legacy') {
     if (path === `${prefix}/environments/${environment.name}`) return environment;
     if (path.includes('/variables?')) {
       variableReads++;
-      const current = structuredClone(variables);
+      const current = structuredClone(variables).filter(row => !refreshing || row.name !== 'FCOS_PREVIEW_VERCEL_AUTHORITY_RECEIPT'
+        || clock >= now + (variant === 'exact-refresh-handoff-deadline' ? 610000 : 330000));
       if (variant === 'exact-changed-pin' && variableReads > 1) current.find(row => row.name === 'FCOS_PREVIEW_EMAIL_BUILD_ENABLED').value = 'true';
       return { total_count: current.length, variables: current };
     }
@@ -226,7 +234,32 @@ async function runnerScenario(root, temporaryDirectory, variant = 'legacy') {
     assert.fail(`Unexpected GitHub read: ${path}`);
   } };
   mock.module(moduleUrl('scripts/lib/release-evidence.mjs'), { namedExports: { ...evidence, githubReleaseReads: () => reads } });
-  mock.module(moduleUrl('scripts/lib/release-production.mjs'), { namedExports: { ...production, githubReleaseOidc: async () => claims } });
+  // Refreshed tokens pass the real RS256/JWKS verifier; only the upstream
+  // transport is offline. A forged signature must never reach provider reads.
+  const crypto = refreshing ? await import('node:crypto') : undefined;
+  const oidcKeys = refreshing ? crypto.generateKeyPairSync('rsa', { modulusLength: 2048 }) : undefined;
+  mock.module(moduleUrl('scripts/lib/release-production.mjs'), { namedExports: { ...production, githubReleaseOidc: async options => {
+    oidcReads++;
+    if (!refreshing || oidcReads === 1) return claims;
+    const refreshed = { ...claims, iat: clock / 1000, exp: clock / 1000 + 300 };
+    if (variant === 'exact-refresh-changed-run') refreshed.run_id = '100';
+    if (variant === 'exact-refresh-changed-source') refreshed.workflow_sha = 'f'.repeat(40);
+    if (variant === 'exact-refresh-changed-environment') refreshed.sub = `repo:${repository.full_name}:environment:other`;
+    if (variant === 'exact-refresh-expired') refreshed.exp = clock / 1000;
+    const header = Buffer.from(JSON.stringify({ alg: 'RS256', kid: 'offline-oidc-key' })).toString('base64url');
+    const payload = Buffer.from(JSON.stringify(refreshed)).toString('base64url');
+    const signature = crypto.sign('RSA-SHA256', Buffer.from(`${header}.${payload}`), oidcKeys.privateKey);
+    if (variant === 'exact-refresh-forged') signature[0] ^= 1;
+    const token = `${header}.${payload}.${signature.toString('base64url')}`;
+    const requestUrl = 'https://fixture.actions.githubusercontent.com/token';
+    return production.githubReleaseOidc({ ...options,
+      env: { ...options.env, ACTIONS_ID_TOKEN_REQUEST_URL: requestUrl, ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'PRIVATE_OIDC_REQUEST' },
+      fetchImpl: async url => {
+        if (url === `${requestUrl}?audience=fcos-production-release`) return new Response(JSON.stringify({ value: token }));
+        assert.equal(url, 'https://token.actions.githubusercontent.com/.well-known/jwks');
+        return new Response(JSON.stringify({ keys: [{ ...oidcKeys.publicKey.export({ format: 'jwk' }), kid: 'offline-oidc-key', use: 'sig', alg: 'RS256' }] }));
+      } });
+  } } });
   mock.module(moduleUrl('scripts/lib/release-readiness.mjs'), { namedExports: { ...readiness, releaseHash: () => candidate.lockHash } });
   mock.module(moduleUrl('scripts/lib/build-provenance.mjs'), { namedExports: { ...provenance,
     collectBuildProvenance: ({ cwd }) => ({ releaseEligible: true, commit: cwd === root ? harnessSha : candidate.sha, sourceDigest: candidate.sourceDigest }) } });
@@ -241,7 +274,8 @@ async function runnerScenario(root, temporaryDirectory, variant = 'legacy') {
   let privateEnrollment;
   if (enrolled) {
     const enrollmentId = '11111111-1111-4111-8111-111111111111';
-    const metadata = { id: 'reviewed-fixture-id', type: 'token', prefix: 'vcp_', projectId, createdAt: now - 1000, expiresAt: now + 3600000, scopes: [{ type: 'team', teamId }] };
+    const metadata = { id: 'reviewed-fixture-id', type: 'token', prefix: 'vcp_', projectId, createdAt: now - 1000,
+      expiresAt: now + (variant === 'exact-refresh-provider-expired' ? 320000 : 3600000), scopes: [{ type: 'team', teamId }] };
     privateEnrollment = enrollment.createPrivateEnrollment({ issuance: { token: { id: metadata.id }, bearerToken: 'vcp_PRIVATE' }, metadata, enrollmentId, requestedExpiresAt: metadata.expiresAt, now });
     const envelope = enrollment.signEnrollmentReceipt({ privateEnrollment, metadata, privateKey, now, context: enrollment.enrolledAuthorityContext({
       repositoryId: repository.id, environmentId: environment.id, runId: run.id, harnessSha, controlRevision, contractSha256, candidateSha: candidate.sha, operation: 'verify-authority' }) });
@@ -284,7 +318,7 @@ async function runnerScenario(root, temporaryDirectory, variant = 'legacy') {
   options.candidateCwd = candidateDirectory;
   fs.writeFileSync(join(candidateDirectory, 'vercel.json'), JSON.stringify({ git: { deploymentEnabled: false } }));
   if (exactSuccessor) {
-    if (variant === 'exact-valid') {
+    if (variant === 'exact-valid' || variant === 'exact-refresh-valid') {
       assert.deepEqual(await runPreviewEmailProofBuild(options), { authorityVerified: true,
         retainedProductionVerified: true, mutations: 0, previewAuthorized: false, productionAuthorized: false });
       assert.equal(requests.length, 5);
@@ -292,6 +326,10 @@ async function runnerScenario(root, temporaryDirectory, variant = 'legacy') {
       assert.equal(report.authorityVerified, true); assert.equal(report.retainedProductionVerified, true);
       assert.equal(report.candidateSha, policy.candidateSha); assert.equal(report.previewAuthorized, false);
       assert.ok(!JSON.stringify(report).includes('PRIVATE'));
+    } else if (refreshing) {
+      await assert.rejects(() => runPreviewEmailProofBuild(options), /receipt_handoff/);
+      assert.equal(requests.length, 0, 'Rejected refresh or original deadline must stop before Vercel access.');
+      assert.equal(fs.existsSync(join(runnerTemp, 'fcos-preview-enrolled-authority.json')), false);
     } else if (['exact-changed-pin', 'exact-missing-secret'].includes(variant)) {
       await assert.rejects(() => runPreviewEmailProofBuild(options), /protection_review/);
       assert.equal(requests.length, 0, 'Changed protected state must stop before Vercel access.');
@@ -304,11 +342,21 @@ async function runnerScenario(root, temporaryDirectory, variant = 'legacy') {
         assert.equal(report.retainedProductionVerified, false); assert.equal(report.authorityVerified, false);
       } else assert.equal(fs.existsSync(reportPath), false, 'Expired authority cannot produce a success report.');
     }
-    assert.equal(variableReads, 2); assert.equal(secretReads, 2);
-    assert.equal(githubPaths.filter(path => path.endsWith('/actions/workflows/preview-email-proof-build.yml')).length, 2);
+    if (refreshing) {
+      assert.equal(oidcReads, variant === 'exact-refresh-handoff-deadline' ? 3 : 2);
+      assert.equal(secretReads, variant === 'exact-refresh-valid' ? 2 : 1);
+      assert.equal(clock, now + (['exact-refresh-valid', 'exact-refresh-provider-expired'].includes(variant) ? 330000 : variant === 'exact-refresh-handoff-deadline' ? 600000
+        : variant === 'exact-refresh-run-deadline' ? 280000 : 270000));
+      if (variant === 'exact-refresh-valid') assert.equal(variableReads, 35);
+    } else {
+      assert.equal(oidcReads, 1); assert.equal(variableReads, 2); assert.equal(secretReads, 2);
+    }
+    assert.equal(githubPaths.filter(path => path.endsWith('/actions/workflows/preview-email-proof-build.yml')).length,
+      refreshing && variant !== 'exact-refresh-valid' ? 1 : 2);
     const journal = fs.readFileSync(join(runnerTemp, 'fcos-preview-email-journal-99.jsonl'), 'utf8');
     const phases = journal.trim().split('\n').map(JSON.parse);
-    for (const phase of ['workflow_identity', 'receipt_handoff']) assert.ok(phases.some(row => row.phase === phase && row.status === 'passed'));
+    for (const phase of ['workflow_identity', ...(refreshing && variant !== 'exact-refresh-valid' ? [] : ['receipt_handoff'])]) assert.ok(phases.some(row => row.phase === phase && row.status === 'passed'));
+    if (refreshing && variant !== 'exact-refresh-valid') assert.ok(phases.some(row => row.phase === 'receipt_handoff' && row.status === 'failed'));
     assert.doesNotMatch(journal, /intent_write|environment_records|controlled_build|execution_claim|PRIVATE/);
     assert.ok(!fs.readdirSync(runnerTemp).some(name => /intent|execution|build\.json/.test(name)));
     assert.ok(!githubPaths.some(path => path.includes('/actions/variables?')));
@@ -409,7 +457,9 @@ for (const variant of ['valid', 'partial-list', 'changed-production', 'expired-a
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
-for (const variant of ['exact-valid', 'exact-changed-pin', 'exact-missing-secret', 'exact-changed-production', 'exact-expired-after-production']) test(`exact04ee native verification runner ${variant} completes the signing handoff and rechecks fresh protected state`, () => {
+for (const variant of ['exact-valid', 'exact-changed-pin', 'exact-missing-secret', 'exact-changed-production', 'exact-expired-after-production',
+  'exact-refresh-valid', 'exact-refresh-changed-run', 'exact-refresh-changed-source', 'exact-refresh-changed-environment',
+  'exact-refresh-forged', 'exact-refresh-expired', 'exact-refresh-provider-expired', 'exact-refresh-handoff-deadline', 'exact-refresh-run-deadline']) test(`exact04ee native verification runner ${variant} completes the signing handoff and rechecks fresh protected state`, () => {
   const directory = mkdtempSync(join(tmpdir(), 'fcos-exact-enrolled-runner-'));
   try {
     const script = join(directory, 'runner.mjs');

@@ -347,6 +347,8 @@ export function assertPreviewEmailBuildProtection(options) {
 /** Wait data only: full existing protection and genuine original admission are
  * mandatory before the first polling callback. This cannot grant a write claim.
  * The native caller re-reads full protected state before using the returned row.
+ * Native verification may refresh its cryptographically verified Actions token;
+ * the original handoff/admission/provider clocks and signed identity stay fixed.
  * No receipt, old-run receipt or renewed timestamps can authorize a Preview. */
 export async function waitForPreviewEmailAttestation(options = {}) {
   const { protection, operation, now = () => Date.now() } = options;
@@ -358,30 +360,46 @@ export async function waitForPreviewEmailAttestation(options = {}) {
   const reviewed = previewEmailProtectionData({ ...protection, now: startedAt }, false, verificationOnly);
   if (reviewed.authorityMode !== ENROLLED_AUTHORITY_MODE) failure('Existing issuance-bound credential required.');
   const { readVariables, privateEnrollment, token, sleep = ms => new Promise(done => setTimeout(done, ms)) } = options;
+  // Only the native read-only verification caller supplies githubReleaseOidc.
+  // Build/readback and callers without that verifier retain the original expiry.
+  const readOidc = verificationOnly && typeof options.readOidc === 'function' ? options.readOidc : undefined;
+  let oidcClaims = { ...protection.oidcClaims };
+  const identityFields = ['iss', 'aud', 'repository', 'repository_id', 'sub', 'environment', 'workflow_ref',
+    'workflow_sha', 'sha', 'ref', 'run_id', 'run_attempt', 'event_name'];
+  const originalIdentity = identityFields.map(name => oidcClaims[name]);
   const context = enrolledAuthorityContext({ repositoryId: protection.repository.id, environmentId: reviewed.environmentId,
     runId: reviewed.runId, harnessSha: protection.harnessSha, controlRevision: protection.controlRevision,
     contractSha256: selected.contractSha256, candidateSha, operation });
-  const deadline = Math.min(startedAt + 600000, protection.oidcClaims.exp * 1000,
+  const deadline = Math.min(startedAt + 600000, ...(readOidc ? [] : [oidcClaims.exp * 1000]),
     ...(verificationOnly ? [Date.parse(selected.capturedAt) + 1800000] : [Date.parse(selected.context.provisionedAt) + 2700000]),
     ...[selected.dispatchedAt, protection.jobs[0].started_at, ...(verificationOnly ? [] : Object.values(selected.reviewedAt))].map(time => Date.parse(time) + 1800000));
   let variables = protection.variables;
   while (now() < deadline) {
     if (verificationOnly) successorVerificationSelection(admission, candidateSha, now());
     else successorLiveSelection(admission, candidateSha, now());
-    const current = previewEmailProtectionData({ ...protection, variables, now: now() }, false, verificationOnly);
+    let current = previewEmailProtectionData({ ...protection, variables, oidcClaims, now: now() }, false, verificationOnly);
     if (current.reviewedTokenId !== reviewed.reviewedTokenId || current.enrollmentId !== reviewed.enrollmentId
       || current.authorityMode !== reviewed.authorityMode) failure('Original receipt handoff identity changed.');
+    if (readOidc && oidcClaims.exp * 1000 - now() <= 30000) {
+      if (now() >= deadline || now() >= oidcClaims.exp * 1000) failure('Original receipt handoff expired.');
+      const refreshed = await readOidc();
+      if (now() >= deadline) failure('Original receipt handoff expired.');
+      if (identityFields.some((name, index) => refreshed?.[name] !== originalIdentity[index])
+        || !Number.isFinite(refreshed?.exp) || refreshed.exp <= oidcClaims.exp) failure('Original receipt handoff signed identity changed or was not refreshed.');
+      current = previewEmailProtectionData({ ...protection, variables, oidcClaims: refreshed, now: now() }, false, verificationOnly);
+      oidcClaims = { ...refreshed };
+    }
     const raw = current.authorityEnvelope;
     if ((!verificationOnly || current.contractPinReady) && typeof raw === 'string') {
       let envelope; try { envelope = JSON.parse(raw); } catch { failure('Run receipt handoff unavailable; private diagnostics suppressed.'); }
       if (equal(envelope?.receipt?.context, context)) {
         verifyEnrollmentReceipt({ envelope: raw, privateEnrollment, token, reviewedTokenId: reviewed.reviewedTokenId,
           enrollmentId: reviewed.enrollmentId, context, now: now() });
-        if (now() >= deadline) failure('Original receipt handoff expired.');
+        if (now() >= deadline || now() >= oidcClaims.exp * 1000) failure('Original receipt handoff expired.');
         return variables;
       }
     }
-    await sleep(Math.min(10000, deadline - now()));
+    await sleep(Math.min(10000, deadline - now(), oidcClaims.exp * 1000 - now()));
     if (now() >= deadline) break;
     variables = await readVariables();
   }
