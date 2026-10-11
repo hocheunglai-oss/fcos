@@ -607,7 +607,13 @@ test('positive offline protected-tree admission yields only an opaque data contr
   assert.throws(() => successorLivePreviewRequest({ admission, operationId: operationId.replace('-99-', '-100-'), now }));
   assert.throws(() => executeSuccessorLiveAdapter({ admission, leaseHeld: true, consumed: false }), { code: 'EXACT_SUCCESSOR_SHARED_COORDINATOR_REQUIRED' });
   assert.equal(admission.previewAuthorized, false); assert.equal(admission.productionAuthorized, false); assert.equal(admission.credentialAuthority, false);
-  assert.equal(value.calls.length, 8);
+  // Genuine runtime absence is checked before using static material.
+  assert.equal(value.calls.length, 11);
+  assert.deepEqual(value.calls.slice(5, 8), [
+    'repos/hocheunglai-oss/fcos/environments/fcos-runtime-compatibility-release/variables?per_page=100&page=1',
+    'repos/hocheunglai-oss/fcos/actions/variables?per_page=100&page=1',
+    'repos/hocheunglai-oss/fcos/actions/runs/99/artifacts?per_page=100&page=1',
+  ]);
 });
 
 test('selection retains each original review age instead of renewing it at collection', async () => {
