@@ -143,7 +143,7 @@ test('fresh pre-write gate rejects clocks that expire during authentication with
   const gate = 'assertRuntimeMaterialPublicationFresh({ producer: current, payload, now: Date.now() });';
   assert.equal(source.split(gate).length - 1, 2);
   assert.ok(source.indexOf(gate) < source.indexOf('fd = openSync('));
-  assert.match(source, /assertRuntimeMaterialPublicationFresh\(\{ producer: current, payload, now: Date\.now\(\) \}\);\n    created = await new DefaultArtifactClient\(\)\.uploadArtifact/);
+  assert.match(source, /assertRuntimeMaterialPublicationFresh\(\{ producer: current, payload, now: Date\.now\(\) \}\);\n\s+phase\('artifact_upload'\);\n\s+created = await new DefaultArtifactClient\(\)\.uploadArtifact/);
 });
 
 test('actual data-only reconciliation tolerates lag then exact visibility with one archive read and no upload callback', async () => {
