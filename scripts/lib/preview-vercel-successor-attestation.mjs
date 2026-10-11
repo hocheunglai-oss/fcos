@@ -6,11 +6,11 @@ import { ENROLLMENT_FIXED_TARGET, assertEnrollmentMetadata, ENROLLMENT_KEYCHAIN_
   ENROLLED_AUTHORITY_RECEIPT, signEnrollmentReceipt, enrolledAuthorityContext } from './preview-vercel-enrollment.mjs';
 import { createHash, createPrivateKey, createPublicKey } from 'node:crypto';
 import { FCOS_CONNECTION_POLICY } from '../../config/fcosConnections.js';
-import { constants, openSync, closeSync, fstatSync, readFileSync, lstatSync, realpathSync, mkdtempSync, rmSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
+import { constants, openSync, closeSync, fstatSync, readFileSync, lstatSync, realpathSync, appendFileSync, fsyncSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
-import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { performance } from 'node:perf_hooks';
 import { githubReleaseReads, RELEASE_REPOSITORY } from './release-evidence.mjs';
 import { assertReleaseCoordinatorSource } from '../release-coordinator-local.mjs';
 import { collectPreviewEmailBuildJobs } from './preview-email-build.mjs';
@@ -203,9 +203,138 @@ const NATIVE_FETCH = globalThis.fetch.bind(globalThis);
 const ENV = Object.freeze({ PATH: '/usr/bin:/bin', HOME: '/Users/vincex', GH_HOST: 'github.com', GH_REPO: RELEASE_REPOSITORY,
   GH_CONFIG_DIR: `${PRIMARY}/.fcos-cli/github` });
 const BASE = `repos/${RELEASE_REPOSITORY}`, ENVIRONMENT = `${BASE}/environments/${ENROLLMENT_FIXED_TARGET.environment}`;
-function command(binary, args, input, timeout = 30000) {
-  try { return execFileSync(binary, args, { cwd: ROOT, env: ENV, input, encoding: 'utf8', timeout,
-    maxBuffer: 1024 * 1024, stdio: ['pipe', 'pipe', 'pipe'] }); } catch { fail(); }
+const KEYCHAIN_READER = `${PRIMARY}/.fcos-cli/bin/fcos-keychain`;
+const KEYCHAIN_READER_SHA256 = '79be1a705f4e0904328b3a94832c27fff97053f41aa4b1563c9a5a1aac9608e2';
+const KEYCHAIN_SOURCE = `${PRIMARY}/scripts/fcos-keychain-migrate.swift`;
+const KEYCHAIN_SOURCE_SHA256 = '5a25f615fa99b1582436ba504781a8ac3cf6d4dac98b15887e5369e20f7a46e4';
+const diagnosticStates = new WeakMap();
+const DIAGNOSTIC_PHASES = new Set(['admission', 'canonical_claim', 'current_admission', 'reader_integrity', 'private_io_started',
+  'capsule_read', 'capsule_validation', 'key_read', 'key_validation', 'metadata_reader_read', 'production_readback',
+  'metadata_read', 'enrollment_validation', 'receipt_signing', 'publication_preflight', 'publication_started',
+  'receipt_publication', 'receipt_readback', 'metadata_preservation', 'complete']);
+const COMMAND_SIGNALS = new Set(['SIGABRT', 'SIGALRM', 'SIGBUS', 'SIGFPE', 'SIGHUP', 'SIGILL', 'SIGINT', 'SIGKILL',
+  'SIGPIPE', 'SIGQUIT', 'SIGSEGV', 'SIGTERM', 'SIGTRAP', 'SIGXCPU', 'SIGXFSZ']);
+
+// Only primitive command outcome fields are accepted. No exception object,
+// stdout/stderr, argument, account, service or path enters diagnostics.
+export function successorAttestationCommandStatus(exitCode, signal, timedOut) {
+  if (!(exitCode === null || Number.isSafeInteger(exitCode) && exitCode >= 0 && exitCode <= 255)
+    || !(signal === null || COMMAND_SIGNALS.has(signal)) || typeof timedOut !== 'boolean') fail();
+  return { exitCode, signal, timedOut };
+}
+function assertNativeParents(path) {
+  if (typeof path !== 'string' || resolve(path) !== path) fail();
+  for (let p = resolve(path, '..');; p = resolve(p, '..')) {
+    const info = lstatSync(p);
+    if (!info.isDirectory() || info.isSymbolicLink() || realpathSync(p) !== p || (info.mode & 0o022) !== 0
+      || info.uid !== process.getuid() && info.uid !== 0) fail();
+    if (p === '/') break;
+  }
+}
+function assertPinnedReaderFile(path, expectedHash, mode, limit) {
+  assertNativeParents(path);
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const info = fstatSync(fd);
+    if (!info.isFile() || info.uid !== process.getuid() || info.nlink !== 1 || (info.mode & 0o7777) !== mode
+      || info.size < 1 || info.size > limit || successorAttestationHash(readFileSync(fd)) !== expectedHash) fail();
+    const current = lstatSync(path);
+    if (current.isSymbolicLink() || current.dev !== info.dev || current.ino !== info.ino || realpathSync(path) !== path) fail();
+  } finally { closeSync(fd); }
+}
+function fixedInstalledReader(identity) {
+  requireSuccessorAttestationPublicationAdmission(identity);
+  // Accepted installation provenance is the fixed binary AND the exact source
+  // from that accepted installation. Never generate,
+  // discover, repair or fall back to a different executable here.
+  assertPinnedReaderFile(KEYCHAIN_READER, KEYCHAIN_READER_SHA256, 0o700, 16 * 1024 * 1024);
+  assertPinnedReaderFile(KEYCHAIN_SOURCE, KEYCHAIN_SOURCE_SHA256, 0o644, 65536);
+  return KEYCHAIN_READER;
+}
+function createNativeDiagnostics(nonce) {
+  if (!uuid(nonce)) fail();
+  const path = join(APPROVALS, `diagnostic-${nonce}.jsonl`);
+  assertNativeParents(path);
+  const directory = lstatSync(APPROVALS);
+  if (!directory.isDirectory() || directory.uid !== process.getuid() || (directory.mode & 0o7777) !== 0o700) fail();
+  let fd;
+  try {
+    fd = openSync(path, constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+    fsyncSync(fd);
+    const parent = openSync(APPROVALS, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try { fsyncSync(parent); } finally { closeSync(parent); }
+    const identity = Object.freeze({});
+    diagnosticStates.set(identity, { fd, path, nonce, started: performance.now(), phase: 'admission' });
+    return identity;
+  } catch { if (fd !== undefined) closeSync(fd); fail(); }
+}
+function diagnosticBinding(value) {
+  const base = ['nonce', 'harnessSha', 'approvalSha256'], claimed = [...base, 'consumptionSha256', 'leaseId'];
+  if (!(exact(value, base) || exact(value, claimed)) || !uuid(value.nonce) || !sha(value.harnessSha) || !hash(value.approvalSha256)
+    || Object.hasOwn(value, 'leaseId') && (!uuid(value.leaseId) || !hash(value.consumptionSha256))) fail();
+  return { nonce: value.nonce, harnessSha: value.harnessSha, approvalSha256: value.approvalSha256,
+    ...(Object.hasOwn(value, 'leaseId') ? { consumptionSha256: value.consumptionSha256, leaseId: value.leaseId } : {}) };
+}
+function bindNativeDiagnostics(identity, original, publicationIdentity) {
+  const state = diagnosticStates.get(identity), a = original.action.approval;
+  if (!state || a.nonce !== state.nonce || successorAttestationHash(original.action.text) !== original.action.sha256) fail();
+  const base = diagnosticBinding({ nonce: a.nonce, harnessSha: a.harnessSha, approvalSha256: original.action.sha256 });
+  if (publicationIdentity === undefined) {
+    if (state.binding) fail();
+    state.binding = freeze(base);
+  } else {
+    const claimed = requireSuccessorAttestationPublicationAdmission(publicationIdentity);
+    if (!same(state.binding, base) || !same(claimed.actual, actualProjection(original))) fail();
+    state.binding = freeze(diagnosticBinding({ ...base, consumptionSha256: claimed.consumptionSha256, leaseId: claimed.lease.leaseId }));
+  }
+}
+function diagnostic(identity, phase, status, commandStatus) {
+  const state = diagnosticStates.get(identity);
+  if (!state || !DIAGNOSTIC_PHASES.has(phase) || !['started', 'passed', 'failed', 'command_completed'].includes(status)
+    || (status === 'command_completed') !== (commandStatus !== undefined)) fail();
+  const info = fstatSync(state.fd), current = lstatSync(state.path);
+  if (!info.isFile() || info.uid !== process.getuid() || info.nlink !== 1 || (info.mode & 0o7777) !== 0o600
+    || info.size > 256 * 1024 || current.isSymbolicLink() || current.dev !== info.dev || current.ino !== info.ino) fail();
+  const elapsedMs = Math.max(0, Math.floor(performance.now() - state.started));
+  if (!Number.isSafeInteger(elapsedMs)) fail();
+  const row = { schemaVersion: 1, kind: 'fcos_existing_attestation_diagnostic', phase, status, elapsedMs,
+    ...(state.binding === undefined ? {} : { binding: diagnosticBinding(state.binding) }),
+    ...(commandStatus === undefined ? {} : { command: successorAttestationCommandStatus(commandStatus.exitCode, commandStatus.signal, commandStatus.timedOut) }) };
+  // Durable write is mandatory before any observed operation. This journal is
+  // never read as admission, lease, consent, source, clock or retry authority.
+  appendFileSync(state.fd, `${JSON.stringify(row)}\n`);
+  fsyncSync(state.fd);
+  state.phase = phase;
+  process.stderr.write(`${JSON.stringify(row)}\n`);
+}
+async function nativePhase(identity, phase, operation) {
+  diagnostic(identity, phase, 'started');
+  try {
+    const value = await operation();
+    diagnostic(identity, phase, 'passed');
+    return value;
+  } catch {
+    try { diagnostic(identity, phase, 'failed'); } catch { /* Fail closed without inspecting exceptions. */ }
+    fail();
+  }
+}
+function closeNativeDiagnostics(identity) {
+  const state = diagnosticStates.get(identity);
+  if (state) { diagnosticStates.delete(identity); closeSync(state.fd); }
+}
+function command(binary, args, input, timeout = 30000, diagnostics) {
+  let result;
+  try { result = spawnSync(binary, args, { cwd: ROOT, env: ENV, input, encoding: 'utf8', timeout,
+    maxBuffer: 1024 * 1024, stdio: ['pipe', 'pipe', 'pipe'] }); } catch {
+    if (diagnostics) diagnostic(diagnostics, diagnosticStates.get(diagnostics)?.phase, 'command_completed',
+      successorAttestationCommandStatus(null, null, false));
+    fail();
+  }
+  const status = successorAttestationCommandStatus(Number.isSafeInteger(result.status) && result.status >= 0 && result.status <= 255 ? result.status : null,
+    COMMAND_SIGNALS.has(result.signal) ? result.signal : null, result.error?.code === 'ETIMEDOUT');
+  if (diagnostics) diagnostic(diagnostics, diagnosticStates.get(diagnostics)?.phase, 'command_completed', status);
+  if (result.error || result.status !== 0 || result.signal !== null) fail();
+  return result.stdout;
 }
 function ownedRead(path, limit = 65536) {
   if (typeof path !== 'string' || resolve(path) !== path) fail();
@@ -389,10 +518,10 @@ async function retainedProduction(readerToken) {
     || production.target !== 'production' || production.readyState !== 'READY' || production.meta?.githubCommitSha !== baseline.sha
     || `https://${production.url}` !== baseline.url) fail();
 }
-function claimPublication(original) {
+function claimPublication(original, diagnostics) {
   const a = original.action.approval;
   const result = JSON.parse(command('/usr/bin/python3', ['-I', join(ROOT, 'scripts/lib/preview-vercel-successor-attestation-ledger.py'),
-    '--claim-approved', a.nonce], undefined, 180000));
+    '--claim-approved', a.nonce], undefined, 180000, diagnostics));
   if (result.operationId !== a.operationId || !hash(result.consumptionSha256) || !same(result.actual, actualProjection(original))) fail();
   const lease = result.lease;
   if (!exact(lease, ['epoch', 'objective', 'ownerThreadId', 'operationId', 'bindingSha256', 'leaseId',
@@ -403,86 +532,117 @@ function claimPublication(original) {
     || !uuid(lease.leaseId) || lease.coordinationOnly !== true || lease.providerAuthorityGranted !== false || lease.uncertainOutcomeRequiresReadback !== true) fail();
   const identity = Object.freeze({}); publicationAdmissions.set(identity, freeze(result)); return identity;
 }
-function assertClaimCurrent(identity, original) {
+function assertClaimCurrent(identity, original, diagnostics) {
   const claimed = requireSuccessorAttestationPublicationAdmission(identity), a = original.action.approval;
   const result = JSON.parse(command('/usr/bin/python3', ['-I', join(ROOT, 'scripts/lib/preview-vercel-successor-attestation-ledger.py'),
-    '--read-consumed', a.nonce], undefined, 180000));
+    '--read-consumed', a.nonce], undefined, 180000, diagnostics));
   if (!same(result, claimed)) fail();
   return claimed;
 }
-async function executeFixed(original) {
+async function executeFixed(original, diagnostics) {
   const a = original.action.approval, nonce = a.nonce;
-  const identity = claimPublication(original); // O_EXCL+fsync and canonical lease precede private credentials.
-  assertOriginalCurrent(original, await collectActual(nonce));
-  assertClaimCurrent(identity, original);
-  const compile = mkdtempSync(join(tmpdir(), 'fcos-existing-attestation-key-'));
-  try {
-    const binary = join(compile, 'fcos-keychain');
-    command('/usr/bin/swiftc', [join(ROOT, 'scripts/fcos-keychain-migrate.swift'), '-module-cache-path', join(compile, 'modules'), '-o', binary]);
-    const info = lstatSync(binary);
-    if (!info.isFile() || info.isSymbolicLink() || info.uid !== process.getuid() || info.nlink !== 1) fail();
-    assertOriginalCurrent(original, await collectActual(nonce)); assertClaimCurrent(identity, original);
-    const capsule = command(binary, ['get', `${FCOS_CONNECTION_POLICY.keychainAccount}:${a.enrollmentId}`, ENROLLMENT_KEYCHAIN_SERVICE]);
-    assertSuccessorAttestationEnrollment(a, original.state, capsule);
-    const privateKey = command(binary, ['get', FCOS_CONNECTION_POLICY.keychainAccount, FCOS_CONNECTION_POLICY.attestation.privateKeyService]);
-    assertSuccessorAttestationPinnedKey(privateKey);
-    // Original private readiness/material/run clocks are rechecked after consent.
-    assertOriginalCurrent(original, await collectActual(nonce)); assertClaimCurrent(identity, original);
-    const readerService = FCOS_CONNECTION_POLICY.providers.find(row => row.id === 'vercel').keychainService;
-    const readerToken = command(binary, ['get', FCOS_CONNECTION_POLICY.keychainAccount, readerService]);
-    if (!readerToken || /\s/.test(readerToken) || readerToken.length > 4096) fail();
-    await retainedProduction(readerToken);
-    const metadata = await readSuccessorEnrollmentTokenMetadata({ tokenId: a.tokenId, token: readerToken, fetchImpl: NATIVE_FETCH });
-    const observedAt = Date.now();
-    assertOriginalCurrent(original, await collectActual(nonce)); assertClaimCurrent(identity, original);
-    assertSuccessorAttestationEnrollment(a, readExistingEnrollment(a), capsule, metadata);
-    if (Date.now() - observedAt >= 600000) fail();
-    const context = enrolledAuthorityContext({ repositoryId: original.public.repositoryId, environmentId: original.public.environmentId,
-      runId: a.runId, harnessSha: a.harnessSha, controlRevision: a.controlRevision, contractSha256: a.contractSha256,
-      candidateSha: a.candidateSha, operation: a.operation });
-    const envelope = signEnrollmentReceipt({ privateEnrollment: capsule, metadata, context, privateKey, now: observedAt,
-      expiresAt: Math.min(observedAt + 600000, a.expiresAt, a.leaseDeadline, a.privateReadinessAt + 2700000,
-        ...(a.operation === 'verify-authority' ? [Date.parse(original.admission.capturedAt) + 1800000]
-          : [Date.parse(original.admission.context.provisionedAt) + 2700000]),
-        ...[original.admission.dispatchedAt, a.jobStartedAt,
-          ...(a.operation === 'verify-authority' ? [] : Object.values(original.admission.reviewedAt))].map(time => Date.parse(time) + 1800000)) });
-    const text = JSON.stringify(envelope);
-    assertOriginalCurrent(original, await collectActual(nonce)); assertClaimCurrent(identity, original);
-    await retainedProduction(readerToken);
-    // Private/provider latency cannot renew observation or any original clock.
-    assertOriginalCurrent(original, await collectActual(nonce)); assertClaimCurrent(identity, original);
-    if (Date.now() >= envelope.receipt.expiresAt) fail();
-    // Exactly one fixed receipt upsert, with no caller-selected name/path/body.
-    const receiptPath = `${ENVIRONMENT}/variables/${ENROLLED_AUTHORITY_RECEIPT}`;
-    const rows = collection(JSON.parse(command(GH, ['api', '--method', 'GET', `${ENVIRONMENT}/variables?per_page=100`])), 'variables');
+  const identity = await nativePhase(diagnostics, 'canonical_claim', () => {
+    const claimed = claimPublication(original, diagnostics);
+    bindNativeDiagnostics(diagnostics, original, claimed);
+    return claimed;
+  });
+  // O_EXCL+fsync and canonical lease precede all private credentials. Neither
+  // a diagnostic row nor an imported/serialized object can mint this identity.
+  const current = () => nativePhase(diagnostics, 'current_admission', async () => {
+    assertOriginalCurrent(original, await collectActual(nonce)); assertClaimCurrent(identity, original, diagnostics);
+  });
+  await current();
+  await nativePhase(diagnostics, 'reader_integrity', () => fixedInstalledReader(identity));
+  await current();
+  diagnostic(diagnostics, 'private_io_started', 'started');
+  const capsule = await nativePhase(diagnostics, 'capsule_read', () => command(fixedInstalledReader(identity),
+    ['get', `${FCOS_CONNECTION_POLICY.keychainAccount}:${a.enrollmentId}`, ENROLLMENT_KEYCHAIN_SERVICE], undefined, 30000, diagnostics));
+  await nativePhase(diagnostics, 'capsule_validation', () => assertSuccessorAttestationEnrollment(a, original.state, capsule));
+  const privateKey = await nativePhase(diagnostics, 'key_read', () => command(fixedInstalledReader(identity),
+    ['get', FCOS_CONNECTION_POLICY.keychainAccount, FCOS_CONNECTION_POLICY.attestation.privateKeyService], undefined, 30000, diagnostics));
+  await nativePhase(diagnostics, 'key_validation', () => assertSuccessorAttestationPinnedKey(privateKey));
+  // Original private readiness/material/run clocks are rechecked after consent.
+  await current();
+  const readerService = FCOS_CONNECTION_POLICY.providers.find(row => row.id === 'vercel').keychainService;
+  const readerToken = await nativePhase(diagnostics, 'metadata_reader_read', () => {
+    const token = command(fixedInstalledReader(identity), ['get', FCOS_CONNECTION_POLICY.keychainAccount, readerService], undefined, 30000, diagnostics);
+    if (!token || /\s/.test(token) || token.length > 4096) fail();
+    return token;
+  });
+  await nativePhase(diagnostics, 'production_readback', () => retainedProduction(readerToken));
+  const metadata = await nativePhase(diagnostics, 'metadata_read', () => readSuccessorEnrollmentTokenMetadata({ tokenId: a.tokenId, token: readerToken, fetchImpl: NATIVE_FETCH }));
+  const observedAt = Date.now();
+  await current();
+  await nativePhase(diagnostics, 'enrollment_validation', () => assertSuccessorAttestationEnrollment(a, readExistingEnrollment(a), capsule, metadata));
+  if (Date.now() - observedAt >= 600000) fail();
+  const context = enrolledAuthorityContext({ repositoryId: original.public.repositoryId, environmentId: original.public.environmentId,
+    runId: a.runId, harnessSha: a.harnessSha, controlRevision: a.controlRevision, contractSha256: a.contractSha256,
+    candidateSha: a.candidateSha, operation: a.operation });
+  const envelope = await nativePhase(diagnostics, 'receipt_signing', () => signEnrollmentReceipt({ privateEnrollment: capsule, metadata, context, privateKey, now: observedAt,
+    expiresAt: Math.min(observedAt + 600000, a.expiresAt, a.leaseDeadline, a.privateReadinessAt + 2700000,
+      ...(a.operation === 'verify-authority' ? [Date.parse(original.admission.capturedAt) + 1800000]
+        : [Date.parse(original.admission.context.provisionedAt) + 2700000]),
+      ...[original.admission.dispatchedAt, a.jobStartedAt,
+        ...(a.operation === 'verify-authority' ? [] : Object.values(original.admission.reviewedAt))].map(time => Date.parse(time) + 1800000)) }));
+  const text = JSON.stringify(envelope);
+  await current();
+  await nativePhase(diagnostics, 'production_readback', () => retainedProduction(readerToken));
+  // Private/provider latency cannot renew observation or any original clock.
+  await current();
+  if (Date.now() >= envelope.receipt.expiresAt) fail();
+  // Exactly one fixed receipt upsert, with no caller-selected name/path/body.
+  const receiptPath = `${ENVIRONMENT}/variables/${ENROLLED_AUTHORITY_RECEIPT}`;
+  const exists = await nativePhase(diagnostics, 'publication_preflight', () => {
+    const rows = collection(JSON.parse(command(GH, ['api', '--method', 'GET', `${ENVIRONMENT}/variables?per_page=100`], undefined, 30000, diagnostics)), 'variables');
     const before = variable(rows, ENROLLED_AUTHORITY_RECEIPT), exists = before !== undefined;
     if ((exists ? successorAttestationHash(before) : null) !== original.public.priorReceiptSha256) fail();
     const currentAction = actionAdmission(nonce);
     if (currentAction.text !== original.action.text) fail();
     bindSuccessorAttestationAdmission({ approval: a, nonce, scriptSha256: a.scriptSha256, admission: original.admission });
-    assertClaimCurrent(identity, original);
+    assertClaimCurrent(identity, original, diagnostics);
     if (Date.now() >= envelope.receipt.expiresAt) fail();
-    command(GH, ['api', '--method', exists ? 'PATCH' : 'POST', exists ? receiptPath : `${ENVIRONMENT}/variables`, '--input', '-'],
-      JSON.stringify({ name: ENROLLED_AUTHORITY_RECEIPT, value: text }));
-    const after = JSON.parse(command(GH, ['api', '--method', 'GET', receiptPath]));
+    return exists;
+  });
+  diagnostic(diagnostics, 'publication_started', 'started');
+  await nativePhase(diagnostics, 'receipt_publication', () => {
+    if (Date.now() >= envelope.receipt.expiresAt) fail();
+    return command(GH,
+      ['api', '--method', exists ? 'PATCH' : 'POST', exists ? receiptPath : `${ENVIRONMENT}/variables`, '--input', '-'],
+      JSON.stringify({ name: ENROLLED_AUTHORITY_RECEIPT, value: text }), 30000, diagnostics);
+  });
+  await nativePhase(diagnostics, 'receipt_readback', () => {
+    const after = JSON.parse(command(GH, ['api', '--method', 'GET', receiptPath], undefined, 30000, diagnostics));
     if (after.name !== ENROLLED_AUTHORITY_RECEIPT || after.value !== text || Date.now() >= envelope.receipt.expiresAt) fail();
-    const secrets = collection(JSON.parse(command(GH, ['api', '--method', 'GET', `${ENVIRONMENT}/secrets?per_page=100`])), 'secrets');
+  });
+  await nativePhase(diagnostics, 'metadata_preservation', () => {
+    const secrets = collection(JSON.parse(command(GH, ['api', '--method', 'GET', `${ENVIRONMENT}/secrets?per_page=100`], undefined, 30000, diagnostics)), 'secrets');
     if (!same(successorAttestationSecretMetadata(secrets.map(({ name, created_at, updated_at }) => ({ name, created_at, updated_at }))),
       successorAttestationSecretMetadata(a.secretMetadata))) fail();
-    return { kind: 'fcos_exact_04ee_existing_receipt_attested', attested: true, receiptSha256: successorAttestationHash(text),
-      runId: a.runId, runAttempt: 1, operation: a.operation, observedAt, expiresAt: envelope.receipt.expiresAt,
-      leaseId: requireSuccessorAttestationPublicationAdmission(identity).lease.leaseId, retainedLease: true, replayForbidden: true,
-      secretMetadataPreserved: true, activationPerformed: false, previewAuthorized: false, productionAuthorized: false };
-  } finally { rmSync(compile, { recursive: true, force: true }); }
+  });
+  return { kind: 'fcos_exact_04ee_existing_receipt_attested', attested: true, receiptSha256: successorAttestationHash(text),
+    runId: a.runId, runAttempt: 1, operation: a.operation, observedAt, expiresAt: envelope.receipt.expiresAt,
+    leaseId: requireSuccessorAttestationPublicationAdmission(identity).lease.leaseId, retainedLease: true, replayForbidden: true,
+    secretMetadataPreserved: true, activationPerformed: false, previewAuthorized: false, productionAuthorized: false };
 }
 export async function runFixedSuccessorAttestation(args) {
   if (!Array.isArray(args) || args.length !== 2 || !['--attest-approved', '--validate-ledger-admission'].includes(args[0])
     || !uuid(args[1]) || process.platform !== 'darwin' || process.env.NODE_OPTIONS || process.env.NODE_PATH || process.execArgv.length
     || !process.argv[1] || resolve(process.argv[1]) !== ENTRY) fail();
+  let diagnostics;
   try {
-    const actual = await collectActual(args[1]);
+    // Validation remains GET-only. The exclusive output journal is never read
+    // or accepted in place of the independent permanent canonical intent.
+    if (args[0] === '--attest-approved') diagnostics = createNativeDiagnostics(args[1]);
+    const actual = diagnostics ? await nativePhase(diagnostics, 'admission', async () => {
+      const collected = await collectActual(args[1]);
+      bindNativeDiagnostics(diagnostics, collected);
+      return collected;
+    }) : await collectActual(args[1]);
     if (args[0] === '--validate-ledger-admission') return { kind: 'fcos_actual_successor_attestation_ledger_admission',
       nonce: args[1], actual: actualProjection(actual) };
-    return await executeFixed(actual);
+    const result = await executeFixed(actual, diagnostics);
+    diagnostic(diagnostics, 'complete', 'passed');
+    return result;
   } catch { fail(); }
+  finally { closeNativeDiagnostics(diagnostics); }
 }

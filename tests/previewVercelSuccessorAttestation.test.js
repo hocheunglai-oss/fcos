@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, rmSync, chmodSync, linkSync, symlinkSync, unlinkSync,
+  constants, openSync, closeSync, fstatSync, lstatSync, realpathSync, appendFileSync, fsyncSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { generateKeyPairSync } from 'node:crypto';
 import { fcosConnectionIdentifier } from '../config/fcosConnections.js';
 import { SUCCESSOR_LIVE_CONTRACT } from '../scripts/lib/runtime-compatibility-successor-live.mjs';
@@ -10,7 +12,8 @@ import { SUCCESSOR_ATTEST_PURPOSE, SUCCESSOR_ATTEST_CANONICAL_HELPER_SHA256,
   requireSuccessorAttestationPublicationAdmission, successorAttestationSecretMetadata, successorAttestationActionBinding,
   assertSuccessorAttestationPrivateAction, assertSuccessorAttestationEnrollment, assertSuccessorAttestationPinnedKey,
   assertSuccessorAttestationProtectedReview, readSuccessorEnrollmentTokenMetadata,
-  assertSuccessorAttestationRepositoryVariables } from '../scripts/lib/preview-vercel-successor-attestation.mjs';
+  assertSuccessorAttestationRepositoryVariables, successorAttestationCommandStatus, successorAttestationHash,
+  runFixedSuccessorAttestation } from '../scripts/lib/preview-vercel-successor-attestation.mjs';
 import { successorAttestationMain } from '../scripts/preview-vercel-successor-attest.mjs';
 import { PREVIEW_EMAIL_BUILD_CONTROL_FILES } from '../scripts/lib/preview-email-build-controls.mjs';
 import { previewCoordinationSecretMetadata } from '../scripts/lib/preview-email-coordination-collector.mjs';
@@ -268,7 +271,9 @@ test('committed control closure includes native ledger and dedicated source; his
 // These fixture functions are separate from module-private production identity
 // maps; they cannot mint a live admission, read credentials or write providers.
 function bodyFixture(path, start, end, dependencies) {
-  const source = readFileSync(path, 'utf8'), body = source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start)));
+  const source = readFileSync(path, 'utf8'), from = source.indexOf(start), to = source.indexOf(end, from);
+  assert.ok(from >= 0);
+  const body = source.slice(from, to < 0 ? source.length : to);
   assert.ok(body.length > 100);
   const name = /(?:async )?function ([A-Za-z0-9_]+)/.exec(start)[1];
   return new Function(...Object.keys(dependencies), `${body.replace(/^export /, '')}\nreturn ${name};`)(...Object.values(dependencies));
@@ -323,7 +328,7 @@ test('actual hosted handoff refuses cloned admissions before polling or any adap
     { get() { accesses++; throw Error('Forbidden adapter property'); } });
   await assert.rejects(() => waitForPreviewEmailAttestation(input)); assert.equal(accesses, 0);
 });
-test('fixed native execution consumes before private reads and performs only the one exact nonsecret receipt write', async () => {
+test('fixed native execution consumes before private reads and performs only the one exact nonsecret receipt write', async t => {
   const a = approval(), original = { action: { approval: a, text: 'OFFLINE_ORIGINAL_ACTION' }, state: state(a),
     public: { repositoryId: 10, environmentId: 20, priorReceiptSha256: null },
     admission: { context: { provisionedAt: new Date(now - 1000).toISOString() }, dispatchedAt: a.dispatchedAt,
@@ -333,12 +338,15 @@ test('fixed native execution consumes before private reads and performs only the
   const deps = {
     claimPublication(value) { assert.equal(value, original); events.push('consume'); return Object.freeze({}); },
     assertOriginalCurrent(left, right) { assert.equal(left, original); assert.equal(right, original); events.push('current'); },
-    collectActual: async () => original, assertClaimCurrent() { events.push('lease'); }, mkdtempSync: () => '/private/tmp/OFFLINE_ONLY',
-    join: (...parts) => parts.join('/'), tmpdir: () => '/private/tmp', ROOT: '/OFFLINE_ROOT',
+    collectActual: async () => original, assertClaimCurrent() { events.push('lease'); },
+    nativePhase: async (identity, phase, operation) => { events.push(phase); return operation(); },
+    diagnostic: (identity, phase, status) => { assert.equal(status, 'started'); events.push(phase); },
+    bindNativeDiagnostics: () => { assert.ok(events.includes('consume')); events.push('bound'); },
+    fixedInstalledReader: () => { assert.ok(events.includes('consume')); return '/OFFLINE_PINNED_READER'; },
     command(binary, args, input) {
-      if (binary === '/usr/bin/swiftc') { events.push('compile'); return ''; }
       if (args[0] === 'get') {
-        assert.ok(events.includes('consume')); events.push(`private:${args[2]}`);
+        assert.equal(binary, '/OFFLINE_PINNED_READER');
+        assert.ok(events.includes('private_io_started')); events.push(`private:${args[2]}`);
         if (args[2] === 'capsule-service') return JSON.stringify(capsule(a));
         if (args[2] === 'key-service') return 'OFFLINE_KEY';
         if (args[2] === 'reader-service') return 'OFFLINE_READER';
@@ -346,6 +354,7 @@ test('fixed native execution consumes before private reads and performs only the
       }
       assert.equal(binary, '/OFFLINE_GH');
       if (args.includes('POST') || args.includes('PATCH')) {
+        assert.ok(events.includes('publication_started'));
         writes.push({ args, body: JSON.parse(input) }); submitted = JSON.parse(input).value; return '{}';
       }
       assert.ok(args.includes('GET'));
@@ -353,7 +362,6 @@ test('fixed native execution consumes before private reads and performs only the
       if (args.at(-1).endsWith('/secrets?per_page=100')) return JSON.stringify({ total_count: 6, secrets: a.secretMetadata });
       return JSON.stringify({ name: 'FCOS_PREVIEW_VERCEL_AUTHORITY_RECEIPT', value: submitted });
     },
-    lstatSync: () => ({ isFile: () => true, isSymbolicLink: () => false, uid: process.getuid(), nlink: 1 }), process,
     assertSuccessorAttestationEnrollment: (a, s, c, m) => assertSuccessorAttestationEnrollment(a, s, c, m, now),
     assertSuccessorAttestationPinnedKey: () => { events.push('key-pin'); },
     FCOS_CONNECTION_POLICY: { keychainAccount: 'OFFLINE_ACCOUNT', attestation: { privateKeyService: 'key-service' },
@@ -367,7 +375,7 @@ test('fixed native execution consumes before private reads and performs only the
     collection: (value, key) => value[key], variable: (rows, name) => rows.find(row => row.name === name)?.value,
     successorAttestationHash: value => value === undefined ? '' : 'a'.repeat(64), actionAdmission: () => original.action,
     bindSuccessorAttestationAdmission: () => {}, successorAttestationSecretMetadata, same: (left, right) => JSON.stringify(left) === JSON.stringify(right),
-    requireSuccessorAttestationPublicationAdmission: () => ({ lease: { leaseId: nonce } }), rmSync: () => events.push('cleanup'),
+    requireSuccessorAttestationPublicationAdmission: () => ({ lease: { leaseId: nonce } }),
   };
   const execute = bodyFixture('scripts/lib/preview-vercel-successor-attestation.mjs', 'async function executeFixed', '\nexport async function runFixedSuccessorAttestation', deps);
   const result = await execute(original);
@@ -384,7 +392,7 @@ test('fixed native execution consumes before private reads and performs only the
   let failed = false; try { await executeUncertain(original); } catch { failed = true; }
   assert.equal(failed, true);
   assert.equal(writes.filter(row => row === 'uncertain-once').length, 1);
-  assert.equal(events.filter(row => row === 'cleanup').length, 2);
+  assert.ok(!events.includes('compile'));
   let clock = now;
   const stale = { ...deps, Date: { now: () => clock, parse: Date.parse }, command(binary, args, input) {
     const value = deps.command(binary, args, input);
@@ -395,4 +403,259 @@ test('fixed native execution consumes before private reads and performs only the
   const priorWrites = writes.length, priorMetadata = events.filter(row => row === 'metadata').length;
   await assert.rejects(() => executeStale(original));
   assert.equal(writes.length, priorWrites); assert.equal(events.filter(row => row === 'metadata').length, priorMetadata);
+  await t.test('publication marker latency reaching exact receipt expiry submits zero writes and never retries', async () => {
+    for (const delayedMarker of ['publication_started', 'receipt_publication']) {
+      let publicationClock = now, mutationAttempts = 0, publicationStarts = 0;
+      const beforeEvents = events.length, beforeWrites = writes.length;
+      const expiresDuringMarker = { ...deps, Date: { now: () => publicationClock, parse: Date.parse },
+        diagnostic(identity, phase, status) {
+          deps.diagnostic(identity, phase, status);
+          if (phase === delayedMarker) publicationClock = envelope.receipt.expiresAt;
+        },
+        nativePhase(identity, phase, operation) {
+          if (phase === 'receipt_publication') publicationStarts++;
+          if (phase === delayedMarker) publicationClock = envelope.receipt.expiresAt;
+          return deps.nativePhase(identity, phase, operation);
+        },
+        command(binary, args, input) {
+          if (args.includes('POST') || args.includes('PATCH')) mutationAttempts++;
+          return deps.command(binary, args, input);
+        } };
+      const executeExpired = bodyFixture('scripts/lib/preview-vercel-successor-attestation.mjs', 'async function executeFixed', '\nexport async function runFixedSuccessorAttestation', expiresDuringMarker);
+      await assert.rejects(() => executeExpired(original));
+      assert.equal(publicationClock, envelope.receipt.expiresAt);
+      assert.equal(mutationAttempts, 0); assert.equal(writes.length, beforeWrites);
+      assert.equal(publicationStarts, 1);
+      const attemptEvents = events.slice(beforeEvents);
+      assert.equal(attemptEvents.filter(row => row === 'consume').length, 1);
+      assert.equal(attemptEvents.filter(row => row === 'publication_started').length, 1);
+      assert.ok(attemptEvents.includes('publication_preflight')); assert.ok(!attemptEvents.includes('receipt_readback'));
+    }
+  });
+  const consumed = { ...deps, claimPublication() { throw Error('Permanently consumed fixture nonce'); } };
+  const replay = bodyFixture('scripts/lib/preview-vercel-successor-attestation.mjs', 'async function executeFixed', '\nexport async function runFixedSuccessorAttestation', consumed);
+  const privateReads = events.filter(row => row.startsWith('private:')).length;
+  await assert.rejects(() => replay(original));
+  assert.equal(events.filter(row => row.startsWith('private:')).length, privateReads); assert.equal(writes.length, priorWrites);
+});
+
+const attestorSourcePath = 'scripts/lib/preview-vercel-successor-attestation.mjs';
+function setDeclaration(name) {
+  const source = readFileSync(attestorSourcePath, 'utf8'), start = source.indexOf(`const ${name} = new Set(`);
+  assert.ok(start > 0);
+  return new Function(`${source.slice(start, source.indexOf(';', start) + 1)} return ${name};`)();
+}
+function nativeBoundaryFixture(t, { spawn = () => assert.fail('No process may run in file fixture') } = {}) {
+  // Disposable owned workspace paths let the real parent, fd, inode, hash and
+  // journal checks run unchanged. No production reader or credential is read.
+  const directory = realpathSync(mkdtempSync(join(process.cwd(), '.attestor-native-test-')));
+  chmodSync(directory, 0o700); t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const stderr = [], durability = [], diagnosticStates = new WeakMap(); let monotonic = 100;
+  const dependencies = { constants, openSync, closeSync, fstatSync, readFileSync, lstatSync, realpathSync,
+    appendFileSync, fsyncSync(fd) { fsyncSync(fd); durability.push('fsync'); }, join, resolve,
+    process: { getuid: () => process.getuid(), stderr: { write(value) { stderr.push(value); durability.push('stderr'); } } },
+    performance: { now: () => monotonic++ }, successorAttestationHash, successorAttestationCommandStatus,
+    diagnosticStates, DIAGNOSTIC_PHASES: setDeclaration('DIAGNOSTIC_PHASES'), COMMAND_SIGNALS: setDeclaration('COMMAND_SIGNALS'),
+    fail: () => { throw Error('Private diagnostics suppressed'); }, uuid: value => value === nonce,
+    sha: value => typeof value === 'string' && /^[a-f0-9]{40}$/.test(value),
+    hash: value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value),
+    exact: (value, keys) => value && typeof value === 'object' && !Array.isArray(value)
+      && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key)),
+    freeze: value => Object.freeze(value), same: (left, right) => JSON.stringify(left) === JSON.stringify(right),
+    actualProjection: value => value.projection, requireSuccessorAttestationPublicationAdmission,
+    APPROVALS: directory, ROOT: directory, ENV: {}, spawnSync: spawn };
+  const load = (start, end) => bodyFixture(attestorSourcePath, start, end, dependencies);
+  dependencies.assertNativeParents = load('function assertNativeParents', '\nfunction assertPinnedReaderFile');
+  dependencies.assertPinnedReaderFile = load('function assertPinnedReaderFile', '\nfunction fixedInstalledReader');
+  dependencies.createNativeDiagnostics = load('function createNativeDiagnostics', '\nfunction diagnostic');
+  dependencies.diagnosticBinding = load('function diagnosticBinding', '\nfunction bindNativeDiagnostics');
+  dependencies.bindNativeDiagnostics = load('function bindNativeDiagnostics', '\nfunction diagnostic(');
+  dependencies.diagnostic = load('function diagnostic(', '\nasync function nativePhase');
+  dependencies.nativePhase = load('async function nativePhase', '\nfunction closeNativeDiagnostics');
+  dependencies.closeNativeDiagnostics = load('function closeNativeDiagnostics', '\nfunction command');
+  dependencies.command = load('function command(', '\nfunction ownedRead');
+  return { directory, stderr, durability, dependencies, load,
+    rows: () => readFileSync(join(directory, `diagnostic-${nonce}.jsonl`), 'utf8').trim().split('\n').map(JSON.parse) };
+}
+test('installed reader checks reject changed bytes, noncanonical paths, symlinks, hardlinks, modes and ownership', t => {
+  const f = nativeBoundaryFixture(t), binary = join(f.directory, 'reader'), source = join(f.directory, 'source.swift');
+  const binaryBytes = 'INERT PUBLIC READER FIXTURE', sourceBytes = 'INERT PUBLIC SOURCE FIXTURE';
+  writeFileSync(binary, binaryBytes, { mode: 0o700 }); writeFileSync(source, sourceBytes, { mode: 0o644 });
+  const verify = f.dependencies.assertPinnedReaderFile, expected = successorAttestationHash(binaryBytes);
+  assert.equal(verify(binary, expected, 0o700, 1024), undefined);
+  for (const mode of [0o600, 0o755, 0o770, 0o1700]) {
+    chmodSync(binary, mode); assert.throws(() => verify(binary, expected, 0o700, 1024));
+  }
+  chmodSync(binary, 0o700);
+  assert.throws(() => verify(binary, '0'.repeat(64), 0o700, 1024));
+  assert.throws(() => verify(binary, expected, 0o700, 1));
+  assert.throws(() => verify(`${f.directory}/../${f.directory.split('/').at(-1)}/reader`, expected, 0o700, 1024));
+  const link = join(f.directory, 'link'); linkSync(binary, link);
+  assert.throws(() => verify(binary, expected, 0o700, 1024)); unlinkSync(link);
+  symlinkSync(binary, link); assert.throws(() => verify(link, expected, 0o700, 1024)); unlinkSync(link);
+  const parentLink = join(f.directory, 'parent-link'); symlinkSync(f.directory, parentLink);
+  assert.throws(() => verify(join(parentLink, 'reader'), expected, 0o700, 1024)); unlinkSync(parentLink);
+  const wrongOwner = bodyFixture(attestorSourcePath, 'function assertPinnedReaderFile', '\nfunction fixedInstalledReader', {
+    ...f.dependencies, fstatSync: fd => ({ ...fstatSync(fd), isFile: () => true, uid: process.getuid() + 1 }) });
+  assert.throws(() => wrongOwner(binary, expected, 0o700, 1024));
+  // This filesystem strips setuid from disposable files; inject only that
+  // kernel stat bit to exercise the exact production mode rejection.
+  const setuid = bodyFixture(attestorSourcePath, 'function assertPinnedReaderFile', '\nfunction fixedInstalledReader', {
+    ...f.dependencies, fstatSync: fd => ({ ...fstatSync(fd), isFile: () => true, mode: fstatSync(fd).mode | 0o4000 }) });
+  assert.throws(() => setuid(binary, expected, 0o700, 1024));
+  chmodSync(f.directory, 0o777); assert.throws(() => verify(binary, expected, 0o700, 1024)); chmodSync(f.directory, 0o700);
+  const foreignParent = bodyFixture(attestorSourcePath, 'function assertNativeParents', '\nfunction assertPinnedReaderFile', {
+    ...f.dependencies, lstatSync: path => path === f.directory ? { ...lstatSync(path), isDirectory: () => true,
+      isSymbolicLink: () => false, uid: process.getuid() + 1 } : lstatSync(path) });
+  assert.throws(() => foreignParent(binary));
+  const admitted = Object.freeze({}); let grants = 0;
+  const installed = bodyFixture(attestorSourcePath, 'function fixedInstalledReader', '\nfunction createNativeDiagnostics', {
+    ...f.dependencies, KEYCHAIN_READER: binary, KEYCHAIN_READER_SHA256: expected, KEYCHAIN_SOURCE: source,
+    KEYCHAIN_SOURCE_SHA256: successorAttestationHash(sourceBytes),
+    requireSuccessorAttestationPublicationAdmission(value) { assert.equal(value, admitted); grants++; } });
+  assert.throws(() => installed(structuredClone(admitted))); assert.equal(grants, 0);
+  assert.equal(installed(admitted), binary); assert.equal(grants, 1);
+  writeFileSync(source, 'ALTERED PUBLIC SOURCE'); assert.throws(() => installed(admitted));
+});
+test('canonical root-owned Linux ancestors are accepted while foreign-owned or writable ancestors deny', () => {
+  const inspected = [], path = '/home/runner/work/fcos/reader';
+  let changedPath, changedOwner, changedMode;
+  const check = bodyFixture(attestorSourcePath, 'function assertNativeParents', '\nfunction assertPinnedReaderFile', {
+    resolve, process: { getuid: () => 1001 }, realpathSync: value => value,
+    lstatSync(value) {
+      inspected.push(value);
+      return { isDirectory: () => true, isSymbolicLink: () => false,
+        uid: value === changedPath ? changedOwner : ['/', '/home'].includes(value) ? 0 : 1001,
+        mode: value === changedPath ? changedMode : 0o755 };
+    }, fail: () => { throw Error('Unsafe ancestor denied'); } });
+  assert.equal(check(path), undefined);
+  assert.deepEqual(inspected, ['/home/runner/work/fcos', '/home/runner/work', '/home/runner', '/home', '/']);
+  for (const [parent, owner, mode] of [['/home', 1002, 0o755], ['/home', 0, 0o775], ['/', 0, 0o777]]) {
+    changedPath = parent; changedOwner = owner; changedMode = mode;
+    assert.throws(() => check(path));
+  }
+});
+test('durable fixed diagnostics precede operations and redact command output, arguments and arbitrary exceptions', async t => {
+  let commandResult = { status: 0, signal: null, stdout: 'PRIVATE_OUTPUT_MARKER', stderr: 'PRIVATE_ERROR_MARKER' }, thrown, accesses = 0;
+  const f = nativeBoundaryFixture(t, { spawn: () => { if (thrown) throw thrown; return commandResult; } });
+  const d = f.dependencies.createNativeDiagnostics(nonce); t.after(() => f.dependencies.closeNativeDiagnostics(d));
+  const { diagnostic, nativePhase, command } = f.dependencies;
+  diagnostic(d, 'private_io_started', 'started');
+  await nativePhase(d, 'capsule_read', () => {
+    assert.ok(f.rows().some(row => row.phase === 'private_io_started' && row.status === 'started'));
+    assert.equal(f.durability.at(-2), 'fsync');
+    return command('/PRIVATE_PATH_MARKER', ['PRIVATE_ACCOUNT_MARKER', 'PRIVATE_SERVICE_MARKER'], 'PRIVATE_INPUT_MARKER', 30000, d);
+  });
+  diagnostic(d, 'publication_started', 'started');
+  await nativePhase(d, 'receipt_publication', () => {
+    assert.ok(f.rows().some(row => row.phase === 'publication_started' && row.status === 'started'));
+    assert.equal(f.durability.at(-2), 'fsync');
+    return command('/PRIVATE_PATH_MARKER', ['PRIVATE_PUBLICATION_ARGUMENT'], 'PRIVATE_PUBLICATION_BODY', 30000, d);
+  });
+  for (const [result, expected] of [
+    [{ status: 2, signal: null }, { exitCode: 2, signal: null, timedOut: false }],
+    [{ status: null, signal: 'SIGTERM', error: { code: 'ETIMEDOUT', message: 'PRIVATE_EXCEPTION_MARKER' } },
+      { exitCode: null, signal: 'SIGTERM', timedOut: true }],
+    [{ status: null, signal: 'SIGKILL' }, { exitCode: null, signal: 'SIGKILL', timedOut: false }],
+  ]) {
+    commandResult = { ...result, stdout: 'PRIVATE_OUTPUT_MARKER', stderr: 'PRIVATE_ERROR_MARKER' };
+    await assert.rejects(() => nativePhase(d, 'key_read', () => command('/PRIVATE_PATH_MARKER', [], undefined, 30000, d)));
+    assert.deepEqual(f.rows().filter(row => row.status === 'command_completed').at(-1).command, expected);
+  }
+  thrown = new Proxy({}, { get() { accesses++; throw Error('PRIVATE_GETTER_MARKER'); } });
+  await assert.rejects(() => nativePhase(d, 'metadata_read', () => command('/PRIVATE_PATH_MARKER', [], undefined, 30000, d)));
+  assert.equal(accesses, 0);
+  assert.throws(() => diagnostic(d, 'PRIVATE_PHASE_MARKER', 'started'));
+  assert.throws(() => successorAttestationCommandStatus(1, 'PRIVATE_SIGNAL_MARKER', false));
+  assert.throws(() => successorAttestationCommandStatus({ secret: 'PRIVATE_STATUS_MARKER' }, null, false));
+  const rows = f.rows();
+  for (const row of rows) {
+    assert.deepEqual(Object.keys(row), ['schemaVersion', 'kind', 'phase', 'status', 'elapsedMs',
+      ...(row.binding ? ['binding'] : []), ...(row.command ? ['command'] : [])]);
+    assert.ok(Number.isSafeInteger(row.elapsedMs) && row.elapsedMs >= 0); assert.equal(row.capturedAt, undefined);
+  }
+  assert.ok(!JSON.stringify(rows).includes('PRIVATE_')); assert.ok(!f.stderr.join('').includes('PRIVATE_'));
+  assert.deepEqual(f.stderr.map(JSON.parse), rows);
+});
+test('durable markers bind immutable native admission and canonical claim without accepting caller DTOs', t => {
+  const f = nativeBoundaryFixture(t), d = f.dependencies.createNativeDiagnostics(nonce);
+  t.after(() => f.dependencies.closeNativeDiagnostics(d));
+  const original = { action: { approval: { nonce, harnessSha: 'a'.repeat(40) }, text: 'PUBLIC ORIGINAL ACTION',
+    sha256: successorAttestationHash('PUBLIC ORIGINAL ACTION') }, projection: { actionSha256: successorAttestationHash('PUBLIC ORIGINAL ACTION') } };
+  f.dependencies.diagnostic(d, 'admission', 'started');
+  assert.equal(f.rows()[0].binding, undefined);
+  f.dependencies.bindNativeDiagnostics(d, original);
+  f.dependencies.diagnostic(d, 'admission', 'passed');
+  const base = { nonce, harnessSha: original.action.approval.harnessSha, approvalSha256: original.action.sha256 };
+  assert.deepEqual(f.rows().at(-1).binding, base);
+  assert.ok(Object.isFrozen(f.dependencies.diagnosticStates.get(d).binding));
+  const claimed = Object.freeze({ actual: original.projection, consumptionSha256: 'c'.repeat(64), lease: Object.freeze({ leaseId: nonce }) });
+  for (const dto of [{}, structuredClone(claimed), { leaseAccepted: true }])
+    assert.throws(() => f.dependencies.bindNativeDiagnostics(d, original, dto));
+  assert.deepEqual(f.dependencies.diagnosticStates.get(d).binding, base);
+  const identity = Object.freeze({}), admissions = new WeakMap([[identity, claimed]]);
+  const bind = bodyFixture(attestorSourcePath, 'function bindNativeDiagnostics', '\nfunction diagnostic(', {
+    ...f.dependencies, requireSuccessorAttestationPublicationAdmission(value) { assert.ok(admissions.has(value)); return admissions.get(value); } });
+  bind(d, original, identity);
+  for (const phase of ['private_io_started', 'publication_started']) f.dependencies.diagnostic(d, phase, 'started');
+  const expected = { ...base, consumptionSha256: claimed.consumptionSha256, leaseId: nonce };
+  assert.deepEqual(f.rows().slice(-2).map(row => row.binding), [expected, expected]);
+  assert.ok(Object.isFrozen(f.dependencies.diagnosticStates.get(d).binding));
+  assert.throws(() => bind(d, { ...original, action: { ...original.action, text: 'CHANGED PUBLIC ACTION' } }, identity));
+  const before = readFileSync(join(f.directory, `diagnostic-${nonce}.jsonl`), 'utf8');
+  f.dependencies.diagnosticStates.get(d).binding = { ...expected, privateOutput: 'PRIVATE_BINDING_MARKER' };
+  assert.throws(() => f.dependencies.diagnostic(d, 'publication_started', 'started'));
+  assert.equal(readFileSync(join(f.directory, `diagnostic-${nonce}.jsonl`), 'utf8'), before);
+  assert.ok(!f.stderr.join('').includes('PRIVATE_'));
+});
+test('a replaced or unsafe diagnostic file fails closed before its guarded operation', async t => {
+  const f = nativeBoundaryFixture(t), d = f.dependencies.createNativeDiagnostics(nonce);
+  t.after(() => f.dependencies.closeNativeDiagnostics(d));
+  const path = join(f.directory, `diagnostic-${nonce}.jsonl`); let operations = 0;
+  const invoke = () => f.dependencies.nativePhase(d, 'capsule_read', () => { operations++; });
+  chmodSync(path, 0o644); await assert.rejects(invoke); chmodSync(path, 0o600);
+  const link = join(f.directory, 'linked-journal'); linkSync(path, link); await assert.rejects(invoke); unlinkSync(link);
+  unlinkSync(path); writeFileSync(path, '{"accepted":true}', { mode: 0o600 }); await assert.rejects(invoke);
+  assert.equal(operations, 0); assert.equal(f.stderr.length, 0);
+});
+test('native denial and hostile journals grant no collection, private capability, publication or replay authority', async t => {
+  const f = nativeBoundaryFixture(t), ENTRY = join(f.directory, 'attestor.mjs'); let collected = 0, executed = 0, opened = 0;
+  const dependencies = { ...f.dependencies, ENTRY, process: { platform: 'darwin', env: {}, execArgv: [], argv: ['node', ENTRY] },
+    uuid: value => value === nonce, createNativeDiagnostics(value) { opened++; return f.dependencies.createNativeDiagnostics(value); },
+    collectActual() { collected++; throw Error('PRIVATE_ADMISSION_MARKER'); },
+    executeFixed() { executed++; assert.fail('No private capability permitted'); }, actualProjection: value => value };
+  const native = bodyFixture(attestorSourcePath, 'export async function runFixedSuccessorAttestation', '\nNATIVE_FIXTURE_END', dependencies);
+  for (const args of [[], ['--attest-approved', 'invalid'], ['--foreign', nonce], ['--attest-approved', nonce, 'extra']])
+    await assert.rejects(() => native(args));
+  assert.equal(opened, 0); assert.equal(collected, 0); assert.equal(executed, 0);
+  await assert.rejects(() => runFixedSuccessorAttestation(['--attest-approved', nonce]));
+  const journalPath = join(f.directory, `diagnostic-${nonce}.jsonl`);
+  for (const text of ['{malformed', JSON.stringify({ accepted: true, private_io_started: true, publication_started: true,
+    leaseAccepted: true, replayForbidden: false })]) {
+    writeFileSync(journalPath, text, { mode: 0o600 });
+    await assert.rejects(() => native(['--attest-approved', nonce]));
+    assert.equal(readFileSync(journalPath, 'utf8'), text); assert.equal(collected, 0); assert.equal(executed, 0);
+    unlinkSync(journalPath);
+  }
+  const target = join(f.directory, 'untrusted-journal'); writeFileSync(target, 'PRIVATE_JOURNAL_MARKER', { mode: 0o600 });
+  symlinkSync(target, journalPath); await assert.rejects(() => native(['--attest-approved', nonce])); unlinkSync(journalPath);
+  await assert.rejects(() => native(['--attest-approved', nonce]));
+  assert.equal(collected, 1); assert.equal(executed, 0);
+  assert.deepEqual(f.rows().map(row => [row.phase, row.status]), [['admission', 'started'], ['admission', 'failed']]);
+  await assert.rejects(() => native(['--attest-approved', nonce])); assert.equal(collected, 1); assert.equal(executed, 0);
+  assert.ok(!f.stderr.join('').includes('PRIVATE_'));
+});
+test('native validation retains GET-only behavior and private helpers are not exported capabilities', async t => {
+  const f = nativeBoundaryFixture(t), ENTRY = join(f.directory, 'attestor.mjs'); let collected = 0;
+  const native = bodyFixture(attestorSourcePath, 'export async function runFixedSuccessorAttestation', '\nNATIVE_FIXTURE_END', {
+    ...f.dependencies, ENTRY, process: { platform: 'darwin', env: {}, execArgv: [], argv: ['node', ENTRY] },
+    uuid: value => value === nonce, collectActual() { collected++; return { unchanged: true }; }, actualProjection: value => value,
+    createNativeDiagnostics() { assert.fail('No journal write permitted for validation'); },
+    executeFixed() { assert.fail('No canonical claim, signing or provider mutation permitted for validation'); } });
+  assert.deepEqual(await native(['--validate-ledger-admission', nonce]), {
+    kind: 'fcos_actual_successor_attestation_ledger_admission', nonce, actual: { unchanged: true } });
+  assert.equal(collected, 1);
+  const module = await import('../scripts/lib/preview-vercel-successor-attestation.mjs');
+  for (const name of ['fixedInstalledReader', 'command', 'executeFixed', 'claimPublication', 'createNativeDiagnostics', 'diagnostic', 'bindNativeDiagnostics'])
+    assert.equal(Object.hasOwn(module, name), false);
 });
