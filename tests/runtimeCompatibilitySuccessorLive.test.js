@@ -294,6 +294,71 @@ test('verification-only missing or wrong contract expires on original clocks and
   assert.equal(accesses, 0);
 });
 
+test('verification handoff refresh binds every original signed identity field and rejects stale or expired replacements before polling', async () => {
+  const { protection, variables } = await verificationProtectionFixture();
+  const initial = { ...protection.oidcClaims, environment: protection.environment.name, exp: (now + 20000) / 1000 };
+  const pending = { variables: variables.variables.filter(row => row.name !== ENROLLED_AUTHORITY_RECEIPT) };
+  for (const [field, replacement] of Object.entries({ iss: 'https://other.invalid', aud: 'other', repository: 'other/repo',
+    repository_id: '8', sub: 'repo:other/repo:environment:other', environment: 'other', workflow_ref: 'other/workflow@refs/heads/main',
+    workflow_sha: 'f'.repeat(40), sha: 'f'.repeat(40), ref: 'refs/heads/other', run_id: '100', run_attempt: '2', event_name: 'push',
+    exp: initial.exp })) {
+    let refreshes = 0;
+    await assert.rejects(() => waitForPreviewEmailAttestation({ protection: { ...protection, variables: pending, oidcClaims: initial },
+      operation: 'verify-authority', now: () => now,
+      readOidc: async () => { refreshes++; return { ...initial, exp: (now + 320000) / 1000, [field]: replacement }; },
+      readVariables: () => assert.fail('Invalid replacement cannot poll.'), sleep: () => assert.fail('Invalid replacement cannot sleep.') }),
+    /signed identity changed or was not refreshed/);
+    assert.equal(refreshes, 1);
+  }
+  for (const exp of [undefined, NaN, Infinity, now / 1000, (now - 1) / 1000]) {
+    await assert.rejects(() => waitForPreviewEmailAttestation({ protection: { ...protection, variables: pending, oidcClaims: initial },
+      operation: 'verify-authority', now: () => now, readOidc: async () => ({ ...initial, exp }),
+      readVariables: () => assert.fail('Expired replacement cannot poll.'), sleep: () => assert.fail('Expired replacement cannot sleep.') }));
+  }
+  await assert.rejects(() => waitForPreviewEmailAttestation({ protection: { ...protection, variables: pending,
+    oidcClaims: { ...initial, exp: now / 1000 } }, operation: 'verify-authority', now: () => now,
+    readOidc: () => assert.fail('An expired initial identity cannot be renewed.') }));
+});
+
+test('verification refresh cannot outlive its signed claims or cross original handoff and dispatch deadlines while awaiting identity', async () => {
+  const { protection, variables } = await verificationProtectionFixture();
+  const pending = { variables: variables.variables.filter(row => row.name !== ENROLLED_AUTHORITY_RECEIPT) };
+  for (const { start, complete, expires, pattern } of [
+    { start: now, complete: now + 600000, expires: now + 900000, pattern: /handoff expired/ },
+    { start: now + 1780000, complete: Date.parse(protection.admission.dispatchedAt) + 1800000,
+      expires: now + 2100000, pattern: /handoff expired/ },
+    { start: now, complete: now + 50000, expires: now + 40000, pattern: /Signed Actions identity/ },
+  ]) {
+    let clock = start, refreshes = 0;
+    const initial = { ...protection.oidcClaims, exp: (start + 20000) / 1000 };
+    await assert.rejects(() => waitForPreviewEmailAttestation({ protection: { ...protection, variables: pending, oidcClaims: initial },
+      operation: 'verify-authority', now: () => clock,
+      readOidc: async () => { refreshes++; clock = complete; return { ...initial, exp: expires / 1000 }; },
+      readVariables: () => assert.fail('A completed expired refresh cannot poll.'), sleep: () => assert.fail('A completed expired refresh cannot sleep.') }), pattern);
+    assert.equal(refreshes, 1); assert.equal(clock, complete);
+  }
+});
+
+test('create and readback receipt handoffs retain initial signed expiry even when a refresh callback is supplied', async () => {
+  const { protection, variables } = await verificationProtectionFixture(), value = fixture();
+  const admission = await collectSuccessorLiveAdmission({ ...value, sourceCwd: trustedCwd, trustedCwd, now });
+  const reviewer = protection.run.actor;
+  Object.assign(value.run, { name: 'FCOS protected Preview email proof build', display_title: `Review FCOS Preview email source ${policy.candidateSha}`,
+    actor: reviewer, triggering_actor: reviewer });
+  const pending = { variables: variables.variables.filter(row => row.name !== ENROLLED_AUTHORITY_RECEIPT).map(row => ({ ...row,
+    value: row.name === 'FCOS_PREVIEW_EMAIL_BUILD_ENABLED' ? 'true'
+      : row.name === 'FCOS_PREVIEW_EMAIL_BUILD_REVIEWED_CONTRACT_SHA256' ? admission.contractSha256 : row.value })) };
+  const jobs = protection.jobs.map(job => ({ ...job, workflow_name: value.run.name }));
+  for (const operation of ['create', 'readback']) {
+    let clock = now, reads = 0;
+    await assert.rejects(() => waitForPreviewEmailAttestation({ protection: { ...protection, ...value, variables: pending, jobs, admission,
+      mode: 'build', oidcClaims: { ...protection.oidcClaims, exp: (now + 15000) / 1000 } }, operation, now: () => clock,
+      readOidc: () => assert.fail('A write-capable handoff cannot refresh its identity.'),
+      sleep: async ms => { clock += ms; }, readVariables: () => { reads++; return pending; } }), /handoff expired/);
+    assert.equal(clock, now + 15000); assert.equal(reads, 1);
+  }
+});
+
 test('portable exact source uses immutable272 plus exactly3 frozen control blobs and rejects supplement tampering', () => {
   assert.equal(controlManifest.objects.length, 3); assert.equal(controlManifest.mandatoryCandidateControls.length, 13);
   assert.equal(controls.controlFiles.candidate.length, 13);

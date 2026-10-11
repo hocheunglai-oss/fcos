@@ -273,6 +273,7 @@ export async function runPreviewEmailProofBuild({ mode = 'dry-run', candidateSha
           protection: { repository, branch, protection, environment, variables, secrets, run, jobs, approvals, workflow, oidcClaims: signed,
             candidateSha, harnessSha: harness.commit, controlRevision, admission, mode: mode === 'verify-authority' ? mode : 'build' },
           readVariables: () => completeEnvironmentNames(reads, `repos/${RELEASE_REPOSITORY}/environments/${PREVIEW_EMAIL_BUILD_ENVIRONMENT}/variables`, 'variables'),
+          ...(verificationOnly ? { readOidc: async () => (signed = await githubReleaseOidc({ env })) } : {}),
           privateEnrollment: env[ENROLLED_AUTHORITY_SECRET], token: env.VERCEL_TOKEN, operation: mode === 'prepare' ? 'create' : mode }));
         // Recheck actual protected state after external signing/consent latency.
         repository = reads.json(`repos/${RELEASE_REPOSITORY}`);
