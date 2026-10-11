@@ -15,6 +15,7 @@ import { successorAttestationMain } from '../scripts/preview-vercel-successor-at
 import { PREVIEW_EMAIL_BUILD_CONTROL_FILES } from '../scripts/lib/preview-email-build-controls.mjs';
 import { previewCoordinationSecretMetadata } from '../scripts/lib/preview-email-coordination-collector.mjs';
 
+const actualVerification = JSON.parse(readFileSync(new URL('./fixtures/preview-verification-actual-github.json', import.meta.url)));
 const now = Date.parse('2026-10-09T02:00:00.000Z'), nonce = '11111111-1111-4111-8111-111111111111', scriptSha256 = 'e'.repeat(64);
 function approval() {
   return { schemaVersion: 1, action: 'attest', purpose: SUCCESSOR_ATTEST_PURPOSE, authorized: true,
@@ -192,6 +193,22 @@ function protectedReview(a = approval()) {
     jobs: [{ id: a.jobId, run_id: a.runId, run_attempt: 1, name: 'proof', workflow_name: 'FCOS protected Preview email proof build',
       head_sha: a.harnessSha, head_branch: 'main', status: 'in_progress', conclusion: null, completed_at: null, started_at: a.jobStartedAt }] };
 }
+test('actual GitHub dynamic run-name fields bind exact verification title, current workflow and approved first job', () => {
+  const a = { ...approval(), operation: 'verify-authority' }, reviewed = protectedReview(a);
+  Object.assign(reviewed.run, actualVerification.run, { id: a.runId, run_started_at: a.dispatchedAt });
+  Object.assign(reviewed.jobs[0], actualVerification.job, { id: a.jobId, run_id: a.runId, head_sha: a.harnessSha, started_at: a.jobStartedAt });
+  reviewed.workflow = { id: actualVerification.run.workflow_id, path: actualVerification.run.path, name: 'FCOS protected Preview email proof build', state: 'active' };
+  assert.equal(assertSuccessorAttestationProtectedReview(a, reviewed, now), true);
+  for (const change of [r => { r.run.name = 'Verify FCOS enrolled Preview authority for source ' + 'f'.repeat(40); },
+    r => { r.run.display_title = r.run.display_title.replace(a.candidateSha, 'f'.repeat(40)); },
+    r => { r.run.path = '.github/workflows/production-release.yml'; }, r => { r.run.workflow_id++; },
+    r => { r.workflow.id++; }, r => { r.workflow.state = 'disabled_manually'; },
+    r => { r.jobs[0].workflow_name = 'foreign workflow'; }, r => { r.jobs[0].head_sha = 'f'.repeat(40); },
+    r => { r.jobs[0].run_id++; }, r => { r.jobs[0].run_attempt = 2; }, r => { r.approvals[0].user.id++; }]) {
+    const changed = structuredClone(reviewed); change(changed);
+    assert.throws(() => assertSuccessorAttestationProtectedReview(a, changed, now));
+  }
+});
 test('real personal exact environment review and original first proof job cannot be substituted or freshened', () => {
   const a = approval(); assert.equal(assertSuccessorAttestationProtectedReview(a, protectedReview(a), now), true);
   for (const mutate of [r => { r.approvals = []; }, r => { r.approvals.push(r.approvals[0]); },
@@ -256,17 +273,18 @@ function bodyFixture(path, start, end, dependencies) {
   const name = /(?:async )?function ([A-Za-z0-9_]+)/.exec(start)[1];
   return new Function(...Object.keys(dependencies), `${body.replace(/^export /, '')}\nreturn ${name};`)(...Object.values(dependencies));
 }
-function waitFixture({ missing = 2, old = true, deadlineAge = 0, badSignature = false } = {}) {
+function waitFixture({ missing = 2, old = true, deadlineAge = 0, badSignature = false, verificationOnly = false, matchingPendingReceipt = false } = {}) {
   let clock = now, reads = 0, verifications = 0, sleeps = 0;
-  const a = approval(), context = { runId: a.runId, operation: 'create' };
-  const selected = { contractSha256: a.contractSha256, context: { provisionedAt: new Date(now - deadlineAge).toISOString() },
+  const a = approval(), operation = verificationOnly ? 'verify-authority' : 'create', context = { runId: a.runId, operation };
+  const selected = { contractSha256: a.contractSha256, capturedAt: new Date(now).toISOString(), context: { provisionedAt: new Date(now - deadlineAge).toISOString() },
     dispatchedAt: a.dispatchedAt, reviewedAt: { root: new Date(now - 1000).toISOString(), independent: new Date(now - 1000).toISOString() } };
-  const oldVariables = { authorityEnvelope: old ? JSON.stringify({ receipt: { context: { ...context, runId: 1 } } }) : undefined };
-  const currentVariables = { authorityEnvelope: JSON.stringify({ receipt: { context } }) };
+  const oldVariables = { contractPin: undefined, authorityEnvelope: old ? JSON.stringify({ receipt: { context: matchingPendingReceipt ? context : { ...context, runId: 1 } } }) : undefined };
+  const currentVariables = { contractPin: a.contractSha256, authorityEnvelope: JSON.stringify({ receipt: { context } }) };
   const fn = bodyFixture('scripts/lib/preview-email-build.mjs', 'export async function waitForPreviewEmailAttestation', '\nexport function previewEmailBuildDeployment', {
     successorLiveSelection(admission, candidate, at) { assert.equal(candidate, a.candidateSha); assert.equal(admission, selected); return selected; },
+    successorVerificationSelection(admission, candidate, at) { assert.equal(candidate, a.candidateSha); assert.equal(admission, selected); return selected; },
     SUCCESSOR_LIVE_CONTRACT, previewEmailProtectionData(p) { return { authorityMode: 'issuance-bound-v1', environmentId: 20,
-      runId: a.runId, reviewedTokenId: a.tokenId, enrollmentId: a.enrollmentId, authorityEnvelope: p.variables.authorityEnvelope }; },
+      contractPinReady: !verificationOnly || p.variables.contractPin === a.contractSha256, runId: a.runId, reviewedTokenId: a.tokenId, enrollmentId: a.enrollmentId, authorityEnvelope: p.variables.authorityEnvelope }; },
     ENROLLED_AUTHORITY_MODE: 'issuance-bound-v1', enrolledAuthorityContext: value => ({ runId: value.runId, operation: value.operation }),
     equal: (left, right) => JSON.stringify(left) === JSON.stringify(right), failure: message => { throw Error(message); },
     verifyEnrollmentReceipt(value) { verifications++; assert.equal(value.enrollmentId, a.enrollmentId);
@@ -274,14 +292,22 @@ function waitFixture({ missing = 2, old = true, deadlineAge = 0, badSignature = 
   });
   return { run: () => fn({ protection: { admission: selected, candidateSha: a.candidateSha, repository: { id: 10 }, harnessSha: a.harnessSha,
     controlRevision: a.controlRevision, variables: oldVariables, jobs: [{ started_at: a.jobStartedAt }], oidcClaims: { exp: (now + 1000000) / 1000 } },
-    operation: 'create', privateEnrollment: 'OFFLINE_CAPSULE', token: 'OFFLINE_BEARER', now: () => clock,
+    operation, privateEnrollment: 'OFFLINE_CAPSULE', token: 'OFFLINE_BEARER', now: () => clock,
     sleep: async ms => { assert.ok(ms > 0 && ms <= 10000); sleeps++; clock += ms; },
-    readVariables: async () => { reads++; return reads >= missing ? currentVariables : oldVariables; } }),
+    readVariables: async () => { reads++; return reads >= missing ? currentVariables : { ...oldVariables, contractPin: 'f'.repeat(64) }; } }),
     observed: () => ({ reads, verifications, sleeps, clock }), currentVariables };
 }
 test('bounded hosted handoff waits for delayed exact run receipt; a prior run receipt never authorizes', async () => {
   const fixture = waitFixture(); assert.deepEqual(await fixture.run(), fixture.currentVariables);
   assert.deepEqual(fixture.observed(), { reads: 2, verifications: 1, sleeps: 2, clock: now + 20000 });
+});
+test('verification-only hosted handoff accepts delayed current contract plus exact signed receipt within original bounds', async () => {
+  const fixture = waitFixture({ verificationOnly: true });
+  assert.deepEqual(await fixture.run(), fixture.currentVariables);
+  assert.deepEqual(fixture.observed(), { reads: 2, verifications: 1, sleeps: 2, clock: now + 20000 });
+  const wrongContract = waitFixture({ verificationOnly: true, matchingPendingReceipt: true, missing: 100 });
+  await assert.rejects(() => wrongContract.run(), /expired/);
+  assert.equal(wrongContract.observed().verifications, 0); assert.equal(wrongContract.observed().clock, now + 600000);
 });
 test('handoff preserves original provisioning expiry and refuses delayed or invalid receipt without renewal', async () => {
   const expired = waitFixture({ missing: 100, deadlineAge: 2699000 });

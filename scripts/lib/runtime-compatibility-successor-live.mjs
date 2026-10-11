@@ -26,6 +26,17 @@ const verified = new WeakSet();
 const verificationOnly = new WeakSet();
 export const SUCCESSOR_VERIFY_PURPOSE = 'existing-preview-vercel-authority-verification-exact04ee-v1';
 export const successorVerificationRunTitle = candidateSha => `Verify FCOS enrolled Preview authority for source ${candidateSha}`;
+// GitHub exposes run-name in run.name and job.workflow_name. Keep the static
+// definition identity bound separately to the current active workflow ID/path.
+export function successorVerificationWorkflowIdentity({ run, job, workflow, candidateSha = policy.candidateSha } = {}) {
+  const path = '.github/workflows/preview-email-proof-build.yml', name = 'FCOS protected Preview email proof build';
+  const title = successorVerificationRunTitle(candidateSha);
+  return candidateSha === policy.candidateSha && Number.isSafeInteger(workflow?.id) && workflow.id > 0
+    && workflow.path === path && workflow.name === name && workflow.state === 'active'
+    && run?.workflow_id === workflow.id && [path, `${path}@main`].includes(run.path)
+    && run.display_title === title && [name, title].includes(run.name)
+    && (!job || job.workflow_name === run.name);
+}
 const sha = value => /^[0-9a-f]{40}$/.test(value || '');
 const hash = value => /^[0-9a-f]{64}$/.test(value || '');
 const id = value => /^[A-Za-z0-9_-]{1,200}$/.test(value || '');
@@ -233,6 +244,7 @@ export async function collectSuccessorVerificationAdmission({ reads, sourceCwd, 
   if (!Number.isSafeInteger(runId) || runId < 1) fail('EXACT_SUCCESSOR_DISPATCH_REQUIRED');
   const workflow = '.github/workflows/preview-email-proof-build.yml';
   const run = await reads.json(`${base}/actions/runs/${runId}`);
+  const workflowIdentity = await reads.json(`${base}/actions/workflows/preview-email-proof-build.yml`);
   const environment = await reads.json(`${base}/environments/fcos-runtime-compatibility-release`);
   const approvals = await reads.json(`${base}/actions/runs/${runId}/approvals`);
   const jobs = await reads.json(`${base}/actions/runs/${runId}/attempts/1/jobs?per_page=100&page=1`);
@@ -245,7 +257,7 @@ export async function collectSuccessorVerificationAdmission({ reads, sourceCwd, 
     || run?.id !== runId || run.repository?.full_name !== RELEASE_REPOSITORY || run.head_repository?.full_name !== RELEASE_REPOSITORY
     || run.head_sha !== trusted.sha || run.head_branch !== trusted.branch || run.event !== 'workflow_dispatch' || run.run_attempt !== 1
     || run.status !== 'in_progress' || ![workflow, `${workflow}@${trusted.branch}`].includes(run.path)
-    || run.name !== 'FCOS protected Preview email proof build' || run.display_title !== successorVerificationRunTitle(policy.candidateSha)
+    || !successorVerificationWorkflowIdentity({ run, job, workflow: workflowIdentity })
     || !githubProviderFresh(run.run_started_at, policy.maxAgeSeconds.dispatch * 1000, now)
     || environment?.name !== 'fcos-runtime-compatibility-release' || !Number.isSafeInteger(environment.id) || environment.id < 1
     || environment.can_admins_bypass !== false || rule?.prevent_self_review !== false || reviewer?.type !== 'User'
