@@ -10,7 +10,7 @@ import { canonicalFcosE2eCandidateUrl } from '../verify-e2e-candidate.mjs';
 import { PREVIEW_EMAIL_BUILD_CONTROL_FILES } from './preview-email-build-controls.mjs';
 import { githubProviderFresh, githubProviderTimestamp } from './github-provider-timestamp.mjs';
 import { SUCCESSOR_LIVE_CONTRACT, successorLiveSelection, successorEmailContract, successorLiveBinding,
-  successorLiveControlBinding, successorLiveRemoteControls } from './runtime-compatibility-successor-live.mjs';
+  successorLiveControlBinding, successorLiveRemoteControls, successorVerificationSelection, successorVerificationRunTitle } from './runtime-compatibility-successor-live.mjs';
 export { PREVIEW_EMAIL_BUILD_CONTROL_FILES } from './preview-email-build-controls.mjs';
 
 export const PREVIEW_EMAIL_BUILD_WORKFLOW = '.github/workflows/preview-email-proof-build.yml';
@@ -52,6 +52,21 @@ export function previewEmailBuildCandidate(candidateSha, { admission, now = Date
   if (contract.schemaVersion !== 1 || rows.length !== 1 || !sha(candidateSha)
     || !hash(rows[0].sourceDigest) || !hash(rows[0].lockHash)) failure('An exact reviewed Preview email candidate is required.');
   return structuredClone(rows[0]);
+}
+
+// Separate helper: build candidate/contract/request/intent functions continue
+// accepting only live admission, never this read-only verification identity.
+export function previewEmailVerificationContext(candidateSha, { admission, now = Date.now() } = {}) {
+  const selected = successorVerificationSelection(admission, candidateSha, now);
+  return { candidate: structuredClone(selected.candidate), contractSha256: selected.contractSha256,
+    controlRevision: selected.previewControlRevision };
+}
+
+export function previewEmailVerificationControlRevision(cwd, { admission, sourceCwd, now = Date.now() } = {}) {
+  const selected = successorVerificationSelection(admission, SUCCESSOR_LIVE_CONTRACT.candidateSha, now);
+  const controls = successorLiveControlBinding({ trustedCwd: cwd, sourceCwd });
+  if (['harnessSha', 'previewControlRevision', 'configurationRevision'].some(key => selected[key] !== controls[key])) failure('Actual verification controls changed.');
+  return controls.previewControlRevision;
 }
 
 export function previewEmailBuildControlRevision(cwd, { admission, sourceCwd, now = Date.now() } = {}) {
@@ -220,7 +235,7 @@ export function assertPreviewEmailBuildReceipt({ receipt, binding, records, admi
   return true;
 }
 
-function assertEnvironmentReview({ environment, run, jobs, approvals, trusted, candidateSha, completed, now }) {
+function assertEnvironmentReview({ environment, run, jobs, approvals, trusted, candidateSha, completed, now, verificationOnly = false }) {
   const rules = environment?.protection_rules?.filter(row => row.type === 'required_reviewers') || [];
   const rule = rules.length === 1 ? rules[0] : null, reviewer = rule?.reviewers?.length === 1 ? rule.reviewers[0] : null;
   if (FCOS_RELEASE_APPROVAL_POLICY.mode !== 'single_operator' || environment?.name !== PREVIEW_EMAIL_BUILD_ENVIRONMENT || !positive(environment.id)
@@ -231,7 +246,7 @@ function assertEnvironmentReview({ environment, run, jobs, approvals, trusted, c
     || run.head_branch !== trusted.branch || run.head_sha !== trusted.sha || run.event !== 'workflow_dispatch' || run.run_attempt !== 1
     || ![PREVIEW_EMAIL_BUILD_WORKFLOW, `${PREVIEW_EMAIL_BUILD_WORKFLOW}@${trusted.branch}`].includes(run.path)
     || !positive(run.id) || !githubProviderTimestamp(run.run_started_at) || Date.parse(run.run_started_at) > now + 30000
-    || run.name !== 'FCOS protected Preview email proof build' || run.display_title !== `Review FCOS Preview email source ${candidateSha}`
+    || run.name !== 'FCOS protected Preview email proof build' || run.display_title !== (verificationOnly ? successorVerificationRunTitle(candidateSha) : `Review FCOS Preview email source ${candidateSha}`)
     || run.actor?.login !== operator || run.triggering_actor?.login !== operator
     || run.actor?.id !== reviewer.reviewer.id || run.triggering_actor?.id !== reviewer.reviewer.id
     || (completed === 'intent' ? !['in_progress', 'completed'].includes(run.status)
@@ -259,13 +274,17 @@ function assertEnvironmentReview({ environment, run, jobs, approvals, trusted, c
 function previewEmailProtectionData({ repository, branch, protection, environment, variables, secrets, run, jobs, approvals, oidcClaims, candidateSha, harnessSha, controlRevision, admission, mode = 'build', now = Date.now() } = {}, receiptRequired = true) {
   if (!['build', 'diagnose-authority', 'verify-authority'].includes(mode)) failure('Unknown protected Preview operation.');
   const trusted = assertProtectedDefault(repository, branch, protection);
-  previewEmailBuildCandidate(candidateSha, { admission, now });
-  const { contractSha256 } = previewEmailBuildContract(candidateSha, { admission, now });
+  const verificationOnly = mode === 'verify-authority' && candidateSha === SUCCESSOR_LIVE_CONTRACT.candidateSha;
+  if (!verificationOnly) previewEmailBuildCandidate(candidateSha, { admission, now });
+  const { contractSha256 } = verificationOnly ? previewEmailVerificationContext(candidateSha, { admission, now })
+    : previewEmailBuildContract(candidateSha, { admission, now });
   if (candidateSha === SUCCESSOR_LIVE_CONTRACT.candidateSha) {
-    const selected = successorLiveBinding(admission, { sha: candidateSha, harnessSha, previewControlRevision: controlRevision }, now);
-    if (selected.runId !== run?.id || selected.workflow !== PREVIEW_EMAIL_BUILD_WORKFLOW) failure('Protected successor review must use this admission dispatch.');
+    const selected = verificationOnly ? successorVerificationSelection(admission, candidateSha, now)
+      : successorLiveBinding(admission, { sha: candidateSha, harnessSha, previewControlRevision: controlRevision }, now);
+    if (selected.runId !== run?.id || selected.workflow !== PREVIEW_EMAIL_BUILD_WORKFLOW
+      || verificationOnly && (selected.harnessSha !== harnessSha || selected.previewControlRevision !== controlRevision)) failure('Protected successor review must use this admission dispatch.');
   }
-  const approved = assertEnvironmentReview({ environment, run, jobs, approvals, trusted, candidateSha, completed: false, now });
+  const approved = assertEnvironmentReview({ environment, run, jobs, approvals, trusted, candidateSha, completed: false, now, verificationOnly });
   const readOnlyAuthority = ['diagnose-authority', 'verify-authority'].includes(mode);
   const pins = { [PREVIEW_EMAIL_BUILD_ENABLE]: readOnlyAuthority ? 'false' : 'true',
     ...(readOnlyAuthority ? { [PREVIEW_EMAIL_AUTHORITY_DIAGNOSTIC_ENABLE]: 'true' } : {}),
@@ -319,7 +338,9 @@ export function assertPreviewEmailBuildProtection(options) {
 export async function waitForPreviewEmailAttestation(options = {}) {
   const { protection, operation, now = () => Date.now() } = options;
   const startedAt = now(), { admission, candidateSha } = protection || {};
-  const selected = successorLiveSelection(admission, candidateSha, startedAt);
+  const verificationOnly = operation === 'verify-authority';
+  const selected = verificationOnly ? successorVerificationSelection(admission, candidateSha, startedAt)
+    : successorLiveSelection(admission, candidateSha, startedAt);
   if (candidateSha !== SUCCESSOR_LIVE_CONTRACT.candidateSha || !['create', 'readback', 'verify-authority'].includes(operation)) failure('Exact original receipt handoff required.');
   const reviewed = previewEmailProtectionData({ ...protection, now: startedAt }, false);
   if (reviewed.authorityMode !== ENROLLED_AUTHORITY_MODE) failure('Existing issuance-bound credential required.');
@@ -328,11 +349,12 @@ export async function waitForPreviewEmailAttestation(options = {}) {
     runId: reviewed.runId, harnessSha: protection.harnessSha, controlRevision: protection.controlRevision,
     contractSha256: selected.contractSha256, candidateSha, operation });
   const deadline = Math.min(startedAt + 600000, protection.oidcClaims.exp * 1000,
-    Date.parse(selected.context.provisionedAt) + 2700000,
-    ...[selected.dispatchedAt, protection.jobs[0].started_at, ...Object.values(selected.reviewedAt)].map(time => Date.parse(time) + 1800000));
+    ...(verificationOnly ? [Date.parse(selected.capturedAt) + 1800000] : [Date.parse(selected.context.provisionedAt) + 2700000]),
+    ...[selected.dispatchedAt, protection.jobs[0].started_at, ...(verificationOnly ? [] : Object.values(selected.reviewedAt))].map(time => Date.parse(time) + 1800000));
   let variables = protection.variables;
   while (now() < deadline) {
-    successorLiveSelection(admission, candidateSha, now());
+    if (verificationOnly) successorVerificationSelection(admission, candidateSha, now());
+    else successorLiveSelection(admission, candidateSha, now());
     const current = previewEmailProtectionData({ ...protection, variables, now: now() }, false);
     const raw = current.authorityEnvelope;
     if (typeof raw === 'string') {

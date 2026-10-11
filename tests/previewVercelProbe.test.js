@@ -306,6 +306,25 @@ test('workflow keeps diagnostic separate from all build and readback steps and p
   assert.match(steps.find(value => value.includes('Preserve exact non-secret')), /inputs.operation != 'diagnose-authority'/);
 });
 
+test('workflow verification title is confined to exact04ee and preserves both legacy candidates and all other modes', () => {
+  const workflow = readFileSync(new URL('../.github/workflows/preview-email-proof-build.yml', import.meta.url), 'utf8');
+  const line = workflow.split('\n').find(row => row.startsWith('run-name:'));
+  // Parse the complete supported expression, rejecting missing candidate gates,
+  // extra branches or changed fallback templates before exercising its matrix.
+  const expression = /^run-name: \$\{\{ inputs\.operation == '([^']+)' && inputs\.expected_commit == '([a-f0-9]{40})' && format\('([^']+)', inputs\.expected_commit\) \|\| format\('([^']+)', inputs\.expected_commit\) \}\}$/.exec(line);
+  assert.ok(expression, 'Exact candidate-gated run-name expression required.');
+  const exact = '04ee3425aac7a49089eda781eb3c976aea1f6785';
+  assert.equal(expression[1], 'verify-authority'); assert.equal(expression[2], exact);
+  const legacy = JSON.parse(readFileSync(new URL('../config/legacy-email-baseline-proof.json', import.meta.url))).preview.candidates.map(row => row.sha);
+  assert.ok(legacy.includes('ff8859b287009e20462c5c0cceff89ae12f13010'));
+  assert.ok(legacy.includes('ee28300d25470fa9ca9a6dda37b3752287f20f19'));
+  for (const candidate of [exact, ...legacy]) for (const operation of ['verify-authority', 'create', 'readback', 'diagnose-authority']) {
+    const rendered = (operation === expression[1] && candidate === expression[2] ? expression[3] : expression[4]).replace('{0}', candidate);
+    assert.equal(rendered, operation === 'verify-authority' && candidate === exact
+      ? `Verify FCOS enrolled Preview authority for source ${candidate}` : `Review FCOS Preview email source ${candidate}`);
+  }
+});
+
 for (const variant of ['valid', 'partial-list', 'changed-production', 'expired-after-production']) test(`enrolled runner ${variant} checks Production and terminates without intent, claim or deployment`, () => {
   const directory = mkdtempSync(join(tmpdir(), 'fcos-enrolled-runner-'));
   try {

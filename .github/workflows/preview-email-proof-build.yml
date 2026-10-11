@@ -1,5 +1,5 @@
 name: FCOS protected Preview email proof build
-run-name: Review FCOS Preview email source ${{ inputs.expected_commit }}
+run-name: ${{ inputs.operation == 'verify-authority' && inputs.expected_commit == '04ee3425aac7a49089eda781eb3c976aea1f6785' && format('Verify FCOS enrolled Preview authority for source {0}', inputs.expected_commit) || format('Review FCOS Preview email source {0}', inputs.expected_commit) }}
 on:
   workflow_dispatch:
     inputs:
