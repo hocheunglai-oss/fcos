@@ -267,9 +267,10 @@ export async function runPreviewEmailProofBuild({ mode = 'dry-run', candidateSha
       let run = await stage('workflow_run', () => reads.json(`repos/${RELEASE_REPOSITORY}/actions/runs/${signed.run_id}`));
       let approvals = await stage('environment_approval', () => reads.json(`repos/${RELEASE_REPOSITORY}/actions/runs/${signed.run_id}/approvals`));
       let jobs = await stage('workflow_job', () => collectPreviewEmailBuildJobs({ reads, runId: Number(signed.run_id) }));
+      let workflow = verificationOnly ? await stage('workflow_identity', () => reads.json(`repos/${RELEASE_REPOSITORY}/actions/workflows/preview-email-proof-build.yml`)) : undefined;
       if (successor && mode !== 'diagnose-authority') {
         variables = await stage('receipt_handoff', () => waitForPreviewEmailAttestation({
-          protection: { repository, branch, protection, environment, variables, secrets, run, jobs, approvals, oidcClaims: signed,
+          protection: { repository, branch, protection, environment, variables, secrets, run, jobs, approvals, workflow, oidcClaims: signed,
             candidateSha, harnessSha: harness.commit, controlRevision, admission, mode: mode === 'verify-authority' ? mode : 'build' },
           readVariables: () => completeEnvironmentNames(reads, `repos/${RELEASE_REPOSITORY}/environments/${PREVIEW_EMAIL_BUILD_ENVIRONMENT}/variables`, 'variables'),
           privateEnrollment: env[ENROLLED_AUTHORITY_SECRET], token: env.VERCEL_TOKEN, operation: mode === 'prepare' ? 'create' : mode }));
@@ -282,11 +283,12 @@ export async function runPreviewEmailProofBuild({ mode = 'dry-run', candidateSha
         run = reads.json(`repos/${RELEASE_REPOSITORY}/actions/runs/${signed.run_id}`);
         approvals = reads.json(`repos/${RELEASE_REPOSITORY}/actions/runs/${signed.run_id}/approvals`);
         jobs = await collectPreviewEmailBuildJobs({ reads, runId: Number(signed.run_id) });
+        if (verificationOnly) workflow = reads.json(`repos/${RELEASE_REPOSITORY}/actions/workflows/preview-email-proof-build.yml`);
         variables = completeEnvironmentNames(reads, `repos/${RELEASE_REPOSITORY}/environments/${PREVIEW_EMAIL_BUILD_ENVIRONMENT}/variables`, 'variables');
       }
       approved = await stage('protection_review', () => {
         const result = assertPreviewEmailBuildProtection({ repository, branch, protection, environment, variables, secrets,
-          run, jobs, approvals, oidcClaims: signed, candidateSha, harnessSha: harness.commit, controlRevision,
+          run, jobs, approvals, workflow, oidcClaims: signed, candidateSha, harnessSha: harness.commit, controlRevision,
           admission, mode: ['diagnose-authority', 'verify-authority'].includes(mode) ? mode : 'build' });
         if (result.runId !== Number(env.GITHUB_RUN_ID)) throw new Error('This runner journal must bind the exact approved workflow run.');
         return result;

@@ -1,0 +1,30 @@
+{
+  "purpose": "Public GitHub metadata projection from the actual approved verification-only run; no authority or credentials",
+  "sourceEvidenceSha256": "ce4ef8b515ca91a9f65f6078f63be7f56417fc11737492196402d83f2cd59c57",
+  "run": {
+    "id": 38114557858,
+    "name": "Verify FCOS enrolled Preview authority for source 04ee3425aac7a49089eda781eb3c976aea1f6785",
+    "display_title": "Verify FCOS enrolled Preview authority for source 04ee3425aac7a49089eda781eb3c976aea1f6785",
+    "workflow_id": 372955040,
+    "path": ".github/workflows/preview-email-proof-build.yml",
+    "head_sha": "3a5dd449048e25961168c1bd5cb1864428c3f94e",
+    "head_branch": "main",
+    "run_attempt": 1,
+    "run_started_at": "2026-10-11T05:22:11Z",
+    "status": "in_progress",
+    "conclusion": null
+  },
+  "job": {
+    "id": 114396765519,
+    "run_id": 38114557858,
+    "run_attempt": 1,
+    "name": "proof",
+    "workflow_name": "Verify FCOS enrolled Preview authority for source 04ee3425aac7a49089eda781eb3c976aea1f6785",
+    "head_sha": "3a5dd449048e25961168c1bd5cb1864428c3f94e",
+    "head_branch": "main",
+    "started_at": "2026-10-11T05:24:02Z",
+    "status": "in_progress",
+    "conclusion": null,
+    "completed_at": null
+  }
+}

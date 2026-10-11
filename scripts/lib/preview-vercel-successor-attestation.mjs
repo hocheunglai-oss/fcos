@@ -1,6 +1,7 @@
 import { fcosConnectionIdentifier } from '../../config/fcosConnections.js';
 import { SUCCESSOR_LIVE_CONTRACT, successorLiveSelection, collectSuccessorLiveOperationAdmission,
-  successorVerificationSelection, collectSuccessorVerificationAdmission, successorVerificationRunTitle } from './runtime-compatibility-successor-live.mjs';
+  successorVerificationSelection, collectSuccessorVerificationAdmission, successorVerificationRunTitle,
+  successorVerificationWorkflowIdentity } from './runtime-compatibility-successor-live.mjs';
 import { ENROLLMENT_FIXED_TARGET, assertEnrollmentMetadata, ENROLLMENT_KEYCHAIN_SERVICE, ENROLLED_AUTHORITY_MODE,
   ENROLLED_AUTHORITY_RECEIPT, signEnrollmentReceipt, enrolledAuthorityContext } from './preview-vercel-enrollment.mjs';
 import { createHash, createPrivateKey, createPublicKey } from 'node:crypto';
@@ -296,7 +297,8 @@ async function publicPreflight(reads, a) {
     || run.display_title !== (a.operation === 'verify-authority' ? successorVerificationRunTitle(a.candidateSha) : `Review FCOS Preview email source ${a.candidateSha}`)) fail();
   const approvals = await reads.json(`${BASE}/actions/runs/${a.runId}/approvals`);
   const jobs = await collectPreviewEmailBuildJobs({ reads, runId: a.runId });
-  assertSuccessorAttestationProtectedReview(a, { user, environment, run, approvals, jobs });
+  const workflow = a.operation === 'verify-authority' ? await reads.json(`${BASE}/actions/workflows/preview-email-proof-build.yml`) : undefined;
+  assertSuccessorAttestationProtectedReview(a, { user, environment, run, approvals, jobs, workflow });
   for (const status of ['queued', 'in_progress', 'waiting', 'pending', 'requested']) {
     const result = await reads.json(`${BASE}/actions/runs?status=${status}&per_page=100`);
     if (!Array.isArray(result?.workflow_runs) || result.total_count !== result.workflow_runs.length || result.workflow_runs.length > 100
@@ -309,16 +311,17 @@ async function publicPreflight(reads, a) {
     reviewerId: user.id, jobId: jobs[0].id, jobStartedAt: jobs[0].started_at, dispatchedAt: run.run_started_at,
     priorReceiptSha256: priorReceipt === undefined ? null : successorAttestationHash(priorReceipt) });
 }
-export function assertSuccessorAttestationProtectedReview(a, { user, environment, run, approvals, jobs }, now = Date.now()) {
+export function assertSuccessorAttestationProtectedReview(a, { user, environment, run, approvals, jobs, workflow }, now = Date.now()) {
   const reviews = (Array.isArray(approvals) ? approvals : []).filter(row => row.environments?.some(e => e.id === environment.id && e.name === environment.name));
   const job = Array.isArray(jobs) && jobs.length === 1 ? jobs[0] : null;
   if (user?.login !== fcosConnectionIdentifier('github', 'Required account') || !positive(user.id)
     || environment?.name !== ENROLLMENT_FIXED_TARGET.environment || !positive(environment.id)
-    || run?.id !== a.runId || run.name !== 'FCOS protected Preview email proof build'
+    || run?.id !== a.runId || (a.operation === 'verify-authority' ? !successorVerificationWorkflowIdentity({ run, job, workflow, candidateSha: a.candidateSha })
+      : run.name !== 'FCOS protected Preview email proof build')
     || reviews.length !== 1 || reviews[0].state !== 'approved' || reviews[0].user?.login !== user.login || reviews[0].user?.id !== user.id
     || run.run_started_at !== a.dispatchedAt || !githubProviderFresh(run.run_started_at, 1800000, now)
     || job?.id !== a.jobId || job.run_id !== a.runId || job.run_attempt !== 1 || job.name !== 'proof'
-    || job.workflow_name !== 'FCOS protected Preview email proof build' || job.head_sha !== a.harnessSha || job.head_branch !== 'main'
+    || job.workflow_name !== (a.operation === 'verify-authority' ? run.name : 'FCOS protected Preview email proof build') || job.head_sha !== a.harnessSha || job.head_branch !== 'main'
     || job.status !== 'in_progress' || job.conclusion !== null || job.completed_at !== null || job.started_at !== a.jobStartedAt
     || !githubProviderFresh(job.started_at, 1800000, now) || Date.parse(job.started_at) < Date.parse(run.run_started_at)) fail();
   return true;

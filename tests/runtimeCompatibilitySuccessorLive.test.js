@@ -20,6 +20,7 @@ import { previewEmailBuildCandidate, previewEmailBuildContract, createPreviewEma
   previewEmailVerificationContext, previewEmailVerificationControlRevision, waitForPreviewEmailAttestation,
   assertPreviewEmailBuildProtection } from '../scripts/lib/preview-email-build.mjs';
 import { createPreviewEmailVercelApi } from '../scripts/preview-email-proof-build.mjs';
+import { ENROLLED_AUTHORITY_RECEIPT, enrolledAuthorityContext } from '../scripts/lib/preview-vercel-enrollment.mjs';
 import { collectTrustedPreviewEmailIntent, assertTrustedPreviewEmailIntentRecord } from '../scripts/lib/preview-email-build.mjs';
 import { coordinationBindingFromOriginal } from '../scripts/lib/preview-email-coordination.mjs';
 import { previewEmailSignerEnabled, previewEmailSignerSourceHashes, previewEmailSignerSourceProof,
@@ -33,6 +34,7 @@ import { copyBoundSource, installPortableObjects, controlManifest, controlManife
 import { SUCCESSOR_ATTEST_PURPOSE, SUCCESSOR_ATTEST_CANONICAL_HELPER_SHA256, successorAttestationPlan,
   bindSuccessorAttestationAdmission, runSuccessorAttestationAdmission } from '../scripts/lib/preview-vercel-successor-attestation.mjs';
 
+const actualVerification = JSON.parse(readFileSync(new URL('./fixtures/preview-verification-actual-github.json', import.meta.url)));
 const cwd = fileURLToPath(new URL('..', import.meta.url));
 const now = Date.parse('2026-10-09T02:00:00.000Z'), iso = value => new Date(value).toISOString();
 const digest = value => createHash('sha256').update(value).digest('hex');
@@ -106,7 +108,8 @@ function verificationFixture(runId = 99) {
   value.reviews = value.reviews.map(row => record({ ...row.value, reviewedAt: iso(now - 7100000),
     previewControlRevision: value.context.value.previewControlRevision, configurationRevision: value.context.value.configurationRevision }));
   value.rows.root = value.reviews[0]; value.rows.independent = value.reviews[1];
-  Object.assign(value.run, { name: 'FCOS protected Preview email proof build', display_title: successorVerificationRunTitle(policy.candidateSha),
+  const workflow = { id: actualVerification.run.workflow_id, path: actualVerification.run.path, name: 'FCOS protected Preview email proof build', state: 'active' };
+  Object.assign(value.run, { name: actualVerification.run.name, display_title: actualVerification.run.display_title, workflow_id: workflow.id,
     actor: { login: operator, id: 1 }, triggering_actor: { login: operator, id: 1 } });
   const environment = { id: 8, name: 'fcos-runtime-compatibility-release', can_admins_bypass: false,
     protection_rules: [{ type: 'required_reviewers', prevent_self_review: false, reviewers: [{ type: 'User', reviewer: { login: operator, id: 1 } }] }],
@@ -116,12 +119,13 @@ function verificationFixture(runId = 99) {
     head_sha: harnessSha, head_branch: 'main', status: 'in_progress', conclusion: null, completed_at: null, started_at: iso(now - 5000) }] };
   const original = value.reads.json;
   value.reads.json = endpoint => {
+    if (endpoint.endsWith('/actions/workflows/preview-email-proof-build.yml')) return workflow;
     if (endpoint.endsWith(`/environments/${environment.name}`)) return environment;
     if (endpoint.endsWith(`/actions/runs/${runId}/approvals`)) return approvals;
     if (endpoint.endsWith(`/actions/runs/${runId}/attempts/1/jobs?per_page=100&page=1`)) return jobs;
     return original(endpoint);
   };
-  return { ...value, environment, approvals, jobs };
+  return { ...value, environment, approvals, jobs, workflow };
 }
 
 test('verification-only admits immutable historical provenance and fresh exact human-reviewed run without renewing live clocks', async () => {
@@ -164,7 +168,13 @@ test('verification-only admits immutable historical provenance and fresh exact h
 });
 
 test('verification-only requires actual current source, first verify run, fresh dispatch/job and genuine non-bypassable review', async () => {
-  for (const change of [v => { v.run.display_title = `Review FCOS Preview email source ${policy.candidateSha}`; },
+  for (const change of [v => { v.run.name = successorVerificationRunTitle('f'.repeat(40)); },
+    v => { v.run.path = '.github/workflows/production-release.yml'; }, v => { v.run.workflow_id++; },
+    v => { v.workflow.id++; }, v => { v.workflow.state = 'disabled_manually'; },
+    v => { v.workflow.path = '.github/workflows/production-release.yml'; },
+    v => { v.jobs.jobs[0].workflow_name = successorVerificationRunTitle('f'.repeat(40)); },
+    v => { v.jobs.jobs[0].run_id++; }, v => { v.jobs.jobs[0].run_attempt = 2; },
+    v => { v.run.actor.id++; }, v => { v.run.display_title = `Review FCOS Preview email source ${policy.candidateSha}`; },
     v => { v.run.run_attempt = 2; }, v => { v.run.run_started_at = iso(now - 1800001); },
     v => { v.run.status = 'completed'; }, v => { v.jobs.jobs[0].started_at = iso(now - 1800001); },
     v => { v.jobs.jobs[0].head_sha = 'f'.repeat(40); }, v => { v.jobs.total_count = 2; },
@@ -177,20 +187,25 @@ test('verification-only requires actual current source, first verify run, fresh 
   }
 });
 
-test('verification-only hosted handoff uses fresh exact review and contract without admitting historical provisioning for a build', async () => {
+async function verificationProtectionFixture() {
   const value = verificationFixture(), admission = await collectSuccessorVerificationAdmission({ reads: value.reads, sourceCwd: trustedCwd, trustedCwd, runId: 99, now });
   const variables = { variables: Object.entries({ FCOS_PREVIEW_EMAIL_BUILD_ENABLED: 'false', FCOS_PREVIEW_EMAIL_AUTHORITY_DIAGNOSTIC_ENABLED: 'true',
     FCOS_RUNTIME_COMPATIBILITY_RELEASE_ENABLED: 'false', FCOS_PREVIEW_EMAIL_BUILD_REVIEWED_SHA: policy.candidateSha,
     FCOS_PREVIEW_EMAIL_BUILD_REVIEWED_HARNESS_SHA: harnessSha, FCOS_PREVIEW_EMAIL_BUILD_REVIEWED_CONTRACT_SHA256: admission.contractSha256,
     FCOS_PREVIEW_EMAIL_BUILD_REVIEWED_CONTROL_SHA256: controls.previewControlRevision, FCOS_RELEASE_VERCEL_TOKEN_ID: 'OFFLINE_EXISTING_TOKEN',
     FCOS_PREVIEW_VERCEL_AUTHORITY_MODE: 'issuance-bound-v1', FCOS_PREVIEW_VERCEL_ISSUANCE_AUTHORITY_ENABLED: 'true',
-    FCOS_PREVIEW_VERCEL_ENROLLMENT_ID: '22222222-2222-4222-8222-222222222222' }).map(([name, value]) => ({ name, value })) };
+    FCOS_PREVIEW_VERCEL_ENROLLMENT_ID: '22222222-2222-4222-8222-222222222222', [ENROLLED_AUTHORITY_RECEIPT]: '{}' }).map(([name, value]) => ({ name, value })) };
   const protection = { ...value, repository, environment: value.environment, jobs: value.jobs.jobs, variables,
     secrets: { secrets: ['FCOS_RELEASE_GH_TOKEN', 'FCOS_RELEASE_VERCEL_TOKEN', 'FCOS_RELEASE_VERCEL_ENROLLMENT'].map(name => ({ name })) },
     oidcClaims: { iss: 'https://token.actions.githubusercontent.com', aud: 'fcos-production-release', repository: repository.full_name, repository_id: String(repository.id),
       sub: `repo:${repository.full_name}:environment:${value.environment.name}`, workflow_ref: `${repository.full_name}/.github/workflows/preview-email-proof-build.yml@refs/heads/main`,
       workflow_sha: harnessSha, sha: harnessSha, ref: 'refs/heads/main', run_id: '99', run_attempt: '1', event_name: 'workflow_dispatch', exp: (now + 600000) / 1000 },
     candidateSha: policy.candidateSha, harnessSha, controlRevision: controls.previewControlRevision, admission, mode: 'verify-authority' };
+  return { value, admission, variables, protection };
+}
+test('verification-only hosted handoff uses fresh exact review and contract without admitting historical provisioning for a build', async () => {
+  const { admission, variables, protection } = await verificationProtectionFixture();
+  assert.equal(assertPreviewEmailBuildProtection({ ...protection, now }).runId, 99);
   let clock = now, sleeps = 0, reads = 0;
   await assert.rejects(() => waitForPreviewEmailAttestation({ protection, operation: 'verify-authority', now: () => clock,
     privateEnrollment: 'OFFLINE_UNUSED_CAPSULE', token: 'OFFLINE_UNUSED_BEARER',
@@ -198,6 +213,85 @@ test('verification-only hosted handoff uses fresh exact review and contract with
   assert.equal(sleeps, 1); assert.equal(reads, 0);
   assert.throws(() => assertPreviewEmailBuildProtection({ ...protection, mode: 'build', now }));
   assert.equal(admission.historicalContext.provisionedAt, iso(now - 7200000));
+});
+
+test('actual dynamic GitHub names pass hosted protection only with exact current workflow and review identity', async () => {
+  const { protection } = await verificationProtectionFixture();
+  assert.equal(protection.run.name, actualVerification.run.name);
+  assert.equal(protection.jobs[0].workflow_name, actualVerification.job.workflow_name);
+  assert.equal(assertPreviewEmailBuildProtection({ ...protection, now }).runId, protection.run.id);
+  for (const change of [p => { p.run.name = successorVerificationRunTitle('f'.repeat(40)); },
+    p => { p.run.display_title = successorVerificationRunTitle('f'.repeat(40)); },
+    p => { p.workflow.id++; }, p => { p.run.workflow_id++; }, p => { p.workflow.state = 'disabled_manually'; },
+    p => { p.run.path = '.github/workflows/production-release.yml'; }, p => { p.run.head_sha = 'f'.repeat(40); },
+    p => { p.jobs[0].workflow_name = successorVerificationRunTitle('f'.repeat(40)); },
+    p => { p.jobs[0].id++; }, p => { p.jobs[0].started_at = iso(now - 1); },
+    p => { p.jobs[0].run_id++; }, p => { p.jobs[0].run_attempt = 2; }, p => { p.approvals[0].user.id++; }]) {
+    const changed = { ...protection, run: structuredClone(protection.run), jobs: structuredClone(protection.jobs),
+      workflow: structuredClone(protection.workflow), approvals: structuredClone(protection.approvals) };
+    change(changed); assert.throws(() => assertPreviewEmailBuildProtection({ ...changed, now }));
+  }
+});
+
+test('verification-only handoff waits for the actual job-bound contract before checking the current signed receipt', async () => {
+  const { admission, protection, variables } = await verificationProtectionFixture();
+  const contractName = 'FCOS_PREVIEW_EMAIL_BUILD_REVIEWED_CONTRACT_SHA256';
+  const pending = { variables: variables.variables.filter(row => row.name !== contractName && row.name !== ENROLLED_AUTHORITY_RECEIPT) };
+  const context = enrolledAuthorityContext({ repositoryId: repository.id, environmentId: protection.environment.id,
+    runId: admission.runId, harnessSha, controlRevision: controls.previewControlRevision,
+    contractSha256: admission.contractSha256, candidateSha: policy.candidateSha, operation: 'verify-authority' });
+  const receipt = { name: ENROLLED_AUTHORITY_RECEIPT, value: JSON.stringify({ receipt: { context }, signature: 'INVALID_OFFLINE_SIGNATURE' }) };
+  let clock = now, reads = 0;
+  // Missing pin, then a previous contract, then the exact current contract.
+  // The inert invalid capsule/signature must only be examined after handoff.
+  await assert.rejects(() => waitForPreviewEmailAttestation({ protection: { ...protection, variables: pending },
+    operation: 'verify-authority', now: () => clock, privateEnrollment: 'OFFLINE_UNUSED_CAPSULE', token: 'OFFLINE_UNUSED_BEARER',
+    sleep: async ms => { clock += ms; }, readVariables: async () => {
+      reads++;
+      return { variables: [...pending.variables, { name: contractName, value: reads === 1 ? 'f'.repeat(64) : admission.contractSha256 }, receipt] };
+    } }), /Enrolled Preview authority failed/);
+  assert.equal(reads, 2); assert.equal(clock, now + 20000);
+  assert.equal(admission.jobStartedAt, protection.jobs[0].started_at);
+  assert.equal(admission.historicalContext.provisionedAt, iso(now - 7200000));
+});
+
+test('verification-only missing or wrong contract expires on original clocks and static unsafe controls never poll', async () => {
+  const { protection, variables } = await verificationProtectionFixture();
+  const contractName = 'FCOS_PREVIEW_EMAIL_BUILD_REVIEWED_CONTRACT_SHA256';
+  for (const value of [undefined, 'f'.repeat(64)]) {
+    const pending = { variables: variables.variables.filter(row => row.name !== contractName && row.name !== ENROLLED_AUTHORITY_RECEIPT) };
+    if (value) pending.variables.push({ name: contractName, value });
+    const context = enrolledAuthorityContext({ repositoryId: repository.id, environmentId: protection.environment.id,
+      runId: protection.run.id, harnessSha, controlRevision: controls.previewControlRevision,
+      contractSha256: variables.variables.find(row => row.name === contractName).value, candidateSha: policy.candidateSha, operation: 'verify-authority' });
+    pending.variables.push({ name: ENROLLED_AUTHORITY_RECEIPT, value: JSON.stringify({ receipt: { context }, signature: 'INVALID_OFFLINE_SIGNATURE' }) });
+    let clock = now, reads = 0;
+    await assert.rejects(() => waitForPreviewEmailAttestation({ protection: { ...protection, variables: pending },
+      operation: 'verify-authority', now: () => clock, privateEnrollment: 'OFFLINE_UNUSED', token: 'OFFLINE_UNUSED',
+      sleep: async () => { clock = now + 600000; }, readVariables: () => { reads++; return pending; } }), /handoff expired/);
+    assert.equal(reads, 0); assert.equal(clock, protection.oidcClaims.exp * 1000);
+    assert.throws(() => assertPreviewEmailBuildProtection({ ...protection, variables: pending, now }));
+  }
+  let oidcClock = now, oidcSleeps = 0, oidcReads = 0;
+  await assert.rejects(() => waitForPreviewEmailAttestation({ protection: { ...protection,
+    oidcClaims: { ...protection.oidcClaims, exp: (now + 15000) / 1000 } }, operation: 'verify-authority', now: () => oidcClock,
+    sleep: async ms => { oidcSleeps++; oidcClock += ms; }, readVariables: () => { oidcReads++; return variables; } }), /handoff expired/);
+  assert.equal(oidcClock, now + 15000); assert.equal(oidcSleeps, 2); assert.equal(oidcReads, 1);
+  for (const [name, value] of [['FCOS_PREVIEW_EMAIL_BUILD_ENABLED', 'true'], ['FCOS_RUNTIME_COMPATIBILITY_RELEASE_ENABLED', 'true'],
+    ['FCOS_PREVIEW_EMAIL_AUTHORITY_DIAGNOSTIC_ENABLED', 'false'], ['FCOS_PREVIEW_EMAIL_BUILD_REVIEWED_SHA', 'f'.repeat(40)],
+    ['FCOS_PREVIEW_EMAIL_BUILD_REVIEWED_HARNESS_SHA', 'f'.repeat(40)], ['FCOS_PREVIEW_EMAIL_BUILD_REVIEWED_CONTROL_SHA256', undefined],
+    [contractName, 'malformed']]) {
+    const changed = { variables: variables.variables.filter(row => row.name !== name) };
+    if (value !== undefined) changed.variables.push({ name, value });
+    let accesses = 0;
+    await assert.rejects(() => waitForPreviewEmailAttestation({ protection: { ...protection, variables: changed },
+      operation: 'verify-authority', now: () => now, readVariables: () => { accesses++; }, sleep: () => { accesses++; } }));
+    assert.equal(accesses, 0);
+  }
+  let accesses = 0;
+  await assert.rejects(() => waitForPreviewEmailAttestation({ protection, operation: 'verify-authority', now: () => now + 1800001,
+    readVariables: () => { accesses++; }, sleep: () => { accesses++; } }));
+  assert.equal(accesses, 0);
 });
 
 test('portable exact source uses immutable272 plus exactly3 frozen control blobs and rejects supplement tampering', () => {
