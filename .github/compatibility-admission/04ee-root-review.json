@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "kind": "fcos_exact_04ee_live_material_review",
+  "role": "root",
+  "reviewer": "/root",
+  "disposition": "accepted",
+  "contextSha256": "d90a243e387060a0d4449e603ffe5a55ffcc9b59ab1ad5f4af45e5944a7de8ad",
+  "candidateSha": "04ee3425aac7a49089eda781eb3c976aea1f6785",
+  "sourceDigest": "b4d9709f53e031e19920d1630c1730a2aa9f349fe8bb035de3c05b4627a8f52e",
+  "lockHash": "9b3d6eb4824ea8688022b9ba249041e25c44b8cebc5443d59c55d8a2da5da378",
+  "previewControlRevision": "dc7fafa4af7868a161b4fa57ba993bea8592f5098a0e0614c5a89d0f217855e3",
+  "configurationRevision": "8f8fa0e3aa79c4b00dc24c7dd6823fb06a6a8a62ebd7fae9481f0510946265a6",
+  "reviewedAt": "2026-10-11T03:05:06.277Z"
+}

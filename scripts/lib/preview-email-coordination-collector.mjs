@@ -49,6 +49,24 @@ async function all(reads, path, field) {
 }
 const variable = (rows, name) => { const matches = rows.variables.filter(row => row.name === name);
   if (matches.length !== 1 || typeof matches[0].value !== 'string') coordinationFailure(); return matches[0].value; };
+// Bind the full preserved collection: enrollment adds a pair to the existing
+// unrelated secrets; receipt/coordination publication never replaces them.
+export function previewCoordinationSecretMetadata(rows, now = Date.now()) {
+  const required = ['FCOS_RELEASE_GH_TOKEN', 'FCOS_RELEASE_VERCEL_TOKEN', 'FCOS_RELEASE_VERCEL_ENROLLMENT'];
+  const allowed = [...required, 'FCOS_E2E_VERCEL_BYPASS', 'FCOS_RELEASE_PREVIEW_RUNTIME_TOKEN', 'FCOS_RELEASE_RUNTIME_TOKEN'];
+  if (!Array.isArray(rows) || rows.length < required.length || rows.length > allowed.length) coordinationFailure();
+  const names = new Set();
+  for (const row of rows) {
+    if (!row || !allowed.includes(row.name) || names.has(row.name)) coordinationFailure();
+    names.add(row.name);
+    for (const value of [row.created_at, row.updated_at]) if (typeof value !== 'string'
+      || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{3})?Z$/.test(value) || !positive(Date.parse(value))
+      || new Date(Date.parse(value)).toISOString() !== (value.includes('.') ? value : value.replace('Z', '.000Z')) || Date.parse(value) > now) coordinationFailure();
+    if (Date.parse(row.created_at) > Date.parse(row.updated_at)) coordinationFailure();
+  }
+  if (required.some(name => !names.has(name))) coordinationFailure();
+  return rows.map(({ name, created_at, updated_at }) => ({ name, created_at, updated_at })).sort((a, b) => a.name.localeCompare(b.name));
+}
 function actualHostedIdentity() {
   const env = process.env, runId = Number(env.GITHUB_RUN_ID), workspace = resolve(env.GITHUB_WORKSPACE || '/');
   if (env.GITHUB_ACTIONS !== 'true' || env.GITHUB_REPOSITORY !== RELEASE_REPOSITORY || !positive(runId)
@@ -107,10 +125,7 @@ export async function collectLocalPreviewCoordinationEvidence(runId) {
     FCOS_RELEASE_VERCEL_TOKEN_ID: receipt?.enrollment?.tokenId, FCOS_PREVIEW_VERCEL_ENROLLMENT_ID: receipt?.enrollment?.enrollmentId };
   for (const [name, expected] of Object.entries(pins)) if (typeof expected !== 'string' || variable(variables, name) !== expected) coordinationFailure();
   const secrets = await all(reads, `${environmentPath}/secrets`, 'secrets');
-  const names = ['FCOS_RELEASE_GH_TOKEN', 'FCOS_RELEASE_VERCEL_TOKEN', 'FCOS_RELEASE_VERCEL_ENROLLMENT'];
-  if (secrets.secrets.length !== names.length || secrets.secrets.some(row => !names.includes(row.name))) coordinationFailure();
-  const secretMetadata = secrets.secrets.map(({ name, created_at, updated_at }) => ({ name, created_at, updated_at }))
-    .sort((a, b) => a.name.localeCompare(b.name));
+  const secretMetadata = previewCoordinationSecretMetadata(secrets.secrets);
   const binding = coordinationBindingFromOriginal({ ...actual, issuanceEnvelope, now: Date.now() });
   const backendProof = await collectCoordinationBackendProof(reads, actual.admission.harnessSha);
   const actionText = variable(variables, PREVIEW_COORDINATION_ACTION_VARIABLE);
