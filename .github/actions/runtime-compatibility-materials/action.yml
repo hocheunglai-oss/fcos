@@ -1,0 +1,5 @@
+name: FCOS immutable runtime compatibility materials
+description: Publish reviewed data with the native Actions artifact runtime
+runs:
+  using: node24
+  main: ../../../scripts/runtime-compatibility-materials.mjs

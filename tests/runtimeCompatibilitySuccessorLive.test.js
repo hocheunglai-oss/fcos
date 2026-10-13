@@ -650,14 +650,17 @@ test('caller control hashes and dirty actual harness bytes cannot substitute com
   await assert.rejects(() => collectSuccessorLiveAdmission({ reads: value.reads, binding: value.binding, sourceCwd: trustedCwd, trustedCwd, now }),
     { code: 'EXACT_SUCCESSOR_ACTUAL_CONTROL_BINDING_REQUIRED' });
   assert.equal(value.calls.length, 0);
-  const file = join(trustedCwd, 'scripts/lib/runtime-compatibility-successor-adapter.mjs'), original = readFileSync(file);
-  try {
-    writeFileSync(file, Buffer.concat([original, Buffer.from('\n// Unreviewed control change.\n')]));
-    assert.throws(() => successorLiveControlBinding({ trustedCwd, sourceCwd: trustedCwd }));
-    const changed = fixture();
-    await assert.rejects(() => collectSuccessorLiveAdmission({ reads: changed.reads, binding: changed.binding, sourceCwd: trustedCwd, trustedCwd, now }));
-    assert.equal(changed.calls.length, 0);
-  } finally { writeFileSync(file, original); }
+  for (const path of ['scripts/lib/runtime-compatibility-successor-adapter.mjs', '.github/actions/runtime-compatibility-materials/action.yml']) {
+    assert.ok(controls.controlFiles.trusted.some(([file]) => file === path));
+    const file = join(trustedCwd, path), original = readFileSync(file);
+    try {
+      writeFileSync(file, Buffer.concat([original, Buffer.from('\n')]));
+      assert.throws(() => successorLiveControlBinding({ trustedCwd, sourceCwd: trustedCwd }));
+      const changed = fixture();
+      await assert.rejects(() => collectSuccessorLiveAdmission({ reads: changed.reads, binding: changed.binding, sourceCwd: trustedCwd, trustedCwd, now }));
+      assert.equal(changed.calls.length, 0);
+    } finally { writeFileSync(file, original); }
+  }
 });
 
 test('replacement commits cannot substitute physical controls for raw pinned harness blobs', () => {

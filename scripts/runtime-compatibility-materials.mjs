@@ -15,7 +15,7 @@ import { RUNTIME_MATERIAL_FILENAME, runtimeMaterialArtifactName, runtimeMaterial
 
 const ROOT = realpathSync(fileURLToPath(new URL('..', import.meta.url)));
 const need = value => { if (!value) throw new Error('Runtime material publication unavailable; retain original evidence for read-only reconciliation.'); };
-const DIAGNOSTIC_PHASES = new Set(['entry', 'source', 'controls', 'oidc', 'producer_authentication', 'input_read',
+const DIAGNOSTIC_PHASES = new Set(['entry', 'artifact_runtime', 'source', 'controls', 'oidc', 'producer_authentication', 'input_read',
   'pack_validation', 'material_validation', 'artifact_absence', 'input_recheck', 'payload', 'publication_freshness',
   'attempt_marker', 'artifact_upload', 'artifact_reconciliation']);
 const DIAGNOSTIC_READS = new Set(['none', 'user', 'repository', 'protected_branch', 'branch_protection', 'workflow_run',
@@ -96,6 +96,11 @@ export async function produceRuntimeCompatibilityMaterials() {
       && (env.GITHUB_JOB !== 'proof' || ['create', 'readback'].includes(env.FCOS_RUNTIME_MATERIAL_OPERATION)));
     const sourceCwd = normal ? ROOT : realpathSync(env.FCOS_RELEASE_SOURCE_DIRECTORY || '/');
     need(normal || sourceCwd === join(workspace, 'candidate'));
+    // GitHub injects the artifact SDK runtime into JavaScript actions. A shell
+    // run step lacks it; reject that boundary before reads or a durable attempt.
+    phase('artifact_runtime');
+    need(typeof env.ACTIONS_RUNTIME_TOKEN === 'string' && env.ACTIONS_RUNTIME_TOKEN.length > 0
+      && typeof env.ACTIONS_RESULTS_URL === 'string' && env.ACTIONS_RESULTS_URL.length > 0);
     phase('source');
     assertSuccessorLiveSource(verifyRuntimeCompatibilitySuccessorSource({ cwd: sourceCwd, candidateCommit: SUCCESSOR_LIVE_CONTRACT.candidateSha }));
     phase('controls');

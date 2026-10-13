@@ -68,7 +68,7 @@ jobs:
       - run: npm install --global vercel@54.20.1
       - name: Persist immutable exact04ee runtime materials
         if: ${{ (inputs.operation == 'create' || inputs.operation == 'readback') && inputs.expected_commit == '04ee3425aac7a49089eda781eb3c976aea1f6785' && (vars.FCOS_RUNTIME_COMPATIBILITY_MATERIAL_TRANSPORT != '' || vars.FCOS_RUNTIME_COMPATIBILITY_MATERIALS != '') }}
-        run: node trusted/scripts/runtime-compatibility-materials.mjs
+        uses: ./trusted/.github/actions/runtime-compatibility-materials
         env:
           GH_TOKEN: ${{ secrets.FCOS_RELEASE_GH_TOKEN }}
           FCOS_E2E_EXPECTED_COMMIT: ${{ inputs.expected_commit }}
