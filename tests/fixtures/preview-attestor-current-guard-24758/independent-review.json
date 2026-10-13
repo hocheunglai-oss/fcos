@@ -1,0 +1,83 @@
+{
+  "schemaVersion": 1,
+  "kind": "exact_runtime_material_upload_cancellation_guard_review_v1",
+  "role": "independent",
+  "reviewerId": "/root/current_three_independent_review",
+  "accepted": true,
+  "reviewedAt": "2026-10-13T00:54:18.810Z",
+  "findings": [],
+  "helper": {
+    "path": "/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/schedule-consolidation-20261004/production-reconciliation-coordinator-20261005/public-runtime-material-upload-cancellation-v1/coordinator_guard.py",
+    "sha256": "24758c4191afae79fa4b149a166c450ac1cac20951a5f648f3cc3853969aa31d"
+  },
+  "acceptedPriorHelper": {
+    "path": "/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/schedule-consolidation-20261004/production-reconciliation-coordinator-20261005/private-preview-partial-cancellation-v1/coordinator_guard.py",
+    "sha256": "d8862df476afffe5c5f2df05f96026ca5336842bc1c73c8884bb2cc1c3f6a053"
+  },
+  "proposal": {
+    "path": "/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/schedule-consolidation-20261004/production-reconciliation-coordinator-20261005/public-runtime-material-upload-cancellation-v1/proposed-human-cancellation-scope.json",
+    "sha256": "b22fa379669712593d75482b724ffda32a03cc6b86de0b7e18a948806ff2dbf9"
+  },
+  "onlyAddedOutcome": "verified_human_cancelled_exact_runtime_material_upload_asof_unknown_submission",
+  "exactLeaseId": "1a917c48-e588-4c20-88ae-83fc0a162810",
+  "exactOperationId": "exact04ee-pr114-current-material-publication-and-one-preview-6dd230bc-dc3a-4928-bc82-de6f9b2e3d80",
+  "exactRunId": 38328488261,
+  "exactJobId": 115072605709,
+  "sourceCommit": "ad57645e25de3cfced711738ee0401f391da3394",
+  "checked": [
+    "Complete prior helper bytes are preserved after removing only the exact new validator/constants block and resolution branch; existing accepted cases are unchanged.",
+    "New outcome requires exact full original lease equality, six fixed hash-authenticated actual references, data-only plan and one-shot intent, seven observed public setup writes, terminal original run/job/source/attempt, one failed material step and all three downstream request/deployment steps skipped.",
+    "Primitive diagnostic must exactly identify artifact_upload with no provider read error classification. It is not treated as proof of no upload submission.",
+    "Fresh original-owner readback requires exact owner/repository/run/source/attempt/terminal status, zero artifacts and pending approvals as-of, retained uncertainty/no-replay flags and bounded nonfuture timestamp.",
+    "New direct-human cancellation record must identify exact operator, original lease/run/job/source, current helper byte hash and bounded nonfuture authorization time, explicitly authorize local cancellation and preserve unknown outcome while denying remote cancellation, upload, signing, Preview, Production and financial authority.",
+    "Nonfinite timestamp issue identified in initial helper405692e was repaired only within the new validator: exact int/float types plus math.isfinite precede comparisons for both observedAt and authorizedAt.",
+    "Global write lease resolver still authenticates current exact lease and resolution bytes, requires root material acceptance and actual action proof, and performs coordination-only resolution. This review does not exercise it."
+  ],
+  "verification": {
+    "actualFixedEvidenceHashesVerified": 6,
+    "priorGuardBytePreservationVerified": true,
+    "independentPureValidatorProbe": {
+      "validSyntheticDecodedRecordsAccepted": true,
+      "nonfiniteOrBooleanTimestampCasesRejected": 10,
+      "providerCalls": 0,
+      "filesystemWrites": 0,
+      "limitation": "Reference I/O was replaced with in-memory decoded actual fixed records and synthetic fresh/human records. This checks predicates and confers no real authority."
+    },
+    "rootReportedFocusedChecks": {
+      "testFile": "/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/schedule-consolidation-20261004/production-reconciliation-coordinator-20261005/public-runtime-material-upload-cancellation-v1/test_exact_cancellation.py",
+      "testSha256": "8b176da3a0c2e5f8d7e78ff7660fd5ee52c3ee0ea1dd1e4926f8893096e0e7e2",
+      "testsPassed": 12,
+      "elapsedSeconds": 0.011,
+      "independentlyInspectedSourceAndPin": true,
+      "independentlyRerun": false
+    }
+  },
+  "resolvedFindings": [
+    {
+      "initialHelperSha256": "405692e09e92d16f751a439fa4faac438a140d1d360778465ce9ada9063de3e2",
+      "issue": "Python JSON NaN could bypass both new freshness predicates.",
+      "status": "resolved_in_final_reviewed_helper"
+    }
+  ],
+  "limits": {
+    "humanAuthorityGranted": false,
+    "actualCancellationPerformed": false,
+    "providerAuthorityGranted": false,
+    "readinessGranted": false,
+    "newUploadGranted": false,
+    "signingGranted": false,
+    "previewExecutionGranted": false,
+    "productionGranted": false,
+    "financialAuthorityGranted": false,
+    "deadlineExtensionGranted": false,
+    "currentAcceptedHelperOrLeaseModifiedByReviewer": false,
+    "providerCalls": 0,
+    "credentialReads": 0,
+    "originalOutcome": "unknown",
+    "possibleLateEffect": true,
+    "absenceAsOfOnly": true,
+    "originalReplayForbidden": true
+  },
+  "requiredBeforeAnyActualCancellation": "Root must authenticate a genuinely new exact code-bound direct-human cancellation decision and fresh owner GET readback, plus final root acceptance. Synthetic tests, this code review, source diagnosis, and terminal zero-artifact observation do not grant cancellation authority."
+}
+

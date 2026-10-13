@@ -162,6 +162,7 @@ async function runnerScenario(root, temporaryDirectory, variant = 'legacy') {
     workflow_name: 'FCOS protected Preview email proof build', status: 'in_progress', conclusion: null,
     started_at: new Date(now - 1000).toISOString(), completed_at: null }];
   const workflow = { id: 123, path: run.path, name: 'FCOS protected Preview email proof build', state: 'active' };
+  run.workflow_id = workflow.id;
   if (variant === 'exact-refresh-run-deadline') run.run_started_at = jobs[0].started_at = new Date(now - 1520000).toISOString();
   const controls = { harnessSha, previewControlRevision: 'b'.repeat(64), configurationRevision: 'c'.repeat(64) };
   const admission = { ...controls, candidate, runId: run.id, runAttempt: 1, workflow: run.path,

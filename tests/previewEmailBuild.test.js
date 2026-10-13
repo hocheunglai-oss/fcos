@@ -171,8 +171,9 @@ async function trustedFixture() {
   const reviewer = { id: 4, login: 'hocheunglai-oss' };
   const run = { id: 99, repository, head_repository: repository, head_branch: 'main', head_sha: harnessSha,
     name: 'FCOS protected Preview email proof build', display_title: `Review FCOS Preview email source ${pin.sha}`,
-    path: '.github/workflows/preview-email-proof-build.yml', event: 'workflow_dispatch', run_attempt: 1,
+    path: '.github/workflows/preview-email-proof-build.yml', workflow_id: 123, event: 'workflow_dispatch', run_attempt: 1,
     status: 'completed', conclusion: 'success', updated_at: iso(now), run_started_at: iso(now - 2000), actor: reviewer, triggering_actor: reviewer };
+  const workflow = { id: 123, path: run.path, name: 'FCOS protected Preview email proof build', state: 'active' };
   const jobs = [{ id: 9, run_id: run.id, run_attempt: 1, name: 'proof',
     workflow_name: 'FCOS protected Preview email proof build', head_sha: harnessSha, head_branch: 'main',
     status: 'completed', conclusion: 'success', started_at: iso(now - 2000), completed_at: iso(now - 500) }];
@@ -199,6 +200,7 @@ async function trustedFixture() {
         const filename = path.split('/contents/')[1].split('?')[0];
         return { type: 'file', encoding: 'base64', content: readFileSync(filename).toString('base64') };
       }
+      if (path === `${prefix}/actions/workflows/preview-email-proof-build.yml`) return workflow;
       if (path.includes('/actions/workflows/')) return { total_count: 1, workflow_runs: [run] };
       if (path === `${prefix}/environments/fcos-runtime-compatibility-release`) return environment;
       if (path === `${prefix}/actions/runs/99/approvals`) return approvals;
@@ -212,7 +214,7 @@ async function trustedFixture() {
   const options = { reads, api: async () => value.raw, binding: { ...receipt.candidate, harnessSha,
     deploymentId: receipt.deployment.id, candidateUrl: receipt.deployment.url }, records: value.environment, now,
     unpack: buffer => JSON.parse(buffer.toString()), readVersion: async () => value.version };
-  return { options, run, jobs, repository, reviewer, artifact, approvals, environment, protection, archive };
+  return { options, run, jobs, workflow, repository, reviewer, artifact, approvals, environment, protection, archive };
 }
 
 async function liveProtectionFixture() {
@@ -225,7 +227,7 @@ async function liveProtectionFixture() {
     FCOS_PREVIEW_EMAIL_BUILD_REVIEWED_CONTRACT_SHA256: PREVIEW_EMAIL_CONTRACT_SHA256,
     FCOS_PREVIEW_EMAIL_BUILD_REVIEWED_CONTROL_SHA256: controlRevision, FCOS_RELEASE_VERCEL_TOKEN_ID: 'fixture-token-id' };
   value.protectionInputs = { repository: value.repository, branch: { name: 'main', protected: true, commit: { sha: harnessSha } },
-    protection: value.protection, environment: value.environment, run: value.run, jobs: value.jobs, approvals: value.approvals,
+    protection: value.protection, environment: value.environment, run: value.run, jobs: value.jobs, approvals: value.approvals, workflow: value.workflow,
     variables: { variables: Object.entries(pins).map(([name, value]) => ({ name, value })) },
     secrets: { secrets: ['FCOS_RELEASE_GH_TOKEN', 'FCOS_RELEASE_VERCEL_TOKEN'].map(name => ({ name })) },
     oidcClaims: { iss: 'https://token.actions.githubusercontent.com', aud: 'fcos-production-release',
@@ -236,6 +238,24 @@ async function liveProtectionFixture() {
       event_name: 'workflow_dispatch', exp: now / 1000 + 300 }, candidateSha: pin.sha, harnessSha, controlRevision, now };
   return value;
 }
+
+test('create protection and archive collectors accept exact GitHub dynamic names while pinning static definition identity', async () => {
+  const value = await liveProtectionFixture();
+  value.run.name = value.run.display_title; value.jobs[0].workflow_name = value.run.name;
+  assert.equal(assertPreviewEmailBuildProtection(value.protectionInputs).runId, 99);
+  for (const change of [v => { delete v.protectionInputs.workflow; }, v => { v.workflow.id++; },
+    v => { v.run.workflow_id++; }, v => { v.workflow.name = v.run.name; }, v => { v.workflow.path += '@main'; },
+    v => { v.workflow.state = 'disabled_manually'; }, v => { v.run.name += ' foreign'; },
+    v => { v.run.display_title = v.run.display_title.replace(pin.sha, 'c'.repeat(40)); },
+    v => { v.jobs[0].workflow_name = 'FCOS protected Preview email proof build'; }]) {
+    const changed = await liveProtectionFixture(); changed.run.name = changed.run.display_title; changed.jobs[0].workflow_name = changed.run.name;
+    change(changed); assert.throws(() => assertPreviewEmailBuildProtection(changed.protectionInputs));
+  }
+  const completed = await trustedFixture(); completed.run.name = completed.run.display_title; completed.jobs[0].workflow_name = completed.run.name;
+  assert.equal((await collectTrustedPreviewEmailBuild(completed.options)).trust.runId, 99);
+  completed.workflow.id++;
+  await assert.rejects(() => collectTrustedPreviewEmailBuild(completed.options));
+});
 
 test('approved live Preview freshness starts at its exact first proof job after a long approval wait', async () => {
   const value = await liveProtectionFixture();

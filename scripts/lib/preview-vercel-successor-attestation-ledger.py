@@ -17,8 +17,8 @@ import tempfile
 import time
 
 BASE = Path('/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/schedule-consolidation-20261004/production-reconciliation-coordinator-20261005')
-HELPER = BASE / 'public-preview-cancellation-v4/coordinator_guard.py'
-HELPER_SHA256 = '2bb8591f79b76b92f917ae7fcc1720d73757b613771812e9e220db015bdd1a18'
+HELPER = BASE / 'public-runtime-material-upload-cancellation-v1/coordinator_guard.py'
+HELPER_SHA256 = '24758c4191afae79fa4b149a166c450ac1cac20951a5f648f3cc3853969aa31d'
 WORKFLOW = BASE.parent / 'workflow-state.json'
 OWNER = '01a0f08b-7fcb-7870-9edc-343e16052b62'
 PURPOSE = 'existing-preview-vercel-run-authority-exact04ee-v1'
@@ -50,7 +50,9 @@ def load_guard(helper):
     raw = regular(helper)
     if digest(raw) != HELPER_SHA256:
         raise ValueError('canonical helper changed')
-    module = importlib.util.module_from_spec(importlib.util.spec_from_loader('fcos_exact_attestation_guard', loader=None))
+    spec = importlib.util.spec_from_file_location('fcos_exact_attestation_guard', str(helper))
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
     exec(compile(raw, str(helper), 'exec'), module.__dict__)
     return module
 
@@ -193,8 +195,9 @@ def canonical_guard(workflow, directory, helper):
             or current.get('localCoordinationGuardAccepted') is not True or current.get('independentReviewPending') is not False
             or current.get('providerAuthority') is not False):
         raise ValueError('current accepted canonical helper required')
-    for key, expected in [('rootAcceptance', 'e498d78f785362f36853be46a925416359c2f06e71422d61feaca89d194150b4'),
-                          ('independentRevisionReview', '03c5a3bb8dc7e98896e4493edef9992573cfd8663d38cc3e1001fd71c59372d9')]:
+    for key, expected in [('rootAcceptance', 'e490439a30f58e3bc3207ff48d7419d8424255f27c05e56304062e4783816093'),
+                          ('independentRevisionReview', 'f0c8fc487abdf35320b2960871f1f8eeae9c2680acaaeac71bccb52909b1c56b'),
+                          ('independentFinalScopeAddendum', 'd84442d57dea9bd42c309f5551441ced29b68132c644cf80dcee32dd500bc832')]:
         ref = current.get(key, {})
         if ref.get('sha256') != expected or digest(regular(ref['path'])) != expected:
             raise ValueError('canonical acceptance changed')

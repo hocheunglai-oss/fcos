@@ -13,13 +13,13 @@ import { fileURLToPath } from 'node:url';
 import { performance } from 'node:perf_hooks';
 import { githubReleaseReads, RELEASE_REPOSITORY } from './release-evidence.mjs';
 import { assertReleaseCoordinatorSource } from '../release-coordinator-local.mjs';
-import { collectPreviewEmailBuildJobs } from './preview-email-build.mjs';
+import { collectPreviewEmailBuildJobs, previewEmailBuildWorkflowIdentity } from './preview-email-build.mjs';
 import { githubProviderFresh } from './github-provider-timestamp.mjs';
 
 // This consumer selects only the existing issuance-receipt purpose/domain.
 // It contains no coordination signature, token issuance or provider adapter.
 export const SUCCESSOR_ATTEST_PURPOSE = 'existing-preview-vercel-run-authority-exact04ee-v1';
-export const SUCCESSOR_ATTEST_CANONICAL_HELPER_SHA256 = '2bb8591f79b76b92f917ae7fcc1720d73757b613771812e9e220db015bdd1a18';
+export const SUCCESSOR_ATTEST_CANONICAL_HELPER_SHA256 = '24758c4191afae79fa4b149a166c450ac1cac20951a5f648f3cc3853969aa31d';
 const policy = SUCCESSOR_LIVE_CONTRACT;
 const hash = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 const sha = value => typeof value === 'string' && /^[a-f0-9]{40}$/.test(value);
@@ -426,7 +426,7 @@ async function publicPreflight(reads, a) {
     || run.display_title !== (a.operation === 'verify-authority' ? successorVerificationRunTitle(a.candidateSha) : `Review FCOS Preview email source ${a.candidateSha}`)) fail();
   const approvals = await reads.json(`${BASE}/actions/runs/${a.runId}/approvals`);
   const jobs = await collectPreviewEmailBuildJobs({ reads, runId: a.runId });
-  const workflow = a.operation === 'verify-authority' ? await reads.json(`${BASE}/actions/workflows/preview-email-proof-build.yml`) : undefined;
+  const workflow = await reads.json(`${BASE}/actions/workflows/preview-email-proof-build.yml`);
   assertSuccessorAttestationProtectedReview(a, { user, environment, run, approvals, jobs, workflow });
   for (const status of ['queued', 'in_progress', 'waiting', 'pending', 'requested']) {
     const result = await reads.json(`${BASE}/actions/runs?status=${status}&per_page=100`);
@@ -446,11 +446,11 @@ export function assertSuccessorAttestationProtectedReview(a, { user, environment
   if (user?.login !== fcosConnectionIdentifier('github', 'Required account') || !positive(user.id)
     || environment?.name !== ENROLLMENT_FIXED_TARGET.environment || !positive(environment.id)
     || run?.id !== a.runId || (a.operation === 'verify-authority' ? !successorVerificationWorkflowIdentity({ run, job, workflow, candidateSha: a.candidateSha })
-      : run.name !== 'FCOS protected Preview email proof build')
+      : !previewEmailBuildWorkflowIdentity({ run, job, workflow, candidateSha: a.candidateSha }))
     || reviews.length !== 1 || reviews[0].state !== 'approved' || reviews[0].user?.login !== user.login || reviews[0].user?.id !== user.id
     || run.run_started_at !== a.dispatchedAt || !githubProviderFresh(run.run_started_at, 1800000, now)
     || job?.id !== a.jobId || job.run_id !== a.runId || job.run_attempt !== 1 || job.name !== 'proof'
-    || job.workflow_name !== (a.operation === 'verify-authority' ? run.name : 'FCOS protected Preview email proof build') || job.head_sha !== a.harnessSha || job.head_branch !== 'main'
+    || job.workflow_name !== run.name || job.head_sha !== a.harnessSha || job.head_branch !== 'main'
     || job.status !== 'in_progress' || job.conclusion !== null || job.completed_at !== null || job.started_at !== a.jobStartedAt
     || !githubProviderFresh(job.started_at, 1800000, now) || Date.parse(job.started_at) < Date.parse(run.run_started_at)) fail();
   return true;

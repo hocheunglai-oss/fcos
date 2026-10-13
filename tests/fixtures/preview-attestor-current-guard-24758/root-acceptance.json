@@ -1,0 +1,43 @@
+{
+  "kind": "exact_runtime_material_upload_cancellation_guard_review_v1",
+  "role": "root",
+  "reviewerId": "/root",
+  "accepted": true,
+  "reviewedAt": "2026-10-13T00:54:58.114344+00:00",
+  "helper": {
+    "path": "/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/schedule-consolidation-20261004/production-reconciliation-coordinator-20261005/public-runtime-material-upload-cancellation-v1/coordinator_guard.py",
+    "sha256": "24758c4191afae79fa4b149a166c450ac1cac20951a5f648f3cc3853969aa31d"
+  },
+  "acceptedPriorHelper": {
+    "path": "/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/schedule-consolidation-20261004/production-reconciliation-coordinator-20261005/private-preview-partial-cancellation-v1/coordinator_guard.py",
+    "sha256": "d8862df476afffe5c5f2df05f96026ca5336842bc1c73c8884bb2cc1c3f6a053"
+  },
+  "proposal": {
+    "path": "/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/schedule-consolidation-20261004/production-reconciliation-coordinator-20261005/public-runtime-material-upload-cancellation-v1/proposed-human-cancellation-scope.json",
+    "sha256": "213f409543da003273120b9b4fde3aa3e6f75f48efc8e477755d81886ec188d6"
+  },
+  "independentReview": {
+    "path": "/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/schedule-consolidation-20261004/production-reconciliation-coordinator-20261005/public-runtime-material-upload-cancellation-v1/independent-guard-review.json",
+    "sha256": "f0c8fc487abdf35320b2960871f1f8eeae9c2680acaaeac71bccb52909b1c56b"
+  },
+  "focusedTests": {
+    "path": "/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/schedule-consolidation-20261004/production-reconciliation-coordinator-20261005/public-runtime-material-upload-cancellation-v1/focused-guard-tests-final.json",
+    "sha256": "ed22734465e1badf34cdc4149deaf37a30223896243c915fb247b2d81b046a3a"
+  },
+  "onlyAddedOutcome": "verified_human_cancelled_exact_runtime_material_upload_asof_unknown_submission",
+  "exactLeaseId": "1a917c48-e588-4c20-88ae-83fc0a162810",
+  "priorGuardBytePreservationVerified": true,
+  "sourceReviewed": true,
+  "nonfiniteTimestampFindingRepaired": true,
+  "unknownUploadPreserved": true,
+  "humanAuthorityGranted": false,
+  "actualCancellationPerformed": false,
+  "providerAuthorityGranted": false,
+  "currentAcceptedHelperUnchanged": true,
+  "currentLeaseRetained": true,
+  "requiredBeforeActualCancellation": [
+    "new exact direct-human code-bound cancellation decision",
+    "fresh exact original-owner GET readback",
+    "actual root action acceptance"
+  ]
+}
