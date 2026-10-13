@@ -1,0 +1,33 @@
+{
+  "purpose": "Public actual create-run identity projection only; terminal failure remains historical and grants no authority.",
+  "sourceEvidenceSha256": {
+    "run.json": "f9c112dec7b099a4b41cf559a0c0131a142ab3c3c779f52477b30d6259dccc9b",
+    "jobs.json": "a676da7c8c43a60aa13c63cb4fad33775ce5a9620614f1629eb88e24abe0bd1a"
+  },
+  "run": {
+    "id": 38356714276,
+    "name": "Review FCOS Preview email source 04ee3425aac7a49089eda781eb3c976aea1f6785",
+    "display_title": "Review FCOS Preview email source 04ee3425aac7a49089eda781eb3c976aea1f6785",
+    "workflow_id": 372955040,
+    "path": ".github/workflows/preview-email-proof-build.yml",
+    "head_sha": "9d4e1d97c7addea8929d6c1be3a8bd80196ee94a",
+    "head_branch": "main",
+    "run_attempt": 1,
+    "run_started_at": "2026-10-13T06:26:34Z",
+    "status": "completed",
+    "conclusion": "failure"
+  },
+  "job": {
+    "id": 115161208776,
+    "run_id": 38356714276,
+    "run_attempt": 1,
+    "name": "proof",
+    "workflow_name": "Review FCOS Preview email source 04ee3425aac7a49089eda781eb3c976aea1f6785",
+    "head_sha": "9d4e1d97c7addea8929d6c1be3a8bd80196ee94a",
+    "head_branch": "main",
+    "started_at": "2026-10-13T06:30:46Z",
+    "status": "completed",
+    "conclusion": "failure",
+    "completed_at": "2026-10-13T06:31:47Z"
+  }
+}

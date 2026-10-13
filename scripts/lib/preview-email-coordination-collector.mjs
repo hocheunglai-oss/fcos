@@ -141,8 +141,9 @@ async function actualHostedContext() {
   const environment = await reads.json(environmentPath), variables = await all(reads, `${environmentPath}/variables`, 'variables');
   const secrets = await all(reads, `${environmentPath}/secrets`, 'secrets'), run = await reads.json(`${base}/actions/runs/${identity.runId}`);
   const approvals = await reads.json(`${base}/actions/runs/${identity.runId}/approvals`), jobs = await collectPreviewEmailBuildJobs({ reads, runId: identity.runId });
+  const workflow = await reads.json(`${base}/actions/workflows/preview-email-proof-build.yml`);
   const oidcClaims = await githubReleaseOidc({ env: process.env });
-  const approved = assertPreviewEmailBuildProtection({ repository, branch, protection, environment, variables, secrets, run, jobs, approvals,
+  const approved = assertPreviewEmailBuildProtection({ repository, branch, protection, environment, variables, secrets, run, jobs, approvals, workflow,
     oidcClaims, candidateSha: SUCCESSOR_LIVE_CONTRACT.candidateSha, harnessSha: admission.harnessSha,
     controlRevision: admission.context.previewControlRevision, admission, now: Date.now() });
   if (approved.runId !== identity.runId || (await reads.json(`${base}/git/ref/heads/${encodeURIComponent(admission.candidate.branch)}`)).object?.sha !== admission.candidate.sha) coordinationFailure();

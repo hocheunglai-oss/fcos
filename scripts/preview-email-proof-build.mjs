@@ -267,7 +267,7 @@ export async function runPreviewEmailProofBuild({ mode = 'dry-run', candidateSha
       let run = await stage('workflow_run', () => reads.json(`repos/${RELEASE_REPOSITORY}/actions/runs/${signed.run_id}`));
       let approvals = await stage('environment_approval', () => reads.json(`repos/${RELEASE_REPOSITORY}/actions/runs/${signed.run_id}/approvals`));
       let jobs = await stage('workflow_job', () => collectPreviewEmailBuildJobs({ reads, runId: Number(signed.run_id) }));
-      let workflow = verificationOnly ? await stage('workflow_identity', () => reads.json(`repos/${RELEASE_REPOSITORY}/actions/workflows/preview-email-proof-build.yml`)) : undefined;
+      let workflow = await stage('workflow_identity', () => reads.json(`repos/${RELEASE_REPOSITORY}/actions/workflows/preview-email-proof-build.yml`));
       if (successor && mode !== 'diagnose-authority') {
         variables = await stage('receipt_handoff', () => waitForPreviewEmailAttestation({
           protection: { repository, branch, protection, environment, variables, secrets, run, jobs, approvals, workflow, oidcClaims: signed,
@@ -284,7 +284,7 @@ export async function runPreviewEmailProofBuild({ mode = 'dry-run', candidateSha
         run = reads.json(`repos/${RELEASE_REPOSITORY}/actions/runs/${signed.run_id}`);
         approvals = reads.json(`repos/${RELEASE_REPOSITORY}/actions/runs/${signed.run_id}/approvals`);
         jobs = await collectPreviewEmailBuildJobs({ reads, runId: Number(signed.run_id) });
-        if (verificationOnly) workflow = reads.json(`repos/${RELEASE_REPOSITORY}/actions/workflows/preview-email-proof-build.yml`);
+        workflow = reads.json(`repos/${RELEASE_REPOSITORY}/actions/workflows/preview-email-proof-build.yml`);
         variables = await completeEnvironmentNames(reads, `repos/${RELEASE_REPOSITORY}/environments/${PREVIEW_EMAIL_BUILD_ENVIRONMENT}/variables`, 'variables');
       }
       approved = await stage('protection_review', () => {

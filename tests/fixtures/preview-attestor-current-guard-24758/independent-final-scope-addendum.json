@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "kind": "exact_runtime_material_upload_cancellation_guard_final_scope_addendum_v1",
+  "role": "independent",
+  "reviewerId": "/root/current_three_independent_review",
+  "accepted": true,
+  "reviewedAt": "2026-10-13T00:55:32.321Z",
+  "findings": [],
+  "originalReview": {
+    "path": "/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/schedule-consolidation-20261004/production-reconciliation-coordinator-20261005/public-runtime-material-upload-cancellation-v1/independent-guard-review.json",
+    "sha256": "f0c8fc487abdf35320b2960871f1f8eeae9c2680acaaeac71bccb52909b1c56b"
+  },
+  "finalHelperSha256": "24758c4191afae79fa4b149a166c450ac1cac20951a5f648f3cc3853969aa31d",
+  "finalScope": {
+    "path": "/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/schedule-consolidation-20261004/production-reconciliation-coordinator-20261005/public-runtime-material-upload-cancellation-v1/proposed-human-cancellation-scope.json",
+    "sha256": "213f409543da003273120b9b4fde3aa3e6f75f48efc8e477755d81886ec188d6"
+  },
+  "priorScopeSha256": "b22fa379669712593d75482b724ffda32a03cc6b86de0b7e18a948806ff2dbf9",
+  "checked": "Replacing only the first final helper hash occurrence in final scope with the initial405692e helper hash exactly reconstructs the prior b22fa379 scope bytes. Nested helper.sha256 and top-level helperSha256 now both identify reviewed final24758 helper. No code, action scope, evidence, flags or authority changes.",
+  "scopeCorrectionOnly": true,
+  "humanAuthorityGranted": false,
+  "actualCancellationPerformed": false,
+  "currentAcceptedHelperOrLeaseModifiedByReviewer": false,
+  "providerCalls": 0
+}
+

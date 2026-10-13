@@ -18,6 +18,7 @@ import { successorAttestationMain } from '../scripts/preview-vercel-successor-at
 import { PREVIEW_EMAIL_BUILD_CONTROL_FILES } from '../scripts/lib/preview-email-build-controls.mjs';
 import { previewCoordinationSecretMetadata } from '../scripts/lib/preview-email-coordination-collector.mjs';
 
+const actualCreate = JSON.parse(readFileSync(new URL('./fixtures/preview-create-actual-github.json', import.meta.url)));
 const actualVerification = JSON.parse(readFileSync(new URL('./fixtures/preview-verification-actual-github.json', import.meta.url)));
 const now = Date.parse('2026-10-09T02:00:00.000Z'), nonce = '11111111-1111-4111-8111-111111111111', scriptSha256 = 'e'.repeat(64);
 function approval() {
@@ -191,11 +192,34 @@ test('ephemeral or wrong signing keys cannot replace the pinned existing Ed25519
 });
 function protectedReview(a = approval()) {
   return { user: { login: a.authorizedBy, id: 10 }, environment: { id: 20, name: a.target.environment },
-    run: { id: a.runId, name: 'FCOS protected Preview email proof build', run_started_at: a.dispatchedAt },
+    run: { id: a.runId, name: 'FCOS protected Preview email proof build', display_title: `Review FCOS Preview email source ${a.candidateSha}`,
+      workflow_id: actualCreate.run.workflow_id, path: actualCreate.run.path, run_started_at: a.dispatchedAt },
+    workflow: { id: actualCreate.run.workflow_id, path: actualCreate.run.path, name: 'FCOS protected Preview email proof build', state: 'active' },
     approvals: [{ state: 'approved', user: { login: a.authorizedBy, id: 10 }, environments: [{ id: 20, name: a.target.environment }] }],
     jobs: [{ id: a.jobId, run_id: a.runId, run_attempt: 1, name: 'proof', workflow_name: 'FCOS protected Preview email proof build',
       head_sha: a.harnessSha, head_branch: 'main', status: 'in_progress', conclusion: null, completed_at: null, started_at: a.jobStartedAt }] };
 }
+test('actual create run-name form and historical static form require exact current workflow and same-form proof job', () => {
+  const a = approval(), reviewed = protectedReview(a);
+  // Only observed name/definition fields are reused; live timing/status are synthetic.
+  Object.assign(reviewed.run, { name: actualCreate.run.name, display_title: actualCreate.run.display_title });
+  reviewed.jobs[0].workflow_name = actualCreate.job.workflow_name;
+  assert.equal(actualCreate.run.status, 'completed');
+  assert.equal(actualCreate.run.conclusion, 'failure');
+  assert.equal(assertSuccessorAttestationProtectedReview(a, reviewed, now), true);
+  for (const change of [r => { r.run.name += ' foreign'; }, r => { r.run.display_title = r.run.display_title.replace(a.candidateSha, 'f'.repeat(40)); },
+    r => { r.run.path = '.github/workflows/production-release.yml'; }, r => { r.run.workflow_id++; },
+    r => { r.workflow.id++; }, r => { r.workflow.path += '@main'; }, r => { r.workflow.name = r.run.name; },
+    r => { r.workflow.state = 'disabled_manually'; }, r => { delete r.workflow; },
+    r => { r.jobs[0].workflow_name = 'FCOS protected Preview email proof build'; },
+    r => { r.jobs[0].run_attempt = 2; }, r => { r.jobs[0].run_id++; }, r => { r.jobs[0].head_sha = 'f'.repeat(40); }]) {
+    const changed = structuredClone(reviewed); change(changed);
+    assert.throws(() => assertSuccessorAttestationProtectedReview(a, changed, now));
+  }
+  assert.equal(assertSuccessorAttestationProtectedReview(a, protectedReview(a), now), true);
+  const mixed = protectedReview(a); mixed.jobs[0].workflow_name = reviewed.run.name;
+  assert.throws(() => assertSuccessorAttestationProtectedReview(a, mixed, now));
+});
 test('actual GitHub dynamic run-name fields bind exact verification title, current workflow and approved first job', () => {
   const a = { ...approval(), operation: 'verify-authority' }, reviewed = protectedReview(a);
   Object.assign(reviewed.run, actualVerification.run, { id: a.runId, run_started_at: a.dispatchedAt });

@@ -403,7 +403,7 @@ test('create and readback receipt handoffs retain initial signed expiry even whe
   const admission = await collectSuccessorLiveAdmission({ ...value, sourceCwd: trustedCwd, trustedCwd, now });
   const reviewer = protection.run.actor;
   Object.assign(value.run, { name: 'FCOS protected Preview email proof build', display_title: `Review FCOS Preview email source ${policy.candidateSha}`,
-    actor: reviewer, triggering_actor: reviewer });
+    actor: reviewer, triggering_actor: reviewer, workflow_id: protection.workflow.id });
   const pending = { variables: variables.variables.filter(row => row.name !== ENROLLED_AUTHORITY_RECEIPT).map(row => ({ ...row,
     value: row.name === 'FCOS_PREVIEW_EMAIL_BUILD_ENABLED' ? 'true'
       : row.name === 'FCOS_PREVIEW_EMAIL_BUILD_REVIEWED_CONTRACT_SHA256' ? admission.contractSha256 : row.value })) };
@@ -443,7 +443,8 @@ test('real GitHub seconds timestamps bind genuine original intent/job and cannot
     harnessSha, controlRevision: controls.previewControlRevision, runId: 99, operationId, records, admission, now });
   const reviewer = { id: 1, login: fcosConnectionIdentifier('github', 'Required account') };
   Object.assign(value.run, { name: 'FCOS protected Preview email proof build', display_title: `Review FCOS Preview email source ${policy.candidateSha}`,
-    actor: reviewer, triggering_actor: reviewer });
+    actor: reviewer, triggering_actor: reviewer, workflow_id: 123 });
+  const workflow = { id: 123, path: value.run.path, name: 'FCOS protected Preview email proof build', state: 'active' };
   const environment = { id: 5, name: 'fcos-runtime-compatibility-release', can_admins_bypass: false,
     deployment_branch_policy: { protected_branches: true, custom_branch_policies: false },
     protection_rules: [{ type: 'required_reviewers', prevent_self_review: false, reviewers: [{ type: 'User', reviewer }] }] };
@@ -460,6 +461,7 @@ test('real GitHub seconds timestamps bind genuine original intent/job and cannot
     workflow_run: { id: 99, head_sha: harnessSha }, digest: `sha256:${digest(archive)}` };
   const originalReads = value.reads.json;
   value.reads.json = endpoint => {
+    if (endpoint.endsWith('/actions/workflows/preview-email-proof-build.yml')) return workflow;
     if (endpoint.endsWith('/actions/runs/99/attempts/1/jobs?per_page=100&page=1')) return { total_count: 1, jobs: [job] };
     if (endpoint.endsWith('/environments/fcos-runtime-compatibility-release')) return environment;
     if (endpoint.endsWith('/actions/runs/99/approvals')) return [{ state: 'approved', user: reviewer, environments: [environment] }];

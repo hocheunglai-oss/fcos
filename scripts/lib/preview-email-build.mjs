@@ -40,6 +40,18 @@ const operator = fcosConnectionIdentifier('github', 'Required account');
 const uuid = '[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}';
 const operation = value => new RegExp(`^fcos-preview-email-[1-9][0-9]*-${uuid}$`).test(value || '');
 const failure = message => { throw new Error(message); };
+
+// GitHub may return the static definition name or the exact run-name in
+// run.name/job.workflow_name. Authenticate the active definition separately.
+export function previewEmailBuildWorkflowIdentity({ run, job, workflow, candidateSha } = {}) {
+  const name = 'FCOS protected Preview email proof build';
+  const title = `Review FCOS Preview email source ${candidateSha}`;
+  return sha(candidateSha) && positive(workflow?.id) && workflow.path === PREVIEW_EMAIL_BUILD_WORKFLOW
+    && workflow.name === name && workflow.state === 'active' && run?.workflow_id === workflow.id
+    && [PREVIEW_EMAIL_BUILD_WORKFLOW, `${PREVIEW_EMAIL_BUILD_WORKFLOW}@main`].includes(run.path)
+    && run.display_title === title && [name, title].includes(run.name)
+    && (!job || job.workflow_name === run.name);
+}
 const immutable = value => { try { return canonicalFcosE2eCandidateUrl(value) === value; } catch { return false; } };
 
 export function previewEmailBuildContract(candidateSha, { admission, now = Date.now() } = {}) {
@@ -248,7 +260,7 @@ function assertEnvironmentReview({ environment, run, jobs, approvals, trusted, c
     || ![PREVIEW_EMAIL_BUILD_WORKFLOW, `${PREVIEW_EMAIL_BUILD_WORKFLOW}@${trusted.branch}`].includes(run.path)
     || !positive(run.id) || !githubProviderTimestamp(run.run_started_at) || Date.parse(run.run_started_at) > now + 30000
     || (verificationOnly ? !successorVerificationWorkflowIdentity({ run, workflow, candidateSha })
-      : run.name !== 'FCOS protected Preview email proof build' || run.display_title !== `Review FCOS Preview email source ${candidateSha}`)
+      : !previewEmailBuildWorkflowIdentity({ run, workflow, candidateSha }))
     || run.actor?.login !== operator || run.triggering_actor?.login !== operator
     || run.actor?.id !== reviewer.reviewer.id || run.triggering_actor?.id !== reviewer.reviewer.id
     || (completed === 'intent' ? !['in_progress', 'completed'].includes(run.status)
@@ -261,7 +273,7 @@ function assertEnvironmentReview({ environment, run, jobs, approvals, trusted, c
   const job = Array.isArray(jobs) && jobs.length === 1 ? jobs[0] : null;
   const jobCompleted = job?.status === 'completed';
   if (!positive(job?.id) || job.run_id !== run.id || job.run_attempt !== 1 || job.name !== 'proof'
-    || job.workflow_name !== (verificationOnly ? run.name : 'FCOS protected Preview email proof build')
+    || job.workflow_name !== run.name
     || job.head_sha !== trusted.sha || job.head_branch !== trusted.branch || !githubProviderFresh(job.started_at, RELEASE_MAX_AGE_MS, now)
     || Date.parse(job.started_at) < Date.parse(run.run_started_at)
     || (completed === 'intent' ? !['in_progress', 'completed'].includes(job.status)
@@ -465,7 +477,9 @@ async function verifiedArchive({ reads, source, run, candidateSha, filename, nam
   const jobs = await collectPreviewEmailBuildJobs({ reads, runId: run.id });
   assertEnvironmentReview({ environment: await reads.json(`repos/${RELEASE_REPOSITORY}/environments/${PREVIEW_EMAIL_BUILD_ENVIRONMENT}`),
     run, jobs,
-    approvals: await reads.json(`repos/${RELEASE_REPOSITORY}/actions/runs/${run.id}/approvals`), trusted: source.trusted, candidateSha, completed, now });
+    approvals: await reads.json(`repos/${RELEASE_REPOSITORY}/actions/runs/${run.id}/approvals`),
+    workflow: await reads.json(`repos/${RELEASE_REPOSITORY}/actions/workflows/preview-email-proof-build.yml`),
+    trusted: source.trusted, candidateSha, completed, now });
   const artifacts = await paginatedGithub(reads, `repos/${RELEASE_REPOSITORY}/actions/runs/${run.id}/artifacts`, 'artifacts');
   const matches = artifacts.filter(row => row.name === name && row.expired === false);
   const artifact = matches.length === 1 ? matches[0] : null;

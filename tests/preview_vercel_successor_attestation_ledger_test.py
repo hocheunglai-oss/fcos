@@ -19,15 +19,17 @@ class ExistingAttestationConsumptionTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix='fcos-existing-attestation-ledger-')
         self.directory = Path(self.temp.name).resolve()
         self.workflow = self.directory / 'workflow-state.json'
-        fixtures = ROOT / 'tests/fixtures/preview-email-coordination-ledger'
+        fixtures = ROOT / 'tests/fixtures/preview-attestor-current-guard-24758'
         self.helper = fixtures / 'coordinator_guard.py'
         self.guard = ledger.load_guard(self.helper)
         helper = {'path': str(self.helper), 'sha256': ledger.HELPER_SHA256,
             'localCoordinationGuardAccepted': True, 'independentReviewPending': False, 'providerAuthority': False,
             'rootAcceptance': {'path': str(fixtures / 'root-acceptance.json'),
-                'sha256': 'e498d78f785362f36853be46a925416359c2f06e71422d61feaca89d194150b4'},
+                'sha256': 'e490439a30f58e3bc3207ff48d7419d8424255f27c05e56304062e4783816093'},
             'independentRevisionReview': {'path': str(fixtures / 'independent-review.json'),
-                'sha256': '03c5a3bb8dc7e98896e4493edef9992573cfd8663d38cc3e1001fd71c59372d9'}}
+                'sha256': 'f0c8fc487abdf35320b2960871f1f8eeae9c2680acaaeac71bccb52909b1c56b'},
+            'independentFinalScopeAddendum': {'path': str(fixtures / 'independent-final-scope-addendum.json'),
+                'sha256': 'd84442d57dea9bd42c309f5551441ced29b68132c644cf80dcee32dd500bc832'}}
         self.state = {'unifiedCoordinator': {'status': 'active', 'epoch': 'production-reconciliation-20261005',
             'writeLeasePath': str(self.directory / 'live-provider-write-lease.json'), 'writeLeaseHelper': helper,
             'objectives': {'production': {'ownerThreadId': ledger.OWNER, 'retired': False, 'status': 'active'}}}}
@@ -130,6 +132,23 @@ class ExistingAttestationConsumptionTests(unittest.TestCase):
             results = list(pool.map(lambda _: attempt(), range(2)))
         self.assertEqual(sum(result is not None for result in results), 1)
         self.assertEqual(len(list((self.directory / ledger.LEDGER_NAME).glob('*.json'))), 1)
+
+    def test_exact_current_review_pins_and_addendum_are_required_before_claim(self):
+        current = self.state['unifiedCoordinator']['writeLeaseHelper']
+        for key in ['rootAcceptance', 'independentRevisionReview', 'independentFinalScopeAddendum']:
+            original = current[key]
+            for changed in [None, {**original, 'sha256': '0' * 64}]:
+                if changed is None:
+                    del current[key]
+                else:
+                    current[key] = changed
+                self.save()
+                with self.assertRaises(ValueError):
+                    self.consume()
+                self.assertFalse((self.directory / 'live-provider-write-lease.json').exists())
+                self.assertFalse(ledger.ledger_path(self.directory, NONCE).exists())
+                current[key] = original
+        self.save()
 
     def test_wrong_helper_review_epoch_and_foreign_paths_fail_before_claim(self):
         for key, value in [('epoch', 'retired'), ('writeLeasePath', 'foreign')]:

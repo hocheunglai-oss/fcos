@@ -1,0 +1,1 @@
+Exact public current canonical guard and accepted review bytes, copied for inert temporary ledger tests. SHA256 pins are checked by the native ledger. These fixtures grant no provider or signing authority. Historical preview-email-coordination-ledger fixture remains unchanged.
