@@ -13,6 +13,7 @@ export const PREVIEW_EMAIL_BUILD_CONTROL_FILES = Object.freeze([
   'scripts/candidate-quality-receipt.mjs', 'scripts/lib/candidate-quality.mjs',
   'scripts/lib/preview-email-build-controls.mjs', 'scripts/lib/runtime-compatibility-successor-live.mjs',
   'scripts/lib/runtime-compatibility-successor-adapter.mjs', 'config/runtime-compatibility-successor-live.json',
+  '.github/actions/runtime-compatibility-materials/action.yml',
   'scripts/runtime-compatibility-materials.mjs', 'scripts/lib/runtime-compatibility-material-transport.mjs',
   'scripts/preview-vercel-successor-attest.mjs', 'scripts/lib/preview-vercel-successor-attestation.mjs',
   'scripts/lib/preview-vercel-successor-attestation-ledger.py',

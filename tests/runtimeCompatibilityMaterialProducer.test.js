@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { generateKeyPairSync, sign } from 'node:crypto';
-import { join, basename } from 'node:path';
+import { join, basename, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import * as vm from 'node:vm';
@@ -31,7 +31,7 @@ if (typeof vm.SourceTextModule !== 'function') {
     t.diagnostic(result.stdout || 'No inner TAP emitted.');
     if (result.stderr) t.diagnostic(result.stderr);
     assert.ifError(result.error); assert.equal(result.signal, null); assert.equal(result.status, 0);
-    for (const line of ['# tests 15', '# pass 15', '# fail 0', '# skipped 0', '# todo 0']) assert.ok(result.stdout.split(/\r?\n/).includes(line), `Missing inner result: ${line}`);
+    for (const line of ['# tests 23', '# pass 23', '# fail 0', '# skipped 0', '# todo 0']) assert.ok(result.stdout.split(/\r?\n/).includes(line), `Missing inner result: ${line}`);
   });
 } else {
   const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
@@ -42,7 +42,7 @@ if (typeof vm.SourceTextModule !== 'function') {
   // validation. Those two dependencies are explicitly synthetic and confer no
   // authority. Collection, OIDC signature verification, pack parsing, payload,
   // original-clock validation and artifact reconciliation use actual helpers.
-  async function harness({ fault, workflow = 'preview-email-proof-build.yml', runner } = {}) {
+  async function harness({ fault, workflow = 'preview-email-proof-build.yml', runner, nativeEntry = false } = {}) {
     const temporary = fs.realpathSync(fs.mkdtempSync(join(tmpdir(), 'fcos-material-producer-test-')));
     const workspace = join(temporary, 'workspace'), normal = workflow === 'runtime-compatibility-normal-role.yml';
     const trusted = normal ? workspace : join(workspace, 'trusted'), candidate = normal ? trusted : join(workspace, 'candidate');
@@ -50,6 +50,13 @@ if (typeof vm.SourceTextModule !== 'function') {
     for (const directory of [join(trusted, 'scripts'), candidate, ownRunner]) fs.mkdirSync(directory, { recursive: true });
     const filename = join(trusted, 'scripts/runtime-compatibility-materials.mjs');
     fs.writeFileSync(filename, fs.readFileSync(producerPath));
+    const actionDirectory = join(trusted, '.github/actions/runtime-compatibility-materials');
+    fs.mkdirSync(actionDirectory, { recursive: true });
+    const descriptor = fs.readFileSync(join(sourceRoot, '.github/actions/runtime-compatibility-materials/action.yml'), 'utf8');
+    fs.writeFileSync(join(actionDirectory, 'action.yml'), descriptor);
+    assert.match(descriptor, /\n  using: node24\n/);
+    const actionMain = resolve(actionDirectory, /^  main: (.+)$/m.exec(descriptor)[1]);
+    assert.equal(actionMain, filename);
     const now = Date.now(), iso = delta => new Date(now + delta).toISOString();
     const rows = { context: record({ synthetic: true, provisionedAt: iso(-60000), retainedId: 'FIXTURE_ONLY' }),
       root: record({ synthetic: true, role: 'root', reviewedAt: iso(-30000) }),
@@ -64,10 +71,19 @@ if (typeof vm.SourceTextModule !== 'function') {
       GITHUB_JOB: normal ? 'compatibility-normal-role' : workflow === 'runtime-compatibility-release.yml' ? 'preflight' : 'proof',
       FCOS_E2E_EXPECTED_COMMIT: expected.sha, GH_TOKEN: secret, HOME: temporary, GITHUB_WORKSPACE: workspace,
       FCOS_RELEASE_SOURCE_DIRECTORY: candidate, FCOS_RUNTIME_MATERIAL_OPERATION: 'create', RUNNER_TEMP: ownRunner,
+      ACTIONS_RUNTIME_TOKEN: secret, ACTIONS_RESULTS_URL: `https://synthetic.results.invalid/private/${secret}`,
       ACTIONS_ID_TOKEN_REQUEST_URL: `https://synthetic.actions.githubusercontent.com/token?private=${secret}`,
-      ACTIONS_ID_TOKEN_REQUEST_TOKEN: secret }, argv: [], execArgv: [], exitCode: 0,
+      ACTIONS_ID_TOKEN_REQUEST_TOKEN: secret }, argv: nativeEntry ? ['/synthetic/node24/bin/node', actionMain] : [], execArgv: [], exitCode: 0,
       stdout: { write: bytes => { state.stdout.push(String(bytes)); return true; } },
       stderr: { write: bytes => { state.stderr.push(String(bytes)); return true; } } };
+    if (fault === 'missing_runtime_token') delete processMock.env.ACTIONS_RUNTIME_TOKEN;
+    if (fault === 'empty_runtime_token') processMock.env.ACTIONS_RUNTIME_TOKEN = '';
+    if (fault === 'missing_results_url') delete processMock.env.ACTIONS_RESULTS_URL;
+    if (fault === 'empty_results_url') processMock.env.ACTIONS_RESULTS_URL = '';
+    if (fault === 'native_extra_argument') processMock.argv.push('--unreviewed');
+    if (fault === 'native_exec_argument') processMock.execArgv.push('--inspect');
+    if (fault === 'native_wrong_source_path') processMock.env.FCOS_RELEASE_SOURCE_DIRECTORY = trusted;
+    if (fault === 'native_wrong_workspace') processMock.env.GITHUB_WORKSPACE = temporary;
     const stdout = processMock.stdout.write, stderr = processMock.stderr.write;
     const consoleMock = { log: (...args) => processMock.stdout.write(`${args.map(String).join(' ')}\n`),
       error: (...args) => processMock.stderr.write(`${args.map(String).join(' ')}\n`) };
@@ -164,7 +180,7 @@ if (typeof vm.SourceTextModule !== 'function') {
       return cache.get(specifier);
     });
     await module.evaluate();
-    return { state, namespace: module.namespace, runner: ownRunner,
+    return { state, namespace: module.namespace, runner: ownRunner, nativeProcess: processMock,
       run: () => module.namespace.produceRuntimeCompatibilityMaterials(),
       restored: () => { assert.equal(processMock.stdout.write, stdout); assert.equal(processMock.stderr.write, stderr);
         for (const directory of state.directories) assert.equal(fs.existsSync(directory), false, 'Transient upload file was not removed.'); },
@@ -205,7 +221,35 @@ if (typeof vm.SourceTextModule !== 'function') {
         assert.equal(h.state.calls.filter(endpoint => endpoint.endsWith('/zip')).length, 1);
       } finally { h.cleanup(); }
     });
+    test(`native node24 action entry ${workflow} resolves the original producer ROOT and exact argv`, async () => {
+      const h = await harness({ workflow, nativeEntry: true });
+      try {
+        h.restored(); assert.equal(h.nativeProcess.exitCode, 0); assert.equal(h.nativeProcess.argv.length, 2); assert.deepEqual(h.nativeProcess.execArgv, []);
+        assert.equal(h.state.uploads.length, 1); assert.equal(h.state.materialChecks.length, 2); assert.equal(h.state.stderr.join(''), '');
+        const result = JSON.parse(h.state.stdout.join('')); assert.equal(result.kind, 'fcos_exact04ee_runtime_material_publication'); assert.equal(result.grantsAuthority, false);
+        assert.equal(h.state.stdout.join('').includes(secret), false); assert.equal(fs.readFileSync(h.state.marker, 'utf8'), markerText);
+      } finally { h.cleanup(); }
+    });
   }
+
+  for (const fault of ['missing_runtime_token', 'empty_runtime_token', 'missing_results_url', 'empty_results_url']) {
+    test(`actual producer ${fault} stops before provider reads, marker or SDK upload without disclosing runtime values`, async () => {
+      const h = await harness({ fault });
+      try { await fails(h); assert.equal(h.state.uploads.length, 0); assert.equal(h.state.calls.length, 0); assert.equal(h.state.fetches.length, 0);
+        assert.equal(h.state.materialChecks.length, 0); assert.equal(h.state.directories.length, 0); assert.equal(fs.existsSync(h.state.marker), false);
+        diagnostic(h, { phase: 'artifact_runtime', readClass: 'none', httpStatus: null, cliExitCode: null });
+      } finally { h.cleanup(); }
+    });
+  }
+
+  test('native action entry refuses extra argv, execution flags and incorrect checkout roots before reads or upload', async () => {
+    for (const fault of ['native_extra_argument', 'native_exec_argument', 'native_wrong_source_path', 'native_wrong_workspace']) {
+      const h = await harness({ fault, nativeEntry: true });
+      try { h.restored(); assert.equal(h.nativeProcess.exitCode, 1); assert.equal(h.state.uploads.length, 0); assert.equal(h.state.calls.length, 0);
+        assert.equal(h.state.fetches.length, 0); assert.equal(fs.existsSync(h.state.marker), false); assert.equal(h.state.stderr.join('').includes(secret), false);
+      } finally { h.cleanup(); }
+    }
+  });
 
   for (const [fault, readClass, httpStatus] of [['oidc_token', 'oidc_token', 403], ['oidc_keys', 'oidc_keys', 503]]) {
     test(`actual producer ${fault} denial emits only bounded status and performs no upload or material reads`, async () => {

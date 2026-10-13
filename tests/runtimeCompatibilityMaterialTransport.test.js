@@ -4,11 +4,15 @@ import { readFileSync, mkdtempSync, writeFileSync, lstatSync, rmSync } from 'nod
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { performance } from 'node:perf_hooks';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { assertRuntimeMaterialProducer, collectRuntimeSuccessorMaterials, parseRuntimeMaterialPack, runtimeMaterialPayload,
   runtimeMaterialHash, decodeRuntimeMaterialArchive, assertRuntimeMaterialPublicationFresh, reconcileRuntimeMaterialPublication, RUNTIME_MATERIAL_INPUT,
   RUNTIME_MATERIAL_FILENAME } from '../scripts/lib/runtime-compatibility-material-transport.mjs';
 import { materialTransportFixture, materialZip } from './helpers/runtimeMaterialTransport.mjs';
 import { createZipUploadStream } from '../node_modules/@actions/artifact/lib/internal/upload/zip.js';
+import { PREVIEW_EMAIL_BUILD_CONTROL_FILES } from '../scripts/lib/preview-email-build-controls.mjs';
+import { SUCCESSOR_LIVE_HARNESS_FILES } from '../scripts/lib/runtime-compatibility-successor-live.mjs';
 
 const now = Date.parse('2026-10-11T09:00:00.000Z'), expected = { harnessSha: 'a'.repeat(40), sha: 'b'.repeat(40), sourceDigest: 'c'.repeat(64),
   lockHash: 'd'.repeat(64), candidateTreeHash: 'e'.repeat(64), previewControlRevision: 'f'.repeat(64), configurationRevision: '1'.repeat(64), runId: 99 };
@@ -103,6 +107,48 @@ test('locked official SDK archive codec is accepted without invoking any upload 
       const chunks = []; for await (const chunk of stream) chunks.push(chunk);
       assert.deepEqual(decodeRuntimeMaterialArchive(Buffer.concat(chunks)), payload);
     }
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('installed artifact SDK rejects absent native runtime variables before any network attempt', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'fcos-material-sdk-runtime-'));
+  const script = `
+    import net from 'node:net';
+    import tls from 'node:tls';
+    import http from 'node:http';
+    import https from 'node:https';
+    import { syncBuiltinESMExports } from 'node:module';
+    let networkCalls = 0;
+    const blocked = () => { networkCalls++; throw new Error('Synthetic network transport forbidden'); };
+    net.Socket.prototype.connect = blocked; tls.connect = blocked;
+    http.request = blocked; http.get = blocked; https.request = blocked; https.get = blocked;
+    globalThis.fetch = blocked; syncBuiltinESMExports();
+    const stdout = process.stdout.write, stderr = process.stderr.write;
+    process.stdout.write = process.stderr.write = () => true;
+    const results = [];
+    try {
+      const { DefaultArtifactClient } = await import('@actions/artifact');
+      const token = ['e30', Buffer.from(JSON.stringify({ scp: 'Actions.Results:synthetic-run:synthetic-job' })).toString('base64url'), 'synthetic-signature'].join('.');
+      for (const missing of ['ACTIONS_RUNTIME_TOKEN', 'ACTIONS_RESULTS_URL']) {
+        delete process.env.ACTIONS_RUNTIME_TOKEN; delete process.env.ACTIONS_RESULTS_URL;
+        if (missing === 'ACTIONS_RESULTS_URL') process.env.ACTIONS_RUNTIME_TOKEN = token;
+        let rejectedForMissingRuntime = false;
+        try { await new DefaultArtifactClient().uploadArtifact('synthetic-runtime-check', [${JSON.stringify(join(directory, RUNTIME_MATERIAL_FILENAME))}], ${JSON.stringify(directory)}, { retentionDays: 7, compressionLevel: 0 }); }
+        catch (error) { rejectedForMissingRuntime = error?.message === 'Unable to get the ' + missing + ' env variable'; }
+        results.push({ missing, rejectedForMissingRuntime, networkCalls });
+      }
+    } finally { process.stdout.write = stdout; process.stderr.write = stderr; }
+    process.stdout.write(JSON.stringify(results));
+  `;
+  try {
+    writeFileSync(join(directory, RUNTIME_MATERIAL_FILENAME), '{}', { mode: 0o600 });
+    const child = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+      cwd: fileURLToPath(new URL('..', import.meta.url)), encoding: 'utf8', timeout: 15000,
+      env: { PATH: process.env.PATH, HOME: directory, GITHUB_SERVER_URL: 'https://github.com' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    assert.ifError(child.error); assert.equal(child.signal, null); assert.equal(child.status, 0); assert.equal(child.stderr, '');
+    assert.deepEqual(JSON.parse(child.stdout), ['ACTIONS_RUNTIME_TOKEN', 'ACTIONS_RESULTS_URL'].map(missing => ({ missing, rejectedForMissingRuntime: true, networkCalls: 0 })));
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
@@ -205,10 +251,18 @@ test('same invocation caches only authenticated immutable archive; mutable revie
 });
 
 test('workflow producer remains data-only and verify-authority does not invoke runtime publication', () => {
+  const action = '.github/actions/runtime-compatibility-materials/action.yml';
+  assert.equal(PREVIEW_EMAIL_BUILD_CONTROL_FILES.filter(path => path === action).length, 1);
+  assert.equal(SUCCESSOR_LIVE_HARNESS_FILES.filter(path => path === action).length, 1);
   const source = readFileSync(new URL('../scripts/runtime-compatibility-materials.mjs', import.meta.url), 'utf8');
   assert.doesNotMatch(source, /process\.env\.(?:FCOS_RELEASE_VERCEL_TOKEN|FCOS_RELEASE_VERCEL_ENROLLMENT)|collectSuccessorLive(?:Operation)?Admission|successorLiveSelection|privateKey|issueGrant/);
   for (const name of workflows) { const workflow = readFileSync(new URL(`../${name}`, import.meta.url), 'utf8');
     assert.equal(workflow.split('name: Persist immutable exact04ee runtime materials').length - 1, 1);
+    const materialStep = workflow.split('      - name: Persist immutable exact04ee runtime materials\n')[1].split('\n      - ')[0];
+    const prefix = name.endsWith('runtime-compatibility-normal-role.yml') ? './' : './trusted/';
+    assert.match(materialStep, new RegExp('^        uses: ' + prefix.replaceAll('.', '\\.') + '\\.github/actions/runtime-compatibility-materials$', 'm'));
+    assert.doesNotMatch(materialStep, /^        (?:run|with|working-directory):/m);
+    assert.match(materialStep, /GH_TOKEN: \$\{\{ secrets.FCOS_RELEASE_GH_TOKEN \}\}/);
     assert.match(workflow, /id-token: write/); assert.match(workflow, /GH_TOKEN: \$\{\{ secrets.FCOS_RELEASE_GH_TOKEN \}\}/);
     if (name.endsWith('preview-email-proof-build.yml')) assert.match(workflow, /inputs\.operation == 'create' \|\| inputs\.operation == 'readback'[^\n]*FCOS_RUNTIME_COMPATIBILITY_MATERIAL_TRANSPORT/);
   }
