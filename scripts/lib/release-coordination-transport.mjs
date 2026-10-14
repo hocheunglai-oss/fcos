@@ -1,3 +1,4 @@
+import { isDurableSuccessorSetup, durableSuccessorSetupDeadline, DURABLE_SETUP_CONTRACT_SHA256 } from './runtime-compatibility-setup.mjs';
 import { writeFileSync, mkdtempSync, rmSync, realpathSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -97,14 +98,16 @@ export async function collectHostedReleaseCoordination({ route, readiness, admis
   assertReleaseReceiptBinding(readiness, readiness?.candidate);
   const actual = collectReleaseCoordinationPublic(reads, runId, route), jobs = releaseCoordinationRows(actual.jobs, 'jobs'); need(jobs.length === 1);
   const successor = readiness.candidate.sha === SUCCESSOR_LIVE_CONTRACT.candidateSha;
-  if (successor) successorLiveBinding(admission, { sha: readiness.candidate.sha, harnessSha: actual.branch.commit.sha,
-    configurationRevision: readiness.candidate.configurationRevision, sourceDigest: readiness.candidate.sourceDigest, lockHash: readiness.candidate.lockHash });
+  const selected = successor ? successorLiveBinding(admission, { sha: readiness.candidate.sha, harnessSha: actual.branch.commit.sha,
+    configurationRevision: readiness.candidate.configurationRevision, sourceDigest: readiness.candidate.sourceDigest, lockHash: readiness.candidate.lockHash }) : undefined;
+  const durable = isDurableSuccessorSetup(selected?.context);
   const backendProof = successor ? await collectCoordinationBackendProof(reads, actual.branch.commit.sha) : undefined;
-  const binding = validateReleaseCoordinationBinding({ schemaVersion: successor ? 2 : 1, route, repositoryId: actual.repository.id, environmentId: actual.environment.id,
+  const binding = validateReleaseCoordinationBinding({ schemaVersion: durable ? 3 : successor ? 2 : 1, route, repositoryId: actual.repository.id, environmentId: actual.environment.id,
     runId, runAttempt: 1, jobId: jobs[0].id, harnessSha: actual.branch.commit.sha, operationId: `fcos-release-${runId}`,
     dispatchedAt: Date.parse(actual.run.run_started_at), jobStartedAt: Date.parse(jobs[0].started_at), intentAt: Date.now(), readinessAt: Date.parse(readiness.capturedAt),
     evidenceExpiresAt: releaseCoordinationEvidenceDeadline(readiness), candidate: readiness.candidate, previousProduction: readiness.previousProduction, readinessSha256: coordinationDigest(readiness),
-    ...(successor ? { backendReviewSha256: backendProof.reviewSha256, backendClosureSha256: backendProof.closureSha256 } : {}) });
+    ...(successor ? { backendReviewSha256: backendProof.reviewSha256, backendClosureSha256: backendProof.closureSha256 } : {}),
+    ...(durable ? { setupContractSha256: DURABLE_SETUP_CONTRACT_SHA256, setupExpiresAt: durableSuccessorSetupDeadline(selected.context) } : {}) });
   const context = { binding, reads, admission, backendProof }; await recheck(context, readiness);
   const intent = await upload(reads, binding, 'intent', { kind: 'fcos_production_coordination_intent', binding });
   context.intent = intent;
@@ -138,10 +141,14 @@ export function releaseCoordinationVerified(capability, readiness) {
 export function successorReleaseCoordinationVerified(capability, readiness, admission) {
   const c = capabilities.get(capability);
   try {
-    return releaseCoordinationVerified(capability, readiness) && c.binding.schemaVersion === 2
+    if (!releaseCoordinationVerified(capability, readiness)) return false;
+    const selected = successorLiveBinding(admission, { sha: c.binding.candidate.sha, harnessSha: c.binding.harnessSha });
+    const durable = isDurableSuccessorSetup(selected.context);
+    return c.binding.schemaVersion === (durable ? 3 : 2)
+      && (!durable || c.binding.setupContractSha256 === DURABLE_SETUP_CONTRACT_SHA256
+        && c.binding.setupExpiresAt === durableSuccessorSetupDeadline(selected.context))
       && c.binding.route === 'compatibility' && c.admission === admission && c.backendProof?.observed === true
-      && c.backendProof.reviewSha256 === c.binding.backendReviewSha256 && c.backendProof.closureSha256 === c.binding.backendClosureSha256
-      && !!successorLiveBinding(admission, { sha: c.binding.candidate.sha, harnessSha: c.binding.harnessSha });
+      && c.backendProof.reviewSha256 === c.binding.backendReviewSha256 && c.backendProof.closureSha256 === c.binding.backendClosureSha256;
   } catch { return false; }
 }
 export async function consumeReleaseCoordination(capability, readiness, phase) {

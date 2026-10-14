@@ -8,10 +8,11 @@ import { assertProtectedDefault, RELEASE_REPOSITORY, readEvidenceArchive } from 
 import { RELEASE_MAX_AGE_MS } from './release-readiness.mjs';
 import { canonicalFcosE2eCandidateUrl } from '../verify-e2e-candidate.mjs';
 import { PREVIEW_EMAIL_BUILD_CONTROL_FILES } from './preview-email-build-controls.mjs';
+import { isDurableSuccessorSetup, assertDurableSetupRecordReadback } from './runtime-compatibility-setup.mjs';
 import { githubProviderFresh, githubProviderTimestamp } from './github-provider-timestamp.mjs';
 import { SUCCESSOR_LIVE_CONTRACT, successorLiveSelection, successorEmailContract, successorLiveBinding,
   successorLiveControlBinding, successorLiveRemoteControls, successorVerificationSelection,
-  successorVerificationWorkflowIdentity } from './runtime-compatibility-successor-live.mjs';
+  successorVerificationWorkflowIdentity, successorLiveExecutionDeadline } from './runtime-compatibility-successor-live.mjs';
 export { PREVIEW_EMAIL_BUILD_CONTROL_FILES } from './preview-email-build-controls.mjs';
 
 export const PREVIEW_EMAIL_BUILD_WORKFLOW = '.github/workflows/preview-email-proof-build.yml';
@@ -53,6 +54,10 @@ export function previewEmailBuildWorkflowIdentity({ run, job, workflow, candidat
     && (!job || job.workflow_name === run.name);
 }
 const immutable = value => { try { return canonicalFcosE2eCandidateUrl(value) === value; } catch { return false; } };
+
+function durableAdmission(admission, candidateSha, now) {
+  return candidateSha === SUCCESSOR_LIVE_CONTRACT.candidateSha && isDurableSuccessorSetup(successorLiveSelection(admission, candidateSha, now).context);
+}
 
 export function previewEmailBuildContract(candidateSha, { admission, now = Date.now() } = {}) {
   return candidateSha === SUCCESSOR_LIVE_CONTRACT.candidateSha ? successorEmailContract(admission, now)
@@ -139,9 +144,12 @@ function assertRecordSnapshot(snapshot, now) {
   }
   return snapshot;
 }
-function assertSelectedRecords(snapshot, candidate, createdAt, now, admission) {
+function assertSelectedRecords(snapshot, candidate, createdAt, now, admission, historicalSnapshot = false) {
   const { contract: selectedContract } = previewEmailBuildContract(candidate.sha, { admission, now });
-  assertRecordSnapshot(snapshot, now);
+  const observedAt = historicalSnapshot ? Date.parse(snapshot.capturedAt) : now;
+  if (historicalSnapshot && (!githubProviderTimestamp(snapshot.capturedAt) || observedAt > createdAt || observedAt > now)) failure('Original environment observation time differs.');
+  assertRecordSnapshot(snapshot, observedAt);
+  if (durableAdmission(admission, candidate.sha, now)) assertDurableSetupRecordReadback(admission.context, snapshot, observedAt);
   const keys = { FCOS_MICROSOFT_TENANT_ID: candidate.tenantRecordId, FCOS_MICROSOFT_CLIENT_ID: candidate.clientRecordId,
     FCOS_EMAIL_ROUTER_ATTACHMENT_SECRET: candidate.attachmentRecordId };
   for (const [key, id] of Object.entries(keys)) {
@@ -189,10 +197,11 @@ export async function collectPreviewEmailEnvironmentRecords({ api, now = Date.no
 
 function assertIntent(intent, now, admission, purpose = 'original_operation') {
   const { contractSha256 } = previewEmailBuildContract(intent?.candidate?.sha, { admission, now });
+  const historical = purpose === 'downstream_receipt' && durableAdmission(admission, intent?.candidate?.sha, now);
   if (!exact(intent, ['schemaVersion', 'kind', 'candidate', 'harnessSha', 'contractSha256', 'controlRevision', 'operationId', 'runId', 'request', 'requestSha256', 'intentAt', 'environmentRecords'])
     || intent.schemaVersion !== 1 || intent.kind !== 'fcos_preview_email_intent' || !sha(intent.harnessSha)
     || intent.contractSha256 !== contractSha256 || !hash(intent.controlRevision) || !positive(intent.runId)
-    || !fresh(intent.intentAt, now)) failure('Trusted durable Preview intent is invalid or stale.');
+    || !(historical ? githubProviderTimestamp(intent.intentAt) && Date.parse(intent.intentAt) <= now : fresh(intent.intentAt, now))) failure('Trusted durable Preview intent is invalid or stale.');
   const selected = previewEmailBuildCandidate(intent.candidate?.sha, { admission, now });
   if (selected.sha === SUCCESSOR_LIVE_CONTRACT.candidateSha) {
     const live = successorLiveBinding(admission,
@@ -209,7 +218,7 @@ function assertIntent(intent, now, admission, purpose = 'original_operation') {
     || !equal(intent.candidate, { sha: selected.sha, branch: selected.branch, sourceDigest: selected.sourceDigest, lockHash: selected.lockHash })
     || !equal(intent.request, createPreviewEmailBuildRequest({ candidateSha: selected.sha, runId: intent.runId, operationId: intent.operationId, admission, now }))
     || intent.requestSha256 !== digest(JSON.stringify(intent.request))) failure('Preview request has an override or differs from the immutable contract.');
-  assertSelectedRecords(intent.environmentRecords, selected, Date.parse(intent.intentAt), now, admission);
+  assertSelectedRecords(intent.environmentRecords, selected, Date.parse(intent.intentAt), now, admission, historical);
   return selected;
 }
 export function createPreviewEmailBuildIntent({ candidateSha, harnessSha, controlRevision, runId, operationId, records, admission, now = Date.now() } = {}) {
@@ -228,8 +237,9 @@ export function createPreviewEmailBuildIntent({ candidateSha, harnessSha, contro
 }
 
 export function assertPreviewEmailBuildReceipt({ receipt, binding, records, admission, now = Date.now() } = {}) {
+  const historical = durableAdmission(admission, binding?.sha, now);
   if (!exact(receipt, ['schemaVersion', 'kind', 'candidate', 'harnessSha', 'contractSha256', 'controlRevision', 'operationId', 'runId', 'request', 'requestSha256', 'intentAt', 'capturedAt', 'deployment', 'environmentRecords'])
-    || receipt.kind !== 'fcos_preview_email_build' || !fresh(receipt.capturedAt, now)
+    || receipt.kind !== 'fcos_preview_email_build' || !(historical ? githubProviderTimestamp(receipt.capturedAt) && Date.parse(receipt.capturedAt) <= now : fresh(receipt.capturedAt, now))
     || Date.parse(receipt.capturedAt) < Date.parse(receipt.intentAt)) failure('Preview build receipt is invalid or stale.');
   const { capturedAt: _capturedAt, deployment, ...intent } = receipt;
   intent.kind = 'fcos_preview_email_intent';
@@ -248,7 +258,7 @@ export function assertPreviewEmailBuildReceipt({ receipt, binding, records, admi
   return true;
 }
 
-function assertEnvironmentReview({ environment, run, jobs, approvals, trusted, candidateSha, workflow, completed, now, verificationOnly = false }) {
+function assertEnvironmentReview({ environment, run, jobs, approvals, trusted, candidateSha, workflow, completed, now, verificationOnly = false, historicalEvidence = false }) {
   const rules = environment?.protection_rules?.filter(row => row.type === 'required_reviewers') || [];
   const rule = rules.length === 1 ? rules[0] : null, reviewer = rule?.reviewers?.length === 1 ? rule.reviewers[0] : null;
   if (FCOS_RELEASE_APPROVAL_POLICY.mode !== 'single_operator' || environment?.name !== PREVIEW_EMAIL_BUILD_ENVIRONMENT || !positive(environment.id)
@@ -274,7 +284,8 @@ function assertEnvironmentReview({ environment, run, jobs, approvals, trusted, c
   const jobCompleted = job?.status === 'completed';
   if (!positive(job?.id) || job.run_id !== run.id || job.run_attempt !== 1 || job.name !== 'proof'
     || job.workflow_name !== run.name
-    || job.head_sha !== trusted.sha || job.head_branch !== trusted.branch || !githubProviderFresh(job.started_at, RELEASE_MAX_AGE_MS, now)
+    || job.head_sha !== trusted.sha || job.head_branch !== trusted.branch
+    || !(historicalEvidence ? githubProviderTimestamp(job.started_at) && Date.parse(job.started_at) <= now : githubProviderFresh(job.started_at, RELEASE_MAX_AGE_MS, now))
     || Date.parse(job.started_at) < Date.parse(run.run_started_at)
     || (completed === 'intent' ? !['in_progress', 'completed'].includes(job.status)
       : completed ? !jobCompleted || job.conclusion !== 'success' : job.status !== 'in_progress')
@@ -383,8 +394,9 @@ export async function waitForPreviewEmailAttestation(options = {}) {
     runId: reviewed.runId, harnessSha: protection.harnessSha, controlRevision: protection.controlRevision,
     contractSha256: selected.contractSha256, candidateSha, operation });
   const deadline = Math.min(startedAt + 600000, ...(readOidc ? [] : [oidcClaims.exp * 1000]),
-    ...(verificationOnly ? [Date.parse(selected.capturedAt) + 1800000] : [Date.parse(selected.context.provisionedAt) + 2700000]),
-    ...[selected.dispatchedAt, protection.jobs[0].started_at, ...(verificationOnly ? [] : Object.values(selected.reviewedAt))].map(time => Date.parse(time) + 1800000));
+    ...(verificationOnly ? [Date.parse(selected.capturedAt) + 1800000, Date.parse(selected.dispatchedAt) + 1800000]
+      : [successorLiveExecutionDeadline(selected, startedAt)]),
+    Date.parse(protection.jobs[0].started_at) + 1800000);
   let variables = protection.variables;
   while (now() < deadline) {
     if (verificationOnly) successorVerificationSelection(admission, candidateSha, now());
@@ -473,13 +485,13 @@ async function protectedSource(reads) {
   const trusted = assertProtectedDefault(repository, branch, protection);
   return { repository, branch, protection, trusted };
 }
-async function verifiedArchive({ reads, source, run, candidateSha, filename, name, now, completed, unpack }) {
+async function verifiedArchive({ reads, source, run, candidateSha, filename, name, now, completed, unpack, historicalEvidence = false }) {
   const jobs = await collectPreviewEmailBuildJobs({ reads, runId: run.id });
   assertEnvironmentReview({ environment: await reads.json(`repos/${RELEASE_REPOSITORY}/environments/${PREVIEW_EMAIL_BUILD_ENVIRONMENT}`),
     run, jobs,
     approvals: await reads.json(`repos/${RELEASE_REPOSITORY}/actions/runs/${run.id}/approvals`),
     workflow: await reads.json(`repos/${RELEASE_REPOSITORY}/actions/workflows/preview-email-proof-build.yml`),
-    trusted: source.trusted, candidateSha, completed, now });
+    trusted: source.trusted, candidateSha, completed, now, historicalEvidence });
   const artifacts = await paginatedGithub(reads, `repos/${RELEASE_REPOSITORY}/actions/runs/${run.id}/artifacts`, 'artifacts');
   const matches = artifacts.filter(row => row.name === name && row.expired === false);
   const artifact = matches.length === 1 ? matches[0] : null;
@@ -496,7 +508,8 @@ export async function collectTrustedPreviewEmailIntent({ reads, runId, candidate
   const run = await reads.json(`repos/${RELEASE_REPOSITORY}/actions/runs/${runId}`);
   if (run?.id !== runId) failure('Original approved Preview intent must use its exact provider run.');
   const result = await verifiedArchive({ reads, source, run, candidateSha, filename: PREVIEW_EMAIL_INTENT_FILENAME,
-    name: `fcos-preview-email-intent-${runId}`, now, completed, unpack });
+    name: `fcos-preview-email-intent-${runId}`, now, completed, unpack,
+    historicalEvidence: completed === 'intent' && !withTrust && durableAdmission(admission, candidateSha, now) });
   const intent = result.payload;
   assertIntent(intent, now, admission, completed === 'intent' && !withTrust ? 'downstream_receipt' : 'original_operation');
   if (intent.runId !== runId || intent.candidate.sha !== candidateSha || intent.harnessSha !== source.trusted.sha
@@ -532,10 +545,12 @@ export async function collectTrustedPreviewEmailBuild({ reads, api, binding, rec
   const liveRecords = records || await collectPreviewEmailEnvironmentRecords({ api, now });
   const expectedControl = await remoteControlRevision(reads, source.trusted.sha, { admission, now });
   for (const run of runs) {
-    if (run.head_sha !== source.trusted.sha || !fresh(run.updated_at, now)) continue;
+    if (run.head_sha !== source.trusted.sha || !(durableAdmission(admission, binding.sha, now)
+      ? githubProviderTimestamp(run.updated_at) && Date.parse(run.updated_at) <= now : fresh(run.updated_at, now))) continue;
     try {
       const result = await verifiedArchive({ reads, source, run, candidateSha: binding.sha, filename: PREVIEW_EMAIL_BUILD_FILENAME,
-        name: `fcos-preview-email-build-${binding.sha}`, now, completed: true, unpack });
+        name: `fcos-preview-email-build-${binding.sha}`, now, completed: true, unpack,
+        historicalEvidence: durableAdmission(admission, binding.sha, now) });
       const receipt = result.payload;
       assertPreviewEmailBuildReceipt({ receipt, binding, records: liveRecords, admission, now });
       if (receipt.controlRevision !== expectedControl) failure('Preview archive controls differ from protected main.');

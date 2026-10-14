@@ -14,7 +14,9 @@ import { performance } from 'node:perf_hooks';
 import { githubReleaseReads, RELEASE_REPOSITORY } from './release-evidence.mjs';
 import { assertReleaseCoordinatorSource } from '../release-coordinator-local.mjs';
 import { collectPreviewEmailBuildJobs, previewEmailBuildWorkflowIdentity } from './preview-email-build.mjs';
-import { githubProviderFresh } from './github-provider-timestamp.mjs';
+import { githubProviderFresh, githubProviderTimestamp } from './github-provider-timestamp.mjs';
+import { DURABLE_SETUP_MODE, DURABLE_SETUP_CONTRACT_SHA256, isDurableSuccessorSetup,
+  durableSuccessorSetupDeadline } from './runtime-compatibility-setup.mjs';
 
 // This consumer selects only the existing issuance-receipt purpose/domain.
 // It contains no coordination signature, token issuance or provider adapter.
@@ -67,13 +69,15 @@ export function successorAttestationPlan() {
 /** Runs before even constructing authenticated collectors. A personal approval
  * does not become an opaque source/material admission or a canonical lease. */
 export function assertSuccessorAttestationApproval({ approval: value, nonce, scriptSha256, now = Date.now() } = {}) {
+  const durable = value?.schemaVersion === 2;
   const keys = ['schemaVersion', 'action', 'purpose', 'authorized', 'authorizedBy', 'authorizationEvidence', 'authorizedAt',
     'attestorNewPurposeAuthorized', 'scriptSha256', 'canonicalHelperSha256', 'nonce', 'target', 'candidateSha', 'sourceDigest',
     'lockHash', 'harnessSha', 'controlRevision', 'configurationRevision', 'contractSha256', 'enrollmentId', 'tokenId',
     'expiresAt', 'leaseDeadline', 'runId', 'runAttempt', 'operation', 'secretMetadata', 'privateReadinessAt',
     'privateActionEvidence', 'rootReview', 'independentReview', 'authorityBasis', 'enrollmentStateSha256',
-    'jobId', 'jobStartedAt', 'dispatchedAt', 'operationId'];
-  if (!exact(value, keys) || value.schemaVersion !== 1 || value.action !== 'attest' || value.purpose !== SUCCESSOR_ATTEST_PURPOSE
+    'jobId', 'jobStartedAt', 'dispatchedAt', 'operationId', ...(durable ? ['setupContractSha256'] : [])];
+  if (!exact(value, keys) || ![1, 2].includes(value.schemaVersion) || value.action !== 'attest' || value.purpose !== SUCCESSOR_ATTEST_PURPOSE
+    || durable && (value.setupContractSha256 !== DURABLE_SETUP_CONTRACT_SHA256 || !['create', 'readback'].includes(value.operation))
     || value.authorized !== true || value.authorizedBy !== fcosConnectionIdentifier('github', 'Required account')
     || typeof value.authorizationEvidence !== 'string' || !value.authorizationEvidence.trim() || value.authorizationEvidence.length > 2048
     || !positive(value.authorizedAt) || value.authorizedAt > now || now - value.authorizedAt > 3600000
@@ -85,7 +89,9 @@ export function assertSuccessorAttestationApproval({ approval: value, nonce, scr
     || !Array.isArray(value.authorityBasis.citations) || !value.authorityBasis.citations.length || value.authorityBasis.citations.length > 10
     || !value.authorityBasis.citations.every(reference)
     || !hash(value.enrollmentStateSha256) || !positive(value.jobId)
-    || ![value.jobStartedAt, value.dispatchedAt].every(time => githubProviderFresh(time, 1800000, now))
+    || !githubProviderFresh(value.jobStartedAt, 1800000, now)
+    || !(durable ? githubProviderTimestamp(value.dispatchedAt) && Date.parse(value.dispatchedAt) <= now
+      : githubProviderFresh(value.dispatchedAt, 1800000, now))
     || Date.parse(value.jobStartedAt) < Date.parse(value.dispatchedAt)
     || value.operationId !== `fcos-preview-vercel-attestation-${value.runId}-${nonce}`
     || value.attestorNewPurposeAuthorized !== true || !hash(scriptSha256) || value.scriptSha256 !== scriptSha256
@@ -160,6 +166,12 @@ export function bindSuccessorAttestationAdmission({ approval, nonce, scriptSha25
   const verificationOnly = value.operation === 'verify-authority';
   const selected = verificationOnly ? successorVerificationSelection(admission, policy.candidateSha, now)
     : successorLiveSelection(admission, policy.candidateSha, now);
+  const durable = !verificationOnly && isDurableSuccessorSetup(selected.context);
+  if ((value.schemaVersion === 2) !== durable
+    || !verificationOnly && (selected.materialMode === DURABLE_SETUP_MODE) !== durable
+    || durable && (selected.context.contractSha256 !== value.setupContractSha256
+      || selected.jobId !== value.jobId || selected.jobStartedAt !== value.jobStartedAt || selected.dispatchedAt !== value.dispatchedAt)) fail();
+  if (durable) durableSuccessorSetupDeadline(selected.context, now);
   if (selected.workflow !== ENROLLMENT_FIXED_TARGET.workflow || selected.runId !== value.runId
     || selected.harnessSha !== value.harnessSha || selected.contractSha256 !== value.contractSha256
     || (verificationOnly ? selected.previewControlRevision : selected.context.previewControlRevision) !== value.controlRevision
@@ -448,7 +460,9 @@ export function assertSuccessorAttestationProtectedReview(a, { user, environment
     || run?.id !== a.runId || (a.operation === 'verify-authority' ? !successorVerificationWorkflowIdentity({ run, job, workflow, candidateSha: a.candidateSha })
       : !previewEmailBuildWorkflowIdentity({ run, job, workflow, candidateSha: a.candidateSha }))
     || reviews.length !== 1 || reviews[0].state !== 'approved' || reviews[0].user?.login !== user.login || reviews[0].user?.id !== user.id
-    || run.run_started_at !== a.dispatchedAt || !githubProviderFresh(run.run_started_at, 1800000, now)
+    || run.run_started_at !== a.dispatchedAt
+    || !(a.schemaVersion === 2 ? githubProviderTimestamp(run.run_started_at) && Date.parse(run.run_started_at) <= now
+      : githubProviderFresh(run.run_started_at, 1800000, now))
     || job?.id !== a.jobId || job.run_id !== a.runId || job.run_attempt !== 1 || job.name !== 'proof'
     || job.workflow_name !== run.name || job.head_sha !== a.harnessSha || job.head_branch !== 'main'
     || job.status !== 'in_progress' || job.conclusion !== null || job.completed_at !== null || job.started_at !== a.jobStartedAt
@@ -539,6 +553,15 @@ function assertClaimCurrent(identity, original, diagnostics) {
   if (!same(result, claimed)) fail();
   return claimed;
 }
+function receiptDeadline(a, admission, observedAt) {
+  return Math.min(observedAt + 600000, a.expiresAt, a.leaseDeadline, a.privateReadinessAt + 2700000,
+    ...(a.schemaVersion === 2 ? [Date.parse(admission.capturedAt) + 1800000,
+      Date.parse(a.jobStartedAt) + 1800000, durableSuccessorSetupDeadline(admission.context, observedAt)]
+      : a.operation === 'verify-authority' ? [Date.parse(admission.capturedAt) + 1800000]
+        : [Date.parse(admission.context.provisionedAt) + 2700000]),
+    ...(a.schemaVersion === 2 ? [] : [admission.dispatchedAt, a.jobStartedAt,
+      ...(a.operation === 'verify-authority' ? [] : Object.values(admission.reviewedAt))].map(time => Date.parse(time) + 1800000)));
+}
 async function executeFixed(original, diagnostics) {
   const a = original.action.approval, nonce = a.nonce;
   const identity = await nativePhase(diagnostics, 'canonical_claim', () => {
@@ -579,11 +602,7 @@ async function executeFixed(original, diagnostics) {
     runId: a.runId, harnessSha: a.harnessSha, controlRevision: a.controlRevision, contractSha256: a.contractSha256,
     candidateSha: a.candidateSha, operation: a.operation });
   const envelope = await nativePhase(diagnostics, 'receipt_signing', () => signEnrollmentReceipt({ privateEnrollment: capsule, metadata, context, privateKey, now: observedAt,
-    expiresAt: Math.min(observedAt + 600000, a.expiresAt, a.leaseDeadline, a.privateReadinessAt + 2700000,
-      ...(a.operation === 'verify-authority' ? [Date.parse(original.admission.capturedAt) + 1800000]
-        : [Date.parse(original.admission.context.provisionedAt) + 2700000]),
-      ...[original.admission.dispatchedAt, a.jobStartedAt,
-        ...(a.operation === 'verify-authority' ? [] : Object.values(original.admission.reviewedAt))].map(time => Date.parse(time) + 1800000)) }));
+    expiresAt: receiptDeadline(a, original.admission, observedAt) }));
   const text = JSON.stringify(envelope);
   await current();
   await nativePhase(diagnostics, 'production_readback', () => retainedProduction(readerToken));

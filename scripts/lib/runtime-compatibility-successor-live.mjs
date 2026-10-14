@@ -8,7 +8,8 @@ import { assertProtectedDefault, assertReleaseGitHubAccount, RELEASE_REPOSITORY 
 import { verifyRuntimeCompatibilitySuccessorSource } from '../verify-runtime-compatibility-successor.mjs';
 import { collectBuildProvenance } from './build-provenance.mjs';
 import { PREVIEW_EMAIL_BUILD_CONTROL_FILES } from './preview-email-build-controls.mjs';
-import { githubProviderFresh } from './github-provider-timestamp.mjs';
+import { DURABLE_SETUP_MODE, DURABLE_SETUP_CONTRACT_SHA256, isDurableSuccessorSetup, durableSuccessorSetupDeadline, assertDurableSetupMetadata } from './runtime-compatibility-setup.mjs';
+import { githubProviderFresh, githubProviderTimestamp } from './github-provider-timestamp.mjs';
 import { collectRuntimeSuccessorMaterials } from './runtime-compatibility-material-transport.mjs';
 
 const digest = value => createHash('sha256').update(value).digest('hex');
@@ -188,20 +189,20 @@ function material(raw, file) {
  * after reading exact bytes from the protected harness Git tree or independently
  * authenticating this run's immutable protected data-producer artifact. */
 function assertSuccessorMaterials({ context, reviews, binding, now = Date.now() } = {}, historicalOnly = false) {
-  const value = context?.value;
+  const value = context?.value, durable = isDurableSuccessorSetup(value);
   const intact = record => Buffer.isBuffer(record?.body) && digest(record.body) === record.sha256
     && JSON.stringify(JSON.parse(record.body.toString('utf8'))) === JSON.stringify(record.value);
   const keys = ['schemaVersion', 'kind', 'contractSha256', 'candidateSha', 'branch', 'sourceDigest', 'lockHash',
     'candidateGitTree', 'candidateTreeHash', 'previewControlRevision', 'configurationRevision', 'provisionedAt',
-    'attachmentOperationId', 'records', 'operation'];
-  if (!exact(value, keys) || value.schemaVersion !== 1 || value.kind !== 'fcos_exact_04ee_live_context'
-    || value.contractSha256 !== SUCCESSOR_LIVE_CONTRACT_SHA256 || !hash(context.sha256) || !intact(context)
+    'attachmentOperationId', 'records', 'operation', ...(durable ? ['setupExpiresAt', 'cleanupDeadline', 'recordMetadata'] : [])];
+  if (!exact(value, keys) || value.schemaVersion !== (durable ? 2 : 1) || value.kind !== (durable ? 'fcos_exact_04ee_setup_context' : 'fcos_exact_04ee_live_context')
+    || value.contractSha256 !== (durable ? DURABLE_SETUP_CONTRACT_SHA256 : SUCCESSOR_LIVE_CONTRACT_SHA256) || !hash(context.sha256) || !intact(context)
     || ['candidateSha', 'branch', 'sourceDigest', 'lockHash', 'candidateGitTree', 'candidateTreeHash'].some(key => value[key] !== policy[key])
     || !sha(binding?.harnessSha) || binding.sha !== policy.candidateSha || binding.sourceDigest !== policy.sourceDigest
     || binding.lockHash !== policy.lockHash || binding.candidateTreeHash !== policy.candidateTreeHash
     || !hash(binding.previewControlRevision) || !hash(binding.configurationRevision)
     || value.previewControlRevision !== binding.previewControlRevision || value.configurationRevision !== binding.configurationRevision
-    || !(historicalOnly ? historicalTimestamp(value.provisionedAt, now) : fresh(value.provisionedAt, policy.maxAgeSeconds.provisioning, now))
+    || !(historicalOnly || durable ? historicalTimestamp(value.provisionedAt, now) : fresh(value.provisionedAt, policy.maxAgeSeconds.provisioning, now))
     || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(value.attachmentOperationId || '')
     || !exact(value.records, ['tenantRecordId', 'clientRecordId', 'attachmentRecordId'])
     || !Object.values(value.records).every(id) || new Set(Object.values(value.records)).size !== 3
@@ -209,16 +210,17 @@ function assertSuccessorMaterials({ context, reviews, binding, now = Date.now() 
     || !exact(value.operation, ['id', 'phase'])
     || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(value.operation.id || '')
     || value.operation.phase !== 'prepared') fail('EXACT_SUCCESSOR_LIVE_CONTEXT_REQUIRED');
+  if (durable) assertDurableSetupMetadata(value, now);
   if (!Array.isArray(reviews) || reviews.length !== 2) fail('EXACT_SUCCESSOR_TWO_MATERIAL_REVIEWS_REQUIRED');
   const reviewers = new Set();
   for (const role of ['root', 'independent']) {
     const matches = reviews.filter(row => row.value?.role === role), review = matches[0]?.value;
     if (matches.length !== 1 || !hash(matches[0].sha256) || !intact(matches[0])
       || !exact(review, ['schemaVersion', 'kind', 'role', 'reviewer', 'disposition', 'contextSha256', 'candidateSha', 'sourceDigest', 'lockHash', 'previewControlRevision', 'configurationRevision', 'reviewedAt'])
-      || review.schemaVersion !== 1 || review.kind !== 'fcos_exact_04ee_live_material_review' || review.disposition !== 'accepted'
+      || review.schemaVersion !== (durable ? 2 : 1) || review.kind !== (durable ? 'fcos_exact_04ee_setup_material_review' : 'fcos_exact_04ee_live_material_review') || review.disposition !== 'accepted'
       || typeof review.reviewer !== 'string' || !/^\/[a-z0-9_/.-]{1,200}$/.test(review.reviewer) || reviewers.has(review.reviewer)
       || review.contextSha256 !== context.sha256
-      || !(historicalOnly ? historicalTimestamp(review.reviewedAt, now) : fresh(review.reviewedAt, policy.maxAgeSeconds.artifact, now))
+      || !(historicalOnly || durable ? historicalTimestamp(review.reviewedAt, now) : fresh(review.reviewedAt, policy.maxAgeSeconds.artifact, now))
       || Date.parse(review.reviewedAt) < Date.parse(value.provisionedAt)
       || ['candidateSha', 'sourceDigest', 'lockHash', 'previewControlRevision', 'configurationRevision'].some(key => review[key] !== value[key])) fail('EXACT_SUCCESSOR_TWO_MATERIAL_REVIEWS_REQUIRED');
     reviewers.add(review.reviewer);
@@ -322,7 +324,7 @@ export async function collectSuccessorLiveAdmission({ reads, binding, sourceCwd,
   const run = await reads.json(`repos/${RELEASE_REPOSITORY}/actions/runs/${binding.runId}`);
   if (run?.id !== binding.runId || run.repository?.full_name !== RELEASE_REPOSITORY || run.head_repository?.full_name !== RELEASE_REPOSITORY
     || run.head_sha !== trusted.sha || run.head_branch !== trusted.branch || run.event !== 'workflow_dispatch' || run.run_attempt !== 1
-    || !['in_progress', 'completed'].includes(run.status) || !githubProviderFresh(run.run_started_at, policy.maxAgeSeconds.dispatch * 1000, now)
+    || !['in_progress', 'completed'].includes(run.status) || !githubProviderTimestamp(run.run_started_at) || Date.parse(run.run_started_at) > now
     || !['.github/workflows/preview-email-proof-build.yml', '.github/workflows/runtime-compatibility-normal-role.yml', '.github/workflows/runtime-compatibility-release.yml']
       .some(path => [path, `${path}@${trusted.branch}`].includes(run.path))) fail('EXACT_SUCCESSOR_DISPATCH_REQUIRED');
   const runtime = await collectRuntimeSuccessorMaterials({ reads, expected: binding, run, now });
@@ -330,13 +332,16 @@ export async function collectSuccessorLiveAdmission({ reads, binding, sourceCwd,
   if (!runtime) for (const [role, file] of Object.entries(policy.materials)) rows[role] = material(
     await reads.json(`repos/${RELEASE_REPOSITORY}/contents/${file}?ref=${trusted.sha}`), file);
   assertSuccessorLiveMaterials({ context: rows.context, reviews: [rows.root, rows.independent], binding, now });
-  const context = rows.context.value;
+  const context = rows.context.value, durable = isDurableSuccessorSetup(context);
+  if (durable ? runtime?.materialMode !== DURABLE_SETUP_MODE
+    : runtime?.materialMode === DURABLE_SETUP_MODE || !githubProviderFresh(run.run_started_at, policy.maxAgeSeconds.dispatch * 1000, now)) fail('EXACT_SUCCESSOR_MATERIAL_MODE_REQUIRED');
   const materialBinding = `${SUCCESSOR_LIVE_CONTRACT_SHA256}\0${rows.context.sha256}\0${rows.root.sha256}\0${rows.independent.sha256}`;
   // The material contract persists across independently admitted workflow runs
   // so downstream consumers can verify the original immutable Preview receipt.
   // Current run/attempt/transport provenance is authenticated separately above;
   // native approval also binds runId, harness, controls and this exact hash.
-  const contractSha256 = runtime ? digest(`fcos-exact-04ee-run-material-v1\0${materialBinding}`)
+  const contractSha256 = durable ? digest(`fcos-exact-04ee-durable-setup-v2\0${DURABLE_SETUP_CONTRACT_SHA256}\0${materialBinding}`)
+    : runtime ? digest(`fcos-exact-04ee-run-material-v1\0${materialBinding}`)
     : digest(`fcos-exact-04ee-live-material-v1\0${materialBinding}`);
   const admission = freeze({ schemaVersion: 1, kind: 'fcos_exact_04ee_collector_admission', harnessSha: trusted.sha,
     contractSha256, capturedAt: new Date(now).toISOString(), dispatchedAt: run.run_started_at, runId: run.id, runAttempt: run.run_attempt,
@@ -344,6 +349,7 @@ export async function collectSuccessorLiveAdmission({ reads, binding, sourceCwd,
     reviewedAt: { root: rows.root.value.reviewedAt, independent: rows.independent.value.reviewedAt },
     materialHashes: Object.fromEntries(Object.entries(rows).map(([key, value]) => [key, value.sha256])),
     ...(runtime ? { materialTransport: runtime.transport } : {}),
+    ...(durable ? { materialMode: DURABLE_SETUP_MODE, jobStartedAt: runtime.transport.jobStartedAt, jobId: runtime.transport.producerJobId } : {}),
     candidate: { sha: policy.candidateSha, branch: policy.branch, sourceDigest: policy.sourceDigest, lockHash: policy.lockHash, ...context.records },
     previewAuthorized: false, productionAuthorized: false, credentialAuthority: false, mutations: 0 });
   verified.add(admission);
@@ -362,11 +368,27 @@ export function collectSuccessorLiveOperationAdmission({ reads, sourceCwd, trust
 
 // Revalidate the ages without accepting a cloned or caller-created selection.
 export function successorLiveSelection(admission, candidateSha = policy.candidateSha, now = Date.now()) {
-  if (!verified.has(admission) || candidateSha !== policy.candidateSha || admission.runAttempt !== 1 || !fresh(admission.capturedAt, policy.maxAgeSeconds.artifact, now)
-    || !fresh(admission.context.provisionedAt, policy.maxAgeSeconds.provisioning, now)
+  if (!verified.has(admission) || candidateSha !== policy.candidateSha || admission.runAttempt !== 1 || !fresh(admission.capturedAt, policy.maxAgeSeconds.artifact, now)) fail('EXACT_SUCCESSOR_TRUSTED_SELECTION_REQUIRED');
+  if (isDurableSuccessorSetup(admission.context)) {
+    if (admission.materialMode !== DURABLE_SETUP_MODE || !Number.isSafeInteger(admission.jobId) || admission.jobId <= 0
+      || !githubProviderTimestamp(admission.dispatchedAt) || Date.parse(admission.dispatchedAt) > now
+      || !githubProviderFresh(admission.jobStartedAt, policy.maxAgeSeconds.dispatch * 1000, now)
+      || Date.parse(admission.jobStartedAt) < Date.parse(admission.dispatchedAt)) fail('EXACT_SUCCESSOR_TRUSTED_SELECTION_REQUIRED');
+    durableSuccessorSetupDeadline(admission.context, now);
+  } else if (!fresh(admission.context.provisionedAt, policy.maxAgeSeconds.provisioning, now)
     || !githubProviderFresh(admission.dispatchedAt, policy.maxAgeSeconds.dispatch * 1000, now)
     || !['root', 'independent'].every(role => fresh(admission.reviewedAt[role], policy.maxAgeSeconds.artifact, now))) fail('EXACT_SUCCESSOR_TRUSTED_SELECTION_REQUIRED');
   return admission;
+}
+
+// Shared downstream clock projection from a genuine admission only. Setup and
+// dispatch retain their original times; current execution is a separate fact.
+export function successorLiveExecutionDeadline(admission, now = Date.now()) {
+  const selected = successorLiveSelection(admission, policy.candidateSha, now);
+  return isDurableSuccessorSetup(selected.context) ? Math.min(durableSuccessorSetupDeadline(selected.context, now),
+    Date.parse(selected.capturedAt) + 1800000, Date.parse(selected.jobStartedAt) + 1800000)
+    : Math.min(Date.parse(selected.context.provisionedAt) + 2700000,
+      ...[selected.dispatchedAt, ...Object.values(selected.reviewedAt)].map(t => Date.parse(t) + 1800000));
 }
 
 export function successorEmailContract(admission, now = Date.now()) {

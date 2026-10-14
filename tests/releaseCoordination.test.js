@@ -1,3 +1,5 @@
+import { DURABLE_SETUP_CONTRACT_SHA256 } from '../scripts/lib/runtime-compatibility-setup.mjs';
+import { SUCCESSOR_LIVE_CONTRACT } from '../scripts/lib/runtime-compatibility-successor-live.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { execFileSync } from 'node:child_process';
@@ -173,4 +175,33 @@ test('original browser and quality completion clocks bound a grant even when rea
     row.capturedAt = new Date(now - 1800001).toISOString();
     assert.throws(() => releaseCoordinationEvidenceDeadline(changed, now));
   }
+});
+
+test('durable compatibility binding3 ignores queued dispatch age but preserves fresh evidence/job and original setup expiry', () => {
+  const b = { ...binding(), schemaVersion: 3, route: 'compatibility', dispatchedAt: now - 43200000,
+    candidate: { ...binding().candidate, sha: SUCCESSOR_LIVE_CONTRACT.candidateSha }, backendReviewSha256: h, backendClosureSha256: h,
+    setupContractSha256: DURABLE_SETUP_CONTRACT_SHA256, setupExpiresAt: now + 1000000 };
+  const admitted = validateReleaseCoordinationBinding(b, now); assert.equal(releaseCoordinationDeadline(admitted), b.setupExpiresAt);
+  for (const alter of [v => { v.schemaVersion = 2; }, v => { v.setupContractSha256 = '0'.repeat(64); }, v => { v.setupExpiresAt = now; },
+    v => { v.jobStartedAt = now - 1800001; }, v => { v.evidenceExpiresAt = now; }, v => { v.route = 'production'; }]) {
+    const changed = clone(b); alter(changed); assert.throws(() => validateReleaseCoordinationBinding(changed, now));
+  }
+  assert.throws(() => validateReleaseCoordinationBinding({ ...binding(), dispatchedAt: now - 43200000 }, now));
+});
+
+test('actual shared capability gate admits schema3 only with the same genuine durable admission and original expiry', () => {
+  const source = readFileSync('scripts/lib/release-coordination-transport.mjs', 'utf8');
+  const start = source.indexOf('export function successorReleaseCoordinationVerified('), end = source.indexOf('\nexport async function consumeReleaseCoordination', start);
+  const capabilities = new WeakMap(), admission = { context: { kind: 'offline-durable', expiry: now + 1000 } }, cap = {};
+  const b = { schemaVersion: 3, route: 'compatibility', candidate: { sha: SUCCESSOR_LIVE_CONTRACT.candidateSha }, harnessSha: sha,
+    setupContractSha256: DURABLE_SETUP_CONTRACT_SHA256, setupExpiresAt: now + 1000, backendReviewSha256: h, backendClosureSha256: h };
+  const c = { binding: b, admission, backendProof: { observed: true, reviewSha256: h, closureSha256: h } }; capabilities.set(cap, c);
+  const deps = { capabilities, releaseCoordinationVerified: value => capabilities.has(value),
+    successorLiveBinding: value => { if (value !== admission) throw Error('unbranded'); return value; },
+    isDurableSuccessorSetup: value => value.kind === 'offline-durable', durableSuccessorSetupDeadline: value => value.expiry, DURABLE_SETUP_CONTRACT_SHA256 };
+  const fn = new Function(...Object.keys(deps), source.slice(start, end).replace('export ', '') + '\nreturn successorReleaseCoordinationVerified;')(...Object.values(deps));
+  assert.equal(fn(cap, {}, admission), true); b.schemaVersion = 2; assert.equal(fn(cap, {}, admission), false);
+  admission.context.kind = 'offline-v1'; assert.equal(fn(cap, {}, admission), true); b.schemaVersion = 3; assert.equal(fn(cap, {}, admission), false);
+  admission.context.kind = 'offline-durable'; b.setupExpiresAt++; assert.equal(fn(cap, {}, admission), false); b.setupExpiresAt--;
+  assert.equal(fn(cap, {}, structuredClone(admission)), false); assert.equal(fn({}, {}, admission), false);
 });

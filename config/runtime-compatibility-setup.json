@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 2,
+  "id": "exact-04ee-durable-preview-setup-v2",
+  "materialMode": "durable-setup-v2",
+  "maxSetupLifetimeSeconds": 86400,
+  "executionMaxAgeSeconds": 1800,
+  "freshMetadataRequired": true,
+  "extendsCleanupDeadline": false,
+  "grantsAuthority": false
+}

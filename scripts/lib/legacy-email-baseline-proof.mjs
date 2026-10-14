@@ -1,3 +1,5 @@
+import { isDurableSuccessorSetup } from './runtime-compatibility-setup.mjs';
+import { githubProviderTimestamp } from './github-provider-timestamp.mjs';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { fcosConnectionIdentifier } from '../../config/fcosConnections.js';
@@ -40,6 +42,7 @@ function assertRecords(records, now) {
  * This accepts a historical limitation; it never establishes old value equality.
  */
 export function assertLegacyEmailBaselineProof({ proof, production, candidate, sourceDigest, normal, admission, now = Date.now() } = {}) {
+  const durable = candidate?.sha === SUCCESSOR_LIVE_CONTRACT.candidateSha && isDurableSuccessorSetup(successorLiveSelection(admission, candidate.sha, now).context);
   const selectedContract = candidate?.sha === SUCCESSOR_LIVE_CONTRACT.candidateSha ? successorEmailContract(admission, now).contract : contract;
   if (!exact(proof, ['schemaVersion', 'contractId', 'capturedAt', 'records', 'build', 'signer']) || proof.schemaVersion !== 1
     || proof.contractId !== contract.id || !fresh(proof.capturedAt, now)
@@ -72,7 +75,9 @@ export function assertLegacyEmailBaselineProof({ proof, production, candidate, s
   }
   if (!exact(proof.build, ['receipt', 'trust']) || !exact(proof.build.trust, ['runId', 'artifactId', 'harnessSha', 'archiveDigest', 'capturedAt'])
     || !positive(proof.build.trust.runId) || !positive(proof.build.trust.artifactId) || !hash(proof.build.trust.archiveDigest)
-    || proof.build.trust.harnessSha !== normal.harnessSha || !fresh(proof.build.trust.capturedAt, now)) fail();
+    || proof.build.trust.harnessSha !== normal.harnessSha || !(durable
+      ? githubProviderTimestamp(proof.build.trust.capturedAt) && Date.parse(proof.build.trust.capturedAt) <= now
+      : fresh(proof.build.trust.capturedAt, now))) fail();
   assertPreviewEmailBuildReceipt({ receipt: proof.build.receipt, records: proof.records,
     binding: { sha: pin.sha, sourceDigest, lockHash: pin.lockHash, deploymentId: candidate.id, candidateUrl: candidate.url, harnessSha: normal.harnessSha }, admission, now });
   if (pin.sha === SUCCESSOR_LIVE_CONTRACT.candidateSha && proof.build.trust.capturedAt !== proof.build.receipt.capturedAt) fail();

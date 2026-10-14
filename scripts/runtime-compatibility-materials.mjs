@@ -9,7 +9,7 @@ import { githubReleaseOidc } from './lib/release-production.mjs';
 import { SUCCESSOR_LIVE_CONTRACT, assertSuccessorLiveSource, assertSuccessorLiveMaterials,
   successorLiveControlBinding } from './lib/runtime-compatibility-successor-live.mjs';
 import { verifyRuntimeCompatibilitySuccessorSource } from './verify-runtime-compatibility-successor.mjs';
-import { RUNTIME_MATERIAL_FILENAME, runtimeMaterialArtifactName, runtimeMaterialInput, parseRuntimeMaterialPack,
+import { RUNTIME_MATERIAL_FILENAME, runtimeMaterialArtifactName, parseRuntimeMaterialPack,
   collectRuntimeMaterialProducer, runtimeMaterialPayload, runtimeMaterialArtifacts,
   assertRuntimeMaterialPublicationFresh, reconcileRuntimeMaterialPublication } from './lib/runtime-compatibility-material-transport.mjs';
 
@@ -113,13 +113,10 @@ export async function produceRuntimeCompatibilityMaterials() {
       phase('oidc');
       const oidcClaims = await githubReleaseOidc({ env: process.env, fetchImpl: diagnosticOidcFetch(diagnostic) });
       phase('producer_authentication');
-      return collectRuntimeMaterialProducer({ reads, expected, oidcClaims, requireCompletedStep: false });
+      return collectRuntimeMaterialProducer({ reads, expected, oidcClaims, requireCompletedStep: false, detectMaterialMode: true });
     };
     // Authentication is complete before the public material variable is read.
-    const producer = await authenticate();
-    phase('input_read');
-    const text = await runtimeMaterialInput(reads, producer.environment);
-    need(text !== null);
+    const producer = await authenticate(), text = producer.materialText;
     phase('pack_validation');
     const rows = parseRuntimeMaterialPack(text, producer.binding);
     phase('material_validation');
@@ -131,7 +128,7 @@ export async function produceRuntimeCompatibilityMaterials() {
     phase('input_recheck');
     need(JSON.stringify(current.binding) === JSON.stringify(producer.binding) && current.job.id === producer.job.id
       && current.step.number === producer.step.number && current.step.started_at === producer.step.started_at
-      && await runtimeMaterialInput(reads, current.environment) === text);
+      && current.materialText === text);
     phase('material_validation');
     assertSuccessorLiveMaterials({ context: rows.context, reviews: [rows.root, rows.independent], binding: expected });
     phase('payload');

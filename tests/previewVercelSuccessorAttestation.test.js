@@ -13,7 +13,9 @@ import { SUCCESSOR_ATTEST_PURPOSE, SUCCESSOR_ATTEST_CANONICAL_HELPER_SHA256,
   assertSuccessorAttestationPrivateAction, assertSuccessorAttestationEnrollment, assertSuccessorAttestationPinnedKey,
   assertSuccessorAttestationProtectedReview, readSuccessorEnrollmentTokenMetadata,
   assertSuccessorAttestationRepositoryVariables, successorAttestationCommandStatus, successorAttestationHash,
-  runFixedSuccessorAttestation } from '../scripts/lib/preview-vercel-successor-attestation.mjs';
+  runFixedSuccessorAttestation, bindSuccessorAttestationAdmission } from '../scripts/lib/preview-vercel-successor-attestation.mjs';
+import { DURABLE_SETUP_MODE, DURABLE_SETUP_CONTRACT_SHA256, isDurableSuccessorSetup,
+  durableSuccessorSetupDeadline } from '../scripts/lib/runtime-compatibility-setup.mjs';
 import { successorAttestationMain } from '../scripts/preview-vercel-successor-attest.mjs';
 import { PREVIEW_EMAIL_BUILD_CONTROL_FILES } from '../scripts/lib/preview-email-build-controls.mjs';
 import { previewCoordinationSecretMetadata } from '../scripts/lib/preview-email-coordination-collector.mjs';
@@ -42,6 +44,106 @@ function approval() {
     jobId: 100, jobStartedAt: new Date(now - 10000).toISOString(), dispatchedAt: new Date(now - 15000).toISOString(),
     operationId: `fcos-preview-vercel-attestation-99-${nonce}` };
 }
+function durableApproval() {
+  return { ...approval(), schemaVersion: 2, setupContractSha256: DURABLE_SETUP_CONTRACT_SHA256,
+    dispatchedAt: new Date(now - 4 * 3600000).toISOString() };
+}
+function durableContext() {
+  return { schemaVersion: 2, kind: 'fcos_exact_04ee_setup_context', contractSha256: DURABLE_SETUP_CONTRACT_SHA256,
+    provisionedAt: new Date(now - 5 * 3600000).toISOString(), setupExpiresAt: new Date(now + 3600000).toISOString(),
+    cleanupDeadline: new Date(now + 2 * 3600000).toISOString(),
+    previewControlRevision: 'b'.repeat(64), configurationRevision: 'c'.repeat(64) };
+}
+test('durable attestation explicitly opts into create/readback and preserves the original queued dispatch', async () => {
+  for (const operation of ['create', 'readback']) {
+    const a = { ...durableApproval(), operation };
+    assert.equal(assertSuccessorAttestationApproval({ approval: a, nonce, scriptSha256, now }), a);
+    assert.equal(assertSuccessorAttestationProtectedReview(a, protectedReview(a), now), true);
+  }
+  const old = approval(); old.dispatchedAt = durableApproval().dispatchedAt;
+  assert.throws(() => assertSuccessorAttestationApproval({ approval: old, nonce, scriptSha256, now }));
+  for (const change of [a => { a.schemaVersion = 1; }, a => { a.schemaVersion = 3; },
+    a => { delete a.setupContractSha256; }, a => { a.setupContractSha256 = '0'.repeat(64); },
+    a => { a.operation = 'verify-authority'; }, a => { a.dispatchedAt = new Date(now + 1).toISOString(); },
+    a => { a.dispatchedAt = '2026-10-08T25:00:00.000Z'; },
+    a => { a.dispatchedAt = new Date(now - 1000).toISOString(); },
+    a => { a.jobStartedAt = new Date(now - 1800001).toISOString(); },
+    a => { a.privateReadinessAt = now - 2700000; }, a => { a.authorizedAt = now - 3600001; },
+    a => { a.materialMode = DURABLE_SETUP_MODE; }]) {
+    const a = durableApproval(); change(a); let reads = 0;
+    await assert.rejects(() => runSuccessorAttestationAdmission({ action: 'attest', approval: a, nonce, scriptSha256,
+      now: () => now, collectAdmission: async () => { reads++; }, preflightFixedReads: () => { reads++; } }));
+    assert.equal(reads, 0);
+  }
+});
+test('durable attestation cannot replace the current original first proof job or private review clocks', () => {
+  const a = durableApproval();
+  assert.equal(assertSuccessorAttestationPrivateAction(a, privateAuthority(a), materialReviews(a), now), true);
+  for (const change of [r => { r.jobs[0].id++; }, r => { r.jobs[0].run_attempt++; },
+    r => { r.jobs[0].started_at = new Date(now - 1).toISOString(); },
+    r => { r.run.run_started_at = new Date(now - 1).toISOString(); }]) {
+    const reviewed = protectedReview(a); change(reviewed);
+    assert.throws(() => assertSuccessorAttestationProtectedReview(a, reviewed, now));
+  }
+  const stale = { ...a, jobStartedAt: new Date(now - 1800001).toISOString() };
+  assert.throws(() => assertSuccessorAttestationProtectedReview(stale, protectedReview(stale), now));
+  for (const change of [rows => { rows[0].reviewedAt = a.authorizedAt - 1; },
+    rows => { rows[0].reviewedAt = a.authorizedAt + 600001; },
+    rows => { rows[0].bindingSha256 = '0'.repeat(64); }]) {
+    const rows = materialReviews(a); change(rows);
+    assert.throws(() => assertSuccessorAttestationPrivateAction(a, privateAuthority(a), rows, now));
+  }
+});
+test('durable approval must agree with the genuine selected setup and exact current job', () => {
+  const a = durableApproval(), selected = { runId: a.runId, workflow: a.target.workflow, harnessSha: a.harnessSha,
+    contractSha256: a.contractSha256, materialMode: DURABLE_SETUP_MODE, context: durableContext(),
+    jobId: a.jobId, jobStartedAt: a.jobStartedAt, dispatchedAt: a.dispatchedAt };
+  // Evaluate the real binding branch with an inert identity gate. This never
+  // enters the production collector's WeakSet or any private/publication path.
+  const bind = bodyFixture('scripts/lib/preview-vercel-successor-attestation.mjs', 'export function bindSuccessorAttestationAdmission',
+    '\n/** Only the fixed native path', { assertSuccessorAttestationApproval, policy: SUCCESSOR_LIVE_CONTRACT,
+      successorLiveSelection(value) { assert.equal(value, selected); return value; },
+      successorVerificationSelection() { assert.fail('No durable verify-authority admission'); },
+      ENROLLMENT_FIXED_TARGET: a.target, DURABLE_SETUP_MODE, isDurableSuccessorSetup, durableSuccessorSetupDeadline,
+      fail: () => { throw Error('Exact setup admission denied'); } });
+  assert.equal(bind({ approval: a, nonce, scriptSha256, admission: selected, now }), selected);
+  for (const change of [s => { s.materialMode = 'legacy'; }, s => { s.context.schemaVersion = 1; },
+    s => { s.context.contractSha256 = '0'.repeat(64); }, s => { s.jobId++; },
+    s => { s.jobStartedAt = new Date(now - 1).toISOString(); },
+    s => { s.dispatchedAt = new Date(now - 2).toISOString(); },
+    s => { s.context.setupExpiresAt = new Date(now).toISOString(); },
+    s => { s.context.cleanupDeadline = new Date(now + 1).toISOString(); }]) {
+    const saved = structuredClone(selected); change(selected);
+    assert.throws(() => bind({ approval: a, nonce, scriptSha256, admission: selected, now }));
+    Object.assign(selected, saved);
+  }
+  assert.throws(() => bindSuccessorAttestationAdmission({ approval: a, nonce, scriptSha256, admission: selected, now }));
+  assert.throws(() => bindSuccessorAttestationAdmission({ approval: a, nonce, scriptSha256, admission: structuredClone(selected), now }));
+});
+test('durable receipt is bounded by every short clock and original setup expiry without renewing any clock', () => {
+  const deadline = bodyFixture('scripts/lib/preview-vercel-successor-attestation.mjs', 'function receiptDeadline',
+    '\nasync function executeFixed', { Date, durableSuccessorSetupDeadline });
+  const a = durableApproval(), admission = { capturedAt: new Date(now).toISOString(), context: durableContext() };
+  assert.equal(deadline(a, admission, now), now + 600000);
+  for (const [key, change] of [
+    ['token', (a, s) => { a.expiresAt = now + 1000; }],
+    ['lease', (a, s) => { a.leaseDeadline = now + 1000; }],
+    ['private readiness', (a, s) => { a.privateReadinessAt = now - 2700000 + 1000; }],
+    ['live capture', (a, s) => { s.capturedAt = new Date(now - 1800000 + 1000).toISOString(); }],
+    ['job start', (a, s) => { a.jobStartedAt = new Date(now - 1800000 + 1000).toISOString(); }],
+    ['setup', (a, s) => { s.context.setupExpiresAt = new Date(now + 1000).toISOString(); }],
+  ]) {
+    const changed = structuredClone(a), selected = structuredClone(admission); change(changed, selected);
+    assert.equal(deadline(changed, selected, now), now + 1000, key);
+  }
+  for (const time of [now, now - 1]) {
+    const selected = structuredClone(admission); selected.context.setupExpiresAt = new Date(time).toISOString();
+    assert.throws(() => deadline(a, selected, now));
+  }
+  const old = approval(), legacy = { context: { provisionedAt: new Date(now - 2700000 + 1000).toISOString() },
+    dispatchedAt: old.dispatchedAt, reviewedAt: { root: new Date(now).toISOString(), independent: new Date(now).toISOString() } };
+  assert.equal(deadline(old, legacy, now), now + 1000);
+});
 test('default plan and all unsupported CLI actions perform no authenticated or private operation', async () => {
   let calls = 0;
   assert.equal((await runSuccessorAttestationAdmission({ collectAdmission() { calls++; }, preflightFixedReads() { calls++; } })).publicationInstalled, true);
@@ -311,6 +413,7 @@ function waitFixture({ missing = 2, old = true, deadlineAge = 0, badSignature = 
   const currentVariables = { contractPin: a.contractSha256, authorityEnvelope: JSON.stringify({ receipt: { context } }) };
   const fn = bodyFixture('scripts/lib/preview-email-build.mjs', 'export async function waitForPreviewEmailAttestation', '\nexport function previewEmailBuildDeployment', {
     successorLiveSelection(admission, candidate, at) { assert.equal(candidate, a.candidateSha); assert.equal(admission, selected); return selected; },
+    successorLiveExecutionDeadline(admission) { assert.equal(admission, selected); return Math.min(Date.parse(selected.context.provisionedAt) + 2700000, ...[selected.dispatchedAt, ...Object.values(selected.reviewedAt)].map(t => Date.parse(t) + 1800000)); },
     successorVerificationSelection(admission, candidate, at) { assert.equal(candidate, a.candidateSha); assert.equal(admission, selected); return selected; },
     SUCCESSOR_LIVE_CONTRACT, previewEmailProtectionData(p) { return { authorityMode: 'issuance-bound-v1', environmentId: 20,
       contractPinReady: !verificationOnly || p.variables.contractPin === a.contractSha256, runId: a.runId, reviewedTokenId: a.tokenId, enrollmentId: a.enrollmentId, authorityEnvelope: p.variables.authorityEnvelope }; },
@@ -393,6 +496,8 @@ test('fixed native execution consumes before private reads and performs only the
     fail: () => { throw Error('Inert native fixture refused'); }, retainedProduction: async () => { events.push('retained-production'); },
     readSuccessorEnrollmentTokenMetadata: async () => { events.push('metadata'); assert.ok(events.includes('key-pin')); return tokenMetadata(a); },
     NATIVE_FETCH: () => assert.fail('No fetch in inert harness'), Date: { now: () => now, parse: Date.parse },
+    receiptDeadline: bodyFixture('scripts/lib/preview-vercel-successor-attestation.mjs', 'function receiptDeadline',
+      '\nasync function executeFixed', { Date, durableSuccessorSetupDeadline }),
     readExistingEnrollment: () => state(a), enrolledAuthorityContext: value => value,
     signEnrollmentReceipt(value) { events.push('sign'); assert.ok(events.includes('metadata')); assert.equal(value.now, now); return envelope; },
     ENROLLED_AUTHORITY_RECEIPT: 'FCOS_PREVIEW_VERCEL_AUTHORITY_RECEIPT', ENVIRONMENT: '/OFFLINE_EXACT_ENVIRONMENT', GH: '/OFFLINE_GH',
