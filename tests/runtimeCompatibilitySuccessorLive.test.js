@@ -1,3 +1,4 @@
+import { DURABLE_SETUP_CONTRACT_SHA256, DURABLE_SETUP_MODE } from '../scripts/lib/runtime-compatibility-setup.mjs';
 import assert from 'node:assert/strict';
 import test, { after } from 'node:test';
 import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
@@ -29,7 +30,7 @@ import { previewEmailSignerEnabled, previewEmailSignerSourceHashes, previewEmail
 import { legacyEmailCandidate, assertLegacyEmailBaselineProof, LEGACY_EMAIL_BASELINE_CONTRACT } from '../scripts/lib/legacy-email-baseline-proof.mjs';
 import { PREVIEW_PARITY_POLICY as parityPolicy, evaluatePreviewParity } from '../scripts/lib/preview-parity.mjs';
 import { compatibilityOperationScopeVerified, assertCompatibilityNormalArtifact, createRuntimeCompatibilityPreflight,
-  executeRuntimeCompatibilityRelease } from '../scripts/lib/runtime-compatibility-release.mjs';
+  executeRuntimeCompatibilityRelease, assertRuntimeCompatibilityProtection, FIRST_RUNTIME_ROLLOUT, COMPATIBILITY_EXCEPTION } from '../scripts/lib/runtime-compatibility-release.mjs';
 import { copyBoundSource, installPortableObjects, controlManifest, controlManifestBytes, validateControlManifest, controlPack } from './helpers/runtimeCompatibilitySuccessorPortable.mjs';
 import { SUCCESSOR_ATTEST_PURPOSE, SUCCESSOR_ATTEST_CANONICAL_HELPER_SHA256, successorAttestationPlan,
   bindSuccessorAttestationAdmission, runSuccessorAttestationAdmission } from '../scripts/lib/preview-vercel-successor-attestation.mjs';
@@ -950,4 +951,78 @@ test('exact04ee compatibility consumes the same authenticated normal archive and
   await assert.rejects(() => executeRuntimeCompatibilityRelease({ preflight: { ...report, ready: true, blockers: [] },
     authority: () => { callbacks++; }, deploy: () => { callbacks++; }, leaseHeld: true }), { code: 'EXACT_SUCCESSOR_SHARED_COORDINATOR_REQUIRED' });
   assert.equal(callbacks, 0);
+});
+
+function durableFixture(runId = 99) {
+  const value = fixture(runId), provisioned = now - 13 * 3600000;
+  const metadata = successorRecords({ candidate: { ...policy, ...value.context.value.records }, context: value.context.value }).records.filter(row => row.target[0] === 'preview');
+  replaceContext(value, context => {
+    Object.assign(context, { schemaVersion: 2, kind: 'fcos_exact_04ee_setup_context', contractSha256: DURABLE_SETUP_CONTRACT_SHA256,
+      provisionedAt: iso(provisioned), setupExpiresAt: iso(provisioned + 86400000), cleanupDeadline: iso(provisioned + 86400000),
+      recordMetadata: Object.fromEntries(['tenantRecordId', 'clientRecordId', 'attachmentRecordId'].map((field, index) =>
+        [field, { ...metadata[index], createdAt: provisioned - 2000, updatedAt: provisioned - 1000 }])) });
+  });
+  value.reviews = value.reviews.map(row => record({ ...row.value, schemaVersion: 2, kind: 'fcos_exact_04ee_setup_material_review', reviewedAt: iso(provisioned + 1000) }));
+  value.rows.root = value.reviews[0]; value.rows.independent = value.reviews[1]; return value;
+}
+function durableRecords(admission, at) {
+  const snapshot = successorRecords(admission); snapshot.capturedAt = iso(at);
+  snapshot.records = [...snapshot.records.filter(row => row.target[0] === 'production'), ...Object.values(admission.context.recordMetadata)]; return snapshot;
+}
+test('genuine durable admission survives queued review, pins exact metadata before intent, and does not mint CREATE from old completed evidence', async () => {
+  const oldTime = now - 7200000, original = durableFixture(99), serialized = JSON.stringify(original.rows);
+  const originalTransport = materialTransportFixture({ expected: original.binding, rows: original.rows, now: oldTime, dispatchedAt: iso(now - 12 * 3600000) });
+  const old = await collectSuccessorLiveAdmission({ binding: original.binding, reads: originalTransport.reads, sourceCwd: trustedCwd, trustedCwd, now: oldTime });
+  assert.equal(old.materialMode, DURABLE_SETUP_MODE); assert.equal(old.jobId, originalTransport.jobs[0].id);
+  const records = durableRecords(old, oldTime), intent = createPreviewEmailBuildIntent({ candidateSha: policy.candidateSha, harnessSha,
+    controlRevision: controls.previewControlRevision, runId: 99, operationId, records, admission: old, now: oldTime });
+  const receipt = { ...intent, kind: 'fcos_preview_email_build', capturedAt: iso(oldTime + 1000), deployment: { id: 'dpl_DurablePreview',
+    url: 'https://fcos-durable01-hocheunglai-6535s-projects.vercel.app', sha: policy.candidateSha, target: 'preview', state: 'READY',
+    createdAt: oldTime + 500, projectId: records.projectId, teamId: records.teamId, operationId } };
+  const downstream = durableFixture(101), transport = materialTransportFixture({ expected: downstream.binding, rows: downstream.rows, now,
+    workflow: '.github/workflows/runtime-compatibility-normal-role.yml', dispatchedAt: iso(now - 12 * 3600000) });
+  const current = await collectSuccessorLiveAdmission({ binding: downstream.binding, reads: transport.reads, sourceCwd: trustedCwd, trustedCwd, now });
+  assert.equal(current.contractSha256, old.contractSha256); assert.equal(JSON.stringify(original.rows), serialized);
+  const liveRecords = durableRecords(current, now), binding = { ...downstream.binding, deploymentId: receipt.deployment.id, candidateUrl: receipt.deployment.url };
+  assert.equal(assertPreviewEmailBuildReceipt({ receipt, binding, records: liveRecords, admission: current, now }), true);
+  const conjunction = await conjunctionFixture(), candidate = receipt.deployment;
+  const signer = { ...conjunction.proof.signer, deploymentId: candidate.id, capturedAt: iso(now) };
+  const normal = { ...conjunction.normal, deploymentId: candidate.id, candidateUrl: candidate.url, capturedAt: iso(now), emailSigner: signer,
+    browserIsolation: { ...conjunction.normal.browserIsolation, deploymentId: candidate.id, candidateUrl: candidate.url } };
+  const proof = { ...conjunction.proof, capturedAt: iso(now), records: liveRecords, signer,
+    build: { receipt, trust: { ...conjunction.proof.build.trust, capturedAt: receipt.capturedAt } } };
+  const proofOptions = { proof, normal, candidate, production: conjunction.observations.production.deployment, sourceDigest: policy.sourceDigest, admission: current, now };
+  assert.equal(assertLegacyEmailBaselineProof(proofOptions), true);
+  assert.throws(() => assertLegacyEmailBaselineProof({ ...proofOptions, admission: conjunction.admission }));
+  assert.throws(() => assertLegacyEmailBaselineProof({ ...proofOptions, admission: structuredClone(current) }));
+  assert.throws(() => assertLegacyEmailBaselineProof({ ...proofOptions, normal: { ...normal, capturedAt: iso(now - 1800001) } }));
+  const releaseValue = durableFixture(102), releaseTransport = materialTransportFixture({ expected: releaseValue.binding, rows: releaseValue.rows, now,
+    workflow: '.github/workflows/runtime-compatibility-release.yml', dispatchedAt: iso(now - 12 * 3600000) });
+  const releaseAdmission = await collectSuccessorLiveAdmission({ binding: releaseValue.binding, reads: releaseTransport.reads, sourceCwd: trustedCwd, trustedCwd, now });
+  const pins = { FCOS_RUNTIME_COMPATIBILITY_RELEASE_ENABLED: 'true', FCOS_COMPATIBILITY_REVIEWED_SHA: policy.candidateSha,
+    FCOS_COMPATIBILITY_REVIEWED_HARNESS_SHA: harnessSha, FCOS_COMPATIBILITY_REVIEWED_SOURCE_SHA256: policy.sourceDigest,
+    FCOS_COMPATIBILITY_REVIEWED_LOCK_SHA256: policy.lockHash, FCOS_COMPATIBILITY_REVIEWED_CONTROL_SHA256: controls.configurationRevision,
+    FCOS_COMPATIBILITY_REVIEWED_TREE_SHA256: policy.candidateTreeHash, FCOS_COMPATIBILITY_PREVIOUS_DEPLOYMENT: FIRST_RUNTIME_ROLLOUT.previousDeploymentId,
+    FCOS_COMPATIBILITY_PREVIOUS_SHA: FIRST_RUNTIME_ROLLOUT.previousSha, FCOS_COMPATIBILITY_PREVIOUS_URL: FIRST_RUNTIME_ROLLOUT.previousUrl,
+    FCOS_COMPATIBILITY_REVIEWED_EXCEPTION: COMPATIBILITY_EXCEPTION, FCOS_RELEASE_VERCEL_TOKEN_ID: 'OFFLINE_REVIEWED_TOKEN' };
+  const protectionArgs = { ...releaseTransport, binding: releaseValue.binding, admission: releaseAdmission, now,
+    variables: { variables: Object.entries(pins).map(([name, value]) => ({ name, value })) },
+    secrets: { secrets: ['FCOS_RELEASE_GH_TOKEN', 'FCOS_RELEASE_VERCEL_TOKEN', 'FCOS_RELEASE_RUNTIME_TOKEN', 'FCOS_RELEASE_PREVIEW_RUNTIME_TOKEN'].map(name => ({ name })) } };
+  assert.equal(assertRuntimeCompatibilityProtection(protectionArgs).runId, 102);
+  assert.throws(() => assertRuntimeCompatibilityProtection({ ...protectionArgs, admission: structuredClone(releaseAdmission) }));
+  assert.throws(() => assertRuntimeCompatibilityProtection({ ...protectionArgs, run: { ...releaseTransport.run, run_started_at: iso(now - 11 * 3600000) } }));
+  assert.throws(() => assertRuntimeCompatibilityProtection({ ...protectionArgs, now: now + 1800001 }));
+
+  assert.throws(() => successorLiveSelection(old, policy.candidateSha, now));
+  assert.throws(() => successorLiveSelection(structuredClone(current), policy.candidateSha, now));
+  assert.throws(() => createPreviewEmailBuildIntent({ candidateSha: policy.candidateSha, harnessSha, controlRevision: controls.previewControlRevision,
+    runId: 99, operationId, records: liveRecords, admission: current, now }));
+  for (const change of [r => { r.updatedAt++; }, r => { r.id += 'LATE'; }, r => { r.comment = 'changed'; }, r => { r.target.push('production'); }]) {
+    const changed = structuredClone(records); change(changed.records.at(-1));
+    assert.throws(() => createPreviewEmailBuildIntent({ candidateSha: policy.candidateSha, harnessSha, controlRevision: controls.previewControlRevision,
+      runId: 99, operationId, records: changed, admission: old, now: oldTime }));
+    const drift = structuredClone(liveRecords); change(drift.records.at(-1));
+    assert.throws(() => assertPreviewEmailBuildReceipt({ receipt, binding, records: drift, admission: current, now }));
+  }
+  await assert.rejects(() => collectSuccessorLiveAdmission({ ...downstream, sourceCwd: trustedCwd, trustedCwd, now })); // v2 has no static fallback
 });

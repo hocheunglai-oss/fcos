@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { inflateRawSync } from 'node:zlib';
 import { FCOS_RELEASE_APPROVAL_POLICY, fcosConnectionIdentifier } from '../../config/fcosConnections.js';
 import { assertProtectedDefault, assertReleaseGitHubAccount } from './release-evidence.mjs';
+import { DURABLE_SETUP_MODE, DURABLE_SETUP_CONTRACT_SHA256, durableSuccessorSetupDeadline } from './runtime-compatibility-setup.mjs';
 import { githubProviderFresh, githubProviderTimestamp } from './github-provider-timestamp.mjs';
 
 export const RUNTIME_MATERIAL_MODE = 'FCOS_RUNTIME_COMPATIBILITY_MATERIAL_TRANSPORT';
@@ -24,6 +25,16 @@ export const runtimeMaterialHash = bytes => createHash('sha256').update(bytes).d
 const fail = () => { throw new Error('Authenticated immutable runtime material is unavailable; no static fallback or action authority.'); };
 const need = value => { if (!value) fail(); };
 const base = () => `repos/${fcosConnectionIdentifier('github', 'Repository')}`;
+export function runtimeSetupBinding(binding) {
+  const { environmentId, runId, runAttempt, workflow, ...setup } = binding;
+  return { ...setup, setupContractSha256: DURABLE_SETUP_CONTRACT_SHA256 };
+}
+export function runtimeMaterialMode(text) {
+  let pack; try { pack = JSON.parse(text); } catch { fail(); }
+  if (pack?.schemaVersion === 2 && pack.kind === 'fcos_exact04ee_setup_material_pack') return DURABLE_SETUP_MODE;
+  need(pack?.schemaVersion === 1 && pack.kind === 'fcos_exact04ee_runtime_material_pack');
+  return RUNTIME_MATERIAL_MODE_VALUE;
+}
 export const runtimeMaterialArtifactName = runId => { need(positive(runId)); return `fcos-exact04ee-runtime-materials-${runId}`; };
 
 async function collection(reads, path, field) {
@@ -65,7 +76,9 @@ export function assertRuntimeMaterialProducer({ repository, branch, protection, 
     && run.head_sha === trusted.sha && run.head_sha === expected.harnessSha && run.head_branch === trusted.branch && run.event === 'workflow_dispatch'
     && [workflow, `${workflow}@${trusted.branch}`].includes(run.path) && ['in_progress', 'completed'].includes(run.status)
     && run.actor?.login === operator && run.actor?.id === reviewer.reviewer.id && run.triggering_actor?.login === operator && run.triggering_actor?.id === reviewer.reviewer.id
-    && githubProviderFresh(run.run_started_at, 1800000, now)
+    && (expected.materialMode === DURABLE_SETUP_MODE
+      ? githubProviderTimestamp(run.run_started_at) && Date.parse(run.run_started_at) <= now
+      : githubProviderFresh(run.run_started_at, 1800000, now))
     && positive(job?.id) && job.run_id === run.id && job.run_attempt === 1 && job.name === route.job && job.workflow_name === run.name
     && job.head_sha === trusted.sha && job.head_branch === trusted.branch && ['in_progress', 'completed'].includes(job.status)
     && githubProviderFresh(job.started_at, 1800000, now) && Date.parse(job.started_at) >= Date.parse(run.run_started_at));
@@ -88,9 +101,10 @@ export function assertRuntimeMaterialProducer({ repository, branch, protection, 
     && oidcClaims.actor === operator && oidcClaims.actor_id === String(reviewer.reviewer.id)
     && Number.isFinite(oidcClaims.exp) && oidcClaims.exp * 1000 > now);
   return { binding, job, step, environment: route.environment, dispatchedAt: run.run_started_at,
+    materialMode: expected.materialMode || RUNTIME_MATERIAL_MODE_VALUE,
     ...(oidcClaims ? { oidcExpiresAt: oidcClaims.exp * 1000 } : {}) };
 }
-export async function collectRuntimeMaterialProducer({ reads, expected, oidcClaims, requireCompletedStep = true, now = Date.now() }) {
+export async function collectRuntimeMaterialProducer({ reads, expected, oidcClaims, requireCompletedStep = true, detectMaterialMode = false, now = Date.now() }) {
   assertReleaseGitHubAccount(reads);
   const repository = await reads.json(base()), branch = await reads.json(`${base()}/branches/${encodeURIComponent(repository.default_branch)}`);
   const protection = await reads.json(`${base()}/branches/${encodeURIComponent(repository.default_branch)}/protection`);
@@ -99,7 +113,15 @@ export async function collectRuntimeMaterialProducer({ reads, expected, oidcClai
   const environment = await reads.json(`${base()}/environments/${route.environment}`);
   const jobs = await collection(reads, `${base()}/actions/runs/${expected.runId}/attempts/1/jobs`, 'jobs');
   const approvals = await reads.json(`${base()}/actions/runs/${expected.runId}/approvals`);
-  return assertRuntimeMaterialProducer({ repository, branch, protection, environment, workflowDefinition, run, jobs, approvals, expected, oidcClaims, requireCompletedStep, now });
+  const data = { repository, branch, protection, environment, workflowDefinition, run, jobs, approvals, expected, oidcClaims, requireCompletedStep, now };
+  if (!detectMaterialMode) return assertRuntimeMaterialProducer(data);
+  // Authenticate the current approved job, source and OIDC before reading even
+  // public setup input. This preliminary data check mints no capability. Final
+  // format-specific admission below keeps v1's original dispatch clock intact.
+  need(oidcClaims !== undefined && requireCompletedStep === false);
+  assertRuntimeMaterialProducer({ ...data, expected: { ...expected, materialMode: DURABLE_SETUP_MODE } });
+  const materialText = await runtimeMaterialInput(reads, route.environment); need(materialText !== null);
+  return { ...assertRuntimeMaterialProducer({ ...data, expected: { ...expected, materialMode: runtimeMaterialMode(materialText) } }), materialText };
 }
 export async function runtimeMaterialArtifacts(reads, runId) {
   need(positive(runId)); return collection(reads, `${base()}/actions/runs/${runId}/artifacts`, 'artifacts');
@@ -112,14 +134,16 @@ export async function runtimeMaterialInput(reads, environment) {
   need(!repositoryVariables.some(row => [RUNTIME_MATERIAL_MODE, RUNTIME_MATERIAL_INPUT].includes(row.name)));
   const mode = variables.find(row => row.name === RUNTIME_MATERIAL_MODE), input = variables.find(row => row.name === RUNTIME_MATERIAL_INPUT);
   if (!mode && !input) return null;
-  need(mode?.value === RUNTIME_MATERIAL_MODE_VALUE && typeof input?.value === 'string' && input.value.length > 0 && Buffer.byteLength(input.value) <= 49152);
+  need([RUNTIME_MATERIAL_MODE_VALUE, DURABLE_SETUP_MODE].includes(mode?.value) && typeof input?.value === 'string' && input.value.length > 0 && Buffer.byteLength(input.value) <= 49152
+    && runtimeMaterialMode(input.value) === mode.value);
   return input.value;
 }
 export function parseRuntimeMaterialPack(text, binding) {
   need(typeof text === 'string' && Buffer.byteLength(text) <= 49152);
   let pack; try { pack = JSON.parse(text); } catch { fail(); }
-  need(exact(pack, ['schemaVersion', 'kind', 'binding', 'materials']) && pack.schemaVersion === 1 && pack.kind === 'fcos_exact04ee_runtime_material_pack'
-    && equal(pack.binding, binding) && exact(pack.materials, ['context', 'root', 'independent']));
+  const durable = runtimeMaterialMode(text) === DURABLE_SETUP_MODE;
+  need(exact(pack, ['schemaVersion', 'kind', 'binding', 'materials'])
+    && equal(pack.binding, durable ? runtimeSetupBinding(binding) : binding) && exact(pack.materials, ['context', 'root', 'independent']));
   const rows = {};
   for (const role of ['context', 'root', 'independent']) {
     const raw = pack.materials[role]; need(typeof raw === 'string' && Buffer.byteLength(raw) > 0 && Buffer.byteLength(raw) <= 32768);
@@ -130,7 +154,7 @@ export function parseRuntimeMaterialPack(text, binding) {
 }
 export function runtimeMaterialPayload(text, producer, now = Date.now()) {
   parseRuntimeMaterialPack(text, producer.binding);
-  const payload = { schemaVersion: 1, kind: 'fcos_exact04ee_runtime_material_artifact', binding: producer.binding,
+  const payload = { schemaVersion: runtimeMaterialMode(text) === DURABLE_SETUP_MODE ? 2 : 1, kind: 'fcos_exact04ee_runtime_material_artifact', binding: producer.binding,
     producerJobId: producer.job.id, capturedAt: new Date(now).toISOString(), materialPackSha256: runtimeMaterialHash(text),
     materialPackText: text, grantsAuthority: false };
   // Bound the actual encoded wrapper before any attempt marker/publication;
@@ -142,12 +166,14 @@ export function runtimeMaterialPayload(text, producer, now = Date.now()) {
 // reads. Capture/publication time cannot extend identity or material validity.
 export function assertRuntimeMaterialPublicationFresh({ producer, payload, now = Date.now() } = {}) {
   const rows = parseRuntimeMaterialPack(payload.materialPackText, producer.binding);
-  const clocks = [[producer.dispatchedAt, 1800000], [producer.job.started_at, 1800000],
-    [producer.step.started_at, 1800000], [rows.context.value.provisionedAt, 2700000],
-    ...['root', 'independent'].map(role => [rows[role].value.reviewedAt, 1800000])];
+  const durable = runtimeMaterialMode(payload.materialPackText) === DURABLE_SETUP_MODE;
+  need((producer.materialMode === DURABLE_SETUP_MODE) === durable);
+  const clocks = [[producer.job.started_at, 1800000], [producer.step.started_at, 1800000],
+    ...(durable ? [] : [[producer.dispatchedAt, 1800000], [rows.context.value.provisionedAt, 2700000],
+      ...['root', 'independent'].map(role => [rows[role].value.reviewedAt, 1800000])])];
   need(Number.isFinite(now) && clocks.every(([timestamp, age]) => githubProviderFresh(timestamp, age, now))
     && githubProviderFresh(payload.capturedAt, 1800000, now) && Number.isFinite(producer.oidcExpiresAt));
-  const deadline = Math.min(producer.oidcExpiresAt, ...clocks.map(([timestamp, age]) => Date.parse(timestamp) + age));
+  const deadline = Math.min(producer.oidcExpiresAt, ...(durable ? [durableSuccessorSetupDeadline(rows.context.value, now)] : []), ...clocks.map(([timestamp, age]) => Date.parse(timestamp) + age));
   need(now < deadline); return deadline;
 }
 
@@ -226,7 +252,8 @@ export async function collectRuntimeSuccessorMaterials({ reads, expected, run, n
   const matches = artifacts.filter(row => row.name === runtimeMaterialArtifactName(expected.runId));
   if (text === null) { need(matches.length === 0); return null; }
   need(matches.length === 1);
-  const producer = await collectRuntimeMaterialProducer({ reads, expected, now }), artifact = matches[0];
+  const materialMode = runtimeMaterialMode(text);
+  const producer = await collectRuntimeMaterialProducer({ reads, expected: { ...expected, materialMode }, now }), artifact = matches[0];
   need(positive(artifact.id) && artifact.expired === false && artifact.workflow_run?.id === expected.runId && artifact.workflow_run?.head_sha === expected.harnessSha
     && artifact.workflow_run?.head_repository_id === producer.binding.repositoryId && artifact.workflow_run?.repository_id === producer.binding.repositoryId
     && /^sha256:[0-9a-f]{64}$/.test(artifact.digest || '') && Number.isSafeInteger(artifact.size_in_bytes) && artifact.size_in_bytes > 0 && artifact.size_in_bytes <= 131072
@@ -244,11 +271,11 @@ export async function collectRuntimeSuccessorMaterials({ reads, expected, run, n
   }
   need(immutable.size === artifact.size_in_bytes); const payload = immutable.payload;
   need(exact(payload, ['schemaVersion', 'kind', 'binding', 'producerJobId', 'capturedAt', 'materialPackSha256', 'materialPackText', 'grantsAuthority'])
-    && payload.schemaVersion === 1 && payload.kind === 'fcos_exact04ee_runtime_material_artifact' && equal(payload.binding, producer.binding)
+    && payload.schemaVersion === (materialMode === DURABLE_SETUP_MODE ? 2 : 1) && payload.kind === 'fcos_exact04ee_runtime_material_artifact' && equal(payload.binding, producer.binding)
     && payload.producerJobId === producer.job.id && payload.grantsAuthority === false && payload.materialPackText === text
     && payload.materialPackSha256 === runtimeMaterialHash(text) && githubProviderFresh(payload.capturedAt, 1800000, now)
     && Date.parse(payload.capturedAt) >= Date.parse(producer.step.started_at) && Date.parse(payload.capturedAt) <= Date.parse(producer.step.completed_at));
-  return { rows: parseRuntimeMaterialPack(text, producer.binding), transport: { kind: 'authenticated_run_artifact',
+  return { rows: parseRuntimeMaterialPack(text, producer.binding), materialMode, transport: { jobStartedAt: producer.job.started_at, kind: 'authenticated_run_artifact',
     artifactId: artifact.id, archiveSha256: artifact.digest.slice(7), materialPackSha256: payload.materialPackSha256,
     producerJobId: producer.job.id, binding: producer.binding, capturedAt: payload.capturedAt } };
 }

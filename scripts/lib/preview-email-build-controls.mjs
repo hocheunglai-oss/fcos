@@ -12,6 +12,7 @@ export const PREVIEW_EMAIL_BUILD_CONTROL_FILES = Object.freeze([
   '.github/workflows/candidate-quality.yml', '.github/quality-candidates/f4576a8c918acef686f084c505b1715de11deeb8.json',
   'scripts/candidate-quality-receipt.mjs', 'scripts/lib/candidate-quality.mjs',
   'scripts/lib/preview-email-build-controls.mjs', 'scripts/lib/runtime-compatibility-successor-live.mjs',
+  'scripts/lib/runtime-compatibility-setup.mjs', 'config/runtime-compatibility-setup.json',
   'scripts/lib/runtime-compatibility-successor-adapter.mjs', 'config/runtime-compatibility-successor-live.json',
   '.github/actions/runtime-compatibility-materials/action.yml',
   'scripts/runtime-compatibility-materials.mjs', 'scripts/lib/runtime-compatibility-material-transport.mjs',

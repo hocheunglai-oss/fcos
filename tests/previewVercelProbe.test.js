@@ -186,7 +186,7 @@ async function runnerScenario(root, temporaryDirectory, variant = 'legacy') {
         assert.deepEqual(input.run, run); assert.deepEqual(input.workflow, workflow); return true;
       },
       collectSuccessorLiveOperationAdmission: denyLive, successorLiveBinding: denyLive, successorLivePlan: denyLive,
-      successorLiveSelection: denyLive, successorEmailContract: denyLive, successorLiveRemoteControls: denyLive,
+      successorLiveSelection: denyLive, successorLiveExecutionDeadline: denyLive, successorEmailContract: denyLive, successorLiveRemoteControls: denyLive,
       successorLiveSourceReceipt: denyLive, rejectSuccessorUncoordinatedMutation: denyLive,
       successorLiveSignerSourceHashes: denyLive, successorLiveSignerSourceProof: denyLive } });
   }

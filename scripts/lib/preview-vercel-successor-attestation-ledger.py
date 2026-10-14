@@ -66,10 +66,24 @@ def pinned(ref):
         raise ValueError('private reference changed')
     return json.loads(raw)
 
+DURABLE_SETUP_SHA256 = 'a22557be43d23f6b85993966a8714f5fe298e26f5fb086a989dee94cb655fda9'
+
+def assert_action_version(action):
+    version = action.get('schemaVersion')
+    if type(version) is not int or version not in (1, 2):
+        raise ValueError('exact attestation version required')
+    if version == 2:
+        if (action.get('setupContractSha256') != DURABLE_SETUP_SHA256
+                or action.get('operation') not in ('create', 'readback')):
+            raise ValueError('exact durable setup policy required')
+    elif 'setupContractSha256' in action:
+        raise ValueError('v1 cannot carry durable setup authority')
+
 def assert_action(action, nonce, now):
     # This independent preliminary check grants no action capability. The native
     # validator applies the full exact schema/source/material/run admission.
-    if (action.get('schemaVersion') != 1 or action.get('action') != 'attest' or action.get('purpose') != PURPOSE
+    assert_action_version(action)
+    if (action.get('action') != 'attest' or action.get('purpose') != PURPOSE
             or action.get('nonce') != nonce or action.get('authorized') is not True or action.get('attestorNewPurposeAuthorized') is not True
             or action.get('authorizedBy') != 'hocheunglai-oss' or action.get('canonicalHelperSha256') != HELPER_SHA256
             or not isinstance(action.get('authorizedAt'), int) or not 0 <= now - action['authorizedAt'] <= 3600000

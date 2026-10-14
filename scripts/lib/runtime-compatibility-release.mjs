@@ -1,3 +1,5 @@
+import { isDurableSuccessorSetup } from './runtime-compatibility-setup.mjs';
+import { githubProviderTimestamp } from './github-provider-timestamp.mjs';
 import { successorReleaseCoordinationVerified, consumeReleaseCoordination } from './release-coordination-transport.mjs';
 import { compatibilityBrowserIsolationVerified } from './compatibility-browser-isolation.mjs';
 import { previewEmailSignerEvidenceVerified } from './preview-email-signer.mjs';
@@ -100,6 +102,8 @@ export function assertRuntimeCompatibilityWorkflowIdentity(claims, repository, b
 export function assertRuntimeCompatibilityProtection({ repository, branch, protection, environment, variables, secrets,
   run, approvals, oidcClaims, binding, admission, now = Date.now() } = {}) {
   const candidateSha = compatibilitySelectedCandidate(binding, admission, now);
+  const selected = candidateSha === SUCCESSOR_LIVE_CONTRACT.candidateSha ? successorLiveBinding(admission, binding, now) : undefined;
+  const durable = isDurableSuccessorSetup(selected?.context);
   if (FCOS_RELEASE_APPROVAL_POLICY.mode !== 'single_operator') throw new Error('This first-rollout contract requires the reviewed single-operator policy.');
   const trusted = assertProtectedDefault(repository, branch, protection);
   assertRuntimeCompatibilityWorkflowIdentity(oidcClaims, repository, branch);
@@ -136,7 +140,9 @@ export function assertRuntimeCompatibilityProtection({ repository, branch, prote
   if (run?.repository?.full_name !== RELEASE_REPOSITORY || run.head_repository?.full_name !== RELEASE_REPOSITORY
     || run.event !== 'workflow_dispatch' || run.head_branch !== trusted.branch || run.head_sha !== trusted.sha
     || ![COMPATIBILITY_WORKFLOW, `${COMPATIBILITY_WORKFLOW}@${trusted.branch}`].includes(run.path)
-    || run.status !== 'in_progress' || !positive(run.id) || run.run_attempt !== 1 || !fresh(run.run_started_at, now)
+    || run.status !== 'in_progress' || !positive(run.id) || run.run_attempt !== 1 || !(durable
+      ? githubProviderTimestamp(run.run_started_at) && run.run_started_at === selected.dispatchedAt && Date.parse(run.run_started_at) <= now
+      : fresh(run.run_started_at, now))
     || run.actor?.login !== operator || run.triggering_actor?.login !== operator
     || run.actor?.id !== reviewer.reviewer.id || run.triggering_actor?.id !== reviewer.reviewer.id) throw new Error('Compatibility requires the pinned human operator first run of the protected default workflow.');
   const reviews = (Array.isArray(approvals) ? approvals : []).filter(review => review.environments?.some(row => row.id === environment.id && row.name === environment.name));
@@ -145,8 +151,8 @@ export function assertRuntimeCompatibilityProtection({ repository, branch, prote
   if (oidcClaims.run_id !== String(run.id) || oidcClaims.run_attempt !== '1' || oidcClaims.event_name !== 'workflow_dispatch'
     || !Number.isFinite(oidcClaims.exp) || oidcClaims.exp * 1000 <= now) throw new Error('Signed Actions identity does not match this approved first compatibility run.');
   if (candidateSha === SUCCESSOR_LIVE_CONTRACT.candidateSha) {
-    const selected = successorLiveBinding(admission, binding, now);
-    if (selected.runId !== run.id || selected.workflow !== COMPATIBILITY_WORKFLOW) throw new Error('Exact successor approval must match its original compatibility dispatch.');
+    if (selected.runId !== run.id || selected.workflow !== COMPATIBILITY_WORKFLOW
+      || durable && selected.materialTransport.binding.environmentId !== environment.id) throw new Error('Exact successor approval must match its original compatibility dispatch.');
   }
   return { runId: run.id, environmentId: environment.id, reviewerId: approval.user.id, approvalMode: 'single_operator', harnessSha: trusted.sha };
 }

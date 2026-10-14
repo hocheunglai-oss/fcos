@@ -3,6 +3,7 @@ import { FCOS_CONNECTION_POLICY, fcosConnectionIdentifier } from '../../config/f
 import { canonicalFcosE2eCandidateUrl } from '../verify-e2e-candidate.mjs';
 import { assertReleaseReceiptBinding } from './release-readiness.mjs';
 import { PREVIEW_COORDINATION_CANONICAL } from './preview-email-coordination.mjs';
+import { DURABLE_SETUP_CONTRACT_SHA256 } from './runtime-compatibility-setup.mjs';
 import { SUCCESSOR_LIVE_CONTRACT } from './runtime-compatibility-successor-live.mjs';
 
 export const RELEASE_COORDINATION_DOMAIN = 'FCOS-PRODUCTION-COORDINATION-GRANT-V1\0';
@@ -24,15 +25,17 @@ const uuid = value => typeof value === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-4[a
 const exact = (v, keys) => { need(v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === keys.length && keys.every(k => Object.hasOwn(v, k))); return Object.fromEntries(keys.map(k => [k, v[k]])); };
 const origin = value => { try { return canonicalFcosE2eCandidateUrl(value) === value; } catch { return false; } };
 const frozen = v => { if (v && typeof v === 'object') { Object.values(v).forEach(frozen); Object.freeze(v); } return v; };
-export function releaseCoordinationDeadline(b) { return Math.min(b.dispatchedAt + 1800000, b.jobStartedAt + 1800000, b.intentAt + 1800000, b.readinessAt + 1800000, b.evidenceExpiresAt); }
+export function releaseCoordinationDeadline(b) { return Math.min(...(b.schemaVersion === 3 ? [b.setupExpiresAt] : [b.dispatchedAt + 1800000]), b.jobStartedAt + 1800000, b.intentAt + 1800000, b.readinessAt + 1800000, b.evidenceExpiresAt); }
 export function validateReleaseCoordinationBinding(raw, now = Date.now()) {
-  const successor = raw?.candidate?.sha === SUCCESSOR_LIVE_CONTRACT.candidateSha;
+  const successor = raw?.candidate?.sha === SUCCESSOR_LIVE_CONTRACT.candidateSha, durable = successor && raw?.schemaVersion === 3;
   const b = exact(raw, ['schemaVersion', 'route', 'repositoryId', 'environmentId', 'runId', 'runAttempt', 'jobId', 'harnessSha',
     'operationId', 'dispatchedAt', 'jobStartedAt', 'intentAt', 'readinessAt', 'evidenceExpiresAt', 'candidate', 'previousProduction', 'readinessSha256',
-    ...(successor ? ['backendReviewSha256', 'backendClosureSha256'] : [])]);
+    ...(successor ? ['backendReviewSha256', 'backendClosureSha256'] : []),
+    ...(durable ? ['setupContractSha256', 'setupExpiresAt'] : [])]);
   b.candidate = exact(b.candidate, ['sha', 'sourceDigest', 'lockHash', 'configurationRevision', 'deploymentId', 'url']);
   b.previousProduction = exact(b.previousProduction, ['deploymentId', 'sha', 'url']);
-  need(b.schemaVersion === (successor ? 2 : 1) && (!successor || b.route === 'compatibility'
+  need(b.schemaVersion === (durable ? 3 : successor ? 2 : 1)
+    && (!durable || b.setupContractSha256 === DURABLE_SETUP_CONTRACT_SHA256 && positive(b.setupExpiresAt) && b.setupExpiresAt > now) && (!successor || b.route === 'compatibility'
     && hash(b.backendReviewSha256) && hash(b.backendClosureSha256)) && Object.hasOwn(RELEASE_COORDINATION_ROUTES, b.route) && b.runAttempt === 1
     && [b.repositoryId, b.environmentId, b.runId, b.jobId].every(positive) && sha(b.harnessSha)
     && b.operationId === `fcos-release-${b.runId}` && sha(b.candidate.sha) && sha(b.previousProduction.sha)

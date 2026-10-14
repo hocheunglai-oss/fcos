@@ -14,6 +14,18 @@ ledger = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ledger)
 NONCE = '11111111-1111-4111-8111-111111111111'
 
+class AttestationVersionTests(unittest.TestCase):
+    def test_explicit_v2_policy_does_not_transfer_v1_authority(self):
+        ledger.assert_action_version({'schemaVersion': 1})
+        for operation in ('create', 'readback'):
+            ledger.assert_action_version({'schemaVersion': 2, 'setupContractSha256': ledger.DURABLE_SETUP_SHA256, 'operation': operation})
+        for invalid in ({'schemaVersion': True}, {'schemaVersion': 3}, {'schemaVersion': 2},
+                {'schemaVersion': 1, 'setupContractSha256': ledger.DURABLE_SETUP_SHA256},
+                {'schemaVersion': 2, 'setupContractSha256': '0' * 64, 'operation': 'create'},
+                {'schemaVersion': 2, 'setupContractSha256': ledger.DURABLE_SETUP_SHA256, 'operation': 'verify-authority'}):
+            with self.assertRaises(ValueError):
+                ledger.assert_action_version(invalid)
+
 class ExistingAttestationConsumptionTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='fcos-existing-attestation-ledger-')

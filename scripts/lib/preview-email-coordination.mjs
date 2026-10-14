@@ -3,7 +3,9 @@ import { FCOS_CONNECTION_POLICY } from '../../config/fcosConnections.js';
 import { ENROLLMENT_FIXED_TARGET } from './preview-vercel-enrollment.mjs';
 import { SUCCESSOR_LIVE_CONTRACT, successorLiveSelection } from './runtime-compatibility-successor-live.mjs';
 import { assertTrustedPreviewEmailIntentRecord } from './preview-email-build.mjs';
-import { githubProviderFresh } from './github-provider-timestamp.mjs';
+import { githubProviderFresh, githubProviderTimestamp } from './github-provider-timestamp.mjs';
+import { DURABLE_SETUP_MODE, DURABLE_SETUP_CONTRACT_SHA256, isDurableSuccessorSetup,
+  durableSuccessorSetupDeadline } from './runtime-compatibility-setup.mjs';
 
 // Source implementation is not action authority. Fixed collectors separately
 // admit the exact original action, observed backend proof and real signed grant.
@@ -30,6 +32,7 @@ const bindingKeys = ['repositoryId', 'environmentId', 'runId', 'runAttempt', 'wo
   'intentArtifactId', 'intentArchiveSha256', 'intentSha256', 'operationId', 'requestSha256', 'candidateSha', 'sourceDigest', 'lockHash',
   'candidateGitTree', 'candidateTreeHash', 'harnessSha', 'controlRevision', 'configurationRevision', 'contractSha256',
   'materialHashes', 'reviewedAt', 'provisionedAt', 'intentAt', 'issuanceEnvelopeSha256', 'issuanceObservedAt', 'issuanceExpiresAt'];
+const durableBindingKeys = [...bindingKeys, 'schemaVersion', 'setupContractSha256', 'setupExpiresAt'];
 
 /** Preserve the protected variable's exact UTF-8 representation. Parsing never
  * replaces text, byte hash, signed property order or original issuance times.
@@ -42,7 +45,8 @@ export function normalizeCoordinationEnvelope(raw, limit = 32768) {
   return freeze({ text, sha256: coordinationHash(Buffer.from(text, 'utf8')), value });
 }
 export function validateCoordinationBinding(raw, now = Date.now()) {
-  const b = ordered(raw, bindingKeys), p = SUCCESSOR_LIVE_CONTRACT;
+  const durable = raw?.schemaVersion === 2;
+  const b = ordered(raw, durable ? durableBindingKeys : bindingKeys), p = SUCCESSOR_LIVE_CONTRACT;
   b.materialHashes = ordered(b.materialHashes, ['context', 'root', 'independent']);
   b.reviewedAt = ordered(b.reviewedAt, ['root', 'independent']);
   if (![b.repositoryId, b.environmentId, b.runId, b.jobId, b.intentArtifactId].every(positive) || b.runAttempt !== 1
@@ -53,15 +57,23 @@ export function validateCoordinationBinding(raw, now = Date.now()) {
     || !Object.values(b.materialHashes).every(hash) || ![b.issuanceObservedAt, b.issuanceExpiresAt].every(positive)
     || b.issuanceObservedAt > now || b.issuanceExpiresAt <= now || b.issuanceExpiresAt <= b.issuanceObservedAt
     || b.issuanceExpiresAt - b.issuanceObservedAt > 600000) coordinationFailure();
-  const times = [[b.provisionedAt, 2700000], [b.intentAt, 1800000],
-    [b.reviewedAt.root, 1800000], [b.reviewedAt.independent, 1800000]];
+  if (durable && (b.setupContractSha256 !== DURABLE_SETUP_CONTRACT_SHA256 || !positive(b.setupExpiresAt)
+    || b.setupExpiresAt <= now || b.setupExpiresAt <= Date.parse(b.provisionedAt)
+    || b.setupExpiresAt - Date.parse(b.provisionedAt) > 86400000)) coordinationFailure();
+  const times = [[b.provisionedAt, durable ? Infinity : 2700000], [b.intentAt, 1800000],
+    [b.reviewedAt.root, durable ? Infinity : 1800000], [b.reviewedAt.independent, durable ? Infinity : 1800000]];
   if (times.some(([time, age]) => !iso(time) || Date.parse(time) > now || now - Date.parse(time) > age)
-    || ![b.dispatchedAt, b.jobStartedAt].every(time => githubProviderFresh(time, 1800000, now))
+    || !githubProviderFresh(b.jobStartedAt, 1800000, now)
+    || !(durable ? githubProviderTimestamp(b.dispatchedAt) && Date.parse(b.dispatchedAt) <= now
+      : githubProviderFresh(b.dispatchedAt, 1800000, now))
     || Date.parse(b.jobStartedAt) < Date.parse(b.dispatchedAt) || Date.parse(b.intentAt) < Date.parse(b.jobStartedAt)
-    || Object.values(b.reviewedAt).some(time => Date.parse(time) < Date.parse(b.provisionedAt))) coordinationFailure();
+    || Object.values(b.reviewedAt).some(time => Date.parse(time) < Date.parse(b.provisionedAt)
+      || durable && Date.parse(time) > Date.parse(b.dispatchedAt))) coordinationFailure();
   return freeze(b);
 }
 export function coordinationDeadline(b) {
+  if (b.schemaVersion === 2) return Math.min(b.issuanceExpiresAt, b.setupExpiresAt,
+    Date.parse(b.jobStartedAt) + 1800000, Date.parse(b.intentAt) + 1800000);
   return Math.min(b.issuanceExpiresAt, Date.parse(b.provisionedAt) + 2700000,
     ...[b.dispatchedAt, b.jobStartedAt, b.intentAt, ...Object.values(b.reviewedAt)].map(t => Date.parse(t) + 1800000));
 }
@@ -76,11 +88,14 @@ export function coordinationClaimName(binding) {
  * but only the separate fixed production wrapper can brand a hosted claim. */
 export function coordinationBindingFromOriginal({ admission, original, issuanceEnvelope, now = Date.now() } = {}) {
   const selected = successorLiveSelection(admission, SUCCESSOR_LIVE_CONTRACT.candidateSha, now);
+  const durable = isDurableSuccessorSetup(selected.context);
+  if ((selected.materialMode === DURABLE_SETUP_MODE) !== durable) coordinationFailure();
   const { intent, trust } = assertTrustedPreviewEmailIntentRecord(original, { admission: selected, now });
   const issuance = normalizeCoordinationEnvelope(issuanceEnvelope, 16384), r = issuance.value.receipt, c = r?.context;
   if (selected.runId !== trust.runId || selected.runId !== intent.runId || selected.runAttempt !== trust.runAttempt
     || selected.workflow !== trust.workflow || selected.dispatchedAt !== trust.dispatchedAt || c?.runId !== intent.runId || c.runAttempt !== 1
     || c.operation !== 'create' || c.repositoryId !== trust.repositoryId || !positive(c.environmentId)
+    || durable && (selected.jobId !== trust.jobId || selected.jobStartedAt !== trust.jobStartedAt)
     || c.harnessSha !== selected.harnessSha || c.candidateSha !== selected.candidate.sha || c.controlRevision !== intent.controlRevision
     || c.contractSha256 !== selected.contractSha256 || r.observedAt !== r.issuedAt) coordinationFailure();
   return validateCoordinationBinding({ repositoryId: trust.repositoryId, environmentId: c.environmentId, runId: intent.runId, runAttempt: 1,
@@ -91,7 +106,9 @@ export function coordinationBindingFromOriginal({ admission, original, issuanceE
     candidateTreeHash: SUCCESSOR_LIVE_CONTRACT.candidateTreeHash, harnessSha: selected.harnessSha, controlRevision: intent.controlRevision,
     configurationRevision: selected.context.configurationRevision, contractSha256: selected.contractSha256,
     materialHashes: selected.materialHashes, reviewedAt: selected.reviewedAt, provisionedAt: selected.context.provisionedAt, intentAt: intent.intentAt,
-    issuanceEnvelopeSha256: issuance.sha256, issuanceObservedAt: r.observedAt, issuanceExpiresAt: r.expiresAt }, now);
+    issuanceEnvelopeSha256: issuance.sha256, issuanceObservedAt: r.observedAt, issuanceExpiresAt: r.expiresAt,
+    ...(durable ? { schemaVersion: 2, setupContractSha256: DURABLE_SETUP_CONTRACT_SHA256,
+      setupExpiresAt: durableSuccessorSetupDeadline(selected.context, now) } : {}) }, now);
 }
 export function validateCoordinationLease(raw, binding) {
   const lease = ordered(raw, ['epoch', 'objective', 'ownerThreadId', 'operationId', 'bindingSha256', 'leaseId',
