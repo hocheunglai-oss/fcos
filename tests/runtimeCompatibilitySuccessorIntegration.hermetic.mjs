@@ -209,7 +209,7 @@ test('H11 actual current readiness normal Preview signer and executor reject sou
   assert.throws(() => readiness.assertReleaseReceiptBinding({ ...source, receiptKind: 'fcos_release_readiness' }, { sha: exact }), /stale, blocked/);
   assert.equal(compatibility.compatibilityReadOnlyGuardsVerified(source), false);
   assert.equal(compatibility.compatibilityNormalCoverageVerified(source), false);
-  assert.throws(() => preview.assertPreviewEmailBuildReceipt({ receipt: source, binding: { sha: exact } }), /invalid or stale/);
+  assert.throws(() => preview.assertPreviewEmailBuildReceipt({ receipt: source, binding: { sha: exact } }), { code: 'EXACT_SUCCESSOR_TRUSTED_SELECTION_REQUIRED' });
   assert.throws(() => preview.previewEmailBuildCandidate(exact), { code: 'EXACT_SUCCESSOR_TRUSTED_SELECTION_REQUIRED' });
   assert.throws(() => signer.previewEmailSignerEnabled(exact), { code: 'EXACT_SUCCESSOR_TRUSTED_SELECTION_REQUIRED' });
   assert.throws(() => signer.previewEmailSignerEvidenceVerified({ ...source, kind: 'fcos_preview_email_signer_evidence' }, { deployment: { id: 'dpl_fixture', sha: exact }, sourceDigest: '0'.repeat(64) }));
