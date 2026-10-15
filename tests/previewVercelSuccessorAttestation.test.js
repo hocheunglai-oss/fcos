@@ -13,10 +13,11 @@ import { SUCCESSOR_ATTEST_PURPOSE, SUCCESSOR_ATTEST_CANONICAL_HELPER_SHA256,
   assertSuccessorAttestationPrivateAction, assertSuccessorAttestationEnrollment, assertSuccessorAttestationPinnedKey,
   assertSuccessorAttestationProtectedReview, readSuccessorEnrollmentTokenMetadata,
   assertSuccessorAttestationRepositoryVariables, successorAttestationCommandStatus, successorAttestationHash,
-  runFixedSuccessorAttestation, bindSuccessorAttestationAdmission } from '../scripts/lib/preview-vercel-successor-attestation.mjs';
+  runFixedSuccessorAttestation, bindSuccessorAttestationAdmission, collectSuccessorAttestationPublicPreflight } from '../scripts/lib/preview-vercel-successor-attestation.mjs';
 import { DURABLE_SETUP_MODE, DURABLE_SETUP_CONTRACT_SHA256, isDurableSuccessorSetup,
   durableSuccessorSetupDeadline } from '../scripts/lib/runtime-compatibility-setup.mjs';
 import { successorAttestationMain } from '../scripts/preview-vercel-successor-attest.mjs';
+import { ENROLLED_AUTHORITY_MODE } from '../scripts/lib/preview-vercel-enrollment.mjs';
 import { PREVIEW_EMAIL_BUILD_CONTROL_FILES } from '../scripts/lib/preview-email-build-controls.mjs';
 import { previewCoordinationSecretMetadata } from '../scripts/lib/preview-email-coordination-collector.mjs';
 
@@ -787,4 +788,77 @@ test('native validation retains GET-only behavior and private helpers are not ex
   const module = await import('../scripts/lib/preview-vercel-successor-attestation.mjs');
   for (const name of ['fixedInstalledReader', 'command', 'executeFixed', 'claimPublication', 'createNativeDiagnostics', 'diagnostic', 'bindNativeDiagnostics'])
     assert.equal(Object.hasOwn(module, name), false);
+});
+
+function publicPreflightFixture() {
+  const a = approval(), time = Date.now(), base = `repos/${a.target.repository}`;
+  a.authorizedAt = time - 1000; a.privateReadinessAt = time - 2000;
+  a.dispatchedAt = new Date(time - 15000).toISOString(); a.jobStartedAt = new Date(time - 10000).toISOString();
+  const state = protectedReview(a), calls = [];
+  Object.assign(state.environment, { can_admins_bypass: false,
+    deployment_branch_policy: { protected_branches: true, custom_branch_policies: false },
+    protection_rules: [{ type: 'required_reviewers', prevent_self_review: false,
+      reviewers: [{ type: 'User', reviewer: state.user }] }] });
+  Object.assign(state.run, { repository: { full_name: a.target.repository }, head_repository: { full_name: a.target.repository },
+    head_sha: a.harnessSha, head_branch: 'main', run_attempt: 1, event: 'workflow_dispatch', status: 'in_progress',
+    actor: state.user, triggering_actor: state.user });
+  state.repository = { id: 30, full_name: a.target.repository, owner: state.user,
+    default_branch: 'main', permissions: { admin: true } };
+  state.variables = Object.entries({ FCOS_RUNTIME_COMPATIBILITY_RELEASE_ENABLED: 'false',
+    FCOS_PREVIEW_VERCEL_ISSUANCE_AUTHORITY_ENABLED: 'true', FCOS_PREVIEW_VERCEL_AUTHORITY_MODE: ENROLLED_AUTHORITY_MODE,
+    FCOS_PREVIEW_EMAIL_BUILD_ENABLED: 'true', FCOS_PREVIEW_EMAIL_AUTHORITY_DIAGNOSTIC_ENABLED: 'false',
+    FCOS_PREVIEW_EMAIL_BUILD_REVIEWED_SHA: a.candidateSha, FCOS_PREVIEW_EMAIL_BUILD_REVIEWED_HARNESS_SHA: a.harnessSha,
+    FCOS_PREVIEW_EMAIL_BUILD_REVIEWED_CONTROL_SHA256: a.controlRevision,
+    FCOS_PREVIEW_EMAIL_BUILD_REVIEWED_CONTRACT_SHA256: a.contractSha256,
+    FCOS_RELEASE_VERCEL_TOKEN_ID: a.tokenId, FCOS_PREVIEW_VERCEL_ENROLLMENT_ID: a.enrollmentId,
+  }).map(([name, value]) => ({ name, value }));
+  const route = endpoint => {
+    if (endpoint === 'user') return state.user;
+    if (endpoint === base) return state.repository;
+    if (endpoint === `${base}/environments/${a.target.environment}`) return state.environment;
+    if (endpoint === `${base}/environments/${a.target.environment}/variables?per_page=100`)
+      return { total_count: state.variables.length, variables: state.variables };
+    if (endpoint === `${base}/environments/${a.target.environment}/secrets?per_page=100`)
+      return { total_count: a.secretMetadata.length, secrets: a.secretMetadata };
+    if (endpoint === `${base}/actions/variables?per_page=100`) return { total_count: 0, variables: [] };
+    if (endpoint === `${base}/actions/runs/${a.runId}`) return state.run;
+    if (endpoint === `${base}/actions/runs/${a.runId}/approvals`) return state.approvals;
+    if (endpoint === `${base}/actions/runs/${a.runId}/attempts/1/jobs?per_page=100&page=1`)
+      return { total_count: state.jobs.length, jobs: state.jobs };
+    if (endpoint === `${base}/actions/workflows/preview-email-proof-build.yml`) return state.workflow;
+    if (endpoint.startsWith(`${base}/actions/runs?status=`)) return { total_count: 0, workflow_runs: [] };
+    if (endpoint.startsWith(`${base}/git/ref/heads/`)) return { object: { sha: a.candidateSha } };
+    throw new Error('Unrecognized offline public preflight route.');
+  };
+  const reads = { json(endpoint) {
+    calls.push(endpoint);
+    if (endpoint === 'user') return structuredClone(route(endpoint));
+    return new Promise((resolve, reject) => setImmediate(() => {
+      try { resolve(structuredClone(route(endpoint))); } catch (error) { reject(error); }
+    }));
+  } };
+  return { a, state, reads, calls, base };
+}
+test('async public preflight retains exact metadata and re-reads every mutable boundary', async () => {
+  const f = publicPreflightFixture(), first = await collectSuccessorAttestationPublicPreflight(f.reads, f.a);
+  assert.equal(first.jobId, f.a.jobId); assert.equal(first.priorReceiptSha256, null);
+  assert.deepEqual(first.secretMetadata, successorAttestationSecretMetadata(f.a.secretMetadata));
+  assert.equal(f.calls.length, 16);
+  f.state.run.status = 'completed';
+  await assert.rejects(() => collectSuccessorAttestationPublicPreflight(f.reads, f.a));
+  assert.equal(f.calls.filter(path => path === `${f.base}/actions/runs/${f.a.runId}`).length, 2);
+});
+test('async public preflight rejects changed review/configuration/workflow and mismatched actor', async () => {
+  for (const change of [f => { f.state.approvals[0].state = 'rejected'; },
+    f => { f.state.environment.protection_rules[0].reviewers[0].reviewer = { login: 'other', id: 11 }; },
+    f => { f.state.workflow.state = 'disabled_manually'; },
+    f => { f.state.variables.find(row => row.name === 'FCOS_PREVIEW_EMAIL_BUILD_ENABLED').value = 'false'; },
+    f => { f.state.jobs[0].status = 'completed'; f.state.jobs[0].conclusion = 'cancelled'; },
+    f => { f.a.jobStartedAt = new Date(Date.now() - 1800001).toISOString(); f.state.jobs[0].started_at = f.a.jobStartedAt; }]) {
+    const f = publicPreflightFixture(); await collectSuccessorAttestationPublicPreflight(f.reads, f.a);
+    change(f); await assert.rejects(() => collectSuccessorAttestationPublicPreflight(f.reads, f.a));
+  }
+  const f = publicPreflightFixture(); f.state.user.login = 'other';
+  await assert.rejects(() => collectSuccessorAttestationPublicPreflight(f.reads, f.a));
+  assert.deepEqual(f.calls, ['user']);
 });
