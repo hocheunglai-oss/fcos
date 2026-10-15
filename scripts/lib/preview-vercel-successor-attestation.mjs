@@ -11,7 +11,8 @@ import { spawnSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { performance } from 'node:perf_hooks';
-import { githubReleaseReads, RELEASE_REPOSITORY } from './release-evidence.mjs';
+import { RELEASE_REPOSITORY } from './release-evidence.mjs';
+import { githubReleaseAsyncReads } from './release-github-async-reads.mjs';
 import { assertReleaseCoordinatorSource } from '../release-coordinator-local.mjs';
 import { collectPreviewEmailBuildJobs, previewEmailBuildWorkflowIdentity } from './preview-email-build.mjs';
 import { githubProviderFresh, githubProviderTimestamp } from './github-provider-timestamp.mjs';
@@ -404,7 +405,7 @@ export function assertSuccessorAttestationRepositoryVariables(rows, operation) {
   }
   return true;
 }
-async function publicPreflight(reads, a) {
+export async function collectSuccessorAttestationPublicPreflight(reads, a) {
   const user = await reads.json('user');
   if (user?.login !== fcosConnectionIdentifier('github', 'Required account') || !positive(user.id)) fail();
   const repository = await reads.json(BASE);
@@ -416,8 +417,15 @@ async function publicPreflight(reads, a) {
     || reviewer?.type !== 'User' || reviewer.reviewer?.login !== user.login || reviewer.reviewer.id !== user.id
     || rules[0].prevent_self_review !== false || environment.deployment_branch_policy?.protected_branches !== true
     || environment.deployment_branch_policy?.custom_branch_policies !== false) fail();
-  const variables = collection(await reads.json(`${ENVIRONMENT}/variables?per_page=100`), 'variables');
-  const secrets = collection(await reads.json(`${ENVIRONMENT}/secrets?per_page=100`), 'secrets');
+  // Independent metadata reads share the fixed two-request transport limit.
+  // Every admission constructs a fresh adapter; mutable responses are never cached.
+  const [variableResult, secretResult, repositoryVariableResult] = await Promise.all([
+    reads.json(`${ENVIRONMENT}/variables?per_page=100`),
+    reads.json(`${ENVIRONMENT}/secrets?per_page=100`),
+    reads.json(`${BASE}/actions/variables?per_page=100`),
+  ]);
+  const variables = collection(variableResult, 'variables');
+  const secrets = collection(secretResult, 'secrets');
   const pins = { FCOS_RUNTIME_COMPATIBILITY_RELEASE_ENABLED: 'false', FCOS_PREVIEW_VERCEL_ISSUANCE_AUTHORITY_ENABLED: 'true',
     FCOS_PREVIEW_VERCEL_AUTHORITY_MODE: ENROLLED_AUTHORITY_MODE,
     FCOS_PREVIEW_EMAIL_BUILD_ENABLED: a.operation === 'verify-authority' ? 'false' : 'true',
@@ -426,22 +434,25 @@ async function publicPreflight(reads, a) {
     FCOS_PREVIEW_EMAIL_BUILD_REVIEWED_CONTROL_SHA256: a.controlRevision, FCOS_PREVIEW_EMAIL_BUILD_REVIEWED_CONTRACT_SHA256: a.contractSha256,
     FCOS_RELEASE_VERCEL_TOKEN_ID: a.tokenId, FCOS_PREVIEW_VERCEL_ENROLLMENT_ID: a.enrollmentId };
   for (const [name, expected] of Object.entries(pins)) if (variable(variables, name) !== expected) fail();
-  const repositoryVariables = collection(await reads.json(`${BASE}/actions/variables?per_page=100`), 'variables');
+  const repositoryVariables = collection(repositoryVariableResult, 'variables');
   assertSuccessorAttestationRepositoryVariables(repositoryVariables, a.operation);
   const metadata = successorAttestationSecretMetadata(secrets.map(({ name, created_at, updated_at }) => ({ name, created_at, updated_at })));
   if (!same(metadata, successorAttestationSecretMetadata(a.secretMetadata))) fail();
-  const run = await reads.json(`${BASE}/actions/runs/${a.runId}`);
+  const [run, approvals, jobs, workflow] = await Promise.all([
+    reads.json(`${BASE}/actions/runs/${a.runId}`),
+    reads.json(`${BASE}/actions/runs/${a.runId}/approvals`),
+    collectPreviewEmailBuildJobs({ reads, runId: a.runId }),
+    reads.json(`${BASE}/actions/workflows/preview-email-proof-build.yml`),
+  ]);
   if (run?.id !== a.runId || run.repository?.full_name !== RELEASE_REPOSITORY || run.head_repository?.full_name !== RELEASE_REPOSITORY
     || run.head_sha !== a.harnessSha || run.head_branch !== 'main' || run.run_attempt !== 1 || run.event !== 'workflow_dispatch'
     || ![ENROLLMENT_FIXED_TARGET.workflow, `${ENROLLMENT_FIXED_TARGET.workflow}@main`].includes(run.path) || run.status !== 'in_progress'
     || run.actor?.id !== user.id || run.triggering_actor?.id !== user.id || run.actor?.login !== user.login || run.triggering_actor?.login !== user.login
     || run.display_title !== (a.operation === 'verify-authority' ? successorVerificationRunTitle(a.candidateSha) : `Review FCOS Preview email source ${a.candidateSha}`)) fail();
-  const approvals = await reads.json(`${BASE}/actions/runs/${a.runId}/approvals`);
-  const jobs = await collectPreviewEmailBuildJobs({ reads, runId: a.runId });
-  const workflow = await reads.json(`${BASE}/actions/workflows/preview-email-proof-build.yml`);
   assertSuccessorAttestationProtectedReview(a, { user, environment, run, approvals, jobs, workflow });
-  for (const status of ['queued', 'in_progress', 'waiting', 'pending', 'requested']) {
-    const result = await reads.json(`${BASE}/actions/runs?status=${status}&per_page=100`);
+  const activeRuns = await Promise.all(['queued', 'in_progress', 'waiting', 'pending', 'requested'].map(status =>
+    reads.json(`${BASE}/actions/runs?status=${status}&per_page=100`)));
+  for (const result of activeRuns) {
     if (!Array.isArray(result?.workflow_runs) || result.total_count !== result.workflow_runs.length || result.workflow_runs.length > 100
       || result.workflow_runs.some(row => /(?:preview-email-proof-build|production-release|runtime-compatibility-release)\.yml(?:@|$)/.test(row.path)
         && row.id !== a.runId)) fail();
@@ -481,10 +492,10 @@ function assertOriginalCurrent(original, current) {
 }
 async function collectActual(nonce) {
   const action = actionAdmission(nonce), a = action.approval;
-  const reads = githubReleaseReads({ command: GH, env: ENV }, { cwd: ROOT });
+  const reads = githubReleaseAsyncReads({ command: GH, env: ENV }, { cwd: ROOT });
   const admission = await (a.operation === 'verify-authority' ? collectSuccessorVerificationAdmission : collectSuccessorLiveOperationAdmission)({ reads, sourceCwd: ROOT, trustedCwd: ROOT, runId: a.runId });
   bindSuccessorAttestationAdmission({ approval: a, nonce, scriptSha256: a.scriptSha256, admission });
-  const checked = await publicPreflight(reads, a);
+  const checked = await collectSuccessorAttestationPublicPreflight(reads, a);
   if (admission.dispatchedAt !== a.dispatchedAt) fail();
   const state = readExistingEnrollment(a);
   // Original timestamps remain untouched by local admission or key consent.

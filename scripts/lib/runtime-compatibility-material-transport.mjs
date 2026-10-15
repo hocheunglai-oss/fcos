@@ -109,10 +109,12 @@ export async function collectRuntimeMaterialProducer({ reads, expected, oidcClai
   const repository = await reads.json(base()), branch = await reads.json(`${base()}/branches/${encodeURIComponent(repository.default_branch)}`);
   const protection = await reads.json(`${base()}/branches/${encodeURIComponent(repository.default_branch)}/protection`);
   const run = await reads.json(`${base()}/actions/runs/${expected.runId}`), route = runtimeMaterialRoute(run.path?.split('@')[0]);
-  const workflowDefinition = await reads.json(`${base()}/actions/workflows/${run.path.split('@')[0].split('/').at(-1)}`);
-  const environment = await reads.json(`${base()}/environments/${route.environment}`);
-  const jobs = await collection(reads, `${base()}/actions/runs/${expected.runId}/attempts/1/jobs`, 'jobs');
-  const approvals = await reads.json(`${base()}/actions/runs/${expected.runId}/approvals`);
+  const [workflowDefinition, environment, jobs, approvals] = await Promise.all([
+    reads.json(`${base()}/actions/workflows/${run.path.split('@')[0].split('/').at(-1)}`),
+    reads.json(`${base()}/environments/${route.environment}`),
+    collection(reads, `${base()}/actions/runs/${expected.runId}/attempts/1/jobs`, 'jobs'),
+    reads.json(`${base()}/actions/runs/${expected.runId}/approvals`),
+  ]);
   const data = { repository, branch, protection, environment, workflowDefinition, run, jobs, approvals, expected, oidcClaims, requireCompletedStep, now };
   if (!detectMaterialMode) return assertRuntimeMaterialProducer(data);
   // Authenticate the current approved job, source and OIDC before reading even

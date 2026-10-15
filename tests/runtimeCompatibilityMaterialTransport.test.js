@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { assertRuntimeMaterialProducer, collectRuntimeSuccessorMaterials, parseRuntimeMaterialPack, runtimeMaterialPayload,
   runtimeMaterialHash, decodeRuntimeMaterialArchive, assertRuntimeMaterialPublicationFresh, reconcileRuntimeMaterialPublication, RUNTIME_MATERIAL_INPUT,
   RUNTIME_MATERIAL_FILENAME } from '../scripts/lib/runtime-compatibility-material-transport.mjs';
+import { githubReleaseAsyncReads } from '../scripts/lib/release-github-async-reads.mjs';
 import { materialTransportFixture, materialZip } from './helpers/runtimeMaterialTransport.mjs';
 import { createZipUploadStream } from '../node_modules/@actions/artifact/lib/internal/upload/zip.js';
 import { PREVIEW_EMAIL_BUILD_CONTROL_FILES } from '../scripts/lib/preview-email-build-controls.mjs';
@@ -266,4 +267,29 @@ test('workflow producer remains data-only and verify-authority does not invoke r
     assert.match(workflow, /id-token: write/); assert.match(workflow, /GH_TOKEN: \$\{\{ secrets.FCOS_RELEASE_GH_TOKEN \}\}/);
     if (name.endsWith('preview-email-proof-build.yml')) assert.match(workflow, /inputs\.operation == 'create' \|\| inputs\.operation == 'readback'[^\n]*FCOS_RUNTIME_COMPATIBILITY_MATERIAL_TRANSPORT/);
   }
+});
+
+test('native async transport batches producer metadata without omitting reads or caching mutable state', async () => {
+  const baseline = fixture(workflows[0]), value = fixture(workflows[0]);
+  const expectedAdmission = await collect(baseline);
+  let active = 0, peak = 0;
+  const reads = githubReleaseAsyncReads({ command: '/OFFLINE/gh', env: {} }, {
+    executeSync(_command, args) { return JSON.stringify(value.reads.json(args[1])); },
+    executeAsync(_command, args, options, callback) {
+      assert.ok(['utf8', 'buffer'].includes(options.encoding));
+      active++; peak = Math.max(peak, active);
+      setImmediate(() => {
+        let result, error;
+        try { result = options.encoding === 'utf8' ? JSON.stringify(value.reads.json(args[1])) : value.reads.archive(args[1]); }
+        catch (failure) { error = failure; }
+        active--; callback(error, result);
+      });
+    },
+  });
+  const admitted = await collectRuntimeSuccessorMaterials({ reads, expected: value.expected, run: value.run, now });
+  assert.deepEqual(admitted, expectedAdmission);
+  assert.equal(value.calls.length, baseline.calls.length);
+  assert.equal(value.archiveCalls, 1); assert.equal(peak, 2); assert.equal(active, 0);
+  value.approvals[0].state = 'rejected';
+  await assert.rejects(() => collectRuntimeSuccessorMaterials({ reads, expected: value.expected, run: value.run, now }));
 });
