@@ -42,6 +42,8 @@ test('candidate process cannot inherit controller secrets or mount its files wri
   const options={image,candidateDirectory,controllerDirectory,program:'node',args:['/candidate/test.js'],env:{CI:'true'}};
   const args=candidateContainerArguments(options);
   assert.ok(args.includes(`type=bind,src=${realpathSync(controllerDirectory)},dst=/controller,readonly`));
+  assert.ok(args.includes(`type=bind,src=${realpathSync(candidateDirectory)},dst=/candidate`));
+  assert.equal(args[args.indexOf('--tmpfs')+1], '/tmp:rw,nosuid,nodev,exec,size=1g');
   assert.ok(args.includes('--read-only'));assert.ok(args.includes('--security-opt=no-new-privileges'));assert.ok(!args.join(' ').includes('docker.sock'));
   for(const key of ['GITHUB_TOKEN','ACTIONS_ID_TOKEN_REQUEST_TOKEN','VERCEL_TOKEN','DATABASE_PASSWORD','NODE_OPTIONS'])assert.throws(()=>candidateContainerArguments({...options,env:{[key]:'private'}}),{code:'CANDIDATE_CREDENTIAL_ENVIRONMENT'});
   assert.throws(()=>candidateContainerArguments({...options,image:image.replace(`@sha256:${H}`,':latest')}),{code:'CANDIDATE_IMAGE_NOT_ADMITTED'});

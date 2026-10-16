@@ -14,7 +14,7 @@ export function candidateContainerArguments({ image, candidateDirectory, control
   if (permitted.some(([key]) => /TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTHORIZATION|GITHUB|ACTIONS|NODE_OPTIONS|PYTHONPATH/i.test(key))) fail('CANDIDATE_CREDENTIAL_ENVIRONMENT');
   return ['run', '--rm', '--init', '--read-only', '--cap-drop=ALL', '--security-opt=no-new-privileges',
     '--user', '1001:1001', '--network=host', '--pids-limit=512', '--memory=6g', '--cpus=2',
-    '--tmpfs', '/tmp:rw,nosuid,nodev,size=1g', '--mount', `type=bind,src=${candidate},dst=/candidate`,
+    '--tmpfs', '/tmp:rw,nosuid,nodev,exec,size=1g', '--mount', `type=bind,src=${candidate},dst=/candidate`,
     '--mount', `type=bind,src=${controller},dst=/controller,readonly`, '--workdir', '/candidate',
     '--env', 'HOME=/tmp', '--env', 'TMPDIR=/tmp', '--env', 'PLAYWRIGHT_BROWSERS_PATH=/ms-playwright',
     ...permitted.flatMap(([key, value]) => ['--env', `${key}=${rewrite(value)}`]), image, program, ...args.map(rewrite)];
