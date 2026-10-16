@@ -1,3 +1,4 @@
+import { validateQualificationSource } from '../../../config/hostedReleaseQualification.js';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { fail, sha, CONTROLLER_WORKFLOW, releaseTargets } from './contract.mjs';
 
@@ -17,15 +18,19 @@ export async function requestGitHubIdentity({ env = process.env, fetchImpl = fet
   return token;
 }
 
-export async function validateHostedIdentity(token, { controllerSha, repositoryId, runId, environment, audience = 'fcos-release-coordinator', keySet, now = Date.now() } = {}) {
+export async function validateHostedIdentity(token, { controllerSha, repositoryId, runId, environment, qualificationSource, audience = 'fcos-release-coordinator', keySet, now = Date.now() } = {}) {
   if (!sha(controllerSha) || !/^[1-9][0-9]*$/.test(String(repositoryId)) || !/^[1-9][0-9]*$/.test(String(runId))) fail('HOSTED_ADMISSION_CONFIG');
   let claims;
   try { ({ payload: claims } = await jwtVerify(token, keySet || createRemoteJWKSet(new URL(`${issuer}/.well-known/jwks`)), {
     issuer, audience, algorithms: ['RS256'], maxTokenAge: '5m', currentDate: new Date(now), clockTolerance: 30,
   })); } catch { fail('HOSTED_IDENTITY_INVALID'); }
   const repository = releaseTargets().repository;
+  const source = qualificationSource && validateQualificationSource(qualificationSource, { repository, controllerSha });
+  if (source && (['fcos-production-release', 'fcos-hosted-production-resume'].includes(environment)
+    || ['fcos-production-release', 'fcos-hosted-production-resume'].includes(claims.environment))) fail('HOSTED_IDENTITY_BINDING');
+  if (source && (claims.sha !== source.bootstrapSha || claims.workflow_ref !== source.callerWorkflowRef || claims.workflow_sha !== source.bootstrapSha)) fail('HOSTED_IDENTITY_BINDING');
   if (claims.repository !== repository || claims.repository_id !== String(repositoryId)
-    || claims.repository_owner !== repository.split('/')[0] || claims.ref !== 'refs/heads/main'
+    || claims.repository_owner !== repository.split('/')[0] || claims.ref !== (source?.ref || 'refs/heads/main')
     || ![true, 'true'].includes(claims.ref_protected) || claims.event_name !== 'workflow_dispatch'
     || claims.run_id !== String(runId) || claims.run_attempt !== '1'
     || claims.job_workflow_sha !== controllerSha
@@ -73,4 +78,24 @@ export function githubClient({ token, fetchImpl = fetch, repositoryId } = {}) {
       fail('GITHUB_PAGINATION_LIMIT');
     },
   };
+}
+
+/** Live, GET-only validation of the separately admitted qualification bootstrap. */
+export async function validateQualificationRun({ github, source, run, env = process.env }) {
+  const repository = releaseTargets().repository;
+  validateQualificationSource(source, { repository, controllerSha: env.FCOS_CONTROLLER_SHA, candidateSha: env.FCOS_CANDIDATE_SHA });
+  const branchName = source.ref.slice('refs/heads/'.length), branchPath = `/repos/${repository}/branches/${encodeURIComponent(branchName)}`;
+  const [branch, protection] = await Promise.all([github.read(branchPath), github.read(`${branchPath}/protection`)]);
+  const references = run?.referenced_workflows?.filter(row => row.path === `${repository}/${CONTROLLER_WORKFLOW}@${source.controllerSha}`);
+  const actor = repository.split('/')[0];
+  if (branch?.name !== branchName || branch.protected !== true || branch.commit?.sha !== source.bootstrapSha
+    || protection?.enforce_admins?.enabled !== true || protection.allow_force_pushes?.enabled !== false || protection.allow_deletions?.enabled !== false
+    || run?.repository?.full_name !== repository || String(run.repository.id) !== env.GITHUB_REPOSITORY_ID || run.head_repository?.full_name !== repository
+    || String(run.id) !== env.GITHUB_RUN_ID || run.head_branch !== branchName || run.head_sha !== source.bootstrapSha
+    || run.path !== '.github/workflows/authenticated-release.yml' || run.event !== 'workflow_dispatch' || run.run_attempt !== 1
+    || run.status !== 'in_progress' || run.conclusion !== null || references?.length !== 1 || references[0].sha !== source.controllerSha
+    || env.GITHUB_ACTOR !== actor || !/^[1-9][0-9]*$/.test(env.GITHUB_ACTOR_ID || '')
+    || run.actor?.login !== actor || String(run.actor.id) !== env.GITHUB_ACTOR_ID
+    || run.triggering_actor?.login !== actor || String(run.triggering_actor.id) !== env.GITHUB_ACTOR_ID) fail('QUALIFICATION_SOURCE_DRIFT');
+  return true;
 }

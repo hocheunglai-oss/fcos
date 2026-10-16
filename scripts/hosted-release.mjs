@@ -36,7 +36,7 @@ export async function hostedRelease(command, { env = process.env, wait = sleep, 
   const binding = { releaseId: manifest.releaseId, manifestHash: digest(manifest) };
   const output = value => { writeJson(env.FCOS_RELEASE_OUTPUT || 'release-result.json', value); return value; };
   if (command === 'checks') {
-    assertHostedController({ controllerDirectory, controllerSha: manifest.controller.sha, env });
+    assertHostedController({ controllerDirectory, controllerSha: manifest.controller.sha, manifest, env });
     assertHostedSetup({ manifest, env });
     assertSourceAdmission({ manifest, candidateDirectory, controllerDirectory });
     prepareCandidateChecks({ manifest, candidateDirectory, controllerDirectory });

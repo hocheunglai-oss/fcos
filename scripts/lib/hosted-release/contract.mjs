@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { qualificationSourceBinding } from '../../../config/hostedReleaseQualification.js';
 import { FCOS_CONNECTION_POLICY, fcosConnectionIdentifier } from '../../../config/fcosConnections.js';
 
 export const CONTRACT_VERSION = 'fcos-hosted-release/v2';
@@ -54,6 +55,7 @@ export function validateManifest(manifest) {
     || canonical(manifest.scope.handoffs.map(item => item.kind).sort()) !== canonical(['status19', 'supplier16'])
     || manifest.scope.handoffs.some(item => !hash(item.sha256))
     || !manifest.requiredChecks?.includes('compatibility_production_observation'))) fail('APPLICATION_SUCCESSOR_ORDER');
+  qualificationSourceBinding(manifest);
   const prior = manifest.previousProduction;
   if (!/^dpl_[A-Za-z0-9]+$/.test(prior?.deploymentId || '') || !sha(prior.sha)
     || !['sourceSha256', 'schemaSha256', 'runtimeSha256'].every(key => hash(prior[key]))) fail('PREVIOUS_PRODUCTION_BINDING');

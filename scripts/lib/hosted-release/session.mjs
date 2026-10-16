@@ -1,9 +1,10 @@
+import { qualificationSourceBinding } from '../../../config/hostedReleaseQualification.js';
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { digest, fail, validateManifest } from './contract.mjs';
 import { assertHostedController, assertHostedSetup, assertSourceAdmission } from './admission.mjs';
 import { createCoordinatorClient } from './coordinator-client.mjs';
-import { githubClient, requestGitHubIdentity, validateHostedIdentity } from './github.mjs';
+import { githubClient, requestGitHubIdentity, validateHostedIdentity, validateQualificationRun } from './github.mjs';
 
 export function readManifest(value) {
   if (typeof value !== 'string' || value.length > 131072) fail('MANIFEST_INPUT');
@@ -22,21 +23,23 @@ export function workflowOutput(values, env = process.env) {
   }
 }
 export async function hostedSession({ manifest, candidateDirectory, controllerDirectory, env = process.env, jobName, requireOidc = true }) {
-  assertHostedController({ controllerDirectory, controllerSha: manifest.controller.sha, env });
+  assertHostedController({ controllerDirectory, controllerSha: manifest.controller.sha, manifest, env });
   assertHostedSetup({ manifest, env });
   const admission = assertSourceAdmission({ manifest, candidateDirectory, controllerDirectory });
   const github = githubClient({ token: env.FCOS_HOSTED_GITHUB_READ_TOKEN || env.GITHUB_TOKEN, repositoryId: env.GITHUB_REPOSITORY_ID });
   await github.identity();
   const run = await github.read(`/repos/${manifest.targets.repository}/actions/runs/${env.GITHUB_RUN_ID}`);
+  const qualificationSource = qualificationSourceBinding(manifest);
+  if (qualificationSource) await validateQualificationRun({ github, source: qualificationSource, run, env });
   const jobs = await github.pages(`/repos/${manifest.targets.repository}/actions/runs/${env.GITHUB_RUN_ID}/attempts/1/jobs`, 'jobs');
   const matches = jobs.filter(job => job.name === jobName && job.status === 'in_progress' && job.conclusion === null);
-  if (run.run_attempt !== 1 || run.event !== 'workflow_dispatch' || run.head_branch !== 'main' || run.head_sha !== env.GITHUB_SHA
+  if (run.run_attempt !== 1 || run.event !== 'workflow_dispatch' || run.head_branch !== (qualificationSource?.ref.slice('refs/heads/'.length) || 'main') || run.head_sha !== env.GITHUB_SHA
     || matches.length !== 1 || matches[0].head_sha !== run.head_sha || matches[0].run_id !== Number(env.GITHUB_RUN_ID)) fail('CURRENT_HOSTED_JOB_IDENTITY');
   const observationEnv = { ...env, FCOS_VERIFIED_JOB_ID: String(matches[0].id) };
   if (!requireOidc) return { manifest, admission, github, env: observationEnv, binding: { releaseId: manifest.releaseId, manifestHash: digest(manifest) } };
   const identity = await requestGitHubIdentity({ env });
   await validateHostedIdentity(identity, { controllerSha: manifest.controller.sha, repositoryId: env.GITHUB_REPOSITORY_ID,
-    runId: env.GITHUB_RUN_ID, environment: env.FCOS_HOSTED_ENVIRONMENT || undefined });
+    runId: env.GITHUB_RUN_ID, qualificationSource, environment: env.FCOS_HOSTED_ENVIRONMENT || undefined });
   const coordinator = createCoordinatorClient({ url: env.FCOS_HOSTED_COORDINATOR_URL, epoch: manifest.epoch,
     owner: { kind: 'release', id: 'features' }, tokenProvider: () => requestGitHubIdentity({ env }) });
   return { manifest, admission, github, coordinator, env: observationEnv, binding: { releaseId: manifest.releaseId, manifestHash: digest(manifest) } };

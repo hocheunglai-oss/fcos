@@ -1,3 +1,5 @@
+import { qualificationSourceBinding } from '../config/hostedReleaseQualification.js';
+import { assertHostedSourceContext } from './lib/hosted-release/admission.mjs';
 import { consequential, collectAcceptance } from './lib/hosted-release/controller.mjs';
 import { assertBoundEvidence, digest, fail, validateManifest } from './lib/hosted-release/contract.mjs';
 import { collectWorkflowArtifact } from './lib/hosted-release/artifacts.mjs';
@@ -17,8 +19,10 @@ export async function runQualification({manifest,coordinator,simulateProduction,
   if(!['hosted','local_rehearsal'].includes(context)) fail('QUALIFICATION_CONTEXT_INVALID');
   if(context==='hosted') {
     assertSimulationIsolation(env);
+    const qualificationSource=qualificationSourceBinding(manifest);
+    if(qualificationSource) assertHostedSourceContext({manifest,env});
     const token=await requestGitHubIdentity({env});
-    const identity=await validateHostedIdentity(token,{controllerSha:manifest.controller.sha,repositoryId,runId:env.GITHUB_RUN_ID});
+    const identity=await validateHostedIdentity(token,{controllerSha:manifest.controller.sha,repositoryId,runId:env.GITHUB_RUN_ID,qualificationSource});
     if(['fcos-production-release','fcos-hosted-production-resume'].includes(identity.environment)) fail('QUALIFICATION_PRODUCTION_ENVIRONMENT_FORBIDDEN');
   }
   const snapshot=await coordinator.snapshot(bound(manifest)),preview=snapshot.operations?.['preview.create'];
