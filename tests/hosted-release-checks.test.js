@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,6 +9,10 @@ import { loadReleaseCheckManifest, runReleaseChecks, evaluateCheckEvidence, requ
 
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const command = (args, env = {}) => ({ program: 'node', args, env });
+// Fixture execution mode must not depend on the outer Actions/Docker check job.
+const fixtureEnvironment = root => ({ PATH: process.env.PATH, TMPDIR: root,
+  GH_TOKEN: 'not-a-real-secret', GITHUB_TOKEN: 'not-a-real-secret', ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'not-a-real-secret',
+  FCOS_CONTROLLER_TOKEN: 'not-a-real-secret', SUPABASE_ACCESS_TOKEN: 'not-a-real-secret', SF_ACCESS_TOKEN: 'not-a-real-secret' });
 const check = (id, commands, requires = []) => ({ id, group: 'code', phase: 'deterministic', kind: 'deterministic', executor: 'candidate', required: true, requires, inputs: ['@source'], profiles: ['controller_v2'], commands });
 function file(root, name, contents) { mkdirSync(dirname(join(root, name)), { recursive: true }); writeFileSync(join(root, name), contents); }
 function init(root) {
@@ -35,7 +39,7 @@ function fixture(t, checks = [check('unit', [command(['--test', 'tests/*.test.js
   file(candidateDirectory, 'config/release-checks-v2.json', '{"program":"sh","args":["-c","exit 99"]}');
   file(candidateDirectory, 'tests/probe.test.js', `import test from 'node:test'; import assert from 'node:assert/strict'; test('isolated',()=>{ for(const name of ['GH_TOKEN','GITHUB_TOKEN','ACTIONS_ID_TOKEN_REQUEST_TOKEN','SUPABASE_ACCESS_TOKEN','SF_ACCESS_TOKEN','NODE_OPTIONS','FCOS_CONTROLLER_TOKEN']) assert.equal(process.env[name],undefined); assert.ok(process.env.HOME.includes('fcos-check-home-')); });`);
   const expectedCandidateSha = commit(candidateDirectory);
-  return { root, candidateDirectory, controllerDirectory, controllerSha, expectedCandidateSha, sourceProfile: 'controller_v2' };
+  return { root, candidateDirectory, controllerDirectory, controllerSha, expectedCandidateSha, sourceProfile: 'controller_v2', environment: fixtureEnvironment(root) };
 }
 
 test('versioned profiles preserve actual frozen04ee fixtures, every database category and separate browser coverage', () => {
@@ -63,7 +67,7 @@ test('actual CLI runs fixed commands, expands complete unit suite and strips con
   const result = spawnSync(process.execPath, [join(f.controllerDirectory, 'scripts/hosted-release-checks.mjs'),
     '--candidate-directory', f.candidateDirectory, '--controller-directory', f.controllerDirectory, '--controller-sha', f.controllerSha,
     '--candidate-sha', f.expectedCandidateSha, '--source-profile', f.sourceProfile, '--group', 'code', '--evidence', output], {
-    encoding: 'utf8', env: { ...process.env, GH_TOKEN: 'not-a-real-secret', GITHUB_TOKEN: 'not-a-real-secret', ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'not-a-real-secret', FCOS_CONTROLLER_TOKEN: 'not-a-real-secret', SUPABASE_ACCESS_TOKEN: 'not-a-real-secret', SF_ACCESS_TOKEN: 'not-a-real-secret' },
+    encoding: 'utf8', env: f.environment,
   });
   assert.equal(result.status, 0, result.stdout + result.stderr);
   const report = JSON.parse(readFileSync(output));
@@ -73,6 +77,26 @@ test('actual CLI runs fixed commands, expands complete unit suite and strips con
   assert.equal(report.candidateSha, f.expectedCandidateSha);
   assert.deepEqual(report.checks[0].commands[0].args, ['--test', 'tests/*.test.js']);
   assert.doesNotMatch(readFileSync(output, 'utf8'), /not-a-real-secret/);
+});
+
+test('actual CLI in Actions requires admitted isolation before executing candidate commands', t => {
+  const f = fixture(t);
+  for (const p of ['scripts/lib/hosted-release/isolation.mjs', 'scripts/lib/hosted-release/contract.mjs', 'config/fcosConnections.js']) file(f.controllerDirectory, p, readFileSync(join(repository, p)));
+  f.controllerSha = commit(f.controllerDirectory);
+  const marker = join(f.root, 'candidate-executed');
+  file(f.candidateDirectory, 'tests/marker.test.js', `import { writeFileSync } from 'node:fs'; writeFileSync(${JSON.stringify(marker)}, 'executed');`);
+  f.expectedCandidateSha = commit(f.candidateDirectory);
+  const output = join(f.root, 'report.json');
+  const result = spawnSync(process.execPath, [join(f.controllerDirectory, 'scripts/hosted-release-checks.mjs'),
+    '--candidate-directory', f.candidateDirectory, '--controller-directory', f.controllerDirectory, '--controller-sha', f.controllerSha,
+    '--candidate-sha', f.expectedCandidateSha, '--source-profile', f.sourceProfile, '--group', 'code', '--evidence', output], {
+    encoding: 'utf8', env: { ...f.environment, GITHUB_ACTIONS: 'true', FCOS_HOSTED_CHECK_IMAGE: 'unadmitted:latest' },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Hosted release check command failed safely/);
+  assert.equal(existsSync(marker), false, 'Actions must not fall back to running candidate code on the host');
+  assert.equal(existsSync(output), false, 'isolation failure must not produce passing evidence');
+  assert.doesNotMatch(result.stdout + result.stderr, /not-a-real-secret/);
 });
 
 test('deterministic cache retains original timestamps; lock/source changes invalidate it', async t => {
