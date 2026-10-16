@@ -1341,7 +1341,7 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         continue-on-error: true
-        if: ${{ needs.execute.result == 'success' }}
+        if: ${{ always() && contains(fromJSON('["success","failure","cancelled"]'), needs.execute.result) }}
         with:
           name: ${{ format('fcos-{0}-production', fromJSON(inputs.manifest).releaseId) }}
       - name: Report observed outcome
@@ -1350,7 +1350,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           FCOS_HOSTED_GITHUB_READ_TOKEN: ${{ secrets.FCOS_HOSTED_GITHUB_READ_TOKEN }}
           FCOS_CONTROLLER_SHA: ${{ job.workflow_sha }}
-          FCOS_RELEASE_RESULT_FILE: ${{ needs.execute.result == 'success' && 'production-result.json' || '' }}
+          FCOS_RELEASE_RESULT_FILE: ${{ contains(fromJSON('["success","failure","cancelled"]'), needs.execute.result) && 'production-result.json' || '' }}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: ${{ format('fcos-{0}-report', fromJSON(inputs.manifest).releaseId) }}

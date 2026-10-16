@@ -253,5 +253,13 @@ test('terminal dispatch skips every executable hosted stage while preserving the
  assert.match(hosted.jobs.report.if,/always\(\)/);assert.doesNotMatch(hosted.jobs.report.if,/terminal/);
  assert.ok(hosted.jobs.report.needs.includes('merge_readiness'));
  const upload=hosted.jobs.execute.steps.at(-1);assert.match(upload.if,/always\(\)/);assert.match(upload.if,/steps.run.outcome/);
- const download=hosted.jobs.report.steps.find(step=>step.uses?.startsWith('actions/download-artifact@'));assert.equal(download['continue-on-error'],true);
+ const download=hosted.jobs.report.steps.find(step=>step.uses?.startsWith('actions/download-artifact@'));assert.equal(download['continue-on-error'],true);assert.match(download.if,/success.*failure.*cancelled/);assert.match(download.if,/always\(\)/);
+ const report=hosted.jobs.report.steps.find(step=>step.name==='Report observed outcome');assert.match(report.env.FCOS_RELEASE_RESULT_FILE,/success.*failure.*cancelled/);
+});
+
+
+test('new shared validator action is immutable while the legacy consumer action remains unchanged',()=>{
+ const quality=load(readFileSync(new URL('../.github/workflows/quality.yml',import.meta.url),'utf8'));
+ assert.equal(quality.jobs['hosted-readiness'].steps[0].uses,'actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b');
+ assert.equal(quality.jobs['authenticated-browser'].steps.at(-1).uses,'actions/github-script@v7');
 });

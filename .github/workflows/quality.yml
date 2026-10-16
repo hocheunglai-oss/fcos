@@ -27,7 +27,7 @@ jobs:
     steps:
       - name: Validate admitted hosted Preview readiness
         id: readiness
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7, verified official tag
         env:
           FCOS_HOSTED_READINESS_ENABLED: ${{ vars.FCOS_HOSTED_READINESS_ENABLED }}
           FCOS_HOSTED_READINESS_ACTIVATION: ${{ vars.FCOS_HOSTED_READINESS_ACTIVATION }}
