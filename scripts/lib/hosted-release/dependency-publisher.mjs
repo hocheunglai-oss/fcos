@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fcosSalesforceEnvironment } from '../../../config/fcosConnections.js';
-import { dependencyHash, importAcceptedNomB, measureDependencyFiles } from './dependencies.mjs';
+import { dependencyHash, importAcceptedNomB, measureDependencyFiles, salesforceDependencySourceVerified } from './dependencies.mjs';
 
 const keys = ['sourceSha256','harnessSha256','salesforceSourceSha256','fixtureSha256','environmentSha256'];
 const canonical = value => Array.isArray(value) ? `[${value.map(canonical).join(',')}]` : value && typeof value === 'object'
@@ -118,7 +118,7 @@ export async function measureHostedNomBInputs({ manifest, handoff, recipe, recip
   if (!env.FCOS_HOSTED_SALESFORCE_READ_TOKEN) return { status: 'waiting_dependency', missing: ['dedicated_devee_readonly_salesforce_credential'] };
   try {
     const devee = validateRecipe(recipe, handoff);
-    need(hash(recipeSha256) && handoff.measurementRecipeSha256 === recipeSha256 && manifest.candidate.salesforceSourceSha256 === handoff.relevantInputs.salesforceSourceSha256);
+    need(hash(recipeSha256) && handoff.measurementRecipeSha256 === recipeSha256 && salesforceDependencySourceVerified(manifest, handoff));
     const get = async path => {
       need(path.startsWith('/services/')); const url = `${devee.instanceUrl}${path}`;
       const response = await fetchImpl(url, { method: 'GET', redirect: 'error', headers: { authorization: `Bearer ${env.FCOS_HOSTED_SALESFORCE_READ_TOKEN}`, accept: 'application/json' }, signal: AbortSignal.timeout(20000) });

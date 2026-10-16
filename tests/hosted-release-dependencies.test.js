@@ -60,6 +60,20 @@ test('unchanged relevant assumptions can reuse original NomB proof for a new sep
   const result = await importAcceptedNomB(f); assert.equal(result.candidateSha, f.manifest.candidate.sha); assert.equal(result.capturedAt, f.live.completedAt);
 });
 
+test('different Salesforce fingerprint formats require exact admitted mapping and unchanged original measurements', async () => {
+  const f = nomFixture(); f.manifest.candidate.salesforceSourceSha256 = 'c'.repeat(64); f.handoff.manifestHash = dependencyHash(f.manifest);
+  await assert.rejects(importAcceptedNomB(f), { code: 'NOM_B_DEPENDENCY_REVALIDATION_REQUIRED' });
+  f.handoff.measurementRecipeSha256 = 'd'.repeat(64); f.handoff.sourceMapping = { candidateSalesforceSourceSha256: f.manifest.candidate.salesforceSourceSha256,
+    originalSalesforceSourceSha256: H, measurementRecipeSha256: f.handoff.measurementRecipeSha256 };
+  const proof = await importAcceptedNomB(f); assert.equal(proof.result.salesforceSourceSha256, f.manifest.candidate.salesforceSourceSha256);
+  assert.equal(proof.result.originalSalesforceSourceSha256, H); assert.equal(proof.capturedAt, f.live.completedAt);
+  f.handoff.sourceMapping.measurementRecipeSha256 = 'e'.repeat(64);
+  await assert.rejects(importAcceptedNomB(f), { code: 'NOM_B_DEPENDENCY_REVALIDATION_REQUIRED' });
+  f.handoff.sourceMapping.measurementRecipeSha256 = f.handoff.measurementRecipeSha256;
+  f.measureInputs = async () => ({ readOnly: true, capturedAt: new Date(now).toISOString(), inputs: { ...f.handoff.relevantInputs, salesforceSourceSha256: 'c'.repeat(64) } });
+  await assert.rejects(importAcceptedNomB(f), { code: 'NOM_B_DEPENDENCY_REVALIDATION_REQUIRED' });
+});
+
 test('relevant file measurement rejects traversal and symlinks and changes only with measured bytes', t => {
   const directory = mkdtempSync(join(tmpdir(), 'fcos-dependency-files-')); t.after(() => rmSync(directory, { recursive: true, force: true }));
   mkdirSync(join(directory, 'src')); writeFileSync(join(directory, 'src/file.js'), 'a'); writeFileSync(join(directory, 'unrelated.md'), 'x');

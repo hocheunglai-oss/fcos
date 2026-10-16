@@ -71,6 +71,15 @@ test('NomB recipe missing credential waits; malicious queries, identity/metadata
     assert.ok(f.calls.every(call => call.options.method === 'GET'));
   }
 });
+test('GET-only mapped Salesforce format preserves original fingerprint and still rejects changed live observations', async t => {
+  const f = recipeFixture(t); f.manifest.candidate.salesforceSourceSha256 = 'c'.repeat(64);
+  await assert.rejects(measureHostedNomBInputs(f), { code: 'NOM_B_READONLY_REVALIDATION_REQUIRED' });
+  f.handoff.sourceMapping = { candidateSalesforceSourceSha256: f.manifest.candidate.salesforceSourceSha256, originalSalesforceSourceSha256: H, measurementRecipeSha256: f.recipeSha256 };
+  const measured = await measureHostedNomBInputs(f); assert.equal(measured.inputs.salesforceSourceSha256, H);
+  f.response.records[0].Body = 'changed deployed Salesforce behavior';
+  await assert.rejects(measureHostedNomBInputs(f), { code: 'NOM_B_READONLY_REVALIDATION_REQUIRED' });
+});
+
 test('independent receipt validator rejects changed digest, foreign recipe and time outside actual producer job', async t => {
   const f = recipeFixture(t), measured = await measureHostedNomBInputs(f), job = { started_at: new Date(now - 1000).toISOString(), completed_at: new Date(now + 1000).toISOString() };
   for (const mutate of [r => { r.observations[0].sha256 = 'c'.repeat(64); }, r => { r.recipeSha256 = 'c'.repeat(64); }, r => { r.capturedAt = new Date(now - 3600000).toISOString(); }]) {

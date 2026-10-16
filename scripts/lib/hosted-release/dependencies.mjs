@@ -15,6 +15,18 @@ const fresh = (value, now) => instant(value) && Date.parse(value) <= now + 30000
 const legacyCandidateSha = JSON.parse(readFileSync(new URL('../../../config/runtime-compatibility-successor-live.json', import.meta.url))).candidateSha;
 const fingerprintKeys = ['sourceSha256', 'harnessSha256', 'salesforceSourceSha256', 'fixtureSha256', 'environmentSha256'];
 
+/** An independently admitted recipe may bridge fingerprint formats. It does not
+ * waive the actual observation equality enforced by the recipe and importer. */
+export function salesforceDependencySourceVerified(manifest, handoff) {
+  const current = manifest?.candidate?.salesforceSourceSha256, original = handoff?.relevantInputs?.salesforceSourceSha256;
+  if (!hash(current) || !hash(original)) return false;
+  const mapping = handoff.sourceMapping;
+  if (!mapping) return current === original;
+  return Object.keys(mapping).length === 3 && mapping.candidateSalesforceSourceSha256 === current
+    && mapping.originalSalesforceSourceSha256 === original && hash(handoff.measurementRecipeSha256)
+    && mapping.measurementRecipeSha256 === handoff.measurementRecipeSha256;
+}
+
 /** Hash reviewed relevant paths without importing or executing candidate files. */
 export function measureDependencyFiles({ directory, paths }) {
   required(Array.isArray(paths) && paths.length > 0 && paths.length <= 4096 && new Set(paths).size === paths.length);
@@ -43,7 +55,7 @@ export async function importAcceptedNomB({ manifest, handoff, verifyHandoff, rea
     required(handoff.kind === 'fcos_reviewed_nom_b_legacy_import' && handoff.manifestHash === dependencyHash(manifest)
       && handoff.candidateSha === manifest.candidate.sha && handoff.originalCandidateSha === legacyCandidateSha && fingerprintKeys.every(k => hash(handoff.relevantInputs?.[k]))
       && Object.keys(handoff.relevantInputs).length === fingerprintKeys.length
-      && handoff.relevantInputs.salesforceSourceSha256 === manifest.candidate.salesforceSourceSha256);
+      && salesforceDependencySourceVerified(manifest, handoff));
     const cache = new Map(); let total = 0;
     const load = async (reference, json = true) => {
       const sha256 = typeof reference === 'string' ? reference : reference?.sha256;
@@ -107,7 +119,8 @@ export async function importAcceptedNomB({ manifest, handoff, verifyHandoff, rea
       manifestHash: dependencyHash(manifest), candidateSha: manifest.candidate.sha, controllerSha: manifest.controller.sha,
       inputsSha256: dependencyHash(current.inputs), capturedAt: live.completedAt,
       result: { actualExecution: true, coverage: 'disposable_devee_nom_b_synthetic', targets: manifest.targets,
-        salesforceSourceSha256: current.inputs.salesforceSourceSha256, originalArtifactSha256: a.liveEvidence,
+        salesforceSourceSha256: manifest.candidate.salesforceSourceSha256, originalSalesforceSourceSha256: current.inputs.salesforceSourceSha256,
+        ...(handoff.sourceMapping ? { sourceMappingSha256: dependencyHash(handoff.sourceMapping) } : {}), originalArtifactSha256: a.liveEvidence,
         originalAcceptanceSha256: a.acceptance, migrationHandoffSha256: dependencyHash(handoff),
         originalCapturedAt: live.completedAt, dependenciesObservedAt: current.capturedAt, exactReplayNoExtraPost: true,
         financialChildCategoriesVerifiedZero: 9, fixtureCleaned: true, deployedPreviewProved: false, financialAuthority: false } };
