@@ -7,6 +7,7 @@ import { PGlite } from '@electric-sql/pglite';
 import pg from 'pg';
 
 export const newMigration = '20261016230316_fcuno_session_proof_and_atomic_projection.sql';
+export const revocationMigration = '20261016231319_fcuno_monotonic_revocation_floor.sql';
 export const userId = '11111111-1111-4111-8111-111111111111';
 export const subject = '22222222-2222-4222-8222-222222222222';
 export const sessionId = '33333333-3333-4333-8333-333333333333';
@@ -99,6 +100,7 @@ export async function federationDatabase(t, { native = false } = {}) {
     grant select,insert,update on public.user_profiles to service_role;`);
   await exec(await readFile(new URL('../supabase/migrations/20260830172911_fcos_fcuno_identity_federation.sql', import.meta.url), 'utf8'));
   await exec(await readFile(new URL(`../supabase/migrations/${newMigration}`, import.meta.url), 'utf8'));
+  await exec(await readFile(new URL(`../supabase/migrations/${revocationMigration}`, import.meta.url), 'utf8'));
   await query('insert into auth.users(id) values($1)', [userId]);
   await query("insert into public.user_profiles(id,email,full_name,active,user_type,use_type_defaults) values($1,'user@fcuno.example','Existing User',true,'trader',true)", [userId]);
   const client = databaseClient(query);

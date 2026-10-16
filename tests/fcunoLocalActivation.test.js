@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { federationDatabase, userId } from './fcunoDatabaseFixture.js';
 
 const source = await readFile(new URL('../api/functions/[name].js', import.meta.url), 'utf8');
 function implementation(name, next) {
@@ -9,13 +10,14 @@ function implementation(name, next) {
   return source.slice(start, end);
 }
 
-function fixture() {
-  const state = { profile: { id: 'local-user', email: 'user@fcuno.example', full_name: 'FCUNO User', active: false, user_type: 'viewer', use_type_defaults: false },
+function fixture({ profileClient = null, initialProfile = null, generalManager = null, afterAuthUpdate = async () => {} } = {}) {
+  const state = { profile: initialProfile || { id: 'local-user', email: 'user@fcuno.example', full_name: 'FCUNO User', active: false, user_type: 'viewer', use_type_defaults: false },
     audits: [], authWrites: [], permissions: [], auditUnavailable: false, otherAdministrators: 1 };
-  const gm = { id: 'general-manager', active: true, user_type: 'general_manager' };
+  const gm = generalManager || { id: 'general-manager', active: true, user_type: 'general_manager' };
   const client = {
-    auth: { admin: { updateUserById: async (id, patch) => { state.authWrites.push(patch); return { data: { user: { id } }, error: null }; } } },
+    auth: { admin: { updateUserById: async (id, patch) => { state.authWrites.push(patch); await afterAuthUpdate(); return { data: { user: { id } }, error: null }; } } },
     from(table) {
+      if (table === 'user_profiles' && profileClient) return profileClient.from(table);
       if (table === 'user_profiles') return {
         select() {
           const q = { eq: () => q, in: () => q, neq: async () => ({ count: state.otherAdministrators, error: null }),
@@ -23,6 +25,14 @@ function fixture() {
           return q;
         },
         upsert: async (patch) => { Object.assign(state.profile, patch); return { error: null }; },
+        update(patch) {
+          const filters = {};
+          const q = { eq: (key, value) => { filters[key] = value; return q; }, select: () => q, maybeSingle: async () => {
+            if (Object.entries(filters).some(([key, value]) => state.profile[key] !== value)) return { data: null, error: null };
+            Object.assign(state.profile, patch); return { data: { email: state.profile.email, full_name: state.profile.full_name, active: state.profile.active }, error: null };
+          } };
+          return q;
+        },
       };
       if (table === 'user_module_permissions') return {
         delete: () => ({ eq: async () => { state.permissions = []; return { error: null }; } }),
@@ -93,6 +103,58 @@ test('a permissions-only update does not implicitly activate an inactive federat
   await assert.rejects(save({ active: 'false' }), { code: 'FCOS_APPLICATION_ACCESS_INVALID' });
   assert.equal(state.profile.active, false);
   assert.ok(state.audits.every((row) => row.action !== 'fcos_application_access_authorized'));
+});
+
+test('executed activation path preserves a concurrently projected identity in PostgreSQL', async (t) => {
+  const { query, client } = await federationDatabase(t);
+  await query("update user_profiles set active=false,user_type='viewer',use_type_defaults=false where id=$1", [userId]);
+  const initialProfile = (await query('select * from user_profiles where id=$1', [userId])).rows[0];
+  const { save } = fixture({ initialProfile, profileClient: client,
+    // Simulate the identity projection after the save's validation read and
+    // before its final authorization write, reproducing the reported race.
+    afterAuthUpdate: () => query("update user_profiles set email='new@fcuno.example',full_name='New FCUNO Name' where id=$1", [userId]),
+  });
+  const result = await save({ active: true });
+  const stored = (await query('select email,full_name,active,user_type from user_profiles where id=$1', [userId])).rows[0];
+  assert.deepEqual(stored, { email: 'new@fcuno.example', full_name: 'New FCUNO Name', active: true, user_type: 'viewer' });
+  assert.equal(result.email, stored.email); assert.equal(result.full_name, stored.full_name);
+});
+
+test('permissions-only save conflicts safely when activation changes concurrently', async (t) => {
+  const { query, client } = await federationDatabase(t);
+  await query("update user_profiles set active=false,user_type='viewer',use_type_defaults=false where id=$1", [userId]);
+  const initialProfile = (await query('select * from user_profiles where id=$1', [userId])).rows[0];
+  const { save, state } = fixture({ initialProfile, profileClient: client,
+    afterAuthUpdate: () => query('update user_profiles set active=true where id=$1', [userId]),
+  });
+  await assert.rejects(save({ active: undefined }), { status: 409, code: 'FCOS_AUTHORIZATION_CONFLICT' });
+  assert.equal((await query('select active from user_profiles where id=$1', [userId])).rows[0].active, true);
+  assert.equal(state.audits.length, 0);
+});
+
+test('authorization compare-and-set preserves a concurrent General Manager transfer', async (t) => {
+  const { query, client } = await federationDatabase(t);
+  const formerManagerId = '77777777-7777-4777-8777-777777777777';
+  await query('insert into auth.users(id) values($1)', [formerManagerId]);
+  await query("insert into user_profiles(id,email,full_name,active,user_type) values($1,'manager@fcuno.example','Manager A',true,'general_manager')", [formerManagerId]);
+  await query("update user_profiles set active=true,user_type='viewer',use_type_defaults=false where id=$1", [userId]);
+  const initialProfile = (await query('select * from user_profiles where id=$1', [userId])).rows[0];
+  const generalManager = (await query('select * from user_profiles where id=$1', [formerManagerId])).rows[0];
+  const { save, state } = fixture({ initialProfile, generalManager, profileClient: client,
+    // Complete A→B after continuity validation but before the pending save's
+    // authorization write. A remains an Administrator, so a last-admin check
+    // alone cannot protect the new General Manager from the old save.
+    afterAuthUpdate: async () => {
+      await query('begin');
+      await query("update user_profiles set user_type='administrator' where id=$1", [formerManagerId]);
+      await query("update user_profiles set user_type='general_manager' where id=$1", [userId]);
+      await query('commit');
+    },
+  });
+  await assert.rejects(save({ active: false }), { status: 409, code: 'FCOS_AUTHORIZATION_CONFLICT' });
+  assert.deepEqual((await query('select user_type,active from user_profiles where id=$1', [userId])).rows[0], { user_type: 'general_manager', active: true });
+  assert.deepEqual((await query('select user_type,active from user_profiles where id=$1', [formerManagerId])).rows[0], { user_type: 'administrator', active: true });
+  assert.ok(state.audits.every((row) => row.action !== 'user_updated'));
 });
 
 test('the administrator entrypoint and desktop form expose local application activation with identity read-only', async () => {

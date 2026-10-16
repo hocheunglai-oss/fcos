@@ -2177,22 +2177,36 @@ async function persistManagedUser(client, body, actor = null) {
   if (!authUser?.id) throw appError('Supabase did not return a user id.', 500);
 
   const nowIso = new Date().toISOString();
-  const effectiveEmail = identityManagedByFcuno ? managedProfile.email : payload.email;
-  const effectiveFullName = identityManagedByFcuno ? managedProfile.full_name : payload.full_name;
-  const effectiveActive = payload.active;
-  const { error: profileError } = await client.from('user_profiles').upsert(
-    {
-      id: authUser.id,
-      email: effectiveEmail,
-      full_name: effectiveFullName,
-      user_type: stagedUserType,
-      active: effectiveActive,
-      use_type_defaults: payload.use_type_defaults,
-      updated_at: nowIso,
-    },
-    { onConflict: 'id' },
-  );
-  if (profileError) throw profileError;
+  let effectiveEmail = payload.email;
+  let effectiveFullName = payload.full_name;
+  let effectiveActive = payload.active;
+  const authorizationPatch = {
+    user_type: stagedUserType,
+    ...(!identityManagedByFcuno || body.active !== undefined ? { active: effectiveActive } : {}),
+    use_type_defaults: payload.use_type_defaults,
+    updated_at: nowIso,
+  };
+  if (identityManagedByFcuno) {
+    // A concurrent signed sync may have changed identity fields since the
+    // validation read. Update authorization columns only and return the current
+    // identity from the database instead of writing that old snapshot back.
+    const { data: updatedProfile, error: profileError } = await client.from('user_profiles')
+      .update(authorizationPatch).eq('id', authUser.id)
+      .eq('user_type', managedProfile.user_type).eq('active', managedProfile.active)
+      .select('email,full_name,active').maybeSingle();
+    if (profileError) throw profileError;
+    if (!updatedProfile) {
+      throw appError('FCOS authorization changed while this user was being saved. Reload the user and try again.', 409, 'FCOS_AUTHORIZATION_CONFLICT');
+    }
+    effectiveEmail = updatedProfile.email;
+    effectiveFullName = updatedProfile.full_name;
+    effectiveActive = updatedProfile.active === true;
+  } else {
+    const { error: profileError } = await client.from('user_profiles').upsert({
+      id: authUser.id, email: effectiveEmail, full_name: effectiveFullName, ...authorizationPatch,
+    }, { onConflict: 'id' });
+    if (profileError) throw profileError;
+  }
 
   const { error: deletePermissionError } = await client.from('user_module_permissions').delete().eq('user_id', authUser.id);
   if (deletePermissionError) throw deletePermissionError;
@@ -2257,9 +2271,9 @@ async function persistManagedUser(client, body, actor = null) {
     }
   }
 
-  await writeAdminAudit(client, actor, isUpdate ? 'user_updated' : 'user_created', authUser.id, payload.email, {
+  await writeAdminAudit(client, actor, isUpdate ? 'user_updated' : 'user_created', authUser.id, effectiveEmail, {
     user_type: payload.user_type,
-    active: payload.active,
+    active: effectiveActive,
     previous_active: managedProfile?.active === true,
     activation_authority: 'fcos',
     use_type_defaults: payload.use_type_defaults,
