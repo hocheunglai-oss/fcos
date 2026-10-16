@@ -128,7 +128,7 @@ export function sanitisedCheckEnvironment({ environment = process.env, home, com
   if (environment.PLAYWRIGHT_BROWSERS_PATH && !/^(?:https?:|\$)/.test(environment.PLAYWRIGHT_BROWSERS_PATH)) env.PLAYWRIGHT_BROWSERS_PATH = environment.PLAYWRIGHT_BROWSERS_PATH;
   if (environment.FCOS_HOSTED_PUBLIC_BUILD_INPUTS) {
     const values = JSON.parse(environment.FCOS_HOSTED_PUBLIC_BUILD_INPUTS);
-    const allowed = ['VITE_FCOS_ENABLE_FCUNO_OIDC','FCOS_ENABLE_FCUNO_FEDERATION','FCUNO_IDENTITY_ISSUER','VITE_SUPABASE_URL','VITE_SUPABASE_ANON_KEY'];
+    const allowed = ['VITE_FCOS_ENABLE_FCUNO_OIDC','FCOS_ENABLE_FCUNO_FEDERATION','FCUNO_IDENTITY_ISSUER','VITE_SUPABASE_URL','VITE_SUPABASE_ANON_KEY','VITE_SUPABASE_PUBLISHABLE_KEY'];
     if (Object.entries(values).some(([key,value]) => !allowed.includes(key) || typeof value !== 'string' || /[\r\n]/.test(value))) throw new Error('Unadmitted public build inputs.');
     Object.assign(env, values);
   }

@@ -3,10 +3,11 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, lstatSync, realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { FCOS_CONNECTION_POLICY, validateFcosConnectionPolicy } from '../config/fcosConnections.js';
+import { FCOS_CONNECTION_POLICY, fcosConnectionIdentifier, validateFcosConnectionPolicy } from '../config/fcosConnections.js';
 import { verifyCodexControls } from '../.codex/control-validation.mjs';
 
-const EXPECTED_ORIGIN = 'https://github.com/hocheunglai-oss/fcos.git';
+const EXPECTED_REPOSITORY = fcosConnectionIdentifier('github', 'Repository');
+const EXPECTED_ORIGIN = `https://github.com/${EXPECTED_REPOSITORY}.git`;
 const MODES = new Set(['--controls', '--release-readiness']);
 
 function git(root, args) {
@@ -45,7 +46,7 @@ function sourceState(root) {
     branch: branchResult.status === 0 ? branchResult.stdout.trim() : null,
     detached: branchResult.status !== 0,
     isCanonicalCheckout: canonicalRoot === currentRoot,
-    originMatchesExpected: origin === EXPECTED_ORIGIN || origin === EXPECTED_ORIGIN.slice(0, -4) || origin === 'git@github.com:hocheunglai-oss/fcos.git',
+    originMatchesExpected: origin === EXPECTED_ORIGIN || origin === EXPECTED_ORIGIN.slice(0, -4) || origin === `git@github.com:${EXPECTED_REPOSITORY}.git`,
     worktree: workingTreeState(root),
   };
 }

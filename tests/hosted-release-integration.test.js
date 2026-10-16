@@ -7,10 +7,10 @@ import { createRequire } from 'node:module';
 import { fixtureManifest } from './helpers/hosted-release-manifest.mjs';
 import { buildReleaseManifest, prepareReleaseManifest } from '../scripts/lib/hosted-release/manifest.mjs';
 import { candidateContainerArguments } from '../scripts/lib/hosted-release/isolation.mjs';
-import { checkBinding } from '../scripts/lib/hosted-release/checks.mjs';
+import { checkBinding, sanitisedCheckEnvironment } from '../scripts/lib/hosted-release/checks.mjs';
 import { validateDeterministicReport } from '../scripts/lib/hosted-release/artifacts.mjs';
 import { publishChecks } from '../scripts/lib/hosted-release/publisher.mjs';
-import { digest, releaseTargets, NORMAL_MODULES } from '../scripts/lib/hosted-release/contract.mjs';
+import { digest, releaseTargets, NORMAL_MODULES, validateManifest } from '../scripts/lib/hosted-release/contract.mjs';
 import { releaseTiming, releaseNotification, assertNotificationDeliveryReceipt } from '../scripts/lib/hosted-release/telemetry.mjs';
 import { assertProjectConfiguration, deploymentArguments } from '../scripts/lib/hosted-release/vercel.mjs';
 import { collectRuntimeProtectionState } from '../scripts/lib/hosted-release/live-collector.mjs';
@@ -19,6 +19,20 @@ import { verificationPlan } from '../scripts/hosted-release.mjs';
 import { hostedProof } from '../scripts/lib/hosted-release/observations.mjs';
 
 const H='a'.repeat(64), image=`ghcr.io/hocheunglai-oss/fcos-release-checks@sha256:${H}`;
+test('hosted public publishable-key alias preserves controller credential isolation', () => {
+  const values = { VITE_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_public_fixture' };
+  const f = setupFixture();
+  f.setup.verification.publicBuildEnvironment = values;
+  const manifest = buildReleaseManifest({ ...f, previousProduction: f.setup.previousProduction });
+  assert.doesNotThrow(() => validateManifest(manifest));
+  const options = { home: '/tmp/check-home', candidateDirectory: '/tmp/candidate', command: { env: {} },
+    environment: { FCOS_HOSTED_PUBLIC_BUILD_INPUTS: JSON.stringify(values), VERCEL_TOKEN: 'controller-only', SUPABASE_SECRET_KEY: 'controller-only' } };
+  const env = sanitisedCheckEnvironment(options);
+  assert.equal(env.VITE_SUPABASE_PUBLISHABLE_KEY, values.VITE_SUPABASE_PUBLISHABLE_KEY);
+  assert.equal(env.VERCEL_TOKEN, undefined);
+  assert.equal(env.SUPABASE_SECRET_KEY, undefined);
+  assert.throws(() => sanitisedCheckEnvironment({ ...options, environment: { FCOS_HOSTED_PUBLIC_BUILD_INPUTS: JSON.stringify({ SUPABASE_SECRET_KEY: 'private' }) } }), /Unadmitted public build inputs/);
+});
 function setupFixture() {
   const m=fixtureManifest();
   const setup={schemaVersion:2,controllerSha:m.controller.sha,targetsSha256:digest(releaseTargets()),epoch:2,previousProduction:m.previousProduction,

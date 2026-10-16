@@ -2,6 +2,16 @@
 
 This is the consolidated replacement for the local signing/short-lived chat handoff. It remains **inactive until hosted qualification and cutover are accepted**. Installing these files does not deploy Production, remove a GitHub reviewer, import financial authority, or resolve an old uncertain write.
 
+## FCOS–FCUNO correction rollout
+
+The consolidated PR also contains the explicitly reviewed FCOS authentication corrections. They are new application scope: do not relabel the frozen compatibility candidate or reuse its authentication proof for these changes. Keep the compatibility successor and later application release distinct, with the required observed Production successor between them.
+
+Before serving the corrected application, apply and verify `supabase/migrations/20261016230316_fcuno_session_proof_and_atomic_projection.sql` through the admitted migration path. This adds service-only immutable session proofs and atomic identity projection/audit finalization. It does not store provider tokens or export the Mac signing key. A database migration passing locally is not live migration acceptance.
+
+Existing FCUNO sessions without a derived proof must sign in to FCUNO again once. Qualify the actual OAuth callback handoff, signed provider proof, token refresh, revocation, local administrator activation and restricted CI account against the deployed target. FCUNO continues to own identity and sign-in eligibility; FCOS administrators own local application activation and permissions. New users remain inactive Viewers without default permissions until explicitly enabled.
+
+The three operational skills are maintained in `skills/`. The canonical checkout's `.fcos-cli/release-state.json` is a navigation pointer to existing checkpoints, not a release authorization. `npm run verify:controls` and `npm run release:readiness` are read-only local diagnostics; required live evidence remains separate.
+
 ## Routine execution
 
 The immutable caller invokes `.github/workflows/hosted-release-controller.yml` by commit SHA. The admitted setup and a business release plan generate the manifest through `scripts/hosted-release-manifest.mjs`; source, lock, configuration, check set and controller hashes are calculated, and current Production/schema/runtime are observed. Recovery supplies the saved identical manifest, rather than generating a new release ID.

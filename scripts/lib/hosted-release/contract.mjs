@@ -78,7 +78,7 @@ export function validateManifest(manifest) {
       || manifest.verification.runtime.node !== 'v24.18.0' || manifest.verification.runtime.platform !== 'linux'
       || manifest.verification.runtime.arch !== 'x64' || !/^Python 3\.[0-9]+\.[0-9]+$/.test(manifest.verification.runtime.python || '')
       || !manifest.verification.publicBuildEnvironment || !manifest.verification.projectSettings) fail('VERIFICATION_ENVIRONMENT');
-    const publicKeys = ['VITE_FCOS_ENABLE_FCUNO_OIDC','FCOS_ENABLE_FCUNO_FEDERATION','FCUNO_IDENTITY_ISSUER','VITE_SUPABASE_URL','VITE_SUPABASE_ANON_KEY'];
+    const publicKeys = ['VITE_FCOS_ENABLE_FCUNO_OIDC','FCOS_ENABLE_FCUNO_FEDERATION','FCUNO_IDENTITY_ISSUER','VITE_SUPABASE_URL','VITE_SUPABASE_ANON_KEY','VITE_SUPABASE_PUBLISHABLE_KEY'];
     if (Object.entries(manifest.verification.publicBuildEnvironment).some(([key,value]) => !publicKeys.includes(key)
       || typeof value !== 'string' || value.length > 4096 || /[\r\n]/.test(value))) fail('PUBLIC_BUILD_INPUT');
     const settings = manifest.verification.projectSettings;

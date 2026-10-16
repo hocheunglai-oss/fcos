@@ -1,0 +1,6 @@
+interface:
+  display_name: "FCOS Project Doctor"
+  short_description: "Find target, source and control configuration drift"
+  default_prompt: "Use $fcos-project-doctor to diagnose current FCOS configuration conflicts without exposing credentials or changing providers."
+policy:
+  allow_implicit_invocation: true

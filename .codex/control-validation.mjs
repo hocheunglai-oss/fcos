@@ -20,9 +20,14 @@ export function verifyCodexControls(root) {
   }
   if (!/\[agents\]\s*max_concurrent_threads_per_session\s*=\s*2\b/.test(config)) throw new Error('FCOS agent limit must remain two.');
   if (/^\s*(?:password|access_token|refresh_token|api_key|client_secret)\s*=/im.test(config)) throw new Error('Credential assignments are forbidden in FCOS controls.');
+  // Immutable pre-doctor candidates retain their admitted control contract. A
+  // revision label alone cannot opt a new validator out of the entrypoint gate.
+  const historicalValidator = policy.revision <= 3
+    && policy.files?.['.codex/control-validation.mjs'] === '10ee550f146920a7d6fcb4353c20f023d20136b8ce031830c6af82b6b99ff814';
+  if (policy.revision <= 3 && !historicalValidator) throw new Error('FCOS historical control contract mismatch.');
   const packageData = JSON.parse(read('package.json'));
-  if (packageData?.scripts?.['verify:controls'] !== 'node scripts/fcos-project-doctor.mjs --controls'
-      || packageData?.scripts?.['release:readiness'] !== 'node scripts/fcos-project-doctor.mjs --release-readiness') {
+  if (!historicalValidator && (packageData?.scripts?.['verify:controls'] !== 'node scripts/fcos-project-doctor.mjs --controls'
+      || packageData?.scripts?.['release:readiness'] !== 'node scripts/fcos-project-doctor.mjs --release-readiness')) {
     throw new Error('FCOS control diagnostic entrypoints are invalid.');
   }
   if (Object.keys(policy.files || {}).length !== CONTROL_FILES.length) throw new Error('FCOS control file inventory is invalid.');
