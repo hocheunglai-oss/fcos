@@ -184,6 +184,7 @@ begin
       and last_ev.evidence->>'outcome'='applied' and last_ev.evidence->'result'->>'id' ~ '^dpl_[A-Za-z0-9]+$')
     or not exists(select 1 from fcos_release_coordination.evidence e where e.release_id=qid
       and e.evidence->>'key'='hosted.qualification' and e.evidence->>'status'='passed'
+      and e.evidence->>'actualGithubArtifactValidated'='true'
       and e.evidence_hash=qualification->>'evidenceHash') then raise exception 'COORDINATION_HOSTED_QUALIFICATION_REQUIRED'; end if;
   if (select count(*) from fcos_release_coordination.operations o cross join lateral
     (select e.state,e.evidence from fcos_release_coordination.operation_events e where e.operation_id=o.operation_id order by e.event_id desc limit 1) last_ev

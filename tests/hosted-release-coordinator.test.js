@@ -50,7 +50,7 @@ async function qualifyDatabase(db,epoch=1) {
     await store.request('begin',simulated,p);
     await store.request('complete',{...simulated,evidence:{outcome:'applied',result:{simulated:true}},evidenceHash:H},p);
   }
-  const evidence={key:'hosted.qualification',status:'passed',artifactSha256:H},evidenceHash=await digest(evidence);
+  const evidence={key:'hosted.qualification',status:'passed',actualGithubArtifactValidated:true,artifactSha256:H},evidenceHash=await digest(evidence);
   await store.request('appendEvidence',{...scope,evidenceId:`qualification-proof-${epoch}`,evidence,evidenceHash},p);
   return db.query('select fcos_release_coordination.activate($1,$2::jsonb)',[epoch,JSON.stringify({manifestHash:scope.manifestHash,evidenceHash,oldWriterFenceHash:H,allWritersAdmitted:true,writerAdmissions:[{id:'legacy-production',admitted:true,proofHash:H}]})]);
 }

@@ -47,7 +47,7 @@ test('native PostgreSQL independent runners have one durable execute and no expi
   // Runner disconnection after committed intent cannot remove its logical lock.
   const terminated=await pool.connect(); await terminated.query('begin');await terminated.query('select 1');terminated.release(true);
   assert.equal((await client.begin(intent)).disposition,'readback');
-  const qualEvidence={key:'hosted.qualification',status:'passed',artifactSha256:H},qualHash=await digest(qualEvidence);
+  const qualEvidence={key:'hosted.qualification',status:'passed',actualGithubArtifactValidated:true,artifactSha256:H},qualHash=await digest(qualEvidence);
   // An unresolved qualification operation cannot activate, even with a declared success.
   await assert.rejects(pool.query('select fcos_release_coordination.activate($1,$2)',[1,{manifestHash:scope.manifestHash,evidenceHash:qualHash,oldWriterFenceHash:H,allWritersAdmitted:true,writerAdmissions:[{id:'legacy',admitted:true,proofHash:H}]}]),/ACTIVATION_STATE_INVALID/);
   await client.complete({...intent,evidence:{outcome:'applied',result:{id:'dpl_qualify'}}});
