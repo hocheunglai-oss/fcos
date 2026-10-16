@@ -40,6 +40,8 @@ jobs:
       dependencies_required: ${{ steps.run.outputs.dependencies_required }}
       approved: ${{ steps.run.outputs.approved }}
       execution_mode: ${{ steps.run.outputs.execution_mode }}
+      terminal: ${{ steps.run.outputs.terminal }}
+      terminal_status: ${{ steps.run.outputs.terminal_status }}
     steps:
       - name: Check out admitted controller
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -81,7 +83,7 @@ jobs:
     name: ${{ format('checks / {0}', matrix.group) }}
     needs:
       - prepare
-    if: ${{ needs.prepare.outputs.has_checks == 'true' }}
+    if: ${{ needs.prepare.outputs.terminal != 'true' && needs.prepare.outputs.has_checks == 'true' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -165,6 +167,7 @@ jobs:
         run: supabase stop --no-backup
         working-directory: controller
   reconcile:
+    if: ${{ needs.prepare.outputs.terminal != 'true' }}
     name: reconcile
     needs:
       - prepare
@@ -222,6 +225,7 @@ jobs:
           FCOS_HOSTED_SCHEMA_DATABASE_URL: ${{ secrets.FCOS_HOSTED_SCHEMA_DATABASE_URL }}
           FCOS_HOSTED_FCUNO_READ_TOKEN: ${{ secrets.FCOS_HOSTED_FCUNO_READ_TOKEN }}
   preview:
+    if: ${{ needs.prepare.outputs.terminal != 'true' }}
     name: preview
     needs:
       - prepare
@@ -291,6 +295,7 @@ jobs:
           retention-days: 30
           overwrite: false
   observe_before:
+    if: ${{ needs.prepare.outputs.terminal != 'true' }}
     name: observe / before
     needs:
       - prepare
@@ -368,7 +373,7 @@ jobs:
     name: dependencies / before
     needs:
       - prepare
-    if: ${{ needs.prepare.outputs.dependencies_required == 'true' }}
+    if: ${{ needs.prepare.outputs.terminal != 'true' && needs.prepare.outputs.dependencies_required == 'true' }}
     runs-on: ubuntu-24.04
     environment: fcos-hosted-dependency-verification
     permissions:
@@ -438,7 +443,7 @@ jobs:
       - prepare
       - observe_before
     if: >-
-      ${{ always() && needs.prepare.result == 'success' && needs.observe_before.result == 'success' &&
+      ${{ needs.prepare.outputs.terminal != 'true' && always() && needs.prepare.result == 'success' && needs.observe_before.result == 'success' &&
       needs.observe_before.outputs.has_browsers == 'true' }}
     runs-on: ubuntu-24.04
     environment: ${{ matrix.mode == 'restricted' && 'fcos-hosted-restricted-verification' || 'fcos-hosted-normal-verification' }}
@@ -522,7 +527,7 @@ jobs:
       - dependencies_before
       - checks
     if: >-
-      ${{ always() && needs.prepare.result == 'success' && needs.observe_before.result == 'success' &&
+      ${{ needs.prepare.outputs.terminal != 'true' && always() && needs.prepare.result == 'success' && needs.observe_before.result == 'success' &&
       (needs.browser_before.result == 'success' || needs.browser_before.result == 'skipped') &&
       (needs.dependencies_before.result == 'success' || needs.dependencies_before.result == 'skipped') &&
       (needs.checks.result == 'success' || needs.checks.result == 'skipped') }}
@@ -584,7 +589,7 @@ jobs:
     needs:
       - prepare
       - publish_before
-    if: ${{ always() && needs.prepare.result == 'success' && needs.publish_before.result == 'success' }}
+    if: ${{ needs.prepare.outputs.terminal != 'true' && always() && needs.prepare.result == 'success' && needs.publish_before.result == 'success' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -637,7 +642,7 @@ jobs:
       - prepare
       - production
     if: >-
-      ${{ always() && needs.prepare.result == 'success' && (needs.production.result == 'success' ||
+      ${{ needs.prepare.outputs.terminal != 'true' && always() && needs.prepare.result == 'success' && (needs.production.result == 'success' ||
       needs.prepare.outputs.approved == 'true') }}
     runs-on: ubuntu-24.04
     environment: fcos-hosted-verification
@@ -714,7 +719,7 @@ jobs:
       - prepare
       - observe_after
     if: >-
-      ${{ always() && needs.observe_after.result == 'success' && needs.observe_after.outputs.dependencies_required ==
+      ${{ needs.prepare.outputs.terminal != 'true' && always() && needs.observe_after.result == 'success' && needs.observe_after.outputs.dependencies_required ==
       'true' }}
     runs-on: ubuntu-24.04
     environment: fcos-hosted-dependency-verification
@@ -785,7 +790,7 @@ jobs:
       - prepare
       - observe_after
     if: >-
-      ${{ always() && needs.prepare.result == 'success' && needs.observe_after.result == 'success' &&
+      ${{ needs.prepare.outputs.terminal != 'true' && always() && needs.prepare.result == 'success' && needs.observe_after.result == 'success' &&
       needs.observe_after.outputs.has_browsers == 'true' }}
     runs-on: ubuntu-24.04
     environment: ${{ matrix.mode == 'restricted' && 'fcos-hosted-restricted-verification' || 'fcos-hosted-normal-verification' }}
@@ -868,7 +873,7 @@ jobs:
       - browser_after
       - dependencies_after
     if: >-
-      ${{ always() && needs.prepare.result == 'success' && needs.observe_after.result == 'success' &&
+      ${{ needs.prepare.outputs.terminal != 'true' && always() && needs.prepare.result == 'success' && needs.observe_after.result == 'success' &&
       (needs.browser_after.result == 'success' || needs.browser_after.result == 'skipped') &&
       (needs.dependencies_after.result == 'success' || needs.dependencies_after.result == 'skipped') }}
     runs-on: ubuntu-24.04
@@ -929,7 +934,7 @@ jobs:
     needs:
       - prepare
       - publish_after
-    if: ${{ always() && needs.prepare.result == 'success' && needs.publish_after.result == 'success' }}
+    if: ${{ needs.prepare.outputs.terminal != 'true' && always() && needs.prepare.result == 'success' && needs.publish_after.result == 'success' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -976,14 +981,76 @@ jobs:
           FCOS_CONTROLLER_SHA: ${{ job.workflow_sha }}
           GITHUB_TOKEN: ${{ github.token }}
           FCOS_HOSTED_GITHUB_READ_TOKEN: ${{ secrets.FCOS_HOSTED_GITHUB_READ_TOKEN }}
+  merge_readiness:
+    name: merge-readiness
+    needs:
+      - prepare
+      - ready_before
+    if: ${{ needs.prepare.outputs.terminal != 'true' && always() && needs.prepare.result == 'success' && needs.ready_before.result == 'success' && needs.ready_before.outputs.ready == 'true' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    timeout-minutes: 10
+    env:
+      FCOS_ADMITTED_RELEASE_SETUP: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP }}
+      FCOS_ADMITTED_RELEASE_SETUP_SHA256: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP_SHA256 }}
+      FCOS_HOSTED_READINESS_ENABLED: ${{ vars.FCOS_HOSTED_READINESS_ENABLED }}
+      FCOS_HOSTED_READINESS_ACTIVATION: ${{ vars.FCOS_HOSTED_READINESS_ACTIVATION }}
+      FCOS_RELEASE_MANIFEST: ${{ inputs.manifest }}
+      FCOS_CONTROLLER_DIRECTORY: controller
+      FCOS_CANDIDATE_DIRECTORY: candidate
+      FCOS_HOSTED_COORDINATOR_URL: ${{ vars.FCOS_HOSTED_COORDINATOR_URL }}
+      FCOS_RELEASE_OUTPUT: hosted-readiness.json
+    outputs:
+      ready: ${{ steps.run.outputs.ready }}
+    steps:
+      - name: Check out admitted controller
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ job.workflow_sha }}
+          path: controller
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.18.0
+      - name: Install trusted controller dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: controller
+      - name: Check out exact candidate data
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ fromJSON(inputs.manifest).candidate.sha }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Run admitted checks
+        id: run
+        run: node controller/scripts/hosted-release-readiness.mjs
+        env:
+          FCOS_CONTROLLER_SHA: ${{ job.workflow_sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: ${{ steps.run.outputs.ready == 'true' }}
+        with:
+          name: ${{ format('fcos-hosted-readiness-{0}', needs.prepare.outputs.candidate_sha) }}
+          path: hosted-readiness.json
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: false
   production:
     name: ${{ format('production / {0}', needs.prepare.outputs.manifest_hash) }}
     needs:
       - prepare
       - ready_before
+      - merge_readiness
     if: >-
-      ${{ needs.prepare.outputs.execution_mode == 'release' && needs.prepare.outputs.approved != 'true' &&
-      needs.ready_before.outputs.ready == 'true' }}
+      ${{ needs.prepare.outputs.terminal != 'true' && needs.prepare.outputs.execution_mode == 'release' && needs.prepare.outputs.approved != 'true' &&
+      needs.ready_before.outputs.ready == 'true' && (vars.FCOS_HOSTED_READINESS_ENABLED != 'true' || needs.merge_readiness.outputs.ready == 'true') }}
     runs-on: ubuntu-24.04
     environment:
       name: fcos-production-release
@@ -1037,7 +1104,7 @@ jobs:
       - prepare
       - ready_after
     if: >-
-      ${{ always() && needs.prepare.result == 'success' && needs.ready_after.result == 'success' &&
+      ${{ needs.prepare.outputs.terminal != 'true' && always() && needs.prepare.result == 'success' && needs.ready_after.result == 'success' &&
       needs.prepare.outputs.execution_mode == 'release' && needs.ready_after.outputs.ready == 'true' }}
     runs-on: ubuntu-24.04
     environment: fcos-hosted-production-resume
@@ -1098,6 +1165,7 @@ jobs:
           FCOS_PRODUCTION_VERIFICATION_BYPASS: ${{ secrets.FCOS_PRODUCTION_VERIFICATION_BYPASS }}
           FCOS_HOSTED_SCHEMA_DATABASE_URL: ${{ secrets.FCOS_HOSTED_SCHEMA_DATABASE_URL }}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: ${{ always() && steps.run.outcome != 'skipped' && steps.run.outcome != '' }}
         with:
           name: ${{ format('fcos-{0}-production', needs.prepare.outputs.release_id) }}
           path: production-result.json
@@ -1109,7 +1177,7 @@ jobs:
     needs:
       - prepare
       - ready_before
-    if: ${{ needs.prepare.outputs.execution_mode == 'qualification' && needs.ready_before.outputs.ready == 'true' }}
+    if: ${{ needs.prepare.outputs.terminal != 'true' && needs.prepare.outputs.execution_mode == 'qualification' && needs.ready_before.outputs.ready == 'true' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -1166,7 +1234,7 @@ jobs:
     needs:
       - prepare
       - qualify
-    if: ${{ needs.prepare.outputs.execution_mode == 'qualification' }}
+    if: ${{ needs.prepare.outputs.terminal != 'true' && needs.prepare.outputs.execution_mode == 'qualification' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -1213,6 +1281,7 @@ jobs:
   report:
     name: report
     needs:
+      - merge_readiness
       - prepare
       - checks
       - reconcile
@@ -1271,6 +1340,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        continue-on-error: true
         if: ${{ needs.execute.result == 'success' }}
         with:
           name: ${{ format('fcos-{0}-production', fromJSON(inputs.manifest).releaseId) }}

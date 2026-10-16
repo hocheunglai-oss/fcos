@@ -10,12 +10,94 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  hosted-readiness:
+    # One read-only validator feeds both existing required check names. No PR
+    # checkout, provider secret, protected environment or renewable identity.
+    if: ${{ vars.FCOS_HOSTED_READINESS_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      accepted: ${{ steps.readiness.outputs.accepted }}
+      artifact_id: ${{ steps.readiness.outputs.artifact_id }}
+      artifact_sha256: ${{ steps.readiness.outputs.artifact_sha256 }}
+      candidate_sha: ${{ steps.readiness.outputs.candidate_sha }}
+    steps:
+      - name: Validate admitted hosted Preview readiness
+        id: readiness
+        uses: actions/github-script@v7
+        env:
+          FCOS_HOSTED_READINESS_ENABLED: ${{ vars.FCOS_HOSTED_READINESS_ENABLED }}
+          FCOS_HOSTED_READINESS_ACTIVATION: ${{ vars.FCOS_HOSTED_READINESS_ACTIVATION }}
+          FCOS_ADMITTED_RELEASE_SETUP: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP }}
+          FCOS_ADMITTED_RELEASE_SETUP_SHA256: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP_SHA256 }}
+        with:
+          script: |
+            core.setOutput('accepted', 'false');
+            try {
+              const { createHash } = require('node:crypto');
+              const canonical = value => value === null || typeof value !== 'object' ? JSON.stringify(value)
+                : Array.isArray(value) ? `[${value.map(canonical).join(',')}]`
+                : `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonical(value[key])}`).join(',')}}`;
+              const rawSetup = process.env.FCOS_ADMITTED_RELEASE_SETUP || '';
+              if (rawSetup.length > 131072) throw new Error('setup');
+              const setup = JSON.parse(rawSetup);
+              if (setup.schemaVersion !== 2 || !/^[a-f0-9]{40}$/.test(setup.controllerSha || '')
+                || createHash('sha256').update(canonical(setup)).digest('hex') !== process.env.FCOS_ADMITTED_RELEASE_SETUP_SHA256) throw new Error('setup');
+              // Only administrator-admitted controller bytes are executable here.
+              const modulePath = 'scripts/lib/hosted-release/readiness.mjs';
+              const { data: source } = await github.rest.repos.getContent({ owner: context.repo.owner, repo: context.repo.repo,
+                path: modulePath, ref: setup.controllerSha, request: { timeout: 15000 } });
+              if (source.type !== 'file' || source.path !== modulePath || source.encoding !== 'base64' || source.size > 65536) throw new Error('source');
+              const bytes = Buffer.from(source.content, 'base64');
+              if (bytes.length !== source.size || createHash('sha1').update(Buffer.concat([Buffer.from(`blob ${bytes.length}\0`), bytes])).digest('hex') !== source.sha) throw new Error('source');
+              const validator = await import(`data:text/javascript;base64,${bytes.toString('base64')}`);
+              const repository = `${context.repo.owner}/${context.repo.repo}`;
+              const admission = validator.admittedReadiness({ enabled: process.env.FCOS_HOSTED_READINESS_ENABLED,
+                setupJson: rawSetup, setupSha256: process.env.FCOS_ADMITTED_RELEASE_SETUP_SHA256,
+                activationJson: process.env.FCOS_HOSTED_READINESS_ACTIVATION, repository, repositoryId: context.payload.repository.id });
+              const read = async (path, { bytes = false } = {}) => {
+                if (path !== `/repos/${repository}` && !path.startsWith(`/repos/${repository}/`)) throw new Error('target');
+                const { data } = await github.request(`GET ${path}`, { request: { timeout: 15000 } });
+                return bytes ? Buffer.from(data) : data;
+              };
+              const candidateSha = context.payload.pull_request?.head.sha || context.sha;
+              const result = await validator.waitForHostedReadiness({ admission, candidateSha, read });
+              if (!result.accepted) {
+                core.setFailed(`${result.code || 'HOSTED_READINESS_PENDING'}: waiting_dependency. Exact hosted Preview readiness is unavailable. Resume the admitted hosted run, then rerun quality while its original proofs are valid. No legacy reviewer or Production approval is requested by this check.`);
+              } else {
+                core.setOutput('accepted', 'true'); core.setOutput('artifact_id', String(result.artifactId));
+                core.setOutput('artifact_sha256', result.artifactSha256); core.setOutput('candidate_sha', candidateSha);
+              }
+            } catch {
+              core.setFailed('HOSTED_READINESS_UNAVAILABLE: waiting_dependency. Verify admitted setup and activation binding, then resume the exact hosted run and rerun quality. No candidate code or provider write was executed.');
+            }
+
   code-and-database:
+    needs: hosted-readiness
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
+      - name: Require the shared hosted readiness receipt
+        if: ${{ vars.FCOS_HOSTED_READINESS_ENABLED == 'true' }}
+        env:
+          READINESS_RESULT: ${{ needs.hosted-readiness.result }}
+          READINESS_ACCEPTED: ${{ needs.hosted-readiness.outputs.accepted }}
+          READINESS_ARTIFACT_ID: ${{ needs.hosted-readiness.outputs.artifact_id }}
+          READINESS_ARTIFACT_SHA256: ${{ needs.hosted-readiness.outputs.artifact_sha256 }}
+          READINESS_CANDIDATE: ${{ needs.hosted-readiness.outputs.candidate_sha }}
+          EXPECTED_CANDIDATE: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [ "$READINESS_RESULT" != success ] || [ "$READINESS_ACCEPTED" != true ] || [ "$READINESS_CANDIDATE" != "$EXPECTED_CANDIDATE" ] || ! [[ "$READINESS_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]] || ! [[ "$READINESS_ARTIFACT_SHA256" =~ ^[a-f0-9]{64}$ ]]; then
+            echo '::error::HOSTED_READINESS_PENDING: waiting_dependency. Resume the exact hosted Preview verification and rerun quality; no verification result is waived.'
+            exit 1
+          fi
       - uses: actions/checkout@v4
+        if: ${{ vars.FCOS_HOSTED_READINESS_ENABLED != 'true' }}
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           # Verify immutable retained Production and compatibility Git objects.
@@ -23,36 +105,51 @@ jobs:
           # PR code must not receive a reusable GitHub credential through git.
           persist-credentials: false
       - uses: actions/setup-node@v4
+        if: ${{ vars.FCOS_HOSTED_READINESS_ENABLED != 'true' }}
         with:
           node-version: 24
           cache: npm
       - run: npm ci
+        if: ${{ vars.FCOS_HOSTED_READINESS_ENABLED != 'true' }}
       - run: npm run verify:fcuno-contract
         env:
           # Read-only token required to fetch FCUNO's pinned contract. It is
           # intentionally neither a repository secret nor persisted by git.
           GITHUB_TOKEN: ${{ github.token }}
+        if: ${{ vars.FCOS_HOSTED_READINESS_ENABLED != 'true' }}
       - run: npm run verify:compatibility
+        if: ${{ vars.FCOS_HOSTED_READINESS_ENABLED != 'true' }}
       - run: npm test
+        if: ${{ vars.FCOS_HOSTED_READINESS_ENABLED != 'true' }}
       - name: Verify isolated Python coordination ledger
+        if: ${{ vars.FCOS_HOSTED_READINESS_ENABLED != 'true' }}
         run: python3 -B -m unittest tests.preview_email_coordination_ledger_test tests.release_coordination_ledger_test
       - run: npm run lint
+        if: ${{ vars.FCOS_HOSTED_READINESS_ENABLED != 'true' }}
       - run: npm run typecheck
+        if: ${{ vars.FCOS_HOSTED_READINESS_ENABLED != 'true' }}
       - run: npm run verify:graph-only
+        if: ${{ vars.FCOS_HOSTED_READINESS_ENABLED != 'true' }}
       - run: npm run build
+        if: ${{ vars.FCOS_HOSTED_READINESS_ENABLED != 'true' }}
       - run: npm run verify:performance
+        if: ${{ vars.FCOS_HOSTED_READINESS_ENABLED != 'true' }}
       - uses: supabase/setup-cli@v1
+        if: ${{ vars.FCOS_HOSTED_READINESS_ENABLED != 'true' }}
         with:
           version: 2.113.0
       - id: start-supabase
         run: supabase start -x studio,imgproxy,edge-runtime,logflare,vector,supavisor
+        if: ${{ vars.FCOS_HOSTED_READINESS_ENABLED != 'true' }}
       - run: FCOS_MIGRATION_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres FCOS_REQUIRE_LIVE_MIGRATION_CHECK=1 npm run verify:migrations
+        if: ${{ vars.FCOS_HOSTED_READINESS_ENABLED != 'true' }}
       - name: Stop temporary Supabase services
         if: ${{ always() && steps.start-supabase.outcome != 'skipped' && steps.start-supabase.outcome != '' }}
         run: supabase stop --no-backup
 
 
       - name: Record exact tested source
+        if: ${{ vars.FCOS_HOSTED_READINESS_ENABLED != 'true' }}
         env:
           CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
@@ -66,6 +163,7 @@ jobs:
           writeFileSync('fcos-quality-source.json', JSON.stringify({ schemaVersion: 1, candidateSha, lockSha256, capturedAt: new Date().toISOString() }) + '\n');
           NODE
       - uses: actions/upload-artifact@v4
+        if: ${{ vars.FCOS_HOSTED_READINESS_ENABLED != 'true' }}
         with:
           name: fcos-quality-source-${{ github.event.pull_request.head.sha || github.sha }}
           path: fcos-quality-source.json
@@ -73,17 +171,33 @@ jobs:
           retention-days: 7
 
   authenticated-browser:
+    needs: hosted-readiness
     # This job deliberately has no checkout, repository secrets, protected
     # environment, or renewable identity. A PR candidate is untrusted code.
     # The protected default-branch harness publishes a non-secret evidence
     # artifact instead. A check-run name alone is forgeable by another workflow.
-    if: ${{ github.event_name == 'pull_request' }}
+    if: ${{ always() && github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     permissions:
       actions: read
       contents: read
     steps:
+      - name: Require the shared hosted readiness receipt
+        if: ${{ vars.FCOS_HOSTED_READINESS_ENABLED == 'true' }}
+        env:
+          READINESS_RESULT: ${{ needs.hosted-readiness.result }}
+          READINESS_ACCEPTED: ${{ needs.hosted-readiness.outputs.accepted }}
+          READINESS_ARTIFACT_ID: ${{ needs.hosted-readiness.outputs.artifact_id }}
+          READINESS_ARTIFACT_SHA256: ${{ needs.hosted-readiness.outputs.artifact_sha256 }}
+          READINESS_CANDIDATE: ${{ needs.hosted-readiness.outputs.candidate_sha }}
+          EXPECTED_CANDIDATE: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [ "$READINESS_RESULT" != success ] || [ "$READINESS_ACCEPTED" != true ] || [ "$READINESS_CANDIDATE" != "$EXPECTED_CANDIDATE" ] || ! [[ "$READINESS_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]] || ! [[ "$READINESS_ARTIFACT_SHA256" =~ ^[a-f0-9]{64}$ ]]; then
+            echo '::error::HOSTED_READINESS_PENDING: waiting_dependency. Resume the exact hosted Preview verification and rerun quality; no verification result is waived.'
+            exit 1
+          fi
       - name: Require trusted authenticated-candidate evidence artifact
+        if: ${{ vars.FCOS_HOSTED_READINESS_ENABLED != 'true' }}
         uses: actions/github-script@v7
         env:
           FCOS_ROUTINE_RELEASE_ENABLED: ${{ vars.FCOS_ROUTINE_RELEASE_ENABLED }}
