@@ -99,3 +99,31 @@ test('native PostgreSQL independent runners have one durable execute and no expi
     await assert.rejects(minimal.query('select fcos_release_coordination.install_epoch($1,$2)',[2,activation]),/permission denied/);
   }finally{minimal.release(true);}
 });
+
+
+test('native non-superuser Supabase-style postgres can install the private schema without widening runtime authority',
+  {skip:!bindir&&process.env.FCOS_REQUIRE_NATIVE_COORDINATOR_DATABASE!=='1'},async t=>{
+    assert.ok(bindir,'Native PostgreSQL is required for the migration-role regression.');
+    const directory=await mkdtemp(path.join(tmpdir(),'fcos-migration-role-pg-')),data=path.join(directory,'data'),port=54592;
+    execFileSync(path.join(bindir,'initdb'),['-D',data,'--username=fcos_test_bootstrap','--auth=trust','--no-locale','--encoding=UTF8'],{stdio:'pipe'});
+    execFileSync(path.join(bindir,'pg_ctl'),['-D',data,'-l',path.join(directory,'server.log'),'-o',`-k ${directory} -h '' -p ${port}`,'-w','start'],{stdio:'pipe'});
+    const admin=new pg.Client({host:directory,port,user:'fcos_test_bootstrap',database:'postgres'});
+    const migrationRole=new pg.Client({host:directory,port,user:'postgres',database:'postgres'});
+    const runtime=new pg.Client({host:directory,port,user:'fcos_coordinator_runtime',database:'postgres'});
+    t.after(async()=>{await runtime.end();await migrationRole.end();await admin.end();execFileSync(path.join(bindir,'pg_ctl'),['-D',data,'-m','immediate','-w','stop'],{stdio:'pipe'});await rm(directory,{recursive:true,force:true});});
+    await admin.connect();await admin.query('create role postgres login nosuperuser nocreatedb createrole inherit nobypassrls; alter database postgres owner to postgres');
+    await migrationRole.connect();
+    const identity=(await migrationRole.query('select rolsuper,rolcreaterole from pg_roles where rolname=current_user')).rows[0];
+    assert.equal(identity.rolsuper,false);assert.equal(identity.rolcreaterole,true);
+    await migrationRole.query(await readFile(new URL('../supabase/migrations/20261016190509_release_coordination.sql',import.meta.url),'utf8'));
+    const owner=(await admin.query("select r.rolname,r.rolcanlogin,r.rolsuper,r.rolcreaterole,r.rolcreatedb,r.rolbypassrls from pg_namespace n join pg_roles r on r.oid=n.nspowner where n.nspname='fcos_release_coordination'")).rows[0];
+    assert.deepEqual(owner,{rolname:'fcos_coordinator_owner',rolcanlogin:false,rolsuper:false,rolcreaterole:false,rolcreatedb:false,rolbypassrls:false});
+    await migrationRole.query('create table public.application_fixture(id integer)');
+    await migrationRole.query('alter role fcos_coordinator_runtime login');await runtime.connect();
+    assert.equal(await verifyDatabaseIdentity((sql,p)=>runtime.query(sql,p)),true);
+    assert.equal((await admin.query("select count(*)::int as n from pg_auth_members where member=(select oid from pg_roles where rolname='fcos_coordinator_runtime')")).rows[0].n,0);
+    await assert.rejects(runtime.query('set role fcos_coordinator_owner'),/permission denied/);
+    await assert.rejects(runtime.query('select * from fcos_release_coordination.control'),/permission denied/);
+    await assert.rejects(runtime.query('select fcos_release_coordination.install_epoch($1,$2)',[1,{}]),/permission denied/);
+    assert.equal((await migrationRole.query("select has_function_privilege('postgres','fcos_release_coordination.install_epoch(bigint,jsonb)','EXECUTE') as permitted")).rows[0].permitted,true);
+  });

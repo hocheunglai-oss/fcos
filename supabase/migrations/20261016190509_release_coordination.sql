@@ -9,6 +9,9 @@ do $$ begin
     create role fcos_coordinator_runtime nologin nosuperuser nocreatedb nocreaterole noinherit nobypassrls;
   end if;
 end $$;
+-- Supabase postgres is CREATEROLE, not superuser; PG17 grants the creator ADMIN
+-- without SET. Only the existing migration administrator receives owner membership.
+grant fcos_coordinator_owner to postgres;
 alter schema fcos_release_coordination owner to fcos_coordinator_owner;
 grant usage on schema fcos_release_coordination to fcos_coordinator_runtime;
 
