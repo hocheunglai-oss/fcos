@@ -23,7 +23,7 @@ export function validateEnvelope(body) {
     && /^[a-zA-Z0-9._:-]{1,200}$/.test(p.releaseId)
     && /^[a-f0-9]{64}$/.test(p.manifestHash), 'COORDINATION_SCOPE_INVALID', 400);
   // Server-authored authentication/approval material cannot be supplied through the API.
-  need(!Object.hasOwn(p,'approvalReceipt') && !Object.hasOwn(p,'resumeReceipt') && !Object.hasOwn(p,'principal') && !Object.hasOwn(p,'notificationDelivery') && !Object.hasOwn(p,'notificationChallenge'), 'COORDINATION_SERVER_FIELD_FORBIDDEN',400);
+  need(!Object.hasOwn(p,'approvalReceipt') && !Object.hasOwn(p,'resumeReceipt') && !Object.hasOwn(p,'principal') && !Object.hasOwn(p,'notificationDelivery') && !Object.hasOwn(p,'notificationChallenge') && !Object.hasOwn(p,'qualificationOnly') && !Object.hasOwn(p,'qualificationAdmission'), 'COORDINATION_SERVER_FIELD_FORBIDDEN',400);
   return {action:body.action, payload:p};
 }
 export function createSqlStore(query) {
@@ -59,4 +59,17 @@ export async function createNotificationDeliveryProof({receiptJson,challenge,now
     &&receivedAt>=Date.parse(challenge.issuedAt)&&receivedAt<=now+30000,'COORDINATION_NOTIFICATION_DELIVERY_REQUIRED',400);
   const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(receiptJson));
   return {receiptJson,receiptSha256:Array.from(new Uint8Array(bytes),b=>b.toString(16).padStart(2,'0')).join('')};
+}
+
+export function assertQualificationScope(principal,payload,action) {
+  if(principal.qualificationOnly!==true) return;
+  need(principal.kind==='github'&&payload.owner.kind==='release'&&!['approve','admitApproval','resume'].includes(action),
+    'COORDINATION_QUALIFICATION_ONLY',403);
+  if(action!=='register') return;
+  const m=payload.manifest,q=principal.qualificationAdmission;
+  const expected={ref:q.ref,bootstrapSha:q.bootstrapSha,callerWorkflowRef:q.callerWorkflowRef,controllerSha:q.jobWorkflowSha,candidateSha:q.candidateSha};
+  need(m?.stage==='qualification'&&m.executionMode==='qualification'&&m.setupSha256===q.setupSha256
+    &&m.controller?.sha===q.jobWorkflowSha&&m.controller.workflow==='.github/workflows/hosted-release-controller.yml'
+    &&m.candidate?.sha===q.candidateSha&&m.qualificationSource&&canonicalJson(m.qualificationSource)===canonicalJson(expected),
+    'COORDINATION_QUALIFICATION_SCOPE_INVALID',403);
 }

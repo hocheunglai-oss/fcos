@@ -1,13 +1,13 @@
-import { ACTIONS, CoordinatorError, createSqlStore, digest, need, validateEnvelope } from './core.mjs';
+import { ACTIONS, CoordinatorError, createSqlStore, digest, need, validateEnvelope, assertQualificationScope } from './core.mjs';
 import { createGithubAuthenticator, createFinancialAuthenticator, validatePolicy } from './auth.mjs';
 import { assertIsolatedEnvironment, verifyDatabaseIdentity } from './runtime.mjs';
-import { createGithubApprovalValidator, createGithubResumeValidator } from './approval.mjs';
+import { createGithubApprovalValidator, createGithubResumeValidator, createGithubQualificationValidator } from './approval.mjs';
 export { createSqlStore } from './core.mjs';
 export { createGithubAuthenticator, createFinancialAuthenticator } from './auth.mjs';
-export { createGithubApprovalValidator, createGithubResumeValidator, validateGithubApproval, validateGithubResume } from './approval.mjs';
+export { createGithubApprovalValidator, createGithubResumeValidator, validateGithubApproval, validateGithubResume, createGithubQualificationValidator, validateGithubQualification } from './approval.mjs';
 
 /** The same request entrypoint runs in an isolated host and disposable database tests. */
-export function createCoordinatorHandler({store,authenticateGithub,authenticateFinancial,validateApproval,validateResume}) {
+export function createCoordinatorHandler({store,authenticateGithub,authenticateFinancial,validateApproval,validateResume,validateQualification}) {
   need(store&&typeof store.request==='function'&&typeof authenticateGithub==='function','COORDINATION_CONFIGURATION_REQUIRED',500);
   return async request=>{
     try {
@@ -29,6 +29,11 @@ export function createCoordinatorHandler({store,authenticateGithub,authenticateF
       const principal=await (financial?authenticateFinancial:authenticateGithub)(authorization.slice(7));
       need(principal?.kind===(financial?'financial':'github'),'COORDINATION_AUTHENTICATION_REQUIRED',401);
       need(payload.owner.kind===(financial?'financial':'release')&&(!financial||payload.owner.id===principal.ownerId),'COORDINATION_OWNER_MISMATCH',403);
+      assertQualificationScope(principal,payload,action);
+      if(principal.qualificationOnly===true) {
+        need(typeof validateQualification==='function','COORDINATION_QUALIFICATION_VALIDATOR_REQUIRED',403);
+        await validateQualification({principal});
+      }
       if(action==='register') {
         need(payload.manifest&&await digest(payload.manifest)===payload.manifestHash,'COORDINATION_MANIFEST_HASH_MISMATCH',400);
         need(payload.manifest.epoch===payload.epoch,'COORDINATION_STALE_EPOCH');
@@ -71,7 +76,8 @@ export function createConfiguredCoordinator({env,query,fetchImpl=globalThis.fetc
   return createCoordinatorHandler({store:createSqlStore(query),authenticateGithub:createGithubAuthenticator({policy}),
     authenticateFinancial:financialPolicy?createFinancialAuthenticator({policy:financialPolicy}):undefined,
     validateApproval:createGithubApprovalValidator({policy,token:get('FCOS_COORDINATOR_GITHUB_METADATA_TOKEN'),fetchImpl}),
-    validateResume:createGithubResumeValidator({policy,token:get('FCOS_COORDINATOR_GITHUB_METADATA_TOKEN'),fetchImpl})});
+    validateResume:createGithubResumeValidator({policy,token:get('FCOS_COORDINATOR_GITHUB_METADATA_TOKEN'),fetchImpl}),
+    validateQualification:policy.qualificationAdmission?createGithubQualificationValidator({policy,token:get('FCOS_COORDINATOR_GITHUB_METADATA_TOKEN'),fetchImpl}):undefined});
 }
 // Deno entrypoint uses only a narrowly privileged DB login and read-only GitHub metadata token.
 if(typeof Deno!=='undefined'&&import.meta.main) {

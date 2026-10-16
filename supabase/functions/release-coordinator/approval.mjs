@@ -1,5 +1,5 @@
 import { FCOS_RELEASE_APPROVAL_POLICY, fcosConnectionIdentifier } from '../../../config/fcosConnections.js';
-import { digest, need } from './core.mjs';
+import { digest, need, canonicalJson } from './core.mjs';
 const initialEnvironment='fcos-production-release', resumeEnvironment='fcos-hosted-production-resume';
 const positive=v=>Number.isSafeInteger(v)&&v>0;
 /** Current protection must remain intact; unrelated main commits do not replace the admitted reusable controller. */
@@ -83,3 +83,46 @@ function githubMetadataCollector({policy,token,fetchImpl=globalThis.fetch},resum
 }
 export const createGithubApprovalValidator=options=>githubMetadataCollector(options,false);
 export const createGithubResumeValidator=options=>githubMetadataCollector(options,true);
+
+/** This independently configured bootstrap identity grants qualification only. */
+export function validateGithubQualification({principal,policy,repository,branch,protection,run,operator}) {
+  const q=policy.qualificationAdmission;
+  need(q&&principal.qualificationOnly===true&&canonicalJson(principal.qualificationAdmission)===canonicalJson(q)
+    &&principal.ref===q.ref&&principal.sha===q.bootstrapSha&&principal.workflowSha===q.callerWorkflowSha
+    &&principal.workflowRef===q.callerWorkflowRef&&principal.jobWorkflowRef===q.jobWorkflowRef&&principal.jobWorkflowSha===q.jobWorkflowSha,
+    'COORDINATION_QUALIFICATION_IDENTITY_INVALID',403);
+  need(repository.full_name===q.repository&&String(repository.id)===q.repositoryId&&repository.default_branch==='main'&&repository.archived!==true
+    &&branch.name===q.ref.slice('refs/heads/'.length)&&branch.protected===true&&branch.commit?.sha===q.bootstrapSha
+    &&protection.enforce_admins?.enabled===true&&protection.allow_force_pushes?.enabled===false&&protection.allow_deletions?.enabled===false,
+    'COORDINATION_QUALIFICATION_PROTECTED_REF_INVALID',403);
+  const workflows=run.referenced_workflows?.filter(w=>w.path===q.jobWorkflowRef&&w.sha===q.jobWorkflowSha)??[];
+  need(run.id===Number(principal.runId)&&run.run_attempt===1&&run.status==='in_progress'&&run.conclusion===null
+    &&run.event==='workflow_dispatch'&&run.head_branch===branch.name&&run.head_sha===q.bootstrapSha
+    &&run.path.split('@')[0]==='.github/workflows/authenticated-release.yml'
+    &&run.repository?.full_name===q.repository&&String(run.repository.id)===q.repositoryId
+    &&run.head_repository?.full_name===q.repository&&String(run.head_repository.id)===q.repositoryId&&workflows.length===1
+    &&operator.login===fcosConnectionIdentifier('github','Required account')&&positive(operator.id)
+    &&[run.actor,run.triggering_actor].every(a=>a?.login===operator.login&&a.id===operator.id)
+    &&principal.actor===operator.login&&principal.actorId===String(operator.id),'COORDINATION_QUALIFICATION_RUN_INVALID',403);
+  return true;
+}
+export function createGithubQualificationValidator({policy,token,fetchImpl=globalThis.fetch}) {
+  need(policy.qualificationAdmission&&typeof token==='string'&&token.length>0,'COORDINATION_METADATA_TOKEN_REQUIRED',500);
+  const base=`https://api.github.com/repos/${policy.repository}`,ref=encodeURIComponent(policy.qualificationAdmission.ref.slice('refs/heads/'.length));
+  let active=0;const pending=[];
+  const read=async path=>{
+    await new Promise(resolve=>{const start=()=>{active++;resolve();};if(active<2) start();else pending.push(start);});
+    try{const response=await fetchImpl(path==='user'?'https://api.github.com/user':`${base}${path}`,{method:'GET',
+      headers:{authorization:`Bearer ${token}`,accept:'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'},redirect:'error',signal:AbortSignal.timeout(10000)});
+      need(response.ok&&!response.redirected,'COORDINATION_GITHUB_METADATA_UNAVAILABLE',503);return await response.json();}
+    catch{need(false,'COORDINATION_GITHUB_METADATA_UNAVAILABLE',503);}
+    finally{active--;pending.shift()?.();}
+  };
+  return async context=>{
+    const operator=await read('user');
+    need(operator.login===fcosConnectionIdentifier('github','Required account')&&positive(operator.id),'COORDINATION_METADATA_ACCOUNT_MISMATCH',403);
+    const [repository,branch]=await Promise.all([read(''),read(`/branches/${ref}`)]);
+    const [protection,run]=await Promise.all([read(`/branches/${ref}/protection`),read(`/actions/runs/${context.principal.runId}`)]);
+    return validateGithubQualification({...context,policy,repository,branch,protection,run,operator});
+  };
+}

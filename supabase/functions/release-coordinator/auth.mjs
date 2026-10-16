@@ -14,7 +14,21 @@ export function validatePolicy(policy) {
     && ['prepare','register','release / prepare','release / register'].includes(policy.registrationJob)
     && policy.approvalJobPrefix === (policy.registrationJob.startsWith('release / ')?'release / production / ':'production / ')
     && policy.resumeJobPrefix === (policy.registrationJob.startsWith('release / ')?'release / execute / ':'execute / '), 'COORDINATION_POLICY_INVALID',500);
+  if(policy.qualificationAdmission!==undefined) validateQualificationAdmission(policy.qualificationAdmission,policy);
   return policy;
+}
+export function validateQualificationAdmission(q,policy) {
+  const fields=['repository','repositoryId','ref','bootstrapSha','callerWorkflowRef','callerWorkflowSha','jobWorkflowRef','jobWorkflowSha','candidateSha','setupSha256'];
+  need(q&&typeof q==='object'&&!Array.isArray(q)&&Object.keys(q).length===fields.length&&fields.every(k=>Object.hasOwn(q,k))
+    &&q.repository===policy.repository&&q.repositoryId===policy.repositoryId
+    &&/^refs\/heads\/[A-Za-z0-9][A-Za-z0-9._/-]{1,190}$/.test(q.ref)&&q.ref!==policy.ref
+    &&!q.ref.includes('..')&&!q.ref.includes('//')&&!q.ref.endsWith('/')&&!q.ref.endsWith('.lock')
+    &&/^[a-f0-9]{40}$/.test(q.bootstrapSha)&&q.callerWorkflowSha===q.bootstrapSha
+    &&q.callerWorkflowRef===`${q.repository}/.github/workflows/authenticated-release.yml@${q.ref}`
+    &&/^[a-f0-9]{40}$/.test(q.jobWorkflowSha)
+    &&q.jobWorkflowRef===`${q.repository}/.github/workflows/hosted-release-controller.yml@${q.jobWorkflowSha}`
+    &&/^[a-f0-9]{40}$/.test(q.candidateSha)&&/^[a-f0-9]{64}$/.test(q.setupSha256),'COORDINATION_QUALIFICATION_POLICY_INVALID',500);
+  return q;
 }
 export function createGithubAuthenticator({policy,jwks,now=()=>Date.now()}) {
   validatePolicy(policy);
@@ -27,18 +41,23 @@ export function createGithubAuthenticator({policy,jwks,now=()=>Date.now()}) {
         maxTokenAge:'5m',clockTolerance:5,currentDate:new Date(now())}));
     } catch { need(false,'COORDINATION_GITHUB_IDENTITY_INVALID',401); }
     const admitted = policy.workflows.find(p=>p.callerWorkflowRef===claims.workflow_ref && p.jobWorkflowRef===claims.job_workflow_ref && p.jobWorkflowSha===claims.job_workflow_sha);
+    const q=policy.qualificationAdmission;
+    const qualificationOnly=!!q&&claims.ref===q.ref&&claims.sha===q.bootstrapSha&&claims.workflow_sha===q.callerWorkflowSha
+      &&claims.workflow_ref===q.callerWorkflowRef&&claims.job_workflow_ref===q.jobWorkflowRef&&claims.job_workflow_sha===q.jobWorkflowSha
+      &&claims.ref_protected==='true'&&!['fcos-production-release','fcos-hosted-production-resume'].includes(claims.environment);
     need(claims.aud===COORDINATOR_AUDIENCE && claims.repository===policy.repository && claims.repository_id===policy.repositoryId
-      && claims.ref===policy.ref && claims.ref_type==='branch' && claims.event_name==='workflow_dispatch'
+      && (claims.ref===policy.ref&&admitted||qualificationOnly) && claims.ref_type==='branch' && claims.event_name==='workflow_dispatch'
       && claims.run_attempt==='1' && /^[1-9][0-9]*$/.test(claims.run_id)
       && /^[a-f0-9]{40}$/.test(claims.sha) && /^[a-f0-9]{40}$/.test(claims.workflow_sha)
-      && claims.runner_environment==='github-hosted' && admitted && claims.exp-claims.iat<=600,
+      && claims.runner_environment==='github-hosted' && claims.exp-claims.iat<=600,
       'COORDINATION_GITHUB_IDENTITY_INVALID',401);
-    const expectedSubject = claims.environment ? `repo:${policy.repository}:environment:${claims.environment.replaceAll(':','%3A')}` : `repo:${policy.repository}:ref:${policy.ref}`;
+    const expectedSubject = claims.environment ? `repo:${policy.repository}:environment:${claims.environment.replaceAll(':','%3A')}` : `repo:${policy.repository}:ref:${claims.ref}`;
     need(claims.sub===expectedSubject,'COORDINATION_GITHUB_SUBJECT_INVALID',401);
     return {kind:'github',runId:claims.run_id,runAttempt:claims.run_attempt,repositoryId:claims.repository_id,
       ref:claims.ref,sha:claims.sha,workflowSha:claims.workflow_sha,workflowRef:claims.workflow_ref,
       jobWorkflowRef:claims.job_workflow_ref,jobWorkflowSha:claims.job_workflow_sha,
-      environment:claims.environment ?? null,actor:claims.actor,actorId:claims.actor_id,subject:claims.sub};
+      environment:claims.environment ?? null,actor:claims.actor,actorId:claims.actor_id,subject:claims.sub,
+      ...(qualificationOnly?{qualificationOnly:true,qualificationAdmission:{...q}}:{})};
   };
 }
 /** A separate issuer/key/audience is mandatory. This credential grants serialization only.

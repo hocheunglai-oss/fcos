@@ -262,7 +262,7 @@ declare c fcos_release_coordination.control%rowtype;
   ev fcos_release_coordination.operation_events%rowtype;
   auth fcos_release_coordination.authorizations%rowtype;
   prior_auth fcos_release_coordination.authorizations%rowtype;
-  existing jsonb; state_value text; result jsonb; is_production boolean;
+  existing jsonb; state_value text; result jsonb; is_production boolean; qualification_manifest jsonb;
 begin
   select * into c from fcos_release_coordination.control where singleton for update;
   if c.epoch is null then raise exception 'COORDINATION_INACTIVE'; end if;
@@ -271,6 +271,25 @@ begin
     or (principal->>'kind'='github' and p->'owner'->>'kind' is distinct from 'release')
     or (principal->>'kind'='financial' and (p->'owner'->>'kind' is distinct from 'financial' or p->'owner'->>'id' is distinct from principal->>'ownerId'))
     or coalesce(principal->>'kind','') not in ('github','financial') then raise exception 'COORDINATION_OWNER_MISMATCH'; end if;
+  if principal->'qualificationOnly'='true'::jsonb then
+    if c.mode<>'qualification' or principal->>'kind'<>'github' or action in ('admitApproval','approve','resume')
+      or (action in ('begin','claim','complete','uncertain','readback') and coalesce(p->>'phase','') not in
+        ('preview.create','qualification.stage','qualification.promote','qualification.rollback')) then raise exception 'COORDINATION_QUALIFICATION_ONLY'; end if;
+    if action='register' then qualification_manifest:=p->'manifest';
+    else select manifest into qualification_manifest from fcos_release_coordination.registrations where release_id=p->>'releaseId'; end if;
+    if coalesce(principal->'qualificationAdmission'->>'setupSha256','') !~ '^[a-f0-9]{64}$'
+      or coalesce(principal->'qualificationAdmission'->>'candidateSha','') !~ '^[a-f0-9]{40}$'
+      or coalesce(principal->'qualificationAdmission'->>'jobWorkflowSha','') !~ '^[a-f0-9]{40}$'
+      or qualification_manifest->>'stage' is distinct from 'qualification' or qualification_manifest->>'executionMode' is distinct from 'qualification'
+      or qualification_manifest->>'setupSha256' is distinct from principal->'qualificationAdmission'->>'setupSha256'
+      or qualification_manifest->'candidate'->>'sha' is distinct from principal->'qualificationAdmission'->>'candidateSha'
+      or qualification_manifest->'controller'->>'sha' is distinct from principal->'qualificationAdmission'->>'jobWorkflowSha'
+      or qualification_manifest->'controller'->>'workflow' is distinct from '.github/workflows/hosted-release-controller.yml'
+      or qualification_manifest->'qualificationSource' is distinct from jsonb_build_object(
+        'ref',principal->'qualificationAdmission'->>'ref','bootstrapSha',principal->'qualificationAdmission'->>'bootstrapSha',
+        'callerWorkflowRef',principal->'qualificationAdmission'->>'callerWorkflowRef','controllerSha',principal->'qualificationAdmission'->>'jobWorkflowSha',
+        'candidateSha',principal->'qualificationAdmission'->>'candidateSha') then raise exception 'COORDINATION_QUALIFICATION_SCOPE_INVALID'; end if;
+  end if;
   if action='register' then
     if coalesce(p->>'releaseId','')='' or coalesce(p->>'manifestHash','') !~ '^[0-9a-f]{64}$'
       or p->'manifest'->>'epoch' is distinct from c.epoch::text
