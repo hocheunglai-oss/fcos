@@ -7,7 +7,12 @@ name: FCOS admitted hosted release controller
       manifest:
         required: true
         type: string
+    secrets:
+      FCOS_HOSTED_GITHUB_READ_TOKEN:
+        required: false
 permissions: {}
+env:
+  FCOS_HOSTED_QUALIFICATION_ADMITTED: ${{ vars.FCOS_HOSTED_QUALIFICATION_ADMITTED }}
 concurrency:
   group: ${{ format('fcos-hosted-release-{0}', fromJSON(inputs.manifest).releaseId) }}
   cancel-in-progress: false

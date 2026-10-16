@@ -104,3 +104,5 @@ jobs:
     uses: hocheunglai-oss/fcos/.github/workflows/hosted-release-controller.yml@bbc5e6b1c0f9211d4f7d8a6e5f8acaccd15b9681
     with:
       manifest: ${{ needs.manifest.outputs.manifest }}
+    secrets:
+      FCOS_HOSTED_GITHUB_READ_TOKEN: ${{ secrets.FCOS_HOSTED_GITHUB_READ_TOKEN }}

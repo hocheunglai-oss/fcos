@@ -3,14 +3,12 @@
 name: FCOS hosted verification toolchain setup
 run-name: FCOS toolchain ${{ inputs.intent_sha256 }}
 'on':
-  workflow_dispatch:
+  workflow_call:
     inputs:
       source_sha:
-        description: Reviewed immutable toolchain source admitted by the setup operator.
         required: true
         type: string
       intent_sha256:
-        description: Exact durable registry-publication intent held by the setup operator.
         required: true
         type: string
 permissions: {}
@@ -19,7 +17,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   build:
-    if: ${{ vars.FCOS_HOSTED_TOOLCHAIN_SETUP_ENABLED == 'true' && github.repository == 'hocheunglai-oss/fcos' && github.repository_id == '1278654816' && github.actor == 'hocheunglai-oss' && github.actor_id == '265701760' && github.triggering_actor == 'hocheunglai-oss' && github.ref == 'refs/heads/main' && github.ref_protected && github.run_attempt == 1 }}
+    if: ${{ vars.FCOS_HOSTED_TOOLCHAIN_SETUP_ENABLED == 'true' && github.repository == 'hocheunglai-oss/fcos' && github.repository_id == '1278654816' && github.actor == 'hocheunglai-oss' && github.actor_id == '265701760' && github.triggering_actor == 'hocheunglai-oss' && github.ref_protected && github.run_attempt == 1 }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -33,6 +31,8 @@ jobs:
       INTENT_SHA256: ${{ inputs.intent_sha256 }}
       ADMITTED_SOURCE_SHA: ${{ vars.FCOS_HOSTED_TOOLCHAIN_SOURCE_SHA }}
       ADMITTED_INTENT_SHA256: ${{ vars.FCOS_HOSTED_TOOLCHAIN_INTENT_SHA256 }}
+      FCOS_HOSTED_TOOLCHAIN_BOOTSTRAP: ${{ vars.FCOS_HOSTED_TOOLCHAIN_BOOTSTRAP }}
+      FCOS_HOSTED_TOOLCHAIN_BOOTSTRAP_SHA256: ${{ vars.FCOS_HOSTED_TOOLCHAIN_BOOTSTRAP_SHA256 }}
     steps:
       - name: Admit immutable setup source and existing write intent
         shell: bash
@@ -46,6 +46,8 @@ jobs:
           repository: hocheunglai-oss/fcos
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
+      - name: Admit exact protected qualification bootstrap context
+        run: node --input-type=module -e 'import {toolchainSourceContext} from "./scripts/hosted-toolchain-admission.mjs"; toolchainSourceContext(process.env)'
       - name: Build without registry or provider credentials
         id: build
         shell: bash
@@ -82,6 +84,9 @@ jobs:
     env:
       SOURCE_SHA: ${{ inputs.source_sha }}
       INTENT_SHA256: ${{ inputs.intent_sha256 }}
+      ADMITTED_SOURCE_SHA: ${{ vars.FCOS_HOSTED_TOOLCHAIN_SOURCE_SHA }}
+      FCOS_HOSTED_TOOLCHAIN_BOOTSTRAP: ${{ vars.FCOS_HOSTED_TOOLCHAIN_BOOTSTRAP }}
+      FCOS_HOSTED_TOOLCHAIN_BOOTSTRAP_SHA256: ${{ vars.FCOS_HOSTED_TOOLCHAIN_BOOTSTRAP_SHA256 }}
       IMAGE_ID: ${{ needs.build.outputs.image_id }}
       ARCHIVE_SHA256: ${{ needs.build.outputs.archive_sha256 }}
       GUARD_SHA256: ${{ needs.build.outputs.guard_sha256 }}
