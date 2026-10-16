@@ -57,6 +57,14 @@ test('ephemeral signatures verify as data only; real pinned verifier rejects the
   assert.throws(() => coordinationBindingFromOriginal({ admission: result, original: result, issuanceEnvelope: text, now }));
   assert.throws(() => coordinationBindingFromOriginal({ admission: structuredClone(result), original: result, issuanceEnvelope: text, now }));
 });
+test('current canonical helper is fixed and a signed retired-helper grant is refused', () => {
+  assert.equal(PREVIEW_COORDINATION_CANONICAL.helperSha256,
+    '24758c4191afae79fa4b149a166c450ac1cac20951a5f648f3cc3853969aa31d');
+  const current = grant();
+  assert.equal(verify(envelope(current)).grant.helperSha256, PREVIEW_COORDINATION_CANONICAL.helperSha256);
+  const retired = { ...current, helperSha256: '2bb8591f79b76b92f917ae7fcc1720d73757b613771812e9e220db015bdd1a18' };
+  assert.throws(() => verify(envelope(retired)));
+});
 test('existing issuance and connection-health signature purposes cannot authenticate coordination', () => {
   for (const purpose of ['FCOS-PREVIEW-VERCEL-RUN-AUTHORITY-V1\0', 'FCOS-CONNECTION-HEALTH-V1\0', '']) {
     assert.throws(() => verify(envelope(grant(), purpose)));
