@@ -370,8 +370,8 @@ export function assertPreviewEmailBuildProtection(options) {
 /** Wait data only: full existing protection and genuine original admission are
  * mandatory before the first polling callback. This cannot grant a write claim.
  * The native caller re-reads full protected state before using the returned row.
- * Native verification may refresh its cryptographically verified Actions token;
- * the original handoff/admission/provider clocks and signed identity stay fixed.
+ * Native verification and durable setup handoffs may refresh their verified
+ * Actions token; original handoff/admission/provider clocks and identity stay fixed.
  * No receipt, old-run receipt or renewed timestamps can authorize a Preview. */
 export async function waitForPreviewEmailAttestation(options = {}) {
   const { protection, operation, now = () => Date.now() } = options;
@@ -383,9 +383,11 @@ export async function waitForPreviewEmailAttestation(options = {}) {
   const reviewed = previewEmailProtectionData({ ...protection, now: startedAt }, false, verificationOnly);
   if (reviewed.authorityMode !== ENROLLED_AUTHORITY_MODE) failure('Existing issuance-bound credential required.');
   const { readVariables, privateEnrollment, token, sleep = ms => new Promise(done => setTimeout(done, ms)) } = options;
-  // Only the native read-only verification caller supplies githubReleaseOidc.
-  // Build/readback and callers without that verifier retain the original expiry.
-  const readOidc = verificationOnly && typeof options.readOidc === 'function' ? options.readOidc : undefined;
+  // The native caller supplies the cryptographically verified OIDC collector.
+  // Durable handoffs keep their original deadlines while refreshing the same
+  // identity. Historical non-durable builds retain the original token expiry.
+  const readOidc = (verificationOnly || isDurableSuccessorSetup(selected.context))
+    && typeof options.readOidc === 'function' ? options.readOidc : undefined;
   let oidcClaims = { ...protection.oidcClaims };
   const identityFields = ['iss', 'aud', 'repository', 'repository_id', 'sub', 'environment', 'workflow_ref',
     'workflow_sha', 'sha', 'ref', 'run_id', 'run_attempt', 'event_name'];

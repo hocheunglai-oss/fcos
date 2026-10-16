@@ -965,6 +965,80 @@ function durableFixture(runId = 99) {
   value.reviews = value.reviews.map(row => record({ ...row.value, schemaVersion: 2, kind: 'fcos_exact_04ee_setup_material_review', reviewedAt: iso(provisioned + 1000) }));
   value.rows.root = value.reviews[0]; value.rows.independent = value.reviews[1]; return value;
 }
+async function durableProtectionFixture() {
+  const { protection, variables } = await verificationProtectionFixture();
+  const value = durableFixture(), transport = materialTransportFixture({ expected: value.binding, rows: value.rows, now });
+  const admission = await collectSuccessorLiveAdmission({ binding: value.binding, reads: transport.reads,
+    sourceCwd: trustedCwd, trustedCwd, now });
+  transport.run.name = 'FCOS protected Preview email proof build';
+  transport.run.display_title = `Review FCOS Preview email source ${policy.candidateSha}`;
+  transport.jobs[0].workflow_name = transport.run.name;
+  transport.jobs[0].conclusion = null;
+  transport.jobs[0].completed_at = null;
+  const pending = { variables: variables.variables.filter(row => row.name !== ENROLLED_AUTHORITY_RECEIPT).map(row => ({ ...row,
+    value: row.name === 'FCOS_PREVIEW_EMAIL_BUILD_ENABLED' ? 'true'
+      : row.name === 'FCOS_PREVIEW_EMAIL_BUILD_REVIEWED_CONTRACT_SHA256' ? admission.contractSha256 : row.value })) };
+  return { protection: { ...protection, repository: transport.repository, branch: transport.branch,
+    protection: transport.protection, environment: transport.environment, run: transport.run, jobs: transport.jobs,
+    approvals: transport.approvals, workflow: transport.workflowDefinition, oidcClaims: transport.oidcClaims,
+    variables: pending, admission, mode: 'build' }, pending };
+}
+
+test('durable create and readback refresh the same verified identity past five minutes without extending the original ten-minute handoff', async () => {
+  for (const operation of ['create', 'readback']) {
+    const { protection, pending } = await durableProtectionFixture();
+    const original = JSON.stringify(protection.admission);
+    const initial = { ...protection.oidcClaims, exp: (now + 300000) / 1000 };
+    let clock = now, refreshes = 0, reads = 0;
+    await assert.rejects(() => waitForPreviewEmailAttestation({ protection: { ...protection, oidcClaims: initial }, operation,
+      now: () => clock, privateEnrollment: 'OFFLINE_UNUSED_CAPSULE', token: 'OFFLINE_UNUSED_BEARER',
+      readOidc: async () => { refreshes++; return { ...initial, exp: (clock + 300000) / 1000 }; },
+      sleep: async ms => { clock += ms; }, readVariables: () => { reads++; return pending; } }), /handoff expired/);
+    assert.equal(clock, now + 600000); assert.equal(refreshes, 2); assert.ok(reads > 30);
+    assert.equal(JSON.stringify(protection.admission), original);
+  }
+});
+
+test('durable handoffs reject every changed signed identity field before polling or private receipt access', async () => {
+  const { protection } = await durableProtectionFixture();
+  const initial = { ...protection.oidcClaims, exp: (now + 20000) / 1000 };
+  for (const operation of ['create', 'readback']) {
+    for (const [field, replacement] of Object.entries({ iss: 'https://other.invalid', aud: 'other', repository: 'other/repo',
+      repository_id: '8', sub: 'repo:other/repo:environment:other', environment: 'other', workflow_ref: 'other/workflow@refs/heads/main',
+      workflow_sha: 'f'.repeat(40), sha: 'f'.repeat(40), ref: 'refs/heads/other', run_id: '100', run_attempt: '2', event_name: 'push',
+      exp: initial.exp })) {
+      let refreshes = 0;
+      await assert.rejects(() => waitForPreviewEmailAttestation({ protection: { ...protection, oidcClaims: initial }, operation,
+        now: () => now, readOidc: async () => { refreshes++; return { ...initial, exp: (now + 320000) / 1000, [field]: replacement }; },
+        readVariables: () => assert.fail('Changed identity cannot poll.'), sleep: () => assert.fail('Changed identity cannot sleep.') }),
+      /signed identity changed or was not refreshed/);
+      assert.equal(refreshes, 1);
+    }
+  }
+});
+
+test('durable token refresh cannot revive an expired identity, move original job deadlines or run after the original handoff deadline', async () => {
+  const { protection, pending } = await durableProtectionFixture();
+  for (const operation of ['create', 'readback']) {
+    await assert.rejects(() => waitForPreviewEmailAttestation({ protection: { ...protection,
+      oidcClaims: { ...protection.oidcClaims, exp: now / 1000 } }, operation, now: () => now,
+      readOidc: () => assert.fail('Expired identity cannot refresh.') }));
+    for (const [startedAt, completedAt] of [[now, now + 600000], [now + 1780000, now + 1791000]]) {
+      let clock = startedAt, refreshes = 0;
+      const initial = { ...protection.oidcClaims, exp: (startedAt + 20000) / 1000 };
+      await assert.rejects(() => waitForPreviewEmailAttestation({ protection: { ...protection, oidcClaims: initial }, operation,
+        now: () => clock, readOidc: async () => { refreshes++; clock = completedAt; return { ...initial, exp: (clock + 300000) / 1000 }; },
+        readVariables: () => assert.fail('Expired refresh cannot poll.'), sleep: () => assert.fail('Expired refresh cannot sleep.') }), /handoff expired/);
+      assert.equal(refreshes, 1);
+    }
+    let clock = now;
+    await assert.rejects(() => waitForPreviewEmailAttestation({ protection: { ...protection,
+      oidcClaims: { ...protection.oidcClaims, exp: (now + 15000) / 1000 } }, operation, now: () => clock,
+      sleep: async ms => { clock += ms; }, readVariables: () => pending }), /handoff expired/);
+    assert.equal(clock, now + 15000);
+  }
+});
+
 function durableRecords(admission, at) {
   const snapshot = successorRecords(admission); snapshot.capturedAt = iso(at);
   snapshot.records = [...snapshot.records.filter(row => row.target[0] === 'production'), ...Object.values(admission.context.recordMetadata)]; return snapshot;
