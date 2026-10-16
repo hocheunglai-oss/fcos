@@ -292,7 +292,7 @@ test('resume cannot create authority or renew an expired receipt; existing inten
   await assert.rejects(f.client.approve(f.scope),/APPROVAL_ENVIRONMENT_REQUIRED/);
   f.setToken(await token());await begin(f);
   await f.db.query(`insert into fcos_release_coordination.authorizations(release_id,run_id,run_attempt,approved_job_id,manifest_hash,epoch,receipt,admitted_at,expires_at)
-    values($1,'101','1',202,$2,1,$3::jsonb,clock_timestamp()-interval '25 hours',clock_timestamp()-interval '1 hour')`,[f.scope.releaseId,f.hash,JSON.stringify({manifestHash:f.hash,runId:'101'})]);
+    values($1,'101','1',202,$2,1,$3::jsonb,statement_timestamp()-interval '25 hours',statement_timestamp()-interval '1 hour')`,[f.scope.releaseId,f.hash,JSON.stringify({manifestHash:f.hash,runId:'101'})]);
   f.setToken(await token({environment:'fcos-hosted-production-resume'}));
   await assert.rejects(f.client.resume(f.scope),/RESUME_FORBIDDEN/);
   assert.equal((await begin(f)).disposition,'readback');
@@ -333,7 +333,7 @@ test('explicit later human review appends a session and old resume admission can
   const f=await fixture(t);await f.register();
   const oldReceipt={manifestHash:f.hash,epoch:1,runId:'101',runAttempt:'1',approvedJobId:202,protectedJobStartedAt:new Date(Date.now()-26*3600000).toISOString()};
   await f.db.query(`insert into fcos_release_coordination.authorizations(release_id,run_id,run_attempt,approved_job_id,manifest_hash,epoch,receipt,admitted_at,expires_at)
-    values($1,'101','1',202,$2,1,$3,clock_timestamp()-interval '25 hours',clock_timestamp()-interval '1 hour')`,[f.scope.releaseId,f.hash,JSON.stringify(oldReceipt)]);
+    values($1,'101','1',202,$2,1,$3,statement_timestamp()-interval '25 hours',statement_timestamp()-interval '1 hour')`,[f.scope.releaseId,f.hash,JSON.stringify(oldReceipt)]);
   const original=(await f.client.snapshot(f.scope)).approval;
   f.setToken(await token({environment:'fcos-production-release'}));await assert.rejects(f.client.approve(f.scope),/RENEWAL_NEW_RUN_REQUIRED/);
   const nextSha='d'.repeat(40);f.setToken(await token({run_id:'102',sha:nextSha,workflow_sha:nextSha}));await f.register();
