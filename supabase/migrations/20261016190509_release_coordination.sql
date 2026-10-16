@@ -17,6 +17,7 @@ create table fcos_release_coordination.epochs (
   activation_evidence jsonb not null,
   activated_at timestamptz not null default clock_timestamp()
 );
+create unique index coordination_notification_challenge_unique on fcos_release_coordination.epochs ((activation_evidence->'notificationChallenge'->>'challenge'));
 create table fcos_release_coordination.control (
   singleton boolean primary key default true check (singleton),
   epoch bigint references fcos_release_coordination.epochs(epoch),
@@ -142,7 +143,7 @@ end $$;
 -- Only a migration operator can activate. Runtime credentials cannot fence or clear legacy uncertainty.
 create function fcos_release_coordination.install_epoch(next_epoch bigint, activation jsonb) returns jsonb
 language plpgsql security definer set search_path = pg_catalog, fcos_release_coordination as $$
-declare c fcos_release_coordination.control%rowtype; item jsonb;
+declare c fcos_release_coordination.control%rowtype; item jsonb; challenge jsonb; issued_at timestamptz;
 begin
   select * into c from fcos_release_coordination.control where singleton for update;
   if next_epoch <= coalesce(c.epoch,0) or c.operation_id is not null then raise exception 'COORDINATION_EPOCH_CONFLICT'; end if;
@@ -154,6 +155,16 @@ begin
      or activation->'legacyFence'->>'kind' is distinct from 'permanent_legacy_sentinel'
      or coalesce(activation->'legacyFence'->>'snapshotHash','') !~ '^[0-9a-f]{64}$'
      or coalesce(activation->'legacyFence'->>'proofHash','') !~ '^[0-9a-f]{64}$' then raise exception 'COORDINATION_ACTIVATION_EVIDENCE_REQUIRED'; end if;
+  challenge:=activation->'notificationChallenge';
+  if jsonb_typeof(challenge) is distinct from 'object'
+    or coalesce(challenge->>'challenge','') !~ '^[0-9a-f]{64}$'
+    or coalesce(challenge->>'repository','') !~ '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
+    or coalesce(challenge->>'operator','') !~ '^[A-Za-z0-9][A-Za-z0-9-]{0,38}$'
+    or jsonb_typeof(challenge->'issuedAt') is distinct from 'string' then raise exception 'COORDINATION_NOTIFICATION_CHALLENGE_REQUIRED'; end if;
+  begin issued_at:=(challenge->>'issuedAt')::timestamptz;
+    if not isfinite(issued_at) or issued_at>clock_timestamp()+interval '30 seconds' then raise exception 'COORDINATION_NOTIFICATION_CHALLENGE_REQUIRED'; end if;
+  exception when others then raise exception 'COORDINATION_NOTIFICATION_CHALLENGE_REQUIRED'; end;
+  if exists(select 1 from fcos_release_coordination.epochs e where e.activation_evidence->'notificationChallenge'->>'challenge'=challenge->>'challenge') then raise exception 'COORDINATION_NOTIFICATION_CHALLENGE_REUSED'; end if;
   for item in select value from jsonb_array_elements(activation->'writers') loop
     if coalesce(item->>'id','')='' or item->>'disabled' is distinct from 'true'
        or coalesce(item->>'proofHash','') !~ '^[0-9a-f]{64}$' then raise exception 'COORDINATION_OLD_WRITER_NOT_FENCED'; end if;
@@ -173,7 +184,8 @@ end $$;
 -- and durable successful hosted qualification in the SAME epoch, then records admin admission.
 create function fcos_release_coordination.activate(expected_epoch bigint, qualification jsonb) returns jsonb
 language plpgsql security definer set search_path = pg_catalog, fcos_release_coordination as $$
-declare c fcos_release_coordination.control%rowtype; installed jsonb; writer jsonb; qid text;
+declare c fcos_release_coordination.control%rowtype; installed jsonb; writer jsonb; qid text; qualification_actor jsonb;
+  challenge jsonb; receipt jsonb; receipt_text text; received_at timestamptz; issued_at timestamptz;
 begin
   select * into c from fcos_release_coordination.control where singleton for update;
   if c.epoch is distinct from expected_epoch or c.mode<>'qualification' or c.operation_id is not null then raise exception 'COORDINATION_ACTIVATION_STATE_INVALID'; end if;
@@ -190,7 +202,7 @@ begin
     end if;
   end loop;
   if exists(select 1 from fcos_release_coordination.imported_uncertainty u left join fcos_release_coordination.import_resolutions r using(import_id) where r.import_id is null) then raise exception 'COORDINATION_IMPORTED_UNCERTAINTY_UNRESOLVED'; end if;
-  select release_id into qid from fcos_release_coordination.registrations
+  select release_id,registration_actor into qid,qualification_actor from fcos_release_coordination.registrations
     where epoch=c.epoch and manifest_hash=qualification->>'manifestHash' and scope='qualification';
   if qid is null or not exists(select 1 from fcos_release_coordination.operations o cross join lateral
     (select e.state,e.evidence from fcos_release_coordination.operation_events e where e.operation_id=o.operation_id order by e.event_id desc limit 1) last_ev
@@ -204,9 +216,29 @@ begin
     (select e.state,e.evidence from fcos_release_coordination.operation_events e where e.operation_id=o.operation_id order by e.event_id desc limit 1) last_ev
     where o.release_id=qid and o.phase in ('qualification.stage','qualification.promote','qualification.rollback')
       and last_ev.state='complete' and last_ev.evidence->>'outcome'='applied' and last_ev.evidence->'result'->>'simulated'='true')<>3 then raise exception 'COORDINATION_QUALIFICATION_SIMULATIONS_REQUIRED'; end if;
+  -- The receipt comes only from this privileged setup transaction. Runtime
+  -- evidence or a release-caller boolean cannot install the one-time attestation.
+  challenge:=installed->'notificationChallenge';
+  receipt_text:=qualification->'notificationDelivery'->>'receiptJson';
+  if jsonb_typeof(qualification->'notificationDelivery'->'receiptJson') is distinct from 'string'
+    or octet_length(receipt_text)>8192
+    or coalesce(qualification->'notificationDelivery'->>'receiptSha256','') !~ '^[0-9a-f]{64}$'
+    or encode(sha256(convert_to(receipt_text,'UTF8')),'hex') is distinct from qualification->'notificationDelivery'->>'receiptSha256'
+    or challenge->>'repository' is distinct from split_part(qualification_actor->>'workflowRef','/.github/',1)
+    then raise exception 'COORDINATION_NOTIFICATION_DELIVERY_REQUIRED'; end if;
+  begin receipt:=receipt_text::jsonb; received_at:=(receipt->>'receivedAt')::timestamptz; issued_at:=(challenge->>'issuedAt')::timestamptz;
+    if jsonb_typeof(receipt) is distinct from 'object'
+      or receipt->>'challenge' is distinct from challenge->>'challenge'
+      or receipt->>'repository' is distinct from challenge->>'repository'
+      or receipt->>'operator' is distinct from challenge->>'operator'
+      or receipt->>'device' is distinct from 'iphone'
+      or receipt->'confirmedByHuman' is distinct from 'true'::jsonb
+      or received_at is null or not isfinite(received_at) or received_at<issued_at or received_at>clock_timestamp()+interval '30 seconds'
+      then raise exception 'COORDINATION_NOTIFICATION_DELIVERY_REQUIRED'; end if;
+  exception when others then raise exception 'COORDINATION_NOTIFICATION_DELIVERY_REQUIRED'; end;
   insert into fcos_release_coordination.activations(epoch,proof) values(c.epoch,qualification);
   update fcos_release_coordination.control set mode='active' where singleton;
-  return jsonb_build_object('epoch',c.epoch,'mode','active');
+  return jsonb_build_object('epoch',c.epoch,'mode','active','notificationReceiptSha256',qualification->'notificationDelivery'->>'receiptSha256');
 end $$;
 create function fcos_release_coordination.resolve_import(import_operation_id text, readback jsonb) returns void
 language plpgsql security definer set search_path = pg_catalog, fcos_release_coordination as $$

@@ -9,7 +9,7 @@ import { SignJWT, generateKeyPair, exportJWK, createLocalJWKSet } from 'jose';
 import { createCoordinatorClient } from '../scripts/lib/hosted-release/coordinator-client.mjs';
 import { createSqlStore, createCoordinatorHandler, createGithubAuthenticator } from '../supabase/functions/release-coordinator/index.ts';
 import { verifyDatabaseIdentity } from '../supabase/functions/release-coordinator/runtime.mjs';
-import { digest } from '../supabase/functions/release-coordinator/core.mjs';
+import { digest, createNotificationChallenge, createNotificationDeliveryProof } from '../supabase/functions/release-coordinator/core.mjs';
 
 const available=spawnSync('pg_config',['--bindir'],{encoding:'utf8'});
 const bindir=available.status===0?available.stdout.trim():null;
@@ -23,7 +23,7 @@ test('native PostgreSQL independent runners have one durable execute and no expi
   const pool=new pg.Pool({host:directory,port,user:'postgres',database:'postgres',max:12});
   t.after(async()=>{await pool.end();execFileSync(path.join(bindir,'pg_ctl'),['-D',data,'-m','immediate','-w','stop'],{stdio:'pipe'});await rm(directory,{recursive:true,force:true});});
   await pool.query(await readFile(new URL('../supabase/migrations/20261016190509_release_coordination.sql',import.meta.url),'utf8'));
-  const H='a'.repeat(64),activation={inventoryComplete:true,inventoryHash:H,legacyFence:{kind:'permanent_legacy_sentinel',snapshotHash:H,proofHash:H},writers:[{id:'legacy',disabled:true,proofHash:H}],uncertainties:[]};
+  const H='a'.repeat(64),activation={notificationChallenge:createNotificationChallenge(),inventoryComplete:true,inventoryHash:H,legacyFence:{kind:'permanent_legacy_sentinel',snapshotHash:H,proofHash:H},writers:[{id:'legacy',disabled:true,proofHash:H}],uncertainties:[]};
   await pool.query('select fcos_release_coordination.install_epoch($1,$2)',[1,activation]);
   const owner={kind:'release',id:'features'},m={epoch:1,executionMode:'qualification'};
   const scope={epoch:1,owner,releaseId:'race-release',manifestHash:await digest(m)},intent={...scope,phase:'preview.create',operationId:'race-operation',requestHash:H};
@@ -56,7 +56,32 @@ test('native PostgreSQL independent runners have one durable execute and no expi
     const simulated={...scope,phase,operationId:`native-${phase}`,requestHash:H};await client.begin(simulated);
     await client.complete({...simulated,evidence:{outcome:'applied',result:{simulated:true}}});
   }
-  await pool.query('select fcos_release_coordination.activate($1,$2)',[1,{manifestHash:scope.manifestHash,evidenceHash:qualHash,oldWriterFenceHash:H,allWritersAdmitted:true,writerAdmissions:[{id:'legacy',admitted:true,proofHash:H}]}]);
+  const activationProof={manifestHash:scope.manifestHash,evidenceHash:qualHash,oldWriterFenceHash:H,allWritersAdmitted:true,writerAdmissions:[{id:'legacy',admitted:true,proofHash:H}]};
+  await assert.rejects(pool.query('select fcos_release_coordination.activate($1,$2)',[1,activationProof]),/NOTIFICATION_DELIVERY_REQUIRED/);
+  const challenge=activation.notificationChallenge,receiptJson=JSON.stringify({...challenge,device:'iphone',confirmedByHuman:true,receivedAt:new Date().toISOString()});
+  const notificationDelivery=await createNotificationDeliveryProof({receiptJson,challenge});
+  await assert.rejects(client.request('activate',{...scope,notificationDelivery}),/ACTION_UNKNOWN/);
+  await assert.rejects(client.snapshot({...scope,notificationDelivery}),/SERVER_FIELD_FORBIDDEN/);
+  await client.appendEvidence({...scope,key:'notification.delivery',evidence:{...JSON.parse(receiptJson),receiptSha256:notificationDelivery.receiptSha256}});
+  await assert.rejects(pool.query('select fcos_release_coordination.activate($1,$2)',[1,activationProof]),/NOTIFICATION_DELIVERY_REQUIRED/);
+  const restricted=await pool.connect();try{await restricted.query('set role fcos_coordinator_runtime');
+    await assert.rejects(restricted.query('select fcos_release_coordination.activate($1,$2)',[1,{...activationProof,notificationDelivery}]),/permission denied/);
+  }finally{restricted.release(true);}
+  for(const invalid of [{...notificationDelivery,receiptSha256:H},{...notificationDelivery,receiptJson:receiptJson+' '}]){
+    await assert.rejects(pool.query('select fcos_release_coordination.activate($1,$2)',[1,{...activationProof,notificationDelivery:invalid}]),/NOTIFICATION_DELIVERY_REQUIRED/);
+    assert.equal((await client.snapshot(scope)).mode,'qualification');
+  }
+  for(const patch of [{challenge:H},{repository:'other/fcos'},{operator:'other'},{device:'android'},{confirmedByHuman:'true'},
+    {receivedAt:new Date(Date.parse(challenge.issuedAt)-1).toISOString()},{receivedAt:new Date(Date.now()+3600000).toISOString()}]){
+    const invalidJson=JSON.stringify({...JSON.parse(receiptJson),...patch});
+    const rawHash=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(invalidJson))),b=>b.toString(16).padStart(2,'0')).join('');
+    await assert.rejects(pool.query('select fcos_release_coordination.activate($1,$2)',[1,{...activationProof,notificationDelivery:{receiptJson:invalidJson,receiptSha256:rawHash}}]),/NOTIFICATION_DELIVERY_REQUIRED/);
+  }
+  const activated=(await pool.query('select fcos_release_coordination.activate($1,$2) as result',[1,{...activationProof,notificationDelivery}])).rows[0].result;
+  assert.equal(activated.notificationReceiptSha256,notificationDelivery.receiptSha256);
+  const stored=(await pool.query('select proof from fcos_release_coordination.activations where epoch=1')).rows[0].proof;
+  assert.deepEqual(stored.notificationDelivery,notificationDelivery);
+  await assert.rejects(pool.query('update fcos_release_coordination.activations set proof=proof where epoch=1'),/APPEND_ONLY/);
   const second={...scope,releaseId:'another-release'};await client.register({...second,manifest:m});
   const secondIntent={...second,phase:'preview.create',operationId:'another-preview',requestHash:H};await client.begin(secondIntent);
   const m2={epoch:1,executionMode:'financial'},financial={kind:'financial',ownerId:'finance'},s2={epoch:1,owner:{kind:'financial',id:'finance'},releaseId:'finance-race',manifestHash:await digest(m2)};

@@ -6,6 +6,7 @@ import path from 'node:path';
 import { tmpdir } from 'node:os';
 import pg from 'pg';
 import { SignJWT, generateKeyPair, exportJWK, createLocalJWKSet } from 'jose';
+import { createNotificationChallenge, createNotificationDeliveryProof } from '../supabase/functions/release-coordinator/core.mjs';
 import { runQualification, publishQualificationArtifact } from '../scripts/hosted-release-qualification.mjs';
 import { preparePreview, executeHostedProduction } from '../scripts/lib/hosted-release/controller.mjs';
 import { CONTRACT_VERSION, CONTROLLER_WORKFLOW, REQUIRED_LIVE_CHECKS, NORMAL_MODULES, WRITE_PHASES, digest, releaseTargets } from '../scripts/lib/hosted-release/contract.mjs';
@@ -62,7 +63,8 @@ test('local rehearsal: native PostgreSQL, signed OIDC, real endpoint/client/cont
  const pool=new pg.Pool({host:directory,port,user:'postgres',database:'postgres',max:8});
  t.after(async()=>{await pool.end();execFileSync(path.join(bindir,'pg_ctl'),['-D',data,'-m','immediate','-w','stop'],{stdio:'pipe'});await rm(directory,{recursive:true,force:true});});
  await pool.query(await readFile(new URL('../supabase/migrations/20261016190509_release_coordination.sql',import.meta.url),'utf8'));
- await pool.query('select fcos_release_coordination.install_epoch($1,$2)',[1,{inventoryComplete:true,inventoryHash:H,legacyFence:{kind:'permanent_legacy_sentinel',snapshotHash:H,proofHash:H},writers:[{id:'legacy',disabled:true,proofHash:H}],uncertainties:[]}]);
+ const notificationChallenge=createNotificationChallenge();
+ await pool.query('select fcos_release_coordination.install_epoch($1,$2)',[1,{notificationChallenge,inventoryComplete:true,inventoryHash:H,legacyFence:{kind:'permanent_legacy_sentinel',snapshotHash:H,proofHash:H},writers:[{id:'legacy',disabled:true,proofHash:H}],uncertainties:[]}]);
  const query=async(sql,values)=>{const c=await pool.connect();try{await c.query('set role fcos_coordinator_runtime');return await c.query(sql,values);}finally{await c.query('reset role');c.release();}};
  const policy={repository,repositoryId:'77',ref:'refs/heads/main',registrationJob:'release / prepare',approvalJobPrefix:'release / production / ',resumeJobPrefix:'release / execute / ',
  workflows:[{callerWorkflowRef:`${repository}/.github/workflows/hosted-release.yml@refs/heads/main`,jobWorkflowRef:`${repository}/${CONTROLLER_WORKFLOW}@${S}`,jobWorkflowSha:S}]};
@@ -105,7 +107,8 @@ test('local rehearsal: native PostgreSQL, signed OIDC, real endpoint/client/cont
  const rehearsal=await runQualification({manifest:q,coordinator:client,simulateProduction:true,context:'local_rehearsal'});
  assert.equal(rehearsal.hostedQualification,false);assert.equal(rehearsal.evidenceKey,'local.qualification');assert.equal(qv.effects.preview,1);assert.equal(qv.effects.stage,0);
  const qualified=await client.snapshot(bind(q));assert.equal(qualified.operations['qualification.stage'].state,'complete');
- const activation={manifestHash:digest(q),evidenceHash:rehearsal.evidenceHash,oldWriterFenceHash:H,allWritersAdmitted:true,writerAdmissions:[{id:'legacy',admitted:true,proofHash:H}]};
+ const notificationDelivery=await createNotificationDeliveryProof({challenge:notificationChallenge,receiptJson:JSON.stringify({...notificationChallenge,device:'iphone',confirmedByHuman:true,receivedAt:new Date().toISOString()})});
+ const activation={notificationDelivery,manifestHash:digest(q),evidenceHash:rehearsal.evidenceHash,oldWriterFenceHash:H,allWritersAdmitted:true,writerAdmissions:[{id:'legacy',admitted:true,proofHash:H}]};
  await assert.rejects(pool.query('select fcos_release_coordination.activate($1,$2)',[1,activation]),/HOSTED_QUALIFICATION_REQUIRED/);
  // Actual publisher code with a fake GitHub artifact boundary; this remains a local rehearsal.
  const archivePath=path.join(directory,'qualification.zip'),reportPath=path.join(directory,'qualification.json');let archive;

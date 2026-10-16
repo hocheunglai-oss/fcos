@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { dirname, resolve, relative, isAbsolute } from 'node:path';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
+import { assertNotificationChallenge } from '../supabase/functions/release-coordinator/core.mjs';
 import { RELEASE_COORDINATION_CANONICAL } from './lib/release-coordination.mjs';
 const hash=value=>createHash('sha256').update(value).digest('hex');
 export const CANONICAL_LEGACY_DIRECTORY='/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/schedule-consolidation-20261004/production-reconciliation-coordinator-20261005';
@@ -27,6 +28,7 @@ export function inspectReviewedCutover({reviewPath,reviewSha256,expectedHelperSh
   const raw=regular(reviewPath);need(hash(raw)===reviewSha256,'CUTOVER_REVIEW_CHANGED');const review=JSON.parse(raw);
   need(review.kind==='fcos_hosted_cutover_review_v1'&&review.coordinationOnly===true&&review.providerAuthorityGranted===false
     &&Number.isSafeInteger(review.nextEpoch)&&review.nextEpoch>0,'CUTOVER_REVIEW_INVALID');
+  try{assertNotificationChallenge(review.notificationChallenge);}catch{fail('CUTOVER_NOTIFICATION_CHALLENGE_REQUIRED');}
   if(fixtureRoot) need([realpathSync(tmpdir()),realpathSync('/tmp')].some(root=>inside(root,fixtureRoot))&&inside(fixtureRoot,reviewPath),'CUTOVER_FIXTURE_MUST_BE_TEMPORARY');
   else need(expectedHelperSha256===RELEASE_COORDINATION_CANONICAL.helperSha256,'CUTOVER_CANONICAL_HELPER_REQUIRED');
   need(review.helper.sha256===expectedHelperSha256&&hash(reference(review.helper))===expectedHelperSha256,'CUTOVER_HELPER_CHANGED');
@@ -127,7 +129,7 @@ export function reviewedInstallEpochPlan(options,{expectedFenceSha256}) {
     &&sentinel.permanent===true&&sentinel.inventorySha256===checked.reviewSha256&&sentinel.legacySnapshotSha256===checked.review.workflow.sha256,
     'CUTOVER_PERMANENT_FENCE_MISMATCH');
   return {query:'select fcos_release_coordination.install_epoch($1::bigint,$2::jsonb)',parameters:[checked.review.nextEpoch,
-    {inventoryComplete:true,inventoryHash:checked.reviewSha256,legacyFence:{kind:'permanent_legacy_sentinel',snapshotHash:checked.review.workflow.sha256,proofHash:expectedFenceSha256},writers:checked.writers,uncertainties:checked.uncertainties}],
+    {inventoryComplete:true,inventoryHash:checked.reviewSha256,notificationChallenge:checked.review.notificationChallenge,legacyFence:{kind:'permanent_legacy_sentinel',snapshotHash:checked.review.workflow.sha256,proofHash:expectedFenceSha256},writers:checked.writers,uncertainties:checked.uncertainties}],
     coordinationOnly:true,providerAuthorityGranted:false,operatorMustAuthenticateProviderEvidence:true};
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){

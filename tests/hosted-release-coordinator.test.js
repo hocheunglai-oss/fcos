@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { PGlite } from '@electric-sql/pglite';
 import { SignJWT, generateKeyPair, exportJWK, createLocalJWKSet } from 'jose';
 import { createCoordinatorHandler, createSqlStore, createGithubAuthenticator, createGithubApprovalValidator, createGithubResumeValidator, createFinancialAuthenticator } from '../supabase/functions/release-coordinator/index.ts';
-import { digest } from '../supabase/functions/release-coordinator/core.mjs';
+import { digest, createNotificationChallenge, createNotificationDeliveryProof } from '../supabase/functions/release-coordinator/core.mjs';
 import { assertIsolatedEnvironment } from '../supabase/functions/release-coordinator/runtime.mjs';
 import { createCoordinatorClient } from '../scripts/lib/hosted-release/coordinator-client.mjs';
 
@@ -12,7 +12,7 @@ const H='a'.repeat(64), S='b'.repeat(40), REPO='hocheunglai-oss/fcos';
 const policy={repository:REPO,repositoryId:'77',ref:'refs/heads/main',registrationJob:'prepare',approvalJobPrefix:'production / ',resumeJobPrefix:'execute / ',
   workflows:[{callerWorkflowRef:`${REPO}/.github/workflows/hosted-release.yml@refs/heads/main`,jobWorkflowRef:`${REPO}/.github/workflows/hosted-release-controller.yml@${S}`,jobWorkflowSha:S}]};
 const owner={kind:'release',id:'features'};
-const activation={inventoryComplete:true,inventoryHash:H,legacyFence:{kind:'permanent_legacy_sentinel',snapshotHash:H,proofHash:H},writers:[{id:'legacy-production',disabled:true,proofHash:H}],uncertainties:[]};
+const activation={notificationChallenge:createNotificationChallenge(),inventoryComplete:true,inventoryHash:H,legacyFence:{kind:'permanent_legacy_sentinel',snapshotHash:H,proofHash:H},writers:[{id:'legacy-production',disabled:true,proofHash:H}],uncertainties:[]};
 const migration=await readFile(new URL('../supabase/migrations/20261016190509_release_coordination.sql',import.meta.url),'utf8');
 const signing=await generateKeyPair('RS256'), jwk=await exportJWK(signing.publicKey); jwk.kid='test-key'; jwk.alg='RS256'; jwk.use='sig';
 const jwks=createLocalJWKSet({keys:[jwk]});
@@ -52,7 +52,9 @@ async function qualifyDatabase(db,epoch=1) {
   }
   const evidence={key:'hosted.qualification',status:'passed',actualGithubArtifactValidated:true,artifactSha256:H},evidenceHash=await digest(evidence);
   await store.request('appendEvidence',{...scope,evidenceId:`qualification-proof-${epoch}`,evidence,evidenceHash},p);
-  return db.query('select fcos_release_coordination.activate($1,$2::jsonb)',[epoch,JSON.stringify({manifestHash:scope.manifestHash,evidenceHash,oldWriterFenceHash:H,allWritersAdmitted:true,writerAdmissions:[{id:'legacy-production',admitted:true,proofHash:H}]})]);
+  const challenge=(await db.query('select activation_evidence from fcos_release_coordination.epochs where epoch=$1',[epoch])).rows[0].activation_evidence.notificationChallenge;
+  const notificationDelivery=await createNotificationDeliveryProof({challenge,receiptJson:JSON.stringify({...challenge,device:'iphone',confirmedByHuman:true,receivedAt:new Date().toISOString()})});
+  return db.query('select fcos_release_coordination.activate($1,$2::jsonb)',[epoch,JSON.stringify({notificationDelivery,manifestHash:scope.manifestHash,evidenceHash,oldWriterFenceHash:H,allWritersAdmitted:true,writerAdmissions:[{id:'legacy-production',admitted:true,proofHash:H}]})]);
 }
 async function fixture(t,{activate=true,uncertainties=[]}={}) {
   const db=new PGlite(); t.after(()=>db.close()); await db.exec(migration);
@@ -166,7 +168,7 @@ test('activation requires fencing and uncertainty import; stale epochs fail and 
   await f.db.query('select fcos_release_coordination.resolve_import($1,$2::jsonb)',['old-unknown',JSON.stringify({outcome:'not_applied',evidenceHash:H})]);
   await qualifyDatabase(f.db);
   assert.equal((await begin(f)).disposition,'execute'); await complete(f);
-  await f.db.query('select fcos_release_coordination.install_epoch($1,$2::jsonb)',[2,JSON.stringify(activation)]);
+  await f.db.query('select fcos_release_coordination.install_epoch($1,$2::jsonb)',[2,JSON.stringify({...activation,notificationChallenge:createNotificationChallenge()})]);
   await assert.rejects(f.client.snapshot(f.scope),/STALE_EPOCH/);
   await f.db.exec('set role fcos_coordinator_runtime');
   await assert.rejects(f.db.exec('select * from fcos_release_coordination.registrations'),/permission denied/);
@@ -361,4 +363,20 @@ test('explicit later human review appends a session and old resume admission can
   assert.equal((await begin(f,'production.promote','renewed-promote')).disposition,'execute');
   const resumeRows=(await f.db.query('select authorization_event_id from fcos_release_coordination.resume_admissions order by authorization_event_id')).rows;
   assert.deepEqual(resumeRows.map(row=>row.authorization_event_id),[original.authorization_event_id,latest.authorization_event_id]);
+});
+
+
+test('one-time notification setup is integrity-bound, canonical, non-refreshing and cannot be installed by runtime fields',async t=>{
+  const challenge=createNotificationChallenge(),receiptJson=JSON.stringify({...challenge,device:'iphone',confirmedByHuman:true,receivedAt:new Date().toISOString()});
+  const proof=await createNotificationDeliveryProof({receiptJson,challenge});
+  assert.deepEqual(await createNotificationDeliveryProof({receiptJson,challenge}),proof);
+  for(const patch of [{operator:'other'},{repository:'other/fcos'},{challenge:H},{device:'android'},{confirmedByHuman:'true'},
+    {receivedAt:new Date(Date.now()+3600000).toISOString()}]){
+    await assert.rejects(createNotificationDeliveryProof({receiptJson:JSON.stringify({...JSON.parse(receiptJson),...patch}),challenge}),/NOTIFICATION_DELIVERY_REQUIRED/);
+  }
+  await assert.rejects(createNotificationDeliveryProof({receiptJson,challenge:{...challenge,operator:'other'}}),/NOTIFICATION_CHALLENGE_REQUIRED/);
+  const f=await fixture(t,{activate:false});
+  await assert.rejects(f.db.query('select fcos_release_coordination.install_epoch($1,$2::jsonb)',[1,JSON.stringify({...activation,notificationChallenge:undefined})]),/NOTIFICATION_CHALLENGE_REQUIRED/);
+  await f.db.query('select fcos_release_coordination.install_epoch($1,$2::jsonb)',[1,JSON.stringify({...activation,notificationChallenge:challenge})]);
+  await assert.rejects(f.db.query('select fcos_release_coordination.install_epoch($1,$2::jsonb)',[2,JSON.stringify({...activation,notificationChallenge:challenge})]),/NOTIFICATION_CHALLENGE_REUSED/);
 });

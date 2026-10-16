@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, realpath } from 'node
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
+import { createNotificationChallenge } from '../supabase/functions/release-coordinator/core.mjs';
 import { inspectReviewedCutover, installPermanentLegacyFence, reviewedInstallEpochPlan } from '../scripts/hosted-release-cutover.mjs';
 const sha=raw=>createHash('sha256').update(raw).digest('hex'),H='a'.repeat(64);
 async function fixture(t){
@@ -16,7 +17,7 @@ async function fixture(t){
  const writers=[];for(const [id,ownerThreadId]of Object.entries(owners))writers.push({id,ownerThreadId,disabledEvidence:await put(`${id}-stopped.json`,{kind:'fcos_legacy_writer_fence',writerId:id,ownerThreadId,disabled:true,sourceSha256:H})});
  const intentPath=path.join(intents,'one-intent.json'),raw=JSON.stringify({operationId:'old-op',outcome:'unknown'});await writeFile(intentPath,raw,{mode:0o600});
  const evidence={path:intentPath,sha256:sha(raw)},ownerReadback=await put('owner-readback.json',{kind:'fcos_legacy_owner_readback',operationId:'old-op',ownerThreadId:owners.production,intentSha256:evidence.sha256,outcome:'unknown'});
- const review={kind:'fcos_hosted_cutover_review_v1',nextEpoch:2,legacyEpoch:'legacy-epoch',coordinationOnly:true,providerAuthorityGranted:false,helper,workflow,leasePath,
+ const review={kind:'fcos_hosted_cutover_review_v1',nextEpoch:2,legacyEpoch:'legacy-epoch',notificationChallenge:createNotificationChallenge(),coordinationOnly:true,providerAuthorityGranted:false,helper,workflow,leasePath,
   existingOwners:owners,requiredWriterIds:['production','reconciliation'],writers,intentInventories:[{directory:intents,entries:[{name:'one-intent.json',sha256:evidence.sha256}]}],uncertainIntents:[{operationId:'old-op',ownerThreadId:owners.production,evidence,ownerReadback}]};
  const reviewed=await put('review.json',review),options={reviewPath:reviewed.path,reviewSha256:reviewed.sha256,expectedHelperSha256:helper.sha256,fixtureRoot:root};
  return {root,base,leasePath,review,options,put};
@@ -24,7 +25,7 @@ async function fixture(t){
 test('reviewed permanent fence occupies canonical shared lease; unknowns import unchanged and fence never expires/replaces',async t=>{
  const f=await fixture(t),review=inspectReviewedCutover(f.options);assert.equal(review.uncertainties.length,1);
  const proof=installPermanentLegacyFence(f.options),before=await readFile(f.leasePath);assert.equal(proof.proofHash,sha(before));
- const plan=reviewedInstallEpochPlan(f.options,{expectedFenceSha256:proof.proofHash});assert.equal(plan.parameters[0],2);assert.equal(plan.parameters[1].uncertainties[0].operationId,'old-op');
+ const plan=reviewedInstallEpochPlan(f.options,{expectedFenceSha256:proof.proofHash});assert.equal(plan.parameters[0],2);assert.equal(plan.parameters[1].uncertainties[0].operationId,'old-op');assert.deepEqual(plan.parameters[1].notificationChallenge,f.review.notificationChallenge);
  assert.equal(plan.providerAuthorityGranted,false);assert.equal(JSON.parse(before).permanent,true);assert.equal(JSON.parse(before).leaseId,undefined);
  assert.throws(()=>installPermanentLegacyFence(f.options),/FENCE_REFUSED/);assert.deepEqual(await readFile(f.leasePath),before);
  assert.throws(()=>reviewedInstallEpochPlan(f.options,{expectedFenceSha256:H}),/FENCE_MISMATCH/);
@@ -39,4 +40,12 @@ test('changed/missing intent coverage, helper bytes, snapshot, writer evidence a
  const omitted={...f.review,uncertainIntents:[]},ref=await f.put('omitted.json',omitted);assert.throws(()=>inspectReviewedCutover({...f.options,reviewPath:ref.path,reviewSha256:ref.sha256}),/UNCLASSIFIED_INTENT/);
  await writeFile(f.review.helper.path,'changed',{mode:0o600});assert.throws(()=>installPermanentLegacyFence(f.options),/REFERENCE_CHANGED/);
  const linked=path.join(f.root,'linked.json');await symlink(f.options.reviewPath,linked);assert.throws(()=>inspectReviewedCutover({...f.options,reviewPath:linked}),/SYMLINK/);
+});
+
+test('cutover review pins the canonical notification challenge before any fence',async t=>{
+ const f=await fixture(t);
+ for(const patch of [undefined,{...f.review.notificationChallenge,operator:'other'},{...f.review.notificationChallenge,repository:'other/fcos'},{...f.review.notificationChallenge,challenge:'short'}]){
+  const ref=await f.put('invalid-notification.json',{...f.review,notificationChallenge:patch});
+  assert.throws(()=>inspectReviewedCutover({...f.options,reviewPath:ref.path,reviewSha256:ref.sha256}),/NOTIFICATION_CHALLENGE_REQUIRED/);
+ }
 });
