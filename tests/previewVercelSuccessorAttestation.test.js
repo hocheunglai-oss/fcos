@@ -416,7 +416,7 @@ function waitFixture({ missing = 2, old = true, deadlineAge = 0, badSignature = 
     successorLiveSelection(admission, candidate, at) { assert.equal(candidate, a.candidateSha); assert.equal(admission, selected); return selected; },
     successorLiveExecutionDeadline(admission) { assert.equal(admission, selected); return Math.min(Date.parse(selected.context.provisionedAt) + 2700000, ...[selected.dispatchedAt, ...Object.values(selected.reviewedAt)].map(t => Date.parse(t) + 1800000)); },
     successorVerificationSelection(admission, candidate, at) { assert.equal(candidate, a.candidateSha); assert.equal(admission, selected); return selected; },
-    SUCCESSOR_LIVE_CONTRACT, previewEmailProtectionData(p) { return { authorityMode: 'issuance-bound-v1', environmentId: 20,
+    SUCCESSOR_LIVE_CONTRACT, isDurableSuccessorSetup, previewEmailProtectionData(p) { return { authorityMode: 'issuance-bound-v1', environmentId: 20,
       contractPinReady: !verificationOnly || p.variables.contractPin === a.contractSha256, runId: a.runId, reviewedTokenId: a.tokenId, enrollmentId: a.enrollmentId, authorityEnvelope: p.variables.authorityEnvelope }; },
     ENROLLED_AUTHORITY_MODE: 'issuance-bound-v1', enrolledAuthorityContext: value => ({ runId: value.runId, operation: value.operation }),
     equal: (left, right) => JSON.stringify(left) === JSON.stringify(right), failure: message => { throw Error(message); },
