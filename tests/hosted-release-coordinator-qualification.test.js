@@ -83,10 +83,21 @@ async function exerciseQualification(f) {
   const preview={...f.scope,phase:'preview.create',operationId:'bootstrap-preview',requestHash:H};
   const starts=await Promise.all(Array.from({length:8},()=>f.client.begin(preview)));
   assert.equal(starts.filter(x=>x.disposition==='execute').length,1);assert.equal(starts.filter(x=>x.disposition==='readback').length,7);
-  assert.ok(f.maximum()<=2,'Metadata concurrency is globally bounded across requests');
+  assert.ok(f.maximum()<=2,'Metadata concurrency is bounded across requests in this validator instance');
   await f.client.uncertain({...preview,evidence:{outcome:'unknown'}});
   assert.equal((await f.client.begin(preview)).disposition,'readback');
+  // Drift may block new submissions, but cannot strand an existing uncertain intent.
+  f.metadata.branch.commit.sha=S;const savedReads=f.reads();
+  assert.equal((await f.client.snapshot(f.scope)).operations['preview.create'].state,'uncertain');
+  assert.equal((await f.client.request('readback',{...preview,evidence:{outcome:'unknown'}})).disposition,'readback');
+  await f.client.appendEvidence({...f.scope,key:'saved.readback',evidence:{observed:true}});
   await f.client.complete({...preview,evidence:{outcome:'applied',result:{id:'dpl_ActualPreviewFixture'}}});
+  assert.equal(f.reads(),savedReads,'Recovery and evidence reuse do not reread volatile branch metadata');
+  await assert.rejects(f.client.begin({...f.scope,phase:'qualification.stage',operationId:'drift-never-dispatched',requestHash:H}),/QUALIFICATION_PROTECTED_REF_INVALID/);
+  await assert.rejects(f.client.register({...f.scope,releaseId:'drift-never-registered',manifest}),/QUALIFICATION_PROTECTED_REF_INVALID/);
+  assert.equal((await f.db.query('select count(*)::int as n from fcos_release_coordination.operations')).rows[0].n,1);
+  assert.equal((await f.db.query('select count(*)::int as n from fcos_release_coordination.registrations')).rows[0].n,1);
+  f.metadata.branch.commit.sha=B;
   for(const phase of ['qualification.stage','qualification.promote','qualification.rollback']) {
     const intent={...f.scope,phase,operationId:phase,requestHash:H};assert.equal((await f.client.begin(intent)).disposition,'execute');
     await f.client.complete({...intent,evidence:{outcome:'applied',result:{simulated:true}}});
@@ -136,10 +147,10 @@ test('manifest setup, candidate, controller, both qualification modes and exact 
   assert.equal((await f.db.query('select count(*)::int as n from fcos_release_coordination.registrations')).rows[0].n,0);
 });
 
-test('each request rechecks actual protected branch, run and immutable reusable controller before SQL',async t=>{
+test('new admission boundaries recheck actual protected branch, run and immutable reusable controller before SQL',async t=>{
   const f=await fixture(t);await f.register();
   f.metadata.run.path=`.github/workflows/authenticated-release.yml@${REF.slice(11)}`;
-  assert.equal((await f.client.snapshot(f.scope)).registration.manifest_hash,f.scope.manifestHash);
+  await f.register(); // Exact GitHub @branch suffix is accepted at a live admission boundary.
   const original=structuredClone(f.metadata);
   for(const mutate of [m=>{m.branch.commit.sha=S;},m=>{m.branch.protected=false;},m=>{m.protection.allow_force_pushes.enabled=true;},
     m=>{m.run.head_sha=S;},m=>{m.run.path='.github/workflows/authenticated-release.yml@other';},m=>{m.run.run_attempt=2;},m=>{m.run.status='completed';},m=>{m.run.referenced_workflows[0].sha=B;},

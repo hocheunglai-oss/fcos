@@ -73,3 +73,40 @@ export function assertQualificationScope(principal,payload,action) {
     &&m.candidate?.sha===q.candidateSha&&m.qualificationSource&&canonicalJson(m.qualificationSource)===canonicalJson(expected),
     'COORDINATION_QUALIFICATION_SCOPE_INVALID',403);
 }
+
+/** Shared only within one configured service process; unrelated/financial calls are independent.
+ * Full bundles remain charged until all queued reads settle, then for one minute. */
+export function createMetadataAdmission({now=Date.now}={}) {
+  let reservations=[],active=0;const pending=[];
+  const runRead=async read=>{
+    await new Promise(resolve=>{const start=()=>{active++;resolve();};if(active<2) start();else pending.push(start);});
+    try{return await read();}finally{active--;pending.shift()?.();}
+  };
+  return {
+    admit(weight) {
+      need(Number.isSafeInteger(weight)&&weight>0&&weight<=45,'COORDINATION_METADATA_WEIGHT_INVALID',500);
+      const at=now();reservations=reservations.filter(row=>row.pending||at-row.at<60000);
+      const used=reservations.reduce((sum,row)=>sum+row.weight,0);
+      if(used+weight>45) {
+        let needed=used+weight-45,recovery=at+60000;
+        for(const row of reservations.filter(row=>!row.pending).sort((a,b)=>a.at-b.at)) {
+          needed-=row.weight;if(needed<=0){recovery=row.at+60000;break;}
+        }
+        const error=new CoordinatorError('COORDINATION_METADATA_PENDING',429);
+        error.retryAfterSeconds=Math.max(1,Math.min(60,Math.ceil((recovery-at)/1000)));throw error;
+      }
+      const reservation={at,weight,pending:true};reservations.push(reservation);
+      let outstanding=0,dispatched=0,finished=false;
+      const settle=()=>{if(finished&&outstanding===0){reservation.pending=false;reservation.at=now();}};
+      return {
+        async runRead(read) {
+          need(!finished,'COORDINATION_METADATA_RESERVATION_FINISHED',500);
+          need(dispatched<weight,'COORDINATION_METADATA_RESERVATION_EXHAUSTED',500);dispatched++;outstanding++;
+          try{return await runRead(read);}finally{outstanding--;settle();}
+        },
+        finish(){finished=true;settle();},
+      };
+    },
+    runRead,
+  };
+}

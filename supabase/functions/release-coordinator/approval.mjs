@@ -1,5 +1,5 @@
 import { FCOS_RELEASE_APPROVAL_POLICY, fcosConnectionIdentifier } from '../../../config/fcosConnections.js';
-import { digest, need, canonicalJson } from './core.mjs';
+import { digest, need, canonicalJson, createMetadataAdmission } from './core.mjs';
 const initialEnvironment='fcos-production-release', resumeEnvironment='fcos-hosted-production-resume';
 const positive=v=>Number.isSafeInteger(v)&&v>0;
 /** Current protection must remain intact; unrelated main commits do not replace the admitted reusable controller. */
@@ -63,16 +63,17 @@ export async function validateGithubApproval(context) {
   return {...receipt,scope:m.scope,executionMode:m.executionMode,actions:m.authorization.actions,rollback:m.authorization.rollback};
 }
 export async function validateGithubResume(context) {return validateProtectedRun(context,true);}
-function githubMetadataCollector({policy,token,fetchImpl=globalThis.fetch},resuming) {
+function githubMetadataCollector({policy,token,fetchImpl=globalThis.fetch,metadataAdmission=createMetadataAdmission()},resuming) {
   need(typeof token==='string'&&token.length>0,'COORDINATION_METADATA_TOKEN_REQUIRED',500);
   const base=`https://api.github.com/repos/${policy.repository}`;
-  const read=async(path,user=false)=>{
-    let response;
-    try {response=await fetchImpl(user?'https://api.github.com/user':`${base}${path}`,{method:'GET',headers:{authorization:`Bearer ${token}`,accept:'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'},redirect:'error',signal:AbortSignal.timeout(10000)});}
-    catch {need(false,'COORDINATION_GITHUB_METADATA_UNAVAILABLE',503);}
-    need(response.ok&&!response.redirected,'COORDINATION_GITHUB_METADATA_UNAVAILABLE',503);return response.json();
-  };
   return async context=>{
+    const scheduler=context.metadataReservation??metadataAdmission;
+    const read=(path,user=false)=>scheduler.runRead(async()=>{
+      let response;
+      try {response=await fetchImpl(user?'https://api.github.com/user':`${base}${path}`,{method:'GET',headers:{authorization:`Bearer ${token}`,accept:'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'},redirect:'error',signal:AbortSignal.timeout(10000)});}
+      catch {need(false,'COORDINATION_GITHUB_METADATA_UNAVAILABLE',503);}
+      need(response.ok&&!response.redirected,'COORDINATION_GITHUB_METADATA_UNAVAILABLE',503);return response.json();
+    });
     const user=await read('',true);need(user.login===fcosConnectionIdentifier('github','Required account')&&positive(user.id),'COORDINATION_METADATA_ACCOUNT_MISMATCH',403);
     const runId=context.principal.runId,environmentName=resuming?resumeEnvironment:initialEnvironment;
     const [repository,branch,protection,environment,run,jobs,approvals]=await Promise.all([read(''),read('/branches/main'),read('/branches/main/protection'),
@@ -106,19 +107,17 @@ export function validateGithubQualification({principal,policy,repository,branch,
     &&principal.actor===operator.login&&principal.actorId===String(operator.id),'COORDINATION_QUALIFICATION_RUN_INVALID',403);
   return true;
 }
-export function createGithubQualificationValidator({policy,token,fetchImpl=globalThis.fetch}) {
+export function createGithubQualificationValidator({policy,token,fetchImpl=globalThis.fetch,metadataAdmission=createMetadataAdmission()}) {
   need(policy.qualificationAdmission&&typeof token==='string'&&token.length>0,'COORDINATION_METADATA_TOKEN_REQUIRED',500);
   const base=`https://api.github.com/repos/${policy.repository}`,ref=encodeURIComponent(policy.qualificationAdmission.ref.slice('refs/heads/'.length));
-  let active=0;const pending=[];
-  const read=async path=>{
-    await new Promise(resolve=>{const start=()=>{active++;resolve();};if(active<2) start();else pending.push(start);});
-    try{const response=await fetchImpl(path==='user'?'https://api.github.com/user':`${base}${path}`,{method:'GET',
-      headers:{authorization:`Bearer ${token}`,accept:'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'},redirect:'error',signal:AbortSignal.timeout(10000)});
-      need(response.ok&&!response.redirected,'COORDINATION_GITHUB_METADATA_UNAVAILABLE',503);return await response.json();}
-    catch{need(false,'COORDINATION_GITHUB_METADATA_UNAVAILABLE',503);}
-    finally{active--;pending.shift()?.();}
-  };
   return async context=>{
+    const scheduler=context.metadataReservation??metadataAdmission;
+    const read=path=>scheduler.runRead(async()=>{
+      try{const response=await fetchImpl(path==='user'?'https://api.github.com/user':`${base}${path}`,{method:'GET',
+        headers:{authorization:`Bearer ${token}`,accept:'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'},redirect:'error',signal:AbortSignal.timeout(10000)});
+        need(response.ok&&!response.redirected,'COORDINATION_GITHUB_METADATA_UNAVAILABLE',503);return await response.json();}
+      catch{need(false,'COORDINATION_GITHUB_METADATA_UNAVAILABLE',503);}
+    });
     const operator=await read('user');
     need(operator.login===fcosConnectionIdentifier('github','Required account')&&positive(operator.id),'COORDINATION_METADATA_ACCOUNT_MISMATCH',403);
     const [repository,branch]=await Promise.all([read(''),read(`/branches/${ref}`)]);

@@ -1,4 +1,4 @@
-import { ACTIONS, CoordinatorError, createSqlStore, digest, need, validateEnvelope, assertQualificationScope } from './core.mjs';
+import { ACTIONS, CoordinatorError, createSqlStore, digest, need, validateEnvelope, assertQualificationScope, createMetadataAdmission } from './core.mjs';
 import { createGithubAuthenticator, createFinancialAuthenticator, validatePolicy } from './auth.mjs';
 import { assertIsolatedEnvironment, verifyDatabaseIdentity } from './runtime.mjs';
 import { createGithubApprovalValidator, createGithubResumeValidator, createGithubQualificationValidator } from './approval.mjs';
@@ -7,9 +7,10 @@ export { createGithubAuthenticator, createFinancialAuthenticator } from './auth.
 export { createGithubApprovalValidator, createGithubResumeValidator, validateGithubApproval, validateGithubResume, createGithubQualificationValidator, validateGithubQualification } from './approval.mjs';
 
 /** The same request entrypoint runs in an isolated host and disposable database tests. */
-export function createCoordinatorHandler({store,authenticateGithub,authenticateFinancial,validateApproval,validateResume,validateQualification}) {
+export function createCoordinatorHandler({store,authenticateGithub,authenticateFinancial,validateApproval,validateResume,validateQualification,admitMetadata}) {
   need(store&&typeof store.request==='function'&&typeof authenticateGithub==='function','COORDINATION_CONFIGURATION_REQUIRED',500);
   return async request=>{
+    let metadataReservation;
     try {
       need(request.method==='POST','COORDINATION_METHOD_FORBIDDEN',405);
       need(request.headers.get('content-type')?.split(';')[0]==='application/json','COORDINATION_CONTENT_TYPE_REQUIRED',415);
@@ -30,14 +31,17 @@ export function createCoordinatorHandler({store,authenticateGithub,authenticateF
       need(principal?.kind===(financial?'financial':'github'),'COORDINATION_AUTHENTICATION_REQUIRED',401);
       need(payload.owner.kind===(financial?'financial':'release')&&(!financial||payload.owner.id===principal.ownerId),'COORDINATION_OWNER_MISMATCH',403);
       assertQualificationScope(principal,payload,action);
-      if(principal.qualificationOnly===true) {
-        need(typeof validateQualification==='function','COORDINATION_QUALIFICATION_VALIDATOR_REQUIRED',403);
-        await validateQualification({principal});
-      }
       if(action==='register') {
         need(payload.manifest&&await digest(payload.manifest)===payload.manifestHash,'COORDINATION_MANIFEST_HASH_MISMATCH',400);
         need(payload.manifest.epoch===payload.epoch,'COORDINATION_STALE_EPOCH');
         if(!financial) need(!principal.environment||principal.environment==='fcos-hosted-preview','COORDINATION_REGISTER_BEFORE_APPROVAL_REQUIRED');
+      }
+      const qualificationBoundary=principal.qualificationOnly===true&&['register','begin','claim'].includes(action);
+      const metadataWeight=qualificationBoundary?5:!financial&&action==='approve'?8:!financial&&action==='resume'?7:0;
+      if(metadataWeight&&admitMetadata) metadataReservation=await admitMetadata({weight:metadataWeight,action,principal});
+      if(qualificationBoundary) {
+        need(typeof validateQualification==='function','COORDINATION_QUALIFICATION_VALIDATOR_REQUIRED',403);
+        await validateQualification({principal,metadataReservation});
       }
       if(action==='approve') {
         need(principal.environment==='fcos-production-release','COORDINATION_APPROVAL_ENVIRONMENT_REQUIRED',403);
@@ -47,13 +51,13 @@ export function createCoordinatorHandler({store,authenticateGithub,authenticateF
         const valid=current.approval&&Date.parse(current.approval.expires_at)>Date.now();
         if(valid) payload.approvalReceipt=current.approval.receipt;
         // Snapshot and final RPC bind immutable registration; network reads hold no DB transaction.
-        if(!valid) payload.approvalReceipt=await validateApproval({principal,registration:current.registration,registrationRun:current.registrationRun,manifestHash:payload.manifestHash});
+        if(!valid) payload.approvalReceipt=await validateApproval({principal,registration:current.registration,registrationRun:current.registrationRun,manifestHash:payload.manifestHash,metadataReservation});
       }
       if(action==='resume') {
         need(!financial&&principal.environment==='fcos-hosted-production-resume'&&typeof validateResume==='function','COORDINATION_RESUME_FORBIDDEN',403);
         const current=await store.request('snapshot',payload,principal);
         need(current.approval&&Date.parse(current.approval.expires_at)>Date.now()&&current.registrationRun,'COORDINATION_RESUME_FORBIDDEN',403);
-        payload.resumeReceipt={...await validateResume({principal,registration:current.registration,registrationRun:current.registrationRun,manifestHash:payload.manifestHash}),authorizationEventId:current.approval.authorization_event_id};
+        payload.resumeReceipt={...await validateResume({principal,registration:current.registration,registrationRun:current.registrationRun,manifestHash:payload.manifestHash,metadataReservation}),authorizationEventId:current.approval.authorization_event_id};
       }
       if(['complete','uncertain','readback','appendEvidence','finish'].includes(action)) {
         need(payload.evidence&&typeof payload.evidence==='object'&&!Array.isArray(payload.evidence),'COORDINATION_EVIDENCE_REQUIRED',400);
@@ -64,8 +68,9 @@ export function createCoordinatorHandler({store,authenticateGithub,authenticateF
     } catch(error) {
       const databaseCode=/^COORDINATION_[A-Z_]+$/.test(error?.message??'')?error.message:null;
       const code=error instanceof CoordinatorError?error.code:databaseCode??'COORDINATION_UNAVAILABLE';
-      return Response.json({error:code},{status:error instanceof CoordinatorError?error.status:databaseCode?409:503,headers:{'cache-control':'no-store'}});
-    }
+      return Response.json({error:code},{status:error instanceof CoordinatorError?error.status:databaseCode?409:503,headers:{'cache-control':'no-store',
+        ...(error instanceof CoordinatorError&&error.code==='COORDINATION_METADATA_PENDING'&&error.status===429?{'retry-after':String(error.retryAfterSeconds)}:{})}});
+    } finally {metadataReservation?.finish?.();}
   };
 }
 export function createConfiguredCoordinator({env,query,fetchImpl=globalThis.fetch}) {
@@ -73,11 +78,13 @@ export function createConfiguredCoordinator({env,query,fetchImpl=globalThis.fetc
   let policy; try { policy=JSON.parse(get('FCOS_COORDINATOR_POLICY')); } catch {throw new CoordinatorError('COORDINATION_POLICY_INVALID',500);}
   validatePolicy(policy);
   let financialPolicy; if(get('FCOS_FINANCIAL_COORDINATOR_POLICY')) financialPolicy=JSON.parse(get('FCOS_FINANCIAL_COORDINATOR_POLICY'));
+  const metadataAdmission=createMetadataAdmission();
   return createCoordinatorHandler({store:createSqlStore(query),authenticateGithub:createGithubAuthenticator({policy}),
+    admitMetadata:({weight})=>metadataAdmission.admit(weight),
     authenticateFinancial:financialPolicy?createFinancialAuthenticator({policy:financialPolicy}):undefined,
-    validateApproval:createGithubApprovalValidator({policy,token:get('FCOS_COORDINATOR_GITHUB_METADATA_TOKEN'),fetchImpl}),
-    validateResume:createGithubResumeValidator({policy,token:get('FCOS_COORDINATOR_GITHUB_METADATA_TOKEN'),fetchImpl}),
-    validateQualification:policy.qualificationAdmission?createGithubQualificationValidator({policy,token:get('FCOS_COORDINATOR_GITHUB_METADATA_TOKEN'),fetchImpl}):undefined});
+    validateApproval:createGithubApprovalValidator({policy,token:get('FCOS_COORDINATOR_GITHUB_METADATA_TOKEN'),fetchImpl,metadataAdmission}),
+    validateResume:createGithubResumeValidator({policy,token:get('FCOS_COORDINATOR_GITHUB_METADATA_TOKEN'),fetchImpl,metadataAdmission}),
+    validateQualification:policy.qualificationAdmission?createGithubQualificationValidator({policy,token:get('FCOS_COORDINATOR_GITHUB_METADATA_TOKEN'),fetchImpl,metadataAdmission}):undefined});
 }
 // Deno entrypoint uses only a narrowly privileged DB login and read-only GitHub metadata token.
 if(typeof Deno!=='undefined'&&import.meta.main) {
