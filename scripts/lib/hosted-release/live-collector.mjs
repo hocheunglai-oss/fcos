@@ -1,0 +1,76 @@
+import { createHash, randomUUID } from 'node:crypto';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { FCOS_CONNECTION_POLICY } from '../../../config/fcosConnections.js';
+import { createHostedRuntimeTokenProvider } from './browser.mjs';
+import { prepareCandidateProtection } from '../../e2e-protection-state.mjs';
+import { request } from '@playwright/test';
+import { createVercelAdapter } from './vercel.mjs';
+import { collectSchemaObservation, hostedProof } from './observations.mjs';
+import { digest, fail } from './contract.mjs';
+
+export async function collectFcunoContract({ env = process.env, fetchImpl = fetch, now = Date.now }) {
+  const pin = FCOS_CONNECTION_POLICY.integrations.fcunoIdentityFederation;
+  const read = async name => {
+    const url = `https://api.github.com/repos/${pin.providerRepository}/contents/${pin.contractPath}/${name}?ref=${pin.providerCommit}`;
+    const response = await fetchImpl(url, { headers: { accept: 'application/vnd.github.raw+json',
+      ...(env.FCOS_HOSTED_FCUNO_READ_TOKEN ? { authorization: `Bearer ${env.FCOS_HOSTED_FCUNO_READ_TOKEN}` } : {}) },
+    redirect: 'error', signal: AbortSignal.timeout(15000) });
+    if (!response.ok || response.redirected) fail('FCUNO_CONTRACT_UNAVAILABLE', 'fcuno_contract');
+    return Buffer.from(await response.arrayBuffer());
+  };
+  const contract = JSON.parse((await read('contract-manifest.json')).toString());
+  const names = ['identity-sync-event.schema.json','oidc-claims.schema.json','release-manifest.schema.json'];
+  if (contract.contractVersion !== pin.protocolVersion || contract.aggregateSha256 !== pin.contractSha256
+    || contract.files?.map(row => row.path).join(',') !== names.join(',')) fail('FCUNO_CONTRACT_CHANGED');
+  const aggregate = createHash('sha256');
+  for (const name of names) { const bytes = await read(name); JSON.parse(bytes.toString());
+    if (digest(bytes) !== contract.files.find(row => row.path === name)?.sha256) fail('FCUNO_CONTRACT_CHANGED');
+    aggregate.update(name).update(Buffer.from([0])).update(bytes).update(Buffer.from([0])); }
+  if (aggregate.digest('hex') !== pin.contractSha256) fail('FCUNO_CONTRACT_CHANGED');
+  return { sha256: pin.contractSha256, commit: pin.providerCommit, capturedAt: new Date(now()).toISOString() };
+}
+
+export function createLiveCollector({ session, candidateDirectory, production = false, fetchImpl = fetch, now = Date.now }) {
+  const { manifest, env } = session; let provider;
+  const tokenProvider = createHostedRuntimeTokenProvider({ env, verifyTarget: async ({ origin, deployment }) => {
+    const actual = await provider.inspect(deployment.id);
+    if (actual.url !== origin || actual.sha !== deployment.sha || actual.state !== 'READY') fail('RUNTIME_LOGIN_TARGET');
+    const sourceSha256 = deployment.sourceSha256 || (actual.id === manifest.previousProduction.deploymentId ? manifest.previousProduction.sourceSha256 : manifest.candidate.sourceSha256);
+    return { verified: true, origin, deploymentId: actual.id, sha: actual.sha, sourceSha256 };
+  } });
+  const runtimeTokenProvider = async ({ origin, deployment }) => {
+    const bypass = deployment.target === 'preview' ? env.FCOS_E2E_VERCEL_BYPASS : env.FCOS_PRODUCTION_VERIFICATION_BYPASS;
+    if (!bypass) fail('RUNTIME_PROTECTION_SETUP_REQUIRED');
+    const state = await collectRuntimeProtectionState({ origin, sha: deployment.sha, bypass });
+    return tokenProvider({ origin, deployment, protectionState: state });
+  };
+  provider = createVercelAdapter({ manifest, candidateDirectory, env, fetchImpl, now, runtimeTokenProvider,
+    schemaObservation: () => collectSchemaObservation({ manifest, env, now }) });
+  let previewObservation;
+  async function collect(id, snapshot) {
+    const preview = snapshot.checks?.['preview.ready']?.result || snapshot.checks?.['preview.ready']?.evidence?.result;
+    if (!preview) return null;
+    let result, capturedAt;
+    if (['preview_binding','runtime_parity'].includes(id)) {
+      previewObservation ||= await provider.verifyArtifact(preview, manifest, 'preview');
+      result = previewObservation; capturedAt = result.runtime.capturedAt;
+    } else if (id === 'live_schema') { result = await collectSchemaObservation({ manifest, env, now }); capturedAt = result.capturedAt; }
+    else if (id === 'fcuno_contract') { result = await collectFcunoContract({ env, fetchImpl, now }); capturedAt = result.capturedAt; }
+    else return null; // Browser and business-owner proofs require their own admitted publishers.
+    return hostedProof({ manifest, checkId: id, result, inputs: { candidate: manifest.candidate, preview: preview.id,
+      runtime: manifest.runtime, migration: manifest.migration }, capturedAt, env });
+  }
+  provider.collectCheck = (id, _manifest, snapshot) => production && id !== 'live_schema' ? null : collect(id, snapshot);
+  return { provider, collect };
+}
+
+export async function collectRuntimeProtectionState({ origin, sha, bypass, requestImpl = request }) {
+  let state;
+  await prepareCandidateProtection({ env: { FCOS_E2E_BASE_URL: origin, FCOS_E2E_CANDIDATE_URL: origin,
+    FCOS_E2E_EXPECTED_COMMIT: sha, FCOS_E2E_VERCEL_BYPASS: bypass,
+    FCOS_E2E_PROTECTION_STATE: join(tmpdir(), `fcos-hosted-memory-${randomUUID()}.json`) }, request: requestImpl,
+    verify: async () => ({ candidateUrl: origin, commit: sha }), writeState: async ({ state: result }) => { state = result; } });
+  if (!state) fail('RUNTIME_PROTECTION_UNOBSERVED');
+  return state;
+}

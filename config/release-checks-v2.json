@@ -35,7 +35,8 @@
       "profiles": [
         "frozen_04ee",
         "controller_v2",
-        "historical_f457"
+        "historical_f457",
+        "application_v2"
       ]
     },
     {
@@ -61,7 +62,8 @@
       "profiles": [
         "frozen_04ee",
         "controller_v2",
-        "historical_f457"
+        "historical_f457",
+        "application_v2"
       ]
     },
     {
@@ -88,8 +90,31 @@
       "profiles": [
         "frozen_04ee",
         "controller_v2",
-        "historical_f457"
-      ]
+        "historical_f457",
+        "application_v2"
+      ],
+      "profileCommands": {
+        "controller_v2": [
+          {
+            "program": "node",
+            "args": [
+              "--test",
+              "@deterministic-tests"
+            ],
+            "env": {}
+          }
+        ],
+        "application_v2": [
+          {
+            "program": "node",
+            "args": [
+              "--test",
+              "@deterministic-tests"
+            ],
+            "env": {}
+          }
+        ]
+      }
     },
     {
       "id": "coordination",
@@ -144,7 +169,8 @@
       "profiles": [
         "frozen_04ee",
         "controller_v2",
-        "historical_f457"
+        "historical_f457",
+        "application_v2"
       ]
     },
     {
@@ -181,7 +207,8 @@
       "profiles": [
         "frozen_04ee",
         "controller_v2",
-        "historical_f457"
+        "historical_f457",
+        "application_v2"
       ]
     },
     {
@@ -207,7 +234,8 @@
       "profiles": [
         "frozen_04ee",
         "controller_v2",
-        "historical_f457"
+        "historical_f457",
+        "application_v2"
       ]
     },
     {
@@ -255,7 +283,8 @@
       "profiles": [
         "frozen_04ee",
         "controller_v2",
-        "historical_f457"
+        "historical_f457",
+        "application_v2"
       ],
       "profileCommands": {
         "controller_v2": [
@@ -303,7 +332,8 @@
       "profiles": [
         "frozen_04ee",
         "controller_v2",
-        "historical_f457"
+        "historical_f457",
+        "application_v2"
       ],
       "artifactInputs": [
         "dist"
@@ -361,7 +391,8 @@
       ],
       "profiles": [
         "frozen_04ee",
-        "historical_f457"
+        "historical_f457",
+        "application_v2"
       ]
     },
     {
@@ -389,7 +420,8 @@
       ],
       "profiles": [
         "frozen_04ee",
-        "historical_f457"
+        "historical_f457",
+        "application_v2"
       ]
     },
     {
@@ -444,7 +476,8 @@
       ],
       "profiles": [
         "frozen_04ee",
-        "historical_f457"
+        "historical_f457",
+        "application_v2"
       ]
     },
     {
@@ -472,7 +505,8 @@
       ],
       "profiles": [
         "frozen_04ee",
-        "historical_f457"
+        "historical_f457",
+        "application_v2"
       ]
     },
     {
@@ -502,7 +536,8 @@
       ],
       "profiles": [
         "frozen_04ee",
-        "historical_f457"
+        "historical_f457",
+        "application_v2"
       ]
     },
     {
@@ -541,7 +576,8 @@
       ],
       "profiles": [
         "frozen_04ee",
-        "historical_f457"
+        "historical_f457",
+        "application_v2"
       ]
     },
     {
@@ -571,7 +607,8 @@
       ],
       "profiles": [
         "frozen_04ee",
-        "historical_f457"
+        "historical_f457",
+        "application_v2"
       ]
     },
     {
@@ -604,7 +641,8 @@
       ],
       "profiles": [
         "frozen_04ee",
-        "historical_f457"
+        "historical_f457",
+        "application_v2"
       ]
     },
     {
@@ -635,7 +673,8 @@
       ],
       "profiles": [
         "frozen_04ee",
-        "historical_f457"
+        "historical_f457",
+        "application_v2"
       ]
     },
     {
@@ -666,7 +705,8 @@
       ],
       "profiles": [
         "frozen_04ee",
-        "historical_f457"
+        "historical_f457",
+        "application_v2"
       ]
     },
     {
@@ -696,7 +736,8 @@
       ],
       "profiles": [
         "frozen_04ee",
-        "historical_f457"
+        "historical_f457",
+        "application_v2"
       ]
     },
     {
@@ -726,7 +767,8 @@
       ],
       "profiles": [
         "frozen_04ee",
-        "historical_f457"
+        "historical_f457",
+        "application_v2"
       ]
     },
     {
@@ -756,7 +798,8 @@
       ],
       "profiles": [
         "frozen_04ee",
-        "historical_f457"
+        "historical_f457",
+        "application_v2"
       ]
     },
     {
@@ -786,7 +829,8 @@
       ],
       "profiles": [
         "frozen_04ee",
-        "historical_f457"
+        "historical_f457",
+        "application_v2"
       ]
     },
     {
@@ -816,7 +860,8 @@
       ],
       "profiles": [
         "frozen_04ee",
-        "historical_f457"
+        "historical_f457",
+        "application_v2"
       ]
     },
     {
@@ -846,7 +891,8 @@
       ],
       "profiles": [
         "frozen_04ee",
-        "historical_f457"
+        "historical_f457",
+        "application_v2"
       ]
     },
     {
@@ -864,7 +910,8 @@
       "profiles": [
         "frozen_04ee",
         "controller_v2",
-        "historical_f457"
+        "historical_f457",
+        "application_v2"
       ]
     },
     {
@@ -882,37 +929,51 @@
       "profiles": [
         "frozen_04ee",
         "controller_v2",
-        "historical_f457"
+        "historical_f457",
+        "application_v2"
       ]
     },
     {
       "id": "server_bundles",
-      "group": "acceptance",
-      "phase": "final",
-      "kind": "volatile",
-      "executor": "controller",
+      "group": "code",
+      "phase": "deterministic",
+      "kind": "deterministic",
+      "executor": "candidate",
       "required": true,
       "requires": [
-        "preview_binding"
+        "build"
       ],
       "inputs": [
         "@source"
       ],
-      "commands": [],
+      "commands": [
+        {
+          "program": "node",
+          "args": [
+            "/usr/local/lib/node_modules/vercel/dist/index.js",
+            "build",
+            "--yes",
+            "--target=preview"
+          ],
+          "env": {}
+        }
+      ],
       "profiles": [
         "frozen_04ee",
         "controller_v2",
-        "historical_f457"
+        "historical_f457",
+        "application_v2"
       ],
       "artifactInputs": [
         "dist",
         ".vercel/output"
-      ]
+      ],
+      "cacheable": false
     },
     {
       "id": "server_performance",
-      "group": "acceptance",
-      "phase": "final",
+      "group": "code",
+      "phase": "deterministic",
       "kind": "deterministic",
       "executor": "candidate",
       "required": true,
@@ -927,7 +988,8 @@
         {
           "program": "node",
           "args": [
-            "scripts/verify-performance-budgets.mjs"
+            "@controller/scripts/hosted-release-performance.mjs",
+            "@candidate"
           ],
           "env": {
             "FCOS_REQUIRE_SERVER_BUNDLES": "1"
@@ -937,7 +999,8 @@
       "profiles": [
         "frozen_04ee",
         "controller_v2",
-        "historical_f457"
+        "historical_f457",
+        "application_v2"
       ],
       "artifactInputs": [
         "dist",
@@ -967,7 +1030,8 @@
       "profiles": [
         "frozen_04ee",
         "controller_v2",
-        "historical_f457"
+        "historical_f457",
+        "application_v2"
       ]
     },
     {
@@ -1005,7 +1069,38 @@
       "profiles": [
         "frozen_04ee",
         "controller_v2",
-        "historical_f457"
+        "historical_f457",
+        "application_v2"
+      ]
+    },
+    {
+      "id": "controller_database",
+      "group": "database",
+      "phase": "deterministic",
+      "kind": "deterministic",
+      "executor": "candidate",
+      "required": true,
+      "requires": [],
+      "inputs": [
+        "@source"
+      ],
+      "commands": [
+        {
+          "program": "node",
+          "args": [
+            "--test",
+            "tests/hosted-release-coordinator-postgres.test.js",
+            "tests/hosted-release-qualification.test.js",
+            "tests/hosted-release-schema-observation.test.js"
+          ],
+          "env": {
+            "FCOS_REQUIRE_NATIVE_COORDINATOR_DATABASE": "1"
+          }
+        }
+      ],
+      "profiles": [
+        "controller_v2",
+        "application_v2"
       ]
     },
     {
@@ -1048,7 +1143,8 @@
         "server_bundles",
         "server_performance",
         "restricted_browser",
-        "normal_role"
+        "normal_role",
+        "controller_database"
       ],
       "inputs": [
         "@source"
@@ -1057,7 +1153,8 @@
       "profiles": [
         "frozen_04ee",
         "controller_v2",
-        "historical_f457"
+        "historical_f457",
+        "application_v2"
       ]
     }
   ],
@@ -1072,6 +1169,9 @@
     "historical_f457": {
       "candidateSha": "f4576a8c918acef686f084c505b1715de11deeb8",
       "purpose": "Historical quality scope, unchanged v1 admission remains authoritative."
+    },
+    "application_v2": {
+      "purpose": "Final separately admitted application scope after observed compatibility Production."
     }
   }
 }

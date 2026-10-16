@@ -28,7 +28,9 @@ export async function hostedReleaseChecks(argv = process.argv.slice(2)) {
     controllerSha: args['--controller-sha'], expectedCandidateSha: args['--candidate-sha'], sourceProfile: args['--source-profile'],
     group: args['--group'], phase: args['--phase'], checkIds: args['--check']?.split(','),
     dependencyReports: args['--dependencies'] ? args['--dependencies'].split(',').map(read) : [],
-    cache: args['--cache'] ? read(args['--cache']).checks : [], onRecord: (_, partial) => persist(partial) });
+    cache: args['--cache'] ? read(args['--cache']).checks : [],
+    environment: { ...process.env, ...(process.env.GITHUB_ACTIONS === 'true' ? { FCOS_HOSTED_CHECK_EXECUTION: '1' } : {}) },
+    onRecord: (_, partial) => persist(partial) });
   persist(report);
   return report;
 }

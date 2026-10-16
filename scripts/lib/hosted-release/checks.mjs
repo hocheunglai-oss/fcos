@@ -126,13 +126,19 @@ export function sanitisedCheckEnvironment({ environment = process.env, home, com
     HOME: home, TMPDIR: home, LANG: 'C.UTF-8', TZ: 'UTC', CI: 'true', ...command.env };
   // Non-secret local browser cache only; never copy arbitrary FCOS/provider/controller variables.
   if (environment.PLAYWRIGHT_BROWSERS_PATH && !/^(?:https?:|\$)/.test(environment.PLAYWRIGHT_BROWSERS_PATH)) env.PLAYWRIGHT_BROWSERS_PATH = environment.PLAYWRIGHT_BROWSERS_PATH;
+  if (environment.FCOS_HOSTED_PUBLIC_BUILD_INPUTS) {
+    const values = JSON.parse(environment.FCOS_HOSTED_PUBLIC_BUILD_INPUTS);
+    const allowed = ['VITE_FCOS_ENABLE_FCUNO_OIDC','FCOS_ENABLE_FCUNO_FEDERATION','FCUNO_IDENTITY_ISSUER','VITE_SUPABASE_URL','VITE_SUPABASE_ANON_KEY'];
+    if (Object.entries(values).some(([key,value]) => !allowed.includes(key) || typeof value !== 'string' || /[\r\n]/.test(value))) throw new Error('Unadmitted public build inputs.');
+    Object.assign(env, values);
+  }
   return env;
 }
 
 function expandArguments(args, candidateDirectory, controllerDirectory) {
   return args.flatMap(arg => {
-    if (arg === 'tests/*.test.js') {
-      const tests = readdirSync(join(candidateDirectory, 'tests')).filter(n => n.endsWith('.test.js')).sort().map(n => `tests/${n}`);
+    if (arg === 'tests/*.test.js' || arg === '@deterministic-tests') {
+      const tests = readdirSync(join(candidateDirectory, 'tests')).filter(n => n.endsWith('.test.js') && (arg !== '@deterministic-tests' || !['hosted-release-coordinator-postgres.test.js','hosted-release-qualification.test.js','hosted-release-schema-observation.test.js'].includes(n))).sort().map(n => `tests/${n}`);
       if (!tests.length) throw new Error('The complete deterministic test suite is missing.');
       return tests;
     }
@@ -147,7 +153,17 @@ export async function runReleaseChecks({ candidateDirectory, controllerDirectory
   now = () => new Date(), validateExternal, onRecord = () => {} } = {}) {
   const { manifest, manifestSha256 } = loadReleaseCheckManifest(controllerDirectory);
   const source = collectReleaseCheckSource(candidateDirectory);
-  const common = collectCheckBinding({ candidateDirectory, controllerDirectory, controllerSha, expectedCandidateSha, sourceProfile, manifest, manifestSha256, source });
+  let runtime;
+  if (environment.FCOS_HOSTED_CHECK_EXECUTION === '1') {
+    const { inspectCandidateRuntime, isolatedCandidateRunner } = await import('./isolation.mjs');
+    runtime = inspectCandidateRuntime({ image: environment.FCOS_HOSTED_CHECK_IMAGE });
+    run = isolatedCandidateRunner({ image: environment.FCOS_HOSTED_CHECK_IMAGE, candidateDirectory, controllerDirectory });
+  }
+  const common = collectCheckBinding({ candidateDirectory, controllerDirectory, controllerSha, expectedCandidateSha, sourceProfile, manifest, manifestSha256, source, ...(runtime ? { runtime } : {}) });
+  if (environment.FCOS_HOSTED_CHECK_EXECUTION === '1') {
+    if (!/^[a-f0-9]{64}$/.test(environment.FCOS_HOSTED_BUILD_INPUTS_SHA256 || '')) throw new Error('Hosted build input binding is missing.');
+    common.buildConfigurationSha256 = environment.FCOS_HOSTED_BUILD_INPUTS_SHA256;
+  }
   const applicable = requiredReleaseChecks(manifest, sourceProfile);
   const selected = applicable.filter(c => (!group || c.group === group) && (!phase || c.phase === phase) && (!checkIds || checkIds.includes(c.id)));
   if (!selected.length || checkIds?.some(id => !selected.some(c => c.id === id))) throw new Error('No admitted checks match the requested selection.');
@@ -156,7 +172,7 @@ export async function runReleaseChecks({ candidateDirectory, controllerDirectory
   const home = mkdtempSync(join(tmpdir(), 'fcos-check-home-'));
   try {
     for (const check of selected) {
-      const binding = checkBinding(check, common, source);
+      let binding = checkBinding(check, common, source);
       const startedAt = now().toISOString();
       const required = check.requires.filter(id => applicable.some(c => c.id === id));
       const missing = required.filter(id => {
@@ -182,8 +198,10 @@ export async function runReleaseChecks({ candidateDirectory, controllerDirectory
               shell: false, stdio: 'inherit', timeout: 60 * 60 * 1000,
             });
             commands.push({ program: command.program, args: command.args, exitCode: result?.status ?? 1 });
+            if (collectReleaseCheckSource(candidateDirectory).sourceInputsSha256 !== source.sourceInputsSha256) throw new Error('Candidate execution modified admitted tracked inputs.');
             if (result?.status !== 0) break;
           }
+          binding = checkBinding(check, common, source); // Bind produced artifacts after the command, never a missing pre-build directory.
           record = { schemaVersion: 2, checkId: check.id, binding, status: commands.length && commands.every(c => c.exitCode === 0) ? 'passed' : 'failed', startedAt, completedAt: now().toISOString(), commands };
         }
       }
