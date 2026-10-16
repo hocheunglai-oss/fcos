@@ -1010,14 +1010,9 @@ export default function AdminControl({ methodologyAction = null }) {
 
               <div className="mt-5 grid gap-3 md:grid-cols-2">
                 <section className="rounded-xl border border-border bg-muted/15 p-3" aria-labelledby="account-status-heading">
-                  <div id="account-status-heading" className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Account status</div>
-                  {identityAuthority === 'fcuno' ? (
-                    <div className="mt-2 flex items-center justify-between gap-3">
-                      <Badge variant="outline" className={userForm.active ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-red-200 bg-red-50 text-red-700'}>{userForm.active ? 'Active' : 'Disabled'}</Badge>
-                      <span className="text-xs text-muted-foreground">Managed in FCUNO</span>
-                    </div>
-                  ) : (
-                    <div className="mt-2 grid grid-cols-2 gap-2" role="group" aria-label="Account status">
+                  <div id="account-status-heading" className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">FCOS application access</div>
+                  {identityAuthority === 'fcuno' && <p className="mt-1 text-xs text-muted-foreground">FCUNO controls sign-in eligibility. FCOS controls application access here.</p>}
+                  <div className="mt-2 grid grid-cols-2 gap-2" role="group" aria-label="FCOS application access">
                       <PermissionChoice
                         active={userForm.active}
                         disabled={selectedUserIsGeneralManager || userForm.user_type === 'general_manager'}
@@ -1033,7 +1028,6 @@ export default function AdminControl({ methodologyAction = null }) {
                         Disabled
                       </PermissionChoice>
                     </div>
-                  )}
                 </section>
 
                 <section className="rounded-xl border border-border bg-muted/15 p-3" aria-labelledby="access-source-heading">

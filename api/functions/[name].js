@@ -795,6 +795,7 @@ async function requireActiveUser(req) {
     authUser: userData.user,
     profile: storedProfile,
     accessToken: token,
+    providerAccessToken: req.headers?.['x-fcos-fcuno-provider-token'] || null,
   });
   if (!profile) throw appError('User is not registered.', 403);
   if (!profile.active) throw appError('User is inactive.', 403);
@@ -2013,7 +2014,7 @@ async function findAuthUserByEmail(client, email) {
   return null;
 }
 
-async function writeAdminAudit(client, actor, action, targetUserId, targetEmail, metadata = {}) {
+async function writeAdminAudit(client, actor, action, targetUserId, targetEmail, metadata = {}, { required = false } = {}) {
   const row = {
     actor_user_id: actor?.id || null,
     actor_email: actor?.email || null,
@@ -2023,6 +2024,7 @@ async function writeAdminAudit(client, actor, action, targetUserId, targetEmail,
     metadata,
   };
   const { error } = await client.from('admin_audit_logs').insert(row);
+  if (error && required) throw error;
   if (error) console.error('Failed to write admin audit log', error.message);
 }
 
@@ -2107,19 +2109,32 @@ async function persistManagedUser(client, body, actor = null) {
     if (error) throw error;
     managedProfile = data;
     if (!managedProfile) throw appError('User not found.', 404);
+    if (identityManagedByFcuno) {
+      if (body.active !== undefined && typeof body.active !== 'boolean') {
+        throw appError('FCOS application access must be explicitly Active or Disabled.', 400, 'FCOS_APPLICATION_ACCESS_INVALID');
+      }
+      payload.active = body.active === undefined ? managedProfile.active === true : body.active;
+    }
     if (identityManagedByFcuno && (
       String(payload.email || '').toLowerCase() !== String(managedProfile?.email || '').toLowerCase()
       || String(payload.full_name || '') !== String(managedProfile?.full_name || '')
-      || payload.active !== (managedProfile?.active !== false)
       || Boolean(payload.password)
     )) {
-      throw appError('Email, name, active state and credentials are managed in FCUNO. Only FCOS authorization can be changed here.', 409, 'FCUNO_IDENTITY_READ_ONLY');
+      throw appError('Email, name and credentials are managed in FCUNO. Only FCOS authorization can be changed here.', 409, 'FCUNO_IDENTITY_READ_ONLY');
     }
     await assertAdministratorContinuity(client, {
       userId: authUser.id,
       nextActive: payload.active,
       nextUserType: payload.user_type,
     });
+    if (identityManagedByFcuno && payload.active !== (managedProfile.active === true)) {
+      // Persist the authorized local access change before any activation write.
+      // An unavailable audit must not grant unaudited application access.
+      await writeAdminAudit(client, actor, 'fcos_application_access_authorized', authUser.id, managedProfile.email, {
+        previous_active: managedProfile.active === true, active: payload.active, user_type: payload.user_type,
+        identity_authority: 'fcuno', activation_authority: 'fcos',
+      }, { required: true });
+    }
   }
 
   const transferRequested = payload.user_type === 'general_manager'
@@ -2164,7 +2179,7 @@ async function persistManagedUser(client, body, actor = null) {
   const nowIso = new Date().toISOString();
   const effectiveEmail = identityManagedByFcuno ? managedProfile.email : payload.email;
   const effectiveFullName = identityManagedByFcuno ? managedProfile.full_name : payload.full_name;
-  const effectiveActive = identityManagedByFcuno ? managedProfile.active !== false : payload.active;
+  const effectiveActive = payload.active;
   const { error: profileError } = await client.from('user_profiles').upsert(
     {
       id: authUser.id,
@@ -2245,6 +2260,8 @@ async function persistManagedUser(client, body, actor = null) {
   await writeAdminAudit(client, actor, isUpdate ? 'user_updated' : 'user_created', authUser.id, payload.email, {
     user_type: payload.user_type,
     active: payload.active,
+    previous_active: managedProfile?.active === true,
+    activation_authority: 'fcos',
     use_type_defaults: payload.use_type_defaults,
     modules: Object.entries(payload.permissions)
       .filter(([moduleId, value]) => permissionCanView(moduleId, value))

@@ -118,6 +118,7 @@ export async function requireEmailRouterUser(req, dependencies = {}) {
     authUser: auth.user,
     profile: storedProfile,
     accessToken: token,
+    providerAccessToken: req.headers?.['x-fcos-fcuno-provider-token'] || null,
     env: dependencies.env || process.env,
   });
   if (!profile?.active || profile.id !== auth.user.id || !UUID.test(profile.id)) throw routerError('Active FCOS user access required.', 403, 'EMAIL_ROUTER_USER_INACTIVE');

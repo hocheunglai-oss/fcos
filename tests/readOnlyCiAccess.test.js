@@ -14,15 +14,22 @@ import { requireEmailRouterUser } from '../api/_emailRouterCore.js';
 const authUser = { id: '11111111-1111-4111-8111-111111111111', email: pin.email,
   identities: [{ provider: pin.provider, identity_data: { sub: pin.subject } }] };
 const storedProfile = { id: authUser.id, email: pin.email, active: false, user_type: 'administrator', use_type_defaults: true };
-const link = { id: 'link-1', auth_user_id: authUser.id, email: pin.email, email_verified: true, source_active: true, use_fcos: true };
+const link = { id: 'link-1', auth_user_id: authUser.id, email: pin.email, email_verified: true, source_active: true, use_fcos: true, revision: 1, credential_revision: 1 };
 const env = { FCOS_ENABLE_READ_ONLY_CI: 'true', FCOS_ENABLE_FCUNO_FEDERATION: 'true', FCUNO_IDENTITY_ISSUER: pin.issuer };
+const authenticatedAt = Math.floor(Date.now() / 1000);
+const sessionId = '33333333-3333-4333-8333-333333333333';
+const accessToken = `header.${Buffer.from(JSON.stringify({ sub: authUser.id, session_id: sessionId, iat: authenticatedAt,
+  amr: [{ method: 'oauth', timestamp: authenticatedAt }] })).toString('base64url')}.signature`;
+const binding = { session_id: sessionId, auth_user_id: authUser.id, identity_link_id: link.id, issuer: pin.issuer,
+  subject: pin.subject, authenticated_at: new Date(authenticatedAt * 1000).toISOString(), provider_issued_at: new Date(authenticatedAt * 1000).toISOString(),
+  credential_revision: 1, identity_revision: 1 };
 
 function queryClient() {
   const reads = [];
   return { reads, from(table) {
     reads.push(table);
     const query = { select() { return query; }, eq() { return query; },
-      maybeSingle: async () => ({ data: table === 'fcos_external_identity_links' ? link : storedProfile, error: null }) };
+      maybeSingle: async () => ({ data: table === 'fcos_external_identity_links' ? link : table === 'fcos_external_identity_sessions' ? binding : storedProfile, error: null }) };
     return query;
   } };
 }
@@ -44,17 +51,21 @@ test('CI requires exact issuer, immutable subject, verified email and live entit
 
 test('live CI admission is read-only and cannot promote its stored zero-permission profile or fall back to a legacy login', async () => {
   const client = queryClient();
-  const profile = await enforceFcunoFederatedAccess({ client, authUser, profile: storedProfile, env });
+  const profile = await enforceFcunoFederatedAccess({ client, authUser, profile: storedProfile, accessToken, env });
   assert.equal(profile.active, true);
   assert.equal(profile.user_type, 'viewer');
   assert.equal(profile.use_type_defaults, false);
   assert.equal(storedProfile.active, false);
   assert.equal(isReadOnlyCiProfile(profile), true);
-  assert.deepEqual(client.reads, ['fcos_external_identity_links', 'user_profiles']);
+  assert.deepEqual(client.reads, ['fcos_external_identity_links', 'fcos_external_identity_sessions', 'user_profiles']);
   for (const disabledEnv of [{}, { ...env, FCOS_ENABLE_FCUNO_FEDERATION: 'false' }, { ...env, FCOS_ENABLE_READ_ONLY_CI: 'false' }]) {
-    await assert.rejects(enforceFcunoFederatedAccess({ client, authUser, profile: storedProfile, env: disabledEnv }), { status: 403 });
+    await assert.rejects(enforceFcunoFederatedAccess({ client, authUser, profile: storedProfile, accessToken, env: disabledEnv }), { status: 403 });
   }
   await assert.rejects(enforceFcunoFederatedAccess({ client, authUser: { ...authUser, identities: [] }, profile: storedProfile, env }), { status: 403 });
+  const passwordToken = `header.${Buffer.from(JSON.stringify({ sub: authUser.id, session_id: sessionId, iat: authenticatedAt,
+    amr: [{ method: 'password', timestamp: authenticatedAt }] })).toString('base64url')}.signature`;
+  await assert.rejects(enforceFcunoFederatedAccess({ client, authUser, profile: storedProfile, accessToken: passwordToken,
+    env: { ...env, FCOS_ENABLE_FCUNO_LEGACY_PASSWORD_LOGIN: 'true', FCOS_FCUNO_BREAK_GLASS_EMAILS: pin.email } }), { code: 'FCOS_CI_IDENTITY_NOT_READY' });
 });
 
 test('the CI allowlist admits audited reads and denies financial, admin, email, upload, AI, preference and unknown operations', () => {
