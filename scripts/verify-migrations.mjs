@@ -46,7 +46,7 @@ if (upgrade.length !== releaseMigrationNames.size) {
 const client = new pg.Client({ connectionString: databaseUrl });
 
 async function resetPublicSchema() {
-  await client.query('drop schema if exists emailrouter cascade; drop schema if exists public cascade; create schema public;');
+  await client.query('drop schema if exists fcos_release_coordination cascade; drop schema if exists emailrouter cascade; drop schema if exists public cascade; create schema public;');
   await client.query('grant usage on schema public to postgres, anon, authenticated, service_role; grant create on schema public to postgres, service_role;');
 }
 
