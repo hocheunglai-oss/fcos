@@ -26,8 +26,8 @@ export function createCoordinatorClient({url,tokenProvider,fetch:fetchImpl=globa
     let result; try { result=await response.json(); } catch {throw new Error('COORDINATION_RESPONSE_UNKNOWN: read coordinator state before any provider submission.');}
     if(!response.ok||response.redirected) throw new Error(result?.error??'COORDINATION_REQUEST_FAILED');
     if(action==='register'||action==='snapshot') manifests.set(payload.releaseId,manifestHash);
-    if(action==='approve') return {...result,manifestHash:result.approval?.manifest_hash,expiresAt:result.approval?.expires_at};
+    if(action==='approve'||action==='resume') return {...result,manifestHash:result.approval?.manifest_hash,expiresAt:result.approval?.expires_at};
     return result;
   };
-  return Object.freeze({request,...Object.fromEntries(['snapshot','register','claim','begin','approve','complete','uncertain','readback','appendEvidence','finish'].map(action=>[action,payload=>request(action,payload)]))});
+  return Object.freeze({request,...Object.fromEntries(['snapshot','register','claim','begin','approve','resume','complete','uncertain','readback','appendEvidence','finish'].map(action=>[action,payload=>request(action,payload)]))});
 }

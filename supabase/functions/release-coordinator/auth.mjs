@@ -12,7 +12,8 @@ export function validatePolicy(policy) {
       && p.jobWorkflowRef.startsWith(`${repository}/.github/workflows/`)
       && /^[a-f0-9]{40}$/.test(p.jobWorkflowSha) && p.jobWorkflowRef.endsWith(`@${p.jobWorkflowSha}`))
     && ['prepare','register','release / prepare','release / register'].includes(policy.registrationJob)
-    && policy.approvalJobPrefix === (policy.registrationJob.startsWith('release / ')?'release / production / ':'production / '), 'COORDINATION_POLICY_INVALID',500);
+    && policy.approvalJobPrefix === (policy.registrationJob.startsWith('release / ')?'release / production / ':'production / ')
+    && policy.resumeJobPrefix === (policy.registrationJob.startsWith('release / ')?'release / execute / ':'execute / '), 'COORDINATION_POLICY_INVALID',500);
   return policy;
 }
 export function createGithubAuthenticator({policy,jwks,now=()=>Date.now()}) {

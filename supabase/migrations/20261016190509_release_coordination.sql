@@ -34,6 +34,21 @@ create table fcos_release_coordination.registrations (
   registration_actor jsonb not null,
   registered_at timestamptz not null default clock_timestamp()
 );
+create table fcos_release_coordination.registration_runs (
+  release_id text not null references fcos_release_coordination.registrations(release_id),
+  run_id text not null,
+  run_attempt text not null check(run_attempt='1'),
+  actor jsonb not null,
+  registered_at timestamptz not null default clock_timestamp(),
+  primary key(release_id,run_id,run_attempt)
+);
+create table fcos_release_coordination.resume_admissions (
+  release_id text not null references fcos_release_coordination.registrations(release_id),
+  run_id text not null,
+  receipt jsonb not null,
+  admitted_at timestamptz not null default clock_timestamp(),
+  primary key(release_id,run_id)
+);
 create table fcos_release_coordination.operations (
   operation_id text primary key,
   release_id text not null references fcos_release_coordination.registrations(release_id),
@@ -105,7 +120,7 @@ create table fcos_release_coordination.import_resolutions (
 create function fcos_release_coordination.reject_mutation() returns trigger language plpgsql
 set search_path = pg_catalog as $$ begin raise exception 'COORDINATION_APPEND_ONLY'; end $$;
 do $$ declare t text; begin
-  foreach t in array array['epochs','registrations','operations','operation_events','evidence','activations','approval_admissions','authorizations','finishes','imported_uncertainty','import_resolutions'] loop
+  foreach t in array array['epochs','registrations','registration_runs','resume_admissions','operations','operation_events','evidence','activations','approval_admissions','authorizations','finishes','imported_uncertainty','import_resolutions'] loop
     execute format('create trigger append_only before update or delete or truncate on fcos_release_coordination.%I for each statement execute function fcos_release_coordination.reject_mutation()',t);
   end loop;
 end $$;
@@ -170,6 +185,10 @@ begin
     or not exists(select 1 from fcos_release_coordination.evidence e where e.release_id=qid
       and e.evidence->>'key'='hosted.qualification' and e.evidence->>'status'='passed'
       and e.evidence_hash=qualification->>'evidenceHash') then raise exception 'COORDINATION_HOSTED_QUALIFICATION_REQUIRED'; end if;
+  if (select count(*) from fcos_release_coordination.operations o cross join lateral
+    (select e.state,e.evidence from fcos_release_coordination.operation_events e where e.operation_id=o.operation_id order by e.event_id desc limit 1) last_ev
+    where o.release_id=qid and o.phase in ('qualification.stage','qualification.promote','qualification.rollback')
+      and last_ev.state='complete' and last_ev.evidence->>'outcome'='applied' and last_ev.evidence->'result'->>'simulated'='true')<>3 then raise exception 'COORDINATION_QUALIFICATION_SIMULATIONS_REQUIRED'; end if;
   insert into fcos_release_coordination.activations(epoch,proof) values(c.epoch,qualification);
   update fcos_release_coordination.control set mode='active' where singleton;
   return jsonb_build_object('epoch',c.epoch,'mode','active');
@@ -214,6 +233,15 @@ begin
       insert into fcos_release_coordination.registrations(release_id,epoch,owner,manifest,manifest_hash,scope,registration_actor)
       values(p->>'releaseId',c.epoch,p->'owner',p->'manifest',p->>'manifestHash',p->'manifest'->>'executionMode',principal) returning * into r;
     end if;
+    if principal->>'kind'='github' then
+      if coalesce(principal->>'runId','') !~ '^[1-9][0-9]*$' or principal->>'runAttempt' is distinct from '1' then raise exception 'COORDINATION_REGISTRATION_RUN_INVALID'; end if;
+      insert into fcos_release_coordination.registration_runs(release_id,run_id,run_attempt,actor)
+      values(r.release_id,principal->>'runId',principal->>'runAttempt',principal) on conflict do nothing;
+      if not exists(select 1 from fcos_release_coordination.registration_runs rr where rr.release_id=r.release_id
+        and rr.run_id=principal->>'runId' and rr.run_attempt=principal->>'runAttempt'
+        and rr.actor->>'sha'=principal->>'sha' and rr.actor->>'workflowSha'=principal->>'workflowSha'
+        and rr.actor->>'jobWorkflowRef'=principal->>'jobWorkflowRef' and rr.actor->>'jobWorkflowSha'=principal->>'jobWorkflowSha') then raise exception 'COORDINATION_REGISTRATION_RUN_CONFLICT'; end if;
+    end if;
     return jsonb_build_object('registered',true,'manifestHash',r.manifest_hash,'registration',to_jsonb(r));
   end if;
   select * into r from fcos_release_coordination.registrations where release_id=p->>'releaseId';
@@ -226,7 +254,7 @@ begin
       (select * from fcos_release_coordination.operation_events e where e.operation_id=op.operation_id order by event_id desc limit 1) last_ev
       where op.release_id=r.release_id) x;
     select to_jsonb(a) into result from fcos_release_coordination.authorizations a where a.release_id=r.release_id;
-    return jsonb_build_object('epoch',c.epoch,'mode',c.mode,'registration',to_jsonb(r),'operations',existing,'approval',result,
+    return jsonb_build_object('epoch',c.epoch,'mode',c.mode,'registration',to_jsonb(r),'registrationRun',(select to_jsonb(rr) from fcos_release_coordination.registration_runs rr where rr.release_id=r.release_id and rr.run_id=principal->>'runId' and rr.run_attempt=principal->>'runAttempt'),'operations',existing,'approval',result,
       'lock',c.operation_id,'status',(select f.evidence->>'status' from fcos_release_coordination.finishes f where f.release_id=r.release_id),'finished',exists(select 1 from fcos_release_coordination.finishes f where f.release_id=r.release_id),
       'evidence',coalesce((select jsonb_agg(to_jsonb(e) order by e.evidence_id) from fcos_release_coordination.evidence e where e.release_id=r.release_id),'[]'::jsonb),
       'checks',coalesce((select jsonb_object_agg(e.evidence->>'key',e.evidence order by e.evidence_event_id) from fcos_release_coordination.evidence e where e.release_id=r.release_id and e.evidence ? 'key'),'{}'::jsonb),
@@ -239,8 +267,7 @@ begin
   if action='admitApproval' then
     if principal->>'kind'<>'github' or r.scope<>'release' or principal->>'environment' is distinct from 'fcos-production-release' then raise exception 'COORDINATION_APPROVAL_INVALID'; end if;
     if exists(select 1 from fcos_release_coordination.authorizations a where a.release_id=r.release_id) then return jsonb_build_object('admitted',true); end if;
-    if principal->>'runId' is distinct from r.registration_actor->>'runId'
-      or principal->>'runAttempt' is distinct from r.registration_actor->>'runAttempt' then raise exception 'COORDINATION_APPROVAL_INVALID'; end if;
+    if not exists(select 1 from fcos_release_coordination.registration_runs rr where rr.release_id=r.release_id and rr.run_id=principal->>'runId' and rr.run_attempt=principal->>'runAttempt') then raise exception 'COORDINATION_REGISTRATION_RUN_REQUIRED'; end if;
     insert into fcos_release_coordination.approval_admissions(release_id,actor) values(r.release_id,principal) on conflict(release_id) do nothing;
     return jsonb_build_object('admitted',true);
   end if;
@@ -248,8 +275,7 @@ begin
     if principal->>'kind'<>'github' or r.scope<>'release' or principal->>'environment' is distinct from 'fcos-production-release' then raise exception 'COORDINATION_APPROVAL_INVALID'; end if;
     select * into auth from fcos_release_coordination.authorizations where release_id=r.release_id;
     if not found then
-      if principal->>'runId' is distinct from r.registration_actor->>'runId'
-        or principal->>'runAttempt' is distinct from r.registration_actor->>'runAttempt'
+      if not exists(select 1 from fcos_release_coordination.registration_runs rr where rr.release_id=r.release_id and rr.run_id=principal->>'runId' and rr.run_attempt=principal->>'runAttempt')
         or coalesce(p->'approvalReceipt'->>'manifestHash','')<>r.manifest_hash
         or p->'approvalReceipt'->>'runId' is distinct from principal->>'runId'
         or p->'approvalReceipt'->>'epoch' is distinct from c.epoch::text then raise exception 'COORDINATION_APPROVAL_INVALID'; end if;
@@ -261,6 +287,17 @@ begin
     if auth.expires_at<=clock_timestamp() then raise exception 'COORDINATION_APPROVAL_EXPIRED'; end if;
     return jsonb_build_object('approval',to_jsonb(auth));
   end if;
+  if action='resume' then
+    select * into auth from fcos_release_coordination.authorizations where release_id=r.release_id;
+    if principal->>'kind'<>'github' or principal->>'environment' is distinct from 'fcos-hosted-production-resume'
+      or r.scope<>'release' or not found or auth.expires_at<=clock_timestamp()
+      or p->'resumeReceipt'->>'manifestHash' is distinct from r.manifest_hash
+      or p->'resumeReceipt'->>'runId' is distinct from principal->>'runId'
+      or not exists(select 1 from fcos_release_coordination.registration_runs rr where rr.release_id=r.release_id and rr.run_id=principal->>'runId' and rr.run_attempt=principal->>'runAttempt') then raise exception 'COORDINATION_RESUME_FORBIDDEN'; end if;
+    insert into fcos_release_coordination.resume_admissions(release_id,run_id,receipt)
+      values(r.release_id,principal->>'runId',p->'resumeReceipt') on conflict do nothing;
+    return jsonb_build_object('approval',to_jsonb(auth),'resumed',true);
+  end if;
   if action in ('begin','claim') then
     if coalesce(p->>'operationId','')='' or coalesce(p->>'phase','')='' or coalesce(p->>'requestHash','') !~ '^[0-9a-f]{64}$' then raise exception 'COORDINATION_OPERATION_INVALID'; end if;
     select * into o from fcos_release_coordination.operations where release_id=r.release_id and phase=p->>'phase';
@@ -270,13 +307,16 @@ begin
       return jsonb_build_object('disposition',case when ev.state='complete' then 'complete' else 'readback' end,'operation',to_jsonb(o),'evidence',ev.evidence);
     end if;
     is_production := p->>'phase' in ('production.stage','production.promote','production.rollback');
-    if principal->>'kind'='github' and p->>'phase' not in ('preview.create','production.stage','production.promote','production.rollback')
+    if principal->>'kind'='github' and p->>'phase' not in ('preview.create','production.stage','production.promote','production.rollback','qualification.stage','qualification.promote','qualification.rollback')
        or principal->>'kind'='financial' and p->>'phase' not like 'financial.%' then raise exception 'COORDINATION_PHASE_FORBIDDEN'; end if;
-    if c.mode='qualification' and (r.scope<>'qualification' or p->>'phase'<>'preview.create') then raise exception 'COORDINATION_QUALIFICATION_ONLY'; end if;
+    if p->>'phase' like 'qualification.%' and (r.scope<>'qualification' or principal->>'environment' in ('fcos-production-release','fcos-hosted-production-resume')) then raise exception 'COORDINATION_QUALIFICATION_SIMULATION_ONLY'; end if;
+    if c.mode='qualification' and (r.scope<>'qualification' or p->>'phase' not in ('preview.create','qualification.stage','qualification.promote','qualification.rollback')) then raise exception 'COORDINATION_QUALIFICATION_ONLY'; end if;
     if c.mode<>'active' and c.mode<>'qualification' then raise exception 'COORDINATION_INACTIVE'; end if;
     if is_production then
       select * into auth from fcos_release_coordination.authorizations where release_id=r.release_id;
-      if r.scope<>'release' or principal->>'environment' is distinct from 'fcos-production-release' or not found or auth.expires_at<=clock_timestamp()
+      if r.scope<>'release' or coalesce(principal->>'environment','') not in ('fcos-production-release','fcos-hosted-production-resume') or not found or auth.expires_at<=clock_timestamp()
+        or not exists(select 1 from fcos_release_coordination.registration_runs rr where rr.release_id=r.release_id and rr.run_id=principal->>'runId' and rr.run_attempt=principal->>'runAttempt')
+        or (principal->>'environment'='fcos-hosted-production-resume' and not exists(select 1 from fcos_release_coordination.resume_admissions ra where ra.release_id=r.release_id and ra.run_id=principal->>'runId'))
         or not (r.manifest->'authorization'->'actions' ? (p->>'phase')) then raise exception 'COORDINATION_PRODUCTION_APPROVAL_REQUIRED'; end if;
     end if;
     if c.operation_id is not null or exists(select 1 from fcos_release_coordination.imported_uncertainty u left join fcos_release_coordination.import_resolutions ir using(import_id) where ir.import_id is null) then
@@ -334,7 +374,7 @@ end $$;
 
 -- Dedicated definer owns only this private schema. The runtime can execute one RPC and nothing else.
 do $$ declare t text; f record; begin
-  foreach t in array array['epochs','control','registrations','operations','operation_events','evidence','activations','approval_admissions','authorizations','finishes','imported_uncertainty','import_resolutions'] loop
+  foreach t in array array['epochs','control','registrations','registration_runs','resume_admissions','operations','operation_events','evidence','activations','approval_admissions','authorizations','finishes','imported_uncertainty','import_resolutions'] loop
     execute format('alter table fcos_release_coordination.%I enable row level security',t);
     execute format('alter table fcos_release_coordination.%I owner to fcos_coordinator_owner',t);
   end loop;

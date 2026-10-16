@@ -29,7 +29,7 @@ test('native PostgreSQL independent runners have one durable execute and no expi
   const scope={epoch:1,owner,releaseId:'race-release',manifestHash:await digest(m)},intent={...scope,phase:'preview.create',operationId:'race-operation',requestHash:H};
   const query=async(sql,p)=>{const connection=await pool.connect();try{await connection.query('set role fcos_coordinator_runtime');return await connection.query(sql,p);}finally{await connection.query('reset role');connection.release();}};
   const store=createSqlStore(query),S='b'.repeat(40),repository='hocheunglai-oss/fcos';
-  const policy={repository,repositoryId:'77',ref:'refs/heads/main',registrationJob:'release / prepare',approvalJobPrefix:'release / production / ',
+  const policy={repository,repositoryId:'77',ref:'refs/heads/main',registrationJob:'release / prepare',approvalJobPrefix:'release / production / ',resumeJobPrefix:'release / execute / ',
     workflows:[{callerWorkflowRef:`${repository}/.github/workflows/hosted-release.yml@refs/heads/main`,jobWorkflowRef:`${repository}/.github/workflows/hosted-release-controller.yml@${S}`,jobWorkflowSha:S}]};
   const pair=await generateKeyPair('RS256'),key=await exportJWK(pair.publicKey);key.kid='native';key.alg='RS256';
   const authenticateGithub=createGithubAuthenticator({policy,jwks:createLocalJWKSet({keys:[key]})});
@@ -52,6 +52,10 @@ test('native PostgreSQL independent runners have one durable execute and no expi
   await assert.rejects(pool.query('select fcos_release_coordination.activate($1,$2)',[1,{manifestHash:scope.manifestHash,evidenceHash:qualHash,oldWriterFenceHash:H,allWritersAdmitted:true,writerAdmissions:[{id:'legacy',admitted:true,proofHash:H}]}]),/ACTIVATION_STATE_INVALID/);
   await client.complete({...intent,evidence:{outcome:'applied',result:{id:'dpl_qualify'}}});
   await client.appendEvidence({...scope,evidenceId:'qualification-native',evidence:qualEvidence});
+  for(const phase of ['qualification.stage','qualification.promote','qualification.rollback']) {
+    const simulated={...scope,phase,operationId:`native-${phase}`,requestHash:H};await client.begin(simulated);
+    await client.complete({...simulated,evidence:{outcome:'applied',result:{simulated:true}}});
+  }
   await pool.query('select fcos_release_coordination.activate($1,$2)',[1,{manifestHash:scope.manifestHash,evidenceHash:qualHash,oldWriterFenceHash:H,allWritersAdmitted:true,writerAdmissions:[{id:'legacy',admitted:true,proofHash:H}]}]);
   const second={...scope,releaseId:'another-release'};await client.register({...second,manifest:m});
   const secondIntent={...second,phase:'preview.create',operationId:'another-preview',requestHash:H};await client.begin(secondIntent);

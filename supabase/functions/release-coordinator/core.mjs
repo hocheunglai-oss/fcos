@@ -1,4 +1,4 @@
-export const ACTIONS = Object.freeze(['snapshot','register','claim','begin','approve','complete','uncertain','readback','appendEvidence','finish']);
+export const ACTIONS = Object.freeze(['snapshot','register','claim','begin','approve','resume','complete','uncertain','readback','appendEvidence','finish']);
 export class CoordinatorError extends Error {
   constructor(code, status = 409) { super(code); this.code = code; this.status = status; }
 }
@@ -22,7 +22,7 @@ export function validateEnvelope(body) {
     && /^[a-zA-Z0-9._:-]{1,200}$/.test(p.releaseId)
     && /^[a-f0-9]{64}$/.test(p.manifestHash), 'COORDINATION_SCOPE_INVALID', 400);
   // Server-authored authentication/approval material cannot be supplied through the API.
-  need(!Object.hasOwn(p,'approvalReceipt') && !Object.hasOwn(p,'principal'), 'COORDINATION_SERVER_FIELD_FORBIDDEN',400);
+  need(!Object.hasOwn(p,'approvalReceipt') && !Object.hasOwn(p,'resumeReceipt') && !Object.hasOwn(p,'principal'), 'COORDINATION_SERVER_FIELD_FORBIDDEN',400);
   return {action:body.action, payload:p};
 }
 export function createSqlStore(query) {

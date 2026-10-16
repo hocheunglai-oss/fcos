@@ -3,13 +3,13 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { PGlite } from '@electric-sql/pglite';
 import { SignJWT, generateKeyPair, exportJWK, createLocalJWKSet } from 'jose';
-import { createCoordinatorHandler, createSqlStore, createGithubAuthenticator, createGithubApprovalValidator, createFinancialAuthenticator } from '../supabase/functions/release-coordinator/index.ts';
+import { createCoordinatorHandler, createSqlStore, createGithubAuthenticator, createGithubApprovalValidator, createGithubResumeValidator, createFinancialAuthenticator } from '../supabase/functions/release-coordinator/index.ts';
 import { digest } from '../supabase/functions/release-coordinator/core.mjs';
 import { assertIsolatedEnvironment } from '../supabase/functions/release-coordinator/runtime.mjs';
 import { createCoordinatorClient } from '../scripts/lib/hosted-release/coordinator-client.mjs';
 
 const H='a'.repeat(64), S='b'.repeat(40), REPO='hocheunglai-oss/fcos';
-const policy={repository:REPO,repositoryId:'77',ref:'refs/heads/main',registrationJob:'prepare',approvalJobPrefix:'production / ',
+const policy={repository:REPO,repositoryId:'77',ref:'refs/heads/main',registrationJob:'prepare',approvalJobPrefix:'production / ',resumeJobPrefix:'execute / ',
   workflows:[{callerWorkflowRef:`${REPO}/.github/workflows/hosted-release.yml@refs/heads/main`,jobWorkflowRef:`${REPO}/.github/workflows/hosted-release-controller.yml@${S}`,jobWorkflowSha:S}]};
 const owner={kind:'release',id:'features'};
 const activation={inventoryComplete:true,inventoryHash:H,legacyFence:{kind:'permanent_legacy_sentinel',snapshotHash:H,proofHash:H},writers:[{id:'legacy-production',disabled:true,proofHash:H}],uncertainties:[]};
@@ -39,12 +39,17 @@ function approvalFixture(hash,registrationTime) {
     '/actions/runs/101/approvals':[{state:'approved',user:actor,environments:[{id:81,name:'fcos-production-release'}]}]};
 }
 async function qualifyDatabase(db,epoch=1) {
-  const m={epoch,executionMode:'qualification',stage:'qualification'},scope={epoch,owner,releaseId:`qualification-${epoch}`,manifestHash:await digest(m)},p={kind:'github',runId:'100',runAttempt:'1'};
+  const m={epoch,executionMode:'qualification',stage:'qualification'},scope={epoch,owner,releaseId:`qualification-${epoch}`,manifestHash:await digest(m)},p=await createGithubAuthenticator({policy,jwks})(await token({run_id:'100'}));
   const store=createSqlStore((sql,values)=>db.query(sql,values));
   await store.request('register',{...scope,manifest:m},p);
   const op={...scope,phase:'preview.create',operationId:`qualify-preview-${epoch}`,requestHash:H};
   await store.request('begin',op,p);
   await store.request('complete',{...op,evidence:{outcome:'applied',result:{id:'dpl_qualify'}},evidenceHash:H},p);
+  for(const phase of ['qualification.stage','qualification.promote','qualification.rollback']) {
+    const simulated={...scope,phase,operationId:`${phase}-${epoch}`,requestHash:H};
+    await store.request('begin',simulated,p);
+    await store.request('complete',{...simulated,evidence:{outcome:'applied',result:{simulated:true}},evidenceHash:H},p);
+  }
   const evidence={key:'hosted.qualification',status:'passed',artifactSha256:H},evidenceHash=await digest(evidence);
   await store.request('appendEvidence',{...scope,evidenceId:`qualification-proof-${epoch}`,evidence,evidenceHash},p);
   return db.query('select fcos_release_coordination.activate($1,$2::jsonb)',[epoch,JSON.stringify({manifestHash:scope.manifestHash,evidenceHash,oldWriterFenceHash:H,allWritersAdmitted:true,writerAdmissions:[{id:'legacy-production',admitted:true,proofHash:H}]})]);
@@ -63,7 +68,7 @@ async function fixture(t,{activate=true,uncertainties=[]}={}) {
     return Response.json(fixtureData[path]);
   };
   const authenticateGithub=createGithubAuthenticator({policy,jwks});
-  const handler=createCoordinatorHandler({store,authenticateGithub,validateApproval:createGithubApprovalValidator({policy,token:'metadata-read-only',fetchImpl})});
+  const handler=createCoordinatorHandler({store,authenticateGithub,validateApproval:createGithubApprovalValidator({policy,token:'metadata-read-only',fetchImpl}),validateResume:createGithubResumeValidator({policy,token:'metadata-read-only',fetchImpl})});
   let authToken=await token();
   const fetchEndpoint=async(url,options)=>handler(new Request(url,options));
   const client=createCoordinatorClient({url:'http://localhost/coordinator',epoch:1,owner,tokenProvider:()=>authToken,fetch:fetchEndpoint});
@@ -134,7 +139,7 @@ test('append-only manifests, operations, events, checks and authorization cannot
   await f.client.appendEvidence({...f.scope,key:'volatile.check',evidence:{passed:true,observation:1}});
   await f.client.appendEvidence({...f.scope,key:'volatile.check',evidence:{passed:true,observation:2}});
   const snap=await f.client.snapshot(f.scope); assert.equal(snap.operations['preview.create'].state,'complete'); assert.equal(snap.checks['preview.tests'].passed,true); assert.equal(snap.checks['volatile.check'].observation,2); assert.equal(snap.evidence.length,3);
-  for(const table of ['registrations','operations','operation_events','evidence','authorizations','approval_admissions']) {
+  for(const table of ['registrations','operations','operation_events','evidence','authorizations','approval_admissions','registration_runs','resume_admissions']) {
     await assert.rejects(f.db.exec(`delete from fcos_release_coordination.${table}`),/APPEND_ONLY/);
     await assert.rejects(f.db.exec(`truncate fcos_release_coordination.${table} cascade`),/APPEND_ONLY/);
   }
@@ -248,4 +253,75 @@ test('isolated host refuses automatically injected Supabase and provider secrets
     assert.throws(()=>assertIsolatedEnvironment({...env,[name]:'fixture'}),/BROAD_CREDENTIAL_FORBIDDEN/);
   }
   assert.throws(()=>assertIsolatedEnvironment({...env,FCOS_COORDINATOR_DATABASE_URL:env.FCOS_COORDINATOR_DATABASE_URL.replace('pjforfvchygdyqfcgpmw','other')}),/DATABASE_ROLE_INVALID/);
+});
+
+test('main may move during approval; a distinct registered run resumes the immutable manifest without renewing approval',async t=>{
+  const f=await fixture(t);await f.register();const first=await f.client.snapshot(f.scope);
+  const initial=approvalFixture(f.hash,first.registrationRun.registered_at);initial['/branches/main'].commit.sha='c'.repeat(40);
+  f.setData(initial);f.setToken(await token({environment:'fcos-production-release'}));
+  const approval=await f.client.approve(f.scope);
+  await begin(f,'production.stage','original-stage');
+  await f.client.uncertain({...f.scope,phase:'production.stage',operationId:'original-stage',reason:'runner lost after submit'});
+  const nextSha='d'.repeat(40);f.setToken(await token({run_id:'102',sha:nextSha,workflow_sha:nextSha}));
+  await f.register();const next=await f.client.snapshot(f.scope);
+  assert.equal(next.registration.registration_actor.runId,'101');assert.equal(next.registrationRun.run_id,'102');
+  const data=approvalFixture(f.hash,next.registrationRun.registered_at),resumed={};
+  for(const [key,value] of Object.entries(data)) resumed[key.replace('/101','/102')]=value;
+  resumed['/branches/main'].commit.sha='e'.repeat(40);
+  resumed['/actions/runs/102'].id=102;resumed['/actions/runs/102'].head_sha=nextSha;
+  for(const job of resumed['/actions/runs/102/attempts/1/jobs?per_page=100'].jobs){job.run_id=102;job.head_sha=nextSha;if(job.name.startsWith('production / '))job.name=`execute / ${f.hash}`;}
+  resumed['/environments/fcos-hosted-production-resume']={...resumed['/environments/fcos-production-release'],id:82,name:'fcos-hosted-production-resume',protection_rules:[]};
+  delete resumed['/environments/fcos-production-release'];delete resumed['/actions/runs/102/approvals'];
+  f.setData(resumed);f.setToken(await token({run_id:'102',sha:nextSha,workflow_sha:nextSha,environment:'fcos-hosted-production-resume'}));
+  await assert.rejects(f.client.approve(f.scope),/APPROVAL_ENVIRONMENT_REQUIRED/);
+  await assert.rejects(begin(f,'production.promote','resumed-promote'),/PRODUCTION_APPROVAL_REQUIRED/);
+  const recovered=await f.client.resume(f.scope);assert.equal(recovered.expiresAt,approval.expiresAt);assert.equal(recovered.manifestHash,f.hash);
+  assert.equal((await begin(f,'production.stage','original-stage')).disposition,'readback');
+  await f.client.readback({...f.scope,phase:'production.stage',operationId:'original-stage',evidence:{outcome:'applied',result:{id:'dpl_original'}}});
+  assert.equal((await begin(f,'production.promote','resumed-promote')).disposition,'execute');
+  assert.equal((await f.client.snapshot(f.scope)).approval.expires_at,approval.expiresAt);
+  assert.equal((await f.db.query('select count(*)::int as n from fcos_release_coordination.authorizations')).rows[0].n,1);
+  assert.equal((await f.db.query('select count(*)::int as n from fcos_release_coordination.resume_admissions')).rows[0].n,1);
+});
+
+test('resume cannot create authority or renew an expired receipt; existing intents remain GET-only recoverable',async t=>{
+  const f=await fixture(t);await f.register();f.setToken(await token({environment:'fcos-hosted-production-resume'}));
+  await assert.rejects(f.client.resume(f.scope),/RESUME_FORBIDDEN/);
+  await assert.rejects(f.client.approve(f.scope),/APPROVAL_ENVIRONMENT_REQUIRED/);
+  f.setToken(await token());await begin(f);
+  await f.db.query(`insert into fcos_release_coordination.authorizations(release_id,manifest_hash,epoch,receipt,admitted_at,expires_at)
+    values($1,$2,1,$3::jsonb,clock_timestamp()-interval '25 hours',clock_timestamp()-interval '1 hour')`,[f.scope.releaseId,f.hash,JSON.stringify({manifestHash:f.hash,runId:'101'})]);
+  f.setToken(await token({environment:'fcos-hosted-production-resume'}));
+  await assert.rejects(f.client.resume(f.scope),/RESUME_FORBIDDEN/);
+  assert.equal((await begin(f)).disposition,'readback');
+  await f.client.readback({...f.scope,phase:'preview.create',operationId:'op-preview',evidence:{outcome:'not_applied'}});
+  await assert.rejects(begin(f,'production.stage','expired-write'),/PRODUCTION_APPROVAL_REQUIRED/);
+});
+
+test('qualification simulation phases share durable intents but can never authorize real Production',async t=>{
+  const f=await fixture(t);await f.register();
+  await assert.rejects(begin(f,'qualification.stage','forbidden-simulation'),/QUALIFICATION_SIMULATION_ONLY/);
+  const qm={...manifest('qualification'),stage:'qualification'},qs={releaseId:'qualification-sim',manifestHash:await digest(qm)};
+  await f.client.register({...qs,manifest:qm});
+  const op={...qs,phase:'qualification.stage',operationId:'simulated-stage',requestHash:H};
+  assert.equal((await f.client.begin(op)).disposition,'execute');
+  await f.client.uncertain({...op,reason:'simulated lost response'});assert.equal((await f.client.begin(op)).disposition,'readback');
+  await f.client.readback({...op,evidence:{outcome:'applied',result:{simulated:true}}});
+  assert.equal((await f.client.begin(op)).disposition,'complete');
+  await assert.rejects(f.client.begin({...qs,phase:'production.stage',operationId:'must-not-deploy',requestHash:H}),/PRODUCTION_APPROVAL_REQUIRED/);
+  f.setToken(await token({environment:'fcos-production-release'}));
+  await assert.rejects(f.client.begin({...qs,phase:'qualification.rollback',operationId:'no-prod-simulation',requestHash:H}),/QUALIFICATION_SIMULATION_ONLY/);
+});
+
+test('approval-only gate hands the same-run executor its original immutable receipt without another review',async t=>{
+  const f=await fixture(t);await f.register();const original=await f.approve();const snapshot=await f.client.snapshot(f.scope);
+  const data=approvalFixture(f.hash,snapshot.registrationRun.registered_at),jobs=data['/actions/runs/101/attempts/1/jobs?per_page=100'];
+  const gate=jobs.jobs[1];gate.status='completed';gate.conclusion='success';gate.completed_at=gate.started_at;
+  jobs.jobs.push({...gate,id:203,name:`execute / ${f.hash}`,status:'in_progress',conclusion:null,completed_at:null});jobs.total_count=3;
+  data['/environments/fcos-hosted-production-resume']={...data['/environments/fcos-production-release'],id:82,name:'fcos-hosted-production-resume',protection_rules:[]};
+  delete data['/environments/fcos-production-release'];delete data['/actions/runs/101/approvals'];f.setData(data);
+  f.setToken(await token({environment:'fcos-hosted-production-resume'}));
+  const resumed=await f.client.resume(f.scope);assert.equal(resumed.expiresAt,original.expiresAt);
+  assert.equal((await begin(f,'production.stage','same-run-stage')).disposition,'execute');
+  assert.equal((await f.db.query('select count(*)::int as n from fcos_release_coordination.authorizations')).rows[0].n,1);
 });

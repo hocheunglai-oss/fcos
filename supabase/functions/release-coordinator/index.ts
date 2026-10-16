@@ -1,13 +1,13 @@
 import { ACTIONS, CoordinatorError, createSqlStore, digest, need, validateEnvelope } from './core.mjs';
 import { createGithubAuthenticator, createFinancialAuthenticator, validatePolicy } from './auth.mjs';
 import { assertIsolatedEnvironment, verifyDatabaseIdentity } from './runtime.mjs';
-import { createGithubApprovalValidator } from './approval.mjs';
+import { createGithubApprovalValidator, createGithubResumeValidator } from './approval.mjs';
 export { createSqlStore } from './core.mjs';
 export { createGithubAuthenticator, createFinancialAuthenticator } from './auth.mjs';
-export { createGithubApprovalValidator, validateGithubApproval } from './approval.mjs';
+export { createGithubApprovalValidator, createGithubResumeValidator, validateGithubApproval, validateGithubResume } from './approval.mjs';
 
 /** The same request entrypoint runs in an isolated host and disposable database tests. */
-export function createCoordinatorHandler({store,authenticateGithub,authenticateFinancial,validateApproval}) {
+export function createCoordinatorHandler({store,authenticateGithub,authenticateFinancial,validateApproval,validateResume}) {
   need(store&&typeof store.request==='function'&&typeof authenticateGithub==='function','COORDINATION_CONFIGURATION_REQUIRED',500);
   return async request=>{
     try {
@@ -35,12 +35,19 @@ export function createCoordinatorHandler({store,authenticateGithub,authenticateF
         if(!financial) need(!principal.environment||principal.environment==='fcos-hosted-preview','COORDINATION_REGISTER_BEFORE_APPROVAL_REQUIRED');
       }
       if(action==='approve') {
+        need(principal.environment==='fcos-production-release','COORDINATION_APPROVAL_ENVIRONMENT_REQUIRED',403);
         need(!financial&&typeof validateApproval==='function','COORDINATION_APPROVAL_UNAVAILABLE',403);
         await store.request('admitApproval',payload,principal);
         const current=await store.request('snapshot',payload,principal);
         if(current.approval) payload.approvalReceipt=current.approval.receipt;
         // Snapshot and final RPC bind immutable registration; network reads hold no DB transaction.
-        if(!current.approval) payload.approvalReceipt=await validateApproval({principal,registration:current.registration,manifestHash:payload.manifestHash});
+        if(!current.approval) payload.approvalReceipt=await validateApproval({principal,registration:current.registration,registrationRun:current.registrationRun,manifestHash:payload.manifestHash});
+      }
+      if(action==='resume') {
+        need(!financial&&principal.environment==='fcos-hosted-production-resume'&&typeof validateResume==='function','COORDINATION_RESUME_FORBIDDEN',403);
+        const current=await store.request('snapshot',payload,principal);
+        need(current.approval&&Date.parse(current.approval.expires_at)>Date.now()&&current.registrationRun,'COORDINATION_RESUME_FORBIDDEN',403);
+        payload.resumeReceipt=await validateResume({principal,registration:current.registration,registrationRun:current.registrationRun,manifestHash:payload.manifestHash});
       }
       if(['complete','uncertain','readback','appendEvidence','finish'].includes(action)) {
         need(payload.evidence&&typeof payload.evidence==='object'&&!Array.isArray(payload.evidence),'COORDINATION_EVIDENCE_REQUIRED',400);
@@ -62,7 +69,8 @@ export function createConfiguredCoordinator({env,query,fetchImpl=globalThis.fetc
   let financialPolicy; if(get('FCOS_FINANCIAL_COORDINATOR_POLICY')) financialPolicy=JSON.parse(get('FCOS_FINANCIAL_COORDINATOR_POLICY'));
   return createCoordinatorHandler({store:createSqlStore(query),authenticateGithub:createGithubAuthenticator({policy}),
     authenticateFinancial:financialPolicy?createFinancialAuthenticator({policy:financialPolicy}):undefined,
-    validateApproval:createGithubApprovalValidator({policy,token:get('FCOS_COORDINATOR_GITHUB_METADATA_TOKEN'),fetchImpl})});
+    validateApproval:createGithubApprovalValidator({policy,token:get('FCOS_COORDINATOR_GITHUB_METADATA_TOKEN'),fetchImpl}),
+    validateResume:createGithubResumeValidator({policy,token:get('FCOS_COORDINATOR_GITHUB_METADATA_TOKEN'),fetchImpl})});
 }
 // Deno entrypoint uses only a narrowly privileged DB login and read-only GitHub metadata token.
 if(typeof Deno!=='undefined'&&import.meta.main) {
