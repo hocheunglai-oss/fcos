@@ -5,7 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { DefaultArtifactClient } from '@actions/artifact';
 import { decodePreviewCoordinationArchive } from './preview-email-coordination-archive.mjs';
 import { FCOS_CONNECTION_POLICY } from '../../config/fcosConnections.js';
-import { githubReleaseReads, assertReleaseGitHubAccount, RELEASE_REPOSITORY } from './release-evidence.mjs';
+import { assertReleaseGitHubAccount, RELEASE_REPOSITORY } from './release-evidence.mjs';
+import { githubReleaseAsyncReads } from './release-github-async-reads.mjs';
 import { githubReleaseOidc } from './release-production.mjs';
 import { SUCCESSOR_LIVE_CONTRACT, collectSuccessorLiveOperationAdmission, successorLiveRemoteControls,
   successorLiveControlBinding, successorLiveBinding } from './runtime-compatibility-successor-live.mjs';
@@ -27,7 +28,7 @@ let uploadAttempted = false;
 const positive = value => Number.isSafeInteger(value) && value > 0;
 const pinnedKey = FCOS_CONNECTION_POLICY.attestation.publicKeySpkiBase64;
 const nativeFetch = globalThis.fetch.bind(globalThis);
-const fixedGh = hosted => githubReleaseReads({ command: hosted ? '/usr/bin/gh' : '/Users/vincex/.local/gh/current/bin/gh',
+const fixedGh = hosted => githubReleaseAsyncReads({ command: hosted ? '/usr/bin/gh' : '/Users/vincex/.local/gh/current/bin/gh',
   env: { PATH: '/usr/bin:/bin', HOME: process.env.HOME, GH_HOST: 'github.com', GH_REPO: RELEASE_REPOSITORY,
     ...(hosted ? { GH_TOKEN: process.env.GH_TOKEN } : { GH_CONFIG_DIR: '/Users/vincex/Documents/FCOS/.fcos-cli/github' }) } }, { cwd: ROOT });
 let localReads;
