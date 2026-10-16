@@ -163,33 +163,38 @@ function normalStorage(source, origin) {
   return { state, token };
 }
 
-export async function verifyNormalRoleRelease({ env = process.env, fetchImpl = globalThis.fetch } = {}) {
+export async function verifyNormalRoleRelease({ env = process.env, fetchImpl = globalThis.fetch,
+  resolveCandidate = resolveFcosE2eCandidate, observeRuntime = collectRuntimeObservation,
+  authenticate = ({ env, url }) => normalStorage(env.FCOS_NORMAL_ROLE_STORAGE_STATE_BASE64, url),
+  browserType = chromium, signerEnabled, collectSigner = collectPreviewEmailSignerEvidence,
+  writeEvidence = evidence => writeFileSync(join(env.RUNNER_TEMP, 'fcos-normal-role-evidence.json'), `${JSON.stringify(evidence)}\n`, { mode: 0o600, flag: 'wx' }),
+} = {}) {
   if (env.FCOS_NORMAL_ROLE_E2E_ENABLED !== 'true' || !/^[0-9a-f]{40}$/.test(env.GITHUB_SHA || '')) throw new Error('Separate normal-role verification is disabled until its identity and protected environment are explicitly approved.');
   const url = canonicalFcosE2eCandidateUrl(env.FCOS_E2E_CANDIDATE_URL);
-  const verified = await resolveFcosE2eCandidate({ candidateUrl: url, expectedCommit: env.FCOS_E2E_EXPECTED_COMMIT,
+  const verified = await resolveCandidate({ candidateUrl: url, expectedCommit: env.FCOS_E2E_EXPECTED_COMMIT,
     githubToken: env.GITHUB_TOKEN, protectionBypass: env.FCOS_E2E_VERCEL_BYPASS, fetchImpl, maxWaitMs: 0 });
   const versionResponse = await fetchImpl(`${url}/app-version.json`, { redirect: 'error',
     headers: env.FCOS_E2E_VERCEL_BYPASS ? { 'x-vercel-protection-bypass': env.FCOS_E2E_VERCEL_BYPASS } : {}, signal: AbortSignal.timeout(20000) });
   const version = await versionResponse.json();
   if (!versionResponse.ok || versionResponse.redirected || version.commit !== verified.commit || !version.deploymentId
     || !/^[0-9a-f]{64}$/.test(version.provenance?.sourceDigest || '') || version.provenance.releaseEligible !== true) throw new Error('Normal-role verification requires exact clean deployment provenance.');
-  const runtime = await collectRuntimeObservation({ url, deployment: { id: version.deploymentId, url, sha: verified.commit, createdAt: version.builtAt },
+  const runtime = await observeRuntime({ url, deployment: { id: version.deploymentId, url, sha: verified.commit, createdAt: version.builtAt },
     sourceDigest: version.provenance.sourceDigest, token: env.FCOS_RELEASE_PREVIEW_RUNTIME_TOKEN, protectionBypass: env.FCOS_E2E_VERCEL_BYPASS, fetchImpl });
   if (!runtime || runtime.safety.readOnly !== true || Object.values(runtime.safety.externalActions).some(value => value !== false)) throw new Error('Normal-role Preview verification requires fresh read-only runtime safety proof.');
-  const { state, token } = normalStorage(env.FCOS_NORMAL_ROLE_STORAGE_STATE_BASE64, url);
+  const { state, token } = await authenticate({ env, url });
   const response = await fetchImpl(`${url}/api/functions/authContext`, { method: 'POST', body: '{}', redirect: 'error', signal: AbortSignal.timeout(20000),
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json',
       ...(env.FCOS_E2E_VERCEL_BYPASS ? { 'x-vercel-protection-bypass': env.FCOS_E2E_VERCEL_BYPASS } : {}) } });
   if (!response.ok || response.redirected) throw new Error('The approved normal-role session could not be independently authenticated.');
   const identity = assertNormalRoleIdentity(await response.json(), { approvedEmail: env.FCOS_NORMAL_ROLE_APPROVED_EMAIL });
-  const emailSigner = previewEmailSignerEnabled(verified.commit)
-    ? await collectPreviewEmailSignerEvidence({ origin: url, deploymentId: version.deploymentId, sha: verified.commit,
+  const emailSigner = (signerEnabled ? signerEnabled(verified.commit) : previewEmailSignerEnabled(verified.commit))
+    ? await collectSigner({ origin: url, deploymentId: version.deploymentId, sha: verified.commit,
       sourceDigest: version.provenance.sourceDigest, bearerToken: token, protectionBypass: env.FCOS_E2E_VERCEL_BYPASS, fetchImpl })
     : undefined;
   let browser, context;
   const checks = [];
   try {
-    browser = await chromium.launch({ headless: true });
+    browser = await browserType.launch({ headless: true });
     context = await browser.newContext({ storageState: state, viewport: { width: 1440, height: 1000 }, serviceWorkers: 'block' });
     let blockedMutations = 0;
     await context.route('**/*', createNormalRoleVerificationRoute({ origin: url, protectionBypass: env.FCOS_E2E_VERCEL_BYPASS,
@@ -271,7 +276,7 @@ export async function verifyNormalRoleRelease({ env = process.env, fetchImpl = g
     sourceDigest: version.provenance.sourceDigest, harnessSha: env.GITHUB_SHA, capturedAt: new Date().toISOString(), checks,
     ...(emailSigner ? { emailSigner } : {}) };
   if (!env.RUNNER_TEMP) throw new Error('A private runner evidence directory is required.');
-  writeFileSync(join(env.RUNNER_TEMP, 'fcos-normal-role-evidence.json'), `${JSON.stringify(evidence)}\n`, { mode: 0o600, flag: 'wx' });
+  await writeEvidence(evidence);
   if (checks.length !== NORMAL_ROLE_MODULES.length) throw new Error(`Normal-role coverage remains incomplete (${checks.length}/${NORMAL_ROLE_MODULES.length}). Missing or unavailable workflows stay blocked.`);
   return evidence;
 }
