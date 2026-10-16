@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, rm, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, realpath } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
+import { tmpdir } from 'node:os';
 import { inspectReviewedCutover, installPermanentLegacyFence, reviewedInstallEpochPlan } from '../scripts/hosted-release-cutover.mjs';
 const sha=raw=>createHash('sha256').update(raw).digest('hex'),H='a'.repeat(64);
 async function fixture(t){
- const root=await mkdtemp('/private/tmp/fcos-cutover-');t.after(()=>rm(root,{recursive:true,force:true}));
+ const root=await realpath(await mkdtemp(path.join(tmpdir(),'fcos-cutover-')));t.after(()=>rm(root,{recursive:true,force:true}));
  const base=path.join(root,'legacy'),intents=path.join(base,'intents');await mkdir(intents,{recursive:true,mode:0o700});
  const put=async(name,value)=>{const file=path.join(root,name),raw=typeof value==='string'?value:JSON.stringify(value);await writeFile(file,raw,{mode:0o600});return{path:file,sha256:sha(raw)};};
  const helper=await put('guard.py','# Fixture only: actual shared lock uses coordination-mutex.lock\n');

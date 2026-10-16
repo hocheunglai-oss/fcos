@@ -231,7 +231,7 @@ test('client never retries an uncertain transport response',async()=>{
 test('approval expiry comes from first admission and cannot be renewed by repeated validation',async t=>{
   const f=await fixture(t);await f.register();
   const principal=await f.authenticateGithub(await token({environment:'fcos-production-release'}));
-  await f.db.query(`insert into fcos_release_coordination.approval_admissions(release_id,actor,observed_at) values($1,$2::jsonb,clock_timestamp()-interval '25 hours')`,[f.scope.releaseId,JSON.stringify(principal)]);
+  await f.db.query(`insert into fcos_release_coordination.approval_admissions(release_id,run_id,run_attempt,actor,observed_at) values($1,'101','1',$2::jsonb,clock_timestamp()-interval '25 hours')`,[f.scope.releaseId,JSON.stringify(principal)]);
   await assert.rejects(f.approve(),/APPROVAL_EXPIRED/);
   await assert.rejects(f.client.approve(f.scope),/APPROVAL_EXPIRED/);
   await assert.rejects(begin(f,'production.stage','expired-op'),/PRODUCTION_APPROVAL_REQUIRED/);
@@ -289,8 +289,8 @@ test('resume cannot create authority or renew an expired receipt; existing inten
   await assert.rejects(f.client.resume(f.scope),/RESUME_FORBIDDEN/);
   await assert.rejects(f.client.approve(f.scope),/APPROVAL_ENVIRONMENT_REQUIRED/);
   f.setToken(await token());await begin(f);
-  await f.db.query(`insert into fcos_release_coordination.authorizations(release_id,manifest_hash,epoch,receipt,admitted_at,expires_at)
-    values($1,$2,1,$3::jsonb,clock_timestamp()-interval '25 hours',clock_timestamp()-interval '1 hour')`,[f.scope.releaseId,f.hash,JSON.stringify({manifestHash:f.hash,runId:'101'})]);
+  await f.db.query(`insert into fcos_release_coordination.authorizations(release_id,run_id,run_attempt,approved_job_id,manifest_hash,epoch,receipt,admitted_at,expires_at)
+    values($1,'101','1',202,$2,1,$3::jsonb,clock_timestamp()-interval '25 hours',clock_timestamp()-interval '1 hour')`,[f.scope.releaseId,f.hash,JSON.stringify({manifestHash:f.hash,runId:'101'})]);
   f.setToken(await token({environment:'fcos-hosted-production-resume'}));
   await assert.rejects(f.client.resume(f.scope),/RESUME_FORBIDDEN/);
   assert.equal((await begin(f)).disposition,'readback');
@@ -324,4 +324,41 @@ test('approval-only gate hands the same-run executor its original immutable rece
   const resumed=await f.client.resume(f.scope);assert.equal(resumed.expiresAt,original.expiresAt);
   assert.equal((await begin(f,'production.stage','same-run-stage')).disposition,'execute');
   assert.equal((await f.db.query('select count(*)::int as n from fcos_release_coordination.authorizations')).rows[0].n,1);
+});
+
+
+test('explicit later human review appends a session and old resume admission cannot authorize the new session',async t=>{
+  const f=await fixture(t);await f.register();
+  const oldReceipt={manifestHash:f.hash,epoch:1,runId:'101',runAttempt:'1',approvedJobId:202,protectedJobStartedAt:new Date(Date.now()-26*3600000).toISOString()};
+  await f.db.query(`insert into fcos_release_coordination.authorizations(release_id,run_id,run_attempt,approved_job_id,manifest_hash,epoch,receipt,admitted_at,expires_at)
+    values($1,'101','1',202,$2,1,$3,clock_timestamp()-interval '25 hours',clock_timestamp()-interval '1 hour')`,[f.scope.releaseId,f.hash,JSON.stringify(oldReceipt)]);
+  const original=(await f.client.snapshot(f.scope)).approval;
+  f.setToken(await token({environment:'fcos-production-release'}));await assert.rejects(f.client.approve(f.scope),/RENEWAL_NEW_RUN_REQUIRED/);
+  const nextSha='d'.repeat(40);f.setToken(await token({run_id:'102',sha:nextSha,workflow_sha:nextSha}));await f.register();
+  const next=await f.client.snapshot(f.scope),data=approvalFixture(f.hash,next.registrationRun.registered_at),renewal={};
+  for(const [key,value]of Object.entries(data))renewal[key.replace('/101','/102')]=value;
+  renewal['/actions/runs/102'].id=102;renewal['/actions/runs/102'].head_sha=nextSha;
+  for(const job of renewal['/actions/runs/102/attempts/1/jobs?per_page=100'].jobs){job.id+=100;job.run_id=102;job.head_sha=nextSha;}
+  const productionToken=await token({run_id:'102',sha:nextSha,workflow_sha:nextSha,environment:'fcos-production-release'});
+  f.setData(renewal);f.setToken(productionToken);
+  const principal=await f.authenticateGithub(productionToken),payload={...f.scope,epoch:1,owner};
+  await f.store.request('admitApproval',payload,principal);
+  await assert.rejects(f.store.request('approve',{...payload,approvalReceipt:{...oldReceipt,runId:'102',approvedJobId:302}},principal),/APPROVAL_INVALID/);
+  renewal['/actions/runs/102/approvals'][0].state='rejected';await assert.rejects(f.client.approve(f.scope),/APPROVAL_AMBIGUOUS/);
+  assert.equal((await f.client.snapshot(f.scope)).approvalHistory.length,1);
+  renewal['/actions/runs/102/approvals'][0].state='approved';const approved=await f.client.approve(f.scope),latest=(await f.client.snapshot(f.scope)).approval;
+  assert.equal(latest.run_id,'102');assert.notEqual(latest.authorization_event_id,original.authorization_event_id);
+  assert.equal(Date.parse(latest.expires_at)-Date.parse(latest.admitted_at),86400000);
+  assert.equal((await f.client.approve(f.scope)).expiresAt,approved.expiresAt);
+  const history=(await f.client.snapshot(f.scope)).approvalHistory;assert.equal(history.length,2);assert.deepEqual(history[0],original);
+  // A stale admission for this run, bound to the previous session, grants no new write.
+  await f.db.query("insert into fcos_release_coordination.resume_admissions(release_id,run_id,authorization_event_id,receipt) values($1,'102',$2,'{}')",[f.scope.releaseId,original.authorization_event_id]);
+  const jobs=renewal['/actions/runs/102/attempts/1/jobs?per_page=100'];jobs.jobs[1].name=`execute / ${f.hash}`;
+  renewal['/environments/fcos-hosted-production-resume']={...renewal['/environments/fcos-production-release'],id:82,name:'fcos-hosted-production-resume',protection_rules:[]};
+  f.setToken(await token({run_id:'102',sha:nextSha,workflow_sha:nextSha,environment:'fcos-hosted-production-resume'}));
+  await assert.rejects(begin(f,'production.promote','renewed-promote'),/PRODUCTION_APPROVAL_REQUIRED/);
+  assert.equal((await f.client.resume(f.scope)).expiresAt,approved.expiresAt);
+  assert.equal((await begin(f,'production.promote','renewed-promote')).disposition,'execute');
+  const resumeRows=(await f.db.query('select authorization_event_id from fcos_release_coordination.resume_admissions order by authorization_event_id')).rows;
+  assert.deepEqual(resumeRows.map(row=>row.authorization_event_id),[original.authorization_event_id,latest.authorization_event_id]);
 });

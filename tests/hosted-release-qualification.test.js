@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { tmpdir } from 'node:os';
 import pg from 'pg';
 import { SignJWT, generateKeyPair, exportJWK, createLocalJWKSet } from 'jose';
 import { runQualification, publishQualificationArtifact } from '../scripts/hosted-release-qualification.mjs';
@@ -55,7 +56,7 @@ function fakeVercel(m){
 test('local rehearsal: native PostgreSQL, signed OIDC, real endpoint/client/controller, delayed gate, crash recovery and rollback',
  {skip:!bindir&&process.env.FCOS_REQUIRE_NATIVE_COORDINATOR_DATABASE!=='1'},async t=>{
  assert.ok(bindir,'Native PostgreSQL is required for the coordinator rehearsal gate.');
- const directory=await mkdtemp('/private/tmp/fcos-qualification-pg-'),data=path.join(directory,'data'),port=54596;
+ const directory=await mkdtemp(path.join(tmpdir(),'fcos-qualification-pg-')),data=path.join(directory,'data'),port=54596;
  execFileSync(path.join(bindir,'initdb'),['-D',data,'--username=postgres','--auth=trust','--no-locale','--encoding=UTF8'],{stdio:'pipe'});
  execFileSync(path.join(bindir,'pg_ctl'),['-D',data,'-l',path.join(directory,'server.log'),'-o',`-k ${directory} -h '' -p ${port}`,'-w','start'],{stdio:'pipe'});
  const pool=new pg.Pool({host:directory,port,user:'postgres',database:'postgres',max:8});
@@ -75,12 +76,13 @@ test('local rehearsal: native PostgreSQL, signed OIDC, real endpoint/client/cont
   assert.equal(options.method,'GET');if(url==='https://api.github.com/user')return Response.json({login:'hocheunglai-oss',id:9});
   const route=url.replace(`https://api.github.com/repos/${repository}`,''),repo={id:77,full_name:repository,default_branch:'main'},actor={id:9,login:'hocheunglai-oss'};
   const envName=identity.environment,id=envName==='fcos-production-release'?81:82,registered=Date.parse(metadata.registered_at),started=new Date(registered+2000).toISOString();
+  const jobId=Number(identity.runId)*10;
   const baseJob={run_id:Number(identity.runId),run_attempt:1,head_sha:identity.sha};
   const records={'':repo,'/branches/main':{name:'main',protected:true,commit:{sha:'e'.repeat(40)}},'/branches/main/protection':{enforce_admins:{enabled:true},allow_force_pushes:{enabled:false},allow_deletions:{enabled:false},required_status_checks:{strict:true,checks:['code-and-database','dependency-review','authenticated-browser'].map(context=>({context,app_id:15368}))}},
    [`/environments/${envName}`]:{id,name:envName,can_admins_bypass:false,deployment_branch_policy:{protected_branches:true,custom_branch_policies:false},protection_rules:envName==='fcos-production-release'?[{type:'required_reviewers',prevent_self_review:false,reviewers:[{type:'User',reviewer:actor}]}]:[]},
    [`/actions/runs/${identity.runId}`]:{id:Number(identity.runId),run_attempt:1,status:'in_progress',conclusion:null,event:'workflow_dispatch',repository:repo,head_repository:repo,head_sha:identity.sha,head_branch:'main',path:'.github/workflows/hosted-release.yml',actor,triggering_actor:actor},
-   [`/actions/runs/${identity.runId}/attempts/1/jobs?per_page=100`]:{total_count:2,jobs:[{...baseJob,id:201,name:'release / prepare',status:'completed',conclusion:'success',completed_at:new Date(registered+1000).toISOString()},
-    {...baseJob,id:202,name:`${envName==='fcos-production-release'?policy.approvalJobPrefix:policy.resumeJobPrefix}${metadata.manifestHash}`,status:'in_progress',conclusion:null,started_at:started}]},
+   [`/actions/runs/${identity.runId}/attempts/1/jobs?per_page=100`]:{total_count:2,jobs:[{...baseJob,id:jobId+1,name:'release / prepare',status:'completed',conclusion:'success',completed_at:new Date(registered+1000).toISOString()},
+    {...baseJob,id:jobId+2,name:`${envName==='fcos-production-release'?policy.approvalJobPrefix:policy.resumeJobPrefix}${metadata.manifestHash}`,status:'in_progress',conclusion:null,started_at:started}]},
    [`/actions/runs/${identity.runId}/approvals`]:[{state:'approved',user:actor,environments:[{id:81,name:'fcos-production-release'}]}]};
   assert.ok(Object.hasOwn(records,route),`Unexpected fixture metadata route ${route}`);return Response.json(records[route]);
  };
@@ -133,4 +135,48 @@ test('local rehearsal: native PostgreSQL, signed OIDC, real endpoint/client/cont
  assert.equal(terminal.status,'rolled_back');assert.equal(v.effects.stage,1);assert.equal(v.effects.promote,1);assert.equal(v.effects.rollback,1);
  const saved=await client.snapshot(bind(m));assert.equal(saved.status,'rolled_back');assert.equal(saved.approval.expires_at,approved.expiresAt);assert.equal(saved.operations['production.rollback'].state,'complete');
  assert.equal((await pool.query('select count(*)::int as n from fcos_release_coordination.authorizations')).rows[0].n,1);
+
+ // Historical fixture rows represent a runner crash after a staged POST, more
+ // than 24h ago. They are inserted once, never updated to manufacture expiry.
+ const renewal=manifest('production-renewal-rehearsal'),rv=fakeVercel(renewal),past=new Date(Date.now()-26*3600000).toISOString();
+ identity={runId:'201',sha:S,environment:null};
+ const historicalActor=await createGithubAuthenticator({policy,jwks:createLocalJWKSet({keys:[jwk]})})(await identityToken());
+ await pool.query(`insert into fcos_release_coordination.registrations(release_id,epoch,owner,manifest,manifest_hash,scope,registration_actor,registered_at)
+   values($1,1,$2,$3,$4,'release',$5,$6::timestamptz-interval '10 seconds')`,[renewal.releaseId,JSON.stringify({kind:'release',id:'features'}),JSON.stringify(renewal),digest(renewal),JSON.stringify(historicalActor),past]);
+ await pool.query(`insert into fcos_release_coordination.registration_runs(release_id,run_id,run_attempt,actor,registered_at)
+   values($1,'201','1',$2,$3::timestamptz-interval '10 seconds')`,[renewal.releaseId,JSON.stringify(historicalActor),past]);
+ metadata={...(await client.snapshot(bind(renewal))).registrationRun,manifestHash:digest(renewal)};identity.environment='fcos-production-release';
+ const historicalPrincipal=await createGithubAuthenticator({policy,jwks:createLocalJWKSet({keys:[jwk]})})(await identityToken());
+ const historical=await client.snapshot(bind(renewal));
+ const historicalReceipt=await createGithubApprovalValidator({policy,token:'local-read-only-fixture',fetchImpl:readGithub})({principal:historicalPrincipal,registration:historical.registration,registrationRun:historical.registrationRun,manifestHash:digest(renewal)});
+ await pool.query(`insert into fcos_release_coordination.approval_admissions(release_id,run_id,run_attempt,actor,observed_at) values($1,'201','1',$2,$3)`,[renewal.releaseId,JSON.stringify(historicalPrincipal),past]);
+ await pool.query(`insert into fcos_release_coordination.authorizations(release_id,run_id,run_attempt,approved_job_id,manifest_hash,epoch,receipt,admitted_at,expires_at)
+   values($1,'201','1',$2,$3,1,$4,$5::timestamptz,$5::timestamptz+interval '24 hours')`,[renewal.releaseId,historicalReceipt.approvedJobId,digest(renewal),JSON.stringify(historicalReceipt),past]);
+ const oldAuthorization=(await client.snapshot(bind(renewal))).approval;
+ const stageId=`${renewal.releaseId}-production-stage`,stageRequestHash=digest({candidate:renewal.candidate,previous:renewal.previousProduction,target:'production',skipDomain:true});
+ await rv.provider.stage(renewal,{operationId:stageId});
+ await pool.query(`insert into fcos_release_coordination.operations(operation_id,release_id,epoch,phase,request_hash,manifest_hash,actor,created_at)
+   values($1,$2,1,'production.stage',$3,$4,$5,$6)`,[stageId,renewal.releaseId,stageRequestHash,digest(renewal),JSON.stringify(historicalPrincipal),past]);
+ await pool.query(`insert into fcos_release_coordination.operation_events(operation_id,state,evidence,evidence_hash,actor,created_at)
+   values($1,'uncertain','{"outcome":"unknown"}',$2,$3,$4)`,[stageId,H,JSON.stringify(historicalPrincipal),past]);
+ await pool.query('update fcos_release_coordination.control set operation_id=$1 where singleton',[stageId]);
+ await assert.rejects(client.approve(bind(renewal)),/RENEWAL_NEW_RUN_REQUIRED/);
+ identity.environment='fcos-hosted-production-resume';await assert.rejects(client.resume(bind(renewal)),/RESUME_FORBIDDEN/);
+ identity={runId:'202',sha:'d'.repeat(40),environment:null};await client.register({...bind(renewal),manifest:renewal});
+ const newReceipt=await gate(renewal),afterApproval=await client.snapshot(bind(renewal));
+ assert.equal(afterApproval.approvalHistory.length,2);assert.deepEqual(afterApproval.approvalHistory[0],oldAuthorization);
+ assert.equal(afterApproval.lock,stageId,'New authority cannot clear an uncertain provider operation.');
+ assert.equal(afterApproval.approval.run_id,'202');assert.notEqual(newReceipt.expiresAt,oldAuthorization.expires_at);
+ const renewalAdmission=(await pool.query("select observed_at from fcos_release_coordination.approval_admissions where release_id=$1 and run_id='202'",[renewal.releaseId])).rows[0].observed_at;
+ assert.equal(Date.parse(newReceipt.expiresAt)-new Date(renewalAdmission).getTime(),86400000);
+ const repeated=await client.approve(bind(renewal));assert.equal(repeated.expiresAt,newReceipt.expiresAt);
+ assert.equal((await client.snapshot(bind(renewal))).approvalHistory.length,2);
+ await executor();await publish(renewal);
+ const renewedResult=await executeHostedProduction({manifest:renewal,coordinator:client,provider:rv.provider,resumeAuthorization:true});
+ assert.equal(renewedResult.status,'complete');assert.equal(rv.effects.stage,1,'The historical stage POST is never repeated after renewed approval.');assert.equal(rv.effects.promote,1);
+ const renewedSnapshot=await client.snapshot(bind(renewal));assert.deepEqual(renewedSnapshot.approvalHistory[0],oldAuthorization);
+ assert.equal(renewedSnapshot.approval.authorization_event_id,afterApproval.approval.authorization_event_id);
+ assert.equal(renewedSnapshot.operations['production.stage'].operationId,stageId);
+ await assert.rejects(pool.query("update fcos_release_coordination.authorizations set expires_at=expires_at+interval '1 day' where authorization_event_id=$1",[oldAuthorization.authorization_event_id]),/APPEND_ONLY/);
+
 });

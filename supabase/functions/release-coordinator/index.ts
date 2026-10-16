@@ -39,15 +39,16 @@ export function createCoordinatorHandler({store,authenticateGithub,authenticateF
         need(!financial&&typeof validateApproval==='function','COORDINATION_APPROVAL_UNAVAILABLE',403);
         await store.request('admitApproval',payload,principal);
         const current=await store.request('snapshot',payload,principal);
-        if(current.approval) payload.approvalReceipt=current.approval.receipt;
+        const valid=current.approval&&Date.parse(current.approval.expires_at)>Date.now();
+        if(valid) payload.approvalReceipt=current.approval.receipt;
         // Snapshot and final RPC bind immutable registration; network reads hold no DB transaction.
-        if(!current.approval) payload.approvalReceipt=await validateApproval({principal,registration:current.registration,registrationRun:current.registrationRun,manifestHash:payload.manifestHash});
+        if(!valid) payload.approvalReceipt=await validateApproval({principal,registration:current.registration,registrationRun:current.registrationRun,manifestHash:payload.manifestHash});
       }
       if(action==='resume') {
         need(!financial&&principal.environment==='fcos-hosted-production-resume'&&typeof validateResume==='function','COORDINATION_RESUME_FORBIDDEN',403);
         const current=await store.request('snapshot',payload,principal);
         need(current.approval&&Date.parse(current.approval.expires_at)>Date.now()&&current.registrationRun,'COORDINATION_RESUME_FORBIDDEN',403);
-        payload.resumeReceipt=await validateResume({principal,registration:current.registration,registrationRun:current.registrationRun,manifestHash:payload.manifestHash});
+        payload.resumeReceipt={...await validateResume({principal,registration:current.registration,registrationRun:current.registrationRun,manifestHash:payload.manifestHash}),authorizationEventId:current.approval.authorization_event_id};
       }
       if(['complete','uncertain','readback','appendEvidence','finish'].includes(action)) {
         need(payload.evidence&&typeof payload.evidence==='object'&&!Array.isArray(payload.evidence),'COORDINATION_EVIDENCE_REQUIRED',400);

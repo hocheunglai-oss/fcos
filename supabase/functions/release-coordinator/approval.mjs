@@ -50,7 +50,7 @@ async function validateProtectedRun({principal,registration,registrationRun,mani
     &&Date.parse(prepare.completed_at)<=Date.parse(job.started_at)
     &&Date.parse(registrationRun.registered_at)<=Date.parse(prepare.completed_at),'COORDINATION_PREAPPROVAL_REGISTRATION_REQUIRED');
   return {schemaVersion:1,manifestHash,epoch:registration.epoch,runId:principal.runId,runAttempt:principal.runAttempt,
-    repositoryId:policy.repositoryId,environmentId:environment.id,registrationJobId:prepare.id,approvedJobId:job.id,
+    repositoryId:policy.repositoryId,environmentId:environment.id,registrationJobId:prepare.id,approvedJobId:job.id,protectedJobStartedAt:job.started_at,
     jobWorkflowRef:principal.jobWorkflowRef,jobWorkflowSha:principal.jobWorkflowSha,
     actualEvidenceHash:await digest({repository,branch,protection,environment,run,jobs,approvals:approvals??null}),
     ...(resuming?{reusesOriginalAuthorization:true}:{reviewer:operator,reviewerId:rules[0].reviewers[0].reviewer.id})};

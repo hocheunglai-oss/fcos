@@ -45,9 +45,10 @@ create table fcos_release_coordination.registration_runs (
 create table fcos_release_coordination.resume_admissions (
   release_id text not null references fcos_release_coordination.registrations(release_id),
   run_id text not null,
+  authorization_event_id bigint not null,
   receipt jsonb not null,
   admitted_at timestamptz not null default clock_timestamp(),
-  primary key(release_id,run_id)
+  primary key(release_id,run_id,authorization_event_id)
 );
 create table fcos_release_coordination.operations (
   operation_id text primary key,
@@ -87,18 +88,31 @@ create table fcos_release_coordination.activations (
   activated_at timestamptz not null default clock_timestamp()
 );
 create table fcos_release_coordination.approval_admissions (
-  release_id text primary key references fcos_release_coordination.registrations(release_id),
+  release_id text not null references fcos_release_coordination.registrations(release_id),
+  run_id text not null,
+  run_attempt text not null check(run_attempt='1'),
   actor jsonb not null,
-  observed_at timestamptz not null default clock_timestamp()
+  observed_at timestamptz not null default clock_timestamp(),
+  primary key(release_id,run_id,run_attempt)
 );
+-- Explicit human renewals append a session; no prior admission or expiry is updated.
 create table fcos_release_coordination.authorizations (
-  release_id text primary key references fcos_release_coordination.registrations(release_id),
+  authorization_event_id bigint generated always as identity primary key,
+  release_id text not null references fcos_release_coordination.registrations(release_id),
+  run_id text not null,
+  run_attempt text not null check(run_attempt='1'),
+  approved_job_id bigint not null unique,
   manifest_hash text not null,
   epoch bigint not null,
   receipt jsonb not null,
-  admitted_at timestamptz not null default clock_timestamp(),
-  expires_at timestamptz not null default (clock_timestamp() + interval '24 hours')
+  admitted_at timestamptz not null,
+  expires_at timestamptz not null,
+  unique(release_id,run_id,run_attempt),
+  check(expires_at=admitted_at+interval '24 hours')
 );
+create index coordination_authorization_session_order on fcos_release_coordination.authorizations(release_id,authorization_event_id desc);
+alter table fcos_release_coordination.resume_admissions add constraint coordination_resume_authorization
+  foreign key(authorization_event_id) references fcos_release_coordination.authorizations(authorization_event_id);
 create table fcos_release_coordination.finishes (
   release_id text primary key references fcos_release_coordination.registrations(release_id),
   evidence jsonb not null,
@@ -212,6 +226,7 @@ declare c fcos_release_coordination.control%rowtype;
   o fcos_release_coordination.operations%rowtype;
   ev fcos_release_coordination.operation_events%rowtype;
   auth fcos_release_coordination.authorizations%rowtype;
+  prior_auth fcos_release_coordination.authorizations%rowtype;
   existing jsonb; state_value text; result jsonb; is_production boolean;
 begin
   select * into c from fcos_release_coordination.control where singleton for update;
@@ -254,8 +269,9 @@ begin
       from fcos_release_coordination.operations op cross join lateral
       (select * from fcos_release_coordination.operation_events e where e.operation_id=op.operation_id order by event_id desc limit 1) last_ev
       where op.release_id=r.release_id) x;
-    select to_jsonb(a) into result from fcos_release_coordination.authorizations a where a.release_id=r.release_id;
+    select to_jsonb(a) into result from fcos_release_coordination.authorizations a where a.release_id=r.release_id order by a.authorization_event_id desc limit 1;
     return jsonb_build_object('epoch',c.epoch,'mode',c.mode,'registration',to_jsonb(r),'registrationRun',(select to_jsonb(rr) from fcos_release_coordination.registration_runs rr where rr.release_id=r.release_id and rr.run_id=principal->>'runId' and rr.run_attempt=principal->>'runAttempt'),'operations',existing,'approval',result,
+      'approvalHistory',coalesce((select jsonb_agg(to_jsonb(a) order by a.authorization_event_id) from fcos_release_coordination.authorizations a where a.release_id=r.release_id),'[]'::jsonb),
       'lock',c.operation_id,'status',(select f.evidence->>'status' from fcos_release_coordination.finishes f where f.release_id=r.release_id),'finished',exists(select 1 from fcos_release_coordination.finishes f where f.release_id=r.release_id),
       'evidence',coalesce((select jsonb_agg(to_jsonb(e) order by e.evidence_id) from fcos_release_coordination.evidence e where e.release_id=r.release_id),'[]'::jsonb),
       'checks',coalesce((select jsonb_object_agg(e.evidence->>'key',e.evidence order by e.evidence_event_id) from fcos_release_coordination.evidence e where e.release_id=r.release_id and e.evidence ? 'key'),'{}'::jsonb),
@@ -267,36 +283,47 @@ begin
   end if;
   if action='admitApproval' then
     if principal->>'kind'<>'github' or r.scope<>'release' or principal->>'environment' is distinct from 'fcos-production-release' then raise exception 'COORDINATION_APPROVAL_INVALID'; end if;
-    if exists(select 1 from fcos_release_coordination.authorizations a where a.release_id=r.release_id) then return jsonb_build_object('admitted',true); end if;
+    select * into auth from fcos_release_coordination.authorizations where release_id=r.release_id order by authorization_event_id desc limit 1;
+    if found and auth.expires_at>clock_timestamp() then return jsonb_build_object('admitted',true); end if;
+    if exists(select 1 from fcos_release_coordination.authorizations a where a.release_id=r.release_id and a.run_id=principal->>'runId') then raise exception 'COORDINATION_RENEWAL_NEW_RUN_REQUIRED'; end if;
     if not exists(select 1 from fcos_release_coordination.registration_runs rr where rr.release_id=r.release_id and rr.run_id=principal->>'runId' and rr.run_attempt=principal->>'runAttempt') then raise exception 'COORDINATION_REGISTRATION_RUN_REQUIRED'; end if;
-    insert into fcos_release_coordination.approval_admissions(release_id,actor) values(r.release_id,principal) on conflict(release_id) do nothing;
+    insert into fcos_release_coordination.approval_admissions(release_id,run_id,run_attempt,actor)
+      values(r.release_id,principal->>'runId',principal->>'runAttempt',principal) on conflict do nothing;
     return jsonb_build_object('admitted',true);
   end if;
   if action='approve' then
     if principal->>'kind'<>'github' or r.scope<>'release' or principal->>'environment' is distinct from 'fcos-production-release' then raise exception 'COORDINATION_APPROVAL_INVALID'; end if;
-    select * into auth from fcos_release_coordination.authorizations where release_id=r.release_id;
-    if not found then
+    select * into auth from fcos_release_coordination.authorizations where release_id=r.release_id order by authorization_event_id desc limit 1;
+    if not found or auth.expires_at<=clock_timestamp() then
+      prior_auth:=auth;
+      if exists(select 1 from fcos_release_coordination.authorizations a where a.release_id=r.release_id and a.run_id=principal->>'runId') then raise exception 'COORDINATION_RENEWAL_NEW_RUN_REQUIRED'; end if;
       if not exists(select 1 from fcos_release_coordination.registration_runs rr where rr.release_id=r.release_id and rr.run_id=principal->>'runId' and rr.run_attempt=principal->>'runAttempt')
         or coalesce(p->'approvalReceipt'->>'manifestHash','')<>r.manifest_hash
         or p->'approvalReceipt'->>'runId' is distinct from principal->>'runId'
-        or p->'approvalReceipt'->>'epoch' is distinct from c.epoch::text then raise exception 'COORDINATION_APPROVAL_INVALID'; end if;
-      insert into fcos_release_coordination.authorizations(release_id,manifest_hash,epoch,receipt,admitted_at,expires_at)
-      select r.release_id,r.manifest_hash,c.epoch,p->'approvalReceipt',a.observed_at,a.observed_at+interval '24 hours'
-      from fcos_release_coordination.approval_admissions a where a.release_id=r.release_id returning * into auth;
+        or p->'approvalReceipt'->>'runAttempt' is distinct from principal->>'runAttempt'
+        or p->'approvalReceipt'->>'epoch' is distinct from c.epoch::text
+        or coalesce(p->'approvalReceipt'->>'approvedJobId','') !~ '^[1-9][0-9]*$'
+        or (prior_auth.authorization_event_id is not null and
+          (p->'approvalReceipt'->>'protectedJobStartedAt' is null or (p->'approvalReceipt'->>'protectedJobStartedAt')::timestamptz<=prior_auth.expires_at))
+        then raise exception 'COORDINATION_APPROVAL_INVALID'; end if;
+      insert into fcos_release_coordination.authorizations(release_id,run_id,run_attempt,approved_job_id,manifest_hash,epoch,receipt,admitted_at,expires_at)
+      select r.release_id,principal->>'runId',principal->>'runAttempt',(p->'approvalReceipt'->>'approvedJobId')::bigint,r.manifest_hash,c.epoch,p->'approvalReceipt',a.observed_at,a.observed_at+interval '24 hours'
+      from fcos_release_coordination.approval_admissions a where a.release_id=r.release_id and a.run_id=principal->>'runId' and a.run_attempt=principal->>'runAttempt' returning * into auth;
       if not found then raise exception 'COORDINATION_APPROVAL_ADMISSION_REQUIRED'; end if;
     end if;
     if auth.expires_at<=clock_timestamp() then raise exception 'COORDINATION_APPROVAL_EXPIRED'; end if;
     return jsonb_build_object('approval',to_jsonb(auth));
   end if;
   if action='resume' then
-    select * into auth from fcos_release_coordination.authorizations where release_id=r.release_id;
+    select * into auth from fcos_release_coordination.authorizations where release_id=r.release_id order by authorization_event_id desc limit 1;
     if principal->>'kind'<>'github' or principal->>'environment' is distinct from 'fcos-hosted-production-resume'
       or r.scope<>'release' or not found or auth.expires_at<=clock_timestamp()
       or p->'resumeReceipt'->>'manifestHash' is distinct from r.manifest_hash
       or p->'resumeReceipt'->>'runId' is distinct from principal->>'runId'
+      or p->'resumeReceipt'->>'authorizationEventId' is distinct from auth.authorization_event_id::text
       or not exists(select 1 from fcos_release_coordination.registration_runs rr where rr.release_id=r.release_id and rr.run_id=principal->>'runId' and rr.run_attempt=principal->>'runAttempt') then raise exception 'COORDINATION_RESUME_FORBIDDEN'; end if;
-    insert into fcos_release_coordination.resume_admissions(release_id,run_id,receipt)
-      values(r.release_id,principal->>'runId',p->'resumeReceipt') on conflict do nothing;
+    insert into fcos_release_coordination.resume_admissions(release_id,run_id,authorization_event_id,receipt)
+      values(r.release_id,principal->>'runId',auth.authorization_event_id,p->'resumeReceipt') on conflict do nothing;
     return jsonb_build_object('approval',to_jsonb(auth),'resumed',true);
   end if;
   if action in ('begin','claim') then
@@ -314,10 +341,11 @@ begin
     if c.mode='qualification' and (r.scope<>'qualification' or p->>'phase' not in ('preview.create','qualification.stage','qualification.promote','qualification.rollback')) then raise exception 'COORDINATION_QUALIFICATION_ONLY'; end if;
     if c.mode<>'active' and c.mode<>'qualification' then raise exception 'COORDINATION_INACTIVE'; end if;
     if is_production then
-      select * into auth from fcos_release_coordination.authorizations where release_id=r.release_id;
+      select * into auth from fcos_release_coordination.authorizations where release_id=r.release_id order by authorization_event_id desc limit 1;
       if r.scope<>'release' or coalesce(principal->>'environment','') not in ('fcos-production-release','fcos-hosted-production-resume') or not found or auth.expires_at<=clock_timestamp()
         or not exists(select 1 from fcos_release_coordination.registration_runs rr where rr.release_id=r.release_id and rr.run_id=principal->>'runId' and rr.run_attempt=principal->>'runAttempt')
-        or (principal->>'environment'='fcos-hosted-production-resume' and not exists(select 1 from fcos_release_coordination.resume_admissions ra where ra.release_id=r.release_id and ra.run_id=principal->>'runId'))
+        or (principal->>'environment'='fcos-production-release' and auth.run_id is distinct from principal->>'runId')
+        or (principal->>'environment'='fcos-hosted-production-resume' and not exists(select 1 from fcos_release_coordination.resume_admissions ra where ra.release_id=r.release_id and ra.run_id=principal->>'runId' and ra.authorization_event_id=auth.authorization_event_id))
         or not (r.manifest->'authorization'->'actions' ? (p->>'phase')) then raise exception 'COORDINATION_PRODUCTION_APPROVAL_REQUIRED'; end if;
     end if;
     if c.operation_id is not null or exists(select 1 from fcos_release_coordination.imported_uncertainty u left join fcos_release_coordination.import_resolutions ir using(import_id) where ir.import_id is null) then
