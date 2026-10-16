@@ -6,8 +6,7 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { FCOS_CONNECTION_POLICY, fcosConnectionIdentifier } from '../config/fcosConnections.js';
 import { collectLocalReleaseCoordination } from './lib/release-coordination-transport.mjs';
-import { PREVIEW_COORDINATION_CANONICAL } from './lib/preview-email-coordination.mjs';
-import { RELEASE_COORDINATION_DOMAIN, RELEASE_COORDINATION_ROUTES, releaseCoordinationDeadline, releaseCoordinationVariable,
+import { RELEASE_COORDINATION_CANONICAL, RELEASE_COORDINATION_DOMAIN, RELEASE_COORDINATION_ROUTES, releaseCoordinationDeadline, releaseCoordinationVariable,
   releaseCoordinationGrantData, releaseCoordinationMessage, verifyReleaseCoordinationGrant, coordinationDigest, coordinationEqual,
   validateReleaseCoordinationBinding, releaseCoordinationFailure } from './lib/release-coordination.mjs';
 
@@ -31,7 +30,7 @@ function pinned(reference) { need(reference && hash(reference.sha256)); const ra
 export function assertReleaseCoordinatorApproval(a, nonce, scriptSha256, now = Date.now()) {
   need(a?.schemaVersion === 1 && a.kind === 'root_admitted_release_coordination_action' && a.action === 'issue-coordination'
     && a.purpose === RELEASE_COORDINATION_DOMAIN && a.nonce === nonce && uuid(nonce) && a.authorizedBy === fcosConnectionIdentifier('github', 'Required account')
-    && a.scriptSha256 === scriptSha256 && hash(scriptSha256) && a.canonicalHelperSha256 === PREVIEW_COORDINATION_CANONICAL.helperSha256
+    && a.scriptSha256 === scriptSha256 && hash(scriptSha256) && a.canonicalHelperSha256 === RELEASE_COORDINATION_CANONICAL.helperSha256
     && Number.isSafeInteger(a.authorizedAt) && a.authorizedAt <= now && now - a.authorizedAt < 1800000
     && Number.isSafeInteger(a.privateReadinessAt) && a.privateReadinessAt <= now && now - a.privateReadinessAt < 2700000
     && a.authorityBasis?.kind === 'existing_direct_human_authorization' && a.authorityBasis.localReviewGrantsAuthority === false

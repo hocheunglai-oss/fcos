@@ -10,7 +10,7 @@ import { generateKeyPairSync, sign } from 'node:crypto';
 import { FCOS_CONNECTION_POLICY, fcosConnectionIdentifier } from '../config/fcosConnections.js';
 import { FCOS_RELEASE_APPROVAL_POLICY } from '../config/fcosConnections.js';
 import { PREVIEW_COORDINATION_CANONICAL } from '../scripts/lib/preview-email-coordination.mjs';
-import { RELEASE_COORDINATION_DOMAIN, RELEASE_COORDINATION_ROUTES, validateReleaseCoordinationBinding, releaseCoordinationDeadline,
+import { RELEASE_COORDINATION_CANONICAL, RELEASE_COORDINATION_DOMAIN, RELEASE_COORDINATION_ROUTES, validateReleaseCoordinationBinding, releaseCoordinationDeadline,
   releaseCoordinationLeaseHash, releaseCoordinationGrantData, releaseCoordinationMessage, verifyReleaseCoordinationGrant,
   coordinationDigest, retainReleaseCoordinationReadiness, releaseCoordinationEvidenceDeadline } from '../scripts/lib/release-coordination.mjs';
 import { assertReleaseCoordinationTrust, releaseCoordinationRows } from '../scripts/lib/release-coordination-trust.mjs';
@@ -27,7 +27,7 @@ function binding() { return { schemaVersion: 1, route: 'production', repositoryI
 function grant(b = binding()) { return releaseCoordinationGrantData({ schemaVersion: 1, kind: 'fcos_production_coordination_grant', keyId: FCOS_CONNECTION_POLICY.attestation.keyId,
   repository: fcosConnectionIdentifier('github', 'Repository'), teamId: fcosConnectionIdentifier('vercel', 'Team ID'), projectId: fcosConnectionIdentifier('vercel', 'Project ID'),
   binding: b, intentArtifactId: 7, intentArchiveSha256: h,
-  lease: { epoch: PREVIEW_COORDINATION_CANONICAL.epoch, objective: PREVIEW_COORDINATION_CANONICAL.objective, ownerThreadId: PREVIEW_COORDINATION_CANONICAL.ownerThreadId,
+  lease: { epoch: RELEASE_COORDINATION_CANONICAL.epoch, objective: RELEASE_COORDINATION_CANONICAL.objective, ownerThreadId: RELEASE_COORDINATION_CANONICAL.ownerThreadId,
     operationId: b.operationId, bindingSha256: releaseCoordinationLeaseHash(b), leaseId: '11111111-1111-4111-8111-111111111111',
     coordinationOnly: true, providerAuthorityGranted: false, uncertainOutcomeRequiresReadback: true }, consumptionSha256: h, issuedAt: now, expiresAt: now + 300000,
   coordinationOnly: true, providerAuthorityGranted: false }); }
@@ -95,16 +95,37 @@ test('actual metadata requires protected main, exact first job, personal approva
 });
 test('local action data requires exact purpose, original action/private windows and independent review references', async () => {
   const a = { schemaVersion: 1, kind: 'root_admitted_release_coordination_action', action: 'issue-coordination', purpose: RELEASE_COORDINATION_DOMAIN,
-    nonce: '11111111-1111-4111-8111-111111111111', authorizedBy: 'hocheunglai-oss', scriptSha256: h, canonicalHelperSha256: PREVIEW_COORDINATION_CANONICAL.helperSha256,
+    nonce: '11111111-1111-4111-8111-111111111111', authorizedBy: 'hocheunglai-oss', scriptSha256: h, canonicalHelperSha256: RELEASE_COORDINATION_CANONICAL.helperSha256,
     authorizedAt: now - 1, privateReadinessAt: now - 1, authorityBasis: { kind: 'existing_direct_human_authorization', localReviewGrantsAuthority: false, citations: [{ path: '/fixture', sha256: h }] },
     rootReview: { sha256: h }, independentReview: { sha256: 'f'.repeat(64) }, binding: binding() };
   assertReleaseCoordinatorApproval(a, a.nonce, h, now);
   for (const change of [{ authorizedAt: now - 1800000 }, { privateReadinessAt: now - 2700000 }, { authorizedAt: now + 1 },
-    { authorizedBy: 'bot' }, { purpose: 'foreign' }, { scriptSha256: 'e'.repeat(64) }, { independentReview: a.rootReview }]) assert.throws(() => assertReleaseCoordinatorApproval({ ...a, ...change }, a.nonce, h, now));
+    { authorizedBy: 'bot' }, { purpose: 'foreign' }, { scriptSha256: 'e'.repeat(64) }, { independentReview: a.rootReview },
+    { canonicalHelperSha256: '2bb8591f79b76b92f917ae7fcc1720d73757b613771812e9e220db015bdd1a18' }]) assert.throws(() => assertReleaseCoordinatorApproval({ ...a, ...change }, a.nonce, h, now));
   assert.equal((await releaseCoordinatorMain(['--plan'])).mutations, 0);
   assert.equal(coordinationDigest(envelope()).length, 64);
 });
 
+
+
+test('release issuer, signed lease and Python ledger independently agree on the accepted current guard', () => {
+  assert.notEqual(RELEASE_COORDINATION_CANONICAL, PREVIEW_COORDINATION_CANONICAL);
+  assert.deepEqual(RELEASE_COORDINATION_CANONICAL, PREVIEW_COORDINATION_CANONICAL);
+  assert.equal(RELEASE_COORDINATION_CANONICAL.helperSha256, '24758c4191afae79fa4b149a166c450ac1cac20951a5f648f3cc3853969aa31d');
+  for (const path of ['scripts/release-coordinator-local.mjs', 'scripts/lib/release-coordination.mjs']) {
+    assert.doesNotMatch(readFileSync(new URL('../' + path, import.meta.url), 'utf8'), /import[^;]+preview-email-coordination\.mjs/);
+  }
+  const script = new URL('../scripts/lib/release-coordination-ledger.py', import.meta.url).pathname;
+  const python = `import importlib.util,json,sys
+s=importlib.util.spec_from_file_location('offline_release_ledger',sys.argv[1]);m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
+print(json.dumps({'helperSha256':m.HELPER_SHA256,'ownerThreadId':m.OWNER,'helper':str(m.HELPER.relative_to(m.BASE))}))`;
+  const actual = JSON.parse(execFileSync('/usr/bin/python3', ['-I', '-B', '-c', python, script], { encoding: 'utf8', timeout: 5000 }));
+  assert.deepEqual(actual, { helperSha256: RELEASE_COORDINATION_CANONICAL.helperSha256,
+    ownerThreadId: RELEASE_COORDINATION_CANONICAL.ownerThreadId,
+    helper: 'public-runtime-material-upload-cancellation-v1/coordinator_guard.py' });
+  assert.deepEqual(Object.keys(grant().lease), ['epoch', 'objective', 'ownerThreadId', 'operationId', 'bindingSha256', 'leaseId',
+    'coordinationOnly', 'providerAuthorityGranted', 'uncertainOutcomeRequiresReadback']);
+});
 
 test('raw issuer source includes workflow/action/package controls and detects changes hidden from Git status', () => {
   const cwd = mkdtempSync(join(tmpdir(), 'fcos-release-source-'));
