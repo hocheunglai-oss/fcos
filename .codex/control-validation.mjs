@@ -20,6 +20,11 @@ export function verifyCodexControls(root) {
   }
   if (!/\[agents\]\s*max_concurrent_threads_per_session\s*=\s*2\b/.test(config)) throw new Error('FCOS agent limit must remain two.');
   if (/^\s*(?:password|access_token|refresh_token|api_key|client_secret)\s*=/im.test(config)) throw new Error('Credential assignments are forbidden in FCOS controls.');
+  const packageData = JSON.parse(read('package.json'));
+  if (packageData?.scripts?.['verify:controls'] !== 'node scripts/fcos-project-doctor.mjs --controls'
+      || packageData?.scripts?.['release:readiness'] !== 'node scripts/fcos-project-doctor.mjs --release-readiness') {
+    throw new Error('FCOS control diagnostic entrypoints are invalid.');
+  }
   if (Object.keys(policy.files || {}).length !== CONTROL_FILES.length) throw new Error('FCOS control file inventory is invalid.');
   for (const file of CONTROL_FILES) {
     if (createHash('sha256').update(read(file)).digest('hex') !== policy.files[file]) throw new Error(`FCOS control revision mismatch: ${file}.`);
