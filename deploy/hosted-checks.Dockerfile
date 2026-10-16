@@ -1,7 +1,7 @@
 # Build once from the admitted controller, qualify it, then configure its GHCR
 # digest. Release workflows refuse mutable tags. This image contains no secrets.
 FROM node:24.18.0-bookworm
-RUN apt-get update && apt-get install -y --no-install-recommends python3 git postgresql postgresql-client libpq-dev \
+RUN apt-get update && apt-get install -y --no-install-recommends python3 git postgresql postgresql-client libpq-dev zip unzip \
     && rm -rf /var/lib/apt/lists/*
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN npm exec --yes --package=playwright@1.62.1 -- playwright install --with-deps chromium chrome \

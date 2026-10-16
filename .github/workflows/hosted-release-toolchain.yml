@@ -1,6 +1,7 @@
 # One-time setup only. The dispatcher retains the canonical provider-write lease
 # through registry readback. Disable and inventory this writer before cutover.
 name: FCOS hosted verification toolchain setup
+run-name: FCOS toolchain ${{ inputs.intent_sha256 }}
 'on':
   workflow_dispatch:
     inputs:
@@ -26,6 +27,7 @@ jobs:
     outputs:
       image_id: ${{ steps.build.outputs.image_id }}
       archive_sha256: ${{ steps.build.outputs.archive_sha256 }}
+      guard_sha256: ${{ steps.build.outputs.guard_sha256 }}
     env:
       SOURCE_SHA: ${{ inputs.source_sha }}
       INTENT_SHA256: ${{ inputs.intent_sha256 }}
@@ -60,7 +62,9 @@ jobs:
           test "$(cat toolchain-output/node-version.txt)" = 'v24.18.0'
           docker save "$image_id" | gzip -1 > toolchain-output/image.tar.gz
           archive_sha256=$(sha256sum toolchain-output/image.tar.gz | cut -d' ' -f1)
-          printf 'image_id=%s\narchive_sha256=%s\n' "$image_id" "$archive_sha256" >> "$GITHUB_OUTPUT"
+          cp scripts/hosted-toolchain-admission.mjs toolchain-output/admission.mjs
+          guard_sha256=$(sha256sum toolchain-output/admission.mjs | cut -d' ' -f1)
+          printf 'image_id=%s\narchive_sha256=%s\nguard_sha256=%s\n' "$image_id" "$archive_sha256" "$guard_sha256" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: fcos-toolchain-setup-image
@@ -73,12 +77,14 @@ jobs:
     timeout-minutes: 15
     permissions:
       actions: read
+      contents: read
       packages: write
     env:
       SOURCE_SHA: ${{ inputs.source_sha }}
       INTENT_SHA256: ${{ inputs.intent_sha256 }}
       IMAGE_ID: ${{ needs.build.outputs.image_id }}
       ARCHIVE_SHA256: ${{ needs.build.outputs.archive_sha256 }}
+      GUARD_SHA256: ${{ needs.build.outputs.guard_sha256 }}
       DOCKER_CONFIG: ${{ runner.temp }}/fcos-toolchain-registry
     steps:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
@@ -92,12 +98,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$IMAGE_ID" =~ ^sha256:[a-f0-9]{64}$ && "$ARCHIVE_SHA256" =~ ^[a-f0-9]{64}$ ]]
+          if [[ ! "$IMAGE_ID" =~ ^sha256:[a-f0-9]{64}$ || ! "$ARCHIVE_SHA256" =~ ^[a-f0-9]{64}$ || ! "$GUARD_SHA256" =~ ^[a-f0-9]{64}$ ]]; then exit 1; fi
           printf '%s  toolchain-output/image.tar.gz\n' "$ARCHIVE_SHA256" | sha256sum --check --strict
+          printf '%s  toolchain-output/admission.mjs\n' "$GUARD_SHA256" | sha256sum --check --strict
           gzip -dc toolchain-output/image.tar.gz | docker load
           test "$(docker image inspect "$IMAGE_ID" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$SOURCE_SHA"
           test "$(docker image inspect "$IMAGE_ID" --format '{{.Config.User}}')" = '1001:1001'
           test "$(docker image inspect "$IMAGE_ID" --format '{{.Os}}/{{.Architecture}}')" = 'linux/amd64'
+      - name: Reject a consumed publication intent using complete hosted history
+        run: node toolchain-output/admission.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       - name: Publish exact image once and read immutable registry digest
         shell: bash
         env:
