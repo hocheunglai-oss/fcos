@@ -85,7 +85,6 @@ jobs:
       IMAGE_ID: ${{ needs.build.outputs.image_id }}
       ARCHIVE_SHA256: ${{ needs.build.outputs.archive_sha256 }}
       GUARD_SHA256: ${{ needs.build.outputs.guard_sha256 }}
-      DOCKER_CONFIG: ${{ runner.temp }}/fcos-toolchain-registry
     steps:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
@@ -113,6 +112,7 @@ jobs:
         shell: bash
         env:
           REGISTRY_TOKEN: ${{ github.token }}
+          DOCKER_CONFIG: ${{ runner.temp }}/fcos-toolchain-registry
         run: |
           set -euo pipefail
           mkdir -p "$DOCKER_CONFIG"

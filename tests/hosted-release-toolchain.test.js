@@ -22,6 +22,31 @@ test('toolchain setup is opt-in, protected, exact-source and first-attempt only'
   }
 });
 
+test('runner context is scoped to steps across all hosted workflow environments', () => {
+  // GitHub evaluates workflow/job env before assigning a runner. See its context-availability table.
+  const workflowContexts = new Set(['github', 'inputs', 'secrets', 'vars']);
+  const jobContexts = new Set([...workflowContexts, 'matrix', 'needs', 'strategy']);
+  function assertContexts(env, allowed, location) {
+    for (const value of Object.values(env || {})) {
+      for (const expression of String(value).matchAll(/\$\{\{([\s\S]*?)\}\}/g)) {
+        const code = expression[1].replace(/'(?:[^']|'')*'/g, '');
+        for (const context of code.matchAll(/(?<![\w.-])([A-Za-z_][\w-]*)\s*[.[]/g)) {
+          assert.ok(allowed.has(context[1]), `${location} cannot use ${context[1]} context`);
+        }
+      }
+    }
+  }
+  for (const file of ['hosted-release-toolchain.yml', 'hosted-release-controller.yml', 'hosted-release.yml', 'quality.yml']) {
+    const definition = yaml.load(readFileSync(new URL(`../.github/workflows/${file}`, import.meta.url), 'utf8'));
+    assertContexts(definition.env, workflowContexts, `${file} env`);
+    for (const [id, job] of Object.entries(definition.jobs)) assertContexts(job.env, jobContexts, `${file} jobs.${id}.env`);
+    assert.throws(() => assertContexts({ DOCKER_CONFIG: '${{ runner.temp }}/registry' }, jobContexts, file), /cannot use runner context/);
+  }
+  assert.equal(workflow.jobs.publish.env.DOCKER_CONFIG, undefined);
+  const publisher = workflow.jobs.publish.steps.find(step => step.env?.REGISTRY_TOKEN);
+  assert.equal(publisher.env.DOCKER_CONFIG, '${{ runner.temp }}/fcos-toolchain-registry');
+});
+
 test('build cannot receive registry authority and publisher never executes image code', () => {
   const { build, publish } = workflow.jobs;
   assert.deepEqual(build.permissions, { contents: 'read' });
