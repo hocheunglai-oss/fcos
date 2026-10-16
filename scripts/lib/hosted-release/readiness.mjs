@@ -187,9 +187,10 @@ export async function verifyReadinessDeterministic({ receipt, admission, reposit
   return true;
 }
 
-export async function consumeHostedReadiness({ admission, candidateSha, read, now = Date.now() }) {
+export async function consumeHostedReadiness({ admission, candidateSha, read, now = Date.now }) {
   if (!admission) return { status: 'disabled', accepted: false };
   need(sha(candidateSha));
+  const clock = typeof now === 'function' ? now : () => now;
   const prefix = `/repos/${admission.repository}`;
   const [repository, branch, listed] = await Promise.all([read(prefix),read(`${prefix}/branches/main`),
     read(`${prefix}/actions/artifacts?name=${readinessArtifactName(candidateSha)}&per_page=20`)]);
@@ -207,8 +208,10 @@ export async function consumeHostedReadiness({ admission, candidateSha, read, no
       if (matches.length === 1 && matches[0].status !== 'completed') continue;
       need(matches.length === 1); const job = matches[0]; validateJob(job, run, READINESS_JOB);
       const bytes = await read(`${prefix}/actions/artifacts/${artifact.id}/zip`, { bytes: true }); validateArtifact(artifact, run, job, bytes);
-      const receipt = readReadinessArchive(bytes, READINESS_FILE); validateReadinessBinding({ receipt, admission, candidateSha, now });
-      await Promise.all([verifyReadinessBrowsers({ receipt, admission, repository, read, now }), verifyReadinessDeterministic({ receipt, admission, repository, read })]);
+      const receipt = readReadinessArchive(bytes, READINESS_FILE); validateReadinessBinding({ receipt, admission, candidateSha, now: clock() });
+      await Promise.all([verifyReadinessBrowsers({ receipt, admission, repository, read, now: clock() }), verifyReadinessDeterministic({ receipt, admission, repository, read })]);
+      // Download latency and rate limiting do not extend the original proof TTL.
+      validateReadinessBinding({ receipt, admission, candidateSha, now: clock() });
       return { status: 'passed', accepted: true, runId: run.id, artifactId: artifact.id, artifactSha256: readinessDigest(bytes), manifestHash: receipt.manifestHash };
     } catch { invalid = true; }
   }
@@ -246,7 +249,7 @@ export async function waitForHostedReadiness({ admission, candidateSha, read, no
   const start = now(); let result;
   const boundedRead = createReadinessReader({ read, now, wait });
   for (let attempt = 0; attempt < attempts; attempt++) {
-    result = await consumeHostedReadiness({ admission, candidateSha, read: boundedRead, now: now() });
+    result = await consumeHostedReadiness({ admission, candidateSha, read: boundedRead, now });
     if (result.accepted) return result;
     if (attempt + 1 === attempts || now() - start >= 3600000) return { ...result, code: 'HOSTED_READINESS_TIMEOUT', dependencyCode: result.code };
     await wait(30000);

@@ -20,6 +20,12 @@ export async function produceHostedReadiness({ manifest, coordinator, github, ad
   const repository = await github.identity(), read = createReadinessReader({ read: github.read, now });
   await Promise.all([verifyReadinessBrowsers({ receipt, admission, repository, read, now: now() }),
     verifyReadinessDeterministic({ receipt, admission, repository, read })]);
+  const expired = [], decisionAt = now();
+  for (const id of manifest.requiredChecks) {
+    try { assertBoundEvidence(receipt.checks[id], manifest, id, { now: decisionAt }); }
+    catch (error) { if (error.code !== 'LIVE_EVIDENCE_EXPIRED') throw error; expired.push(id); }
+  }
+  if (expired.length) return { status: 'waiting_dependency', accepted: false, missing: expired };
   return { status: 'passed', accepted: true, receipt };
 }
 

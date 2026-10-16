@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { load } from 'js-yaml';
@@ -262,4 +262,42 @@ test('new shared validator action is immutable while the legacy consumer action 
  const quality=load(readFileSync(new URL('../.github/workflows/quality.yml',import.meta.url),'utf8'));
  assert.equal(quality.jobs['hosted-readiness'].steps[0].uses,'actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b');
  assert.equal(quality.jobs['authenticated-browser'].steps.at(-1).uses,'actions/github-script@v7');
+});
+
+
+function nearExpiryFixture() {
+  const f = fixture(), capturedAt = f.iso(-1790000);
+  f.checks.normal_role.capturedAt = capturedAt;
+  f.browserReports[1].capturedAt = capturedAt; f.browserReports[1].completedAt = capturedAt;
+  Object.assign(f.jobs.jobs[1], { started_at: f.iso(-1800000), completed_at: f.iso(-1780000) });
+  f.artifacts.artifacts[1].created_at = f.iso(-1780500); f.repack();
+  let clock = f.now;
+  return { ...f, clock: () => clock, delayedRead: async (path, options) => {
+    const value = await f.read(path, options);
+    if (options?.bytes && path.endsWith('/artifacts/32/zip')) clock += 15000;
+    return value;
+  } };
+}
+
+test('consumer rechecks original proof expiry at acceptance after delayed archive download', async () => {
+  const f = nearExpiryFixture(), capturedAt = f.checks.normal_role.capturedAt;
+  const result = await waitForHostedReadiness({ admission: f.admission, candidateSha: f.manifest.candidate.sha,
+    read: f.delayedRead, now: f.clock, attempts: 1 });
+  assert.equal(f.clock() - f.now, 15000); assert.equal(result.accepted, false);
+  assert.equal(result.status, 'waiting_dependency'); assert.equal(result.code, 'HOSTED_READINESS_TIMEOUT');
+  assert.equal(result.dependencyCode, 'HOSTED_READINESS_INVALID');
+  assert.equal(f.checks.normal_role.capturedAt, capturedAt);
+});
+
+test('producer withholds receipt and final-gate readiness when an original proof expires during downloads', async t => {
+  const f = nearExpiryFixture(), root = mkdtempSync(join(tmpdir(), 'fcos-readiness-clock-')); t.after(() => rmSync(root, { recursive: true, force: true }));
+  const output = join(root, 'receipt.json'), githubOutput = join(root, 'github-output'), capturedAt = f.checks.normal_role.capturedAt;
+  const env = { FCOS_RELEASE_MANIFEST: JSON.stringify(f.manifest), FCOS_HOSTED_READINESS_ENABLED: 'true', FCOS_ADMITTED_RELEASE_SETUP: JSON.stringify(f.setup),
+    FCOS_ADMITTED_RELEASE_SETUP_SHA256: digest(f.setup), FCOS_HOSTED_READINESS_ACTIVATION: JSON.stringify(f.activation),
+    GITHUB_REPOSITORY: f.repository.full_name, GITHUB_REPOSITORY_ID: String(f.repository.id), GITHUB_OUTPUT: githubOutput, FCOS_RELEASE_OUTPUT: output };
+  const result = await hostedReadinessEntrypoint({ env, now: f.clock,
+    sessionFactory: async () => ({ coordinator: f.coordinator, github: { ...f.github, read: f.delayedRead } }) });
+  assert.equal(result.accepted, false); assert.equal(result.status, 'waiting_dependency'); assert.deepEqual(result.missing, ['normal_role']);
+  assert.match(readFileSync(githubOutput, 'utf8'), /ready=false/);
+  assert.equal(existsSync(output), false); assert.equal(f.checks.normal_role.capturedAt, capturedAt);
 });
