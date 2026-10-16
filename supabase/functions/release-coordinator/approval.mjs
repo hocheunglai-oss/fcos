@@ -98,7 +98,7 @@ export function validateGithubQualification({principal,policy,repository,branch,
   const workflows=run.referenced_workflows?.filter(w=>w.path===q.jobWorkflowRef&&w.sha===q.jobWorkflowSha)??[];
   need(run.id===Number(principal.runId)&&run.run_attempt===1&&run.status==='in_progress'&&run.conclusion===null
     &&run.event==='workflow_dispatch'&&run.head_branch===branch.name&&run.head_sha===q.bootstrapSha
-    &&run.path.split('@')[0]==='.github/workflows/authenticated-release.yml'
+    &&['.github/workflows/authenticated-release.yml',`.github/workflows/authenticated-release.yml@${branch.name}`].includes(run.path)
     &&run.repository?.full_name===q.repository&&String(run.repository.id)===q.repositoryId
     &&run.head_repository?.full_name===q.repository&&String(run.head_repository.id)===q.repositoryId&&workflows.length===1
     &&operator.login===fcosConnectionIdentifier('github','Required account')&&positive(operator.id)

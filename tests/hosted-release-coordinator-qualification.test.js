@@ -137,9 +137,12 @@ test('manifest setup, candidate, controller, both qualification modes and exact 
 });
 
 test('each request rechecks actual protected branch, run and immutable reusable controller before SQL',async t=>{
-  const f=await fixture(t);await f.register();const original=structuredClone(f.metadata);
+  const f=await fixture(t);await f.register();
+  f.metadata.run.path=`.github/workflows/authenticated-release.yml@${REF.slice(11)}`;
+  assert.equal((await f.client.snapshot(f.scope)).registration.manifest_hash,f.scope.manifestHash);
+  const original=structuredClone(f.metadata);
   for(const mutate of [m=>{m.branch.commit.sha=S;},m=>{m.branch.protected=false;},m=>{m.protection.allow_force_pushes.enabled=true;},
-    m=>{m.run.head_sha=S;},m=>{m.run.run_attempt=2;},m=>{m.run.status='completed';},m=>{m.run.referenced_workflows[0].sha=B;},
+    m=>{m.run.head_sha=S;},m=>{m.run.path='.github/workflows/authenticated-release.yml@other';},m=>{m.run.run_attempt=2;},m=>{m.run.status='completed';},m=>{m.run.referenced_workflows[0].sha=B;},
     m=>{m.run.actor={login:'other',id:10};},m=>{m.run.repository={id:78,full_name:REPO};}]) {
     Object.assign(f.metadata,structuredClone(original));mutate(f.metadata);
     await assert.rejects(f.client.begin({...f.scope,phase:'preview.create',operationId:'never-dispatched',requestHash:H}),/QUALIFICATION_/);
