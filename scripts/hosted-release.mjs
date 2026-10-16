@@ -6,7 +6,7 @@ import { assertHostedController, assertHostedSetup, assertSourceAdmission } from
 import { hostedSession, readManifest, writeJson, workflowOutput } from './lib/hosted-release/session.mjs';
 import { prepareCandidateChecks, assertPublicBuildInputs } from './lib/hosted-release/candidate-bootstrap.mjs';
 import { runReleaseChecks } from './lib/hosted-release/checks.mjs';
-import { collectAcceptance, executeHostedProduction, preparePreview, reconcilePending, safeFailure } from './lib/hosted-release/controller.mjs';
+import { collectAcceptance, executeHostedProduction, preparePreview, reconcilePending, safeFailure, terminalReleaseStatus } from './lib/hosted-release/controller.mjs';
 import { publishDeterministicGroup } from './lib/hosted-release/artifacts.mjs';
 import { publishDependencies } from './lib/hosted-release/dependency-publisher.mjs';
 import { publishBrowser } from './lib/hosted-release/browser-publisher.mjs';
@@ -29,7 +29,7 @@ export function verificationPlan(snapshot, manifest) {
 
 /** One CLI owns every hosted entrypoint. It never reads the Mac keychain or executes
  * candidate JavaScript in a credential-bearing job. No command retries a write. */
-export async function hostedRelease(command, { env = process.env, wait = sleep, now = Date.now } = {}) {
+export async function hostedRelease(command, { env = process.env, wait = sleep, now = Date.now, sessionFactory = hostedSession } = {}) {
   if (!commands.has(command)) fail('UNKNOWN_RELEASE_COMMAND');
   const manifest = readManifest(env.FCOS_RELEASE_MANIFEST), candidateDirectory = resolve(env.FCOS_CANDIDATE_DIRECTORY || 'candidate');
   const controllerDirectory = resolve(env.FCOS_CONTROLLER_DIRECTORY || 'controller'), phase = env.FCOS_VERIFICATION_PHASE || 'before';
@@ -53,7 +53,7 @@ export async function hostedRelease(command, { env = process.env, wait = sleep, 
   const jobName = command === 'prepare' ? 'release / prepare' : command === 'approve' ? `release / production / ${binding.manifestHash}`
     : command === 'execute' ? `release / execute / ${binding.manifestHash}`
     : command === 'browser' ? `release / browser / ${phase} / ${env.FCOS_BROWSER_MODE}` : `release / ${command}${['observe','publish','ready'].includes(command) ? ` / ${phase}` : ''}`;
-  const session = await hostedSession({ manifest, candidateDirectory, controllerDirectory, env, jobName, requireOidc: command !== 'browser' });
+  const session = await sessionFactory({ manifest, candidateDirectory, controllerDirectory, env, jobName, requireOidc: command !== 'browser' });
   const { coordinator, github, admission } = session;
   if (command === 'reconcile') {
     const { provider } = createLiveCollector({ session, candidateDirectory });
@@ -63,6 +63,16 @@ export async function hostedRelease(command, { env = process.env, wait = sleep, 
   if (command === 'prepare') {
     await coordinator.register({ ...binding, manifest });
     const snapshot = await coordinator.snapshot(binding);
+    const terminal = terminalReleaseStatus(snapshot, manifest);
+    if (terminal) {
+      writeJson('check-cache.json', { manifestHash: binding.manifestHash, checks: [] });
+      workflowOutput({ manifest_hash: binding.manifestHash, candidate_sha: manifest.candidate.sha, controller_sha: manifest.controller.sha,
+        release_id: manifest.releaseId, source_profile: manifest.candidate.sourceProfile, execution_mode: manifest.executionMode,
+        terminal: 'true', terminal_status: terminal, groups: JSON.stringify({ group: [] }), has_checks: 'false',
+        browser_matrix: JSON.stringify({ mode: [] }), has_browsers: 'false', dependencies_required: 'false', approved: 'false' }, env);
+      if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, `\nSaved release outcome: ${terminal}. Recovery requires no repeated release work.\n`);
+      return output({ status: terminal, resumed: true, manifestHash: binding.manifestHash, groups: [], originalApproval: snapshot.approval || null });
+    }
     writeJson('check-cache.json', { manifestHash: binding.manifestHash, checks: Object.entries(snapshot.checks || {}).flatMap(([id,value]) => {
       const proof = value.evidence || value;
       try { assertBoundEvidence(proof, manifest, id); return proof.kind === 'deterministic' && proof.result?.rawCheck ? [proof.result.rawCheck] : []; } catch { return []; }
@@ -72,7 +82,7 @@ export async function hostedRelease(command, { env = process.env, wait = sleep, 
     const approved = snapshot.approval?.manifest_hash === binding.manifestHash && Date.parse(snapshot.approval.expires_at) > now();
     workflowOutput({ manifest_hash: binding.manifestHash, candidate_sha: manifest.candidate.sha, controller_sha: manifest.controller.sha,
       release_id: manifest.releaseId, source_profile: manifest.candidate.sourceProfile, groups: JSON.stringify({ group: groups }),
-      ...verificationPlan(snapshot,manifest), has_checks: String(groups.length > 0), approved: String(approved), execution_mode: manifest.executionMode }, env);
+      ...verificationPlan(snapshot,manifest), terminal: 'false', terminal_status: '', has_checks: String(groups.length > 0), approved: String(approved), execution_mode: manifest.executionMode }, env);
     if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, renderReleaseSummary(manifest, snapshot.checks));
     return output({ status: 'prepared', manifestHash: binding.manifestHash, groups, originalApproval: snapshot.approval || null });
   }

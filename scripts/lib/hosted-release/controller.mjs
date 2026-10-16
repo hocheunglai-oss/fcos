@@ -50,9 +50,20 @@ async function evidenceWrite(coordinator, manifest, key, result, now) {
   await coordinator.appendEvidence({ ...bound(manifest), key, evidence: { result, capturedAt: new Date(now()).toISOString() } });
 }
 
+export function terminalReleaseStatus(snapshot, manifest) {
+  if (!['complete', 'rolled_back'].includes(snapshot?.status)) return null;
+  const registration = snapshot.registration, manifestHash = digest(manifest);
+  if (snapshot.finished !== true || registration?.release_id !== manifest.releaseId
+    || registration.epoch !== manifest.epoch || registration.manifest_hash !== manifestHash
+    || !registration.manifest || digest(registration.manifest) !== manifestHash) fail('TERMINAL_RELEASE_BINDING', 'release.recovery');
+  return snapshot.status;
+}
+
 export async function preparePreview({ manifest, coordinator, provider, now = Date.now }) {
   validateManifest(manifest);
   await coordinator.register({ ...bound(manifest), manifest });
+  const terminal = terminalReleaseStatus(await coordinator.snapshot(bound(manifest)), manifest);
+  if (terminal) return { status: terminal, resumed: true };
   await provider.admit(manifest, 'preview');
   const preview = await consequential({ manifest, coordinator, phase: 'preview.create', request: { candidate: manifest.candidate, target: 'preview' },
     submit: context => provider.createPreview(manifest, context), readback: context => provider.discover(manifest, 'preview', context) });
