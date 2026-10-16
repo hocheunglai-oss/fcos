@@ -5,7 +5,7 @@ import { CONTROLLER_WORKFLOW, digest, fail, hash, validateManifest } from './con
 export function assertHostedJob({ manifest, run, job, expectedJobName, controllerSha, artifact }) {
   validateManifest(manifest);
   const source = qualificationSourceBinding(manifest);
-  if (source && (run?.head_sha !== source.bootstrapSha || run.run_attempt !== 1 || run.path !== '.github/workflows/authenticated-release.yml')) fail('PRODUCER_CONTROLLER_BINDING', 'proof.publish');
+  if (source && (run?.head_sha !== source.bootstrapSha || run.run_attempt !== 1 || !['.github/workflows/authenticated-release.yml', `.github/workflows/authenticated-release.yml@${source.ref.slice('refs/heads/'.length)}`].includes(run.path))) fail('PRODUCER_CONTROLLER_BINDING', 'proof.publish');
   const reusable = run?.referenced_workflows?.filter(row => row.path === `${manifest.targets.repository}/${CONTROLLER_WORKFLOW}@${manifest.controller.sha}`);
   if (reusable?.length !== 1 || reusable[0].sha !== manifest.controller.sha) fail('PRODUCER_CONTROLLER_BINDING', 'proof.publish');
   if (controllerSha !== manifest.controller.sha || run?.repository?.full_name !== manifest.targets.repository

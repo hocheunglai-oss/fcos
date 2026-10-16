@@ -92,7 +92,7 @@ export async function validateQualificationRun({ github, source, run, env = proc
     || protection?.enforce_admins?.enabled !== true || protection.allow_force_pushes?.enabled !== false || protection.allow_deletions?.enabled !== false
     || run?.repository?.full_name !== repository || String(run.repository.id) !== env.GITHUB_REPOSITORY_ID || run.head_repository?.full_name !== repository
     || String(run.id) !== env.GITHUB_RUN_ID || run.head_branch !== branchName || run.head_sha !== source.bootstrapSha
-    || run.path !== '.github/workflows/authenticated-release.yml' || run.event !== 'workflow_dispatch' || run.run_attempt !== 1
+    || !['.github/workflows/authenticated-release.yml', `.github/workflows/authenticated-release.yml@${branchName}`].includes(run.path) || run.event !== 'workflow_dispatch' || run.run_attempt !== 1
     || run.status !== 'in_progress' || run.conclusion !== null || references?.length !== 1 || references[0].sha !== source.controllerSha
     || env.GITHUB_ACTOR !== actor || !/^[1-9][0-9]*$/.test(env.GITHUB_ACTOR_ID || '')
     || run.actor?.login !== actor || String(run.actor.id) !== env.GITHUB_ACTOR_ID

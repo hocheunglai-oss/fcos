@@ -107,7 +107,8 @@ test('normal main dispatch retains its existing identity and needs no qualificat
 test('live qualification source refuses protection, run, operator or immutable-controller drift', async t => {
   const f = fixture(t);
   assert.equal(await validateQualificationRun({ github: f.github, source: f.source, run: f.run, env: f.env }), true);
-  for (const change of [{ head_sha: 'e'.repeat(40) }, { run_attempt: 2 }, { conclusion: 'success' }, { status: 'completed' },
+  assert.equal(await validateQualificationRun({ github: f.github, source: f.source, run: { ...f.run, path: `${f.run.path}@${f.run.head_branch}` }, env: f.env }), true);
+  for (const change of [{ path: `${f.run.path}@main` }, { path: `${f.run.path}@${f.source.ref}` }, { head_sha: 'e'.repeat(40) }, { run_attempt: 2 }, { conclusion: 'success' }, { status: 'completed' },
     { path: '.github/workflows/hosted-release.yml' }, { repository: { full_name: repository, id: 1 } },
     { triggering_actor: { login: 'someone', id: 12345 } }, { referenced_workflows: [] },
     { referenced_workflows: [...f.run.referenced_workflows, ...f.run.referenced_workflows] }]) {
@@ -156,7 +157,8 @@ test('qualification artifact publisher accepts only exact bootstrap job/source w
   const artifact = { id: 19, expired: false, workflow_run: { id: run.id, head_sha: B }, digest: `sha256:${H}`, archiveSha256: H, created_at: end };
   const args = { manifest: f.manifest, run, job, artifact, expectedJobName: job.name, controllerSha: f.controllerSha };
   assert.equal(assertHostedJob(args), true);
-  for (const change of [{ head_branch: 'main' }, { head_sha: 'e'.repeat(40) }, { run_attempt: 2 }, { path: '.github/workflows/hosted-release.yml' }]) {
+  assert.equal(assertHostedJob({ ...args, run: { ...run, path: `${run.path}@${run.head_branch}` } }), true);
+  for (const change of [{ path: `${run.path}@main` }, { path: `${run.path}@${f.source.ref}` }, { head_branch: 'main' }, { head_sha: 'e'.repeat(40) }, { run_attempt: 2 }, { path: '.github/workflows/hosted-release.yml' }]) {
     assert.throws(() => assertHostedJob({ ...args, run: { ...run, ...change } }));
   }
   const normal = fixtureManifest(); normal.controller.sha = f.controllerSha;
