@@ -7,8 +7,37 @@ name: FCOS admitted hosted release controller
       manifest:
         required: true
         type: string
+    # Named slots admit environment-only secrets without inheriting other credentials.
     secrets:
+      FCOS_E2E_VERCEL_BYPASS:
+        required: true
+      FCOS_HOSTED_FCUNO_READ_TOKEN:
+        required: true
       FCOS_HOSTED_GITHUB_READ_TOKEN:
+        required: true
+      FCOS_HOSTED_NORMAL_EMAIL:
+        required: true
+      FCOS_HOSTED_NORMAL_PASSWORD:
+        required: true
+      FCOS_HOSTED_PRESERVATION_DATABASE_URL:
+        required: true
+      FCOS_HOSTED_RESTRICTED_EMAIL:
+        required: true
+      FCOS_HOSTED_RESTRICTED_PASSWORD:
+        required: true
+      FCOS_HOSTED_RUNTIME_EMAIL:
+        required: true
+      FCOS_HOSTED_RUNTIME_PASSWORD:
+        required: true
+      FCOS_HOSTED_SALESFORCE_READ_TOKEN:
+        required: true
+      FCOS_HOSTED_SCHEMA_DATABASE_URL:
+        required: true
+      FCOS_HOSTED_VERCEL_READ_TOKEN:
+        required: true
+      FCOS_HOSTED_VERCEL_TOKEN:
+        required: true
+      FCOS_PRODUCTION_VERIFICATION_BYPASS:
         required: false
 permissions: {}
 env:

@@ -10,6 +10,15 @@ const require = createRequire(import.meta.url);
 const yaml = require('js-yaml');
 const template = readFileSync(new URL('../.github/qualification/hosted-release-bootstrap.yml', import.meta.url), 'utf8');
 const definition = yaml.load(template);
+const environmentSecrets = [
+  'FCOS_E2E_VERCEL_BYPASS', 'FCOS_HOSTED_FCUNO_READ_TOKEN', 'FCOS_HOSTED_GITHUB_READ_TOKEN',
+  'FCOS_HOSTED_NORMAL_EMAIL', 'FCOS_HOSTED_NORMAL_PASSWORD', 'FCOS_HOSTED_PRESERVATION_DATABASE_URL',
+  'FCOS_HOSTED_RESTRICTED_EMAIL', 'FCOS_HOSTED_RESTRICTED_PASSWORD', 'FCOS_HOSTED_RUNTIME_EMAIL',
+  'FCOS_HOSTED_RUNTIME_PASSWORD', 'FCOS_HOSTED_SALESFORCE_READ_TOKEN', 'FCOS_HOSTED_SCHEMA_DATABASE_URL',
+  'FCOS_HOSTED_VERCEL_READ_TOKEN', 'FCOS_HOSTED_VERCEL_TOKEN', 'FCOS_PRODUCTION_VERIFICATION_BYPASS',
+];
+const qualificationSecrets = environmentSecrets.filter(name => name !== 'FCOS_PRODUCTION_VERIFICATION_BYPASS');
+const forwarding = names => Object.fromEntries(names.map(name => [name, `\${{ secrets.${name} }}`]));
 
 test('qualification bootstrap stays inactive and calls the same immutable controller', () => {
   assert.deepEqual(Object.keys(definition.on), ['workflow_dispatch']);
@@ -23,7 +32,7 @@ test('qualification bootstrap stays inactive and calls the same immutable contro
   assert.equal(rendered.jobs.manifest.env.FCOS_CONTROLLER_SHA, sha);
   assert.equal(rendered.jobs.manifest.steps[0].with.ref, sha);
   assert.equal(rendered.jobs.release.uses, `hocheunglai-oss/fcos/.github/workflows/hosted-release-controller.yml@${sha}`);
-  assert.deepEqual(rendered.jobs.release.secrets, { FCOS_HOSTED_GITHUB_READ_TOKEN: '${{ secrets.FCOS_HOSTED_GITHUB_READ_TOKEN }}' });
+  assert.deepEqual(rendered.jobs.release.secrets, forwarding(qualificationSecrets));
   assert.equal(rendered.jobs.toolchain.if, "${{ inputs.bootstrap_phase == 'toolchain' }}");
   assert.equal(rendered.jobs.toolchain.uses, `hocheunglai-oss/fcos/.github/workflows/hosted-release-toolchain.yml@${sha}`);
   assert.equal(rendered.jobs.toolchain.with.source_sha, sha);
@@ -31,11 +40,30 @@ test('qualification bootstrap stays inactive and calls the same immutable contro
   assert.deepEqual(rendered.jobs.toolchain.permissions, { contents: 'read', actions: 'read', packages: 'write' });
   assert.equal(rendered.jobs.manifest.env.FCOS_QUALIFICATION_BOOTSTRAP, 'true');
   const controller = yaml.load(readFileSync(new URL('../.github/workflows/hosted-release-controller.yml', import.meta.url), 'utf8'));
-  assert.deepEqual(controller.on.workflow_call.secrets, { FCOS_HOSTED_GITHUB_READ_TOKEN: { required: false } });
+  assert.deepEqual(controller.on.workflow_call.secrets, Object.fromEntries(environmentSecrets.map(name =>
+    [name, { required: name !== 'FCOS_PRODUCTION_VERIFICATION_BYPASS' }])));
   const mainCaller = yaml.load(readFileSync(new URL('../.github/workflows/hosted-release.yml', import.meta.url), 'utf8'));
-  assert.deepEqual(mainCaller.jobs.release.secrets, rendered.jobs.release.secrets);
+  assert.deepEqual(mainCaller.jobs.release.secrets, forwarding(environmentSecrets));
   assert.doesNotMatch(JSON.stringify(controller.jobs.checks), /secrets\./);
   assert.equal(controller.env.FCOS_HOSTED_QUALIFICATION_ADMITTED, '${{ vars.FCOS_HOSTED_QUALIFICATION_ADMITTED }}');
+});
+
+test('every reusable environment secret is explicitly admitted without exposing provider values to candidate jobs', () => {
+  const controller = yaml.load(readFileSync(new URL('../.github/workflows/hosted-release-controller.yml', import.meta.url), 'utf8'));
+  const referenced = new Set();
+  for (const [id, job] of Object.entries(controller.jobs)) {
+    for (const [, name] of JSON.stringify(job).matchAll(/secrets\.([A-Z0-9_]+)/g)) {
+      referenced.add(name);
+      assert.ok(controller.on.workflow_call.secrets[name], `${id} references an undeclared secret`);
+      if (name !== 'FCOS_HOSTED_GITHUB_READ_TOKEN') assert.ok(job.environment, `${id} exposes a provider secret without a protected environment`);
+      if (name === 'FCOS_PRODUCTION_VERIFICATION_BYPASS') assert.equal(job.environment, 'fcos-hosted-production-resume');
+    }
+  }
+  assert.deepEqual([...referenced].sort(), environmentSecrets);
+  assert.equal(controller.jobs.checks.environment, undefined);
+  assert.doesNotMatch(JSON.stringify(controller.jobs.checks), /secrets\./);
+  assert.equal(definition.jobs.release.secrets.FCOS_PRODUCTION_VERIFICATION_BYPASS, undefined);
+  assert.notEqual(definition.jobs.release.secrets, 'inherit');
 });
 
 test('bootstrap checks scope and live read-only admission before candidate checkout or provider access', () => {
@@ -51,10 +79,7 @@ test('bootstrap checks scope and live read-only admission before candidate check
   assert.deepEqual(Object.keys(steps[admission].env).sort(), ['FCOS_HOSTED_GITHUB_READ_TOKEN', 'GITHUB_TOKEN']);
   assert.ok(steps[admission].run.includes('node controller/scripts/hosted-release-manifest.mjs --validate-dispatch-only'));
   const secrets = [...JSON.stringify(definition).matchAll(/secrets\.([A-Z0-9_]+)/g)].map(match => match[1]);
-  assert.deepEqual([...new Set(secrets)].sort(), [
-    'FCOS_HOSTED_GITHUB_READ_TOKEN', 'FCOS_HOSTED_RUNTIME_EMAIL', 'FCOS_HOSTED_RUNTIME_PASSWORD',
-    'FCOS_HOSTED_SCHEMA_DATABASE_URL', 'FCOS_HOSTED_VERCEL_READ_TOKEN', 'FCOS_PRODUCTION_VERIFICATION_BYPASS',
-  ].sort());
+  assert.deepEqual([...new Set(secrets)].sort(), environmentSecrets);
   assert.ok(!secrets.includes('FCOS_HOSTED_VERCEL_PRODUCTION_TOKEN'));
 });
 
