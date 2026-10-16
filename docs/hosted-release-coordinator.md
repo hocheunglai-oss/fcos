@@ -34,6 +34,10 @@ POST JSON `{action, payload}` with the current identity JWT as Bearer token. Git
 
 An unknown HTTP outcome is never retried automatically. On a lost begin response, read the journal and perform provider GET-only discovery for the original operation. Neither a new runner nor a new run attempt grants another write.
 
+Qualification source metadata is refreshed only for `register`, `begin` and `claim`; journal-only actions still authenticate signed identity and the exact admitted manifest/epoch but make no new GitHub metadata reads. Approval and resume collect their own required live metadata. A shared per-service-process scheduler limits these collectors to two concurrent reads and 45 reserved reads per rolling minute. Reservations cover queued/in-flight work and remain charged for 60 seconds after completion. This is not a repository-wide or multi-instance quota guarantee: measure aggregate provider traffic during hosted qualification, and retain the financial owner's independent quota controls.
+
+When the complete collector budget is unavailable, the endpoint returns HTTP 429 with exactly `{"error":"COORDINATION_METADATA_PENDING"}` and `Retry-After: 1..60` **before any storage request**. The release client may wait at most three minutes and repeat only that definitive response, preserving the exact request bytes, operation ID and evidence timestamps while obtaining a fresh identity token. A timeout, lost response, malformed response or any other error remains uncertain and is never automatically retried. Exhausting the bounded wait reports the pending phase and resumes from the unchanged manifest/journal; it grants no provider submission.
+
 ## Privileged cutover and qualification
 
 These SQL functions are available only to the database migration operator; the endpoint role cannot call them. No function automatically deploys, fences a legacy writer, activates a service, or clears a provider outcome.
