@@ -13,7 +13,7 @@ export const PREVIEW_COORDINATION_DOMAIN = 'FCOS-EXACT-04EE-COORDINATION-GRANT-V
 export const PREVIEW_COORDINATION_VARIABLE = 'FCOS_PREVIEW_EMAIL_COORDINATION_GRANT';
 export const PREVIEW_COORDINATION_FILENAME = 'fcos-preview-email-coordination-claim.json';
 export const PREVIEW_COORDINATION_TARGET = ENROLLMENT_FIXED_TARGET;
-export const PREVIEW_COORDINATION_CANONICAL = Object.freeze({ helperSha256: '2bb8591f79b76b92f917ae7fcc1720d73757b613771812e9e220db015bdd1a18',
+export const PREVIEW_COORDINATION_CANONICAL = Object.freeze({ helperSha256: '24758c4191afae79fa4b149a166c450ac1cac20951a5f648f3cc3853969aa31d',
   epoch: 'production-reconciliation-20261005', objective: 'production', ownerThreadId: '01a0f08b-7fcb-7870-9edc-343e16052b62' });
 export const coordinationHash = value => createHash('sha256').update(value).digest('hex');
 export const coordinationSame = (a, b) => JSON.stringify(a) === JSON.stringify(b);

@@ -16,8 +16,8 @@ import tempfile
 import time
 
 BASE = Path('/Users/vincex/Documents/FCOS/.fcos-cli/outputs/overnight-20261004/resumed-indefinite-20261004/schedule-consolidation-20261004/production-reconciliation-coordinator-20261005')
-HELPER = BASE / 'public-preview-cancellation-v4/coordinator_guard.py'
-HELPER_SHA256 = '2bb8591f79b76b92f917ae7fcc1720d73757b613771812e9e220db015bdd1a18'
+HELPER = BASE / 'public-runtime-material-upload-cancellation-v1/coordinator_guard.py'
+HELPER_SHA256 = '24758c4191afae79fa4b149a166c450ac1cac20951a5f648f3cc3853969aa31d'
 WORKFLOW = BASE.parent / 'workflow-state.json'
 OWNER = '01a0f08b-7fcb-7870-9edc-343e16052b62'
 DOMAIN = b'FCOS-EXACT-04EE-CANONICAL-LEASE-V1\0'
@@ -193,8 +193,9 @@ def claim_and_consume(binding_text, workflow, directory, helper, fixture=False, 
             or current.get('localCoordinationGuardAccepted') is not True
             or current.get('independentReviewPending') is not False or current.get('providerAuthority') is not False):
         raise ValueError('current accepted canonical helper required')
-    for key, expected in [('rootAcceptance', 'e498d78f785362f36853be46a925416359c2f06e71422d61feaca89d194150b4'),
-                          ('independentRevisionReview', '03c5a3bb8dc7e98896e4493edef9992573cfd8663d38cc3e1001fd71c59372d9')]:
+    for key, expected in [('rootAcceptance', 'e490439a30f58e3bc3207ff48d7419d8424255f27c05e56304062e4783816093'),
+                          ('independentRevisionReview', 'f0c8fc487abdf35320b2960871f1f8eeae9c2680acaaeac71bccb52909b1c56b'),
+                          ('independentFinalScopeAddendum', 'd84442d57dea9bd42c309f5551441ced29b68132c644cf80dcee32dd500bc832')]:
         reference = current.get(key, {})
         if reference.get('sha256') != expected or hashlib.sha256(regular(reference['path'])).hexdigest() != expected:
             raise ValueError('accepted canonical review changed')

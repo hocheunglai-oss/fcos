@@ -59,8 +59,12 @@ backend experiment. The proof itself grants no activation or key access.
 
 ## Permanent consumption and native Preview
 
-The unchanged canonical WriteLease helper SHA256 is
-`2bb8591f79b76b92f917ae7fcc1720d73757b613771812e9e220db015bdd1a18`.
+The accepted canonical WriteLease helper at
+`public-runtime-material-upload-cancellation-v1/coordinator_guard.py` has SHA256
+`24758c4191afae79fa4b149a166c450ac1cac20951a5f648f3cc3853969aa31d`.
+Admission requires its exact root acceptance, independent review and final scope
+addendum bytes. Retired helpers and incomplete or changed reviews fail before
+claim; no fallback or dynamic helper selection is provided.
 It claims the production-objective lease before O_EXCL/fsynced permanent
 consumption in `preview-coordination-consumption/`. The filename hashes only the
 operation ID. Changed binding, source, run or expiry cannot replay it. Consumption

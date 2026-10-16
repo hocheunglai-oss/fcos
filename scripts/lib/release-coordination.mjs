@@ -2,10 +2,12 @@ import { createHash, createPublicKey, verify } from 'node:crypto';
 import { FCOS_CONNECTION_POLICY, fcosConnectionIdentifier } from '../../config/fcosConnections.js';
 import { canonicalFcosE2eCandidateUrl } from '../verify-e2e-candidate.mjs';
 import { assertReleaseReceiptBinding } from './release-readiness.mjs';
-import { PREVIEW_COORDINATION_CANONICAL } from './preview-email-coordination.mjs';
 import { DURABLE_SETUP_CONTRACT_SHA256 } from './runtime-compatibility-setup.mjs';
 import { SUCCESSOR_LIVE_CONTRACT } from './runtime-compatibility-successor-live.mjs';
 
+// Release actions pin the accepted guard independently of Preview protocol changes.
+export const RELEASE_COORDINATION_CANONICAL = Object.freeze({ helperSha256: '24758c4191afae79fa4b149a166c450ac1cac20951a5f648f3cc3853969aa31d',
+  epoch: 'production-reconciliation-20261005', objective: 'production', ownerThreadId: '01a0f08b-7fcb-7870-9edc-343e16052b62' });
 export const RELEASE_COORDINATION_DOMAIN = 'FCOS-PRODUCTION-COORDINATION-GRANT-V1\0';
 export const RELEASE_COORDINATION_FILE = 'fcos-preview-email-coordination-claim.json'; // Reuse the reviewed bounded ZIP format.
 export const RELEASE_COORDINATION_ENABLE = 'FCOS_RELEASE_COORDINATION_ENABLED';
@@ -58,7 +60,7 @@ export function releaseCoordinationGrantData(raw) {
   need(g.schemaVersion === 1 && g.kind === 'fcos_production_coordination_grant' && g.keyId === FCOS_CONNECTION_POLICY.attestation.keyId
     && g.repository === fcosConnectionIdentifier('github', 'Repository') && g.teamId === fcosConnectionIdentifier('vercel', 'Team ID')
     && g.projectId === fcosConnectionIdentifier('vercel', 'Project ID') && positive(g.intentArtifactId) && hash(g.intentArchiveSha256)
-    && ['epoch', 'objective', 'ownerThreadId'].every(k => g.lease[k] === PREVIEW_COORDINATION_CANONICAL[k])
+    && ['epoch', 'objective', 'ownerThreadId'].every(k => g.lease[k] === RELEASE_COORDINATION_CANONICAL[k])
     && g.lease.operationId === g.binding.operationId && g.lease.bindingSha256 === releaseCoordinationLeaseHash(g.binding)
     && uuid(g.lease.leaseId) && g.lease.coordinationOnly === true && g.lease.providerAuthorityGranted === false
     && g.lease.uncertainOutcomeRequiresReadback === true && hash(g.consumptionSha256)

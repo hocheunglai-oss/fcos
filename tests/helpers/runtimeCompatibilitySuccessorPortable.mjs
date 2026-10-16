@@ -9,7 +9,7 @@ export const SOURCE_ROOT = fileURLToPath(new URL('../../', import.meta.url));
 export const FIXTURE_ROOT = join(SOURCE_ROOT, 'tests/fixtures/runtime-compatibility-successor-integration');
 export const MANIFEST_HASH = '504504e0923b28028c3b97a0e2c81cf112799fda2d095e4491419b7724f7722a';
 export const PACK_HASH = 'edb0c7a0d0ac7f45dba5fcfc8f6d98cbbf9667f01713a5d7f7764dc7e7380628';
-const BINDINGS_HASH = 'b606753892b5420de25f36a29de3c96413a94334621d807ef756ff7169930cba';
+const BINDINGS_HASH = '75207edeeba173c6bee65c72a74ced848da8c8c13d8b476ffda7d8074621fceb';
 export const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 
 function regularFile(root, path) {
@@ -92,10 +92,16 @@ assert.equal(JSON.parse(twentysecondBindingBytes).previousSourceBindingsSha256, 
 const twentythirdBindingBytes = regularFile(FIXTURE_ROOT, 'source-bindings-v23.json');
 assert.equal(hash(twentythirdBindingBytes), '245482ba4e4ac00022db4facacd6250205993452e5f09423d2cb61c94a7c50b1');
 assert.equal(JSON.parse(twentythirdBindingBytes).previousSourceBindingsSha256, hash(twentysecondBindingBytes));
-const bindingBytes = regularFile(FIXTURE_ROOT, 'source-bindings-v24.json');
+const twentyfourthBindingBytes = regularFile(FIXTURE_ROOT, 'source-bindings-v24.json');
+assert.equal(hash(twentyfourthBindingBytes), 'b606753892b5420de25f36a29de3c96413a94334621d807ef756ff7169930cba');
+assert.equal(JSON.parse(twentyfourthBindingBytes).previousSourceBindingsSha256, hash(twentythirdBindingBytes));
+const twentyfifthBindingBytes = regularFile(FIXTURE_ROOT, 'source-bindings-v25.json');
+assert.equal(hash(twentyfifthBindingBytes), '67dc4eedf30951cd264e6039673eb140d723daa972b9a891d6b8602096de638f');
+assert.equal(JSON.parse(twentyfifthBindingBytes).previousSourceBindingsSha256, hash(twentyfourthBindingBytes));
+const bindingBytes = regularFile(FIXTURE_ROOT, 'source-bindings-v26.json');
 assert.equal(hash(bindingBytes), BINDINGS_HASH, 'Reviewed source bindings differ.');
 export const sourceBindings = JSON.parse(bindingBytes);
-assert.equal(sourceBindings.previousSourceBindingsSha256, hash(twentythirdBindingBytes), 'Previous source binding history differs.');
+assert.equal(sourceBindings.previousSourceBindingsSha256, hash(twentyfifthBindingBytes), 'Previous source binding history differs.');
 const rows = new Map(sourceBindings.sources.map(row => [row.path, row]));
 assert.equal(rows.size, sourceBindings.sources.length, 'Duplicate source binding.');
 export function assertBoundSource(path, bytes) {

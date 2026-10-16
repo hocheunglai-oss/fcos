@@ -33,6 +33,18 @@ The Python entry accepts only `--claim-approved <UUID>` and independently calls
 the fixed read-only admission path; caller-provided binding JSON cannot claim.
 Only the unchanged canonical WriteLease helper serializes live writes.
 
+Release action admission and grant validation pin their own
+`RELEASE_COORDINATION_CANONICAL`; they do not inherit changes to the Preview
+protocol. The JavaScript issuer and Python ledger both require the current
+accepted guard `24758c4191afae79fa4b149a166c450ac1cac20951a5f648f3cc3853969aa31d`
+at `public-runtime-material-upload-cancellation-v1/coordinator_guard.py`, the
+original production objective/epoch/owner, and the same canonical shared lease.
+Before claiming, the ledger authenticates all three current root, independent
+revision and independent final-scope review byte hashes. Retired guards, missing
+reviews or changed review bytes fail before a claim or permanent consumption.
+This alignment changes no action authority, signature/wire schema, original
+clock, one-POST limit or resolution rule; historical fixtures stay unchanged.
+
 The canonical lease is claimed before an exclusive permanent operation record,
 then before private-key access, signing or the sole create-only per-run environment
 variable. Signatures use the separate `FCOS-PRODUCTION-COORDINATION-GRANT-V1` domain.
