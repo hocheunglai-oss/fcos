@@ -135,6 +135,7 @@ const connectionPolicy = {
       identifiers: [
         { label: 'Project name', value: 'FCOS' },
         { label: 'Project ref', value: 'pjforfvchygdyqfcgpmw' },
+        { label: 'Session pooler host', value: 'aws-0-ap-southeast-1.pooler.supabase.com' },
       ],
       cliVersion: { exact: '2.113.0' },
       requiredPermissions: ['project.read', 'project.link'],

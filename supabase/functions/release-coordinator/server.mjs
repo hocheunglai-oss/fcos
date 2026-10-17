@@ -3,11 +3,10 @@ import { createServer } from 'node:http';
 import { pathToFileURL } from 'node:url';
 import pg from 'pg';
 import { createConfiguredCoordinator } from './index.ts';
-import { assertIsolatedEnvironment, verifyDatabaseIdentity } from './runtime.mjs';
+import { coordinatorDatabaseOptions, verifyDatabaseIdentity } from './runtime.mjs';
 export async function startCoordinatorServer({env=process.env}={}) {
   if(Number(process.versions.node.split('.')[0])!==24) throw new Error('COORDINATION_NODE_24_REQUIRED');
-  const connectionString=assertIsolatedEnvironment(env);
-  const pool=new pg.Pool({connectionString,max:2,connectionTimeoutMillis:10000,idleTimeoutMillis:10000,statement_timeout:10000});
+  const pool=new pg.Pool({...coordinatorDatabaseOptions(env),max:2,connectionTimeoutMillis:10000,idleTimeoutMillis:10000,statement_timeout:10000});
   const query=(sql,values)=>pool.query(sql,values);
   try {
     await verifyDatabaseIdentity(query);

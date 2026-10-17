@@ -5,7 +5,9 @@ import { PGlite } from '@electric-sql/pglite';
 import { SignJWT, generateKeyPair, exportJWK, createLocalJWKSet } from 'jose';
 import { createCoordinatorHandler, createSqlStore, createGithubAuthenticator, createGithubApprovalValidator, createGithubResumeValidator, createFinancialAuthenticator } from '../supabase/functions/release-coordinator/index.ts';
 import { digest, createNotificationChallenge, createNotificationDeliveryProof } from '../supabase/functions/release-coordinator/core.mjs';
-import { assertIsolatedEnvironment } from '../supabase/functions/release-coordinator/runtime.mjs';
+import { assertIsolatedEnvironment, coordinatorDatabaseOptions, verifyDatabaseIdentity } from '../supabase/functions/release-coordinator/runtime.mjs';
+import pg from 'pg';
+import { X509Certificate } from 'node:crypto';
 import { createCoordinatorClient } from '../scripts/lib/hosted-release/coordinator-client.mjs';
 
 const H='a'.repeat(64), S='b'.repeat(40), REPO='hocheunglai-oss/fcos';
@@ -255,6 +257,41 @@ test('isolated host refuses automatically injected Supabase and provider secrets
     assert.throws(()=>assertIsolatedEnvironment({...env,[name]:'fixture'}),/BROAD_CREDENTIAL_FORBIDDEN/);
   }
   assert.throws(()=>assertIsolatedEnvironment({...env,FCOS_COORDINATOR_DATABASE_URL:env.FCOS_COORDINATOR_DATABASE_URL.replace('pjforfvchygdyqfcgpmw','other')}),/DATABASE_ROLE_INVALID/);
+});
+
+test('isolated database transport binds direct or observed session pooler, role, project and verified TLS',()=>{
+  const direct='postgresql://fcos_coordinator_runtime:fixture%3A%40@db.pjforfvchygdyqfcgpmw.supabase.co/postgres?sslmode=verify-full';
+  const pooled='postgresql://fcos_coordinator_runtime.pjforfvchygdyqfcgpmw:fixture%3A%40@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres?sslmode=verify-full';
+  for(const url of [direct,pooled]) {
+    const options=coordinatorDatabaseOptions({FCOS_COORDINATOR_DATABASE_URL:url});
+    const actual=new pg.Client(options).connectionParameters;
+    assert.equal(actual.host,new URL(url).hostname);assert.equal(actual.port,5432);
+    assert.equal(actual.user,decodeURIComponent(new URL(url).username));assert.equal(actual.password,'fixture:@');
+    assert.equal(actual.database,'postgres');assert.equal(actual.ssl.rejectUnauthorized,true);
+    assert.equal(actual.ssl.servername,actual.host);assert.equal(options.connectionString,undefined);
+    assert.equal(new X509Certificate(actual.ssl.ca).fingerprint256,'80:70:25:AD:50:D4:ED:21:9D:2C:9C:7D:29:9C:00:4F:82:4E:B0:0C:F7:F6:5A:FE:F6:07:D0:7B:72:E6:CA:FA');
+  }
+  const invalid=[
+    direct.replace('postgresql:','postgres:'),direct.replace('/postgres?','/other?'),direct.replace(':fixture%3A%40',''),
+    direct.replace('fcos_coordinator_runtime:','postgres:'),direct.replace('.supabase.co/','.supabase.co:6543/'),
+    pooled.replace('aws-0-','aws-1-'),pooled.replace('runtime.pjforfvchygdyqfcgpmw','runtime.other'),
+    pooled.replace('runtime.pjforfvchygdyqfcgpmw','runtime'),pooled.replace(':5432/',':6543/'),
+    direct+'#fragment',direct.replace('verify-full','require'),direct.replace('verify-full','disable'),
+    ...['host=example.invalid','user=postgres','password=other','port=6543','dbname=other','options=-c%20role%3Dpostgres',
+      'sslmode=no-verify','sslmode=verify-full','ssl=false','sslrootcert=/tmp/ca','sslcert=/tmp/key','hostaddr=127.0.0.1',
+      'application_name=unexpected','%68ost=example.invalid'].map(query=>direct+'&'+query),
+  ];
+  for(const url of invalid) assert.throws(()=>coordinatorDatabaseOptions({FCOS_COORDINATOR_DATABASE_URL:url}),/DATABASE_ROLE_INVALID/);
+});
+
+test('database startup rejects SET ROLE impersonation, another database and broad privileges',async()=>{
+  const valid={identity:'fcos_coordinator_runtime',login_identity:'fcos_coordinator_runtime',database_name:'postgres',
+    rolsuper:false,rolcreaterole:false,rolcreatedb:false,rolbypassrls:false,memberships:false,application_access:false,external_definer_access:false};
+  assert.equal(await verifyDatabaseIdentity(async()=>({rows:[valid]})),true);
+  for(const changed of [{login_identity:'postgres'},{identity:'postgres'},{database_name:'other'},
+    ...['rolsuper','rolcreaterole','rolcreatedb','rolbypassrls','memberships','application_access','external_definer_access'].map(k=>({[k]:true}))]) {
+    await assert.rejects(verifyDatabaseIdentity(async()=>({rows:[{...valid,...changed}]})),/DATABASE_PRIVILEGES_INVALID/);
+  }
 });
 
 test('main may move during approval; a distinct registered run resumes the immutable manifest without renewing approval',async t=>{

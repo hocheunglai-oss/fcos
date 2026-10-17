@@ -1,6 +1,6 @@
 import { ACTIONS, CoordinatorError, createSqlStore, digest, need, validateEnvelope, assertQualificationScope, createMetadataAdmission } from './core.mjs';
 import { createGithubAuthenticator, createFinancialAuthenticator, validatePolicy } from './auth.mjs';
-import { assertIsolatedEnvironment, verifyDatabaseIdentity } from './runtime.mjs';
+import { coordinatorDatabaseOptions, verifyDatabaseIdentity } from './runtime.mjs';
 import { createGithubApprovalValidator, createGithubResumeValidator, createGithubQualificationValidator } from './approval.mjs';
 export { createSqlStore } from './core.mjs';
 export { createGithubAuthenticator, createFinancialAuthenticator } from './auth.mjs';
@@ -88,9 +88,8 @@ export function createConfiguredCoordinator({env,query,fetchImpl=globalThis.fetc
 }
 // Deno entrypoint uses only a narrowly privileged DB login and read-only GitHub metadata token.
 if(typeof Deno!=='undefined'&&import.meta.main) {
-  const connectionString=assertIsolatedEnvironment(Deno.env);
   const {default:pg}=await import('pg');
-  const pool=new pg.Pool({connectionString,max:2,connectionTimeoutMillis:10000,idleTimeoutMillis:10000,statement_timeout:10000});
+  const pool=new pg.Pool({...coordinatorDatabaseOptions(Deno.env),max:2,connectionTimeoutMillis:10000,idleTimeoutMillis:10000,statement_timeout:10000});
   const query=(sql,values)=>pool.query(sql,values);
   await verifyDatabaseIdentity(query);
   Deno.serve(createConfiguredCoordinator({env:Deno.env,query}));

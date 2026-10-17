@@ -91,8 +91,9 @@ test('native PostgreSQL independent runners have one durable execute and no expi
   assert.equal((await store.request('begin',{...s2,phase:'financial.link',operationId:'finance-operation',requestHash:H},financial)).disposition,'busy');
   await client.complete({...secondIntent,evidence:{outcome:'applied',result:{id:'confirmed'}}});
   assert.equal((await store.request('begin',{...s2,phase:'financial.link',operationId:'finance-operation',requestHash:H},financial)).disposition,'execute');
-  // Exercise the actual HTTP handler with the minimally privileged DB role as well.
-  assert.equal(await verifyDatabaseIdentity(query),true);
+  // SET ROLE is useful for fixtures, but startup must reject an administrative login.
+  // A real restricted login is accepted in the separate migration-role test below.
+  await assert.rejects(verifyDatabaseIdentity(query),/DATABASE_PRIVILEGES_INVALID/);
   assert.equal((await client.snapshot(scope)).operations['preview.create'].state,'complete');
   const minimal=await pool.connect();try{await minimal.query('set role fcos_coordinator_runtime');
     await assert.rejects(minimal.query('select * from fcos_release_coordination.registrations'),/permission denied/);
