@@ -1,3 +1,4 @@
+import { createSalesforceRecipeReader, salesforceRecipePath } from './salesforce-read-auth.mjs';
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fcosSalesforceEnvironment } from '../../../config/fcosConnections.js';
@@ -23,9 +24,10 @@ export const NOM_B_LEGACY_HISTORY = Object.freeze({
   dependencies: '62f01830c7c9ce1e7ba4d0b9842499bf8901a8b383bc7bcbe13549c335ff7b0c',
 });
 
-function pinnedJson(file, pin, readFile) {
+function pinnedJson(file, pin, readFile, onBytes) {
   need(file && hash(pin)); let bytes; try { bytes = Buffer.from(readFile(file)); } catch (error) { need(error.code !== 'ENOENT', 'DEPENDENCY_SETUP_PENDING'); throw error; }
   need(bytes.length > 0 && bytes.length <= 32 * 1024 * 1024 && dependencyHash(bytes) === pin);
+  onBytes?.(bytes);
   return JSON.parse(bytes.toString('utf8'));
 }
 /** Setup files omit manifestHash to avoid a circular file/hash/manifest binding.
@@ -46,14 +48,15 @@ export function loadDependencySetup({ manifest, env = process.env, readFile = re
   else {
     const original = pinnedJson(env.FCOS_HOSTED_NOM_B_HANDOFF_FILE, nom.handoffSha256, readFile);
     const bundle = pinnedJson(env.FCOS_HOSTED_NOM_B_ARTIFACTS_FILE, nom.artifactsSha256, readFile);
-    const recipe = pinnedJson(env.FCOS_HOSTED_NOM_B_RECIPE_FILE, nom.recipeSha256, readFile);
+    let recipeBytes;
+    const recipe = pinnedJson(env.FCOS_HOSTED_NOM_B_RECIPE_FILE, nom.recipeSha256, readFile, bytes => { recipeBytes = bytes; });
     need(!Object.hasOwn(original, 'manifestHash') && original.measurementRecipeSha256 === nom.recipeSha256
       && Object.entries(NOM_B_LEGACY_HISTORY).every(([key, sha]) => original.artifacts?.[key] === sha)
       && recipe.originalAcceptanceSha256 === NOM_B_LEGACY_HISTORY.acceptance
       && bundle.schemaVersion === 1 && bundle.kind === 'fcos_immutable_dependency_artifacts'
       && bundle.artifacts && typeof bundle.artifacts === 'object' && Object.keys(bundle.artifacts).length <= 128);
     const handoff = { ...original, manifestHash };
-    setup.nomB = { handoff, recipe, recipeSha256: nom.recipeSha256, setupPins: { ...nom },
+    setup.nomB = { handoff, recipe, recipeBytes, recipeSha256: nom.recipeSha256, setupPins: { ...nom },
       verifyHandoff: async ({ handoff: actual, handoffSha256 }) => {
         need(canonical(actual) === canonical(handoff) && handoffSha256 === dependencyHash(handoff));
         return { verified: true, handoffSha256, manifestHash, financialAuthority: false };
@@ -102,7 +105,7 @@ function validateRecipe(recipe, handoff) {
       else need(exact(read, ['kind','object','tooling']) && read.tooling === false && read.fields === undefined && read.where === undefined);
     }
   }
-  need(filesCount <= 512 && readCount <= 24);
+  need(filesCount <= 512 && readCount <= 16);
   return devee;
 }
 // The complete original coverage is mandatory even when a reviewed recipe/hash is supplied.
@@ -157,21 +160,21 @@ function validateLegacyRecipe(recipe, handoff, legacy) {
   }
   return checks;
 }
-function queryPath(read, version) {
-  if (read.kind === 'describe') return `/services/data/${version}/sobjects/${read.object}/describe`;
-  const where = read.where ? ` WHERE ${read.where.field} IN (${read.where.values.map(value => `'${value}'`).join(',')})` : '';
-  return `/services/data/${version}/${read.tooling ? 'tooling/' : ''}query?q=${encodeURIComponent(`SELECT ${read.fields.join(',')} FROM ${read.object}${where} ORDER BY Id LIMIT ${read.limit}`)}`;
-}
 /** Concrete GET-only collector. The reviewed recipe maps old fingerprint formats
  * to current comparable observations; arbitrary URLs and executable SOQL are absent.
  */
-export async function measureHostedNomBInputs({ manifest, handoff, readArtifact, recipe, recipeSha256, candidateDirectory, controllerDirectory, setupDirectory,
+export async function measureHostedNomBInputs({ manifest, handoff, readArtifact, recipe, recipeBytes, recipeSha256, candidateDirectory, controllerDirectory, setupDirectory,
   env = process.env, fetchImpl = globalThis.fetch, now = Date.now }) {
-  if (!env.FCOS_HOSTED_SALESFORCE_READ_TOKEN) return { status: 'waiting_dependency', missing: ['dedicated_devee_readonly_salesforce_credential'] };
+  const renewable = manifest.verification?.salesforceReadCredential;
+  const legacyBearer = !renewable && manifest.stage !== 'qualification' && env.GITHUB_ACTIONS !== 'true' && env.FCOS_HOSTED_SALESFORCE_LEGACY_BEARER_ALLOWED === 'true';
+  if (!renewable && !legacyBearer) return { status: 'waiting_dependency', missing: ['admitted_dedicated_devee_jwt_reader_setup'] };
+  if (renewable && !env.FCOS_HOSTED_SALESFORCE_JWT_PRIVATE_KEY || legacyBearer && !env.FCOS_HOSTED_SALESFORCE_READ_TOKEN)
+    return { status: 'waiting_dependency', missing: ['dedicated_devee_jwt_private_input'] };
   try {
     const devee = validateRecipe(recipe, handoff);
     const legacy = await loadNomBLegacyAssumptions({ handoff, readArtifact }), checks = validateLegacyRecipe(recipe, handoff, legacy);
     need(hash(recipeSha256) && handoff.measurementRecipeSha256 === recipeSha256 && salesforceDependencySourceVerified(manifest, handoff));
+    const reader = renewable ? createSalesforceRecipeReader({ manifest, recipe, recipeBytes, recipeSha256, env, fetchImpl, now }) : null;
     const get = async path => {
       need(path.startsWith('/services/')); const url = `${devee.instanceUrl}${path}`;
       const response = await fetchImpl(url, { method: 'GET', redirect: 'error', headers: { authorization: `Bearer ${env.FCOS_HOSTED_SALESFORCE_READ_TOKEN}`, accept: 'application/json' }, signal: AbortSignal.timeout(20000) });
@@ -187,13 +190,17 @@ export async function measureHostedNomBInputs({ manifest, handoff, readArtifact,
       } else bytes = Buffer.from(await response.arrayBuffer());
       need(bytes.length <= 4 * 1024 * 1024); return JSON.parse(bytes.toString());
     };
-    const info = await get('/services/oauth2/userinfo');
-    need([devee.orgId, devee.orgId.slice(0, 15)].includes(info.organization_id) && info.user_id === recipe.userId
-      && (info.preferred_username || info.username) === devee.username);
-    const org = await get(`/services/data/${recipe.apiVersion}/query?q=${encodeURIComponent('SELECT Id,IsSandbox FROM Organization LIMIT 2')}`);
-    need(org.done === true && org.totalSize === 1 && org.records?.length === 1 && org.records[0].Id === devee.orgId && org.records[0].IsSandbox === true);
-    const user = await get(`/services/data/${recipe.apiVersion}/sobjects/User/${recipe.userId}?fields=Id,Username,IsActive,ProfileId`);
-    need(user.Id === recipe.userId && user.Username === devee.username && user.IsActive === true && user.ProfileId === recipe.profileId);
+    if (reader) await reader.admit();
+    else {
+      const info = await get('/services/oauth2/userinfo');
+      need([devee.orgId, devee.orgId.slice(0, 15)].includes(info.organization_id) && info.user_id === recipe.userId
+        && (info.preferred_username || info.username) === devee.username);
+      const org = await get(`/services/data/${recipe.apiVersion}/query?q=${encodeURIComponent('SELECT Id,IsSandbox FROM Organization LIMIT 2')}`);
+      need(org.done === true && org.totalSize === 1 && org.records?.length === 1 && org.records[0].Id === devee.orgId && org.records[0].IsSandbox === true);
+      const user = await get(`/services/data/${recipe.apiVersion}/sobjects/User/${recipe.userId}?fields=Id,Username,IsActive,ProfileId`);
+      need(user.Id === recipe.userId && user.Username === devee.username && user.IsActive === true && user.ProfileId === recipe.profileId);
+    }
+    let readIndex = 0;
     const roots = { candidate: candidateDirectory, controller: controllerDirectory, setup: setupDirectory }, observed = [];
     for (const observation of recipe.observations) {
       const files = [];
@@ -203,7 +210,7 @@ export async function measureHostedNomBInputs({ manifest, handoff, readArtifact,
       }
       const reads = [];
       for (const read of observation.reads) {
-        const value = await get(queryPath(read, recipe.apiVersion));
+        const value = reader ? await reader.readRecipe(readIndex++) : await get(salesforceRecipePath(read, recipe.apiVersion));
         if (read.kind === 'query') need(value.done === true && !value.nextRecordsUrl && Array.isArray(value.records)
           && value.records.length < read.limit && value.totalSize === value.records.length);
         checks.get(read)(value);
@@ -214,12 +221,15 @@ export async function measureHostedNomBInputs({ manifest, handoff, readArtifact,
     const receipt = { schemaVersion: 1, kind: 'fcos_nom_b_readonly_measurements', recipeSha256, capturedAt: new Date(now()).toISOString(),
       candidateSalesforceSourceSha256: handoff.candidateSalesforceSourceSha256, legacyInputsSha256: dependencyHash(legacy.inputs),
       identitySha256: dependencyHash({ orgId: devee.orgId, username: devee.username, userId: recipe.userId, profileId: recipe.profileId, isSandbox: true }), observations: observed };
+    if (reader) receipt.authentication = { kind: renewable.kind, credentialBindingSha256: dependencyHash(renewable) };
     return { readOnly: true, capturedAt: receipt.capturedAt, inputs: { ...handoff.relevantInputs }, receipt };
   } catch { const error = new Error('NOM_B_READONLY_REVALIDATION_REQUIRED'); error.code = error.message; throw error; }
 }
 
 export function validateNomBMeasurementReceipt({ receipt, recipe, recipeSha256, handoff, manifest, legacy, job }) {
   validateRecipe(recipe, handoff); validateLegacyRecipe(recipe, handoff, legacy);
+  if (manifest.verification?.salesforceReadCredential || manifest.stage === 'qualification')
+    need(receipt?.authentication?.kind === 'fcos_salesforce_jwt_recipe_reader' && receipt.authentication.credentialBindingSha256 === dependencyHash(manifest.verification?.salesforceReadCredential));
   need(salesforceDependencySourceVerified(manifest, handoff));
   need(receipt?.schemaVersion === 1 && receipt.kind === 'fcos_nom_b_readonly_measurements' && receipt.recipeSha256 === recipeSha256
     && receipt.candidateSalesforceSourceSha256 === handoff.candidateSalesforceSourceSha256 && receipt.legacyInputsSha256 === dependencyHash(legacy.inputs)

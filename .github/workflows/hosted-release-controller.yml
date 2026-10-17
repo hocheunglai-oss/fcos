@@ -33,8 +33,8 @@ name: FCOS admitted hosted release controller
         required: true
       FCOS_HOSTED_RUNTIME_PASSWORD:
         required: true
-      FCOS_HOSTED_SALESFORCE_READ_TOKEN:
-        required: true
+      FCOS_HOSTED_SALESFORCE_JWT_PRIVATE_KEY:
+        required: false
       FCOS_HOSTED_SCHEMA_DATABASE_URL:
         required: true
       FCOS_HOSTED_VERCEL_READ_TOKEN:
@@ -464,7 +464,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           FCOS_HOSTED_GITHUB_READ_TOKEN: ${{ secrets.FCOS_HOSTED_GITHUB_READ_TOKEN }}
           FCOS_CONTROLLER_SHA: ${{ job.workflow_sha }}
-          FCOS_HOSTED_SALESFORCE_READ_TOKEN: ${{ secrets.FCOS_HOSTED_SALESFORCE_READ_TOKEN }}
+          FCOS_HOSTED_SALESFORCE_JWT_PRIVATE_KEY: ${{ secrets.FCOS_HOSTED_SALESFORCE_JWT_PRIVATE_KEY }}
           FCOS_HOSTED_PRESERVATION_DATABASE_URL: ${{ secrets.FCOS_HOSTED_PRESERVATION_DATABASE_URL }}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -812,7 +812,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           FCOS_HOSTED_GITHUB_READ_TOKEN: ${{ secrets.FCOS_HOSTED_GITHUB_READ_TOKEN }}
           FCOS_CONTROLLER_SHA: ${{ job.workflow_sha }}
-          FCOS_HOSTED_SALESFORCE_READ_TOKEN: ${{ secrets.FCOS_HOSTED_SALESFORCE_READ_TOKEN }}
+          FCOS_HOSTED_SALESFORCE_JWT_PRIVATE_KEY: ${{ secrets.FCOS_HOSTED_SALESFORCE_JWT_PRIVATE_KEY }}
           FCOS_HOSTED_PRESERVATION_DATABASE_URL: ${{ secrets.FCOS_HOSTED_PRESERVATION_DATABASE_URL }}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:

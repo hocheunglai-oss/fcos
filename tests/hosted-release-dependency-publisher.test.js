@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { dirname } from 'node:path';
 import { fcosSalesforceEnvironment } from '../config/fcosConnections.js';
+import { salesforceReaderFixture } from './helpers/hosted-salesforce-read.mjs';
 import { nomBFixture } from './fixtures/hosted-nom-b.mjs';
 import { collectFinancialPreservation, dependencyHash } from '../scripts/lib/hosted-release/dependencies.mjs';
 import { hostedDependencies } from '../scripts/hosted-release-dependencies.mjs';
@@ -57,7 +58,7 @@ async function recipeFixture(t, options = {}) {
     else { const decoded=decodeURIComponent(url), read=recipe.observations.flatMap(row=>row.reads).find(read=>read.kind==='describe'?decoded.includes(`/sobjects/${read.object}/describe`):decoded.includes(` FROM ${read.object} `)); body=responseFor(read); }
     return new Response(JSON.stringify(body),{status:200});
   };
-  Object.assign(f,{directory,recipe,candidateDirectory:directory,controllerDirectory:directory,setupDirectory:directory,env:{FCOS_HOSTED_SALESFORCE_READ_TOKEN:'private-read-token'},fetchImpl,calls,refreshRecipe});refreshRecipe();return f;
+  Object.assign(f,{directory,recipe,candidateDirectory:directory,controllerDirectory:directory,setupDirectory:directory,env:{FCOS_HOSTED_SALESFORCE_LEGACY_BEARER_ALLOWED:'true',FCOS_HOSTED_SALESFORCE_READ_TOKEN:'private-read-token'},fetchImpl,calls,refreshRecipe});refreshRecipe();return f;
 }
 
 test('GET-only recipe measures actual files, org/user/profile and bounded metadata before mapping legacy fingerprints', async t => {
@@ -206,7 +207,7 @@ test('historical timestamp permission is exact NomB deterministic and cannot wai
 
 test('actual CLI process writes waiting report and calls no-OIDC hosted entrypoint without executing candidate code', t => {
   const directory = temporary(t), sourceRoot = fileURLToPath(new URL('../', import.meta.url));
-  for (const relative of ['scripts/hosted-release-dependencies.mjs','scripts/lib/hosted-release/dependencies.mjs','scripts/lib/hosted-release/dependency-publisher.mjs','config/fcosConnections.js','config/runtime-compatibility-successor-live.json']) {
+  for (const relative of ['scripts/hosted-release-dependencies.mjs','scripts/lib/hosted-release/dependencies.mjs','scripts/lib/hosted-release/observer-target.mjs','scripts/lib/hosted-release/dependency-publisher.mjs','scripts/lib/hosted-release/salesforce-read-auth.mjs','config/fcosConnections.js','config/runtime-compatibility-successor-live.json']) {
     const destination = join(directory, relative); mkdirSync(dirname(destination), { recursive: true }); copyFileSync(join(sourceRoot, relative), destination);
   }
   writeFileSync(join(directory,'package.json'), JSON.stringify({ type: 'module' })); symlinkSync(join(sourceRoot,'node_modules'),join(directory,'node_modules'));
@@ -219,4 +220,22 @@ test('actual CLI process writes waiting report and calls no-OIDC hosted entrypoi
     FCOS_CANDIDATE_DIRECTORY:join(directory,'candidate'),FCOS_CONTROLLER_DIRECTORY:directory}});
   assert.equal(child.status,0,child.stderr); assert.equal(JSON.parse(readFileSync(output)).status,'waiting_dependency');
   assert.deepEqual(JSON.parse(readFileSync(sessionFile)),{requireOidc:false,jobName:'release / dependencies / before'});assert.equal(existsSync(canary),false);
+});
+
+
+test('renewable JWT collector preserves all sixteen NomB reads and independent receipt binding; no opaque fallback can qualify', async t => {
+  const f=await recipeFixture(t), auth=salesforceReaderFixture({recipe:f.recipe,manifest:f.manifest});
+  const legacyFetch=f.fetchImpl;
+  const fetched=[];
+  const fetchImpl=async(url,options)=>{fetched.push({url,options});return options.method==='POST'?auth.fetchImpl(url,options):legacyFetch(url,options);};
+  const measured=await measureHostedNomBInputs({...f,env:auth.env,fetchImpl,now:auth.now,recipeBytes:auth.recipeBytes});
+  assert.deepEqual(measured.inputs,f.handoff.relevantInputs);assert.equal(fetched.length,20);assert.equal(fetched[0].options.method,'POST');assert.ok(fetched.slice(1).every(row=>row.options.method==='GET'));
+  assert.deepEqual(measured.receipt.authentication,{kind:'fcos_salesforce_jwt_recipe_reader',credentialBindingSha256:dependencyHash(auth.binding)});
+  const job={started_at:new Date(auth.now()-1000).toISOString(),completed_at:new Date(auth.now()+1000).toISOString()};
+  validateNomBMeasurementReceipt({...f,receipt:measured.receipt,job});
+  const old=structuredClone(measured.receipt);delete old.authentication;assert.throws(()=>validateNomBMeasurementReceipt({...f,receipt:old,job}));
+  assert.ok(!JSON.stringify(measured).includes('fixture-access-token'));assert.ok(!JSON.stringify(measured).includes('BEGIN PRIVATE'));
+  assert.equal((await measureHostedNomBInputs({...f,env:{FCOS_HOSTED_SALESFORCE_READ_TOKEN:'opaque',FCOS_HOSTED_SALESFORCE_LEGACY_BEARER_ALLOWED:'true'}})).status,'waiting_dependency');
+  const local=await recipeFixture(t);assert.equal((await measureHostedNomBInputs({...local,env:{...local.env,GITHUB_ACTIONS:'true'}})).status,'waiting_dependency');
+  local.manifest.stage='qualification';assert.equal((await measureHostedNomBInputs(local)).status,'waiting_dependency');
 });

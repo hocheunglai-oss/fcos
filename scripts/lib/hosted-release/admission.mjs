@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { collectBuildProvenance } from '../build-provenance.mjs';
 import { collectCheckBinding, collectReleaseCheckSource, loadReleaseCheckManifest, requiredReleaseChecks } from './checks.mjs';
 import { canonical, digest, fail, REQUIRED_LIVE_CHECKS, validateManifest } from './contract.mjs';
+import { validateSalesforceReadAcceptance } from './salesforce-read-auth.mjs';
 import { validateVercelReadAcceptance } from './vercel-read-auth.mjs';
 import { validateVercelPreviewWriterAcceptance } from './vercel-writer-auth.mjs';
 
@@ -71,5 +72,7 @@ export function assertHostedSetup({ manifest, env = process.env }) {
     validateVercelReadAcceptance(manifest.verification?.vercelReadCredential,setup,{targets:manifest.targets});
   if (manifest.verification?.vercelPreviewWriterCredential)
     validateVercelPreviewWriterAcceptance(manifest.verification.vercelPreviewWriterCredential, setup, { targets: manifest.targets });
+  if (manifest.verification?.salesforceReadCredential)
+    validateSalesforceReadAcceptance(manifest.verification.salesforceReadCredential, setup);
   return setup;
 }
