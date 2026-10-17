@@ -68,6 +68,7 @@ async function requireActiveUser(req) {
     authUser: auth.user,
     profile: storedProfile,
     accessToken: token,
+    providerAccessToken: req.headers?.['x-fcos-fcuno-provider-token'] || null,
   });
   if (!profile) throw endpointError('User is not registered.', 403, 'FCOS_USER_UNREGISTERED');
   if (!profile.active) throw endpointError('User is inactive.', 403, 'FCOS_USER_INACTIVE');

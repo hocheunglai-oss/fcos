@@ -1,0 +1,6 @@
+interface:
+  display_name: "FCOS Hosted Release"
+  short_description: "Resume verified releases without approval loops"
+  default_prompt: "Use $fcos-hosted-release to resume the current release through every eligible phase to the next actual human gate."
+policy:
+  allow_implicit_invocation: true

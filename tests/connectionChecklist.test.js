@@ -57,14 +57,14 @@ function attestation(overrides = {}) {
   };
 }
 
-test('one schema-validated policy owns the approved targets and API-first order', () => {
+test('one schema-validated policy owns the approved targets and CLI-first order', () => {
   assert.equal(validateFcosConnectionPolicy(FCOS_CONNECTION_POLICY), true);
   assert.deepEqual(CONNECTION_CHECKLIST_SEQUENCE.map(({ id }) => id), [
-    'api_first',
-    'cli_fallback',
+    'cli_first',
+    'api_fallback',
     'browser_fallback',
   ]);
-  assert.equal(CONNECTION_POLICY_VERSION, 11);
+  assert.equal(CONNECTION_POLICY_VERSION, 12);
   assert.equal(APPROVED_CONNECTION_BROWSER_PROFILE, 'Otto');
   assert.equal(CONNECTION_PROFILE_NAME, 'fcos-production');
   assert.equal(CONNECTION_LOCAL_STATE_DIRECTORY, '.fcos-cli');
@@ -238,11 +238,11 @@ test('Salesforce promotions fail closed and enforce DEVEE, GitHub, QAT, Producti
   assert.match(source, /environment\.isSandbox \? 'NoTestRun' : 'RunRelevantTests'/);
   assert.match(source, /Salesforce source must use LF line endings/);
   assert.ok(
-    source.indexOf('const deveeDeployment = deploy(deveeValidation)') < source.indexOf("['scripts/sync-salesforce-shared-repository.mjs', '--publish']"),
+    source.indexOf("upstream?.status !== 'succeeded'") < source.indexOf("sharedPublication = mirror('--publish')"),
     'DEVEE must be deployed successfully before shared publication.',
   );
   assert.ok(
-    source.indexOf("['scripts/sync-salesforce-shared-repository.mjs', '--publish']") < source.indexOf('salesforce.environments.slice(1)'),
+    source.indexOf("sharedPublication = mirror('--check')") < source.indexOf('const validation = validate(environment)'),
     'Shared publication must succeed before QAT and Production promotion.',
   );
 });

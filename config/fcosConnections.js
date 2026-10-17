@@ -1,6 +1,6 @@
 const connectionPolicy = {
   schemaVersion: 1,
-  policyVersion: 11,
+  policyVersion: 12,
   profile: 'fcos-production',
   browserProfile: 'Otto',
   localStateDirectory: '.fcos-cli',
@@ -19,19 +19,19 @@ const connectionPolicy = {
   },
   sequence: [
     {
-      id: 'api_first',
-      label: 'Use the approved API or connector',
-      detail: 'Prefer a purpose-built API or connector after verifying its exact account, organization, project, repository, environment, scope, and target permissions.',
+      id: 'cli_first',
+      label: 'Use the verified CLI first',
+      detail: 'Use the repo-pinned CLI after its version, identity, target pin, and required permissions pass.',
     },
     {
-      id: 'cli_fallback',
-      label: 'Fall back to the verified CLI',
-      detail: 'When no approved API or connector can complete the operation, use the repo-pinned CLI only after its version, identity, target pin, and required permissions pass.',
+      id: 'api_fallback',
+      label: 'Use the approved API or connector when needed',
+      detail: 'When the verified CLI is unavailable, lacks the required capability, or cannot verify the exact target, use a purpose-built API or connector with the same checks.',
     },
     {
       id: 'browser_fallback',
       label: 'Use Chrome only as the final fallback',
-      detail: 'Chrome remains locked unless both the approved API/connector and verified CLI cannot complete the operation. Use only the environment-pinned profile, then return to API or CLI verification.',
+      detail: 'Chrome remains locked unless both the verified CLI and approved API/connector cannot complete the operation. Use only the environment-pinned profile, then return to CLI or API verification.',
     },
   ],
   integrations: {
@@ -135,6 +135,7 @@ const connectionPolicy = {
       identifiers: [
         { label: 'Project name', value: 'FCOS' },
         { label: 'Project ref', value: 'pjforfvchygdyqfcgpmw' },
+        { label: 'Session pooler host', value: 'aws-0-ap-southeast-1.pooler.supabase.com' },
       ],
       cliVersion: { exact: '2.113.0' },
       requiredPermissions: ['project.read', 'project.link'],
@@ -165,6 +166,8 @@ const connectionPolicy = {
         { label: 'Devee Org ID', value: '00D1m0000008kioEAA' },
         { label: 'Devee alias', value: 'fcos-devee' },
         { label: 'Devee username', value: 'vincent@cosulich.com.hk.devee' },
+        { label: 'Hosted DEVEE read-only username', value: 'fcos.hosted.reader.00d1m0000008kioeaa@cosulich.com.hk.devee' },
+        { label: 'Hosted DEVEE read-only licence name', value: 'Salesforce Integration' },
         { label: 'QAT Org ID', value: '00D1s0000008lFEEAY' },
         { label: 'QAT alias', value: 'fcos-qat' },
         { label: 'QAT username', value: 'vincent@cosulich.com.hk.qat' },
@@ -236,10 +239,10 @@ export function validateFcosConnectionPolicy(value = connectionPolicy) {
   requirePositiveInteger(value.policyVersion, 'policyVersion');
   requireString(value.profile, 'profile');
   requireString(value.browserProfile, 'browserProfile');
-  const expectedSequence = ['api_first', 'cli_fallback', 'browser_fallback'];
+  const expectedSequence = ['cli_first', 'api_fallback', 'browser_fallback'];
   if (!Array.isArray(value.sequence)
       || value.sequence.map(({ id }) => id).join(',') !== expectedSequence.join(',')) {
-    throw new Error('Connection policy order must remain API/connector, CLI, then Chrome.');
+    throw new Error('Connection policy order must remain CLI, API/connector, then Chrome.');
   }
   for (const [index, step] of value.sequence.entries()) {
     requireString(step.label, `sequence.${index}.label`);

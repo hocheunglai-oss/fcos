@@ -1,0 +1,1400 @@
+# One immutable reusable controller. Intermediate environments have no reviewer gate
+# only after qualification; the Production environment retains its required reviewer.
+name: FCOS admitted hosted release controller
+'on':
+  workflow_call:
+    inputs:
+      manifest:
+        required: true
+        type: string
+    # Named slots admit environment-only secrets without inheriting other credentials.
+    secrets:
+      FCOS_E2E_VERCEL_BYPASS:
+        required: true
+      FCOS_HOSTED_FCUNO_READ_TOKEN:
+        required: false
+      FCOS_HOSTED_GITHUB_READ_TOKEN:
+        required: true
+      FCOS_HOSTED_NORMAL_EMAIL:
+        required: true
+      FCOS_HOSTED_NORMAL_PASSWORD:
+        required: true
+      FCOS_HOSTED_PRESERVATION_DATABASE_URL:
+        required: true
+      FCOS_HOSTED_RESTRICTED_EMAIL:
+        required: false
+      FCOS_HOSTED_RESTRICTED_FALLBACK_EMAIL:
+        required: false
+      FCOS_HOSTED_RESTRICTED_FALLBACK_PASSWORD:
+        required: false
+      FCOS_HOSTED_RESTRICTED_PASSWORD:
+        required: false
+      FCOS_HOSTED_RUNTIME_EMAIL:
+        required: true
+      FCOS_HOSTED_RUNTIME_PASSWORD:
+        required: true
+      FCOS_HOSTED_SALESFORCE_JWT_PRIVATE_KEY:
+        required: false
+      FCOS_HOSTED_SCHEMA_DATABASE_URL:
+        required: true
+      FCOS_HOSTED_VERCEL_READ_TOKEN:
+        required: true
+      FCOS_HOSTED_VERCEL_TOKEN:
+        required: true
+      FCOS_PRODUCTION_VERIFICATION_BYPASS:
+        required: false
+permissions: {}
+env:
+  FCOS_HOSTED_QUALIFICATION_ADMITTED: ${{ vars.FCOS_HOSTED_QUALIFICATION_ADMITTED }}
+concurrency:
+  group: ${{ format('fcos-hosted-release-{0}', fromJSON(inputs.manifest).releaseId) }}
+  cancel-in-progress: false
+jobs:
+  prepare:
+    name: prepare
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    timeout-minutes: 10
+    env:
+      FCOS_ADMITTED_RELEASE_SETUP: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP }}
+      FCOS_ADMITTED_RELEASE_SETUP_SHA256: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP_SHA256 }}
+      FCOS_RELEASE_MANIFEST: ${{ inputs.manifest }}
+      FCOS_CONTROLLER_DIRECTORY: controller
+      FCOS_CANDIDATE_DIRECTORY: candidate
+      FCOS_HOSTED_COORDINATOR_URL: ${{ vars.FCOS_HOSTED_COORDINATOR_URL }}
+    outputs:
+      manifest_hash: ${{ steps.run.outputs.manifest_hash }}
+      candidate_sha: ${{ steps.run.outputs.candidate_sha }}
+      controller_sha: ${{ steps.run.outputs.controller_sha }}
+      release_id: ${{ steps.run.outputs.release_id }}
+      source_profile: ${{ steps.run.outputs.source_profile }}
+      groups: ${{ steps.run.outputs.groups }}
+      has_checks: ${{ steps.run.outputs.has_checks }}
+      browser_matrix: ${{ steps.run.outputs.browser_matrix }}
+      has_browsers: ${{ steps.run.outputs.has_browsers }}
+      dependencies_required: ${{ steps.run.outputs.dependencies_required }}
+      approved: ${{ steps.run.outputs.approved }}
+      execution_mode: ${{ steps.run.outputs.execution_mode }}
+      terminal: ${{ steps.run.outputs.terminal }}
+      terminal_status: ${{ steps.run.outputs.terminal_status }}
+    steps:
+      - name: Check out admitted controller
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ job.workflow_sha }}
+          path: controller
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.18.0
+      - name: Install trusted controller dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: controller
+      - name: Check out exact candidate data
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ fromJSON(inputs.manifest).candidate.sha }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Run admitted checks
+        id: run
+        run: node controller/scripts/hosted-release.mjs prepare
+        env:
+          FCOS_CONTROLLER_SHA: ${{ job.workflow_sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+          FCOS_HOSTED_GITHUB_READ_TOKEN: ${{ secrets.FCOS_HOSTED_GITHUB_READ_TOKEN }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ${{ format('fcos-{0}-check-cache', fromJSON(inputs.manifest).releaseId) }}
+          path: check-cache.json
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: false
+  checks:
+    name: ${{ format('checks / {0}', matrix.group) }}
+    needs:
+      - prepare
+    if: ${{ needs.prepare.outputs.terminal != 'true' && needs.prepare.outputs.has_checks == 'true' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix: ${{ fromJSON(needs.prepare.outputs.groups) }}
+    env:
+      FCOS_ADMITTED_RELEASE_SETUP: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP }}
+      FCOS_ADMITTED_RELEASE_SETUP_SHA256: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP_SHA256 }}
+      FCOS_RELEASE_MANIFEST: ${{ inputs.manifest }}
+      FCOS_CONTROLLER_DIRECTORY: controller
+      FCOS_CANDIDATE_DIRECTORY: candidate
+      FCOS_HOSTED_COORDINATOR_URL: ${{ vars.FCOS_HOSTED_COORDINATOR_URL }}
+      FCOS_CHECK_GROUP: ${{ matrix.group }}
+      FCOS_CHECK_CACHE_FILE: check-cache.json
+      FCOS_RELEASE_OUTPUT: ${{ format('{0}.json', matrix.group) }}
+    steps:
+      - name: Check out admitted controller
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ job.workflow_sha }}
+          path: controller
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.18.0
+      - name: Install trusted controller dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: controller
+      - name: Check out exact candidate data
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ fromJSON(inputs.manifest).candidate.sha }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: ${{ format('fcos-{0}-check-cache', needs.prepare.outputs.release_id) }}
+      - name: Authenticate read-only image pull
+        env:
+          GHCR_READ_TOKEN: ${{ github.token }}
+        run: printf %s "$GHCR_READ_TOKEN" | docker login ghcr.io --username hocheunglai-oss --password-stdin
+      - name: Pull admitted credential-free image
+        env:
+          CHECK_IMAGE: ${{ fromJSON(inputs.manifest).verification.runtime.image }}
+        run: docker pull "$CHECK_IMAGE"
+      - uses: supabase/setup-cli@1dedf2c611547ede7232d26866dd3c56ab903bbb
+        if: ${{ matrix.group == 'database' && fromJSON(inputs.manifest).candidate.sourceProfile != 'controller_v2' }}
+        with:
+          version: 2.113.0
+      - name: Start isolated disposable database
+        if: ${{ matrix.group == 'database' && fromJSON(inputs.manifest).candidate.sourceProfile != 'controller_v2' }}
+        run: supabase start -x studio,imgproxy,edge-runtime,logflare,vector,supavisor
+        working-directory: controller
+      - name: Run admitted checks
+        id: run
+        run: node controller/scripts/hosted-release.mjs checks
+        env:
+          FCOS_CONTROLLER_SHA: ${{ job.workflow_sha }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ${{ format('fcos-{0}-{1}', needs.prepare.outputs.release_id, matrix.group) }}
+          path: ${{ format('{0}.json', matrix.group) }}
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: false
+      - name: Remove image-pull credential
+        if: ${{ always() }}
+        run: docker logout ghcr.io
+      - name: Stop disposable database
+        if: >-
+          ${{ always() && matrix.group == 'database' && fromJSON(inputs.manifest).candidate.sourceProfile !=
+          'controller_v2' }}
+        run: supabase stop --no-backup
+        working-directory: controller
+  reconcile:
+    if: ${{ needs.prepare.outputs.terminal != 'true' }}
+    name: reconcile
+    needs:
+      - prepare
+    runs-on: ubuntu-24.04
+    environment: fcos-hosted-verification
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    timeout-minutes: 10
+    env:
+      FCOS_ADMITTED_RELEASE_SETUP: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP }}
+      FCOS_ADMITTED_RELEASE_SETUP_SHA256: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP_SHA256 }}
+      FCOS_RELEASE_MANIFEST: ${{ inputs.manifest }}
+      FCOS_CONTROLLER_DIRECTORY: controller
+      FCOS_CANDIDATE_DIRECTORY: candidate
+      FCOS_HOSTED_COORDINATOR_URL: ${{ vars.FCOS_HOSTED_COORDINATOR_URL }}
+      FCOS_HOSTED_ENVIRONMENT: fcos-hosted-verification
+    steps:
+      - name: Check out admitted controller
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ job.workflow_sha }}
+          path: controller
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.18.0
+      - name: Install trusted controller dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: controller
+      - name: Check out exact candidate data
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ fromJSON(inputs.manifest).candidate.sha }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Run admitted checks
+        id: run
+        run: node controller/scripts/hosted-release.mjs reconcile
+        env:
+          FCOS_CONTROLLER_SHA: ${{ job.workflow_sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+          FCOS_HOSTED_GITHUB_READ_TOKEN: ${{ secrets.FCOS_HOSTED_GITHUB_READ_TOKEN }}
+          FCOS_HOSTED_RUNTIME_EMAIL: ${{ secrets.FCOS_HOSTED_RUNTIME_EMAIL }}
+          FCOS_HOSTED_RUNTIME_PASSWORD: ${{ secrets.FCOS_HOSTED_RUNTIME_PASSWORD }}
+          FCOS_HOSTED_RUNTIME_EXPECTED_ROLE: ${{ vars.FCOS_HOSTED_RUNTIME_EXPECTED_ROLE }}
+          FCOS_HOSTED_VERCEL_READ_TOKEN: ${{ secrets.FCOS_HOSTED_VERCEL_READ_TOKEN }}
+          FCOS_E2E_VERCEL_BYPASS: ${{ secrets.FCOS_E2E_VERCEL_BYPASS }}
+          FCOS_HOSTED_SCHEMA_DATABASE_URL: ${{ secrets.FCOS_HOSTED_SCHEMA_DATABASE_URL }}
+          FCOS_HOSTED_FCUNO_READ_TOKEN: ${{ secrets.FCOS_HOSTED_FCUNO_READ_TOKEN }}
+  preview:
+    if: ${{ needs.prepare.outputs.terminal != 'true' }}
+    name: preview
+    needs:
+      - prepare
+      - reconcile
+    runs-on: ubuntu-24.04
+    environment: fcos-hosted-preview
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    timeout-minutes: 30
+    env:
+      FCOS_ADMITTED_RELEASE_SETUP: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP }}
+      FCOS_ADMITTED_RELEASE_SETUP_SHA256: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP_SHA256 }}
+      FCOS_RELEASE_MANIFEST: ${{ inputs.manifest }}
+      FCOS_CONTROLLER_DIRECTORY: controller
+      FCOS_CANDIDATE_DIRECTORY: candidate
+      FCOS_HOSTED_COORDINATOR_URL: ${{ vars.FCOS_HOSTED_COORDINATOR_URL }}
+      FCOS_HOSTED_ENVIRONMENT: fcos-hosted-preview
+      FCOS_RELEASE_OUTPUT: preview.json
+    steps:
+      - name: Check out admitted controller
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ job.workflow_sha }}
+          path: controller
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.18.0
+      - name: Install trusted controller dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: controller
+      - name: Check out exact candidate data
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ fromJSON(inputs.manifest).candidate.sha }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install trusted browser runtime
+        run: npx --no-install playwright install --with-deps chromium chrome
+        working-directory: controller
+      - run: npm install --global vercel@54.20.1
+      - name: Run admitted checks
+        id: run
+        run: node controller/scripts/hosted-release.mjs preview
+        env:
+          FCOS_CONTROLLER_SHA: ${{ job.workflow_sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+          FCOS_HOSTED_GITHUB_READ_TOKEN: ${{ secrets.FCOS_HOSTED_GITHUB_READ_TOKEN }}
+          FCOS_HOSTED_RUNTIME_EMAIL: ${{ secrets.FCOS_HOSTED_RUNTIME_EMAIL }}
+          FCOS_HOSTED_RUNTIME_PASSWORD: ${{ secrets.FCOS_HOSTED_RUNTIME_PASSWORD }}
+          FCOS_HOSTED_RUNTIME_EXPECTED_ROLE: ${{ vars.FCOS_HOSTED_RUNTIME_EXPECTED_ROLE }}
+          FCOS_HOSTED_CREDENTIAL_CLASS: preview
+          FCOS_HOSTED_VERCEL_TOKEN: ${{ secrets.FCOS_HOSTED_VERCEL_TOKEN }}
+          FCOS_HOSTED_VERCEL_TOKEN_ID: ${{ vars.FCOS_HOSTED_VERCEL_TOKEN_ID }}
+          FCOS_E2E_VERCEL_BYPASS: ${{ secrets.FCOS_E2E_VERCEL_BYPASS }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ${{ format('fcos-{0}-preview', needs.prepare.outputs.release_id) }}
+          path: preview.json
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: false
+  observe_before:
+    if: ${{ needs.prepare.outputs.terminal != 'true' }}
+    name: observe / before
+    needs:
+      - prepare
+      - preview
+    runs-on: ubuntu-24.04
+    environment: fcos-hosted-verification
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    timeout-minutes: 20
+    env:
+      FCOS_ADMITTED_RELEASE_SETUP: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP }}
+      FCOS_ADMITTED_RELEASE_SETUP_SHA256: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP_SHA256 }}
+      FCOS_RELEASE_MANIFEST: ${{ inputs.manifest }}
+      FCOS_CONTROLLER_DIRECTORY: controller
+      FCOS_CANDIDATE_DIRECTORY: candidate
+      FCOS_HOSTED_COORDINATOR_URL: ${{ vars.FCOS_HOSTED_COORDINATOR_URL }}
+      FCOS_VERIFICATION_PHASE: before
+      FCOS_HOSTED_ENVIRONMENT: fcos-hosted-verification
+      FCOS_RELEASE_OUTPUT: observations-before.json
+    outputs:
+      browser_matrix: ${{ steps.run.outputs.browser_matrix }}
+      has_browsers: ${{ steps.run.outputs.has_browsers }}
+      dependencies_required: ${{ steps.run.outputs.dependencies_required }}
+    steps:
+      - name: Check out admitted controller
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ job.workflow_sha }}
+          path: controller
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.18.0
+      - name: Install trusted controller dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: controller
+      - name: Check out exact candidate data
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ fromJSON(inputs.manifest).candidate.sha }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install trusted browser runtime
+        run: npx --no-install playwright install --with-deps chromium chrome
+        working-directory: controller
+      - name: Run admitted checks
+        id: run
+        run: node controller/scripts/hosted-release.mjs observe
+        env:
+          FCOS_CONTROLLER_SHA: ${{ job.workflow_sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+          FCOS_HOSTED_GITHUB_READ_TOKEN: ${{ secrets.FCOS_HOSTED_GITHUB_READ_TOKEN }}
+          FCOS_HOSTED_RUNTIME_EMAIL: ${{ secrets.FCOS_HOSTED_RUNTIME_EMAIL }}
+          FCOS_HOSTED_RUNTIME_PASSWORD: ${{ secrets.FCOS_HOSTED_RUNTIME_PASSWORD }}
+          FCOS_HOSTED_RUNTIME_EXPECTED_ROLE: ${{ vars.FCOS_HOSTED_RUNTIME_EXPECTED_ROLE }}
+          FCOS_HOSTED_VERCEL_READ_TOKEN: ${{ secrets.FCOS_HOSTED_VERCEL_READ_TOKEN }}
+          FCOS_E2E_VERCEL_BYPASS: ${{ secrets.FCOS_E2E_VERCEL_BYPASS }}
+          FCOS_HOSTED_SCHEMA_DATABASE_URL: ${{ secrets.FCOS_HOSTED_SCHEMA_DATABASE_URL }}
+          FCOS_HOSTED_FCUNO_READ_TOKEN: ${{ secrets.FCOS_HOSTED_FCUNO_READ_TOKEN }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ${{ format('fcos-{0}-observations-before', needs.prepare.outputs.release_id) }}
+          path: observations-before.json
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: false
+  dependencies_before:
+    name: dependencies / before
+    needs:
+      - prepare
+    if: ${{ needs.prepare.outputs.terminal != 'true' && needs.prepare.outputs.dependencies_required == 'true' }}
+    runs-on: ubuntu-24.04
+    environment: fcos-hosted-dependency-verification
+    permissions:
+      contents: read
+      actions: read
+    timeout-minutes: 15
+    env:
+      FCOS_ADMITTED_RELEASE_SETUP: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP }}
+      FCOS_ADMITTED_RELEASE_SETUP_SHA256: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP_SHA256 }}
+      FCOS_RELEASE_MANIFEST: ${{ inputs.manifest }}
+      FCOS_CONTROLLER_DIRECTORY: controller
+      FCOS_CANDIDATE_DIRECTORY: candidate
+      FCOS_HOSTED_COORDINATOR_URL: ${{ vars.FCOS_HOSTED_COORDINATOR_URL }}
+      FCOS_VERIFICATION_PHASE: before
+      FCOS_HOSTED_ENVIRONMENT: fcos-hosted-dependency-verification
+      FCOS_HOSTED_DEPENDENCY_SETUP_DIRECTORY: dependency-setup
+      FCOS_RELEASE_OUTPUT: dependencies.json
+    steps:
+      - name: Check out admitted controller
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ job.workflow_sha }}
+          path: controller
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.18.0
+      - name: Install trusted controller dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: controller
+      - name: Check out exact candidate data
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ fromJSON(inputs.manifest).candidate.sha }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Download admitted immutable dependency setup
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          repository: hocheunglai-oss/fcos
+          run-id: ${{ fromJSON(vars.FCOS_ADMITTED_RELEASE_SETUP).dependencyArtifact.runId }}
+          name: ${{ fromJSON(vars.FCOS_ADMITTED_RELEASE_SETUP).dependencyArtifact.name }}
+          path: dependency-setup
+          github-token: ${{ github.token }}
+      - name: Run admitted checks
+        run: node controller/scripts/hosted-release-dependencies.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          FCOS_HOSTED_GITHUB_READ_TOKEN: ${{ secrets.FCOS_HOSTED_GITHUB_READ_TOKEN }}
+          FCOS_CONTROLLER_SHA: ${{ job.workflow_sha }}
+          FCOS_HOSTED_SALESFORCE_JWT_PRIVATE_KEY: ${{ secrets.FCOS_HOSTED_SALESFORCE_JWT_PRIVATE_KEY }}
+          FCOS_HOSTED_PRESERVATION_DATABASE_URL: ${{ secrets.FCOS_HOSTED_PRESERVATION_DATABASE_URL }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ${{ format('fcos-{0}-dependencies-before', needs.prepare.outputs.release_id) }}
+          path: dependencies.json
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: false
+  browser_before:
+    name: ${{ format('browser / before / {0}', matrix.mode) }}
+    needs:
+      - prepare
+      - observe_before
+    if: >-
+      ${{ needs.prepare.outputs.terminal != 'true' && always() && needs.prepare.result == 'success' && needs.observe_before.result == 'success' &&
+      needs.observe_before.outputs.has_browsers == 'true' }}
+    runs-on: ubuntu-24.04
+    environment: ${{ matrix.mode == 'restricted' && 'fcos-hosted-restricted-verification' || 'fcos-hosted-normal-verification' }}
+    permissions:
+      contents: read
+      actions: read
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix: ${{ fromJSON(needs.observe_before.outputs.browser_matrix) }}
+    env:
+      FCOS_ADMITTED_RELEASE_SETUP: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP }}
+      FCOS_ADMITTED_RELEASE_SETUP_SHA256: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP_SHA256 }}
+      FCOS_RELEASE_MANIFEST: ${{ inputs.manifest }}
+      FCOS_CONTROLLER_DIRECTORY: controller
+      FCOS_CANDIDATE_DIRECTORY: candidate
+      FCOS_HOSTED_COORDINATOR_URL: ${{ vars.FCOS_HOSTED_COORDINATOR_URL }}
+      FCOS_VERIFICATION_PHASE: before
+      FCOS_BROWSER_MODE: ${{ matrix.mode }}
+      FCOS_OBSERVATIONS_FILE: observations-before.json
+      FCOS_RELEASE_OUTPUT: ${{ matrix.mode == 'restricted' && 'restricted.json' || 'normal-role.json' }}
+    steps:
+      - name: Check out admitted controller
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ job.workflow_sha }}
+          path: controller
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.18.0
+      - name: Install trusted controller dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: controller
+      - name: Check out exact candidate data
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ fromJSON(inputs.manifest).candidate.sha }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install trusted browser runtime
+        run: npx --no-install playwright install --with-deps chromium chrome
+        working-directory: controller
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: ${{ format('fcos-{0}-observations-before', needs.prepare.outputs.release_id) }}
+      - name: Run admitted checks
+        id: run
+        run: node controller/scripts/hosted-release.mjs browser
+        env:
+          FCOS_CONTROLLER_SHA: ${{ job.workflow_sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+          FCOS_HOSTED_GITHUB_READ_TOKEN: ${{ secrets.FCOS_HOSTED_GITHUB_READ_TOKEN }}
+          FCOS_HOSTED_BROWSER_ENABLED: 'true'
+          FCOS_HOSTED_VERCEL_READ_TOKEN: ${{ secrets.FCOS_HOSTED_VERCEL_READ_TOKEN }}
+          FCOS_E2E_VERCEL_BYPASS: ${{ secrets.FCOS_E2E_VERCEL_BYPASS }}
+          FCOS_HOSTED_RESTRICTED_EMAIL: >-
+            ${{ matrix.mode == 'restricted' && ((secrets.FCOS_HOSTED_RESTRICTED_EMAIL != '' && secrets.FCOS_HOSTED_RESTRICTED_PASSWORD != '' && secrets.FCOS_HOSTED_RESTRICTED_EMAIL) || (secrets.FCOS_HOSTED_RESTRICTED_FALLBACK_EMAIL != '' && secrets.FCOS_HOSTED_RESTRICTED_FALLBACK_PASSWORD != '' && secrets.FCOS_HOSTED_RESTRICTED_FALLBACK_EMAIL)) || '' }}
+          FCOS_HOSTED_RESTRICTED_PASSWORD: >-
+            ${{ matrix.mode == 'restricted' && ((secrets.FCOS_HOSTED_RESTRICTED_EMAIL != '' && secrets.FCOS_HOSTED_RESTRICTED_PASSWORD != '' && secrets.FCOS_HOSTED_RESTRICTED_PASSWORD) || (secrets.FCOS_HOSTED_RESTRICTED_FALLBACK_EMAIL != '' && secrets.FCOS_HOSTED_RESTRICTED_FALLBACK_PASSWORD != '' && secrets.FCOS_HOSTED_RESTRICTED_FALLBACK_PASSWORD)) || '' }}
+          FCOS_HOSTED_NORMAL_EMAIL: ${{ matrix.mode == 'normal_role' && secrets.FCOS_HOSTED_NORMAL_EMAIL || '' }}
+          FCOS_HOSTED_NORMAL_PASSWORD: ${{ matrix.mode == 'normal_role' && secrets.FCOS_HOSTED_NORMAL_PASSWORD || '' }}
+          FCOS_HOSTED_NORMAL_EXPECTED_ROLE: ${{ vars.FCOS_HOSTED_NORMAL_EXPECTED_ROLE }}
+          FCOS_NORMAL_ROLE_APPROVED_EMAIL: ${{ matrix.mode == 'normal_role' && vars.FCOS_NORMAL_ROLE_APPROVED_EMAIL || '' }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ${{ format('fcos-{0}-before-{1}', needs.prepare.outputs.release_id, matrix.mode) }}
+          path: ${{ matrix.mode == 'restricted' && 'restricted.json' || 'normal-role.json' }}
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: false
+  publish_before:
+    name: publish / before
+    needs:
+      - prepare
+      - observe_before
+      - browser_before
+      - dependencies_before
+      - checks
+    if: >-
+      ${{ needs.prepare.outputs.terminal != 'true' && always() && needs.prepare.result == 'success' && needs.observe_before.result == 'success' &&
+      (needs.browser_before.result == 'success' || needs.browser_before.result == 'skipped') &&
+      (needs.dependencies_before.result == 'success' || needs.dependencies_before.result == 'skipped') &&
+      (needs.checks.result == 'success' || needs.checks.result == 'skipped') }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    timeout-minutes: 10
+    env:
+      FCOS_ADMITTED_RELEASE_SETUP: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP }}
+      FCOS_ADMITTED_RELEASE_SETUP_SHA256: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP_SHA256 }}
+      FCOS_RELEASE_MANIFEST: ${{ inputs.manifest }}
+      FCOS_CONTROLLER_DIRECTORY: controller
+      FCOS_CANDIDATE_DIRECTORY: candidate
+      FCOS_HOSTED_COORDINATOR_URL: ${{ vars.FCOS_HOSTED_COORDINATOR_URL }}
+      FCOS_VERIFICATION_PHASE: before
+      FCOS_HOSTED_DEPENDENCY_SETUP_DIRECTORY: dependency-setup
+    steps:
+      - name: Check out admitted controller
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ job.workflow_sha }}
+          path: controller
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.18.0
+      - name: Install trusted controller dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: controller
+      - name: Check out exact candidate data
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ fromJSON(inputs.manifest).candidate.sha }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Download admitted immutable dependency setup
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          repository: hocheunglai-oss/fcos
+          run-id: ${{ fromJSON(vars.FCOS_ADMITTED_RELEASE_SETUP).dependencyArtifact.runId }}
+          name: ${{ fromJSON(vars.FCOS_ADMITTED_RELEASE_SETUP).dependencyArtifact.name }}
+          path: dependency-setup
+          github-token: ${{ github.token }}
+      - name: Run admitted checks
+        id: run
+        run: node controller/scripts/hosted-release.mjs publish
+        env:
+          FCOS_CONTROLLER_SHA: ${{ job.workflow_sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+          FCOS_HOSTED_GITHUB_READ_TOKEN: ${{ secrets.FCOS_HOSTED_GITHUB_READ_TOKEN }}
+  ready_before:
+    name: ready / before
+    needs:
+      - prepare
+      - publish_before
+    if: ${{ needs.prepare.outputs.terminal != 'true' && always() && needs.prepare.result == 'success' && needs.publish_before.result == 'success' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    timeout-minutes: 10
+    env:
+      FCOS_ADMITTED_RELEASE_SETUP: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP }}
+      FCOS_ADMITTED_RELEASE_SETUP_SHA256: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP_SHA256 }}
+      FCOS_RELEASE_MANIFEST: ${{ inputs.manifest }}
+      FCOS_CONTROLLER_DIRECTORY: controller
+      FCOS_CANDIDATE_DIRECTORY: candidate
+      FCOS_HOSTED_COORDINATOR_URL: ${{ vars.FCOS_HOSTED_COORDINATOR_URL }}
+      FCOS_VERIFICATION_PHASE: before
+    outputs:
+      ready: ${{ steps.run.outputs.ready }}
+    steps:
+      - name: Check out admitted controller
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ job.workflow_sha }}
+          path: controller
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.18.0
+      - name: Install trusted controller dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: controller
+      - name: Check out exact candidate data
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ fromJSON(inputs.manifest).candidate.sha }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Run admitted checks
+        id: run
+        run: node controller/scripts/hosted-release.mjs ready
+        env:
+          FCOS_CONTROLLER_SHA: ${{ job.workflow_sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+          FCOS_HOSTED_GITHUB_READ_TOKEN: ${{ secrets.FCOS_HOSTED_GITHUB_READ_TOKEN }}
+  observe_after:
+    name: observe / after
+    needs:
+      - prepare
+      - production
+    if: >-
+      ${{ needs.prepare.outputs.terminal != 'true' && always() && needs.prepare.result == 'success' && (needs.production.result == 'success' ||
+      needs.prepare.outputs.approved == 'true') }}
+    runs-on: ubuntu-24.04
+    environment: fcos-hosted-verification
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    timeout-minutes: 20
+    env:
+      FCOS_ADMITTED_RELEASE_SETUP: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP }}
+      FCOS_ADMITTED_RELEASE_SETUP_SHA256: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP_SHA256 }}
+      FCOS_RELEASE_MANIFEST: ${{ inputs.manifest }}
+      FCOS_CONTROLLER_DIRECTORY: controller
+      FCOS_CANDIDATE_DIRECTORY: candidate
+      FCOS_HOSTED_COORDINATOR_URL: ${{ vars.FCOS_HOSTED_COORDINATOR_URL }}
+      FCOS_VERIFICATION_PHASE: after
+      FCOS_HOSTED_ENVIRONMENT: fcos-hosted-verification
+      FCOS_RELEASE_OUTPUT: observations-after.json
+    outputs:
+      browser_matrix: ${{ steps.run.outputs.browser_matrix }}
+      has_browsers: ${{ steps.run.outputs.has_browsers }}
+      dependencies_required: ${{ steps.run.outputs.dependencies_required }}
+    steps:
+      - name: Check out admitted controller
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ job.workflow_sha }}
+          path: controller
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.18.0
+      - name: Install trusted controller dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: controller
+      - name: Check out exact candidate data
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ fromJSON(inputs.manifest).candidate.sha }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install trusted browser runtime
+        run: npx --no-install playwright install --with-deps chromium chrome
+        working-directory: controller
+      - name: Run admitted checks
+        id: run
+        run: node controller/scripts/hosted-release.mjs observe
+        env:
+          FCOS_CONTROLLER_SHA: ${{ job.workflow_sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+          FCOS_HOSTED_GITHUB_READ_TOKEN: ${{ secrets.FCOS_HOSTED_GITHUB_READ_TOKEN }}
+          FCOS_HOSTED_RUNTIME_EMAIL: ${{ secrets.FCOS_HOSTED_RUNTIME_EMAIL }}
+          FCOS_HOSTED_RUNTIME_PASSWORD: ${{ secrets.FCOS_HOSTED_RUNTIME_PASSWORD }}
+          FCOS_HOSTED_RUNTIME_EXPECTED_ROLE: ${{ vars.FCOS_HOSTED_RUNTIME_EXPECTED_ROLE }}
+          FCOS_HOSTED_VERCEL_READ_TOKEN: ${{ secrets.FCOS_HOSTED_VERCEL_READ_TOKEN }}
+          FCOS_E2E_VERCEL_BYPASS: ${{ secrets.FCOS_E2E_VERCEL_BYPASS }}
+          FCOS_HOSTED_SCHEMA_DATABASE_URL: ${{ secrets.FCOS_HOSTED_SCHEMA_DATABASE_URL }}
+          FCOS_HOSTED_FCUNO_READ_TOKEN: ${{ secrets.FCOS_HOSTED_FCUNO_READ_TOKEN }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ${{ format('fcos-{0}-observations-after', needs.prepare.outputs.release_id) }}
+          path: observations-after.json
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: false
+  dependencies_after:
+    name: dependencies / after
+    needs:
+      - prepare
+      - observe_after
+    if: >-
+      ${{ needs.prepare.outputs.terminal != 'true' && always() && needs.observe_after.result == 'success' && needs.observe_after.outputs.dependencies_required ==
+      'true' }}
+    runs-on: ubuntu-24.04
+    environment: fcos-hosted-dependency-verification
+    permissions:
+      contents: read
+      actions: read
+    timeout-minutes: 15
+    env:
+      FCOS_ADMITTED_RELEASE_SETUP: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP }}
+      FCOS_ADMITTED_RELEASE_SETUP_SHA256: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP_SHA256 }}
+      FCOS_RELEASE_MANIFEST: ${{ inputs.manifest }}
+      FCOS_CONTROLLER_DIRECTORY: controller
+      FCOS_CANDIDATE_DIRECTORY: candidate
+      FCOS_HOSTED_COORDINATOR_URL: ${{ vars.FCOS_HOSTED_COORDINATOR_URL }}
+      FCOS_VERIFICATION_PHASE: after
+      FCOS_HOSTED_ENVIRONMENT: fcos-hosted-dependency-verification
+      FCOS_HOSTED_DEPENDENCY_SETUP_DIRECTORY: dependency-setup
+      FCOS_RELEASE_OUTPUT: dependencies.json
+    steps:
+      - name: Check out admitted controller
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ job.workflow_sha }}
+          path: controller
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.18.0
+      - name: Install trusted controller dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: controller
+      - name: Check out exact candidate data
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ fromJSON(inputs.manifest).candidate.sha }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Download admitted immutable dependency setup
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          repository: hocheunglai-oss/fcos
+          run-id: ${{ fromJSON(vars.FCOS_ADMITTED_RELEASE_SETUP).dependencyArtifact.runId }}
+          name: ${{ fromJSON(vars.FCOS_ADMITTED_RELEASE_SETUP).dependencyArtifact.name }}
+          path: dependency-setup
+          github-token: ${{ github.token }}
+      - name: Run admitted checks
+        run: node controller/scripts/hosted-release-dependencies.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          FCOS_HOSTED_GITHUB_READ_TOKEN: ${{ secrets.FCOS_HOSTED_GITHUB_READ_TOKEN }}
+          FCOS_CONTROLLER_SHA: ${{ job.workflow_sha }}
+          FCOS_HOSTED_SALESFORCE_JWT_PRIVATE_KEY: ${{ secrets.FCOS_HOSTED_SALESFORCE_JWT_PRIVATE_KEY }}
+          FCOS_HOSTED_PRESERVATION_DATABASE_URL: ${{ secrets.FCOS_HOSTED_PRESERVATION_DATABASE_URL }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ${{ format('fcos-{0}-dependencies-after', needs.prepare.outputs.release_id) }}
+          path: dependencies.json
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: false
+  browser_after:
+    name: ${{ format('browser / after / {0}', matrix.mode) }}
+    needs:
+      - prepare
+      - observe_after
+    if: >-
+      ${{ needs.prepare.outputs.terminal != 'true' && always() && needs.prepare.result == 'success' && needs.observe_after.result == 'success' &&
+      needs.observe_after.outputs.has_browsers == 'true' }}
+    runs-on: ubuntu-24.04
+    environment: ${{ matrix.mode == 'restricted' && 'fcos-hosted-restricted-verification' || 'fcos-hosted-normal-verification' }}
+    permissions:
+      contents: read
+      actions: read
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix: ${{ fromJSON(needs.observe_after.outputs.browser_matrix) }}
+    env:
+      FCOS_ADMITTED_RELEASE_SETUP: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP }}
+      FCOS_ADMITTED_RELEASE_SETUP_SHA256: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP_SHA256 }}
+      FCOS_RELEASE_MANIFEST: ${{ inputs.manifest }}
+      FCOS_CONTROLLER_DIRECTORY: controller
+      FCOS_CANDIDATE_DIRECTORY: candidate
+      FCOS_HOSTED_COORDINATOR_URL: ${{ vars.FCOS_HOSTED_COORDINATOR_URL }}
+      FCOS_VERIFICATION_PHASE: after
+      FCOS_BROWSER_MODE: ${{ matrix.mode }}
+      FCOS_OBSERVATIONS_FILE: observations-after.json
+      FCOS_RELEASE_OUTPUT: ${{ matrix.mode == 'restricted' && 'restricted.json' || 'normal-role.json' }}
+    steps:
+      - name: Check out admitted controller
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ job.workflow_sha }}
+          path: controller
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.18.0
+      - name: Install trusted controller dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: controller
+      - name: Check out exact candidate data
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ fromJSON(inputs.manifest).candidate.sha }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install trusted browser runtime
+        run: npx --no-install playwright install --with-deps chromium chrome
+        working-directory: controller
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: ${{ format('fcos-{0}-observations-after', needs.prepare.outputs.release_id) }}
+      - name: Run admitted checks
+        id: run
+        run: node controller/scripts/hosted-release.mjs browser
+        env:
+          FCOS_CONTROLLER_SHA: ${{ job.workflow_sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+          FCOS_HOSTED_GITHUB_READ_TOKEN: ${{ secrets.FCOS_HOSTED_GITHUB_READ_TOKEN }}
+          FCOS_HOSTED_BROWSER_ENABLED: 'true'
+          FCOS_HOSTED_VERCEL_READ_TOKEN: ${{ secrets.FCOS_HOSTED_VERCEL_READ_TOKEN }}
+          FCOS_E2E_VERCEL_BYPASS: ${{ secrets.FCOS_E2E_VERCEL_BYPASS }}
+          FCOS_HOSTED_RESTRICTED_EMAIL: >-
+            ${{ matrix.mode == 'restricted' && ((secrets.FCOS_HOSTED_RESTRICTED_EMAIL != '' && secrets.FCOS_HOSTED_RESTRICTED_PASSWORD != '' && secrets.FCOS_HOSTED_RESTRICTED_EMAIL) || (secrets.FCOS_HOSTED_RESTRICTED_FALLBACK_EMAIL != '' && secrets.FCOS_HOSTED_RESTRICTED_FALLBACK_PASSWORD != '' && secrets.FCOS_HOSTED_RESTRICTED_FALLBACK_EMAIL)) || '' }}
+          FCOS_HOSTED_RESTRICTED_PASSWORD: >-
+            ${{ matrix.mode == 'restricted' && ((secrets.FCOS_HOSTED_RESTRICTED_EMAIL != '' && secrets.FCOS_HOSTED_RESTRICTED_PASSWORD != '' && secrets.FCOS_HOSTED_RESTRICTED_PASSWORD) || (secrets.FCOS_HOSTED_RESTRICTED_FALLBACK_EMAIL != '' && secrets.FCOS_HOSTED_RESTRICTED_FALLBACK_PASSWORD != '' && secrets.FCOS_HOSTED_RESTRICTED_FALLBACK_PASSWORD)) || '' }}
+          FCOS_HOSTED_NORMAL_EMAIL: ${{ matrix.mode == 'normal_role' && secrets.FCOS_HOSTED_NORMAL_EMAIL || '' }}
+          FCOS_HOSTED_NORMAL_PASSWORD: ${{ matrix.mode == 'normal_role' && secrets.FCOS_HOSTED_NORMAL_PASSWORD || '' }}
+          FCOS_HOSTED_NORMAL_EXPECTED_ROLE: ${{ vars.FCOS_HOSTED_NORMAL_EXPECTED_ROLE }}
+          FCOS_NORMAL_ROLE_APPROVED_EMAIL: ${{ matrix.mode == 'normal_role' && vars.FCOS_NORMAL_ROLE_APPROVED_EMAIL || '' }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ${{ format('fcos-{0}-after-{1}', needs.prepare.outputs.release_id, matrix.mode) }}
+          path: ${{ matrix.mode == 'restricted' && 'restricted.json' || 'normal-role.json' }}
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: false
+  publish_after:
+    name: publish / after
+    needs:
+      - prepare
+      - observe_after
+      - browser_after
+      - dependencies_after
+    if: >-
+      ${{ needs.prepare.outputs.terminal != 'true' && always() && needs.prepare.result == 'success' && needs.observe_after.result == 'success' &&
+      (needs.browser_after.result == 'success' || needs.browser_after.result == 'skipped') &&
+      (needs.dependencies_after.result == 'success' || needs.dependencies_after.result == 'skipped') }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    timeout-minutes: 10
+    env:
+      FCOS_ADMITTED_RELEASE_SETUP: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP }}
+      FCOS_ADMITTED_RELEASE_SETUP_SHA256: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP_SHA256 }}
+      FCOS_RELEASE_MANIFEST: ${{ inputs.manifest }}
+      FCOS_CONTROLLER_DIRECTORY: controller
+      FCOS_CANDIDATE_DIRECTORY: candidate
+      FCOS_HOSTED_COORDINATOR_URL: ${{ vars.FCOS_HOSTED_COORDINATOR_URL }}
+      FCOS_VERIFICATION_PHASE: after
+      FCOS_HOSTED_DEPENDENCY_SETUP_DIRECTORY: dependency-setup
+    steps:
+      - name: Check out admitted controller
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ job.workflow_sha }}
+          path: controller
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.18.0
+      - name: Install trusted controller dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: controller
+      - name: Check out exact candidate data
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ fromJSON(inputs.manifest).candidate.sha }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Download admitted immutable dependency setup
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          repository: hocheunglai-oss/fcos
+          run-id: ${{ fromJSON(vars.FCOS_ADMITTED_RELEASE_SETUP).dependencyArtifact.runId }}
+          name: ${{ fromJSON(vars.FCOS_ADMITTED_RELEASE_SETUP).dependencyArtifact.name }}
+          path: dependency-setup
+          github-token: ${{ github.token }}
+      - name: Run admitted checks
+        id: run
+        run: node controller/scripts/hosted-release.mjs publish
+        env:
+          FCOS_CONTROLLER_SHA: ${{ job.workflow_sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+          FCOS_HOSTED_GITHUB_READ_TOKEN: ${{ secrets.FCOS_HOSTED_GITHUB_READ_TOKEN }}
+  ready_after:
+    name: ready / after
+    needs:
+      - prepare
+      - publish_after
+    if: ${{ needs.prepare.outputs.terminal != 'true' && always() && needs.prepare.result == 'success' && needs.publish_after.result == 'success' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    timeout-minutes: 10
+    env:
+      FCOS_ADMITTED_RELEASE_SETUP: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP }}
+      FCOS_ADMITTED_RELEASE_SETUP_SHA256: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP_SHA256 }}
+      FCOS_RELEASE_MANIFEST: ${{ inputs.manifest }}
+      FCOS_CONTROLLER_DIRECTORY: controller
+      FCOS_CANDIDATE_DIRECTORY: candidate
+      FCOS_HOSTED_COORDINATOR_URL: ${{ vars.FCOS_HOSTED_COORDINATOR_URL }}
+      FCOS_VERIFICATION_PHASE: after
+    outputs:
+      ready: ${{ steps.run.outputs.ready }}
+    steps:
+      - name: Check out admitted controller
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ job.workflow_sha }}
+          path: controller
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.18.0
+      - name: Install trusted controller dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: controller
+      - name: Check out exact candidate data
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ fromJSON(inputs.manifest).candidate.sha }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Run admitted checks
+        id: run
+        run: node controller/scripts/hosted-release.mjs ready
+        env:
+          FCOS_CONTROLLER_SHA: ${{ job.workflow_sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+          FCOS_HOSTED_GITHUB_READ_TOKEN: ${{ secrets.FCOS_HOSTED_GITHUB_READ_TOKEN }}
+  merge_readiness:
+    name: merge-readiness
+    needs:
+      - prepare
+      - ready_before
+    if: ${{ needs.prepare.outputs.terminal != 'true' && always() && needs.prepare.result == 'success' && needs.ready_before.result == 'success' && needs.ready_before.outputs.ready == 'true' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    timeout-minutes: 10
+    env:
+      FCOS_ADMITTED_RELEASE_SETUP: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP }}
+      FCOS_ADMITTED_RELEASE_SETUP_SHA256: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP_SHA256 }}
+      FCOS_HOSTED_READINESS_ENABLED: ${{ vars.FCOS_HOSTED_READINESS_ENABLED }}
+      FCOS_HOSTED_READINESS_ACTIVATION: ${{ vars.FCOS_HOSTED_READINESS_ACTIVATION }}
+      FCOS_RELEASE_MANIFEST: ${{ inputs.manifest }}
+      FCOS_CONTROLLER_DIRECTORY: controller
+      FCOS_CANDIDATE_DIRECTORY: candidate
+      FCOS_HOSTED_COORDINATOR_URL: ${{ vars.FCOS_HOSTED_COORDINATOR_URL }}
+      FCOS_RELEASE_OUTPUT: hosted-readiness.json
+    outputs:
+      ready: ${{ steps.run.outputs.ready }}
+    steps:
+      - name: Check out admitted controller
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ job.workflow_sha }}
+          path: controller
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.18.0
+      - name: Install trusted controller dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: controller
+      - name: Check out exact candidate data
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ fromJSON(inputs.manifest).candidate.sha }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Run admitted checks
+        id: run
+        run: node controller/scripts/hosted-release-readiness.mjs
+        env:
+          FCOS_CONTROLLER_SHA: ${{ job.workflow_sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: ${{ steps.run.outputs.ready == 'true' }}
+        with:
+          name: ${{ format('fcos-hosted-readiness-{0}', needs.prepare.outputs.candidate_sha) }}
+          path: hosted-readiness.json
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: false
+  production:
+    name: ${{ format('production / {0}', needs.prepare.outputs.manifest_hash) }}
+    needs:
+      - prepare
+      - ready_before
+      - merge_readiness
+    if: >-
+      ${{ needs.prepare.outputs.terminal != 'true' && needs.prepare.outputs.execution_mode == 'release' && needs.prepare.outputs.approved != 'true' &&
+      needs.ready_before.outputs.ready == 'true' && (vars.FCOS_HOSTED_READINESS_ENABLED != 'true' || needs.merge_readiness.outputs.ready == 'true') }}
+    runs-on: ubuntu-24.04
+    environment:
+      name: fcos-production-release
+      url: ${{ format('https://github.com/{0}/actions/runs/{1}#summary', github.repository, github.run_id) }}
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    timeout-minutes: 10
+    env:
+      FCOS_ADMITTED_RELEASE_SETUP: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP }}
+      FCOS_ADMITTED_RELEASE_SETUP_SHA256: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP_SHA256 }}
+      FCOS_RELEASE_MANIFEST: ${{ inputs.manifest }}
+      FCOS_CONTROLLER_DIRECTORY: controller
+      FCOS_CANDIDATE_DIRECTORY: candidate
+      FCOS_HOSTED_COORDINATOR_URL: ${{ vars.FCOS_HOSTED_COORDINATOR_URL }}
+      FCOS_HOSTED_ENVIRONMENT: fcos-production-release
+    steps:
+      - name: Check out admitted controller
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ job.workflow_sha }}
+          path: controller
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.18.0
+      - name: Install trusted controller dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: controller
+      - name: Check out exact candidate data
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ fromJSON(inputs.manifest).candidate.sha }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Run admitted checks
+        id: run
+        run: node controller/scripts/hosted-release.mjs approve
+        env:
+          FCOS_CONTROLLER_SHA: ${{ job.workflow_sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+          FCOS_HOSTED_GITHUB_READ_TOKEN: ${{ secrets.FCOS_HOSTED_GITHUB_READ_TOKEN }}
+  execute:
+    name: ${{ format('execute / {0}', needs.prepare.outputs.manifest_hash) }}
+    needs:
+      - prepare
+      - ready_after
+    if: >-
+      ${{ needs.prepare.outputs.terminal != 'true' && always() && needs.prepare.result == 'success' && needs.ready_after.result == 'success' &&
+      needs.prepare.outputs.execution_mode == 'release' && needs.ready_after.outputs.ready == 'true' }}
+    runs-on: ubuntu-24.04
+    environment: fcos-hosted-production-resume
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    timeout-minutes: 30
+    env:
+      FCOS_ADMITTED_RELEASE_SETUP: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP }}
+      FCOS_ADMITTED_RELEASE_SETUP_SHA256: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP_SHA256 }}
+      FCOS_RELEASE_MANIFEST: ${{ inputs.manifest }}
+      FCOS_CONTROLLER_DIRECTORY: controller
+      FCOS_CANDIDATE_DIRECTORY: candidate
+      FCOS_HOSTED_COORDINATOR_URL: ${{ vars.FCOS_HOSTED_COORDINATOR_URL }}
+      FCOS_HOSTED_ENVIRONMENT: fcos-hosted-production-resume
+      FCOS_RELEASE_OUTPUT: production-result.json
+    steps:
+      - name: Check out admitted controller
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ job.workflow_sha }}
+          path: controller
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.18.0
+      - name: Install trusted controller dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: controller
+      - name: Check out exact candidate data
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ fromJSON(inputs.manifest).candidate.sha }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install trusted browser runtime
+        run: npx --no-install playwright install --with-deps chromium chrome
+        working-directory: controller
+      - run: npm install --global vercel@54.20.1
+      - name: Run admitted checks
+        id: run
+        run: node controller/scripts/hosted-release.mjs execute
+        env:
+          FCOS_CONTROLLER_SHA: ${{ job.workflow_sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+          FCOS_HOSTED_GITHUB_READ_TOKEN: ${{ secrets.FCOS_HOSTED_GITHUB_READ_TOKEN }}
+          FCOS_HOSTED_RUNTIME_EMAIL: ${{ secrets.FCOS_HOSTED_RUNTIME_EMAIL }}
+          FCOS_HOSTED_RUNTIME_PASSWORD: ${{ secrets.FCOS_HOSTED_RUNTIME_PASSWORD }}
+          FCOS_HOSTED_RUNTIME_EXPECTED_ROLE: ${{ vars.FCOS_HOSTED_RUNTIME_EXPECTED_ROLE }}
+          FCOS_HOSTED_CREDENTIAL_CLASS: production
+          FCOS_HOSTED_VERCEL_TOKEN: ${{ secrets.FCOS_HOSTED_VERCEL_TOKEN }}
+          FCOS_HOSTED_VERCEL_TOKEN_ID: ${{ vars.FCOS_HOSTED_VERCEL_TOKEN_ID }}
+          FCOS_PRODUCTION_VERIFICATION_BYPASS: ${{ secrets.FCOS_PRODUCTION_VERIFICATION_BYPASS }}
+          FCOS_HOSTED_SCHEMA_DATABASE_URL: ${{ secrets.FCOS_HOSTED_SCHEMA_DATABASE_URL }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: ${{ always() && steps.run.outcome != 'skipped' && steps.run.outcome != '' }}
+        with:
+          name: ${{ format('fcos-{0}-production', needs.prepare.outputs.release_id) }}
+          path: production-result.json
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: false
+  qualify:
+    name: qualify
+    needs:
+      - prepare
+      - ready_before
+    if: ${{ needs.prepare.outputs.terminal != 'true' && needs.prepare.outputs.execution_mode == 'qualification' && needs.ready_before.outputs.ready == 'true' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    timeout-minutes: 10
+    env:
+      FCOS_ADMITTED_RELEASE_SETUP: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP }}
+      FCOS_ADMITTED_RELEASE_SETUP_SHA256: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP_SHA256 }}
+      FCOS_RELEASE_MANIFEST: ${{ inputs.manifest }}
+      FCOS_CONTROLLER_DIRECTORY: controller
+      FCOS_CANDIDATE_DIRECTORY: candidate
+      FCOS_HOSTED_COORDINATOR_URL: ${{ vars.FCOS_HOSTED_COORDINATOR_URL }}
+      FCOS_RELEASE_OUTPUT: qualification.json
+    steps:
+      - name: Check out admitted controller
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ job.workflow_sha }}
+          path: controller
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.18.0
+      - name: Install trusted controller dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: controller
+      - name: Check out exact candidate data
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ fromJSON(inputs.manifest).candidate.sha }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Run admitted checks
+        id: run
+        run: node controller/scripts/hosted-release.mjs qualify
+        env:
+          FCOS_CONTROLLER_SHA: ${{ job.workflow_sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+          FCOS_HOSTED_GITHUB_READ_TOKEN: ${{ secrets.FCOS_HOSTED_GITHUB_READ_TOKEN }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ${{ format('fcos-{0}-qualification', needs.prepare.outputs.release_id) }}
+          path: qualification.json
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: false
+  qualification_publish:
+    name: qualify-publish
+    needs:
+      - prepare
+      - qualify
+    if: ${{ needs.prepare.outputs.terminal != 'true' && needs.prepare.outputs.execution_mode == 'qualification' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    timeout-minutes: 10
+    env:
+      FCOS_ADMITTED_RELEASE_SETUP: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP }}
+      FCOS_ADMITTED_RELEASE_SETUP_SHA256: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP_SHA256 }}
+      FCOS_RELEASE_MANIFEST: ${{ inputs.manifest }}
+      FCOS_CONTROLLER_DIRECTORY: controller
+      FCOS_CANDIDATE_DIRECTORY: candidate
+      FCOS_HOSTED_COORDINATOR_URL: ${{ vars.FCOS_HOSTED_COORDINATOR_URL }}
+    steps:
+      - name: Check out admitted controller
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ job.workflow_sha }}
+          path: controller
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.18.0
+      - name: Install trusted controller dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: controller
+      - name: Check out exact candidate data
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ fromJSON(inputs.manifest).candidate.sha }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Run admitted checks
+        id: run
+        run: node controller/scripts/hosted-release.mjs qualify-publish
+        env:
+          FCOS_CONTROLLER_SHA: ${{ job.workflow_sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+          FCOS_HOSTED_GITHUB_READ_TOKEN: ${{ secrets.FCOS_HOSTED_GITHUB_READ_TOKEN }}
+  report:
+    name: report
+    needs:
+      - merge_readiness
+      - prepare
+      - checks
+      - reconcile
+      - preview
+      - observe_before
+      - dependencies_before
+      - browser_before
+      - publish_before
+      - ready_before
+      - observe_after
+      - dependencies_after
+      - browser_after
+      - publish_after
+      - ready_after
+      - production
+      - execute
+      - qualify
+      - qualification_publish
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    timeout-minutes: 10
+    env:
+      FCOS_ADMITTED_RELEASE_SETUP: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP }}
+      FCOS_ADMITTED_RELEASE_SETUP_SHA256: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP_SHA256 }}
+      FCOS_RELEASE_MANIFEST: ${{ inputs.manifest }}
+      FCOS_CONTROLLER_DIRECTORY: controller
+      FCOS_CANDIDATE_DIRECTORY: candidate
+      FCOS_HOSTED_COORDINATOR_URL: ${{ vars.FCOS_HOSTED_COORDINATOR_URL }}
+      FCOS_JOB_RESULTS: ${{ toJSON(needs) }}
+      FCOS_RELEASE_OUTPUT: release-report.json
+    steps:
+      - name: Check out admitted controller
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ job.workflow_sha }}
+          path: controller
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.18.0
+      - name: Install trusted controller dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: controller
+      - name: Check out exact candidate data
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ fromJSON(inputs.manifest).candidate.sha }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        continue-on-error: true
+        if: ${{ always() && contains(fromJSON('["success","failure","cancelled"]'), needs.execute.result) }}
+        with:
+          name: ${{ format('fcos-{0}-production', fromJSON(inputs.manifest).releaseId) }}
+      - name: Report observed outcome
+        run: node controller/scripts/hosted-release-report.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          FCOS_HOSTED_GITHUB_READ_TOKEN: ${{ secrets.FCOS_HOSTED_GITHUB_READ_TOKEN }}
+          FCOS_CONTROLLER_SHA: ${{ job.workflow_sha }}
+          FCOS_RELEASE_RESULT_FILE: ${{ contains(fromJSON('["success","failure","cancelled"]'), needs.execute.result) && 'production-result.json' || '' }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ${{ format('fcos-{0}-report', fromJSON(inputs.manifest).releaseId) }}
+          path: release-report.json
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: false
+        if: ${{ always() }}

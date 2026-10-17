@@ -1,0 +1,157 @@
+# One-time qualification bootstrap template, not an installed Actions workflow.
+# Replace every controller placeholder with the admitted immutable controller.
+# Publish only as authenticated-release.yml on the separately admitted protected qualification branch.
+# Admission binds that branch/commit/candidate/setup; Production authority is never available.
+name: FCOS hosted qualification bootstrap
+run-name: ${{ inputs.bootstrap_phase == 'toolchain' && format('FCOS toolchain {0}', inputs.intent_sha256) || format('FCOS hosted qualification {0}', inputs.candidate_sha || 'resume saved manifest') }}
+'on':
+  workflow_dispatch:
+    inputs:
+      bootstrap_phase:
+        description: One-time image publication or actual qualification; never Production.
+        type: choice
+        default: qualification
+        options:
+          - qualification
+          - toolchain
+      intent_sha256:
+        description: Exact held legacy publication intent; required only for the toolchain phase.
+        type: string
+        required: false
+      candidate_sha:
+        description: Exact reviewed candidate SHA for a new release.
+        type: string
+        required: false
+      plan:
+        description: Reviewed JSON business release plan. Required for a new release.
+        type: string
+        required: false
+      resume_manifest:
+        description: Saved unchanged release manifest for recovery. Do not generate a new release ID.
+        type: string
+        required: false
+permissions: {}
+jobs:
+  toolchain:
+    if: ${{ inputs.bootstrap_phase == 'toolchain' }}
+    permissions:
+      contents: read
+      actions: read
+      packages: write
+    uses: hocheunglai-oss/fcos/.github/workflows/hosted-release-toolchain.yml@__FCOS_CONTROLLER_SHA__
+    with:
+      source_sha: __FCOS_CONTROLLER_SHA__
+      intent_sha256: ${{ inputs.intent_sha256 }}
+  manifest:
+    name: Prepare immutable release manifest
+    if: ${{ inputs.bootstrap_phase == 'qualification' && vars.FCOS_HOSTED_QUALIFICATION_ADMITTED == 'true' }}
+    runs-on: ubuntu-24.04
+    environment: fcos-hosted-verification
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      manifest: ${{ steps.manifest.outputs.manifest }}
+    env:
+      FCOS_QUALIFICATION_BOOTSTRAP: 'true'
+      FCOS_HOSTED_QUALIFICATION_ADMITTED: ${{ vars.FCOS_HOSTED_QUALIFICATION_ADMITTED }}
+      FCOS_CONTROLLER_DIRECTORY: controller
+      FCOS_CANDIDATE_DIRECTORY: candidate
+      FCOS_CONTROLLER_SHA: __FCOS_CONTROLLER_SHA__
+      FCOS_ADMITTED_RELEASE_SETUP: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP }}
+      FCOS_ADMITTED_RELEASE_SETUP_SHA256: ${{ vars.FCOS_ADMITTED_RELEASE_SETUP_SHA256 }}
+      FCOS_CANDIDATE_SHA: ${{ fromJSON(inputs.resume_manifest || '{}').candidate.sha || inputs.candidate_sha }}
+      FCOS_RELEASE_PLAN: ${{ inputs.plan }}
+      FCOS_RESUME_MANIFEST: ${{ inputs.resume_manifest }}
+    steps:
+      - name: Check out admitted controller
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: __FCOS_CONTROLLER_SHA__
+          path: controller
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.18.0
+      - name: Install admitted controller dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: controller
+      - name: Admit qualification dispatch before candidate checkout
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          FCOS_HOSTED_GITHUB_READ_TOKEN: ${{ secrets.FCOS_HOSTED_GITHUB_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          const resume = process.env.FCOS_RESUME_MANIFEST;
+          const plan = process.env.FCOS_RELEASE_PLAN;
+          if (!!resume === !!plan) throw new Error('Exactly one qualification plan or unchanged recovery manifest required');
+          const value = JSON.parse(resume || plan);
+          if (value.stage !== 'qualification' || (resume && value.executionMode !== 'qualification')
+            || (value.executionMode !== undefined && value.executionMode !== 'qualification')) {
+            throw new Error('Qualification-only bootstrap');
+          }
+          NODE
+          node controller/scripts/hosted-release-manifest.mjs --validate-dispatch-only
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: hocheunglai-oss/fcos
+          ref: ${{ env.FCOS_CANDIDATE_SHA }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install trusted runtime browser
+        run: npx --no-install playwright install --with-deps chromium
+        working-directory: controller
+      - name: Prepare actual qualification manifest
+        id: manifest
+        run: node controller/scripts/hosted-release-manifest.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          FCOS_HOSTED_GITHUB_READ_TOKEN: ${{ secrets.FCOS_HOSTED_GITHUB_READ_TOKEN }}
+          FCOS_HOSTED_VERCEL_READ_TOKEN: ${{ secrets.FCOS_HOSTED_VERCEL_READ_TOKEN }}
+          FCOS_HOSTED_SCHEMA_DATABASE_URL: ${{ secrets.FCOS_HOSTED_SCHEMA_DATABASE_URL }}
+          FCOS_PRODUCTION_VERIFICATION_BYPASS: ${{ secrets.FCOS_PRODUCTION_VERIFICATION_BYPASS }}
+          FCOS_HOSTED_RUNTIME_EMAIL: ${{ secrets.FCOS_HOSTED_RUNTIME_EMAIL }}
+          FCOS_HOSTED_RUNTIME_PASSWORD: ${{ secrets.FCOS_HOSTED_RUNTIME_PASSWORD }}
+          FCOS_HOSTED_RUNTIME_EXPECTED_ROLE: ${{ vars.FCOS_HOSTED_RUNTIME_EXPECTED_ROLE }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ${{ format('fcos-release-manifest-{0}', github.run_id) }}
+          path: release-manifest.json
+          if-no-files-found: error
+          retention-days: 90
+  release:
+    name: release
+    needs:
+      - manifest
+    permissions:
+      contents: read
+      actions: read
+      packages: read
+      id-token: write
+    uses: hocheunglai-oss/fcos/.github/workflows/hosted-release-controller.yml@__FCOS_CONTROLLER_SHA__
+    with:
+      manifest: ${{ needs.manifest.outputs.manifest }}
+    # Values remain in each called job's protected environment; no secrets: inherit.
+    secrets:
+      FCOS_E2E_VERCEL_BYPASS: ${{ secrets.FCOS_E2E_VERCEL_BYPASS }}
+      FCOS_HOSTED_FCUNO_READ_TOKEN: ${{ secrets.FCOS_HOSTED_FCUNO_READ_TOKEN }}
+      FCOS_HOSTED_GITHUB_READ_TOKEN: ${{ secrets.FCOS_HOSTED_GITHUB_READ_TOKEN }}
+      FCOS_HOSTED_NORMAL_EMAIL: ${{ secrets.FCOS_HOSTED_NORMAL_EMAIL }}
+      FCOS_HOSTED_NORMAL_PASSWORD: ${{ secrets.FCOS_HOSTED_NORMAL_PASSWORD }}
+      FCOS_HOSTED_PRESERVATION_DATABASE_URL: ${{ secrets.FCOS_HOSTED_PRESERVATION_DATABASE_URL }}
+      FCOS_HOSTED_RESTRICTED_EMAIL: ${{ secrets.FCOS_HOSTED_RESTRICTED_EMAIL }}
+      FCOS_HOSTED_RESTRICTED_FALLBACK_EMAIL: ${{ secrets.FCOS_E2E_EMAIL }}
+      FCOS_HOSTED_RESTRICTED_FALLBACK_PASSWORD: ${{ secrets.FCOS_E2E_PASSWORD }}
+      FCOS_HOSTED_RESTRICTED_PASSWORD: ${{ secrets.FCOS_HOSTED_RESTRICTED_PASSWORD }}
+      FCOS_HOSTED_RUNTIME_EMAIL: ${{ secrets.FCOS_HOSTED_RUNTIME_EMAIL }}
+      FCOS_HOSTED_RUNTIME_PASSWORD: ${{ secrets.FCOS_HOSTED_RUNTIME_PASSWORD }}
+      FCOS_HOSTED_SALESFORCE_JWT_PRIVATE_KEY: ${{ secrets.FCOS_HOSTED_SALESFORCE_JWT_PRIVATE_KEY }}
+      FCOS_HOSTED_SCHEMA_DATABASE_URL: ${{ secrets.FCOS_HOSTED_SCHEMA_DATABASE_URL }}
+      FCOS_HOSTED_VERCEL_READ_TOKEN: ${{ secrets.FCOS_HOSTED_VERCEL_READ_TOKEN }}
+      FCOS_HOSTED_VERCEL_TOKEN: ${{ secrets.FCOS_HOSTED_VERCEL_TOKEN }}
