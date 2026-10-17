@@ -7,6 +7,7 @@ import { collectRuntimeObservation } from '../../collect-preview-parity.mjs';
 import { assertProductionRuntimeReadback } from '../release-production.mjs';
 import { canonicalFcosE2eCandidateUrl } from '../../verify-e2e-candidate.mjs';
 import { canonical, digest, fail, validateManifest } from './contract.mjs';
+import { createVercelIntegrationReader } from './vercel-read-auth.mjs';
 
 export function assertProjectConfiguration(actual, expected) {
   const keys = ['framework','buildCommand','devCommand','installCommand','outputDirectory','rootDirectory','nodeVersion'];
@@ -27,18 +28,21 @@ export function deploymentArguments(manifest, operationId, production) {
 
 /** Trusted process only; candidate files are packaged by the pinned CLI, never imported/executed here. */
 export function createVercelAdapter({ manifest, candidateDirectory, env = process.env, fetchImpl = fetch,
-  execute = execFileSync, now = Date.now, schemaObservation, collectCheck, runtimeTokenProvider } = {}) {
+  execute = execFileSync, now = Date.now, schemaObservation, collectCheck, runtimeTokenProvider, readOnly = false } = {}) {
   validateManifest(manifest);
   const cwd = resolve(candidateDirectory), target = manifest.targets;
-  if (!env.FCOS_HOSTED_VERCEL_TOKEN || !env.FCOS_HOSTED_VERCEL_TOKEN_ID) fail('HOSTED_VERCEL_CREDENTIAL_MISSING');
+  const reader=readOnly?createVercelIntegrationReader({manifest,env,fetchImpl,now}):null;
+  if (!readOnly && (!env.FCOS_HOSTED_VERCEL_TOKEN || !env.FCOS_HOSTED_VERCEL_TOKEN_ID)) fail('HOSTED_VERCEL_CREDENTIAL_MISSING');
   const cliEnv = { PATH: env.PATH, HOME: env.HOME, CI: '1', NO_COLOR: '1', VERCEL_TOKEN: env.FCOS_HOSTED_VERCEL_TOKEN,
     VERCEL_ORG_ID: target.vercelTeam, VERCEL_PROJECT_ID: target.vercelProject };
   const run = args => {
+    if(readOnly)fail('VERCEL_READ_WRITE_FORBIDDEN','vercel.read');
     try { return execute('vercel', [...args, '--scope', fcosConnectionIdentifier('vercel', 'Team'), '--cwd', cwd, '--no-color'], {
       cwd, env: cliEnv, encoding: 'utf8', timeout: 180000, maxBuffer: 2 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'],
     }).trim(); } catch { fail('VERCEL_COMMAND_UNRESOLVED', 'vercel.write', 'Read back this operation; command errors do not prove that submission did not occur.'); }
   };
   const api = async (path, { permitStatus } = {}) => {
+    if(readOnly)return reader.get(path);
     const url = new URL(`https://api.vercel.com${path}`); url.searchParams.set('teamId', target.vercelTeam);
     if (url.origin !== 'https://api.vercel.com' || !path.startsWith('/v')) fail('VERCEL_API_PATH');
     let response;
@@ -93,6 +97,7 @@ export function createVercelAdapter({ manifest, candidateDirectory, env = proces
   async function admit(release, phase) {
     validateManifest(release);
     if (digest(release) !== digest(manifest)) fail('MANIFEST_CHANGED');
+    if(readOnly)return reader.admit();
     const production = phase.startsWith('production');
     if (production && env.FCOS_HOSTED_CREDENTIAL_CLASS !== 'production' || !production && env.FCOS_HOSTED_CREDENTIAL_CLASS !== 'preview') fail('CREDENTIAL_CLASS_MISMATCH', phase);
     if (existsSync(join(cwd, 'vercel.ts'))) fail('EXECUTABLE_DEPLOY_CONFIGURATION', phase);
@@ -126,7 +131,7 @@ export function createVercelAdapter({ manifest, candidateDirectory, env = proces
     if (!/^https:\/\/[a-z0-9-]+\.vercel\.app\/?$/.test(output)) fail('DEPLOYMENT_RESPONSE_UNRESOLVED');
     return deployment(new URL(output).hostname);
   }
-  return {
+  const adapter = {
     admit, verifyArtifact, collectCheck, inspect: deployment,
     observePreviousProduction: async () => {
       const p = await project();
@@ -181,4 +186,8 @@ export function createVercelAdapter({ manifest, candidateDirectory, env = proces
       if (version.deploymentId !== value.id || version.commit !== release.previousProduction.sha || version.provenance?.sourceDigest !== release.previousProduction.sourceSha256) fail('ROLLBACK_PUBLIC_READBACK');
     },
   };
+  if(readOnly)return Object.fromEntries(['admit','verifyArtifact','collectCheck','inspect','observePreviousProduction','currentProduction','ready','discover'].map(key=>[key,adapter[key]]));
+  return adapter;
 }
+
+export function createVercelReadAdapter(options) { return createVercelAdapter({...options,readOnly:true}); }

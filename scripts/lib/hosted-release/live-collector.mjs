@@ -5,7 +5,7 @@ import { FCOS_CONNECTION_POLICY } from '../../../config/fcosConnections.js';
 import { createHostedRuntimeTokenProvider } from './browser.mjs';
 import { prepareCandidateProtection } from '../../e2e-protection-state.mjs';
 import { request } from '@playwright/test';
-import { createVercelAdapter } from './vercel.mjs';
+import { createVercelAdapter, createVercelReadAdapter } from './vercel.mjs';
 import { collectSchemaObservation, hostedProof } from './observations.mjs';
 import { digest, fail } from './contract.mjs';
 
@@ -45,7 +45,8 @@ export function createLiveCollector({ session, candidateDirectory, production = 
     const state = await collectRuntimeProtectionState({ origin, sha: deployment.sha, bypass });
     return tokenProvider({ origin, deployment, protectionState: state });
   };
-  provider = createVercelAdapter({ manifest, candidateDirectory, env, fetchImpl, now, runtimeTokenProvider,
+  const adapter=production || env.FCOS_HOSTED_CREDENTIAL_CLASS==='preview'?createVercelAdapter:createVercelReadAdapter;
+  provider = adapter({ manifest, candidateDirectory, env, fetchImpl, now, runtimeTokenProvider,
     schemaObservation: () => collectSchemaObservation({ manifest, env, now }) });
   let previewObservation;
   async function collect(id, snapshot) {

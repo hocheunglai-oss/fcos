@@ -15,6 +15,7 @@ import { assertNormalRoleIdentity, NORMAL_ROLE_MODULES, verifyNormalRoleRelease 
 import { COMPATIBILITY_NORMAL_MODULES, verifyRuntimeCompatibilityNormalRole } from '../../runtime-compatibility-normal-role.mjs';
 import { PREVIEW_EMAIL_SIGNER_MAILBOX_REGISTRY_ID } from '../preview-email-signer.mjs';
 import { compatibilityBrowserIsolationVerified } from '../compatibility-browser-isolation.mjs';
+import { createVercelIntegrationReader } from './vercel-read-auth.mjs';
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 const FROZEN = '04ee3425aac7a49089eda781eb3c976aea1f6785';
@@ -55,12 +56,8 @@ export function assertHostedBrowserBinding(manifest, preview) {
 // A trusted workflow may instead inject an independently authenticated provider-proof reader.
 export async function recheckHostedPreviewProvider({ manifest, preview, env, fetchImpl = fetch }) {
   if (!env.FCOS_HOSTED_VERCEL_READ_TOKEN) setup('vercel_readonly_metadata_credential');
-  const api = async path => {
-    const url = new URL(`https://api.vercel.com${path}`); url.searchParams.set('teamId', manifest.targets.vercelTeam);
-    const response = await fetchImpl(url, { method: 'GET', redirect: 'error', signal: AbortSignal.timeout(20000),
-      headers: { authorization: `Bearer ${env.FCOS_HOSTED_VERCEL_READ_TOKEN}` } });
-    requireFact(response.ok && !response.redirected); return response.json();
-  };
+  const reader=createVercelIntegrationReader({manifest,env,fetchImpl});
+  const api=path=>reader.get(path);
   const project = await api(`/v9/projects/${manifest.targets.vercelProject}`);
   requireFact(project.id === manifest.targets.vercelProject && project.accountId === manifest.targets.vercelTeam
     && project.name === fcosConnectionIdentifier('vercel', 'Project') && project.link?.type === 'github'

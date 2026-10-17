@@ -14,6 +14,7 @@ import { digest, validateManifest } from '../scripts/lib/hosted-release/contract
 import { prepareHostedManifest } from '../scripts/hosted-release-manifest.mjs';
 import { runQualification } from '../scripts/hosted-release-qualification.mjs';
 import { fixtureManifest } from './helpers/hosted-release-manifest.mjs';
+import { vercelReadFixture } from './helpers/hosted-vercel-read.mjs';
 
 const repository = 'hocheunglai-oss/fcos', repositoryId = '1278654816', B = 'd'.repeat(40), H = 'a'.repeat(64);
 function fixture(t) {
@@ -32,6 +33,7 @@ function fixture(t) {
     previousProduction: manifest.previousProduction, qualificationSource: source,
     verification: { runtime: { image: `ghcr.io/hocheunglai-oss/fcos-release-checks@sha256:${H}`, node: 'v24.18.0', python: 'Python 3.11.2', platform: 'linux', arch: 'x64' },
       publicBuildEnvironment: {}, projectSettings: {} } };
+  const read=vercelReadFixture({targets:manifest.targets});setup.verification.vercelReadCredential=read.binding;setup.vercelReadCredentialAcceptance=read.acceptance;
   manifest.verification = setup.verification; manifest.setupSha256 = digest(setup);
   const env = { GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: repository, GITHUB_REPOSITORY_ID: repositoryId,
     GITHUB_REF: source.ref, GITHUB_REF_PROTECTED: 'true', GITHUB_SHA: B, GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_RUN_ID: '17', GITHUB_RUN_ATTEMPT: '1',

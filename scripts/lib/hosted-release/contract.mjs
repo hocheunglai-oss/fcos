@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { qualificationSourceBinding } from '../../../config/hostedReleaseQualification.js';
 import { FCOS_CONNECTION_POLICY, fcosConnectionIdentifier } from '../../../config/fcosConnections.js';
+import { validateVercelReadBinding } from './vercel-read-auth.mjs';
 
 export const CONTRACT_VERSION = 'fcos-hosted-release/v2';
 export const CONTROLLER_WORKFLOW = '.github/workflows/hosted-release-controller.yml';
@@ -73,6 +74,8 @@ export function validateManifest(manifest) {
   if (!hash(manifest.runtime?.expectedSha256) || !manifest.runtime.expectedProduction || !manifest.runtime.expectedPreview
     || digest(manifest.runtime.expectedProduction) !== manifest.runtime.expectedSha256) fail('RUNTIME_EXPECTATIONS');
   if (!Array.isArray(manifest.changes) || manifest.changes.length > 200 || manifest.changes.some(text => typeof text !== 'string' || text.length > 500)) fail('RELEASE_SUMMARY');
+  if (manifest.stage==='qualification' || manifest.verification?.vercelReadCredential)
+    validateVercelReadBinding(manifest.verification?.vercelReadCredential,{targets:manifest.targets});
   if (manifest.verification) {
     if (!/^ghcr\.io\/hocheunglai-oss\/fcos-release-checks@sha256:[a-f0-9]{64}$/.test(manifest.verification.runtime?.image || '')
       || manifest.verification.runtime.node !== 'v24.18.0' || manifest.verification.runtime.platform !== 'linux'

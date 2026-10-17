@@ -12,6 +12,7 @@ import { preparePreview, executeHostedProduction } from '../scripts/lib/hosted-r
 import { CONTRACT_VERSION, CONTROLLER_WORKFLOW, REQUIRED_LIVE_CHECKS, NORMAL_MODULES, WRITE_PHASES, digest, releaseTargets } from '../scripts/lib/hosted-release/contract.mjs';
 import { createCoordinatorHandler, createSqlStore, createGithubAuthenticator, createGithubApprovalValidator, createGithubResumeValidator } from '../supabase/functions/release-coordinator/index.ts';
 import { createCoordinatorClient } from '../scripts/lib/hosted-release/coordinator-client.mjs';
+import { vercelReadFixture } from './helpers/hosted-vercel-read.mjs';
 const H='a'.repeat(64),S='b'.repeat(40),repository='hocheunglai-oss/fcos';
 const runtime={flags:{},safety:{readOnly:false},auth:{}};
 function manifest(releaseId,qualification=false){return{schemaVersion:2,contract:CONTRACT_VERSION,releaseId,epoch:1,stage:qualification?'qualification':'application',executionMode:qualification?'qualification':'release',
@@ -21,7 +22,8 @@ function manifest(releaseId,qualification=false){return{schemaVersion:2,contract
  previousProduction:{deploymentId:'dpl_previous',sha:'c'.repeat(40),sourceSha256:H,schemaSha256:H,runtimeSha256:digest(runtime)},
  requiredChecks:[...REQUIRED_LIVE_CHECKS,...(qualification?[]:['compatibility_production_observation'])],
  authorization:{validitySeconds:86400,actions:WRITE_PHASES,rollback:{mode:'compatible_previous_only',schemaRollback:false}},
- migration:{mode:'none',expectedSchemaSha256:H},runtime:{expectedSha256:digest(runtime),expectedProduction:runtime,expectedPreview:{...runtime,safety:{readOnly:true}}},changes:['Local rehearsal only']};}
+ migration:{mode:'none',expectedSchemaSha256:H},runtime:{expectedSha256:digest(runtime),expectedProduction:runtime,expectedPreview:{...runtime,safety:{readOnly:true}}},changes:['Local rehearsal only'],
+ ...(qualification?{verification:{runtime:{image:`ghcr.io/hocheunglai-oss/fcos-release-checks@sha256:${H}`,node:'v24.18.0',python:'Python 3.11.2',platform:'linux',arch:'x64'},publicBuildEnvironment:{},projectSettings:{},vercelReadCredential:vercelReadFixture().binding}}:{})};}
 const binaries=spawnSync('pg_config',['--bindir'],{encoding:'utf8'}),bindir=binaries.status===0?binaries.stdout.trim():null;
 function proof(m,id,{stale=false}={}){return{schemaVersion:2,checkId:id,status:'passed',kind:'volatile',maxAgeSeconds:1800,manifestHash:digest(m),candidateSha:m.candidate.sha,controllerSha:m.controller.sha,
  inputsSha256:H,artifactSha256:H,capturedAt:new Date(Date.now()-(stale?3600000:0)).toISOString(),publisher:{trust:'hosted_controller',runId:101,jobId:201},

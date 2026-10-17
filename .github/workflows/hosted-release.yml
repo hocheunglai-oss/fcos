@@ -79,8 +79,7 @@ jobs:
         id: manifest
         run: node controller/scripts/hosted-release-manifest.mjs
         env:
-          FCOS_HOSTED_VERCEL_TOKEN: ${{ secrets.FCOS_HOSTED_VERCEL_READ_TOKEN }}
-          FCOS_HOSTED_VERCEL_TOKEN_ID: ${{ vars.FCOS_HOSTED_VERCEL_READ_TOKEN_ID }}
+          FCOS_HOSTED_VERCEL_READ_TOKEN: ${{ secrets.FCOS_HOSTED_VERCEL_READ_TOKEN }}
           FCOS_HOSTED_SCHEMA_DATABASE_URL: ${{ secrets.FCOS_HOSTED_SCHEMA_DATABASE_URL }}
           FCOS_PRODUCTION_VERIFICATION_BYPASS: ${{ secrets.FCOS_PRODUCTION_VERIFICATION_BYPASS }}
           FCOS_HOSTED_RUNTIME_EMAIL: ${{ secrets.FCOS_HOSTED_RUNTIME_EMAIL }}

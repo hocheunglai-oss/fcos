@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { admitVercelReadFixture } from './helpers/hosted-vercel-read.mjs';
 import assert from 'node:assert/strict';
 import { canonical, digest, NORMAL_MODULES, validateManifest } from '../scripts/lib/hosted-release/contract.mjs';
 import { consequential, executeHostedProduction, preparePreview } from '../scripts/lib/hosted-release/controller.mjs';
@@ -103,6 +104,7 @@ test('rollback is refused when schema compatibility or current Production owners
 
 test('qualification cannot call real Production and duplicate intent never gets execute twice', async () => {
   const f = fixture(); f.manifest.stage = 'qualification'; f.manifest.executionMode = 'qualification';
+  admitVercelReadFixture(f.manifest);
   await assert.rejects(executeHostedProduction(f), { code: 'QUALIFICATION_CANNOT_DEPLOY' });
   let calls = 0;
   const args = { manifest: f.manifest, coordinator: f.coordinator, phase: 'preview.create', request: { x: 1 }, submit: async () => { calls++; return { id: 'dpl_once' }; }, readback: async () => ({ outcome: 'unknown' }) };

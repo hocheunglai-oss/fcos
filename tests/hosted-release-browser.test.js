@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { FCOS_CONNECTION_POLICY, fcosConnectionIdentifier } from '../config/fcosConnections.js';
 import { FCOS_READ_ONLY_CI } from '../config/fcosCiIdentity.js';
+import { admitVercelReadFixture } from './helpers/hosted-vercel-read.mjs';
 import { COMPATIBILITY_NORMAL_MODULES, verifyRuntimeCompatibilityNormalRole } from '../scripts/runtime-compatibility-normal-role.mjs';
 import { PREVIEW_EMAIL_SIGNER_MAILBOX_REGISTRY_ID } from '../scripts/lib/preview-email-signer.mjs';
 import { runHostedBrowser, loginHostedFcuno, runHostedRestrictedHarness, createHostedRuntimeTokenProvider,
@@ -117,17 +118,17 @@ test('fixed restricted subprocess runs trusted suites with no renewable/provider
 });
 
 test('readonly Vercel adapter uses only pinned GET endpoints and rejects a mismatching project before deployment lookup', async t => {
-  const f = fixture(t); const calls = [];
-  const read = await recheckHostedPreviewProvider({ ...f.options, env: { FCOS_HOSTED_VERCEL_READ_TOKEN: 'PRIVATE_READ' }, fetchImpl: async (url, options) => {
+  const f = fixture(t); const calls = [];const credential=admitVercelReadFixture(f.manifest);f.preview.manifestHash=digest(f.manifest);
+  const read = await recheckHostedPreviewProvider({ ...f.options, env: credential.env, fetchImpl: async (url, options) => {
     calls.push(String(url)); assert.equal(options.method, 'GET'); assert.equal(options.redirect, 'error');
-    return { ok: true, redirected: false, json: async () => calls.length === 1 ? { id: f.manifest.targets.vercelProject, accountId: f.manifest.targets.vercelTeam, name: 'fcos', link: { type: 'github', org: 'hocheunglai-oss', repo: 'fcos' } } : {
+    return { ok: true, redirected: false, json: async () => String(url).includes('/integrations/configuration/')?credential.configuration:String(url).includes('/v9/projects/') ? { id: f.manifest.targets.vercelProject, accountId: f.manifest.targets.vercelTeam, name: 'fcos', link: { type: 'github', org: 'hocheunglai-oss', repo: 'fcos' } } : {
       id: f.preview.id, url: new URL(origin).hostname, projectId: f.preview.projectId, teamId: f.preview.teamId, readyState: 'READY', target: null, meta: { githubCommitSha: FROZEN, fcosHostedManifest: digest(f.manifest) } } };
   } });
-  assert.equal(read.id, f.preview.id); assert.equal(calls.length, 2); assert.ok(calls.every(url => url.includes(f.manifest.targets.vercelTeam)));
+  assert.equal(read.id, f.preview.id); assert.equal(calls.length, 4); assert.ok(calls.every(url => url.includes(f.manifest.targets.vercelTeam)));
   assert.throws(() => assertHostedBrowserBinding(f.manifest, { ...f.preview, target: 'production' }));
   let deniedCalls = 0;
-  await assert.rejects(recheckHostedPreviewProvider({ ...f.options, env: { FCOS_HOSTED_VERCEL_READ_TOKEN: 'PRIVATE_READ' }, fetchImpl: async () => { deniedCalls++; return { ok: true, redirected: false, json: async () => ({ id: 'wrong' }) }; } }));
-  assert.equal(deniedCalls, 1);
+  await assert.rejects(recheckHostedPreviewProvider({ ...f.options, env: credential.env, fetchImpl: async url => { deniedCalls++; return { ok: true, redirected: false, json: async () => String(url).includes('/integrations/configuration/')?credential.configuration:{ id: 'wrong' } }; } }));
+  assert.equal(deniedCalls, 2);
 });
 
 function fakeLoginBrowser(auth, state, { foreign = false, cleanupFail = false } = {}) {
