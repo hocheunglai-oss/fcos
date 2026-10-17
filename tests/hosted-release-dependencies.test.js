@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fcosConnectionIdentifier, fcosSalesforceEnvironment } from '../config/fcosConnections.js';
+import { fcosConnectionIdentifier } from '../config/fcosConnections.js';
 import { nomBFixture } from './fixtures/hosted-nom-b.mjs';
 import { collectFinancialPreservation, dependencyHash, importAcceptedNomB, measureDependencyFiles, nomBContentVersionMetadataSuccessor, loadNomBLegacyAssumptions } from '../scripts/lib/hosted-release/dependencies.mjs';
 
