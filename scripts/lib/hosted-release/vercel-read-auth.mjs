@@ -48,7 +48,10 @@ export function validateVercelReadAcceptance(binding, setup, options) {
 }
 
 export function assertVercelReadConfiguration(configuration,binding) {
-  need(configuration?.type==='integration-configuration' && configuration.id===binding.configurationId
+  // The authenticated configuration endpoint omits type in actual responses.
+  // If supplied, its discriminator must still describe a configuration.
+  need(configuration && typeof configuration==='object' && !Array.isArray(configuration)
+    && [undefined,'integration-configuration'].includes(configuration.type) && configuration.id===binding.configurationId
     && configuration.integrationId===binding.integrationId && configuration.teamId===binding.teamId && configuration.ownerId===binding.teamId
     && configuration.projectSelection==='selected' && Array.isArray(configuration.projects)
     && configuration.projects.length===1 && configuration.projects[0]===binding.projectId && scopesMatch(configuration.scopes)

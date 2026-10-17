@@ -45,8 +45,19 @@ test('private bearer fingerprint substitution and writer/client secrets refuse b
   assert.equal(calls,0);
 });
 
+test('actual configuration response without synthetic type or status passes the authenticated reader boundary',async()=>{
+  const f=fixture(),configuration={...f.configuration},calls=[];
+  delete configuration.type;delete configuration.status;
+  const reader=createVercelIntegrationReader({...f,fetchImpl:async(url,options)=>{
+    calls.push(url.pathname);assert.equal(options.method,'GET');
+    return response(url.pathname.startsWith('/v1/integrations/')?configuration:{id:f.binding.projectId});
+  }});
+  assert.equal((await reader.get(`/v9/projects/${f.binding.projectId}`)).id,f.binding.projectId);
+  assert.deepEqual(calls,[`/v1/integrations/configuration/${f.binding.configurationId}`,`/v9/projects/${f.binding.projectId}`]);
+});
+
 test('provider live installation checks exact identity, selected project, scopes and active state',async()=>{
-  for(const change of [{id:'icfg_wrong'},{integrationId:'oac_wrong'},{ownerId:'wrong'},{teamId:'wrong'},{projectSelection:'all'},
+  for(const change of [{type:'deployment'},{type:null},{customerDeleteRequestedAt:1},{id:'icfg_wrong'},{integrationId:'oac_wrong'},{ownerId:'wrong'},{teamId:'wrong'},{projectSelection:'all'},
     {projects:[]},{projects:['prj_wrong']},{projects:[fixture().binding.projectId,'prj_extra']},{scopes:[...VERCEL_READ_SCOPES,'write:deployment']},
     {scopes:['read:project','read:deployment']},{scopes:[...VERCEL_READ_SCOPES,'read:user']},{disabledAt:1},{deletedAt:1},{deleteRequestedAt:1},{status:'error'},{status:null}]) {
     const f=fixture(),calls=[];
