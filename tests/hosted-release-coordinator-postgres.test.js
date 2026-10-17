@@ -122,6 +122,14 @@ test('native non-superuser Supabase-style postgres can install the private schem
     await migrationRole.query('create table public.application_fixture(id integer)');
     await migrationRole.query('alter role fcos_coordinator_runtime login');await runtime.connect();
     assert.equal(await verifyDatabaseIdentity((sql,p)=>runtime.query(sql,p)),true);
+    await migrationRole.query('create schema isolated_extension; create view isolated_extension.statistics as select 1 as value; grant select on isolated_extension.statistics to public');
+    assert.equal(await verifyDatabaseIdentity((sql,p)=>runtime.query(sql,p)),true);
+    await assert.rejects(runtime.query('select * from isolated_extension.statistics'),/permission denied/);
+    await migrationRole.query('grant usage on schema isolated_extension to fcos_coordinator_runtime');
+    assert.equal((await runtime.query('select * from isolated_extension.statistics')).rows[0].value,1);
+    await assert.rejects(verifyDatabaseIdentity((sql,p)=>runtime.query(sql,p)),/COORDINATION_DATABASE_PRIVILEGES_INVALID/);
+    await migrationRole.query('revoke usage on schema isolated_extension from fcos_coordinator_runtime');
+    assert.equal(await verifyDatabaseIdentity((sql,p)=>runtime.query(sql,p)),true);
     assert.equal((await admin.query("select count(*)::int as n from pg_auth_members where member=(select oid from pg_roles where rolname='fcos_coordinator_runtime')")).rows[0].n,0);
     await assert.rejects(runtime.query('set role fcos_coordinator_owner'),/permission denied/);
     await assert.rejects(runtime.query('select * from fcos_release_coordination.control'),/permission denied/);

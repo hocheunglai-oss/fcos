@@ -35,7 +35,7 @@ export async function verifyDatabaseIdentity(query) {
     exists(select 1 from pg_auth_members m where m.member=r.oid) as memberships,
     exists(select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
       where n.nspname not in ('pg_catalog','information_schema','fcos_release_coordination') and n.nspname not like 'pg_toast%'
-      and c.relkind in ('r','p','v','m','f') and has_table_privilege(r.oid,c.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE')) as application_access,
+      and c.relkind in ('r','p','v','m','f') and has_schema_privilege(r.oid,n.oid,'USAGE') and has_table_privilege(r.oid,c.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE')) as application_access,
     exists(select 1 from pg_proc p join pg_namespace n on n.oid=p.pronamespace
       where n.nspname not in ('pg_catalog','information_schema','fcos_release_coordination')
       and p.prosecdef and has_schema_privilege(r.oid,n.oid,'USAGE') and has_function_privilege(r.oid,p.oid,'EXECUTE')) as external_definer_access
