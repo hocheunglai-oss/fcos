@@ -85,6 +85,34 @@ test('hosted read jobs keep the Integration bearer distinct from unchanged write
     const env=workflow.jobs[job].steps.find(step=>step.id==='run').env;assert.ok(env.FCOS_HOSTED_VERCEL_READ_TOKEN);assert.equal(env.FCOS_HOSTED_VERCEL_TOKEN,undefined);assert.equal(env.FCOS_HOSTED_VERCEL_TOKEN_ID,undefined);
   }
   const preview=workflow.jobs.preview.steps.find(step=>step.id==='run').env;assert.ok(preview.FCOS_HOSTED_VERCEL_TOKEN);assert.ok(preview.FCOS_HOSTED_VERCEL_TOKEN_ID);assert.equal(preview.FCOS_HOSTED_VERCEL_READ_TOKEN,undefined);
+  for(const path of ['../.github/workflows/hosted-release.yml','../.github/qualification/hosted-release-bootstrap.yml']) {
+    const caller=yaml.load(readFileSync(new URL(path,import.meta.url),'utf8')),env=caller.jobs.manifest.steps.find(step=>step.id==='manifest').env;
+    assert.ok(env.FCOS_HOSTED_VERCEL_READ_TOKEN);assert.equal(env.FCOS_HOSTED_VERCEL_TOKEN,undefined);assert.equal(env.FCOS_HOSTED_VERCEL_TOKEN_ID,undefined);
+  }
+});
+
+test('restricted workflow selects complete dedicated or existing repository pairs together without normal/runtime exposure',()=>{
+  const yaml=createRequire(import.meta.url)('js-yaml'),controller=yaml.load(readFileSync(new URL('../.github/workflows/hosted-release-controller.yml',import.meta.url),'utf8'));
+  const fallback={FCOS_HOSTED_RESTRICTED_FALLBACK_EMAIL:'existing-ci@example.invalid',FCOS_HOSTED_RESTRICTED_FALLBACK_PASSWORD:'EXISTING_PAIR'};
+  for(const path of ['../.github/workflows/hosted-release.yml','../.github/qualification/hosted-release-bootstrap.yml']) {
+    const caller=yaml.load(readFileSync(new URL(path,import.meta.url),'utf8'));assert.notEqual(caller.jobs.release.secrets,'inherit');
+    assert.equal(caller.jobs.release.secrets.FCOS_HOSTED_RESTRICTED_FALLBACK_EMAIL,'${{ secrets.FCOS_E2E_EMAIL }}');
+    assert.equal(caller.jobs.release.secrets.FCOS_HOSTED_RESTRICTED_FALLBACK_PASSWORD,'${{ secrets.FCOS_E2E_PASSWORD }}');
+  }
+  const evaluate=(expression,secrets,mode)=>Function('secrets','matrix',`return (${expression.slice(3,-2)});`)(new Proxy(secrets,{get:(object,key)=>object[key]??''}),{mode});
+  for(const id of ['browser_before','browser_after']) {
+    const env=controller.jobs[id].steps.find(step=>step.id==='run').env;
+    const pair=(secrets,mode='restricted')=>[evaluate(env.FCOS_HOSTED_RESTRICTED_EMAIL,secrets,mode),evaluate(env.FCOS_HOSTED_RESTRICTED_PASSWORD,secrets,mode)];
+    assert.deepEqual(pair(fallback),[fallback.FCOS_HOSTED_RESTRICTED_FALLBACK_EMAIL,fallback.FCOS_HOSTED_RESTRICTED_FALLBACK_PASSWORD]);
+    for(const partial of [{FCOS_HOSTED_RESTRICTED_EMAIL:'partial@example.invalid'},{FCOS_HOSTED_RESTRICTED_PASSWORD:'PARTIAL'}])assert.deepEqual(pair({...fallback,...partial}),pair(fallback));
+    const dedicated={...fallback,FCOS_HOSTED_RESTRICTED_EMAIL:'dedicated-ci@example.invalid',FCOS_HOSTED_RESTRICTED_PASSWORD:'DEDICATED_PAIR'};
+    assert.deepEqual(pair(dedicated),[dedicated.FCOS_HOSTED_RESTRICTED_EMAIL,dedicated.FCOS_HOSTED_RESTRICTED_PASSWORD]);
+    for(const incomplete of [{FCOS_HOSTED_RESTRICTED_FALLBACK_EMAIL:'partial@example.invalid'},{FCOS_HOSTED_RESTRICTED_FALLBACK_PASSWORD:'PARTIAL'},{}])assert.deepEqual(pair(incomplete),['','']);
+    assert.deepEqual(pair(dedicated,'normal_role'),['','']);assert.equal(Object.keys(env).some(key=>key.includes('RESTRICTED_FALLBACK')),false);
+    assert.doesNotMatch(env.FCOS_HOSTED_RESTRICTED_EMAIL+env.FCOS_HOSTED_RESTRICTED_PASSWORD,/HOSTED_NORMAL|HOSTED_RUNTIME/);
+  }
+  for(const [id,job] of Object.entries(controller.jobs))if(!['browser_before','browser_after'].includes(id))assert.doesNotMatch(JSON.stringify(job),/RESTRICTED_FALLBACK|secrets\.FCOS_E2E_(?:EMAIL|PASSWORD)/);
+  assert.equal(controller.on.workflow_call.secrets.FCOS_HOSTED_FCUNO_READ_TOKEN.required,false);
 });
 
 test('read adapter exposes no write operations and live collector uses it outside writer jobs',async()=>{

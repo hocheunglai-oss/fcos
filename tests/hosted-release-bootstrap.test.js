@@ -13,12 +13,14 @@ const definition = yaml.load(template);
 const environmentSecrets = [
   'FCOS_E2E_VERCEL_BYPASS', 'FCOS_HOSTED_FCUNO_READ_TOKEN', 'FCOS_HOSTED_GITHUB_READ_TOKEN',
   'FCOS_HOSTED_NORMAL_EMAIL', 'FCOS_HOSTED_NORMAL_PASSWORD', 'FCOS_HOSTED_PRESERVATION_DATABASE_URL',
-  'FCOS_HOSTED_RESTRICTED_EMAIL', 'FCOS_HOSTED_RESTRICTED_PASSWORD', 'FCOS_HOSTED_RUNTIME_EMAIL',
+  'FCOS_HOSTED_RESTRICTED_EMAIL', 'FCOS_HOSTED_RESTRICTED_FALLBACK_EMAIL', 'FCOS_HOSTED_RESTRICTED_FALLBACK_PASSWORD', 'FCOS_HOSTED_RESTRICTED_PASSWORD', 'FCOS_HOSTED_RUNTIME_EMAIL',
   'FCOS_HOSTED_RUNTIME_PASSWORD', 'FCOS_HOSTED_SALESFORCE_READ_TOKEN', 'FCOS_HOSTED_SCHEMA_DATABASE_URL',
   'FCOS_HOSTED_VERCEL_READ_TOKEN', 'FCOS_HOSTED_VERCEL_TOKEN', 'FCOS_PRODUCTION_VERIFICATION_BYPASS',
 ];
 const qualificationSecrets = environmentSecrets.filter(name => name !== 'FCOS_PRODUCTION_VERIFICATION_BYPASS');
-const forwarding = names => Object.fromEntries(names.map(name => [name, `\${{ secrets.${name} }}`]));
+const fallbackSources={FCOS_HOSTED_RESTRICTED_FALLBACK_EMAIL:'FCOS_E2E_EMAIL',FCOS_HOSTED_RESTRICTED_FALLBACK_PASSWORD:'FCOS_E2E_PASSWORD'};
+const optionalSecrets=new Set(['FCOS_HOSTED_FCUNO_READ_TOKEN','FCOS_HOSTED_RESTRICTED_EMAIL','FCOS_HOSTED_RESTRICTED_PASSWORD',...Object.keys(fallbackSources),'FCOS_PRODUCTION_VERIFICATION_BYPASS']);
+const forwarding = names => Object.fromEntries(names.map(name => [name, `\${{ secrets.${fallbackSources[name] || name} }}`]));
 
 test('qualification bootstrap stays inactive and calls the same immutable controller', () => {
   assert.deepEqual(Object.keys(definition.on), ['workflow_dispatch']);
@@ -41,7 +43,7 @@ test('qualification bootstrap stays inactive and calls the same immutable contro
   assert.equal(rendered.jobs.manifest.env.FCOS_QUALIFICATION_BOOTSTRAP, 'true');
   const controller = yaml.load(readFileSync(new URL('../.github/workflows/hosted-release-controller.yml', import.meta.url), 'utf8'));
   assert.deepEqual(controller.on.workflow_call.secrets, Object.fromEntries(environmentSecrets.map(name =>
-    [name, { required: name !== 'FCOS_PRODUCTION_VERIFICATION_BYPASS' }])));
+    [name, { required: !optionalSecrets.has(name) }])));
   const mainCaller = yaml.load(readFileSync(new URL('../.github/workflows/hosted-release.yml', import.meta.url), 'utf8'));
   assert.deepEqual(mainCaller.jobs.release.secrets, forwarding(environmentSecrets));
   assert.doesNotMatch(JSON.stringify(controller.jobs.checks), /secrets\./);
@@ -79,7 +81,7 @@ test('bootstrap checks scope and live read-only admission before candidate check
   assert.deepEqual(Object.keys(steps[admission].env).sort(), ['FCOS_HOSTED_GITHUB_READ_TOKEN', 'GITHUB_TOKEN']);
   assert.ok(steps[admission].run.includes('node controller/scripts/hosted-release-manifest.mjs --validate-dispatch-only'));
   const secrets = [...JSON.stringify(definition).matchAll(/secrets\.([A-Z0-9_]+)/g)].map(match => match[1]);
-  assert.deepEqual([...new Set(secrets)].sort(), environmentSecrets);
+  assert.deepEqual([...new Set(secrets)].sort(), environmentSecrets.map(name=>fallbackSources[name]||name).sort());
   assert.ok(!secrets.includes('FCOS_HOSTED_VERCEL_PRODUCTION_TOKEN'));
 });
 
