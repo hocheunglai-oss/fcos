@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fcosSalesforceEnvironment } from '../../../config/fcosConnections.js';
-import { dependencyHash, importAcceptedNomB, measureDependencyFiles, salesforceDependencySourceVerified } from './dependencies.mjs';
+import { dependencyHash, importAcceptedNomB, loadNomBLegacyAssumptions, measureDependencyFiles, salesforceDependencySourceVerified } from './dependencies.mjs';
 
 const keys = ['sourceSha256','harnessSha256','salesforceSourceSha256','fixtureSha256','environmentSha256'];
 const canonical = value => Array.isArray(value) ? `[${value.map(canonical).join(',')}]` : value && typeof value === 'object'
@@ -105,6 +105,58 @@ function validateRecipe(recipe, handoff) {
   need(filesCount <= 512 && readCount <= 24);
   return devee;
 }
+// The complete original coverage is mandatory even when a reviewed recipe/hash is supplied.
+function legacyReadExpectations(legacy, recipe) {
+  const query = (object, tooling, fields, field, values, check) => ({ object, kind: 'query', tooling, fields,
+    ...(field ? { where: { field, values } } : {}), check });
+  const select = (rows, fields) => rows.map(row => Object.fromEntries(fields.map(key => [key, row[key]]))).sort((a, b) => String(a.Id).localeCompare(String(b.Id)));
+  const equalRows = (value, expected, fields) => need(canonical(select(value.records, fields)) === canonical(select(expected, fields)));
+  const sf = [];
+  for (const object of ['ApexClass','ApexTrigger']) {
+    const trigger = object === 'ApexTrigger', fields = ['Id','Name',...(trigger ? ['TableEnumOrId','Status'] : []),'Body','LastModifiedDate'];
+    sf.push(query(object, true, fields, trigger ? 'TableEnumOrId' : 'Name', legacy.indexes[object].scope, value => {
+      if (trigger) need(value.records.every(row => ['Active','Inactive'].includes(row.Status) && legacy.indexes.ApexTrigger.scope.includes(row.TableEnumOrId)));
+      const rows = trigger ? value.records.filter(row => row.Status === 'Active') : value.records;
+      need(rows.every(row => typeof row.Body === 'string'));
+      equalRows({ records: rows.map(({ Body, ...row }) => ({ ...row, bodySha256: dependencyHash(Body) })) }, legacy.apex[object],
+        ['Id','Name',...(trigger ? ['TableEnumOrId','Status'] : []),'bodySha256','LastModifiedDate']);
+    }));
+  }
+  for (const [object, fields, field, active] of [
+    ['ValidationRule',['Id','ValidationName','Active','EntityDefinitionId','LastModifiedDate'],'EntityDefinitionId','Active'],
+    ['WorkflowRule',['Id','Name','TableEnumOrId','LastModifiedDate'],'TableEnumOrId',null],
+    ['FlowDefinitionView',['Id','ApiName','IsActive','ActiveVersionId','TriggerType','TriggerObjectOrEventId','RecordTriggerType'],'TriggerObjectOrEventId','IsActive'],
+  ]) sf.push(query(object, object !== 'FlowDefinitionView', fields, field, legacy.indexes[object].scope, value => {
+    if (active) need(value.records.every(row => typeof row[active] === 'boolean'));
+    const records = active ? value.records.filter(row => row[active] === true) : value.records;
+    equalRows({ records }, legacy.indexes[object].rows, fields.filter(key => key !== 'IsActive'));
+  }));
+  for (const object of Object.keys(legacy.schema)) sf.push({ object, kind: 'describe', tooling: false,
+    check: value => need(canonical(value) === canonical(legacy.schema[object])) });
+  const absent = value => need(value.records.length === 0);
+  return { salesforceSourceSha256: sf,
+    fixtureSha256: [...Object.entries(legacy.fixtureIds).map(([object, id]) => query(object, false, ['Id'], 'Id', [id], absent)),
+      query('ContentDocumentLink', false, ['Id','ContentDocumentId','LinkedEntityId'], 'ContentDocumentId', [legacy.fixtureIds.ContentDocument], absent)],
+    environmentSha256: [query('User', false, ['Id','Username','IsActive','ProfileId'], 'Id', [legacy.environment.userId], value =>
+      equalRows(value, [{ Id: legacy.environment.userId, Username: legacy.environment.username, IsActive: true, ProfileId: recipe.profileId }], ['Id','Username','IsActive','ProfileId'])),
+      query('Xero_Contact_Sync_Setting__c', false, ['Id','SetupOwnerId','Enabled__c'], null, null, absent)] };
+}
+function validateLegacyRecipe(recipe, handoff, legacy) {
+  need(canonical(legacy.inputs) === canonical(handoff.relevantInputs)
+    && ['origin','orgId','username','userId','isSandbox','apiVersion'].every(key => recipe[key] === legacy.environment[key === 'origin' ? 'instanceUrl' : key]));
+  const expected = legacyReadExpectations(legacy, recipe), checks = new Map();
+  for (const observation of recipe.observations) {
+    const reads = expected[observation.input] || []; need(observation.reads.length === reads.length);
+    for (const specification of reads) {
+      const matches = observation.reads.filter(read => read.object === specification.object && read.kind === specification.kind
+        && read.tooling === specification.tooling && (read.kind === 'describe' || canonical([...read.fields].sort()) === canonical([...specification.fields].sort())
+          && canonical(read.where ? { field: read.where.field, values: [...read.where.values].sort() } : null)
+            === canonical(specification.where ? { field: specification.where.field, values: [...specification.where.values].sort() } : null)));
+      need(matches.length === 1); checks.set(matches[0], specification.check);
+    }
+  }
+  return checks;
+}
 function queryPath(read, version) {
   if (read.kind === 'describe') return `/services/data/${version}/sobjects/${read.object}/describe`;
   const where = read.where ? ` WHERE ${read.where.field} IN (${read.where.values.map(value => `'${value}'`).join(',')})` : '';
@@ -113,11 +165,12 @@ function queryPath(read, version) {
 /** Concrete GET-only collector. The reviewed recipe maps old fingerprint formats
  * to current comparable observations; arbitrary URLs and executable SOQL are absent.
  */
-export async function measureHostedNomBInputs({ manifest, handoff, recipe, recipeSha256, candidateDirectory, controllerDirectory, setupDirectory,
+export async function measureHostedNomBInputs({ manifest, handoff, readArtifact, recipe, recipeSha256, candidateDirectory, controllerDirectory, setupDirectory,
   env = process.env, fetchImpl = globalThis.fetch, now = Date.now }) {
   if (!env.FCOS_HOSTED_SALESFORCE_READ_TOKEN) return { status: 'waiting_dependency', missing: ['dedicated_devee_readonly_salesforce_credential'] };
   try {
     const devee = validateRecipe(recipe, handoff);
+    const legacy = await loadNomBLegacyAssumptions({ handoff, readArtifact }), checks = validateLegacyRecipe(recipe, handoff, legacy);
     need(hash(recipeSha256) && handoff.measurementRecipeSha256 === recipeSha256 && salesforceDependencySourceVerified(manifest, handoff));
     const get = async path => {
       need(path.startsWith('/services/')); const url = `${devee.instanceUrl}${path}`;
@@ -152,20 +205,24 @@ export async function measureHostedNomBInputs({ manifest, handoff, recipe, recip
       for (const read of observation.reads) {
         const value = await get(queryPath(read, recipe.apiVersion));
         if (read.kind === 'query') need(value.done === true && !value.nextRecordsUrl && Array.isArray(value.records)
-          && value.records.length <= read.limit && value.totalSize === value.records.length);
+          && value.records.length < read.limit && value.totalSize === value.records.length);
+        checks.get(read)(value);
         reads.push({ recipe: read, sha256: dependencyHash(value) });
       }
       const sha256 = dependencyHash({ files, reads }); need(sha256 === observation.expectedSha256); observed.push({ input: observation.input, sha256 });
     }
     const receipt = { schemaVersion: 1, kind: 'fcos_nom_b_readonly_measurements', recipeSha256, capturedAt: new Date(now()).toISOString(),
+      candidateSalesforceSourceSha256: handoff.candidateSalesforceSourceSha256, legacyInputsSha256: dependencyHash(legacy.inputs),
       identitySha256: dependencyHash({ orgId: devee.orgId, username: devee.username, userId: recipe.userId, profileId: recipe.profileId, isSandbox: true }), observations: observed };
     return { readOnly: true, capturedAt: receipt.capturedAt, inputs: { ...handoff.relevantInputs }, receipt };
   } catch { const error = new Error('NOM_B_READONLY_REVALIDATION_REQUIRED'); error.code = error.message; throw error; }
 }
 
-export function validateNomBMeasurementReceipt({ receipt, recipe, recipeSha256, handoff, job }) {
-  validateRecipe(recipe, handoff);
+export function validateNomBMeasurementReceipt({ receipt, recipe, recipeSha256, handoff, manifest, legacy, job }) {
+  validateRecipe(recipe, handoff); validateLegacyRecipe(recipe, handoff, legacy);
+  need(salesforceDependencySourceVerified(manifest, handoff));
   need(receipt?.schemaVersion === 1 && receipt.kind === 'fcos_nom_b_readonly_measurements' && receipt.recipeSha256 === recipeSha256
+    && receipt.candidateSalesforceSourceSha256 === handoff.candidateSalesforceSourceSha256 && receipt.legacyInputsSha256 === dependencyHash(legacy.inputs)
     && within(receipt.capturedAt, job.started_at, job.completed_at) && Array.isArray(receipt.observations)
     && canonical(receipt.observations) === canonical(recipe.observations.map(row => ({ input: row.input, sha256: row.expectedSha256 })))
     && receipt.identitySha256 === dependencyHash({ orgId: recipe.orgId, username: recipe.username, userId: recipe.userId, profileId: recipe.profileId, isSandbox: true }));
@@ -198,7 +255,8 @@ export async function publishDependencies({ github, coordinator, manifest, runId
         && row.controllerSha === report.controllerSha && hash(row.inputsSha256));
       if (row.checkId === 'nom_b') {
         need(setup.nomB && row.evidenceKind === 'deterministic');
-        const current = validateNomBMeasurementReceipt({ receipt: report.nomBMeasurement, ...setup.nomB, job: collected.job });
+        const legacy = await loadNomBLegacyAssumptions(setup.nomB);
+        const current = validateNomBMeasurementReceipt({ receipt: report.nomBMeasurement, ...setup.nomB, manifest, legacy, job: collected.job });
         historical = await importAcceptedNomB({ manifest, ...setup.nomB, measureInputs: async () => current, now });
         need(canonical(row) === canonical(historical));
       } else {

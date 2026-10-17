@@ -15,16 +15,96 @@ const fresh = (value, now) => instant(value) && Date.parse(value) <= now + 30000
 const legacyCandidateSha = JSON.parse(readFileSync(new URL('../../../config/runtime-compatibility-successor-live.json', import.meta.url))).candidateSha;
 const fingerprintKeys = ['sourceSha256', 'harnessSha256', 'salesforceSourceSha256', 'fixtureSha256', 'environmentSha256'];
 
-/** An independently admitted recipe may bridge fingerprint formats. It does not
- * waive the actual observation equality enforced by the recipe and importer. */
+/** Repository admission and historical live metadata are different bindings. */
 export function salesforceDependencySourceVerified(manifest, handoff) {
-  const current = manifest?.candidate?.salesforceSourceSha256, original = handoff?.relevantInputs?.salesforceSourceSha256;
-  if (!hash(current) || !hash(original)) return false;
-  const mapping = handoff.sourceMapping;
-  if (!mapping) return current === original;
-  return Object.keys(mapping).length === 3 && mapping.candidateSalesforceSourceSha256 === current
-    && mapping.originalSalesforceSourceSha256 === original && hash(handoff.measurementRecipeSha256)
-    && mapping.measurementRecipeSha256 === handoff.measurementRecipeSha256;
+  return hash(manifest?.candidate?.salesforceSourceSha256)
+    && handoff?.candidateSalesforceSourceSha256 === manifest.candidate.salesforceSourceSha256
+    && !Object.hasOwn(handoff, 'sourceMapping');
+}
+
+/** Follow only hash references from the admitted originals, never their local paths.
+ * The setup loader pins the primary eight artifacts independently of the handoff.
+ */
+export async function loadNomBLegacyAssumptions({ handoff, readArtifact }) {
+  required(typeof readArtifact === 'function');
+  const cache = new Map(); let total = 0;
+  const load = async reference => {
+    const sha256 = typeof reference === 'string' ? reference : reference?.sha256;
+    required(hash(sha256));
+    if (!cache.has(sha256)) {
+      required(cache.size < 128); const bytes = Buffer.from(await readArtifact({ sha256 })); total += bytes.length;
+      required(bytes.length > 0 && bytes.length <= 8 * 1024 * 1024 && total <= 32 * 1024 * 1024 && dependencyHash(bytes) === sha256);
+      cache.set(sha256, JSON.parse(bytes.toString('utf8')));
+    }
+    return cache.get(sha256);
+  };
+  const a = handoff.artifacts;
+  const [acceptance, scope, admission, dependencies, cleanup] = await Promise.all(
+    ['acceptance','scope','admission','dependencies','cleanup'].map(key => load(a?.[key])));
+  const devee = fcosSalesforceEnvironment('devee');
+  required(acceptance.accepted === true && cleanup.accepted === true && scope.syntheticFixture === true
+    && acceptance.scope?.sha256 === a.scope && acceptance.admission?.sha256 === a.admission
+    && admission.dependenciesEvidence?.sha256 === a.dependencies
+    && acceptance.candidateSourceSha256 === handoff.relevantInputs?.sourceSha256
+    && acceptance.harnessSha256 === handoff.relevantInputs?.harnessSha256
+    && dependencies.orgId === devee.orgId && dependencies.username === devee.username
+    && /^v[0-9]{2}\.0$/.test(dependencies.apiVersion || '')
+    && ['nominationSchemaSha256','stemSchemaSha256','contentSchemaSha256','automationSha256'].every(key => hash(dependencies[key]))
+    && ['ownedDocumentAndVersionDeleted','allThreeOwnedFixtureRecordsDeleted','activeDocumentLinksZero'].every(key => cleanup[key] === true));
+  const [identity, fixture, automation] = await Promise.all([
+    load(dependencies.evidence?.['identity.json']), load(admission.fixtureEvidence), load(dependencies.automationSha256),
+  ]);
+  required(identity.orgId === devee.orgId && identity.username === devee.username && identity.isSandbox === true
+    && identity.instanceUrl === devee.instanceUrl && identity.userinfo?.organization_id === devee.orgId
+    && identity.userinfo?.preferred_username === devee.username && /^[A-Za-z0-9]{18}$/.test(identity.userinfo?.user_id || '')
+    && fixture.orgId === devee.orgId && fixture.username === devee.username && fixture.stemId === scope.stemId
+    && fixture.nominationId === scope.nominationId && fixture.ownedSynthetic === true
+    && automation.orgId === devee.orgId && automation.username === devee.username
+    && automation.completeRelevantIndexesAndLastModifiedUnchanged === true && automation.noRelevantActiveRecordFlows === true);
+  const schema = {};
+  for (const [object, key] of [['Nomination__c','nominationSchemaSha256'],['STEM__c','stemSchemaSha256'],['ContentVersion','contentSchemaSha256']]) {
+    const reference = dependencies.evidence?.[`describe-${object}.json`]; required(reference?.sha256 === dependencies[key]);
+    const evidence = await load(reference); required(evidence.result?.name === object); schema[object] = evidence.result;
+  }
+  const scopes = evidence => {
+    const query = new URL(evidence.path, 'https://unused.invalid').searchParams.get('q');
+    const match = query?.match(/ IN \(([^)]+)\)/); required(match);
+    const values = match[1].split(',').map(value => value.trim());
+    required(values.length > 0 && values.length <= 100 && values.every(value => /^'[A-Za-z0-9_]+'$/.test(value)));
+    return values.map(value => value.slice(1, -1)).sort();
+  };
+  const indexes = {}, apex = {};
+  for (const [object, name] of [['ApexTrigger','relevant-active-trigger-index.json'],['ApexClass','relevant-class-index.json'],
+    ['ValidationRule','relevant-active-validation-index.json'],['WorkflowRule','relevant-workflow-index.json'],['FlowDefinitionView','relevant-active-flows.json']]) {
+    const comparison = automation.freshIndexComparisons?.[name];
+    required(comparison?.freshIndex?.sha256 === dependencies.evidence?.[name]?.sha256);
+    const evidence = await load(comparison.freshIndex); required(evidence.result?.done === true && Array.isArray(evidence.result.records)
+      && evidence.result.totalSize === evidence.result.records.length);
+    indexes[object] = { rows: evidence.result.records, scope: scopes(evidence) };
+    if (object.startsWith('Apex')) {
+      const bodies = await load(comparison.acceptedPriorBodiesOrIndex), pins = comparison.acceptedBodyHashesReused;
+      required(bodies.result?.done === true && Array.isArray(bodies.result.records)
+        && bodies.result.totalSize === bodies.result.records.length && pins && typeof pins === 'object');
+      apex[object] = bodies.result.records;
+      required(apex[object].length === (object === 'ApexClass' ? 6 : 5) && Object.keys(pins).length === apex[object].length
+        && apex[object].every(row => hash(row.bodySha256) && pins[row.Name] === row.bodySha256
+          && indexes[object].rows.some(index => index.Id === row.Id && index.Name === row.Name && index.LastModifiedDate === row.LastModifiedDate)));
+    }
+  }
+  required(indexes.FlowDefinitionView.rows.length === 0);
+  const xero = await load(dependencies.evidence?.['xero-sync-enabled-only.json']);
+  required(xero.result?.done === true && xero.result.totalSize === 0 && xero.result.records?.length === 0);
+  const environment = { orgId: devee.orgId, username: devee.username, userId: identity.userinfo.user_id,
+    isSandbox: true, instanceUrl: devee.instanceUrl, apiVersion: dependencies.apiVersion };
+  const inputs = { sourceSha256: acceptance.candidateSourceSha256, harnessSha256: acceptance.harnessSha256,
+    salesforceSourceSha256: dependencyHash(Object.fromEntries(['nominationSchemaSha256','stemSchemaSha256','contentSchemaSha256','automationSha256'].map(key => [key, dependencies[key]]))),
+    fixtureSha256: dependencyHash({ scopeArtifactSha256: a.scope, scopeFingerprint: admission.scopeSha256, cleanupArtifactSha256: a.cleanup }),
+    environmentSha256: dependencyHash(environment) };
+  required(canonical(inputs) === canonical(handoff.relevantInputs));
+  const fixtureIds = { Nomination__c: fixture.nominationId, STEM__c: fixture.stemId, Stem_Status__c: fixture.statusId,
+    ContentDocument: acceptance.ownedContentDocumentId, ContentVersion: acceptance.ownedContentVersionId };
+  required(Object.values(fixtureIds).every(value => /^[A-Za-z0-9]{18}$/.test(value || '')));
+  return { inputs, environment, schema, indexes, apex, fixtureIds };
 }
 
 /** Hash reviewed relevant paths without importing or executing candidate files. */
@@ -113,14 +193,15 @@ export async function importAcceptedNomB({ manifest, handoff, verifyHandoff, rea
       && acceptance.actualTest.some(r => r.sha256 === a.liveEvidence) && acceptance.actualTest.some(r => r.sha256 === a.desktopEvidence)
       && Array.isArray(cleanup.actualReadbacks) && cleanup.actualReadbacks.length >= 5);
     await Promise.all([...acceptance.actualReadbacks, ...acceptance.actualTest, ...cleanup.actualReadbacks].map(r => load(r, false)));
+    const legacy = await loadNomBLegacyAssumptions({ handoff, readArtifact });
     const current = await measureInputs({ manifest, handoff });
-    required(current?.readOnly === true && fresh(current.capturedAt, now()) && canonical(current.inputs) === canonical(handoff.relevantInputs));
+    required(current?.readOnly === true && fresh(current.capturedAt, now()) && canonical(current.inputs) === canonical(legacy.inputs));
     return { schemaVersion: 2, kind: 'fcos_hosted_dependency_raw', checkId: 'nom_b', status: 'passed', evidenceKind: 'deterministic',
       manifestHash: dependencyHash(manifest), candidateSha: manifest.candidate.sha, controllerSha: manifest.controller.sha,
       inputsSha256: dependencyHash(current.inputs), capturedAt: live.completedAt,
       result: { actualExecution: true, coverage: 'disposable_devee_nom_b_synthetic', targets: manifest.targets,
-        salesforceSourceSha256: manifest.candidate.salesforceSourceSha256, originalSalesforceSourceSha256: current.inputs.salesforceSourceSha256,
-        ...(handoff.sourceMapping ? { sourceMappingSha256: dependencyHash(handoff.sourceMapping) } : {}), originalArtifactSha256: a.liveEvidence,
+        candidateSalesforceSourceSha256: manifest.candidate.salesforceSourceSha256, originalRelevantSalesforceSha256: legacy.inputs.salesforceSourceSha256,
+        salesforceEvidenceKind: 'accepted_relevant_live_schema_and_automation', originalArtifactSha256: a.liveEvidence,
         originalAcceptanceSha256: a.acceptance, migrationHandoffSha256: dependencyHash(handoff),
         originalCapturedAt: live.completedAt, dependenciesObservedAt: current.capturedAt, exactReplayNoExtraPost: true,
         financialChildCategoriesVerifiedZero: 9, fixtureCleaned: true, deployedPreviewProved: false, financialAuthority: false } };

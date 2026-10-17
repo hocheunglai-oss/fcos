@@ -4,43 +4,15 @@ import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fcosConnectionIdentifier, fcosSalesforceEnvironment } from '../config/fcosConnections.js';
+import { nomBFixture } from './fixtures/hosted-nom-b.mjs';
 import { collectFinancialPreservation, dependencyHash, importAcceptedNomB, measureDependencyFiles } from '../scripts/lib/hosted-release/dependencies.mjs';
 
 const H = 'a'.repeat(64), S = 'b'.repeat(40), now = Date.parse('2026-10-17T01:00:00Z');
 const manifest = () => ({ candidate: { sha: '04ee3425aac7a49089eda781eb3c976aea1f6785', salesforceSourceSha256: H }, controller: { sha: S }, targets: { supabaseProject: fcosConnectionIdentifier('supabase', 'Project ref') } });
-function nomFixture() {
-  const m = manifest(), artifacts = new Map(), put = value => { const bytes = Buffer.from(JSON.stringify(value)); const sha256 = dependencyHash(bytes); artifacts.set(sha256, bytes); return sha256; };
-  const ref = name => ({ path: `/untrusted/path/${name}.json`, sha256: put({ proof: name }) });
-  const devee = fcosSalesforceEnvironment('devee');
-  const scope = { syntheticFixture: true, candidateSha: m.candidate.sha, orgId: devee.orgId, username: devee.username, stemId: 'stem', nominationId: 'nomination', fileSha256: H, fileSize: 3 };
-  const live = { candidateSha: m.candidate.sha, sourceSha256: H, harnessSha256: H, target: { orgId: devee.orgId, username: devee.username, isSandbox: true }, operationId: 'original-operation',
-    coreVerified: true, exactReplayVerified: true, freshListAbsent: true, postsTotal: 1, fileSha256: H, fileSize: 3, scopeFingerprint: H,
-    startedAt: '2026-10-10T18:35:48.358Z', completedAt: '2026-10-10T18:40:17.837Z',
-    result: { stemId: 'stem', nominationId: 'nomination', contentDocumentId: 'document', contentVersionId: 'version', receivedStatus: '🟢', verified: true } };
-  const desktop = { ...live, desktopVerified: true, forbiddenRequests: [], pageErrors: [] };
-  const dependencies = { kind: 'actual_devee_nom_b_schema_automation_admission', orgId: devee.orgId, username: devee.username, sourceSha256: H, fieldsAndPermissionsVerified: true, automationReviewed: true };
-  const a = { scope: put(scope), dependencies: put(dependencies), liveEvidence: put(live), desktopEvidence: put(desktop) };
-  a.admission = put({ kind: 'root_admitted_exact04ee_nom_b_devee_filing', candidateSha: m.candidate.sha, sourceSha256: H, harnessSha256: H, scopeSha256: H, dependenciesEvidence: { sha256: a.dependencies } });
-  a.cleanup = put({ kind: 'root_actual_owned_devee_document_and_fixture_cleanup_acceptance', accepted: true, ownedDocumentAndVersionDeleted: true, allThreeOwnedFixtureRecordsDeleted: true,
-    activeDocumentLinksZero: true, retainedAccountAndPortExactlyPreserved: true, singleAllOrNoneCompositeOnly: true, financialActions: false, productionChanged: false,
-    actualReadbacks: Array.from({ length: 5 }, (_, i) => ref(`cleanup${i}`)) });
-  a.acceptance = put({ kind: 'root_actual_exact04ee_disposable_nom_b_acceptance', accepted: true, candidateSha: m.candidate.sha, candidateSourceSha256: H, harnessSha256: H,
-    operationId: live.operationId, ownedContentDocumentId: 'document', ownedContentVersionId: 'version', singleProviderPost: true, durableLedgerCompleted: true,
-    exactReplayNoExtraPost: true, freshMissingListAbsent: true, buyerReceivedGreen: true, buyerSentAndPdfRemainRed: true, allOtherReadFixtureFieldsUnchanged: true,
-    documentLinksOnlyOwnedBuyerAndAuthenticatedCreator: true, retainedAccountPortActive: true, localSyntheticDeveeSeamOnly: true, financialChildCategoriesVerifiedZero: 9,
-    productionChanged: false, normalRoleSessionProved: false, deployedFifteenModulePreviewAttestation: false,
-    scope: { sha256: a.scope }, admission: { sha256: a.admission }, actualTest: [{ sha256: a.liveEvidence }, { sha256: a.desktopEvidence }], actualReadbacks: Array.from({ length: 9 }, (_, i) => ref(`read${i}`)) });
-  a.reuseDecision = put({ kind: 'root_accepted_nom_b_relevant_change_reuse_decision', accepted: true, passingProof: { sha256: a.acceptance }, cleanupClosure: { sha256: a.cleanup },
-    candidateSha: m.candidate.sha, candidateSourceSha256: H, reuseForUnrelatedWorkflowOrDocumentationChanges: true,
-    rerunAffectedBehaviorForRelevantSourceDependencyRuntimeConfigEnvironmentChangeOrFailure: true, freshBoundaryReadsRemainRequiredForNewWrites: true, productionAuthorizedByThisDecision: false });
-  const handoff = { kind: 'fcos_reviewed_nom_b_legacy_import', manifestHash: dependencyHash(m), candidateSha: m.candidate.sha, originalCandidateSha: m.candidate.sha, artifacts: a,
-    relevantInputs: { sourceSha256: H, harnessSha256: H, salesforceSourceSha256: H, fixtureSha256: H, environmentSha256: H } };
-  return { manifest: m, handoff, artifacts, put, live, verifyHandoff: async ({ handoffSha256 }) => ({ verified: true, handoffSha256, manifestHash: dependencyHash(m), financialAuthority: false }),
-    readArtifact: async ({ sha256 }) => artifacts.get(sha256), measureInputs: async () => ({ readOnly: true, capturedAt: new Date(now).toISOString(), inputs: handoff.relevantInputs }), now: () => now };
-}
+const nomFixture = () => nomBFixture({ manifest: manifest(), now });
 
 test('actual accepted NomB import retains original time and restricted synthetic coverage, with no paths or writes', async () => {
-  const f = nomFixture(), result = await importAcceptedNomB(f);
+  const f = await nomFixture(), result = await importAcceptedNomB(f);
   assert.equal(result.status, 'passed'); assert.equal(result.capturedAt, f.live.completedAt);
   assert.equal(result.result.deployedPreviewProved, false); assert.equal(result.result.financialAuthority, false);
   assert.equal(result.result.coverage, 'disposable_devee_nom_b_synthetic'); assert.ok(!JSON.stringify(result).includes('/untrusted/'));
@@ -51,26 +23,33 @@ test('NomB missing setup waits; tampered/unaccepted, changed or stale dependenci
     f => { f.measureInputs = async () => ({ readOnly: true, capturedAt: new Date(now).toISOString(), inputs: { ...f.handoff.relevantInputs, environmentSha256: 'c'.repeat(64) } }); },
     f => { f.measureInputs = async () => ({ readOnly: true, capturedAt: '2026-10-01T00:00:00Z', inputs: f.handoff.relevantInputs }); },
     f => { f.handoff.artifacts.liveEvidence = f.put({ ...f.live, postsTotal: 2 }); }]) {
-    const f = nomFixture(); mutate(f); await assert.rejects(importAcceptedNomB(f), { code: 'NOM_B_DEPENDENCY_REVALIDATION_REQUIRED' });
+    const f = await nomFixture(); mutate(f); await assert.rejects(importAcceptedNomB(f), { code: 'NOM_B_DEPENDENCY_REVALIDATION_REQUIRED' });
   }
 });
 
 test('unchanged relevant assumptions can reuse original NomB proof for a new separately admitted candidate', async () => {
-  const f = nomFixture(); f.manifest.candidate.sha = 'c'.repeat(40); f.handoff.candidateSha = f.manifest.candidate.sha; f.handoff.manifestHash = dependencyHash(f.manifest);
+  const f = await nomFixture(); f.manifest.candidate.sha = 'c'.repeat(40); f.handoff.candidateSha = f.manifest.candidate.sha; f.handoff.manifestHash = dependencyHash(f.manifest);
   const result = await importAcceptedNomB(f); assert.equal(result.candidateSha, f.manifest.candidate.sha); assert.equal(result.capturedAt, f.live.completedAt);
 });
 
-test('different Salesforce fingerprint formats require exact admitted mapping and unchanged original measurements', async () => {
-  const f = nomFixture(); f.manifest.candidate.salesforceSourceSha256 = 'c'.repeat(64); f.handoff.manifestHash = dependencyHash(f.manifest);
+test('candidate repository binding remains separate from original live Salesforce assumptions', async () => {
+  const f = await nomFixture(); assert.notEqual(f.manifest.candidate.salesforceSourceSha256, f.handoff.relevantInputs.salesforceSourceSha256);
+  const proof = await importAcceptedNomB(f); assert.equal(proof.result.candidateSalesforceSourceSha256, f.manifest.candidate.salesforceSourceSha256);
+  assert.equal(proof.result.originalRelevantSalesforceSha256, f.handoff.relevantInputs.salesforceSourceSha256); assert.equal(proof.capturedAt, f.live.completedAt);
+  f.manifest.candidate.salesforceSourceSha256 = 'c'.repeat(64); f.handoff.manifestHash = dependencyHash(f.manifest);
   await assert.rejects(importAcceptedNomB(f), { code: 'NOM_B_DEPENDENCY_REVALIDATION_REQUIRED' });
-  f.handoff.measurementRecipeSha256 = 'd'.repeat(64); f.handoff.sourceMapping = { candidateSalesforceSourceSha256: f.manifest.candidate.salesforceSourceSha256,
-    originalSalesforceSourceSha256: H, measurementRecipeSha256: f.handoff.measurementRecipeSha256 };
-  const proof = await importAcceptedNomB(f); assert.equal(proof.result.salesforceSourceSha256, f.manifest.candidate.salesforceSourceSha256);
-  assert.equal(proof.result.originalSalesforceSourceSha256, H); assert.equal(proof.capturedAt, f.live.completedAt);
-  f.handoff.sourceMapping.measurementRecipeSha256 = 'e'.repeat(64);
+  f.handoff.candidateSalesforceSourceSha256 = f.manifest.candidate.salesforceSourceSha256;
+  assert.equal((await importAcceptedNomB(f)).status, 'passed');
+  f.handoff.sourceMapping = { candidateSalesforceSourceSha256: f.manifest.candidate.salesforceSourceSha256 };
   await assert.rejects(importAcceptedNomB(f), { code: 'NOM_B_DEPENDENCY_REVALIDATION_REQUIRED' });
-  f.handoff.sourceMapping.measurementRecipeSha256 = f.handoff.measurementRecipeSha256;
-  f.measureInputs = async () => ({ readOnly: true, capturedAt: new Date(now).toISOString(), inputs: { ...f.handoff.relevantInputs, salesforceSourceSha256: 'c'.repeat(64) } });
+});
+test('original live inputs are derived from loaded original bytes, not self-asserted hashes', async () => {
+  for (const key of ['salesforceSourceSha256','fixtureSha256','environmentSha256']) {
+    const f = await nomFixture(); f.handoff.relevantInputs[key] = 'c'.repeat(64);
+    await assert.rejects(importAcceptedNomB(f), { code: 'NOM_B_DEPENDENCY_REVALIDATION_REQUIRED' });
+  }
+  const f = await nomFixture(); const original = f.artifacts.get(f.handoff.artifacts.dependencies);
+  f.artifacts.set(f.handoff.artifacts.dependencies, Buffer.from(original.toString().replace('v67.0', 'v68.0')));
   await assert.rejects(importAcceptedNomB(f), { code: 'NOM_B_DEPENDENCY_REVALIDATION_REQUIRED' });
 });
 

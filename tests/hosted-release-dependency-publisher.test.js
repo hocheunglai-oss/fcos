@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { dirname } from 'node:path';
 import { fcosSalesforceEnvironment } from '../config/fcosConnections.js';
+import { nomBFixture } from './fixtures/hosted-nom-b.mjs';
 import { collectFinancialPreservation, dependencyHash } from '../scripts/lib/hosted-release/dependencies.mjs';
 import { hostedDependencies } from '../scripts/hosted-release-dependencies.mjs';
 import { loadDependencySetup, measureHostedNomBInputs, NOM_B_LEGACY_HISTORY, publishDependencies, validateNomBMeasurementReceipt } from '../scripts/lib/hosted-release/dependency-publisher.mjs';
@@ -22,67 +23,96 @@ function manifest() { return { schemaVersion: 2, contract: 'fcos-hosted-release/
   requiredChecks: [...contract.REQUIRED_LIVE_CHECKS], authorization: { validitySeconds: 86400, actions: [...contract.WRITE_PHASES], rollback: { mode: 'compatible_previous_only', schemaRollback: false } },
   migration: { mode: 'none', expectedSchemaSha256: H }, runtime: { expectedSha256: dependencyHash({ safety: true }), expectedProduction: { safety: true }, expectedPreview: { safety: true } }, changes: ['offline dependency test'] }; }
 function temporary(t) { const directory = mkdtempSync(join(tmpdir(), 'fcos-hosted-dependencies-')); t.after(() => rmSync(directory, { recursive: true, force: true })); return directory; }
-function recipeFixture(t) {
-  const directory = temporary(t), devee = fcosSalesforceEnvironment('devee');
+async function recipeFixture(t) {
+  const directory = temporary(t), devee = fcosSalesforceEnvironment('devee'), f = await nomBFixture({ manifest: manifest(), now });
   for (const file of ['source.js','harness.js','fixture.json']) writeFileSync(join(directory, file), file);
   const file = (root, path) => ({ root, path, sha256: dependencyHash(readFileSync(join(directory, path))) });
-  const query = { kind: 'query', object: 'ApexClass', tooling: true, fields: ['Id','Name','Body'], where: { field: 'Name', values: ['NominationController'] }, limit: 2 };
-  const describe = { kind: 'describe', object: 'Nomination__c', tooling: false };
-  const response = { done: true, totalSize: 1, records: [{ Id: '01pExample', Name: 'NominationController', Body: 'reviewed body' }] }, metadata = { fields: [{ name: 'Id', type: 'id' }] };
+  const query = (object, fields, field, values, tooling = false) => ({ kind: 'query', object, tooling, fields, limit: 100, ...(field ? { where: { field, values } } : {}) });
+  const sf = [query('ApexClass',['Id','Name','Body','LastModifiedDate'],'Name',f.legacy.indexes.ApexClass.scope,true),
+    query('ApexTrigger',['Id','Name','TableEnumOrId','Status','Body','LastModifiedDate'],'TableEnumOrId',f.legacy.indexes.ApexTrigger.scope,true),
+    query('ValidationRule',['Id','ValidationName','Active','EntityDefinitionId','LastModifiedDate'],'EntityDefinitionId',f.legacy.indexes.ValidationRule.scope,true),
+    query('WorkflowRule',['Id','Name','TableEnumOrId','LastModifiedDate'],'TableEnumOrId',f.legacy.indexes.WorkflowRule.scope,true),
+    query('FlowDefinitionView',['Id','ApiName','IsActive','ActiveVersionId','TriggerType','TriggerObjectOrEventId','RecordTriggerType'],'TriggerObjectOrEventId',f.legacy.indexes.FlowDefinitionView.scope),
+    ...Object.keys(f.schemas).map(object => ({ kind: 'describe', object, tooling: false }))];
+  const fixtureReads = [...Object.entries(f.fixtureIds).map(([object,id])=>query(object,['Id'],'Id',[id])),
+    query('ContentDocumentLink',['Id','ContentDocumentId','LinkedEntityId'],'ContentDocumentId',[f.fixtureIds.ContentDocument])];
+  const profileId = `00e${'2'.repeat(15)}`;
+  f.responses.User = [{ Id: f.environment.userId, Username: devee.username, IsActive: true, ProfileId: profileId }];
+  const envReads = [query('User',['Id','Username','IsActive','ProfileId'],'Id',[f.environment.userId]), query('Xero_Contact_Sync_Setting__c',['Id','SetupOwnerId','Enabled__c'])];
+  const responseFor = read => read.kind === 'describe' ? f.schemas[read.object] : { done: true, totalSize: (f.responses[read.object] || []).length,
+    records: (f.responses[read.object] || []).map(row => Object.fromEntries(read.fields.map(field => [field,row[field]]))) };
   const recipe = { schemaVersion: 1, kind: 'fcos_nom_b_readonly_measurement_recipe', originalAcceptanceSha256: NOM_B_LEGACY_HISTORY.acceptance,
-    origin: devee.instanceUrl, orgId: devee.orgId, username: devee.username, isSandbox: true, apiVersion: 'v67.0', userId: `005${'1'.repeat(15)}`, profileId: `00e${'2'.repeat(15)}`,
-    observations: [
-      { input: 'sourceSha256', files: [file('candidate','source.js')], reads: [] },
-      { input: 'harnessSha256', files: [file('controller','harness.js')], reads: [] },
-      { input: 'salesforceSourceSha256', files: [], reads: [query] },
-      { input: 'fixtureSha256', files: [file('setup','fixture.json')], reads: [] },
-      { input: 'environmentSha256', files: [], reads: [describe] },
-    ] };
-  for (const observation of recipe.observations) { observation.originalInputSha256 = H;
-    observation.expectedSha256 = dependencyHash({ files: observation.files, reads: observation.reads.map(read => ({ recipe: read, sha256: dependencyHash(read.kind === 'query' ? response : metadata) })) }); }
-  const recipeSha256 = dependencyHash(JSON.stringify(recipe));
-  const handoff = { relevantInputs: Object.fromEntries(recipe.observations.map(row => [row.input, H])), measurementRecipeSha256: recipeSha256 };
-  const calls = [];
-  const fetchImpl = async (url, options) => {
-    calls.push({ url, options }); let body;
-    if (url.endsWith('/userinfo')) body = { organization_id: devee.orgId, user_id: recipe.userId, preferred_username: devee.username };
-    else if (url.includes('Organization%20LIMIT')) body = { done: true, totalSize: 1, records: [{ Id: devee.orgId, IsSandbox: true }] };
-    else if (url.includes('/sobjects/User/')) body = { Id: recipe.userId, Username: devee.username, IsActive: true, ProfileId: recipe.profileId };
-    else body = url.includes('/describe') ? metadata : response;
-    return new Response(JSON.stringify(body), { status: 200 });
+    origin: devee.instanceUrl, orgId: devee.orgId, username: devee.username, isSandbox: true, apiVersion: 'v67.0', userId: f.environment.userId, profileId,
+    observations: [{ input: 'sourceSha256', files: [file('candidate','source.js')], reads: [] },{ input: 'harnessSha256', files: [file('controller','harness.js')], reads: [] },
+      { input: 'salesforceSourceSha256', files: [], reads: sf },{ input: 'fixtureSha256', files: [file('setup','fixture.json')], reads: fixtureReads },{ input: 'environmentSha256', files: [], reads: envReads }] };
+  const refreshRecipe = () => { for (const observation of recipe.observations) { observation.originalInputSha256 = f.handoff.relevantInputs[observation.input];
+    observation.expectedSha256 = dependencyHash({ files: observation.files, reads: observation.reads.map(read => ({ recipe: read, sha256: dependencyHash(responseFor(read)) })) }); }
+    f.recipeSha256 = dependencyHash(JSON.stringify(recipe)); f.handoff.measurementRecipeSha256 = f.recipeSha256; };
+  const calls = [], fetchImpl = async (url, options) => {
+    calls.push({url,options}); let body;
+    if(url.endsWith('/userinfo')) body={organization_id:devee.orgId,user_id:recipe.userId,preferred_username:devee.username};
+    else if(url.includes('Organization%20LIMIT'))body={done:true,totalSize:1,records:[{Id:devee.orgId,IsSandbox:true}]};
+    else if(url.includes('/sobjects/User/'))body=f.responses.User[0];
+    else { const decoded=decodeURIComponent(url), read=recipe.observations.flatMap(row=>row.reads).find(read=>read.kind==='describe'?decoded.includes(`/sobjects/${read.object}/describe`):decoded.includes(` FROM ${read.object} `)); body=responseFor(read); }
+    return new Response(JSON.stringify(body),{status:200});
   };
-  return { directory, manifest: manifest(), handoff, recipe, recipeSha256, candidateDirectory: directory, controllerDirectory: directory, setupDirectory: directory,
-    env: { FCOS_HOSTED_SALESFORCE_READ_TOKEN: 'private-read-token' }, fetchImpl, calls, response, now: () => now };
+  Object.assign(f,{directory,recipe,candidateDirectory:directory,controllerDirectory:directory,setupDirectory:directory,env:{FCOS_HOSTED_SALESFORCE_READ_TOKEN:'private-read-token'},fetchImpl,calls,refreshRecipe});refreshRecipe();return f;
 }
 
 test('GET-only recipe measures actual files, org/user/profile and bounded metadata before mapping legacy fingerprints', async t => {
-  const f = recipeFixture(t), measured = await measureHostedNomBInputs(f);
-  assert.deepEqual(measured.inputs, f.handoff.relevantInputs); assert.equal(f.calls.length, 5);
+  const f = await recipeFixture(t), measured = await measureHostedNomBInputs(f);
+  assert.deepEqual(measured.inputs, f.handoff.relevantInputs); assert.equal(f.calls.length, 19);
   assert.ok(f.calls.every(call => call.options.method === 'GET' && call.url.startsWith(`${f.recipe.origin}/services/`) && call.options.redirect === 'error'));
   assert.deepEqual(validateNomBMeasurementReceipt({ ...f, receipt: measured.receipt, job: { started_at: new Date(now - 1000).toISOString(), completed_at: new Date(now + 1000).toISOString() } }).inputs, measured.inputs);
   assert.ok(!JSON.stringify(measured).includes('private-read-token')); assert.ok(!JSON.stringify(measured).includes('reviewed body'));
 });
 test('NomB recipe missing credential waits; malicious queries, identity/metadata/file drift cannot yield fingerprints', async t => {
-  assert.equal((await measureHostedNomBInputs({ ...recipeFixture(t), env: {} })).status, 'waiting_dependency');
+  assert.equal((await measureHostedNomBInputs({ ...await recipeFixture(t), env: {} })).status, 'waiting_dependency');
   for (const mutate of [f => { f.recipe.origin = 'https://attacker.invalid'; }, f => { f.recipe.observations[2].reads[0].where.values = ["x' OR Id!='"]; },
-    f => { f.recipe.observations[2].reads[0].kind = 'executeAnonymous'; }, f => { f.response.done = false; },
+    f => { f.recipe.observations[2].reads[0].kind = 'executeAnonymous'; }, f => { f.responses.ApexClass.push({...f.responses.ApexClass[0],Id:'extra'}); },
     f => { writeFileSync(join(f.directory, 'source.js'), 'changed'); }, f => { f.recipe.profileId = `00e${'9'.repeat(15)}`; f.fetchImpl = async () => new Response('{}'); }]) {
-    const f = recipeFixture(t); mutate(f); await assert.rejects(measureHostedNomBInputs(f), { code: 'NOM_B_READONLY_REVALIDATION_REQUIRED' });
+    const f = await recipeFixture(t); mutate(f); await assert.rejects(measureHostedNomBInputs(f), { code: 'NOM_B_READONLY_REVALIDATION_REQUIRED' });
     assert.ok(f.calls.every(call => call.options.method === 'GET'));
   }
 });
-test('GET-only mapped Salesforce format preserves original fingerprint and still rejects changed live observations', async t => {
-  const f = recipeFixture(t); f.manifest.candidate.salesforceSourceSha256 = 'c'.repeat(64);
-  await assert.rejects(measureHostedNomBInputs(f), { code: 'NOM_B_READONLY_REVALIDATION_REQUIRED' });
-  f.handoff.sourceMapping = { candidateSalesforceSourceSha256: f.manifest.candidate.salesforceSourceSha256, originalSalesforceSourceSha256: H, measurementRecipeSha256: f.recipeSha256 };
-  const measured = await measureHostedNomBInputs(f); assert.equal(measured.inputs.salesforceSourceSha256, H);
-  f.response.records[0].Body = 'changed deployed Salesforce behavior';
-  await assert.rejects(measureHostedNomBInputs(f), { code: 'NOM_B_READONLY_REVALIDATION_REQUIRED' });
+test('live original Apex checks cannot be waived by changing the admitted expected response hash', async t => {
+  for (const object of ['ApexClass','ApexTrigger']) for (let i=0;i<(object==='ApexClass'?6:5);i++) {
+    const f=await recipeFixture(t);f.responses[object][i].Body='changed deployed behavior';f.refreshRecipe();
+    await assert.rejects(measureHostedNomBInputs(f),{code:'NOM_B_READONLY_REVALIDATION_REQUIRED'});
+  }
+  for (const mutate of [f=>f.responses.ApexTrigger.push({...f.responses.ApexTrigger[0],Id:'01q999999999999999',Name:'NewActive'}),
+    f=>f.responses.ValidationRule.push({...f.responses.ValidationRule[0],Id:'03d999999999999999'}),
+    f=>f.responses.FlowDefinitionView.push({Id:'301999999999999999',IsActive:true}),f=>{f.schemas.Nomination__c.fields[0].type='changed';}]) {
+    const f=await recipeFixture(t);mutate(f);f.refreshRecipe();await assert.rejects(measureHostedNomBInputs(f),{code:'NOM_B_READONLY_REVALIDATION_REQUIRED'});
+  }
+});
+test('cleaned fixture must stay absent and coverage cannot omit original objects or bodies', async t => {
+  for(const object of ['STEM__c','Nomination__c','Stem_Status__c','ContentDocument','ContentVersion','ContentDocumentLink']) {
+    const f=await recipeFixture(t);f.responses[object]=[{Id:f.fixtureIds[object]||'link'}];f.refreshRecipe();
+    await assert.rejects(measureHostedNomBInputs(f),{code:'NOM_B_READONLY_REVALIDATION_REQUIRED'});
+  }
+  for(const mutate of [f=>f.recipe.observations[2].reads.pop(),f=>{f.recipe.observations[2].reads[0].fields=f.recipe.observations[2].reads[0].fields.filter(x=>x!=='Body');},
+    f=>{f.recipe.observations[3].reads=[];},f=>{f.handoff.candidateSalesforceSourceSha256='c'.repeat(64);}]) {
+    const f=await recipeFixture(t);mutate(f);f.refreshRecipe();await assert.rejects(measureHostedNomBInputs(f),{code:'NOM_B_READONLY_REVALIDATION_REQUIRED'});
+  }
+});
+
+test('current ProfileId is a fresh separate binding, never an invented historical identity field', async t => {
+  const f=await recipeFixture(t), original=f.handoff.relevantInputs.environmentSha256;
+  f.recipe.profileId=`00e${'3'.repeat(15)}`;f.responses.User[0].ProfileId=f.recipe.profileId;f.refreshRecipe();
+  const measured=await measureHostedNomBInputs(f);assert.equal(measured.inputs.environmentSha256,original);
+});
+test('new Xero setting, malformed active flag, saturated limit and narrowed trigger scope fail closed', async t => {
+  for(const mutate of [f=>f.responses.Xero_Contact_Sync_Setting__c.push({Id:'a00111111111111111',SetupOwnerId:'org',Enabled__c:true}),
+    f=>f.responses.FlowDefinitionView.push({Id:'301111111111111111',IsActive:'true'}),
+    f=>{f.recipe.observations[2].reads[0].limit=6;},f=>{f.recipe.observations[2].reads[1].where={field:'Id',values:[f.responses.ApexTrigger[0].Id]};}]) {
+    const f=await recipeFixture(t);mutate(f);f.refreshRecipe();await assert.rejects(measureHostedNomBInputs(f),{code:'NOM_B_READONLY_REVALIDATION_REQUIRED'});
+  }
 });
 
 test('independent receipt validator rejects changed digest, foreign recipe and time outside actual producer job', async t => {
-  const f = recipeFixture(t), measured = await measureHostedNomBInputs(f), job = { started_at: new Date(now - 1000).toISOString(), completed_at: new Date(now + 1000).toISOString() };
-  for (const mutate of [r => { r.observations[0].sha256 = 'c'.repeat(64); }, r => { r.recipeSha256 = 'c'.repeat(64); }, r => { r.capturedAt = new Date(now - 3600000).toISOString(); }]) {
+  const f = await recipeFixture(t), measured = await measureHostedNomBInputs(f), job = { started_at: new Date(now - 1000).toISOString(), completed_at: new Date(now + 1000).toISOString() };
+  for (const mutate of [r => { r.observations[0].sha256 = 'c'.repeat(64); }, r => { r.recipeSha256 = 'c'.repeat(64); }, r => { r.capturedAt = new Date(now - 3600000).toISOString(); },r=>{r.candidateSalesforceSourceSha256='c'.repeat(64);},r=>{r.legacyInputsSha256='c'.repeat(64);}]) {
     const receipt = structuredClone(measured.receipt); mutate(receipt); assert.throws(() => validateNomBMeasurementReceipt({ ...f, receipt, job }));
   }
 });
