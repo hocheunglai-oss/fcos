@@ -10,6 +10,38 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  observer-network-preflight:
+    # Setup diagnostic only; no database login, environment or provider secret.
+    # This does not replace actual hosted observer/collector qualification.
+    if: ${{ vars.FCOS_HOSTED_READINESS_ENABLED != 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.18.0
+      - name: Check fixed observer host without credentials
+        env:
+          FCOS_EXPECTED_SOURCE: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: >-
+          env -i PATH="$PATH" GITHUB_ACTIONS=true
+          GITHUB_REPOSITORY="$GITHUB_REPOSITORY" GITHUB_RUN_ID="$GITHUB_RUN_ID"
+          GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" RUNNER_OS="$RUNNER_OS" RUNNER_ARCH="$RUNNER_ARCH"
+          FCOS_EXPECTED_SOURCE="$FCOS_EXPECTED_SOURCE" node scripts/hosted-network-preflight.mjs
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: fcos-observer-network-preflight
+          path: hosted-network-preflight.json
+          if-no-files-found: error
+          retention-days: 7
+
   hosted-readiness:
     # One read-only validator feeds both existing required check names. No PR
     # checkout, provider secret, protected environment or renewable identity.
