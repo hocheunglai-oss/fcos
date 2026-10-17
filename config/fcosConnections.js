@@ -166,6 +166,8 @@ const connectionPolicy = {
         { label: 'Devee Org ID', value: '00D1m0000008kioEAA' },
         { label: 'Devee alias', value: 'fcos-devee' },
         { label: 'Devee username', value: 'vincent@cosulich.com.hk.devee' },
+        { label: 'Hosted DEVEE read-only username', value: 'fcos.hosted.reader.00d1m0000008kioeaa@cosulich.com.hk.devee' },
+        { label: 'Hosted DEVEE read-only licence name', value: 'Salesforce Integration' },
         { label: 'QAT Org ID', value: '00D1s0000008lFEEAY' },
         { label: 'QAT alias', value: 'fcos-qat' },
         { label: 'QAT username', value: 'vincent@cosulich.com.hk.qat' },

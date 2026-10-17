@@ -227,15 +227,32 @@ test('renewable JWT collector preserves all sixteen NomB reads and independent r
   const f=await recipeFixture(t), auth=salesforceReaderFixture({recipe:f.recipe,manifest:f.manifest});
   const legacyFetch=f.fetchImpl;
   const fetched=[];
-  const fetchImpl=async(url,options)=>{fetched.push({url,options});return options.method==='POST'?auth.fetchImpl(url,options):legacyFetch(url,options);};
+  const fetchImpl=async(url,options)=>{fetched.push({url,options});return options.method==='POST'||url.endsWith('/userinfo')||url.includes('Organization%20LIMIT')||url.includes('/sobjects/User/')||url.includes('/sobjects/Profile/')||url.includes('/sobjects/UserLicense/')||auth.permissionIntrospection.paths.some(path=>url===`${auth.binding.instanceUrl}${path}`)?auth.fetchImpl(url,options):legacyFetch(url,options);};
   const measured=await measureHostedNomBInputs({...f,env:auth.env,fetchImpl,now:auth.now,recipeBytes:auth.recipeBytes});
-  assert.deepEqual(measured.inputs,f.handoff.relevantInputs);assert.equal(fetched.length,20);assert.equal(fetched[0].options.method,'POST');assert.ok(fetched.slice(1).every(row=>row.options.method==='GET'));
-  assert.deepEqual(measured.receipt.authentication,{kind:'fcos_salesforce_jwt_recipe_reader',credentialBindingSha256:dependencyHash(auth.binding)});
+  assert.deepEqual(measured.inputs,f.handoff.relevantInputs);assert.equal(fetched.length,29);assert.equal(fetched[0].options.method,'POST');assert.ok(fetched.slice(1).every(row=>row.options.method==='GET'));
+  assert.deepEqual(measured.receipt.authentication,{kind:'fcos_salesforce_jwt_recipe_reader',credentialBindingSha256:dependencyHash(auth.binding),permissionObservation:{schemaVersion:1,kind:'fcos_salesforce_fresh_business_data_read_only_permission_observation',recipeSha256:auth.binding.permissionRecipeSha256,observedSha256:dependencyHash(auth.permissionValues),capturedAt:new Date(auth.now()).toISOString()}});
   const job={started_at:new Date(auth.now()-1000).toISOString(),completed_at:new Date(auth.now()+1000).toISOString()};
   validateNomBMeasurementReceipt({...f,receipt:measured.receipt,job});
+  for(const mutate of [r=>delete r.authentication.permissionObservation,r=>r.authentication.permissionObservation.recipeSha256='b'.repeat(64),r=>r.authentication.permissionObservation.capturedAt='2020-01-01T00:00:00Z']){const changed=structuredClone(measured.receipt);mutate(changed);assert.throws(()=>validateNomBMeasurementReceipt({...f,receipt:changed,job}));}
   const old=structuredClone(measured.receipt);delete old.authentication;assert.throws(()=>validateNomBMeasurementReceipt({...f,receipt:old,job}));
   assert.ok(!JSON.stringify(measured).includes('fixture-access-token'));assert.ok(!JSON.stringify(measured).includes('BEGIN PRIVATE'));
   assert.equal((await measureHostedNomBInputs({...f,env:{FCOS_HOSTED_SALESFORCE_READ_TOKEN:'opaque',FCOS_HOSTED_SALESFORCE_LEGACY_BEARER_ALLOWED:'true'}})).status,'waiting_dependency');
   const local=await recipeFixture(t);assert.equal((await measureHostedNomBInputs({...local,env:{...local.env,GITHUB_ACTIONS:'true'}})).status,'waiting_dependency');
   local.manifest.stage='qualification';assert.equal((await measureHostedNomBInputs(local)).status,'waiting_dependency');
+});
+
+test('incomplete or former privileged reader setup waits and does not exchange a token',async t=>{
+  const f=await recipeFixture(t),auth=salesforceReaderFixture({recipe:f.recipe,manifest:f.manifest});
+  auth.binding.providerPermissionMode='pinned_user_permissions';
+  const result=await measureHostedNomBInputs({...f,env:auth.env,fetchImpl:auth.fetchImpl,recipeBytes:auth.recipeBytes});
+  assert.deepEqual(result,{status:'waiting_dependency',missing:['admitted_business_data_read_only_devee_jwt_reader_setup']});
+  assert.equal(auth.calls.length,0);
+});
+test('dedicated reader cannot replace original fixture or weaken permission-sensitive frozen describes',async t=>{
+  for(const mutate of [f=>{f.responses.User[0].ProfileId='00e000000000001AAA';},f=>{f.schemas.Nomination__c.createable=false;}]){
+    const f=await recipeFixture(t);mutate(f);f.refreshRecipe();
+    const auth=salesforceReaderFixture({recipe:f.recipe,manifest:f.manifest});
+    const fetchImpl=async(url,options)=>options.method==='POST'||url.endsWith('/userinfo')||url.includes('Organization%20LIMIT')||url.includes('/sobjects/User/')||url.includes('/sobjects/Profile/')||url.includes('/sobjects/UserLicense/')||auth.permissionIntrospection.paths.some(path=>url===`${auth.binding.instanceUrl}${path}`)?auth.fetchImpl(url,options):f.fetchImpl(url,options);
+    await assert.rejects(measureHostedNomBInputs({...f,env:auth.env,fetchImpl,recipeBytes:auth.recipeBytes}),{code:'NOM_B_READONLY_REVALIDATION_REQUIRED'});
+  }
 });

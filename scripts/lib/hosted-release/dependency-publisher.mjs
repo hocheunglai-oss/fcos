@@ -167,6 +167,7 @@ export async function measureHostedNomBInputs({ manifest, handoff, readArtifact,
   env = process.env, fetchImpl = globalThis.fetch, now = Date.now }) {
   const renewable = manifest.verification?.salesforceReadCredential;
   const legacyBearer = !renewable && manifest.stage !== 'qualification' && env.GITHUB_ACTIONS !== 'true' && env.FCOS_HOSTED_SALESFORCE_LEGACY_BEARER_ALLOWED === 'true';
+  if (renewable && renewable.providerPermissionMode !== 'provider_business_data_read_only') return { status: 'waiting_dependency', missing: ['admitted_business_data_read_only_devee_jwt_reader_setup'] };
   if (!renewable && !legacyBearer) return { status: 'waiting_dependency', missing: ['admitted_dedicated_devee_jwt_reader_setup'] };
   if (renewable && !env.FCOS_HOSTED_SALESFORCE_JWT_PRIVATE_KEY || legacyBearer && !env.FCOS_HOSTED_SALESFORCE_READ_TOKEN)
     return { status: 'waiting_dependency', missing: ['dedicated_devee_jwt_private_input'] };
@@ -221,15 +222,21 @@ export async function measureHostedNomBInputs({ manifest, handoff, readArtifact,
     const receipt = { schemaVersion: 1, kind: 'fcos_nom_b_readonly_measurements', recipeSha256, capturedAt: new Date(now()).toISOString(),
       candidateSalesforceSourceSha256: handoff.candidateSalesforceSourceSha256, legacyInputsSha256: dependencyHash(legacy.inputs),
       identitySha256: dependencyHash({ orgId: devee.orgId, username: devee.username, userId: recipe.userId, profileId: recipe.profileId, isSandbox: true }), observations: observed };
-    if (reader) receipt.authentication = { kind: renewable.kind, credentialBindingSha256: dependencyHash(renewable) };
+    if (reader) receipt.authentication = { kind: renewable.kind, credentialBindingSha256: dependencyHash(renewable), permissionObservation: await reader.admit() };
     return { readOnly: true, capturedAt: receipt.capturedAt, inputs: { ...handoff.relevantInputs }, receipt };
   } catch { const error = new Error('NOM_B_READONLY_REVALIDATION_REQUIRED'); error.code = error.message; throw error; }
 }
 
 export function validateNomBMeasurementReceipt({ receipt, recipe, recipeSha256, handoff, manifest, legacy, job }) {
   validateRecipe(recipe, handoff); validateLegacyRecipe(recipe, handoff, legacy);
-  if (manifest.verification?.salesforceReadCredential || manifest.stage === 'qualification')
-    need(receipt?.authentication?.kind === 'fcos_salesforce_jwt_recipe_reader' && receipt.authentication.credentialBindingSha256 === dependencyHash(manifest.verification?.salesforceReadCredential));
+  if (manifest.verification?.salesforceReadCredential || manifest.stage === 'qualification') {
+    const binding = manifest.verification?.salesforceReadCredential, permission = receipt?.authentication?.permissionObservation;
+    need(binding && receipt?.authentication?.kind === 'fcos_salesforce_jwt_recipe_reader' && receipt.authentication.credentialBindingSha256 === dependencyHash(binding)
+      && exact(permission, ['schemaVersion','kind','recipeSha256','observedSha256','capturedAt'])
+      && permission.schemaVersion === 1 && permission.kind === 'fcos_salesforce_fresh_business_data_read_only_permission_observation'
+      && permission.recipeSha256 === binding.permissionRecipeSha256 && hash(permission.observedSha256)
+      && within(permission.capturedAt, job.started_at, job.completed_at) && Date.parse(permission.capturedAt) <= Date.parse(receipt.capturedAt) + 30000);
+  }
   need(salesforceDependencySourceVerified(manifest, handoff));
   need(receipt?.schemaVersion === 1 && receipt.kind === 'fcos_nom_b_readonly_measurements' && receipt.recipeSha256 === recipeSha256
     && receipt.candidateSalesforceSourceSha256 === handoff.candidateSalesforceSourceSha256 && receipt.legacyInputsSha256 === dependencyHash(legacy.inputs)
